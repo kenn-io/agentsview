@@ -239,13 +239,21 @@ func TestMusePersonalSyncAllSinceIncludesIndexOnlyChanges(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, os.WriteFile(index, []byte(strings.ReplaceAll(indexText, "16:00:00", "17:00:00")), 0o600))
 	require.NoError(t, os.Chtimes(index, info.ModTime(), info.ModTime()))
-	indexInfo, err := os.Stat(index)
-	require.NoError(t, err)
-	changeTime, ok := fileChangeTime(index, indexInfo)
-	if !ok {
+	if _, ok := fileChangeTime(index, info); !ok {
 		t.Skip("platform does not expose file change time")
 	}
-	assert.GreaterOrEqual(t, changeTime, cutoff.UnixNano())
+	require.EventuallyWithT(t, func(c *assert.CollectT) {
+		require.NoError(c, os.Chtimes(index, info.ModTime(), info.ModTime()))
+		indexInfo, err := os.Stat(index)
+		require.NoError(c, err)
+		changeTime, ok := fileChangeTime(index, indexInfo)
+		require.True(c, ok)
+		assert.GreaterOrEqual(c, changeTime, cutoff.UnixNano())
+	}, 2*time.Second, time.Millisecond)
+	// A new engine must observe persisted archive freshness correctly too.
+	engine.Close()
+	engine = NewEngine(ctx, database, EngineConfig{AgentDirs: map[parser.AgentType][]string{parser.AgentMusePersonal: {root}}, Machine: "local"})
+	t.Cleanup(engine.Close)
 	require.Zero(t, engine.SyncAllSince(ctx, cutoff, nil).Failed)
 	session, err := database.GetSessionFull(ctx, id)
 	require.NoError(t, err)
@@ -256,12 +264,100 @@ func TestMusePersonalSyncAllSinceIncludesIndexOnlyChanges(t *testing.T) {
 	require.NoError(t, err)
 	removeCutoff := time.Unix(0, updatedMtime+1)
 	require.NoError(t, os.Remove(index))
-	dirInfo, err := os.Stat(filepath.Dir(transcript))
-	require.NoError(t, err)
-	assert.GreaterOrEqual(t, dirInfo.ModTime().UnixNano(), removeCutoff.UnixNano())
+	require.EventuallyWithT(t, func(c *assert.CollectT) {
+		now := time.Now()
+		require.NoError(c, os.Chtimes(filepath.Dir(transcript), now, now))
+		dirInfo, err := os.Stat(filepath.Dir(transcript))
+		require.NoError(c, err)
+		assert.GreaterOrEqual(c, dirInfo.ModTime().UnixNano(), removeCutoff.UnixNano())
+	}, 2*time.Second, time.Millisecond)
+	engine.Close()
+	engine = NewEngine(ctx, database, EngineConfig{AgentDirs: map[parser.AgentType][]string{parser.AgentMusePersonal: {root}}, Machine: "local"})
+	t.Cleanup(engine.Close)
 	require.Zero(t, engine.SyncAllSince(ctx, removeCutoff, nil).Failed)
 	session, err = database.GetSessionFull(ctx, id)
 	require.NoError(t, err)
 	require.NotNil(t, session.EndedAt)
 	assert.Equal(t, "2026-10-05T15:04:06Z", *session.EndedAt)
+}
+
+// A shared index edit must replace only the session whose identity changed.
+func TestMusePersonalIndexRefreshesOnlyChangedSession(t *testing.T) {
+	for _, watcher := range []bool{false, true} {
+		t.Run(fmt.Sprint(watcher), func(t *testing.T) {
+			root, path := musePersonalSyncFile(t, musePersonalSyncItem(0, `{"type":"message","role":"user","text":"original"}`))
+			secondID := "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee"
+			second := filepath.Join(filepath.Dir(path), secondID+".jsonl")
+			require.NoError(t, os.WriteFile(second, []byte(strings.ReplaceAll(musePersonalSyncHeader, musePersonalSyncID, secondID)+musePersonalSyncItem(0, `{"type":"message","role":"user","text":"sibling"}`)), 0o600))
+			index := filepath.Join(filepath.Dir(path), "sessions.json")
+			row := func(id, updated string) string {
+				return fmt.Sprintf(`{"session_id":%q,"agent_id":"66666666-7777-4888-8999-000000000000","created_at":"2026-10-05T15:04:05Z","updated_at":%q}`, id, updated)
+			}
+			writeIndex := func(a string) {
+				rows := row(secondID, "2026-10-05T16:00:00Z")
+				if a != "" {
+					rows = row(musePersonalSyncID, a) + "," + rows
+				}
+				require.NoError(t, os.WriteFile(index, []byte(`{"version":1,"sessions":[`+rows+`]}`), 0o600))
+			}
+			writeIndex("2026-10-05T16:00:00Z")
+			database := openTestDB(t)
+			engine := NewEngine(t.Context(), database, EngineConfig{AgentDirs: map[parser.AgentType][]string{parser.AgentMusePersonal: {root}}, Machine: "local"})
+			t.Cleanup(engine.Close)
+			stats := engine.SyncAll(t.Context(), nil)
+			require.Zero(t, stats.Failed)
+			require.Equal(t, 2, stats.Synced)
+			written := 0
+			engine.writeBatchOverride = func(batch []pendingWrite, mode syncWriteMode, force bool) (int, int, int, int) {
+				written += len(batch)
+				out := engine.writeBatchWithOutcomeContext(t.Context(), batch, mode, force)
+				return out.writtenSessions, out.writtenMessages, out.failedSessions, out.cwdFiltered
+			}
+			sibling, err := database.GetMessages(t.Context(), "muse-personal:"+secondID, 0, 100, true)
+			require.NoError(t, err)
+			for _, step := range []struct{ updated, want string }{
+				{"2026-10-05T17:00:00.123Z", "2026-10-05T17:00:00.123Z"},
+				{"", "2026-10-05T15:04:06Z"},
+			} {
+				writeIndex(step.updated)
+				written = 0
+				if watcher {
+					require.NoError(t, engine.SyncPathsContext(t.Context(), []string{index}))
+				} else {
+					stats = engine.SyncAll(t.Context(), nil)
+					require.Zero(t, stats.Failed)
+					assert.Equal(t, 1, stats.Synced)
+				}
+				assert.Equal(t, 1, written, "index event must admit exactly one archive replacement")
+				session, err := database.GetSessionFull(t.Context(), "muse-personal:"+musePersonalSyncID)
+				require.NoError(t, err)
+				require.NotNil(t, session.EndedAt)
+				assert.Equal(t, step.want, *session.EndedAt)
+				b, err := database.GetSessionFull(t.Context(), "muse-personal:"+secondID)
+				require.NoError(t, err)
+				require.NotNil(t, b.EndedAt)
+				assert.Equal(t, "2026-10-05T16:00:00Z", *b.EndedAt)
+				messages, err := database.GetMessages(t.Context(), "muse-personal:"+secondID, 0, 100, true)
+				require.NoError(t, err)
+				assert.Equal(t, sibling, messages, "unchanged sibling must retain its stored messages")
+				stats = engine.SyncAll(t.Context(), nil)
+				require.Zero(t, stats.Failed)
+				assert.Zero(t, stats.Synced)
+			}
+			require.NoError(t, os.Remove(index))
+			written = 0
+			require.NoError(t, engine.SyncPathsContext(t.Context(), []string{index}))
+			assert.Equal(t, 1, written, "whole-index removal changes only the remaining indexed sibling")
+			// Explicit reparse remains available even when fingerprints match.
+			written = 0
+			require.NoError(t, engine.ReparsePathsContext(t.Context(), []string{second}))
+			assert.Equal(t, 1, written)
+			engine.Close()
+			engine = NewEngine(t.Context(), database, EngineConfig{AgentDirs: map[parser.AgentType][]string{parser.AgentMusePersonal: {root}}, Machine: "local"})
+			t.Cleanup(engine.Close)
+			stats = engine.SyncAll(t.Context(), nil)
+			require.Zero(t, stats.Failed)
+			assert.Zero(t, stats.Synced)
+		})
+	}
 }

@@ -406,26 +406,128 @@ func parseMusePersonalSession(ctx context.Context, path, machine string) (*Parse
 		return nil, nil, err
 	}
 	sess.MessageCount = len(messages)
-	musePersonalApplyIndex(ctx, path, h, sess)
+	updates, err := musePersonalIndexUpdates(ctx, path, h)
+	if err != nil {
+		return nil, nil, err
+	}
+	for _, updated := range updates {
+		if !updated.Before(sess.EndedAt) {
+			sess.EndedAt = updated
+			break
+		}
+	}
 	if err := ctx.Err(); err != nil {
 		return nil, nil, err
 	}
 	return sess, messages, nil
 }
 
-// The index is advisory: only matching identity and creation evidence may extend
-// the transcript's end time. Its paths, counts and context snapshot are inert.
-func musePersonalApplyIndex(ctx context.Context, path string, h musePersonalHeader, sess *ParsedSession) {
-	index := filepath.Join(filepath.Dir(path), "sessions.json")
-	info, err := os.Lstat(index)
-	if err != nil || !info.Mode().IsRegular() || info.Size() > musePersonalIndexLimit {
-		return
+// Index paths and opaque fields are never authorities. Only the full identity
+// and ordered update instants participate in enrichment and freshness.
+func musePersonalIndexIdentity(h musePersonalHeader) string {
+	return h.SessionID + ":" + h.AgentID + ":" + h.CreatedAt.UTC().Format(time.RFC3339Nano)
+}
+
+func musePersonalIndexUpdates(ctx context.Context, path string, h musePersonalHeader) ([]time.Time, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
 	}
-	f, err := os.Open(index)
+	index := filepath.Join(filepath.Dir(path), "sessions.json")
+	info, err := siblingMetadataFileInfoStrict(index)
+	if err != nil || info == nil {
+		return nil, err
+	}
+	generation := fileStatTupleDigest(0xD6, index)
+	identity := musePersonalIndexIdentity(h)
+	// Without reliable ctime/inode evidence, never reuse a shared snapshot.
+	prefix := fmt.Sprintf("muse-personal-index:%s:%x:", index, generation)
+	var entries map[string][]time.Time
+	load := func() error {
+		var err error
+		entries, err = musePersonalLoadIndex(ctx, index, info, generation)
+		if err != nil {
+			return err
+		}
+		if reconciliationCacheAvailable(ctx) && generation != 0 {
+			for key, updates := range entries {
+				value, err := json.Marshal(updates)
+				if err != nil {
+					return err
+				}
+				if err := reconciliationCachePut(ctx, prefix+key, string(value)); err != nil {
+					return err
+				}
+			}
+		}
+		return nil
+	}
+	if reconciliationCacheAvailable(ctx) && generation != 0 {
+		if err := reconciliationCacheOnce(ctx, prefix, load); err != nil {
+			return nil, err
+		}
+		value, found, err := reconciliationCacheGet(ctx, prefix+identity)
+		if err != nil {
+			return nil, err
+		}
+		var updates []time.Time
+		if found {
+			if err := json.Unmarshal([]byte(value), &updates); err != nil {
+				return nil, err
+			}
+		}
+		// A cached generation must still describe the current physical file. In
+		// particular, an old snapshot cannot certify a newer engine stat digest.
+		if err := musePersonalVerifyIndex(ctx, index, info, generation); err != nil {
+			return nil, err
+		}
+		return updates, nil
+	}
+	if err := load(); err != nil {
+		return nil, err
+	}
+	return entries[identity], nil
+}
+
+func musePersonalVerifyIndex(ctx context.Context, path string, before os.FileInfo, generation uint64) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	after, err := os.Lstat(path)
 	if err != nil {
-		return
+		return err
+	}
+	if !after.Mode().IsRegular() || !os.SameFile(before, after) ||
+		before.Size() != after.Size() || !before.ModTime().Equal(after.ModTime()) ||
+		generation != fileStatTupleDigest(0xD6, path) {
+		return errors.New("Muse Personal index changed during read")
+	}
+	return nil
+}
+
+func musePersonalLoadIndex(ctx context.Context, path string, info os.FileInfo, generation uint64) (map[string][]time.Time, error) {
+	observeSharedContainerScan(ctx)
+	if info.Size() > musePersonalIndexLimit {
+		return nil, musePersonalVerifyIndex(ctx, path, info, generation)
+	}
+	f, err := os.Open(path)
+	if err != nil {
+		return nil, err
 	}
 	defer f.Close()
+	opened, err := f.Stat()
+	if err != nil {
+		return nil, err
+	}
+	if !opened.Mode().IsRegular() || !os.SameFile(info, opened) {
+		return nil, errors.New("Muse Personal index replaced before read")
+	}
+	raw, err := io.ReadAll(io.LimitReader(&countingReader{ctx: ctx, r: f}, musePersonalIndexLimit+1))
+	if err != nil {
+		return nil, err
+	}
+	if err := musePersonalVerifyIndex(ctx, path, info, generation); err != nil {
+		return nil, err
+	}
 	var data struct {
 		Version  int `json:"version"`
 		Sessions []struct {
@@ -435,19 +537,17 @@ func musePersonalApplyIndex(ctx context.Context, path string, h musePersonalHead
 			UpdatedAt time.Time `json:"updated_at"`
 		} `json:"sessions"`
 	}
-	decoder := jsontext.NewDecoder(io.LimitReader(&countingReader{ctx: ctx, r: f}, musePersonalIndexLimit+1))
-	if json.UnmarshalDecode(decoder, &data) != nil || data.Version != 1 {
-		return
+	// Unmarshal validates the entire document, including EOF, before any cache
+	// writes. Malformed/unsupported advisory metadata keeps transcript semantics.
+	if len(raw) > musePersonalIndexLimit || json.Unmarshal(raw, &data) != nil || data.Version != 1 {
+		return nil, musePersonalVerifyIndex(ctx, path, info, generation)
 	}
-	if _, err := decoder.ReadValue(); !errors.Is(err, io.EOF) {
-		return
-	}
+	entries := make(map[string][]time.Time)
 	for _, entry := range data.Sessions {
-		if entry.SessionID == h.SessionID && entry.AgentID == h.AgentID && entry.CreatedAt.Equal(h.CreatedAt) && !entry.UpdatedAt.Before(sess.EndedAt) {
-			sess.EndedAt = entry.UpdatedAt
-			return
-		}
+		key := musePersonalIndexIdentity(musePersonalHeader{SessionID: entry.SessionID, AgentID: entry.AgentID, CreatedAt: entry.CreatedAt})
+		entries[key] = append(entries[key], entry.UpdatedAt)
 	}
+	return entries, musePersonalVerifyIndex(ctx, path, info, generation)
 }
 
 const musePersonalUnsupportedContent = "[Unsupported Muse Personal content]"

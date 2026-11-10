@@ -6214,7 +6214,13 @@ schemas keep their existing ordering behavior.
   output metadata, checkpoint details and context snapshots stay in raw custody.
   An unterminated final line defers publication. Raw capture includes the original
   transcript and regular index, even when the index version cannot enrich the
-  session. Index arrival, edits and removal refresh the projection. Local and
+  session. Reverified against synthetic fixtures on 2026-11-10: index freshness
+  uses the matching session ID, agent ID and normalized creation instant, with
+  update timestamps in row order (the first eligible row extends end time).
+  Each verified index generation is decoded once per sync pass. Arrival, edits
+  and removal refresh only affected session projections; unrelated fields,
+  whitespace and sibling rows do not force replacement. The complete index
+  remains in raw custody, including malformed or opaque bytes. Local and
   hosted parsing use the same provider; logical hosted paths remain stable
   across generations. Nonregular transcripts are rejected before opening;
   unreadable owned directories and observed cancellation cannot authorize a

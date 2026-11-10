@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 )
 
 func newMusePersonalProviderFactory(def AgentDef) ProviderFactory {
@@ -216,16 +217,24 @@ func musePersonalFingerprintSource(ctx context.Context, src singleFileSource) (S
 	if err := addSiblingMetadataFingerprintPart(ctx, h, "transcript", src.Path, info); err != nil {
 		return SourceFingerprint{}, err
 	}
-	index := filepath.Join(filepath.Dir(src.Path), "sessions.json")
-	mi, err := siblingMetadataFileInfoStrict(index)
+	f, err := os.Open(src.Path)
 	if err != nil {
 		return SourceFingerprint{}, err
 	}
-	if mi != nil {
-		fp.Size += mi.Size()
-		if err := addSiblingMetadataFingerprintPart(ctx, h, "index", index, mi); err != nil {
-			return SourceFingerprint{}, err
-		}
+	header, err := musePersonalReadHeader(f, src.Path)
+	_ = f.Close()
+	if err != nil {
+		return SourceFingerprint{}, err
+	}
+	updates, err := musePersonalIndexUpdates(ctx, src.Path, header)
+	if err != nil {
+		return SourceFingerprint{}, err
+	}
+	// Empty and unusable indexes share a stable absence marker. Shared file
+	// stats and unrelated bytes never invalidate this session's projection.
+	_, _ = h.Write([]byte("index-updates:"))
+	for _, updated := range updates {
+		_, _ = h.Write([]byte(updated.UTC().Format(time.RFC3339Nano) + "\n"))
 	}
 	fp.Hash = hex.EncodeToString(h.Sum(nil))
 	return fp, nil
@@ -282,7 +291,7 @@ func musePersonalProviderCapabilities() Capabilities {
 	source.CompositeFingerprint = CapabilitySupported
 	source.ForceReplaceOnParse = CapabilitySupported
 	source.MultiFileStatHash = CapabilitySupported
-	return Capabilities{RawCapture: RawCaptureCapabilities{Support: CapabilitySupported, Shape: RawCaptureShapeFiles, Append: RawCaptureAppendMany}, Source: source, Content: ContentCapabilities{FirstMessage: CapabilitySupported, Thinking: CapabilitySupported, ToolCalls: CapabilitySupported, ToolResults: CapabilitySupported, ToolResultEvents: CapabilitySupported, MalformedLineCount: CapabilitySupported, TruncationStatus: CapabilitySupported}, Sync: ProviderSyncSemantics{FingerprintHashRequiredForFreshness: true, PartialDiscovery: true}}
+	return Capabilities{RawCapture: RawCaptureCapabilities{Support: CapabilitySupported, Shape: RawCaptureShapeFiles, Append: RawCaptureAppendMany}, Source: source, Content: ContentCapabilities{FirstMessage: CapabilitySupported, Thinking: CapabilitySupported, ToolCalls: CapabilitySupported, ToolResults: CapabilitySupported, ToolResultEvents: CapabilitySupported, MalformedLineCount: CapabilitySupported, TruncationStatus: CapabilitySupported}, Sync: ProviderSyncSemantics{FingerprintHashRequiredForFreshness: true, PartialDiscovery: true, BatchFingerprintCache: true}}
 }
 
 func (s musePersonalSourceSet) sourceRef(root string, match singleFileMatch) SourceRef {
