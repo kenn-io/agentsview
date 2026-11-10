@@ -98,11 +98,12 @@ App-level glue that remains local:
   browser locale; the shared wrappers above do this.
 - A page or panel with nothing to show uses kit-ui `EmptyState`: nothing saved
   yet, no rows for these filters, or a feature this server does not offer. Pass
-  an icon, a title, an optional description, and controls such as Retry as
-  children. Use `align="top"` for a whole page or a panel under its header, so
-  the state sits the same fixed step below the header on every page. Keep
-  `StateNotice` for framed notes that sit above content that still renders
-  (read-only mode, date-filter scope), and the alert card for failed loads.
+  `title` and an optional `description` as props, the icon as an `icon`
+  snippet, and controls such as Retry as children. Use `align="top"` for a
+  whole page or a panel under its header, so the state sits the same fixed
+  step below the header on every page. Keep `StateNotice` for framed notes
+  that sit above content that still renders (read-only mode, date-filter
+  scope), and the alert card for failed loads.
 - `frontend/src/lib/components/content/SessionFindBar.svelte` wires kit-ui
   `FindBar` to the in-session search store.
 - kit-ui `SettingsLayout` owns grouped settings navigation and scroll behavior;
@@ -123,8 +124,9 @@ App-level glue that remains local:
   reports only the widths a person sets, through `oncolumnresize`, and does
   not store them. Pages that offer resizing persist the widths they care
   about: Recent edits keeps them in `localStorage` through
-  `recentedits/columnWidths.ts`, keyed by column position, because kit-ui
-  names a column by its translated label. Columns nobody resized follow the
+  `recentedits/columnWidths.ts` under stable column keys (`project`, `edits`,
+  `time`). kit-ui names a column by its translated label, so the page maps the
+  position kit-ui reports to that key. Columns nobody resized follow the
   window, and Recent edits' File column takes the spare width (`fill`).
   Pass a translated `resizeLabel` on every resizable header.
 
