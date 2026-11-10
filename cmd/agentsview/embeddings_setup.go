@@ -4,6 +4,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log"
+	"math"
 	"net/url"
 	"sync"
 
@@ -48,7 +50,44 @@ func newLiveVectorServing(ctx context.Context, cfg config.Config, database *db.D
 		push: &vectorPushSource{cfg: cfg},
 	}
 	v.startSchedulers()
+	v.startSharedChoice()
 	return v, nil
+}
+
+func (v *liveVectorServing) startSharedChoice() {
+	chosen, err := embedlocal.ChoiceRecorded()
+	if err != nil {
+		log.Printf("search by meaning: read shared choice: %v", err)
+		return
+	}
+	if v.cfg.ArchiveContent.UsageOnly() || v.database.ArchiveContent().UsageOnly() || v.cfg.DeploymentEmbeddings != nil {
+		return
+	}
+	embeddings := v.cfg.Vector.Embeddings
+	if v.cfg.Vector.Enabled {
+		_, deployment, err := embeddings.Server("")
+		if !chosen && err == nil && embeddings.Model == "nomic-embed-text" && deployment.Endpoint == "" {
+			status, err := embeddingsSetupStatus(v.ctx, server.EmbeddingsSetupStatus{}, v.cfg)
+			if err == nil && status.Provider == "built-in" {
+				recordEmbeddingChoice()
+			}
+		}
+		return
+	}
+	if !chosen || (embeddings.Model != "" && embeddings.Model != "nomic-embed-text") || embeddings.Servers != nil || embeddings.DefaultServer != "" {
+		return
+	}
+	if err := v.Setup(math.MaxInt64); err != nil {
+		v.mu.Lock()
+		v.setup = server.EmbeddingsSetupStatus{Action: "turn-on", Error: err.Error()}
+		v.mu.Unlock()
+	}
+}
+
+func recordEmbeddingChoice() {
+	if err := embedlocal.RecordChoice(); err != nil {
+		log.Printf("search by meaning: record shared choice: %v", err)
+	}
 }
 
 func (v *liveVectorServing) startSchedulers() {
@@ -115,6 +154,8 @@ func (v *liveVectorServing) Manager(store string) server.EmbeddingsManager {
 }
 
 func (v *liveVectorServing) ServerOptions() []server.Option {
+	v.mu.Lock()
+	defer v.mu.Unlock()
 	options := []server.Option{
 		server.WithEmbeddingsRuntime(v),
 		server.WithVectorPushSource(v.push),
@@ -252,7 +293,7 @@ func (v *liveVectorServing) Setup(approvedBytes int64) error {
 
 func (v *liveVectorServing) activate(deployment config.VectorEmbeddingsServerConfig, approvedBytes int64) error {
 	cfg := v.cfg
-	_, err := resolveLocalEmbeddings(v.ctx, deployment,
+	endpoint, err := resolveLocalEmbeddings(v.ctx, deployment,
 		func(_ context.Context, size int64) (bool, error) {
 			if size > approvedBytes {
 				v.mu.Lock()
@@ -296,7 +337,13 @@ func (v *liveVectorServing) activate(deployment config.VectorEmbeddingsServerCon
 	}
 	err = v.serving.manager.StartBuild(vector.BuildRequest{IncludeAutomated: cfg.Vector.IncludeAutomated})
 	if errors.Is(err, vector.ErrBuildRunning) {
-		return nil
+		err = nil
+	}
+	if err == nil && deployment.Endpoint == "" {
+		u, parseErr := url.Parse(endpoint)
+		if parseErr == nil && u.Port() != "11434" {
+			recordEmbeddingChoice()
+		}
 	}
 	return err
 }
