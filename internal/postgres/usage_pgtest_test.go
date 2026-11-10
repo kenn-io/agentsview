@@ -11,6 +11,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"go.kenn.io/agentsview/internal/config"
 	"go.kenn.io/agentsview/internal/db"
 	"go.kenn.io/agentsview/internal/dbtest"
 	"go.kenn.io/agentsview/internal/export"
@@ -45,6 +46,7 @@ func TestStoreConfiguredAliasKimiPricing(t *testing.T) {
 	pricing.SetConfiguredAliases(map[string]string{"gateway-kimi": "kimi-for-coding"})
 	t.Cleanup(func() { pricing.SetConfiguredAliases(nil) })
 	_, store := prepareUsageSchema(t, "agentsview_alias_kimi_test")
+	store.SetCustomPricing(map[string]config.CustomModelRate{"gateway-kimi": {PriceAs: "kimi-for-coding"}})
 	ctx := t.Context()
 	_, err := store.DB().ExecContext(ctx, `INSERT INTO model_pricing (model_pattern, input_microdollars_per_mtok, output_microdollars_per_mtok, cache_creation_microdollars_per_mtok, cache_read_microdollars_per_mtok, updated_at) VALUES ('kimi-k3',3000000,0,0,0,'seed')`)
 	require.NoError(t, err)

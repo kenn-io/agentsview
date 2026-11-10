@@ -5357,6 +5357,7 @@ func TestGetDailyUsage_KimiAliasPricing(t *testing.T) {
 	pricingpkg.SetConfiguredAliases(map[string]string{"gateway-kimi": "kimi-for-coding"})
 	t.Cleanup(func() { pricingpkg.SetConfiguredAliases(nil) })
 	d := testDB(t)
+	d.SetCustomPricing(map[string]config.CustomModelRate{"gateway-kimi": {PriceAs: "kimi-for-coding"}})
 	ctx := t.Context()
 
 	// K2.6 era rates (matching the moonshot/kimi-k2.6 snapshot row) and

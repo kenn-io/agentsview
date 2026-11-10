@@ -263,7 +263,9 @@ func TestUsageJournaledConfiguredAliasChanges(t *testing.T) {
 	database.usageBackfillMu.Unlock()
 	var original int64
 	require.NoError(t, cache.db.QueryRowContext(t.Context(), `SELECT install_revision FROM usage_rollup_installs WHERE session_id='unrelated'`).Scan(&original))
-	for _, step := range []struct {
+	var mappedOriginal int64
+	require.NoError(t, cache.db.QueryRowContext(t.Context(), `SELECT install_revision FROM usage_rollup_installs WHERE session_id='mapped'`).Scan(&mappedOriginal))
+	for i, step := range []struct {
 		aliases map[string]string
 		cost    int64
 	}{
@@ -278,12 +280,23 @@ func TestUsageJournaledConfiguredAliasChanges(t *testing.T) {
 			custom[name] = config.CustomModelRate{PriceAs: target}
 		}
 		database.SetCustomPricing(custom)
+		database.usageBackfillMu.Lock()
+		database.usageBackfillEnabled = true
+		database.usageBackfillMu.Unlock()
 		got, err := database.GetDailyUsage(t.Context(), filter)
 		require.NoError(t, err)
 		assert.Equal(t, step.cost, got.Totals.TotalCost.Microdollars)
+		require.NoError(t, database.WaitUsageCacheBackfill(t.Context()))
+		database.usageBackfillMu.Lock()
+		database.usageBackfillEnabled = false
+		database.usageBackfillMu.Unlock()
 		var revision int64
 		require.NoError(t, cache.db.QueryRowContext(t.Context(), `SELECT install_revision FROM usage_rollup_installs WHERE session_id='unrelated'`).Scan(&revision))
 		assert.Equal(t, original, revision)
+		if i == 0 {
+			require.NoError(t, cache.db.QueryRowContext(t.Context(), `SELECT install_revision FROM usage_rollup_installs WHERE session_id='mapped'`).Scan(&revision))
+			assert.NotEqual(t, mappedOriginal, revision)
+		}
 	}
 }
 

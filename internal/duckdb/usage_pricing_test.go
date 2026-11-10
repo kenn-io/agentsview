@@ -29,6 +29,8 @@ func TestDailyUsageKimiDateAliasPricing(t *testing.T) {
 	t.Cleanup(func() { pricingpkg.SetConfiguredAliases(nil) })
 	ctx := t.Context()
 	local := newLocalDB(t)
+	custom := map[string]config.CustomModelRate{"gateway-kimi": {PriceAs: "kimi-for-coding"}}
+	local.SetCustomPricing(custom)
 
 	require.NoError(t, local.UpsertModelPricing([]db.ModelPricing{
 		{
@@ -116,6 +118,7 @@ func TestDailyUsageKimiDateAliasPricing(t *testing.T) {
 	_, err = syncer.pushEverything(ctx, nil)
 	require.NoError(t, err)
 	store := NewStoreFromDB(syncer.DB())
+	store.SetCustomPricing(custom)
 
 	got, err := store.GetDailyUsage(ctx, db.UsageFilter{
 		From:     "2026-07-01",

@@ -589,6 +589,7 @@ func TestDailyUsageAliasTargetCustomRateOverridesPersistedPrice(t *testing.T) {
 			store, _, local := newUsagePriceStore(t)
 			custom := map[string]config.CustomModelRate{
 				tc.customModel: {InputMicrodollarsPerMTok: 7_000_000},
+				"round-test":   {PriceAs: tc.target},
 			}
 			local.SetCustomPricing(custom)
 			store.SetCustomPricing(custom)
