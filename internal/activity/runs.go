@@ -152,6 +152,35 @@ func (b *SessionRunsBuilder) Finish() SessionRuns {
 	return runs
 }
 
+// DeriveSessionRuns reduces the candidates source streams for the sessions
+// ids names to each session's runs and ignores other sessions. source must
+// stream in sweep order: each session's candidates then reach its builder in
+// the order the aggregator takes them.
+func DeriveSessionRuns(
+	ctx context.Context, ids []string, gapCapSeconds float64, source CandidateSource,
+) (map[string]SessionRuns, error) {
+	index := make(map[string]int, len(ids))
+	builders := make([]SessionRunsBuilder, len(ids))
+	for i, id := range ids {
+		index[id] = i
+		builders[i] = *NewSessionRunsBuilder(gapCapSeconds)
+	}
+	err := source(ctx, func(c IntervalCandidate) error {
+		if i, ok := index[c.SessionID]; ok {
+			builders[i].Add(c)
+		}
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	runs := make(map[string]SessionRuns, len(ids))
+	for id, i := range index {
+		runs[id] = builders[i].Finish()
+	}
+	return runs, nil
+}
+
 // AppendClipped appends the session's runs clipped to [start, end), the
 // range start and effective end of a report, in start order.
 func (r SessionRuns) AppendClipped(out []Run, sessionID string, start, end time.Time) []Run {

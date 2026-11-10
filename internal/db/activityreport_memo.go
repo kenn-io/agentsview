@@ -190,33 +190,26 @@ func (db *DB) activityReportRuns(
 	}
 	m.mu.Unlock()
 	if len(misses) > 0 {
-		builders := make(map[string]*activity.SessionRunsBuilder, len(misses))
-		counted := make(map[string]*activityMemoCounted, len(misses))
-		for _, id := range misses {
-			builders[id] = activity.NewSessionRunsBuilder(q.GapCapSeconds)
-			counted[id] = &activityMemoCounted{}
+		index := make(map[string]int, len(misses))
+		counted := make([]activityMemoCounted, len(misses))
+		for i, id := range misses {
+			index[id] = i
 		}
-		// The scan's stream is in sweep order, so each session's candidates
-		// reach its builder in the order the aggregator would take them.
-		err := db.activityReportCandidateSQL(misses, window, func(id string, message activityCountedMessage) {
-			if c := counted[id]; c != nil {
-				c.add(message)
-			}
-		})(ctx, func(c activity.IntervalCandidate) error {
-			if b := builders[c.SessionID]; b != nil {
-				b.Add(c)
-			}
-			return nil
-		})
+		derived, err := activity.DeriveSessionRuns(ctx, misses, q.GapCapSeconds,
+			db.activityReportCandidateSQL(misses, window, func(id string, message activityCountedMessage) {
+				if i, ok := index[id]; ok {
+					counted[i].add(message)
+				}
+			}))
 		if err != nil {
 			return nil, nil, err
 		}
 		entries := make([]activityMemoEntry, 0, len(misses))
 		var bytes int64
-		for _, id := range misses {
+		for i, id := range misses {
 			entry := activityMemoEntry{
 				key: activityMemoKey{id, lower}, version: versions[id], upper: window.EffectiveEnd,
-				runs: builders[id].Finish(), counted: counted[id].finish(),
+				runs: derived[id], counted: counted[i].finish(),
 			}
 			sessions[id] = entry
 			if _, exists := versions[id]; exists {
