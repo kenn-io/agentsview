@@ -722,6 +722,47 @@ func retainedInlineURI(raw jsontext.Value) (jsontext.Value, bool, bool) {
 	return uri, block.Type == "input_image", true
 }
 
+// RetainedImageReader caches image block locations for one source result.
+// Callers verify the returned bytes against the occurrence hash.
+type RetainedImageReader struct {
+	callID, eventID int64
+	contentLen      int
+	blocks          [][2]int
+}
+
+func (r *RetainedImageReader) Read(content string, callID, eventID int64, index int, assetsDir string, limit int64) ([]byte, error) {
+	if r.blocks == nil || r.callID != callID || r.eventID != eventID || r.contentLen != len(content) {
+		r.callID, r.eventID, r.contentLen = callID, eventID, len(content)
+		r.blocks = make([][2]int, 0)
+		scanSummarySections(content, func(_, end int, raw jsontext.Value) {
+			var blocks []jsontext.Value
+			if json.Unmarshal(raw, &blocks) != nil {
+				return
+			}
+			base, offset := end-len(raw), 0
+			for _, block := range blocks {
+				at := bytes.Index(raw[offset:], block)
+				if at < 0 {
+					return
+				}
+				start := offset + at
+				offset = start + len(block)
+				if _, ok := retainedImageBlock(block, len(r.blocks)); ok {
+					r.blocks = append(r.blocks, [2]int{base + start, base + offset})
+				}
+			}
+		})
+	}
+	if index < 0 || index >= len(r.blocks) {
+		return nil, fmt.Errorf("retained image %d missing", index)
+	}
+	span := r.blocks[index]
+	if span[0] < 0 || span[1] > len(content) || span[0] >= span[1] {
+		return nil, errors.New("retained image location changed")
+	}
+	return readRetainedImageBlock(jsontext.Value(content[span[0]:span[1]]), index, assetsDir, limit)
+}
+
 // ReadRetainedImage reads the indexed retained image without changing its
 // stored form, refusing copies larger than limit bytes.
 func ReadRetainedImage(content string, index int, assetsDir string, limit int64) ([]byte, error) {
@@ -734,6 +775,10 @@ func ReadRetainedImage(content string, index int, assetsDir string, limit int64)
 	if found == nil {
 		return nil, fmt.Errorf("retained image %d missing", index)
 	}
+	return readRetainedImageBlock(found, index, assetsDir, limit)
+}
+
+func readRetainedImageBlock(found jsontext.Value, index int, assetsDir string, limit int64) ([]byte, error) {
 	var body []byte
 	if p, ok := parseOffloadedImagePlaceholder(found); ok {
 		hash, ext, ok := assetImageDigest(p.ImageRef)

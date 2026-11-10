@@ -36,6 +36,7 @@ func (m *Manager) Run(ctx context.Context) error {
 		identity.Fingerprint = m.Processor
 	}
 	cutoff := time.Now()
+	reader := &db.RetainedImageReader{}
 	for {
 		pending, err := m.DB.PendingImageText(ctx, identity.Fingerprint, cutoff, pageSize)
 		if err != nil {
@@ -48,7 +49,7 @@ func (m *Manager) Run(ctx context.Context) error {
 			if !time.Now().Before(deadline) {
 				return ctx.Err()
 			}
-			if err := m.processImage(ctx, identity, hash); err != nil {
+			if err := m.processImage(ctx, identity, hash, reader); err != nil {
 				return err
 			}
 		}
@@ -57,9 +58,9 @@ func (m *Manager) Run(ctx context.Context) error {
 
 // processImage reads the first retained copy whose bytes match hash. Only
 // verified bytes can fail permanently; unusable copies leave a retry.
-func (m *Manager) processImage(ctx context.Context, identity ocr.Identity, hash string) error {
-	for offset := 0; ; offset += pageSize {
-		items, err := m.DB.ImageTextSources(ctx, hash, offset, pageSize)
+func (m *Manager) processImage(ctx context.Context, identity ocr.Identity, hash string, reader *db.RetainedImageReader) error {
+	for offset := 0; ; offset++ {
+		items, err := m.DB.ImageTextSources(ctx, hash, offset, 1)
 		if err != nil {
 			return err
 		}
@@ -67,12 +68,22 @@ func (m *Manager) processImage(ctx context.Context, identity ocr.Identity, hash 
 			if err := ctx.Err(); err != nil {
 				return err
 			}
-			body, err := db.ReadRetainedImage(item.Content, item.Index, m.DB.AssetsDir(), glmocr.MaxDocumentBytes)
+			body, err := reader.Read(item.Content, item.CallID, item.EventID, item.Index, m.DB.AssetsDir(), glmocr.MaxDocumentBytes)
 			if err != nil || len(body) == 0 {
-				continue
+				body, err = db.ReadRetainedImage(item.Content, item.Index, m.DB.AssetsDir(), glmocr.MaxDocumentBytes)
+				if err != nil || len(body) == 0 {
+					continue
+				}
 			}
 			if sum := sha256.Sum256(body); hex.EncodeToString(sum[:]) != hash {
-				continue
+				// A source can change without changing its length during a pass.
+				body, err = db.ReadRetainedImage(item.Content, item.Index, m.DB.AssetsDir(), glmocr.MaxDocumentBytes)
+				if err != nil {
+					continue
+				}
+				if sum := sha256.Sum256(body); hex.EncodeToString(sum[:]) != hash {
+					continue
+				}
 			}
 			// Process verifies the type against the bytes before sending a request.
 			// Try image types so a stale label does not hide usable image data.
@@ -103,7 +114,7 @@ func (m *Manager) processImage(ctx context.Context, identity ocr.Identity, hash 
 			}
 			return m.DB.SaveImageTextTerminal(ctx, hash, identity)
 		}
-		if len(items) < pageSize {
+		if len(items) == 0 {
 			break
 		}
 	}

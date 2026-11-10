@@ -225,6 +225,42 @@ func TestImageTextPassDrainsPages(t *testing.T) {
 	require.Equal(t, 21, requests)
 }
 
+func TestImageTextPassReadsMultipleImagesFromOneResult(t *testing.T) {
+	ctx := t.Context()
+	d, err := db.Open(ctx, filepath.Join(t.TempDir(), "archive.db"))
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, d.Close()) })
+	blocks := []string{`{"type":"input_image","image_url":"data:image/png;base64,%%%"}`}
+	want := make(map[string]bool)
+	for i := range 3 {
+		image := base64.StdEncoding.EncodeToString(fmt.Appendf(nil, "\x89PNG\r\n\x1a\nimage%d", i))
+		want[image] = true
+		blocks = append(blocks, fmt.Sprintf(`{"type":"input_image","image_url":"data:image/png;base64,%s"}`, image))
+	}
+	content := "[" + strings.Join(blocks, ",") + "]"
+	require.NoError(t, d.UpsertSession(ctx, db.Session{ID: "multi", Project: "demo", Agent: "test", MessageCount: 1}))
+	require.NoError(t, d.InsertMessages(ctx, []db.Message{{SessionID: "multi", Ordinal: 1, Role: "assistant", Content: "answer", ToolCalls: []db.ToolCall{{ToolName: "Read", ResultContent: content}}}}))
+	seen := make(map[string]bool)
+	requests := 0
+	client := localOCRClient(t, func(w http.ResponseWriter, r *http.Request) {
+		requests++
+		var request struct {
+			Images []string `json:"images"`
+		}
+		require.NoError(t, json.UnmarshalRead(r.Body, &request))
+		require.Len(t, request.Images, 1)
+		seen[strings.TrimPrefix(request.Images[0], "data:image/png;base64,")] = true
+		w.Header().Set("Content-Type", "application/json")
+		fmt.Fprintf(w, `{"model":"glm-ocr","deployment_fingerprint":%q,"json_result":[[{"index":0,"label":"text","content":"invoice"}]]}`, glmocr.DefaultDeploymentFingerprint)
+	})
+	manager := Manager{DB: d, Client: client}
+	require.NoError(t, manager.Run(ctx))
+	require.Equal(t, want, seen)
+	require.Equal(t, 3, requests)
+	require.NoError(t, manager.Run(ctx))
+	require.Equal(t, 3, requests)
+}
+
 func TestImageTextUsesSameSessionRetainedCopy(t *testing.T) {
 	for _, corrupt := range []bool{false, true} {
 		t.Run(fmt.Sprintf("corrupt=%t", corrupt), func(t *testing.T) {
