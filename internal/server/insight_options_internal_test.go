@@ -77,3 +77,17 @@ func TestCannedGenerationPassesSnapshotToGenerator(t *testing.T) {
 	require.Contains(t, recorder.Body.String(), "ok")
 	require.NotContains(t, recorder.Body.String(), "mutated-model")
 }
+
+func TestChatGPTGenerateOptionsFromServerConfig(t *testing.T) {
+	srv := &Server{}
+	srv.cfg.DataDir = t.TempDir()
+	srv.cfg.Insights.Provider = "chatgpt"
+	srv.cfg.Insights.Model = "model"
+	opts := srv.currentInsightGenerateOptions(t.Context())
+	require.NotNil(t, opts.ChatGPT)
+	require.Nil(t, opts.Endpoint)
+	require.Equal(t, srv.cfg.DataDir, opts.ChatGPT.DataDir)
+	require.Equal(t, "model", opts.ChatGPT.Model)
+	_, err := srv.defaultInsightGenerateStream(t.Context(), "claude", "prompt", nil)
+	require.ErrorContains(t, err, "ChatGPT is not connected")
+}

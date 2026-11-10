@@ -52,9 +52,10 @@ links use `/recall?tab=generated&insight=<id>`.
 
 ![Generated insights](/docs/assets/generated/screenshots/recall-generated-insights.png)
 
-Generated insights use the configured OpenAI-compatible endpoint when
-`[insights]` has both an `endpoint` and `model`; when neither is set, they use
-the selected agent CLI on your machine. See
+Generated insights can use a [ChatGPT subscription](#chatgpt-subscription), an
+OpenAI-compatible endpoint, or a local agent CLI. With the default empty
+`provider`, they use the endpoint when `[insights]` has both `endpoint` and
+`model`, or the selected agent CLI when neither is set. See
 [Choosing the default agent](#choosing-the-default-agent) to set the initial
 selection. Partial endpoint configuration is rejected during configuration
 validation. Endpoint mode sends one non-streaming `POST /chat/completions`
@@ -86,6 +87,68 @@ report under the same endpoint and model.
 
 Generated insights can also be listed, fetched, and generated from the CLI with
 `agentsview insight`; see the [CLI reference](/docs/commands/).
+
+### ChatGPT subscription
+
+Set `provider = "chatgpt"` to generate daily activity, agent analysis, tool
+effectiveness, canned insights, and Friction Log summaries with your ChatGPT
+subscription. This mode needs no API key or installed Codex CLI. It does not
+change the separate Friction Log classifier.
+
+```toml
+[insights]
+provider = "chatgpt"
+model = "your-codex-model" # replace with a model available to your account
+```
+
+Do not combine this provider with `endpoint`, `api_key_env`, or `allow_http`.
+Unknown providers and a missing model fail configuration validation. Restart the
+server after changing its configuration. The existing agent picker remains
+visible; ChatGPT mode uses the configured model regardless of that CLI choice.
+Saved results identify the backend as `chatgpt`.
+
+On the server, run as the user that runs AgentsView, with the same
+`AGENTSVIEW_DATA_DIR` and configuration:
+
+```bash
+agentsview insight chatgpt login
+agentsview insight chatgpt status --json
+agentsview insight chatgpt logout
+```
+
+Login prints a verification URL and code. Open that URL in a browser on another
+machine if needed and approve the code. For a container, use
+`docker exec -it --user <daemon-user> <container> agentsview insight chatgpt login`;
+pass the daemon's data-directory environment if it differs from the container's
+default. These commands act on local files and reject `--server` and
+`--server-token-file`; they do not start or contact the daemon. Login does not
+edit configuration or enable the provider.
+
+Credentials live in `<data-dir>/insights-chatgpt/credentials.json`, separate from
+`config.toml` and Codex's credentials. The directory is private (0700), and the
+files are owner-only (0600) on POSIX systems. Windows relies on the data
+directory's user ACLs. Keep this directory private in volume mounts and backups.
+Refresh is automatic near expiry, including across concurrent requests and
+processes. Status reads local state without contacting OpenAI and exposes only
+connection state and access-token expiry. A terminal refresh rejection requires
+login again. Logout clears local credentials and cancels pending login attempts;
+it cannot revoke tokens already issued by OpenAI or stop an in-flight request.
+Use ChatGPT's security settings for account-side revocation.
+
+This opt-in integration uses Codex's device-code protocol and subscription
+backend, rather than the public OpenAI API. It does not establish that reuse of
+Codex's client registration is an approved third-party integration. Check
+OpenAI's terms and your plan/workspace rules; device-code login may need to be
+enabled. These endpoints can change. Model availability, usage limits, and
+entitlement depend on your account. Session-derived prompts go to OpenAI; review
+its data controls before enabling this. Protocol tests use fixtures and do not
+verify a live account's entitlement.
+
+Authentication, model, and service failures return an error without retrying
+through a CLI or an endpoint. Partial or incomplete output is never saved.
+Canned cache identity includes ChatGPT and its model, but excludes account and
+credentials. Logging out or switching accounts does not remove saved reports or
+cached reports; force refresh when you need a new report under the same model.
 
 ### Tool effectiveness reports
 
@@ -142,8 +205,8 @@ The Web UI picker and requests that do not name an agent use this value when it
 is set, and `claude` when it is not. `default_agent` accepts `claude`, `codex`,
 `copilot`, `gemini`, or `kiro`; another value fails configuration validation at
 startup. An explicit picker choice overrides the default until you switch
-servers. `default_agent` has no effect while `[insights]` also sets an
-`endpoint` and `model`, because endpoint mode never invokes an agent CLI.
+servers. `default_agent` has no effect in ChatGPT or endpoint mode, because those
+modes do not invoke an agent CLI.
 
 Reviewed JSONL import is a guarded laboratory inlet, not a stable or recommended
 end-user workflow. Use an isolated `AGENTSVIEW_DATA_DIR` for experiments. The

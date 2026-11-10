@@ -16,6 +16,7 @@ import (
 	"strings"
 	"unicode/utf16"
 
+	"go.kenn.io/agentsview/internal/chatgpt"
 	"go.kenn.io/agentsview/internal/config"
 	"go.kenn.io/agentsview/internal/stringutil"
 )
@@ -88,14 +89,22 @@ type AgentConfig struct {
 	AllowUnsafe bool
 }
 
+// ChatGPTConfig is the explicit subscription backend choice for one call.
+// Credentials are loaded privately at request time and never copied here.
+type ChatGPTConfig struct {
+	DataDir string
+	Model   string
+}
+
 // GenerateOptions holds optional insight generation overrides.
 type GenerateOptions struct {
 	Agents   map[string]AgentConfig
 	Endpoint *EndpointConfig
+	ChatGPT  *ChatGPTConfig
 }
 
-// GenerateStreamWithOptions invokes an AI agent CLI to generate an
-// insight, using configured binary paths before falling back to PATH.
+// GenerateStreamWithOptions uses the configured insight backend, or invokes
+// an agent CLI using configured binary paths before falling back to PATH.
 func GenerateStreamWithOptions(
 	ctx context.Context, agent, prompt string, onLog LogFunc,
 	opts GenerateOptions,
@@ -104,6 +113,13 @@ func GenerateStreamWithOptions(
 		return Result{}, fmt.Errorf(
 			"unsupported agent: %s", agent,
 		)
+	}
+	if opts.ChatGPT != nil {
+		text, err := chatgpt.New(opts.ChatGPT.DataDir).Complete(ctx, opts.ChatGPT.Model, prompt)
+		if err != nil {
+			return Result{}, err
+		}
+		return Result{Content: text, Agent: "chatgpt", Model: strings.TrimSpace(opts.ChatGPT.Model)}, nil
 	}
 	if opts.Endpoint != nil {
 		return generateEndpoint(ctx, *opts.Endpoint, prompt)
@@ -497,7 +513,7 @@ func parseCodexStream(
 // characters. macOS has no per-argument cap, only 1 MiB for all arguments and
 // the environment together, so its limit leaves 128 KiB for the rest.
 func PromptArgLimit(agent string, opts GenerateOptions) int {
-	if agent != "copilot" || opts.Endpoint != nil {
+	if agent != "copilot" || opts.Endpoint != nil || opts.ChatGPT != nil {
 		return 0
 	}
 	switch runtime.GOOS {

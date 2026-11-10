@@ -11,6 +11,7 @@ import (
 	"strings"
 	"time"
 
+	"go.kenn.io/agentsview/internal/chatgpt"
 	"go.kenn.io/agentsview/internal/db"
 	"go.kenn.io/agentsview/internal/friction"
 	"go.kenn.io/agentsview/internal/money"
@@ -337,7 +338,13 @@ func CannedCacheKey(
 	generationBackend := requestedAgent
 	generationModel := ""
 	generationEndpointHash := ""
-	if generation.Endpoint != nil &&
+	if generation.ChatGPT != nil {
+		generationBackend = "chatgpt"
+		generationModel = strings.TrimSpace(generation.ChatGPT.Model)
+		endpointSum := sha256.Sum256([]byte(chatgpt.ResponsesURL))
+		generationEndpointHash = hex.EncodeToString(endpointSum[:])
+		requestedAgent = ""
+	} else if generation.Endpoint != nil &&
 		strings.TrimSpace(generation.Endpoint.Endpoint) != "" &&
 		strings.TrimSpace(generation.Endpoint.Model) != "" {
 		generationBackend = "openai"

@@ -2343,7 +2343,7 @@ the saved Markdown content for get.
 `insight generate` accepts `--type`, `--date-from`, `--date-to`, `--project`,
 `--prompt`, `--session-id`, `--agent`, `--automated-scope`, and `--timezone`.
 The type defaults to `daily_activity`. The server validates fields, selects the
-configured agent or endpoint, and decides whether the selected backend can save
+configured ChatGPT provider, agent, or endpoint, and decides whether the selected backend can save
 the result. Local commands discover or start the configured daemon; an explicit
 `--server <url>` targets an already running server.
 
@@ -2358,6 +2358,25 @@ result written to stdout, which keeps JSON output usable in scripts. For an
 explicit server, provide its bearer token with `AGENTSVIEW_SERVER_TOKEN` or
 `--server-token-file <path>`. The local daemon token from `config.toml` is never
 sent to an explicitly supplied server.
+
+### `agentsview insight chatgpt`
+
+Manage ChatGPT authorization on the server, as its operating user and with its
+configured data directory:
+
+```bash
+agentsview insight chatgpt login
+agentsview insight chatgpt status [--json]
+agentsview insight chatgpt logout
+```
+
+`login` prints the verification URL and device code, then waits for browser
+approval. `status` reads local connection state and expiry without contacting
+OpenAI; `--format json` and `--json` print the same state as JSON. `logout`
+clears local credentials and cancels pending login; it does not revoke tokens at
+OpenAI. All three commands reject `--server` and `--server-token-file` and do not
+start a daemon. For container setup, provider configuration, and limits, see
+[ChatGPT subscription](/docs/recall/#chatgpt-subscription).
 
 ______________________________________________________________________
 

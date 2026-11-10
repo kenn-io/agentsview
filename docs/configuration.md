@@ -306,7 +306,7 @@ Set it to `"0"` to keep syncing while idle. Restart the server after changing it
 | `[vector]`                          | Opt-in semantic-search index; model settings live in `[vector.embeddings]`, named endpoints in `[vector.embeddings.servers.<name>]`, embedding schedule in `[vector.embed]` — see [Semantic Search](/docs/semantic-search/#enabling-vector) for every key                                                                                                                                                                                                                        |
 | `[recall.extract]`                  | Opt-in model-backed recall extraction; named endpoints in `[recall.extract.servers.<name>]`, prompt selection in `[recall.extract.prompts]`, request overrides in `[recall.extract.request]` — see [Recall](/docs/recall/#automatic-extraction)                                                                                                                                                                                                                                  |
 | `[integrations.docbank]` | Optional lookup of transcript image digests in Docbank; see [Find transcript images in Docbank](/docs/configuration/#find-transcript-images-in-docbank) |
-| `[insights]`                        | Optional generated-insights endpoint and model, plus `default_agent`, the agent CLI new reports start with; local loopback HTTP is allowed, remote plaintext requires `allow_http = true`, and endpoint failures do not retry through a CLI — see [Recall](/docs/recall/#current-surface)                                                                                                                                                                                        |
+| `[insights]`                        | Opt-in `provider = "chatgpt"` with an explicit model for subscription-backed insights, or an OpenAI-compatible endpoint and model; `default_agent` selects the agent CLI new reports start with when neither backend is configured; local loopback HTTP is allowed, remote plaintext requires `allow_http = true`, and endpoint failures do not retry through a CLI — see [Recall](/docs/recall/#current-surface)                                                                                                                                                                                        |
 | `[friction]`                        | Opt-in Friction Log review; set `enabled = true` to review changed sessions in the background after each sync — see [Friction Log](#friction-log)                                                                                                                                                                                                                                                                                                                                |
 | `[kata]`                            | Optional Kata issue-tracker connection; off by default; HTTPS needs `token_env` — see [Kata](/docs/kata/)                                         |
 | `[[remote_hosts]]`                  | Remote machines synced by a bare `agentsview source sync` — see [CLI Reference](/docs/commands/#agentsview-sync)                                                                                                                                                                                                                                                                                                                                                                 |
@@ -2285,7 +2285,7 @@ builds missing days on demand. Findings are heuristics: check the session
 before acting on one.
 
 On the Friction Log page, **Generate summary** asks the configured `[insights]`
-endpoint or agent CLI for an optional model-written overview of one digest.
+backend for an optional model-written overview of one digest.
 Nothing generates summaries on a schedule. The model receives the digest counts,
 P0 alerts, and up to 20 pattern titles ranked by occurrences. Pattern titles can
 contain up to 80 characters of the text that triggered a correction, workaround,
@@ -2513,8 +2513,8 @@ Optional features that send data externally when you enable them:
     only leaves the machine if you expose the mirror over a remote Quack
     endpoint.
 - [Generated insights](/docs/recall/#current-surface) sends scoped session
-    content to the configured endpoint when `[insights]` sets `endpoint` and
-    `model`, or to the selected agent CLI when neither is set.
+    content to OpenAI when `[insights] provider = "chatgpt"`, or to the configured
+    endpoint when `[insights]` sets `endpoint` and `model`, or to the selected agent CLI when neither is set.
 - [Publish to Gist](/docs/usage/#publish-to-gist) uploads a session to GitHub.
 
 The automatic outbound requests are update checks and anonymous telemetry:

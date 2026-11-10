@@ -64,6 +64,7 @@ func newInsightCommand() *cobra.Command {
 	cmd.AddCommand(newInsightListCommand())
 	cmd.AddCommand(newInsightGetCommand())
 	cmd.AddCommand(newInsightGenerateCommand())
+	cmd.AddCommand(newInsightChatGPTCommand())
 	return cmd
 }
 

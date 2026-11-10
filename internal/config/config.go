@@ -773,9 +773,10 @@ type AgentConfig struct {
 	AllowUnsafe bool   `json:"allow_unsafe,omitempty" toml:"allow_unsafe"`
 }
 
-// InsightsConfig controls an optional OpenAI-compatible chat-completions
-// endpoint for generated insights.
+// InsightsConfig selects a generated-insights backend. Empty Provider keeps
+// endpoint-or-CLI selection; chatgpt opts into private subscription credentials.
 type InsightsConfig struct {
+	Provider  string `json:"provider,omitempty" toml:"provider"`
 	Endpoint  string `json:"endpoint,omitempty" toml:"endpoint"`
 	Model     string `json:"model,omitempty" toml:"model"`
 	APIKeyEnv string `json:"api_key_env,omitempty" toml:"api_key_env"`
@@ -834,6 +835,19 @@ func (c InsightsConfig) Validate() error {
 		if _, err := ParseInsightAgent(c.DefaultAgent); err != nil {
 			return fmt.Errorf("[insights] %w", err)
 		}
+	}
+	provider := strings.ToLower(strings.TrimSpace(c.Provider))
+	if provider != "" && provider != "chatgpt" {
+		return errors.New("[insights] provider must be empty or chatgpt")
+	}
+	if provider == "chatgpt" {
+		if strings.TrimSpace(c.Model) == "" {
+			return errors.New("[insights] chatgpt model is required")
+		}
+		if strings.TrimSpace(c.Endpoint) != "" || strings.TrimSpace(c.APIKeyEnv) != "" || c.AllowHTTP {
+			return errors.New("[insights] chatgpt cannot be combined with endpoint, api_key_env, or allow_http")
+		}
+		return nil
 	}
 	endpoint := strings.TrimSpace(c.Endpoint)
 	model := strings.TrimSpace(c.Model)
@@ -2239,6 +2253,7 @@ func (c *Config) applyConfigTOML(data string) error {
 	}
 	if meta.IsDefined("insights") {
 		c.Insights = file.Insights
+		c.Insights.Provider = strings.ToLower(strings.TrimSpace(c.Insights.Provider))
 		c.Insights.Endpoint = strings.TrimSpace(c.Insights.Endpoint)
 		c.Insights.Model = strings.TrimSpace(c.Insights.Model)
 		c.Insights.APIKeyEnv = strings.TrimSpace(c.Insights.APIKeyEnv)

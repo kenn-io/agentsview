@@ -350,6 +350,10 @@ func New(
 
 func insightGenerateOptions(cfg config.Config) insight.GenerateOptions {
 	opts := insight.GenerateOptions{Agents: insightAgentConfig(cfg.Agent)}
+	if cfg.Insights.Provider == "chatgpt" {
+		opts.ChatGPT = &insight.ChatGPTConfig{DataDir: cfg.DataDir, Model: cfg.Insights.Model}
+		return opts
+	}
 	if strings.TrimSpace(cfg.Insights.Endpoint) != "" &&
 		strings.TrimSpace(cfg.Insights.Model) != "" {
 		opts.Endpoint = &insight.EndpointConfig{
