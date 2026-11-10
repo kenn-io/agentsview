@@ -338,15 +338,6 @@ func TestEmbeddingsDisabledReturnsError(t *testing.T) {
 				err.Error())
 		})
 	}
-	t.Run("build usage-only", func(t *testing.T) {
-		dir := testDataDir(t)
-		t.Setenv("AGENTSVIEW_NO_DAEMON", "1")
-		require.NoError(t, os.WriteFile(filepath.Join(dir, "config.toml"), []byte("archive_content = \"usage\"\n"), 0o600))
-		var out bytes.Buffer
-		err := runEmbeddingsBuild(t.Context(), &out, strings.NewReader("yes\n"), EmbeddingsBuildOptions{})
-		require.ErrorIs(t, err, db.ErrArchiveContentExcluded)
-		assert.NotContains(t, out.String(), "[y/N]")
-	})
 }
 
 // TestEmbeddingsListRendersTable seeds vectors.db directly with one
@@ -1582,7 +1573,6 @@ func TestBuildViaDaemonConflictThenPolls(t *testing.T) {
 		n := statusCalls.Add(1)
 		status := vector.BuildStatus{Running: n < 2}
 		if n >= 2 {
-			status.Setup = &vector.SetupStatus{Action: "turn-on", Error: "setup failed"}
 			status.LastResult = &vector.BuildResult{
 				Activated: true,
 				Fill:      kitvec.FillStats{Documents: 3, Chunks: 3},

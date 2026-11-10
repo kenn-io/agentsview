@@ -740,8 +740,7 @@ describe("CommandPalette", () => {
   it("renders the semantic setup panel instead of the raw error for semantic-unavailable", async () => {
     mockSearchStore.mode = "semantic";
     mockSearchStore.error = {
-      detail:
-        "semantic search not available: run 'agentsview index embeddings build' or turn it on in Settings → Embeddings → Turn on",
+      detail: "semantic search unavailable",
       kind: "semantic-unavailable",
     };
     const component = mount(CommandPalette, { target: document.body });

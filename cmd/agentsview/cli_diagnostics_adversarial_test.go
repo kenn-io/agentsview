@@ -121,10 +121,6 @@ func TestCLIRecoveryGroupedCommandAdvice(t *testing.T) {
 	applyCLIRecovery(sessionSearch, cause, semantic)
 	assert.Equal(t, "unavailable", semantic.kind)
 	assert.Contains(t, semantic.hint, "agentsview index embeddings build")
-	var output bytes.Buffer
-	writeCLIDiagnostic(&output, semantic)
-	assert.Equal(t, 1, strings.Count(output.String(), "index embeddings build"))
-	assert.Contains(t, output.String(), "index missing")
 	assert.Contains(t, semantic.hint, "agentsview session search --help")
 	assert.Contains(t, semantic.hint, "--fts or --regex")
 
@@ -189,6 +185,18 @@ func TestCLIRecoveryGroupedCommandAdvice(t *testing.T) {
 		assert.NotContains(ht, commandRecoveryHint(child), "--host")
 		assert.Contains(ht, commandRecoveryHint(child), child.CommandPath()+" --help")
 	}, hegel.WithTestCases(1000))
+}
+
+func TestWriteCLIDiagnosticDeduplicatesSemanticAdvice(t *testing.T) {
+	cmd, _, err := newRootCommand().Find([]string{"session", "search"})
+	require.NoError(t, err)
+	cause := fmt.Errorf("%w: index missing", db.ErrSemanticUnavailable)
+	diagnostic := &cliDiagnosticError{err: cause}
+	applyCLIRecovery(cmd, cause, diagnostic)
+	var output bytes.Buffer
+	writeCLIDiagnostic(&output, diagnostic)
+	assert.Equal(t, 1, strings.Count(output.String(), "index embeddings build"))
+	assert.Contains(t, output.String(), "index missing")
 }
 
 func TestCLIRecoveryRemoteSentinelsHideURLSecrets(t *testing.T) {

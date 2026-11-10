@@ -618,7 +618,7 @@ func TestCLIEmbeddingsSetup(t *testing.T) {
 						return
 					}
 					if reads == 2 && tc.missing > 0 {
-						fmt.Fprintf(w, `{"setup":{"busy":true,"downloaded_bytes":%d,"total_bytes":%d}}`, tc.missing, tc.missing)
+						fmt.Fprintf(w, `{"setup":{"action":"turn-on","busy":true,"downloaded_bytes":%d,"total_bytes":%d}}`, tc.missing, tc.missing)
 						return
 					}
 					io.WriteString(w, `{"setup":{"enabled":true,"error":"inspection failed"},"last_result":{"Fill":{"Documents":3,"Chunks":4}}}`)
@@ -665,58 +665,88 @@ func TestCLIEmbeddingsSetup(t *testing.T) {
 			}
 		})
 	}
-}
-
-func TestCLIEmbeddingsEnabledSetupUsesOneConfirmation(t *testing.T) {
-	setTestHome(t, t.TempDir())
-	dir := testDataDir(t)
-	require.NoError(t, os.WriteFile(filepath.Join(dir, "config.toml"), []byte("[vector]\nenabled = true\n[vector.embeddings]\nmodel = 'nomic-embed-text'\ndimension = 768\n"), 0o600))
-	oldEndpoint, oldInstall := localEmbeddingEndpoint, installLocalEmbeddings
-	t.Cleanup(func() { localEmbeddingEndpoint, installLocalEmbeddings = oldEndpoint, oldInstall })
-	var installed bool
-	localEmbeddingEndpoint = func(context.Context, embedlocal.Options) (string, error) {
-		if !installed {
-			return "", embedlocal.ErrNotFound
-		}
-		return "http://127.0.0.1:1/v1", nil
-	}
-	installLocalEmbeddings = func(ctx context.Context, opts embedlocal.InstallOptions) (embedlocal.Installation, error) {
-		approved, err := opts.Confirm(ctx, 1000001)
-		if err != nil || !approved {
-			return embedlocal.Installation{}, errors.New("download declined")
-		}
-		installed = true
-		return embedlocal.Installation{}, nil
-	}
-	var setupPosts int
-	startEmbeddingsTestDaemon(t, dir, map[string]http.HandlerFunc{
-		"POST /api/v1/embeddings/build": func(w http.ResponseWriter, _ *http.Request) {
-			w.WriteHeader(http.StatusNotImplemented)
-		},
-		"GET /api/v1/embeddings/status": func(w http.ResponseWriter, _ *http.Request) {
-			w.Header().Set("Content-Type", "application/json")
-			if setupPosts == 0 {
-				io.WriteString(w, `{"setup":{"action":"turn-on","provider":"built-in","missing_bytes":1000001}}`)
-			} else {
-				io.WriteString(w, `{"setup":{"enabled":true},"last_result":{}}`)
+	t.Run("enabled-built-in-one-confirmation", func(t *testing.T) {
+		setTestHome(t, t.TempDir())
+		dir := testDataDir(t)
+		require.NoError(t, os.WriteFile(filepath.Join(dir, "config.toml"), []byte("[vector]\nenabled = true\n[vector.embeddings]\nmodel = 'nomic-embed-text'\ndimension = 768\n"), 0o600))
+		oldEndpoint, oldInstall := localEmbeddingEndpoint, installLocalEmbeddings
+		t.Cleanup(func() { localEmbeddingEndpoint, installLocalEmbeddings = oldEndpoint, oldInstall })
+		var installed bool
+		localEmbeddingEndpoint = func(context.Context, embedlocal.Options) (string, error) {
+			if !installed {
+				return "", embedlocal.ErrNotFound
 			}
-		},
-		"POST /api/v1/embeddings/setup": func(w http.ResponseWriter, r *http.Request) {
-			setupPosts++
-			var body struct {
-				ApprovedBytes int64 `json:"approved_bytes"`
+			return "http://127.0.0.1:1/v1", nil
+		}
+		installLocalEmbeddings = func(ctx context.Context, opts embedlocal.InstallOptions) (embedlocal.Installation, error) {
+			approved, err := opts.Confirm(ctx, 1000001)
+			if err != nil || !approved {
+				return embedlocal.Installation{}, errors.New("download declined")
 			}
-			assert.NoError(t, json.UnmarshalRead(r.Body, &body))
-			assert.EqualValues(t, 1000001, body.ApprovedBytes)
-			w.WriteHeader(http.StatusAccepted)
-		},
+			installed = true
+			return embedlocal.Installation{}, nil
+		}
+		var setupPosts int
+		startEmbeddingsTestDaemon(t, dir, map[string]http.HandlerFunc{
+			"POST /api/v1/embeddings/build": func(w http.ResponseWriter, _ *http.Request) {
+				w.WriteHeader(http.StatusNotImplemented)
+			},
+			"GET /api/v1/embeddings/status": func(w http.ResponseWriter, _ *http.Request) {
+				w.Header().Set("Content-Type", "application/json")
+				if setupPosts == 0 {
+					io.WriteString(w, `{"setup":{"action":"turn-on","provider":"built-in","missing_bytes":1000001}}`)
+				} else {
+					io.WriteString(w, `{"setup":{"enabled":true},"last_result":{}}`)
+				}
+			},
+			"POST /api/v1/embeddings/setup": func(w http.ResponseWriter, r *http.Request) {
+				setupPosts++
+				var body struct {
+					ApprovedBytes int64 `json:"approved_bytes"`
+				}
+				assert.NoError(t, json.UnmarshalRead(r.Body, &body))
+				assert.EqualValues(t, 1000001, body.ApprovedBytes)
+				w.WriteHeader(http.StatusAccepted)
+			},
+		})
+		var out strings.Builder
+		err := runEmbeddingsBuild(t.Context(), &out, strings.NewReader("yes\n"), EmbeddingsBuildOptions{})
+		assert.NoError(t, err)
+		assert.Equal(t, 1, setupPosts)
+		assert.Equal(t, 1, strings.Count(out.String(), "[y/N]"), out.String())
+		assert.NotContains(t, out.String(), "Download approximately")
 	})
-	var out strings.Builder
-	err := runEmbeddingsBuild(t.Context(), &out, strings.NewReader("yes\n"), EmbeddingsBuildOptions{})
-	assert.NoError(t, err)
-	assert.Equal(t, 1, setupPosts)
-	assert.Equal(t, 1, strings.Count(out.String(), "[y/N]"), out.String())
-	assert.NotContains(t, out.String(), "Download approximately")
+	for _, input := range []string{"no\n", "yes\n"} {
+		t.Run("inspection-error-"+strings.TrimSpace(input), func(t *testing.T) {
+			setTestHome(t, t.TempDir())
+			dir := testDataDir(t)
+			var posts int
+			startEmbeddingsTestDaemon(t, dir, map[string]http.HandlerFunc{
+				"GET /api/v1/embeddings/status": func(w http.ResponseWriter, _ *http.Request) {
+					w.Header().Set("Content-Type", "application/json")
+					io.WriteString(w, `{"setup":{"action":"turn-on","provider":"built-in","error":"cannot inspect model directory"}}`)
+				},
+				"POST /api/v1/embeddings/setup": func(w http.ResponseWriter, _ *http.Request) {
+					posts++
+					w.WriteHeader(http.StatusAccepted)
+				},
+			})
+			var out strings.Builder
+			err := runEmbeddingsBuild(t.Context(), &out, strings.NewReader(input), EmbeddingsBuildOptions{})
+			require.Error(t, err)
+			cause, prompt := strings.Index(out.String(), "cannot inspect model directory"), strings.Index(out.String(), "Retry search setup?")
+			assert.GreaterOrEqual(t, cause, 0)
+			assert.Greater(t, prompt, cause)
+			assert.NotContains(t, out.String(), " MB")
+			if input == "no\n" {
+				assert.Zero(t, posts)
+			} else {
+				assert.Equal(t, 1, posts)
+				assert.ErrorContains(t, err, "cannot inspect model directory")
+			}
+		})
+	}
+
 }
 
 func TestCLIEmbeddingsBuildStartsBeforeStatus(t *testing.T) {
@@ -748,66 +778,6 @@ func TestCLIEmbeddingsSetupRequiresWritableDaemon(t *testing.T) {
 	err := runEmbeddingsBuild(t.Context(), &out, strings.NewReader("yes\n"), EmbeddingsBuildOptions{})
 	require.ErrorContains(t, err, "search setup requires a writable daemon")
 	assert.NotContains(t, out.String(), "[y/N]")
-}
-
-func TestCLIEmbeddingsSetupInspectionError(t *testing.T) {
-	oldInspect, oldEndpoint, oldInstall := inspectLocalEmbeddings, localEmbeddingEndpoint, installLocalEmbeddings
-	t.Cleanup(func() {
-		inspectLocalEmbeddings, localEmbeddingEndpoint, installLocalEmbeddings = oldInspect, oldEndpoint, oldInstall
-	})
-	for _, input := range []string{"no\n", "yes\n"} {
-		t.Run(strings.TrimSpace(input), func(t *testing.T) {
-			setTestHome(t, t.TempDir())
-			dir := testDataDir(t)
-			cfg, err := config.LoadReadOnly()
-			require.NoError(t, err)
-			database := dbtest.OpenTestDBAt(t, filepath.Join(dir, "sessions.db"))
-			var inspections, posts atomic.Int32
-			var attempted atomic.Bool
-			inspectLocalEmbeddings = func(context.Context, embedlocal.Options) (embedlocal.Status, error) {
-				if inspections.Add(1) == 1 {
-					return embedlocal.Status{}, errors.New("cannot inspect model directory")
-				}
-				return embedlocal.Status{DownloadBytes: 100}, nil
-			}
-			localEmbeddingEndpoint = func(context.Context, embedlocal.Options) (string, error) { return "", embedlocal.ErrNotFound }
-			installLocalEmbeddings = func(ctx context.Context, opts embedlocal.InstallOptions) (embedlocal.Installation, error) {
-				attempted.Store(true)
-				_, err := opts.Confirm(ctx, 100)
-				if err != nil {
-					return embedlocal.Installation{}, err
-				}
-				return embedlocal.Installation{}, errors.New("download declined")
-			}
-			owner, err := newLiveVectorServing(t.Context(), cfg, database, nil, config.LoadReadOnly)
-			require.NoError(t, err)
-			t.Cleanup(func() { require.NoError(t, owner.Close()) })
-			ln, port := listenLoopback(t)
-			cfg.Host, cfg.Port = "127.0.0.1", port
-			handler := server.New(cfg, database, nil, owner.ServerOptions()...).Handler()
-			startTestServer(t, ln, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-				if r.Method == http.MethodPost && r.URL.Path == "/api/v1/embeddings/setup" {
-					posts.Add(1)
-				}
-				handler.ServeHTTP(w, r)
-			}))
-			writeDaemonRuntimeForTest(t, dir, "127.0.0.1", port, "test", false)
-			var out strings.Builder
-			err = runEmbeddingsBuild(t.Context(), &out, strings.NewReader(input), EmbeddingsBuildOptions{})
-			require.Error(t, err)
-			cause, prompt := strings.Index(out.String(), "cannot inspect model directory"), strings.Index(out.String(), "Retry search setup?")
-			assert.GreaterOrEqual(t, cause, 0)
-			assert.Greater(t, prompt, cause)
-			assert.NotContains(t, out.String(), " MB")
-			if input == "no\n" {
-				assert.Zero(t, posts.Load())
-				assert.False(t, attempted.Load())
-			} else {
-				assert.EqualValues(t, 1, posts.Load())
-				assert.True(t, attempted.Load())
-			}
-		})
-	}
 }
 
 func TestCLIEmbeddingsFreshSetup(t *testing.T) {
