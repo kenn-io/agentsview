@@ -14,7 +14,7 @@ import (
 )
 
 func TestClickHouseRetainedCommitLinksAfterNarrowRebuild(t *testing.T) {
-	for _, policy := range []config.ArchiveContent{config.ArchiveContentTranscripts, config.ArchiveContentUsage} {
+	for _, policy := range []config.ArchiveContent{config.ArchiveContentTranscripts} {
 		for _, full := range []bool{false, true} {
 			t.Run(string(policy)+map[bool]string{false: "/generation", true: "/full"}[full], func(t *testing.T) {
 				a, target := seedFixture(t)

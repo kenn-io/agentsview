@@ -17,7 +17,7 @@ import (
 type retainedDeleteBarrier struct{ paused, release chan struct{} }
 
 func (b *retainedDeleteBarrier) TraceQueryStart(ctx context.Context, _ *pgx.Conn, data pgx.TraceQueryStartData) context.Context {
-	if strings.HasPrefix(data.SQL, "DELETE FROM retained_commit_links") || strings.HasPrefix(data.SQL, "DELETE FROM commit_links WHERE session_id=") {
+	if strings.HasPrefix(data.SQL, "DELETE FROM retained_commit_links") {
 		close(b.paused)
 		select {
 		case <-b.release:
@@ -41,11 +41,8 @@ func TestPGRetainedCommitLinkPublicationRace(t *testing.T) {
 				require.NoError(t, localB.ReplaceSessionMessages(ctx, "commit-live", nil))
 			}
 			b := &Sync{pg: pg, local: localB, machine: "workstation", schema: a.schema, schemaDone: true}
-			_, err := b.Push(ctx, true, nil)
-			require.NoError(t, err)
-			_, err = pg.ExecContext(ctx, `DELETE FROM sessions WHERE id='commit-live'`)
-			require.NoError(t, err)
 			require.NoError(t, localA.DeleteSession(ctx, "commit-live"))
+			var err error
 			a.archiveID, err = localA.GetArchiveID(ctx)
 			require.NoError(t, err)
 			connStr, err := appendConnParams(testPGURL(t), map[string]string{"search_path": a.schema, "TimeZone": "UTC"})

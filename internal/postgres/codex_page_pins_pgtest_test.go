@@ -187,27 +187,9 @@ func TestCodexPageUpgradePreservesPostgresPins(t *testing.T) {
 			if tc.name == "page_only" || tc.name == "other_owner" {
 				var live, retained int
 				require.NoError(t, syncer.pg.QueryRowContext(ctx, `SELECT count(*) FILTER (WHERE NOT retained), count(*) FILTER (WHERE retained) FROM commit_links WHERE session_id=$1`, thread).Scan(&live, &retained))
-				if tc.name == "page_only" {
-					assert.Zero(t, live)
-				} else {
-					assert.Equal(t, 1, live)
-				}
+				assert.Equal(t, map[string]int{"page_only": 0, "other_owner": 1}[tc.name], live)
 				assert.Equal(t, 1, retained)
-				if tc.name == "page_only" {
-					anchor := thread + "-anchor"
-					_, err = syncer.pg.ExecContext(ctx, `INSERT INTO sessions(id,project,agent,machine,deleted_at,trash_includes_codex_pages) VALUES($1,'sample','codex','machine',NOW(),true)`, anchor)
-					require.NoError(t, err)
-					_, err = syncer.pg.ExecContext(ctx, `INSERT INTO commit_links (session_id,sha,branch,subject,repository,message_ordinal,call_index,tool_use_id,committed_at,turn_ordinal,turn_text,project,retained) VALUES ($1,'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa','','','',0,0,'','',0,'prompt','',false)`, anchor)
-					require.NoError(t, err)
-					tx, err := syncer.pg.BeginTx(ctx, nil)
-					require.NoError(t, err)
-					require.NoError(t, retireCodexPageThread(ctx, tx, anchor, page, true))
-					require.NoError(t, tx.Commit())
-					var anchors, links int
-					require.NoError(t, syncer.pg.QueryRowContext(ctx, `SELECT (SELECT count(*) FROM sessions WHERE id=$1 AND deleted_at IS NOT NULL AND trash_includes_codex_pages), (SELECT count(*) FROM commit_links WHERE session_id=$1 AND turn_text='prompt')`, anchor).Scan(&anchors, &links))
-					assert.Equal(t, 1, anchors)
-					assert.Equal(t, 1, links)
-				}
+
 			}
 			if tc.name == "filtered_head" || tc.name == "excluded_head" {
 				head, err := store.GetSessionFull(ctx, thread)

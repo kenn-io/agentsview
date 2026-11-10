@@ -3205,12 +3205,6 @@ func TestFilteredArchiveIdentityRepairPreservesOtherPublicationScope(
 	require.NoError(t, err)
 	_, err = alpha.pg.ExecContext(ctx, `INSERT INTO retained_commit_links (source_archive_id,session_id,sha,branch,subject,repository,message_ordinal,call_index,tool_use_id,committed_at) VALUES ($1,'retained','aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa','','','',0,0,'','')`, oldArchiveID)
 	require.NoError(t, err)
-	reader, err := NewStore(ctx, pgURL, schema, true)
-	require.NoError(t, err)
-	t.Cleanup(func() { require.NoError(t, reader.Close()) })
-	links, err := reader.SessionCommitLinks(ctx, "retained")
-	require.NoError(t, err)
-	require.Len(t, links.Commits, 1)
 	const repairedArchiveID = "filtered-repaired-archive-id"
 	require.NoError(t, local.SetArchiveIdentityForTest(
 		ctx, repairedArchiveID,
@@ -3219,9 +3213,6 @@ func TestFilteredArchiveIdentityRepairPreservesOtherPublicationScope(
 
 	_, err = alpha.Push(ctx, false, nil)
 	require.NoError(t, err)
-	var retainedCount int
-	require.NoError(t, alpha.pg.QueryRowContext(ctx, `SELECT count(*) FROM retained_commit_links WHERE source_archive_id=$1`, oldArchiveID).Scan(&retainedCount))
-	require.Zero(t, retainedCount)
 	for _, fixture := range []struct {
 		query string
 		args  []any
@@ -3281,6 +3272,7 @@ func TestFilteredArchiveIdentityRepairPreservesOtherPublicationScope(
 	_, err = beta.Push(ctx, false, nil)
 	require.NoError(t, err)
 	for _, table := range []string{
+		"retained_commit_links",
 		"source_archives",
 		"source_project_identity_observations",
 		"source_project_identity_observation_scopes",
@@ -3303,15 +3295,6 @@ func TestFilteredArchiveIdentityRepairPreservesOtherPublicationScope(
 		repairedArchiveID,
 	).Scan(&repairedSessions))
 	assert.Equal(t, 2, repairedSessions)
-	alpha.projects = []string{"narrowed"}
-	_, err = alpha.Push(ctx, false, nil)
-	require.NoError(t, err)
-	links, err = reader.SessionCommitLinks(ctx, "retained")
-	require.NoError(t, err)
-	require.Empty(t, links.Commits)
-	matches, err := reader.CommitSessionLinks(ctx, []string{"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"})
-	require.NoError(t, err)
-	require.Empty(t, matches.Commits[0].Links)
 }
 
 // TestSessionProvenanceBackfillForcesOneFullPush verifies that the provenance

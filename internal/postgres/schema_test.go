@@ -585,8 +585,7 @@ func TestEnsureSchemaChecksDataVersionBeforeDDL(t *testing.T) {
 		"EnsureSchema must not mutate PG before data-version refusal")
 }
 
-func TestSyncEnsureSchemaSkipsLegacyDDLWhenSchemaCompatible(t *testing.T) {
-	pg, state := newSchemaProbeDB(t, nil)
+func setPushSchemaProbeCurrent(state *schemaProbeState) {
 	state.existingTables = map[string]bool{
 		"retained_commit_links":                           true,
 		"commit_links":                                    true,
@@ -616,10 +615,11 @@ func TestSyncEnsureSchemaSkipsLegacyDDLWhenSchemaCompatible(t *testing.T) {
 		"idx_sessions_parentless_workers": true,
 		"idx_sessions_source_missing":     true,
 	}
-	require.True(t, pushSchemaCurrent(t.Context(), pg))
-	delete(state.existingTables, "retained_commit_links")
-	require.False(t, pushSchemaCurrent(t.Context(), pg))
-	state.existingTables["retained_commit_links"] = true
+}
+
+func TestSyncEnsureSchemaSkipsLegacyDDLWhenSchemaCompatible(t *testing.T) {
+	pg, state := newSchemaProbeDB(t, nil)
+	setPushSchemaProbeCurrent(state)
 	syncer := &Sync{pg: pg, schema: "agentsview"}
 
 	require.NoError(t, syncer.EnsureSchema(t.Context()))
@@ -963,11 +963,11 @@ func TestSyncEnsureSchemaRunsDDLWhenPushMetadataMissing(t *testing.T) {
 		},
 	})
 	state.existingTables = map[string]bool{
-		"retained_commit_links": true,
-		"commit_links":          true,
-		"model_pricing":         true,
-		"cursor_usage_events":   true,
+		"commit_links":        true,
+		"model_pricing":       true,
+		"cursor_usage_events": true,
 	}
+	state.existingTables["retained_commit_links"] = true
 	state.existingIndexes = map[string]bool{
 		"idx_cursor_usage_events_dedup":   true,
 		"idx_tool_result_events_terminal": true,
@@ -988,35 +988,34 @@ func TestSyncEnsureSchemaRunsDDLWhenPushMetadataMissing(t *testing.T) {
 }
 
 func TestSyncEnsureSchemaRunsDDLWhenPushTableMissing(t *testing.T) {
-	pg, state := newSchemaProbeDB(t, map[string][]string{
-		"sessions": {
-			"has_total_output_tokens",
-			"has_peak_context_tokens",
-		},
-		"messages": {
-			"has_context_tokens",
-			"has_output_tokens",
-		},
-	})
-	// Read-compatible, and cursor_usage_events present, but model_pricing
-	// absent: the read probe passes yet a push would fail on model_pricing,
-	// so the fast path must fall back to EnsureSchema.
-	state.existingTables = map[string]bool{
-		"retained_commit_links": true,
-		"commit_links":          true,
-		"cursor_usage_events":   true,
+	for _, missing := range []string{"model_pricing", "retained_commit_links"} {
+		t.Run(missing, func(t *testing.T) {
+			pg, state := newSchemaProbeDB(t, map[string][]string{
+				"sessions": {
+					"has_total_output_tokens",
+					"has_peak_context_tokens",
+				},
+				"messages": {
+					"has_context_tokens",
+					"has_output_tokens",
+				},
+			})
+			setPushSchemaProbeCurrent(state)
+			require.True(t, pushSchemaCurrent(t.Context(), pg))
+			delete(state.existingTables, missing)
+			require.False(t, pushSchemaCurrent(t.Context(), pg))
+			syncer := &Sync{pg: pg, schema: "agentsview"}
+
+			require.NoError(t, syncer.EnsureSchema(t.Context()))
+
+			assert.Positive(t, state.execCount(),
+				"missing push-written table must fall back to migration DDL")
+			assert.Contains(t, strings.ToLower(state.executedSQL()),
+				"create table",
+				"fallback must create missing push tables")
+		})
 	}
-	syncer := &Sync{pg: pg, schema: "agentsview"}
-
-	require.NoError(t, syncer.EnsureSchema(t.Context()))
-
-	assert.Positive(t, state.execCount(),
-		"missing push-written table must fall back to migration DDL")
-	assert.Contains(t, strings.ToLower(state.executedSQL()),
-		"create table",
-		"fallback must create missing push tables")
 }
-
 func TestSyncEnsureSchemaRunsDDLWhenMappingTableMissing(t *testing.T) {
 	pg, state := newSchemaProbeDB(t, map[string][]string{
 		"sessions": {
@@ -1073,13 +1072,13 @@ func TestSyncEnsureSchemaRunsDDLWhenDedupIndexMissing(t *testing.T) {
 	// read probe passes yet ON CONFLICT DO NOTHING would not dedup cursor
 	// usage rows. The fast path must fall back to EnsureSchema.
 	state.existingTables = map[string]bool{
-		"retained_commit_links": true,
-		"commit_links":          true,
-		"model_pricing":         true,
-		"model_pricing_bands":   true,
-		"genai_pricing":         true,
-		"cursor_usage_events":   true,
+		"commit_links":        true,
+		"model_pricing":       true,
+		"model_pricing_bands": true,
+		"genai_pricing":       true,
+		"cursor_usage_events": true,
 	}
+	state.existingTables["retained_commit_links"] = true
 	syncer := &Sync{pg: pg, schema: "agentsview"}
 
 	require.NoError(t, syncer.EnsureSchema(t.Context()))
