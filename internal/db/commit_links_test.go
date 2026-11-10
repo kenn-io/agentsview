@@ -30,10 +30,15 @@ func TestCommitLinksArgvCommands(t *testing.T) {
 	for _, tt := range []struct {
 		name, input, repository string
 	}{
+		{"issue bash -lc", `{"command":["bash","-lc","git commit -m fix"]}`, "/work"},
+		{"option-looking path", `{"command":["git","-C","--git-dir=space here","commit"]}`, "/work/--git-dir=space here"},
+		{"workdir single quote", `{"command":["git","commit"],"workdir":"'"}`, "/work/'"},
+		{"cwd single quote", `{"command":["git","commit"],"cwd":"'"}`, "/work/'"},
+		{"workdir literal quotes", `{"command":["git","commit"],"workdir":"'/repo'"}`, "/work/'/repo'"},
+		{"cwd literal quotes", `{"command":["git","commit"],"cwd":"'/repo'"}`, "/work/'/repo'"},
 		{"sh -c", `{"command":["sh","-c","git commit -m fix"]}`, "/work"},
 		{"sh -lc", `{"command":["sh","-lc","git commit -m fix"]}`, "/work"},
 		{"bash -c", `{"command":["bash","-c","git commit -m fix"]}`, "/work"},
-		{"bash -lc", `{"command":["bash","-lc","git commit -m fix"]}`, "/work"},
 		{"zsh -c", `{"command":["zsh","-c","git commit -m fix"]}`, "/work"},
 		{"zsh -lc", `{"command":["zsh","-lc","git commit -m fix"]}`, "/work"},
 		{"absolute shell", `{"command":["/bin/bash","-lc","cd repo && git commit -m fix"]}`, "/work/repo"},
@@ -50,6 +55,7 @@ func TestCommitLinksArgvCommands(t *testing.T) {
 		{"env", `{"command":["env","X=1","git","commit"]}`, "/work"},
 		{"apostrophe", `{"command":["git","-C","/work/a'b\"c","commit"]}`, `/work/a'b"c`},
 		{"literal apostrophe", `{"command":"git -C '/work/a'\\''b' commit"}`, "/work/a'b"},
+		{"successive option-looking paths", `{"command":["git","-C","-C","-C","--git-dir=space here","commit"]}`, "/work/-C/--git-dir=space here"},
 		{"successive paths", `{"command":["git","-C","root","-C","child repo","commit"]}`, "/work/root/child repo"},
 		{"workdir", `{"command":["git","commit"],"workdir":"/repo"}`, "/repo"},
 		{"argv path", `{"command":["git","-C","/path with spaces","commit","-m","fix"]}`, "/path with spaces"},
@@ -528,7 +534,7 @@ func TestCommitLinksBackfill(t *testing.T) {
 	archive := filepath.Join(t.TempDir(), "archive.db")
 	d, err := Open(t.Context(), archive)
 	require.NoError(t, err)
-	for _, id := range []string{"repaired", "env", "equals", "unchanged"} {
+	for _, id := range []string{"repaired", "env", "equals", "operand", "unchanged"} {
 		insertSession(t, d, id, "project-a", func(s *Session) { s.Cwd = "/work" })
 		input := `{"command":"git commit -m fix"}`
 		switch id {
@@ -536,12 +542,14 @@ func TestCommitLinksBackfill(t *testing.T) {
 			input = `{"command":["bash","-lc","git commit -m fix"]}`
 		case "env":
 			input = `{"command":["env","-i","PATH=/usr/bin","git","commit","-m","fix"]}`
+		case "operand":
+			input = `{"command":["git","-C","--git-dir=space here","commit"]}`
 		case "equals":
 			input = `{"command":["git","--work-tree=/path with spaces","commit"]}`
 		}
 		insertMessages(t, d, commitMessages(id, input, "[main abc1234] Fix parser")...)
 	}
-	_, err = d.getWriter().Exec(t.Context(), `DELETE FROM commit_links WHERE session_id IN ('repaired','env','equals')`)
+	_, err = d.getWriter().Exec(t.Context(), `DELETE FROM commit_links WHERE session_id IN ('repaired','env','equals','operand')`)
 	require.NoError(t, err)
 	_, err = d.getWriter().Exec(t.Context(), `DELETE FROM stats WHERE key=?`, commitLinksBackfillKey)
 	require.NoError(t, err)
@@ -554,12 +562,16 @@ func TestCommitLinksBackfill(t *testing.T) {
 	for i := 0; i < 2; i++ {
 		d, err = Open(t.Context(), archive)
 		require.NoError(t, err)
-		for _, id := range []string{"repaired", "env", "equals"} {
+		for _, id := range []string{"repaired", "env", "equals", "operand"} {
 			got, err := d.SessionCommitLinks(t.Context(), id)
 			require.NoError(t, err)
 			require.Len(t, got.Commits, 1)
 			assert.Equal(t, "abc1234", got.Commits[0].SHA)
-			assert.Equal(t, "/work", got.Commits[0].Repository)
+			wantRepository := "/work"
+			if id == "operand" {
+				wantRepository += "/--git-dir=space here"
+			}
+			assert.Equal(t, wantRepository, got.Commits[0].Repository)
 			require.NotNil(t, got.Commits[0].Turn)
 			assert.Equal(t, "Record the parser fix", got.Commits[0].Turn.Text)
 			var repaired string
@@ -576,7 +588,7 @@ func TestCommitLinksBackfill(t *testing.T) {
 		}
 		reverse, err := d.CommitSessionLinks(t.Context(), []string{"abc1234"})
 		require.NoError(t, err)
-		require.Len(t, reverse.Commits[0].Links, 4)
+		require.Len(t, reverse.Commits[0].Links, 5)
 		var unchanged string
 		require.NoError(t, d.getReader().QueryRowContext(t.Context(), `SELECT local_modified_at FROM sessions WHERE id='unchanged'`).Scan(&unchanged))
 		assert.Equal(t, "2000-01-01T00:00:00.000Z", unchanged)

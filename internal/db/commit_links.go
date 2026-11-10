@@ -26,7 +26,7 @@ const (
 	MaxCommitSHAs          = 200
 	commitLinksBackfillKey = "commit_links_backfill_v2"
 	commitCommandToken     = `(?:"(?:\\[\s\S]|[^"\\])*"|'(?:[^']|'\\'')*'|[^\s;&|"']+)`
-	commitGlobalOption     = `(?:-[cC]\s+` + commitCommandToken + `|--(?:git-dir|work-tree|namespace|config-env)(?:=|\s+)` + commitCommandToken + `|-[pP]|--(?:no-pager|paginate|bare|no-replace-objects|literal-pathspecs|glob-pathspecs|noglob-pathspecs|icase-pathspecs|no-optional-locks|no-lazy-fetch|no-advice))`
+	commitGlobalOption     = `(?:-[cC]\s+` + commitCommandToken + `|--(?:git-dir|work-tree|namespace|config-env)(?:=|\s+)` + commitCommandToken + `|'--(?:git-dir|work-tree|namespace|config-env)=(?:[^']|'\\'')*'|-[pP]|--(?:no-pager|paginate|bare|no-replace-objects|literal-pathspecs|glob-pathspecs|noglob-pathspecs|icase-pathspecs|no-optional-locks|no-lazy-fetch|no-advice))`
 )
 
 var (
@@ -88,14 +88,8 @@ type CommitSessionList struct {
 
 // commitRepository records the directory of the first git commit invocation.
 func commitRepository(input, cwd string) string {
-	resolve := func(base, dir string) string {
-		quoted := strings.HasPrefix(dir, "'") || strings.HasPrefix(dir, `"`)
-		if strings.HasPrefix(dir, "'") && strings.HasSuffix(dir, "'") {
-			dir = strings.ReplaceAll(dir[1:len(dir)-1], `'\''`, "'")
-		} else {
-			dir = strings.Trim(dir, "\"'")
-		}
-		if path.IsAbs(dir) || (!quoted && strings.HasPrefix(dir, "~")) || commitWindowsDriveRE.MatchString(dir) || strings.HasPrefix(dir, `\\`) {
+	resolve := func(base, dir string, shellTilde bool) string {
+		if path.IsAbs(dir) || (shellTilde && strings.HasPrefix(dir, "~")) || commitWindowsDriveRE.MatchString(dir) || strings.HasPrefix(dir, `\\`) {
 			return dir
 		}
 		if !strings.ContainsAny(base+dir, `\`) && !commitWindowsDriveRE.MatchString(base) {
@@ -126,6 +120,17 @@ func commitRepository(input, cwd string) string {
 		}
 		return joined
 	}
+	resolveWord := func(base, word string) string {
+		quoted := len(word) >= 2 && ((word[0] == '\'' && word[len(word)-1] == '\'') || (word[0] == '"' && word[len(word)-1] == '"'))
+		if quoted {
+			if word[0] == '\'' {
+				word = strings.ReplaceAll(word[1:len(word)-1], `'\''`, "'")
+			} else {
+				word = word[1 : len(word)-1]
+			}
+		}
+		return resolve(base, word, !quoted)
+	}
 	var fields struct {
 		Workdir string `json:"workdir"`
 		Cwd     string `json:"cwd"`
@@ -138,23 +143,28 @@ func commitRepository(input, cwd string) string {
 	if dir == "" && !jsontext.Value(input).IsValid() && len(commitToolCallRE.FindAllStringIndex(input, -1)) == 1 && commitCommandText(input) != "" {
 		if match := commitWorkdirRE.FindStringSubmatch(commitCommandRE.ReplaceAllString(input, "")); match != nil {
 			dir = match[1]
-			if strings.HasPrefix(dir, "\"") {
-				_ = json.Unmarshal([]byte(match[1]), &dir)
+			if strings.HasPrefix(dir, `"`) {
+				if json.Unmarshal([]byte(dir), &dir) == nil {
+					cwd = resolve(cwd, dir, false)
+				}
+			} else {
+				cwd = resolveWord(cwd, dir)
 			}
+			dir = ""
 		}
 	}
 	if dir != "" {
-		cwd = resolve(cwd, dir)
+		cwd = resolve(cwd, dir, false)
 	}
 	command := commitCommandText(input)
 	if invocation := commitInvocationRE.FindStringIndex(command); invocation != nil {
 		if matches := commitCDRE.FindAllStringSubmatch(command[:invocation[0]], -1); len(matches) > 0 {
-			cwd = resolve(cwd, matches[len(matches)-1][1])
+			cwd = resolveWord(cwd, matches[len(matches)-1][1])
 		}
 	}
 	for _, option := range commitGlobalOptionRE.FindAllString(commitInvocationRE.FindString(command), -1) {
 		if strings.HasPrefix(option, "-C") {
-			cwd = resolve(cwd, strings.TrimSpace(option[2:]))
+			cwd = resolveWord(cwd, strings.TrimSpace(option[2:]))
 		}
 	}
 	return cwd
@@ -200,12 +210,9 @@ func commitCommandText(input string) string {
 			}
 			args[0] = "git"
 			for i, arg := range args {
-				name, value, hasValue := strings.Cut(arg, "=")
 				switch {
 				case strings.HasPrefix(arg, "~"):
 					args[i] = shellquote.POSIXLiteral(arg)
-				case hasValue && (name == "--git-dir" || name == "--work-tree" || name == "--namespace" || name == "--config-env"):
-					args[i] = shellquote.POSIX(name+"=") + shellquote.POSIX(value)
 				default:
 					args[i] = shellquote.POSIX(arg)
 				}

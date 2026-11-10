@@ -1522,8 +1522,10 @@ fixtures retain this field; missing identities remain source-local.
   case checks that a new native commit execution owns its repository and
   prompt after a batch poll.
   An archived `shell` call also records `command` as an array such as
-  `["bash", "-lc", "git commit ..."]`. `TestCommitLinksArgvCommands` and
-  `TestCommitLinksBackfill` cover extraction and archive repair;
+  `["bash", "-lc", "git commit ..."]`. Each array element is one shell
+  word; `workdir` and `cwd` are raw paths, while `cd` and `-C` use shell
+  words. `TestCommitLinksArgvCommands` covers quotes, spaces, apostrophes,
+  and option-looking paths. `TestCommitLinksBackfill` covers archive repair;
   `TestPGCommitLinkParity`, `TestClickHouseCommitLinkParity`, and
   `TestDuckDBIncrementalRetainedCommitLinkScope` cover incremental publication.
 

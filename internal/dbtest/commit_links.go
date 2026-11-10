@@ -151,9 +151,10 @@ func AssertRetainedCommitLink(t *testing.T, reader db.CommitLinkReader, want boo
 func SeedUnrepairedCommitLink(t *testing.T, local *db.DB) {
 	t.Helper()
 	for id, input := range map[string]string{
-		"commit-argv":   `{"command":["bash","-lc","git commit -m change"]}`,
-		"commit-env":    `{"command":["env","-i","PATH=/usr/bin","git","commit","-m","change"]}`,
-		"commit-equals": `{"command":["git","--work-tree=/path with spaces","commit"]}`,
+		"commit-argv":    `{"command":["bash","-lc","git commit -m change"]}`,
+		"commit-env":     `{"command":["env","-i","PATH=/usr/bin","git","commit","-m","change"]}`,
+		"commit-operand": `{"command":["git","-C","--git-dir=space here","commit"],"workdir":"/work"}`,
+		"commit-equals":  `{"command":["git","--work-tree=/path with spaces","commit"]}`,
 	} {
 		SeedSession(t, local, id, "commit-project")
 		result := "[main def5678] Save the change"
@@ -165,7 +166,7 @@ func SeedUnrepairedCommitLink(t *testing.T, local *db.DB) {
 	conn, err := sql.Open("sqlite3", local.Path())
 	require.NoError(t, err)
 	defer conn.Close()
-	_, err = conn.ExecContext(t.Context(), `DELETE FROM commit_links WHERE session_id IN ('commit-argv','commit-env','commit-equals')`)
+	_, err = conn.ExecContext(t.Context(), `DELETE FROM commit_links WHERE session_id IN ('commit-argv','commit-env','commit-equals','commit-operand')`)
 	require.NoError(t, err)
 	_, err = conn.ExecContext(t.Context(), `DELETE FROM stats WHERE key='commit_links_backfill_v2'`)
 	require.NoError(t, err)
@@ -176,7 +177,7 @@ func SeedUnrepairedCommitLink(t *testing.T, local *db.DB) {
 // AssertRepairedCommitLinkPush opens the archive to run the repair after an initial push.
 func AssertRepairedCommitLinkPush(t *testing.T, local *db.DB, reader func() db.CommitLinkReader, push func()) {
 	t.Helper()
-	for _, id := range []string{"commit-argv", "commit-env", "commit-equals"} {
+	for _, id := range []string{"commit-argv", "commit-env", "commit-equals", "commit-operand"} {
 		before, err := reader().SessionCommitLinks(t.Context(), id)
 		require.NoError(t, err)
 		require.Empty(t, before.Commits)
@@ -185,11 +186,14 @@ func AssertRepairedCommitLinkPush(t *testing.T, local *db.DB, reader func() db.C
 	require.NoError(t, err)
 	require.NoError(t, reopened.Close())
 	push()
-	for _, id := range []string{"commit-argv", "commit-env", "commit-equals"} {
+	for _, id := range []string{"commit-argv", "commit-env", "commit-equals", "commit-operand"} {
 		links, err := reader().SessionCommitLinks(t.Context(), id)
 		require.NoError(t, err)
 		require.Len(t, links.Commits, 1)
 		assert.Equal(t, "def5678", links.Commits[0].SHA)
+		if id == "commit-operand" {
+			assert.Equal(t, "/work/--git-dir=space here", links.Commits[0].Repository)
+		}
 		require.NotNil(t, links.Commits[0].Turn)
 		assert.Equal(t, "Record the parser fix", links.Commits[0].Turn.Text)
 	}
