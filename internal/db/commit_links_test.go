@@ -47,6 +47,7 @@ func TestCommitLinksArgvCommands(t *testing.T) {
 		{"absolute zsh", `{"command":["/bin/zsh","-lc","git commit -m fix"]}`, "/work"},
 		{"env assignment", `{"command":["env","GIT_AUTHOR_DATE=now","git","commit"]}`, "/work"},
 		{"env shell", `{"command":["env","NAME=value","bash","-lc","cd /repo && git commit"]}`, "/repo"},
+		{"env directory and shell cd", `{"command":["env","-C","/repo","bash","-lc","cd sub && git commit"]}`, "/repo/sub"},
 		{"windows git executable", `{"command":["C:\\Program Files\\Git\\bin\\git.exe","-C","/repo","commit"]}`, "/repo"},
 		{"trailing apostrophe", `{"command":["git","-C","/work/a'","commit"]}`, "/work/a'"},
 		{"literal tilde", `{"command":["git","-C","~/repo","commit"]}`, "/work/~/repo"},
