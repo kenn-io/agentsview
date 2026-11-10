@@ -632,7 +632,7 @@ func TestDarwinWatcherLostShallowEventsInvalidateRoots(t *testing.T) {
 
 	backend.shallowWatcher.consume(darwinShallowRoot{
 		logicalPath: root, nativePath: canonicalWatchRoot(root),
-	}, []fsevents.Event{{Flags: fseventFlagUserDropped}})
+	}, []fsevents.Event{{Flags: fseventFlagMustScanSubDirs}})
 
 	waitForDarwinBatch(t, batches, func(batch WatchBatch) bool { return batch.FullSync })
 	obligation := requireReceiveWithin(t, polling, 5*time.Second)
