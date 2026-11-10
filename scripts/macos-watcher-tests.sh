@@ -17,20 +17,15 @@ fi
 list_format='{{range .TestGoFiles}}{{$.Dir}}/{{.}}{{"\n"}}{{end}}'
 list_format+='{{range .XTestGoFiles}}{{$.Dir}}/{{.}}{{"\n"}}{{end}}'
 
-# Prints the test names declared in the selected files. A function keeps the
-# case statement out of $(...), which macOS's bash 3.2 cannot parse.
-selected_test_names() {
+names=$(
     go list -f "$list_format" "$@" | while IFS= read -r file; do
         [[ -n $file ]] || continue
-        case ${file##*/} in
-            watch*_test.go | *_darwin_test.go) ;;
-            *) grep -q '^//go:build.*darwin' "$file" || continue ;;
-        esac
+        base=${file##*/}
+        [[ $base == watch*_test.go || $base == *_darwin_test.go ]] ||
+            grep -q '^//go:build.*darwin' "$file" || continue
         sed -nE 's/^func (Test[A-Z0-9_][A-Za-z0-9_]*)\(.*/\1/p' "$file"
     done | LC_ALL=C sort -u
-}
-
-names=$(selected_test_names "$@")
+)
 names=$(printf '%s\n' "$names" | { grep -vx -e TestMain -e '' || true; })
 
 if [[ -z $names ]]; then
