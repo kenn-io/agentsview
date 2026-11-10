@@ -21,11 +21,11 @@ import (
 // Cursor Agent (the CLI, see cursor.go): it is a VS Code-style global-state
 // SQLite database, state.vscdb, whose cursorDiskKV table holds one JSON blob
 // per key. A "composerData:<uuid>" key is one chat session; its
-// fullConversationHeadersOnly array lists that session's turns in order, each
-// pointing at a sibling "bubbleId:<composerId>:<bubbleUuid>" row holding the
-// turn's text. conversationMap, the alternative inline-message field, was
+// fullConversationHeadersOnly array or composerConvHeaders chunk rows list
+// that session's turns in order, each pointing at a sibling
+// "bubbleId:<composerId>:<bubbleUuid>" row holding the turn's text. conversationMap, the alternative inline-message field, was
 // observed empty on every real (including large) conversation, so it is not a
-// usable source in this schema version (_v: 16 composerData / _v: 3 bubbles).
+// usable source in the observed _v: 16 schema.
 const (
 	cursorIDEIDPrefix = "cursor-ide:"
 	// CursorIDEDBRelPath is the container's path relative to the provider
@@ -34,6 +34,7 @@ const (
 	CursorIDEDBRelPath         = "state.vscdb"
 	cursorIDEComposerKeyPrefix = "composerData:"
 	cursorIDEBubbleKeyPrefix   = "bubbleId:"
+	cursorIDEHeaderKeyPrefix   = "composerConvHeaders:"
 
 	// cursorIDEBubbleTypeUser and cursorIDEBubbleTypeAssistant are the
 	// cursorDiskKV bubble "type" values.
@@ -149,7 +150,11 @@ type cursorIDEWorkspaceIdentifier struct {
 // capability flags, encryption keys for Cursor's own cloud sync, ...) is
 // ignored.
 type cursorIDEComposerDoc struct {
-	Headers             []cursorIDEComposerHeader    `json:"fullConversationHeadersOnly"`
+	Headers   []cursorIDEComposerHeader `json:"fullConversationHeadersOnly"`
+	HeaderLog struct {
+		Count      int `json:"count"`
+		ChunkCount int `json:"chunkCount"`
+	} `json:"headerLog"`
 	Name                string                       `json:"name"`
 	CreatedAt           int64                        `json:"createdAt"`
 	LastUpdatedAt       int64                        `json:"lastUpdatedAt"`
@@ -169,7 +174,7 @@ type cursorIDEComposerMeta struct {
 
 // cursorIDEComposerDigest hashes every parse input of one composer: the raw
 // composerData document (covering name, cwd, git branch, timestamps, and the
-// header order) and the key plus value bytes of every stored bubble row in
+// inline header order) and the keys and values of bubble and header rows in
 // the composer's key range. Any committed edit to the composer -- including
 // an equal-length in-place bubble rewrite, a header reorder, or a
 // metadata-only change that leaves lastUpdatedAt untouched -- changes the
@@ -184,13 +189,15 @@ func cursorIDEComposerDigest(
 	h := fnv.New64a()
 	_, _ = h.Write(rawComposer)
 	rows, err := q.QueryContext(ctx,
-		`SELECT key, value FROM cursorDiskKV WHERE key >= ? AND key < ? ORDER BY key`,
+		`SELECT key, value FROM cursorDiskKV WHERE (key >= ? AND key < ?) OR (key >= ? AND key < ?) ORDER BY key`,
 		cursorIDEBubbleKeyPrefix+composerID+":",
 		cursorIDEBubbleKeyPrefix+composerID+";",
+		cursorIDEHeaderKeyPrefix+composerID+":",
+		cursorIDEHeaderKeyPrefix+composerID+";",
 	)
 	if err != nil {
 		return "", fmt.Errorf(
-			"digesting cursor IDE bubbles for %s: %w", composerID, err)
+			"digesting cursor IDE rows for %s: %w", composerID, err)
 	}
 	defer rows.Close()
 	for rows.Next() {
@@ -198,7 +205,7 @@ func cursorIDEComposerDigest(
 		var value []byte
 		if err := rows.Scan(&key, &value); err != nil {
 			return "", fmt.Errorf(
-				"scanning cursor IDE bubble for digest %s: %w", composerID, err)
+				"scanning cursor IDE row for digest %s: %w", composerID, err)
 		}
 		_, _ = h.Write([]byte{0})
 		_, _ = h.Write([]byte(key))
@@ -207,13 +214,14 @@ func cursorIDEComposerDigest(
 	}
 	if err := rows.Err(); err != nil {
 		return "", fmt.Errorf(
-			"digesting cursor IDE bubbles for %s: %w", composerID, err)
+			"digesting cursor IDE rows for %s: %w", composerID, err)
 	}
 	return strconv.FormatUint(h.Sum64(), 16), nil
 }
 
 // cursorIDEComposerDocDigest hashes one raw composerData value; the watcher
-// compares it because every bubble the parser reads is listed in it.
+// compares it on file changes. Header-row-only edits wait for periodic
+// reconciliation.
 func cursorIDEComposerDocDigest(raw []byte) string {
 	h := fnv.New64a()
 	_, _ = h.Write(raw)
@@ -310,8 +318,8 @@ func listCursorIDEComposerIDs(ctx context.Context, conn *sql.DB) ([]string, erro
 }
 
 // listCursorIDEComposerTokens streams every composer whose document lists
-// at least one conversation header, in ascending composer-ID order, with the
-// digest of that document. It reads only composerData rows; NULL, malformed,
+// at least one inline or declared chunked header, in ascending composer-ID
+// order, with the digest of that document. It reads only composerData rows; NULL, malformed,
 // and headerless values are left out, and the whole-container pass keeps
 // handling them.
 func listCursorIDEComposerTokens(
@@ -322,7 +330,7 @@ func listCursorIDEComposerTokens(
 		`SELECT key, value FROM cursorDiskKV
 		WHERE key >= ? AND key < ?
 		  AND CASE WHEN json_valid(CAST(value AS TEXT))
-		           THEN coalesce(json_array_length(CAST(value AS TEXT), '$.fullConversationHeadersOnly'), 0)
+		           THEN coalesce(json_array_length(CAST(value AS TEXT), '$.fullConversationHeadersOnly'), 0) + coalesce(json_extract(CAST(value AS TEXT), '$.headerLog.count'), 0)
 		           ELSE 0 END > 0
 		ORDER BY key`,
 		cursorIDEComposerKeyPrefix, "composerData;",
@@ -546,12 +554,37 @@ func parseCursorIDEComposer(
 		return nil, fmt.Errorf(
 			"decoding cursor IDE composer %s: %w", composerID, err)
 	}
+	truncated := false
+	if len(doc.Headers) == 0 && doc.HeaderLog.Count > 0 {
+		for i := 0; i < doc.HeaderLog.ChunkCount; i++ {
+			key := fmt.Sprintf("%s%s:%06d", cursorIDEHeaderKeyPrefix, composerID, i)
+			var rawChunk []byte
+			err := tx.QueryRowContext(ctx, `SELECT value FROM cursorDiskKV WHERE key = ?`, key).Scan(&rawChunk)
+			if errors.Is(err, sql.ErrNoRows) || (err == nil && len(rawChunk) == 0) {
+				truncated = true
+				continue
+			}
+			if err != nil {
+				return nil, fmt.Errorf("loading cursor IDE headers %s: %w", key, err)
+			}
+			var headers []cursorIDEComposerHeader
+			if err := json.Unmarshal(rawChunk, &headers); err != nil {
+				return nil, fmt.Errorf("decoding cursor IDE headers %s: %w", key, err)
+			}
+			if len(headers) == 0 {
+				truncated = true
+			}
+			doc.Headers = append(doc.Headers, headers...)
+		}
+		if len(doc.Headers) < doc.HeaderLog.Count {
+			truncated = true
+		}
+	}
 	if len(doc.Headers) == 0 {
 		return nil, nil
 	}
 
 	var messages []ParsedMessage
-	truncated := false
 	for _, header := range doc.Headers {
 		if err := ctx.Err(); err != nil {
 			return nil, err
