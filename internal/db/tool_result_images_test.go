@@ -44,6 +44,10 @@ func TestReadRetainedImageLimit(t *testing.T) {
 		_, err = ReadRetainedImage(asset, 0, dir, 32)
 		require.ErrorContains(t, err, "exceeds 32 bytes")
 		require.ErrorIs(t, err, ErrImageTooLarge)
+		corrupt := fmt.Sprintf(`[{"type":"agentsview_image","version":1,"image_ref":%q,"media_type":"image/png","byte_size":1}]`, ref)
+		_, err = ReadRetainedImage(corrupt, 0, dir, 32)
+		require.ErrorContains(t, err, "exceeds 32 bytes")
+		require.NotErrorIs(t, err, ErrImageTooLarge)
 	})
 	t.Run("oversized_buffer", func(t *testing.T) {
 		if os.Getenv("AGENTSVIEW_TEST_IMAGE_BUFFER") != "1" {

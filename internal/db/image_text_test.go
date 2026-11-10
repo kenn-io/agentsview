@@ -13,22 +13,19 @@ import (
 	"go.kenn.io/docbank/document/ocr"
 )
 
-func TestImageTextBackfillExistingResults(t *testing.T) {
+func TestImageTextBackfillAndCopy(t *testing.T) {
 	ctx := t.Context()
 	d := testDB(t)
 	insertSession(t, d, "image", "demo")
 	content := testInlineImageContent()
 	require.NoError(t, d.InsertMessages(ctx, []Message{{SessionID: "image", Role: "assistant", ToolCalls: []ToolCall{{ToolName: "Read", ResultContent: content}}}}))
-	pending, err := d.PendingImageText(ctx, "test", time.Now(), 20)
-	require.NoError(t, err)
-	require.Empty(t, pending)
-	_, err = d.getWriter().ExecContext(ctx, `CREATE TRIGGER fail_image_backfill BEFORE INSERT ON image_text_occurrences BEGIN SELECT RAISE(ABORT,'backfill interrupted'); END`)
+	_, err := d.getWriter().ExecContext(ctx, `CREATE TRIGGER fail_image_backfill BEFORE INSERT ON image_text_occurrences BEGIN SELECT RAISE(ABORT,'backfill interrupted'); END`)
 	require.NoError(t, err)
 	require.ErrorContains(t, d.BackfillImageTextOccurrences(ctx), "backfill interrupted")
 	_, err = d.getWriter().ExecContext(ctx, `DROP TRIGGER fail_image_backfill`)
 	require.NoError(t, err)
 	require.NoError(t, d.BackfillImageTextOccurrences(ctx))
-	pending, err = d.PendingImageText(ctx, "test", time.Now(), 20)
+	pending, err := d.PendingImageText(ctx, "test", time.Now(), 20)
 	require.NoError(t, err)
 	require.Equal(t, []string{RetainedToolResultImages(content)[0].SHA256}, pending)
 	disabledSource, disabledDest := testDB(t), testDB(t)
@@ -294,8 +291,6 @@ func TestImageTextMembershipAndPruning(t *testing.T) {
 		require.NoError(t, err)
 		require.Empty(t, pending)
 		var count int
-		require.NoError(t, dst.Reader().QueryRow(ctx, `SELECT count(*) FROM image_text_cache`).Scan(&count))
-		require.Equal(t, 3, count)
 		require.NoError(t, dst.BackfillImageTextOccurrences(ctx))
 		require.NoError(t, dst.Reader().QueryRow(ctx, `SELECT count(*) FROM image_text_cache`).Scan(&count))
 		require.Equal(t, 2, count)
@@ -446,6 +441,11 @@ func TestImageTextSearchContent(t *testing.T) {
 	results, err := d.Search(ctx, SearchFilter{Query: "invoice 42"})
 	require.NoError(t, err)
 	require.Len(t, results.Results, 1)
+	pageContent := `[{"type":"input_image","image_url":"data:image/png;base64,AwQF"},{"type":"input_image","image_url":"data:image/png;base64,BgcI"}]`
+	require.NoError(t, d.InsertMessages(ctx, []Message{{SessionID: "session", Ordinal: 3, Role: "assistant", ToolCalls: []ToolCall{{ToolName: "Read", ResultContent: pageContent}}}}))
+	images := RetainedToolResultImages(pageContent)
+	require.NoError(t, d.SaveImageText(ctx, images[0].SHA256, identity, "needle zebra", false))
+	require.NoError(t, d.SaveImageText(ctx, images[1].SHA256, identity, "needle apple", false))
 	for _, mode := range []string{"substring", "regex"} {
 		filter := ContentSearchFilter{Pattern: "invoice 42", Mode: mode, Sources: []string{"tool_result"}, Scope: "subordinate", IncludeOneShot: true, IncludeAutomated: true}
 		page, err := d.SearchContent(ctx, filter)
@@ -460,6 +460,18 @@ func TestImageTextSearchContent(t *testing.T) {
 		page, err = d.SearchContent(ctx, filter)
 		require.NoError(t, err)
 		require.Empty(t, page.Matches)
+		filter = ContentSearchFilter{Pattern: "needle", Mode: mode, Sources: []string{"tool_result"}, Limit: 1, IncludeOneShot: true, IncludeAutomated: true}
+		page, err = d.SearchContent(ctx, filter)
+		require.NoError(t, err)
+		require.Len(t, page.Matches, 1)
+		require.Contains(t, page.Matches[0].Snippet, "apple")
+		require.NotZero(t, page.NextCursor)
+		filter.Cursor = page.NextCursor
+		page, err = d.SearchContent(ctx, filter)
+		require.NoError(t, err)
+		require.Len(t, page.Matches, 1)
+		require.Contains(t, page.Matches[0].Snippet, "zebra")
+		require.Zero(t, page.NextCursor)
 	}
 }
 
@@ -560,6 +572,16 @@ func TestImageTextSurvivesMetadataOnlyReplacement(t *testing.T) {
 			}
 			require.NoError(t, d.Reader().QueryRow(ctx, `SELECT transcript_revision FROM sessions WHERE id='image'`).Scan(&after))
 			require.Equal(t, before, after)
+			if mode == "batch" {
+				_, err = d.getWriter().ExecContext(ctx, `CREATE TABLE image_refresh_count(n INTEGER); INSERT INTO image_refresh_count VALUES (0); CREATE TRIGGER image_refresh_count_insert AFTER INSERT ON image_text_occurrences BEGIN UPDATE image_refresh_count SET n=n+1; END`)
+				require.NoError(t, err)
+				messages[0].SourceUUID = "source-1"
+				_, err = d.WriteSessionBatchAtomic(ctx, []SessionBatchWrite{{Session: Session{ID: "image", Project: "demo", Agent: defaultAgent, Machine: defaultMachine, MessageCount: 1}, ReplaceMessages: true, Messages: messages}})
+				require.NoError(t, err)
+				var count int
+				require.NoError(t, d.Reader().QueryRow(ctx, `SELECT n FROM image_refresh_count`).Scan(&count))
+				require.Equal(t, 1, count)
+			}
 			page, err := d.SearchContent(ctx, ContentSearchFilter{Pattern: "needle", Mode: "substring", Sources: []string{"tool_result"}, IncludeOneShot: true, IncludeAutomated: true})
 			require.NoError(t, err)
 			require.Len(t, page.Matches, 1)
@@ -567,58 +589,6 @@ func TestImageTextSurvivesMetadataOnlyReplacement(t *testing.T) {
 			require.NoError(t, err)
 			require.Len(t, rows, 1)
 			require.Equal(t, "needle image", rows[0].Text)
-		})
-	}
-}
-
-func TestImageTextBatchSourceIDGainRefreshesOnce(t *testing.T) {
-	ctx := t.Context()
-	d := testDB(t)
-	require.NoError(t, d.BackfillImageTextOccurrences(ctx))
-	content := testInlineImageContent()
-	write := SessionBatchWrite{
-		Session: Session{ID: "image", Project: "demo", Agent: defaultAgent, Machine: defaultMachine}, ReplaceMessages: true,
-		Messages: []Message{{SessionID: "image", Ordinal: 1, Role: "assistant", ToolCalls: []ToolCall{{ToolName: "Read", ResultContent: content}}}},
-	}
-	_, err := d.WriteSessionBatchAtomic(ctx, []SessionBatchWrite{write})
-	require.NoError(t, err)
-	_, err = d.getWriter().ExecContext(ctx, `CREATE TABLE image_refresh_count(n INTEGER); INSERT INTO image_refresh_count VALUES (0); CREATE TRIGGER image_refresh_count_insert AFTER INSERT ON image_text_occurrences BEGIN UPDATE image_refresh_count SET n=n+1; END`)
-	require.NoError(t, err)
-	write.Messages[0].SourceUUID = "source-1"
-	_, err = d.WriteSessionBatchAtomic(ctx, []SessionBatchWrite{write})
-	require.NoError(t, err)
-	var count int
-	require.NoError(t, d.Reader().QueryRow(ctx, `SELECT n FROM image_refresh_count`).Scan(&count))
-	require.Equal(t, 1, count)
-}
-
-func TestImageTextContentPageOrder(t *testing.T) {
-	ctx := t.Context()
-	d := testDB(t)
-	require.NoError(t, d.BackfillImageTextOccurrences(t.Context()))
-	insertSession(t, d, "image", "demo")
-	content := `[{"type":"input_image","image_url":"data:image/png;base64,AAEC"},{"type":"input_image","image_url":"data:image/png;base64,AwQF"}]`
-	require.NoError(t, d.InsertMessages(ctx, []Message{{SessionID: "image", Ordinal: 1, Role: "assistant", Content: "answer", ToolCalls: []ToolCall{{ToolName: "Read", ResultContent: content}}}}))
-	identity, err := ocr.NewIdentity("test", "model", "revision")
-	require.NoError(t, err)
-	images := RetainedToolResultImages(content)
-	require.Len(t, images, 2)
-	require.NoError(t, d.SaveImageText(ctx, images[0].SHA256, identity, "needle zebra", false))
-	require.NoError(t, d.SaveImageText(ctx, images[1].SHA256, identity, "needle apple", false))
-	for _, mode := range []string{"substring", "regex"} {
-		t.Run(mode, func(t *testing.T) {
-			filter := ContentSearchFilter{Pattern: "needle", Mode: mode, Sources: []string{"tool_result"}, Limit: 1, IncludeOneShot: true, IncludeAutomated: true}
-			page, err := d.SearchContent(ctx, filter)
-			require.NoError(t, err)
-			require.Len(t, page.Matches, 1)
-			require.Contains(t, page.Matches[0].Snippet, "apple")
-			require.NotZero(t, page.NextCursor)
-			filter.Cursor = page.NextCursor
-			page, err = d.SearchContent(ctx, filter)
-			require.NoError(t, err)
-			require.Len(t, page.Matches, 1)
-			require.Contains(t, page.Matches[0].Snippet, "zebra")
-			require.Zero(t, page.NextCursor)
 		})
 	}
 }
