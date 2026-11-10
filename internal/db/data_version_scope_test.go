@@ -30,7 +30,19 @@ func TestAntigravityCLIPromptEnvelopeUpgradeScopes(t *testing.T) {
 }
 
 func TestCommitLinkUpgradeScope(t *testing.T) {
-	assert.Equal(t, []parser.AgentType{parser.AgentCodex}, ScopedDataVersionProviders(169, 170))
+	d := testDB(t)
+	for _, agent := range []string{"codex", "claude"} {
+		insertSession(t, d, agent, "project", func(s *Session) { s.Agent = agent })
+		require.NoError(t, d.SetSessionDataVersion(t.Context(), agent, 169))
+	}
+	require.NoError(t, d.Update(t.Context(), func(tx *sql.Tx) error {
+		if err := writeUserVersion(t.Context(), tx, 169); err != nil {
+			return err
+		}
+		return advanceDataVersion(t.Context(), tx, 170)
+	}))
+	assert.Equal(t, 169, d.GetSessionDataVersion(t.Context(), "codex"))
+	assert.Equal(t, 170, d.GetSessionDataVersion(t.Context(), "claude"))
 }
 
 // Version 134 reshapes Codex session IDs, so it must rebuild every provider.
