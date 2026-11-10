@@ -354,14 +354,6 @@
     --kit-control-height: 28px;
   }
 
-  /* Light theme leaves --bg-raised unset, so kit-ui buttons and select
-     triggers fall back to the gray inset fill and read as disabled. Here
-     enabled controls take the surface fill with their border instead;
-     dark keeps its lighter raised fill. */
-  :global(:root:not(.dark)) .settings-page {
-    --bg-raised: var(--bg-surface);
-  }
-
   /* One row grid for every panel: a label column, then the control.
      Panels keep their own markup; this replaces their per-panel
      space-between rows so controls start on a shared edge everywhere.

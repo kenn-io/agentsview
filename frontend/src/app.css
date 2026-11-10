@@ -400,18 +400,6 @@ button:disabled {
   cursor: not-allowed;
 }
 
-/* Light secondary buttons: kit-ui falls back to the gray inset fill, which
-   reads as disabled, and a plain surface fill vanishes on a white card. A
-   faint neutral tint, a firmer edge, and a small shadow make an enabled
-   secondary read as a raised button on any light surface. Dark keeps
-   kit-ui's raised fill. */
-:root:not(.dark)
-  .kit-button--outline.kit-button--neutral:not(:disabled, [aria-disabled="true"], :active, [aria-expanded="true"]) {
-  --kit-button-fill: color-mix(in srgb, var(--text-primary) 3%, var(--bg-surface));
-  border-color: color-mix(in srgb, var(--text-muted) 32%, var(--border-default));
-  box-shadow: var(--shadow-sm);
-}
-
 /* A disabled menu item often carries its reason ("Import unavailable in
    read-only mode"). Muted ink at full opacity keeps it clearly disabled
    beside secondary-ink items while the reason stays readable. */
