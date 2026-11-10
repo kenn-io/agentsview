@@ -1639,7 +1639,6 @@ func (s *Sync) retireSourceArchiveMetadata(
 			"source_project_identity_observations",
 			"source_session_project_identity_snapshots",
 			"source_worktree_project_mappings",
-			"retained_commit_links",
 		} {
 			if _, err := tx.ExecContext(ctx,
 				"DELETE FROM "+table+" WHERE source_archive_id = $1",
@@ -1650,6 +1649,9 @@ func (s *Sync) retireSourceArchiveMetadata(
 				)
 			}
 		}
+	}
+	if _, err := tx.ExecContext(ctx, `DELETE FROM retained_commit_links WHERE source_archive_id=$1`, archiveID); err != nil {
+		return fmt.Errorf("retiring old archive retained links: %w", err)
 	}
 	if err := tx.Commit(); err != nil {
 		return fmt.Errorf("committing old archive metadata retirement: %w", err)
@@ -2276,6 +2278,9 @@ func (s *Sync) reconcilePGMissingSessions(
 		if err := rows.Close(); err != nil {
 			return err
 		}
+		if _, err := tx.ExecContext(ctx, `DELETE FROM commit_links WHERE NOT retained AND session_id = ANY($1)`, deleted); err != nil {
+			return err
+		}
 		for _, id := range deleted {
 			if err := clearSessionVectorsTx(ctx, tx, id); err != nil {
 				return err
@@ -2354,8 +2359,8 @@ func (s *Sync) reconcilePGProjectScopeMoves(
 		return nil, err
 	}
 	if _, err := tx.ExecContext(ctx, `
-		DELETE FROM sessions
-		WHERE owner_marker = $1 AND id = ANY($2)`, ownerMarker, staleIDs); err != nil {
+		WITH deleted AS (DELETE FROM sessions WHERE owner_marker = $1 AND id = ANY($2) RETURNING id)
+		DELETE FROM commit_links WHERE NOT retained AND session_id IN (SELECT id FROM deleted)`, ownerMarker, staleIDs); err != nil {
 		return nil, fmt.Errorf("deleting pg sessions that moved out of scope: %w", err)
 	}
 	if err := tx.Commit(); err != nil {
@@ -2403,7 +2408,8 @@ func deletePGExcludedSessionRows(
 		return nil
 	}
 	if _, err := pg.ExecContext(ctx,
-		`DELETE FROM sessions WHERE id = ANY($1)`,
+		`WITH deleted AS (DELETE FROM sessions WHERE id = ANY($1) RETURNING id)
+		DELETE FROM commit_links WHERE NOT retained AND session_id IN (SELECT id FROM deleted)`,
 		ids,
 	); err != nil {
 		return fmt.Errorf("deleting pg excluded session rows: %w", err)

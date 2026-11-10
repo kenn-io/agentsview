@@ -541,7 +541,7 @@ func (s *Store) deleteSessionIfTrashed(ctx context.Context, id string) (int64, e
 			"deleting trashed session "+id, err,
 		)
 	}
-	if err := deletePGExcludedSessionRows(ctx, tx, excludedIDs); err != nil {
+	if err := deletePGExcludedTrashedSessionRows(ctx, tx, excludedIDs); err != nil {
 		return 0, mapPGWriteError(
 			"purging excluded session aliases for "+id, err,
 		)
@@ -615,7 +615,7 @@ func (s *Store) emptyTrashOnce(ctx context.Context, legacyOnly bool) (int, error
 	if legacyOnly {
 		err = deleteLegacyExcludedSessionRows(ctx, tx, excludedIDs)
 	} else {
-		err = deletePGExcludedSessionRows(ctx, tx, excludedIDs)
+		err = deletePGExcludedTrashedSessionRows(ctx, tx, excludedIDs)
 	}
 	if err != nil {
 		return 0, mapPGWriteError("purging excluded trashed session aliases", err)
@@ -757,4 +757,19 @@ func deletePGTrashedSessionRows(
 		return 0, err
 	}
 	return n, nil
+}
+
+func deletePGExcludedTrashedSessionRows(ctx context.Context, tx *sql.Tx, ids []string) error {
+	if len(ids) == 0 {
+		return nil
+	}
+	var hasCommitLinks bool
+	if err := tx.QueryRowContext(ctx, `SELECT to_regclass('commit_links') IS NOT NULL`).Scan(&hasCommitLinks); err != nil {
+		return err
+	}
+	if hasCommitLinks {
+		return deletePGExcludedSessionRows(ctx, tx, ids)
+	}
+	_, err := tx.ExecContext(ctx, `DELETE FROM sessions WHERE id = ANY($1)`, ids)
+	return err
 }

@@ -188,9 +188,32 @@ func TestCodexLegacyTrashPurgeMirror(t *testing.T) {
 				require.NoError(t, err)
 				assert.Nil(t, session, "purging the thread must remove its saved pages")
 			}
+			// Exercise scoped cleanup against both the excluded archive and a
+			// different owner that happens to have a page under the same thread.
+			_, err := syncer.pg.ExecContext(ctx, `INSERT INTO sessions(id,project,agent,machine,owner_marker)
+				SELECT $1,'sample','codex',machine,owner_marker FROM excluded_sessions WHERE id=$3
+				UNION ALL SELECT $2,'sample','codex','other','other-owner'`, codexTrashPage, codexTrashSibling, codexTrashThread)
+			require.NoError(t, err)
+			for _, id := range []string{codexTrashPage, codexTrashSibling} {
+				_, err = syncer.pg.ExecContext(ctx, `INSERT INTO commit_links (session_id,sha,branch,subject,repository,message_ordinal,call_index,tool_use_id,committed_at,turn_ordinal,turn_text,project,retained) VALUES ($1,'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa','','','',0,0,'','',0,'prompt','',false),($1,'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb','','','',0,0,'','',NULL,'','',true)`, id)
+				require.NoError(t, err)
+			}
+			tx, err := syncer.pg.BeginTx(ctx, nil)
+			require.NoError(t, err)
+			require.NoError(t, deletePGScopedExcludedSessionRows(ctx, tx, []string{codexTrashPage, codexTrashSibling}))
+			require.NoError(t, tx.Commit())
+			for _, row := range []struct {
+				id   string
+				live int
+			}{{codexTrashPage, 0}, {codexTrashSibling, 1}} {
+				var live, retained int
+				require.NoError(t, syncer.pg.QueryRowContext(ctx, `SELECT count(*) FILTER (WHERE NOT retained), count(*) FILTER (WHERE retained) FROM commit_links WHERE session_id=$1`, row.id).Scan(&live, &retained))
+				assert.Equal(t, row.live, live)
+				assert.Equal(t, 1, retained)
+			}
 			// A later source restore and a newly discovered file cannot undo the
 			// permanent whole-thread exclusion chosen in PostgreSQL.
-			_, err := local.RestoreSession(ctx, codexTrashThread)
+			_, err = local.RestoreSession(ctx, codexTrashThread)
 			require.NoError(t, err)
 			require.NoError(t, local.UpsertSession(ctx, db.Session{ID: codexTrashReturning, Agent: "codex", Project: "sample", Machine: "machine"}))
 			if !empty {

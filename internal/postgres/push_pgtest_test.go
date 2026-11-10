@@ -653,6 +653,9 @@ func TestPushProjectMoveReconcilesFilteredScope(t *testing.T) {
 			)
 			require.NoError(t, err)
 
+			_, err = syncer.pg.ExecContext(ctx, `INSERT INTO commit_links (session_id,sha,branch,subject,repository,message_ordinal,call_index,tool_use_id,committed_at,turn_ordinal,turn_text,project,retained)
+                SELECT id, 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa', '', '', '', 0, 0, '', '', 0, 'prompt', '', false FROM sessions WHERE id=ANY($1)`, []string{sessionID, "other-owner-session"})
+			require.NoError(t, err)
 			_, err = local.CreateWorktreeProjectMapping(ctx, db.WorktreeProjectMapping{
 				Machine: "local", PathPrefix: "/srv/custom-worktrees",
 				Layout: db.WorktreeMappingLayoutExplicit, Project: targetProject,
@@ -683,6 +686,12 @@ func TestPushProjectMoveReconcilesFilteredScope(t *testing.T) {
 				`SELECT COUNT(*) FROM sessions WHERE id = $1`, "other-owner-session",
 			).Scan(&count))
 			assert.Equal(t, 1, count, "reconciliation must preserve another archive owner")
+			require.NoError(t, syncer.pg.QueryRowContext(ctx, `SELECT count(*) FROM commit_links WHERE session_id='other-owner-session' AND NOT retained`).Scan(&count))
+			assert.Equal(t, 1, count)
+			if !tc.wantSession {
+				require.NoError(t, syncer.pg.QueryRowContext(ctx, `SELECT count(*) FROM commit_links WHERE session_id=$1 AND NOT retained`, sessionID).Scan(&count))
+				assert.Zero(t, count)
+			}
 
 			targetObsCount := 0
 			if tc.wantTargetObs {
@@ -1486,6 +1495,8 @@ func TestPushPurgesRowsForPGExcludedSessions(t *testing.T) {
 	_, err = sync.Push(ctx, false, nil)
 	require.NoError(t, err, "initial Push")
 
+	_, err = pg.ExecContext(ctx, `INSERT INTO commit_links (session_id,sha,branch,subject,repository,message_ordinal,call_index,tool_use_id,committed_at,turn_ordinal,turn_text,project,retained) VALUES ($1,'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa','','','',0,0,'','',0,'prompt','',false),($1,'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb','','','',0,0,'','',NULL,'','',true)`, sessionID)
+	require.NoError(t, err)
 	_, err = pg.ExecContext(t.Context(),
 		`INSERT INTO excluded_sessions (id) VALUES ($1)`,
 		sessionID,
@@ -1522,6 +1533,11 @@ func TestPushPurgesRowsForPGExcludedSessions(t *testing.T) {
 		sessionID,
 	).Scan(&count), "count purged session")
 	assert.Zero(t, count, "excluded session row should be purged")
+	var retained int
+	require.NoError(t, pg.QueryRowContext(ctx, `SELECT count(*) FILTER (WHERE NOT retained), count(*) FILTER (WHERE retained) FROM commit_links WHERE session_id=$1`, sessionID).Scan(&count, &retained))
+	assert.Zero(t, count)
+	assert.Equal(t, 1, retained)
+
 }
 
 func TestPushSessionSkipsPGExcludedSession(t *testing.T) {
@@ -3189,6 +3205,12 @@ func TestFilteredArchiveIdentityRepairPreservesOtherPublicationScope(
 	require.NoError(t, err)
 	_, err = alpha.pg.ExecContext(ctx, `INSERT INTO retained_commit_links (source_archive_id,session_id,sha,branch,subject,repository,message_ordinal,call_index,tool_use_id,committed_at) VALUES ($1,'retained','aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa','','','',0,0,'','')`, oldArchiveID)
 	require.NoError(t, err)
+	reader, err := NewStore(ctx, pgURL, schema, true)
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, reader.Close()) })
+	links, err := reader.SessionCommitLinks(ctx, "retained")
+	require.NoError(t, err)
+	require.Len(t, links.Commits, 1)
 	const repairedArchiveID = "filtered-repaired-archive-id"
 	require.NoError(t, local.SetArchiveIdentityForTest(
 		ctx, repairedArchiveID,
@@ -3199,7 +3221,7 @@ func TestFilteredArchiveIdentityRepairPreservesOtherPublicationScope(
 	require.NoError(t, err)
 	var retainedCount int
 	require.NoError(t, alpha.pg.QueryRowContext(ctx, `SELECT count(*) FROM retained_commit_links WHERE source_archive_id=$1`, oldArchiveID).Scan(&retainedCount))
-	require.Equal(t, 1, retainedCount)
+	require.Zero(t, retainedCount)
 	for _, fixture := range []struct {
 		query string
 		args  []any
@@ -3281,6 +3303,15 @@ func TestFilteredArchiveIdentityRepairPreservesOtherPublicationScope(
 		repairedArchiveID,
 	).Scan(&repairedSessions))
 	assert.Equal(t, 2, repairedSessions)
+	alpha.projects = []string{"narrowed"}
+	_, err = alpha.Push(ctx, false, nil)
+	require.NoError(t, err)
+	links, err = reader.SessionCommitLinks(ctx, "retained")
+	require.NoError(t, err)
+	require.Empty(t, links.Commits)
+	matches, err := reader.CommitSessionLinks(ctx, []string{"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"})
+	require.NoError(t, err)
+	require.Empty(t, matches.Commits[0].Links)
 }
 
 // TestSessionProvenanceBackfillForcesOneFullPush verifies that the provenance

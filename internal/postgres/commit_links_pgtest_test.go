@@ -214,3 +214,19 @@ func TestPGRetainedCommitLinkScope(t *testing.T) {
 		require.NoError(t, err)
 	})
 }
+
+func TestPGCommitLinksRemovedWithDeletedSession(t *testing.T) {
+	syncer, local, pg, ctx := newSessionProvenancePushSync(t, "agentsview_commit_deleted_rows_test")
+	dbtest.SeedCommitLinks(t, local)
+	_, err := syncer.Push(ctx, true, nil)
+	require.NoError(t, err)
+	_, err = pg.ExecContext(ctx, `INSERT INTO commit_links (session_id,sha,branch,subject,repository,message_ordinal,call_index,tool_use_id,committed_at,turn_ordinal,turn_text,project,retained) VALUES ('commit-live','ffffffffffffffffffffffffffffffffffffffff','','legacy','',0,0,'','',NULL,'','',true)`)
+	require.NoError(t, err)
+	require.NoError(t, local.DeleteSession(ctx, "commit-live"))
+	_, err = syncer.Push(ctx, true, nil)
+	require.NoError(t, err)
+	var live, retained int
+	require.NoError(t, pg.QueryRowContext(ctx, `SELECT count(*) FILTER (WHERE NOT retained),count(*) FILTER (WHERE retained) FROM commit_links WHERE session_id='commit-live'`).Scan(&live, &retained))
+	require.Zero(t, live)
+	require.Equal(t, 1, retained)
+}
