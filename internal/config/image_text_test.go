@@ -16,5 +16,5 @@ func TestImageTextConfig(t *testing.T) {
 	require.Equal(t, "http://127.0.0.1:1234/glmocr/parse", policy.Values().Endpoint)
 	require.NoError(t, cfg.validateSections())
 	require.NoError(t, cfg.applyConfigTOML("[image_text]\nenabled = true\nendpoint = 'https://example.com/glmocr/parse'\n"))
-	require.ErrorContains(t, cfg.validateSections(), "image_text")
+	require.ErrorContains(t, cfg.validateSections(), "endpoint must be an explicit loopback HTTP")
 }

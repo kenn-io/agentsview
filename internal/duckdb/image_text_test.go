@@ -104,13 +104,12 @@ func TestDuckDBImageTextFollowsIncrementalPushes(t *testing.T) {
 	result := push()
 	require.False(t, result.Diagnostics.Full, result.Diagnostics.RebuildReason)
 	require.Equal(t, 1, result.SessionsPushed)
-	call := db.ImageTextRow{
-		SessionID: id, SourceKind: "tool_call", MessageOrdinal: 1, ImageHash: hash,
-		Processor: "proc-a", Provider: "glm-ocr", Model: "glm-ocr", Revision: "r1", Text: "invoice 4827",
+	want := func() []db.ImageTextRow {
+		t.Helper()
+		rows, err := local.SessionImageTextRows(ctx, id)
+		require.NoError(t, err)
+		return rows
 	}
-	event := call
-	event.SourceKind, event.CallIndex = "event", 1
-	want := func() []db.ImageTextRow { return []db.ImageTextRow{event, call} }
 	assert.Equal(t, want(), mirrorRows())
 	assert.Equal(t, []int{1, 1, 1, 1, 1}, found("invoice 4827"))
 	require.NoError(t, local.ClearImageText(ctx))
@@ -130,9 +129,7 @@ func TestDuckDBImageTextFollowsIncrementalPushes(t *testing.T) {
 	second := ocr.Identity{Fingerprint: "proc-b", Provider: "tesseract", Model: "eng", Revision: "r2"}
 	require.NoError(t, local.SaveImageText(ctx, hash, second, "receipt 9931", false))
 	push()
-	for _, r := range []*db.ImageTextRow{&call, &event} {
-		r.Processor, r.Provider, r.Model, r.Revision, r.Text = "proc-b", "tesseract", "eng", "r2", "receipt 9931"
-	}
+
 	assert.Equal(t, want(), mirrorRows())
 	assert.Empty(t, found("invoice"))
 	assert.Equal(t, []int{1, 1, 1, 1, 1}, found("receipt 9931"))

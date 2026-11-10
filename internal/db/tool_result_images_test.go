@@ -34,6 +34,11 @@ func TestReadRetainedImageLimit(t *testing.T) {
 		got, err := ReadRetainedImage(content, 0, "", int64(len(body)))
 		require.NoError(t, err)
 		require.Equal(t, body, got)
+		encoded := base64.StdEncoding.EncodeToString(bytes.Repeat([]byte("x"), 8<<20))
+		invalid := `[{"type":"input_image","image_url":"data:image/png;base64,` + encoded[:len(encoded)-4] + `%%%"},{"type":"input_image","image_url":"data:image/png;base64,AQID"}]`
+		got, err = ReadRetainedImage(invalid, 0, "", 32)
+		require.NoError(t, err)
+		require.Equal(t, []byte{1, 2, 3}, got)
 	})
 	t.Run("asset", func(t *testing.T) {
 		body := bytes.Repeat([]byte("x"), 1024*1024)
@@ -843,11 +848,6 @@ func TestToolImageDelimiterVariantsRemovePayload(t *testing.T) {
 }
 
 func TestRetainedToolResultImages(t *testing.T) {
-	encoded := base64.StdEncoding.EncodeToString(bytes.Repeat([]byte("x"), 8<<20))
-	invalid := `[{"type":"input_image","image_url":"data:image/png;base64,` + encoded[:len(encoded)-4] + `%%%"},{"type":"input_image","image_url":"data:image/png;base64,AQID"}]`
-	body, err := ReadRetainedImage(invalid, 0, "", 32)
-	require.NoError(t, err)
-	require.Equal(t, []byte{1, 2, 3}, body)
 	const digest = "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"
 	inline := `[{"type":"input_image","image_url":"data:image/png;base64,YWJj"}]`
 	offloaded := `[{"type":"agentsview_image","version":1,"image_ref":"asset://` + digest + `.png","media_type":"image/png","byte_size":3}]`

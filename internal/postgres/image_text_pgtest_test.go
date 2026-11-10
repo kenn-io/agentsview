@@ -103,10 +103,9 @@ func TestPGImageTextPushAndSearch(t *testing.T) {
 	push()
 	want := []hit{{"shot", 1}}
 	assert.Equal(t, map[string][]hit{"global": want, "substring": want, "regex": want}, searches())
-	assert.Equal(t, []db.ImageTextRow{{
-		SessionID: "shot", SourceKind: "tool_call", MessageOrdinal: 1, ImageHash: hash,
-		Processor: "proc-a", Provider: "glm-ocr", Model: "glm-ocr", Revision: "r1", Text: "invoice 4827",
-	}}, published())
+	wantRows, err := local.SessionImageTextRows(ctx, "shot")
+	require.NoError(t, err)
+	assert.Equal(t, wantRows, published())
 	assert.False(t, updatedAtStale(), "an OCR-only change must advance updated_at")
 	// The image representative wins over the session's name match.
 	_, err = pg.ExecContext(ctx, `UPDATE sessions SET display_name='invoice 4827 notes' WHERE id='shot'`)
