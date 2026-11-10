@@ -25,24 +25,6 @@ export function loadColumnWidths(): ColumnWidths {
   }
 }
 
-/** Merge a table report (every column's width, in header order) into the
- * kept widths, taking only the columns the user resized. */
-export function mergeColumnWidths(
-  kept: ColumnWidths,
-  order: readonly string[],
-  reported: readonly number[],
-  resized: ReadonlySet<string>,
-): ColumnWidths {
-  const next = { ...kept };
-  order.forEach((key, i) => {
-    const width = reported[i];
-    if (resized.has(key) && width !== undefined && width > 0) {
-      next[key] = Math.round(width);
-    }
-  });
-  return next;
-}
-
 export function saveColumnWidths(widths: ColumnWidths): void {
   try {
     localStorage.setItem(COLUMN_WIDTHS_STORAGE_KEY, JSON.stringify(widths));

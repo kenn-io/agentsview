@@ -3,22 +3,11 @@ import { afterEach, describe, expect, it } from "vite-plus/test";
 import {
   COLUMN_WIDTHS_STORAGE_KEY,
   loadColumnWidths,
-  mergeColumnWidths,
   saveColumnWidths,
 } from "./columnWidths.js";
 
 describe("recent edits column widths", () => {
   afterEach(() => localStorage.clear());
-
-  it("keeps only the columns the user resized", () => {
-    const next = mergeColumnWidths(
-      { time: 120 },
-      ["project", "file", "edits", "time"],
-      [312.4, 640, 72, 120],
-      new Set(["project"]),
-    );
-    expect(next).toEqual({ project: 312, time: 120 });
-  });
 
   it("round-trips saved widths and drops unusable values", () => {
     saveColumnWidths({ project: 300, file: 500 });

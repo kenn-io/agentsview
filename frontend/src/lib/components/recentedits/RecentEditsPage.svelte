@@ -1,5 +1,10 @@
 <script lang="ts">
-  import { SearchInput, TableHeaderCell, VirtualTable } from "@kenn-io/kit-ui";
+  import {
+    SearchInput,
+    TableHeaderCell,
+    VirtualTable,
+    type ColumnResize,
+  } from "@kenn-io/kit-ui";
   import { untrack } from "svelte";
   import { MediaQuery } from "svelte/reactivity";
   import { PencilIcon, RefreshCwIcon } from "../../icons.js";
@@ -14,11 +19,7 @@
   import LibraryPageHeader from "../shared/LibraryPageHeader.svelte";
   import MissingData from "../shared/MissingData.svelte";
   import { LatestRead } from "../../utils/latest-read.js";
-  import {
-    loadColumnWidths,
-    mergeColumnWidths,
-    saveColumnWidths,
-  } from "./columnWidths.js";
+  import { loadColumnWidths, saveColumnWidths } from "./columnWidths.js";
 
   interface Edit {
     session_id: string;
@@ -69,13 +70,6 @@
   // Widths the user set by dragging or fitting a column edge, kept across
   // visits. Plain: the table owns the live widths once it has sized them.
   let keptWidths = loadColumnWidths();
-  // The column whose resize handle is in use, and whether the person
-  // asked for a new width: a drag that moved, an arrow key, or a fit
-  // (Enter or double-click). Tabbing across handles or a click that does
-  // not move keeps nothing.
-  let touched:
-    | { column: string; resized: boolean; pointerId?: number; startX?: number }
-    | undefined;
 
   // The toolbar spans the list's width, and it is laid out before the
   // first rows arrive, when the table sizes its columns.
@@ -113,47 +107,14 @@
     return Math.max(160, tableWidth - 2 - others);
   }
 
-  function handleColumn(event: Event): string | undefined {
-    const handle = (event.target as Element | null)?.closest?.(".kit-th__resize");
-    const cell = handle?.closest("th");
-    return cell ? columns[cell.cellIndex] : undefined;
-  }
-
-  function notePointerDown(event: PointerEvent) {
-    const column = handleColumn(event);
-    touched = column
-      ? { column, resized: false, pointerId: event.pointerId, startX: event.clientX }
-      : undefined;
-  }
-
-  // The handle captures the pointer, so its moves pass through the list.
-  // The handle resizes by clientX, so movement is measured the same way;
-  // some touch pointers report no movementX.
-  function notePointerMove(event: PointerEvent) {
-    if (touched?.pointerId === event.pointerId && event.clientX !== touched.startX) {
-      touched.resized = true;
-    }
-  }
-
-  const RESIZE_KEYS = new Set(["ArrowLeft", "ArrowRight", "Enter"]);
-  function noteKey(event: KeyboardEvent) {
-    const column = handleColumn(event);
-    if (column && RESIZE_KEYS.has(event.key)) touched = { column, resized: true };
-  }
-
-  function noteFit(event: MouseEvent) {
-    const column = handleColumn(event);
-    if (column) touched = { column, resized: true };
-  }
-
-  // Called after a resize or fit. Earlier resized columns are already
-  // kept, so only the column the person resized is merged.
-  function keepWidths(widths: number[]) {
-    const change = touched;
-    touched = undefined;
+  // kit-ui reports only widths a person set: a drag, an arrow key, or a
+  // fit. It names the column by its translated label, so the position
+  // picks the stored key.
+  function keepWidth({ index, width }: ColumnResize) {
+    const column = columns[index];
     // Phone widths fit the phone; they are not kept for wider windows.
-    if (stacked.current || !change?.resized) return;
-    keptWidths = mergeColumnWidths(keptWidths, columns, widths, new Set([change.column]));
+    if (stacked.current || column === undefined) return;
+    keptWidths = { ...keptWidths, [column]: Math.round(width) };
     saveColumnWidths(keptWidths);
   }
 
@@ -322,14 +283,7 @@
       {/snippet}
     </MissingData>
   {:else}
-    <!-- svelte-ignore a11y_no_static_element_interactions -->
-    <div
-      class="re-list"
-      onpointerdowncapture={notePointerDown}
-      onpointermovecapture={notePointerMove}
-      onkeydowncapture={noteKey}
-      ondblclickcapture={noteFit}
-    >
+    <div class="re-list">
       {#key tableWidth}
       <VirtualTable
         items={rows}
@@ -339,7 +293,7 @@
         unsorted
         estimateRowHeight={33}
         ariaLabel={m.recent_edits_title()}
-        oncolumnwidthschange={keepWidths}
+        oncolumnresize={keepWidth}
       >
         {#snippet header()}
           {#if !stacked.current}
