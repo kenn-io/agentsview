@@ -41,7 +41,10 @@ same results. Serve reports a missing-column error until a push from the new
 binary has updated the schema.
 
 Commit lookups return the copied links and prompts.
-The first push after upgrading is a full push to copy existing commit links.
+The first push after upgrading is a full push that repairs existing commit links.
+Each archive keeps its own retained copies; a rebuild removes only that archive's
+discarded copies. Older retained links with unknown ownership stay until a
+matching archive publishes them.
 A deleted session remains visible as a missing record. Project filters use the
 project saved with its links in SQLite, including after a rebuild or a deletion
 before the first push.

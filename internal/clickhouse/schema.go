@@ -17,7 +17,7 @@ import (
 // added later ship as ADD COLUMN IF NOT EXISTS entries in the table specs,
 // so an older mirror upgrades in place; the version tells operators and
 // status output which shape a mirror has.
-const SchemaVersion = 7
+const SchemaVersion = 8
 
 // Metadata keys shared by every archive that pushes into the mirror.
 const (
@@ -37,7 +37,7 @@ const (
 	curationFingerprintKeyBase  = "agentsview_curation_fingerprint"
 	cursorUsageMaxIDKeyBase     = "agentsview_cursor_usage_max_id"
 	usageSnapshotReadyKeyBase   = "agentsview_usage_snapshot_ready"
-	commitLinksReadyKeyBase     = "agentsview_commit_links_ready"
+	commitLinksReadyKeyBase     = "agentsview_commit_links_ready_v2"
 	messageDialogueReadyKeyBase = "agentsview_message_dialogue_ready"
 	storedCountRepairKeyBase    = "agentsview_stored_message_count_repair"
 	databaseIDKeyBase           = "agentsview_source_database_id"
@@ -562,6 +562,17 @@ var mirrorTables = []tableSpec{
 			col("project", tString), col("retained", tBool),
 		},
 		orderBy: []string{"sha", "session_id"},
+	},
+	{
+		name: "retained_commit_links",
+		columns: []columnSpec{
+			col("source_archive_id", tString), col("session_id", tString), col("sha", tString),
+			col("branch", tString), col("subject", tString), col("repository", tString),
+			col("message_ordinal", tInt), col("call_index", tInt), col("tool_use_id", tString),
+			col("committed_at", tString), col("turn_ordinal", tNullInt), col("turn_text", tString),
+			col("project", tString), col("retained", tBool),
+		},
+		orderBy: []string{"source_archive_id", "sha", "session_id"},
 	},
 	{
 		name: "secret_findings",

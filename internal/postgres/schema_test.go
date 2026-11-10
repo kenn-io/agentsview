@@ -588,6 +588,7 @@ func TestEnsureSchemaChecksDataVersionBeforeDDL(t *testing.T) {
 func TestSyncEnsureSchemaSkipsLegacyDDLWhenSchemaCompatible(t *testing.T) {
 	pg, state := newSchemaProbeDB(t, nil)
 	state.existingTables = map[string]bool{
+		"retained_commit_links":                           true,
 		"commit_links":                                    true,
 		"model_pricing":                                   true,
 		"model_pricing_bands":                             true,
@@ -639,6 +640,7 @@ func TestSyncEnsureSchemaSkipsLegacyDDLWhenSchemaCompatible(t *testing.T) {
 func TestEnsureSchemaScrubsProjectIdentityGitRemoteCredentials(t *testing.T) {
 	pg, state := newSchemaProbeDB(t, nil)
 	state.existingTables = map[string]bool{
+		"retained_commit_links":                           true,
 		"commit_links":                                    true,
 		"model_pricing":                                   true,
 		"model_pricing_bands":                             true,
@@ -957,9 +959,10 @@ func TestSyncEnsureSchemaRunsDDLWhenPushMetadataMissing(t *testing.T) {
 		},
 	})
 	state.existingTables = map[string]bool{
-		"commit_links":        true,
-		"model_pricing":       true,
-		"cursor_usage_events": true,
+		"retained_commit_links": true,
+		"commit_links":          true,
+		"model_pricing":         true,
+		"cursor_usage_events":   true,
 	}
 	state.existingIndexes = map[string]bool{
 		"idx_cursor_usage_events_dedup":   true,
@@ -995,8 +998,9 @@ func TestSyncEnsureSchemaRunsDDLWhenPushTableMissing(t *testing.T) {
 	// absent: the read probe passes yet a push would fail on model_pricing,
 	// so the fast path must fall back to EnsureSchema.
 	state.existingTables = map[string]bool{
-		"commit_links":        true,
-		"cursor_usage_events": true,
+		"retained_commit_links": true,
+		"commit_links":          true,
+		"cursor_usage_events":   true,
 	}
 	syncer := &Sync{pg: pg, schema: "agentsview"}
 
@@ -1025,6 +1029,7 @@ func TestSyncEnsureSchemaRunsDDLWhenMappingTableMissing(t *testing.T) {
 	// fast path must fall back to EnsureSchema so mapping publication has
 	// a table to write into.
 	state.existingTables = map[string]bool{
+		"retained_commit_links":                     true,
 		"commit_links":                              true,
 		"model_pricing":                             true,
 		"model_pricing_bands":                       true,
@@ -1064,11 +1069,12 @@ func TestSyncEnsureSchemaRunsDDLWhenDedupIndexMissing(t *testing.T) {
 	// read probe passes yet ON CONFLICT DO NOTHING would not dedup cursor
 	// usage rows. The fast path must fall back to EnsureSchema.
 	state.existingTables = map[string]bool{
-		"commit_links":        true,
-		"model_pricing":       true,
-		"model_pricing_bands": true,
-		"genai_pricing":       true,
-		"cursor_usage_events": true,
+		"retained_commit_links": true,
+		"commit_links":          true,
+		"model_pricing":         true,
+		"model_pricing_bands":   true,
+		"genai_pricing":         true,
+		"cursor_usage_events":   true,
 	}
 	syncer := &Sync{pg: pg, schema: "agentsview"}
 

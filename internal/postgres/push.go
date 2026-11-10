@@ -31,7 +31,7 @@ const (
 	sessionAliasBackfillStateKey           = "pg_session_alias_backfill_v1"
 	legacyProjectIdentityStateKey          = "project_identity_publication_revision_v2"
 	projectIdentityPublicationStateKey     = "project_identity_publication_revision_v3"
-	commitLinksBackfillStateKey            = "pg_commit_links_backfill_v1"
+	commitLinksBackfillStateKey            = "pg_commit_links_backfill_v2"
 	messageDialogueBackfillStateKey        = "pg_message_dialogue_backfill_v1"
 	transcriptRevisionBackfillStateKey     = "pg_transcript_revision_backfill_v1"
 	sessionProvenanceBackfillStateKey      = "pg_session_provenance_backfill_v2"

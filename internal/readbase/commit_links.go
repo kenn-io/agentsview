@@ -13,11 +13,18 @@ type CommitLinkQuerier interface {
 	QueryContext(context.Context, string, ...any) (*sql.Rows, error)
 }
 
-func readCommitLinks(ctx context.Context, q CommitLinkQuerier, where string, args ...any) ([]db.CommitLink, error) {
-	rows, err := q.QueryContext(ctx, `SELECT l.session_id,l.sha,l.branch,l.subject,l.repository,l.message_ordinal,l.call_index,l.tool_use_id,l.committed_at,
- (COALESCE(s.id,'')='' OR s.deleted_at IS NOT NULL),l.turn_ordinal,l.turn_text
- FROM commit_links l LEFT JOIN sessions s ON s.id=l.session_id
- WHERE (l.retained OR COALESCE(s.id,'')<>'') AND (`+where+`) ORDER BY l.session_id,l.message_ordinal,l.committed_at,l.call_index,l.sha`, args...)
+func readCommitLinks(ctx context.Context, q CommitLinkQuerier, retained bool, where string, args ...any) ([]db.CommitLink, error) {
+	source := `SELECT session_id,sha,branch,subject,repository,message_ordinal,call_index,tool_use_id,committed_at,turn_ordinal,turn_text,project,retained, '' AS source_archive_id, 0 AS priority FROM commit_links`
+	if retained {
+		source += ` UNION ALL SELECT *, 1 AS priority FROM (SELECT session_id,sha,branch,subject,repository,message_ordinal,call_index,tool_use_id,committed_at,turn_ordinal,turn_text,project,retained,source_archive_id FROM retained_commit_links) owned`
+	}
+	rows, err := q.QueryContext(ctx, `SELECT session_id,sha,branch,subject,repository,message_ordinal,call_index,tool_use_id,committed_at,missing,turn_ordinal,turn_text FROM (
+ SELECT l.session_id,l.sha,l.branch,l.subject,l.repository,l.message_ordinal,l.call_index,l.tool_use_id,l.committed_at,
+ (COALESCE(s.id,'')='' OR s.deleted_at IS NOT NULL) AS missing,l.turn_ordinal,l.turn_text,
+ ROW_NUMBER() OVER (PARTITION BY l.session_id,l.sha ORDER BY l.priority,l.source_archive_id) AS rank
+ FROM (`+source+`) l LEFT JOIN sessions s ON s.id=l.session_id
+ WHERE (l.retained OR COALESCE(s.id,'')<>'') AND (l.priority=0 OR COALESCE(s.id,'')='') AND (`+where+`)
+ ) ranked WHERE rank=1 ORDER BY session_id,message_ordinal,committed_at,call_index,sha`, args...)
 	if err != nil {
 		return nil, err
 	}
@@ -43,16 +50,16 @@ func readCommitLinks(ctx context.Context, q CommitLinkQuerier, where string, arg
 	return links, rows.Err()
 }
 
-func SessionCommitLinks(ctx context.Context, q CommitLinkQuerier, dialect db.QueryDialect, id string) (*db.SessionCommitList, error) {
+func SessionCommitLinks(ctx context.Context, q CommitLinkQuerier, dialect db.QueryDialect, retained bool, id string) (*db.SessionCommitList, error) {
 	b := db.NewQueryBuilder(dialect, 0)
-	links, err := readCommitLinks(ctx, q, "l.session_id="+b.Add(id), b.Args()...)
+	links, err := readCommitLinks(ctx, q, retained, "l.session_id="+b.Add(id), b.Args()...)
 	if err != nil {
 		return nil, err
 	}
 	return &db.SessionCommitList{Commits: links}, nil
 }
 
-func CommitSessionLinks(ctx context.Context, q CommitLinkQuerier, dialect db.QueryDialect, shas []string) (*db.CommitSessionList, error) {
+func CommitSessionLinks(ctx context.Context, q CommitLinkQuerier, dialect db.QueryDialect, retained bool, shas []string) (*db.CommitSessionList, error) {
 	queries, err := db.NormalizeCommitSHAs(shas)
 	if err != nil {
 		return nil, err
@@ -63,7 +70,7 @@ func CommitSessionLinks(ctx context.Context, q CommitLinkQuerier, dialect db.Que
 	for _, sha := range queries {
 		predicates = append(predicates, "l.sha LIKE "+b.Add(sha+"%")+" OR "+b.Add(sha)+" LIKE l.sha || '%'")
 	}
-	links, err := readCommitLinks(ctx, q, strings.Join(predicates, " OR "), b.Args()...)
+	links, err := readCommitLinks(ctx, q, retained, strings.Join(predicates, " OR "), b.Args()...)
 	if err != nil {
 		return nil, err
 	}
@@ -76,6 +83,21 @@ func CommitSessionLinks(ctx context.Context, q CommitLinkQuerier, dialect db.Que
 		}
 		db.MarkCommitAmbiguity(matches)
 		out.Commits = append(out.Commits, db.CommitSessionMatch{SHA: sha, Links: matches})
+	}
+	return out, nil
+}
+
+// ScopedRetainedCommitLinks returns the archive's policy-scoped retained snapshot.
+func ScopedRetainedCommitLinks(ctx context.Context, local *db.DB, projects, exclude []string) ([]db.CommitLinkRow, error) {
+	rows, err := local.RetainedCommitLinkRows(ctx)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]db.CommitLinkRow, 0, len(rows))
+	for _, r := range rows {
+		if db.ProjectMatchesPushScope(r.Project, projects, exclude) {
+			out = append(out, r)
+		}
 	}
 	return out, nil
 }

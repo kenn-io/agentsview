@@ -6,6 +6,7 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"go.kenn.io/agentsview/internal/config"
 	"go.kenn.io/agentsview/internal/db"
 	gitlog "go.kenn.io/agentsview/internal/db/git"
 )
@@ -144,4 +145,60 @@ func AssertRetainedCommitLink(t *testing.T, reader db.CommitLinkReader, want boo
 	assert.Equal(t, "abc1234567890123456789012345678901234567", links.Commits[0].SHA)
 	assert.True(t, links.Commits[0].Missing)
 	assert.Nil(t, links.Commits[0].Turn)
+}
+
+// SeedRetainedCommitLink creates transcript evidence for a deleted session.
+func SeedRetainedCommitLink(t *testing.T, d *db.DB, id, sha string) {
+	t.Helper()
+	SeedSession(t, d, id, "commit-project")
+	result := "[main " + sha + "] Save the change"
+	require.NoError(t, d.ReplaceSessionMessages(t.Context(), id, []db.Message{{
+		SessionID: id, Ordinal: 0, Role: "assistant", HasToolUse: true,
+		ToolCalls: []db.ToolCall{{ToolName: "Bash", Category: "Bash", ToolUseID: "call", InputJSON: `{"command":"git commit -m change"}`, ResultContent: result, ResultEvents: []db.ToolResultEvent{{Source: "tool_result", Content: result}}}},
+	}}))
+	require.NoError(t, d.DeleteSession(t.Context(), id))
+}
+
+func RebuildCommitArchive(t *testing.T, source *db.DB, policy config.ArchiveContent) *db.DB {
+	t.Helper()
+	rebuilt := OpenTestDB(t)
+	rebuilt.SetArchiveContent(policy)
+	require.NoError(t, rebuilt.CopyArchiveIdentityFrom(t.Context(), source.Path()))
+	require.NoError(t, rebuilt.CopySyncStateFrom(t.Context(), source.Path()))
+	require.NoError(t, rebuilt.CopyExcludedSessionsFrom(t.Context(), source.Path()))
+	require.NoError(t, rebuilt.CopyCommitTrailersFrom(t.Context(), source.Path()))
+	_, err := rebuilt.CopyTrashedDataFrom(t.Context(), source.Path())
+	require.NoError(t, err)
+	_, err = rebuilt.CopyOrphanedDataFrom(t.Context(), source.Path())
+	require.NoError(t, err)
+	require.NoError(t, rebuilt.CopySessionMetadataFrom(t.Context(), source.Path()))
+	rows, err := rebuilt.RetainedCommitLinkRows(t.Context())
+	require.NoError(t, err)
+	require.Empty(t, rows)
+	return rebuilt
+}
+
+func AssertRebuiltCommitLinks(t *testing.T, reader db.CommitLinkReader) {
+	t.Helper()
+	for _, tc := range []struct {
+		id, sha string
+		want    bool
+	}{
+		{"archive-a", "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", false},
+		{"archive-b", "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb", true},
+	} {
+		links, err := reader.SessionCommitLinks(t.Context(), tc.id)
+		require.NoError(t, err)
+		matches, err := reader.CommitSessionLinks(t.Context(), []string{tc.sha})
+		require.NoError(t, err)
+		if tc.want {
+			require.Len(t, links.Commits, 1)
+			assert.Equal(t, tc.sha, links.Commits[0].SHA)
+			require.Len(t, matches.Commits[0].Links, 1)
+			assert.Equal(t, tc.id, matches.Commits[0].Links[0].SessionID)
+		} else {
+			assert.Empty(t, links.Commits)
+			assert.Empty(t, matches.Commits[0].Links)
+		}
+	}
 }
