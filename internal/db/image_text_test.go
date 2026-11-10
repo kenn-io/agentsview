@@ -227,6 +227,31 @@ func TestImageTextMovesBetweenSessionsInAtomicBatch(t *testing.T) {
 	require.Zero(t, count)
 }
 
+func TestImageTextMovesBetweenSessionsInInsertMessages(t *testing.T) {
+	ctx := t.Context()
+	d := testDB(t)
+	content := testInlineImageContent()
+	for _, id := range []string{"a", "b"} {
+		insertSession(t, d, id, "demo")
+	}
+	require.NoError(t, d.InsertMessages(ctx, []Message{{SessionID: "a", Role: "assistant", Content: "answer", ToolCalls: []ToolCall{{ToolName: "Read", ToolUseID: "call", ResultContent: content}}}}))
+	hash := RetainedToolResultImages(content)[0].SHA256
+	identity, err := ocr.NewIdentity("test", "model", "revision")
+	require.NoError(t, err)
+	require.NoError(t, d.SaveImageText(ctx, hash, identity, "invoice", false))
+	require.NoError(t, d.InsertMessages(ctx, []Message{
+		{SessionID: "a", Ordinal: 1, Role: "assistant", Content: "updated", ToolCalls: []ToolCall{{ToolName: "Read", ToolUseID: "call", ResultEvents: []ToolResultEvent{{ToolUseID: "call", Source: "tool", Status: "completed", Content: "removed"}}}}},
+		{SessionID: "b", Ordinal: 1, Role: "assistant", Content: "answer", ToolCalls: []ToolCall{{ToolName: "Read", ResultContent: content}}},
+	}))
+	page, err := d.Search(ctx, SearchFilter{Query: "invoice"})
+	require.NoError(t, err)
+	require.Len(t, page.Results, 1)
+	require.Equal(t, "b", page.Results[0].SessionID)
+	pending, err := d.PendingImageText(ctx, identity.Fingerprint, time.Now(), 20)
+	require.NoError(t, err)
+	require.Empty(t, pending)
+}
+
 func TestImageTextSurvivesReplacementWithTrashedCopy(t *testing.T) {
 	ctx := t.Context()
 	d := testDB(t)

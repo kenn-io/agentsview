@@ -128,10 +128,14 @@ func scopeLegacyDevinSourceUUIDsLocked(
 	); err != nil {
 		return fmt.Errorf("scoping devin recall end uuids: %w", err)
 	}
+	imageTx := &imageTextBatchTx{transactionQueries: contextTransaction{ctx: ctx, tx: tx}, oldHashes: make(map[string]bool)}
 	for _, id := range sessionIDs {
-		if err := bumpTranscriptRevisionTx(tx, id); err != nil {
+		if err := bumpTranscriptRevisionTx(imageTx, id); err != nil {
 			return err
 		}
+	}
+	if err := imageTx.pruneImageText(); err != nil {
+		return err
 	}
 	if err := tx.Commit(); err != nil {
 		return fmt.Errorf("committing devin source uuid rewrite: %w", err)
