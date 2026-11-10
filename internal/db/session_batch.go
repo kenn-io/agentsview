@@ -107,8 +107,9 @@ type SessionBatchResult struct {
 }
 
 type contextTransaction struct {
-	ctx context.Context
-	tx  *sql.Tx
+	ctx             context.Context
+	tx              *sql.Tx
+	imageTextHashes *[]string
 }
 
 func (tx contextTransaction) Exec(
@@ -171,7 +172,8 @@ func (db *DB) WriteSessionBatchContext(
 		return result, fmt.Errorf("beginning batch tx: %w", err)
 	}
 	defer func() { _ = tx.Rollback() }()
-	ctxTx := contextTransaction{ctx: ctx, tx: tx}
+	var imageTextHashes []string
+	ctxTx := contextTransaction{ctx: ctx, tx: tx, imageTextHashes: &imageTextHashes}
 	var pendingRecallRevocations recallEvidenceRevocationEvents
 	var writtenUsageIDs []string
 
@@ -235,6 +237,9 @@ func (db *DB) WriteSessionBatchContext(
 	if err := ctx.Err(); err != nil {
 		return result, err
 	}
+	if err := pruneImageTextHashesTx(tx, imageTextHashes); err != nil {
+		return result, err
+	}
 	if err := tx.Commit(); err != nil {
 		return result, fmt.Errorf("committing batch tx: %w", err)
 	}
@@ -268,6 +273,8 @@ func (db *DB) WriteSessionBatchAtomic(ctx context.Context,
 	defer func() { _ = tx.Rollback() }()
 	var pendingRecallRevocations recallEvidenceRevocationEvents
 	var writtenUsageIDs []string
+	var imageTextHashes []string
+	ctxTx := contextTransaction{ctx: ctx, tx: tx, imageTextHashes: &imageTextHashes}
 
 	for i, write := range writes {
 		sanitized, err := sanitizeSessionBatchWriteContext(ctx, write)
@@ -275,7 +282,7 @@ func (db *DB) WriteSessionBatchAtomic(ctx context.Context,
 		if err == nil {
 			write = db.storageSessionBatchWrite(sanitized)
 			messagesWritten, err = db.writeOneSessionBatchTx(
-				ctx, tx, tx,
+				ctx, tx, ctxTx,
 				write,
 				&pendingRecallRevocations,
 				db.usageOnlyStorage(), nil,
@@ -307,6 +314,9 @@ func (db *DB) WriteSessionBatchAtomic(ctx context.Context,
 	}
 
 	if _, err := linkSubagentSessionsForSessionsTx(ctx, tx, writtenUsageIDs); err != nil {
+		return result, err
+	}
+	if err := pruneImageTextHashesTx(tx, imageTextHashes); err != nil {
 		return result, err
 	}
 

@@ -245,7 +245,6 @@ func TestImageTextMembershipAndPruning(t *testing.T) {
 					require.NoError(t, d.Reader().QueryRow(ctx, `SELECT count(*) FROM image_text_cache WHERE image_hash=?`, sharedHash).Scan(&count))
 					require.Equal(t, step.shared, count)
 				}
-				require.NoError(t, d.BackfillImageTextOccurrences(ctx))
 				for hash, want := range map[string]int{sharedHash: step.shared, exclusiveHash: 0, unrelatedHash: 1} {
 					var count int
 					require.NoError(t, d.Reader().QueryRow(ctx, `SELECT count(*) FROM image_text_cache WHERE image_hash=?`, hash).Scan(&count))
@@ -496,11 +495,6 @@ func TestImageTextSearchUsesCurrentResultEvents(t *testing.T) {
 	require.Equal(t, "session", page.Results[0].SessionID)
 	require.Equal(t, 1, page.Results[0].Ordinal)
 	require.Contains(t, page.Results[0].Snippet, "<mark>currentimageword</mark>")
-	require.NoError(t, d.InsertMessages(ctx, []Message{{SessionID: "session", Ordinal: 2, Role: "assistant", Content: "later"}}))
-	page, err = d.Search(ctx, SearchFilter{Query: "currentimageword"})
-	require.NoError(t, err)
-	require.Len(t, page.Results, 1)
-	require.Equal(t, 1, page.Results[0].Ordinal)
 }
 
 func TestImageTextSearchRespectsMessageVisibility(t *testing.T) {
@@ -593,31 +587,6 @@ func TestImageTextSurvivesMetadataOnlyReplacement(t *testing.T) {
 	}
 }
 
-func TestImageTextIncrementalRefreshKeepsUntouchedImages(t *testing.T) {
-	ctx := t.Context()
-	d := testDB(t)
-	require.NoError(t, d.BackfillImageTextOccurrences(ctx))
-	insertSession(t, d, "incremental", "demo")
-	first := testInlineImageContent()
-	require.NoError(t, d.InsertMessages(ctx, []Message{{SessionID: "incremental", Ordinal: 0, Role: "assistant", ToolCalls: []ToolCall{{ToolName: "Read", ToolUseID: "old", ResultContent: first}}}}))
-	hash := RetainedToolResultImages(first)[0].SHA256
-	_, err := d.getWriter().Exec(ctx, `CREATE TRIGGER preserve_old BEFORE DELETE ON image_text_occurrences WHEN old.image_hash='`+hash+`' BEGIN SELECT RAISE(ABORT, 'unrelated image refreshed'); END`)
-	require.NoError(t, err)
-	_, err = d.WriteSessionIncremental(ctx, "incremental", []Message{{SessionID: "incremental", Ordinal: 1, Role: "assistant", Content: "text only"}}, IncrementalSessionUpdate{})
-	require.NoError(t, err)
-	second := `[{"type":"input_image","image_url":"data:image/png;base64,AQID"}]`
-	_, err = d.WriteSessionIncremental(ctx, "incremental", []Message{{SessionID: "incremental", Ordinal: 2, Role: "assistant", ToolCalls: []ToolCall{{ToolName: "Read", ToolUseID: "new", ResultContent: second}}}}, IncrementalSessionUpdate{})
-	require.NoError(t, err)
-	pending, err := d.PendingImageText(ctx, "processor", time.Now(), 10)
-	require.NoError(t, err)
-	require.ElementsMatch(t, []string{hash, RetainedToolResultImages(second)[0].SHA256}, pending)
-	_, err = d.WriteSessionIncremental(ctx, "incremental", nil, IncrementalSessionUpdate{ToolCallResultUpdates: []ToolCallResultUpdate{{ToolUseID: "new", Position: ToolCallPosition{MessageOrdinal: 2}, Events: []ToolResultEvent{{Source: "tool", Content: `[{"type":"input_image","image_url":"data:image/png;base64,BAUG"}]`}}}}})
-	require.NoError(t, err)
-	pending, err = d.PendingImageText(ctx, "processor", time.Now(), 10)
-	require.NoError(t, err)
-	require.ElementsMatch(t, []string{hash, RetainedToolResultImages(`[{"type":"input_image","image_url":"data:image/png;base64,BAUG"}]`)[0].SHA256}, pending)
-}
-
 func TestMirrorImageTextDataVersion(t *testing.T) {
 	for _, tc := range []struct {
 		version int
@@ -629,7 +598,7 @@ func TestMirrorImageTextDataVersion(t *testing.T) {
 }
 
 func TestImageTextAppendKeepsUntouchedOccurrences(t *testing.T) {
-	for _, mode := range []string{"insert", "replace messages", "replace content", "batch append", "batch replace"} {
+	for _, mode := range []string{"insert", "replace messages", "replace content", "batch append", "batch replace", "incremental"} {
 		t.Run(mode, func(t *testing.T) {
 			ctx := t.Context()
 			d := testDB(t)
@@ -652,6 +621,8 @@ func TestImageTextAppendKeepsUntouchedOccurrences(t *testing.T) {
 			switch mode {
 			case "insert":
 				err = d.InsertMessages(ctx, []Message{appendMessage})
+			case "incremental":
+				_, err = d.WriteSessionIncremental(ctx, "image", []Message{appendMessage}, IncrementalSessionUpdate{})
 			case "replace messages":
 				err = d.ReplaceSessionMessages(ctx, "image", []Message{first, appendMessage})
 			case "replace content":
@@ -666,6 +637,21 @@ func TestImageTextAppendKeepsUntouchedOccurrences(t *testing.T) {
 			page, err := d.Search(ctx, SearchFilter{Query: "invoice"})
 			require.NoError(t, err)
 			require.Len(t, page.Results, 1)
+			require.Equal(t, 0, page.Results[0].Ordinal)
+			if mode == "incremental" {
+				second := `[{"type":"input_image","image_url":"data:image/png;base64,AQID"}]`
+				_, err = d.WriteSessionIncremental(ctx, "image", []Message{{SessionID: "image", Ordinal: 2, Role: "assistant", ToolCalls: []ToolCall{{ToolName: "Read", ToolUseID: "new", ResultContent: second}}}}, IncrementalSessionUpdate{})
+				require.NoError(t, err)
+				pending, err := d.PendingImageText(ctx, "processor", time.Now(), 10)
+				require.NoError(t, err)
+				require.ElementsMatch(t, []string{hash, RetainedToolResultImages(second)[0].SHA256}, pending)
+				updated := `[{"type":"input_image","image_url":"data:image/png;base64,BAUG"}]`
+				_, err = d.WriteSessionIncremental(ctx, "image", nil, IncrementalSessionUpdate{ToolCallResultUpdates: []ToolCallResultUpdate{{ToolUseID: "new", Position: ToolCallPosition{MessageOrdinal: 2}, Events: []ToolResultEvent{{Source: "tool", Content: updated}}}}})
+				require.NoError(t, err)
+				pending, err = d.PendingImageText(ctx, "processor", time.Now(), 10)
+				require.NoError(t, err)
+				require.ElementsMatch(t, []string{hash, RetainedToolResultImages(updated)[0].SHA256}, pending)
+			}
 		})
 	}
 }
