@@ -66,13 +66,6 @@ const firstScopedDataVersion = 131
 // reads waiting until a full sync pass has reparsed affected sources.
 const scopedUpgradePendingKey = "scoped_upgrade_pending"
 
-// Version 170 protects the image projection from older writers without
-// changing parser output. Tests can override the current parser scope.
-func imageTextProjectionVersion(version int) bool {
-	_, scoped := dataVersionScopes[version]
-	return version == imageTextProjectionDataVersion && !scoped
-}
-
 // ScopedDataVersionProviders returns the providers to reparse when an
 // archive moves from one parser version to another. It returns nil when any
 // version in the range requires a full rebuild.
@@ -82,9 +75,6 @@ func ScopedDataVersionProviders(from, to int) []parser.AgentType {
 	}
 	var affected []parser.AgentType
 	for version := from + 1; version <= to; version++ {
-		if imageTextProjectionVersion(version) {
-			continue
-		}
 		providers := dataVersionScopes[version]
 		if len(providers) == 0 {
 			return nil
@@ -100,9 +90,6 @@ func ScopedDataVersionProviders(from, to int) []parser.AgentType {
 // invalidate unaffected agents.
 func AgentDataVersion(agent parser.AgentType) int {
 	for version := dataVersion; version > 0; version-- {
-		if imageTextProjectionVersion(version) {
-			continue
-		}
 		providers := dataVersionScopes[version]
 		if len(providers) == 0 {
 			return version
@@ -120,9 +107,6 @@ func AgentDataVersion(agent parser.AgentType) int {
 // full rebuild.
 func fullRebuildDataVersion() int {
 	for version := dataVersion; version > 0; version-- {
-		if imageTextProjectionVersion(version) {
-			continue
-		}
 		if len(dataVersionScopes[version]) == 0 {
 			return version
 		}

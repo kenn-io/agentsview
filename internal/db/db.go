@@ -663,10 +663,7 @@ CREATE INDEX IF NOT EXISTS idx_provider_freshness_updated_at
 // (169: keep DeepSeek Harness native message ids as message source ids.
 // Re-parse DeepSeek Harness sources in place; source and session identities
 // are unchanged.)
-// (170: protect the image text occurrence projection from older writers.)
-const dataVersion = 170
-
-const imageTextProjectionDataVersion = 170
+const dataVersion = 169
 
 const archiveOnlyVersionBase = 1 << 20
 
@@ -2303,11 +2300,7 @@ func probeDatabaseConn(ctx context.Context,
 	if schema {
 		return true, false, false, nil
 	}
-	parserVersion := dataVersion
-	if imageTextProjectionVersion(parserVersion) {
-		parserVersion--
-	}
-	fullRebuild = archiveOnly || version < parserVersion && len(ScopedDataVersionProviders(version, dataVersion)) == 0
+	fullRebuild = archiveOnly || version < dataVersion && len(ScopedDataVersionProviders(version, dataVersion)) == 0
 	// Archive-only archives cannot reparse sources, so any stale version
 	// needs their preservation rebuild.
 	countScoped := includeScoped || archiveOnly
@@ -2320,7 +2313,7 @@ func probeDatabaseConn(ctx context.Context,
 			return false, pending, pending && fullRebuild, err
 		}
 	}
-	if version >= parserVersion {
+	if version >= dataVersion {
 		return false, false, false, nil
 	}
 	return false, countScoped || fullRebuild, fullRebuild, nil
@@ -3366,6 +3359,9 @@ func (db *DB) migrateColumns(ctx context.Context, progress OpenProgressFunc) err
 		return err
 	}
 	if err := db.backfillCommitLinksLocked(ctx, w); err != nil {
+		return err
+	}
+	if err := db.backfillImageTextOccurrencesLocked(ctx, w); err != nil {
 		return err
 	}
 	if err := ctx.Err(); err != nil {
@@ -5333,20 +5329,6 @@ func (db *DB) HasCJKFTS(ctx context.Context) (available bool) {
 
 func (db *DB) setDataVersion(ctx context.Context) error {
 	return db.Update(ctx, func(tx *sql.Tx) error {
-		version, _, err := readUserVersion(ctx, tx)
-		if err != nil {
-			return err
-		}
-		if version < imageTextProjectionDataVersion && imageTextProjectionVersion(imageTextProjectionDataVersion) {
-			if err := backfillImageTextOccurrencesTx(ctx, tx); err != nil {
-				return err
-			}
-			if version == imageTextProjectionDataVersion-1 {
-				if _, err := tx.ExecContext(ctx, `UPDATE sessions SET data_version=? WHERE data_version=?`, imageTextProjectionDataVersion, version); err != nil {
-					return fmt.Errorf("advancing complete session versions: %w", err)
-				}
-			}
-		}
 		return advanceDataVersion(ctx, tx, dataVersion)
 	})
 }

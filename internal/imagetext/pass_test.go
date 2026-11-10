@@ -225,37 +225,66 @@ func TestImageTextPassDrainsPages(t *testing.T) {
 	require.Equal(t, 21, requests)
 }
 
-func TestImageTextUsesSameSessionRetainedCopy(t *testing.T) {
+func TestImageTextPassFindsGenericFileData(t *testing.T) {
 	ctx := t.Context()
 	d, err := db.Open(ctx, filepath.Join(t.TempDir(), "archive.db"))
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, d.Close()) })
-	assetDir := t.TempDir()
-	d.SetAssetsDir(assetDir)
-	png := []byte("\x89PNG\r\n\x1a\nimage")
-	ref, _, err := assets.Put(assetDir, "image/png", png)
-	require.NoError(t, err)
-	require.NoError(t, os.Remove(filepath.Join(assetDir, strings.TrimPrefix(ref, "asset://"))))
-	offloaded := fmt.Sprintf(`[{"type":"agentsview_image","version":1,"image_ref":%q,"media_type":"image/png","byte_size":%d}]`, ref, len(png))
-	inline := fmt.Sprintf(`[{"type":"input_image","image_url":"data:image/png;base64,%s"}]`, base64.StdEncoding.EncodeToString(png))
-	require.NoError(t, d.UpsertSession(ctx, db.Session{ID: "same", Project: "demo", Agent: "test", MessageCount: 21}))
-	var messages []db.Message
-	for i := range 20 {
-		messages = append(messages, db.Message{SessionID: "same", Ordinal: i, Role: "assistant", Content: "missing", ToolCalls: []db.ToolCall{{ToolName: "Read", ResultContent: offloaded}}})
-	}
-	messages = append(messages, db.Message{SessionID: "same", Ordinal: 20, Role: "assistant", Content: "inline", ToolCalls: []db.ToolCall{{ToolName: "Read", ResultContent: inline}}})
-	require.NoError(t, d.InsertMessages(ctx, messages))
-	requests := 0
+	png := base64.StdEncoding.EncodeToString([]byte("\x89PNG\r\n\x1a\nimage"))
+	content := fmt.Sprintf(`[{"type":"file","mime":"application/octet-stream","uri":"data:application/octet-stream;base64,%s"}]`, png)
+	require.NoError(t, d.UpsertSession(ctx, db.Session{ID: "file", Project: "demo", Agent: "test", MessageCount: 1}))
+	require.NoError(t, d.InsertMessages(ctx, []db.Message{{SessionID: "file", Role: "assistant", Content: "answer", ToolCalls: []db.ToolCall{{ToolName: "Read", ResultContent: content}}}}))
 	client := localOCRClient(t, func(w http.ResponseWriter, r *http.Request) {
-		requests++
 		w.Header().Set("Content-Type", "application/json")
 		fmt.Fprintf(w, `{"model":"glm-ocr","deployment_fingerprint":%q,"json_result":[[{"index":0,"label":"text","content":"invoice"}]]}`, glmocr.DefaultDeploymentFingerprint)
 	})
 	require.NoError(t, (&Manager{DB: d, Client: client}).Run(ctx))
-	require.Equal(t, 1, requests)
 	page, err := d.Search(ctx, db.SearchFilter{Query: "invoice"})
 	require.NoError(t, err)
 	require.Len(t, page.Results, 1)
+	require.Equal(t, "file", page.Results[0].SessionID)
+}
+
+func TestImageTextUsesSameSessionRetainedCopy(t *testing.T) {
+	for _, corrupt := range []bool{false, true} {
+		t.Run(fmt.Sprintf("corrupt=%t", corrupt), func(t *testing.T) {
+			ctx := t.Context()
+			d, err := db.Open(ctx, filepath.Join(t.TempDir(), "archive.db"))
+			require.NoError(t, err)
+			t.Cleanup(func() { require.NoError(t, d.Close()) })
+			assetDir := t.TempDir()
+			d.SetAssetsDir(assetDir)
+			png := []byte("\x89PNG\r\n\x1a\nimage")
+			ref, _, err := assets.Put(assetDir, "image/png", png)
+			require.NoError(t, err)
+			path := filepath.Join(assetDir, strings.TrimPrefix(ref, "asset://"))
+			if corrupt {
+				require.NoError(t, os.WriteFile(path, []byte("corrupt"), 0600))
+			} else {
+				require.NoError(t, os.Remove(path))
+			}
+			offloaded := fmt.Sprintf(`[{"type":"agentsview_image","version":1,"image_ref":%q,"media_type":"image/png","byte_size":%d}]`, ref, len(png))
+			inline := fmt.Sprintf(`[{"type":"input_image","image_url":"data:image/png;base64,%s"}]`, base64.StdEncoding.EncodeToString(png))
+			require.NoError(t, d.UpsertSession(ctx, db.Session{ID: "same", Project: "demo", Agent: "test", MessageCount: 21}))
+			var messages []db.Message
+			for i := range 20 {
+				messages = append(messages, db.Message{SessionID: "same", Ordinal: i, Role: "assistant", Content: "missing", ToolCalls: []db.ToolCall{{ToolName: "Read", ResultContent: offloaded}}})
+			}
+			messages = append(messages, db.Message{SessionID: "same", Ordinal: 20, Role: "assistant", Content: "inline", ToolCalls: []db.ToolCall{{ToolName: "Read", ResultContent: inline}}})
+			require.NoError(t, d.InsertMessages(ctx, messages))
+			requests := 0
+			client := localOCRClient(t, func(w http.ResponseWriter, r *http.Request) {
+				requests++
+				w.Header().Set("Content-Type", "application/json")
+				fmt.Fprintf(w, `{"model":"glm-ocr","deployment_fingerprint":%q,"json_result":[[{"index":0,"label":"text","content":"invoice"}]]}`, glmocr.DefaultDeploymentFingerprint)
+			})
+			require.NoError(t, (&Manager{DB: d, Client: client}).Run(ctx))
+			require.Equal(t, 1, requests)
+			page, err := d.Search(ctx, db.SearchFilter{Query: "invoice"})
+			require.NoError(t, err)
+			require.Len(t, page.Results, 1)
+		})
+	}
 }
 
 func TestImageTextCachesEmptyNormalizedOutput(t *testing.T) {

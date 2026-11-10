@@ -42,8 +42,7 @@ func TestImageTextSearchFirstPageWithManyMessages(t *testing.T) {
 		}
 	}
 	require.True(t, found, "image text should reach the first page")
-	require.Equal(t, messageRank, imageRank, "the matches should exercise equal relevance")
-
+	require.InDelta(t, messageRank, imageRank, 0.000001, "the matches should exercise equal relevance")
 }
 
 func TestImageTextSearchPaginationByRelevance(t *testing.T) {

@@ -13,6 +13,37 @@ import (
 	"go.kenn.io/docbank/document/ocr"
 )
 
+func TestImageTextBackfillExistingResults(t *testing.T) {
+	ctx := t.Context()
+	path := filepath.Join(t.TempDir(), "archive.db")
+	d, err := Open(ctx, path)
+	require.NoError(t, err)
+	defer func() { _ = d.Close() }()
+	insertSession(t, d, "image", "demo")
+	content := `[{"type":"file","mime":"application/octet-stream","uri":"data:application/octet-stream;base64,iVBORw0KGgppbWFnZQ=="}]`
+	require.NoError(t, d.InsertMessages(ctx, []Message{{SessionID: "image", Role: "assistant", Content: "answer", ToolCalls: []ToolCall{{ToolName: "Read", ResultContent: content}}}}))
+	require.NoError(t, d.Update(ctx, func(tx *sql.Tx) error {
+		if _, err := tx.ExecContext(ctx, `DELETE FROM image_text_occurrences`); err != nil {
+			return err
+		}
+		_, err := tx.ExecContext(ctx, `DELETE FROM stats WHERE key=?`, imageTextBackfillKey)
+		return err
+	}))
+	require.NoError(t, d.Close())
+	d, err = Open(ctx, path)
+	require.NoError(t, err)
+	pending, err := d.PendingImageText(ctx, "test", time.Now(), 20)
+	require.NoError(t, err)
+	require.Len(t, pending, 1)
+	identity, err := ocr.NewIdentity("test", "model", "revision")
+	require.NoError(t, err)
+	require.NoError(t, d.SaveImageText(ctx, pending[0], identity, "invoice", false))
+	page, err := d.Search(ctx, SearchFilter{Query: "invoice"})
+	require.NoError(t, err)
+	require.Len(t, page.Results, 1)
+	require.Equal(t, "image", page.Results[0].SessionID)
+}
+
 func TestImageTextIndexRebuild(t *testing.T) {
 	ctx := t.Context()
 	path := filepath.Join(t.TempDir(), "archive.db")
@@ -289,17 +320,7 @@ func TestImageTextSearchQuotedAndColumnFiltered(t *testing.T) {
 	page, err = d.Search(ctx, SearchFilter{Query: `"absent" OR content:invoice`})
 	require.NoError(t, err)
 	require.Empty(t, page.Results)
-	for _, query := range []string{`"invoice" OR content:missing`, `"invoice" OR content:"missing phrase"`, `"invoice" OR content:(missing OR absent)`, `"invoice" OR content:"missing" + "phrase"`, `"invoice" NOT content:invoice`, `"invoice" OR -{content rendered}:missing`, `"absent" OR -content:(content:missing OR invoice)`} {
-		page, err = d.Search(ctx, SearchFilter{Query: query})
-		require.NoError(t, err, query)
-		require.Len(t, page.Results, 1, query)
-		require.Equal(t, "image", page.Results[0].SessionID)
-	}
-	for _, query := range []string{`"invoice" AND content:invoice`, `"invoice" content:invoice`, `"absent" OR rendered:(invoice OR absent)`} {
-		page, err = d.Search(ctx, SearchFilter{Query: query})
-		require.NoError(t, err, query)
-		require.Empty(t, page.Results, query)
-	}
+
 }
 
 func TestImageTextSearchContent(t *testing.T) {

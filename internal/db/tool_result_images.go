@@ -306,7 +306,7 @@ func streamInlineDataLimit(raw jsontext.Value, dst io.Writer, imageOnly bool, li
 	if !ok || (imageOnly && !strings.HasPrefix(strings.ToLower(mediaType), "image/")) {
 		return "", 0, 0, false
 	}
-	var decoded io.Reader = base64.NewDecoder(base64.StdEncoding.Strict(), strings.NewReader(payload))
+	decoded := base64.NewDecoder(base64.StdEncoding.Strict(), strings.NewReader(payload))
 	if limit >= 0 {
 		decoded = io.LimitReader(decoded, limit+1)
 	}

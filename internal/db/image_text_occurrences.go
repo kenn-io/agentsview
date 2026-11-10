@@ -3,7 +3,6 @@ package db
 import (
 	"context"
 	"crypto/sha256"
-	"database/sql"
 	"fmt"
 	"unsafe"
 
@@ -60,47 +59,56 @@ func (m imageTextMemo) images(content string) []RetainedImage {
 	return images
 }
 
-// backfillImageTextOccurrencesTx projects retained rows without reparsing sources.
-func backfillImageTextOccurrencesTx(ctx context.Context, tx *sql.Tx) error {
-	batch := &imageTextBatchTx{transactionQueries: tx, oldHashes: make(map[string]bool)}
-	last := ""
-	for {
-		rows, err := tx.QueryContext(ctx, `SELECT session_id FROM (
-			SELECT session_id FROM tool_calls WHERE result_content LIKE '%image%' AND session_id>?
-			UNION SELECT session_id FROM tool_result_events WHERE content LIKE '%image%' AND session_id>?
-		) ORDER BY session_id LIMIT 100`, last, last)
-		if err != nil {
-			return fmt.Errorf("finding retained images: %w", err)
-		}
-		var ids []string
-		for rows.Next() {
-			var id string
-			if err := rows.Scan(&id); err != nil {
-				rows.Close()
-				return err
-			}
-			ids = append(ids, id)
-		}
-		err = rows.Err()
-		if closeErr := rows.Close(); err == nil {
-			err = closeErr
-		}
-		if err != nil {
+const imageTextBackfillKey = "image_text_occurrences_backfill_v1"
+
+func (db *DB) backfillImageTextOccurrencesLocked(ctx context.Context, w *writerHandle) error {
+	tx, err := w.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = tx.Rollback() }()
+	var done int
+	if err := tx.QueryRowContext(ctx, `SELECT count(*) FROM stats WHERE key=? AND value!=0`, imageTextBackfillKey).Scan(&done); err != nil {
+		return err
+	}
+	if done != 0 {
+		return nil
+	}
+	rows, err := tx.QueryContext(ctx, `SELECT session_id FROM tool_calls WHERE result_content LIKE '%image%' OR result_content LIKE '%data:%'
+		UNION SELECT session_id FROM tool_result_events WHERE content LIKE '%image%' OR content LIKE '%data:%'`)
+	if err != nil {
+		return err
+	}
+	defer rows.Close()
+	var ids []string
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			_ = rows.Close()
 			return err
 		}
-		for _, id := range ids {
-			if err := ctx.Err(); err != nil {
-				return err
-			}
-			if err := refreshImageTextOccurrencesTx(batch, id); err != nil {
-				return fmt.Errorf("projecting retained images: %w", err)
-			}
-		}
-		if len(ids) < 100 {
-			return batch.pruneImageText()
-		}
-		last = ids[len(ids)-1]
+		ids = append(ids, id)
 	}
+	err = rows.Err()
+	if closeErr := rows.Close(); err == nil {
+		err = closeErr
+	}
+	if err != nil {
+		return err
+	}
+	batch := &imageTextBatchTx{transactionQueries: tx, oldHashes: make(map[string]bool)}
+	for _, id := range ids {
+		if err := refreshImageTextOccurrencesTx(batch, id); err != nil {
+			return fmt.Errorf("backfilling image text occurrences: %w", err)
+		}
+	}
+	if err := batch.pruneImageText(); err != nil {
+		return err
+	}
+	if _, err := tx.ExecContext(ctx, `INSERT OR REPLACE INTO stats(key,value) VALUES (?,1)`, imageTextBackfillKey); err != nil {
+		return err
+	}
+	return tx.Commit()
 }
 
 // refreshImageTextOccurrencesTx records image locations after the final tool-result projection.
@@ -165,8 +173,8 @@ func sessionImageTextHashes(tx transactionQueries, sessionID string) (map[string
 
 func sessionImageTextOccurrences(tx transactionQueries, sessionID string) ([]ImageTextOccurrence, error) {
 	rows, err := tx.Query(`SELECT tc.id, 0, COALESCE(tc.result_content, '') FROM tool_calls tc
-		WHERE tc.session_id=? AND tc.result_content LIKE '%image%' AND NOT EXISTS (SELECT 1 FROM tool_result_events e WHERE e.session_id=tc.session_id AND e.tool_use_id=tc.tool_use_id AND tc.tool_use_id<>'')
-		UNION ALL SELECT 0, e.id, e.content FROM tool_result_events e WHERE e.session_id=? AND e.content LIKE '%image%'`, sessionID, sessionID)
+		WHERE tc.session_id=? AND (tc.result_content LIKE '%image%' OR tc.result_content LIKE '%data:%') AND NOT EXISTS (SELECT 1 FROM tool_result_events e WHERE e.session_id=tc.session_id AND e.tool_use_id=tc.tool_use_id AND tc.tool_use_id<>'')
+		UNION ALL SELECT 0, e.id, e.content FROM tool_result_events e WHERE e.session_id=? AND (e.content LIKE '%image%' OR e.content LIKE '%data:%')`, sessionID, sessionID)
 	if err != nil {
 		return nil, err
 	}

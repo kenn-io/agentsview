@@ -8,11 +8,9 @@ import (
 	"path/filepath"
 	"strconv"
 	"testing"
-	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-	"go.kenn.io/agentsview/internal/assets"
 	"go.kenn.io/agentsview/internal/config"
 	"go.kenn.io/agentsview/internal/db"
 	"go.kenn.io/agentsview/internal/dbtest"
@@ -143,79 +141,4 @@ func TestCodexGeneratedImageUpgradeReparsesUnchangedSource(t *testing.T) {
 	require.NoError(t, engine.ReconcileWatchRoots(t.Context(), []string{root}, false))
 	assert.Equal(t, db.CurrentDataVersion(), database.GetSessionDataVersion(t.Context(), sessionID))
 	assert.Equal(t, want, resultContent(t, database))
-}
-
-func TestImageTextProjectionUpgradeKeepsOffloadedImages(t *testing.T) {
-	for _, archiveVersion := range []int{168, 169} {
-		t.Run(strconv.Itoa(archiveVersion), func(t *testing.T) {
-			ctx := t.Context()
-			const uuid = "019eb791-cf7d-75c1-8439-9ed74c122b09"
-			root := t.TempDir()
-			png := testjsonl.SolidPNGBase64(2, 2, color.RGBA{B: 180, A: 255})
-			writeCodexRollout(t, root, "01", "rollout-2024-01-01T10-00-00-"+uuid+".jsonl", testjsonl.JoinJSONL(
-				testjsonl.CodexSessionMetaJSON(uuid, "/workspace/project", "user", "2024-01-01T10:00:00Z"),
-				testjsonl.CodexMsgJSON("user", "draw a blue square", "2024-01-01T10:00:01Z"),
-				testjsonl.CodexImageGenerationCallJSON("ig_1", "A blue square", png, "2024-01-01T10:00:02Z"),
-			))
-			sessionID := "codex:" + uuid
-			database := dbtest.OpenTestDB(t)
-			assetsDir := t.TempDir()
-			database.SetAssetsDir(assetsDir)
-			config := EngineConfig{AgentDirs: map[parser.AgentType][]string{parser.AgentCodex: {root}}, Machine: "local"}
-			engine := NewEngine(ctx, database, config)
-			require.Equal(t, 1, engine.SyncAll(ctx, nil).Synced)
-			_, err := database.MigrateToolImages(ctx, db.StripImagesFilter{}, func(mediaType string, body []byte) (string, bool, error) {
-				return assets.Put(assetsDir, mediaType, body)
-			})
-			require.NoError(t, err)
-			resultContent := func(d *db.DB) string {
-				t.Helper()
-				messages, err := d.GetAllMessages(ctx, sessionID)
-				require.NoError(t, err)
-				for _, message := range messages {
-					for _, call := range message.ToolCalls {
-						return call.ResultContent
-					}
-				}
-				return ""
-			}
-			offloaded := resultContent(database)
-			require.Contains(t, offloaded, "asset://")
-			require.NotContains(t, offloaded, "data:image/")
-			require.NoError(t, database.UpsertSession(ctx, db.Session{ID: "retry", Project: "demo", Agent: "codex", MessageCount: 1}))
-			require.NoError(t, database.SetSessionDataVersion(ctx, "retry", 167))
-			require.NoError(t, database.Update(ctx, func(tx *sql.Tx) error {
-				if _, err := tx.ExecContext(ctx, `DELETE FROM image_text_occurrences`); err != nil {
-					return err
-				}
-				if _, err := tx.ExecContext(ctx, `UPDATE sessions SET data_version=? WHERE id=?`, archiveVersion, sessionID); err != nil {
-					return err
-				}
-				_, err := tx.ExecContext(ctx, fmt.Sprintf("PRAGMA user_version=%d", archiveVersion))
-				return err
-			}))
-			engine.Close()
-			path := database.Path()
-			require.NoError(t, database.Close())
-			database, err = db.OpenIsolated(ctx, path)
-			require.NoError(t, err)
-			t.Cleanup(func() { require.NoError(t, database.Close()) })
-			database.SetAssetsDir(assetsDir)
-			require.False(t, database.NeedsResync())
-			require.Equal(t, db.CurrentDataVersion(), database.GetSessionDataVersion(ctx, sessionID))
-			require.Equal(t, 167, database.GetSessionDataVersion(ctx, "retry"))
-			var version int
-			require.NoError(t, database.Reader().QueryRow(ctx, `PRAGMA user_version`).Scan(&version))
-			require.Equal(t, 170, version)
-			pending, err := database.PendingImageText(ctx, "test", time.Now(), 20)
-			require.NoError(t, err)
-			require.Len(t, pending, 1)
-			require.Equal(t, offloaded, resultContent(database))
-			engine = NewEngine(ctx, database, config)
-			t.Cleanup(engine.Close)
-			stats := engine.SyncAll(ctx, nil)
-			require.Zero(t, stats.Failed)
-			require.Equal(t, offloaded, resultContent(database))
-		})
-	}
 }
