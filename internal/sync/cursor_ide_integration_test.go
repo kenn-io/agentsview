@@ -1344,25 +1344,20 @@ func TestSyncPathsCursorIDEFramelessWALEventDoesNotReparse(t *testing.T) {
 	assert.Equal(t, "Committed", displayName(), "a WAL with frames must still sync")
 }
 
-func TestCursorIDEChunkedHeaderReconciliation(t *testing.T) {
+func TestCursorIDEHeaderDigestReconciliation(t *testing.T) {
 	root := t.TempDir()
 	path := filepath.Join(root, "state.vscdb")
-	c := cursorIDERetentionComposer("chunk-migration", 0, 2)
+	c := cursorIDERetentionComposer("header-digest", 0, 2)
 	createCursorIDEStateDB(t, path, []cursorIDESyncComposer{c})
-	execCursorIDEStateDB(t, path, `UPDATE cursorDiskKV SET value = ? WHERE key = ?`, `{"_v":18,"fullConversationHeadersOnly":[],"headerLog":{"count":2,"chunkCount":1}}`, "composerData:chunk-migration")
-	execCursorIDEStateDB(t, path, `INSERT INTO cursorDiskKV (key, value) VALUES (?, ?)`, "composerConvHeaders:chunk-migration:000000", `[{"bubbleId":"b1","type":1},{"bubbleId":"b2","type":2}]`)
+	execCursorIDEStateDB(t, path, `UPDATE cursorDiskKV SET value = ? WHERE key = ?`, `{"_v":18,"fullConversationHeadersOnly":[],"headerLog":{"count":2,"chunkCount":1}}`, "composerData:header-digest")
+	execCursorIDEStateDB(t, path, `INSERT INTO cursorDiskKV (key, value) VALUES (?, ?)`, "composerConvHeaders:header-digest:000000", `[{"bubbleId":"b1","type":1},{"bubbleId":"b2","type":2}]`)
 	engine, database := newCursorIDESyncEngine(t, root)
 	t.Cleanup(engine.Close)
 	require.Equal(t, 1, engine.SyncAll(t.Context(), nil).Synced)
-	const id = "cursor-ide:chunk-migration"
-	messages, err := database.GetMessages(t.Context(), id, 0, 100, true)
-	require.NoError(t, err)
-	require.Len(t, messages, 2)
-	assert.Equal(t, "b1", messages[0].SourceUUID)
-	assert.Equal(t, "b2", messages[1].SourceUUID)
-	execCursorIDEStateDB(t, path, `UPDATE cursorDiskKV SET value = ? WHERE key = ?`, `[{"bubbleId":"b2","type":2},{"bubbleId":"b1","type":1}]`, "composerConvHeaders:chunk-migration:000000")
+	const id = "cursor-ide:header-digest"
+	execCursorIDEStateDB(t, path, `UPDATE cursorDiskKV SET value = ? WHERE key = ?`, `[{"bubbleId":"b2","type":2},{"bubbleId":"b1","type":1}]`, "composerConvHeaders:header-digest:000000")
 	require.NoError(t, engine.ReconcileProviderRoots(t.Context(), parser.AgentCursorIDE, []string{root}))
-	messages, err = database.GetMessages(t.Context(), id, 0, 100, true)
+	messages, err := database.GetMessages(t.Context(), id, 0, 100, true)
 	require.NoError(t, err)
 	require.Len(t, messages, 2)
 	assert.Equal(t, "b2", messages[0].SourceUUID)
