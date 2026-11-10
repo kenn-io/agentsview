@@ -972,9 +972,10 @@ agentsview session prune [flags]
 | `--yes`           | `false` | Skip confirmation prompt                            |
 
 Filters combine with AND. One prune removes matching parents and descendants.
-A descendant that fails any filter keeps all its ancestors. Prune skips trash
-unless `--agent` is set, which includes matching sessions in trash. The summary
-shows how many matches are in trash.
+A descendant that fails any filter keeps all its ancestors. Without `--agent`,
+prune skips trash, so a trashed descendant keeps its ancestors. With `--agent`,
+prune includes matching sessions in trash. The summary shows how many matches
+are in trash.
 
 Prune keeps deleted sessions out of later syncs. To keep new sessions from
 that agent out of the archive, add it to
