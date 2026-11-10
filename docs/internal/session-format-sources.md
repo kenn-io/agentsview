@@ -3329,6 +3329,12 @@ schemas keep their existing ordering behavior.
   against 133 local run directories, with and without the header: all type as
   subagents with a parent, none resolve to themselves, and the other Pi
   sessions keep their fork type. Data version 156 reparses Pi-format archives.
+- **Scoped recovery:** Reverified 2026-11-10 against the shared JSONL source
+  set and Pi's streaming discovery adapter. Pi forwards requested scopes to
+  the shared walker, so inaccessible session paths use
+  [scoped retries][pi-scoped-retries] without changing configured source
+  identities. The transcript format, parsed output, and data version are
+  unchanged.
 - **Agentsview:** `internal/parser/pi.go` and `internal/parser/pi_provider.go`;
   alternate branches remain in the file but only the active ancestry is a
   conversation. Reverified 2026-09-03 against 156 local Pi transcripts: the
@@ -3351,6 +3357,8 @@ schemas keep their existing ordering behavior.
   stored path or fingerprint hint scans discovered session headers after the
   filename and directory lookups miss. Data version 109 reparses stored native
   Pi sessions to repair lineage edges and fork classification.
+
+[pi-scoped-retries]: ../configuration.md#sync-behavior
 
 ## Prime Agent (`prime-agent`)
 
@@ -4441,7 +4449,10 @@ schemas keep their existing ordering behavior.
   clear surviving children's parent links. A cron continuation whose
   ancestors were pruned keeps its stored job, including transcript-only parses
   and Augure Desktop. Cron member fingerprints include the resolved job ID in
-  direct and cached reads for both providers.
+  direct and cached reads for both providers. Scoped reconciliation recognises
+  virtual state members from provider-issued membership proofs. Reverified
+  2026-11-12 with a state session moved between two configured roots: syncing
+  its former root preserves the complete archived session as source-present.
 
 ## Forge (`forge`)
 

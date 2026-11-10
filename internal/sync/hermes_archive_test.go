@@ -1082,6 +1082,11 @@ func TestReconcileHermesScopedRootPreservesStateMemberMovedToAnotherRoot(t *test
 		t.Context(), nil, true,
 	))
 
+	before, err := database.GetSessionFull(t.Context(), "hermes:child")
+	require.NoError(t, err)
+	require.NotNil(t, before)
+	require.Nil(t, before.SourceMissingAt)
+
 	writeHermesArchiveStateDB(t, secondRoot)
 	conn, err := sql.Open("sqlite3", firstStateDB)
 	require.NoError(t, err)
@@ -1092,10 +1097,10 @@ func TestReconcileHermesScopedRootPreservesStateMemberMovedToAnotherRoot(t *test
 	require.NoError(t, engine.ReconcileWatchRootsAfterLostEvents(
 		t.Context(), []string{firstSessions}, false,
 	))
-	stored, err := database.GetSession(t.Context(), "hermes:child")
+	stored, err := database.GetSessionFull(t.Context(), "hermes:child")
 	require.NoError(t, err)
-	assert.NotNil(t, stored,
-		"a scoped pass cannot disprove the same virtual member under another root")
+	assert.Equal(t, before, stored,
+		"a scoped pass must preserve the source-present session while its virtual member exists under another root")
 }
 
 func writeHermesArchiveStateDB(t *testing.T, root string) string {
