@@ -3,6 +3,7 @@
 package sync
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 	"slices"
@@ -89,18 +90,22 @@ func TestTranslateShallowFSEventKeepsRootAndDirectChildren(t *testing.T) {
 
 func TestDarwinShallowWatcherCollapsesOverflowToOneFullSync(t *testing.T) {
 	watcher := newDarwinShallowWatcher(nil, nil)
-	require.NoError(t, watcher.Start())
 	t.Cleanup(watcher.Stop)
 
+	// The native adapter caps one callback at defaultWatchBatchMaxEntries
+	// events, so overflow comes from several callbacks queued before the
+	// forwarder drains them. Each batch alone fits; together they do not.
 	root := darwinShallowRoot{logicalPath: "/sessions", nativePath: "/sessions"}
-	events := make([]fsevents.Event, defaultWatchBatchMaxEntries+1)
-	for i := range events {
-		events[i] = fsevents.Event{
+	batch := make([]fsevents.Event, 5000)
+	for i := range batch {
+		batch[i] = fsevents.Event{
 			Path:  "/sessions/a.jsonl",
 			Flags: fseventFlagItemModified | fseventFlagItemIsFile,
 		}
 	}
-	watcher.consume(root, events)
+	watcher.consume(root, batch)
+	watcher.consume(root, batch)
+	require.NoError(t, watcher.Start())
 
 	assert.Equal(t, backendEvent{Op: backendOpFullSync},
 		requireReceiveWithin(t, watcher.Events(), time.Second))
@@ -110,6 +115,57 @@ func TestDarwinShallowWatcherCollapsesOverflowToOneFullSync(t *testing.T) {
 	assert.Equal(t, "/sessions/after.jsonl",
 		requireReceiveWithin(t, watcher.Events(), time.Second).Path,
 		"delivery must resume with ordinary events after the full sync")
+}
+
+// drainingStream fails to start, and its Close waits for an in-flight
+// callback the way fsevents.Stream.Close drains the shared dispatch queue.
+type drainingStream struct {
+	startErr error
+	inFlight <-chan struct{}
+	closed   chan struct{}
+}
+
+func (s *drainingStream) Start() error { return s.startErr }
+
+func (s *drainingStream) Close() error {
+	<-s.inFlight
+	close(s.closed)
+	return nil
+}
+
+func TestDarwinShallowWatcherFailedStartDoesNotDeadlockCallbacks(t *testing.T) {
+	other := darwinShallowRoot{logicalPath: "/other", nativePath: "/other"}
+	inFlight := make(chan struct{})
+	startErr := errors.New("start refused")
+	var watcher *darwinShallowWatcher
+	stream := &drainingStream{
+		startErr: startErr, inFlight: inFlight, closed: make(chan struct{}),
+	}
+	watcher = newDarwinShallowWatcher(nil,
+		func(string, func([]fsevents.Event)) (darwinStream, error) {
+			// Another stream's callback arrives while AddShallow is starting
+			// this one, so it waits for the watcher's lock.
+			go func() {
+				defer close(inFlight)
+				watcher.consume(other, []fsevents.Event{{
+					Path:  "/other/a.jsonl",
+					Flags: fseventFlagItemModified | fseventFlagItemIsFile,
+				}})
+			}()
+			return stream, nil
+		})
+	require.NoError(t, watcher.Start())
+	t.Cleanup(watcher.Stop)
+
+	added := make(chan error, 1)
+	go func() { added <- watcher.AddShallow("/sessions") }()
+
+	require.ErrorIs(t, requireReceiveWithin(t, added, 10*time.Second), startErr)
+	requireReceiveWithin(t, stream.closed, time.Second)
+	assert.Zero(t, watcher.streamCount())
+	assert.Equal(t, "/other/a.jsonl",
+		requireReceiveWithin(t, watcher.Events(), time.Second).Path,
+		"the waiting callback's event must still be delivered")
 }
 
 func TestDarwinWatcherShallowRootIgnoresNestedWrites(t *testing.T) {

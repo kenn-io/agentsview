@@ -66,13 +66,25 @@ func (w *darwinShallowWatcher) Events() <-chan backendEvent { return w.events }
 // Start begin delivering when Start runs.
 func (w *darwinShallowWatcher) AddShallow(root string) error {
 	root = filepath.Clean(root)
+	failed, err := w.addShallowLocked(root)
+	if failed != nil {
+		// Closing drains the shared callback queue, whose in-flight callback
+		// may be waiting for w.mu, so close only after the lock is released.
+		_ = failed.Close()
+	}
+	return err
+}
+
+// addShallowLocked registers root under w.mu. When the new stream fails to
+// start it returns that stream for the caller to close outside the lock.
+func (w *darwinShallowWatcher) addShallowLocked(root string) (darwinStream, error) {
 	w.mu.Lock()
 	defer w.mu.Unlock()
 	if w.stopped {
-		return errors.New("shallow watcher is stopped")
+		return nil, errors.New("shallow watcher is stopped")
 	}
 	if _, exists := w.streams[root]; exists {
-		return nil
+		return nil, nil
 	}
 	registration := darwinShallowRoot{
 		logicalPath: root,
@@ -82,16 +94,15 @@ func (w *darwinShallowWatcher) AddShallow(root string) error {
 		w.consume(registration, events)
 	})
 	if err != nil {
-		return fmt.Errorf("create shallow FSEvents stream for %s: %w", root, err)
+		return nil, fmt.Errorf("create shallow FSEvents stream for %s: %w", root, err)
 	}
 	if w.started {
 		if err := stream.Start(); err != nil {
-			_ = stream.Close()
-			return fmt.Errorf("start shallow FSEvents stream for %s: %w", root, err)
+			return stream, fmt.Errorf("start shallow FSEvents stream for %s: %w", root, err)
 		}
 	}
 	w.streams[root] = stream
-	return nil
+	return nil, nil
 }
 
 // Remove stops watching root. Closing a stream waits for its in-flight
