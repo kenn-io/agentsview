@@ -49,6 +49,7 @@ func TestImageTextPassDeadline(t *testing.T) {
 		require.NoError(t, err)
 		defer func() { require.NoError(t, d.Close()) }()
 		client := localOCRClient(t, func(w http.ResponseWriter, r *http.Request) {
+			w.Header().Set("Content-Type", "application/json")
 			select {
 			case <-time.After(70 * time.Second):
 				fmt.Fprintf(w, `{"model":"glm-ocr","deployment_fingerprint":%q,"json_result":[[{"index":0,"label":"text","content":"example"}]]}`, glmocr.DefaultDeploymentFingerprint)
@@ -56,7 +57,7 @@ func TestImageTextPassDeadline(t *testing.T) {
 			}
 		})
 		require.NoError(t, d.UpsertSession(ctx, db.Session{ID: "one", Project: "demo", Agent: "test"}))
-		for i := range 2 {
+		for i := range 22 {
 			content := fmt.Sprintf(`[{"type":"file","uri":"data:image/png;base64,%s"}]`, base64.StdEncoding.EncodeToString(fmt.Appendf(nil, "\x89PNG\r\n\x1a\nimage%d", i)))
 			require.NoError(t, d.InsertMessages(ctx, []db.Message{{SessionID: "one", Ordinal: i, Role: "assistant", ToolCalls: []db.ToolCall{{ToolName: "Read", ResultContent: content}}}}))
 		}
@@ -65,7 +66,15 @@ func TestImageTextPassDeadline(t *testing.T) {
 		require.LessOrEqual(t, time.Since(start), passBudget)
 		pending, err := d.PendingImageText(ctx, client.Identity().Fingerprint, time.Now(), 20)
 		require.NoError(t, err)
-		require.Len(t, pending, 1)
+		require.Len(t, pending, 20)
+		var timedOut string
+		require.NoError(t, d.Reader().QueryRow(ctx, `SELECT image_hash FROM image_text_cache WHERE succeeded=0`).Scan(&timedOut))
+		require.NoError(t, (&Manager{DB: d, Client: client}).Run(ctx))
+		var succeeded, failures int
+		require.NoError(t, d.Reader().QueryRow(ctx, `SELECT count(*) FROM image_text_cache WHERE succeeded=1`).Scan(&succeeded))
+		require.Equal(t, 2, succeeded)
+		require.NoError(t, d.Reader().QueryRow(ctx, `SELECT failures FROM image_text_cache WHERE image_hash=?`, timedOut).Scan(&failures))
+		require.Equal(t, 1, failures)
 	})
 }
 

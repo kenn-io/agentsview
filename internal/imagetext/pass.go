@@ -27,11 +27,16 @@ type Manager struct {
 // next interval.
 var passBudget = 2 * time.Minute
 
-const pageSize = 20
+const (
+	pageSize        = 20
+	passSaveReserve = time.Second
+)
 
 func (m *Manager) Run(ctx context.Context) error {
 	passCtx, cancel := context.WithTimeout(ctx, passBudget)
 	defer cancel()
+	workCtx, stopWork := context.WithTimeout(passCtx, passBudget-passSaveReserve)
+	defer stopWork()
 	identity := m.Client.Identity()
 	if m.Processor != "" {
 		identity.Fingerprint = m.Processor
@@ -49,7 +54,13 @@ func (m *Manager) Run(ctx context.Context) error {
 			return nil
 		}
 		for _, hash := range pending {
-			if err := m.processImage(passCtx, identity, hash); err != nil {
+			if workCtx.Err() != nil {
+				return ctx.Err()
+			}
+			if err := m.processImage(workCtx, identity, hash); err != nil {
+				if workCtx.Err() != nil && passCtx.Err() == nil {
+					return m.DB.SaveImageText(passCtx, hash, identity, "", true)
+				}
 				if passCtx.Err() != nil && ctx.Err() == nil {
 					return nil
 				}
