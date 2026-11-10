@@ -77,10 +77,8 @@ func (b activityReportRunBackend) ActivityReportRunSource(ids []string, q activi
 		if err != nil {
 			return err
 		}
+		// The consumer checks for cancellation before each run.
 		for _, run := range runs {
-			if err := ctx.Err(); err != nil {
-				return err
-			}
 			if err := yield(run); err != nil {
 				return err
 			}

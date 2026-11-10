@@ -64,10 +64,8 @@ func (b activityReportBackend) ActivityReportRunSource(ids []string, q activity.
 			return err
 		}
 		b.kept.sessions, b.kept.complete = sessions, true
+		// The consumer checks for cancellation before each run.
 		for _, run := range runs {
-			if err := ctx.Err(); err != nil {
-				return err
-			}
 			if err := yield(run); err != nil {
 				return err
 			}
