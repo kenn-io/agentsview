@@ -64,7 +64,7 @@ agentsview serve           # start the server in the foreground
 agentsview daemon start    # alternatively, start the same server in the background
 agentsview daemon status   # show daemon status
 agentsview daemon restart  # restart from current configuration
-agentsview index embeddings build  # turn on search by meaning
+agentsview index embeddings build  # turn on search by meaning; starts daemon if needed
 agentsview daemon stop     # stop the server, web UI, and sync
 agentsview session list    # read from the daemon if warm, otherwise SQLite
 agentsview report usage daily     # print daily cost summary
