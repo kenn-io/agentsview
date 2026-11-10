@@ -95,6 +95,9 @@ func ensureConversationSchemaLocked(ctx context.Context, w *writerHandle) error 
 	if err := ensureConversationVisibleSchema(ctx, tx); err != nil {
 		return err
 	}
+	if err := ensureConversationUsageSchema(ctx, tx); err != nil {
+		return err
+	}
 	return tx.Commit()
 }
 

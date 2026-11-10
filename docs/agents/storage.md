@@ -231,6 +231,17 @@ index available during orphan and trash copies so each message lookup does not
 scan the session's entire retained history. The next writable open builds it
 once for existing archives; no parser resync is required.
 
+Each live projection row also records a fingerprint of its message's own usage
+columns (`usage_key`) and the `conversation_usage_revision` value of its last
+usage-only change (`usage_revision`). Triggers on `messages` advance that
+counter only when the fingerprint changes, so a full rewrite that keeps usage
+publishes nothing; triggers on `usage_events` mark the message at
+`message_ordinal`. A projection row that is created or moves takes its
+fingerprint without a revision, because it already publishes a conversation
+revision. The change stream re-sends marked messages; the conversation export
+ignores these columns. The writable open that adds the columns records every
+live row's fingerprint first.
+
 Keep only digests and compact latest changes, not a body event log; bounded body
 reads take text from the archived message at the projected ordinal and reject it
 when its digest no longer matches the pinned revision. Project-only changes

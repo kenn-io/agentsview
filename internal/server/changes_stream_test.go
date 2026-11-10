@@ -340,44 +340,151 @@ func TestChangeStreamDeliversLiveChangesInOrder(t *testing.T) {
 	assert.Equal(t, map[string]int{"unannounced": 2, "announced": 2}, sessions)
 }
 
-func TestChangeStreamCarriesUsageAddedAfterMessage(t *testing.T) {
-	te := setupChangeStream(t)
+// seedLateUsageSession writes a priced session whose reply has no usage yet,
+// then opens a stream and returns it with the replay event.
+func seedLateUsageSession(t *testing.T, te *testEnv) ([]db.Message, *changeStreamClient, changeStreamChangesWire) {
+	t.Helper()
 	ctx := t.Context()
 	started := "2026-05-02T09:00:00Z"
 	require.NoError(t, te.db.UpsertSession(ctx, db.Session{
-		ID: "late-usage", Project: "sample", Machine: "local", Agent: "claude", StartedAt: &started, MessageCount: 1,
+		ID: "late-usage", Project: "sample", Machine: "local", Agent: "codex", StartedAt: &started, MessageCount: 2,
 	}))
-	reply := db.Message{
-		SessionID: "late-usage", Ordinal: 0, Role: "assistant", Content: "Done", SourceUUID: "late-reply",
-		Timestamp: "2026-05-02T09:00:01Z", Model: changeStreamModel,
+	msgs := []db.Message{
+		{SessionID: "late-usage", Ordinal: 0, Role: "user", Content: "Run it", SourceUUID: "late-user", Timestamp: "2026-05-02T09:00:00Z"},
+		{
+			SessionID: "late-usage", Ordinal: 1, Role: "assistant", Content: "Done", SourceUUID: "late-reply",
+			Timestamp: "2026-05-02T09:00:01Z", Model: changeStreamModel,
+		},
 	}
-	require.NoError(t, te.db.InsertMessages(ctx, []db.Message{reply}))
-
+	require.NoError(t, te.db.InsertMessages(ctx, msgs))
 	stream := openChangeStream(t, te, "")
-	replay := stream.changes(t, 1)[0]
-	var before *changeStreamSessionWire
-	for i := range replay.Sessions {
-		if replay.Sessions[i].SessionID == "late-usage" {
-			before = &replay.Sessions[i]
+	return msgs, stream, stream.changes(t, 1)[0]
+}
+
+func lateUsageMessageID(t *testing.T, replay changeStreamChangesWire) string {
+	t.Helper()
+	for _, message := range replay.Messages {
+		if message.SessionID == "late-usage" && message.Role == "assistant" {
+			assert.Nil(t, message.Usage, "the reply has no usage before the later write")
+			return message.MessageID
 		}
 	}
-	require.NotNil(t, before)
-	assert.Equal(t, &changeStreamUsageWire{}, before.Usage)
+	require.FailNow(t, "replay has no late-usage reply")
+	return ""
+}
 
-	// The message text is unchanged, so its conversation revision stays put;
-	// the usage change must still reach the subscriber.
-	reply.TokenUsage = []byte(`{"input_tokens":2000,"output_tokens":100}`)
-	require.NoError(t, te.db.ReplaceSessionMessages(ctx, "late-usage", []db.Message{reply}))
+// 2000 input at $3/MTok plus 100 output at $15/MTok.
+var lateUsage = &changeStreamUsageWire{InputTokens: 2000, OutputTokens: 100, CostMicrodollars: 7500, Priced: true}
+
+func TestChangeStreamResendsMessagesWhoseUsageChangesWithoutText(t *testing.T) {
+	for name, write := range map[string]func(*testing.T, *testEnv, []db.Message){
+		"token-only rewrite": func(t *testing.T, te *testEnv, msgs []db.Message) {
+			t.Helper()
+			msgs[1].TokenUsage = []byte(`{"input_tokens":2000,"output_tokens":100}`)
+			require.NoError(t, te.db.ReplaceSessionMessages(t.Context(), "late-usage", msgs))
+		},
+		"incremental token-usage update": func(t *testing.T, te *testEnv, _ []db.Message) {
+			t.Helper()
+			_, err := te.db.WriteSessionIncremental(t.Context(), "late-usage", nil, db.IncrementalSessionUpdate{
+				MsgCount: 2, NextOrdinal: 2,
+				MessageTokenUsageUpdates: []db.MessageTokenUsageUpdate{{
+					Ordinal: 1, TokenUsage: jsontext.Value(`{"input_tokens":2000,"output_tokens":100}`),
+					OutputTokens: 100, HasOutputTokens: true,
+				}},
+			})
+			require.NoError(t, err)
+		},
+		"usage event for the message": func(t *testing.T, te *testEnv, _ []db.Message) {
+			t.Helper()
+			require.NoError(t, te.db.ReplaceSessionUsageEvents(t.Context(), "late-usage", []db.UsageEvent{{
+				SessionID: "late-usage", MessageOrdinal: new(1), Source: "turn", Model: changeStreamModel,
+				InputTokens: 2000, OutputTokens: 100, OccurredAt: "2026-05-02T09:00:01Z", DedupKey: "turn-1",
+			}}))
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			te := setupChangeStream(t)
+			msgs, stream, replay := seedLateUsageSession(t, te)
+			replyID := lateUsageMessageID(t, replay)
+			var replyRevision string
+			for _, message := range replay.Messages {
+				if message.MessageID == replyID {
+					replyRevision = message.Revision
+				}
+			}
+
+			write(t, te, msgs)
+			te.broadcaster.Emit("messages")
+
+			update := stream.changes(t, 2)[1]
+			assert.Equal(t, replay.To, update.From)
+			require.Len(t, update.Messages, 1, "only the message whose usage changed is sent again")
+			resent := update.Messages[0]
+			assert.Equal(t, replyID, resent.MessageID)
+			assert.Equal(t, replyRevision, resent.Revision, "its text did not change, so its revision stays")
+			assert.Equal(t, lateUsage, resent.Usage)
+			assert.Equal(t, "2026-05-02T09:00:01Z", *resent.Timestamp)
+			require.Len(t, update.Sessions, 1)
+			assert.Equal(t, lateUsage, update.Sessions[0].Usage)
+
+			// Resuming after the re-send does not send it again.
+			resumed := openChangeStream(t, te, "?after="+update.To)
+			resumed.ready(t)
+			seedChangeStreamSession(t, te, "after-resend")
+			te.broadcaster.Emit("messages")
+			next := resumed.changes(t, 1)[0]
+			assert.Equal(t, update.To, next.From)
+			for _, message := range next.Messages {
+				assert.Equal(t, "after-resend", message.SessionID)
+			}
+		})
+	}
+}
+
+func TestChangeStreamSendsATextAndUsageChangeOnce(t *testing.T) {
+	te := setupChangeStream(t)
+	msgs, stream, replay := seedLateUsageSession(t, te)
+	replyID := lateUsageMessageID(t, replay)
+
+	msgs[1].Content = "Done, all green"
+	msgs[1].TokenUsage = []byte(`{"input_tokens":2000,"output_tokens":100}`)
+	require.NoError(t, te.db.ReplaceSessionMessages(t.Context(), "late-usage", msgs))
 	te.broadcaster.Emit("messages")
 
 	update := stream.changes(t, 2)[1]
-	assert.Equal(t, replay.To, update.From)
-	assert.Empty(t, update.Messages, "a usage-only change publishes no message revision")
-	require.Len(t, update.Sessions, 1)
-	assert.Equal(t, "late-usage", update.Sessions[0].SessionID)
-	// 2000 input at $3/MTok plus 100 output at $15/MTok.
-	assert.Equal(t, &changeStreamUsageWire{InputTokens: 2000, OutputTokens: 100, CostMicrodollars: 7500, Priced: true},
-		update.Sessions[0].Usage)
+	require.Len(t, update.Messages, 1)
+	assert.Equal(t, replyID, update.Messages[0].MessageID)
+	assert.Equal(t, lateUsage, update.Messages[0].Usage)
+
+	resumed := openChangeStream(t, te, "?after="+update.To)
+	resumed.ready(t)
+	seedChangeStreamSession(t, te, "after-text")
+	te.broadcaster.Emit("messages")
+	for _, message := range resumed.changes(t, 1)[0].Messages {
+		assert.Equal(t, "after-text", message.SessionID, "the changed reply is not sent a second time")
+	}
+}
+
+func TestChangeStreamIgnoresRewritesThatKeepUsage(t *testing.T) {
+	te := setupChangeStream(t)
+	msgs, stream, replay := seedLateUsageSession(t, te)
+	lateUsageMessageID(t, replay)
+	msgs[1].TokenUsage = []byte(`{"input_tokens":2000,"output_tokens":100}`)
+	require.NoError(t, te.db.ReplaceSessionMessages(t.Context(), "late-usage", msgs))
+	extra := db.Message{SessionID: "late-usage", Ordinal: 2, Role: "user", Content: "One more", SourceUUID: "late-extra"}
+	require.NoError(t, te.db.InsertMessages(t.Context(), []db.Message{extra}))
+	te.broadcaster.Emit("messages")
+	before := stream.changesWithMessages(t, len(replay.Messages)+2)
+
+	// Dropping a message forces a full rewrite, which deletes and reinserts
+	// every message row. Only the dropped message changed.
+	require.NoError(t, te.db.ReplaceSessionMessages(t.Context(), "late-usage", msgs))
+	te.broadcaster.Emit("messages")
+
+	update := stream.changes(t, len(before)+1)[len(before)]
+	require.Len(t, update.Messages, 1, "a rewrite that keeps usage re-sends nothing else")
+	assert.True(t, update.Messages[0].Deleted)
+	assert.Equal(t, "user", update.Messages[0].Role)
 }
 
 func TestChangeStreamPagesLargeReplays(t *testing.T) {

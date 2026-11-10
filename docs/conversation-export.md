@@ -127,15 +127,23 @@ session summaries. `priced` is `true` only when every counted usage has a price.
 Otherwise `cost_microdollars` covers only the priced part, and a session without
 usage reports zeros with `priced: false`.
 
-Token usage written after its message, such as usage a later sync adds without
-changing the text, sends the session again with new totals. The message itself
-is not sent again, so its `usage` keeps the value from its last revision. Two
-kinds of cost change send nothing:
+A message is sent again, with the same `revision` and its current `usage`, when
+its usage changes while its text does not. Examples are token usage that a later
+sync adds to an earlier reply, and a usage record attached to that message. Only
+the messages whose stored usage changed are sent again, and each change is sent
+once. A rewrite of a session's usage records can also re-send messages after the
+first changed record whose usage did not change. Some changes alter a message's
+computed `usage` while its own stored usage stays the same, so they update only
+the session totals or send nothing:
 
-- Model pricing updates change computed costs without sending any session.
-  Reconnect without a cursor to recompute every total.
-- When two Claude sessions share a streamed response, a write to one session can
-  move that shared usage between them. Only the written session is sent.
+- Model pricing updates change computed costs without sending any message or
+  session. Reconnect without a cursor to recompute every value.
+- When two sessions store the same Claude response, such as a resumed or forked
+  transcript, a write to one can move that usage between them. The written
+  session is sent; the other session's message and totals keep their earlier
+  usage until it changes again.
+- A session-level reported cost spread across messages changes their shares when
+  any of its usage changes. Only the changed messages are sent again.
 
 ## Read only the text you need
 

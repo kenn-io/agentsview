@@ -15,11 +15,12 @@ import (
 	"go.kenn.io/agentsview/internal/money"
 )
 
-// A change stream follows two trigger-maintained counters. The conversation
-// publication revision covers message and session-state changes; the usage
-// change revision covers token, cost, and session-column changes, including
-// usage written after its message was published. The cursor carries both,
-// bound to one database generation.
+// A change stream follows three trigger-maintained counters. The conversation
+// publication revision covers message and session-state changes. The usage
+// change revision covers a session's token, cost, and column changes. The
+// conversation usage revision covers a message whose own usage changed without
+// a conversation revision, such as token usage a later sync adds to unchanged
+// text. The cursor carries all three, bound to one database generation.
 const (
 	changeStreamPositionVersion = 1
 	changeStreamPositionKind    = "changes"
@@ -31,6 +32,7 @@ type changeStreamPosition struct {
 	DatabaseID   string `json:"database_id"`
 	Conversation int64  `json:"conversation,string"`
 	Usage        int64  `json:"usage,string"`
+	MessageUsage int64  `json:"message_usage,string"`
 }
 
 func (p changeStreamPosition) encode() (string, error) {
@@ -57,7 +59,7 @@ func decodeChangeStreamPosition(cursor string) (changeStreamPosition, bool) {
 	}
 	valid := position.Version == changeStreamPositionVersion &&
 		position.Kind == changeStreamPositionKind && position.DatabaseID != "" &&
-		position.Conversation >= 0 && position.Usage >= 0
+		position.Conversation >= 0 && position.Usage >= 0 && position.MessageUsage >= 0
 	return position, valid
 }
 
@@ -128,6 +130,7 @@ type changeStreamRevisions struct {
 	databaseID   string
 	conversation int64
 	usage        int64
+	messageUsage int64
 }
 
 func changeStreamRevisionsTx(ctx context.Context, tx *sql.Tx) (changeStreamRevisions, error) {
@@ -146,6 +149,10 @@ func changeStreamRevisionsTx(ctx context.Context, tx *sql.Tx) (changeStreamRevis
 		return heads, err
 	}
 	heads.usage, err = archiveJournalRevision(ctx, tx, archiveMetadataUsageChangeRevisionKey, "usage change")
+	if err != nil {
+		return heads, err
+	}
+	heads.messageUsage, err = archiveJournalRevision(ctx, tx, conversationUsageRevisionKey, "conversation usage")
 	return heads, err
 }
 
@@ -164,6 +171,7 @@ func (db *DB) ReadChangeStreamHead(ctx context.Context) (ChangeStreamHead, error
 	head, err := changeStreamPosition{
 		Version: changeStreamPositionVersion, Kind: changeStreamPositionKind,
 		DatabaseID: heads.databaseID, Conversation: heads.conversation, Usage: heads.usage,
+		MessageUsage: heads.messageUsage,
 	}.encode()
 	if err != nil {
 		return ChangeStreamHead{}, err
@@ -177,8 +185,9 @@ type changeStreamMessageRow struct {
 }
 
 // ReadChangeStream returns the changes published after cursor in one read
-// snapshot, at most MaxSessionLimit message and session-state changes plus at
-// most MaxSessionLimit usage changes. An empty cursor, one from another
+// snapshot: at most MaxSessionLimit message and session-state changes, at most
+// MaxSessionLimit session usage changes, and at most MaxSessionLimit messages
+// whose own usage changed without a conversation revision. An empty cursor, one from another
 // database generation, or one this archive did not issue restarts from the
 // beginning. Every session a change touches is reported with its current
 // state, so a message change also refreshes its session's totals.
@@ -198,17 +207,32 @@ func (db *DB) ReadChangeStream(ctx context.Context, cursor string) (ChangeStream
 	}
 	position, ok := decodeChangeStreamPosition(cursor)
 	if !ok || position.DatabaseID != heads.databaseID ||
-		position.Conversation > heads.conversation || position.Usage > heads.usage {
+		position.Conversation > heads.conversation || position.Usage > heads.usage ||
+		position.MessageUsage > heads.messageUsage {
 		batch.Reset = true
+		// The replay sends every message with its current usage, so no
+		// earlier usage change needs its own re-send.
 		position = changeStreamPosition{
 			Version: changeStreamPositionVersion, Kind: changeStreamPositionKind,
-			DatabaseID: heads.databaseID,
+			DatabaseID: heads.databaseID, MessageUsage: heads.messageUsage,
 		}
 	} else {
 		batch.From = cursor
 	}
 
 	sessionIDs := map[string]struct{}{}
+	// A message whose conversation revision is past the cursor is sent by the
+	// conversation pages, now or in a later event, with its current usage.
+	resent, messageUsageLast, messageUsageMore, err := readChangeStreamMessageUsageTx(
+		ctx, tx, position.MessageUsage, position.Conversation, sessionIDs)
+	if err != nil {
+		return ChangeStreamBatch{}, err
+	}
+	if messageUsageMore {
+		position.MessageUsage = messageUsageLast
+	} else {
+		position.MessageUsage = heads.messageUsage
+	}
 	messages, conversationMore, err := readChangeStreamConversationTx(ctx, tx, position.Conversation, sessionIDs)
 	if err != nil {
 		return ChangeStreamBatch{}, err
@@ -230,7 +254,8 @@ func (db *DB) ReadChangeStream(ctx context.Context, cursor string) (ChangeStream
 	} else {
 		position.Usage = heads.usage
 	}
-	batch.More = conversationMore || usageMore
+	batch.More = conversationMore || usageMore || messageUsageMore
+	messages.rows = append(messages.rows, resent...)
 
 	ids := make([]string, 0, len(sessionIDs))
 	for id := range sessionIDs {
@@ -309,6 +334,42 @@ func readChangeStreamConversationTx(
 		}
 	}
 	return page, more, errors.Join(rows.Err(), rows.Close())
+}
+
+// readChangeStreamMessageUsageTx reads live messages whose own usage changed
+// after the cursor, in conversation usage revision order. Each marked row has
+// its own revision, so a page can end between any two of them.
+func readChangeStreamMessageUsageTx(
+	ctx context.Context, tx *sql.Tx, after, conversationAfter int64, sessionIDs map[string]struct{},
+) ([]changeStreamMessageRow, int64, bool, error) {
+	rows, err := tx.QueryContext(ctx, `SELECT c.session_id,c.message_id,c.revision,c.role,NULLIF(c.timestamp,''),c.deleted,c.ordinal,
+		 COALESCE(m.model,''),c.usage_revision
+		 FROM conversation_messages c LEFT JOIN messages m ON m.session_id=c.session_id AND m.ordinal=c.ordinal
+		 WHERE c.usage_revision > ? AND c.removed=0 AND c.revision <= ?
+		 ORDER BY c.usage_revision LIMIT ?`, after, conversationAfter, MaxSessionLimit+1)
+	if err != nil {
+		return nil, 0, false, fmt.Errorf("reading message usage changes: %w", err)
+	}
+	defer rows.Close()
+	var out []changeStreamMessageRow
+	var last int64
+	more := false
+	for rows.Next() {
+		if len(out) == MaxSessionLimit {
+			more = true
+			break
+		}
+		var row changeStreamMessageRow
+		var revision int64
+		if err := rows.Scan(&row.message.SessionID, &row.message.MessageID, &revision, &row.message.Role,
+			&row.message.Timestamp, &row.message.Deleted, &row.ordinal, &row.message.Model, &last); err != nil {
+			return nil, 0, false, err
+		}
+		row.message.Revision = strconv.FormatInt(revision, 10)
+		sessionIDs[row.message.SessionID] = struct{}{}
+		out = append(out, row)
+	}
+	return out, last, more, errors.Join(rows.Err(), rows.Close())
 }
 
 // readChangeStreamUsageTx reads sessions whose usage or session columns
