@@ -21,12 +21,18 @@ func TestImageTextBackfillExistingResults(t *testing.T) {
 	defer func() { _ = d.Close() }()
 	insertSession(t, d, "image", "demo")
 	content := `[{"type":"file","mime":"application/octet-stream","uri":"data:application/octet-stream;base64,iVBORw0KGgppbWFnZQ=="}]`
-	require.NoError(t, d.InsertMessages(ctx, []Message{{SessionID: "image", Role: "assistant", Content: "answer", ToolCalls: []ToolCall{{ToolName: "Read", ResultContent: content}}}}))
+	require.NoError(t, d.InsertMessages(ctx, []Message{{SessionID: "image", Role: "assistant", Content: "answer", ToolCalls: []ToolCall{{ToolName: "Read", ResultContent: testInlineImageContent()}}}}))
 	require.NoError(t, d.Update(ctx, func(tx *sql.Tx) error {
-		if _, err := tx.ExecContext(ctx, `DELETE FROM image_text_occurrences`); err != nil {
+		if _, err := tx.ExecContext(ctx, `UPDATE tool_calls SET result_content=? WHERE session_id='image'`, content); err != nil {
 			return err
 		}
-		_, err := tx.ExecContext(ctx, `DELETE FROM stats WHERE key=?`, imageTextBackfillKey)
+		if _, err := tx.ExecContext(ctx, `INSERT OR REPLACE INTO stats(key,value) VALUES ('image_text_occurrences_backfill_v1',1)`); err != nil {
+			return err
+		}
+		if _, err := tx.ExecContext(ctx, `DELETE FROM stats WHERE key='image_text_occurrences_backfill_v2'`); err != nil {
+			return err
+		}
+		_, err := tx.ExecContext(ctx, `PRAGMA user_version=169`)
 		return err
 	}))
 	require.NoError(t, d.Close())
@@ -35,6 +41,7 @@ func TestImageTextBackfillExistingResults(t *testing.T) {
 	pending, err := d.PendingImageText(ctx, "test", time.Now(), 20)
 	require.NoError(t, err)
 	require.Len(t, pending, 1)
+	require.Equal(t, RetainedToolResultImages(content)[0].SHA256, pending[0])
 	identity, err := ocr.NewIdentity("test", "model", "revision")
 	require.NoError(t, err)
 	require.NoError(t, d.SaveImageText(ctx, pending[0], identity, "invoice", false))
@@ -42,6 +49,53 @@ func TestImageTextBackfillExistingResults(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, page.Results, 1)
 	require.Equal(t, "image", page.Results[0].SessionID)
+	_, err = d.getWriter().ExecContext(ctx, `PRAGMA user_version=169`)
+	require.NoError(t, err)
+	require.NoError(t, d.Close())
+	d, err = Open(ctx, path)
+	require.NoError(t, err)
+	var raw int
+	require.NoError(t, d.Reader().QueryRow(ctx, `PRAGMA user_version`).Scan(&raw))
+	require.Equal(t, (1<<21)+169, raw)
+	page, err = d.Search(ctx, SearchFilter{Query: "invoice"})
+	require.NoError(t, err)
+	require.Len(t, page.Results, 1)
+}
+
+func TestImageTextBackfillRetriesAfterFailure(t *testing.T) {
+	ctx := t.Context()
+	path := filepath.Join(t.TempDir(), "archive.db")
+	d, err := Open(ctx, path)
+	require.NoError(t, err)
+	insertSession(t, d, "image", "demo")
+	require.NoError(t, d.InsertMessages(ctx, []Message{{SessionID: "image", Role: "assistant", Content: "answer", ToolCalls: []ToolCall{{ToolName: "Read", ResultContent: testInlineImageContent()}}}}))
+	require.NoError(t, d.Update(ctx, func(tx *sql.Tx) error {
+		_, err := tx.ExecContext(ctx, `DELETE FROM stats WHERE key='image_text_occurrences_backfill_v2';
+			PRAGMA user_version=169;
+			CREATE TRIGGER fail_image_backfill BEFORE INSERT ON image_text_occurrences BEGIN SELECT RAISE(ABORT,'backfill interrupted'); END`)
+		return err
+	}))
+	require.NoError(t, d.Close())
+	_, err = Open(ctx, path)
+	require.ErrorContains(t, err, "backfill interrupted")
+	raw, err := sql.Open(sqliteArchiveDriverName, makeDSN(path, false))
+	require.NoError(t, err)
+	var version, marker int
+	require.NoError(t, raw.QueryRowContext(ctx, `PRAGMA user_version`).Scan(&version))
+	require.Equal(t, 169, version)
+	require.NoError(t, raw.QueryRowContext(ctx, `SELECT count(*) FROM stats WHERE key='image_text_occurrences_backfill_v2'`).Scan(&marker))
+	require.Zero(t, marker)
+	_, err = raw.ExecContext(ctx, `DROP TRIGGER fail_image_backfill`)
+	require.NoError(t, err)
+	require.NoError(t, raw.Close())
+	d, err = Open(ctx, path)
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, d.Close()) })
+	pending, err := d.PendingImageText(ctx, "test", time.Now(), 20)
+	require.NoError(t, err)
+	require.Len(t, pending, 1)
+	require.NoError(t, d.Reader().QueryRow(ctx, `PRAGMA user_version`).Scan(&version))
+	require.Equal(t, (1<<21)+169, version)
 }
 
 func TestImageTextIndexRebuild(t *testing.T) {

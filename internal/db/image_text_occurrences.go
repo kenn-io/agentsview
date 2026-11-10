@@ -59,7 +59,7 @@ func (m imageTextMemo) images(content string) []RetainedImage {
 	return images
 }
 
-const imageTextBackfillKey = "image_text_occurrences_backfill_v1"
+const imageTextBackfillKey = "image_text_occurrences_backfill_v2"
 
 func (db *DB) backfillImageTextOccurrencesLocked(ctx context.Context, w *writerHandle) error {
 	tx, err := w.BeginTx(ctx, nil)
@@ -72,7 +72,14 @@ func (db *DB) backfillImageTextOccurrencesLocked(ctx context.Context, w *writerH
 		return err
 	}
 	if done != 0 {
-		return nil
+		version, _, err := readUserVersion(ctx, tx)
+		if err != nil {
+			return err
+		}
+		if err := writeUserVersion(ctx, tx, version); err != nil {
+			return err
+		}
+		return tx.Commit()
 	}
 	rows, err := tx.QueryContext(ctx, `SELECT session_id FROM tool_calls WHERE result_content LIKE '%image%' OR result_content LIKE '%data:%'
 		UNION SELECT session_id FROM tool_result_events WHERE content LIKE '%image%' OR content LIKE '%data:%'`)
@@ -106,6 +113,13 @@ func (db *DB) backfillImageTextOccurrencesLocked(ctx context.Context, w *writerH
 		return err
 	}
 	if _, err := tx.ExecContext(ctx, `INSERT OR REPLACE INTO stats(key,value) VALUES (?,1)`, imageTextBackfillKey); err != nil {
+		return err
+	}
+	version, _, err := readUserVersion(ctx, tx)
+	if err != nil {
+		return err
+	}
+	if err := writeUserVersion(ctx, tx, version); err != nil {
 		return err
 	}
 	return tx.Commit()

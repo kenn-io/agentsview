@@ -667,6 +667,8 @@ const dataVersion = 169
 
 const archiveOnlyVersionBase = 1 << 20
 
+const imageTextFormatVersionBit = 1 << 21
+
 const tokenCoverageRepairStatsKey = "token_coverage_repair_v1"
 
 const toolCallFieldBackfillStatsKey = "tool_call_field_backfill_v1"
@@ -2362,13 +2364,12 @@ func readUserVersion(ctx context.Context, conn interface {
 
 // DecodeUserVersion returns the parser version and permanent archive-only mode.
 func DecodeUserVersion(version int) (int, bool) {
-	if version >= archiveOnlyVersionBase {
-		return version - archiveOnlyVersionBase, true
-	}
-	return version, false
+	archiveOnly := version&archiveOnlyVersionBase != 0
+	return version &^ (archiveOnlyVersionBase | imageTextFormatVersionBit), archiveOnly
 }
 
 func writeUserVersion(ctx context.Context, tx *sql.Tx, version int) error {
+	version |= imageTextFormatVersionBit
 	var metadataExists bool
 	if err := tx.QueryRowContext(ctx, `SELECT EXISTS (SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'archive_metadata')`).Scan(&metadataExists); err != nil {
 		return err

@@ -182,9 +182,10 @@ as complete for draining attached archive sources.
 The `raw_archive_*` tables record retained captures, root identities, accepted
 sources and deletion evidence. Seed import and restore permanently enable
 archive-only mode, which disables source sync and publication. These archives
-store `1 << 20` plus their parser version in `PRAGMA user_version`, so older
-builds refuse them. This build decodes that range and preserves pending
-rebuilds; ordinary archives keep their parser version unchanged.
+store `1 << 20` plus their parser version in `PRAGMA user_version`. All
+archives also carry `1 << 21` for the image-text index, so older builds refuse
+archives whose index they cannot maintain. This build decodes both bits and
+preserves pending rebuilds without changing the parser version.
 
 ### Artifact checkpoint landings
 
