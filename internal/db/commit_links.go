@@ -623,17 +623,16 @@ func (d *DB) backfillCommitLinksLocked(ctx context.Context, w *writerHandle) err
 	return tx.Commit()
 }
 
-// markCommitLinksBackfilled records the backfill. A version 169 archive-only
-// archive moves to the Codex-scoped version so older readers refuse it; its
-// pending marker keeps the preservation rebuild. Older archives keep their version.
+// markCommitLinksBackfilled records the backfill and protects recovered links.
+// Earlier archives retain their version for the Codex identity rebuild.
 func markCommitLinksBackfilled(ctx context.Context, tx *sql.Tx) error {
 	if _, err := tx.ExecContext(ctx, `INSERT OR REPLACE INTO stats(key,value) VALUES (?,1)`, commitLinksBackfillKey); err != nil {
 		return err
 	}
-	if version, archiveOnly, err := readUserVersion(ctx, tx); err != nil || !archiveOnly || version != 169 {
+	if version, archiveOnly, err := readUserVersion(ctx, tx); err != nil || !archiveOnly || version < codexThreadIdentityDataVersion || version >= 170 {
 		return err
 	}
-	return advanceDataVersion(ctx, tx, dataVersion)
+	return advanceDataVersion(ctx, tx, 170)
 }
 
 // The time fallback adapts Pando's turnThatWrote; see

@@ -572,7 +572,7 @@ func TestCommitLinksBackfill(t *testing.T) {
 }
 
 func TestCommitLinksBackfillArchiveOnlyVersion(t *testing.T) {
-	for _, oldVersion := range []int{168, 169} {
+	for _, oldVersion := range []int{136, 137, 168, 169} {
 		t.Run(strconv.Itoa(oldVersion), func(t *testing.T) {
 			d := testDB(t)
 			insertSession(t, d, "s1", "project-a")
@@ -586,7 +586,7 @@ func TestCommitLinksBackfillArchiveOnlyVersion(t *testing.T) {
 			require.NoError(t, err)
 			var version int
 			require.NoError(t, d.getReader().QueryRowContext(t.Context(), `PRAGMA user_version`).Scan(&version))
-			if oldVersion == 169 {
+			if oldVersion >= 137 {
 				assert.Equal(t, (1<<20)+170, version)
 			} else {
 				assert.Equal(t, (1<<20)+oldVersion, version)
