@@ -462,15 +462,19 @@ func (r fakeEmbeddingsRuntime) Manager(store string) EmbeddingsManager {
 		return nil
 	}
 }
+
 func (r fakeEmbeddingsRuntime) IncludeAutomated() bool { return r.includeAutomated }
+
 func (r fakeEmbeddingsRuntime) BuildStarted() {
 	if r.buildStarted != nil {
 		*r.buildStarted = true
 	}
 }
+
 func (r fakeEmbeddingsRuntime) SetupStatus(context.Context) (EmbeddingsSetupStatus, error) {
 	return EmbeddingsSetupStatus{Enabled: true, Busy: r.busy}, nil
 }
+
 func (r fakeEmbeddingsRuntime) Setup(_ int64, build *vector.BuildRequest) error {
 	if r.setupBuild != nil {
 		*r.setupBuild = build

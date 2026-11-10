@@ -642,9 +642,9 @@ func TestCLIEmbeddingsSetupRequiresWritableDaemon(t *testing.T) {
 	var out strings.Builder
 	err := runEmbeddingsBuild(t.Context(), &out, strings.NewReader("yes\n"), EmbeddingsBuildOptions{})
 	require.ErrorContains(t, err, "search setup requires a writable daemon")
-	assert.ErrorContains(t, err, "agentsview daemon start")
-	assert.ErrorContains(t, err, "agentsview index embeddings build")
-	assert.ErrorContains(t, err, "Settings → Embeddings → Turn on")
+	require.ErrorContains(t, err, "agentsview daemon start")
+	require.ErrorContains(t, err, "agentsview index embeddings build")
+	require.ErrorContains(t, err, "Settings → Embeddings → Turn on")
 	assert.NotContains(t, out.String(), "[y/N]")
 }
 

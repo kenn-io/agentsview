@@ -311,7 +311,11 @@ func (v *liveVectorServing) activate(deployment config.VectorEmbeddingsServerCon
 	if build != nil {
 		req = *build
 	}
-	err = v.Manager(req.Store).StartBuild(req)
+	manager := v.Manager(req.Store)
+	if manager == nil {
+		return errors.New("Another process may be using search. Close it and retry.") //nolint:staticcheck // ST1005: This recovery message appears directly in the UI.
+	}
+	err = manager.StartBuild(req)
 	if errors.Is(err, vector.ErrBuildRunning) {
 		return nil
 	}
