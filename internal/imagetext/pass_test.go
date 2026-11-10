@@ -42,6 +42,33 @@ type roundTripFunc func(*http.Request) (*http.Response, error)
 
 func (f roundTripFunc) RoundTrip(r *http.Request) (*http.Response, error) { return f(r) }
 
+func TestImageTextPassDeadline(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		ctx := t.Context()
+		d, err := db.Open(ctx, filepath.Join(t.TempDir(), "archive.db"))
+		require.NoError(t, err)
+		defer func() { require.NoError(t, d.Close()) }()
+		client := localOCRClient(t, func(w http.ResponseWriter, r *http.Request) {
+			select {
+			case <-time.After(70 * time.Second):
+				fmt.Fprintf(w, `{"model":"glm-ocr","deployment_fingerprint":%q,"json_result":[[{"index":0,"label":"text","content":"example"}]]}`, glmocr.DefaultDeploymentFingerprint)
+			case <-r.Context().Done():
+			}
+		})
+		require.NoError(t, d.UpsertSession(ctx, db.Session{ID: "one", Project: "demo", Agent: "test"}))
+		for i := range 2 {
+			content := fmt.Sprintf(`[{"type":"file","uri":"data:image/png;base64,%s"}]`, base64.StdEncoding.EncodeToString(fmt.Appendf(nil, "\x89PNG\r\n\x1a\nimage%d", i)))
+			require.NoError(t, d.InsertMessages(ctx, []db.Message{{SessionID: "one", Ordinal: i, Role: "assistant", ToolCalls: []db.ToolCall{{ToolName: "Read", ResultContent: content}}}}))
+		}
+		start := time.Now()
+		require.NoError(t, (&Manager{DB: d, Client: client}).Run(ctx))
+		require.LessOrEqual(t, time.Since(start), passBudget)
+		pending, err := d.PendingImageText(ctx, client.Identity().Fingerprint, time.Now(), 20)
+		require.NoError(t, err)
+		require.Len(t, pending, 1)
+	})
+}
+
 func TestImageTextPassKeepsRetryCutoff(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		ctx := t.Context()

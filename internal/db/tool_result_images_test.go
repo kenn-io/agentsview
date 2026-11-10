@@ -1,6 +1,8 @@
 package db
 
 import (
+	"bytes"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -15,6 +17,24 @@ import (
 	"github.com/stretchr/testify/require"
 	"go.kenn.io/agentsview/internal/config"
 )
+
+func TestReadRetainedImageInlineLimit(t *testing.T) {
+	body := bytes.Repeat([]byte("x"), 1024*1024)
+	uri := "data:image/png;base64," + base64.StdEncoding.EncodeToString(body)
+	raw, err := json.Marshal(uri)
+	require.NoError(t, err)
+	var decoded bytes.Buffer
+	_, size, _, ok := streamInlineDataLimit(raw, &decoded, true, 32)
+	require.True(t, ok)
+	require.EqualValues(t, 33, size)
+	require.Equal(t, 33, decoded.Len())
+	content := fmt.Sprintf(`[{"type":"input_image","image_url":%s}]`, raw)
+	_, err = ReadRetainedImage(content, 0, "", 32)
+	require.ErrorContains(t, err, "exceeds 32 bytes")
+	got, err := ReadRetainedImage(content, 0, "", int64(len(body)))
+	require.NoError(t, err)
+	require.Equal(t, body, got)
+}
 
 func testInlineImageContent() string {
 	return `[{"type":"text","text":"before"},{"type":"input_image","image_url":"data:image/png;base64,AAEC"},{"type":"text","text":"after"}]`

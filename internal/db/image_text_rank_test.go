@@ -1,13 +1,60 @@
 package db
 
 import (
+	"fmt"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/require"
 	"go.kenn.io/docbank/document/ocr"
 )
 
-func TestImageTextSearchPaginationAfterMessageMatches(t *testing.T) {
+func TestImageTextSearchFirstPageWithManyMessages(t *testing.T) {
+	ctx := t.Context()
+	d := testDB(t)
+	for i := range 50 {
+		id := fmt.Sprintf("message-%02d", i)
+		insertSession(t, d, id, "demo")
+		require.NoError(t, d.InsertMessages(ctx, []Message{{SessionID: id, Role: "assistant", Content: "needle " + strings.Repeat("filler ", i+1)}}))
+	}
+	insertSession(t, d, "image", "demo")
+	content := testInlineImageContent()
+	require.NoError(t, d.InsertMessages(ctx, []Message{{SessionID: "image", Role: "assistant", Content: "answer", ToolCalls: []ToolCall{{ToolName: "Read", ResultContent: content}}}}))
+	insertSession(t, d, "both", "demo")
+	require.NoError(t, d.InsertMessages(ctx, []Message{{SessionID: "both", Role: "assistant", Content: "needle " + strings.Repeat("filler ", 100), ToolCalls: []ToolCall{{ToolName: "Read", ResultContent: content}}}}))
+	identity, err := ocr.NewIdentity("test", "model", "revision")
+	require.NoError(t, err)
+	require.NoError(t, d.SaveImageText(ctx, RetainedToolResultImages(content)[0].SHA256, identity, "needle needle needle", false))
+	page, err := d.Search(ctx, SearchFilter{Query: "needle", Limit: 30})
+	require.NoError(t, err)
+	require.Len(t, page.Results, 30)
+	var found bool
+	for _, result := range page.Results {
+		found = found || result.SessionID == "image"
+	}
+	require.True(t, found, "image text should reach the first page")
+	seen := make(map[string]bool)
+	var previousRank float64
+	first := true
+	for {
+		for _, result := range page.Results {
+			require.False(t, seen[result.SessionID], "session must appear only once across pages")
+			if !first {
+				require.GreaterOrEqual(t, result.Rank, previousRank)
+			}
+			previousRank, first = result.Rank, false
+			seen[result.SessionID] = true
+		}
+		if page.NextCursor == 0 {
+			break
+		}
+		page, err = d.Search(ctx, SearchFilter{Query: "needle", Limit: 30, Cursor: page.NextCursor})
+		require.NoError(t, err)
+	}
+	require.Len(t, seen, 52)
+}
+
+func TestImageTextSearchPaginationByRelevance(t *testing.T) {
 	ctx := t.Context()
 	d := testDB(t)
 	content := testInlineImageContent()
@@ -34,9 +81,6 @@ func TestImageTextSearchPaginationAfterMessageMatches(t *testing.T) {
 		for _, result := range page.Results {
 			ids = append(ids, result.SessionID)
 			ordinals[result.SessionID] = result.Ordinal
-			if len(ids) > 4 {
-				require.Zero(t, result.Rank)
-			}
 		}
 		if page.NextCursor == 0 {
 			break
@@ -44,8 +88,8 @@ func TestImageTextSearchPaginationAfterMessageMatches(t *testing.T) {
 		cursor = page.NextCursor
 	}
 	require.Len(t, ids, 7)
-	require.ElementsMatch(t, []string{"message-a", "message-b", "message-c", "message-d"}, ids[:4])
-	require.Equal(t, []string{"image-a", "image-b", "name"}, ids[4:])
+	require.ElementsMatch(t, []string{"message-a", "message-b", "message-c", "message-d", "image-a", "image-b"}, ids[:6])
+	require.Equal(t, "name", ids[6])
 	require.Equal(t, 1, ordinals["image-b"])
 	require.Equal(t, -1, ordinals["name"])
 }

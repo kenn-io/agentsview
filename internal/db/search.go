@@ -503,8 +503,7 @@ func (db *DB) Search(
 		bestArgs = []any{plainQuery}
 		ftsSessionsSQL = "SELECT session_id FROM best_rows"
 		ftsSessionsArgs = nil
-		// Image and name rows rank 0.0, after every message match, so they reach
-		// the page only when the walk read every match.
+		// Name rows rank after every message and image match.
 		includeNames = walk.complete
 	}
 	args = append(args, bestArgs...)
@@ -516,26 +515,27 @@ func (db *DB) Search(
 		 LEFT JOIN messages cm ON cm.id=tc.message_id
 		 JOIN messages im ON im.session_id=o.session_id AND im.ordinal=COALESCE(e.tool_call_message_ordinal,cm.ordinal)`
 	imageVisibilitySQL := `im.is_system = 0 AND ` + SystemPrefixSQL("im.content", "im.role")
-	if hasImageText && includeNames {
+	if hasImageText {
 		args = append(args, f.Query)
 		args = append(args, nameProjectArgs...)
-		args = append(args, ftsSessionsArgs...)
+		args = append(args, ftsArgs...)
 		imageBranchSQL = fmt.Sprintf(`
 			UNION ALL
-			SELECT session_id,project,agent,machine,name,session_ended_at,ordinal,NULL,image_rowid,NULL,0.0,0
+			SELECT session_id,project,agent,machine,name,session_ended_at,ordinal,NULL,image_rowid,NULL,image_rank,0
 			FROM (
 			 SELECT s.id AS session_id,s.project,s.agent,s.machine,
 			 COALESCE(s.display_name,s.session_name,s.first_message,'') AS name,
 			 COALESCE(s.ended_at,s.started_at,'') AS session_ended_at,
 			 im.ordinal AS ordinal,
 			 c.rowid AS image_rowid,
-			 ROW_NUMBER() OVER (PARTITION BY s.id ORDER BY c.rowid,im.ordinal,o.call_id,o.event_id,o.image_index) AS rn
+			 %s.rank AS image_rank,
+			 ROW_NUMBER() OVER (PARTITION BY s.id ORDER BY %s.rank,im.ordinal,o.call_id,o.event_id,o.image_index) AS rn
 			 FROM %s JOIN image_text_cache c ON c.rowid=%s.rowid AND c.succeeded=1
 			 %s
 			 JOIN sessions s ON s.id=o.session_id
 			 WHERE %s MATCH ? AND s.deleted_at IS NULL AND %s %s
-			 AND s.id NOT IN (%s)
-			) WHERE rn=1`, imageTable, imageTable, imageOccurrenceSQL, imageTable, imageVisibilitySQL, nameProjectClause, ftsSessionsSQL)
+			 AND NOT EXISTS (SELECT 1 FROM sessions s2 JOIN messages m2 ON m2.session_id=s2.id CROSS JOIN messages_fts WHERE messages_fts.rowid=m2.id AND `+innerWhereSQL+` AND s2.id=s.id)
+			) WHERE rn=1`, imageTable, imageTable, imageTable, imageTable, imageOccurrenceSQL, imageTable, imageVisibilitySQL, nameProjectClause)
 	}
 	nameBranchSQL := ""
 	if includeNames {

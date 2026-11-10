@@ -294,6 +294,10 @@ func decodeInlineImage(raw jsontext.Value) (mediaType string, decoded []byte, ok
 }
 
 func streamInlineData(raw jsontext.Value, dst io.Writer, imageOnly bool) (string, int64, int64, bool) {
+	return streamInlineDataLimit(raw, dst, imageOnly, -1)
+}
+
+func streamInlineDataLimit(raw jsontext.Value, dst io.Writer, imageOnly bool, limit int64) (string, int64, int64, bool) {
 	var uri string
 	if json.Unmarshal(raw, &uri) != nil {
 		return "", 0, 0, false
@@ -302,7 +306,11 @@ func streamInlineData(raw jsontext.Value, dst io.Writer, imageOnly bool) (string
 	if !ok || (imageOnly && !strings.HasPrefix(strings.ToLower(mediaType), "image/")) {
 		return "", 0, 0, false
 	}
-	size, err := io.Copy(dst, base64.NewDecoder(base64.StdEncoding.Strict(), strings.NewReader(payload)))
+	var decoded io.Reader = base64.NewDecoder(base64.StdEncoding.Strict(), strings.NewReader(payload))
+	if limit >= 0 {
+		decoded = io.LimitReader(decoded, limit+1)
+	}
+	size, err := io.Copy(dst, decoded)
 	return mediaType, size, int64(len(uri)), err == nil
 }
 
@@ -754,7 +762,7 @@ func ReadRetainedImage(content string, index int, assetsDir string, limit int64)
 			uri = block.URI
 		}
 		var buf bytes.Buffer
-		if _, _, _, ok := streamInlineData(uri, &buf, block.Type == "input_image"); !ok {
+		if _, _, _, ok := streamInlineDataLimit(uri, &buf, block.Type == "input_image", limit); !ok {
 			return nil, errors.New("invalid inline image")
 		}
 		body = buf.Bytes()

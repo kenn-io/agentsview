@@ -30,26 +30,30 @@ var passBudget = 2 * time.Minute
 const pageSize = 20
 
 func (m *Manager) Run(ctx context.Context) error {
+	passCtx, cancel := context.WithTimeout(ctx, passBudget)
+	defer cancel()
 	identity := m.Client.Identity()
 	if m.Processor != "" {
 		identity.Fingerprint = m.Processor
 	}
 	cutoff := time.Now()
-	deadline := cutoff.Add(passBudget)
 	for {
-		pending, err := m.DB.PendingImageText(ctx, identity.Fingerprint, cutoff, pageSize)
+		pending, err := m.DB.PendingImageText(passCtx, identity.Fingerprint, cutoff, pageSize)
 		if err != nil {
+			if passCtx.Err() != nil && ctx.Err() == nil {
+				return nil
+			}
 			return err
 		}
 		if len(pending) == 0 {
 			return nil
 		}
 		for _, hash := range pending {
-			if err := m.processImage(ctx, identity, hash); err != nil {
+			if err := m.processImage(passCtx, identity, hash); err != nil {
+				if passCtx.Err() != nil && ctx.Err() == nil {
+					return nil
+				}
 				return err
-			}
-			if time.Now().After(deadline) {
-				return nil
 			}
 		}
 	}
