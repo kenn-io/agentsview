@@ -10,34 +10,30 @@ import (
 	"strings"
 )
 
-// Tokens describe the pinned producer's writes, not arbitrary external SQL.
-// Timestamp repair at aca4f1df uses this exact BETWEEN predicate, including
-// SQLite's NULL handling. See session-format-sources.md before changing it.
-const hermesMessageTokenColumns = `COUNT(*) AS n, MAX(id) AS last_id,
- SUM(NOT(timestamp BETWEEN 0.0 AND 4200000000.0)) AS invalid_times`
-
 func hermesHasTranscriptRevision(ctx context.Context, conn *sql.DB) (bool, error) {
 	var count int
 	err := conn.QueryRowContext(ctx, `SELECT COUNT(*) FROM pragma_table_info('sessions') WHERE name='transcript_revision'`).Scan(&count)
 	return count == 1, err
 }
 
-// The whole-store and single-member forms read identical values. Grouping the
-// covering session/timestamp index avoids fetching transcript payload pages.
+// The same three endpoints describe direct and seeded tokens. Native indexes
+// bound whole-store message work to three seeks per session, independent of
+// history length. Direct fingerprints also support legacy stores without them.
 func hermesMemberTokenQuery(revision bool, single bool) string {
 	rev := "0"
 	if revision {
 		rev = "transcript_revision"
 	}
-	where, messageWhere := "", ""
+	where, idIndex, timeIndex := "", " INDEXED BY idx_messages_session_id", " INDEXED BY idx_messages_session"
 	if single {
-		where = " WHERE id = ?"
-		messageWhere = " WHERE session_id = ?"
+		where, idIndex, timeIndex = " WHERE id = ?", "", ""
 	}
-	return `WITH members AS (SELECT ` + hermesStateSessionColumns + `, ` + rev + ` AS revision FROM sessions` + where + `),
- metadata AS (SELECT session_id, ` + hermesMessageTokenColumns + ` FROM messages` + messageWhere + ` GROUP BY session_id)
- SELECT members.*, COALESCE(metadata.n,0), COALESCE(metadata.last_id,0), COALESCE(metadata.invalid_times,0)
- FROM members LEFT JOIN metadata ON metadata.session_id=members.id ORDER BY members.id`
+	return `WITH members AS (SELECT ` + hermesStateSessionColumns + `, ` + rev + ` AS revision FROM sessions` + where + `)
+ SELECT members.*,
+ COALESCE((SELECT id FROM messages` + idIndex + ` WHERE session_id=members.id ORDER BY id DESC LIMIT 1),0),
+ (SELECT timestamp FROM messages` + timeIndex + ` WHERE session_id=members.id ORDER BY timestamp LIMIT 1),
+ (SELECT timestamp FROM messages` + timeIndex + ` WHERE session_id=members.id ORDER BY timestamp DESC LIMIT 1)
+ FROM members ORDER BY members.id`
 }
 
 func listHermesMemberTokens(ctx context.Context, conn *sql.DB, id string, yield func(string, string) error) error {
@@ -51,7 +47,7 @@ func listHermesMemberTokens(ctx context.Context, conn *sql.DB, id string, yield 
 	}
 	var args []any
 	if id != "" {
-		args = []any{id, id}
+		args = []any{id}
 	}
 	rows, err := conn.QueryContext(ctx, hermesMemberTokenQuery(revision, id != ""), args...)
 	if err != nil {
@@ -110,6 +106,20 @@ var hermesRevisionTrigger = regexp.MustCompile(`(?is)^create\s+trigger\s+(?:if\s
 // Recheck on every event: an older Hermes writer can recreate a shorter
 // trigger on opening the store. Unrecognized definitions fail closed.
 func hermesStoreTracksRewrites(ctx context.Context, conn *sql.DB) (bool, error) {
+	// Schema 33 is the verified ceiling, not a promise against additive changes.
+	// Native indexes are mandatory for the listing; legacy direct checks need none.
+	var version any
+	var indexes int
+	err := conn.QueryRowContext(ctx, `SELECT version,
+ (SELECT COUNT(*) FROM sqlite_master WHERE type='index' AND name IN ('idx_messages_session_id','idx_messages_session'))
+ FROM schema_version LIMIT 1`).Scan(&version, &indexes)
+	if err != nil {
+		return false, err
+	}
+	v, ok := version.(int64)
+	if !ok || v < 1 || v > 33 || indexes != 2 {
+		return false, nil
+	}
 	revision, err := hermesHasTranscriptRevision(ctx, conn)
 	if err != nil || !revision {
 		return false, err

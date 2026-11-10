@@ -991,7 +991,8 @@ func TestHermesMemberCoreSeedRetainedIDBytesStayBounded(t *testing.T) {
 		tx, err := conn.BeginTx(t.Context(), nil)
 		require.NoError(t, err)
 		defer func() { _ = tx.Rollback() }()
-		_, err = tx.ExecContext(t.Context(), "DELETE FROM messages; DELETE FROM sessions")
+		_, err = tx.ExecContext(t.Context(), `DELETE FROM messages; DELETE FROM sessions;
+ CREATE INDEX idx_messages_session_id ON messages(session_id,id); CREATE INDEX idx_messages_session ON messages(session_id,timestamp)`)
 		require.NoError(t, err)
 		for i := range sessionCount {
 			id := fmt.Sprintf("member-%06d", i)
@@ -1061,7 +1062,8 @@ func TestHermesMemberCoreSeedMatchesBulkCronAncestry(t *testing.T) {
 			VALUES (?, ?, NULLIF(?, ''), 1, 'Daily digest · Oct 07')`, id, source, parent)
 		require.NoError(t, err)
 	}
-	_, err = conn.ExecContext(t.Context(), "DELETE FROM messages; DELETE FROM sessions")
+	_, err = conn.ExecContext(t.Context(), `DELETE FROM messages; DELETE FROM sessions;
+ CREATE INDEX idx_messages_session_id ON messages(session_id,id); CREATE INDEX idx_messages_session ON messages(session_id,timestamp)`)
 	require.NoError(t, err)
 	insert("cron_job-a_20261007_120000", "cron", "")
 	parent := "cron_job-a_20261007_120000"
