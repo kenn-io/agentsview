@@ -112,6 +112,10 @@ func TestPGActivityReportInputClock(t *testing.T) {
 
 func TestPGActivityReportInputRangeSwitchAfterPush(t *testing.T) {
 	local, syncer, store := newUsageJournalFixture(t)
+	// Model three input sets that together exceed the old 128 MiB budget.
+	store.runtimeState().activityInputs.Size = func(pgActivityInputs) int64 { return 64 << 20 }
+	counter := &activityInputReadCounter{storeExecutor: store.pg}
+	store.pg = counter
 	pgKeptSession(t, local, "a", "project-a", "2026-06-14")
 	pgKeptPush(t, syncer, false)
 	now := time.Date(2026, 6, 14, 12, 0, 0, 0, time.UTC)
@@ -136,6 +140,10 @@ func TestPGActivityReportInputRangeSwitchAfterPush(t *testing.T) {
 		got := pgKeptBuild(t, store, f, q, true)
 		assert.Equal(t, 1000, got.Report.Totals.OutputTokens)
 		requirePGKeptEqual(t, pgKeptBuild(t, fresh, f, q, true), got)
+	}
+	require.Len(t, counter.transcriptReads, 6)
+	for _, ids := range counter.transcriptReads[3:] {
+		assert.Equal(t, []string{"b"}, ids)
 	}
 }
 
