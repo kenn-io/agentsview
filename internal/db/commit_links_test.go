@@ -30,6 +30,8 @@ func TestCommitLinksArgvCommands(t *testing.T) {
 	for _, tt := range []struct {
 		name, input, repository string
 	}{
+		{"non-git executable", `{"command":["echo","commit","git"]}`, ""},
+		{"git log argument", `{"command":["git","log","--grep=match git commit"]}`, ""},
 		{"issue bash -lc", `{"command":["bash","-lc","git commit -m fix"]}`, "/work"},
 		{"Windows git executable", `{"command":["C:\\Program Files\\Git\\bin\\git.exe","-C","/repo","commit"]}`, "/repo"},
 		{"sh -c", `{"command":["sh","-c","git commit -m fix"]}`, "/work"},
@@ -47,25 +49,13 @@ func TestCommitLinksArgvCommands(t *testing.T) {
 			insertMessages(t, d, messages...)
 			got, err := d.SessionCommitLinks(t.Context(), "s1")
 			require.NoError(t, err)
+			if tt.repository == "" {
+				assert.Empty(t, got.Commits)
+				return
+			}
 			require.Len(t, got.Commits, 1)
 			assert.Equal(t, "abc1234", got.Commits[0].SHA)
 			assert.Equal(t, tt.repository, got.Commits[0].Repository)
-		})
-	}
-}
-
-func TestCommitLinksArgvNonCommitOutput(t *testing.T) {
-	for _, tt := range []struct{ input, output string }{
-		{`{"command":["echo","commit","git"]}`, "[main abc1234] Fix parser"},
-		{`{"command":["git","log","--grep=match git commit"]}`, "[main abc1234] Fix parser"},
-	} {
-		t.Run(tt.input, func(t *testing.T) {
-			d := testDB(t)
-			insertSession(t, d, "s1", "project-a")
-			insertMessages(t, d, commitMessages("s1", tt.input, tt.output)...)
-			got, err := d.SessionCommitLinks(t.Context(), "s1")
-			require.NoError(t, err)
-			assert.Empty(t, got.Commits)
 		})
 	}
 }
