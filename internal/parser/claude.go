@@ -1338,29 +1338,6 @@ func claudeSubagentMapLinks(
 	return links
 }
 
-func claudeAppendedToolUseIDs(entries []dagEntry) map[string]struct{} {
-	appendedToolUseIDs := make(map[string]struct{})
-	for _, e := range entries {
-		if e.entryType != "assistant" {
-			continue
-		}
-		content := gjson.Get(e.line, "message.content")
-		if !content.IsArray() {
-			continue
-		}
-		content.ForEach(func(_, part gjson.Result) bool {
-			if part.Get("type").Str != "tool_use" {
-				return true
-			}
-			if toolUseID := part.Get("id").Str; toolUseID != "" {
-				appendedToolUseIDs[toolUseID] = struct{}{}
-			}
-			return true
-		})
-	}
-	return appendedToolUseIDs
-}
-
 // appendAddsDAGRoot reports whether an appended message entry has a
 // uuid but no parentUuid, i.e. it would add a root to the session's
 // DAG. Root count is the only property of the stored linearity verdict

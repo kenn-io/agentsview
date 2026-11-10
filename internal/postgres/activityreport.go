@@ -715,7 +715,7 @@ func activityReportClaudePeerPredicate(sessions, lower, upper string) string {
 			FROM messages m JOIN sessions s ON s.id = m.session_id
 			WHERE ` + pgUsageMessageEligibility + `
 				AND m.session_id = ANY(` + sessions + `)
-				AND m.claude_message_id != '' AND m.claude_request_id != ''
+				AND m.claude_message_id != ''
 				AND COALESCE(m.timestamp, s.started_at) >= ` + lower + `::timestamptz
 				AND COALESCE(m.timestamp, s.started_at) <= ` + upper + `::timestamptz
 		)`

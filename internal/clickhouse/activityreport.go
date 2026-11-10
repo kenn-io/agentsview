@@ -871,7 +871,7 @@ func clickActivityReportUsageQuery(
 				m.claude_request_id AS claude_request_id
 			FROM usage_messages m
 			WHERE m.session_id IN (SELECT id FROM candidate_sessions)
-				AND m.claude_message_id != '' AND m.claude_request_id != ''
+				AND m.claude_message_id != ''
 				AND ` + timestampBound + `
 			SETTINGS final = 0
 		), `
@@ -911,7 +911,7 @@ func clickPreparedActivityUsageQuery(
 		candidate_keys AS (
 		SELECT DISTINCT claude_message_id,claude_request_id FROM prepared_rows
 		WHERE session_id IN (SELECT id FROM candidate_sessions)
-		AND claude_message_id != '' AND claude_request_id != '')
+		AND claude_message_id != '')
 		SELECT ` + chPreparedUsageColumns + ` FROM prepared_rows
 		WHERE session_id IN (SELECT id FROM candidate_sessions)
 		OR (source='message' AND (claude_message_id,claude_request_id) IN (SELECT * FROM candidate_keys))`

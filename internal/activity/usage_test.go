@@ -239,7 +239,6 @@ func TestUsageSurvivorSelectionFiltersRangeBeforeUngatedAgentSourceUUIDDedup(t *
 	}
 	for i := range rows {
 		rows[i].Agent = "claude"
-		rows[i].ClaudeMessageID = "msg"
 		rows[i].SourceUUID = "source"
 	}
 	mask, attribution, searches := UsageSurvivorSelection(
@@ -250,4 +249,44 @@ func TestUsageSurvivorSelectionFiltersRangeBeforeUngatedAgentSourceUUIDDedup(t *
 	assert.Equal(t, []bool{false, true, false}, mask)
 	assert.Equal(t, "a", attribution[1])
 	assert.Equal(t, 2, searches[1])
+}
+
+// Claude Agent SDK transcripts omit requestId, and a tool result can separate
+// blocks of one response, so its repeated usage must still count once.
+func TestClaudeSnapshotSurvivorSelectionWithoutRequestID(t *testing.T) {
+	usage := []UsageRow{
+		{
+			SessionID: "s", Timestamp: "2026-01-10T11:00:01Z", MessageOrdinal: 1,
+			OutputTokens: 460, SourceUUID: "uuid-1", Agent: "claude",
+			UsageSource: "message", ClaudeMessageID: "msg-split",
+		},
+		{
+			SessionID: "s", Timestamp: "2026-01-10T11:00:04Z", MessageOrdinal: 3,
+			OutputTokens: 460, SourceUUID: "uuid-3", Agent: "claude",
+			UsageSource: "message", ClaudeMessageID: "msg-split",
+		},
+		{
+			SessionID: "s", Timestamp: "2026-01-10T11:00:05Z", MessageOrdinal: 4,
+			OutputTokens: 5, SourceUUID: "uuid-4", Agent: "claude",
+			UsageSource: "message", ClaudeMessageID: "msg-final",
+		},
+		{
+			SessionID: "s", Timestamp: "2026-01-10T11:00:06Z", MessageOrdinal: 5,
+			OutputTokens: 7, SourceUUID: "uuid-5", Agent: "claude",
+			UsageSource: "message", ClaudeMessageID: "msg-final",
+			ClaudeRequestID: "req-other",
+		},
+	}
+	mask, attribution, _ := ClaudeSnapshotSurvivorSelection(usage)
+	assert.Equal(t, []bool{false, true, true, true}, mask)
+	assert.Equal(t, []string{"", "s", "s", "s"}, attribution)
+
+	selected, err := SelectSessionUsageRows(t.Context(), usage,
+		func(int, int) (UsagePrice, error) { return UsagePrice{}, nil })
+	require.NoError(t, err)
+	output := make([]int, 0, len(selected.Rows))
+	for _, row := range selected.Rows {
+		output = append(output, row.OutputTokens)
+	}
+	assert.Equal(t, []int{460, 5, 7}, output)
 }
