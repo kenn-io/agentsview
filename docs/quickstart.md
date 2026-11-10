@@ -276,9 +276,8 @@ That setting disables auto-start; it does not stop a running daemon or bypass
 its archive lock.
 
 To search by meaning, choose **Settings → Embeddings → Turn on** or run
-`agentsview index embeddings build` and approve the download. The command
-starts the daemon if needed. Embeddings run locally by default; agents use
-keyword search until indexing is ready. Use `agentsview session search --semantic`
+`agentsview index embeddings build` and approve the download. Embeddings run
+locally by default; agents use keyword search until indexing is ready. Use `agentsview session search --semantic`
 or `--hybrid` to search by meaning. See
 [Semantic Search](/docs/semantic-search/#enabling-vector) to configure other providers.
 

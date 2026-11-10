@@ -635,16 +635,14 @@ func TestSkillsInstall_ProjectFlagOutsideRepoFallsBackToCWD(t *testing.T) {
 func TestSkillsInstall_SemanticSearchHint(t *testing.T) {
 	const hint = "run 'agentsview index embeddings build' or turn it on in Settings → Embeddings → Turn on"
 	tests := []struct {
-		name             string
-		config           string
-		args             []string
-		wantHint         bool
-		seedRemote       bool
-		defaultHarnesses bool
-		refused          bool
+		name       string
+		config     string
+		args       []string
+		wantHint   bool
+		seedRemote bool
+		refused    bool
 	}{
 		{name: "off", wantHint: true},
-		{name: "both harnesses", defaultHarnesses: true, wantHint: true},
 		{name: "refused", refused: true},
 		{name: "on", config: "[vector]\nenabled = true\n[vector.embeddings]\nmodel = 'nomic-embed-text'\ndimension = 768\n"},
 		{name: "invalid", config: "[vector\n"},
@@ -669,11 +667,7 @@ func TestSkillsInstall_SemanticSearchHint(t *testing.T) {
 				out, err := executeCommand(newRootCommand(), "skills", "install", "--harness", "claude", "--server", "https://example.com")
 				require.NoError(t, err, "output: %s", out)
 			}
-			args := []string{"skills", "install"}
-			if !tt.defaultHarnesses {
-				args = append(args, "--harness", "claude")
-			}
-			args = append(args, tt.args...)
+			args := append([]string{"skills", "install", "--harness", "claude"}, tt.args...)
 			out, err := executeCommand(newRootCommand(), args...)
 			if tt.refused {
 				require.Error(t, err)

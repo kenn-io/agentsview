@@ -232,11 +232,7 @@ func parseGenerationID(raw string) (int64, error) {
 	return id, nil
 }
 
-const (
-	semanticSearchBuildCommand = "agentsview index embeddings build"
-	semanticSearchSettingsPath = "Settings → Embeddings → Turn on"
-	semanticSearchSetupHint    = "run '" + semanticSearchBuildCommand + "' or turn it on in " + semanticSearchSettingsPath
-)
+const semanticSearchSetupHint = "run 'agentsview index embeddings build' or turn it on in Settings → Embeddings → Turn on"
 
 // requireVectorEnabled rejects every embeddings subcommand up front when
 // [vector] is not configured, with the exact message the brief specifies.
@@ -444,14 +440,14 @@ func runEmbeddingsBuild(
 			if cfg.Vector.Enabled {
 				problem, action = "search setup is incomplete", "finish setup"
 			}
-			return fmt.Errorf("%s: %s with '%s' (no build flags) or %s, then rerun with --%s", problem, action, semanticSearchBuildCommand, semanticSearchSettingsPath, flag)
+			return fmt.Errorf("%s: %s with 'agentsview index embeddings build' (no build flags) or Settings → Embeddings → Turn on, then rerun with --%s", problem, action, flag)
 		}
 		tr, err := ensureTransportContext(ctx, &cfg, transportIntentArchiveWrite, 0)
 		if err != nil {
 			return err
 		}
 		if tr.Mode != transportHTTP || tr.ReadOnly {
-			return errors.New("search setup requires a writable daemon; start it with `agentsview daemon start` and retry `" + semanticSearchBuildCommand + "`, or use " + semanticSearchSettingsPath)
+			return errors.New("search setup requires a writable daemon; start it with `agentsview daemon start` and retry `agentsview index embeddings build`, or use Settings → Embeddings → Turn on")
 		}
 		cfg.Vector.Embeddings, err = cfg.VectorSetupEmbeddings()
 		if err != nil {
