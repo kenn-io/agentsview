@@ -1,3 +1,4 @@
+import { formatCount as kitFormatCount } from "@kenn-io/kit-ui/utils/format";
 import { formatDateTime, getLocale, m } from "../i18n/index.js";
 export { formatMoney as formatCost } from "../money.js";
 
@@ -7,38 +8,14 @@ export { formatMoney as formatCost } from "../money.js";
 export { formatNumber } from "@kenn-io/kit-ui/utils/format";
 export { truncate } from "@kenn-io/kit-ui/utils/time";
 
-const COMPACT_COUNT_THRESHOLD = 1_000;
-
-interface CountFormatters {
-  standard: Intl.NumberFormat;
-  compact: Intl.NumberFormat;
-}
-
-const countFormatters = new Map<string, CountFormatters>();
-
 /**
- * The app's one format for counts and token totals. Below 1,000 the plain
- * number ("516"); from 1,000 the compact form with exactly one decimal
- * ("7.9K", "18.0K", "1.0M", "32.6B"), so a column of counts lines up and
- * never mixes full and compact forms. Locale-aware.
+ * The app's one format for counts and token totals, in the app language.
+ * Below 1,000 the plain number ("516"); from 1,000 the compact form with
+ * exactly one decimal ("7.9K", "18.0K", "1.0M"), so a column of counts
+ * lines up and never mixes full and compact forms.
  */
 export function formatCount(value: number): string {
-  const locale = getLocale();
-  let formatters = countFormatters.get(locale);
-  if (!formatters) {
-    formatters = {
-      standard: new Intl.NumberFormat(locale, { maximumFractionDigits: 1 }),
-      compact: new Intl.NumberFormat(locale, {
-        notation: "compact",
-        minimumFractionDigits: 1,
-        maximumFractionDigits: 1,
-      }),
-    };
-    countFormatters.set(locale, formatters);
-  }
-  return Math.abs(value) < COMPACT_COUNT_THRESHOLD
-    ? formatters.standard.format(value)
-    : formatters.compact.format(value);
+  return kitFormatCount(value, getLocale());
 }
 
 const MINUTE = 60;
