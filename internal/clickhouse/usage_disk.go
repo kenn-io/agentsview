@@ -32,28 +32,20 @@ func encodeUsageRows[T any](rows []T, limit int64, size func(T) int64) ([]byte, 
 		if err := enc.Encode(row); err != nil {
 			return nil, err
 		}
-		if int64(buf.Len()) > limit {
-			return nil, errors.New("usage selection exceeds limit")
-		}
 	}
 	return buf.Bytes(), nil
 }
 
-func decodeUsageRows[T any](data []byte, limit int64, size func(T) int64) ([]T, bool) {
+func decodeUsageRows[T any](data []byte) ([]T, bool) {
 	dec := gob.NewDecoder(bytes.NewReader(data))
 	var count int
 	if err := dec.Decode(&count); err != nil || count < 0 {
 		return nil, false
 	}
 	rows := []T{}
-	var total int64
 	for range count {
 		var row T
 		if err := dec.Decode(&row); err != nil {
-			return nil, false
-		}
-		total += size(row)
-		if total > limit {
 			return nil, false
 		}
 		rows = append(rows, row)
@@ -82,7 +74,7 @@ func (s *Store) usageCaptureStable(ctx context.Context) bool {
 
 // usageDiskFilter shares one source extent per logical version across selections.
 func (s *Store) usageDiskFilter(ctx context.Context, state preparedUsageState, f db.UsageFilter, version string) db.UsageFilter {
-	if f.To == "" || f.Timezone == "" || db.TerminationUsesTime(f.Termination) || version == "" || !state.ready || len(state.raw) != 0 {
+	if !s.usageDisk.Enabled() || f.To == "" || f.Timezone == "" || db.TerminationUsesTime(f.Termination) || version == "" || !state.ready || len(state.raw) != 0 {
 		return f
 	}
 	loc, err := time.LoadLocation(f.Timezone)

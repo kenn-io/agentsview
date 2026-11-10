@@ -1378,7 +1378,7 @@ func (s *Store) forEachDailyUsageGroupRow(
 	diskReady := !top && s.usageDisk.Enabled() && state.ready && len(state.raw) == 0 && memoSlot != ""
 	if diskReady {
 		if data, ok := s.usageDisk.Get(memoSlot, usageDiskVersion+memoVersion); ok {
-			if keptRows, ok := decodeUsageRows(data, dailyUsageRowsBytes, dailyUsageRowBytes); ok {
+			if keptRows, ok := decodeUsageRows[chDailyUsageGroupRow](data); ok {
 				for _, row := range keptRows {
 					if err := visit(row); err != nil {
 						return err
@@ -1484,8 +1484,6 @@ func (s *Store) forEachDailyUsageGroupRow(
 	}
 	defer rows.Close()
 	var memo []chDailyUsageGroupRow
-	var memoBytes int64
-	retaining := !top
 	for rows.Next() {
 		var r chDailyUsageGroupRow
 		var explicitKey string
@@ -1515,14 +1513,8 @@ func (s *Store) forEachDailyUsageGroupRow(
 		r.Explicit = explicitKey != ""
 		r.TS = formatDBTime(ts)
 		r.PricingTS = formatDBTime(pricingTS)
-		if retaining {
-			memoBytes += dailyUsageRowBytes(r)
-			if memoBytes > dailyUsageRowsBytes {
-				retaining = false
-				memo = nil
-			} else {
-				memo = append(memo, r)
-			}
+		if !top {
+			memo = append(memo, r)
 		}
 		if err := visit(r); err != nil {
 			return err
@@ -1531,7 +1523,7 @@ func (s *Store) forEachDailyUsageGroupRow(
 	if err := rows.Err(); err != nil {
 		return fmt.Errorf("iterating clickhouse daily usage aggregates: %w", err)
 	}
-	if !top && retaining && (!state.ready || len(state.raw) != 0 || s.usageCaptureStable(ctx)) {
+	if !top && (!state.ready || len(state.raw) != 0 || s.usageCaptureStable(ctx)) {
 		s.dailyUsageRows.Put(memoSlot, memoVersion, memo)
 		if diskReady {
 			if data, err := encodeUsageRows(memo, dailyUsageRowsBytes, dailyUsageRowBytes); err == nil {
@@ -2214,7 +2206,7 @@ func (s *Store) GetTopSessionsByCost(
 	}
 	if !ok && diskReady {
 		if data, found := s.usageDisk.Get(memoSlot, topUsageDiskVersion+memoVersion); found {
-			out, ok = decodeUsageRows(data, kept.DefaultMaxBytes, db.TopSessionBytes)
+			out, ok = decodeUsageRows[db.TopSessionEntry](data)
 			if ok {
 				s.topSessionTotals.Put(memoSlot, memoVersion, out)
 			}

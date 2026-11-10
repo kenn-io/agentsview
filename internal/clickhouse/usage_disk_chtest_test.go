@@ -96,13 +96,7 @@ func TestUsageDiskRestartAndPush(t *testing.T) {
 func TestUsageDiskNextDay(t *testing.T) {
 	t.Setenv("CACHE_DIRECTORY", t.TempDir())
 	_, syncer, first := newPreparedUsageStore(t)
-	require.NoError(t, first.openActivityReportDisk(syncer.target))
 	f := db.UsageFilter{From: "2026-01-01", To: "2026-01-30", Timezone: "America/New_York", Breakdowns: true, PairwiseSides: true, TopSessionsByGroup: true}
-	daily, err := first.GetDailyUsage(t.Context(), f)
-	require.NoError(t, err)
-	require.NotEmpty(t, daily.Daily)
-	top, err := first.GetTopSessionsByCost(t.Context(), f, 10)
-	require.NoError(t, err)
 	extentCount := func() uint64 {
 		t.Helper()
 		execPreparedUsage(t, first, "SYSTEM FLUSH LOGS")
@@ -110,6 +104,17 @@ func TestUsageDiskNextDay(t *testing.T) {
 		require.NoError(t, first.DB().QueryRowContext(t.Context(), `SELECT count() FROM system.query_log WHERE current_database = currentDatabase() AND type = 'QueryStart' AND startsWith(query, 'SELECT maxOrNull(ts)')`).Scan(&count))
 		return count
 	}
+	beforeExtent := extentCount()
+	_, err := first.GetDailyUsage(t.Context(), f)
+	require.NoError(t, err)
+	require.Equal(t, beforeExtent, extentCount(), "memory-only reads should not scan the source extent")
+	first = newTestStore(t, syncer.conn, syncer.target)
+	require.NoError(t, first.openActivityReportDisk(syncer.target))
+	daily, err := first.GetDailyUsage(t.Context(), f)
+	require.NoError(t, err)
+	require.NotEmpty(t, daily.Daily)
+	top, err := first.GetTopSessionsByCost(t.Context(), f, 10)
+	require.NoError(t, err)
 	extents := extentCount()
 	f.To = "2026-01-31"
 	memDaily, err := first.GetDailyUsage(t.Context(), f)
@@ -244,7 +249,9 @@ func TestUsageDiskTopGroupedCustomPricing(t *testing.T) {
 }
 
 func TestUsageDiskDateProofSources(t *testing.T) {
+	t.Setenv("CACHE_DIRECTORY", t.TempDir())
 	local, syncer, store := newPreparedUsageStore(t)
+	require.NoError(t, store.openActivityReportDisk(syncer.target))
 	f := db.UsageFilter{Timezone: "America/New_York", To: "2026-01-30"}
 	check := func(want string) {
 		t.Helper()
