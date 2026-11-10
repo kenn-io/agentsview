@@ -184,8 +184,8 @@ as complete for draining attached archive sources.
 The `raw_archive_*` tables record retained captures, root identities, accepted
 sources and deletion evidence. Seed import and restore permanently enable
 archive-only mode, which disables source sync and publication. These archives
-store `1 << 20` plus their parser version in `PRAGMA user_version`. Data version 170 triggers a preservation rebuild and prevents older binaries
-from writing archives whose image-text index they cannot maintain.
+store `1 << 20` plus their parser version in `PRAGMA user_version`, so older builds refuse them. This build decodes that range and preserves pending rebuilds; ordinary archives keep their parser version unchanged.
+Data version 171 requires no source reparse; it keeps older binaries from writing archives whose image-text index they cannot maintain.
 
 ### Artifact checkpoint landings
 

@@ -664,7 +664,8 @@ CREATE INDEX IF NOT EXISTS idx_provider_freshness_updated_at
 // Re-parse DeepSeek Harness sources in place; source and session identities
 // are unchanged.)
 // (170: reparse Codex sources for recovered commit links.)
-const dataVersion = 170
+// (171: prevent older binaries from writing archives with an image-text index.)
+const dataVersion = 171
 
 const archiveOnlyVersionBase = 1 << 20
 
@@ -2301,7 +2302,7 @@ func probeDatabaseConn(ctx context.Context,
 	if schema {
 		return true, false, false, nil
 	}
-	fullRebuild = archiveOnly || version < dataVersion && len(ScopedDataVersionProviders(version, dataVersion)) == 0
+	fullRebuild = archiveOnly || version < fullRebuildDataVersion()
 	// Archive-only archives cannot reparse sources, so any stale version
 	// needs their preservation rebuild.
 	countScoped := includeScoped || archiveOnly

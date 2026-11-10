@@ -104,10 +104,7 @@ func (m *Manager) processImage(ctx context.Context, identity ocr.Identity, hash 
 		}
 		return m.DB.SaveImageText(ctx, hash, identity, strings.TrimSpace(strings.Join(parts, "\n")), false)
 	}
-	if err := m.DB.SaveImageText(ctx, hash, identity, "", true); err != nil {
-		return err
-	}
-	return fmt.Errorf("no readable retained copy for image %s", hash)
+	return m.DB.SaveImageText(ctx, hash, identity, "", true)
 }
 
 // ProcessorKey includes the output policy while excluding the service address.

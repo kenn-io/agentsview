@@ -15,6 +15,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"go.kenn.io/agentsview/internal/codexcloud/mirror"
+	"go.kenn.io/agentsview/internal/config"
 	"go.kenn.io/agentsview/internal/db"
 	"go.kenn.io/agentsview/internal/dbtest"
 	"go.kenn.io/agentsview/internal/export"
@@ -23,6 +24,58 @@ import (
 	"go.kenn.io/agentsview/internal/sync"
 	"go.kenn.io/agentsview/internal/testjsonl"
 )
+
+func TestImageTextCompatibilityUpgradeKeepsStrippedImagesRemoved(t *testing.T) {
+	ctx := t.Context()
+	database := dbtest.OpenTestDB(t)
+	root := t.TempDir()
+	const id = "019eb791-cf7d-75c1-8439-9ed74c122b06"
+	const image = `[{"type":"input_image","image_url":"data:image/png;base64,AAEC"}]`
+	body := testjsonl.JoinJSONL(
+		testjsonl.CodexSessionMetaJSON(id, root, "user", "2024-01-01T10:00:00Z"),
+		testjsonl.CodexMsgJSON("user", "show image", "2024-01-01T10:00:01Z"),
+		testjsonl.CodexFunctionCallWithCallIDJSON("exec_command", "call", `{}`, "2024-01-01T10:00:02Z"),
+		testjsonl.CodexFunctionCallOutputJSON("call", json.RawMessage(image), "2024-01-01T10:00:03Z"),
+	)
+	dbtest.WriteTestFile(t, filepath.Join(root, "rollout-2024-01-01T10-00-00-"+id+".jsonl"), []byte(body))
+	cfg := sync.EngineConfig{Machine: "local", AgentDirs: map[parser.AgentType][]string{parser.AgentCodex: {root}}, ToolResultImages: config.ToolResultImagesKeep, DisableFilesystemProjectDiscovery: true}
+	engine := sync.NewEngine(ctx, database, cfg)
+	require.Equal(t, 1, engine.SyncAll(ctx, nil).Synced)
+	engine.Close()
+	_, err := database.StripToolImages(ctx, db.StripImagesFilter{})
+	require.NoError(t, err)
+	require.NoError(t, database.SetSessionDataVersion(ctx, "codex:"+id, 170))
+	require.NoError(t, database.Update(ctx, func(tx *sql.Tx) error {
+		_, err := tx.ExecContext(ctx, "PRAGMA user_version=170")
+		return err
+	}))
+	path := database.Path()
+	require.NoError(t, database.Close())
+	_, full, err := db.ArchiveResyncState(ctx, path)
+	require.NoError(t, err)
+	require.False(t, full)
+	database, err = db.OpenIsolated(ctx, path)
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, database.Close()) })
+	require.Equal(t, db.CurrentDataVersion(), database.GetSessionDataVersion(ctx, "codex:"+id))
+	engine = sync.NewEngine(ctx, database, cfg)
+	t.Cleanup(engine.Close)
+	engine.SyncAll(ctx, nil)
+	messages, err := database.GetAllMessages(ctx, "codex:"+id)
+	require.NoError(t, err)
+	calls := 0
+	for _, message := range messages {
+		for _, call := range message.ToolCalls {
+			calls++
+			assert.Contains(t, call.ResultContent, "agentsview_image")
+			assert.NotContains(t, call.ResultContent, "data:image")
+			for _, event := range call.ResultEvents {
+				assert.NotContains(t, event.Content, "data:image")
+			}
+		}
+	}
+	require.Equal(t, 1, calls)
+}
 
 func TestLegacyUpgradePreservesIncompleteRetry(t *testing.T) {
 	database := dbtest.OpenTestDB(t)

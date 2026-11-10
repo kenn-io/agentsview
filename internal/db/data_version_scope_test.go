@@ -45,6 +45,26 @@ func TestCommitLinkUpgradeScope(t *testing.T) {
 	assert.Equal(t, 170, d.GetSessionDataVersion(t.Context(), "claude"))
 }
 
+func TestImageTextCompatibilityVersion(t *testing.T) {
+	providers := ScopedDataVersionProviders(170, CurrentDataVersion())
+	require.NotNil(t, providers)
+	require.Empty(t, providers)
+	d := testDB(t)
+	for _, id := range []string{"complete", "retry"} {
+		insertSession(t, d, id, "project", func(s *Session) { s.Agent = "codex" })
+	}
+	require.NoError(t, d.SetSessionDataVersion(t.Context(), "complete", 170))
+	require.NoError(t, d.SetSessionDataVersion(t.Context(), "retry", 169))
+	require.NoError(t, d.Update(t.Context(), func(tx *sql.Tx) error {
+		if err := writeUserVersion(t.Context(), tx, 170); err != nil {
+			return err
+		}
+		return advanceDataVersion(t.Context(), tx, CurrentDataVersion())
+	}))
+	assert.Equal(t, CurrentDataVersion(), d.GetSessionDataVersion(t.Context(), "complete"))
+	assert.Equal(t, 169, d.GetSessionDataVersion(t.Context(), "retry"))
+}
+
 // Version 134 reshapes Codex session IDs, so it must rebuild every provider.
 func TestCodexLegacyPageVersionRebuildsEveryProvider(t *testing.T) {
 	assert.Nil(t, ScopedDataVersionProviders(133, 134))
@@ -92,11 +112,6 @@ func TestValidateDataVersionScopes(t *testing.T) {
 				dataVersion + 1: {parser.AgentHermes},
 			},
 			wantErr: "declare only versions",
-		},
-		{
-			name:    "empty declaration",
-			scopes:  map[int][]parser.AgentType{dataVersion: {}},
-			wantErr: "lists no providers",
 		},
 		{
 			name:    "stored alias",

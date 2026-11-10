@@ -138,19 +138,7 @@ func (db *DB) rewriteStoredToolResultRows(
 	if err != nil {
 		return false, err
 	}
-	defer func() { _ = oldHashes.Close() }()
-	var hashes []string
-	for oldHashes.Next() {
-		var hash string
-		if err := oldHashes.Scan(&hash); err != nil {
-			return false, err
-		}
-		hashes = append(hashes, hash)
-	}
-	err = oldHashes.Err()
-	if closeErr := oldHashes.Close(); err == nil {
-		err = closeErr
-	}
+	hashes, err := scanStrings(oldHashes)
 	if err != nil {
 		return false, err
 	}

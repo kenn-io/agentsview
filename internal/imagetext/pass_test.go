@@ -191,7 +191,7 @@ func TestImageTextCorruptAssetRetriesAfterRepair(t *testing.T) {
 		fmt.Fprintf(w, `{"model":"glm-ocr","deployment_fingerprint":%q,"json_result":[[{"index":0,"label":"text","content":"retry succeeded"}]]}`, glmocr.DefaultDeploymentFingerprint)
 	})
 	manager := Manager{DB: d, Client: client}
-	require.Error(t, manager.Run(ctx))
+	require.NoError(t, manager.Run(ctx))
 	require.Zero(t, requests)
 	require.NoError(t, os.WriteFile(path, png, 0o600))
 	require.NoError(t, d.Update(ctx, func(tx *sql.Tx) error {
@@ -204,6 +204,38 @@ func TestImageTextCorruptAssetRetriesAfterRepair(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, page.Results, 1)
 	require.Equal(t, "one", page.Results[0].SessionID)
+}
+
+func TestImageTextMissingAssetDoesNotBlockOtherImages(t *testing.T) {
+	ctx := t.Context()
+	d := imageTextTestDB(t)
+	d.SetAssetsDir(t.TempDir())
+	for i := range 2 {
+		id := fmt.Sprintf("healthy-%d", i)
+		body := fmt.Appendf(nil, "\x89PNG\r\n\x1a\nimage%d", i)
+		content := fmt.Sprintf(`[{"type":"input_image","image_url":"data:image/png;base64,%s"}]`, base64.StdEncoding.EncodeToString(body))
+		require.NoError(t, d.UpsertSession(ctx, db.Session{ID: id, Project: "demo", Agent: "test", MessageCount: 1}))
+		require.NoError(t, d.InsertMessages(ctx, []db.Message{{SessionID: id, Role: "assistant", ToolCalls: []db.ToolCall{{ToolName: "Read", ResultContent: content}}}}))
+	}
+	missing := fmt.Sprintf(`[{"type":"agentsview_image","version":1,"image_ref":"asset://%s.png","media_type":"image/png","byte_size":10}]`, strings.Repeat("a", 64))
+	require.NoError(t, d.UpsertSession(ctx, db.Session{ID: "missing", Project: "demo", Agent: "test", MessageCount: 1}))
+	require.NoError(t, d.InsertMessages(ctx, []db.Message{{SessionID: "missing", Role: "assistant", ToolCalls: []db.ToolCall{{ToolName: "Read", ResultContent: missing}}}}))
+	requests := 0
+	client := localOCRClient(t, func(w http.ResponseWriter, r *http.Request) {
+		requests++
+		w.Header().Set("Content-Type", "application/json")
+		fmt.Fprintf(w, `{"model":"glm-ocr","deployment_fingerprint":%q,"json_result":[[{"index":0,"label":"text","content":"invoice"}]]}`, glmocr.DefaultDeploymentFingerprint)
+	})
+	require.NoError(t, d.BackfillImageTextOccurrences(ctx))
+	pending, err := d.PendingImageText(ctx, client.Identity().Fingerprint, time.Now(), 3)
+	require.NoError(t, err)
+	require.Len(t, pending, 3)
+	require.Equal(t, strings.Repeat("a", 64), pending[0])
+	require.NoError(t, (&Manager{DB: d, Client: client}).Run(ctx))
+	require.Equal(t, 2, requests)
+	page, err := d.Search(ctx, db.SearchFilter{Query: "invoice"})
+	require.NoError(t, err)
+	require.Len(t, page.Results, 2)
 }
 
 func TestImageTextProcessorKey(t *testing.T) {

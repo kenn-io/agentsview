@@ -69,16 +69,3 @@ func TestArchiveOnlySurvivesRebuildMetadataCopy(t *testing.T) {
 	require.NoError(t, reopened.Reader().QueryRow(ctx, "PRAGMA user_version").Scan(&raw))
 	assert.Equal(t, (1<<20)+dataVersion, raw)
 }
-
-func TestImageTextDataVersionRequiresRebuild(t *testing.T) {
-	ctx := t.Context()
-	d := testDB(t)
-	path := d.Path()
-	_, err := d.getWriter().ExecContext(ctx, fmt.Sprintf("PRAGMA user_version=%d", CurrentDataVersion()-1))
-	require.NoError(t, err)
-	require.NoError(t, d.Close())
-	needs, full, err := ArchiveResyncState(ctx, path)
-	require.NoError(t, err)
-	require.True(t, needs)
-	require.True(t, full)
-}
