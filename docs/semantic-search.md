@@ -25,8 +25,8 @@ concurrency, and the search path — see
 
 Semantic search is disabled by default. Open **Settings → Embeddings** and choose **Turn on**, or choose it from the search palette. AgentsView asks for the required download through that button, shows download and indexing progress, and starts semantic search without a restart. Full-text search remains available during indexing.
 
-For CLI setup, run `agentsview index embeddings build`. AgentsView
-uses a running Ollama server with Nomic or Kit's shared local server. If the
+For CLI setup, run `agentsview index embeddings build`. The command starts the
+daemon if needed. AgentsView uses a running Ollama server with Nomic or Kit's shared local server. If the
 local server needs files, the CLI asks before downloading them. Search and
 automatic builds reuse installed files; they direct you to the CLI when a
 download needs approval. Declining stops the download and build.

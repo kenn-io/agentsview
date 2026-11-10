@@ -236,11 +236,6 @@ This will:
 1. Start watching session directories for changes
 1. Launch the web UI at `http://127.0.0.1:8080`
 
-To search by meaning, choose **Settings → Embeddings → Turn on** or run
-`agentsview index embeddings build` and approve the download. Embeddings run
-locally by default; agents use keyword search until indexing is ready. See
-[Semantic Search](/docs/semantic-search/#enabling-vector) to configure other providers.
-
 Open `http://127.0.0.1:8080` in your browser. Pass `--no-browser` to disable
 automatic browser launch. Alternatively, start the same server in the background
 so it can keep running after your shell exits:
@@ -279,6 +274,13 @@ these commands finish. For scripts or CI jobs that must leave no background
 server, stop the daemon first, then run `AGENTSVIEW_NO_DAEMON=1 agentsview source sync`.
 That setting disables auto-start; it does not stop a running daemon or bypass
 its archive lock.
+
+To search by meaning, choose **Settings → Embeddings → Turn on** or run
+`agentsview index embeddings build` and approve the download. The command
+starts the daemon if needed. Embeddings run locally by default; agents use
+keyword search until indexing is ready. Use `agentsview session search --semantic`
+or `--hybrid` to search by meaning. See
+[Semantic Search](/docs/semantic-search/#enabling-vector) to configure other providers.
 
 ## Customize
 
