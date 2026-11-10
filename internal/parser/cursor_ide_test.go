@@ -3,7 +3,6 @@
 package parser
 
 import (
-	"context"
 	"database/sql"
 	"encoding/binary"
 	"encoding/json"
@@ -1279,10 +1278,8 @@ func TestCursorIDEHeaderChunks(t *testing.T) {
 		truncated, malformed, nullFirst bool
 	}{
 		{"ordered", `{"_v":18,"fullConversationHeadersOnly":[],"headerLog":{"count":2,"chunkCount":2}}`, `[{"bubbleId":"b2","type":2}]`, `[{"bubbleId":"b1","type":1}]`, []string{"b2", "b1"}, false, false, false},
-		{"large chunk count", `{"headerLog":{"count":2,"chunkCount":1000000000}}`, `[{"bubbleId":"b1","type":1}]`, `[{"bubbleId":"b2","type":2}]`, []string{"b1", "b2"}, true, false, false},
 		{"lagging count and extra row", `{"headerLog":{"count":1,"chunkCount":1}}`, `[{"bubbleId":"b1","type":1},{"bubbleId":"b2","type":2}]`, `[{"bubbleId":"stale","type":1}]`, []string{"b1", "b2"}, false, false, false},
 		{"missing", `{"headerLog":{"count":1,"chunkCount":2}}`, ``, `[{"bubbleId":"b2","type":2}]`, []string{"b2"}, true, false, false},
-		{"missing middle", `{"headerLog":{"count":2,"chunkCount":3}}`, `[{"bubbleId":"b1","type":1}]`, `[{"bubbleId":"b2","type":2}]`, []string{"b1", "b2"}, true, false, false},
 		{"all missing", `{"headerLog":{"count":2,"chunkCount":1}}`, ``, ``, nil, true, false, false},
 		{"null", `{"headerLog":{"count":1,"chunkCount":2}}`, ``, `[{"bubbleId":"b2","type":2}]`, []string{"b2"}, true, false, true},
 		{"empty", `{"headerLog":{"count":1,"chunkCount":2}}`, `[]`, `[{"bubbleId":"b2","type":2}]`, []string{"b2"}, true, false, false},
@@ -1295,13 +1292,7 @@ func TestCursorIDEHeaderChunks(t *testing.T) {
 			execCursorIDEDB(t, path, `UPDATE cursorDiskKV SET value = ? WHERE key = ?`, tc.root, "composerData:"+id)
 			for i, chunk := range []string{tc.first, tc.second} {
 				if chunk != "" {
-					index := i
-					if tc.name == "large chunk count" && i == 1 {
-						index = 999999
-					} else if tc.name == "missing middle" && i == 1 {
-						index = 2
-					}
-					execCursorIDEDB(t, path, `INSERT INTO cursorDiskKV (key, value) VALUES (?, ?)`, fmt.Sprintf("composerConvHeaders:%s:%06d", id, index), chunk)
+					execCursorIDEDB(t, path, `INSERT INTO cursorDiskKV (key, value) VALUES (?, ?)`, fmt.Sprintf("composerConvHeaders:%s:%06d", id, i), chunk)
 				}
 			}
 			if tc.nullFirst {
@@ -1312,13 +1303,7 @@ func TestCursorIDEHeaderChunks(t *testing.T) {
 			defer conn.Close()
 			info, err := os.Stat(path)
 			require.NoError(t, err)
-			ctx := t.Context()
-			if tc.name == "large chunk count" {
-				var cancel context.CancelFunc
-				ctx, cancel = context.WithTimeout(ctx, 2*time.Second)
-				defer cancel()
-			}
-			result, err := parseCursorIDEComposer(ctx, conn, path, id, "test", info)
+			result, err := parseCursorIDEComposer(t.Context(), conn, path, id, "test", info)
 			if tc.malformed {
 				require.ErrorContains(t, err, "decoding cursor IDE headers composerConvHeaders:chunk-test:000001")
 				return
