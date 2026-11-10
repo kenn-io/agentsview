@@ -672,11 +672,12 @@ func TestSessionPricingPassReadsOnlyTheBatchRows(t *testing.T) {
 		usagePriceScope{sessionIDs: []string{usagePriceRoundID}}))
 
 	execPreparedUsage(t, store, "SYSTEM FLUSH LOGS")
-	var readRows uint64
+	var passes, readRows uint64
 	require.NoError(t, store.DB().QueryRowContext(ctx, `
-		SELECT argMax(read_rows, event_time_microseconds) FROM system.query_log
+		SELECT count(), argMax(read_rows, event_time_microseconds) FROM system.query_log
 		WHERE current_database = currentDatabase() AND type = 'QueryFinish' AND is_initial_query = 1
-			AND position(query, 'WHERE price_key NOT IN') > 0`).Scan(&readRows))
+			AND position(query, 'WHERE price_key NOT IN') > 0`).Scan(&passes, &readRows))
+	require.Positive(t, passes, "the query log must hold the pricing pass")
 	assert.Less(t, readRows, uint64(1000))
 }
 

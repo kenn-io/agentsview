@@ -732,11 +732,12 @@ func chClampedJSONInt(jsonExpr string, keys ...string) string {
 	for _, key := range keys {
 		args = append(args, chSQLString(key))
 	}
-	extract := "JSONExtractInt(" + strings.Join(args, ", ") + ")"
-	return fmt.Sprintf(
-		"least(greatest(%s, 0), %d)",
-		extract, db.MaxPlausibleTokens,
-	)
+	return chClampTokens("JSONExtractInt(" + strings.Join(args, ", ") + ")")
+}
+
+// chClampTokens clamps a token count expression to [0, db.MaxPlausibleTokens].
+func chClampTokens(expr string) string {
+	return fmt.Sprintf("least(greatest(%s, 0), %d)", expr, db.MaxPlausibleTokens)
 }
 
 // chUsageNormSource holds the per-row expressions usage_normalized computes
@@ -768,16 +769,13 @@ func chUsageRawNormSource() chUsageNormSource {
 // clamps them as chUsageRawNormSource clamps the token JSON's values, so a
 // row gets the same price key from either table.
 func chUsageStoredNormSource() chUsageNormSource {
-	clamp := func(column string) string {
-		return fmt.Sprintf("least(greatest(%s, 0), %d)", column, db.MaxPlausibleTokens)
-	}
 	return chUsageNormSource{
-		input:         clamp("input_tokens"),
-		output:        clamp("output_tokens"),
-		cacheCreate:   clamp("cache_create"),
-		cacheCreate1h: clamp("cache_create_1h"),
-		cacheRead:     clamp("cache_read"),
-		reasoning:     clamp("reasoning_tokens"),
+		input:         chClampTokens("input_tokens"),
+		output:        chClampTokens("output_tokens"),
+		cacheCreate:   chClampTokens("cache_create"),
+		cacheCreate1h: chClampTokens("cache_create_1h"),
+		cacheRead:     chClampTokens("cache_read"),
+		reasoning:     chClampTokens("reasoning_tokens"),
 		web:           "greatest(web_search_requests, 0)",
 		priceModel:    chPriceModelCaseSQL(),
 		priceKey:      chUsagePriceKeySQL,
