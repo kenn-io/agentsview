@@ -578,6 +578,28 @@ func TestDailyUsageCustomRatesOverridePersistedPrices(t *testing.T) {
 	assert.Equal(t, money.Money{Microdollars: 55}, modelCost(t, got, "round-test"))
 }
 
+func TestDailyUsageAliasTargetCustomRateOverridesPersistedPrice(t *testing.T) {
+	t.Cleanup(func() { pricingpkg.SetConfiguredAliases(nil) })
+	for _, tc := range []struct{ target, customModel string }{
+		{"tier-test", "tier-test"},
+		{"kimi-for-coding", pricingpkg.KimiK26Canonical},
+	} {
+		t.Run(tc.target, func(t *testing.T) {
+			pricingpkg.SetConfiguredAliases(map[string]string{"round-test": tc.target})
+			store, _, local := newUsagePriceStore(t)
+			custom := map[string]config.CustomModelRate{
+				tc.customModel: {InputMicrodollarsPerMTok: 7_000_000},
+			}
+			local.SetCustomPricing(custom)
+			store.SetCustomPricing(custom)
+			got, err := store.GetDailyUsage(t.Context(), db.UsageFilter{Timezone: "UTC", Agent: "hermes"})
+			require.NoError(t, err)
+			assert.Equal(t, money.Money{Microdollars: 77}, modelCost(t, got, "round-test"))
+			assertDailyUsageParity(t, local, store)
+		})
+	}
+}
+
 func TestPushPricesCursorUsageAddedLater(t *testing.T) {
 	t.Parallel()
 	store, syncer, local := newUsagePriceStore(t)

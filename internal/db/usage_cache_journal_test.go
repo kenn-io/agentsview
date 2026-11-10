@@ -243,6 +243,8 @@ func TestUsageJournaledFreshness(t *testing.T) {
 
 func TestUsageJournaledConfiguredAliasChanges(t *testing.T) {
 	t.Cleanup(func() { pricingpkg.SetConfiguredAliases(nil) })
+	pricingpkg.SetConfiguredAliases(nil)
+	assert.Equal(t, "catalog\x00"+pricingpkg.BillingPolicyVersion()+"\x00"+usageSessionPricingIdentityVersion, usagePricingIdentityWithDigest("catalog"))
 	database := testDB(t)
 	seedJournaledUsage(t, database, "mapped")
 	seedJournaledUsage(t, database, "unrelated")
