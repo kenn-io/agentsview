@@ -87,9 +87,9 @@ func (s *Store) Search(ctx context.Context, f db.SearchFilter) (db.SearchPage, e
 		orderBy = "session_ended_at DESC, session_id ASC"
 	}
 	args = append(args, f.Limit+1, f.Cursor)
-	// The name branch scopes its embeddable-message and msg_matches checks
+	// The name branch scopes its embeddable-message and msg_grouped checks
 	// to name_candidates. Unscoped, ClickHouse runs the system-prefix regex
-	// over every message and recomputes the inlined msg_matches CTE over the
+	// over every message and recomputes the inlined msg_grouped CTE over the
 	// whole table.
 	rows, err := s.queryContext(ctx, `
 		WITH msg_grouped AS (
@@ -142,7 +142,7 @@ func (s *Store) Search(ctx context.Context, f db.SearchFilter) (db.SearchPage, e
 						AND `+embeddableMessagePredicate("mx")+`
 				)
 				AND s.id NOT IN (
-					SELECT session_id FROM msg_matches
+					SELECT session_id FROM msg_grouped
 					WHERE session_id IN (SELECT id FROM name_candidates)
 				)
 		)

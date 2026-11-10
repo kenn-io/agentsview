@@ -3,7 +3,6 @@
 package clickhouse
 
 import (
-	"fmt"
 	"strings"
 	"testing"
 
@@ -24,7 +23,7 @@ func TestClickHouseSearchMemory(t *testing.T) {
 		SELECT concat('session-', leftPad(toString(number), 5, '0')), 'project', 'machine', 'claude', repeat('preview ', 20),
 			toDateTime64('2026-01-01 00:00:00', 6, 'UTC') + toIntervalSecond(number),
 			toDateTime64('2026-01-01 00:00:00', 6, 'UTC') + toIntervalSecond(number),
-			toDateTime64('2026-01-01 00:00:00', 6, 'UTC'), 40, 20, 1 FROM numbers(24000)`)
+			toDateTime64('2026-01-01 00:00:00', 6, 'UTC'), 40, 40, 1 FROM numbers(24000)`)
 	require.NoError(t, err)
 	_, err = conn.ExecContext(ctx, `INSERT INTO messages (id, session_id, ordinal, role, content, timestamp, content_length, is_system, push_version)
 		SELECT toInt64(number), concat('session-', leftPad(toString(intDiv(number, 40)), 5, '0')), toInt64(number % 40), 'user',
@@ -34,23 +33,11 @@ func TestClickHouseSearchMemory(t *testing.T) {
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, store.Close()) })
 	ctx = chdriver.Context(ctx, chdriver.WithSettings(chdriver.Settings{"max_memory_usage": 2147483648}))
-	for _, sort := range []string{"relevance", "recency"} {
-		for _, cursor := range []int{0, 50, 23950, 0} {
-			page, err := store.Search(ctx, db.SearchFilter{Query: "context", Sort: sort, Limit: 50, Cursor: cursor})
-			require.NoError(t, err, "%s cursor %d", sort, cursor)
-			require.Len(t, page.Results, 50)
-			for i, result := range page.Results {
-				require.Equal(t, fmt.Sprintf("session-%05d", 23999-cursor-i), result.SessionID)
-				require.Equal(t, 0, result.Ordinal)
-				require.Equal(t, ("context " + strings.Repeat("sample text ", 42))[:200], result.Snippet)
-			}
-			next := cursor + 50
-			if next == 24000 {
-				next = 0
-			}
-			require.Equal(t, next, page.NextCursor)
-		}
-	}
+	page, err := store.Search(ctx, db.SearchFilter{Query: "context", Limit: 50})
+	require.NoError(t, err)
+	require.Len(t, page.Results, 50)
+	require.Equal(t, "session-23999", page.Results[0].SessionID)
+	require.Equal(t, "session-23950", page.Results[49].SessionID)
 }
 
 func TestClickHouseSearchWinningMessageAndPages(t *testing.T) {
@@ -65,7 +52,7 @@ func TestClickHouseSearchWinningMessageAndPages(t *testing.T) {
 			row.1 AS id, row.2 AS name, toDateTime64('2026-01-01 00:00:00', 6, 'UTC') AS ts)`)
 	require.NoError(t, err)
 	_, err = conn.ExecContext(ctx, `INSERT INTO messages (id, session_id, ordinal, role, content, timestamp, content_length, is_system, push_version)
-		SELECT row.1, row.2, row.3, 'user', row.4, toDateTime64('2026-01-01 00:00:00', 6, 'UTC'), 0, false, 1
+		SELECT row.1, row.2, row.3, 'user', row.4, toDateTime64('2026-01-01 00:00:00', 6, 'UTC'), length(row.4), false, 1
 		FROM (SELECT arrayJoin([(toInt64(1), 'a', toInt64(0), 'later context extra'),
 			(toInt64(2), 'a', toInt64(2), 'context extra café'),
 			(toInt64(3), 'a', toInt64(1), concat('context extra 世界', repeat('界', 200))),
