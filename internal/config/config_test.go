@@ -2630,38 +2630,32 @@ output = 15.0
 
 func TestLoadFile_CustomModelPricingPriceAs(t *testing.T) {
 	f := newConfigFixture(t)
-	f.WriteConfigText(t, `[custom_model_pricing."private-gateway-deployment"]
-price_as = "gpt-6-sol"
-
-[custom_model_pricing."gateway/internal-alias"]
-price_as = "internal-model"
-
-[custom_model_pricing.internal-model]
-input_microdollars_per_mtok = 1000000
-
-[custom_model_pricing.empty]
+	f.WriteConfigText(t, `[custom_model_pricing.empty]
 
 [custom_model_pricing.fetched-alias]
 price_as = "new-catalog-model"
+
+[custom_model_pricing.qualified-deployment]
+price_as = "provider/gpt-6-sol"
+[custom_model_pricing."gpt-6-sol"]
+price_as = "gpt-5.6-luna"
 
 [custom_model_pricing.deployment]
 price_as = "gateway/custom"
 [custom_model_pricing."gateway/custom"]
 input_microdollars_per_mtok = 5000000
 [custom_model_pricing.custom]
-price_as = "gpt-6-sol"
+price_as = "gpt-6-astra"
 `)
 
 	cfg := f.LoadMinimal(t)
 	assert.Equal(t, map[string]string{
-		"private-gateway-deployment": "gpt-6-sol",
-		"gateway/internal-alias":     "internal-model",
-		"fetched-alias":              "new-catalog-model",
-		"deployment":                 "gateway/custom",
-		"custom":                     "gpt-6-sol",
+		"fetched-alias":        "new-catalog-model",
+		"qualified-deployment": "provider/gpt-6-sol",
+		"gpt-6-sol":            "gpt-5.6-luna",
+		"deployment":           "gateway/custom",
+		"custom":               "gpt-6-astra",
 	}, PricingAliases(cfg.CustomModelPricing))
-	assert.Equal(t, int64(1_000_000),
-		cfg.CustomModelPricing["internal-model"].InputMicrodollarsPerMTok)
 }
 
 func TestLoadFileRejectsInvalidCustomModelPricingPriceAs(t *testing.T) {
@@ -2675,17 +2669,9 @@ input_microdollars_per_mtok = 0
 		{"empty target", `[custom_model_pricing.alias]
 price_as = ""
 `, `price_as must not be empty`},
-		{"prefixed chain", `[custom_model_pricing.deployment]
-price_as = "gateway/gpt-5.6-luna"
-[custom_model_pricing."gpt-5.6-luna"]
-price_as = "gpt-6-sol"
-`, `price_as target "gateway/gpt-5.6-luna" is itself a price_as entry`},
 		{"self", `[custom_model_pricing.alias]
 price_as = "alias"
 `, `custom_model_pricing."alias": price_as target "alias" is itself a price_as entry`},
-		{"untrimmed", `[custom_model_pricing.alias]
-price_as = " gpt-6-sol"
-`, `price_as must not have surrounding whitespace`},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

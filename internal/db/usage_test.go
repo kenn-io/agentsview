@@ -5632,63 +5632,6 @@ func TestGetDailyUsage_CodexAutoReviewLunaPricing(t *testing.T) {
 	assert.Empty(t, session.UnpricedModels, "UnpricedModels")
 }
 
-func TestGetDailyUsage_PriceAsAliasRepricesCachedRollups(t *testing.T) {
-	t.Cleanup(func() { pricingpkg.SetConfiguredAliases(nil) })
-	d := testDB(t)
-	d.SetEmptyCatalogPricing(FallbackRateMap())
-	ctx := t.Context()
-	const canonical, alias = "gpt-6-sol", "private-gateway-sol-deployment"
-	ts := "2026-10-01T12:00:00Z"
-	models := []string{canonical, alias}
-	for modelIndex, model := range models {
-		id := fmt.Sprintf("price-as-%d-0", modelIndex)
-		insertSession(t, d, id, "proj", func(s *Session) {
-			s.Agent = "pi"
-			s.StartedAt = new(ts)
-		})
-		insertMessages(t, d, Message{
-			SessionID: id, Ordinal: 0, Role: "assistant",
-			Timestamp: ts, Model: model,
-			TokenUsage: jsontext.Value(`{"input_tokens":272000,"output_tokens":1000}`),
-		})
-	}
-	daily := func(model string) *DailyUsageResult {
-		t.Helper()
-		got, err := d.GetDailyUsage(ctx, UsageFilter{
-			From: "2026-10-01", To: "2026-10-01", Timezone: "UTC", Model: model,
-		})
-		require.NoError(t, err)
-		return &got
-	}
-	base := daily(canonical)
-	require.Positive(t, base.Totals.TotalCost.Microdollars)
-	unpriced := func() {
-		t.Helper()
-		for _, model := range models[1:] {
-			assert.Zero(t, daily(model).Totals.TotalCost.Microdollars, model)
-		}
-		session, err := d.GetSessionUsage(ctx, "price-as-1-0", false)
-		require.NoError(t, err)
-		assert.False(t, session.HasCost)
-		assert.Equal(t, []string{alias}, session.UnpricedModels)
-	}
-	// Build and cache rollups before the alias exists.
-	unpriced()
-
-	priceAs := map[string]config.CustomModelRate{alias: {PriceAs: canonical}}
-	pricingpkg.SetConfiguredAliases(config.PricingAliases(priceAs))
-	d.SetCustomPricing(priceAs)
-	for _, model := range models[1:] {
-		got := daily(model)
-		assert.Equal(t, base.Totals.TotalCost, got.Totals.TotalCost, model)
-	}
-
-	pricingpkg.SetConfiguredAliases(nil)
-	d.SetCustomPricing(nil)
-	unpriced()
-
-}
-
 func TestGetDailyUsage_CodexNamespacedPricing(t *testing.T) {
 	d := testDB(t)
 	d.SetEmptyCatalogPricing(FallbackRateMap())

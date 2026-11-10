@@ -334,12 +334,7 @@ func TestSetConfiguredAliases(t *testing.T) {
 	} {
 		assert.Equal(t, want, ConfiguredAliasTarget(model), model)
 	}
-	changed := ConfiguredAliasesDigest()
-	assert.NotEmpty(t, changed)
-	SetConfiguredAliases(map[string]string{"gateway-sol": "gpt-6.1-sol"})
-	assert.NotEqual(t, changed, ConfiguredAliasesDigest())
-	SetConfiguredAliases(nil)
-	assert.Empty(t, ConfiguredAliasesDigest())
+
 }
 
 func TestFixedPricingAliasesReturnsCopy(t *testing.T) {

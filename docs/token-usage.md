@@ -569,11 +569,11 @@ The table key is the model name as it appears in your session data (match the
 string the agent itself writes, dots and all — quote the key if it contains
 special characters). Custom rates take precedence over LiteLLM, OpenRouter, and
 the embedded fallback, and apply to the Usage dashboard, the `agentsview report usage`
-CLI, and `pg serve` alike. A custom entry replaces the full rate row for that
-model, so omitted fields are treated as zero rather than falling through to
-another catalog. A custom row is flat and suppresses any fetched request bands
-for that model. Models without a custom entry continue to resolve through the
-stored catalog.
+CLI, and `pg serve` alike. An entry with explicit rates replaces the full rate
+row for that model, so omitted fields are treated as zero rather than falling
+through to another catalog. Explicit rates are flat and suppress fetched
+request bands for that model. Models without a custom entry continue to resolve
+through the stored catalog.
 
 To use a catalog model's rates and later updates for a deployment name:
 
@@ -584,7 +584,8 @@ price_as = "gpt-6-sol"
 
 A bare key also matches a provider-prefixed name; a key containing `/` matches
 only that exact name. An exact custom rate takes precedence. The target may be
-a catalog model or another custom rate, but not another `price_as` entry.
+a catalog model or another custom rate, but not an exact `price_as` entry.
+A qualified target resolves independently of any bare-name mapping.
 Unknown targets remain unpriced. Empty rate tables set all rates to zero.
 Restart after changing mappings, and use the same configuration on machines
 that share a mirror.

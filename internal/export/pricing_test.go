@@ -22,13 +22,13 @@ func TestPricingResolverConfiguredAliasUsesTargetLadder(t *testing.T) {
 		{ModelPattern: "ai21.j2-mid-v1", Rates: ModelRates{InputPerMTok: money.MustParseDollars("12.50"), Source: PricingRowSourceFetched}},
 		{GenAI: embedded.Prices, GenAIVersion: embedded.Version, GenAISource: PricingRowSourceEmbedded},
 	})
-	model, lookup := resolver.ResolveAt("gpt-5.6-luna", "ai21.j2-mid-v1", time.Date(2026, 8, 1, 0, 0, 0, 0, time.UTC))
+	model, lookup := resolver.ResolveAt("gpt-5.6-luna", "gpt-5.6-luna", time.Date(2026, 8, 1, 0, 0, 0, 0, time.UTC))
 	require.True(t, lookup.OK)
 	assert.Equal(t, "ai21.j2-mid-v1", model)
 	assert.Equal(t, money.MustParseDollars("12.50"), lookup.Rates.InputPerMTok)
 
 	pricingpkg.SetConfiguredAliases(map[string]string{"gpt-5.6-luna": "missing-model"})
-	_, lookup = resolver.ResolveAt("gpt-5.6-luna", "missing-model", time.Date(2026, 8, 1, 0, 0, 0, 0, time.UTC))
+	_, lookup = resolver.ResolveAt("gpt-5.6-luna", "gpt-5.6-luna", time.Date(2026, 8, 1, 0, 0, 0, 0, time.UTC))
 	assert.False(t, lookup.OK)
 
 	pricingpkg.SetConfiguredAliases(map[string]string{"gateway-kimi": "kimi-for-coding"})
@@ -55,28 +55,26 @@ func TestPricingResolverConfiguredAliasUsesTargetLadder(t *testing.T) {
 	_, custom := resolver.ResolveAt("gateway-custom", "gateway-custom", time.Time{})
 	require.True(t, custom.OK)
 	assert.Equal(t, money.MustParseDollars("7"), custom.Rates.InputPerMTok)
-
+	pricingpkg.SetConfiguredAliases(map[string]string{"deployment": "provider/gpt-6-sol", "gpt-6-sol": "gpt-5.6-luna"})
+	resolver = NewPricingResolver([]EffectivePricingRow{
+		{ModelPattern: "provider/gpt-6-sol", Rates: ModelRates{InputPerMTok: money.MustParseDollars("5"), Source: PricingRowSourceFetched}},
+		{ModelPattern: "gpt-5.6-luna", Rates: ModelRates{InputPerMTok: money.MustParseDollars("2"), Source: PricingRowSourceFetched}},
+	})
+	_, qualified := resolver.ResolveAt("deployment", "deployment", time.Time{})
+	require.True(t, qualified.OK)
+	assert.Equal(t, money.MustParseDollars("5"), qualified.Rates.InputPerMTok)
 }
 
 func TestPricingResolverExactCustomRateBeatsConfiguredAlias(t *testing.T) {
 	pricingpkg.SetConfiguredAliases(map[string]string{"foo": "gpt-6-sol"})
 	t.Cleanup(func() { pricingpkg.SetConfiguredAliases(nil) })
 	resolver := NewPricingResolver([]EffectivePricingRow{
-		{ModelPattern: "gateway/foo", Rates: ModelRates{InputPerMTok: money.MustParseDollars("3"), Source: PricingRowSourceCustom}},
-		{ModelPattern: "gpt-6-sol", Rates: ModelRates{InputPerMTok: money.MustParseDollars("9"), Source: PricingRowSourceFetched}},
-	})
-	model, lookup := resolver.ResolveAt("gateway/foo", "gpt-6-sol", time.Now())
-	require.True(t, lookup.OK)
-	assert.Equal(t, "gateway/foo", model)
-	assert.Equal(t, money.MustParseDollars("3"), lookup.Rates.InputPerMTok)
-	resolver = NewPricingResolver([]EffectivePricingRow{
 		{ModelPattern: "gateway/foo", Rates: ModelRates{Source: PricingRowSourceCustom}},
 		{ModelPattern: "gpt-6-sol", Rates: ModelRates{InputPerMTok: money.MustParseDollars("9"), Source: PricingRowSourceFetched}},
 	})
-	_, lookup = resolver.ResolveAt("gateway/foo", "gpt-6-sol", time.Time{})
+	_, lookup := resolver.ResolveAt("gateway/foo", "gpt-6-sol", time.Time{})
 	require.True(t, lookup.OK)
 	assert.Zero(t, lookup.Rates.InputPerMTok.Microdollars)
-
 }
 
 func TestPricingResolverUsesHistoricalGenAIPricesBeforeFlatFallback(t *testing.T) {

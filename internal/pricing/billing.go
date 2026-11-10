@@ -30,10 +30,8 @@ func BillingPolicyFor(providerID string) (BillingPolicy, bool) {
 	return positAssistantPolicy, true
 }
 
-// BillingPolicyVersion identifies the billing policy in cache identities.
-func BillingPolicyVersion() string {
-	return positAssistantPolicy.Version
-}
+// BillingPolicyVersion identifies the policy in internal cache identities.
+func BillingPolicyVersion() string { return positAssistantPolicy.Version }
 
 // OpenAIPriorityProviderID identifies Codex sessions using OpenAI's priority tier.
 const OpenAIPriorityProviderID = "openai-priority"

@@ -160,17 +160,14 @@ func SetConfiguredAliases(priceAs map[string]string) {
 	})
 }
 
-func configuredPricingAliases() []FixedPricingAlias {
-	if c := configured.Load(); c != nil {
-		return c.aliases
-	}
-	return nil
-}
-
 // ConfiguredAliasTarget returns the explicitly configured target for model.
 func ConfiguredAliasTarget(model string) string {
+	c := configured.Load()
+	if c == nil {
+		return ""
+	}
 	name := pricingAliasName(model)
-	for _, alias := range configuredPricingAliases() {
+	for _, alias := range c.aliases {
 		if alias.Name == model || (!alias.Exact && alias.Name == name) {
 			return alias.Canonical
 		}
@@ -187,9 +184,8 @@ func ConfiguredAliasesDigest() string {
 }
 
 // FixedPricingAliases returns the timestamp-independent reported-name
-// mappings, copied for caller safety. DuckDB and
-// ClickHouse render these as SQL CASE arms so aggregate usage prices the
-// same canonical models as SQLite.
+// mappings, copied for caller safety. DuckDB renders these as SQL CASE
+// arms so aggregate usage prices the same canonical models as SQLite.
 func FixedPricingAliases() []FixedPricingAlias {
 	return slices.Clone(fixedPricingAliases)
 }

@@ -267,6 +267,11 @@ func TestUsageJournaledConfiguredAliasChanges(t *testing.T) {
 		{nil, 100},
 	} {
 		pricingpkg.SetConfiguredAliases(step.aliases)
+		custom := make(map[string]config.CustomModelRate, len(step.aliases))
+		for name, target := range step.aliases {
+			custom[name] = config.CustomModelRate{PriceAs: target}
+		}
+		database.SetCustomPricing(custom)
 		got, err := database.GetDailyUsage(t.Context(), filter)
 		require.NoError(t, err)
 		assert.Equal(t, step.cost, got.Totals.TotalCost.Microdollars)
