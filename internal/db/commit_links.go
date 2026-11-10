@@ -27,7 +27,7 @@ const (
 	MaxCommitSHAs          = 200
 	commitLinksBackfillKey = "commit_links_backfill_v2"
 	commitCommandToken     = `(?:"(?:\\[\s\S]|[^"\\])*"|'(?:[^']|'\\'')*'|[^\s;&|"']+)`
-	commitGlobalOption     = `(?:-[cC]\s+` + commitCommandToken + `|--(?:git-dir|work-tree|namespace|config-env)(?:=|\s+)` + commitCommandToken + `|-[pP]|--(?:no-pager|paginate|bare|no-replace-objects|literal-pathspecs|glob-pathspecs|noglob-pathspecs|icase-pathspecs|no-optional-locks|no-lazy-fetch|no-advice))`
+	commitGlobalOption     = `(?:-[cC]\s+` + commitCommandToken + `|--(?:git-dir|work-tree|namespace|config-env)(?:=|\s+)` + commitCommandToken + `|'--(?:git-dir|work-tree|namespace|config-env)=(?:[^']|'\\'')*'|-[pP]|--(?:no-pager|paginate|bare|no-replace-objects|literal-pathspecs|glob-pathspecs|noglob-pathspecs|icase-pathspecs|no-optional-locks|no-lazy-fetch|no-advice))`
 )
 
 var (
@@ -99,7 +99,7 @@ func commitRepository(input, cwd string) string {
 		if path.IsAbs(dir) || strings.HasPrefix(dir, "~") || commitWindowsDriveRE.MatchString(dir) || strings.HasPrefix(dir, `\\`) {
 			return dir
 		}
-		if !strings.ContainsAny(base+dir, `\`) && !commitWindowsDriveRE.MatchString(base) {
+		if path.IsAbs(base) && !strings.HasPrefix(base, "//") || !strings.ContainsAny(base+dir, `\`) && !commitWindowsDriveRE.MatchString(base) {
 			return path.Join(base, dir)
 		}
 		// filepath follows the host OS; transcript paths can come from any OS.

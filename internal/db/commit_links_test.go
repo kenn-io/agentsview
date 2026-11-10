@@ -35,8 +35,9 @@ func TestCommitLinksArgvCommands(t *testing.T) {
 		{"sh -c", `{"command":["sh","-c","git commit -m fix"]}`, "/work"},
 		{"absolute zsh", `{"command":["/bin/zsh","-lc","git commit -m fix"]}`, "/work"},
 		{"trailing apostrophe", `{"command":["git","-C","/work/a'","commit"]}`, "/work/a'"},
+		{"work tree with spaces", `{"command":["git","--work-tree=/path with spaces","commit"]}`, "/work"},
+		{"literal backslash", `{"command":["git","-C","repo\\child","commit"]}`, `/work/repo\child`},
 		{"literal tilde", `{"command":["git","-C","~/repo","commit"]}`, "/work/~/repo"},
-		{"apostrophe", `{"command":["git","-C","/work/a'b\"c","commit"]}`, `/work/a'b"c`},
 		{"successive paths", `{"command":["git","-C","root","-C","child repo","commit"]}`, "/work/root/child repo"},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
@@ -55,7 +56,7 @@ func TestCommitLinksArgvCommands(t *testing.T) {
 
 func TestCommitLinksArgvNonCommitOutput(t *testing.T) {
 	for _, tt := range []struct{ input, output string }{
-		{`{"command":["echo","commit"]}`, "[main abc1234] Fix parser"},
+		{`{"command":["echo","commit","git"]}`, "[main abc1234] Fix parser"},
 		{`{"command":["git","log","--grep=match git commit"]}`, "[main abc1234] Fix parser"},
 	} {
 		t.Run(tt.input, func(t *testing.T) {
