@@ -13770,7 +13770,7 @@ func (e *Engine) dropShrinkingTruncatedCursorIDEResults(
 			kept = results[:0]
 			for _, r := range results {
 				if r.Session.IsTruncated {
-					verifyFailed = verifyFailed || len(r.Messages) > 0
+					verifyFailed = true
 					continue
 				}
 				kept = append(kept, r)

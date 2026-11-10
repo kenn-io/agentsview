@@ -1451,3 +1451,21 @@ func TestCursorIDEIncompleteHeadersPreserveArchive(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, newMessages, 2)
 }
+
+func TestCursorIDEIncompleteHeadersAbortEmptyRebuild(t *testing.T) {
+	root := t.TempDir()
+	path := filepath.Join(root, "state.vscdb")
+	composer := cursorIDERetentionComposer("rebuild-incomplete", 0, 2)
+	createCursorIDEStateDB(t, path, []cursorIDESyncComposer{composer})
+	engine, database := newCursorIDESyncEngine(t, root)
+	t.Cleanup(engine.Close)
+	require.Equal(t, 1, engine.SyncAll(t.Context(), nil).Synced)
+	execCursorIDEStateDB(t, path, `UPDATE cursorDiskKV SET value = ? WHERE key = ?`, `{"_v":18,"headerLog":{"count":2,"chunkCount":1}}`, "composerData:rebuild-incomplete")
+	stats := engine.ResyncAll(t.Context(), nil)
+	assert.True(t, stats.Aborted)
+	messages, err := database.GetMessages(t.Context(), "cursor-ide:rebuild-incomplete", 0, 100, true)
+	require.NoError(t, err)
+	require.Len(t, messages, 2)
+	assert.Equal(t, "b1", messages[0].SourceUUID)
+	assert.Equal(t, "b2", messages[1].SourceUUID)
+}

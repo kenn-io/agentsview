@@ -198,7 +198,7 @@ func cursorIDEComposerDigest(
 	)
 	if err != nil {
 		return "", fmt.Errorf(
-			"digesting cursor IDE rows for %s: %w", composerID, err)
+			"digesting cursor IDE bubbles for %s: %w", composerID, err)
 	}
 	defer rows.Close()
 	for rows.Next() {
@@ -206,7 +206,7 @@ func cursorIDEComposerDigest(
 		var value []byte
 		if err := rows.Scan(&key, &value); err != nil {
 			return "", fmt.Errorf(
-				"scanning cursor IDE row for digest %s: %w", composerID, err)
+				"scanning cursor IDE bubble for digest %s: %w", composerID, err)
 		}
 		_, _ = h.Write([]byte{0})
 		_, _ = h.Write([]byte(key))
@@ -215,7 +215,7 @@ func cursorIDEComposerDigest(
 	}
 	if err := rows.Err(); err != nil {
 		return "", fmt.Errorf(
-			"digesting cursor IDE rows for %s: %w", composerID, err)
+			"digesting cursor IDE bubbles for %s: %w", composerID, err)
 	}
 	return strconv.FormatUint(h.Sum64(), 16), nil
 }
