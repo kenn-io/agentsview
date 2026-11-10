@@ -521,9 +521,6 @@ func (s *Sync) pushWithOptions(
 	diagnosticErr := s.syncDiagnosticEvents(ctx, full, markerID)
 	if diagnosticErr != nil {
 		log.Printf("pgsync: diagnostic events: %v", diagnosticErr)
-		if !errors.Is(diagnosticErr, db.ErrDiagnosticConflict) {
-			diagnosticErr = nil
-		}
 	}
 	// Candidate selection shares ListSessionsForMirrorWindow with the
 	// DuckDB mirror push: sync_marker >= lastPush, inclusive below and

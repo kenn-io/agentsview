@@ -8,6 +8,7 @@ import (
 	"time"
 	"uuid"
 
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
@@ -163,4 +164,50 @@ func TestDiagnosticPushConflictingArchives(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, pg.QueryRowContext(t.Context(), `SELECT message FROM diagnostic_events WHERE id=$1`, event.ID).Scan(&message))
 	assert.Equal(t, other.Message, message)
+}
+
+func TestPushReturnsDiagnosticErrorAfterPublishingSessions(t *testing.T) {
+	const schema = "agentsview_diagnostic_push_error_test"
+	const sessionID = "claude:unrelated-session"
+	pgURL := testPGURL(t)
+	cleanNamedPGSchema(t, pgURL, schema)
+	t.Cleanup(func() { cleanNamedPGSchema(t, pgURL, schema) })
+	pg, err := Open(t.Context(), pgURL, schema, true)
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = pg.Close() })
+	require.NoError(t, EnsureSchema(t.Context(), pg, schema))
+	_, err = pg.ExecContext(t.Context(), `ALTER TABLE diagnostic_events ADD CONSTRAINT diagnostic_insert_rejected CHECK (message <> 'reject diagnostic')`)
+	require.NoError(t, err)
+
+	local := testDB(t)
+	when := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+	_, err = local.AppendDiagnostic(t.Context(), db.DiagnosticEvent{
+		ID: uuid.NewV7().String(), Source: "worker", Message: "reject diagnostic", OccurredAt: when,
+	})
+	require.NoError(t, err)
+	startedAt := when.Format(time.RFC3339)
+	firstMessage := "unrelated session"
+	require.NoError(t, local.UpsertSession(t.Context(), db.Session{
+		ID: sessionID, Agent: "claude", Project: "project-a", Machine: "machine-a",
+		FirstMessage: &firstMessage, StartedAt: &startedAt, MessageCount: 1,
+	}))
+	require.NoError(t, local.InsertMessages(t.Context(), []db.Message{{
+		SessionID: sessionID, Ordinal: 0, Role: "user", Content: firstMessage,
+	}}))
+
+	syncer := &Sync{
+		pg: pg, local: local, machine: "machine-a", schema: schema,
+		schemaDone: true, targetFingerprint: "target-a",
+	}
+	_, err = syncer.Push(t.Context(), false, nil)
+	var pgErr *pgconn.PgError
+	if assert.ErrorAs(t, err, &pgErr) {
+		assert.Equal(t, "23514", pgErr.Code)
+		assert.Equal(t, "diagnostic_insert_rejected", pgErr.ConstraintName)
+	}
+	assert.NotErrorIs(t, err, db.ErrDiagnosticConflict)
+
+	var published bool
+	require.NoError(t, pg.QueryRowContext(t.Context(), `SELECT EXISTS(SELECT 1 FROM sessions WHERE id=$1)`, sessionID).Scan(&published))
+	assert.True(t, published, "the unrelated local session should publish despite the diagnostic error")
 }

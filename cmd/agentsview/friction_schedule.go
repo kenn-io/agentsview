@@ -65,7 +65,9 @@ func newFrictionRunner(cfg config.Config, store frictionRunnerStore, now func() 
 		BackfillDays: cfg.Friction.BackfillDays, SeatPatterns: patterns,
 	}
 	if source, ok := store.(review.DiagnosticSource); ok {
-		runner.Diagnostics = source
+		if capable, ok := store.(interface{ FrictionDiagnosticsAvailable() bool }); !ok || capable.FrictionDiagnosticsAvailable() {
+			runner.Diagnostics = source
+		}
 	}
 	return runner, nil
 }

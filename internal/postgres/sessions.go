@@ -43,9 +43,10 @@ type storeRuntime struct {
 	cursorMu     sync.RWMutex
 	cursorSecret []byte
 
-	insightCapabilityMu        sync.RWMutex
-	insightGenerationAvailable bool
-	frictionAvailable          atomic.Bool
+	insightCapabilityMu          sync.RWMutex
+	insightGenerationAvailable   bool
+	frictionAvailable            atomic.Bool
+	frictionDiagnosticsAvailable atomic.Bool
 	// frictionIssueLinksPresent is set once a pattern read finds
 	// friction_issue_links; see frictionIssueSelect.
 	frictionIssueLinksPresent atomic.Bool
