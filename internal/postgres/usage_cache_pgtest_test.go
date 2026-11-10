@@ -698,7 +698,16 @@ func TestPGUsageCacheAccountTotalsMatchDirect(t *testing.T) {
 func TestPGUsageCacheDefersLargePreparation(t *testing.T) {
 	local, syncer, store, _ := keptUsageFixture(t)
 	ctx := t.Context()
-	_, err := store.pg.ExecContext(ctx, `INSERT INTO cursor_usage_events(id,agent,occurred_at,model,output_tokens,charged_microdollars,dedup_key) VALUES(1,'cursor','2026-01-01','paid-a',2,200,'account-one')`)
+	_, err := store.pg.ExecContext(ctx, `INSERT INTO cursor_usage_events(
+		id,agent,occurred_at,model,output_tokens,charged_microdollars,dedup_key
+	) VALUES
+		(1,'cursor','2026-01-01','paid-a',2,200,'account-one'),
+		(2,'cursor','2026-01-01','paid-a',3,300,'paid-c:provider:event')`)
+	require.NoError(t, err)
+	_, err = store.pg.ExecContext(ctx, `INSERT INTO cursor_usage_events(
+		id,agent,occurred_at,model,output_tokens,charged_microdollars,dedup_key
+	) SELECT id+2,'cursor','2026-01-01','paid-a',1,100,'account-'||id
+	FROM generate_series(1,1000) AS series(id)`)
 	require.NoError(t, err)
 	probe := attachUsageCacheProbe(t, store, t.TempDir())
 	store.usageCache.DeferWork()
@@ -726,7 +735,14 @@ func TestPGUsageCacheDefersLargePreparation(t *testing.T) {
 	requireCachedUsageMatchesDirect(t, store, filter)
 	require.Equal(t, []string{"paid-a"}, probe.takeExtracted(), "a small push refreshes during the read")
 
-	_, err = store.pg.ExecContext(ctx, `INSERT INTO cursor_usage_events(id,agent,occurred_at,model,output_tokens,charged_microdollars,dedup_key) VALUES(2,'cursor','2026-01-01','paid-a',3,300,'account-two')`)
+	require.NoError(t, local.UpsertSession(ctx, db.Session{ID: "paid-c", Project: "project-a", Machine: "test-machine", Agent: "codex", StartedAt: new("2026-01-01T09:00:00Z")}))
+	require.NoError(t, local.ReplaceSessionUsageEvents(ctx, "paid-c", []db.UsageEvent{{SessionID: "paid-c", Source: "provider", Model: "paid-a", OutputTokens: 10, DedupKey: "event", OccurredAt: "2026-01-01T09:00:00Z"}}))
+	pushed, err = syncer.Push(ctx, false, nil)
+	require.NoError(t, err)
+	require.Empty(t, pushed.Errors)
+	requireDeferred("session update invalidates account totals")
+
+	_, err = store.pg.ExecContext(ctx, `INSERT INTO cursor_usage_events(id,agent,occurred_at,model,output_tokens,charged_microdollars,dedup_key) VALUES(1003,'cursor','2026-01-01','paid-a',3,300,'account-two')`)
 	require.NoError(t, err)
 	requireDeferred("account change")
 

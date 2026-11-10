@@ -269,8 +269,15 @@ func (c *usageRollupCoordinator) Ensure(
 	if err != nil {
 		return nil, usageRollupMetrics{}, err
 	}
-	if len(stale) == 0 && installs[usageRollupCursorSessionID].FactRevision >= snapshot.CursorHighWater {
+	cursorCurrent := installs[usageRollupCursorSessionID].FactRevision >= snapshot.CursorHighWater
+	if len(stale) == 0 && cursorCurrent {
 		return installs, usageRollupMetrics{}, nil
+	}
+	if usageWorkDeferred(ctx) && snapshot.exactAccountRevision && !cursorCurrent {
+		// External account generations must be rebuilt from their full source.
+		// A session refresh can invalidate this install after journal readiness
+		// was checked, so defer the rebuild to the background warm pass.
+		return nil, usageRollupMetrics{}, ErrUsageCacheWarming
 	}
 	// The catalog digest only keys single-flight; staleness is per session.
 	catalogHash := snapshot.PricingIdentity
