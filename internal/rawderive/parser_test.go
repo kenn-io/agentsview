@@ -1825,23 +1825,3 @@ func TestProviderParserHostedCodexSkillNameStaysLexical(t *testing.T) {
 	require.Len(t, out.Outcome.Results[0].Result.Messages[0].ToolCalls, 1)
 	assert.Empty(t, out.Outcome.Results[0].Result.Messages[0].ToolCalls[0].SkillName)
 }
-
-func TestStablePathMapLogicalPrimary(t *testing.T) {
-	root := t.TempDir()
-	transcript := filepath.Join(root, "sessions", "session.jsonl")
-	index := filepath.Join(root, "sessions", "sessions.json")
-	ref := objectRefForBytes(t, []byte("fixture"))
-	manifest := parserTestManifest(t, parser.AgentMusePersonal, "logical-session", []rawsync.Entry{
-		{Path: "sessions/session.jsonl", Type: "file", Length: ref.Length, Objects: []rawsync.ObjectRef{ref}},
-		{Path: "sessions/sessions.json", Type: "file", Length: ref.Length, Objects: []rawsync.ObjectRef{ref}},
-	})
-	tree := &Materialization{root: root, entries: map[string]string{
-		"sessions/session.jsonl": transcript, "sessions/sessions.json": index,
-	}}
-	paths := newStablePathMap(manifest, tree, "sessions/session.jsonl")
-	assert.Equal(t, "logical-session", paths.rewrite(transcript))
-	assert.Equal(t, paths.prefix+"sessions/sessions.json", paths.rewrite(index))
-	resolved, ok := paths.resolve("logical-session")
-	require.True(t, ok)
-	assert.Equal(t, transcript, resolved)
-}

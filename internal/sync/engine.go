@@ -6841,7 +6841,7 @@ func musePersonalCompositeMtime(path string) (int64, error) {
 	var mtime int64
 	for _, target := range targets {
 		info, err := os.Lstat(target.path)
-		if os.IsNotExist(err) && !target.required {
+		if err != nil && !target.required {
 			continue
 		}
 		if err != nil {
@@ -12750,7 +12750,16 @@ func (e *Engine) SourceMtime(ctx context.Context, sessionID string) int64 {
 		// Session polling must notice companion metadata changes too.
 		// This opaque stat token is compared for equality, not ordering.
 		if hasher := e.sources().providerStatHashers[def.Type]; hasher != nil {
-			return int64(hasher.ComputeMultiFileStatHash(path))
+			if token := hasher.ComputeMultiFileStatHash(path); token != 0 {
+				return int64(token)
+			}
+		}
+		if def.Type == parser.AgentMusePersonal {
+			// An unusable optional index must not make a live transcript look missing.
+			mtime, err := musePersonalCompositeMtime(path)
+			if err == nil {
+				return mtime
+			}
 		}
 		return 0
 	}

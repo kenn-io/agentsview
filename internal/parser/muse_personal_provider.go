@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -23,7 +24,10 @@ func newMusePersonalProviderFactory(def AgentDef) ProviderFactory {
 				return out
 			}),
 			WithFileChangedPathClassifier(musePersonalClassifyPath),
-			WithFileLookup(musePersonalFindFile),
+			WithFileLookup(func(ctx context.Context, root, id string) (singleFileMatch, bool) {
+				match, _ := musePersonalFindFile(ctx, root, id)
+				return match, match.Path != ""
+			}),
 			WithFileFingerprint(musePersonalFingerprintSource),
 			WithFileParse(musePersonalFileParser),
 		)}
@@ -186,18 +190,18 @@ func musePersonalScanSessions(ctx context.Context, root, dir string, yield func(
 	return incomplete
 }
 
-func musePersonalFindFile(ctx context.Context, root, id string) (singleFileMatch, bool) {
+func musePersonalFindFile(ctx context.Context, root, id string) (singleFileMatch, error) {
 	if !musePersonalUUID(id) {
-		return singleFileMatch{}, false
+		return singleFileMatch{}, nil
 	}
 	var found singleFileMatch
-	_ = musePersonalDiscoverEach(ctx, root, func(m singleFileMatch) error {
-		if strings.TrimSuffix(filepath.Base(m.Path), ".jsonl") == id {
-			found = m
+	err := musePersonalDiscoverEach(ctx, root, func(match singleFileMatch) error {
+		if strings.TrimSuffix(filepath.Base(match.Path), ".jsonl") == id {
+			found = match
 		}
 		return nil
 	})
-	return found, found.Path != ""
+	return found, err
 }
 
 func musePersonalFingerprintSource(ctx context.Context, src singleFileSource) (SourceFingerprint, error) {
@@ -269,7 +273,6 @@ func (s musePersonalSourceSet) Parse(ctx context.Context, req ParseRequest) (Par
 		}
 		req.Fingerprint = fp
 	}
-	s.cfg.parseFile = musePersonalFileParser
 	out, err := s.singleFileSourceSet.Parse(ctx, req)
 	if errors.Is(err, errMusePersonalIncompleteHeader) {
 		return ParseOutcome{ResultSetComplete: false}, nil
@@ -311,7 +314,12 @@ func (s musePersonalSourceSet) Discover(ctx context.Context) ([]SourceRef, error
 	return sources, err
 }
 
-func (s musePersonalSourceSet) DiscoverEach(ctx context.Context, yield func(SourceRef) error) error {
+func (s musePersonalSourceSet) DiscoverEach(ctx context.Context, yield func(SourceRef) error) (resultErr error) {
+	seen, err := newDiscoveryDiskMapForContext(ctx)
+	if err != nil {
+		return incompleteDiscoveryError(AgentMusePersonal, "track session identities", err)
+	}
+	defer func() { resultErr = errors.Join(resultErr, seen.close()) }()
 	var incomplete error
 	for i, root := range s.roots {
 		if err := ctx.Err(); err != nil {
@@ -326,7 +334,16 @@ func (s musePersonalSourceSet) DiscoverEach(ctx context.Context, yield func(Sour
 					return nil
 				}
 			}
-			if err := yield(s.sourceRef(root, match)); err != nil {
+			source := s.sourceRef(root, match)
+			inserted, err := seen.putIfAbsent(ctx, source.Key, match.Path)
+			if err != nil {
+				return err
+			}
+			if !inserted {
+				incomplete = errors.Join(incomplete, incompleteDiscoveryError(AgentMusePersonal, "duplicate session identity", fmt.Errorf("duplicate source %s", source.Key)))
+				return nil
+			}
+			if err := yield(source); err != nil {
 				return discoveryYieldError{cause: err}
 			}
 			return nil
@@ -366,13 +383,7 @@ func (s musePersonalSourceSet) FindSource(ctx context.Context, req FindSourceReq
 	}
 	var incomplete error
 	for _, root := range s.roots {
-		var found singleFileMatch
-		err := musePersonalDiscoverEach(ctx, root, func(match singleFileMatch) error {
-			if strings.TrimSuffix(filepath.Base(match.Path), ".jsonl") == req.RawSessionID {
-				found = match
-			}
-			return nil
-		})
+		found, err := musePersonalFindFile(ctx, root, req.RawSessionID)
 		if ctx.Err() != nil {
 			return SourceRef{}, false, ctx.Err()
 		}

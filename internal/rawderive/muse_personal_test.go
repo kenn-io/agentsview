@@ -230,3 +230,24 @@ func TestMusePersonalHostedGenerations(t *testing.T) {
 	assert.Equal(t, first.Manifest.SourceKey, relocated.Manifest.SourceKey)
 	assert.Equal(t, first.Manifest.ConfiguredRootID, relocated.Manifest.ConfiguredRootID)
 }
+
+func TestMusePersonalLocalPreparationStablePaths(t *testing.T) {
+	p, source, _, _ := musePersonalParitySetup(t, musePersonalParityUser, musePersonalParityIndex)
+	manifest, objects := manifestFromCapturePlan(t, parser.AgentMusePersonal, p, source)
+	tree, err := (Materializer{Store: &materializerStore{objects: objects}, BaseDir: t.TempDir(), MaxTotalBytes: 1 << 20}).Materialize(t.Context(), manifest)
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, tree.Cleanup()) })
+	for _, stored := range []string{manifest.Manifest.SourceKey, source.DisplayPath} {
+		t.Run(stored, func(t *testing.T) {
+			local, err := PrepareLocalSource(t.Context(), manifest, tree, "fixture", stored)
+			require.NoError(t, err)
+			assert.Equal(t, stored, local.Config.PathRewriter(local.Path))
+			resolved, ok := local.Config.StoredPathResolver(stored)
+			require.True(t, ok)
+			assert.Equal(t, local.Path, resolved)
+			index, err := tree.EntryPath(filepath.ToSlash(filepath.Join(filepath.Dir(musePersonalParityRel), "sessions.json")))
+			require.NoError(t, err)
+			assert.Equal(t, "raw-manifest:"+manifest.ManifestID+":"+filepath.ToSlash(filepath.Join(filepath.Dir(musePersonalParityRel), "sessions.json")), local.Config.PathRewriter(index))
+		})
+	}
+}

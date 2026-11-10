@@ -294,3 +294,37 @@ func TestMusePersonalFutureBodiesStayOpaque(t *testing.T) {
 		})
 	}
 }
+
+func TestMusePersonalFutureRecordTimestampShapes(t *testing.T) {
+	for _, timestamp := range []string{`"2026-10-05T15:04:06Z"`, `1791212646`} {
+		t.Run(timestamp, func(t *testing.T) {
+			p, _ := musePersonalTestProvider(t, `{"type":"future_record","created_at":`+timestamp+`,"opaque":"private-body"}`+"\n")
+			result := musePersonalTestParse(t, p).Results[0].Result
+			assert.Zero(t, result.Session.MalformedLines)
+			require.Len(t, result.Messages, 1)
+			assert.Equal(t, musePersonalUnsupportedContent, result.Messages[0].Content)
+			assert.Contains(t, result.Messages[0].SourceSubtype, "future_record")
+			assert.NotContains(t, result.Messages[0].Content, "private-body")
+		})
+	}
+}
+
+func TestMusePersonalMixedAccounting(t *testing.T) {
+	first := musePersonalTestItem(0, `{"type":"message","role":"user","text":"first"}`)
+	body := musePersonalTestItem(4, `{"type":"function_call","call_id":"a","name":"exec","arguments":"{}"}`) +
+		`{"type":"compaction_checkpoint","checkpoint_seq":0,"created_at":1791212760,"summary":"summary"}` + "\n" +
+		first + first +
+		musePersonalTestItem(5, `{"type":"function_call_output","call_id":"a","output":"result","success":true}`) +
+		musePersonalTestItem(2, `{"type":"future_mix","opaque":"hidden"}`) + "{malformed\n"
+	p, _ := musePersonalTestProvider(t, body)
+	result := musePersonalTestParse(t, p).Results[0].Result
+	assert.Equal(t, 1, result.Session.MalformedLines)
+	require.Len(t, result.Messages, 4)
+	assert.Equal(t, "first", result.Messages[0].Content)
+	assert.Equal(t, musePersonalUnsupportedContent, result.Messages[1].Content)
+	require.Len(t, result.Messages[2].ToolCalls, 1)
+	require.Len(t, result.Messages[2].ToolCalls[0].ResultEvents, 1)
+	assert.Equal(t, "result", result.Messages[2].ToolCalls[0].ResultEvents[0].Content)
+	assert.Equal(t, "summary", result.Messages[3].Content)
+	assert.True(t, result.Messages[3].IsCompactBoundary)
+}
