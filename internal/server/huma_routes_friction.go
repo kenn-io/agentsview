@@ -32,6 +32,7 @@ func (s *Server) registerFrictionRoutes() {
 	s.get(group, "/friction/findings", "List friction findings", s.humaListFrictionFindings)
 	s.get(group, "/friction/patterns", "List friction patterns", s.humaListFrictionPatterns)
 	s.postLong(group, "/friction/run", "Run friction review", s.humaRunFrictionReview)
+	s.post(group, "/diagnostics", "Append a diagnostic", s.humaAppendDiagnostic)
 	s.registerFrictionIssueRoutes(group)
 }
 
@@ -99,6 +100,9 @@ type frictionDigestResponse struct {
 	Summary         frictionSummary   `json:"summary"`
 	Signals         []frictionSignal  `json:"signals"`
 	P0Alerts        []frictionP0Alert `json:"p0_alerts"`
+	// Diagnostics groups the diagnostic signals by source and message in
+	// first-seen order, as the Markdown renders them.
+	Diagnostics []friction.DiagnosticGroup `json:"diagnostics"`
 	// Patterns are the recurrence rows for this digest's findings.
 	Patterns []frictionPatternItem `json:"patterns"`
 	// Sessions describes each archived session the digest names, keyed by
@@ -130,6 +134,7 @@ type frictionSummary struct {
 	Patterns        int                 `json:"patterns"`
 	Frustrations    int                 `json:"frustrations"`
 	Interruptions   int                 `json:"interruptions"`
+	Diagnostics     int                 `json:"diagnostics,omitzero"`
 	P0Alerts        map[string][]string `json:"p0_alerts"`
 }
 
@@ -468,9 +473,10 @@ func (s *Server) humaGetFrictionDigest(
 		Date: d.Date, Timezone: d.Timezone, RulesVersion: d.RulesVersion,
 		BuiltAt: d.BuiltAt.UTC(), Revision: d.Revision, SessionsScanned: d.SessionsScanned,
 		MarkdownSHA256: d.MarkdownSHA256, Summary: summary,
-		Signals:  frictionSignalItems(snap.Signals, s.frictionPublicURL()),
-		P0Alerts: frictionP0AlertItems(snap.P0Alerts),
-		Patterns: frictionPatternItems(patterns),
+		Signals:     frictionSignalItems(snap.Signals, s.frictionPublicURL()),
+		P0Alerts:    frictionP0AlertItems(snap.P0Alerts),
+		Patterns:    frictionPatternItems(patterns),
+		Diagnostics: friction.GroupDiagnostics(snap.Signals),
 	}
 	resp.Sessions, err = s.frictionSessions(ctx, snap.Signals, snap.P0Alerts)
 	if err != nil {

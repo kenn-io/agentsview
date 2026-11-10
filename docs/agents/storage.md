@@ -10,8 +10,8 @@ to handle a data-version change.
 
 Use non-destructive schema migrations such as `ALTER TABLE` and `UPDATE`.
 
-Dashboard analytics, report, and search scans, and other multi-second scans over
-message or usage rows, take the lane; the list and sidebar reads every page
+Dashboard analytics, report, and search scans, change stream reads, and other
+multi-second scans over message or usage rows, take the lane; the list and sidebar reads every page
 loads (session list, stats, project list) and reads scoped to one session stay
 outside. The lane uses `acquireBulkRead`, using at most `readerMaxOpenConns - 1`
 reader connections so quick reads always get one. Each holder uses one reader
@@ -230,6 +230,23 @@ Archive refresh seeks live conversation rows by `(session_id, ordinal)` through
 index available during orphan and trash copies so each message lookup does not
 scan the session's entire retained history. The next writable open builds it
 once for existing archives; no parser resync is required.
+
+Each live projection row also records a fingerprint of its message's own usage
+columns (`usage_key`) and the `conversation_usage_revision` value of its last
+usage-only change (`usage_revision`). Triggers on `messages` advance that
+counter only when the fingerprint changes, so a full rewrite that keeps usage
+publishes nothing; triggers on `usage_events` mark the message at
+`message_ordinal`. A projection row that is created or moves takes its
+fingerprint without a revision, because it already publishes a conversation
+revision. The change stream re-sends marked messages; the conversation export
+ignores these columns. The writable open that adds the columns records every
+live row's fingerprint first.
+
+The change stream's replay finds a session through its projected messages or
+its `usage_session_changes` row. That journal began in v0.47.0 without a
+backfill, so every writable open journals each session that has no row, one
+fresh `usage_change_revision` per session, so the stream can page between any
+two of them. Usage cache consumers then see those sessions change once.
 
 Keep only digests and compact latest changes, not a body event log; bounded body
 reads take text from the archived message at the projected ordinal and reject it
@@ -1318,6 +1335,18 @@ own metadata, which is why the docs below call the database a mirror.
   derive the keys in a CTE instead. Chunked lists (`db.QueryChunkedSize`) are
   for sets that arrive from outside the database, and they bound entry count,
   not bytes.
+- Do not add skipping indexes or projections for time ranges or text search on
+  session-keyed tables such as `messages` and `usage_messages`. Session IDs are
+  random, so each granule mixes sessions from unrelated dates, and every part
+  spans the whole key range. Under `final = 1` the exact-mode expansion
+  (`use_skip_indexes_if_final_exact_mode`) adds back most granules an index
+  skipped, and projections are not read at all. On a 4.4M-message mirror a
+  minmax on `messages.timestamp` skipped none of 541 granules, the former
+  `usage_messages` minmax made the Activity usage read 1.2x to 3.4x slower, and
+  a `text` index on `messages.content` made `ILIKE` search about 3x slower with
+  3.5x the memory while adding 24% to storage, 3x to insert time, and 5x to
+  merge time. Before adding an index, measure the real query with
+  `EXPLAIN indexes = 1` under `final = 1`, on more than one part.
 - Tests use the `chtest` build tag. Run `make test-clickhouse` against a
   dedicated test server (`TEST_CLICKHOUSE_URL` or the compose service). Do not
   point those tests at a live mirror.

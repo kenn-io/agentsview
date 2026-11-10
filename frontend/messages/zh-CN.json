@@ -1666,7 +1666,7 @@
   "insights_page_template_instruction_opportunities": "指令优化机会",
   "insights_page_template_friction_review": "摩擦复盘",
   "friction_review_summary_title": "模型撰写的摘要",
-  "friction_review_summary_notice": "由模型根据此日报的摘要和模式标题撰写。不会修改发现项、日报或问题。",
+  "friction_review_summary_notice": "由模型根据此日报的摘要、模式标题以及分组后的诊断来源和消息撰写。不会修改发现项、日报或问题。",
   "friction_review_summary_empty": "此日报尚无摘要。",
   "friction_review_summary_generate": "生成摘要",
   "friction_review_summary_regenerate": "重新生成",
@@ -2998,6 +2998,8 @@
   "friction_section_patterns": "模式",
   "friction_section_frustration": "挫败",
   "friction_section_interruptions": "中断",
+  "friction_section_diagnostics": "诊断",
+  "friction_diagnostic_count": "{count} 次",
   "friction_interruption_count": [
     {
       "declarations": [
@@ -3016,6 +3018,7 @@
   "friction_kind_pattern": "模式",
   "friction_kind_frustration": "挫败",
   "friction_kind_interruption": "中断",
+  "friction_kind_diagnostic": "诊断",
   "friction_disabled_title": "此服务器已关闭摩擦日志",
   "friction_disabled_hint": "此服务器不生成摘要。请在 config.toml 中设置 [friction] enabled = true 并重启守护进程。只读归档无法生成摘要。",
   "friction_markdown_title": "Markdown",

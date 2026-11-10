@@ -293,7 +293,7 @@ Set it to `"0"` to keep syncing while idle. Restart the server after changing it
 | `public_origins`                    | Additional trusted origins for request Host/Origin checks                                                                                                                                                                                                                                                                                                                                                                                                                        |
 | `daemon_idle_timeout`               | Idle timeout for automatically started and `serve --background` writable daemons; set to `"0s"` to keep them alive                                                                                                                                                                                                                                                                                                                                                               |
 | `sync_idle_after`                   | Pause local collection after this long without client activity; defaults to `"10m"`, with `"0"` disabling the pause                                                                                                                                                                                                                                                                                                                                                              |
-| `sync_interval`                     | Minimum time between watcher-triggered session sync starts in `serve` and archive push commands. Default `"5s"`; use `"60s"` for less frequent syncs. Zero or negative durations disable the minimum interval. Applies on restart or when provider changes rebuild watchers. Raw sync, live-activity polling, and periodic catch-up keep their own timers.                                                                                                                       |
+| `sync_interval`                     | Minimum time between watcher-triggered session sync starts in `serve` and archive push commands. Default `"5s"`; use `"60s"` for less frequent syncs. Zero or negative durations disable the minimum interval. While a [change stream](/docs/conversation-export/#follow-changes-live) is open, `serve` uses at most `"1s"`. Applies on restart or when provider changes rebuild watchers. Raw sync, live-activity polling, and periodic catch-up keep their own timers.         |
 | `chart_palette`                     | Server-wide categorical chart colors: `"agentsview"` (default), `"matplotlib"`, or `"colorblind"`; also configurable under **Settings > Appearance**                                                                                                                                                                                                                                                                                                                             |
 | `zoom_level`                        | Default interface zoom for clients without a local preference: `67`, `75`, `80`, `90`, `100`, `110`, `120`, `125`, `130`, `150`, `175`, or `200`. Defaults to `100` when omitted. Restart the daemon after manual edits                                                                                                                                                                                                                                                          |
 | `disabled_agents`                   | Session providers to exclude from local filesystem scanning — see [Disabling Session Providers](#disabling-session-providers)                                                                                                                                                                                                                                                                                                                                                    |
@@ -2284,13 +2284,21 @@ with [`agentsview friction`](/docs/commands/#agentsview-friction), the
 builds missing days on demand. Findings are heuristics: check the session
 before acting on one.
 
+Use `agentsview diagnostics append` or `POST /api/v1/diagnostics` to record a
+failure outside an agent session. Friction review must be enabled on the
+archive building the digest for the events to appear. The digest groups matching sources and
+messages in a Diagnostics section. These events do not create P0 alerts or
+recurring patterns. A delayed event rebuilds its completed day, including dates
+older than the session backfill window.
+
 On the Friction Log page, **Generate summary** asks the configured `[insights]`
 endpoint or agent CLI for an optional model-written overview of one digest.
 Nothing generates summaries on a schedule. The model receives the digest counts,
-P0 alerts, and up to 20 pattern titles ranked by occurrences. Pattern titles can
+P0 alerts, up to 20 pattern titles ranked by occurrences, and up to 20 grouped
+diagnostic sources and messages. Pattern titles can
 contain up to 80 characters of the text that triggered a correction, workaround,
 or deferral; frustration titles are withheld because they quote the user. The
-model does not receive finding text, evidence, or transcripts. The summary is
+model does not receive session finding text, evidence, or transcripts. The summary is
 labeled as model-written and cannot change findings, digests, or recurrence.
 Repeating a request returns the saved summary until the digest changes, and
 saved summaries also appear under **Recall → Generated insights** as **Friction

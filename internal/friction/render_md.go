@@ -24,7 +24,7 @@ func RenderMarkdown(s DigestSnapshot) []byte {
 	frustrations, interruptions := groups[KindFrustration], groups[KindInterruption]
 	patterns := groups[KindPattern]
 	total := len(corrections) + len(errs) + len(workarounds) + len(deferrals) +
-		len(frustrations) + len(interruptions) + len(patterns)
+		len(frustrations) + len(interruptions) + len(patterns) + len(groups[KindDiagnostic])
 
 	var b bytes.Buffer
 	b.WriteString("---\n")
@@ -38,6 +38,9 @@ func RenderMarkdown(s DigestSnapshot) []byte {
 	fmt.Fprintf(&b, "patterns: %d\n", len(patterns))
 	fmt.Fprintf(&b, "frustrations: %d\n", len(frustrations))
 	fmt.Fprintf(&b, "interruptions: %d\n", len(interruptions))
+	if n := len(groups[KindDiagnostic]); n > 0 {
+		fmt.Fprintf(&b, "diagnostics: %d\n", n)
+	}
 	b.WriteString("---\n\n")
 	fmt.Fprintf(&b, "# Friction Log — %s\n\n", s.Date)
 
@@ -89,7 +92,41 @@ func RenderMarkdown(s DigestSnapshot) []byte {
 		}
 	}
 
+	if diagnostics := GroupDiagnostics(groups[KindDiagnostic]); len(diagnostics) > 0 {
+		b.WriteString("\n## Diagnostics\n\n")
+		for _, group := range diagnostics {
+			fmt.Fprintf(&b, "- %s: %s x%d\n", code(group.Source), code(group.Message), group.Count)
+		}
+	}
 	return b.Bytes()
+}
+
+// DiagnosticGroup counts diagnostic events with the same source and message.
+// The Markdown, the digest API, and the model summary all use this grouping.
+type DiagnosticGroup struct {
+	Source  string `json:"source"`
+	Message string `json:"message"`
+	Count   int    `json:"count"`
+}
+
+// GroupDiagnostics groups the diagnostic signals' source and message pairs in
+// order of first occurrence. Other kinds are skipped.
+func GroupDiagnostics(signals []Signal) []DiagnosticGroup {
+	groups := []DiagnosticGroup{}
+	index := map[[2]string]int{}
+	for _, signal := range signals {
+		if signal.Kind != KindDiagnostic {
+			continue
+		}
+		key := [2]string{signal.Label, signal.Text}
+		if i, ok := index[key]; ok {
+			groups[i].Count++
+		} else {
+			index[key] = len(groups)
+			groups = append(groups, DiagnosticGroup{Source: signal.Label, Message: signal.Text, Count: 1})
+		}
+	}
+	return groups
 }
 
 func section(b *bytes.Buffer, title, placeholder string, sigs []Signal, line func(Signal) string) {

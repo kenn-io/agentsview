@@ -630,6 +630,9 @@ func runServe(ctx context.Context, cfg config.Config, opts serveOptions, restart
 	if rtOpts.BasePath != "" {
 		srvOpts = append(srvOpts, server.WithBasePath(rtOpts.BasePath))
 	}
+	if ingestion != nil {
+		srvOpts = append(srvOpts, server.WithSyncIntervalOverride(ingestion.SyncIntervalOverride()))
+	}
 	srvOpts = append(srvOpts, pushBackendOptions()...)
 	if !cfg.ArchiveContent.UsageOnly() && !database.ArchiveContent().UsageOnly() {
 		srvOpts = append(srvOpts, vectorServe.ServerOptions()...)

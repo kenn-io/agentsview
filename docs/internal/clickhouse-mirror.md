@@ -458,8 +458,9 @@ or the new ones, never a mix, and read them as they read rows the view prepared.
 A push checks that a rebuild is due both before and after it takes the lock.
 After publishing, the holder rebuilds once more if the snapshots that changed
 meanwhile make one due. If they make one due again, it logs that and leaves the
-rest to the next push. Without the view, nothing refreshes on a schedule, and a
-failed rebuild waits for the next push. Because `prepared_usage` is then not a
+rest to the next push that writes usage; see "What the check reads" below.
+Without the view, nothing refreshes on a schedule, and a failed rebuild waits
+for that push. Because `prepared_usage` is then not a
 refreshable view's target, native backups include its rows without
 `backup_data_from_refreshable_materialized_view_targets`.
 
@@ -552,6 +553,24 @@ changed, and reads prepare at most a fiftieth of what they read. On a
 300,000-row test table, a 5,000-row delta added about 0.13 seconds to the first
 read after a push. Deleted sessions' rows stay until the next
 rebuild, and reads skip them. The view's 15-minute schedule is unchanged.
+
+**What the check reads.** A push compares the stamp stored on the rows with the
+stamp a refresh would store now, and counts rows only when the two differ. It
+reads the snapshot count and hash without FINAL, from the highest revision of
+each session, which gives the values the refresh's FINAL read gives. It reads
+the price record count from part metadata, which counts a key twice while two
+pushes that priced it at once both hold it unmerged. That count can only be too
+high, so a count below the stored one still proves the records were cleared; a
+clearing refilled with enough duplicates to reach the stored count goes unseen.
+On a copy of the production layout, the check read 323,000 rows (17 MiB) in 22
+ms, against 2.56 million rows (234 MiB) in 188 ms with FINAL: 8.5x faster.
+
+A push that wrote no snapshots, deletions, price records, or pricing digest
+checks only that the table is not empty. A push that changed those inputs
+checks after its own writes. When that push ends with session errors, which
+skip the check, or a rebuild leaves the next push to rebuild, the rebuild
+waits for the next push that writes, or for the view's scheduled refresh.
+Reads stay exact meanwhile, only slower.
 
 ## Dashboard facts
 

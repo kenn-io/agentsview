@@ -1414,6 +1414,8 @@ type SSEEvent struct {
 func parseSSE(body string) []SSEEvent {
 	var events []SSEEvent
 	scanner := bufio.NewScanner(strings.NewReader(body))
+	// Change stream pages exceed the default 64 KiB line limit.
+	scanner.Buffer(nil, 16<<20)
 	var currentEvent SSEEvent
 	hasData := false
 	for scanner.Scan() {

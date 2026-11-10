@@ -145,7 +145,7 @@ func restrictedOperation(grant, method, path string) bool {
 	case "/api/ping", "/api/v1/version",
 		"/api/v1/sessions", "/api/v1/sessions/sidebar-index", "/api/v1/session-ids/resolve",
 		"/api/v1/projects", "/api/v1/machines", "/api/v1/agents", "/api/v1/branches",
-		"/api/v1/search", "/api/v1/search/content", "/api/v1/events",
+		"/api/v1/search", "/api/v1/search/content", "/api/v1/events", "/api/v1/changes/stream",
 		"/api/v1/recall/entries", "/api/v1/memory/status", "/api/v1/recent-edits",
 		"/api/v1/usage/summary", "/api/v1/usage/pairwise-comparison",
 		"/api/v1/analytics/tools", "/api/v1/analytics/signals", "/api/v1/analytics/signal-sessions",

@@ -336,27 +336,27 @@ func TestBuildDate(t *testing.T) {
 			assert.Contains(t, summary, `"schema_version": 1`)
 			assert.Equal(t, 3, rowCount(t, d, "friction_patterns"), "every kind feeds local recurrence")
 		}},
-		{name: "diagnostics_come_last_are_recorded_and_never_raise_p0", run: func(t *testing.T, d *db.DB, r *review.Runner) {
+		{name: "diagnostics_come_last_and_are_recorded", run: func(t *testing.T, d *db.DB, r *review.Runner) {
 			t.Helper()
 			seed(t, d, subject{id: "s1", ended: "2026-09-15T12:00:00Z", findings: []db.FrictionFinding{correction("s1", "no, use the other file please")}})
-			diag := func(id string) friction.Signal {
+			diag := func(id string, hour int) friction.Signal {
 				return friction.Signal{
-					Kind: friction.KindError, SubjectID: id, Detector: "error",
-					ToolName: "nightly_check", Text: id + ": check failed", Dims: friction.Dims{Machine: "ci-runner"},
+					Kind: friction.KindDiagnostic, SubjectID: id, SubjectKind: friction.SubjectDiagnostic,
+					Label: "worker", Text: "check failed", OccurredAt: time.Date(2026, 9, 15, hour, 0, 0, 0, time.UTC),
 				}
 			}
-			r.Diagnostics = fakeDiagnostics{sigs: []friction.Signal{diag("run-9:nightly_check"), diag("run-1:nightly_check"), diag("run-5:nightly_check")}}
+			r.Diagnostics = fakeDiagnostics{sigs: []friction.Signal{diag("diagnostic:00000000-0000-0000-0000-000000000001", 15), diag("diagnostic:00000000-0000-0000-0000-000000000002", 13), diag("diagnostic:00000000-0000-0000-0000-000000000003", 14)}}
 			rep, err := r.BuildDate(t.Context(), day, review.BuildOptions{})
 			require.NoError(t, err)
 			ids := []string{}
 			for _, s := range rep.Snapshot.Signals {
 				ids = append(ids, s.SubjectID)
 			}
-			assert.Equal(t, []string{"s1", "run-1:nightly_check", "run-5:nightly_check", "run-9:nightly_check"}, ids)
+			assert.Equal(t, []string{"s1", "diagnostic:00000000-0000-0000-0000-000000000002", "diagnostic:00000000-0000-0000-0000-000000000003", "diagnostic:00000000-0000-0000-0000-000000000001"}, ids)
 			assert.Equal(t, friction.SubjectDiagnostic, rep.Snapshot.Signals[1].SubjectKind)
-			assert.Empty(t, rep.Snapshot.P0Alerts, "diagnostics never raise P0 (spec §6.5)")
-			assert.Equal(t, 4, rep.Snapshot.SessionsScanned)
-			assert.Equal(t, 4, stored(t, d, day).SessionsScanned)
+			assert.Equal(t, 1, rep.Snapshot.SessionsScanned)
+			assert.Equal(t, 1, stored(t, d, day).SessionsScanned)
+			assert.Equal(t, 1, rowCount(t, d, "friction_patterns"))
 			raw, err := sql.Open("sqlite3", d.Path())
 			require.NoError(t, err)
 			defer raw.Close()
