@@ -301,12 +301,18 @@ func TestChangeStreamResumesAfterCursorWithoutRepeats(t *testing.T) {
 	// Resuming from the newest cursor sends nothing until a change arrives.
 	caughtUp := openChangeStream(t, te, "?after="+changes.To)
 	caughtUp.ready(t)
+	// A session and its messages can arrive in separate archive writes.
+	require.NoError(t, te.db.UpsertSession(t.Context(), db.Session{ID: "stream-c", Project: "sample", Machine: "local", Agent: "claude"}))
+	te.broadcaster.Emit("messages")
+	sessionOnly := caughtUp.changes(t, 1)[0]
+	assert.Equal(t, changes.To, sessionOnly.From)
+	assert.Empty(t, sessionOnly.Messages)
 	seedChangeStreamSession(t, te, "stream-c")
 	te.broadcaster.Emit("messages")
-	// The seed writes the session before its messages, so the stream's first
-	// catch-up can send the session alone before the messages arrive.
 	live := caughtUp.changesWithMessages(t, 2)
-	assert.Equal(t, changes.To, live[0].From)
+	for i := 1; i < len(live); i++ {
+		assert.Equal(t, live[i-1].To, live[i].From)
+	}
 	var sessions []string
 	for _, event := range live {
 		for _, message := range event.Messages {
