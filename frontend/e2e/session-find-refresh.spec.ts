@@ -1,4 +1,4 @@
-import { expect, test, type Page } from "@playwright/test";
+import { expect, test, type Locator, type Page } from "@playwright/test";
 import type { DbMessage as Message } from "../src/lib/api/generated/index.js";
 
 const SESSION_ID = "test-session-xlarge-5500";
@@ -27,6 +27,22 @@ function message(ordinal: number, content: string): Message {
 test.afterEach(async ({ page }) => {
   await page.unrouteAll({ behavior: "ignoreErrors" });
 });
+
+async function waitForScrollSettled(transcript: Locator): Promise<number> {
+  let last = -1;
+  await expect
+    .poll(
+      async () => {
+        const top = await transcript.evaluate((el) => el.scrollTop);
+        const settled = top === last;
+        last = top;
+        return settled;
+      },
+      { intervals: [300] },
+    )
+    .toBe(true);
+  return last;
+}
 
 async function installLiveSession(page: Page) {
   const all = Array.from({ length: 300 }, (_, i) =>
@@ -102,25 +118,16 @@ for (const newestFirst of [false, true])
       }
 
       // Let the initial reveal settle so it cannot race the user's scroll.
-      let last = -1;
-      await expect
-        .poll(
-          async () => {
-            const top = await transcript.evaluate((el) => el.scrollTop);
-            const settled = top === last;
-            last = top;
-            return settled;
-          },
-          { intervals: [300] },
-        )
-        .toBe(true);
+      await waitForScrollSettled(transcript);
 
       // The user scrolls away from the current match.
       const settledTop = await transcript.evaluate((el) => el.scrollTop);
       await transcript.hover();
       await page.mouse.wheel(0, 6000);
       await expect.poll(() => transcript.evaluate((el) => el.scrollTop)).not.toBe(settledTop);
-      const before = await transcript.evaluate((el) => el.scrollTop);
+      // wheel() returns before WebKit finishes scrolling and measuring rows.
+      // Compare the refresh against the user's final position, not an intermediate frame.
+      const before = await waitForScrollSettled(transcript);
 
       // The refresh only counts once the client has fetched the appended rows.
       const reloaded = page.waitForResponse(
