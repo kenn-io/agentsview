@@ -2,13 +2,17 @@ package clickhouse
 
 import (
 	"database/sql"
+	"runtime"
 	"slices"
 	"testing"
 	"time"
+	"unsafe"
+	"weak"
 
 	"go.kenn.io/agentsview/internal/db"
 	"go.kenn.io/agentsview/internal/readbase"
 
+	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
@@ -127,6 +131,36 @@ func TestPatchedActivityUsageMatchesFreshRead(t *testing.T) {
 	var fresh activityUsageRange
 	fresh.reset(nil, keepTestUsage(slices.Concat(unchanged, pushed)))
 	require.Equal(t, sessionRows(&fresh), sessionRows(&r))
+}
+
+// A push that replaces a session must let its previous rows be freed while
+// the sessions it left unchanged stay kept. The range's byte estimate counts
+// only the rows it holds, so replaced rows that stayed alive beside the kept
+// ones would let the range outgrow its memo's byte cap uncounted.
+func TestPatchedActivityUsageFreesReplacedRows(t *testing.T) {
+	var before []clickSessionUsageOrderedRow
+	for _, session := range []string{"session-a", "session-b", "session-c"} {
+		for i := range 10 {
+			before = append(before, keptTestRow(session, "message",
+				time.Date(2026, 9, 1, 10, 0, i, 0, time.UTC).Format(time.RFC3339), int64(i+1), "msg", "req", i))
+		}
+	}
+	var r activityUsageRange
+	r.reset(nil, keepTestUsage(before))
+	data, arena := func() (weak.Pointer[byte], weak.Pointer[byte]) {
+		replaced := r.sessions[r.number["session-b"]].rows
+		return weak.Make(unsafe.SliceData(replaced.data)), weak.Make(unsafe.StringData(replaced.arena))
+	}()
+	r.patch(nil, []string{"session-b"}, keepTestUsage([]clickSessionUsageOrderedRow{
+		keptTestRow("session-b", "message", "2026-09-01T10:00:20Z", 1, "msg", "req", 20),
+	}))
+
+	runtime.GC()
+	assert.Nil(t, data.Value(), "the replaced session's data is still alive")
+	assert.Nil(t, arena.Value(), "the replaced session's arena is still alive")
+	for _, session := range []string{"session-a", "session-c"} {
+		assert.Len(t, keptTestRows(r.sessions[r.number[session]].rows), 10, session)
+	}
 }
 
 // Selecting candidates from a range's kept rows must return what the

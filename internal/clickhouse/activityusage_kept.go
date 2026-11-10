@@ -1,6 +1,7 @@
 package clickhouse
 
 import (
+	"bytes"
 	"cmp"
 	"context"
 	"hash/maphash"
@@ -112,13 +113,15 @@ func (r *activityUsageRange) setSession(session keptUsageSession) int32 {
 }
 
 // splitKeptUsage splits a kept read into each session's rows, in report
-// order. The sessions' rows are written one session after another into one
-// buffer, and each session's part is a slice of it that shares the read's
-// dictionary.
+// order. Each session's rows get buffers of their own and share the read's
+// dictionary. A push replaces a few sessions while the rest stay kept, so
+// rows sharing one buffer would keep every replaced session's bytes alive
+// beyond what the range's byte estimate counts.
 func splitKeptUsage(k *activityUsageKept) []keptUsageSession {
 	type key struct {
 		session     uint64
 		data, arena int
+		arenaBytes  int
 		us          int64
 	}
 	keys := make([]key, 0, k.count)
@@ -132,45 +135,42 @@ func splitKeptUsage(k *activityUsageKept) []keptUsageSession {
 			us = r.us
 		}
 		at.session, at.us = r.refs[0], r.us
+		at.arenaBytes = len(k.arena) - len(arena) - at.arena
 		keys = append(keys, at)
 	}
 	slices.SortStableFunc(keys, func(a, b key) int { return cmp.Compare(a.session, b.session) })
-	e := &keptUsageEncoder{k: &activityUsageKept{dict: k.dict}, data: make([]byte, 0, len(k.data)+len(keys))}
-	e.arena.Grow(len(k.arena))
-	type span struct {
-		session     keptUsageSession
-		data, arena [2]int
-	}
-	var spans []span
+	// The encoder's data buffer is scratch reused by every session; each
+	// session's arena is built at its exact size.
+	e := &keptUsageEncoder{k: &activityUsageKept{dict: k.dict}}
+	var out []keptUsageSession
 	for i := 0; i < len(keys); {
 		ref := keys[i].session
-		part := span{session: keptUsageSession{id: k.dict[ref]}, data: [2]int{len(e.data)}, arena: [2]int{e.arena.Len()}}
-		e.us = 0
-		j := i
+		session := keptUsageSession{id: k.dict[ref]}
+		j, arenaBytes := i, 0
 		for ; j < len(keys) && keys[j].session == ref; j++ {
-			at := keys[j]
+			arenaBytes += keys[j].arenaBytes
+		}
+		e.data, e.us = e.data[:0], 0
+		e.arena.Reset()
+		e.arena.Grow(arenaBytes)
+		for _, at := range keys[i:j] {
 			k.decode(k.data[at.data:], k.arena[at.arena:], 0, &r)
 			r.us = at.us
 			e.encode(&r.clickActivityReportUsageRow, r.refs, r.us, r.validTS)
 			if !r.validTS {
 				continue
 			}
-			if !part.session.timed {
-				part.session.minUS, part.session.timed = r.us, true
+			if !session.timed {
+				session.minUS, session.timed = r.us, true
 			}
-			part.session.maxUS = r.us
+			session.maxUS = r.us
 		}
-		part.data[1], part.arena[1] = len(e.data), e.arena.Len()
-		part.session.rows = &activityUsageKept{dict: k.dict, count: j - i, sessions: []uint64{ref}}
-		spans = append(spans, part)
+		session.rows = &activityUsageKept{
+			dict: k.dict, count: j - i, sessions: []uint64{ref},
+			data: bytes.Clone(e.data), arena: e.arena.String(),
+		}
+		out = append(out, session)
 		i = j
-	}
-	all := e.arena.String()
-	out := make([]keptUsageSession, len(spans))
-	for i, part := range spans {
-		part.session.rows.data = e.data[part.data[0]:part.data[1]:part.data[1]]
-		part.session.rows.arena = all[part.arena[0]:part.arena[1]]
-		out[i] = part.session
 	}
 	return out
 }

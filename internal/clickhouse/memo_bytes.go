@@ -101,7 +101,8 @@ func usageRangeBytes(r *activityUsageRange) int64 {
 		if k == nil {
 			continue
 		}
-		n += int64(unsafe.Sizeof(*k)) + int64(len(k.arena)) + int64(len(k.data)) + 8*int64(len(k.sessions))
+		// Each session owns its arena and data; see splitKeptUsage.
+		n += int64(unsafe.Sizeof(*k)) + int64(len(k.arena)) + int64(cap(k.data)) + 8*int64(len(k.sessions))
 		if len(k.dict) > 0 && !dicts[&k.dict[0]] {
 			dicts[&k.dict[0]] = true
 			for _, v := range k.dict {
