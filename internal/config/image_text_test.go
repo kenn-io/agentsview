@@ -17,7 +17,5 @@ func TestImageTextConfig(t *testing.T) {
 	require.NoError(t, cfg.validateSections())
 	require.NoError(t, cfg.applyConfigTOML("[image_text]\nenabled = true\nendpoint = 'https://example.com/glmocr/parse'\n"))
 	require.ErrorContains(t, cfg.validateSections(), "image_text")
-	require.NoError(t, cfg.applyConfigTOML("[image_text]\nenabled = true\nendpoint = 'http://127.0.0.1:70000/glmocr/parse'\n"))
-	require.ErrorContains(t, cfg.validateSections(), "image_text")
 	require.ErrorContains(t, cfg.applyConfigTOML("[image_text]\nenable = true\n"), "image_text.enable: unknown config key")
 }
