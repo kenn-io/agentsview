@@ -566,7 +566,7 @@ func (db *DB) Search(
 				) AND NOT EXISTS (SELECT 1 FROM messages_fts JOIN image_text_cache c ON c.rowid=messages_fts.rowid AND c.succeeded=1 `+imageOccurrenceSQL+` WHERE o.session_id=s.id AND `+imageVisibilitySQL+` AND messages_fts MATCH ?)`, nameProjectClause, ftsSessionsSQL)
 	}
 	args = append(args, f.Limit+1, f.Cursor) // LIMIT / OFFSET
-	args = append(args, f.Query, f.Query) // paged image and message snippet MATCH
+	args = append(args, f.Query, f.Query)    // paged image and message snippet MATCH
 
 	// Relevance ordering needs match_pos before pagination. Recency ordering
 	// does not, so it avoids scanning every matching message for the position.

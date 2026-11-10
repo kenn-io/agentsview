@@ -288,7 +288,6 @@ func TestImageTextMembershipAndPruning(t *testing.T) {
 		require.NoError(t, dst.BackfillImageTextOccurrences(ctx))
 		require.NoError(t, dst.Reader().QueryRow(ctx, `SELECT count(*) FROM image_text_cache`).Scan(&count))
 		require.Equal(t, 2, count)
-
 	})
 
 	t.Run("legacy archive without image cache", func(t *testing.T) {
@@ -303,7 +302,6 @@ func TestImageTextMembershipAndPruning(t *testing.T) {
 	})
 
 	t.Run("shared writes", imageTextSharedAcrossSessionWrites)
-
 }
 
 func imageTextSharedAcrossSessionWrites(t *testing.T) {
@@ -577,8 +575,10 @@ func TestImageTextBatchSourceIDGainRefreshesOnce(t *testing.T) {
 	d := testDB(t)
 	require.NoError(t, d.BackfillImageTextOccurrences(ctx))
 	content := testInlineImageContent()
-	write := SessionBatchWrite{Session: Session{ID: "image", Project: "demo", Agent: defaultAgent, Machine: defaultMachine}, ReplaceMessages: true,
-		Messages: []Message{{SessionID: "image", Ordinal: 1, Role: "assistant", ToolCalls: []ToolCall{{ToolName: "Read", ResultContent: content}}}}}
+	write := SessionBatchWrite{
+		Session: Session{ID: "image", Project: "demo", Agent: defaultAgent, Machine: defaultMachine}, ReplaceMessages: true,
+		Messages: []Message{{SessionID: "image", Ordinal: 1, Role: "assistant", ToolCalls: []ToolCall{{ToolName: "Read", ResultContent: content}}}},
+	}
 	_, err := d.WriteSessionBatchAtomic(ctx, []SessionBatchWrite{write})
 	require.NoError(t, err)
 	_, err = d.getWriter().ExecContext(ctx, `CREATE TABLE image_refresh_count(n INTEGER); INSERT INTO image_refresh_count VALUES (0); CREATE TRIGGER image_refresh_count_insert AFTER INSERT ON image_text_occurrences BEGIN UPDATE image_refresh_count SET n=n+1; END`)
