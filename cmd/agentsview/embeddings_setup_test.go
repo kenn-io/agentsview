@@ -704,7 +704,10 @@ func TestCLIEmbeddingsSetup(t *testing.T) {
 				var body struct {
 					ApprovedBytes int64 `json:"approved_bytes"`
 				}
-				assert.NoError(t, json.UnmarshalRead(r.Body, &body))
+				if !assert.NoError(t, json.UnmarshalRead(r.Body, &body)) {
+					w.WriteHeader(http.StatusBadRequest)
+					return
+				}
 				assert.EqualValues(t, 1000001, body.ApprovedBytes)
 				w.WriteHeader(http.StatusAccepted)
 			},
@@ -746,7 +749,6 @@ func TestCLIEmbeddingsSetup(t *testing.T) {
 			}
 		})
 	}
-
 }
 
 func TestCLIEmbeddingsBuildStartsBeforeStatus(t *testing.T) {
