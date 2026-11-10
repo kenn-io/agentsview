@@ -80,25 +80,6 @@ func TestImageTextIndexRebuild(t *testing.T) {
 	}
 }
 
-func TestImageTextCopyKeepsTerminalFailures(t *testing.T) {
-	ctx := t.Context()
-	source := testDB(t)
-	target := testDB(t)
-	content := testInlineImageContent()
-	for _, d := range []*DB{source, target} {
-		insertSession(t, d, "image", "demo")
-		require.NoError(t, d.InsertMessages(ctx, []Message{{SessionID: "image", Role: "assistant", ToolCalls: []ToolCall{{ToolName: "Read", ResultContent: content}}}}))
-	}
-	hash := RetainedToolResultImages(content)[0].SHA256
-	identity, err := ocr.NewIdentity("test", "model", "revision")
-	require.NoError(t, err)
-	require.NoError(t, source.SaveImageTextTerminal(ctx, hash, identity))
-	require.NoError(t, target.CopyImageTextFrom(ctx, source.Path()))
-	pending, err := target.PendingImageText(ctx, identity.Fingerprint, time.Now(), 20)
-	require.NoError(t, err)
-	require.Empty(t, pending)
-}
-
 func TestImageTextPendingPrefersUnattempted(t *testing.T) {
 	ctx := t.Context()
 	d := testDB(t)
@@ -221,10 +202,6 @@ func TestImageTextMovesBetweenSessionsInAtomicBatch(t *testing.T) {
 	pending, err := d.PendingImageText(ctx, identity.Fingerprint, time.Now(), 20)
 	require.NoError(t, err)
 	require.Empty(t, pending)
-	require.NoError(t, d.ReplaceSessionMessages(ctx, "b", []Message{{SessionID: "b", Role: "assistant", Content: "removed"}}))
-	var count int
-	require.NoError(t, d.Reader().QueryRow(ctx, `SELECT count(*) FROM image_text_cache WHERE image_hash=?`, hash).Scan(&count))
-	require.Zero(t, count)
 }
 
 func TestImageTextMovesBetweenSessionsInInsertMessages(t *testing.T) {

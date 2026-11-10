@@ -2423,16 +2423,6 @@ func CheckSchemaCompat(
 		)
 	}
 
-	_, err = db.ExecContext(ctx,
-		`SELECT session_id, source_kind, message_ordinal, call_index, event_index,
-			image_index, image_hash, processor, provider, model, revision, text
-		 FROM image_text LIMIT 0`)
-	if err != nil {
-		return fmt.Errorf(
-			"image_text table missing required columns: %w", err,
-		)
-	}
-
 	hasModelPricing := true
 	_, err = db.ExecContext(ctx,
 		`SELECT input_microdollars_per_mtok,

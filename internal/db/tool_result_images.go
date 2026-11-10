@@ -658,18 +658,26 @@ type RetainedImage struct {
 // RetainedToolResultImages walks the same sections used by image retention.
 func RetainedToolResultImages(content string) []RetainedImage {
 	var images []RetainedImage
+	walkRetainedImages(content, func(_ jsontext.Value, image RetainedImage) {
+		images = append(images, image)
+	})
+	return images
+}
+
+func walkRetainedImages(content string, visit func(jsontext.Value, RetainedImage)) {
+	index := 0
 	scanSummarySections(content, func(_, _ int, raw jsontext.Value) {
 		var blocks []jsontext.Value
 		if json.Unmarshal(raw, &blocks) != nil {
 			return
 		}
 		for _, raw := range blocks {
-			if image, ok := retainedImageBlock(raw, len(images)); ok {
-				images = append(images, image)
+			if image, ok := retainedImageBlock(raw, index); ok {
+				visit(raw, image)
+				index++
 			}
 		}
 	})
-	return images
 }
 
 // retainedImageBlock reads one tool-result block as retained image evidence. A
@@ -687,43 +695,40 @@ func retainedImageBlock(raw jsontext.Value, index int) (RetainedImage, bool) {
 }
 
 func retainedInlineFile(raw jsontext.Value, index int) (RetainedImage, bool) {
+	uri, imageOnly, ok := retainedInlineURI(raw)
+	if !ok {
+		return RetainedImage{}, false
+	}
+	hash := sha256.New()
+	mediaType, size, _, ok := streamInlineData(uri, hash, imageOnly)
+	return RetainedImage{Index: index, MediaType: mediaType, Size: new(size), SHA256: hex.EncodeToString(hash.Sum(nil))}, ok
+}
+
+func retainedInlineURI(raw jsontext.Value) (jsontext.Value, bool, bool) {
 	var block struct {
 		Type     string         `json:"type"`
 		ImageURL jsontext.Value `json:"image_url"`
 		URI      jsontext.Value `json:"uri"`
 	}
 	if json.Unmarshal(raw, &block, json.MatchCaseInsensitiveNames(true)) != nil {
-		return RetainedImage{}, false
+		return nil, false, false
 	}
 	uri := block.ImageURL
 	if block.Type == "file" {
 		uri = block.URI
 	} else if block.Type != "input_image" {
-		return RetainedImage{}, false
+		return nil, false, false
 	}
-	hash := sha256.New()
-	mediaType, size, _, ok := streamInlineData(uri, hash, block.Type == "input_image")
-	return RetainedImage{Index: index, MediaType: mediaType, Size: new(size), SHA256: hex.EncodeToString(hash.Sum(nil))}, ok
+	return uri, block.Type == "input_image", true
 }
 
 // ReadRetainedImage reads the indexed retained image without changing its
 // stored form, refusing copies larger than limit bytes.
 func ReadRetainedImage(content string, index int, assetsDir string, limit int64) ([]byte, error) {
 	var found jsontext.Value
-	n := 0
-	scanSummarySections(content, func(_, _ int, raw jsontext.Value) {
-		var blocks []jsontext.Value
-		if json.Unmarshal(raw, &blocks) != nil {
-			return
-		}
-		for _, block := range blocks {
-			if _, ok := retainedImageBlock(block, n); !ok {
-				continue
-			}
-			if n == index {
-				found = block
-			}
-			n++
+	walkRetainedImages(content, func(block jsontext.Value, image RetainedImage) {
+		if image.Index == index {
+			found = block
 		}
 	})
 	if found == nil {
@@ -749,20 +754,12 @@ func ReadRetainedImage(content string, index int, assetsDir string, limit int64)
 			return nil, err
 		}
 	} else {
-		var block struct {
-			Type     string         `json:"type"`
-			ImageURL jsontext.Value `json:"image_url"`
-			URI      jsontext.Value `json:"uri"`
-		}
-		if err := json.Unmarshal(found, &block, json.MatchCaseInsensitiveNames(true)); err != nil {
-			return nil, err
-		}
-		uri := block.ImageURL
-		if block.Type == "file" {
-			uri = block.URI
+		uri, imageOnly, ok := retainedInlineURI(found)
+		if !ok {
+			return nil, errors.New("invalid inline image")
 		}
 		var buf bytes.Buffer
-		if _, _, _, ok := streamInlineDataLimit(uri, &buf, block.Type == "input_image", limit); !ok {
+		if _, _, _, ok := streamInlineDataLimit(uri, &buf, imageOnly, limit); !ok {
 			return nil, errors.New("invalid inline image")
 		}
 		body = buf.Bytes()

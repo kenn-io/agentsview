@@ -18,7 +18,6 @@ type ImageTextOccurrence struct {
 type PendingImageText struct {
 	Content string
 	Index   int
-	Hash    string
 }
 
 // ImageTextRow is one successful extraction at a portable source location.
@@ -62,7 +61,7 @@ func (db *DB) PendingImageText(ctx context.Context, processor string, now time.T
 
 // ImageTextSources pages retained copies so a widely shared image stays bounded.
 func (db *DB) ImageTextSources(ctx context.Context, hash string, offset, limit int) ([]PendingImageText, error) {
-	rows, err := db.getReader().QueryContext(ctx, `SELECT COALESCE(e.content,tc.result_content,''),o.image_index,o.image_hash
+	rows, err := db.getReader().QueryContext(ctx, `SELECT COALESCE(e.content,tc.result_content,''),o.image_index
  FROM image_text_occurrences o LEFT JOIN tool_calls tc ON tc.id=o.call_id LEFT JOIN tool_result_events e ON e.id=o.event_id
  WHERE o.image_hash=? ORDER BY o.session_id,o.call_id,o.event_id,o.image_index LIMIT ? OFFSET ?`, hash, limit, offset)
 	if err != nil {
@@ -72,7 +71,7 @@ func (db *DB) ImageTextSources(ctx context.Context, hash string, offset, limit i
 	var out []PendingImageText
 	for rows.Next() {
 		var p PendingImageText
-		if err := rows.Scan(&p.Content, &p.Index, &p.Hash); err != nil {
+		if err := rows.Scan(&p.Content, &p.Index); err != nil {
 			return nil, err
 		}
 		out = append(out, p)
