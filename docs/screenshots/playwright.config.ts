@@ -5,7 +5,6 @@ export default defineConfig({
   timeout: 60_000,
   retries: 0,
   workers: 1,
-  maxFailures: 1,
   outputDir: '/result/playwright-results',
   use: {
     baseURL: 'http://127.0.0.1:8090',

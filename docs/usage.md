@@ -36,10 +36,14 @@ last sync time, and the build version.
 
 On the normal local `agentsview serve` runtime, the session lists in the sidebar
 update automatically from a global SSE event stream (debounced during busy
-syncs). The dashboard, Usage page, and Activity page do not refetch their charts
+syncs). The dashboard and Activity page do not refetch their charts
 on every sync event — each pairs a manual refresh button with a relative
 "Updated…" timestamp, and the Analytics dashboard also refreshes periodically on
-its own. Click refresh, or change the date range, to pull the latest numbers.
+its own. Use refresh or change the date range for an immediate update.
+
+Usage refreshes after session data changes and on its five-minute timer,
+at most once a minute while visible.
+It pauses while hidden and catches up when you return.
 
 For range-based concurrency and agent-minutes reporting, use the top-level
 [Activity](/docs/activity/) page.
@@ -820,7 +824,7 @@ so matches can be highlighted.
 ### Block-Type Filtering
 
 Click the filter icon in the message viewer header to open a dropdown that
-toggles visibility of six content categories:
+toggles visibility of seven content categories:
 
 | Category  | What It Controls          |
 | --------- | ------------------------- |
@@ -830,6 +834,7 @@ toggles visibility of six content categories:
 | Tool      | Tool call blocks          |
 | Code      | Code blocks               |
 | System    | System boundary cards     |
+| Hooks     | Hook output cards         |
 
 Turning off **Code** collapses each fenced block into an inline placeholder
 showing its language and an **Expand** button. Expand or collapse individual
@@ -1177,7 +1182,7 @@ can copy the session directory and open it in detected editors or file browsers.
 Pi sessions use `pi --session` with the transcript path when available, or the
 native session ID. For Pi, **Copy command** includes the working directory so
 you can paste the complete command into a shell. Augure Code sessions use
-`augure resume`. Copying a session's directory path also works when that
+`augure resume`, and Open Interpreter sessions use `interpreter resume`. Copying a session's directory path also works when that
 directory has been deleted.
 
 Local Codex sessions add **Open in Codex Desktop**, which deep-links to the

@@ -57,9 +57,9 @@ func (s *Store) readActivitySourceProbe(ctx context.Context) (activity.SourcePro
 	err := s.queryRowContext(ctx, `SELECT
 		(SELECT toInt64(count()) FROM sessions),
 		ifNull(toString((SELECT max(local_modified_at) FROM sessions)), ''),
-		ifNull((SELECT max(data_version) FROM sessions), toInt64(0)),
-		ifNull((SELECT max(id) FROM messages), toInt64(0)),
-		ifNull((SELECT max(id) FROM usage_events), toInt64(0)),
+		ifNull((SELECT max(data_version) FROM sessions), 0),
+		ifNull((SELECT max(id) FROM messages), 0),
+		ifNull((SELECT max(id) FROM usage_events), 0),
 		greatest(
 			ifNull((SELECT max(updated_at) FROM model_pricing), ''),
 			ifNull((SELECT max(updated_at) FROM genai_pricing), '')
@@ -68,7 +68,7 @@ func (s *Store) readActivitySourceProbe(ctx context.Context) (activity.SourcePro
 			SELECT max(toInt64OrZero(value))
 			FROM sync_metadata
 			WHERE startsWith(key, ?)
-		), toInt64(0))`,
+		), 0)`,
 		identityRevisionKeyBase).Scan(
 		&probe.SessionCount, &probe.MaxSessionModified, &probe.MaxDataVersion,
 		&probe.MaxMessageID, &probe.MaxUsageID, &probe.MaxPricingUpdated,
@@ -147,7 +147,7 @@ func (s *Store) preparedUsageState(ctx context.Context) (preparedUsageState, err
 	var filled uint64
 	var comment string
 	err := s.queryRowContext(ctx, `SELECT
-		(SELECT ifNull(max(toUInt64OrZero(value)),0) FROM sync_metadata WHERE startsWith(key,?)),
+		(SELECT max(toUInt64OrZero(value)) FROM sync_metadata WHERE startsWith(key,?)),
 		ifNull((SELECT comment FROM system.tables WHERE database = currentDatabase() AND name = 'prepared_usage'), '')`,
 		usageSnapshotReadyKeyBase+":").Scan(&filled, &comment)
 	if err != nil {
@@ -323,15 +323,15 @@ func (s *Store) preparedCoveredSnapshots(ctx context.Context, stamp string) (map
 
 // compareUsageCoverage fills the number of sessions without a current
 // snapshot, the snapshots the prepared rows do not cover, and the covered
-// snapshots that no longer exist. A snapshot without usage facts or events
-// prepares no rows, so it is covered whether or not the refresh saw it; its
-// array sizes come from the size subcolumns, since under FINAL length()
-// reads the arrays.
+// snapshots that no longer exist. A snapshot from which the refresh keeps no
+// row, such as one of a trashed session or one whose messages report no
+// tokens, is covered whether or not the refresh saw it. The stored
+// chSnapshotPreparesUsage flag says which snapshots those are without reading
+// their usage arrays.
 func (s *Store) compareUsageCoverage(ctx context.Context, covered map[usageSnapshotKey]bool, live *usageCoverage) error {
 	rows, err := s.queryContext(ctx, `SELECT 0, id, push_version, machine, false FROM sessions
 		UNION ALL
-		SELECT 1, id, push_version, toString(revision),
-			usage_messages.size0 != 0 OR usage_events.size0 != 0 FROM usage_session_snapshots`)
+		SELECT 1, id, push_version, toString(revision), `+chSnapshotPreparesUsage+` FROM usage_session_snapshots`)
 	if err != nil {
 		return fmt.Errorf("reading usage coverage: %w", err)
 	}
@@ -345,8 +345,8 @@ func (s *Store) compareUsageCoverage(ctx context.Context, covered map[usageSnaps
 		var table uint8
 		var id, revision string
 		var version uint64
-		var hasUsage bool
-		if err := rows.Scan(&table, &id, &version, &revision, &hasUsage); err != nil {
+		var preparesUsage bool
+		if err := rows.Scan(&table, &id, &version, &revision, &preparesUsage); err != nil {
 			return fmt.Errorf("scanning usage coverage: %w", err)
 		}
 		if table == 0 {
@@ -360,7 +360,7 @@ func (s *Store) compareUsageCoverage(ctx context.Context, covered map[usageSnaps
 		live.revisions[id] = revision
 		key := usageSnapshotKey{id: id, revision: revision}
 		current[key] = true
-		if hasUsage && !covered[key] {
+		if preparesUsage && !covered[key] {
 			live.changed = append(live.changed, id)
 			live.changedKeys = append(live.changedKeys, key)
 		}

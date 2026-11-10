@@ -23,7 +23,25 @@ const terminalEventSnapshotSelect = `SELECT s.id AS session_id, s.push_version A
  ) tre ON tre.session_id = s.id AND tre.push_version = s.push_version
  GROUP BY s.id, s.push_version`
 
+var terminalEventSnapshotView = mirrorView{
+	name:    "terminal_event_snapshots_mv",
+	clauses: "TO terminal_event_snapshots",
+	query:   fmt.Sprintf(terminalEventSnapshotSelect, "toUInt128(s.push_version) * 2 + 1"),
+}
+
 func ensureTerminalEventSnapshots(ctx context.Context, conn *sql.DB) error {
+	if _, err := conn.ExecContext(ctx, `CREATE TABLE IF NOT EXISTS terminal_event_snapshots (
+   session_id String, push_version UInt64,
+   last_terminal_at Nullable(DateTime64(6, 'UTC')), revision UInt128)
+   ENGINE = ReplacingMergeTree(revision) ORDER BY session_id
+   SETTINGS index_granularity = 64`); err != nil {
+		return fmt.Errorf("creating terminal event snapshots: %w", err)
+	}
+	// Mirrors created before the view filtered tool_result_events to the
+	// inserted sessions scan that whole table on every session insert.
+	if err := ensureView(ctx, conn, terminalEventSnapshotView); err != nil {
+		return err
+	}
 	const marker = "terminal_event_snapshots_backfill"
 	metadata, err := readMetadata(ctx, conn, marker)
 	if err != nil {
@@ -31,20 +49,6 @@ func ensureTerminalEventSnapshots(ctx context.Context, conn *sql.DB) error {
 	}
 	if metadata[marker] == "1" {
 		return nil
-	}
-	queries := []string{
-		`CREATE TABLE IF NOT EXISTS terminal_event_snapshots (
-   session_id String, push_version UInt64,
-   last_terminal_at Nullable(DateTime64(6, 'UTC')), revision UInt128)
-   ENGINE = ReplacingMergeTree(revision) ORDER BY session_id
-   SETTINGS index_granularity = 64`,
-		"CREATE MATERIALIZED VIEW IF NOT EXISTS terminal_event_snapshots_mv TO terminal_event_snapshots AS " +
-			fmt.Sprintf(terminalEventSnapshotSelect, "toUInt128(s.push_version) * 2 + 1"),
-	}
-	for _, query := range queries {
-		if _, err := conn.ExecContext(ctx, query); err != nil {
-			return fmt.Errorf("creating terminal event snapshots: %w", err)
-		}
 	}
 	// Live inserts win over an older backfill of the same published version.
 	log.Print("ClickHouse: filling terminal event snapshots before serving; source events remain unchanged")

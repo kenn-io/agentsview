@@ -30,6 +30,7 @@ const (
 type ContentSearchFilter struct {
 	Pattern       string
 	Mode          string   // "substring" (default) | "regex" | "fts" | "terms" | "semantic" | "hybrid"
+	KeywordOnly   bool     // internal hybrid keyword leg; skips the semantic index
 	Sources       []string // subset of {"messages","thinking","tool_input","tool_result"}
 	ExcludeSystem bool
 
@@ -389,7 +390,7 @@ func (db *DB) substringSearchPage(
 	if hasSource(f, "messages") {
 		branches = append(branches, fmt.Sprintf(`
 			SELECT m.session_id, s.project, s.agent,
-				COALESCE(s.transcript_revision,'') AS transcript_revision,
+				s.transcript_revision AS transcript_revision,
 				'message' AS location,
 				m.role AS role, '' AS tool_name, m.ordinal,
 				COALESCE(m.timestamp,'') AS ts, %s AS snippet,
@@ -407,7 +408,7 @@ func (db *DB) substringSearchPage(
 	if hasSource(f, "thinking") {
 		branches = append(branches, fmt.Sprintf(`
 			SELECT m.session_id, s.project, s.agent,
-				COALESCE(s.transcript_revision,'') AS transcript_revision,
+				s.transcript_revision AS transcript_revision,
 				'thinking' AS location,
 				m.role AS role, '' AS tool_name, m.ordinal,
 				COALESCE(m.timestamp,'') AS ts, %s AS snippet,
@@ -423,7 +424,7 @@ func (db *DB) substringSearchPage(
 	if hasSource(f, "tool_input") {
 		branches = append(branches, fmt.Sprintf(`
 			SELECT tc.session_id, s.project, s.agent,
-				COALESCE(s.transcript_revision,'') AS transcript_revision,
+				s.transcript_revision AS transcript_revision,
 				'tool_input' AS location,
 				'assistant' AS role, tc.tool_name, mm.ordinal,
 				COALESCE(mm.timestamp,'') AS ts, %s AS snippet,
@@ -449,7 +450,7 @@ func (db *DB) substringSearchPage(
 		// tool_calls, which SQLite does not store.
 		branches = append(branches, fmt.Sprintf(`
 			SELECT tc.session_id, s.project, s.agent,
-				COALESCE(s.transcript_revision,'') AS transcript_revision,
+				s.transcript_revision AS transcript_revision,
 				'tool_result' AS location,
 				'assistant' AS role, tc.tool_name, mm.ordinal,
 				COALESCE(mm.timestamp,'') AS ts, %s AS snippet,
@@ -469,7 +470,7 @@ func (db *DB) substringSearchPage(
 		args = append(args, scopeArgs...)
 		branches = append(branches, fmt.Sprintf(`
 			SELECT tre.session_id, s.project, s.agent,
-				COALESCE(s.transcript_revision,'') AS transcript_revision,
+				s.transcript_revision AS transcript_revision,
 				'tool_result' AS location,
 				'assistant' AS role, '' AS tool_name,
 				tre.tool_call_message_ordinal AS ordinal,
@@ -766,7 +767,7 @@ func (db *DB) regexCandidateRows(
 		branches = append(branches, fmt.Sprintf(`
 			SELECT m.session_id AS session_id, s.project AS project,
 				s.agent AS agent,
-				COALESCE(s.transcript_revision,'') AS transcript_revision,
+				s.transcript_revision AS transcript_revision,
 				'message' AS location,
 				m.role AS role, '' AS tool_name,
 				m.ordinal AS ordinal, COALESCE(m.timestamp,'') AS ts,
@@ -785,7 +786,7 @@ func (db *DB) regexCandidateRows(
 		branches = append(branches, fmt.Sprintf(`
 			SELECT m.session_id AS session_id, s.project AS project,
 				s.agent AS agent,
-				COALESCE(s.transcript_revision,'') AS transcript_revision,
+				s.transcript_revision AS transcript_revision,
 				'thinking' AS location,
 				m.role AS role, '' AS tool_name,
 				m.ordinal AS ordinal, COALESCE(m.timestamp,'') AS ts,
@@ -801,7 +802,7 @@ func (db *DB) regexCandidateRows(
 		branches = append(branches, fmt.Sprintf(`
 			SELECT tc.session_id AS session_id, s.project AS project,
 				s.agent AS agent,
-				COALESCE(s.transcript_revision,'') AS transcript_revision,
+				s.transcript_revision AS transcript_revision,
 				'tool_input' AS location,
 				'assistant' AS role, tc.tool_name AS tool_name,
 				mm.ordinal AS ordinal, COALESCE(mm.timestamp,'') AS ts,
@@ -818,7 +819,7 @@ func (db *DB) regexCandidateRows(
 		branches = append(branches, fmt.Sprintf(`
 			SELECT tc.session_id AS session_id, s.project AS project,
 				s.agent AS agent,
-				COALESCE(s.transcript_revision,'') AS transcript_revision,
+				s.transcript_revision AS transcript_revision,
 				'tool_result' AS location,
 				'assistant' AS role, tc.tool_name AS tool_name,
 				mm.ordinal AS ordinal, COALESCE(mm.timestamp,'') AS ts,
@@ -836,7 +837,7 @@ func (db *DB) regexCandidateRows(
 		branches = append(branches, fmt.Sprintf(`
 			SELECT tre.session_id AS session_id, s.project AS project,
 				s.agent AS agent,
-				COALESCE(s.transcript_revision,'') AS transcript_revision,
+				s.transcript_revision AS transcript_revision,
 				'tool_result' AS location,
 				'assistant' AS role, '' AS tool_name,
 				tre.tool_call_message_ordinal AS ordinal,
@@ -1032,7 +1033,7 @@ func (db *DB) searchContentFTS(
 	// and secret redaction sees whole secrets rather than a pre-truncated window.
 	query := fmt.Sprintf(`
 		SELECT m.session_id, s.project, s.agent,
-			COALESCE(s.transcript_revision,''), 'message', m.role, '',
+			s.transcript_revision, 'message', m.role, '',
 			m.ordinal, COALESCE(m.timestamp,'') AS ts, COALESCE(m.dialogue_text, m.content) AS snippet,
 			%s AS term_hits
 		FROM messages_fts
@@ -1614,18 +1615,24 @@ func (db *DB) searchContentHybrid(
 	if err := ValidateSemanticFilter(f); err != nil {
 		return ContentSearchPage{}, err
 	}
-	searcher := db.getVectorSearcher()
-	if searcher == nil {
-		return ContentSearchPage{}, ErrSemanticUnavailable
+	var searcher VectorSearcher
+	if !f.KeywordOnly {
+		if searcher = db.getVectorSearcher(); searcher == nil {
+			return ContentSearchPage{}, ErrSemanticUnavailable
+		}
 	}
 	if !db.HasFTS(ctx) {
 		return ContentSearchPage{}, errFTSUnavailable
 	}
 
 	k := max(f.Limit*4, SemanticOverfetchMin)
-	vecLeg, err := db.hybridVectorLeg(ctx, f, searcher, k)
-	if err != nil {
-		return ContentSearchPage{}, err
+	var vecLeg hybridLeg
+	var err error
+	if searcher != nil {
+		vecLeg, err = db.hybridVectorLeg(ctx, f, searcher, k)
+		if err != nil {
+			return ContentSearchPage{}, err
+		}
 	}
 	ftsLeg, err := db.hybridFTSLeg(ctx, f, searcher, k)
 	if err != nil {
@@ -1762,6 +1769,15 @@ func (db *DB) fetchHybridFTSBatch(
 	return hits, nil
 }
 
+// ResolveHybridMessageUnits returns empty unit refs without a searcher so
+// keyword-only callers derive ranges from the archive.
+func ResolveHybridMessageUnits(ctx context.Context, searcher VectorSearcher, refs []MessageRef) ([]UnitRef, error) {
+	if searcher == nil {
+		return make([]UnitRef, len(refs)), nil
+	}
+	return searcher.ResolveMessageUnits(ctx, refs)
+}
+
 // appendHybridFTSHits resolves one batch of FTS message hits to their
 // containing units, classifies unit-less hits structurally (range and
 // subordinate flag, so the scope filter and the fusion penalty treat them
@@ -1779,7 +1795,7 @@ func (db *DB) appendHybridFTSHits(
 	for i, hit := range hits {
 		refs[i] = MessageRef{SessionID: hit.sessionID, Ordinal: hit.ordinal}
 	}
-	units, err := searcher.ResolveMessageUnits(ctx, refs)
+	units, err := ResolveHybridMessageUnits(ctx, searcher, refs)
 	if err != nil {
 		return fmt.Errorf("resolving fts hits to units: %w", err)
 	}
@@ -2015,8 +2031,8 @@ func (db *DB) enrichSemanticHits(
 				strings.Join(values, ", ") + ") " +
 				"SELECT m.session_id, s.project, s.agent, s.machine, COALESCE(s.display_name, s.session_name), m.role, m.ordinal, " +
 				"COALESCE(m.timestamp, ''), m.content, COALESCE(m.dialogue_text, m.content), " +
-				"COALESCE(s.transcript_revision, ''), " +
-				"COALESCE(s.relationship_type, ''), " +
+				"s.transcript_revision, " +
+				"s.relationship_type, " +
 				"COALESCE(s.parent_session_id, ''), m.is_sidechain " +
 				"FROM hits h " +
 				"JOIN messages m ON m.session_id = h.session_id AND m.ordinal = h.ordinal " +

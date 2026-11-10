@@ -2932,6 +2932,26 @@ components:
       required:
         - commits
       type: object
+    DbSessionExclusionCounts:
+      additionalProperties: false
+      properties:
+        automated:
+          format: int64
+          type: integer
+        children:
+          format: int64
+          type: integer
+        children_lower_bound:
+          type: boolean
+        one_shot:
+          format: int64
+          type: integer
+      required:
+        - one_shot
+        - automated
+        - children
+        - children_lower_bound
+      type: object
     DbSessionExternalParent:
       additionalProperties: false
       properties:
@@ -2977,6 +2997,8 @@ components:
     DbSessionPage:
       additionalProperties: false
       properties:
+        exclusion_counts:
+          $ref: "#/components/schemas/DbSessionExclusionCounts"
         next_cursor:
           type: string
         sessions:
@@ -4914,6 +4936,15 @@ components:
       required:
         - generations
       type: object
+    EmbeddingsSetupInputBody:
+      additionalProperties: false
+      properties:
+        approved_bytes:
+          description: Download size the user saw; a larger download is declined
+          format: int64
+          minimum: 0
+          type: integer
+      type: object
     EmptyTrashResponse:
       additionalProperties: false
       properties:
@@ -5244,6 +5275,28 @@ components:
       required:
         - created
       type: object
+    FrictionFilingItem:
+      additionalProperties: false
+      properties:
+        attempts:
+          format: int64
+          type: integer
+        last_error:
+          type: string
+        next_attempt_at:
+          format: date-time
+          type: string
+        state:
+          description: "retry: waiting for the next attempt; needs_person: file or link it by hand; paused: a person removed its link"
+          enum:
+            - retry
+            - needs_person
+            - paused
+          type: string
+      required:
+        - state
+        - attempts
+      type: object
     FrictionFindingItem:
       additionalProperties: false
       properties:
@@ -5395,6 +5448,8 @@ components:
     FrictionPatternItem:
       additionalProperties: false
       properties:
+        filing:
+          $ref: "#/components/schemas/FrictionFilingItem"
         fingerprint:
           type: string
         first_seen_date:
@@ -6949,6 +7004,8 @@ components:
           type: boolean
         coverage:
           $ref: "#/components/schemas/ServiceMemoryCoverage"
+        effective_mode:
+          type: string
         matches:
           items:
             $ref: "#/components/schemas/DbContentMatch"
@@ -6956,6 +7013,8 @@ components:
         next_cursor:
           format: int64
           type: integer
+        note:
+          type: string
         revision_bound:
           type: boolean
       required:
@@ -7664,6 +7723,8 @@ components:
     ServiceSessionList:
       additionalProperties: false
       properties:
+        exclusion_counts:
+          $ref: "#/components/schemas/DbSessionExclusionCounts"
         next_cursor:
           type: string
         sessions:
@@ -8839,6 +8900,8 @@ components:
           type: number
         running:
           type: boolean
+        setup:
+          $ref: "#/components/schemas/VectorSetupStatus"
         started_at:
           type: string
         total:
@@ -8929,6 +8992,40 @@ components:
         - remaining
         - remaining_known
       type: object
+    VectorSetupStatus:
+      additionalProperties: false
+      properties:
+        action:
+          type: string
+        busy:
+          type: boolean
+        downloaded_bytes:
+          format: int64
+          type: integer
+        enabled:
+          type: boolean
+        error:
+          type: string
+        installing:
+          type: boolean
+        missing_bytes:
+          format: int64
+          type: integer
+        provider:
+          type: string
+        total_bytes:
+          format: int64
+          type: integer
+      required:
+        - enabled
+        - provider
+        - action
+        - missing_bytes
+        - installing
+        - busy
+        - downloaded_bytes
+        - total_bytes
+      type: object
     VersionInfo:
       additionalProperties: false
       properties:
@@ -8945,6 +9042,8 @@ components:
           format: int64
           type: integer
         docbank_enabled:
+          type: boolean
+        friction_auto_file:
           type: boolean
         friction_available:
           type: boolean
@@ -12923,6 +13022,81 @@ paths:
       summary: Set terminal config
       tags:
         - Config
+  /api/v1/daemon/persist:
+    post:
+      operationId: post-api-v1-daemon-persist
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                additionalProperties:
+                  type: boolean
+                type: object
+          description: OK
+        "400":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+          description: Bad Request
+        "401":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+          description: Unauthorized
+        "403":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+          description: Forbidden
+        "404":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+          description: Not Found
+        "409":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+          description: Conflict
+        "500":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+          description: Internal Server Error
+        "501":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+          description: Not Implemented
+        "502":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+          description: Bad Gateway
+        "503":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+          description: Service Unavailable
+        "504":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+          description: Gateway Timeout
+      summary: Keep the daemon running until stopped
+      tags:
+        - Daemon
   /api/v1/data/compact:
     post:
       operationId: post-api-v1-data-compact
@@ -13977,6 +14151,91 @@ paths:
                 $ref: "#/components/schemas/ApiErrorResponse"
           description: Gateway Timeout
       summary: Retire an embedding generation
+      tags:
+        - Embeddings
+  /api/v1/embeddings/setup:
+    post:
+      operationId: post-api-v1-embeddings-setup
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/EmbeddingsSetupInputBody"
+        required: true
+      responses:
+        "202":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/EmbeddingsBuildResponse"
+          description: Accepted
+        "400":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+          description: Bad Request
+        "401":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+          description: Unauthorized
+        "403":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+          description: Forbidden
+        "404":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+          description: Not Found
+        "409":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+          description: Conflict
+        "422":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+          description: Unprocessable Entity
+        "500":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+          description: Internal Server Error
+        "501":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+          description: Not Implemented
+        "502":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+          description: Bad Gateway
+        "503":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+          description: Service Unavailable
+        "504":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+          description: Gateway Timeout
+      summary: Set up search by meaning
       tags:
         - Embeddings
   /api/v1/embeddings/status:
@@ -19213,6 +19472,13 @@ paths:
               - semantic
               - hybrid
             type: string
+        - description: Return hybrid keyword matches when semantic search is unavailable
+          explode: false
+          in: query
+          name: allow_keyword_fallback
+          schema:
+            description: Return hybrid keyword matches when semantic search is unavailable
+            type: boolean
         - description: "Result scope: top, all, or subordinate (blank lexical scope keeps sidebar child filtering)"
           explode: false
           in: query
@@ -19914,6 +20180,13 @@ paths:
           schema:
             description: IANA timezone name
             type: string
+        - description: Compute only outcome_stats; other sections are zero-valued
+          explode: false
+          in: query
+          name: outcomes_only
+          schema:
+            description: Compute only outcome_stats; other sections are zero-valued
+            type: boolean
         - description: Include git-derived outcome stats
           explode: false
           in: query
@@ -20008,6 +20281,13 @@ paths:
     get:
       operationId: get-api-v1-sessions
       parameters:
+        - description: Include default-exclusion counts; true also samples hidden children, false counts only one-shot and automated sessions. First page only.
+          explode: false
+          in: query
+          name: exclusion_counts
+          schema:
+            description: Include default-exclusion counts; true also samples hidden children, false counts only one-shot and automated sessions. First page only.
+            type: boolean
         - description: Filter by project
           explode: false
           in: query

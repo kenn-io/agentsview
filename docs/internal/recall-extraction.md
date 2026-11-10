@@ -341,8 +341,8 @@ The daemon scheduler mirrors the embedding scheduler's shape:
   become eligible only after the quiet period, long after the last sync-driven
   debounce fired, so sync signals alone cannot guarantee eventual extraction;
 - every daemon lifetime begins with one *full* pass (the debounce timer starts
-  armed and the full carry starts set): a detached daemon self-reaps after its
-  idle timeout (20 m default), which is shorter than the backstop interval, so
+  armed and the full carry starts set): an auto-started daemon self-reaps after
+  its idle timeout (20 m default), shorter than the backstop interval, so
   work deferred past a daemon's exit — a session whose quiet period elapsed
   with no daemon running, retraction for a session trashed in between, a
   completed session whose transcript grew — must not depend on sync activity

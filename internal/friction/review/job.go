@@ -2,6 +2,7 @@ package review
 
 import (
 	"context"
+	"errors"
 	"time"
 
 	"go.kenn.io/agentsview/internal/poller"
@@ -10,9 +11,10 @@ import (
 // JobName is the poller job that keeps digests caught up (spec §8.1).
 const JobName = "friction-review"
 
-// Job runs CatchUp hourly. exclusive serializes each day with sync and resync on
-// SQLite (engine.RunExclusive) or with manual runs on pg serve; nil runs
-// the work directly.
+// Job runs CatchUp hourly, then any work installed with SetAfterCatchUp.
+// exclusive serializes each day with sync and resync on SQLite
+// (engine.RunExclusive) or with manual runs on pg serve; nil runs the work
+// directly. The after-catch-up work runs outside exclusive.
 func Job(r *Runner, exclusive func(func() error) error) poller.Job {
 	return poller.Job{
 		Name:       JobName,
@@ -21,7 +23,7 @@ func Job(r *Runner, exclusive func(func() error) error) poller.Job {
 		Cooldown:   10 * time.Minute,
 		RunAtStart: true,
 		Run: func(ctx context.Context) error {
-			return r.catchUp(ctx, exclusive, nil)
+			return errors.Join(r.catchUp(ctx, exclusive, nil), r.runAfterCatchUp(ctx))
 		},
 	}
 }

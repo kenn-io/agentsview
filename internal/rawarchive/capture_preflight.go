@@ -14,7 +14,7 @@ import (
 var captureCountQueries = map[string]string{
 	"stars":            "SELECT count(*) FROM starred_sessions",
 	"pins":             "SELECT count(*) FROM pinned_messages",
-	"renamed":          "SELECT count(*) FROM sessions WHERE coalesce(display_name,'')<>''",
+	"renamed":          "SELECT count(*) FROM sessions WHERE display_name<>''",
 	"trashed":          "SELECT count(*) FROM sessions WHERE deleted_at IS NOT NULL",
 	"deleted":          "SELECT count(*) FROM excluded_sessions",
 	"has_origin":       "SELECT count(*) FROM pg_sync_state WHERE key='artifact_origin_id'",

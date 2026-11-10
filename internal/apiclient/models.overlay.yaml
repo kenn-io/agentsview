@@ -57,6 +57,12 @@ actions:
       x-go-type-import:
         path: go.kenn.io/agentsview/internal/db
         name: db
+  - target: $.components.schemas.DbSessionExclusionCounts
+    update:
+      x-go-type: db.SessionExclusionCounts
+      x-go-type-import:
+        path: go.kenn.io/agentsview/internal/db
+        name: db
   - target: $.components.schemas.DbSignalSessionsResponse
     update:
       x-go-type: db.SignalSessionsResponse

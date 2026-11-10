@@ -91,7 +91,7 @@ func ToolCallResultContentSQL(callAlias, ordinalExpr string) string {
 				WHERE tre_rc.session_id = %[1]s.session_id
 				  AND tre_rc.tool_call_message_ordinal = %[2]s
 				  AND tre_rc.call_index = COALESCE(%[1]s.call_index, 0)
-				  AND COALESCE(tre_rc.content, '') <> ''
+				  AND tre_rc.content <> ''
 				LIMIT 2
 			) sole_rc
 		), '')

@@ -72,6 +72,18 @@ func duckValueLiteral(v any) (string, error) {
 			return "TRUE", nil
 		}
 		return "FALSE", nil
+	case []string:
+		// A list parameter, such as the session IDs an IN (SELECT unnest(?))
+		// filter reads, binds as a DuckDB list on the local path.
+		items := make([]string, len(value))
+		for i, item := range value {
+			lit, err := duckRemoteStringLiteral(item)
+			if err != nil {
+				return "", err
+			}
+			items[i] = lit
+		}
+		return "[" + strings.Join(items, ", ") + "]::VARCHAR[]", nil
 	case time.Time:
 		return "TIMESTAMP " + duckLiteral(
 			value.UTC().Format("2006-01-02 15:04:05.999999"),

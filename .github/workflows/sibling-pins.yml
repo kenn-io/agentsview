@@ -31,7 +31,7 @@ permissions:
 jobs:
   sibling-pins:
     name: Sibling pins on main
-    runs-on: ubuntu-latest
+    runs-on: namespace-profile-linux-1cpu
     timeout-minutes: 10
     steps:
       - name: Check sibling pins

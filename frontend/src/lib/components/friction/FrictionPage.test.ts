@@ -424,6 +424,30 @@ describe("FrictionPage", () => {
       expect(file).toHaveBeenCalledWith(toolError.fingerprint);
     });
 
+    it("links any pattern but files only kinds whose text may leave the machine", async () => {
+      vi.spyOn(friction, "checkKata").mockImplementation(async () => {
+        friction.kataReady = true;
+      });
+      friction.digest!.patterns = [
+        ...friction.digest!.patterns!,
+        {
+          fingerprint: frustrationSignal.fingerprint,
+          kind: "frustration",
+          title: "[friction/frustration] test-session-medium-8: frustrated",
+          first_seen_date: DATE,
+          last_seen_date: DATE,
+          occurrence_count: 1,
+          session_count: 1,
+          last_subject_id: "test-session-medium-8",
+          last_ordinal: 9,
+        },
+      ];
+      await render();
+      await tick();
+      expect(buttons(headlineRow("this is still broken"))).toEqual(["Link issue"]);
+      expect(buttons(headlineRow("command not found"))).toEqual(["File to Kata", "Link issue"]);
+    });
+
     it("offers no actions when Kata is not ready", async () => {
       vi.spyOn(friction, "checkKata").mockImplementation(async () => {
         friction.kataReady = false;
@@ -450,6 +474,34 @@ describe("FrictionPage", () => {
         li.textContent?.includes("command not found"),
       )!;
       expect(finding.querySelector(".row-issue")?.textContent?.trim()).toBe("agentsview#f001");
+    });
+
+    it.each([
+      ["automatic filing on", true, "Auto-filing paused"],
+      ["automatic filing off", false, undefined],
+    ])("shows a pause only where it matters: %s", async (_name, autoFile, want) => {
+      sync.serverVersion = version({ friction_build_allowed: false, friction_auto_file: autoFile });
+      friction.digest!.patterns = friction.digest!.patterns!.map((p) =>
+        p.fingerprint === toolError.fingerprint
+          ? { ...p, filing: { state: "paused", attempts: 0 } }
+          : p,
+      );
+      await render();
+      const note = headlineRow("command not found").querySelector<HTMLElement>(".filing-note");
+      expect(note?.textContent?.trim()).toBe(want);
+    });
+
+    it("says why automatic filing has not linked a pattern", async () => {
+      sync.serverVersion = version({ friction_build_allowed: false });
+      friction.digest!.patterns = friction.digest!.patterns!.map((p) =>
+        p.fingerprint === toolError.fingerprint
+          ? { ...p, filing: { state: "needs_person", attempts: 1, last_error: "kata: HTTP 422" } }
+          : p,
+      );
+      await render();
+      const note = headlineRow("command not found").querySelector<HTMLElement>(".filing-note");
+      expect(note?.textContent?.trim()).toBe("Filing stopped");
+      expect(note?.title).toBe("kata: HTTP 422");
     });
   });
 

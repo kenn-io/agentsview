@@ -734,7 +734,7 @@ func (t *toolset) getMessageBodyContinuation(
 type searchContentIn struct {
 	Pattern          string   `json:"pattern,omitempty" jsonschema:"Natural-language query for semantic/hybrid, whitespace-separated literals for terms, or exact substring/regex for lexical search across message text, thinking, and tool inputs/results. Mutually exclusive with concepts."`
 	Concepts         []string `json:"concepts,omitempty" jsonschema:"Two to five semantic concepts that must all have evidence in the same session, even in different messages. Implies mode semantic, does not page, and is mutually exclusive with pattern."`
-	Mode             string   `json:"mode,omitempty" jsonschema:"substring (default), regex, terms, semantic, or hybrid. Prefer hybrid or semantic for contextual questions when a vector search index is configured."`
+	Mode             string   `json:"mode,omitempty" jsonschema:"substring (default), regex, terms, semantic, or hybrid. Prefer hybrid for contextual questions. Hybrid returns keyword matches with a note when search by meaning is unavailable; semantic requires a ready index."`
 	Scope            string   `json:"scope,omitempty" jsonschema:"Substring/regex/terms/semantic/hybrid result scope: top, all (default), or subordinate."`
 	Project          string   `json:"project,omitempty" jsonschema:"Restrict to one project."`
 	Agent            string   `json:"agent,omitempty" jsonschema:"Restrict to one agent."`
@@ -800,6 +800,7 @@ type contentMatch struct {
 }
 
 type searchContentOut struct {
+	Note           string                      `json:"note,omitempty"`
 	Hints          []service.ContentSearchHint `json:"hints,omitempty"`
 	Matches        []contentMatch              `json:"matches"`
 	NextCursor     *int                        `json:"next_cursor,omitempty"`
@@ -906,6 +907,7 @@ func (t *toolset) searchContent(
 		Pattern:            in.Pattern,
 		Concepts:           in.Concepts,
 		Mode:               in.Mode,
+		KeywordFallback:    mode == "hybrid",
 		Scope:              scope,
 		Project:            in.Project,
 		Agent:              in.Agent,
@@ -929,7 +931,8 @@ func (t *toolset) searchContent(
 	out := searchContentOut{
 		Matches:        make([]contentMatch, 0, len(res.Matches)),
 		ActivityCutoff: cutoff,
-		EffectiveMode:  cmp.Or(mode, "substring"),
+		EffectiveMode:  cmp.Or(res.EffectiveMode, mode, "substring"),
+		Note:           res.Note,
 		Exclusions: searchContentExclusions{
 			CurrentSessionID: currentSession,
 			RecentActive:     currentSession == "" && !in.IncludeActive,

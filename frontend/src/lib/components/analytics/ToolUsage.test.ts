@@ -104,9 +104,8 @@ describe("ToolUsage", () => {
     await unmount(component);
   });
 
-  it("renders loading state while the first fetch is in flight", async () => {
+  it("renders loading state until the first response arrives", async () => {
     analytics.tools = null;
-    analytics.loading = { ...analytics.loading, tools: true };
 
     const component = mount(ToolUsage, { target: document.body });
     await tick();
@@ -114,11 +113,10 @@ describe("ToolUsage", () => {
     expect(document.body.textContent).toContain("Loading tool usage...");
     expect(document.body.textContent).not.toContain("No tool usage data");
 
-    analytics.loading = { ...analytics.loading, tools: false };
     await unmount(component);
   });
 
-  it("renders empty state without tool rows", async () => {
+  it("shows an empty message only after receiving empty results", async () => {
     analytics.tools = {
       total_calls: 0,
       by_category: [],
@@ -131,11 +129,19 @@ describe("ToolUsage", () => {
     await tick();
 
     expect(document.body.textContent).toContain("No tool usage data");
+    expect(document.querySelector(".loading")).toBeNull();
+
+    analytics.errors.tools = "request failed";
+    await tick();
+    expect(document.querySelector(".error")).not.toBeNull();
+    expect(document.body.textContent).toContain("No tool usage data");
+    analytics.tools = null;
+    await tick();
+    expect(document.body.textContent).not.toContain("No tool usage data");
 
     await unmount(component);
   });
   function seedRates() {
-    analytics.loading = { ...analytics.loading, tools: false };
     analytics.tools = {
       total_calls: 7,
       by_category: [{ category: "Grep", count: 7, pct: 100 }],

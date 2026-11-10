@@ -33,7 +33,7 @@ func (s *Store) loadAnalyticsSessions(
 		args = append(args, extraArgs...)
 	}
 	rows, err := s.queryContext(ctx, `
-		SELECT `+readbase.AnalyticsSessionColumns+`
+		SELECT `+readbase.AnalyticsSessionColumns+`, COALESCE(s.agentsview_push_fingerprint, '')
 		FROM sessions s
 		WHERE `+where, args...)
 	if err != nil {
@@ -41,7 +41,7 @@ func (s *Store) loadAnalyticsSessions(
 	}
 	defer rows.Close()
 
-	return readbase.ScanAnalyticsSessions(rows, "duckdb", formatDBTime, false)
+	return readbase.ScanAnalyticsSessions(rows, "duckdb", formatDBTime, readbase.AnalyticsSessionExtras{PushFingerprint: true})
 }
 
 func duckBuildAnalyticsWhere(f db.AnalyticsFilter, dateCol, tablePrefix string, includeDate, includeTime bool) (string, []any) {
@@ -106,15 +106,18 @@ func duckAnalyticsMessageTimeExists(
 		strings.Join(preds, " AND ") + ")", args
 }
 
-func (s analyticsSQL) ToolCountsSQL(ids []string) (string, []any) {
-	ph, args := db.InPlaceholders(ids)
+func (s analyticsSQL) VisitSessionIDSets(ctx context.Context, ids []string, visit func(ctx context.Context, idSet string, args []any) error) error {
+	return readbase.VisitChunkedSessionIDs(ctx, ids, visit)
+}
+
+func (s analyticsSQL) ToolCountsSQL(idSet string, args []any) (string, []any) {
 	return `
 			SELECT tc.session_id, m.model, m.timestamp, COUNT(*)
 			FROM tool_calls tc
 			JOIN messages m
 				ON m.session_id = tc.session_id
 				AND m.id = tc.message_id
-			WHERE tc.session_id IN ` + ph + `
+			WHERE tc.session_id IN ` + idSet + `
 			GROUP BY tc.session_id, m.model, m.timestamp`, args
 }
 
@@ -149,7 +152,7 @@ func (s analyticsSQL) Autonomy(ctx context.Context, ids []string, _ db.Analytics
 	rows, err := s.QueryContext(ctx, `
 		SELECT session_id,
 			SUM(CASE WHEN role = 'user' AND is_system = FALSE
-				AND COALESCE(source_subtype, '') != 'tool_result' THEN 1 ELSE 0 END) AS user_count,
+				AND source_subtype != 'tool_result' THEN 1 ELSE 0 END) AS user_count,
 			SUM(CASE WHEN role = 'assistant' AND has_tool_use = TRUE THEN 1 ELSE 0 END) AS tool_count
 		FROM messages
 		WHERE session_id IN `+ph+`
@@ -163,16 +166,16 @@ func (s analyticsSQL) Autonomy(ctx context.Context, ids []string, _ db.Analytics
 	return readbase.ScanAnalyticsAutonomy(rows, "duckdb")
 }
 
-func (s analyticsSQL) VelocityMessages(ctx context.Context, ids []string, _ db.AnalyticsFilter, loc *time.Location) (map[string][]db.TimingMessage, error) {
+func (s analyticsSQL) VelocitySessions(ctx context.Context, ids []string, _ db.AnalyticsFilter, loc *time.Location) (map[string]db.SessionVelocity, error) {
 	out := make(map[string][]db.TimingMessage)
 	if len(ids) == 0 {
-		return out, nil
+		return nil, nil
 	}
 	ph, args := db.InPlaceholders(ids)
 	rows, err := s.QueryContext(ctx, `
 		SELECT session_id, ordinal, role, timestamp, content_length
 		FROM messages
-		WHERE session_id IN `+ph+`
+		WHERE `+db.ExcludeClaudeHooksSQL("source_subtype")+` AND session_id IN `+ph+`
 		ORDER BY session_id, ordinal`,
 		args...,
 	)
@@ -180,7 +183,11 @@ func (s analyticsSQL) VelocityMessages(ctx context.Context, ids []string, _ db.A
 		return nil, fmt.Errorf("querying duckdb velocity messages: %w", err)
 	}
 	defer rows.Close()
-	return readbase.ScanAnalyticsVelocityMessages(rows, "duckdb", formatDBTime, loc, out)
+	msgs, err := readbase.ScanAnalyticsVelocityMessages(rows, "duckdb", formatDBTime, loc, out)
+	if err != nil {
+		return nil, err
+	}
+	return db.SessionVelocities(msgs), nil
 }
 
 func (s analyticsSQL) VelocityToolCounts(ctx context.Context, ids []string, _ db.AnalyticsFilter) (map[string]int, error) {
@@ -203,58 +210,49 @@ func (s analyticsSQL) VelocityToolCounts(ctx context.Context, ids []string, _ db
 	return readbase.ScanAnalyticsVelocityToolCounts(rows, "duckdb", out)
 }
 
+// Mirror replacements preserve the memo generation; fingerprints version entries.
+const frustrationMemoGeneration uint64 = 0
+
 func (s *Store) duckPopulateFrustrationMarkers(
 	ctx context.Context,
 	rows []db.SignalRow,
+	versions map[string]string,
 ) error {
 	if len(rows) == 0 {
 		return nil
 	}
 	cache := s.path != ""
-	// Pin cached counts and the query start to the same mirror generation.
-	s.handleMu.RLock()
-	generation := s.frustrationMemo.Generation()
 	idx := make(map[string]int, len(rows))
-	placeholders := make([]string, 0, len(rows))
-	args := make([]any, 0, len(rows))
+	ids := make([]string, 0, len(rows))
 	for i := range rows {
-		if cache {
-			if count, ok := s.frustrationMemo.Lookup(generation, rows[i].ID, ""); ok {
+		if version := versions[rows[i].ID]; cache && version != "" {
+			if count, ok := s.frustrationMemo.Lookup(frustrationMemoGeneration, rows[i].ID, version); ok {
 				rows[i].FrustrationMarkerCount = count
 				continue
 			}
 		}
 		idx[rows[i].ID] = i
-		placeholders = append(placeholders, "?")
-		args = append(args, rows[i].ID)
+		ids = append(ids, rows[i].ID)
 	}
-	if len(args) == 0 {
-		s.handleMu.RUnlock()
+	if len(ids) == 0 {
 		return nil
 	}
-	q := `SELECT session_id, content, is_system
-		FROM messages
-		WHERE role = 'user' AND COALESCE(source_subtype, '') <> 'tool_result' AND session_id IN (` +
-		strings.Join(placeholders, ",") + `)`
-	msgRows, err := queryDuckDBContext(ctx, s.duck, s.connectionKind, s.quack, q, args...)
-	s.handleMu.RUnlock()
+	msgRows, err := s.queryContext(ctx, duckFrustrationPromptsSQL, duckFrustrationPromptsArgs(ids)...)
 	if err != nil {
 		return fmt.Errorf("querying duckdb frustration markers: %w", err)
 	}
 	defer msgRows.Close()
 	for msgRows.Next() {
 		var sessionID, content string
-		var isSystem bool
-		if err := msgRows.Scan(
-			&sessionID, &content, &isSystem,
-		); err != nil {
+		var decided bool
+		if err := msgRows.Scan(&sessionID, &decided, &content); err != nil {
 			return fmt.Errorf("scanning duckdb frustration marker: %w", err)
 		}
 		i, ok := idx[sessionID]
-		if !ok || isSystem {
+		if !ok {
 			continue
 		}
-		if signals.IsFrustrationMarker(content) {
+		if decided || signals.IsFrustrationMarker(content) {
 			rows[i].FrustrationMarkerCount++
 		}
 	}
@@ -263,7 +261,9 @@ func (s *Store) duckPopulateFrustrationMarkers(
 	}
 	if cache {
 		for id, i := range idx {
-			s.frustrationMemo.Store(generation, id, "", rows[i].FrustrationMarkerCount)
+			if version := versions[id]; version != "" {
+				s.frustrationMemo.Store(frustrationMemoGeneration, id, version, rows[i].FrustrationMarkerCount)
+			}
 		}
 	}
 	return nil
@@ -495,10 +495,14 @@ SELECT
 FROM cursor_usage_events cu
 WHERE %s`
 
-const duckUsageMessageEligibility = `
+// duckUsageMessageSourceEligibility is the condition a message meets when
+// its usage counts, before the join to its session.
+const duckUsageMessageSourceEligibility = `
 			m.token_usage != ''
 			AND m.model != ''
-			AND m.model != '<synthetic>'
+			AND m.model != '<synthetic>'`
+
+const duckUsageMessageEligibility = duckUsageMessageSourceEligibility + `
 			AND s.deleted_at IS NULL`
 
 // duckUsageMatchingMessageSourceEligibility is the message-only half of
@@ -565,7 +569,7 @@ func duckUsageRawSQL(f db.UsageFilter, sessionID string) (string, []any) {
 				NULL AS cost_microdollars, '' AS cost_source,
 			s.project AS project, s.agent AS agent, s.machine AS machine,
 			s.user_message_count AS user_message_count, s.is_automated AS is_automated,
-			COALESCE(s.display_name, s.session_name, s.first_message, s.project, s.id) AS display_name,
+			COALESCE(s.display_name, s.session_name, s.first_message, s.project) AS display_name,
 			s.group_key AS group_key, COALESCE(s.session_name, '') AS session_name,
 			s.started_at AS started_at,
 			COALESCE(s.ended_at, s.started_at, s.created_at) AS activity_at
@@ -581,7 +585,7 @@ func duckUsageRawSQL(f db.UsageFilter, sessionID string) (string, []any) {
 			'' AS source_uuid,
 			CASE
 				WHEN ue.dedup_key != '' THEN ue.session_id || ':' || ue.source || ':' || ue.dedup_key
-				ELSE ue.session_id || ':' || ue.source || ':id:' || CAST(ue.id AS VARCHAR)
+				ELSE ue.session_id || ':' || ue.source || ':id:' || ue.id
 			END AS usage_dedup_key,
 				ue.input_tokens AS input_tokens, ue.output_tokens AS output_tokens,
 				ue.cache_creation_input_tokens AS cache_create,
@@ -591,7 +595,7 @@ func duckUsageRawSQL(f db.UsageFilter, sessionID string) (string, []any) {
 				ue.cost_source AS cost_source,
 			s.project AS project, s.agent AS agent, s.machine AS machine,
 			s.user_message_count AS user_message_count, s.is_automated AS is_automated,
-			COALESCE(s.display_name, s.session_name, s.first_message, s.project, s.id) AS display_name,
+			COALESCE(s.display_name, s.session_name, s.first_message, s.project) AS display_name,
 			s.group_key AS group_key, COALESCE(s.session_name, '') AS session_name,
 			s.started_at AS started_at,
 			COALESCE(s.ended_at, s.started_at, s.created_at) AS activity_at
@@ -853,7 +857,7 @@ func duckUsageCTEFromRaw(
 					ELSE attributed.is_automated END AS is_automated,
 				CASE WHEN attributed.id IS NULL THEN ranked.display_name ELSE COALESCE(
 					attributed.display_name, attributed.session_name,
-					attributed.first_message, attributed.project, attributed.id
+					attributed.first_message, attributed.project
 				) END AS display_name,
 				CASE WHEN attributed.id IS NULL THEN ranked.group_key ELSE attributed.group_key END AS group_key,
 				CASE WHEN attributed.id IS NULL THEN ranked.session_name ELSE COALESCE(attributed.session_name, '') END AS session_name,
@@ -2052,6 +2056,27 @@ func (s *Store) GetSessionPlanUsage(
 	return p, rows.Err()
 }
 
+// sessionMayHaveUsageRows reports whether the session's usage read can
+// return rows. A session with token totals is assumed to have them. For one
+// without, a probe looks for a message or usage event the read would
+// select; duckUsageRawSQL reads no other table for a session's rows. The
+// probe ignores whether the session is deleted, so it can only answer true
+// for a read that turns out empty, never false for one that has rows.
+func (s *Store) sessionMayHaveUsageRows(ctx context.Context, sess *db.Session) (bool, error) {
+	if sess.HasTotalOutputTokens || sess.HasPeakContextTokens {
+		return true, nil
+	}
+	var found bool
+	if err := s.queryRowContext(ctx, `SELECT
+		EXISTS (SELECT 1 FROM messages m WHERE m.session_id = ? AND `+duckUsageMessageSourceEligibility+`)
+		OR EXISTS (SELECT 1 FROM usage_events ue WHERE ue.session_id = ? AND `+duckUsageEventSourceEligibility+`)`,
+		sess.ID, sess.ID,
+	).Scan(&found); err != nil {
+		return false, fmt.Errorf("probing duckdb usage rows for %s: %w", sess.ID, err)
+	}
+	return found, nil
+}
+
 func (s *Store) GetSessionUsage(
 	ctx context.Context, sessionID string, includeBreakdown bool,
 ) (*db.SessionUsage, error) {
@@ -2059,19 +2084,27 @@ func (s *Store) GetSessionUsage(
 	if err != nil || sess == nil {
 		return nil, err
 	}
-	rateResolver, err := s.loadPricingResolver(ctx)
+	mayHaveRows, err := s.sessionMayHaveUsageRows(ctx, sess)
 	if err != nil {
 		return nil, err
 	}
+	// Without usage rows there is nothing to price: the session's own
+	// token totals and plan usage are the whole response.
+	var rateResolver *export.PricingResolver
 	var breakdownRows []duckSessionUsageRow
 	breakdownCount := 0
-	if includeBreakdown {
-		breakdownRows, err = s.sessionUsageRows(ctx, sessionID)
-	} else {
-		breakdownCount, err = s.sessionUsageRowCount(ctx, sessionID)
-	}
-	if err != nil {
-		return nil, err
+	if mayHaveRows {
+		if rateResolver, err = s.loadPricingResolver(ctx); err != nil {
+			return nil, err
+		}
+		if includeBreakdown {
+			breakdownRows, err = s.sessionUsageRows(ctx, sessionID)
+		} else {
+			breakdownCount, err = s.sessionUsageRowCount(ctx, sessionID)
+		}
+		if err != nil {
+			return nil, err
+		}
 	}
 	models := map[string]bool{}
 	unpriced := map[string]bool{}
@@ -2086,53 +2119,55 @@ func (s *Store) GetSessionUsage(
 	// contribute, so neither cost-only rows nor token-bearing rows
 	// can flip it when the session flags are false.
 	hasRows := false
-	err = s.forEachSessionUsageAggregateRow(
-		ctx, db.UsageFilter{}, sessionID,
-		func(r duckUsageAggregateRow) error {
-			deduplicatedOutputTokens += r.snapshotDedupOutput
-			if r.authoritativeCostRows > 0 {
-				v := money.Money{Microdollars: r.authoritativeCost}
-				authoritativeCost = &v
-			}
-			cost, _, priced, contributes, priceErr := duckUsageAggregateResolvedCost(
-				r.model, r.priceModel, r.providerID, duckUsagePricingTimestamp(r.pricingTS),
-				r.inputTok, r.outputTok, r.cacheCr, r.cacheCr1h, r.cacheRd,
-				r.billableInput, r.billableOutput, r.billableReason,
-				r.billableCacheCr, r.billableCacheCr1h, r.billableCacheRd,
-				r.billableWebSearch,
-				r.explicitCost,
-				r.reportedCostRows > 0,
-				db.UsageSourceIsRequestScoped(r.source) || r.messageOrdinal.Valid,
-				rateResolver,
-			)
-			if priceErr != nil {
-				return priceErr
-			}
-			// Cost-only copilot-reported carrier rows never contribute, so
-			// they must not surface as token data or a model, matching the
-			// SQLite and PostgreSQL session usage paths.
-			if !contributes {
+	if mayHaveRows {
+		err = s.forEachSessionUsageAggregateRow(
+			ctx, db.UsageFilter{}, sessionID,
+			func(r duckUsageAggregateRow) error {
+				deduplicatedOutputTokens += r.snapshotDedupOutput
+				if r.authoritativeCostRows > 0 {
+					v := money.Money{Microdollars: r.authoritativeCost}
+					authoritativeCost = &v
+				}
+				cost, _, priced, contributes, priceErr := duckUsageAggregateResolvedCost(
+					r.model, r.priceModel, r.providerID, duckUsagePricingTimestamp(r.pricingTS),
+					r.inputTok, r.outputTok, r.cacheCr, r.cacheCr1h, r.cacheRd,
+					r.billableInput, r.billableOutput, r.billableReason,
+					r.billableCacheCr, r.billableCacheCr1h, r.billableCacheRd,
+					r.billableWebSearch,
+					r.explicitCost,
+					r.reportedCostRows > 0,
+					db.UsageSourceIsRequestScoped(r.source) || r.messageOrdinal.Valid,
+					rateResolver,
+				)
+				if priceErr != nil {
+					return priceErr
+				}
+				// Cost-only copilot-reported carrier rows never contribute, so
+				// they must not surface as token data or a model, matching the
+				// SQLite and PostgreSQL session usage paths.
+				if !contributes {
+					return nil
+				}
+				hasRows = true
+				models[r.model] = true
+				totalCost, priceErr = money.Add(totalCost, cost)
+				if priceErr != nil {
+					return fmt.Errorf("summing duckdb session usage: %w", priceErr)
+				}
+				if r.reportedCostRows > 0 {
+					hasReportedCost = true
+				}
+				if r.billableInput != 0 || r.billableOutput != 0 ||
+					r.billableReason != 0 || r.billableCacheCr != 0 ||
+					r.billableCacheRd != 0 || r.billableWebSearch > 0 {
+					hasComputedCost = true
+				}
+				if !priced {
+					unpriced[r.model] = true
+				}
 				return nil
-			}
-			hasRows = true
-			models[r.model] = true
-			totalCost, priceErr = money.Add(totalCost, cost)
-			if priceErr != nil {
-				return fmt.Errorf("summing duckdb session usage: %w", priceErr)
-			}
-			if r.reportedCostRows > 0 {
-				hasReportedCost = true
-			}
-			if r.billableInput != 0 || r.billableOutput != 0 ||
-				r.billableReason != 0 || r.billableCacheCr != 0 ||
-				r.billableCacheRd != 0 || r.billableWebSearch > 0 {
-				hasComputedCost = true
-			}
-			if !priced {
-				unpriced[r.model] = true
-			}
-			return nil
-		})
+			})
+	}
 	if err != nil {
 		return nil, err
 	}

@@ -63,9 +63,12 @@ type VersionInfo struct {
 	// FrictionBuildAllowed reports that this request may start a build:
 	// the server has a friction runner and accepts runs from this caller.
 	FrictionBuildAllowed bool `json:"friction_build_allowed"`
-	KataAvailable        bool `json:"kata_available"`
-	APIVersion           int  `json:"api_version"`
-	DataVersion          int  `json:"data_version"`
+	// FrictionAutoFile reports that this hub files Friction Log patterns to
+	// Kata automatically.
+	FrictionAutoFile bool `json:"friction_auto_file,omitempty"`
+	KataAvailable    bool `json:"kata_available"`
+	APIVersion       int  `json:"api_version"`
+	DataVersion      int  `json:"data_version"`
 }
 
 // APIVersion is shared by HTTP version reporting and local daemon discovery.
@@ -161,8 +164,9 @@ type Server struct {
 	// (e.g. "/agentsview"). When set, all routes are served
 	// under this prefix and a <base href> tag is injected
 	// into the SPA's index.html.
-	basePath string
-	idle     *IdleTracker
+	basePath      string
+	idle          *IdleTracker
+	persistDaemon func() error
 
 	ingestionFreshness IngestionFreshness
 
@@ -184,22 +188,14 @@ type Server struct {
 	// default; enabled by the hidden serve --pprof flag.
 	pprofEnabled bool
 
-	// embeddingsManager, when set, backs the /api/v1/embeddings/...
-	// build lifecycle routes. Nil (the default) leaves those routes
-	// unregistered, e.g. when semantic search is not configured.
-	embeddingsManager EmbeddingsManager
-	embeddingsStores  map[string]EmbeddingsManager
+	// embeddingsRuntime coordinates live setup and access to embedding managers.
+	embeddingsRuntime EmbeddingsRuntime
 
 	// embeddingsUnavailableReason, when non-empty, replaces the generic
 	// "embeddings manager not available" 501 message on the embeddings
 	// routes with a cause-specific one (e.g. vector serving disabled at
 	// startup because vectors.write.lock was held).
 	embeddingsUnavailableReason string
-
-	// embeddingsIncludeAutomatedDefault is the daemon's configured
-	// [vector].include_automated scope, applied to HTTP build requests
-	// that leave include_automated unset.
-	embeddingsIncludeAutomatedDefault bool
 
 	// vectorPushSource, when set, supplies the local vectors.db active
 	// generation to the daemon's pg push handler. Nil leaves the vector
@@ -239,6 +235,8 @@ type Server struct {
 	// kata is the optional Kata spoke connection; never nil after New.
 	kata              *kata.Conn
 	frictionExclusive func(func() error) error
+	// constructed is set when New returns; see WithFriction.
+	constructed       bool
 	rawSyncDeviceAuth RawSyncDeviceAuth
 	rawSyncCustody    RawSyncCustody
 	rawSyncStatus     RawSyncStatusReader
@@ -345,6 +343,8 @@ func New(
 	}
 	s.assetCache = newAssetCache()
 	s.routes()
+	s.constructed = true
+	s.installAutoFile()
 	return s
 }
 
@@ -611,6 +611,19 @@ func WithFriction(runner *review.Runner, exclusive func(func() error) error) Opt
 	return func(s *Server) {
 		s.frictionRunner = runner
 		s.frictionExclusive = exclusive
+		// Within New the job may already be running, so New installs
+		// automatic filing once the Kata connection exists.
+		if s.constructed {
+			s.installAutoFile()
+		}
+	}
+}
+
+// installAutoFile gives the friction job its automatic filing pass. Every
+// field the pass reads must be set first.
+func (s *Server) installAutoFile() {
+	if s.frictionRunner != nil {
+		s.frictionRunner.SetAfterCatchUp(s.autoFileFriction)
 	}
 }
 
@@ -1039,7 +1052,7 @@ func archiveWriteRequest(r *http.Request) bool {
 		return !startupOnly
 	case "/api/v1/recall/import":
 		return r.URL.Query().Get("dry_run") != "true"
-	case "/api/v1/settings", "/api/v1/recall/query", "/api/v1/commits/sessions", "/api/v1/settings/worktree-mappings/preview", "/api/v1/data/strip-images/preview", "/api/v1/memory/refresh", "/api/v1/raw-sync/tokens":
+	case "/api/v1/daemon/persist", "/api/v1/settings", "/api/v1/recall/query", "/api/v1/commits/sessions", "/api/v1/settings/worktree-mappings/preview", "/api/v1/data/strip-images/preview", "/api/v1/memory/refresh", "/api/v1/raw-sync/tokens":
 		return false
 	}
 	for _, prefix := range []string{"/api/v1/config/", "/api/v1/telemetry/", "/api/v1/remote-sync/", "/api/v1/embeddings/", "/api/v1/raw-sync/uploads", "/api/v1/import/claude-ai/sync/results/"} {
@@ -1454,7 +1467,7 @@ func localInterfaceIPs() map[string]bool {
 
 // ListenAndServe starts the HTTP server.
 func (s *Server) ListenAndServe() error {
-	addr := fmt.Sprintf("%s:%d", s.cfg.Host, s.cfg.Port)
+	addr := net.JoinHostPort(s.cfg.Host, strconv.Itoa(s.cfg.Port))
 	listenCtx := context.Background()
 	if s.baseCtx != nil {
 		listenCtx = s.baseCtx
@@ -1832,3 +1845,8 @@ func logMiddleware(next http.Handler) http.Handler {
 
 // WithRawSyncTenant binds every raw credential/token identity before route work.
 func WithRawSyncTenant(tenant string) Option { return func(s *Server) { s.rawSyncTenant = tenant } }
+
+// WithDaemonPersistence installs the writable local daemon's lifetime publisher.
+func WithDaemonPersistence(publish func() error) Option {
+	return func(s *Server) { s.persistDaemon = publish }
+}

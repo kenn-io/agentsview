@@ -370,8 +370,7 @@ func TestWriteDuckDBPushDiagnosticsReportsResumedRebuildKept(t *testing.T) {
 }
 
 // TestWriteDuckDBPushDiagnosticsReportsDeferredMode verifies a deferred
-// watch-mode push (mirror held by a live serve; see
-// storage.MirrorPushOptions.Automatic) prints its mode and reason
+// watch-mode push waiting for the rebuild lock prints its mode and reason
 // instead of the incremental or rebuild counters, none of which exist for
 // a push that touched nothing.
 func TestWriteDuckDBPushDiagnosticsReportsDeferredMode(t *testing.T) {
@@ -380,13 +379,13 @@ func TestWriteDuckDBPushDiagnosticsReportsDeferredMode(t *testing.T) {
 	writeDuckDBPushDiagnostics(&out, storage.MirrorPushResult{
 		Diagnostics: storage.MirrorPushDiagnostics{
 			Deferred:       true,
-			DeferredReason: "mirror is locked by a serving process; deferring until it is released",
+			DeferredReason: "another push is rebuilding the mirror; deferring until it finishes",
 		},
 	})
 
 	got := out.String()
 	assert.Contains(t, got,
-		"DuckDB push mode: deferred (mirror is locked by a serving process; deferring until it is released)")
+		"DuckDB push mode: deferred (another push is rebuilding the mirror; deferring until it finishes)")
 	assert.NotContains(t, got, "DuckDB push wrote:",
 		"a deferred push wrote nothing and must not print write counters")
 }

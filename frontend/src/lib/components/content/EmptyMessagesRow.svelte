@@ -1,6 +1,6 @@
 <script lang="ts">
+  import { Disclosure } from "@kenn-io/kit-ui";
   import type { DbMessage as Message } from "../../api/generated/index.js";
-  import { ChevronRightIcon } from "../../icons.js";
   import { m } from "../../i18n/index.js";
   import MessageContent from "./MessageContent.svelte";
 
@@ -13,23 +13,19 @@
   let { messages, open, onToggle }: Props = $props();
 </script>
 
-<details
+<Disclosure
+  variant="plain"
   class="empty-run"
   {open}
-  ontoggle={(event) => {
-    if (event.currentTarget.open !== open) onToggle(event.currentTarget.open);
+  ontoggle={(o) => {
+    if (o !== open) onToggle(o);
   }}
 >
-  <summary class="empty-summary" title={m.transcript_empty_messages_title()}>
-    <span class="empty-line"></span>
-    <span class="empty-label">
-      <span class="empty-chevron">
-        <ChevronRightIcon size="12" strokeWidth="2.2" aria-hidden="true" />
-      </span>
+  {#snippet summary()}
+    <span class="empty-label" title={m.transcript_empty_messages_title()}>
       {m.transcript_empty_messages({ count: messages.length })}
     </span>
-    <span class="empty-line"></span>
-  </summary>
+  {/snippet}
   {#if open}
     <div class="empty-messages">
       {#each messages as message (message.id)}
@@ -39,44 +35,38 @@
       {/each}
     </div>
   {/if}
-</details>
+</Disclosure>
 
 <style>
-  .empty-summary {
-    display: flex;
-    align-items: center;
-    gap: 8px;
+  /* Keep the row's divider inset with the chevron beside its centered
+     label, and render the hidden cards exactly like the transcript's other
+     cards rather than as indented secondary text. */
+  :global(.empty-run.kit-disclosure--plain > .kit-disclosure__summary) {
     padding: 2px 12px;
-    color: var(--text-muted);
-    font-size: 11px;
-    font-weight: 500;
-    cursor: pointer;
-    list-style: none;
   }
-  .empty-summary::-webkit-details-marker {
-    display: none;
-  }
-  .empty-summary:hover {
-    color: var(--text-secondary);
-  }
-  .empty-line {
+  :global(.empty-run > .kit-disclosure__summary::before),
+  :global(.empty-run > .kit-disclosure__summary::after) {
+    content: "";
     flex: 1;
     height: 1px;
     background: var(--border-muted);
   }
+  :global(.empty-run > .kit-disclosure__summary > .kit-disclosure__title) {
+    flex: none;
+  }
+  :global(.empty-run.kit-disclosure--plain > .kit-disclosure__content) {
+    padding: 0;
+    color: inherit;
+    font-size: inherit;
+    line-height: inherit;
+  }
   .empty-label {
-    display: inline-flex;
-    align-items: center;
-    gap: 4px;
+    color: var(--text-muted);
+    font-size: 11px;
     white-space: nowrap;
   }
-  .empty-chevron {
-    display: inline-flex;
-    align-items: center;
-    transition: transform 0.15s ease;
-  }
-  .empty-run[open] .empty-chevron {
-    transform: rotate(90deg);
+  :global(.empty-run > summary:hover) .empty-label {
+    color: var(--text-secondary);
   }
   .empty-messages {
     display: flex;

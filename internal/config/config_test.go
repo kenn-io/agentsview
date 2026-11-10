@@ -3193,3 +3193,54 @@ func TestLoadFile_ModelAliases(t *testing.T) {
 		})
 	}
 }
+
+func TestSaveVectorSetupPreservesSettings(t *testing.T) {
+	for _, raw := range []string{
+		"port = 12345\n[vector]\nenabled = false\ninclude_automated = true\n",
+		"[vector]\nenabled = false\n[vector.embeddings]\nmodel = 'test-model'\ndimension = 3\nmodel_context_tokens = 0\nquery_prefix = ''\ndocument_prefix = ''\ninput_suffix = '!'\nrequest_dimensions = false\n[vector.embeddings.servers.local]\nendpoint = 'https://example.com/v1'\nmax_retries = 0\n",
+	} {
+		t.Run(raw, func(t *testing.T) {
+			dir := setupTestEnv(t)
+			path := filepath.Join(dir, configFileName)
+			cfg, err := LoadReadOnly()
+			require.NoError(t, err)
+			// Setup reads edits made after the daemon loaded its config.
+			require.NoError(t, os.WriteFile(path, []byte(raw), 0o600))
+			var expected map[string]any
+			_, err = toml.Decode(raw, &expected)
+			require.NoError(t, err)
+			expected["vector"].(map[string]any)["enabled"] = true
+			require.NoError(t, cfg.SaveVectorSetup())
+			var saved map[string]any
+			_, err = toml.DecodeFile(path, &saved)
+			require.NoError(t, err)
+			assert.Equal(t, expected, saved)
+		})
+	}
+}
+
+func TestSaveVectorSetupRejectsInvalidCurrentSettings(t *testing.T) {
+	for _, tc := range []struct{ name, raw, wantError string }{
+		{name: "invalid token budget", raw: "[vector]\nenabled = false\n[vector.embeddings]\nmodel = 'test-model'\ndimension = 3\nmodel_context_tokens = 512\n[vector.embeddings.servers.local]\nendpoint = 'https://example.com/v1'\nmax_batch_tokens = 256\n"},
+		{name: "array of vector tables", raw: "[[vector]]\nenabled = false\n[vector.embeddings]\nmodel = 'test-model'\ndimension = 3\n[vector.embeddings.servers.local]\nendpoint = 'https://example.com/v1'\n", wantError: "vector must be a table"},
+		{name: "scalar vector", raw: "vector = 'preserve this value'\n", wantError: "vector must be a table"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			dir := setupTestEnv(t)
+			cfg, err := LoadReadOnly()
+			require.NoError(t, err)
+			path := filepath.Join(dir, configFileName)
+			require.NoError(t, os.WriteFile(path, []byte(tc.raw), 0o600))
+			_, setupErr := cfg.VectorSetupEmbeddings()
+			saveErr := cfg.SaveVectorSetup()
+			data, err := os.ReadFile(path)
+			require.NoError(t, err)
+			assert.Equal(t, tc.raw, string(data))
+			require.ErrorIs(t, setupErr, ErrInvalidVectorSetup)
+			require.ErrorIs(t, saveErr, ErrInvalidVectorSetup)
+			if tc.wantError != "" {
+				require.ErrorContains(t, setupErr, tc.wantError)
+			}
+		})
+	}
+}

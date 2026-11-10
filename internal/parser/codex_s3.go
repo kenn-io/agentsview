@@ -1,6 +1,7 @@
 package parser
 
 import (
+	"cmp"
 	"fmt"
 	"maps"
 	"path"
@@ -64,15 +65,16 @@ func codexS3Scanner() S3SessionScanner {
 	}
 }
 
-// FindCodexS3ParentSessionURIs locates every rollout of an explicitly named
+// FindCodexS3ParentSessionObjects locates every rollout of an explicitly named
 // parent thread under the same configured Codex S3 root as childURI: the
 // thread's own rollout and each revert page (<thread>_<rollout>). A fork
-// replays history from all of them. Each session key yields one URI, the live
-// copy before an archived one. It lists metadata only; callers decide whether
-// and where to materialize the objects.
-func FindCodexS3ParentSessionURIs(
+// replays history from all of them. Each session key yields one object, the
+// live copy before an archived one, with the size and fingerprint the listing
+// reported. It lists metadata only; callers decide whether and where to
+// materialize the objects.
+func FindCodexS3ParentSessionObjects(
 	configuredRoot, childURI, parentID string,
-) []string {
+) []S3Object {
 	if parentID == "" || strings.TrimSpace(parentID) != parentID ||
 		strings.ContainsAny(parentID, `/\\`) ||
 		CodexSessionUUIDFromFilename("rollout-x-"+parentID+".jsonl") != parentID {
@@ -86,7 +88,7 @@ func FindCodexS3ParentSessionURIs(
 	if err != nil {
 		return nil
 	}
-	byKey := make(map[string]string)
+	byKey := make(map[string]S3Object)
 	for _, obj := range objects {
 		if _, withinRoot := s3RelativePath(root, obj.URI); !withinRoot {
 			continue
@@ -95,11 +97,13 @@ func FindCodexS3ParentSessionURIs(
 		if CodexThreadIDFromSessionKey(key) != parentID {
 			continue
 		}
-		if current, seen := byKey[key]; !seen || codexS3URIPreferred(obj.URI, current) {
-			byKey[key] = obj.URI
+		if current, seen := byKey[key]; !seen || codexS3URIPreferred(obj.URI, current.URI) {
+			byKey[key] = obj
 		}
 	}
-	return slices.Sorted(maps.Values(byKey))
+	return slices.SortedFunc(maps.Values(byKey), func(a, b S3Object) int {
+		return cmp.Compare(a.URI, b.URI)
+	})
 }
 
 // codexS3PreferredFiles drops a compressed rollout object whose plain object

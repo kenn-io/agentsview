@@ -20,7 +20,7 @@ func TestActivitySourceProbeCachePreservesFreshness(t *testing.T) {
 	conn := chtest.Open(t, dsn, database)
 	ctx := t.Context()
 	require.NoError(t, EnsureSchemaOn(ctx, conn))
-	store := NewStoreFromDB(conn)
+	store := newTestStore(t, conn, Target{URL: dsn, Database: database})
 	for _, query := range []string{
 		`SYSTEM STOP MERGES messages`,
 		`INSERT INTO sessions (id,push_version,data_version,local_modified_at) VALUES ('probe',1,1,'2026-01-10 00:00:00')`,

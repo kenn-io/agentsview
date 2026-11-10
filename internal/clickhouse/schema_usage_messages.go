@@ -40,15 +40,11 @@ var usageColumns = []struct{ name, typ, expression string }{
 const usageMessageFields = `session_id, ordinal, timestamp, model, provider_id,
 	claude_message_id, claude_request_id, source_uuid, push_version`
 
+// usageMessagesOrderBy is the replacement key of usage_messages, the same key
+// as messages, since the view writes one row per message.
+var usageMessagesOrderBy = []string{"session_id", "ordinal"}
+
 func ensureUsageMessages(ctx context.Context, conn *sql.DB) error {
-	const marker = "usage_messages_backfill"
-	metadata, err := readMetadata(ctx, conn, marker)
-	if err != nil {
-		return err
-	}
-	if metadata[marker] == "1" {
-		return nil
-	}
 	columns := []string{
 		"session_id String", "ordinal Int64", "timestamp Nullable(DateTime64(6, 'UTC'))",
 		"model String", "provider_id String", "claude_message_id String",
@@ -63,17 +59,27 @@ func ensureUsageMessages(ctx context.Context, conn *sql.DB) error {
 	// The low bit makes a live insert beat a concurrent, older backfill of
 	// the same push version. UInt128 preserves every possible UInt64 version.
 	columns = append(columns, "revision UInt128", "INDEX usage_time timestamp TYPE minmax GRANULARITY 1")
-	queries := []string{
-		"CREATE TABLE IF NOT EXISTS usage_messages (" + strings.Join(columns, ", ") + `)
-		 ENGINE = ReplacingMergeTree(revision) ORDER BY (session_id, ordinal)
-		 SETTINGS index_granularity = 64`,
-		"CREATE MATERIALIZED VIEW IF NOT EXISTS usage_messages_mv TO usage_messages AS SELECT " +
-			selection + ", toUInt128(push_version) * 2 + 1 AS revision FROM messages",
+	if _, err := conn.ExecContext(ctx, "CREATE TABLE IF NOT EXISTS usage_messages ("+strings.Join(columns, ", ")+`)
+		 ENGINE = ReplacingMergeTree(revision) ORDER BY (`+strings.Join(usageMessagesOrderBy, ", ")+`)
+		 SETTINGS index_granularity = 64`); err != nil {
+		return fmt.Errorf("creating stored usage messages: %w", err)
 	}
-	for _, query := range queries {
-		if _, err := conn.ExecContext(ctx, query); err != nil {
-			return fmt.Errorf("creating stored usage messages: %w", err)
-		}
+	// Mirrors from before the view computed the counters read them from
+	// stored columns of messages that the code no longer creates.
+	if err := ensureView(ctx, conn, mirrorView{
+		name:    "usage_messages_mv",
+		clauses: "TO usage_messages",
+		query:   "SELECT " + selection + ", toUInt128(push_version) * 2 + 1 AS revision FROM messages",
+	}); err != nil {
+		return err
+	}
+	const marker = "usage_messages_backfill"
+	metadata, err := readMetadata(ctx, conn, marker)
+	if err != nil {
+		return err
+	}
+	if metadata[marker] == "1" {
+		return nil
 	}
 	log.Print("ClickHouse: filling usage messages before serving; source messages remain unchanged")
 	if _, err := conn.ExecContext(ctx, "INSERT INTO usage_messages SELECT "+selection+
@@ -136,13 +142,14 @@ func ensureUsageSessionSnapshots(ctx context.Context, conn *sql.DB) error {
 		expression := strings.ReplaceAll(column.expression, "token_usage", "tupleElement(m,'token_usage')")
 		if column.name != "usage_present" && column.name != "usage_web" {
 			typ = "UInt32"
-			expression = fmt.Sprintf("least(greatest(%s,toInt64(0)),toInt64(%d))", expression, db.MaxPlausibleTokens)
+			expression = fmt.Sprintf("least(greatest(%s,0),%d)", expression, db.MaxPlausibleTokens)
 		}
 		factTypes = append(factTypes, column.name+" "+typ)
 		factValues = append(factValues, expression)
 	}
 	columns = append(columns, "usage_facts Array(Tuple("+strings.Join(factTypes, ",")+
-		")) MATERIALIZED arrayMap(m -> tuple("+strings.Join(factValues, ",")+"),usage_messages)")
+		")) MATERIALIZED arrayMap(m -> tuple("+strings.Join(factValues, ",")+"),usage_messages)",
+		chSnapshotPreparesUsageColumn)
 	_, err = conn.ExecContext(ctx, "CREATE TABLE IF NOT EXISTS "+spec.name+" ("+
 		strings.Join(columns, ",")+") ENGINE=ReplacingMergeTree(revision) ORDER BY id SETTINGS index_granularity=1")
 	if err != nil {
@@ -161,7 +168,50 @@ func ensureUsageSessionSnapshots(ctx context.Context, conn *sql.DB) error {
 			return fmt.Errorf("adding clickhouse column %s.%s: %w", spec.name, c.name, err)
 		}
 	}
+	if _, has := existing[spec.name][chSnapshotPreparesUsage]; !has {
+		if err := addSnapshotPreparesUsage(ctx, conn); err != nil {
+			return err
+		}
+	}
 	return ensurePreparedUsage(ctx, conn)
+}
+
+// chSnapshotPreparesUsage names the snapshot column that says whether the
+// prepared usage refresh keeps any row of the snapshot: the session is not
+// trashed, and a message or event passes the refresh's eligibility. Coverage
+// reads it to tell a snapshot pushed since the refresh from one that has
+// nothing to prepare; see compareUsageCoverage.
+const chSnapshotPreparesUsage = "prepares_usage"
+
+// chSnapshotPreparesUsageColumn defines chSnapshotPreparesUsage with the
+// eligibility chPreparedUsageKeyedSQL applies to each message
+// (chStoredMessageUsable) and event (chUsageEventUsable). It names tuple
+// elements with tupleElement: a lightweight DELETE recomputes the column, and
+// that path cannot resolve m.model inside a lambda. A table keeps the
+// expression it was created with, so a change to either condition needs a
+// migration of this column as well.
+var chSnapshotPreparesUsageColumn = chSnapshotPreparesUsage + ` Bool MATERIALIZED deleted_at IS NULL AND (
+	arrayExists(m -> ` + chStoredMessageUsable("tupleElement(m, 'usage_present')", "tupleElement(m, 'model')") + `,
+		usage_facts)
+	OR arrayExists(ue -> ` + chUsageEventUsable("tupleElement(ue, 'model')") + `, usage_events))`
+
+// addSnapshotPreparesUsage adds chSnapshotPreparesUsage to a snapshot table
+// created before it. Parts written earlier compute the column from their
+// usage arrays on every read, so it also starts a mutation that stores the
+// column in them. The schema step does not wait for the mutation: reads are
+// correct while it runs, only slower. A step stopped between the two
+// statements leaves the column computed on read until merges rewrite those
+// parts.
+func addSnapshotPreparesUsage(ctx context.Context, conn *sql.DB) error {
+	for _, stmt := range []string{
+		"ALTER TABLE " + usageSessionSnapshotTable + " ADD COLUMN IF NOT EXISTS " + chSnapshotPreparesUsageColumn,
+		"ALTER TABLE " + usageSessionSnapshotTable + " MATERIALIZE COLUMN " + chSnapshotPreparesUsage,
+	} {
+		if _, err := conn.ExecContext(ctx, stmt); err != nil {
+			return fmt.Errorf("adding %s.%s: %w", usageSessionSnapshotTable, chSnapshotPreparesUsage, err)
+		}
+	}
+	return nil
 }
 
 // chPreparedUsageKeyColumn is the non-null time column prepared_usage sorts
@@ -172,9 +222,20 @@ const chPreparedUsageKeyColumn = "ts_key"
 
 const chPreparedUsageSortingKey = chPreparedUsageKeyColumn + ", session_id"
 
-// chPreparedUsageRefresh is the scheduled rebuild. Every push also starts a
-// refresh, so the schedule only covers a trigger that failed.
+// chPreparedUsageRefresh is the scheduled rebuild. A push also starts a
+// refresh once enough has changed; see preparedUsageRebuildDue.
 const chPreparedUsageRefresh = "EVERY 15 MINUTE"
+
+// chPreparedUsageBehindShare decides when a push rebuilds prepared_usage or
+// starts the view's refresh. Reads stay exact while the table is behind:
+// they prepare the rows of the sessions pushed since the last rebuild
+// themselves. Those rows cost each read time, and a rebuild rewrites the
+// whole table, so a push rebuilds once the rows reads prepare reach one
+// chPreparedUsageBehindShare of the stored rows. A rebuild then rewrites at
+// most that many times the rows that changed, and reads prepare at most that
+// share of what they read. On a 300,000-row test table, a 5,000-row delta
+// added about 0.13 seconds to the first read after a push.
+const chPreparedUsageBehindShare = 50
 
 // chPreparedUsageRefreshSettings apply to every query that fills
 // prepared_usage, whether the view runs it or a push does.
@@ -323,7 +384,7 @@ const chPreparedUsageColumns = `session_id, message_ordinal, ts, pricing_ts, sou
 // chPreparedUsagePricingDigestSQL reads the digest the mirror was last priced
 // under. A push writes every price record for a digest before this key, so a
 // refresh that reads the key joins a complete set of records for it.
-const chPreparedUsagePricingDigestSQL = "(SELECT ifNull(max(value), '') FROM sync_metadata WHERE key = '" +
+const chPreparedUsagePricingDigestSQL = "(SELECT max(value) FROM sync_metadata WHERE key = '" +
 	usagePricedDigestKey + "')"
 
 // chPriceStampSQL counts the price records under the digest the refresh
@@ -628,12 +689,16 @@ func ensurePreparedUsage(ctx context.Context, conn *sql.DB) error {
 
 // createPreparedUsageView creates the view that refreshes prepared_usage
 // on the server. It leaves the table empty until the first refresh.
+//
+// The prepared_usage comment covers the refresh schedule and query, and a
+// change to either drops the view with the table. The view's own check also
+// covers the refresh settings.
 func createPreparedUsageView(ctx context.Context, conn *sql.DB) error {
-	if _, err := conn.ExecContext(ctx, `CREATE MATERIALIZED VIEW IF NOT EXISTS prepare_usage REFRESH `+chPreparedUsageRefresh+`
-		TO prepared_usage EMPTY AS `+chPreparedUsageQuery()+" SETTINGS "+chPreparedUsageRefreshSettings); err != nil {
-		return fmt.Errorf("creating prepared usage: %w", err)
-	}
-	return nil
+	return ensureView(ctx, conn, mirrorView{
+		name:    "prepare_usage",
+		clauses: "REFRESH " + chPreparedUsageRefresh + " TO prepared_usage EMPTY",
+		query:   chPreparedUsageQuery() + " SETTINGS " + chPreparedUsageRefreshSettings,
+	})
 }
 
 func preparedUsageViewExists(ctx context.Context, conn *sql.DB) (bool, error) {
@@ -757,11 +822,11 @@ func chExchangeSupported(ctx context.Context, conn *sql.DB) (supported bool, err
 	return true, nil
 }
 
-// refreshPreparedUsage brings prepared_usage up to date after a push. Where
-// the view exists, it starts the view's refresh, which runs on the server.
-// Where the schema step found that the database cannot swap tables, it
-// dropped the view and left a rebuild lock, and the push rebuilds the table
-// before it returns.
+// refreshPreparedUsage brings prepared_usage up to date after a push once a
+// rebuild is due; see preparedUsageRebuildDue. Where the view exists, it
+// starts the view's refresh, which runs on the server. Where the schema step
+// found that the database cannot swap tables, it dropped the view and left a
+// rebuild lock, and the push rebuilds the table before it returns.
 func refreshPreparedUsage(ctx context.Context, conn *sql.DB) error {
 	hasView, err := preparedUsageViewExists(ctx, conn)
 	if err != nil {
@@ -802,6 +867,11 @@ func refreshPreparedUsage(ctx context.Context, conn *sql.DB) error {
 		}
 		return nil
 	}
+	due, reason, err := preparedUsageRebuildDue(ctx, conn)
+	if err != nil || !due {
+		return err
+	}
+	log.Printf("clickhouse push: starting prepared usage refresh: %s", reason)
 	if _, err := conn.ExecContext(ctx, "SYSTEM REFRESH VIEW prepare_usage"); err != nil {
 		return fmt.Errorf("starting prepared usage refresh (the next scheduled refresh retries): %w", err)
 	}
@@ -839,11 +909,12 @@ func finishScheduledRefreshSwitch(ctx context.Context, conn *sql.DB) error {
 // must not replace a newer one between them: the read would trust the newer
 // stamp and serve the older rows. A push that finds another rebuild running
 // skips its own. The running rebuild checks once more after it publishes and
-// rebuilds again for snapshots that arrived meanwhile, as the view queues one
-// more refresh for a request that arrives during a refresh.
+// rebuilds again when the snapshots that arrived meanwhile make a rebuild due,
+// as the view queues one more refresh for a request that arrives during a
+// refresh.
 func rebuildPreparedUsage(ctx context.Context, conn *sql.DB) (err error) {
-	current, err := preparedUsageCurrent(ctx, conn)
-	if err != nil || current {
+	due, _, err := preparedUsageRebuildDue(ctx, conn)
+	if err != nil || !due {
 		return err
 	}
 	generation, acquired, err := acquireRebuildLock(ctx, conn)
@@ -878,8 +949,8 @@ func rebuildPreparedUsage(ctx context.Context, conn *sql.DB) (err error) {
 	// The first pass checks again because the previous holder may have
 	// published these snapshots while this push waited for the lock.
 	for pass := range 3 {
-		current, err := preparedUsageCurrent(ctx, conn)
-		if err != nil || current {
+		due, reason, err := preparedUsageRebuildDue(ctx, conn)
+		if err != nil || !due {
 			return err
 		}
 		switch pass {
@@ -890,7 +961,7 @@ func rebuildPreparedUsage(ctx context.Context, conn *sql.DB) (err error) {
 				"usage reads compute those sessions directly, which is slower, until the next push rebuilds prepared usage")
 			return nil
 		}
-		if err := publishPreparedUsageBuild(ctx, conn, generation); err != nil {
+		if err := publishPreparedUsageBuild(ctx, conn, generation, reason); err != nil {
 			return err
 		}
 	}
@@ -898,9 +969,10 @@ func rebuildPreparedUsage(ctx context.Context, conn *sql.DB) (err error) {
 }
 
 // publishPreparedUsageBuild fills the build table of the lock generation
-// with the view's query and moves its parts into prepared_usage.
-func publishPreparedUsageBuild(ctx context.Context, conn *sql.DB, generation uint64) (err error) {
-	log.Print("clickhouse push: rebuilding prepared usage")
+// with the view's query and moves its parts into prepared_usage. The reason
+// says why the rebuild is due, for the log.
+func publishPreparedUsageBuild(ctx context.Context, conn *sql.DB, generation uint64, reason string) (err error) {
+	log.Printf("clickhouse push: rebuilding prepared usage: %s", reason)
 	started := time.Now()
 	build := fmt.Sprintf("%s%d", chPreparedUsageBuildPrefix, generation)
 	if _, err := conn.ExecContext(ctx, "CREATE TABLE "+build+" AS prepared_usage"); err != nil {
@@ -1107,27 +1179,69 @@ func releaseRebuildLock(ctx context.Context, conn *sql.DB, generation uint64) er
 	return nil
 }
 
-// preparedUsageCurrent reports whether the prepared rows were derived from
-// the current snapshots and price records. The refresh query reads nothing
-// else, so a rebuild would store the same rows. An empty table has no stamp
-// and is never current.
-func preparedUsageCurrent(ctx context.Context, conn *sql.DB) (bool, error) {
+// chPreparedUsageBehindSQL counts the rows reads prepare themselves: the
+// rows of every snapshot that no stored row was derived from, as
+// chPreparedUsageDeltaRowsSQL would select them. The covered snapshots come
+// from the covered_sessions projection, which FINAL would bypass.
+//
+// The count applies the message and event conditions of
+// chUsageStoredMessageEligibility and chUsageEventEligibility to the array
+// subcolumns they read, in one scan. Counting the rows of
+// chPreparedUsageKeyedSQL would read every field of usage_facts through two
+// ARRAY JOIN scans, about four times the bytes. The normalized selection has
+// no join, dedup, or other filter, so these filters alone decide which rows
+// exist.
+func chPreparedUsageBehindSQL() string {
+	return `SELECT sum(
+		arrayCount((present, model) -> ` + chStoredMessageUsable("present", "model") + `,
+			s.usage_facts.usage_present, s.usage_facts.model)
+		+ arrayCount(model -> ` + chUsageEventUsable("model") + `, s.usage_events.model))
+	FROM usage_session_snapshots s
+	WHERE s.deleted_at IS NULL AND (s.id, s.revision) NOT IN (
+		SELECT session_id, snapshot_revision FROM prepared_usage
+		GROUP BY session_id, snapshot_revision SETTINGS final=0)`
+}
+
+// preparedUsageRebuildDue reports whether a push should rebuild prepared_usage
+// or start the view's refresh, and why. Reads stay exact either way, so a
+// rebuild is due only when it changes what reads cost: the table is empty, the
+// stored price copies no longer serve reads, or reads prepare too many rows
+// themselves; see chPreparedUsageBehindShare.
+func preparedUsageRebuildDue(ctx context.Context, conn *sql.DB) (due bool, reason string, err error) {
 	var stored, live usageStamp
-	err := conn.QueryRowContext(ctx, `SELECT snapshot_count, snapshot_hash, pricing_digest, price_count
-		FROM prepared_usage LIMIT 1 SETTINGS final=0`).Scan(
-		&stored.snapshotCount, &stored.snapshotHash, &stored.pricingDigest, &stored.priceCount)
+	var prepared uint64
+	err = conn.QueryRowContext(ctx, `SELECT snapshot_count, snapshot_hash, pricing_digest, price_count,
+		(SELECT count() FROM prepared_usage) FROM prepared_usage LIMIT 1 SETTINGS final=0`).Scan(
+		&stored.snapshotCount, &stored.snapshotHash, &stored.pricingDigest, &stored.priceCount, &prepared)
 	if errors.Is(err, sql.ErrNoRows) {
-		return false, nil
+		return true, "the table is empty", nil
 	}
 	if err != nil {
-		return false, fmt.Errorf("reading prepared usage stamp: %w", err)
+		return false, "", fmt.Errorf("reading prepared usage stamp: %w", err)
 	}
 	if err := conn.QueryRowContext(ctx, `SELECT `+chSnapshotStampSQL+`,
 		`+chPreparedUsagePricingDigestSQL+` AS pricing_digest, `+chPriceStampSQL).Scan(
 		&live.snapshotCount, &live.snapshotHash, &live.pricingDigest, &live.priceCount); err != nil {
-		return false, fmt.Errorf("reading current usage stamp: %w", err)
+		return false, "", fmt.Errorf("reading current usage stamp: %w", err)
 	}
-	return stored == live, nil
+	switch {
+	case stored == live:
+		return false, "", nil
+	case stored.pricingDigest != live.pricingDigest || live.priceCount < stored.priceCount:
+		// Until the stored price copies match the price records again, reads
+		// price every row through the per-request join.
+		return true, "prices changed", nil
+	}
+	var behind uint64
+	if err := conn.QueryRowContext(ctx, chPreparedUsageBehindSQL()).Scan(&behind); err != nil {
+		return false, "", fmt.Errorf("counting usage rows prepared at read time: %w", err)
+	}
+	limit := prepared / chPreparedUsageBehindShare
+	if behind < limit {
+		return false, "", nil
+	}
+	return true, fmt.Sprintf("reads prepare %d usage rows themselves, and the limit for a table of %d rows is %d",
+		behind, prepared, limit), nil
 }
 
 // retireRebuildLocks fences off rebuilds that pushes started while the

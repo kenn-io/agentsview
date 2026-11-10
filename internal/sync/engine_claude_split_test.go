@@ -344,7 +344,8 @@ func TestClaudeIncrementalSplitMatchesFullParse(t *testing.T) {
 func testClaudeSplitMatchesFullParse(
 	t *testing.T, archive config.ArchiveContent,
 	lines []string, splitAfter int,
-) {
+	beforeAppend ...func(*testEnv),
+) (*testEnv, string) {
 	t.Helper()
 	incrementalEnv, incrementalDir := newClaudeSplitTestEnv(t, claudeSplitFactory(t), archive)
 	fullEnv, fullDir := newClaudeSplitTestEnv(t, claudeSplitFactory(t), archive)
@@ -359,6 +360,9 @@ func testClaudeSplitMatchesFullParse(
 	require.NoError(t, os.MkdirAll(filepath.Dir(path), 0o755))
 	require.NoError(t, os.WriteFile(path, []byte(initial), 0o644))
 	incrementalEnv.engine.SyncAll(t.Context(), nil)
+	for _, prepare := range beforeAppend {
+		prepare(incrementalEnv)
+	}
 	appendClaudeSplitLines(t, path, strings.TrimSuffix(rest, "\n"))
 	incrementalEnv.engine.SyncPaths([]string{path})
 
@@ -379,6 +383,7 @@ func testClaudeSplitMatchesFullParse(
 		snapshotSplitSession(t, incrementalEnv.db, sessionID),
 		"session aggregates differ from a full parse",
 	)
+	return incrementalEnv, path
 }
 
 // TestClaudeIncrementalSplitReparsesOnlyTheOpenRun covers issue #1963:

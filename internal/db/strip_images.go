@@ -195,7 +195,7 @@ func (db *DB) rewriteStoredToolResultRows(
 
 	eventRows, err := tx.QueryContext(ctx, `
 		SELECT rowid, tool_call_message_ordinal, call_index,
-		       COALESCE(content, ''), COALESCE(content_length, 0)
+		       content, content_length
 		FROM tool_result_events
 		WHERE session_id = ?`, sessionID)
 	if err != nil {
@@ -447,7 +447,7 @@ func (db *DB) toolImageStats(
 		FROM tool_calls
 		WHERE session_id = ?
 		UNION ALL
-		SELECT COALESCE(content, '')
+		SELECT content
 		FROM tool_result_events
 		WHERE session_id = ?`, sessionID, sessionID)
 	if err != nil {

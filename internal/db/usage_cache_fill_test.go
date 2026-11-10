@@ -16,6 +16,7 @@ import (
 	"sync"
 	"sync/atomic"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	"github.com/stretchr/testify/assert"
@@ -711,10 +712,10 @@ func usageSpoolExtractionFixture(tb testing.TB, count int) (*DB, *usageCache) {
 	return database, cache
 }
 
-// Both stores put the session key first; compare every remaining fact value.
-func usageSpoolFactValues(t *testing.T, database *sql.DB, query string) [][]any {
+// Compare every fact value except the first key column.
+func usageSpoolFactValues(t *testing.T, database *sql.DB, query string, args ...any) [][]any {
 	t.Helper()
-	rows, err := database.QueryContext(t.Context(), query)
+	rows, err := database.QueryContext(t.Context(), query, args...)
 	require.NoError(t, err)
 	defer rows.Close()
 	columns, err := rows.Columns()
@@ -954,6 +955,10 @@ func TestUsageFillEnsureRefillsOnlyChangedSessions(t *testing.T) {
 }
 
 func TestUsageFillCoordinatorSharesDetachedSessionWork(t *testing.T) {
+	synctest.Test(t, testUsageFillCoordinatorSharesDetachedSessionWork)
+}
+
+func testUsageFillCoordinatorSharesDetachedSessionWork(t *testing.T) {
 	database := usageCandidateFixture(t)
 	snapshot, err := database.captureUsageQuery(
 		t.Context(), UsageFilter{}, usageQueryKindToken,
@@ -974,6 +979,7 @@ func TestUsageFillCoordinatorSharesDetachedSessionWork(t *testing.T) {
 		},
 	}
 	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
 	firstDone := make(chan error, 1)
 	go func() {
 		_, fillErr := cache.fill.Ensure(ctx, snapshot.Versions[:1], 0)
@@ -987,9 +993,11 @@ func TestUsageFillCoordinatorSharesDetachedSessionWork(t *testing.T) {
 		)
 		secondDone <- fillErr
 	}()
+	// Both callers must be waiting on the blocked fill before it can finish.
+	synctest.Wait()
 	cancel()
-	close(release)
 	require.ErrorIs(t, <-firstDone, context.Canceled)
+	close(release)
 	require.NoError(t, <-secondDone)
 	assert.Equal(t, int32(1), extractions.Load())
 }

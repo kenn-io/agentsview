@@ -60,7 +60,7 @@ var termsSQLByDialect = map[string]termsSQLFragments{
 		prefilterText: "COALESCE(dialogue_text, content)",
 		bodyAgg:       "GROUP_CONCAT(content, char(10) ORDER BY ordinal)",
 		timestamp:     "COALESCE(m.timestamp,'')",
-		sessionSort:   "COALESCE(s.ended_at, s.started_at, s.created_at, '')",
+		sessionSort:   "COALESCE(s.ended_at, s.started_at, s.created_at)",
 		orderBySort:   "julianday(sort_ts) DESC",
 	},
 	"postgres": {
@@ -192,8 +192,8 @@ func buildTermsSearchSQL(
 		), members AS (
 			SELECT h.session_id, s.project, s.agent, s.machine,
 				COALESCE(s.display_name, s.session_name) AS display_name,
-				COALESCE(s.transcript_revision,'') AS transcript_revision,
-				COALESCE(s.relationship_type,'') AS relationship_type,
+				s.transcript_revision AS transcript_revision,
+				s.relationship_type AS relationship_type,
 				COALESCE(s.parent_session_id,'') AS parent_session_id,
 				m.role, h.ordinal, %s AS ts, %s AS content, h.is_sidechain,
 				%s AS sort_ts,

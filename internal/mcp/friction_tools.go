@@ -78,17 +78,18 @@ type listFrictionPatternsIn struct {
 }
 
 type frictionPatternOut struct {
-	Fingerprint     string                     `json:"fingerprint"`
-	Kind            string                     `json:"kind"`
-	Title           string                     `json:"title"`
-	FirstSeenDate   string                     `json:"first_seen_date"`
-	LastSeenDate    string                     `json:"last_seen_date"`
-	OccurrenceCount int                        `json:"occurrence_count"`
-	SessionCount    int                        `json:"session_count"`
-	LastSessionID   string                     `json:"last_session_id"`
-	LastOrdinal     *int                       `json:"last_ordinal,omitempty"`
-	WebURL          string                     `json:"web_url,omitempty" jsonschema:"Browser URL for the most recent occurrence; use this URL when linking to it."`
-	Issue           *service.FrictionIssueView `json:"issue,omitempty" jsonschema:"Kata issue filed or linked for this pattern; Kata owns its status."`
+	Fingerprint     string                      `json:"fingerprint"`
+	Kind            string                      `json:"kind"`
+	Title           string                      `json:"title"`
+	FirstSeenDate   string                      `json:"first_seen_date"`
+	LastSeenDate    string                      `json:"last_seen_date"`
+	OccurrenceCount int                         `json:"occurrence_count"`
+	SessionCount    int                         `json:"session_count"`
+	LastSessionID   string                      `json:"last_session_id"`
+	LastOrdinal     *int                        `json:"last_ordinal,omitempty"`
+	WebURL          string                      `json:"web_url,omitempty" jsonschema:"Browser URL for the most recent occurrence; use this URL when linking to it."`
+	Issue           *service.FrictionIssueView  `json:"issue,omitempty" jsonschema:"Kata issue filed or linked for this pattern; Kata owns its status."`
+	Filing          *service.FrictionFilingView `json:"filing,omitempty" jsonschema:"Why automatic filing has not linked this pattern: state retry, needs_person or paused."`
 }
 
 type listFrictionPatternsOut struct {
@@ -116,7 +117,7 @@ func (t *toolset) listFrictionPatterns(
 			FirstSeenDate: v.FirstSeenDate, LastSeenDate: v.LastSeenDate,
 			OccurrenceCount: v.OccurrenceCount, SessionCount: v.SessionCount,
 			LastSessionID: v.LastSubjectID, LastOrdinal: v.LastOrdinal,
-			WebURL: v.LastSessionURL, Issue: v.Issue,
+			WebURL: v.LastSessionURL, Issue: v.Issue, Filing: v.Filing,
 		})
 	}
 	return nil, out, nil

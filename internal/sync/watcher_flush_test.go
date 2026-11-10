@@ -132,6 +132,13 @@ func TestWatcherFlushPendingStopAndCancellation(t *testing.T) {
 			return ctx.Err()
 		}, newFakeWatchBackend(), 8, 1000)
 		require.NoError(t, err)
+		cancelCallback := w.callbackCancel
+		w.callbackCancel = func() {
+			cancelCallback()
+			// Allow the worker and queued flush to run as soon as the callback
+			// is canceled, before Stop continues with its remaining cleanup.
+			synctest.Wait()
+		}
 		w.Start()
 		w.eventSink.Add(backendEvent{Path: "/file", Op: backendOpWrite})
 		ctx, cancel := context.WithCancel(t.Context())

@@ -109,3 +109,30 @@ func TestRedactDSNAndFingerprint(t *testing.T) {
 	assert.NotEqual(t, fp1, fp3)
 	assert.NotContains(t, fp1, "s3cret")
 }
+
+func TestConnectOptionsPoolAndThreads(t *testing.T) {
+	tests := []struct {
+		name        string
+		dsn         string
+		poolSize    int
+		wantConns   int
+		wantThreads any
+	}{
+		{name: "defaults", dsn: "clickhouse://h:9000/db", wantConns: 12, wantThreads: 8},
+		{name: "url pool size", dsn: "clickhouse://h:9000/db?max_open_conns=20", wantConns: 20, wantThreads: 8},
+		{name: "url threads", dsn: "clickhouse://h:9000/db?max_threads=4", wantConns: 12, wantThreads: 4},
+		{name: "url server default threads", dsn: "clickhouse://h:9000/db?max_threads=0", wantConns: 12, wantThreads: 0},
+		{name: "fixed pool ignores url size", dsn: "clickhouse://h:9000/db?max_open_conns=20", poolSize: 4, wantConns: 4, wantThreads: 8},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			opt, err := connectOptions(tt.dsn, "mirror", tt.poolSize)
+			require.NoError(t, err)
+			assert.Equal(t, tt.wantConns, opt.MaxOpenConns)
+			assert.Equal(t, tt.wantConns, opt.MaxIdleConns)
+			assert.Equal(t, tt.wantThreads, opt.Settings["max_threads"])
+			assert.Equal(t, 1, opt.Settings["final"])
+			assert.Equal(t, "mirror", opt.Auth.Database)
+		})
+	}
+}

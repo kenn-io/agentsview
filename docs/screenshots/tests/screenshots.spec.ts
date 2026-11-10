@@ -96,6 +96,28 @@ async function selectFirstSession(page: Page) {
   await page.waitForTimeout(1000);
 }
 
+// Sessions holding only hook output appear in the sidebar but render
+// no messages, so a scan skips them instead of failing. Waiting for the
+// clicked session's transcript to load, rather than for a timeout,
+// keeps both capture passes choosing the same session.
+async function openSessionWithMessages(item: Locator): Promise<boolean> {
+  const page = item.page();
+  const id = await item.getAttribute('data-session-id');
+  if (!id) throw new Error('session item has no id');
+  await item.click();
+  const list = page.locator('.message-list-scroll');
+  await expect(list).toHaveAttribute('data-messages-session-id', id, { timeout: 10_000 });
+  await expect(list).toHaveAttribute('data-loaded', 'true', { timeout: 10_000 });
+  return page
+    .locator('.message')
+    .first()
+    .waitFor({ timeout: 2_000 })
+    .then(
+      () => true,
+      () => false,
+    );
+}
+
 async function selectRichSession(page: Page) {
   await page.goto('/sessions/' + encodeURIComponent(CORPUS.targets.rich.session_id));
   await page.waitForSelector('.message', { timeout: 10_000 });
@@ -1311,12 +1333,10 @@ test.describe('Command palette', () => {
     );
 
     const setup = palette.locator('.semantic-setup');
-    await expect(setup).toContainText(
-      "Semantic search isn't set up",
-      { timeout: 10_000 }
-    );
-    await expect(setup).toContainText('[vector]');
-    await expect(setup).toContainText('agentsview index embeddings build');
+    await expect(setup).toContainText('Search by meaning', {
+      timeout: 10_000,
+    });
+    await expect(setup.getByRole('button', { name: 'Turn on' })).toBeVisible();
     await snapEl(palette.locator('.palette'), 'semantic-search-setup');
   });
 
@@ -1756,6 +1776,16 @@ test.describe('Settings', () => {
           phase: 'embedding',
           rate_per_second: 10,
           running: true,
+          setup: {
+            action: '',
+            busy: false,
+            downloaded_bytes: 0,
+            enabled: true,
+            installing: false,
+            missing_bytes: 0,
+            provider: 'built-in',
+            total_bytes: 0,
+          },
           started_at: startedAt,
           total: 1000,
         }),
@@ -1792,10 +1822,10 @@ test.describe('Settings', () => {
     await embeddingsSection.scrollIntoViewIfNeeded();
     await expect(
       embeddingsSection.getByRole('progressbar', {
-        name: 'Embedding progress',
+        name: 'Search by meaning setup',
       })
     ).toBeVisible();
-    await expect(embeddingsSection.getByText(/^ETA /)).toBeVisible({
+    await expect(embeddingsSection.getByText(/^Indexing 360 of 1,000 text sections · .* left/)).toBeVisible({
       timeout: 5_000,
     });
 
@@ -2236,8 +2266,7 @@ test.describe('Session Vital Signs', () => {
       'button[aria-label="Show session analysis"], button[aria-label="Hide session analysis"]',
     );
     for (let i = 0; i < limit; i++) {
-      await items.nth(i).click();
-      await page.waitForSelector('.message', { timeout: 10_000 });
+      if (!(await openSessionWithMessages(items.nth(i)))) continue;
       await page.waitForTimeout(400);
       if (!(await vitalsBtn.count()) || !(await vitalsBtn.isVisible())) {
         continue;
@@ -2317,8 +2346,7 @@ test.describe('Session intelligence', () => {
     const total = await items.count();
     const limit = Math.min(total, 25);
     for (let i = 0; i < limit; i++) {
-      await items.nth(i).click();
-      await page.waitForSelector('.message', { timeout: 10_000 });
+      if (!(await openSessionWithMessages(items.nth(i)))) continue;
       await page.waitForTimeout(400);
       const badge = page.locator('.grade-badge');
       if (
@@ -2345,8 +2373,7 @@ test.describe('Session intelligence', () => {
     const limit = Math.min(total, 30);
     let firstGradedIdx = -1;
     for (let i = 0; i < limit; i++) {
-      await items.nth(i).click();
-      await page.waitForSelector('.message', { timeout: 10_000 });
+      if (!(await openSessionWithMessages(items.nth(i)))) continue;
       await page.waitForTimeout(300);
       const badge = page.locator('.grade-badge').first();
       if (!(await badge.count()) || !(await badge.isVisible())) {
@@ -2579,5 +2606,190 @@ test.describe('Recent Edits', () => {
     await page.waitForTimeout(500);
 
     await snap(page, 'recent-edits');
+  });
+});
+
+// ── Friction Log ────────────────────────────────────────
+
+test.describe('Friction Log', () => {
+  const DATE = new Date(CAPTURE_NOW.getTime() - 86_400_000)
+    .toISOString()
+    .slice(0, 10);
+  const PREVIOUS = new Date(CAPTURE_NOW.getTime() - 2 * 86_400_000)
+    .toISOString()
+    .slice(0, 10);
+  const FIRST = 'fl1:' + 'a'.repeat(64);
+  const SECOND = 'fl1:' + 'b'.repeat(64);
+
+  function finding(overrides: Record<string, unknown>) {
+    return {
+      kind: 'correction',
+      detector: 'correction.coding',
+      subject_id: 'session-a',
+      subject_kind: 'session',
+      title: '',
+      fingerprint: 'fl1:' + 'c'.repeat(64),
+      text: '',
+      tool_name: '',
+      label: '',
+      evidence: '',
+      message_ordinal: 3,
+      call_index: null,
+      occurred_at: null,
+      seat: '',
+      agent: 'claude',
+      machine: '',
+      persona: '',
+      channel: '',
+      session_url: '',
+      ...overrides,
+    };
+  }
+
+  const signals = [
+    finding({
+      kind: 'error',
+      detector: 'error',
+      subject_id: 'session-b',
+      tool_name: 'Bash',
+      title: 'make test exited 2: missing fixture',
+      text: 'make test exited 2: missing fixture',
+      fingerprint: FIRST,
+      message_ordinal: 14,
+    }),
+    finding({
+      kind: 'workaround',
+      detector: 'workaround',
+      title: 'Skipped the failing migration test',
+      text: 'Skipped the failing migration test for now',
+      fingerprint: SECOND,
+      message_ordinal: 21,
+    }),
+    finding({
+      title: 'Use the existing retry helper',
+      text: 'No, use the existing retry helper',
+      message_ordinal: 7,
+    }),
+    finding({
+      kind: 'interruption',
+      detector: 'interruption',
+      subject_id: 'session-b',
+      fingerprint: 'fl1:' + 'd'.repeat(64),
+      message_ordinal: 9,
+    }),
+  ];
+
+  const pattern = {
+    kind: 'error',
+    last_ordinal: 14,
+    last_seen_date: DATE,
+    last_subject_id: 'session-b',
+  };
+
+  const digest = {
+    date: DATE,
+    timezone: CORPUS.timezone || 'UTC',
+    rules_version: 'friction-v1',
+    built_at: DATE + 'T23:59:00Z',
+    revision: 1,
+    sessions_scanned: 18,
+    markdown_sha256: '0'.repeat(64),
+    summary: {
+      date: DATE,
+      schema_version: 1,
+      sessions_scanned: 18,
+      corrections: 1,
+      errors: 1,
+      workarounds: 1,
+      deferrals: 0,
+      patterns: 0,
+      frustrations: 0,
+      interruptions: 1,
+      p0_alerts: { Bash: ['session-a', 'session-b', 'session-c'] },
+    },
+    signals,
+    p0_alerts: [
+      { tool: 'Bash', subject_ids: ['session-a', 'session-b', 'session-c'] },
+    ],
+    patterns: [
+      {
+        ...pattern,
+        fingerprint: FIRST,
+        title: 'make test exited 2: missing fixture',
+        first_seen_date: '2026-03-24',
+        occurrence_count: 9,
+        session_count: 5,
+        issue: {
+          issue_uid: 'issue-1',
+          linked_at: DATE + 'T12:00:00Z',
+          qualified_id: 'project-a#42',
+          source: 'filed',
+        },
+      },
+      {
+        ...pattern,
+        kind: 'workaround',
+        fingerprint: SECOND,
+        title: 'Skipped the failing migration test',
+        first_seen_date: DATE,
+        last_ordinal: 21,
+        last_subject_id: 'session-a',
+        occurrence_count: 2,
+        session_count: 2,
+      },
+    ],
+    sessions: {
+      'session-a': { agent: 'claude', project: 'project-a', display_name: 'Add retry handling' },
+      'session-b': { agent: 'codex', project: 'project-a', display_name: 'Fix fixture loading' },
+      'session-c': { agent: 'claude', project: 'project-b', display_name: 'Update build scripts' },
+    },
+  };
+
+  test('daily digest', async ({ page }) => {
+    await page.route('**/api/v1/version', async (route) => {
+      const response = await route.fetch();
+      await route.fulfill({
+        response,
+        json: {
+          ...(await response.json()),
+          friction_available: true,
+          friction_build_allowed: true,
+          friction_readable: true,
+        },
+      });
+    });
+    await page.route('**/api/v1/kata/status', (route) =>
+      route.fulfill({ json: { project: 'project-a', state: 'ready' } })
+    );
+    await page.route('**/api/v1/friction/**', async (route) => {
+      const path = new URL(route.request().url()).pathname.replace(/\/+$/, '');
+      const item = (date: string) => ({
+        date,
+        timezone: digest.timezone,
+        rules_version: digest.rules_version,
+        built_at: date + 'T23:59:00Z',
+        revision: 1,
+        sessions_scanned: 18,
+      });
+      if (path.endsWith('/friction/digests')) {
+        await route.fulfill({ json: { digests: [item(DATE), item(PREVIOUS)] } });
+      } else if (path.endsWith('/friction/digests/' + DATE)) {
+        await route.fulfill({ json: digest });
+      } else if (path.endsWith('/friction/digests/' + DATE + '/md')) {
+        await route.fulfill({ contentType: 'text/markdown', body: '# Friction Log\n' });
+      } else {
+        await route.fulfill({ status: 404, json: { detail: 'unmocked ' + path } });
+      }
+    });
+
+    await page.setViewportSize(FULL);
+    await page.goto('/friction?date=' + DATE);
+    const friction = page.locator('.friction-page');
+    await expect(friction.getByRole('heading', { level: 1 })).toContainText(DATE, {
+      timeout: 15_000,
+    });
+    await expect(friction).toContainText('make test exited 2');
+    await page.waitForTimeout(500);
+    await snap(page, 'friction-log');
   });
 });

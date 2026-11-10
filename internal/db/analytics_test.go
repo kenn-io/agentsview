@@ -155,23 +155,40 @@ func mustProjects(
 }
 
 func TestAnalyticsSummaryReturnsFirstReadError(t *testing.T) {
-	d := testDB(t)
-	insertSession(t, d, "summary", "project", func(s *Session) {
-		s.StartedAt = new("2024-06-01T09:00:00Z")
-	})
-	d.rawReader().SetMaxOpenConns(1)
-	conn, err := d.getReader().Conn(t.Context())
-	require.NoError(t, err)
-	// Fail during SQLite row evaluation, after QueryContext has returned rows.
-	require.NoError(t, conn.Raw(func(driverConn any) error {
-		return driverConn.(interface{ RegisterFunc(string, any, bool) error }).RegisterFunc("strftime", func(...any) (string, error) {
-			return "", errors.New("summary read failure")
-		}, false)
-	}))
-	require.NoError(t, conn.Close())
+	for _, tc := range []struct {
+		name string
+		want string
+	}{
+		{"serving", "querying analytics summary: summary read failure"},
+		{"cold read-only", "summary read failure"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			d := testDB(t)
+			insertSession(t, d, "summary", "project", func(s *Session) {
+				s.StartedAt = new("2024-06-01T09:00:00Z")
+			})
+			if tc.name == "cold read-only" {
+				reader, err := OpenReadOnly(t.Context(), d.Path())
+				require.NoError(t, err)
+				t.Cleanup(func() { require.NoError(t, reader.Close()) })
+				d = reader
+			}
+			d.rawReader().SetMaxOpenConns(1)
+			conn, err := d.getReader().Conn(t.Context())
+			require.NoError(t, err)
+			// Cached SQL evaluates its first row during QueryContext; cold
+			// read-only SQL evaluates it during Next. Both must return the error.
+			require.NoError(t, conn.Raw(func(driverConn any) error {
+				return driverConn.(interface{ RegisterFunc(string, any, bool) error }).RegisterFunc("strftime", func(...any) (string, error) {
+					return "", errors.New("summary read failure")
+				}, false)
+			}))
+			require.NoError(t, conn.Close())
 
-	_, err = d.GetAnalyticsSummary(t.Context(), baseFilter())
-	require.EqualError(t, err, "summary read failure")
+			_, err = d.GetAnalyticsSummary(t.Context(), baseFilter())
+			require.EqualError(t, err, tc.want)
+		})
+	}
 }
 
 func TestGetAnalyticsSummary(t *testing.T) {
@@ -323,6 +340,13 @@ func TestAnalyticsSubagentScope(t *testing.T) {
 	shape, err := d.GetAnalyticsSessionShape(ctx, f)
 	require.NoError(t, err, "GetAnalyticsSessionShape")
 	assert.Equal(t, 1, shape.Count, "session-shape stays root-only")
+
+	insertSession(t, d, "continuation", "project-alpha", func(s *Session) {
+		withTokens("continuation", 5, 2, 200)(s)
+		s.ParentSessionID = new("root")
+	})
+	assert.Equal(t, 3, mustSummary(t, d, ctx, f).TotalSessions,
+		"summary also counts the parented continuation")
 }
 
 func TestAnalyticsModelFilter(t *testing.T) {
@@ -2626,16 +2650,6 @@ func TestGetAnalyticsTools(t *testing.T) {
 	})
 }
 
-func TestAnalyticsToolsToolCallsQueryAggregatesInSQL(t *testing.T) {
-	q := analyticsToolsQuery("(?,?)", "", "", false)
-	normalized := strings.Join(strings.Fields(strings.ToLower(q)), " ")
-
-	assert.Contains(t, normalized,
-		"select tc.session_id, tc.category, trim(coalesce(tc.tool_name, '')), count(*)")
-	assert.Contains(t, normalized,
-		"group by tc.session_id, tc.category, trim(coalesce(tc.tool_name, ''))")
-}
-
 func TestGetAnalyticsToolsModelFilterCountsOnlyMatchingToolCalls(
 	t *testing.T,
 ) {
@@ -3182,23 +3196,6 @@ func TestGetAnalyticsSkillsDateBoundaries(t *testing.T) {
 		"only the in-range week is bucketed")
 }
 
-func TestAnalyticsSkillsToolCallsQueryAggregatesInSQL(t *testing.T) {
-	q := analyticsSkillsQuery("(?,?)", "", "")
-	normalized := strings.Join(strings.Fields(strings.ToLower(q)), " ")
-
-	assert.Contains(t, normalized,
-		"select tc.session_id, trim(tc.skill_name), count(*), "+
-			"coalesce(m.timestamp, '')")
-	assert.Contains(t, normalized,
-		"left join messages m on m.session_id = tc.session_id "+
-			"and m.id = tc.message_id")
-	assert.Contains(t, normalized,
-		"trim(coalesce(tc.skill_name, '')) != ''")
-	assert.Contains(t, normalized,
-		"group by tc.session_id, trim(tc.skill_name), "+
-			"coalesce(m.timestamp, '')")
-}
-
 func TestGetAnalyticsSkillsModelFilterCountsOnlyMatchingSkillCalls(
 	t *testing.T,
 ) {
@@ -3394,6 +3391,11 @@ func TestGetAnalyticsTopSessions(t *testing.T) {
 				"done",
 				"2024-06-02T11:00:00Z",
 			),
+			Message{
+				SessionID: "wall-dominant", Ordinal: 3, Role: "user",
+				Content: "hook output", Timestamp: "2024-06-02T11:10:00Z",
+				IsSystem: true, SourceType: "attachment", SourceSubtype: "hook_success",
+			},
 		)
 
 		insertSession(t, d, "actively-working", "project-gamma", func(s *Session) {
@@ -5277,6 +5279,25 @@ func TestGetAnalyticsToolsChunksSessionsAtMaxSQLVars(t *testing.T) {
 	assert.Equal(t, BuildToolsAnalytics(all), resp)
 	assert.Equal(t, 501, resp.TotalCalls)
 	t.Log("chunked and unchunked responses match; TotalCalls == 501")
+}
+
+func TestGetAnalyticsVelocityIgnoresHookRows(t *testing.T) {
+	d := testDB(t)
+	ctx := t.Context()
+	require.NoError(t, d.UpsertSession(ctx, Session{
+		ID: "hooks", Project: "proj", Agent: "claude", Machine: "local",
+		StartedAt: new("2024-06-01T09:00:00Z"), MessageCount: 4, UserMessageCount: 1,
+	}))
+	require.NoError(t, d.ReplaceSessionMessages(ctx, "hooks", []Message{
+		{SessionID: "hooks", Ordinal: 0, Role: "user", IsSystem: true, SourceType: "attachment", SourceSubtype: "hook_success", Timestamp: "2024-06-01T09:00:00Z", Content: "startup output"},
+		{SessionID: "hooks", Ordinal: 1, Role: "user", Timestamp: "2024-06-01T09:01:00Z", Content: "question"},
+		{SessionID: "hooks", Ordinal: 2, Role: "user", IsSystem: true, SourceType: "attachment", SourceSubtype: "hook_additional_context", Timestamp: "2024-06-01T09:01:09Z", Content: "prompt context"},
+		{SessionID: "hooks", Ordinal: 3, Role: "assistant", Timestamp: "2024-06-01T09:01:10Z", Content: "answer"},
+	}))
+	resp, err := d.GetAnalyticsVelocity(ctx, baseFilter())
+	require.NoError(t, err)
+	assert.InDelta(t, 10.0, resp.Overall.FirstResponseSec.P50, 0.001)
+	assert.InDelta(t, 10.0, resp.Overall.TurnCycleSec.P50, 0.001)
 }
 
 func TestAnalyticsDateWindowPlan(t *testing.T) {

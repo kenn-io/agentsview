@@ -92,6 +92,7 @@ type usageExceptionRow struct {
 type usageRollupBuild struct {
 	SessionID, Agent, StartedAt string
 	Project, Machine, GitBranch string
+	GroupKey, GroupLabel        string
 	IsAutomated                 bool
 	UserMessageCount            int
 	HasAuthoritative            bool
@@ -99,6 +100,7 @@ type usageRollupBuild struct {
 	PricingInputs, PricingHash string
 	Source                     usageSourceVersion
 	FactRevision               int64
+	CursorAfter                int64 // Installed Cursor fact revision, or zero for a full build.
 	ChangeRevision             int64
 	SourcePricing              string
 	Daily                      []usageDailyContribution
@@ -438,7 +440,7 @@ func loadUsageRollupFacts(
 }
 
 func loadCursorUsageRollupBuild(
-	ctx context.Context, conn *sql.Conn, highWater int64,
+	ctx context.Context, conn *sql.Conn, after, highWater int64,
 	location *time.Location, pricing *usagePricingIdentities,
 ) (usageRollupBuild, error) {
 	// Cursor rows price at read time, so only the policy identity applies.
@@ -454,13 +456,14 @@ func loadCursorUsageRollupBuild(
 			SyncMarker: strconv.FormatInt(highWater, 10),
 		},
 		FactRevision: highWater,
+		CursorAfter:  after,
 	}
 	rows, err := conn.QueryContext(ctx, `SELECT source_id, agent, timestamp_ms,
 		raw_timestamp, model, input_tokens, output_tokens,
 		cache_creation_tokens, cache_read_tokens, charged_microdollars,
 		is_headless, dedup_key
-		FROM cursor_usage_facts WHERE source_id <= ? ORDER BY source_id`,
-		highWater)
+		FROM cursor_usage_facts WHERE source_id > ? AND source_id <= ? ORDER BY source_id`,
+		after, highWater)
 	if err != nil {
 		return build, err
 	}
@@ -500,6 +503,7 @@ func loadCursorUsageRollupBuild(
 	// Cursor rows stay on the exception tier: their keys may collide with
 	// session usage keys and their filters depend on per-row headless state,
 	// so pricing remains deferred to the request-time group resolution.
+	// Rows append by source_id, so existing exception rows remain valid.
 	for _, fact := range facts {
 		if usageRollupGeneralKey(fact) == "" {
 			return build, fmt.Errorf(
@@ -552,7 +556,7 @@ func buildUsageRollupSessions(
 		}
 		builds = append(builds, usageRollupBuild{
 			SessionID: id, Agent: sessions[id].Agent, StartedAt: sessions[id].StartedAt,
-			Project: sessions[id].Project, Machine: sessions[id].Machine, GitBranch: sessions[id].GitBranch,
+			Project: sessions[id].Project, Machine: sessions[id].Machine, GitBranch: sessions[id].GitBranch, GroupKey: sessions[id].GroupKey, GroupLabel: bakedUsageSession(sessions[id]).GroupLabel,
 			IsAutomated: sessions[id].IsAutomated, UserMessageCount: sessions[id].UserMessageCount,
 			HasAuthoritative: hasAuthoritative,
 			PricingInputs:    pricingInputs, PricingHash: pricingHash,

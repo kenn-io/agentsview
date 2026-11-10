@@ -94,7 +94,7 @@ func (db *DB) GetTrendsTerms(
 	}
 	args = append(selectArgs, args...)
 	query := `SELECT m.session_id, m.ordinal, m.role, m.is_system,
-			COALESCE(m.model, ''), ` + content + `, COALESCE(m.timestamp, ''),
+			m.model, ` + content + `, COALESCE(m.timestamp, ''),
 			COALESCE(s.started_at, ''), s.created_at
 		FROM sessions s
 		JOIN messages m ON m.session_id = s.id

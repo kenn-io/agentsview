@@ -57,7 +57,7 @@ func (s *Store) GetTrendsTerms(
 		ORDER BY m.session_id, m.ordinal`
 	}
 	query := `SELECT m.session_id, m.ordinal, m.role, m.is_system,
-			COALESCE(m.model, ''), ` + content + `,
+			m.model, ` + content + `,
 			COALESCE(TO_CHAR(m.timestamp AT TIME ZONE 'UTC',
 				'YYYY-MM-DD"T"HH24:MI:SS"Z"'), ''),
 			COALESCE(TO_CHAR(s.started_at AT TIME ZONE 'UTC',

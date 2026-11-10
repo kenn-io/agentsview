@@ -41,15 +41,27 @@ per-row-rounded estimated cost, savings, authoritative cost markers, request
 counts, and discarded-snapshot output. Go owns model resolution, rate-band
 selection, money rounding, and result assembly.
 
-Rollup installs bake `agent`, `started_at`, `project`, `machine`, `git_branch`,
-`is_automated`, and `user_message_count`. A journaled metadata change rebuilds
-that session's rows and moves its day totals to the new dimensions. Termination
-and `active_since` filters still use archive metadata and per-session rows.
+Installs bake `agent`, `started_at`, `project`, `machine`, `git_branch`,
+`group_key`, `group_label`, `is_automated`, and `user_message_count`.
+`group_label` is the cron label derived from `session_name`. Format 21 gives
+these grouping fields a separate generation from format 20 writers. A journaled
+metadata change rebuilds that session's rows and moves its day totals to the new
+dimensions. Name changes on grouped sessions journal through their own trigger,
+which writers that predate it do not drop. Termination and `active_since`
+filters still use archive metadata and per-session rows.
 
 After a completed timezone coverage pass, daily reads apply session and model
 filters to day totals in SQL. They load install metadata only for authoritative
-sessions and exception owners. Distinct matching sessions come from daily rows
-plus surviving exceptions. Warm preparations skip window-session discovery. Each
+sessions and exception owners. SQL counts ordinary sessions by project and
+agent; surviving exception owners add their distinct counts. Warm Top sessions
+reads fold exception owners first, then rank their contributions together with
+ordinary session rows in one SQL query. Grouped units take agent from their
+highest-ranked member (ties by session ID), matching `GroupTopSessions` over
+ranked entries, start from their newest member, and the label from their newest
+labelled member. Only
+returned individual sessions load archive names. SQL computes the trailing
+remainder from the same units. Daily reads count in SQL; billed-session counts
+read per-session rows. Warm preparations skip window-session discovery. Each
 archive snapshot loads its pricing catalog and computes its digest.
 
 ### Dedup exceptions

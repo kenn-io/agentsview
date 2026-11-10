@@ -13,7 +13,7 @@ func UsageSlot(f UsageFilter, keepBreakdowns bool) string {
 	f.TopSessionsByGroup = false
 	f.TopSessionsSort = ""
 	f.TopSessionsTokenTypes = 0
-	f.SkipSessionCounts = false
+	f.SkipSessionCounts, f.PairwiseSides = false, false
 	if !keepBreakdowns {
 		f.Breakdowns = false
 	}

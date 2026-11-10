@@ -322,7 +322,9 @@ func newTopSessionsRetryStore(t *testing.T, target Target, readingContexts *atom
 			readingContexts.Store(strings.Contains(line, "FROM usage_price_contexts"))
 		}
 	}
-	store := NewStoreFromDB(chdriver.OpenDB(options))
+	bulk, err := chdriver.Open(options)
+	require.NoError(t, err)
+	store := NewStoreFromDB(chdriver.OpenDB(options), bulk)
 	t.Cleanup(func() { require.NoError(t, store.Close()) })
 	return store
 }

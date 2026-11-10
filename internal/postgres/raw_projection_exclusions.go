@@ -123,6 +123,6 @@ func (s *RawProjectionStore) EmptyTrash(ctx context.Context) (int, error) {
 }
 
 func excludeRawCohort(ctx context.Context, tx *sql.Tx, group, id string) error {
-	_, err := tx.ExecContext(ctx, `INSERT INTO raw_curation(group_id,branch_id,field,value) SELECT group_id,branch_id,'excluded','true'::jsonb FROM raw_session_branches WHERE group_id=$1 AND session_id=$2 AND active ON CONFLICT(group_id,branch_id,field) DO UPDATE SET value='true'`, group, id)
+	_, err := tx.ExecContext(ctx, `INSERT INTO raw_curation(group_id,branch_id,field,value) SELECT group_id,branch_id,'excluded','true' FROM raw_session_branches WHERE group_id=$1 AND session_id=$2 AND active ON CONFLICT(group_id,branch_id,field) DO UPDATE SET value='true'`, group, id)
 	return err
 }

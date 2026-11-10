@@ -231,7 +231,7 @@ func (cache *usageCache) fillUsageWindow(ctx context.Context, snapshot *usageQue
 
 func (db *DB) queryUsageRollups(
 	ctx context.Context, filter UsageFilter, kind usageQueryKind,
-	includeCursor bool,
+	includeCursor bool, topSessionsLimit int,
 ) (usageQuerySnapshot, usageFactsResult, *export.PricingResolver, error) {
 	// Retirement and cache-side install invalidation require a fresh capture.
 	var lastErr error
@@ -241,7 +241,7 @@ func (db *DB) queryUsageRollups(
 	if memo != nil {
 		key = usageWindowKey(filter, kind, cursor)
 	}
-	// Day totals get one fresh journaled attempt after concurrent installs.
+	// Totals readers get one fresh journaled attempt after concurrent installs.
 	// Further conflicts use full-window preparation within the same budget.
 	for attempt := 1; attempt <= usageFillMaxAttempts+1; attempt++ {
 		if attempt > 1 {
@@ -253,7 +253,7 @@ func (db *DB) queryUsageRollups(
 		if attempt == 1 {
 			prepared, err = db.sharedUsageWindow(ctx, key, filter, kind, cursor)
 		} else {
-			prepared, err = db.prepareUsageWindow(ctx, filter, kind, cursor, attempt == 2 && kind == usageQueryKindDayTotals, filter.Progress)
+			prepared, err = db.prepareUsageWindow(ctx, filter, kind, cursor, attempt == 2 && kind.readsJournaledTotals(), filter.Progress)
 		}
 		if err != nil {
 			if errors.Is(err, errUsageCacheSourceChanged) {
@@ -283,7 +283,7 @@ func (db *DB) queryUsageRollups(
 			matching, queryErr = cache.usageRollupActivityQuery(ctx, snapshot, filter, prepared.installs)
 			facts.MatchingSessions = matching
 		} else {
-			facts, queryErr = cache.usageRollupQuery(ctx, prepared, filter, resolver)
+			facts, queryErr = cache.usageRollupQuery(ctx, prepared, filter, resolver, topSessionsLimit)
 		}
 		timings := prepared.timings
 		timings.read = time.Since(readStarted)
@@ -309,18 +309,40 @@ func (db *DB) queryUsageRollups(
 func (db *DB) GetTopSessionsByCost(
 	ctx context.Context, filter UsageFilter, limit int,
 ) ([]TopSessionEntry, error) {
+	kind := usageQueryKindToken
+	if filter.ActiveSince == "" && filter.Termination == "" {
+		kind = usageQueryKindTopSessions
+	}
 	snapshot, facts, _, err := db.queryUsageRollups(
-		ctx, filter, usageQueryKindToken, false)
+		ctx, filter, kind, false, limit)
 	if err != nil {
 		return nil, err
 	}
+	if facts.TopSessions != nil {
+		return db.finishUsageTopSessions(ctx, facts)
+	}
+	result, err := foldUsageTopSessions(snapshot.Sessions, facts.Groups, filter)
+	if err != nil {
+		return nil, err
+	}
+	if filter.TopSessionsByGroup {
+		// A group takes the agent of its first entry. The fold returns map order,
+		// so rank members here to match the agent that SQL ranking picks.
+		sortTopSessions(result, filter.TopSessionsSort, filter.TopSessionsTokenTypes)
+		return GroupTopSessions(result, limit, filter.TopSessionsSort, filter.TopSessionsTokenTypes)
+	}
+	return SortAndLimitTopSessions(result, limit, filter.TopSessionsSort, filter.TopSessionsTokenTypes), nil
+}
+
+func foldUsageTopSessions(sessions []usageQuerySession, groups []usageFactsGroup, filter UsageFilter) ([]TopSessionEntry, error) {
+	var err error
 	type totals struct {
 		input, output, cacheWrite, cacheRead int
 		cost                                 money.Money
 		authoritative                        *money.Money
 	}
 	bySession := make(map[string]*totals)
-	for _, group := range facts.Groups {
+	for _, group := range groups {
 		if group.SessionID == "" {
 			continue
 		}
@@ -344,8 +366,8 @@ func (db *DB) GetTopSessionsByCost(
 			current.authoritative = &value
 		}
 	}
-	metadata := make(map[string]usageQuerySession, len(snapshot.Sessions))
-	for _, session := range snapshot.Sessions {
+	metadata := make(map[string]usageQuerySession, len(sessions))
+	for _, session := range sessions {
 		metadata[session.ID] = session
 	}
 	result := make([]TopSessionEntry, 0, len(bySession))
@@ -373,12 +395,7 @@ func (db *DB) GetTopSessionsByCost(
 		}
 		result = append(result, entry)
 	}
-	if filter.TopSessionsByGroup {
-		return GroupTopSessions(result, limit, filter.TopSessionsSort, filter.TopSessionsTokenTypes)
-	}
-	return SortAndLimitTopSessions(
-		result, limit, filter.TopSessionsSort, filter.TopSessionsTokenTypes,
-	), nil
+	return result, nil
 }
 
 // GetUsageSessionCounts returns distinct billed survivor owners by metadata.
@@ -386,11 +403,23 @@ func (db *DB) GetUsageSessionCounts(
 	ctx context.Context, filter UsageFilter,
 ) (UsageSessionCounts, error) {
 	_, facts, _, err := db.queryUsageRollups(
-		ctx, filter, usageQueryKindToken, false)
+		ctx, filter, usageQueryKindToken, false, 0)
 	if err != nil {
 		return UsageSessionCounts{}, err
 	}
 	return NewUsageSessionCounts(facts.MatchingSessions), nil
+}
+
+func usageSessionCounts(facts usageFactsResult) UsageSessionCounts {
+	counts := NewUsageSessionCounts(facts.MatchingSessions)
+	counts.Total += facts.SessionCounts.Total
+	for key, count := range facts.SessionCounts.ByProject {
+		counts.ByProject[key] += count
+	}
+	for key, count := range facts.SessionCounts.ByAgent {
+		counts.ByAgent[key] += count
+	}
+	return counts
 }
 
 // GetUsageMatchingSessionCount counts sessions with eligible usage activity.
@@ -398,7 +427,7 @@ func (db *DB) GetUsageMatchingSessionCount(
 	ctx context.Context, filter UsageFilter,
 ) (int, error) {
 	_, facts, _, err := db.queryUsageRollups(
-		ctx, filter, usageQueryKindActivity, false)
+		ctx, filter, usageQueryKindActivity, false, 0)
 	if err != nil {
 		return 0, err
 	}

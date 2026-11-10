@@ -5926,6 +5926,7 @@ type ClientInterface interface {
 	PostAPIV1ArtifactsExchangeWithResponse(ctx context.Context, options *PostAPIV1ArtifactsExchangeRequestOptions, reqEditors ...runtime.RequestEditorFn) (*PostAPIV1ArtifactsExchangeResp, error)
 	GetAPIV1CodexCloudStatusWithResponse(ctx context.Context, reqEditors ...runtime.RequestEditorFn) (*GetAPIV1CodexCloudStatusResp, error)
 	PostAPIV1CommitsSessionsWithResponse(ctx context.Context, options *PostAPIV1CommitsSessionsRequestOptions, reqEditors ...runtime.RequestEditorFn) (*PostAPIV1CommitsSessionsResp, error)
+	PostAPIV1DaemonPersistWithResponse(ctx context.Context, reqEditors ...runtime.RequestEditorFn) (*PostAPIV1DaemonPersistResp, error)
 	PostAPIV1DataCompactWithResponse(ctx context.Context, options *PostAPIV1DataCompactRequestOptions, reqEditors ...runtime.RequestEditorFn) (*PostAPIV1DataCompactResp, error)
 	PostAPIV1EmbeddingsBuildWithResponse(ctx context.Context, options *PostAPIV1EmbeddingsBuildRequestOptions, reqEditors ...runtime.RequestEditorFn) (*PostAPIV1EmbeddingsBuildResp, error)
 	GetAPIV1EmbeddingsGenerationsWithResponse(ctx context.Context, options *GetAPIV1EmbeddingsGenerationsRequestOptions, reqEditors ...runtime.RequestEditorFn) (*GetAPIV1EmbeddingsGenerationsResp, error)
@@ -7668,6 +7669,212 @@ func (c *Client) PostAPIV1CommitsSessionsWithResponse(ctx context.Context, optio
 					ContentType:   resp.Headers.Get("Content-Type"),
 					ContentLength: len(bodyBytes),
 					TargetType:    "PostAPIV1CommitsSessionsErrorResponseJSON504",
+					Body:          bodyBytes,
+					Err:           err,
+				}
+			}
+		}
+		return out, runtime.NewClientAPIError(fmt.Errorf("API error (status %d)", resp.StatusCode), runtime.WithStatusCode(resp.StatusCode))
+	default:
+		return out, runtime.NewClientAPIError(fmt.Errorf("unexpected status code: %d", resp.StatusCode), runtime.WithStatusCode(resp.StatusCode))
+	}
+}
+
+// PostAPIV1DaemonPersist Keep the daemon running until stopped
+func (c *Client) PostAPIV1DaemonPersistWithResponse(ctx context.Context, reqEditors ...runtime.RequestEditorFn) (*PostAPIV1DaemonPersistResp, error) {
+	var err error
+	reqParams := runtime.RequestOptionsParameters{
+		RequestURL: c.apiClient.GetBaseURL() + "/api/v1/daemon/persist",
+		Method:     "POST",
+	}
+
+	req, err := c.apiClient.CreateRequest(ctx, reqParams, reqEditors...)
+	if err != nil {
+		return nil, fmt.Errorf("error creating request: %w", err)
+	}
+
+	resp, err := c.apiClient.ExecuteRequest(ctx, req, "/api/v1/daemon/persist")
+	if err != nil {
+		return nil, fmt.Errorf("error executing request: %w", err)
+	}
+
+	out := &PostAPIV1DaemonPersistResp{
+		HTTPResponse: resp.Raw,
+		Body:         resp.Content,
+		StatusCode:   resp.StatusCode,
+	}
+
+	switch resp.StatusCode {
+	case 200:
+		out.JSON200 = new(PostAPIV1DaemonPersistResponse)
+		bodyBytes := resp.Content
+		if len(bodyBytes) > 0 {
+			if err := json.Unmarshal(bodyBytes, out.JSON200); err != nil {
+				return out, &runtime.ResponseDecodeError{
+					StatusCode:    resp.StatusCode,
+					ContentType:   resp.Headers.Get("Content-Type"),
+					ContentLength: len(bodyBytes),
+					TargetType:    "PostAPIV1DaemonPersistResponse",
+					Body:          bodyBytes,
+					Err:           err,
+				}
+			}
+		}
+		return out, nil
+	case 400:
+		out.JSON400 = new(PostAPIV1DaemonPersistErrorResponse)
+		bodyBytes := resp.Content
+		if len(bodyBytes) > 0 {
+			if err := json.Unmarshal(bodyBytes, out.JSON400); err != nil {
+				return out, &runtime.ResponseDecodeError{
+					StatusCode:    resp.StatusCode,
+					ContentType:   resp.Headers.Get("Content-Type"),
+					ContentLength: len(bodyBytes),
+					TargetType:    "PostAPIV1DaemonPersistErrorResponse",
+					Body:          bodyBytes,
+					Err:           err,
+				}
+			}
+		}
+		return out, runtime.NewClientAPIError(fmt.Errorf("API error (status %d)", resp.StatusCode), runtime.WithStatusCode(resp.StatusCode))
+	case 401:
+		out.JSON401 = new(PostAPIV1DaemonPersistErrorResponseJSON)
+		bodyBytes := resp.Content
+		if len(bodyBytes) > 0 {
+			if err := json.Unmarshal(bodyBytes, out.JSON401); err != nil {
+				return out, &runtime.ResponseDecodeError{
+					StatusCode:    resp.StatusCode,
+					ContentType:   resp.Headers.Get("Content-Type"),
+					ContentLength: len(bodyBytes),
+					TargetType:    "PostAPIV1DaemonPersistErrorResponseJSON",
+					Body:          bodyBytes,
+					Err:           err,
+				}
+			}
+		}
+		return out, runtime.NewClientAPIError(fmt.Errorf("API error (status %d)", resp.StatusCode), runtime.WithStatusCode(resp.StatusCode))
+	case 403:
+		out.JSON403 = new(PostAPIV1DaemonPersistErrorResponseJSON403)
+		bodyBytes := resp.Content
+		if len(bodyBytes) > 0 {
+			if err := json.Unmarshal(bodyBytes, out.JSON403); err != nil {
+				return out, &runtime.ResponseDecodeError{
+					StatusCode:    resp.StatusCode,
+					ContentType:   resp.Headers.Get("Content-Type"),
+					ContentLength: len(bodyBytes),
+					TargetType:    "PostAPIV1DaemonPersistErrorResponseJSON403",
+					Body:          bodyBytes,
+					Err:           err,
+				}
+			}
+		}
+		return out, runtime.NewClientAPIError(fmt.Errorf("API error (status %d)", resp.StatusCode), runtime.WithStatusCode(resp.StatusCode))
+	case 404:
+		out.JSON404 = new(PostAPIV1DaemonPersistErrorResponseJSON404)
+		bodyBytes := resp.Content
+		if len(bodyBytes) > 0 {
+			if err := json.Unmarshal(bodyBytes, out.JSON404); err != nil {
+				return out, &runtime.ResponseDecodeError{
+					StatusCode:    resp.StatusCode,
+					ContentType:   resp.Headers.Get("Content-Type"),
+					ContentLength: len(bodyBytes),
+					TargetType:    "PostAPIV1DaemonPersistErrorResponseJSON404",
+					Body:          bodyBytes,
+					Err:           err,
+				}
+			}
+		}
+		return out, runtime.NewClientAPIError(fmt.Errorf("API error (status %d)", resp.StatusCode), runtime.WithStatusCode(resp.StatusCode))
+	case 409:
+		out.JSON409 = new(PostAPIV1DaemonPersistErrorResponseJSON409)
+		bodyBytes := resp.Content
+		if len(bodyBytes) > 0 {
+			if err := json.Unmarshal(bodyBytes, out.JSON409); err != nil {
+				return out, &runtime.ResponseDecodeError{
+					StatusCode:    resp.StatusCode,
+					ContentType:   resp.Headers.Get("Content-Type"),
+					ContentLength: len(bodyBytes),
+					TargetType:    "PostAPIV1DaemonPersistErrorResponseJSON409",
+					Body:          bodyBytes,
+					Err:           err,
+				}
+			}
+		}
+		return out, runtime.NewClientAPIError(fmt.Errorf("API error (status %d)", resp.StatusCode), runtime.WithStatusCode(resp.StatusCode))
+	case 500:
+		out.JSON500 = new(PostAPIV1DaemonPersistErrorResponseJSON500)
+		bodyBytes := resp.Content
+		if len(bodyBytes) > 0 {
+			if err := json.Unmarshal(bodyBytes, out.JSON500); err != nil {
+				return out, &runtime.ResponseDecodeError{
+					StatusCode:    resp.StatusCode,
+					ContentType:   resp.Headers.Get("Content-Type"),
+					ContentLength: len(bodyBytes),
+					TargetType:    "PostAPIV1DaemonPersistErrorResponseJSON500",
+					Body:          bodyBytes,
+					Err:           err,
+				}
+			}
+		}
+		return out, runtime.NewClientAPIError(fmt.Errorf("API error (status %d)", resp.StatusCode), runtime.WithStatusCode(resp.StatusCode))
+	case 501:
+		out.JSON501 = new(PostAPIV1DaemonPersistErrorResponseJSON501)
+		bodyBytes := resp.Content
+		if len(bodyBytes) > 0 {
+			if err := json.Unmarshal(bodyBytes, out.JSON501); err != nil {
+				return out, &runtime.ResponseDecodeError{
+					StatusCode:    resp.StatusCode,
+					ContentType:   resp.Headers.Get("Content-Type"),
+					ContentLength: len(bodyBytes),
+					TargetType:    "PostAPIV1DaemonPersistErrorResponseJSON501",
+					Body:          bodyBytes,
+					Err:           err,
+				}
+			}
+		}
+		return out, runtime.NewClientAPIError(fmt.Errorf("API error (status %d)", resp.StatusCode), runtime.WithStatusCode(resp.StatusCode))
+	case 502:
+		out.JSON502 = new(PostAPIV1DaemonPersistErrorResponseJSON502)
+		bodyBytes := resp.Content
+		if len(bodyBytes) > 0 {
+			if err := json.Unmarshal(bodyBytes, out.JSON502); err != nil {
+				return out, &runtime.ResponseDecodeError{
+					StatusCode:    resp.StatusCode,
+					ContentType:   resp.Headers.Get("Content-Type"),
+					ContentLength: len(bodyBytes),
+					TargetType:    "PostAPIV1DaemonPersistErrorResponseJSON502",
+					Body:          bodyBytes,
+					Err:           err,
+				}
+			}
+		}
+		return out, runtime.NewClientAPIError(fmt.Errorf("API error (status %d)", resp.StatusCode), runtime.WithStatusCode(resp.StatusCode))
+	case 503:
+		out.JSON503 = new(PostAPIV1DaemonPersistErrorResponseJSON503)
+		bodyBytes := resp.Content
+		if len(bodyBytes) > 0 {
+			if err := json.Unmarshal(bodyBytes, out.JSON503); err != nil {
+				return out, &runtime.ResponseDecodeError{
+					StatusCode:    resp.StatusCode,
+					ContentType:   resp.Headers.Get("Content-Type"),
+					ContentLength: len(bodyBytes),
+					TargetType:    "PostAPIV1DaemonPersistErrorResponseJSON503",
+					Body:          bodyBytes,
+					Err:           err,
+				}
+			}
+		}
+		return out, runtime.NewClientAPIError(fmt.Errorf("API error (status %d)", resp.StatusCode), runtime.WithStatusCode(resp.StatusCode))
+	case 504:
+		out.JSON504 = new(PostAPIV1DaemonPersistErrorResponseJSON504)
+		bodyBytes := resp.Content
+		if len(bodyBytes) > 0 {
+			if err := json.Unmarshal(bodyBytes, out.JSON504); err != nil {
+				return out, &runtime.ResponseDecodeError{
+					StatusCode:    resp.StatusCode,
+					ContentType:   resp.Headers.Get("Content-Type"),
+					ContentLength: len(bodyBytes),
+					TargetType:    "PostAPIV1DaemonPersistErrorResponseJSON504",
 					Body:          bodyBytes,
 					Err:           err,
 				}
@@ -21980,6 +22187,25 @@ func (c *Client) GetAPIV1VersionWithResponse(ctx context.Context, reqEditors ...
 
 var _ ClientInterface = (*Client)(nil)
 
+// FrictionFilingItemState retry: waiting for the next attempt; needs_person: file or link it by hand; paused: a person removed its link
+type FrictionFilingItemState string
+
+const (
+	NeedsPerson FrictionFilingItemState = "needs_person"
+	Paused      FrictionFilingItemState = "paused"
+	Retry       FrictionFilingItemState = "retry"
+)
+
+// Validate checks if the FrictionFilingItemState value is valid
+func (f FrictionFilingItemState) Validate() error {
+	switch f {
+	case NeedsPerson, Paused, Retry:
+		return nil
+	default:
+		return runtime.NewValidationErrorsFromString("Enum", fmt.Sprintf("must be a valid FrictionFilingItemState value, got: %v", f))
+	}
+}
+
 type IntegrationsdocbankMatchState string
 
 const (
@@ -23334,6 +23560,9 @@ type GetAPIV1SearchContentQuery struct {
 	// Mode Search mode
 	Mode *GetAPIV1SearchContentQueryMode `json:"mode,omitempty"`
 
+	// AllowKeywordFallback Return hybrid keyword matches when semantic search is unavailable
+	AllowKeywordFallback *bool `json:"allow_keyword_fallback,omitempty"`
+
 	// Scope Result scope: top, all, or subordinate (blank lexical scope keeps sidebar child filtering)
 	Scope *GetAPIV1SearchContentQueryScope `json:"scope,omitempty"`
 
@@ -23600,6 +23829,9 @@ type GetAPIV1SessionStatsQuery struct {
 	// Timezone IANA timezone name
 	Timezone *string `json:"timezone,omitempty"`
 
+	// OutcomesOnly Compute only outcome_stats; other sections are zero-valued
+	OutcomesOnly *bool `json:"outcomes_only,omitempty"`
+
 	// IncludeGitOutcomes Include git-derived outcome stats
 	IncludeGitOutcomes *bool `json:"include_git_outcomes,omitempty"`
 
@@ -23608,6 +23840,9 @@ type GetAPIV1SessionStatsQuery struct {
 }
 
 type GetAPIV1SessionsQuery struct {
+	// ExclusionCounts Include default-exclusion counts; true also samples hidden children, false counts only one-shot and automated sessions. First page only.
+	ExclusionCounts *bool `json:"exclusion_counts,omitempty"`
+
 	// Project Filter by project
 	Project *string `json:"project,omitempty"`
 
@@ -24334,6 +24569,28 @@ type PostAPIV1CommitsSessionsErrorResponseJSON502 = APIErrorResponse
 type PostAPIV1CommitsSessionsErrorResponseJSON503 = APIErrorResponse
 
 type PostAPIV1CommitsSessionsErrorResponseJSON504 = APIErrorResponse
+
+type PostAPIV1DaemonPersistResponse map[string]bool
+
+type PostAPIV1DaemonPersistErrorResponse = APIErrorResponse
+
+type PostAPIV1DaemonPersistErrorResponseJSON = APIErrorResponse
+
+type PostAPIV1DaemonPersistErrorResponseJSON403 = APIErrorResponse
+
+type PostAPIV1DaemonPersistErrorResponseJSON404 = APIErrorResponse
+
+type PostAPIV1DaemonPersistErrorResponseJSON409 = APIErrorResponse
+
+type PostAPIV1DaemonPersistErrorResponseJSON500 = APIErrorResponse
+
+type PostAPIV1DaemonPersistErrorResponseJSON501 = APIErrorResponse
+
+type PostAPIV1DaemonPersistErrorResponseJSON502 = APIErrorResponse
+
+type PostAPIV1DaemonPersistErrorResponseJSON503 = APIErrorResponse
+
+type PostAPIV1DaemonPersistErrorResponseJSON504 = APIErrorResponse
 
 type PostAPIV1DataCompactResponse = db.CompactResult
 
@@ -26068,6 +26325,23 @@ type PostAPIV1CommitsSessionsResp struct {
 	JSON502      *PostAPIV1CommitsSessionsErrorResponseJSON502
 	JSON503      *PostAPIV1CommitsSessionsErrorResponseJSON503
 	JSON504      *PostAPIV1CommitsSessionsErrorResponseJSON504
+}
+
+type PostAPIV1DaemonPersistResp struct {
+	HTTPResponse *http.Response
+	Body         []byte
+	StatusCode   int
+	JSON200      *PostAPIV1DaemonPersistResponse
+	JSON400      *PostAPIV1DaemonPersistErrorResponse
+	JSON401      *PostAPIV1DaemonPersistErrorResponseJSON
+	JSON403      *PostAPIV1DaemonPersistErrorResponseJSON403
+	JSON404      *PostAPIV1DaemonPersistErrorResponseJSON404
+	JSON409      *PostAPIV1DaemonPersistErrorResponseJSON409
+	JSON500      *PostAPIV1DaemonPersistErrorResponseJSON500
+	JSON501      *PostAPIV1DaemonPersistErrorResponseJSON501
+	JSON502      *PostAPIV1DaemonPersistErrorResponseJSON502
+	JSON503      *PostAPIV1DaemonPersistErrorResponseJSON503
+	JSON504      *PostAPIV1DaemonPersistErrorResponseJSON504
 }
 
 type PostAPIV1DataCompactResp struct {
@@ -28381,6 +28655,8 @@ type DBSession = db.Session
 
 type DBSessionCommitList = db.SessionCommitList
 
+type DBSessionExclusionCounts = db.SessionExclusionCounts
+
 type DBSessionExternalParent = db.SessionExternalParent
 
 type DBSessionLabels = db.SessionLabels
@@ -29291,6 +29567,28 @@ func (f FrictionFileResponse) Validate() error {
 	return errors
 }
 
+type FrictionFilingItem struct {
+	Attempts      int64      `json:"attempts"`
+	LastError     *string    `json:"last_error,omitempty"`
+	NextAttemptAt *time.Time `json:"next_attempt_at,omitempty"`
+
+	// State retry: waiting for the next attempt; needs_person: file or link it by hand; paused: a person removed its link
+	State FrictionFilingItemState `json:"state" validate:"required"`
+}
+
+func (f FrictionFilingItem) Validate() error {
+	var errors runtime.ValidationErrors
+	if v, ok := any(f.State).(runtime.Validator); ok {
+		if err := v.Validate(); err != nil {
+			errors = errors.Append("State", err)
+		}
+	}
+	if len(errors) == 0 {
+		return nil
+	}
+	return errors
+}
+
 type FrictionFindingItem struct {
 	CallIndex      *int64     `json:"call_index"`
 	Detector       string     `json:"detector" validate:"required"`
@@ -29404,20 +29702,28 @@ func (f FrictionP0Alert) Validate() error {
 }
 
 type FrictionPatternItem struct {
-	Fingerprint     string             `json:"fingerprint" validate:"required"`
-	FirstSeenDate   string             `json:"first_seen_date" validate:"required"`
-	Issue           *FrictionIssueItem `json:"issue,omitempty"`
-	Kind            string             `json:"kind" validate:"required"`
-	LastOrdinal     *int64             `json:"last_ordinal"`
-	LastSeenDate    string             `json:"last_seen_date" validate:"required"`
-	LastSubjectID   string             `json:"last_subject_id" validate:"required"`
-	OccurrenceCount int64              `json:"occurrence_count"`
-	SessionCount    int64              `json:"session_count"`
-	Title           string             `json:"title" validate:"required"`
+	Filing          *FrictionFilingItem `json:"filing,omitempty"`
+	Fingerprint     string              `json:"fingerprint" validate:"required"`
+	FirstSeenDate   string              `json:"first_seen_date" validate:"required"`
+	Issue           *FrictionIssueItem  `json:"issue,omitempty"`
+	Kind            string              `json:"kind" validate:"required"`
+	LastOrdinal     *int64              `json:"last_ordinal"`
+	LastSeenDate    string              `json:"last_seen_date" validate:"required"`
+	LastSubjectID   string              `json:"last_subject_id" validate:"required"`
+	OccurrenceCount int64               `json:"occurrence_count"`
+	SessionCount    int64               `json:"session_count"`
+	Title           string              `json:"title" validate:"required"`
 }
 
 func (f FrictionPatternItem) Validate() error {
 	var errors runtime.ValidationErrors
+	if f.Filing != nil {
+		if v, ok := any(f.Filing).(runtime.Validator); ok {
+			if err := v.Validate(); err != nil {
+				errors = errors.Append("Filing", err)
+			}
+		}
+	}
 	if err := typesValidator.Var(f.Fingerprint, "required"); err != nil {
 		errors = errors.Append("Fingerprint", err)
 	}
@@ -31058,6 +31364,22 @@ type VectorRepairStats struct {
 	Scanned        bool  `json:"scanned"`
 }
 
+type VectorSetupStatus struct {
+	Action          string  `json:"action" validate:"required"`
+	Busy            bool    `json:"busy"`
+	DownloadedBytes int64   `json:"downloaded_bytes"`
+	Enabled         bool    `json:"enabled"`
+	ErrorData       *string `json:"error,omitempty"`
+	Installing      bool    `json:"installing"`
+	MissingBytes    int64   `json:"missing_bytes"`
+	Provider        string  `json:"provider" validate:"required"`
+	TotalBytes      int64   `json:"total_bytes"`
+}
+
+func (v VectorSetupStatus) Validate() error {
+	return runtime.ConvertValidatorError(typesValidator.Struct(v))
+}
+
 type VersionInfo struct {
 	APIVersion                 int64  `json:"api_version"`
 	ArchiveOnly                *bool  `json:"archive_only,omitempty"`
@@ -31065,6 +31387,7 @@ type VersionInfo struct {
 	Commit                     string `json:"commit" validate:"required"`
 	DataVersion                int64  `json:"data_version"`
 	DocbankEnabled             *bool  `json:"docbank_enabled,omitempty"`
+	FrictionAutoFile           *bool  `json:"friction_auto_file,omitempty"`
 	FrictionAvailable          bool   `json:"friction_available"`
 	FrictionBuildAllowed       bool   `json:"friction_build_allowed"`
 	FrictionReadable           *bool  `json:"friction_readable,omitempty"`

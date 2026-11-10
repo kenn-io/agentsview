@@ -156,7 +156,8 @@ func (db *DB) UsagePricingDigest(ctx context.Context) (string, error) {
 	return usagePricingIdentity(rows)
 }
 
-// RewarmUsageCache rebuilds price-stale rollups; a call during a pass queues one rerun because passes pin their catalog.
+// RewarmUsageCache starts or queues a pass to rebuild price-stale rollups.
+// Active passes detect committed pricing changes between batches and restart with the current catalog.
 func (db *DB) RewarmUsageCache() error {
 	if !db.isUsageBackfillEnabled() {
 		return nil
@@ -170,6 +171,19 @@ func (db *DB) isUsageBackfillEnabled() bool {
 	db.usageBackfillMu.Lock()
 	defer db.usageBackfillMu.Unlock()
 	return db.usageBackfillEnabled
+}
+
+func (db *DB) usageBackfillPricingChanged(ctx context.Context, revision int64) (bool, error) {
+	_, current, err := db.databaseIDAndUsagePricingRevision(ctx)
+	// Pricing triggers copy the incremented global revision, so only a
+	// pricing revision above the snapshot's change revision needs a rerun.
+	if err != nil || current <= revision {
+		return false, err
+	}
+	db.usageBackfillMu.Lock()
+	defer db.usageBackfillMu.Unlock()
+	db.usageBackfillRerun = true
+	return true, nil
 }
 
 // StopUsageCacheBackfill cancels and joins the active pass before cache handles
@@ -262,6 +276,11 @@ func (db *DB) runUsageCacheBackfillPass(
 	allResults := make(map[string]usageFillResult, len(snapshot.Versions))
 	var installs []map[string]usageRollupInstall
 	for start := 0; start < len(snapshot.Versions); start += usageCacheBackfillBatchSize {
+		if start > 0 {
+			if changed, err := db.usageBackfillPricingChanged(ctx, snapshot.ChangeRevision); err != nil || changed {
+				return err
+			}
+		}
 		end := min(start+usageCacheBackfillBatchSize, len(snapshot.Versions))
 		cursorTarget := int64(0)
 		if start == 0 {
@@ -299,6 +318,9 @@ func (db *DB) runUsageCacheBackfillPass(
 			}
 		}
 	}
+	if changed, err := db.usageBackfillPricingChanged(ctx, snapshot.ChangeRevision); err != nil || changed {
+		return err
+	}
 	// Filling a later batch can invalidate a rollup install from an
 	// earlier batch when the filled session adds a sibling for an
 	// identity the earlier batch had finalized. Re-verify the whole
@@ -327,6 +349,9 @@ func (db *DB) runUsageCacheBackfillPass(
 		dailyRows += metrics.DailyRows
 		exceptionGroups += metrics.ExceptionGroups
 		exceptionRows += metrics.ExceptionRows
+	}
+	if changed, err := db.usageBackfillPricingChanged(ctx, snapshot.ChangeRevision); err != nil || changed {
+		return err
 	}
 	if err := cache.sweepDeletionJournal(ctx, db); err != nil {
 		return err
@@ -570,7 +595,7 @@ func (cache *usageCache) sweepDeletionJournal(ctx context.Context, archive *DB) 
 	}
 	if _, err := conn.ExecContext(ctx, `
 		UPDATE usage_cache_metadata
-		SET value = CAST(MAX(CAST(value AS INTEGER), ?) AS TEXT)
+		SET value = MAX(CAST(value AS INTEGER), ?)
 		WHERE key = ?`, through, usageCacheMetadataDeletionRevision,
 	); err != nil {
 		return err
