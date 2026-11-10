@@ -296,21 +296,13 @@ matches a pushed generation.
 
 On the machine that owns the sessions, choose **Settings → Embeddings → Turn on** to approve the download and build the local index without restarting. For CLI setup, follow the steps below.
 
-1. Enable vectors in `~/.agentsview/config.toml`. AgentsView discovers Ollama
-   with Nomic or uses Kit's shared local server. Explicit recipes and server
-   settings are described in
-   [Enabling `[vector]`](/docs/semantic-search/#enabling-vector).
-
-    ```toml
-    [vector]
-    enabled = true
-    ```
-
-1. Restart the daemon, then build the local index. The CLI asks before the first
-   download; declining stops the download and build. `--yes` skips rebuild
-   confirmation but does not approve this download. Approve the first install
-   interactively before running unattended builds. Confirm an active
-   generation exists:
+1. Build the local index. AgentsView discovers Ollama with Nomic or uses Kit's
+   shared local server. For other providers, see
+   [Enabling `[vector]`](/docs/semantic-search/#enabling-vector). The CLI asks
+   before the first download; declining stops the download and build. `--yes`
+   skips rebuild confirmation but does not approve this download. Approve the
+   first install interactively before running unattended builds. Confirm an
+   active generation exists:
 
     ```bash
     agentsview index embeddings build --yes

@@ -275,6 +275,14 @@ server, stop the daemon first, then run `AGENTSVIEW_NO_DAEMON=1 agentsview sourc
 That setting disables auto-start; it does not stop a running daemon or bypass
 its archive lock.
 
+### Search by meaning
+
+Choose **Settings → Embeddings → Turn on** or run `agentsview index embeddings build`
+and approve the download. Embeddings run locally by default; agents use keyword
+search until indexing is ready. Use `agentsview session search --semantic` or
+`--hybrid` to search by meaning. See [Semantic Search](/docs/semantic-search/#enabling-vector)
+to configure other providers.
+
 ## Customize
 
 Override the default port or host:
@@ -393,8 +401,3 @@ Once running, the web UI provides:
 Use the [Usage Guide](/docs/usage/) for navigation and resume controls. To
 correct project assignments, see the [Data page](/docs/data/) and its opt-in
 project workspace.
-
-Beyond full-text search, opt-in semantic search lets
-`agentsview session search --semantic` (or `--hybrid`) match session content by
-meaning, backed by a local or hosted embeddings endpoint. See
-[Semantic Search](/docs/semantic-search/) for setup.

@@ -631,3 +631,56 @@ func TestSkillsInstall_ProjectFlagOutsideRepoFallsBackToCWD(t *testing.T) {
 	assert.Contains(t, out, wantPath)
 	assert.FileExists(t, wantPath)
 }
+
+func TestSkillsInstall_SemanticSearchHint(t *testing.T) {
+	const hint = "run 'agentsview index embeddings build' or turn it on in Settings → Embeddings → Turn on"
+	tests := []struct {
+		name       string
+		config     string
+		args       []string
+		wantHint   bool
+		seedRemote bool
+		refused    bool
+	}{
+		{name: "off", wantHint: true},
+		{name: "refused", refused: true},
+		{name: "on", config: "[vector]\nenabled = true\n[vector.embeddings]\nmodel = 'nomic-embed-text'\ndimension = 768\n"},
+		{name: "invalid", config: "[vector\n"},
+		{name: "usage only", config: "archive_content = 'usage'\n"},
+		{name: "remote", args: []string{"--server", "https://example.com"}},
+		{name: "installed remote", seedRemote: true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			home, data := t.TempDir(), t.TempDir()
+			setTestHome(t, home)
+			t.Setenv("AGENTSVIEW_DATA_DIR", data)
+			t.Setenv("AGENTSVIEW_SKILLS_SERVER", "")
+			t.Setenv("AGENTSVIEW_SKILLS_SERVER_TOKEN_FILE", "")
+			if tt.config != "" {
+				require.NoError(t, os.WriteFile(filepath.Join(data, "config.toml"), []byte(tt.config), 0o600))
+			}
+			if tt.refused {
+				writeSkillFile(t, claudeSkillPath(home), foreignClaudeContent)
+			}
+			if tt.seedRemote {
+				out, err := executeCommand(newRootCommand(), "skills", "install", "--harness", "claude", "--server", "https://example.com")
+				require.NoError(t, err, "output: %s", out)
+			}
+			args := append([]string{"skills", "install", "--harness", "claude"}, tt.args...)
+			out, err := executeCommand(newRootCommand(), args...)
+			if tt.refused {
+				require.Error(t, err)
+			} else {
+				require.NoError(t, err, "output: %s", out)
+			}
+			if tt.wantHint {
+				assert.Equal(t, 1, strings.Count(out, hint))
+				assert.NoFileExists(t, filepath.Join(data, "config.toml"))
+			} else {
+				assert.NotContains(t, out, hint)
+			}
+			assert.NoFileExists(t, filepath.Join(data, "sessions.db"))
+		})
+	}
+}
