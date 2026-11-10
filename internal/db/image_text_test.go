@@ -621,3 +621,28 @@ func TestImageTextContentPageOrder(t *testing.T) {
 		})
 	}
 }
+
+func TestImageTextIncrementalRefreshKeepsUntouchedImages(t *testing.T) {
+	ctx := t.Context()
+	d := testDB(t)
+	require.NoError(t, d.BackfillImageTextOccurrences(ctx))
+	insertSession(t, d, "incremental", "demo")
+	first := testInlineImageContent()
+	require.NoError(t, d.InsertMessages(ctx, []Message{{SessionID: "incremental", Ordinal: 0, Role: "assistant", ToolCalls: []ToolCall{{ToolName: "Read", ToolUseID: "old", ResultContent: first}}}}))
+	hash := RetainedToolResultImages(first)[0].SHA256
+	_, err := d.getWriter().Exec(ctx, `CREATE TRIGGER preserve_old BEFORE DELETE ON image_text_occurrences WHEN old.image_hash='`+hash+`' BEGIN SELECT RAISE(ABORT, 'unrelated image refreshed'); END`)
+	require.NoError(t, err)
+	_, err = d.WriteSessionIncremental(ctx, "incremental", []Message{{SessionID: "incremental", Ordinal: 1, Role: "assistant", Content: "text only"}}, IncrementalSessionUpdate{})
+	require.NoError(t, err)
+	second := `[{"type":"input_image","image_url":"data:image/png;base64,AQID"}]`
+	_, err = d.WriteSessionIncremental(ctx, "incremental", []Message{{SessionID: "incremental", Ordinal: 2, Role: "assistant", ToolCalls: []ToolCall{{ToolName: "Read", ToolUseID: "new", ResultContent: second}}}}, IncrementalSessionUpdate{})
+	require.NoError(t, err)
+	pending, err := d.PendingImageText(ctx, "processor", time.Now(), 10)
+	require.NoError(t, err)
+	require.ElementsMatch(t, []string{hash, RetainedToolResultImages(second)[0].SHA256}, pending)
+	_, err = d.WriteSessionIncremental(ctx, "incremental", nil, IncrementalSessionUpdate{ToolCallResultUpdates: []ToolCallResultUpdate{{ToolUseID: "new", Position: ToolCallPosition{MessageOrdinal: 2}, Events: []ToolResultEvent{{Source: "tool", Content: `[{"type":"input_image","image_url":"data:image/png;base64,BAUG"}]`}}}}})
+	require.NoError(t, err)
+	pending, err = d.PendingImageText(ctx, "processor", time.Now(), 10)
+	require.NoError(t, err)
+	require.ElementsMatch(t, []string{hash, RetainedToolResultImages(`[{"type":"input_image","image_url":"data:image/png;base64,BAUG"}]`)[0].SHA256}, pending)
+}

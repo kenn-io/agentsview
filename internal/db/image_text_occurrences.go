@@ -81,10 +81,93 @@ func refreshImageTextOccurrencesTx(tx transactionQueries, sessionID string) erro
 	return nil
 }
 
+// refreshIncrementalImageTextOccurrencesTx refreshes only changed tool results.
+func refreshIncrementalImageTextOccurrencesTx(tx transactionQueries, sessionID string, msgs []Message, update IncrementalSessionUpdate) error {
+	var enabled int
+	if err := tx.QueryRow(`SELECT count(*) FROM stats WHERE key=? AND value!=0`, imageTextBackfillKey).Scan(&enabled); err != nil {
+		return err
+	}
+	if enabled == 0 {
+		return nil
+	}
+	if _, err := tx.Exec(`DELETE FROM image_text_occurrences WHERE session_id=? AND ((call_id IS NOT NULL AND NOT EXISTS (SELECT 1 FROM tool_calls WHERE id=call_id)) OR (event_id IS NOT NULL AND NOT EXISTS (SELECT 1 FROM tool_result_events WHERE id=event_id)))`, sessionID); err != nil {
+		return err
+	}
+	ids := make(map[string]bool)
+	ordinals := make(map[int]bool)
+	for _, msg := range msgs {
+		for _, call := range msg.ToolCalls {
+			if call.ToolUseID != "" {
+				ids[call.ToolUseID] = true
+			} else {
+				ordinals[msg.Ordinal] = true
+			}
+			for _, event := range call.ResultEvents {
+				if event.ToolUseID != "" {
+					ids[event.ToolUseID] = true
+				}
+			}
+		}
+	}
+	for _, link := range update.SubagentLinks {
+		if link.HasResult && link.ToolUseID != "" {
+			ids[link.ToolUseID] = true
+		}
+	}
+	for _, result := range update.ToolCallResultUpdates {
+		if len(result.Events) > 0 {
+			ids[result.ToolUseID] = true
+		}
+	}
+	refresh := func(callFilter, eventFilter string, value any) error {
+		occurrences, err := imageTextOccurrencesQuery(tx, sessionID, callFilter, eventFilter, []any{value})
+		if err != nil {
+			return err
+		}
+		_, err = tx.Exec(`DELETE FROM image_text_occurrences WHERE session_id=? AND (call_id IN (SELECT tc.id FROM tool_calls tc WHERE tc.session_id=? `+callFilter+`) OR event_id IN (SELECT e.id FROM tool_result_events e WHERE e.session_id=? `+eventFilter+`))`, sessionID, sessionID, value, sessionID, value)
+		if err != nil {
+			return err
+		}
+		for _, o := range occurrences {
+			var call, event any
+			if o.CallID != 0 {
+				call = o.CallID
+			}
+			if o.EventID != 0 {
+				event = o.EventID
+			}
+			if _, err := tx.Exec(`INSERT INTO image_text_occurrences(session_id,call_id,event_id,image_index,image_hash) VALUES(?,?,?,?,?)`, sessionID, call, event, o.Index, o.Hash); err != nil {
+				return err
+			}
+		}
+		return nil
+	}
+	for id := range ids {
+		if id != "" {
+			if err := refresh(` AND tc.tool_use_id=?`, ` AND e.tool_use_id=?`, id); err != nil {
+				return err
+			}
+		}
+	}
+	for ordinal := range ordinals {
+		if err := refresh(` AND tc.message_id IN (SELECT id FROM messages WHERE session_id=tc.session_id AND ordinal=?)`, ` AND e.tool_call_message_ordinal=?`, ordinal); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 func sessionImageTextOccurrences(tx transactionQueries, sessionID string) ([]ImageTextOccurrence, error) {
+	return imageTextOccurrencesQuery(tx, sessionID, "", "", nil)
+}
+
+func imageTextOccurrencesQuery(tx transactionQueries, sessionID, callFilter, eventFilter string, args []any) ([]ImageTextOccurrence, error) {
+	queryArgs := append([]any{sessionID}, args...)
+	queryArgs = append(queryArgs, sessionID)
+	queryArgs = append(queryArgs, args...)
 	rows, err := tx.Query(`SELECT tc.id, 0, COALESCE(tc.result_content, '') FROM tool_calls tc
-		WHERE tc.session_id=? AND (tc.result_content LIKE '%image%' OR tc.result_content LIKE '%data:%') AND NOT EXISTS (SELECT 1 FROM tool_result_events e WHERE e.session_id=tc.session_id AND e.tool_use_id=tc.tool_use_id AND tc.tool_use_id<>'')
-		UNION ALL SELECT 0, e.id, e.content FROM tool_result_events e WHERE e.session_id=? AND (e.content LIKE '%image%' OR e.content LIKE '%data:%')`, sessionID, sessionID)
+		WHERE tc.session_id=? AND (tc.result_content LIKE '%image%' OR tc.result_content LIKE '%data:%') AND NOT EXISTS (SELECT 1 FROM tool_result_events e WHERE e.session_id=tc.session_id AND e.tool_use_id=tc.tool_use_id AND tc.tool_use_id<>'') `+callFilter+`
+		UNION ALL SELECT 0, e.id, e.content FROM tool_result_events e WHERE e.session_id=? AND (e.content LIKE '%image%' OR e.content LIKE '%data:%') `+eventFilter, queryArgs...)
 	if err != nil {
 		return nil, err
 	}
