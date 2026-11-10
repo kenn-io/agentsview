@@ -1,11 +1,9 @@
 package main
 
 import (
-	"bytes"
 	"context"
 	"encoding/base64"
 	"fmt"
-	"log"
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
@@ -21,10 +19,7 @@ import (
 )
 
 func TestImageTextRespectsArchiveContent(t *testing.T) {
-	var logs bytes.Buffer
-	writer := log.Writer()
-	log.SetOutput(&logs)
-	t.Cleanup(func() { log.SetOutput(writer) })
+	logs := captureLogOutput(t)
 	ctx := t.Context()
 	d, err := db.Open(ctx, filepath.Join(t.TempDir(), "archive.db"))
 	require.NoError(t, err)
