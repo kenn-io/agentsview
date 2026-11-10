@@ -156,25 +156,29 @@ func (db *DB) ClearImageText(ctx context.Context) error {
 	return tx.Commit()
 }
 
-func (db *DB) CopyImageTextFrom(ctx context.Context, sourcePath string) error {
+func (db *DB) CopyImageTextFrom(ctx context.Context, sourcePath string) (bool, error) {
 	if err := db.requireImageTextStorage(); err != nil {
-		return err
+		return false, err
 	}
 	db.mu.Lock()
 	defer db.mu.Unlock()
 	conn, err := db.getWriter().Conn(ctx)
 	if err != nil {
-		return err
+		return false, err
 	}
 	defer conn.Close()
 	if _, err = conn.ExecContext(ctx, `ATTACH DATABASE ? AS old_db`, sourcePath); err != nil {
-		return err
+		return false, err
 	}
 	defer func() { _, _ = execWithoutCancel(ctx, conn, `DETACH DATABASE old_db`) }()
-	if _, err = conn.ExecContext(ctx, `INSERT OR IGNORE INTO image_text_cache(id,image_hash,processor,provider,model,revision,text,succeeded,failures,retry_at,updated_at) SELECT (SELECT COALESCE(MIN(id),0) FROM main.image_text_cache)-ROW_NUMBER() OVER (),image_hash,processor,provider,model,revision,text,succeeded,failures,retry_at,updated_at FROM old_db.image_text_cache c`); err != nil {
-		return fmt.Errorf("copy image text: %w", err)
+	var enabled bool
+	if err := conn.QueryRowContext(ctx, `SELECT EXISTS (SELECT 1 FROM old_db.stats WHERE key=? AND value!=0)`, imageTextBackfillKey).Scan(&enabled); err != nil {
+		return false, err
 	}
-	return nil
+	if _, err = conn.ExecContext(ctx, `INSERT OR IGNORE INTO image_text_cache(id,image_hash,processor,provider,model,revision,text,succeeded,failures,retry_at,updated_at) SELECT (SELECT COALESCE(MIN(id),0) FROM main.image_text_cache)-ROW_NUMBER() OVER (),image_hash,processor,provider,model,revision,text,succeeded,failures,retry_at,updated_at FROM old_db.image_text_cache c`); err != nil {
+		return false, fmt.Errorf("copy image text: %w", err)
+	}
+	return enabled, nil
 }
 
 func (db *DB) SessionImageTextRows(ctx context.Context, id string) ([]ImageTextRow, error) {

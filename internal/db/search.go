@@ -527,7 +527,6 @@ func (db *DB) Search(
 		args = append(args, likePattern)        // name WHERE first_message LIKE
 		args = append(args, nameProjectArgs...) // optional name branch project and dates
 		args = append(args, ftsSessionsArgs...) // NOT IN WHERE
-		args = append(args, f.Query)
 		nameBranchSQL = fmt.Sprintf(`
 			UNION ALL
 
@@ -558,7 +557,7 @@ func (db *DB) Search(
 				%s
 				AND s.id NOT IN (
 					%s
-				) AND NOT EXISTS (SELECT 1 FROM messages_fts JOIN image_text_cache c ON c.rowid=messages_fts.rowid AND c.succeeded=1 `+imageOccurrenceSQL+` WHERE o.session_id=s.id AND `+imageVisibilitySQL+` AND messages_fts MATCH ?)`, nameProjectClause, ftsSessionsSQL)
+				)`, nameProjectClause, ftsSessionsSQL)
 	}
 	args = append(args, f.Limit+1, f.Cursor) // LIMIT / OFFSET
 	args = append(args, f.Query, f.Query)    // paged image and message snippet MATCH

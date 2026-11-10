@@ -284,7 +284,8 @@ func TestImageTextMembershipAndPruning(t *testing.T) {
 			require.NoError(t, src.SaveImageText(ctx, RetainedToolResultImages(content)[0].SHA256, identity, "invoice", false))
 		}
 		require.NoError(t, src.SaveImageText(ctx, RetainedToolResultImages(terminal)[0].SHA256, identity, "", false))
-		require.NoError(t, dst.CopyImageTextFrom(ctx, src.Path()))
+		_, err = dst.CopyImageTextFrom(ctx, src.Path())
+		require.NoError(t, err)
 		page, err := dst.Search(ctx, SearchFilter{Query: "invoice"})
 		require.NoError(t, err)
 		require.Len(t, page.Results, 1)

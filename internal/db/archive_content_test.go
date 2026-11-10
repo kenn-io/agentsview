@@ -1091,7 +1091,8 @@ func TestTranscriptArchiveRefusesImageText(t *testing.T) {
 	require.NoError(t, err)
 	require.ErrorIs(t, database.SaveImageText(t.Context(), "hash", identity, "text", false), ErrArchiveContentExcluded)
 	require.ErrorIs(t, database.SaveImageText(t.Context(), "hash", identity, "", true), ErrArchiveContentExcluded)
-	require.ErrorIs(t, database.CopyImageTextFrom(t.Context(), database.Path()), ErrArchiveContentExcluded)
+	_, err = database.CopyImageTextFrom(t.Context(), database.Path())
+	require.ErrorIs(t, err, ErrArchiveContentExcluded)
 }
 
 func TestUsageArchiveRefusesDerivedText(t *testing.T) {
