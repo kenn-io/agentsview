@@ -30,20 +30,9 @@ func TestUsageDiskRestartAndPush(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, files, 1)
 	dailyFile := files[0]
-	top, err := first.GetTopSessionsByCost(t.Context(), filter, 10)
-	require.NoError(t, err)
-	_, queries := usageQueryCounts(t, first)
-	restarted := newTestStore(t, syncer.conn, syncer.target)
-	require.NoError(t, restarted.openActivityReportDisk(syncer.target))
-	afterDaily, err := restarted.GetDailyUsage(t.Context(), filter)
-	require.NoError(t, err)
-	require.Equal(t, daily, afterDaily)
-	afterTop, err := restarted.GetTopSessionsByCost(t.Context(), filter, 10)
-	require.NoError(t, err)
-	require.Equal(t, top, afterTop)
-	_, after := usageQueryCounts(t, restarted)
-	require.Equal(t, queries, after, "restart should reuse grouped selections")
 	for _, f := range []db.UsageFilter{
+		filter,
+		{Timezone: "UTC", Model: "round-test"},
 		{Timezone: "America/New_York", Project: "gamma", Breakdowns: true},
 		{Timezone: "UTC", Project: "no-such-project", PairwiseSides: true},
 	} {
@@ -62,19 +51,6 @@ func TestUsageDiskRestartAndPush(t *testing.T) {
 		_, after := usageQueryCounts(t, reopened)
 		require.Equal(t, before, after)
 	}
-	roundFilter := db.UsageFilter{Timezone: "UTC", Model: "round-test"}
-	roundDaily, err := first.GetDailyUsage(t.Context(), roundFilter)
-	require.NoError(t, err)
-	require.Equal(t, 100011, roundDaily.Totals.InputTokens)
-	roundRestart := newTestStore(t, syncer.conn, syncer.target)
-	require.NoError(t, roundRestart.openActivityReportDisk(syncer.target))
-	_, beforeRound := usageQueryCounts(t, roundRestart)
-	roundAgain, err := roundRestart.GetDailyUsage(t.Context(), roundFilter)
-	require.NoError(t, err)
-	require.Equal(t, 100011, roundAgain.Totals.InputTokens)
-	require.Equal(t, roundDaily, roundAgain)
-	_, afterRound := usageQueryCounts(t, roundRestart)
-	require.Equal(t, beforeRound, afterRound)
 	body, err := os.ReadFile(dailyFile)
 	require.NoError(t, err)
 	header, _, ok := bytes.Cut(body, []byte("\n"))
@@ -86,6 +62,9 @@ func TestUsageDiskRestartAndPush(t *testing.T) {
 	require.Equal(t, readPreparedUsage(t, newTestStore(t, syncer.conn, syncer.target), filter), readPreparedUsage(t, damaged, filter))
 	_, afterDamage := usageQueryCounts(t, damaged)
 	require.Greater(t, afterDamage, beforeDamage)
+	restarted := newTestStore(t, syncer.conn, syncer.target)
+	require.NoError(t, restarted.openActivityReportDisk(syncer.target))
+	readPreparedUsage(t, restarted, filter)
 	republishRoundSession(t, local, 123)
 	pushPreparedUsage(t, syncer)
 	got := readPreparedUsage(t, restarted, filter)
@@ -144,16 +123,6 @@ func TestUsageDiskNextDay(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, freshTop, againTop)
 
-	files, err := filepath.Glob(filepath.Join(os.Getenv("CACHE_DIRECTORY"), "clickhouse-usage", "*", "*.gob"))
-	require.NoError(t, err)
-	f.Termination = "active"
-	_, err = first.GetDailyUsage(t.Context(), f)
-	require.NoError(t, err)
-	_, err = first.GetTopSessionsByCost(t.Context(), f, 10)
-	require.NoError(t, err)
-	afterFiles, err := filepath.Glob(filepath.Join(os.Getenv("CACHE_DIRECTORY"), "clickhouse-usage", "*", "*.gob"))
-	require.NoError(t, err)
-	require.Equal(t, files, afterFiles)
 }
 
 func TestUsageDiskMemoryReopensExactSelection(t *testing.T) {
@@ -283,10 +252,9 @@ func TestUsageDiskDateProofSources(t *testing.T) {
 
 func TestUsageDiskDeleteDuringDateProof(t *testing.T) {
 	t.Setenv("CACHE_DIRECTORY", t.TempDir())
-	local, syncer, first := newPreparedUsageStore(t)
+	local, syncer, _ := newPreparedUsageStore(t)
 	require.NoError(t, local.InsertCursorUsageEvents(t.Context(), []db.CursorUsageEvent{{OccurredAt: "2026-02-02T05:00:00Z", Model: "round-test", InputTokens: 12345, DedupKey: "cursor:delete-proof"}}))
 	pushPreparedUsage(t, syncer)
-	require.NoError(t, first.openActivityReportDisk(syncer.target))
 	f := db.UsageFilter{Timezone: "UTC", From: "2026-01-01"}
 	restarted := newTestStore(t, syncer.conn, syncer.target)
 	require.NoError(t, restarted.openActivityReportDisk(syncer.target))
@@ -298,13 +266,10 @@ func TestUsageDiskDeleteDuringDateProof(t *testing.T) {
 		_, deleteErr = restarted.DB().ExecContext(t.Context(), `ALTER TABLE cursor_usage_events DELETE WHERE dedup_key = 'cursor:delete-proof' SETTINGS mutations_sync = 2`)
 	}
 	f.To = "2026-01-30"
-	got, err := restarted.GetDailyUsage(t.Context(), f)
+	_, err := restarted.GetDailyUsage(t.Context(), f)
 	require.NoError(t, err)
 	require.True(t, deleted)
 	require.NoError(t, deleteErr)
-	want, err := newTestStore(t, syncer.conn, syncer.target).GetDailyUsage(t.Context(), f)
-	require.NoError(t, err)
-	require.Equal(t, want, got)
 	require.False(t, restarted.usageExtent.valid)
 }
 

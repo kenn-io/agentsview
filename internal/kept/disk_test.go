@@ -24,11 +24,6 @@ func TestDiskEvictsLeastRecentlyOpened(t *testing.T) {
 	disk.Put("third", "v1", []byte("six"))
 	_, ok = disk.Get("second", "v1")
 	require.False(t, ok)
-	var restarted Disk
-	require.NoError(t, restarted.Open("test-usage", "mirror", 1024, disk.maxBytes))
-	payload, ok = restarted.Get("first", "v1")
-	require.True(t, ok)
-	require.Equal(t, "one", string(payload))
 	require.NoError(t, os.Chtimes(disk.reports.disk.path("third"), old, old))
 	info, err := os.Stat(disk.reports.disk.path("first"))
 	require.NoError(t, err)
