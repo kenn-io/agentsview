@@ -889,25 +889,21 @@ END;
 // concurrent HTTP handler goroutines can safely read while
 // Reopen/CloseConnections swap the underlying *sql.DB.
 type DB struct {
-	path        string
-	writer      atomic.Pointer[sql.DB]
-	reader      atomic.Pointer[sql.DB]
-	reads       readRegistry
-	usageCache  *usageCacheManager
-	usageSource UsageCacheSource
-	// usageSourceDatabaseID holds the external source identity from the
-	// latest capture.
-	usageSourceDatabaseID atomic.Pointer[string]
-	activityMemo          activityCandidateMemo
-	activityKept          kept.Memo[activityKept]
-	sessionStatsFacts     *sessionStatsFactsMemo
-	frustrationMemo       FrustrationMarkerMemo
-	usageBackfillMu       sync.Mutex
-	usageBackfillCancel   context.CancelFunc
-	usageBackfillDone     chan struct{}
-	usageBackfillErr      error
-	usageBackfillStarted  func()
-	usageBackfillRerun    bool // queues one more pass after the active one
+	path                 string
+	writer               atomic.Pointer[sql.DB]
+	reader               atomic.Pointer[sql.DB]
+	reads                readRegistry
+	usageCache           *usageCacheManager
+	activityMemo         activityCandidateMemo
+	activityKept         kept.Memo[activityKept]
+	sessionStatsFacts    *sessionStatsFactsMemo
+	frustrationMemo      FrustrationMarkerMemo
+	usageBackfillMu      sync.Mutex
+	usageBackfillCancel  context.CancelFunc
+	usageBackfillDone    chan struct{}
+	usageBackfillErr     error
+	usageBackfillStarted func()
+	usageBackfillRerun   bool // queues one more pass after the active one
 	// usageBackfillEnabled records that this process explicitly started
 	// background backfill (the daemon lifecycle). Reopen restarts a pass
 	// only then, so CLI resyncs never trigger an unrequested archive scan.
@@ -977,6 +973,10 @@ type DB struct {
 	// reuse prepared statements, so a SQLite authorizer sees one compilation
 	// per query shape rather than one per page.
 	memberFreshnessPages atomic.Int64
+
+	usageSource UsageCacheSource
+	// usageSourceDatabaseID holds the external source identity from the latest capture.
+	usageSourceDatabaseID atomic.Pointer[string]
 }
 
 // MessagesLoadCount returns the total number of GetAllMessages calls the
