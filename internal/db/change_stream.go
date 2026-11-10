@@ -228,22 +228,27 @@ func (db *DB) ReadChangeStream(ctx context.Context, cursor string) (ChangeStream
 	if err != nil {
 		return ChangeStreamBatch{}, err
 	}
+	var messages changeStreamConversationPage
+	conversationMore := false
 	if messageUsageMore {
+		// Hold the conversation position until the usage backlog drains. A
+		// message sent now by the conversation pages would pass the next usage
+		// page's revision filter and be sent again with the same state.
 		position.MessageUsage = messageUsageLast
 	} else {
 		position.MessageUsage = heads.messageUsage
-	}
-	messages, conversationMore, err := readChangeStreamConversationTx(ctx, tx, position.Conversation, sessionIDs)
-	if err != nil {
-		return ChangeStreamBatch{}, err
-	}
-	if conversationMore {
-		position.Conversation, err = strconv.ParseInt(messages.lastRevision, 10, 64)
+		messages, conversationMore, err = readChangeStreamConversationTx(ctx, tx, position.Conversation, sessionIDs)
 		if err != nil {
 			return ChangeStreamBatch{}, err
 		}
-	} else {
-		position.Conversation = heads.conversation
+		if conversationMore {
+			position.Conversation, err = strconv.ParseInt(messages.lastRevision, 10, 64)
+			if err != nil {
+				return ChangeStreamBatch{}, err
+			}
+		} else {
+			position.Conversation = heads.conversation
+		}
 	}
 	usageLast, usageMore, err := readChangeStreamUsageTx(ctx, tx, position.Usage, sessionIDs)
 	if err != nil {

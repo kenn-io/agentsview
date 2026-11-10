@@ -2,6 +2,7 @@ package db
 
 import (
 	"path/filepath"
+	"strconv"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -90,4 +91,62 @@ func TestCopySessionMetadataKeepsConversationUsageRevision(t *testing.T) {
 	require.NoError(t, err)
 	assert.False(t, batch.Reset)
 	assert.Empty(t, batch.Messages, "nothing changed after the head")
+}
+
+// A usage backlog longer than one page must not let the conversation pages
+// send a message that a later usage page sends again.
+func TestChangeStreamSendsEditedMessageOnceBehindUsageBacklog(t *testing.T) {
+	d := testDB(t)
+	_, err := d.EnsureConversationExportInitialized(t.Context())
+	require.NoError(t, err)
+	require.NoError(t, d.UpsertSession(t.Context(), Session{ID: "chat", Project: "sample", Machine: "local", Agent: "codex"}))
+	msgs := make([]Message, MaxSessionLimit+2)
+	for i := range msgs {
+		msgs[i] = Message{
+			SessionID: "chat", Ordinal: i, Role: "assistant", Content: "reply " + strconv.Itoa(i),
+			SourceUUID: "reply-" + strconv.Itoa(i), Model: "sample-model",
+		}
+	}
+	require.NoError(t, d.InsertMessages(t.Context(), msgs))
+	head, err := d.ReadChangeStreamHead(t.Context())
+	require.NoError(t, err)
+
+	// Ordinals 1 through 501 change usage only, then ordinal 0 changes both
+	// text and usage.
+	for i := 1; i < len(msgs); i++ {
+		msgs[i].TokenUsage = []byte(`{"input_tokens":10,"output_tokens":1}`)
+	}
+	require.NoError(t, d.ReplaceSessionMessages(t.Context(), "chat", msgs))
+	msgs[0].Content = "reply 0, edited"
+	msgs[0].TokenUsage = []byte(`{"input_tokens":40,"output_tokens":4}`)
+	require.NoError(t, d.ReplaceSessionMessages(t.Context(), "chat", msgs))
+
+	var editedID string
+	require.NoError(t, d.getReader().QueryRowContext(t.Context(),
+		`SELECT message_id FROM conversation_messages WHERE session_id='chat' AND ordinal=0 AND removed=0`).Scan(&editedID))
+	sent := map[string]int{}
+	var edited []ChangeStreamMessage
+	cursor := head.Head
+	for {
+		batch, err := d.ReadChangeStream(t.Context(), cursor)
+		require.NoError(t, err)
+		require.False(t, batch.Reset)
+		for _, message := range batch.Messages {
+			sent[message.MessageID]++
+			if message.MessageID == editedID {
+				edited = append(edited, message)
+			}
+		}
+		cursor = batch.To
+		if !batch.More {
+			break
+		}
+	}
+	assert.Len(t, sent, len(msgs), "every changed message is sent")
+	for id, count := range sent {
+		assert.Equal(t, 1, count, "message %s", id)
+	}
+	require.Len(t, edited, 1)
+	require.NotNil(t, edited[0].Usage)
+	assert.Equal(t, 40, edited[0].Usage.InputTokens)
 }
