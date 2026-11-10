@@ -40,7 +40,7 @@ var (
 	commitWorkdirRE           = regexp.MustCompile(`["']?(?:workdir|cwd)["']?\s*:\s*("(?:\\.|[^"\\])*"|'[^']*')`)
 	commitCommandRE           = regexp.MustCompile(`["']?(?:cmd|command)["']?\s*:\s*("(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'|\x60(?:\\.|[^\x60\\])*\x60)`)
 	commitToolCallRE          = regexp.MustCompile(`\btools\.\w+\s*\(`)
-	commitCDRE                = regexp.MustCompile(`(?:^|[;&|\n])\s*cd\s+("[^"]*"|'[^']*'|[^\s;&|]+)`)
+	commitCDRE                = regexp.MustCompile(`(?:^|[;&|\n])\s*cd\s+(` + commitCommandToken + `)`)
 	commitGlobalOptionRE      = regexp.MustCompile(commitGlobalOption)
 	commitPollRE              = regexp.MustCompile(`\btools\.write_stdin\s*\(\s*\{[^{}]*["']?session_id["']?\s*:\s*([0-9]+)`)
 	commitRunningRE           = regexp.MustCompile(`(?m)^Process running with session ID ([0-9]+)\r?$`)

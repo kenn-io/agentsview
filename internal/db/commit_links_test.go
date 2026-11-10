@@ -31,6 +31,7 @@ func TestCommitLinksArgvCommands(t *testing.T) {
 		name, input, repository string
 	}{
 		{"issue bash -lc", `{"command":["bash","-lc","git commit -m fix"]}`, "/work"},
+		{"shell cd apostrophe", `{"command":["bash","-lc","cd '/work/a'\\''b' && git commit -m fix"]}`, "/work/a'b"},
 		{"option-looking path", `{"command":["git","-C","--git-dir=space here","commit"]}`, "/work/--git-dir=space here"},
 		{"workdir single quote", `{"command":["git","commit"],"workdir":"'"}`, "/work/'"},
 		{"cwd single quote", `{"command":["git","commit"],"cwd":"'"}`, "/work/'"},
