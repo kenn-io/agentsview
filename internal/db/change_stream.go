@@ -517,7 +517,7 @@ func (db *DB) readChangeStreamSessionsTx(
 		chunk := ids[start:min(start+maxSQLVars, len(ids))]
 		// Trashed sessions keep their record, so they keep their origin too.
 		err := readChangeStreamSessionMachinesTx(ctx, tx, chunk, func(id, machine string) {
-			if origin := machines.origin(machine, archiveID); origin != "" {
+			if origin := machines.origin(machine, heads.archiveID); origin != "" {
 				sessions[index[id]].MachineID = &origin
 			}
 		})
