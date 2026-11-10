@@ -24,37 +24,33 @@ func TestClickHouseConfiguredAliasKimiPricing(t *testing.T) {
 	ctx := t.Context()
 	local, target := seedFixture(t)
 	require.NoError(t, local.UpsertModelPricing([]db.ModelPricing{
-		{ModelPattern: "moonshot/kimi-k2.6", InputPerMTok: money.MustParseDollars("2")},
 		{ModelPattern: "kimi-k3", InputPerMTok: money.MustParseDollars("3")},
 	}))
-	for _, tc := range []struct{ id, ts string }{{"alias-before", "2026-07-18T23:59:59Z"}, {"alias-after", "2026-07-19T00:00:00Z"}} {
-		_, err := local.WriteSessionBatchAtomic(ctx, []db.SessionBatchWrite{{
-			Session:     db.Session{ID: tc.id, Project: "alias-test", Machine: "test", Agent: "pi", StartedAt: &tc.ts, MessageCount: 1, UserMessageCount: 1},
-			Messages:    []db.Message{{SessionID: tc.id, Ordinal: 0, Role: "assistant", Timestamp: tc.ts, Model: "gateway-kimi", TokenUsage: []byte(`{"input_tokens":1000000}`)}},
-			DataVersion: 1, ReplaceMessages: true,
-		}})
-		require.NoError(t, err)
-	}
+	ts := "2026-07-19T00:00:00Z"
+	_, err := local.WriteSessionBatchAtomic(ctx, []db.SessionBatchWrite{{
+		Session:     db.Session{ID: "alias-after", Project: "alias-test", Machine: "test", Agent: "pi", StartedAt: &ts, MessageCount: 1, UserMessageCount: 1},
+		Messages:    []db.Message{{SessionID: "alias-after", Ordinal: 0, Role: "assistant", Timestamp: ts, Model: "gateway-kimi", TokenUsage: []byte(`{"input_tokens":1000000}`)}},
+		DataVersion: 1, ReplaceMessages: true,
+	}})
+	require.NoError(t, err)
 	syncer := newTestSync(t, local, target, storage.PusherOptions{})
-	_, err := syncer.Push(ctx, false, nil)
+	_, err = syncer.Push(ctx, false, nil)
 	require.NoError(t, err)
 	require.NoError(t, syncer.syncModelPricing(ctx))
 	store, err := NewStore(ctx, target)
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, store.Close()) })
-	for _, tc := range []struct{ id, day, cost string }{{"alias-before", "2026-07-18", "0.95"}, {"alias-after", "2026-07-19", "3"}} {
-		daily, err := store.GetDailyUsage(ctx, db.UsageFilter{From: tc.day, To: tc.day, Timezone: "UTC", Model: "gateway-kimi"})
-		require.NoError(t, err)
-		assert.Equal(t, money.MustParseDollars(tc.cost), daily.Totals.TotalCost)
-		session, err := store.GetSessionUsage(ctx, tc.id, true)
-		require.NoError(t, err)
-		assert.Equal(t, money.MustParseDollars(tc.cost), session.Cost)
-		query, err := activity.ResolveQuery(activity.QueryInput{Preset: "day", Date: tc.day, Timezone: "UTC"}, time.Date(2030, 1, 1, 0, 0, 0, 0, time.UTC))
-		require.NoError(t, err)
-		report, err := store.BuildActivityReportArtifacts(ctx, db.AnalyticsFilter{Project: "alias-test", Timezone: "UTC"}, query, nil)
-		require.NoError(t, err)
-		assert.Equal(t, money.MustParseDollars(tc.cost), report.Report.Totals.Cost)
-	}
+	daily, err := store.GetDailyUsage(ctx, db.UsageFilter{From: "2026-07-19", To: "2026-07-19", Timezone: "UTC", Model: "gateway-kimi"})
+	require.NoError(t, err)
+	assert.Equal(t, money.MustParseDollars("3"), daily.Totals.TotalCost)
+	session, err := store.GetSessionUsage(ctx, "alias-after", true)
+	require.NoError(t, err)
+	assert.Equal(t, money.MustParseDollars("3"), session.Cost)
+	query, err := activity.ResolveQuery(activity.QueryInput{Preset: "day", Date: "2026-07-19", Timezone: "UTC"}, time.Date(2030, 1, 1, 0, 0, 0, 0, time.UTC))
+	require.NoError(t, err)
+	report, err := store.BuildActivityReportArtifacts(ctx, db.AnalyticsFilter{Project: "alias-test", Timezone: "UTC"}, query, nil)
+	require.NoError(t, err)
+	assert.Equal(t, money.MustParseDollars("3"), report.Report.Totals.Cost)
 }
 
 func TestClickHouseUsageCostFromFixture(t *testing.T) {

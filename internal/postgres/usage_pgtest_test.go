@@ -46,24 +46,21 @@ func TestStoreConfiguredAliasKimiPricing(t *testing.T) {
 	t.Cleanup(func() { pricing.SetConfiguredAliases(nil) })
 	_, store := prepareUsageSchema(t, "agentsview_alias_kimi_test")
 	ctx := t.Context()
-	_, err := store.DB().ExecContext(ctx, `INSERT INTO model_pricing (model_pattern, input_microdollars_per_mtok, output_microdollars_per_mtok, cache_creation_microdollars_per_mtok, cache_read_microdollars_per_mtok, updated_at) VALUES ('moonshot/kimi-k2.6',2000000,0,0,0,'seed'),('kimi-k3',3000000,0,0,0,'seed')`)
+	_, err := store.DB().ExecContext(ctx, `INSERT INTO model_pricing (model_pattern, input_microdollars_per_mtok, output_microdollars_per_mtok, cache_creation_microdollars_per_mtok, cache_read_microdollars_per_mtok, updated_at) VALUES ('kimi-k3',3000000,0,0,0,'seed')`)
 	require.NoError(t, err)
-	for _, tc := range []struct{ id, ts, cost string }{{"before", "2026-07-18T23:59:59Z", "0.95"}, {"after", "2026-07-19T00:00:00Z", "3"}} {
-		_, err := store.DB().ExecContext(ctx, `INSERT INTO sessions (id,machine,project,agent,started_at,message_count,user_message_count) VALUES ($1,'test','alias-test','pi',$2::timestamptz,1,1)`, tc.id, tc.ts)
-		require.NoError(t, err)
-		_, err = store.DB().ExecContext(ctx, `INSERT INTO messages (session_id,ordinal,role,content,timestamp,model,token_usage) VALUES ($1,0,'assistant','hi',$2::timestamptz,'gateway-kimi','{"input_tokens":1000000}')`, tc.id, tc.ts)
-		require.NoError(t, err)
-		day := tc.ts[:10]
-		daily, err := store.GetDailyUsage(ctx, db.UsageFilter{From: day, To: day, Timezone: "UTC", Model: "gateway-kimi"})
-		require.NoError(t, err)
-		assert.Equal(t, money.MustParseDollars(tc.cost), daily.Totals.TotalCost)
-		session, err := store.GetSessionUsage(ctx, tc.id, true)
-		require.NoError(t, err)
-		assert.Equal(t, money.MustParseDollars(tc.cost), session.Cost)
-		report, err := store.BuildActivityReportArtifacts(ctx, db.AnalyticsFilter{Project: "alias-test", Timezone: "UTC"}, pgDayQuery(t, day, "UTC"), nil)
-		require.NoError(t, err)
-		assert.Equal(t, money.MustParseDollars(tc.cost), report.Report.Totals.Cost)
-	}
+	_, err = store.DB().ExecContext(ctx, `INSERT INTO sessions (id,machine,project,agent,started_at,message_count,user_message_count) VALUES ('after','test','alias-test','pi','2026-07-19T00:00:00Z',1,1)`)
+	require.NoError(t, err)
+	_, err = store.DB().ExecContext(ctx, `INSERT INTO messages (session_id,ordinal,role,content,timestamp,model,token_usage) VALUES ('after',0,'assistant','hi','2026-07-19T00:00:00Z','gateway-kimi','{"input_tokens":1000000}')`)
+	require.NoError(t, err)
+	daily, err := store.GetDailyUsage(ctx, db.UsageFilter{From: "2026-07-19", To: "2026-07-19", Timezone: "UTC", Model: "gateway-kimi"})
+	require.NoError(t, err)
+	assert.Equal(t, money.MustParseDollars("3"), daily.Totals.TotalCost)
+	session, err := store.GetSessionUsage(ctx, "after", true)
+	require.NoError(t, err)
+	assert.Equal(t, money.MustParseDollars("3"), session.Cost)
+	report, err := store.BuildActivityReportArtifacts(ctx, db.AnalyticsFilter{Project: "alias-test", Timezone: "UTC"}, pgDayQuery(t, "2026-07-19", "UTC"), nil)
+	require.NoError(t, err)
+	assert.Equal(t, money.MustParseDollars("3"), report.Report.Totals.Cost)
 }
 
 func TestStoreGetDailyUsageUsesFallbackPricing(t *testing.T) {

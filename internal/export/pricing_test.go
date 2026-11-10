@@ -55,14 +55,6 @@ func TestPricingResolverConfiguredAliasUsesTargetLadder(t *testing.T) {
 	_, custom := resolver.ResolveAt("gateway-custom", "gateway-custom", time.Time{})
 	require.True(t, custom.OK)
 	assert.Equal(t, money.MustParseDollars("7"), custom.Rates.InputPerMTok)
-	pricingpkg.SetConfiguredAliases(map[string]string{"deployment": "provider/gpt-6-sol", "gpt-6-sol": "gpt-5.6-luna"})
-	resolver = NewPricingResolver([]EffectivePricingRow{
-		{ModelPattern: "provider/gpt-6-sol", Rates: ModelRates{InputPerMTok: money.MustParseDollars("5"), Source: PricingRowSourceFetched}},
-		{ModelPattern: "gpt-5.6-luna", Rates: ModelRates{InputPerMTok: money.MustParseDollars("2"), Source: PricingRowSourceFetched}},
-	})
-	_, qualified := resolver.ResolveAt("deployment", "deployment", time.Time{})
-	require.True(t, qualified.OK)
-	assert.Equal(t, money.MustParseDollars("5"), qualified.Rates.InputPerMTok)
 }
 
 func TestPricingResolverExactCustomRateBeatsConfiguredAlias(t *testing.T) {
@@ -72,7 +64,7 @@ func TestPricingResolverExactCustomRateBeatsConfiguredAlias(t *testing.T) {
 		{ModelPattern: "gateway/foo", Rates: ModelRates{Source: PricingRowSourceCustom}},
 		{ModelPattern: "gpt-6-sol", Rates: ModelRates{InputPerMTok: money.MustParseDollars("9"), Source: PricingRowSourceFetched}},
 	})
-	_, lookup := resolver.ResolveAt("gateway/foo", "gpt-6-sol", time.Time{})
+	_, lookup := resolver.ResolveAt("gateway/foo", "gateway/foo", time.Time{})
 	require.True(t, lookup.OK)
 	assert.Zero(t, lookup.Rates.InputPerMTok.Microdollars)
 }

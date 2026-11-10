@@ -2640,12 +2640,8 @@ price_as = "provider/gpt-6-sol"
 [custom_model_pricing."gpt-6-sol"]
 price_as = "gpt-5.6-luna"
 
-[custom_model_pricing.deployment]
-price_as = "gateway/custom"
-[custom_model_pricing."gateway/custom"]
-input_microdollars_per_mtok = 5000000
-[custom_model_pricing.custom]
-price_as = "gpt-6-astra"
+[custom_model_pricing.self]
+price_as = "self"
 `)
 
 	cfg := f.LoadMinimal(t)
@@ -2653,8 +2649,7 @@ price_as = "gpt-6-astra"
 		"fetched-alias":        "new-catalog-model",
 		"qualified-deployment": "provider/gpt-6-sol",
 		"gpt-6-sol":            "gpt-5.6-luna",
-		"deployment":           "gateway/custom",
-		"custom":               "gpt-6-astra",
+		"self":                 "self",
 	}, PricingAliases(cfg.CustomModelPricing))
 }
 
@@ -2669,9 +2664,6 @@ input_microdollars_per_mtok = 0
 		{"empty target", `[custom_model_pricing.alias]
 price_as = ""
 `, `price_as must not be empty`},
-		{"self", `[custom_model_pricing.alias]
-price_as = "alias"
-`, `custom_model_pricing."alias": price_as target "alias" is itself a price_as entry`},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

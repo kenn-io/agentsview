@@ -954,17 +954,12 @@ func decodeCustomModelPricing(data string) (map[string]CustomModelRate, error) {
 			continue
 		}
 		target := rate.PriceAs
-		targetEntry := decoded.CustomModelPricing[target]
 		switch {
 		case hasRates:
 			return nil, fmt.Errorf(
 				"custom_model_pricing.%q: price_as cannot be combined with rate fields", model)
 		case target == "":
 			return nil, fmt.Errorf("custom_model_pricing.%q: price_as must not be empty", model)
-		case targetEntry.PriceAs != "":
-			return nil, fmt.Errorf(
-				"custom_model_pricing.%q: price_as target %q is itself a price_as entry; chains are unsupported",
-				model, target)
 		}
 	}
 	return decoded.CustomModelPricing, nil

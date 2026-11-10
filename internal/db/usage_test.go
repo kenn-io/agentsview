@@ -4508,6 +4508,47 @@ func benchClaudeID(kind string, session, ordinal int) string {
 		strconv.Itoa(ordinal)
 }
 
+func TestGetDailyUsage_OverlappingPricingAliases(t *testing.T) {
+	dir := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "config.toml"), []byte(`
+[custom_model_pricing.deployment]
+price_as = "model-b"
+[custom_model_pricing.model-b]
+price_as = "model-c"
+[custom_model_pricing.zero-model]
+`), 0o600))
+	cfg, err := config.LoadReadOnlyAt(dir)
+	require.NoError(t, err)
+	pricingpkg.SetConfiguredAliases(config.PricingAliases(cfg.CustomModelPricing))
+	t.Cleanup(func() { pricingpkg.SetConfiguredAliases(nil) })
+	d := testDB(t)
+	d.SetCustomPricing(cfg.CustomModelPricing)
+	require.NoError(t, d.UpsertModelPricing([]ModelPricing{
+		{ModelPattern: "model-b", InputPerMTok: money.MustParseDollars("2")},
+		{ModelPattern: "model-c", InputPerMTok: money.MustParseDollars("3")},
+		{ModelPattern: "zero-model", InputPerMTok: money.MustParseDollars("4")},
+	}))
+	for _, model := range []string{"deployment", "model-b", "zero-model"} {
+		insertSession(t, d, model, "project")
+		require.NoError(t, d.InsertMessages(t.Context(), []Message{{
+			SessionID: model, Role: "assistant", Model: model, Timestamp: "2026-08-10T12:00:00Z",
+			TokenUsage: []byte(`{"input_tokens":1000000}`),
+		}}))
+	}
+	got, err := d.GetDailyUsage(t.Context(), UsageFilter{Timezone: "UTC"})
+	require.NoError(t, err)
+	require.Len(t, got.Daily, 1)
+	costs := make(map[string]money.Money)
+	for _, model := range got.Daily[0].ModelBreakdowns {
+		costs[model.ModelName] = model.Cost
+	}
+	assert.Equal(t, map[string]money.Money{
+		"deployment": money.MustParseDollars("2"),
+		"model-b":    money.MustParseDollars("3"),
+		"zero-model": {},
+	}, costs)
+}
+
 func TestGetDailyUsage_PricingPrecedence(t *testing.T) {
 	d := testDB(t)
 	ctx := t.Context()
