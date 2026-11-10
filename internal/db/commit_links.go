@@ -32,7 +32,6 @@ const (
 var (
 	ErrInvalidCommitSHA       = errors.New("commit SHA must contain 7 to 64 hexadecimal characters")
 	ErrCommitLinksUnavailable = errors.New("commit links are unavailable from this backend")
-	commitEnvNameRE           = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
 	commitSHARE               = regexp.MustCompile(`^[0-9a-f]{7,64}$`)
 	commitSummaryRE           = regexp.MustCompile(`(?m)^\[(detached HEAD|[^\s\[\]~^:?*\\]+) (?:\(root-commit\) )?([0-9a-f]{7,64})\] ([^\r\n]*)\r?$`)
 	commitInvocationRE        = regexp.MustCompile(`(?:^|[\s;&|(/]|\\[nrt]|(?:(?:cmd|command)["']?\s*:|(?:^|[\s/])(?:ba|da|z|k)?sh\s+(?:-\w+\s+)*-\w*c\s|\()\s*["'\x60])git\s+(?:` + commitGlobalOption + `\s+)*commit(?:$|[\s;&|)'"\x60\\])`)
@@ -170,11 +169,6 @@ func commitRepository(input, cwd string) string {
 	return cwd
 }
 
-func commitExecutableName(executable string) string {
-	name := path.Base(strings.ReplaceAll(executable, `\`, "/"))
-	return strings.TrimSuffix(strings.ToLower(name), ".exe")
-}
-
 func commitCommandText(input string) string {
 	if jsontext.Value(input).IsValid() {
 		var payload struct {
@@ -182,33 +176,9 @@ func commitCommandText(input string) string {
 		}
 		if json.Unmarshal([]byte(input), &payload) == nil && payload.Command != nil {
 			args := payload.Command
-			if len(args) > 0 && commitExecutableName(args[0]) == "env" {
-				args = args[1:]
-				if len(args) > 0 && (args[0] == "-i" || args[0] == "--ignore-environment") {
-					args = args[1:]
-				}
-				if len(args) > 0 && args[0] == "--" {
-					args = args[1:]
-				}
-				for len(args) > 0 {
-					name, _, ok := strings.Cut(args[0], "=")
-					if !ok || !commitEnvNameRE.MatchString(name) {
-						break
-					}
-					args = args[1:]
-				}
-			}
-			if len(args) == 0 {
-				return ""
-			}
-			executable := commitExecutableName(args[0])
-			if len(args) >= 3 && (executable == "sh" || executable == "bash" || executable == "zsh") && (args[1] == "-c" || args[1] == "-lc") {
+			if len(args) >= 3 && (args[0] == "sh" || args[0] == "bash" || args[0] == "zsh") && (args[1] == "-c" || args[1] == "-lc") {
 				return args[2]
 			}
-			if executable != "git" {
-				return ""
-			}
-			args[0] = "git"
 			for i, arg := range args {
 				switch {
 				case strings.HasPrefix(arg, "~"):

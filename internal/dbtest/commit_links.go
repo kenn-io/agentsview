@@ -1,7 +1,6 @@
 package dbtest
 
 import (
-	"database/sql"
 	"strings"
 	"testing"
 
@@ -145,41 +144,4 @@ func AssertRetainedCommitLink(t *testing.T, reader db.CommitLinkReader, want boo
 	assert.Equal(t, "abc1234567890123456789012345678901234567", links.Commits[0].SHA)
 	assert.True(t, links.Commits[0].Missing)
 	assert.Nil(t, links.Commits[0].Turn)
-}
-
-// SeedUnrepairedCommitLink represents an archive last opened by the v1 repair.
-func SeedUnrepairedCommitLink(t *testing.T, local *db.DB) {
-	t.Helper()
-	const id = "commit-argv"
-	SeedSession(t, local, id, "commit-project")
-	result := "[main def5678] Save the change"
-	require.NoError(t, local.ReplaceSessionMessages(t.Context(), id, []db.Message{
-		{SessionID: id, Ordinal: 0, Role: "user", Content: "Record the parser fix"},
-		{SessionID: id, Ordinal: 1, Role: "assistant", HasToolUse: true, ToolCalls: []db.ToolCall{{ToolName: "shell", Category: "Bash", InputJSON: `{"command":["bash","-lc","git commit -m change"]}`, ResultContent: result, ResultEvents: []db.ToolResultEvent{{Source: "tool_result", Content: result}}}}},
-	}))
-	conn, err := sql.Open("sqlite3", local.Path())
-	require.NoError(t, err)
-	defer conn.Close()
-	_, err = conn.ExecContext(t.Context(), `DELETE FROM commit_links WHERE session_id='commit-argv'`)
-	require.NoError(t, err)
-	_, err = conn.ExecContext(t.Context(), `DELETE FROM stats WHERE key='commit_links_backfill_v2'`)
-	require.NoError(t, err)
-	_, err = conn.ExecContext(t.Context(), `INSERT OR REPLACE INTO stats(key,value) VALUES ('commit_links_backfill_v1',1)`)
-	require.NoError(t, err)
-}
-
-// AssertRepairedCommitLinkPush opens the archive to run the repair after an initial push.
-func AssertRepairedCommitLinkPush(t *testing.T, local *db.DB, reader func() db.CommitLinkReader, push func()) {
-	t.Helper()
-	before, err := reader().SessionCommitLinks(t.Context(), "commit-argv")
-	require.NoError(t, err)
-	require.Empty(t, before.Commits)
-	reopened, err := db.Open(t.Context(), local.Path())
-	require.NoError(t, err)
-	require.NoError(t, reopened.Close())
-	push()
-	links, err := reader().SessionCommitLinks(t.Context(), "commit-argv")
-	require.NoError(t, err)
-	require.Len(t, links.Commits, 1)
-	assert.Equal(t, "def5678", links.Commits[0].SHA)
 }

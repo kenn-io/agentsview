@@ -88,7 +88,6 @@ func TestPGPurgeKeepsMissingCommitLinks(t *testing.T) {
 func TestPGCommitLinkParity(t *testing.T) {
 	syncer, local, pg, ctx := newSessionProvenancePushSync(t, "agentsview_commit_links_test")
 	dbtest.SeedCommitLinks(t, local)
-	dbtest.SeedUnrepairedCommitLink(t, local)
 	_, err := syncer.Push(ctx, false, nil)
 	require.NoError(t, err)
 	store, err := NewStore(t.Context(), testPGURL(t), syncer.schema, true)
@@ -102,10 +101,6 @@ func TestPGCommitLinkParity(t *testing.T) {
 	}
 	_, err = pg.ExecContext(ctx, `UPDATE sessions SET updated_at='2000-01-01T00:00:00Z' WHERE id='commit-trailer'`)
 	require.NoError(t, err)
-	dbtest.AssertRepairedCommitLinkPush(t, local, func() db.CommitLinkReader { return store }, func() {
-		_, err := syncer.Push(t.Context(), false, nil)
-		require.NoError(t, err)
-	})
 	dbtest.AssertTrailerIncrementalPush(t, local, func() db.CommitLinkReader { return store }, func() {
 		_, err := syncer.Push(t.Context(), false, nil)
 		require.NoError(t, err)

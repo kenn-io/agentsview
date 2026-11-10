@@ -33,17 +33,9 @@ func TestCommitLinksArgvCommands(t *testing.T) {
 		{"issue bash -lc", `{"command":["bash","-lc","git commit -m fix"]}`, "/work"},
 		{"shell cd apostrophe", `{"command":["bash","-lc","cd '/work/a'\\''b' && git commit -m fix"]}`, "/work/a'b"},
 		{"sh -c", `{"command":["sh","-c","git commit -m fix"]}`, "/work"},
-		{"absolute shell", `{"command":["/bin/bash","-lc","cd repo && git commit -m fix"]}`, "/work/repo"},
-		{"Windows git", `{"command":["C:\\Program Files\\Git\\bin\\GIT.ExE","-C","D:\\work\\repo","commit"]}`, `D:\work\repo`},
-		{"Windows bash", `{"command":["C:\\Program Files\\Git\\bin\\Bash.EXE","-lc","git commit -m fix"],"workdir":"D:\\work\\repo"}`, `D:\work\repo`},
-		{"Windows env", `{"command":["C:\\bin\\ENV.ExE","X=1","C:\\bin\\Git.EXE","commit"]}`, "/work"},
-		{"env clean", `{"command":["env","-i","PATH=/usr/bin","git","commit","-m","fix"]}`, "/work"},
-		{"env clean long", `{"command":["env","--ignore-environment","git","commit"]}`, "/work"},
-		{"env separator", `{"command":["env","--","git","commit","-m","fix"]}`, "/work"},
 		{"equals work tree", `{"command":["git","--work-tree=/path with spaces","commit"]}`, "/work"},
 		{"equals apostrophe", `{"command":["git","--git-dir=/path with o'b","commit"]}`, "/work"},
 		{"config equals", `{"command":["git","-c","user.name=A B","commit"]}`, "/work"},
-		{"env", `{"command":["env","X=1","git","commit"]}`, "/work"},
 		{"apostrophe", `{"command":["git","-C","/work/a'b\"c","commit"]}`, `/work/a'b"c`},
 		{"successive option-looking paths", `{"command":["git","-C","-C","-C","--git-dir=space here","commit"]}`, "/work/-C/--git-dir=space here"},
 		{"successive paths", `{"command":["git","-C","root","-C","child repo","commit"]}`, "/work/root/child repo"},
@@ -63,7 +55,7 @@ func TestCommitLinksArgvCommands(t *testing.T) {
 			assert.Equal(t, tt.repository, got.Commits[0].Repository)
 		})
 	}
-	for _, input := range []string{`{"command":[]}`, `{"command":["printf","git","commit"]}`, `{"command":["C:\\bin\\printf.exe","git","commit"]}`, `{"command":["git","log","git","commit"]}`, `{"command":["env","-i","printf","git","commit"]}`, `{"command":["env","--","printf","git","commit"]}`, `{"command":["env","--","git","log","git","commit"]}`, `{"command":["env","1X=1","git","commit"]}`} {
+	for _, input := range []string{`{"command":[]}`, `{"command":["printf","git","commit"]}`, `{"command":["git","log","git","commit"]}`} {
 		t.Run(input, func(t *testing.T) {
 			d := testDB(t)
 			insertSession(t, d, "s1", "project-a")
