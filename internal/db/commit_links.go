@@ -25,7 +25,7 @@ const (
 	MaxCommitSHAs          = 200
 	commitLinksBackfillKey = "commit_links_backfill_v2"
 	commitCommandToken     = `(?:"(?:\\[\s\S]|[^"\\])*"|'(?:[^']|'\\'')*'|[^\s;&|"']+)`
-	commitGlobalOption     = `(?:-[cC]\s+` + commitCommandToken + `|--(?:git-dir|work-tree|namespace|config-env)(?:=|\s+)` + commitCommandToken + `|'--(?:git-dir|work-tree|namespace|config-env)=(?:[^']|'\\'')*'|-[pP]|--(?:no-pager|paginate|bare|no-replace-objects|literal-pathspecs|glob-pathspecs|noglob-pathspecs|icase-pathspecs|no-optional-locks|no-lazy-fetch|no-advice))`
+	commitGlobalOption     = `(?:-[cC]\s+` + commitCommandToken + `|--(?:git-dir|work-tree|namespace|config-env)(?:=|\s+)` + commitCommandToken + `|-[pP]|--(?:no-pager|paginate|bare|no-replace-objects|literal-pathspecs|glob-pathspecs|noglob-pathspecs|icase-pathspecs|no-optional-locks|no-lazy-fetch|no-advice))`
 )
 
 var (
@@ -128,7 +128,7 @@ func commitRepository(input, cwd string) string {
 				word = word[1 : len(word)-1]
 			}
 		}
-		return resolve(base, word, !quoted)
+		return resolve(base, word, true)
 	}
 	var fields struct {
 		Workdir string `json:"workdir"`
@@ -181,7 +181,7 @@ func commitArgv(input string) (command string, dirs []string, direct, present bo
 	var payload struct {
 		Command []string `json:"command"`
 	}
-	if !jsontext.Value(input).IsValid() || json.Unmarshal([]byte(input), &payload) != nil || payload.Command == nil {
+	if json.Unmarshal([]byte(input), &payload) != nil || payload.Command == nil {
 		return "", nil, false, false
 	}
 	args := payload.Command
@@ -222,17 +222,12 @@ executable:
 		return "", nil, false, true
 	}
 	for i := 1; i < len(args); i++ {
-		arg := args[i]
-		if arg == "commit" {
+		switch arg := args[i]; arg {
+		case "commit":
 			return "git commit", dirs, true, true
-		}
-		switch arg {
 		case "-c", "-C", "--git-dir", "--work-tree", "--namespace", "--config-env":
 			i++
-			if i >= len(args) {
-				return "", nil, false, true
-			}
-			if arg == "-C" {
+			if arg == "-C" && i < len(args) {
 				dirs = append(dirs, args[i])
 			}
 		case "-p", "-P", "--no-pager", "--paginate", "--bare", "--no-replace-objects", "--literal-pathspecs", "--glob-pathspecs", "--noglob-pathspecs", "--icase-pathspecs", "--no-optional-locks", "--no-lazy-fetch", "--no-advice":

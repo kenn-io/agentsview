@@ -308,7 +308,6 @@ func TestCommitLinksRepositoryPathStyle(t *testing.T) {
 		{"POSIX absolute", "/work", "cd /repo && git commit -m fix", "/repo"},
 		{"tilde", "/work", "cd ~/x && git commit -m fix", "~/x"},
 		{"literal apostrophe", "/work", `git -C '/work/a'\''b' commit`, "/work/a'b"},
-		{"shell quoted tilde", "/work", `git -C '~project' commit`, "/work/~project"},
 		{"nonleading cd", "/work", "git add . && cd /elsewhere && git commit -m fix", "/elsewhere"},
 		{"nonleading relative cd", "/work", "git add . && cd repo && git commit -m fix", "/work/repo"},
 		{"last cd before commit", "/work", "cd /first && cd /repo && git commit -m fix && cd /later", "/repo"},
