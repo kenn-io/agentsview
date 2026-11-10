@@ -76,8 +76,18 @@ func TestDailyUsageKimiDateAliasPricing(t *testing.T) {
 		"duck-kimi-post", "alpha", "post cutoff",
 		"2026-07-19T00:00:00.000Z", 2)
 	postSession.Agent = "kimi"
+	builtinSession := syncSession("duck-kimi-builtin", "builtin", "built-in alias", "2026-07-19T00:00:00.000Z", 2)
+	builtinSession.Agent = "kimi"
 
 	_, err := local.WriteSessionBatchAtomic(ctx, []db.SessionBatchWrite{
+		{
+			Session: builtinSession,
+			Messages: []db.Message{
+				kimiMessage("duck-kimi-builtin", 0, "kimi-for-coding", "2026-07-18T12:00:00.000Z"),
+				kimiMessage("duck-kimi-builtin", 1, "kimi-for-coding", "2026-07-19T00:00:00.000Z"),
+			},
+			DataVersion: 1, ReplaceMessages: true,
+		},
 		{
 			Session: preSession,
 			Messages: []db.Message{
@@ -90,8 +100,6 @@ func TestDailyUsageKimiDateAliasPricing(t *testing.T) {
 		{
 			Session: postSession,
 			Messages: []db.Message{
-				// Same model, same day, both eras: the SQL price_model
-				// CASE must split this group before summing.
 				kimiMessage("duck-kimi-post", 0,
 					"gateway-kimi", "2026-07-18T12:00:00.000Z"),
 				kimiMessage("duck-kimi-post", 1,
@@ -123,6 +131,12 @@ func TestDailyUsageKimiDateAliasPricing(t *testing.T) {
 	assert.Equal(t, money.MustParseDollars("4.80"), got.Daily[1].TotalCost,
 		"post-cutoff day prices at K3 rates")
 
+	builtin, err := store.GetDailyUsage(ctx, db.UsageFilter{From: "2026-07-01", To: "2026-07-31", Timezone: "UTC", Model: "kimi-for-coding"})
+	require.NoError(t, err)
+	require.Len(t, builtin.Daily, 2)
+	assert.Equal(t, money.MustParseDollars("1.51"), builtin.Daily[0].TotalCost)
+	assert.Equal(t, money.MustParseDollars("4.80"), builtin.Daily[1].TotalCost)
+
 	require.NotNil(t, got.Pricing, "pricing block")
 	require.Contains(t, got.Pricing.Models, "gateway-kimi")
 	resolutions := got.Pricing.Models["gateway-kimi"].Resolutions
@@ -135,7 +149,7 @@ func TestDailyUsageKimiDateAliasPricing(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, money.MustParseDollars("1.51"), usage.Cost)
 	for _, tc := range []struct{ day, cost string }{{"2026-07-18", "1.51"}, {"2026-07-19", "4.80"}} {
-		report, err := store.GetActivityReport(ctx, db.AnalyticsFilter{Timezone: "UTC"}, duckDayQuery(t, tc.day, "UTC"))
+		report, err := store.GetActivityReport(ctx, db.AnalyticsFilter{Project: "alpha", Timezone: "UTC"}, duckDayQuery(t, tc.day, "UTC"))
 		require.NoError(t, err)
 		assert.Equal(t, money.MustParseDollars(tc.cost), report.Totals.Cost)
 	}
