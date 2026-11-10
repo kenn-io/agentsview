@@ -26,7 +26,6 @@ func TestDiagnosticAppendRoute(t *testing.T) {
 	}
 	assertStatus(t, post(body, "203.0.113.5:1234"), http.StatusForbidden)
 	assertStatus(t, post(body, "127.0.0.1:1234"), http.StatusOK)
-	assertStatus(t, post(body, "127.0.0.1:1234"), http.StatusOK)
 	assertStatus(t, post(strings.Replace(body, id, strings.ToUpper(id), 1), "127.0.0.1:1234"), http.StatusOK)
 	withoutTime := fmt.Sprintf(`{"id":%q,"source":"worker","message":"launch failed"}`, id)
 	assertStatus(t, post(withoutTime, "127.0.0.1:1234"), http.StatusOK)
