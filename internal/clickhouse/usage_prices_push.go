@@ -2,12 +2,15 @@ package clickhouse
 
 import (
 	"context"
+	"crypto/sha256"
 	"database/sql"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"log"
 	"slices"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -22,6 +25,11 @@ const usagePriceInsertBatch = 20000
 // priced under. It is mirror-wide, not per archive: a pricing pass covers
 // every exporter's rows.
 const usagePricedDigestKey = "usage_prices_digest"
+
+// usagePricedCursorKey records what the last pricing pass over the Cursor
+// rows covered, as cursorPricingParts.mark renders it. It is mirror-wide,
+// like the Cursor rows themselves.
+const usagePricedCursorKey = "usage_prices_cursor"
 
 // usagePriceScope selects which mirrored usage rows a pricing pass reads.
 // The zero value covers the whole mirror, whichever archive pushed it,
@@ -329,9 +337,12 @@ func (s *Sync) insertUsagePrices(
 // The whole mirror is priced when the digest changed, on a full push, and on
 // a mirror no pass has covered yet, which is also the backfill for rows
 // written before price records existed. Otherwise session rows were priced
-// by the batch that wrote them, and only the Cursor rows need a pass. Rows
-// this misses, such as those of an exporter that writes no prices, stay
-// correct: the reader prices them per request until the next whole pass.
+// by the batch that wrote them, and only the Cursor rows can need a pass:
+// when there are Cursor rows and the last pass that covered them did not
+// see the same rows, digest, and price records; see cursorPricingParts.
+// Rows this misses, such as those of an exporter that writes no prices,
+// stay correct: the reader prices them per request until the next whole
+// pass.
 //
 // Models that pass finds uncovered, and models an earlier push left
 // pending, are adopted before any session batch. Every push then drops the
@@ -341,7 +352,12 @@ func (s *Sync) syncUsagePrices(ctx context.Context, full bool) (*usagePricer, er
 	if err != nil {
 		return nil, err
 	}
-	meta, err := readMetadata(ctx, s.conn, usagePricedDigestKey)
+	// Read before pricing, so a mark never claims rows the pass missed.
+	parts, err := s.readCursorPricingParts(ctx)
+	if err != nil {
+		return nil, err
+	}
+	meta, err := readMetadata(ctx, s.conn, usagePricedDigestKey, usagePricedCursorKey)
 	if err != nil {
 		return nil, err
 	}
@@ -350,27 +366,117 @@ func (s *Sync) syncUsagePrices(ctx context.Context, full bool) (*usagePricer, er
 		return nil, err
 	}
 	whole := full || meta[usagePricedDigestKey] != pricer.digest
-	added, err := s.priceUsageScope(ctx, pricer, usagePriceScope{cursorOnly: !whole})
-	if err != nil {
-		return nil, err
+	cursorDue := parts.cursor != "" && meta[usagePricedCursorKey] != parts.mark(pricer.digest)
+	var added []chUsagePriceModel
+	if whole || cursorDue {
+		if added, err = s.priceUsageScope(ctx, pricer, usagePriceScope{cursorOnly: !whole}); err != nil {
+			return nil, err
+		}
 	}
 	if added = pricer.uncovered(slices.Concat(added, pending)); len(added) > 0 {
+		// Adoption prices the whole mirror, Cursor rows included, under the
+		// digest it moves to.
 		if err := s.adoptUsageModels(ctx, pricer, added); err != nil {
+			return nil, err
+		}
+		if parts.cursor == "" {
+			return pricer, nil
+		}
+		if err := writeMetadata(ctx, s.conn, map[string]string{
+			usagePricedCursorKey: parts.mark(pricer.digest),
+		}); err != nil {
 			return nil, err
 		}
 		return pricer, nil
 	}
+	covered := map[string]string{}
 	if whole {
-		if err := writeMetadata(ctx, s.conn, map[string]string{
-			usagePricedDigestKey: pricer.digest,
-		}); err != nil {
-			return nil, err
-		}
+		covered[usagePricedDigestKey] = pricer.digest
+	}
+	if parts.cursor != "" && (whole || cursorDue) {
+		covered[usagePricedCursorKey] = parts.mark(pricer.digest)
+	}
+	if err := writeMetadata(ctx, s.conn, covered); err != nil {
+		return nil, err
 	}
 	if err := s.pruneUsagePrices(ctx, pricer.digest); err != nil {
 		return nil, err
 	}
 	return pricer, nil
+}
+
+// cursorPricingParts identifies, from their active parts, what a pass over
+// the Cursor rows reads and what it leaves behind.
+//
+// cursor names every active part of cursor_usage_events with a hash of its
+// files, so it changes when an insert, merge, or mutation does, and two
+// equal values mean the same rows. It is empty when the table has no
+// active parts, and then there is nothing to price.
+//
+// firstBlock maps each digest to the lowest block number among its active
+// usage_event_prices parts. Merges and inserts keep it; dropping the
+// digest's partition, as pruneUsagePrices does, raises it, because every
+// part written afterwards has a higher block number. A pass that read the
+// value before writing records therefore sees it change if a drop
+// removed any of them.
+type cursorPricingParts struct {
+	cursor     string
+	firstBlock map[string]int64
+}
+
+func (s *Sync) readCursorPricingParts(ctx context.Context) (cursorPricingParts, error) {
+	rows, err := s.conn.QueryContext(ctx, `
+		SELECT table, partition, name, hash_of_all_files, min_block_number
+		FROM system.parts
+		WHERE database = currentDatabase() AND active
+			AND table IN ('cursor_usage_events', 'usage_event_prices')
+		ORDER BY table, name`)
+	if err != nil {
+		return cursorPricingParts{}, fmt.Errorf("reading clickhouse cursor pricing parts: %w", err)
+	}
+	defer rows.Close()
+	out := cursorPricingParts{firstBlock: map[string]int64{}}
+	cursor := sha256.New()
+	cursorParts := 0
+	for rows.Next() {
+		var table, partition, name, files string
+		var minBlock int64
+		if err := rows.Scan(&table, &partition, &name, &files, &minBlock); err != nil {
+			return cursorPricingParts{}, fmt.Errorf("scanning clickhouse cursor pricing parts: %w", err)
+		}
+		if table == "cursor_usage_events" {
+			_, _ = fmt.Fprintf(cursor, "%d:%s%d:%s", len(name), name, len(files), files)
+			cursorParts++
+			continue
+		}
+		if first, ok := out.firstBlock[partition]; !ok || minBlock < first {
+			out.firstBlock[partition] = minBlock
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return cursorPricingParts{}, fmt.Errorf("iterating clickhouse cursor pricing parts: %w", err)
+	}
+	if cursorParts > 0 {
+		out.cursor = hex.EncodeToString(cursor.Sum(nil))
+	}
+	return out, nil
+}
+
+// mark renders what a pass over the Cursor rows covers under digest: the
+// Cursor parts, the digest's first price record block, and the query that
+// derives their price keys, which a build can change without changing the
+// digest. A pass records its mark after it finishes, so a push that reads
+// the same mark has nothing to price.
+func (p cursorPricingParts) mark(digest string) string {
+	rawSQL, args := usagePricingRawSQL(usagePriceScope{cursorOnly: true})
+	cte, args := chUsageCTEFromRaw(db.UsageFilter{Timezone: "UTC"}, rawSQL, args, false)
+	h := sha256.New()
+	for _, field := range []string{
+		digest, p.cursor, strconv.FormatInt(p.firstBlock[digest], 10), cte, fmt.Sprint(args),
+	} {
+		_, _ = fmt.Fprintf(h, "%d:%s", len(field), field)
+	}
+	return hex.EncodeToString(h.Sum(nil))
 }
 
 // pruneUsagePrices drops the records and contexts of every pricing digest

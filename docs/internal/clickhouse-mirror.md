@@ -230,10 +230,30 @@ catalog repriced the whole mirror each time, about nine times a day on a mirror
 fed by three machines, and kept every generation.
 
 A push prices the whole mirror when the digest changed, on a full push, and on a
-mirror no pass has covered. Otherwise it prices new session batches and Cursor
-events under the current digest. A usage row whose model the digest does not
-cover is not priced under it, because a catalog that resolves that model
-differently would map to the same digest:
+mirror no pass has covered. Otherwise it prices new session batches under the
+current digest, and passes over the Cursor rows only when one could find
+something:
+
+- `cursor_usage_events` has rows, and
+- the mark in `sync_metadata` key `usage_prices_cursor` differs from the
+  current one. The mark covers the digest, the active parts of
+  `cursor_usage_events` with their file hashes, the lowest block number of the
+  digest's `usage_event_prices` parts, and the query that derives Cursor price
+  keys. A push reads the parts before pricing and records the mark after the
+  pass, or the whole pass, finishes.
+
+New Cursor rows, merges, and mutations change the parts. Dropping the digest's
+partition raises its lowest block number. A build that changes how price keys
+are derived changes the query. Each forces the next pass. An unchanged mark
+means the rows a finished pass priced are still the only rows, and their
+records are still there. Reading the parts takes about 2 ms, against about
+315 ms and 1.68 million rows for a pass on a production mirror with no Cursor
+rows. The first pass under a new digest records a mark from before the
+digest's first records, so the next push passes once more.
+
+A usage row whose model the digest does not cover is not priced under it,
+because a catalog that resolves that model differently would map to the same
+digest:
 
 1. The session batch registers the model as pending and leaves its rows to
    per-request pricing.
@@ -258,9 +278,10 @@ as the deleted rows on servers in `lightweight_update` mode.
 
 A push that revives a digest idle for 24 hours while another push drops it can
 lose part of that digest's records, or keep records whose contexts were dropped.
-Reads stay correct. They price rows without a record per request until the next
-whole pass. A read that still finds a record without its context after three
-attempts prices every row per request.
+Reads stay correct. They price rows without a record per request. The next push
+prices the Cursor rows again; session rows wait for the next whole pass. A read
+that still finds a record without its context after three attempts prices every
+row per request.
 
 Serve stays read-only. Missing prices and reader-specific custom rates are
 computed for that request using the current pricing rules while push fills the

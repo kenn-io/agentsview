@@ -867,3 +867,82 @@ func TestUsageReadsPriceRecordsWithoutContextsPerRequest(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, want, top)
 }
+
+// cursorPricingQueries counts the finished queries in conn's database that
+// read the Cursor rows against the price records, which only a pricing pass
+// does while nothing reads usage.
+func cursorPricingQueries(t *testing.T, conn *sql.DB) int {
+	t.Helper()
+	_, err := conn.ExecContext(t.Context(), "SYSTEM FLUSH LOGS")
+	require.NoError(t, err)
+	var n int
+	require.NoError(t, conn.QueryRowContext(t.Context(), `
+		SELECT count() FROM system.query_log
+		WHERE current_database = currentDatabase() AND type = 'QueryFinish'
+			AND query LIKE '%FROM cursor_usage_events cu%'
+			AND query LIKE '%usage_event_prices%'
+			AND query NOT LIKE '%system.query_log%'`).Scan(&n))
+	return n
+}
+
+func TestPushSkipsCursorPricingWithoutCursorRows(t *testing.T) {
+	t.Parallel()
+	local, target := seedFixture(t)
+	syncer := newTestSync(t, local, target, storage.PusherOptions{})
+	_, err := syncer.Push(t.Context(), false, nil)
+	require.NoError(t, err)
+	before := cursorPricingQueries(t, syncer.conn)
+	_, err = syncer.Push(t.Context(), false, nil)
+	require.NoError(t, err)
+	assert.Equal(t, before, cursorPricingQueries(t, syncer.conn))
+}
+
+func TestPushPricesCursorRowsOnlyAfterTheyChange(t *testing.T) {
+	t.Parallel()
+	store, syncer, local := newUsagePriceStore(t)
+	// The first pass under a digest cannot know where the digest's records
+	// start, so the next push passes over the Cursor rows once more.
+	_, err := syncer.Push(t.Context(), false, nil)
+	require.NoError(t, err)
+	settled := cursorPricingQueries(t, syncer.conn)
+	_, err = syncer.Push(t.Context(), false, nil)
+	require.NoError(t, err)
+	assert.Equal(t, settled, cursorPricingQueries(t, syncer.conn), "unchanged Cursor rows")
+
+	require.NoError(t, local.InsertCursorUsageEvents(t.Context(), []db.CursorUsageEvent{{
+		OccurredAt: "2026-01-13T05:00:00.000Z", Model: "tier-test", Kind: "usage",
+		InputTokens: 70, OutputTokens: 7, CacheReadTokens: 9,
+		Charged: money.MustParseDollars("0.04"), DedupKey: "cursor-3",
+	}}))
+	_, err = syncer.Push(t.Context(), false, nil)
+	require.NoError(t, err)
+	assert.Equal(t, settled+1, cursorPricingQueries(t, syncer.conn), "new Cursor row")
+	_, err = syncer.Push(t.Context(), false, nil)
+	require.NoError(t, err)
+	assert.Equal(t, settled+1, cursorPricingQueries(t, syncer.conn), "priced Cursor rows")
+	assertDailyUsageParity(t, local, store)
+}
+
+// A push that drops the current digest's partition while another revives
+// it removes Cursor records that unchanged Cursor rows do not reveal.
+func TestPushRepricesCursorRowsAfterTheirRecordsAreDropped(t *testing.T) {
+	t.Parallel()
+	_, syncer, _ := newUsagePriceStore(t)
+	_, err := syncer.Push(t.Context(), false, nil)
+	require.NoError(t, err)
+	meta, err := readMetadata(t.Context(), syncer.conn, usagePricedDigestKey)
+	require.NoError(t, err)
+	digest := meta[usagePricedDigestKey]
+	require.NotEmpty(t, digest)
+	_, err = syncer.conn.ExecContext(t.Context(),
+		"ALTER TABLE usage_event_prices DROP PARTITION ?", digest)
+	require.NoError(t, err)
+
+	_, err = syncer.Push(t.Context(), false, nil)
+	require.NoError(t, err)
+	var records int
+	require.NoError(t, syncer.conn.QueryRowContext(t.Context(),
+		"SELECT count() FROM usage_event_prices WHERE pricing_digest = ?", digest).Scan(&records))
+	// The fixture's two Cursor events; session rows wait for a whole pass.
+	assert.Equal(t, 2, records)
+}
