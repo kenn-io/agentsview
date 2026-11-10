@@ -127,12 +127,10 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - set: alone
+          - set: doubleclose
             shard: 1
-          - set: alone
+          - set: doubleclose
             shard: 2
-          - set: leaks
-            shard: 1
     steps:
       - uses: actions/checkout@v7.0.1
         with:
@@ -157,19 +155,10 @@ jobs:
         timeout-minutes: 36
         run: |
           mkdir -p gotestsum
-          if [ "${{ matrix.set }}" = alone ]; then
-            go test -json -tags fts5 -run '^TestFSNotifyBackendRemoveRecursiveRootRemovesDescendantWatches$' -count=3000 -timeout=30m ./internal/sync > gotestsum/repro.json
-          else
-            : > gotestsum/repro.json
-            go test -c -tags fts5 -o "$RUNNER_TEMP/sync.test" ./internal/sync
-            pattern=$(GOFLAGS="$GOFLAGS -tags=fts5" scripts/macos-watcher-tests.sh ./internal/sync)
-            names=${pattern#^(}; names=${names%)\$}
-            cd internal/sync
-            for name in $(echo "$names" | tr '|' ' '); do
-              count=$("$RUNNER_TEMP/sync.test" -test.run "^($name|TestZZZLeakScratch)\$" -test.v -test.timeout=2m 2>&1 | sed -n 's/.*LEAKED_READERS //p')
-              [ "$count" = 0 ] || echo "leak: $name $count"
-            done
-          fi
+          status=0
+          go test -json -tags fts5 -run '^TestZZZKqueueDoubleClose$' -count=1 -timeout=10m ./internal/sync > gotestsum/repro.json || status=$?
+          jq -rj 'select(.Action == "output") | .Output' gotestsum/repro.json | grep -E 'iteration|ZZZ|closed|FAIL|ok' | tail -40
+          exit "$status"
         env:
           CGO_ENABLED: "1"
 
