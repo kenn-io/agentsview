@@ -563,7 +563,7 @@ func (db *DB) writeOneSessionBatchTx(
 			if err := applySessionMessageDiffTx(ctx, tx, write.Session.ID, plan); err != nil {
 				return 0, err
 			}
-			if len(plan.updates) > 0 {
+			if len(plan.updates) > 0 && !replacementTranscriptChanged {
 				if err := refreshImageTextOccurrencesTx(queries, write.Session.ID); err != nil {
 					return 0, err
 				}

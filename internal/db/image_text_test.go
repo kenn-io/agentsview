@@ -560,6 +560,25 @@ func TestImageTextSurvivesMetadataOnlyReplacement(t *testing.T) {
 	}
 }
 
+func TestImageTextBatchSourceIDGainRefreshesOnce(t *testing.T) {
+	ctx := t.Context()
+	d := testDB(t)
+	require.NoError(t, d.BackfillImageTextOccurrences(ctx))
+	content := testInlineImageContent()
+	write := SessionBatchWrite{Session: Session{ID: "image", Project: "demo", Agent: defaultAgent, Machine: defaultMachine}, ReplaceMessages: true,
+		Messages: []Message{{SessionID: "image", Ordinal: 1, Role: "assistant", ToolCalls: []ToolCall{{ToolName: "Read", ResultContent: content}}}}}
+	_, err := d.WriteSessionBatchAtomic(ctx, []SessionBatchWrite{write})
+	require.NoError(t, err)
+	_, err = d.getWriter().ExecContext(ctx, `CREATE TABLE image_refresh_count(n INTEGER); INSERT INTO image_refresh_count VALUES (0); CREATE TRIGGER image_refresh_count_insert AFTER INSERT ON image_text_occurrences BEGIN UPDATE image_refresh_count SET n=n+1; END`)
+	require.NoError(t, err)
+	write.Messages[0].SourceUUID = "source-1"
+	_, err = d.WriteSessionBatchAtomic(ctx, []SessionBatchWrite{write})
+	require.NoError(t, err)
+	var count int
+	require.NoError(t, d.Reader().QueryRow(ctx, `SELECT n FROM image_refresh_count`).Scan(&count))
+	require.Equal(t, 1, count)
+}
+
 func TestImageTextContentPageOrder(t *testing.T) {
 	ctx := t.Context()
 	d := testDB(t)
