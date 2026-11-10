@@ -113,16 +113,18 @@ func usageRangeBytes(r *activityUsageRange) int64 {
 	return n + usageSurvivorsBytes(&r.survivors)
 }
 
+// usageSurvivorsBytes counts the survivors' slices by capacity: a push
+// splices rows in and out of them, and a slice keeps its largest array.
 func usageSurvivorsBytes(u *usageSurvivors) int64 {
-	n := int64(len(u.candidate)) +
-		int64(len(u.tokens))*int64(unsafe.Sizeof(usageTokenRow{})) +
-		int64(len(u.results))*int64(unsafe.Sizeof(usageTokenSurvivor{})) +
+	n := int64(cap(u.candidate)) +
+		int64(cap(u.tokens))*int64(unsafe.Sizeof(usageTokenRow{})) +
+		int64(cap(u.results))*int64(unsafe.Sizeof(usageTokenSurvivor{})) +
 		int64(len(u.pricing))*int64(unsafe.Sizeof(usagePricingTally{})+unsafe.Sizeof(usagePricingKey{}))
 	// A total row's strings point into its rows' dictionary and arena.
 	for _, totals := range u.totals {
 		n += int64(unsafe.Sizeof(totals)) +
-			int64(len(totals.rows))*int64(unsafe.Sizeof(usageTotalRow{})) +
-			int64(len(totals.pricing))*int64(unsafe.Sizeof(usagePricingCount{}))
+			int64(cap(totals.rows))*int64(unsafe.Sizeof(usageTotalRow{})) +
+			int64(cap(totals.pricing))*int64(unsafe.Sizeof(usagePricingCount{}))
 	}
 	return n
 }

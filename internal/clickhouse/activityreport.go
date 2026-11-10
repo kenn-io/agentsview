@@ -898,7 +898,10 @@ func (s *Store) keptActivityUsage(
 	rows, err := r.usage(ctx, ids, q, rateResolver, pricingDigest)
 	if err != nil {
 		// A derivation that stopped part way leaves no state to build on.
+		// The refresh may already have changed the rows, so store the range
+		// again for the memo to record its current size.
 		r.survivors = usageSurvivors{}
+		s.activityUsageRanges.Put(slot, "", []*activityUsageRange{r})
 		return nil, err
 	}
 	// Only ranges in progress read this memo, so a range that has ended is

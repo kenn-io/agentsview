@@ -10,6 +10,7 @@ import (
 	"strconv"
 	"testing"
 	"time"
+	"unsafe"
 
 	"github.com/stretchr/testify/require"
 
@@ -285,4 +286,74 @@ func TestKeptActivityUsageDecodesOnlyChangedSessions(t *testing.T) {
 		outputs += row.OutputTokens
 	}
 	require.Equal(t, 199*10*10+11, outputs)
+}
+
+// A report that fails after its refresh changed a kept range must leave the
+// memo with the range's current size. Otherwise a range that outgrew the
+// byte cap stays kept, counted at its earlier size.
+func TestKeptActivityUsageFailureRecordsGrownRange(t *testing.T) {
+	q := activity.Query{
+		Loc: time.UTC, RangeStart: usageTestStart, RangeEnd: usageTestStart.Add(48 * time.Hour),
+		EffectiveEnd: usageTestStart.Add(47 * time.Hour), Partial: true,
+		Bucket: activity.BucketSpec{Unit: activity.BucketDay, NominalSeconds: 86400},
+	}
+	row := func(session string, i int) clickSessionUsageOrderedRow {
+		return keptTestRow(session, "message", usageTestStart.Add(time.Duration(i)*time.Minute).Format(time.RFC3339),
+			int64(i), "", "", 1)
+	}
+	const lower, upper = "2026-09-01T00:00:00Z", "2999-01-01T00:00:00Z"
+	slot := lower + "|" + upper
+	s := NewStoreFromDB(nil, nil)
+	r := &activityUsageRange{}
+	r.reset(map[string]string{"session-a": "1"}, keepTestUsage([]clickSessionUsageOrderedRow{row("session-a", 0)}))
+	s.activityUsageRanges.MaxBytes = usageRangeBytes(r) + 1
+	s.activityUsageRanges.Put(slot, "", []*activityUsageRange{r})
+	_, kept := s.activityUsageRanges.Get(slot, "")
+	require.True(t, kept)
+
+	// A refresh read session-b's new rows, then the report was canceled.
+	revisions := map[string]string{"session-a": "1", "session-b": "1"}
+	var pushed []clickSessionUsageOrderedRow
+	for i := range 10 {
+		pushed = append(pushed, row("session-b", i))
+	}
+	r.patch(revisions, []string{"session-b"}, keepTestUsage(pushed))
+	ctx, cancel := context.WithCancel(t.Context())
+	cancel()
+	resolver, digest := usageTestResolver(0)
+	_, err := s.keptActivityUsage(ctx, preparedUsageState{revisions: revisions}, lower, upper,
+		[]string{"session-a", "session-b"}, q, resolver, digest)
+	require.ErrorIs(t, err, context.Canceled)
+
+	_, kept = s.activityUsageRanges.Get(slot, "")
+	require.False(t, kept, "the grown range is still kept at its earlier size")
+}
+
+// The survivors' byte estimate must cover every array their slices keep. The
+// first token index reserves a place for every row, but only rows with a
+// dedup token fill it.
+func TestUsageSurvivorsBytesCountsReservedCapacity(t *testing.T) {
+	q := activity.Query{
+		Loc: time.UTC, RangeStart: usageTestStart, RangeEnd: usageTestStart.Add(48 * time.Hour),
+		EffectiveEnd: usageTestStart.Add(47 * time.Hour), Partial: true,
+		Bucket: activity.BucketSpec{Unit: activity.BucketDay, NominalSeconds: 86400},
+	}
+	rows := []clickSessionUsageOrderedRow{
+		keptTestRow("session-b", "message", usageTestStart.Format(time.RFC3339), 0, "msg", "req", 1),
+	}
+	for i := range 2000 {
+		rows = append(rows, keptTestRow("session-a", "message",
+			usageTestStart.Add(time.Duration(i)*time.Second).Format(time.RFC3339), int64(i), "", "", 1))
+	}
+	var r activityUsageRange
+	r.reset(nil, keepTestUsage(rows))
+	resolver, digest := usageTestResolver(0)
+	_, err := r.usage(t.Context(), []string{"session-a", "session-b"}, q, resolver, digest)
+	require.NoError(t, err)
+
+	u := &r.survivors
+	require.Greater(t, cap(u.tokens), len(u.tokens))
+	arrays := int64(cap(u.tokens))*int64(unsafe.Sizeof(usageTokenRow{})) +
+		int64(cap(u.results))*int64(unsafe.Sizeof(usageTokenSurvivor{}))
+	require.GreaterOrEqual(t, usageSurvivorsBytes(u), arrays)
 }
