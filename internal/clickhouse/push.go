@@ -87,7 +87,6 @@ func (s *Sync) pushWithOptions(
 		s.archiveKey(usageSnapshotReadyKeyBase),
 		s.archiveKey(messageDialogueReadyKeyBase),
 		s.archiveKey(commitLinksReadyKeyBase),
-		s.archiveKey(imageTextReadyKeyBase),
 		s.archiveKey(storedCountRepairKeyBase),
 		s.archiveKey(databaseIDKeyBase),
 		s.archiveKey(fullPushRunKeyBase),
@@ -117,9 +116,6 @@ func (s *Sync) pushWithOptions(
 	}
 	if !full && meta[s.archiveKey(commitLinksReadyKeyBase)] == "" {
 		full, reason = true, "backfilling commit links"
-	}
-	if !full && meta[s.archiveKey(imageTextReadyKeyBase)] == "" {
-		full, reason = true, "backfilling image text"
 	}
 	if !full && meta[s.archiveKey(messageDialogueReadyKeyBase)] == "" {
 		full, reason = true, "preparing message dialogue"
@@ -367,7 +363,6 @@ func (s *Sync) pushWithOptions(
 		if full {
 			pushed[s.archiveKey(messageDialogueReadyKeyBase)] = cutoff
 			pushed[s.archiveKey(commitLinksReadyKeyBase)] = cutoff
-			pushed[s.archiveKey(imageTextReadyKeyBase)] = cutoff
 			pushed[s.archiveKey(fullPushRunKeyBase)] = ""
 		}
 		if err := writeMetadata(ctx, conn, pushed); err != nil {

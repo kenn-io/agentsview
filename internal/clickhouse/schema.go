@@ -38,7 +38,6 @@ const (
 	cursorUsageMaxIDKeyBase     = "agentsview_cursor_usage_max_id"
 	usageSnapshotReadyKeyBase   = "agentsview_usage_snapshot_ready"
 	commitLinksReadyKeyBase     = "agentsview_commit_links_ready"
-	imageTextReadyKeyBase       = "agentsview_image_text_ready"
 	messageDialogueReadyKeyBase = "agentsview_message_dialogue_ready"
 	storedCountRepairKeyBase    = "agentsview_stored_message_count_repair"
 	databaseIDKeyBase           = "agentsview_source_database_id"

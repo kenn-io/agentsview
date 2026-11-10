@@ -184,17 +184,16 @@ func TestClickHouseImageTextPushAndSearch(t *testing.T) {
 		assertSearch(t, "invoice", `invoice \d+ total`, 1, "Read")
 	})
 
-	t.Run("backfill after upgrade", func(t *testing.T) {
+	t.Run("backfill after archive rebuild", func(t *testing.T) {
 		_, err := store.DB().ExecContext(ctx, `DELETE FROM image_text WHERE 1 SETTINGS mutations_sync=2`)
 		require.NoError(t, err)
-		_, err = store.DB().ExecContext(ctx, `DELETE FROM sync_metadata WHERE key=? SETTINGS mutations_sync=2`,
-			syncer.archiveKey(imageTextReadyKeyBase))
-		require.NoError(t, err)
+		require.NoError(t, local.SetDatabaseIDForTest(ctx, "rebuilt-archive"))
 		result, err := syncer.Push(ctx, false, nil)
 		require.NoError(t, err)
 		assert.True(t, result.Full)
 		assert.Zero(t, result.Errors)
 		assertRows(t)
+		assertSearch(t, "invoice", `invoice \d+ total`, 1, "Read")
 	})
 
 	t.Run("image removed", func(t *testing.T) {
