@@ -315,7 +315,6 @@ type SearchResult struct {
 	Ordinal        int      `json:"ordinal"`
 	SessionEndedAt string   `json:"session_ended_at"`
 	Snippet        string   `json:"snippet"`
-	MatchKind      string   `json:"match_kind,omitempty"`
 	Rank           float64  `json:"rank"`
 }
 
@@ -504,7 +503,7 @@ func (db *DB) Search(
 		bestArgs = []any{plainQuery}
 		ftsSessionsSQL = "SELECT session_id FROM best_rows"
 		ftsSessionsArgs = nil
-		// Image and name rows rank after every message match, so they reach
+		// Image and name rows rank 0.0, after every message match, so they reach
 		// the page only when the walk read every match.
 		includeNames = walk.complete
 	}
@@ -523,7 +522,7 @@ func (db *DB) Search(
 		args = append(args, ftsSessionsArgs...)
 		imageBranchSQL = fmt.Sprintf(`
 			UNION ALL
-			SELECT session_id,project,agent,machine,name,session_ended_at,ordinal,NULL,image_rowid,NULL,0.5,0,'image_text'
+			SELECT session_id,project,agent,machine,name,session_ended_at,ordinal,NULL,image_rowid,NULL,0.0,0
 			FROM (
 			 SELECT s.id AS session_id,s.project,s.agent,s.machine,
 			 COALESCE(s.display_name,s.session_name,s.first_message,'') AS name,
@@ -564,8 +563,8 @@ func (db *DB) Search(
 						THEN COALESCE(s.first_message, '')
 					ELSE COALESCE(s.display_name, s.session_name, s.first_message, '')
 				END AS snippet,
-				1.0 AS rank,
-				0 AS match_pos, '' AS match_kind
+				0.0 AS rank,
+				0 AS match_pos
 			FROM sessions s
 			WHERE (COALESCE(s.display_name, s.session_name) LIKE ? ESCAPE '\'
 				OR s.first_message LIKE ? ESCAPE '\')
@@ -595,7 +594,7 @@ func (db *DB) Search(
 	query := fmt.Sprintf(`
 		%spage AS MATERIALIZED (
 		SELECT session_id, project, agent, machine, name,
-			session_ended_at, ordinal, best_rowid, image_rowid, snippet, rank, match_pos, match_kind
+			session_ended_at, ordinal, best_rowid, image_rowid, snippet, rank, match_pos
 		FROM (
 			-- FTS branch: message content matches
 			SELECT m.session_id, s.project, s.agent, s.machine,
@@ -604,7 +603,7 @@ func (db *DB) Search(
 				best.best_ordinal AS ordinal, best.best_rowid, NULL AS image_rowid,
 				NULL AS snippet,
 				best.best_rank AS rank,
-				%s AS match_pos, '' AS match_kind
+				%s AS match_pos
 			FROM (
 				%s
 			) AS best
@@ -623,7 +622,7 @@ func (db *DB) Search(
 				FROM messages_fts
 				WHERE messages_fts.rowid = page.best_rowid AND %s
 			) END AS snippet,
-			rank, match_pos, match_kind
+			rank, match_pos
 		FROM page
 		ORDER BY %s`,
 		withSQL,
@@ -653,7 +652,7 @@ func (db *DB) Search(
 		if err := rows.Scan(
 			&r.SessionID, &r.Project, &r.Agent, &r.Machine, &r.Name,
 			&r.SessionEndedAt, &r.Ordinal,
-			&r.Snippet, &r.Rank, &matchPos, &r.MatchKind,
+			&r.Snippet, &r.Rank, &matchPos,
 		); err != nil {
 			return SearchPage{},
 				fmt.Errorf("scanning result: %w", err)

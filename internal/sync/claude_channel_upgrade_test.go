@@ -2,6 +2,7 @@ package sync_test
 
 import (
 	"database/sql"
+	"fmt"
 	"os"
 	"path/filepath"
 	"testing"
@@ -68,7 +69,9 @@ func TestClaudeChannelUpgradeKeepsRetryCuration(t *testing.T) {
 				require.Equal(t, 2, pinOrdinal)
 				require.Equal(t, 2, messageOrdinal)
 			}
-			_, err = raw.ExecContext(ctx, "UPDATE sessions SET data_version = 144; PRAGMA user_version = 144")
+			// Model version 145's reparse as the current scoped upgrade.
+			t.Cleanup(db.InstallDataVersionScopesForTest(map[int][]parser.AgentType{db.CurrentDataVersion(): db.ScopedDataVersionProviders(144, 145)}))
+			_, err = raw.ExecContext(ctx, fmt.Sprintf("UPDATE sessions SET data_version = %[1]d; PRAGMA user_version = %[1]d", db.CurrentDataVersion()-1))
 			require.NoError(t, err)
 			require.NoError(t, raw.Close())
 

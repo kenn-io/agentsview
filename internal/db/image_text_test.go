@@ -4,7 +4,7 @@ import (
 	"encoding/base64"
 	"fmt"
 	"path/filepath"
-	"strings"
+	"slices"
 	"testing"
 	"time"
 
@@ -80,7 +80,7 @@ func TestImageTextIndexRebuild(t *testing.T) {
 	}
 }
 
-func TestImageTextCopyDropsTerminalFailures(t *testing.T) {
+func TestImageTextCopyKeepsTerminalFailures(t *testing.T) {
 	ctx := t.Context()
 	source := testDB(t)
 	target := testDB(t)
@@ -92,32 +92,75 @@ func TestImageTextCopyDropsTerminalFailures(t *testing.T) {
 	hash := RetainedToolResultImages(content)[0].SHA256
 	identity, err := ocr.NewIdentity("test", "model", "revision")
 	require.NoError(t, err)
-	require.NoError(t, source.SaveImageTextTerminal(ctx, hash, identity, map[string]bool{"image/png": true}))
+	require.NoError(t, source.SaveImageTextTerminal(ctx, hash, identity))
 	require.NoError(t, target.CopyImageTextFrom(ctx, source.Path()))
 	pending, err := target.PendingImageText(ctx, identity.Fingerprint, time.Now(), 20)
 	require.NoError(t, err)
-	require.Equal(t, []string{hash}, pending)
+	require.Empty(t, pending)
 }
 
-func TestImageTextTerminalDoesNotSuppressCorrectedSource(t *testing.T) {
+func TestImageTextPendingPrefersUnattempted(t *testing.T) {
 	ctx := t.Context()
 	d := testDB(t)
 	insertSession(t, d, "image", "demo")
-	png := testInlineImageContent()
-	gif := strings.Replace(png, "image/png", "image/gif", 1)
-	hash := RetainedToolResultImages(gif)[0].SHA256
-	require.NoError(t, d.InsertMessages(ctx, []Message{{SessionID: "image", Role: "assistant", ToolCalls: []ToolCall{{ToolName: "Read", ResultContent: gif}}}}))
-	sources, err := d.ImageTextSources(ctx, hash, 0, 20)
-	require.NoError(t, err)
-	require.Len(t, sources, 1)
-	require.Equal(t, "image/gif", RetainedToolResultImages(sources[0].Content)[0].MediaType)
-	require.NoError(t, d.ReplaceSessionMessages(ctx, "image", []Message{{SessionID: "image", Role: "assistant", ToolCalls: []ToolCall{{ToolName: "Read", ResultContent: png}}}}))
+	var hashes []string
+	for i := range 3 {
+		content := fmt.Sprintf(`[{"type":"input_image","image_url":"data:image/png;base64,%s"}]`, base64.StdEncoding.EncodeToString(fmt.Appendf(nil, "\x89PNG\r\n\x1a\n%d", i)))
+		hashes = append(hashes, RetainedToolResultImages(content)[0].SHA256)
+		require.NoError(t, d.InsertMessages(ctx, []Message{{SessionID: "image", Ordinal: i, Role: "assistant", ToolCalls: []ToolCall{{ToolName: "Read", ResultContent: content}}}}))
+	}
+	slices.Sort(hashes)
 	identity, err := ocr.NewIdentity("test", "model", "revision")
 	require.NoError(t, err)
-	require.NoError(t, d.SaveImageTextTerminal(ctx, hash, identity, map[string]bool{"image/gif": true}))
+	for _, hash := range hashes[:2] {
+		require.NoError(t, d.SaveImageText(ctx, hash, identity, "", true))
+	}
+	_, err = d.getWriter().Exec(ctx, `UPDATE image_text_cache SET retry_at=CASE image_hash WHEN ? THEN '2000-01-02T00:00:00Z' ELSE '2000-01-01T00:00:00Z' END`, hashes[0])
+	require.NoError(t, err)
 	pending, err := d.PendingImageText(ctx, identity.Fingerprint, time.Now(), 20)
 	require.NoError(t, err)
-	require.Equal(t, []string{hash}, pending)
+	require.Equal(t, []string{hashes[2], hashes[1], hashes[0]}, pending)
+}
+
+func TestImageTextMirrorRows(t *testing.T) {
+	ctx := t.Context()
+	d := testDB(t)
+	insertSession(t, d, "image", "demo")
+	content := testInlineImageContent()
+	require.NoError(t, d.InsertMessages(ctx, []Message{{SessionID: "image", Ordinal: 3, Role: "assistant", Content: "answer", ToolCalls: []ToolCall{
+		{ToolName: "Read", ResultContent: content},
+		{ToolName: "Read", ToolUseID: "call", ResultEvents: []ToolResultEvent{{ToolUseID: "call", Source: "tool", Status: "completed", Content: content}}},
+	}}}))
+	hash := RetainedToolResultImages(content)[0].SHA256
+	var before struct{ marker, modified string }
+	var revision int64
+	require.NoError(t, d.Reader().QueryRow(ctx, `SELECT sync_marker,COALESCE(local_modified_at,''),transcript_revision FROM sessions WHERE id='image'`).Scan(&before.marker, &before.modified, &revision))
+	identity, err := ocr.NewIdentity("test", "model", "revision")
+	require.NoError(t, err)
+	require.NoError(t, d.SaveImageText(ctx, hash, identity, "", true))
+	var marker, modified string
+	var afterRevision int64
+	require.NoError(t, d.Reader().QueryRow(ctx, `SELECT sync_marker,COALESCE(local_modified_at,''),transcript_revision FROM sessions WHERE id='image'`).Scan(&marker, &modified, &afterRevision))
+	require.Equal(t, before.marker, marker)
+	rows, err := d.SessionImageTextRows(ctx, "image")
+	require.NoError(t, err)
+	require.Empty(t, rows)
+
+	require.NoError(t, d.SaveImageText(ctx, hash, identity, "invoice 4827", false))
+	require.NoError(t, d.Reader().QueryRow(ctx, `SELECT sync_marker,COALESCE(local_modified_at,''),transcript_revision FROM sessions WHERE id='image'`).Scan(&marker, &modified, &afterRevision))
+	require.Greater(t, marker, before.marker)
+	require.Equal(t, before.modified, modified)
+	require.Equal(t, revision, afterRevision)
+	row := ImageTextRow{SessionID: "image", MessageOrdinal: 3, ImageHash: hash, Processor: identity.Fingerprint, Provider: identity.Provider, Model: identity.Model, Revision: identity.Revision, Text: "invoice 4827"}
+	event, call := row, row
+	event.SourceKind, event.CallIndex = "event", 1
+	call.SourceKind = "tool_call"
+	rows, err = d.SessionImageTextRows(ctx, "image")
+	require.NoError(t, err)
+	require.Equal(t, []ImageTextRow{event, call}, rows)
+	snapshot, err := d.LoadSessionMirrorSnapshot(ctx, "image")
+	require.NoError(t, err)
+	require.Equal(t, rows, snapshot.ImageText)
 }
 
 func TestImageTextMembershipAndPruning(t *testing.T) {
@@ -283,7 +326,6 @@ func TestImageTextSearchUsesCurrentResultEvents(t *testing.T) {
 	require.Len(t, page.Results, 1)
 	require.Equal(t, "session", page.Results[0].SessionID)
 	require.Equal(t, 1, page.Results[0].Ordinal)
-	require.Equal(t, "image_text", page.Results[0].MatchKind)
 	require.Contains(t, page.Results[0].Snippet, "<mark>currentimageword</mark>")
 	require.NoError(t, d.InsertMessages(ctx, []Message{{SessionID: "session", Ordinal: 2, Role: "assistant", Content: "later"}}))
 	page, err = d.Search(ctx, SearchFilter{Query: "currentimageword"})

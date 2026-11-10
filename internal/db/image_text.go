@@ -2,6 +2,8 @@ package db
 
 import (
 	"context"
+	"database/sql"
+	"encoding/json/v2"
 	"fmt"
 	"time"
 
@@ -12,7 +14,6 @@ type ImageTextOccurrence struct {
 	CallID, EventID int64
 	Index           int
 	Hash            string
-	MediaType       string
 }
 type PendingImageText struct {
 	Content string
@@ -20,10 +21,30 @@ type PendingImageText struct {
 	Hash    string
 }
 
+// ImageTextRow is one successful extraction at a portable source location.
+// SourceKind is "tool_call" for a call's result content and "event" for a
+// tool result event; EventIndex is zero for tool calls.
+type ImageTextRow struct {
+	SessionID      string `json:"session_id"`
+	SourceKind     string `json:"source_kind"`
+	MessageOrdinal int    `json:"message_ordinal"`
+	CallIndex      int    `json:"call_index"`
+	EventIndex     int    `json:"event_index"`
+	ImageIndex     int    `json:"image_index"`
+	ImageHash      string `json:"image_hash"`
+	Processor      string `json:"processor"`
+	Provider       string `json:"provider"`
+	Model          string `json:"model"`
+	Revision       string `json:"revision"`
+	Text           string `json:"text"`
+}
+
+// PendingImageText lists hashes never attempted before due retries, oldest
+// retry first, so repeated failures cannot starve other images.
 func (db *DB) PendingImageText(ctx context.Context, processor string, now time.Time, limit int) ([]string, error) {
 	rows, err := db.getReader().QueryContext(ctx, `SELECT o.image_hash FROM image_text_occurrences o LEFT JOIN image_text_cache c ON c.image_hash=o.image_hash AND c.processor=?
  WHERE c.image_hash IS NULL OR (c.succeeded=0 AND c.retry_at<=?)
- GROUP BY o.image_hash ORDER BY o.image_hash LIMIT ?`, processor, now.UTC().Format(time.RFC3339), limit)
+ GROUP BY o.image_hash ORDER BY MAX(c.image_hash IS NOT NULL), MAX(c.retry_at), o.image_hash LIMIT ?`, processor, now.UTC().Format(time.RFC3339), limit)
 	if err != nil {
 		return nil, err
 	}
@@ -74,7 +95,7 @@ func (db *DB) SaveImageText(ctx context.Context, hash string, identity ocr.Ident
 	if err != nil {
 		return err
 	}
-	defer tx.Rollback()
+	defer func() { _ = tx.Rollback() }()
 	_, err = tx.ExecContext(ctx, `INSERT INTO image_text_cache(image_hash,processor,provider,model,revision,text,succeeded,updated_at) SELECT ?,?,?,?,?,?,1,strftime('%Y-%m-%dT%H:%M:%fZ','now') WHERE EXISTS (SELECT 1 FROM image_text_occurrences WHERE image_hash=?)
 		ON CONFLICT(image_hash,processor) DO UPDATE SET text=excluded.text,succeeded=1,failures=0,retry_at='',updated_at=excluded.updated_at`, hash, identity.Fingerprint, identity.Provider, identity.Model, identity.Revision, text, hash)
 	if err != nil {
@@ -83,37 +104,24 @@ func (db *DB) SaveImageText(ctx context.Context, hash string, identity ocr.Ident
 	if _, err = tx.ExecContext(ctx, `DELETE FROM image_text_cache WHERE image_hash=? AND processor<>? AND EXISTS (SELECT 1 FROM image_text_cache WHERE image_hash=? AND processor=? AND succeeded=1)`, hash, identity.Fingerprint, hash, identity.Fingerprint); err != nil {
 		return err
 	}
+	// Advance the mirror cursor without invalidating Recall's content stamp.
+	if _, err = tx.ExecContext(ctx, `UPDATE sessions
+		SET sync_marker = MAX(COALESCE(sync_marker, ''), strftime('%Y-%m-%dT%H:%M:%fZ','now'))
+		WHERE id IN (SELECT session_id FROM image_text_occurrences WHERE image_hash=?)`, hash); err != nil {
+		return fmt.Errorf("marking image text sessions modified: %w", err)
+	}
 	return tx.Commit()
 }
 
-func (db *DB) SaveImageTextTerminal(ctx context.Context, hash string, identity ocr.Identity, inspectedTypes map[string]bool) error {
+// SaveImageTextTerminal records that verified bytes cannot be read by this
+// processor, so the result holds for every copy of the image.
+func (db *DB) SaveImageTextTerminal(ctx context.Context, hash string, identity ocr.Identity) error {
 	if err := db.requireDerivedTextStorage("image text"); err != nil {
 		return err
 	}
 	db.mu.Lock()
 	defer db.mu.Unlock()
-	rows, err := db.getWriter().QueryContext(ctx, `SELECT DISTINCT media_type FROM image_text_occurrences WHERE image_hash=?`, hash)
-	if err != nil {
-		return err
-	}
-	for rows.Next() {
-		var mediaType string
-		if err := rows.Scan(&mediaType); err != nil {
-			rows.Close()
-			return err
-		}
-		if !inspectedTypes[mediaType] {
-			return rows.Close()
-		}
-	}
-	if err := rows.Err(); err != nil {
-		rows.Close()
-		return err
-	}
-	if err := rows.Close(); err != nil {
-		return err
-	}
-	_, err = db.getWriter().ExecContext(ctx, `INSERT INTO image_text_cache(image_hash,processor,provider,model,revision,failures,retry_at)
+	_, err := db.getWriter().ExecContext(ctx, `INSERT INTO image_text_cache(image_hash,processor,provider,model,revision,failures,retry_at)
  SELECT ?,?,?,?,?,1,'9999-12-31T23:59:59Z' WHERE EXISTS (SELECT 1 FROM image_text_occurrences WHERE image_hash=?)
  ON CONFLICT(image_hash,processor) DO UPDATE SET retry_at=excluded.retry_at`, hash, identity.Fingerprint, identity.Provider, identity.Model, identity.Revision, hash)
 	return err
@@ -134,8 +142,64 @@ func (db *DB) CopyImageTextFrom(ctx context.Context, sourcePath string) error {
 		return err
 	}
 	defer func() { _, _ = execWithoutCancel(ctx, conn, `DETACH DATABASE old_db`) }()
-	if _, err = conn.ExecContext(ctx, `INSERT OR IGNORE INTO image_text_cache(image_hash,processor,provider,model,revision,text,succeeded,failures,retry_at,updated_at) SELECT image_hash,processor,provider,model,revision,text,succeeded,failures,retry_at,updated_at FROM old_db.image_text_cache c WHERE retry_at<>'9999-12-31T23:59:59Z' AND EXISTS (SELECT 1 FROM image_text_occurrences o WHERE o.image_hash=c.image_hash)`); err != nil {
+	if _, err = conn.ExecContext(ctx, `INSERT OR IGNORE INTO image_text_cache(image_hash,processor,provider,model,revision,text,succeeded,failures,retry_at,updated_at) SELECT image_hash,processor,provider,model,revision,text,succeeded,failures,retry_at,updated_at FROM old_db.image_text_cache c WHERE EXISTS (SELECT 1 FROM image_text_occurrences o WHERE o.image_hash=c.image_hash)`); err != nil {
 		return fmt.Errorf("copy image text: %w", err)
 	}
 	return nil
+}
+
+func (db *DB) SessionImageTextRows(ctx context.Context, id string) ([]ImageTextRow, error) {
+	rows, err := db.SessionImageTextRowsBySession(ctx, []string{id})
+	return rows[id], err
+}
+
+// SessionImageTextRowsBySession reads mirror image text in one archive snapshot.
+func (db *DB) SessionImageTextRowsBySession(ctx context.Context, ids []string) (map[string][]ImageTextRow, error) {
+	tx, err := db.getReader().BeginTx(ctx, &sql.TxOptions{ReadOnly: true})
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = tx.Rollback() }()
+	rows, err := sessionImageTextRows(ctx, tx, ids)
+	if err != nil {
+		return nil, err
+	}
+	out := make(map[string][]ImageTextRow)
+	for _, row := range rows {
+		out[row.SessionID] = append(out[row.SessionID], row)
+	}
+	return out, tx.Commit()
+}
+
+func sessionImageTextRows(ctx context.Context, q messageRowsQuerier, ids []string) ([]ImageTextRow, error) {
+	selected, err := json.Marshal(ids)
+	if err != nil {
+		return nil, err
+	}
+	rows, err := q.QueryContext(ctx, `SELECT o.session_id,
+		CASE WHEN o.event_id IS NULL THEN 'tool_call' ELSE 'event' END,
+		COALESCE(e.tool_call_message_ordinal,m.ordinal),COALESCE(e.call_index,tc.call_index,0),COALESCE(e.event_index,0),
+		o.image_index,o.image_hash,c.processor,c.provider,c.model,c.revision,c.text
+		FROM image_text_occurrences o
+		JOIN image_text_cache c ON c.image_hash=o.image_hash AND c.succeeded=1
+		LEFT JOIN tool_result_events e ON e.id=o.event_id
+		LEFT JOIN tool_calls tc ON tc.id=o.call_id
+		LEFT JOIN messages m ON m.id=tc.message_id
+		WHERE o.session_id IN (SELECT value FROM json_each(?))
+		  AND (e.id IS NOT NULL OR m.id IS NOT NULL)
+		ORDER BY 1,2,3,4,5,6,8`, string(selected))
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []ImageTextRow
+	for rows.Next() {
+		var r ImageTextRow
+		if err := rows.Scan(&r.SessionID, &r.SourceKind, &r.MessageOrdinal, &r.CallIndex, &r.EventIndex,
+			&r.ImageIndex, &r.ImageHash, &r.Processor, &r.Provider, &r.Model, &r.Revision, &r.Text); err != nil {
+			return nil, err
+		}
+		out = append(out, r)
+	}
+	return out, rows.Err()
 }

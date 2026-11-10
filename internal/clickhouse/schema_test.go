@@ -128,6 +128,7 @@ func TestRowBuildersMatchInsertColumns(t *testing.T) {
 		"usage_events":       usageEventRow(db.UsageEvent{SessionID: "s"}, 1),
 		"secret_findings":    secretFindingRow(db.SecretFinding{SessionID: "s"}, 0, 1),
 		"pinned_messages":    pinnedMessageRow(db.PinnedMessage{SessionID: "s"}, 1),
+		"image_text":         imageTextRow(db.ImageTextRow{SessionID: "s"}, 1),
 		"session_plan_usage": planUsage,
 	}
 	for table, row := range rows {

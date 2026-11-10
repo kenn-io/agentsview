@@ -2607,8 +2607,6 @@ components:
           type: string
         machine:
           type: string
-        match_kind:
-          type: string
         name:
           type: string
         ordinal:

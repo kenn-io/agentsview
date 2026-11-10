@@ -158,6 +158,19 @@ CREATE TABLE IF NOT EXISTS commit_links (
 CREATE INDEX IF NOT EXISTS idx_commit_links_sha ON commit_links(sha);
 `
 
+// imageTextDDL holds the archive's successful image extractions at portable
+// source coordinates, one row per image and processor.
+const imageTextDDL = `
+CREATE TABLE IF NOT EXISTS image_text (
+    session_id TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
+    source_kind TEXT NOT NULL, message_ordinal INTEGER NOT NULL,
+    call_index INTEGER NOT NULL, event_index INTEGER NOT NULL, image_index INTEGER NOT NULL,
+    image_hash TEXT NOT NULL, processor TEXT NOT NULL, provider TEXT NOT NULL,
+    model TEXT NOT NULL, revision TEXT NOT NULL, text TEXT NOT NULL,
+    PRIMARY KEY(session_id,source_kind,message_ordinal,call_index,event_index,image_index,processor)
+);
+`
+
 // coreDDL creates the tables and indexes. It uses unqualified
 // names because Open() sets search_path to the target schema.
 //
@@ -622,7 +635,7 @@ CREATE UNIQUE INDEX IF NOT EXISTS idx_tool_result_events_dedup
         call_index, event_index
     );
 
-` + commitLinksDDL + `
+` + commitLinksDDL + imageTextDDL + `
 
 CREATE TABLE IF NOT EXISTS secret_findings (
     id               BIGINT GENERATED ALWAYS AS IDENTITY
@@ -2407,6 +2420,16 @@ func CheckSchemaCompat(
 		return fmt.Errorf(
 			"session_plan_usage table missing required columns: %w",
 			err,
+		)
+	}
+
+	_, err = db.ExecContext(ctx,
+		`SELECT session_id, source_kind, message_ordinal, call_index, event_index,
+			image_index, image_hash, processor, provider, model, revision, text
+		 FROM image_text LIMIT 0`)
+	if err != nil {
+		return fmt.Errorf(
+			"image_text table missing required columns: %w", err,
 		)
 	}
 

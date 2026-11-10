@@ -3,8 +3,12 @@ package imagetext
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"fmt"
 	"io"
+	"net/http"
+	"slices"
 	"strings"
 	"time"
 
@@ -19,14 +23,21 @@ type Manager struct {
 	Processor string
 }
 
+// passBudget bounds one scheduled pass; the poller resumes the rest on its
+// next interval.
+var passBudget = 2 * time.Minute
+
+const pageSize = 20
+
 func (m *Manager) Run(ctx context.Context) error {
 	identity := m.Client.Identity()
 	if m.Processor != "" {
 		identity.Fingerprint = m.Processor
 	}
 	cutoff := time.Now()
+	deadline := cutoff.Add(passBudget)
 	for {
-		pending, err := m.DB.PendingImageText(ctx, identity.Fingerprint, cutoff, 20)
+		pending, err := m.DB.PendingImageText(ctx, identity.Fingerprint, cutoff, pageSize)
 		if err != nil {
 			return err
 		}
@@ -37,49 +48,39 @@ func (m *Manager) Run(ctx context.Context) error {
 			if err := m.processImage(ctx, identity, hash); err != nil {
 				return err
 			}
+			if time.Now().After(deadline) {
+				return nil
+			}
 		}
 	}
 }
 
+// processImage reads the first retained copy whose bytes match hash. Only
+// verified bytes can fail permanently; unusable copies leave a retry.
 func (m *Manager) processImage(ctx context.Context, identity ocr.Identity, hash string) error {
-	retry := false
-	inspectedTypes := make(map[string]bool)
-	for offset := 0; ; offset += 20 {
-		items, err := m.DB.ImageTextSources(ctx, hash, offset, 20)
+	for offset := 0; ; offset += pageSize {
+		items, err := m.DB.ImageTextSources(ctx, hash, offset, pageSize)
 		if err != nil {
 			return err
-		}
-		if len(items) == 0 {
-			break
 		}
 		for _, item := range items {
 			if err := ctx.Err(); err != nil {
 				return err
 			}
-			var image *db.RetainedImage
-			images := db.RetainedToolResultImages(item.Content)
-			for i := range images {
-				if images[i].Index == item.Index && images[i].SHA256 == item.Hash {
-					image = &images[i]
-					break
-				}
-			}
-			if image == nil {
-				retry = true
+			body, err := db.ReadRetainedImage(item.Content, item.Index, m.DB.AssetsDir(), glmocr.MaxDocumentBytes)
+			if err != nil || len(body) == 0 {
 				continue
 			}
-			inspectedTypes[image.MediaType] = true
-			if image.Size == nil || *image.Size <= 0 || *image.Size > glmocr.MaxDocumentBytes || (image.MediaType != "image/png" && image.MediaType != "image/jpeg" && image.MediaType != "image/webp") {
+			if sum := sha256.Sum256(body); hex.EncodeToString(sum[:]) != hash {
 				continue
 			}
-			body, offloaded, err := db.ReadRetainedImage(item.Content, item.Index, m.DB.AssetsDir())
+			mediaType := detectMediaType(body)
+			if !slices.Contains(glmocr.SupportedMediaTypes(), mediaType) || !strings.HasPrefix(mediaType, "image/") {
+				return m.DB.SaveImageTextTerminal(ctx, hash, identity)
+			}
+			source, err := ocr.NewSource(io.NopCloser(bytes.NewReader(body)), mediaType, int64(len(body)), hash)
 			if err != nil {
-				retry = true
-				continue
-			}
-			source, err := ocr.NewSource(io.NopCloser(bytes.NewReader(body)), image.MediaType, *image.Size, item.Hash)
-			if err != nil {
-				continue
+				return err
 			}
 			imageCtx, cancel := context.WithTimeout(ctx, 2*time.Minute)
 			result, err := m.Client.Process(imageCtx, source)
@@ -88,32 +89,32 @@ func (m *Manager) processImage(ctx context.Context, identity ocr.Identity, hash 
 				if ctx.Err() != nil {
 					return ctx.Err()
 				}
-				if ocr.ErrorKindOf(err) != ocr.ErrorInvalidInput {
-					return m.DB.SaveImageText(ctx, hash, identity, "", true)
+				if ocr.ErrorKindOf(err) == ocr.ErrorInvalidInput {
+					return m.DB.SaveImageTextTerminal(ctx, hash, identity)
 				}
-				if offloaded {
-					retry = true
-				}
-				continue
+				return m.DB.SaveImageText(ctx, hash, identity, "", true)
 			}
 			var parts []string
 			for _, unit := range result.Document.Units {
 				parts = append(parts, unit.Text)
 			}
 			text := strings.TrimSpace(strings.Join(parts, "\n"))
-			return m.DB.SaveImageText(ctx, item.Hash, identity, text, false)
+			return m.DB.SaveImageText(ctx, hash, identity, text, false)
 		}
-		if len(items) < 20 {
+		if len(items) < pageSize {
 			break
 		}
 	}
-	if err := ctx.Err(); err != nil {
-		return err
+	return m.DB.SaveImageText(ctx, hash, identity, "", true)
+}
+
+// detectMediaType follows Docbank's sniffing so a label never decides the
+// type sent for OCR.
+func detectMediaType(body []byte) string {
+	if len(body) >= 12 && string(body[:4]) == "RIFF" && string(body[8:12]) == "WEBP" {
+		return "image/webp"
 	}
-	if retry {
-		return m.DB.SaveImageText(ctx, hash, identity, "", true)
-	}
-	return m.DB.SaveImageTextTerminal(ctx, hash, identity, inspectedTypes)
+	return http.DetectContentType(body)
 }
 
 // ProcessorKey includes the output policy while excluding the service address.

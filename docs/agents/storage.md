@@ -1314,13 +1314,22 @@ TEST_PG_URL="postgres://user:pass@host:5432/dbname?sslmode=disable" \
 ### Image text
 
 When `[image_text]` is enabled, the daemon extracts text from retained inline
-and offloaded PNG, JPEG, and WebP tool-result images using the configured local
-GLM-OCR service. It caches normalized text by decoded image hash and processor
-identity, and tracks current occurrences in the same transaction as tool results.
-Startup and periodic passes backfill existing archives and process pending images
-in bounded pages. Failed requests and missing assets retry with backoff;
-unsupported and oversized images are terminal. A full archive rebuild preserves
+and offloaded tool-result images using the configured local GLM-OCR service. It
+caches normalized text by decoded image hash and processor identity, and tracks
+current occurrences in the same transaction as tool results. Startup and
+periodic passes backfill existing archives in bounded pages, each pass limited
+to two minutes. Each image is read from a copy whose bytes match its hash, and
+its type is detected from those bytes. Failed requests and missing, corrupt, or
+oversized copies retry with backoff; verified bytes that are not PNG, JPEG, or
+WebP, or that GLM-OCR rejects, are terminal. A full archive rebuild preserves
 cache entries for retained images and rebuilds their occurrences. Removing the
-last occurrence removes its cached text. The web keyword search and SQLite
-substring and regex `tool_result` searches include this text. Usage-only archives
-do not store image text.
+last occurrence removes its cached text. Usage-only archives do not store image
+text.
+
+Successful text is published to PostgreSQL, DuckDB, and ClickHouse as
+session-owned `image_text` rows keyed by the tool call or result event,
+image index, and processor, with the image hash, provider, model, and revision.
+A new extraction advances the session's `sync_marker`, so the next incremental
+push sends it without changing the transcript revision. Global keyword search
+and substring and regex `tool_result` searches match this text in every
+backend, anchored to the message holding the tool call.

@@ -74,51 +74,12 @@ func (m *imageTextMemo) images(content string) []RetainedImage {
 
 // refreshImageTextOccurrencesTx records image locations after the final tool-result projection.
 func refreshImageTextOccurrencesTx(tx transactionQueries, sessionID string) error {
-	oldRows, err := tx.Query(`SELECT COALESCE(call_id,0),COALESCE(event_id,0),image_index,image_hash,media_type FROM image_text_occurrences WHERE session_id=?`, sessionID)
+	oldHashes, err := sessionImageTextHashes(tx, sessionID)
 	if err != nil {
 		return err
 	}
-	oldOccurrences := make(map[ImageTextOccurrence]bool)
-	for oldRows.Next() {
-		var old ImageTextOccurrence
-		if err := oldRows.Scan(&old.CallID, &old.EventID, &old.Index, &old.Hash, &old.MediaType); err != nil {
-			oldRows.Close()
-			return err
-		}
-		oldOccurrences[old] = true
-	}
-	if err := oldRows.Err(); err != nil {
-		oldRows.Close()
-		return err
-	}
-	if err := oldRows.Close(); err != nil {
-		return err
-	}
-	rows, err := tx.Query(`SELECT tc.id, 0, COALESCE(tc.result_content, '') FROM tool_calls tc
-		WHERE tc.session_id=? AND tc.result_content LIKE '%image%' AND NOT EXISTS (SELECT 1 FROM tool_result_events e WHERE e.session_id=tc.session_id AND e.tool_use_id=tc.tool_use_id AND tc.tool_use_id<>'')
-		UNION ALL SELECT 0, e.id, e.content FROM tool_result_events e WHERE e.session_id=? AND e.content LIKE '%image%'`, sessionID, sessionID)
+	occurrences, err := sessionImageTextOccurrences(tx, sessionID)
 	if err != nil {
-		return err
-	}
-	var occurrences []ImageTextOccurrence
-	for rows.Next() {
-		var callID, eventID int64
-		var content string
-		if err := rows.Scan(&callID, &eventID, &content); err != nil {
-			rows.Close()
-			return err
-		}
-		for _, image := range retainedImageMemo.images(content) {
-			if image.SHA256 != "" {
-				occurrences = append(occurrences, ImageTextOccurrence{CallID: callID, EventID: eventID, Index: image.Index, Hash: image.SHA256, MediaType: image.MediaType})
-			}
-		}
-	}
-	if err := rows.Err(); err != nil {
-		rows.Close()
-		return err
-	}
-	if err := rows.Close(); err != nil {
 		return err
 	}
 	if _, err := tx.Exec(`DELETE FROM image_text_occurrences WHERE session_id=?`, sessionID); err != nil {
@@ -132,19 +93,55 @@ func refreshImageTextOccurrencesTx(tx transactionQueries, sessionID string) erro
 		if o.EventID != 0 {
 			event = o.EventID
 		}
-		if _, err := tx.Exec(`INSERT INTO image_text_occurrences(session_id,call_id,event_id,image_index,image_hash,media_type) VALUES(?,?,?,?,?,?)`, sessionID, call, event, o.Index, o.Hash, o.MediaType); err != nil {
+		if _, err := tx.Exec(`INSERT INTO image_text_occurrences(session_id,call_id,event_id,image_index,image_hash) VALUES(?,?,?,?,?)`, sessionID, call, event, o.Index, o.Hash); err != nil {
 			return err
 		}
-		if !oldOccurrences[o] {
-			if _, err := tx.Exec(`DELETE FROM image_text_cache WHERE image_hash=? AND succeeded=0 AND retry_at='9999-12-31T23:59:59Z'`, o.Hash); err != nil {
-				return err
-			}
-		}
 	}
-	for old := range oldOccurrences {
-		if _, err = tx.Exec(`DELETE FROM image_text_cache WHERE image_hash=? AND NOT EXISTS (SELECT 1 FROM image_text_occurrences o WHERE o.image_hash=?)`, old.Hash, old.Hash); err != nil {
+	for hash := range oldHashes {
+		if _, err = tx.Exec(`DELETE FROM image_text_cache WHERE image_hash=? AND NOT EXISTS (SELECT 1 FROM image_text_occurrences o WHERE o.image_hash=?)`, hash, hash); err != nil {
 			return err
 		}
 	}
 	return nil
+}
+
+func sessionImageTextHashes(tx transactionQueries, sessionID string) (map[string]bool, error) {
+	rows, err := tx.Query(`SELECT DISTINCT image_hash FROM image_text_occurrences WHERE session_id=?`, sessionID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	hashes := make(map[string]bool)
+	for rows.Next() {
+		var hash string
+		if err := rows.Scan(&hash); err != nil {
+			return nil, err
+		}
+		hashes[hash] = true
+	}
+	return hashes, rows.Err()
+}
+
+func sessionImageTextOccurrences(tx transactionQueries, sessionID string) ([]ImageTextOccurrence, error) {
+	rows, err := tx.Query(`SELECT tc.id, 0, COALESCE(tc.result_content, '') FROM tool_calls tc
+		WHERE tc.session_id=? AND tc.result_content LIKE '%image%' AND NOT EXISTS (SELECT 1 FROM tool_result_events e WHERE e.session_id=tc.session_id AND e.tool_use_id=tc.tool_use_id AND tc.tool_use_id<>'')
+		UNION ALL SELECT 0, e.id, e.content FROM tool_result_events e WHERE e.session_id=? AND e.content LIKE '%image%'`, sessionID, sessionID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var occurrences []ImageTextOccurrence
+	for rows.Next() {
+		var callID, eventID int64
+		var content string
+		if err := rows.Scan(&callID, &eventID, &content); err != nil {
+			return nil, err
+		}
+		for _, image := range retainedImageMemo.images(content) {
+			if image.SHA256 != "" {
+				occurrences = append(occurrences, ImageTextOccurrence{CallID: callID, EventID: eventID, Index: image.Index, Hash: image.SHA256})
+			}
+		}
+	}
+	return occurrences, rows.Err()
 }

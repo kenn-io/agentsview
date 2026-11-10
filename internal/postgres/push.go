@@ -1471,6 +1471,13 @@ func (s *Sync) pushBatchAttempt(
 			*pushed = (*pushed)[:len(*pushed)-n]
 			return batchResult{}, nil
 		}
+		imageTextChanged, err := s.pushImageText(ctx, tx, sess.ID)
+		if err != nil {
+			log.Printf("pgsync: image text %s: %v", sess.ID, err)
+			_ = tx.Rollback()
+			*pushed = (*pushed)[:len(*pushed)-n]
+			return batchResult{}, nil
+		}
 		frictionChanged := false
 		if !frictionUnchanged {
 			frictionChanged, err = s.pushFrictionFindings(ctx, tx, sess.ID)
@@ -1493,9 +1500,10 @@ func (s *Sync) pushBatchAttempt(
 			return batchResult{}, nil
 		}
 
-		// Publish findings, commit links, friction, or plan usage changes to
-		// read-mode watchers unless pushMessages already advanced updated_at.
-		if !messagesChanged && (findingsChanged || commitLinksChanged || frictionChanged || planUsageChanged) {
+		// Publish findings, commit links, image text, friction, or plan usage
+		// changes to read-mode watchers unless pushMessages already advanced
+		// updated_at.
+		if !messagesChanged && (findingsChanged || commitLinksChanged || imageTextChanged || frictionChanged || planUsageChanged) {
 			if _, err := tx.ExecContext(ctx, `
 				UPDATE sessions
 				SET updated_at = NOW()
@@ -4230,6 +4238,65 @@ func bulkInsertSecretFindings(ctx context.Context, tx *sql.Tx, sessionID string,
 		}
 	}
 	return nil
+}
+
+// pushImageText replaces a session's image text when the archive's rows
+// differ from the published ones and reports whether it changed them. OCR can
+// finish without any other session change, so the caller advances updated_at.
+func (s *Sync) pushImageText(ctx context.Context, tx *sql.Tx, id string) (bool, error) {
+	local, err := s.local.SessionImageTextRows(ctx, id)
+	if err != nil {
+		return false, fmt.Errorf("reading local image text: %w", err)
+	}
+	rows := make([]db.ImageTextRow, len(local))
+	for i, r := range local {
+		rows[i] = db.ImageTextRow{
+			SessionID: sanitizePG(r.SessionID), SourceKind: sanitizePG(r.SourceKind),
+			MessageOrdinal: r.MessageOrdinal, CallIndex: r.CallIndex, EventIndex: r.EventIndex,
+			ImageIndex: r.ImageIndex, ImageHash: sanitizePG(r.ImageHash),
+			Processor: sanitizePG(r.Processor), Provider: sanitizePG(r.Provider),
+			Model: sanitizePG(r.Model), Revision: sanitizePG(r.Revision), Text: sanitizePG(r.Text),
+		}
+	}
+	published, err := publishedImageText(ctx, tx, id)
+	if err != nil {
+		return false, err
+	}
+	if slices.Equal(published, rows) {
+		return false, nil
+	}
+	if _, err := tx.ExecContext(ctx, `DELETE FROM image_text WHERE session_id=$1`, id); err != nil {
+		return false, fmt.Errorf("deleting pg image text: %w", err)
+	}
+	for _, r := range rows {
+		if _, err := tx.ExecContext(ctx, `INSERT INTO image_text (session_id,source_kind,message_ordinal,call_index,event_index,image_index,image_hash,processor,provider,model,revision,text) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)`,
+			r.SessionID, r.SourceKind, r.MessageOrdinal, r.CallIndex, r.EventIndex, r.ImageIndex,
+			r.ImageHash, r.Processor, r.Provider, r.Model, r.Revision, r.Text); err != nil {
+			return false, fmt.Errorf("inserting pg image text: %w", err)
+		}
+	}
+	return true, nil
+}
+
+// publishedImageText reads a session's rows in the archive export's order.
+func publishedImageText(ctx context.Context, tx *sql.Tx, id string) ([]db.ImageTextRow, error) {
+	rows, err := tx.QueryContext(ctx, `SELECT session_id,source_kind,message_ordinal,call_index,event_index,image_index,image_hash,processor,provider,model,revision,text
+		FROM image_text WHERE session_id=$1
+		ORDER BY source_kind COLLATE "C",message_ordinal,call_index,event_index,image_index,processor COLLATE "C"`, id)
+	if err != nil {
+		return nil, fmt.Errorf("reading pg image text: %w", err)
+	}
+	defer rows.Close()
+	var out []db.ImageTextRow
+	for rows.Next() {
+		var r db.ImageTextRow
+		if err := rows.Scan(&r.SessionID, &r.SourceKind, &r.MessageOrdinal, &r.CallIndex, &r.EventIndex, &r.ImageIndex,
+			&r.ImageHash, &r.Processor, &r.Provider, &r.Model, &r.Revision, &r.Text); err != nil {
+			return nil, err
+		}
+		out = append(out, r)
+	}
+	return out, rows.Err()
 }
 
 // normalizeSyncTimestamps ensures schema exists and normalizes

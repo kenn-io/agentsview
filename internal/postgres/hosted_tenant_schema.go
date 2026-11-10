@@ -44,6 +44,7 @@ var hostedTables = append([]HostedTable{
 	{Name: "excluded_sessions", Key: []string{"id"}},
 	{Name: "session_aliases", Key: []string{"session_id", "alias_id"}, ForeignKeys: sessionHostedFK()},
 	{Name: "commit_links", Key: []string{"session_id", "sha"}},
+	{Name: "image_text", Key: []string{"session_id", "source_kind", "message_ordinal", "call_index", "event_index", "image_index", "processor"}, ForeignKeys: sessionHostedFK()},
 	{Name: "pinned_messages", Key: []string{"id"}, ForeignKeys: sessionHostedFK()},
 	{Name: "tool_calls", Key: []string{"id"}, ForeignKeys: sessionHostedFK()},
 	{Name: "tool_result_events", Key: []string{"id"}, ForeignKeys: sessionHostedFK()},
@@ -84,6 +85,7 @@ var hostedTables = append([]HostedTable{
 var hostedCoreUpgradeTables = []struct{ name, ddl string }{
 	{"session_plan_usage", sessionPlanUsageDDL},
 	{"commit_links", commitLinksDDL},
+	{"image_text", imageTextDDL},
 }
 
 // installHostedCoreUpgrade adds only missing upgrade tables to an already

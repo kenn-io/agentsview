@@ -446,8 +446,9 @@ func TestKiroSubagentUpgradeRecordsSpawnsInPlace(t *testing.T) {
 	require.NoError(t, database.Close())
 
 	// Model version 150, which dropped spawn records, without changing the
-	// source fingerprint.
-	previousVersion := 150
+	// source fingerprint, as the current scoped upgrade.
+	t.Cleanup(db.InstallDataVersionScopesForTest(map[int][]parser.AgentType{db.CurrentDataVersion(): db.ScopedDataVersionProviders(150, 151)}))
+	previousVersion := db.CurrentDataVersion() - 1
 	raw, err := sql.Open("sqlite3", archivePath)
 	require.NoError(t, err)
 	_, err = raw.ExecContext(ctx, fmt.Sprintf(`

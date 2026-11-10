@@ -17,9 +17,9 @@ const fingerprintProgressStride = 200
 // sessionFingerprints hashes each candidate's local content: the mirrored
 // session scalars, every message with its tool calls and result events,
 // the usage-event fingerprint, the tool-call fingerprint (file_path and
-// call_index are json:"-" on ToolCall), secret findings, and pins. The
-// mirror stores the hash on the session row; a later push skips sessions
-// whose hash is unchanged.
+// call_index are json:"-" on ToolCall), secret findings, pins, commit
+// links, and successful image text. The mirror stores the hash on the
+// session row; a later push skips sessions whose hash is unchanged.
 func (s *Sync) sessionFingerprints(
 	ctx context.Context, sessions []db.Session, onProgress func(storage.PushProgress),
 ) (map[string]string, error) {
@@ -51,6 +51,7 @@ func (s *Sync) snapshotFingerprint(snapshot *db.SessionMirrorSnapshot) (string, 
 		SecretFindings []db.SecretFinding
 		Pins           []db.PinnedMessage
 		CommitLinks    []db.CommitLinkRow `json:",omitzero"`
+		ImageText      []db.ImageTextRow  `json:",omitzero"`
 		// Omitted when nil so sessions without plan usage keep the
 		// fingerprints they had before the table existed.
 		PlanUsage *db.SessionPlanUsage `json:",omitzero"`
@@ -63,6 +64,7 @@ func (s *Sync) snapshotFingerprint(snapshot *db.SessionMirrorSnapshot) (string, 
 		SecretFindings: snapshot.Findings,
 		Pins:           snapshot.Pins,
 		CommitLinks:    snapshot.CommitLinks,
+		ImageText:      snapshot.ImageText,
 		PlanUsage:      snapshot.PlanUsage,
 	}
 	data, err := json.Marshal(payload)

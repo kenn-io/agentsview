@@ -17,7 +17,7 @@ import (
 // added later ship as ADD COLUMN IF NOT EXISTS entries in the table specs,
 // so an older mirror upgrades in place; the version tells operators and
 // status output which shape a mirror has.
-const SchemaVersion = 7
+const SchemaVersion = 8
 
 // Metadata keys shared by every archive that pushes into the mirror.
 const (
@@ -38,6 +38,7 @@ const (
 	cursorUsageMaxIDKeyBase     = "agentsview_cursor_usage_max_id"
 	usageSnapshotReadyKeyBase   = "agentsview_usage_snapshot_ready"
 	commitLinksReadyKeyBase     = "agentsview_commit_links_ready"
+	imageTextReadyKeyBase       = "agentsview_image_text_ready"
 	messageDialogueReadyKeyBase = "agentsview_message_dialogue_ready"
 	storedCountRepairKeyBase    = "agentsview_stored_message_count_repair"
 	databaseIDKeyBase           = "agentsview_source_database_id"
@@ -562,6 +563,20 @@ var mirrorTables = []tableSpec{
 			col("project", tString), col("retained", tBool),
 		},
 		orderBy: []string{"sha", "session_id"},
+	},
+	// image_text holds each successful image extraction at its portable
+	// source location; a processor change replaces the row under a new key.
+	{
+		name: "image_text",
+		columns: []columnSpec{
+			col("session_id", tString), col("source_kind", tLowString),
+			col("message_ordinal", tInt), col("call_index", tInt),
+			col("event_index", tInt), col("image_index", tInt),
+			col("image_hash", tString), col("processor", tString),
+			col("provider", tString), col("model", tString),
+			col("revision", tString), col("text", tString),
+		},
+		orderBy: []string{"session_id", "source_kind", "message_ordinal", "call_index", "event_index", "image_index", "processor"},
 	},
 	{
 		name: "secret_findings",

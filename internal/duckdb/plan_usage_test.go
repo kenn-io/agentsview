@@ -130,7 +130,7 @@ func TestDuckDBFingerprintTracksPlanUsage(t *testing.T) {
 	s := newInMemoryTestSync(t, local, storage.MirrorPushOptions{})
 	fingerprint := func() string {
 		t.Helper()
-		fps, err := s.sessionFingerprints(t.Context(), []db.Session{*sess})
+		fps, _, err := s.sessionFingerprints(t.Context(), []db.Session{*sess})
 		require.NoError(t, err)
 		return fps["sess-1"]
 	}

@@ -65,6 +65,14 @@ const firstScopedDataVersion = 131
 // reads waiting until a full sync pass has reparsed affected sources.
 const scopedUpgradePendingKey = "scoped_upgrade_pending"
 
+// InstallDataVersionScopesForTest replaces the declared scopes until the
+// returned function restores them.
+func InstallDataVersionScopesForTest(scopes map[int][]parser.AgentType) func() {
+	previous := dataVersionScopes
+	dataVersionScopes = scopes
+	return func() { dataVersionScopes = previous }
+}
+
 // ScopedDataVersionProviders returns the providers to reparse when an
 // archive moves from one parser version to another. It returns nil when any
 // version in the range requires a full rebuild.

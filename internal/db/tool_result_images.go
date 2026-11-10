@@ -7,6 +7,7 @@ import (
 	"encoding/hex"
 	"encoding/json/jsontext"
 	"encoding/json/v2"
+	"errors"
 	"fmt"
 	"io"
 	"log"
@@ -697,8 +698,9 @@ func retainedInlineFile(raw jsontext.Value, index int) (RetainedImage, bool) {
 	return RetainedImage{Index: index, MediaType: mediaType, Size: new(size), SHA256: hex.EncodeToString(hash.Sum(nil))}, ok
 }
 
-// ReadRetainedImage reads the indexed retained image without changing its stored form.
-func ReadRetainedImage(content string, index int, assetsDir string) ([]byte, bool, error) {
+// ReadRetainedImage reads the indexed retained image without changing its
+// stored form, refusing copies larger than limit bytes.
+func ReadRetainedImage(content string, index int, assetsDir string, limit int64) ([]byte, error) {
 	var found jsontext.Value
 	n := 0
 	scanSummarySections(content, func(_, _ int, raw jsontext.Value) {
@@ -717,46 +719,48 @@ func ReadRetainedImage(content string, index int, assetsDir string) ([]byte, boo
 		}
 	})
 	if found == nil {
-		return nil, false, fmt.Errorf("retained image %d missing", index)
+		return nil, fmt.Errorf("retained image %d missing", index)
 	}
+	var body []byte
 	if p, ok := parseOffloadedImagePlaceholder(found); ok {
 		hash, ext, ok := assetImageDigest(p.ImageRef)
-		name := hash + ext
 		if !ok {
-			return nil, true, fmt.Errorf("invalid image reference")
+			return nil, errors.New("invalid image reference")
 		}
 		root, err := os.OpenRoot(assetsDir)
 		if err != nil {
-			return nil, true, err
+			return nil, err
 		}
 		defer root.Close()
-		file, err := root.Open(name)
+		file, err := root.Open(hash + ext)
 		if err != nil {
-			return nil, true, err
+			return nil, err
 		}
 		defer file.Close()
-		body, err := io.ReadAll(io.LimitReader(file, p.ByteSize+1))
-		if err != nil {
-			return nil, true, err
+		if body, err = io.ReadAll(io.LimitReader(file, limit+1)); err != nil {
+			return nil, err
 		}
-		return body, true, nil
+	} else {
+		var block struct {
+			Type     string         `json:"type"`
+			ImageURL jsontext.Value `json:"image_url"`
+			URI      jsontext.Value `json:"uri"`
+		}
+		if err := json.Unmarshal(found, &block, json.MatchCaseInsensitiveNames(true)); err != nil {
+			return nil, err
+		}
+		uri := block.ImageURL
+		if block.Type == "file" {
+			uri = block.URI
+		}
+		var buf bytes.Buffer
+		if _, _, _, ok := streamInlineData(uri, &buf, block.Type == "input_image"); !ok {
+			return nil, errors.New("invalid inline image")
+		}
+		body = buf.Bytes()
 	}
-	var block struct {
-		Type     string         `json:"type"`
-		ImageURL jsontext.Value `json:"image_url"`
-		URI      jsontext.Value `json:"uri"`
+	if int64(len(body)) > limit {
+		return nil, fmt.Errorf("retained image %d exceeds %d bytes", index, limit)
 	}
-	if err := json.Unmarshal(found, &block, json.MatchCaseInsensitiveNames(true)); err != nil {
-		return nil, false, err
-	}
-	uri := block.ImageURL
-	if block.Type == "file" {
-		uri = block.URI
-	}
-	var buf bytes.Buffer
-	_, _, _, ok := streamInlineData(uri, &buf, block.Type == "input_image")
-	if !ok {
-		return nil, false, fmt.Errorf("invalid inline image")
-	}
-	return buf.Bytes(), false, nil
+	return body, nil
 }

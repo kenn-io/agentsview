@@ -27,9 +27,9 @@ const idBatchSize = 500
 // delete order. Tool calls and their result events go before messages: a
 // push that fails between two deletes then leaves messages without calls,
 // never calls whose copied message ordinal and timestamp name a message
-// that is gone.
+// that is gone. Image text goes first for the same reason.
 var dependentTables = []string{
-	"tool_result_events", "tool_calls", "messages", "usage_events",
+	"image_text", "tool_result_events", "tool_calls", "messages", "usage_events",
 	"session_plan_usage", "secret_findings", "commit_links", "pinned_messages",
 }
 
@@ -87,6 +87,7 @@ func (s *Sync) pushWithOptions(
 		s.archiveKey(usageSnapshotReadyKeyBase),
 		s.archiveKey(messageDialogueReadyKeyBase),
 		s.archiveKey(commitLinksReadyKeyBase),
+		s.archiveKey(imageTextReadyKeyBase),
 		s.archiveKey(storedCountRepairKeyBase),
 		s.archiveKey(databaseIDKeyBase),
 		s.archiveKey(fullPushRunKeyBase),
@@ -116,6 +117,9 @@ func (s *Sync) pushWithOptions(
 	}
 	if !full && meta[s.archiveKey(commitLinksReadyKeyBase)] == "" {
 		full, reason = true, "backfilling commit links"
+	}
+	if !full && meta[s.archiveKey(imageTextReadyKeyBase)] == "" {
+		full, reason = true, "backfilling image text"
 	}
 	if !full && meta[s.archiveKey(messageDialogueReadyKeyBase)] == "" {
 		full, reason = true, "preparing message dialogue"
@@ -363,6 +367,7 @@ func (s *Sync) pushWithOptions(
 		if full {
 			pushed[s.archiveKey(messageDialogueReadyKeyBase)] = cutoff
 			pushed[s.archiveKey(commitLinksReadyKeyBase)] = cutoff
+			pushed[s.archiveKey(imageTextReadyKeyBase)] = cutoff
 			pushed[s.archiveKey(fullPushRunKeyBase)] = ""
 		}
 		if err := writeMetadata(ctx, conn, pushed); err != nil {
@@ -787,6 +792,7 @@ type sessionPayload struct {
 	usage       []db.UsageEvent
 	planUsage   *db.SessionPlanUsage
 	commitLinks []db.CommitLinkRow
+	imageText   []db.ImageTextRow
 	findings    []db.SecretFinding
 	pins        []db.PinnedMessage
 	fingerprint string
@@ -810,7 +816,8 @@ func (s *Sync) loadPayload(ctx context.Context, sess db.Session) (sessionPayload
 	return sessionPayload{
 		session: snapshot.Session, messages: snapshot.Messages, usage: snapshot.Usage,
 		planUsage: snapshot.PlanUsage,
-		findings:  snapshot.Findings, commitLinks: snapshot.CommitLinks, pins: snapshot.Pins, fingerprint: fingerprint,
+		findings:  snapshot.Findings, commitLinks: snapshot.CommitLinks, imageText: snapshot.ImageText,
+		pins: snapshot.Pins, fingerprint: fingerprint,
 	}, nil
 }
 
@@ -913,7 +920,7 @@ func vanishedRowsDeleteSQL(table, placeholders string) (string, error) {
 }
 
 func (s *Sync) insertDependents(ctx context.Context, payloads []sessionPayload, version uint64) error {
-	var messages, toolCalls, toolResults, usage, planUsage, findings, pins, links [][]any
+	var messages, toolCalls, toolResults, images, usage, planUsage, findings, pins, links [][]any
 	for _, p := range payloads {
 		if p.planUsage != nil {
 			row, err := planUsageRow(p.session.ID, p.planUsage, version)
@@ -930,6 +937,9 @@ func (s *Sync) insertDependents(ctx context.Context, payloads []sessionPayload, 
 					toolResults = append(toolResults, toolResultEventRow(m, i, ev, version))
 				}
 			}
+		}
+		for _, r := range p.imageText {
+			images = append(images, imageTextRow(r, version))
 		}
 		for _, ev := range p.usage {
 			usage = append(usage, usageEventRow(ev, version))
@@ -951,6 +961,7 @@ func (s *Sync) insertDependents(ctx context.Context, payloads []sessionPayload, 
 		{"messages", messages},
 		{"tool_calls", toolCalls},
 		{"tool_result_events", toolResults},
+		{"image_text", images},
 		{"usage_events", usage},
 		{"session_plan_usage", planUsage},
 		{"secret_findings", findings},
@@ -1117,6 +1128,15 @@ func toolResultEventRow(m db.Message, callIndex int, ev db.ToolResultEvent, vers
 		m.SessionID, int64(m.Ordinal), int64(callIndex), ev.ToolUseID, ev.AgentID,
 		ev.SubagentSessionID, ev.Source, ev.Status, ev.Content, int64(ev.ContentLength),
 		timeValue(ev.Timestamp), int64(ev.EventIndex),
+		version,
+	}
+}
+
+func imageTextRow(r db.ImageTextRow, version uint64) []any {
+	return []any{
+		r.SessionID, r.SourceKind, int64(r.MessageOrdinal), int64(r.CallIndex),
+		int64(r.EventIndex), int64(r.ImageIndex), r.ImageHash, r.Processor,
+		r.Provider, r.Model, r.Revision, r.Text,
 		version,
 	}
 }

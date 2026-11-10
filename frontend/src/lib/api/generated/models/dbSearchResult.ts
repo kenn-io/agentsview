@@ -5,7 +5,6 @@
 export interface DbSearchResult {
   agent: string;
   machine: string;
-  match_kind?: string;
   name: string;
   ordinal: number;
   project: string;

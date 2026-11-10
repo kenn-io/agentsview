@@ -38,7 +38,7 @@ func ensureImageTextFTS(ctx context.Context, w cjkFTSTransactor, rebuild bool) e
 	if err != nil {
 		return err
 	}
-	defer tx.Rollback()
+	defer func() { _ = tx.Rollback() }()
 	tables := [][2]string{{"image_text_fts", imageTextFTS}}
 	if simpleFTSRuntimeConfig.available() {
 		tables = append(tables, [2]string{"image_text_cjk_fts", imageTextCJKFTS})

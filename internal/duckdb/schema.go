@@ -29,7 +29,9 @@ import (
 // v23 adds the agent identity and 64-bit counters to imported account usage rows.
 // v24 stores dialogue that repeats content as NULL (see db.StoredDialogue);
 // the rebuild drops the copies older pushes wrote.
-const SchemaVersion = 24
+// v25 adds text extracted from tool result images (image_text); the rebuild
+// copies it for resident sessions.
+const SchemaVersion = 25
 
 const schemaVersionMetadataKey = "agentsview_schema_version"
 
@@ -119,6 +121,29 @@ var mirrorTables = []tableSpec{
 			{name: "retained", def: "BOOLEAN NOT NULL"},
 		},
 		indexes: []string{"CREATE INDEX IF NOT EXISTS idx_commit_links_sha ON commit_links(sha)"},
+	},
+	{
+		name: "image_text",
+		create: `CREATE TABLE IF NOT EXISTS image_text (
+ session_id TEXT NOT NULL, source_kind TEXT NOT NULL, message_ordinal INTEGER NOT NULL,
+ call_index INTEGER NOT NULL, event_index INTEGER NOT NULL, image_index INTEGER NOT NULL,
+ image_hash TEXT NOT NULL, processor TEXT NOT NULL, provider TEXT NOT NULL,
+ model TEXT NOT NULL, revision TEXT NOT NULL, text TEXT NOT NULL,
+ PRIMARY KEY(session_id,source_kind,message_ordinal,call_index,event_index,image_index,processor))`,
+		columns: []columnSpec{
+			{name: "session_id", def: "TEXT NOT NULL"},
+			{name: "source_kind", def: "TEXT NOT NULL"},
+			{name: "message_ordinal", def: "INTEGER NOT NULL"},
+			{name: "call_index", def: "INTEGER NOT NULL"},
+			{name: "event_index", def: "INTEGER NOT NULL"},
+			{name: "image_index", def: "INTEGER NOT NULL"},
+			{name: "image_hash", def: "TEXT NOT NULL"},
+			{name: "processor", def: "TEXT NOT NULL"},
+			{name: "provider", def: "TEXT NOT NULL"},
+			{name: "model", def: "TEXT NOT NULL"},
+			{name: "revision", def: "TEXT NOT NULL"},
+			{name: "text", def: "TEXT NOT NULL"},
+		},
 	},
 	{
 		name: "sync_metadata",

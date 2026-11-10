@@ -18,7 +18,9 @@ func TestCommandCodeVersionUpgradeReparsesUnchangedSourceAndClearsSkip(t *testin
 		rawSessionID = "00000000-0000-0000-0000-000000000001"
 		sessionID    = "commandcode:" + rawSessionID
 	)
-	const previousVersion = 148
+	// Model version 149's reparse as the current scoped upgrade.
+	t.Cleanup(db.InstallDataVersionScopesForTest(map[int][]parser.AgentType{db.CurrentDataVersion(): db.ScopedDataVersionProviders(148, 149)}))
+	previousVersion := db.CurrentDataVersion() - 1
 	root := t.TempDir()
 	projectDir := filepath.Join(root, "example-project")
 	require.NoError(t, os.MkdirAll(projectDir, 0o755))

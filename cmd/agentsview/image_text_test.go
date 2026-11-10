@@ -53,7 +53,7 @@ func TestImageTextJobKeepsDaemonAwake(t *testing.T) {
 	go func() { tracker.Run(ctx); close(trackerDone) }()
 	select {
 	case <-idled:
-		t.Fatal("daemon idled during OCR")
+		require.FailNow(t, "daemon idled during OCR")
 	case <-time.After(2 * time.Second):
 	}
 	close(release)

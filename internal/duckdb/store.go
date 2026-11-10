@@ -779,6 +779,16 @@ func (s *Store) Search(ctx context.Context, f db.SearchFilter) (db.SearchPage, e
 	nameProject += nameProjectSb988.String()
 	project += projectSb988.String()
 	args = append(args, dateBuilder.Args()...)
+	// Image text matches every term like messages do and ranks with names.
+	imageTermClauses := make([]string, len(terms))
+	for i, t := range terms {
+		imageTermClauses[i] = "it.text ILIKE ? ESCAPE '\\'"
+		args = append(args, "%"+db.EscapeLikePattern(t)+"%")
+	}
+	if f.Project != "" {
+		args = append(args, f.Project)
+	}
+	args = append(args, dateBuilder.Args()...)
 	args = append(args, namePattern, namePattern, namePattern, namePattern)
 	if f.Project != "" {
 		args = append(args, f.Project)
@@ -819,6 +829,35 @@ func (s *Store) Search(ctx context.Context, f db.SearchFilter) (db.SearchPage, e
 			FROM msg_ranked
 			WHERE rn = 1
 		),
+		image_ranked AS (
+			SELECT it.session_id, s.project, s.agent, s.machine,
+				COALESCE(s.display_name, s.session_name, s.first_message, '') AS name,
+				COALESCE(s.ended_at, s.started_at, s.created_at) AS session_ended_at,
+				it.message_ordinal AS ordinal, SUBSTRING(it.text, 1, 200) AS snippet,
+				1.0 AS rank, 2 AS match_priority, 0 AS match_pos,
+				ROW_NUMBER() OVER (
+					PARTITION BY it.session_id
+					ORDER BY it.message_ordinal ASC, it.call_index ASC,
+						it.event_index ASC, it.source_kind ASC,
+						it.image_index ASC, it.processor ASC
+				) AS rn
+			FROM image_text it
+			JOIN sessions s ON s.id = it.session_id
+			JOIN messages im ON im.session_id = it.session_id
+				AND im.ordinal = it.message_ordinal
+			WHERE `+strings.Join(imageTermClauses, " AND ")+`
+				AND s.deleted_at IS NULL
+				AND im.is_system = FALSE
+				AND `+db.DuckDBSystemPrefixSQL("im.content", "im.role")+`
+				AND it.session_id NOT IN (SELECT session_id FROM msg_matches)
+				`+nameProject+`
+		),
+		image_matches AS (
+			SELECT session_id, project, agent, machine, name, session_ended_at,
+				ordinal, snippet, rank, match_priority, match_pos
+			FROM image_ranked
+			WHERE rn = 1
+		),
 		name_candidates AS (
 			SELECT s.id AS session_id, s.project, s.agent, s.machine,
 				COALESCE(s.display_name, s.session_name, s.first_message, '') AS name,
@@ -837,6 +876,7 @@ func (s *Store) Search(ctx context.Context, f db.SearchFilter) (db.SearchPage, e
 				OR s.first_message ILIKE ? ESCAPE '\')
 				AND s.deleted_at IS NULL
 				AND s.id NOT IN (SELECT session_id FROM msg_matches)
+				AND s.id NOT IN (SELECT session_id FROM image_matches)
 				`+nameProject+`
 		),
 		name_matches AS (
@@ -852,6 +892,8 @@ func (s *Store) Search(ctx context.Context, f db.SearchFilter) (db.SearchPage, e
 			session_ended_at, ordinal, snippet, rank
 		FROM (
 			SELECT * FROM msg_matches
+			UNION ALL
+			SELECT * FROM image_matches
 			UNION ALL
 			SELECT * FROM name_matches
 		) combined
@@ -1179,6 +1221,12 @@ func (s *Store) collectContentSubstringMatches(
 				`+eventAnchorJoin+`
 					WHERE `+eventPred+`
 						AND tre.session_id IN (SELECT id FROM sessions WHERE `+scopeWhere+`) AND `+db.LexicalAnchorScopeSQL(f, "s", "m", db.DuckDBQueryDialect()))
+			for _, image := range duckImageTextBranches(eventAnchorJoin, "") {
+				imagePred := addSearchArgs("it.text")
+				branches = append(branches, image+`
+						AND `+imagePred+`
+						AND s.id IN (SELECT id FROM sessions WHERE `+scopeWhere+`) AND `+db.LexicalAnchorScopeSQL(f, "s", "m", db.DuckDBQueryDialect()))
+			}
 		default:
 			return nil, &db.SearchInputError{Msg: fmt.Sprintf("search: unknown source %q", source)}
 		}
@@ -1202,6 +1250,49 @@ func (s *Store) collectContentSubstringMatches(
 		start, end, _ := db.CaseInsensitiveSpan(body, f.Pattern)
 		return f.BuildSnippet(body, start, end)
 	})
+}
+
+// duckImageTextBranches returns tool_result rows for image text, anchored
+// like the call and event they came from. Callers append the text and scope
+// predicates; DISTINCT folds identical images within one result.
+func duckImageTextBranches(eventAnchorJoin, extra string) []string {
+	call := `SELECT DISTINCT it.session_id, s.project, s.agent, 'tool_result' AS location,
+						'assistant' AS role, tc.tool_name, m.ordinal,
+						m.timestamp AS ts,
+						it.text AS body,
+						COALESCE(s.ended_at, s.started_at, s.created_at) AS sort_ts,
+						5 AS src, COALESCE(tc.id, 0) AS row_id,
+						tc.call_index AS call_index, 0 AS event_index` + extra + `
+					FROM image_text it JOIN sessions s ON s.id = it.session_id
+					JOIN messages m ON m.session_id = it.session_id
+						AND m.ordinal = it.message_ordinal
+					JOIN tool_calls tc ON tc.session_id = m.session_id
+						AND tc.message_id = m.id AND tc.call_index = it.call_index
+					WHERE it.source_kind = 'tool_call'
+						AND NOT EXISTS (
+							SELECT 1 FROM tool_result_events tre
+							WHERE tre.session_id = tc.session_id
+								AND tre.tool_use_id = tc.tool_use_id
+								AND tc.tool_use_id <> ''
+						)`
+	event := `SELECT DISTINCT it.session_id, s.project, s.agent, 'tool_result' AS location,
+						'assistant' AS role, '' AS tool_name,
+						tre.tool_call_message_ordinal AS ordinal,
+						tre.timestamp AS ts,
+						it.text AS body,
+						COALESCE(s.ended_at, s.started_at, s.created_at) AS sort_ts,
+						6 AS src, COALESCE(tre.id, 0) AS row_id,
+						tre.call_index AS call_index,
+						tre.event_index AS event_index` + extra + `
+					FROM image_text it JOIN tool_result_events tre
+						ON tre.session_id = it.session_id
+						AND tre.tool_call_message_ordinal = it.message_ordinal
+						AND tre.call_index = it.call_index
+						AND tre.event_index = it.event_index
+					JOIN sessions s ON s.id = tre.session_id
+				` + eventAnchorJoin + `
+					WHERE it.source_kind = 'event'`
+	return []string{call, event}
 }
 
 func duckContentSearchPredicate(
@@ -1362,6 +1453,14 @@ func (s *Store) collectContentSource(
 		resultFilter := prefixFilter("tc.result_content")
 		args = append(args, scopeArgs...)
 		eventFilter := prefixFilter("tre.content")
+		var images strings.Builder
+		for _, image := range duckImageTextBranches(eventAnchorJoin, ", false AS legacy_thinking") {
+			args = append(args, scopeArgs...)
+			images.WriteString(`
+					UNION ALL
+					` + image + `
+						AND s.id IN (SELECT id FROM sessions WHERE ` + scopeWhere + `) AND ` + db.LexicalAnchorScopeSQL(f, "s", "m", db.DuckDBQueryDialect()) + prefixFilter("it.text"))
+		}
 		query = `SELECT session_id, project, agent, location, role,
 				tool_name, ordinal, ts, body, sort_ts, src, row_id, call_index, event_index, legacy_thinking
 				FROM (
@@ -1395,7 +1494,7 @@ func (s *Store) collectContentSource(
 						tre.call_index AS call_index, tre.event_index, false AS legacy_thinking
 					FROM tool_result_events tre JOIN sessions s ON s.id = tre.session_id
 				` + eventAnchorJoin + `
-					WHERE tre.session_id IN (SELECT id FROM sessions WHERE ` + scopeWhere + `) AND ` + db.LexicalAnchorScopeSQL(f, "s", "m", db.DuckDBQueryDialect()) + eventFilter + `
+					WHERE tre.session_id IN (SELECT id FROM sessions WHERE ` + scopeWhere + `) AND ` + db.LexicalAnchorScopeSQL(f, "s", "m", db.DuckDBQueryDialect()) + eventFilter + images.String() + `
 				)`
 		orderBy = "session_id, ordinal, src, row_id, call_index, event_index"
 	default:

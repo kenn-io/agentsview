@@ -36,8 +36,9 @@ func TestClaudeBlankThinkingUsageUpgradeRestoresUsage(t *testing.T) {
 	require.NoError(t, database.Close())
 
 	// Model version 149, which dropped the blank record and its usage,
-	// without changing the source fingerprint.
-	previousVersion := 149
+	// without changing the source fingerprint, as the current scoped upgrade.
+	t.Cleanup(db.InstallDataVersionScopesForTest(map[int][]parser.AgentType{db.CurrentDataVersion(): db.ScopedDataVersionProviders(149, 150)}))
+	previousVersion := db.CurrentDataVersion() - 1
 	raw, err := sql.Open("sqlite3", archivePath)
 	require.NoError(t, err)
 	_, err = raw.ExecContext(ctx, fmt.Sprintf(`

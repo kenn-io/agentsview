@@ -52,6 +52,10 @@ A deleted session remains visible as a missing record. Project filters use the
 project saved with its links in SQLite, including after a rebuild or a deletion
 before the first push.
 
+Search matches text extracted from tool-result images when
+[`[image_text]`](configuration.md#image-text) is enabled locally. Each new
+extraction is sent on the next incremental push.
+
 ## Hosted raw processing
 
 For uploads that the server parses itself, provision a schema and tenant with

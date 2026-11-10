@@ -390,7 +390,7 @@
                 {/if}
                 {#if result.snippet && result.snippet.replace(/<\/?mark>/g, '') !== result.name}
                   <span class="item-snippet">
-                    {#if result.matchKind === "image_text"}<span class="item-match-kind">{m.command_palette_match_image_text()}</span>{/if}{#if result.snippetFormat === "plain-text"}
+                    {#if result.snippetFormat === "plain-text"}
                       {result.snippet}
                     {:else}
                       {@html sanitizeSnippet(result.snippet)}
@@ -567,16 +567,6 @@
     text-overflow: ellipsis;
     font-size: 11px;
     color: var(--text-muted);
-  }
-
-  .item-snippet :global(mark) {
-    color: var(--accent-amber-foreground);
-  }
-
-  .item-match-kind {
-    margin-right: 6px;
-    font-weight: 500;
-    color: var(--text-secondary);
   }
 
   .item-meta {
