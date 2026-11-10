@@ -38,7 +38,15 @@ func TestDiagnosticAppendAndDaySelection(t *testing.T) {
 	dates, err := d.FrictionPendingDiagnosticDates(t.Context(), "2026-01-31", time.UTC)
 	require.NoError(t, err)
 	assert.Equal(t, []string{"2026-01-01"}, dates)
-
+	for _, id := range []string{"00000000-0000-0000-0000-000000000002", "00000000-0000-0000-0000-000000000001"} {
+		_, err := d.getWriter().Exec(t.Context(), `INSERT INTO diagnostic_events(id,source,message,occurred_at,accepted_at) VALUES(?,?,?,?,?)`, id, "worker", "failure", "2026-01-01T00:00:00.000000000Z", "2026-01-02T00:00:00.000000000Z")
+		require.NoError(t, err)
+	}
+	signals, err = d.DiagnosticSignalsForDate(t.Context(), "2026-01-01", time.UTC)
+	require.NoError(t, err)
+	require.Len(t, signals, 3)
+	assert.Equal(t, "diagnostic:00000000-0000-0000-0000-000000000001", signals[0].SubjectID)
+	assert.Equal(t, "diagnostic:00000000-0000-0000-0000-000000000002", signals[1].SubjectID)
 }
 
 func TestDiagnosticRejectsUnreplicableValues(t *testing.T) {
@@ -72,17 +80,4 @@ func TestDiagnosticResync(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, events, 1)
 	assert.Equal(t, e.ID, events[0].ID)
-}
-
-func TestDiagnosticTieOrder(t *testing.T) {
-	d := testDB(t)
-	for _, id := range []string{"00000000-0000-0000-0000-000000000002", "00000000-0000-0000-0000-000000000001"} {
-		_, err := d.getWriter().Exec(t.Context(), `INSERT INTO diagnostic_events(id,source,message,occurred_at,accepted_at) VALUES(?,?,?,?,?)`, id, "worker", "failure", "2026-01-01T00:00:00.000000000Z", "2026-01-02T00:00:00.000000000Z")
-		require.NoError(t, err)
-	}
-	signals, err := d.DiagnosticSignalsForDate(t.Context(), "2026-01-01", time.UTC)
-	require.NoError(t, err)
-	require.Len(t, signals, 2)
-	assert.Equal(t, "diagnostic:00000000-0000-0000-0000-000000000001", signals[0].SubjectID)
-	assert.Equal(t, "diagnostic:00000000-0000-0000-0000-000000000002", signals[1].SubjectID)
 }

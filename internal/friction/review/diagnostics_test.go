@@ -39,19 +39,18 @@ func TestDiagnosticsCatchUpRebuildsOldDay(t *testing.T) {
 	_, err = r.CatchUp(t.Context())
 	require.NoError(t, err)
 	assert.Equal(t, rebuilt.Revision, stored(t, d, "2026-08-30").Revision)
-}
-
-func TestDiagnosticsCatchUpEpoch(t *testing.T) {
-	d := dbtest.OpenTestDB(t)
-	r := newRunner(d)
-	r.Diagnostics = d
-	var err error
-	r.Loc, err = time.LoadLocation("America/Los_Angeles")
-	require.NoError(t, err)
-	_, err = d.AppendDiagnostic(t.Context(), db.DiagnosticEvent{ID: uuid.NewV7().String(), Source: "worker", Message: "launch failed", OccurredAt: time.Unix(0, 0)})
-	require.NoError(t, err)
-	_, err = r.CatchUp(t.Context())
-	require.NoError(t, err)
-	assert.Contains(t, string(stored(t, d, "1969-12-31").Markdown), "`worker`: `launch failed` x1")
-	assert.NotNil(t, stored(t, d, "2026-09-21"))
+	t.Run("epoch", func(t *testing.T) {
+		d := dbtest.OpenTestDB(t)
+		r := newRunner(d)
+		r.Diagnostics = d
+		var err error
+		r.Loc, err = time.LoadLocation("America/Los_Angeles")
+		require.NoError(t, err)
+		_, err = d.AppendDiagnostic(t.Context(), db.DiagnosticEvent{ID: uuid.NewV7().String(), Source: "worker", Message: "launch failed", OccurredAt: time.Unix(0, 0)})
+		require.NoError(t, err)
+		_, err = r.CatchUp(t.Context())
+		require.NoError(t, err)
+		assert.Contains(t, string(stored(t, d, "1969-12-31").Markdown), "`worker`: `launch failed` x1")
+		assert.NotNil(t, stored(t, d, "2026-09-21"))
+	})
 }

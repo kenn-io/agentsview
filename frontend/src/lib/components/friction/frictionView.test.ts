@@ -81,18 +81,13 @@ describe("groupSignals", () => {
     expect(sections[4]!.signals.map((s) => s.subject_id)).toEqual(["p1"]);
     expect(sections[5]!.signals.map((s) => s.subject_id)).toEqual(["f1"]);
     expect(sections[6]!.signals.map((s) => s.subject_id)).toEqual(["i1"]);
+    const diagnostics = groupSignals([sig({ kind: "diagnostic", subject_kind: "diagnostic", label: "worker", text: "launch failed" })]);
+    expect(diagnostics.at(-1)?.kind).toBe("diagnostic");
   });
 
   it("drops kinds the page does not know instead of throwing", () => {
     const sections = groupSignals([sig({ kind: "future_kind" })]);
     expect(sections.every((s) => s.signals.length === 0)).toBe(true);
-  });
-});
-
-describe("diagnostics", () => {
-  it("shows a diagnostic section after the session kinds", () => {
-    const signals = [sig({ kind: "diagnostic", subject_kind: "diagnostic", label: "worker", text: "launch failed" })];
-    expect(groupSignals(signals).at(-1)?.kind).toBe("diagnostic");
   });
 });
 

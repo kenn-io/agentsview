@@ -62,26 +62,6 @@ func TestDiagnosticPushFilteredAndReset(t *testing.T) {
 	assert.Equal(t, 1, pgTableCount(t, t.Context(), pg, "diagnostic_events"))
 }
 
-func TestDiagnosticTieOrder(t *testing.T) {
-	const schema = "agentsview_diagnostic_order_test"
-	pgURL := testPGURL(t)
-	cleanNamedPGSchema(t, pgURL, schema)
-	t.Cleanup(func() { cleanNamedPGSchema(t, pgURL, schema) })
-	pg, err := Open(t.Context(), pgURL, schema, true)
-	require.NoError(t, err)
-	t.Cleanup(func() { _ = pg.Close() })
-	require.NoError(t, EnsureSchema(t.Context(), pg, schema))
-	for _, id := range []string{"00000000-0000-0000-0000-000000000002", "00000000-0000-0000-0000-000000000001"} {
-		_, err := pg.ExecContext(t.Context(), `INSERT INTO diagnostic_events(id,source,message,occurred_at,occurred_at_exact,accepted_at) VALUES($1,'worker','failure','2026-01-01T00:00:00Z','2026-01-01T00:00:00Z','2026-01-02T00:00:00Z')`, id)
-		require.NoError(t, err)
-	}
-	signals, err := (&Store{pg: pg}).DiagnosticSignalsForDate(t.Context(), "2026-01-01", time.UTC)
-	require.NoError(t, err)
-	require.Len(t, signals, 2)
-	assert.Equal(t, "diagnostic:00000000-0000-0000-0000-000000000001", signals[0].SubjectID)
-	assert.Equal(t, "diagnostic:00000000-0000-0000-0000-000000000002", signals[1].SubjectID)
-}
-
 func TestDiagnosticReadsWithoutTable(t *testing.T) {
 	const schema = "agentsview_diagnostic_missing_test"
 	pgURL := testPGURL(t)
@@ -102,15 +82,19 @@ func TestDiagnosticReadsWithoutTable(t *testing.T) {
 	assert.Empty(t, signals)
 
 	require.NoError(t, EnsureSchema(t.Context(), pg, schema))
-	_, err = pg.ExecContext(t.Context(), `INSERT INTO diagnostic_events(id,source,message,occurred_at,occurred_at_exact,accepted_at) VALUES('00000000-0000-0000-0000-000000000001','worker','failure','2026-01-01T00:00:00Z','2026-01-01T00:00:00Z','2026-01-02T00:00:00Z')`)
-	require.NoError(t, err)
+	for _, id := range []string{"00000000-0000-0000-0000-000000000002", "00000000-0000-0000-0000-000000000001"} {
+		_, err = pg.ExecContext(t.Context(), `INSERT INTO diagnostic_events(id,source,message,occurred_at,occurred_at_exact,accepted_at) VALUES($1,'worker','failure','2026-01-01T00:00:00Z','2026-01-01T00:00:00Z','2026-01-02T00:00:00Z')`, id)
+		require.NoError(t, err)
+	}
 	dates, err = store.FrictionPendingDiagnosticDates(t.Context(), "2026-01-02", time.UTC)
 	require.NoError(t, err)
 	assert.Equal(t, []string{"2026-01-01"}, dates)
 	signals, err = store.DiagnosticSignalsForDate(t.Context(), "2026-01-01", time.UTC)
 	require.NoError(t, err)
-	require.Len(t, signals, 1)
+	require.Len(t, signals, 2)
 	assert.Equal(t, "failure", signals[0].Text)
+	assert.Equal(t, "diagnostic:00000000-0000-0000-0000-000000000001", signals[0].SubjectID)
+	assert.Equal(t, "diagnostic:00000000-0000-0000-0000-000000000002", signals[1].SubjectID)
 }
 
 func TestDiagnosticPushConflictingArchives(t *testing.T) {
