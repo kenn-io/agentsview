@@ -7,12 +7,17 @@ import (
 	"net/http"
 	"time"
 
+	"github.com/doordash-oss/oapi-codegen-dd/v3/pkg/runtime"
 	"go.kenn.io/agentsview/internal/apiclient"
 	"go.kenn.io/agentsview/internal/config"
 	"go.kenn.io/agentsview/internal/importer"
 )
 
-func syncClaudeAIChrome(ctx context.Context) error {
+func syncChrome(ctx context.Context, importType string) error {
+	label := "claude.ai"
+	if importType == "chatgpt" {
+		label = "ChatGPT"
+	}
 	cfg, err := config.LoadMinimalFor(config.ScopeLocal)
 	if err != nil {
 		return err
@@ -22,7 +27,7 @@ func syncClaudeAIChrome(ctx context.Context) error {
 		return err
 	}
 	if transport.Mode != transportHTTP {
-		return errors.New("claude.ai Sync requires a running server")
+		return fmt.Errorf("%s Sync requires a running server", label)
 	}
 	httpTransport := http.DefaultTransport.(*http.Transport).Clone()
 	httpTransport.ResponseHeaderTimeout = 30 * time.Second
@@ -31,13 +36,29 @@ func syncClaudeAIChrome(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	browser := apiclient.Chrome
-	response, err := api.PostAPIV1ImportClaudeAiSyncStreamWithResponse(ctx, &apiclient.PostAPIV1ImportClaudeAiSyncRequestOptions{Query: &apiclient.PostAPIV1ImportClaudeAiSyncQuery{Browser: &browser}})
-	if err != nil && (response == nil || response.StatusCode == http.StatusOK) {
+	streamCall := map[string]func() (int, []byte, *runtime.Stream[[]byte], *http.Response, error){
+		"chatgpt": func() (int, []byte, *runtime.Stream[[]byte], *http.Response, error) {
+			response, err := api.PostAPIV1ImportChatgptSyncStreamWithResponse(ctx)
+			if response == nil {
+				return 0, nil, nil, nil, err
+			}
+			return response.StatusCode, response.Body, response.Stream200, response.HTTPResponse, err
+		},
+		"claude-ai": func() (int, []byte, *runtime.Stream[[]byte], *http.Response, error) {
+			browser := apiclient.Chrome
+			response, err := api.PostAPIV1ImportClaudeAiSyncStreamWithResponse(ctx, &apiclient.PostAPIV1ImportClaudeAiSyncRequestOptions{Query: &apiclient.PostAPIV1ImportClaudeAiSyncQuery{Browser: &browser}})
+			if response == nil {
+				return 0, nil, nil, nil, err
+			}
+			return response.StatusCode, response.Body, response.Stream200, response.HTTPResponse, err
+		},
+	}[importType]
+	status, body, stream, httpResponse, err := streamCall()
+	if err != nil && (httpResponse == nil || status == http.StatusOK) {
 		return err
 	}
-	defer response.HTTPResponse.Body.Close()
-	stats, err := readChromeSync(response)
+	defer httpResponse.Body.Close()
+	stats, err := readBrowserChromeSync(status, body, stream)
 	printImportSummary(stats)
 	if err != nil {
 		return err
@@ -48,12 +69,12 @@ func syncClaudeAIChrome(ctx context.Context) error {
 	return nil
 }
 
-func readChromeSync(response *apiclient.PostAPIV1ImportClaudeAiSyncResp) (importer.ImportStats, error) {
-	if response.StatusCode != http.StatusOK {
-		return importer.ImportStats{}, errors.New(daemonErrorMessage(response.StatusCode, response.Body))
+func readBrowserChromeSync(status int, body []byte, stream *runtime.Stream[[]byte]) (importer.ImportStats, error) {
+	if status != http.StatusOK {
+		return importer.ImportStats{}, errors.New(daemonErrorMessage(status, body))
 	}
 	var stats importer.ImportStats
-	result, err := consumeDaemonPushEvents[importer.ImportStats](response.Stream200, func(progress importer.ImportStats) {
+	result, err := consumeDaemonPushEvents[importer.ImportStats](stream, func(progress importer.ImportStats) {
 		stats = progress
 	})
 	if err != nil {

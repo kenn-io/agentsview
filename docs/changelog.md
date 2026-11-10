@@ -9,6 +9,18 @@ The latest release is
 
 ## Unreleased
 
+**Upgrade notes**
+
+- Claude.ai Chrome users must rerun `agentsview source chrome setup` and reload the
+  extension once because the native-host protocol moved to version 2.
+
+**New features**
+
+- Sync ChatGPT chats through the Chrome extension from Import > ChatGPT or
+  `agentsview source import --type chatgpt --sync`. Sync pages active and archived chats
+  and keeps the previous version in Trash when it replaces a chat's history with
+  a different branch. Appending turns makes no copy.
+
 **Bug fixes**
 
 - Antigravity app and IDE sessions now show their project and working directory

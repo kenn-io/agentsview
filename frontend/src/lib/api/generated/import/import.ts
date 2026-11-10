@@ -56,6 +56,22 @@ export const postApiV1ImportChatgpt = async (
   });
 };
 
+export const getPostApiV1ImportChatgptSyncUrl = () => {
+  return `/api/v1/import/chatgpt/sync`;
+};
+
+/**
+ * @summary Sync ChatGPT conversations
+ */
+export const postApiV1ImportChatgptSync = async (
+  options?: Parameters<typeof orvalRequest>[1],
+): Promise<Response> => {
+  return orvalRequest<Response>(getPostApiV1ImportChatgptSyncUrl(), {
+    ...options,
+    method: "POST",
+  });
+};
+
 export const getPostApiV1ImportClaudeAiUrl = (params?: PostApiV1ImportClaudeAiParams) => {
   const normalizedParams = new URLSearchParams();
 
