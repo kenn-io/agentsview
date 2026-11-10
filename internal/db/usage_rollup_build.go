@@ -641,14 +641,12 @@ func (b *usageAccountTotalsBuilder) add(fact usageRollupFact) error {
 	total := b.totals[key]
 	if total == nil {
 		total = &usageAccountTotal{
-			usageDailyContribution: usageDailyContribution{
-				LocalDate: fact.LocalDate, ReportedModel: fact.Model,
-				ProviderID:  fact.Fact.ProviderID,
-				PricedModel: priced.PricedModel, MatchedPattern: priced.MatchedPattern,
-				RateOK: priced.RateOK, RateHash: rateHash,
-				BandThreshold: priced.BandThreshold,
-			},
-			Agent: fact.Agent, IsHeadless: fact.IsHeadless,
+			LocalDate: fact.LocalDate, ReportedModel: fact.Model,
+			ProviderID:  fact.Fact.ProviderID,
+			PricedModel: priced.PricedModel, MatchedPattern: priced.MatchedPattern,
+			RateOK: priced.RateOK, RateHash: rateHash,
+			BandThreshold: priced.BandThreshold,
+			Agent:         fact.Agent, IsHeadless: fact.IsHeadless,
 		}
 		b.totals[key] = total
 	}

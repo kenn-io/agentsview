@@ -117,6 +117,7 @@ func TestUsageAccountCollisionsSeekUsageKeys(t *testing.T) {
 		name := tc.name
 		rows, err := conn.QueryContext(t.Context(), "EXPLAIN QUERY PLAN "+tc.query, tc.args...)
 		require.NoError(t, err)
+		defer rows.Close()
 		var plan []string
 		for rows.Next() {
 			var id, parent, unused int
@@ -125,7 +126,6 @@ func TestUsageAccountCollisionsSeekUsageKeys(t *testing.T) {
 			plan = append(plan, detail)
 		}
 		require.NoError(t, rows.Err())
-		require.NoError(t, rows.Close())
 		assert.Contains(t, strings.Join(plan, "\n"), "INDEX usage_facts_usage_dedup_key", name)
 		assert.NotContains(t, strings.Join(plan, "\n"), "SCAN f", name)
 	}
