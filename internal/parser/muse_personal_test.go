@@ -157,6 +157,12 @@ func TestMusePersonalDefersUnterminatedTail(t *testing.T) {
 func TestMusePersonalAdvisoryIndex(t *testing.T) {
 	for _, tc := range []struct{ name, index, want string }{
 		{"missing", "", "2026-10-05T15:04:06Z"},
+		{"trailing JSON", `{"version":1,"sessions":[{"session_id":"11111111-2222-4333-8444-555555555555","agent_id":"66666666-7777-4888-8999-000000000000","created_at":"2026-10-05T15:04:05Z","updated_at":"2026-10-05T16:00:00Z"}]} {}`, "2026-10-05T15:04:06Z"},
+		{"oversized", `{"version":1,"padding":"` + strings.Repeat("x", musePersonalIndexLimit) + `"}`, "2026-10-05T15:04:06Z"},
+		{"wrong creation", `{"version":1,"sessions":[{"session_id":"11111111-2222-4333-8444-555555555555","agent_id":"66666666-7777-4888-8999-000000000000","created_at":"2026-10-05T15:04:04Z","updated_at":"2026-10-05T16:00:00Z"}]}`, "2026-10-05T15:04:06Z"},
+		{"ordered duplicate", `{"version":1,"sessions":[{"session_id":"11111111-2222-4333-8444-555555555555","agent_id":"66666666-7777-4888-8999-000000000000","created_at":"2026-10-05T15:04:05Z","updated_at":"2026-10-05T15:04:05Z"},{"session_id":"11111111-2222-4333-8444-555555555555","agent_id":"66666666-7777-4888-8999-000000000000","created_at":"2026-10-05T15:04:05Z","updated_at":"2026-10-05T16:00:00Z"},{"session_id":"11111111-2222-4333-8444-555555555555","agent_id":"66666666-7777-4888-8999-000000000000","created_at":"2026-10-05T15:04:05Z","updated_at":"2026-10-05T18:00:00Z"}]}`, "2026-10-05T16:00:00Z"},
+		{"same creation instant", `{"version":1,"sessions":[{"session_id":"11111111-2222-4333-8444-555555555555","agent_id":"66666666-7777-4888-8999-000000000000","created_at":"2026-10-05T17:04:05+02:00","updated_at":"2026-10-05T16:00:00Z"}]}`, "2026-10-05T16:00:00Z"},
+
 		{"invalid", "{", "2026-10-05T15:04:06Z"},
 		{"unknown version", `{"version":2,"sessions":[{"session_id":"11111111-2222-4333-8444-555555555555","agent_id":"66666666-7777-4888-8999-000000000000","created_at":"2026-10-05T15:04:05Z","updated_at":"2026-10-05T16:00:00Z"}]}`, "2026-10-05T15:04:06Z"},
 		{"matched", `{"version":1,"sessions":[{"session_id":"11111111-2222-4333-8444-555555555555","agent_id":"66666666-7777-4888-8999-000000000000","created_at":"2026-10-05T15:04:05Z","updated_at":"2026-10-05T16:00:00Z","item_count":999999,"transcript_path":"../../secret"}]}`, "2026-10-05T16:00:00Z"},

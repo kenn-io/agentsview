@@ -2368,6 +2368,11 @@ func providerChangedPathForceParse(
 		return eventKind == "remove" &&
 			providerDeletedPhysicalSQLiteSource(agent, sourcePath)
 	}
+	// Index writes and removals compare the per-identity projection before
+	// parsing; explicit reparse modes still set ForceParse at the caller.
+	if agent == parser.AgentMusePersonal && filepath.Base(eventPath) == "sessions.json" {
+		return false
+	}
 	// Copilot companion events compare per-session hashes before parsing.
 	if agent == parser.AgentCopilot && filepath.Clean(sourcePath) != filepath.Clean(eventPath) {
 		return false

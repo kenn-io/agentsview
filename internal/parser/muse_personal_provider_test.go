@@ -9,6 +9,8 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -91,7 +93,7 @@ func TestMusePersonalCompositeFingerprintAndDigest(t *testing.T) {
 	writeSourceFile(t, index, `{"version":1}`)
 	first, err := p.Fingerprint(t.Context(), sources[0])
 	require.NoError(t, err)
-	assert.NotEqual(t, initial.Hash, first.Hash)
+	assert.Equal(t, initial.Hash, first.Hash)
 	digest := hasher.ComputeMultiFileStatHash(path)
 	require.NotZero(t, digest)
 	info, err := os.Stat(index)
@@ -114,7 +116,7 @@ func TestMusePersonalCompositeFingerprintAndDigest(t *testing.T) {
 	second, err := p.Fingerprint(t.Context(), sources[0])
 	require.NoError(t, err)
 	assert.Equal(t, first.Size, second.Size)
-	assert.NotEqual(t, first.Hash, second.Hash)
+	assert.Equal(t, first.Hash, second.Hash)
 	// A zero digest conservatively forces hashing on platforms without ctime.
 	if digest != 0 {
 		assert.NotEqual(t, digest, hasher.ComputeMultiFileStatHash(path))
@@ -353,4 +355,131 @@ func TestMusePersonalUnfinishedHeaderCannotReplaceDiscoveredSource(t *testing.T)
 		require.ErrorIs(t, err, errMusePersonalIncompleteHeader)
 		assert.False(t, complete)
 	}
+}
+
+func TestMusePersonalIndexCacheAcrossProviders(t *testing.T) {
+	for _, count := range []int{2, 100} {
+		t.Run(strconv.Itoa(count), func(t *testing.T) {
+			_, path := musePersonalTestProvider(t, "")
+			root := filepath.Dir(filepath.Dir(filepath.Dir(path)))
+			require.NoError(t, os.Remove(path))
+			var rows []string
+			for i := range count {
+				id := fmt.Sprintf("%08x-2222-4333-8444-555555555555", i)
+				writeSourceFile(t, filepath.Join(filepath.Dir(path), id+".jsonl"), strings.ReplaceAll(musePersonalTestHeader, musePersonalTestID, id))
+				rows = append(rows, fmt.Sprintf(`{"session_id":%q,"agent_id":"66666666-7777-4888-8999-000000000000","created_at":"2026-10-05T17:04:05+02:00","updated_at":"2026-10-05T16:00:00Z"}`, id))
+			}
+			index := filepath.Join(filepath.Dir(path), "sessions.json")
+			text := `{"version":1,"sessions":[` + strings.Join(rows, ",") + `]}`
+			writeSourceFile(t, index, text)
+			for range 2 {
+				var scans atomic.Int64
+				ctx, closeCache, err := WithReconciliationCache(WithSharedContainerScanObserver(t.Context(), func() { scans.Add(1) }))
+				require.NoError(t, err)
+				p, ok := NewProvider(AgentMusePersonal, ProviderConfig{Roots: []string{root}})
+				require.True(t, ok)
+				sources, err := p.Discover(ctx)
+				require.NoError(t, err)
+				require.Len(t, sources, count)
+				parseAll := func(want string) {
+					var workers sync.WaitGroup
+					for _, source := range sources {
+						workers.Go(func() {
+							other, ok := NewProvider(AgentMusePersonal, ProviderConfig{Roots: []string{root}})
+							if !assert.True(t, ok) {
+								return
+							}
+							fp, err := other.Fingerprint(ctx, source)
+							if !assert.NoError(t, err) {
+								return
+							}
+							out, err := other.Parse(ctx, ParseRequest{Source: source, Fingerprint: fp})
+							if !assert.NoError(t, err) || !assert.Len(t, out.Results, 1) {
+								return
+							}
+							assert.Equal(t, want, out.Results[0].Result.Session.EndedAt.Format(time.RFC3339))
+						})
+					}
+					workers.Wait()
+				}
+				parseAll("2026-10-05T16:00:00Z")
+				assert.Equal(t, int64(1), scans.Load())
+				// Atomic replacement changes the generation even with identical size/mtime.
+				info, err := os.Stat(index)
+				require.NoError(t, err)
+				replacement := index + ".new"
+				writeSourceFile(t, replacement, strings.ReplaceAll(text, "16:00:00", "17:00:00"))
+				require.NoError(t, os.Chtimes(replacement, info.ModTime(), info.ModTime()))
+				require.NoError(t, os.Rename(replacement, index))
+				parseAll("2026-10-05T17:00:00Z")
+				assert.Equal(t, int64(2), scans.Load())
+				require.NoError(t, closeCache())
+				writeSourceFile(t, index, text)
+			}
+		})
+	}
+}
+
+func TestMusePersonalIndexFailedLoadRetriesNextPass(t *testing.T) {
+	for _, failure := range []string{"cancel", "replace", "remove", "cache"} {
+		t.Run(failure, func(t *testing.T) {
+			p, path := musePersonalTestProvider(t, "")
+			index := filepath.Join(filepath.Dir(path), "sessions.json")
+			writeSourceFile(t, index, `{"version":1}`)
+			sources, err := p.Discover(t.Context())
+			require.NoError(t, err)
+			require.Len(t, sources, 1)
+			base, cancel := context.WithCancel(t.Context())
+			defer cancel()
+			ctx, closeCache, err := WithReconciliationCache(WithSharedContainerScanObserver(base, func() {
+				switch failure {
+				case "cancel":
+					cancel()
+				case "replace":
+					writeSourceFile(t, index+".new", `{"version":2}`)
+					require.NoError(t, os.Rename(index+".new", index))
+				case "remove":
+					require.NoError(t, os.Remove(index))
+				}
+			}))
+			require.NoError(t, err)
+			if failure == "cache" {
+				require.NoError(t, closeCache())
+			}
+			_, err = p.Fingerprint(ctx, sources[0])
+			require.Error(t, err, "an unverified load cannot establish freshness")
+			if failure != "cache" {
+				require.NoError(t, closeCache())
+			}
+			writeSourceFile(t, index, `{"version":1,"sessions":[{"session_id":"11111111-2222-4333-8444-555555555555","agent_id":"66666666-7777-4888-8999-000000000000","created_at":"2026-10-05T15:04:05Z","updated_at":"2026-10-05T18:00:00Z"}]}`)
+			fresh, cleanup, err := WithReconciliationCache(t.Context())
+			require.NoError(t, err)
+			defer func() { require.NoError(t, cleanup()) }()
+			out, err := p.Parse(fresh, ParseRequest{Source: sources[0]})
+			require.NoError(t, err)
+			require.Len(t, out.Results, 1)
+			assert.Equal(t, "2026-10-05T18:00:00Z", out.Results[0].Result.Session.EndedAt.Format(time.RFC3339))
+		})
+	}
+}
+
+func TestMusePersonalOpaqueIndexEditKeepsProjection(t *testing.T) {
+	p, path := musePersonalTestProvider(t, "")
+	sources, err := p.Discover(t.Context())
+	require.NoError(t, err)
+	require.Len(t, sources, 1)
+	index := filepath.Join(filepath.Dir(path), "sessions.json")
+	writeSourceFile(t, index, `{"version":1,"opaque":"before"}`)
+	before, err := p.Fingerprint(t.Context(), sources[0])
+	require.NoError(t, err)
+	writeSourceFile(t, index, `{"version":1,"opaque":"after and longer"}`)
+	after, err := p.Fingerprint(t.Context(), sources[0])
+	require.NoError(t, err)
+	assert.Equal(t, before, after)
+	plan, err := p.(RawCaptureProvider).PlanRawCapture(t.Context(), sources[0])
+	require.NoError(t, err)
+	require.Len(t, plan.Entries, 2)
+	raw, err := os.ReadFile(plan.Entries[1].LocalPath)
+	require.NoError(t, err)
+	assert.Equal(t, `{"version":1,"opaque":"after and longer"}`, string(raw))
 }

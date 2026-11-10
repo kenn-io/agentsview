@@ -99,7 +99,7 @@ func musePersonalParityAck(t *testing.T, store *rawcheckpoint.Store, m rawsync.C
 }
 
 func TestMusePersonalDurableCaptureHostedParity(t *testing.T) {
-	p, source, store, _ := musePersonalParitySetup(t,
+	p, source, store, path := musePersonalParitySetup(t,
 		musePersonalParityUser+musePersonalParityCall+musePersonalParityOutput, musePersonalParityIndex)
 	local, err := p.Parse(t.Context(), parser.ParseRequest{Source: source, Machine: "hosted-worker"})
 	require.NoError(t, err)
@@ -134,6 +134,20 @@ func TestMusePersonalDurableCaptureHostedParity(t *testing.T) {
 	_, pending, err := store.FinalizeNextManifest(t.Context(), "device-a")
 	require.NoError(t, err)
 	assert.False(t, pending)
+	before, err := p.Fingerprint(t.Context(), source)
+	require.NoError(t, err)
+	index := filepath.Join(filepath.Dir(path), "sessions.json")
+	musePersonalParityWrite(t, index, strings.TrimSuffix(musePersonalParityIndex, "}")+`,"opaque":{"retained":"new bytes"}}`)
+	after, err := p.Fingerprint(t.Context(), source)
+	require.NoError(t, err)
+	assert.Equal(t, before, after, "opaque edits cannot change the normalized projection")
+	changed, err := rawcapture.New(store).Capture(t.Context(), p, source)
+	require.NoError(t, err)
+	assert.Equal(t, rawcapture.StatusCaptured, changed.Status)
+	next, projected := musePersonalParityHosted(t, store, objects)
+	assert.NotEqual(t, manifest.Manifest.Entries, next.Manifest.Entries, "raw custody must retain the edit")
+	require.Len(t, projected.Outcome.Results, 1)
+	assert.Equal(t, h.Messages, projected.Outcome.Results[0].Result.Messages)
 }
 
 func TestMusePersonalHostedGenerations(t *testing.T) {
