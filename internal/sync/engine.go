@@ -13761,7 +13761,7 @@ func (e *Engine) dropShrinkingTruncatedCursorIDEResults(
 		kept = append(kept, r)
 	}
 	results = kept
-	if len(results) == 0 || e.forceParseRequested(file) {
+	if len(results) == 0 {
 		return results, false
 	}
 	type messageSourceUUIDReader interface {
