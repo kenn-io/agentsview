@@ -2834,6 +2834,11 @@ func TestFindPruneCandidatesAgentTrees(t *testing.T) {
 		{"project protects ancestors", PruneFilter{Agent: "mimocode", Project: "selected"}, "mimocode", false, false, []string{"sibling"}},
 		{"protected cycle terminates", PruneFilter{Agent: "mimocode"}, "claude", false, true, []string{"sibling"}},
 		{"without agent excludes trash", PruneFilter{MaxMessages: new(2)}, "mimocode", true, false, []string{"sibling"}},
+		{"without agent complete tree", PruneFilter{Before: "2026-11-02"}, "mimocode", false, false, []string{"parent", "child", "grandchild", "sibling"}},
+		{"newer descendant protects ancestors", PruneFilter{Before: "2025-01-01"}, "mimocode", false, false, []string{"sibling"}},
+		{"other project protects ancestors", PruneFilter{Project: "selected"}, "mimocode", false, false, []string{"sibling"}},
+		{"other prompt protects ancestors", PruneFilter{FirstMessage: "selected"}, "mimocode", false, false, []string{"sibling"}},
+		{"message count protects ancestors", PruneFilter{MaxMessages: new(1)}, "mimocode", false, false, []string{"sibling"}},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			d := testDB(t)
@@ -2867,7 +2872,7 @@ func TestFindPruneCandidatesAgentTrees(t *testing.T) {
 	}
 }
 
-func TestFindPruneCandidatesExcludesParents(t *testing.T) {
+func TestFindPruneCandidatesIncludesParents(t *testing.T) {
 	d := testDB(t)
 
 	// Create a parent -> child chain.
@@ -2893,12 +2898,7 @@ func TestFindPruneCandidatesExcludesParents(t *testing.T) {
 
 	ids := collectIDs(got)
 
-	// Parent should be excluded; child and standalone eligible.
-	require.Len(t, got, 2, "got candidates %v", ids)
-	for _, s := range got {
-		assert.NotEqual(t, "parent1", s.ID,
-			"parent1 should be excluded, got candidates: %v", ids)
-	}
+	assert.ElementsMatch(t, []string{"parent1", "child1", "standalone"}, ids)
 }
 
 func TestFindPruneCandidatesLikeEscaping(t *testing.T) {

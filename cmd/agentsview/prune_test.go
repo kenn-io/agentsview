@@ -211,6 +211,53 @@ func TestPrunerEmptyFilterReturnsError(t *testing.T) {
 		"error should mention filter requirement")
 }
 
+func TestPrunerPrunesChainsInOnePass(t *testing.T) {
+	d := dbtest.OpenTestDB(t)
+	root := t.TempDir()
+	rows := []struct{ id, parent, ended string }{
+		{"parent", "", "2024-01-01"}, {"child", "parent", "2024-01-01"},
+		{"grandchild", "child", "2024-01-01"}, {"protected", "", "2024-01-01"},
+		{"protected-child", "protected", "2024-01-01"}, {"newer", "protected-child", "2026-11-03"},
+		{"trash", "", "2024-01-01"},
+	}
+	for _, row := range rows {
+		path := filepath.Join(root, row.id+".jsonl")
+		require.NoError(t, os.WriteFile(path, []byte("transcript"), 0o600))
+		dbtest.SeedSession(t, d, row.id, "test", func(s *db.Session) {
+			s.Agent, s.FilePath, s.EndedAt = "claude", new(path), new(row.ended)
+			if row.parent != "" {
+				s.ParentSessionID = new(row.parent)
+			}
+		})
+	}
+	_, err := d.SoftDeleteSessions(t.Context(), []string{"trash"})
+	require.NoError(t, err)
+	pruner, _ := newTestPruner(t, d, "y\n")
+	filter := db.PruneFilter{Before: "2026-11-02"}
+	require.NoError(t, pruner.Prune(t.Context(), PruneConfig{Filter: filter, DryRun: true}))
+	for _, row := range rows {
+		session, err := d.GetSessionFull(t.Context(), row.id)
+		require.NoError(t, err)
+		assert.NotNil(t, session, row.id)
+		assert.False(t, d.IsSessionExcluded(t.Context(), row.id), row.id)
+		assert.FileExists(t, filepath.Join(root, row.id+".jsonl"))
+	}
+	require.NoError(t, pruner.Prune(t.Context(), PruneConfig{Filter: filter}))
+	for _, row := range rows {
+		session, err := d.GetSessionFull(t.Context(), row.id)
+		require.NoError(t, err)
+		deleted := row.id == "parent" || row.id == "child" || row.id == "grandchild"
+		if deleted {
+			assert.Nil(t, session, row.id)
+			assert.NoFileExists(t, filepath.Join(root, row.id+".jsonl"))
+		} else {
+			assert.NotNil(t, session, row.id)
+			assert.FileExists(t, filepath.Join(root, row.id+".jsonl"))
+		}
+		assert.Equal(t, deleted, d.IsSessionExcluded(t.Context(), row.id), row.id)
+	}
+}
+
 func TestConfirm(t *testing.T) {
 	tests := []struct {
 		name  string
