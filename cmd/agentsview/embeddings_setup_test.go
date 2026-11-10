@@ -285,8 +285,10 @@ func TestLiveEmbeddingsSetupStatusAndExportDuringWriteLockRetry(t *testing.T) {
 	movedPath := filepath.Join(t.TempDir(), "moved.db")
 	require.NoError(t, os.WriteFile(filepath.Join(dir, "config.toml"), fmt.Appendf(nil, "[vector]\nenabled = true\ndb_path = %q\n", movedPath), 0o600))
 	releaseHeld()
-	require.NoError(t, owner.Setup(0))
-	<-owner.done
+	writeDaemonRuntimeForTest(t, dir, "127.0.0.1", port, "test", false)
+	var out strings.Builder
+	require.NoError(t, runEmbeddingsBuild(t.Context(), &out, strings.NewReader("yes\n"), EmbeddingsBuildOptions{}))
+	assert.Contains(t, out.String(), "Retry search setup?")
 	setup, err := owner.SetupStatus(t.Context())
 	require.NoError(t, err)
 	require.Empty(t, setup.Error)
@@ -579,6 +581,7 @@ func TestCLIEmbeddingsSetup(t *testing.T) {
 	}{
 		{"download", "built-in", "yes\n", 1000001, false, false, false},
 		{"flagged", "built-in", "yes\n", 0, true, false, false},
+		{"enabled-flagged", "ollama", "yes\n", 0, true, false, true},
 		{"busy", "ollama", "yes\n", 0, false, true, false},
 		{"enabled", "ollama", "yes\n", 0, false, false, true},
 	} {
@@ -591,6 +594,9 @@ func TestCLIEmbeddingsSetup(t *testing.T) {
 			var posts, reads int
 			var approved int64
 			handlers := map[string]http.HandlerFunc{
+				"POST /api/v1/embeddings/build": func(w http.ResponseWriter, _ *http.Request) {
+					w.WriteHeader(http.StatusNotImplemented)
+				},
 				"GET /api/v1/embeddings/status": func(w http.ResponseWriter, _ *http.Request) {
 					w.Header().Set("Content-Type", "application/json")
 					reads++
@@ -660,6 +666,36 @@ func TestCLIEmbeddingsSetup(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestCLIEmbeddingsBuildStartsBeforeStatus(t *testing.T) {
+	setTestHome(t, t.TempDir())
+	dir := testDataDir(t)
+	writeEmbeddingsTestConfig(t, dir, "http://127.0.0.1:1")
+	var builds atomic.Int32
+	startEmbeddingsTestDaemon(t, dir, map[string]http.HandlerFunc{
+		"POST /api/v1/embeddings/build": func(w http.ResponseWriter, _ *http.Request) {
+			builds.Add(1)
+			w.WriteHeader(http.StatusAccepted)
+		},
+		"GET /api/v1/embeddings/status": func(w http.ResponseWriter, _ *http.Request) {
+			assert.EqualValues(t, 1, builds.Load(), "build must start before status is requested")
+			w.Header().Set("Content-Type", "application/json")
+			io.WriteString(w, `{"setup":{"error":"inspection failed"},"last_result":{}}`)
+		},
+	})
+	var out strings.Builder
+	require.NoError(t, runEmbeddingsBuild(t.Context(), &out, strings.NewReader(""), EmbeddingsBuildOptions{}))
+}
+
+func TestCLIEmbeddingsSetupCompletedWithInspectionError(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		io.WriteString(w, `{"setup":{"error":"inspection failed"},"last_result":{}}`)
+	}))
+	t.Cleanup(server.Close)
+	var out strings.Builder
+	require.NoError(t, pollDaemonBuildStatus(t.Context(), &out, embeddingsDaemonClient{baseURL: server.URL}, true))
 }
 
 func TestCLIEmbeddingsSetupRequiresWritableDaemon(t *testing.T) {

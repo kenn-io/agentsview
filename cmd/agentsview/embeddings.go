@@ -414,7 +414,22 @@ func runEmbeddingsBuild(
 		return requireVectorEnabled(cfg)
 	}
 	needsSetup := !cfg.Vector.Enabled
-	if !needsSetup && IsLocalDaemonActive(cfg.DataDir, cfg.AuthToken) {
+	flag := ""
+	switch {
+	case opts.FullRebuild:
+		flag = "full-rebuild"
+	case opts.Backstop:
+		flag = "backstop"
+	case opts.RepairInvalid:
+		flag = "repair-invalid"
+	case opts.Using != "":
+		flag = "using"
+	case strings.TrimSpace(opts.Store) != "" && strings.TrimSpace(opts.Store) != "messages":
+		flag = "store"
+	case opts.IncludeAutomatedSet:
+		flag = "include-automated"
+	}
+	if !needsSetup && flag != "" && IsLocalDaemonActive(cfg.DataDir, cfg.AuthToken) {
 		client, err := resolveEmbeddingsDaemonClient(cfg)
 		if err != nil {
 			return err
@@ -426,21 +441,6 @@ func runEmbeddingsBuild(
 		}
 	}
 	if needsSetup {
-		flag := ""
-		switch {
-		case opts.FullRebuild:
-			flag = "full-rebuild"
-		case opts.Backstop:
-			flag = "backstop"
-		case opts.RepairInvalid:
-			flag = "repair-invalid"
-		case opts.Using != "":
-			flag = "using"
-		case strings.TrimSpace(opts.Store) != "" && strings.TrimSpace(opts.Store) != "messages":
-			flag = "store"
-		case opts.IncludeAutomatedSet:
-			flag = "include-automated"
-		}
 		if flag != "" {
 			problem, action := "search by meaning is off", "turn it on"
 			if cfg.Vector.Enabled {
@@ -499,7 +499,20 @@ func runEmbeddingsBuild(
 		Using:            opts.Using,
 	}
 	if IsLocalDaemonActive(cfg.DataDir, cfg.AuthToken) {
-		return runEmbeddingsBuildDaemon(ctx, out, cfg, req)
+		client, err := resolveEmbeddingsDaemonClient(cfg)
+		if err != nil {
+			return err
+		}
+		client.store = daemonEmbeddingStore(req.Store)
+		err = client.startBuild(ctx, req)
+		apiErr, ok := errors.AsType[*daemonAPIError](err)
+		if flag == "" && ok && apiErr.status == http.StatusNotImplemented {
+			status, statusErr := client.status(ctx)
+			if statusErr == nil && status.Setup != nil && status.Setup.Action == "turn-on" {
+				return setupEmbeddingsBuild(ctx, out, confirmation, cfg, client)
+			}
+		}
+		return finishDaemonBuild(ctx, out, client, err)
 	}
 	return runEmbeddingsBuildDirect(ctx, out, cfg, req)
 }
@@ -703,26 +716,17 @@ func runDirectBuild(
 	}
 }
 
-// runEmbeddingsBuildDaemon resolves the local daemon and runs the build
-// through its HTTP API.
-func runEmbeddingsBuildDaemon(
-	ctx context.Context, out io.Writer, cfg config.Config, req vector.BuildRequest,
-) error {
-	client, err := resolveEmbeddingsDaemonClient(cfg)
-	if err != nil {
-		return err
-	}
-	client.store = daemonEmbeddingStore(req.Store)
-	return buildViaDaemon(ctx, out, client, req)
-}
-
 // buildViaDaemon starts a build via POST /build, printing a status line
 // instead of failing when one is already running (409), then polls
 // /status until the build stops running.
 func buildViaDaemon(
 	ctx context.Context, out io.Writer, client embeddingsDaemonClient, req vector.BuildRequest,
 ) error {
-	if err := client.startBuild(ctx, req); err != nil {
+	return finishDaemonBuild(ctx, out, client, client.startBuild(ctx, req))
+}
+
+func finishDaemonBuild(ctx context.Context, out io.Writer, client embeddingsDaemonClient, err error) error {
+	if err != nil {
 		apiErr, hasApiErr := errors.AsType[*daemonAPIError](err)
 		if hasApiErr && apiErr.status == http.StatusConflict {
 			fmt.Fprintln(out, "a build is already running (daemon)")
@@ -745,7 +749,7 @@ func pollDaemonBuildStatus(
 		if err != nil {
 			return err
 		}
-		if setup && status.Setup != nil && status.Setup.Error != "" {
+		if setup && status.Setup != nil && status.Setup.Action != "" && status.Setup.Error != "" {
 			return errors.New(status.Setup.Error)
 		}
 		if setup && status.Setup != nil && status.Setup.Busy && status.Setup.TotalBytes > 0 {
@@ -1083,7 +1087,7 @@ func setupEmbeddingsBuild(ctx context.Context, out io.Writer, in *bufio.Scanner,
 	approved := int64(0)
 	if setup.Provider == "built-in" && setup.MissingBytes > 0 {
 		approved = setup.MissingBytes
-		fmt.Fprintf(out, "%s downloads %d MB once, shared by all Kenn apps.\n", action, (approved+999999)/1000000)
+		fmt.Fprintf(out, "%s downloads %d MB once, shared by all Kenn apps.\n", action, downloadMegabytes(approved))
 	} else {
 		provider := strings.Replace(setup.Provider, "ollama", "Ollama", 1)
 		fmt.Fprintf(out, "%s uses %s with %s.\n", action, provider, cfg.Vector.Embeddings.Model)
@@ -1110,6 +1114,11 @@ func joinActiveSetup(ctx context.Context, out io.Writer, cfg config.Config, clie
 	}
 	if setup != nil && setup.Enabled && setup.Action == "" {
 		fmt.Fprintln(out, "Search by meaning is on.")
+		var err error
+		cfg, err = loadDaemonClientConfig(config.ScopeVector)
+		if err != nil {
+			return true, fmt.Errorf("loading config: %w", err)
+		}
 		return true, buildViaDaemon(ctx, out, client, vector.BuildRequest{IncludeAutomated: vector.MessageIndexSpec().NormalizeIncludeAutomated(cfg.Vector.IncludeAutomated)})
 	}
 	return false, nil

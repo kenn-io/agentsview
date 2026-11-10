@@ -56,10 +56,12 @@ func prepareLocalEmbeddings(ctx context.Context, c config.VectorEmbeddingsConfig
 		return err
 	}
 	_, err = resolveLocalEmbeddings(ctx, server, func(_ context.Context, size int64) (bool, error) {
-		return confirmScanned(in, out, fmt.Sprintf("Download approximately %d MB for local semantic search?", (size+999999)/1000000)), nil
+		return confirmScanned(in, out, fmt.Sprintf("Download approximately %d MB for local semantic search?", downloadMegabytes(size))), nil
 	}, nil)
 	return err
 }
+
+func downloadMegabytes(size int64) int64 { return (size + 999999) / 1000000 }
 
 func lazyLocalEncoder(c config.VectorEmbeddingsConfig, name string, server config.VectorEmbeddingsServerConfig, role embedconfig.Role, retryRateLimits bool) kitvec.EncodeFunc {
 	var mu sync.Mutex
