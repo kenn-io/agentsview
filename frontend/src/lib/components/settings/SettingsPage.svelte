@@ -506,14 +506,6 @@
     padding-bottom: calc(var(--space-8) + var(--space-6));
   }
 
-  .settings-page :global(.kit-settings__nav-item--active),
-  .settings-page :global(.kit-settings__nav-item--active:hover) {
-    /* A neutral fill and primary ink mark the selected panel; no accent
-       edge. */
-    background: var(--selected-list-bg);
-    color: var(--text-primary);
-  }
-
   .settings-page.settings-no-results :global(.kit-settings__nav),
   .settings-page.settings-no-results :global(.kit-settings__panel) {
     display: none;

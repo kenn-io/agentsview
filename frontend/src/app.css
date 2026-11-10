@@ -291,15 +291,10 @@
   --role-code-frame-style: dashed;
 }
 
-/* An unclean ending is a warning, not an error. kit-ui paints it red;
-   the warning orange keeps it apart from the amber stale dot and from
-   real failures. Used by the sidebar, Top sessions rows, and its pill. */
-:root .kit-status-dot.kit-status-dot--unclean {
-  background: var(--accent-orange);
-}
-
-/* Light orange is too pale for a 3:1 status mark on white and on tinted
-   rows; step it toward primary ink, keeping the hue. */
+/* kit-ui paints an unclean StatusDot in --accent-orange. The app's light
+   orange is an agent identity hue, too pale for a 3:1 status mark on white
+   (about 2.6:1), so in light theme the dot steps toward primary ink,
+   keeping the hue. */
 :root:not(.dark) .kit-status-dot.kit-status-dot--unclean {
   background: color-mix(in srgb, var(--accent-orange) 72%, var(--text-primary));
 }
@@ -371,41 +366,6 @@ button {
 button:disabled {
   opacity: var(--opacity-disabled);
   cursor: not-allowed;
-}
-
-/* One disabled look for secondary actions: faded muted ink, a faint edge,
-   and no fill, so a disabled control never reads as a clickable outline
-   button. Dark takes a larger share of muted ink so the label stays
-   readable on the near-black surface, but still a clear step below the
-   secondary ink of enabled buttons. */
-:root {
-  --disabled-ink: color-mix(in srgb, var(--text-muted) 58%, var(--bg-surface));
-  --disabled-edge: var(--border-muted);
-}
-
-:root.dark {
-  --disabled-ink: color-mix(in srgb, var(--text-muted) 68%, var(--bg-surface));
-}
-
-/* A disabled primary (Save token, Connect on a read-only server) keeps a
-   faint accent fill and edge so it still reads as the panel's main action,
-   but its label uses the same disabled ink as a disabled secondary, so the
-   two read as equally unavailable side by side. */
-:root .kit-button--solid.kit-button--info:disabled {
-  opacity: 1;
-  background: color-mix(in srgb, var(--accent-blue) 12%, var(--bg-surface));
-  border-color: color-mix(in srgb, var(--accent-blue) 24%, var(--disabled-edge));
-  color: color-mix(in srgb, var(--accent-blue) 18%, var(--disabled-ink));
-  box-shadow: none;
-  cursor: not-allowed;
-}
-
-/* A disabled menu item often carries its reason ("Import unavailable in
-   read-only mode"). Muted ink at full opacity keeps it clearly disabled
-   beside secondary-ink items while the reason stays readable. */
-:root .kit-menu__item.kit-control-states[aria-disabled="true"] {
-  opacity: 1;
-  color: var(--text-muted);
 }
 
 /* Input reset */

@@ -137,27 +137,19 @@ kit-ui's `RangePicker`, which seeds its Custom tab from the same math.
 
 ### Known kit-ui gaps (tracked upstream)
 
-These app overrides stay until kit-ui covers them. Remove each one with the
-pin bump that adopts the kit-ui fix, not before.
+No app override waits on a kit-ui pull request at the current pin. One
+override and one accepted behavior remain:
 
-Waiting for kit-ui pull request `kenn-io/kit-ui#203`:
-
-- A disabled primary button (`.kit-button--solid.kit-button--info:disabled`
-  in `frontend/src/app.css`) keeps a faint accent fill and edge at full
-  opacity, with the same disabled ink as a disabled secondary button. It reads
-  the app's `--disabled-ink` and `--disabled-edge` tokens.
-- A disabled menu item stays at full opacity in muted ink, so its reason
-  ("Import unavailable in read-only mode") stays readable (`app.css`).
-- The current Settings panel in `SettingsLayout`'s navigation uses primary
-  ink instead of kit-ui's blue (`SettingsPage.svelte`).
-- An unclean session end is an orange `StatusDot`, apart from the red
-  failure and amber stale dots (`.kit-status-dot--unclean` in `app.css`).
-
-Accepted as kit-ui ships it, with a possible kit-ui follow-up:
-
+- In light theme, an unclean `StatusDot` mixes the app's `--accent-orange`
+  toward primary ink (`frontend/src/app.css`). kit-ui paints the dot in plain
+  `--accent-orange`, and the app's light orange is an agent identity hue at
+  about 2.6:1 on white, below the 3:1 a status mark needs. Drop the rule only
+  if kit-ui darkens the light dot itself; `e2e/text-contrast.spec.ts` checks
+  it.
 - With no current tab and the tabs collapsed, `TopBar`'s menu trigger reads
   "Primary navigation: —", and the open menu shows a disabled, checked "—"
-  row.
+  row. That is kit-ui's behavior, accepted as is; a kit-ui follow-up could
+  drop the check and the dash from the name.
 
 Resolved upstream (adopted at the current pin):
 
@@ -177,6 +169,12 @@ Resolved upstream (adopted at the current pin):
   language.
 - kit-ui's theme owns the selected-state pill, popover surface and edge, card
   edge, overlay backdrop and shadow, light text inks, and one icon line weight.
+- kit-ui draws a disabled primary button with a faint accent fill and edge at
+  full opacity, a disabled menu item in muted ink at full opacity, the current
+  Settings panel in primary ink, and an unclean `StatusDot` in orange. Its
+  theme defines `--disabled-ink`, `--disabled-edge`, and a default
+  `--accent-orange`; the app sets its own `--accent-orange`, an agent identity
+  hue, which the orange dot then uses (see the light-theme rule above).
 
 ## Legacy Exceptions
 
