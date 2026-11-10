@@ -301,7 +301,6 @@ func TestImageTextMembershipAndPruning(t *testing.T) {
 		dst := testDB(t)
 		require.NoError(t, dst.CopyImageTextFrom(t.Context(), source))
 	})
-
 }
 
 func imageTextSharedAcrossSessionWrites(t *testing.T) {

@@ -691,8 +691,8 @@ func retainedInlineFile(raw jsontext.Value, index int, hashImage bool) (Retained
 	if !ok {
 		return RetainedImage{}, false
 	}
-	var out io.Writer = io.Discard
-	var hash = sha256.New()
+	out := io.Discard
+	hash := sha256.New()
 	if hashImage {
 		out = hash
 	}
