@@ -1016,6 +1016,7 @@ func TestSyncEnsureSchemaRunsDDLWhenPushTableMissing(t *testing.T) {
 		})
 	}
 }
+
 func TestSyncEnsureSchemaRunsDDLWhenMappingTableMissing(t *testing.T) {
 	pg, state := newSchemaProbeDB(t, map[string][]string{
 		"sessions": {
