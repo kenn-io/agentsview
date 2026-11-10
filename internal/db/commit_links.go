@@ -230,6 +230,9 @@ func commitArgv(input string) (string, bool, bool) {
 	program := basename(args[0])
 	prefix := ""
 	if dir != "" {
+		if strings.HasPrefix(dir, "~") {
+			dir = "./" + dir
+		}
 		prefix = "cd " + shellquote.POSIXLiteral(dir) + " && "
 	}
 	if len(args) >= 4 && args[1] == "-l" && args[2] == "-c" {

@@ -36,6 +36,7 @@ func TestCommitLinksArgvCommands(t *testing.T) {
 		{"shell separate login option", `{"command":["bash","-l","-c","git commit"]}`, "/work"},
 		{"timeout", `{"command":["timeout","30","git","commit"]}`, "/work"},
 		{"env directory", `{"command":["env","-C","/repo","git","commit"]}`, "/repo"},
+		{"env literal tilde", `{"command":["env","-C","~/repo","git","commit"]}`, "/work/~/repo"},
 		{"env attached directory", `{"command":["env","-C/repo","git","commit"]}`, "/repo"},
 		{"env long directory", `{"command":["/usr/bin/env","--chdir","/repo","git","commit"]}`, "/repo"},
 		{"env equals directory", `{"command":["env","--chdir=/repo","git","commit"]}`, "/repo"},
