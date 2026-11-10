@@ -156,8 +156,8 @@ func commitRepository(input, cwd string) string {
 	command := commitCommandText(input)
 	_, _, argv := commitArgv(input)
 	if invocation := commitInvocationRE.FindStringIndex(command); invocation != nil {
-		if matches := commitCDRE.FindAllStringSubmatch(command[:invocation[0]], -1); len(matches) > 0 {
-			cwd = resolve(cwd, shellWord(matches[len(matches)-1][1]), false)
+		for _, match := range commitCDRE.FindAllStringSubmatch(command[:invocation[0]], -1) {
+			cwd = resolve(cwd, shellWord(match[1]), false)
 		}
 	}
 	for _, option := range commitGlobalOptionRE.FindAllString(commitInvocationRE.FindString(command), -1) {
