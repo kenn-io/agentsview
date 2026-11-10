@@ -625,7 +625,17 @@ func (d *DB) backfillCommitLinksLocked(ctx context.Context, w *writerHandle) err
 	if err != nil {
 		return err
 	}
-	if !archiveOnly && len(ScopedDataVersionProviders(version, dataVersion)) > 0 {
+	if archiveOnly && version < 170 {
+		// Earlier versions still need their preservation rebuild after a restart.
+		if version < 169 {
+			if _, err := tx.ExecContext(ctx, `INSERT INTO stats(key,value) VALUES (?,170) ON CONFLICT(key) DO UPDATE SET value=max(value,excluded.value)`, scopedUpgradePendingKey); err != nil {
+				return err
+			}
+		}
+		if err := writeUserVersion(ctx, tx, 170); err != nil {
+			return err
+		}
+	} else if !archiveOnly && len(ScopedDataVersionProviders(version, dataVersion)) > 0 {
 		if err := advanceDataVersion(ctx, tx, dataVersion); err != nil {
 			return err
 		}

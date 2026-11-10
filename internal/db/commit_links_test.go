@@ -630,6 +630,34 @@ func TestCommitLinksBackfillAdvancesOlderScopedVersion(t *testing.T) {
 	require.Len(t, got.Commits, 1)
 }
 
+func TestCommitLinksBackfillArchiveOnlyVersion(t *testing.T) {
+	for _, oldVersion := range []int{168, 169} {
+		t.Run(strconv.Itoa(oldVersion), func(t *testing.T) {
+			d := testDB(t)
+			insertSession(t, d, "s1", "project-a")
+			insertMessages(t, d, commitMessages("s1", `{"command":["bash","-lc","git commit"]}`, "[main abc1234] Fix")...)
+			require.NoError(t, d.EnableArchiveOnly(t.Context()))
+			_, err := d.getWriter().Exec(t.Context(), `DELETE FROM commit_links; DELETE FROM stats WHERE key='commit_links_backfill_v2'; PRAGMA user_version=`+strconv.Itoa((1<<20)+oldVersion))
+			require.NoError(t, err)
+			path := d.Path()
+			require.NoError(t, d.Close())
+			d, err = OpenIsolatedContext(t.Context(), path)
+			require.NoError(t, err)
+			var version int
+			require.NoError(t, d.getReader().QueryRowContext(t.Context(), `PRAGMA user_version`).Scan(&version))
+			assert.Equal(t, (1<<20)+170, version)
+			got, err := d.SessionCommitLinks(t.Context(), "s1")
+			require.NoError(t, err)
+			require.Len(t, got.Commits, 1)
+			require.NoError(t, d.Close())
+			needs, rebuild, err := ArchiveResyncState(t.Context(), path)
+			require.NoError(t, err)
+			assert.Equal(t, oldVersion < 169, needs)
+			assert.Equal(t, oldVersion < 169, rebuild)
+		})
+	}
+}
+
 func TestCommitLinksResyncAndPolicy(t *testing.T) {
 	old := testDB(t)
 	insertSession(t, old, "written", "project-a")
