@@ -16,6 +16,13 @@ The latest release is
 
 **Bug fixes**
 
+- Semantic search builds on Kit's built-in local embeddings server no longer
+  fail on every attempt with `embed request failed`. The built-in server runs
+  the model on the CPU, so it now defaults to 8 inputs per request, one request
+  at a time, and a 5-minute request timeout. A request that still times out is
+  retried as two smaller requests, and the error now says the request timed
+  out. Set `batch_size`, `concurrency`, or `timeout` on a `local = true` server
+  to tune it.
 - Prune removes matching parent and child session chains in one pass, even
   without `--agent`.
 - Commit lookups keep live prompts and other archives' deleted-session links.
