@@ -10,8 +10,13 @@ import { serveTranscript, transcriptMessage } from "./helpers/mock-transcript";
 // so both kinds of row are measured on every run.
 const SESSION_ID = "test-session-xlarge-5500";
 
-function bash(command: string): ToolCall {
-  return { tool_name: "Bash", category: "Bash", input_json: JSON.stringify({ command }) };
+function bash(command: string, callIndex = 0): ToolCall {
+  return {
+    call_index: callIndex,
+    tool_name: "Bash",
+    category: "Bash",
+    input_json: JSON.stringify({ command }),
+  };
 }
 
 const message = (ordinal: number, extra: Partial<Message>) =>
@@ -25,7 +30,7 @@ const messages: Message[] = [
   message(4, { content: "Now in parallel.", content_length: 16 }),
   message(5, {
     has_tool_use: true,
-    tool_calls: [bash("go vet ./..."), bash("npm run check"), bash("git status")],
+    tool_calls: [bash("go vet ./...", 0), bash("npm run check", 1), bash("git status", 2)],
   }),
 ];
 

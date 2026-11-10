@@ -18,6 +18,7 @@ test("a long hunk header wraps inside the diff strip", async ({ page }) => {
       has_tool_use: true,
       tool_calls: [
         {
+          call_index: 0,
           tool_name: "apply_patch",
           category: "Edit",
           input_json: JSON.stringify({
