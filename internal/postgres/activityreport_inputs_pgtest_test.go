@@ -116,6 +116,13 @@ func TestPGActivityReportInputRangeSwitchAfterPush(t *testing.T) {
 	store.pg = counter
 	pgKeptSession(t, local, "a", "project-a", "2026-06-14")
 	pgKeptPush(t, syncer, false)
+	// Give each range enough real usage rows that all three exceed 128 MiB.
+	_, err := store.DB().ExecContext(t.Context(), `INSERT INTO messages
+		(session_id, ordinal, role, content, timestamp, model, token_usage, claude_message_id, claude_request_id)
+		SELECT 'a', i + 1, 'assistant', '', '2026-06-14T10:01:00Z', 'kept-model',
+		'{"output_tokens":1}', repeat('x', 500) || i::text, 'request'
+		FROM generate_series(1, 100000) AS i`)
+	require.NoError(t, err)
 	now := time.Date(2026, 6, 14, 12, 0, 0, 0, time.UTC)
 	f := db.AnalyticsFilter{Timezone: "UTC"}
 	var queries []activity.Query
@@ -131,8 +138,12 @@ func TestPGActivityReportInputRangeSwitchAfterPush(t *testing.T) {
 	}
 	pgKeptSession(t, local, "b", "project-a", "2026-06-14")
 	pgKeptPush(t, syncer, false)
+	fresh, err := NewStore(t.Context(), testPGURL(t), syncer.schema, true)
+	require.NoError(t, err)
+	defer fresh.Close()
 	for _, q := range queries {
-		pgKeptBuild(t, store, f, q, true)
+		got := pgKeptBuild(t, store, f, q, true)
+		requirePGKeptEqual(t, pgKeptBuild(t, fresh, f, q, true), got)
 	}
 	require.Len(t, counter.transcriptReads, 6)
 	for _, ids := range counter.transcriptReads[3:] {
