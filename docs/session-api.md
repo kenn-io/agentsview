@@ -1599,7 +1599,8 @@ because their stored tool calls are already gone.
 Transcript links require a `git commit` invocation, allowing Git global options,
 and Git's commit summary with a SHA of 7 to 64 characters in the call's stored
 output. Quiet commits and summaries with shorter SHAs have no link. Older Codex
-commands stored as argument arrays are unsupported. Codex output received
+commands stored as argument arrays support direct Git calls and scripts passed
+to `sh`, `bash`, or `zsh` with `-c` or `-lc`. Codex output received
 through a later `write_stdin` poll links to the original commit call when its
 process ID matches. Polls with no originating commit call produce no links.
 Code-mode scripts with exactly one tool call and a fixed command literal can
