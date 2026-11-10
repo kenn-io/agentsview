@@ -663,8 +663,7 @@ CREATE INDEX IF NOT EXISTS idx_provider_freshness_updated_at
 // (169: keep DeepSeek Harness native message ids as message source ids.
 // Re-parse DeepSeek Harness sources in place; source and session identities
 // are unchanged.)
-// (170: protect recovered commit links from older archive readers. Parser
-// output is unchanged.)
+// (170: reparse Codex sources for recovered commit links.)
 const dataVersion = 170
 
 const archiveOnlyVersionBase = 1 << 20
@@ -2299,8 +2298,7 @@ func probeDatabaseConn(ctx context.Context,
 	if schema {
 		return true, false, false, nil
 	}
-	providers := ScopedDataVersionProviders(version, dataVersion)
-	fullRebuild = archiveOnly || version < dataVersion && providers == nil
+	fullRebuild = archiveOnly || version < dataVersion && len(ScopedDataVersionProviders(version, dataVersion)) == 0
 	// Archive-only archives cannot reparse sources, so any stale version
 	// needs their preservation rebuild.
 	countScoped := includeScoped || archiveOnly
@@ -2316,7 +2314,7 @@ func probeDatabaseConn(ctx context.Context,
 	if version >= dataVersion {
 		return false, false, false, nil
 	}
-	return false, fullRebuild || countScoped && len(providers) > 0, fullRebuild, nil
+	return false, countScoped || fullRebuild, fullRebuild, nil
 }
 
 // needsSchemaRepair probes for required legacy columns that may be missing in

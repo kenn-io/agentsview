@@ -27,7 +27,7 @@ const (
 	MaxCommitSHAs          = 200
 	commitLinksBackfillKey = "commit_links_backfill_v2"
 	commitCommandToken     = `(?:"(?:\\[\s\S]|[^"\\])*"|'(?:[^']|'\\'')*'|[^\s;&|"']+)`
-	commitGlobalOption     = `(?:-[cC]\s+` + commitCommandToken + `|--(?:git-dir|work-tree|namespace|config-env|exec-path)(?:=|\s+)` + commitCommandToken + `|-[pP]|--(?:no-pager|paginate|bare|no-replace-objects|literal-pathspecs|glob-pathspecs|noglob-pathspecs|icase-pathspecs|no-optional-locks|no-lazy-fetch|no-advice))`
+	commitGlobalOption     = `(?:-[cC]\s+` + commitCommandToken + `|--(?:git-dir|work-tree|namespace|config-env)(?:=|\s+)` + commitCommandToken + `|-[pP]|--(?:no-pager|paginate|bare|no-replace-objects|literal-pathspecs|glob-pathspecs|noglob-pathspecs|icase-pathspecs|no-optional-locks|no-lazy-fetch|no-advice))`
 )
 
 var (
@@ -40,7 +40,7 @@ var (
 	commitWorkdirRE           = regexp.MustCompile(`["']?(?:workdir|cwd)["']?\s*:\s*("(?:\\.|[^"\\])*"|'[^']*')`)
 	commitCommandRE           = regexp.MustCompile(`["']?(?:cmd|command)["']?\s*:\s*("(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'|\x60(?:\\.|[^\x60\\])*\x60)`)
 	commitToolCallRE          = regexp.MustCompile(`\btools\.\w+\s*\(`)
-	commitCDRE                = regexp.MustCompile(`(?:^|[;&|\n])\s*cd\s+(` + commitCommandToken + `)`)
+	commitCDRE                = regexp.MustCompile(`(?:^|[;&|\n])\s*cd\s+("[^"]*"|'[^']*'|[^\s;&|]+)`)
 	commitGlobalOptionRE      = regexp.MustCompile(commitGlobalOption)
 	commitPollRE              = regexp.MustCompile(`\btools\.write_stdin\s*\(\s*\{[^{}]*["']?session_id["']?\s*:\s*([0-9]+)`)
 	commitRunningRE           = regexp.MustCompile(`(?m)^Process running with session ID ([0-9]+)\r?$`)
@@ -155,8 +155,8 @@ func commitRepository(input, cwd string) string {
 	}
 	command := commitCommandText(input)
 	if invocation := commitInvocationRE.FindStringIndex(command); invocation != nil {
-		for _, match := range commitCDRE.FindAllStringSubmatch(command[:invocation[0]], -1) {
-			cwd = resolve(cwd, shellWord(match[1]))
+		if matches := commitCDRE.FindAllStringSubmatch(command[:invocation[0]], -1); len(matches) > 0 {
+			cwd = resolve(cwd, matches[len(matches)-1][1])
 		}
 	}
 	for _, option := range commitGlobalOptionRE.FindAllString(commitInvocationRE.FindString(command), -1) {
@@ -176,16 +176,6 @@ func commitArgv(input string) (string, bool) {
 	}
 	args := payload.Command
 	basename := func(name string) string { return path.Base(strings.ReplaceAll(name, `\`, "/")) }
-	if len(args) >= 3 && basename(args[0]) == "timeout" {
-		args = args[2:]
-	}
-	dir := ""
-	if len(args) > 0 && basename(args[0]) == "env" {
-		var ok bool
-		if args, dir, ok = commitEnvArgs(args); !ok {
-			return "", true
-		}
-	}
 	if len(args) == 0 {
 		return "", true
 	}
@@ -197,46 +187,17 @@ func commitArgv(input string) (string, bool) {
 		return shellquote.POSIX(arg)
 	}
 	program := basename(args[0])
-	prefix := ""
-	if dir != "" {
-		prefix = "cd " + word(dir) + " && "
-	}
-	if len(args) >= 4 && args[1] == "-l" && args[2] == "-c" {
-		args = append(args[:1], args[2:]...)
-	}
 	if len(args) >= 3 && (program == "sh" || program == "bash" || program == "zsh") && (args[1] == "-c" || args[1] == "-lc") {
-		return prefix + args[2], true
+		return args[2], true
 	}
-	if program != "git" && !strings.EqualFold(program, "git.exe") {
+	if program != "git" {
 		return "", true
 	}
 	args[0] = "git"
 	for i, arg := range args {
 		args[i] = word(arg)
 	}
-	return prefix + strings.Join(args, " "), true
-}
-
-// commitEnvArgs strips env's assignments and -C directory, returning the wrapped argv and directory.
-func commitEnvArgs(args []string) ([]string, string, bool) {
-	dir := ""
-	for i := 1; i < len(args); i++ {
-		switch arg := args[i]; {
-		case arg == "-C" || arg == "--chdir":
-			if i+1 == len(args) {
-				return nil, "", false
-			}
-			i++
-			dir = args[i]
-		case strings.HasPrefix(arg, "-C") || strings.HasPrefix(arg, "--chdir="):
-			dir = arg[strings.IndexAny(arg, "C=")+1:] // the first C or = ends the matched prefix
-		case strings.HasPrefix(arg, "-"):
-			return nil, "", false
-		case !strings.Contains(arg, "="): // assignments pass through
-			return args[i:], dir, true
-		}
-	}
-	return nil, "", false
+	return strings.Join(args, " "), true
 }
 
 func commitCommandText(input string) string {
@@ -656,25 +617,6 @@ func (d *DB) backfillCommitLinksLocked(ctx context.Context, w *writerHandle) err
 	}
 	if _, err := tx.ExecContext(ctx, `INSERT OR REPLACE INTO stats(key,value) VALUES (?,1)`, commitLinksBackfillKey); err != nil {
 		return err
-	}
-	version, archiveOnly, err := readUserVersion(ctx, tx)
-	if err != nil {
-		return err
-	}
-	if archiveOnly && version < 170 {
-		// Earlier versions still need their preservation rebuild after a restart.
-		if version < 169 {
-			if _, err := tx.ExecContext(ctx, `INSERT INTO stats(key,value) VALUES (?,170) ON CONFLICT(key) DO UPDATE SET value=max(value,excluded.value)`, scopedUpgradePendingKey); err != nil {
-				return err
-			}
-		}
-		if err := writeUserVersion(ctx, tx, 170); err != nil {
-			return err
-		}
-	} else if !archiveOnly && ScopedDataVersionProviders(version, dataVersion) != nil {
-		if err := advanceDataVersion(ctx, tx, dataVersion); err != nil {
-			return err
-		}
 	}
 	return tx.Commit()
 }

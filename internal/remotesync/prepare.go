@@ -1140,7 +1140,7 @@ func (hs RemoteSync) prepareMirror(
 	dataRebuildPending := importedDataVersion != currentDataVersion ||
 		dataRebuildRequested || journal.RequiredDataVersion != 0
 	if dataRebuildPending && journal.RequiredDataVersion != currentDataVersion {
-		if scopedProviders != nil ||
+		if len(scopedProviders) > 0 ||
 			bootstrap && !dataRebuildRequested && !journal.FullImport {
 			journal.RequiredDataVersion = currentDataVersion
 			journal.DataRebuildCacheVersion = 0
@@ -1148,7 +1148,7 @@ func (hs RemoteSync) prepareMirror(
 			journal = requireMirrorDataVersionImport(journal, currentDataVersion)
 		}
 	}
-	if journal.RequiredDataVersion != 0 && fullReason == "" && scopedProviders == nil {
+	if journal.RequiredDataVersion != 0 && fullReason == "" && len(scopedProviders) == 0 {
 		fullReason = FullImportDataRebuild
 		if bootstrap {
 			fullReason = FullImportBootstrap
@@ -1233,7 +1233,6 @@ func (hs RemoteSync) prepareMirror(
 		))
 	}
 	dataRebuild := journal.RequiredDataVersion != 0
-	versionOnly := scopedProviders != nil && len(scopedProviders) == 0 && !dataRebuildRequested
 	attemptCacheDataVersion := 0
 	if dataRebuild {
 		attemptCacheDataVersion = currentDataVersion
@@ -1249,8 +1248,8 @@ func (hs RemoteSync) prepareMirror(
 		Journal: journal, FullReason: fullReason,
 		ScopedProviders:          scopedProviders,
 		ForceParse:               hs.forceParseRequested(),
-		ForceFullParseAfterCache: dataRebuild && !versionOnly,
-		ResetAttemptCache: dataRebuild && !versionOnly &&
+		ForceFullParseAfterCache: dataRebuild,
+		ResetAttemptCache: dataRebuild &&
 			journal.DataRebuildCacheVersion != currentDataVersion,
 		AttemptCacheDataVersion: attemptCacheDataVersion,
 	})

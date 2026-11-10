@@ -1434,22 +1434,6 @@ func TestHTTPAntigravityClosedWALWriterSkipsIdleArchives(t *testing.T) {
 	}
 }
 
-func TestHTTPVersionOnlyUpgradeKeepsMirrorIncremental(t *testing.T) {
-	remote := newMirrorTestRemote(t)
-	remote.writeSession(t, "session.jsonl", time.Date(2026, 8, 14, 10, 0, 0, 0, time.UTC), "hello")
-	database, hs := newMirrorSync(t, remote, t.TempDir())
-	_, err := hs.Run(t.Context())
-	require.NoError(t, err)
-	require.NoError(t, database.SetRemoteImportDataVersion(t.Context(), hs.Host, 169))
-	got, err := hs.Run(t.Context())
-	require.NoError(t, err)
-	assert.Empty(t, got.FullReason)
-	assert.Zero(t, got.SessionsSynced)
-	version, err := database.RemoteImportDataVersion(t.Context(), hs.Host)
-	require.NoError(t, err)
-	assert.Equal(t, 170, version)
-}
-
 func TestHTTPUnchangedMirrorImportsIntoNewDatabaseGeneration(t *testing.T) {
 	remote := newMirrorTestRemote(t)
 	remote.writeSession(

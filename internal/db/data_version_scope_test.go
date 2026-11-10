@@ -30,56 +30,12 @@ func TestAntigravityCLIPromptEnvelopeUpgradeScopes(t *testing.T) {
 }
 
 // Version 134 reshapes Codex session IDs, so it must rebuild every provider.
+func TestCommitLinkUpgradeScope(t *testing.T) {
+	assert.Equal(t, []parser.AgentType{parser.AgentCodex}, ScopedDataVersionProviders(169, 170))
+}
+
 func TestCodexLegacyPageVersionRebuildsEveryProvider(t *testing.T) {
 	assert.Nil(t, ScopedDataVersionProviders(133, 134))
-}
-
-func TestVersionOnlyUpgradeScope(t *testing.T) {
-	assert.NotNil(t, ScopedDataVersionProviders(169, 170))
-	assert.Empty(t, ScopedDataVersionProviders(169, 170))
-	assert.Equal(t, []parser.AgentType{parser.AgentDeepSeekHarness}, ScopedDataVersionProviders(168, 170))
-	assert.Equal(t, 164, AgentDataVersion(parser.AgentCodex))
-}
-
-func TestVersionOnlyReadOnlyArchiveNeedsResync(t *testing.T) {
-	d := testDB(t)
-	require.NoError(t, d.Update(t.Context(), func(tx *sql.Tx) error {
-		return writeUserVersion(t.Context(), tx, 169)
-	}))
-	path := d.Path()
-	require.NoError(t, d.Close())
-	readOnly, err := OpenReadOnly(t.Context(), path)
-	require.NoError(t, err)
-	t.Cleanup(func() { require.NoError(t, readOnly.Close()) })
-	assert.False(t, readOnly.NeedsResync())
-	needs, full, err := ArchiveResyncState(t.Context(), path)
-	require.NoError(t, err)
-	assert.False(t, needs)
-	assert.False(t, full)
-}
-
-func TestVersionOnlyUpgradePreservesParserState(t *testing.T) {
-	d := testDB(t)
-	for _, id := range []string{"current", "retry"} {
-		insertSession(t, d, id, "project", func(s *Session) { s.Agent = "codex" })
-	}
-	require.NoError(t, d.SetSessionDataVersion(t.Context(), "current", 169))
-	require.NoError(t, d.SetSessionDataVersion(t.Context(), "retry", 168))
-	require.NoError(t, d.ReplaceSkippedFiles(t.Context(), map[string]int64{"source?agent=codex": 1}))
-	require.NoError(t, d.Update(t.Context(), func(tx *sql.Tx) error {
-		return writeUserVersion(t.Context(), tx, 169)
-	}))
-	require.NoError(t, d.Update(t.Context(), func(tx *sql.Tx) error {
-		return advanceDataVersion(t.Context(), tx, 170)
-	}))
-	assert.Equal(t, 170, d.GetSessionDataVersion(t.Context(), "current"))
-	assert.Equal(t, 168, d.GetSessionDataVersion(t.Context(), "retry"))
-	skips, err := d.LoadSkippedFiles(t.Context())
-	require.NoError(t, err)
-	assert.Equal(t, map[string]int64{"source?agent=codex": 1}, skips)
-	var pending int
-	require.NoError(t, d.getReader().QueryRowContext(t.Context(), `SELECT count(*) FROM stats WHERE key=?`, scopedUpgradePendingKey).Scan(&pending))
-	assert.Zero(t, pending)
 }
 
 func TestDialogueUpgradeReparsesClassifiedProviders(t *testing.T) {
@@ -124,6 +80,11 @@ func TestValidateDataVersionScopes(t *testing.T) {
 				dataVersion + 1: {parser.AgentHermes},
 			},
 			wantErr: "declare only versions",
+		},
+		{
+			name:    "empty declaration",
+			scopes:  map[int][]parser.AgentType{dataVersion: {}},
+			wantErr: "lists no providers",
 		},
 		{
 			name:    "stored alias",

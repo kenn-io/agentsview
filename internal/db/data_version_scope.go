@@ -12,8 +12,7 @@ import (
 
 // dataVersionScopes maps a parser data version to the providers whose stored
 // output it changes. A declared version reparses those providers' sources in
-// place; an empty declaration needs no reparse, and an undeclared version
-// requires a full rebuild.
+// place; an undeclared version requires a full rebuild.
 //
 // Declare a version only when the reparse preserves source and session
 // identities, and prove that with a regression test. List every provider
@@ -56,7 +55,7 @@ var dataVersionScopes = map[int][]parser.AgentType{
 	167: {parser.AgentClaude, parser.AgentCowork, parser.AgentQoder, parser.AgentIcodemate},
 	168: {parser.AgentAntigravity, parser.AgentAntigravityCLI},
 	169: {parser.AgentDeepSeekHarness},
-	170: {},
+	170: {parser.AgentCodex},
 }
 
 // firstScopedDataVersion is the oldest version that may be declared. Released
@@ -70,16 +69,15 @@ const scopedUpgradePendingKey = "scoped_upgrade_pending"
 
 // ScopedDataVersionProviders returns the providers to reparse when an
 // archive moves from one parser version to another. It returns nil when any
-// version in the range requires a full rebuild. A non-nil empty slice means
-// the range changes no parser output.
+// version in the range requires a full rebuild.
 func ScopedDataVersionProviders(from, to int) []parser.AgentType {
 	if from <= 0 || from >= to {
 		return nil
 	}
-	affected := make([]parser.AgentType, 0)
+	var affected []parser.AgentType
 	for version := from + 1; version <= to; version++ {
-		providers, declared := dataVersionScopes[version]
-		if !declared {
+		providers := dataVersionScopes[version]
+		if len(providers) == 0 {
 			return nil
 		}
 		affected = append(affected, providers...)
@@ -93,8 +91,8 @@ func ScopedDataVersionProviders(from, to int) []parser.AgentType {
 // invalidate unaffected agents.
 func AgentDataVersion(agent parser.AgentType) int {
 	for version := dataVersion; version > 0; version-- {
-		providers, declared := dataVersionScopes[version]
-		if !declared {
+		providers := dataVersionScopes[version]
+		if len(providers) == 0 {
 			return version
 		}
 		for _, provider := range providers {
@@ -110,7 +108,7 @@ func AgentDataVersion(agent parser.AgentType) int {
 // full rebuild.
 func fullRebuildDataVersion() int {
 	for version := dataVersion; version > 0; version-- {
-		if _, declared := dataVersionScopes[version]; !declared {
+		if len(dataVersionScopes[version]) == 0 {
 			return version
 		}
 	}
@@ -121,6 +119,9 @@ func fullRebuildDataVersion() int {
 // apply safely.
 func validateDataVersionScopes(scopes map[int][]parser.AgentType) error {
 	for version, providers := range scopes {
+		if len(providers) == 0 {
+			return fmt.Errorf("data version %d: declaration lists no providers", version)
+		}
 		for _, provider := range providers {
 			if _, ok := parser.AgentByType(provider); !ok {
 				return fmt.Errorf(
@@ -174,10 +175,6 @@ func advanceDataVersion(ctx context.Context, tx *sql.Tx, target int) error {
 			scopedUpgradePendingKey, target,
 		); err != nil {
 			return fmt.Errorf("recording pending scoped upgrade: %w", err)
-		}
-	} else if providers != nil {
-		if err := promoteUnaffectedSessions(ctx, tx, current, target, nil); err != nil {
-			return err
 		}
 	}
 	return writeUserVersion(ctx, tx, max(current, target))

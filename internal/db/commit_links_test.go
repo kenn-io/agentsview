@@ -32,22 +32,10 @@ func TestCommitLinksArgvCommands(t *testing.T) {
 	}{
 		{"issue bash -lc", `{"command":["bash","-lc","git commit -m fix"]}`, "/work"},
 		{"shell trailing double quote", `{"command":["bash","-lc","git -C \"/work/a\\\"\" commit"]}`, `/work/a"`},
-		{"shell separate login option", `{"command":["bash","-l","-c","git commit"]}`, "/work"},
-		{"timeout", `{"command":["timeout","30","git","commit"]}`, "/work"},
-		{"env directory", `{"command":["env","-C","/repo","git","commit"]}`, "/repo"},
-		{"env literal tilde", `{"command":["env","-C","~/repo","git","commit"]}`, "/work/~/repo"},
-		{"env long directory", `{"command":["/usr/bin/env","--chdir","/repo","git","commit"]}`, "/repo"},
-		{"env equals option-like directory", `{"command":["env","--chdir=-Cfoo","git","commit"]}`, "/work/-Cfoo"},
-		{"env attached option-like directory", `{"command":["env","-C--chdir=foo","git","commit"]}`, "/work/--chdir=foo"},
-		{"shell cd apostrophe", `{"command":["bash","-lc","cd '/work/a'\\''b' && git commit -m fix"]}`, "/work/a'b"},
 		{"sh -c", `{"command":["sh","-c","git commit -m fix"]}`, "/work"},
 		{"absolute zsh", `{"command":["/bin/zsh","-lc","git commit -m fix"]}`, "/work"},
-		{"env shell", `{"command":["env","NAME=value","bash","-lc","cd /repo && git commit"]}`, "/repo"},
-		{"env directory and shell cd", `{"command":["env","-C","/repo","bash","-lc","cd sub && git commit"]}`, "/repo/sub"},
-		{"windows git executable", `{"command":["C:\\Program Files\\Git\\bin\\git.exe","-C","/repo","commit"]}`, "/repo"},
 		{"trailing apostrophe", `{"command":["git","-C","/work/a'","commit"]}`, "/work/a'"},
 		{"literal tilde", `{"command":["git","-C","~/repo","commit"]}`, "/work/~/repo"},
-		{"exec path and decoy", `{"command":["git","--exec-path=/bin","-c","name=-C decoy","-C","child","commit"]}`, "/work/child"},
 		{"apostrophe", `{"command":["git","-C","/work/a'b\"c","commit"]}`, `/work/a'b"c`},
 		{"successive paths", `{"command":["git","-C","root","-C","child repo","commit"]}`, "/work/root/child repo"},
 		{"argv path", `{"command":["git","-C","/path with spaces","commit","-m","fix"]}`, "/path with spaces"},
@@ -309,7 +297,6 @@ func TestCommitLinksRepositoryPathStyle(t *testing.T) {
 	}{
 		{"POSIX absolute", "/work", "cd /repo && git commit -m fix", "/repo"},
 		{"tilde", "/work", "cd ~/x && git commit -m fix", "~/x"},
-		{"literal apostrophe", "/work", `git -C '/work/a'\''b' commit`, "/work/a'b"},
 		{"nonleading cd", "/work", "git add . && cd /elsewhere && git commit -m fix", "/elsewhere"},
 		{"nonleading relative cd", "/work", "git add . && cd repo && git commit -m fix", "/work/repo"},
 		{"last cd before commit", "/work", "cd /first && cd /repo && git commit -m fix && cd /later", "/repo"},
@@ -554,7 +541,7 @@ func TestCommitLinksBackfill(t *testing.T) {
 		assert.Equal(t, 170, version)
 		var pending int
 		require.NoError(t, d.getReader().QueryRowContext(t.Context(), `SELECT count(*) FROM stats WHERE key=?`, scopedUpgradePendingKey).Scan(&pending))
-		assert.Zero(t, pending)
+		assert.Equal(t, 1, pending)
 		got, err := d.SessionCommitLinks(t.Context(), "repaired")
 		require.NoError(t, err)
 		require.Len(t, got.Commits, 1)
@@ -594,10 +581,7 @@ func TestCommitLinksBackfillFailureRetries(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, d.backfillCommitLinksLocked(t.Context(), d.getWriter()))
 	require.NoError(t, d.getReader().QueryRowContext(t.Context(), `PRAGMA user_version`).Scan(&version))
-	assert.Equal(t, 170, version)
-	var pending int
-	require.NoError(t, d.getReader().QueryRowContext(t.Context(), `SELECT value FROM stats WHERE key=?`, scopedUpgradePendingKey).Scan(&pending))
-	assert.Equal(t, 170, pending, "the earlier scoped upgrade stays pending")
+	assert.Equal(t, 168, version)
 	got, err := d.SessionCommitLinks(t.Context(), "s1")
 	require.NoError(t, err)
 	require.Len(t, got.Commits, 1)
@@ -618,15 +602,15 @@ func TestCommitLinksBackfillArchiveOnlyVersion(t *testing.T) {
 			require.NoError(t, err)
 			var version int
 			require.NoError(t, d.getReader().QueryRowContext(t.Context(), `PRAGMA user_version`).Scan(&version))
-			assert.Equal(t, (1<<20)+170, version)
+			assert.Equal(t, (1<<20)+oldVersion, version)
 			got, err := d.SessionCommitLinks(t.Context(), "s1")
 			require.NoError(t, err)
 			require.Len(t, got.Commits, 1)
 			require.NoError(t, d.Close())
 			needs, rebuild, err := ArchiveResyncState(t.Context(), path)
 			require.NoError(t, err)
-			assert.Equal(t, oldVersion < 169, needs)
-			assert.Equal(t, oldVersion < 169, rebuild)
+			assert.True(t, needs)
+			assert.True(t, rebuild)
 		})
 	}
 }
