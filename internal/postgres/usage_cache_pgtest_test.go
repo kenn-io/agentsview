@@ -410,7 +410,10 @@ func TestPGUsageCacheChronologicalTimestamps(t *testing.T) {
 					messages[1].Role, messages[1].Model, messages[1].TokenUsage = "assistant", "model-a", []byte(`{"output_tokens":30}`)
 				}
 				if tc.toOnly == "exceptions" {
+					// A shared ID with mixed models keeps the undated rows on the
+					// exception tier; the dated row stays an ordinary rollup.
 					messages[0].SourceUUID, messages[1].SourceUUID = "undated-uuid", "dated-uuid"
+					messages = append(messages, db.Message{SessionID: "session-a", Ordinal: 2, Role: "assistant", Content: "undated duplicate", Model: "model-b", TokenUsage: []byte(`{"output_tokens":10}`), SourceUUID: "undated-uuid"})
 				}
 				require.NoError(t, local.InsertMessages(ctx, messages))
 			} else if tc.reported {
