@@ -58,7 +58,7 @@ func ensureUsageMessages(ctx context.Context, conn *sql.DB) error {
 	selection := strings.Join(fields, ", ")
 	// The low bit makes a live insert beat a concurrent, older backfill of
 	// the same push version. UInt128 preserves every possible UInt64 version.
-	columns = append(columns, "revision UInt128", "INDEX usage_time timestamp TYPE minmax GRANULARITY 1")
+	columns = append(columns, "revision UInt128")
 	if _, err := conn.ExecContext(ctx, "CREATE TABLE IF NOT EXISTS usage_messages ("+strings.Join(columns, ", ")+`)
 		 ENGINE = ReplacingMergeTree(revision) ORDER BY (`+strings.Join(usageMessagesOrderBy, ", ")+`)
 		 SETTINGS index_granularity = 64`); err != nil {

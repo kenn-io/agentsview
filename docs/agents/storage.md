@@ -1318,6 +1318,18 @@ own metadata, which is why the docs below call the database a mirror.
   derive the keys in a CTE instead. Chunked lists (`db.QueryChunkedSize`) are
   for sets that arrive from outside the database, and they bound entry count,
   not bytes.
+- Do not add skipping indexes or projections for time ranges or text search on
+  session-keyed tables such as `messages` and `usage_messages`. Session IDs are
+  random, so each granule mixes sessions from unrelated dates, and every part
+  spans the whole key range. Under `final = 1` the exact-mode expansion
+  (`use_skip_indexes_if_final_exact_mode`) adds back most granules an index
+  skipped, and projections are not read at all. On a 4.4M-message mirror a
+  minmax on `messages.timestamp` skipped none of 541 granules, the former
+  `usage_messages` minmax made the Activity usage read 1.2x to 3.4x slower, and
+  a `text` index on `messages.content` made `ILIKE` search about 3x slower with
+  3.5x the memory while adding 24% to storage, 3x to insert time, and 5x to
+  merge time. Before adding an index, measure the real query with
+  `EXPLAIN indexes = 1` under `final = 1`, on more than one part.
 - Tests use the `chtest` build tag. Run `make test-clickhouse` against a
   dedicated test server (`TEST_CLICKHOUSE_URL` or the compose service). Do not
   point those tests at a live mirror.

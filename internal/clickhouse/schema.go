@@ -17,7 +17,7 @@ import (
 // added later ship as ADD COLUMN IF NOT EXISTS entries in the table specs,
 // so an older mirror upgrades in place; the version tells operators and
 // status output which shape a mirror has.
-const SchemaVersion = 8
+const SchemaVersion = 9
 
 // Metadata keys shared by every archive that pushes into the mirror.
 const (
@@ -743,6 +743,14 @@ func EnsureSchemaOn(ctx context.Context, conn *sql.DB) error {
 	if err := ensureUsageMessages(ctx, conn); err != nil {
 		return err
 	}
+	for _, i := range retiredSkipIndexes {
+		if _, has := existingIndexes[i.table][i.name]; !has {
+			continue
+		}
+		if err := dropSkipIndex(ctx, conn, i.table, i.name); err != nil {
+			return err
+		}
+	}
 	if err := ensureTerminalEventSnapshots(ctx, conn); err != nil {
 		return err
 	}
@@ -822,6 +830,27 @@ func addSkipIndex(ctx context.Context, conn *sql.DB, table string, i indexSpec) 
 	if _, err := conn.ExecContext(ctx,
 		"ALTER TABLE "+table+" MATERIALIZE INDEX "+i.name); err != nil {
 		return fmt.Errorf("building clickhouse index %s.%s: %w", table, i.name, err)
+	}
+	return nil
+}
+
+// retiredSkipIndexes lists skipping indexes that an older release created
+// and schema setup now removes.
+var retiredSkipIndexes = []struct{ table, name string }{
+	// A minmax on usage_messages.timestamp. Under final = 1 the exact-mode
+	// expansion re-selected almost every granule it skipped, so the
+	// Activity report's usage read ran 1.2x to 3.4x slower with it.
+	{"usage_messages", "usage_time"},
+}
+
+// dropSkipIndex removes a skipping index. Callers check that the index
+// exists first: ClickHouse queues a mutation for DROP INDEX IF EXISTS even
+// when there is nothing to drop. IF EXISTS still covers two schema setups
+// racing to drop it.
+func dropSkipIndex(ctx context.Context, conn *sql.DB, table, name string) error {
+	if _, err := conn.ExecContext(ctx,
+		"ALTER TABLE "+table+" DROP INDEX IF EXISTS "+name); err != nil {
+		return fmt.Errorf("dropping clickhouse index %s.%s: %w", table, name, err)
 	}
 	return nil
 }
