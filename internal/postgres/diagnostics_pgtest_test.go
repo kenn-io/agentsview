@@ -13,6 +13,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"go.kenn.io/agentsview/internal/db"
+	"go.kenn.io/agentsview/internal/dbtest"
 	"go.kenn.io/agentsview/internal/friction/review"
 )
 
@@ -180,6 +181,8 @@ func TestPushReturnsDiagnosticErrorAfterPublishingSessions(t *testing.T) {
 	require.NoError(t, err)
 
 	local := testDB(t)
+	const retainedSHA = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+	dbtest.SeedRetainedCommitLink(t, local, "deleted-session", retainedSHA)
 	when := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
 	_, err = local.AppendDiagnostic(t.Context(), db.DiagnosticEvent{
 		ID: uuid.NewV7().String(), Source: "worker", Message: "reject diagnostic", OccurredAt: when,
@@ -199,7 +202,8 @@ func TestPushReturnsDiagnosticErrorAfterPublishingSessions(t *testing.T) {
 		pg: pg, local: local, machine: "machine-a", schema: schema,
 		schemaDone: true, targetFingerprint: "target-a",
 	}
-	_, err = syncer.Push(t.Context(), false, nil)
+	first, err := syncer.Push(t.Context(), true, nil)
+	assert.True(t, first.Full)
 	var pgErr *pgconn.PgError
 	if assert.ErrorAs(t, err, &pgErr) {
 		assert.Equal(t, "23514", pgErr.Code)
@@ -210,4 +214,18 @@ func TestPushReturnsDiagnosticErrorAfterPublishingSessions(t *testing.T) {
 	var published bool
 	require.NoError(t, pg.QueryRowContext(t.Context(), `SELECT EXISTS(SELECT 1 FROM sessions WHERE id=$1)`, sessionID).Scan(&published))
 	assert.True(t, published, "the unrelated local session should publish despite the diagnostic error")
+
+	state := syncer.effectiveSyncState()
+	storedRun, err := state.GetSyncState(t.Context(), fullPushRunStateKey)
+	require.NoError(t, err)
+	assert.Empty(t, storedRun, "a completed full push should not remain pending")
+	var retainedCount int
+	require.NoError(t, pg.QueryRowContext(t.Context(), `SELECT count(*) FROM retained_commit_links WHERE sha=$1`, retainedSHA).Scan(&retainedCount))
+	assert.Equal(t, 1, retainedCount, "retained commit links should publish after session sync completes")
+
+	second, err := syncer.Push(t.Context(), false, nil)
+	var secondPGErr *pgconn.PgError
+	require.ErrorAs(t, err, &secondPGErr)
+	assert.Equal(t, "23514", secondPGErr.Code)
+	assert.False(t, second.Full, "the next push should continue incrementally")
 }
