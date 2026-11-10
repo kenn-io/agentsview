@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"log"
 	"time"
 
 	"go.kenn.io/agentsview/internal/config"
@@ -14,6 +15,9 @@ import (
 
 func setupImageText(ctx context.Context, cfg config.Config, database *db.DB) (*imagetext.Manager, error) {
 	if !cfg.ImageText.Enabled || cfg.ArchiveContent.OmitsToolContent() || database.ArchiveContent().OmitsToolContent() {
+		if cfg.ImageText.Enabled {
+			log.Print("image_text: disabled because archive_content omits tool results; clearing image text")
+		}
 		return nil, database.ClearImageText(ctx)
 	}
 	policy, err := cfg.ImageText.Policy()

@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log"
 	"net/http"
 	"strings"
 	"time"
@@ -66,6 +67,7 @@ func passError(parent, pass context.Context, err error) error {
 }
 
 func (m *Manager) processImage(ctx context.Context, identity ocr.Identity, hash string) error {
+	lastErr := errors.New("no retained source")
 	for offset := 0; ; offset++ {
 		items, err := m.DB.ImageTextSources(ctx, hash, offset, 1)
 		if err != nil {
@@ -78,6 +80,10 @@ func (m *Manager) processImage(ctx context.Context, identity ocr.Identity, hash 
 		body, err := db.ReadRetainedImage(item.Content, item.Index, m.DB.AssetsDir(), glmocr.MaxDocumentBytes)
 		sum := sha256.Sum256(body)
 		if err != nil || hex.EncodeToString(sum[:]) != hash {
+			if err == nil {
+				err = errors.New("content hash mismatch")
+			}
+			lastErr = err
 			continue
 		}
 		mediaType := http.DetectContentType(body)
@@ -104,6 +110,7 @@ func (m *Manager) processImage(ctx context.Context, identity ocr.Identity, hash 
 		}
 		return m.DB.SaveImageText(ctx, hash, identity, strings.TrimSpace(strings.Join(parts, "\n")), false)
 	}
+	log.Printf("image text: no readable copy of %s (%v); retrying with backoff", hash, lastErr)
 	return m.DB.SaveImageText(ctx, hash, identity, "", true)
 }
 

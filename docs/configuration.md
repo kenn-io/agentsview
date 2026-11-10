@@ -2760,6 +2760,7 @@ enabled = true
 Restart the daemon after changing this setting. Images removed by the `drop`
 storage policy cannot be indexed. Disabling image text clears extracted text;
 enabling it again extracts images anew. The endpoint must use a loopback
-address. See
+address. Image text requires an `archive_content` setting that keeps tool
+results; otherwise it stays off and a warning is logged. See
 [search text in images](commands.md#search-text-in-images) for supported images
 and search modes.

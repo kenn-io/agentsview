@@ -1,10 +1,12 @@
 package imagetext
 
 import (
+	"bytes"
 	"database/sql"
 	"encoding/base64"
 	"encoding/json/v2"
 	"fmt"
+	"log"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -170,6 +172,10 @@ func TestImageTextServiceErrorBackoff(t *testing.T) {
 }
 
 func TestImageTextCorruptAssetRetriesAfterRepair(t *testing.T) {
+	var logs bytes.Buffer
+	writer := log.Writer()
+	log.SetOutput(&logs)
+	t.Cleanup(func() { log.SetOutput(writer) })
 	ctx := t.Context()
 	d := imageTextTestDB(t)
 	dir := t.TempDir()
@@ -192,6 +198,8 @@ func TestImageTextCorruptAssetRetriesAfterRepair(t *testing.T) {
 	})
 	manager := Manager{DB: d, Client: client}
 	require.NoError(t, manager.Run(ctx))
+	require.Contains(t, logs.String(), "no readable copy")
+	require.Contains(t, logs.String(), "content hash mismatch")
 	require.Zero(t, requests)
 	require.NoError(t, os.WriteFile(path, png, 0o600))
 	require.NoError(t, d.Update(ctx, func(tx *sql.Tx) error {

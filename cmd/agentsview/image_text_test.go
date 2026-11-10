@@ -1,9 +1,11 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"encoding/base64"
 	"fmt"
+	"log"
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
@@ -19,6 +21,10 @@ import (
 )
 
 func TestImageTextRespectsArchiveContent(t *testing.T) {
+	var logs bytes.Buffer
+	writer := log.Writer()
+	log.SetOutput(&logs)
+	t.Cleanup(func() { log.SetOutput(writer) })
 	ctx := t.Context()
 	d, err := db.Open(ctx, filepath.Join(t.TempDir(), "archive.db"))
 	require.NoError(t, err)
@@ -28,11 +34,15 @@ func TestImageTextRespectsArchiveContent(t *testing.T) {
 	manager, err := setupImageText(t.Context(), cfg, d)
 	require.NoError(t, err)
 	require.Nil(t, manager)
+	require.Contains(t, logs.String(), "image_text: disabled because archive_content omits tool results")
+	logs.Reset()
 	cfg.ArchiveContent = config.ArchiveContentFull
 	d.SetArchiveContent(config.ArchiveContentTranscripts)
 	manager, err = setupImageText(t.Context(), cfg, d)
 	require.NoError(t, err)
 	require.Nil(t, manager)
+	require.Contains(t, logs.String(), "image_text: disabled because archive_content omits tool results")
+	logs.Reset()
 	d, err = db.Open(ctx, filepath.Join(t.TempDir(), "full.db"))
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, d.Close()) })
@@ -47,9 +57,11 @@ func TestImageTextRespectsArchiveContent(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, d.SaveImageText(ctx, db.RetainedToolResultImages(content)[0].SHA256, identity, "invoice", false))
 	cfg.ImageText.Enabled = false
+	logs.Reset()
 	manager, err = setupImageText(ctx, cfg, d)
 	require.NoError(t, err)
 	require.Nil(t, manager)
+	require.Empty(t, logs.String())
 	var count int
 	require.NoError(t, d.Reader().QueryRow(ctx, `SELECT count(*) FROM image_text_cache`).Scan(&count))
 	require.Zero(t, count)

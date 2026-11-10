@@ -1935,6 +1935,9 @@ func (c *Config) applyConfigTOML(data string) error {
 		if len(key) > 0 && key[0] == "archive_sources" {
 			return fmt.Errorf("unknown archive source setting %s", key.String())
 		}
+		if len(key) > 0 && key[0] == "image_text" {
+			return fmt.Errorf("%s: unknown config key; a value written here has no effect", key.String())
+		}
 	}
 	c.ArchiveSources = file.ArchiveSources
 	if err := c.ValidateArchiveSources(); err != nil {
