@@ -16,6 +16,8 @@ The latest release is
 
 **Bug fixes**
 
+- Prune removes matching parent and child session chains in one pass, even
+  without `--agent`.
 - Commit lookups keep live prompts and other archives' deleted-session links.
 - Antigravity app and IDE sessions now show their project and working directory
   instead of all landing in one unlabeled project. AgentsView reads each

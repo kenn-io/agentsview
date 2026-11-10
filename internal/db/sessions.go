@@ -6225,11 +6225,9 @@ func (db *DB) FindPruneCandidates(ctx context.Context,
 		args = append(args, escapeLike(f.FirstMessage)+"%")
 	}
 
-	prefix := ""
-	if f.Agent != "" {
-		// Kept sessions protect every ancestor, including through matching rows
-		// and legacy whole-thread trash anchors.
-		prefix = `WITH RECURSIVE matched(id) AS (
+	// Kept sessions protect every ancestor, including through matching rows
+	// and legacy whole-thread trash anchors.
+	prefix := `WITH RECURSIVE matched(id) AS (
 			SELECT id FROM sessions WHERE ` + where + `
 		), protected(id) AS (
 			SELECT id FROM sessions
@@ -6246,12 +6244,7 @@ func (db *DB) FindPruneCandidates(ctx context.Context,
 			  AND a.deleted_at IS NOT NULL
 			  AND a.trash_includes_codex_pages = 1
 		) `
-		where = "id IN (SELECT id FROM matched) AND id NOT IN (SELECT id FROM protected)"
-	} else {
-		where += ` AND NOT EXISTS (
-			SELECT 1 FROM sessions AS child
-			WHERE child.parent_session_id = sessions.id)`
-	}
+	where = "id IN (SELECT id FROM matched) AND id NOT IN (SELECT id FROM protected)"
 
 	query := prefix + "SELECT " + sessionPruneCols +
 		" FROM sessions WHERE " + where + `
