@@ -207,9 +207,9 @@ func TestSessionDiagnosisEvidenceAndPrivacy(t *testing.T) {
 
 func TestSessionDiagnosisMissingEvidence(t *testing.T) {
 	messages := []db.Message{
-		{Ordinal: 0, ToolCalls: []db.ToolCall{{ToolName: "read"}}},
-		{Ordinal: 1, ToolCalls: []db.ToolCall{{ToolName: "read"}}},
-		{Ordinal: 2, ToolCalls: []db.ToolCall{{ToolName: "read"}}},
+		{Ordinal: 0, ToolCalls: []db.ToolCall{{ToolName: "read", InputJSON: `{"path":"a.go"}`}}},
+		{Ordinal: 1, ToolCalls: []db.ToolCall{{ToolName: "read", InputJSON: `{"path":"a.go"}`}}},
+		{Ordinal: 2, ToolCalls: []db.ToolCall{{ToolName: "read", InputJSON: `{"path":"a.go"}`}}},
 	}
 	got := testSessionDiagnosis(t, "root", &service.SessionUsageReport{}, messages)
 	assert.Equal(t, []diagnosisRetry{{Tool: "read", Count: 3, FirstOrdinal: 0, LastOrdinal: 2}}, got.RetryRuns)

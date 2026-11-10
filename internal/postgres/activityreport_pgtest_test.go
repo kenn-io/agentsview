@@ -62,6 +62,29 @@ func seedPGDailyFixture(t *testing.T, store *Store) {
 	require.NoError(t, err, "insert messages")
 }
 
+func TestPGActivityReportReadersAvoidPreparedStatements(t *testing.T) {
+	_, store := prepareUsageSchema(t, "agentsview_activity_fresh_plan_test")
+	seedPGDailyFixture(t, store)
+	tx, err := store.DB().BeginTx(t.Context(), nil)
+	require.NoError(t, err)
+	defer tx.Rollback()
+	view := store.readView(tx)
+	q := pgDayQuery(t, "2026-06-16", "UTC")
+	q.Partial, q.EffectiveEnd = true, q.RangeEnd.Add(-time.Second)
+	_, err = view.BuildActivityReportArtifacts(t.Context(), db.AnalyticsFilter{Timezone: "UTC"}, q, nil)
+	require.NoError(t, err)
+	for _, reader := range []string{
+		"%AS web_search_requests%",
+		"%SELECT session_id, ordinal, role, timestamp, model%",
+		"%WITH terminal_events AS%",
+	} {
+		var prepared int
+		require.NoError(t, tx.QueryRowContext(t.Context(),
+			"SELECT count(*) FROM pg_prepared_statements WHERE statement LIKE $1", reader).Scan(&prepared))
+		assert.Zero(t, prepared, "Activity reader must plan with its actual parameters: %s", reader)
+	}
+}
+
 func TestPGActivityReportSourceProbeUsesMirrorSchema(t *testing.T) {
 	_, store := prepareUsageSchema(t, "agentsview_activity_probe_test")
 	ctx := t.Context()
@@ -632,7 +655,7 @@ func TestPGGetActivityReportDedupUsesChronologicalOrder(t *testing.T) {
 	require.NoError(t, err)
 	digest, err := export.EffectivePricingDigest(pricing)
 	require.NoError(t, err)
-	usage, _, err := store.activityReportUsage(ctx, ids, lower, upper, q, nil, pricing, digest)
+	usage, _, err := store.activityReportUsage(ctx, ids, lower, upper, q, nil, pricing, digest, nil)
 	require.NoError(t, err)
 
 	// The shared dedup identity leaves one survivor.

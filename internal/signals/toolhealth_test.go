@@ -302,6 +302,28 @@ func TestRetryCount(t *testing.T) {
 			},
 			5, // 2 + 3
 		},
+		{
+			// archive_content = "transcripts" drops tool inputs, so stored
+			// rows cannot show that calls with the same name repeated input.
+			"missing inputs are not retries",
+			[]ToolCallRow{
+				{ToolName: "Bash"},
+				{ToolName: "Bash"},
+				{ToolName: "Bash"},
+				{ToolName: "Bash"},
+			},
+			0,
+		},
+		{
+			"missing input breaks streak",
+			[]ToolCallRow{
+				{ToolName: "Bash", InputJSON: `{"cmd":"ls"}`},
+				{ToolName: "Bash", InputJSON: `{"cmd":"ls"}`},
+				{ToolName: "Bash"},
+				{ToolName: "Bash", InputJSON: `{"cmd":"ls"}`},
+			},
+			0,
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

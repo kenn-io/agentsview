@@ -478,7 +478,7 @@ func TestEnsureTransport_ReplacesDifferentDaemonVersion(t *testing.T) {
 			t.Run(fmt.Sprintf("%s/intent-%d", tt.name, intent), func(t *testing.T) {
 				dir := daemonRuntimeDir(t)
 				host, port := testPingServer(t)
-				_, err := WriteDaemonRuntimeWithAuthAndNoSync(
+				_, err := WriteDaemonRuntimeWithAuthAndNoSync(nil,
 					dir, host, port, tt.daemon, "", false, false, true, nil,
 				)
 				require.NoError(t, err)
@@ -535,7 +535,7 @@ func TestEnsureTransport_ReadIntentPreservesExplicitNoSyncWhenRestartingOlderDae
 ) {
 	dir := daemonRuntimeDir(t)
 	host, port := testPingServer(t)
-	_, err := WriteDaemonRuntimeWithAuthAndNoSync(
+	_, err := WriteDaemonRuntimeWithAuthAndNoSync(nil,
 		dir, host, port, "1.0.0", "", false, false, false, nil,
 	)
 	require.NoError(t, err)
@@ -1338,7 +1338,7 @@ func TestServicesUseRunningDaemonBrowserURL(t *testing.T) {
 	defer server.Close()
 	host, port := splitTestServerURL(t, server.URL)
 	dir := t.TempDir()
-	path, err := WriteDaemonRuntimeWithAuthAndNoSync(dir, host, port, "test", "https://viewer.example/base", false, false, false, nil)
+	path, err := WriteDaemonRuntimeWithAuthAndNoSync(nil, dir, host, port, "test", "https://viewer.example/base", false, false, false, nil)
 	require.NoError(t, err)
 	rt := daemonRuntimeFromRecord(readRuntimeRecord(t, path))
 	tr := transportFromRuntime(rt)

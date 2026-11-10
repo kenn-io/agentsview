@@ -296,8 +296,8 @@ func TestExportPlanOnlyEmptyCost(t *testing.T) {
 // The plan usage count scans message and usage rows for every report, so it
 // waits for a bulk-read slot and leaves a reader for quick reads.
 func TestPlanUsageCountsWaitForBulkReadSlot(t *testing.T) {
-	d := testDB(t)
 	synctest.Test(t, func(t *testing.T) {
+		d := testDB(t)
 		var releases []func()
 		for range bulkReadSlots {
 			release, err := d.acquireBulkRead(t.Context())

@@ -5,6 +5,8 @@ import { SessionsService } from "../../api/generated/index";
 import { afterEach, describe, expect, it, vi } from "vite-plus/test";
 import { mount, tick, unmount } from "svelte";
 import type { Session } from "../../api/types.js";
+import { ui } from "../../stores/ui.svelte.js";
+import { msg } from "../../utils/test-messages.js";
 import { fileReferences } from "../../stores/file-references.svelte.js";
 import { setLocale } from "../../i18n/index.js";
 // @ts-ignore
@@ -91,6 +93,45 @@ afterEach(() => {
 });
 
 describe("SubagentInline", () => {
+  it("routes child hooks to cards only when Hooks is visible", async () => {
+    const original = new Set(ui.visibleBlocks);
+    getMessages.mockResolvedValue({
+      messages: [
+        msg({
+          is_system: true,
+          source_type: "attachment",
+          source_subtype: "hook_additional_context",
+          content: "Content:\nchild hook context",
+        }),
+      ],
+      count: 1,
+    });
+    getSession.mockResolvedValue(makeSession());
+    try {
+      for (const visible of [true, false]) {
+        ui.setBlockVisible("hook", visible);
+        const component = mount(SubagentInline, {
+          target: document.body,
+          props: { sessionId: "subagent-session-id" },
+        });
+        try {
+          await tick();
+          document.querySelector<HTMLButtonElement>(".subagent-toggle")!.click();
+          await vi.waitUntil(
+            () =>
+              document.querySelector(".subagent-messages") &&
+              !document.querySelector(".subagent-status"),
+          );
+          expect(!!document.querySelector(".system-boundary")).toBe(visible);
+        } finally {
+          await unmount(component);
+        }
+      }
+    } finally {
+      ui.visibleBlocks = original;
+    }
+  });
+
   it.each([true, false])(
     "explains file matches when expanded with Docbank enabled=%s",
     async (enabled) => {

@@ -104,8 +104,8 @@ func buildTermsAnchorSQL(
 			) AS next_start,
 				s.project, s.agent, s.machine,
 				COALESCE(s.display_name, s.session_name) AS display_name,
-				COALESCE(s.transcript_revision,'') AS transcript_revision,
-				COALESCE(s.relationship_type,'') AS relationship_type,
+				s.transcript_revision AS transcript_revision,
+				s.relationship_type AS relationship_type,
 				COALESCE(s.parent_session_id,'') AS parent_session_id,
 				` + frag.sessionSort + ` AS sort_ts,
 				CASE WHEN st.is_sidechain = ` + dialect.trueLiteral + ` OR ` + SubordinateSessionSQL("s") + `

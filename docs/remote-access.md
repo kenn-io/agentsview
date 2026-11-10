@@ -138,16 +138,8 @@ continues with local and reachable remote sources, and exits successfully unless
 another error occurs. `agentsview source sync --host X` remains strict and reports an
 unavailable explicitly selected host as an error.
 
-For always-available fleet nodes launched with `agentsview daemon start`, set:
-
-```toml
-daemon_idle_timeout = "0s"
-```
-
-That setting controls detached writable daemons, including config-driven and
-`serve --background` launches. Supervised daemons run under systemd, launchd,
-Docker, or a foreground shell never create the idle tracker and already stay
-alive until their supervisor stops them.
+Fleet nodes launched with `agentsview daemon start` stay available until
+stopped.
 
 Run `agentsview source sync` on the collector to sync local sessions and every
 configured host. Set `interval` on a `[[remote_hosts]]` entry when a running

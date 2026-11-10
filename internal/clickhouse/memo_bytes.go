@@ -42,7 +42,9 @@ func aggregateRowBytes(r chUsageAggregateRow) int64 {
 
 func dailyUsageRowBytes(r chDailyUsageGroupRow) int64 {
 	return aggregateRowBytes(r.chUsageAggregateRow) + int64(unsafe.Sizeof(r)-unsafe.Sizeof(r.chUsageAggregateRow)) +
-		stringBytes(r.kind, r.contextID, r.priceError)
+		stringBytes(r.kind, r.contextID, r.priceError) +
+		int64(len(r.inexactModels)+len(r.inexactProjects))*int64(unsafe.Sizeof("")) +
+		stringBytes(r.inexactModels...) + stringBytes(r.inexactProjects...)
 }
 
 func usageSessionRowBytes(r chUsageSessionRow) int64 {

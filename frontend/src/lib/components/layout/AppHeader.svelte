@@ -130,6 +130,7 @@
     tool: m.header_transcript_blocks_tool,
     code: m.header_transcript_blocks_code,
     system: m.header_transcript_blocks_system,
+    hook: m.header_transcript_blocks_hook,
   };
 
   const BLOCK_COLORS: Record<BlockType, string> = {
@@ -139,6 +140,7 @@
     tool: "var(--accent-amber)",
     code: "var(--text-muted)",
     system: "var(--text-muted)",
+    hook: "var(--text-muted)",
   };
 
   async function handleExport() {

@@ -136,7 +136,7 @@ func TestReconciliationSpoolFallsBackForOversizedSourceState(t *testing.T) {
 	assert.Empty(t, page[0].SourceState.Payload)
 }
 
-func TestReconciliationSpoolDSNEscapesPortablePaths(t *testing.T) {
+func TestSQLiteScratchDSNEscapesPortablePaths(t *testing.T) {
 	tests := []struct {
 		name string
 		path string
@@ -145,23 +145,23 @@ func TestReconciliationSpoolDSNEscapesPortablePaths(t *testing.T) {
 		{
 			name: "posix special characters",
 			path: "/tmp/archive #?%/reconcile.db",
-			want: "file:/tmp/archive%20%23%3F%25/reconcile.db",
+			want: "file:/tmp/archive%20%23%3F%25/reconcile.db?_stmt_cache_size=64",
 		},
 		{
 			name: "windows drive",
 			path: `C:\Data\archive #?%\reconcile.db`,
-			want: "file:/C:/Data/archive%20%23%3F%25/reconcile.db",
+			want: "file:/C:/Data/archive%20%23%3F%25/reconcile.db?_stmt_cache_size=64",
 		},
 		{
 			name: "windows UNC",
 			path: `\\server\share\archive #%\reconcile.db`,
-			want: `\\server\share\archive #%\reconcile.db`,
+			want: `\\server\share\archive #%\reconcile.db?_stmt_cache_size=64`,
 		},
 	}
 
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			assert.Equal(t, tc.want, reconciliationSpoolDSN(tc.path))
+			assert.Equal(t, tc.want, sqliteScratchDSN(tc.path))
 		})
 	}
 }

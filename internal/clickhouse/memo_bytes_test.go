@@ -21,3 +21,9 @@ func TestAggregateRowMemoCountsGroupMetadata(t *testing.T) {
 		})
 	}
 }
+
+func TestDailyUsageMemoCountsDimensionEvidence(t *testing.T) {
+	base := dailyUsageRowBytes(chDailyUsageGroupRow{})
+	row := chDailyUsageGroupRow{inexactModels: []string{"model-a", "model-b"}, inexactProjects: []string{"project"}}
+	assert.Equal(t, int64(3*16+21), dailyUsageRowBytes(row)-base)
+}

@@ -2221,7 +2221,7 @@ func (db *DB) ExtractProgressStats(
 	}
 	rows, err := db.getReader().QueryContext(ctx, `
 		SELECT state, COUNT(*),
-			COALESCE(SUM(unit_cursor), 0), COALESCE(SUM(units_total), 0)
+			SUM(unit_cursor), SUM(units_total)
 		FROM recall_extract_progress
 		WHERE generation_fingerprint = ?
 		GROUP BY state`, fingerprint)

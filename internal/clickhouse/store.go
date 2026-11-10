@@ -14,6 +14,8 @@ import (
 	"sync/atomic"
 	"time"
 
+	chdriver "github.com/ClickHouse/clickhouse-go/v2"
+
 	"go.kenn.io/agentsview/internal/config"
 	"go.kenn.io/agentsview/internal/db"
 	"go.kenn.io/agentsview/internal/export"
@@ -37,10 +39,21 @@ var errNotImplemented = errors.New("not implemented for the ClickHouse backend")
 // without FINAL in the query text.
 type Store struct {
 	readbase.MirrorStubs
-	conn          *sql.DB
-	cursorMu      sync.RWMutex
-	cursorSecret  []byte
-	customPricing map[string]config.CustomModelRate
+	conn *sql.DB
+	// pages serves the session list, sidebar filters, and one-session reads
+	// apart from conn's dashboard and Usage scans; see pageMaxOpenConns.
+	pages *sql.DB
+	// bulk reads the Activity usage rows; see openBulk.
+	bulk chdriver.Conn
+	// usageSliceRows is the fewest stored rows worth a slice of their own in
+	// an Activity range read; see readActivityUsageSlices.
+	usageSliceRows int
+	// afterUsageSlices, when set, runs once a sliced range read has read
+	// every slice. Tests use it to change the rows mid-read.
+	afterUsageSlices func()
+	cursorMu         sync.RWMutex
+	cursorSecret     []byte
+	customPricing    map[string]config.CustomModelRate
 
 	// vectorMu guards the searcher and reason installed by the serve gate.
 	vectorMu                  sync.RWMutex
@@ -86,9 +99,6 @@ type Store struct {
 		sync.Mutex
 		last string
 	}
-	// keeping tracks the encodes of activity usage reads being kept; see
-	// activityReportUsage. Close waits for them.
-	keeping sync.WaitGroup
 	// activitySessionListings keeps candidate listings per parts and predicate.
 	activitySessionListings kept.Memo[activitySessionListing]
 	projectIdentityMaps     kept.Memo[map[string]export.ProjectMapEntry]
@@ -127,13 +137,25 @@ func NewStore(ctx context.Context, t Target) (*Store, error) {
 		}
 		return nil, fmt.Errorf("checking clickhouse Activity metadata access: %w", err)
 	}
-	return NewStoreFromDB(conn), nil
+	pages, err := openPages(ctx, t)
+	if err != nil {
+		conn.Close()
+		return nil, err
+	}
+	bulk, err := openBulk(ctx, t)
+	if err != nil {
+		return nil, errors.Join(err, conn.Close(), pages.Close())
+	}
+	s := NewStoreFromDB(conn, bulk)
+	s.pages = pages
+	return s, nil
 }
 
-// NewStoreFromDB wraps an already open connection. The caller owns the
-// connection's compatibility checks.
-func NewStoreFromDB(conn *sql.DB) *Store {
-	s := &Store{conn: conn}
+// NewStoreFromDB wraps already open connections: conn serves page reads too,
+// and bulk serves the reads that return millions of rows; see openBulk. The
+// caller owns the connections' compatibility checks.
+func NewStoreFromDB(conn *sql.DB, bulk chdriver.Conn) *Store {
+	s := &Store{conn: conn, pages: conn, bulk: bulk, usageSliceRows: activityUsageSliceRows}
 	s.usageVersions.tables = map[string]usageTableVersion{}
 	s.dailyUsageRows.Size, s.dailyUsageRows.MaxBytes = dailyUsageRowBytes, dailyUsageRowsBytes
 	s.sessionAggregateRows.Size = aggregateRowBytes
@@ -153,8 +175,10 @@ func (s *Store) DB() *sql.DB { return s.conn }
 func (s *Store) Close() error {
 	s.closeOnce.Do(func() {
 		s.stopBackground()
-		s.keeping.Wait()
-		s.closeErr = s.conn.Close()
+		s.closeErr = errors.Join(s.conn.Close(), s.bulk.Close())
+		if s.pages != s.conn {
+			s.closeErr = errors.Join(s.closeErr, s.pages.Close())
+		}
 	})
 	return s.closeErr
 }
@@ -165,6 +189,15 @@ func (s *Store) queryContext(ctx context.Context, query string, args ...any) (*s
 
 func (s *Store) queryRowContext(ctx context.Context, query string, args ...any) *sql.Row {
 	return s.conn.QueryRowContext(ctx, query, args...)
+}
+
+// pageQueryContext runs a page read on the pages pool.
+func (s *Store) pageQueryContext(ctx context.Context, query string, args ...any) (*sql.Rows, error) {
+	return s.pages.QueryContext(ctx, query, args...)
+}
+
+func (s *Store) pageQueryRowContext(ctx context.Context, query string, args ...any) *sql.Row {
+	return s.pages.QueryRowContext(ctx, query, args...)
 }
 
 func (s *Store) ReadOnly() bool { return true }

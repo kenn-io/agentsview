@@ -123,6 +123,30 @@ it("shows setup instructions when disconnected", async () => {
   expect(screen.getByText(m.import_claude_setup_load({ url: "chrome://extensions" }))).toBeTruthy();
 });
 
+it("offers Chrome Sync for ChatGPT and opens ChatGPT sign-in after auth failure", async () => {
+  syncChatGPTChrome.mockRejectedValueOnce(
+    new ApiError(0, "Sign in to ChatGPT, then Sync again", "chatgpt_auth_required"),
+  );
+  const open = vi.spyOn(window, "open").mockReturnValue(null);
+  render(ImportModal, props());
+  await fireEvent.click(screen.getByRole("button", { name: "ChatGPT" }));
+  await clickSync();
+  await waitFor(() => expect(screen.getByText("Signed out")).toBeTruthy());
+  expect(screen.getByText(m.import_chatgpt_signed_out())).toBeTruthy();
+  expect(screen.queryByText(m.import_chatgpt_tab_note())).toBeNull();
+  expect(syncChatGPTChrome).toHaveBeenCalledWith(
+    expect.objectContaining({ onProgress: expect.any(Function) }),
+    expect.any(AbortSignal),
+  );
+  await fireEvent.click(screen.getByRole("button", { name: m.import_claude_connect() }));
+  expect(open).toHaveBeenCalledExactlyOnceWith(
+    "https://chatgpt.com/",
+    "_blank",
+    "noopener,noreferrer",
+  );
+  expect(syncClaudeAI).not.toHaveBeenCalled();
+});
+
 function pendingSync() {
   const run = {} as {
     signal: AbortSignal;

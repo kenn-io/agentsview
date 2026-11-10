@@ -221,6 +221,7 @@ func TestChromeHostLocalOnly(t *testing.T) {
 		{"repeated browser", http.MethodPost, "/api/v1/import/claude-ai/sync?browser&browser=chrome", "192.0.2.10:1234", "", `expected value to be one of \"chrome\" (query.browser: true)`, true, http.StatusBadRequest},
 		{"chatgpt", http.MethodPost, "/api/v1/import/chatgpt/sync", "192.0.2.10:1234", "", "Chrome Sync requires a local connection", true, http.StatusForbidden},
 		{"status", http.MethodGet, "/api/v1/import/claude-ai/chrome", "192.0.2.10:1234", "", "Chrome Sync requires a local connection", true, http.StatusForbidden},
+		{"chatgpt", http.MethodPost, "/api/v1/import/chatgpt/sync", "192.0.2.10:1234", "", "Chrome Sync requires a local connection", true, http.StatusForbidden},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			srv := testServer(t, 5*time.Second)

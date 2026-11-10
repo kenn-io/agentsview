@@ -529,7 +529,7 @@ func (db *DB) activityReportSessionsFrom(
 		s.machine,
 		COALESCE(s.started_at, ''),
 		COALESCE(s.ended_at, ''),
-		COALESCE(s.is_automated, 0),
+		s.is_automated,
 		s.relationship_type = 'subagent'
 	FROM sessions s
 	WHERE ` + where
@@ -610,7 +610,7 @@ func (db *DB) activityReportActivityFrom(
 	err := queryChunked(ids, func(chunk []string) error {
 		ph, args := InPlaceholders(chunk)
 		query := `SELECT session_id, ordinal, role,
-			COALESCE(timestamp, ''), model
+			timestamp, model
 		FROM messages
 		WHERE session_id IN ` + ph + `
 			AND timestamp IS NOT NULL
@@ -682,7 +682,7 @@ func (db *DB) activityReportCandidates(
 // pair through a Go callback. The last column marks messages that message
 // counts include.
 const activityReportMessagesSQL = `SELECT session_id, ordinal, role, timestamp, model,
-	is_system = 0 AND COALESCE(source_subtype, '') <> 'tool_result'
+	is_system = 0 AND source_subtype <> 'tool_result'
 FROM messages INDEXED BY idx_messages_velocity
 WHERE session_id IN (SELECT value FROM json_each(?))
 	AND timestamp IS NOT NULL AND timestamp != ''
@@ -693,41 +693,6 @@ ORDER BY session_id, ordinal`
 type activityCountedMessage struct {
 	timestamp string
 	user      bool
-}
-
-// activityPairMessage is one parseable message of a session. starts marks a
-// message inside the pairing window, which may start a pair.
-type activityPairMessage struct {
-	ordinal     int
-	at          time.Time
-	role, model string
-	starts      bool
-}
-
-// appendActivityTranscriptPairs pairs each window message of one session with
-// the next parseable one. The prior model is the latest assistant model whose
-// message is later than the message before it, up to and including the start.
-// Times compare at microseconds, as the reports order them.
-func appendActivityTranscriptPairs(
-	out []activity.IntervalCandidate, sessionID string, ms []activityPairMessage,
-) []activity.IntervalCandidate {
-	prior := "unknown"
-	for i, m := range ms {
-		if i > 0 && m.role == "assistant" && m.model != "" &&
-			m.at.UnixMicro() > ms[i-1].at.UnixMicro() {
-			prior = m.model
-		}
-		if !m.starts || i+1 == len(ms) {
-			continue
-		}
-		next := ms[i+1]
-		out = append(out, activity.IntervalCandidate{
-			SessionID: sessionID, StartOrdinal: m.ordinal, EndOrdinal: next.ordinal,
-			Start: m.at, End: next.at, ClosingRole: next.role,
-			ClosingModel: next.model, PriorModel: prior,
-		})
-	}
-	return out
 }
 
 const activityReportTerminalCandidatesSQL = `WITH
@@ -957,45 +922,45 @@ func (db *DB) activityReportCandidateSQL(
 			defer rows.Close()
 			var pairs []activity.IntervalCandidate
 			var sessionID string
-			var session []activityPairMessage
+			var session []activity.TranscriptMessage
 			// Scan targets live outside the loop: Scan takes their addresses,
 			// so per-row variables would each escape to the heap.
 			var id, timestamp string
-			var m activityPairMessage
+			var m activity.TranscriptMessage
 			var countable bool
 			for rows.Next() {
 				if err := ctx.Err(); err != nil {
 					return err
 				}
 				if err := rows.Scan(
-					&id, &m.ordinal, &m.role, &timestamp, &m.model, &countable,
+					&id, &m.Ordinal, &m.Role, &timestamp, &m.Model, &countable,
 				); err != nil {
 					return fmt.Errorf(
 						"scanning activity report message: %w", err)
 				}
 				if id != sessionID {
-					pairs = appendActivityTranscriptPairs(pairs, sessionID, session)
+					pairs = activity.AppendTranscriptPairs(pairs, sessionID, session)
 					sessionID, session = id, session[:0]
 				}
 				at, ok := ParseStoredTimestamp(timestamp)
 				if !ok {
 					continue
 				}
-				m.at = at.UTC()
+				m.At = at.UTC()
 				if counted != nil && countable &&
-					(m.role == "user" || m.role == "assistant") &&
-					!m.at.Before(lowerTime) && m.at.Before(upperTime) {
-					counted(id, activityCountedMessage{timestamp, m.role == "user"})
+					(m.Role == "user" || m.Role == "assistant") &&
+					!m.At.Before(lowerTime) && m.At.Before(upperTime) {
+					counted(id, activityCountedMessage{timestamp, m.Role == "user"})
 				}
-				us := m.at.UnixMicro()
-				m.starts = us >= lower && us < upper &&
+				us := m.At.UnixMicro()
+				m.Starts = us >= lower && us < upper &&
 					timestamp >= paddedLower && timestamp < paddedUpper
 				session = append(session, m)
 			}
 			if err := rows.Err(); err != nil {
 				return err
 			}
-			pairs = appendActivityTranscriptPairs(pairs, sessionID, session)
+			pairs = activity.AppendTranscriptPairs(pairs, sessionID, session)
 			sort.Slice(pairs, func(i, j int) bool {
 				return activity.CandidateLess(pairs[i], pairs[j])
 			})

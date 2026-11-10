@@ -653,7 +653,17 @@ CREATE INDEX IF NOT EXISTS idx_provider_freshness_updated_at
 // and session identities are unchanged.)
 // (166: retain inbound Claude peer user records as system messages. Re-parse
 // Claude-format sources in place; source and session identities are unchanged.)
-const dataVersion = 166
+// (167: retain Claude-format hook output as non-dialogue system rows.
+// Re-parse unchanged sources in place; source and session identities are
+// unchanged.)
+// (168: fill Antigravity working directories, projects, and sub-agent parents
+// from conversation_summaries.db. Re-parse unchanged antigravity and
+// antigravity-cli sources in place, so remote mirrors that are otherwise
+// unchanged catch up; source and session identities are unchanged.)
+// (169: keep DeepSeek Harness native message ids as message source ids.
+// Re-parse DeepSeek Harness sources in place; source and session identities
+// are unchanged.)
+const dataVersion = 169
 
 const archiveOnlyVersionBase = 1 << 20
 
@@ -881,6 +891,7 @@ type DB struct {
 	usageCache           *usageCacheManager
 	activityMemo         activityCandidateMemo
 	activityKept         kept.Memo[activityKept]
+	sessionStatsFacts    *sessionStatsFactsMemo
 	frustrationMemo      FrustrationMarkerMemo
 	usageBackfillMu      sync.Mutex
 	usageBackfillCancel  context.CancelFunc
@@ -951,6 +962,12 @@ type DB struct {
 		waitCount    int64
 		waitDuration time.Duration
 	}
+
+	// memberFreshnessPages counts ListVirtualContainerMemberFreshnessPage
+	// calls so tests can pin how many pages a sync pass reads. Serving readers
+	// reuse prepared statements, so a SQLite authorizer sees one compilation
+	// per query shape rather than one per page.
+	memberFreshnessPages atomic.Int64
 }
 
 // MessagesLoadCount returns the total number of GetAllMessages calls the
@@ -1004,34 +1021,32 @@ func (r *readerHandle) Query(ctx context.Context,
 	query string, args ...any,
 ) (*sql.Rows, error) {
 	r.owner.connMu.RLock()
-	defer r.owner.connMu.RUnlock()
-	rows, err := r.current().QueryContext(ctx, query, args...)
-	return rows, err
+	unlock := sync.OnceFunc(r.owner.connMu.RUnlock)
+	defer unlock()
+	ctx = context.WithValue(ctx, readerQueryUnlockKey{}, unlock)
+	return r.current().QueryContext(ctx, query, args...)
 }
 
 func (r *readerHandle) QueryContext(
 	ctx context.Context, query string, args ...any,
 ) (*sql.Rows, error) {
-	r.owner.connMu.RLock()
-	defer r.owner.connMu.RUnlock()
-	rows, err := r.current().QueryContext(ctx, query, args...)
-	return rows, err
+	return r.Query(ctx, query, args...)
 }
 
 func (r *readerHandle) QueryRow(ctx context.Context,
 	query string, args ...any,
 ) *sql.Row {
 	r.owner.connMu.RLock()
-	defer r.owner.connMu.RUnlock()
+	unlock := sync.OnceFunc(r.owner.connMu.RUnlock)
+	defer unlock()
+	ctx = context.WithValue(ctx, readerQueryUnlockKey{}, unlock)
 	return r.current().QueryRowContext(ctx, query, args...)
 }
 
 func (r *readerHandle) QueryRowContext(
 	ctx context.Context, query string, args ...any,
 ) *sql.Row {
-	r.owner.connMu.RLock()
-	defer r.owner.connMu.RUnlock()
-	return r.current().QueryRowContext(ctx, query, args...)
+	return r.QueryRow(ctx, query, args...)
 }
 
 func (r *readerHandle) BeginTx(
@@ -1208,6 +1223,7 @@ func (db *DB) requireWritable() error {
 func (db *DB) SetCustomPricing(p map[string]config.CustomModelRate) {
 	db.customPricing = p
 	db.effectivePricing = nil
+	db.invalidateSessionStatsFacts()
 }
 
 // SetEffectivePricing installs in-memory pricing rows with explicit provenance
@@ -1221,6 +1237,7 @@ func (db *DB) SetEffectivePricing(
 		rates.Bands = append([]export.PricingBand(nil), rates.Bands...)
 		db.effectivePricing[model] = rates
 	}
+	db.invalidateSessionStatsFacts()
 }
 
 // SetEmptyCatalogPricing installs in-memory rates that are used only when the
@@ -1233,6 +1250,7 @@ func (db *DB) SetEmptyCatalogPricing(
 		rates.Bands = append([]export.PricingBand(nil), rates.Bands...)
 		db.emptyCatalogPricing[model] = rates
 	}
+	db.invalidateSessionStatsFacts()
 }
 
 // SetCursorSecret updates the secret key used for cursor signing.
@@ -1589,7 +1607,7 @@ DROP TRIGGER IF EXISTS trg_session_project_identity_snapshots_revision_delete;
 CREATE TRIGGER IF NOT EXISTS trg_project_identity_observations_revision_insert
 AFTER INSERT ON project_identity_observations BEGIN
     INSERT INTO archive_metadata (key, value) VALUES ('project_identity_publication_revision', '1')
-    ON CONFLICT(key) DO UPDATE SET value = CAST(CAST(value AS INTEGER) + 1 AS TEXT),
+    ON CONFLICT(key) DO UPDATE SET value = CAST(value AS INTEGER) + 1,
         updated_at = strftime('%Y-%m-%dT%H:%M:%fZ','now');
     INSERT INTO project_identity_observation_changes (
         project, machine, root_path, git_remote, revision, deleted
@@ -1603,7 +1621,7 @@ END;
 CREATE TRIGGER IF NOT EXISTS trg_project_identity_observations_revision_update
 AFTER UPDATE ON project_identity_observations BEGIN
     INSERT INTO archive_metadata (key, value) VALUES ('project_identity_publication_revision', '1')
-    ON CONFLICT(key) DO UPDATE SET value = CAST(CAST(value AS INTEGER) + 1 AS TEXT),
+    ON CONFLICT(key) DO UPDATE SET value = CAST(value AS INTEGER) + 1,
         updated_at = strftime('%Y-%m-%dT%H:%M:%fZ','now');
     INSERT INTO project_identity_observation_changes (
         project, machine, root_path, git_remote, revision, deleted
@@ -1625,7 +1643,7 @@ END;
 CREATE TRIGGER IF NOT EXISTS trg_project_identity_observations_revision_delete
 AFTER DELETE ON project_identity_observations BEGIN
     INSERT INTO archive_metadata (key, value) VALUES ('project_identity_publication_revision', '1')
-    ON CONFLICT(key) DO UPDATE SET value = CAST(CAST(value AS INTEGER) + 1 AS TEXT),
+    ON CONFLICT(key) DO UPDATE SET value = CAST(value AS INTEGER) + 1,
         updated_at = strftime('%Y-%m-%dT%H:%M:%fZ','now');
     INSERT INTO project_identity_observation_changes (
         project, machine, root_path, git_remote, revision, deleted
@@ -1639,7 +1657,7 @@ END;
 CREATE TRIGGER IF NOT EXISTS trg_session_project_identity_snapshots_revision_insert
 AFTER INSERT ON session_project_identity_snapshots BEGIN
     INSERT INTO archive_metadata (key, value) VALUES ('project_identity_publication_revision', '1')
-    ON CONFLICT(key) DO UPDATE SET value = CAST(CAST(value AS INTEGER) + 1 AS TEXT),
+    ON CONFLICT(key) DO UPDATE SET value = CAST(value AS INTEGER) + 1,
         updated_at = strftime('%Y-%m-%dT%H:%M:%fZ','now');
     INSERT INTO session_project_identity_snapshot_changes (
         session_id, project, revision, deleted
@@ -1653,7 +1671,7 @@ END;
 CREATE TRIGGER IF NOT EXISTS trg_session_project_identity_snapshots_revision_update
 AFTER UPDATE ON session_project_identity_snapshots BEGIN
     INSERT INTO archive_metadata (key, value) VALUES ('project_identity_publication_revision', '1')
-    ON CONFLICT(key) DO UPDATE SET value = CAST(CAST(value AS INTEGER) + 1 AS TEXT),
+    ON CONFLICT(key) DO UPDATE SET value = CAST(value AS INTEGER) + 1,
         updated_at = strftime('%Y-%m-%dT%H:%M:%fZ','now');
     INSERT INTO session_project_identity_snapshot_changes (
         session_id, project, revision, deleted
@@ -1675,7 +1693,7 @@ END;
 CREATE TRIGGER IF NOT EXISTS trg_session_project_identity_snapshots_revision_delete
 AFTER DELETE ON session_project_identity_snapshots BEGIN
     INSERT INTO archive_metadata (key, value) VALUES ('project_identity_publication_revision', '1')
-    ON CONFLICT(key) DO UPDATE SET value = CAST(CAST(value AS INTEGER) + 1 AS TEXT),
+    ON CONFLICT(key) DO UPDATE SET value = CAST(value AS INTEGER) + 1,
         updated_at = strftime('%Y-%m-%dT%H:%M:%fZ','now');
     INSERT INTO session_project_identity_snapshot_changes (
         session_id, project, revision, deleted
@@ -2032,6 +2050,7 @@ var readOnlyRequiredTables = []string{
 	"friction_digest_sessions",
 	"friction_patterns",
 	"friction_issue_links",
+	"friction_filing_state",
 	"recall_entries",
 	"recall_evidence",
 	"recall_query_events",
@@ -3298,6 +3317,9 @@ func (db *DB) migrateColumns(ctx context.Context, progress OpenProgressFunc) err
 	if err := applySchemaColumnMigrations(ctx, w, progress); err != nil {
 		return err
 	}
+	if err := addDialogueIsContent(ctx, w, progress); err != nil {
+		return err
+	}
 	if _, err := w.ExecContext(ctx, artifactSessionQueueTriggerCreatesSQL); err != nil {
 		return fmt.Errorf("installing artifact session queue triggers: %w", err)
 	}
@@ -3813,9 +3835,9 @@ AFTER INSERT ON sessions
 BEGIN
     UPDATE sessions SET sync_marker = MAX(
         COALESCE(strftime('%Y-%m-%dT%H:%M:%fZ', NEW.created_at), ''),
-        COALESCE(strftime('%Y-%m-%dT%H:%M:%fZ', NULLIF(NEW.local_modified_at, '')), ''),
-        COALESCE(strftime('%Y-%m-%dT%H:%M:%fZ', NULLIF(NEW.ended_at, '')), ''),
-        COALESCE(strftime('%Y-%m-%dT%H:%M:%fZ', NULLIF(NEW.started_at, '')), ''),
+        COALESCE(strftime('%Y-%m-%dT%H:%M:%fZ', NEW.local_modified_at), ''),
+        COALESCE(strftime('%Y-%m-%dT%H:%M:%fZ', NEW.ended_at), ''),
+        COALESCE(strftime('%Y-%m-%dT%H:%M:%fZ', NEW.started_at), ''),
         COALESCE(strftime('%Y-%m-%dT%H:%M:%fZ', NEW.file_mtime / 1000000000.0, 'unixepoch'), '')
     ) WHERE id = NEW.id;
 END;
@@ -3826,9 +3848,9 @@ AFTER UPDATE OF created_at, local_modified_at, ended_at, started_at, file_mtime 
 BEGIN
     UPDATE sessions SET sync_marker = MAX(
         COALESCE(strftime('%Y-%m-%dT%H:%M:%fZ', NEW.created_at), ''),
-        COALESCE(strftime('%Y-%m-%dT%H:%M:%fZ', NULLIF(NEW.local_modified_at, '')), ''),
-        COALESCE(strftime('%Y-%m-%dT%H:%M:%fZ', NULLIF(NEW.ended_at, '')), ''),
-        COALESCE(strftime('%Y-%m-%dT%H:%M:%fZ', NULLIF(NEW.started_at, '')), ''),
+        COALESCE(strftime('%Y-%m-%dT%H:%M:%fZ', NEW.local_modified_at), ''),
+        COALESCE(strftime('%Y-%m-%dT%H:%M:%fZ', NEW.ended_at), ''),
+        COALESCE(strftime('%Y-%m-%dT%H:%M:%fZ', NEW.started_at), ''),
         COALESCE(strftime('%Y-%m-%dT%H:%M:%fZ', NEW.file_mtime / 1000000000.0, 'unixepoch'), '')
     ) WHERE id = NEW.id;
 END;
@@ -3863,9 +3885,9 @@ END;
 // marker.
 const backfillSyncMarkerSQL = `UPDATE sessions SET sync_marker = MAX(
     COALESCE(strftime('%Y-%m-%dT%H:%M:%fZ', created_at), ''),
-    COALESCE(strftime('%Y-%m-%dT%H:%M:%fZ', NULLIF(local_modified_at, '')), ''),
-    COALESCE(strftime('%Y-%m-%dT%H:%M:%fZ', NULLIF(ended_at, '')), ''),
-    COALESCE(strftime('%Y-%m-%dT%H:%M:%fZ', NULLIF(started_at, '')), ''),
+    COALESCE(strftime('%Y-%m-%dT%H:%M:%fZ', local_modified_at), ''),
+    COALESCE(strftime('%Y-%m-%dT%H:%M:%fZ', ended_at), ''),
+    COALESCE(strftime('%Y-%m-%dT%H:%M:%fZ', started_at), ''),
     COALESCE(strftime('%Y-%m-%dT%H:%M:%fZ', file_mtime / 1000000000.0, 'unixepoch'), '')
 ) WHERE sync_marker IS NULL`
 
@@ -4038,6 +4060,10 @@ func (db *DB) createPartialIndexesLocked(ctx context.Context, w *writerHandle) e
 		`CREATE INDEX IF NOT EXISTS idx_sessions_friction_activity
 		 ON sessions(COALESCE(NULLIF(ended_at, ''), NULLIF(started_at, '')))
 		 WHERE deleted_at IS NULL`,
+		// Raw session ID lookups seek on the ID tail instead of scanning
+		// every session; see FindSessionIDsByRawSuffix.
+		`CREATE INDEX IF NOT EXISTS idx_sessions_id_tail
+		 ON sessions(` + sqliteSessionIDTailExpr + `)`,
 	}
 	for _, ddl := range indexes {
 		if _, err := w.Exec(ctx, ddl); err != nil {
@@ -4886,7 +4912,8 @@ func openAndInit(
 
 	db := &DB{
 		path: path, usageCache: newUsageCacheManager(path),
-		activityKept: newActivityKeptMemo(),
+		activityKept:      newActivityKeptMemo(),
+		sessionStatsFacts: newSessionStatsFactsMemo(),
 	}
 	reader := db.openReader(path)
 	db.usageCache.attachArchive(db)
@@ -5717,7 +5744,7 @@ func (db *DB) reopenLockedWithBarrier(keepWriterBarrier bool) error {
 	var oldReader *sql.DB
 	db.activityKept.DeleteSlots(func(string) bool { return true })
 	db.activityMemo.swap(func() {
-		db.frustrationMemo.Swap(func() { oldReader = db.reader.Swap(reader) })
+		db.frustrationMemo.Swap(func() { db.sessionStatsFacts.Swap(func() { oldReader = db.reader.Swap(reader) }) })
 	})
 	// Reopen fully restores the writer pool, so clear any writer-closed barrier
 	// a prior CloseWriter set unless the caller keeps it. Without the clear a

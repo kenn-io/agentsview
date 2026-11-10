@@ -237,7 +237,8 @@ func scanSessionRowWithSource(rs rowScanner, includeSource bool) (Session, error
 }
 
 // Version 6 stores per-call tool observations for effectiveness rates.
-const CurrentQualitySignalVersion = 6
+// Version 7 stops calls without retained input from counting as retries.
+const CurrentQualitySignalVersion = 7
 
 // QualitySignals groups persisted deterministic quality-signal
 // columns for API callers while keeping the database representation
@@ -572,6 +573,7 @@ func (db *DB) DecodeCursor(s string) (SessionCursor, error) {
 
 // SessionFilter specifies how to query sessions.
 type SessionFilter struct {
+	ExclusionCounts *bool // nil omits the summary; true includes child counts
 	// IDs selects rows directly. Nil preserves discovery defaults; an empty
 	// non-nil slice matches nothing. Raw IDs expand over literal tilde suffixes.
 	IDs []string
@@ -701,9 +703,10 @@ func buildCanonicalRootWhere(includeOrphans bool) string {
 
 // SessionPage is a page of session results.
 type SessionPage struct {
-	Sessions   []Session `json:"sessions"`
-	NextCursor string    `json:"next_cursor,omitempty"`
-	Total      int       `json:"total"`
+	ExclusionCounts *SessionExclusionCounts `json:"exclusion_counts,omitempty"`
+	Sessions        []Session               `json:"sessions"`
+	NextCursor      string                  `json:"next_cursor,omitempty"`
+	Total           int                     `json:"total"`
 }
 
 type SidebarSessionIndexRow struct {
@@ -769,7 +772,14 @@ func (db *DB) ListSessions(
 	// Total count applies filters but not cursor. To avoid
 	// re-counting on every pagination request, newer cursors carry
 	// the first-page total and we reuse it here.
-	if total <= 0 {
+	var exclusions *SessionExclusionCounts
+	if f.WantsExclusionCounts() {
+		var err error
+		total, exclusions, err = CountSessionExclusions(ctx, db.getReader(), f, dialect)
+		if err != nil {
+			return SessionPage{}, fmt.Errorf("counting session exclusions: %w", err)
+		}
+	} else if total <= 0 {
 		countQuery := "SELECT COUNT(*) FROM sessions WHERE " + where
 		if err := db.getReader().QueryRowContext(
 			ctx, countQuery, args...,
@@ -815,7 +825,10 @@ func (db *DB) ListSessions(
 		return SessionPage{}, err
 	}
 
-	return BuildSessionPage(sessions, total, f, rs, db.EncodeCursor), nil
+	exclusions.LoadChildren(ctx, db.getReader(), f, dialect, total)
+	page := BuildSessionPage(sessions, total, f, rs, db.EncodeCursor)
+	page.ExclusionCounts = exclusions
+	return page, nil
 }
 
 // HasVisibleSession reports whether the default sidebar has a session to show.
@@ -2817,6 +2830,39 @@ func (db *DB) FindSessionIDsByPartial(
 	return ids, rows.Err()
 }
 
+// SessionIDTail returns the part of a session ID after its last ':' or '~'
+// delimiter, or the whole ID when it has neither. Every ID that
+// FindSessionIDsByRawSuffix matches for raw has the same tail as raw, so
+// backends index the tail and seek on it before checking the exact
+// suffix forms.
+func SessionIDTail(id string) string {
+	return id[strings.LastIndexAny(id, ":~")+1:]
+}
+
+// sqliteSessionIDTailExpr computes SessionIDTail(id) with SQLite core
+// functions, which have no reverse search. It maps '~' to ':', trims every
+// character after the last ':' to find the prefix ending at that delimiter,
+// and removes that prefix. The prefix ends in ':' and the tail has none, so
+// the replace removes only the leading copy. replace() returns its input
+// unchanged for an empty pattern, so an ID with no delimiter is its own
+// tail. idx_sessions_id_tail indexes this exact expression.
+const sqliteSessionIDTailExpr = `replace(replace(id, '~', ':'),
+	rtrim(replace(id, '~', ':'), replace(replace(id, '~', ''), ':', '')), '')`
+
+// rawSuffixLookupSQL binds ?1 raw, ?2 limit, and ?3 SessionIDTail(raw).
+const rawSuffixLookupSQL = `SELECT id FROM sessions
+	WHERE ` + sqliteSessionIDTailExpr + ` = ?3
+	  AND (id = ?1
+	       OR SUBSTR(id, -(LENGTH(?1) + 1)) IN (':' || ?1, '~' || ?1))
+	  AND deleted_at IS NULL
+	ORDER BY (id = ?1) DESC,
+	         COALESCE(
+	             NULLIF(ended_at, ''),
+	             NULLIF(started_at, ''),
+	             created_at
+	         ) DESC
+	LIMIT ?2`
+
 // FindSessionIDsByRawSuffix returns up to limit session IDs whose
 // stored id is either the exact raw input or the raw input
 // preceded by an agent or host prefix (e.g. "codex:<uuid>" or
@@ -2824,7 +2870,8 @@ func (db *DB) FindSessionIDsByPartial(
 // comparison uses SUBSTR rather than LIKE so that SQL wildcard
 // characters ('_' and '%') present in session IDs (which permit
 // underscores) are compared literally instead of matching any
-// character. Results are sorted by most recently active first.
+// character. The tail predicate lets SQLite seek idx_sessions_id_tail.
+// Results are sorted by most recently active first.
 // Excludes soft-deleted sessions.
 func (db *DB) FindSessionIDsByRawSuffix(
 	ctx context.Context, raw string, limit int,
@@ -2836,18 +2883,7 @@ func (db *DB) FindSessionIDsByRawSuffix(
 		limit = 5
 	}
 	rows, err := db.getReader().QueryContext(ctx,
-		`SELECT id FROM sessions
-		 WHERE (id = ?1
-		        OR SUBSTR(id, -(LENGTH(?1) + 1)) IN (':' || ?1, '~' || ?1))
-		   AND deleted_at IS NULL
-		 ORDER BY (id = ?1) DESC,
-		          COALESCE(
-		              NULLIF(ended_at, ''),
-		              NULLIF(started_at, ''),
-		              created_at
-		          ) DESC
-		 LIMIT ?2`,
-		raw, limit,
+		rawSuffixLookupSQL, raw, limit, SessionIDTail(raw),
 	)
 	if err != nil {
 		return nil, fmt.Errorf(
@@ -3067,7 +3103,7 @@ func (db *DB) GetSessionVersion(ctx context.Context,
 		"SELECT message_count, COALESCE(file_mtime, 0),"+
 			" COALESCE(file_hash, ''), COALESCE(local_modified_at, ''), COALESCE(sync_marker, '')"+
 			", (SELECT json_group_array(label) FROM (SELECT label FROM session_labels WHERE session_id = sessions.id ORDER BY label)),"+
-			" COALESCE(parent_session_id, ''), COALESCE(relationship_type, ''),"+
+			" COALESCE(parent_session_id, ''), relationship_type,"+
 			" COALESCE((SELECT ep.parent_session_id FROM session_external_parents ep WHERE ep.session_id = sessions.id), '') FROM sessions WHERE id = ?",
 		id,
 	).Scan(&count, &fileMtime, &fileHash, &localModifiedAt, &syncMarker, &labels, &parent, &relationship, &launcherParent)
@@ -3417,7 +3453,7 @@ func messageRangeTotalsTx(ctx context.Context,
 	err := tx.QueryRowContext(ctx, `
 		SELECT COUNT(*),
 			COALESCE(SUM(role = 'user' AND is_system = 0
-				AND COALESCE(source_subtype, '') <> 'tool_result'), 0),
+				AND source_subtype <> 'tool_result'), 0),
 			COALESCE(SUM(CASE WHEN has_output_tokens != 0
 				THEN output_tokens ELSE 0 END), 0),
 			COALESCE(MAX(has_output_tokens != 0), 0),
@@ -3866,6 +3902,12 @@ const virtualContainerMemberFreshnessQuery = `SELECT file_path, file_mtime, data
  WHERE file_path %s ? AND file_path < ? || '$' AND source_missing_at IS NULL
  ORDER BY file_path, rowid`
 
+// VirtualContainerMemberFreshnessPages returns how many stored member
+// freshness pages this archive has listed.
+func (db *DB) VirtualContainerMemberFreshnessPages() int64 {
+	return db.memberFreshnessPages.Load()
+}
+
 // ListVirtualContainerMemberFreshnessPage returns the freshness signal for
 // stored sessions whose file_path is a virtual member of the shared container
 // at containerPath ("<containerPath>#<sessionID>"), excluding source-missing
@@ -3892,6 +3934,7 @@ func (db *DB) ListVirtualContainerMemberFreshnessPage(
 	if containerPath == "" || limit <= 0 {
 		return nil, true, nil
 	}
+	db.memberFreshnessPages.Add(1)
 	lower := containerPath + "#"
 	lowerOp := ">="
 	if afterPath > lower {
@@ -4419,7 +4462,7 @@ func (db *DB) ListSessionWriteIdentitiesByID(
 				args[i] = id
 			}
 			rows, err := db.getReader().QueryContext(ctx, `
-			SELECT id, machine, agent, COALESCE(cwd, ''),
+			SELECT id, machine, agent, cwd,
 			       COALESCE(file_path, ''), COALESCE(file_hash, ''),
 			       session_name
 			FROM sessions
@@ -5343,10 +5386,7 @@ func (db *DB) MarkSessionSourceMissing(
 	defer db.mu.Unlock()
 	result, err := db.getWriter().ExecContext(ctx, `
 		UPDATE sessions
-		SET source_missing_at = COALESCE(
-		        source_missing_at,
-		        strftime('%Y-%m-%dT%H:%M:%fZ','now')
-		    ),
+		SET source_missing_at = strftime('%Y-%m-%dT%H:%M:%fZ','now'),
 		    local_modified_at = strftime('%Y-%m-%dT%H:%M:%fZ','now')
 		WHERE machine = ? AND agent = ? AND id = ? AND file_path = ?
 		  AND source_missing_at IS NULL

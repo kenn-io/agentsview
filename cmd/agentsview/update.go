@@ -22,6 +22,7 @@ type UpdateConfig struct {
 }
 
 type updateDaemonStopResult struct {
+	Persistent       bool
 	Stopped          bool
 	Host             string
 	Port             int
@@ -229,6 +230,9 @@ func restartDaemonAfterUpdate(ctx context.Context,
 	}
 	cmd := exec.CommandContext(ctx, exe, restartDaemonAfterUpdateArgs(cfg, stopResult)...)
 	cmd.Env = append(os.Environ(), "AGENTSVIEW_DATA_DIR="+cfg.DataDir)
+	if stopResult.Persistent {
+		cmd.Env = append(cmd.Env, updateRestartPersistentEnvVar+"=true")
+	}
 	out, err := cmd.CombinedOutput()
 	if err != nil {
 		return fmt.Errorf("serve --background: %w: %s", err, strings.TrimSpace(string(out)))

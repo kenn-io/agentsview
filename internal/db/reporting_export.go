@@ -556,7 +556,7 @@ func (db *DB) reportingUsageSessionsFrom(
 			s.machine,
 			COALESCE(s.started_at, ''),
 			COALESCE(s.ended_at, ''),
-			COALESCE(s.is_automated, 0),
+			s.is_automated,
 			s.relationship_type = 'subagent'
 		FROM sessions s
 		WHERE s.id != '' AND s.id IN usage_session_ids

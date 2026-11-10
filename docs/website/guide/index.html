@@ -101,7 +101,7 @@
         <p class="eyebrow">Five-minute guide</p>
         <h1>The session intelligence loop</h1>
         <p class="lede">Your agents already write the raw data. AgentsView turns it into a searchable archive, and the archive into answers your agents can use on their next run.</p>
-          <p>Updated for <a href="/docs/changelog/#0461">v0.46.1</a>, including cloud chats, selectable cost breakdowns, and tool-effectiveness reports.</p>
+          <p>Updated for <a href="/docs/changelog/#0470">v0.47.0</a>, including the Friction Log, the prompt behind any line of code, and one-click search by meaning.</p>
         <ol class="guide-nav" aria-label="Guide stops">
           <li><a href="#capture">01 Capture</a></li>
           <li><a href="#browse">02 Browse</a></li>
@@ -174,10 +174,10 @@
             <p>Select a project, model, or agent in the cost breakdown to narrow the page. Open hermes-cron to compare individual jobs. Model aliases combine variants after each has been priced.</p>
             <a href="/docs/token-usage/">Token usage and costs</a>
             <figure class="terminal">
-              <code><span class="prompt">$</span> agentsview usage daily --breakdown
-<span class="prompt">$</span> agentsview usage statusline
+              <code><span class="prompt">$</span> agentsview report usage daily --breakdown
+<span class="prompt">$</span> agentsview report usage statusline
 <span class="hi">$9.61 today</span></code>
-              <figcaption class="caption">On <code>main</code>, these reports use <code>agentsview report usage</code>. See the <a href="/docs/commands/#command-migration">command migration</a> for release-compatible names.</figcaption>
+              <figcaption class="caption">Older command names still work. See the <a href="/docs/commands/#command-migration">command migration</a>.</figcaption>
             </figure>
           </div>
           <div class="guide-media">
@@ -193,7 +193,7 @@
         <li class="guide-stop" id="search">
           <div class="guide-copy">
             <h2>Search by words or by meaning</h2>
-            <p>Press Ctrl/Cmd+K to search, then choose a project and date range in the palette. Select All Projects to widen the search without changing the sidebar. Full-text search finds exact words; opt-in semantic and hybrid search find related meaning and cite the matching conversation.</p>
+            <p>Press Ctrl/Cmd+K to search, then choose a project and date range in the palette. Select All Projects to widen the search without changing the sidebar. Full-text search finds exact words. Turn on search by meaning from the palette or Settings to find related ideas and cite the matching conversation.</p>
             <a href="/docs/usage/#command-palette">Search controls</a> · <a href="/docs/semantic-search/">Semantic search</a>
           </div>
           <div class="guide-media">
@@ -211,6 +211,7 @@
             <h2>Assess session health</h2>
             <p>Health scores point to tool failures, context pressure, and repeated loops in the transcript. Open Analysis to see Session Vitals: measured tool execution and time that cannot be assigned to a phase. Click an activity row to inspect its transcript entry. Open the health badge for tool sequences that trace errors, retries, switches, and recovery back to recorded calls, without model charges.</p>
             <p>Tool Usage shows empty-result, repeat-call, and recovery rates with links to contributing sessions. Choose Analyze tool effectiveness from a session's actions menu for a model assessment that cites the calls it judged.</p>
+            <p>Turn on the <a href="/docs/quality/#friction-log">Friction Log</a> for a daily review of corrections, tool errors, and recurring problems, each linked to its message. File recurring problems as Kata issues.</p>
             <a href="/docs/session-intelligence/">Session intelligence</a>
           </div>
           <div class="guide-media">
@@ -243,7 +244,7 @@
           <div class="guide-copy">
             <h2>Give your agents the archive</h2>
             <p>The loop closes when agents read their own history. The MCP server exposes session history as assistant tools, the REST API and CLI serve scripts and hooks, and SSE streams live messages. An agent can check what a previous run tried before repeating it. Native memory plugins for Claude Code and Codex bundle recall instructions, focused search, and session-start refresh.</p>
-            <p>Read-only MCP tools also expose file edits, tool calls, child sessions, Activity reports, tool usage, cost comparisons, and offline guide search.</p>
+            <p>Read-only MCP tools also expose file edits, tool calls, child sessions, Activity reports, tool usage, cost comparisons, and offline guide search. Run <a href="/docs/commands/#agentsview-why"><code>agentsview why file.go:120-140</code></a> to find the session and prompt behind a line of code.</p>
             <a href="/docs/mcp/">MCP server</a> · <a href="/docs/session-api/">Session API</a>
           </div>
           <div class="guide-media">

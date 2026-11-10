@@ -6,6 +6,10 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net"
+	"net/http"
+	"net/http/httptest"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -16,6 +20,7 @@ import (
 	"github.com/stretchr/testify/require"
 	"go.kenn.io/agentsview/internal/config"
 	"go.kenn.io/agentsview/internal/db"
+	"go.kenn.io/agentsview/internal/server"
 	"go.kenn.io/kit/daemon"
 )
 
@@ -33,6 +38,7 @@ func daemonCommandTestDeps(t *testing.T) (*daemonCommandDeps, *bytes.Buffer) {
 	dir := t.TempDir()
 	out := new(bytes.Buffer)
 	deps := defaultDaemonCommandDeps()
+	deps.persistRuntime = func(context.Context, config.Config, *DaemonRuntime) error { return nil }
 	deps.resolveDataDir = func() (string, error) { return dir, nil }
 	deps.mkdirAll = func(path string, mode os.FileMode) error {
 		assert.Equal(t, dir, path)
@@ -172,6 +178,7 @@ func TestDaemonStartUsesConfigOnlyPolicyAndIsIdempotent(t *testing.T) {
 	require.NoError(t, executeDaemonCommand(t, *deps, out, "start"))
 	assert.Equal(t, []string{"serve"}, gotArgs)
 	assert.True(t, gotPolicy.ConfigOnly)
+	assert.True(t, gotPolicy.Persistent)
 	assert.Equal(t, "daemon start", gotPolicy.Operation)
 	assert.True(t, gotPolicy.Attached)
 	assert.NotNil(t, gotPolicy.OnLaunch)
@@ -378,14 +385,13 @@ func TestDaemonStartLaunchContentionTerminalStates(t *testing.T) {
 		name        string
 		observation daemonLaunchObservation
 		wantErr     string
-		wantOut     string
 	}{
 		{
-			name: "published writable",
+			name: "failed lock reacquire after writable publication",
 			observation: daemonLaunchObservation{Records: []daemon.RuntimeRecord{
 				testWritableRecord(21, "/runtime/21.json"),
 			}},
-			wantOut: "already running",
+			wantErr: "launch is still in progress",
 		},
 		{
 			name: "multiple published writables",
@@ -426,13 +432,7 @@ func TestDaemonStartLaunchContentionTerminalStates(t *testing.T) {
 			}
 
 			err := executeDaemonCommand(t, *deps, out, "start")
-			if tt.wantErr == "" {
-				require.NoError(t, err)
-				assert.Contains(t, out.String(), tt.wantOut)
-			} else {
-				require.Error(t, err)
-				require.ErrorContains(t, err, tt.wantErr)
-			}
+			require.ErrorContains(t, err, tt.wantErr)
 			assert.Equal(t, 0, loadCalls, "contender must not read or write config")
 			assert.Equal(t, 0, startCalls, "contender must never start a second writer")
 		})
@@ -1060,7 +1060,7 @@ func TestDaemonRestartUsesStartupStateFallbackWhileStarting(t *testing.T) {
 	deps.readStartupState = func(string) *startupState {
 		return &startupState{
 			PID: 113, Version: "v1.2.3-test", CreateTime: "987654321",
-			Phase: "initial sync",
+			Phase: "initial sync", Persistent: true,
 		}
 	}
 	deps.stopTargetConfirmed = func(rec daemon.RuntimeRecord, _ string) bool {
@@ -1077,6 +1077,7 @@ func TestDaemonRestartUsesStartupStateFallbackWhileStarting(t *testing.T) {
 	) (backgroundLaunchResult, error) {
 		assert.Equal(t, []string{"serve"}, args)
 		assert.Equal(t, "daemon restart", policy.Operation)
+		assert.True(t, policy.Persistent)
 		return backgroundLaunchResult{
 			Runtime: &DaemonRuntime{
 				Record: daemon.RuntimeRecord{PID: 315},
@@ -1086,7 +1087,7 @@ func TestDaemonRestartUsesStartupStateFallbackWhileStarting(t *testing.T) {
 		}, nil
 	}
 
-	require.NoError(t, executeDaemonCommand(t, *deps, out, "restart"))
+	require.NoError(t, runDaemonRestart(t.Context(), out, *deps))
 	assert.Equal(t, 113, stopped.PID)
 	assert.Contains(t, out.String(), "restarted")
 	assert.NotContains(t, out.String(), "startup is still in progress")
@@ -1224,4 +1225,198 @@ func TestDaemonStartConfigFailureReturnsError(t *testing.T) {
 	err := executeDaemonCommand(t, *deps, out, "start")
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "config invalid")
+}
+
+func TestDaemonStartPromotesAutomaticDaemon(t *testing.T) {
+	for _, tc := range []struct{ fallback, contended bool }{{false, false}, {false, true}, {true, false}} {
+		t.Run(fmt.Sprintf("fallback=%v/contention=%v", tc.fallback, tc.contended), func(t *testing.T) {
+			dir := testDataDir(t)
+			cfg := config.Config{DataDir: dir, DBPath: filepath.Join(dir, "sessions.db"), Host: "127.0.0.1", PublicURL: "http://viewer.example.test"}
+			database, err := db.Open(t.Context(), cfg.DBPath)
+			require.NoError(t, err)
+			defer database.Close()
+			ts := httptest.NewUnstartedServer(nil)
+			ep := testDaemonEndpoint{Host: "127.0.0.1", Port: ts.Listener.Addr().(*net.TCPAddr).Port}
+			cfg.Port = ep.Port
+			ts.Config.Handler = server.New(cfg, database, nil, server.WithBasePath("/av"), server.WithVersion(server.VersionInfo{Version: version}), server.WithDaemonPersistence(func() error { return publishPersistentDaemon(cfg.DataDir) })).Handler()
+			ts.Start()
+			defer ts.Close()
+			MarkDaemonStarting(dir)
+			t.Cleanup(func() { UnmarkDaemonStarting(dir) })
+			writer := newStartupStateWriter(dir, time.Now)
+			writer.state.IdleTimeout = "2s"
+			writer.SetPhase("starting HTTP server")
+			if tc.fallback {
+				path, err := runtimeStore(dir).Path(os.Getpid())
+				require.NoError(t, err)
+				require.NoError(t, os.Mkdir(path, 0o700))
+			}
+			_, err = WriteDaemonRuntimeWithAuthAndNoSync(&daemonLifetime{IdleTimeout: 2 * time.Second}, dir, ep.Host, ep.Port, version, cfg.PublicURL+"/av", false, false, true, nil)
+			if tc.fallback {
+				require.Error(t, err)
+			} else {
+				require.NoError(t, err)
+			}
+			rt := FindWritableDaemonRuntime(dir)
+			require.NotNil(t, rt)
+			assert.Equal(t, tc.fallback, rt.RuntimeFallback)
+			deps, out := daemonCommandTestDeps(t)
+			deps.resolveDataDir = func() (string, error) { return dir, nil }
+			deps.mkdirAll = os.MkdirAll
+			deps.loadConfig = func() (config.Config, error) { return cfg, nil }
+			deps.writableRuntime = func(dataDir, token string) *DaemonRuntime { return FindWritableDaemonRuntime(dataDir, token) }
+			deps.persistRuntime = persistDaemonRuntime
+			if tc.contended {
+				attempts := 0
+				deps.acquireLaunchLockWithError = func(string) (daemonLaunchLock, bool, error) {
+					attempts++
+					return &testDaemonLaunchLock{}, attempts > 1, nil
+				}
+				deps.waitContendedLaunch = func(string) daemonLaunchObservation {
+					return daemonLaunchObservation{Records: []daemon.RuntimeRecord{rt.Record}}
+				}
+			}
+			deps.startBackground = func(context.Context, config.Config, []string, serveReplacementOptions, backgroundLaunchPolicy) (backgroundLaunchResult, error) {
+				require.FailNow(t, "promotion must keep the running daemon in place")
+				return backgroundLaunchResult{}, nil
+			}
+			require.NoError(t, runDaemonStart(t.Context(), out, *deps))
+			after := FindWritableDaemonRuntime(dir)
+			require.NotNil(t, after)
+			assert.True(t, after.Persistent)
+			require.NotNil(t, after.IdleTimeout)
+			assert.Zero(t, *after.IdleTimeout)
+		})
+	}
+}
+
+func TestRestartCommandSelectsLifetime(t *testing.T) {
+	for _, tc := range []struct {
+		command                    string
+		persistent, wantPersistent bool
+	}{
+		{"serve", false, false}, {"serve", true, true}, {"daemon", false, true},
+	} {
+		t.Run(fmt.Sprintf("%s/persistent=%v", tc.command, tc.persistent), func(t *testing.T) {
+			deps, out := daemonCommandTestDeps(t)
+			rec := testWritableRecord(79, "")
+			rec.Metadata[runtimePersistent] = strconv.FormatBool(tc.persistent)
+			deps.writableRecords = func(string, string) ([]daemon.RuntimeRecord, error) { return []daemon.RuntimeRecord{rec}, nil }
+			deps.startBackground = func(_ context.Context, _ config.Config, _ []string, _ serveReplacementOptions, policy backgroundLaunchPolicy) (backgroundLaunchResult, error) {
+				assert.Equal(t, tc.wantPersistent, policy.Persistent)
+				return backgroundLaunchResult{Started: true, Runtime: &DaemonRuntime{Record: testWritableRecord(80, "")}}, nil
+			}
+			if tc.command == "serve" {
+				require.NoError(t, executeServeCommand(t, *deps, out, "restart"))
+			} else {
+				require.NoError(t, executeDaemonCommand(t, *deps, out, "restart"))
+			}
+		})
+	}
+}
+
+func TestDaemonStartReplacesOlderAutomaticDaemon(t *testing.T) {
+	deps, out := daemonCommandTestDeps(t)
+	setTestVersion(t, "1.1.0")
+	rt := daemonRuntimeFromRecord(testWritableRecord(79, ""))
+	rt.Record.Version = "1.0.0"
+	deps.writableRuntime = func(string, string) *DaemonRuntime { return rt }
+	promoted, replaced := false, false
+	deps.persistRuntime = func(context.Context, config.Config, *DaemonRuntime) error {
+		promoted = true
+		return errors.New("old daemon has no persistence endpoint")
+	}
+	deps.startBackground = func(_ context.Context, _ config.Config, _ []string, _ serveReplacementOptions, policy backgroundLaunchPolicy) (backgroundLaunchResult, error) {
+		replaced = true
+		return backgroundLaunchResult{Started: true, Runtime: &DaemonRuntime{Record: testWritableRecord(80, ""), Persistent: true}}, nil
+	}
+	require.NoError(t, runDaemonStart(t.Context(), out, *deps))
+	assert.True(t, replaced)
+	assert.False(t, promoted)
+}
+
+func TestDaemonStartReturnsFallbackPromotionError(t *testing.T) {
+	setTestVersion(t, "1.1.0")
+	deps, out := daemonCommandTestDeps(t)
+	incumbent := &DaemonRuntime{Record: daemon.RuntimeRecord{Version: "1.0.0"}, RuntimeFallback: true}
+	deps.writableRuntime = func(string, string) *DaemonRuntime { return incumbent }
+	rejected := errors.New("persistence operation unavailable")
+	deps.persistRuntime = func(_ context.Context, _ config.Config, rt *DaemonRuntime) error {
+		assert.Same(t, incumbent, rt)
+		return rejected
+	}
+	deps.startBackground = func(context.Context, config.Config, []string, serveReplacementOptions, backgroundLaunchPolicy) (backgroundLaunchResult, error) {
+		require.FailNow(t, "eligible daemon should be promoted in place")
+		return backgroundLaunchResult{}, nil
+	}
+	require.ErrorIs(t, runDaemonStart(t.Context(), out, *deps), rejected)
+}
+
+func TestDaemonStartRejectsMultipleWritersBeforeReuse(t *testing.T) {
+	requirePOSIXSignals(t, "requires a long-lived child process")
+	setTestVersion(t, "1.0.0")
+	for _, persistent := range []bool{false, true} {
+		t.Run(strconv.FormatBool(persistent), func(t *testing.T) {
+			dir := runtimeTestDir(t)
+			host, port := testPingServer(t)
+			first := daemonRuntimeRecord(host, port, withRuntimeVersion("1.0.0"))
+			first.Metadata[runtimePersistent] = strconv.FormatBool(persistent)
+			_, err := writeRuntimeRecordForTest(dir, first)
+			require.NoError(t, err)
+			otherPID := startSleepProcess(t)
+			_, err = writeRuntimeRecordForTest(dir, daemonRuntimeRecord("127.0.0.1", 9101, withRuntimePID(otherPID)))
+			require.NoError(t, err)
+			require.NotNil(t, FindWritableDaemonRuntime(dir))
+			deps, out := daemonCommandTestDeps(t)
+			deps.resolveDataDir = func() (string, error) { return dir, nil }
+			deps.mkdirAll = os.MkdirAll
+			deps.loadConfig = func() (config.Config, error) { return config.Config{DataDir: dir}, nil }
+			deps.writableRuntime = func(dir, token string) *DaemonRuntime { return FindWritableDaemonRuntime(dir, token) }
+			promoted := false
+			deps.persistRuntime = func(context.Context, config.Config, *DaemonRuntime) error { promoted = true; return nil }
+			deps.startBackground = func(context.Context, config.Config, []string, serveReplacementOptions, backgroundLaunchPolicy) (backgroundLaunchResult, error) {
+				require.FailNow(t, "multiple writers must be rejected before launch")
+				return backgroundLaunchResult{}, nil
+			}
+			err = runDaemonStart(t.Context(), out, *deps)
+			require.ErrorContains(t, err, "multiple writable agentsview daemons")
+			require.ErrorContains(t, err, strconv.Itoa(os.Getpid()))
+			require.ErrorContains(t, err, strconv.Itoa(otherPID))
+			assert.False(t, promoted)
+		})
+	}
+}
+
+func TestPersistDaemonRuntimeReportsRequestFailure(t *testing.T) {
+	for _, tc := range []struct {
+		status int
+		cause  string
+		want   string
+	}{
+		{http.StatusInternalServerError, "publishing lifetime: disk full", "HTTP 500 Internal Server Error"},
+		{http.StatusNotFound, "404 page not found", "HTTP 404 Not Found"},
+	} {
+		t.Run(strconv.Itoa(tc.status), func(t *testing.T) {
+			ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				assert.Equal(t, http.MethodPost, r.Method)
+				assert.Equal(t, "/api/v1/daemon/persist", r.URL.Path)
+				if tc.status == http.StatusNotFound {
+					http.NotFound(w, r)
+					return
+				}
+				w.Header().Set("Content-Type", "application/json")
+				w.WriteHeader(tc.status)
+				_, _ = fmt.Fprintf(w, `{"error":%q}`, tc.cause)
+			}))
+			defer ts.Close()
+			endpoint, err := url.Parse(ts.URL)
+			require.NoError(t, err)
+			port, err := strconv.Atoi(endpoint.Port())
+			require.NoError(t, err)
+			err = persistDaemonRuntime(t.Context(), config.Config{}, &DaemonRuntime{Record: daemon.RuntimeRecord{Version: version}, Host: endpoint.Hostname(), Port: port})
+			require.ErrorContains(t, err, tc.want)
+			require.ErrorContains(t, err, tc.cause)
+			require.ErrorContains(t, err, "agentsview daemon restart")
+		})
+	}
 }

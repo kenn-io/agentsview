@@ -199,3 +199,14 @@ func (t *IdleTracker) signal() {
 	default:
 	}
 }
+
+// DisableShutdown preserves sync suspension while keeping the server available.
+func (t *IdleTracker) DisableShutdown() {
+	if t == nil {
+		return
+	}
+	t.mu.Lock()
+	t.timeout = 0
+	t.mu.Unlock()
+	t.signal()
+}

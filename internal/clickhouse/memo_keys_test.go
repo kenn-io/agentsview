@@ -17,7 +17,7 @@ func TestAnalyticsSessionMemoKeyKeepsArgumentBoundaries(t *testing.T) {
 	require.NotEqual(t, a, analyticsSessionMemoKey("s.project IN (?, ?)", []any{"a b", 1}))
 }
 
-func TestUsageRowMemoKeyKeepsCustomModelBoundaries(t *testing.T) {
+func TestUsageRowMemoKeyKeepsReadInputsDistinct(t *testing.T) {
 	f := db.UsageFilter{Timezone: "UTC", From: "2026-01-12", To: "2026-01-12"}
 	a, err := usageRowMemoKeyFor("daily", f, "", "digest", [][2]string{{"a b", "c"}})
 	require.NoError(t, err)
@@ -29,6 +29,10 @@ func TestUsageRowMemoKeyKeepsCustomModelBoundaries(t *testing.T) {
 	d, err := usageRowMemoKeyFor("daily", f, "", "digest", nil)
 	require.NoError(t, err)
 	require.NotEqual(t, c, d)
+	f.PairwiseSides = true
+	e, err := usageRowMemoKeyFor("daily", f, "", "digest", nil)
+	require.NoError(t, err)
+	require.NotEqual(t, d, e)
 }
 
 // A termination filter that compares session times with the current time

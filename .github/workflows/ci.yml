@@ -28,7 +28,7 @@ permissions:
 jobs:
   changes:
     if: github.event_name == 'pull_request'
-    runs-on: ubuntu-latest
+    runs-on: namespace-profile-linux-1cpu
     timeout-minutes: 5
     permissions:
       pull-requests: read
@@ -83,6 +83,7 @@ jobs:
         uses: $/.github/actions/go-cache-restore
         with:
           group: lint-${{ matrix.linter }}
+          owner: "true"
           extra-path: ~/.cache/golangci-lint
 
       - uses: kenn-io/kit/.github/actions/kit-retry@v0.48.3
@@ -112,7 +113,7 @@ jobs:
 
       - name: Fetch Go checkers
         if: matrix.linter == 'golangci'
-        run: GOFLAGS="${GOFLAGS:+$GOFLAGS }-n" kit-retry 3 5 make lint-workflow-retries lint-config-check lint-sql
+        run: GOFLAGS="${GOFLAGS:+$GOFLAGS }-n" kit-retry 3 5 make lint-workflow-retries lint-config-check lint-sql lint-huma
 
       - name: Run Go linters
         if: matrix.linter == 'golangci'
@@ -124,10 +125,7 @@ jobs:
 
       - name: Check Huma API contract
         if: matrix.linter == 'golangci'
-        run: |
-          huma=go.kenn.io/kit/cmd/huma-check@e9840a327158da2559458186b253b0c15a5e2c2b
-          kit-retry 3 5 go run -n "$huma"
-          go run "$huma" -fix=false ./...
+        run: make lint-huma
 
       - name: Save Go caches
         uses: $/.github/actions/go-cache-save
@@ -369,6 +367,7 @@ jobs:
         uses: $/.github/actions/go-cache-restore
         with:
           group: test-${{ runner.os }}-${{ runner.arch }}
+          owner: &test-cache-owner ${{ matrix.testSet != 'lint' && (runner.os != 'Linux' || matrix.testSet == 'other') }}
 
       - uses: kenn-io/kit/.github/actions/kit-retry@v0.48.3
 
@@ -393,6 +392,7 @@ jobs:
         if: runner.os == 'Windows' && steps.setup_mingw.outcome == 'failure'
         uses: msys2/setup-msys2@v2.33.0
         with:
+          release: false
           msystem: MINGW64
           update: false
           install: ${{ env.MSYS2_PACKAGES }}
@@ -460,6 +460,7 @@ jobs:
         with: &linter-cache
           group: lint-${{ runner.os }}-${{ runner.arch }}-${{ steps.linter_version.outputs.version }}-${{ hashFiles('.custom-gcl.yml') }}-${{ steps.setup_go.outputs.go-version }}
           include-go-cache: "false"
+          owner: "true"
           extra-path: ${{ runner.temp }}/golangci-lint
 
       - name: Prepare Go linters (Windows)
@@ -542,7 +543,7 @@ jobs:
           done
 
       - name: Save Go caches
-        if: matrix.testSet != 'lint' && (runner.os != 'Linux' || matrix.testSet == 'other')
+        if: *test-cache-owner
         uses: $/.github/actions/go-cache-save
 
       # Save the test group before the linter restore replaces GO_CACHE_*.
@@ -649,6 +650,7 @@ jobs:
         if: steps.setup_mingw.outcome == 'failure'
         uses: msys2/setup-msys2@v2.33.0
         with:
+          release: false
           msystem: MINGW64
           update: false
           install: mingw-w64-x86_64-gcc
@@ -832,6 +834,7 @@ jobs:
         if: steps.setup_mingw.outcome == 'failure'
         uses: msys2/setup-msys2@v2.33.0
         with:
+          release: false
           msystem: MINGW64
           update: false
           install: mingw-w64-x86_64-gcc
@@ -918,6 +921,7 @@ jobs:
         uses: $/.github/actions/go-cache-restore
         with:
           group: race-linux
+          owner: &race-cache-owner ${{ matrix.testSet == 'other' }}
 
       - uses: kenn-io/kit/.github/actions/kit-retry@v0.48.3
 
@@ -969,7 +973,7 @@ jobs:
           CGO_ENABLED: "1"
 
       - name: Save Go caches
-        if: matrix.testSet == 'other'
+        if: *race-cache-owner
         uses: $/.github/actions/go-cache-save
 
   # Owns Windows Rust test coverage for PR and main-push desktop artifacts.

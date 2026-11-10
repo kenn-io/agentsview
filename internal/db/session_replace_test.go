@@ -304,3 +304,43 @@ func TestReplaceSessionKeepingTrashedCopyKeepsPinsWhenRetainedRowsUnchanged(t *t
 	assert.Equal(t, stored[0].Ordinal, copied[0].Ordinal)
 	assert.Equal(t, live[0].Note, copied[0].Note, "usage-only storage may clear the note, but both sides must agree")
 }
+
+// A replacement whose rows only gain source IDs keeps the live rows and their
+// pins, and the trashed copy of the old transcript still gets the pins.
+func TestReplaceSessionKeepingTrashedCopyWhenRowsGainSourceUUIDs(t *testing.T) {
+	d := testDB(t)
+	ctx := t.Context()
+	before := seedReplaceSession(t, d)
+	write := messageCountWrite("replace", 3)
+	write.Session.Agent = "chatgpt"
+	write.Session.FilePath = Ptr("/exports/replace.json")
+	write.Messages[1].HasToolUse = true
+	write.Messages[1].ToolCalls = []ToolCall{{
+		ToolName: "Bash", Category: "Bash", ToolUseID: "tool-use-1",
+		ResultContent: "build output", ResultContentLength: 12,
+	}}
+	for i := range write.Messages {
+		write.Messages[i].SourceUUID = "native-" + string(rune('a'+i))
+	}
+
+	copyID, err := d.ReplaceSessionKeepingTrashedCopy(ctx, write)
+	require.NoError(t, err)
+	require.NotEmpty(t, copyID)
+
+	live, err := d.GetAllMessages(ctx, "replace")
+	require.NoError(t, err)
+	require.Len(t, live, 3)
+	for i := range live {
+		assert.Equal(t, before[i].ID, live[i].ID, "live row %d stays in place", i)
+		assert.Equal(t, write.Messages[i].SourceUUID, live[i].SourceUUID)
+	}
+	livePins, err := d.ListPinnedMessages(ctx, "replace", "")
+	require.NoError(t, err)
+	assert.Len(t, livePins, 2)
+	copyPins, err := d.ListPinnedMessages(ctx, copyID, "")
+	require.NoError(t, err)
+	require.Len(t, copyPins, 2)
+	assert.ElementsMatch(t, []int{0, 1}, []int{copyPins[0].Ordinal, copyPins[1].Ordinal})
+	require.NotNil(t, copyPins[0].Note)
+	assert.Equal(t, "note", *copyPins[0].Note)
+}

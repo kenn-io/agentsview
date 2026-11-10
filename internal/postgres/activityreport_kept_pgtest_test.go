@@ -3,6 +3,7 @@
 package postgres
 
 import (
+	"fmt"
 	"testing"
 	"time"
 
@@ -67,6 +68,7 @@ func TestPGActivityReportKeptChanges(t *testing.T) {
 		timezone string
 		keep     bool
 		full     bool
+		checkSQL bool
 		prepare  func(*testing.T, *db.DB)
 		write    func(*testing.T, *db.DB)
 		store    func(*Store)
@@ -175,7 +177,7 @@ func TestPGActivityReportKeptChanges(t *testing.T) {
 			t.Helper()
 			assert.Len(t, a.Sessions, 2)
 		}},
-		{name: "ineligible Claude peer", keep: true, prepare: func(t *testing.T, d *db.DB) {
+		{name: "ineligible Claude peer", keep: true, checkSQL: true, prepare: func(t *testing.T, d *db.DB) {
 			t.Helper()
 			require.NoError(t, d.ReplaceSessionMessages(t.Context(), "past", []db.Message{{SessionID: "past", Ordinal: 0, Role: "assistant", Content: "answer", Timestamp: "2026-06-14T10:01:00Z", Model: "kept-model", TokenUsage: []byte(`{"output_tokens":500}`), ClaudeMessageID: "shared-message", ClaudeRequestID: "shared-request"}}))
 		}, write: func(t *testing.T, d *db.DB) {
@@ -198,7 +200,7 @@ func TestPGActivityReportKeptChanges(t *testing.T) {
 			t.Helper()
 			assert.Equal(t, 5, a.Report.Totals.OutputTokens)
 		}},
-		{name: "Claude peer of peer", keep: true, prepare: func(t *testing.T, d *db.DB) {
+		{name: "Claude peer of peer", keep: true, checkSQL: true, prepare: func(t *testing.T, d *db.DB) {
 			t.Helper()
 			pgKeptSession(t, d, "peer", "project-b", "2026-06-14")
 			require.NoError(t, d.ReplaceSessionMessages(t.Context(), "past", []db.Message{{SessionID: "past", Ordinal: 0, Role: "assistant", Content: "partial", Timestamp: "2026-06-14T10:00:00Z", Model: "kept-model", TokenUsage: []byte(`{"output_tokens":5}`), ClaudeMessageID: "message-a", ClaudeRequestID: "request-a"}}))
@@ -215,40 +217,57 @@ func TestPGActivityReportKeptChanges(t *testing.T) {
 			assert.Equal(t, 631, a.Report.Totals.OutputTokens)
 		}},
 	} {
-		t.Run(tc.name, func(t *testing.T) {
-			d, syncer, store := newUsageJournalFixture(t)
-			pgKeptSession(t, d, "past", "project-a", "2026-06-14")
-			if tc.prepare != nil {
-				tc.prepare(t, d)
-			}
-			tz := tc.timezone
-			if tz == "" {
-				tz = "UTC"
-			}
-			q, f := pgDayQuery(t, "2026-06-14", tz), db.AnalyticsFilter{Timezone: tz, Project: "project-a"}
-			pgKeptPush(t, syncer, false)
-			before := pgKeptBuild(t, store, f, q, true)
-			if tc.write != nil {
-				tc.write(t, d)
-			}
-			if tc.store != nil {
-				tc.store(store)
-			}
-			pgKeptPush(t, syncer, tc.full)
-			changed := pgKeptBuild(t, store, f, q, !tc.keep)
-			tc.check(t, changed)
-			a, err := activity.ArtifactDigest(before)
-			require.NoError(t, err)
-			b, err := activity.ArtifactDigest(changed)
-			require.NoError(t, err)
-			if tc.keep {
-				assert.Equal(t, a, b)
-			} else {
-				assert.NotEqual(t, a, b)
-			}
-			store.runtimeState().activityKept.DeleteSlots(func(string) bool { return true })
-			requirePGKeptEqual(t, changed, pgKeptBuild(t, store, f, q, true))
-		})
+		for _, partial := range []bool{false, true} {
+			t.Run(fmt.Sprintf("%s/partial=%t", tc.name, partial), func(t *testing.T) {
+				d, syncer, store := newUsageJournalFixture(t)
+				if tc.checkSQL && !partial {
+					store.DB().SetMaxOpenConns(1)
+				}
+				pgKeptSession(t, d, "past", "project-a", "2026-06-14")
+				if tc.prepare != nil {
+					tc.prepare(t, d)
+				}
+				tz := tc.timezone
+				if tz == "" {
+					tz = "UTC"
+				}
+				q, f := pgDayQuery(t, "2026-06-14", tz), db.AnalyticsFilter{Timezone: tz, Project: "project-a"}
+				if partial {
+					q.Partial = true
+					q.EffectiveEnd = q.RangeEnd.Add(-time.Second)
+				}
+				pgKeptPush(t, syncer, false)
+				before := pgKeptBuild(t, store, f, q, true)
+				if tc.write != nil {
+					tc.write(t, d)
+				}
+				if tc.store != nil {
+					tc.store(store)
+				}
+				pgKeptPush(t, syncer, tc.full)
+				changed := pgKeptBuild(t, store, f, q, partial || !tc.keep)
+				if tc.checkSQL && !partial {
+					var prepared int
+					require.NoError(t, store.DB().QueryRowContext(t.Context(), `SELECT count(*)
+					FROM pg_prepared_statements WHERE statement LIKE 'SELECT EXISTS (%'
+					AND statement LIKE '%m.claude_message_id != %'`).Scan(&prepared))
+					assert.Zero(t, prepared, "kept Activity overlap check must plan with its actual parameters")
+				}
+				tc.check(t, changed)
+				a, err := activity.ArtifactDigest(before)
+				require.NoError(t, err)
+				b, err := activity.ArtifactDigest(changed)
+				require.NoError(t, err)
+				if tc.keep {
+					assert.Equal(t, a, b)
+				} else {
+					assert.NotEqual(t, a, b)
+				}
+				store.runtimeState().activityKept.DeleteSlots(func(string) bool { return true })
+				store.runtimeState().activityInputs.DeleteSlots(func(string) bool { return true })
+				requirePGKeptEqual(t, changed, pgKeptBuild(t, store, f, q, true))
+			})
+		}
 	}
 }
 

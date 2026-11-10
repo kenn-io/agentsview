@@ -287,6 +287,12 @@ func TestAgentByPrefix(t *testing.T) {
 			true,
 		},
 		{
+			"open-interpreter prefix",
+			"open-interpreter:some-uuid",
+			AgentInterpreter,
+			true,
+		},
+		{
 			"copilot prefix",
 			"copilot:sess-id",
 			AgentCopilot,
@@ -477,6 +483,7 @@ func TestRegistryCompleteness(t *testing.T) {
 		AgentCodex,
 		AgentTraeX,
 		AgentAugureCode,
+		AgentInterpreter,
 		AgentCopilot,
 		AgentGemini,
 		AgentGeminiApps,

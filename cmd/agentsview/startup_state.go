@@ -44,6 +44,8 @@ type startupState struct {
 	CaddyCreateTime  string    `json:"caddy_create_time,omitempty"`
 	RequireAuth      bool      `json:"require_auth,omitempty"`
 	RequireAuthKnown bool      `json:"require_auth_known,omitempty"`
+	Persistent       bool      `json:"persistent,omitempty"`
+	IdleTimeout      string    `json:"idle_timeout,omitempty"`
 	NoSync           bool      `json:"no_sync,omitempty"`
 	NoSyncKnown      bool      `json:"no_sync_known,omitempty"`
 	UpdatedAt        time.Time `json:"updated_at"`

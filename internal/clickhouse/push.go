@@ -24,9 +24,12 @@ const sessionPushBatchSize = 100
 const idBatchSize = 500
 
 // dependentTables are the per-session tables replaced on every push, in
-// insert order. Deletes run in the same order.
+// delete order. Tool calls and their result events go before messages: a
+// push that fails between two deletes then leaves messages without calls,
+// never calls whose copied message ordinal and timestamp name a message
+// that is gone.
 var dependentTables = []string{
-	"messages", "tool_calls", "tool_result_events", "usage_events",
+	"tool_result_events", "tool_calls", "messages", "usage_events",
 	"session_plan_usage", "secret_findings", "commit_links", "pinned_messages",
 }
 
@@ -117,14 +120,17 @@ func (s *Sync) pushWithOptions(
 	if !full && meta[s.archiveKey(messageDialogueReadyKeyBase)] == "" {
 		full, reason = true, "preparing message dialogue"
 	}
-	// Rows from before stored_message_count, or from an older writer, read as unknown until a full push republishes them.
+	// Rows from before stored_message_count or the current dashboard facts,
+	// or from an older writer, read as unknown until a full push
+	// republishes them.
 	repairing := meta[s.archiveKey(storedCountRepairKeyBase)] != ""
 	if !repairing {
 		var unknown uint64
 		if err := conn.QueryRowContext(ctx,
-			"SELECT count() FROM sessions WHERE source_archive_id = ? AND stored_message_count IS NULL", s.archiveID,
+			"SELECT count() FROM sessions WHERE source_archive_id = ? AND (stored_message_count IS NULL OR dashboard_facts_version != ?)",
+			s.archiveID, dashboardFactsVersion,
 		).Scan(&unknown); err != nil {
-			return result, fmt.Errorf("reading clickhouse sessions without stored message counts: %w", err)
+			return result, fmt.Errorf("reading clickhouse sessions without stored counts: %w", err)
 		}
 		if unknown > 0 {
 			// Republishing fills the NULLs before every session lands, so keep repairing until a push finishes cleanly.
@@ -135,7 +141,7 @@ func (s *Sync) pushWithOptions(
 		}
 	}
 	if !full && repairing {
-		full, reason = true, "publishing stored message counts"
+		full, reason = true, "publishing stored session counts"
 	}
 	localDeletion, err := s.local.SessionDeletionPublicationRevision(ctx)
 	if err != nil {
@@ -362,10 +368,11 @@ func (s *Sync) pushWithOptions(
 		if err := writeMetadata(ctx, conn, pushed); err != nil {
 			return result, err
 		}
-		// Prepared usage serves reads only while it reflects the current
-		// snapshot set, so refresh it now instead of waiting for the
-		// schedule. Where the view refreshes it, the scheduled refresh
-		// still covers a failed trigger; elsewhere the next push retries.
+		// Reads prepare the rows of the sessions pushed since the last
+		// refresh themselves, so refresh prepared usage now once that
+		// work grows past its limit instead of waiting for the schedule.
+		// Where the view refreshes it, the scheduled refresh still covers
+		// a failed trigger; elsewhere the next push retries.
 		if err := refreshPreparedUsage(ctx, conn); err != nil {
 			log.Printf("clickhouse push: prepared usage is behind; usage reads stay correct but slower: %v", err)
 		}
@@ -851,12 +858,15 @@ func (s *Sync) pushSessionBatch(
 	}
 	for batchIDs := range idBatches(ids) {
 		placeholders, args := inArgs(batchIDs)
+		args = slices.Concat(args, []any{version}, args, []any{version})
 		// The usage_messages view never sees deletes, so a shorter republished
 		// session would leave its removed ordinals behind at the old version.
 		for _, table := range slices.Concat(dependentTables, []string{"usage_messages"}) {
-			if _, err := s.conn.ExecContext(ctx,
-				"DELETE FROM "+table+" WHERE session_id IN ("+placeholders+") AND push_version < ?",
-				append(args, version)...); err != nil {
+			query, err := vanishedRowsDeleteSQL(table, placeholders)
+			if err != nil {
+				return nil, err
+			}
+			if _, err := s.conn.ExecContext(ctx, query, args...); err != nil {
 				return nil, fmt.Errorf("deleting older clickhouse %s rows: %w", table, err)
 			}
 		}
@@ -873,6 +883,33 @@ func (s *Sync) pushSessionBatch(
 		return nil, err
 	}
 	return counts, nil
+}
+
+// vanishedRowsDeleteSQL returns the DELETE that removes the rows an older push
+// wrote to table for the sessions in placeholders under keys this push did not
+// write. It takes the session IDs and the push version twice, in that order.
+//
+// A key this push rewrote keeps its older row until ReplacingMergeTree
+// collapses it, which every final=1 read already does. Deleting those rows too
+// would write a patch row for each one: a re-pushed session would write one
+// for every row it has, and every later read of the table pays to apply patch
+// rows until merges fold them in. The subquery reads without FINAL because
+// any row at or above the version marks its key as current.
+func vanishedRowsDeleteSQL(table, placeholders string) (string, error) {
+	var key []string
+	if table == "usage_messages" {
+		key = usageMessagesOrderBy
+	} else {
+		spec, ok := tableByName(table)
+		if !ok {
+			return "", fmt.Errorf("missing clickhouse table specification for %s", table)
+		}
+		key = spec.orderBy
+	}
+	columns := strings.Join(key, ", ")
+	return "DELETE FROM " + table + " WHERE session_id IN (" + placeholders + ") AND push_version < ?" +
+		" AND (" + columns + ") NOT IN (SELECT " + columns + " FROM " + table +
+		" WHERE session_id IN (" + placeholders + ") AND push_version >= ? SETTINGS final = 0)", nil
 }
 
 func (s *Sync) insertDependents(ctx context.Context, payloads []sessionPayload, version uint64) error {
@@ -990,7 +1027,7 @@ func insertSQL(spec tableSpec) string {
 
 func (s *Sync) sessionRow(p sessionPayload, fingerprint string, version uint64) []any {
 	sess := p.session
-	return []any{
+	row := []any{
 		sess.ID, sess.Project, sess.ProjectAssigned,
 		db.MirroredSessionMachine(sess, s.machine), sess.Agent,
 		sess.AgentLabel, sess.Entrypoint, sess.SessionKind,
@@ -1021,8 +1058,9 @@ func (s *Sync) sessionRow(p sessionPayload, fingerprint string, version uint64) 
 		int64(sess.SecretLeakCount), sess.SecretsRulesVersion,
 		db.EncodePRLinks(sess.PRLinks), db.LabelsArg(sess.Labels),
 		lastMessageAt(p.messages), fingerprint, s.archiveID,
-		int64(len(p.messages)), version,
+		int64(len(p.messages)),
 	}
+	return append(append(row, computeDashboardFacts(p.messages).row()...), version)
 }
 
 func lastMessageAt(msgs []db.Message) *time.Time {
@@ -1041,8 +1079,9 @@ func lastMessageAt(msgs []db.Message) *time.Time {
 }
 
 func messageRow(m db.Message, version uint64) []any {
+	dialogue, _ := db.StoredDialogue(m.Content, m.ThinkingText, m.DialogueText)
 	return []any{
-		m.ID, m.SessionID, int64(m.Ordinal), m.Role, m.Content, m.ThinkingText, m.DialogueText,
+		m.ID, m.SessionID, int64(m.Ordinal), m.Role, m.Content, m.ThinkingText, dialogue,
 		timeValue(m.Timestamp), m.HasThinking, m.HasToolUse, int64(m.ContentLength),
 		m.IsSystem, m.Model, m.ReasoningEffort, string(m.TokenUsage),
 		int64(m.ContextTokens), int64(m.OutputTokens), m.ProviderID,
@@ -1068,6 +1107,7 @@ func toolCallRow(m db.Message, tc db.ToolCall, callIndex int, version uint64) []
 		tc.ToolUseID, tc.InputJSON, tc.SkillName, int64(length),
 		stored,
 		tc.SubagentSessionID, tc.FilePath,
+		timeValue(m.Timestamp), m.Model, true,
 		version,
 	}
 }

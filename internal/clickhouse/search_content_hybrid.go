@@ -39,18 +39,24 @@ const maxHybridKeywordBatches = 4
 // fused at unit granularity with db.RRFMerge. The keyword leg is the mirror's
 // recency-ordered term-AND ILIKE ranking, the same substitution the
 // PostgreSQL store makes for BM25. The caller has already validated the
-// filter and confirmed a searcher is wired.
+// filter before selecting either hybrid leg.
 func (s *Store) searchContentHybrid(
 	ctx context.Context, f db.ContentSearchFilter,
 ) (db.ContentSearchPage, error) {
-	searcher := s.getVectorSearcher()
-	if searcher == nil {
-		return db.ContentSearchPage{}, s.semanticUnavailableError()
+	var searcher db.VectorSearcher
+	if !f.KeywordOnly {
+		if searcher = s.getVectorSearcher(); searcher == nil {
+			return db.ContentSearchPage{}, s.semanticUnavailableError()
+		}
 	}
 	k := max(f.Limit*4, db.SemanticOverfetchMin)
-	vecLeg, err := s.hybridVectorLeg(ctx, f, searcher, k)
-	if err != nil {
-		return db.ContentSearchPage{}, err
+	var vecLeg hybridLeg
+	var err error
+	if searcher != nil {
+		vecLeg, err = s.hybridVectorLeg(ctx, f, searcher, k)
+		if err != nil {
+			return db.ContentSearchPage{}, err
+		}
 	}
 	kwLeg, err := s.hybridKeywordLeg(ctx, f, searcher, k)
 	if err != nil {
@@ -176,7 +182,7 @@ func (s *Store) appendHybridKeywordHits(
 	for i, hit := range hits {
 		refs[i] = db.MessageRef{SessionID: hit.sessionID, Ordinal: hit.ordinal}
 	}
-	units, err := searcher.ResolveMessageUnits(ctx, refs)
+	units, err := db.ResolveHybridMessageUnits(ctx, searcher, refs)
 	if err != nil {
 		return fmt.Errorf("resolving keyword hits to units: %w", err)
 	}

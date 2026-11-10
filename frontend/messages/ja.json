@@ -70,6 +70,7 @@
   "header_transcript_blocks_tool": "ツール呼び出し",
   "header_transcript_blocks_code": "コードブロック",
   "header_transcript_blocks_system": "システム境界",
+  "header_transcript_blocks_hook": "フック",
   "header_actions_follow_latest": "最新のメッセージをフォローする",
   "header_actions_toggle_sort": "並べ替え順序を切り換える (o)",
   "header_actions_cycle_layout": "サイクルレイアウト: {layout} (l)",
@@ -173,9 +174,6 @@
   "command_palette_semantic_ready_intro": "セマンティック検索は設定されていますが、このアーカイブには埋め込みインデックスが構築されていません。",
   "command_palette_semantic_build_button": "埋め込みの構築",
   "command_palette_semantic_build_hint": "ビルドはサーバー上でバックグラウンドで実行されます。この検索は終了すると再実行されます。",
-  "command_palette_semantic_building_title": "埋め込みインデックスを構築中...",
-  "command_palette_semantic_building_scanning": "アーカイブをスキャンしています...",
-  "command_palette_semantic_building_progress": "{percentLabel} が埋め込まれています",
   "command_palette_semantic_failed_title": "埋め込みのビルドに失敗しました",
   "command_palette_search_timeout_title": "検索に時間がかかりすぎました",
   "command_palette_search_timeout_detail": "もう一度やり直してください。最初のセマンティック検索またはハイブリッド検索は、埋め込みモデルがウォームアップしている間は遅くなる可能性があります。",
@@ -595,6 +593,7 @@
   "analytics_export_csv": "CSVのエクスポート",
   "analytics_activity_by_day_hour": "日別および時間別の活動",
   "analytics_summary_sessions": "セッション",
+  "analytics_summary_sessions_scope": "{range} · サブエージェントを含む",
   "analytics_summary_messages": "メッセージ",
   "analytics_summary_projects": "プロジェクト",
   "analytics_summary_active_days": "アクティブな日",
@@ -2086,56 +2085,32 @@
   "settings_embeddings_load_failed": "埋め込みステータスのロードに失敗しました",
   "settings_embeddings_model_label": "モデル",
   "settings_embeddings_dimension_label": "次元",
-  "settings_embeddings_status_label": "状態",
-  "settings_embeddings_status_idle": "アイドル状態",
-  "settings_embeddings_status_scanning": "走査",
-  "settings_embeddings_status_embedding": "埋め込み",
-  "settings_embeddings_status_running": "ランニング",
   "settings_embeddings_scanning_hint": "セッションの変更をスキャンしています - 総作業量はまだわかりません。",
-  "settings_embeddings_progress_chunks": [
-    {
-      "declarations": [
-        "input count",
-        "input doneLabel",
-        "input totalLabel",
-        "local countPlural = count: plural"
-      ],
-      "selectors": ["countPlural"],
-      "match": {
-        "countPlural=one": "{doneLabel} / {totalLabel} チャンク",
-        "countPlural=other": "{doneLabel} / {totalLabel} チャンク"
-      }
-    }
-  ],
   "settings_embeddings_rate": [
     {
       "declarations": ["input count", "input rateLabel", "local countPlural = count: plural"],
       "selectors": ["countPlural"],
       "match": {
-        "countPlural=one": "{rateLabel} チャンク/秒",
-        "countPlural=other": "{rateLabel} チャンク/秒"
+        "countPlural=one": "{rateLabel} テキスト区間/秒",
+        "countPlural=other": "{rateLabel} テキスト区間/秒"
       }
     }
   ],
   "settings_embeddings_elapsed": "経過 {duration}",
-  "settings_embeddings_eta": "到着予定時刻 {duration}",
-  "settings_embeddings_eta_estimating": "残り時間を見積もっています...",
   "settings_embeddings_duration_hours_minutes": "{hours}時 {minutes}分",
   "settings_embeddings_duration_minutes_seconds": "{minutes}分 {seconds}秒",
   "settings_embeddings_duration_seconds": "{seconds}秒",
   "settings_embeddings_last_build_label": "最終ビルド",
   "settings_embeddings_last_build_completed": "完了",
-  "settings_embeddings_last_build_failed": "失敗した",
   "settings_embeddings_last_build_activated": "新しい世代を有効化しました",
   "settings_embeddings_last_build_documents": "埋め込まれたドキュメント",
-  "settings_embeddings_last_build_chunks": "埋め込まれたチャンク",
+  "settings_embeddings_last_build_chunks": "索引済みテキスト区間",
   "settings_embeddings_generations_title": "世代",
   "settings_embeddings_generations_empty": "埋め込み世代はまだ存在しません。",
   "settings_embeddings_state_active": "アクティブ",
   "settings_embeddings_state_building": "構築中",
   "settings_embeddings_state_retired": "廃止済み",
   "settings_embeddings_coverage": "{embeddedLabel} が埋め込まれています · {missingLabel} が見つかりません",
-  "settings_embeddings_progress_aria": "埋め込みの進行状況",
   "settings_remote_connected_version": "接続済み (v{version})",
   "settings_remote_server_returned": "サーバーが {status} を返しました",
   "settings_remote_connection_failed": "接続に失敗しました",
@@ -2218,6 +2193,9 @@
   "system_boundary_interrupted": "リクエストが中断されました",
   "system_boundary_task_notification": "タスク通知",
   "system_boundary_stop_hook": "フックフィードバックを停止する",
+  "system_boundary_hook_success": "フック出力",
+  "system_boundary_stop_hook_summary": "停止フックの概要",
+  "system_boundary_hook_cancelled": "フックのキャンセル",
   "system_boundary_peer_message": "別のセッションからのメッセージ",
   "system_boundary_title": "システム境界: {subtype}",
   "system_boundary_show_content": "コンテンツを表示",
@@ -3010,6 +2988,10 @@
   "friction_issue_cancel": "キャンセル",
   "friction_issue_unlink": "リンク解除",
   "friction_issue_unlink_title": "リンクを削除します。Kata の課題はそのまま残ります",
+  "friction_filing_retry": "登録に失敗しました。再試行します",
+  "friction_filing_needs_person": "登録を停止しました",
+  "friction_filing_paused": "自動登録を一時停止中",
+  "friction_filing_paused_title": "リンクが削除されたため、自動登録はこのパターンをスキップします。登録またはリンクすると再開します。",
   "friction_digest_heading": "フリクションログ — {date}",
   "friction_digest_built": "{when} に作成（{timezone}）",
   "friction_p0_failed": [
@@ -3144,6 +3126,31 @@
   "docbank_file": "ファイル {n} · {mediaType} · {size}",
   "docbank_file_without_size": "ファイル {n} · {mediaType}",
   "docbank_more": "Docbank にあと {count} 件",
+  "meaning_name": "意味で検索",
+  "meaning_off": "オフ",
+  "meaning_on": "オン",
+  "meaning_uses_ollama": "有効にすると Ollama を使用します",
+  "meaning_ollama": "オン · Ollama",
+  "meaning_turning_on": "有効化中",
+  "meaning_turn_on": "有効にする",
+  "meaning_download": "{size} を一度ダウンロードし、すべての Kenn アプリで共有します",
+  "meaning_downloaded": "このコンピューターに保存済み",
+  "meaning_configured": "設定済みのサーバーを使用",
+  "meaning_downloading": "{total} 中 {done} をダウンロード中",
+  "meaning_indexing": "{total} {items} 中 {done} をインデックス中",
+  "meaning_time_left": "残り {time}",
+  "meaning_meanwhile": "キーワード検索は引き続き利用できます",
+  "meaning_under_minute": "1分未満",
+  "meaning_about_time": "約 {time}",
+  "meaning_progress": "意味検索の設定",
+  "meaning_hint": "意味検索はオフです",
+  "meaning_chunks": [
+    {
+      "declarations": ["input count", "local countPlural = count: plural"],
+      "selectors": ["countPlural"],
+      "match": { "countPlural=one": "テキスト区間", "countPlural=other": "テキスト区間" }
+    }
+  ],
   "empty_archive_title": "まだセッションがありません",
   "empty_archive_desc": "AgentsView はこれらのフォルダーからセッションを読み取ります。エージェントがいずれかに書き込むと、ここに表示されます。",
   "empty_archive_choose_folders": "フォルダーを選択"

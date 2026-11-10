@@ -26,7 +26,8 @@ before matching and pagination.
 
 A mirror written before dialogue storage (schema version 20 or older) rejects
 reads with a schema compatibility error naming `messages.dialogue_text`. Run
-`agentsview replica duckdb push` to rebuild it before serving it with a newer binary.
+`agentsview replica duckdb push` to rebuild it before serving it with a newer
+binary.
 
 Commit lookups return the copied links and prompts.
 The first push after upgrading rebuilds the mirror to copy existing commit
@@ -237,10 +238,8 @@ Environment variables override the config file:
   changed since the rebuild began. When `--full` discards an unfinished
   rebuild, the push mode line says `discarded an unfinished rebuild`. A
   rebuild that ended with session errors resumes only while the mirror still
-  needs a rebuild. A manual push also resumes it when other processes have the
-  mirror open and the push has to fall back to a rebuild. The reported reason
-  then names those processes. Otherwise the push deletes the rebuild file after
-  the incremental update runs.
+  needs a rebuild. Otherwise the push deletes the rebuild file and retries
+  the failed sessions through an incremental update.
 - **One rebuild at a time** — a push holds a lock beside the rebuild file
   from the moment it reads the file until the swap. While another push holds
   it, a watch-mode push waits for a later cycle and a manual push fails. A
@@ -285,17 +284,17 @@ Environment variables override the config file:
   serve` and `duckdb quack serve` open the mirror with DuckDB's read-only
   access mode, and read-only handles coexist across processes. A push can
   therefore always inspect a served mirror; only DuckDB's exclusive WRITE
-  lock conflicts. While serve processes hold the file, an incremental
-  push cannot acquire write access: an explicit `duckdb push` falls back
-  to a full rebuild (rebuild file plus atomic rename, which never opens the
-  destination for writing), while the automatic pushes of `duckdb push
-  --watch` defer instead (logging the deferral) so a long-running serve
-  does not turn every changed batch into a full-archive rebuild. A
-  deferred push does not advance the mirror's push cutoff, so once the
-  serve process releases the file the next push catches up on everything
-  that changed in the meantime. A push that finds the mirror held
-  READ-WRITE fails with an error naming the holder: that is either
-  another push in flight or a serve process built before serve went
+  lock conflicts. While readers hold the mirror, both manual and watched
+  pushes update a standby file, checkpoint it, and swap it into place. Serve
+  adopts the replacement on its next poll. The first publication copies the
+  mirror and its WAL, requiring space for one extra mirror. Later publications
+  reuse the retired file at `<mirror-name>.spare` in the work directory and
+  catch it up through its own push cursors. A rebuild removes the standby;
+  ordinary in-place pushes keep it for reuse. If readers still hold the
+  standby, the push returns an error. Watch mode retries the pending batch;
+  a manual push can be rerun once readers release it. A push that finds the
+  mirror held READ-WRITE fails with an error naming the holder: that is
+  either another push in flight or a serve process built before serve went
   read-only — upgrading such a serve process needs a one-time restart.
   Leftover `<mirror-path>.agentsview-mirror` sidecar files from older
   development builds are inert and can be deleted. On POSIX platforms,

@@ -1199,7 +1199,7 @@ func loadUsageSourceVersions(
 		placeholders, args := InPlaceholders(chunk)
 		rows, queryErr := tx.QueryContext(ctx, `
 			SELECT id, COALESCE(sync_marker, ''),
-			       COALESCE(transcript_revision, '0'), COALESCE(usage_generation, ''),
+			       transcript_revision, COALESCE(usage_generation, ''),
 			       (SELECT MAX(ordinal) FROM messages WHERE session_id=sessions.id)
 			FROM sessions WHERE deleted_at IS NULL AND id IN `+placeholders,
 			args...)
@@ -1610,7 +1610,7 @@ func (c *usageFillCoordinator) installCursorBatch(
 	}
 	if _, err := tx.ExecContext(ctx, `
 		UPDATE usage_cache_metadata
-		SET value = CAST(MAX(CAST(value AS INTEGER), ?) AS TEXT)
+		SET value = MAX(CAST(value AS INTEGER), ?)
 		WHERE key = ?`, committedThrough, usageCacheMetadataCursorHighWaterMark,
 	); err != nil {
 		return err

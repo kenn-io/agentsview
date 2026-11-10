@@ -253,17 +253,25 @@ func syncConversation(ctx context.Context, store db.Store, result parser.ParseRe
 	keepCopy := false
 	if keepsReplacedHistory(result.Session.Agent) {
 		prefix := false
+		var completed []int
 		if stored != nil && len(stored) >= len(archived) {
-			var filled []int
-			filled, prefix = compareChatGPTPrefix(archived, stored[:len(archived)], true)
-			if prefix && result.Session.Agent == parser.AgentGeminiApps {
-				// Appends and completed replies keep stored rows, their IDs, and
-				// pins. The fill indices count stored-form rows, which usage-only
-				// storage thins, so the rows written come from the same slice.
-				rows := chatGPTFillRows(archived, stored, filled, true)
-				rows = append(rows, stored[len(archived):]...)
-				return importUpdated, appendChatGPTMessages(ctx, store, chatGPTSession(result.Session), rows)
+			completed, prefix = compareChatGPTPrefix(archived, stored[:len(archived)], true)
+		}
+		// Appends and completed replies keep stored rows, their IDs, and pins.
+		// Gemini always takes this path. ChatGPT takes it under usage-only
+		// storage, where an appended reply resizes the identity groups a full
+		// replacement uses to restore pins. The fill indices count stored-form
+		// rows, which usage-only storage thins, so the rows written come from
+		// the same slice.
+		if prefix && (result.Session.Agent == parser.AgentGeminiApps ||
+			(storeArchiveContent(store).UsageOnly() && len(msgs) >= existing.MessageCount)) {
+			rows := chatGPTFillRows(archived, stored, completed, true)
+			rows = append(rows, stored[len(archived):]...)
+			err := appendChatGPTMessages(ctx, store, chatGPTSession(result.Session), rows)
+			if errors.Is(err, db.ErrSessionExcluded) {
+				return importSkipped, nil
 			}
+			return importUpdated, err
 		}
 		keepCopy = !prefix
 	}

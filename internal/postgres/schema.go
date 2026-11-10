@@ -20,6 +20,7 @@ const (
 	tokenCoverageRepairMetadataKey        = "token_coverage_repair_v1"
 	sourceCurationBackfillMetadataKey     = "source_curation_baseline_backfill_v1"
 	codexThreadScopeMetadataKey           = "codex_thread_scope_v1"
+	dialogueDedupeMetadataKey             = "dialogue_dedupe_v1"
 	projectIdentityRemoteScrubMetadataKey = "git_remote_credentials_scrub_v1"
 	tokenCoverageBackfillBatchSize        = 1000
 )
@@ -734,6 +735,16 @@ CREATE TABLE IF NOT EXISTS friction_issue_links (
     source            TEXT NOT NULL,
     linked_at         TIMESTAMPTZ NOT NULL
 );
+
+CREATE TABLE IF NOT EXISTS friction_filing_state (
+    fingerprint     TEXT PRIMARY KEY,
+    state           TEXT NOT NULL,
+    attempts        INTEGER NOT NULL DEFAULT 0,
+    first_failed_at TIMESTAMPTZ,
+    next_attempt_at TIMESTAMPTZ,
+    last_error      TEXT NOT NULL DEFAULT '',
+    updated_at      TIMESTAMPTZ NOT NULL
+);
 `
 
 func migrateMoneyColumnsPG(
@@ -1192,6 +1203,14 @@ func EnsureSchema(
 		time.Since(step).Round(time.Millisecond),
 	)
 	step = time.Now()
+	if err := dedupeStoredDialoguePG(ctx, db); err != nil {
+		return err
+	}
+	log.Printf(
+		"pg schema: dialogue deduplication step completed in %s",
+		time.Since(step).Round(time.Millisecond),
+	)
+	step = time.Now()
 	if err := createMissingPreparationIndexesPG(ctx, db); err != nil {
 		return err
 	}
@@ -1266,6 +1285,9 @@ var preparationIndexesPG = []struct{ name, ddl string }{
 	{"idx_sessions_data_version", `CREATE INDEX IF NOT EXISTS idx_sessions_data_version ON sessions(data_version)`},
 	{"idx_sessions_parentless_workers", `CREATE INDEX IF NOT EXISTS idx_sessions_parentless_workers ON sessions(id) WHERE ` + db.ParentlessWorkerSQL},
 	{"idx_sessions_source_missing", `CREATE INDEX IF NOT EXISTS idx_sessions_source_missing ON sessions(id) WHERE deletion_cause = 'source_missing'`},
+	// Raw session ID lookups seek on the ID tail instead of scanning every
+	// session; see Store.FindSessionIDsByRawSuffix.
+	{"idx_sessions_id_tail", `CREATE INDEX IF NOT EXISTS idx_sessions_id_tail ON sessions((` + pgSessionIDTailExpr + `))`},
 }
 
 // createMissingPreparationIndexesPG serializes publishers upgrading the same
@@ -1414,6 +1436,9 @@ func runSchemaDataRepairsPG(ctx context.Context, db *sql.DB) error {
 	if err := backfillCodexThreadScopePG(ctx, db); err != nil {
 		return err
 	}
+	if err := dedupeStoredDialoguePG(ctx, db); err != nil {
+		return err
+	}
 	if err := repairLegacySourceMissingDeletionPG(ctx, db); err != nil {
 		return err
 	}
@@ -1431,6 +1456,26 @@ func runSchemaDataRepairsPG(ctx context.Context, db *sql.DB) error {
 		return err
 	}
 	return markTokenCoverageRepairDone(ctx, db)
+}
+
+// dedupeStoredDialoguePG applies db.StoredDialogue to rows pushed before it:
+// a dialogue_text that repeats content on a message without thinking text
+// becomes NULL, which search already reads as content. The marker and the
+// UPDATE share one statement, so the rewrite runs once and a failure retries
+// it whole.
+func dedupeStoredDialoguePG(ctx context.Context, pg pgSessionExecer) error {
+	_, err := pg.ExecContext(ctx, `
+		WITH migration AS (
+			INSERT INTO sync_metadata (key, value) VALUES ($1, '1')
+			ON CONFLICT (key) DO NOTHING RETURNING key
+		)
+		UPDATE messages SET dialogue_text = NULL
+		WHERE dialogue_text = content AND thinking_text = ''
+		  AND EXISTS (SELECT 1 FROM migration)`, dialogueDedupeMetadataKey)
+	if err != nil {
+		return fmt.Errorf("removing duplicate dialogue text: %w", err)
+	}
+	return nil
 }
 
 // Backfill only thread deletion decisions present before per-file identities.
@@ -2551,6 +2596,7 @@ func pushSchemaCurrent(ctx context.Context, db *sql.DB) bool {
 		!pgHasTable(ctx, db, "friction_digest_sessions") ||
 		!pgHasTable(ctx, db, "friction_patterns") ||
 		!pgHasTable(ctx, db, "friction_issue_links") ||
+		!pgHasTable(ctx, db, "friction_filing_state") ||
 		!pgHasTable(ctx, db, "cursor_usage_events") ||
 		!pgHasTable(ctx, db, "friction_findings") {
 		return false

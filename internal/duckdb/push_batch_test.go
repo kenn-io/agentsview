@@ -5,7 +5,6 @@ package duckdb
 import (
 	"context"
 	"database/sql"
-	"database/sql/driver"
 	"errors"
 	"fmt"
 	"strings"
@@ -20,10 +19,10 @@ import (
 	"go.kenn.io/agentsview/internal/storage"
 )
 
-func TestPushBatchedDependentsPreserveValues(t *testing.T) {
+func TestPushRejectsIntegerOverflowReplacement(t *testing.T) {
 	ctx := t.Context()
 	local := newLocalDB(t)
-	write := duckBatchFixture("batch-values", 203)
+	write := duckBatchFixture("integer-overflow", 1)
 	_, err := local.WriteSessionBatchAtomic(ctx, []db.SessionBatchWrite{write})
 	require.NoError(t, err)
 	syncer := newInMemoryTestSync(t, local, storage.MirrorPushOptions{})
@@ -31,34 +30,26 @@ func TestPushBatchedDependentsPreserveValues(t *testing.T) {
 	sess, err := local.GetSession(ctx, write.Session.ID)
 	require.NoError(t, err)
 	require.NotNil(t, sess)
-	_, err = syncer.pushSingleSession(ctx, *sess, "initial")
+	_, err = syncer.pushSingleSession(ctx, *sess, "before")
 	require.NoError(t, err)
-	assertDuckBatchParity(t, local, syncer.DB(), sess.ID)
-	var summary string
-	require.NoError(t, syncer.DB().QueryRowContext(ctx,
-		`SELECT result_content FROM tool_calls WHERE session_id = ? AND tool_use_id = ?`,
-		sess.ID, "row-102-call-0",
-	).Scan(&summary))
-	assert.Equal(t, strings.Repeat("summary\u03bb", 160000)+"row-102 summary", summary)
 
-	replacement := duckBatchFixture(sess.ID, 1)
-	replacement.Messages[0].ToolCalls = nil
-	replacement.Messages[0].HasToolUse = false
-	replacement.UsageEvents = nil
-	_, err = local.WriteSessionBatchAtomic(ctx, []db.SessionBatchWrite{replacement})
-	require.NoError(t, err)
+	sess.TotalOutputTokens = 2147483648
+	sess.HasTotalOutputTokens = true
+	require.NoError(t, local.UpsertSession(ctx, *sess))
 	sess, err = local.GetSession(ctx, sess.ID)
 	require.NoError(t, err)
-	_, err = syncer.pushSingleSession(ctx, *sess, "replacement")
-	require.NoError(t, err)
-	assertDuckBatchParity(t, local, syncer.DB(), sess.ID)
-	assertDuckDBCount(t, syncer.DB(), "messages", 1)
-	for _, table := range []string{"tool_calls", "tool_result_events", "usage_events"} {
-		assertDuckDBCount(t, syncer.DB(), table, 0)
-	}
+	require.Equal(t, 2147483648, sess.TotalOutputTokens)
+	_, err = syncer.tryPushSessionBatch(ctx, []db.Session{*sess}, map[string]string{sess.ID: "after"})
+	require.ErrorContains(t, err, "total_output_tokens")
+	require.ErrorContains(t, err, "INTEGER")
+	var total int64
+	require.NoError(t, syncer.DB().QueryRowContext(ctx,
+		`SELECT total_output_tokens FROM sessions WHERE id = ?`, sess.ID,
+	).Scan(&total))
+	assert.Equal(t, int64(0), total)
 }
 
-func TestDuckInsertBatchStatementBounds(t *testing.T) {
+func TestDuckAppenderPayloadBounds(t *testing.T) {
 	const byteLimit = 1 << 20
 	first, second := strings.Repeat("a", 614400), strings.Repeat("b", 614400)
 	exactPrefix := strings.Repeat("e", byteLimit-4)
@@ -72,40 +63,36 @@ func TestDuckInsertBatchStatementBounds(t *testing.T) {
 		wantSmallRows[i] = sql.NullString{String: "s\u03bb", Valid: true}
 	}
 	for _, tc := range []struct {
-		name         string
-		values       []any
-		wantValues   []sql.NullString
-		wantRows     []int
-		wantPayloads []int
+		name        string
+		values      []any
+		wantValues  []sql.NullString
+		tables      []string
+		wantVisible [][2]int
 	}{
-		{name: "empty"},
 		{
-			name: "100-small-rows", values: smallRows[:100], wantValues: wantSmallRows[:100],
-			wantRows: []int{100}, wantPayloads: []int{300},
+			name: "shared-table-budget", values: []any{first, "edge", second},
+			tables:      []string{"batch_bounds", "other_bounds", "other_bounds"},
+			wantValues:  []sql.NullString{{String: first, Valid: true}, {String: "edge", Valid: true}, {String: second, Valid: true}},
+			wantVisible: [][2]int{{0, 0}, {0, 0}, {1, 1}},
 		},
 		{
-			name: "101-small-rows", values: smallRows, wantValues: wantSmallRows,
-			wantRows: []int{100, 1}, wantPayloads: []int{300, 3},
-		},
-		{
-			name: "combined-byte-overflow", values: []any{first, second},
-			wantValues: []sql.NullString{{String: first, Valid: true}, {String: second, Valid: true}},
-			wantRows:   []int{1, 1}, wantPayloads: []int{614400, 614400},
+			name: "small-rows-stay-buffered", values: smallRows, wantValues: wantSmallRows,
+			wantVisible: make([][2]int, 101),
 		},
 		{
 			name: "exact-byte-limit-and-tail", values: []any{exactPrefix, "edge", "tail"},
-			wantValues: []sql.NullString{{String: exactPrefix, Valid: true}, {String: "edge", Valid: true}, {String: "tail", Valid: true}},
-			wantRows:   []int{2, 1}, wantPayloads: []int{byteLimit, 4},
+			wantValues:  []sql.NullString{{String: exactPrefix, Valid: true}, {String: "edge", Valid: true}, {String: "tail", Valid: true}},
+			wantVisible: [][2]int{{0, 0}, {2, 0}, {2, 0}},
 		},
 		{
 			name: "small-oversized-small", values: []any{"a", oversized, "b"},
-			wantValues: []sql.NullString{{String: "a", Valid: true}, {String: oversized, Valid: true}, {String: "b", Valid: true}},
-			wantRows:   []int{1, 1, 1}, wantPayloads: []int{1, byteLimit + 1, 1},
+			wantValues:  []sql.NullString{{String: "a", Valid: true}, {String: oversized, Valid: true}, {String: "b", Valid: true}},
+			wantVisible: [][2]int{{0, 0}, {2, 0}, {2, 0}},
 		},
 		{
 			name: "nullable-pointer-payload", values: []any{&first, &second, null, &empty, nil, ""},
-			wantValues: []sql.NullString{{String: first, Valid: true}, {String: second, Valid: true}, {}, {Valid: true}, {}, {Valid: true}},
-			wantRows:   []int{1, 5}, wantPayloads: []int{614400, 614400},
+			wantValues:  []sql.NullString{{String: first, Valid: true}, {String: second, Valid: true}, {}, {Valid: true}, {}, {Valid: true}},
+			wantVisible: [][2]int{{0, 0}, {1, 0}, {1, 0}, {1, 0}, {1, 0}, {1, 0}},
 		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -115,63 +102,74 @@ func TestDuckInsertBatchStatementBounds(t *testing.T) {
 			t.Cleanup(func() { require.NoError(t, conn.Close()) })
 			_, err = conn.ExecContext(ctx, `CREATE TABLE batch_bounds (id INTEGER PRIMARY KEY, payload VARCHAR)`)
 			require.NoError(t, err)
-			exec := &duckBatchRecordingExecutor{db: conn}
-			batch := newDuckInsertBatch(exec, "INSERT INTO batch_bounds (id, payload) VALUES ", 2)
-			for i, value := range tc.values {
-				require.NoError(t, batch.add(ctx, i, value))
-			}
-			require.NoError(t, batch.flush(ctx))
-
-			var statementRows, statementPayloads []int
-			for _, args := range exec.calls {
-				require.Zero(t, len(args)%2)
-				rows, payload := len(args)/2, 0
-				for i := 1; i < len(args); i += 2 {
-					value, err := driver.DefaultParameterConverter.ConvertValue(args[i])
-					require.NoError(t, err)
-					if value != nil {
-						text, ok := value.(string)
-						require.True(t, ok, "payload must bind as text, got %T", value)
-						payload += len(text)
+			_, err = conn.ExecContext(ctx, `CREATE TABLE other_bounds (id INTEGER PRIMARY KEY, payload VARCHAR)`)
+			require.NoError(t, err)
+			err = func() (err error) {
+				sqlConn, err := conn.Conn(ctx)
+				if err != nil {
+					return err
+				}
+				defer sqlConn.Close()
+				tx, err := sqlConn.BeginTx(ctx, nil)
+				if err != nil {
+					return err
+				}
+				defer func() { _ = tx.Rollback() }()
+				var batch *duckAppendBatch
+				err = sqlConn.Raw(func(raw any) error {
+					batch, err = newDuckAppendBatch(ctx, raw, map[string][]columnSpec{
+						"batch_bounds": {{"id", "id INTEGER"}, {"payload", "payload VARCHAR"}},
+						"other_bounds": {{"id", "id INTEGER"}, {"payload", "payload VARCHAR"}},
+					})
+					return err
+				})
+				if err != nil {
+					return err
+				}
+				defer func() {
+					err = errors.Join(err, sqlConn.Raw(func(any) error { return batch.close(ctx) }))
+				}()
+				for i, value := range tc.values {
+					table := "batch_bounds"
+					if tc.tables != nil {
+						table = tc.tables[i]
+					}
+					if err := sqlConn.Raw(func(any) error { return batch.add(ctx, table, i, value) }); err != nil {
+						return err
+					}
+					// Inspect the transaction before any explicit flush or close.
+					for j, table := range []string{"batch_bounds", "other_bounds"} {
+						var visible int
+						if err := tx.QueryRowContext(ctx, "SELECT count(*) FROM "+table).Scan(&visible); err != nil {
+							return err
+						}
+						assert.Equal(t, tc.wantVisible[i][j], visible, "row %d, table %s", i, table)
 					}
 				}
-				assert.Positive(t, rows)
-				assert.LessOrEqual(t, rows, 100)
-				if payload > byteLimit {
-					assert.Equal(t, 1, rows, "an oversized row must be written alone")
+				if err := sqlConn.Raw(func(any) error { return batch.flush(ctx) }); err != nil {
+					return err
 				}
-				statementRows = append(statementRows, rows)
-				statementPayloads = append(statementPayloads, payload)
-			}
-			assert.Equal(t, tc.wantRows, statementRows)
-			assert.Equal(t, tc.wantPayloads, statementPayloads)
-
-			rows, err := conn.QueryContext(ctx, `SELECT id, payload FROM batch_bounds ORDER BY id`)
+				rows, err := tx.QueryContext(ctx, `SELECT id, payload FROM batch_bounds UNION ALL SELECT id, payload FROM other_bounds ORDER BY id`)
+				if err != nil {
+					return err
+				}
+				defer rows.Close()
+				var stored []sql.NullString
+				for rows.Next() {
+					var id int
+					var value sql.NullString
+					if err := rows.Scan(&id, &value); err != nil {
+						return err
+					}
+					assert.Equal(t, len(stored), id)
+					stored = append(stored, value)
+				}
+				assert.Equal(t, tc.wantValues, stored)
+				return rows.Err()
+			}()
 			require.NoError(t, err)
-			defer func() { require.NoError(t, rows.Close()) }()
-			var stored []sql.NullString
-			for rows.Next() {
-				var id int
-				var value sql.NullString
-				require.NoError(t, rows.Scan(&id, &value))
-				assert.Equal(t, len(stored), id)
-				stored = append(stored, value)
-			}
-			require.NoError(t, rows.Err())
-			assert.Equal(t, tc.wantValues, stored)
 		})
 	}
-}
-
-type duckBatchRecordingExecutor struct {
-	db    *sql.DB
-	calls [][]any
-}
-
-func (e *duckBatchRecordingExecutor) ExecContext(ctx context.Context, query string, args ...any) (sql.Result, error) {
-	argsSnapshot := append([]any(nil), args...)
-	e.calls = append(e.calls, argsSnapshot)
-	return e.db.ExecContext(ctx, query, args...)
 }
 
 func TestPushBatchedDependentsRollbackAndRetry(t *testing.T) {
@@ -192,6 +190,8 @@ func TestPushBatchedDependentsRollbackAndRetry(t *testing.T) {
 				before := duckBatchSnapshot(t, syncer.DB(), sess.ID)
 
 				updated := duckBatchFixture(sess.ID, 203)
+				updated.UsageEvents[0].DedupKey = strings.Repeat("usage", 220000)
+				updated.UsageEvents[1].DedupKey = strings.Repeat("usage", 220000) + "second"
 				_, err = local.WriteSessionBatchAtomic(ctx, []db.SessionBatchWrite{updated})
 				require.NoError(t, err)
 				sess, err = local.GetSession(ctx, sess.ID)
@@ -200,21 +200,35 @@ func TestPushBatchedDependentsRollbackAndRetry(t *testing.T) {
 				defer cancel()
 				failure := errors.New("injected dependent write failure")
 				var injected bool
-				err = syncer.withDuckTx(ctx, "interrupted replacement", func(tx *sql.Tx) error {
-					exec := &duckBatchInterruptExecutor{
-						tx: tx, table: table, failure: failure,
-						cancel: cancel, canceled: canceled,
+				flushed := false
+				previousHook := duckAppendHook
+				t.Cleanup(func() { duckAppendHook = previousHook })
+				duckAppendHook = func(name string, flush bool) error {
+					if name != table {
+						return nil
 					}
-					_, pushErr := syncer.pushSession(attemptCtx, exec, *sess, "after")
-					injected = exec.interrupted
-					return pushErr
-				})
-				require.True(t, injected, "the failure must follow one real inserted chunk")
+					if flush {
+						flushed = true
+						return nil
+					}
+					if flushed {
+						injected = true
+						if canceled {
+							cancel()
+							return nil
+						}
+						return failure
+					}
+					return nil
+				}
+				_, err = syncer.tryPushSessionBatch(attemptCtx, []db.Session{*sess}, map[string]string{sess.ID: "after"})
+				require.True(t, injected, "the failure must follow one real inserted chunk: %v", err)
 				if canceled {
 					require.ErrorIs(t, err, context.Canceled)
 				} else {
 					require.ErrorIs(t, err, failure)
 				}
+				require.ErrorContains(t, err, "batch of 1 sessions starting with batch-rollback")
 				assert.Equal(t, before, duckBatchSnapshot(t, syncer.DB(), sess.ID))
 				var fingerprint string
 				require.NoError(t, syncer.DB().QueryRowContext(ctx,
@@ -222,6 +236,7 @@ func TestPushBatchedDependentsRollbackAndRetry(t *testing.T) {
 				).Scan(&fingerprint))
 				assert.Equal(t, "before", fingerprint)
 
+				duckAppendHook = previousHook
 				_, err = syncer.pushSingleSession(ctx, *sess, "after")
 				require.NoError(t, err)
 				assertDuckBatchParity(t, local, syncer.DB(), sess.ID)
@@ -232,30 +247,6 @@ func TestPushBatchedDependentsRollbackAndRetry(t *testing.T) {
 			})
 		}
 	}
-}
-
-type duckBatchInterruptExecutor struct {
-	tx          *sql.Tx
-	table       string
-	failure     error
-	cancel      context.CancelFunc
-	canceled    bool
-	chunks      int
-	interrupted bool
-}
-
-func (e *duckBatchInterruptExecutor) ExecContext(ctx context.Context, query string, args ...any) (sql.Result, error) {
-	if strings.HasPrefix(strings.TrimSpace(query), "INSERT INTO "+e.table+" (") {
-		e.chunks++
-		if e.chunks == 2 {
-			e.interrupted = true
-			if !e.canceled {
-				return nil, e.failure
-			}
-			e.cancel()
-		}
-	}
-	return e.tx.ExecContext(ctx, query, args...)
 }
 
 func duckBatchFixture(id string, count int) db.SessionBatchWrite {
@@ -411,4 +402,102 @@ func duckBatchRows(t *testing.T, rows *sql.Rows) [][]any {
 	}
 	require.NoError(t, rows.Err())
 	return result
+}
+
+func TestPushReplacementClearsAllSessionRows(t *testing.T) {
+	ctx := t.Context()
+	local := newLocalDB(t)
+	write := duckBatchFixture("replace-all", 2)
+	write.Findings = []db.SecretFinding{{SessionID: write.Session.ID, RuleName: "fixture", Confidence: "definite", LocationKind: "message", MessageOrdinal: 0, MatchStart: 0, MatchEnd: 3, RedactedMatch: "row", RulesVersion: "fixture"}}
+
+	write.Messages[0].IsSystem = false
+	write.Messages[0].IsSidechain = false
+	write.Messages[1].SourceType = ""
+	write.Messages[1].SourceSubtype = ""
+	write.Messages[0].Role = "user"
+	const result = "[main abc1234567890123456789012345678901234567] Save the change"
+	write.Messages[1].ToolCalls = []db.ToolCall{{
+		ToolName: "Bash", Category: "Bash", ToolUseID: "commit-call",
+		InputJSON: `{"command":"git commit -m change"}`, ResultContent: result,
+		ResultEvents: []db.ToolResultEvent{{ToolUseID: "commit-call", Source: "tool_result", Content: result}},
+	}}
+
+	_, err := local.WriteSessionBatchAtomic(ctx, []db.SessionBatchWrite{write})
+	require.NoError(t, err)
+	msgs, err := local.GetAllMessages(ctx, write.Session.ID)
+	require.NoError(t, err)
+	_, err = local.PinMessage(ctx, write.Session.ID, msgs[0].ID, nil)
+	require.NoError(t, err)
+	syncer := newInMemoryTestSync(t, local, storage.MirrorPushOptions{})
+	require.NoError(t, createSchema(ctx, syncer.DB()))
+	sess, err := local.GetSession(ctx, write.Session.ID)
+	require.NoError(t, err)
+	_, err = syncer.pushSingleSession(ctx, *sess, "before")
+	require.NoError(t, err)
+	tables := []string{"messages", "tool_calls", "tool_result_events", "usage_events", "commit_links", "secret_findings", "pinned_messages"}
+	for _, table := range tables {
+		var count int
+		require.NoError(t, syncer.DB().QueryRowContext(ctx, "SELECT count(*) FROM "+table).Scan(&count))
+		require.Positive(t, count, table)
+	}
+	require.NoError(t, local.UnpinMessage(ctx, sess.ID, msgs[0].ID))
+	replacement := duckBatchFixture(sess.ID, 1)
+	replacement.Messages[0].Content = "replacement message"
+	replacement.Messages[0].ToolCalls = nil
+	replacement.Messages[0].HasToolUse = false
+	replacement.UsageEvents = nil
+	replacement.Session.Project = "replacement"
+	_, err = local.WriteSessionBatchAtomic(ctx, []db.SessionBatchWrite{replacement})
+	require.NoError(t, err)
+	sess, err = local.GetSession(ctx, sess.ID)
+	require.NoError(t, err)
+	_, err = syncer.pushSingleSession(ctx, *sess, "after")
+	require.NoError(t, err)
+	for _, table := range tables {
+		want := 0
+		if table == "messages" {
+			want = 1
+		}
+		assertDuckDBCount(t, syncer.DB(), table, want)
+	}
+	assertDuckBatchParity(t, local, syncer.DB(), sess.ID)
+	assertDuckDBCount(t, syncer.DB(), "sessions", 1)
+	var project, fingerprint string
+	require.NoError(t, syncer.DB().QueryRowContext(ctx, "SELECT project, agentsview_push_fingerprint FROM sessions").Scan(&project, &fingerprint))
+	assert.Equal(t, "replacement", project)
+	assert.Equal(t, "after", fingerprint)
+}
+
+func TestPushDuckDBTimestampCastParity(t *testing.T) {
+	ctx := t.Context()
+	local := newLocalDB(t)
+	write := duckBatchFixture("timestamp-cast", 1)
+	// DuckDB accepts this offset and space separator, while parseTimestamp
+	// deliberately leaves it for the SQL cast.
+	const raw = "2026-01-02 03:04:05.123456+02:00"
+	_, parsed := parseTimestamp(raw)
+	require.False(t, parsed)
+	write.Session.StartedAt = new(raw)
+	write.Messages[0].Timestamp = raw
+	write.Messages[0].ToolCalls[0].ResultEvents[0].Timestamp = raw
+	write.UsageEvents[0].OccurredAt = raw
+	_, err := local.WriteSessionBatchAtomic(ctx, []db.SessionBatchWrite{write})
+	require.NoError(t, err)
+	syncer := newInMemoryTestSync(t, local, storage.MirrorPushOptions{})
+	require.NoError(t, createSchema(ctx, syncer.DB()))
+	sess, err := local.GetSession(ctx, write.Session.ID)
+	require.NoError(t, err)
+	_, err = syncer.pushSingleSession(ctx, *sess, "timestamp")
+	require.NoError(t, err)
+	for _, field := range []struct{ table, column, where string }{
+		{"sessions", "started_at", "id = 'timestamp-cast'"},
+		{"messages", "timestamp", "session_id = 'timestamp-cast' AND ordinal = 0"},
+		{"tool_result_events", "timestamp", "session_id = 'timestamp-cast' AND tool_use_id = 'row-000-call-0' AND event_index = 0"},
+		{"usage_events", "occurred_at", "session_id = 'timestamp-cast' AND dedup_key = 'row-000'"},
+	} {
+		var got, sqlCast time.Time
+		require.NoError(t, syncer.DB().QueryRowContext(ctx, "SELECT "+field.column+", CAST(? AS TIMESTAMP) FROM "+field.table+" WHERE "+field.where, raw).Scan(&got, &sqlCast))
+		assert.Equal(t, time.Date(2026, 1, 2, 3, 4, 5, 123456000, time.UTC), got, field)
+		assert.Equal(t, sqlCast, got, field)
+	}
 }

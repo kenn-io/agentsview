@@ -4,7 +4,6 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
-	"strings"
 )
 
 const (
@@ -63,18 +62,14 @@ func (db *DB) GetFrictionMessages(ctx context.Context, sessionID string) (msgs [
 // oversized transcript is rejected without loading its text.
 func frictionInputWithinBudget(ctx context.Context, tx *sql.Tx, sessionID string) (bool, error) {
 	remainingRows, remainingBytes := frictionMaxRows, frictionMaxBytes
-	for _, table := range []struct{ name, columns string }{
-		{"messages", "content thinking_text"},
-		{"tool_calls", "input_json result_content"},
-		{"tool_result_events", "content"},
+	// octet_length reads SQLite record metadata without loading TEXT payloads.
+	for _, table := range []struct{ name, length string }{
+		{"messages", "octet_length(content) + octet_length(thinking_text)"},
+		{"tool_calls", "COALESCE(octet_length(input_json), 0) + COALESCE(octet_length(result_content), 0)"},
+		{"tool_result_events", "octet_length(content)"},
 	} {
-		// octet_length reads SQLite record metadata without loading TEXT payloads.
-		var lengths []string
-		for column := range strings.FieldsSeq(table.columns) {
-			lengths = append(lengths, "COALESCE(octet_length("+column+"), 0)")
-		}
 		var rows, bytes int
-		query := "SELECT count(*), COALESCE(sum(n), 0) FROM (SELECT " + strings.Join(lengths, " + ") + " AS n FROM " + table.name + " WHERE session_id = ? LIMIT ?)"
+		query := "SELECT count(*), COALESCE(sum(n), 0) FROM (SELECT " + table.length + " AS n FROM " + table.name + " WHERE session_id = ? LIMIT ?)"
 		if err := tx.QueryRowContext(ctx, query, sessionID, remainingRows+1).Scan(&rows, &bytes); err != nil {
 			return false, fmt.Errorf("checking friction input size: %w", err)
 		}
