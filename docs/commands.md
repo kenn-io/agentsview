@@ -2044,7 +2044,9 @@ agentsview export sessions [flags]
 
 With `--wait`, export starts or discovers the local daemon and waits for project
 identity evidence to finish. Progress goes to standard error. Cancel the command
-to stop waiting. A failed backfill reports its reason and restart instructions.
+to stop waiting. A failed backfill or unavailable daemon reports recovery
+commands. Archive-only databases cannot run the backfill; finish it on the
+writable source and restore an archive containing the evidence.
 
 By default, one-shot and automated sessions are excluded, so token and cost
 totals can be lower than the full archive unless the corresponding include flags
