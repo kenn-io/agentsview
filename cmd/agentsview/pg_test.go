@@ -364,7 +364,7 @@ func TestRunPGServeHelperProcess(t *testing.T) {
 	require.NoError(t, cmd.Flags().Parse(args[sep+1:]))
 	cfg, basePath, err := loadReplicaServeConfig(cmd)
 	require.NoError(t, err)
-	runReplicaServe(t.Context(), pgReplica{}, cfg, basePath, nil)
+	runReplicaServe(t.Context(), pgReplica{}, cfg, basePath, nil, false)
 }
 
 func TestWritePGPushSummaryIncludesSkippedConflicts(t *testing.T) {

@@ -320,7 +320,7 @@ func loadDuckDBServeConfig(cmd *cobra.Command) (config.Config, string, error) {
 	return cfg, basePath, nil
 }
 
-func runDuckDBServe(ctx context.Context, appCfg config.Config, basePath string) {
+func runDuckDBServe(ctx context.Context, appCfg config.Config, basePath string, pprof bool) {
 	setupLogFile(appCfg.DataDir)
 	if appCfg.RequireAuth {
 		if err := appCfg.EnsureAuthToken(); err != nil {
@@ -365,6 +365,7 @@ func runDuckDBServe(ctx context.Context, appCfg config.Config, basePath string) 
 		}),
 		server.WithDataDir(appCfg.DataDir),
 		server.WithBaseContext(ctx),
+		server.WithPprof(pprof),
 	}
 	if basePath != "" {
 		opts = append(opts, server.WithBasePath(rtOpts.BasePath))
