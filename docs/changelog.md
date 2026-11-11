@@ -49,6 +49,9 @@ The latest release is
   sessions. `DIRECT_API_DIR` or `[agents.direct-api] dirs` change the directory.
   See [Direct API Sessions](/docs/token-usage/#direct-api-sessions).
 
+- `agentsview session usage <id> --wait` waits for ingestion or a rebuild and
+  returns saved totals if the wait ends before a refresh completes.
+
 - A `[custom_model_pricing."<model>"]` entry can set `price_as` to price a model
   name exactly like a catalog model, such as a private gateway deployment name
   that serves `gpt-6-sol`. The name inherits that model's long-context tiers
