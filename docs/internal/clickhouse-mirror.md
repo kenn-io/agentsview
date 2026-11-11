@@ -411,15 +411,15 @@ new view. `usage_messages_mv`, `terminal_event_snapshots_mv`, and
 the refresh settings, which the `prepared_usage` table comment does not cover.
 
 **Refreshed table.** The refreshable materialized view `prepare_usage` turns the
-snapshots into `prepared_usage` every 15 minutes, and a push starts a refresh
-once one is due; see "When a push rebuilds" below. Rows are sorted by their
-stored UTC time, so a day read touches only that day's granules. Each row stores
-its price model, price key, and a copy of its price record, stamped with the
-pricing digest it was priced under. The table comment names the query that built
-it; a table built by another query is dropped and rebuilt on the next schema
-step, and a rebuild that stopped halfway finishes on the next start. The schema
-step adds a missing projection only with the refresh stopped, and always starts
-it again.
+snapshots into `prepared_usage` when a push finds a refresh due, and once a day
+as a backstop; see "When a push rebuilds" and "The view's schedule" below. Rows
+are sorted by their stored UTC time, so a day read touches only that day's
+granules. Each row stores its price model, price key, and a copy of its price
+record, stamped with the pricing digest it was priced under. The table comment
+names the query that built it; a table built by another query is dropped and
+rebuilt on the next schema step, and a rebuild that stopped halfway finishes on
+the next start. The schema step adds a missing projection only with the refresh
+stopped, and always starts it again.
 
 **Refresh without a table exchange.** Every refresh of the view ends with
 `EXCHANGE TABLES`, which ClickHouse runs as a `renameat2` call with the
@@ -552,7 +552,7 @@ returns. A rebuild then rewrites at most fifty times the rows that
 changed, and reads prepare at most a fiftieth of what they read. On a
 300,000-row test table, a 5,000-row delta added about 0.13 seconds to the first
 read after a push. Deleted sessions' rows stay until the next
-rebuild, and reads skip them. The view's 15-minute schedule is unchanged.
+rebuild, and reads skip them.
 
 **What the check reads.** A push compares the stamp stored on the rows with the
 stamp a refresh would store now, and counts rows only when the two differ. It
@@ -569,8 +569,45 @@ A push that wrote no snapshots, deletions, price records, or pricing digest
 checks only that the table is not empty. A push that changed those inputs
 checks after its own writes. When that push ends with session errors, which
 skip the check, or a rebuild leaves the next push to rebuild, the rebuild
-waits for the next push that writes, or for the view's scheduled refresh.
-Reads stay exact meanwhile, only slower.
+waits for the next push that writes, or for the view's daily refresh. Reads
+stay exact meanwhile, only slower.
+
+**The view's schedule.** The view refreshes on its own once a day
+(`chPreparedUsageRefresh`, `EVERY 1 DAY`), at midnight in the ClickHouse
+server's time zone. Every refresh rewrites the whole table, and a push already
+starts a refresh whenever one is due, so the schedule only covers a due refresh
+that no push started: a push that ended with session errors, or a refresh
+request that failed. The next push that writes checks again and catches both,
+so the schedule matters only when no push writes for a day. The table comment
+hashes the schedule, so changing it drops and rebuilds `prepared_usage` once on
+the next schema step.
+
+Until November 2026 the schedule was `EVERY 15 MINUTE`. On a production mirror
+with 1.56 million prepared rows, each refresh read 4.5 million rows (1.8 GiB),
+wrote every row, and took about 6 seconds. The schedule ran it 96 times a day
+whether or not anything changed, and the build table took about 16 GiB of new
+parts a day.
+
+A simulated day on a scratch server with 1.5 million prepared rows ran 27
+pushes every 15 minutes, each republishing 3 sessions, and one full push of
+22,000 sessions in 10 pushes. The view's clock was faked with
+`SYSTEM TEST VIEW ... SET FAKE TIME`:
+
+| Schedule | Refreshes | Started by pushes | Rows written | Bytes written |
+| --- | --- | --- | --- | --- |
+| `EVERY 15 MINUTE` | 106 | 10 | 159 million | 53.2 GiB |
+| `EVERY 1 DAY` | 14 | 13 | 21 million | 7.0 GiB |
+
+The daily schedule wrote 7.6x less. Without the 15-minute reset, the steady
+pushes reached the one-fiftieth limit three times, so pushes started three
+more refreshes.
+
+Bursts of push-started refreshes follow a full push from another host. After
+a deploy, a second host's full push republishes every session with a new
+revision, about 4,000 sessions a minute. Each push from a host that is already
+done finds the table one-fiftieth behind again and starts a refresh, about
+every 33 seconds until the full push ends. Each refresh in those bursts was
+due by the rule above, and none was requested while another was running.
 
 ## Dashboard facts
 
