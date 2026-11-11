@@ -11232,12 +11232,6 @@ func (e *Engine) collectAndBatchWithOptions(
 			r.releaseAll()
 			continue
 		}
-		if r.sourceProofWithheld(false) && !proofWithheld {
-			proofWithheld = true
-			if tracker := reconciliationBaselineTrackerFor(ctx); tracker != nil {
-				tracker.addNonAuthoritativeScope(r.agent, r.path)
-			}
-		}
 		sourceAllowsParserExclusions := e.sourceAllowsParserExclusions(
 			r.processResult,
 		)
@@ -11400,17 +11394,17 @@ func (e *Engine) collectAndBatchWithOptions(
 			storedOK:   r.sourceCwdStoredOK,
 		}
 		allowed, vetoed := e.splitResultsByCwdFilter(r.results, sourceCwd)
-		activeResults := make([]parser.ParseResult, 0, len(r.results))
+		reservedResults := 0
 		for _, result := range r.results {
-			if !reserved[applyIDPrefixToID(e.idPrefix, result.Session.ID)] {
-				activeResults = append(activeResults, result)
+			if reserved[applyIDPrefixToID(e.idPrefix, result.Session.ID)] {
+				reservedResults++
 			}
 		}
-		if len(r.results) > 0 && len(activeResults) == 0 {
+		if len(r.results) > 0 && reservedResults == len(r.results) {
 			stats.sessionPushReservedFiles++
 		}
 		stats.cwdFilteredSessions += vetoed
-		cwdChanged, err := e.reconcileFilteredSourceCwd(ctx, activeResults, sourceCwd)
+		cwdChanged, err := e.reconcileFilteredSourceCwd(ctx, r.results, sourceCwd)
 		if err != nil {
 			log.Printf("reconcile filtered source cwd: %v", err)
 			stats.RecordFailed()
@@ -22090,15 +22084,9 @@ func (e *Engine) processAndWriteSessionFile(
 	if err != nil {
 		return false, sessionsChanged, err
 	}
-	activeResults := make([]parser.ParseResult, 0, len(res.results))
-	for _, result := range res.results {
-		if !reserved[applyIDPrefixToID(e.idPrefix, result.Session.ID)] {
-			activeResults = append(activeResults, result)
-		}
-	}
 	if res.sourceCwdResolution.State != parser.SourceCwdUnspecified {
 		changed, reconcileErr := e.reconcileFilteredSourceCwd(ctx,
-			activeResults,
+			res.results,
 			sourceCwdDecision{
 				resolution: res.sourceCwdResolution,
 				storedCwd:  res.sourceCwdStored,

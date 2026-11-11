@@ -312,11 +312,9 @@ func TestSyncClaudeDAGIntentionalSkipCompletesActiveMembers(t *testing.T) {
 				require.Equal(t, 2, initial.Synced)
 			}
 			require.Zero(t, initial.Failed)
-			if tc.reserved {
-				// The receipt remains the owner through subsequent syncs.
-			} else if tc.trashed {
+			if tc.trashed {
 				require.NoError(t, database.SoftDeleteSession(t.Context(), "forked-i"))
-			} else {
+			} else if !tc.reserved {
 				require.NoError(t, database.DeleteSession(t.Context(), "forked-i"))
 			}
 

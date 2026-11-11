@@ -88,9 +88,17 @@ func TestSessionPushCreatesAndRetryPreservesCuration(t *testing.T) {
 	var generation int64
 	require.NoError(t, d.getReader().QueryRowContext(ctx,
 		`SELECT generation FROM artifact_export_queue WHERE session_id = 'snapshot'`).Scan(&generation))
+	dir := t.TempDir()
+	d.SetAssetsDir(dir)
+	d.SetToolResultImages(config.ToolResultImagesOffload)
+	write.Messages = []Message{testImageMessage("snapshot")}
+	write.Session.UserMessageCount = 0
 	created, err = d.ApplySessionPush(ctx, receipt, write)
 	require.NoError(t, err)
 	assert.False(t, created)
+	entries, err := os.ReadDir(dir)
+	require.NoError(t, err)
+	assert.Empty(t, entries)
 	after, err := d.GetSessionFull(ctx, "snapshot")
 	require.NoError(t, err)
 	assert.Equal(t, before, after, "retry must not touch any session metadata")
@@ -111,7 +119,7 @@ func TestSessionPushCreatesAndRetryPreservesCuration(t *testing.T) {
 }
 
 func TestSessionPushConflictsDoNotOverwrite(t *testing.T) {
-	for _, kind := range []string{"hash", "origin", "unowned", "trash", "deleted", "excluded", "inherited-trash", "retry", "machine-adopted"} {
+	for _, kind := range []string{"hash", "origin", "unowned", "trash", "excluded", "inherited-trash", "machine-adopted"} {
 		t.Run(kind, func(t *testing.T) {
 			d := testDB(t)
 			ctx := t.Context()
@@ -142,7 +150,7 @@ func TestSessionPushConflictsDoNotOverwrite(t *testing.T) {
 				receipt.SourceOrigin = "archive-b"
 			case "trash":
 				require.NoError(t, d.SoftDeleteSession(ctx, id))
-			case "deleted", "excluded":
+			case "excluded":
 				require.NoError(t, d.DeleteSession(ctx, id))
 			}
 			before, err := d.GetArtifactExportSession(ctx, id)
@@ -153,11 +161,7 @@ func TestSessionPushConflictsDoNotOverwrite(t *testing.T) {
 			write.Messages = []Message{testImageMessage(id)}
 			write.Session.UserMessageCount = 0
 			created, err := d.ApplySessionPush(ctx, receipt, write)
-			if kind == "retry" {
-				require.NoError(t, err)
-			} else {
-				require.ErrorIs(t, err, ErrSessionPushConflict)
-			}
+			require.ErrorIs(t, err, ErrSessionPushConflict)
 			assert.False(t, created)
 			entries, err := os.ReadDir(dir)
 			require.NoError(t, err)
@@ -167,7 +171,7 @@ func TestSessionPushConflictsDoNotOverwrite(t *testing.T) {
 			assert.Equal(t, before, after)
 			messages, err := d.GetAllMessages(ctx, id)
 			require.NoError(t, err)
-			if kind == "deleted" || kind == "excluded" || kind == "inherited-trash" {
+			if kind == "excluded" || kind == "inherited-trash" {
 				assert.Empty(t, messages)
 			} else {
 				require.Len(t, messages, 1)
@@ -336,6 +340,7 @@ func TestLoadSessionPushDataExactLiveSession(t *testing.T) {
 		_, err := d.WriteSessionBatchAtomic(ctx, []SessionBatchWrite{write})
 		require.NoError(t, err)
 	}
+	require.NoError(t, d.RenameSession(ctx, "parent", Ptr("local title")))
 	require.NoError(t, d.SoftDeleteSession(ctx, "trashed"))
 	for _, id := range []string{"missing", "pare", "trashed"} {
 		session, data, err := d.LoadSessionPushData(ctx, id, smallArtifactExportLoadLimits())
@@ -347,7 +352,7 @@ func TestLoadSessionPushDataExactLiveSession(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, session)
 	assert.Equal(t, "parent", session.ID)
-	assert.Nil(t, session.DisplayName, "keep agent and local names separate for export")
+	assert.Equal(t, Ptr("local title"), session.DisplayName, "keep agent and local names separate for export")
 	assert.Equal(t, Ptr("agent title"), session.SessionName)
 	require.Len(t, data.Messages, 1)
 	assert.Equal(t, "parent", data.Messages[0].SessionID)

@@ -463,7 +463,7 @@ func TestSessionPushPRLinksAndUnknownManifestFields(t *testing.T) {
 	for i := range links {
 		links[i] = db.PRLink{URL: "https://example.test/project/pull/1", Host: "example.test", Repository: "project", Number: 1}
 	}
-	valid := adversarialSessionPushPacket(t, db.Session{ID: "selected", Agent: "claude", Machine: "source", PRLinks: links[:256]}, nil)
+	valid := adversarialSessionPushPacket(t, db.Session{ID: "selected", Agent: "claude", Machine: "source", PRLinks: links}, nil)
 	_, _, err := DecodeSessionPush(valid)
 	require.NoError(t, err)
 	var envelope SessionPushEnvelope
@@ -477,7 +477,4 @@ func TestSessionPushPRLinksAndUnknownManifestFields(t *testing.T) {
 	require.NoError(t, err)
 	_, _, err = DecodeSessionPush(valid)
 	require.NoError(t, err, "ignore unknown manifest fields like artifact import")
-	data := adversarialSessionPushPacket(t, db.Session{ID: "selected", Agent: "claude", Machine: "source", PRLinks: links}, nil)
-	_, _, err = DecodeSessionPush(data)
-	require.NoError(t, err)
 }
