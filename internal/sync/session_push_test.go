@@ -44,18 +44,18 @@ func TestSessionPushRealRebuildPreservesSnapshotAgainstNativeCollision(t *testin
 
 func TestSessionPushSharedSourceImportsUnreservedMember(t *testing.T) {
 	for _, tc := range []struct {
-		name            string
-		agent           parser.AgentType
-		excluded        bool
-		member, content string
+		name                      string
+		agent                     parser.AgentType
+		excluded                  bool
+		reserved, member, content string
 	}{
-		{"reserved member", parser.AgentCursor, false, "independent", "independent content"},
-		{"excluded member", parser.AgentVibe, true, "canonical", "canonical content"},
+		{"reserved member", parser.AgentCursorIDE, false, "cursor-ide:reserved", "cursor-ide:independent", "independent content"},
+		{"excluded member", parser.AgentVibe, true, "reserved", "canonical", "canonical content"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			d := openTestDB(t)
-			receipt := db.SessionPushReceipt{SessionID: "reserved", SourceOrigin: "source", PayloadHash: strings.Repeat("a", 64)}
-			write := db.SessionBatchWrite{Session: db.Session{ID: "reserved", Agent: string(tc.agent), Machine: "source", MessageCount: 1, UserMessageCount: 1}, Messages: []db.Message{{SessionID: "reserved", Ordinal: 0, Role: "user", Content: "accepted snapshot"}}, ReplaceMessages: true}
+			receipt := db.SessionPushReceipt{SessionID: tc.reserved, SourceOrigin: "source", PayloadHash: strings.Repeat("a", 64)}
+			write := db.SessionBatchWrite{Session: db.Session{ID: tc.reserved, Agent: string(tc.agent), Machine: "source", MessageCount: 1, UserMessageCount: 1}, Messages: []db.Message{{SessionID: tc.reserved, Ordinal: 0, Role: "user", Content: "accepted snapshot"}}, ReplaceMessages: true}
 			_, err := d.ApplySessionPush(t.Context(), receipt, write)
 			require.NoError(t, err)
 			engine := NewEngine(t.Context(), d, EngineConfig{Machine: "receiver"})
@@ -63,16 +63,16 @@ func TestSessionPushSharedSourceImportsUnreservedMember(t *testing.T) {
 			jobs := make(chan syncJob, 1)
 			job := syncJob{agent: tc.agent, path: "fixture-source"}
 			if tc.excluded {
-				job.excludedSessionIDs = []string{"reserved"}
+				job.excludedSessionIDs = []string{tc.reserved}
 			} else {
-				job.results = append(job.results, parser.ParseResult{Session: parser.ParsedSession{ID: "reserved", Agent: tc.agent, Machine: "receiver"}, Messages: []parser.ParsedMessage{{Role: parser.RoleUser, Content: "replacement"}}})
+				job.results = append(job.results, parser.ParseResult{Session: parser.ParsedSession{ID: tc.reserved, Agent: tc.agent, Machine: "receiver"}, Messages: []parser.ParsedMessage{{Role: parser.RoleUser, Content: "replacement"}}})
 			}
 			job.results = append(job.results, parser.ParseResult{Session: parser.ParsedSession{ID: tc.member, Agent: tc.agent, Machine: "receiver"}, Messages: []parser.ParsedMessage{{Role: parser.RoleUser, Content: tc.content}}})
 			jobs <- job
 			close(jobs)
 			stats := engine.collectAndBatch(t.Context(), jobs, 1, 1, nil, syncWriteDefault)
 			assert.Zero(t, stats.Failed)
-			reserved, err := d.GetAllMessages(t.Context(), "reserved")
+			reserved, err := d.GetAllMessages(t.Context(), tc.reserved)
 			require.NoError(t, err)
 			require.Len(t, reserved, 1)
 			assert.Equal(t, "accepted snapshot", reserved[0].Content)
