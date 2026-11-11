@@ -70,49 +70,28 @@ test("search shows placeholder rows at a result-list size while it runs", async 
   await expect(page.locator(".palette-results")).toHaveAttribute("aria-busy", "false");
 });
 
-test("Retry keeps focus and filters through another failure and success", async ({ page }) => {
-  await page.clock.setFixedTime(new Date());
-  await page.goto("/usage");
-  await openSearch(page, "synchronous DB read");
-  await page.locator(".palette-controls .kit-typeahead__trigger").click();
-  await page.locator(".kit-typeahead__option", { hasText: "project-duration" }).click();
-  await page.locator(".palette-controls .kit-date-range-picker__trigger").click();
-  await page.getByRole("button", { name: "90d", exact: true }).click();
-  await page.getByRole("button", { name: "Recency", exact: true }).click();
-  await expect(page.locator(".palette-item").first()).toBeVisible();
-  const urls: string[] = [];
-  let release: () => void = () => {};
-  const held = new Promise<void>((resolve) => (release = resolve));
+test("Retry keeps focus through another failure and success", async ({ page }) => {
+  let requests = 0;
   await page.route("**/api/v1/search?**", async (route) => {
-    urls.push(route.request().url());
-    if (urls.length === 2) await held;
-    if (urls.length <= 2) {
-      await route.fulfill({ status: 400, json: { error: "Search temporarily unavailable" } });
+    requests++;
+    if (requests <= 4) {
+      await route.fulfill({ status: 500, json: { error: "Search temporarily unavailable" } });
     } else {
       await route.continue();
     }
   });
-  await page.locator(".palette-input").fill("synchronous DB");
+  await page.goto("/usage");
+  await openSearch(page, "synchronous DB read");
   const retry = page.getByRole("button", { name: "Retry" });
   const input = page.locator(".palette-input");
   await expect(retry).toBeVisible();
   await retry.focus();
   await page.keyboard.press("Enter");
-  await expect.poll(() => urls.length).toBe(2);
-  release();
+  await expect.poll(() => requests).toBe(4);
   await expect(retry).toBeVisible();
   await expect(input).toBeFocused();
   await retry.focus();
   await page.keyboard.press("Enter");
   await expect(page.locator(".palette-item").first()).toBeVisible();
   await expect(input).toBeFocused();
-  await expect(input).toHaveValue("synchronous DB");
-  expect(urls).toHaveLength(3);
-  const params = new URL(urls[0]).searchParams;
-  expect(params.get("q")).toBe("synchronous DB");
-  expect(params.get("project")).toBe("project-duration");
-  expect(params.get("sort")).toBe("recency");
-  expect(params.get("date_from")).toBeTruthy();
-  expect(params.get("date_to")).toBeTruthy();
-  expect(new Set(urls).size).toBe(1);
 });

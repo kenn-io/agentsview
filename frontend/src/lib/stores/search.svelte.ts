@@ -273,11 +273,7 @@ export class SearchStore {
         try {
           response = await SearchService.getApiV1Search(params, { signal });
         } catch (error: unknown) {
-          if (
-            signal.aborted ||
-            (error instanceof ApiError && error.status === 501) ||
-            !isTransient(error)
-          )
+          if ((error instanceof ApiError && error.status === 501) || !isTransient(error))
             throw error;
           await new Promise((resolve) => setTimeout(resolve, 300));
           if (signal.aborted) return;

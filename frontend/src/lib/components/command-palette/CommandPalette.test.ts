@@ -720,24 +720,28 @@ describe("CommandPalette", () => {
     expect(mockSearchStore.resetRange).toHaveBeenCalledOnce();
   });
 
-  it.each(["timeout", "generic"] as const)("offers retry for a %s error", async (kind) => {
-    mockSearchStore.mode = kind === "timeout" ? "semantic" : "fulltext";
-    mockSearchStore.error = { detail: kind === "timeout" ? "request timed out" : null, kind };
+  it("explains a semantic timeout", async () => {
+    mockSearchStore.mode = "semantic";
+    mockSearchStore.error = { detail: "request timed out", kind: "timeout" };
+    const component = mount(CommandPalette, { target: document.body });
+    await enterSearchQuery();
+    const error = document.querySelector(".palette-error");
+    expect(error?.querySelector("strong")?.textContent).toBe("Search took too long");
+    expect(error?.querySelector("span")?.textContent).toBe(
+      "Try again. The first Semantic or Hybrid search can be slower while the embedding model warms up.",
+    );
+    expect(error?.textContent).not.toContain("request timed out");
+    unmount(component);
+  });
+
+  it("focuses the input when retrying a generic error", async () => {
+    mockSearchStore.error = { detail: null, kind: "generic" };
     const component = mount(CommandPalette, { target: document.body });
     await enterSearchQuery();
     mockSearchStore.search.mockClear();
-
-    const error = document.querySelector(".palette-error");
-    if (kind === "timeout") {
-      expect(error?.querySelector("strong")?.textContent).toBe("Search took too long");
-      expect(error?.querySelector("span")?.textContent).toBe(
-        "Try again. The first Semantic or Hybrid search can be slower while the embedding model warms up.",
-      );
-      expect(error?.textContent).not.toContain("request timed out");
-    }
-    const retry = Array.from(error?.querySelectorAll<HTMLButtonElement>("button") ?? []).find(
-      (button) => button.textContent?.trim() === "Retry",
-    );
+    const retry = Array.from(
+      document.querySelectorAll<HTMLButtonElement>(".palette-error button"),
+    ).find((button) => button.textContent?.trim() === "Retry");
     expect(retry).toBeDefined();
     retry!.focus();
     retry!.click();

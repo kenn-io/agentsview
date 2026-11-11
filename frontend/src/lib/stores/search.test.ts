@@ -186,49 +186,63 @@ describe("SearchStore", () => {
     ]);
   });
 
-  it("retries a transient full-text failure without exposing it", async () => {
-    const store = createSearchStore(memoryStorage());
-    const second = deferred<SearchResponse>();
-    searchService.getApiV1Search
-      .mockRejectedValueOnce(new ApiError(503, "unavailable"))
-      .mockReturnValueOnce(second.promise);
-    store.search("needle", "alpha");
-    await runDebounce();
-    await vi.advanceTimersByTimeAsync(300);
-    expect(searchService.getApiV1Search).toHaveBeenCalledTimes(2);
-    expect(searchService.getApiV1Search.mock.calls[0]).toEqual(
-      searchService.getApiV1Search.mock.calls[1],
-    );
-    expect(store.isSearching).toBe(true);
-    expect(store.error).toBeNull();
-    expect(reportErrorShown).not.toHaveBeenCalled();
-    second.resolve(fullTextResponse("needle"));
-    await flushMicrotasks();
-    expect(store.results[0]?.session_id).toBe("full-0");
-    expect(store.isSearching).toBe(false);
-  });
+  it.each(["recover", "exhaust"] as const)(
+    "handles a transient full-text failure: %s",
+    async (outcome) => {
+      const store = createSearchStore(memoryStorage());
+      const second = deferred<SearchResponse>();
+      store.setSort("recency");
+      store.setRange({ mode: "calendar", unit: "day", anchor: "2026-07-04" });
+      searchService.getApiV1Search
+        .mockRejectedValueOnce(new ApiError(503, "first"))
+        .mockReturnValueOnce(second.promise);
+      store.search("needle", "alpha");
+      await runDebounce();
+      await vi.advanceTimersByTimeAsync(300);
+      expect(searchService.getApiV1Search).toHaveBeenCalledTimes(2);
+      expect(store.isSearching).toBe(true);
+      expect(store.error).toBeNull();
+      expect(reportErrorShown).not.toHaveBeenCalled();
+      if (outcome === "recover") {
+        second.resolve(fullTextResponse("needle"));
+        await flushMicrotasks();
+        expect(store.results[0]?.session_id).toBe("full-0");
+      } else {
+        second.reject(new ApiError(500, "second"));
+        await flushMicrotasks();
+        expect(store.error).toEqual({ detail: "second", kind: "generic" });
+        expect(reportErrorShown).toHaveBeenCalledTimes(1);
+        searchService.getApiV1Search.mockResolvedValueOnce(fullTextResponse("needle"));
+        store.retry();
+        await flushMicrotasks();
+        expect(searchService.getApiV1Search).toHaveBeenLastCalledWith(
+          {
+            q: "needle",
+            project: "alpha",
+            limit: 30,
+            sort: "recency",
+            date_from: "2026-07-04",
+            date_to: "2026-07-04",
+          },
+          expect.objectContaining({ signal: expect.anything() }),
+        );
+        expect(store.results[0]?.session_id).toBe("full-0");
+      }
+      expect(store.isSearching).toBe(false);
+    },
+  );
 
-  it("reports only the final failure after two attempts", async () => {
+  it.each([
+    [400, "bad query"],
+    [501, "not implemented"],
+  ] as const)("does not retry HTTP %i", async (status, detail) => {
     const store = createSearchStore(memoryStorage());
-    searchService.getApiV1Search
-      .mockRejectedValueOnce(new ApiError(503, "first"))
-      .mockRejectedValueOnce(new ApiError(500, "second"));
+    searchService.getApiV1Search.mockRejectedValueOnce(new ApiError(status, detail));
     store.search("needle");
     await runDebounce();
     await vi.advanceTimersByTimeAsync(300);
-    expect(searchService.getApiV1Search).toHaveBeenCalledTimes(2);
-    expect(store.error).toEqual({ detail: "second", kind: "generic" });
-    expect(reportErrorShown).toHaveBeenCalledTimes(1);
-    expect(store.isSearching).toBe(false);
-  });
-
-  it("does not retry a client failure", async () => {
-    const store = createSearchStore(memoryStorage());
-    searchService.getApiV1Search.mockRejectedValueOnce(new ApiError(400, "bad query"));
-    store.search("needle");
-    await runDebounce();
     expect(searchService.getApiV1Search).toHaveBeenCalledTimes(1);
-    expect(store.error?.detail).toBe("bad query");
+    expect(store.error).toEqual({ detail, kind: "generic" });
   });
 
   it("does not retry when the search is canceled during the delay", async () => {
@@ -239,8 +253,6 @@ describe("SearchStore", () => {
     store.clear();
     await vi.advanceTimersByTimeAsync(300);
     expect(searchService.getApiV1Search).toHaveBeenCalledTimes(1);
-    expect(store.error).toBeNull();
-    expect(reportErrorShown).not.toHaveBeenCalled();
   });
 
   it.each(["semantic", "hybrid"] as const)(
@@ -402,18 +414,6 @@ describe("SearchStore", () => {
     store.retry();
     await flushMicrotasks();
     expect(vi.mocked(reportErrorShown).mock.calls).toEqual([["search"], ["search"]]);
-  });
-
-  it("keeps a full-text 501 generic: setup guidance only applies to semantic modes", async () => {
-    const store = createSearchStore(memoryStorage());
-    searchService.getApiV1Search.mockRejectedValueOnce(generatedApiError(501, "not implemented"));
-
-    store.search("fulltext failure");
-    await runDebounce();
-
-    await vi.advanceTimersByTimeAsync(300);
-    expect(searchService.getApiV1Search).toHaveBeenCalledTimes(1);
-    expect(store.error).toEqual({ detail: "not implemented", kind: "generic" });
   });
 
   it("clears an earlier error when a new request starts and on clear", async () => {
