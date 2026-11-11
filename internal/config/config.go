@@ -35,6 +35,7 @@ import (
 	"go.kenn.io/agentsview/internal/pathutil"
 	"go.kenn.io/kit/atomicfile"
 	"go.kenn.io/kit/embedconfig"
+	"go.kenn.io/kit/embedlocal"
 )
 
 // TerminalConfig holds terminal launch preferences.
@@ -383,9 +384,9 @@ const (
 // where one full-context input can take seconds, so a request carries fewer
 // inputs, builds send one request at a time, and each request may run longer.
 const (
-	defaultBuiltinEmbeddingsBatchSize   = 8
+	defaultBuiltinEmbeddingsBatchSize   = embedlocal.BatchItems
 	defaultBuiltinEmbeddingsConcurrency = 1
-	defaultBuiltinEmbeddingsTimeout     = "5m"
+	defaultBuiltinEmbeddingsTimeout     = embedlocal.RequestTimeout
 )
 
 // normalizedEmbeddingsServers fills each named server's unset transport
@@ -407,7 +408,7 @@ func normalizedEmbeddingsServers(
 		if s.Endpoint == "" {
 			batchSize = defaultBuiltinEmbeddingsBatchSize
 			concurrency = defaultBuiltinEmbeddingsConcurrency
-			timeout = defaultBuiltinEmbeddingsTimeout
+			timeout = defaultBuiltinEmbeddingsTimeout.String()
 		}
 		if !meta.IsDefined("vector", "embeddings", "servers", name, "batch_size") {
 			s.BatchSize = batchSize

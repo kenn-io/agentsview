@@ -1,6 +1,7 @@
 package config
 
 import (
+	"go.kenn.io/kit/embedlocal"
 	"maps"
 	"path/filepath"
 	"testing"
@@ -626,7 +627,7 @@ func TestVectorConfigTOMLLoad(t *testing.T) {
 			{
 				name:       "automatic discovery",
 				embeddings: map[string]any{"model": "nomic-embed-text", "dimension": 768},
-				server:     "automatic", wantBatchSize: 8, wantConcurrency: 1, wantTimeout: "5m",
+				server:     "automatic", wantBatchSize: 8, wantConcurrency: 1, wantTimeout: embedlocal.RequestTimeout.String(),
 			},
 			{
 				name: "local server",
@@ -634,7 +635,7 @@ func TestVectorConfigTOMLLoad(t *testing.T) {
 					"model": "nomic-embed-text", "dimension": 768,
 					"servers": map[string]any{"shared": map[string]any{"local": true}},
 				},
-				server: "shared", wantBatchSize: 8, wantConcurrency: 1, wantTimeout: "5m",
+				server: "shared", wantBatchSize: 8, wantConcurrency: 1, wantTimeout: embedlocal.RequestTimeout.String(),
 			},
 			{
 				name: "local server keeps explicit transport",
