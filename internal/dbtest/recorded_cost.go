@@ -55,9 +55,9 @@ const RecordedCostDailyTotal = 2_000 + 7_000 + 0 + 5_000 + 4_000 + 1_500
 
 // SeedRecordedCostSessions writes the RecordedCostCases sessions and the
 // rc-priced catalog row through the normal batch write path.
-func SeedRecordedCostSessions(t testing.TB, local *db.DB) {
-	t.Helper()
-	require.NoError(t, local.UpsertModelPricing([]db.ModelPricing{{
+func SeedRecordedCostSessions(tb testing.TB, local *db.DB) {
+	tb.Helper()
+	require.NoError(tb, local.UpsertModelPricing([]db.ModelPricing{{
 		ModelPattern:  "rc-priced",
 		InputPerMTok:  money.Money{Microdollars: 1_000_000},
 		OutputPerMTok: money.Money{Microdollars: 2_000_000},
@@ -120,8 +120,8 @@ func SeedRecordedCostSessions(t testing.TB, local *db.DB) {
 			CostSource: "fixture", OccurredAt: at, DedupKey: "rc-unknown",
 		}}},
 	}
-	_, err := local.WriteSessionBatchAtomic(t.Context(), writes)
-	require.NoError(t, err, "seed recorded-cost sessions")
+	_, err := local.WriteSessionBatchAtomic(tb.Context(), writes)
+	require.NoError(tb, err, "seed recorded-cost sessions")
 }
 
 // AssertRecordedCostUsage checks a store holding SeedRecordedCostSessions

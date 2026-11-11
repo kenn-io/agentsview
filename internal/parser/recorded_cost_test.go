@@ -43,7 +43,7 @@ func TestSetRecordedCostKeepsTokenCounters(t *testing.T) {
 			msg := ParsedMessage{TokenUsage: jsontext.Value(tt.usage)}
 			msg.SetRecordedCost(money.Money{Microdollars: tt.cost})
 
-			require.True(t, jsontext.Value(msg.TokenUsage).IsValid(), "usage %s", msg.TokenUsage)
+			require.True(t, msg.TokenUsage.IsValid(), "usage %s", msg.TokenUsage)
 			got := usagefacts.ParseTokenUsage(string(msg.TokenUsage))
 			require.NotNil(t, got.RecordedCostMicrodollars)
 			assert.Equal(t, tt.cost, *got.RecordedCostMicrodollars)
