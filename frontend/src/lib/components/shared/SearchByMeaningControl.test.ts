@@ -15,9 +15,9 @@ afterEach(() => {
 });
 
 it.each([
-  ["embeddings_provider_changed", false],
-  ["embeddings_build_running", true],
-])("handles %s", async (code, started) => {
+  ["embeddings_provider_changed", false, "ollama", 0],
+  ["embeddings_build_running", true, "built-in", 295000000],
+])("handles %s", async (code, started, provider, approvedBytes) => {
   vi.mocked(EmbeddingsService.postApiV1EmbeddingsSetup).mockRejectedValueOnce(
     new ApiError(409, "conflict", code),
   );
@@ -33,10 +33,10 @@ it.each([
         setup: {
           enabled: false,
           action: "turn-on",
-          provider: "built-in",
+          provider,
           busy: false,
           installing: false,
-          missing_bytes: 0,
+          missing_bytes: 295000000,
           downloaded_bytes: 0,
           total_bytes: 0,
         },
@@ -47,6 +47,10 @@ it.each([
   });
   document.querySelector<HTMLButtonElement>("button")!.click();
   await vi.waitFor(() => expect(onchange).toHaveBeenCalledWith(started));
+  expect(EmbeddingsService.postApiV1EmbeddingsSetup).toHaveBeenCalledWith({
+    approved_bytes: approvedBytes,
+    expected_provider: provider,
+  });
   flushSync();
   unmount(component);
 });

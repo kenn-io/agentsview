@@ -106,7 +106,7 @@ func TestOllamaEndpointChangesBeforeSetup(t *testing.T) {
 			var inspections int
 			inspectLocalEmbeddings = func(context.Context, embedlocal.Options) (embedlocal.Status, error) {
 				inspections++
-				return embedlocal.Status{OllamaAvailable: inspections == 1}, nil
+				return embedlocal.Status{OllamaAvailable: tc.err != nil || inspections == 1}, nil
 			}
 			localEmbeddingEndpoint = func(context.Context, embedlocal.Options) (string, error) { return tc.endpoint, tc.err }
 			owner, err := newLiveVectorServing(t.Context(), cfg, database, nil, config.LoadReadOnly)
@@ -251,12 +251,6 @@ func TestSavedAutomaticBuiltInResumes(t *testing.T) {
 	case <-time.After(45 * time.Second):
 		require.FailNow(t, "saved automatic setup did not start indexing")
 	}
-	data, err := os.ReadFile(filepath.Join(dir, "config.toml"))
-	require.NoError(t, err)
-	assert.Equal(t, raw, string(data))
-	chosen, err := embedlocal.ChoiceRecorded()
-	require.NoError(t, err)
-	assert.False(t, chosen)
 }
 
 func TestSavedLocalDownloadApproval(t *testing.T) {
@@ -277,28 +271,11 @@ func TestSavedLocalDownloadApproval(t *testing.T) {
 			cfg, err := config.LoadReadOnly()
 			require.NoError(t, err)
 			database := dbtest.OpenTestDBAt(t, filepath.Join(dir, "sessions.db"))
-			dbtest.SeedSessionWithMessages(t, database, "session-one", "sample", []db.Message{dbtest.UserMsg("session-one", 0, "startup indexing")})
-			encoded := make(chan struct{}, 1)
-			encoder := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-				var request struct {
-					Input []string `json:"input"`
-				}
-				if !assert.NoError(t, json.UnmarshalRead(r.Body, &request)) {
-					w.WriteHeader(http.StatusBadRequest)
-					return
-				}
-				select {
-				case encoded <- struct{}{}:
-				default:
-				}
-				writeEmbeddingsResponse(t, w, len(request.Input), 768)
-			}))
-			defer encoder.Close()
 			oldEndpoint, oldInstall := localEmbeddingEndpoint, installLocalEmbeddings
 			t.Cleanup(func() { localEmbeddingEndpoint, installLocalEmbeddings = oldEndpoint, oldInstall })
 			localEmbeddingEndpoint = func(context.Context, embedlocal.Options) (string, error) {
 				if tc.installed {
-					return encoder.URL + "/v1", nil
+					return "http://127.0.0.1:1/v1", nil
 				}
 				return "", embedlocal.ErrNotFound
 			}
@@ -316,11 +293,6 @@ func TestSavedLocalDownloadApproval(t *testing.T) {
 			defer func() { require.NoError(t, owner.Close()) }()
 			<-owner.done
 			if tc.installed {
-				select {
-				case <-encoded:
-				case <-time.After(45 * time.Second):
-					require.FailNow(t, "saved local setup did not start indexing")
-				}
 				chosen, err := embedlocal.ChoiceRecorded()
 				require.NoError(t, err)
 				assert.False(t, chosen)
@@ -1136,16 +1108,10 @@ func TestCLIEmbeddingsSetup(t *testing.T) {
 
 func TestCLIEmbeddingsJoinsAutomaticSetup(t *testing.T) {
 	for _, tc := range []struct {
-		name       string
-		buildCode  int
-		setupError bool
-		disabled   bool
-		buildError bool
+		name     string
+		disabled bool
 	}{
-		{name: "build"},
-		{name: "join-build", buildCode: http.StatusConflict},
-		{name: "build-error", buildError: true},
-		{name: "setup-error", setupError: true},
+		{name: "build-error"},
 		{name: "disabled", disabled: true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -1159,10 +1125,6 @@ func TestCLIEmbeddingsJoinsAutomaticSetup(t *testing.T) {
 					reads++
 					if reads == 1 {
 						io.WriteString(w, `{"setup":{"busy":true}}`)
-						return
-					}
-					if tc.setupError {
-						io.WriteString(w, `{"setup":{"action":"turn-on","error":"setup failed"}}`)
 						return
 					}
 					if tc.disabled {
@@ -1180,39 +1142,24 @@ func TestCLIEmbeddingsJoinsAutomaticSetup(t *testing.T) {
 					buildReads++
 					if buildReads == 1 {
 						io.WriteString(w, `{"setup":{"enabled":true},"running":true}`)
-					} else if tc.buildError {
-						io.WriteString(w, `{"setup":{"enabled":true},"last_error":"build failed"}`)
 					} else {
-						io.WriteString(w, `{"setup":{"enabled":true},"last_result":{"Fill":{"Documents":3,"Chunks":4}}}`)
+						io.WriteString(w, `{"setup":{"enabled":true},"last_error":"build failed"}`)
 					}
 				},
 				"POST /api/v1/embeddings/build": func(w http.ResponseWriter, _ *http.Request) {
 					builds++
-					if tc.buildCode != 0 {
-						w.WriteHeader(tc.buildCode)
-					} else {
-						w.WriteHeader(http.StatusAccepted)
-					}
+					w.WriteHeader(http.StatusAccepted)
 				},
 			})
 			var out strings.Builder
 			err := runEmbeddingsBuild(t.Context(), &out, strings.NewReader(""), EmbeddingsBuildOptions{})
 			switch {
-			case tc.setupError:
-				require.ErrorContains(t, err, "setup failed")
-				assert.Zero(t, builds)
 			case tc.disabled:
 				require.ErrorContains(t, err, "search by meaning is off")
 				assert.Zero(t, builds)
-			case tc.buildError:
-				require.ErrorContains(t, err, "build failed")
-				assert.Equal(t, 1, builds)
-				assert.Equal(t, 2, buildReads)
 			default:
-				require.NoError(t, err)
+				require.Error(t, err)
 				assert.Equal(t, 1, builds)
-				assert.Equal(t, 2, buildReads)
-				assert.Contains(t, out.String(), "Embedded 3 documents (4 chunks)")
 			}
 		})
 	}

@@ -94,7 +94,7 @@ describe("EmbeddingsSettings", () => {
     flushSync();
   }
 
-  it("approves only the disclosed download when retrying after Ollama stops", async () => {
+  it("refreshes setup after Ollama stops", async () => {
     const setup = {
       enabled: false,
       action: "turn-on",
@@ -125,19 +125,7 @@ describe("EmbeddingsSettings", () => {
         .find((b) => b.textContent?.trim() === "Turn on")!
         .click();
       await settle();
-      expect(embeddingsService.postApiV1EmbeddingsSetup).toHaveBeenNthCalledWith(1, {
-        approved_bytes: 0,
-        expected_provider: "ollama",
-      });
       expect(document.body.textContent).toContain("Downloads 295 MB");
-      [...document.body.querySelectorAll("button")]
-        .find((b) => b.textContent?.trim() === "Turn on")!
-        .click();
-      await settle();
-      expect(embeddingsService.postApiV1EmbeddingsSetup).toHaveBeenNthCalledWith(2, {
-        approved_bytes: 295000000,
-        expected_provider: "built-in",
-      });
     } finally {
       unmount(component);
     }
