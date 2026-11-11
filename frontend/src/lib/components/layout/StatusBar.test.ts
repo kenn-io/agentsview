@@ -208,7 +208,9 @@ describe("StatusBar", () => {
     await tick();
 
     expect(document.body.textContent).toContain("Session data unavailable. Click to retry.");
-    expect(document.querySelector(".backend-warn")?.getAttribute("title")).toBe("Session data unavailable. Click to retry.");
+    expect(document.querySelector(".backend-warn")?.getAttribute("title")).toBe(
+      "Session data unavailable. Click to retry.",
+    );
 
     sync.backendDegraded = false;
     await tick();
