@@ -64,16 +64,11 @@ func newPushSessionCommand() *cobra.Command {
 			}
 			defer database.Close()
 			database.SetArchiveContent(cfg.ArchiveContent)
-			payload, err := artifact.EncodeSessionPush(cmd.Context(), database, args[0], agent)
+			payload, storedAgent, err := artifact.EncodeSessionPush(cmd.Context(), database, args[0], agent)
 			if err != nil {
 				return fmt.Errorf("push: %w", err)
 			}
-			// The validated packet supplies the stored agent even when --agent was omitted.
-			_, write, err := artifact.DecodeSessionPush(payload)
-			if err != nil {
-				return errors.New("push: cannot validate local session")
-			}
-			result, err := sendSessionPush(cmd.Context(), target, token, payload, args[0], write.Session.Agent)
+			result, err := sendSessionPush(cmd.Context(), target, token, payload, args[0], storedAgent)
 			if err != nil {
 				return err
 			}
@@ -174,6 +169,10 @@ func sendSessionPush(ctx context.Context, base, token string, payload []byte, id
 	if resp.StatusCode != http.StatusOK {
 		reason := "receiver rejected the session"
 		switch resp.StatusCode {
+		case http.StatusBadRequest:
+			if resp.Header.Get("X-AgentsView-Push-Error") == "future-data-version" {
+				reason = "receiver needs an upgrade to accept this session"
+			}
 		case http.StatusMovedPermanently, http.StatusFound, http.StatusSeeOther, http.StatusTemporaryRedirect, http.StatusPermanentRedirect:
 			reason = "receiver redirect refused"
 		case http.StatusUnauthorized:
@@ -181,7 +180,7 @@ func sendSessionPush(ctx context.Context, base, token string, payload []byte, id
 		case http.StatusForbidden, http.StatusNotFound:
 			reason = "receiver is unavailable or does not accept session pushes"
 		case http.StatusConflict:
-			reason = "session conflicts with receiver's accepted snapshot"
+			reason = "session conflicts with an accepted snapshot or existing session; receiver cannot replace it"
 		case http.StatusRequestEntityTooLarge:
 			reason = "session exceeds receiver size limit"
 		case http.StatusUnsupportedMediaType:

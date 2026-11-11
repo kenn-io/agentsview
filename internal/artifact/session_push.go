@@ -17,6 +17,9 @@ import (
 // MaxSessionPushBytes bounds the complete serialized single-session envelope.
 const MaxSessionPushBytes int64 = 64 << 20
 
+// ErrSessionPushFutureDataVersion identifies a session from a newer parser.
+var ErrSessionPushFutureDataVersion = errors.New("receiver requires a newer parser")
+
 // SessionPushTimeout allows two minutes of overhead and 64 KiB/s for the body.
 func SessionPushTimeout(size int64) time.Duration {
 	if size < 0 || size > MaxSessionPushBytes {
@@ -38,6 +41,34 @@ type SessionPushEnvelope struct {
 type sessionPushSegment struct {
 	SHA256 string `json:"sha256"`
 	NDJSON string `json:"ndjson"`
+}
+
+// These fields define version 1 of the receipt identity independently of
+// artifact versions, segment boundaries, and usage accounting.
+type sessionPushIdentityMessage struct {
+	Ordinal      int                           `json:"ordinal"`
+	Role         string                        `json:"role"`
+	Content      string                        `json:"content"`
+	ThinkingText string                        `json:"thinking_text"`
+	IsSystem     bool                          `json:"is_system"`
+	ToolCalls    []sessionPushIdentityToolCall `json:"tool_calls"`
+}
+
+type sessionPushIdentityToolCall struct {
+	Name      string                     `json:"name"`
+	Input     string                     `json:"input"`
+	Result    string                     `json:"result"`
+	Subagent  string                     `json:"subagent"`
+	Category  string                     `json:"category"`
+	FilePath  string                     `json:"file_path"`
+	SkillName string                     `json:"skill_name"`
+	Events    []sessionPushIdentityEvent `json:"events"`
+}
+
+type sessionPushIdentityEvent struct {
+	Source  string `json:"source"`
+	Status  string `json:"status"`
+	Content string `json:"content"`
 }
 
 type sessionPushCapture struct {
@@ -68,32 +99,33 @@ func (s *sessionPushCapture) Create(_ context.Context, ref Ref, identity Identit
 
 // EncodeSessionPush reads exactly id from one SQLite snapshot. It never syncs
 // sources, resolves partial IDs, or traverses parent/subagent references.
-func EncodeSessionPush(ctx context.Context, database *db.DB, id, expectedAgent string) ([]byte, error) {
+func EncodeSessionPush(ctx context.Context, database *db.DB, id, expectedAgent string) ([]byte, string, error) {
 	if id == "" || strings.Contains(id, "~") {
-		return nil, errors.New("push requires an exact native archive session ID")
+		return nil, "", errors.New("push requires an exact native archive session ID")
 	}
 	if database.ArchiveContent().UsageOnly() {
-		return nil, errors.New("usage-only archive cannot supply a transcript")
+		return nil, "", errors.New("usage-only archive cannot supply a transcript")
 	}
 	session, data, err := database.LoadSessionPushData(ctx, id, artifactExportLoadLimits(productionArtifactLimits()))
 	if err != nil {
 		if contextErr := ctx.Err(); contextErr != nil {
-			return nil, contextErr
+			return nil, "", contextErr
 		}
-		return nil, errors.New("cannot read the selected session within transfer limits")
+		return nil, "", errors.New("cannot read the selected session within transfer limits")
 	}
 	if session == nil {
-		return nil, errors.New("session is not in the local archive")
+		return nil, "", errors.New("session is not in the local archive")
 	}
 	if expectedAgent != "" && session.Agent != expectedAgent {
-		return nil, errors.New("session agent does not match --agent")
+		return nil, "", errors.New("session agent does not match --agent")
 	}
 	archiveID, err := database.GetArchiveID(ctx)
 	if err != nil || archiveID == "" {
-		return nil, errors.New("source archive identity is unavailable")
+		return nil, "", errors.New("source archive identity is unavailable")
 	}
 	origin := "push-" + hashHex([]byte(archiveID))[:32]
-	return encodeSessionPushData(ctx, origin, *session, data)
+	payload, err := encodeSessionPushData(ctx, origin, *session, data)
+	return payload, session.Agent, err
 }
 
 func encodeSessionPushData(ctx context.Context, origin string, session db.Session, data db.ArtifactExportData) ([]byte, error) {
@@ -175,7 +207,7 @@ func decodeSessionPush(data []byte) (db.SessionPushReceipt, db.SessionBatchWrite
 		return zero, noWrite, errors.New("invalid selected session")
 	}
 	if m.DataVersion > db.CurrentDataVersion() {
-		return zero, noWrite, errors.New("unsupported parser data version")
+		return zero, noWrite, ErrSessionPushFutureDataVersion
 	}
 	if err := validateImportedManifest(m, m.Origin, m.Origin+"~"+envelope.SessionID, limits); err != nil {
 		return zero, noWrite, err
@@ -191,6 +223,7 @@ func decodeSessionPush(data []byte) (db.SessionPushReceipt, db.SessionBatchWrite
 		return zero, noWrite, errors.New("segment closure mismatch")
 	}
 	var messages []db.Message
+	var identity []sessionPushIdentityMessage
 	ordinals := make(map[int]struct{})
 	var nested nestedCollectionCounts
 	var decodedBytes int64
@@ -233,10 +266,18 @@ func decodeSessionPush(data []byte) (db.SessionPushReceipt, db.SessionBatchWrite
 					}
 				}
 			}
+			item := sessionPushIdentityMessage{Ordinal: message.Ordinal, Role: message.Role, Content: message.Content, ThinkingText: message.ThinkingText, IsSystem: message.IsSystem}
+			for _, call := range message.ToolCalls {
+				tool := sessionPushIdentityToolCall{Name: call.ToolName, Input: call.InputJSON, Result: call.ResultContent, Subagent: call.SubagentSessionID, Category: call.Category, FilePath: call.FilePath, SkillName: call.SkillName}
+				for _, event := range call.ResultEvents {
+					tool.Events = append(tool.Events, sessionPushIdentityEvent{Source: event.Source, Status: event.Status, Content: event.Content})
+				}
+				item.ToolCalls = append(item.ToolCalls, tool)
+			}
+			identity = append(identity, item)
 			converted := message.dbMessage()
-			// Normalize before asset downgrade and signal extraction, matching the
-			// text just preflighted. Receipt hashing still uses the wire manifest
-			// and segment digests, independently of these storage projections.
+			// Normalize before asset downgrade and signal extraction. The receipt
+			// identity uses the validated wire content before these projections.
 			for i := range converted.ToolCalls {
 				db.SanitizeToolCall(&converted.ToolCalls[i])
 			}
@@ -260,9 +301,9 @@ func decodeSessionPush(data []byte) (db.SessionPushReceipt, db.SessionBatchWrite
 	}
 	// Identity follows the transcript, independent of local curation.
 	canonical, err := canonicalJSON(struct {
-		Version  int      `json:"v"`
-		Segments []string `json:"segments"`
-	}{1, m.Segments})
+		Version  int                          `json:"v"`
+		Messages []sessionPushIdentityMessage `json:"messages"`
+	}{1, identity})
 	if err != nil {
 		return zero, noWrite, err
 	}

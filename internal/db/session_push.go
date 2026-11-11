@@ -20,6 +20,11 @@ type SessionPushReceipt struct {
 // or retried without changing existing ownership or deletion decisions.
 var ErrSessionPushConflict = errors.New("session push conflicts with archived session")
 
+// ErrSessionPushNeedsUpgrade means the archive cannot yet protect receipts.
+var ErrSessionPushNeedsUpgrade = errors.New("session push requires archive rebuild")
+
+const sessionPushMinArchiveVersion = 173
+
 // ApplySessionPush atomically publishes a first snapshot and its receipt.
 // Matching receipts are no-ops only while their session still exists outside
 // Trash. Receipts outlive permanent deletion to prevent later resurrection.
@@ -48,6 +53,13 @@ func (db *DB) ApplySessionPush(
 		return false, fmt.Errorf("beginning session push: %w", err)
 	}
 	defer func() { _ = tx.Rollback() }()
+	version, _, err := readUserVersion(ctx, tx)
+	if err != nil {
+		return false, err
+	}
+	if version < sessionPushMinArchiveVersion {
+		return false, ErrSessionPushNeedsUpgrade
+	}
 	// Retention includes inherited exclusions/trash for absent archive rows.
 	// Resolve it in this transaction before any image policy can publish files.
 	if err := validateRecallImportPlaceholderSessionStateWithQueryer(ctx, tx, receipt.SessionID); err != nil {

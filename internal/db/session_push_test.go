@@ -44,6 +44,18 @@ func TestSessionPushArchiveVersionRejectsPreviousWriter(t *testing.T) {
 	assert.Greater(t, version, 172)
 }
 
+func TestSessionPushRejectsArchiveAwaitingRebuild(t *testing.T) {
+	d := testDB(t)
+	_, err := d.getWriter().ExecContext(t.Context(), "PRAGMA user_version = 172")
+	require.NoError(t, err)
+	receipt, write := sessionPushFixture("snapshot")
+	_, err = d.ApplySessionPush(t.Context(), receipt, write)
+	require.ErrorIs(t, err, ErrSessionPushNeedsUpgrade)
+	stored, err := d.GetSession(t.Context(), "snapshot")
+	require.NoError(t, err)
+	assert.Nil(t, stored)
+}
+
 func requireSessionPushReceipt(t *testing.T, d *DB, id string) {
 	t.Helper()
 	var origin, hash string

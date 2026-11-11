@@ -112,6 +112,9 @@ func (s *Server) handleSessionPush(w http.ResponseWriter, r *http.Request) {
 	}
 	receipt, write, err := artifact.DecodeSessionPush(body)
 	if err != nil {
+		if errors.Is(err, artifact.ErrSessionPushFutureDataVersion) {
+			w.Header().Set("X-AgentsView-Push-Error", "future-data-version")
+		}
 		http.Error(w, "invalid normalized session payload", http.StatusBadRequest)
 		return
 	}
@@ -132,7 +135,7 @@ func (s *Server) handleSessionPush(w http.ResponseWriter, r *http.Request) {
 		if errors.Is(err, db.ErrSessionPushConflict) {
 			status = http.StatusConflict
 		}
-		if errors.Is(err, syncpkg.ErrSyncInProgress) || errors.Is(err, db.ErrCompactInProgress) || errors.Is(err, db.ErrWriterClosed) || r.Context().Err() != nil {
+		if errors.Is(err, syncpkg.ErrSyncInProgress) || errors.Is(err, db.ErrCompactInProgress) || errors.Is(err, db.ErrWriterClosed) || errors.Is(err, db.ErrSessionPushNeedsUpgrade) || r.Context().Err() != nil {
 			status = http.StatusServiceUnavailable
 		}
 		http.Error(w, "session ingest failed", status)

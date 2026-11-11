@@ -22,7 +22,7 @@ func TestSessionPushExactSelection(t *testing.T) {
 		}})
 		require.NoError(t, err)
 	}
-	data, err := EncodeSessionPush(t.Context(), d, "codex:chosen", "codex")
+	data, _, err := EncodeSessionPush(t.Context(), d, "codex:chosen", "codex")
 	require.NoError(t, err)
 	assert.NotContains(t, string(data), "chosen-child")
 	receipt, write, err := DecodeSessionPush(data)
@@ -32,26 +32,54 @@ func TestSessionPushExactSelection(t *testing.T) {
 	require.Len(t, write.Messages, 1)
 	assert.Equal(t, "codex:chosen", write.Messages[0].Content)
 	assert.Nil(t, write.Session.FilePath)
-	_, err = EncodeSessionPush(t.Context(), d, "codex:cho", "codex")
+	_, _, err = EncodeSessionPush(t.Context(), d, "codex:cho", "codex")
 	require.Error(t, err)
-	_, err = EncodeSessionPush(t.Context(), d, "codex:chosen", "claude")
+	_, _, err = EncodeSessionPush(t.Context(), d, "codex:chosen", "claude")
 	require.Error(t, err)
 }
 
 func TestSessionPushRetryAfterRename(t *testing.T) {
 	d := testDB(t)
 	require.NoError(t, d.UpsertSession(t.Context(), db.Session{ID: "sample", Agent: "claude", Machine: "source"}))
-	first, err := EncodeSessionPush(t.Context(), d, "sample", "")
+	first, _, err := EncodeSessionPush(t.Context(), d, "sample", "")
 	require.NoError(t, err)
 	name := "renamed"
 	require.NoError(t, d.RenameSession(t.Context(), "sample", &name))
-	second, err := EncodeSessionPush(t.Context(), d, "sample", "")
+	second, _, err := EncodeSessionPush(t.Context(), d, "sample", "")
 	require.NoError(t, err)
 	receipt1, _, err := DecodeSessionPush(first)
 	require.NoError(t, err)
 	receipt2, _, err := DecodeSessionPush(second)
 	require.NoError(t, err)
 	assert.Equal(t, receipt1.PayloadHash, receipt2.PayloadHash)
+}
+
+func TestSessionPushRetryAfterUsageChanges(t *testing.T) {
+	session := db.Session{ID: "sample", Agent: "claude", Machine: "source", MessageCount: 1, UserMessageCount: 1}
+	data := db.ArtifactExportData{Messages: []db.Message{{Ordinal: 0, Role: "user", Content: "hello"}}}
+	first, err := encodeSessionPushData(t.Context(), "source", session, data)
+	require.NoError(t, err)
+	data.Messages[0].TokenUsage = []byte(`{"input_tokens":100}`)
+	data.Messages[0].ContextTokens = 100
+	data.Messages[0].OutputTokens = 20
+	data.Messages[0].HasContextTokens = true
+	data.Messages[0].HasOutputTokens = true
+	data.Messages[0].Model = "updated-model"
+	data.Messages[0].Timestamp = "2026-01-02T00:00:00Z"
+	second, err := encodeSessionPushData(t.Context(), "source", session, data)
+	require.NoError(t, err)
+	receipt1, write1, err := DecodeSessionPush(first)
+	require.NoError(t, err)
+	receipt2, write2, err := DecodeSessionPush(second)
+	require.NoError(t, err)
+	assert.Equal(t, receipt1.PayloadHash, receipt2.PayloadHash)
+	receiver := testDB(t)
+	created, err := receiver.ApplySessionPush(t.Context(), receipt1, write1)
+	require.NoError(t, err)
+	require.True(t, created)
+	created, err = receiver.ApplySessionPush(t.Context(), receipt2, write2)
+	require.NoError(t, err)
+	assert.False(t, created)
 }
 
 func TestSessionPushPreservesLauncherParent(t *testing.T) {
@@ -61,7 +89,7 @@ func TestSessionPushPreservesLauncherParent(t *testing.T) {
 	}
 	_, err := d.SetSessionExternalParent(t.Context(), "child", "parent")
 	require.NoError(t, err)
-	packet, err := EncodeSessionPush(t.Context(), d, "child", "")
+	packet, _, err := EncodeSessionPush(t.Context(), d, "child", "")
 	require.NoError(t, err)
 	_, write, err := DecodeSessionPush(packet)
 	require.NoError(t, err)
@@ -82,7 +110,37 @@ func TestSessionPushRejectsFutureParserVersion(t *testing.T) {
 	packet, err = json.Marshal(envelope)
 	require.NoError(t, err)
 	_, _, err = DecodeSessionPush(packet)
-	require.ErrorContains(t, err, "unsupported parser data version")
+	require.ErrorIs(t, err, ErrSessionPushFutureDataVersion)
+}
+
+func TestSessionPushReceiptIgnoresSegmentBoundaries(t *testing.T) {
+	session := db.Session{ID: "sample", Agent: "claude", Machine: "source", MessageCount: 2, UserMessageCount: 1}
+	data := db.ArtifactExportData{Messages: []db.Message{{Ordinal: 0, Role: "user", Content: "hello"}, {Ordinal: 1, Role: "assistant", Content: "world"}}}
+	packet, err := encodeSessionPushData(t.Context(), "source", session, data)
+	require.NoError(t, err)
+	original, _, err := DecodeSessionPush(packet)
+	require.NoError(t, err)
+	var envelope SessionPushEnvelope
+	require.NoError(t, json.Unmarshal(packet, &envelope))
+	var segments []sessionPushSegment
+	require.NoError(t, json.Unmarshal(envelope.Segments, &segments))
+	require.Len(t, segments, 1)
+	lines := strings.SplitAfter(segments[0].NDJSON, "\n")
+	require.GreaterOrEqual(t, len(lines), 2)
+	first, second := lines[0], strings.Join(lines[1:], "")
+	segments = []sessionPushSegment{{SHA256: hashHex([]byte(first)), NDJSON: first}, {SHA256: hashHex([]byte(second)), NDJSON: second}}
+	var m manifest
+	require.NoError(t, json.Unmarshal(envelope.Manifest, &m))
+	m.Segments = []string{segments[0].SHA256, segments[1].SHA256}
+	envelope.Manifest, err = json.Marshal(m)
+	require.NoError(t, err)
+	envelope.Segments, err = json.Marshal(segments)
+	require.NoError(t, err)
+	packet, err = json.Marshal(envelope)
+	require.NoError(t, err)
+	resegmented, _, err := DecodeSessionPush(packet)
+	require.NoError(t, err)
+	assert.Equal(t, original.PayloadHash, resegmented.PayloadHash)
 }
 
 func TestSessionPushPreservesCapabilities(t *testing.T) {
@@ -163,19 +221,19 @@ func TestSessionPushCanceledContext(t *testing.T) {
 	require.NoError(t, d.UpsertSession(t.Context(), db.Session{
 		ID: "sample", Agent: "claude", Machine: "source",
 	}))
-	_, err := EncodeSessionPush(t.Context(), d, "sample", "")
+	_, _, err := EncodeSessionPush(t.Context(), d, "sample", "")
 	require.NoError(t, err, "the selected session must be encodable before cancellation")
 
 	ctx, cancel := context.WithCancel(t.Context())
 	cancel()
-	_, err = EncodeSessionPush(ctx, d, "sample", "")
+	_, _, err = EncodeSessionPush(ctx, d, "sample", "")
 	require.ErrorIs(t, err, context.Canceled)
 }
 
 func TestSessionPushRejectMalformed(t *testing.T) {
 	d := testDB(t)
 	require.NoError(t, d.UpsertSession(t.Context(), db.Session{ID: "sample", Agent: "claude", Machine: "source"}))
-	data, err := EncodeSessionPush(t.Context(), d, "sample", "")
+	data, _, err := EncodeSessionPush(t.Context(), d, "sample", "")
 	require.NoError(t, err)
 	for _, mutate := range []func(map[string]any){
 		func(v map[string]any) { v["v"] = 99 },

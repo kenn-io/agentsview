@@ -42,7 +42,7 @@ func TestSessionPushServeExtendsBoundedUploadReadDeadline(t *testing.T) {
 	require.NoError(t, source.UpsertSession(t.Context(), db.Session{
 		ID: "selected", Agent: "claude", Machine: "source",
 	}))
-	payload, err := artifact.EncodeSessionPush(t.Context(), source, "selected", "")
+	payload, _, err := artifact.EncodeSessionPush(t.Context(), source, "selected", "")
 	require.NoError(t, err)
 
 	reader, writer := io.Pipe()
@@ -158,7 +158,7 @@ func TestSessionPushReceiverInsertAndRetry(t *testing.T) {
 	s.cfg.AcceptSessionPush, s.cfg.RequireAuth, s.cfg.AuthToken = true, true, "secret"
 	d := s.db.(*db.DB)
 	require.NoError(t, d.UpsertSession(t.Context(), db.Session{ID: "source", Agent: "claude", Machine: "source"}))
-	payload, err := artifact.EncodeSessionPush(t.Context(), d, "source", "")
+	payload, _, err := artifact.EncodeSessionPush(t.Context(), d, "source", "")
 	require.NoError(t, err)
 	// Move this selected synthetic session to a distinct receiving archive.
 	receiver := testServer(t, 30*time.Second)

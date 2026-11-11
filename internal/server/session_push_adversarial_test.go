@@ -84,7 +84,7 @@ func TestSessionPushBasePathAndMalformedBodyAreAtomic(t *testing.T) {
 	source := testServer(t, 30*time.Second)
 	d := source.db.(*db.DB)
 	require.NoError(t, d.UpsertSession(t.Context(), db.Session{ID: "selected", Agent: "claude", Machine: "source"}))
-	payload, err := artifact.EncodeSessionPush(t.Context(), d, "selected", "")
+	payload, _, err := artifact.EncodeSessionPush(t.Context(), d, "selected", "")
 	require.NoError(t, err)
 	r := httptest.NewRequestWithContext(t.Context(), http.MethodPost,
 		"/view/api/v1/sessions/ingest", bytes.NewReader(payload))

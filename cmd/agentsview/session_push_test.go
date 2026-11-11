@@ -243,7 +243,7 @@ func TestPushSessionDistinguishesConflictAndBusy(t *testing.T) {
 		status  int
 		message string
 	}{
-		{http.StatusConflict, "conflicts with receiver's accepted snapshot"},
+		{http.StatusConflict, "receiver cannot replace it"},
 		{http.StatusServiceUnavailable, "receiver is temporarily unavailable"},
 	} {
 		t.Run(http.StatusText(tc.status), func(t *testing.T) {
@@ -253,4 +253,14 @@ func TestPushSessionDistinguishesConflictAndBusy(t *testing.T) {
 			require.ErrorContains(t, err, tc.message)
 		})
 	}
+}
+
+func TestPushSessionReportsReceiverUpgrade(t *testing.T) {
+	remote := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("X-AgentsView-Push-Error", "future-data-version")
+		w.WriteHeader(http.StatusBadRequest)
+	}))
+	defer remote.Close()
+	_, err := sendSessionPush(t.Context(), remote.URL, "fixture", nil, "sample", "claude")
+	require.ErrorContains(t, err, "receiver needs an upgrade")
 }
