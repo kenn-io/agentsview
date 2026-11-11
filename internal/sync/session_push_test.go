@@ -90,7 +90,7 @@ func TestSessionPushDeferredCollisionPreservesDataVersion(t *testing.T) {
 	engine := NewEngine(t.Context(), d, EngineConfig{Machine: "receiver"})
 	t.Cleanup(engine.Close)
 	jobs := make(chan syncJob, 1)
-	jobs <- syncJob{agent: parser.AgentAntigravityCLI, path: "fixture-source", processResult: processResult{retrySessionIDs: map[string]bool{"reserved": true}, results: []parser.ParseResult{{Session: parser.ParsedSession{ID: "reserved", Agent: parser.AgentAntigravityCLI}}}}}
+	jobs <- syncJob{agent: parser.AgentAntigravityCLI, path: "fixture-source", retrySessionIDs: map[string]bool{"reserved": true}, results: []parser.ParseResult{{Session: parser.ParsedSession{ID: "reserved", Agent: parser.AgentAntigravityCLI}}}}
 	close(jobs)
 	engine.collectAndBatch(t.Context(), jobs, 1, 1, nil, syncWriteDefault)
 	session, err := d.GetSessionFull(t.Context(), "reserved")
