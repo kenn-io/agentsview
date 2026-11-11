@@ -256,7 +256,10 @@ describe("SearchStore", () => {
     const store = createSearchStore(memoryStorage());
     searchService.getApiV1Search
       .mockRejectedValueOnce(new ApiError(503, "unavailable"))
-      .mockRejectedValueOnce(new DOMException("Aborted", "AbortError"));
+      .mockImplementationOnce(async (_params, options) => {
+        if (options?.signal?.aborted) throw new DOMException("Aborted", "AbortError");
+        return fullTextResponse("needle");
+      });
     store.search("needle");
     await runDebounce();
     store.clear();
