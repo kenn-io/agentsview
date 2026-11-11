@@ -228,6 +228,9 @@ and can mirror data to PostgreSQL, DuckDB, or ClickHouse.
 
 - Pull requests must have a user-facing benefit or improve the developer
   experience, and the body must say which one.
+- A pull request must be useful if nothing after it merges. Put groundwork in
+  the first PR that uses it, and open a stack's PRs one at a time, each after
+  the one below has been reviewed.
 - Write issues and pull requests in English.
 - Do not poll or watch GitHub Actions checks unless the developer explicitly
   requests it.
