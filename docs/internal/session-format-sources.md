@@ -4221,7 +4221,10 @@ schemas keep their existing ordering behavior.
   Auxiliary same-key ledger UPSERTs can leave session fields/revision unchanged,
   so the full ledger read remains necessary under the current producer contract.
   Ledger keys aggregate route/task usage; their lifetime count has no verified
-  constant bound per session. Only selected members read transcript payloads.
+  constant bound per session. Cron members still receive full fingerprint checks
+  because an ancestor can change their resolved job. Other selected members
+  read transcript payloads. The new fingerprint format causes one reparse of
+  previously imported sessions as they are checked.
 - **Model usage check (2026-10-22):**
   [hermes_state_usage.py](https://github.com/NousResearch/hermes-agent/blob/3ba2b0787ed3a73ec3b08085ed0137f235209cf4/hermes_state_usage.py)
   records per-model and billing-route deltas in `session_model_usage`.

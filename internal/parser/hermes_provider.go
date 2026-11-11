@@ -2059,7 +2059,7 @@ func seedHermesMemberCoresLocked(ctx context.Context, stateDB string) error {
 	}
 	defer memberConn.Close()
 	observeSharedContainerScan(ctx)
-	return listHermesMemberTokens(ctx, idsConn, "", func(id, token string) error {
+	return listHermesMemberTokens(ctx, idsConn, "", func(id, token string, _ bool) error {
 		retainedIDBytes := int64(len(id))
 		observeStreamingRetainedBytes(ctx, retainedIDBytes)
 		defer observeStreamingRetainedBytes(ctx, -retainedIDBytes)

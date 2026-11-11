@@ -34,7 +34,7 @@ func hermesTokenFixture(t *testing.T) (*sql.DB, string) {
 func tokenMap(t *testing.T, c *sql.DB) map[string]string {
 	t.Helper()
 	out := map[string]string{}
-	require.NoError(t, listHermesMemberTokens(t.Context(), c, "", func(id, token string) error { out[id] = token; return nil }))
+	require.NoError(t, listHermesMemberTokens(t.Context(), c, "", func(id, token string, _ bool) error { out[id] = token; return nil }))
 	return out
 }
 
