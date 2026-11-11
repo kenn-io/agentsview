@@ -358,6 +358,9 @@ func (s *Store) loadPricing(ctx context.Context) (map[string]export.ModelRates, 
 		}
 	}
 	for model, custom := range s.customPricing {
+		if custom.PriceAs != "" {
+			continue
+		}
 		rates := export.ModelRates{
 			InputPerMTok:  money.Money{Microdollars: custom.InputMicrodollarsPerMTok},
 			OutputPerMTok: money.Money{Microdollars: custom.OutputMicrodollarsPerMTok},

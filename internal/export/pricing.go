@@ -384,6 +384,7 @@ func (r *PricingResolver) ResolveAt(
 	if r == nil {
 		return reportedModel, PricingLookup{}
 	}
+	reportedModel, canonicalModel = r.aliasPricingInputs(reportedModel, canonicalModel, timestamp)
 	pricedModel, lookup := r.resolveAt(reportedModel, canonicalModel, timestamp)
 	if lookup.OK && !isPlaceholderOllamaCloudRate(lookup) {
 		return pricedModel, lookup
@@ -401,6 +402,21 @@ func (r *PricingResolver) ResolveAt(
 		return pricedModel, baseLookup
 	}
 	return pricedModel, lookup
+}
+
+// aliasPricingInputs selects the target before applying its built-in aliases.
+func (r *PricingResolver) aliasPricingInputs(reported, canonical string, at time.Time) (string, string) {
+	if rates, ok := r.byModel[reported]; ok && rates.Source == PricingRowSourceCustom {
+		return reported, canonical
+	}
+	if target := pricingpkg.ConfiguredAliasTarget(reported); target != "" {
+		canonical = pricingpkg.CanonicalModelForDate(target, at)
+		if canonical == "" {
+			canonical = target
+		}
+		return target, canonical
+	}
+	return reported, canonical
 }
 
 // DependencyFingerprint hashes what ResolveAt/ResolveBilledAt can return at any timestamp, minus UpdatedAt.
@@ -453,6 +469,11 @@ func (r *PricingResolver) DependencyFingerprint(
 			writeField(fingerprint)
 		}
 		return flat, custom, matched
+	}
+	selectedReported, earlierCanonical := r.aliasPricingInputs(reportedModel, canonicalModel, pricingpkg.KimiModelEraCutoff.Add(-time.Nanosecond))
+	reportedModel, canonicalModel = r.aliasPricingInputs(reportedModel, canonicalModel, time.Time{})
+	if earlierCanonical != canonicalModel {
+		writeLadder(selectedReported, earlierCanonical)
 	}
 	mainFlat, mainCustom, mainGenAI := writeLadder(reportedModel, canonicalModel)
 	// ResolveAt tries Ollama bases only when the main ladder can come back unusable.
