@@ -252,14 +252,24 @@ describe("SearchStore", () => {
     expect(store.error).toEqual({ detail, kind: "generic" });
   });
 
-  it("does not retry when the search is canceled during the delay", async () => {
+  it("keeps a canceled search cleared when the retry delay ends", async () => {
     const store = createSearchStore(memoryStorage());
-    searchService.getApiV1Search.mockRejectedValueOnce(new ApiError(503, "unavailable"));
+    let retrySignal: AbortSignal | null | undefined;
+    searchService.getApiV1Search
+      .mockRejectedValueOnce(new ApiError(503, "unavailable"))
+      .mockImplementationOnce(async (_params, options) => {
+        retrySignal = options?.signal;
+        throw new DOMException("Aborted", "AbortError");
+      });
     store.search("needle");
     await runDebounce();
     store.clear();
     await vi.advanceTimersByTimeAsync(300);
-    expect(searchService.getApiV1Search).toHaveBeenCalledTimes(1);
+    expect(retrySignal?.aborted).toBe(true);
+    expect(store.results).toEqual([]);
+    expect(store.error).toBeNull();
+    expect(store.isSearching).toBe(false);
+    expect(reportErrorShown).not.toHaveBeenCalled();
   });
 
   it.each(["semantic", "hybrid"] as const)(
