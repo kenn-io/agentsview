@@ -105,9 +105,14 @@ export function filterDisplayItemsByTranscriptMode(
     }
 
     // Codex can end a turn with a response that produced only reasoning.
-    // Its thinking row must not replace the answer before it; it stands in
-    // only for a turn that has no answer yet.
-    if (pendingAssistant && isThinkingOnly(item.message)) {
+    // Its thinking row must not replace an answer that would still be shown;
+    // it stands in only when the turn has no such answer.
+    if (
+      pendingAssistant &&
+      !toolAfterPendingAssistant &&
+      !isThinkingOnly(pendingAssistant.message) &&
+      isThinkingOnly(item.message)
+    ) {
       continue;
     }
 

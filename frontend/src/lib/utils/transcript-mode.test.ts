@@ -229,6 +229,30 @@ describe("filterDisplayItemsByTranscriptMode", () => {
     ).toEqual([0, 2, 4]);
     // A turn interrupted after reasoning still shows that reasoning.
     expect(ordinalsOf([userMsg(0), thinking(1, "Starting."), userMsg(2)])).toEqual([0, 1, 2]);
+    // Without an answer, the newest reasoning stands in, even after tool work.
+    expect(
+      ordinalsOf([userMsg(0), thinking(1, "A"), toolMsg(2), thinking(3, "B"), userMsg(4)]),
+    ).toEqual([0, 3, 4]);
+    expect(
+      ordinalsOf([userMsg(0), thinking(1, "A"), toolMsg(2), thinking(3, "B"), userMsg(4)], true),
+    ).toEqual([0, 3, 4]);
+    // Narration that trailing tool work disqualifies is not an answer.
+    expect(
+      ordinalsOf([
+        userMsg(0),
+        assistantMsg(1, "working"),
+        toolMsg(2),
+        thinking(3, "B"),
+        userMsg(4),
+      ]),
+    ).toEqual([0, 3, 4]);
+    // When the provider keeps answers before tool work, the answer still wins.
+    expect(
+      ordinalsOf(
+        [userMsg(0), assistantMsg(1, "answer"), toolMsg(2), thinking(3, "B"), userMsg(4)],
+        true,
+      ),
+    ).toEqual([0, 1, 4]);
     // Thinking beside answer text is an answer, not a thinking row.
     const mixed = msg({
       ordinal: 3,
