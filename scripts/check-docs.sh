@@ -50,28 +50,31 @@ if [[ -z "$python_bin" ]]; then
 fi
 "$python_bin" docs/scripts/check_markdown_sources.py
 
-if ! command -v rg >/dev/null 2>&1; then
-  printf 'rg not found; cannot validate docs media references\n' >&2
-  exit 127
-fi
+# Search tracked and untracked docs, skipping ignored build output and
+# hydrated assets. git grep exits 1 when nothing matches; anything higher
+# means the search itself failed.
+find_media_refs() {
+  local status=0
+  git grep --untracked -nE "$1" -- docs README.md || status=$?
+  if [[ "$status" -gt 1 ]]; then
+    printf 'git grep failed (status %s); cannot validate docs media references\n' "$status" >&2
+    return "$status"
+  fi
+}
 
-root_media_refs="$(
-  (rg -n '(<img[^>]+src="/|!\[[^]]*\]\(/)[^)" >]+\.(png|svg|jpg|jpeg|webp|gif)' docs README.md || true) \
-    | grep -v '/assets/static/' \
-    | grep -v '/assets/generated/' \
-    || true
-)"
+without_asset_paths() {
+  grep -v '/assets/static/' | grep -v '/assets/generated/' || true
+}
+
+root_media_refs="$(find_media_refs '(<img[^>]+src="/|!\[[^]]*]\(/)[^)" >]+\.(png|svg|jpg|jpeg|webp|gif)')"
+root_media_refs="$(printf '%s' "$root_media_refs" | without_asset_paths)"
 if [[ -n "$root_media_refs" ]]; then
   printf 'docs media references must use /assets/static or /assets/generated:\n%s\n' "$root_media_refs" >&2
   exit 1
 fi
 
-source_media_refs="$(
-  (rg -n '(/screenshots/[^)" '"'"'`>]+\.(png|svg|jpg|jpeg|webp|gif)|/agents/[^)" '"'"'`>]+\.(png|svg|jpg|jpeg|webp|gif)|/architecture\.svg|https://agentsview\.io/og-image\.png|/og-image\.png)' docs README.md || true) \
-    | grep -v '/assets/static/' \
-    | grep -v '/assets/generated/' \
-    || true
-)"
+source_media_refs="$(find_media_refs '(/screenshots/[^)" '"'"'`>]+\.(png|svg|jpg|jpeg|webp|gif)|/agents/[^)" '"'"'`>]+\.(png|svg|jpg|jpeg|webp|gif)|/architecture\.svg|https://agentsview\.io/og-image\.png|/og-image\.png)')"
+source_media_refs="$(printf '%s' "$source_media_refs" | without_asset_paths)"
 if [[ -n "$source_media_refs" ]]; then
   printf 'docs source media references must use /assets/static or /assets/generated:\n%s\n' "$source_media_refs" >&2
   exit 1

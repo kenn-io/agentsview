@@ -237,3 +237,27 @@ and can mirror data to PostgreSQL, DuckDB, or ClickHouse.
   Verification, or Test plan.
 - Explain what the code does now, why it changed, tradeoffs, limits, and where
   reviewers should look.
+
+## Before opening a pull request
+
+- Build for a use you have. Run the change on your own real data, such as an
+  export, archive, or photo library, and say in the body what it did there. If
+  nothing you use needs it yet, don't open it.
+- Make it useful if nothing after it merges. Don't add code that works only once
+  a later PR lands, or a guard for something `main` can't do yet.
+- Start from what the repo already does. Find the closest command, importer,
+  query, or library it already uses, extend it, and name it in the body. If it
+  can't be extended, say why.
+- Add only what the change uses now. Leave out options, states, paging, flags,
+  and API surface until something calls them.
+- Review your diff as a maintainer would: cut what `main` already does and
+  anything without a caller.
+- When review findings keep landing in the same code, rethink the design there
+  instead of patching each one.
+- Build a stack one PR at a time, and start the next only after the one below
+  has been reviewed. Review usually reshapes a PR, and everything built on it
+  then has to be rebuilt.
+- Keep only a few PRs open at once. Each one waits for a maintainer, and the
+  ones nobody gets to go stale.
+- Before each push, check that your schema, API, and protocol version numbers
+  are still the next ones free on `main`.
