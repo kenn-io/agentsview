@@ -248,7 +248,7 @@ describe("RecallCorpusPanel", () => {
     expect(document.querySelector('table[aria-label="Recall entries"]')).not.toBeNull();
     expect(document.querySelector("h2")?.textContent).toBe("Recall");
     expect(document.body.textContent).toContain(
-      "Browse distilled entries and extraction coverage.",
+      "Browse Recall entries and see processing progress.",
     );
     expect(document.body.textContent).not.toContain(
       "Limit model-backed passes to an explicit session count.",
@@ -272,7 +272,7 @@ describe("RecallCorpusPanel", () => {
     expect(document.body.textContent).toContain("Messages 12–14");
     expect(expand!.getAttribute("aria-expanded")).toBe("true");
     expect(expand!.getAttribute("aria-label")).toBe("Collapse Keep extraction passes bounded");
-    expect(document.body.textContent).toContain("Extraction status");
+    expect(document.body.textContent).toContain("Processing status");
     expect(document.body.textContent).toContain("8 done");
     expect(document.body.textContent).toContain("1 failed");
     expect(document.body.textContent).toContain("3 eligible");
@@ -737,7 +737,7 @@ describe("RecallCorpusPanel", () => {
     await tick();
 
     const confirmActivate = Array.from(document.querySelectorAll<HTMLButtonElement>("button")).find(
-      (button) => button.textContent?.trim() === "Activate generation",
+      (button) => button.textContent?.trim() === "Use these entries",
     );
     expect(confirmActivate).toBeDefined();
     confirmActivate!.click();
@@ -748,7 +748,7 @@ describe("RecallCorpusPanel", () => {
       );
       expect(
         Array.from(document.querySelectorAll<HTMLButtonElement>("button")).find(
-          (button) => button.textContent?.trim() === "Activate generation",
+          (button) => button.textContent?.trim() === "Use these entries",
         ),
       ).toBeUndefined();
     });
@@ -969,7 +969,7 @@ describe("RecallCorpusPanel", () => {
     expect(archive).toHaveLength(2);
     expect(archive.every((button) => !button.disabled)).toBe(true);
     expect(document.body.textContent).toContain(
-      "Approval is unavailable because the source evidence was revoked.",
+      "You can't approve this entry because its source messages could not be verified.",
     );
     expect(document.body.textContent).toContain("Human approved");
   });

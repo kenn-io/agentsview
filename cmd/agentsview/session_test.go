@@ -2629,6 +2629,6 @@ func TestSessionUsageIncompleteRefreshReturnsAvailableUsage(t *testing.T) {
 	assert.Equal(t, 42, out.TotalOutputTokens)
 	assert.True(t, out.RefreshIncomplete)
 	assert.Equal(t, tokenUseExitOK, code)
-	assert.Contains(t, stderr, "warning: usage refresh incomplete; showing usage currently stored in the archive")
+	assert.Contains(t, stderr, "warning: couldn't refresh usage; saved totals may be out of date")
 	assert.Contains(t, stderr, reason)
 }

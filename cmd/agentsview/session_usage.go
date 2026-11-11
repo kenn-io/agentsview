@@ -280,8 +280,8 @@ func httpSessionUsageData(
 		}
 		if startupPending || archiveStale || syncPending {
 			return nil, tokenUseExitErr, errors.New(
-				"session usage is not yet available; retry after startup ingestion " +
-					"or archive catch-up finishes",
+				"session usage is not ready; wait for syncing or rebuilding " +
+					"to finish, then retry",
 			)
 		}
 		// Startup or rebuild work can finish after the first lookup but before
@@ -303,7 +303,7 @@ func httpSessionUsageData(
 			if !errors.Is(syncErr, db.ErrReadOnly) {
 				refreshIncomplete = true
 				fmt.Fprintf(os.Stderr,
-					"warning: usage refresh incomplete; showing usage currently stored in the archive: %v\n", syncErr)
+					"warning: couldn't refresh usage; saved totals may be out of date: %v\n", syncErr)
 			}
 		}
 	}
@@ -474,7 +474,7 @@ func renderSessionUsageHuman(w io.Writer, out *sessionUsageOutput) error {
 		fmt.Fprintf(w, "%s %.0f\n", label("AI Credits"), out.AICredits)
 	}
 	if out.RefreshIncomplete {
-		fmt.Fprintln(w, "Usage refresh: incomplete; showing archived totals")
+		fmt.Fprintln(w, "Usage refresh is incomplete. Saved totals may be out of date.")
 	}
 	if line := planUsageLine(out.Agent, out.Plan); line != "" {
 		fmt.Fprintf(w, "%s %s\n", label("Plan usage"), sanitizeTerminal(line))

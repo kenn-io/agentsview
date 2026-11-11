@@ -227,7 +227,7 @@ func renderSessionDiagnosis(w io.Writer, d *sessionDiagnosis) error {
 	if err := renderSessionUsageHuman(w, d.Usage); err != nil {
 		return err
 	}
-	if _, err := fmt.Fprintf(w, "Observed usage rows: uncached input %d; cache read %d; cache write %d; output %d (coverage may be incomplete)\n", d.ObservedRows.UncachedInput, d.ObservedRows.CacheRead, d.ObservedRows.CacheWrite, d.ObservedRows.Output); err != nil {
+	if _, err := fmt.Fprintf(w, "Usage records found: uncached input %d; cache read %d; cache write %d; output %d. Some usage data may be missing.\n", d.ObservedRows.UncachedInput, d.ObservedRows.CacheRead, d.ObservedRows.CacheWrite, d.ObservedRows.Output); err != nil {
 		return err
 	}
 	// Request counts and cache-miss reasons are never available, so they live

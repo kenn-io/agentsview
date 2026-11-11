@@ -2,6 +2,7 @@ import type { EventSource } from "eventsource";
 import { triggerResync, triggerSync, watchSession, type SyncHandle } from "../api/client.js";
 import { MetadataService, SyncService } from "../api/generated/index";
 import { ApiError, isAbortError, isRemoteConnection } from "../api/runtime.js";
+import { m } from "../i18n/index.js";
 import { reportSyncFailed } from "../utils/telemetry.js";
 import { fileReferences } from "./file-references.svelte.js";
 import { events } from "./events.svelte.js";
@@ -125,7 +126,7 @@ class SyncStore {
     }
   }
 
-  markBackendDegraded(message = "sync not ready") {
+  markBackendDegraded(message = m.status_bar_sync_not_ready()) {
     this.remoteUnreachable = false;
     this.backendDegraded = true;
     this.backendDegradedMessage = message;
