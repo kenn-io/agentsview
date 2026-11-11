@@ -431,7 +431,7 @@ func TestKiroSubagentDelegationStatusFeedsToolHealth(t *testing.T) {
 
 // A rebuild reparses Kiro sources, so a session archived
 // before spawns were parsed gains its Task calls without changing identity.
-func TestKiroSubagentUpgradeRecordsSpawns(t *testing.T) {
+func TestKiroSubagentRebuildRecordsSpawns(t *testing.T) {
 	ctx := t.Context()
 	root := t.TempDir()
 	writeKiroSessionWithSubagent(t, root)
@@ -460,7 +460,6 @@ func TestKiroSubagentUpgradeRecordsSpawns(t *testing.T) {
 	reopened, err := db.OpenIsolated(ctx, archivePath)
 	require.NoError(t, err)
 	defer func() { require.NoError(t, reopened.Close()) }()
-	assert.True(t, reopened.NeedsResync())
 	require.Empty(t, kiroSpawnLinks(t, reopened, kiroSubagentParentID))
 	upgraded := sync.NewEngine(ctx, reopened, cfg)
 	defer upgraded.Close()

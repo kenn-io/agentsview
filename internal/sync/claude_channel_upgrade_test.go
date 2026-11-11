@@ -75,7 +75,6 @@ func TestClaudeChannelUpgradeKeepsRetryCuration(t *testing.T) {
 			reopened, err := db.OpenIsolated(ctx, archivePath)
 			require.NoError(t, err)
 			defer func() { require.NoError(t, reopened.Close()) }()
-			assert.True(t, reopened.NeedsResync())
 			upgraded := sync.NewEngine(ctx, reopened, cfg)
 			defer upgraded.Close()
 			stats := upgraded.ResyncAll(ctx, nil)

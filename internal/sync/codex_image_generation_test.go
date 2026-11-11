@@ -135,7 +135,6 @@ func TestCodexGeneratedImageRebuildReparsesUnchangedSource(t *testing.T) {
 	database, err := db.OpenIsolated(t.Context(), dbPath)
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, database.Close()) })
-	assert.True(t, database.NeedsResync())
 	engine = NewEngine(t.Context(), database, EngineConfig{AgentDirs: agentDirs, Machine: "local"})
 	t.Cleanup(engine.Close)
 	stats := engine.ResyncAll(t.Context(), nil)

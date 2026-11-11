@@ -29,6 +29,7 @@ func TestSessionPushExactSelection(t *testing.T) {
 		session := db.Session{ID: id, Agent: "codex", Machine: "source", Project: "example", MessageCount: 1, UserMessageCount: 1}
 		message := db.Message{SessionID: id, Ordinal: 0, Role: "user", Content: id}
 		if id == "codex:chosen" {
+			session.FilePath = new("/fixture/source.jsonl")
 			session.ParentSessionID = new("codex:parent")
 			session.RelationshipType = "subagent"
 			message.ToolCalls = []db.ToolCall{{ToolName: "Agent", SubagentSessionID: "codex:chosen-child"}}
@@ -180,7 +181,7 @@ func TestSessionPushExactSelection(t *testing.T) {
 	})
 }
 
-func TestSessionPushReceiptIgnoresSegmentBoundaries(t *testing.T) {
+func TestSessionPushReceiptTracksTranscriptContent(t *testing.T) {
 	for name, check := range map[string]func(*testing.T){
 		"rename": func(t *testing.T) {
 			t.Helper()
