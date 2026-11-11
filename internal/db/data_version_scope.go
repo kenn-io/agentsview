@@ -63,6 +63,7 @@ var dataVersionScopes = map[int][]parser.AgentType{
 
 	174: {parser.AgentCodex, parser.AgentTraeX, parser.AgentAugureCode, parser.AgentInterpreter, parser.AgentCodexCloud},
 	175: {parser.AgentOpenCode, parser.AgentKilo, parser.AgentMiMoCode, parser.AgentIcodemate, parser.AgentOpenClaw, parser.AgentQClaw, parser.AgentForge, parser.AgentCline, parser.AgentCodex, parser.AgentTraeX, parser.AgentAugureCode, parser.AgentInterpreter, parser.AgentGemini},
+	176: {parser.AgentPi, parser.AgentOMP, parser.AgentOMO, parser.AgentPrimeAgent, parser.AgentStepCode, parser.AgentOpenClaw, parser.AgentQClaw, parser.AgentShelley, parser.AgentFx, parser.AgentOpenCode, parser.AgentKilo, parser.AgentMiMoCode, parser.AgentIcodemate},
 }
 
 // firstScopedDataVersion is the oldest version that may be declared. Released

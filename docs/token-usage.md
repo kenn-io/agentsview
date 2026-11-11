@@ -522,6 +522,13 @@ price the model, the catalog price is used and the recorded cost is kept for
 comparison. A recorded cost of $0 never prices a row, because agents write $0
 for models they have no rate for; those rows stay unpriced.
 
+AgentsView keeps recorded costs from Pi and the agents built on it, OpenClaw,
+QClaw, Shelley, fx, and OpenCode, Kilo, and MiMo Code. For the OpenCode family
+it sums the cost of each model request in a message. Some of these figures are
+what a provider or gateway billed rather than an estimate; they follow the same
+rule. fx costs are kept only when fx has a billing record for every request.
+Existing sessions from these agents are re-read once after upgrading.
+
 Costs that an agent or provider reports as billed keep their existing
 treatment: the reported cost is the price.
 

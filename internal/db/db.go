@@ -678,7 +678,9 @@ CREATE INDEX IF NOT EXISTS idx_provider_freshness_updated_at
 // call as hidden usage-only rows. Re-parse OpenCode-format, OpenClaw, QClaw,
 // Forge, Cline, Codex-format, and Gemini sources in place; source and session
 // identities are unchanged.)
-const dataVersion = 175
+// (176: keep the cost Pi, OpenClaw, Shelley, fx, and OpenCode-format agents
+// record for their requests, as a recorded cost.)
+const dataVersion = 176
 
 const archiveOnlyVersionBase = 1 << 20
 

@@ -15,6 +15,7 @@ import (
 	"strings"
 
 	_ "github.com/mattn/go-sqlite3"
+	"github.com/tidwall/gjson"
 )
 
 const (
@@ -94,6 +95,7 @@ type shelleyUsage struct {
 	CacheCreationInputTokens jsontext.Value `json:"cache_creation_input_tokens"`
 	CacheReadInputTokens     jsontext.Value `json:"cache_read_input_tokens"`
 	OutputTokens             jsontext.Value `json:"output_tokens"`
+	CostUSD                  jsontext.Value `json:"cost_usd"`
 	Model                    string         `json:"model"`
 }
 
@@ -722,13 +724,13 @@ func applyShelleyUsage(msg *ParsedMessage, usageData, convModel string) error {
 
 	// The usage_data keys are already the AgentsView canonical names, so
 	// the raw blob is stored verbatim for catalog cost pricing.
-	//
-	// usage_data also carries an exact gateway cost_usd. It is not yet
-	// surfaced: capturing it cleanly (without double-counting cost
-	// against the catalog-priced per-message tokens) needs a dedicated
-	// usage-event path and is left as a follow-up. Standard gateway
-	// models are priced correctly by the catalog today.
 	msg.TokenUsage = jsontext.Value(usageData)
+	// cost_usd is the exe.dev gateway's Exedev-Gateway-Cost header, or 0
+	// when the header was missing. It is kept as a recorded cost, which
+	// prices the message only when the catalog has no rate for its model.
+	if cost, ok := recordedCostDollars(gjson.ParseBytes(u.CostUSD)); ok {
+		msg.SetRecordedCost(cost)
+	}
 	msg.ContextTokens = context
 	msg.OutputTokens = output
 	msg.HasContextTokens = context > 0
