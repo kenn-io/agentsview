@@ -1242,7 +1242,7 @@ func TestFindDaemonRuntime_IgnoresIncompatibleRuntime(t *testing.T) {
 	dir := runtimeTestDir(t)
 	writeLiveRuntime(t, dir, false,
 		withRuntimeVersion("old"),
-		withRuntimeAPIVersion(server.UsageWaitAPIVersion-1), // Older daemons cannot guarantee safe usage-wait retries.
+		withRuntimeAPIVersion(server.APIVersion-1),
 	)
 
 	assert.Nil(t, FindDaemonRuntime(dir))
