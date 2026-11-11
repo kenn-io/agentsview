@@ -93,16 +93,15 @@ func (p *usagePricer) withModels(added []chUsagePriceModel) (*usagePricer, error
 	return &usagePricer{digest: digest, resolver: p.resolver, models: models}, nil
 }
 
-const chUsagePricingMessageEligibility = `
-			m.token_usage != ''
-			AND m.model != ''
-			AND m.model != '<synthetic>'`
+var chUsagePricingMessageEligibility = `
+			` + chStoredMessageUsable("m.usage_present", "m.model")
 
 // usagePricingRawSQL renders the raw usage rows of a scope. It reads what
 // the mirror holds, not the local archive, so a price is always derived
 // from the same normalized values the reader joins on. It reads no session
 // rows: no pricing input comes from the session row, and a batch is priced
-// before its session rows land.
+// before its session rows land. Message usage comes from usage_messages;
+// see chUsageRawSQLFromWheres.
 func usagePricingRawSQL(scope usagePriceScope) (string, []any) {
 	cursorSQL, cursorArgs, _ := chCursorUsageRowsSQLForBounds(
 		db.UsageFilter{}, chUsageBounds{})
@@ -119,11 +118,18 @@ func usagePricingRawSQL(scope usagePriceScope) (string, []any) {
 		messageArgs, eventArgs = args, args
 	}
 	rawSQL, args := chUsageRawSQLFromWheres(
-		false, messageWhere, messageArgs, eventWhere, eventArgs)
+		true, messageWhere, messageArgs, eventWhere, eventArgs)
 	if len(scope.sessionIDs) > 0 {
 		return rawSQL, args
 	}
 	return rawSQL + "\n\t\tUNION ALL\n" + cursorSQL, append(args, cursorArgs...)
+}
+
+// usagePricingCTE renders the usage CTEs over the raw usage rows of a scope.
+func usagePricingCTE(scope usagePriceScope) (string, []any) {
+	rawSQL, args := usagePricingRawSQL(scope)
+	return chUsageCTEFromRawSource(db.UsageFilter{Timezone: "UTC"}, rawSQL, args,
+		false, chUsageStoredNormSource(), "")
 }
 
 // unpricedUsageSQL renders the distinct pricing inputs of a scope that have
@@ -131,18 +137,18 @@ func usagePricingRawSQL(scope usagePriceScope) (string, []any) {
 //
 // usage_event_prices is sorted by (pricing_digest, price_key). A Cursor or
 // session-batch scope looks up only its own price keys, so the lookup reads
-// the granules that can hold them instead of every record under the digest.
-// That evaluates usage_normalized a second time, which costs far less than
-// collecting the digest's whole key set for these scopes, but for the whole
-// mirror it doubles the cost of the pass, so the whole mirror filters on
-// the digest's whole key set.
+// the granules that can hold them, and its key set stays small. Price keys
+// are hashes spread evenly over the digest's granules, so a scope with more
+// than a few hundred keys still reads nearly all of them: 885 keys of 100
+// sessions read 192 of 194 granules on a production mirror. The lookup
+// evaluates usage_normalized a second time, which costs little for these
+// scopes, but for the whole mirror it doubles the cost of the pass, so the
+// whole mirror filters on the digest's whole key set.
 //
 // Records are only ever inserted, and dropped a digest at a time, so a key
 // has a record whenever any part holds one: the lookup skips FINAL.
 func unpricedUsageSQL(scope usagePriceScope, digest string) (string, []any) {
-	rawSQL, args := usagePricingRawSQL(scope)
-	cte, args := chUsageCTEFromRaw(
-		db.UsageFilter{Timezone: "UTC"}, rawSQL, args, false)
+	cte, args := usagePricingCTE(scope)
 	candidates := ""
 	if scope.cursorOnly || len(scope.sessionIDs) > 0 {
 		candidates = `
@@ -496,8 +502,7 @@ func (s *Sync) readCursorPricingParts(ctx context.Context) (cursorPricingParts, 
 // digest. A pass records its mark after it finishes, so a push that reads
 // the same mark has nothing to price.
 func (p cursorPricingParts) mark(digest string) string {
-	rawSQL, args := usagePricingRawSQL(usagePriceScope{cursorOnly: true})
-	cte, args := chUsageCTEFromRaw(db.UsageFilter{Timezone: "UTC"}, rawSQL, args, false)
+	cte, args := usagePricingCTE(usagePriceScope{cursorOnly: true})
 	h := sha256.New()
 	for _, field := range []string{
 		digest, p.cursor, strconv.FormatInt(p.firstBlock[digest], 10), cte, fmt.Sprint(args),

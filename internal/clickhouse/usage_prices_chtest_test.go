@@ -652,6 +652,35 @@ func TestUnpricedUsageFindsKeysWithoutRecordsUnderTheDigest(t *testing.T) {
 	assert.NotContains(t, unpriced(cursor, "another-digest"), cursorKey)
 }
 
+// A session batch's pricing pass reads about as many rows as the batch has,
+// however many messages of other sessions share its index granules.
+func TestSessionPricingPassReadsOnlyTheBatchRows(t *testing.T) {
+	t.Parallel()
+	store, syncer, _ := newUsagePriceStore(t)
+	ctx := t.Context()
+	// 50,000 messages of other sessions sort right after the batch's session
+	// and merge into the same part.
+	execPreparedUsage(t, store, `INSERT INTO messages (session_id, ordinal, role, push_version)
+		SELECT concat('`+usagePriceRoundID+`-neighbor-', leftPad(toString(intDiv(number, 10)), 6, '0')),
+			number % 10, 'user', 1
+		FROM numbers(50000)`,
+		"OPTIMIZE TABLE messages FINAL",
+		"OPTIMIZE TABLE usage_messages FINAL")
+	pricer, err := syncer.newUsagePricer(ctx)
+	require.NoError(t, err)
+	require.NoError(t, syncer.priceUsageBatch(ctx, pricer,
+		usagePriceScope{sessionIDs: []string{usagePriceRoundID}}))
+
+	execPreparedUsage(t, store, "SYSTEM FLUSH LOGS")
+	var passes, readRows uint64
+	require.NoError(t, store.DB().QueryRowContext(ctx, `
+		SELECT count(), argMax(read_rows, event_time_microseconds) FROM system.query_log
+		WHERE current_database = currentDatabase() AND type = 'QueryFinish' AND is_initial_query = 1
+			AND position(query, 'WHERE price_key NOT IN') > 0`).Scan(&passes, &readRows))
+	require.Positive(t, passes, "the query log must hold the pricing pass")
+	assert.Less(t, readRows, uint64(1000))
+}
+
 // Serve installs custom rates after it opens the store. The background
 // work it starts afterwards must price with them, even when a session
 // pushed since the last refresh makes the first prepared state load the
