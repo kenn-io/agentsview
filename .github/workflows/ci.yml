@@ -1149,7 +1149,7 @@ jobs:
         if: failure() || github.run_attempt > 1 || hashFiles('gotestsum/postgres-core-heavy-reruns.txt') != ''
         uses: actions/upload-artifact@v7.0.2
         with:
-          name: gotestsum-postgres-core-heavy-attempt-${{ github.run_attempt }}
+          name: gotestsum-postgres-core-heavy-${{ matrix.name }}-attempt-${{ github.run_attempt }}
           path: gotestsum/postgres-core-heavy.json
           retention-days: 14
           if-no-files-found: ignore
