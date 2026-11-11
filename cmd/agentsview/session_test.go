@@ -3169,9 +3169,10 @@ func TestSessionUsageArchiveOnlyWaitIncomplete(t *testing.T) {
 				assert.Contains(t, string(data), `"wait_incomplete":true`)
 				var human strings.Builder
 				require.NoError(t, renderSessionUsageHuman(&human, out))
-				assert.Contains(t, human.String(), "Waiting for ingestion did not finish")
+				assert.NotContains(t, human.String(), "Waiting for ingestion did not finish")
 			})
 			assert.Contains(t, stderr, "waiting for ingestion did not finish")
+			assert.Contains(t, stderr, "saved totals may be out of date")
 		})
 	}
 }
