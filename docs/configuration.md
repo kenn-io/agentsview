@@ -2706,7 +2706,6 @@ Exact-version links require
 url = "https://docbank.example.com"
 web_url = "https://docbank.example.com"
 api_key_env = "DOCBANK_API_KEY"
-allow_http = false
 ```
 
 Set `DOCBANK_API_KEY` in the environment of each consumer, including the
@@ -2735,11 +2734,10 @@ api_key_env = "DOCBANK_API_KEY"
 allow_http = true
 ```
 
-`allow_http` applies to both `url` and the optional `web_url`. It permits HTTP
-to any host, matching the Insights transport policy. HTTP exposes the API key
-and requested digests in plaintext, so enable it only on a network you trust.
-If you set `web_url`, use an address the browser can reach. API keys stay in
-request headers and redirects are refused.
+`allow_http` applies to both `url` and the optional `web_url`, matching the
+Insights transport policy. HTTP exposes the API key and requested digests in
+plaintext, so enable it only on a network you trust. API keys stay in request
+headers and redirects are refused.
 
 Lookup covers retained tool-result images, including offloaded assets, inline
 OpenCode `file.uri` payloads such as PDF and text files, and Markdown `asset://`

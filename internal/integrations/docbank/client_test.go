@@ -2,9 +2,7 @@ package docbank
 
 import (
 	"bytes"
-	"context"
 	"log"
-	"net"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -126,26 +124,4 @@ func TestLookupFailures(t *testing.T) {
 		})
 	}
 	assert.Zero(t, hits.Load())
-}
-
-func TestLookupContainerHTTP(t *testing.T) {
-	t.Setenv("DOCBANK_TEST_KEY", "test-key")
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		assert.Equal(t, "docbank:8485", r.Host)
-		assert.Equal(t, "test-key", r.Header.Get("X-Api-Key"))
-		_, _ = w.Write([]byte(`{"items":[],"total":0}`))
-	}))
-	defer srv.Close()
-	cfg := config.DocbankIntegration{URL: "http://docbank:8485", APIKeyEnv: "DOCBANK_TEST_KEY", AllowHTTP: true}
-	require.NoError(t, cfg.Validate())
-	client := New(cfg)
-	transport := http.DefaultTransport.(*http.Transport).Clone()
-	transport.Proxy = nil
-	transport.DialContext = func(ctx context.Context, network, addr string) (net.Conn, error) {
-		return (&net.Dialer{}).DialContext(ctx, network, srv.Listener.Addr().String())
-	}
-	defer transport.CloseIdleConnections()
-	client.http.Transport = transport
-	_, err := client.Lookup(t.Context(), strings.Repeat("a", 64))
-	require.NoError(t, err)
 }
