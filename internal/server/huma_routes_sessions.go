@@ -841,6 +841,11 @@ func (s *Server) exactSessionUsage(
 		if rollup == nil {
 			return nil, &sessionUsageError{Status: http.StatusNotFound, Body: sessionUsageErrorBody{Code: "session_not_found", Message: "session not found"}}
 		}
+		// The comparison covers the rows of this response's breakdown, which
+		// is the session's own usage; rollup_* fields carry the subagents.
+		if rollup.Usage.RecordedCost, err = db.SummarizeRecordedCost(rollup.Usage.Breakdown); err != nil {
+			return nil, sessionUsageQueryError(err)
+		}
 		body := newSessionUsageHumaResponse(rollup.Usage)
 		if rollup.HasCost {
 			body.RollupCost = &rollup.Cost

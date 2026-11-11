@@ -621,7 +621,19 @@ func TestHandleSessionUsage_ReportsAgentRecordedCost(t *testing.T) {
 		got.Breakdown[0]["recorded_cost"])
 	assert.NotContains(t, got.Breakdown[0], "recorded_cost_priced")
 
+	// A rollup request compares the same own-session breakdown.
+	w = te.get(t, "/api/v1/sessions/pi:usage-recorded/usage?rollup=true&breakdown=true")
+	assertStatus(t, w, http.StatusOK)
+	var rollup map[string]any
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &rollup))
+	assert.Equal(t, got.RecordedCost, rollup["recorded_cost"])
+
 	// Without a breakdown there is nothing to compare.
+	w = te.get(t, "/api/v1/sessions/pi:usage-recorded/usage?rollup=true")
+	assertStatus(t, w, http.StatusOK)
+	var rollupPlain map[string]any
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &rollupPlain))
+	assert.NotContains(t, rollupPlain, "recorded_cost")
 	w = te.get(t, "/api/v1/sessions/pi:usage-recorded/usage")
 	assertStatus(t, w, http.StatusOK)
 	var plain map[string]any

@@ -3216,7 +3216,7 @@ type SessionRecordedCost struct {
 	// catalog has no rate for their model.
 	FallbackRows int `json:"fallback_rows"`
 	// UnpricedRows is how many rows neither the catalog nor a recorded cost
-	// above zero could price.
+	// above zero could price. Computed still includes their known fees.
 	UnpricedRows int `json:"unpriced_rows"`
 }
 
@@ -3237,12 +3237,12 @@ func SummarizeRecordedCost(entries []SessionUsageBreakdownEntry) (*SessionRecord
 		if out.Recorded, err = money.Add(out.Recorded, *entry.RecordedCost); err != nil {
 			return nil, fmt.Errorf("summing recorded cost: %w", err)
 		}
-		if !entry.HasCost {
-			out.UnpricedRows++
-			continue
-		}
+		// An unpriced row can still carry a known fee, such as web searches.
 		if out.Computed, err = money.Add(out.Computed, entry.Cost); err != nil {
 			return nil, fmt.Errorf("summing computed cost: %w", err)
+		}
+		if !entry.HasCost {
+			out.UnpricedRows++
 		}
 		if entry.RecordedCostPriced {
 			out.FallbackRows++
