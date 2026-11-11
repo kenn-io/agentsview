@@ -133,8 +133,7 @@ func (db *DB) ApplySessionPush(
 			}
 			return false, err
 		}
-	}
-	if _, err := applySessionExternalParentsFor(ctx, tx.ExecContext,
+	} else if _, err := applySessionExternalParentsFor(ctx, tx.ExecContext,
 		func(ctx context.Context, query string, args ...any) rowScanner {
 			return tx.QueryRowContext(ctx, query, args...)
 		}, []string{receipt.SessionID}); err != nil {

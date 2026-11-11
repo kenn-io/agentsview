@@ -128,7 +128,7 @@ func TestPushSessionTransportFailuresAreSanitized(t *testing.T) {
 		{"conflict", http.StatusConflict, "", "receiver cannot replace it"},
 		{"too large", http.StatusRequestEntityTooLarge, "", "session exceeds receiver size limit"},
 		{"unsupported", http.StatusNotImplemented, "", "receiver does not support session pushes"},
-		{"busy", http.StatusServiceUnavailable, "", "receiver is temporarily unavailable"},
+		{"busy", http.StatusServiceUnavailable, "", "receiver is temporarily unavailable; try again later"},
 		{"rebuild", http.StatusServiceUnavailable, "archive-rebuild-required", "receiver must finish its archive rebuild"},
 		{"upgrade", http.StatusBadRequest, "future-data-version", "receiver needs an upgrade"},
 	} {

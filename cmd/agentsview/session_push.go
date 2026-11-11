@@ -181,7 +181,7 @@ func sendSessionPush(ctx context.Context, u *url.URL, token string, payload []by
 		case http.StatusNotImplemented:
 			reason = "receiver does not support session pushes"
 		case http.StatusServiceUnavailable:
-			reason = "receiver is temporarily unavailable"
+			reason = "receiver is temporarily unavailable; try again later"
 			if resp.Header.Get("X-AgentsView-Push-Error") == "archive-rebuild-required" {
 				reason = "receiver must finish its archive rebuild"
 			}

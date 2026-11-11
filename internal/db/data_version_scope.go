@@ -61,8 +61,9 @@ var dataVersionScopes = map[int][]parser.AgentType{
 
 	ImageTextDataVersion: {}, // Older binaries cannot maintain image_text_occurrences; nothing to reparse.
 
-	174:                    {parser.AgentCodex, parser.AgentTraeX, parser.AgentAugureCode, parser.AgentInterpreter, parser.AgentCodexCloud},
-	175:                    {parser.AgentOpenCode, parser.AgentKilo, parser.AgentMiMoCode, parser.AgentIcodemate, parser.AgentOpenClaw, parser.AgentQClaw, parser.AgentForge, parser.AgentCline, parser.AgentCodex, parser.AgentTraeX, parser.AgentAugureCode, parser.AgentInterpreter, parser.AgentGemini},
+	174: {parser.AgentCodex, parser.AgentTraeX, parser.AgentAugureCode, parser.AgentInterpreter, parser.AgentCodexCloud},
+	175: {parser.AgentOpenCode, parser.AgentKilo, parser.AgentMiMoCode, parser.AgentIcodemate, parser.AgentOpenClaw, parser.AgentQClaw, parser.AgentForge, parser.AgentCline, parser.AgentCodex, parser.AgentTraeX, parser.AgentAugureCode, parser.AgentInterpreter, parser.AgentGemini},
+
 	SessionPushDataVersion: {}, // Older binaries cannot preserve pushed receipts; nothing to reparse.
 }
 
