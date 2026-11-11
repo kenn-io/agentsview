@@ -37,7 +37,7 @@ settings.
 
 An enabled configuration with `local = true` starts indexing at startup using
 installed server files. It does not record a shared choice. If files are missing,
-use **Turn on** to approve the download.
+use **Turn on** to approve the download, even if a shared choice exists.
 
 For CLI setup, run `agentsview index embeddings build`. AgentsView uses a
 running Ollama server with Nomic or Kit's shared local server. If the local
