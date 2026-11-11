@@ -870,7 +870,7 @@ ______________________________________________________________________
 
 ## Development
 
-Requires Go 1.27.3+ (CGO), Node.js 24.22.1+.
+Requires Go 1.27.4+ (CGO), Node.js 24.22.1+.
 
 ```bash
 make dev            # Go server (dev mode)
