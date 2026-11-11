@@ -224,9 +224,10 @@ type usageRollupCall struct {
 }
 
 type usageRollupObserver struct {
-	beforeEnsure  func()
-	beforeAttempt func(map[string]usageFillResult)
-	beforeInstall func([]usageRollupBuild)
+	beforeEnsure       func()
+	beforeAttempt      func(map[string]usageFillResult)
+	beforeInstall      func([]usageRollupBuild)
+	beforeAccountBuild func()
 }
 
 // usageRollupCoordinator aggregates committed per-session facts out of the
@@ -563,6 +564,9 @@ func (c *usageRollupCoordinator) ensureAttempt(
 		return nil, false, usageRollupMetrics{}, err
 	}
 	if !snapshot.deferAccountBuild && installs[usageRollupCursorSessionID].FactRevision < snapshot.CursorHighWater {
+		if c.observer.beforeAccountBuild != nil {
+			c.observer.beforeAccountBuild()
+		}
 		cursorBuild, cursorErr := loadCursorUsageRollupBuild(
 			ctx, conn, installs[usageRollupCursorSessionID].FactRevision,
 			snapshot, pricing)

@@ -1008,6 +1008,7 @@ func TestUsageRollupDeferredAccountBuilds(t *testing.T) {
 		require.NoError(t, err)
 		t.Cleanup(func() { require.NoError(t, reader.Close()) })
 		snapshot, fills, cache := prepareUsageRollupTest(t, reader.engine)
+		snapshot.exactAccountRevision = true
 		return database, source, reader, snapshot, fills, cache
 	}
 	t.Run("overlapping flights", func(t *testing.T) {
@@ -1029,6 +1030,8 @@ func TestUsageRollupDeferredAccountBuilds(t *testing.T) {
 					<-release[i]
 				}
 				var accountBuilt atomic.Bool
+				var accountLoads atomic.Int32
+				cache.rollup.observer.beforeAccountBuild = func() { accountLoads.Add(1) }
 				cache.rollup.observer.beforeInstall = func(builds []usageRollupBuild) {
 					if slices.ContainsFunc(builds, func(build usageRollupBuild) bool { return build.SessionID == usageRollupCursorSessionID }) {
 						accountBuilt.Store(true)
@@ -1072,6 +1075,7 @@ func TestUsageRollupDeferredAccountBuilds(t *testing.T) {
 					require.FailNow(t, "deferred flight did not finish")
 				}
 				require.False(t, accountBuilt.Load(), "the deferred flight must not build account totals")
+				require.Zero(t, accountLoads.Load(), "the deferred flight must not load account totals")
 				var accounts int
 				require.NoError(t, cache.db.QueryRowContext(t.Context(), `SELECT COUNT(*) FROM usage_rollup_installs WHERE session_id = ?`, usageRollupCursorSessionID).Scan(&accounts))
 				require.Zero(t, accounts)
@@ -1083,6 +1087,7 @@ func TestUsageRollupDeferredAccountBuilds(t *testing.T) {
 					require.FailNow(t, "background flight did not finish")
 				}
 				require.True(t, accountBuilt.Load())
+				require.Equal(t, int32(1), accountLoads.Load())
 				require.NoError(t, cache.db.QueryRowContext(t.Context(), `SELECT COUNT(*) FROM usage_rollup_installs WHERE session_id = ?`, usageRollupCursorSessionID).Scan(&accounts))
 				require.Equal(t, 1, accounts)
 			})
@@ -1098,6 +1103,7 @@ func TestUsageRollupDeferredAccountBuilds(t *testing.T) {
 		_, err = database.getWriter().ExecContext(t.Context(), `UPDATE sessions SET project='project-b' WHERE id='rollup-race'`)
 		require.NoError(t, err)
 		snapshot, fills, _ = prepareUsageRollupTest(t, reader.engine)
+		snapshot.exactAccountRevision = true
 		started := make(chan struct{})
 		release := make(chan struct{})
 		unblock := sync.OnceFunc(func() { close(release) })
@@ -1107,6 +1113,8 @@ func TestUsageRollupDeferredAccountBuilds(t *testing.T) {
 			<-release
 		}
 		var rebuiltAccount atomic.Bool
+		var accountLoads atomic.Int32
+		cache.rollup.observer.beforeAccountBuild = func() { accountLoads.Add(1) }
 		cache.rollup.observer.beforeInstall = func(builds []usageRollupBuild) {
 			if slices.ContainsFunc(builds, func(build usageRollupBuild) bool { return build.SessionID == usageRollupCursorSessionID }) {
 				rebuiltAccount.Store(true)
@@ -1135,6 +1143,7 @@ func TestUsageRollupDeferredAccountBuilds(t *testing.T) {
 		case err := <-done:
 			require.ErrorIs(t, err, ErrUsageCacheWarming)
 			assert.False(t, rebuiltAccount.Load(), "the foreground request must defer the account rebuild")
+			require.Zero(t, accountLoads.Load())
 		case <-time.After(10 * time.Second):
 			require.FailNow(t, "foreground rollup did not finish")
 		}
@@ -1380,6 +1389,10 @@ type rollupAccountSource struct {
 	databaseID string
 	revision   int64
 	accounts   []UsageSourceAccount
+}
+
+func (s *rollupAccountSource) UsageSourceIdentity(context.Context) (string, error) {
+	return s.databaseID, nil
 }
 
 func (s *rollupAccountSource) CaptureUsage(ctx context.Context, request UsageSourceRequest) (UsageSourceSnapshot, error) {

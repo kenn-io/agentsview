@@ -55,7 +55,7 @@ func readUsageDayTotals(ctx context.Context, conn *sql.Conn, timezoneID int64, s
 		return usageFactsResult{}, err
 	}
 
-	if err := readUsageOwners(ctx, conn, timezoneID, snapshot, filter); err != nil {
+	if err := readUsageOwners(ctx, conn, timezoneID, snapshot, filter, false); err != nil {
 		return usageFactsResult{}, err
 	}
 	authoritative, err := readUsageDailyRollups(ctx, conn, timezoneID, *snapshot, filter, " AND i.has_authoritative=1")
@@ -110,29 +110,32 @@ func readUsageSessionCounts(ctx context.Context, conn *sql.Conn, timezoneID int6
 	return nil
 }
 
-func readUsageOwners(ctx context.Context, conn *sql.Conn, timezoneID int64, snapshot *usageQuerySnapshot, filter UsageFilter) error {
+func readUsageOwners(ctx context.Context, conn *sql.Conn, timezoneID int64, snapshot *usageQuerySnapshot, filter UsageFilter, all bool) error {
 	from, to := usageRollupDateBounds(*snapshot)
 	// Include every exception owner before ranking; filtering earlier can change
-	// snapshot attribution. Authoritative sessions keep per-session allocation.
+	// snapshot attribution. Breakdown sides also need ordinary session owners.
 	b := NewQueryBuilder(SQLiteQueryDialect(), 0)
 	passing := strings.Join(BuildUsageSessionFilter(filter, b, ""), " AND ")
 	if passing == "" {
 		passing = "1=1"
 	}
 	where := `s.timezone_id=` + b.Add(timezoneID)
-	authoritativeScope := strings.Join(BuildUsageSessionFilter(filter, b, ""), " AND ")
-	if authoritativeScope == "" {
-		authoritativeScope = "1=1"
+	owner := "1=1"
+	if !all {
+		authoritativeScope := strings.Join(BuildUsageSessionFilter(filter, b, ""), " AND ")
+		if authoritativeScope == "" {
+			authoritativeScope = "1=1"
+		}
+		dates := "1=1"
+		if from != "" {
+			dates += ` AND local_date>=` + b.Add(from)
+		}
+		if to != "" {
+			dates += ` AND local_date<=` + b.Add(to)
+		}
+		authoritativeScope += ` AND s.id IN (SELECT r.rollup_install_id FROM usage_daily_rollups r WHERE ` + dates + `)`
+		owner = usageOwnerPredicate("s", b, from, to, authoritativeScope)
 	}
-	dates := "1=1"
-	if from != "" {
-		dates += ` AND local_date>=` + b.Add(from)
-	}
-	if to != "" {
-		dates += ` AND local_date<=` + b.Add(to)
-	}
-	authoritativeScope += ` AND s.id IN (SELECT r.rollup_install_id FROM usage_daily_rollups r WHERE ` + dates + `)`
-	owner := usageOwnerPredicate("s", b, from, to, authoritativeScope)
 	rows, err := conn.QueryContext(ctx, `SELECT s.session_id, s.project, s.baked_agent, s.machine, s.baked_started_at, (`+passing+`)
         FROM (SELECT *, baked_agent AS agent FROM usage_rollup_installs) s WHERE `+where+` AND (`+owner+`)`, b.Args()...)
 	if err != nil {

@@ -10,7 +10,7 @@ import (
 // readUsageTopSessionOwners loads only the daily contributions that need the
 // shared exception fold before they can enter SQL ranking.
 func readUsageTopSessionOwners(ctx context.Context, conn *sql.Conn, timezoneID int64, snapshot *usageQuerySnapshot, filter UsageFilter) (usageFactsResult, error) {
-	if err := readUsageOwners(ctx, conn, timezoneID, snapshot, filter); err != nil {
+	if err := readUsageOwners(ctx, conn, timezoneID, snapshot, filter, false); err != nil {
 		return usageFactsResult{}, err
 	}
 	ids := make([]string, 0, len(snapshot.Sessions))

@@ -46,6 +46,7 @@ type UsageSourceAccount struct {
 // UsageCacheSource supplies source snapshots while the shared cache owns facts,
 // pricing, deduplication, publication, and generation lifetimes.
 type UsageCacheSource interface {
+	UsageSourceIdentity(context.Context) (string, error)
 	CaptureUsage(context.Context, UsageSourceRequest) (UsageSourceSnapshot, error)
 	StreamUsage(context.Context, []string, func(string, usagefacts.Fact) error) (UsageSourceSnapshot, error)
 	ReadUsageAccounts(context.Context) (string, int64, []UsageSourceAccount, error)

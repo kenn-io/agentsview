@@ -426,11 +426,6 @@ func scanUsageIdentityFactRows(
 	return rows.Err()
 }
 
-// invalidateUsageDedupSharers deletes every timezone rollup install of the
-// sessions, other than the excluded ones, that store a fact matching one of
-// the changed dedup identities. Their next read reclassifies groups whose
-// membership changed, so a finalized daily row can never survive gaining a
-// sibling.
 // usageAccountInvalidationSQL deletes the account install when a changed
 // session usage key matches an account key. The empty-key predicate lets
 // SQLite probe the partial usage key index.
@@ -441,6 +436,11 @@ const usageAccountInvalidationSQL = `DELETE FROM usage_rollup_installs
 		WHERE EXISTS (SELECT 1 FROM usage_facts f
 			WHERE f.usage_dedup_key = c.first AND f.usage_dedup_key != ''))`
 
+// invalidateUsageDedupSharers deletes every timezone rollup install of the
+// sessions, other than the excluded ones, that store a fact matching one of
+// the changed dedup identities. Their next read reclassifies groups whose
+// membership changed, so a finalized daily row can never survive gaining a
+// sibling.
 func invalidateUsageDedupSharers(
 	ctx context.Context, runner usageCacheStatementRunner,
 	changed usageDedupIdentitySet, excluded map[string]bool,
