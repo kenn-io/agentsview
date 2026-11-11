@@ -98,3 +98,25 @@ func TestSessionPushDeferredCollisionPreservesDataVersion(t *testing.T) {
 	require.NotNil(t, session)
 	assert.Equal(t, db.CurrentDataVersion(), session.DataVersion)
 }
+
+func TestSessionPushRebuildWithoutSources(t *testing.T) {
+	d := openTestDB(t)
+	receipt := db.SessionPushReceipt{SessionID: "pushed", SourceOrigin: "source", PayloadHash: strings.Repeat("a", 64)}
+	write := db.SessionBatchWrite{Session: db.Session{ID: "pushed", Agent: "claude", Machine: "source", MessageCount: 1, UserMessageCount: 1}, Messages: []db.Message{{SessionID: "pushed", Ordinal: 0, Role: "user", Content: "accepted snapshot"}}, ReplaceMessages: true, DataVersion: db.CurrentDataVersion()}
+	_, err := d.ApplySessionPush(t.Context(), receipt, write)
+	require.NoError(t, err)
+	engine := NewEngine(t.Context(), d, EngineConfig{AgentDirs: map[parser.AgentType][]string{parser.AgentClaude: {t.TempDir()}}, Machine: "receiver"})
+	t.Cleanup(engine.Close)
+	stats := engine.ResyncAll(t.Context(), nil)
+	require.False(t, stats.Aborted, "rebuild aborted: %v", stats.Warnings)
+	require.True(t, stats.ArchiveRebuilt)
+	messages, err := d.GetAllMessages(t.Context(), "pushed")
+	require.NoError(t, err)
+	require.Len(t, messages, 1)
+	assert.Equal(t, "accepted snapshot", messages[0].Content)
+}
+
+func TestSessionPushReservedMultiSessionFileAndFilteredSource(t *testing.T) {
+	stats := SyncStats{TotalSessions: 3, Skipped: 3, filesOK: 2, filesDiscovered: 2, nonContainerDiscovered: 2, sessionPushReservedFiles: 1, cwdFilteredFiles: 1, cwdFilteredSessions: 1}
+	assert.Empty(t, resyncSwapAbortReason(stats, 1, 0))
+}

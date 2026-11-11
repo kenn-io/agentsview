@@ -3039,7 +3039,6 @@ func resyncSwapAbortReason(
 	// is restored later; every discovered file must still have a known outcome.
 	pushReservedOnly := stats.Synced == 0 && stats.Failed == 0 &&
 		stats.TotalSessions > 0 && stats.sessionPushReservedFiles > 0 &&
-		stats.filesOK == stats.TotalSessions &&
 		stats.filesOK == stats.sessionPushReservedFiles+stats.parserExcludedFiles+stats.cwdFilteredFiles
 	excludedOnly := stats.Synced == 0 &&
 		stats.TotalSessions > 0 &&
@@ -4635,6 +4634,7 @@ func countRootSessionsForAgent(ctx context.Context,
 	err := database.Reader().QueryRow(ctx, `
 		SELECT COUNT(*) FROM sessions
 		WHERE agent = ?
+		  AND NOT EXISTS (SELECT 1 FROM session_push_receipts spr WHERE spr.session_id = sessions.id)
 		  AND message_count > 0
 		  AND relationship_type NOT IN ('subagent', 'fork')
 		  AND deleted_at IS NULL
@@ -4662,6 +4662,7 @@ func countIcodemateContainerRootSessions(ctx context.Context,
 	err := database.Reader().QueryRow(ctx, `
 		SELECT COUNT(*) FROM sessions
 		WHERE agent = ?
+		  AND NOT EXISTS (SELECT 1 FROM session_push_receipts spr WHERE spr.session_id = sessions.id)
 		  AND file_path NOT LIKE '%.jsonl'
 		  AND message_count > 0
 		  AND relationship_type NOT IN ('subagent', 'fork')

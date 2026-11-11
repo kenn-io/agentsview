@@ -14,6 +14,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"go.kenn.io/agentsview/internal/db"
+	"go.kenn.io/agentsview/internal/dbtest"
 	"go.kenn.io/agentsview/internal/parser"
 	"go.kenn.io/agentsview/internal/sync"
 	"go.kenn.io/agentsview/internal/testjsonl"
@@ -745,4 +746,36 @@ func TestSyncForgeFailureIsolation(t *testing.T) {
 	).Scan(&count)
 	require.NoError(t, err, "query broken session")
 	assert.Zero(t, count, "broken session present in DB")
+}
+
+func TestRebuildPushKiroAndFilteredFile(t *testing.T) {
+	env := &testEnv{db: dbtest.OpenTestDB(t), claudeDir: t.TempDir(), kiroDir: t.TempDir()}
+	kiro := createKiroSQLiteDB(t, env.kiroDir)
+	payload := readKiroSQLiteFixture(t, "standard_payload.json")
+	for _, id := range []string{"one", "two"} {
+		kiro.addSession(t, "/allowed/project", id, payload, 1779012000000, 1779012030000)
+		fullID := "kiro:" + id
+		receipt := db.SessionPushReceipt{SessionID: fullID, SourceOrigin: "source", PayloadHash: strings.Repeat("a", 64)}
+		write := db.SessionBatchWrite{Session: db.Session{ID: fullID, Agent: "kiro", Machine: "source", MessageCount: 1, UserMessageCount: 1}, Messages: []db.Message{{SessionID: fullID, Role: "user", Content: "snapshot"}}, ReplaceMessages: true, DataVersion: db.CurrentDataVersion()}
+		_, err := env.db.ApplySessionPush(t.Context(), receipt, write)
+		require.NoError(t, err)
+	}
+	content := testjsonl.NewSessionBuilder().AddClaudeUser("2026-01-01T00:00:00Z", "outside", "/outside/project").String()
+	path := env.writeClaudeSessionForProject(t, "/outside/project", "filtered.jsonl", content)
+	_, err := env.db.WriteSessionBatchAtomic(t.Context(), []db.SessionBatchWrite{{Session: db.Session{ID: "filtered", Agent: "claude", Machine: "local", Cwd: "/outside/project", FilePath: &path, MessageCount: 1, UserMessageCount: 1}, Messages: []db.Message{{SessionID: "filtered", Role: "user", Content: "archived local"}}, ReplaceMessages: true, DataVersion: db.CurrentDataVersion()}})
+	require.NoError(t, err)
+	env.engine = sync.NewEngine(t.Context(), env.db, sync.EngineConfig{AgentDirs: map[parser.AgentType][]string{parser.AgentClaude: {env.claudeDir}, parser.AgentKiro: {env.kiroDir}}, Machine: "local", IncludeCwdPrefixes: []string{"/allowed"}})
+	t.Cleanup(env.engine.Close)
+	stats := env.engine.ResyncAll(t.Context(), nil)
+	require.False(t, stats.Aborted, "%+v", stats)
+	require.True(t, stats.ArchiveRebuilt)
+	for _, id := range []string{"kiro:one", "kiro:two"} {
+		messages, err := env.db.GetAllMessages(t.Context(), id)
+		require.NoError(t, err)
+		require.Len(t, messages, 1)
+		require.Equal(t, "snapshot", messages[0].Content)
+	}
+	filtered, err := env.db.GetSession(t.Context(), "filtered")
+	require.NoError(t, err)
+	require.NotNil(t, filtered)
 }

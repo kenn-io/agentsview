@@ -207,6 +207,13 @@ func TestProtectedFileSessionCountDisabledIcodemate(t *testing.T) {
 		require.NoError(t, database.UpsertSession(t.Context(), sess))
 	}
 
+	// A pushed snapshot has no local source and must not cancel protection
+	// for an unrelated file when disabled-provider counts are subtracted.
+	receipt := db.SessionPushReceipt{SessionID: "icodemate:pushed", SourceOrigin: "local", PayloadHash: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}
+	write := db.SessionBatchWrite{Session: db.Session{ID: receipt.SessionID, Machine: "local", Agent: "icodemate", MessageCount: 1}, Messages: []db.Message{{SessionID: receipt.SessionID, Role: "user", Content: "snapshot"}}, ReplaceMessages: true, DataVersion: db.CurrentDataVersion()}
+	_, err := database.ApplySessionPush(t.Context(), receipt, write)
+	require.NoError(t, err)
+
 	tests := []struct {
 		name           string
 		preserveAgents []parser.AgentType
