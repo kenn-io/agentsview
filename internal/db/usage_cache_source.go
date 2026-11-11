@@ -27,6 +27,8 @@ type UsageSourceSnapshot = usageQuerySnapshot
 // ErrUsageSourceUnavailable means the source cannot currently support caching.
 var ErrUsageSourceUnavailable = errors.New("usage cache source unavailable")
 
+var errUsageCacheRevisionRewound = errors.New("usage cache source revision rewound")
+
 // UsageSourceRequest selects a window, explicit sessions, or journal changes.
 // A non-nil IDs selects exactly those sessions, including an empty set.
 type UsageSourceRequest struct {
@@ -495,7 +497,10 @@ func (db *DB) captureExternalJournaledUsageWindow(ctx context.Context, filter Us
 	if snapshot.DatabaseID != databaseID {
 		return snapshot, usageQuerySnapshot{}, nil, false, errUsageCacheSourceChanged
 	}
-	if zone.revision.Int64 > snapshot.ChangeRevision || snapshot.PricingIdentity != zone.pricing {
+	if zone.revision.Int64 > snapshot.ChangeRevision {
+		return usageQuerySnapshot{}, usageQuerySnapshot{}, nil, false, errUsageCacheRevisionRewound
+	}
+	if snapshot.PricingIdentity != zone.pricing {
 		return usageQuerySnapshot{}, usageQuerySnapshot{}, nil, false, nil
 	}
 	if !cursor {

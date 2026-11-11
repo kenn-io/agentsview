@@ -11,7 +11,59 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"go.kenn.io/agentsview/internal/usagefacts"
 )
+
+type changingUsageSource struct {
+	*rollupAccountSource
+	streams atomic.Int64
+}
+
+func (s *changingUsageSource) CaptureUsage(ctx context.Context, request UsageSourceRequest) (UsageSourceSnapshot, error) {
+	snapshot, err := s.rollupAccountSource.CaptureUsage(ctx, request)
+	snapshot.DatabaseID = s.databaseID
+	snapshot.ChangeRevision = s.revision
+	return snapshot, err
+}
+
+func (s *changingUsageSource) StreamUsage(ctx context.Context, ids []string, emit func(string, usagefacts.Fact) error) (UsageSourceSnapshot, error) {
+	s.streams.Add(1)
+	snapshot, err := s.rollupAccountSource.StreamUsage(ctx, ids, emit)
+	snapshot.DatabaseID = s.databaseID
+	snapshot.ChangeRevision = s.revision
+	return snapshot, err
+}
+
+func TestUsageCacheReaderChangesSourceGeneration(t *testing.T) {
+	database := testDB(t)
+	seedUsageSnapshotSession(t, database, "rollup-race", "project-a", "2026-08-10T09:00:00Z", 0, 10, "model-a")
+	id, err := database.GetDatabaseID(t.Context())
+	require.NoError(t, err)
+	source := &changingUsageSource{rollupAccountSource: &rollupAccountSource{database: database, databaseID: id + "|timeline-a", revision: 10, output: 10}}
+	reader, err := NewUsageCacheReader(t.TempDir(), source)
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, reader.Close()) })
+	filter := UsageFilter{Timezone: "UTC"}
+	want, err := database.GetDailyUsage(t.Context(), filter)
+	require.NoError(t, err)
+	got, err := reader.GetDailyUsage(t.Context(), filter)
+	require.NoError(t, err)
+	require.Equal(t, want, got)
+	_, err = database.getWriter().Exec(t.Context(), `UPDATE messages SET token_usage='{"output_tokens":20}' WHERE session_id='rollup-race'`)
+	require.NoError(t, err)
+	source.output = 20
+	source.databaseID = id + "|timeline-b"
+	want = getDailyUsageLegacyForRollupTest(t, database, filter)
+	got, err = reader.GetDailyUsage(t.Context(), filter)
+	require.NoError(t, err)
+	require.Equal(t, want, got)
+	streams := source.streams.Load()
+	got, err = reader.GetDailyUsage(t.Context(), filter)
+	require.NoError(t, err)
+	require.Equal(t, want, got)
+	require.Equal(t, streams, source.streams.Load())
+	require.Contains(t, reader.engine.usageCache.generations, source.databaseID)
+}
 
 func TestTopSessionsRollupMatchesLegacy(t *testing.T) {
 	database := openDailyUsageFixtureDB(t)

@@ -9,6 +9,8 @@ import (
 	"fmt"
 	"log"
 	"maps"
+	"os"
+	"path/filepath"
 	"slices"
 	"sync"
 	"sync/atomic"
@@ -605,6 +607,12 @@ func TestPGUsageCacheDirectFallbackAndRecovery(t *testing.T) {
 				return
 			}
 			if name == "granted role" {
+				source := &pgUsageCacheSource{Store: reader, target: "read-only-target"}
+				snapshot, err := source.CaptureUsage(ctx, db.UsageSourceRequest{Filter: filter})
+				require.NoError(t, err)
+				var systemID, timeline string
+				require.NoError(t, reader.pg.QueryRowContext(ctx, `SELECT (pg_control_system()).system_identifier::text, substring(pg_walfile_name(pg_current_wal_lsn()), 1, 8)`).Scan(&systemID, &timeline))
+				require.Contains(t, snapshot.DatabaseID, "|"+systemID+"|"+timeline)
 				counter := &usageReadCounter{storeExecutor: reader.pg, queries: map[string]int{}}
 				reader.pg = counter
 				first, err := reader.GetDailyUsage(ctx, filter)
@@ -738,6 +746,60 @@ func TestPGUsageCacheAccountTotalsMatchDirect(t *testing.T) {
 	for _, filter := range filters {
 		requireCachedUsageMatchesDirect(t, store, filter)
 	}
+}
+
+func TestPGUsageCacheRecoversRewoundJournal(t *testing.T) {
+	_, _, store, _ := keptUsageFixture(t)
+	ctx := t.Context()
+	_, err := store.pg.ExecContext(ctx, `INSERT INTO cursor_usage_events(id,agent,occurred_at,model,output_tokens,charged_microdollars,dedup_key) VALUES(1,'cursor','2026-01-01','paid-a',3,100,'restored-account')`)
+	require.NoError(t, err)
+	directory := t.TempDir()
+	probe := attachUsageCacheProbe(t, store, directory)
+	filter := db.UsageFilter{Timezone: "UTC"}
+	before, err := store.usageCache.GetDailyUsage(ctx, filter)
+	require.NoError(t, err)
+	paths, err := filepath.Glob(filepath.Join(directory, "usage-cache-v*.db"))
+	require.NoError(t, err)
+	require.Len(t, paths, 1)
+	oldFile, err := os.Stat(paths[0])
+	require.NoError(t, err)
+	var oid uint32
+	var revision, marker int64
+	require.NoError(t, store.pg.QueryRowContext(ctx, `SELECT 'usage_session_changes'::regclass::oid, (SELECT value::bigint FROM sync_metadata WHERE key='usage_change_revision'), (SELECT revision FROM usage_session_changes WHERE session_id='')`).Scan(&oid, &revision, &marker))
+	require.Positive(t, marker)
+	_, err = store.pg.ExecContext(ctx, `UPDATE cursor_usage_events SET charged_microdollars=300 WHERE id=1`)
+	require.NoError(t, err)
+	restored := marker - 1
+	require.Positive(t, restored)
+	_, err = store.pg.ExecContext(ctx, `UPDATE usage_session_changes SET revision=$1 WHERE revision>$1`, restored)
+	require.NoError(t, err)
+	_, err = store.pg.ExecContext(ctx, `UPDATE sync_metadata SET value=($1::bigint)::text WHERE key='usage_change_revision'`, restored)
+	require.NoError(t, err)
+	var restoredOID uint32
+	var restoredRevision, restoredMarker int64
+	require.NoError(t, store.pg.QueryRowContext(ctx, `SELECT 'usage_session_changes'::regclass::oid, (SELECT value::bigint FROM sync_metadata WHERE key='usage_change_revision'), (SELECT revision FROM usage_session_changes WHERE session_id='')`).Scan(&restoredOID, &restoredRevision, &restoredMarker))
+	require.Equal(t, oid, restoredOID)
+	require.Less(t, restoredRevision, revision)
+	require.Less(t, restoredMarker, marker)
+	t.Logf("journal oid=%d revision=%d->%d marker=%d->%d account=100->300", oid, revision, restoredRevision, marker, restoredMarker)
+	want, err := (&Store{pg: store.pg}).GetDailyUsage(ctx, filter)
+	require.NoError(t, err)
+	require.Equal(t, int64(200), want.Totals.TotalCost.Microdollars-before.Totals.TotalCost.Microdollars)
+	store.usageCache.DeferWork()
+	_, err = store.usageCache.GetDailyUsage(ctx, filter)
+	require.ErrorIs(t, err, db.ErrUsageCacheWarming)
+	require.NoError(t, store.usageCache.WaitWarm(ctx))
+	got, err := store.usageCache.GetDailyUsage(ctx, filter)
+	require.NoError(t, err, "cache should warm after journal rewind")
+	require.Equal(t, want, got)
+	newFile, err := os.Stat(paths[0])
+	require.NoError(t, err)
+	require.False(t, os.SameFile(oldFile, newFile), "rewound generation must be retired")
+	probe.takeExtracted()
+	got, err = store.usageCache.GetDailyUsage(ctx, filter)
+	require.NoError(t, err)
+	require.Equal(t, want, got)
+	require.Empty(t, probe.takeExtracted(), "rebuilt cache must be reused")
 }
 
 func TestPGUsageCacheDefersAccountChange(t *testing.T) {

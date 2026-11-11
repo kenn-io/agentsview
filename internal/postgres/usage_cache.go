@@ -92,7 +92,17 @@ func (source *pgUsageCacheSource) snapshot(ctx context.Context, view *Store) (db
 	if err != nil {
 		return snapshot, err
 	}
-	snapshot.DatabaseID = fmt.Sprintf("%s|%d", source.target, oid)
+	var systemID, timeline string
+	err = view.pg.QueryRowContext(ctx, `SELECT (pg_control_system()).system_identifier::text,
+ substring(pg_walfile_name(pg_current_wal_lsn()), 1, 8)
+ WHERE NOT pg_is_in_recovery()`).Scan(&systemID, &timeline)
+	if err != nil {
+		if ctx.Err() != nil {
+			return snapshot, ctx.Err()
+		}
+		return snapshot, db.ErrUsageSourceUnavailable
+	}
+	snapshot.DatabaseID = fmt.Sprintf("%s|%d|%s|%s", source.target, oid, systemID, timeline)
 	err = view.pg.QueryRowContext(ctx, `SELECT COALESCE((SELECT revision FROM usage_session_changes WHERE session_id=''), 1)`).Scan(&snapshot.CursorHighWater)
 	if isUndefinedTable(err) || isInsufficientPrivilege(err) {
 		return snapshot, db.ErrUsageSourceUnavailable

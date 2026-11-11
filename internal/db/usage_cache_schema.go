@@ -453,6 +453,7 @@ type usageCacheManager struct {
 	cancel      context.CancelFunc
 
 	mu          sync.Mutex
+	retireMu    sync.Mutex
 	generations map[string]*usageCache
 	currentID   string
 	closed      bool
@@ -1173,6 +1174,8 @@ func (m *usageCacheManager) detachAllLocked() []*usageCache {
 }
 
 func (m *usageCacheManager) RetireExcept(databaseID string) error {
+	m.retireMu.Lock()
+	defer m.retireMu.Unlock()
 	m.mu.Lock()
 	if m.closed {
 		m.mu.Unlock()
@@ -1191,7 +1194,28 @@ func (m *usageCacheManager) RetireExcept(databaseID string) error {
 	return retireUsageCaches(caches, m.archivePath, true)
 }
 
+func (m *usageCacheManager) retireGeneration(databaseID string, cache *usageCache) error {
+	m.retireMu.Lock()
+	defer m.retireMu.Unlock()
+	m.mu.Lock()
+	if m.generations[databaseID] != cache {
+		m.mu.Unlock()
+		return nil
+	}
+	cache.beginRetirement()
+	m.mu.Unlock()
+	err := retireUsageCaches([]*usageCache{cache}, m.archivePath, true)
+	m.mu.Lock()
+	if m.generations[databaseID] == cache {
+		delete(m.generations, databaseID)
+	}
+	m.mu.Unlock()
+	return err
+}
+
 func (m *usageCacheManager) Close() error {
+	m.retireMu.Lock()
+	defer m.retireMu.Unlock()
 	m.mu.Lock()
 	if m.closed {
 		m.mu.Unlock()

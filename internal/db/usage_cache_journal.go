@@ -135,6 +135,13 @@ func (db *DB) prepareJournaledUsageWindow(ctx context.Context, filter UsageFilte
 		}
 	}
 	snapshot, refresh, refreshIDs, trusted, err := db.captureJournaledUsageWindow(ctx, filter, kind, cursor, databaseID, zone, lost, window)
+	if errors.Is(err, errUsageCacheRevisionRewound) {
+		release()
+		if err := db.usageCache.retireGeneration(databaseID, cache); err != nil {
+			return usagePreparedWindow{}, false, err
+		}
+		return usagePreparedWindow{}, false, ErrUsageCacheWarming
+	}
 	if err != nil {
 		return usagePreparedWindow{}, false, err
 	}
