@@ -44,7 +44,7 @@ func newSessionUsageCommand() *cobra.Command {
 			"Claude subagent transcripts beside the named session. " +
 			"--own-only reports the named transcript's usage.\n\n" +
 			"Missing daemon IDs return a retry error while startup ingestion or an archive rebuild is pending; " +
-			"otherwise they return exit 2. --wait gives HTTP ingestion and refresh up to 30 seconds after daemon discovery. Direct and --pg reads do not wait. " +
+			"otherwise they return exit 2. --wait gives HTTP lookup, startup, and refresh up to 30 seconds after daemon discovery. Known sessions can refresh during catch-up. Direct and --pg reads do not wait. " +
 			"--no-sync and HTTP --own-only read only the archive and can wait for existing work. " +
 			"If refresh is refused or fails, the command shows archived usage with a warning; " +
 			"JSON sets refresh_incomplete. Direct mode keeps its targeted source lookup.\n\n" +
@@ -298,47 +298,17 @@ func httpSessionUsageData(
 	}
 	var waitErr error
 	if query.Wait || missing {
-		started, wasPending := false, false
-		_, waitErr = backoff.Retry(waitCtx, func() (struct{}, error) {
-			startup, stale, pending, statusErr := httpSessionSyncStatus(waitCtx, baseURL, token)
-			if statusErr != nil {
-				return struct{}{}, backoff.Permanent(fmt.Errorf("checking sync status: %w", statusErr))
-			}
-			if !startup && !stale && !pending {
-				return struct{}{}, nil
-			}
-			wasPending = true
-			if !query.Wait {
-				return struct{}{}, backoff.Permanent(errors.New("session usage is not ready; wait for syncing or rebuilding to finish, then retry"))
-			}
-			if startup && !stale && refresh && !started {
-				started = true
-				_, startErr := postDaemonPush[sync.SyncStats, sync.Progress](waitCtx, transport{URL: baseURL}, token, startupSyncOperation, apiclient.DaemonPushRequest{}, nil)
-				if startErr != nil {
-					return struct{}{}, backoff.Permanent(fmt.Errorf("starting ingestion: %w", startErr))
-				}
-			}
-			return struct{}{}, errors.New("session usage is not ready")
-		}, backoff.WithBackOff(backoff.NewConstantBackOff(time.Second)), backoff.WithMaxTries(0), backoff.WithMaxElapsedTime(0))
+		waitErr = waitSessionUsageReady(waitCtx, baseURL, token, query.Wait, known, refresh)
 		if ctx.Err() != nil {
 			return nil, tokenUseExitErr, ctx.Err()
-		}
-		if waitErr != nil {
-			if waitCtx.Err() != nil {
-				waitErr = waitCtx.Err()
-			} else {
-				waitErr = backoff.AsRetryError(waitErr).LastErr
-			}
 		}
 		if !query.Wait && waitErr != nil {
 			return nil, tokenUseExitErr, waitErr
 		}
-		if waitErr == nil && (!known || wasPending) {
-			previousID := resolvedID
+		if waitErr == nil && !known {
 			resolvedID, err = resolveServiceSessionID(waitCtx, backend, sessionID)
 			if waitCtx.Err() != nil && ctx.Err() == nil {
 				waitErr = waitCtx.Err()
-				resolvedID = previousID
 			} else if errors.Is(err, errSessionNotFound) {
 				return nil, tokenUseExitNotFound, nil
 			} else if err != nil {
@@ -346,31 +316,17 @@ func httpSessionUsageData(
 			}
 		}
 		if waitErr != nil && !known {
-			return nil, tokenUseExitErr, fmt.Errorf("waiting for session usage: %w", waitErr)
+			return nil, tokenUseExitErr, fmt.Errorf("waiting for session usage: %w; wait for syncing or rebuilding to finish, then retry", waitErr)
 		}
 	}
 	refreshIncomplete := false
 	if refresh {
-		var syncErr error
-		if waitErr != nil {
-			syncErr = waitErr
-		} else {
-			_, syncErr = backoff.Retry(waitCtx, func() (struct{}, error) {
-				_, err := backend.Sync(waitCtx, service.SyncInput{ID: resolvedID, Subagents: true, UsageRefresh: true})
-				if err == nil {
-					return struct{}{}, nil
-				}
-				if !query.Wait || !errors.Is(err, servicehttp.ErrSessionRefreshNotStarted) {
-					return struct{}{}, backoff.Permanent(err)
-				}
-				return struct{}{}, err
-			}, backoff.WithBackOff(backoff.NewConstantBackOff(time.Second)), backoff.WithMaxTries(0), backoff.WithMaxElapsedTime(0))
+		syncErr := waitErr
+		if syncErr == nil {
+			syncErr = refreshSessionUsage(waitCtx, backend, resolvedID, query.Wait)
 		}
 		if ctx.Err() != nil {
 			return nil, tokenUseExitErr, ctx.Err()
-		}
-		if syncErr != nil && waitErr == nil {
-			syncErr = backoff.AsRetryError(syncErr).LastErr
 		}
 		if syncErr != nil && !errors.Is(syncErr, db.ErrReadOnly) {
 			refreshIncomplete = true
@@ -403,6 +359,57 @@ func httpSessionUsageData(
 		ServerRunning:      true, RefreshIncomplete: refreshIncomplete, WaitIncomplete: waitErr != nil && !refresh,
 	}
 	return out, usageExitCode(out), nil
+}
+
+func waitSessionUsageReady(ctx context.Context, baseURL, token string, wait, known, refresh bool) error {
+	started := false
+	var startErr error
+	_, err := backoff.Retry(ctx, func() (struct{}, error) {
+		startup, stale, pending, statusErr := httpSessionSyncStatus(ctx, baseURL, token)
+		if statusErr != nil {
+			return struct{}{}, backoff.Permanent(fmt.Errorf("checking sync status: %w", statusErr))
+		}
+		if !startup && !stale && (!pending || (known && refresh)) {
+			return struct{}{}, nil
+		}
+		if !wait {
+			return struct{}{}, backoff.Permanent(errors.New("session usage is not ready; wait for syncing or rebuilding to finish, then retry"))
+		}
+		if startup && !stale && refresh && !started {
+			started = true
+			_, startErr = postDaemonPush[sync.SyncStats, sync.Progress](ctx, transport{URL: baseURL}, token, startupSyncOperation, apiclient.DaemonPushRequest{}, nil)
+			if startErr != nil {
+				startErr = fmt.Errorf("starting ingestion: %w", startErr)
+			}
+		}
+		return struct{}{}, errors.New("session usage is not ready")
+	}, backoff.WithBackOff(backoff.NewConstantBackOff(time.Second)), backoff.WithMaxTries(0), backoff.WithMaxElapsedTime(0))
+	if err == nil {
+		return nil
+	}
+	if ctx.Err() != nil {
+		err = ctx.Err()
+	} else {
+		err = backoff.AsRetryError(err).LastErr
+	}
+	return errors.Join(err, startErr)
+}
+
+func refreshSessionUsage(ctx context.Context, backend service.SessionService, id string, wait bool) error {
+	_, err := backoff.Retry(ctx, func() (struct{}, error) {
+		_, err := backend.Sync(ctx, service.SyncInput{ID: id, Subagents: true, UsageRefresh: true})
+		if err == nil {
+			return struct{}{}, nil
+		}
+		if !wait || !errors.Is(err, servicehttp.ErrSessionRefreshNotStarted) {
+			return struct{}{}, backoff.Permanent(err)
+		}
+		return struct{}{}, err
+	}, backoff.WithBackOff(backoff.NewConstantBackOff(time.Second)), backoff.WithMaxTries(0), backoff.WithMaxElapsedTime(0))
+	if err == nil {
+		return nil
+	}
+	return backoff.AsRetryError(err).LastErr
 }
 
 func httpSessionSyncStatus(

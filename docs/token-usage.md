@@ -1311,8 +1311,10 @@ daemon's file watcher handles later source changes.
 During a full parser rebuild, statusline skips startup ingestion and reads the
 retained archive with a stale warning.
 
-`session usage` and its `token-use` alias refresh known sessions without
-waiting for startup ingestion. Combined totals include archived descendants.
+`session usage` and its `token-use` alias attempt to refresh known sessions
+without waiting by default. Pass `session usage --wait` to wait for startup or
+a rebuild before refreshing; known sessions can refresh during catch-up.
+Combined totals include archived descendants.
 See the [session usage contract](/docs/session-api/#agentsview-session-usage)
 for refresh behavior, missing-session exit codes, and the `refresh_incomplete`
 JSON field.

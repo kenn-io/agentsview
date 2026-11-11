@@ -1274,8 +1274,8 @@ did before. A Codex Cloud session with plan usage figures but no captured tokens
 exits `0`. A sub-agent chat counted under its root, or a session whose plan
 usage has not been reported, exits `3`.
 
-Combined usage refreshes a known session and nearby Claude subagent transcripts
-without waiting for startup ingestion. The CLI requests this with
+By default, combined usage attempts to refresh a known session and nearby
+Claude subagent transcripts without waiting for startup ingestion. The CLI requests this with
 `usage_refresh: true`, `id`, and `subagents: true` on
 `POST /api/v1/sessions/sync`. If refresh is refused or fails, the command
 returns archived totals with a warning; JSON sets `refresh_incomplete: true`.
@@ -1283,8 +1283,10 @@ A missing daemon ID returns a retry error while `GET /api/v1/sync/status`
 reports `startup_pending`, `archive_stale`, or `sync_pending`. Once all three
 are clear, it returns exit 2. Pass `--wait` to give HTTP lookup, ingestion,
 and refresh a shared 30-second budget after daemon discovery. When startup is
-deferred, combined usage starts it once; it does not start an archive rebuild.
-After pending work clears, the command resolves the ID again. Only a confirmed
+deferred, combined usage requests it once and keeps observing status if that
+request fails; it does not start an archive rebuild. A known session may refresh
+while catch-up is pending once startup and rebuild are clear. A missing ID
+waits for catch-up and is resolved again. Only a confirmed
 parent lock refusal permits a refresh retry. If waiting fails or expires, the
 command reads available saved totals and reports that the wait did not finish.
 An ID that is still absent while work remains pending returns a retry error.

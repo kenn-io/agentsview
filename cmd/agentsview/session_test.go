@@ -2987,3 +2987,114 @@ func TestSessionUsageWaitDoesNotResolveKnownIDTwiceWhenClear(t *testing.T) {
 	assert.Equal(t, 42, out.TotalOutputTokens)
 	assert.Equal(t, []string{"/api/v1/sessions/remote-session", "/api/v1/sessions/sync", "/api/v1/sessions/remote-session/usage"}, requests.RequestPath)
 }
+
+func TestSessionUsageWaitKnownSessionRefreshesDuringCatchup(t *testing.T) {
+	previous := sessionUsageWaitTimeout
+	sessionUsageWaitTimeout = 100 * time.Millisecond //nolint:kennlint // deadlinetest: a blocked refresh reaches the deadline
+	t.Cleanup(func() { sessionUsageWaitTimeout = previous })
+	ts, reqs := newRemoteUsageServer(t, remoteUsageSpec{canonicalID: "remote-session"})
+	original := ts.Config.Handler
+	ts.Config.Handler = http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/api/v1/sync/status" {
+			writeJSONResponse(w, `{"sync_pending":true}`)
+			return
+		}
+		original.ServeHTTP(w, r)
+	})
+	out, code, err := httpSessionUsageData(t.Context(), ts.URL, "", sessionUsageQuery{SessionID: "remote-session", Wait: true})
+	require.NoError(t, err)
+	require.NotNil(t, out)
+	assert.Equal(t, tokenUseExitOK, code)
+	assert.Equal(t, 42, out.TotalOutputTokens)
+	assert.False(t, out.RefreshIncomplete)
+	assert.Equal(t, "remote-session", reqs.SyncInput.ID)
+	assert.Equal(t, 1, strings.Count(strings.Join(reqs.RequestPath, ","), "/api/v1/sessions/sync"))
+}
+
+func TestSessionUsageWaitContinuesAfterStartupFailure(t *testing.T) {
+	for _, missing := range []bool{false, true} {
+		t.Run(fmt.Sprintf("missing=%v", missing), func(t *testing.T) {
+			ts, reqs := newRemoteUsageServer(t, remoteUsageSpec{canonicalID: "remote-session"})
+			original := ts.Config.Handler
+			statuses, starts := 0, 0
+			ts.Config.Handler = http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				switch r.URL.Path {
+				case "/api/v1/sync/status":
+					statuses++
+					if statuses == 1 {
+						writeJSONResponse(w, `{"startup_pending":true}`)
+					} else {
+						writeJSONResponse(w, `{}`)
+					}
+					return
+				case "/api/v1/sync":
+					starts++
+					http.Error(w, "startup failed", http.StatusServiceUnavailable)
+					return
+				case "/api/v1/sessions/remote-session":
+					if missing && statuses < 2 {
+						http.NotFound(w, r)
+						return
+					}
+				}
+				original.ServeHTTP(w, r)
+			})
+			out, code, err := httpSessionUsageData(t.Context(), ts.URL, "", sessionUsageQuery{SessionID: "remote-session", Wait: true})
+			require.NoError(t, err)
+			require.NotNil(t, out)
+			assert.Equal(t, tokenUseExitOK, code)
+			assert.Equal(t, 42, out.TotalOutputTokens)
+			assert.False(t, out.RefreshIncomplete)
+			assert.Equal(t, 1, starts)
+			assert.Equal(t, "remote-session", reqs.SyncInput.ID)
+		})
+	}
+}
+
+func TestSessionUsageWaitStartupFailureAtDeadline(t *testing.T) {
+	previous := sessionUsageWaitTimeout
+	sessionUsageWaitTimeout = 100 * time.Millisecond //nolint:kennlint // deadlinetest: verifies the pending startup deadline
+	t.Cleanup(func() { sessionUsageWaitTimeout = previous })
+	for _, missing := range []bool{false, true} {
+		t.Run(fmt.Sprintf("missing=%v", missing), func(t *testing.T) {
+			ts, _ := newRemoteUsageServer(t, remoteUsageSpec{canonicalID: "remote-session"})
+			original := ts.Config.Handler
+			starts := 0
+			ts.Config.Handler = http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				switch r.URL.Path {
+				case "/api/v1/sync/status":
+					writeJSONResponse(w, `{"startup_pending":true}`)
+					return
+				case "/api/v1/sync":
+					starts++
+					http.Error(w, "startup failed", http.StatusServiceUnavailable)
+					return
+				case "/api/v1/sessions/remote-session":
+					if missing {
+						http.NotFound(w, r)
+						return
+					}
+				}
+				original.ServeHTTP(w, r)
+			})
+			stderr := captureStderr(t, func() {
+				out, code, err := httpSessionUsageData(t.Context(), ts.URL, "", sessionUsageQuery{SessionID: "remote-session", Wait: true})
+				if missing {
+					require.ErrorContains(t, err, "startup failed")
+					assert.ErrorContains(t, err, "then retry")
+					assert.Nil(t, out)
+					return
+				}
+				require.NoError(t, err)
+				require.NotNil(t, out)
+				assert.Equal(t, tokenUseExitOK, code)
+				assert.Equal(t, 42, out.TotalOutputTokens)
+				assert.True(t, out.RefreshIncomplete)
+			})
+			if !missing {
+				assert.Contains(t, stderr, "startup failed")
+			}
+			assert.Equal(t, 1, starts)
+		})
+	}
+}
