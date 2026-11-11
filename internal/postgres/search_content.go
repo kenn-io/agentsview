@@ -168,6 +168,8 @@ func (s *Store) searchContentSubstringPG(
 	if pgHasSource(f, "tool_result") {
 		branches = append(branches, pgToolResultContentBranch(f, escapedPat, pb))
 		branches = append(branches, pgToolResultEventsBranch(f, escapedPat, pb))
+		predicate := fmt.Sprintf("it.text ILIKE '%%'||%s||'%%' ESCAPE E'\\\\'", pb.add("%"+escapedPat+"%"))
+		branches = append(branches, pgImageTextBranches(f, predicate, "snippet", "")...)
 	}
 	if len(branches) == 0 {
 		return db.ContentSearchPage{}, nil
@@ -179,7 +181,7 @@ func (s *Store) searchContentSubstringPG(
 		"SELECT session_id, project, agent, transcript_revision, location, role, tool_name, " +
 		"ordinal, ts, snippet FROM (" +
 		strings.Join(branches, " UNION ALL ") +
-		") sub ORDER BY sort_ts DESC NULLS LAST, session_id ASC, ordinal ASC, src ASC, row_id ASC " +
+		") sub ORDER BY sort_ts DESC NULLS LAST, session_id ASC, ordinal ASC, src ASC, row_id ASC, snippet ASC " +
 		"LIMIT " + limitP + " OFFSET " + offsetP
 
 	return s.scanPGContentMatches(ctx, query, pb.args, f.Limit, f.Cursor,
@@ -472,6 +474,8 @@ func (s *Store) pgRegexCandidateRows(
 			pgToolResultContentCandidateBranch(f, lit, pb))
 		branches = append(branches,
 			pgToolResultEventsCandidateBranch(f, lit, pb))
+		branches = append(branches, pgImageTextBranches(
+			f, pgPrefilterClause("it.text", lit, pb), "body", ", FALSE AS legacy_thinking")...)
 	}
 	if len(branches) == 0 {
 		q := "SELECT '' AS session_id, '' AS project, '' AS agent, " +
@@ -485,7 +489,7 @@ func (s *Store) pgRegexCandidateRows(
 		"SELECT session_id, project, agent, transcript_revision, location, role, tool_name, " +
 		"ordinal, ts, body, legacy_thinking FROM (" +
 		strings.Join(branches, " UNION ALL ") +
-		") sub ORDER BY sort_ts DESC NULLS LAST, session_id ASC, ordinal ASC, src ASC, row_id ASC"
+		") sub ORDER BY sort_ts DESC NULLS LAST, session_id ASC, ordinal ASC, src ASC, row_id ASC, body ASC"
 	return s.pg.QueryContext(ctx, query, pb.args...)
 }
 
@@ -577,6 +581,55 @@ func pgToolResultEventsCandidateBranch(
 	prefilter += " AND " + db.LexicalAnchorScopeSQL(f, "s", "m", db.PostgresQueryDialect())
 
 	return "\n\t\tSELECT tre.session_id, s.project, s.agent,\n\t\t\ts.transcript_revision,\n\t\t\t'tool_result' AS location, 'assistant' AS role, '' AS tool_name,\n\t\t\ttre.tool_call_message_ordinal AS ordinal, tre.timestamp AS ts,\n\t\t\ttre.content AS body, 3 AS src, tre.id AS row_id, FALSE AS legacy_thinking,\n\t\t\tCOALESCE(s.ended_at, s.started_at, s.created_at) AS sort_ts\n\t\tFROM tool_result_events tre\n\t\tJOIN sessions s ON s.id = tre.session_id\n\t\tJOIN scoped sc ON sc.id = tre.session_id\n" + eventAnchorJoin + "\n\t\tWHERE " + prefilter
+}
+
+// pgImageTextBranches search extracted image text as more tool_result content,
+// anchored like the result_content and event branches. A call or event can hold
+// several images, so the final text column breaks ordering ties.
+func pgImageTextBranches(f db.ContentSearchFilter, predicate, body, extra string) []string {
+	call := fmt.Sprintf(`
+		SELECT DISTINCT tc.session_id, s.project, s.agent,
+			s.transcript_revision,
+			'tool_result' AS location,
+			'assistant' AS role, tc.tool_name, tc.message_ordinal AS ordinal,
+			m.timestamp AS ts,
+			it.text AS %[1]s, 5 AS src, tc.id AS row_id%[2]s,
+			COALESCE(s.ended_at, s.started_at, s.created_at) AS sort_ts
+		FROM image_text it
+		JOIN tool_calls tc ON tc.session_id = it.session_id
+			AND tc.message_ordinal = it.message_ordinal
+			AND tc.call_index = it.call_index
+		JOIN sessions s ON s.id = tc.session_id
+		JOIN scoped sc ON sc.id = tc.session_id
+		JOIN messages m ON m.session_id = tc.session_id
+			AND m.ordinal = tc.message_ordinal
+		WHERE it.source_kind = 'tool_call' AND %[3]s
+		  AND NOT EXISTS (
+			SELECT 1 FROM tool_result_events tre
+			WHERE tre.session_id = tc.session_id
+			  AND tre.tool_use_id = tc.tool_use_id
+			  AND tc.tool_use_id <> ''
+		  )`, body, extra, predicate) + " AND " + db.LexicalAnchorScopeSQL(f, "s", "m", db.PostgresQueryDialect())
+	event := fmt.Sprintf(`
+		SELECT DISTINCT tre.session_id, s.project, s.agent,
+			s.transcript_revision,
+			'tool_result' AS location,
+			'assistant' AS role, '' AS tool_name,
+			tre.tool_call_message_ordinal AS ordinal,
+			tre.timestamp AS ts,
+			it.text AS %[1]s, 6 AS src, tre.id AS row_id%[2]s,
+			COALESCE(s.ended_at, s.started_at, s.created_at) AS sort_ts
+		FROM image_text it
+		JOIN tool_result_events tre ON tre.session_id = it.session_id
+			AND tre.tool_call_message_ordinal = it.message_ordinal
+			AND tre.call_index = it.call_index
+			AND tre.event_index = it.event_index
+		JOIN sessions s ON s.id = tre.session_id
+		JOIN scoped sc ON sc.id = tre.session_id
+		%[4]s
+		WHERE it.source_kind = 'event' AND %[3]s`, body, extra, predicate, db.LexicalEventAnchorJoinSQL(f.Scope)) +
+		" AND " + db.LexicalAnchorScopeSQL(f, "s", "m", db.PostgresQueryDialect())
+	return []string{call, event}
 }
 
 // pgSubstringSnippet builds a substring-match snippet: it locates the

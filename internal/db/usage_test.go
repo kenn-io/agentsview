@@ -17,6 +17,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"go.kenn.io/agentsview/internal/activity"
 	"go.kenn.io/agentsview/internal/config"
 	"go.kenn.io/agentsview/internal/export"
 	"go.kenn.io/agentsview/internal/money"
@@ -4507,6 +4508,47 @@ func benchClaudeID(kind string, session, ordinal int) string {
 		strconv.Itoa(ordinal)
 }
 
+func TestGetDailyUsage_OverlappingPricingAliases(t *testing.T) {
+	dir := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "config.toml"), []byte(`
+[custom_model_pricing.deployment]
+price_as = "model-b"
+[custom_model_pricing.model-b]
+price_as = "model-c"
+[custom_model_pricing.zero-model]
+`), 0o600))
+	cfg, err := config.LoadReadOnlyAt(dir)
+	require.NoError(t, err)
+	pricingpkg.SetConfiguredAliases(config.PricingAliases(cfg.CustomModelPricing))
+	t.Cleanup(func() { pricingpkg.SetConfiguredAliases(nil) })
+	d := testDB(t)
+	d.SetCustomPricing(cfg.CustomModelPricing)
+	require.NoError(t, d.UpsertModelPricing([]ModelPricing{
+		{ModelPattern: "model-b", InputPerMTok: money.MustParseDollars("2")},
+		{ModelPattern: "model-c", InputPerMTok: money.MustParseDollars("3")},
+		{ModelPattern: "zero-model", InputPerMTok: money.MustParseDollars("4")},
+	}))
+	for _, model := range []string{"deployment", "model-b", "zero-model"} {
+		insertSession(t, d, model, "project")
+		require.NoError(t, d.InsertMessages(t.Context(), []Message{{
+			SessionID: model, Role: "assistant", Model: model, Timestamp: "2026-08-10T12:00:00Z",
+			TokenUsage: []byte(`{"input_tokens":1000000}`),
+		}}))
+	}
+	got, err := d.GetDailyUsage(t.Context(), UsageFilter{Timezone: "UTC"})
+	require.NoError(t, err)
+	require.Len(t, got.Daily, 1)
+	costs := make(map[string]money.Money)
+	for _, model := range got.Daily[0].ModelBreakdowns {
+		costs[model.ModelName] = model.Cost
+	}
+	assert.Equal(t, map[string]money.Money{
+		"deployment": money.MustParseDollars("2"),
+		"model-b":    money.MustParseDollars("3"),
+		"zero-model": {},
+	}, costs)
+}
+
 func TestGetDailyUsage_PricingPrecedence(t *testing.T) {
 	d := testDB(t)
 	ctx := t.Context()
@@ -5312,7 +5354,10 @@ func TestGetDailyUsage_CodebuffCostOnly(t *testing.T) {
 // UTC cutoff and K3 rates at and after it. The explicit k2d6-agent alias stays
 // on K2.6, while static k3/k3-agent rows price flat at K3.
 func TestGetDailyUsage_KimiAliasPricing(t *testing.T) {
+	pricingpkg.SetConfiguredAliases(map[string]string{"gateway-kimi": "kimi-for-coding"})
+	t.Cleanup(func() { pricingpkg.SetConfiguredAliases(nil) })
 	d := testDB(t)
+	d.SetCustomPricing(map[string]config.CustomModelRate{"gateway-kimi": {PriceAs: "kimi-for-coding"}})
 	ctx := t.Context()
 
 	// K2.6 era rates (matching the moonshot/kimi-k2.6 snapshot row) and
@@ -5360,6 +5405,12 @@ func TestGetDailyUsage_KimiAliasPricing(t *testing.T) {
 		wantCost       money.Money
 		wantPriceModel string // key expected in the pricing block
 	}{
+		{
+			name: "gateway before cutoff", model: "gateway-kimi", ts: "2026-07-18T23:59:58Z", wantCost: k26Cost, wantPriceModel: "moonshot/kimi-k2.6",
+		},
+		{
+			name: "gateway at cutoff", model: "gateway-kimi", ts: "2026-07-19T00:00:00Z", wantCost: k3Cost, wantPriceModel: "kimi-k3",
+		},
 		{
 			name:           "kimi-for-coding one second before cutoff",
 			model:          "kimi-for-coding",
@@ -5441,7 +5492,11 @@ func TestGetDailyUsage_KimiAliasPricing(t *testing.T) {
 
 	for i, tt := range tests {
 		sessionID := "kimi-dates-" + strconv.Itoa(i)
-		insertSession(t, d, sessionID, "proj", func(s *Session) {
+		project := "proj"
+		if tt.model == "gateway-kimi" {
+			project = "gateway-project"
+		}
+		insertSession(t, d, sessionID, project, func(s *Session) {
 			s.Agent = "kimi"
 			s.StartedAt = new(tt.ts)
 		})
@@ -5479,6 +5534,16 @@ func TestGetDailyUsage_KimiAliasPricing(t *testing.T) {
 					tt.wantPriceModel)
 			}
 		})
+	}
+	for i, tc := range tests[:2] {
+		session, err := d.GetSessionUsage(ctx, "kimi-dates-"+strconv.Itoa(i), true)
+		require.NoError(t, err)
+		assert.Equal(t, tc.wantCost, session.Cost)
+		q, err := activity.ResolveQuery(activity.QueryInput{Preset: "day", Date: tc.ts[:10], Timezone: "UTC"}, time.Date(2030, 1, 1, 0, 0, 0, 0, time.UTC))
+		require.NoError(t, err)
+		report, err := d.GetActivityReport(ctx, AnalyticsFilter{Project: "gateway-project", Timezone: "UTC"}, q)
+		require.NoError(t, err)
+		assert.Equal(t, tc.wantCost, report.Totals.Cost)
 	}
 }
 

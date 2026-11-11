@@ -473,9 +473,9 @@ func (s *Store) restoreSession(ctx context.Context, id string) (int64, error) {
 func restorePGSessionTx(ctx context.Context, tx *sql.Tx, id string) (int64, error) {
 	res, err := tx.ExecContext(ctx, `UPDATE sessions
 		SET deleted_at = NULL, deletion_cause = NULL,
-			data_version = $2, updated_at = NOW()
+			data_version = CASE WHEN EXISTS (SELECT 1 FROM image_text WHERE session_id = $1) THEN GREATEST($2::int, $3::int) ELSE $2::int END, updated_at = NOW()
 		WHERE id = $1 AND deleted_at IS NOT NULL`,
-		id, max(db.CurrentDataVersion()-1, 0))
+		id, max(db.CurrentDataVersion()-1, 0), db.ImageTextDataVersion)
 	if err != nil {
 		return 0, err
 	}

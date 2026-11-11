@@ -133,6 +133,7 @@ func newReplicaStatusCommand(backend storage.Replica) *cobra.Command {
 }
 
 func newReplicaServeCommand(backend storage.Replica) *cobra.Command {
+	var pprofEnabled bool
 	cmd := &cobra.Command{
 		Use:          "serve",
 		Short:        "Serve from " + backend.DisplayName() + " (read-only)",
@@ -148,7 +149,7 @@ func newReplicaServeCommand(backend storage.Replica) *cobra.Command {
 			if err != nil {
 				fatal("%v", err)
 			}
-			runReplicaServe(cmd.Context(), backend, appCfg, basePath, watch)
+			runReplicaServe(cmd.Context(), backend, appCfg, basePath, watch, pprofEnabled)
 		},
 	}
 	cmd.Flags().String(
@@ -156,6 +157,7 @@ func newReplicaServeCommand(backend storage.Replica) *cobra.Command {
 		"",
 		"URL prefix for reverse-proxy subpath (e.g. /agentsview)",
 	)
+	addPprofFlag(cmd, &pprofEnabled)
 	if backend.Name() == "pg" {
 		cmd.Short = "Serve from PostgreSQL (read-only API; --push-watch also ingests)"
 		cmd.Flags().Bool("push-watch", false, "Ingest and continuously push a local archive in this process")

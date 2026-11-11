@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { formatCount } from "../../utils/format.js";
   import { errorTelemetry } from "../../utils/error-telemetry.js";
   import { m } from "../../i18n/index.js";
   import { onMount, onDestroy, untrack } from "svelte";
@@ -26,7 +27,9 @@
   import type { AutomatedScope } from "../../api/types.js";
 import type { DbSignalCalibration as SignalCalibration, DbSignalSessionExample as SignalSessionExample } from "../../api/generated/index.js";
   import { Card, Typeahead } from "@kenn-io/kit-ui";
+  import StatCard from "../analytics/StatCard.svelte";
   import ProjectTypeahead from "../layout/ProjectTypeahead.svelte";
+  import FilterChip from "../shared/FilterChip.svelte";
   import RangePicker from "../shared/RangePicker.svelte";
   import RefreshControl from "../shared/RefreshControl.svelte";
   import {
@@ -98,7 +101,7 @@ import type { DbSignalCalibration as SignalCalibration, DbSignalSessionExample a
       .sort((a, b) => b.session_count - a.session_count)
       .map((agent) => ({
         name: agent.name,
-        label: `${agentLabel(agent.name)} (${agent.session_count})`,
+        label: `${agentLabel(agent.name)} (${formatCount(agent.session_count)})`,
         displayLabel: agentLabel(agent.name),
         count: agent.session_count,
       }));
@@ -106,7 +109,7 @@ import type { DbSignalCalibration as SignalCalibration, DbSignalSessionExample a
       {
         name: "",
         label: m.insights_page_all_agents(),
-        displayLabel: m.insights_page_all_agents(),
+        displayLabel: m.filter_dropdown_all(),
         count: 0,
       },
       ...opts,
@@ -442,7 +445,7 @@ import type { DbSignalCalibration as SignalCalibration, DbSignalSessionExample a
 
   function affectedLabel(pattern: QualityPatternView): string {
     if (pattern.totalSessions === 0) return m.insights_page_no_computed_sessions();
-    return m.insights_page_affected_sessions({ affected: pattern.affectedSessions, total: pattern.totalSessions });
+    return m.insights_page_affected_sessions({ affected: formatCount(pattern.affectedSessions), total: formatCount(pattern.totalSessions) });
   }
 
   function pct(count: number, total: number): number {
@@ -588,24 +591,30 @@ import type { DbSignalCalibration as SignalCalibration, DbSignalSessionExample a
     />
 
     <div class="filter-group">
-      <ProjectTypeahead
-        projects={sessions.projects}
-        value={analytics.project}
-        onselect={handleProjectChange}
-      />
-      <Typeahead
-        options={agentOptions}
-        value={analytics.agent}
-        fallbackLabel={analytics.agent
-          ? agentLabel(analytics.agent)
-          : m.insights_page_all_agents()}
-        placeholder={m.insights_page_filter_agents()}
-        title={m.insights_page_filter_by_agent()}
-        emptyLabel={m.insights_page_no_matching_agents()}
-        onselect={handleAgentChange}
-      />
-      <label class="toolbar-scope">
-        <span>{m.insights_page_session_scope()}</span>
+      <FilterChip active={analytics.project !== ""}>
+        <ProjectTypeahead
+          projects={sessions.projects}
+          value={analytics.project}
+          onselect={handleProjectChange}
+          triggerPrefix={`${m.analytics_col_project()}:`}
+          allLabel={m.filter_dropdown_all()}
+        />
+      </FilterChip>
+      <FilterChip active={analytics.agent !== ""}>
+        <Typeahead
+          options={agentOptions}
+          value={analytics.agent}
+          fallbackLabel={analytics.agent
+            ? agentLabel(analytics.agent)
+            : m.filter_dropdown_all()}
+          placeholder={m.insights_page_filter_agents()}
+          title={m.insights_page_filter_by_agent()}
+          emptyLabel={m.insights_page_no_matching_agents()}
+          triggerPrefix={`${m.analytics_col_agent()}:`}
+          onselect={handleAgentChange}
+        />
+      </FilterChip>
+      <FilterChip>
         <Typeahead
           options={scopeOptions}
           value={analytics.automatedScope}
@@ -613,9 +622,10 @@ import type { DbSignalCalibration as SignalCalibration, DbSignalSessionExample a
           placeholder={m.insights_page_filter_scopes()}
           title={m.insights_page_filter_by_scope()}
           emptyLabel={m.insights_page_no_matching_scopes()}
+          triggerPrefix={`${m.insights_page_session_scope()}:`}
           onselect={handleAutomatedScopeChange}
         />
-      </label>
+      </FilterChip>
     </div>
 
     <RefreshControl
@@ -668,8 +678,9 @@ import type { DbSignalCalibration as SignalCalibration, DbSignalSessionExample a
         <div class="recommendation-list">
           {#each recommendations as rec}
             <Card level="default" padding="none" class="recommendation">
+              <!-- The section header carries the rule-based badge once for
+                   every card below it. -->
               <article class="recommendation-content">
-                <span class="badge rule">{m.insights_page_rule_based()}</span>
                 <strong>{rec.label}</strong>
                 <p>{rec.rationale}</p>
               </article>
@@ -680,7 +691,6 @@ import type { DbSignalCalibration as SignalCalibration, DbSignalSessionExample a
       {#if sync.serverVersion?.friction_readable === true}
         <Card level="default" padding="none" class="friction-link-card">
           <article class="friction-link-content">
-            <span class="badge rule">{m.insights_page_rule_based()}</span>
             <strong>{m.friction_quality_card_title()}</strong>
             <p>{m.friction_quality_card_body()}</p>
             <a class="friction-link" href={router.buildHref("friction")} onclick={openFrictionLog}>
@@ -743,42 +753,31 @@ import type { DbSignalCalibration as SignalCalibration, DbSignalSessionExample a
         {/if}
 
         <div class="summary-grid">
-          <Card level="default" padding="none" class="summary-card">
-            <article class="summary-card-content">
-              <span class="label">{m.insights_page_average_score()}</span>
-              <strong>
-                {summary.avgHealthScore == null
-                  ? "--"
-                  : Math.round(summary.avgHealthScore)}
-              </strong>
-              <span>
-                {summary.avgHealthScore == null
-                  ? m.insights_page_no_scored_sessions()
-                  : m.insights_page_grade_badge({ grade: scoreToGrade(summary.avgHealthScore) })}
-              </span>
-            </article>
-          </Card>
-          <Card level="default" padding="none" class="summary-card">
-            <article class="summary-card-content">
-              <span class="label">{m.insights_page_scored_sessions()}</span>
-              <strong>{summary.scoredSessions}</strong>
-              <span>{m.insights_page_unscored_count({ count: summary.unscoredSessions })}</span>
-            </article>
-          </Card>
-          <Card level="default" padding="none" class="summary-card">
-            <article class="summary-card-content">
-              <span class="label">{m.insights_page_low_quality()}</span>
-              <strong>{summary.lowQualitySessions}</strong>
-              <span>{m.insights_page_df_graded()}</span>
-            </article>
-          </Card>
-          <Card level="default" padding="none" class="summary-card">
-            <article class="summary-card-content">
-              <span class="label">{m.insights_page_prompt_signals()}</span>
-              <strong>{summary.computedQualitySessions}</strong>
-              <span>{m.insights_page_sessions_computed()}</span>
-            </article>
-          </Card>
+          <StatCard
+            tier="lead"
+            label={m.insights_page_average_score()}
+            value={summary.avgHealthScore == null
+              ? "--"
+              : String(Math.round(summary.avgHealthScore))}
+            sub={summary.avgHealthScore == null
+              ? m.insights_page_no_scored_sessions()
+              : m.insights_page_grade_badge({ grade: scoreToGrade(summary.avgHealthScore) })}
+          />
+          <StatCard
+            label={m.insights_page_scored_sessions()}
+            value={formatCount(summary.scoredSessions)}
+            sub={m.insights_page_unscored_count({ count: formatCount(summary.unscoredSessions) })}
+          />
+          <StatCard
+            label={m.insights_page_low_quality()}
+            value={formatCount(summary.lowQualitySessions)}
+            sub={m.insights_page_df_graded()}
+          />
+          <StatCard
+            label={m.insights_page_prompt_signals()}
+            value={formatCount(summary.computedQualitySessions)}
+            sub={m.insights_page_sessions_computed()}
+          />
         </div>
 
         <Card
@@ -790,13 +789,13 @@ import type { DbSignalCalibration as SignalCalibration, DbSignalSessionExample a
           {#each summary.scoreDistribution as bucket}
             <div class="grade-bar">
               <span>{bucket.grade}</span>
+              <strong>{formatCount(bucket.count)}</strong>
               <div class="bar-track">
                 <div
                   class="bar-fill"
                   style:width={`${(bucket.count / maxGradeCount) * 100}%`}
                 ></div>
               </div>
-              <strong>{bucket.count}</strong>
             </div>
           {/each}
         </Card>
@@ -831,25 +830,35 @@ import type { DbSignalCalibration as SignalCalibration, DbSignalSessionExample a
                 </span>
               </div>
 
+              <div class="driver-frame">
               <div class="driver-list">
+                <div class="driver-head" aria-hidden="true">
+                  <span>{m.insights_page_column_signal()}</span>
+                  <span>{m.insights_page_column_count()}</span>
+                  <span>{m.insights_page_column_sessions()}</span>
+                  <span>{m.insights_page_column_outcome()}</span>
+                </div>
                 {#each pattern.drivers as driver}
+                  {@const sessionsLabel = m.insights_page_driver_sessions({
+                    count: driver.sessions,
+                    countLabel: formatCount(driver.sessions),
+                  })}
+                  {@const totalLabel = `${formatCount(driver.total)}${driver.unit ?? ""}`}
+                  {@const outcomeLabel = calibrationLabel(String(driver.id))}
                   <button
                     class="driver-row"
                     class:active={selectedSignalId === driver.id}
                     type="button"
+                    aria-label={`${driver.label}: ${totalLabel}, ${sessionsLabel}, ${outcomeLabel}`}
                     onclick={() => openSignalEvidence(String(driver.id))}
                   >
                     <span>{driver.label}</span>
-                    <strong>
-                      {driver.total}{driver.unit ?? ""}
-                    </strong>
-                    <em>{m.insights_page_driver_sessions({
-                      count: driver.sessions,
-                      countLabel: driver.sessions.toLocaleString(),
-                    })}</em>
-                    <small>{calibrationLabel(String(driver.id))}</small>
+                    <strong>{totalLabel}</strong>
+                    <em>{formatCount(driver.sessions)}</em>
+                    <small>{outcomeLabel}</small>
                   </button>
                 {/each}
+              </div>
               </div>
 
               <div
@@ -933,7 +942,7 @@ import type { DbSignalCalibration as SignalCalibration, DbSignalSessionExample a
                         <span>{agentLabel(example.agent)}</span>
                         <span>{example.outcome || m.insights_page_unknown()}</span>
                         <span>{qualityBadge(example)}</span>
-                        {#if example.failure_signals != null}<span>{m.insights_page_failures({ count: example.failure_signals })}</span>{/if}
+                        {#if example.failure_signals != null}<span>{m.insights_page_failures({ count: formatCount(example.failure_signals) })}</span>{/if}
                       </span>
                     </Card>
                   {/each}
@@ -974,50 +983,8 @@ import type { DbSignalCalibration as SignalCalibration, DbSignalSessionExample a
     align-items: center;
     flex-wrap: wrap;
     gap: 8px;
-    flex: 1 1 560px;
+    flex: 1 1 auto;
     min-width: 0;
-    max-width: 720px;
-  }
-
-  .toolbar-scope {
-    display: flex;
-    align-items: center;
-    gap: 6px;
-    flex: 0 0 220px;
-    min-width: 220px;
-  }
-
-  .toolbar-scope span {
-    color: var(--text-muted);
-    font-size: 10px;
-    font-weight: 700;
-    letter-spacing: 0.04em;
-    text-transform: uppercase;
-    white-space: nowrap;
-  }
-
-  .filter-group :global(.kit-typeahead),
-  .toolbar-scope :global(.kit-typeahead) {
-    min-width: 0;
-    max-width: none;
-    width: 100%;
-  }
-
-  /* The kit-ui Typeahead list pins to the trigger width, so size the
-     trigger itself (the old --typeahead-list-min-width knob is retired). */
-  .filter-group > :global(.kit-typeahead:first-child) {
-    flex: 0 1 220px;
-    min-width: 180px;
-    max-width: 260px;
-  }
-
-  .filter-group > :global(.kit-typeahead:nth-child(2)) {
-    flex: 0 0 120px;
-  }
-
-  .toolbar-scope :global(.kit-typeahead) {
-    flex: 0 0 128px;
-    width: 128px;
   }
 
   .content {
@@ -1102,10 +1069,14 @@ import type { DbSignalCalibration as SignalCalibration, DbSignalSessionExample a
     text-underline-offset: 2px;
   }
 
+  /* Same size and weight as the analytics section titles on the other
+     analytics pages (Session health): a clear step above the 14px
+     semibold pattern card titles and 13px body. */
   .section-heading h2 {
     margin-top: 2px;
-    font-size: 18px;
-    line-height: 1.2;
+    font-size: 16px;
+    font-weight: 700;
+    line-height: 1.3;
     color: var(--text-primary);
   }
 
@@ -1128,14 +1099,18 @@ import type { DbSignalCalibration as SignalCalibration, DbSignalSessionExample a
     letter-spacing: 0.04em;
   }
 
+  /* Badges fit their text, even inside column layouts that stretch. */
   .badge {
     display: inline-flex;
+    align-self: flex-start;
+    justify-self: start;
+    width: fit-content;
     align-items: center;
     height: 18px;
     padding: 0 6px;
     border-radius: 3px;
     border: 1px solid var(--border-muted);
-    font-size: 10px;
+    font-size: 11px;
     font-weight: 700;
     letter-spacing: 0.03em;
     text-transform: uppercase;
@@ -1161,46 +1136,32 @@ import type { DbSignalCalibration as SignalCalibration, DbSignalSessionExample a
     gap: var(--space-5);
   }
 
-  .summary-grid :global(.summary-card) {
-    min-height: 92px;
-    padding: 12px;
-    display: flex;
-    flex-direction: column;
-    gap: 0;
-    justify-content: space-between;
+  /* Quality has only four headline figures, so they lead the section at
+     24px instead of the denser analytics rows' 18-20px. */
+  .summary-grid :global(.kit-card.stat-card .card-value) {
+    font-size: 24px;
+    line-height: 30px;
   }
 
-  .summary-grid :global(.summary-card > .kit-card__body) {
-    display: contents;
-  }
-
-  .summary-card-content {
-    display: flex;
-    flex: 1;
-    flex-direction: column;
-    gap: 0;
-    justify-content: space-between;
+  /* The grid owns the column count; a card's 120px minimum would make
+     tracks overlap when zoom narrows the page above the 900px query. */
+  .summary-grid :global(.kit-card.stat-card) {
     min-width: 0;
+    padding-block: 8px;
   }
 
-  .summary-grid :global(.summary-card .label) {
-    color: var(--text-muted);
-    font-size: 11px;
-    font-weight: 600;
-    text-transform: uppercase;
-    letter-spacing: 0.04em;
-  }
-
-  .summary-grid :global(.summary-card strong) {
-    font-size: 28px;
-    line-height: 1;
+  /* With only four cards and two of them able to show the same compact
+     value, the label names the card: a full step larger and in primary
+     ink, with the sublabel kept below it. */
+  .summary-grid :global(.kit-card.stat-card .card-label) {
+    font-size: 12.5px;
+    line-height: 17px;
     color: var(--text-primary);
-    font-variant-numeric: tabular-nums;
   }
 
-  .summary-grid :global(.summary-card span:last-child) {
-    color: var(--text-secondary);
-    font-size: 12px;
+  .summary-grid :global(.kit-card.stat-card .card-sub) {
+    font-size: 11.5px;
+    line-height: 15px;
   }
 
   .content :global(.distribution-row) {
@@ -1216,7 +1177,7 @@ import type { DbSignalCalibration as SignalCalibration, DbSignalSessionExample a
 
   .grade-bar {
     display: grid;
-    grid-template-columns: 18px 1fr minmax(22px, auto);
+    grid-template-columns: 12px minmax(36px, auto) 1fr;
     gap: 8px;
     align-items: center;
     color: var(--text-secondary);
@@ -1224,7 +1185,7 @@ import type { DbSignalCalibration as SignalCalibration, DbSignalSessionExample a
   }
 
   .grade-bar strong {
-    text-align: right;
+    text-align: left;
     color: var(--text-primary);
     font-variant-numeric: tabular-nums;
   }
@@ -1277,6 +1238,7 @@ import type { DbSignalCalibration as SignalCalibration, DbSignalSessionExample a
 
   .pattern-head h3 {
     font-size: 14px;
+    font-weight: var(--font-weight-semibold, 600);
     margin-bottom: 3px;
   }
 
@@ -1286,13 +1248,26 @@ import type { DbSignalCalibration as SignalCalibration, DbSignalSessionExample a
     line-height: 1.4;
   }
 
+  /* A leading status dot in the pill's color, so severity reads like
+     every other status in the suite (dots), not as text alone. */
   .severity {
     flex-shrink: 0;
+    display: inline-flex;
+    align-items: center;
+    gap: var(--space-3);
     border-radius: 999px;
-    padding: 2px 8px;
+    padding: 2px 8px 2px 7px;
     font-size: 11px;
-    font-weight: 700;
-    border: 1px solid var(--border-muted);
+    font-weight: 600;
+    border: 1px solid color-mix(in srgb, currentColor 30%, transparent);
+  }
+
+  .severity::before {
+    content: "";
+    width: 6px;
+    height: 6px;
+    border-radius: 50%;
+    background: currentColor;
   }
 
   .pattern-grid :global(.severity-critical .severity) {
@@ -1349,16 +1324,42 @@ import type { DbSignalCalibration as SignalCalibration, DbSignalSessionExample a
   }
 
   .driver-list {
-    display: flex;
-    flex-direction: column;
-    gap: 6px;
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto auto auto;
+    column-gap: var(--space-4);
+    row-gap: 6px;
+  }
+
+  .driver-head,
+  .driver-row {
+    grid-column: 1 / -1;
+    display: grid;
+    grid-template-columns: subgrid;
+    align-items: baseline;
+  }
+
+  .driver-head {
+    padding: 0 4px;
+    color: var(--text-muted);
+    font-size: 10.5px;
+    font-weight: 600;
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+    white-space: nowrap;
+  }
+
+  .driver-head span:not(:first-child),
+  .driver-row > :not(:first-child) {
+    text-align: right;
+  }
+
+  /* Outcome reads as its own column, not a suffix of the session count. */
+  .driver-head span:last-child,
+  .driver-row > :last-child {
+    padding-left: var(--space-6);
   }
 
   .driver-row {
-    display: grid;
-    grid-template-columns: minmax(0, 1fr) auto auto auto;
-    gap: var(--space-4);
-    align-items: baseline;
     width: 100%;
     min-height: 24px;
     padding: 2px 4px;
@@ -1393,9 +1394,33 @@ import type { DbSignalCalibration as SignalCalibration, DbSignalSessionExample a
 
   .driver-row small {
     color: var(--text-muted);
-    font-size: 10px;
+    font-size: 11px;
     font-variant-numeric: tabular-nums;
     white-space: nowrap;
+  }
+
+  /* Narrow cards: four columns would squeeze the signal names to nothing,
+     so the outcome moves to its own line under the name, and its column
+     heading goes with it. */
+  .driver-frame {
+    container-type: inline-size;
+  }
+
+  @container (max-width: 400px) {
+    .driver-list {
+      grid-template-columns: minmax(0, 1fr) auto auto;
+    }
+
+    .driver-head span:last-child {
+      display: none;
+    }
+
+    .driver-row > :last-child {
+      grid-column: 1 / -1;
+      padding-left: 0;
+      text-align: left;
+      white-space: normal;
+    }
   }
 
   .sparkline {
@@ -1428,7 +1453,7 @@ import type { DbSignalCalibration as SignalCalibration, DbSignalSessionExample a
     height: auto !important;
     margin-right: 8px;
     color: var(--text-muted);
-    font-size: 10px;
+    font-size: 11px;
     font-weight: 700;
     text-transform: uppercase;
     letter-spacing: 0.04em;
@@ -1451,7 +1476,7 @@ import type { DbSignalCalibration as SignalCalibration, DbSignalSessionExample a
 
   .examples-label {
     color: var(--text-muted);
-    font-size: 10px;
+    font-size: 11px;
     font-weight: 700;
     text-transform: uppercase;
     letter-spacing: 0.04em;
@@ -1506,6 +1531,7 @@ import type { DbSignalCalibration as SignalCalibration, DbSignalSessionExample a
     margin-top: 2px;
     color: var(--text-primary);
     font-size: 14px;
+    font-weight: var(--font-weight-semibold, 600);
   }
 
   .evidence-state {
@@ -1612,11 +1638,13 @@ import type { DbSignalCalibration as SignalCalibration, DbSignalSessionExample a
   .recommendation-list :global(.recommendation strong) {
     color: var(--text-primary);
     font-size: 13px;
+    font-weight: var(--font-weight-medium, 500);
   }
 
   .recommendation-list :global(.recommendation p) {
-    color: var(--text-secondary);
+    color: var(--text-muted);
     font-size: 12px;
+    font-weight: 400;
     line-height: 1.45;
   }
 
@@ -1702,10 +1730,11 @@ import type { DbSignalCalibration as SignalCalibration, DbSignalSessionExample a
     animation: shimmer 1.4s ease-in-out infinite;
   }
 
+  /* Matches the loaded summary card so the page does not shift. */
   .skeleton-card {
     border-radius: var(--radius-md);
     border: 1px solid var(--border-muted);
-    height: 92px;
+    height: 84px;
   }
 
   .pattern-grid :global(.skeleton-pattern) {
@@ -1766,7 +1795,6 @@ import type { DbSignalCalibration as SignalCalibration, DbSignalSessionExample a
       grid-template-columns: 1fr;
     }
 
-    .driver-row,
     .evidence-list :global(.evidence-row) {
       grid-template-columns: 1fr;
     }

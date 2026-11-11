@@ -582,7 +582,7 @@ func parsePoolsideSession(
 		IsTruncated:       lastLineWasMalformed,
 		MessageCount:      len(messages),
 		UserMessageCount:  userMsgCount,
-		MalformedLines:    malformedLines,
+		MalformedLines:    malformedLines + lr.SkippedLines(),
 		SourceSessionID:   strings.TrimPrefix(sessionID, poolsideIDPrefix),
 		SourceVersion:     "poolside-trajectory-v1",
 		File:              fileInfo,

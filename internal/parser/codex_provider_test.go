@@ -2297,8 +2297,14 @@ func TestCodexProviderIncrementalUserBoundaryDoesNotBackfillCommittedUsage(t *te
 		)
 		require.NoError(t, err)
 		assert.Equal(t, IncrementalApplied, status)
-		require.Len(t, outcome.Messages, 1)
+		require.Len(t, outcome.Messages, 2)
 		assert.Equal(t, RoleUser, outcome.Messages[0].Role)
+		hidden := outcome.Messages[1]
+		assert.Equal(t, RoleAssistant, hidden.Role)
+		assert.True(t, hidden.IsSystem, "the usage-only row stays out of the transcript")
+		assert.Empty(t, hidden.Content)
+		assert.Equal(t, 100_000, hidden.ContextTokens)
+		assert.Equal(t, 250, hidden.OutputTokens)
 		assert.Empty(t, outcome.MessageTokenUsageUpdates,
 			"usage after a real user boundary must not update the prior turn")
 	})

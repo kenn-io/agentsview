@@ -4,6 +4,7 @@
     Checkbox,
     ColorInput,
     SegmentedControl,
+    Toggle,
     Typeahead,
     type ColorInputSwatch,
   } from "@kenn-io/kit-ui";
@@ -17,6 +18,7 @@
     ZOOM_STEPS,
     type BlockType,
     type MessageLayout,
+    type ReadingWidth,
   } from "../../stores/ui.svelte.js";
   import {
     isChartPalette,
@@ -55,6 +57,12 @@
     { value: "compact", label: m.appearance_layout_compact() },
     { value: "stream", label: m.appearance_layout_stream() },
     { value: "skim", label: m.appearance_layout_skim() },
+  ]);
+
+  const READING_WIDTH_OPTIONS: { value: ReadingWidth; label: string }[] = $derived([
+    { value: "default", label: m.appearance_reading_width_default() },
+    { value: "wider", label: m.appearance_reading_width_wider() },
+    { value: "full", label: m.appearance_reading_width_full() },
   ]);
 
   const BLOCK_LABELS: Record<BlockType, string> = $derived({
@@ -135,16 +143,20 @@
 <div class="appearance-settings">
   <div class="setting-row">
     <span class="setting-label">{m.appearance_theme()}</span>
-    <Button size="sm" onclick={() => ui.toggleTheme()}>
+    <Button onclick={() => ui.toggleTheme()}>
       {ui.theme === "light" ? m.appearance_light() : m.appearance_dark()}
     </Button>
   </div>
 
   <div class="setting-row">
     <span class="setting-label">{m.appearance_high_contrast()}</span>
-    <Button size="sm" onclick={() => ui.toggleHighContrast()}>
+    <Toggle
+      checked={ui.highContrast}
+      ariaLabel={m.appearance_high_contrast()}
+      onchange={() => ui.toggleHighContrast()}
+    >
       {ui.highContrast ? m.appearance_on() : m.appearance_off()}
-    </Button>
+    </Toggle>
   </div>
 
   <div class="setting-row option-row">
@@ -171,6 +183,16 @@
     />
   </div>
 
+  <div class="setting-row option-row">
+    <span class="setting-label">{m.appearance_reading_width()}</span>
+    <SegmentedControl
+      options={READING_WIDTH_OPTIONS}
+      value={ui.readingWidth}
+      ariaLabel={m.appearance_reading_width()}
+      onchange={(value) => ui.setReadingWidth(value as ReadingWidth)}
+    />
+  </div>
+
   <div class="setting-row">
     <span class="setting-label">{m.appearance_zoom()}</span>
     <Typeahead
@@ -185,13 +207,17 @@
     />
   </div>
 
+  <!-- Every switch sits in the control column with its On/Off state, as
+       High contrast does; the setting's name is the row label. -->
   <div class="setting-row">
-    <Checkbox
+    <span class="setting-label">{m.appearance_render_unknown_xml_blocks()}</span>
+    <Toggle
       checked={ui.renderUnknownXmlBlocksAsPreformatted}
       onchange={() => ui.toggleUnknownXmlBlocksAsPreformatted()}
       ariaLabel={m.appearance_render_unknown_xml_blocks()}
-      label={m.appearance_render_unknown_xml_blocks()}
-    />
+    >
+      {ui.renderUnknownXmlBlocksAsPreformatted ? m.appearance_on() : m.appearance_off()}
+    </Toggle>
   </div>
 
   <div class="setting-row column message-colors">
@@ -209,18 +235,22 @@
         }}
       />
       <Button
-        size="sm"
         disabled={messageColors.isDefault}
         onclick={() => messageColors.applyPreset("default")}
       >
         {m.appearance_message_colors_reset_all()}
       </Button>
     </div>
-    <Checkbox
-      checked={messageColors.patterns}
-      onchange={() => messageColors.setPatterns(!messageColors.patterns)}
-      label={m.appearance_message_colors_patterns()}
-    />
+    <div class="setting-row">
+      <span class="setting-label">{m.appearance_message_colors_patterns()}</span>
+      <Toggle
+        checked={messageColors.patterns}
+        onchange={() => messageColors.setPatterns(!messageColors.patterns)}
+        ariaLabel={m.appearance_message_colors_patterns()}
+      >
+        {messageColors.patterns ? m.appearance_on() : m.appearance_off()}
+      </Toggle>
+    </div>
     <div class="role-colors">
       {#each MESSAGE_ROLES as role (role)}
         {@const custom = messageColors.colors[role]}
@@ -287,16 +317,36 @@
     gap: var(--space-5);
   }
 
+  /* One label column for every row, so controls start on a shared edge
+     instead of floating at the far right. */
   .setting-row {
-    display: flex;
+    display: grid;
+    grid-template-columns: var(--setting-label-width) minmax(0, 1fr);
     align-items: center;
-    justify-content: space-between;
+    justify-items: start;
     gap: 12px;
   }
 
+  .appearance-settings {
+    --setting-label-width: 222px;
+  }
+
+  .setting-row > :global(:only-child) {
+    grid-column: 1 / -1;
+  }
+
   .setting-row.column {
+    display: flex;
     flex-direction: column;
     align-items: flex-start;
+    padding-top: var(--space-4);
+    border-top: 1px solid var(--border-muted);
+  }
+
+  .setting-row.column > .setting-label {
+    font-size: 13px;
+    font-weight: 600;
+    color: var(--text-primary);
   }
 
   .setting-label {
@@ -308,8 +358,9 @@
 
   .setting-hint {
     font-size: 12px;
-    color: var(--text-muted);
-    max-width: 60ch;
+    line-height: 1.6;
+    color: var(--text-secondary);
+    max-width: 64ch;
   }
 
   .message-colors {
@@ -325,9 +376,9 @@
 
   .role-colors {
     display: grid;
-    grid-template-columns: max-content minmax(0, 1fr);
+    grid-template-columns: var(--setting-label-width) minmax(0, 1fr);
     align-items: center;
-    gap: var(--space-4) var(--space-5);
+    gap: var(--space-4) 12px;
     width: 100%;
   }
 
@@ -338,6 +389,21 @@
   .role-color-name {
     font-size: 12px;
     color: var(--text-primary);
+  }
+
+  /* The zoom value reads at the same strength as the neighboring controls. */
+  .setting-row :global(.kit-typeahead__value-text) {
+    color: var(--text-primary);
+  }
+
+  /* Presets match the hex field's rhythm instead of a dense strip. */
+  .role-colors :global(.kit-color-input--sm .kit-color-input__swatch) {
+    width: 20px;
+    height: 20px;
+  }
+
+  .role-colors :global(.kit-color-input__swatches) {
+    gap: 6px;
   }
 
   .role-color-controls {
@@ -376,8 +442,8 @@
 
   @media (max-width: 640px) {
     .setting-row.option-row {
-      flex-direction: column;
-      align-items: stretch;
+      grid-template-columns: minmax(0, 1fr);
+      justify-items: stretch;
     }
 
     .option-row .setting-label {

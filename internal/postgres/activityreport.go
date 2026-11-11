@@ -15,6 +15,7 @@ import (
 	"go.kenn.io/agentsview/internal/export"
 	"go.kenn.io/agentsview/internal/kept"
 	"go.kenn.io/agentsview/internal/money"
+	"golang.org/x/sync/errgroup"
 )
 
 // GetActivityReport assembles a concurrency- and usage-oriented report
@@ -498,10 +499,47 @@ func (s *Store) activityReportCandidateSourceWithCounts(ids []string, q activity
 		if len(ids) == 0 {
 			return nil
 		}
-		lower := q.RangeStart.Add(
-			-time.Duration(q.GapCapSeconds) * time.Second,
-		)
-		terminalQuery := `WITH terminal_events AS (
+		terminal, pairs, read, err := s.readActivityCandidates(ctx, ids, q, counted != nil)
+		if err != nil {
+			return err
+		}
+		if counted != nil {
+			*counted = append(*counted, read...)
+		}
+		sort.Slice(pairs, func(i, j int) bool {
+			return activity.CandidateLess(pairs[i], pairs[j])
+		})
+		messageSource := func(
+			ctx context.Context,
+			yield func(activity.IntervalCandidate) error,
+		) error {
+			for _, candidate := range pairs {
+				if err := ctx.Err(); err != nil {
+					return err
+				}
+				if err := yield(candidate); err != nil {
+					return err
+				}
+			}
+			return nil
+		}
+		return activity.MergeCandidateSlice(terminal, messageSource)(ctx, yield)
+	}
+}
+
+// readActivityCandidates reads the sessions' terminal tool candidates, in
+// candidate stream order, beside their message pairs, which come from
+// slices of the sessions read at once on the pool and in order on a read
+// snapshot. Each session's pairs sit together in the result. With
+// withCounts, it also returns each counted message from the range start to
+// the effective end, in no set order.
+func (s *Store) readActivityCandidates(
+	ctx context.Context, ids []string, q activity.Query, withCounts bool,
+) (terminal, pairs []activity.IntervalCandidate, counted []pgActivityCountedMessage, err error) {
+	lower := q.RangeStart.Add(
+		-time.Duration(q.GapCapSeconds) * time.Second,
+	)
+	terminalQuery := `WITH terminal_events AS (
 			SELECT tre.session_id, tre.tool_call_message_ordinal AS ordinal,
 				tre.call_index, tre.event_index, tre.timestamp
 			FROM tool_result_events tre
@@ -619,84 +657,72 @@ func (s *Store) activityReportCandidateSourceWithCounts(ids []string, q activity
 			AND candidate.start_timestamp < $3
 		ORDER BY candidate.start_timestamp, candidate.session_id,
 			candidate.start_ordinal, candidate.call_index, candidate.event_index`
-		scanCandidate := func(
-			row interface{ Scan(dest ...any) error },
-		) (activity.IntervalCandidate, error) {
-			var candidate activity.IntervalCandidate
-			if err := row.Scan(
-				&candidate.SessionID, &candidate.StartOrdinal,
-				&candidate.EndOrdinal, &candidate.Start, &candidate.End,
-				&candidate.ClosingRole, &candidate.ClosingModel,
-				&candidate.PriorModel,
-			); err != nil {
-				return candidate, fmt.Errorf(
-					"scanning pg activity report candidate: %w", err)
-			}
-			candidate.Start = candidate.Start.UTC()
-			candidate.End = candidate.End.UTC()
-			return candidate, nil
+	scanCandidate := func(
+		row interface{ Scan(dest ...any) error },
+	) (activity.IntervalCandidate, error) {
+		var candidate activity.IntervalCandidate
+		if err := row.Scan(
+			&candidate.SessionID, &candidate.StartOrdinal,
+			&candidate.EndOrdinal, &candidate.Start, &candidate.End,
+			&candidate.ClosingRole, &candidate.ClosingModel,
+			&candidate.PriorModel,
+		); err != nil {
+			return candidate, fmt.Errorf(
+				"scanning pg activity report candidate: %w", err)
 		}
+		candidate.Start = candidate.Start.UTC()
+		candidate.End = candidate.End.UTC()
+		return candidate, nil
+	}
 
+	readTerminal := func(ctx context.Context) ([]activity.IntervalCandidate, error) {
 		terminalRows, err := s.pg.QueryContext(
 			ctx, terminalQuery, pgx.QueryExecModeDescribeExec, ids, lower, q.EffectiveEnd,
 		)
 		if err != nil {
-			return fmt.Errorf("querying pg activity report terminal candidates: %w", err)
+			return nil, fmt.Errorf("querying pg activity report terminal candidates: %w", err)
 		}
 		defer terminalRows.Close()
 		var terminal []activity.IntervalCandidate
 		for terminalRows.Next() {
 			candidate, scanErr := scanCandidate(terminalRows)
 			if scanErr != nil {
-				terminalRows.Close()
-				return scanErr
+				return nil, scanErr
 			}
 			terminal = append(terminal, candidate)
 		}
 		if err := terminalRows.Err(); err != nil {
-			terminalRows.Close()
-			return err
+			return nil, err
 		}
-		if err := terminalRows.Close(); err != nil {
-			return err
-		}
-
-		messageSource := func(
-			ctx context.Context,
-			yield func(activity.IntervalCandidate) error,
-		) error {
-			var pairs []activity.IntervalCandidate
-			// pgx truncates SQL timestamp bounds to microseconds.
-			lowerMicro, upperMicro := lower.UnixMicro(), q.EffectiveEnd.UnixMicro()
-			countLowerMicro := q.RangeStart.UnixMicro()
-			err := s.activityTranscriptSource(ctx, ids, func(id string, session []activity.TranscriptMessage) {
-				for i := range session {
-					us := session[i].At.UnixMicro()
-					if counted != nil && session[i].Counted && us >= countLowerMicro && us < upperMicro {
-						*counted = append(*counted, pgActivityCountedMessage{id, us, session[i].Role == "user"})
-					}
-					session[i].Starts = us >= lowerMicro && us < upperMicro
-				}
-				pairs = activity.AppendTranscriptPairs(pairs, id, session)
-			})
-			if err != nil {
-				return err
-			}
-			sort.Slice(pairs, func(i, j int) bool {
-				return activity.CandidateLess(pairs[i], pairs[j])
-			})
-			for _, candidate := range pairs {
-				if err := ctx.Err(); err != nil {
-					return err
-				}
-				if err := yield(candidate); err != nil {
-					return err
-				}
-			}
-			return nil
-		}
-		return activity.MergeCandidateSlice(terminal, messageSource)(ctx, yield)
+		return terminal, terminalRows.Close()
 	}
+	n := max(1, min(activityMessageSlices, (len(ids)+activityMessageSliceSessions-1)/activityMessageSliceSessions))
+	parts := make([][]string, n)
+	for i, id := range ids {
+		parts[i%n] = append(parts[i%n], id)
+	}
+	slicePairs := make([][]activity.IntervalCandidate, n)
+	sliceCounted := make([][]pgActivityCountedMessage, n)
+	g, readCtx := errgroup.WithContext(ctx)
+	if !s.supportsConcurrentReads() {
+		// A read snapshot shares one transaction, which runs one statement
+		// at a time, so its reads run in order.
+		g.SetLimit(1)
+	}
+	g.Go(func() (err error) {
+		terminal, err = readTerminal(readCtx)
+		return err
+	})
+	for i, part := range parts {
+		g.Go(func() (err error) {
+			slicePairs[i], sliceCounted[i], err = s.readActivityMessagePairs(readCtx, part, q, withCounts)
+			return err
+		})
+	}
+	if err := g.Wait(); err != nil {
+		return nil, nil, nil, err
+	}
+	return terminal, slices.Concat(slicePairs...), slices.Concat(sliceCounted...), nil
 }
 
 // ActivityReportCandidateSource exposes the backend's mechanical pairing

@@ -1,29 +1,14 @@
 <script lang="ts">
   import { errorTelemetry } from "../../utils/error-telemetry.js";
-  import { Card } from "@kenn-io/kit-ui";
+  import StatCard from "../analytics/StatCard.svelte";
   import { usage } from "../../stores/usage.svelte.js";
   import { m } from "../../i18n/index.js";
+  import { formatCount } from "../../utils/format.js";
   import { ZERO_MONEY, compareMoney, divideMoney, formatMoney } from "../../money.js";
   import {
     ALL_TOKEN_TYPES,
     sumSelectedTokens,
   } from "../../stores/usageTokenTypes.js";
-
-  function fmtTokens(v: number): string {
-    if (v >= 1_000_000_000) {
-      const g = Math.floor(v / 100_000_000) / 10;
-      return `${g}B`;
-    }
-    if (v >= 1_000_000) {
-      const m = Math.floor(v / 100_000) / 10;
-      return `${m}M`;
-    }
-    if (v >= 1_000) {
-      const k = Math.floor(v / 100) / 10;
-      return `${k}K`;
-    }
-    return String(v);
-  }
 
   function fmtPct(v: number): string {
     return `${(v * 100).toFixed(1)}%`;
@@ -177,6 +162,8 @@
     value: () => string;
     sub?: () => string;
     featured?: boolean;
+    /** Context counts (projects, models, days) read one step quieter. */
+    context?: boolean;
   }
 
   const cards = $derived.by(() => {
@@ -184,35 +171,35 @@
       return [
         {
           label: selectedTokenLabel,
-          value: () => fmtTokens(totalTokens),
+          value: () => formatCount(totalTokens),
           featured: true,
         },
         {
           label: () => m.usage_summary_total_input(),
-          value: () => fmtTokens(totalInputTokens),
+          value: () => formatCount(totalInputTokens),
         },
         {
           label: () => m.usage_uncached_input(),
-          value: () => fmtTokens(inputTokens),
+          value: () => formatCount(inputTokens),
           sub: () =>
             cachedTokens > 0
               ? m.usage_summary_cached_tokens({
-                  value: `+${fmtTokens(cachedTokens)}`,
+                  value: `+${formatCount(cachedTokens)}`,
                 })
               : "",
         },
         {
           label: () => m.analytics_metric_output_tokens(),
-          value: () => fmtTokens(outputTokens),
+          value: () => formatCount(outputTokens),
         },
         {
           label: () => m.usage_summary_daily_burn_tokens(),
-          value: () => fmtTokens(dailyBurnTokens),
+          value: () => formatCount(dailyBurnTokens),
           sub: () => m.usage_summary_avg_day(),
         },
         {
           label: () => m.usage_summary_peak_day_tokens(),
-          value: () => fmtTokens(peakTokens.value),
+          value: () => formatCount(peakTokens.value),
           sub: () => peakTokens.date,
         },
         {
@@ -221,18 +208,19 @@
         },
         {
           label: () => m.analytics_summary_projects(),
+          context: true,
           value: () =>
-            String(
-              usage.summary?.projectTotals.length ?? 0,
-            ),
+            formatCount(usage.summary?.projectTotals.length ?? 0),
         },
         {
           label: () => m.usage_models(),
-          value: () => String(usage.summary?.modelTotals.length ?? 0),
+          context: true,
+          value: () => formatCount(usage.summary?.modelTotals.length ?? 0),
         },
         {
           label: () => m.analytics_summary_active_days(),
-          value: () => String(activeDays),
+          context: true,
+          value: () => formatCount(activeDays),
         },
       ] satisfies Card[];
     }
@@ -254,21 +242,21 @@
         : []),
       {
         label: () => m.usage_summary_total_input(),
-        value: () => fmtTokens(totalInputTokens),
+        value: () => formatCount(totalInputTokens),
       },
       {
         label: () => m.usage_uncached_input(),
-        value: () => fmtTokens(inputTokens),
+        value: () => formatCount(inputTokens),
         sub: () =>
           cachedTokens > 0
             ? m.usage_summary_cached_tokens({
-                value: `+${fmtTokens(cachedTokens)}`,
+                value: `+${formatCount(cachedTokens)}`,
               })
             : "",
       },
       {
         label: () => m.analytics_metric_output_tokens(),
-        value: () => fmtTokens(outputTokens),
+        value: () => formatCount(outputTokens),
       },
       {
         label: () => m.usage_summary_daily_burn(),
@@ -287,19 +275,20 @@
       },
       {
         label: () => m.analytics_summary_projects(),
+        context: true,
         value: () =>
-          String(
-            usage.summary?.projectTotals.length ?? 0,
-          ),
+          formatCount(usage.summary?.projectTotals.length ?? 0),
       },
       {
         label: () => m.usage_models(),
+        context: true,
         value: () =>
-          String(usage.summary?.modelTotals.length ?? 0),
+          formatCount(usage.summary?.modelTotals.length ?? 0),
       },
       {
         label: () => m.analytics_summary_active_days(),
-        value: () => String(activeDays),
+        context: true,
+        value: () => formatCount(activeDays),
       },
     ];
     return baseCards;
@@ -308,25 +297,14 @@
 
 <div class="summary-cards">
   {#each cards as card}
-    <Card
-      level="default"
-      padding="none"
-      class={card.featured ? "card featured" : "card"}
-    >
-      {#if usage.errors.summary}
-        <span class="card-value error">--</span>
-        <span class="card-label">{card.label()}</span>
-      {:else}
-        <span class="card-value">{card.value()}</span>
-        <span class="card-label">{card.label()}</span>
-        {#if card.sub}
-          {@const subtext = card.sub()}
-          {#if subtext}
-            <span class="card-sub">{subtext}</span>
-          {/if}
-        {/if}
-      {/if}
-    </Card>
+    <StatCard
+      value={card.value()}
+      label={card.label()}
+      sub={card.sub?.() ?? ""}
+      tier={card.featured ? "lead" : card.context ? "context" : "standard"}
+      featured={card.featured}
+      error={!!usage.errors.summary}
+    />
   {/each}
 </div>
 
@@ -347,48 +325,6 @@
     display: flex;
     gap: 8px;
     flex-wrap: wrap;
-  }
-
-  .summary-cards :global(.card) {
-    flex: 1;
-    min-width: 120px;
-    min-height: 90px;
-    padding: 12px;
-    display: flex;
-    flex-direction: column;
-    gap: 2px;
-  }
-
-  .summary-cards :global(.card > .kit-card__body) {
-    display: contents;
-  }
-
-  .summary-cards :global(.card.featured) {
-    border-width: 2px;
-    border-color: var(--accent-blue);
-  }
-
-  .card-value {
-    font-size: 20px;
-    font-weight: 600;
-    color: var(--text-primary);
-    line-height: 1.2;
-  }
-
-  .card-value.error {
-    color: var(--text-muted);
-  }
-
-  .card-label {
-    font-size: 11px;
-    color: var(--text-muted);
-    font-weight: 500;
-  }
-
-  .card-sub {
-    font-size: 10px;
-    color: var(--text-muted);
-    margin-top: 2px;
   }
 
   .error-bar {

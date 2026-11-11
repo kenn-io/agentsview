@@ -195,12 +195,16 @@ func (db *DB) activityReportRuns(
 		for i, id := range misses {
 			index[id] = i
 		}
-		derived, err := activity.DeriveSessionRuns(ctx, misses, q.GapCapSeconds,
-			db.activityReportCandidateSQL(misses, window, func(id string, message activityCountedMessage) {
-				if i, ok := index[id]; ok {
-					counted[i].add(message)
-				}
-			}))
+		terminal, pairs, err := db.readActivityCandidates(ctx, misses, window, func(id string, message activityCountedMessage) {
+			if i, ok := index[id]; ok {
+				counted[i].add(message)
+			}
+		})
+		if err != nil {
+			return nil, nil, err
+		}
+		derived, err := activity.DeriveSessionRunsInParallel(ctx, misses, q.GapCapSeconds,
+			activity.GroupSessionCandidates(misses, pairs, terminal))
 		if err != nil {
 			return nil, nil, err
 		}

@@ -74,13 +74,13 @@ it("positions visible matches without hidden thinking, including live filter cha
     },
   });
   await tick();
-  expect(document.querySelector("rect")?.getAttribute("y")).toBe("0");
+  expect(document.querySelector("rect.tick")?.getAttribute("y")).toBe("0");
 
   ui.toggleBlock("thinking");
   await tick();
-  expect(document.querySelector("rect")?.getAttribute("y")).toBe("96");
+  expect(document.querySelector("rect.tick")?.getAttribute("y")).toBe("98");
 
   ui.toggleBlock("thinking");
   await tick();
-  expect(document.querySelector("rect")?.getAttribute("y")).toBe("0");
+  expect(document.querySelector("rect.tick")?.getAttribute("y")).toBe("0");
 });

@@ -304,6 +304,9 @@ func (s *Store) mergeDBPricing(
 // the override step without a live PostgreSQL connection.
 func (s *Store) applyCustomPricing(out map[string]export.ModelRates) {
 	for model, cp := range s.runtimeState().customPricing {
+		if cp.PriceAs != "" {
+			continue
+		}
 		rates := export.ModelRates{
 			InputPerMTok: money.Money{
 				Microdollars: cp.InputMicrodollarsPerMTok,

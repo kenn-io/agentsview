@@ -110,34 +110,120 @@ describe("SessionVitals", () => {
     vi.unstubAllGlobals();
   });
 
-  it.each([
-    { duration: null, label: "Not measured" },
-    { duration: 0, label: "0ms" },
-  ])(
-    "distinguishes $label from missing timing and keeps its category filter",
-    async ({ duration, label }) => {
-      const timing = timingWithCall();
-      timing.tool_duration_ms = 0;
-      timing.turns[0]!.calls[0]!.duration_ms = duration;
-      timing.by_category = [{ category: "Bash", duration_ms: 0, call_count: 1 }];
-      mocks.fetchSessionTiming.mockResolvedValue(timing);
-      component = mount(SessionVitals, {
-        target: document.body,
-        props: { sessionId: "sess-1", session: traceSession },
-      });
-      await tick();
-      await tick();
+  it("keeps a 0ms reading in Time spent with its category filter", async () => {
+    const timing = timingWithCall();
+    timing.tool_duration_ms = 0;
+    timing.turns[0]!.calls[0]!.duration_ms = 0;
+    timing.by_category = [{ category: "Bash", duration_ms: 0, call_count: 1 }];
+    mocks.fetchSessionTiming.mockResolvedValue(timing);
+    component = mount(SessionVitals, {
+      target: document.body,
+      props: { sessionId: "sess-1", session: traceSession },
+    });
+    await tick();
+    await tick();
 
-      expect(document.querySelectorAll(".stat-grid .val")[1]?.textContent?.trim()).toBe(label);
-      const category = [...document.querySelectorAll<HTMLButtonElement>(".agg-row")].find(
-        (row) => row.querySelector(".agg-name")?.textContent?.trim() === "Bash",
-      );
-      expect(category?.querySelector(".agg-val")?.textContent?.trim()).toBe(label);
-      category!.click();
-      await tick();
-      expect(document.querySelector(".filter-chip")?.textContent).toContain("Bash");
-    },
-  );
+    expect(document.querySelectorAll(".stat-grid .val")[1]?.textContent?.trim()).toBe("0ms");
+    const category = [...document.querySelectorAll<HTMLButtonElement>(".agg-row")].find(
+      (row) => row.querySelector(".agg-name")?.textContent?.trim() === "Bash",
+    );
+    expect(category?.querySelector(".agg-val")?.textContent).toContain("0ms");
+    category!.click();
+    await tick();
+    expect(document.querySelector(".filter-chip")?.textContent).toContain("Bash");
+  });
+
+  it("clears the category filter when the panel switches sessions", async () => {
+    const timed = timingWithCall();
+    timed.by_category = [{ category: "Bash", duration_ms: 400, call_count: 1 }];
+    const untimed = timingWithCall();
+    untimed.session_id = "sess-2";
+    untimed.tool_duration_ms = 0;
+    untimed.turns[0]!.calls[0]!.duration_ms = null;
+    untimed.turns[0]!.calls[0]!.category = "Read";
+    untimed.by_category = [{ category: "Read", duration_ms: 0, call_count: 1 }];
+    mocks.fetchSessionTiming.mockImplementation(async ({ id }: { id: string }) =>
+      id === "sess-2" ? untimed : timed,
+    );
+    const view = render(SessionVitals, { sessionId: "sess-1", session: traceSession });
+    await vi.waitFor(() => expect(document.querySelector(".agg-row")).not.toBeNull());
+    const bash = [...document.querySelectorAll<HTMLButtonElement>(".agg-row")].find(
+      (row) => row.querySelector(".agg-name")?.textContent?.trim() === "Bash",
+    );
+    await fireEvent.click(bash!);
+    expect(document.querySelector(".filter-chip")?.textContent).toContain("Bash");
+
+    await view.rerender({ sessionId: "sess-2", session: { ...traceSession, id: "sess-2" } });
+    await vi.waitFor(() =>
+      expect(document.querySelector(".calls .call .cn")?.textContent).toBe("Read"),
+    );
+    expect(document.querySelector(".filter-chip")).toBeNull();
+    expect(document.querySelectorAll(".calls .call.dimmed")).toHaveLength(0);
+  });
+
+  it("hides Time spent when no tool call has timing", async () => {
+    const timing = timingWithCall();
+    timing.tool_duration_ms = 0;
+    timing.turns[0]!.calls[0]!.duration_ms = null;
+    timing.by_category = [{ category: "Bash", duration_ms: 0, call_count: 1 }];
+    mocks.fetchSessionTiming.mockResolvedValue(timing);
+    component = mount(SessionVitals, {
+      target: document.body,
+      props: { sessionId: "sess-1", session: traceSession },
+    });
+    await tick();
+    await tick();
+
+    const headings = [...document.querySelectorAll(".v-section .v-h")].map((h) =>
+      h.textContent?.trim(),
+    );
+    expect(headings.some((h) => h?.startsWith("Time spent"))).toBe(false);
+    // The Calls list still shows the untimed call.
+    expect(document.querySelector(".call .cn")?.textContent).toBe("Bash");
+  });
+
+  it.each([
+    { name: "some calls have durations", durations: [400, null], running: false },
+    { name: "no call has a duration", durations: [null, null], running: false },
+    { name: "the last call is running", durations: [null, null], running: true },
+  ])("shows call timing columns only when needed: $name", async ({ durations, running }) => {
+    const timing = timingWithCall();
+    timing.running = running;
+    timing.turns[0]!.duration_ms = running ? null : 400;
+    timing.turns[0]!.started_at = new Date(Date.now() - 3000).toISOString();
+    timing.turns[0]!.calls = durations.map((duration_ms, i) => ({
+      tool_use_id: `call-${i}`,
+      tool_name: "Bash",
+      category: "Bash",
+      duration_ms,
+      is_parallel: true,
+      input_preview: "pwd",
+    }));
+    timing.tool_call_count = durations.length;
+    mocks.fetchSessionTiming.mockResolvedValue(timing);
+    component = mount(SessionVitals, {
+      target: document.body,
+      props: { sessionId: "sess-1", session: traceSession },
+    });
+    await tick();
+    await tick();
+
+    const labels = [...document.querySelectorAll(".calls .cd")].map((el) => el.textContent?.trim());
+    expect(document.querySelector(".calls")?.textContent).not.toContain("unknown");
+    if (running) {
+      expect(labels[0]).toBe("");
+      expect(labels[1]).toMatch(/^running /);
+      expect(document.querySelector(".scale-axis")).not.toBeNull();
+    } else if (durations.some((d) => d != null)) {
+      expect(labels).toEqual(["400ms", ""]);
+      expect(document.querySelector(".scale-axis")).not.toBeNull();
+    } else {
+      expect(labels).toEqual([]);
+      expect(document.querySelectorAll(".calls .cbar-wrap")).toHaveLength(0);
+      expect(document.querySelectorAll(".calls .call.untimed")).toHaveLength(2);
+      expect(document.querySelector(".scale-axis")).toBeNull();
+    }
+  });
 
   it("renders measured activity and unattributed time and jumps to the prompt", async () => {
     const timing = timingWithCall();
@@ -199,21 +285,20 @@ describe("SessionVitals", () => {
     );
     expect([...document.querySelectorAll(".cd")].map((el) => el.textContent?.trim())).toEqual([
       "2.0s",
-      "unknown",
+      "",
     ]);
     expect(
       [...document.querySelectorAll<HTMLElement>(".cbar")].map((el) => el.style.width),
     ).toEqual(["100%", "0%"]);
-    const readCategory = [...document.querySelectorAll<HTMLButtonElement>(".agg-row")].find(
-      (row) => row.querySelector(".agg-name")?.textContent?.trim() === "Read",
+    // Read has no timed call, so Time spent lists only Bash; the untimed
+    // category gets no row and no "Not measured" note.
+    const timeSpent = [...document.querySelectorAll(".v-section")].find((section) =>
+      section.querySelector(".v-h")?.textContent?.trim().startsWith("Time spent"),
     );
-    expect(readCategory).not.toBeUndefined();
-    readCategory!.click();
-    await tick();
-    expect(document.querySelector(".cgroup")?.classList.contains("dimmed")).toBe(false);
-    expect(document.querySelector(".lane-row .lane-mark")?.classList.contains("dimmed")).toBe(
-      false,
-    );
+    expect(
+      [...timeSpent!.querySelectorAll(".agg-row .agg-name")].map((el) => el.textContent?.trim()),
+    ).toEqual(["Bash"]);
+    expect(document.body.textContent).not.toContain("Not measured");
     const readLane = [...document.querySelectorAll(".lane-row")].find(
       (row) => row.querySelector(".lane-label")?.textContent?.trim() === "Read",
     );

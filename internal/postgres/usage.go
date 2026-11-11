@@ -819,7 +819,8 @@ func pgSnapshotRankedDailyUsageRowsSQL(
 			WHERE %[3]s
 		),
 		usage_snapshot_ranked AS (
-			SELECT usage_snapshot_window.*,
+			SELECT session_id AS ranked_session_id,
+				message_ordinal AS ranked_message_ordinal,
 				FIRST_VALUE(session_id) OVER (
 					PARTITION BY claude_message_id, claude_request_id
 					ORDER BY ts ASC NULLS LAST, session_id ASC,
@@ -837,9 +838,13 @@ func pgSnapshotRankedDailyUsageRowsSQL(
 			WHERE claude_message_id != ''
 		),
 		usage_snapshot_survivors AS (
-			SELECT *
-			FROM usage_snapshot_ranked
-			WHERE snapshot_rank = 1
+			SELECT w.*, r.snapshot_attribution_session_id, r.snapshot_rank,
+				r.snapshot_web_search_requests
+			FROM usage_snapshot_window w
+			JOIN usage_snapshot_ranked r
+				ON r.ranked_session_id = w.session_id
+				AND r.ranked_message_ordinal = w.message_ordinal
+			WHERE w.claude_message_id != '' AND r.snapshot_rank = 1
 			UNION ALL
 			SELECT usage_snapshot_window.*,
 				session_id AS snapshot_attribution_session_id,

@@ -1,3 +1,4 @@
+import { untrack } from "svelte";
 import {
   Virtualizer,
   type VirtualizerOptions,
@@ -9,7 +10,6 @@ import {
   windowScroll,
   // kit-ui-check-ignore: local wrapper preserves TanStack scroll reconciliation and measurement-cache semantics used by MessageList; replacing it with kit-ui VirtualList is a separate migration.
 } from "@tanstack/virtual-core";
-import { untrack } from "svelte";
 
 type PartialKeys<T, K extends keyof T> = Omit<T, K> & Partial<Pick<T, K>>;
 
@@ -102,6 +102,12 @@ function createBaseVirtualizer<TScroll extends Element | Window, TItem extends E
     if (orderChanged) untrack(() => _version++);
 
     postUpdate?.(instance, opts, cacheKeyChanged);
+
+    // setOptions does not notify, and TanStack notifies only when the
+    // rendered index range changes. Without this, a new item count that
+    // keeps the range indexes, or leaves the scroll offset past the new end,
+    // would keep the old rows and total size on screen.
+    untrack(() => _version++);
 
     return () => {
       instance?._willUpdate();

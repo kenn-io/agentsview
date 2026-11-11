@@ -25,6 +25,53 @@ func embeddableMessagePredicate(alias string) string {
 const toolCallMessageJoin = `JOIN messages m ON m.session_id = tc.session_id
 			AND m.ordinal = tc.message_ordinal`
 
+// imageTextCallJoin and imageTextEventJoin attach image text to the tool
+// call result or result event that held the image. The small image table
+// is the join's build side.
+const imageTextCallJoin = `JOIN image_text it ON it.session_id = tc.session_id
+			AND it.message_ordinal = tc.message_ordinal AND it.call_index = tc.call_index`
+
+const imageTextEventJoin = `JOIN image_text it ON it.session_id = tre.session_id
+			AND it.message_ordinal = tre.tool_call_message_ordinal
+			AND it.call_index = tre.call_index AND it.event_index = tre.event_index`
+
+// imageTextResultBranches returns the tool_result rows for image text: one
+// branch for tool call results and one for result events, each with its
+// scope placeholders followed by the predicate's. Rows sort after the text
+// of the same source and, as in SQLite, repeat once per distinct text.
+func imageTextResultBranches(f db.ContentSearchFilter, scopeWhere, callPredicate, eventPredicate, extra string) []string {
+	return []string{
+		`
+				SELECT DISTINCT it.session_id AS session_id, s.project AS project, s.agent AS agent,
+					'tool_result' AS location, 'assistant' AS role, tc.tool_name AS tool_name,
+					m.ordinal AS ordinal, m.timestamp AS ts,
+					it.text AS body,
+					COALESCE(s.ended_at, s.started_at, s.created_at) AS sort_ts,
+					5 AS src, tc.message_id AS row_id,
+					tc.call_index AS call_index, toInt64(0) AS event_index` + extra + `
+				FROM tool_calls tc ` + imageTextCallJoin + `
+				JOIN sessions s ON s.id = tc.session_id
+				` + toolCallMessageJoin + `
+				WHERE it.source_kind = 'tool_call' AND it.push_version >= s.push_version
+					AND ` + toolCallWithoutEvents + `
+					AND it.session_id IN (SELECT id FROM sessions WHERE ` + scopeWhere + `) AND ` +
+			db.LexicalAnchorScopeSQL(f, "s", "m", db.ClickHouseQueryDialect()) + callPredicate, `
+				SELECT DISTINCT it.session_id AS session_id, s.project AS project, s.agent AS agent,
+					'tool_result' AS location, 'assistant' AS role, '' AS tool_name,
+					tre.tool_call_message_ordinal AS ordinal, tre.timestamp AS ts,
+					it.text AS body,
+					COALESCE(s.ended_at, s.started_at, s.created_at) AS sort_ts,
+					6 AS src, 0 AS row_id,
+					tre.call_index AS call_index, tre.event_index AS event_index` + extra + `
+				FROM tool_result_events tre ` + imageTextEventJoin + `
+				JOIN sessions s ON s.id = tre.session_id
+				` + db.LexicalEventAnchorJoinSQL(f.Scope) + `
+				WHERE it.source_kind = 'event' AND it.push_version >= s.push_version
+					AND it.session_id IN (SELECT id FROM sessions WHERE ` + scopeWhere + `) AND ` +
+			db.LexicalAnchorScopeSQL(f, "s", "m", db.ClickHouseQueryDialect()) + eventPredicate,
+	}
+}
+
 // toolCallWithoutEvents excludes tool calls whose result events are stored
 // separately, so a result is not reported twice.
 const toolCallWithoutEvents = `NOT (tc.tool_use_id <> '' AND (tc.session_id, tc.tool_use_id) IN (
@@ -54,11 +101,16 @@ func (s *Store) Search(ctx context.Context, f db.SearchFilter) (db.SearchPage, e
 	args := []any{firstTerm, firstTerm}
 
 	termClauses := make([]string, len(terms))
+	imageClauses := make([]string, len(terms))
+	termArgs := make([]any, len(terms))
 	for i, t := range terms {
 		termClauses[i] = "m.content ILIKE ?"
-		args = append(args, "%"+db.EscapeLikePattern(t)+"%")
+		imageClauses[i] = "it.text ILIKE ?"
+		termArgs[i] = "%" + db.EscapeLikePattern(t) + "%"
 	}
+	args = append(args, termArgs...)
 	msgTermPredicate := strings.Join(termClauses, "\n\t\t\t\tAND ")
+	imageTermPredicate := strings.Join(imageClauses, " AND ")
 	if f.Project != "" {
 		project = "AND s.project = ?"
 		args = append(args, f.Project)
@@ -75,6 +127,14 @@ func (s *Store) Search(ctx context.Context, f db.SearchFilter) (db.SearchPage, e
 	}
 	nameProject += nameProjectDates.String()
 	project += projectDates.String()
+	args = append(args, dateBuilder.Args()...)
+	// image_candidates, then image_ranked with the message branch's filters.
+	args = append(args, termArgs...)
+	args = append(args, firstTerm)
+	args = append(args, termArgs...)
+	if f.Project != "" {
+		args = append(args, f.Project)
+	}
 	args = append(args, dateBuilder.Args()...)
 	args = append(args, namePattern, namePattern)
 	if f.Project != "" {
@@ -113,6 +173,43 @@ func (s *Store) Search(ctx context.Context, f db.SearchFilter) (db.SearchPage, e
 				1.0 AS rank, 1 AS match_priority, g.winner.3 AS match_pos
 			FROM msg_grouped g
 		),
+		image_candidates AS (
+			SELECT DISTINCT it.session_id AS session_id FROM image_text it WHERE `+imageTermPredicate+`
+		),
+		-- Sessions that only image text matches rank with name matches,
+		-- anchored at the visible message holding the image's tool call.
+		image_ranked AS (
+			SELECT it.session_id AS session_id, s.project AS project, s.agent AS agent, s.machine AS machine,
+				COALESCE(s.display_name, s.session_name, s.first_message, '') AS name,
+				COALESCE(s.ended_at, s.started_at, s.created_at) AS session_ended_at,
+				it.message_ordinal AS ordinal, substringUTF8(it.text, greatest(1, positionCaseInsensitiveUTF8(it.text, ?) - 100), 200) AS snippet,
+				1.0 AS rank, 2 AS match_priority, 0 AS match_pos,
+				ROW_NUMBER() OVER (
+					PARTITION BY it.session_id
+					ORDER BY it.message_ordinal ASC, it.call_index ASC, it.event_index ASC,
+						it.image_index ASC, it.source_kind ASC, it.processor ASC
+				) AS rn
+			FROM image_text it
+			JOIN sessions s ON s.id = it.session_id
+			WHERE `+imageTermPredicate+` AND it.push_version >= s.push_version
+				AND s.deleted_at IS NULL
+				AND (it.session_id, it.message_ordinal) IN (
+					SELECT mx.session_id, mx.ordinal FROM messages mx
+					WHERE mx.session_id IN (SELECT session_id FROM image_candidates)
+						AND `+embeddableMessagePredicate("mx")+`
+				)
+				AND it.session_id NOT IN (
+					SELECT session_id FROM msg_matches
+					WHERE session_id IN (SELECT session_id FROM image_candidates)
+				)
+				`+project+`
+		),
+		image_matches AS (
+			SELECT session_id, project, agent, machine, name, session_ended_at,
+				ordinal, snippet, rank, match_priority, match_pos
+			FROM image_ranked
+			WHERE rn = 1
+		),
 		name_candidates AS (
 			SELECT s.id AS id FROM sessions s
 			WHERE (COALESCE(s.display_name, s.session_name) ILIKE ?
@@ -144,11 +241,17 @@ func (s *Store) Search(ctx context.Context, f db.SearchFilter) (db.SearchPage, e
 					SELECT session_id FROM msg_grouped
 					WHERE session_id IN (SELECT id FROM name_candidates)
 				)
+				AND s.id NOT IN (
+					SELECT session_id FROM image_matches
+					WHERE session_id IN (SELECT id FROM name_candidates)
+				)
 		)
 		SELECT session_id, project, agent, machine, name,
 			session_ended_at, ordinal, snippet, rank
 		FROM (
 			SELECT * FROM msg_matches
+			UNION ALL
+			SELECT * FROM image_matches
 			UNION ALL
 			SELECT * FROM name_matches
 		) AS combined
@@ -408,6 +511,11 @@ func (s *Store) collectContentSubstringMatches(
 				`+eventAnchorJoin+`
 				WHERE `+eventPred+`
 					AND tre.session_id IN (SELECT id FROM sessions WHERE `+scopeWhere+`) AND `+db.LexicalAnchorScopeSQL(f, "s", "m", db.ClickHouseQueryDialect()))
+			args = append(args, scopeArgs...)
+			callImagePred := " AND " + contentSearchPredicate("it.text", f, &args)
+			args = append(args, scopeArgs...)
+			eventImagePred := " AND " + contentSearchPredicate("it.text", f, &args)
+			branches = append(branches, imageTextResultBranches(f, scopeWhere, callImagePred, eventImagePred, "")...)
 		default:
 			return nil, &db.SearchInputError{Msg: fmt.Sprintf("search: unknown source %q", source)}
 		}
@@ -420,7 +528,7 @@ func (s *Store) collectContentSubstringMatches(
 			ordinal, ts, body
 		FROM (` + strings.Join(branches, " UNION ALL ") + `) AS matches
 		ORDER BY sort_ts DESC, session_id ASC, ordinal ASC,
-			src ASC, row_id ASC, call_index ASC, event_index ASC
+			src ASC, row_id ASC, call_index ASC, event_index ASC, body ASC
 		LIMIT ? OFFSET ?`
 	args = append(args, f.Limit+1, f.Cursor)
 	rows, err := s.queryContext(ctx, query, args...)
@@ -551,6 +659,11 @@ func (s *Store) collectContentSource(
 		resultFilter := prefixFilter("tc.result_content")
 		args = append(args, scopeArgs...)
 		eventFilter := prefixFilter("tre.content")
+		args = append(args, scopeArgs...)
+		callImageFilter := prefixFilter("it.text")
+		args = append(args, scopeArgs...)
+		eventImageFilter := prefixFilter("it.text")
+		images := imageTextResultBranches(f, scopeWhere, callImageFilter, eventImageFilter, ", false AS legacy_thinking")
 		query = `SELECT session_id, project, agent, location, role,
 			tool_name, ordinal, ts, body, sort_ts, src, row_id, call_index, event_index, legacy_thinking
 			FROM (
@@ -576,6 +689,8 @@ func (s *Store) collectContentSource(
 				FROM tool_result_events tre JOIN sessions s ON s.id = tre.session_id
 				` + eventAnchorJoin + `
 				WHERE tre.session_id IN (SELECT id FROM sessions WHERE ` + scopeWhere + `) AND ` + db.LexicalAnchorScopeSQL(f, "s", "m", db.ClickHouseQueryDialect()) + eventFilter + `
+				UNION ALL` + images[0] + `
+				UNION ALL` + images[1] + `
 			) AS results
 			ORDER BY session_id, ordinal, src, row_id, call_index, event_index`
 	default:

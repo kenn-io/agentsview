@@ -2,7 +2,7 @@
   import { onDestroy, onMount, untrack } from "svelte";
   import { Button, Card, EmptyState, IconButton, Typeahead } from "@kenn-io/kit-ui";
   import { formatDateTime, m } from "../../i18n/index.js";
-  import { ChevronLeftIcon, ChevronRightIcon } from "../../icons.js";
+  import { ChevronLeftIcon, ChevronRightIcon, CircleCheckIcon, LogsIcon } from "../../icons.js";
   import { friction } from "../../stores/friction.svelte.js";
   import { router } from "../../stores/router.svelte.js";
   import { sync } from "../../stores/sync.svelte.js";
@@ -46,6 +46,23 @@
       void friction.checkKata();
     }
   });
+  // A mirror without friction tables cannot serve these reads at all. Its
+  // list request fails, but that is a fact about the backend, not a fault.
+  const frictionUnreadable = $derived(sync.serverVersion?.friction_readable === false);
+  // With no digest list (off, unreadable, or none built yet) the page shows
+  // one EmptyState, centered across the page like Pinned's instead
+  // of inside the left-aligned digest column.
+  const listMissing = $derived(
+    friction.errors.dates
+      ? frictionUnreadable
+      : !friction.loading.dates && friction.dates.length === 0,
+  );
+  // Backend reasons arrive lowercase; set them as a sentence.
+  const datesErrorSentence = $derived(
+    friction.errors.dates
+      ? friction.errors.dates.charAt(0).toUpperCase() + friction.errors.dates.slice(1)
+      : "",
+  );
   const dateOptions = $derived(
     friction.dates.map((item) => ({ name: item.date, label: item.date })),
   );
@@ -153,7 +170,7 @@
     />
   </header>
 
-  <main class="content" aria-busy={busy}>
+  <main class="content" class:content--missing={listMissing} aria-busy={busy}>
     {#if friction.lastBuildWritten !== null}
       <div class="build-status" role="status">
         {friction.lastBuildWritten > 0
@@ -167,7 +184,19 @@
       </div>
     {/if}
 
-    {#if friction.errors.dates}
+    {#if friction.errors.dates && frictionUnreadable}
+      <EmptyState
+        align="top"
+        role="status"
+        title={m.friction_load_error()}
+        description={datesErrorSentence}
+      >
+        {#snippet icon()}
+          <LogsIcon size="24" strokeWidth="1.75" />
+        {/snippet}
+        <Button size="sm" label={m.friction_retry()} onclick={refresh} />
+      </EmptyState>
+    {:else if friction.errors.dates}
       <Card level="default" padding="none" class="state-panel">
         <div class="state-panel-alert" role="alert">
           <strong>{m.friction_load_error()}</strong>
@@ -177,14 +206,24 @@
       </Card>
     {:else if !friction.loading.dates && friction.dates.length === 0}
       {#if frictionAvailable}
-        <EmptyState title={m.friction_empty_title()}>
-          <p class="empty-hint">
-            {buildAllowed ? m.friction_empty_hint() : m.friction_empty_hint_remote()}
-          </p>
+        <EmptyState
+          align="top"
+          title={m.friction_empty_title()}
+          description={buildAllowed ? m.friction_empty_hint() : m.friction_empty_hint_remote()}
+        >
+          {#snippet icon()}
+            <LogsIcon size="24" strokeWidth="1.75" />
+          {/snippet}
         </EmptyState>
       {:else}
-        <EmptyState title={m.friction_disabled_title()}>
-          <p class="empty-hint">{m.friction_disabled_hint()}</p>
+        <EmptyState
+          align="top"
+          title={m.friction_disabled_title()}
+          description={m.friction_disabled_hint()}
+        >
+          {#snippet icon()}
+            <LogsIcon size="24" strokeWidth="1.75" />
+          {/snippet}
         </EmptyState>
       {/if}
     {:else if friction.errors.digest}
@@ -236,12 +275,16 @@
           {/if}
         {/each}
       {:else}
-        <EmptyState title={m.friction_clean_title()}>
-          <p class="empty-hint">
-            {digest.sessions_scanned > 0
-              ? m.friction_clean_hint({ count: digest.sessions_scanned })
-              : m.friction_clean_no_sessions()}
-          </p>
+        <EmptyState
+          align="top"
+          title={m.friction_clean_title()}
+          description={digest.sessions_scanned > 0
+            ? m.friction_clean_hint({ count: digest.sessions_scanned })
+            : m.friction_clean_no_sessions()}
+        >
+          {#snippet icon()}
+            <CircleCheckIcon size="24" strokeWidth="1.75" />
+          {/snippet}
         </EmptyState>
       {/if}
 
@@ -316,7 +359,8 @@
     font-size: 12px;
     align-items: flex-start;
   }
-  .empty-hint {
-    max-width: 60ch;
+  /* A missing digest list centers across the whole page, as on Pinned. */
+  .content--missing {
+    max-width: none;
   }
 </style>

@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { describe, it, expect, vi, beforeEach, afterEach } from "vite-plus/test";
+import { describe, it, expect, vi, beforeEach, afterEach, onTestFinished } from "vite-plus/test";
 import { mount, tick, unmount } from "svelte";
 const mocks = vi.hoisted(() => ({
   downloadExport: vi.fn().mockResolvedValue(undefined),
@@ -65,8 +65,44 @@ function testSession(overrides: Partial<Session> = {}): Session {
   };
 }
 
+async function openMoreActions(): Promise<void> {
+  document.querySelector<HTMLButtonElement>('button[aria-label="More actions"]')!.click();
+  await tick();
+}
+
+function menuItem(text: string): HTMLButtonElement | undefined {
+  return Array.from(document.querySelectorAll<HTMLButtonElement>('[role="menuitem"]')).find(
+    (item) => item.textContent?.includes(text),
+  );
+}
+
+// jsdom has no layout, so TopBar's collapse measurement needs widths: a
+// tab row narrower than the bar keeps the tabs, a wider one collapses them.
+function stubTopBarWidths(tabRow: number, bar: number): () => void {
+  const offsetWidth = vi
+    .spyOn(HTMLElement.prototype, "offsetWidth", "get")
+    .mockImplementation(function (this: HTMLElement) {
+      return this.classList.contains("kit-top-bar__probe") ? tabRow : 0;
+    });
+  const clientWidth = vi
+    .spyOn(HTMLElement.prototype, "clientWidth", "get")
+    .mockImplementation(function (this: HTMLElement) {
+      return this.classList.contains("kit-top-bar") ? bar : 0;
+    });
+  return () => {
+    offsetWidth.mockRestore();
+    clientWidth.mockRestore();
+  };
+}
+
+const currentTabs = () =>
+  Array.from(document.querySelectorAll('[aria-current="page"]'), (element) =>
+    element.textContent?.trim(),
+  );
+
 describe("AppHeader export actions", () => {
   let component: ReturnType<typeof mount> | undefined;
+  let restoreWidths: (() => void) | undefined;
 
   beforeEach(() => {
     vi.clearAllMocks();
@@ -88,6 +124,8 @@ describe("AppHeader export actions", () => {
       unmount(component);
       component = undefined;
     }
+    restoreWidths?.();
+    restoreWidths = undefined;
     document.body.innerHTML = "";
     ui.isMobileViewport = false;
     ui.sidebarOpen = true;
@@ -98,68 +136,79 @@ describe("AppHeader export actions", () => {
   });
 
   it.each([
-    { archive_only: false, read_only: false, importDisabled: false, syncLabel: "Sync sessions" },
-    { archive_only: false, read_only: true, importDisabled: true, syncLabel: "Refresh data" },
-    { archive_only: true, read_only: false, importDisabled: true, syncLabel: null },
+    {
+      archive_only: false,
+      read_only: false,
+      importLabel: "Import conversations",
+      importDisabled: false,
+      syncLabel: "Sync sessions",
+    },
+    {
+      archive_only: false,
+      read_only: true,
+      importLabel: "Import unavailable in read-only mode",
+      importDisabled: true,
+      syncLabel: "Refresh data",
+    },
+    {
+      archive_only: true,
+      read_only: false,
+      importLabel: "Import unavailable in archive-only mode",
+      importDisabled: true,
+      syncLabel: null,
+    },
   ])(
     "offers the available actions for archive_only=$archive_only read_only=$read_only",
-    async ({ archive_only, read_only, importDisabled, syncLabel }) => {
+    async ({ archive_only, read_only, importLabel, importDisabled, syncLabel }) => {
       sync.serverVersion = { archive_only, read_only } as NonNullable<typeof sync.serverVersion>;
       component = mount(AppHeader, { target: document.body });
       await tick();
 
-      const importButton = document.querySelector<HTMLButtonElement>(".import-btn")!;
-      expect(importButton.disabled).toBe(importDisabled);
-      if (archive_only) expect(importButton.title).toBe("Import unavailable in archive-only mode");
-      else if (read_only) expect(importButton.title).toBe("Import unavailable in read-only mode");
       const syncButton = document.querySelector<HTMLButtonElement>(".sync-btn");
       if (syncLabel) expect(syncButton?.getAttribute("aria-label")).toBe(syncLabel);
       else expect(syncButton).toBeNull();
-      expect(
-        document.querySelector<HTMLButtonElement>('button[aria-label="Export session"]')?.disabled,
-      ).toBe(false);
-      importButton.click();
+
+      await openMoreActions();
+      expect(menuItem("Download HTML export")).toBeDefined();
+      const importItem = menuItem(importLabel)!;
+      expect(importItem).toBeDefined();
+      expect(importItem.getAttribute("aria-disabled") === "true").toBe(importDisabled);
+      importItem.click();
       await tick();
       expect(document.querySelector('[role="dialog"]') !== null).toBe(!importDisabled);
     },
   );
 
-  it("marks the Import button while Claude.ai Sync runs with the dialog closed", async () => {
+  it("shows a visible Import button only while Claude.ai Sync runs", async () => {
     mocks.syncClaudeAI.mockReturnValue(new Promise(() => {}));
     component = mount(AppHeader, { target: document.body });
     await tick();
-    const importButton = document.querySelector<HTMLButtonElement>(".import-btn")!;
-    expect(importButton.getAttribute("aria-label")).toBe("Import conversations");
+    expect(document.querySelector(".import-btn")).toBeNull();
     void claudeAISync.start(undefined, () => {});
     await tick();
+    const importButton = document.querySelector<HTMLButtonElement>(".import-btn")!;
     expect(importButton.getAttribute("aria-label")).toBe(
       "Claude.ai Sync is running. Open Import to see progress or stop it.",
     );
     expect(importButton.querySelector(".sync-spinner")).not.toBeNull();
     claudeAISync.stop();
     await tick();
-    expect(importButton.getAttribute("aria-label")).toBe("Import conversations");
-    expect(importButton.querySelector(".sync-spinner")).toBeNull();
+    expect(document.querySelector(".import-btn")).toBeNull();
   });
 
-  it("copies markdown export link from export menu", async () => {
+  it("leaves the transcript controls to the session header on wide screens", async () => {
+    component = mount(AppHeader, { target: document.body });
+    await tick();
+    expect(document.querySelector(".view-trigger")).toBeNull();
+    expect(document.querySelector('button[aria-label="Follow latest messages"]')).toBeNull();
+  });
+
+  it("copies markdown export link from the actions menu", async () => {
     component = mount(AppHeader, { target: document.body });
     await tick();
 
-    const exportButton = document.querySelector<HTMLButtonElement>(
-      'button[aria-label="Export session"]',
-    );
-    expect(exportButton).not.toBeNull();
-
-    exportButton!.click();
-    await tick();
-
-    const copyButton = Array.from(document.querySelectorAll<HTMLButtonElement>("button")).find(
-      (button) => button.textContent?.includes("Copy markdown export link"),
-    );
-    expect(copyButton).not.toBeNull();
-
-    copyButton!.click();
+    await openMoreActions();
+    menuItem("Copy markdown export link")!.click();
     await tick();
 
     expect(mocks.getMarkdownExportUrl).toHaveBeenCalledWith("sess-123");
@@ -171,7 +220,7 @@ describe("AppHeader export actions", () => {
     );
   });
 
-  it("copies active session source path from export menu", async () => {
+  it("copies active session source path from the actions menu", async () => {
     sessions.sessions = [
       testSession({
         file_path: "/tmp/agentsview/sessions/session-123.jsonl",
@@ -181,20 +230,8 @@ describe("AppHeader export actions", () => {
     component = mount(AppHeader, { target: document.body });
     await tick();
 
-    const exportButton = document.querySelector<HTMLButtonElement>(
-      'button[aria-label="Export session"]',
-    );
-    expect(exportButton).not.toBeNull();
-
-    exportButton!.click();
-    await tick();
-
-    const copyPathButton = Array.from(document.querySelectorAll<HTMLButtonElement>("button")).find(
-      (button) => button.textContent?.includes("Copy source file path"),
-    );
-    expect(copyPathButton).toBeDefined();
-
-    copyPathButton!.click();
+    await openMoreActions();
+    menuItem("Copy source file path")!.click();
     await tick();
 
     expect(mocks.copyToClipboard).toHaveBeenCalledWith(
@@ -202,27 +239,25 @@ describe("AppHeader export actions", () => {
     );
   });
 
-  it("toggles follow latest from the session header", async () => {
+  it("shows the transcript controls in the top bar on narrow screens", async () => {
+    ui.isMobileViewport = true;
     component = mount(AppHeader, { target: document.body });
     await tick();
 
     const followButton = document.querySelector<HTMLButtonElement>(
       'button[aria-label="Follow latest messages"]',
-    );
-    expect(followButton).not.toBeNull();
-    expect(followButton!.classList.contains("active")).toBe(false);
+    )!;
+    expect(followButton.getAttribute("aria-pressed")).toBe("false");
 
-    followButton!.click();
+    followButton.click();
     await tick();
-
     expect(ui.followLatest).toBe(true);
-    expect(followButton!.classList.contains("active")).toBe(true);
+    expect(followButton.getAttribute("aria-pressed")).toBe("true");
 
-    followButton!.click();
+    followButton.click();
     await tick();
-
     expect(ui.followLatest).toBe(false);
-    expect(followButton!.classList.contains("active")).toBe(false);
+    expect(followButton.getAttribute("aria-pressed")).toBe("false");
   });
 
   it("keeps the sidebar toggle out of the desktop title bar", async () => {
@@ -372,6 +407,129 @@ describe("AppHeader export actions", () => {
     expect(labels).not.toContain("Friction Log");
   });
 
+  for (const readable of [false, true]) {
+    it(`marks ${readable ? "the Friction tab" : "no tab"} current on /friction when its tab is ${readable ? "shown" : "hidden"}`, async () => {
+      sync.serverVersion = {
+        api_version: 1,
+        data_version: 1,
+        insight_generation_available: false,
+        friction_available: false,
+        friction_build_allowed: false,
+        friction_readable: readable,
+        session_stats_available: false,
+        kata_available: false,
+        version: "dev",
+        commit: "unknown",
+        build_date: "",
+        read_only: true,
+      };
+      router.route = "friction";
+      restoreWidths = stubTopBarWidths(600, 2000);
+      component = mount(AppHeader, { target: document.body });
+      await tick();
+
+      expect(document.querySelector(".kit-top-bar__tabs")).not.toBeNull();
+      expect(currentTabs()).toEqual(readable ? ["Friction Log"] : []);
+    });
+  }
+
+  it("marks no tab current on Settings and the routed tab again after it", async () => {
+    router.route = "settings";
+    restoreWidths = stubTopBarWidths(600, 2000);
+    component = mount(AppHeader, { target: document.body });
+    await tick();
+
+    expect(document.querySelector(".kit-top-bar__tabs")).not.toBeNull();
+    expect(currentTabs()).toEqual([]);
+
+    // Sessions is the tab the bar falls back to, so returning to it is the
+    // case where nothing re-renders the attribute by itself.
+    router.route = "sessions";
+    await tick();
+    expect(currentTabs()).toEqual(["Sessions"]);
+
+    router.route = "settings";
+    await tick();
+    expect(currentTabs()).toEqual([]);
+
+    router.route = "usage";
+    await tick();
+    expect(currentTabs()).toEqual(["Usage"]);
+  });
+
+  it("shows a neutral collapsed menu on Settings and the routed tab after it", async () => {
+    router.route = "settings";
+    restoreWidths = stubTopBarWidths(2000, 600);
+    component = mount(AppHeader, { target: document.body });
+    await tick();
+
+    const trigger = () =>
+      document.querySelector<HTMLElement>(
+        ".kit-top-bar__nav-select .kit-select-dropdown__trigger",
+      )!;
+    const shown = () => ({
+      text: trigger().querySelector(".kit-select-dropdown__value")?.textContent,
+      label: trigger().getAttribute("aria-label"),
+    });
+    expect(shown()).toEqual({ text: "—", label: "Primary navigation: —" });
+
+    router.route = "sessions";
+    await tick();
+    expect(shown()).toEqual({ text: "Sessions", label: "Primary navigation: Sessions" });
+
+    router.route = "settings";
+    await tick();
+    expect(shown()).toEqual({ text: "—", label: "Primary navigation: —" });
+
+    router.route = "usage";
+    await tick();
+    expect(shown()).toEqual({ text: "Usage", label: "Primary navigation: Usage" });
+  });
+
+  it("selects no destination in the open collapsed menu on Settings", async () => {
+    // jsdom has no scrollIntoView; the menu scrolls its highlight into view.
+    Element.prototype.scrollIntoView = vi.fn();
+    onTestFinished(() => {
+      delete (Element.prototype as Partial<Element>).scrollIntoView;
+    });
+    router.route = "settings";
+    restoreWidths = stubTopBarWidths(2000, 600);
+    component = mount(AppHeader, { target: document.body });
+    await tick();
+
+    const trigger = () =>
+      document.querySelector<HTMLElement>(
+        ".kit-top-bar__nav-select .kit-select-dropdown__trigger",
+      )!;
+    // Opens the menu, reads which options claim to be selected, closes it.
+    const selectedOptions = async () => {
+      trigger().click();
+      await tick();
+      const options = [...document.querySelectorAll('.kit-top-bar__nav-select [role="option"]')];
+      expect(options.length).toBeGreaterThan(0);
+      // With no current tab, kit-ui adds a disabled "—" placeholder row
+      // that holds the selection; no destination is selected.
+      const names = options
+        .filter((option) => !option.matches(":disabled"))
+        .filter((option) => option.getAttribute("aria-selected") === "true")
+        .map((option) => option.textContent?.trim());
+      trigger().click();
+      await tick();
+      expect(document.querySelector('.kit-top-bar__nav-select [role="option"]')).toBeNull();
+      return names;
+    };
+
+    expect(await selectedOptions()).toEqual([]);
+
+    router.route = "sessions";
+    await tick();
+    expect(await selectedOptions()).toEqual(["Sessions"]);
+
+    router.route = "settings";
+    await tick();
+    expect(await selectedOptions()).toEqual([]);
+  });
+
   it("distinguishes global sync from page refresh controls", async () => {
     component = mount(AppHeader, { target: document.body });
     await tick();
@@ -409,7 +567,9 @@ describe("AppHeader export actions", () => {
 
     expect(refreshButton).not.toBeNull();
     expect(refreshButton?.textContent?.trim()).toBe("Refresh");
-    expect(refreshButton?.querySelector("svg.lucide-database-backup")).not.toBeNull();
+    // Same glyph as the page refresh controls: both mean "refresh data".
+    expect(refreshButton?.querySelector("svg.lucide-refresh-cw")).not.toBeNull();
+    expect(refreshButton?.querySelector("svg.lucide-database-backup")).toBeNull();
     expect(document.body.textContent).toContain("Recall");
   });
 

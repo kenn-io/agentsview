@@ -1,4 +1,16 @@
+import type { Component } from "svelte";
 import { m } from "../../i18n/index.js";
+import {
+  CalendarRangeIcon,
+  GlobeIcon,
+  ImageIcon,
+  LanguagesIcon,
+  PaletteIcon,
+  PlugIcon,
+  SparklesIcon,
+  SquareTerminalIcon,
+} from "../../icons.js";
+import GithubIcon from "../shared/GithubIcon.svelte";
 
 export type SettingsPanelId =
   | "appearance"
@@ -7,9 +19,7 @@ export type SettingsPanelId =
   | "terminal"
   | "agent-directories"
   | "tool-result-images"
-  | "worktree-mappings"
   | "embeddings"
-  | "archive-content"
   | "github"
   | "remote-access";
 
@@ -20,6 +30,8 @@ export interface SettingsPanelMeta {
   description: string;
   group: string;
   keywords: string;
+  /** Shown before the label in the settings navigation. */
+  icon: Component;
 }
 
 export function settingsPanels(): SettingsPanelMeta[] {
@@ -30,14 +42,22 @@ export function settingsPanels(): SettingsPanelMeta[] {
   return [
     {
       id: "appearance",
+      icon: PaletteIcon,
       label: m.appearance_title(),
       title: m.appearance_title(),
       description: m.appearance_description(),
       group: preferences,
-      keywords: m.settings_search_keywords_appearance(),
+      // The multi-word control labels, so searching a setting by the
+      // name it shows finds this panel in every locale.
+      keywords: [
+        m.settings_search_keywords_appearance(),
+        m.appearance_message_layout(),
+        m.appearance_reading_width(),
+      ].join(" "),
     },
     {
       id: "language",
+      icon: LanguagesIcon,
       label: m.settings_language_title(),
       title: m.settings_language_title(),
       description: m.settings_language_description(),
@@ -46,6 +66,7 @@ export function settingsPanels(): SettingsPanelMeta[] {
     },
     {
       id: "date-ranges",
+      icon: CalendarRangeIcon,
       label: m.settings_date_ranges_title(),
       title: m.settings_date_ranges_title(),
       description: m.settings_date_ranges_description(),
@@ -54,6 +75,7 @@ export function settingsPanels(): SettingsPanelMeta[] {
     },
     {
       id: "terminal",
+      icon: SquareTerminalIcon,
       label: m.settings_terminal_title(),
       title: m.settings_terminal_title(),
       description: m.settings_terminal_description(),
@@ -62,6 +84,7 @@ export function settingsPanels(): SettingsPanelMeta[] {
     },
     {
       id: "agent-directories",
+      icon: PlugIcon,
       label: m.settings_session_providers_title(),
       title: m.settings_session_providers_title(),
       description: m.settings_session_providers_description(),
@@ -70,6 +93,7 @@ export function settingsPanels(): SettingsPanelMeta[] {
     },
     {
       id: "tool-result-images",
+      icon: ImageIcon,
       label: m.settings_tool_images_title(),
       title: m.settings_tool_images_title(),
       description: m.settings_tool_images_description(),
@@ -77,15 +101,8 @@ export function settingsPanels(): SettingsPanelMeta[] {
       keywords: m.settings_search_keywords_tool_images(),
     },
     {
-      id: "worktree-mappings",
-      label: m.worktree_title(),
-      title: m.worktree_title(),
-      description: m.settings_worktree_moved(),
-      group: data,
-      keywords: m.settings_search_keywords_worktree_mappings(),
-    },
-    {
       id: "embeddings",
+      icon: SparklesIcon,
       label: m.settings_embeddings_title(),
       title: m.settings_embeddings_title(),
       description: m.settings_embeddings_description(),
@@ -93,15 +110,8 @@ export function settingsPanels(): SettingsPanelMeta[] {
       keywords: m.settings_search_keywords_embeddings(),
     },
     {
-      id: "archive-content",
-      label: m.settings_archive_content_title(),
-      title: m.settings_archive_content_title(),
-      description: m.settings_archive_content_description(),
-      group: data,
-      keywords: m.settings_search_keywords_archive_content(),
-    },
-    {
       id: "github",
+      icon: GithubIcon,
       label: m.settings_nav_github(),
       title: m.settings_github_title(),
       description: m.settings_github_description(),
@@ -110,6 +120,7 @@ export function settingsPanels(): SettingsPanelMeta[] {
     },
     {
       id: "remote-access",
+      icon: GlobeIcon,
       label: m.settings_nav_remote_access(),
       title: m.settings_remote_title(),
       description: m.settings_remote_description(),

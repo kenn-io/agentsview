@@ -344,7 +344,7 @@ describe("DataPage", () => {
     await flush();
 
     await fireEvent.click(screen.getByTitle("Project"));
-    await fireEvent.mouseDown(screen.getByRole("option", { name: "target-project (12)" }));
+    await fireEvent.mouseDown(screen.getByRole("option", { name: "target-project 12" }));
     await vi.advanceTimersByTimeAsync(300);
     await flush();
     await fireEvent.click(screen.getByRole("button", { name: "Save correction" }));
@@ -390,7 +390,7 @@ describe("DataPage", () => {
     await flush();
 
     await fireEvent.click(screen.getByTitle("Project"));
-    await fireEvent.mouseDown(screen.getByRole("option", { name: "target-project (12)" }));
+    await fireEvent.mouseDown(screen.getByRole("option", { name: "target-project 12" }));
     await vi.advanceTimersByTimeAsync(300);
     await flush();
     await fireEvent.click(screen.getByRole("button", { name: "Save correction" }));

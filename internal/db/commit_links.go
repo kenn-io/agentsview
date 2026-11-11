@@ -436,10 +436,15 @@ func bumpIncrementalTranscriptRevisionTx(tx transactionQueries, sessionID string
 			return err
 		}
 	}
-	if !refresh {
-		return bumpTranscriptRevision(tx, sessionID, true)
+	if err := bumpTranscriptRevision(tx, sessionID, true); err != nil {
+		return err
 	}
-	return bumpTranscriptRevisionTx(tx, sessionID)
+	if refresh {
+		if err := refreshSessionCommitLinksTx(tx, sessionID); err != nil {
+			return err
+		}
+	}
+	return refreshIncrementalImageTextOccurrencesTx(tx, sessionID, msgs, ids)
 }
 
 func refreshSessionCommitLinksTx(tx transactionQueries, sessionID string) error {

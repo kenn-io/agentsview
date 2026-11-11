@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vite-plus/test";
 import { mount, tick, unmount } from "svelte";
+import { dismissable } from "@kenn-io/kit-ui";
 import { ui } from "../stores/ui.svelte.js";
 import { sessions } from "../stores/sessions.svelte.js";
 import { starred } from "../stores/starred.svelte.js";
@@ -190,6 +191,36 @@ describe("registerShortcuts", () => {
       sessions.activeSessionId = "s1";
       fireKey("Escape");
       expect(sessions.activeSessionId).toBeNull();
+    });
+
+    it("deselects the session when transcript content mimics a kit-ui menu", () => {
+      sessions.activeSessionId = "s1";
+      const content = document.createElement("div");
+      content.className = "message-content";
+      content.innerHTML = '<div class="kit-menu__content" role="menu">Example</div>';
+      document.body.appendChild(content);
+      try {
+        fireKey("Escape");
+        expect(sessions.activeSessionId).toBeNull();
+      } finally {
+        content.remove();
+      }
+    });
+
+    it("leaves the session open while a kit-ui popover claims Escape", () => {
+      sessions.activeSessionId = "s1";
+      // kit-ui menus and popovers dismiss through dismissable(), which
+      // listens on document and is registered when the popover opens,
+      // after the app shortcuts.
+      const dismiss = vi.fn();
+      const stop = dismissable({ owners: () => [], dismiss });
+      try {
+        fireKey("Escape", { cancelable: true });
+        expect(dismiss).toHaveBeenCalledOnce();
+        expect(sessions.activeSessionId).toBe("s1");
+      } finally {
+        stop();
+      }
     });
 
     it("should prioritize closing modal over deselecting session", () => {

@@ -360,6 +360,7 @@ func parsePiLikeSession(
 	}
 
 	sess := &ParsedSession{
+		MalformedLines:   lr.SkippedLines(),
 		ID:               idPrefix + sessionID,
 		Project:          project,
 		Machine:          machine,

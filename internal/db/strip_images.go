@@ -134,6 +134,14 @@ func (db *DB) rewriteStoredToolResultRows(
 		return false, fmt.Errorf("beginning tool result strip: %w", err)
 	}
 	defer func() { _ = tx.Rollback() }()
+	oldHashes, err := tx.QueryContext(ctx, `SELECT DISTINCT image_hash FROM image_text_occurrences WHERE session_id=?`, sessionID)
+	if err != nil {
+		return false, err
+	}
+	hashes, err := scanStrings(oldHashes)
+	if err != nil {
+		return false, err
+	}
 	queueGenerationBefore, queueExistedBefore, err := artifactExportGenerationTx(
 		tx, sessionID,
 	)
@@ -290,6 +298,9 @@ func (db *DB) rewriteStoredToolResultRows(
 	if err := bumpTranscriptRevisionTx(tx, sessionID); err != nil {
 		return false, err
 	}
+	if err := refreshImageTextOccurrencesTx(tx, sessionID); err != nil {
+		return false, err
+	}
 	if err := reconcileRecallEvidenceForSessionTx(
 		ctx, tx, sessionID, &pendingRecallRevocations,
 	); err != nil {
@@ -321,6 +332,11 @@ func (db *DB) rewriteStoredToolResultRows(
 		tx, sessionID, queueGenerationBefore, queueExistedBefore,
 	); err != nil {
 		return false, err
+	}
+	for _, hash := range hashes {
+		if _, err := tx.ExecContext(ctx, `DELETE FROM image_text_cache WHERE image_hash=? AND NOT EXISTS (SELECT 1 FROM image_text_occurrences WHERE image_hash=?)`, hash, hash); err != nil {
+			return false, err
+		}
 	}
 	if err := tx.Commit(); err != nil {
 		return false, fmt.Errorf("committing tool result strip: %w", err)

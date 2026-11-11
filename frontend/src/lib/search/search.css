@@ -8,7 +8,9 @@
   color: var(--bg-primary, #111827);
 }
 
+/* A thin amber frame marks the current block, so the eye finds it before
+   the match highlight inside it. */
 [data-search-current="true"] {
-  outline: 2px solid var(--accent-amber, #d29922);
-  outline-offset: -2px;
+  outline: 1.5px solid var(--accent-amber, #d29922);
+  outline-offset: -1.5px;
 }

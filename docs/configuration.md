@@ -155,7 +155,7 @@ writes keep inline content, and archives that omit tool content write no assets.
 See [image storage](/docs/data/#ingest-time-image-offload) for retries, backups,
 and remote-backend limits.
 
-You can also select **Offload** under **Settings > Archive content**. The
+You can also select **Offload** under **Settings > Tool-result images**. The
 restart notice appears after you save a changed policy.
 
 ![Tool-result image policy in Settings](/docs/assets/generated/screenshots/settings-archive-content.png)
@@ -284,7 +284,7 @@ Set it to `"0"` to keep syncing while idle. Restart the server after changing it
 | `cursor_admin_user_id`              | Optional default Cursor Admin usage filter by member user ID                                                                                                                                                                                                                                                                                                                                                                                                                     |
 | `github_token`                      | Optional saved GitHub token for Gist publishing                                                                                                                                                                                                                                                                                                                                                                                                                                  |
 | `result_content_blocked_categories` | Tool categories whose result content is not stored (default: `["Read", "Glob"]`). Changes apply to new ingestion and full rebuilds; see [storage maintenance](/docs/data/#storage-maintenance) for existing source-backed sessions.                                                                                                                                                                                                                                              |
-| `tool_result_images`                | Retain supported inline tool-result image blocks with `"keep"` (default), or store readable `agentsview_image` placeholders with `"drop"`, or move supported images to the local asset store with `"offload"`. The setting affects future ingestion and full resyncs; use `db migrate --images` to move existing images or `db strip --images` to remove them from stored results; also configurable under **Settings > Archive content**, and changes require a daemon restart. |
+| `tool_result_images`                | Retain supported inline tool-result image blocks with `"keep"` (default), or store readable `agentsview_image` placeholders with `"drop"`, or move supported images to the local asset store with `"offload"`. The setting affects future ingestion and full resyncs; use `db migrate --images` to move existing images or `db strip --images` to remove them from stored results; also configurable under **Settings > Tool-result images**, and changes require a daemon restart. |
 | `archive_content`                   | How much of each session the archive stores: `"full"` (default), `"transcripts"`, or `"usage"`; changes require a daemon restart — see [Archive content](#archive-content)                                                                                                                                                                                                                                                                                                       |
 | `host`                              | Interface the server binds to (default `127.0.0.1`); non-loopback values require `require_auth = true`                                                                                                                                                                                                                                                                                                                                                                           |
 | `require_auth`                      | Require bearer-token authentication for API access                                                                                                                                                                                                                                                                                                                                                                                                                               |
@@ -2754,3 +2754,21 @@ Images dropped by the image policy have no bytes to hash, so they report
 Results refresh when the session reopens and when its transcript changes, at
 most every 15 seconds while matches are already shown. Successful Docbank
 answers are reused for one minute. No migration or resync is required.
+
+### Image text
+
+Enable image text extraction when a local GLM-OCR service is available:
+
+```toml
+[image_text]
+enabled = true
+# endpoint = "http://127.0.0.1:30004/glmocr/parse"
+```
+
+Restart the daemon after changing this setting. Images removed by the `drop`
+storage policy cannot be indexed. Disabling image text clears extracted text;
+enabling it again extracts images anew. The endpoint must use a loopback
+address. Image text requires an `archive_content` setting that keeps tool
+results; otherwise it stays off and a warning is logged. See
+[search text in images](commands.md#search-text-in-images) for supported images
+and search modes.

@@ -1935,6 +1935,9 @@ func (db *DB) loadPricingMapFrom(
 		}
 	}
 	for model, cp := range db.customPricing {
+		if cp.PriceAs != "" {
+			continue
+		}
 		rates := export.ModelRates{
 			InputPerMTok: money.Money{
 				Microdollars: cp.InputMicrodollarsPerMTok,

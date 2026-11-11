@@ -96,6 +96,14 @@ App-level glue that remains local:
   Calendar) should receive `locale={getLocale()}` from the i18n facade so
   their date formatting follows the app language setting instead of the
   browser locale; the shared wrappers above do this.
+- A page or panel with nothing to show uses kit-ui `EmptyState`: nothing saved
+  yet, no rows for these filters, or a feature this server does not offer. Pass
+  `title` and an optional `description` as props, the icon as an `icon`
+  snippet, and controls such as Retry as children. Use `align="top"` for a
+  whole page or a panel under its header, so the state sits the same fixed
+  step below the header on every page. Keep `StateNotice` for framed notes
+  that sit above content that still renders (read-only mode, date-filter
+  scope), and the alert card for failed loads.
 - `frontend/src/lib/components/content/SessionFindBar.svelte` wires kit-ui
   `FindBar` to the in-session search store.
 - kit-ui `SettingsLayout` owns grouped settings navigation and scroll behavior;
@@ -112,6 +120,15 @@ App-level glue that remains local:
   contract. Dependency updates must pass the zoom menu geometry coverage in
   `frontend/e2e/appearance-a11y.spec.ts`. The date picker retains its current
   scale until kit-ui can size its fixed-width panel for zoom.
+- Resizable tables use kit-ui `VirtualTable` with `TableHeaderCell`. kit-ui
+  reports only the widths a person sets, through `oncolumnresize`, and does
+  not store them. Pages that offer resizing persist the widths they care
+  about: Recent edits keeps them in `localStorage` through
+  `recentedits/columnWidths.ts` under stable column keys (`project`, `edits`,
+  `time`). kit-ui names a column by its translated label, so the page maps the
+  position kit-ui reports to that key. Columns nobody resized follow the
+  window, and Recent edits' File column takes the spare width (`fill`).
+  Pass a translated `resizeLabel` on every resizable header.
 
 Relative date ranges follow kit-ui semantics: "Last N days" spans N calendar
 days inclusive of today. `presetRange()` (dateRangeSelector.ts) and
@@ -120,22 +137,44 @@ kit-ui's `RangePicker`, which seeds its Custom tab from the same math.
 
 ### Known kit-ui gaps (tracked upstream)
 
-These gaps ship with the current kit-ui pin and are resolved by adding props
-upstream, then bumping the commit hash in `frontend/package.json` and threading
-the new props through the app wrappers. Do not work around them with unsupported
-props or forked styles.
+No app override waits on a kit-ui pull request at the current pin. One
+override and one accepted behavior remain:
 
-- `Modal`'s close-X `aria-label` is hardcoded English; needs a label prop.
-- `CodeBlock` forwards `copyLabel` but keeps CopyButton's English "Copied" label.
-- `TopBar` cannot express "no active tab"; on routes that are not tabs
-  (settings), the first tab renders as current.
+- In light theme, an unclean `StatusDot` mixes the app's `--accent-orange`
+  toward primary ink (`frontend/src/app.css`). kit-ui paints the dot in plain
+  `--accent-orange`, and the app's light orange is an agent identity hue at
+  about 2.6:1 on white, below the 3:1 a status mark needs. Drop the rule only
+  if kit-ui darkens the light dot itself; `e2e/text-contrast.spec.ts` checks
+  it.
+- With no current tab and the tabs collapsed, `TopBar`'s menu trigger reads
+  "Primary navigation: —", and the open menu shows a disabled, checked "—"
+  row. That is kit-ui's behavior, accepted as is; a kit-ui follow-up could
+  drop the check and the dash from the name.
 
-Resolved upstream (adopted at the current pin): `RefreshControl` takes a
-`formatAge` prop, `DateRangePicker`'s `weekOfLabel` substitutes a `{date}`
-placeholder, and both take a `locale` prop — the shared wrappers inject all
-three. `RefreshControl` also takes `ageWidthSamples`, which the shared wrapper
-uses to keep the label box a fixed width, and an `ageTooltip` snippet, which it
-uses for the query step list.
+Resolved upstream (adopted at the current pin):
+
+- `RefreshControl` takes `formatAge`, `ageWidthSamples`, an `ageTooltip`
+  snippet, and `size="sm"`, which page toolbars use. `DateRangePicker`'s
+  `weekOfLabel` substitutes a `{date}` placeholder, its presets sit under the
+  mode control as a lower tier, and both components take a `locale` prop. The
+  shared wrappers inject all of these.
+- `TopBar` takes `compact`, and an `active` value that names no tab means no
+  tab is current (Settings, and Friction while its tab is hidden).
+- `EmptyState` takes `align="top"`.
+- `VirtualTable` keeps measured row heights by row key, refits columns nobody
+  resized when the table width changes, and reports person-set widths through
+  `oncolumnresize`. `TableHeaderCell` takes `resizeLabel` and `fill`.
+- `Modal` takes `closeLabel`, and `CodeBlock` takes `copiedLabel`.
+- `formatCount` takes a locale; the app's `formatCount` passes the app
+  language.
+- kit-ui's theme owns the selected-state pill, popover surface and edge, card
+  edge, overlay backdrop and shadow, light text inks, and one icon line weight.
+- kit-ui draws a disabled primary button with a faint accent fill and edge at
+  full opacity, a disabled menu item in muted ink at full opacity, the current
+  Settings panel in primary ink, and an unclean `StatusDot` in orange. Its
+  theme defines `--disabled-ink`, `--disabled-edge`, and a default
+  `--accent-orange`; the app sets its own `--accent-orange`, an agent identity
+  hue, which the orange dot then uses (see the light-theme rule above).
 
 ## Legacy Exceptions
 

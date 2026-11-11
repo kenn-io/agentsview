@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -1003,4 +1004,40 @@ func TestForgeReasoningNoText(t *testing.T) {
 	require.GreaterOrEqual(t, len(msgs), 2, "want at least 2 messages")
 	asst := msgs[1]
 	assertEq(t, "HasThinking", asst.HasThinking, false)
+}
+
+func TestForgeCountsDamagedContext(t *testing.T) {
+	complete := `{"messages":[` +
+		`{"message":{"text":{"role":"User","content":"First question","timestamp":"2026-05-02T10:00:00Z"}}},` +
+		`{"message":{"text":{"role":"Assistant","content":"First answer","timestamp":"2026-05-02T10:00:01Z"}}},` +
+		`{"message":{"text":{"role":"User","content":"Second question","timestamp":"2026-05-02T10:00:02Z"}}}]}`
+	// A context cut off inside the third message still yields the first two.
+	truncated, _, found := strings.Cut(complete, "Second question")
+	require.True(t, found)
+
+	tests := []struct {
+		name          string
+		context       string
+		wantMessages  int
+		wantMalformed int
+	}{
+		{name: "complete context", context: complete, wantMessages: 3, wantMalformed: 0},
+		{name: "truncated context", context: truncated, wantMessages: 2, wantMalformed: 1},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			dbPath, seeder, db := newForgeTestDB(t)
+			defer db.Close()
+			seeder.AddConversation(t.Context(),
+				"conv-damaged", "Damaged", 1, tt.context,
+				"2026-05-02 10:00:00", "2026-05-02 10:00:02", "",
+			)
+
+			sessions, err := parseForgeAll(dbPath, "m")
+			require.NoError(t, err)
+			require.Len(t, sessions, 1)
+			assert.Len(t, sessions[0].Messages, tt.wantMessages)
+			assert.Equal(t, tt.wantMalformed, sessions[0].Session.MalformedLines)
+		})
+	}
 }

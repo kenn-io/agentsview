@@ -1,7 +1,8 @@
 <script lang="ts">
+  import { formatCount } from "../../utils/format.js";
   import { errorTelemetry } from "../../utils/error-telemetry.js";
   import type { ErrorKind } from "../../utils/telemetry.js";
-  import { Button, Chip, type ChipTone } from "@kenn-io/kit-ui";
+  import { Button, type ChipTone } from "@kenn-io/kit-ui";
   import { SvelteSet } from "svelte/reactivity";
   import type {
     DbSessionTiming,
@@ -9,7 +10,7 @@
     SessionToolSequenceCall,
     SessionToolSequencesResponse,
   } from "../../api/generated/index.js";
-  import { getLocale, m } from "../../i18n/index.js";
+  import { m } from "../../i18n/index.js";
   import { ChevronRightIcon, InfoIcon, WorkflowIcon } from "../../icons.js";
   import { type ScrollCall } from "../../stores/ui.svelte.js";
   import { TOOL_OUTCOMES, outcomeLabel, type ToolOutcome } from "../../utils/tool-outcomes.js";
@@ -73,7 +74,7 @@
   const openCalls = new SvelteSet<string>();
 
   function countArgs(count: number) {
-    return { count, countLabel: count.toLocaleString(getLocale()) };
+    return { count, countLabel: formatCount(count) };
   }
 
   function toggle(set: SvelteSet<string>, key: string) {
@@ -149,7 +150,7 @@
   }
 
   function previewNote(total: number, omitted: number) {
-    return m.tool_sequences_preview_shows({ ...countArgs(total), shownLabel: (total - omitted).toLocaleString(getLocale()) });
+    return m.tool_sequences_preview_shows({ ...countArgs(total), shownLabel: formatCount(total - omitted) });
   }
 
   // The row's link names the call so the transcript can refuse a message that no longer holds it.
@@ -183,7 +184,7 @@
         <h2 id="{uid}-title">{m.tool_sequences_title()}</h2>
         {#if data && !failed && data.total_tool_calls > 0}
           <span class="count" title={m.tool_sequences_sequence_count(countArgs(data.total_sequences))}>
-            <span aria-hidden="true">{data.total_sequences.toLocaleString(getLocale())}</span>
+            <span aria-hidden="true">{formatCount(data.total_sequences)}</span>
             <span class="kit-sr-only">{m.tool_sequences_sequence_count(countArgs(data.total_sequences))}</span>
           </span>
         {/if}
@@ -258,9 +259,15 @@
                 <span class="facts">{flags.join(" · ")}</span>
               {/if}
               <span class="where">{messageRange(sequence)}</span>
-              <Chip size="xs" tone={ENDING_TONES[sequence.ending]} title={endingExplanation(sequence.ending)} class="ending">
+              <span class="ending" title={endingExplanation(sequence.ending)}>
+                <i
+                  class="ending-dot"
+                  class:hollow={sequence.ending === "unknown"}
+                  data-kit-tone={ENDING_TONES[sequence.ending]}
+                  aria-hidden="true"
+                ></i>
                 {endingLabel(sequence.ending)}
-              </Chip>
+              </span>
             </button>
             {#if open}
               <div class="calls" id="{uid}-seq-{index}">
@@ -363,7 +370,7 @@
             {#if data.omitted_sequences > 0}
               {m.tool_sequences_showing_sequences({
                 ...countArgs(data.total_sequences),
-                shownLabel: data.sequences.length.toLocaleString(getLocale()),
+                shownLabel: formatCount(data.sequences.length),
               })}
             {/if}
             {#if data.omitted_calls > 0}
@@ -383,16 +390,25 @@
     max-height: clamp(10rem, 34vh, 24rem);
     min-width: 0;
     overflow: auto;
-    padding: 10px var(--space-5) var(--space-5);
+    /* The panel sits on the transcript's shared reading column, under
+       SignalPanel; its fill and bottom rule span the column, not the pane. */
+    margin-inline: max(12px, calc((100% - var(--reading-column)) / 2));
+    padding: 10px 12px var(--space-5);
     background: var(--bg-inset);
     border-bottom: 1px solid var(--border-default);
     color: var(--text-primary);
     font-size: var(--font-size-sm);
   }
 
+  /* Dark: the same raised band as SignalPanel, which this panel continues. */
+  :global(:root.dark) .tool-sequences-panel:not(.embedded) {
+    background: color-mix(in srgb, var(--text-primary) 4%, var(--bg-surface));
+  }
+
   .tool-sequences-panel.embedded {
     max-height: none;
     overflow: visible;
+    margin-inline: 0;
     padding: 0;
     background: none;
     border-bottom: 0;
@@ -453,6 +469,35 @@
     display: inline-flex;
     align-items: center;
     gap: var(--space-2);
+  }
+
+  /* A sequence's ending uses the same status idiom as the legend and the
+     transcript's tool status: a small dot in the status tone (a hollow
+     ring for unknown) beside a sentence-case label, with no filled pill. */
+  .ending {
+    display: inline-flex;
+    flex-shrink: 0;
+    align-items: center;
+    gap: var(--space-2);
+    color: var(--text-secondary);
+    font-size: var(--font-size-xs);
+    white-space: nowrap;
+  }
+
+  .ending-dot {
+    display: inline-block;
+    flex-shrink: 0;
+    width: 6px;
+    height: 6px;
+    border-radius: 50%;
+    background: var(--kit-tone, var(--text-muted));
+  }
+
+  .ending-dot.hollow {
+    width: 7px;
+    height: 7px;
+    border: 1.5px solid var(--text-muted);
+    background: transparent;
   }
 
   .box {
@@ -733,7 +778,7 @@
       margin-left: 0;
     }
 
-    .sequence-row :global(.ending) {
+    .sequence-row .ending {
       margin-left: auto;
     }
 

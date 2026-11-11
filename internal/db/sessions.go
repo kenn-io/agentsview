@@ -3154,7 +3154,11 @@ type IncrementalInfo struct {
 	// PendingUsageOrdinal identifies the last committed assistant message in
 	// the current turn whose token usage has not yet been persisted. Codex
 	// incremental tails use it to apply the token_count that follows a late
-	// tool result without reparsing the committed prefix.
+	// tool result without reparsing the committed prefix. System rows are
+	// never targets. Codex reasoning rows (thinking without tool use) are a
+	// target only while newest, a state an appended row can end, so any
+	// reasoning row after a candidate leaves this nil and an unattached tail
+	// falls back to a full parse, which applies the parser's rule.
 	PendingUsageOrdinal *int
 }
 
@@ -3271,7 +3275,18 @@ func (db *DB) GetSessionForIncremental(ctx context.Context,
 			 FROM messages m
 			 WHERE m.session_id = s.id
 			   AND m.role = 'assistant'
+			   AND m.is_system = 0
+			   AND NOT (m.has_thinking = 1 AND m.has_tool_use = 0)
 			   AND (m.token_usage IS NULL OR length(m.token_usage) = 0)
+			   AND NOT EXISTS (
+			       SELECT 1
+			       FROM messages r
+			       WHERE r.session_id = s.id
+			         AND r.role = 'assistant'
+			         AND r.is_system = 0
+			         AND r.has_thinking = 1 AND r.has_tool_use = 0
+			         AND r.ordinal > m.ordinal
+			   )
 			   AND m.ordinal > COALESCE((
 			       SELECT MAX(u.ordinal)
 			       FROM messages u
@@ -7023,6 +7038,7 @@ type SessionMirrorSnapshot struct {
 	Findings            []SecretFinding
 	Pins                []PinnedMessage
 	PlanUsage           *SessionPlanUsage // nil when the session has none
+	ImageText           []ImageTextRow
 	UsageFingerprint    string
 	ToolCallFingerprint string
 }
@@ -7070,6 +7086,9 @@ func (db *DB) loadSessionMirrorSnapshot(ctx context.Context, id string, afterSes
 		return nil, err
 	}
 	if result.PlanUsage, err = sessionPlanUsageWithQuerier(ctx, tx, id); err != nil {
+		return nil, err
+	}
+	if result.ImageText, err = sessionImageTextRows(ctx, tx, []string{id}); err != nil {
 		return nil, err
 	}
 	usage := make(map[string]string, 1)

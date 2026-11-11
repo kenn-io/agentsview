@@ -1,10 +1,14 @@
 package db
 
 import (
+	"bytes"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strconv"
 	"strings"
 	"testing"
@@ -13,8 +17,73 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"go.kenn.io/agentsview/internal/assets"
 	"go.kenn.io/agentsview/internal/config"
 )
+
+func TestReadRetainedImageLimit(t *testing.T) {
+	t.Run("inline", func(t *testing.T) {
+		body := bytes.Repeat([]byte("x"), 1024*1024)
+		uri := "data:image/png;base64," + base64.StdEncoding.EncodeToString(body)
+		raw, err := json.Marshal(uri)
+		require.NoError(t, err)
+		content := fmt.Sprintf(`[{"type":"input_image","image_url":%s}]`, raw)
+		_, err = ReadRetainedImage(content, 0, "", 32)
+		require.ErrorContains(t, err, "exceeds 32 bytes")
+		require.ErrorIs(t, err, ErrImageTooLarge)
+		got, err := ReadRetainedImage(content, 0, "", int64(len(body)))
+		require.NoError(t, err)
+		require.Equal(t, body, got)
+		encoded := base64.StdEncoding.EncodeToString(bytes.Repeat([]byte("x"), 8<<20))
+		invalid := `[{"type":"input_image","image_url":"data:image/png;base64,` + encoded[:len(encoded)-4] + `%%%"},{"type":"input_image","image_url":"data:image/png;base64,AQID"}]`
+		got, err = ReadRetainedImage(invalid, 0, "", 32)
+		require.NoError(t, err)
+		require.Equal(t, []byte{1, 2, 3}, got)
+	})
+	t.Run("asset", func(t *testing.T) {
+		body := bytes.Repeat([]byte("x"), 1024*1024)
+		dir := t.TempDir()
+		ref, _, err := assets.Put(dir, "image/png", body)
+		require.NoError(t, err)
+		asset := fmt.Sprintf(`[{"type":"agentsview_image","version":1,"image_ref":%q,"media_type":"image/png","byte_size":%d}]`, ref, len(body))
+		_, err = ReadRetainedImage(asset, 0, dir, 32)
+		require.ErrorContains(t, err, "exceeds 32 bytes")
+		require.ErrorIs(t, err, ErrImageTooLarge)
+		smallRef, _, err := assets.Put(dir, "image/png", []byte("x"))
+		require.NoError(t, err)
+		corrupt := fmt.Sprintf(`[{"type":"agentsview_image","version":1,"image_ref":%q,"media_type":"image/png","byte_size":1}]`, smallRef)
+		require.NoError(t, os.Truncate(filepath.Join(dir, strings.TrimPrefix(smallRef, "asset://")), int64(len(body))))
+		_, err = ReadRetainedImage(corrupt, 0, dir, 32)
+		require.ErrorContains(t, err, "exceeds 32 bytes")
+		require.NotErrorIs(t, err, ErrImageTooLarge)
+	})
+	t.Run("oversized_buffer", func(t *testing.T) {
+		if os.Getenv("AGENTSVIEW_TEST_IMAGE_BUFFER") != "1" {
+			cmd := exec.CommandContext(t.Context(), os.Args[0], "-test.run=^TestReadRetainedImageLimit/oversized_buffer$")
+			cmd.Env = append(os.Environ(), "AGENTSVIEW_TEST_IMAGE_BUFFER=1")
+			output, err := cmd.CombinedOutput()
+			require.NoError(t, err, "%s", output)
+			return
+		}
+		encoded := base64.StdEncoding.EncodeToString(bytes.Repeat([]byte("x"), 8<<20))
+		content := fmt.Sprintf(`[{"type":"input_image","image_url":"data:image/png;base64,%s"},{"type":"input_image","image_url":"data:image/png;base64,%%%%%%"},{"type":"input_image","image_url":"data:image/png;base64,AQID"}]`, encoded)
+		allocated := func(index int) (uint64, []byte, error) {
+			t.Helper()
+			runtime.GC()
+			var before, after runtime.MemStats
+			runtime.ReadMemStats(&before)
+			body, err := ReadRetainedImage(content, index, "", 32)
+			runtime.ReadMemStats(&after)
+			return after.TotalAlloc - before.TotalAlloc, body, err
+		}
+		baseline, body, err := allocated(1)
+		require.NoError(t, err)
+		require.Equal(t, []byte{1, 2, 3}, body)
+		oversized, _, err := allocated(0)
+		require.ErrorContains(t, err, "exceeds 32 bytes")
+		require.LessOrEqual(t, oversized, baseline+(1<<20), "the oversized body must not be buffered")
+	})
+}
 
 func testInlineImageContent() string {
 	return `[{"type":"text","text":"before"},{"type":"input_image","image_url":"data:image/png;base64,AAEC"},{"type":"text","text":"after"}]`

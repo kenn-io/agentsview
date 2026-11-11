@@ -130,9 +130,6 @@ func (p *qClawProvider) parseSession(
 			content := msg.Get("content")
 			text, thinkingText, dialogueText, hasThinking, hasToolUse, tcs, trs := ExtractTextContent(ctx, content)
 			text = strings.TrimSpace(text)
-			if text == "" && len(tcs) == 0 && len(trs) == 0 {
-				continue
-			}
 
 			pm := ParsedMessage{
 				Ordinal:            ordinal,
@@ -149,6 +146,12 @@ func (p *qClawProvider) parseSession(
 				tokenPresenceKnown: true,
 			}
 			applyQClawAssistantUsage(&pm, msg)
+			if text == "" && len(tcs) == 0 && len(trs) == 0 {
+				var ok bool
+				if pm, ok = usageOnlyMessage(pm); !ok {
+					continue
+				}
+			}
 			messages = append(messages, pm)
 			ordinal++
 
@@ -208,6 +211,7 @@ func (p *qClawProvider) parseSession(
 	}
 
 	sess := &ParsedSession{
+		MalformedLines:   lr.SkippedLines(),
 		ID:               fullID,
 		Project:          project,
 		Machine:          machine,

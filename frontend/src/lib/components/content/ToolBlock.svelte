@@ -44,7 +44,8 @@
   }
 
   let { sessionId = "", ordinal = 0, content, label, toolCall, searchScope, durationLabel,
-    isSlow = false, isRunning = false, inGroup = false }: Props = $props();
+    isSlow = false, isRunning = false,
+    inGroup = false }: Props = $props();
   let userCollapsed = $state(true);
   let userOutputCollapsed = $state(true);
   let userHistoryCollapsed = $state(true);
@@ -119,6 +120,12 @@
     return typeof prompt === "string" && prompt.trim() ? prompt : m.tool_block_image_alt();
   });
   let structuredSummary = $derived(toolCall ? summarizeToolCall(toolCall) : null);
+  // Split a "path (+N -M)" edit summary so the counts can take diff colors;
+  // the rendered text stays identical.
+  let summaryDiffStat = $derived.by(() => {
+    const match = structuredSummary?.match(/^(.*) \((\+\d+)(?: (-\d+))?\)$/);
+    return match ? { path: match[1], add: match[2], del: match[3] ?? null } : null;
+  });
   let structuredSummaryTitle = $derived(toolCall ? summarizeToolCallPath(toolCall) : null);
   const outputModeOptions = $derived<SegmentedControlOption[]>([
     { value: "raw", label: m.tool_block_raw() },
@@ -153,6 +160,14 @@
     ? m.tool_block_show_all_lines({ count: displayContent.totalLines ?? 0 }) : "");
   let isDiff = $derived(resolvedInput.text.startsWith("--- a/") || resolvedInput.text.startsWith("@@"));
   let diffLines = $derived(isDiff ? resolvedInput.text.split("\n") : []);
+  // The file fields and a leading @@ hunk header share one muted strip.
+  // While in-session search runs, the diff keeps its exact source lines so
+  // match offsets stay true, as meta display values do.
+  let mergeHunk = $derived(
+    !!metaTags && !taskPrompt && !!fallbackContent && !sourceTextForSearch
+      && (diffLines[0]?.startsWith("@@") ?? false),
+  );
+  let bodyDiffLines = $derived(mergeHunk ? diffLines.slice(1) : diffLines);
 
   $effect(() => {
     const source = displayContent.text;
@@ -160,7 +175,7 @@
     commandHtml = null;
     if (!highlight) return;
     let cancelled = false;
-    void highlightToHtml(source, "bash").then((html) => {
+    void highlightToHtml(source, "bash", { lightTheme: true }).then((html) => {
       if (!cancelled) commandHtml = html;
     }).catch(() => {
       // Keep the plain command if the optional syntax highlighter fails.
@@ -202,12 +217,12 @@
         contentOverrideSeq = inSessionSearch.navigationRevision;
       }
     }}>
-      <span class="tool-chevron" class:open={!collapsed}><ChevronRightIcon size="10" strokeWidth="2.4" aria-hidden="true" /></span>
+      <span class="tool-chevron" class:open={!collapsed}><ChevronRightIcon size="12" strokeWidth="2.2" aria-hidden="true" /></span>
       {#if label}<span class="tool-label">{label}</span>{/if}
       <SearchMatchCount count={matchCount} />
       {#if structuredSummary}
         <span class="tool-preview" title={structuredSummaryTitle ?? undefined}>
-          {structuredSummary}{#if structuredSummaryTitle}<span class="kit-sr-only">{structuredSummaryTitle}</span>{/if}
+          {#if summaryDiffStat}<span class="summary-path">{summaryDiffStat.path}</span> (<span class="stat-add">{summaryDiffStat.add}</span>{#if summaryDiffStat.del}{" "}<span class="stat-del">{summaryDiffStat.del}</span>{/if}){:else}{structuredSummary}{/if}{#if structuredSummaryTitle}<span class="kit-sr-only">{structuredSummaryTitle}</span>{/if}
         </span>
       {:else if collapsed && legacyPreview}<span class="tool-preview">{legacyPreview}</span>{/if}
       {#if durationLabel}<span class="tool-duration" class:slow={isSlow} class:running={isRunning}>{durationLabel}</span>{/if}
@@ -221,19 +236,19 @@
   {#if showImages}<ToolResultImages sources={imageSources} alt={imageAlt} />{/if}
   {#if !collapsed}
     {#if metaTags}
-      <div class="tool-meta">
+      <div class="tool-meta" class:diff-strip={isDiff && !!fallbackContent && !taskPrompt}>
         {#each metaTags as { label: metaLabel, value, displayValue }, tagIndex}
           <span class="meta-tag"><span class="meta-label">{metaLabel}:</span>
             {#if displayValue && !sourceTextForSearch}<span class="meta-value" title={value}>{displayValue}<span class="kit-sr-only">{value}</span></span>
             {:else}<span {@attach searchBlock(metaKeys[tagIndex])}>{value}</span>{/if}
           </span>
-        {/each}
+        {/each}{#if mergeHunk}<span class="diff-strip-hunk">{diffLines[0]}</span>{/if}
       </div>
     {/if}
     {#if taskPrompt}
       <pre class="tool-content" {@attach searchBlock(inputKey)}>{taskPrompt}</pre>
     {:else if fallbackContent && isDiff}
-      <pre class="diff-view" {@attach searchBlock(inputKey)}>{#each diffLines as line, index}<span class="diff-line {line.startsWith('@@') ? 'diff-hunk' : line.startsWith('+') ? 'diff-add' : line.startsWith('-') ? 'diff-del' : 'diff-ctx'}">{line}</span>{index < diffLines.length - 1 ? "\n" : ""}{/each}</pre>
+      <pre class="diff-view" class:after-strip={!!metaTags} {@attach searchBlock(inputKey)}>{#each bodyDiffLines as line, index}<span class="diff-line {line.startsWith('@@') ? 'diff-hunk' : line.startsWith('+') ? 'diff-add' : line.startsWith('-') ? 'diff-del' : 'diff-ctx'}">{line}</span>{index < bodyDiffLines.length - 1 ? "\n" : ""}{/each}</pre>
     {:else if displayContent.text}
       {#if isCommand}
         <pre class="tool-content tool-command" {@attach searchBlock(inputKey)}><code>{#if commandHtml !== null}{@html commandHtml}{:else}{displayContent.text}{/if}</code></pre>
@@ -249,7 +264,7 @@
       {/if}
     {/if}
     {#if toolCall?.result_content}
-      <div class="output-header-row">
+      <div class="output-header-row" class:with-hint={!outputCollapsed && !!sourceTextForSearch}>
         <button class="output-header" aria-expanded={!outputCollapsed} onclick={(e) => {
           e.stopPropagation();
           const sel = window.getSelection();
@@ -257,13 +272,13 @@
           userOutputCollapsed = !outputCollapsed;
           outputOverrideSeq = inSessionSearch.navigationRevision;
         }}>
-          <span class="tool-chevron" class:open={!outputCollapsed}><ChevronRightIcon size="10" strokeWidth="2.4" aria-hidden="true" /></span>
+          <span class="tool-chevron" class:open={!outputCollapsed}><ChevronRightIcon size="12" strokeWidth="2.2" aria-hidden="true" /></span>
           <span class="output-label">{m.tool_block_output()}</span>
           <SearchMatchCount searchKey={outputKey} />
           {#if outputCollapsed && outputPreviewLine}<span class="tool-preview">{outputPreviewLine}</span>{/if}
         </button>
         {#if !outputCollapsed && sourceTextForSearch}
-          <span class="search-output-hint">{m.session_find_raw_output()}</span>
+          <span class="search-output-hint" title={m.session_find_raw_output()}>{m.session_find_raw_output()}</span>
         {:else if !outputCollapsed}
           <SegmentedControl class="output-mode" options={outputModeOptions} value={outputMode}
             ariaLabel={m.tool_block_output_mode()} onchange={(next) => (outputMode = next as "raw" | "formatted")} />
@@ -293,7 +308,7 @@
         userHistoryCollapsed = !historyCollapsed;
         historyOverrideSeq = inSessionSearch.navigationRevision;
       }}>
-        <span class="tool-chevron" class:open={!historyCollapsed}><ChevronRightIcon size="10" strokeWidth="2.4" aria-hidden="true" /></span>
+        <span class="tool-chevron" class:open={!historyCollapsed}><ChevronRightIcon size="12" strokeWidth="2.2" aria-hidden="true" /></span>
         <span class="output-label">{m.tool_block_history()}</span>
         <SearchMatchCount count={historyCount} />
         {#if historyCollapsed && historyPreviewLine}<span class="tool-preview">{historyPreviewLine}</span>{/if}
@@ -319,7 +334,13 @@
 </div>
 
 <style>
-  .search-output-hint { color: var(--text-muted); font-size: 10px; margin-inline-start: auto; }
+  /* The hint gives way first in a narrow pane, so the output label,
+     match count, and copy button keep their room; its title keeps the
+     full text. */
+  .search-output-hint {
+    color: var(--text-muted); font-size: 11px; white-space: nowrap; flex: 0 100 auto; min-width: 0;
+    overflow: hidden; text-overflow: ellipsis; margin-inline: auto 8px;
+  }
   .tool-block {
     border-left: var(--role-tool-bar-width) var(--role-tool-bar-style) var(--role-tool-accent);
     background: var(--tool-bg);
@@ -329,8 +350,12 @@
   .tool-block.in-group { margin: 0; border-left: none; border-radius: 0; }
   .tool-header-row, .output-header-row { display: flex; align-items: center; min-width: 0; }
   .output-header-row { border-top: 1px solid var(--border-muted); }
+  /* Tool and parallel groups set --tool-row-pad-block and
+     --tool-row-copy-trim so a run of calls packs into 24px rows: the
+     hover-only copy button is 26px tall, so the trim keeps it from
+     setting the row height. */
   .tool-header {
-    display: flex; align-items: center; gap: 6px; padding: 6px 10px; width: 100%;
+    display: flex; align-items: center; gap: 8px; padding: var(--tool-row-pad-block, 4px) 10px; width: 100%;
     text-align: left; font-size: 12px; color: var(--text-secondary); min-width: 0;
     border-radius: 0 var(--radius-sm) var(--radius-sm) 0; transition: background 0.1s;
     user-select: text; flex: 1 1 auto;
@@ -339,17 +364,27 @@
   .tool-chevron { display: inline-flex; align-items: center; transition: transform 0.15s; flex-shrink: 0; color: var(--text-muted); }
   .tool-chevron.open { transform: rotate(90deg); }
   .tool-label { font-family: var(--font-mono); font-weight: 500; font-size: 11px; color: var(--role-tool-ink); white-space: nowrap; flex-shrink: 0; }
-  .tool-preview { font-family: var(--font-mono); font-size: 12px; color: var(--text-muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; }
+  /* Light theme: the shared tool ink is an olive near 4.2:1 on the tool
+     wash; a deeper amber keeps the name warm and above 4.5:1. */
+  :global(:root:not(.dark)) .tool-label { color: color-mix(in srgb, var(--role-tool-accent) 65%, var(--text-primary)); }
+  /* Dark: at medium weight the shared ink reads as beige, so names take a
+     larger share of the tool amber, still below the full accent. */
+  :global(:root.dark) .tool-label { color: color-mix(in srgb, var(--role-tool-accent) 60%, var(--text-secondary)); }
+  .summary-path { color: var(--text-primary); }
+  .stat-add { color: color-mix(in srgb, var(--accent-green) 75%, var(--text-primary)); }
+  .stat-del { color: color-mix(in srgb, var(--accent-red) 75%, var(--text-primary)); }
+  .tool-preview { font-family: var(--font-mono); font-size: 12px; color: var(--text-secondary); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; }
   .tool-duration {
-    font-family: var(--font-mono); font-size: 10px; color: var(--text-muted); padding: 2px 7px;
-    background: color-mix(in srgb, var(--text-primary) 4%, transparent);
-    border: 1px solid color-mix(in srgb, var(--text-primary) 4%, transparent);
-    border-radius: var(--radius-sm); flex-shrink: 0; margin-left: auto;
+    /* Plain text by default; only slow and running durations get a fill. */
+    font-family: var(--font-mono); font-size: 11px; color: var(--text-muted); padding: 0 6px;
+    font-variant-numeric: tabular-nums; border: 1px solid transparent;
+    background: transparent;
+    border-radius: var(--radius-sm); flex-shrink: 0; margin-left: auto; margin-right: 6px; min-width: 56px; text-align: right;
   }
   .tool-duration.slow { color: var(--slow-fg); background: var(--slow-bg); border-color: var(--slow-ring); }
   .tool-duration.running { color: var(--running-fg); background: var(--running-bg); border-color: var(--running-ring); animation: duration-pulse 1.6s ease-in-out infinite; }
-  .tool-meta { display: flex; flex-wrap: wrap; gap: 6px; padding: 6px 14px; border-top: 1px solid var(--border-muted); }
-  .meta-tag { font-family: var(--font-mono); font-size: 11px; color: var(--text-muted); background: var(--bg-inset); padding: 2px 6px; border-radius: var(--radius-sm); }
+  .tool-meta { display: flex; flex-wrap: wrap; gap: var(--space-3) var(--space-5); padding: 2px 14px; border-top: 1px solid color-mix(in srgb, var(--border-muted) 55%, transparent); }
+  .meta-tag { font-family: var(--font-mono); font-size: 11px; color: var(--text-muted); padding: 1px 0; }
   .meta-label { color: var(--text-secondary); font-weight: 500; }
   .show-more-btn {
     display: block; width: 100%; padding: 4px 14px; font-family: var(--font-mono); font-size: 11px;
@@ -358,12 +393,25 @@
   .show-more-btn:hover { background: var(--bg-surface-hover); }
   .tool-content { padding: 8px 14px 10px; font-family: var(--font-mono); font-size: 12px; color: var(--text-secondary); line-height: 1.5; overflow-x: auto; border-top: 1px solid var(--border-muted); }
   .tool-command { background: var(--code-bg); color: var(--code-text); }
+  /* Dark keeps the dark code band with catppuccin token colors. Light uses
+     a light surface with github-light token colors, which hold 4.5:1 on
+     white, instead of a near-black band inside a pale tool row. */
   .tool-command code { font-family: inherit; }
+  .tool-command code :global(span) { font-style: var(--shiki-dark-font-style, inherit); }
+  :global(:root:not(.dark)) .tool-command { background: var(--bg-surface); color: var(--text-primary); }
+  :global(:root:not(.dark)) .tool-command code :global(span) {
+    color: var(--shiki-light, inherit) !important;
+    font-style: var(--shiki-light-font-style, inherit);
+  }
   .output-header {
     display: flex; align-items: center; gap: 6px; padding: 5px 10px; width: 100%; text-align: left;
     font-size: 12px; color: var(--text-secondary); min-width: 0; transition: background 0.1s; user-select: text; flex: 1 1 auto;
   }
   :global(.tool-block .output-mode) { flex: 0 0 auto; margin-left: auto; }
+  /* Beside the hint the header starts from its content's width, not the
+     row's, so in a wide pane the hint keeps its whole text and only a
+     narrow pane makes it give way. */
+  .output-header-row.with-hint .output-header { width: auto; }
   .formatted-output :global(pre) { white-space: pre-wrap; }
   .tool-preview, .meta-value { position: relative; }
   :global(.tool-preview .kit-sr-only), :global(.meta-tag .kit-sr-only) {
@@ -373,6 +421,7 @@
   .formatted-output :global(p) { overflow-wrap: anywhere; }
   .output-header:hover { background: var(--bg-surface-hover); color: var(--text-primary); }
   :global(.tool-copy.kit-copy-btn) { flex: 0 0 auto; margin-right: 8px; }
+  .tool-header-row > :global(.tool-copy.kit-copy-btn) { margin-block: var(--tool-row-copy-trim, 0); }
   .tool-block:hover :global(.tool-copy.kit-copy-btn),
   .tool-header-row:focus-within :global(.tool-copy.kit-copy-btn),
   .output-header-row:focus-within :global(.tool-copy.kit-copy-btn) { opacity: 1; }
@@ -383,17 +432,62 @@
   }
   .history-header:hover { background: var(--bg-surface-hover); color: var(--text-primary); }
   .output-label { font-family: var(--font-mono); font-weight: 500; font-size: 11px; color: var(--text-secondary); white-space: nowrap; flex-shrink: 0; }
-  .output-content { max-height: 300px; overflow-y: auto; }
+  /* A match scrolled into view keeps a line of air above it, so the first
+     output line is not cut by the block's top edge. */
+  .output-content { max-height: 300px; overflow-y: auto; scroll-padding-block: 8px; }
   .result-history, .result-event + .result-event { border-top: 1px solid var(--border-muted); }
   .result-event-meta { display: flex; flex-wrap: wrap; gap: 6px; padding: 6px 14px 0; }
   .history-content { border-top: 0; margin-top: 0; }
   .diff-view {
-    font-family: var(--font-mono); font-size: 12px; line-height: 1.5; overflow-x: auto;
+    font-family: var(--font-mono); font-size: 12.5px; line-height: 1.55; overflow-x: auto;
     border-top: 1px solid var(--border-muted); padding: 4px 0; max-height: 400px; overflow-y: auto;
   }
+  /* The file fields and the first hunk header form one muted strip above
+     the code, instead of a field row and a separate blue hunk band. */
+  .tool-meta.diff-strip {
+    align-items: baseline; padding: 3px 14px;
+    background: color-mix(in srgb, var(--text-primary) 4%, transparent);
+    border-top-color: var(--border-muted);
+  }
+  /* A long function context wraps inside the strip instead of running
+     past the block's clipped edge. */
+  .diff-strip-hunk {
+    font-family: var(--font-mono); font-size: 11px; color: var(--text-muted);
+    margin-inline-start: auto; min-width: 0; max-width: 100%; overflow-wrap: anywhere;
+    font-variant-numeric: tabular-nums;
+  }
+  .diff-view.after-strip { border-top: none; }
   .diff-line { display: inline-block; min-width: 100%; padding: 0 14px; white-space: pre; }
-  .diff-hunk { color: var(--accent-blue, #58a6ff); background: color-mix(in srgb, var(--accent-blue, #58a6ff) 8%, transparent); padding: 2px 14px; margin: 2px 0; }
-  .diff-add { color: var(--accent-green, #3fb950); background: color-mix(in srgb, var(--accent-green, #3fb950) 10%, transparent); }
-  .diff-del { color: var(--accent-red, #f85149); background: color-mix(in srgb, var(--accent-red, #f85149) 10%, transparent); }
+  /* Later hunk headers use the same muted strip. */
+  .diff-hunk {
+    color: var(--text-muted); background: color-mix(in srgb, var(--text-primary) 4%, transparent);
+    padding: 2px 14px; margin: 2px 0; font-size: 11px;
+  }
+  .diff-add {
+    color: color-mix(in srgb, var(--accent-green, #3fb950) 70%, var(--text-primary));
+    background: color-mix(in srgb, var(--accent-green, #3fb950) 9%, transparent);
+    box-shadow: inset 2px 0 0 color-mix(in srgb, var(--accent-green, #3fb950) 60%, transparent);
+  }
+  .diff-del {
+    color: color-mix(in srgb, var(--accent-red, #f85149) 70%, var(--text-primary));
+    background: color-mix(in srgb, var(--accent-red, #f85149) 8%, transparent);
+    box-shadow: inset 2px 0 0 color-mix(in srgb, var(--accent-red, #f85149) 60%, transparent);
+  }
+  /* Dark: a quiet wash keeps long runs of changes from glowing; the solid
+     edge carries the add/remove signal. */
+  :global(:root.dark) .diff-add {
+    background: color-mix(in srgb, var(--accent-green, #3fb950) 8%, transparent);
+    box-shadow: inset 2px 0 0 color-mix(in srgb, var(--accent-green, #3fb950) 75%, transparent);
+  }
+  :global(:root.dark) .diff-del {
+    background: color-mix(in srgb, var(--accent-red, #f85149) 8%, transparent);
+    box-shadow: inset 2px 0 0 color-mix(in srgb, var(--accent-red, #f85149) 75%, transparent);
+  }
+  /* The add/remove edge is a straight bar. */
+  .diff-add, .diff-del,
+  :global(:root.dark) .diff-add, :global(:root.dark) .diff-del {
+    border-start-start-radius: 0;
+    border-end-start-radius: 0;
+  }
   .diff-ctx { color: var(--text-muted); }
 </style>

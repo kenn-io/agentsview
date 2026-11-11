@@ -39,12 +39,22 @@ function contrastRatio(
   return (lighter + 0.05) / (darker + 0.05);
 }
 
+/** Parses a computed color: rgb()/rgba(), or the color(srgb r g b) form
+ * Chromium reports for color-mix() results, with channels in 0..1. */
 function parseRgb(value: string): [number, number, number] {
-  const match = value.match(/rgba?\((\d+),\s*(\d+),\s*(\d+)/);
-  if (!match) {
-    throw new Error(`Expected rgb() color, got ${value}`);
+  const rgb = value.match(/rgba?\((\d+),\s*(\d+),\s*(\d+)/);
+  if (rgb) {
+    return [Number(rgb[1]), Number(rgb[2]), Number(rgb[3])];
   }
-  return [Number(match[1]), Number(match[2]), Number(match[3])];
+  const srgb = value.match(/color\(srgb\s+([\d.]+)\s+([\d.]+)\s+([\d.]+)/);
+  if (srgb) {
+    return [
+      Math.round(Number(srgb[1]) * 255),
+      Math.round(Number(srgb[2]) * 255),
+      Math.round(Number(srgb[3]) * 255),
+    ];
+  }
+  throw new Error(`Expected rgb() or color(srgb) color, got ${value}`);
 }
 
 async function elementColors(locator: Locator): Promise<{
@@ -172,7 +182,7 @@ test.describe("Appearance accessibility", () => {
     );
 
     await page.goto("/quality");
-    await expect(page.getByRole("heading", { name: "Quality Patterns" })).toBeVisible();
+    await expect(page.getByRole("heading", { name: "Quality patterns" })).toBeVisible();
     await page.locator(".driver-row").first().click();
     await expect(page.locator(".evidence-panel-live")).toBeVisible();
 
@@ -181,7 +191,7 @@ test.describe("Appearance accessibility", () => {
         getComputedStyle(document.querySelector(selector)!).display;
       return {
         recommendation: display(".recommendation-content"),
-        summary: display(".summary-card-content"),
+        summary: display(".summary-grid .stat-card"),
         pattern: display(".pattern-card-content"),
         evidence: display(".evidence-panel-live"),
       };
@@ -279,9 +289,11 @@ test.describe("Appearance accessibility", () => {
 
     // Measure a real kit-ui primary/solid Button (the Import modal's
     // confirm action) rather than a synthetic element, so a kit-ui Button
-    // styling regression fails this test. Computed color/background still
-    // reflect the tone tokens while the button is disabled.
-    await page.locator(".import-btn").click();
+    // styling regression fails this test. The button is disabled here, so
+    // this measures the disabled-primary treatment: accent-tinted ink on a
+    // faint accent wash must stay readable.
+    await page.getByRole("button", { name: "More actions" }).click();
+    await page.getByRole("menuitem", { name: "Import conversations" }).click();
     const solidButton = page.locator(".kit-button--solid.kit-button--info");
     await expect(solidButton).toBeVisible();
     expectReadableContrast(await elementColors(solidButton));
@@ -350,7 +362,12 @@ test.describe("Appearance accessibility", () => {
       }, mode);
       const label = JSON.stringify(mode);
       expect(await resolvedColor(user, "border-left-color"), label).toEqual([0, 114, 178]);
-      expect(await resolvedColor(assistant, "border-left-color"), label).toEqual([213, 94, 0]);
+      // Reading the rail back through a canvas can round a channel by one,
+      // so compare each channel within 1.
+      const assistantRail = await resolvedColor(assistant, "border-left-color");
+      [213, 94, 0].forEach((channel, index) => {
+        expect(Math.abs(assistantRail[index]! - channel), label).toBeLessThanOrEqual(1);
+      });
       await expect(user).toHaveCSS("border-left-style", "solid");
       await expect(assistant).toHaveCSS("border-left-style", "double");
       for (const message of [user, assistant]) {
@@ -386,6 +403,7 @@ test.describe("Appearance accessibility", () => {
     await page.goto("/sessions/test-session-small-5");
     const rail = page.locator(".parallel-group").first();
     await expect(rail).toBeVisible();
+    // By default one solid neutral rule encloses the group.
     await expect(rail).toHaveCSS("border-left-style", "solid");
     await expect(rail).toHaveCSS("border-left-width", "2px");
 
@@ -583,6 +601,34 @@ test("Zoom menus keep the interface scale and stay aligned with their trigger", 
       Math.abs(panel.y + panel.height - button.y),
     ),
   ).toBeLessThanOrEqual(4);
+});
+
+test("transcript header menus open beside their triggers at 120% zoom", async ({ page }) => {
+  await page.addInitScript(() => localStorage.setItem("agentsview-zoom-level", "120"));
+  const sp = new SessionsPage(page);
+  await sp.goto();
+  await sp.selectFirstSession();
+  await expect.poll(() => readZoom(page)).toBe("1.2");
+
+  for (const trigger of [
+    page.locator(".view-trigger"),
+    page.getByRole("button", { name: "More actions" }),
+  ]) {
+    await trigger.click();
+    const menu = page.getByRole("menu");
+    await expect(menu).toBeVisible();
+    const button = (await trigger.boundingBox())!;
+    const box = (await menu.boundingBox())!;
+    const viewport = page.viewportSize()!;
+    // The menu opens just below its trigger, right-aligned to it, and
+    // stays inside the window.
+    expect(Math.abs(box.y - (button.y + button.height))).toBeLessThanOrEqual(8);
+    expect(Math.abs(box.x + box.width - (button.x + button.width))).toBeLessThanOrEqual(8);
+    expect(box.x).toBeGreaterThanOrEqual(0);
+    expect(box.x + box.width).toBeLessThanOrEqual(viewport.width);
+    await trigger.click();
+    await expect(menu).toHaveCount(0);
+  }
 });
 
 test("configured zoom is a default and browser choices stay independent", async ({

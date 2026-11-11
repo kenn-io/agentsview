@@ -11,12 +11,13 @@ to handle a data-version change.
 Use non-destructive schema migrations such as `ALTER TABLE` and `UPDATE`.
 
 Dashboard analytics, report, and search scans, change stream reads, and other
-multi-second scans over message or usage rows, take the lane; the list and sidebar reads every page
-loads (session list, stats, project list) and reads scoped to one session stay
-outside. The lane uses `acquireBulkRead`, using at most `readerMaxOpenConns - 1`
-reader connections so quick reads always get one. Each holder uses one reader
-connection at a time. Validate input before acquiring a permit. Release it
-before waiting for another bulk reader or doing host git/GitHub lookups.
+multi-second scans over message or usage rows, take the lane; the list and
+sidebar reads every page loads (session list, stats, project list) and reads
+scoped to one session stay outside. The lane uses `acquireBulkRead`, using at
+most `readerMaxOpenConns - 1` reader connections so quick reads always get one.
+Each holder uses one reader connection at a time. Validate input before
+acquiring a permit. Release it before waiting for another bulk reader or doing
+host git/GitHub lookups.
 
 The archive writer and its serving reader pool cache up to 64 prepared SQL
 statements per connection. This avoids compiling repeated import, project
@@ -27,10 +28,10 @@ connections.
 
 Reconciliation spools, Codex staging databases, and temporary parser indexes for
 discovery and reconciliation also cache up to 64 prepared statements per
-connection. Parser indexes use one connection. Writable vector indexes use the
-same limit with the cgo driver; the modernc driver keeps its existing
-configuration. These caches close with their connections and do not change the
-stored data.
+connection. Parser indexes use one connection. Writable vector indexes and
+raw-sync checkpoints use the same limit with the cgo driver; the modernc driver
+keeps its existing configuration. Checkpoint caching applies to writable opens.
+These caches close with their connections and do not change the stored data.
 
 The startup worker snapshots freshness for digest-capable providers while it
 holds the archive write lock, before the daemon opens the archive; later passes
@@ -184,9 +185,8 @@ as complete for draining attached archive sources.
 The `raw_archive_*` tables record retained captures, root identities, accepted
 sources and deletion evidence. Seed import and restore permanently enable
 archive-only mode, which disables source sync and publication. These archives
-store `1 << 20` plus their parser version in `PRAGMA user_version`, so older
-builds refuse them. This build decodes that range and preserves pending
-rebuilds; ordinary archives keep their parser version unchanged.
+store `1 << 20` plus their parser version in `PRAGMA user_version`, so older builds refuse them. This build decodes that range and preserves pending rebuilds; ordinary archives keep their parser version unchanged.
+Data version 173 requires no source reparse; it keeps older binaries from writing archives whose image-text index they cannot maintain.
 
 ### Artifact checkpoint landings
 
@@ -242,11 +242,11 @@ revision. The change stream re-sends marked messages; the conversation export
 ignores these columns. The writable open that adds the columns records every
 live row's fingerprint first.
 
-The change stream's replay finds a session through its projected messages or
-its `usage_session_changes` row. That journal began in v0.47.0 without a
-backfill, so every writable open journals each session that has no row, one
-fresh `usage_change_revision` per session, so the stream can page between any
-two of them. Usage cache consumers then see those sessions change once.
+The change stream's replay finds a session through its projected messages or its
+`usage_session_changes` row. That journal began in v0.47.0 without a backfill,
+so every writable open journals each session that has no row, one fresh
+`usage_change_revision` per session, so the stream can page between any two of
+them. Usage cache consumers then see those sessions change once.
 
 Keep only digests and compact latest changes, not a body event log; bounded body
 reads take text from the archived message at the projected ordinal and reject it
@@ -916,13 +916,13 @@ because a cached fingerprint merely looks newer.
 
 ### Activity report index
 
-SQLite keeps each session's activity runs in memory per session and range
-start, within a 128 MiB budget that also counts each entry's overhead. A run is
-a stretch of touching pieces of one session with one model, each already capped
-at the idle gap and trimmed against the session's earlier activity, as
-`activity.SessionRunsBuilder` derives them from the pairing scan's candidates.
-A report sweeps the runs through `activity.BuildRunArtifactsWithSurvivorUsage`,
-so a refresh pairs only the sessions whose entries miss and sweeps far fewer
+SQLite keeps each session's activity runs in memory per session and range start,
+within a 128 MiB budget that also counts each entry's overhead. A run is a
+stretch of touching pieces of one session with one model, each already capped at
+the idle gap and trimmed against the session's earlier activity, as
+`activity.SessionRunsBuilder` derives them from the pairing scan's candidates. A
+report sweeps the runs through `activity.BuildRunArtifactsWithSurvivorUsage`, so
+a refresh pairs only the sessions whose entries miss and sweeps far fewer
 intervals than candidates. On a scratch archive of 100,000 sessions and 2.6
 million candidates over seven months, the kept runs took 73 MiB, and a refresh
 with ten changed sessions spent 163 ms pairing instead of 106 s and 168 ms
@@ -967,6 +967,15 @@ older form after column migrations and log that startup is waiting; the rebuild
 took about 6 s on that archive and needs no parser resync. Read-only opens use
 whichever form the archive has. PostgreSQL keeps the five-column index.
 
+The terminal candidates query and the message read need no result of each other.
+When a bulk-read slot is free, SQLite runs the terminal query on it beside the
+message read; otherwise it runs the two in turn. PostgreSQL runs them together
+on its pool, with the message read split into one slice per 4,096 sessions, up
+to two; a read snapshot shares one transaction, so there they run in turn.
+Both then derive each session's runs on every available core through
+`activity.DeriveSessionRunsInParallel`, which gives the runs the merged
+candidate stream gives. DuckDB keeps its reads in turn on its single connection.
+
 The terminal candidates query names `idx_messages_assistant_model` with
 `INDEXED BY` for its prior-model lookup. The wider velocity index also covers
 that lookup, and SQLite can otherwise choose it and step back through every
@@ -981,32 +990,32 @@ active, stale, or unclean termination status bypass this cache.
 
 PostgreSQL keeps ongoing Activity reports' per-session activity and raw usage
 inputs in memory with a 128 MiB estimated-size budget. Each session keeps its
-runs and the ascending times of its counted user and assistant messages,
-derived from one pairing over all time: the candidates a report range leaves out
-are ones the aggregator rejects for that range anyway, so one entry serves every
+runs and the ascending times of its counted user and assistant messages, derived
+from one pairing over all time: the candidates a report range leaves out are
+ones the aggregator rejects for that range anyway, so one entry serves every
 effective end of the slot. The usage change journal invalidates changed sessions
 and their matching snapshot peers. Tool events are not journaled; a tool event
 change reaches PostgreSQL through a push that also changes the session's
 `transcript_revision`, which the journal records. Each visit selects sessions,
 pairs only sessions without an entry, sweeps the runs, selects usage snapshots,
 and prices the surviving rows again. On a scratch database of 100,000 sessions
-and 2.6 million candidates over seven months, the kept activity took 71 MiB,
-and a refresh with ten changed sessions spent 90 ms pairing instead of 3.2 s
-and 209 ms sweeping instead of 1.0 s. Journal replacement, a changed gap cap,
-and unavailable or regressed revisions rebuild the inputs. Large change sets
-use a full read, and inputs above the budget aren't retained. Hosted stores and
+and 2.6 million candidates over seven months, the kept activity took 71 MiB, and
+a refresh with ten changed sessions spent 90 ms pairing instead of 3.2 s and 209
+ms sweeping instead of 1.0 s. Journal replacement, a changed gap cap, and
+unavailable or regressed revisions rebuild the inputs. Large change sets use a
+full read, and inputs above the budget aren't retained. Hosted stores and
 transaction views use their existing reads.
 
-DuckDB keeps each session's runs and counted message times in memory per
-session and gap cap, within a 128 MiB budget, at the session's
+DuckDB keeps each session's runs and counted message times in memory per session
+and gap cap, within a 128 MiB budget, at the session's
 `agentsview_push_fingerprint`. A push changes that fingerprint whenever a
-session's messages or tool events change, so entries survive mirror
-replacements and a refresh pairs only changed sessions. A session without a
-fingerprint is paired on every report. Like PostgreSQL, DuckDB pairs over all
-time and clips runs at the effective end cast to its microsecond `TIMESTAMP`. On
-the same scratch data, the kept runs took 74 MiB, and a refresh with ten changed
-sessions spent 328 ms pairing instead of 3.4 s, 224 ms sweeping instead of
-1.1 s, and 42 ms counting messages instead of 593 ms.
+session's messages or tool events change, so entries survive mirror replacements
+and a refresh pairs only changed sessions. A session without a fingerprint is
+paired on every report. Like PostgreSQL, DuckDB pairs over all time and clips
+runs at the effective end cast to its microsecond `TIMESTAMP`. On the same
+scratch data, the kept runs took 74 MiB, and a refresh with ten changed sessions
+spent 328 ms pairing instead of 3.4 s, 224 ms sweeping instead of 1.1 s, and 42
+ms counting messages instead of 593 ms.
 
 ### PostgreSQL push preparation indexes
 
@@ -1361,16 +1370,16 @@ own metadata, which is why the docs below call the database a mirror.
   for sets that arrive from outside the database, and they bound entry count,
   not bytes.
 - Do not add skipping indexes or projections for time ranges or text search on
-  session-keyed tables such as `messages` and `usage_messages`. Session IDs are
-  random, so each granule mixes sessions from unrelated dates, and every part
-  spans the whole key range. Under `final = 1` the exact-mode expansion
+  session-keyed tables such as `messages` and `usage_messages`. Session IDs
+  are random, so each granule mixes sessions from unrelated dates, and every
+  part spans the whole key range. Under `final = 1` the exact-mode expansion
   (`use_skip_indexes_if_final_exact_mode`) adds back most granules an index
   skipped, and projections are not read at all. On a 4.4M-message mirror a
   minmax on `messages.timestamp` skipped none of 541 granules, the former
-  `usage_messages` minmax made the Activity usage read 1.2x to 3.4x slower, and
-  a `text` index on `messages.content` made `ILIKE` search about 3x slower with
-  3.5x the memory while adding 24% to storage, 3x to insert time, and 5x to
-  merge time. Before adding an index, measure the real query with
+  `usage_messages` minmax made the Activity usage read 1.2x to 3.4x slower,
+  and a `text` index on `messages.content` made `ILIKE` search about 3x slower
+  with 3.5x the memory while adding 24% to storage, 3x to insert time, and 5x
+  to merge time. Before adding an index, measure the real query with
   `EXPLAIN indexes = 1` under `final = 1`, on more than one part.
 - Tests use the `chtest` build tag. Run `make test-clickhouse` against a
   dedicated test server (`TEST_CLICKHOUSE_URL` or the compose service). Do not
@@ -1391,3 +1400,26 @@ To use an existing dedicated instance, run:
 TEST_PG_URL="postgres://user:pass@host:5432/dbname?sslmode=disable" \
   CGO_ENABLED=1 go test -tags "fts5,pgtest" ./internal/postgres/... -v
 ```
+
+### Image text
+
+When `[image_text]` is enabled, the daemon extracts text from retained inline
+and offloaded tool-result images using the configured local GLM-OCR service. It
+caches normalized text by decoded image hash and processor identity, and tracks
+current occurrences in the same transaction as tool results. The first enabled pass builds occurrences for existing archives. Extraction
+passes start requests for two minutes; each request stops after Docbank's timeout. Each image is read from a copy whose bytes match its hash, and
+its type is detected from those bytes. Failed requests and missing or corrupt
+copies retry with backoff; oversized images, verified bytes that are not PNG,
+JPEG, or WebP, and invalid input are terminal. A full archive rebuild preserves
+cache entries for retained images and rebuilds their occurrences. Removing the last occurrence removes its cached text during the next pass.
+Disabling image text and restarting removes cached text and mirror matches;
+re-enabling extracts it again. Usage-only archives do not store image
+text.
+
+Successful text is published to PostgreSQL, DuckDB, and ClickHouse as
+session-owned `image_text` rows keyed by the tool call or result event,
+image index, and processor, with the image hash, provider, model, and revision.
+A new extraction advances the session's `sync_marker`, so the next incremental
+push sends it without changing the transcript revision. Global keyword search
+and substring and regex `tool_result` searches match this text in every
+backend, anchored to the message holding the tool call.

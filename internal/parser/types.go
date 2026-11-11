@@ -1708,6 +1708,13 @@ type ParsedToolResultEvent struct {
 }
 
 // ParsedMessage holds a single extracted message.
+//
+// Usage contract: a native record that carries token usage always yields a
+// message with that usage or a ParsedUsageEvent, never nothing. A record with
+// no text, tool call, or tool result to show still keeps its usage as a hidden
+// usage-only row: an assistant message with no content and IsSystem set, so
+// the transcript hides it while usage and cost count its tokens. Build that row
+// with usageOnlyMessage.
 type ParsedMessage struct {
 	CodexOrigin   CodexMessageOrigin `json:"-"`
 	Ordinal       int
@@ -1831,6 +1838,30 @@ type ParsedUsageEvent struct {
 	CostSource               string
 	OccurredAt               string
 	DedupKey                 string
+}
+
+// usageOnlyMessage returns msg as the hidden usage-only row the
+// ParsedMessage usage contract describes. Call it for a record that has
+// nothing to show in the transcript. It reports false when msg carries no
+// positive token count, so a record without usage is still dropped. The row
+// keeps msg's identity, timestamp, model, and token fields and drops any
+// thinking text, which a hidden row cannot show.
+func usageOnlyMessage(msg ParsedMessage) (ParsedMessage, bool) {
+	if len(msg.TokenUsage) == 0 ||
+		(msg.ContextTokens <= 0 && msg.OutputTokens <= 0) {
+		return ParsedMessage{}, false
+	}
+	msg.Role = RoleAssistant
+	msg.IsSystem = true
+	msg.Content = ""
+	msg.DialogueText = nil
+	msg.ContentLength = 0
+	msg.ThinkingText = ""
+	msg.HasThinking = false
+	msg.HasToolUse = false
+	msg.ToolCalls = nil
+	msg.ToolResults = nil
+	return msg, true
 }
 
 // accumulateMessageTokenUsage rolls up explicit per-message token

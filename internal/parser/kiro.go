@@ -268,6 +268,7 @@ func (p *kiroProvider) parseLegacySessionContext(
 	}
 
 	sess := &ParsedSession{
+		MalformedLines:   lr.SkippedLines(),
 		ID:               sessionID,
 		Project:          project,
 		Machine:          machine,
@@ -516,7 +517,7 @@ func (p *kiroProvider) parseCurrentSessionContext(
 			userCount++
 		}
 	}
-	return &ParsedSession{ID: "kiro:" + sessionID, Project: project, Machine: machine, Agent: AgentKiro, Cwd: cwd, FirstMessage: firstMessage, StartedAt: startedAt, EndedAt: endedAt, MessageCount: len(messages), UserMessageCount: userCount, SessionName: sessionName, ParentSessionID: parentSessionID, RelationshipType: relationship, File: FileInfo{Path: path, Size: info.Size(), Mtime: info.ModTime().UnixNano()}}, messages, nil
+	return &ParsedSession{ID: "kiro:" + sessionID, Project: project, Machine: machine, Agent: AgentKiro, Cwd: cwd, FirstMessage: firstMessage, StartedAt: startedAt, EndedAt: endedAt, MessageCount: len(messages), UserMessageCount: userCount, SessionName: sessionName, ParentSessionID: parentSessionID, RelationshipType: relationship, MalformedLines: lr.SkippedLines(), File: FileInfo{Path: path, Size: info.Size(), Mtime: info.ModTime().UnixNano()}}, messages, nil
 }
 
 func kiroCurrentMessageTimestamp(value gjson.Result) time.Time {

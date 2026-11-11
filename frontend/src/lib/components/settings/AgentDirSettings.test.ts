@@ -45,6 +45,58 @@ afterEach(() => {
 });
 
 describe("AgentDirSettings", () => {
+  it("shows full provider paths that wrap only after a separator", async () => {
+    settings.sessionProviders = [
+      {
+        id: "cowork",
+        display_name: "Claude Cowork",
+        dirs: ["/Users/me/Library/Application Support/Claude/sessions"],
+        homes_supported: false,
+        homes: [],
+      },
+    ];
+    const component = mount(AgentDirSettings, { target: document.body });
+    await tick();
+
+    const path = document.body.querySelector("code.provider-path");
+    expect(path?.textContent).toBe("/Users/me/Library/Application Support/Claude/sessions");
+    // Break opportunities sit between segments, and every segment but the
+    // last ends with the separator, so a line never breaks inside a name.
+    const segments = Array.from(
+      path?.querySelectorAll(".provider-path-seg") ?? [],
+      (seg) => seg.textContent,
+    );
+    expect(segments).toEqual([
+      "/",
+      "Users/",
+      "me/",
+      "Library/",
+      "Application Support/",
+      "Claude/",
+      "sessions",
+    ]);
+    expect(path?.querySelectorAll("wbr")).toHaveLength(segments.length);
+    unmount(component);
+  });
+
+  it("names each switch for its provider without visible state text", async () => {
+    const component = mount(AgentDirSettings, { target: document.body });
+    await tick();
+
+    const rows = [...document.body.querySelectorAll<HTMLElement>(".provider-row")];
+    expect(
+      rows.map((row) => ({
+        name: row.querySelector(".provider-name")?.textContent,
+        switchLabel: row.querySelector('input[role="switch"]')?.getAttribute("aria-label"),
+        switchText: row.querySelector(".kit-toggle")?.textContent?.trim(),
+      })),
+    ).toEqual([
+      { name: "Claude Code", switchLabel: "Enable Claude Code session sync", switchText: "" },
+      { name: "Gemini", switchLabel: "Enable Gemini session sync", switchText: "" },
+    ]);
+    await unmount(component);
+  });
+
   it("enables a disabled provider and confirms the change was applied", async () => {
     const save = vi.spyOn(settings, "save").mockImplementation(async (patch) => {
       settings.disabledAgents = patch.disabled_agents ?? [];

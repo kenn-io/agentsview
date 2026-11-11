@@ -158,6 +158,7 @@
 </script>
 
 <KitRefreshControl
+  size="sm"
   {...rest}
   onRefresh={refreshWhenVisible}
   lastUpdatedAt={status === undefined ? lastUpdatedAt : null}

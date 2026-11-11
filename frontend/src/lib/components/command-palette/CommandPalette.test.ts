@@ -194,17 +194,23 @@ describe("CommandPalette", () => {
     mockSessions.sessions = [makeSession("s1", "cursor"), makeSession("s2", "unknown")];
   });
 
-  it("uses agentColor for recent-session dots including fallback", async () => {
+  it("names each recent session's agent in its agent ink, including fallback", async () => {
     const component = mount(CommandPalette, {
       target: document.body,
     });
 
     await tick();
 
-    const dots = Array.from(document.querySelectorAll<HTMLElement>(".item-dot"));
-    expect(dots).toHaveLength(2);
-    expect(dots[0]?.getAttribute("style")).toContain("var(--accent-black)");
-    expect(dots[1]?.getAttribute("style")).toContain("var(--accent-blue)");
+    const agents = Array.from(document.querySelectorAll<HTMLElement>(".item-agent"));
+    expect(agents).toHaveLength(2);
+    expect(agents[0]?.textContent).toBe("Cursor");
+    expect(agents[0]?.getAttribute("style")).toContain(
+      "--agent-ink: var(--accent-black-ink, var(--accent-black))",
+    );
+    expect(agents[1]?.textContent).toBe("Unknown");
+    expect(agents[1]?.getAttribute("style")).toContain(
+      "--agent-ink: var(--accent-blue-ink, var(--accent-blue))",
+    );
 
     unmount(component);
   });
@@ -575,6 +581,25 @@ describe("CommandPalette", () => {
     unmount(semantic);
   });
 
+  it("announces searching through a status region that is already mounted", async () => {
+    const component = mount(CommandPalette, { target: document.body });
+    await tick();
+    // Mounted and empty before any query.
+    const status = document.querySelector('[role="status"].palette-search-status');
+    expect(status).not.toBeNull();
+    expect(status?.textContent?.trim()).toBe("");
+
+    // The store mock is not reactive; entering the query is the change
+    // that re-renders the palette with the search running.
+    mockSearchStore.isSearching = true;
+    await enterSearchQuery();
+    // Same node, new text: live regions announce changes, not insertions.
+    expect(document.querySelector('[role="status"].palette-search-status')).toBe(status);
+    expect(status?.textContent?.trim()).toBe("Searching...");
+
+    unmount(component);
+  });
+
   it("renders loading before error, empty state, and results", async () => {
     mockSearchStore.isSearching = true;
     mockSearchStore.error = { detail: "backend detail", kind: "generic" };
@@ -582,7 +607,12 @@ describe("CommandPalette", () => {
     const component = mount(CommandPalette, { target: document.body });
     await enterSearchQuery();
 
-    expect(document.querySelector(".palette-empty")?.textContent).toContain("Searching");
+    const loading = document.querySelector(".palette-loading");
+    expect(loading?.querySelectorAll(".skeleton-row").length).toBeGreaterThan(0);
+    const status = document.querySelector('[role="status"].palette-search-status');
+    expect(status?.textContent?.trim()).toBe("Searching...");
+    expect(status?.closest('[aria-busy="true"]')).toBeNull();
+    expect(document.querySelector(".palette-results")?.getAttribute("aria-busy")).toBe("true");
     expect(document.querySelector(".palette-error")).toBeNull();
     expect(document.querySelector(".palette-item")).toBeNull();
 
