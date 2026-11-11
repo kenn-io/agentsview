@@ -880,7 +880,7 @@ func TestCLIEmbeddingsSetup(t *testing.T) {
 						io.WriteString(w, `{"setup":{"action":"turn-on","provider":"ollama"}}`)
 					case tc.postStatus == http.StatusConflict && reads == 2:
 						io.WriteString(w, `{"setup":{"action":"turn-on","busy":true}}`)
-					case tc.postStatus != http.StatusConflict && buildPosts == 0:
+					case buildPosts == 0:
 						if !tc.stale {
 							if !assert.NoError(t, os.WriteFile(filepath.Join(dir, "config.toml"), []byte("[vector]\nenabled = true\n[vector.embeddings]\nmodel = 'nomic-embed-text'\ndimension = 768\n"), 0o600)) {
 								w.WriteHeader(http.StatusInternalServerError)
@@ -918,10 +918,8 @@ func TestCLIEmbeddingsSetup(t *testing.T) {
 			}
 			if tc.postStatus == http.StatusConflict {
 				assert.Contains(t, out.String(), "Search setup is already running.")
-				assert.Zero(t, buildPosts)
-			} else {
-				assert.Equal(t, 1, buildPosts)
 			}
+			assert.Equal(t, 1, buildPosts)
 		})
 	}
 	for _, tc := range []struct {
@@ -1084,6 +1082,90 @@ func TestCLIEmbeddingsSetup(t *testing.T) {
 			} else {
 				assert.Equal(t, 1, posts)
 				assert.ErrorContains(t, err, "cannot inspect model directory")
+			}
+		})
+	}
+}
+
+func TestCLIEmbeddingsJoinsAutomaticSetup(t *testing.T) {
+	for _, tc := range []struct {
+		name       string
+		buildCode  int
+		setupError bool
+		disabled   bool
+		buildError bool
+	}{
+		{name: "build"},
+		{name: "join-build", buildCode: http.StatusConflict},
+		{name: "build-error", buildError: true},
+		{name: "setup-error", setupError: true},
+		{name: "disabled", disabled: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			setTestHome(t, t.TempDir())
+			dir := testDataDir(t)
+			require.NoError(t, os.WriteFile(filepath.Join(dir, "config.toml"), []byte("[vector]\nenabled = false\n"), 0o600))
+			var reads, builds, buildReads int
+			startEmbeddingsTestDaemon(t, dir, map[string]http.HandlerFunc{
+				"GET /api/v1/embeddings/status": func(w http.ResponseWriter, _ *http.Request) {
+					w.Header().Set("Content-Type", "application/json")
+					reads++
+					if reads == 1 {
+						io.WriteString(w, `{"setup":{"busy":true}}`)
+						return
+					}
+					if tc.setupError {
+						io.WriteString(w, `{"setup":{"action":"turn-on","error":"setup failed"}}`)
+						return
+					}
+					if tc.disabled {
+						io.WriteString(w, `{"setup":{"enabled":false}}`)
+						return
+					}
+					if builds == 0 {
+						if !assert.NoError(t, os.WriteFile(filepath.Join(dir, "config.toml"), []byte("[vector]\nenabled = true\n[vector.embeddings]\nmodel = 'nomic-embed-text'\ndimension = 768\n"), 0o600)) {
+							w.WriteHeader(http.StatusInternalServerError)
+							return
+						}
+						io.WriteString(w, `{"setup":{"enabled":true}}`)
+						return
+					}
+					buildReads++
+					if buildReads == 1 {
+						io.WriteString(w, `{"setup":{"enabled":true},"running":true}`)
+					} else if tc.buildError {
+						io.WriteString(w, `{"setup":{"enabled":true},"last_error":"build failed"}`)
+					} else {
+						io.WriteString(w, `{"setup":{"enabled":true},"last_result":{"Fill":{"Documents":3,"Chunks":4}}}`)
+					}
+				},
+				"POST /api/v1/embeddings/build": func(w http.ResponseWriter, _ *http.Request) {
+					builds++
+					if tc.buildCode != 0 {
+						w.WriteHeader(tc.buildCode)
+					} else {
+						w.WriteHeader(http.StatusAccepted)
+					}
+				},
+			})
+			var out strings.Builder
+			err := runEmbeddingsBuild(t.Context(), &out, strings.NewReader(""), EmbeddingsBuildOptions{})
+			switch {
+			case tc.setupError:
+				require.ErrorContains(t, err, "setup failed")
+				assert.Zero(t, builds)
+			case tc.disabled:
+				require.ErrorContains(t, err, "search by meaning is off")
+				assert.Zero(t, builds)
+			case tc.buildError:
+				require.ErrorContains(t, err, "build failed")
+				assert.Equal(t, 1, builds)
+				assert.Equal(t, 2, buildReads)
+			default:
+				require.NoError(t, err)
+				assert.Equal(t, 1, builds)
+				assert.Equal(t, 2, buildReads)
+				assert.Contains(t, out.String(), "Embedded 3 documents (4 chunks)")
 			}
 		})
 	}

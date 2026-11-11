@@ -730,14 +730,14 @@ func buildViaDaemon(
 			return err
 		}
 	}
-	return pollDaemonBuildStatus(ctx, out, client, false)
+	return pollDaemonBuildStatus(ctx, out, client, false, false)
 }
 
 // pollDaemonBuildStatus polls the daemon's build status at
 // embeddingsPollInterval, printing a progress line on every poll while the
 // build is running, until it reports Running == false.
 func pollDaemonBuildStatus(
-	ctx context.Context, out io.Writer, client embeddingsDaemonClient, setup bool,
+	ctx context.Context, out io.Writer, client embeddingsDaemonClient, setup, setupOnly bool,
 ) error {
 	var progress buildProgressPrinter
 	for {
@@ -752,6 +752,9 @@ func pollDaemonBuildStatus(
 			progress.printDownload(out, status.Setup.DownloadedBytes, status.Setup.TotalBytes)
 		}
 		if !setup || status.Setup == nil || !status.Setup.Busy {
+			if setupOnly {
+				return nil
+			}
 			if !status.Running {
 				return finalizeBuildStatus(out, status)
 			}
@@ -1099,14 +1102,28 @@ func setupEmbeddingsBuild(ctx context.Context, out io.Writer, in *bufio.Scanner,
 		}
 		return err
 	}
-	return pollDaemonBuildStatus(ctx, out, client, true)
+	return pollDaemonBuildStatus(ctx, out, client, true, false)
 }
 
 func joinActiveSetup(ctx context.Context, out io.Writer, cfg config.Config, client embeddingsDaemonClient, status vector.BuildStatus) (bool, error) {
 	setup := status.Setup
 	if setup != nil && setup.Busy {
 		fmt.Fprintln(out, "Search setup is already running.")
-		return true, pollDaemonBuildStatus(ctx, out, client, true)
+		if err := pollDaemonBuildStatus(ctx, out, client, true, true); err != nil {
+			return true, err
+		}
+		var err error
+		status, err = client.status(ctx)
+		if err != nil {
+			return true, err
+		}
+		setup = status.Setup
+		if setup != nil && setup.Action != "" && setup.Error != "" {
+			return true, errors.New(setup.Error)
+		}
+		if setup == nil || !setup.Enabled || setup.Action != "" {
+			return true, errors.New("search by meaning is off after setup")
+		}
 	}
 	if setup != nil && setup.Enabled && setup.Action == "" {
 		var err error
