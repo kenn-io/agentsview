@@ -28159,8 +28159,8 @@ func (a ArtifactExchangeRequest) Validate() error {
 }
 
 type ArtifactSessionPushEnvelope struct {
+	ExternalParentSessionID *string                              `json:"external_parent_session_id,omitempty"`
 	Manifest                map[string]any                       `json:"manifest"`
-	PendingExternalParentID *string                              `json:"pending_external_parent_id,omitempty"`
 	Segments                ArtifactSessionPushEnvelope_Segments `json:"segments" validate:"required"`
 	SessionID               string                               `json:"session_id" validate:"required"`
 	V                       int64                                `json:"v"`

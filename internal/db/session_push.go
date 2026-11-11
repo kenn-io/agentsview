@@ -13,7 +13,7 @@ type SessionPushReceipt struct {
 	SessionID               string
 	SourceOrigin            string
 	PayloadHash             string
-	PendingExternalParentID *string
+	ExternalParentSessionID *string
 }
 
 // ErrSessionPushConflict reports an ID whose first snapshot cannot be accepted
@@ -107,13 +107,13 @@ func (db *DB) ApplySessionPush(
 		}
 		return false, err
 	}
-	if receipt.PendingExternalParentID != nil {
+	if receipt.ExternalParentSessionID != nil {
 		var exists bool
 		if err := tx.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM session_external_parents WHERE session_id = ?)`, receipt.SessionID).Scan(&exists); err != nil {
 			return false, err
 		}
 		if !exists {
-			if _, err := setSessionExternalParentTx(ctx, tx, receipt.SessionID, *receipt.PendingExternalParentID); err != nil {
+			if _, err := setSessionExternalParentTx(ctx, tx, receipt.SessionID, *receipt.ExternalParentSessionID); err != nil {
 				if errors.Is(err, ErrSessionExternalParentInvalid) {
 					return false, fmt.Errorf("%w: %w", ErrSessionPushConflict, err)
 				}

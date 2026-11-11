@@ -527,11 +527,11 @@ components:
     ArtifactSessionPushEnvelope:
       additionalProperties: false
       properties:
+        external_parent_session_id:
+          type: string
         manifest:
           additionalProperties: true
           type: object
-        pending_external_parent_id:
-          type: string
         segments:
           items:
             additionalProperties: false

@@ -205,7 +205,7 @@ func TestSessionPushMalformedWriteRollsBack(t *testing.T) {
 func TestSessionPushPendingParentFailureRollsBack(t *testing.T) {
 	d := testDB(t)
 	receipt, write := sessionPushFixture("snapshot")
-	receipt.PendingExternalParentID = new("parent")
+	receipt.ExternalParentSessionID = new("parent")
 	_, err := d.getWriter().ExecContext(t.Context(), `CREATE TRIGGER fail_pushed_parent
 		BEFORE INSERT ON session_external_parents
 		BEGIN SELECT RAISE(ABORT, 'parent write failed'); END`)
@@ -228,7 +228,7 @@ func TestSessionPushPreservesExistingExternalParent(t *testing.T) {
 	_, err := d.SetSessionExternalParent(t.Context(), "snapshot", "local-parent")
 	require.NoError(t, err)
 	receipt, write := sessionPushFixture("snapshot")
-	receipt.PendingExternalParentID = new("source-parent")
+	receipt.ExternalParentSessionID = new("source-parent")
 	created, err := d.ApplySessionPush(t.Context(), receipt, write)
 	require.NoError(t, err)
 	require.True(t, created)
@@ -256,6 +256,9 @@ func TestSessionPushRebuildPreservesReceiptsAndCuration(t *testing.T) {
 	source := testDB(t)
 	for _, id := range []string{"live", "trashed", "purged"} {
 		receipt, write := sessionPushFixture(id)
+		if id == "live" {
+			receipt.ExternalParentSessionID = new("launcher")
+		}
 		created, err := source.ApplySessionPush(ctx, receipt, write)
 		require.NoError(t, err)
 		require.True(t, created)
@@ -284,6 +287,9 @@ func TestSessionPushRebuildPreservesReceiptsAndCuration(t *testing.T) {
 	_, err = destination.CopyOrphanedDataFrom(ctx, path)
 	require.NoError(t, err)
 	require.NoError(t, destination.CopySessionMetadataFrom(ctx, path))
+	link, err := destination.GetSessionExternalParent(ctx, "live")
+	require.NoError(t, err)
+	assert.Equal(t, "launcher", link.ParentSessionID)
 	for _, id := range []string{"live", "trashed"} {
 		session, err := destination.GetArtifactExportSession(ctx, id)
 		require.NoError(t, err)
