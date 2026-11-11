@@ -52,7 +52,9 @@ func TestCommandCodeVersionUpgradeReparsesUnchangedSourceAndClearsSkip(t *testin
 		Machine:   "local",
 	})
 	t.Cleanup(engine.Close)
-	assert.Equal(t, 1, engine.SyncAll(t.Context(), nil).Synced)
+	stats := engine.ResyncAll(t.Context(), nil)
+	require.True(t, stats.ArchiveRebuilt)
+	assert.Equal(t, 1, stats.Synced)
 	assert.Equal(t, db.CurrentDataVersion(), reopened.GetSessionDataVersion(t.Context(), sessionID))
 }
 

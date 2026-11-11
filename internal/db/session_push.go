@@ -176,7 +176,7 @@ func ValidateSessionPushResultCollections(content string) error {
 func validateSessionPushResultJSON(content string) error {
 	dec := jsontext.NewDecoder(strings.NewReader(content))
 	first, _ := dec.ReadToken() // Non-JSON result text is allowed.
-	if first.Kind() == jsontext.KindBeginArray || first.Kind() == jsontext.KindBeginObject {
+	if first.Kind() == jsontext.KindBeginArray {
 		type collection struct {
 			kind  jsontext.Kind
 			count int

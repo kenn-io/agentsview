@@ -66,15 +66,12 @@ type sessionPushIdentityMessage struct {
 }
 
 type sessionPushIdentityToolCall struct {
-	Name      string                     `json:"name"`
-	ID        string                     `json:"id"`
-	Input     string                     `json:"input"`
-	Result    string                     `json:"result"`
-	Subagent  string                     `json:"subagent"`
-	Category  string                     `json:"category"`
-	FilePath  string                     `json:"file_path"`
-	SkillName string                     `json:"skill_name"`
-	Events    []sessionPushIdentityEvent `json:"events"`
+	Name     string                     `json:"name"`
+	ID       string                     `json:"id"`
+	Input    string                     `json:"input"`
+	Result   string                     `json:"result"`
+	Subagent string                     `json:"subagent"`
+	Events   []sessionPushIdentityEvent `json:"events"`
 }
 
 type sessionPushIdentityEvent struct {
@@ -90,7 +87,7 @@ type sessionPushIdentityEvent struct {
 func sessionPushIdentity(m segmentMessage) sessionPushIdentityMessage {
 	item := sessionPushIdentityMessage{Ordinal: m.Ordinal, Role: m.Role, Content: m.Content, ThinkingText: m.ThinkingText, Timestamp: m.Timestamp, HasThinking: m.HasThinking, HasToolUse: m.HasToolUse, Model: m.Model, ReasoningEffort: m.ReasoningEffort, ProviderID: m.ProviderID, ClaudeMessageID: m.ClaudeMessageID, ClaudeRequestID: m.ClaudeRequestID, IsSystem: m.IsSystem, SourceSubtype: m.SourceSubtype, PromptSource: m.PromptSource, IsCompactBoundary: m.IsCompactBoundary}
 	for _, call := range m.ToolCalls {
-		tool := sessionPushIdentityToolCall{Name: call.ToolName, ID: call.ToolUseID, Input: call.InputJSON, Result: call.ResultContent, Subagent: call.SubagentSessionID, Category: call.Category, FilePath: call.FilePath, SkillName: call.SkillName}
+		tool := sessionPushIdentityToolCall{Name: call.ToolName, ID: call.ToolUseID, Input: call.InputJSON, Result: call.ResultContent, Subagent: call.SubagentSessionID}
 		for _, event := range call.ResultEvents {
 			tool.Events = append(tool.Events, sessionPushIdentityEvent{ID: event.ToolUseID, Agent: event.AgentID, Subagent: event.SubagentSessionID, Source: event.Source, Status: event.Status, Content: event.Content, Timestamp: event.Timestamp})
 		}

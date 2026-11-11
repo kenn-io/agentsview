@@ -3,6 +3,7 @@ package artifact
 import (
 	"context"
 	"encoding/json/v2"
+	"fmt"
 	"strings"
 	"testing"
 	"unicode/utf8"
@@ -12,6 +13,50 @@ import (
 	"go.kenn.io/agentsview/internal/db"
 	"hegel.dev/go/hegel"
 )
+
+func TestSessionPushRetryAfterToolMetadataChanges(t *testing.T) {
+	session := db.Session{ID: "sample", Agent: "claude", Machine: "source", MessageCount: 1}
+	data := db.ArtifactExportData{Messages: []db.Message{{Ordinal: 0, Role: "assistant", ToolCalls: []db.ToolCall{{ToolName: "Read", InputJSON: `{"path":"file"}`, ResultContent: "result", Category: "Read", FilePath: "file", SkillName: "one"}}}}}
+	first, err := encodeSessionPushData(t.Context(), "source", session, data)
+	require.NoError(t, err)
+	data.Messages[0].ToolCalls[0].Category = "Other"
+	data.Messages[0].ToolCalls[0].FilePath = "resolved-file"
+	data.Messages[0].ToolCalls[0].SkillName = "two"
+	second, err := encodeSessionPushData(t.Context(), "source", session, data)
+	require.NoError(t, err)
+	receipt1, write1, err := DecodeSessionPush(first)
+	require.NoError(t, err)
+	receipt2, write2, err := DecodeSessionPush(second)
+	require.NoError(t, err)
+	receiver := testDB(t)
+	created, err := receiver.ApplySessionPush(t.Context(), receipt1, write1)
+	require.NoError(t, err)
+	require.True(t, created)
+	created, err = receiver.ApplySessionPush(t.Context(), receipt2, write2)
+	require.NoError(t, err)
+	assert.False(t, created)
+}
+
+func TestSessionPushTransfersStructuredToolResult(t *testing.T) {
+	fields := make([]string, 257)
+	for i := range fields {
+		fields[i] = fmt.Sprintf(`"field%d":%d`, i, i)
+	}
+	content := "{" + strings.Join(fields, ",") + "}"
+	session := db.Session{ID: "sample", Agent: "claude", Machine: "source", MessageCount: 1}
+	packet, err := encodeSessionPushData(t.Context(), "source", session, db.ArtifactExportData{Messages: []db.Message{{Ordinal: 0, Role: "assistant", ToolCalls: []db.ToolCall{{ToolName: "Read", ResultContent: content}}}}})
+	require.NoError(t, err)
+	receipt, write, err := DecodeSessionPush(packet)
+	require.NoError(t, err)
+	receiver := testDB(t)
+	_, err = receiver.ApplySessionPush(t.Context(), receipt, write)
+	require.NoError(t, err)
+	messages, err := receiver.GetAllMessages(t.Context(), "sample")
+	require.NoError(t, err)
+	require.Len(t, messages, 1)
+	require.Len(t, messages[0].ToolCalls, 1)
+	assert.Equal(t, content, messages[0].ToolCalls[0].ResultContent)
+}
 
 func TestSessionPushExactSelection(t *testing.T) {
 	d := testDB(t)
@@ -168,14 +213,14 @@ func TestSessionPushIdentityV1(t *testing.T) {
 		Messages []sessionPushIdentityMessage `json:"messages"`
 	}{1, []sessionPushIdentityMessage{sessionPushIdentity(message)}})
 	require.NoError(t, err)
-	const expected = `{"messages":[{"claude_message_id":"message","claude_request_id":"request","content":"answer","has_thinking":true,"has_tool_use":true,"is_compact_boundary":true,"is_system":true,"model":"model","ordinal":0,"prompt_source":"prompt","provider_id":"provider","reasoning_effort":"high","role":"assistant","source_subtype":"notice","thinking_text":"thought","timestamp":"2026-01-01T00:00:00Z","tool_calls":[{"category":"read","events":[{"agent":"agent","content":"result","id":"call","source":"tool","status":"done","subagent":"child","timestamp":"2026-01-01T00:00:01Z"}],"file_path":"file","id":"call","input":"input","name":"Read","result":"result","skill_name":"skill","subagent":"child"}]}],"v":1}` + "\n"
+	const expected = `{"messages":[{"claude_message_id":"message","claude_request_id":"request","content":"answer","has_thinking":true,"has_tool_use":true,"is_compact_boundary":true,"is_system":true,"model":"model","ordinal":0,"prompt_source":"prompt","provider_id":"provider","reasoning_effort":"high","role":"assistant","source_subtype":"notice","thinking_text":"thought","timestamp":"2026-01-01T00:00:00Z","tool_calls":[{"events":[{"agent":"agent","content":"result","id":"call","source":"tool","status":"done","subagent":"child","timestamp":"2026-01-01T00:00:01Z"}],"id":"call","input":"input","name":"Read","result":"result","subagent":"child"}]}],"v":1}` + "\n"
 	assert.Equal(t, expected, string(canonical))
-	assert.Equal(t, "ca65f6c613b52ce655002c189d18c37765abe0c208006dac7b570c231f7c70b2", hashHex(canonical))
+	assert.Equal(t, "97cd677a5770704bc32bd0fd2a85e8289beb0f00287cb7cc2ef4e748fdf67480", hashHex(canonical))
 	packet, err := encodeSessionPushData(t.Context(), "source", db.Session{ID: "sample", Agent: "claude", Machine: "source", MessageCount: 1}, db.ArtifactExportData{Messages: []db.Message{message.dbMessage()}})
 	require.NoError(t, err)
 	receipt, _, err := DecodeSessionPush(packet)
 	require.NoError(t, err)
-	assert.Equal(t, "ca65f6c613b52ce655002c189d18c37765abe0c208006dac7b570c231f7c70b2", receipt.PayloadHash)
+	assert.Equal(t, "97cd677a5770704bc32bd0fd2a85e8289beb0f00287cb7cc2ef4e748fdf67480", receipt.PayloadHash)
 }
 
 func TestSessionPushPreservesCapabilities(t *testing.T) {

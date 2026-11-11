@@ -76,11 +76,13 @@ func TestCodexOrdinaryForkLinkSurvivesSyncAndUpgrade(t *testing.T) {
 	database, err := db.OpenIsolated(t.Context(), dbPath)
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, database.Close()) })
-	assert.False(t, database.NeedsResync(), "the archive upgrades in place")
+	assert.True(t, database.NeedsResync())
 	engine = NewEngine(t.Context(), database, EngineConfig{AgentDirs: agentDirs, Machine: "local"})
 	t.Cleanup(engine.Close)
 	// The version upgrade must reparse even when the source is unchanged.
-	require.NoError(t, engine.ReconcileWatchRoots(t.Context(), []string{root}, false))
+	stats := engine.ResyncAll(t.Context(), nil)
+	require.True(t, stats.ArchiveRebuilt)
+	require.Zero(t, stats.Failed)
 	assert.Equal(t, db.CurrentDataVersion(), database.GetSessionDataVersion(t.Context(), childID))
 	assertForkLink(t, database)
 }

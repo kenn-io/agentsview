@@ -42,7 +42,10 @@ func TestClaudeHookOutputUpgradePreservesArchive(t *testing.T) {
 	_, err = database.PinMessage(ctx, id, legacy[1].ID, nil)
 	require.NoError(t, err)
 	// Version 166 keeps the peer-message rows but still lacks hook rows.
-	const previous = 166
+	scope := db.ScopedDataVersionProviders(166, 167)
+	version := db.CurrentDataVersion()
+	t.Cleanup(db.InstallDataVersionScopesForTest(map[int][]parser.AgentType{version: scope}))
+	previous := version - 1
 	require.NoError(t, database.Update(ctx, func(tx *sql.Tx) error {
 		if _, err := tx.ExecContext(ctx, "UPDATE sessions SET data_version = ?, message_count = 2, user_message_count = 1 WHERE id = ?", previous, id); err != nil {
 			return err
