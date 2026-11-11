@@ -161,7 +161,9 @@
     >
       {#each MODES as mode (mode.id)}
         <MenuRadioItem value={mode.id} closeOnSelect={false} textValue={mode.name()} class="view-option">
-          <span class="option-name">{mode.name()}</span>
+          <span class="option-text">
+            <span class="option-name">{mode.name()}</span>
+          </span>
         </MenuRadioItem>
       {/each}
     </MenuRadioGroup>
