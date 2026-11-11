@@ -7,7 +7,6 @@ import (
 
 	"go.kenn.io/agentsview/internal/db"
 	"go.kenn.io/agentsview/internal/ingest"
-	"go.kenn.io/agentsview/internal/parser"
 )
 
 func (e *Engine) sessionArchiveProvenance(session *db.Session, native string) (*db.ArchiveSessionProvenance, error) {
@@ -21,112 +20,67 @@ func (e *Engine) sessionArchiveProvenance(session *db.Session, native string) (*
 	return &p, nil
 }
 
-// Check kept and excluded results before staging freshness or other session
-// writes: one conflicting DAG member must leave every existing member unchanged.
-func (e *Engine) validateSourceSessionOwnership(ctx context.Context, res processResult) error {
+// Check every unreserved member before staging freshness or session writes.
+func (e *Engine) validateSourceSessionOwnership(ctx context.Context, res processResult) (map[string]bool, error) {
+	ids := make([]string, 0, len(res.results)+len(res.excludedSessionIDs)+1)
+	for _, result := range res.results {
+		ids = append(ids, applyIDPrefixToID(e.idPrefix, result.Session.ID))
+	}
+	ids = append(ids, e.applyIDPrefixToSessionIDs(res.excludedSessionIDs)...)
+	if res.incremental != nil {
+		ids = append(ids, applyIDPrefixToID(e.idPrefix, res.incremental.sessionID))
+	}
+	reserved, err := e.db.SessionPushReservations(ctx, ids)
+	if err != nil {
+		return nil, err
+	}
 	baseline := e.db
 	if old, ok := e.archiveStore.(*db.DB); ok {
 		baseline = old
 	}
 	for _, result := range res.results {
+		if reserved[applyIDPrefixToID(e.idPrefix, result.Session.ID)] {
+			continue
+		}
 		session, err := ingest.ConvertSessionContext(ctx, result.Session, nil)
 		if err != nil {
-			return err
+			return nil, err
 		}
 		if err := e.applyRemoteRewritesContext(ctx, &session, nil); err != nil {
-			return err
+			return nil, err
 		}
 		provenance, err := e.sessionArchiveProvenance(&session, result.Session.ID)
 		if err != nil {
-			return err
+			return nil, err
 		}
 		if baseline != e.db && provenance != nil {
 			if err := baseline.CheckExistingArchiveProvenance(ctx, session.ID, *provenance); err != nil {
-				return err
+				return nil, err
 			}
 		}
 		if err := e.db.CheckArchiveSessionProvenance(ctx, session, provenance); err != nil {
-			return err
+			return nil, err
 		}
 	}
 	if !e.sourceAllowsParserExclusions(res) {
-		return nil
+		return reserved, nil
 	}
-	excluded := e.applyIDPrefixToSessionIDs(res.excludedSessionIDs)
-	for _, id := range excluded {
-		if id == "" {
+	var excluded []string
+	for _, id := range e.applyIDPrefixToSessionIDs(res.excludedSessionIDs) {
+		if id == "" || reserved[id] {
 			continue
 		}
-		// Exclusion deletes have no ownership grant, even for an attached
-		// source. The delete transaction repeats this check.
 		if err := e.db.CheckArchiveSessionProvenance(ctx, db.Session{ID: id}, nil); err != nil {
-			return err
-		}
-	}
-	if len(excluded) > 0 && e.parserExclusionPolicy != nil {
-		return e.parserExclusionPolicy(ctx, excluded)
-	}
-	return nil
-}
-
-// filterReservedSourceMembers allows independent members of a shared source to
-// progress while leaving a pushed snapshot untouched. Claude-format DAGs must
-// still be admitted as a whole, and partial sources cannot prove freshness.
-func (e *Engine) filterReservedSourceMembers(ctx context.Context, res *processResult, agent parser.AgentType) (bool, error) {
-	if err := e.validateSourceSessionOwnership(ctx, *res); err == nil {
-		return false, nil
-	} else if !errors.Is(err, db.ErrSessionPushConflict) || res.incremental != nil {
-		return false, err
-	} else if sourceRequiresAtomicDAGCompletion(agent, len(res.results)) {
-		return false, errors.New("atomic source contains a reserved session")
-	}
-	kept := make([]parser.ParseResult, 0, len(res.results))
-	for _, result := range res.results {
-		one := *res
-		one.results = []parser.ParseResult{result}
-		one.excludedSessionIDs = nil
-		if err := e.validateSourceSessionOwnership(ctx, one); err != nil {
-			if errors.Is(err, db.ErrSessionPushConflict) {
-				continue
-			}
-			return false, err
-		}
-		kept = append(kept, result)
-	}
-	excluded := make([]string, 0, len(res.excludedSessionIDs))
-	for _, id := range res.excludedSessionIDs {
-		checkID := applyIDPrefixToID(e.idPrefix, id)
-		if checkID == "" {
-			excluded = append(excluded, id)
-			continue
-		}
-		if err := e.db.CheckArchiveSessionProvenance(ctx, db.Session{ID: checkID}, nil); err != nil {
-			if errors.Is(err, db.ErrSessionPushConflict) {
-				continue
-			}
-			return false, err
+			return nil, err
 		}
 		excluded = append(excluded, id)
 	}
-	if len(kept) == len(res.results) && len(excluded) == len(res.excludedSessionIDs) {
-		return false, db.ErrSessionPushConflict
+	if len(excluded) > 0 && e.parserExclusionPolicy != nil {
+		if err := e.parserExclusionPolicy(ctx, excluded); err != nil {
+			return nil, err
+		}
 	}
-	if len(kept) == 0 && len(excluded) == 0 && len(res.sourceMissingMembers) == 0 {
-		return true, nil
-	}
-	partial := *res
-	partial.results = kept
-	// Do not delete or tombstone members based on a partial source view.
-	partial.excludedSessionIDs = nil
-	partial.sourceMissingMembers = nil
-	if err := e.validateSourceSessionOwnership(ctx, partial); err != nil {
-		return false, err
-	}
-	partial.needsRetry = true
-	partial.noCacheSkip = true
-	partial.suppressPresenceSweep = true
-	*res = partial
-	return false, nil
+	return reserved, nil
 }
 
 func (e *Engine) writeAttachedStaged(ctx context.Context, prepared preparedSessionWrite, pw pendingWrite, provenance *db.ArchiveSessionProvenance) error {

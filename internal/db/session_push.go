@@ -3,6 +3,7 @@ package db
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"fmt"
 )
@@ -116,6 +117,31 @@ func (db *DB) ApplySessionPush(
 	db.notifyUsageSessions([]string{receipt.SessionID})
 	pending.flush()
 	return true, nil
+}
+
+// SessionPushReservations returns the candidate IDs held by durable receipts.
+func (db *DB) SessionPushReservations(ctx context.Context, ids []string) (map[string]bool, error) {
+	reserved := make(map[string]bool)
+	if len(ids) == 0 {
+		return reserved, nil
+	}
+	encoded, err := json.Marshal(ids)
+	if err != nil {
+		return nil, err
+	}
+	rows, err := db.getReader().QueryContext(ctx, `SELECT session_id FROM session_push_receipts WHERE session_id IN (SELECT value FROM json_each(?))`, string(encoded))
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			return nil, err
+		}
+		reserved[id] = true
+	}
+	return reserved, rows.Err()
 }
 
 // checkSessionPushReservationTx applies to ordinary ingestion, not curation or

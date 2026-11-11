@@ -1432,11 +1432,11 @@ func (e *Engine) clearProviderSourceFreshness(
 // already resolve the member for source freshness and must not make active
 // Claude DAG branches stale.
 func (e *Engine) partitionIntentionalSourceSkips(ctx context.Context,
-	ids []string,
+	ids []string, reserved map[string]bool,
 ) (active []string, skipped map[string]bool) {
 	active = make([]string, 0, len(ids))
 	for _, id := range ids {
-		if e.db.IsSessionExcluded(ctx, id) || e.db.IsSessionTrashed(ctx, id) {
+		if reserved[id] || e.db.IsSessionExcluded(ctx, id) || e.db.IsSessionTrashed(ctx, id) {
 			if skipped == nil {
 				skipped = make(map[string]bool)
 			}
@@ -11216,23 +11216,19 @@ func (e *Engine) collectAndBatchWithOptions(
 		if !e.discardWritesOnCancel {
 			completionCtx = context.WithoutCancel(ctx)
 		}
-		allReserved, ownershipErr := e.filterReservedSourceMembers(completionCtx, &r.processResult, r.agent)
-		if allReserved || ownershipErr != nil {
-			err := ownershipErr
-			if allReserved {
-				err = db.ErrSessionPushConflict
-			}
-			if errors.Is(err, db.ErrSessionPushConflict) {
-				stats.RecordSkip()
-				stats.filesOK++
-				stats.sessionPushReservedFiles++
-				progress.SessionsDone++
-				e.reportProgress(onProgress, progress)
-			} else {
-				log.Printf("validate source session ownership: %v", err)
-				stats.RecordFailed()
-			}
+		reserved, ownershipErr := e.validateSourceSessionOwnership(completionCtx, r.processResult)
+		if ownershipErr != nil {
+			log.Printf("validate source session ownership: %v", ownershipErr)
+			stats.RecordFailed()
 			e.noteSQLiteContainerResult(r.containerResultPath(), false)
+			r.releaseAll()
+			continue
+		}
+		if r.incremental != nil && reserved[applyIDPrefixToID(e.idPrefix, r.incremental.sessionID)] {
+			stats.RecordSkip()
+			stats.filesOK++
+			stats.sessionPushReservedFiles++
+			e.noteSQLiteContainerResult(r.containerResultPath(), true)
 			r.releaseAll()
 			continue
 		}
@@ -11258,8 +11254,21 @@ func (e *Engine) collectAndBatchWithOptions(
 			resultIDs = append(resultIDs, result.Session.ID)
 		}
 		resultIDs = e.applyIDPrefixToSessionIDs(resultIDs)
+		activeResultIDs, sourceCompletionSkipped := e.partitionIntentionalSourceSkips(ctx, resultIDs, reserved)
+		unreservedResultIDs := make([]string, 0, len(resultIDs))
+		for _, id := range resultIDs {
+			if !reserved[id] {
+				unreservedResultIDs = append(unreservedResultIDs, id)
+			}
+		}
+		activeExcluded := excluded[:0]
+		for _, id := range excluded {
+			if !reserved[id] {
+				activeExcluded = append(activeExcluded, id)
+			}
+		}
 		children, err := e.db.SubagentChildSessionIDs(completionCtx, append(
-			append([]string{}, excluded...), resultIDs...,
+			append([]string{}, activeExcluded...), unreservedResultIDs...,
 		))
 		if err != nil {
 			log.Printf("list pre-write subagent children: %v", err)
@@ -11281,10 +11290,7 @@ func (e *Engine) collectAndBatchWithOptions(
 		atomicDAG := sourceRequiresAtomicDAGCompletion(
 			r.agent, len(r.results),
 		)
-		var sourceCompletionSkipped map[string]bool
 		if atomicDAG {
-			activeResultIDs, skipped := e.partitionIntentionalSourceSkips(ctx, resultIDs)
-			sourceCompletionSkipped = skipped
 			staleVersion := max(db.CurrentDataVersion()-1, 0)
 			if err := e.db.SetExistingSessionDataVersions(ctx,
 				activeResultIDs, staleVersion,
@@ -11298,7 +11304,7 @@ func (e *Engine) collectAndBatchWithOptions(
 			}
 		}
 		excludedSessionIDs, err := e.deleteParserExcludedSessions(ctx,
-			r.processResult, sourceAllowsParserExclusions,
+			r.processResult, sourceAllowsParserExclusions, reserved,
 		)
 		if err != nil {
 			log.Printf("delete parser-excluded sessions: %v", err)
@@ -11405,9 +11411,24 @@ func (e *Engine) collectAndBatchWithOptions(
 			storedCwd:  r.sourceCwdStored,
 			storedOK:   r.sourceCwdStoredOK,
 		}
-		allowed, vetoed := e.splitResultsByCwdFilter(r.results, sourceCwd)
+		allowed := make([]parser.ParseResult, 0, len(r.results))
+		activeResults := make([]parser.ParseResult, 0, len(r.results))
+		vetoed := 0
+		for _, result := range r.results {
+			if reserved[applyIDPrefixToID(e.idPrefix, result.Session.ID)] {
+				allowed = append(allowed, result)
+				continue
+			}
+			activeResults = append(activeResults, result)
+			matches, rejected := e.splitResultsByCwdFilter([]parser.ParseResult{result}, sourceCwd)
+			allowed = append(allowed, matches...)
+			vetoed += rejected
+		}
+		if len(r.results) > 0 && len(activeResults) == 0 {
+			stats.sessionPushReservedFiles++
+		}
 		stats.cwdFilteredSessions += vetoed
-		cwdChanged, err := e.reconcileFilteredSourceCwd(ctx, r.results, sourceCwd)
+		cwdChanged, err := e.reconcileFilteredSourceCwd(ctx, activeResults, sourceCwd)
 		if err != nil {
 			log.Printf("reconcile filtered source cwd: %v", err)
 			stats.RecordFailed()
@@ -11550,6 +11571,7 @@ func (e *Engine) collectAndBatchWithOptions(
 					sourceCwdStored:         r.sourceCwdStored,
 					sourceCwdStoredOK:       r.sourceCwdStoredOK,
 					sourceCompletionSkipped: sourceCompletionSkipped[applyIDPrefixToID(e.idPrefix, pr.Session.ID)],
+					sourceReserved:          reserved[applyIDPrefixToID(e.idPrefix, pr.Session.ID)],
 				}
 				if i == 0 && (atomicDAG || r.providerStatHash != nil) {
 					// Claude-compatible providers can emit several DAG branches
@@ -14832,13 +14854,18 @@ func (e *Engine) stageProviderStatHash(
 // safe to exclude from resync's orphan copy.
 func (e *Engine) deleteParserExcludedSessions(ctx context.Context,
 	res processResult,
-	sourceAllowed bool,
+	sourceAllowed bool, reserved map[string]bool,
 ) ([]string, error) {
 	if !sourceAllowed {
 		return nil, nil
 	}
 
-	excluded := e.applyIDPrefixToSessionIDs(res.excludedSessionIDs)
+	var excluded []string
+	for _, id := range e.applyIDPrefixToSessionIDs(res.excludedSessionIDs) {
+		if !reserved[id] {
+			excluded = append(excluded, id)
+		}
+	}
 	if len(excluded) > 0 {
 		if _, err := e.db.DeleteParserExcludedSessions(ctx, excluded); err != nil {
 			return nil, err
@@ -18378,6 +18405,7 @@ type pendingWrite struct {
 	// sourceCompletionSkipped marks a user-excluded or trashed member that
 	// resolves source completeness without requiring a write or promotion.
 	sourceCompletionSkipped bool
+	sourceReserved          bool
 	// storageTrustPath/State/Snap promote the session's OpenCode
 	// storage-gate trust after its batch is confirmed fully written.
 	// Empty for everything else.
@@ -18433,7 +18461,7 @@ func (e *Engine) normalizePendingWriteMachines(
 	indexes := make(map[string][]int, len(batch))
 	ids := make([]string, 0, len(batch))
 	for i := range batch {
-		if batch[i].sess.ID == "" {
+		if batch[i].sourceReserved || batch[i].sess.ID == "" {
 			continue
 		}
 		id := applyIDPrefixToID(e.idPrefix, batch[i].sess.ID)
@@ -18554,7 +18582,7 @@ func (e *Engine) rejectSkipCacheWrites(ctx context.Context, writes []skipCacheWr
 // to invalidate, so without the demotion a partial write (session row updated,
 // messages not) would compare as unchanged and never be repaired.
 func (e *Engine) markStaleFailedMemberWrite(ctx context.Context, pw pendingWrite) {
-	if pw.sess.Agent != parser.AgentOmnigent || pw.sess.ID == "" {
+	if pw.sourceReserved || pw.sess.Agent != parser.AgentOmnigent || pw.sess.ID == "" {
 		return
 	}
 	// Sessions are stored under the remote-sync prefixed ID
@@ -18667,7 +18695,7 @@ func (e *Engine) preserveUnavailableSourceProjects(
 	indexes := make(map[string][]int)
 	ids := make([]string, 0, len(batch))
 	for i := range batch {
-		if batch[i].sourceProjectResolved {
+		if batch[i].sourceReserved || batch[i].sourceProjectResolved {
 			continue
 		}
 		sess := batch[i].sess
@@ -18903,6 +18931,10 @@ func (e *Engine) writeBatchWithOutcomeContext(
 	}
 	resolveWorktreeProject := e.loadWorktreeProjectResolverContext(ctx)
 	for i, pw := range batch {
+		if pw.sourceReserved {
+			outcome.resolved[i] = true
+			continue
+		}
 		if ctx.Err() != nil {
 			return outcome
 		}
@@ -19714,6 +19746,10 @@ func (e *Engine) writeBatchBulkWithOutcomeContext(
 	resolveWorktreeProject := e.loadWorktreeProjectResolverContext(ctx)
 
 	for pendingIndex, pw := range batch {
+		if pw.sourceReserved {
+			outcome.resolved[pendingIndex] = true
+			continue
+		}
 		if ctx.Err() != nil {
 			return outcome
 		}
@@ -22068,16 +22104,19 @@ func (e *Engine) processAndWriteSessionFile(
 		}
 		return false, sessionsChanged, res.err
 	}
-	allReserved, err := e.filterReservedSourceMembers(ctx, &res, file.Agent)
-	if allReserved {
-		return false, sessionsChanged, db.ErrSessionPushConflict
-	}
+	reserved, err := e.validateSourceSessionOwnership(ctx, res)
 	if err != nil {
 		return false, sessionsChanged, err
 	}
+	activeResults := make([]parser.ParseResult, 0, len(res.results))
+	for _, result := range res.results {
+		if !reserved[applyIDPrefixToID(e.idPrefix, result.Session.ID)] {
+			activeResults = append(activeResults, result)
+		}
+	}
 	if res.sourceCwdResolution.State != parser.SourceCwdUnspecified {
 		changed, reconcileErr := e.reconcileFilteredSourceCwd(ctx,
-			res.results,
+			activeResults,
 			sourceCwdDecision{
 				resolution: res.sourceCwdResolution,
 				storedCwd:  res.sourceCwdStored,
@@ -22153,8 +22192,21 @@ func (e *Engine) processAndWriteSessionFile(
 		resultIDs = append(resultIDs, pr.Session.ID)
 	}
 	resultIDs = e.applyIDPrefixToSessionIDs(resultIDs)
+	activeResultIDs, sourceCompletionSkipped := e.partitionIntentionalSourceSkips(ctx, resultIDs, reserved)
+	unreservedResultIDs := make([]string, 0, len(resultIDs))
+	for _, id := range resultIDs {
+		if !reserved[id] {
+			unreservedResultIDs = append(unreservedResultIDs, id)
+		}
+	}
+	activeExcluded := excluded[:0]
+	for _, id := range excluded {
+		if !reserved[id] {
+			activeExcluded = append(activeExcluded, id)
+		}
+	}
 	priorChildren, childErr := e.db.SubagentChildSessionIDs(ctx,
-		append(append([]string{}, excluded...), resultIDs...),
+		append(append([]string{}, activeExcluded...), unreservedResultIDs...),
 	)
 	if childErr != nil {
 		return false, sessionsChanged, fmt.Errorf(
@@ -22178,10 +22230,7 @@ func (e *Engine) processAndWriteSessionFile(
 	atomicDAG := sourceRequiresAtomicDAGCompletion(
 		file.Agent, len(res.results),
 	)
-	var sourceCompletionSkipped map[string]bool
 	if atomicDAG {
-		activeResultIDs, skipped := e.partitionIntentionalSourceSkips(ctx, resultIDs)
-		sourceCompletionSkipped = skipped
 		staleVersion := max(db.CurrentDataVersion()-1, 0)
 		if err := e.db.SetExistingSessionDataVersions(ctx,
 			activeResultIDs, staleVersion,
@@ -22235,7 +22284,7 @@ func (e *Engine) processAndWriteSessionFile(
 	// collectAndBatch, exclusions from a source with no session
 	// inside the cwd allow-list are frozen so archived rows survive.
 	if _, err := e.deleteParserExcludedSessions(ctx,
-		res, sourceAllowsParserExclusions,
+		res, sourceAllowsParserExclusions, reserved,
 	); err != nil {
 		return false, sessionsChanged, fmt.Errorf(
 			"delete parser-excluded sessions: %w", err,
@@ -22288,6 +22337,9 @@ func (e *Engine) processAndWriteSessionFile(
 	// Handle incremental updates from processFile (e.g.
 	// append-only JSONL that was already synced).
 	if res.incremental != nil {
+		if reserved[applyIDPrefixToID(e.idPrefix, res.incremental.sessionID)] {
+			return false, sessionsChanged, nil
+		}
 		if err := e.writeIncremental(ctx, res.incremental); err != nil {
 			return false, sessionsChanged, err
 		}
@@ -22323,6 +22375,10 @@ func (e *Engine) processAndWriteSessionFile(
 		log.Printf("sync: session needs retry: %s", cause)
 	}
 	for i, pr := range res.results {
+		if reserved[resultIDs[i]] {
+			resolved++
+			continue
+		}
 		sessionNeedsRetry := res.providerWideFailureCount > 0 ||
 			res.needsRetryForSession(pr.Session.ID)
 		// Match the batch path: these fallback parses cannot replace saved

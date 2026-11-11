@@ -116,8 +116,8 @@ func (w *sessionPushDeadlineRecorder) SetReadDeadline(deadline time.Time) error 
 func TestSessionPushReadDeadlineScalesWithPayload(t *testing.T) {
 	s := testServer(t, 30*time.Second)
 	s.cfg.AcceptSessionPush, s.cfg.RequireAuth, s.cfg.AuthToken = true, true, "secret"
-	r := httptest.NewRequestWithContext(t.Context(), http.MethodPost, "/api/v1/sessions/ingest", strings.NewReader("{}"))
-	r.ContentLength = artifact.MaxSessionPushBytes
+	body := strings.NewReader(strings.Repeat(" ", int(artifact.MaxSessionPushBytes)-1024))
+	r := httptest.NewRequestWithContext(t.Context(), http.MethodPost, "/api/v1/sessions/ingest", body)
 	r.Header.Set("Authorization", "Bearer secret")
 	r.Header.Set("Content-Type", "application/json")
 	w := &sessionPushDeadlineRecorder{ResponseRecorder: httptest.NewRecorder()}
@@ -136,6 +136,11 @@ func TestSessionPushReceiverInsertAndRetry(t *testing.T) {
 	// Move this selected synthetic session to a distinct receiving archive.
 	receiver := testServer(t, 30*time.Second)
 	receiver.cfg.AcceptSessionPush, receiver.cfg.RequireAuth, receiver.cfg.AuthToken = true, true, "secret"
+	notified := 0
+	receiver.sessionMutationNotify = func() { notified++ }
+	receiver.broadcaster = NewBroadcaster(0)
+	events, unsubscribe := receiver.broadcaster.Subscribe()
+	defer unsubscribe()
 	for _, status := range []string{"created", "unchanged"} {
 		r := httptest.NewRequestWithContext(t.Context(), http.MethodPost,
 			"/api/v1/sessions/ingest", bytes.NewReader(payload))
@@ -146,6 +151,14 @@ func TestSessionPushReceiverInsertAndRetry(t *testing.T) {
 		require.Equal(t, http.StatusOK, w.Code, w.Body.String())
 		assert.JSONEq(t, `{"session_id":"source","agent":"claude","status":"`+status+`"}`, w.Body.String())
 	}
+	assert.Equal(t, 1, notified)
+	select {
+	case event := <-events:
+		assert.Equal(t, "sessions", event.Scope)
+	case <-time.After(5 * time.Second):
+		require.FailNow(t, "accepted session did not broadcast")
+	}
+	assert.Empty(t, events)
 	stored, err := receiver.db.(*db.DB).GetSession(t.Context(), "source")
 	require.NoError(t, err)
 	require.NotNil(t, stored)
@@ -174,16 +187,22 @@ func TestSessionPushReceiverRejectsChangedBoundary(t *testing.T) {
 	before, err := receiver.db.(*db.DB).GetAllMessages(t.Context(), session.ID)
 	require.NoError(t, err)
 	for _, tc := range []struct {
-		name   string
-		change func(*db.Message)
+		name      string
+		change    func(*db.Message)
+		unchanged bool
 	}{
-		{"compact boundary", func(m *db.Message) { m.IsCompactBoundary = true }},
-		{"source subtype", func(m *db.Message) { m.SourceSubtype = "notice" }},
-		{"timestamp", func(m *db.Message) { m.Timestamp = "2026-01-02T00:00:00Z" }},
-		{"model", func(m *db.Message) { m.Model = "model-b" }},
-		{"tool identity", func(m *db.Message) { m.ToolCalls[0].ToolUseID = "other-call" }},
-		{"result time", func(m *db.Message) { m.ToolCalls[0].ResultEvents[0].Timestamp = "2026-01-02T00:00:00Z" }},
-		{"result attribution", func(m *db.Message) { m.ToolCalls[0].ResultEvents[0].AgentID = "agent-b" }},
+		{"compact boundary", func(m *db.Message) { m.IsCompactBoundary = true }, false},
+		{"source subtype", func(m *db.Message) { m.SourceSubtype = "notice" }, false},
+		{"timestamp", func(m *db.Message) { m.Timestamp = "2026-01-02T00:00:00Z" }, false},
+		{"model", func(m *db.Message) { m.Model = "model-b"; m.ReasoningEffort = "high" }, true},
+		{"accounting", func(m *db.Message) { m.ProviderID = "provider-b"; m.ContextTokens = 99; m.SourceUUID = "new-source" }, true},
+		{"text", func(m *db.Message) { m.Content = "changed" }, false},
+		{"role", func(m *db.Message) { m.Role = "assistant" }, false},
+		{"tool input", func(m *db.Message) { m.ToolCalls[0].InputJSON = `{"path":"other"}` }, false},
+		{"tool result", func(m *db.Message) { m.ToolCalls[0].ResultContent = "changed" }, false},
+		{"tool identity", func(m *db.Message) { m.ToolCalls[0].ToolUseID = "other-call" }, false},
+		{"result time", func(m *db.Message) { m.ToolCalls[0].ResultEvents[0].Timestamp = "2026-01-02T00:00:00Z" }, false},
+		{"result attribution", func(m *db.Message) { m.ToolCalls[0].ResultEvents[0].AgentID = "agent-b" }, false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			changedMessage := message
@@ -194,7 +213,13 @@ func TestSessionPushReceiverRejectsChangedBoundary(t *testing.T) {
 			require.NoError(t, err)
 			changed, _, err := artifact.EncodeSessionPush(t.Context(), source, session.ID, "")
 			require.NoError(t, err)
-			assert.Equal(t, http.StatusConflict, send(changed).Code)
+			result := send(changed)
+			if tc.unchanged {
+				assert.Equal(t, http.StatusOK, result.Code)
+				assert.JSONEq(t, `{"session_id":"source","agent":"claude","status":"unchanged"}`, result.Body.String())
+			} else {
+				assert.Equal(t, http.StatusConflict, result.Code)
+			}
 			stored, err := receiver.db.(*db.DB).GetAllMessages(t.Context(), session.ID)
 			require.NoError(t, err)
 			assert.Equal(t, before, stored)

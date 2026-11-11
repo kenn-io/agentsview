@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -269,11 +270,14 @@ func TestSyncClaudeDAGIntentionalSkipCompletesActiveMembers(t *testing.T) {
 		name       string
 		trashed    bool
 		syncSingle bool
+		reserved   bool
 	}{
 		{name: "sync_all/excluded"},
 		{name: "sync_all/trashed", trashed: true},
 		{name: "sync_single/excluded", syncSingle: true},
 		{name: "sync_single/trashed", trashed: true, syncSingle: true},
+		{name: "sync_all/reserved", reserved: true},
+		{name: "sync_single/reserved", syncSingle: true, reserved: true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			database := openTestDB(t)
@@ -283,6 +287,12 @@ func TestSyncClaudeDAGIntentionalSkipCompletesActiveMembers(t *testing.T) {
 			path := filepath.Join(projectDir, "forked.jsonl")
 			builder := newClaudeDAGBuilder(true)
 			require.NoError(t, os.WriteFile(path, []byte(builder.String()), 0o644))
+			if tc.reserved {
+				receipt := db.SessionPushReceipt{SessionID: "forked-i", SourceOrigin: "source", PayloadHash: strings.Repeat("a", 64)}
+				write := db.SessionBatchWrite{Session: db.Session{ID: "forked-i", Agent: "claude", Machine: "source", MessageCount: 1}, Messages: []db.Message{{SessionID: "forked-i", Ordinal: 0, Role: "assistant", Content: "accepted snapshot"}}, ReplaceMessages: true, DataVersion: db.CurrentDataVersion()}
+				_, err := database.ApplySessionPush(t.Context(), receipt, write)
+				require.NoError(t, err)
+			}
 
 			engine := NewEngine(t.Context(), database, EngineConfig{
 				AgentDirs: map[parser.AgentType][]string{
@@ -292,9 +302,19 @@ func TestSyncClaudeDAGIntentionalSkipCompletesActiveMembers(t *testing.T) {
 			})
 			t.Cleanup(engine.Close)
 			initial := engine.SyncAll(t.Context(), nil)
-			require.Equal(t, 2, initial.Synced)
+			if tc.reserved {
+				require.Equal(t, 1, initial.Synced)
+				messages, err := database.GetAllMessages(t.Context(), "forked-i")
+				require.NoError(t, err)
+				require.Len(t, messages, 1)
+				assert.Equal(t, "accepted snapshot", messages[0].Content)
+			} else {
+				require.Equal(t, 2, initial.Synced)
+			}
 			require.Zero(t, initial.Failed)
-			if tc.trashed {
+			if tc.reserved {
+				// The receipt remains the owner through subsequent syncs.
+			} else if tc.trashed {
 				require.NoError(t, database.SoftDeleteSession(t.Context(), "forked-i"))
 			} else {
 				require.NoError(t, database.DeleteSession(t.Context(), "forked-i"))
@@ -340,6 +360,19 @@ func TestSyncClaudeDAGIntentionalSkipCompletesActiveMembers(t *testing.T) {
 			assert.Zero(t, noop.Synced,
 				"a completed active branch must not rewrite on restart")
 			assert.Zero(t, noop.Failed)
+
+			if tc.reserved {
+				rebuilt := restarted.ResyncAll(t.Context(), nil)
+				require.True(t, rebuilt.ArchiveRebuilt)
+				require.Zero(t, rebuilt.Failed)
+				main, err := database.GetSessionFull(t.Context(), "forked")
+				require.NoError(t, err)
+				require.NotNil(t, main)
+				messages, err := database.GetAllMessages(t.Context(), "forked-i")
+				require.NoError(t, err)
+				require.Len(t, messages, 1)
+				assert.Equal(t, "accepted snapshot", messages[0].Content)
+			}
 
 			if !tc.trashed {
 				return

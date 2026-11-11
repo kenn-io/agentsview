@@ -52,8 +52,6 @@ type sessionPushIdentityMessage struct {
 	Timestamp         string                        `json:"timestamp"`
 	HasThinking       bool                          `json:"has_thinking"`
 	HasToolUse        bool                          `json:"has_tool_use"`
-	Model             string                        `json:"model"`
-	ReasoningEffort   string                        `json:"reasoning_effort"`
 	IsSystem          bool                          `json:"is_system"`
 	SourceSubtype     string                        `json:"source_subtype"`
 	PromptSource      string                        `json:"prompt_source"`
@@ -81,7 +79,7 @@ type sessionPushIdentityEvent struct {
 }
 
 func sessionPushIdentity(m segmentMessage) sessionPushIdentityMessage {
-	item := sessionPushIdentityMessage{Ordinal: m.Ordinal, Role: m.Role, Content: m.Content, ThinkingText: m.ThinkingText, Timestamp: m.Timestamp, HasThinking: m.HasThinking, HasToolUse: m.HasToolUse, Model: m.Model, ReasoningEffort: m.ReasoningEffort, IsSystem: m.IsSystem, SourceSubtype: m.SourceSubtype, PromptSource: m.PromptSource, IsCompactBoundary: m.IsCompactBoundary}
+	item := sessionPushIdentityMessage{Ordinal: m.Ordinal, Role: m.Role, Content: m.Content, ThinkingText: m.ThinkingText, Timestamp: m.Timestamp, HasThinking: m.HasThinking, HasToolUse: m.HasToolUse, IsSystem: m.IsSystem, SourceSubtype: m.SourceSubtype, PromptSource: m.PromptSource, IsCompactBoundary: m.IsCompactBoundary}
 	for _, call := range m.ToolCalls {
 		tool := sessionPushIdentityToolCall{Name: call.ToolName, ID: call.ToolUseID, Input: call.InputJSON, Result: call.ResultContent, Subagent: call.SubagentSessionID}
 		for _, event := range call.ResultEvents {

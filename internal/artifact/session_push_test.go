@@ -132,6 +132,8 @@ func TestSessionPushReceiptIgnoresSegmentBoundaries(t *testing.T) {
 			data.Messages[0].OutputTokens = 20
 			data.Messages[0].HasContextTokens = true
 			data.Messages[0].HasOutputTokens = true
+			data.Messages[0].Model = "corrected-model"
+			data.Messages[0].ReasoningEffort = "corrected-effort"
 			data.Messages[0].ProviderID = "corrected-provider"
 			data.Messages[0].ClaudeMessageID = "corrected-message"
 			data.Messages[0].ClaudeRequestID = "corrected-request"
@@ -223,14 +225,14 @@ func TestSessionPushIdentityV1(t *testing.T) {
 		Messages []sessionPushIdentityMessage `json:"messages"`
 	}{1, []sessionPushIdentityMessage{sessionPushIdentity(message)}})
 	require.NoError(t, err)
-	const expected = `{"messages":[{"content":"answer","has_thinking":true,"has_tool_use":true,"is_compact_boundary":true,"is_system":true,"model":"model","ordinal":0,"prompt_source":"prompt","reasoning_effort":"high","role":"assistant","source_subtype":"notice","thinking_text":"thought","timestamp":"2026-01-01T00:00:00Z","tool_calls":[{"events":[{"agent":"agent","content":"result","id":"call","source":"tool","status":"done","subagent":"child","timestamp":"2026-01-01T00:00:01Z"}],"id":"call","input":"input","name":"Read","result":"result","subagent":"child"}]}],"v":1}` + "\n"
+	const expected = `{"messages":[{"content":"answer","has_thinking":true,"has_tool_use":true,"is_compact_boundary":true,"is_system":true,"ordinal":0,"prompt_source":"prompt","role":"assistant","source_subtype":"notice","thinking_text":"thought","timestamp":"2026-01-01T00:00:00Z","tool_calls":[{"events":[{"agent":"agent","content":"result","id":"call","source":"tool","status":"done","subagent":"child","timestamp":"2026-01-01T00:00:01Z"}],"id":"call","input":"input","name":"Read","result":"result","subagent":"child"}]}],"v":1}` + "\n"
 	assert.Equal(t, expected, string(canonical))
-	assert.Equal(t, "7f6a0eafdfffaa6e2486bf67cbf454abd8c79eff4f92274a2ea6fe32b619d154", hashHex(canonical))
+	assert.Equal(t, "d544bb593031823a5b2175f36a2135f9619c000846b3289f15bfa8b5ea203bf0", hashHex(canonical))
 	packet, err := encodeSessionPushData(t.Context(), "source", db.Session{ID: "sample", Agent: "claude", Machine: "source", MessageCount: 1}, db.ArtifactExportData{Messages: []db.Message{message.dbMessage()}})
 	require.NoError(t, err)
 	receipt, _, err := DecodeSessionPush(packet)
 	require.NoError(t, err)
-	assert.Equal(t, "7f6a0eafdfffaa6e2486bf67cbf454abd8c79eff4f92274a2ea6fe32b619d154", receipt.PayloadHash)
+	assert.Equal(t, "d544bb593031823a5b2175f36a2135f9619c000846b3289f15bfa8b5ea203bf0", receipt.PayloadHash)
 }
 
 func TestSessionPushPreservesCapabilities(t *testing.T) {

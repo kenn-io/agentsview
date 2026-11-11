@@ -67,11 +67,24 @@ func TestSessionPushCreatesAndRetryPreservesCuration(t *testing.T) {
 	d := testDB(t)
 	ctx := t.Context()
 	receipt, write := sessionPushFixture("snapshot")
+	started := "2026-08-10T10:00:00Z"
+	write.Session.StartedAt = &started
+	write.Messages[0].Role = "assistant"
+	write.Messages[0].Timestamp = started
+	write.Messages[0].Model = "model"
+	write.Messages[0].TokenUsage = []byte(`{"input_tokens":10}`)
+	filter := UsageFilter{From: "2026-08-10", To: "2026-08-10", Timezone: "UTC"}
+	usage, err := d.GetDailyUsage(ctx, filter)
+	require.NoError(t, err)
+	assert.Zero(t, usage.Totals.InputTokens)
 	require.NoError(t, d.SetSyncState(ctx, "artifact_origin_id", "receiver-origin"))
 	require.NoError(t, d.SetSyncState(ctx, "artifact_local_machine_name", receipt.SourceOrigin))
 	created, err := d.ApplySessionPush(ctx, receipt, write)
 	require.NoError(t, err)
 	require.True(t, created)
+	usage, err = d.GetDailyUsage(ctx, filter)
+	require.NoError(t, err)
+	assert.Equal(t, 20, usage.Totals.InputTokens)
 	requireSessionPushReceipt(t, d, "snapshot")
 	messages, err := d.GetAllMessages(ctx, "snapshot")
 	require.NoError(t, err)

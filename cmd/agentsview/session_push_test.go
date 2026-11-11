@@ -27,8 +27,8 @@ func TestPushSessionCommandToAuthenticatedReceiver(t *testing.T) {
 	source, err := db.Open(t.Context(), filepath.Join(sourceDir, "sessions.db"))
 	require.NoError(t, err)
 	_, err = source.WriteSessionBatchAtomic(t.Context(), []db.SessionBatchWrite{{
-		Session:  db.Session{ID: "codex:selected", Agent: "codex", Machine: "source", MessageCount: 1, UserMessageCount: 1},
-		Messages: []db.Message{{SessionID: "codex:selected", Ordinal: 0, Role: "user", Content: "codex:selected"}}, ReplaceMessages: true,
+		Session:  db.Session{ID: "host~codex:selected", Agent: "codex", Machine: "source", ParentSessionID: new("host~codex:parent"), RelationshipType: "subagent", MessageCount: 1, UserMessageCount: 1},
+		Messages: []db.Message{{SessionID: "host~codex:selected", Ordinal: 0, Role: "user", Content: "host~codex:selected"}}, ReplaceMessages: true,
 	}})
 	require.NoError(t, err)
 	require.NoError(t, source.Close())
@@ -48,13 +48,17 @@ func TestPushSessionCommandToAuthenticatedReceiver(t *testing.T) {
 	cmd := newPushSessionCommand()
 	var out bytes.Buffer
 	cmd.SetOut(&out)
-	cmd.SetArgs([]string{"codex:selected", "--to", remote.URL + "/mounted", "--agent", "codex", "--json"})
+	cmd.SetArgs([]string{"host~codex:selected", "--to", remote.URL + "/mounted", "--agent", "codex", "--json"})
 	require.NoError(t, cmd.ExecuteContext(t.Context()))
-	assert.JSONEq(t, `{"session_id":"codex:selected","agent":"codex","status":"created"}`, out.String())
-	messages, err := target.GetAllMessages(t.Context(), "codex:selected")
+	assert.JSONEq(t, `{"session_id":"host~codex:selected","agent":"codex","status":"created"}`, out.String())
+	messages, err := target.GetAllMessages(t.Context(), "host~codex:selected")
 	require.NoError(t, err)
 	require.Len(t, messages, 1)
-	assert.Equal(t, "codex:selected", messages[0].Content)
+	assert.Equal(t, "host~codex:selected", messages[0].Content)
+	stored, err := target.GetSessionFull(t.Context(), "host~codex:selected")
+	require.NoError(t, err)
+	require.NotNil(t, stored)
+	assert.Equal(t, new("host~codex:parent"), stored.ParentSessionID)
 }
 
 func TestPushSessionTransportRefusesUnsafeTargets(t *testing.T) {
