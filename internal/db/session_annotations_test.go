@@ -1,7 +1,6 @@
 package db
 
 import (
-	"context"
 	"database/sql"
 	"fmt"
 	"path/filepath"
@@ -746,17 +745,12 @@ func TestSessionExternalParentYieldsToSpawnEdge(t *testing.T) {
 	assert.True(t, link.Applied)
 }
 
-type sessionAnnotationTestReporter interface {
-	Errorf(string, ...any)
-	FailNow()
-}
-
-func exercisePassiveSessionPushExternalParent(
-	t sessionAnnotationTestReporter, d *DB, ctx context.Context, suffix, toolName string,
-) {
-	managerID := "manager-" + suffix
-	workerID := "worker-" + suffix
-	pushedID := "pushed-" + suffix
+func TestSessionExternalParentIgnoresPassiveSessionPushReferences(t *testing.T) {
+	d := testDB(t)
+	ctx := t.Context()
+	managerID := "manager-fixture"
+	workerID := "worker-fixture"
+	pushedID := "pushed-fixture"
 	for _, id := range []string{managerID, workerID} {
 		require.NoError(t, d.UpsertSession(ctx, Session{
 			ID: id, Project: "proj", Machine: defaultMachine, Agent: defaultAgent,
@@ -772,7 +766,7 @@ func exercisePassiveSessionPushExternalParent(
 	write.Messages[0].Role = "assistant"
 	write.Messages[0].HasToolUse = true
 	write.Messages[0].ToolCalls = []ToolCall{{
-		ToolName: toolName, Category: "Task", SubagentSessionID: workerID,
+		ToolName: "Agent", Category: "Task", SubagentSessionID: workerID,
 	}}
 	created, err := d.ApplySessionPush(ctx, receipt, write)
 	require.NoError(t, err)
@@ -797,6 +791,8 @@ func exercisePassiveSessionPushExternalParent(
 		_, err = d.GetSessionExternalParent(ctx, workerID)
 		require.ErrorIs(t, err, sql.ErrNoRows)
 	}
+	_, err = d.LinkSubagentSessionsContext(ctx)
+	require.NoError(t, err)
 	assertApplied()
 	cleared, err := d.ClearSessionExternalParent(ctx, workerID)
 	require.NoError(t, err)
@@ -811,11 +807,18 @@ func exercisePassiveSessionPushExternalParent(
 	require.NoError(t, err)
 	assert.True(t, cleared.Changed)
 	assertCleared()
-}
-
-func TestSessionExternalParentIgnoresPassiveSessionPushReferences(t *testing.T) {
-	d := testDB(t)
-	exercisePassiveSessionPushExternalParent(t, d, t.Context(), "fixture", "Agent")
+	children, err := d.SubagentChildSessionIDs(ctx, []string{pushedID})
+	require.NoError(t, err)
+	assert.Empty(t, children)
+	_, err = d.getWriter().ExecContext(ctx, `UPDATE sessions SET parent_session_id = 'absent', relationship_type = 'subagent' WHERE id = ?`, workerID)
+	require.NoError(t, err)
+	require.NoError(t, d.QueueSubagentParentCleanupRepairs(ctx, []string{workerID}))
+	_, err = d.RepairQueuedSubagentParentsContext(ctx, nil)
+	require.NoError(t, err)
+	worker, err := d.GetSession(ctx, workerID)
+	require.NoError(t, err)
+	require.NotNil(t, worker)
+	assert.Nil(t, worker.ParentSessionID)
 }
 
 func TestAnnotationTreeSkipsHiddenAncestors(t *testing.T) {

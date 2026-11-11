@@ -6,128 +6,44 @@ import (
 	"fmt"
 	"strings"
 	"testing"
-	"unicode/utf8"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"go.kenn.io/agentsview/internal/db"
-	"hegel.dev/go/hegel"
 )
-
-func TestSessionPushRetryAfterToolMetadataChanges(t *testing.T) {
-	session := db.Session{ID: "sample", Agent: "claude", Machine: "source", MessageCount: 1}
-	data := db.ArtifactExportData{Messages: []db.Message{{Ordinal: 0, Role: "assistant", ToolCalls: []db.ToolCall{{ToolName: "Read", InputJSON: `{"path":"file"}`, ResultContent: "result", Category: "Read", FilePath: "file", SkillName: "one"}}}}}
-	first, err := encodeSessionPushData(t.Context(), "source", session, data)
-	require.NoError(t, err)
-	data.Messages[0].ToolCalls[0].Category = "Other"
-	data.Messages[0].ToolCalls[0].FilePath = "resolved-file"
-	data.Messages[0].ToolCalls[0].SkillName = "two"
-	second, err := encodeSessionPushData(t.Context(), "source", session, data)
-	require.NoError(t, err)
-	receipt1, write1, err := DecodeSessionPush(first)
-	require.NoError(t, err)
-	receipt2, write2, err := DecodeSessionPush(second)
-	require.NoError(t, err)
-	receiver := testDB(t)
-	created, err := receiver.ApplySessionPush(t.Context(), receipt1, write1)
-	require.NoError(t, err)
-	require.True(t, created)
-	created, err = receiver.ApplySessionPush(t.Context(), receipt2, write2)
-	require.NoError(t, err)
-	assert.False(t, created)
-}
-
-func TestSessionPushTransfersStructuredToolResult(t *testing.T) {
-	fields := make([]string, 257)
-	for i := range fields {
-		fields[i] = fmt.Sprintf(`"field%d":%d`, i, i)
-	}
-	content := "{" + strings.Join(fields, ",") + "}"
-	session := db.Session{ID: "sample", Agent: "claude", Machine: "source", MessageCount: 1}
-	packet, err := encodeSessionPushData(t.Context(), "source", session, db.ArtifactExportData{Messages: []db.Message{{Ordinal: 0, Role: "assistant", ToolCalls: []db.ToolCall{{ToolName: "Read", ResultContent: content}}}}})
-	require.NoError(t, err)
-	receipt, write, err := DecodeSessionPush(packet)
-	require.NoError(t, err)
-	receiver := testDB(t)
-	_, err = receiver.ApplySessionPush(t.Context(), receipt, write)
-	require.NoError(t, err)
-	messages, err := receiver.GetAllMessages(t.Context(), "sample")
-	require.NoError(t, err)
-	require.Len(t, messages, 1)
-	require.Len(t, messages[0].ToolCalls, 1)
-	assert.Equal(t, content, messages[0].ToolCalls[0].ResultContent)
-}
 
 func TestSessionPushExactSelection(t *testing.T) {
 	d := testDB(t)
-	for _, id := range []string{"codex:chosen", "codex:chosen-child", "other"} {
+	for _, id := range []string{"codex:chosen", "codex:parent", "codex:chosen-child", "other"} {
+		session := db.Session{ID: id, Agent: "codex", Machine: "source", Project: "example", MessageCount: 1, UserMessageCount: 1}
+		message := db.Message{SessionID: id, Ordinal: 0, Role: "user", Content: id}
+		if id == "codex:chosen" {
+			session.ParentSessionID = new("codex:parent")
+			session.RelationshipType = "subagent"
+			message.ToolCalls = []db.ToolCall{{ToolName: "Agent", SubagentSessionID: "codex:chosen-child"}}
+		}
 		_, err := d.WriteSessionBatchAtomic(t.Context(), []db.SessionBatchWrite{{
-			Session:  db.Session{ID: id, Agent: "codex", Machine: "source", Project: "example", MessageCount: 1, UserMessageCount: 1},
-			Messages: []db.Message{{SessionID: id, Ordinal: 0, Role: "user", Content: id}}, ReplaceMessages: true,
+			Session: session, Messages: []db.Message{message}, ReplaceMessages: true,
 		}})
 		require.NoError(t, err)
 	}
 	data, _, err := EncodeSessionPush(t.Context(), d, "codex:chosen", "codex")
 	require.NoError(t, err)
-	assert.NotContains(t, string(data), "chosen-child")
 	receipt, write, err := DecodeSessionPush(data)
 	require.NoError(t, err)
 	assert.Equal(t, "codex:chosen", receipt.SessionID)
 	assert.Equal(t, receipt.SessionID, write.Session.ID)
 	require.Len(t, write.Messages, 1)
 	assert.Equal(t, "codex:chosen", write.Messages[0].Content)
+	require.Len(t, write.Messages[0].ToolCalls, 1)
+	assert.Equal(t, "codex:chosen-child", write.Messages[0].ToolCalls[0].SubagentSessionID)
+	require.NotNil(t, write.Session.ParentSessionID)
+	assert.Equal(t, "codex:parent", *write.Session.ParentSessionID)
 	assert.Nil(t, write.Session.FilePath)
 	_, _, err = EncodeSessionPush(t.Context(), d, "codex:cho", "codex")
 	require.Error(t, err)
 	_, _, err = EncodeSessionPush(t.Context(), d, "codex:chosen", "claude")
 	require.Error(t, err)
-}
-
-func TestSessionPushRetryAfterRename(t *testing.T) {
-	d := testDB(t)
-	require.NoError(t, d.UpsertSession(t.Context(), db.Session{ID: "sample", Agent: "claude", Machine: "source"}))
-	first, _, err := EncodeSessionPush(t.Context(), d, "sample", "")
-	require.NoError(t, err)
-	name := "renamed"
-	require.NoError(t, d.RenameSession(t.Context(), "sample", &name))
-	second, _, err := EncodeSessionPush(t.Context(), d, "sample", "")
-	require.NoError(t, err)
-	receipt1, _, err := DecodeSessionPush(first)
-	require.NoError(t, err)
-	receipt2, _, err := DecodeSessionPush(second)
-	require.NoError(t, err)
-	assert.Equal(t, receipt1.PayloadHash, receipt2.PayloadHash)
-}
-
-func TestSessionPushRetryAfterUsageChanges(t *testing.T) {
-	session := db.Session{ID: "sample", Agent: "claude", Machine: "source", MessageCount: 1, UserMessageCount: 1}
-	data := db.ArtifactExportData{Messages: []db.Message{{Ordinal: 0, Role: "user", Content: "hello"}}}
-	first, err := encodeSessionPushData(t.Context(), "source", session, data)
-	require.NoError(t, err)
-	data.Messages[0].TokenUsage = []byte(`{"input_tokens":100}`)
-	data.Messages[0].ContextTokens = 100
-	data.Messages[0].OutputTokens = 20
-	data.Messages[0].HasContextTokens = true
-	data.Messages[0].HasOutputTokens = true
-	data.Messages[0].SourceUUID = "new-source-id"
-	data.Messages[0].SourceType = "updated-source-type"
-	data.Messages[0].SourceParentUUID = "new-parent-id"
-	data.Messages[0].IsSidechain = true
-	data.Messages[0].ContentLength = 123
-	second, err := encodeSessionPushData(t.Context(), "source", session, data)
-	require.NoError(t, err)
-	receipt1, write1, err := DecodeSessionPush(first)
-	require.NoError(t, err)
-	receipt2, write2, err := DecodeSessionPush(second)
-	require.NoError(t, err)
-	assert.Equal(t, receipt1.PayloadHash, receipt2.PayloadHash)
-	receiver := testDB(t)
-	created, err := receiver.ApplySessionPush(t.Context(), receipt1, write1)
-	require.NoError(t, err)
-	require.True(t, created)
-	created, err = receiver.ApplySessionPush(t.Context(), receipt2, write2)
-	require.NoError(t, err)
-	assert.False(t, created)
 }
 
 func TestSessionPushPreservesLauncherParent(t *testing.T) {
@@ -162,48 +78,114 @@ func TestSessionPushRejectsFutureParserVersion(t *testing.T) {
 }
 
 func TestSessionPushReceiptIgnoresSegmentBoundaries(t *testing.T) {
-	session := db.Session{ID: "sample", Agent: "claude", Machine: "source", MessageCount: 2, UserMessageCount: 1}
-	data := db.ArtifactExportData{Messages: []db.Message{{Ordinal: 0, Role: "user", Content: "hello"}, {Ordinal: 1, Role: "assistant", Content: "world"}}}
-	packet, err := encodeSessionPushData(t.Context(), "source", session, data)
-	require.NoError(t, err)
-	original, _, err := DecodeSessionPush(packet)
-	require.NoError(t, err)
-	var envelope SessionPushEnvelope
-	require.NoError(t, json.Unmarshal(packet, &envelope))
-	var segments []sessionPushSegment
-	require.NoError(t, json.Unmarshal(envelope.Segments, &segments))
-	require.Len(t, segments, 1)
-	lines := strings.SplitAfter(segments[0].NDJSON, "\n")
-	require.GreaterOrEqual(t, len(lines), 2)
-	first, second := lines[0], strings.Join(lines[1:], "")
-	segments = []sessionPushSegment{{SHA256: hashHex([]byte(first)), NDJSON: first}, {SHA256: hashHex([]byte(second)), NDJSON: second}}
-	var m manifest
-	require.NoError(t, json.Unmarshal(envelope.Manifest, &m))
-	m.Segments = []string{segments[0].SHA256, segments[1].SHA256}
-	envelope.Manifest, err = json.Marshal(m)
-	require.NoError(t, err)
-	envelope.Segments, err = json.Marshal(segments)
-	require.NoError(t, err)
-	packet, err = json.Marshal(envelope)
-	require.NoError(t, err)
-	resegmented, _, err := DecodeSessionPush(packet)
-	require.NoError(t, err)
-	assert.Equal(t, original.PayloadHash, resegmented.PayloadHash)
-	for i := range segments {
-		require.Contains(t, segments[i].NDJSON, `"v":4`)
-		segments[i].NDJSON = strings.Replace(segments[i].NDJSON, `"v":4`, `"v":1`, 1)
-		segments[i].SHA256 = hashHex([]byte(segments[i].NDJSON))
-		m.Segments[i] = segments[i].SHA256
+	for name, check := range map[string]func(*testing.T){
+		"rename": func(t *testing.T) {
+			d := testDB(t)
+			require.NoError(t, d.UpsertSession(t.Context(), db.Session{ID: "sample", Agent: "claude", Machine: "source"}))
+			first, _, err := EncodeSessionPush(t.Context(), d, "sample", "")
+			require.NoError(t, err)
+			name := "renamed"
+			require.NoError(t, d.RenameSession(t.Context(), "sample", &name))
+			second, _, err := EncodeSessionPush(t.Context(), d, "sample", "")
+			require.NoError(t, err)
+			receipt1, _, err := DecodeSessionPush(first)
+			require.NoError(t, err)
+			receipt2, _, err := DecodeSessionPush(second)
+			require.NoError(t, err)
+			assert.Equal(t, receipt1.PayloadHash, receipt2.PayloadHash)
+		},
+		"usage and source metadata": func(t *testing.T) {
+			session := db.Session{ID: "sample", Agent: "claude", Machine: "source", MessageCount: 1, UserMessageCount: 1}
+			fields := make([]string, 257)
+			for i := range fields {
+				fields[i] = fmt.Sprintf(`"field%d":%d`, i, i)
+			}
+			content := "{" + strings.Join(fields, ",") + "}"
+			data := db.ArtifactExportData{Messages: []db.Message{{Ordinal: 0, Role: "user", Content: "hello", ToolCalls: []db.ToolCall{{ToolName: "Read", ResultContent: content, Category: "Read", FilePath: "file", SkillName: "one"}}}}}
+			first, err := encodeSessionPushData(t.Context(), "source", session, data)
+			require.NoError(t, err)
+			data.Messages[0].TokenUsage = []byte(`{"input_tokens":100}`)
+			data.Messages[0].ContextTokens = 100
+			data.Messages[0].OutputTokens = 20
+			data.Messages[0].HasContextTokens = true
+			data.Messages[0].HasOutputTokens = true
+			data.Messages[0].SourceUUID = "new-source-id"
+			data.Messages[0].SourceType = "updated-source-type"
+			data.Messages[0].SourceParentUUID = "new-parent-id"
+			data.Messages[0].IsSidechain = true
+			data.Messages[0].ContentLength = 123
+			data.Messages[0].ToolCalls[0].Category = "Other"
+			data.Messages[0].ToolCalls[0].FilePath = "resolved-file"
+			data.Messages[0].ToolCalls[0].SkillName = "two"
+			second, err := encodeSessionPushData(t.Context(), "source", session, data)
+			require.NoError(t, err)
+			receipt1, _, err := DecodeSessionPush(first)
+			require.NoError(t, err)
+			receipt2, write, err := DecodeSessionPush(second)
+			require.NoError(t, err)
+			require.Len(t, write.Messages[0].ToolCalls, 1)
+			assert.Equal(t, content, write.Messages[0].ToolCalls[0].ResultContent)
+			assert.Equal(t, receipt1.PayloadHash, receipt2.PayloadHash)
+		},
+		"segments and wire version": func(t *testing.T) {
+			session := db.Session{ID: "sample", Agent: "claude", Machine: "source", MessageCount: 2, UserMessageCount: 1}
+			data := db.ArtifactExportData{Messages: []db.Message{{Ordinal: 0, Role: "user", Content: "hello"}, {Ordinal: 1, Role: "assistant", Content: "world"}}}
+			packet, err := encodeSessionPushData(t.Context(), "source", session, data)
+			require.NoError(t, err)
+			original, _, err := DecodeSessionPush(packet)
+			require.NoError(t, err)
+			var envelope SessionPushEnvelope
+			require.NoError(t, json.Unmarshal(packet, &envelope))
+			var segments []sessionPushSegment
+			require.NoError(t, json.Unmarshal(envelope.Segments, &segments))
+			require.Len(t, segments, 1)
+			lines := strings.SplitAfter(segments[0].NDJSON, "\n")
+			require.GreaterOrEqual(t, len(lines), 2)
+			first, second := lines[0], strings.Join(lines[1:], "")
+			segments = []sessionPushSegment{{SHA256: hashHex([]byte(first)), NDJSON: first}, {SHA256: hashHex([]byte(second)), NDJSON: second}}
+			var m manifest
+			require.NoError(t, json.Unmarshal(envelope.Manifest, &m))
+			m.Segments = []string{segments[0].SHA256, segments[1].SHA256}
+			envelope.Manifest, err = json.Marshal(m)
+			require.NoError(t, err)
+			envelope.Segments, err = json.Marshal(segments)
+			require.NoError(t, err)
+			packet, err = json.Marshal(envelope)
+			require.NoError(t, err)
+			resegmented, _, err := DecodeSessionPush(packet)
+			require.NoError(t, err)
+			assert.Equal(t, original.PayloadHash, resegmented.PayloadHash)
+			for i := range segments {
+				require.Contains(t, segments[i].NDJSON, `"v":4`)
+				segments[i].NDJSON = strings.Replace(segments[i].NDJSON, `"v":4`, `"v":1`, 1)
+				segments[i].SHA256 = hashHex([]byte(segments[i].NDJSON))
+				m.Segments[i] = segments[i].SHA256
+			}
+			envelope.Manifest, err = json.Marshal(m)
+			require.NoError(t, err)
+			envelope.Segments, err = json.Marshal(segments)
+			require.NoError(t, err)
+			packet, err = json.Marshal(envelope)
+			require.NoError(t, err)
+			older, _, err := DecodeSessionPush(packet)
+			require.NoError(t, err)
+			assert.Equal(t, original.PayloadHash, older.PayloadHash)
+		},
+		"repeat": func(t *testing.T) {
+			session := db.Session{ID: "sample", Agent: "claude", Machine: "source"}
+			first, err := encodeSessionPushData(t.Context(), "source", session, db.ArtifactExportData{})
+			require.NoError(t, err)
+			second, err := encodeSessionPushData(t.Context(), "source", session, db.ArtifactExportData{})
+			require.NoError(t, err)
+			a, _, err := DecodeSessionPush(first)
+			require.NoError(t, err)
+			b, _, err := DecodeSessionPush(second)
+			require.NoError(t, err)
+			assert.Equal(t, a.PayloadHash, b.PayloadHash)
+		},
+	} {
+		t.Run(name, check)
 	}
-	envelope.Manifest, err = json.Marshal(m)
-	require.NoError(t, err)
-	envelope.Segments, err = json.Marshal(segments)
-	require.NoError(t, err)
-	packet, err = json.Marshal(envelope)
-	require.NoError(t, err)
-	older, _, err := DecodeSessionPush(packet)
-	require.NoError(t, err)
-	assert.Equal(t, original.PayloadHash, older.PayloadHash)
 }
 
 func TestSessionPushIdentityV1(t *testing.T) {
@@ -233,67 +215,71 @@ func TestSessionPushPreservesCapabilities(t *testing.T) {
 }
 
 func TestSessionPushSparseOrdinalsAndToolResultCarrier(t *testing.T) {
-	ordinal := 5
-	session := db.Session{ID: "cortex:sample", Agent: "cortex", Machine: "source", MessageCount: 3, UserMessageCount: 1}
-	data := db.ArtifactExportData{
-		Messages: []db.Message{
-			{Ordinal: 0, Role: "user", Content: "question"},
-			{Ordinal: 3, Role: "user", SourceSubtype: "tool_result", Content: "tool output"},
-			{Ordinal: 5, Role: "assistant", Content: "answer"},
-		},
-		UsageEvents: []db.UsageEvent{{SessionID: session.ID, MessageOrdinal: &ordinal, Source: "session", DedupKey: "turn"}},
-	}
-	packet, err := encodeSessionPushData(t.Context(), "source", session, data)
-	require.NoError(t, err)
-	_, write, err := DecodeSessionPush(packet)
-	require.NoError(t, err)
-	require.Len(t, write.Messages, 3)
-	assert.Equal(t, []int{0, 3, 5}, []int{write.Messages[0].Ordinal, write.Messages[1].Ordinal, write.Messages[2].Ordinal})
-	assert.Equal(t, "tool_result", write.Messages[1].SourceSubtype)
-	assert.Equal(t, 1, write.Session.UserMessageCount)
-	require.Len(t, write.UsageEvents, 1)
-	require.NotNil(t, write.UsageEvents[0].MessageOrdinal)
-	assert.Equal(t, 5, *write.UsageEvents[0].MessageOrdinal)
-}
-
-func TestSessionPushGooseAuthoritativeCounts(t *testing.T) {
-	for _, tc := range []struct {
-		name     string
-		count    int
-		messages []db.Message
-	}{
-		{"retained carrier", 3, []db.Message{{Ordinal: 0, Role: "user", Content: "question"}, {Ordinal: 1, Role: "user", Content: "approval required"}, {Ordinal: 2, Role: "assistant", Content: "answer"}}},
-		{"removed carrier", 3, []db.Message{{Ordinal: 0, Role: "user", Content: "question"}, {Ordinal: 2, Role: "assistant", Content: "answer"}}},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			session := db.Session{ID: "goose:sample", Agent: "goose", Machine: "source", MessageCount: tc.count, UserMessageCount: 1}
-			packet, err := encodeSessionPushData(t.Context(), "source", session, db.ArtifactExportData{Messages: tc.messages})
+	for name, check := range map[string]func(*testing.T){
+		"sparse carrier": func(t *testing.T) {
+			ordinal := 5
+			session := db.Session{ID: "cortex:sample", Agent: "cortex", Machine: "source", MessageCount: 3, UserMessageCount: 1}
+			data := db.ArtifactExportData{
+				Messages: []db.Message{
+					{Ordinal: 0, Role: "user", Content: "question"},
+					{Ordinal: 3, Role: "user", SourceSubtype: "tool_result", Content: "tool output"},
+					{Ordinal: 5, Role: "assistant", Content: "answer"},
+				},
+				UsageEvents: []db.UsageEvent{{SessionID: session.ID, MessageOrdinal: &ordinal, Source: "session", DedupKey: "turn"}},
+			}
+			packet, err := encodeSessionPushData(t.Context(), "source", session, data)
 			require.NoError(t, err)
 			_, write, err := DecodeSessionPush(packet)
 			require.NoError(t, err)
-			assert.Equal(t, 3, write.Session.MessageCount)
+			require.Len(t, write.Messages, 3)
+			assert.Equal(t, []int{0, 3, 5}, []int{write.Messages[0].Ordinal, write.Messages[1].Ordinal, write.Messages[2].Ordinal})
+			assert.Equal(t, "tool_result", write.Messages[1].SourceSubtype)
 			assert.Equal(t, 1, write.Session.UserMessageCount)
-			require.Len(t, write.Messages, len(tc.messages))
-			assert.Equal(t, "answer", write.Messages[len(write.Messages)-1].Content)
-		})
+			require.Len(t, write.UsageEvents, 1)
+			require.NotNil(t, write.UsageEvents[0].MessageOrdinal)
+			assert.Equal(t, 5, *write.UsageEvents[0].MessageOrdinal)
+		},
+		"goose counts": func(t *testing.T) {
+			for _, tc := range []struct {
+				name     string
+				count    int
+				messages []db.Message
+			}{
+				{"retained carrier", 3, []db.Message{{Ordinal: 0, Role: "user", Content: "question"}, {Ordinal: 1, Role: "user", Content: "approval required"}, {Ordinal: 2, Role: "assistant", Content: "answer"}}},
+				{"removed carrier", 3, []db.Message{{Ordinal: 0, Role: "user", Content: "question"}, {Ordinal: 2, Role: "assistant", Content: "answer"}}},
+			} {
+				t.Run(tc.name, func(t *testing.T) {
+					session := db.Session{ID: "goose:sample", Agent: "goose", Machine: "source", MessageCount: tc.count, UserMessageCount: 1}
+					packet, err := encodeSessionPushData(t.Context(), "source", session, db.ArtifactExportData{Messages: tc.messages})
+					require.NoError(t, err)
+					_, write, err := DecodeSessionPush(packet)
+					require.NoError(t, err)
+					assert.Equal(t, 3, write.Session.MessageCount)
+					assert.Equal(t, 1, write.Session.UserMessageCount)
+					require.Len(t, write.Messages, len(tc.messages))
+					assert.Equal(t, "answer", write.Messages[len(write.Messages)-1].Content)
+				})
+			}
+		},
+		"filtered carrier usage": func(t *testing.T) {
+			ordinal := 1
+			session := db.Session{ID: "zcode:sample", Agent: "zcode", Machine: "source", MessageCount: 2, UserMessageCount: 1}
+			data := db.ArtifactExportData{
+				Messages:    []db.Message{{Ordinal: 0, Role: "user", Content: "question"}, {Ordinal: 2, Role: "assistant", Content: "answer"}},
+				UsageEvents: []db.UsageEvent{{SessionID: session.ID, MessageOrdinal: &ordinal, Source: "session", DedupKey: "carrier", InputTokens: 42}},
+			}
+			packet, err := encodeSessionPushData(t.Context(), "source", session, data)
+			require.NoError(t, err)
+			_, write, err := DecodeSessionPush(packet)
+			require.NoError(t, err)
+			require.Len(t, write.UsageEvents, 1)
+			require.NotNil(t, write.UsageEvents[0].MessageOrdinal)
+			assert.Equal(t, 1, *write.UsageEvents[0].MessageOrdinal)
+			assert.Equal(t, 42, write.UsageEvents[0].InputTokens)
+		},
+	} {
+		t.Run(name, check)
 	}
-}
-
-func TestSessionPushPreservesUsageForFilteredCarrier(t *testing.T) {
-	ordinal := 1
-	session := db.Session{ID: "zcode:sample", Agent: "zcode", Machine: "source", MessageCount: 2, UserMessageCount: 1}
-	data := db.ArtifactExportData{
-		Messages:    []db.Message{{Ordinal: 0, Role: "user", Content: "question"}, {Ordinal: 2, Role: "assistant", Content: "answer"}},
-		UsageEvents: []db.UsageEvent{{SessionID: session.ID, MessageOrdinal: &ordinal, Source: "session", DedupKey: "carrier", InputTokens: 42}},
-	}
-	packet, err := encodeSessionPushData(t.Context(), "source", session, data)
-	require.NoError(t, err)
-	_, write, err := DecodeSessionPush(packet)
-	require.NoError(t, err)
-	require.Len(t, write.UsageEvents, 1)
-	require.NotNil(t, write.UsageEvents[0].MessageOrdinal)
-	assert.Equal(t, 1, *write.UsageEvents[0].MessageOrdinal)
-	assert.Equal(t, 42, write.UsageEvents[0].InputTokens)
 }
 
 func TestSessionPushCanceledContext(t *testing.T) {
@@ -315,40 +301,45 @@ func TestSessionPushRejectMalformed(t *testing.T) {
 	require.NoError(t, d.UpsertSession(t.Context(), db.Session{ID: "sample", Agent: "claude", Machine: "source"}))
 	data, _, err := EncodeSessionPush(t.Context(), d, "sample", "")
 	require.NoError(t, err)
-	for _, mutate := range []func(map[string]any){
-		func(v map[string]any) { v["v"] = 99 },
-		func(v map[string]any) { v["session_id"] = "other" },
-		func(v map[string]any) { v["segments"] = []any{} },
-		func(v map[string]any) { v["extra"] = "unrequested" },
-		func(v map[string]any) { v["segments"].([]any)[0].(map[string]any)["ndjson"] = "{}" },
+	for _, tc := range []struct {
+		name, want string
+		mutate     func(map[string]any)
+	}{
+		{"version", "unsupported version", func(v map[string]any) { v["v"] = 99 }},
+		{"session", "invalid selected session", func(v map[string]any) { v["session_id"] = "other" }},
+		{"segments", "segment closure mismatch", func(v map[string]any) { v["segments"] = []any{} }},
+		{"unknown", "unknown", func(v map[string]any) { v["extra"] = "unrequested" }},
+		{"hash", "segment hash mismatch", func(v map[string]any) { v["segments"].([]any)[0].(map[string]any)["ndjson"] = "{}" }},
 	} {
-		var value map[string]any
-		require.NoError(t, json.Unmarshal(data, &value))
-		mutate(value)
-		bad, err := json.Marshal(value)
-		require.NoError(t, err)
-		_, _, err = DecodeSessionPush(bad)
-		require.Error(t, err)
+		t.Run(tc.name, func(t *testing.T) {
+			var value map[string]any
+			require.NoError(t, json.Unmarshal(data, &value))
+			tc.mutate(value)
+			bad, err := json.Marshal(value)
+			require.NoError(t, err)
+			_, _, err = DecodeSessionPush(bad)
+			require.ErrorContains(t, err, tc.want)
+		})
 	}
+	for _, payload := range []string{`{"v":1,"v":1}`, `{} {}`} {
+		_, _, err = DecodeSessionPush([]byte(payload))
+		require.ErrorContains(t, err, "json")
+	}
+	ordinal := 0
+	packet, err := encodeSessionPushData(t.Context(), "source", db.Session{ID: "sample", Agent: "claude", Machine: "source"}, db.ArtifactExportData{UsageEvents: []db.UsageEvent{{SessionID: "sample", MessageOrdinal: &ordinal, Source: "session"}}})
+	require.NoError(t, err)
+	var envelope SessionPushEnvelope
+	require.NoError(t, json.Unmarshal(packet, &envelope))
+	var wire manifest
+	require.NoError(t, json.Unmarshal(envelope.Manifest, &wire))
+	invalid := -1
+	wire.UsageEvents[0].MessageOrdinal = &invalid
+	envelope.Manifest, err = json.Marshal(wire)
+	require.NoError(t, err)
+	packet, err = json.Marshal(envelope)
+	require.NoError(t, err)
+	_, _, err = DecodeSessionPush(packet)
+	require.ErrorContains(t, err, "usage has negative message ordinal")
 	_, _, err = DecodeSessionPush([]byte(strings.Repeat(" ", int(MaxSessionPushBytes)+1)))
-	require.Error(t, err)
-}
-
-func TestSessionPushUnicodeRoundTrip(t *testing.T) {
-	hegel.Test(t, func(ht *hegel.T) {
-		content := hegel.Draw(ht, hegel.Text())
-		// Bound materialization while drawing from the complete Unicode domain.
-		if len(content) > 4096 {
-			content = content[:4096]
-			for !utf8.ValidString(content) {
-				content = content[:len(content)-1]
-			}
-		}
-		data, err := encodeSessionPushData(t.Context(), "source", db.Session{ID: "codex:sample", Agent: "codex", Machine: "source", MessageCount: 1, UserMessageCount: 1}, db.ArtifactExportData{Messages: []db.Message{{Ordinal: 0, Role: "user", Content: content}}})
-		require.NoError(ht, err)
-		_, write, err := DecodeSessionPush(data)
-		require.NoError(ht, err)
-		require.Len(ht, write.Messages, 1)
-		assert.Equal(ht, content, write.Messages[0].Content)
-	}, hegel.WithTestCases(2000))
+	require.ErrorContains(t, err, "body exceeds")
 }

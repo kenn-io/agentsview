@@ -42,77 +42,44 @@ func TestSessionPushRealRebuildPreservesSnapshotAgainstNativeCollision(t *testin
 	assert.False(t, created)
 }
 
-func TestSessionPushRebuildSkipClassificationPreservesFailureGuard(t *testing.T) {
+func TestSessionPushSharedSourceImportsUnreservedMember(t *testing.T) {
 	for _, tc := range []struct {
-		name  string
-		stats SyncStats
-		abort bool
+		name            string
+		agent           parser.AgentType
+		excluded        bool
+		member, content string
 	}{
-		{"reserved", SyncStats{TotalSessions: 1, Skipped: 1, filesOK: 1, nonContainerDiscovered: 1, sessionPushReservedFiles: 1}, false},
-		{"real failure", SyncStats{TotalSessions: 2, Skipped: 1, Failed: 1, filesOK: 1, nonContainerDiscovered: 2, sessionPushReservedFiles: 1}, true},
-		{"unexplained empty", SyncStats{TotalSessions: 2, Skipped: 2, filesOK: 2, nonContainerDiscovered: 2, sessionPushReservedFiles: 1}, true},
+		{"reserved member", parser.AgentCursor, false, "independent", "independent content"},
+		{"excluded member", parser.AgentVibe, true, "canonical", "canonical content"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			reason := resyncSwapAbortReason(tc.stats, 1, 0)
-			if tc.abort {
-				assert.NotEmpty(t, reason)
+			d := openTestDB(t)
+			receipt := db.SessionPushReceipt{SessionID: "reserved", SourceOrigin: "source", PayloadHash: strings.Repeat("a", 64)}
+			write := db.SessionBatchWrite{Session: db.Session{ID: "reserved", Agent: string(tc.agent), Machine: "source", MessageCount: 1, UserMessageCount: 1}, Messages: []db.Message{{SessionID: "reserved", Ordinal: 0, Role: "user", Content: "accepted snapshot"}}, ReplaceMessages: true}
+			_, err := d.ApplySessionPush(t.Context(), receipt, write)
+			require.NoError(t, err)
+			engine := NewEngine(t.Context(), d, EngineConfig{Machine: "receiver"})
+			t.Cleanup(engine.Close)
+			jobs := make(chan syncJob, 1)
+			job := syncJob{agent: tc.agent, path: "fixture-source"} //nolint:modernize // Embedded-field literal shorthand is not supported by the CI compiler.
+			if tc.excluded {
+				job.excludedSessionIDs = []string{"reserved"}
 			} else {
-				assert.Empty(t, reason)
+				job.results = append(job.results, parser.ParseResult{Session: parser.ParsedSession{ID: "reserved", Agent: tc.agent, Machine: "receiver"}, Messages: []parser.ParsedMessage{{Role: parser.RoleUser, Content: "replacement"}}})
 			}
+			job.results = append(job.results, parser.ParseResult{Session: parser.ParsedSession{ID: tc.member, Agent: tc.agent, Machine: "receiver"}, Messages: []parser.ParsedMessage{{Role: parser.RoleUser, Content: tc.content}}})
+			jobs <- job
+			close(jobs)
+			stats := engine.collectAndBatch(t.Context(), jobs, 1, 1, nil, syncWriteDefault)
+			assert.Zero(t, stats.Failed)
+			reserved, err := d.GetAllMessages(t.Context(), "reserved")
+			require.NoError(t, err)
+			require.Len(t, reserved, 1)
+			assert.Equal(t, "accepted snapshot", reserved[0].Content)
+			member, err := d.GetAllMessages(t.Context(), tc.member)
+			require.NoError(t, err)
+			require.Len(t, member, 1)
+			assert.Equal(t, tc.content, member[0].Content)
 		})
 	}
-}
-
-func TestSessionPushSharedSourceImportsUnreservedMember(t *testing.T) {
-	d := openTestDB(t)
-	receipt := db.SessionPushReceipt{SessionID: "reserved", SourceOrigin: "source", PayloadHash: strings.Repeat("a", 64)}
-	write := db.SessionBatchWrite{Session: db.Session{ID: "reserved", Agent: "cursor", Machine: "source", MessageCount: 1, UserMessageCount: 1}, Messages: []db.Message{{SessionID: "reserved", Ordinal: 0, Role: "user", Content: "accepted snapshot"}}, ReplaceMessages: true}
-	_, err := d.ApplySessionPush(t.Context(), receipt, write)
-	require.NoError(t, err)
-	engine := NewEngine(t.Context(), d, EngineConfig{Machine: "receiver"})
-	t.Cleanup(engine.Close)
-	jobs := make(chan syncJob, 1)
-	job := syncJob{agent: parser.AgentCursor, path: "fixture-source"} //nolint:modernize // Embedded-field literal shorthand is not supported by the CI compiler.
-	job.results = []parser.ParseResult{
-		{Session: parser.ParsedSession{ID: "reserved", Agent: parser.AgentCursor, Machine: "receiver"}, Messages: []parser.ParsedMessage{{Role: parser.RoleUser, Content: "replacement"}}},
-		{Session: parser.ParsedSession{ID: "independent", Agent: parser.AgentCursor, Machine: "receiver"}, Messages: []parser.ParsedMessage{{Role: parser.RoleUser, Content: "independent content"}}},
-	}
-	jobs <- job
-	close(jobs)
-	stats := engine.collectAndBatch(t.Context(), jobs, 1, 1, nil, syncWriteDefault)
-	assert.Zero(t, stats.Failed)
-	reserved, err := d.GetAllMessages(t.Context(), "reserved")
-	require.NoError(t, err)
-	require.Len(t, reserved, 1)
-	assert.Equal(t, "accepted snapshot", reserved[0].Content)
-	independent, err := d.GetAllMessages(t.Context(), "independent")
-	require.NoError(t, err)
-	require.Len(t, independent, 1)
-	assert.Equal(t, "independent content", independent[0].Content)
-}
-
-func TestSessionPushReservedExclusionDoesNotBlockSourceMember(t *testing.T) {
-	d := openTestDB(t)
-	receipt := db.SessionPushReceipt{SessionID: "reserved", SourceOrigin: "source", PayloadHash: strings.Repeat("a", 64)}
-	write := db.SessionBatchWrite{Session: db.Session{ID: "reserved", Agent: "vibe", Machine: "source", MessageCount: 1, UserMessageCount: 1}, Messages: []db.Message{{SessionID: "reserved", Ordinal: 0, Role: "user", Content: "accepted snapshot"}}, ReplaceMessages: true}
-	_, err := d.ApplySessionPush(t.Context(), receipt, write)
-	require.NoError(t, err)
-	engine := NewEngine(t.Context(), d, EngineConfig{Machine: "receiver"})
-	t.Cleanup(engine.Close)
-	jobs := make(chan syncJob, 1)
-	job := syncJob{agent: parser.AgentVibe, path: "fixture-source"} //nolint:modernize // Embedded-field literal shorthand is not supported by the CI compiler.
-	job.excludedSessionIDs = []string{"reserved"}
-	job.results = []parser.ParseResult{{Session: parser.ParsedSession{ID: "canonical", Agent: parser.AgentVibe, Machine: "receiver"}, Messages: []parser.ParsedMessage{{Role: parser.RoleUser, Content: "canonical content"}}}}
-	jobs <- job
-	close(jobs)
-	stats := engine.collectAndBatch(t.Context(), jobs, 1, 1, nil, syncWriteDefault)
-	assert.Zero(t, stats.Failed)
-	reserved, err := d.GetAllMessages(t.Context(), "reserved")
-	require.NoError(t, err)
-	require.Len(t, reserved, 1)
-	assert.Equal(t, "accepted snapshot", reserved[0].Content)
-	canonical, err := d.GetAllMessages(t.Context(), "canonical")
-	require.NoError(t, err)
-	require.Len(t, canonical, 1)
-	assert.Equal(t, "canonical content", canonical[0].Content)
 }

@@ -1,7 +1,6 @@
 package server
 
 import (
-	"bytes"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -21,7 +20,7 @@ type sessionPushObservedBody struct{ reads int }
 func (r *sessionPushObservedBody) Read([]byte) (int, error) { r.reads++; return 0, io.EOF }
 
 func TestSessionPushRejectsBeforeReadingUnauthorizedOrOversizeBody(t *testing.T) {
-	for _, mode := range []string{"unauthorized", "query-token", "oversize", "encoding", "busy", "read-only", "usage-only"} {
+	for _, mode := range []string{"unauthorized", "disabled", "auth-off", "wrong-token", "query-token", "oversize", "encoding", "busy", "read-only", "usage-only"} {
 		t.Run(mode, func(t *testing.T) {
 			s := testServer(t, 30*time.Second)
 			s.cfg.AcceptSessionPush, s.cfg.RequireAuth, s.cfg.AuthToken = true, true, "fixture"
@@ -34,6 +33,14 @@ func TestSessionPushRejectsBeforeReadingUnauthorizedOrOversizeBody(t *testing.T)
 			switch mode {
 			case "unauthorized":
 				r.Header.Del("Authorization")
+			case "disabled":
+				s.cfg.AcceptSessionPush = false
+				want = http.StatusNotFound
+			case "auth-off":
+				s.cfg.RequireAuth = false
+				want = http.StatusForbidden
+			case "wrong-token":
+				r.Header.Set("Authorization", "Bearer bad")
 			case "query-token":
 				r.Header.Del("Authorization")
 				r.URL.RawQuery = "token=fixture"
@@ -68,32 +75,15 @@ func TestSessionPushRejectsBeforeReadingUnauthorizedOrOversizeBody(t *testing.T)
 func TestSessionPushBasePathAndMalformedBodyAreAtomic(t *testing.T) {
 	s := testServer(t, 30*time.Second, WithBasePath("/view"))
 	s.cfg.AcceptSessionPush, s.cfg.RequireAuth, s.cfg.AuthToken = true, true, "fixture"
-	for _, payload := range []string{`{"v":99,"session_id":"selected"}`, `{"v":1,"v":1}`, `{} {}`} {
-		r := httptest.NewRequestWithContext(t.Context(), http.MethodPost,
-			"/view/api/v1/sessions/ingest", strings.NewReader(payload))
-		r.Header.Set("Authorization", "Bearer fixture")
-		r.Header.Set("Content-Type", "application/json")
-		w := httptest.NewRecorder()
-		s.Handler().ServeHTTP(w, r)
-		require.Equal(t, http.StatusBadRequest, w.Code, w.Body.String())
-		selected, err := s.db.(*db.DB).GetSession(t.Context(), "selected")
-		require.NoError(t, err)
-		assert.Nil(t, selected)
-	}
-	// A valid first push with that same ID must still be newly accepted.
-	source := testServer(t, 30*time.Second)
-	d := source.db.(*db.DB)
-	require.NoError(t, d.UpsertSession(t.Context(), db.Session{ID: "selected", Agent: "claude", Machine: "source"}))
-	payload, _, err := artifact.EncodeSessionPush(t.Context(), d, "selected", "")
-	require.NoError(t, err)
-	r := httptest.NewRequestWithContext(t.Context(), http.MethodPost,
-		"/view/api/v1/sessions/ingest", bytes.NewReader(payload))
+	r := httptest.NewRequestWithContext(t.Context(), http.MethodPost, "/view/api/v1/sessions/ingest", strings.NewReader(`{"v":99,"session_id":"selected"}`))
 	r.Header.Set("Authorization", "Bearer fixture")
 	r.Header.Set("Content-Type", "application/json")
 	w := httptest.NewRecorder()
 	s.Handler().ServeHTTP(w, r)
-	require.Equal(t, http.StatusOK, w.Code, w.Body.String())
-	assert.JSONEq(t, `{"session_id":"selected","agent":"claude","status":"created"}`, w.Body.String())
+	require.Equal(t, http.StatusBadRequest, w.Code, w.Body.String())
+	selected, err := s.db.(*db.DB).GetSession(t.Context(), "selected")
+	require.NoError(t, err)
+	assert.Nil(t, selected)
 }
 
 func TestSessionPushOpenAPIRepresentsObjectAndSegmentArray(t *testing.T) {

@@ -124,35 +124,6 @@ func TestSessionPushReadDeadlineScalesWithPayload(t *testing.T) {
 	assert.Greater(t, time.Until(w.deadline), 18*time.Minute)
 }
 
-func TestSessionPushReceiverGates(t *testing.T) {
-	for _, tc := range []struct {
-		name          string
-		enabled, auth bool
-		token         string
-		status        int
-	}{
-		{"disabled", false, false, "", http.StatusNotFound},
-		{"auth-off", true, false, "secret", http.StatusForbidden},
-		{"missing-token", true, true, "", http.StatusUnauthorized},
-		{"wrong-token", true, true, "bad", http.StatusUnauthorized},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			s := testServer(t, 30*time.Second)
-			s.cfg.AcceptSessionPush, s.cfg.RequireAuth, s.cfg.AuthToken = tc.enabled, tc.auth, "secret"
-			r := httptest.NewRequestWithContext(t.Context(), http.MethodPost,
-				"/api/v1/sessions/ingest", bytes.NewBufferString("not JSON"))
-			r.Host = "127.0.0.1:0"
-			r.Header.Set("Origin", "http://127.0.0.1:0")
-			if tc.token != "" {
-				r.Header.Set("Authorization", "Bearer "+tc.token)
-			}
-			w := httptest.NewRecorder()
-			s.Handler().ServeHTTP(w, r)
-			assert.Equal(t, tc.status, w.Code, w.Body.String())
-		})
-	}
-}
-
 func TestSessionPushReceiverInsertAndRetry(t *testing.T) {
 	s := testServer(t, 30*time.Second)
 	s.cfg.AcceptSessionPush, s.cfg.RequireAuth, s.cfg.AuthToken = true, true, "secret"

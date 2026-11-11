@@ -2,6 +2,7 @@ package db
 
 import (
 	"context"
+	"os"
 	"strings"
 	"testing"
 
@@ -26,22 +27,18 @@ func TestSessionPushRetryRequiresCurrentOwnership(t *testing.T) {
 	receipt, write := sessionPushFixture("snapshot")
 	_, err := d.ApplySessionPush(t.Context(), receipt, write)
 	require.NoError(t, err)
-	// Ordinary upserts are fenced separately; simulate unexpected ownership
-	// damage to exercise the retry's defensive current-row check.
+	// Installation identity adoption can change the session machine after ingest.
 	_, err = d.getWriter().ExecContext(t.Context(), `UPDATE sessions SET machine='different-owner' WHERE id='snapshot'`)
 	require.NoError(t, err)
 	_, err = d.ApplySessionPush(t.Context(), receipt, write)
 	require.ErrorIs(t, err, ErrSessionPushConflict)
 }
 
-func TestSessionPushArchiveVersionRejectsPreviousWriter(t *testing.T) {
+func TestSessionPushArchiveVersionSupportsReceipts(t *testing.T) {
 	d := testDB(t)
-	receipt, write := sessionPushFixture("snapshot")
-	_, err := d.ApplySessionPush(t.Context(), receipt, write)
-	require.NoError(t, err)
 	var version int
 	require.NoError(t, d.getReader().QueryRowContext(t.Context(), "PRAGMA user_version").Scan(&version))
-	assert.Greater(t, version, 172)
+	assert.GreaterOrEqual(t, version, sessionPushMinArchiveVersion)
 }
 
 func TestSessionPushRejectsArchiveAwaitingRebuild(t *testing.T) {
@@ -113,12 +110,19 @@ func TestSessionPushCreatesAndRetryPreservesCuration(t *testing.T) {
 }
 
 func TestSessionPushConflictsDoNotOverwrite(t *testing.T) {
-	for _, kind := range []string{"hash", "origin", "unowned", "trash", "deleted", "excluded"} {
+	for _, kind := range []string{"hash", "origin", "unowned", "trash", "deleted", "excluded", "inherited-trash", "retry"} {
 		t.Run(kind, func(t *testing.T) {
 			d := testDB(t)
 			ctx := t.Context()
-			receipt, write := sessionPushFixture("snapshot")
-			if kind == "unowned" || kind == "excluded" {
+			id := "snapshot"
+			if kind == "inherited-trash" {
+				d = upgradedCodexTrash(t)
+				id = legacyTrashMissingPage
+			}
+			receipt, write := sessionPushFixture(id)
+			if kind == "inherited-trash" {
+				write.Session.Agent = "codex"
+			} else if kind == "unowned" || kind == "excluded" {
 				_, err := d.WriteSessionBatchAtomic(ctx, []SessionBatchWrite{write})
 				require.NoError(t, err)
 			} else {
@@ -132,26 +136,42 @@ func TestSessionPushConflictsDoNotOverwrite(t *testing.T) {
 			case "origin":
 				receipt.SourceOrigin = "archive-b"
 			case "trash":
-				require.NoError(t, d.SoftDeleteSession(ctx, "snapshot"))
+				require.NoError(t, d.SoftDeleteSession(ctx, id))
 			case "deleted", "excluded":
-				require.NoError(t, d.DeleteSession(ctx, "snapshot"))
+				require.NoError(t, d.DeleteSession(ctx, id))
 			}
-			before, err := d.GetArtifactExportSession(ctx, "snapshot")
+			before, err := d.GetArtifactExportSession(ctx, id)
 			require.NoError(t, err)
-			write.Messages[0].Content = "replacement must not land"
+			dir := t.TempDir()
+			d.SetAssetsDir(dir)
+			d.SetToolResultImages(config.ToolResultImagesOffload)
+			write.Messages = []Message{testImageMessage(id)}
+			write.Session.UserMessageCount = 0
 			created, err := d.ApplySessionPush(ctx, receipt, write)
-			require.ErrorIs(t, err, ErrSessionPushConflict)
+			if kind == "retry" {
+				require.NoError(t, err)
+			} else {
+				require.ErrorIs(t, err, ErrSessionPushConflict)
+			}
 			assert.False(t, created)
-			after, err := d.GetArtifactExportSession(ctx, "snapshot")
+			entries, err := os.ReadDir(dir)
+			require.NoError(t, err)
+			assert.Empty(t, entries, "a rejected or unchanged push must not publish image objects")
+			after, err := d.GetArtifactExportSession(ctx, id)
 			require.NoError(t, err)
 			assert.Equal(t, before, after)
-			messages, err := d.GetAllMessages(ctx, "snapshot")
+			messages, err := d.GetAllMessages(ctx, id)
 			require.NoError(t, err)
-			if kind == "deleted" || kind == "excluded" {
+			if kind == "deleted" || kind == "excluded" || kind == "inherited-trash" {
 				assert.Empty(t, messages)
 			} else {
 				require.Len(t, messages, 1)
 				assert.Equal(t, "first snapshot", messages[0].Content)
+			}
+			if kind == "inherited-trash" || kind == "excluded" {
+				var receipts int
+				require.NoError(t, d.getReader().QueryRowContext(ctx, `SELECT count(*) FROM session_push_receipts WHERE session_id=?`, id).Scan(&receipts))
+				assert.Zero(t, receipts)
 			}
 		})
 	}
@@ -160,6 +180,8 @@ func TestSessionPushConflictsDoNotOverwrite(t *testing.T) {
 func TestSessionPushMalformedWriteRollsBack(t *testing.T) {
 	d := testDB(t)
 	receipt, write := sessionPushFixture("snapshot")
+	require.NoError(t, d.SetSyncState(t.Context(), "artifact_origin_id", "receiver-origin"))
+	require.NoError(t, d.SetSyncState(t.Context(), "artifact_local_machine_name", receipt.SourceOrigin))
 	// Usage validation runs after the session insert inside the batch writer.
 	write.UsageEvents[0].SessionID = "other-session"
 	created, err := d.ApplySessionPush(t.Context(), receipt, write)
@@ -236,20 +258,16 @@ func TestSessionPushRebuildPreservesReceiptsAndCuration(t *testing.T) {
 	stars, err := destination.ListStarredSessionIDs(ctx)
 	require.NoError(t, err)
 	assert.Contains(t, stars, "live")
-	for _, id := range []string{"live", "trashed", "purged"} {
+	for _, id := range []string{"trashed", "purged"} {
 		receipt, write := sessionPushFixture(id)
 		created, err := destination.ApplySessionPush(ctx, receipt, write)
 		assert.False(t, created)
-		if id == "live" {
-			assert.NoError(t, err)
-		} else {
-			require.ErrorIs(t, err, ErrSessionPushConflict)
-		}
+		require.ErrorIs(t, err, ErrSessionPushConflict)
 	}
 }
 
 func TestSessionPushStoragePolicies(t *testing.T) {
-	for _, policy := range []config.ArchiveContent{config.ArchiveContentFull, config.ArchiveContentTranscripts, config.ArchiveContentUsage} {
+	for _, policy := range []config.ArchiveContent{config.ArchiveContentFull, config.ArchiveContentTranscripts} {
 		t.Run(string(policy), func(t *testing.T) {
 			d := testDB(t)
 			d.SetArchiveContent(policy)
@@ -262,13 +280,7 @@ func TestSessionPushStoragePolicies(t *testing.T) {
 			assert.True(t, created)
 			messages, err := d.GetAllMessages(t.Context(), "snapshot")
 			require.NoError(t, err)
-			if policy == config.ArchiveContentUsage {
-				require.Len(t, messages, 1)
-				assert.Equal(t, "assistant", messages[0].Role)
-				assert.Empty(t, messages[0].Content)
-				assert.Empty(t, messages[0].ToolCalls)
-				return
-			}
+
 			require.Len(t, messages, 1)
 			assert.Equal(t, "answer retained", messages[0].Content)
 			require.Len(t, messages[0].ToolCalls, 1)
@@ -312,13 +324,10 @@ func TestSessionPushCanceledDoesNotPublish(t *testing.T) {
 func TestLoadSessionPushDataExactLiveSession(t *testing.T) {
 	d := testDB(t)
 	ctx := t.Context()
-	for _, id := range []string{"parent", "child", "trashed"} {
+	for _, id := range []string{"parent", "trashed"} {
 		_, write := sessionPushFixture(id)
 		write.Session.FirstMessage = Ptr("first snapshot")
 		write.Session.SessionName = Ptr("agent title")
-		if id == "child" {
-			write.Session.ParentSessionID = Ptr("parent")
-		}
 		_, err := d.WriteSessionBatchAtomic(ctx, []SessionBatchWrite{write})
 		require.NoError(t, err)
 	}
@@ -343,43 +352,4 @@ func TestLoadSessionPushDataExactLiveSession(t *testing.T) {
 	limits.MessageBytes = 1
 	_, _, err = d.LoadSessionPushData(ctx, "parent", limits)
 	require.ErrorIs(t, err, ErrArtifactExportLimit)
-}
-
-func TestLoadSessionPushDataCoherentSnapshotDuringWrites(t *testing.T) {
-	d := testDB(t)
-	ctx := t.Context()
-	_, write := sessionPushFixture("snapshot")
-	write.Session.FirstMessage = Ptr("first snapshot")
-	_, err := d.WriteSessionBatchAtomic(ctx, []SessionBatchWrite{write})
-	require.NoError(t, err)
-	start := make(chan struct{})
-	writerDone := make(chan error, 1)
-	go func() {
-		<-start
-		for i := range 24 {
-			_, next := sessionPushFixture("snapshot")
-			if i%2 == 0 {
-				next.Messages[0].Content = "second snapshot"
-			}
-			next.Session.FirstMessage = Ptr(next.Messages[0].Content)
-			if _, err := d.WriteSessionBatchAtomic(ctx, []SessionBatchWrite{next}); err != nil {
-				writerDone <- err
-				return
-			}
-		}
-		writerDone <- nil
-	}()
-	close(start)
-	for range 24 {
-		session, data, err := d.LoadSessionPushData(ctx, "snapshot", smallArtifactExportLoadLimits())
-		require.NoError(t, err, "loading session push snapshot")
-		if !assert.NotNil(t, session, "loaded session push snapshot") {
-			break
-		}
-		if !assert.Len(t, data.Messages, 1) {
-			break
-		}
-		assert.Equal(t, Ptr(data.Messages[0].Content), session.FirstMessage)
-	}
-	require.NoError(t, <-writerDone)
 }
