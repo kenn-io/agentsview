@@ -24,19 +24,19 @@ func hermesMemberTokenQuery(revision bool, single bool) string {
 	if revision {
 		rev = "transcript_revision"
 	}
-	where, idIndex, timeIndex := "", " INDEXED BY idx_messages_session_id", " INDEXED BY idx_messages_session"
+	where := ""
 	if single {
-		where, idIndex, timeIndex = " WHERE id = ?", "", ""
+		where = " WHERE id = ?"
 	}
 	return `WITH members AS (SELECT ` + hermesStateSessionColumns + `, ` + rev + ` AS revision FROM sessions` + where + `)
  SELECT members.*,
- COALESCE((SELECT id FROM messages` + idIndex + ` WHERE session_id=members.id ORDER BY id DESC LIMIT 1),0),
- (SELECT timestamp FROM messages` + timeIndex + ` WHERE session_id=members.id ORDER BY timestamp LIMIT 1),
- (SELECT timestamp FROM messages` + timeIndex + ` WHERE session_id=members.id ORDER BY timestamp DESC LIMIT 1)
+ COALESCE((SELECT id FROM messages WHERE session_id=members.id ORDER BY id DESC LIMIT 1),0),
+ (SELECT timestamp FROM messages WHERE session_id=members.id ORDER BY timestamp LIMIT 1),
+ (SELECT timestamp FROM messages WHERE session_id=members.id ORDER BY timestamp DESC LIMIT 1)
  FROM members ORDER BY members.id`
 }
 
-func listHermesMemberTokens(ctx context.Context, conn *sql.DB, id string, yield func(string, string) error) error {
+func listHermesMemberTokens(ctx context.Context, conn *sql.DB, id string, yield func(string, string, bool) error) error {
 	revision, err := hermesHasTranscriptRevision(ctx, conn)
 	if err != nil {
 		return err
@@ -74,7 +74,7 @@ func listHermesMemberTokens(ctx context.Context, conn *sql.DB, id string, yield 
 			fmt.Fprintf(h, "%T:%q\x00", value, fmt.Sprint(value))
 		}
 		fmt.Fprintf(h, "%#v", usage[sid])
-		if err := yield(sid, hex.EncodeToString(h.Sum(nil))); err != nil {
+		if err := yield(sid, hex.EncodeToString(h.Sum(nil)), values[1] == "cron"); err != nil {
 			return err
 		}
 	}
@@ -83,7 +83,7 @@ func listHermesMemberTokens(ctx context.Context, conn *sql.DB, id string, yield 
 
 func hermesMemberToken(ctx context.Context, conn *sql.DB, id string) (string, error) {
 	var token string
-	err := listHermesMemberTokens(ctx, conn, id, func(_ string, value string) error { token = value; return nil })
+	err := listHermesMemberTokens(ctx, conn, id, func(_ string, value string, _ bool) error { token = value; return nil })
 	return token, err
 }
 
@@ -204,7 +204,7 @@ func (s hermesSourceSet) changedHermesMembers(ctx context.Context, root, stateDB
 	}
 	cursor.Passed = orphan
 	var changed []string
-	err = listHermesMemberTokens(ctx, conn, "", func(id, token string) error {
+	err = listHermesMemberTokens(ctx, conn, "", func(id, token string, cron bool) error {
 		row, found, err := cursor.Lookup(ctx, VirtualSourcePath(stateDB, id))
 		if err != nil {
 			return err
@@ -213,7 +213,7 @@ func (s hermesSourceSet) changedHermesMembers(ctx context.Context, root, stateDB
 			if row.Suppressed {
 				return nil
 			}
-			if stored, ok := hermesStoredMemberToken(row.FingerprintHash); ok && stored == token {
+			if stored, ok := hermesStoredMemberToken(row.FingerprintHash); ok && stored == token && !cron {
 				return nil
 			}
 		}
