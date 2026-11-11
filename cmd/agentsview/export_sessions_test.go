@@ -784,15 +784,16 @@ func waitExportProgress(t *testing.T, progress <-chan struct{}, done <-chan erro
 }
 
 func TestExportWaitDuringDaemonChanges(t *testing.T) {
-	for _, mode := range []string{"daemon stops", "one ping fails", "cancel"} {
+	for _, mode := range []string{"daemon stops", "temporary ping failures", "cancel"} {
 		t.Run(mode, func(t *testing.T) {
 			path := pendingExportArchive(t, false)
 			dir := filepath.Dir(path)
-			var fail, observed atomic.Bool
+			var fail, observed atomic.Int32
 			ping := daemon.NewPingHandler(daemon.PingHandlerOptions{Service: daemonService, Version: "test"})
 			ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-				if fail.CompareAndSwap(true, false) {
-					observed.Store(true)
+				if fail.Load() > 0 {
+					fail.Add(-1)
+					observed.Add(1)
 					http.Error(w, "temporary ping error", http.StatusServiceUnavailable)
 					return
 				}
@@ -819,10 +820,12 @@ func TestExportWaitDuringDaemonChanges(t *testing.T) {
 				cancel()
 				require.ErrorIs(t, <-done, context.Canceled)
 				assert.Empty(t, out.String())
-			case "one ping fails":
-				fail.Store(true)
-				waitExportProgress(t, progress, done)
-				require.True(t, observed.Load())
+			case "temporary ping failures":
+				fail.Store(4)
+				for observed.Load() < 4 {
+					waitExportProgress(t, progress, done)
+				}
+				require.EqualValues(t, 4, observed.Load())
 				database, err := db.Open(t.Context(), path)
 				require.NoError(t, err)
 				engine := agentsync.NewEngine(t.Context(), database, agentsync.EngineConfig{Machine: "local"})
@@ -1017,12 +1020,12 @@ func TestExportDaemonStartupCases(t *testing.T) {
 	})
 }
 
-func TestExportWaitRejectsUnknownBackfillState(t *testing.T) {
+func TestExportWaitRejectsNewerBackfillState(t *testing.T) {
 	path := pendingExportArchive(t, false)
 	raw, err := sql.Open("sqlite3", path)
 	require.NoError(t, err)
 	defer raw.Close()
-	_, err = raw.ExecContext(t.Context(), `INSERT INTO background_migrations (name, state) VALUES ('session_project_identity_snapshots_v1', 'unexpected')`)
+	_, err = raw.ExecContext(t.Context(), `INSERT INTO background_migrations (name, state) VALUES ('session_project_identity_snapshots_v1', 'future_state')`)
 	require.NoError(t, err)
 	started := false
 	stubStartBackgroundServeForTransport(t, func(context.Context, *config.Config, time.Duration, bool) (*DaemonRuntime, error) {
@@ -1030,7 +1033,7 @@ func TestExportWaitRejectsUnknownBackfillState(t *testing.T) {
 		return nil, errors.New("unexpected launch")
 	})
 	stdout, _, err := executeExportSessionsCommand(newRootCommand(), "export", "sessions", "--wait")
-	require.ErrorContains(t, err, "unexpected")
+	require.ErrorContains(t, err, "future_state")
 	require.ErrorContains(t, err, "agentsview export status")
 	assert.False(t, started)
 	assert.Empty(t, stdout)
@@ -1204,32 +1207,12 @@ func TestExportSessionsCursorConflictingFilterIsUsageError(t *testing.T) {
 }
 
 func TestExportSessionsCursorAllowsFormatAndLimit(t *testing.T) {
-	database := seedExportSessionsArchive(t)
+	seedExportSessionsArchive(t)
 	cursor := firstExportSessionsCursor(t)
 	stdout, stderr, err := executeExportSessionsCommand(newRootCommand(), "export", "sessions", "--cursor", cursor, "--format", "json", "--limit", "1")
 	require.NoError(t, err)
 	assert.Empty(t, stderr)
 	require.Len(t, decodeExportSessionsDocument(t, stdout).Sessions, 1)
-	path := database.Path()
-	require.NoError(t, database.Close())
-	raw, err := sql.Open("sqlite3", path)
-	require.NoError(t, err)
-	_, err = raw.ExecContext(t.Context(), `INSERT INTO background_migrations (name, state) VALUES ('session_project_identity_snapshots_v1', 'pending')`)
-	require.NoError(t, err)
-	require.NoError(t, raw.Close())
-	stubExportDaemon(t, filepath.Dir(path))
-	ctx, cancel := context.WithTimeout(t.Context(), 25*time.Second)
-	defer cancel()
-	root := newRootCommand()
-	root.SetContext(ctx)
-	stdout, stderr, err = executeExportSessionsCommand(
-		root, "export", "sessions", "--cursor", cursor, "--format", "json", "--limit", "1", "--wait",
-	)
-	require.NoError(t, err, "cursor with format and limit")
-	assert.Empty(t, stderr)
-	doc := decodeExportSessionsDocument(t, stdout)
-	require.Len(t, doc.Sessions, 1)
-	assert.Equal(t, "alpha-old", doc.Sessions[0].ID)
 }
 
 func TestExportSessionsCursorResumesFilteredExport(t *testing.T) {

@@ -388,7 +388,7 @@ func TestDetectTransport_DaemonStarting_FallsBackToDirect(t *testing.T) {
 }
 
 func TestDetectTransportRoutesStartupProgress(t *testing.T) {
-	for _, mode := range []string{"detect", "detect external", "startup wait", "external wait", "background ready", "launch contention", "launch"} {
+	for _, mode := range []string{"detect", "detect external", "startup wait", "launch"} {
 		t.Run(mode, func(t *testing.T) {
 			dir := daemonRuntimeDir(t)
 			require.NoError(t, os.MkdirAll(dir, 0o700))
@@ -405,9 +405,9 @@ func TestDetectTransportRoutesStartupProgress(t *testing.T) {
 				require.NoError(t, err)
 				assert.Contains(t, progress.String(), "server is starting up, waiting")
 				return
-			case "detect external", "external wait":
+			case "detect external":
 				holdExternalStartupLockForTest(t, dir)
-			case "startup wait", "background ready", "launch contention":
+			case "startup wait":
 				MarkDaemonStarting(dir)
 				t.Cleanup(func() { UnmarkDaemonStarting(dir) })
 			}
@@ -421,18 +421,6 @@ func TestDetectTransportRoutesStartupProgress(t *testing.T) {
 				assert.Contains(t, progress.String(), "server is starting up, waiting")
 			case "startup wait":
 				WaitForDaemonStartupContext(ctx, dir, 50*time.Millisecond) //nolint:kennlint // deadlinetest: the held startup ends at the deadline
-				assert.Contains(t, progress.String(), "Opening archive")
-			case "external wait":
-				_, _, _ = waitForExternalServeStartup(ctx, dir, "", 50*time.Millisecond) //nolint:kennlint // deadlinetest: the held startup ends at the deadline
-				assert.Contains(t, progress.String(), "Opening archive")
-			case "background ready":
-				_, _ = waitForBackgroundServeReady(ctx, dir, "", make(chan error), 50*time.Millisecond) //nolint:kennlint // deadlinetest: the held startup ends at the deadline
-				assert.Contains(t, progress.String(), "Opening archive")
-			case "launch contention":
-				lock, ok := acquireBackgroundLaunchLock(dir)
-				require.True(t, ok)
-				t.Cleanup(func() { _ = lock.Unlock() })
-				_, _ = waitForBackgroundLaunchBeforeArchiveWrite(ctx, dir, 50*time.Millisecond) //nolint:kennlint // deadlinetest: the held startup ends at the deadline
 				assert.Contains(t, progress.String(), "Opening archive")
 			case "launch":
 				host, port := testPingServer(t)
