@@ -166,6 +166,21 @@ func TestAnalyticsToolsSkillsSQLiteParity(t *testing.T) {
 		})
 	}
 
+	t.Run("sparse-prepared-query", func(t *testing.T) {
+		f := march("America/New_York")
+		f.Project, f.Model = "beta", "model-a"
+		for range 8 {
+			rows, err := remote.analyticsToolRows(t.Context(), f)
+			require.NoError(t, err)
+			require.Len(t, rows, 1)
+			assert.Equal(t, "second", rows[0].SessionID)
+			assert.Equal(t, "codex", rows[0].Agent)
+			assert.Equal(t, "beta", rows[0].Project)
+			assert.Equal(t, "2024-03-11", rows[0].Date)
+			assert.Equal(t, 1, rows[0].Count)
+		}
+	})
+
 	t.Run("new-york-literal", func(t *testing.T) {
 		f := march("America/New_York")
 		tools, err := remote.GetAnalyticsTools(t.Context(), f)
@@ -253,6 +268,38 @@ func TestAnalyticsToolsSkillsSQLiteParity(t *testing.T) {
 		assert.Equal(t, []db.ToolUsageAnalysis{
 			{ToolName: "Unknown", Category: "Other", CallCount: 1, SessionCount: 1, Pct: 100, MissingCalls: 1},
 		}, tools.ByTool, "07:30Z is 03:30 EDT after the spring-forward jump")
+	})
+
+	t.Run("fall-and-fractional-offset", func(t *testing.T) {
+		started := "2024-11-03T05:30:00Z"
+		require.NoError(t, local.UpsertSession(t.Context(), db.Session{
+			ID: "fall", Project: "gamma", Machine: "parity-machine", Agent: "codex",
+			StartedAt: &started, MessageCount: 3, UserMessageCount: 3,
+		}))
+		var messages []db.Message
+		for i, timestamp := range []string{"2024-11-03T05:30:00Z", "2024-11-03T06:30:00Z", "2024-11-04T05:30:00Z"} {
+			messages = append(messages, db.Message{
+				SessionID: "fall", Ordinal: i, Role: "assistant", Content: "call", Timestamp: timestamp,
+				Model: "model-a", HasToolUse: true,
+				ToolCalls: []db.ToolCall{{SessionID: "fall", ToolName: "Read", Category: "Read"}},
+			})
+		}
+		require.NoError(t, local.InsertMessages(t.Context(), messages))
+		_, err := syncer.Push(t.Context(), false, nil)
+		require.NoError(t, err)
+		for _, zone := range []string{"America/New_York", "Asia/Kathmandu"} {
+			f := db.AnalyticsFilter{From: "2024-11-03", To: "2024-11-04", Timezone: zone, Project: "gamma"}
+			want, err := local.GetAnalyticsTools(t.Context(), f)
+			require.NoError(t, err)
+			got, err := remote.GetAnalyticsTools(t.Context(), f)
+			require.NoError(t, err)
+			assert.Equal(t, want, got)
+			assert.Equal(t, 3, got.TotalCalls)
+			assert.Equal(t, []db.ToolTrendEntry{
+				{Date: "2024-10-28", ByCat: map[string]int{"Read": 2}},
+				{Date: "2024-11-04", ByCat: map[string]int{"Read": 1}},
+			}, got.Trend)
+		}
 	})
 }
 
