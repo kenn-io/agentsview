@@ -520,8 +520,9 @@ func exportLoadedSessionToStore(
 	usageEvents []db.UsageEvent,
 	planUsage *db.SessionPlanUsage,
 	limits artifactLimits,
+	allowQualifiedID bool,
 ) (string, bool, error) {
-	if sess.ID == "" || strings.Contains(sess.ID, "~") {
+	if sess.ID == "" || (!allowQualifiedID && strings.Contains(sess.ID, "~")) {
 		return "", false, rejectArtifactExportf(
 			"native session ID %q is invalid: must be non-empty and exclude '~'",
 			sess.ID,
@@ -627,7 +628,7 @@ func exportClaimedSessionToStore(
 	}
 	return exportLoadedSessionToStore(
 		ctx, store, origin, sess, data.Messages, data.UsageEvents,
-		data.PlanUsage, limits,
+		data.PlanUsage, limits, false,
 	)
 }
 

@@ -45,6 +45,30 @@ func TestSessionPushExactSelection(t *testing.T) {
 	require.Error(t, err)
 	_, _, err = EncodeSessionPush(t.Context(), d, "codex:chosen", "claude")
 	require.Error(t, err)
+
+	remoteID, parentID := "host~codex:chosen", "host~codex:parent"
+	_, err = d.WriteSessionBatchAtomic(t.Context(), []db.SessionBatchWrite{{
+		Session:  db.Session{ID: remoteID, Agent: "codex", Machine: "host", ParentSessionID: &parentID, RelationshipType: "subagent", MessageCount: 1, UserMessageCount: 1},
+		Messages: []db.Message{{SessionID: remoteID, Ordinal: 0, Role: "user", Content: "remote transcript"}}, ReplaceMessages: true,
+	}})
+	require.NoError(t, err)
+	data, _, err = EncodeSessionPush(t.Context(), d, remoteID, "codex")
+	require.NoError(t, err)
+	receipt, write, err = DecodeSessionPush(data)
+	require.NoError(t, err)
+	assert.Equal(t, remoteID, receipt.SessionID)
+	require.Equal(t, &parentID, write.Session.ParentSessionID)
+	receiver := testDB(t)
+	created, err := receiver.ApplySessionPush(t.Context(), receipt, write)
+	require.NoError(t, err)
+	require.True(t, created)
+	created, err = receiver.ApplySessionPush(t.Context(), receipt, write)
+	require.NoError(t, err)
+	assert.False(t, created)
+	other := testDB(t)
+	require.NoError(t, other.UpsertSession(t.Context(), db.Session{ID: remoteID, Agent: "codex", Machine: "other"}))
+	_, err = other.ApplySessionPush(t.Context(), receipt, write)
+	require.ErrorIs(t, err, db.ErrSessionPushConflict)
 }
 
 func TestSessionPushPreservesLauncherParent(t *testing.T) {
@@ -108,6 +132,9 @@ func TestSessionPushReceiptIgnoresSegmentBoundaries(t *testing.T) {
 			data.Messages[0].OutputTokens = 20
 			data.Messages[0].HasContextTokens = true
 			data.Messages[0].HasOutputTokens = true
+			data.Messages[0].ProviderID = "corrected-provider"
+			data.Messages[0].ClaudeMessageID = "corrected-message"
+			data.Messages[0].ClaudeRequestID = "corrected-request"
 			data.Messages[0].SourceUUID = "new-source-id"
 			data.Messages[0].SourceType = "updated-source-type"
 			data.Messages[0].SourceParentUUID = "new-parent-id"
@@ -196,14 +223,14 @@ func TestSessionPushIdentityV1(t *testing.T) {
 		Messages []sessionPushIdentityMessage `json:"messages"`
 	}{1, []sessionPushIdentityMessage{sessionPushIdentity(message)}})
 	require.NoError(t, err)
-	const expected = `{"messages":[{"claude_message_id":"message","claude_request_id":"request","content":"answer","has_thinking":true,"has_tool_use":true,"is_compact_boundary":true,"is_system":true,"model":"model","ordinal":0,"prompt_source":"prompt","provider_id":"provider","reasoning_effort":"high","role":"assistant","source_subtype":"notice","thinking_text":"thought","timestamp":"2026-01-01T00:00:00Z","tool_calls":[{"events":[{"agent":"agent","content":"result","id":"call","source":"tool","status":"done","subagent":"child","timestamp":"2026-01-01T00:00:01Z"}],"id":"call","input":"input","name":"Read","result":"result","subagent":"child"}]}],"v":1}` + "\n"
+	const expected = `{"messages":[{"content":"answer","has_thinking":true,"has_tool_use":true,"is_compact_boundary":true,"is_system":true,"model":"model","ordinal":0,"prompt_source":"prompt","reasoning_effort":"high","role":"assistant","source_subtype":"notice","thinking_text":"thought","timestamp":"2026-01-01T00:00:00Z","tool_calls":[{"events":[{"agent":"agent","content":"result","id":"call","source":"tool","status":"done","subagent":"child","timestamp":"2026-01-01T00:00:01Z"}],"id":"call","input":"input","name":"Read","result":"result","subagent":"child"}]}],"v":1}` + "\n"
 	assert.Equal(t, expected, string(canonical))
-	assert.Equal(t, "97cd677a5770704bc32bd0fd2a85e8289beb0f00287cb7cc2ef4e748fdf67480", hashHex(canonical))
+	assert.Equal(t, "7f6a0eafdfffaa6e2486bf67cbf454abd8c79eff4f92274a2ea6fe32b619d154", hashHex(canonical))
 	packet, err := encodeSessionPushData(t.Context(), "source", db.Session{ID: "sample", Agent: "claude", Machine: "source", MessageCount: 1}, db.ArtifactExportData{Messages: []db.Message{message.dbMessage()}})
 	require.NoError(t, err)
 	receipt, _, err := DecodeSessionPush(packet)
 	require.NoError(t, err)
-	assert.Equal(t, "97cd677a5770704bc32bd0fd2a85e8289beb0f00287cb7cc2ef4e748fdf67480", receipt.PayloadHash)
+	assert.Equal(t, "7f6a0eafdfffaa6e2486bf67cbf454abd8c79eff4f92274a2ea6fe32b619d154", receipt.PayloadHash)
 }
 
 func TestSessionPushPreservesCapabilities(t *testing.T) {
@@ -419,7 +446,7 @@ func TestSessionPushRichRoundTripProperty(t *testing.T) {
 func adversarialSessionPushPacket(t *testing.T, session db.Session, messages []db.Message) []byte {
 	t.Helper()
 	sink := &sessionPushCapture{}
-	_, _, err := exportLoadedSessionToStore(t.Context(), sink, "source", &session, messages, nil, nil, productionArtifactLimits())
+	_, _, err := exportLoadedSessionToStore(t.Context(), sink, "source", &session, messages, nil, nil, productionArtifactLimits(), false)
 	require.NoError(t, err)
 	segments, err := json.Marshal(sink.segments)
 	require.NoError(t, err)

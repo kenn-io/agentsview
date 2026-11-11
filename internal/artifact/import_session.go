@@ -71,7 +71,7 @@ func loadImportedSession(
 			ctx, store, manifestRef, "invalid import manifest",
 		)
 	}
-	if err := validateImportedManifest(m, origin, gid, limits); err != nil {
+	if err := validateImportedManifest(m, origin, gid, limits, false); err != nil {
 		return quarantineImportDependency(
 			ctx, store, manifestRef, "invalid import manifest",
 		)
@@ -186,7 +186,7 @@ func downgradeImportedAssetContent(content string) string {
 }
 
 func validateImportedManifest(
-	m manifest, origin, gid string, limits artifactLimits,
+	m manifest, origin, gid string, limits artifactLimits, allowQualifiedID bool,
 ) error {
 	if m.Version < manifestMinDecodeVersion || m.Version > manifestFormatVersion {
 		return errors.New("manifest version is unsupported")
@@ -194,7 +194,7 @@ func validateImportedManifest(
 	if m.Origin != origin {
 		return errors.New("manifest origin is invalid")
 	}
-	if m.NativeSessionID == "" || strings.Contains(m.NativeSessionID, "~") {
+	if m.NativeSessionID == "" || (!allowQualifiedID && strings.Contains(m.NativeSessionID, "~")) {
 		return errors.New("manifest native session ID is invalid")
 	}
 	if gid != origin+"~"+m.NativeSessionID {

@@ -7,7 +7,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"strings"
 	"time"
 
 	"go.kenn.io/agentsview/internal/db"
@@ -55,9 +54,6 @@ type sessionPushIdentityMessage struct {
 	HasToolUse        bool                          `json:"has_tool_use"`
 	Model             string                        `json:"model"`
 	ReasoningEffort   string                        `json:"reasoning_effort"`
-	ProviderID        string                        `json:"provider_id"`
-	ClaudeMessageID   string                        `json:"claude_message_id"`
-	ClaudeRequestID   string                        `json:"claude_request_id"`
 	IsSystem          bool                          `json:"is_system"`
 	SourceSubtype     string                        `json:"source_subtype"`
 	PromptSource      string                        `json:"prompt_source"`
@@ -85,7 +81,7 @@ type sessionPushIdentityEvent struct {
 }
 
 func sessionPushIdentity(m segmentMessage) sessionPushIdentityMessage {
-	item := sessionPushIdentityMessage{Ordinal: m.Ordinal, Role: m.Role, Content: m.Content, ThinkingText: m.ThinkingText, Timestamp: m.Timestamp, HasThinking: m.HasThinking, HasToolUse: m.HasToolUse, Model: m.Model, ReasoningEffort: m.ReasoningEffort, ProviderID: m.ProviderID, ClaudeMessageID: m.ClaudeMessageID, ClaudeRequestID: m.ClaudeRequestID, IsSystem: m.IsSystem, SourceSubtype: m.SourceSubtype, PromptSource: m.PromptSource, IsCompactBoundary: m.IsCompactBoundary}
+	item := sessionPushIdentityMessage{Ordinal: m.Ordinal, Role: m.Role, Content: m.Content, ThinkingText: m.ThinkingText, Timestamp: m.Timestamp, HasThinking: m.HasThinking, HasToolUse: m.HasToolUse, Model: m.Model, ReasoningEffort: m.ReasoningEffort, IsSystem: m.IsSystem, SourceSubtype: m.SourceSubtype, PromptSource: m.PromptSource, IsCompactBoundary: m.IsCompactBoundary}
 	for _, call := range m.ToolCalls {
 		tool := sessionPushIdentityToolCall{Name: call.ToolName, ID: call.ToolUseID, Input: call.InputJSON, Result: call.ResultContent, Subagent: call.SubagentSessionID}
 		for _, event := range call.ResultEvents {
@@ -125,8 +121,8 @@ func (s *sessionPushCapture) Create(_ context.Context, ref Ref, identity Identit
 // EncodeSessionPush reads exactly id from one SQLite snapshot. It never syncs
 // sources, resolves partial IDs, or traverses parent/subagent references.
 func EncodeSessionPush(ctx context.Context, database *db.DB, id, expectedAgent string) ([]byte, string, error) {
-	if id == "" || strings.Contains(id, "~") {
-		return nil, "", errors.New("push requires an exact native archive session ID")
+	if id == "" {
+		return nil, "", errors.New("push requires an exact archive session ID")
 	}
 	if database.ArchiveContent().UsageOnly() {
 		return nil, "", errors.New("usage-only archive cannot supply a transcript")
@@ -157,7 +153,7 @@ func encodeSessionPushData(ctx context.Context, origin string, session db.Sessio
 	// Revisions are local bookkeeping, not part of this immutable content key.
 	session.TranscriptRevision = nil
 	sink := &sessionPushCapture{}
-	_, _, err := exportLoadedSessionToStore(ctx, sink, origin, &session, canonicalMessages(data.Messages), data.UsageEvents, data.PlanUsage, productionArtifactLimits())
+	_, _, err := exportLoadedSessionToStore(ctx, sink, origin, &session, canonicalMessages(data.Messages), data.UsageEvents, data.PlanUsage, productionArtifactLimits(), true)
 	if err != nil {
 		return nil, err
 	}
@@ -171,10 +167,6 @@ func encodeSessionPushData(ctx context.Context, origin string, session db.Sessio
 	}
 	if int64(len(encoded)) > MaxSessionPushBytes {
 		return nil, errors.New("session push exceeds 64 MiB")
-	}
-	// Validate the same closure that the receiver will accept before networking.
-	if _, _, err := DecodeSessionPush(encoded); err != nil {
-		return nil, err
 	}
 	return encoded, nil
 }
@@ -199,7 +191,7 @@ func decodeSessionPush(data []byte) (db.SessionPushReceipt, db.SessionBatchWrite
 	if err := json.Unmarshal(data, &envelope, json.RejectUnknownMembers(true)); err != nil {
 		return zero, noWrite, err
 	}
-	if envelope.Version != 1 || envelope.SessionID == "" || len(envelope.SessionID) > 1024 || strings.Contains(envelope.SessionID, "~") {
+	if envelope.Version != 1 || envelope.SessionID == "" || len(envelope.SessionID) > 1024 {
 		return zero, noWrite, errors.New("unsupported version or session ID")
 	}
 	limits := productionArtifactLimits()
@@ -219,7 +211,7 @@ func decodeSessionPush(data []byte) (db.SessionPushReceipt, db.SessionBatchWrite
 	if m.DataVersion > db.CurrentDataVersion() {
 		return zero, noWrite, ErrSessionPushFutureDataVersion
 	}
-	if err := validateImportedManifest(m, m.Origin, m.Origin+"~"+envelope.SessionID, limits); err != nil {
+	if err := validateImportedManifest(m, m.Origin, m.Origin+"~"+envelope.SessionID, limits, true); err != nil {
 		return zero, noWrite, err
 	}
 	if err := preflightJSONArrayCount(envelope.Segments, "segments", limits.manifestSegments); err != nil {
