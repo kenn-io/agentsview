@@ -1801,3 +1801,37 @@ CREATE TABLE IF NOT EXISTS codex_fork_state (
  session_id TEXT PRIMARY KEY REFERENCES sessions(id) ON DELETE CASCADE,
  state_json TEXT NOT NULL
 );
+
+-- OCR text is shared by all occurrences of the same image and processor.
+CREATE TABLE IF NOT EXISTS image_text_cache (
+    id INTEGER PRIMARY KEY,
+    image_hash TEXT NOT NULL,
+    processor TEXT NOT NULL,
+    provider TEXT NOT NULL,
+    model TEXT NOT NULL,
+    revision TEXT NOT NULL,
+    text TEXT NOT NULL DEFAULT '',
+    succeeded INTEGER NOT NULL DEFAULT 0,
+    failures INTEGER NOT NULL DEFAULT 0,
+    retry_at TEXT NOT NULL DEFAULT '',
+    updated_at TEXT NOT NULL DEFAULT '',
+    UNIQUE (image_hash, processor)
+);
+
+CREATE TABLE IF NOT EXISTS image_text_occurrences (
+    session_id TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
+    -- Source rows can be replaced before the session refreshes this projection.
+    call_id INTEGER,
+    event_id INTEGER,
+    image_index INTEGER NOT NULL,
+    image_hash TEXT NOT NULL
+);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_image_text_occurrences_call ON image_text_occurrences(call_id, image_index) WHERE call_id IS NOT NULL;
+CREATE UNIQUE INDEX IF NOT EXISTS idx_image_text_occurrences_event ON image_text_occurrences(event_id, image_index) WHERE event_id IS NOT NULL;
+CREATE INDEX IF NOT EXISTS idx_image_text_occurrences_session ON image_text_occurrences(session_id);
+CREATE INDEX IF NOT EXISTS idx_image_text_occurrences_hash ON image_text_occurrences(image_hash);
+
+CREATE TRIGGER IF NOT EXISTS image_text_session_delete BEFORE DELETE ON sessions BEGIN
+    DELETE FROM image_text_cache WHERE image_hash IN (SELECT image_hash FROM image_text_occurrences WHERE session_id=old.id)
+    AND NOT EXISTS (SELECT 1 FROM image_text_occurrences o WHERE o.image_hash=image_text_cache.image_hash AND o.session_id<>old.id);
+END;

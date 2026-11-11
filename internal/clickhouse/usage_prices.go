@@ -13,6 +13,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"time"
 
 	"go.kenn.io/agentsview/internal/config"
 	"go.kenn.io/agentsview/internal/db"
@@ -386,6 +387,14 @@ func (c chUsagePriceContext) record(
 // ladder: a false positive only sends events through request-time pricing,
 // while a false negative would serve a shared price the reader overrode.
 func (c chUsagePriceContext) customPriced(pricing *export.PricingResolver) bool {
+	if pricingpkg.ConfiguredAliasTarget(c.ReportedModel) != "" {
+		for _, at := range []time.Time{{}, pricingpkg.KimiModelEraCutoff.Add(-time.Nanosecond)} {
+			_, lookup := pricing.ResolveAt(c.ReportedModel, c.CanonicalModel, at)
+			if lookup.Rates.Source == export.PricingRowSourceCustom {
+				return true
+			}
+		}
+	}
 	priced := c.CanonicalModel
 	if priced == "" {
 		priced = c.ReportedModel

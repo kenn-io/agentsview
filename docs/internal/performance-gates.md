@@ -195,6 +195,12 @@ package list, sample count, and per-tier iteration counts for these benchmarks:
 - `BenchmarkVectorMirrorUpsert` — publish document metadata to the vector
   mirror, without embedding generation. Run it in `./internal/vector`, outside
   the default benchmark package set.
+- `BenchmarkCheckpointSourceHead`, `BenchmarkCheckpointAdvanceHead`, and
+  `BenchmarkCheckpointCapture` — read acknowledged raw-source heads, advance
+  them, and reserve/persist capture metadata with staged objects. The capture
+  cases contain one or 100 file entries sharing one object. Their fixtures
+  grow by one generation per iteration, so comparisons use fixed iteration
+  counts. They run in `./internal/rawcheckpoint`.
 - `BenchmarkGetStats` — the repeatedly polled sidebar totals over 10k sessions.
   Computes all totals together so a refresh scans filtered sessions once.
 - `BenchmarkArchiveSessionReads` — session metadata, full session details, and
@@ -322,8 +328,7 @@ The detailed architecture and oracle requirements are in
 
 `BenchmarkCodexIncrementalCursor` lives in `internal/parser` and compares cold
 prefix reconstruction with an exact warm cursor. It is outside the local
-comparison target: `BENCH_GATE_PACKAGES` currently contains `./internal/sync`,
-`./internal/db`, `./internal/secrets`, and `./internal/signals`.
+comparison target; the [Makefile](../../Makefile) owns `BENCH_GATE_PACKAGES`.
 
 ### 3. Macro ratio gate (run manually, build tag `macrobench`)
 

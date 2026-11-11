@@ -66,6 +66,9 @@ func chLoadPricing(
 
 func chApplyCustomPricing(out map[string]export.ModelRates, customPricing map[string]config.CustomModelRate) {
 	for model, custom := range customPricing {
+		if custom.PriceAs != "" {
+			continue
+		}
 		rates := export.ModelRates{
 			InputPerMTok:  money.Money{Microdollars: custom.InputMicrodollarsPerMTok},
 			OutputPerMTok: money.Money{Microdollars: custom.OutputMicrodollarsPerMTok},

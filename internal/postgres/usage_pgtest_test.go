@@ -11,6 +11,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"go.kenn.io/agentsview/internal/config"
 	"go.kenn.io/agentsview/internal/db"
 	"go.kenn.io/agentsview/internal/dbtest"
 	"go.kenn.io/agentsview/internal/export"
@@ -39,6 +40,29 @@ func prepareUsageSchema(
 	require.NoError(t, err, "NewStore")
 	t.Cleanup(func() { _ = store.Close() })
 	return pgURL, store
+}
+
+func TestStoreConfiguredAliasKimiPricing(t *testing.T) {
+	pricing.SetConfiguredAliases(map[string]string{"gateway-kimi": "kimi-for-coding"})
+	t.Cleanup(func() { pricing.SetConfiguredAliases(nil) })
+	_, store := prepareUsageSchema(t, "agentsview_alias_kimi_test")
+	store.SetCustomPricing(map[string]config.CustomModelRate{"gateway-kimi": {PriceAs: "kimi-for-coding"}})
+	ctx := t.Context()
+	_, err := store.DB().ExecContext(ctx, `INSERT INTO model_pricing (model_pattern, input_microdollars_per_mtok, output_microdollars_per_mtok, cache_creation_microdollars_per_mtok, cache_read_microdollars_per_mtok, updated_at) VALUES ('kimi-k3',3000000,0,0,0,'seed')`)
+	require.NoError(t, err)
+	_, err = store.DB().ExecContext(ctx, `INSERT INTO sessions (id,machine,project,agent,started_at,message_count,user_message_count) VALUES ('after','test','alias-test','pi','2026-07-19T00:00:00Z',1,1)`)
+	require.NoError(t, err)
+	_, err = store.DB().ExecContext(ctx, `INSERT INTO messages (session_id,ordinal,role,content,timestamp,model,token_usage) VALUES ('after',0,'assistant','hi','2026-07-19T00:00:00Z','gateway-kimi','{"input_tokens":1000000}')`)
+	require.NoError(t, err)
+	daily, err := store.GetDailyUsage(ctx, db.UsageFilter{From: "2026-07-19", To: "2026-07-19", Timezone: "UTC", Model: "gateway-kimi"})
+	require.NoError(t, err)
+	assert.Equal(t, money.MustParseDollars("3"), daily.Totals.TotalCost)
+	session, err := store.GetSessionUsage(ctx, "after", true)
+	require.NoError(t, err)
+	assert.Equal(t, money.MustParseDollars("3"), session.Cost)
+	report, err := store.BuildActivityReportArtifacts(ctx, db.AnalyticsFilter{Project: "alias-test", Timezone: "UTC"}, pgDayQuery(t, "2026-07-19", "UTC"), nil)
+	require.NoError(t, err)
+	assert.Equal(t, money.MustParseDollars("3"), report.Report.Totals.Cost)
 }
 
 func TestStoreGetDailyUsageUsesFallbackPricing(t *testing.T) {

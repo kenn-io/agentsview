@@ -14,6 +14,7 @@ import (
 	"go.kenn.io/agentsview/internal/export"
 	"go.kenn.io/agentsview/internal/friction"
 	"go.kenn.io/agentsview/internal/parser"
+	"go.kenn.io/docbank/document/ocr"
 )
 
 func TestOpenUsageOnlyPreservesStoredAutomationClassification(t *testing.T) {
@@ -1081,6 +1082,16 @@ func TestCopyOrphanedDataProjectsArchiveContent(t *testing.T) {
 		assert.Empty(t, call.InputJSON)
 		assert.Empty(t, call.ResultEvents)
 	})
+}
+
+func TestTranscriptArchiveRefusesImageText(t *testing.T) {
+	database := testDB(t)
+	database.SetArchiveContent(config.ArchiveContentTranscripts)
+	identity, err := ocr.NewIdentity("test", "model", "revision")
+	require.NoError(t, err)
+	require.ErrorIs(t, database.SaveImageText(t.Context(), "hash", identity, "text", false), ErrArchiveContentExcluded)
+	_, err = database.CopyImageTextFrom(t.Context(), database.Path())
+	require.ErrorIs(t, err, ErrArchiveContentExcluded)
 }
 
 func TestUsageArchiveRefusesDerivedText(t *testing.T) {

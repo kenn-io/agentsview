@@ -563,6 +563,20 @@ var mirrorTables = []tableSpec{
 		},
 		orderBy: []string{"sha", "session_id"},
 	},
+	// image_text holds each successful image extraction at its portable
+	// source location; a processor change replaces the row under a new key.
+	{
+		name: "image_text",
+		columns: []columnSpec{
+			col("session_id", tString), col("source_kind", tLowString),
+			col("message_ordinal", tInt), col("call_index", tInt),
+			col("event_index", tInt), col("image_index", tInt),
+			col("image_hash", tString), col("processor", tString),
+			col("provider", tString), col("model", tString),
+			col("revision", tString), col("text", tString),
+		},
+		orderBy: []string{"session_id", "source_kind", "message_ordinal", "call_index", "event_index", "image_index", "processor"},
+	},
 	{
 		name: "retained_commit_links",
 		columns: []columnSpec{

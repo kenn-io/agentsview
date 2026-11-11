@@ -11,6 +11,12 @@ The latest release is
 
 **New features**
 
+- A `[custom_model_pricing."<model>"]` entry can set `price_as` to price a model
+  name exactly like a catalog model, such as a private gateway deployment name
+  that serves `gpt-6-sol`. The name inherits that model's long-context tiers
+  and catalog updates, and changing the mapping reprices cached usage. See
+  [Custom Model Pricing](/docs/token-usage/#custom-model-pricing).
+
 - Follow archive changes live from the local daemon with
   `GET /api/v1/changes/stream`. A sync client or dashboard receives every
   session and message change as it is published, with token and cost totals

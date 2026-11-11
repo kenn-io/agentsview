@@ -58,6 +58,8 @@ var dataVersionScopes = map[int][]parser.AgentType{
 	170: {parser.AgentCodex},
 	171: {parser.AgentClaude, parser.AgentCowork, parser.AgentQoder, parser.AgentIcodemate},
 	172: {parser.AgentCursorIDE},
+
+	ImageTextDataVersion: {}, // Older binaries cannot maintain image_text_occurrences; nothing to reparse.
 }
 
 // firstScopedDataVersion is the oldest version that may be declared. Released
@@ -76,10 +78,10 @@ func ScopedDataVersionProviders(from, to int) []parser.AgentType {
 	if from <= 0 || from >= to {
 		return nil
 	}
-	var affected []parser.AgentType
+	affected := []parser.AgentType{}
 	for version := from + 1; version <= to; version++ {
-		providers := dataVersionScopes[version]
-		if len(providers) == 0 {
+		providers, ok := dataVersionScopes[version]
+		if !ok {
 			return nil
 		}
 		affected = append(affected, providers...)
@@ -93,8 +95,8 @@ func ScopedDataVersionProviders(from, to int) []parser.AgentType {
 // invalidate unaffected agents.
 func AgentDataVersion(agent parser.AgentType) int {
 	for version := dataVersion; version > 0; version-- {
-		providers := dataVersionScopes[version]
-		if len(providers) == 0 {
+		providers, ok := dataVersionScopes[version]
+		if !ok {
 			return version
 		}
 		for _, provider := range providers {
@@ -110,7 +112,7 @@ func AgentDataVersion(agent parser.AgentType) int {
 // full rebuild.
 func fullRebuildDataVersion() int {
 	for version := dataVersion; version > 0; version-- {
-		if len(dataVersionScopes[version]) == 0 {
+		if _, ok := dataVersionScopes[version]; !ok {
 			return version
 		}
 	}
@@ -121,9 +123,6 @@ func fullRebuildDataVersion() int {
 // apply safely.
 func validateDataVersionScopes(scopes map[int][]parser.AgentType) error {
 	for version, providers := range scopes {
-		if len(providers) == 0 {
-			return fmt.Errorf("data version %d: declaration lists no providers", version)
-		}
 		for _, provider := range providers {
 			if _, ok := parser.AgentByType(provider); !ok {
 				return fmt.Errorf(
@@ -160,15 +159,12 @@ func advanceDataVersion(ctx context.Context, tx *sql.Tx, target int) error {
 		return fmt.Errorf("reading data version: %w", err)
 	}
 	providers := ScopedDataVersionProviders(current, target)
+	var agents []parser.AgentType
 	if len(providers) > 0 {
-		var agents []parser.AgentType
 		for _, provider := range providers {
 			agents = append(agents, parser.ProviderStoredAgents(provider)...)
 		}
 		if err := invalidateAgentParseCaches(ctx, tx, agents); err != nil {
-			return err
-		}
-		if err := promoteUnaffectedSessions(ctx, tx, current, target, agents); err != nil {
 			return err
 		}
 		if _, err := tx.ExecContext(ctx,
@@ -177,6 +173,11 @@ func advanceDataVersion(ctx context.Context, tx *sql.Tx, target int) error {
 			scopedUpgradePendingKey, target,
 		); err != nil {
 			return fmt.Errorf("recording pending scoped upgrade: %w", err)
+		}
+	}
+	if providers != nil {
+		if err := promoteUnaffectedSessions(ctx, tx, current, target, agents); err != nil {
+			return err
 		}
 	}
 	return writeUserVersion(ctx, tx, max(current, target))

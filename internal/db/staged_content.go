@@ -510,6 +510,9 @@ func (db *DB) replaceSessionContentStaged(
 	if err := bumpTranscriptRevisionTx(tx, sessionID); err != nil {
 		return err
 	}
+	if err := refreshImageTextOccurrencesTx(tx, sessionID); err != nil {
+		return err
+	}
 	if err := reconcileRecallEvidenceForSessionTx(
 		ctx, tx, sessionID, &pendingRecallRevocations,
 	); err != nil {

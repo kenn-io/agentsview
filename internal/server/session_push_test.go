@@ -105,6 +105,21 @@ func TestSessionPushReceiverReportsConflict(t *testing.T) {
 	changed, _, err := artifact.EncodeSessionPush(t.Context(), source, session.ID, "")
 	require.NoError(t, err)
 	assert.Equal(t, http.StatusConflict, send(changed).Code)
+
+	started, release, done := make(chan struct{}), make(chan struct{}), make(chan error, 1)
+	go func() {
+		done <- receiver.SerializeArchiveWrite(t.Context(), func() error {
+			close(started)
+			<-release
+			return nil
+		})
+	}()
+	<-started
+	defer func() {
+		close(release)
+		require.NoError(t, <-done)
+	}()
+	assert.Equal(t, http.StatusServiceUnavailable, send(original).Code)
 }
 
 func TestSessionPushReportsVersionAndRebuildRequirements(t *testing.T) {

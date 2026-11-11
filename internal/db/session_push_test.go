@@ -24,7 +24,8 @@ func sessionPushFixture(id string) (SessionPushReceipt, SessionBatchWrite) {
 
 func TestSessionPushRejectsArchiveAwaitingRebuild(t *testing.T) {
 	d := testDB(t)
-	_, err := d.getWriter().ExecContext(t.Context(), fmt.Sprintf("PRAGMA user_version = %d", sessionPushMinArchiveVersion-1))
+	require.Equal(t, ImageTextDataVersion+1, sessionPushMinArchiveVersion)
+	_, err := d.getWriter().ExecContext(t.Context(), fmt.Sprintf("PRAGMA user_version = %d", ImageTextDataVersion))
 	require.NoError(t, err)
 	receipt, write := sessionPushFixture("snapshot")
 	_, err = d.ApplySessionPush(t.Context(), receipt, write)
@@ -32,6 +33,11 @@ func TestSessionPushRejectsArchiveAwaitingRebuild(t *testing.T) {
 	stored, err := d.GetSession(t.Context(), "snapshot")
 	require.NoError(t, err)
 	assert.Nil(t, stored)
+	_, err = d.getWriter().ExecContext(t.Context(), fmt.Sprintf("PRAGMA user_version = %d", sessionPushMinArchiveVersion))
+	require.NoError(t, err)
+	created, err := d.ApplySessionPush(t.Context(), receipt, write)
+	require.NoError(t, err)
+	assert.True(t, created)
 }
 
 func requireSessionPushReceipt(t *testing.T, d *DB, id string) {
@@ -228,6 +234,25 @@ func TestSessionPushPreservesExistingExternalParent(t *testing.T) {
 	link, err := d.GetSessionExternalParent(t.Context(), "snapshot")
 	require.NoError(t, err)
 	assert.Equal(t, "local-parent", link.ParentSessionID)
+}
+
+func TestSessionPushRejectsParentCycleWithoutSaving(t *testing.T) {
+	d := testDB(t)
+	ctx := t.Context()
+	insertSession(t, d, "parent", "proj")
+	_, err := d.SetSessionExternalParent(ctx, "parent", "snapshot")
+	require.NoError(t, err)
+	receipt, write := sessionPushFixture("snapshot")
+	receipt.ExternalParentSessionID = new("parent")
+	created, err := d.ApplySessionPush(ctx, receipt, write)
+	require.ErrorIs(t, err, ErrSessionPushConflict)
+	assert.False(t, created)
+	session, err := d.GetSession(ctx, "snapshot")
+	require.NoError(t, err)
+	assert.Nil(t, session)
+	reserved, err := d.SessionPushReservations(ctx, []string{"snapshot"})
+	require.NoError(t, err)
+	assert.False(t, reserved["snapshot"])
 }
 
 func TestSessionPushRebuildPreservesReceiptsAndCuration(t *testing.T) {

@@ -668,8 +668,9 @@ CREATE INDEX IF NOT EXISTS idx_provider_freshness_updated_at
 // the response's web-search total. Re-parse Claude-format sources in place;
 // source and session identities are unchanged.)
 // (172: import Cursor IDE chunked conversation headers.)
-// (173: rebuild while preserving pushed sessions so older writers reject them.)
-const dataVersion = 173
+// (173: prevent older binaries from writing archives with an image-text index.)
+// (174: rebuild while preserving pushed sessions so older writers reject them.)
+const dataVersion = 174
 
 const archiveOnlyVersionBase = 1 << 20
 
@@ -770,7 +771,8 @@ END;
 const schemaFTS = `
 CREATE VIEW IF NOT EXISTS message_search_content AS
 SELECT id, session_id, content AS rendered,
-    COALESCE(dialogue_text, content) AS content FROM messages;
+    COALESCE(dialogue_text, content) AS content FROM messages
+UNION ALL SELECT id, NULL, text, '' FROM image_text_cache;
 CREATE VIRTUAL TABLE IF NOT EXISTS messages_fts USING fts5(
     content, rendered,
     content='message_search_content',
@@ -781,7 +783,18 @@ CREATE VIRTUAL TABLE IF NOT EXISTS messages_fts USING fts5(
 CREATE TRIGGER IF NOT EXISTS messages_ai AFTER INSERT ON messages BEGIN
     INSERT INTO messages_fts(rowid, rendered, content) VALUES (new.id, new.content, COALESCE(new.dialogue_text, new.content));
 END;
-` + messagesADTriggerDDL + messagesAUTriggerDDL
+` + messagesADTriggerDDL + messagesAUTriggerDDL + `
+CREATE TRIGGER IF NOT EXISTS image_text_ai AFTER INSERT ON image_text_cache BEGIN
+    INSERT INTO messages_fts(rowid, rendered, content) VALUES(new.id, new.text, '');
+END;
+CREATE TRIGGER IF NOT EXISTS image_text_ad AFTER DELETE ON image_text_cache BEGIN
+    INSERT INTO messages_fts(messages_fts, rowid, rendered, content) VALUES('delete', old.id, old.text, '');
+END;
+CREATE TRIGGER IF NOT EXISTS image_text_au AFTER UPDATE ON image_text_cache BEGIN
+    INSERT INTO messages_fts(messages_fts, rowid, rendered, content) VALUES('delete', old.id, old.text, '');
+    INSERT INTO messages_fts(rowid, rendered, content) VALUES(new.id, new.text, '');
+END;
+`
 
 const schemaCJKFTS = `
 CREATE VIRTUAL TABLE IF NOT EXISTS messages_cjk_fts USING fts5(
@@ -793,6 +806,19 @@ CREATE VIRTUAL TABLE IF NOT EXISTS messages_cjk_fts USING fts5(
 `
 
 const schemaCJKFTSTriggers = `
+CREATE TEMP TRIGGER IF NOT EXISTS image_text_cjk_ai AFTER INSERT ON main.image_text_cache
+WHEN ` + cjkFTSRuntimeMatchesSQL + ` BEGIN
+    INSERT INTO messages_cjk_fts(rowid, rendered, content) VALUES(new.id, new.text, '');
+END;
+CREATE TEMP TRIGGER IF NOT EXISTS image_text_cjk_ad AFTER DELETE ON main.image_text_cache
+WHEN ` + cjkFTSRuntimeMatchesSQL + ` BEGIN
+    INSERT INTO messages_cjk_fts(messages_cjk_fts, rowid, rendered, content) VALUES('delete', old.id, old.text, '');
+END;
+CREATE TEMP TRIGGER IF NOT EXISTS image_text_cjk_au AFTER UPDATE ON main.image_text_cache
+WHEN ` + cjkFTSRuntimeMatchesSQL + ` BEGIN
+    INSERT INTO messages_cjk_fts(messages_cjk_fts, rowid, rendered, content) VALUES('delete', old.id, old.text, '');
+    INSERT INTO messages_cjk_fts(rowid, rendered, content) VALUES(new.id, new.text, '');
+END;
 CREATE TEMP TRIGGER IF NOT EXISTS messages_cjk_ai
 AFTER INSERT ON main.messages
 WHEN ` + cjkFTSRuntimeMatchesSQL + ` BEGIN
@@ -2035,6 +2061,8 @@ var readOnlyRequiredTables = []string{
 	"session_plan_usage",
 	"tool_calls",
 	"tool_result_events",
+	"image_text_cache",
+	"image_text_occurrences",
 	"insights",
 	"pinned_messages",
 	"starred_sessions",
@@ -2303,7 +2331,7 @@ func probeDatabaseConn(ctx context.Context,
 	if schema {
 		return true, false, false, nil
 	}
-	fullRebuild = archiveOnly || version < dataVersion && len(ScopedDataVersionProviders(version, dataVersion)) == 0
+	fullRebuild = archiveOnly || version < fullRebuildDataVersion()
 	// Archive-only archives cannot reparse sources, so any stale version
 	// needs their preservation rebuild.
 	countScoped := includeScoped || archiveOnly
@@ -5135,6 +5163,8 @@ func (db *DB) DropFTS(ctx context.Context) error {
 	db.mu.Lock()
 	defer db.mu.Unlock()
 	stmts := []string{
+		"DROP TRIGGER IF EXISTS image_text_cjk_ai", "DROP TRIGGER IF EXISTS image_text_cjk_ad", "DROP TRIGGER IF EXISTS image_text_cjk_au",
+		"DROP TRIGGER IF EXISTS image_text_ai", "DROP TRIGGER IF EXISTS image_text_ad", "DROP TRIGGER IF EXISTS image_text_au",
 		"DROP TRIGGER IF EXISTS messages_cjk_ai",
 		"DROP TRIGGER IF EXISTS messages_cjk_ad",
 		"DROP TRIGGER IF EXISTS messages_cjk_au",
