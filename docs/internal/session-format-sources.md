@@ -4202,7 +4202,8 @@ schemas keep their existing ordering behavior.
   The gated listing pins those indexes because the producer warns that stale
   [SQLite statistics](https://github.com/NousResearch/hermes-agent/blob/aca4f1df/hermes_state_common.py#L140-L146)
   can choose the wrong index and sort message history. Direct and seeded
-  fingerprints remain usable without either index.
+  fingerprints remain usable without either index: their token omits message
+  endpoints while the full fingerprint still reads the session's history.
   Native append/replacement moves greatest ID; active-only deletion resets the
   live count even when newer inactive rows remain. Clear removes all messages.
   The native `messages_transcript_revision_update` and
