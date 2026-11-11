@@ -119,3 +119,35 @@ func TestAccountUsagePushKeepsAgentsUnknownModelsAndReportedCosts(t *testing.T) 
 		})
 	}
 }
+
+// Cursor rows that share a dedup key are one usage fact. The mirror keys
+// cursor_usage_events on (dedup_key, id), so copies with different ids
+// survive; the daily read keeps the earliest copy, and keeps exactly one when
+// copies also share a timestamp.
+func TestAccountUsageDuplicateCursorRowsCountOnce(t *testing.T) {
+	local := dbtest.OpenTestDB(t)
+	require.NoError(t, local.InsertCursorUsageEvents(t.Context(), []db.CursorUsageEvent{
+		{OccurredAt: "2026-11-04T13:00:00Z", Model: "dup-test", InputTokens: 5, DedupKey: "cursor:dup"},
+	}))
+	dsn, database := chtest.FreshDatabase(t)
+	target := Target{URL: dsn, Database: database}
+	syncer := newTestSync(t, local, target, storage.PusherOptions{})
+	_, err := syncer.Push(t.Context(), false, nil)
+	require.NoError(t, err)
+	store, err := NewStore(t.Context(), target)
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, store.Close()) })
+	_, err = store.conn.ExecContext(t.Context(), `INSERT INTO cursor_usage_events
+		(id, occurred_at, model, input_tokens, dedup_key) VALUES
+		(1001, '2026-11-04 13:00:00', 'dup-test', 5, 'cursor:dup'),
+		(1002, '2026-11-04 14:00:00', 'dup-test', 700, 'cursor:dup')`)
+	require.NoError(t, err)
+	require.Equal(t, 3, chtest.Count(t, store.conn, "cursor_usage_events", "dedup_key = 'cursor:dup'"))
+
+	got, err := store.GetDailyUsage(t.Context(), db.UsageFilter{
+		From: "2026-11-04", To: "2026-11-04", Timezone: "UTC",
+	})
+	require.NoError(t, err)
+	require.Len(t, got.Daily, 1)
+	assert.Equal(t, 5, got.Daily[0].InputTokens)
+}

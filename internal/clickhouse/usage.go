@@ -469,10 +469,12 @@ func chUsageLocalDateSQL(f db.UsageFilter) (string, any) {
 // messages and usage_events. Prepared rows already hold the normalized
 // counters, so they take the place of the token JSON and the raw counters;
 // the normalization step is idempotent on them. Session columns still come
-// from the live sessions row, exactly as the raw form joins them.
+// from the live sessions row: usage_localized joins them for the rows that
+// survive deduplication. Until then the rows carry the agent they were
+// prepared with, which deduplication reads, and empty session columns.
 func chPreparedUsageRawSQL(state preparedUsageState, f db.UsageFilter, sessionID string) (string, []any) {
 	// Model and session filters apply after Claude snapshot attribution
-	// (usage_snapshot_filtered), exactly as the raw source does: a filtered
+	// (usage_kept), exactly as the raw source does: a filtered
 	// session's facts may belong to another session in the same request.
 	inputFilter := chUsageSnapshotInputFilter(f)
 	bounds := chUsageBoundsForFilter(inputFilter)
@@ -495,17 +497,15 @@ func chPreparedUsageRawSQL(state preparedUsageState, f db.UsageFilter, sessionID
 			p.cache_create_1h_norm AS cache_create_1h,
 			p.web_search_requests_norm AS web_search_requests,
 			p.cost_microdollars AS cost_microdollars, p.cost_source AS cost_source,
-			s.project AS project, s.agent AS agent, s.machine AS machine,
-			s.user_message_count AS user_message_count, s.is_automated AS is_automated,
-			` + chUsageDisplayNameSQL + ` AS display_name,
-			s.group_key AS group_key, ifNull(s.session_name, '') AS session_name,
-			s.started_at AS started_at,
-			COALESCE(s.ended_at, s.started_at, s.created_at) AS activity_at,
+			'' AS project, p.agent AS agent, '' AS machine,
+			toInt64(0) AS user_message_count, false AS is_automated,
+			'' AS display_name, '' AS group_key, '' AS session_name,
+			CAST(NULL AS Nullable(DateTime64(6, 'UTC'))) AS started_at,
+			CAST(NULL AS Nullable(DateTime64(6, 'UTC'))) AS activity_at,
 			p.price_model AS stored_price_model, p.price_key AS stored_price_key,
 			` + chUsageStoredPriceSelect() + `
 		FROM (` + sourceSQL + `) p
-		JOIN sessions s ON s.id = p.session_id
-		WHERE ` + where, args
+		WHERE p.session_id IN (SELECT s.id FROM sessions s WHERE ` + where + `)`, args
 }
 
 // chPreparedUsageSourceSQL renders the prepared rows a read may use under
@@ -741,13 +741,11 @@ func chClampTokens(expr string) string {
 }
 
 // chUsageNormSource holds the per-row expressions usage_normalized computes
-// for message rows, and the columns survivors must carry past attribution.
-// Raw rows carry the message's token JSON; prepared rows already carry the
-// normalized counters.
+// for message rows. Raw rows carry the message's token JSON; prepared rows
+// already carry the normalized counters.
 type chUsageNormSource struct {
 	input, output, cacheCreate, cacheCreate1h, cacheRead, reasoning, web string
 	priceModel, priceKey                                                 string
-	passthrough                                                          []string
 }
 
 func chUsageRawNormSource() chUsageNormSource {
@@ -788,18 +786,13 @@ func chUsageStoredNormSource() chUsageNormSource {
 // cursor rows, which join the union from their own table, still compute
 // the first two here and are priced by the per-request join.
 func chPreparedUsageNormSource() chUsageNormSource {
-	passthrough := make([]string, 0, len(chUsageStoredPriceColumns))
-	for _, column := range chUsageStoredPriceColumns {
-		passthrough = append(passthrough, column.stored)
-	}
 	return chUsageNormSource{
 		input: "input_tokens", output: "output_tokens",
 		cacheCreate: "cache_create", cacheCreate1h: "cache_create_1h",
 		cacheRead: "cache_read", reasoning: "reasoning_tokens",
-		web:         "web_search_requests",
-		priceModel:  "if(source = 'cursor', " + chPriceModelCaseSQL() + ", stored_price_model)",
-		priceKey:    "if(source = 'cursor', " + chUsagePriceKeySQL + ", stored_price_key)",
-		passthrough: passthrough,
+		web:        "web_search_requests",
+		priceModel: "if(source = 'cursor', " + chPriceModelCaseSQL() + ", stored_price_model)",
+		priceKey:   "if(source = 'cursor', " + chUsagePriceKeySQL + ", stored_price_key)",
 	}
 }
 
@@ -819,10 +812,6 @@ func chUsageCTEFromRawSource(
 ) (string, []any) {
 	localDateSQL, localDateArg := chUsageLocalDateSQL(f)
 	priceModelSQL := norms.priceModel
-	var passthrough strings.Builder
-	for _, column := range norms.passthrough {
-		passthrough.WriteString("\n\t\t\t\tranked." + column + ",")
-	}
 	datePred := "1"
 	var dateArgs []any
 	if f.From != "" {
@@ -833,149 +822,7 @@ func chUsageCTEFromRawSource(
 		datePred += " AND local_date <= ?"
 		dateArgs = append(dateArgs, f.To)
 	}
-	snapshotCTE := ""
-	rankedSource := "usage_normalized"
-	var snapshotArgs []any
-	if preferCompleteClaudeSnapshots {
-		// Attribution moves a row only to a session that has a row in the
-		// read, so a one-session read joins just that session. Otherwise the
-		// join reads every session.
-		attributedSessions := "sessions"
-		if sessionID != "" {
-			attributedSessions = "(SELECT * FROM sessions WHERE id = ?)"
-			snapshotArgs = append(snapshotArgs, sessionID)
-		}
-		snapshotFilter := "1"
-		var snapshotFilterArgs []any
-		snapshotFilter, snapshotFilterArgs = appendChUsageSourceFilterClauses(
-			snapshotFilter, snapshotFilterArgs, "survivor.model", f)
-		snapshotFilter, snapshotFilterArgs = appendChUsageSessionFilterClauses(
-			snapshotFilter, snapshotFilterArgs, f, "")
-		// Complete pairs share zero; incomplete rows discard the window results.
-		snapshotCTE = `,
-		usage_snapshot_ranked AS (
-			SELECT *,
-				CASE
-					WHEN claude_message_id != ''
-						THEN first_value(session_id) OVER (
-							PARTITION BY claude_message_id, claude_request_id,
-								if(claude_message_id = '', cityHash64(session_id), toUInt64(0))
-							ORDER BY ts ASC, session_id ASC,
-								COALESCE(message_ordinal, -1) ASC
-						)
-					ELSE session_id
-				END AS snapshot_attribution_session_id,
-				CASE
-					WHEN claude_message_id != ''
-						THEN row_number() OVER (
-							PARTITION BY claude_message_id, claude_request_id,
-								if(claude_message_id = '', cityHash64(session_id), toUInt64(0))
-							ORDER BY output_tokens_norm DESC, ts DESC,
-								session_id DESC,
-								COALESCE(message_ordinal, -1) DESC
-						)
-					ELSE 1
-				END AS snapshot_rank,
-				CASE
-					WHEN claude_message_id != ''
-						THEN sum(output_tokens_norm) OVER (
-							PARTITION BY claude_message_id, claude_request_id,
-								if(claude_message_id = '', cityHash64(session_id), toUInt64(0))
-						) - max(output_tokens_norm) OVER (
-							PARTITION BY claude_message_id, claude_request_id,
-								if(claude_message_id = '', cityHash64(session_id), toUInt64(0))
-						)
-					ELSE 0
-				END AS snapshot_deduplicated_output_tokens,
-				CASE
-					WHEN claude_message_id != ''
-						THEN max(web_search_requests_norm) OVER (
-							PARTITION BY claude_message_id, claude_request_id,
-								if(claude_message_id = '', cityHash64(session_id), toUInt64(0))
-						)
-					ELSE web_search_requests_norm
-				END AS snapshot_web_search_requests
-			FROM usage_normalized
-		),
-		usage_snapshot_survivors AS (
-			SELECT
-				ranked.snapshot_attribution_session_id AS session_id,
-				ranked.message_ordinal,
-				ranked.source,
-				ranked.ts,
-				ranked.pricing_ts,
-				ranked.model,
-				ranked.provider_id,
-				ranked.token_json,
-				ranked.claude_message_id,
-				ranked.claude_request_id,
-				ranked.source_uuid,
-				ranked.usage_dedup_key,
-				ranked.input_tokens,
-				ranked.output_tokens,
-				ranked.cache_create,
-				ranked.cache_read,
-				ranked.reasoning_tokens,
-				ranked.cost_microdollars,
-				ranked.cost_source,
-				ranked.input_tokens_norm,
-				ranked.output_tokens_norm,
-				ranked.cache_create_norm,
-				ranked.cache_create_1h_norm,
-				ranked.cache_read_norm,
-				ranked.reasoning_tokens_norm,
-				ranked.snapshot_web_search_requests AS web_search_requests_norm,
-				ranked.dedup_group,
-				ranked.local_date,
-				ranked.price_model,
-				ranked.price_key,` + passthrough.String() + `
-				ranked.snapshot_deduplicated_output_tokens,
-				if(attributed.id = '', ranked.project, attributed.project) AS project,
-				if(attributed.id = '', ranked.agent, attributed.agent) AS agent,
-				if(attributed.id = '', ranked.machine, attributed.machine) AS machine,
-				if(attributed.id = '', ranked.user_message_count, attributed.user_message_count) AS user_message_count,
-				if(attributed.id = '', ranked.is_automated, attributed.is_automated) AS is_automated,
-				if(attributed.id = '', ranked.display_name, COALESCE(
-					attributed.display_name, attributed.session_name,
-					attributed.first_message, attributed.project, attributed.id
-				)) AS display_name,
-				if(attributed.id = '', ranked.group_key, attributed.group_key) AS group_key,
-				if(attributed.id = '', ranked.session_name, ifNull(attributed.session_name, '')) AS session_name,
-				if(attributed.id = '', ranked.started_at, attributed.started_at) AS started_at,
-				if(attributed.id = '', ranked.activity_at, COALESCE(
-					attributed.ended_at, attributed.started_at,
-					attributed.created_at
-				)) AS activity_at
-			FROM usage_snapshot_ranked ranked
-			LEFT JOIN ` + attributedSessions + ` attributed
-				ON attributed.id = ranked.snapshot_attribution_session_id
-			WHERE ranked.snapshot_rank = 1
-		)`
-		rankedSource = "usage_snapshot_survivors"
-		// Without session or model filters, every survivor is kept and the
-		// filter join would only read every session.
-		if snapshotFilter != "1" {
-			snapshotCTE += `,
-		usage_snapshot_filtered AS (
-			SELECT survivor.*
-			FROM usage_snapshot_survivors survivor
-			LEFT JOIN sessions s ON s.id = survivor.session_id
-			WHERE survivor.session_id = '' OR (` + snapshotFilter + `)
-		)`
-			rankedSource = "usage_snapshot_filtered"
-			snapshotArgs = append(snapshotArgs, snapshotFilterArgs...)
-		}
-	}
-	evidenceSelect := ""
-	if f.PairwiseSides {
-		evidenceSelect = `,
-				arrayFilter(value -> value != model, groupUniqArray(model) OVER (
-					PARTITION BY dedup_group ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING
-				)) AS inexact_models,
-				arrayFilter(value -> value != project, groupUniqArray(project) OVER (
-					PARTITION BY dedup_group ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING
-				)) AS inexact_projects`
-	}
+	dedupCTE, dedupArgs := chUsageSnapshotDedupCTE(f, preferCompleteClaudeSnapshots, sessionID)
 	maxTok := db.MaxPlausibleTokens
 	query := fmt.Sprintf(`
 		WITH usage_raw AS (
@@ -983,23 +830,23 @@ func chUsageCTEFromRawSource(
 		),
 		usage_normalized AS (
 			SELECT *,
-				if(source = 'message', %[8]s,
+				if(source = 'message', %[7]s,
 					if(source = 'session' OR session_id = '', greatest(input_tokens, 0),
 						least(greatest(input_tokens, 0), %[4]d))) AS input_tokens_norm,
-				if(source = 'message', %[9]s,
+				if(source = 'message', %[8]s,
 					if(source = 'session' OR session_id = '', greatest(output_tokens, 0),
 						least(greatest(output_tokens, 0), %[4]d))) AS output_tokens_norm,
-				if(source = 'message', %[10]s,
+				if(source = 'message', %[9]s,
 					if(source = 'session' OR session_id = '', greatest(cache_create, 0),
 						least(greatest(cache_create, 0), %[4]d))) AS cache_create_norm,
-				if(source = 'message', %[11]s, 0) AS cache_create_1h_norm,
-				if(source = 'message', %[12]s,
+				if(source = 'message', %[10]s, 0) AS cache_create_1h_norm,
+				if(source = 'message', %[11]s,
 					if(source = 'session' OR session_id = '', greatest(cache_read, 0),
 						least(greatest(cache_read, 0), %[4]d))) AS cache_read_norm,
-				if(source = 'message', %[13]s,
+				if(source = 'message', %[12]s,
 					if(source = 'session' OR session_id = '', greatest(reasoning_tokens, 0),
 						least(greatest(reasoning_tokens, 0), %[4]d))) AS reasoning_tokens_norm,
-				if(source = 'message', %[15]s, 0) AS web_search_requests_norm,
+				if(source = 'message', %[14]s, 0) AS web_search_requests_norm,
 				if(claude_message_id != '',
 					concat('claude:', claude_message_id, ':', claude_request_id),
 					if(source = 'message' AND agent != '' AND source_uuid != '',
@@ -1014,30 +861,211 @@ func chUsageCTEFromRawSource(
 				) AS dedup_group,
 				%[2]s AS local_date,
 				%[5]s AS price_model,
-				%[14]s AS price_key
+				%[13]s AS price_key
 			FROM usage_raw
 			WHERE %[3]s
-		)%[6]s,
+		),%[6]s`, rawSQL, localDateSQL, datePred, maxTok,
+		priceModelSQL, dedupCTE,
+		norms.input, norms.output, norms.cacheCreate, norms.cacheCreate1h,
+		norms.cacheRead, norms.reasoning,
+		norms.priceKey, norms.web,
+	)
+	args = append(args, localDateArg)
+	args = append(args, dateArgs...)
+	args = append(args, dedupArgs...)
+	return query, args
+}
+
+// chUsageSessionFilterSQL renders the session and model filters of f over a
+// row whose session id is sessionColumn and whose model is modelColumn, or
+// "1" when f has neither. Session predicates read the session through an IN
+// subquery, so the filter reads sessions once however many rows it checks.
+func chUsageSessionFilterSQL(f db.UsageFilter, sessionColumn, modelColumn string) (string, []any) {
+	where, args := appendChUsageSourceFilterClauses("1", nil, modelColumn, f)
+	sessionWhere, sessionArgs := appendChUsageSessionFilterClauses("1", nil, f, "")
+	if sessionWhere != "1" {
+		where += "\n\t\t\t\tAND " + sessionColumn + " IN (SELECT s.id FROM sessions s WHERE " + sessionWhere + ")"
+		args = append(args, sessionArgs...)
+	}
+	return where, args
+}
+
+// chUsageSnapshotDedupCTE renders usage_localized: the usage_normalized rows
+// that survive Claude snapshot ranking, the session and model filters, and
+// deduplication, with their session columns.
+//
+// Without snapshot preference, rows deduplicate by dedup_group alone and keep
+// the session columns usage_raw gave them.
+//
+// With it, each Claude request keeps the row with the most output, credited
+// to the session that saw the request first; every other row keeps the first
+// row of its dedup_group. Both rankings run as one window pass over the
+// columns they read, partitioned by the Claude request for Claude rows and by
+// dedup_group for the rest. A Claude request's dedup_group holds just its
+// survivor, so ranking it again would change nothing. The surviving rows'
+// remaining columns are joined back from usage_normalized, and their session
+// columns from one read of sessions. Filters apply where the old per-stage
+// form applied them: before deduplication for other rows, and to the
+// credited session after ranking for Claude rows.
+func chUsageSnapshotDedupCTE(
+	f db.UsageFilter, preferCompleteClaudeSnapshots bool, sessionID string,
+) (string, []any) {
+	if !preferCompleteClaudeSnapshots {
+		evidenceSelect := ""
+		if f.PairwiseSides {
+			evidenceSelect = `,
+				arrayFilter(value -> value != model, groupUniqArray(model) OVER (
+					PARTITION BY dedup_group ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING
+				)) AS inexact_models,
+				arrayFilter(value -> value != project, groupUniqArray(project) OVER (
+					PARTITION BY dedup_group ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING
+				)) AS inexact_projects`
+		}
+		return `
 		usage_localized AS (
 			SELECT *,
 				row_number() OVER (
 					PARTITION BY dedup_group
 					ORDER BY ts ASC, session_id ASC,
 						COALESCE(message_ordinal, -1) ASC
-				) AS dedup_rank%[16]s
-			FROM %[7]s
+				) AS dedup_rank` + evidenceSelect + `
+			FROM usage_normalized
 			QUALIFY dedup_rank = 1
-		)`, rawSQL, localDateSQL, datePred, maxTok,
-		priceModelSQL, snapshotCTE, rankedSource,
-		norms.input, norms.output, norms.cacheCreate, norms.cacheCreate1h,
-		norms.cacheRead, norms.reasoning,
-		norms.priceKey, norms.web, evidenceSelect,
-	)
-	args = append(args, localDateArg)
-	args = append(args, dateArgs...)
-	args = append(args, snapshotArgs...)
-	return query, args
+		)`, nil
+	}
+	var args []any
+	rowFilter, rowFilterArgs := chUsageSessionFilterSQL(f, "session_id", "model")
+	inputWhere := ""
+	if rowFilter != "1" {
+		// Cursor rows carry no session and were filtered when read.
+		inputWhere = `
+			WHERE is_claude OR session_id = '' OR (` + rowFilter + `)`
+		args = append(args, rowFilterArgs...)
+	}
+	inputSource := "usage_normalized"
+	inputProject := ""
+	evidenceWindows, evidenceKept, evidenceSelect := "", "", ""
+	if f.PairwiseSides {
+		// Evidence lists the other models and projects a row's dedup_group
+		// held. Prepared rows read their project with the other session
+		// columns at the end, so the ranking pass reads it here.
+		inputSource = `(
+				SELECT n.*, if(ps.id = '', n.project, ps.project) AS row_project
+				FROM usage_normalized n
+				LEFT JOIN (SELECT id, project FROM sessions) ps ON ps.id = n.session_id
+			)`
+		inputProject = ", row_project"
+		evidenceWindows = `,
+				groupUniqArray(model) OVER usage_partition AS group_models,
+				groupUniqArray(row_project) OVER usage_partition AS group_projects`
+		evidenceKept = `,
+				if(is_claude, [], arrayFilter(value -> value != model, group_models)) AS inexact_models,
+				if(is_claude, [], arrayFilter(value -> value != row_project, group_projects)) AS inexact_projects`
+		evidenceSelect = ", k.inexact_models AS inexact_models, k.inexact_projects AS inexact_projects"
+	}
+	keptWhere := ""
+	keptFilter, keptFilterArgs := chUsageSessionFilterSQL(
+		f, "snapshot_attribution_session_id", "model")
+	if keptFilter != "1" {
+		keptWhere = `
+				AND (NOT is_claude OR (` + keptFilter + `))`
+		args = append(args, keptFilterArgs...)
+	}
+	// Attribution credits a row only to a session that has a row in the
+	// read, so a one-session read joins just that session.
+	attributedSessions := "sessions"
+	if sessionID != "" {
+		attributedSessions = "(SELECT * FROM sessions WHERE id = ?)"
+		args = append(args, sessionID)
+	}
+	// Claude rows rank by most output, then latest; other rows by earliest.
+	// One ORDER BY serves both: each row's sort keys for the other kind are
+	// constant within its partition.
+	return `
+		usage_rank_input AS (
+			SELECT session_id, ts, message_ordinal, model,
+				output_tokens_norm, web_search_requests_norm,
+				claude_message_id != '' AS is_claude,
+				claude_message_id AS rank_message_id,
+				if(is_claude, claude_request_id, '') AS rank_request_id,
+				if(is_claude, '', dedup_group) AS rank_group` + inputProject + `
+			FROM ` + inputSource + inputWhere + `
+		),
+		usage_ranked AS (
+			SELECT *,
+				argMin(session_id, (
+					ts IS NULL, ifNull(ts, toDateTime64(0, 6, 'UTC')),
+					session_id, COALESCE(message_ordinal, -1)
+				)) OVER usage_partition AS snapshot_attribution_session_id,
+				sum(output_tokens_norm) OVER usage_partition
+					- max(output_tokens_norm) OVER usage_partition
+					AS snapshot_deduplicated_output_tokens,
+				max(web_search_requests_norm) OVER usage_partition
+					AS snapshot_web_search_requests` + evidenceWindows + `,
+				row_number() OVER (
+					PARTITION BY rank_message_id, rank_request_id, rank_group
+					ORDER BY if(is_claude, output_tokens_norm, 0) DESC,
+						if(is_claude, ts, NULL) DESC,
+						if(is_claude, session_id, '') DESC,
+						if(is_claude, COALESCE(message_ordinal, -1), 0) DESC,
+						if(is_claude, NULL, ts) ASC,
+						if(is_claude, '', session_id) ASC,
+						if(is_claude, 0, COALESCE(message_ordinal, -1)) ASC
+				) AS usage_rank
+			FROM usage_rank_input
+			WINDOW usage_partition AS (
+				PARTITION BY rank_message_id, rank_request_id, rank_group
+			)
+		),
+		usage_kept AS (
+			SELECT rank_group AS kept_group, session_id AS kept_session_id,
+				ts AS kept_ts, message_ordinal AS kept_ordinal,
+				if(is_claude, snapshot_attribution_session_id, session_id) AS kept_attributed_session_id,
+				if(is_claude, snapshot_deduplicated_output_tokens, 0) AS kept_deduplicated_output_tokens,
+				if(is_claude, snapshot_web_search_requests, web_search_requests_norm) AS kept_web_search_requests` + evidenceKept + `
+			FROM usage_ranked
+			WHERE usage_rank = 1` + keptWhere + `
+		),
+		usage_deduplicated AS (
+			-- Message rows are unique by session and ordinal, so the key finds
+			-- each kept row. Other rows of a dedup_group can share every key
+			-- column; ANY keeps one row per key, as the ranking kept one.
+			SELECT u.* EXCEPT (session_id, web_search_requests_norm),
+				k.kept_attributed_session_id AS session_id,
+				k.kept_web_search_requests AS web_search_requests_norm,
+				k.kept_deduplicated_output_tokens AS snapshot_deduplicated_output_tokens,
+				toUInt64(1) AS dedup_rank` + evidenceSelect + `
+			FROM usage_normalized u
+			ANY INNER JOIN usage_kept k
+				ON k.kept_group = if(u.claude_message_id = '', u.dedup_group, '')
+				AND k.kept_session_id = u.session_id
+				AND isNotDistinctFrom(k.kept_ts, u.ts)
+				AND isNotDistinctFrom(k.kept_ordinal, u.message_ordinal)
+		),
+		usage_localized AS (
+			-- Cursor rows have no session and keep the columns they were read with.
+			SELECT d.* EXCEPT (` + chUsageSessionColumnNames + `),
+				if(a.id = '', d.project, a.project) AS project,
+				if(a.id = '', d.agent, a.agent) AS agent,
+				if(a.id = '', d.machine, a.machine) AS machine,
+				if(a.id = '', d.user_message_count, a.user_message_count) AS user_message_count,
+				if(a.id = '', d.is_automated, a.is_automated) AS is_automated,
+				if(a.id = '', d.display_name, COALESCE(
+					a.display_name, a.session_name, a.first_message, a.project, a.id
+				)) AS display_name,
+				if(a.id = '', d.group_key, a.group_key) AS group_key,
+				if(a.id = '', d.session_name, ifNull(a.session_name, '')) AS session_name,
+				if(a.id = '', d.started_at, a.started_at) AS started_at,
+				if(a.id = '', d.activity_at, COALESCE(a.ended_at, a.started_at, a.created_at)) AS activity_at
+			FROM usage_deduplicated d
+			LEFT JOIN ` + attributedSessions + ` a ON a.id = d.session_id
+		)`, args
 }
+
+// chUsageSessionColumnNames lists the session columns usage_raw selects,
+// which usage_localized replaces with the credited session's values.
+const chUsageSessionColumnNames = "project, agent, machine, user_message_count, is_automated, " +
+	"display_name, group_key, session_name, started_at, activity_at"
 
 type chUsageBucket struct {
 	inputTok  int
@@ -1492,10 +1520,10 @@ func (s *Store) forEachDailyUsageGroupRow(
 	// Visit rows in time order so the last Copilot-reported total is the session cost.
 	order := `ORDER BY session_id ASC, local_date ASC, project ASC, agent ASC, group_machine ASC,
 			row_ts ASC, COALESCE(row_message_ordinal, -1) ASC, row_source ASC,
-			row_usage_dedup_key ASC, model ASC, row_price_model ASC`
+			any(usage_dedup_key) ASC, model ASC, row_price_model ASC`
 	if top {
 		order = `ORDER BY session_id ASC, row_ts ASC, COALESCE(row_message_ordinal, -1) ASC,
-			row_source ASC, row_usage_dedup_key ASC, model ASC, row_price_model ASC`
+			row_source ASC, any(usage_dedup_key) ASC, model ASC, row_price_model ASC`
 	}
 	query := cte + pricedSQL + `,
 		usage_classified AS (
@@ -1532,7 +1560,6 @@ func (s *Store) forEachDailyUsageGroupRow(
 			any(price_model) AS row_price_model, any(source) AS row_source,
 			any(message_ordinal) AS row_message_ordinal,
 			any(ts) AS row_ts, any(pricing_ts),
-			any(usage_dedup_key) AS row_usage_dedup_key,
 			any(cache_create_1h_norm),
 			any(billable_input_tokens), any(billable_output_tokens),
 			any(billable_reasoning_tokens), any(billable_cache_creation_tokens),
@@ -1568,7 +1595,6 @@ func (s *Store) forEachDailyUsageGroupRow(
 			&r.ExplicitCost, &r.BillableWebSearch,
 			&r.PriceError, &r.Overflow,
 			&r.PriceModel, &r.Source, &r.MessageOrdinal, &ts, &pricingTS,
-			new(string),
 			&r.CacheCr1h,
 			&r.BillableInput, &r.BillableOutput, &r.BillableReason,
 			&r.BillableCacheCr, &r.BillableCacheCr1h, &r.BillableCacheRd,
