@@ -28,6 +28,13 @@ import (
 func TestImageTextCompatibilityUpgradeKeepsStrippedImagesRemoved(t *testing.T) {
 	ctx := t.Context()
 	version := db.ImageTextDataVersion
+	// Isolate the image-text version: a later version that reparses Codex
+	// rebuilds results from the source, which this test is not about.
+	scopes := map[int][]parser.AgentType{}
+	for v := version; v <= db.CurrentDataVersion(); v++ {
+		scopes[v] = []parser.AgentType{}
+	}
+	t.Cleanup(db.InstallDataVersionScopesForTest(scopes))
 	database := dbtest.OpenTestDB(t)
 	root := t.TempDir()
 	const id = "019eb791-cf7d-75c1-8439-9ed74c122b06"
