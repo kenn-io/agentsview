@@ -45,6 +45,9 @@ func (c DocbankIntegration) Validate() error {
 			return fmt.Errorf("[integrations.docbank] invalid %s", field)
 		}
 		if err := ValidateExtractTransport(u, c.AllowHTTP); err != nil {
+			if u.Scheme != "http" {
+				return fmt.Errorf("[integrations.docbank] %s must use http or https", field)
+			}
 			return fmt.Errorf("[integrations.docbank] %s must be https, or http to a loopback host; set allow_http = true to permit other HTTP hosts", field)
 		}
 	}

@@ -20,6 +20,7 @@ func TestDocbankIntegrationValidation(t *testing.T) {
 			{"loopback", "http://127.0.0.1", "", false},
 			{"https", "https://example.com", "", false},
 			{"missing host", "https://:443", "[integrations.docbank] invalid %s", true},
+			{"unsupported scheme", "ftp://docbank:8485", "[integrations.docbank] %s must use http or https", true},
 		} {
 			t.Run(field+"/"+tc.name, func(t *testing.T) {
 				apiURL, webURL := tc.endpoint, ""
