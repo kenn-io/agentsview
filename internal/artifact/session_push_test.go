@@ -304,7 +304,7 @@ func TestSessionPushSidechainChangeConflicts(t *testing.T) {
 	_, err = source.WriteSessionBatchAtomic(t.Context(), []db.SessionBatchWrite{{Session: session, Messages: []db.Message{message}, ReplaceMessages: true}})
 	require.NoError(t, err)
 	_, err = push()
-	assert.ErrorIs(t, err, db.ErrSessionPushConflict)
+	require.ErrorIs(t, err, db.ErrSessionPushConflict)
 	stored, err := receiver.GetAllMessages(t.Context(), session.ID)
 	require.NoError(t, err)
 	require.Len(t, stored, 1)
