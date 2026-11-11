@@ -46,7 +46,7 @@ func TestProjectIdentityBackfillFailureRecording(t *testing.T) {
 	})
 }
 
-func TestWritableOpenRequeuesFailedProjectIdentityBackfill(t *testing.T) {
+func TestWritableOpenPreservesFailedProjectIdentityBackfill(t *testing.T) {
 	d := testDB(t)
 	ctx := t.Context()
 	require.NoError(t, d.UpsertSession(ctx, Session{ID: "complete", Project: "app", Machine: "local", Agent: "codex"}))
@@ -59,8 +59,8 @@ func TestWritableOpenRequeuesFailedProjectIdentityBackfill(t *testing.T) {
 	defer d.Close()
 	status, err := d.ProjectIdentityBackfillStatus(ctx)
 	require.NoError(t, err)
-	assert.Equal(t, "pending", status.State)
-	assert.Empty(t, status.LastError)
+	assert.Equal(t, "failed", status.State)
+	assert.Equal(t, "completion failed", status.LastError)
 }
 
 func TestEnsureProjectIdentityBackfillRequeuesUnverifiedCompletedGap(

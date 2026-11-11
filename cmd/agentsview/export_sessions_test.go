@@ -1156,6 +1156,30 @@ func TestExportSessionsFailedBackfillDoesNotStartDaemon(t *testing.T) {
 	}
 }
 
+func TestExportFailureSurvivesDirectWritableOpen(t *testing.T) {
+	path := pendingExportArchive(t, false)
+	database, err := db.Open(t.Context(), path)
+	require.NoError(t, err)
+	engine := agentsync.NewEngine(t.Context(), database, agentsync.EngineConfig{Machine: "local"})
+	require.NoError(t, engine.BackfillProjectIdentitySnapshots(t.Context()))
+	engine.Close()
+	require.NoError(t, database.Close())
+	raw, err := sql.Open("sqlite3", path)
+	require.NoError(t, err)
+	_, err = raw.ExecContext(t.Context(), `UPDATE background_migrations SET state = 'failed', last_error = 'completion failed' WHERE name = 'session_project_identity_snapshots_v1'`)
+	require.NoError(t, err)
+	require.NoError(t, raw.Close())
+	database, err = db.Open(t.Context(), path)
+	require.NoError(t, err)
+	require.NoError(t, database.Close())
+	forbidStartBackgroundServeForTransport(t, "failed backfill must not start a daemon")
+	stdout, _, err := executeExportSessionsCommand(newRootCommand(), "export", "sessions", "--wait")
+	require.ErrorContains(t, err, "completion failed")
+	assert.Contains(t, err.Error(), "agentsview daemon restart")
+	assert.Contains(t, err.Error(), "agentsview export status")
+	assert.Empty(t, stdout)
+}
+
 func TestExportStatusReportsBackfillFailure(t *testing.T) {
 	dataDir := testDataDir(t)
 	dbPath := filepath.Join(dataDir, "sessions.db")

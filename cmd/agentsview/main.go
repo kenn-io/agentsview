@@ -283,7 +283,7 @@ func runServe(ctx context.Context, cfg config.Config, opts serveOptions, restart
 	startupProgress.SetPhase("opening database")
 	databaseProgress := newResyncProgressPrinter(os.Stdout, time.Now)
 	database, writeLock, err := openWriteDBWith(ctx, cfg, func(ctx context.Context, cfg config.Config) (*db.DB, error) {
-		return openDBWithProgress(ctx, cfg, func(p db.OpenProgress) {
+		return openDaemonDBWithProgress(ctx, cfg, archiveOnly, func(p db.OpenProgress) {
 			if p.ResyncRequired {
 				fmt.Println(p.Detail)
 			} else {
@@ -1730,6 +1730,22 @@ func rotateLogFile(path string, limit int64) {
 
 func openDB(ctx context.Context, cfg config.Config) (*db.DB, error) {
 	return openDBWithProgress(ctx, cfg, nil)
+}
+
+func openDaemonDBWithProgress(ctx context.Context, cfg config.Config, archiveOnly bool, progress db.OpenProgressFunc) (*db.DB, error) {
+	database, err := openDBWithProgress(ctx, cfg, progress)
+	if err != nil || archiveOnly {
+		return database, err
+	}
+	status, err := database.ProjectIdentityBackfillStatus(ctx)
+	if err == nil && status.State == "failed" {
+		err = database.StartProjectIdentityBackfill(ctx)
+	}
+	if err != nil {
+		_ = database.Close()
+		return nil, fmt.Errorf("retrying project identity backfill: %w", err)
+	}
+	return database, nil
 }
 
 func openDBWithProgress(ctx context.Context, cfg config.Config, progress db.OpenProgressFunc) (*db.DB, error) {

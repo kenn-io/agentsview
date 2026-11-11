@@ -37,6 +37,10 @@ func ensureProjectIdentityBackfillQueuedTx(
 		SELECT state FROM background_migrations WHERE name = ?`,
 		ProjectIdentityBackfillName,
 	).Scan(&state)
+	// Only daemon startup may retry a recorded failure.
+	if state == "failed" {
+		return nil
+	}
 	if err == nil && state == "completed" {
 		var verified string
 		verifyErr := tx.QueryRowContext(ctx,
@@ -55,16 +59,12 @@ func ensureProjectIdentityBackfillQueuedTx(
 	}
 	var missing bool
 	if err := tx.QueryRowContext(ctx, `
-		SELECT EXISTS(
-			SELECT 1 FROM sessions s
-			WHERE NOT EXISTS (
-				SELECT 1 FROM session_project_identity_snapshots p
-				WHERE p.session_id = s.id
-			)
-		)`).Scan(&missing); err != nil {
+		SELECT EXISTS(SELECT 1 FROM sessions s WHERE NOT EXISTS (
+			SELECT 1 FROM session_project_identity_snapshots p WHERE p.session_id = s.id
+		))`).Scan(&missing); err != nil {
 		return fmt.Errorf("checking project identity backfill candidates: %w", err)
 	}
-	if !missing && state != "failed" {
+	if !missing {
 		if state == "completed" {
 			if _, err := tx.ExecContext(ctx, `
 				INSERT INTO stats (key, value) VALUES (?, '1')
