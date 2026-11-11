@@ -53,10 +53,10 @@ func Materialize(ctx context.Context, cfg config.Config, session *db.Session, cw
 	if !capture.ValidUUID(id) {
 		return Result{}, errors.New("native Claude UUID required; archive-only fork sessions are unsupported")
 	}
-	if session.FilePath == nil || *session.FilePath == "" {
-		return Result{}, errors.New("native transcript is unavailable from configured sources")
+	source, err := storedSource(session, host)
+	if err != nil {
+		return Result{}, err
 	}
-	source := *session.FilePath
 	var files []sourceFile
 	if strings.HasPrefix(source, "s3://") {
 		if host != "" && host != session.Machine {
@@ -88,7 +88,7 @@ func Materialize(ctx context.Context, cfg config.Config, session *db.Session, cw
 			return Result{}, fmt.Errorf("reading native transcript: %w", err)
 		}
 	} else {
-		files, err = readConfiguredLocal(ctx, cfg, session, source, id)
+		files, source, err = readConfiguredLocal(ctx, cfg, session, source, id)
 	}
 	if err != nil {
 		return Result{}, fmt.Errorf("reading native transcript: %w", err)
@@ -131,7 +131,19 @@ func Materialize(ctx context.Context, cfg config.Config, session *db.Session, cw
 	return Result{Source: source, Paths: paths, Cwd: cwd, Status: status, ConfigDir: home, ProjectOverride: projectOverride}, nil
 }
 
-func readConfiguredLocal(ctx context.Context, cfg config.Config, session *db.Session, stored, id string) ([]sourceFile, error) {
+// storedSource returns the archived source path. Only an unqualified local
+// session may lack one; mirror and S3 sessions need it to find their original.
+func storedSource(session *db.Session, host string) (string, error) {
+	if session.FilePath != nil && *session.FilePath != "" {
+		return *session.FilePath, nil
+	}
+	if host == "" {
+		return "", nil
+	}
+	return "", errors.New("native transcript is unavailable from configured sources")
+}
+
+func readConfiguredLocal(ctx context.Context, cfg config.Config, session *db.Session, stored, id string) ([]sourceFile, string, error) {
 	var roots []string
 	for _, root := range cfg.ResolveDirs(parser.AgentClaude) {
 		if strings.HasPrefix(root, "s3://") {
@@ -147,24 +159,67 @@ func readConfiguredLocal(ctx context.Context, cfg config.Config, session *db.Ses
 	}
 	provider, ok := parser.NewProvider(parser.AgentClaude, parser.ProviderConfig{Roots: roots, Machine: cfg.InstallationID, SourceMachines: cfg.SourceMachines[parser.AgentClaude]})
 	if !ok {
-		return nil, errors.New("native source provider unavailable")
+		return nil, "", errors.New("native source provider unavailable")
 	}
-	ref, found, err := provider.FindSource(ctx, parser.FindSourceRequest{RawSessionID: id, FullSessionID: session.ID, StoredFilePath: stored, PreferStoredSource: true})
+	name, err := localSourcePath(ctx, provider, session.ID, stored, id)
 	if err != nil {
-		return nil, err
-	}
-	if !found || ref.Provider != parser.AgentClaude {
-		return nil, errors.New("native transcript is unavailable from configured sources")
-	}
-	if filepath.Clean(ref.DisplayPath) != filepath.Clean(stored) {
-		return nil, errors.New("source lookup did not resolve the archived transcript")
+		return nil, "", err
 	}
 	for _, root := range roots {
-		if within(root, ref.DisplayPath) {
-			return readLocalSource(ctx, root, ref.DisplayPath, id, maxSourceBytes)
+		if within(root, name) {
+			files, err := readLocalSource(ctx, root, name, id, maxSourceBytes)
+			return files, name, err
 		}
 	}
-	return nil, errors.New("source is outside configured roots")
+	return nil, "", errors.New("source is outside configured roots")
+}
+
+// localSourcePath keeps an archived path that still resolves exactly. A
+// missing or stale path falls back to the one physical copy under the roots.
+func localSourcePath(ctx context.Context, provider parser.Provider, fullID, stored, id string) (string, error) {
+	ref, found, err := provider.FindSource(ctx, parser.FindSourceRequest{RawSessionID: id, FullSessionID: fullID, StoredFilePath: stored, PreferStoredSource: true})
+	if err != nil {
+		return "", err
+	}
+	if found && ref.Provider == parser.AgentClaude && filepath.Clean(ref.DisplayPath) == filepath.Clean(stored) {
+		return ref.DisplayPath, nil
+	}
+	return uniqueLocalSource(ctx, provider, id)
+}
+
+// uniqueLocalSource discovers id's transcript under the provider's roots.
+// Incomplete discovery or a second physical file fails instead of guessing;
+// aliases of one file, such as overlapping roots or symlinks, count once.
+func uniqueLocalSource(ctx context.Context, provider parser.Provider, id string) (string, error) {
+	discoverer, ok := provider.(parser.StreamingDiscoverer)
+	if !ok {
+		return "", errors.New("native source provider unavailable")
+	}
+	var match string
+	var matchInfo os.FileInfo
+	err := discoverer.DiscoverEach(ctx, func(ref parser.SourceRef) error {
+		name := filepath.Clean(ref.DisplayPath)
+		if filepath.Base(name) != id+".jsonl" {
+			return nil
+		}
+		info, err := os.Stat(name)
+		if err != nil {
+			return err
+		}
+		if matchInfo == nil {
+			match, matchInfo = name, info
+		} else if !os.SameFile(matchInfo, info) {
+			return fmt.Errorf("ambiguous native transcript: %s and %s", match, name)
+		}
+		return nil
+	})
+	if err != nil {
+		return "", err
+	}
+	if matchInfo == nil {
+		return "", errors.New("native transcript is unavailable from configured sources")
+	}
+	return match, nil
 }
 
 func within(root, name string) bool {
