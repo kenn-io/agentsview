@@ -178,3 +178,54 @@ func TestSessionPushReceiverInsertAndRetry(t *testing.T) {
 	require.NotNil(t, stored)
 	assert.Equal(t, "claude", stored.Agent)
 }
+
+func TestSessionPushReceiverRejectsChangedBoundary(t *testing.T) {
+	source := testServer(t, 30*time.Second).db.(*db.DB)
+	session := db.Session{ID: "source", Agent: "claude", Machine: "source", MessageCount: 1, UserMessageCount: 1}
+	message := db.Message{SessionID: session.ID, Ordinal: 0, Role: "user", Content: "hello", HasToolUse: true, ToolCalls: []db.ToolCall{{ToolName: "Read", ToolUseID: "call", ResultContent: "result", ResultEvents: []db.ToolResultEvent{{EventIndex: 0, ToolUseID: "call", Source: "tool", Status: "done", Content: "result"}}}}}
+	_, err := source.WriteSessionBatchAtomic(t.Context(), []db.SessionBatchWrite{{Session: session, Messages: []db.Message{message}, ReplaceMessages: true}})
+	require.NoError(t, err)
+	original, _, err := artifact.EncodeSessionPush(t.Context(), source, session.ID, "")
+	require.NoError(t, err)
+	receiver := testServer(t, 30*time.Second)
+	receiver.cfg.AcceptSessionPush, receiver.cfg.RequireAuth, receiver.cfg.AuthToken = true, true, "secret"
+	send := func(payload []byte) *httptest.ResponseRecorder {
+		r := httptest.NewRequestWithContext(t.Context(), http.MethodPost, "/api/v1/sessions/ingest", bytes.NewReader(payload))
+		r.Header.Set("Authorization", "Bearer secret")
+		r.Header.Set("Content-Type", "application/json")
+		w := httptest.NewRecorder()
+		receiver.Handler().ServeHTTP(w, r)
+		return w
+	}
+	require.Equal(t, http.StatusOK, send(original).Code)
+	before, err := receiver.db.(*db.DB).GetAllMessages(t.Context(), session.ID)
+	require.NoError(t, err)
+	for _, tc := range []struct {
+		name   string
+		change func(*db.Message)
+	}{
+		{"compact boundary", func(m *db.Message) { m.IsCompactBoundary = true }},
+		{"source subtype", func(m *db.Message) { m.SourceSubtype = "notice" }},
+		{"timestamp", func(m *db.Message) { m.Timestamp = "2026-01-02T00:00:00Z" }},
+		{"model", func(m *db.Message) { m.Model = "model-b" }},
+		{"tool identity", func(m *db.Message) { m.ToolCalls[0].ToolUseID = "other-call" }},
+		{"result time", func(m *db.Message) { m.ToolCalls[0].ResultEvents[0].Timestamp = "2026-01-02T00:00:00Z" }},
+		{"result attribution", func(m *db.Message) { m.ToolCalls[0].ResultEvents[0].AgentID = "agent-b" }},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			changedMessage := message
+			changedMessage.ToolCalls = append([]db.ToolCall(nil), message.ToolCalls...)
+			changedMessage.ToolCalls[0].ResultEvents = append([]db.ToolResultEvent(nil), message.ToolCalls[0].ResultEvents...)
+			tc.change(&changedMessage)
+			_, err := source.WriteSessionBatchAtomic(t.Context(), []db.SessionBatchWrite{{Session: session, Messages: []db.Message{changedMessage}, ReplaceMessages: true}})
+			require.NoError(t, err)
+			changed, _, err := artifact.EncodeSessionPush(t.Context(), source, session.ID, "")
+			require.NoError(t, err)
+			assert.Equal(t, http.StatusConflict, send(changed).Code)
+			stored, err := receiver.db.(*db.DB).GetAllMessages(t.Context(), session.ID)
+			require.NoError(t, err)
+			assert.Equal(t, before, stored)
+			assert.JSONEq(t, `{"session_id":"source","agent":"claude","status":"unchanged"}`, send(original).Body.String())
+		})
+	}
+}

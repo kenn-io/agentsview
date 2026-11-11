@@ -64,8 +64,11 @@ func TestSessionPushRetryAfterUsageChanges(t *testing.T) {
 	data.Messages[0].OutputTokens = 20
 	data.Messages[0].HasContextTokens = true
 	data.Messages[0].HasOutputTokens = true
-	data.Messages[0].Model = "updated-model"
-	data.Messages[0].Timestamp = "2026-01-02T00:00:00Z"
+	data.Messages[0].SourceUUID = "new-source-id"
+	data.Messages[0].SourceType = "updated-source-type"
+	data.Messages[0].SourceParentUUID = "new-parent-id"
+	data.Messages[0].IsSidechain = true
+	data.Messages[0].ContentLength = 123
 	second, err := encodeSessionPushData(t.Context(), "source", session, data)
 	require.NoError(t, err)
 	receipt1, write1, err := DecodeSessionPush(first)
@@ -141,6 +144,38 @@ func TestSessionPushReceiptIgnoresSegmentBoundaries(t *testing.T) {
 	resegmented, _, err := DecodeSessionPush(packet)
 	require.NoError(t, err)
 	assert.Equal(t, original.PayloadHash, resegmented.PayloadHash)
+	for i := range segments {
+		require.Contains(t, segments[i].NDJSON, `"v":4`)
+		segments[i].NDJSON = strings.Replace(segments[i].NDJSON, `"v":4`, `"v":1`, 1)
+		segments[i].SHA256 = hashHex([]byte(segments[i].NDJSON))
+		m.Segments[i] = segments[i].SHA256
+	}
+	envelope.Manifest, err = json.Marshal(m)
+	require.NoError(t, err)
+	envelope.Segments, err = json.Marshal(segments)
+	require.NoError(t, err)
+	packet, err = json.Marshal(envelope)
+	require.NoError(t, err)
+	older, _, err := DecodeSessionPush(packet)
+	require.NoError(t, err)
+	assert.Equal(t, original.PayloadHash, older.PayloadHash)
+}
+
+func TestSessionPushIdentityV1(t *testing.T) {
+	message := segmentMessage{Ordinal: 0, Role: "assistant", Content: "answer", ThinkingText: "thought", Timestamp: "2026-01-01T00:00:00Z", HasThinking: true, HasToolUse: true, Model: "model", ReasoningEffort: "high", ProviderID: "provider", ClaudeMessageID: "message", ClaudeRequestID: "request", IsSystem: true, SourceSubtype: "notice", PromptSource: "prompt", IsCompactBoundary: true, ToolCalls: []segmentToolCall{{ToolName: "Read", ToolUseID: "call", InputJSON: "input", ResultContent: "result", SubagentSessionID: "child", Category: "read", FilePath: "file", SkillName: "skill", ResultEvents: []segmentResultEvent{{ToolUseID: "call", AgentID: "agent", SubagentSessionID: "child", Source: "tool", Status: "done", Content: "result", Timestamp: "2026-01-01T00:00:01Z"}}}}}
+	canonical, err := canonicalJSON(struct {
+		Version  int                          `json:"v"`
+		Messages []sessionPushIdentityMessage `json:"messages"`
+	}{1, []sessionPushIdentityMessage{sessionPushIdentity(message)}})
+	require.NoError(t, err)
+	const expected = `{"messages":[{"claude_message_id":"message","claude_request_id":"request","content":"answer","has_thinking":true,"has_tool_use":true,"is_compact_boundary":true,"is_system":true,"model":"model","ordinal":0,"prompt_source":"prompt","provider_id":"provider","reasoning_effort":"high","role":"assistant","source_subtype":"notice","thinking_text":"thought","timestamp":"2026-01-01T00:00:00Z","tool_calls":[{"category":"read","events":[{"agent":"agent","content":"result","id":"call","source":"tool","status":"done","subagent":"child","timestamp":"2026-01-01T00:00:01Z"}],"file_path":"file","id":"call","input":"input","name":"Read","result":"result","skill_name":"skill","subagent":"child"}]}],"v":1}` + "\n"
+	assert.Equal(t, expected, string(canonical))
+	assert.Equal(t, "ca65f6c613b52ce655002c189d18c37765abe0c208006dac7b570c231f7c70b2", hashHex(canonical))
+	packet, err := encodeSessionPushData(t.Context(), "source", db.Session{ID: "sample", Agent: "claude", Machine: "source", MessageCount: 1}, db.ArtifactExportData{Messages: []db.Message{message.dbMessage()}})
+	require.NoError(t, err)
+	receipt, _, err := DecodeSessionPush(packet)
+	require.NoError(t, err)
+	assert.Equal(t, "ca65f6c613b52ce655002c189d18c37765abe0c208006dac7b570c231f7c70b2", receipt.PayloadHash)
 }
 
 func TestSessionPushPreservesCapabilities(t *testing.T) {

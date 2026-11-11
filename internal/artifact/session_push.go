@@ -46,16 +46,28 @@ type sessionPushSegment struct {
 // These fields define version 1 of the receipt identity independently of
 // artifact versions, segment boundaries, and usage accounting.
 type sessionPushIdentityMessage struct {
-	Ordinal      int                           `json:"ordinal"`
-	Role         string                        `json:"role"`
-	Content      string                        `json:"content"`
-	ThinkingText string                        `json:"thinking_text"`
-	IsSystem     bool                          `json:"is_system"`
-	ToolCalls    []sessionPushIdentityToolCall `json:"tool_calls"`
+	Ordinal           int                           `json:"ordinal"`
+	Role              string                        `json:"role"`
+	Content           string                        `json:"content"`
+	ThinkingText      string                        `json:"thinking_text"`
+	Timestamp         string                        `json:"timestamp"`
+	HasThinking       bool                          `json:"has_thinking"`
+	HasToolUse        bool                          `json:"has_tool_use"`
+	Model             string                        `json:"model"`
+	ReasoningEffort   string                        `json:"reasoning_effort"`
+	ProviderID        string                        `json:"provider_id"`
+	ClaudeMessageID   string                        `json:"claude_message_id"`
+	ClaudeRequestID   string                        `json:"claude_request_id"`
+	IsSystem          bool                          `json:"is_system"`
+	SourceSubtype     string                        `json:"source_subtype"`
+	PromptSource      string                        `json:"prompt_source"`
+	IsCompactBoundary bool                          `json:"is_compact_boundary"`
+	ToolCalls         []sessionPushIdentityToolCall `json:"tool_calls"`
 }
 
 type sessionPushIdentityToolCall struct {
 	Name      string                     `json:"name"`
+	ID        string                     `json:"id"`
 	Input     string                     `json:"input"`
 	Result    string                     `json:"result"`
 	Subagent  string                     `json:"subagent"`
@@ -66,9 +78,25 @@ type sessionPushIdentityToolCall struct {
 }
 
 type sessionPushIdentityEvent struct {
-	Source  string `json:"source"`
-	Status  string `json:"status"`
-	Content string `json:"content"`
+	ID        string `json:"id"`
+	Agent     string `json:"agent"`
+	Subagent  string `json:"subagent"`
+	Source    string `json:"source"`
+	Status    string `json:"status"`
+	Content   string `json:"content"`
+	Timestamp string `json:"timestamp"`
+}
+
+func sessionPushIdentity(m segmentMessage) sessionPushIdentityMessage {
+	item := sessionPushIdentityMessage{Ordinal: m.Ordinal, Role: m.Role, Content: m.Content, ThinkingText: m.ThinkingText, Timestamp: m.Timestamp, HasThinking: m.HasThinking, HasToolUse: m.HasToolUse, Model: m.Model, ReasoningEffort: m.ReasoningEffort, ProviderID: m.ProviderID, ClaudeMessageID: m.ClaudeMessageID, ClaudeRequestID: m.ClaudeRequestID, IsSystem: m.IsSystem, SourceSubtype: m.SourceSubtype, PromptSource: m.PromptSource, IsCompactBoundary: m.IsCompactBoundary}
+	for _, call := range m.ToolCalls {
+		tool := sessionPushIdentityToolCall{Name: call.ToolName, ID: call.ToolUseID, Input: call.InputJSON, Result: call.ResultContent, Subagent: call.SubagentSessionID, Category: call.Category, FilePath: call.FilePath, SkillName: call.SkillName}
+		for _, event := range call.ResultEvents {
+			tool.Events = append(tool.Events, sessionPushIdentityEvent{ID: event.ToolUseID, Agent: event.AgentID, Subagent: event.SubagentSessionID, Source: event.Source, Status: event.Status, Content: event.Content, Timestamp: event.Timestamp})
+		}
+		item.ToolCalls = append(item.ToolCalls, tool)
+	}
+	return item
 }
 
 type sessionPushCapture struct {
@@ -224,7 +252,6 @@ func decodeSessionPush(data []byte) (db.SessionPushReceipt, db.SessionBatchWrite
 	}
 	var messages []db.Message
 	var identity []sessionPushIdentityMessage
-	ordinals := make(map[int]struct{})
 	var nested nestedCollectionCounts
 	var decodedBytes int64
 	for i, segment := range segments {
@@ -246,10 +273,6 @@ func decodeSessionPush(data []byte) (db.SessionPushReceipt, db.SessionBatchWrite
 			if message.Ordinal < 0 {
 				return zero, noWrite, errors.New("message ordinal must be nonnegative")
 			}
-			if _, exists := ordinals[message.Ordinal]; exists {
-				return zero, noWrite, errors.New("duplicate message ordinal")
-			}
-			ordinals[message.Ordinal] = struct{}{}
 			for callIndex, call := range message.ToolCalls {
 				if call.CallIndex != callIndex {
 					return zero, noWrite, errors.New("invalid tool call coordinate")
@@ -266,15 +289,7 @@ func decodeSessionPush(data []byte) (db.SessionPushReceipt, db.SessionBatchWrite
 					}
 				}
 			}
-			item := sessionPushIdentityMessage{Ordinal: message.Ordinal, Role: message.Role, Content: message.Content, ThinkingText: message.ThinkingText, IsSystem: message.IsSystem}
-			for _, call := range message.ToolCalls {
-				tool := sessionPushIdentityToolCall{Name: call.ToolName, Input: call.InputJSON, Result: call.ResultContent, Subagent: call.SubagentSessionID, Category: call.Category, FilePath: call.FilePath, SkillName: call.SkillName}
-				for _, event := range call.ResultEvents {
-					tool.Events = append(tool.Events, sessionPushIdentityEvent{Source: event.Source, Status: event.Status, Content: event.Content})
-				}
-				item.ToolCalls = append(item.ToolCalls, tool)
-			}
-			identity = append(identity, item)
+			identity = append(identity, sessionPushIdentity(message))
 			converted := message.dbMessage()
 			// Normalize before asset downgrade and signal extraction. The receipt
 			// identity uses the validated wire content before these projections.
