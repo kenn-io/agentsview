@@ -11,6 +11,7 @@ filter:
   include:
     operation-ids:
       - get-startup-probe
+      - get-api-ping
       - post-api-v1-daemon-persist
       - get-api-v1-version
       - get-api-v1-memory-status

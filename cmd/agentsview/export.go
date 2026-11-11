@@ -7,13 +7,13 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"net/http"
 	"sort"
 	"strings"
 	"time"
 
 	"github.com/spf13/cobra"
 	"github.com/spf13/pflag"
+	"go.kenn.io/agentsview/internal/apiclient"
 	"go.kenn.io/agentsview/internal/config"
 	"go.kenn.io/agentsview/internal/db"
 	"go.kenn.io/agentsview/internal/export"
@@ -405,30 +405,16 @@ func exportDaemonPing(ctx context.Context, rt *DaemonRuntime, token string) (fai
 	ctx, cancel := context.WithTimeout(ctx, time.Second)
 	defer cancel()
 	ep := rt.Record.Endpoint()
-	client := ep.HTTPClient(daemon.HTTPClientOptions{Timeout: time.Second, DisableKeepAlives: true})
-	if token != "" {
-		client.Transport = bearerAuthTransport{token: token, base: client.Transport}
-	}
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, ep.BaseURL()+rt.BasePath+"/api/ping", nil)
+	client, err := apiclient.NewHTTPClient(ep.BaseURL()+rt.BasePath, token,
+		ep.HTTPClient(daemon.HTTPClientOptions{Timeout: time.Second, DisableKeepAlives: true}))
 	if err != nil {
 		return false, false
 	}
-	resp, err := client.Do(req)
-	if err != nil {
+	resp, err := client.GetAPIPingWithResponse(ctx)
+	if err != nil || resp == nil || resp.JSON200 == nil || resp.JSON200.Pid == nil || *resp.JSON200.Pid != int64(rt.Record.PID) {
 		return false, false
 	}
-	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusOK {
-		return false, false
-	}
-	var ping struct {
-		PID    int  `json:"pid"`
-		Failed bool `json:"project_identity_backfill_failed"`
-	}
-	if json.UnmarshalDecode(jsontext.NewDecoder(resp.Body), &ping) != nil || ping.PID != rt.Record.PID {
-		return false, false
-	}
-	return ping.Failed, true
+	return resp.JSON200.ProjectIdentityBackfillFailed != nil && *resp.JSON200.ProjectIdentityBackfillFailed, true
 }
 
 func exportWritableDaemonPing(ctx context.Context, cfg *config.Config, rt **DaemonRuntime) (failed, ok bool) {

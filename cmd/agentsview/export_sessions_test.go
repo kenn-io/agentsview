@@ -842,6 +842,34 @@ func TestExportWaitDuringDaemonChanges(t *testing.T) {
 	}
 }
 
+func TestExportDaemonPing(t *testing.T) {
+	for _, tc := range []struct {
+		name       string
+		body       string
+		wantFailed bool
+		wantOK     bool
+	}{
+		{name: "failed backfill", body: `{"ok":true,"healthy":true,"pid":42,"project_identity_backfill_failed":true}`, wantFailed: true, wantOK: true},
+		{name: "no failure", body: `{"ok":true,"healthy":true,"pid":42}`, wantOK: true},
+		{name: "different process", body: `{"ok":true,"healthy":true,"pid":43,"project_identity_backfill_failed":true}`},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				assert.Equal(t, "/nested/api/ping", r.URL.Path)
+				assert.Equal(t, "Bearer example-token", r.Header.Get("Authorization"))
+				w.Header().Set("Content-Type", "application/json")
+				_, _ = io.WriteString(w, tc.body)
+			}))
+			t.Cleanup(ts.Close)
+			ep := serverEndpoint(t, ts)
+			rt := &DaemonRuntime{Record: daemon.RuntimeRecord{PID: 42, Address: ep.Addr}, BasePath: "/nested"}
+			failed, ok := exportDaemonPing(t.Context(), rt, "example-token")
+			assert.Equal(t, tc.wantFailed, failed)
+			assert.Equal(t, tc.wantOK, ok)
+		})
+	}
+}
+
 func TestExportWaitReusesDaemonRuntimeForSinglePing(t *testing.T) {
 	path := pendingExportArchive(t, false)
 	dir := filepath.Dir(path)
