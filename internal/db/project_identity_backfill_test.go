@@ -35,12 +35,15 @@ func TestProjectIdentityBackfillFailureRecording(t *testing.T) {
 			} else {
 				assert.Equal(t, state, status.State)
 			}
-			reader, err := OpenReadOnly(ctx, d.Path())
-			require.NoError(t, err)
-			defer reader.Close()
-			require.ErrorIs(t, reader.FailProjectIdentityBackfill(ctx, errors.New("write failed")), ErrReadOnly)
 		})
 	}
+	t.Run("read-only", func(t *testing.T) {
+		d := testDB(t)
+		reader, err := OpenReadOnly(t.Context(), d.Path())
+		require.NoError(t, err)
+		defer reader.Close()
+		require.ErrorIs(t, reader.FailProjectIdentityBackfill(t.Context(), errors.New("write failed")), ErrReadOnly)
+	})
 }
 
 func TestEnsureProjectIdentityBackfillRequeuesUnverifiedCompletedGap(

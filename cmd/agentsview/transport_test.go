@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strconv"
 	"testing"
@@ -387,15 +388,74 @@ func TestDetectTransport_DaemonStarting_FallsBackToDirect(t *testing.T) {
 }
 
 func TestDetectTransportRoutesStartupProgress(t *testing.T) {
-	dir := daemonRuntimeDir(t)
-	MarkDaemonStarting(dir)
-	t.Cleanup(func() { UnmarkDaemonStarting(dir) })
-	stubWaitForDaemonStartupForTransport(t, func(context.Context, string, time.Duration, ...string) bool { return false })
-	var progress bytes.Buffer
-	ctx := context.WithValue(t.Context(), daemonProgressContextKey{}, &progress)
-	_, err := detectTransportContext(ctx, dir, "", time.Second)
-	require.NoError(t, err)
-	assert.Contains(t, progress.String(), "server is starting up, waiting")
+	for _, mode := range []string{"detect", "detect external", "startup wait", "external wait", "background ready", "launch contention", "launch"} {
+		t.Run(mode, func(t *testing.T) {
+			dir := daemonRuntimeDir(t)
+			require.NoError(t, os.MkdirAll(dir, 0o700))
+			var progress bytes.Buffer
+			ctx, cancel := context.WithTimeout(t.Context(), 250*time.Millisecond)
+			defer cancel()
+			ctx = context.WithValue(ctx, daemonProgressContextKey{}, &progress)
+			switch mode {
+			case "detect":
+				MarkDaemonStarting(dir)
+				t.Cleanup(func() { UnmarkDaemonStarting(dir) })
+				stubWaitForDaemonStartupForTransport(t, func(context.Context, string, time.Duration, ...string) bool { return false })
+				_, err := detectTransportContext(ctx, dir, "", time.Second)
+				require.NoError(t, err)
+				assert.Contains(t, progress.String(), "server is starting up, waiting")
+				return
+			case "detect external", "external wait":
+				holdExternalStartupLockForTest(t, dir)
+			case "startup wait", "background ready", "launch contention":
+				MarkDaemonStarting(dir)
+				t.Cleanup(func() { UnmarkDaemonStarting(dir) })
+			}
+			if mode != "launch" {
+				state := newStartupStateWriter(dir, time.Now)
+				state.SetPhase("Opening archive")
+			}
+			switch mode {
+			case "detect external":
+				_, _ = detectTransportContext(ctx, dir, "", 50*time.Millisecond)
+				assert.Contains(t, progress.String(), "server is starting up, waiting")
+			case "startup wait":
+				WaitForDaemonStartupContext(ctx, dir, 50*time.Millisecond)
+				assert.Contains(t, progress.String(), "Opening archive")
+			case "external wait":
+				_, _, _ = waitForExternalServeStartup(ctx, dir, "", 50*time.Millisecond)
+				assert.Contains(t, progress.String(), "Opening archive")
+			case "background ready":
+				_, _ = waitForBackgroundServeReady(ctx, dir, "", make(chan error), 50*time.Millisecond)
+				assert.Contains(t, progress.String(), "Opening archive")
+			case "launch contention":
+				lock, ok := acquireBackgroundLaunchLock(dir)
+				require.True(t, ok)
+				t.Cleanup(func() { _ = lock.Unlock() })
+				_, _ = waitForBackgroundLaunchBeforeArchiveWrite(ctx, dir, 50*time.Millisecond)
+				assert.Contains(t, progress.String(), "Opening archive")
+			case "launch":
+				host, port := testPingServer(t)
+				old := startServeBackgroundProcessForEnsure
+				startServeBackgroundProcessForEnsure = func(ctx context.Context, _ config.Config, _ []string) (*exec.Cmd, string, error) {
+					if _, err := WriteDaemonRuntime(dir, host, port, version, false); err != nil {
+						return nil, "", err
+					}
+					child := exec.CommandContext(ctx, "sleep", "30")
+					if err := child.Start(); err != nil {
+						return nil, "", err
+					}
+					t.Cleanup(func() { _ = child.Process.Kill() })
+					return child, "test.log", nil
+				}
+				t.Cleanup(func() { startServeBackgroundProcessForEnsure = old; RemoveDaemonRuntime(dir) })
+				cfg := config.Config{DataDir: dir}
+				_, err := ensureBackgroundServe(ctx, &cfg, time.Second, false)
+				require.NoError(t, err)
+				assert.Contains(t, progress.String(), "Starting agentsview")
+			}
+		})
+	}
 }
 
 func TestEnsureTransport_ReadIntentStartsDaemon(t *testing.T) {
