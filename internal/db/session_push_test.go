@@ -225,9 +225,10 @@ func TestSessionPushParentWithExistingLinks(t *testing.T) {
 				_, err := d.SetSessionExternalParent(ctx, "snapshot", "launcher")
 				require.NoError(t, err)
 			}
-			if mode == "sender" {
+			switch mode {
+			case "sender":
 				receipt.ExternalParentSessionID = new("launcher")
-			} else if mode == "receiver wins" {
+			case "receiver wins":
 				insertSession(t, d, "source-parent", "project")
 				_, err := d.SetSessionExternalParent(ctx, "source-parent", "snapshot")
 				require.NoError(t, err)
