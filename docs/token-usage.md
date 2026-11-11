@@ -876,8 +876,9 @@ workflow also:
   second index to keep fresh.
 - **Reads committed archive data** — daily reports can run while the daemon
   imports new source changes. Run `agentsview source sync` first when those changes
-  must be included. Session usage and statusline finish any pending startup
-  ingestion before querying, including when they reuse an existing daemon.
+  must be included. Statusline finishes pending startup ingestion before querying.
+  Session usage attempts a targeted refresh by default and may return saved totals
+  while startup is pending.
 
 <a id="agentsview-usage-daily"></a>
 
