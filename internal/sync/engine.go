@@ -11419,12 +11419,12 @@ func (e *Engine) collectAndBatchWithOptions(
 		}
 		allowed, vetoed := e.splitResultsByCwdFilter(r.results, sourceCwd)
 		reservedResults := 0
-		for _, result := range r.results {
+		for _, result := range allowed {
 			if reserved[applyIDPrefixToID(e.idPrefix, result.Session.ID)] {
 				reservedResults++
 			}
 		}
-		if len(r.results) > 0 && reservedResults == len(r.results) {
+		if len(allowed) > 0 && reservedResults == len(allowed) {
 			stats.sessionPushReservedFiles++
 		}
 		stats.cwdFilteredSessions += vetoed

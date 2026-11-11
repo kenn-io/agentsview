@@ -462,3 +462,37 @@ func TestSessionPushRejectsDirectTranscriptMutation(t *testing.T) {
 		})
 	}
 }
+
+func TestSessionPushLauncherParentEditableAfterNativeSpawnReference(t *testing.T) {
+	for _, action := range []string{"clear", "move"} {
+		t.Run(action, func(t *testing.T) {
+			d := testDB(t)
+			ctx := t.Context()
+			insertSession(t, d, "first-parent", "proj")
+			insertSession(t, d, "second-parent", "proj")
+			receipt, write := sessionPushFixture("child")
+			receipt.ExternalParentSessionID = new("first-parent")
+			_, err := d.ApplySessionPush(ctx, receipt, write)
+			require.NoError(t, err)
+			link, err := d.GetSessionExternalParent(ctx, "child")
+			require.NoError(t, err)
+			require.True(t, link.Applied)
+			_, err = d.WriteSessionBatchAtomic(ctx, []SessionBatchWrite{{Session: Session{ID: "spawner", Agent: "claude", Machine: "local", MessageCount: 1}, Messages: []Message{{SessionID: "spawner", Role: "assistant", HasToolUse: true, ToolCalls: []ToolCall{{ToolName: "Agent", Category: "Task", SubagentSessionID: "child"}}}}, ReplaceMessages: true}})
+			require.NoError(t, err)
+			if action == "clear" {
+				_, err = d.ClearSessionExternalParent(ctx, "child")
+			} else {
+				_, err = d.SetSessionExternalParent(ctx, "child", "second-parent")
+			}
+			require.NoError(t, err)
+			child, err := d.GetSessionFull(ctx, "child")
+			require.NoError(t, err)
+			require.NotNil(t, child)
+			if action == "clear" {
+				assert.Nil(t, child.ParentSessionID)
+			} else {
+				assert.Equal(t, new("second-parent"), child.ParentSessionID)
+			}
+		})
+	}
+}

@@ -115,3 +115,38 @@ func TestSessionPushRebuildWithoutSources(t *testing.T) {
 	require.Len(t, messages, 1)
 	assert.Equal(t, "accepted snapshot", messages[0].Content)
 }
+
+func TestSessionPushRebuildMixedReservedAndFilteredFiles(t *testing.T) {
+	root := t.TempDir()
+	project := filepath.Join(root, "project")
+	require.NoError(t, os.MkdirAll(project, 0o700))
+	d := openTestDB(t)
+	for _, item := range []struct{ id, cwd string }{{"allowed", "/allowed/project"}, {"filtered", "/outside/project"}} {
+		content := testjsonl.NewSessionBuilder().AddClaudeUser("2026-01-01T00:00:00Z", "native", item.cwd).String()
+		require.NoError(t, os.WriteFile(filepath.Join(project, item.id+".jsonl"), []byte(content), 0o600))
+		receipt := db.SessionPushReceipt{SessionID: item.id, SourceOrigin: "source", PayloadHash: strings.Repeat("a", 64)}
+		write := db.SessionBatchWrite{Session: db.Session{ID: item.id, Agent: "claude", Machine: "source", MessageCount: 1, UserMessageCount: 1}, Messages: []db.Message{{SessionID: item.id, Role: "user", Content: "snapshot"}}, ReplaceMessages: true, DataVersion: db.CurrentDataVersion()}
+		_, err := d.ApplySessionPush(t.Context(), receipt, write)
+		require.NoError(t, err)
+	}
+	path := filepath.Join(project, "native.jsonl")
+	content := testjsonl.NewSessionBuilder().AddClaudeUser("2026-01-01T00:00:00Z", "native", "/outside/project").String()
+	require.NoError(t, os.WriteFile(path, []byte(content), 0o600))
+	_, err := d.WriteSessionBatchAtomic(t.Context(), []db.SessionBatchWrite{{Session: db.Session{ID: "native", Agent: "claude", Machine: "local", Cwd: "/outside/project", FilePath: &path, MessageCount: 1, UserMessageCount: 1}, Messages: []db.Message{{SessionID: "native", Role: "user", Content: "archived"}}, ReplaceMessages: true, DataVersion: db.CurrentDataVersion()}})
+	require.NoError(t, err)
+	engine := NewEngine(t.Context(), d, EngineConfig{AgentDirs: map[parser.AgentType][]string{parser.AgentClaude: {root}}, Machine: "local", IncludeCwdPrefixes: []string{"/allowed"}})
+	t.Cleanup(engine.Close)
+	stats := engine.ResyncAll(t.Context(), nil)
+	require.False(t, stats.Aborted, "rebuild aborted: %v", stats.Warnings)
+	require.True(t, stats.ArchiveRebuilt)
+	for _, id := range []string{"allowed", "filtered", "native"} {
+		messages, err := d.GetAllMessages(t.Context(), id)
+		require.NoError(t, err)
+		require.Len(t, messages, 1)
+		if id == "native" {
+			assert.Equal(t, "archived", messages[0].Content)
+		} else {
+			assert.Equal(t, "snapshot", messages[0].Content)
+		}
+	}
+}

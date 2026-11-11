@@ -195,6 +195,7 @@ func spawnEdgeExistsSQL(alias string) string {
 	return `EXISTS (
 			SELECT 1 FROM tool_calls tc
 			WHERE tc.subagent_session_id = ` + alias + `.id
+			AND NOT EXISTS (SELECT 1 FROM session_push_receipts own WHERE own.session_id = ` + alias + `.id)
 			AND tc.session_id IS NOT tc.subagent_session_id
 			AND ` + activeSubagentSpawnerSQL + `
 		)`
