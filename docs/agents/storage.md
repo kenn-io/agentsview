@@ -835,8 +835,7 @@ rows, so no usage, cost, or rollup query reads it. Session usage loads it as
 
 Apply every database optimization and every Go-side backend optimization to each
 backend it applies to: SQLite, PostgreSQL, CockroachDB, DuckDB, and ClickHouse,
-plus shared read layers such as `internal/readbase`. This covers query shape,
-indexes, caching, batching, read paths, sync and push paths, and similar work.
+plus shared read layers such as `internal/readbase`.
 
 A change that optimizes one, two, or three of these backends while the
 optimization applies to the others is incomplete. When a backend cannot take the
