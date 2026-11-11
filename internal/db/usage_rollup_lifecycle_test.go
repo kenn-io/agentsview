@@ -38,7 +38,7 @@ func TestUsageQueryIntervals(t *testing.T) {
 	assert.Equal(t, []usageQueryInterval{toOnly}, usageQueryIntervals(UsageFilter{To: "2026-09-06", Timezone: "America/Santiago"}))
 }
 
-func TestUsageTimezoneIdentityTracksNamedZoneRules(t *testing.T) {
+func TestUsageTimezoneIdentityUsesNamedZone(t *testing.T) {
 	loc, err := time.LoadLocation("America/Chicago")
 	require.NoError(t, err)
 	intervals := usageQueryIntervals(UsageFilter{

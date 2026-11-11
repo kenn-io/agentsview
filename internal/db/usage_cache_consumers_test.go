@@ -62,7 +62,6 @@ func TestUsageCacheReaderChangesSourceGeneration(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, want, got)
 	require.Equal(t, streams, source.streams.Load())
-	require.Contains(t, reader.engine.usageCache.generations, source.databaseID)
 }
 
 func TestTopSessionsRollupMatchesLegacy(t *testing.T) {

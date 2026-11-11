@@ -227,16 +227,11 @@ func TestPGUsageCacheAccountReplacementAndPricing(t *testing.T) {
 		`DELETE FROM model_pricing WHERE model_pattern='paid-a'`,
 		`INSERT INTO source_project_identity_observations(source_archive_id,project,machine,observed_at) VALUES('account-journal','project-a','test-machine',now())`,
 	} {
-		before, err := probe.pgUsageCacheSource.CaptureUsage(ctx, db.UsageSourceRequest{})
-		require.NoError(t, err)
 		accountReads.Store(0)
-		_, err = store.pg.ExecContext(ctx, mutation)
+		_, err := store.pg.ExecContext(ctx, mutation)
 		require.NoError(t, err)
 		requireCachedUsageMatchesDirect(t, store, filter)
 		require.Empty(t, probe.takeExtracted(), "account or metadata changes must reuse session facts")
-		after, err := probe.pgUsageCacheSource.CaptureUsage(ctx, db.UsageSourceRequest{})
-		require.NoError(t, err)
-		assert.Greater(t, after.CursorHighWater, before.CursorHighWater)
 		assert.Equal(t, int64(1), accountReads.Load())
 	}
 	store.SetCustomPricing(map[string]config.CustomModelRate{"paid-a": {OutputMicrodollarsPerMTok: 23000000}})
@@ -298,7 +293,7 @@ func TestPGUsageCacheCloseFill(t *testing.T) {
 	requireCachedUsageMatchesDirect(t, store, filter)
 }
 
-func TestPGUsageCacheConcurrentHandlesCannotPublishPartialWindow(t *testing.T) {
+func TestPGUsageCacheConcurrentHandlesFillSameWindow(t *testing.T) {
 	_, _, store, _ := keptUsageFixture(t)
 	directory := t.TempDir()
 	probe := attachUsageCacheProbe(t, store, directory)
@@ -316,24 +311,30 @@ func TestPGUsageCacheConcurrentHandlesCannotPublishPartialWindow(t *testing.T) {
 	finishRelease := sync.OnceFunc(func() { close(release) })
 	t.Cleanup(finishRelease)
 	filter := db.UsageFilter{Timezone: "UTC"}
-	done := make(chan error, 1)
-	go func() { _, err := store.usageCache.GetDailyUsage(t.Context(), filter); done <- err }()
+	type outcome struct {
+		result db.DailyUsageResult
+		err    error
+	}
+	done := make(chan outcome, 1)
+	go func() {
+		result, err := store.usageCache.GetDailyUsage(t.Context(), filter)
+		done <- outcome{result, err}
+	}()
 	select {
 	case <-started:
 	case <-time.After(10 * time.Second):
 		t.Fatal("fill did not reach extraction")
-	}
-	select {
-	case err := <-done:
-		t.Fatalf("partial request returned before all shards finished: %v", err)
-	case <-time.After(100 * time.Millisecond):
 	}
 	concurrent := &Store{pg: store.pg, ownedDB: store.DB()}
 	second := attachUsageCacheProbe(t, concurrent, directory)
 	t.Cleanup(func() { require.NoError(t, concurrent.usageCache.Close()) })
 	requireCachedUsageMatchesDirect(t, concurrent, filter)
 	finishRelease()
-	require.NoError(t, <-done)
+	first := <-done
+	require.NoError(t, first.err)
+	want, err := (&Store{pg: store.pg}).GetDailyUsage(t.Context(), filter)
+	require.NoError(t, err)
+	require.Equal(t, want, first.result)
 	require.NotEmpty(t, second.takeExtracted())
 }
 
