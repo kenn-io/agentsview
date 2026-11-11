@@ -254,7 +254,7 @@ func newExportSessionsCommand() *cobra.Command {
 	flags.Var(&cfg.Format, "format", "Output format: json or ndjson")
 	flags.BoolVar(&cfg.JSON, "json", false,
 		"Emit JSON output (alias for --format json)")
-	flags.BoolVar(&cfg.Wait, "wait", false, "Wait for project identity evidence backfill")
+	flags.BoolVar(&cfg.Wait, "wait", false, "Wait for project identification")
 	flags.BoolVar(&cfg.All, "all", false,
 		"Export every page as one output stream")
 	return cmd
@@ -315,13 +315,13 @@ func runExportSessions(cmd *cobra.Command, cfg exportSessionsConfig) error {
 			return fmt.Errorf("checking archive mode: %w", err)
 		}
 		if archiveOnly {
-			return errors.New("archive-only databases have no project identity backfill worker; run `agentsview export sessions --wait` on the writable source, then restore an archive containing the evidence")
+			return errors.New("projects cannot be identified in an archive-only database; run `agentsview export sessions --wait` on the writable source, then restore an updated archive")
 		}
 		if backfill.State == "failed" {
 			return exportBackfillFailure(backfill)
 		}
 		if !cfg.Wait {
-			return fmt.Errorf("project identity evidence backfill is %s (%d/%d); run `agentsview export sessions --wait` or check `agentsview export status`", backfill.State, backfill.CompletedItems, backfill.TotalItems)
+			return fmt.Errorf("project identification is %s (%d/%d); run `agentsview export sessions --wait` or check `agentsview export status`", backfill.State, backfill.CompletedItems, backfill.TotalItems)
 		}
 		if err := database.Close(); err != nil {
 			return err
@@ -387,7 +387,7 @@ func runExportSessions(cmd *cobra.Command, cfg exportSessionsConfig) error {
 }
 
 func unknownExportBackfillState(state string) error {
-	return fmt.Errorf("unknown project identity evidence backfill state %q; run `agentsview export status`", state)
+	return fmt.Errorf("unknown project identification status %q; run `agentsview export status`", state)
 }
 
 func exportBackfillFailure(status db.BackgroundMigrationStatus) error {
@@ -395,7 +395,7 @@ func exportBackfillFailure(status db.BackgroundMigrationStatus) error {
 	if status.LastError != "" {
 		reason = ": " + status.LastError
 	}
-	return fmt.Errorf("project identity evidence backfill failed%s; run `agentsview daemon restart`, then check `agentsview export status`", reason)
+	return fmt.Errorf("project identification failed%s; run `agentsview daemon restart`, then check `agentsview export status`", reason)
 }
 
 func exportDaemonPing(ctx context.Context, rt *DaemonRuntime, token string) (failed, ok bool) {
@@ -472,7 +472,7 @@ func waitForExportBackfill(ctx context.Context, progress io.Writer, cfg *config.
 			if unavailableSince.IsZero() {
 				unavailableSince = time.Now()
 			} else if time.Since(unavailableSince) >= exportDaemonUnavailableGrace {
-				return fmt.Errorf("project identity evidence backfill is %s (%d/%d), but the writable daemon is unavailable; run `agentsview daemon restart`, then check `agentsview export status`", status.State, status.CompletedItems, status.TotalItems)
+				return fmt.Errorf("project identification is %s (%d/%d), but the writable daemon is unavailable; run `agentsview daemon restart`, then check `agentsview export status`", status.State, status.CompletedItems, status.TotalItems)
 			}
 		} else {
 			unavailableSince = time.Time{}
@@ -480,7 +480,7 @@ func waitForExportBackfill(ctx context.Context, progress io.Writer, cfg *config.
 				return exportBackfillFailure(db.BackgroundMigrationStatus{})
 			}
 		}
-		if _, err := fmt.Fprintf(progress, "project identity evidence backfill: %s (%d/%d)\n", status.State, status.CompletedItems, status.TotalItems); err != nil {
+		if _, err := fmt.Fprintf(progress, "Identifying projects: %s (%d/%d)\n", status.State, status.CompletedItems, status.TotalItems); err != nil {
 			return err
 		}
 		timer := time.NewTimer(time.Second)

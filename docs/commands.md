@@ -2021,7 +2021,7 @@ agentsview export sessions [flags]
 | `--limit`             | `500`   | Maximum sessions to return; max `db.MaxSessionLimit`      |
 | `--cursor`            |         | Opaque cursor from a previous response                    |
 | `--all`               | `false` | Export every eligible page as one output stream           |
-| `--wait`              | `false` | Wait for project identity evidence backfill               |
+| `--wait`              | `false` | Wait for project identification                          |
 | `--project`           |         | Filter by exact project name                              |
 | `--exclude-project`   |         | Exclude sessions from the given project                   |
 | `--machine`           |         | ID, alias, ID/alias list, or unique display name          |

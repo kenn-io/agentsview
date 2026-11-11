@@ -686,7 +686,7 @@ func TestExportSessionsUpgradeRequiresBackgroundEvidenceBackfill(t *testing.T) {
 	require.Error(t, err)
 	assert.Empty(t, stderr)
 	assert.Empty(t, stdout)
-	assert.Contains(t, err.Error(), "project identity evidence backfill is pending")
+	assert.Contains(t, err.Error(), "project identification is pending")
 	assert.Contains(t, err.Error(), "agentsview export sessions --wait")
 
 	raw, err = sql.Open("sqlite3", dbPath)
@@ -939,9 +939,10 @@ func TestExportWaitAfterDaemonRestart(t *testing.T) {
 			_, err = raw.ExecContext(t.Context(), `INSERT INTO background_migrations (name, state) VALUES ('session_project_identity_snapshots_v1', 'pending') ON CONFLICT(name) DO UPDATE SET state = 'pending'`)
 			require.NoError(t, err)
 			trigger := `CREATE TRIGGER fail_backfill BEFORE INSERT ON session_project_identity_snapshots BEGIN SELECT RAISE(FAIL, 'backfill blocked'); END`
-			if mode == "completed evidence" {
+			switch mode {
+			case "completed evidence":
 				trigger = `CREATE TRIGGER fail_backfill BEFORE UPDATE ON background_migrations WHEN NEW.state = 'completed' BEGIN SELECT RAISE(FAIL, 'backfill blocked'); END`
-			} else if mode == "unrecordable failure" {
+			case "unrecordable failure":
 				trigger = `CREATE TRIGGER fail_backfill BEFORE UPDATE ON background_migrations WHEN NEW.state IN ('running', 'failed') BEGIN SELECT RAISE(FAIL, 'backfill writes blocked'); END`
 			}
 			_, err = raw.ExecContext(t.Context(), trigger)
@@ -1120,7 +1121,7 @@ func TestExportSessionsFailedBackfillDoesNotStartDaemon(t *testing.T) {
 			forbidStartBackgroundServeForTransport(t, "failed backfill must not start a daemon")
 			stdout, _, err := executeExportSessionsCommand(newRootCommand(), "export", "sessions", "--wait")
 			if reason == "" {
-				require.ErrorContains(t, err, "backfill failed; run `agentsview daemon restart`")
+				require.ErrorContains(t, err, "project identification failed; run `agentsview daemon restart`")
 			} else {
 				require.ErrorContains(t, err, reason)
 				assert.Contains(t, err.Error(), "agentsview daemon restart")
