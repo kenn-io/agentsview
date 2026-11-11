@@ -1158,8 +1158,9 @@ func TestCLIEmbeddingsJoinsAutomaticSetup(t *testing.T) {
 				require.ErrorContains(t, err, "search by meaning is off")
 				assert.Zero(t, builds)
 			default:
-				require.Error(t, err)
+				require.ErrorContains(t, err, "build failed")
 				assert.Equal(t, 1, builds)
+				assert.Equal(t, 2, buildReads)
 			}
 		})
 	}
