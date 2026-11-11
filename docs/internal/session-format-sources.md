@@ -4219,9 +4219,14 @@ schemas keep their existing ordering behavior.
   manual partial salvage dropping interior rows. No replacement tracker is used.
   Reverify these couplings when the producer changes: additive changes can occur
   without a schema-version bump. The pinned tree has no independent message
-  session-ID reassignment or finish-reason-only rewrite. Transcript-file edits
-  use their own `sessions/` events. Listing costs session metadata plus distinct
-  lifetime ledger keys and indexed message seeks, not only changed sessions.
+  session-ID reassignment. A finish-reason change in
+  [transcript repair](https://github.com/NousResearch/hermes-agent/blob/aca4f1df/agent/transcript_repair.py#L317-L328)
+  names content and display metadata in the update, advancing the revision.
+  [Prune rewrites](https://github.com/NousResearch/hermes-agent/blob/aca4f1df/hermes_state_prune_rewrite.py#L225-L249)
+  first insert a retained row with a new ID, advancing the greatest message ID.
+  Transcript-file edits use their own `sessions/` events. Listing costs session
+  metadata plus distinct lifetime ledger keys and indexed message seeks, not
+  only changed sessions.
   Auxiliary same-key ledger UPSERTs can leave session fields/revision unchanged,
   so the full ledger read remains necessary under the current producer contract.
   Ledger keys aggregate route/task usage; their lifetime count has no verified
