@@ -2358,5 +2358,31 @@ func (s *Store) GetSessionUsage(
 	if out.PlanUsage, err = s.GetSessionPlanUsage(ctx, sess.ID); err != nil {
 		return nil, err
 	}
+	if out.SessionTotal, err = s.getSessionUsageTotal(ctx, sess.ID); err != nil {
+		return nil, err
+	}
 	return out, nil
+}
+
+// getSessionUsageTotal returns the session's recorded total, or nil when it
+// has none.
+func (s *Store) getSessionUsageTotal(
+	ctx context.Context, sessionID string,
+) (*db.SessionUsageTotal, error) {
+	rows, err := s.queryContext(ctx,
+		`SELECT `+db.SessionUsageTotalColumns+` FROM session_usage_totals WHERE session_id = ?`,
+		sessionID,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("querying duckdb session total for %s: %w", sessionID, err)
+	}
+	defer rows.Close()
+	if !rows.Next() {
+		return nil, rows.Err()
+	}
+	t, err := db.ScanSessionUsageTotal(rows.Scan)
+	if err != nil {
+		return nil, fmt.Errorf("scanning duckdb session total for %s: %w", sessionID, err)
+	}
+	return t, rows.Err()
 }

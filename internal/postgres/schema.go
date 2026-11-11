@@ -342,7 +342,7 @@ CREATE INDEX IF NOT EXISTS idx_usage_events_session
 
 CREATE INDEX IF NOT EXISTS idx_usage_events_occurred
     ON usage_events (occurred_at);
-` + sessionPlanUsageDDL + `
+` + sessionPlanUsageDDL + sessionUsageTotalsDDL + `
 CREATE TABLE IF NOT EXISTS cursor_usage_events (
     id BIGSERIAL PRIMARY KEY,
     agent TEXT NOT NULL DEFAULT 'cursor',
@@ -2440,6 +2440,16 @@ func CheckSchemaCompat(
 	if err != nil {
 		return fmt.Errorf(
 			"session_plan_usage table missing required columns: %w",
+			err,
+		)
+	}
+
+	_, err = db.ExecContext(ctx,
+		`SELECT session_id, `+sessionUsageTotalColumns+`
+		 FROM session_usage_totals LIMIT 0`)
+	if err != nil {
+		return fmt.Errorf(
+			"session_usage_totals table missing required columns: %w",
 			err,
 		)
 	}

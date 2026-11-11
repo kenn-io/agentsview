@@ -21,7 +21,7 @@ func TestSnapshotFingerprintTracksPlanUsage(t *testing.T) {
 	}}
 	fingerprint := func() string {
 		t.Helper()
-		fp, err := s.snapshotFingerprint(snapshot)
+		fp, err := s.snapshotFingerprint(snapshot, nil)
 		require.NoError(t, err)
 		return fp
 	}
@@ -46,7 +46,7 @@ func TestSnapshotFingerprintTracksDialogue(t *testing.T) {
 	}
 	fingerprint := func() string {
 		t.Helper()
-		fp, err := s.snapshotFingerprint(snapshot)
+		fp, err := s.snapshotFingerprint(snapshot, nil)
 		require.NoError(t, err)
 		return fp
 	}

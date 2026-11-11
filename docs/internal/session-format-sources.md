@@ -493,6 +493,28 @@ fixtures retain this field; missing identities remain source-local.
   it, and an absent or malformed breakdown falls back to the 5m rate for the
   whole write total (issue #1452).
 
+- **Session cost total (`cost-state`, checked 2026-11-11):** Claude Code
+  appends `cost-state` records with `totalCostUSD`, `hasUnknownModelCost`,
+  and per-model `modelUsage` (`inputTokens`, `outputTokens`,
+  `thinkingTokens`, `cacheReadInputTokens`, `cacheCreationInputTokens`,
+  `webSearchRequests`, `costUSD`). No public producer source exists; this is
+  observed evidence from 1,480 records in 917 local Claude Code 2.1
+  transcripts. The records are cumulative snapshots: every record in a file
+  shares one `startTime`, and no total decreases, so the last record is the
+  file's total. Subagent transcripts never carry one. The total includes
+  subagent calls: across 81 sessions with subagents, transcript output was
+  49% of `outputTokens` for the parent file alone and 103.5% with its
+  subagent files, while 817 sessions without subagents matched within 1-3%.
+  It also includes side calls that are never written to the transcript: 130
+  of the 131 sessions whose transcript output is more than 10% below the
+  total have an `ai-title` record, and titled sessions run a median of 31
+  output and 1,520 input tokens above their transcripts while untitled ones
+  match. Agentsview keeps the last record with usage as the session total,
+  with subagent scope `included`, in `session_usage_totals` (data version
+  177). It is never added to usage or cost; `session usage` shows it as
+  `session_total` and an `Agent total:` line. An appended record with usage
+  makes the incremental parser fall back to a full parse.
+
 - **Server tool use (web search):** Anthropic bills server-side web search at
   $10 per 1,000 requests on top of tokens and reports the count in
   `message.usage.server_tool_use.web_search_requests`, which Claude Code

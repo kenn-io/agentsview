@@ -680,7 +680,8 @@ CREATE INDEX IF NOT EXISTS idx_provider_freshness_updated_at
 // identities are unchanged.)
 // (176: keep the cost Pi, OpenClaw, Shelley, fx, and OpenCode-format agents
 // record for their requests, as a recorded cost.)
-const dataVersion = 176
+// (177: keep Claude Code's cost-state session total.)
+const dataVersion = 177
 
 const archiveOnlyVersionBase = 1 << 20
 
@@ -2069,6 +2070,7 @@ var readOnlyRequiredTables = []string{
 	"stats",
 	"usage_events",
 	"session_plan_usage",
+	"session_usage_totals",
 	"tool_calls",
 	"tool_result_events",
 	"image_text_cache",

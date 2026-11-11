@@ -1531,10 +1531,22 @@ func (s *Sync) pushBatchAttempt(
 			return batchResult{}, nil
 		}
 
-		// Publish findings, commit links, image text, friction, or plan usage
-		// changes to read-mode watchers unless pushMessages already advanced
-		// updated_at.
-		if !messagesChanged && (findingsChanged || commitLinksChanged || imageTextChanged || frictionChanged || planUsageChanged) {
+		sessionTotalChanged, err := s.replaceSessionUsageTotal(ctx, tx, sess.ID)
+		if err != nil {
+			log.Printf(
+				"pgsync: session total %s: %v",
+				sess.ID, err,
+			)
+			_ = tx.Rollback()
+			*pushed = (*pushed)[:len(*pushed)-n]
+			return batchResult{}, nil
+		}
+
+		// Publish findings, commit links, image text, friction, plan usage,
+		// or session total changes to read-mode watchers unless pushMessages
+		// already advanced updated_at.
+		if !messagesChanged && (findingsChanged || commitLinksChanged || imageTextChanged ||
+			frictionChanged || planUsageChanged || sessionTotalChanged) {
 			if _, err := tx.ExecContext(ctx, `
 				UPDATE sessions
 				SET updated_at = NOW()

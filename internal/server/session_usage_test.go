@@ -15,6 +15,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"go.kenn.io/agentsview/internal/db"
+	"go.kenn.io/agentsview/internal/dbtest"
 	"go.kenn.io/agentsview/internal/money"
 	"go.kenn.io/agentsview/internal/testjsonl"
 )
@@ -639,4 +640,24 @@ func TestHandleSessionUsage_ReportsAgentRecordedCost(t *testing.T) {
 	var plain map[string]any
 	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &plain))
 	assert.NotContains(t, plain, "recorded_cost")
+}
+
+func TestHandleSessionUsage_ReportsAgentSessionTotal(t *testing.T) {
+	te := setup(t)
+	dbtest.SeedSessionUsageTotal(t, te.db)
+	w := te.get(t, "/api/v1/sessions/"+dbtest.SessionTotalSessionID+"/usage")
+	assertStatus(t, w, http.StatusOK)
+	var got map[string]any
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &got))
+	assert.Equal(t, map[string]any{"microdollars": float64(2000)}, got["cost"],
+		"the session total is not added to cost")
+	total, ok := got["session_total"].(map[string]any)
+	require.True(t, ok, "session_total present: %v", got["session_total"])
+	assert.Equal(t, "claude-cost-state", total["source"])
+	assert.Equal(t, "included", total["subagent_scope"])
+	assert.Equal(t, map[string]any{"microdollars": float64(750000)}, total["cost"])
+	assert.Equal(t, true, total["incomplete"])
+	models, ok := total["models"].([]any)
+	require.True(t, ok)
+	assert.Len(t, models, 2)
 }

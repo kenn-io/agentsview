@@ -13,3 +13,9 @@ func TestRecordedCostPricesOnlyUnpricedModels(t *testing.T) {
 	dbtest.SeedRecordedCostSessions(t, local)
 	dbtest.AssertRecordedCostUsage(t, local)
 }
+
+func TestSessionUsageTotalStaysApartFromUsage(t *testing.T) {
+	local := dbtest.OpenTestDB(t)
+	dbtest.SeedSessionUsageTotal(t, local)
+	dbtest.AssertSessionUsageTotal(t, local)
+}

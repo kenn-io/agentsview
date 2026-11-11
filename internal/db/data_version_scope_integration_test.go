@@ -19,6 +19,7 @@ import (
 	"go.kenn.io/agentsview/internal/db"
 	"go.kenn.io/agentsview/internal/dbtest"
 	"go.kenn.io/agentsview/internal/export"
+	"go.kenn.io/agentsview/internal/money"
 	"go.kenn.io/agentsview/internal/parser"
 	"go.kenn.io/agentsview/internal/pricing"
 	"go.kenn.io/agentsview/internal/sync"
@@ -1590,4 +1591,77 @@ func TestRecordedCostUpgradeReparsesInPlace(t *testing.T) {
 	var sessions int
 	require.NoError(t, database.Reader().QueryRow(ctx, "SELECT count(*) FROM sessions").Scan(&sessions))
 	assert.Equal(t, 1, sessions)
+}
+
+func TestClaudeCostStateUpgradeKeepsSessionTotalApart(t *testing.T) {
+	providers := []parser.AgentType{parser.AgentClaude, parser.AgentCowork, parser.AgentQoder, parser.AgentIcodemate}
+	scope := db.ScopedDataVersionProviders(176, 177)
+	assert.ElementsMatch(t, providers, scope)
+	version := db.CurrentDataVersion()
+	t.Cleanup(db.InstallDataVersionScopesForTest(map[int][]parser.AgentType{version: scope}))
+	ctx := t.Context()
+	database := dbtest.OpenTestDB(t)
+	require.NoError(t, database.UpsertModelPricing([]db.ModelPricing{{
+		ModelPattern:  "rc-claude-model",
+		InputPerMTok:  money.Money{Microdollars: 1_000_000},
+		OutputPerMTok: money.Money{Microdollars: 2_000_000},
+	}}))
+	root := t.TempDir()
+	sessionID := "c0000000-0000-4000-8000-000000000174"
+	source := filepath.Join(root, "project", sessionID+".jsonl")
+	body := testjsonl.NewSessionBuilder().AddClaudeUserWithSessionID("2026-10-08T12:00:00Z", "hello", sessionID).String() + "\n" +
+		`{"type":"assistant","timestamp":"2026-10-08T12:00:01Z","sessionId":"` + sessionID + `","uuid":"a1","requestId":"req_1",` +
+		`"message":{"id":"msg_1","role":"assistant","model":"rc-claude-model","content":[{"type":"text","text":"hi"}],` +
+		`"usage":{"input_tokens":1000,"output_tokens":500}}}` + "\n" +
+		`{"type":"cost-state","sessionId":"` + sessionID + `","totalCostUSD":0.75,"startTime":1,` +
+		`"modelUsage":{"rc-claude-model":{"inputTokens":1500,"outputTokens":530,"thinkingTokens":0,` +
+		`"cacheReadInputTokens":0,"cacheCreationInputTokens":0,"webSearchRequests":0,"costUSD":0.75}},"hasUnknownModelCost":false}` + "\n"
+	dbtest.WriteTestFile(t, source, []byte(body))
+	cfg := sync.EngineConfig{Machine: "local", AgentDirs: map[parser.AgentType][]string{parser.AgentClaude: {root}}}
+	engine := sync.NewEngine(ctx, database, cfg)
+	require.Equal(t, 1, engine.SyncAll(ctx, nil).Synced)
+	engine.Close()
+	var id string
+	require.NoError(t, database.Reader().QueryRow(ctx, "SELECT id FROM sessions").Scan(&id))
+
+	requireTotal := func(database *db.DB) {
+		t.Helper()
+		usage, err := database.GetSessionUsage(ctx, id, true)
+		require.NoError(t, err)
+		require.NotNil(t, usage)
+		// The catalog prices the transcript's own call; the agent's total
+		// sits beside it and is never added.
+		assert.Equal(t, int64(2_000), usage.Cost.Microdollars)
+		require.NotNil(t, usage.SessionTotal)
+		assert.Equal(t, parser.ClaudeCostStateSource, usage.SessionTotal.Source)
+		assert.Equal(t, parser.SubagentScopeIncluded, usage.SessionTotal.SubagentScope)
+		require.NotNil(t, usage.SessionTotal.Cost)
+		assert.Equal(t, int64(750_000), usage.SessionTotal.Cost.Microdollars)
+		require.Len(t, usage.SessionTotal.Models, 1)
+		assert.Equal(t, int64(530), usage.SessionTotal.Models[0].OutputTokens)
+		daily, err := database.GetDailyUsage(ctx, db.UsageFilter{From: "2026-10-08", To: "2026-10-08", Timezone: "UTC"})
+		require.NoError(t, err)
+		assert.Equal(t, int64(2_000), daily.Totals.TotalCost.Microdollars, "usage totals exclude the session total")
+		assert.Equal(t, 500, daily.Totals.OutputTokens)
+	}
+	requireTotal(database)
+
+	// Reproduce the previous parser, which dropped cost-state.
+	require.NoError(t, database.Update(ctx, func(tx *sql.Tx) error {
+		_, err := tx.ExecContext(ctx, fmt.Sprintf(
+			"DELETE FROM session_usage_totals; UPDATE sessions SET data_version=%d; PRAGMA user_version=%d",
+			version-1, version-1))
+		return err
+	}))
+	path := database.Path()
+	require.NoError(t, database.Close())
+	database, err := db.OpenIsolated(ctx, path)
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, database.Close()) })
+	assert.False(t, database.NeedsResync(), "the cost-state upgrade must reparse in place")
+	engine = sync.NewEngine(ctx, database, cfg)
+	t.Cleanup(engine.Close)
+	require.Equal(t, 1, engine.SyncAll(ctx, nil).Synced)
+	requireTotal(database)
+	assert.Equal(t, source, database.GetSessionFilePath(ctx, id))
 }
