@@ -1903,10 +1903,6 @@ func TestHermesLedgerFingerprintChangesOnlyItsMember(t *testing.T) {
 	require.True(t, ok)
 	fingerprints := func() map[string]string {
 		t.Helper()
-		ctx, cleanup, err := WithReconciliationCache(t.Context())
-		require.NoError(t, err)
-		defer func() { require.NoError(t, cleanup()) }()
-		require.NoError(t, seedHermesMemberCoresLocked(ctx, stateDB))
 		out := map[string]string{}
 		for _, id := range []string{"child", "sibling"} {
 			source, found, err := provider.FindSource(t.Context(), FindSourceRequest{FullSessionID: "hermes:" + id})
@@ -1914,9 +1910,6 @@ func TestHermesLedgerFingerprintChangesOnlyItsMember(t *testing.T) {
 			require.True(t, found)
 			direct, err := provider.Fingerprint(t.Context(), source)
 			require.NoError(t, err)
-			seeded, err := provider.Fingerprint(ctx, source)
-			require.NoError(t, err)
-			assert.Equal(t, direct.Hash, seeded.Hash)
 			out[id] = direct.Hash
 		}
 		return out

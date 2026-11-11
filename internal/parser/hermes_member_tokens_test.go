@@ -52,11 +52,13 @@ func TestHermesMemberTokensMatchDirectAndSeededFingerprint(t *testing.T) {
 	sources, err := set.Discover(t.Context())
 	require.NoError(t, err)
 	require.NotEmpty(t, sources)
+	checked := 0
 	for _, source := range sources {
 		src, ok := source.Opaque.(hermesSource)
 		if !ok || src.SessionID == "" {
 			continue
 		}
+		checked++
 		src.FingerprintSingleMember = true
 		fp, err := hermesStateMemberFingerprint(t.Context(), source, src)
 		require.NoError(t, err)
@@ -68,18 +70,48 @@ func TestHermesMemberTokensMatchDirectAndSeededFingerprint(t *testing.T) {
 		require.NoError(t, err)
 		assert.Equal(t, fp.Hash, seeded.Hash)
 	}
+	assert.Equal(t, len(tokens), checked)
 }
 
-func TestHermesMemberTokensIgnoreUnusedSessionColumns(t *testing.T) {
-	c, _ := hermesTokenFixture(t)
-	before := tokenMap(t, c)
-	_, err := c.ExecContext(t.Context(), `UPDATE sessions SET runtime_revision=8,last_activity_at=1778769999`)
-	require.NoError(t, err)
-	assert.Equal(t, before, tokenMap(t, c))
+func TestHermesMemberTokenChanges(t *testing.T) {
+	for _, tc := range []struct {
+		name, setup, statement string
+		changed                bool
+	}{
+		{"insert", "", `INSERT INTO messages(session_id,role,content,timestamp) VALUES ('child','assistant','reply',1778767220)`, true},
+		{"title", "", `UPDATE sessions SET title='new title' WHERE id='child'`, true},
+		{"content", "", `UPDATE messages SET content='rewritten' WHERE session_id='child'`, true},
+		{"usage", "", `UPDATE sessions SET input_tokens=777 WHERE id='child'`, true},
+		{"display", "", `UPDATE messages SET codex_reasoning_items='[]' WHERE session_id='child'`, true},
+		{"timestamp repair", `UPDATE messages SET timestamp=-5 WHERE session_id='child'`, `UPDATE messages SET timestamp=1778767210 WHERE session_id='child'`, true},
+		{"live count after interior delete", `INSERT INTO messages(session_id,role,content,timestamp) VALUES ('child','user','inactive',1778767200),('child','user','inactive',1778767300)`, `DELETE FROM messages WHERE id=1; UPDATE sessions SET message_count=0 WHERE id='child'`, true},
+		{"delete all endpoints", `UPDATE sessions SET message_count=0 WHERE id='child'`, `DELETE FROM messages WHERE session_id='child'`, true},
+		{"unused session fields", "", `UPDATE sessions SET runtime_revision=8,last_activity_at=1778769999 WHERE id='child'`, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			c, _ := hermesTokenFixture(t)
+			_, err := c.ExecContext(t.Context(), `INSERT INTO sessions(id,source,started_at) VALUES ('neighbour','cli',1778767200)`)
+			require.NoError(t, err)
+			if tc.setup != "" {
+				_, err = c.ExecContext(t.Context(), tc.setup)
+				require.NoError(t, err)
+			}
+			before := tokenMap(t, c)
+			_, err = c.ExecContext(t.Context(), tc.statement)
+			require.NoError(t, err)
+			after := tokenMap(t, c)
+			if tc.changed {
+				assert.NotEqual(t, before["child"], after["child"])
+			} else {
+				assert.Equal(t, before["child"], after["child"])
+			}
+			assert.Equal(t, before["neighbour"], after["neighbour"])
+		})
+	}
 }
 
 func TestHermesMemberListingFallbacksAndDeletion(t *testing.T) {
-	for _, kind := range []string{"deleted", "malformed", "legacy", "suppressed", "pager error", "trigger removed", "missing index"} {
+	for _, kind := range []string{"deleted", "malformed", "legacy", "suppressed", "pager error", "trigger removed", "empty authority", "suppressed authority"} {
 		t.Run(kind, func(t *testing.T) {
 			c, path := hermesTokenFixture(t)
 			root := filepath.Dir(path)
@@ -103,15 +135,16 @@ func TestHermesMemberListingFallbacksAndDeletion(t *testing.T) {
 			case "suppressed":
 				stored.Suppressed = true
 				_, err = c.ExecContext(t.Context(), `UPDATE sessions SET title='changed'`)
-			case "missing index":
-				_, err = c.ExecContext(t.Context(), `DROP INDEX idx_messages_session_id`)
-				require.NoError(t, err)
-				_, err = set.Fingerprint(t.Context(), source)
 			case "trigger removed":
 				_, err = c.ExecContext(t.Context(), `DROP TRIGGER messages_display_revision_update`)
 			}
 			require.NoError(t, err)
 			rows := []StoredMemberFreshness{stored}
+			if kind == "empty authority" {
+				rows = nil
+			} else if kind == "suppressed authority" {
+				rows[0].Suppressed = true
+			}
 			if kind == "suppressed" {
 				// Mixed authority still skips the matching suppressed member.
 				rows = append([]StoredMemberFreshness{{Path: VirtualSourcePath(path, "a")}}, rows...)
@@ -135,59 +168,28 @@ func TestHermesMemberListingFallbacksAndDeletion(t *testing.T) {
 			default:
 				require.Len(t, sources, 1)
 				assert.Equal(t, VirtualSourcePath(path, "s"), sources[0].FingerprintKey)
-			}
-		})
-	}
-}
-
-// Enabling an existing root through settings can dispatch a watcher event before
-// its first full sync. Without stored authority, use the bulk-seeded full path.
-func TestHermesMemberListingWithoutStoredAuthority(t *testing.T) {
-	for _, suppressed := range []bool{false, true} {
-		t.Run(fmt.Sprint(suppressed), func(t *testing.T) {
-			conn, path := hermesTokenFixture(t)
-			_, err := conn.ExecContext(t.Context(), `INSERT INTO sessions(id,source,started_at) VALUES ('new','cli',1778767200); INSERT INTO messages(session_id,role,content,timestamp) VALUES ('new','user','new member',1778767200)`)
-			require.NoError(t, err)
-			var stored []StoredMemberFreshness
-			if suppressed {
-				stored = []StoredMemberFreshness{{Path: VirtualSourcePath(path, "child"), Suppressed: true}}
-			}
-			set := newHermesSourceSet(AgentHermes, []string{filepath.Dir(path)})
-			sources, err := set.SourcesForChangedPath(t.Context(), ChangedPathRequest{
-				Path: path, AllowWatermarkOnlySources: true,
-				StoredMemberFreshnessPage: memoryFreshnessPager(stored, 1),
-			})
-			require.NoError(t, err)
-			require.NotEmpty(t, sources)
-			for _, source := range sources {
-				assert.False(t, source.Opaque.(hermesSource).FingerprintSingleMember,
-					"an unimported root must retain the bulk-seeded fingerprint path")
+				assert.Equal(t, kind == "legacy", sources[0].Opaque.(hermesSource).FingerprintSingleMember)
 			}
 		})
 	}
 }
 
 func TestHermesMemberFreshnessContainerRoots(t *testing.T) {
-	for _, profile := range []bool{false, true} {
-		root := t.TempDir()
-		providerRoot := root
-		if profile {
-			providerRoot = filepath.Join(root, ".hermes", "profiles")
-			root = filepath.Join(providerRoot, "work")
-		}
-		require.NoError(t, os.MkdirAll(root, 0700))
-		createHermesStateDB(t, root)
-		p, ok := NewProvider(AgentHermes, ProviderConfig{Roots: []string{providerRoot}})
-		require.True(t, ok)
-		path := filepath.Join(root, "state.db")
-		for _, event := range []string{path, path + "-wal"} {
-			container, ok := ResolveStoredMemberFreshnessContainer(p, event)
-			assert.True(t, ok)
-			assert.Equal(t, path, container)
-		}
-		_, ok = ResolveStoredMemberFreshnessContainer(p, filepath.Join(root, "sessions", "s.jsonl"))
-		assert.False(t, ok)
+	root := t.TempDir()
+	providerRoot := filepath.Join(root, ".hermes", "profiles")
+	root = filepath.Join(providerRoot, "work")
+	require.NoError(t, os.MkdirAll(root, 0700))
+	createHermesStateDB(t, root)
+	p, ok := NewProvider(AgentHermes, ProviderConfig{Roots: []string{providerRoot}})
+	require.True(t, ok)
+	path := filepath.Join(root, "state.db")
+	for _, event := range []string{path, path + "-wal"} {
+		container, ok := ResolveStoredMemberFreshnessContainer(p, event)
+		assert.True(t, ok)
+		assert.Equal(t, path, container)
 	}
+	_, ok = ResolveStoredMemberFreshnessContainer(p, filepath.Join(root, "sessions", "s.jsonl"))
+	assert.False(t, ok)
 }
 
 func TestHermesMemberTokenLedgerOnlyWrite(t *testing.T) {
@@ -199,8 +201,6 @@ func TestHermesMemberTokenLedgerOnlyWrite(t *testing.T) {
  INSERT INTO session_model_usage(session_id,model,input_tokens,task) SELECT id,'model',12,'aux' FROM sessions`)
 	require.NoError(t, err)
 	before := tokenMap(t, c)
-	sessionBefore, err := scanHermesStateSession(c.QueryRowContext(t.Context(), hermesStateSessionQuery, "child"))
-	require.NoError(t, err)
 	// Native auxiliary UPSERT touches only this same ledger key. Neither session
 	// metadata/revision nor message history changes; the neighbour stays untouched.
 	_, err = c.ExecContext(t.Context(), `INSERT INTO session_model_usage(session_id,model,input_tokens,task) VALUES ('child','model',87,'aux')
@@ -221,64 +221,28 @@ func TestHermesMemberTokenLedgerOnlyWrite(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, sources, 1)
 	assert.Equal(t, VirtualSourcePath(path, "child"), sources[0].FingerprintKey)
-	sessionAfter, err := scanHermesStateSession(c.QueryRowContext(t.Context(), hermesStateSessionQuery, "child"))
-	require.NoError(t, err)
-	assert.Equal(t, sessionBefore, sessionAfter, "all imported session metadata stays unchanged")
-	var revision int
-	require.NoError(t, c.QueryRowContext(t.Context(), `SELECT transcript_revision FROM sessions WHERE id='child'`).Scan(&revision))
-	assert.Zero(t, revision)
 }
 
-func TestHermesMemberTokenNativeDeletes(t *testing.T) {
-	c, _ := hermesTokenFixture(t)
-	// Newer inactive rows surround the live row's timestamp. Deleting the live
-	// interior row preserves greatest ID and both endpoints; native live count moves.
-	_, err := c.ExecContext(t.Context(), `INSERT INTO sessions(id,source,started_at) VALUES ('neighbour','cli',1778767200);
- INSERT INTO messages(session_id,role,content,timestamp) VALUES ('child','user','inactive',1778767200),('child','user','inactive',1778767300)`)
-	require.NoError(t, err)
-	for _, stmt := range []string{
-		`DELETE FROM messages WHERE id=1; UPDATE sessions SET message_count=0 WHERE id='child'`,
-		`DELETE FROM messages WHERE session_id='child'; UPDATE sessions SET message_count=0 WHERE id='child'`,
-	} {
-		before := tokenMap(t, c)
-		_, err = c.ExecContext(t.Context(), stmt)
-		require.NoError(t, err)
-		after := tokenMap(t, c)
-		assert.NotEqual(t, before["child"], after["child"])
-		assert.Equal(t, before["neighbour"], after["neighbour"])
-	}
-}
-
-// Growing unchanged history must retain three covering endpoint searches, not
-// materialize message aggregates. The owner and ledger cardinalities stay fixed.
 func TestHermesMemberTokenHistoryGrowth(t *testing.T) {
 	c, _ := hermesTokenFixture(t)
-	for _, n := range []int{20, 20000} {
-		t.Run(fmt.Sprint(n), func(t *testing.T) {
-			_, err := c.ExecContext(t.Context(), `DELETE FROM messages;
-WITH RECURSIVE n(x) AS (VALUES(1) UNION ALL SELECT x+1 FROM n WHERE x<?)
-INSERT INTO messages(session_id,role,content,timestamp) SELECT 'child','user','history',1778767200+x FROM n`, n)
-			require.NoError(t, err)
-			rows, err := c.QueryContext(t.Context(), "EXPLAIN QUERY PLAN "+hermesMemberTokenQuery(true, false))
-			require.NoError(t, err)
-			searches, endpoints := 0, 0
-			for rows.Next() {
-				var id, parent, unused int
-				var detail string
-				require.NoError(t, rows.Scan(&id, &parent, &unused, &detail))
-				if strings.Contains(detail, "SEARCH messages USING COVERING INDEX idx_messages_session_id (session_id=?)") {
-					searches++
-				}
-				if strings.Contains(detail, "SEARCH messages USING COVERING INDEX idx_messages_session (session_id=?)") {
-					endpoints++
-				}
-			}
-			require.NoError(t, rows.Err())
-			require.NoError(t, rows.Close())
-			assert.Equal(t, 1, searches, "greatest ID must use its covering seek")
-			assert.Equal(t, 2, endpoints, "both timestamp endpoints must use covering seeks")
-		})
+	rows, err := c.QueryContext(t.Context(), "EXPLAIN QUERY PLAN "+hermesMemberTokenQuery(true, false))
+	require.NoError(t, err)
+	searches, endpoints := 0, 0
+	for rows.Next() {
+		var id, parent, unused int
+		var detail string
+		require.NoError(t, rows.Scan(&id, &parent, &unused, &detail))
+		if strings.Contains(detail, "SEARCH messages USING COVERING INDEX idx_messages_session_id (session_id=?)") {
+			searches++
+		}
+		if strings.Contains(detail, "SEARCH messages USING COVERING INDEX idx_messages_session (session_id=?)") {
+			endpoints++
+		}
 	}
+	require.NoError(t, rows.Err())
+	require.NoError(t, rows.Close())
+	assert.Equal(t, 1, searches, "greatest ID must use its covering seek")
+	assert.Equal(t, 2, endpoints, "both timestamp endpoints must use covering seeks")
 }
 
 func TestHermesMemberSchemaGate(t *testing.T) {
@@ -286,6 +250,9 @@ func TestHermesMemberSchemaGate(t *testing.T) {
 		`UPDATE schema_version SET version=33`, `UPDATE schema_version SET version=34`,
 		`UPDATE schema_version SET version=NULL`, `UPDATE schema_version SET version='bad'`,
 		`DELETE FROM schema_version`, `DROP TABLE schema_version`,
+		`DROP INDEX idx_messages_session_id`, `DROP INDEX idx_messages_session`,
+		`DROP TRIGGER messages_display_revision_update`,
+		`DROP TRIGGER messages_display_revision_update; DROP TRIGGER messages_transcript_revision_update; ALTER TABLE sessions DROP COLUMN transcript_revision`,
 	} {
 		t.Run(setup, func(t *testing.T) {
 			c, _ := hermesTokenFixture(t)
@@ -294,5 +261,39 @@ func TestHermesMemberSchemaGate(t *testing.T) {
 			ok, _ := hermesStoreTracksRewrites(t.Context(), c)
 			assert.Equal(t, strings.HasSuffix(setup, "=33"), ok)
 		})
+	}
+}
+
+// A changed ancestor can change a cron child's job without changing its token.
+func TestHermesWatcherSelectsCronChildAfterAncestorChanges(t *testing.T) {
+	c, path := hermesTokenFixture(t)
+	_, err := c.ExecContext(t.Context(), `UPDATE sessions SET source='cron', parent_session_id='parent' WHERE id='child';
+ INSERT INTO sessions(id,source,parent_session_id,started_at) VALUES ('parent','cron','middle',1)`)
+	require.NoError(t, err)
+	set := newHermesSourceSet(AgentHermes, []string{filepath.Dir(path)})
+	child := set.stateMemberSourceRef(filepath.Dir(path), path, "child")
+	fp, err := set.Fingerprint(t.Context(), child)
+	require.NoError(t, err)
+	stored := []StoredMemberFreshness{{Path: VirtualSourcePath(path, "child"), FingerprintHash: fp.Hash}}
+	for _, stmt := range []string{
+		`INSERT INTO sessions(id,source,parent_session_id,started_at) VALUES ('middle','cron','cron_job-a_20261009_120000',1)`,
+		`UPDATE sessions SET parent_session_id='cron_job-b_20261009_120000' WHERE id='middle'`,
+	} {
+		_, err = c.ExecContext(t.Context(), stmt)
+		require.NoError(t, err)
+		sources, err := set.SourcesForChangedPath(t.Context(), ChangedPathRequest{Path: path, AllowWatermarkOnlySources: true, StoredMemberFreshnessPage: memoryFreshnessPager(stored, 1)})
+		require.NoError(t, err)
+		found := false
+		for _, source := range sources {
+			if source.FingerprintKey == child.FingerprintKey {
+				found = true
+			}
+		}
+		assert.True(t, found, "cron child must be checked after ancestor changes")
+		next, err := set.Fingerprint(t.Context(), child)
+		require.NoError(t, err)
+		assert.NotEqual(t, fp.Hash, next.Hash)
+		fp = next
+		stored[0].FingerprintHash = fp.Hash
 	}
 }

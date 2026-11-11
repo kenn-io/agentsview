@@ -371,9 +371,6 @@ func TestStoredMemberFreshnessCursorLookup(t *testing.T) {
 		require.NoError(t, err)
 		assert.Equal(t, tc.want, got, tc.path)
 	}
-}
-
-func TestStoredMemberFreshnessCursorReportsOnlyMissingRows(t *testing.T) {
 	for _, pageSize := range []int{1, 2, 512} {
 		t.Run(fmt.Sprint(pageSize), func(t *testing.T) {
 			rows := []StoredMemberFreshness{{Path: "a"}, {Path: "b"}, {Path: "c"}, {Path: "d"}, {Path: "e"}}
