@@ -136,6 +136,12 @@ func TestOpenAPIDocumentsEmbeddingsRoutesWithoutManager(t *testing.T) {
 	}
 }
 
+func TestEmbeddingsSetupRequiresProvider(t *testing.T) {
+	s := newEmbeddingsTestServer(t, &fakeEmbeddingsManager{})
+	w := serveJSON(t, s.mux, http.MethodPost, "/api/v1/embeddings/setup", struct{}{})
+	assertRecorderStatus(t, w, http.StatusBadRequest)
+}
+
 func TestEmbeddingsBuildReturnsAcceptedAndStartsBuild(t *testing.T) {
 	fake := &fakeEmbeddingsManager{}
 	s := newEmbeddingsTestServer(t, fake)

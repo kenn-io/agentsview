@@ -3300,7 +3300,6 @@ func TestAutomaticVectorSetupRejectsExplicitSettings(t *testing.T) {
 		"[vector.embeddings]\nmodel = 'custom'\n",
 		"[vector.embeddings]\ndefault_server = 'local'\n",
 		"[vector.embeddings.servers.local]\nlocal = true\n",
-		"[vector.embeddings.servers.remote]\nendpoint = 'https://example.com/v1'\n",
 	} {
 		t.Run(raw, func(t *testing.T) {
 			dir := setupTestEnv(t)

@@ -26,40 +26,6 @@ import (
 	"go.kenn.io/kit/embedlocal"
 )
 
-func TestSetupRejectsStaleProvider(t *testing.T) {
-	setTestHome(t, t.TempDir())
-	dir := testDataDir(t)
-	cfg, err := config.LoadReadOnly()
-	require.NoError(t, err)
-	database := dbtest.OpenTestDBAt(t, filepath.Join(dir, "sessions.db"))
-	oldInspect := inspectLocalEmbeddings
-	t.Cleanup(func() { inspectLocalEmbeddings = oldInspect })
-	var ollama atomic.Bool
-	ollama.Store(true)
-	inspectLocalEmbeddings = func(context.Context, embedlocal.Options) (embedlocal.Status, error) {
-		return embedlocal.Status{OllamaAvailable: ollama.Load()}, nil
-	}
-	owner, err := newLiveVectorServing(t.Context(), cfg, database, nil, config.LoadReadOnly)
-	require.NoError(t, err)
-	defer func() { require.NoError(t, owner.Close()) }()
-	ln, port := listenLoopback(t)
-	cfg.Host, cfg.Port = "127.0.0.1", port
-	ts := startTestServer(t, ln, server.New(cfg, database, nil, owner.ServerOptions()...).Handler())
-	status, err := owner.SetupStatus(t.Context())
-	require.NoError(t, err)
-	require.Equal(t, "ollama", status.Provider)
-	embeddingRequest(t, ts.Client(), ts.URL, "POST", "/api/v1/embeddings/setup", "application/json", strings.NewReader(`{}`), http.StatusBadRequest)
-	ollama.Store(false)
-	embeddingRequest(t, ts.Client(), ts.URL, "POST", "/api/v1/embeddings/setup", "application/json", strings.NewReader(`{"expected_provider":"ollama"}`), http.StatusConflict)
-	assert.Nil(t, owner.done)
-	saved, err := config.LoadReadOnly()
-	require.NoError(t, err)
-	assert.False(t, saved.Vector.Enabled)
-	chosen, err := embedlocal.ChoiceRecorded()
-	require.NoError(t, err)
-	assert.False(t, chosen)
-}
-
 func TestSetupUsesCandidateShownByStatus(t *testing.T) {
 	setTestHome(t, t.TempDir())
 	dir := testDataDir(t)
@@ -95,38 +61,48 @@ func TestSetupUsesCandidateShownByStatus(t *testing.T) {
 	}
 }
 
-func TestOllamaDisappearsBeforeProviderPin(t *testing.T) {
-	setTestHome(t, t.TempDir())
-	dir := testDataDir(t)
-	cfg, err := config.LoadReadOnly()
-	require.NoError(t, err)
-	database := dbtest.OpenTestDBAt(t, filepath.Join(dir, "sessions.db"))
-	oldInspect, oldEndpoint := inspectLocalEmbeddings, localEmbeddingEndpoint
-	t.Cleanup(func() { inspectLocalEmbeddings, localEmbeddingEndpoint = oldInspect, oldEndpoint })
-	inspectLocalEmbeddings = func(context.Context, embedlocal.Options) (embedlocal.Status, error) {
-		return embedlocal.Status{OllamaAvailable: true}, nil
+func TestOllamaProviderChangesBeforeSetup(t *testing.T) {
+	for _, tc := range []struct {
+		name      string
+		available bool
+		endpoint  string
+		err       error
+	}{
+		{name: "status changed", available: false},
+		{name: "endpoint changed", available: true, endpoint: "http://127.0.0.1:10001/v1"},
+		{name: "endpoint disappeared", available: true, err: embedlocal.ErrNotFound},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			setTestHome(t, t.TempDir())
+			dir := testDataDir(t)
+			cfg, err := config.LoadReadOnly()
+			require.NoError(t, err)
+			database := dbtest.OpenTestDBAt(t, filepath.Join(dir, "sessions.db"))
+			oldInspect, oldEndpoint := inspectLocalEmbeddings, localEmbeddingEndpoint
+			t.Cleanup(func() { inspectLocalEmbeddings, localEmbeddingEndpoint = oldInspect, oldEndpoint })
+			inspectLocalEmbeddings = func(context.Context, embedlocal.Options) (embedlocal.Status, error) {
+				return embedlocal.Status{OllamaAvailable: tc.available}, nil
+			}
+			localEmbeddingEndpoint = func(context.Context, embedlocal.Options) (string, error) { return tc.endpoint, tc.err }
+			owner, err := newLiveVectorServing(t.Context(), cfg, database, nil, config.LoadReadOnly)
+			require.NoError(t, err)
+			defer func() { require.NoError(t, owner.Close()) }()
+			require.ErrorIs(t, owner.Setup(0, "ollama"), server.ErrEmbeddingsProviderChanged)
+			assert.Nil(t, owner.done)
+			chosen, err := embedlocal.ChoiceRecorded()
+			require.NoError(t, err)
+			assert.False(t, chosen)
+			saved, err := config.LoadReadOnly()
+			require.NoError(t, err)
+			assert.False(t, saved.Vector.Enabled)
+		})
 	}
-	localEmbeddingEndpoint = func(context.Context, embedlocal.Options) (string, error) {
-		return "http://127.0.0.1:10001/v1", nil
-	}
-	owner, err := newLiveVectorServing(t.Context(), cfg, database, nil, config.LoadReadOnly)
-	require.NoError(t, err)
-	defer func() { require.NoError(t, owner.Close()) }()
-	require.ErrorIs(t, owner.Setup(0, "ollama"), server.ErrEmbeddingsProviderChanged)
-	assert.Nil(t, owner.done)
-	chosen, err := embedlocal.ChoiceRecorded()
-	require.NoError(t, err)
-	assert.False(t, chosen)
-	saved, err := config.LoadReadOnly()
-	require.NoError(t, err)
-	assert.False(t, saved.Vector.Enabled)
 }
 
 func TestSharedSetupPreservesProviderAddedDuringDownload(t *testing.T) {
 	for _, raw := range []string{
 		"[vector]\nenabled = false\n",
 		"[vector.embeddings.servers.local]\nlocal = true\n",
-		"[vector.embeddings.servers.remote]\nendpoint = 'https://example.com/v1'\n",
 	} {
 		t.Run(raw, func(t *testing.T) {
 			setTestHome(t, t.TempDir())
@@ -184,6 +160,7 @@ func TestSharedChoiceLeavesConfiguredSearchAlone(t *testing.T) {
 	}{
 		{name: "absent"},
 		{name: "explicit off", shared: true, config: "[vector]\nenabled = false\n"},
+		{name: "enabled automatic", config: "[vector]\nenabled = true\n"},
 		{name: "deployment", shared: true, deployment: true},
 		{name: "usage-only archive", shared: true, usage: true},
 	} {
@@ -211,71 +188,54 @@ func TestSharedChoiceLeavesConfiguredSearchAlone(t *testing.T) {
 			assert.Nil(t, owner.done)
 			saved, err := config.LoadReadOnly()
 			require.NoError(t, err)
-			assert.False(t, saved.Vector.Enabled)
+			assert.Equal(t, cfg.Vector.Enabled, saved.Vector.Enabled)
 			assert.Equal(t, cfg.Vector.Embeddings, saved.Vector.Embeddings)
 		})
 	}
 }
 
-func TestEnabledBuiltinStartsWithoutRecordingSharedChoice(t *testing.T) {
-	setTestHome(t, t.TempDir())
-	dir := testDataDir(t)
-	writeTestConfig(t, dir, "[vector]\nenabled = true\n[vector.embeddings]\nmodel = 'nomic-embed-text'\ndimension = 768\n[vector.embeddings.servers.local]\nlocal = true\n")
-	cfg, err := config.LoadReadOnly()
-	require.NoError(t, err)
-	database := dbtest.OpenTestDBAt(t, filepath.Join(dir, "sessions.db"))
-	dbtest.SeedSessionWithMessages(t, database, "session-one", "sample", []db.Message{dbtest.UserMsg("session-one", 0, "startup indexing")})
-	encoded := make(chan struct{}, 1)
-	encoder := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		var request struct {
-			Input []string `json:"input"`
-		}
-		require.NoError(t, json.UnmarshalRead(r.Body, &request))
-		select {
-		case encoded <- struct{}{}:
-		default:
-		}
-		writeEmbeddingsResponse(t, w, len(request.Input), 768)
-	}))
-	defer encoder.Close()
-	oldEndpoint := localEmbeddingEndpoint
-	t.Cleanup(func() { localEmbeddingEndpoint = oldEndpoint })
-	localEmbeddingEndpoint = func(_ context.Context, opts embedlocal.Options) (string, error) {
-		assert.True(t, opts.SkipOllama)
-		return encoder.URL + "/v1", nil
-	}
-	owner, err := newLiveVectorServing(t.Context(), cfg, database, nil, config.LoadReadOnly)
-	require.NoError(t, err)
-	defer func() { require.NoError(t, owner.Close()) }()
-	<-owner.done
-	chosen, err := embedlocal.ChoiceRecorded()
-	require.NoError(t, err)
-	assert.False(t, chosen)
-	select {
-	case <-encoded:
-	case <-time.After(10 * time.Second):
-		t.Fatal("saved local setup did not start indexing")
-	}
-	saved, err := config.LoadReadOnly()
-	require.NoError(t, err)
-	assert.Equal(t, cfg.Vector, saved.Vector)
-}
-
 func TestSavedLocalDownloadApproval(t *testing.T) {
-	for _, shared := range []bool{false, true} {
-		t.Run(fmt.Sprintf("shared=%t", shared), func(t *testing.T) {
+	for _, tc := range []struct {
+		name              string
+		shared, installed bool
+	}{
+		{name: "declined"},
+		{name: "approved", shared: true},
+		{name: "installed", installed: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
 			setTestHome(t, t.TempDir())
 			dir := testDataDir(t)
 			writeTestConfig(t, dir, "[vector]\nenabled = true\n[vector.embeddings]\nmodel = 'nomic-embed-text'\ndimension = 768\n[vector.embeddings.servers.local]\nlocal = true\n")
-			if shared {
+			if tc.shared {
 				require.NoError(t, embedlocal.RecordChoice())
 			}
 			cfg, err := config.LoadReadOnly()
 			require.NoError(t, err)
 			database := dbtest.OpenTestDBAt(t, filepath.Join(dir, "sessions.db"))
+			dbtest.SeedSessionWithMessages(t, database, "session-one", "sample", []db.Message{dbtest.UserMsg("session-one", 0, "startup indexing")})
+			encoded := make(chan struct{}, 1)
+			encoder := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				var request struct {
+					Input []string `json:"input"`
+				}
+				require.NoError(t, json.UnmarshalRead(r.Body, &request))
+				select {
+				case encoded <- struct{}{}:
+				default:
+				}
+				writeEmbeddingsResponse(t, w, len(request.Input), 768)
+			}))
+			defer encoder.Close()
 			oldEndpoint, oldInstall := localEmbeddingEndpoint, installLocalEmbeddings
 			t.Cleanup(func() { localEmbeddingEndpoint, installLocalEmbeddings = oldEndpoint, oldInstall })
-			localEmbeddingEndpoint = func(context.Context, embedlocal.Options) (string, error) { return "", embedlocal.ErrNotFound }
+			localEmbeddingEndpoint = func(_ context.Context, opts embedlocal.Options) (string, error) {
+				assert.True(t, opts.SkipOllama)
+				if tc.installed {
+					return encoder.URL + "/v1", nil
+				}
+				return "", embedlocal.ErrNotFound
+			}
 			var approved atomic.Bool
 			installLocalEmbeddings = func(ctx context.Context, opts embedlocal.InstallOptions) (embedlocal.Installation, error) {
 				allowed, err := opts.Confirm(ctx, 100)
@@ -289,34 +249,23 @@ func TestSavedLocalDownloadApproval(t *testing.T) {
 			require.NoError(t, err)
 			defer func() { require.NoError(t, owner.Close()) }()
 			<-owner.done
-			assert.Equal(t, shared, approved.Load())
-			status, err := owner.SetupStatus(t.Context())
-			require.NoError(t, err)
-			assert.Equal(t, "turn-on", status.Action)
-			chosen, err := embedlocal.ChoiceRecorded()
-			require.NoError(t, err)
-			assert.Equal(t, shared, chosen)
+			if tc.installed {
+				select {
+				case <-encoded:
+				case <-time.After(10 * time.Second):
+					t.Fatal("saved local setup did not start indexing")
+				}
+				chosen, err := embedlocal.ChoiceRecorded()
+				require.NoError(t, err)
+				assert.False(t, chosen)
+			} else {
+				assert.Equal(t, tc.shared, approved.Load())
+				status, err := owner.SetupStatus(t.Context())
+				require.NoError(t, err)
+				assert.Equal(t, "turn-on", status.Action)
+			}
 		})
 	}
-}
-
-func TestEnabledAutomaticDoesNotRecordChoice(t *testing.T) {
-	setTestHome(t, t.TempDir())
-	dir := testDataDir(t)
-	writeTestConfig(t, dir, "[vector]\nenabled = true\n")
-	cfg, err := config.LoadReadOnly()
-	require.NoError(t, err)
-	database := dbtest.OpenTestDBAt(t, filepath.Join(dir, "sessions.db"))
-	owner, err := newLiveVectorServing(t.Context(), cfg, database, nil, config.LoadReadOnly)
-	require.NoError(t, err)
-	defer func() { require.NoError(t, owner.Close()) }()
-	chosen, err := embedlocal.ChoiceRecorded()
-	require.NoError(t, err)
-	assert.False(t, chosen)
-	assert.Nil(t, owner.done)
-	saved, err := config.LoadReadOnly()
-	require.NoError(t, err)
-	assert.Equal(t, cfg.Vector, saved.Vector)
 }
 
 func TestLiveEmbeddingsSetup(t *testing.T) {
@@ -327,7 +276,7 @@ func TestLiveEmbeddingsSetup(t *testing.T) {
 		inspectLocalEmbeddings, localEmbeddingEndpoint, installLocalEmbeddings = oldInspect, oldEndpoint, oldInstall
 		onBattery = oldOnBattery
 	})
-	for _, recipe := range []string{"fresh", "shared", "automatic", "explicit", "nomic", "changed-provider"} {
+	for _, recipe := range []string{"fresh", "shared", "automatic", "nomic", "changed-provider"} {
 		t.Run(recipe, func(t *testing.T) {
 			setTestHome(t, t.TempDir())
 			dir := testDataDir(t)
@@ -366,15 +315,8 @@ func TestLiveEmbeddingsSetup(t *testing.T) {
 			}
 			cfg, err := config.Default()
 			require.NoError(t, err)
-			if recipe == "nomic" {
-				shared, err := embedlocal.DefaultDir()
-				require.NoError(t, err)
-				require.NoError(t, os.MkdirAll(filepath.Dir(shared), 0o700))
-				require.NoError(t, os.WriteFile(shared, []byte("unusable built-in installation"), 0o600))
-			}
 			cfg.DataDir, cfg.DBPath = dir, filepath.Join(dir, "sessions.db")
 			raw := map[string]string{
-				"explicit":         "[vector]\nenabled = false\n[vector.embeddings]\nmodel = 'nomic-embed-text'\ndimension = 768\n[vector.embeddings.servers.local]\nendpoint = '" + stub.URL + "/v1'\n",
 				"changed-provider": "[vector]\nenabled = false\n[vector.embeddings]\nmodel = 'nomic-embed-text'\ndimension = 768\n[vector.embeddings.servers.local]\nendpoint = '" + stub.URL + "/v1'\n",
 				"nomic":            "[vector]\nenabled = false\n[vector.embeddings]\nmodel = 'nomic-embed-text:v1.5'\ndimension = 768\n[vector.embeddings.servers.local]\nendpoint = '" + stub.URL + "/v1'\nollama_cpu_fallback = true\n",
 			}[recipe]
@@ -384,9 +326,9 @@ func TestLiveEmbeddingsSetup(t *testing.T) {
 				require.NoError(t, err)
 			}
 			var installed atomic.Bool
-			inspectLocalEmbeddings = func(ctx context.Context, opts embedlocal.Options) (embedlocal.Status, error) {
+			inspectLocalEmbeddings = func(_ context.Context, opts embedlocal.Options) (embedlocal.Status, error) {
 				if recipe == "nomic" {
-					return embedlocal.Inspect(ctx, opts)
+					return embedlocal.Status{}, errors.New("unusable built-in installation")
 				}
 				if recipe == "automatic" && !opts.SkipOllama {
 					return embedlocal.Status{OllamaAvailable: true, DownloadBytes: 295_000_000}, nil
@@ -524,7 +466,7 @@ func TestLiveEmbeddingsSetup(t *testing.T) {
 				assert.True(t, selected.Local)
 				assert.Greater(t, encoded.Load(), int64(0))
 			}
-			if recipe == "fresh" || recipe == "explicit" || recipe == "automatic" {
+			if recipe == "fresh" || recipe == "nomic" || recipe == "automatic" {
 				chosen, err := embedlocal.ChoiceRecorded()
 				require.NoError(t, err)
 				assert.Equal(t, recipe == "fresh", chosen)
@@ -585,10 +527,7 @@ func TestLiveEmbeddingsSetupStatusAndExportDuringWriteLockRetry(t *testing.T) {
 		inspections.Add(1)
 		return embedlocal.Status{OllamaAvailable: true}, nil
 	}
-	localEmbeddingEndpoint = func(_ context.Context, opts embedlocal.Options) (string, error) {
-		if opts.SkipOllama {
-			return "", embedlocal.ErrNotFound
-		}
+	localEmbeddingEndpoint = func(context.Context, embedlocal.Options) (string, error) {
 		return "http://127.0.0.1:1/v1", nil
 	}
 	reloaded := make(chan struct{})

@@ -562,37 +562,29 @@ describe("CommandPalette", () => {
     },
   );
 
-  it("refreshes the provider without changing search mode after setup conflicts", async () => {
+  it.each(["conflict", "started"])("handles setup %s", async (result) => {
     const setup = { enabled: false, action: "turn-on", provider: "ollama", missing_bytes: 0, busy: false, installing: false, downloaded_bytes: 0, total_bytes: 0 };
     mockEmbeddingsService.getApiV1EmbeddingsStatus
       .mockResolvedValueOnce({ running: false, setup })
       .mockResolvedValueOnce({ running: false, setup: { ...setup, provider: "built-in", missing_bytes: 295000000 } });
-    mockEmbeddingsService.postApiV1EmbeddingsSetup.mockRejectedValue(new ApiError(409, "provider changed"));
-    const component = mount(CommandPalette, { target: document.body });
-    try {
-      await enterSearchQuery();
-      const hint = await tickUntil(".meaning-hint button");
-      hint.click();
-      for (let i = 0; i < 20; i++) await tick();
-      expect(mockSearchStore.setMode).not.toHaveBeenCalled();
-      expect(mockEmbeddingsService.getApiV1EmbeddingsStatus).toHaveBeenCalledTimes(2);
-      expect(document.body.textContent).toContain("295 MB");
-    } finally {
-      unmount(component);
+    if (result === "conflict") {
+      mockEmbeddingsService.postApiV1EmbeddingsSetup.mockRejectedValue(new ApiError(409, "provider changed"));
+    } else {
+      mockEmbeddingsService.postApiV1EmbeddingsSetup.mockResolvedValue({ started: true });
     }
-  });
-
-  it("switches to search by meaning when setup starts", async () => {
-    const setup = { enabled: false, action: "turn-on", provider: "built-in", missing_bytes: 0, busy: false, installing: false, downloaded_bytes: 0, total_bytes: 0 };
-    mockEmbeddingsService.getApiV1EmbeddingsStatus.mockResolvedValue({ running: false, setup });
-    mockEmbeddingsService.postApiV1EmbeddingsSetup.mockResolvedValue({ started: true });
     const component = mount(CommandPalette, { target: document.body });
     try {
       await enterSearchQuery();
       const hint = await tickUntil(".meaning-hint button");
       hint.click();
       for (let i = 0; i < 20; i++) await tick();
-      expect(mockSearchStore.setMode).toHaveBeenCalledWith("semantic");
+      if (result === "conflict") {
+        expect(mockSearchStore.setMode).not.toHaveBeenCalled();
+        expect(mockEmbeddingsService.getApiV1EmbeddingsStatus).toHaveBeenCalledTimes(2);
+        expect(document.body.textContent).toContain("295 MB");
+      } else {
+        expect(mockSearchStore.setMode).toHaveBeenCalledWith("semantic");
+      }
     } finally {
       unmount(component);
     }
