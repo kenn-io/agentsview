@@ -156,7 +156,6 @@
   "status_bar_synced_ago": "{time} sinxronlaşdırıldı",
   "status_bar_build": "Yığım: {commit}",
   "command_palette_placeholder": "Sessiyaları və mesajları axtar...",
-  "command_palette_clear": "Təmizlə",
   "command_palette_clear_search": "Axtarışı təmizlə",
   "command_palette_search_mode_label": "Axtarış rejimi",
   "command_palette_mode_fulltext": "Tam mətn",

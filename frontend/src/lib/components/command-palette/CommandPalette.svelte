@@ -2,11 +2,12 @@
   import { m } from "../../i18n/index.js";
   import {
     Button,
+    IconButton,
     KbdBadge,
     SegmentedControl,
     type SegmentedControlOption,
   } from "@kenn-io/kit-ui";
-  import { SearchIcon } from "../../icons.js";
+  import { EraserIcon, SearchIcon } from "../../icons.js";
   import { tick, onDestroy, untrack } from "svelte";
   import { ui } from "../../stores/ui.svelte.js";
   import { sessions } from "../../stores/sessions.svelte.js";
@@ -314,13 +315,13 @@
         oninput={handleInput}
       />
       {#if inputValue}
-        <Button
+        <IconButton
           size="sm"
-          label={m.command_palette_clear()}
           ariaLabel={m.command_palette_clear_search()}
-          title={m.command_palette_clear_search()}
           onclick={clearSearch}
-        />
+        >
+          <EraserIcon size="14" aria-hidden="true" />
+        </IconButton>
       {/if}
       <KbdBadge keys={["⎋"]} joiner="compact" ariaLabel="Escape" />
     </div>
