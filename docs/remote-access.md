@@ -1,7 +1,7 @@
 ---
 title: Remote Access
 description: Access AgentsView from other devices on your network
-last_edited: 2026-11-06
+last_edited: 2026-11-11
 ---
 
 AgentsView binds to `127.0.0.1` by default, so only your local machine can reach
@@ -138,6 +138,7 @@ A changed transcript or an existing session with the same ID returns a conflict;
 there is no force replacement. Finish recording a session before pushing it.
 Permanently deleting a pushed session keeps its receipt, so that ID cannot be
 accepted again, even if the transcript is unchanged.
+There is no command or API to release that receipt.
 Ordinary source ingestion cannot replace a pushed snapshot. Rebuilds reserve
 its ID before parsing and preserve the archived transcript with its receipt.
 References in a pushed transcript do not grant writes to other sessions.
@@ -146,6 +147,8 @@ or `unchanged`). Failures return nonzero and leave stdout empty.
 
 A push to an archive awaiting a required rebuild returns 503 until the rebuild
 finishes.
+The receiver accepts one push at a time, including while reading its upload;
+other pushes receive 503 and can retry after it finishes.
 
 The authenticated endpoint is `POST /api/v1/sessions/ingest`. It accepts only
 versioned, uncompressed JSON up to 64 MiB, including escaping overhead, with

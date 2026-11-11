@@ -1,5 +1,5 @@
 ---
-last_edited: 2026-11-09
+last_edited: 2026-11-11
 title: CLI Reference
 description: All AgentsView commands, flags, and environment variables
 ---

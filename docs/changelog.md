@@ -11,6 +11,10 @@ The latest release is
 
 **New features**
 
+- Push one archived session to another authenticated AgentsView instance with
+  `agentsview push`. Enable `accept_session_push` on the receiving instance.
+  See [Push one archived session](/docs/remote-access/#push-one-archived-session).
+
 - A `[custom_model_pricing."<model>"]` entry can set `price_as` to price a model
   name exactly like a catalog model, such as a private gateway deployment name
   that serves `gpt-6-sol`. The name inherits that model's long-context tiers
