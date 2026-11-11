@@ -1579,7 +1579,6 @@
   "recall_generated_group_sessions": "Sessions",
   "recall_generated_group_report": "Report",
   "recall_generated_read_only_reason": "This archive is read-only, so new reports can't be generated here.",
-  "recall_page_subtitle": "Browse Recall entries and see processing progress.",
   "recall_page_search_placeholder": "Search Recall entries…",
   "recall_page_clear_search": "Clear Recall search",
   "recall_page_type_filter": "Entry type",

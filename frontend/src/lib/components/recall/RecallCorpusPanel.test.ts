@@ -247,9 +247,6 @@ describe("RecallCorpusPanel", () => {
     });
     expect(document.querySelector('table[aria-label="Recall entries"]')).not.toBeNull();
     expect(document.querySelector("h2")?.textContent).toBe("Recall");
-    expect(document.body.textContent).toContain(
-      "Browse Recall entries and see processing progress.",
-    );
     expect(document.body.textContent).not.toContain(
       "Limit model-backed passes to an explicit session count.",
     );
@@ -405,7 +402,10 @@ describe("RecallCorpusPanel", () => {
       expect(document.body.textContent).toContain("Keep extraction passes bounded");
     });
     // The initial entries load reports itself on its own.
-    expect(await queryTimeline()).toEqual({ names: ["Entries"], total: "0 ms" });
+    expect(await queryTimeline()).toEqual({
+      names: ["Entries"],
+      total: "0 ms",
+    });
 
     document.querySelector<HTMLButtonElement>('button[aria-label="Refresh"]')!.click();
     await vi.waitFor(() => {
@@ -415,7 +415,10 @@ describe("RecallCorpusPanel", () => {
     expect(statusRequests).toBe(2);
     // The entries request succeeded, but the pair did not: the timeline still
     // shows the earlier standalone load rather than a fresh partial result.
-    expect(await queryTimeline()).toEqual({ names: ["Entries"], total: "0 ms" });
+    expect(await queryTimeline()).toEqual({
+      names: ["Entries"],
+      total: "0 ms",
+    });
   });
 
   it("does not publish a refresh whose entries request a filter change superseded", async () => {
@@ -736,9 +739,9 @@ describe("RecallCorpusPanel", () => {
     activate!.click();
     await tick();
 
-    const confirmActivate = Array.from(document.querySelectorAll<HTMLButtonElement>("button")).find(
-      (button) => button.textContent?.trim() === "Use these entries",
-    );
+    const confirmActivate = Array.from(
+      document.querySelectorAll<HTMLButtonElement>('[role="dialog"] button'),
+    ).find((button) => button.textContent?.trim() === "Activate");
     expect(confirmActivate).toBeDefined();
     confirmActivate!.click();
     await vi.waitFor(() => {
@@ -746,11 +749,7 @@ describe("RecallCorpusPanel", () => {
         "/api/v1/recall/extraction/activate",
         expect.objectContaining({ method: "POST" }),
       );
-      expect(
-        Array.from(document.querySelectorAll<HTMLButtonElement>("button")).find(
-          (button) => button.textContent?.trim() === "Use these entries",
-        ),
-      ).toBeUndefined();
+      expect(document.querySelector('[role="dialog"]')).toBeNull();
     });
 
     const retire = Array.from(document.querySelectorAll<HTMLButtonElement>("button")).find(
@@ -760,9 +759,9 @@ describe("RecallCorpusPanel", () => {
     retire!.click();
     await tick();
 
-    const confirmRetire = Array.from(document.querySelectorAll<HTMLButtonElement>("button")).find(
-      (button) => button.textContent?.trim() === "Retire generation",
-    );
+    const confirmRetire = Array.from(
+      document.querySelectorAll<HTMLButtonElement>('[role="dialog"] button'),
+    ).find((button) => button.textContent?.trim() === "Retire");
     expect(confirmRetire).toBeDefined();
     confirmRetire!.click();
     await vi.waitFor(() => {
