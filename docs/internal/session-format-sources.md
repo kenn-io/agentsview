@@ -1,5 +1,5 @@
 ---
-last_edited: 2026-11-09
+last_edited: 2026-11-11
 ---
 
 # Session Format Source Inventory
@@ -739,6 +739,54 @@ fixtures retain this field; missing identities remain source-local.
   `internal/parser/cowork_paths.go`, and `internal/parser/cowork_provider.go`.
 
 ## Codex (`codex`)
+
+- **Reasoning, compaction, and usage repeats (checked 2026-11-11 at
+  `87b7bdbf2efb9cb6fb15d821ef535061012c0138`):** The pinned
+  [response schema](https://github.com/openai/codex/blob/87b7bdbf2efb9cb6fb15d821ef535061012c0138/codex-rs/protocol/src/models.rs)
+  defines `reasoning` items with a `summary` array of `summary_text` parts,
+  an optional `content` array of `reasoning_text` or `text` parts, and
+  `encrypted_content`. The
+  [rollout policy](https://github.com/openai/codex/blob/87b7bdbf2efb9cb6fb15d821ef535061012c0138/codex-rs/rollout/src/policy.rs)
+  persists reasoning items and top-level `compacted` records. A
+  [`compacted` record](https://github.com/openai/codex/blob/87b7bdbf2efb9cb6fb15d821ef535061012c0138/codex-rs/history/src/rollout_payload.rs)
+  carries `message` and `replacement_history`. Local compaction stores its
+  summary in `message`
+  ([compact.rs](https://github.com/openai/codex/blob/87b7bdbf2efb9cb6fb15d821ef535061012c0138/codex-rs/core/src/compact.rs)),
+  and remote compaction leaves it empty. A read-only scan of 17,779 local
+  rollouts found 230,292 reasoning items: 27,822 had summary text, none had
+  raw `content`, and the rest were encrypted only. It also found 177
+  `compacted` records, 160 with a summary. Local compaction writes the
+  summary model's reply as an ordinary assistant message, followed by its
+  `token_count`, before the `compacted` record. Agentsview stores readable
+  reasoning as an assistant thinking row: summary text first, raw content
+  only when there is no summary, and no row for encrypted-only reasoning.
+  Each `compacted` record becomes a system compact-boundary row whose content
+  is `message`, or `Context compacted` when it is empty;
+  `replacement_history` is not replayed. Usage attachment skips boundary
+  rows. A reasoning row takes usage only while it is the newest assistant row
+  of the turn, so the message or call that follows it in the same response
+  keeps that response's usage. In the scan, 9 `token_count` events from
+  responses that produced only reasoning used to be dropped and now count,
+  and 57 move from an older assistant message to their own response. Native
+  `token_usage_record` rows carry `response_id`, per-response `usage`, and
+  running turn and thread totals
+  ([protocol.rs](https://github.com/openai/codex/blob/87b7bdbf2efb9cb6fb15d821ef535061012c0138/codex-rs/protocol/src/protocol.rs)).
+  They mirror `token_count` (291,310 records against 292,444 `token_count`
+  events with usage in a second scan of the same, still-growing corpus), so
+  the parser still reads only `token_count` and adds no session totals.
+  Repeated `token_count` events are now recognized by their whole `info`
+  object, including the cumulative `total_token_usage`, so two calls with
+  equal per-call counts both count. The scan suppressed the same
+  753 repeats under both keys. Usage that still finds no row stays
+  unattached. Data version 174 reparses Codex, TraeX, and Augure Code sources
+  in place, and the parser checkpoint moves to version 6, so a stored cursor
+  makes the next append a full parse. Covered by
+  `TestCodexReasoningKeptAsThinking`, `TestCodexReasoningUsageAttachment`,
+  `TestCodexCompactedRecordBecomesBoundary`,
+  `TestCodexTokenCountDedupUsesCumulativeTotal`,
+  `TestCodexFidelityUsageReachesCost`,
+  `TestCodexFidelityAppendMatchesFullParse`, and
+  `TestCodexTranscriptFidelityUpgradeReparsesInPlace`.
 
 - **Archived shell argv:** Older Codex shell calls record `command` as an
   argument array, including `bash -lc` scripts. Commit links read these arrays

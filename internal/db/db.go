@@ -669,7 +669,11 @@ CREATE INDEX IF NOT EXISTS idx_provider_freshness_updated_at
 // source and session identities are unchanged.)
 // (172: import Cursor IDE chunked conversation headers.)
 // (173: prevent older binaries from writing archives with an image-text index.)
-const dataVersion = 173
+// (174: keep Codex reasoning summaries as thinking rows and compaction records
+// as compact boundaries, and dedupe token_count by its whole info object.
+// Re-parse Codex-format sources in place; source and session identities are
+// unchanged.)
+const dataVersion = 174
 
 const archiveOnlyVersionBase = 1 << 20
 

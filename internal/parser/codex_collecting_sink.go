@@ -212,20 +212,38 @@ func (s *CodexCollectingSink) SetCallSubagentSessionID(
 // ApplyTokenUsageToLastAssistant applies normalized token usage to the
 // last assistant message without usage, scanning back to the current
 // turn's user boundary. Returns false when no target exists.
+//
+// System rows such as compaction boundaries are skipped. A reasoning row is
+// a target only while it is the newest assistant row: Codex writes reasoning
+// before the message or call of the same response, which then takes the
+// usage, so an older reasoning row never absorbs a later call's usage. A
+// response that produced only reasoning keeps its usage on that row.
+// IncrementalInfo.PendingUsageOrdinal applies the same rule to the
+// committed prefix.
 func (s *CodexCollectingSink) ApplyTokenUsageToLastAssistant(
 	raw string,
 ) bool {
+	newerResponse := false
 	for i := len(s.messages) - 1; i >= 0; i-- {
-		if s.messages[i].Role == RoleUser {
+		msg := &s.messages[i]
+		if msg.Role == RoleUser {
 			break
 		}
-		if s.messages[i].Role == RoleAssistant &&
-			s.messages[i].TokenUsage == nil {
-			applyCodexTokenUsage(&s.messages[i], raw)
+		if msg.Role != RoleAssistant || msg.IsSystem {
+			continue
+		}
+		if msg.TokenUsage == nil && (!newerResponse || !codexReasoningOnly(msg)) {
+			applyCodexTokenUsage(msg, raw)
 			return true
 		}
+		newerResponse = true
 	}
 	return false
+}
+
+// codexReasoningOnly reports a thinking row written for a reasoning item.
+func codexReasoningOnly(msg *ParsedMessage) bool {
+	return msg.HasThinking && !msg.HasToolUse
 }
 
 func (s *CodexCollectingSink) InsertOrphanMessage(

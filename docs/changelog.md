@@ -1,5 +1,5 @@
 ---
-last_edited: 2026-11-09
+last_edited: 2026-11-11
 title: Changelog
 description: Release history for AgentsView
 ---
@@ -41,6 +41,12 @@ The latest release is
   retried as two smaller requests, and the error now says the request timed
   out. Set `batch_size`, `concurrency`, or `timeout` on a `local = true` server
   to tune it.
+- Codex sessions now show the model's readable reasoning summaries as
+  thinking blocks and mark each context compaction with a divider holding its
+  summary. Encrypted reasoning still shows nothing. When a model response
+  produced only reasoning, its tokens and cost now count. Two model calls with
+  identical token counts can no longer collapse into one. The next sync reparses
+  Codex, TraeX, and Augure Code sessions in place.
 - Prune removes matching parent and child session chains in one pass, even
   without `--agent`.
 - Commit lookups keep live prompts and other archives' deleted-session links.
