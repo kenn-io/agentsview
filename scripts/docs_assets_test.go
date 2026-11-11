@@ -184,12 +184,47 @@ func TestCheckDocsRejectsCorruptedMarkdownSyntax(t *testing.T) {
 	assert.Contains(t, string(output), "activity.md")
 }
 
-func TestCheckDocsRequiresRipgrepForMediaReferenceChecks(t *testing.T) {
-	tempDir := t.TempDir()
-	repo := filepath.Join(tempDir, "repo")
+func TestCheckDocsRejectsRootRelativeMediaInUntrackedPage(t *testing.T) {
+	repo, checkScript := checkDocsMediaFixture(t)
+	git(t, repo, "init", "--quiet")
+	require.NoError(t, os.WriteFile(
+		filepath.Join(repo, "docs", "guide.md"),
+		[]byte(docsPage("Guide", "![Sessions](/screenshots/sessions.png)")),
+		0o644,
+	))
+
+	pythonPath := requireRunnablePython3(t)
+	env := append(envWithout("PYTHON"), "PYTHON="+pythonPath)
+	output, err := runBash(t, repo, env, checkScript)
+
+	require.Error(t, err, string(output))
+	assert.Contains(t, string(output), "docs media references must use /assets/static or /assets/generated")
+	assert.Contains(t, string(output), "docs/guide.md:")
+}
+
+func TestCheckDocsFailsWhenMediaSearchFails(t *testing.T) {
+	repo, checkScript := checkDocsMediaFixture(t)
+
+	pythonPath := requireRunnablePython3(t)
+	env := append(
+		envWithout("PYTHON", "GIT_DIR", "GIT_WORK_TREE"),
+		"PYTHON="+pythonPath,
+		"GIT_CEILING_DIRECTORIES="+filepath.Dir(repo),
+	)
+	output, err := runBash(t, repo, env, checkScript)
+
+	require.Error(t, err, string(output))
+	assert.Contains(t, string(output), "cannot validate docs media references")
+}
+
+// checkDocsMediaFixture installs check-docs.sh with a valid docs page and a
+// no-op asset hydrator, so a run reaches the media reference checks.
+func checkDocsMediaFixture(t *testing.T) (repo, checkScript string) {
+	t.Helper()
+	repo = filepath.Join(t.TempDir(), "repo")
 	require.NoError(t, os.MkdirAll(repo, 0o755))
 
-	checkScript := installScript(t, repo, filepath.Join("scripts", "check-docs.sh"))
+	checkScript = installScript(t, repo, filepath.Join("scripts", "check-docs.sh"))
 	installScript(t, repo, filepath.Join("docs", "scripts", "check_markdown_sources.py"))
 	require.NoError(t, os.MkdirAll(filepath.Join(repo, "docs", "assets"), 0o755))
 	require.NoError(t, os.WriteFile(
@@ -199,26 +234,22 @@ func TestCheckDocsRequiresRipgrepForMediaReferenceChecks(t *testing.T) {
 	))
 	require.NoError(t, os.WriteFile(
 		filepath.Join(repo, "docs", "activity.md"),
-		[]byte(strings.Join([]string{
-			"---",
-			"title: Activity",
-			"description: Activity docs",
-			"---",
-			"",
-			"Valid docs page.",
-			"",
-		}, "\n")),
+		[]byte(docsPage("Activity", "Valid docs page.")),
 		0o644,
 	))
+	return repo, checkScript
+}
 
-	pythonPath := requireRunnablePython3(t)
-	emptyBin := filepath.Join(tempDir, "empty-bin")
-	require.NoError(t, os.MkdirAll(emptyBin, 0o755))
-	env := append(envWithout("PATH", "PYTHON"), "PYTHON="+pythonPath, "PATH="+emptyBin)
-	output, err := runBash(t, repo, env, checkScript)
-
-	require.Error(t, err, string(output))
-	assert.Contains(t, string(output), "rg not found")
+func docsPage(title, body string) string {
+	return strings.Join([]string{
+		"---",
+		"title: " + title,
+		"description: " + title + " docs",
+		"---",
+		"",
+		body,
+		"",
+	}, "\n")
 }
 
 func TestBuiltSiteCheckRequiresMarkdownCompanions(t *testing.T) {

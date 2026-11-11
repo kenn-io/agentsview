@@ -103,6 +103,20 @@ func TestPGImageTextPushAndSearch(t *testing.T) {
 	push()
 	want := []hit{{"shot", 1}}
 	assert.Equal(t, map[string][]hit{"global": want, "substring": want, "regex": want}, searches())
+	_, err = pg.ExecContext(ctx, `
+		INSERT INTO image_text (session_id, source_kind, message_ordinal, call_index, event_index, image_index,
+			image_hash, processor, provider, model, revision, text)
+		SELECT session_id, source_kind, message_ordinal, call_index, event_index, image_index,
+			image_hash, 'zzzz', provider, model, revision, 'invoice 4827 losing'
+		FROM image_text WHERE session_id = 'shot'
+	`)
+	require.NoError(t, err)
+	page, err := store.Search(ctx, db.SearchFilter{Query: "invoice 4827", Limit: 1})
+	require.NoError(t, err)
+	require.Len(t, page.Results, 1)
+	assert.Equal(t, "invoice 4827", page.Results[0].Snippet)
+	_, err = pg.ExecContext(ctx, `DELETE FROM image_text WHERE session_id = 'shot' AND processor = 'zzzz'`)
+	require.NoError(t, err)
 	wantRows, err := local.SessionImageTextRows(ctx, "shot")
 	require.NoError(t, err)
 	assert.Equal(t, wantRows, published())

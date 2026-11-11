@@ -691,8 +691,8 @@ test("the selected message stays marked while find is open", async ({ page }) =>
   await openSession(page);
   await openFind(page);
   releaseHistory();
-  // Let the debounced search select and scroll to its first match before
-  // clicking a different message to inspect its selection marker.
+  // Finishing the search can scroll and replace virtual rows. Select a
+  // message after that work so the outline probe reads the clicked card.
   await expectCompleteIndex(page);
   await page
     .locator(".virtual-row:not(.selected) p")

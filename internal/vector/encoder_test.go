@@ -377,7 +377,7 @@ func TestEncoderNamesRequestTimeout(t *testing.T) {
 			require.NoError(t, err)
 
 			_, err = enc(t.Context(), []string{"alpha"})
-			require.EqualError(t, err, "embed request failed: no response within the 1s request timeout")
+			require.EqualError(t, err, "embed request timed out")
 			_, ok := errors.AsType[*embedclient.TransportError](err)
 			assert.True(t, ok, "the timeout keeps its transport error type")
 			assert.False(t, isPermanentEncodeError(err), "a timeout aborts the fill for a later retry")
