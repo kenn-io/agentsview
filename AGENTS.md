@@ -257,8 +257,6 @@ and can mirror data to PostgreSQL, DuckDB, or ClickHouse.
 - Build a stack one PR at a time, and start the next only after the one below
   has been reviewed. Review usually reshapes a PR, and everything built on it
   then has to be rebuilt.
-- Don't open a second slice of a stack while the one below is unreviewed, even
-  when asked to open the whole plan.
 - Keep only a few PRs open at once. Each one waits for a maintainer, and the
   ones nobody gets to go stale.
 - Before each push, check that your schema, API, and protocol version numbers
