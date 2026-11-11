@@ -109,14 +109,14 @@ FROM generate_series(1, 1100) n`)
 	require.ErrorIs(t, err, db.ErrUsageCacheWarming)
 	select {
 	case <-started:
-		t.Fatal("warm pass started while the direct read was held")
+		require.FailNow(t, "warm pass started while the direct read was held")
 	case <-time.After(200 * time.Millisecond):
 	}
 	release()
 	select {
 	case <-started:
 	case <-time.After(10 * time.Second):
-		t.Fatal("warm pass did not start after the direct read finished")
+		require.FailNow(t, "warm pass did not start after the direct read finished")
 	}
 	require.Eventually(t, func() bool {
 		files, err := filepath.Glob(filepath.Join(directory, "usage-cache-v*.db"))
@@ -470,7 +470,7 @@ CREATE OR REPLACE FUNCTION mark_usage_cursor_usage_events() RETURNS trigger LANG
 	select {
 	case <-done:
 	case <-time.After(10 * time.Second):
-		t.Fatal("journal upgrade did not finish")
+		require.FailNow(t, "journal upgrade did not finish")
 	}
 	var accountRevision, changeRevision int64
 	require.NoError(t, store.pg.QueryRowContext(ctx, `SELECT (SELECT value::bigint FROM sync_metadata WHERE key='usage_account_revision'), (SELECT value::bigint FROM sync_metadata WHERE key='usage_change_revision')`).Scan(&accountRevision, &changeRevision))
@@ -523,7 +523,7 @@ func TestPGUsageCacheCloseFill(t *testing.T) {
 	select {
 	case <-started:
 	case <-time.After(10 * time.Second):
-		t.Fatal("fill did not reach extraction")
+		require.FailNow(t, "fill did not reach extraction")
 	}
 	require.NoError(t, store.usageCache.Close())
 	require.ErrorIs(t, <-finished, context.Canceled)
@@ -562,7 +562,7 @@ func TestPGUsageCacheConcurrentHandlesFillSameWindow(t *testing.T) {
 	select {
 	case <-started:
 	case <-time.After(10 * time.Second):
-		t.Fatal("fill did not reach extraction")
+		require.FailNow(t, "fill did not reach extraction")
 	}
 	concurrent := &Store{pg: store.pg, ownedDB: store.DB()}
 	second := attachUsageCacheProbe(t, concurrent, directory)
@@ -1137,7 +1137,7 @@ func TestPGUsageCacheNewerClaimDoesNotResetOlderSnapshot(t *testing.T) {
 	select {
 	case <-started:
 	case <-time.After(10 * time.Second):
-		t.Fatal("source snapshot did not finish")
+		require.FailNow(t, "source snapshot did not finish")
 	}
 	_, err = store.pg.ExecContext(ctx, `UPDATE usage_events SET output_tokens=output_tokens+10 WHERE session_id='paid-a'`)
 	require.NoError(t, err)
@@ -1147,7 +1147,7 @@ func TestPGUsageCacheNewerClaimDoesNotResetOlderSnapshot(t *testing.T) {
 	select {
 	case <-done:
 	case <-time.After(10 * time.Second):
-		t.Fatal("older snapshot did not finish")
+		require.FailNow(t, "older snapshot did not finish")
 	}
 	require.NoError(t, cached.QueryRowContext(ctx, `SELECT value FROM usage_cache_metadata WHERE key='reset_epoch'`).Scan(&after))
 	require.Equal(t, before, after)

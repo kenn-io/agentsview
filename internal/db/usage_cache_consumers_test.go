@@ -53,7 +53,7 @@ func TestUsageCacheInitialProbeDoesNotOverwriteNewIdentity(t *testing.T) {
 	select {
 	case <-source.started:
 	case <-time.After(10 * time.Second):
-		t.Fatal("initial capture did not start")
+		require.FailNow(t, "initial capture did not start")
 	}
 	newID := "new"
 	reader.engine.usageSourceDatabaseID.Store(&newID)
@@ -63,7 +63,7 @@ func TestUsageCacheInitialProbeDoesNotOverwriteNewIdentity(t *testing.T) {
 	case got := <-done:
 		require.Equal(t, newID, got)
 	case <-time.After(10 * time.Second):
-		t.Fatal("initial capture did not finish")
+		require.FailNow(t, "initial capture did not finish")
 	}
 }
 

@@ -477,10 +477,11 @@ func (c *usageFillCoordinator) replaceExternalAccounts(ctx context.Context, targ
 		return err
 	}
 	defer func() { _ = spoolTx.Rollback() }()
-	insert, err := spoolTx.PrepareContext(ctx, `INSERT INTO accounts VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
+	insert, err := spoolTx.PrepareContext(ctx, `INSERT INTO accounts VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`) //nolint:kennlint // sqlclosecheck: the stream callback borrows this statement; it is closed below.
 	if err != nil {
 		return err
 	}
+	defer insert.Close()
 	databaseID, revision, err := c.archive.usageSource.StreamUsageAccounts(ctx, func(account UsageSourceAccount) error {
 		millis, _, _ := usagefacts.ParseTimestamp(account.Timestamp)
 		_, err := insert.ExecContext(ctx, account.ID, account.Agent, millis, account.Timestamp, account.Model, max(account.InputTokens, 0), max(account.OutputTokens, 0), max(account.CacheWriteTokens, 0), max(account.CacheReadTokens, 0), account.ChargedMicrodollars, boolInt(account.Headless), account.DedupKey)

@@ -76,7 +76,7 @@ func TestUsageResetRejectsOldPublications(t *testing.T) {
 		select {
 		case <-source.read:
 		case <-time.After(10 * time.Second):
-			t.Fatal("account read did not reach publication")
+			require.FailNow(t, "account read did not reach publication")
 		}
 		require.NoError(t, cache.resetRewoundUsage(t.Context(), 0))
 		release()
@@ -105,7 +105,7 @@ func TestUsageResetRejectsOldPublications(t *testing.T) {
 		select {
 		case <-built:
 		case <-time.After(10 * time.Second):
-			t.Fatal("rollup did not reach installation")
+			require.FailNow(t, "rollup did not reach installation")
 		}
 		require.NoError(t, cache.resetRewoundUsage(t.Context(), 0))
 		unblock()
