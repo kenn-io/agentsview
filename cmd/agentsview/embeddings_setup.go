@@ -341,6 +341,15 @@ func (v *liveVectorServing) activate(deployment config.VectorEmbeddingsServerCon
 	if err != nil {
 		return err
 	}
+	if automatic && v.serving.manager != nil {
+		current, err := v.reload()
+		if err != nil {
+			return err
+		}
+		if !current.Vector.Enabled {
+			return nil
+		}
+	}
 	if v.serving.manager == nil {
 		if err := cfg.SaveVectorSetup(builtin, automatic, pinnedEndpoint); errors.Is(err, config.ErrVectorSetupIneligible) {
 			return nil
