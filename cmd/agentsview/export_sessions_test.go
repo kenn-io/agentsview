@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"database/sql"
 	"encoding/json/jsontext"
 	"encoding/json/v2"
@@ -18,6 +19,7 @@ import (
 	"github.com/spf13/cobra"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"go.kenn.io/agentsview/internal/config"
 	"go.kenn.io/agentsview/internal/db"
 	"go.kenn.io/agentsview/internal/dbtest"
 	"go.kenn.io/agentsview/internal/export"
@@ -679,7 +681,7 @@ func TestExportSessionsUpgradeRequiresBackgroundEvidenceBackfill(t *testing.T) {
 	assert.Empty(t, stderr)
 	assert.Empty(t, stdout)
 	assert.Contains(t, err.Error(), "project identity evidence backfill is pending")
-	assert.Contains(t, err.Error(), "agentsview export status")
+	assert.Contains(t, err.Error(), "agentsview export sessions --wait")
 
 	raw, err = sql.Open("sqlite3", dbPath)
 	require.NoError(t, err)
@@ -696,6 +698,131 @@ func TestExportSessionsUpgradeRequiresBackgroundEvidenceBackfill(t *testing.T) {
 		WHERE name = 'session_project_identity_snapshots_v1'
 	`).Scan(&state))
 	assert.Equal(t, "pending", state)
+}
+
+func TestExportWaitForBackfill(t *testing.T) {
+	dataDir := testDataDir(t)
+	path := filepath.Join(dataDir, "sessions.db")
+	database := dbtest.OpenTestDBAt(t, path)
+	require.NoError(t, database.Close())
+	raw, err := sql.Open("sqlite3", path)
+	require.NoError(t, err)
+	defer raw.Close()
+	_, err = raw.ExecContext(t.Context(), `INSERT INTO background_migrations (name, state, total_items, completed_items, last_error) VALUES ('session_project_identity_snapshots_v1', 'running', 1, 0, '')`)
+	require.NoError(t, err)
+	cfg := config.Config{DataDir: dataDir, DBPath: path}
+
+	t.Run("completion", func(t *testing.T) {
+		progress := new(bytes.Buffer)
+		started := make(chan struct{})
+		done := make(chan error, 1)
+		go func() {
+			reader, err := waitForExportBackfill(t.Context(), progress, cfg, func(context.Context) error { close(started); return nil })
+			if reader != nil {
+				_ = reader.Close()
+			}
+			done <- err
+		}()
+		<-started
+		select {
+		case err := <-done:
+			t.Fatalf("returned before completion: %v", err)
+		case <-time.After(100 * time.Millisecond):
+		}
+		_, err := raw.ExecContext(t.Context(), `UPDATE background_migrations SET state = 'completed', completed_items = 1 WHERE name = 'session_project_identity_snapshots_v1'`)
+		require.NoError(t, err)
+		require.NoError(t, <-done)
+		assert.Contains(t, progress.String(), "running")
+	})
+	t.Run("cancellation", func(t *testing.T) {
+		_, err := raw.ExecContext(t.Context(), `UPDATE background_migrations SET state = 'running' WHERE name = 'session_project_identity_snapshots_v1'`)
+		require.NoError(t, err)
+		ctx, cancel := context.WithCancel(t.Context())
+		defer cancel()
+		done := make(chan error, 1)
+		progress := make(chan struct{}, 1)
+		go func() {
+			reader, err := waitForExportBackfill(ctx, exportProgressSignal(progress), cfg, func(context.Context) error { return nil })
+			if reader != nil {
+				_ = reader.Close()
+			}
+			done <- err
+		}()
+		<-progress
+		cancel()
+		assert.ErrorIs(t, <-done, context.Canceled)
+	})
+}
+
+type exportProgressSignal chan struct{}
+
+func (s exportProgressSignal) Write(p []byte) (int, error) {
+	select {
+	case s <- struct{}{}:
+	default:
+	}
+	return len(p), nil
+}
+
+func TestExportSessionsWaitsBeforeWritingOutput(t *testing.T) {
+	dataDir := testDataDir(t)
+	path := filepath.Join(dataDir, "sessions.db")
+	database := dbtest.OpenTestDBAt(t, path)
+	require.NoError(t, database.SetDatabaseIDForTest(t.Context(), "export-sessions-test-db"))
+	require.NoError(t, database.Close())
+	raw, err := sql.Open("sqlite3", path)
+	require.NoError(t, err)
+	defer raw.Close()
+	_, err = raw.ExecContext(t.Context(), `INSERT INTO background_migrations (name, state, total_items, completed_items, last_error) VALUES ('session_project_identity_snapshots_v1', 'running', 1, 0, '')`)
+	require.NoError(t, err)
+	cmd, _, err := newRootCommand().Find([]string{"export", "sessions"})
+	require.NoError(t, err)
+	cmd.SetContext(t.Context())
+	out := new(bytes.Buffer)
+	cmd.SetOut(out)
+	progress := make(chan struct{}, 1)
+	cmd.SetErr(exportProgressSignal(progress))
+	done := make(chan error, 1)
+	go func() {
+		done <- runExportSessionsWithStart(cmd, exportSessionsConfig{Limit: 1, Wait: true}, func(context.Context, *config.Config) error { return nil })
+	}()
+	select {
+	case <-progress:
+	case err := <-done:
+		t.Fatalf("export stopped before reporting progress: %v", err)
+	case <-time.After(5 * time.Second):
+		t.Fatal("export did not report progress")
+	}
+	assert.Empty(t, out.String())
+	_, err = raw.ExecContext(t.Context(), `UPDATE background_migrations SET state = 'completed', completed_items = 1 WHERE name = 'session_project_identity_snapshots_v1'`)
+	require.NoError(t, err)
+	require.NoError(t, <-done)
+	assert.Equal(t, "export-sessions-test-db", decodeExportSessionsDocument(t, out.String()).DatabaseID)
+}
+
+func TestExportSessionsFailedBackfillDoesNotStartDaemon(t *testing.T) {
+	dataDir := testDataDir(t)
+	path := filepath.Join(dataDir, "sessions.db")
+	database := dbtest.OpenTestDBAt(t, path)
+	require.NoError(t, database.Close())
+	raw, err := sql.Open("sqlite3", path)
+	require.NoError(t, err)
+	_, err = raw.ExecContext(t.Context(), `INSERT INTO background_migrations (name, state, total_items, completed_items, last_error) VALUES ('session_project_identity_snapshots_v1', 'failed', 1, 0, 'metadata unavailable')`)
+	require.NoError(t, err)
+	require.NoError(t, raw.Close())
+	root := newRootCommand()
+	cmd, _, err := root.Find([]string{"export", "sessions"})
+	require.NoError(t, err)
+	out := new(bytes.Buffer)
+	cmd.SetOut(out)
+	cmd.SetContext(t.Context())
+	started := false
+	err = runExportSessionsWithStart(cmd, exportSessionsConfig{Limit: 1, Wait: true}, func(context.Context, *config.Config) error { started = true; return nil })
+	require.ErrorContains(t, err, "metadata unavailable")
+	assert.Contains(t, err.Error(), "agentsview daemon restart")
+	assert.Contains(t, err.Error(), "agentsview export status")
+	assert.False(t, started)
+	assert.Empty(t, out.String())
 }
 
 func TestExportStatusReportsBackfillFailure(t *testing.T) {

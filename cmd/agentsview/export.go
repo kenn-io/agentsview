@@ -6,8 +6,10 @@ import (
 	"encoding/json/v2"
 	"errors"
 	"fmt"
+	"io"
 	"sort"
 	"strings"
+	"time"
 
 	"github.com/spf13/cobra"
 	"github.com/spf13/pflag"
@@ -57,6 +59,7 @@ type exportSessionsConfig struct {
 	Format             exportSessionsFormat
 	JSON               bool
 	All                bool
+	Wait               bool
 	MinToolFailuresSet bool
 }
 
@@ -249,12 +252,35 @@ func newExportSessionsCommand() *cobra.Command {
 	flags.Var(&cfg.Format, "format", "Output format: json or ndjson")
 	flags.BoolVar(&cfg.JSON, "json", false,
 		"Emit JSON output (alias for --format json)")
+	flags.BoolVar(&cfg.Wait, "wait", false, "Wait for project identity evidence backfill")
 	flags.BoolVar(&cfg.All, "all", false,
 		"Export every page as one output stream")
 	return cmd
 }
 
 func runExportSessions(cmd *cobra.Command, cfg exportSessionsConfig) error {
+	return runExportSessionsWithStart(cmd, cfg, startExportDaemon)
+}
+
+func startExportDaemon(ctx context.Context, cfg *config.Config) error {
+	tr, err := ensureTransportContext(ctx, cfg, transportIntentLongLived, startupWaitTimeout)
+	if err != nil {
+		return err
+	}
+	if tr.Mode == transportHTTP && !tr.ReadOnly {
+		return nil
+	}
+	if tr.ReadOnly && !daemonAutostartDisabled() && !cfg.NoDaemonAutostart && !cfg.RequireDaemon {
+		if err := guardDaemonAutoStartConfig(*cfg); err != nil {
+			return err
+		}
+		_, err = startBackgroundServeForTransport(ctx, cfg, startupWaitTimeout, false)
+		return err
+	}
+	return errors.New("start a writable daemon with `agentsview daemon start`, then retry")
+}
+
+func runExportSessionsWithStart(cmd *cobra.Command, cfg exportSessionsConfig, start func(context.Context, *config.Config) error) error {
 	if cfg.Cursor != "" {
 		if err := validateExportSessionsCursorFlags(cmd.Flags()); err != nil {
 			return err
@@ -273,7 +299,11 @@ func runExportSessions(cmd *cobra.Command, cfg exportSessionsConfig) error {
 	if err != nil {
 		return err
 	}
-	defer database.Close()
+	defer func() {
+		if database != nil {
+			_ = database.Close()
+		}
+	}()
 
 	ctx := cmd.Context()
 	backfill, err := database.ProjectIdentityBackfillStatus(ctx)
@@ -281,10 +311,21 @@ func runExportSessions(cmd *cobra.Command, cfg exportSessionsConfig) error {
 		return fmt.Errorf("checking project identity evidence: %w", err)
 	}
 	if backfill.State != "not_needed" && backfill.State != "completed" {
-		return fmt.Errorf(
-			"project identity evidence backfill is %s (%d/%d); start or restart the writable daemon, then check `agentsview export status`",
-			backfill.State, backfill.CompletedItems, backfill.TotalItems,
-		)
+		if backfill.State == "failed" {
+			return exportBackfillFailure(backfill)
+		}
+		if !cfg.Wait {
+			return fmt.Errorf("project identity evidence backfill is %s (%d/%d); run `agentsview export sessions --wait` or check `agentsview export status`", backfill.State, backfill.CompletedItems, backfill.TotalItems)
+		}
+		if err := database.Close(); err != nil {
+			return err
+		}
+		database, err = waitForExportBackfill(ctx, cmd.ErrOrStderr(), appCfg, func(ctx context.Context) error {
+			return start(ctx, &appCfg)
+		})
+		if err != nil {
+			return err
+		}
 	}
 	if err := ensureExportSessionsPricing(ctx, database, appCfg); err != nil {
 		return err
@@ -329,6 +370,45 @@ func runExportSessions(cmd *cobra.Command, cfg exportSessionsConfig) error {
 		return nil
 	}
 	return json.MarshalEncode(enc, output)
+}
+
+func exportBackfillFailure(status db.BackgroundMigrationStatus) error {
+	return fmt.Errorf("project identity evidence backfill failed: %s; run `agentsview daemon restart`, then check `agentsview export status`", status.LastError)
+}
+
+func waitForExportBackfill(ctx context.Context, progress io.Writer, cfg config.Config, start func(context.Context) error) (*db.DB, error) {
+	if err := start(ctx); err != nil {
+		return nil, err
+	}
+	for {
+		database, err := openExportReadOnlyDB(ctx, cfg)
+		if err != nil {
+			return nil, err
+		}
+		status, err := database.ProjectIdentityBackfillStatus(ctx)
+		if err != nil {
+			_ = database.Close()
+			return nil, fmt.Errorf("checking project identity evidence: %w", err)
+		}
+		switch status.State {
+		case "completed", "not_needed":
+			return database, nil
+		case "failed":
+			_ = database.Close()
+			return nil, exportBackfillFailure(status)
+		}
+		_ = database.Close()
+		if _, err := fmt.Fprintf(progress, "project identity evidence backfill: %s (%d/%d)\n", status.State, status.CompletedItems, status.TotalItems); err != nil {
+			return nil, err
+		}
+		timer := time.NewTimer(time.Second)
+		select {
+		case <-ctx.Done():
+			timer.Stop()
+			return nil, ctx.Err()
+		case <-timer.C:
+		}
+	}
 }
 
 // ensureExportSessionsPricing installs embedded fallback plus custom pricing
