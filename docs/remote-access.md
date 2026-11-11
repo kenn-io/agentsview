@@ -89,8 +89,8 @@ When `require_auth` is disabled, normal local loopback use remains ungated.
 
 ## Push one archived session
 
-On current `main`, an explicit push can copy one normalized session to another
-instance. The receiver must run normal writable SQLite `serve`. PostgreSQL,
+An explicit push can copy one normalized session to another instance. The
+receiver must run normal writable SQLite `serve`. PostgreSQL,
 DuckDB and ClickHouse read servers cannot accept these pushes.
 
 On the receiver, set both operator settings and restart the daemon:
@@ -133,11 +133,16 @@ The first accepted transcript is immutable in this version. Retrying it returns
 even if the sender's metadata or usage changes.
 A changed transcript or an existing session with the same ID returns a conflict;
 there is no force replacement. Finish recording a session before pushing it.
+Permanently deleting a pushed session keeps its receipt, so that ID cannot be
+accepted again, even if the transcript is unchanged.
 Ordinary source ingestion cannot replace a pushed snapshot. Rebuilds reserve
 its ID before parsing and preserve the archived transcript with its receipt.
 References in a pushed transcript do not grant writes to other sessions.
 Successful JSON output contains `session_id`, `agent`, and `status` (`created`
 or `unchanged`). Failures return nonzero and leave stdout empty.
+
+Upgrading an existing archive to this version requires a full rebuild. A push
+to an archive still awaiting that rebuild returns 503 until the rebuild finishes.
 
 The authenticated endpoint is `POST /api/v1/sessions/ingest`. It accepts only
 versioned, uncompressed JSON up to 64 MiB, including escaping overhead, with

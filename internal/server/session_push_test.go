@@ -3,6 +3,7 @@ package server
 import (
 	"bytes"
 	"context"
+	"database/sql"
 	"encoding/json/v2"
 	"io"
 	"net"
@@ -168,9 +169,13 @@ func TestSessionPushReceiverInsertAndRetry(t *testing.T) {
 func TestSessionPushReceiverRejectsChangedBoundary(t *testing.T) {
 	source := testServer(t, 30*time.Second).db.(*db.DB)
 	session := db.Session{ID: "source", Agent: "claude", Machine: "source", MessageCount: 1, UserMessageCount: 1}
-	message := db.Message{SessionID: session.ID, Ordinal: 0, Role: "user", Content: "hello", HasToolUse: true, ToolCalls: []db.ToolCall{{ToolName: "Read", ToolUseID: "call", ResultContent: "result", ResultEvents: []db.ToolResultEvent{{EventIndex: 0, ToolUseID: "call", Source: "tool", Status: "done", Content: "result"}}}}}
+	message := db.Message{SessionID: session.ID, Ordinal: 0, Role: "user", Content: "hello", HasToolUse: true, ToolCalls: []db.ToolCall{{ToolName: "Read", ToolUseID: "call", ResultContent: "result", ResultEvents: []db.ToolResultEvent{{EventIndex: 4, ToolUseID: "call", Source: "tool", Status: "done", Content: "result"}}}}}
 	_, err := source.WriteSessionBatchAtomic(t.Context(), []db.SessionBatchWrite{{Session: session, Messages: []db.Message{message}, ReplaceMessages: true}})
 	require.NoError(t, err)
+	require.NoError(t, source.Update(t.Context(), func(tx *sql.Tx) error {
+		_, err := tx.ExecContext(t.Context(), `UPDATE tool_result_events SET event_index = 4 WHERE session_id = ?`, session.ID)
+		return err
+	}))
 	original, _, err := artifact.EncodeSessionPush(t.Context(), source, session.ID, "")
 	require.NoError(t, err)
 	receiver := testServer(t, 30*time.Second)
@@ -186,6 +191,10 @@ func TestSessionPushReceiverRejectsChangedBoundary(t *testing.T) {
 	require.Equal(t, http.StatusOK, send(original).Code)
 	before, err := receiver.db.(*db.DB).GetAllMessages(t.Context(), session.ID)
 	require.NoError(t, err)
+	require.Len(t, before, 1)
+	require.Len(t, before[0].ToolCalls, 1)
+	require.Len(t, before[0].ToolCalls[0].ResultEvents, 1)
+	assert.Equal(t, "result", before[0].ToolCalls[0].ResultEvents[0].Content)
 	for _, tc := range []struct {
 		name      string
 		change    func(*db.Message)

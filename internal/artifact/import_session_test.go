@@ -175,6 +175,16 @@ func TestLoadImportedSessionCompleteClosure(t *testing.T) {
 	assert.Equal(t, contractOrigin+"~session", write.Session.ID)
 	require.Len(t, write.Messages, 1)
 	assert.Equal(t, "hello", write.Messages[0].Content)
+
+	m.Session.MessageCount = 2
+	m.Session.UserMessageCount = 2
+	messages = append(messages, db.Message{Ordinal: 1, Role: "user", SourceSubtype: "tool_result", Content: "output"})
+	manifestHash = createImportTestClosure(t, store, &m, messages)
+	write, outcome, err = loadImportedSession(t.Context(), database, store, contractOrigin, contractOrigin+"~session", manifestHash, productionArtifactLimits())
+	require.NoError(t, err)
+	assert.Equal(t, importClosureComplete, outcome)
+	require.Len(t, write.Messages, 2)
+	assert.Equal(t, "output", write.Messages[1].Content)
 }
 
 func TestLoadImportedSessionDefersOversizedFutureSegment(t *testing.T) {

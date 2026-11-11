@@ -249,11 +249,6 @@ func decodeSessionPush(data []byte) (db.SessionPushReceipt, db.SessionBatchWrite
 				if call.CallIndex != callIndex {
 					return zero, noWrite, errors.New("invalid tool call coordinate")
 				}
-				for eventIndex, event := range call.ResultEvents {
-					if event.EventIndex != eventIndex {
-						return zero, noWrite, errors.New("invalid result event coordinate")
-					}
-				}
 			}
 			identity = append(identity, sessionPushIdentity(message))
 			converted := message.dbMessage()

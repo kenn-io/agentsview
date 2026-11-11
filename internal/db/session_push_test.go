@@ -429,7 +429,7 @@ func TestSessionPushReservesOrdinaryWriterOwnership(t *testing.T) {
 }
 
 func TestSessionPushRejectsDirectTranscriptMutation(t *testing.T) {
-	for _, mode := range []string{"append", "replace", "usage", "plan"} {
+	for _, mode := range []string{"append", "replace", "replace content", "incremental", "usage", "plan"} {
 		t.Run(mode, func(t *testing.T) {
 			d := testDB(t)
 			receipt, write := sessionPushFixture("reserved")
@@ -440,6 +440,10 @@ func TestSessionPushRejectsDirectTranscriptMutation(t *testing.T) {
 				err = d.InsertMessages(t.Context(), []Message{{SessionID: "reserved", Ordinal: 1, Role: "assistant", Content: "new content"}})
 			case "replace":
 				err = d.ReplaceSessionMessages(t.Context(), "reserved", []Message{{SessionID: "reserved", Ordinal: 0, Role: "user", Content: "replacement"}})
+			case "replace content":
+				err = d.ReplaceSessionContent(t.Context(), "reserved", []Message{{SessionID: "reserved", Ordinal: 0, Role: "user", Content: "replacement"}}, SessionSignalUpdate{}, nil)
+			case "incremental":
+				err = d.UpdateSessionIncremental(t.Context(), "reserved", IncrementalSessionUpdate{MsgCount: 99})
 			case "usage":
 				err = d.ReplaceSessionUsageEvents(t.Context(), "reserved", []UsageEvent{{SessionID: "reserved", Source: "session", Model: "model", InputTokens: 999}})
 			case "plan":

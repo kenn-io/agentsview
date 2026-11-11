@@ -3397,6 +3397,9 @@ func (db *DB) FileIdentityChanged(ctx context.Context, path string, inode, devic
 func updateSessionIncrementalTx(ctx context.Context,
 	tx *sql.Tx, id string, update IncrementalSessionUpdate,
 ) error {
+	if err := checkSessionPushReservationTx(ctx, tx, id); err != nil {
+		return err
+	}
 	var lastEntryUUID any
 	if update.LastEntryUUID != "" {
 		lastEntryUUID = update.LastEntryUUID
@@ -3416,10 +3419,7 @@ func updateSessionIncrementalTx(ctx context.Context,
 			has_total_output_tokens = ?,
 			has_peak_context_tokens = ?,
 			termination_status = ?,
-			-- Mark the row as last written by the incremental-append path.
-			-- The full-replace writer (upsertSessionArgs) resets this to
-			-- false; parse-diff reads it to classify benign
-			-- incremental-vs-full skew.
+			-- Mark incremental writes so parse-diff can classify skew.
 			last_write_incremental = 1
 		WHERE id = ?`,
 		update.EndedAt, update.MsgCount, update.UserMsgCount,

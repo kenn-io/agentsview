@@ -7,7 +7,6 @@ import (
 
 	"go.kenn.io/agentsview/internal/db"
 	"go.kenn.io/agentsview/internal/ingest"
-	"go.kenn.io/agentsview/internal/parser"
 )
 
 type importClosureOutcome uint8
@@ -244,7 +243,7 @@ func validateImportedClosureCounts(m manifest, messages []db.Message, checkCount
 			return errors.New("session closure has duplicate message ordinal")
 		}
 		ordinals[message.Ordinal] = struct{}{}
-		if message.Role == "user" && !message.IsSystem && message.SourceSubtype != parser.SourceSubtypeToolResult {
+		if message.Role == "user" && !message.IsSystem {
 			userMessageCount++
 		}
 	}

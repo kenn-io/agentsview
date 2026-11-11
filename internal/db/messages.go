@@ -2568,9 +2568,6 @@ func (db *DB) replaceSessionContent(ctx context.Context,
 
 	db.mu.Lock()
 	defer db.mu.Unlock()
-
-	// Same diff-vs-full decision as ReplaceSessionMessages: this is
-	// the hot path for streaming chunk-merge full-parse fallbacks.
 	plan, stored, useDiff, storedLoaded := db.planStoredMessageDiff(
 		ctx, sessionID, msgs,
 	)
@@ -2582,6 +2579,9 @@ func (db *DB) replaceSessionContent(ctx context.Context,
 		return fmt.Errorf("beginning tx: %w", err)
 	}
 	defer func() { _ = tx.Rollback() }()
+	if err := checkSessionPushReservationTx(ctx, tx, sessionID); err != nil {
+		return err
+	}
 	if useDiff {
 		needsPinRemap, err := messageDiffNeedsPinRemapTx(ctx, tx, plan)
 		if err != nil {
