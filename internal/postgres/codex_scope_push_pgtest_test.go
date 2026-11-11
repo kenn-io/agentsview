@@ -9,7 +9,17 @@ import (
 )
 
 func TestPushSessionWithCodexScope(t *testing.T) {
-	syncer, local, pg, ctx := newSessionProvenancePushSync(t, "agentsview_codex_scope_push_test")
+	const schema = "agentsview_codex_scope_push_test"
+	pgURL := testPGURL(t)
+	cleanNamedPGSchema(t, pgURL, schema)
+	t.Cleanup(func() { cleanNamedPGSchema(t, pgURL, schema) })
+	pg, err := Open(t.Context(), pgURL, schema, true)
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, pg.Close()) })
+	ctx := t.Context()
+	require.NoError(t, EnsureSchema(ctx, pg, schema))
+	local := testDB(t)
+	syncer := &Sync{pg: pg, local: local, machine: "workstation", schema: schema, schemaDone: true}
 	seedProvenanceSession(t, local, "session-1", "workstation", "project", "")
 	result, err := syncer.Push(ctx, true, nil)
 	require.NoError(t, err)
