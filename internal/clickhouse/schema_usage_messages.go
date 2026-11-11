@@ -73,12 +73,15 @@ func ensureUsageMessages(ctx context.Context, conn *sql.DB) error {
 		"claude_request_id String", "source_uuid String", "push_version UInt64",
 	}
 	fields := []string{usageMessageFields}
+	targets := []string{usageMessageFields}
 	for _, column := range usageColumns {
 		columns = append(columns, column.name+" "+column.typ)
 		fields = append(fields, column.expression+" AS "+column.name)
+		targets = append(targets, column.name)
 	}
 	columns = append(columns, usageRecordedCostColumn+" Nullable(Int64)")
 	fields = append(fields, chRecordedCostSQL("token_usage")+" AS "+usageRecordedCostColumn)
+	targets = append(targets, usageRecordedCostColumn, "revision")
 	selection := strings.Join(fields, ", ")
 	// The low bit makes a live insert beat a concurrent, older backfill of
 	// the same push version. UInt128 preserves every possible UInt64 version.
@@ -115,8 +118,10 @@ func ensureUsageMessages(ctx context.Context, conn *sql.DB) error {
 		return nil
 	}
 	log.Print("ClickHouse: filling usage messages before serving; source messages remain unchanged")
-	if _, err := conn.ExecContext(ctx, "INSERT INTO usage_messages SELECT "+selection+
-		", toUInt128(push_version) * 2 AS revision FROM messages"); err != nil {
+	// Name the target columns: an upgraded table has the recorded cost after
+	// revision, a new one before it.
+	if _, err := conn.ExecContext(ctx, "INSERT INTO usage_messages ("+strings.Join(targets, ", ")+
+		") SELECT "+selection+", toUInt128(push_version) * 2 AS revision FROM messages"); err != nil {
 		return fmt.Errorf("backfilling usage messages (startup can retry): %w", err)
 	}
 	return writeMetadata(ctx, conn, map[string]string{marker: "1"})

@@ -1114,10 +1114,18 @@ func pgDailyUsageAmounts(
 			return 0, 0, 0, 0, money.Money{}, money.Money{},
 				fmt.Errorf("pricing pg usage row for model %q: %w", r.model, err)
 		}
-		db.RecordComputedUsagePricing(
-			pricing, r.model, pricedModel, lookup, requestScoped,
-			inputTok, cacheCrTok, cacheRdTok,
-		)
+		if r.cost.Valid && r.costSource != db.CopilotReportedCostSource &&
+			inputTok == 0 && outputTok == 0 && reasoningTok == 0 &&
+			cacheCrTok == 0 && cacheRdTok == 0 && pgDailyUsageRowWebSearchRequests(r) == 0 {
+			// A cost-only row whose recorded cost lost to the catalog is not
+			// a priced request.
+			pricing.RecordResolvedComputed(r.model, pricedModel, lookup)
+		} else {
+			db.RecordComputedUsagePricing(
+				pricing, r.model, pricedModel, lookup, requestScoped,
+				inputTok, cacheCrTok, cacheRdTok,
+			)
+		}
 	}
 	selectedRates := rates
 	if requestScoped {

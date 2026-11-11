@@ -43,6 +43,9 @@ var RecordedCostCases = []RecordedCostCase{
 	{SessionID: "rc-event", Cost: 3_000 + 2_000, HasCost: true, Models: []string{"rc-custom", "rc-priced"}},
 	// Any other status keeps the historical rule: the reported cost wins.
 	{SessionID: "rc-exact", Cost: 4_000, HasCost: true, Models: []string{"rc-priced"}},
+	// A cost-only message whose recorded cost loses to the catalog adds
+	// nothing: no cost, no model, and no priced request.
+	{SessionID: "rc-evidence", Cost: 0, HasCost: false},
 	// A costed event without a model is kept under the unknown-model label.
 	{SessionID: "rc-unknown", Cost: 1_500, HasCost: true, Models: []string{usagefacts.UnknownModel}},
 }
@@ -84,6 +87,9 @@ func SeedRecordedCostSessions(t testing.TB, local *db.DB) {
 		}},
 		{Session: session("rc-fallback"), Messages: []db.Message{
 			message("rc-fallback", "rc-custom", `{`+tokens+`,"recorded_cost_microdollars":7000}`),
+		}},
+		{Session: session("rc-evidence"), Messages: []db.Message{
+			message("rc-evidence", "rc-priced", `{"recorded_cost_microdollars":800}`),
 		}},
 		{Session: session("rc-zero"), Messages: []db.Message{
 			message("rc-zero", "rc-custom", `{`+tokens+`,"recorded_cost_microdollars":0}`),
@@ -159,6 +165,20 @@ func AssertRecordedCostUsage(t *testing.T, store db.Store) {
 		"rc-custom":             7_000 + 3_000,
 		usagefacts.UnknownModel: 1_500,
 	}, models, "daily model costs")
+	// rc-priced is charged at catalog rates for one message request
+	// (rc-catalog) and one session aggregate (rc-event). The rc-evidence
+	// message is not a priced request.
+	require.NotNil(t, daily.Pricing, "daily pricing provenance")
+	var requests, aggregates int
+	for _, resolution := range daily.Pricing.Models["rc-priced"].Resolutions {
+		requests += resolution.Application.BaseRequestCount
+		for _, band := range resolution.Application.Bands {
+			requests += band.RequestCount
+		}
+		aggregates += resolution.Application.AggregateRowCount
+	}
+	assert.Equal(t, 1, requests, "rc-priced priced requests")
+	assert.Equal(t, 1, aggregates, "rc-priced priced aggregate rows")
 
 	top, err := store.GetTopSessionsByCost(ctx, filter, 100)
 	require.NoError(t, err, "top sessions")

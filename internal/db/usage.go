@@ -1583,9 +1583,14 @@ func dailyUsageAmounts(
 	}
 	// Record the exact lookup behind the charge, including provider billing
 	// adjustments, rather than resolving the row again for provenance.
-	if priced.Reported > 0 {
+	switch {
+	case priced.Reported > 0:
 		pricing.RecordResolvedReported(r.model, priced.PricedModel, priced.lookup)
-	} else {
+	case priced.ComputedRequest == 0 && priced.ComputedAggregate == 0:
+		// A cost-only row whose recorded cost lost to the catalog is not a
+		// priced request.
+		pricing.RecordResolvedComputed(r.model, priced.PricedModel, priced.lookup)
+	default:
 		RecordComputedUsagePricing(
 			pricing, r.model, priced.PricedModel, priced.lookup, fact.RequestScoped,
 			inputTok, cacheCrTok, cacheRdTok,
