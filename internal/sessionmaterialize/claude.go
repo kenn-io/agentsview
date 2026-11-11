@@ -13,8 +13,10 @@ import (
 	"golang.org/x/text/unicode/norm"
 )
 
-var claudeProjectOverride = regexp.MustCompile(`^[A-Za-z0-9_-]{1,64}$`)
-var reservedProjectOverride = regexp.MustCompile(`(?i)^(con|prn|aux|nul|com[0-9]|lpt[0-9])$`)
+var (
+	claudeProjectOverride   = regexp.MustCompile(`^[A-Za-z0-9_-]{1,64}$`)
+	reservedProjectOverride = regexp.MustCompile(`(?i)^(con|prn|aux|nul|com[0-9]|lpt[0-9])$`)
+)
 
 func claudeDestination(cwd, sessionID string) (string, string, string, error) {
 	home := os.Getenv("CLAUDE_CONFIG_DIR")
@@ -48,7 +50,7 @@ func claudeDestination(cwd, sessionID string) (string, string, string, error) {
 func clearClaudeWorktree(data []byte, sessionID, sourceSessionID string) ([]byte, error) {
 	var bound bool
 	var found bool
-	for _, line := range bytes.Split(data, []byte{'\n'}) {
+	for line := range bytes.SplitSeq(data, []byte{'\n'}) {
 		if len(bytes.TrimSpace(line)) == 0 {
 			continue
 		}

@@ -45,12 +45,12 @@ func TestMaterializeConfiguredSources(t *testing.T) {
 				cfg.SessionSources = []config.SessionSource{{Agent: parser.AgentClaude, Dir: filepath.Join(root, "original"), Machine: "local"}}
 				cfg.SourceMachines = map[parser.AgentType]map[string]string{parser.AgentClaude: {filepath.Join(root, "original"): "local"}}
 			}
-			require.NoError(t, os.MkdirAll(filepath.Dir(name), 0700))
+			require.NoError(t, os.MkdirAll(filepath.Dir(name), 0o700))
 			original := []byte(`{"type":"user","sessionId":"` + id + `","message":{"role":"user","content":"fixture"}}` + "\n" + `{"type":"worktree-state","sessionId":"` + id + `","worktreeSession":{"worktreePath":"/old"}}` + "\n")
-			require.NoError(t, os.WriteFile(name, original, 0600))
+			require.NoError(t, os.WriteFile(name, original, 0o600))
 			sidecar := filepath.Join(strings.TrimSuffix(name, ".jsonl"), "tool-results", "result.txt")
-			require.NoError(t, os.MkdirAll(filepath.Dir(sidecar), 0700))
-			require.NoError(t, os.WriteFile(sidecar, []byte("tool output"), 0600))
+			require.NoError(t, os.MkdirAll(filepath.Dir(sidecar), 0o700))
+			require.NoError(t, os.WriteFile(sidecar, []byte("tool output"), 0o600))
 			result, err := Materialize(t.Context(), cfg, s, cwd)
 			require.NoError(t, err)
 			assert.Equal(t, "installed", result.Status)
@@ -72,12 +72,12 @@ func TestMaterializeConfiguredSources(t *testing.T) {
 				lock, err := remotesync.AcquireMirrorLock(t.Context(), remotesync.MirrorDir(root, "remote"))
 				require.NoError(t, err)
 				defer lock.Close()
-				ctx, cancel := context.WithTimeout(t.Context(), 50*time.Millisecond)
+				ctx, cancel := context.WithTimeout(t.Context(), time.Second)
 				defer cancel()
 				_, err = Materialize(ctx, cfg, s, cwd)
 				require.ErrorIs(t, err, context.DeadlineExceeded)
 			} else {
-				require.NoError(t, os.WriteFile(filepath.Join(filepath.Dir(sidecar), "result2.txt"), []byte("more"), 0600))
+				require.NoError(t, os.WriteFile(filepath.Join(filepath.Dir(sidecar), "result2.txt"), []byte("more"), 0o600))
 				_, err = readLocalSource(t.Context(), filepath.Join(root, "original"), name, id, int64(len(original)+len("tool output")+3))
 				require.ErrorContains(t, err, "exceeds size limit")
 				require.ErrorContains(t, err, "result2.txt")
@@ -139,9 +139,9 @@ func TestMaterializeParentSource(t *testing.T) {
 	root := t.TempDir()
 	home := t.TempDir()
 	name := filepath.Join(root, "project", selected+".jsonl")
-	require.NoError(t, os.MkdirAll(filepath.Dir(name), 0700))
+	require.NoError(t, os.MkdirAll(filepath.Dir(name), 0o700))
 	original := []byte(`{"type":"user","sessionId":"` + parent + `","message":{"content":"parent"}}` + "\n" + `{"type":"worktree-state","sessionId":"` + parent + `","worktreeSession":{}}` + "\n")
-	require.NoError(t, os.WriteFile(name, original, 0600))
+	require.NoError(t, os.WriteFile(name, original, 0o600))
 	cfg := config.Config{InstallationID: "local", AgentDirs: map[parser.AgentType][]string{parser.AgentClaude: {root}}}
 	s := &db.Session{ID: selected, Agent: "claude", Machine: "local", FilePath: &name, SourceSessionID: parent}
 	t.Setenv("CLAUDE_CODE_PROJECT_DIR_NAME", "project")

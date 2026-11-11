@@ -80,7 +80,10 @@ func Materialize(ctx context.Context, cfg config.Config, session *db.Session, cw
 				return Result{}, lockErr
 			}
 			files, err = readLocalSource(ctx, root, name, id, maxSourceBytes)
-			err = errors.Join(err, lock.Close())
+			if err != nil {
+				return Result{}, fmt.Errorf("reading native transcript: %w", errors.Join(err, lock.Close()))
+			}
+			err = lock.Close()
 		}
 	} else {
 		files, err = readConfiguredLocal(ctx, cfg, session, source, id)
@@ -134,7 +137,7 @@ func readConfiguredLocal(ctx context.Context, cfg config.Config, session *db.Ses
 	}
 	provider, ok := parser.NewProvider(parser.AgentClaude, parser.ProviderConfig{Roots: roots, Machine: cfg.InstallationID, SourceMachines: cfg.SourceMachines[parser.AgentClaude]})
 	if !ok {
-		return nil, errors.New("Claude source provider unavailable")
+		return nil, errors.New("native source provider unavailable")
 	}
 	ref, found, err := provider.FindSource(ctx, parser.FindSourceRequest{RawSessionID: id, FullSessionID: session.ID, StoredFilePath: stored, PreferStoredSource: true})
 	if err != nil {
@@ -245,6 +248,7 @@ func readFile(ctx context.Context, name string, limit int64) ([]byte, os.FileInf
 	}
 	return data, before, nil
 }
+
 func readBounded(r io.Reader, limit int64) ([]byte, error) {
 	data, err := io.ReadAll(io.LimitReader(r, limit+1))
 	if err != nil {

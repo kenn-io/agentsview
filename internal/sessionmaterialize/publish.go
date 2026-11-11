@@ -39,7 +39,7 @@ func publishFiles(ctx context.Context, files []installFile) (changed bool, err e
 		} else if same {
 			continue
 		}
-		if err := os.MkdirAll(filepath.Dir(file.path), 0700); err != nil {
+		if err := os.MkdirAll(filepath.Dir(file.path), 0o700); err != nil {
 			return false, err
 		}
 		f, err := os.CreateTemp(filepath.Dir(file.path), ".materialize-*")

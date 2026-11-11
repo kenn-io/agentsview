@@ -30,7 +30,7 @@ func TestPublishCancelledBeforeWriting(t *testing.T) {
 	cancel()
 	name := filepath.Join(t.TempDir(), "primary")
 	_, err := publishFiles(ctx, []installFile{{name, []byte("data")}})
-	assert.ErrorIs(t, err, context.Canceled)
+	require.ErrorIs(t, err, context.Canceled)
 	_, err = os.Stat(name)
 	assert.ErrorIs(t, err, os.ErrNotExist)
 }
@@ -39,7 +39,7 @@ func TestPublishPreflightsAllDestinations(t *testing.T) {
 	dir := t.TempDir()
 	primary := filepath.Join(dir, "primary")
 	dependency := filepath.Join(dir, "dependency")
-	require.NoError(t, os.WriteFile(primary, []byte("existing"), 0600))
+	require.NoError(t, os.WriteFile(primary, []byte("existing"), 0o600))
 	_, err := publishFiles(t.Context(), []installFile{{dependency, []byte("tool")}, {primary, []byte("other")}})
 	require.Error(t, err)
 	_, err = os.Stat(dependency)
