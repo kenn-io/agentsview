@@ -104,7 +104,9 @@ below.
 
 Related actions now share a noun. Existing command names continue to work for
 at least one release. They are hidden from root help and completion, and an
-invoked legacy action prints its replacement on stderr. Flags, arguments,
+invoked legacy action prints its replacement on stderr. `agentsview sync` is
+the exception: it stays a supported shortcut for `source sync`, appears in root
+help, and prints no deprecation notice. Flags, arguments,
 stdout documents, exit codes, HTTP routes, and MCP tools keep their behavior.
 Daemon, SSH sync, browser host, and parser child protocols keep their existing
 launch paths.
@@ -112,7 +114,6 @@ launch paths.
 | Legacy command                             | Preferred command                                                  |
 | ------------------------------------------ | ------------------------------------------------------------------ |
 | `agents [agent...]`                        | `source list [agent...]`                                           |
-| `sync`                                     | `source sync`                                                      |
 | `import`                                   | `source import`                                                    |
 | `chrome setup`                             | `source chrome setup`                                              |
 | `raw-sync ...`                             | `source raw ...`                                                   |

@@ -99,6 +99,12 @@ func groupCommands(root *cobra.Command) {
 		if move.canonical == "session prune" {
 			guardLocalPruneFlags(canonical)
 		}
+		// sync is the most-typed command, so it stays a supported, visible
+		// shortcut instead of a deprecated spelling.
+		if move.legacy == "sync" {
+			legacy.Short += " (shortcut for 'source sync')"
+			continue
+		}
 		markLegacyCommand(legacy, move.legacy, move.canonical)
 		legacy.Hidden = true
 	}
