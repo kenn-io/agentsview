@@ -325,5 +325,6 @@ func TestRenderSessionUsageHuman_AgentRecordedCost(t *testing.T) {
 	b.Reset()
 	require.NoError(t, renderSessionUsageHuman(&b, out))
 	assert.Contains(t, b.String(),
-		"Agent cost:    $0.50 recorded for 3 rows; AgentsView $0.42 (1 priced by the agent's cost) (1 unpriced)")
+		"Agent cost:    the agent recorded $0.50; AgentsView charged $0.42 for the same usage "+
+			"(1 priced from the agent's figure because no catalog rate exists; 1 with no price from either)")
 }

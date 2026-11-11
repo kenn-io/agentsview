@@ -494,18 +494,18 @@ func recordedCostLine(rc *db.SessionRecordedCost) string {
 	if rc == nil {
 		return ""
 	}
-	rows := "rows"
-	if rc.Rows == 1 {
-		rows = "row"
-	}
-	line := fmt.Sprintf("%s recorded for %d %s; AgentsView %s",
-		money.FormatUSD(rc.Recorded, money.DisplayCents), rc.Rows, rows,
+	line := fmt.Sprintf("the agent recorded %s; AgentsView charged %s for the same usage",
+		money.FormatUSD(rc.Recorded, money.DisplayCents),
 		money.FormatUSD(rc.Computed, money.DisplayCents))
+	var notes []string
 	if rc.FallbackRows > 0 {
-		line += fmt.Sprintf(" (%d priced by the agent's cost)", rc.FallbackRows)
+		notes = append(notes, fmt.Sprintf("%d priced from the agent's figure because no catalog rate exists", rc.FallbackRows))
 	}
 	if rc.UnpricedRows > 0 {
-		line += fmt.Sprintf(" (%d unpriced)", rc.UnpricedRows)
+		notes = append(notes, fmt.Sprintf("%d with no price from either", rc.UnpricedRows))
+	}
+	if len(notes) > 0 {
+		line += " (" + strings.Join(notes, "; ") + ")"
 	}
 	return line
 }
