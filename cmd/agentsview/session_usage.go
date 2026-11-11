@@ -604,9 +604,6 @@ func renderSessionUsageHuman(w io.Writer, out *sessionUsageOutput) error {
 	if out.RefreshIncomplete {
 		fmt.Fprintln(w, "Usage refresh is incomplete. Saved totals may be out of date.")
 	}
-	if out.WaitIncomplete {
-		fmt.Fprintln(w, "Waiting for ingestion did not finish. Saved totals may be out of date.")
-	}
 	if line := planUsageLine(out.Agent, out.Plan); line != "" {
 		fmt.Fprintf(w, "%s %s\n", label("Plan usage"), sanitizeTerminal(line))
 	}
