@@ -42,3 +42,44 @@ func TestRawTranscriptPrefixRequiresCompleteRowAgreement(t *testing.T) {
 		})
 	}
 }
+
+func TestRawTranscriptPrefixAcceptsAGrownSessionTotalOnTheSameTranscript(t *testing.T) {
+	total := func(microdollars int64) *db.SessionUsageTotal {
+		return &db.SessionUsageTotal{
+			Source: "claude-cost-state", SubagentScope: "included",
+			Cost: &money.Money{Microdollars: microdollars},
+		}
+	}
+	capture := func(change func(*ingest.PreparedSession)) ingest.PreparedSession {
+		p := ingest.PreparedSession{
+			Session:  db.Session{MessageCount: 1},
+			Messages: []db.Message{{Ordinal: 0, Content: "original"}},
+		}
+		change(&p)
+		return p
+	}
+	for _, tc := range []struct {
+		name          string
+		before, after func(*ingest.PreparedSession)
+		matches       bool
+	}{
+		{"total appended on exit", func(*ingest.PreparedSession) {}, func(p *ingest.PreparedSession) { p.SessionTotal = total(42) }, true},
+		{"total grew", func(p *ingest.PreparedSession) { p.SessionTotal = total(42) }, func(p *ingest.PreparedSession) { p.SessionTotal = total(50) }, true},
+		{"total shrank", func(p *ingest.PreparedSession) { p.SessionTotal = total(50) }, func(p *ingest.PreparedSession) { p.SessionTotal = total(42) }, false},
+		{"same total", func(p *ingest.PreparedSession) { p.SessionTotal = total(42) }, func(p *ingest.PreparedSession) { p.SessionTotal = total(42) }, false},
+		{"changed message", func(*ingest.PreparedSession) {}, func(p *ingest.PreparedSession) {
+			p.SessionTotal = total(42)
+			p.Messages[0].Content = "different"
+		}, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			before, after := capture(tc.before), capture(tc.after)
+			matches, err := rawTranscriptPrefix(before, after)
+			require.NoError(t, err)
+			assert.Equal(t, tc.matches, matches, "earlier capture extended by the later one")
+			reverse, err := rawTranscriptPrefix(after, before)
+			require.NoError(t, err)
+			assert.False(t, matches && reverse, "two captures never extend each other")
+		})
+	}
+}
