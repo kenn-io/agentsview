@@ -398,7 +398,7 @@ func exportBackfillFailure(status db.BackgroundMigrationStatus) error {
 	return fmt.Errorf("project identity evidence backfill failed%s; run `agentsview daemon restart`, then check `agentsview export status`", reason)
 }
 
-func exportDaemonBackfillFailed(ctx context.Context, rt *DaemonRuntime, token string) bool {
+func exportDaemonPing(ctx context.Context, rt *DaemonRuntime, token string) (failed, ok bool) {
 	ctx, cancel := context.WithTimeout(ctx, time.Second)
 	defer cancel()
 	ep := rt.Record.Endpoint()
@@ -408,20 +408,36 @@ func exportDaemonBackfillFailed(ctx context.Context, rt *DaemonRuntime, token st
 	}
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, ep.BaseURL()+rt.BasePath+"/api/ping", nil)
 	if err != nil {
-		return false
+		return false, false
 	}
 	resp, err := client.Do(req)
 	if err != nil {
-		return false
+		return false, false
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
-		return false
+		return false, false
 	}
 	var ping struct {
+		PID    int  `json:"pid"`
 		Failed bool `json:"project_identity_backfill_failed"`
 	}
-	return json.UnmarshalDecode(jsontext.NewDecoder(resp.Body), &ping) == nil && ping.Failed
+	if json.UnmarshalDecode(jsontext.NewDecoder(resp.Body), &ping) != nil || ping.PID != rt.Record.PID {
+		return false, false
+	}
+	return ping.Failed, true
+}
+
+func exportWritableDaemonPing(ctx context.Context, cfg *config.Config, rt **DaemonRuntime) (failed, ok bool) {
+	if *rt != nil {
+		failed, ok = exportDaemonPing(ctx, *rt, cfg.AuthToken)
+	}
+	if !ok {
+		if *rt = FindWritableDaemonRuntime(cfg.DataDir, cfg.AuthToken); *rt != nil {
+			failed, ok = exportDaemonPing(ctx, *rt, cfg.AuthToken)
+		}
+	}
+	return failed, ok
 }
 
 // Allow transient runtime discovery or ping failures before reporting daemon loss.
@@ -431,7 +447,7 @@ func waitForExportBackfill(ctx context.Context, progress io.Writer, cfg *config.
 	if err := startExportDaemon(ctx, cfg); err != nil {
 		return err
 	}
-	var unavailableSince time.Time
+	rt, unavailableSince := (*DaemonRuntime)(nil), time.Time{}
 	for {
 		database, err := openExportReadOnlyDB(ctx, *cfg)
 		if err != nil {
@@ -451,7 +467,8 @@ func waitForExportBackfill(ctx context.Context, progress io.Writer, cfg *config.
 		default:
 			return unknownExportBackfillState(status.State)
 		}
-		if rt := FindWritableDaemonRuntime(cfg.DataDir, cfg.AuthToken); rt == nil {
+		failed, ok := exportWritableDaemonPing(ctx, cfg, &rt)
+		if !ok {
 			if unavailableSince.IsZero() {
 				unavailableSince = time.Now()
 			} else if time.Since(unavailableSince) >= exportDaemonUnavailableGrace {
@@ -459,7 +476,7 @@ func waitForExportBackfill(ctx context.Context, progress io.Writer, cfg *config.
 			}
 		} else {
 			unavailableSince = time.Time{}
-			if exportDaemonBackfillFailed(ctx, rt, cfg.AuthToken) {
+			if failed {
 				return exportBackfillFailure(db.BackgroundMigrationStatus{})
 			}
 		}

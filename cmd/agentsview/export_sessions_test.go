@@ -9,6 +9,8 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -723,14 +725,13 @@ func pendingExportArchive(t *testing.T, archiveOnly bool) string {
 func TestExportSessionsArchiveOnlyPending(t *testing.T) {
 	for _, state := range []string{"pending", "failed"} {
 		t.Run(state, func(t *testing.T) {
-			var path string
 			if state == "pending" {
-				path = pendingExportArchive(t, true)
+				pendingExportArchive(t, true)
 			} else {
 				database := seedExportSessionsArchive(t)
 				require.NoError(t, database.EnableArchiveOnly(t.Context()))
 				require.NoError(t, database.Close())
-				path = filepath.Join(os.Getenv("AGENTSVIEW_DATA_DIR"), "sessions.db")
+				path := filepath.Join(os.Getenv("AGENTSVIEW_DATA_DIR"), "sessions.db")
 				raw, err := sql.Open("sqlite3", path)
 				require.NoError(t, err)
 				_, err = raw.ExecContext(t.Context(), `INSERT INTO background_migrations (name, state, total_items, completed_items, last_error) VALUES ('session_project_identity_snapshots_v1', 'failed', 2, 2, 'completion blocked')`)
@@ -786,18 +787,19 @@ func TestExportWaitDuringDaemonChanges(t *testing.T) {
 		t.Run(mode, func(t *testing.T) {
 			path := pendingExportArchive(t, false)
 			dir := filepath.Dir(path)
-			host, port := testPingServer(t)
-			writeDaemonRuntimeForTest(t, dir, host, port, "test", false)
-			original := listDaemonRuntimeRecords
 			var fail, observed atomic.Bool
-			listDaemonRuntimeRecords = func(store daemonRuntimeStore) ([]daemon.RuntimeRecord, error) {
+			ping := daemon.NewPingHandler(daemon.PingHandlerOptions{Service: daemonService, Version: "test"})
+			ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				if fail.CompareAndSwap(true, false) {
 					observed.Store(true)
-					return nil, errors.New("temporary listing error")
+					http.Error(w, "temporary ping error", http.StatusServiceUnavailable)
+					return
 				}
-				return original(store)
-			}
-			t.Cleanup(func() { listDaemonRuntimeRecords = original })
+				ping.ServeHTTP(w, r)
+			}))
+			t.Cleanup(ts.Close)
+			ep := serverEndpoint(t, ts)
+			writeDaemonRuntimeForTest(t, dir, ep.Host, ep.Port, "test", false)
 			ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
 			defer cancel()
 			progress := make(chan struct{}, 1)
@@ -806,6 +808,7 @@ func TestExportWaitDuringDaemonChanges(t *testing.T) {
 			assert.Empty(t, out.String())
 			switch mode {
 			case "disappears":
+				ts.Close()
 				RemoveDaemonRuntime(dir)
 				err := <-done
 				require.ErrorContains(t, err, "agentsview daemon restart")
@@ -833,6 +836,31 @@ func TestExportWaitDuringDaemonChanges(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestExportWaitUsesSingleDaemonPing(t *testing.T) {
+	path := pendingExportArchive(t, false)
+	dir := filepath.Dir(path)
+	var calls atomic.Int32
+	ping := daemon.NewPingHandler(daemon.PingHandlerOptions{Service: daemonService, Version: "test"})
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		calls.Add(1)
+		ping.ServeHTTP(w, r)
+	}))
+	t.Cleanup(ts.Close)
+	ep := serverEndpoint(t, ts)
+	writeDaemonRuntimeForTest(t, dir, ep.Host, ep.Port, "test", false)
+	ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
+	defer cancel()
+	progress := make(chan struct{}, 1)
+	out, done := exportWaitCommand(t, ctx, exportProgressSignal(progress))
+	waitExportProgress(t, progress, done)
+	before := calls.Load()
+	waitExportProgress(t, progress, done)
+	assert.EqualValues(t, 1, calls.Load()-before)
+	cancel()
+	require.ErrorIs(t, <-done, context.Canceled)
+	assert.Empty(t, out.String())
 }
 
 func stubExportDaemon(t *testing.T, dir string) func() {
@@ -918,6 +946,15 @@ func TestExportWaitReportsUnrecordableFailure(t *testing.T) {
 }
 
 func TestExportDaemonStartupCases(t *testing.T) {
+	for _, version := range []int{15, 16} {
+		t.Run(fmt.Sprintf("older daemon API %d", version), func(t *testing.T) {
+			dir := testDataDir(t)
+			writeLiveRuntime(t, dir, false, withRuntimeVersion("old"), withRuntimeAPIVersion(version))
+			forbidStartBackgroundServeForTransport(t, "incompatible daemon")
+			cfg := config.Config{DataDir: dir}
+			require.ErrorContains(t, startExportDaemon(t.Context(), &cfg), "agentsview daemon restart")
+		})
+	}
 	t.Run("startup error", func(t *testing.T) {
 		dir := testDataDir(t)
 		failure := errors.New("launch failed")
