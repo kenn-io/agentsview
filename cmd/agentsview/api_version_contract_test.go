@@ -70,8 +70,7 @@ func checkAPIVersionContract(apiVersion int, digest string, records []apiVersion
 		if names := byVersion[v]; len(names) > 1 {
 			slices.Sort(names)
 			return fmt.Errorf("API version %d has %d different contract digests (%s); "+
-				"delete the one this PR added (git diff --name-only --diff-filter=A "+
-				"origin/main -- %s lists it), then %s",
+				"delete the one of these in %s that appears in this PR's changed files, then %s",
 				v, len(names), strings.Join(names, ", "), apiVersionRecordDir, move)
 		}
 	}
@@ -140,7 +139,8 @@ func TestCheckAPIVersionContract(t *testing.T) {
 		for _, apiVersion := range []int{16, 15} {
 			err := checkAPIVersionContract(apiVersion, merged, records)
 			require.ErrorContains(t, err, "API version 16 has 2 different contract digests (16-bbbb, 16-cccc)")
-			assert.ErrorContains(t, err, "git diff --name-only --diff-filter=A origin/main -- "+apiVersionRecordDir)
+			assert.ErrorContains(t, err, "delete the one of these in "+apiVersionRecordDir+" that appears in this PR's changed files")
+			assert.NotContains(t, err.Error(), "origin/main")
 			assert.ErrorContains(t, err, "add an empty file 17-dddd, set server.APIVersion to 17")
 		}
 
