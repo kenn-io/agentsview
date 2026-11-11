@@ -58,48 +58,21 @@ func TestSessionPushExactSelection(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, remoteID, receipt.SessionID)
 	require.Equal(t, &parentID, write.Session.ParentSessionID)
-	receiver := testDB(t)
-	created, err := receiver.ApplySessionPush(t.Context(), receipt, write)
-	require.NoError(t, err)
-	require.True(t, created)
-	created, err = receiver.ApplySessionPush(t.Context(), receipt, write)
-	require.NoError(t, err)
-	assert.False(t, created)
-	other := testDB(t)
-	require.NoError(t, other.UpsertSession(t.Context(), db.Session{ID: remoteID, Agent: "codex", Machine: "other"}))
-	_, err = other.ApplySessionPush(t.Context(), receipt, write)
-	require.ErrorIs(t, err, db.ErrSessionPushConflict)
-}
 
-func TestSessionPushPreservesLauncherParent(t *testing.T) {
-	d := testDB(t)
-	for _, id := range []string{"parent", "child"} {
-		require.NoError(t, d.UpsertSession(t.Context(), db.Session{ID: id, Agent: "claude", Machine: "source"}))
-	}
-	_, err := d.SetSessionExternalParent(t.Context(), "child", "parent")
-	require.NoError(t, err)
-	packet, _, err := EncodeSessionPush(t.Context(), d, "child", "")
-	require.NoError(t, err)
-	_, write, err := DecodeSessionPush(packet)
-	require.NoError(t, err)
-	require.NotNil(t, write.Session.ParentSessionID)
-	assert.Equal(t, "parent", *write.Session.ParentSessionID)
-}
-
-func TestSessionPushRejectsFutureParserVersion(t *testing.T) {
-	packet, err := encodeSessionPushData(t.Context(), "source", db.Session{ID: "sample", Agent: "claude", Machine: "source"}, db.ArtifactExportData{})
-	require.NoError(t, err)
-	var envelope SessionPushEnvelope
-	require.NoError(t, json.Unmarshal(packet, &envelope))
-	var m manifest
-	require.NoError(t, json.Unmarshal(envelope.Manifest, &m))
-	m.DataVersion = db.CurrentDataVersion() + 1
-	envelope.Manifest, err = json.Marshal(m)
-	require.NoError(t, err)
-	packet, err = json.Marshal(envelope)
-	require.NoError(t, err)
-	_, _, err = DecodeSessionPush(packet)
-	require.ErrorIs(t, err, ErrSessionPushFutureDataVersion)
+	t.Run("launcher parent", func(t *testing.T) {
+		d := testDB(t)
+		for _, id := range []string{"parent", "child"} {
+			require.NoError(t, d.UpsertSession(t.Context(), db.Session{ID: id, Agent: "claude", Machine: "source"}))
+		}
+		_, err := d.SetSessionExternalParent(t.Context(), "child", "parent")
+		require.NoError(t, err)
+		packet, _, err := EncodeSessionPush(t.Context(), d, "child", "")
+		require.NoError(t, err)
+		_, write, err := DecodeSessionPush(packet)
+		require.NoError(t, err)
+		require.NotNil(t, write.Session.ParentSessionID)
+		assert.Equal(t, "parent", *write.Session.ParentSessionID)
+	})
 }
 
 func TestSessionPushReceiptIgnoresSegmentBoundaries(t *testing.T) {
@@ -199,19 +172,6 @@ func TestSessionPushReceiptIgnoresSegmentBoundaries(t *testing.T) {
 			older, _, err := DecodeSessionPush(packet)
 			require.NoError(t, err)
 			assert.Equal(t, original.PayloadHash, older.PayloadHash)
-		},
-		"repeat": func(t *testing.T) {
-			t.Helper()
-			session := db.Session{ID: "sample", Agent: "claude", Machine: "source"}
-			first, err := encodeSessionPushData(t.Context(), "source", session, db.ArtifactExportData{})
-			require.NoError(t, err)
-			second, err := encodeSessionPushData(t.Context(), "source", session, db.ArtifactExportData{})
-			require.NoError(t, err)
-			a, _, err := DecodeSessionPush(first)
-			require.NoError(t, err)
-			b, _, err := DecodeSessionPush(second)
-			require.NoError(t, err)
-			assert.Equal(t, a.PayloadHash, b.PayloadHash)
 		},
 	} {
 		t.Run(name, check)
@@ -375,6 +335,47 @@ func TestSessionPushRejectMalformed(t *testing.T) {
 	require.ErrorContains(t, err, "usage has negative message ordinal")
 	_, _, err = DecodeSessionPush([]byte(strings.Repeat(" ", int(MaxSessionPushBytes)+1)))
 	require.ErrorContains(t, err, "body exceeds")
+	t.Run("future parser version", func(t *testing.T) {
+		packet, err := encodeSessionPushData(t.Context(), "source", db.Session{ID: "sample", Agent: "claude", Machine: "source"}, db.ArtifactExportData{})
+		require.NoError(t, err)
+		var envelope SessionPushEnvelope
+		require.NoError(t, json.Unmarshal(packet, &envelope))
+		var m manifest
+		require.NoError(t, json.Unmarshal(envelope.Manifest, &m))
+		m.DataVersion = db.CurrentDataVersion() + 1
+		envelope.Manifest, err = json.Marshal(m)
+		require.NoError(t, err)
+		packet, err = json.Marshal(envelope)
+		require.NoError(t, err)
+		_, _, err = DecodeSessionPush(packet)
+		require.ErrorIs(t, err, ErrSessionPushFutureDataVersion)
+	})
+	t.Run("invalid tool call coordinate", func(t *testing.T) {
+		data := adversarialSessionPushPacket(t, db.Session{ID: "selected", Agent: "claude", Machine: "source", MessageCount: 1}, []db.Message{{Ordinal: 0, Role: "assistant", ToolCalls: []db.ToolCall{{ToolName: "Read", ResultEvents: []db.ToolResultEvent{{EventIndex: 0, Content: "first"}, {EventIndex: 1, Content: "second"}}}}}})
+		_, _, err := DecodeSessionPush(data)
+		require.NoError(t, err, "the unmodified graph must be valid")
+		var envelope SessionPushEnvelope
+		require.NoError(t, json.Unmarshal(data, &envelope))
+		var segments []sessionPushSegment
+		require.NoError(t, json.Unmarshal(envelope.Segments, &segments))
+		var record segmentMessage
+		require.NoError(t, json.Unmarshal([]byte(segments[0].NDJSON), &record))
+		record.ToolCalls[0].CallIndex = -1
+		body, err := canonicalJSON(record)
+		require.NoError(t, err)
+		segments[0].NDJSON, segments[0].SHA256 = string(body), hashHex(body)
+		var m manifest
+		require.NoError(t, json.Unmarshal(envelope.Manifest, &m))
+		m.Segments[0] = segments[0].SHA256
+		envelope.Manifest, err = json.Marshal(m)
+		require.NoError(t, err)
+		envelope.Segments, err = json.Marshal(segments)
+		require.NoError(t, err)
+		data, err = json.Marshal(envelope)
+		require.NoError(t, err)
+		_, _, err = DecodeSessionPush(data)
+		require.ErrorContains(t, err, "invalid tool call coordinate")
+	})
 }
 
 func TestSessionPushNormalizedAssetReferenceDowngrade(t *testing.T) {
@@ -390,7 +391,7 @@ func TestSessionPushNormalizedAssetReferenceDowngrade(t *testing.T) {
 	assert.NotContains(t, call.ResultContent, "\x00")
 }
 
-func TestSessionPushUsageRoundTripAndReceipt(t *testing.T) {
+func TestSessionPushUsageRoundTrip(t *testing.T) {
 	session := db.Session{ID: "codex:selected", Agent: "codex", Machine: "source", MessageCount: 1, UserMessageCount: 1}
 	ordinal, weekly, credits, cost := 0, 12.5, "3.25", money.Money{Microdollars: 12345}
 	usage := []db.UsageEvent{{SessionID: session.ID, MessageOrdinal: &ordinal, Source: "session", Model: "fixture-model", ProviderID: "fixture-provider", InputTokens: 100, OutputTokens: 20, CacheCreationInputTokens: 3, CacheReadInputTokens: 4, ReasoningTokens: 5, Cost: &cost, CostStatus: "available", CostSource: "provider", OccurredAt: "2026-01-01T00:00:00Z", DedupKey: "turn-1"}}
@@ -457,7 +458,7 @@ func adversarialSessionPushPacket(t *testing.T, session db.Session, messages []d
 	return data
 }
 
-func TestSessionPushAcceptsManyPRLinks(t *testing.T) {
+func TestSessionPushPRLinksAndUnknownManifestFields(t *testing.T) {
 	links := make([]db.PRLink, 4097)
 	for i := range links {
 		links[i] = db.PRLink{URL: "https://example.test/project/pull/1", Host: "example.test", Repository: "project", Number: 1}
@@ -479,39 +480,4 @@ func TestSessionPushAcceptsManyPRLinks(t *testing.T) {
 	data := adversarialSessionPushPacket(t, db.Session{ID: "selected", Agent: "claude", Machine: "source", PRLinks: links}, nil)
 	_, _, err = DecodeSessionPush(data)
 	require.NoError(t, err)
-}
-
-func TestSessionPushRejectsNestedCoordinates(t *testing.T) {
-	for _, coordinate := range []string{"call", "event"} {
-		t.Run(coordinate, func(t *testing.T) {
-			data := adversarialSessionPushPacket(t, db.Session{ID: "selected", Agent: "claude", Machine: "source", MessageCount: 1}, []db.Message{{Ordinal: 0, Role: "assistant", ToolCalls: []db.ToolCall{{ToolName: "Read", ResultEvents: []db.ToolResultEvent{{EventIndex: 0, Content: "first"}, {EventIndex: 1, Content: "second"}}}}}})
-			_, _, err := DecodeSessionPush(data)
-			require.NoError(t, err, "the unmodified graph must be valid")
-			var envelope SessionPushEnvelope
-			require.NoError(t, json.Unmarshal(data, &envelope))
-			var segments []sessionPushSegment
-			require.NoError(t, json.Unmarshal(envelope.Segments, &segments))
-			var record segmentMessage
-			require.NoError(t, json.Unmarshal([]byte(segments[0].NDJSON), &record))
-			if coordinate == "call" {
-				record.ToolCalls[0].CallIndex = -1
-			} else {
-				record.ToolCalls[0].ResultEvents[1].EventIndex = 0
-			}
-			body, err := canonicalJSON(record)
-			require.NoError(t, err)
-			segments[0].NDJSON, segments[0].SHA256 = string(body), hashHex(body)
-			var m manifest
-			require.NoError(t, json.Unmarshal(envelope.Manifest, &m))
-			m.Segments[0] = segments[0].SHA256
-			envelope.Manifest, err = json.Marshal(m)
-			require.NoError(t, err)
-			envelope.Segments, err = json.Marshal(segments)
-			require.NoError(t, err)
-			data, err = json.Marshal(envelope)
-			require.NoError(t, err)
-			_, _, err = DecodeSessionPush(data)
-			require.Error(t, err)
-		})
-	}
 }

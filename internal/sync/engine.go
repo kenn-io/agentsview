@@ -11255,20 +11255,8 @@ func (e *Engine) collectAndBatchWithOptions(
 		}
 		resultIDs = e.applyIDPrefixToSessionIDs(resultIDs)
 		activeResultIDs, sourceCompletionSkipped := e.partitionIntentionalSourceSkips(ctx, resultIDs, reserved)
-		unreservedResultIDs := make([]string, 0, len(resultIDs))
-		for _, id := range resultIDs {
-			if !reserved[id] {
-				unreservedResultIDs = append(unreservedResultIDs, id)
-			}
-		}
-		activeExcluded := excluded[:0]
-		for _, id := range excluded {
-			if !reserved[id] {
-				activeExcluded = append(activeExcluded, id)
-			}
-		}
 		children, err := e.db.SubagentChildSessionIDs(completionCtx, append(
-			append([]string{}, activeExcluded...), unreservedResultIDs...,
+			append([]string{}, excluded...), resultIDs...,
 		))
 		if err != nil {
 			log.Printf("list pre-write subagent children: %v", err)
@@ -11411,18 +11399,12 @@ func (e *Engine) collectAndBatchWithOptions(
 			storedCwd:  r.sourceCwdStored,
 			storedOK:   r.sourceCwdStoredOK,
 		}
-		allowed := make([]parser.ParseResult, 0, len(r.results))
+		allowed, vetoed := e.splitResultsByCwdFilter(r.results, sourceCwd)
 		activeResults := make([]parser.ParseResult, 0, len(r.results))
-		vetoed := 0
 		for _, result := range r.results {
-			if reserved[applyIDPrefixToID(e.idPrefix, result.Session.ID)] {
-				allowed = append(allowed, result)
-				continue
+			if !reserved[applyIDPrefixToID(e.idPrefix, result.Session.ID)] {
+				activeResults = append(activeResults, result)
 			}
-			activeResults = append(activeResults, result)
-			matches, rejected := e.splitResultsByCwdFilter([]parser.ParseResult{result}, sourceCwd)
-			allowed = append(allowed, matches...)
-			vetoed += rejected
 		}
 		if len(r.results) > 0 && len(activeResults) == 0 {
 			stats.sessionPushReservedFiles++
@@ -22193,20 +22175,8 @@ func (e *Engine) processAndWriteSessionFile(
 	}
 	resultIDs = e.applyIDPrefixToSessionIDs(resultIDs)
 	activeResultIDs, sourceCompletionSkipped := e.partitionIntentionalSourceSkips(ctx, resultIDs, reserved)
-	unreservedResultIDs := make([]string, 0, len(resultIDs))
-	for _, id := range resultIDs {
-		if !reserved[id] {
-			unreservedResultIDs = append(unreservedResultIDs, id)
-		}
-	}
-	activeExcluded := excluded[:0]
-	for _, id := range excluded {
-		if !reserved[id] {
-			activeExcluded = append(activeExcluded, id)
-		}
-	}
 	priorChildren, childErr := e.db.SubagentChildSessionIDs(ctx,
-		append(append([]string{}, activeExcluded...), unreservedResultIDs...),
+		append(append([]string{}, excluded...), resultIDs...),
 	)
 	if childErr != nil {
 		return false, sessionsChanged, fmt.Errorf(

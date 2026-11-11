@@ -3419,7 +3419,10 @@ func updateSessionIncrementalTx(ctx context.Context,
 			has_total_output_tokens = ?,
 			has_peak_context_tokens = ?,
 			termination_status = ?,
-			-- Mark incremental writes so parse-diff can classify skew.
+			-- Mark the row as last written by the incremental-append path.
+			-- The full-replace writer (upsertSessionArgs) resets this to
+			-- false; parse-diff reads it to classify benign
+			-- incremental-vs-full skew.
 			last_write_incremental = 1
 		WHERE id = ?`,
 		update.EndedAt, update.MsgCount, update.UserMsgCount,

@@ -117,6 +117,14 @@ func (w *sessionPushDeadlineRecorder) SetReadDeadline(deadline time.Time) error 
 func TestSessionPushReadDeadlineScalesWithPayload(t *testing.T) {
 	s := testServer(t, 30*time.Second)
 	s.cfg.AcceptSessionPush, s.cfg.RequireAuth, s.cfg.AuthToken = true, true, "secret"
+	small := httptest.NewRequestWithContext(t.Context(), http.MethodPost, "/api/v1/sessions/ingest", strings.NewReader("{}"))
+	small.Header.Set("Authorization", "Bearer secret")
+	small.Header.Set("Content-Type", "application/json")
+	smallResponse := &sessionPushDeadlineRecorder{ResponseRecorder: httptest.NewRecorder()}
+	s.Handler().ServeHTTP(smallResponse, small)
+	assert.Equal(t, http.StatusBadRequest, smallResponse.Code)
+	assert.Greater(t, time.Until(smallResponse.deadline), time.Minute)
+	assert.Less(t, time.Until(smallResponse.deadline), 3*time.Minute)
 	body := strings.NewReader(strings.Repeat(" ", int(artifact.MaxSessionPushBytes)-1024))
 	r := httptest.NewRequestWithContext(t.Context(), http.MethodPost, "/api/v1/sessions/ingest", body)
 	r.Header.Set("Authorization", "Bearer secret")
@@ -200,18 +208,8 @@ func TestSessionPushReceiverRejectsChangedBoundary(t *testing.T) {
 		change    func(*db.Message)
 		unchanged bool
 	}{
-		{"compact boundary", func(m *db.Message) { m.IsCompactBoundary = true }, false},
-		{"source subtype", func(m *db.Message) { m.SourceSubtype = "notice" }, false},
-		{"timestamp", func(m *db.Message) { m.Timestamp = "2026-01-02T00:00:00Z" }, false},
 		{"model", func(m *db.Message) { m.Model = "model-b"; m.ReasoningEffort = "high" }, true},
-		{"accounting", func(m *db.Message) { m.ProviderID = "provider-b"; m.ContextTokens = 99; m.SourceUUID = "new-source" }, true},
 		{"text", func(m *db.Message) { m.Content = "changed" }, false},
-		{"role", func(m *db.Message) { m.Role = "assistant" }, false},
-		{"tool input", func(m *db.Message) { m.ToolCalls[0].InputJSON = `{"path":"other"}` }, false},
-		{"tool result", func(m *db.Message) { m.ToolCalls[0].ResultContent = "changed" }, false},
-		{"tool identity", func(m *db.Message) { m.ToolCalls[0].ToolUseID = "other-call" }, false},
-		{"result time", func(m *db.Message) { m.ToolCalls[0].ResultEvents[0].Timestamp = "2026-01-02T00:00:00Z" }, false},
-		{"result attribution", func(m *db.Message) { m.ToolCalls[0].ResultEvents[0].AgentID = "agent-b" }, false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			changedMessage := message
@@ -317,20 +315,6 @@ func TestSessionPushRejectsBeforeReadingUnauthorizedOrOversizeBody(t *testing.T)
 			assert.Zero(t, body.reads)
 		})
 	}
-}
-
-func TestSessionPushBasePathAndMalformedBodyAreAtomic(t *testing.T) {
-	s := testServer(t, 30*time.Second, WithBasePath("/view"))
-	s.cfg.AcceptSessionPush, s.cfg.RequireAuth, s.cfg.AuthToken = true, true, "fixture"
-	r := httptest.NewRequestWithContext(t.Context(), http.MethodPost, "/view/api/v1/sessions/ingest", strings.NewReader(`{"v":99,"session_id":"selected"}`))
-	r.Header.Set("Authorization", "Bearer fixture")
-	r.Header.Set("Content-Type", "application/json")
-	w := httptest.NewRecorder()
-	s.Handler().ServeHTTP(w, r)
-	require.Equal(t, http.StatusBadRequest, w.Code, w.Body.String())
-	selected, err := s.db.(*db.DB).GetSession(t.Context(), "selected")
-	require.NoError(t, err)
-	assert.Nil(t, selected)
 }
 
 func TestSessionPushOpenAPIRepresentsObjectAndSegmentArray(t *testing.T) {

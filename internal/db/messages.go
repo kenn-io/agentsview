@@ -2568,6 +2568,9 @@ func (db *DB) replaceSessionContent(ctx context.Context,
 
 	db.mu.Lock()
 	defer db.mu.Unlock()
+
+	// Same diff-vs-full decision as ReplaceSessionMessages: this is
+	// the hot path for streaming chunk-merge full-parse fallbacks.
 	plan, stored, useDiff, storedLoaded := db.planStoredMessageDiff(
 		ctx, sessionID, msgs,
 	)

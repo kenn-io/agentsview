@@ -22,18 +22,6 @@ func sessionPushFixture(id string) (SessionPushReceipt, SessionBatchWrite) {
 	}
 }
 
-func TestSessionPushRetryRequiresCurrentOwnership(t *testing.T) {
-	d := testDB(t)
-	receipt, write := sessionPushFixture("snapshot")
-	_, err := d.ApplySessionPush(t.Context(), receipt, write)
-	require.NoError(t, err)
-	// Installation identity adoption can change the session machine after ingest.
-	_, err = d.getWriter().ExecContext(t.Context(), `UPDATE sessions SET machine='different-owner' WHERE id='snapshot'`)
-	require.NoError(t, err)
-	_, err = d.ApplySessionPush(t.Context(), receipt, write)
-	require.ErrorIs(t, err, ErrSessionPushConflict)
-}
-
 func TestSessionPushArchiveVersionSupportsReceipts(t *testing.T) {
 	d := testDB(t)
 	var version int
@@ -123,7 +111,7 @@ func TestSessionPushCreatesAndRetryPreservesCuration(t *testing.T) {
 }
 
 func TestSessionPushConflictsDoNotOverwrite(t *testing.T) {
-	for _, kind := range []string{"hash", "origin", "unowned", "trash", "deleted", "excluded", "inherited-trash", "retry"} {
+	for _, kind := range []string{"hash", "origin", "unowned", "trash", "deleted", "excluded", "inherited-trash", "retry", "machine-adopted"} {
 		t.Run(kind, func(t *testing.T) {
 			d := testDB(t)
 			ctx := t.Context()
@@ -145,6 +133,9 @@ func TestSessionPushConflictsDoNotOverwrite(t *testing.T) {
 				require.True(t, created)
 			}
 			switch kind {
+			case "machine-adopted":
+				_, err := d.getWriter().ExecContext(ctx, `UPDATE sessions SET machine='different-owner' WHERE id=?`, id)
+				require.NoError(t, err)
 			case "hash":
 				receipt.PayloadHash = strings.Repeat("b", 64)
 			case "origin":

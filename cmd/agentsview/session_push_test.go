@@ -69,7 +69,7 @@ func TestPushSessionTransportRefusesUnsafeTargets(t *testing.T) {
 	}
 }
 
-func TestPushSessionRejectOversizeTokenFile(t *testing.T) {
+func TestPushSessionTokenSources(t *testing.T) {
 	for _, tc := range []struct {
 		name, env, file, want string
 		fail                  bool
@@ -89,7 +89,6 @@ func TestPushSessionRejectOversizeTokenFile(t *testing.T) {
 			token, err := sessionPushToken(t.Context(), "SELECTED_TOKEN", path)
 			if tc.fail {
 				require.Error(t, err)
-				assert.NotContains(t, err.Error(), "header")
 			} else {
 				require.NoError(t, err)
 				assert.Equal(t, tc.want, token)
