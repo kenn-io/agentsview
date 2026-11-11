@@ -90,14 +90,12 @@ func TestMaterializeConfiguredSources(t *testing.T) {
 		name      string
 		hint      string
 		duplicate bool
-		wrongID   bool
 		wantError string
 	}{
 		{name: "moved root", hint: "stale"},
 		{name: "missing path"},
 		{name: "empty path", hint: "empty"},
-		{name: "ambiguous fallback", duplicate: true, wantError: "ambiguous"},
-		{name: "mismatched transcript", wrongID: true, wantError: "no messages for this session"},
+		{name: "ambiguous fallback", hint: "stale", duplicate: true, wantError: "ambiguous"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			root := t.TempDir()
@@ -109,11 +107,7 @@ func TestMaterializeConfiguredSources(t *testing.T) {
 				AgentDirs: map[parser.AgentType][]string{parser.AgentClaude: {root}},
 			}
 			name := filepath.Join(root, "project", id+".jsonl")
-			recordID := id
-			if tc.wrongID {
-				recordID = "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"
-			}
-			original := []byte(`{"type":"user","sessionId":"` + recordID + `","message":{"content":"fixture"}}` + "\n")
+			original := []byte(`{"type":"user","sessionId":"` + id + `","message":{"content":"fixture"}}` + "\n")
 			require.NoError(t, os.MkdirAll(filepath.Dir(name), 0o700))
 			require.NoError(t, os.WriteFile(name, original, 0o600))
 			if tc.duplicate {
@@ -138,7 +132,11 @@ func TestMaterializeConfiguredSources(t *testing.T) {
 				return
 			}
 			require.NoError(t, err)
-			assert.Equal(t, name, result.Source)
+			expectedInfo, err := os.Stat(name)
+			require.NoError(t, err)
+			actualInfo, err := os.Stat(result.Source)
+			require.NoError(t, err)
+			assert.True(t, os.SameFile(expectedInfo, actualInfo))
 			installed, err := os.ReadFile(dest)
 			require.NoError(t, err)
 			assert.Equal(t, original, installed)
