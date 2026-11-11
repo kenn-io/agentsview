@@ -376,7 +376,7 @@ func (v *liveVectorServing) activate(deployment config.VectorEmbeddingsServerCon
 	}
 	if err == nil && builtin && !automatic {
 		if err := embedlocal.RecordChoice(); err != nil {
-			log.Printf("search by meaning: record shared choice: %v", err)
+			return fmt.Errorf("record shared choice: %w", err)
 		}
 	}
 	return err

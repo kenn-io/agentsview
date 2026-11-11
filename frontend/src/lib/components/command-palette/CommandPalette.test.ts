@@ -562,7 +562,10 @@ describe("CommandPalette", () => {
     },
   );
 
-  it.each(["conflict", "started"])("handles setup %s", async (result) => {
+  it.each([
+    { result: "conflict", name: "refreshes status after a setup conflict" },
+    { result: "started", name: "switches to semantic search after setup starts" },
+  ])("$name", async ({ result }) => {
     const setup = {
       enabled: false,
       action: "turn-on",

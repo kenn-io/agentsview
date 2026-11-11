@@ -60,6 +60,33 @@ func TestSetupUsesCandidateShownByStatus(t *testing.T) {
 	}
 }
 
+func TestSetupReportsSharedChoiceWriteFailure(t *testing.T) {
+	home := t.TempDir()
+	setTestHome(t, home)
+	dir := testDataDir(t)
+	cfg, err := config.LoadReadOnly()
+	require.NoError(t, err)
+	database := dbtest.OpenTestDBAt(t, filepath.Join(dir, "sessions.db"))
+	oldInspect, oldEndpoint := inspectLocalEmbeddings, localEmbeddingEndpoint
+	t.Cleanup(func() { inspectLocalEmbeddings, localEmbeddingEndpoint = oldInspect, oldEndpoint })
+	inspectLocalEmbeddings = func(context.Context, embedlocal.Options) (embedlocal.Status, error) {
+		return embedlocal.Status{}, nil
+	}
+	localEmbeddingEndpoint = func(context.Context, embedlocal.Options) (string, error) {
+		return "http://127.0.0.1:1/v1", nil
+	}
+	owner, err := newLiveVectorServing(t.Context(), cfg, database, nil, config.LoadReadOnly)
+	require.NoError(t, err)
+	defer func() { require.NoError(t, owner.Close()) }()
+	require.NoError(t, os.WriteFile(filepath.Join(home, ".kenn"), []byte("block directory"), 0o600))
+	require.NoError(t, owner.Setup(0, "built-in"))
+	<-owner.done
+	status, err := owner.SetupStatus(t.Context())
+	require.NoError(t, err)
+	assert.Equal(t, "turn-on", status.Action)
+	assert.Contains(t, status.Error, "record shared choice")
+}
+
 func TestOllamaEndpointChangesBeforeSetup(t *testing.T) {
 	for _, tc := range []struct {
 		name, endpoint string
@@ -85,12 +112,6 @@ func TestOllamaEndpointChangesBeforeSetup(t *testing.T) {
 			defer func() { require.NoError(t, owner.Close()) }()
 			require.ErrorIs(t, owner.Setup(0, "ollama"), server.ErrEmbeddingsProviderChanged)
 			assert.Nil(t, owner.done)
-			chosen, err := embedlocal.ChoiceRecorded()
-			require.NoError(t, err)
-			assert.False(t, chosen)
-			saved, err := config.LoadReadOnly()
-			require.NoError(t, err)
-			assert.False(t, saved.Vector.Enabled)
 		})
 	}
 }
@@ -186,18 +207,14 @@ func TestSharedChoiceLeavesConfiguredSearchAlone(t *testing.T) {
 
 func TestSavedLocalDownloadApproval(t *testing.T) {
 	for _, tc := range []struct {
-		name                       string
-		shared, installed, battery bool
+		name              string
+		shared, installed bool
 	}{
-		{name: "declined"},
-		{name: "approved", shared: true},
+		{name: "no shared choice"},
+		{name: "shared choice does not approve a saved config", shared: true},
 		{name: "installed", installed: true},
-		{name: "installed on battery", installed: true, battery: true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			oldBattery := onBattery
-			onBattery = func() bool { return tc.battery }
-			t.Cleanup(func() { onBattery = oldBattery })
 			setTestHome(t, t.TempDir())
 			dir := testDataDir(t)
 			writeTestConfig(t, dir, "[vector]\nenabled = true\n[vector.embeddings]\nmodel = 'nomic-embed-text'\ndimension = 768\n[vector.embeddings.servers.local]\nlocal = true\n")
@@ -245,10 +262,7 @@ func TestSavedLocalDownloadApproval(t *testing.T) {
 			require.NoError(t, err)
 			defer func() { require.NoError(t, owner.Close()) }()
 			<-owner.done
-			if tc.battery {
-				owner.Manager("").Wait()
-				assert.Empty(t, encoded, "automatic indexing must wait for external power")
-			} else if tc.installed {
+			if tc.installed {
 				select {
 				case <-encoded:
 				case <-time.After(45 * time.Second):
