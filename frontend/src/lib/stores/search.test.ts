@@ -1,3 +1,5 @@
+/// <reference types="node" />
+
 import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test";
 import { createServer } from "node:http";
 import { SearchService } from "../api/generated/index.js";
