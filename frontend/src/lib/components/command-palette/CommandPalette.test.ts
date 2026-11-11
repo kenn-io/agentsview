@@ -564,6 +564,7 @@ describe("CommandPalette", () => {
 
   it.each([
     { result: "conflict", name: "refreshes status after a setup conflict" },
+    { result: "running", name: "switches to semantic search when setup is already running" },
     { result: "started", name: "switches to semantic search after setup starts" },
   ])("$name", async ({ result }) => {
     const setup = {
@@ -585,6 +586,10 @@ describe("CommandPalette", () => {
     if (result === "conflict") {
       mockEmbeddingsService.postApiV1EmbeddingsSetup.mockRejectedValue(
         new ApiError(409, "provider changed", "embeddings_provider_changed"),
+      );
+    } else if (result === "running") {
+      mockEmbeddingsService.postApiV1EmbeddingsSetup.mockRejectedValue(
+        new ApiError(409, "embedding build already running", "embeddings_build_running"),
       );
     } else {
       mockEmbeddingsService.postApiV1EmbeddingsSetup.mockResolvedValue({ started: true });

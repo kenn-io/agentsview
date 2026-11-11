@@ -368,10 +368,8 @@ func (v *liveVectorServing) activate(deployment config.VectorEmbeddingsServerCon
 				return err
 			}
 			server.Endpoint = pinnedEndpoint
-			servingCfg.Vector.Embeddings.Servers = maps.Clone(cfg.Vector.Embeddings.Servers)
-			if servingCfg.Vector.Embeddings.Servers == nil {
-				servingCfg.Vector.Embeddings.Servers = make(map[string]config.VectorEmbeddingsServerConfig)
-			}
+			servingCfg.Vector.Embeddings.Servers = map[string]config.VectorEmbeddingsServerConfig{}
+			maps.Copy(servingCfg.Vector.Embeddings.Servers, cfg.Vector.Embeddings.Servers)
 			servingCfg.Vector.Embeddings.Servers[name] = server
 		}
 		// Opening can wait on another process's write lock; status stays available.
