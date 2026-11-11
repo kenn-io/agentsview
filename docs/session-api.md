@@ -1280,11 +1280,13 @@ without waiting for startup ingestion. The CLI requests this with
 returns archived totals with a warning; JSON sets `refresh_incomplete: true`.
 A missing daemon ID returns a retry error while `GET /api/v1/sync/status`
 reports `startup_pending`, `archive_stale`, or `sync_pending`. Once all three
-are clear, it returns exit 2. Scheduled ingestion owns retries. Pass `--wait`
-to wait up to 30 seconds for these states to clear and resolve the ID again.
-The same budget covers refresh retries when the daemon confirms the parent
-refresh did not start. If that wait expires after a refused refresh, the command
-reads saved totals and marks the refresh incomplete.
+are clear, it returns exit 2. Pass `--wait` to give HTTP lookup, ingestion,
+and refresh a shared 30-second budget after daemon discovery. When startup is
+deferred, combined usage starts it once; it does not start an archive rebuild.
+After pending work clears, the command resolves the ID again. Only a confirmed
+parent lock refusal permits a refresh retry. If waiting fails or expires, the
+command reads available saved totals and marks an incomplete refresh. An ID
+that is still absent while work remains pending returns a retry error.
 
 Daemon API 15 adds `sync_pending`, which stays true while ingestion catches up
 after an idle period. Older local clients must upgrade to interpret it. The
@@ -1293,8 +1295,10 @@ are logged. Archive responses carry `X-Agentsview-Archive-Stale: true` while
 catch-up is incomplete. A required parser rebuild uses the stale header
 independently.
 
-HTTP `--own-only` and `--no-sync` read only the archive and return exit 2 for
-missing IDs. Direct mode still refreshes the named transcript. Combined HTTP
+HTTP `--own-only` and `--no-sync` read only the archive. With `--wait`, they
+observe pending work without starting sync. Direct and PostgreSQL reads do not
+wait for a daemon. HTTP `--wait` requires daemon API 16; upgrade or restart
+an older server. Direct mode still refreshes the named transcript. Combined HTTP
 refresh requires daemon API 12; upgrade or restart older servers, or use
 `--no-sync`. Archived combined reads require API 6. `POST /api/v1/sessions/sync`
 returns HTTP 409 for a stale local archive for every caller, including

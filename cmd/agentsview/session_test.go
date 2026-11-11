@@ -2697,6 +2697,9 @@ func TestSessionUsageWait(t *testing.T) {
 }
 
 func TestSessionUsageWaitExpiresAfterRefusedRefresh(t *testing.T) {
+	originalTimeout := sessionUsageWaitTimeout
+	sessionUsageWaitTimeout = 100 * time.Millisecond //nolint:kennlint // deadlinetest: verifies wait expiry while the daemon remains busy
+	t.Cleanup(func() { sessionUsageWaitTimeout = originalTimeout })
 	ts, _ := newRemoteUsageServer(t, remoteUsageSpec{canonicalID: "remote-session"})
 	original := ts.Config.Handler
 	syncs := 0
@@ -2719,5 +2722,173 @@ func TestSessionUsageWaitExpiresAfterRefusedRefresh(t *testing.T) {
 	assert.Equal(t, tokenUseExitOK, code)
 	assert.Equal(t, 42, out.TotalOutputTokens)
 	assert.True(t, out.RefreshIncomplete)
-	assert.Greater(t, syncs, 1)
+	assert.Equal(t, 1, syncs)
+}
+
+func TestSessionUsageWaitPendingFallback(t *testing.T) {
+	originalTimeout := sessionUsageWaitTimeout
+	sessionUsageWaitTimeout = 100 * time.Millisecond //nolint:kennlint // deadlinetest: verifies wait expiry while the daemon remains busy
+	t.Cleanup(func() { sessionUsageWaitTimeout = originalTimeout })
+	for _, missing := range []bool{false, true} {
+		t.Run(fmt.Sprintf("missing=%v", missing), func(t *testing.T) {
+			ts, _ := newRemoteUsageServer(t, remoteUsageSpec{canonicalID: "remote-session"})
+			original := ts.Config.Handler
+			ts.Config.Handler = http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if r.URL.Path == "/api/v1/sync/status" {
+					writeJSONResponse(w, `{"archive_stale":true}`)
+					return
+				}
+				if missing && r.URL.Path == "/api/v1/sessions/remote-session" {
+					http.NotFound(w, r)
+					return
+				}
+				original.ServeHTTP(w, r)
+			})
+			out, code, err := httpSessionUsageData(t.Context(), ts.URL, "", sessionUsageQuery{SessionID: "remote-session", Wait: true})
+			if missing {
+				require.ErrorContains(t, err, "waiting for session usage")
+				assert.Nil(t, out)
+				return
+			}
+			require.NoError(t, err)
+			require.NotNil(t, out)
+			assert.Equal(t, tokenUseExitOK, code)
+			assert.Equal(t, 42, out.TotalOutputTokens)
+			assert.True(t, out.RefreshIncomplete)
+		})
+	}
+}
+
+func TestSessionUsageWaitArchiveOnly(t *testing.T) {
+	for _, ownOnly := range []bool{false, true} {
+		t.Run(fmt.Sprintf("ownOnly=%v", ownOnly), func(t *testing.T) {
+			ts, _ := newRemoteUsageServer(t, remoteUsageSpec{canonicalID: "remote-session"})
+			original := ts.Config.Handler
+			statuses, syncs := 0, 0
+			ts.Config.Handler = http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				switch r.URL.Path {
+				case "/api/v1/sync/status":
+					statuses++
+					if statuses == 1 {
+						writeJSONResponse(w, `{"sync_pending":true}`)
+					} else {
+						writeJSONResponse(w, `{}`)
+					}
+					return
+				case "/api/v1/sessions/remote-session":
+					if statuses < 2 {
+						http.NotFound(w, r)
+						return
+					}
+				case "/api/v1/sessions/sync", "/api/v1/sync":
+					syncs++
+				}
+				original.ServeHTTP(w, r)
+			})
+			out, code, err := httpSessionUsageData(t.Context(), ts.URL, "", sessionUsageQuery{SessionID: "remote-session", Wait: true, OwnOnly: ownOnly, NoSync: !ownOnly})
+			require.NoError(t, err)
+			require.NotNil(t, out)
+			assert.Equal(t, tokenUseExitOK, code)
+			assert.Equal(t, 42, out.TotalOutputTokens)
+			assert.Zero(t, syncs)
+		})
+	}
+}
+
+func TestSessionUsageWaitRemoteCapability(t *testing.T) {
+	for _, tc := range []struct {
+		name                       string
+		version                    int
+		ownOnly, noSync, supported bool
+	}{
+		{name: "old combined", version: 15},
+		{name: "old own only", version: 15, ownOnly: true},
+		{name: "old no sync", version: 15, noSync: true},
+		{name: "supported own only", version: server.UsageWaitAPIVersion, ownOnly: true, supported: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			newAgentDataDir(t)
+			ts, requests := newRemoteUsageServer(t, remoteUsageSpec{canonicalID: "remote-session", apiVersion: tc.version})
+			original := ts.Config.Handler
+			ts.Config.Handler = http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if r.URL.Path == "/api/v1/sync/status" {
+					writeJSONResponse(w, `{}`)
+					return
+				}
+				original.ServeHTTP(w, r)
+			})
+			args := []string{"session", "usage", "remote-session", "--server", ts.URL, "--wait"}
+			if tc.ownOnly {
+				args = append(args, "--own-only")
+			}
+			if tc.noSync {
+				args = append(args, "--no-sync")
+			}
+			cmd := sessionUsageCommand(t, args...)
+			out, _, err := sessionUsageDataForCommand(cmd, "remote-session")
+			if !tc.supported {
+				require.ErrorContains(t, err, "does not support --wait")
+				assert.Nil(t, out)
+				assert.Equal(t, []string{"/api/v1/version"}, requests.RequestPath)
+				return
+			}
+			require.NoError(t, err)
+			require.NotNil(t, out)
+			assert.Equal(t, 42, out.TotalOutputTokens)
+		})
+	}
+}
+
+func TestSessionUsageWaitStartsDeferredIngestion(t *testing.T) {
+	cfg := testConfigWithClaudeFixture(t)
+	cfg.Host = "127.0.0.1"
+	database := dbtest.OpenTestDBAt(t, cfg.DBPath)
+	engine := agentsync.NewEngine(t.Context(), database, agentsync.EngineConfig{
+		AgentDirs: cfg.AgentDirs, Machine: cfg.InstallationID, DeferStartupMaintenance: true,
+	})
+	t.Cleanup(engine.Close)
+	ln, err := (&net.ListenConfig{}).Listen(t.Context(), "tcp", "127.0.0.1:0")
+	require.NoError(t, err)
+	cfg.Port = ln.Addr().(*net.TCPAddr).Port
+	srv := server.New(cfg, database, engine)
+	starts := 0
+	ts := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/api/v1/sync" {
+			starts++
+			assert.Equal(t, "true", r.URL.Query().Get("startup_only"))
+		}
+		srv.Handler().ServeHTTP(w, r)
+	}))
+	ts.Listener = ln
+	ts.Start()
+	t.Cleanup(ts.Close)
+	out, _, err := httpSessionUsageData(t.Context(), ts.URL, "", sessionUsageQuery{SessionID: "session0", Wait: true})
+	require.NoError(t, err)
+	require.NotNil(t, out)
+	assert.Equal(t, "session0", out.SessionID)
+	assert.Equal(t, 1, starts)
+	assert.True(t, engine.StartupReconciled())
+}
+
+func TestSessionUsageWaitCancellation(t *testing.T) {
+	ts, _ := newRemoteUsageServer(t, remoteUsageSpec{canonicalID: "remote-session"})
+	original := ts.Config.Handler
+	statusSeen := make(chan struct{})
+	ts.Config.Handler = http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/api/v1/sync/status" {
+			close(statusSeen)
+			writeJSONResponse(w, `{"archive_stale":true}`)
+			return
+		}
+		original.ServeHTTP(w, r)
+	})
+	ctx, cancel := context.WithCancel(t.Context())
+	done := make(chan error, 1)
+	go func() {
+		_, _, err := httpSessionUsageData(ctx, ts.URL, "", sessionUsageQuery{SessionID: "remote-session", Wait: true})
+		done <- err
+	}()
+	<-statusSeen
+	cancel()
+	assert.ErrorIs(t, <-done, context.Canceled)
 }

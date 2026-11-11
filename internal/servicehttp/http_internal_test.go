@@ -1,6 +1,7 @@
 package servicehttp
 
 import (
+	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -349,4 +350,31 @@ func TestSearchContentForwardsConceptsAndSemanticIntent(t *testing.T) {
 	)
 	require.NoError(t, err)
 	assert.True(t, res.CandidateTruncated)
+}
+
+func TestSyncClassifiesOnlyNeverStartedConflict(t *testing.T) {
+	for _, tc := range []struct {
+		name      string
+		status    int
+		body      string
+		wantRetry bool
+	}{
+		{name: "parent lock refused", status: 409, body: `{"code":"session_refresh_not_started","error":"busy"}`, wantRetry: true},
+		{name: "other conflict", status: 409, body: `{"error":"busy"}`},
+		{name: "server error", status: 500, body: `{"code":"session_refresh_not_started"}`},
+		{name: "interrupted response", status: 200, body: `{"id":`},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				assert.Equal(t, "/api/v1/sessions/sync", r.URL.Path)
+				w.Header().Set("Content-Type", "application/json")
+				w.WriteHeader(tc.status)
+				_, _ = fmt.Fprint(w, tc.body)
+			}))
+			t.Cleanup(ts.Close)
+			_, err := NewHTTPBackend(ts.URL, "", false, "").Sync(t.Context(), service.SyncInput{ID: "session-a", Subagents: true, UsageRefresh: true})
+			require.Error(t, err)
+			assert.Equal(t, tc.wantRetry, errors.Is(err, ErrSessionRefreshNotStarted))
+		})
+	}
 }

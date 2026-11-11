@@ -572,6 +572,9 @@ type SyncInput struct {
 	UsageRefresh bool   `json:"usage_refresh,omitempty"`
 }
 
+// SessionRefreshNotStartedCode identifies a refresh refused before it acquired the parent lock.
+const SessionRefreshNotStartedCode = "session_refresh_not_started"
+
 // ErrInvalidUsageRefresh reports a usage refresh without both ID and Subagents.
 var ErrInvalidUsageRefresh = errors.New("sync: usage_refresh requires id and subagents")
 

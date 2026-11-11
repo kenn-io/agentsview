@@ -1220,7 +1220,7 @@ func (s *Server) humaSyncSession(
 			return nil, handled
 		}
 		if in.Body.UsageRefresh && errors.Is(err, syncpkg.ErrSessionRefreshNotStarted) {
-			return nil, apiErrorWithCode(http.StatusConflict, "session_refresh_not_started", err.Error())
+			return nil, apiErrorWithCode(http.StatusConflict, service.SessionRefreshNotStartedCode, err.Error())
 		}
 		if errors.Is(err, syncpkg.ErrSyncInProgress) ||
 			errors.Is(err, db.ErrSessionExcluded) ||

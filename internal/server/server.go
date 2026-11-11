@@ -76,6 +76,8 @@ type VersionInfo struct {
 // CLI or daemon.
 const (
 	APIVersion = 16
+	// UsageWaitAPIVersion supports bounded usage waits and safe refresh retries.
+	UsageWaitAPIVersion = 16
 	// KataAPIVersion is the first daemon API that serves /api/v1/kata/status.
 	KataAPIVersion = 14
 	// FrictionAPIVersion is the first daemon API that serves
