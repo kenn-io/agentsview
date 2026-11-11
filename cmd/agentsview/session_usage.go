@@ -379,7 +379,26 @@ func sessionUsageStatusError(wait bool, err error) error {
 func waitSessionUsageReady(ctx context.Context, baseURL, token string, wait, known, refresh bool) error {
 	started := false
 	var startErr error
+	startupCtx, cancelStartup := context.WithCancel(ctx)
+	result := make(chan error, 1)
+	defer func() {
+		cancelStartup()
+		if started && result != nil {
+			<-result
+		}
+	}()
+	collectStart := func() {
+		select {
+		case err := <-result:
+			result = nil
+			if err != nil {
+				startErr = fmt.Errorf("starting ingestion: %w", err)
+			}
+		default:
+		}
+	}
 	_, err := backoff.Retry(ctx, func() (struct{}, error) {
+		collectStart()
 		startup, stale, pending, statusErr := httpSessionSyncStatus(ctx, baseURL, token)
 		if statusErr != nil {
 			return struct{}{}, sessionUsageStatusError(wait, statusErr)
@@ -392,16 +411,18 @@ func waitSessionUsageReady(ctx context.Context, baseURL, token string, wait, kno
 		}
 		if startup && !stale && refresh && !started {
 			started = true
-			_, startErr = postDaemonPush[sync.SyncStats, sync.Progress](ctx, transport{URL: baseURL}, token, startupSyncOperation, apiclient.DaemonPushRequest{}, nil)
-			if startErr != nil {
-				startErr = fmt.Errorf("starting ingestion: %w", startErr)
-			}
+			// Startup may become ready before the sync finishes draining sources.
+			go func() {
+				_, err := postDaemonPush[sync.SyncStats, sync.Progress](startupCtx, transport{URL: baseURL}, token, startupSyncOperation, apiclient.DaemonPushRequest{}, nil)
+				result <- err
+			}()
 		}
 		return struct{}{}, errors.New("session usage is not ready")
 	}, backoff.WithBackOff(backoff.NewConstantBackOff(sessionUsagePollInterval)), backoff.WithMaxTries(0), backoff.WithMaxElapsedTime(0))
 	if err == nil {
 		return nil
 	}
+	collectStart()
 	if ctx.Err() != nil {
 		err = ctx.Err()
 	} else {

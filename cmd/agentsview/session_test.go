@@ -3122,6 +3122,51 @@ func TestSessionUsageWaitRetriesTransientStatusFailure(t *testing.T) {
 	assert.Equal(t, 2, checks)
 }
 
+func TestSessionUsageWaitProceedsWhenStartupCompletesDuringDrain(t *testing.T) {
+	shortenSessionUsagePoll(t)
+	ts, _ := newRemoteUsageServer(t, remoteUsageSpec{canonicalID: "remote-session"})
+	original := ts.Config.Handler
+	started := make(chan struct{})
+	canceled := make(chan struct{})
+	release := make(chan struct{})
+	t.Cleanup(func() { close(release) })
+	ts.Config.Handler = http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/api/v1/sync/status":
+			select {
+			case <-started:
+				writeJSONResponse(w, `{"sync_pending":true}`)
+			default:
+				writeJSONResponse(w, `{"startup_pending":true}`)
+			}
+			return
+		case "/api/v1/sync":
+			_, _ = io.Copy(io.Discard, r.Body)
+			close(started)
+			select {
+			case <-r.Context().Done():
+				close(canceled)
+			case <-release:
+			}
+			return
+		}
+		original.ServeHTTP(w, r)
+	})
+	ctx, cancel := context.WithTimeout(t.Context(), 2*time.Second)
+	defer cancel()
+	out, code, err := httpSessionUsageData(ctx, ts.URL, "", sessionUsageQuery{SessionID: "remote-session", Wait: true})
+	require.NoError(t, err)
+	require.NotNil(t, out)
+	assert.Equal(t, tokenUseExitOK, code)
+	assert.Equal(t, 42, out.TotalOutputTokens)
+	assert.False(t, out.RefreshIncomplete)
+	select {
+	case <-canceled:
+	case <-time.After(5 * time.Second):
+		require.FailNow(t, "server did not observe startup request cancellation")
+	}
+}
+
 func TestSessionUsageWaitCapsStartedRefresh(t *testing.T) {
 	previous := sessionUsageWaitTimeout
 	sessionUsageWaitTimeout = 100 * time.Millisecond
