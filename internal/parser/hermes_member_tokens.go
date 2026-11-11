@@ -95,8 +95,10 @@ func hermesStoredMemberToken(value string) (string, bool) {
 	return parts[1], true
 }
 
-var hermesTriggerComments = regexp.MustCompile(`--[^\n]*`)
-var hermesRevisionTrigger = regexp.MustCompile(`(?is)^create\s+trigger\s+(?:if\s+not\s+exists\s+)?\w+\s+after\s+update\s+of\s+([\w,\s]+)\s+on\s+messages\s+begin\s+update\s+sessions\s+set\s+transcript_revision\s*=\s*transcript_revision\s*\+\s*1\s+where\s+id\s*=\s*new\.session_id\s*;\s*end\s*;?$`)
+var (
+	hermesTriggerComments = regexp.MustCompile(`--[^\n]*`)
+	hermesRevisionTrigger = regexp.MustCompile(`(?is)^create\s+trigger\s+(?:if\s+not\s+exists\s+)?\w+\s+after\s+update\s+of\s+([\w,\s]+)\s+on\s+messages\s+begin\s+update\s+sessions\s+set\s+transcript_revision\s*=\s*transcript_revision\s*\+\s*1\s+where\s+id\s*=\s*new\.session_id\s*;\s*end\s*;?$`)
+)
 
 // Recheck on every event: an older Hermes writer can recreate a shorter
 // trigger on opening the store. Unrecognized definitions fail closed.
@@ -134,7 +136,7 @@ func hermesStoreTracksRewrites(ctx context.Context, conn *sql.DB) (bool, error) 
 		if len(match) != 2 {
 			continue
 		}
-		for _, column := range strings.Split(strings.ToLower(match[1]), ",") {
+		for column := range strings.SplitSeq(strings.ToLower(match[1]), ",") {
 			covered[strings.TrimSpace(column)] = true
 		}
 	}
@@ -176,7 +178,8 @@ func (s hermesSourceSet) changedHermesMembers(ctx context.Context, root, stateDB
 	if _, err := conn.ExecContext(ctx, "BEGIN"); err != nil {
 		return nil, false, err
 	}
-	defer conn.ExecContext(context.WithoutCancel(ctx), "ROLLBACK") // Finish this caller's read snapshot after cancellation.
+	// Finish this caller's read snapshot after cancellation.
+	defer func() { _, _ = conn.ExecContext(context.WithoutCancel(ctx), "ROLLBACK") }()
 	tracks, err := hermesStoreTracksRewrites(ctx, conn)
 	if err != nil || !tracks {
 		return nil, false, err

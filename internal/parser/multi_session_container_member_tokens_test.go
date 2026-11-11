@@ -3,10 +3,10 @@ package parser
 import (
 	"context"
 	"errors"
-	"fmt"
 	"os"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -372,7 +372,7 @@ func TestStoredMemberFreshnessCursorLookup(t *testing.T) {
 		assert.Equal(t, tc.want, got, tc.path)
 	}
 	for _, pageSize := range []int{1, 2, 512} {
-		t.Run(fmt.Sprint(pageSize), func(t *testing.T) {
+		t.Run(strconv.Itoa(pageSize), func(t *testing.T) {
 			rows := []StoredMemberFreshness{{Path: "a"}, {Path: "b"}, {Path: "c"}, {Path: "d"}, {Path: "e"}}
 			cursor := NewStoredMemberFreshnessCursor(memoryFreshnessPager(rows, pageSize))
 			var missing []string

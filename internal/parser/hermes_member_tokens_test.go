@@ -118,7 +118,7 @@ func TestHermesMemberListingFallbacksAndDeletion(t *testing.T) {
 			// Use one valid member, with an independent transcript fallback.
 			_, err := c.ExecContext(t.Context(), `DELETE FROM messages;DELETE FROM sessions; INSERT INTO sessions(id,source,started_at) VALUES ('s','cli',1778767200); INSERT INTO messages(session_id,role,content,timestamp) VALUES ('s','user','original',1778767200)`)
 			require.NoError(t, err)
-			require.NoError(t, os.MkdirAll(filepath.Join(root, "sessions"), 0700))
+			require.NoError(t, os.MkdirAll(filepath.Join(root, "sessions"), 0o700))
 			writeSourceFile(t, filepath.Join(root, "sessions", "s.jsonl"), hermesProviderJSONLFixture("fallback"))
 			source := set.stateMemberSourceRef(root, path, "s")
 			fingerprint, err := set.Fingerprint(t.Context(), source)
@@ -139,9 +139,10 @@ func TestHermesMemberListingFallbacksAndDeletion(t *testing.T) {
 			}
 			require.NoError(t, err)
 			rows := []StoredMemberFreshness{stored}
-			if kind == "empty authority" {
+			switch kind {
+			case "empty authority":
 				rows = nil
-			} else if kind == "suppressed authority" {
+			case "suppressed authority":
 				rows[0].Suppressed = true
 			}
 			if kind == "suppressed" {
@@ -177,7 +178,7 @@ func TestHermesMemberFreshnessContainerRoots(t *testing.T) {
 	root := t.TempDir()
 	providerRoot := filepath.Join(root, ".hermes", "profiles")
 	root = filepath.Join(providerRoot, "work")
-	require.NoError(t, os.MkdirAll(root, 0700))
+	require.NoError(t, os.MkdirAll(root, 0o700))
 	createHermesStateDB(t, root)
 	p, ok := NewProvider(AgentHermes, ProviderConfig{Roots: []string{providerRoot}})
 	require.True(t, ok)
@@ -226,6 +227,7 @@ func TestHermesMemberTokenHistoryGrowth(t *testing.T) {
 	c, _ := hermesTokenFixture(t)
 	rows, err := c.QueryContext(t.Context(), "EXPLAIN QUERY PLAN "+hermesMemberTokenQuery(true, false))
 	require.NoError(t, err)
+	defer func() { require.NoError(t, rows.Close()) }()
 	searches, endpoints := 0, 0
 	for rows.Next() {
 		var id, parent, unused int
@@ -239,7 +241,6 @@ func TestHermesMemberTokenHistoryGrowth(t *testing.T) {
 		}
 	}
 	require.NoError(t, rows.Err())
-	require.NoError(t, rows.Close())
 	assert.Equal(t, 1, searches, "greatest ID must use its covering seek")
 	assert.Equal(t, 2, endpoints, "both timestamp endpoints must use covering seeks")
 }
