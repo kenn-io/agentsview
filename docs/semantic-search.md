@@ -29,6 +29,16 @@ the required download through that button, shows download and indexing progress,
 and starts semantic search without a restart. Full-text search remains available
 during indexing.
 
+Turning on the built-in server records a shared choice after setup succeeds.
+Other apps using Kit can use that choice, and AgentsView can use it at startup
+to enable search and download missing built-in server files. Explicitly disabled
+or separately configured search keeps its settings.
+
+An enabled configuration with `local = true` starts indexing at startup using
+installed server files. It does not record a shared choice. If files are missing,
+startup can download them only when a shared choice has already been recorded;
+otherwise, use **Turn on** to approve the download.
+
 For CLI setup, run `agentsview index embeddings build`. AgentsView uses a
 running Ollama server with Nomic or Kit's shared local server. If the local
 server needs files, the CLI asks before downloading them. Search and automatic
@@ -1000,9 +1010,13 @@ enables semantic search, installs missing shared server files, and starts
 indexing. Replica and DuckDB servers have no local setup control.
 
 `GET /api/v1/embeddings/status` includes `setup` when browser setup is
-available. `POST /api/v1/embeddings/setup` accepts `approved_bytes`, the
-download size disclosed to the user. It returns `202` with `{"started":true}`
-when setup is accepted. A concurrent setup returns `409`.
+available. `POST /api/v1/embeddings/setup` requires `expected_provider` from
+`setup.provider` (`built-in`, `ollama`, or `configured`) and accepts
+`approved_bytes`, the download size disclosed to the user. It returns `202`
+with `{"started":true}` when setup is accepted. A concurrent setup or a changed
+provider returns `409`; refresh the status before trying again. A missing
+`expected_provider` returns `400`. After upgrading, reload browser pages opened
+before the upgrade so they send the required provider.
 
 Approval covers at most `approved_bytes`. If installation verifies that a larger
 download is required, it declines the download and reports the verified size in

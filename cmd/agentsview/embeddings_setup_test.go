@@ -383,7 +383,7 @@ func TestSharedChoiceLeavesConfiguredSearchAlone(t *testing.T) {
 	}
 }
 
-func TestEnabledBuiltinRecordsSharedChoice(t *testing.T) {
+func TestEnabledBuiltinStartsWithoutRecordingSharedChoice(t *testing.T) {
 	setTestHome(t, t.TempDir())
 	dir := testDataDir(t)
 	writeTestConfig(t, dir, "[vector]\nenabled = true\n[vector.embeddings]\nmodel = 'nomic-embed-text'\ndimension = 768\n[vector.embeddings.servers.local]\nlocal = true\n")
@@ -416,7 +416,7 @@ func TestEnabledBuiltinRecordsSharedChoice(t *testing.T) {
 	<-owner.done
 	chosen, err := embedlocal.ChoiceRecorded()
 	require.NoError(t, err)
-	assert.True(t, chosen)
+	assert.False(t, chosen)
 	select {
 	case <-encoded:
 	case <-time.After(10 * time.Second):

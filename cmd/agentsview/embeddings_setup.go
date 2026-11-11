@@ -73,7 +73,7 @@ func (v *liveVectorServing) startSharedChoice() {
 				approvedBytes = math.MaxInt64
 			}
 			v.mu.Lock()
-			err = v.startSetup(deployment, approvedBytes, false, "")
+			err = v.startSetup(deployment, approvedBytes, false, false, "")
 			v.mu.Unlock()
 			if err != nil {
 				log.Printf("search by meaning: start saved setup: %v", err)
@@ -94,7 +94,7 @@ func (v *liveVectorServing) startSharedChoice() {
 		if err == nil {
 			deployment.Local = true
 			v.mu.Lock()
-			err = v.startSetup(deployment, math.MaxInt64, true, "")
+			err = v.startSetup(deployment, math.MaxInt64, true, false, "")
 			v.mu.Unlock()
 		}
 	}
@@ -309,11 +309,11 @@ func (v *liveVectorServing) Setup(approvedBytes int64, expectedProvider string) 
 		}
 		deployment.Endpoint = pinnedEndpoint
 	}
-	return v.startSetup(deployment, approvedBytes, false, pinnedEndpoint)
+	return v.startSetup(deployment, approvedBytes, false, true, pinnedEndpoint)
 }
 
 // startSetup starts the leased worker with v.mu held.
-func (v *liveVectorServing) startSetup(deployment config.VectorEmbeddingsServerConfig, approvedBytes int64, automatic bool, pinnedEndpoint string) error {
+func (v *liveVectorServing) startSetup(deployment config.VectorEmbeddingsServerConfig, approvedBytes int64, automatic, recordChoice bool, pinnedEndpoint string) error {
 	if v.setup.Busy {
 		return vector.ErrBuildRunning
 	}
@@ -325,7 +325,7 @@ func (v *liveVectorServing) startSetup(deployment config.VectorEmbeddingsServerC
 	v.done = make(chan struct{})
 	go func() {
 		defer release()
-		err := v.activate(deployment, approvedBytes, automatic, pinnedEndpoint)
+		err := v.activate(deployment, approvedBytes, automatic, recordChoice, pinnedEndpoint)
 		v.mu.Lock()
 		v.setup.Busy = false
 		if err != nil {
@@ -343,7 +343,7 @@ func (v *liveVectorServing) startSetup(deployment config.VectorEmbeddingsServerC
 	return nil
 }
 
-func (v *liveVectorServing) activate(deployment config.VectorEmbeddingsServerConfig, approvedBytes int64, automatic bool, pinnedEndpoint string) error {
+func (v *liveVectorServing) activate(deployment config.VectorEmbeddingsServerConfig, approvedBytes int64, automatic, recordChoice bool, pinnedEndpoint string) error {
 	cfg := v.cfg
 	_, builtin, err := resolveLocalEmbeddings(v.ctx, deployment,
 		func(_ context.Context, size int64) (bool, error) {
@@ -393,7 +393,7 @@ func (v *liveVectorServing) activate(deployment config.VectorEmbeddingsServerCon
 	if errors.Is(err, vector.ErrBuildRunning) {
 		err = nil
 	}
-	if err == nil && builtin {
+	if err == nil && builtin && recordChoice {
 		recordEmbeddingChoice()
 	}
 	return err
