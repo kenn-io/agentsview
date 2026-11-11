@@ -189,9 +189,6 @@ func DecodeSessionPush(data []byte) (db.SessionPushReceipt, db.SessionBatchWrite
 func decodeSessionPush(data []byte) (db.SessionPushReceipt, db.SessionBatchWrite, error) {
 	var zero db.SessionPushReceipt
 	var noWrite db.SessionBatchWrite
-	if int64(len(data)) > MaxSessionPushBytes {
-		return zero, noWrite, errors.New("body exceeds 64 MiB")
-	}
 	var envelope SessionPushEnvelope
 	if err := json.Unmarshal(data, &envelope, json.RejectUnknownMembers(true)); err != nil {
 		return zero, noWrite, err

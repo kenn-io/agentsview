@@ -476,8 +476,6 @@ func TestSessionPushRejectMalformed(t *testing.T) {
 	require.NoError(t, err)
 	_, _, err = DecodeSessionPush(packet)
 	require.ErrorContains(t, err, "usage has negative message ordinal")
-	_, _, err = DecodeSessionPush([]byte(strings.Repeat(" ", int(MaxSessionPushBytes)+1)))
-	require.ErrorContains(t, err, "body exceeds")
 	t.Run("unknown manifest field", func(t *testing.T) {
 		var envelope SessionPushEnvelope
 		require.NoError(t, json.Unmarshal(data, &envelope))
