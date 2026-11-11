@@ -1388,8 +1388,8 @@ fixtures retain this field; missing identities remain source-local.
   updates resend the previous `last_token_usage`; the existing digest check
   drops the repeat. An incremental parse with no stored target still falls
   back to a full parse, and the prefix seed makes the same attach decision as
-  the full parse so later ordinals do not shift. TraeX and Augure Code share
-  this decoder.
+  the full parse so later ordinals do not shift. TraeX, Augure Code, and Open
+  Interpreter share this decoder.
 - **Agentsview:** `internal/parser/codex.go` and
   `internal/parser/codex_provider.go`; usage is taken from the last-turn
   counters rather than repeatedly counting cumulative totals. Reverified
@@ -3716,7 +3716,7 @@ schemas keep their existing ordering behavior.
   [agent-session-base.ts](https://github.com/openclaw/openclaw/blob/40d31f34813c2a01284b097c0d0d785fbb173400/src/agents/sessions/agent-session-base.ts#L345-L367)
   appends every assistant `message_end`. Agentsview stores an assistant
   message with usage and no text or tool call, such as `content: []`, as a
-  hidden usage-only row. QClaw shares this decoder.
+  hidden usage-only row. QClaw's own decoder applies the same rule.
 - **SQLite layout:** OpenClaw 2026.9.5 also stores each agent's transcript in
   `agent/openclaw-agent.sqlite`. Agentsview reads the ordered
   `transcript_events(session_id, seq, event_json, created_at)` rows and sends
@@ -3788,8 +3788,10 @@ schemas keep their existing ordering behavior.
 - **Usage and cost:** Compatible records can contain input, output, cache-read,
   cache-write, model, and reported total cost. As for OpenClaw, Agentsview
   ignores the reported monetary field and catalog-prices tokens.
-- **Agentsview:** `internal/parser/qclaw.go` delegates message decoding to
-  `internal/parser/openclaw.go`.
+- **Agentsview:** `internal/parser/qclaw.go` has its own decoder for the
+  OpenClaw record shape. Like OpenClaw, it keeps an assistant message with
+  usage and no text or tool call as a hidden usage-only row (rechecked
+  2026-11-11).
 
 ## Kimi CLI (`kimi`)
 

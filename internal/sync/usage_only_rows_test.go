@@ -89,37 +89,13 @@ func usageOnlyCases() []usageOnlyCase {
 			name:      "openclaw",
 			agent:     parser.AgentOpenClaw,
 			sessionID: "openclaw:main:usage-only",
-			write: func(t *testing.T, dir string) {
-				writeJSONLFile(t, filepath.Join(dir, "main", "sessions", "usage-only.jsonl"),
-					map[string]any{
-						"type": "session", "version": 3, "id": "usage-only",
-						"timestamp": "2026-09-22T10:00:00Z", "cwd": "/workspace/project-a",
-					},
-					map[string]any{
-						"type": "message", "id": "m1", "timestamp": "2026-09-22T10:00:01Z",
-						"message": map[string]any{"role": "user", "content": "check the build"},
-					},
-					map[string]any{
-						"type": "message", "id": "m2", "timestamp": "2026-09-22T10:00:02Z",
-						"message": map[string]any{
-							"role": "assistant", "model": usageOnlyModel,
-							"content": []map[string]any{{"type": "text", "text": "the build passes"}},
-							"usage":   map[string]any{"input": 10, "output": visibleOutputTokens},
-						},
-					},
-					// A provider reply with no content blocks, such as an error stop.
-					map[string]any{
-						"type": "message", "id": "m3", "timestamp": "2026-09-22T10:00:03Z",
-						"message": map[string]any{
-							"role": "assistant", "model": usageOnlyModel,
-							"content": []map[string]any{},
-							"usage": map[string]any{
-								"input": usageOnlyInputTokens, "output": usageOnlyOutputTokens,
-							},
-						},
-					},
-				)
-			},
+			write:     writeClawUsageOnlySession,
+		},
+		{
+			name:      "qclaw",
+			agent:     parser.AgentQClaw,
+			sessionID: "qclaw:main:usage-only",
+			write:     writeClawUsageOnlySession,
 		},
 		{
 			name:      "forge",
@@ -191,23 +167,13 @@ func usageOnlyCases() []usageOnlyCase {
 			name:      "codex",
 			agent:     parser.AgentCodex,
 			sessionID: "codex:019f0000-0000-7000-8000-0000000a5e01",
-			write: func(t *testing.T, dir string) {
-				path := filepath.Join(dir, "2026", "09", "15",
-					"rollout-2026-09-15T10-00-00-019f0000-0000-7000-8000-0000000a5e01.jsonl")
-				require.NoError(t, os.MkdirAll(filepath.Dir(path), 0o755))
-				require.NoError(t, os.WriteFile(path, []byte(testjsonl.JoinJSONL(
-					testjsonl.CodexSessionMetaJSON("019f0000-0000-7000-8000-0000000a5e01",
-						"/workspace/project-a", "user", "2026-09-15T10:00:00Z"),
-					testjsonl.CodexTurnContextJSON(usageOnlyModel, "2026-09-15T10:00:01Z"),
-					testjsonl.CodexMsgJSON("user", "check the build", "2026-09-15T10:00:01Z"),
-					testjsonl.CodexMsgJSON("assistant", "the build passes", "2026-09-15T10:00:05Z"),
-					testjsonl.CodexTokenCountJSON("2026-09-15T10:00:05Z", 10, visibleOutputTokens, 0),
-					// A reasoning-only response: Codex counts it, but writes
-					// no message for it.
-					testjsonl.CodexTokenCountJSON("2026-09-15T10:00:07Z",
-						usageOnlyInputTokens, usageOnlyOutputTokens, 0),
-				)), 0o644))
-			},
+			write:     writeCodexUsageOnlySession,
+		},
+		{
+			name:      "open interpreter",
+			agent:     parser.AgentInterpreter,
+			sessionID: "open-interpreter:019f0000-0000-7000-8000-0000000a5e01",
+			write:     writeCodexUsageOnlySession,
 		},
 		{
 			name:      "gemini",
@@ -235,6 +201,62 @@ func usageOnlyCases() []usageOnlyCase {
 			},
 		},
 	}
+}
+
+// writeClawUsageOnlySession writes an OpenClaw-format session, which QClaw
+// also writes.
+func writeClawUsageOnlySession(t *testing.T, dir string) {
+	t.Helper()
+	writeJSONLFile(t, filepath.Join(dir, "main", "sessions", "usage-only.jsonl"),
+		map[string]any{
+			"type": "session", "version": 3, "id": "usage-only",
+			"timestamp": "2026-09-22T10:00:00Z", "cwd": "/workspace/project-a",
+		},
+		map[string]any{
+			"type": "message", "id": "m1", "timestamp": "2026-09-22T10:00:01Z",
+			"message": map[string]any{"role": "user", "content": "check the build"},
+		},
+		map[string]any{
+			"type": "message", "id": "m2", "timestamp": "2026-09-22T10:00:02Z",
+			"message": map[string]any{
+				"role": "assistant", "model": usageOnlyModel,
+				"content": []map[string]any{{"type": "text", "text": "the build passes"}},
+				"usage":   map[string]any{"input": 10, "output": visibleOutputTokens},
+			},
+		},
+		// A provider reply with no content blocks, such as an error stop.
+		map[string]any{
+			"type": "message", "id": "m3", "timestamp": "2026-09-22T10:00:03Z",
+			"message": map[string]any{
+				"role": "assistant", "model": usageOnlyModel,
+				"content": []map[string]any{},
+				"usage": map[string]any{
+					"input": usageOnlyInputTokens, "output": usageOnlyOutputTokens,
+				},
+			},
+		},
+	)
+}
+
+// writeCodexUsageOnlySession writes a Codex rollout, which Open Interpreter
+// also writes.
+func writeCodexUsageOnlySession(t *testing.T, dir string) {
+	t.Helper()
+	path := filepath.Join(dir, "2026", "09", "15",
+		"rollout-2026-09-15T10-00-00-019f0000-0000-7000-8000-0000000a5e01.jsonl")
+	require.NoError(t, os.MkdirAll(filepath.Dir(path), 0o755))
+	require.NoError(t, os.WriteFile(path, []byte(testjsonl.JoinJSONL(
+		testjsonl.CodexSessionMetaJSON("019f0000-0000-7000-8000-0000000a5e01",
+			"/workspace/project-a", "user", "2026-09-15T10:00:00Z"),
+		testjsonl.CodexTurnContextJSON(usageOnlyModel, "2026-09-15T10:00:01Z"),
+		testjsonl.CodexMsgJSON("user", "check the build", "2026-09-15T10:00:01Z"),
+		testjsonl.CodexMsgJSON("assistant", "the build passes", "2026-09-15T10:00:05Z"),
+		testjsonl.CodexTokenCountJSON("2026-09-15T10:00:05Z", 10, visibleOutputTokens, 0),
+		// A reasoning-only response: Codex counts it, but writes
+		// no message for it.
+		testjsonl.CodexTokenCountJSON("2026-09-15T10:00:07Z",
+			usageOnlyInputTokens, usageOnlyOutputTokens, 0),
+	)), 0o644))
 }
 
 // TestUsageOnlyRecordsReachStoredUsage checks the ParsedMessage usage
