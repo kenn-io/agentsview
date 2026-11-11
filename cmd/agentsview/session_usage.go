@@ -298,7 +298,7 @@ func httpSessionUsageData(
 	}
 	var waitErr error
 	if query.Wait || missing {
-		started := false
+		started, wasPending := false, false
 		_, waitErr = backoff.Retry(waitCtx, func() (struct{}, error) {
 			startup, stale, pending, statusErr := httpSessionSyncStatus(waitCtx, baseURL, token)
 			if statusErr != nil {
@@ -307,8 +307,9 @@ func httpSessionUsageData(
 			if !startup && !stale && !pending {
 				return struct{}{}, nil
 			}
+			wasPending = true
 			if !query.Wait {
-				return struct{}{}, backoff.Permanent(errors.New("session usage is not ready; retry with --wait"))
+				return struct{}{}, backoff.Permanent(errors.New("session usage is not ready; wait for syncing or rebuilding to finish, then retry"))
 			}
 			if startup && !stale && refresh && !started {
 				started = true
@@ -332,7 +333,7 @@ func httpSessionUsageData(
 		if !query.Wait && waitErr != nil {
 			return nil, tokenUseExitErr, waitErr
 		}
-		if waitErr == nil {
+		if waitErr == nil && (!known || wasPending) {
 			previousID := resolvedID
 			resolvedID, err = resolveServiceSessionID(waitCtx, backend, sessionID)
 			if waitCtx.Err() != nil && ctx.Err() == nil {
