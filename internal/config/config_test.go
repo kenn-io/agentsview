@@ -3273,6 +3273,7 @@ func TestSaveVectorSetupPersistsSelectedServer(t *testing.T) {
 		batchSize     int
 	}{
 		{raw: "[vector]\ninclude_automated = true\n[vector.embeddings]\nquery_prefix = 'custom: '\n"},
+		{raw: "[vector.embeddings]\nmodel = ''\nquery_prefix = 'custom: '\n"},
 		{raw: "[vector.embeddings]\nmodel = 'nomic-embed-text'\ndimension = 768\n[vector.embeddings.servers.cpu]\nlocal = true\nbatch_size = 3\n", batchSize: 3},
 		{endpoint: "http://127.0.0.1:11434/v1"},
 	} {

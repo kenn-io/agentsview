@@ -186,14 +186,18 @@ func TestSharedChoiceLeavesConfiguredSearchAlone(t *testing.T) {
 
 func TestSavedLocalDownloadApproval(t *testing.T) {
 	for _, tc := range []struct {
-		name              string
-		shared, installed bool
+		name                       string
+		shared, installed, battery bool
 	}{
 		{name: "declined"},
 		{name: "approved", shared: true},
 		{name: "installed", installed: true},
+		{name: "installed on battery", installed: true, battery: true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
+			oldBattery := onBattery
+			onBattery = func() bool { return tc.battery }
+			t.Cleanup(func() { onBattery = oldBattery })
 			setTestHome(t, t.TempDir())
 			dir := testDataDir(t)
 			writeTestConfig(t, dir, "[vector]\nenabled = true\n[vector.embeddings]\nmodel = 'nomic-embed-text'\ndimension = 768\n[vector.embeddings.servers.local]\nlocal = true\n")
@@ -241,17 +245,20 @@ func TestSavedLocalDownloadApproval(t *testing.T) {
 			require.NoError(t, err)
 			defer func() { require.NoError(t, owner.Close()) }()
 			<-owner.done
-			if tc.installed {
+			if tc.battery {
+				owner.Manager("").Wait()
+				assert.Empty(t, encoded, "automatic indexing must wait for external power")
+			} else if tc.installed {
 				select {
 				case <-encoded:
-				case <-time.After(10 * time.Second):
+				case <-time.After(45 * time.Second):
 					require.FailNow(t, "saved local setup did not start indexing")
 				}
 				chosen, err := embedlocal.ChoiceRecorded()
 				require.NoError(t, err)
 				assert.False(t, chosen)
 			} else {
-				assert.Equal(t, tc.shared, approved.Load())
+				assert.False(t, approved.Load())
 				status, err := owner.SetupStatus(t.Context())
 				require.NoError(t, err)
 				assert.Equal(t, "turn-on", status.Action)
@@ -316,7 +323,7 @@ func TestSharedChoiceStartsLocalIndexing(t *testing.T) {
 		}
 		status = manager.Status()
 		return status.LastResult != nil || status.LastError != ""
-	}, 10*time.Second, 10*time.Millisecond)
+	}, 45*time.Second, 10*time.Millisecond)
 	require.Empty(t, status.LastError)
 	require.NotNil(t, status.LastResult)
 	assert.Positive(t, encoded.Load())

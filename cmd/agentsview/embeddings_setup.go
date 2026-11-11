@@ -65,7 +65,7 @@ func (v *liveVectorServing) startSharedChoice() {
 		log.Printf("search by meaning: read shared choice: %v", err)
 	}
 	var approvedBytes int64
-	if chosen {
+	if chosen && !v.cfg.Vector.Enabled {
 		approvedBytes = math.MaxInt64
 	}
 	embeddings := v.cfg.Vector.Embeddings
@@ -365,6 +365,10 @@ func (v *liveVectorServing) activate(deployment config.VectorEmbeddingsServerCon
 		}
 		v.startSchedulers()
 		v.mu.Unlock()
+	}
+	if automatic {
+		v.serving.Scheduler.Notify()
+		return nil
 	}
 	err = v.serving.manager.StartBuild(vector.BuildRequest{IncludeAutomated: cfg.Vector.IncludeAutomated})
 	if errors.Is(err, vector.ErrBuildRunning) {

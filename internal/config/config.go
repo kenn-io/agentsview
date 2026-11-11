@@ -4269,7 +4269,7 @@ func (c *Config) SaveVectorSetup(local, automatic bool, endpoint string) error {
 			if err != nil {
 				return err
 			}
-			if _, ok := embeddings["model"]; !ok {
+			if model, _ := embeddings["model"].(string); model == "" {
 				embeddings["model"] = recipe.Model
 				for key, value := range map[string]any{
 					"dimension": recipe.Dimension, "max_input_chars": recipe.MaxInputChars,
@@ -4294,6 +4294,21 @@ func (c *Config) SaveVectorSetup(local, automatic bool, endpoint string) error {
 			} else {
 				selected["endpoint"] = endpoint
 			}
+		}
+		encoded, err := toml.Marshal(existing)
+		if err != nil {
+			return err
+		}
+		validated, err := Default()
+		if err != nil {
+			return err
+		}
+		validated.DataDir = c.DataDir
+		if err := validated.applyConfigTOML(string(encoded)); err != nil {
+			return invalidVectorSetupError{err}
+		}
+		if err := validated.Vector.Validate(); err != nil {
+			return invalidVectorSetupError{err}
 		}
 		return c.writeConfigMap(existing)
 	})
