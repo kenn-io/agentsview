@@ -80,3 +80,21 @@ func TestSessionPushContributorMergePreservesRebuildDecision(t *testing.T) {
 		})
 	}
 }
+
+func TestSessionPushDeferredCollisionPreservesDataVersion(t *testing.T) {
+	d := openTestDB(t)
+	receipt := db.SessionPushReceipt{SessionID: "reserved", SourceOrigin: "source", PayloadHash: strings.Repeat("a", 64)}
+	write := db.SessionBatchWrite{Session: db.Session{ID: "reserved", Agent: string(parser.AgentAntigravityCLI), Machine: "source", MessageCount: 1, UserMessageCount: 1}, Messages: []db.Message{{SessionID: "reserved", Ordinal: 0, Role: "user", Content: "accepted snapshot"}}, ReplaceMessages: true, DataVersion: db.CurrentDataVersion()}
+	_, err := d.ApplySessionPush(t.Context(), receipt, write)
+	require.NoError(t, err)
+	engine := NewEngine(t.Context(), d, EngineConfig{Machine: "receiver"})
+	t.Cleanup(engine.Close)
+	jobs := make(chan syncJob, 1)
+	jobs <- syncJob{agent: parser.AgentAntigravityCLI, path: "fixture-source", processResult: processResult{retrySessionIDs: map[string]bool{"reserved": true}, results: []parser.ParseResult{{Session: parser.ParsedSession{ID: "reserved", Agent: parser.AgentAntigravityCLI}}}}}
+	close(jobs)
+	engine.collectAndBatch(t.Context(), jobs, 1, 1, nil, syncWriteDefault)
+	session, err := d.GetSessionFull(t.Context(), "reserved")
+	require.NoError(t, err)
+	require.NotNil(t, session)
+	assert.Equal(t, db.CurrentDataVersion(), session.DataVersion)
+}

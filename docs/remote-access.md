@@ -148,11 +148,6 @@ The authenticated endpoint is `POST /api/v1/sessions/ingest`. It accepts only
 versioned, uncompressed JSON up to 64 MiB, including escaping overhead, with
 the artifact format's additional collection limits. Oversize or malformed
 input fails before insertion; sessions are never truncated to fit.
-Push metadata allows at most 256 PR links. JSON collections inside tool-result
-text are also bounded before image processing: at most 4,096 array entries and
-256 fields per object. Large structured results can exceed these limits even
-when the envelope is under 64 MiB.
-
 Use the normal bearer-authenticated listener. The optional restricted signed
 listener does not permit session ingest; configuring a request-signing key
 does not grant that permission or widen its 4 MiB request limit.
