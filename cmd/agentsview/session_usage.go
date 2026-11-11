@@ -295,7 +295,7 @@ func httpSessionUsageData(
 	}
 	resolvedID, err := resolveServiceSessionID(waitCtx, backend, sessionID)
 	missing := errors.Is(err, errSessionNotFound)
-	if err != nil && !missing && waitCtx.Err() == nil {
+	if err != nil && !missing && !query.Wait && waitCtx.Err() == nil {
 		return nil, tokenUseExitErr, err
 	}
 	refresh := !query.OwnOnly && !query.NoSync
@@ -360,8 +360,7 @@ func httpSessionUsageData(
 	return out, usageExitCode(out), nil
 }
 
-func sessionUsageStatusError(wait bool, err error) error {
-	err = fmt.Errorf("checking sync status: %w", err)
+func sessionUsageRetryError(wait bool, err error) error {
 	if !wait {
 		return backoff.Permanent(err)
 	}
@@ -393,7 +392,7 @@ func waitSessionUsageReady(ctx context.Context, baseURL, token string, backend s
 		collectStart()
 		startup, stale, pending, statusErr := httpSessionSyncStatus(ctx, baseURL, token)
 		if statusErr != nil {
-			return resolvedID, sessionUsageStatusError(wait, statusErr)
+			return resolvedID, sessionUsageRetryError(wait, fmt.Errorf("checking sync status: %w", statusErr))
 		}
 		if !wait && (startup || stale || pending) {
 			return resolvedID, backoff.Permanent(errors.New("session usage is not ready; wait for syncing or rebuilding to finish, then retry"))
@@ -403,7 +402,7 @@ func waitSessionUsageReady(ctx context.Context, baseURL, token string, backend s
 			if lookupErr == nil {
 				resolvedID = found
 			} else if !errors.Is(lookupErr, errSessionNotFound) {
-				return resolvedID, backoff.Permanent(lookupErr)
+				return resolvedID, sessionUsageRetryError(wait, lookupErr)
 			} else if !pending {
 				if !wait {
 					return resolvedID, backoff.Permanent(errSessionNotFound)
