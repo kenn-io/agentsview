@@ -146,12 +146,13 @@ func (reader *UsageCacheReader) ResetEpoch(ctx context.Context) (int64, error) {
 	manager := reader.engine.usageCache
 	manager.mu.Lock()
 	cache := manager.generations[*databaseID]
-	var release func()
-	if cache != nil {
-		release, _ = cache.acquire()
+	if cache == nil {
+		manager.mu.Unlock()
+		return 0, ErrUsageCacheWarming
 	}
+	release, ok := cache.acquire()
 	manager.mu.Unlock()
-	if release == nil {
+	if !ok {
 		return 0, ErrUsageCacheWarming
 	}
 	defer release()
