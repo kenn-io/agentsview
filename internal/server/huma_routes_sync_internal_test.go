@@ -2814,6 +2814,7 @@ func TestUsageRefreshRoute(t *testing.T) {
 					"id": "retained", "subagents": true, "usage_refresh": true,
 				})
 				require.Equal(t, http.StatusConflict, w.Code, w.Body.String())
+				assert.Contains(t, w.Body.String(), `"code":"session_refresh_not_started"`)
 			},
 		},
 	} {
