@@ -1012,7 +1012,8 @@ func TestForgeCountsDamagedContext(t *testing.T) {
 		`{"message":{"text":{"role":"Assistant","content":"First answer","timestamp":"2026-05-02T10:00:01Z"}}},` +
 		`{"message":{"text":{"role":"User","content":"Second question","timestamp":"2026-05-02T10:00:02Z"}}}]}`
 	// A context cut off inside the third message still yields the first two.
-	truncated := complete[:strings.Index(complete, "Second question")]
+	truncated, _, found := strings.Cut(complete, "Second question")
+	require.True(t, found)
 
 	tests := []struct {
 		name          string
