@@ -113,7 +113,7 @@ func TestS3ConfiguredSource(t *testing.T) {
 			}
 			return
 		}
-		if r.URL.Path == "/test/"+base+"/tool-results/result.txt" || r.URL.Path == "/test/"+base+"/tool-results/result2.txt" {
+		if r.URL.Path == "/test/"+base+"/tool-results/result.txt" || r.URL.Path == "/test/"+base+"/tool-results/result2.txt" || r.URL.Path == "/test/"+extraKey.Load().(string) {
 			_, _ = io.WriteString(w, "tool")
 			return
 		}
@@ -156,12 +156,21 @@ func TestS3ConfiguredSource(t *testing.T) {
 		_, err = Materialize(t.Context(), cfg, s, cwd)
 		require.ErrorContains(t, err, "invalid source session identity")
 	}
+	extraKey.Store(base + "/tool-results/a/./b")
+	_, err = readS3Source(t.Context(), cfg, "host", uri, id, maxSourceBytes)
+	require.ErrorContains(t, err, "unsafe S3 file path")
 	if runtime.GOOS == "windows" {
 		for _, invalid := range []string{"CON", "file:stream"} {
 			extraKey.Store(base + "/tool-results/" + invalid)
 			_, err = readS3Source(t.Context(), cfg, "host", uri, id, maxSourceBytes)
 			require.ErrorContains(t, err, "unsafe S3 file path")
 		}
+	} else {
+		extraKey.Store(base + "/tool-results/file:stream")
+		files, err = readS3Source(t.Context(), cfg, "host", uri, id, maxSourceBytes)
+		require.NoError(t, err)
+		require.Len(t, files, 2)
+		assert.Equal(t, "tool-results/file:stream", files[1].rel)
 	}
 }
 
