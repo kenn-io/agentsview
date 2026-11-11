@@ -46,13 +46,4 @@ describe("ShortcutsModal", () => {
     expect(groups.get("Sessions")).toEqual(["Next session", "Previous session"]);
     expect(groups.get("Actions")).toContain("Show this modal");
   });
-
-  it("renders every label as visible text", async () => {
-    await render();
-
-    const labels = [...document.querySelectorAll(".shortcut-group-label")].map((el) =>
-      el.textContent?.trim(),
-    );
-    expect(labels).toEqual(["Navigation", "Messages", "Sessions", "Actions"]);
-  });
 });

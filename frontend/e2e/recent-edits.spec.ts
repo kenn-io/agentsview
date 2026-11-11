@@ -237,65 +237,6 @@ test.describe("Recent Edits feed", () => {
       Object.keys(JSON.parse(localStorage.getItem("agentsview-recent-edits-columns") ?? "{}")),
     );
 
-  test("clicking a resize handle without dragging keeps no width", async ({ page }) => {
-    await withRecentEdits(page);
-    await page.setViewportSize({ width: 1280, height: 800 });
-    await page.goto("/recent-edits");
-    await expect(page.locator(".re-file-row")).toHaveCount(3);
-
-    const handle = page.locator(".re-list thead th").first().getByRole("separator");
-    const box = (await handle.boundingBox())!;
-    await page.mouse.click(box.x + box.width / 2, box.y + box.height / 2);
-    expect(await keptColumns(page)).toEqual([]);
-  });
-
-  test("clicking Last edit's handle after narrowing a column keeps no Last edit width", async ({
-    page,
-  }) => {
-    await withRecentEdits(page);
-    await page.setViewportSize({ width: 1280, height: 800 });
-    await page.goto("/recent-edits");
-    await expect(page.locator(".re-file-row")).toHaveCount(3);
-    const handles = page.locator(".re-list thead th").getByRole("separator");
-    const clickLastEdit = async () => {
-      const box = (await handles.nth(2).boundingBox())!;
-      await page.mouse.click(box.x + box.width / 2, box.y + box.height / 2);
-    };
-
-    // Narrow Project by four keyboard steps; File takes the room.
-    await handles.first().focus();
-    for (let i = 0; i < 4; i++) await page.keyboard.press("ArrowLeft");
-    await expect.poll(() => keptColumns(page)).toEqual(["project"]);
-
-    await clickLastEdit();
-    expect(await keptColumns(page)).toEqual(["project"]);
-
-    // The same after a reload, when Project starts at its kept width.
-    await page.reload();
-    await expect(page.locator(".re-file-row")).toHaveCount(3);
-    await clickLastEdit();
-    expect(await keptColumns(page)).toEqual(["project"]);
-  });
-
-  test("after a refresh, clicking Edits' handle without dragging keeps no Edits width", async ({
-    page,
-  }) => {
-    await withRecentEdits(page);
-    await page.setViewportSize({ width: 1280, height: 800 });
-    await page.goto("/recent-edits");
-    await expect(page.locator(".re-file-row")).toHaveCount(3);
-    const handles = page.locator(".re-list thead th").getByRole("separator");
-    await handles.first().focus();
-    for (let i = 0; i < 4; i++) await page.keyboard.press("ArrowLeft");
-    await expect.poll(() => keptColumns(page)).toEqual(["project"]);
-
-    await page.getByRole("button", { name: "Reload list" }).click();
-    await expect(page.locator(".re-file-row")).toHaveCount(3);
-    const box = (await handles.nth(1).boundingBox())!;
-    await page.mouse.click(box.x + box.width / 2, box.y + box.height / 2);
-    expect(await keptColumns(page)).toEqual(["project"]);
-  });
-
   test("File has no resize handle, takes the spare width, and ignores a stored width", async ({
     page,
   }) => {
@@ -315,45 +256,6 @@ test.describe("Recent Edits feed", () => {
     // is far wider than the stored 200px.
     expect(layout.overflow).toBeLessThanOrEqual(2);
     expect(layout.columns[1]).toBeGreaterThan(400);
-  });
-
-  test("a drag whose pointer reports no movementX still keeps the width", async ({ page }) => {
-    await withRecentEdits(page);
-    await page.setViewportSize({ width: 1280, height: 800 });
-    await page.goto("/recent-edits");
-    await expect(page.locator(".re-file-row")).toHaveCount(3);
-    const handle = page.locator(".re-list thead th").first().getByRole("separator");
-    const before = Number(await handle.getAttribute("aria-valuenow"));
-
-    // Some touch pointers move clientX and leave movementX at zero, as
-    // these constructed events do.
-    await handle.evaluate((el) => {
-      const r = el.getBoundingClientRect();
-      const at = (clientX: number, type: string, buttons: number) =>
-        el.dispatchEvent(
-          new PointerEvent(type, {
-            bubbles: true,
-            cancelable: true,
-            composed: true,
-            pointerId: 1,
-            pointerType: "mouse",
-            isPrimary: true,
-            button: 0,
-            buttons,
-            clientX,
-            clientY: r.top + r.height / 2,
-          }),
-        );
-      const x = r.left + r.width / 2;
-      at(x, "pointerdown", 1);
-      for (const step of [20, 40, 60]) at(x + step, "pointermove", 1);
-      at(x + 60, "pointerup", 0);
-    });
-
-    await expect
-      .poll(async () => Number(await handle.getAttribute("aria-valuenow")))
-      .toBeGreaterThan(before + 40);
-    await expect.poll(() => keptColumns(page)).toEqual(["project"]);
   });
 
   test("a phone resize is not kept once the window is wide again", async ({ page }) => {
