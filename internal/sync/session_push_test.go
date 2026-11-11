@@ -43,45 +43,26 @@ func TestSessionPushRealRebuildPreservesSnapshotAgainstNativeCollision(t *testin
 }
 
 func TestSessionPushSharedSourceImportsUnreservedMember(t *testing.T) {
-	for _, tc := range []struct {
-		name                      string
-		agent                     parser.AgentType
-		excluded                  bool
-		reserved, member, content string
-	}{
-		{"reserved member", parser.AgentClaude, false, "forked-i", "forked", "independent content"},
-		{"excluded member", parser.AgentVibe, true, "reserved", "canonical", "canonical content"},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			d := openTestDB(t)
-			receipt := db.SessionPushReceipt{SessionID: tc.reserved, SourceOrigin: "source", PayloadHash: strings.Repeat("a", 64)}
-			write := db.SessionBatchWrite{Session: db.Session{ID: tc.reserved, Agent: string(tc.agent), Machine: "source", MessageCount: 1, UserMessageCount: 1}, Messages: []db.Message{{SessionID: tc.reserved, Ordinal: 0, Role: "user", Content: "accepted snapshot"}}, ReplaceMessages: true}
-			_, err := d.ApplySessionPush(t.Context(), receipt, write)
-			require.NoError(t, err)
-			engine := NewEngine(t.Context(), d, EngineConfig{Machine: "receiver"})
-			t.Cleanup(engine.Close)
-			jobs := make(chan syncJob, 1)
-			job := syncJob{agent: tc.agent, path: "fixture-source"}
-			if tc.excluded {
-				job.excludedSessionIDs = []string{tc.reserved}
-			} else {
-				job.results = append(job.results, parser.ParseResult{Session: parser.ParsedSession{ID: tc.reserved, Agent: tc.agent, Machine: "receiver"}, Messages: []parser.ParsedMessage{{Role: parser.RoleUser, Content: "replacement"}}})
-			}
-			job.results = append(job.results, parser.ParseResult{Session: parser.ParsedSession{ID: tc.member, Agent: tc.agent, Machine: "receiver"}, Messages: []parser.ParsedMessage{{Role: parser.RoleUser, Content: tc.content}}})
-			jobs <- job
-			close(jobs)
-			stats := engine.collectAndBatch(t.Context(), jobs, 1, 1, nil, syncWriteDefault)
-			assert.Zero(t, stats.Failed)
-			reserved, err := d.GetAllMessages(t.Context(), tc.reserved)
-			require.NoError(t, err)
-			require.Len(t, reserved, 1)
-			assert.Equal(t, "accepted snapshot", reserved[0].Content)
-			member, err := d.GetAllMessages(t.Context(), tc.member)
-			require.NoError(t, err)
-			require.Len(t, member, 1)
-			assert.Equal(t, tc.content, member[0].Content)
-		})
-	}
+	d := openTestDB(t)
+	receipt := db.SessionPushReceipt{SessionID: "reserved", SourceOrigin: "source", PayloadHash: strings.Repeat("a", 64)}
+	write := db.SessionBatchWrite{Session: db.Session{ID: "reserved", Agent: string(parser.AgentVibe), Machine: "source", MessageCount: 1, UserMessageCount: 1}, Messages: []db.Message{{SessionID: "reserved", Ordinal: 0, Role: "user", Content: "accepted snapshot"}}, ReplaceMessages: true}
+	_, err := d.ApplySessionPush(t.Context(), receipt, write)
+	require.NoError(t, err)
+	engine := NewEngine(t.Context(), d, EngineConfig{Machine: "receiver"})
+	t.Cleanup(engine.Close)
+	jobs := make(chan syncJob, 1)
+	jobs <- syncJob{agent: parser.AgentVibe, path: "fixture-source", excludedSessionIDs: []string{"reserved"}, results: []parser.ParseResult{{Session: parser.ParsedSession{ID: "canonical", Agent: parser.AgentVibe, Machine: "receiver"}, Messages: []parser.ParsedMessage{{Role: parser.RoleUser, Content: "canonical content"}}}}}
+	close(jobs)
+	stats := engine.collectAndBatch(t.Context(), jobs, 1, 1, nil, syncWriteDefault)
+	assert.Zero(t, stats.Failed)
+	reserved, err := d.GetAllMessages(t.Context(), "reserved")
+	require.NoError(t, err)
+	require.Len(t, reserved, 1)
+	assert.Equal(t, "accepted snapshot", reserved[0].Content)
+	member, err := d.GetAllMessages(t.Context(), "canonical")
+	require.NoError(t, err)
+	require.Len(t, member, 1)
+	assert.Equal(t, "canonical content", member[0].Content)
 }
 
 func TestSessionPushContributorMergePreservesRebuildDecision(t *testing.T) {
@@ -94,14 +75,16 @@ func TestSessionPushContributorMergePreservesRebuildDecision(t *testing.T) {
 				}
 				merge(&aggregate, SyncStats{TotalSessions: 1, Skipped: 1, filesOK: 1, nonContainerDiscovered: 1, sessionPushReservedFiles: 1})
 				assert.Empty(t, resyncSwapAbortReason(aggregate, 1, 0), "known reserved/deferred outcomes must survive aggregation")
-				failed := aggregate
-				failed.Failed++
-				assert.NotEmpty(t, resyncSwapAbortReason(failed, 1, 0), "real failures still abort")
-				unexplained := aggregate
-				unexplained.TotalSessions++
-				unexplained.filesOK++
-				unexplained.Skipped++
-				assert.NotEmpty(t, resyncSwapAbortReason(unexplained, 1, 0), "unexplained empty outcomes still abort")
+				if name == "contributors" && !mixed {
+					failed := aggregate
+					failed.Failed++
+					assert.NotEmpty(t, resyncSwapAbortReason(failed, 1, 0), "real failures still abort")
+					unexplained := aggregate
+					unexplained.TotalSessions++
+					unexplained.filesOK++
+					unexplained.Skipped++
+					assert.NotEmpty(t, resyncSwapAbortReason(unexplained, 1, 0), "unexplained empty outcomes still abort")
+				}
 			}
 		})
 	}

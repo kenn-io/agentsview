@@ -429,7 +429,7 @@ func TestKiroSubagentDelegationStatusFeedsToolHealth(t *testing.T) {
 	assert.Equal(t, 1, parent.ToolFailureSignalCount, "only the failed delegation is a tool failure")
 }
 
-// Data version 151 reparses Kiro sources in place, so a session archived
+// A rebuild reparses Kiro sources, so a session archived
 // before spawns were parsed gains its Task calls without changing identity.
 func TestKiroSubagentUpgradeRecordsSpawns(t *testing.T) {
 	ctx := t.Context()

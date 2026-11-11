@@ -13,7 +13,7 @@ import (
 	"go.kenn.io/agentsview/internal/parser"
 )
 
-func TestCodexOrdinaryForkLinkSurvivesSyncAndUpgrade(t *testing.T) {
+func TestCodexOrdinaryForkLinkSurvivesSyncAndRebuild(t *testing.T) {
 	const (
 		parent = "a1000000-0000-4000-8000-000000000001"
 		child  = "a1000000-0000-4000-8000-000000000002"
@@ -79,7 +79,7 @@ func TestCodexOrdinaryForkLinkSurvivesSyncAndUpgrade(t *testing.T) {
 	assert.True(t, database.NeedsResync())
 	engine = NewEngine(t.Context(), database, EngineConfig{AgentDirs: agentDirs, Machine: "local"})
 	t.Cleanup(engine.Close)
-	// The version upgrade must reparse even when the source is unchanged.
+	// The rebuild must reparse even when the source is unchanged.
 	stats := engine.ResyncAll(t.Context(), nil)
 	require.True(t, stats.ArchiveRebuilt)
 	require.Zero(t, stats.Failed)

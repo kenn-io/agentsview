@@ -81,7 +81,7 @@ func TestCodexGeneratedImageStoredAsImageResult(t *testing.T) {
 	}
 }
 
-func TestCodexGeneratedImageUpgradeReparsesUnchangedSource(t *testing.T) {
+func TestCodexGeneratedImageRebuildReparsesUnchangedSource(t *testing.T) {
 	const uuid = "019eb791-cf7d-75c1-8439-9ed74c122b08"
 	png := testjsonl.SolidPNGBase64(2, 2, color.RGBA{G: 180, A: 255})
 	root := t.TempDir()

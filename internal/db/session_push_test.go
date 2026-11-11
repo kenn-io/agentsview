@@ -409,23 +409,8 @@ func TestSessionPushQueuedCleanupPreservesSnapshot(t *testing.T) {
 	}
 }
 
-func TestSessionPushReservesOrdinaryWriterOwnership(t *testing.T) {
-	d := testDB(t)
-	receipt, first := sessionPushFixture("reserved")
-	_, err := d.ApplySessionPush(t.Context(), receipt, first)
-	require.NoError(t, err)
-	_, replacement := sessionPushFixture("reserved")
-	replacement.Messages[0].Content = "ordinary source replacement"
-	_, err = d.WriteSessionBatchAtomic(t.Context(), []SessionBatchWrite{replacement})
-	require.ErrorIs(t, err, ErrSessionPushConflict)
-	messages, err := d.GetAllMessages(t.Context(), "reserved")
-	require.NoError(t, err)
-	require.Len(t, messages, 1)
-	assert.Equal(t, "first snapshot", messages[0].Content)
-}
-
 func TestSessionPushRejectsDirectTranscriptMutation(t *testing.T) {
-	for _, mode := range []string{"append", "replace", "replace content", "incremental", "usage", "plan", "staged", "staged checkpoint", "staged identical"} {
+	for _, mode := range []string{"batch", "append", "replace", "replace content", "incremental", "usage", "plan", "staged", "staged checkpoint", "staged identical"} {
 		t.Run(mode, func(t *testing.T) {
 			d := testDB(t)
 			receipt, write := sessionPushFixture("reserved")
@@ -441,6 +426,10 @@ func TestSessionPushRejectsDirectTranscriptMutation(t *testing.T) {
 			blobs, hasBlobs, err := d.GetParserCheckpointBlobs(t.Context(), "reserved")
 			require.NoError(t, err)
 			switch mode {
+			case "batch":
+				_, replacement := sessionPushFixture("reserved")
+				replacement.Messages[0].Content = "ordinary source replacement"
+				_, err = d.WriteSessionBatchAtomic(t.Context(), []SessionBatchWrite{replacement})
 			case "append":
 				err = d.InsertMessages(t.Context(), []Message{{SessionID: "reserved", Ordinal: 1, Role: "assistant", Content: "new content"}})
 			case "replace":

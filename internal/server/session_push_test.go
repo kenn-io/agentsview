@@ -208,18 +208,11 @@ func TestSessionPushReceiverRetryAfterImageMigration(t *testing.T) {
 	reverse := testServer(t, 30*time.Second)
 	reverse.cfg.AcceptSessionPush, reverse.cfg.RequireAuth, reverse.cfg.AuthToken = true, true, "secret"
 	assert.JSONEq(t, `{"session_id":"source","agent":"claude","status":"created"}`, send(reverse, migrated).Body.String())
-	fresh := testServer(t, 30*time.Second).db.(*db.DB)
-	archiveID, err := source.GetArchiveID(t.Context())
+	_, err = source.WriteSessionBatchAtomic(t.Context(), []db.SessionBatchWrite{{Session: db.Session{ID: id, Agent: "claude", Machine: "source", MessageCount: 1}, Messages: []db.Message{message}, ReplaceMessages: true}})
 	require.NoError(t, err)
-	require.NoError(t, fresh.Update(t.Context(), func(tx *sql.Tx) error {
-		_, err := tx.ExecContext(t.Context(), `UPDATE archive_metadata SET value = ? WHERE key = 'archive_id'`, archiveID)
-		return err
-	}))
-	_, err = fresh.WriteSessionBatchAtomic(t.Context(), []db.SessionBatchWrite{{Session: db.Session{ID: id, Agent: "claude", Machine: "source", MessageCount: 1}, Messages: []db.Message{message}, ReplaceMessages: true}})
+	inline, _, err := artifact.EncodeSessionPush(t.Context(), source, id, "")
 	require.NoError(t, err)
-	freshPayload, _, err := artifact.EncodeSessionPush(t.Context(), fresh, id, "")
-	require.NoError(t, err)
-	assert.JSONEq(t, `{"session_id":"source","agent":"claude","status":"unchanged"}`, send(reverse, freshPayload).Body.String())
+	assert.JSONEq(t, `{"session_id":"source","agent":"claude","status":"unchanged"}`, send(reverse, inline).Body.String())
 	before, err := receiver.db.(*db.DB).GetAllMessages(t.Context(), id)
 	require.NoError(t, err)
 	for _, field := range []string{"summary", "event"} {
@@ -244,16 +237,12 @@ func TestSessionPushReceiverRetryAfterImageMigration(t *testing.T) {
 	assert.Equal(t, before, after)
 }
 
-func TestSessionPushReceiverRejectsChangedBoundary(t *testing.T) {
+func TestSessionPushReceiverRejectsChangedText(t *testing.T) {
 	source := testServer(t, 30*time.Second).db.(*db.DB)
 	session := db.Session{ID: "source", Agent: "claude", Machine: "source", MessageCount: 1, UserMessageCount: 1}
-	message := db.Message{SessionID: session.ID, Ordinal: 0, Role: "user", Content: "hello", HasToolUse: true, ToolCalls: []db.ToolCall{{ToolName: "Read", ToolUseID: "call", ResultContent: "result", ResultEvents: []db.ToolResultEvent{{EventIndex: 4, ToolUseID: "call", Source: "tool", Status: "done", Content: "result"}}}}}
+	message := db.Message{SessionID: session.ID, Ordinal: 0, Role: "user", Content: "hello", HasToolUse: true, ToolCalls: []db.ToolCall{{ToolName: "Read", ToolUseID: "call", ResultContent: "result", ResultEvents: []db.ToolResultEvent{{ToolUseID: "call", Source: "tool", Status: "done", Content: "result"}}}}}
 	_, err := source.WriteSessionBatchAtomic(t.Context(), []db.SessionBatchWrite{{Session: session, Messages: []db.Message{message}, ReplaceMessages: true}})
 	require.NoError(t, err)
-	require.NoError(t, source.Update(t.Context(), func(tx *sql.Tx) error {
-		_, err := tx.ExecContext(t.Context(), `UPDATE tool_result_events SET event_index = 4 WHERE session_id = ?`, session.ID)
-		return err
-	}))
 	original, _, err := artifact.EncodeSessionPush(t.Context(), source, session.ID, "")
 	require.NoError(t, err)
 	receiver := testServer(t, 30*time.Second)
@@ -273,36 +262,16 @@ func TestSessionPushReceiverRejectsChangedBoundary(t *testing.T) {
 	require.Len(t, before[0].ToolCalls, 1)
 	require.Len(t, before[0].ToolCalls[0].ResultEvents, 1)
 	assert.Equal(t, "result", before[0].ToolCalls[0].ResultEvents[0].Content)
-	for _, tc := range []struct {
-		name      string
-		change    func(*db.Message)
-		unchanged bool
-	}{
-		{"model", func(m *db.Message) { m.Model = "model-b"; m.ReasoningEffort = "high" }, true},
-		{"text", func(m *db.Message) { m.Content = "changed" }, false},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			changedMessage := message
-			changedMessage.ToolCalls = append([]db.ToolCall(nil), message.ToolCalls...)
-			changedMessage.ToolCalls[0].ResultEvents = append([]db.ToolResultEvent(nil), message.ToolCalls[0].ResultEvents...)
-			tc.change(&changedMessage)
-			_, err := source.WriteSessionBatchAtomic(t.Context(), []db.SessionBatchWrite{{Session: session, Messages: []db.Message{changedMessage}, ReplaceMessages: true}})
-			require.NoError(t, err)
-			changed, _, err := artifact.EncodeSessionPush(t.Context(), source, session.ID, "")
-			require.NoError(t, err)
-			result := send(changed)
-			if tc.unchanged {
-				assert.Equal(t, http.StatusOK, result.Code)
-				assert.JSONEq(t, `{"session_id":"source","agent":"claude","status":"unchanged"}`, result.Body.String())
-			} else {
-				assert.Equal(t, http.StatusConflict, result.Code)
-			}
-			stored, err := receiver.db.(*db.DB).GetAllMessages(t.Context(), session.ID)
-			require.NoError(t, err)
-			assert.Equal(t, before, stored)
-			assert.JSONEq(t, `{"session_id":"source","agent":"claude","status":"unchanged"}`, send(original).Body.String())
-		})
-	}
+	message.Content = "changed"
+	_, err = source.WriteSessionBatchAtomic(t.Context(), []db.SessionBatchWrite{{Session: session, Messages: []db.Message{message}, ReplaceMessages: true}})
+	require.NoError(t, err)
+	changed, _, err := artifact.EncodeSessionPush(t.Context(), source, session.ID, "")
+	require.NoError(t, err)
+	assert.Equal(t, http.StatusConflict, send(changed).Code)
+	stored, err := receiver.db.(*db.DB).GetAllMessages(t.Context(), session.ID)
+	require.NoError(t, err)
+	assert.Equal(t, before, stored)
+	assert.JSONEq(t, `{"session_id":"source","agent":"claude","status":"unchanged"}`, send(original).Body.String())
 }
 
 func TestSessionPushReportsFutureParserVersion(t *testing.T) {

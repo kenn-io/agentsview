@@ -13,7 +13,7 @@ import (
 	"go.kenn.io/agentsview/internal/parser"
 )
 
-func TestCommandCodeVersionUpgradeReparsesUnchangedSourceAndClearsSkip(t *testing.T) {
+func TestCommandCodeRebuildReparsesPreviouslySkippedSource(t *testing.T) {
 	const (
 		rawSessionID = "00000000-0000-0000-0000-000000000001"
 		sessionID    = "commandcode:" + rawSessionID

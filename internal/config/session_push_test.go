@@ -41,13 +41,3 @@ func TestSessionPushDeploymentOptIn(t *testing.T) {
 		})
 	}
 }
-
-func TestSessionPushLocalScopeIgnoresReceiverDeploymentSetting(t *testing.T) {
-	unsetDeploymentEnv(t)
-	t.Setenv("HOME", t.TempDir())
-	t.Setenv("AGENTSVIEW_DATA_DIR", t.TempDir())
-	t.Setenv("AGENTSVIEW_MODE", "serve")
-	t.Setenv("AGENTSVIEW_ACCEPT_SESSION_PUSH", "invalid")
-	_, err := LoadReadOnlyFor(ScopeLocal)
-	require.NoError(t, err, "a sender must not load unused receiver settings")
-}

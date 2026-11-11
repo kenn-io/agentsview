@@ -335,6 +335,19 @@ func TestSessionPushRejectMalformed(t *testing.T) {
 	require.ErrorContains(t, err, "usage has negative message ordinal")
 	_, _, err = DecodeSessionPush([]byte(strings.Repeat(" ", int(MaxSessionPushBytes)+1)))
 	require.ErrorContains(t, err, "body exceeds")
+	t.Run("unknown manifest field", func(t *testing.T) {
+		var envelope SessionPushEnvelope
+		require.NoError(t, json.Unmarshal(data, &envelope))
+		var fields map[string]any
+		require.NoError(t, json.Unmarshal(envelope.Manifest, &fields))
+		fields["future_optional_field"] = "value"
+		envelope.Manifest, err = json.Marshal(fields)
+		require.NoError(t, err)
+		packet, err := json.Marshal(envelope)
+		require.NoError(t, err)
+		_, _, err = DecodeSessionPush(packet)
+		require.NoError(t, err, "ignore unknown manifest fields like artifact import")
+	})
 	t.Run("future parser version", func(t *testing.T) {
 		packet, err := encodeSessionPushData(t.Context(), "source", db.Session{ID: "sample", Agent: "claude", Machine: "source"}, db.ArtifactExportData{})
 		require.NoError(t, err)
@@ -458,7 +471,7 @@ func adversarialSessionPushPacket(t *testing.T, session db.Session, messages []d
 	return data
 }
 
-func TestSessionPushPRLinksAndUnknownManifestFields(t *testing.T) {
+func TestSessionPushManyPRLinks(t *testing.T) {
 	links := make([]db.PRLink, 4097)
 	for i := range links {
 		links[i] = db.PRLink{URL: "https://example.test/project/pull/1", Host: "example.test", Repository: "project", Number: 1}
@@ -466,15 +479,4 @@ func TestSessionPushPRLinksAndUnknownManifestFields(t *testing.T) {
 	valid := adversarialSessionPushPacket(t, db.Session{ID: "selected", Agent: "claude", Machine: "source", PRLinks: links}, nil)
 	_, _, err := DecodeSessionPush(valid)
 	require.NoError(t, err)
-	var envelope SessionPushEnvelope
-	require.NoError(t, json.Unmarshal(valid, &envelope))
-	var fields map[string]any
-	require.NoError(t, json.Unmarshal(envelope.Manifest, &fields))
-	fields["future_optional_field"] = "value"
-	envelope.Manifest, err = json.Marshal(fields)
-	require.NoError(t, err)
-	valid, err = json.Marshal(envelope)
-	require.NoError(t, err)
-	_, _, err = DecodeSessionPush(valid)
-	require.NoError(t, err, "ignore unknown manifest fields like artifact import")
 }
