@@ -274,9 +274,8 @@ export class SearchStore {
           response = await SearchService.getApiV1Search(params, { signal });
         } catch (error: unknown) {
           if (
-            requestVersion !== this.requestVersion ||
             signal.aborted ||
-            isAbortError(error) ||
+            (error instanceof ApiError && error.status === 501) ||
             !isTransient(error)
           )
             throw error;

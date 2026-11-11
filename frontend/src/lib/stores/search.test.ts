@@ -416,7 +416,7 @@ describe("SearchStore", () => {
 
   it("keeps a full-text 501 generic: setup guidance only applies to semantic modes", async () => {
     const store = createSearchStore(memoryStorage());
-    searchService.getApiV1Search.mockRejectedValue(generatedApiError(501, "not implemented"));
+    searchService.getApiV1Search.mockRejectedValueOnce(generatedApiError(501, "not implemented"));
 
     store.search("fulltext failure");
     await runDebounce();

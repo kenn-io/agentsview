@@ -69,3 +69,23 @@ test("search shows placeholder rows at a result-list size while it runs", async 
   await expect(status).toHaveCount(0);
   await expect(page.locator(".palette-results")).toHaveAttribute("aria-busy", "false");
 });
+
+test("Retry runs the same search after both automatic attempts fail", async ({ page }) => {
+  let requests = 0;
+  await page.route("**/api/v1/search?**", async (route) => {
+    requests++;
+    if (requests <= 2) {
+      await route.fulfill({ status: 503, json: { error: "Search temporarily unavailable" } });
+    } else {
+      await route.continue();
+    }
+  });
+  await page.goto("/usage");
+  await openSearch(page, "synchronous DB read");
+  await expect(page.getByRole("button", { name: "Retry" })).toBeVisible();
+  expect(requests).toBe(2);
+  await page.getByRole("button", { name: "Retry" }).click();
+  await expect(page.locator(".palette-item").first()).toBeVisible();
+  await expect(page.locator(".palette-input")).toHaveValue("synchronous DB read");
+  expect(requests).toBe(3);
+});
