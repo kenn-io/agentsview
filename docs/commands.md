@@ -2169,7 +2169,7 @@ prints a resume command. It reads the local archive without starting a daemon
 and finds originals in configured local roots, remote mirrors, or configured
 S3 roots. It does not recover retained or attached captures yet; Pi and Codex
 are not yet supported. The transcript and companions together are limited to
-512 MiB. `--server` and `--pg` are unavailable. Use `--json` for
+512 MiB. `--server`, `--server-token-file`, and `--pg` are unavailable. Use `--json` for
 the source, installed paths, checkout, command, and installed or unchanged
 status. Claude's native home and supported environment overrides determine
 the destination, independently of discovery roots.
@@ -2184,7 +2184,9 @@ restoring the original checkout, as observed in Claude Code 2.1.322.
 An already-running Claude session can attach in that process's existing
 directory. Claude's in-app resume picker can also fall back to a recorded
 project path for an unbound session. Start the printed command in a new process
-when the selected checkout matters.
+when the selected checkout matters: end the existing running session first.
+If the destination is a configured Claude source root, a later sync may also
+discover the installed copy as a separate local session.
 
 `agentsview session commits <id>` lists transcript and Git trailer commits
 linked to a session. The `SOURCE` column distinguishes `transcript` from

@@ -1,6 +1,8 @@
 package sessionmaterialize
 
 import (
+	"context"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -8,6 +10,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -42,7 +45,7 @@ func TestMaterializeConfiguredSources(t *testing.T) {
 				cfg.SourceMachines = map[parser.AgentType]map[string]string{parser.AgentClaude: {filepath.Join(root, "original"): "local"}}
 			}
 			require.NoError(t, os.MkdirAll(filepath.Dir(name), 0700))
-			original := []byte(`{"type":"user","message":"fixture"}` + "\n")
+			original := []byte(`{"type":"user","sessionId":"` + id + `","message":{"role":"user","content":"fixture"}}` + "\n" + `{"type":"worktree-state","sessionId":"` + id + `","worktreeSession":{"worktreePath":"/old"}}` + "\n")
 			require.NoError(t, os.WriteFile(name, original, 0600))
 			sidecar := filepath.Join(strings.TrimSuffix(name, ".jsonl"), "tool-results", "result.txt")
 			require.NoError(t, os.MkdirAll(filepath.Dir(sidecar), 0700))
@@ -52,13 +55,22 @@ func TestMaterializeConfiguredSources(t *testing.T) {
 			assert.Equal(t, "installed", result.Status)
 			got, err := os.ReadFile(filepath.Join(home, "projects", "test-project", id+".jsonl"))
 			require.NoError(t, err)
-			assert.Equal(t, original, got)
+			assert.Equal(t, string(original)+`{"type":"worktree-state","worktreeSession":null,"sessionId":"`+id+`"}`+"\n", string(got))
 			got, err = os.ReadFile(filepath.Join(home, "projects", "test-project", id, "tool-results", "result.txt"))
 			require.NoError(t, err)
 			assert.Equal(t, "tool output", string(got))
 			result, err = Materialize(t.Context(), cfg, s, cwd)
 			require.NoError(t, err)
 			assert.Equal(t, "unchanged", result.Status)
+			if mirror {
+				lock, err := remotesync.AcquireMirrorLock(t.Context(), remotesync.MirrorDir(root, "remote"))
+				require.NoError(t, err)
+				defer lock.Close()
+				ctx, cancel := context.WithTimeout(t.Context(), 50*time.Millisecond)
+				defer cancel()
+				_, err = Materialize(ctx, cfg, s, cwd)
+				require.Error(t, err)
+			}
 		})
 	}
 }
@@ -72,11 +84,20 @@ func TestS3RejectsUnconfiguredRoot(t *testing.T) {
 func TestS3ConfiguredSource(t *testing.T) {
 	const id = "12345678-1234-1234-1234-123456789abc"
 	const root = "s3://test/host/raw/claude"
-	const contents = "{\"type\":\"user\",\"message\":\"fixture\"}\n"
+	const contents = "{\"type\":\"user\",\"sessionId\":\"" + id + "\",\"message\":{\"content\":\"fixture\"}}\n"
+	const base = "host/raw/claude/project/" + id
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Query().Get("list-type") == "2" {
 			w.Header().Set("Content-Type", "application/xml")
-			_, _ = io.WriteString(w, `<ListBucketResult><IsTruncated>false</IsTruncated></ListBucketResult>`)
+			if strings.Contains(r.URL.Query().Get("prefix"), "tool-results") {
+				_, _ = io.WriteString(w, `<ListBucketResult><IsTruncated>false</IsTruncated><Contents><Key>`+base+`/tool-results/</Key><Size>0</Size></Contents><Contents><Key>`+base+`/tool-results/result.txt</Key><Size>4</Size></Contents></ListBucketResult>`)
+			} else {
+				_, _ = io.WriteString(w, `<ListBucketResult><IsTruncated>false</IsTruncated><Contents><Key>`+base+`/subagents/</Key><Size>0</Size></Contents></ListBucketResult>`)
+			}
+			return
+		}
+		if r.URL.Path == "/test/"+base+"/tool-results/result.txt" {
+			_, _ = io.WriteString(w, "tool")
 			return
 		}
 		if r.URL.Path != "/test/host/raw/claude/project/"+id+".jsonl" {
@@ -94,6 +115,29 @@ func TestS3ConfiguredSource(t *testing.T) {
 	cfg := config.Config{AgentDirs: map[parser.AgentType][]string{parser.AgentClaude: {root}}}
 	files, err := readS3Source(t.Context(), cfg, "host", root+"/project/"+id+".jsonl", id)
 	require.NoError(t, err)
-	require.Len(t, files, 1)
+	require.Len(t, files, 2)
 	assert.Equal(t, contents, string(files[0].data))
+	assert.Equal(t, "tool-results/result.txt", files[1].rel)
+	assert.Equal(t, "tool", string(files[1].data))
+}
+
+func TestMaterializeRejectsEmptyAndMetadataOnly(t *testing.T) {
+	const id = "12345678-1234-1234-1234-123456789abc"
+	for _, input := range []string{"", " \n", `{"type":"worktree-state","sessionId":"` + id + `","worktreeSession":null}`} {
+		t.Run(fmt.Sprintf("bytes-%d", len(input)), func(t *testing.T) {
+			root := t.TempDir()
+			home := t.TempDir()
+			t.Setenv("CLAUDE_CONFIG_DIR", home)
+			t.Setenv("CLAUDE_CODE_PROJECT_DIR_NAME", "project")
+			name := filepath.Join(root, "project", id+".jsonl")
+			require.NoError(t, os.MkdirAll(filepath.Dir(name), 0700))
+			require.NoError(t, os.WriteFile(name, []byte(input), 0600))
+			cfg := config.Config{InstallationID: "local", AgentDirs: map[parser.AgentType][]string{parser.AgentClaude: {root}}}
+			s := &db.Session{ID: id, Agent: "claude", Machine: "local", FilePath: &name}
+			_, err := Materialize(t.Context(), cfg, s, t.TempDir())
+			require.Error(t, err)
+			_, err = os.Stat(filepath.Join(home, "projects", "project", id+".jsonl"))
+			assert.ErrorIs(t, err, os.ErrNotExist)
+		})
+	}
 }

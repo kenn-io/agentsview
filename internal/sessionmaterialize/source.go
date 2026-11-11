@@ -26,11 +26,13 @@ type sourceFile struct {
 }
 
 type Result struct {
-	Source  string   `json:"source"`
-	Paths   []string `json:"paths"`
-	Cwd     string   `json:"cwd"`
-	Command string   `json:"command"`
-	Status  string   `json:"status"`
+	Source          string   `json:"source"`
+	Paths           []string `json:"paths"`
+	Cwd             string   `json:"cwd"`
+	Command         string   `json:"command"`
+	Status          string   `json:"status"`
+	ConfigDir       string   `json:"-"`
+	ProjectOverride string   `json:"-"`
 }
 
 // Materialize installs a Claude transcript and its own native dependencies.
@@ -74,7 +76,12 @@ func Materialize(ctx context.Context, cfg config.Config, session *db.Session, cw
 		var name string
 		name, err = remotesync.SafeRemappedRemotePath(root, source)
 		if err == nil {
+			lock, lockErr := remotesync.AcquireMirrorLock(ctx, root)
+			if lockErr != nil {
+				return Result{}, lockErr
+			}
 			files, err = readLocalSource(ctx, root, name, id)
+			err = errors.Join(err, lock.Close())
 		}
 	} else {
 		files, err = readConfiguredLocal(ctx, cfg, session, source, id)
@@ -90,7 +97,7 @@ func Materialize(ctx context.Context, cfg config.Config, session *db.Session, cw
 		return Result{}, err
 	}
 	files[0].data = primary
-	dest, err := claudeDestination(cwd, id)
+	dest, home, projectOverride, err := claudeDestination(cwd, id)
 	if err != nil {
 		return Result{}, err
 	}
@@ -112,7 +119,7 @@ func Materialize(ctx context.Context, cfg config.Config, session *db.Session, cw
 	if changed {
 		status = "installed"
 	}
-	return Result{Source: source, Paths: paths, Cwd: cwd, Status: status}, nil
+	return Result{Source: source, Paths: paths, Cwd: cwd, Status: status, ConfigDir: home, ProjectOverride: projectOverride}, nil
 }
 
 func readConfiguredLocal(ctx context.Context, cfg config.Config, session *db.Session, stored, id string) ([]sourceFile, error) {
@@ -168,10 +175,11 @@ func readLocalSource(ctx context.Context, root, name, id string) ([]sourceFile, 
 	if filepath.Base(name) != id+".jsonl" || !within(root, name) {
 		return nil, errors.New("source identity or root mismatch")
 	}
-	data, err := readFile(ctx, name)
+	data, info, err := readFile(ctx, name)
 	if err != nil {
 		return nil, err
 	}
+	snapshots := map[string]os.FileInfo{name: info}
 	out := []sourceFile{{data: data}}
 	total := int64(len(data))
 	base := strings.TrimSuffix(name, ".jsonl")
@@ -200,10 +208,11 @@ func readLocalSource(ctx context.Context, root, name, id string) ([]sourceFile, 
 			if err != nil {
 				return err
 			}
-			data, err := readFile(ctx, name)
+			data, info, err := readFile(ctx, name)
 			if err != nil {
 				return err
 			}
+			snapshots[name] = info
 			total += int64(len(data))
 			if total > maxSourceBytes {
 				return errors.New("native source exceeds size limit")
@@ -215,19 +224,41 @@ func readLocalSource(ctx context.Context, root, name, id string) ([]sourceFile, 
 			return nil, err
 		}
 	}
+	for name, before := range snapshots {
+		after, err := os.Stat(name)
+		if err != nil || !os.SameFile(before, after) || before.Size() != after.Size() || before.ModTime() != after.ModTime() {
+			return nil, fmt.Errorf("source changed while reading %s; retry when it is idle", name)
+		}
+	}
 	return out, nil
 }
 
-func readFile(ctx context.Context, name string) ([]byte, error) {
+func readFile(ctx context.Context, name string) ([]byte, os.FileInfo, error) {
 	if err := ctx.Err(); err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	f, err := os.Open(name)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	defer f.Close()
-	return readBounded(contextReader{ctx: ctx, r: f})
+	before, err := f.Stat()
+	if err != nil {
+		return nil, nil, err
+	}
+	data, err := readBounded(contextReader{ctx: ctx, r: f}, maxSourceBytes)
+	if err != nil {
+		return nil, nil, err
+	}
+	after, err := f.Stat()
+	if err != nil {
+		return nil, nil, err
+	}
+	current, err := os.Stat(name)
+	if err != nil || !os.SameFile(before, current) || !os.SameFile(before, after) || before.Size() != after.Size() || before.ModTime() != after.ModTime() || after.Size() != current.Size() || after.ModTime() != current.ModTime() {
+		return nil, nil, fmt.Errorf("source changed while reading %s; retry when it is idle", name)
+	}
+	return data, after, nil
 }
 
 type contextReader struct {
@@ -241,12 +272,12 @@ func (r contextReader) Read(p []byte) (int, error) {
 	}
 	return r.r.Read(p)
 }
-func readBounded(r io.Reader) ([]byte, error) {
-	data, err := io.ReadAll(io.LimitReader(r, maxSourceBytes+1))
+func readBounded(r io.Reader, limit int64) ([]byte, error) {
+	data, err := io.ReadAll(io.LimitReader(r, limit+1))
 	if err != nil {
 		return nil, err
 	}
-	if len(data) > maxSourceBytes {
+	if int64(len(data)) > limit {
 		return nil, errors.New("native source exceeds size limit")
 	}
 	return data, nil
@@ -281,11 +312,6 @@ func readS3Source(ctx context.Context, cfg config.Config, machine, uri, id strin
 	if _, err := p.S3TempRelPath(uri); err != nil {
 		return nil, err
 	}
-	scratch, err := os.MkdirTemp("", "agentsview-materialize-*")
-	if err != nil {
-		return nil, err
-	}
-	defer os.RemoveAll(scratch)
 	var total int64
 	fetch := func(uri string) ([]byte, error) {
 		r, err := parser.FetchS3ObjectContext(ctx, uri)
@@ -293,21 +319,9 @@ func readS3Source(ctx context.Context, cfg config.Config, machine, uri, id strin
 			return nil, err
 		}
 		defer r.Close()
-		f, err := os.CreateTemp(scratch, "object-*")
-		if err != nil {
-			return nil, err
-		}
-		name := f.Name()
-		n, err := io.Copy(f, io.LimitReader(r, maxSourceBytes-total+1))
-		err = errors.Join(err, f.Close())
-		if err != nil {
-			return nil, err
-		}
-		total += n
-		if total > maxSourceBytes {
-			return nil, errors.New("native source exceeds size limit")
-		}
-		return readFile(ctx, name)
+		data, err := readBounded(contextReader{ctx: ctx, r: r}, maxSourceBytes-total)
+		total += int64(len(data))
+		return data, err
 	}
 	data, err := fetch(uri)
 	if err != nil {
@@ -323,6 +337,12 @@ func readS3Source(ctx context.Context, cfg config.Config, machine, uri, id strin
 		}
 		for _, obj := range objects {
 			rel, ok := strings.CutPrefix(obj.URI, base+"/")
+			if ok && obj.Size == 0 && strings.HasPrefix(rel, sub+"/") && strings.HasSuffix(rel, "/") {
+				trimmed := strings.TrimSuffix(rel, "/")
+				if !strings.Contains(trimmed, `\`) && path.Clean(trimmed) == trimmed {
+					continue
+				}
+			}
 			if !ok || !strings.HasPrefix(rel, sub+"/") || path.Clean(rel) != rel || strings.Contains(rel, `\`) {
 				return nil, errors.New("unsafe S3 sidecar path")
 			}

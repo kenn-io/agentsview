@@ -493,7 +493,15 @@ func ClaudeProjectDir(dir string) string {
 	return name[:200] + "-" + strconv.FormatInt(h, 36)
 }
 
-func encodeClaudeWorkDir(dir string) string { return ClaudeProjectDir(dir) }
+func encodeClaudeWorkDir(dir string) string {
+	dir = filepath.Clean(dir)
+	return strings.Map(func(r rune) rune {
+		if r == '-' || r >= 'a' && r <= 'z' || r >= 'A' && r <= 'Z' || r >= '0' && r <= '9' {
+			return r
+		}
+		return '-'
+	}, dir)
+}
 
 // scanFirstLine is used only for exact candidate validation. It stops before
 // allocating beyond the caller's JSONL line bound.

@@ -2,7 +2,6 @@ package capture
 
 import (
 	"encoding/json"
-	"runtime"
 	"strings"
 	"testing"
 
@@ -48,9 +47,6 @@ func TestDecodeResultRejectsUnknownContract(t *testing.T) {
 }
 
 func TestClaudeWorkDirEncodingMatchesObservedProducerLayout(t *testing.T) {
-	if runtime.GOOS == "windows" {
-		t.Skip("fixture is a POSIX absolute path")
-	}
 	assert.Equal(t,
 		"-workspace-Space-dot-underscore--hash",
 		encodeClaudeWorkDir("/workspace/Space.dot_underscore/@hash"),

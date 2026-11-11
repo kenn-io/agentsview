@@ -24,15 +24,16 @@ func TestClearClaudeWorktree(t *testing.T) {
 		{"invalid id", `{"type":"worktree-state","sessionId":"other","worktreeSession":{}}`, "", true},
 		{"numeric id", `{"type":"worktree-state","sessionId":5,"worktreeSession":{}}`, "", true},
 	}
+	prefix := `{"type":"user","sessionId":"` + id + `","message":{"role":"user","content":"hello"}}` + "\n"
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got, err := clearClaudeWorktree([]byte(tt.input), id)
+			got, err := clearClaudeWorktree([]byte(prefix+tt.input), id)
 			if tt.invalid {
 				require.Error(t, err)
 				return
 			}
 			require.NoError(t, err)
-			assert.Equal(t, tt.input+tt.suffix, string(got))
+			assert.Equal(t, prefix+tt.input+tt.suffix, string(got))
 		})
 	}
 }
@@ -42,18 +43,35 @@ func TestClaudeDestination(t *testing.T) {
 	t.Setenv("CLAUDE_CONFIG_DIR", home)
 	t.Setenv("CLAUDE_CODE_PROJECT_DIR_NAME", "project-1")
 	const id = "12345678-1234-1234-1234-123456789abc"
-	got, err := claudeDestination(t.TempDir(), id)
+	got, _, _, err := claudeDestination(t.TempDir(), id)
 	require.NoError(t, err)
 	assert.Equal(t, filepath.Join(home, "projects", "project-1", id+".jsonl"), got)
 	t.Setenv("CLAUDE_CODE_PROJECT_DIR_NAME", "CON")
-	got, err = claudeDestination(t.TempDir(), id)
+	got, _, _, err = claudeDestination(t.TempDir(), id)
 	require.NoError(t, err)
 	assert.NotEqual(t, filepath.Join(home, "projects", "CON", id+".jsonl"), got)
 	t.Setenv("HOME", home)
 	t.Setenv("USERPROFILE", home)
 	t.Setenv("CLAUDE_CONFIG_DIR", "")
 	t.Setenv("CLAUDE_CODE_PROJECT_DIR_NAME", "project-1")
-	got, err = claudeDestination(t.TempDir(), id)
+	got, _, _, err = claudeDestination(t.TempDir(), id)
 	require.NoError(t, err)
 	assert.NotEqual(t, filepath.Join(home, ".claude", "projects", "project-1", id+".jsonl"), got)
+	t.Setenv("CLAUDE_CONFIG_DIR", "relative-config")
+	t.Setenv("CLAUDE_CODE_PROJECT_DIR_NAME", "project-1")
+	got, resolved, project, err := claudeDestination(t.TempDir(), id)
+	require.NoError(t, err)
+	expected, err := filepath.Abs("relative-config")
+	require.NoError(t, err)
+	assert.Equal(t, expected, resolved)
+	assert.Equal(t, "project-1", project)
+	assert.Equal(t, filepath.Join(expected, "projects", project, id+".jsonl"), got)
+}
+
+func TestRejectMissingConversation(t *testing.T) {
+	const id = "12345678-1234-1234-1234-123456789abc"
+	for _, raw := range []string{"", "  ", `{"type":"worktree-state","sessionId":"` + id + `","worktreeSession":null}`, `{"type":"user","sessionId":"aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa","message":{"role":"user","content":"other"}}`} {
+		_, err := clearClaudeWorktree([]byte(raw), id)
+		require.Error(t, err)
+	}
 }

@@ -21,8 +21,8 @@ func newSessionMaterializeCommand() *cobra.Command {
 		Short: "Install original session files for native resume",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			if cmd.Flags().Changed("server") || cmd.Flags().Changed("pg") {
-				return errors.New("session materialize requires the local archive; --server and --pg are unsupported")
+			if cmd.Flags().Changed("server") || cmd.Flags().Changed("server-token-file") || cmd.Flags().Changed("pg") {
+				return errors.New("session materialize requires the local archive; --server, --server-token-file and --pg are unsupported")
 			}
 			if cwd == "" {
 				return errors.New("--cwd is required")
@@ -52,11 +52,7 @@ func newSessionMaterializeCommand() *cobra.Command {
 				return err
 			}
 			_, nativeID := parser.StripHostPrefix(id)
-			if runtime.GOOS == "windows" {
-				result.Command = "Set-Location -LiteralPath " + shellquote.PowerShell(result.Cwd) + "; if ($?) { claude --resume " + shellquote.PowerShell(nativeID) + " }"
-			} else {
-				result.Command = "cd " + shellquote.POSIX(result.Cwd) + " && claude --resume " + shellquote.POSIX(nativeID)
-			}
+			result.Command = claudeResumeCommand(result.Cwd, nativeID, result.ConfigDir, result.ProjectOverride, runtime.GOOS == "windows")
 			if outputFormat(cmd) == "json" {
 				return json.NewEncoder(cmd.OutOrStdout()).Encode(result)
 			}
@@ -66,4 +62,11 @@ func newSessionMaterializeCommand() *cobra.Command {
 	}
 	cmd.Flags().StringVar(&cwd, "cwd", "", "Existing local checkout for the resumed session")
 	return cmd
+}
+
+func claudeResumeCommand(cwd, id, home, project string, windows bool) string {
+	if windows {
+		return "Set-Location -LiteralPath " + shellquote.PowerShell(cwd) + "; if ($?) { & { $oldHome = $env:CLAUDE_CONFIG_DIR; $oldProject = $env:CLAUDE_CODE_PROJECT_DIR_NAME; try { $env:CLAUDE_CONFIG_DIR = " + shellquote.PowerShell(home) + "; $env:CLAUDE_CODE_PROJECT_DIR_NAME = " + shellquote.PowerShell(project) + "; claude --resume " + shellquote.PowerShell(id) + " } finally { $env:CLAUDE_CONFIG_DIR = $oldHome; $env:CLAUDE_CODE_PROJECT_DIR_NAME = $oldProject } } }"
+	}
+	return "cd " + shellquote.POSIX(cwd) + " && CLAUDE_CONFIG_DIR=" + shellquote.POSIX(home) + " CLAUDE_CODE_PROJECT_DIR_NAME=" + shellquote.POSIX(project) + " claude --resume " + shellquote.POSIX(id)
 }
