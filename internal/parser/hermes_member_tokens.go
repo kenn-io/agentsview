@@ -54,10 +54,14 @@ func listHermesMemberTokens(ctx context.Context, conn *sql.DB, id string, yield 
 		return err
 	}
 	defer rows.Close()
+	columns, err := rows.Columns()
+	if err != nil {
+		return err
+	}
 	for rows.Next() {
 		// Scan raw values so a malformed session still gets selected and follows
 		// the normal member-error/transcript-fallback path.
-		values := make([]any, 22)
+		values := make([]any, len(columns))
 		targets := make([]any, len(values))
 		for i := range values {
 			targets[i] = &values[i]
