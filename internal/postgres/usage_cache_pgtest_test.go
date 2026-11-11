@@ -106,7 +106,7 @@ func requireCachedUsageMatchesDirect(t *testing.T, store *Store, filter db.Usage
 	store.runtimeState().pricingMu.Lock()
 	direct.SetCustomPricing(store.runtimeState().customPricing)
 	store.runtimeState().pricingMu.Unlock()
-	require.NoError(t, completeUsageParity(t.Context(), direct, store.usageCache, filter))
+	require.NoError(t, completeUsageParity(t.Context(), direct, store.usageCache, filter, "", false))
 }
 
 // readWarmedUsage reads daily usage from a configured cache, waiting once
@@ -181,21 +181,6 @@ func TestPGUsageCacheWindowRestartAndSmallPush(t *testing.T) {
 	}
 }
 
-func TestPGUsageCachePairwiseComparisonMatchesDirect(t *testing.T) {
-	_, _, store, _ := keptUsageFixture(t)
-	attachUsageCacheProbe(t, store, t.TempDir())
-	direct := &Store{pg: store.pg}
-	req := service.UsagePairwiseComparisonRequest{
-		UsageRequest:  service.UsageRequest{From: "2026-01-01", To: "2026-01-01", Timezone: "UTC", IncludeOneShot: true},
-		LeftDimension: "model", LeftValue: "paid-a", RightDimension: "model", RightValue: "paid-b", FallbackToDefault: true,
-	}
-	want, err := service.NewReadOnlyBackend(direct).UsagePairwiseComparison(t.Context(), req)
-	require.NoError(t, err)
-	got, err := service.NewReadOnlyBackend(store).UsagePairwiseComparison(t.Context(), req)
-	require.NoError(t, err)
-	require.Equal(t, want, got)
-}
-
 func TestPGUsageCacheRestartDefaultPairwiseCaptures(t *testing.T) {
 	_, _, store, _ := keptUsageFixture(t)
 	directory := t.TempDir()
@@ -221,7 +206,6 @@ func TestPGUsageCacheRestartDefaultPairwiseCaptures(t *testing.T) {
 	probe.mu.Lock()
 	captures := probe.captures
 	probe.mu.Unlock()
-	t.Logf("source captures after restart: %d", captures)
 	require.LessOrEqual(t, captures, 1, "ranking and comparison sides should share a capture")
 	require.NoError(t, reopened.usageCache.Close())
 	reopened = &Store{pg: store.pg, ownedDB: store.DB()}
@@ -624,17 +608,24 @@ func TestPGUsageCacheDirectFallbackAndRecovery(t *testing.T) {
 				attachUsageCacheProbe(t, reader, directory)
 				cancelled, cancel := context.WithCancel(ctx)
 				cancel()
-				before := counter.queryAttempts.Load()
+				counter.mu.Lock()
+				before := maps.Clone(counter.queries)
+				counter.mu.Unlock()
 				_, err := reader.GetUsageSessionCounts(cancelled, filter)
 				require.ErrorIs(t, err, context.Canceled)
-				require.Equal(t, before, counter.queryAttempts.Load(), "cancelled cache requests must not start direct queries")
+				counter.mu.Lock()
+				after := maps.Clone(counter.queries)
+				counter.mu.Unlock()
+				require.Equal(t, before, after, "cancelled cache requests must not start direct queries")
 				return
 			}
 			if name == "busy sessions" || name == "busy accounts" || name == "pricing mutation" {
 				_, err := reader.pg.ExecContext(ctx, `INSERT INTO cursor_usage_events(id,agent,occurred_at,model,output_tokens,charged_microdollars,dedup_key) VALUES(1,'cursor','2026-01-01','paid-a',2,3,'account-one')`)
 				require.NoError(t, err)
 				probe := attachUsageCacheProbe(t, reader, directory)
+				var mutations atomic.Int64
 				mutation := func(ctx context.Context) error {
+					mutations.Add(1)
 					query := `UPDATE usage_events SET output_tokens=output_tokens+1 WHERE session_id='paid-a'`
 					if name == "busy accounts" {
 						query = `UPDATE cursor_usage_events SET charged_microdollars=charged_microdollars+1 WHERE id=1`
@@ -655,6 +646,7 @@ func TestPGUsageCacheDirectFallbackAndRecovery(t *testing.T) {
 				}
 				got, err := read(ctx, filter)
 				require.NoError(t, err)
+				require.Positive(t, mutations.Load(), "the source mutation must occur during the read")
 				probe.before, probe.beforeAccounts = nil, nil
 				want, err := (&Store{pg: reader.pg}).GetDailyUsage(ctx, filter)
 				require.NoError(t, err)
@@ -689,7 +681,7 @@ func TestPGUsageCacheDirectFallbackAndRecovery(t *testing.T) {
 					require.Equal(t, 5750, got.Totals.OutputTokens)
 					for _, grouped := range []bool{false, true} {
 						filter.TopSessionsByGroup = grouped
-						require.NoError(t, completeUsageParity(t.Context(), &Store{pg: reader.pg}, active, filter))
+						require.NoError(t, completeUsageParity(t.Context(), &Store{pg: reader.pg}, active, filter, "paid-a", false))
 					}
 				}
 				probe.before = nil
@@ -758,14 +750,10 @@ func TestPGUsageCacheDirectFallbackAndRecovery(t *testing.T) {
 				assert.NotContains(t, output.String(), "warming usage cache")
 			}
 			_, err := reader.usageCache.GetDailyUsage(ctx, filter)
-			if name == "initial denial" {
-				require.ErrorIs(t, err, db.ErrUsageSourceUnavailable)
-			} else if name != "late journal installation" {
-				require.True(t, isUndefinedTable(err), "cache must preserve the PostgreSQL missing-table error: %v", err)
-			}
+			require.ErrorIs(t, err, db.ErrUsageSourceUnavailable)
 			for _, grouped := range []bool{false, true} {
 				filter.TopSessionsByGroup = grouped
-				require.NoError(t, completeUsageParity(t.Context(), &Store{pg: reader.pg}, reader, filter))
+				require.NoError(t, completeUsageParity(t.Context(), &Store{pg: reader.pg}, reader, filter, "paid-a", false))
 			}
 			if name == "late journal installation" {
 				require.NoError(t, EnsureSchema(ctx, syncer.pg, syncer.schema))

@@ -1008,7 +1008,7 @@ func TestUsageRollupDeferredAccountBuilds(t *testing.T) {
 		require.NoError(t, err)
 		t.Cleanup(func() { require.NoError(t, reader.Close()) })
 		snapshot, fills, cache := prepareUsageRollupTest(t, reader.engine)
-		snapshot.exactAccountRevision = true
+		require.True(t, snapshot.exactAccountRevision)
 		return database, source, reader, snapshot, fills, cache
 	}
 	t.Run("overlapping flights", func(t *testing.T) {
@@ -1103,7 +1103,7 @@ func TestUsageRollupDeferredAccountBuilds(t *testing.T) {
 		_, err = database.getWriter().ExecContext(t.Context(), `UPDATE sessions SET project='project-b' WHERE id='rollup-race'`)
 		require.NoError(t, err)
 		snapshot, fills, _ = prepareUsageRollupTest(t, reader.engine)
-		snapshot.exactAccountRevision = true
+		require.True(t, snapshot.exactAccountRevision)
 		started := make(chan struct{})
 		release := make(chan struct{})
 		unblock := sync.OnceFunc(func() { close(release) })

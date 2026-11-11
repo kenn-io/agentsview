@@ -294,11 +294,11 @@ func requireCompleteUsageParity(
 	t testing.TB, local, remote db.Store, filter db.UsageFilter,
 ) {
 	t.Helper()
-	require.NoError(t, completeUsageParity(t.Context(), local, remote, filter, "snapshot-winner"))
+	require.NoError(t, completeUsageParity(t.Context(), local, remote, filter, "snapshot-winner", true))
 }
 
 func completeUsageParity(
-	ctx context.Context, local, remote usageAggregateReader, filter db.UsageFilter, sessionID ...string,
+	ctx context.Context, local, remote usageAggregateReader, filter db.UsageFilter, sessionID string, crossBackend bool,
 ) error {
 	localDaily, err := local.GetDailyUsage(ctx, filter)
 	if err != nil {
@@ -310,13 +310,12 @@ func completeUsageParity(
 	}
 	// Pairwise ranking metadata is private to each backend; compare its public
 	// result through the service instead.
-	fullStore := len(sessionID) > 0
 	localDaily.Pairwise, remoteDaily.Pairwise = nil, nil
 	if !reflect.DeepEqual(localDaily, remoteDaily) {
 		return fmt.Errorf("complete daily result differs")
 	}
 	limit := 20
-	if fullStore {
+	if crossBackend {
 		limit = 10
 	}
 	localTop, err := local.GetTopSessionsByCost(ctx, filter, limit)
@@ -327,7 +326,7 @@ func completeUsageParity(
 	if err != nil {
 		return fmt.Errorf("remote GetTopSessionsByCost: %w", err)
 	}
-	if !fullStore {
+	if !crossBackend {
 		normalizeUsageTopTimes(localTop)
 		normalizeUsageTopTimes(remoteTop)
 	}
@@ -356,14 +355,14 @@ func completeUsageParity(
 	if localMatching != remoteMatching {
 		return fmt.Errorf("complete matching-session-count result differs")
 	}
-	if !fullStore {
+	if sessionID == "" {
 		return nil
 	}
-	localSession, err := local.(db.Store).GetSessionUsage(ctx, sessionID[0], filter.Breakdowns)
+	localSession, err := local.(db.Store).GetSessionUsage(ctx, sessionID, filter.Breakdowns)
 	if err != nil {
 		return fmt.Errorf("local GetSessionUsage: %w", err)
 	}
-	remoteSession, err := remote.(db.Store).GetSessionUsage(ctx, sessionID[0], filter.Breakdowns)
+	remoteSession, err := remote.(db.Store).GetSessionUsage(ctx, sessionID, filter.Breakdowns)
 	if err != nil {
 		return fmt.Errorf("remote GetSessionUsage: %w", err)
 	}
