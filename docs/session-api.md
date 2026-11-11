@@ -1281,12 +1281,14 @@ Claude subagent transcripts without waiting for startup ingestion. The CLI reque
 returns archived totals with a warning; JSON sets `refresh_incomplete: true`.
 A missing daemon ID returns a retry error while `GET /api/v1/sync/status`
 reports `startup_pending`, `archive_stale`, or `sync_pending`. Once all three
-are clear, it returns exit 2. Pass `--wait` to give HTTP lookup, ingestion,
+are clear, it returns exit 2 without `--wait`. Pass `--wait` to give HTTP lookup, ingestion,
 and refresh a shared 30-second budget after daemon discovery. When startup is
 deferred, combined usage requests it once and keeps observing status if that
 request fails; it does not start an archive rebuild. A known session may refresh
-while catch-up is pending once startup and rebuild are clear. A missing ID
-waits for catch-up and is resolved again. Only a confirmed
+while catch-up is pending once startup and rebuild are clear. A missing ID is
+looked up repeatedly after startup and rebuild clear, including during catch-up.
+At the deadline, an absent ID returns exit 2 if status is clear, or a retry error
+if work remains pending or status is unavailable. Only a confirmed
 parent lock refusal permits a refresh retry. If waiting fails or expires, the
 command reads available saved totals and reports that the wait did not finish.
 An ID that is still absent while work remains pending returns a retry error.
@@ -1298,8 +1300,9 @@ are logged. Archive responses carry `X-Agentsview-Archive-Stale: true` while
 catch-up is incomplete. A required parser rebuild uses the stale header
 independently.
 
-HTTP `--own-only` and `--no-sync` read only the archive. With `--wait`, they
-observe pending work without starting sync. If the wait fails, the command
+HTTP `--own-only` reads usage from the archive and, with `--wait`, can start
+deferred ingestion to find a missing session. HTTP `--no-sync` reads the archive
+and never starts source sync. If the wait fails, the command
 warns and JSON sets `wait_incomplete: true` without marking a refresh. Direct
 and PostgreSQL reads do not wait for a daemon. HTTP archive-only waits require
 daemon API 15; waits that refresh require API 16. Upgrade or restart an older
