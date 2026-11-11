@@ -8,7 +8,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestCockroachFreshSchema(t *testing.T) {
+func TestCockroachSchemaAndCodexScope(t *testing.T) {
 	pgURL := testPGURL(t)
 	const schema = "agentsview_cockroach_fresh_test"
 	cleanNamedPGSchema(t, pgURL, schema)

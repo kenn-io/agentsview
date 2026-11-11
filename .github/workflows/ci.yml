@@ -1103,7 +1103,7 @@ jobs:
             if docker exec cockroach-schema /cockroach/cockroach sql --insecure --host=127.0.0.1:26257 -e 'SELECT 1'; then break; fi
             sleep 1
           done
-          make test-postgres-core-heavy-ci POSTGRES_CORE_HEAVY_TEST=TestCockroachFreshSchema
+          make test-postgres-core-heavy-ci POSTGRES_CORE_HEAVY_TEST=TestCockroachSchemaAndCodexScope
         env:
           TEST_PG_URL: postgres://root@127.0.0.1:26257/defaultdb?sslmode=disable
 
