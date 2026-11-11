@@ -633,7 +633,8 @@ func decodeShelleyMessage(
 	}
 	if content == "" && thinking == "" &&
 		len(toolCalls) == 0 && len(toolResults) == 0 {
-		if !msg.HasContextTokens && !msg.HasOutputTokens {
+		if _, charged := msg.RecordedCost(); !msg.HasContextTokens &&
+			!msg.HasOutputTokens && !charged {
 			return ParsedMessage{}, false, malformed
 		}
 		msg.IsSystem = true
@@ -715,20 +716,23 @@ func applyShelleyUsage(msg *ParsedMessage, usageData, convModel string) error {
 		shelleyTokenCount(u.CacheReadInputTokens)
 	output := shelleyTokenCount(u.OutputTokens)
 
+	// cost_usd is the exe.dev gateway's Exedev-Gateway-Cost header, or 0
+	// when the header was missing. It is kept as a recorded cost, which
+	// prices the message only when the catalog has no rate for its model.
+	cost, hasCost := recordedCostDollars(gjson.ParseBytes(u.CostUSD))
+
 	// Shelley writes an all-zero usage blob on user/tool rows; skip those
 	// so they do not produce spurious token-presence flags or empty
-	// token_usage rows in the cost UNION.
-	if context == 0 && output == 0 {
+	// token_usage rows in the cost UNION. A charged row without token
+	// counts still keeps its cost.
+	if context == 0 && output == 0 && (!hasCost || cost.Microdollars == 0) {
 		return nil
 	}
 
 	// The usage_data keys are already the AgentsView canonical names, so
 	// the raw blob is stored verbatim for catalog cost pricing.
 	msg.TokenUsage = jsontext.Value(usageData)
-	// cost_usd is the exe.dev gateway's Exedev-Gateway-Cost header, or 0
-	// when the header was missing. It is kept as a recorded cost, which
-	// prices the message only when the catalog has no rate for its model.
-	if cost, ok := recordedCostDollars(gjson.ParseBytes(u.CostUSD)); ok {
+	if hasCost {
 		msg.SetRecordedCost(cost)
 	}
 	msg.ContextTokens = context

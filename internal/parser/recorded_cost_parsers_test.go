@@ -130,3 +130,45 @@ func TestOpenCodeKeepsStepFinishCosts(t *testing.T) {
 	require.Len(t, msgs, 1)
 	requireRecordedCost(t, msgs[0], 30_000)
 }
+
+func TestQClawKeepsRecordedCost(t *testing.T) {
+	path, _ := writeQClawTestFile(t, "main",
+		`{"type":"session","version":3,"id":"rc-q","timestamp":"2026-04-30T12:00:00Z","cwd":"/home/user/proj"}`,
+		`{"type":"message","id":"u1","timestamp":"2026-04-30T12:00:01Z","message":{"role":"user","content":[{"type":"text","text":"do a thing"}],"timestamp":"2026-04-30T12:00:01Z"}}`,
+		`{"type":"message","id":"a1","timestamp":"2026-04-30T12:00:02Z","message":{"role":"assistant","content":[{"type":"text","text":"done"}],"timestamp":"2026-04-30T12:00:02Z","model":"vendor/some-model","usage":{"input":3,"output":91,"cost":{"total":0.0042}}}}`,
+	)
+	_, msgs, err := parseQClawSessionForTest(t, path, "", "test")
+	require.NoError(t, err)
+	require.Len(t, msgs, 2)
+	requireRecordedCost(t, msgs[1], 4_200)
+}
+
+func TestShelleyKeepsChargedRowWithoutTokens(t *testing.T) {
+	_, dbPath, db := newShelleyTestDB(t)
+	seedShelleyConversation(
+		t, db, "cRC1", "charged", "/home/user/dev/app",
+		"claude-sonnet-4-6", "", true,
+		"2026-06-15T10:00:00Z", "2026-06-15T10:00:40Z",
+	)
+	seedShelleyMessage(t, db, "cRC1", 1, 1, "user",
+		`{"Role":0,"Content":[{"Type":2,"Text":"go"}]}`,
+		"", "", "2026-06-15T10:00:00Z")
+	seedShelleyMessage(t, db, "cRC1", 2, 1, "error", `{not json`, "",
+		`{"input_tokens":0,"output_tokens":0,"cost_usd":0.25,"model":"custom-model"}`,
+		"2026-06-15T10:00:40Z")
+	seedShelleyMessage(t, db, "cRC1", 3, 1, "error", `{not json`, "",
+		`{"input_tokens":0,"output_tokens":0,"cost_usd":0,"model":"custom-model"}`,
+		"2026-06-15T10:00:41Z")
+	info, err := os.Stat(dbPath)
+	require.NoError(t, err)
+	result, err := parseShelleyConversationDirectForTest(t, dbPath, "cRC1", "m", info)
+	require.NoError(t, err)
+	require.NotNil(t, result)
+
+	require.Len(t, result.Messages, 2, "the charged row is kept; the all-zero row is not")
+	charged := result.Messages[1]
+	requireRecordedCost(t, charged, 250_000)
+	assert.Equal(t, "custom-model", charged.Model)
+	assert.False(t, charged.HasContextTokens, "no token counts are known")
+	assert.False(t, charged.HasOutputTokens, "no token counts are known")
+}
