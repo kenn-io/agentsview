@@ -9,15 +9,18 @@ import (
 
 func TestSessionPushConfig(t *testing.T) {
 	for _, enabled := range []bool{false, true} {
-		c := Config{AcceptSessionPush: enabled}
-		err := c.validateSessionPush()
+		c, err := Default()
+		require.NoError(t, err)
+		c.AcceptSessionPush = enabled
+		c.RequireAuth = false
+		err = c.validateSections()
 		if enabled {
 			require.ErrorContains(t, err, "require_auth")
 		} else {
 			require.NoError(t, err)
 		}
 		c.RequireAuth = true
-		require.NoError(t, c.validateSessionPush())
+		require.NoError(t, c.validateSections())
 	}
 	c := Config{}
 	require.NoError(t, c.applyConfigTOML("accept_session_push = true\nrequire_auth = true\n"))

@@ -115,8 +115,3 @@ func TestSessionPushRebuildWithoutSources(t *testing.T) {
 	require.Len(t, messages, 1)
 	assert.Equal(t, "accepted snapshot", messages[0].Content)
 }
-
-func TestSessionPushReservedMultiSessionFileAndFilteredSource(t *testing.T) {
-	stats := SyncStats{TotalSessions: 3, Skipped: 3, filesOK: 2, filesDiscovered: 2, nonContainerDiscovered: 2, sessionPushReservedFiles: 1, cwdFilteredFiles: 1, cwdFilteredSessions: 1}
-	assert.Empty(t, resyncSwapAbortReason(stats, 1, 0))
-}

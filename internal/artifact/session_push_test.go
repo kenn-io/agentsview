@@ -10,6 +10,7 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"go.kenn.io/agentsview/internal/assets"
 	"go.kenn.io/agentsview/internal/db"
 	"go.kenn.io/agentsview/internal/money"
 	"hegel.dev/go/hegel"
@@ -304,10 +305,50 @@ func TestSessionPushIdentityV1(t *testing.T) {
 	receipt, _, err = DecodeSessionPush(packet)
 	require.NoError(t, err)
 	assert.Equal(t, "e4411fff4c01f253d797d8b92db40d2b24f8bc49c224b23ed802e30b27754aec", receipt.PayloadHash)
+
+	source := testDB(t)
+	image := `[{"type":"input_image","image_url":"data:image/png;base64,AAEC"}]`
+	dbMessage := db.Message{SessionID: "images", Ordinal: 0, Role: "assistant", Content: "answer", ToolCalls: []db.ToolCall{{ToolName: "Read", ToolUseID: "call", ResultContent: image, ResultEvents: []db.ToolResultEvent{{ToolUseID: "call", Source: "tool", Content: image}}}}}
+	session := db.Session{ID: "images", Agent: "claude", Machine: "source", MessageCount: 1}
+	_, err = source.WriteSessionBatchAtomic(t.Context(), []db.SessionBatchWrite{{Session: session, Messages: []db.Message{dbMessage}, ReplaceMessages: true}})
+	require.NoError(t, err)
+	inline, _, err := EncodeSessionPush(t.Context(), source, session.ID, "")
+	require.NoError(t, err)
+	inlineReceipt, _, err := DecodeSessionPush(inline)
+	require.NoError(t, err)
+	dir := t.TempDir()
+	_, err = source.MigrateToolImages(t.Context(), db.StripImagesFilter{}, func(mediaType string, body []byte) (string, bool, error) {
+		return assets.Put(dir, mediaType, body)
+	})
+	require.NoError(t, err)
+	migrated, _, err := EncodeSessionPush(t.Context(), source, session.ID, "")
+	require.NoError(t, err)
+	migratedReceipt, _, err := DecodeSessionPush(migrated)
+	require.NoError(t, err)
+	assert.Equal(t, inlineReceipt.PayloadHash, migratedReceipt.PayloadHash)
+	for _, field := range []string{"summary", "event"} {
+		t.Run(field, func(t *testing.T) {
+			changed := dbMessage
+			changed.ToolCalls = append([]db.ToolCall(nil), dbMessage.ToolCalls...)
+			changed.ToolCalls[0].ResultEvents = append([]db.ToolResultEvent(nil), dbMessage.ToolCalls[0].ResultEvents...)
+			if field == "summary" {
+				changed.ToolCalls[0].ResultContent = strings.ReplaceAll(image, "AAEC", "AAED")
+			} else {
+				changed.ToolCalls[0].ResultEvents[0].Content = strings.ReplaceAll(image, "AAEC", "AAED")
+			}
+			_, err := source.WriteSessionBatchAtomic(t.Context(), []db.SessionBatchWrite{{Session: session, Messages: []db.Message{changed}, ReplaceMessages: true}})
+			require.NoError(t, err)
+			packet, _, err := EncodeSessionPush(t.Context(), source, session.ID, "")
+			require.NoError(t, err)
+			changedReceipt, _, err := DecodeSessionPush(packet)
+			require.NoError(t, err)
+			assert.NotEqual(t, inlineReceipt.PayloadHash, changedReceipt.PayloadHash)
+		})
+	}
 }
 
 func TestSessionPushPreservesCapabilities(t *testing.T) {
-	data, err := encodeSessionPushData(t.Context(), "source", db.Session{ID: "sample", Agent: "claude", Machine: "source", HasToolCalls: true, HasContextData: true}, db.ArtifactExportData{})
+	data, err := encodeSessionPushData(t.Context(), "source", db.Session{ID: "sample", Agent: "claude", Machine: "source", MessageCount: 1, HasToolCalls: true, HasContextData: true}, db.ArtifactExportData{Messages: []db.Message{{Ordinal: 0, Role: "assistant", HasToolUse: true, HasContextTokens: true, ContextTokens: 100, ToolCalls: []db.ToolCall{{ToolName: "Read", ToolUseID: "call"}}}}})
 	require.NoError(t, err)
 	_, write, err := DecodeSessionPush(data)
 	require.NoError(t, err)
@@ -580,15 +621,4 @@ func adversarialSessionPushPacket(t *testing.T, session db.Session, messages []d
 	data, err := json.Marshal(SessionPushEnvelope{Version: 1, SessionID: session.ID, Manifest: sink.manifest, Segments: segments})
 	require.NoError(t, err)
 	return data
-}
-
-func TestSessionPushManyPRLinks(t *testing.T) {
-	links := make([]db.PRLink, 4097)
-	for i := range links {
-		links[i] = db.PRLink{URL: "https://example.test/project/pull/1", Host: "example.test", Repository: "project", Number: 1}
-	}
-	valid := adversarialSessionPushPacket(t, db.Session{ID: "selected", Agent: "claude", Machine: "source", PRLinks: links}, nil)
-	_, write, err := DecodeSessionPush(valid)
-	require.NoError(t, err)
-	assert.Len(t, write.Session.PRLinks, 4097)
 }

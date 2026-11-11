@@ -55,7 +55,6 @@ func TestSessionPushCreatesAndRetryPreservesCuration(t *testing.T) {
 	write.Session.UserMessageCount = 0
 	write.Messages[0].Timestamp = started
 	write.Messages[0].Model = "model"
-	write.Messages[0].TokenUsage = []byte(`{"input_tokens":10}`)
 	filter := UsageFilter{From: "2026-08-10", To: "2026-08-10", Timezone: "UTC"}
 	usage, err := d.GetDailyUsage(ctx, filter)
 	require.NoError(t, err)
@@ -67,7 +66,7 @@ func TestSessionPushCreatesAndRetryPreservesCuration(t *testing.T) {
 	require.True(t, created)
 	usage, err = d.GetDailyUsage(ctx, filter)
 	require.NoError(t, err)
-	assert.Equal(t, 20, usage.Totals.InputTokens)
+	assert.Equal(t, 10, usage.Totals.InputTokens)
 	requireSessionPushReceipt(t, d, "snapshot")
 	messages, err := d.GetAllMessages(ctx, "snapshot")
 	require.NoError(t, err)

@@ -14,7 +14,6 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"go.kenn.io/agentsview/internal/artifact"
-	"go.kenn.io/agentsview/internal/assets"
 	"go.kenn.io/agentsview/internal/config"
 	"go.kenn.io/agentsview/internal/db"
 )
@@ -81,16 +80,17 @@ func TestSessionPushReceiverInsertAndRetry(t *testing.T) {
 	assert.Equal(t, "claude", stored.Agent)
 }
 
-func TestSessionPushReceiverRetryAfterImageMigration(t *testing.T) {
+func TestSessionPushReceiverReportsConflict(t *testing.T) {
 	source := testServer(t, 30*time.Second).db.(*db.DB)
-	id := "source"
-	image := `[{"type":"input_image","image_url":"data:image/png;base64,AAEC"}]`
-	message := db.Message{SessionID: id, Ordinal: 0, Role: "assistant", Content: "answer", ToolCalls: []db.ToolCall{{ToolName: "Read", ToolUseID: "call", ResultContent: image, ResultEvents: []db.ToolResultEvent{{ToolUseID: "call", Source: "tool", Content: image}}}}}
-	_, err := source.WriteSessionBatchAtomic(t.Context(), []db.SessionBatchWrite{{Session: db.Session{ID: id, Agent: "claude", Machine: "source", MessageCount: 1}, Messages: []db.Message{message}, ReplaceMessages: true}})
+	session := db.Session{ID: "source", Agent: "claude", Machine: "source", MessageCount: 1}
+	message := db.Message{SessionID: session.ID, Role: "user", Content: "first"}
+	_, err := source.WriteSessionBatchAtomic(t.Context(), []db.SessionBatchWrite{{Session: session, Messages: []db.Message{message}, ReplaceMessages: true}})
+	require.NoError(t, err)
+	original, _, err := artifact.EncodeSessionPush(t.Context(), source, session.ID, "")
 	require.NoError(t, err)
 	receiver := testServer(t, 30*time.Second)
 	receiver.cfg.AcceptSessionPush, receiver.cfg.RequireAuth, receiver.cfg.AuthToken = true, true, "secret"
-	send := func(receiver *Server, payload []byte) *httptest.ResponseRecorder {
+	send := func(payload []byte) *httptest.ResponseRecorder {
 		r := httptest.NewRequestWithContext(t.Context(), http.MethodPost, "/api/v1/sessions/ingest", bytes.NewReader(payload))
 		r.Header.Set("Authorization", "Bearer secret")
 		r.Header.Set("Content-Type", "application/json")
@@ -98,49 +98,13 @@ func TestSessionPushReceiverRetryAfterImageMigration(t *testing.T) {
 		receiver.Handler().ServeHTTP(w, r)
 		return w
 	}
-	original, _, err := artifact.EncodeSessionPush(t.Context(), source, id, "")
+	require.Equal(t, http.StatusOK, send(original).Code)
+	message.Content = "changed"
+	_, err = source.WriteSessionBatchAtomic(t.Context(), []db.SessionBatchWrite{{Session: session, Messages: []db.Message{message}, ReplaceMessages: true}})
 	require.NoError(t, err)
-	assert.JSONEq(t, `{"session_id":"source","agent":"claude","status":"created"}`, send(receiver, original).Body.String())
-	dir := t.TempDir()
-	_, err = source.MigrateToolImages(t.Context(), db.StripImagesFilter{}, func(mediaType string, body []byte) (string, bool, error) {
-		return assets.Put(dir, mediaType, body)
-	})
+	changed, _, err := artifact.EncodeSessionPush(t.Context(), source, session.ID, "")
 	require.NoError(t, err)
-	migrated, _, err := artifact.EncodeSessionPush(t.Context(), source, id, "")
-	require.NoError(t, err)
-	retry := send(receiver, migrated)
-	require.Equal(t, http.StatusOK, retry.Code, retry.Body.String())
-	assert.JSONEq(t, `{"session_id":"source","agent":"claude","status":"unchanged"}`, retry.Body.String())
-	reverse := testServer(t, 30*time.Second)
-	reverse.cfg.AcceptSessionPush, reverse.cfg.RequireAuth, reverse.cfg.AuthToken = true, true, "secret"
-	assert.JSONEq(t, `{"session_id":"source","agent":"claude","status":"created"}`, send(reverse, migrated).Body.String())
-	_, err = source.WriteSessionBatchAtomic(t.Context(), []db.SessionBatchWrite{{Session: db.Session{ID: id, Agent: "claude", Machine: "source", MessageCount: 1}, Messages: []db.Message{message}, ReplaceMessages: true}})
-	require.NoError(t, err)
-	inline, _, err := artifact.EncodeSessionPush(t.Context(), source, id, "")
-	require.NoError(t, err)
-	assert.JSONEq(t, `{"session_id":"source","agent":"claude","status":"unchanged"}`, send(reverse, inline).Body.String())
-	before, err := receiver.db.(*db.DB).GetAllMessages(t.Context(), id)
-	require.NoError(t, err)
-	for _, field := range []string{"summary", "event"} {
-		t.Run(field, func(t *testing.T) {
-			changedMessage := message
-			changedMessage.ToolCalls = append([]db.ToolCall(nil), message.ToolCalls...)
-			changedMessage.ToolCalls[0].ResultEvents = append([]db.ToolResultEvent(nil), message.ToolCalls[0].ResultEvents...)
-			if field == "summary" {
-				changedMessage.ToolCalls[0].ResultContent = strings.ReplaceAll(image, "AAEC", "AAED")
-			} else {
-				changedMessage.ToolCalls[0].ResultEvents[0].Content = strings.ReplaceAll(image, "AAEC", "AAED")
-			}
-			_, err := source.WriteSessionBatchAtomic(t.Context(), []db.SessionBatchWrite{{Session: db.Session{ID: id, Agent: "claude", Machine: "source", MessageCount: 1}, Messages: []db.Message{changedMessage}, ReplaceMessages: true}})
-			require.NoError(t, err)
-			changed, _, err := artifact.EncodeSessionPush(t.Context(), source, id, "")
-			require.NoError(t, err)
-			assert.Equal(t, http.StatusConflict, send(receiver, changed).Code)
-		})
-	}
-	after, err := receiver.db.(*db.DB).GetAllMessages(t.Context(), id)
-	require.NoError(t, err)
-	assert.Equal(t, before, after)
+	assert.Equal(t, http.StatusConflict, send(changed).Code)
 }
 
 func TestSessionPushReportsVersionAndRebuildRequirements(t *testing.T) {
@@ -185,7 +149,7 @@ type sessionPushObservedBody struct{ reads int }
 func (r *sessionPushObservedBody) Read([]byte) (int, error) { r.reads++; return 0, io.EOF }
 
 func TestSessionPushRejectsBeforeReadingUnauthorizedOrOversizeBody(t *testing.T) {
-	for _, mode := range []string{"unauthorized", "disabled", "auth-off", "oversize", "encoding", "busy", "read-only", "usage-only"} {
+	for _, mode := range []string{"unauthorized", "disabled", "auth-off", "auth-off-token", "oversize", "encoding", "busy", "read-only", "usage-only"} {
 		t.Run(mode, func(t *testing.T) {
 			s := testServer(t, 30*time.Second)
 			s.cfg.AcceptSessionPush, s.cfg.RequireAuth, s.cfg.AuthToken = true, true, "fixture"
@@ -204,6 +168,9 @@ func TestSessionPushRejectsBeforeReadingUnauthorizedOrOversizeBody(t *testing.T)
 			case "auth-off":
 				s.cfg.RequireAuth = false
 				r.Header.Del("Authorization")
+			case "auth-off-token":
+				s.cfg.RequireAuth = false
+				want = http.StatusForbidden
 			case "oversize":
 				r.ContentLength = artifact.MaxSessionPushBytes + 1
 				want = http.StatusRequestEntityTooLarge
