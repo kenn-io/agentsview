@@ -1,6 +1,7 @@
 package db
 
 import (
+	"errors"
 	"path/filepath"
 	"testing"
 	"time"
@@ -10,6 +11,37 @@ import (
 
 	"go.kenn.io/agentsview/internal/export"
 )
+
+func TestProjectIdentityBackfillFailureRecording(t *testing.T) {
+	for _, state := range []string{"pending", "not_needed", "completed"} {
+		t.Run(state, func(t *testing.T) {
+			d := testDB(t)
+			ctx := t.Context()
+			if state == "pending" {
+				require.NoError(t, d.UpsertSession(ctx, Session{ID: "missing", Project: "app", Machine: "local", Agent: "codex"}))
+				_, err := d.getWriter().ExecContext(ctx, `DELETE FROM session_project_identity_snapshots WHERE session_id = 'missing'`)
+				require.NoError(t, err)
+			}
+			if state == "completed" {
+				_, err := d.getWriter().ExecContext(ctx, `INSERT INTO background_migrations (name, state) VALUES (?, 'completed')`, ProjectIdentityBackfillName)
+				require.NoError(t, err)
+			}
+			require.NoError(t, d.FailProjectIdentityBackfill(ctx, errors.New("write failed")))
+			status, err := d.ProjectIdentityBackfillStatus(ctx)
+			require.NoError(t, err)
+			if state == "pending" {
+				assert.Equal(t, "failed", status.State)
+				assert.Equal(t, "write failed", status.LastError)
+			} else {
+				assert.Equal(t, state, status.State)
+			}
+			reader, err := OpenReadOnly(ctx, d.Path())
+			require.NoError(t, err)
+			defer reader.Close()
+			require.ErrorIs(t, reader.FailProjectIdentityBackfill(ctx, errors.New("write failed")), ErrReadOnly)
+		})
+	}
+}
 
 func TestEnsureProjectIdentityBackfillRequeuesUnverifiedCompletedGap(
 	t *testing.T,

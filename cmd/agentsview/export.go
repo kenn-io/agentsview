@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net/http"
 	"sort"
 	"strings"
 	"time"
@@ -16,6 +17,7 @@ import (
 	"go.kenn.io/agentsview/internal/config"
 	"go.kenn.io/agentsview/internal/db"
 	"go.kenn.io/agentsview/internal/export"
+	"go.kenn.io/kit/daemon"
 )
 
 type exportSessionsFormat string
@@ -389,7 +391,37 @@ func unknownExportBackfillState(state string) error {
 }
 
 func exportBackfillFailure(status db.BackgroundMigrationStatus) error {
-	return fmt.Errorf("project identity evidence backfill failed: %s; run `agentsview daemon restart`, then check `agentsview export status`", status.LastError)
+	reason := ""
+	if status.LastError != "" {
+		reason = ": " + status.LastError
+	}
+	return fmt.Errorf("project identity evidence backfill failed%s; run `agentsview daemon restart`, then check `agentsview export status`", reason)
+}
+
+func exportDaemonBackfillFailed(ctx context.Context, rt *DaemonRuntime, token string) bool {
+	ctx, cancel := context.WithTimeout(ctx, time.Second)
+	defer cancel()
+	ep := rt.Record.Endpoint()
+	client := ep.HTTPClient(daemon.HTTPClientOptions{Timeout: time.Second, DisableKeepAlives: true})
+	if token != "" {
+		client.Transport = bearerAuthTransport{token: token, base: client.Transport}
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, ep.BaseURL()+rt.BasePath+"/api/ping", nil)
+	if err != nil {
+		return false
+	}
+	resp, err := client.Do(req)
+	if err != nil {
+		return false
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return false
+	}
+	var ping struct {
+		Failed bool `json:"project_identity_backfill_failed"`
+	}
+	return json.UnmarshalDecode(jsontext.NewDecoder(resp.Body), &ping) == nil && ping.Failed
 }
 
 // Allow transient runtime discovery or ping failures before reporting daemon loss.
@@ -419,7 +451,7 @@ func waitForExportBackfill(ctx context.Context, progress io.Writer, cfg *config.
 		default:
 			return unknownExportBackfillState(status.State)
 		}
-		if FindWritableDaemonRuntime(cfg.DataDir, cfg.AuthToken) == nil {
+		if rt := FindWritableDaemonRuntime(cfg.DataDir, cfg.AuthToken); rt == nil {
 			if unavailableSince.IsZero() {
 				unavailableSince = time.Now()
 			} else if time.Since(unavailableSince) >= exportDaemonUnavailableGrace {
@@ -427,6 +459,9 @@ func waitForExportBackfill(ctx context.Context, progress io.Writer, cfg *config.
 			}
 		} else {
 			unavailableSince = time.Time{}
+			if exportDaemonBackfillFailed(ctx, rt, cfg.AuthToken) {
+				return exportBackfillFailure(db.BackgroundMigrationStatus{})
+			}
 		}
 		if _, err := fmt.Fprintf(progress, "project identity evidence backfill: %s (%d/%d)\n", status.State, status.CompletedItems, status.TotalItems); err != nil {
 			return err

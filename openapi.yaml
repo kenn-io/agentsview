@@ -6115,6 +6115,8 @@ components:
         pid:
           format: int64
           type: integer
+        project_identity_backfill_failed:
+          type: boolean
         service:
           type: string
         sync:

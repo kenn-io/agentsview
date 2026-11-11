@@ -2043,8 +2043,9 @@ agentsview export sessions [flags]
 | `--has-secret`        | `false` | Only sessions with detected secret leaks                  |
 
 With `--wait`, export starts or discovers the local daemon and waits for project
-identity evidence to finish. Progress goes to standard error. Cancel the command
-to stop waiting. A failed backfill or unavailable daemon reports recovery
+identity evidence to finish. A daemon started by export continues running after
+the command until its idle timeout. Progress goes to standard error. Cancel the
+command to stop waiting. A failed backfill or unavailable daemon reports recovery
 commands. Archive-only databases cannot run the backfill; finish it on the
 writable source and restore an archive containing the evidence.
 

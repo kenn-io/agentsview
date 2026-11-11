@@ -926,6 +926,71 @@ func TestExportSessionsStartsRealWorker(t *testing.T) {
 	assert.Len(t, snapshots, 2)
 }
 
+func TestExportWaitReportsUnrecordableFailure(t *testing.T) {
+	path := pendingExportArchive(t, false)
+	dir := filepath.Dir(path)
+	raw, err := sql.Open("sqlite3", path)
+	require.NoError(t, err)
+	defer raw.Close()
+	_, err = raw.ExecContext(t.Context(), `CREATE TRIGGER block_identity_failure BEFORE UPDATE ON background_migrations WHEN NEW.state IN ('running', 'failed') BEGIN SELECT RAISE(FAIL, 'backfill writes blocked'); END`)
+	require.NoError(t, err)
+	home := t.TempDir()
+	var child *exec.Cmd
+	stubStartBackgroundServeForTransport(t, func(ctx context.Context, cfg *config.Config, _ time.Duration, _ bool) (*DaemonRuntime, error) {
+		child = exec.CommandContext(ctx, os.Args[0], "-test.run=^TestExportDaemonHelper$")
+		child.Env = append(os.Environ(), "AGENTSVIEW_EXPORT_HELPER=1", "AGENTSVIEW_DATA_DIR="+dir, "HOME="+home, "XDG_CONFIG_HOME="+filepath.Join(home, "config"), "XDG_CACHE_HOME="+filepath.Join(home, "cache"))
+		if err := child.Start(); err != nil {
+			return nil, err
+		}
+		ticker := time.NewTicker(50 * time.Millisecond)
+		defer ticker.Stop()
+		for {
+			if rt := FindWritableDaemonRuntime(cfg.DataDir, cfg.AuthToken); rt != nil {
+				return rt, nil
+			}
+			select {
+			case <-ctx.Done():
+				return nil, ctx.Err()
+			case <-ticker.C:
+			}
+		}
+	})
+	t.Cleanup(func() {
+		if child != nil && child.Process != nil {
+			_ = child.Process.Kill()
+			_ = child.Wait()
+		}
+	})
+	ctx, cancel := context.WithTimeout(t.Context(), 8*time.Second)
+	defer cancel()
+	out, done := exportWaitCommand(t, ctx, io.Discard)
+	err = <-done
+	require.ErrorContains(t, err, "agentsview daemon restart")
+	assert.Contains(t, err.Error(), "agentsview export status")
+	assert.Empty(t, out.String())
+	require.NoError(t, child.Process.Kill())
+	_ = child.Wait()
+	child = nil
+	_, err = raw.ExecContext(t.Context(), `DROP TRIGGER block_identity_failure`)
+	require.NoError(t, err)
+	resumeCtx, resumeCancel := context.WithTimeout(t.Context(), 15*time.Second)
+	defer resumeCancel()
+	out, done = exportWaitCommand(t, resumeCtx, io.Discard)
+	require.NoError(t, <-done)
+	assert.Len(t, decodeExportSessionsDocument(t, out.String()).Sessions, 2)
+}
+
+func TestExportFailedBackfillWithoutReason(t *testing.T) {
+	path := pendingExportArchive(t, false)
+	raw, err := sql.Open("sqlite3", path)
+	require.NoError(t, err)
+	_, err = raw.ExecContext(t.Context(), `INSERT INTO background_migrations (name, state) VALUES ('session_project_identity_snapshots_v1', 'failed')`)
+	require.NoError(t, err)
+	require.NoError(t, raw.Close())
+	_, _, err = executeExportSessionsCommand(newRootCommand(), "export", "sessions", "--wait")
+	require.ErrorContains(t, err, "backfill failed; run `agentsview daemon restart`")
+}
+
 func TestExportDaemonStartupCases(t *testing.T) {
 	t.Run("startup error", func(t *testing.T) {
 		dir := testDataDir(t)

@@ -7,6 +7,7 @@ export interface PingInfo {
   healthy: boolean;
   ok: boolean;
   pid?: number;
+  project_identity_backfill_failed?: boolean;
   service?: string;
   sync?: SyncProgress;
   version?: string;

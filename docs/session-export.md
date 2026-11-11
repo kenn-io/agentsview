@@ -365,7 +365,8 @@ configuration visible when the migration runs, so a repository that moved or
 changed remotes may not reproduce its original checkout context. Existing stored
 snapshots remain authoritative. `agentsview export status` reports pending,
 running, failed, and completed state; failed status includes the last recorded
-error.
+error. Run `agentsview export sessions --wait` to start the local daemon if
+needed and wait for this work before exporting.
 
 ## Versioning
 

@@ -165,9 +165,10 @@ type Server struct {
 	// (e.g. "/agentsview"). When set, all routes are served
 	// under this prefix and a <base href> tag is injected
 	// into the SPA's index.html.
-	basePath      string
-	idle          *IdleTracker
-	persistDaemon func() error
+	basePath                      string
+	idle                          *IdleTracker
+	persistDaemon                 func() error
+	projectIdentityBackfillFailed func() bool
 
 	ingestionFreshness IngestionFreshness
 
@@ -658,6 +659,11 @@ type IngestionFreshness interface {
 // WithIngestionFreshness waits for local ingestion before archive operations.
 func WithIngestionFreshness(f IngestionFreshness) Option {
 	return func(s *Server) { s.ingestionFreshness = f }
+}
+
+// WithProjectIdentityBackfillFailure reports worker failures independently of the archive.
+func WithProjectIdentityBackfillFailure(f func() bool) Option {
+	return func(s *Server) { s.projectIdentityBackfillFailed = f }
 }
 
 func WithIdleTracker(t *IdleTracker) Option {

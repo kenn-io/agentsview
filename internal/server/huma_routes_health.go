@@ -10,12 +10,13 @@ import (
 )
 
 type PingInfo struct {
-	OK      bool              `json:"ok"`
-	Healthy bool              `json:"healthy"`
-	Service string            `json:"service,omitempty"`
-	Version string            `json:"version,omitempty"`
-	PID     int               `json:"pid,omitempty"`
-	Sync    *syncpkg.Progress `json:"sync,omitempty"`
+	OK                            bool              `json:"ok"`
+	Healthy                       bool              `json:"healthy"`
+	Service                       string            `json:"service,omitempty"`
+	Version                       string            `json:"version,omitempty"`
+	PID                           int               `json:"pid,omitempty"`
+	Sync                          *syncpkg.Progress `json:"sync,omitempty"`
+	ProjectIdentityBackfillFailed bool              `json:"project_identity_backfill_failed,omitempty"`
 }
 
 func (s *Server) registerHealthRoutes() {
@@ -37,14 +38,16 @@ func (s *Server) humaPing(
 			healthy = !current.Stalled
 		}
 	}
+	backfillFailed := s.projectIdentityBackfillFailed != nil && s.projectIdentityBackfillFailed()
 	return &jsonOutput[PingInfo]{
 		Body: PingInfo{
-			OK:      true,
-			Healthy: healthy,
-			Service: daemonService,
-			Version: s.version.Version,
-			PID:     os.Getpid(),
-			Sync:    progress,
+			OK:                            true,
+			Healthy:                       healthy,
+			Service:                       daemonService,
+			Version:                       s.version.Version,
+			PID:                           os.Getpid(),
+			Sync:                          progress,
+			ProjectIdentityBackfillFailed: backfillFailed,
 		},
 	}, nil
 }
