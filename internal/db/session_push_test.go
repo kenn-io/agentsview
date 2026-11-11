@@ -120,12 +120,13 @@ func TestSessionPushConflictsDoNotOverwrite(t *testing.T) {
 				id = legacyTrashMissingPage
 			}
 			receipt, write := sessionPushFixture(id)
-			if kind == "inherited-trash" {
+			switch kind {
+			case "inherited-trash":
 				write.Session.Agent = "codex"
-			} else if kind == "unowned" || kind == "excluded" {
+			case "unowned", "excluded":
 				_, err := d.WriteSessionBatchAtomic(ctx, []SessionBatchWrite{write})
 				require.NoError(t, err)
-			} else {
+			default:
 				created, err := d.ApplySessionPush(ctx, receipt, write)
 				require.NoError(t, err)
 				require.True(t, created)

@@ -20,7 +20,6 @@ func TestSessionPushReservesOrdinaryWriterOwnership(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, messages, 1)
 	assert.Equal(t, "first snapshot", messages[0].Content)
-
 }
 
 func TestSessionPushRejectsDirectTranscriptMutation(t *testing.T) {

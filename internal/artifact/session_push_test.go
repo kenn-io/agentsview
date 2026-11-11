@@ -80,6 +80,7 @@ func TestSessionPushRejectsFutureParserVersion(t *testing.T) {
 func TestSessionPushReceiptIgnoresSegmentBoundaries(t *testing.T) {
 	for name, check := range map[string]func(*testing.T){
 		"rename": func(t *testing.T) {
+			t.Helper()
 			d := testDB(t)
 			require.NoError(t, d.UpsertSession(t.Context(), db.Session{ID: "sample", Agent: "claude", Machine: "source"}))
 			first, _, err := EncodeSessionPush(t.Context(), d, "sample", "")
@@ -95,6 +96,7 @@ func TestSessionPushReceiptIgnoresSegmentBoundaries(t *testing.T) {
 			assert.Equal(t, receipt1.PayloadHash, receipt2.PayloadHash)
 		},
 		"usage and source metadata": func(t *testing.T) {
+			t.Helper()
 			session := db.Session{ID: "sample", Agent: "claude", Machine: "source", MessageCount: 1, UserMessageCount: 1}
 			fields := make([]string, 257)
 			for i := range fields {
@@ -128,6 +130,7 @@ func TestSessionPushReceiptIgnoresSegmentBoundaries(t *testing.T) {
 			assert.Equal(t, receipt1.PayloadHash, receipt2.PayloadHash)
 		},
 		"segments and wire version": func(t *testing.T) {
+			t.Helper()
 			session := db.Session{ID: "sample", Agent: "claude", Machine: "source", MessageCount: 2, UserMessageCount: 1}
 			data := db.ArtifactExportData{Messages: []db.Message{{Ordinal: 0, Role: "user", Content: "hello"}, {Ordinal: 1, Role: "assistant", Content: "world"}}}
 			packet, err := encodeSessionPushData(t.Context(), "source", session, data)
@@ -172,6 +175,7 @@ func TestSessionPushReceiptIgnoresSegmentBoundaries(t *testing.T) {
 			assert.Equal(t, original.PayloadHash, older.PayloadHash)
 		},
 		"repeat": func(t *testing.T) {
+			t.Helper()
 			session := db.Session{ID: "sample", Agent: "claude", Machine: "source"}
 			first, err := encodeSessionPushData(t.Context(), "source", session, db.ArtifactExportData{})
 			require.NoError(t, err)
@@ -217,6 +221,7 @@ func TestSessionPushPreservesCapabilities(t *testing.T) {
 func TestSessionPushSparseOrdinalsAndToolResultCarrier(t *testing.T) {
 	for name, check := range map[string]func(*testing.T){
 		"sparse carrier": func(t *testing.T) {
+			t.Helper()
 			ordinal := 5
 			session := db.Session{ID: "cortex:sample", Agent: "cortex", Machine: "source", MessageCount: 3, UserMessageCount: 1}
 			data := db.ArtifactExportData{
@@ -240,6 +245,7 @@ func TestSessionPushSparseOrdinalsAndToolResultCarrier(t *testing.T) {
 			assert.Equal(t, 5, *write.UsageEvents[0].MessageOrdinal)
 		},
 		"goose counts": func(t *testing.T) {
+			t.Helper()
 			for _, tc := range []struct {
 				name     string
 				count    int
@@ -262,6 +268,7 @@ func TestSessionPushSparseOrdinalsAndToolResultCarrier(t *testing.T) {
 			}
 		},
 		"filtered carrier usage": func(t *testing.T) {
+			t.Helper()
 			ordinal := 1
 			session := db.Session{ID: "zcode:sample", Agent: "zcode", Machine: "source", MessageCount: 2, UserMessageCount: 1}
 			data := db.ArtifactExportData{

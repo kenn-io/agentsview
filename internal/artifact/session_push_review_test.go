@@ -35,7 +35,6 @@ func TestSessionPushUsageRoundTripAndReceipt(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, usage, write.UsageEvents, "keep native IDs, message ordinals and every accounting field")
 	assert.Equal(t, plan, write.PlanUsage, "the root reference remains text, without origin prefix or fetching its session")
-
 }
 
 func TestSessionPushRichRoundTripProperty(t *testing.T) {

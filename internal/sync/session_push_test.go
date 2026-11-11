@@ -61,7 +61,7 @@ func TestSessionPushSharedSourceImportsUnreservedMember(t *testing.T) {
 			engine := NewEngine(t.Context(), d, EngineConfig{Machine: "receiver"})
 			t.Cleanup(engine.Close)
 			jobs := make(chan syncJob, 1)
-			job := syncJob{agent: tc.agent, path: "fixture-source"} //nolint:modernize // Embedded-field literal shorthand is not supported by the CI compiler.
+			job := syncJob{agent: tc.agent, path: "fixture-source"}
 			if tc.excluded {
 				job.excludedSessionIDs = []string{"reserved"}
 			} else {
