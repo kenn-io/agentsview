@@ -1,13 +1,14 @@
 <script lang="ts">
-  import { Card } from "@kenn-io/kit-ui";
+  import { formatCount } from "../../utils/format.js";
+  import StatCard from "../analytics/StatCard.svelte";
   import { formatDateTime, m } from "../../i18n/index.js";
   import type { Report } from "../../api/types.js";
   import { formatMoney } from "../../money.js";
 
   let { report }: { report: Report } = $props();
 
-  function fmtInt(v: number): string {
-    return v.toLocaleString();
+  function fmtMinutes(v: number): string {
+    return formatCount(Math.round(v));
   }
 
   // Subagents are separate from interactive and automated conversation counts.
@@ -16,19 +17,19 @@
     if (t.subagent_sessions > 0) {
       parts.push(
         m.activity_session_kind_split({
-          interactive: fmtInt(t.interactive_sessions),
+          interactive: formatCount(t.interactive_sessions),
           subagents: t.subagent_sessions,
-          subagentsLabel: fmtInt(t.subagent_sessions),
-          automated: fmtInt(t.automated_sessions),
+          subagentsLabel: formatCount(t.subagent_sessions),
+          automated: formatCount(t.automated_sessions),
         }),
       );
     } else if (t.automated_sessions > 0) {
       parts.push(
-        m.activity_interactive_automated_split({ interactive: fmtInt(t.interactive_sessions), automated: fmtInt(t.automated_sessions) }),
+        m.activity_interactive_automated_split({ interactive: formatCount(t.interactive_sessions), automated: formatCount(t.automated_sessions) }),
       );
     }
     if (t.untimed_sessions > 0) {
-      parts.push(m.activity_untimed_count({ count: fmtInt(t.untimed_sessions) }));
+      parts.push(m.activity_untimed_count({ count: formatCount(t.untimed_sessions) }));
     }
     return parts.join(", ");
   }
@@ -63,6 +64,7 @@
     value: string;
     sub?: string;
     featured?: boolean;
+    context?: boolean;
   }
 
   const cards = $derived.by((): SummaryCard[] => {
@@ -70,7 +72,7 @@
     return [
       {
         label: m.activity_interactive_peak(),
-        value: fmtInt(report.interactive_peak.agents),
+        value: formatCount(report.interactive_peak.agents),
         sub: peakAt ? m.activity_at_time({ time: peakAt }) : "",
         featured: true,
       },
@@ -83,20 +85,22 @@
         label: m.activity_agent_minutes(),
         // Round to a whole minute so the card shows "134", not "134.226";
         // matches the Breakdowns rounding of the same metric.
-        value: fmtInt(Math.round(t.agent_minutes)),
+        value: fmtMinutes(t.agent_minutes),
       },
       {
         label: m.activity_sessions(),
-        value: fmtInt(t.sessions),
+        value: formatCount(t.sessions),
         sub: sessionsSub(t),
       },
       {
         label: m.activity_projects(),
-        value: fmtInt(t.distinct_projects),
+        value: formatCount(t.distinct_projects),
+        context: true,
       },
       {
         label: m.activity_models(),
-        value: fmtInt(t.distinct_models),
+        value: formatCount(t.distinct_models),
+        context: true,
       },
       {
         label: m.activity_total_cost(),
@@ -108,17 +112,14 @@
 
 <div class="summary-cards">
   {#each cards as card}
-    <Card
-      level="default"
-      padding="none"
-      class={card.featured ? "card featured" : "card"}
-    >
-      <span class="card-value">{card.value}</span>
-      <span class="card-label">{card.label}</span>
-      {#if card.sub}
-        <span class="card-sub">{card.sub}</span>
-      {/if}
-    </Card>
+    <StatCard
+      value={card.value}
+      label={card.label}
+      sub={card.sub ?? ""}
+      tier={card.featured ? "lead" : card.context ? "context" : "standard"}
+      featured={card.featured}
+      subLines={2}
+    />
   {/each}
 </div>
 
@@ -127,42 +128,5 @@
     display: flex;
     gap: 8px;
     flex-wrap: wrap;
-  }
-
-  .summary-cards :global(.card) {
-    flex: 1;
-    min-width: 110px;
-    padding: 12px;
-    display: flex;
-    flex-direction: column;
-    gap: 2px;
-  }
-
-  .summary-cards :global(.card > .kit-card__body) {
-    display: contents;
-  }
-
-  .summary-cards :global(.card.featured) {
-    border-width: 2px;
-    border-color: var(--accent-blue);
-  }
-
-  .card-value {
-    font-size: 20px;
-    font-weight: 600;
-    color: var(--text-primary);
-    line-height: 1.2;
-  }
-
-  .card-label {
-    font-size: 11px;
-    color: var(--text-muted);
-    font-weight: 500;
-  }
-
-  .card-sub {
-    font-size: 10px;
-    color: var(--text-muted);
-    margin-top: 2px;
   }
 </style>

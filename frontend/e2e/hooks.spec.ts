@@ -14,9 +14,11 @@ function hookCard(page: Page) {
     .filter({ has: page.locator(".label", { hasText: "Hook output" }) });
 }
 
-async function openBlockMenu(page: Page) {
-  await page.locator(".transcript-strip .filter-wrap > button").click();
-  return page.locator(".block-filter-dropdown");
+async function openViewMenu(page: Page) {
+  await page.locator(".view-trigger").click();
+  const menu = page.getByRole("menu", { name: "Transcript view" });
+  await expect(menu).toBeVisible();
+  return menu;
 }
 
 async function expectFollowingReplyBelowHook(page: Page) {
@@ -31,10 +33,10 @@ async function expectFollowingReplyBelowHook(page: Page) {
 
 test("Hooks menu choice filters hook rows", async ({ page }) => {
   await openHookTranscript(page);
-  const menu = await openBlockMenu(page);
-  await menu.getByRole("button", { name: "Hooks", exact: true }).click();
+  const menu = await openViewMenu(page);
+  await menu.getByRole("menuitemcheckbox", { name: "Hooks", exact: true }).click();
   await expect(hookCard(page)).toHaveCount(0);
-  await menu.locator(".block-filter-reset").click();
+  await menu.getByRole("menuitem", { name: "Show all", exact: true }).click();
   await expect(hookCard(page)).toBeVisible();
 });
 

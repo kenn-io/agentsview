@@ -16,7 +16,7 @@ test.describe("Usage page", () => {
     });
     await expect(page.locator(".chart-container")).toBeVisible();
     await expect(
-      page.locator(".chart-container").getByRole("figure", { name: "Cost Over Time" }),
+      page.locator(".chart-container").getByRole("figure", { name: "Cost over time" }),
     ).toBeVisible();
   });
 
@@ -401,7 +401,7 @@ test.describe("Usage input cards", () => {
       await expect(card(page, "Total Input").locator(".card-value")).toHaveText("7.9B");
       const uncached = card(page, "Uncached Input");
       await expect(uncached.locator(".card-value")).toHaveText("248.6M");
-      await expect(uncached.locator(".card-sub")).toHaveText("+7.6B cached");
+      await expect(uncached.locator(".card-sub")).toHaveText("+7.7B cached");
       await expect(page.locator(".card-label", { hasText: /^Input Tokens$/ })).toHaveCount(0);
       await expectStableCards(page);
     });
@@ -412,8 +412,16 @@ test.describe("Usage input cards", () => {
       await page.addInitScript(() => localStorage.setItem("agentsview-locale", "az"));
       await openUsage(page, width);
 
-      await expect(card(page, "Cəmi giriş").locator(".card-value")).toHaveText("7.9B");
-      await expect(card(page, "Keşsiz giriş").locator(".card-value")).toHaveText("248.6M");
+      // Counts use the browser's Intl compact notation for the app language.
+      // WebKit has the Azerbaijani CLDR data ("7,9 mlrd", "248,6 mln");
+      // Chromium's trimmed ICU lacks it and uses the root forms ("7.9G",
+      // "248.6M"). Either way the longer az figures must fit the cards.
+      await expect(card(page, "Cəmi giriş").locator(".card-value")).toHaveText(
+        /^(7\.9G|7,9\smlrd)$/,
+      );
+      await expect(card(page, "Keşsiz giriş").locator(".card-value")).toHaveText(
+        /^(248\.6M|248,6\smln)$/,
+      );
       await expectStableCards(page, false);
     });
   }

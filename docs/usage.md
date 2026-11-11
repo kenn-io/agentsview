@@ -1368,8 +1368,7 @@ organized into sections:
 | Appearance         | Theme (light/dark), high-contrast mode, chart colors, message colors, message layout, zoom, block visibility |
 | Date ranges        | Browser-local checkbox for linking date selections across Sessions, Usage, Activity, Trends, and Quality |
 | Session Providers  | Enable session providers, inspect their session directories, and add alternate agent homes               |
-| Archive content    | Choose whether future imports keep, drop, or offload tool-result images                                  |
-| Tool-result images | Preview and remove images from stored tool results                                                       |
+| Tool-result images | Choose whether future imports keep, drop, or offload tool-result images; preview and remove images already stored |
 | Terminal           | Default terminal emulator for session resume                                                             |
 | Embeddings         | Current semantic-index build phase, progress, throughput, ETA, last result, and local generations        |
 | GitHub             | Personal access token for Gist publishing                                                                |

@@ -70,6 +70,20 @@ const syntheticEditedFiles = Array.from({ length: 30 }, (_, index) => ({
   project: "synthetic-project",
 }));
 
+const syntheticTrendsResponse = {
+  granularity: "week",
+  from: "2026-01-01",
+  to: "2026-01-31",
+  message_count: 100,
+  buckets: [],
+  series: Array.from({ length: 30 }, (_, index) => ({
+    term: `synthetic term ${index + 1}`,
+    total: 30 - index,
+    variants: [`synthetic term ${index + 1}`],
+    points: [],
+  })),
+};
+
 const syntheticTrashedSessions = Array.from({ length: 12 }, (_, index) => ({
   id: `synthetic-trashed-${index + 1}`,
   project: "synthetic-project",
@@ -93,7 +107,7 @@ test.describe("Scrollbar layout", () => {
     await page.goto("/pinned");
 
     const scroller = page.locator(".page-scroll");
-    const heading = page.getByRole("heading", { name: "Pinned Messages" });
+    const heading = page.getByRole("heading", { name: "Pinned messages" });
     await expect(heading).toBeVisible();
     expect(await overflows(scroller)).toBe(false);
     const before = await leftEdge(heading);
@@ -114,32 +128,44 @@ test.describe("Scrollbar layout", () => {
     await page.goto("/recent-edits");
 
     const scroller = page.locator(".page-scroll");
-    const heading = page.getByRole("heading", { name: "Recent Edits" });
+    const heading = page.getByRole("heading", { name: "Recent edits" });
     await expect(heading).toBeVisible();
     expect(await overflows(scroller)).toBe(false);
     const before = await leftEdge(heading);
 
     release();
-    await expect(page.locator(".re-file-row")).toHaveCount(30);
+    // The list is virtualized, so only the rows near the viewport mount.
+    await expect(page.locator(".re-file-row").first()).toBeVisible();
     await expectScrollbarAppeared(scroller);
 
     expect(await leftEdge(heading)).toBe(before);
   });
 
-  test("keeps the Trends column in place when results make the page scroll", async ({ page }) => {
-    const release = await holdRequests(page, "**/api/v1/trends/terms*");
+  test("keeps the Trends layout in place when results fill the term table", async ({ page }) => {
+    // Thirty terms outgrow the term table, which scrolls inside its panel
+    // beside the fixed-height chart; the page itself does not scroll.
+    const release = await holdRequests(page, "**/api/v1/trends/terms*", (route) =>
+      route.fulfill({ json: syntheticTrendsResponse }),
+    );
     await page.goto("/trends");
 
     const scroller = page.locator(".page-scroll");
     const heading = page.getByRole("heading", { name: "Trends" });
+    // Recompute reads "Recomputing" while the request is held. It ends the
+    // right-aligned toolbar group, so its right edge must hold either way.
+    const refresh = page.getByRole("button", { name: /^Recomput/ });
     await expect(heading).toBeVisible();
     expect(await overflows(scroller)).toBe(false);
-    const before = await leftEdge(heading);
+    const headingBefore = await leftEdge(heading);
+    const refreshBefore = await rightEdge(refresh);
 
     release();
-    await expectScrollbarAppeared(scroller);
+    await expect(page.getByText("synthetic term 30", { exact: true })).toBeAttached();
+    await expectScrollbarAppeared(page.locator(".table-panel"));
+    expect(await overflows(scroller)).toBe(false);
 
-    expect(await leftEdge(heading)).toBe(before);
+    expect(await leftEdge(heading)).toBe(headingBefore);
+    expect(await rightEdge(refresh)).toBe(refreshBefore);
   });
 
   test("keeps the Trash column in place when restoring removes the scrollbar", async ({ page }) => {
@@ -181,8 +207,8 @@ test.describe("Scrollbar layout", () => {
     expect(await overflows(scroller)).toBe(false);
     const before = await leftEdge(panel);
 
-    await nav.locator("button", { hasText: "Session Providers" }).click();
-    await expect(page.getByRole("heading", { name: "Session Providers" })).toBeVisible();
+    await nav.locator("button", { hasText: "Session providers" }).click();
+    await expect(page.getByRole("heading", { name: "Session providers" })).toBeVisible();
     await expectScrollbarAppeared(scroller);
 
     expect(await leftEdge(panel)).toBe(before);
@@ -210,7 +236,10 @@ test.describe("Scrollbar layout", () => {
   test("keeps Analytics' right-aligned controls in place when results make the pane scroll", async ({
     page,
   }) => {
-    await page.setViewportSize({ width: 1600, height: 2400 });
+    // Tall enough that the loading cards (about 2290px of pane) fit without
+    // a scrollbar, and short enough that the loaded charts (about 3790px)
+    // overflow it.
+    await page.setViewportSize({ width: 1600, height: 2600 });
     const release = await holdRequests(page, "**/api/v1/analytics/**");
     await page.goto("/sessions");
 

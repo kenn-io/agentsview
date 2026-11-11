@@ -54,16 +54,21 @@
   "nav_trash": "휴지통",
   "nav_search_sessions": "세션 검색...",
   "nav_search_sessions_shortcut": "세션 검색 ({shortcut})",
-  "header_transcript_normal_title": "일반 트랜스크립트 - 모든 메시지 표시",
-  "header_transcript_normal_label": "일반 트랜스크립트 모드",
-  "header_transcript_normal": "일반",
-  "header_transcript_focused_title": "집중 트랜스크립트 - 사용자 프롬프트와 최종 답변만 표시",
-  "header_transcript_focused_label": "집중 트랜스크립트 모드",
-  "header_transcript_focused": "집중",
-  "header_transcript_filter_title": "블록 유형 필터",
-  "header_transcript_filter_label": "블록 유형 필터",
   "header_transcript_visibility": "블록 표시 여부",
   "header_transcript_show_all": "모두 표시",
+  "header_view_trigger": "보기: {layout}",
+  "header_view_trigger_focused": "보기: {layout} · 프롬프트와 답변",
+  "header_view_trigger_label": "대화 보기: {layout}",
+  "header_view_trigger_label_focused": "대화 보기: {layout}, 프롬프트와 답변",
+  "header_view_menu_label": "대화 보기",
+  "header_view_layout_heading": "레이아웃",
+  "header_view_layout_default_description": "펼친 메시지",
+  "header_view_layout_compact_description": "같은 내용을 더 좁은 간격으로",
+  "header_view_layout_stream_description": "화자 표시 없는 채팅",
+  "header_view_layout_skim_description": "메시지와 도구 호출마다 한 줄",
+  "header_view_mode_heading": "내용",
+  "header_view_mode_normal": "모든 메시지와 도구 호출",
+  "header_view_mode_focused": "내 프롬프트와 최종 답변만",
   "header_transcript_blocks_user": "사용자 메시지",
   "header_transcript_blocks_assistant": "어시스턴트 텍스트",
   "header_transcript_blocks_thinking": "사고 블록",
@@ -73,20 +78,12 @@
   "header_transcript_blocks_hook": "훅",
   "header_actions_follow_latest": "최신 메시지 따라가기",
   "header_actions_toggle_sort": "정렬 순서 전환 (o)",
-  "header_actions_cycle_layout": "레이아웃 전환: {layout} (l)",
-  "header_actions_cycle_layout_label": "메시지 레이아웃 전환",
-  "header_actions_export_options": "세션 내보내기 옵션",
-  "header_actions_export_session": "세션 내보내기",
   "header_actions_download_html": "HTML 내보내기 다운로드",
-  "header_actions_copied_markdown_link": "마크다운 링크 복사됨",
   "header_actions_copy_markdown_link": "마크다운 내보내기 링크 복사",
   "header_actions_copy_source_path": "소스 파일 경로 복사",
-  "header_actions_publish_title": "Gist에 게시 (p)",
-  "header_actions_publish_label": "Gist에 게시",
   "header_actions_publish_public": "공개 Gist 게시",
   "header_actions_publish_secret": "비밀 Gist 게시",
   "header_actions_more_actions": "추가 작업",
-  "header_actions_layout": "레이아웃: {layout}",
   "header_actions_refresh_data": "데이터 새로고침",
   "header_actions_refresh_data_shortcut": "데이터 새로고침 (r)",
   "header_actions_sync_sessions": "세션 동기화",
@@ -237,19 +234,19 @@
   "session_breadcrumb_summary_mode_tooltip": "이 transcript에는 도구 결과, 사고 내용, 변경 사항(diff)이 없습니다. 전체 충실도를 보려면 agy-reader 사이드카가 필요합니다 — 설치하거나, 이미 설치했다면 따라잡을 때까지 기다리세요. 방법을 알아보려면 클릭하세요.",
   "session_breadcrumb_malformed_lines": [
     {
-      "declarations": ["input count", "local countPlural = count: plural"],
+      "declarations": ["input count", "input countLabel", "local countPlural = count: plural"],
       "selectors": ["countPlural"],
       "match": {
-        "countPlural=other": "형식 오류가 있는 {count}줄"
+        "countPlural=other": "형식 오류가 있는 {countLabel}줄"
       }
     }
   ],
   "session_breadcrumb_malformed_lines_tooltip": [
     {
-      "declarations": ["input count", "local countPlural = count: plural"],
+      "declarations": ["input count", "input countLabel", "local countPlural = count: plural"],
       "selectors": ["countPlural"],
       "match": {
-        "countPlural=other": "소스 파일에서 {count}줄을 구문 분석할 수 없습니다"
+        "countPlural=other": "소스 파일에서 {countLabel}줄을 구문 분석할 수 없습니다"
       }
     }
   ],
@@ -464,6 +461,13 @@
   "sidebar_row_star_session": "세션 고정",
   "sidebar_row_unstar_session": "세션 고정 해제",
   "sidebar_row_rename": "이름 변경",
+  "sidebar_row_user_message_count": [
+    {
+      "declarations": ["input count", "input countLabel", "local countPlural = count: plural"],
+      "selectors": ["countPlural"],
+      "match": { "countPlural=other": "사용자 메시지 {countLabel}개" }
+    }
+  ],
   "sidebar_row_open_in_new_tab": "새 탭에서 열기",
   "sidebar_row_delete": "삭제",
   "sidebar_row_change_project": "프로젝트 변경…",
@@ -765,9 +769,13 @@
       }
     }
   ],
-  "analytics_top_skills_agent_breakdown": "에이전트별 세부 내역",
   "analytics_top_skills_agents": "에이전트",
-  "analytics_top_skills_projects": "프로젝트: {projects}",
+  "analytics_top_skills_col_skill": "스킬",
+  "analytics_top_skills_col_share": "비중",
+  "analytics_top_skills_col_calls": "호출",
+  "analytics_top_skills_col_sessions": "세션",
+  "analytics_top_skills_col_last_used": "마지막 사용",
+  "analytics_top_skills_projects_label": "프로젝트",
   "analytics_top_skills_empty": "스킬 사용 데이터가 없습니다",
   "analytics_skill_trend_title": "시간별 스킬 사용량",
   "analytics_skill_trend_other": "기타",
@@ -858,12 +866,11 @@
   "settings_search_empty": "일치하는 설정 없음",
   "settings_search_clear": "검색 지우기",
   "settings_search_result": "{category} 표시 중",
-  "settings_search_keywords_appearance": "테마 대비 레이아웃 텍스트 글꼴 블록 theme contrast layout text font blocks 확대 축소 zoom 색상 색각 color",
+  "settings_search_keywords_appearance": "테마 대비 레이아웃 텍스트 글꼴 블록 theme contrast layout text font blocks 확대 축소 zoom 색상 색각 color 너비 width",
   "settings_search_keywords_language": "언어 로캘 번역 language locale translation",
   "settings_search_keywords_date_ranges": "날짜 범위 연결 페이지 date range linked pages",
   "settings_search_keywords_terminal": "터미널 재개 실행 바이너리 인수 클립보드 terminal resume launch binary arguments clipboard",
   "settings_search_keywords_agent_directories": "에이전트 디렉터리 경로 스캔 세션 agent directories paths scan sessions",
-  "settings_search_keywords_worktree_mappings": "워크트리 매핑 프로젝트 경로 레이아웃 worktree mappings projects paths layouts",
   "settings_search_keywords_embeddings": "임베딩 시맨틱 검색 벡터 인덱스 세대 embeddings semantic search vectors index generations",
   "settings_search_keywords_github": "GitHub Gist 토큰 게시 통합 token publish integration",
   "settings_search_keywords_remote_access": "원격 서버 연결 인증 토큰 네트워크 remote server connection auth token network",
@@ -1191,9 +1198,14 @@
   "recent_edits_count": "편집 {count}건",
   "recent_edits_truncated": "전체 {total}건 중 최근 {shown}건 표시",
   "recent_edits_load_more": "더 보기",
-  "recent_edits_refresh": "새로고침",
+  "recent_edits_refresh": "목록 다시 불러오기",
   "recent_edits_search_placeholder": "파일 경로로 필터링",
   "recent_edits_clear_search": "파일 경로 검색 지우기",
+  "recent_edits_col_project": "프로젝트",
+  "recent_edits_col_file": "파일",
+  "recent_edits_col_edits": "편집",
+  "recent_edits_col_last_edit": "마지막 편집",
+  "recent_edits_resize_column": "{column} 열 너비 조정",
   "activity_insight_waiting_server": "서버 버전을 기다리는 중",
   "activity_insight_generate_insight": "인사이트 생성",
   "activity_insight_generation_failed": "생성 실패",
@@ -1472,6 +1484,9 @@
   "recall_generated_export": "내보내기",
   "recall_generated_publish": "게시",
   "recall_generated_publish_secret": "비공개",
+  "recall_generated_group_sessions": "세션",
+  "recall_generated_group_report": "보고서",
+  "recall_generated_read_only_reason": "이 아카이브는 읽기 전용이라 여기서 새 보고서를 생성할 수 없습니다.",
   "recall_page_subtitle": "추출된 항목과 추출 범위를 살펴봅니다.",
   "recall_page_search_placeholder": "리콜 항목 검색…",
   "recall_page_clear_search": "리콜 검색 지우기",
@@ -1691,6 +1706,10 @@
   "insights_page_calibration_no_affected": "영향받은 세션 없음",
   "insights_page_calibration_incomplete_rate": "{rate}% 미완료",
   "insights_page_calibration_incomplete_lift": "미완료 {lift}배",
+  "insights_page_column_signal": "신호",
+  "insights_page_column_count": "횟수",
+  "insights_page_column_sessions": "세션",
+  "insights_page_column_outcome": "결과",
   "insights_page_signal_examples": "신호 예시",
   "insights_page_grade_badge": "등급 {grade}",
   "insights_page_unscored": "채점되지 않음",
@@ -1734,10 +1753,15 @@
   "insights_page_pct_affected": "{pct}% 영향받음",
   "insights_pattern_recommendation_rationale": [
     {
-      "declarations": ["input affected", "input total", "local totalPlural = total: plural"],
+      "declarations": [
+        "input affectedLabel",
+        "input total",
+        "input totalLabel",
+        "local totalPlural = total: plural"
+      ],
       "selectors": ["totalPlural"],
       "match": {
-        "totalPlural=other": "{total}개 세션 중 {affected}개에서 이 결정론적 패턴이 발생했습니다."
+        "totalPlural=other": "{totalLabel}개 세션 중 {affectedLabel}개에서 이 결정론적 패턴이 발생했습니다."
       }
     }
   ],
@@ -1789,13 +1813,14 @@
     {
       "declarations": [
         "input count",
+        "input countLabel",
         "input completedRate",
         "input failureSignals",
         "local countPlural = count: plural"
       ],
       "selectors": ["countPlural"],
       "match": {
-        "countPlural=other": "세션 {count}개, {completedRate}% 완료, 평균 실패 신호 {failureSignals}개"
+        "countPlural=other": "세션 {countLabel}개, {completedRate}% 완료, 평균 실패 신호 {failureSignals}개"
       }
     }
   ],
@@ -1923,6 +1948,10 @@
   "resync_retry": "재시도",
   "resync_error_read_only": "읽기 전용 백엔드에서는 전체 재동기화를 사용할 수 없습니다.",
   "resync_error_in_progress": "이미 동기화가 진행 중입니다.",
+  "shortcuts_group_navigation": "탐색",
+  "shortcuts_group_messages": "메시지",
+  "shortcuts_group_sessions": "세션",
+  "shortcuts_group_actions": "작업",
   "shortcuts_open_command_palette": "명령 팔레트 열기",
   "shortcuts_find_in_session": "세션에서 찾기",
   "shortcuts_close_palette": "팔레트 / 모달 / 검색 닫기",
@@ -1976,7 +2005,7 @@
   "settings_session_providers_save_failed": "세션 공급자를 업데이트하지 못했습니다. 이전 선택이 계속 적용됩니다.",
   "settings_session_providers_homes_title": "대체 홈 디렉터리",
   "settings_session_providers_homes_hint": "사용자 지정 {envVar}와 같은 에이전트 홈 디렉터리를 추가합니다. AgentsView가 세션 디렉터리를 자동으로 찾습니다.",
-  "settings_session_providers_homes_placeholder": "~/.{agent}-work",
+  "settings_session_providers_homes_placeholder": "예: ~/.{agent}-work",
   "settings_session_providers_homes_add": "홈 추가",
   "settings_session_providers_homes_input_aria": "새 {provider} 홈 디렉터리",
   "settings_session_providers_homes_remove_aria": "{provider} 홈 {home} 제거",
@@ -1999,6 +2028,10 @@
   "appearance_chart_palette_matplotlib": "Matplotlib",
   "appearance_chart_palette_colorblind": "색각 이상 친화",
   "appearance_message_layout": "메시지 레이아웃",
+  "appearance_reading_width": "읽기 너비",
+  "appearance_reading_width_default": "기본",
+  "appearance_reading_width_wider": "넓게",
+  "appearance_reading_width_full": "전체",
   "appearance_block_visibility": "블록 표시 여부",
   "settings_github_token_saved": "GitHub 토큰이 저장되었습니다.",
   "settings_github_save_failed": "토큰 저장에 실패했습니다",
@@ -2078,8 +2111,6 @@
   "settings_terminal_args_hint": "(플레이스홀더로 \\{cmd\\} 사용)",
   "settings_terminal_saving": "저장 중...",
   "settings_terminal_save": "저장",
-  "settings_worktree_moved": "프로젝트 분류 규칙이 데이터로 이동했습니다.",
-  "settings_worktree_moved_link": "데이터 › 규칙 열기",
   "worktree_failed_load": "매핑을 불러오지 못했습니다",
   "worktree_failed_save": "매핑 저장에 실패했습니다",
   "worktree_failed_delete": "매핑 삭제에 실패했습니다",
@@ -2107,6 +2138,8 @@
   "worktree_saving": "저장 중...",
   "worktree_add_mapping": "매핑 추가",
   "worktree_save_mapping": "매핑 저장",
+  "worktree_form_new_title": "새 매핑",
+  "worktree_form_edit_title": "매핑 편집",
   "worktree_cancel": "취소",
   "worktree_applying": "적용 중...",
   "worktree_apply_mappings": "매핑 적용",
@@ -2161,8 +2194,8 @@
   "trends_title": "트렌드",
   "trends_date_range": "{from} ~ {to}",
   "trends_reset": "초기화",
-  "trends_refreshing": "새로고침 중",
-  "trends_refresh": "새로고침",
+  "trends_refreshing": "다시 계산 중",
+  "trends_refresh": "다시 계산",
   "trends_terms": "용어",
   "trends_one_per_line": "한 줄에 하나씩",
   "trends_group_by": "그룹 기준",
@@ -2249,9 +2282,6 @@
   "appearance_on": "켜짐",
   "appearance_off": "꺼짐",
   "appearance_zoom": "확대/축소",
-  "settings_archive_content_title": "아카이브 콘텐츠",
-  "settings_archive_content_description": "수집할 때 도구 결과에서 저장하는 내용입니다.",
-  "settings_search_keywords_archive_content": "아카이브 콘텐츠 이미지 보존 도구 결과 플레이스홀더 저장 archive content images retention tool results placeholders storage",
   "settings_tool_result_images": "도구 결과 이미지",
   "settings_tool_result_images_keep": "유지",
   "settings_tool_result_images_drop": "삭제",
@@ -2260,7 +2290,7 @@
   "settings_tool_result_images_restart_notice": "이 변경을 새로 수집되는 세션에 적용하려면 AgentsView 데몬을 다시 시작하세요.",
   "settings_tool_images_title": "도구 결과 이미지",
   "settings_tool_images_description": "도구 결과 내에 저장된 인라인 이미지.",
-  "settings_search_keywords_tool_images": "이미지 도구 결과 제거 정리 페이로드 바이트 저장소",
+  "settings_search_keywords_tool_images": "이미지 도구 결과 제거 정리 페이로드 바이트 저장소 아카이브 콘텐츠 보존 플레이스홀더 저장 archive content images retention tool results placeholders storage",
   "settings_image_cleanup_intro": "인라인 이미지 페이로드가 포함된 저장된 도구 결과를 미리 보고, 해당 페이로드를 읽기 쉬운 자리 표시자로 교체합니다.",
   "settings_image_cleanup_project_label": "프로젝트 포함",
   "settings_image_cleanup_project_placeholder": "모든 프로젝트",
@@ -3085,5 +3115,6 @@
   ],
   "empty_archive_title": "아직 세션이 없습니다",
   "empty_archive_desc": "AgentsView는 이 폴더에서 세션을 읽습니다. 에이전트가 이 중 한 곳에 기록하면 여기에 표시됩니다.",
-  "empty_archive_choose_folders": "폴더 선택"
+  "empty_archive_choose_folders": "폴더 선택",
+  "usage_tooltip_no_usage": "사용 없음"
 }

@@ -1,5 +1,6 @@
 <script lang="ts">
   import { EmptyState } from "@kenn-io/kit-ui";
+  import LibraryPageHeader from "../shared/LibraryPageHeader.svelte";
   import { m } from "../../i18n/index.js";
   import { TrashIcon } from "../../icons.js";
   import { onDestroy, onMount } from "svelte";
@@ -9,7 +10,7 @@
     isAbortError,
   } from "../../api/runtime.js";
   import { sessions } from "../../stores/sessions.svelte.js";
-  import { formatRelativeTime, truncate } from "../../utils/format.js";
+  import { formatRelativeTime, truncate, formatCount } from "../../utils/format.js";
   import { normalizeMessagePreview } from "../../utils/messages.js";
   import { LatestRead } from "../../utils/latest-read.js";
   let trashedSessions: Session[] = $state([]);
@@ -82,27 +83,35 @@
 </script>
 
 <div class="trash-page">
+  <!-- The title stays visible in every state, like the other library
+       pages; the count and Empty trash appear only with deleted sessions. -->
+  <LibraryPageHeader title={m.trash_title()}>
+    {#snippet trailing()}
+      {#if !loading && trashedSessions.length > 0}
+        <span class="trash-count">{trashedSessions.length}</span>
+      {/if}
+    {/snippet}
+    {#snippet actions()}
+      {#if !loading && trashedSessions.length > 0}
+        <button
+          class="empty-all-btn"
+          onclick={emptyAll}
+          disabled={emptying}
+        >
+          {emptying ? m.trash_emptying() : m.trash_empty_trash()}
+        </button>
+      {/if}
+    {/snippet}
+  </LibraryPageHeader>
   {#if loading}
     <div class="loading-state">{m.trash_loading()}</div>
   {:else if trashedSessions.length === 0}
-    <EmptyState title={m.trash_empty()} description={m.trash_empty_desc()}>
+    <EmptyState align="top" title={m.trash_empty()} description={m.trash_empty_desc()}>
       {#snippet icon()}
-        <TrashIcon size="40" strokeWidth="1.6" aria-hidden="true" />
+        <TrashIcon size="24" strokeWidth="1.75" />
       {/snippet}
     </EmptyState>
   {:else}
-    <div class="trash-header">
-      <TrashIcon size="18" strokeWidth="2" class="trash-icon" aria-hidden="true" />
-      <h2>{m.trash_title()}</h2>
-      <span class="trash-count">{trashedSessions.length}</span>
-      <button
-        class="empty-all-btn"
-        onclick={emptyAll}
-        disabled={emptying}
-      >
-        {emptying ? m.trash_emptying() : m.trash_empty_trash()}
-      </button>
-    </div>
 
     <div class="trash-list">
       {#each trashedSessions as session (session.id)}
@@ -114,7 +123,7 @@
               <span class="trash-project">{session.project}</span>
               <span class="trash-msgs">{m.trash_msgs({
                 count: session.user_message_count,
-                countLabel: session.user_message_count.toLocaleString(),
+                countLabel: formatCount(session.user_message_count),
               })}</span>
               {#if session.deleted_at}
                 <span class="trash-deleted">{m.trash_deleted_ago({ time: formatRelativeTime(session.deleted_at) })}</span>
@@ -144,41 +153,20 @@
 </div>
 
 <style>
+  /* Shared library page frame: a 1040px content column. */
   .trash-page {
-    max-width: 800px;
+    max-width: 1088px;
     margin: 0 auto;
-    padding: 40px 24px;
-  }
-
-  .trash-header {
-    display: flex;
-    align-items: center;
-    gap: var(--space-4);
-    margin-bottom: 8px;
-  }
-
-  :global(.trash-icon) {
-    color: var(--text-muted);
-  }
-
-  .trash-header h2 {
-    font-size: 20px;
-    font-weight: 600;
-    color: var(--text-primary);
-    margin: 0;
+    padding: 28px 24px;
   }
 
   .trash-count {
-    background: var(--text-muted);
-    color: white;
-    font-size: 11px;
-    font-weight: 600;
-    padding: 1px 7px;
-    border-radius: 10px;
+    color: var(--text-muted);
+    font-size: 13px;
+    font-variant-numeric: tabular-nums;
   }
 
   .empty-all-btn {
-    margin-left: auto;
     font-size: 11px;
     font-weight: 500;
     color: var(--accent-red, #e55);

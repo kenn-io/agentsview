@@ -4,9 +4,10 @@ import { testMoney } from "../test/money.js";
 import {
   formatRelativeTime,
   sanitizeSnippet,
+  highlightTerms,
   _resetNonceCounter,
   formatCost,
-  formatTokenCount,
+  formatCount,
   formatTokenUsage,
 } from "./format.js";
 
@@ -122,38 +123,23 @@ describe("sanitizeSnippet", () => {
   });
 });
 
-describe("formatTokenCount", () => {
-  it("returns '0' for zero", () => {
-    expect(formatTokenCount(0)).toBe("0");
+describe("formatCount", () => {
+  afterEach(() => {
+    setLocale("en");
   });
 
-  it("returns raw number for values under 1000", () => {
-    expect(formatTokenCount(1)).toBe("1");
-    expect(formatTokenCount(500)).toBe("500");
-    expect(formatTokenCount(999)).toBe("999");
+  it("formats English counts with compact units", () => {
+    setLocale("en");
+    expect(formatCount(1_405)).toBe("1.4K");
   });
 
-  it("formats thousands with 'k' suffix", () => {
-    expect(formatTokenCount(1000)).toBe("1k");
-    expect(formatTokenCount(1200)).toBe("1.2k");
-    expect(formatTokenCount(1250)).toBe("1.2k");
-    expect(formatTokenCount(45000)).toBe("45k");
-    expect(formatTokenCount(45600)).toBe("45.6k");
-    expect(formatTokenCount(999999)).toBe("999.9k");
-  });
-
-  it("formats millions with 'M' suffix", () => {
-    expect(formatTokenCount(1000000)).toBe("1M");
-    expect(formatTokenCount(1200000)).toBe("1.2M");
-    expect(formatTokenCount(1250000)).toBe("1.2M");
-    expect(formatTokenCount(25000000)).toBe("25M");
-    expect(formatTokenCount(25600000)).toBe("25.6M");
-  });
-
-  it("drops decimal when it would be .0", () => {
-    expect(formatTokenCount(2000)).toBe("2k");
-    expect(formatTokenCount(10000)).toBe("10k");
-    expect(formatTokenCount(3000000)).toBe("3M");
+  it("follows the active locale for decimals and compact units", () => {
+    setLocale("fr");
+    expect(formatCount(2.5)).toBe("2,5");
+    expect(formatCount(999)).toBe("999");
+    expect(formatCount(1_405)).toBe("1,4\u00a0k");
+    expect(formatCount(18_033)).toBe("18,0\u00a0k");
+    expect(formatCount(13_144_700_000)).toBe("13,1\u00a0Md");
   });
 });
 
@@ -163,11 +149,109 @@ describe("formatTokenUsage", () => {
   });
 
   it("formats both reported token metrics", () => {
-    expect(formatTokenUsage(2400, true, 180, true)).toBe("2.4k ctx / 180 out");
+    expect(formatTokenUsage(2400, true, 180, true)).toBe("2.4K ctx / 180 out");
+    expect(formatTokenUsage(145_600, true, 12_000, true)).toBe("145.6K ctx / 12.0K out");
   });
 
   it("renders an explicit placeholder for missing token metrics", () => {
     expect(formatTokenUsage(0, false, 180, true)).toBe("— ctx / 180 out");
-    expect(formatTokenUsage(2400, true, 0, false)).toBe("2.4k ctx / — out");
+    expect(formatTokenUsage(2400, true, 0, false)).toBe("2.4K ctx / — out");
+  });
+});
+
+describe("highlightTerms", () => {
+  it("flags case-insensitive matches of each query word", () => {
+    expect(highlightTerms("Goldmark v2 uses goldmark parser", "goldmark parser")).toEqual([
+      { text: "Goldmark", match: true },
+      { text: " v2 uses ", match: false },
+      { text: "goldmark", match: true },
+      { text: " ", match: false },
+      { text: "parser", match: true },
+    ]);
+  });
+
+  it("matches query punctuation literally and in full", () => {
+    expect(highlightTerms("call a.b(c) now", "a.b(c)")).toEqual([
+      { text: "call ", match: false },
+      { text: "a.b(c)", match: true },
+      { text: " now", match: false },
+    ]);
+    expect(highlightTerms("it's done", "it's")).toEqual([
+      { text: "it's", match: true },
+      { text: " done", match: false },
+    ]);
+    expect(highlightTerms("axb(c) here", "a.b(c)")).toEqual([
+      { text: "axb(c) here", match: false },
+    ]);
+  });
+
+  it("strips phrase quotes but keeps the words", () => {
+    expect(highlightTerms("the goldmark parser", '"goldmark"')).toEqual([
+      { text: "the ", match: false },
+      { text: "goldmark", match: true },
+      { text: " parser", match: false },
+    ]);
+  });
+
+  it("keeps quotes inside ordinary words and treats quoted phrases as one term", () => {
+    expect(highlightTerms('a parser" b', 'parser"')).toEqual([
+      { text: "a ", match: false },
+      { text: 'parser"', match: true },
+      { text: " b", match: false },
+    ]);
+    expect(highlightTerms("the goldmark v2 api", '"goldmark v2"')).toEqual([
+      { text: "the ", match: false },
+      { text: "goldmark v2", match: true },
+      { text: " api", match: false },
+    ]);
+  });
+
+  it("uses phrase syntax only when the query starts with a quote, like the backend", () => {
+    // Not leading: every word is literal, quotes included.
+    expect(highlightTerms('fix "bug" here; fix bug', 'fix "bug"')).toEqual([
+      { text: "fix", match: true },
+      { text: " ", match: false },
+      { text: '"bug"', match: true },
+      { text: " here; ", match: false },
+      { text: "fix", match: true },
+      { text: " bug", match: false },
+    ]);
+    // Leading: a doubled quote inside a phrase is one literal quote.
+    expect(highlightTerms('she said "hi" twice', '"said ""hi"""')).toEqual([
+      { text: "she ", match: false },
+      { text: 'said "hi"', match: true },
+      { text: " twice", match: false },
+    ]);
+  });
+
+  it("keeps non-ASCII whitespace inside a quote-led term, like the backend", () => {
+    // U+00A0 does not split terms in quote-led FTS syntax.
+    expect(highlightTerms("fix\u00a0bug, then fix the bug", '"fix"\u00a0"bug"')).toEqual([
+      { text: "fix\u00a0bug", match: true },
+      { text: ", then fix the bug", match: false },
+    ]);
+  });
+
+  it("folds Unicode case and keeps distinct spellings of one word", () => {
+    // U+212A KELVIN SIGN folds to K only under Unicode case folding.
+    expect(highlightTerms("Kelvin scale", "kelvin")).toEqual([
+      { text: "Kelvin", match: true },
+      { text: " scale", match: false },
+    ]);
+    // Dotted capital I lowercases to i plus a combining dot; both spellings
+    // in the query must stay and both must highlight.
+    const lower = "İstanbul".toLowerCase();
+    expect(highlightTerms(`İstanbul and ${lower}`, `İstanbul ${lower}`)).toEqual([
+      { text: "İstanbul", match: true },
+      { text: " and ", match: false },
+      { text: lower, match: true },
+    ]);
+  });
+
+  it("returns the whole text unflagged when no term qualifies", () => {
+    expect(highlightTerms("a short note", "a")).toEqual([{ text: "a short note", match: false }]);
+    expect(highlightTerms("nothing here", "goldmark")).toEqual([
+      { text: "nothing here", match: false },
+    ]);
   });
 });

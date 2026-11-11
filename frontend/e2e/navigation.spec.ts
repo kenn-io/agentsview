@@ -169,7 +169,7 @@ test.describe("Navigation", () => {
     await expect(page.getByText("Previous user prompt")).toBeVisible();
 
     const shortcutsModal = page.getByRole("dialog", {
-      name: "Keyboard Shortcuts",
+      name: "Keyboard shortcuts",
     });
     for (const width of [1280, 768, 400]) {
       await page.setViewportSize({ width, height: 800 });
@@ -183,3 +183,170 @@ test.describe("Navigation", () => {
     }
   });
 });
+
+test.describe("Top bar current tab", () => {
+  // Wide enough that the ten tabs never collapse into the dropdown.
+  test.use({ viewport: { width: 1600, height: 900 } });
+
+  async function tabLooks(page: import("@playwright/test").Page) {
+    const tabs = page.locator(".kit-top-bar__tabs .kit-top-bar__tab");
+    await expect(tabs.first()).toBeVisible();
+    // Park the pointer away from the bar so no tab is hovered.
+    await page.mouse.move(800, 600);
+    return tabs.evaluateAll((els) =>
+      els.map((el) => {
+        const s = getComputedStyle(el);
+        return {
+          label: el.textContent?.trim() ?? "",
+          look: `${s.backgroundColor}|${s.boxShadow}|${s.color}`,
+        };
+      }),
+    );
+  }
+
+  test("marks the route's tab on a tab page", async ({ page }) => {
+    await page.goto("/sessions");
+    const tabs = await tabLooks(page);
+    const sessions = tabs.find((t) => t.label === "Sessions");
+    const others = tabs.filter((t) => t.label !== "Sessions");
+    expect(others.every((t) => t.look !== sessions?.look)).toBe(true);
+  });
+
+  test("shows no tab as current on Settings", async ({ page }) => {
+    await page.goto("/settings");
+    const tabs = await tabLooks(page);
+    expect(new Set(tabs.map((t) => t.look)).size).toBe(1);
+    await expect(page.locator('[aria-current="page"]')).toHaveCount(0);
+
+    // Leaving Settings for the tab the bar would fall back to marks it again.
+    await page
+      .getByRole("navigation", { name: "Primary navigation" })
+      .getByRole("button", { name: "Sessions", exact: true })
+      .click();
+    await expect(page.locator('[aria-current="page"]')).toHaveText("Sessions");
+  });
+
+  test("shows a neutral collapsed menu on Settings", async ({ page }) => {
+    // Ten destinations do not fit at this width, so the tabs collapse.
+    await page.setViewportSize({ width: 1000, height: 700 });
+    await page.goto("/settings");
+    const trigger = page.locator(".kit-top-bar__nav-select .kit-select-dropdown__trigger");
+    await expect(trigger).toHaveText("—");
+    await expect(trigger).toHaveAccessibleName("Primary navigation: —");
+    await expect(page.locator('[aria-current="page"]')).toHaveCount(0);
+
+    // The open menu presents no destination as selected: kit-ui holds the
+    // selection on a disabled "—" placeholder, so every enabled option has
+    // no check, no selected colour or weight, and no aria-selected.
+    await page.mouse.move(0, 0);
+    await trigger.click();
+    const options = page.locator(".kit-top-bar__nav-select [role=option]:enabled");
+    await expect(options.first()).toBeVisible();
+    await expect(
+      page.locator(".kit-top-bar__nav-select [role=option][aria-selected=true]:enabled"),
+    ).toHaveCount(0);
+    await expect(
+      page.locator(
+        ".kit-top-bar__nav-select [role=option]:enabled .kit-select-dropdown__check svg:visible",
+      ),
+    ).toHaveCount(0);
+    // Move the highlight off Sessions so it is measured at rest.
+    await options.last().hover();
+    await expect(options.first()).not.toHaveClass(/highlighted/);
+    const looks = await options.evaluateAll((els) =>
+      els
+        .filter((el) => !el.matches(".highlighted, :disabled"))
+        .map((el) => `${getComputedStyle(el).color} ${getComputedStyle(el).fontWeight}`),
+    );
+    expect(looks.length).toBeGreaterThan(1);
+    expect(new Set(looks).size).toBe(1);
+  });
+});
+
+test.describe("Project picker", () => {
+  const projects = Array.from({ length: 60 }, (_, i) => ({
+    name: `project-${String(i).padStart(2, "0")}`,
+    session_count: 10,
+  }));
+
+  async function openPicker(page: import("@playwright/test").Page) {
+    await page.route("**/api/v1/projects*", (route) => route.fulfill({ json: { projects } }));
+    await page.goto("/sessions");
+    await page.locator(".project-picker .kit-typeahead__trigger").click();
+    // "All Projects" is there before the projects load; wait for the rest
+    // so the list is measured at its full length.
+    await expect(page.locator(".kit-typeahead__option")).toHaveCount(projects.length + 1);
+  }
+
+  test("the open filter field sits above the collapsed navigation and search", async ({ page }) => {
+    // Ten destinations do not fit at this width, so the tabs collapse.
+    await page.setViewportSize({ width: 1400, height: 700 });
+    await openPicker(page);
+    await expect(page.locator(".kit-top-bar__nav-select")).toBeVisible();
+    const hits = await page.locator(".kit-typeahead__input").evaluate((input) => {
+      const r = input.getBoundingClientRect();
+      return [0.1, 0.5, 0.9].map((f) => {
+        const hit = document.elementFromPoint(r.left + r.width * f, r.top + r.height / 2);
+        return !!hit && input.closest(".kit-typeahead")!.contains(hit);
+      });
+    });
+    expect(hits).toEqual([true, true, true]);
+  });
+
+  for (const zoom of ["100", "150"]) {
+    test(`the list shows only whole rows at ${zoom}% zoom`, async ({ page }) => {
+      await page.addInitScript(
+        (value) => localStorage.setItem("agentsview-zoom-level", value),
+        zoom,
+      );
+      await page.setViewportSize({ width: 1400, height: 700 });
+      await openPicker(page);
+      const layout = await page.locator(".kit-typeahead__body").evaluate((body) => {
+        const box = body.getBoundingClientRect();
+        const rows = [...body.querySelectorAll(".kit-typeahead__option")]
+          .map((row) => row.getBoundingClientRect())
+          .filter((row) => row.bottom > box.top + 0.5 && row.top < box.bottom - 0.5);
+        const panel = body.closest(".kit-typeahead__panel")!.getBoundingClientRect();
+        return {
+          rows: rows.length,
+          lastCut: rows.at(-1)!.bottom - box.bottom,
+          bodyInsidePanel: box.bottom <= panel.bottom + 0.5,
+        };
+      });
+      expect(layout.rows).toBeGreaterThan(3);
+      expect(layout.lastCut, JSON.stringify(layout)).toBeLessThanOrEqual(0.5);
+      expect(layout.bodyInsidePanel).toBe(true);
+    });
+  }
+});
+
+for (const width of [320, 375]) {
+  test(`search results keep titles readable and stay inside the palette at ${width}px`, async ({
+    page,
+  }) => {
+    await page.setViewportSize({ width, height: 800 });
+    await page.goto("/usage");
+    await page.keyboard.press("ControlOrMeta+k");
+    const input = page.locator(".palette-input");
+    await expect(input).toBeVisible();
+    await input.fill("synchronous DB read");
+    const items = page.locator(".palette-item", { hasText: "synchronous DB read" });
+    await expect(items.first()).toBeVisible();
+    const rows = await items.evaluateAll((els) =>
+      els.map((row) => {
+        const box = row.getBoundingClientRect();
+        const body = row.querySelector(".item-body")!.getBoundingClientRect();
+        const parts = [...row.children].map((c) => c.getBoundingClientRect());
+        return {
+          bodyShare: body.width / box.width,
+          inside: parts.every((p) => p.left >= box.left - 0.5 && p.right <= box.right + 0.5),
+        };
+      }),
+    );
+    for (const row of rows) {
+      // The title and snippet keep most of the row.
+      expect(row.bodyShare, JSON.stringify(row)).toBeGreaterThanOrEqual(0.6);
+      expect(row.inside, JSON.stringify(row)).toBe(true);
+    }
+  });
+}

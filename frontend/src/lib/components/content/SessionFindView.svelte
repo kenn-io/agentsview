@@ -20,7 +20,7 @@
 {#if inSessionSearch.isOpen && inSessionSearch.resultsOpen}
   <FindResultsList />
 {/if}
-<div class="find-viewport" class:has-find={inSessionSearch.isActive}>
+<div class="find-viewport" class:has-find={inSessionSearch.isActive} class:find-open={inSessionSearch.isOpen}>
   {@render children()}
   {#if inSessionSearch.isActive}
     <FindOverviewRail {items} {totalSize} {newestFirst} {rowOffset} />
@@ -29,5 +29,22 @@
 
 <style>
   .find-viewport { position: relative; display: flex; flex-direction: column; flex: 1; min-height: 0; }
-  .has-find :global(.message-list-scroll) { padding-inline-end: 12px; }
+  /* The overview rail needs 12px plus a 10px gap past the reading column.
+     Wide panes already have that in the side gutter, so the column stays
+     centered on the same edges as the session header; only a pane within
+     44px of the column reserves up to 12px and shifts it. */
+  .has-find {
+    --find-rail: clamp(0px, calc(var(--reading-column) + 44px - 100%), 12px);
+  }
+  .has-find :global(.message-list-scroll) { padding-inline-end: var(--find-rail); }
+  /* While find is open, its field's focus ring is the only blue on screen:
+     the selected card trades MessageList's blue outline for a neutral one,
+     so j/k and clicks still show which message is selected, and a
+     selected card that holds the current match keeps the amber frame from
+     search.css. */
+  .find-open :global(.virtual-row.selected > *) { outline-color: var(--text-muted); }
+  .find-open :global(.virtual-row.selected > [data-search-current="true"]) {
+    outline: 1.5px solid var(--accent-amber);
+    outline-offset: -1.5px;
+  }
 </style>

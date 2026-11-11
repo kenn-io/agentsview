@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { formatCount } from "../../utils/format.js";
   import { analytics } from "../../stores/analytics.svelte.js";
   import PanelStatus from "./PanelStatus.svelte";
   import { router } from "../../stores/router.svelte.js";
@@ -105,7 +106,7 @@
               style="width: {barWidth(bucket)}"
             ></div>
           </div>
-          <span class="bar-count">{bucket.count}</span>
+          <span class="bar-count">{formatCount(bucket.count)}</span>
         </div>
       {/each}
     </div>
@@ -113,7 +114,7 @@
       <div class="shape-footer">
         {m.analytics_session_shape_session_count({
           count: analytics.sessionShape.count,
-          countLabel: analytics.sessionShape.count.toLocaleString(),
+          countLabel: formatCount(analytics.sessionShape.count),
         })}
       </div>
     {/if}
@@ -144,13 +145,16 @@
   .view-toggle {
     display: flex;
     gap: 2px;
+    padding: 2px;
+    border-radius: var(--radius-md);
+    background: var(--bg-inset);
   }
 
   .toggle-btn {
     height: 22px;
     padding: 0 8px;
     border-radius: var(--radius-sm);
-    font-size: 10px;
+    font-size: 11px;
     font-weight: 500;
     color: var(--text-muted);
     cursor: pointer;
@@ -162,9 +166,12 @@
     color: var(--text-secondary);
   }
 
+  /* Shared selected-segment idiom (app.css): raised pill, medium weight. */
   .toggle-btn.active {
-    background: var(--bg-inset);
+    background: var(--selected-strong-bg);
+    box-shadow: var(--selected-strong-edge);
     color: var(--text-primary);
+    font-weight: var(--selected-strong-weight);
   }
 
   .bar-chart {
@@ -192,7 +199,7 @@
 
   .bar-label {
     width: 48px;
-    font-size: 10px;
+    font-size: 11px;
     color: var(--text-muted);
     text-align: right;
     flex-shrink: 0;
@@ -215,7 +222,7 @@
 
   .bar-count {
     width: 32px;
-    font-size: 10px;
+    font-size: 11px;
     color: var(--text-secondary);
     text-align: right;
     flex-shrink: 0;
@@ -223,7 +230,7 @@
 
   .shape-footer {
     margin-top: 8px;
-    font-size: 10px;
+    font-size: 11px;
     color: var(--text-muted);
     text-align: right;
   }
