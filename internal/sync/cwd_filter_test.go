@@ -980,8 +980,8 @@ func TestShouldAbortResyncSwap(t *testing.T) {
 		{
 			name: "deferred and filtered with unaccounted OK file aborts",
 			stats: SyncStats{
-				TotalSessions: 3, filesOK: 3,
-				deferredPreservedIDs: []string{"child"}, cwdFilteredFiles: 1,
+				TotalSessions: 3, filesOK: 3, filesDiscovered: 3,
+				deferredPreservedIDs: []string{"child"}, deferredPreservedFiles: 1, cwdFilteredFiles: 1,
 				cwdFilteredSessions: 1, nonContainerDiscovered: 3,
 			},
 			oldFileSessions: 3,
@@ -990,7 +990,7 @@ func TestShouldAbortResyncSwap(t *testing.T) {
 		{
 			name: "preserved fallback failure proceeds",
 			stats: SyncStats{
-				TotalSessions: 1, filesOK: 1, Failed: 1,
+				TotalSessions: 1, filesOK: 1, filesDiscovered: 1, Failed: 1, deferredPreservedFiles: 1,
 				deferredPreservedIDs:   []string{"antigravity"},
 				preservedRetryFailures: 1, nonContainerDiscovered: 1,
 			},
@@ -999,7 +999,7 @@ func TestShouldAbortResyncSwap(t *testing.T) {
 		{
 			name: "failure beyond preserved fallbacks aborts",
 			stats: SyncStats{
-				TotalSessions: 2, filesOK: 2, Failed: 2,
+				TotalSessions: 2, filesOK: 2, filesDiscovered: 2, Failed: 2, deferredPreservedFiles: 2,
 				deferredPreservedIDs:   []string{"antigravity", "child"},
 				preservedRetryFailures: 1, nonContainerDiscovered: 2,
 			},

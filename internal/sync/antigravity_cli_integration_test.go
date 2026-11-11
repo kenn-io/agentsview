@@ -638,11 +638,34 @@ func TestRebuildAntigravityCLIFallbackPreservesPushedSnapshot(t *testing.T) {
 	write := db.SessionBatchWrite{Session: db.Session{ID: id, Agent: string(parser.AgentAntigravityCLI), Machine: "source", MessageCount: 1, UserMessageCount: 1}, Messages: []db.Message{{SessionID: id, Role: "user", Content: "accepted snapshot"}}, ReplaceMessages: true, DataVersion: db.CurrentDataVersion()}
 	_, err := env.db.ApplySessionPush(t.Context(), receipt, write)
 	require.NoError(t, err)
-	stats := env.engine.ResyncAll(t.Context(), nil)
+	const deferredUUID = "11111111-2222-4333-8444-555555555555"
+	deferredID := "antigravity-cli:" + deferredUUID
+	createAntigravityCLIUndisplayableStepDB(t, filepath.Join(convDir, deferredUUID+".db"))
+	_, err = env.db.WriteSessionBatchAtomic(t.Context(), []db.SessionBatchWrite{{Session: db.Session{ID: deferredID, Agent: string(parser.AgentAntigravityCLI), Machine: "local", MessageCount: 1}, Messages: []db.Message{{SessionID: deferredID, Role: "user", Content: "saved history"}}, ReplaceMessages: true, DataVersion: db.CurrentDataVersion()}})
+	require.NoError(t, err)
+	kiroDir := t.TempDir()
+	kiro := createKiroSQLiteDB(t, kiroDir)
+	payload := readKiroSQLiteFixture(t, "standard_payload.json")
+	for _, member := range []string{"one", "two"} {
+		kiro.addSession(t, "/work/project", member, payload, 1779012000000, 1779012030000)
+		kiroID := "kiro:" + member
+		kiroReceipt := db.SessionPushReceipt{SessionID: kiroID, SourceOrigin: "source", PayloadHash: strings.Repeat("a", 64)}
+		kiroWrite := db.SessionBatchWrite{Session: db.Session{ID: kiroID, Agent: "kiro", Machine: "source", MessageCount: 1}, Messages: []db.Message{{SessionID: kiroID, Role: "user", Content: "kiro snapshot"}}, ReplaceMessages: true, DataVersion: db.CurrentDataVersion()}
+		_, err := env.db.ApplySessionPush(t.Context(), kiroReceipt, kiroWrite)
+		require.NoError(t, err)
+	}
+	engine := sync.NewEngine(t.Context(), env.db, sync.EngineConfig{AgentDirs: map[parser.AgentType][]string{parser.AgentAntigravityCLI: {env.antigravityCLIDir}, parser.AgentKiro: {kiroDir}}, Machine: "local"})
+	t.Cleanup(engine.Close)
+	stats := engine.ResyncAll(t.Context(), nil)
 	require.False(t, stats.Aborted, "%v", stats.Warnings)
 	require.True(t, stats.ArchiveRebuilt)
 	assert.Equal(t, db.CurrentDataVersion(), env.db.GetSessionDataVersion(t.Context(), id))
 	assert.Equal(t, []string{"accepted snapshot"}, antigravityCLIMessageContents(fetchMessages(t, env.db, id)))
+	assert.Equal(t, []string{"saved history"}, antigravityCLIMessageContents(fetchMessages(t, env.db, deferredID)))
+	assert.Less(t, env.db.GetSessionDataVersion(t.Context(), deferredID), db.CurrentDataVersion())
+	for _, id := range []string{"kiro:one", "kiro:two"} {
+		assert.Equal(t, []string{"kiro snapshot"}, antigravityCLIMessageContents(fetchMessages(t, env.db, id)))
+	}
 }
 
 func TestRebuildAntigravityCLIFallbackWithFilteredSource(t *testing.T) {

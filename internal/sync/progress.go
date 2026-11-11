@@ -127,6 +127,7 @@ type SyncStats struct {
 	deferredRetryPaths       []string
 	deferredRetryOverflow    bool
 	deferredPreservedIDs     []string
+	deferredPreservedFiles   int
 	// preservedRetryFailures counts the Failed entries that are preserved
 	// Antigravity CLI fallbacks, whose saved rows a rebuild restores.
 	preservedRetryFailures int

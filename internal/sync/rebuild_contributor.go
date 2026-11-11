@@ -162,6 +162,9 @@ func mergeSyncStats(dst *SyncStats, src SyncStats) {
 	dst.messagesIndexed += src.messagesIndexed
 	dst.parserExcludedFiles += src.parserExcludedFiles
 	dst.sessionPushReservedFiles += src.sessionPushReservedFiles
+	dst.deferredPreservedFiles += src.deferredPreservedFiles
+	dst.preservedRetryFailures += src.preservedRetryFailures
+	dst.deferredPreservedIDs = append(dst.deferredPreservedIDs, src.deferredPreservedIDs...)
 	dst.parserExcludedIDs = append(dst.parserExcludedIDs, src.parserExcludedIDs...)
 	dst.sourceMissingArchiveMembers = append(
 		dst.sourceMissingArchiveMembers, src.sourceMissingArchiveMembers...,

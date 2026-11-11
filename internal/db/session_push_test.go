@@ -39,6 +39,43 @@ func TestSessionPushRejectsArchiveAwaitingRebuild(t *testing.T) {
 	assert.True(t, created)
 }
 
+func TestSessionPushTranscriptsArchiveInvalidatesDiscardedToolSignals(t *testing.T) {
+	for _, policy := range []config.ArchiveContent{config.ArchiveContentFull, config.ArchiveContentTranscripts} {
+		t.Run(string(policy), func(t *testing.T) {
+			d := testDB(t)
+			d.SetArchiveContent(policy)
+			receipt, write := sessionPushFixture("snapshot")
+			write.Messages = []Message{{SessionID: "snapshot", Role: "assistant", ToolCalls: []ToolCall{{ToolName: "Read", InputJSON: `{"path":"sample"}`, ResultContent: "error: failed"}}}}
+			write.Signals = SessionSignalUpdate{ToolFailureSignalCount: 1, ToolRetryCount: 1, QualitySignals: QualitySignals{Version: CurrentQualitySignalVersion}}
+			created, err := d.ApplySessionPush(t.Context(), receipt, write)
+			require.NoError(t, err)
+			require.True(t, created)
+			stored, err := d.GetSessionFull(t.Context(), "snapshot")
+			require.NoError(t, err)
+			require.NotNil(t, stored)
+			messages, err := d.GetAllMessages(t.Context(), "snapshot")
+			require.NoError(t, err)
+			require.Len(t, messages, 1)
+			require.Len(t, messages[0].ToolCalls, 1)
+			if policy == config.ArchiveContentTranscripts {
+				assert.Empty(t, messages[0].ToolCalls[0].ResultContent)
+				assert.Zero(t, stored.ToolFailureSignalCount)
+				assert.Zero(t, stored.ToolRetryCount)
+				assert.Zero(t, stored.QualitySignalVersion)
+			} else {
+				assert.Equal(t, "error: failed", messages[0].ToolCalls[0].ResultContent)
+				assert.Equal(t, 1, stored.ToolFailureSignalCount)
+				assert.Equal(t, 1, stored.ToolRetryCount)
+				assert.Equal(t, CurrentQualitySignalVersion, stored.QualitySignalVersion)
+			}
+			requireSessionPushReceipt(t, d, "snapshot")
+			created, err = d.ApplySessionPush(t.Context(), receipt, write)
+			require.NoError(t, err)
+			assert.False(t, created)
+		})
+	}
+}
+
 func requireSessionPushReceipt(t *testing.T, d *DB, id string) {
 	t.Helper()
 	var origin, hash string

@@ -76,6 +76,17 @@ func (db *DB) storageSessionBatchWrite(write SessionBatchWrite) SessionBatchWrit
 	return write
 }
 
+func (db *DB) storageImportedSessionBatchWrite(write SessionBatchWrite) SessionBatchWrite {
+	write = db.storageSessionBatchWrite(write)
+	if !db.usageOnlyStorage() && db.ArchiveContent().OmitsToolContent() {
+		// The sender's signals were computed from content this archive discards.
+		write.Signals = SessionSignalUpdate{}
+		write.Findings = nil
+		write.SkipSignalUpdates = false
+	}
+	return write
+}
+
 // SessionWouldShortenError reports a rejected message-count decrease.
 type SessionWouldShortenError struct {
 	SessionID        string

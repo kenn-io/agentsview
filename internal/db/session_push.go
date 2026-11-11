@@ -110,7 +110,7 @@ func (db *DB) ApplySessionPush(
 		}
 	}
 	// Image offload publishes files. Decide conflicts/no-ops before any policy I/O.
-	write = db.storageSessionBatchWrite(write)
+	write = db.storageImportedSessionBatchWrite(write)
 
 	var pending recallEvidenceRevocationEvents
 	queries := contextTransaction{ctx: ctx, tx: tx}

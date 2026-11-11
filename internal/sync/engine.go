@@ -3032,9 +3032,9 @@ func resyncSwapAbortReason(
 	// still be accounted for, and the only failures allowed are the preserved
 	// fallbacks, whose saved rows the orphan copy restores.
 	deferredOnly := stats.Synced == 0 && stats.Failed == stats.preservedRetryFailures &&
-		stats.filesOK > 0 && stats.TotalSessions == stats.filesOK &&
-		len(stats.deferredPreservedIDs) > 0 &&
-		len(stats.deferredPreservedIDs)+stats.cwdFilteredFiles+stats.parserExcludedFiles+stats.sessionPushReservedFiles == stats.filesOK
+		stats.filesOK > 0 && stats.filesDiscovered == stats.filesOK &&
+		stats.deferredPreservedFiles > 0 &&
+		stats.deferredPreservedFiles+stats.cwdFilteredFiles+stats.parserExcludedFiles+stats.sessionPushReservedFiles == stats.filesOK
 	// A known ownership reservation writes no source rows. The archived push
 	// is restored later; every discovered file must still have a known outcome.
 	pushReservedOnly := stats.Synced == 0 && stats.Failed == 0 &&
@@ -7543,6 +7543,9 @@ func mergeReconciliationSyncStats(dst *SyncStats, src SyncStats) {
 	dst.messagesIndexed += src.messagesIndexed
 	dst.parserExcludedFiles += src.parserExcludedFiles
 	dst.sessionPushReservedFiles += src.sessionPushReservedFiles
+	dst.deferredPreservedFiles += src.deferredPreservedFiles
+	dst.preservedRetryFailures += src.preservedRetryFailures
+	dst.deferredPreservedIDs = append(dst.deferredPreservedIDs, src.deferredPreservedIDs...)
 	dst.parserExcludedIDs = append(dst.parserExcludedIDs, src.parserExcludedIDs...)
 	dst.Tombstoned += src.Tombstoned
 	dst.sourceMissingArchiveMembers = append(
@@ -11514,12 +11517,17 @@ func (e *Engine) collectAndBatchWithOptions(
 			// publish fallback content and remain marked for retry.
 			if (isCodexFormatAgent(r.agent) && r.deferredCount > 0) ||
 				(r.agent == parser.AgentAntigravityCLI && len(r.retrySessionIDs) > 0) {
+				preservedBefore := len(stats.deferredPreservedIDs)
 				var store db.Store = e.db
 				if e.archiveStore != nil {
 					store = e.archiveStore
 				}
 				kept := allowed[:0]
 				for _, pr := range allowed {
+					id := applyIDPrefixToID(e.idPrefix, pr.Session.ID)
+					if reserved[id] {
+						continue
+					}
 					if isCodexFormatAgent(r.agent) && pr.Session.CodexFork != nil {
 						// The shared writer reconciles explicit replay provenance atomically.
 						kept = append(kept, pr)
@@ -11527,10 +11535,6 @@ func (e *Engine) collectAndBatchWithOptions(
 					}
 					if !r.needsRetryForSession(pr.Session.ID) {
 						kept = append(kept, pr)
-						continue
-					}
-					id := applyIDPrefixToID(e.idPrefix, pr.Session.ID)
-					if reserved[id] {
 						continue
 					}
 					stored, err := savedHistory(ctx, store, id)
@@ -11559,6 +11563,9 @@ func (e *Engine) collectAndBatchWithOptions(
 				}
 				allowed = kept
 				if len(allowed) == 0 {
+					if len(stats.deferredPreservedIDs) > preservedBefore {
+						stats.deferredPreservedFiles++
+					}
 					r.releaseAll()
 					progress.SessionsDone++
 					e.reportProgress(onProgress, progress)
