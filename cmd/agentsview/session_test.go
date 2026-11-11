@@ -2835,6 +2835,40 @@ func TestSessionUsageWaitMissingLookupTimesOut(t *testing.T) {
 	assert.Nil(t, out)
 }
 
+func TestSessionUsageWaitRetriesTransientLookup(t *testing.T) {
+	shortenSessionUsagePoll(t)
+	for _, initial := range []bool{true, false} {
+		t.Run(fmt.Sprintf("initial=%v", initial), func(t *testing.T) {
+			ts, _ := newRemoteUsageServer(t, remoteUsageSpec{canonicalID: "codex:remote-session"})
+			original := ts.Config.Handler
+			lookups := 0
+			ts.Config.Handler = http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if r.URL.Path == "/api/v1/sync/status" {
+					writeJSONResponse(w, `{}`)
+					return
+				}
+				if r.URL.Path == "/api/v1/sessions/codex:remote-session" {
+					lookups++
+					if !initial && lookups == 1 {
+						http.NotFound(w, r)
+						return
+					}
+					if (initial && lookups == 1) || (!initial && lookups == 2) {
+						http.Error(w, "temporarily unavailable", http.StatusServiceUnavailable)
+						return
+					}
+				}
+				original.ServeHTTP(w, r)
+			})
+			out, code, err := httpSessionUsageData(t.Context(), ts.URL, "", sessionUsageQuery{SessionID: "codex:remote-session", Wait: true, NoSync: true})
+			require.NoError(t, err)
+			require.NotNil(t, out)
+			assert.Equal(t, tokenUseExitOK, code)
+			assert.Equal(t, 42, out.TotalOutputTokens)
+		})
+	}
+}
+
 func TestSessionUsageWaitKnownOwnOnlyStartsDeferredIngestion(t *testing.T) {
 	shortenSessionUsagePoll(t)
 	previous := sessionUsageWaitTimeout
