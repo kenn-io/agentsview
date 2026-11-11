@@ -397,7 +397,7 @@ func (v *liveVectorServing) activate(deployment config.VectorEmbeddingsServerCon
 	}
 	if err == nil && builtin && !automatic {
 		if err := embedlocal.RecordChoice(); err != nil {
-			return fmt.Errorf("record shared choice: %w", err)
+			return fmt.Errorf("Can't save across apps: %w", err) //nolint:staticcheck // ST1005: This message appears directly in the UI.
 		}
 	}
 	return err

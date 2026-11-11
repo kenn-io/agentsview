@@ -27,6 +27,9 @@ it.each([
     props: {
       status: {
         running: false,
+        done: 0,
+        eta_milliseconds: 0,
+        total: 0,
         setup: {
           enabled: false,
           action: "turn-on",

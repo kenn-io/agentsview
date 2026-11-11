@@ -84,7 +84,7 @@ func TestSetupReportsSharedChoiceWriteFailure(t *testing.T) {
 	status, err := owner.SetupStatus(t.Context())
 	require.NoError(t, err)
 	assert.Equal(t, "turn-on", status.Action)
-	assert.Contains(t, status.Error, "record shared choice")
+	assert.Contains(t, status.Error, "Can't save across apps")
 }
 
 func TestOllamaEndpointChangesBeforeSetup(t *testing.T) {
