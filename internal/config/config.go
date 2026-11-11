@@ -1229,8 +1229,6 @@ type Config struct {
 	HostExplicit bool `json:"-" toml:"-"`
 	// PortExplicit is true when the user passed --port on the CLI.
 	PortExplicit bool `json:"-" toml:"-"`
-	// VectorEnabledExplicit records an app-level choice in the config file.
-	VectorEnabledExplicit bool `json:"-" toml:"-"`
 
 	// DeploymentEmbeddings is the embedding transport from deployment env,
 	// set only without a [vector] section.
@@ -2233,7 +2231,6 @@ func (c *Config) applyConfigTOML(data string) error {
 	if file.DuckDB.ExcludeProjects != nil && c.DuckDB.ExcludeProjects == nil {
 		c.DuckDB.ExcludeProjects = file.DuckDB.ExcludeProjects
 	}
-	c.VectorEnabledExplicit = meta.IsDefined("vector", "enabled")
 	if file.Vector.Enabled {
 		c.Vector.Enabled = true
 	}
@@ -4229,8 +4226,8 @@ func (c *Config) SaveGithubToken(token string) error {
 // opposed to failures reading or locking the config file.
 var ErrInvalidVectorSetup = errors.New("invalid vector setup")
 
-// ErrVectorSetupDisabled means an automatic setup found an explicit opt-out.
-var ErrVectorSetupDisabled = errors.New("vector setup explicitly disabled")
+// ErrVectorSetupIneligible means automatic setup found an explicit choice.
+var ErrVectorSetupIneligible = errors.New("vector setup has explicit settings")
 
 type invalidVectorSetupError struct{ error }
 
@@ -4240,10 +4237,10 @@ func (invalidVectorSetupError) Is(target error) bool { return target == ErrInval
 
 // VectorSetupEmbeddings returns the validated embeddings recipe SaveVectorSetup
 // would save now, so status and activation select the same provider.
-func (c *Config) VectorSetupEmbeddings() (VectorEmbeddingsConfig, error) {
+func (c *Config) VectorSetupEmbeddings(automatic bool) (VectorEmbeddingsConfig, error) {
 	var embeddings VectorEmbeddingsConfig
 	err := c.withConfigLock(func() error {
-		_, candidate, err := c.vectorSetupCandidate(false)
+		_, candidate, err := c.vectorSetupCandidate(automatic)
 		if err == nil {
 			embeddings = candidate.Vector.Embeddings
 		}
@@ -4318,7 +4315,20 @@ func (c *Config) vectorSetupCandidate(automatic bool) (map[string]any, Config, e
 		section = make(map[string]any)
 	}
 	if enabled, ok := section["enabled"].(bool); automatic && ok && !enabled {
-		return nil, Config{}, ErrVectorSetupDisabled
+		return nil, Config{}, ErrVectorSetupIneligible
+	}
+	if automatic {
+		if embeddings, ok := section["embeddings"].(map[string]any); ok {
+			if model, ok := embeddings["model"].(string); ok && model != "" && model != defaultNomicModel {
+				return nil, Config{}, ErrVectorSetupIneligible
+			}
+			if _, ok := embeddings["servers"]; ok {
+				return nil, Config{}, ErrVectorSetupIneligible
+			}
+			if _, ok := embeddings["default_server"]; ok {
+				return nil, Config{}, ErrVectorSetupIneligible
+			}
+		}
 	}
 	section["enabled"] = true
 	existing["vector"] = section

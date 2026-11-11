@@ -3277,7 +3277,7 @@ func TestSaveVectorSetupPersistsLocalRecipe(t *testing.T) {
 			require.NoError(t, os.WriteFile(filepath.Join(dir, configFileName), []byte(raw), 0o600))
 			cfg, err := LoadReadOnly()
 			require.NoError(t, err)
-			before, err := cfg.VectorSetupEmbeddings()
+			before, err := cfg.VectorSetupEmbeddings(false)
 			require.NoError(t, err)
 			require.NoError(t, cfg.SaveVectorSetup(true, false))
 			saved, err := LoadReadOnly()
@@ -3288,6 +3288,30 @@ func TestSaveVectorSetupPersistsLocalRecipe(t *testing.T) {
 			assert.True(t, selected.Local)
 			before.Servers = saved.Vector.Embeddings.Servers
 			assert.Equal(t, before, saved.Vector.Embeddings)
+		})
+	}
+}
+
+func TestAutomaticVectorSetupRejectsExplicitSettings(t *testing.T) {
+	for _, raw := range []string{
+		"[vector]\nenabled = false\n",
+		"[vector.embeddings]\nmodel = 'custom'\n",
+		"[vector.embeddings]\ndefault_server = 'local'\n",
+		"[vector.embeddings.servers.local]\nlocal = true\n",
+		"[vector.embeddings.servers.remote]\nendpoint = 'https://example.com/v1'\n",
+	} {
+		t.Run(raw, func(t *testing.T) {
+			dir := setupTestEnv(t)
+			cfg, err := LoadReadOnly()
+			require.NoError(t, err)
+			path := filepath.Join(dir, configFileName)
+			require.NoError(t, os.WriteFile(path, []byte(raw), 0o600))
+			_, err = cfg.VectorSetupEmbeddings(true)
+			require.ErrorIs(t, err, ErrVectorSetupIneligible)
+			require.ErrorIs(t, cfg.SaveVectorSetup(true, true), ErrVectorSetupIneligible)
+			data, err := os.ReadFile(path)
+			require.NoError(t, err)
+			assert.Equal(t, raw, string(data))
 		})
 	}
 }
@@ -3304,7 +3328,7 @@ func TestSaveVectorSetupRejectsInvalidCurrentSettings(t *testing.T) {
 			require.NoError(t, err)
 			path := filepath.Join(dir, configFileName)
 			require.NoError(t, os.WriteFile(path, []byte(tc.raw), 0o600))
-			_, setupErr := cfg.VectorSetupEmbeddings()
+			_, setupErr := cfg.VectorSetupEmbeddings(false)
 			saveErr := cfg.SaveVectorSetup(false, false)
 			data, err := os.ReadFile(path)
 			require.NoError(t, err)

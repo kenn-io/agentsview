@@ -126,6 +126,7 @@ describe("EmbeddingsSettings", () => {
       await settle();
       expect(embeddingsService.postApiV1EmbeddingsSetup).toHaveBeenNthCalledWith(1, {
         approved_bytes: 0,
+        expected_provider: "ollama",
       });
       expect(document.body.textContent).toContain("Downloads 295 MB");
       expect(document.body.querySelector('[role="alert"]')?.textContent).toContain(
@@ -137,6 +138,7 @@ describe("EmbeddingsSettings", () => {
       await settle();
       expect(embeddingsService.postApiV1EmbeddingsSetup).toHaveBeenNthCalledWith(2, {
         approved_bytes: 295000000,
+        expected_provider: "built-in",
       });
     } finally {
       unmount(component);
@@ -245,6 +247,29 @@ describe("EmbeddingsSettings", () => {
     await settle(2000);
     expect(document.body.textContent).toContain("Indexing 2 of");
     unmount(component);
+  });
+
+  it("refreshes the displayed provider when setup returns a conflict", async () => {
+    const setup = {
+      enabled: false, action: "turn-on", provider: "ollama", busy: false,
+      installing: false, missing_bytes: 0, downloaded_bytes: 0, total_bytes: 0,
+    };
+    embeddingsService.getApiV1EmbeddingsStatus.mockResolvedValue({ running: false, setup });
+    embeddingsService.postApiV1EmbeddingsSetup.mockImplementation(async () => {
+      embeddingsService.getApiV1EmbeddingsStatus.mockResolvedValue({ running: false, setup: { ...setup, provider: "built-in", missing_bytes: 295000000 } });
+      throw new ApiError(409, "provider changed");
+    });
+    const component = mount(EmbeddingsSettings, { target: document.body });
+    try {
+      await settle();
+      [...document.body.querySelectorAll("button")].find((b) => b.textContent?.trim() === "Turn on")!.click();
+      await settle();
+      expect(embeddingsService.postApiV1EmbeddingsSetup).toHaveBeenCalledWith({ approved_bytes: 0, expected_provider: "ollama" });
+      expect(document.body.textContent).toContain("Downloads 295 MB");
+      expect(document.body.querySelector('[role="alert"]')).toBeNull();
+    } finally {
+      unmount(component);
+    }
   });
 
   it.each([true, false])(

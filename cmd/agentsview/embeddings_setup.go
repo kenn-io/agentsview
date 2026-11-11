@@ -78,14 +78,14 @@ func (v *liveVectorServing) startSharedChoice() {
 		}
 		return
 	}
-	if !chosen || v.cfg.VectorEnabledExplicit || (embeddings.Model != "" && embeddings.Model != "nomic-embed-text") || embeddings.Servers != nil || embeddings.DefaultServer != "" {
+	if !chosen {
 		return
 	}
-	embeddings, err = v.cfg.VectorSetupEmbeddings()
+	embeddings, err = v.cfg.VectorSetupEmbeddings(true)
+	if errors.Is(err, config.ErrVectorSetupIneligible) {
+		return
+	}
 	if err == nil {
-		if embeddings.Model != "nomic-embed-text" || embeddings.Servers != nil || embeddings.DefaultServer != "" {
-			return
-		}
 		_, deployment, resolveErr := embeddings.Server("")
 		err = resolveErr
 		if err == nil {
@@ -204,7 +204,7 @@ func (v *liveVectorServing) SetupStatus(ctx context.Context) (server.EmbeddingsS
 	if missingManager && cfg.DeploymentEmbeddings == nil {
 		status.Action = "turn-on"
 		var err error
-		cfg.Vector.Embeddings, err = cfg.VectorSetupEmbeddings()
+		cfg.Vector.Embeddings, err = cfg.VectorSetupEmbeddings(false)
 		if err != nil {
 			return status, setupRequestError(err)
 		}
@@ -261,7 +261,7 @@ func setupRequestError(err error) error {
 	return err
 }
 
-func (v *liveVectorServing) Setup(approvedBytes int64) error {
+func (v *liveVectorServing) Setup(approvedBytes int64, expectedProvider string) error {
 	status, err := v.SetupStatus(v.ctx)
 	if err != nil {
 		return err
@@ -273,7 +273,7 @@ func (v *liveVectorServing) Setup(approvedBytes int64) error {
 	}
 	embeddings := v.cfg.Vector.Embeddings
 	if v.serving.manager == nil {
-		embeddings, err = v.cfg.VectorSetupEmbeddings()
+		embeddings, err = v.cfg.VectorSetupEmbeddings(false)
 		if err != nil {
 			return setupRequestError(err)
 		}
@@ -284,6 +284,9 @@ func (v *liveVectorServing) Setup(approvedBytes int64) error {
 	}
 	if status.Action != "turn-on" {
 		return fmt.Errorf("%w: setup action is unavailable for the current embeddings provider", vector.ErrInvalidBuildRequest)
+	}
+	if status.Provider != expectedProvider {
+		return server.ErrEmbeddingsProviderChanged
 	}
 	if status.Provider == "built-in" && deployment.Endpoint == "" {
 		deployment.Local = true
@@ -344,7 +347,7 @@ func (v *liveVectorServing) activate(deployment config.VectorEmbeddingsServerCon
 		return err
 	}
 	if v.serving.manager == nil {
-		if err := cfg.SaveVectorSetup(builtin, automatic); errors.Is(err, config.ErrVectorSetupDisabled) {
+		if err := cfg.SaveVectorSetup(builtin, automatic); errors.Is(err, config.ErrVectorSetupIneligible) {
 			return nil
 		} else if err != nil {
 			return err
