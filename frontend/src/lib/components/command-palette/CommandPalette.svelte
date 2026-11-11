@@ -2,11 +2,12 @@
   import { m } from "../../i18n/index.js";
   import {
     Button,
+    IconButton,
     KbdBadge,
     SegmentedControl,
     type SegmentedControlOption,
   } from "@kenn-io/kit-ui";
-  import { SearchIcon } from "../../icons.js";
+  import { SearchIcon, XIcon } from "../../icons.js";
   import { tick, onDestroy, untrack } from "svelte";
   import { ui } from "../../stores/ui.svelte.js";
   import { sessions } from "../../stores/sessions.svelte.js";
@@ -125,6 +126,18 @@
     } else {
       searchStore.clear();
     }
+  }
+
+  // Starts over, as a fresh open would: no query, the sidebar's project, and
+  // the default sort and date range.
+  function clearSearch() {
+    inputValue = "";
+    project = sessions.filters.project;
+    selectedIndex = 0;
+    searchStore.clear();
+    searchStore.resetSort();
+    searchStore.resetRange();
+    inputRef?.focus();
   }
 
   function handleKeydown(e: KeyboardEvent) {
@@ -301,6 +314,15 @@
         value={inputValue}
         oninput={handleInput}
       />
+      {#if inputValue}
+        <IconButton
+          size="sm"
+          ariaLabel={m.command_palette_clear_search()}
+          onclick={clearSearch}
+        >
+          <XIcon size="14" aria-hidden="true" />
+        </IconButton>
+      {/if}
       <KbdBadge keys={["⎋"]} joiner="compact" ariaLabel="Escape" />
     </div>
 

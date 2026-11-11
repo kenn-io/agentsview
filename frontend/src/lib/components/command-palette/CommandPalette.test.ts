@@ -337,6 +337,62 @@ describe("CommandPalette", () => {
     }
   });
 
+  it("offers the clear button only while there is a query", async () => {
+    const component = mount(CommandPalette, { target: document.body });
+    try {
+      await tick();
+      const clearButton = () =>
+        document.querySelector<HTMLButtonElement>('button[aria-label="Clear search"]');
+      expect(clearButton()).toBeNull();
+
+      await enterSearchQuery("co");
+      expect(clearButton()).not.toBeNull();
+
+      await enterSearchQuery("");
+      expect(clearButton()).toBeNull();
+    } finally {
+      unmount(component);
+    }
+  });
+
+  it("clears a reopened search back to a fresh palette", async () => {
+    mockSessions.filters.project = "";
+    mockSearchStore.restore.mockReturnValueOnce({
+      query: "configuration",
+      project: "proj-a",
+      selectedIndex: 1,
+    });
+    mockSearchStore.results = [
+      makeSearchResult({ session_id: "codex:first" }),
+      makeSearchResult({ session_id: "codex:second" }),
+    ];
+    const component = mount(CommandPalette, { target: document.body });
+    try {
+      await tick();
+      const input = document.querySelector<HTMLInputElement>(".palette-input")!;
+      document.querySelector<HTMLButtonElement>('button[aria-label="Clear search"]')!.click();
+      await tick();
+
+      expect(input.value).toBe("");
+      expect(document.activeElement).toBe(input);
+      expect(mockUi.activeModal).toBe("commandPalette");
+      expect(mockSearchStore.clear).toHaveBeenCalledOnce();
+      expect(mockSearchStore.resetSort).toHaveBeenCalledOnce();
+      expect(mockSearchStore.resetRange).toHaveBeenCalledOnce();
+      // Recent sessions replace the results, with the first one highlighted.
+      const items = document.querySelectorAll<HTMLElement>(".palette-item");
+      expect(items).toHaveLength(mockSessions.sessions.length);
+      expect(items[0]!.classList.contains("selected")).toBe(true);
+      expect(document.querySelector('button[aria-label="Clear search"]')).toBeNull();
+
+      // The retained project is gone: the next query searches the sidebar's.
+      await enterSearchQuery("another");
+      expect(mockSearchStore.search).toHaveBeenLastCalledWith("another", "");
+    } finally {
+      unmount(component);
+    }
+  });
+
   it("copies canonical session_id to clipboard, not stripped display ID", async () => {
     // Prefixed ID: stripIdPrefix("codex:abc123def456", "codex") → "abc123def456"
     // Display shows first 8 chars: "abc123de"

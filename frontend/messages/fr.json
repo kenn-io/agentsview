@@ -154,6 +154,7 @@
   "status_bar_synced_ago": "synchronisé {time}",
   "status_bar_build": "Build\u202f: {commit}",
   "command_palette_placeholder": "Rechercher dans les sessions et les messages...",
+  "command_palette_clear_search": "Effacer la recherche",
   "command_palette_search_mode_label": "Mode de recherche",
   "command_palette_mode_fulltext": "Texte intégral",
   "command_palette_mode_semantic": "Sémantique",

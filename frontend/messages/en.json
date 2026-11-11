@@ -154,6 +154,7 @@
   "status_bar_synced_ago": "synced {time}",
   "status_bar_build": "Build: {commit}",
   "command_palette_placeholder": "Search sessions and messages...",
+  "command_palette_clear_search": "Clear search",
   "command_palette_search_mode_label": "Search mode",
   "command_palette_mode_fulltext": "Full text",
   "command_palette_mode_semantic": "Semantic",
