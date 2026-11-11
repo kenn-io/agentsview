@@ -13,9 +13,13 @@ import (
 	"os/exec"
 	"path/filepath"
 	"slices"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
+	"unicode/utf16"
+
+	"golang.org/x/text/unicode/norm"
 
 	"go.kenn.io/agentsview/internal/pathutil"
 )
@@ -219,6 +223,11 @@ func newUUID() (string, error) {
 }
 
 func validUUID(value string) bool {
+	return ValidUUID(value)
+}
+
+// ValidUUID reports whether value has the native UUID text shape.
+func ValidUUID(value string) bool {
 	if len(value) != 36 {
 		return false
 	}
@@ -453,16 +462,38 @@ func absoluteExpandedPath(path string) (string, error) {
 	return filepath.Abs(expanded)
 }
 
-func encodeClaudeWorkDir(dir string) string {
-	dir = filepath.Clean(dir)
-	return strings.Map(func(r rune) rune {
-		if r == '-' || r >= 'a' && r <= 'z' || r >= 'A' && r <= 'Z' ||
-			r >= '0' && r <= '9' {
-			return r
+// ClaudeProjectDir encodes a checkout path as Claude Code 2.1.322 does.
+func ClaudeProjectDir(dir string) string {
+	abs, err := filepath.Abs(dir)
+	if err != nil {
+		abs = filepath.Clean(dir)
+	}
+	if resolved, err := filepath.EvalSymlinks(abs); err == nil {
+		abs = resolved
+	}
+	units := utf16.Encode([]rune(norm.NFC.String(abs)))
+	var b strings.Builder
+	var hash int32
+	for _, c := range units {
+		hash = hash*31 + int32(c)
+		if c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z' || c >= '0' && c <= '9' {
+			b.WriteByte(byte(c))
+		} else {
+			b.WriteByte('-')
 		}
-		return '-'
-	}, dir)
+	}
+	name := b.String()
+	if len(name) <= 200 {
+		return name
+	}
+	h := int64(hash)
+	if h < 0 {
+		h = -h
+	}
+	return name[:200] + "-" + strconv.FormatInt(h, 36)
 }
+
+func encodeClaudeWorkDir(dir string) string { return ClaudeProjectDir(dir) }
 
 // scanFirstLine is used only for exact candidate validation. It stops before
 // allocating beyond the caller's JSONL line bound.

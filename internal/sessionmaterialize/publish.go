@@ -1,0 +1,103 @@
+package sessionmaterialize
+
+import (
+	"bytes"
+	"context"
+	"errors"
+	"fmt"
+	"os"
+	"path/filepath"
+
+	"go.kenn.io/kit/atomicfile"
+)
+
+type installFile struct {
+	path string
+	data []byte
+}
+
+// publishFiles preflights every destination before publishing in order. Callers
+// put the primary transcript last, after all its dependencies.
+func publishFiles(ctx context.Context, files []installFile) (changed bool, err error) {
+	temps := make([]string, len(files))
+	defer func() {
+		for _, name := range temps {
+			if name != "" {
+				_ = os.Remove(name)
+			}
+		}
+		if err != nil && changed {
+			err = fmt.Errorf("partial publication; retry to reuse installed files: %w", err)
+		}
+	}()
+	seen := make(map[string]bool, len(files))
+	for i, file := range files {
+		if err := ctx.Err(); err != nil {
+			return false, err
+		}
+		if seen[file.path] {
+			return false, fmt.Errorf("duplicate destination: %s", file.path)
+		}
+		seen[file.path] = true
+		if same, err := identicalDestination(file); err != nil {
+			return false, err
+		} else if same {
+			continue
+		}
+		if err := os.MkdirAll(filepath.Dir(file.path), 0700); err != nil {
+			return false, err
+		}
+		f, err := os.CreateTemp(filepath.Dir(file.path), ".materialize-*")
+		if err != nil {
+			return false, err
+		}
+		temps[i] = f.Name()
+		_, err = f.Write(file.data)
+		if err == nil {
+			err = f.Sync()
+		}
+		err = errors.Join(err, f.Close())
+		if err != nil {
+			return false, err
+		}
+	}
+	for i, file := range files {
+		if temps[i] == "" {
+			continue
+		}
+		if err := ctx.Err(); err != nil {
+			return changed, err
+		}
+		if err := atomicfile.RenameNoReplace(temps[i], file.path); err != nil {
+			if same, cmp := identicalDestination(file); cmp != nil {
+				return changed, cmp
+			} else if !same {
+				return changed, err
+			}
+			continue
+		}
+		changed = true
+	}
+	return changed, nil
+}
+
+func identicalDestination(file installFile) (bool, error) {
+	info, err := os.Lstat(file.path)
+	if errors.Is(err, os.ErrNotExist) {
+		return false, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	if !info.Mode().IsRegular() {
+		return false, fmt.Errorf("destination is not a regular file: %s", file.path)
+	}
+	old, err := os.ReadFile(file.path)
+	if err != nil {
+		return false, err
+	}
+	if !bytes.Equal(old, file.data) {
+		return false, fmt.Errorf("destination differs: %s", file.path)
+	}
+	return true, nil
+}
