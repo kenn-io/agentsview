@@ -724,6 +724,9 @@ func TestSessionPushRetainedImages(t *testing.T) {
 			assert.Contains(t, got[0].Content, "![chart](data:image/png;base64,AAEC)")
 			assert.Contains(t, got[0].Content, "[pic]: data:image/png;base64,AAEC")
 			assert.Contains(t, got[0].Content, "`![example](asset://fake.png)`")
+			images := db.MarkdownAssetImages(got[0].Content)
+			require.Len(t, images, 2)
+			assert.Equal(t, "ae4b3280e56e2faf83f414a6e3dabe9d5fbe18976544c05fed121accb85b53fc", images[0].SHA256)
 			for _, content := range []string{got[0].ToolCalls[0].ResultContent, got[0].ToolCalls[0].ResultEvents[0].Content} {
 				body, err := db.ReadRetainedImage(t.Context(), content, 0, dir, 100)
 				require.NoError(t, err)
