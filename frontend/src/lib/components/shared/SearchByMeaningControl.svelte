@@ -42,7 +42,6 @@
       onchange(true);
     } catch (e) {
       if (e instanceof ApiError && e.status === 409 && (e.code === "embeddings_provider_changed" || e.code === "embeddings_build_running")) {
-        if (e.code === "embeddings_provider_changed") error = e.message;
         onchange(e.code === "embeddings_build_running");
         return;
       }
