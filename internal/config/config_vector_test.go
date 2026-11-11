@@ -1,13 +1,14 @@
 package config
 
 import (
-	"go.kenn.io/kit/embedlocal"
 	"maps"
 	"path/filepath"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"go.kenn.io/kit/embedlocal"
 )
 
 // validVectorConfig returns a VectorConfig with every field enabled
