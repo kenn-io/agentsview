@@ -29,9 +29,9 @@
     { id: "skim", name: m.appearance_layout_skim, description: m.header_view_layout_skim_description },
   ];
 
-  const MODES: { id: TranscriptMode; name: () => string; description: () => string }[] = [
-    { id: "normal", name: m.header_view_mode_normal, description: m.header_view_mode_normal_description },
-    { id: "focused", name: m.header_view_mode_focused, description: m.header_view_mode_focused_description },
+  const MODES: { id: TranscriptMode; name: () => string }[] = [
+    { id: "normal", name: m.header_view_mode_normal },
+    { id: "focused", name: m.header_view_mode_focused },
   ];
 
   const BLOCK_LABELS: Record<BlockType, () => string> = {
@@ -102,7 +102,7 @@
 <Menu align="end">
   <MenuTrigger
     class={["view-trigger", { filtered }]}
-    title={`${triggerText}\n${m.header_view_trigger_title()}`}
+    title={triggerText}
     ariaLabel={focused
       ? m.header_view_trigger_label_focused({ layout: layoutName })
       : m.header_view_trigger_label({ layout: layoutName })}
@@ -161,10 +161,7 @@
     >
       {#each MODES as mode (mode.id)}
         <MenuRadioItem value={mode.id} closeOnSelect={false} textValue={mode.name()} class="view-option">
-          <span class="option-text">
-            <span class="option-name">{mode.name()}</span>
-            <span class="option-description">{mode.description()}</span>
-          </span>
+          <span class="option-name">{mode.name()}</span>
         </MenuRadioItem>
       {/each}
     </MenuRadioGroup>

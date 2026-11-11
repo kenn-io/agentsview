@@ -79,7 +79,7 @@ test("switching content and layout with the View menu open keeps the transcript 
   const pick = (name: string) =>
     page.getByRole("menuitemradio", { name: new RegExp(`^${name}`) }).click();
 
-  await pick("Prompts and final answers");
+  await pick("Only your prompts and final answers");
   await expectHealthy(
     page,
     (layout) => layout.scrollHeight < everythingHeight * 0.75,
@@ -87,7 +87,7 @@ test("switching content and layout with the View menu open keeps the transcript 
   );
   const promptsHeight = (await transcriptLayout(page)).scrollHeight;
 
-  await pick("Everything");
+  await pick("All messages and tool calls");
   await expectHealthy(
     page,
     (layout) => layout.scrollHeight > promptsHeight * 1.5,
@@ -100,5 +100,7 @@ test("switching content and layout with the View menu open keeps the transcript 
   }
 
   // Every pick above kept the menu open.
-  await expect(page.getByRole("menuitemradio", { name: /^Everything/ })).toBeVisible();
+  await expect(
+    page.getByRole("menuitemradio", { name: /^All messages and tool calls/ }),
+  ).toBeVisible();
 });

@@ -151,7 +151,8 @@ async function setTranscriptMode(page: Page, mode: "normal" | "focused") {
   await page.locator(".view-trigger").click();
   await page
     .getByRole("menuitemradio", {
-      name: mode === "normal" ? "Everything" : "Prompts and final answers",
+      name:
+        mode === "normal" ? "All messages and tool calls" : "Only your prompts and final answers",
     })
     .click();
   // Mode picks keep the View menu open; close it so the transcript gets input.

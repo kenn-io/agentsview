@@ -195,7 +195,7 @@ test("transcript controls fit a very narrow transcript pane", async ({ page }) =
   await sp.selectFirstSession();
   await page.getByRole("button", { name: "Show session analysis" }).click();
   await page.locator(".view-trigger").click();
-  await page.getByRole("menuitemradio", { name: "Prompts and final answers" }).click();
+  await page.getByRole("menuitemradio", { name: "Only your prompts and final answers" }).click();
   await page.keyboard.press("Escape");
 
   const pane = await box(page, ".session-breadcrumb");
@@ -222,7 +222,7 @@ test("the View trigger shows its full label and keeps its width across layouts a
   const widths = new Set<number>();
   // Layout and mode picks keep the menu open, so one open covers them all.
   await trigger.click();
-  for (const mode of ["Everything", "Prompts and final answers"]) {
+  for (const mode of ["All messages and tool calls", "Only your prompts and final answers"]) {
     await page.getByRole("menuitemradio", { name: new RegExp(`^${mode}`) }).click();
     for (const layout of ["Default", "Compact", "Stream", "Skim"]) {
       await page.getByRole("menuitemradio", { name: new RegExp(`^${layout}`) }).click();

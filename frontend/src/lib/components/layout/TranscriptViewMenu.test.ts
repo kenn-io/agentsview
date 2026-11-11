@@ -79,7 +79,7 @@ describe("TranscriptViewMenu", () => {
 
   it("switches to prompts and final answers", async () => {
     await open();
-    item("menuitemradio", "Prompts and final answers").click();
+    item("menuitemradio", "Only your prompts and final answers").click();
     await tick();
     expect(ui.transcriptMode).toBe("focused");
     expect(document.querySelector('[role="menu"]')).not.toBeNull();
