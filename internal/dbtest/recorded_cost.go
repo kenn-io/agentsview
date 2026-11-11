@@ -45,17 +45,25 @@ func comparison(recorded, computed int64, rows, fallback, unpriced int) *db.Sess
 // microdollars at catalog rates. rc-custom has no rate.
 var RecordedCostCases = []RecordedCostCase{
 	// The catalog prices the model, so its price beats the recorded 9,000.
-	{SessionID: "rc-catalog", Cost: 2_000, HasCost: true, Models: []string{"rc-priced"},
-		Comparison: comparison(9_000, 2_000, 1, 0, 0)},
+	{
+		SessionID: "rc-catalog", Cost: 2_000, HasCost: true, Models: []string{"rc-priced"},
+		Comparison: comparison(9_000, 2_000, 1, 0, 0),
+	},
 	// The catalog cannot price the model, so the recorded cost is the price.
-	{SessionID: "rc-fallback", Cost: 7_000, HasCost: true, Models: []string{"rc-custom"},
-		Comparison: comparison(7_000, 7_000, 1, 1, 0)},
+	{
+		SessionID: "rc-fallback", Cost: 7_000, HasCost: true, Models: []string{"rc-custom"},
+		Comparison: comparison(7_000, 7_000, 1, 1, 0),
+	},
 	// A recorded $0 for an unpriced model stays unpriced.
-	{SessionID: "rc-zero", Cost: 0, HasCost: false, Models: []string{"rc-custom"}, Unpriced: []string{"rc-custom"},
-		Comparison: comparison(0, 0, 1, 0, 1)},
+	{
+		SessionID: "rc-zero", Cost: 0, HasCost: false, Models: []string{"rc-custom"}, Unpriced: []string{"rc-custom"},
+		Comparison: comparison(0, 0, 1, 0, 1),
+	},
 	// A recorded aggregate event follows the same rule as a message.
-	{SessionID: "rc-event", Cost: 3_000 + 2_000, HasCost: true, Models: []string{"rc-custom", "rc-priced"},
-		Comparison: comparison(3_000+6_000, 3_000+2_000, 2, 1, 0)},
+	{
+		SessionID: "rc-event", Cost: 3_000 + 2_000, HasCost: true, Models: []string{"rc-custom", "rc-priced"},
+		Comparison: comparison(3_000+6_000, 3_000+2_000, 2, 1, 0),
+	},
 	// Any other status keeps the historical rule: the reported cost wins.
 	{SessionID: "rc-exact", Cost: 4_000, HasCost: true, Models: []string{"rc-priced"}},
 	// A cost-only message whose recorded cost loses to the catalog adds

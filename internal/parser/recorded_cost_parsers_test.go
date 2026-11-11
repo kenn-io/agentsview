@@ -113,10 +113,14 @@ func TestOpenCodeKeepsStepFinishCosts(t *testing.T) {
 	})
 	parts := []map[string]any{
 		{"id": "prt_1", "type": "text", "text": "reply"},
-		{"id": "prt_2", "type": "step-finish", "cost": 0.01,
-			"tokens": map[string]any{"input": 11, "output": 7, "cache": map[string]any{"read": 3, "write": 2}}},
-		{"id": "prt_3", "type": "step-finish", "cost": 0.02,
-			"tokens": map[string]any{"input": 13, "output": 5, "cache": map[string]any{"read": 4, "write": 0}}},
+		{
+			"id": "prt_2", "type": "step-finish", "cost": 0.01,
+			"tokens": map[string]any{"input": 11, "output": 7, "cache": map[string]any{"read": 3, "write": 2}},
+		},
+		{
+			"id": "prt_3", "type": "step-finish", "cost": 0.02,
+			"tokens": map[string]any{"input": 13, "output": 5, "cache": map[string]any{"read": 4, "write": 0}},
+		},
 	}
 	for i, part := range parts {
 		part["sessionID"], part["messageID"] = "ses_rc", "msg_1"
