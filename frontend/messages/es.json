@@ -156,6 +156,7 @@
   "status_bar_synced_ago": "sincronizado {time}",
   "status_bar_build": "Build: {commit}",
   "command_palette_placeholder": "Buscar sesiones y mensajes...",
+  "command_palette_clear": "Borrar",
   "command_palette_clear_search": "Borrar búsqueda",
   "command_palette_search_mode_label": "Modo de búsqueda",
   "command_palette_mode_fulltext": "Texto completo",

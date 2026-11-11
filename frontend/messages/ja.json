@@ -154,6 +154,7 @@
   "status_bar_synced_ago": "{time}を同期しました",
   "status_bar_build": "ビルド: {commit}",
   "command_palette_placeholder": "セッションとメッセージを検索...",
+  "command_palette_clear": "クリア",
   "command_palette_clear_search": "検索をクリア",
   "command_palette_search_mode_label": "検索モード",
   "command_palette_mode_fulltext": "全文",

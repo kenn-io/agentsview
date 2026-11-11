@@ -151,6 +151,7 @@
   "status_bar_synced_ago": "已同步 {time}",
   "status_bar_build": "Build: {commit}",
   "command_palette_placeholder": "搜索会话和消息...",
+  "command_palette_clear": "清除",
   "command_palette_clear_search": "清除搜索",
   "command_palette_search_mode_label": "搜索模式",
   "command_palette_mode_fulltext": "全文",
