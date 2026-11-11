@@ -11548,7 +11548,7 @@ func (e *Engine) collectAndBatchWithOptions(
 						if r.agent == parser.AgentAntigravityCLI {
 							stats.preservedRetryFailures++
 						}
-					} else if !reserved[id] && stored.DataVersion >= db.CurrentDataVersion() {
+					} else if stored.DataVersion >= db.CurrentDataVersion() {
 						if err := e.db.SetSessionDataVersion(ctx, id, max(db.CurrentDataVersion()-1, 0)); err != nil {
 							cause := fmt.Sprintf("mark deferred session %s for retry: %v", id, err)
 							log.Printf("sync: %s", cause)
