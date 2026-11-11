@@ -37,7 +37,9 @@ func TestLocalEmbeddingsBuildConsent(t *testing.T) {
 				t.Cleanup(stub.Close)
 				installed, dispatched, starting := state == "running", false, false
 				localEmbeddingEndpoint = func(_ context.Context, opts embedlocal.Options) (string, error) {
-					assert.False(t, opts.SkipOllama)
+					if opts.SkipOllama {
+						assert.Empty(t, opts.Executable)
+					}
 					if !installed {
 						return "", embedlocal.ErrNotFound
 					}
@@ -102,6 +104,43 @@ func TestLocalEmbeddingsBuildConsent(t *testing.T) {
 				assert.Equal(t, approve, installed)
 			})
 		}
+	}
+}
+
+func TestResolveLocalEmbeddingsProviderIdentity(t *testing.T) {
+	oldEndpoint := localEmbeddingEndpoint
+	t.Cleanup(func() { localEmbeddingEndpoint = oldEndpoint })
+	for _, tc := range []struct {
+		name, discovered, builtin string
+		server                    config.VectorEmbeddingsServerConfig
+		probeErr                  error
+		want                      bool
+	}{
+		{name: "explicit endpoint", server: config.VectorEmbeddingsServerConfig{Endpoint: "http://127.0.0.1:11434/v1"}},
+		{name: "forced local", server: config.VectorEmbeddingsServerConfig{Local: true}, builtin: "http://127.0.0.1:11434/v1", want: true},
+		{name: "matching discovery", discovered: "http://127.0.0.1:11434/v1", builtin: "http://127.0.0.1:11434/v1", want: true},
+		{name: "different discovery", discovered: "http://127.0.0.1:1234/v1", builtin: "http://127.0.0.1:5678/v1"},
+		{name: "failed probe", discovered: "http://127.0.0.1:1234/v1", probeErr: errors.New("unavailable")},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			localEmbeddingEndpoint = func(_ context.Context, opts embedlocal.Options) (string, error) {
+				if opts.SkipOllama {
+					assert.Empty(t, opts.Executable)
+					return tc.builtin, tc.probeErr
+				}
+				return tc.discovered, nil
+			}
+			endpoint, builtin, err := resolveLocalEmbeddings(t.Context(), tc.server, nil, nil)
+			require.NoError(t, err)
+			assert.Equal(t, tc.want, builtin)
+			if tc.server.Endpoint != "" {
+				assert.Equal(t, tc.server.Endpoint, endpoint)
+			} else if tc.server.Local {
+				assert.Equal(t, tc.builtin, endpoint)
+			} else {
+				assert.Equal(t, tc.discovered, endpoint)
+			}
+		})
 	}
 }
 

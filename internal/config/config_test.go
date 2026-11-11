@@ -3258,11 +3258,36 @@ func TestSaveVectorSetupPreservesSettings(t *testing.T) {
 			_, err = toml.Decode(raw, &expected)
 			require.NoError(t, err)
 			expected["vector"].(map[string]any)["enabled"] = true
-			require.NoError(t, cfg.SaveVectorSetup())
+			require.NoError(t, cfg.SaveVectorSetup(false))
 			var saved map[string]any
 			_, err = toml.DecodeFile(path, &saved)
 			require.NoError(t, err)
 			assert.Equal(t, expected, saved)
+		})
+	}
+}
+
+func TestSaveVectorSetupPersistsLocalRecipe(t *testing.T) {
+	for _, raw := range []string{
+		"[vector]\ninclude_automated = true\n[vector.embeddings]\nquery_prefix = 'custom: '\n",
+		"[vector.embeddings]\nmodel = 'nomic-embed-text'\ndimension = 768\n[vector.embeddings.servers.cpu]\nlocal = true\nbatch_size = 3\n",
+	} {
+		t.Run(raw, func(t *testing.T) {
+			dir := setupTestEnv(t)
+			require.NoError(t, os.WriteFile(filepath.Join(dir, configFileName), []byte(raw), 0o600))
+			cfg, err := LoadReadOnly()
+			require.NoError(t, err)
+			before, err := cfg.VectorSetupEmbeddings()
+			require.NoError(t, err)
+			require.NoError(t, cfg.SaveVectorSetup(true))
+			saved, err := LoadReadOnly()
+			require.NoError(t, err)
+			assert.True(t, saved.Vector.Enabled)
+			_, selected, err := saved.Vector.Embeddings.Server("")
+			require.NoError(t, err)
+			assert.True(t, selected.Local)
+			before.Servers = saved.Vector.Embeddings.Servers
+			assert.Equal(t, before, saved.Vector.Embeddings)
 		})
 	}
 }
@@ -3280,7 +3305,7 @@ func TestSaveVectorSetupRejectsInvalidCurrentSettings(t *testing.T) {
 			path := filepath.Join(dir, configFileName)
 			require.NoError(t, os.WriteFile(path, []byte(tc.raw), 0o600))
 			_, setupErr := cfg.VectorSetupEmbeddings()
-			saveErr := cfg.SaveVectorSetup()
+			saveErr := cfg.SaveVectorSetup(false)
 			data, err := os.ReadFile(path)
 			require.NoError(t, err)
 			assert.Equal(t, tc.raw, string(data))

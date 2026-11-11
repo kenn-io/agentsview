@@ -55,29 +55,47 @@ func newLiveVectorServing(ctx context.Context, cfg config.Config, database *db.D
 }
 
 func (v *liveVectorServing) startSharedChoice() {
+	if v.cfg.ArchiveContent.UsageOnly() || v.database.ArchiveContent().UsageOnly() || v.cfg.DeploymentEmbeddings != nil {
+		return
+	}
 	chosen, err := embedlocal.ChoiceRecorded()
 	if err != nil {
 		log.Printf("search by meaning: read shared choice: %v", err)
-		return
-	}
-	if v.cfg.ArchiveContent.UsageOnly() || v.database.ArchiveContent().UsageOnly() || v.cfg.DeploymentEmbeddings != nil {
-		return
 	}
 	embeddings := v.cfg.Vector.Embeddings
 	if v.cfg.Vector.Enabled {
 		_, deployment, err := embeddings.Server("")
-		if !chosen && err == nil && embeddings.Model == "nomic-embed-text" && deployment.Endpoint == "" {
-			status, err := embeddingsSetupStatus(v.ctx, server.EmbeddingsSetupStatus{}, v.cfg)
-			if err == nil && status.Provider == "built-in" {
+		if err == nil && deployment.Local && deployment.Endpoint == "" && v.serving.manager != nil {
+			if !chosen {
 				recordEmbeddingChoice()
+			}
+			v.mu.Lock()
+			err = v.startSetup(deployment, math.MaxInt64)
+			v.mu.Unlock()
+			if err != nil {
+				log.Printf("search by meaning: start saved setup: %v", err)
 			}
 		}
 		return
 	}
-	if !chosen || (embeddings.Model != "" && embeddings.Model != "nomic-embed-text") || embeddings.Servers != nil || embeddings.DefaultServer != "" {
+	if !chosen || v.cfg.VectorEnabledExplicit || (embeddings.Model != "" && embeddings.Model != "nomic-embed-text") || embeddings.Servers != nil || embeddings.DefaultServer != "" {
 		return
 	}
-	if err := v.Setup(math.MaxInt64); err != nil {
+	embeddings, err = v.cfg.VectorSetupEmbeddings()
+	if err == nil {
+		if embeddings.Model != "nomic-embed-text" || embeddings.Servers != nil || embeddings.DefaultServer != "" {
+			return
+		}
+		_, deployment, resolveErr := embeddings.Server("")
+		err = resolveErr
+		if err == nil {
+			deployment.Local = true
+			v.mu.Lock()
+			err = v.startSetup(deployment, math.MaxInt64)
+			v.mu.Unlock()
+		}
+	}
+	if err != nil {
 		v.mu.Lock()
 		v.setup = server.EmbeddingsSetupStatus{Action: "turn-on", Error: err.Error()}
 		v.mu.Unlock()
@@ -190,6 +208,8 @@ func (v *liveVectorServing) SetupStatus(ctx context.Context) (server.EmbeddingsS
 		if err != nil {
 			return status, setupRequestError(err)
 		}
+	} else if status.Error != "" && cfg.DeploymentEmbeddings == nil {
+		status.Action = "turn-on"
 	}
 	status, err := embeddingsSetupStatus(ctx, status, cfg)
 	if status.Action == "" {
@@ -265,6 +285,14 @@ func (v *liveVectorServing) Setup(approvedBytes int64) error {
 	if status.Action != "turn-on" {
 		return fmt.Errorf("%w: setup action is unavailable for the current embeddings provider", vector.ErrInvalidBuildRequest)
 	}
+	return v.startSetup(deployment, approvedBytes)
+}
+
+// startSetup starts the leased worker with v.mu held.
+func (v *liveVectorServing) startSetup(deployment config.VectorEmbeddingsServerConfig, approvedBytes int64) error {
+	if v.setup.Busy {
+		return vector.ErrBuildRunning
+	}
 	release, ok := v.idle.BeginWork()
 	if !ok {
 		return errors.New("server is shutting down")
@@ -293,7 +321,7 @@ func (v *liveVectorServing) Setup(approvedBytes int64) error {
 
 func (v *liveVectorServing) activate(deployment config.VectorEmbeddingsServerConfig, approvedBytes int64) error {
 	cfg := v.cfg
-	endpoint, err := resolveLocalEmbeddings(v.ctx, deployment,
+	_, builtin, err := resolveLocalEmbeddings(v.ctx, deployment,
 		func(_ context.Context, size int64) (bool, error) {
 			if size > approvedBytes {
 				v.mu.Lock()
@@ -313,7 +341,7 @@ func (v *liveVectorServing) activate(deployment config.VectorEmbeddingsServerCon
 		return err
 	}
 	if v.serving.manager == nil {
-		if err := cfg.SaveVectorSetup(); err != nil {
+		if err := cfg.SaveVectorSetup(builtin); err != nil {
 			return err
 		}
 		cfg, err = v.reload()
@@ -339,11 +367,8 @@ func (v *liveVectorServing) activate(deployment config.VectorEmbeddingsServerCon
 	if errors.Is(err, vector.ErrBuildRunning) {
 		err = nil
 	}
-	if err == nil && deployment.Endpoint == "" {
-		u, parseErr := url.Parse(endpoint)
-		if parseErr == nil && u.Port() != "11434" {
-			recordEmbeddingChoice()
-		}
+	if err == nil && builtin {
+		recordEmbeddingChoice()
 	}
 	return err
 }
