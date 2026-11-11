@@ -648,6 +648,27 @@ func KeepSessionUsageRow(seen map[UsageDedupToken]struct{}, row UsageIdentity) b
 	return !ok || AddUsageDedupToken(seen, key)
 }
 
+// UsageSelectionRow contains the fields needed to select usage survivors.
+type UsageSelectionRow struct {
+	UsageIdentity
+	SessionID         string
+	MessageOrdinal    int64
+	Timestamp         time.Time
+	TimestampValid    bool
+	RawTimestamp      string
+	OutputTokens      int
+	WebSearchRequests int
+}
+
+func usageSelectionRows(rows []UsageRow) []UsageSelectionRow {
+	out := make([]UsageSelectionRow, len(rows))
+	for i, row := range rows {
+		ts, valid := parseTS(row.Timestamp)
+		out[i] = UsageSelectionRow{UsageIdentity: row.UsageIdentity(), SessionID: row.SessionID, MessageOrdinal: row.MessageOrdinal, Timestamp: ts, TimestampValid: valid, RawTimestamp: row.Timestamp, OutputTokens: row.OutputTokens, WebSearchRequests: row.WebSearchRequests}
+	}
+	return out
+}
+
 // ClaudeSnapshotSurvivorSelection also returns the earliest session and the
 // maximum billed web-search count for each surviving snapshot. Callers use the
 // former for attribution and the latter when pricing the selected token row.
@@ -666,12 +687,12 @@ func ClaudeSnapshotSurvivorSelection(
 func ClaudeSnapshotSurvivorSelectionContext(
 	ctx context.Context, usage []UsageRow,
 ) (mask []bool, attribution []string, webSearchRequests []int, err error) {
-	mask, attribution, webSearchRequests, _, err = claudeSnapshotSelectionContext(ctx, usage, nil)
+	mask, attribution, webSearchRequests, _, err = claudeSnapshotSelectionContext(ctx, usageSelectionRows(usage), nil)
 	return mask, attribution, webSearchRequests, err
 }
 
 func claudeSnapshotSelectionContext(
-	ctx context.Context, usage []UsageRow, eligible []bool,
+	ctx context.Context, usage []UsageSelectionRow, eligible []bool,
 ) (
 	mask []bool,
 	attribution []string,
@@ -760,7 +781,7 @@ func claudeSnapshotSelectionContext(
 func CanonicalSessionTokenCoverageContext(
 	ctx context.Context, usage []UsageRow,
 ) (map[string]SessionTokenCoverage, error) {
-	_, _, _, snapshotCanonical, err := claudeSnapshotSelectionContext(ctx, usage, nil)
+	_, _, _, snapshotCanonical, err := claudeSnapshotSelectionContext(ctx, usageSelectionRows(usage), nil)
 	if err != nil {
 		return nil, err
 	}
@@ -811,14 +832,12 @@ func CanonicalSessionTokenCoverageContext(
 	return coverage, nil
 }
 
-func earlierClaudeSnapshotAttribution(candidate, current UsageRow) bool {
-	candidateTS, candidateErr := time.Parse(time.RFC3339Nano, candidate.Timestamp)
-	currentTS, currentErr := time.Parse(time.RFC3339Nano, current.Timestamp)
-	if candidateErr == nil && currentErr == nil && !candidateTS.Equal(currentTS) {
-		return candidateTS.Before(currentTS)
+func earlierClaudeSnapshotAttribution(candidate, current UsageSelectionRow) bool {
+	if candidate.TimestampValid && current.TimestampValid && !candidate.Timestamp.Equal(current.Timestamp) {
+		return candidate.Timestamp.Before(current.Timestamp)
 	}
-	if (candidateErr == nil) != (currentErr == nil) {
-		return candidateErr == nil
+	if candidate.TimestampValid != current.TimestampValid {
+		return candidate.TimestampValid
 	}
 	if candidate.SessionID != current.SessionID {
 		return candidate.SessionID < current.SessionID
@@ -826,20 +845,18 @@ func earlierClaudeSnapshotAttribution(candidate, current UsageRow) bool {
 	if candidate.MessageOrdinal != current.MessageOrdinal {
 		return candidate.MessageOrdinal < current.MessageOrdinal
 	}
-	return candidateErr != nil && candidate.Timestamp < current.Timestamp
+	return !candidate.TimestampValid && candidate.RawTimestamp < current.RawTimestamp
 }
 
-func laterClaudeSnapshot(candidate, current UsageRow) bool {
+func laterClaudeSnapshot(candidate, current UsageSelectionRow) bool {
 	if candidate.OutputTokens != current.OutputTokens {
 		return candidate.OutputTokens > current.OutputTokens
 	}
-	candidateTS, candidateErr := time.Parse(time.RFC3339Nano, candidate.Timestamp)
-	currentTS, currentErr := time.Parse(time.RFC3339Nano, current.Timestamp)
-	if candidateErr == nil && currentErr == nil && !candidateTS.Equal(currentTS) {
-		return candidateTS.After(currentTS)
+	if candidate.TimestampValid && current.TimestampValid && !candidate.Timestamp.Equal(current.Timestamp) {
+		return candidate.Timestamp.After(current.Timestamp)
 	}
-	if (candidateErr == nil) != (currentErr == nil) {
-		return candidateErr == nil
+	if candidate.TimestampValid != current.TimestampValid {
+		return candidate.TimestampValid
 	}
 	if candidate.SessionID != current.SessionID {
 		return candidate.SessionID > current.SessionID
@@ -847,7 +864,7 @@ func laterClaudeSnapshot(candidate, current UsageRow) bool {
 	if candidate.MessageOrdinal != current.MessageOrdinal {
 		return candidate.MessageOrdinal > current.MessageOrdinal
 	}
-	return candidateErr != nil && candidate.Timestamp > current.Timestamp
+	return !candidate.TimestampValid && candidate.RawTimestamp > current.RawTimestamp
 }
 
 // UsageSurvivorSelection returns the survivor mask, accounting destination,
@@ -887,10 +904,23 @@ func usageSurvivorSelection(
 	usage []UsageRow,
 	allowed map[string]struct{},
 ) (mask []bool, attribution []string, webSearchRequests []int, err error) {
+	return usageSelection(ctx, start, end, effEnd, usageSelectionRows(usage), allowed)
+}
+
+// SelectUsageSurvivorsForSessions selects from compact, timestamp-parsed rows.
+func SelectUsageSurvivorsForSessions(ctx context.Context, start, end, effEnd time.Time, usage []UsageSelectionRow, sessionIDs []string) (mask []bool, attribution []string, webSearchRequests []int, err error) {
+	allowed := make(map[string]struct{}, len(sessionIDs))
+	for _, id := range sessionIDs {
+		allowed[id] = struct{}{}
+	}
+	return usageSelection(ctx, start, end, effEnd, usage, allowed)
+}
+
+func usageSelection(ctx context.Context, start, end, effEnd time.Time, usage []UsageSelectionRow, allowed map[string]struct{}) (mask []bool, attribution []string, webSearchRequests []int, err error) {
 	eligible := make([]bool, len(usage))
 	for i, u := range usage {
-		t, ok := parseTS(u.Timestamp)
-		if !ok || t.Before(start) || !t.Before(end) {
+		t := u.Timestamp
+		if !u.TimestampValid || t.Before(start) || !t.Before(end) {
 			continue
 		}
 		if !t.Before(effEnd) {
@@ -915,7 +945,7 @@ func usageSurvivorSelection(
 				continue
 			}
 		}
-		if k, ok := usageDedupTokenWithoutSourceGate(u.UsageIdentity()); ok && !AddUsageDedupToken(seen, k) {
+		if k, ok := usageDedupTokenWithoutSourceGate(u.UsageIdentity); ok && !AddUsageDedupToken(seen, k) {
 			continue
 		}
 		mask[i] = true

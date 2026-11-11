@@ -803,7 +803,6 @@ func (s *Store) activityReportUsage(
 	// so a single global (ts, session_id, ordinal) order can be imposed
 	// before the aggregator's first-seen dedup.
 	type ordered struct {
-		row     activity.UsageRow
 		scan    duckActivityReportUsageRow
 		ts      time.Time
 		ordinal int64
@@ -845,19 +844,6 @@ func (s *Store) activityReportUsage(
 			ts:      parsedTS,
 			ordinal: ord,
 			scan:    r,
-			row: activity.UsageRow{
-				SessionID:         r.sessionID,
-				Model:             r.model,
-				Timestamp:         tsStr,
-				InputTokens:       r.inputTok,
-				OutputTokens:      r.outputTok,
-				WebSearchRequests: r.webSearchRequests,
-				Agent:             r.agent,
-				ClaudeMessageID:   r.claudeMessageID,
-				ClaudeRequestID:   r.claudeRequestID,
-				SourceUUID:        r.sourceUUID,
-				UsageDedupKey:     r.usageDedupKey,
-			},
 		})
 	}
 	if err := rows.Err(); err != nil {
@@ -870,18 +856,18 @@ func (s *Store) activityReportUsage(
 		if !a.ts.Equal(b.ts) {
 			return a.ts.Before(b.ts)
 		}
-		if a.row.SessionID != b.row.SessionID {
-			return a.row.SessionID < b.row.SessionID
+		if a.scan.sessionID != b.scan.sessionID {
+			return a.scan.sessionID < b.scan.sessionID
 		}
 		return a.ordinal < b.ordinal
 	})
-	baseRows := make([]activity.UsageRow, len(rowsAcc))
+	selection := make([]activity.UsageSelectionRow, len(rowsAcc))
 	for i, o := range rowsAcc {
-		baseRows[i] = o.row
+		r := o.scan
+		ts, err := time.Parse(time.RFC3339Nano, r.ts)
+		selection[i] = activity.UsageSelectionRow{SessionID: r.sessionID, Timestamp: ts, TimestampValid: err == nil, OutputTokens: r.outputTok, WebSearchRequests: r.webSearchRequests, UsageIdentity: activity.UsageIdentity{Agent: r.agent, ClaudeMessageID: r.claudeMessageID, ClaudeRequestID: r.claudeRequestID, SourceUUID: r.sourceUUID, UsageDedupKey: r.usageDedupKey}}
 	}
-	mask, attribution, webSearchRequests, err := activity.UsageSurvivorSelectionForSessions(
-		ctx, q.RangeStart, q.RangeEnd, q.EffectiveEnd, baseRows, ids,
-	)
+	mask, attribution, webSearchRequests, err := activity.SelectUsageSurvivorsForSessions(ctx, q.RangeStart, q.RangeEnd, q.EffectiveEnd, selection, ids)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -896,8 +882,7 @@ func (s *Store) activityReportUsage(
 		if priceErr != nil {
 			return nil, nil, priceErr
 		}
-		row := o.row
-		row.SessionID = attribution[i]
+		row := activity.UsageRow{SessionID: attribution[i], Model: costRow.model, Timestamp: costRow.ts, InputTokens: costRow.inputTok, OutputTokens: costRow.outputTok, Agent: costRow.agent, ClaudeMessageID: costRow.claudeMessageID, ClaudeRequestID: costRow.claudeRequestID, SourceUUID: costRow.sourceUUID, UsageDedupKey: costRow.usageDedupKey}
 		row.WebSearchRequests = webSearchRequests[i]
 		row.Cost = cost
 		row.CostSource = costSource

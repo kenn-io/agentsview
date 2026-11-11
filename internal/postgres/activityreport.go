@@ -769,72 +769,50 @@ func (s *Store) activityReportUsage(
 		return out, &block, nil
 	}
 
-	type ordered struct {
-		row     activity.UsageRow
-		scan    pgActivityUsageRow
-		us      int64
-		ordinal int64
-	}
-	rowsAcc := make([]ordered, 0, len(raw))
-	for _, r := range raw {
+	order := make([]int, len(raw))
+	for i, r := range raw {
+		order[i] = i
 		if read != nil {
 			read[r.sessionID.Value()] = struct{}{}
 		}
-		ord := int64(-1)
-		if r.ordinalValid {
-			ord = int64(r.ordinal)
-		}
-		rowsAcc = append(rowsAcc, ordered{
-			us:      r.us,
-			ordinal: ord,
-			scan:    r,
-			row: activity.UsageRow{
-				SessionID:       r.sessionID.Value(),
-				Model:           r.model.Value(),
-				Timestamp:       FormatISO8601(time.UnixMicro(r.us).UTC()),
-				Agent:           r.agent.Value(),
-				ProviderID:      r.providerID.Value(),
-				ClaudeMessageID: r.claudeMessageID,
-				ClaudeRequestID: r.claudeRequestID,
-				SourceUUID:      r.sourceUUID,
-				UsageDedupKey:   r.usageDedupKey,
-			},
-		})
 	}
-
-	sort.SliceStable(rowsAcc, func(i, j int) bool {
-		a, b := rowsAcc[i], rowsAcc[j]
+	sort.SliceStable(order, func(i, j int) bool {
+		a, b := raw[order[i]], raw[order[j]]
 		if a.us != b.us {
 			return a.us < b.us
 		}
-		if a.row.SessionID != b.row.SessionID {
-			return a.row.SessionID < b.row.SessionID
+		if a.sessionID != b.sessionID {
+			return a.sessionID.Value() < b.sessionID.Value()
 		}
-		return a.ordinal < b.ordinal
+		ao, bo := int64(-1), int64(-1)
+		if a.ordinalValid {
+			ao = int64(a.ordinal)
+		}
+		if b.ordinalValid {
+			bo = int64(b.ordinal)
+		}
+		return ao < bo
 	})
-	baseRows := make([]activity.UsageRow, len(rowsAcc))
-	for i, o := range rowsAcc {
-		row := o.row
-		row.InputTokens, row.OutputTokens = int(o.scan.input), int(o.scan.output)
-		row.WebSearchRequests = int(o.scan.webSearches)
-		baseRows[i] = row
+	selection := make([]activity.UsageSelectionRow, len(order))
+	for i, index := range order {
+		r := raw[index]
+		selection[i] = activity.UsageSelectionRow{SessionID: r.sessionID.Value(), Timestamp: time.UnixMicro(r.us).UTC(), TimestampValid: true, OutputTokens: int(r.output), WebSearchRequests: int(r.webSearches), UsageIdentity: activity.UsageIdentity{Agent: r.agent.Value(), ClaudeMessageID: r.claudeMessageID, ClaudeRequestID: r.claudeRequestID, SourceUUID: r.sourceUUID, UsageDedupKey: r.usageDedupKey}}
 	}
-	mask, attribution, webSearchRequests, err := activity.UsageSurvivorSelectionForSessions(
-		ctx, q.RangeStart, q.RangeEnd, q.EffectiveEnd, baseRows, ids,
-	)
+	mask, attribution, webSearchRequests, err := activity.SelectUsageSurvivorsForSessions(ctx, q.RangeStart, q.RangeEnd, q.EffectiveEnd, selection, ids)
 	if err != nil {
 		return nil, nil, err
 	}
-	out = make([]activity.UsageRow, 0, len(rowsAcc))
-	for i, o := range rowsAcc {
+	out = make([]activity.UsageRow, 0, len(order))
+	for i, index := range order {
+		r := raw[index]
 		if !mask[i] {
 			continue
 		}
-		inputTok, outputTok := int(o.scan.input), int(o.scan.output)
-		costRow := o.scan
+		inputTok, outputTok := int(r.input), int(r.output)
+		costRow := r
 		var sessionCost *money.Money
-		if o.scan.copilotReported && o.scan.costValid {
-			v := money.Money{Microdollars: o.scan.cost}
+		if r.copilotReported && r.costValid {
+			v := money.Money{Microdollars: r.cost}
 			sessionCost = &v
 			costRow.costValid = false
 			rateResolver.RecordUnattributedReported()
@@ -848,8 +826,7 @@ func (s *Store) activityReportUsage(
 		if costRow.costValid {
 			costSource = export.CostSourceReported
 		}
-		row := o.row
-		row.SessionID = attribution[i]
+		row := activity.UsageRow{SessionID: attribution[i], Model: r.model.Value(), Timestamp: FormatISO8601(time.UnixMicro(r.us).UTC()), Agent: r.agent.Value(), ProviderID: r.providerID.Value(), ClaudeMessageID: r.claudeMessageID, ClaudeRequestID: r.claudeRequestID, SourceUUID: r.sourceUUID, UsageDedupKey: r.usageDedupKey}
 		row.InputTokens = inputTok
 		row.OutputTokens = outputTok
 		row.WebSearchRequests = webSearchRequests[i]

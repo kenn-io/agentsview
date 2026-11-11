@@ -123,26 +123,25 @@ func (db *DB) activityReportCachedUsage(
 		return nil, nil, nil, err
 	}
 	slices.SortFunc(facts, compareActivityUsageFacts)
-	rows := make([]activity.UsageRow, len(facts))
+	selection := make([]activity.UsageSelectionRow, len(facts))
 	var read []string
-	for k, fact := range facts {
-		rows[k] = fact.row
+	for i, fact := range facts {
+		row := fact.row
 		if collectRead {
-			read = append(read, fact.row.SessionID)
+			read = append(read, row.SessionID)
 		}
+		selection[i] = activity.UsageSelectionRow{UsageIdentity: row.UsageIdentity(), SessionID: row.SessionID, MessageOrdinal: row.MessageOrdinal, Timestamp: time.UnixMilli(fact.millis).Add(time.Duration(fact.nanos)), TimestampValid: fact.validTS, OutputTokens: row.OutputTokens, WebSearchRequests: row.WebSearchRequests}
 	}
-	mask, attribution, webSearchRequests, err := activity.UsageSurvivorSelectionForSessions(
-		ctx, q.RangeStart, q.RangeEnd, q.EffectiveEnd, rows, ids,
-	)
+	mask, attribution, webSearchRequests, err := activity.SelectUsageSurvivorsForSessions(ctx, q.RangeStart, q.RangeEnd, q.EffectiveEnd, selection, ids)
 	if err != nil {
 		return nil, nil, nil, err
 	}
-	out := rows[:0]
+	out := make([]activity.UsageRow, 0, len(facts))
 	for k, fact := range facts {
 		if !mask[k] {
 			continue
 		}
-		row := rows[k]
+		row := fact.row
 		reported := fact.reported
 		if fact.costSource == CopilotReportedCostSource && reported.Valid {
 			row.SessionCost = &money.Money{Microdollars: reported.Int64}

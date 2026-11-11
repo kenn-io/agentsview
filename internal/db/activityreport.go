@@ -1061,25 +1061,21 @@ func (db *DB) activityReportUsageFrom(
 		return nil, nil, nil, err
 	}
 	sortActivityReportUsageCandidates(candidates)
-	baseRows := make([]activity.UsageRow, len(candidates))
+	selection := make([]activity.UsageSelectionRow, len(candidates))
 	var read []string
 	if collectRead {
 		read = make([]string, 0, len(candidates))
 	}
 	for i := range candidates {
-		candidate := &candidates[i]
-		row := candidate.usageRow()
+		c := &candidates[i]
+		r := &c.scan
 		if collectRead {
-			read = append(read, row.SessionID)
+			read = append(read, r.sessionID)
 		}
-		_, row.OutputTokens, _, _, _ = dailyUsageRowTokens(candidate.scan)
-		row.WebSearchRequests = usageRowWebSearchRequests(
-			candidate.scan.usageSource, candidate.scan.tokenJSON)
-		baseRows[i] = row
+		_, output, _, _, _ := dailyUsageRowTokens(*r)
+		selection[i] = activity.UsageSelectionRow{SessionID: r.sessionID, MessageOrdinal: c.ordinal, Timestamp: c.ts, TimestampValid: c.validTS, OutputTokens: output, WebSearchRequests: usageRowWebSearchRequests(r.usageSource, r.tokenJSON), UsageIdentity: activity.UsageIdentity{Agent: r.agent, ClaudeMessageID: r.claudeMessageID, ClaudeRequestID: r.claudeRequestID, SourceUUID: r.sourceUUID, UsageDedupKey: r.usageDedupKey}}
 	}
-	mask, attribution, webSearchRequests, err := activity.UsageSurvivorSelectionForSessions(
-		ctx, q.RangeStart, q.RangeEnd, q.EffectiveEnd, baseRows, ids,
-	)
+	mask, attribution, webSearchRequests, err := activity.SelectUsageSurvivorsForSessions(ctx, q.RangeStart, q.RangeEnd, q.EffectiveEnd, selection, ids)
 	if err != nil {
 		return nil, nil, nil, err
 	}
