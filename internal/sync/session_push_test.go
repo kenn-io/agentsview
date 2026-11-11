@@ -49,7 +49,7 @@ func TestSessionPushSharedSourceImportsUnreservedMember(t *testing.T) {
 		excluded                  bool
 		reserved, member, content string
 	}{
-		{"reserved member", parser.AgentCursorIDE, false, "cursor-ide:reserved", "cursor-ide:independent", "independent content"},
+		{"reserved member", parser.AgentClaude, false, "forked-i", "forked", "independent content"},
 		{"excluded member", parser.AgentVibe, true, "reserved", "canonical", "canonical content"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {

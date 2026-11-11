@@ -6,6 +6,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
@@ -18,6 +19,13 @@ import (
 	"go.kenn.io/agentsview/internal/db"
 	"go.kenn.io/agentsview/internal/server"
 )
+
+func mustPushURL(t *testing.T, base string) *url.URL {
+	t.Helper()
+	u, err := sessionPushURL(base)
+	require.NoError(t, err)
+	return u
+}
 
 func TestPushSessionCommandToAuthenticatedReceiver(t *testing.T) {
 	sourceDir := t.TempDir()
@@ -119,6 +127,7 @@ func TestPushSessionTransportFailuresAreSanitized(t *testing.T) {
 		{"internal error", http.StatusInternalServerError, "", "receiver rejected the session"},
 		{"unsupported", http.StatusNotImplemented, "", "receiver does not support session pushes"},
 		{"busy", http.StatusServiceUnavailable, "", "receiver is temporarily unavailable"},
+		{"rebuild", http.StatusServiceUnavailable, "archive-rebuild-required", "receiver must finish its archive rebuild"},
 		{"upgrade", http.StatusBadRequest, "future-data-version", "receiver needs an upgrade"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -128,7 +137,7 @@ func TestPushSessionTransportFailuresAreSanitized(t *testing.T) {
 				_, _ = w.Write([]byte("private-response-token"))
 			}))
 			defer remote.Close()
-			_, err := sendSessionPush(t.Context(), remote.URL, "private-token", []byte(`{}`), "sample", "claude")
+			_, err := sendSessionPush(t.Context(), mustPushURL(t, remote.URL), "private-token", []byte(`{}`), "sample", "claude")
 			require.ErrorContains(t, err, tc.message)
 			assert.NotContains(t, err.Error(), "private")
 		})
@@ -138,7 +147,7 @@ func TestPushSessionTransportFailuresAreSanitized(t *testing.T) {
 		_, _ = w.Write([]byte(`{"session_id":"wrong","agent":"claude","status":"created"}`))
 	}))
 	defer remote.Close()
-	_, err := sendSessionPush(t.Context(), remote.URL, "fixture", nil, "sample", "claude")
+	_, err := sendSessionPush(t.Context(), mustPushURL(t, remote.URL), "fixture", nil, "sample", "claude")
 	require.Error(t, err)
 	assert.NotContains(t, err.Error(), "fixture")
 }
@@ -152,7 +161,7 @@ func TestPushSessionTransportPreservesPayloadBytes(t *testing.T) {
 		_, _ = w.Write([]byte(`{"session_id":"selected","agent":"claude","status":"created"}`))
 	}))
 	defer remote.Close()
-	_, err := sendSessionPush(t.Context(), remote.URL, "fixture-token", payload, "selected", "claude")
+	_, err := sendSessionPush(t.Context(), mustPushURL(t, remote.URL), "fixture-token", payload, "selected", "claude")
 	require.NoError(t, err)
 }
 
@@ -163,7 +172,7 @@ func TestPushSessionPreservesEscapedBasePath(t *testing.T) {
 		_, _ = w.Write([]byte(`{"session_id":"selected","agent":"claude","status":"created"}`))
 	}))
 	defer remote.Close()
-	_, err := sendSessionPush(t.Context(), remote.URL+"/tenant%2Fprivate", "fixture-token", []byte(`{}`), "selected", "claude")
+	_, err := sendSessionPush(t.Context(), mustPushURL(t, remote.URL+"/tenant%2Fprivate"), "fixture-token", []byte(`{}`), "selected", "claude")
 	require.NoError(t, err)
 	assert.Equal(t, "/tenant%2Fprivate/api/v1/sessions/ingest", escaped)
 }
@@ -176,7 +185,7 @@ func TestPushSessionRedirectNeverReceivesCredentialsOrBody(t *testing.T) {
 		http.Redirect(w, r, target.URL, http.StatusTemporaryRedirect)
 	}))
 	defer redirect.Close()
-	_, err := sendSessionPush(t.Context(), redirect.URL, "fixture-secret", []byte("selected-body"), "selected", "claude")
+	_, err := sendSessionPush(t.Context(), mustPushURL(t, redirect.URL), "fixture-secret", []byte("selected-body"), "selected", "claude")
 	require.Error(t, err)
 	assert.NotContains(t, err.Error(), "fixture-secret")
 	assert.Zero(t, requests)

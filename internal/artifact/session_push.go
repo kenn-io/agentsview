@@ -9,6 +9,7 @@ import (
 	"io"
 	"time"
 
+	"go.kenn.io/agentsview/internal/config"
 	"go.kenn.io/agentsview/internal/db"
 	"go.kenn.io/agentsview/internal/ingest"
 )
@@ -80,10 +81,12 @@ type sessionPushIdentityEvent struct {
 
 func sessionPushIdentity(m segmentMessage) sessionPushIdentityMessage {
 	item := sessionPushIdentityMessage{Ordinal: m.Ordinal, Role: m.Role, Content: m.Content, ThinkingText: m.ThinkingText, Timestamp: m.Timestamp, HasThinking: m.HasThinking, HasToolUse: m.HasToolUse, IsSystem: m.IsSystem, SourceSubtype: m.SourceSubtype, PromptSource: m.PromptSource, IsCompactBoundary: m.IsCompactBoundary}
-	for _, call := range m.ToolCalls {
-		tool := sessionPushIdentityToolCall{Name: call.ToolName, ID: call.ToolUseID, Input: call.InputJSON, Result: call.ResultContent, Subagent: call.SubagentSessionID}
-		for _, event := range call.ResultEvents {
-			tool.Events = append(tool.Events, sessionPushIdentityEvent{ID: event.ToolUseID, Agent: event.AgentID, Subagent: event.SubagentSessionID, Source: event.Source, Status: event.Status, Content: event.Content, Timestamp: event.Timestamp})
+	// The offload projection requires a nonempty path; this variant writes no files.
+	projected, _ := db.ProjectToolResultImagesWithoutWriting([]db.Message{m.dbMessage()}, config.ToolResultImagesOffload, ".")
+	for i, call := range m.ToolCalls {
+		tool := sessionPushIdentityToolCall{Name: call.ToolName, ID: call.ToolUseID, Input: call.InputJSON, Result: projected[0].ToolCalls[i].ResultContent, Subagent: call.SubagentSessionID}
+		for j, event := range call.ResultEvents {
+			tool.Events = append(tool.Events, sessionPushIdentityEvent{ID: event.ToolUseID, Agent: event.AgentID, Subagent: event.SubagentSessionID, Source: event.Source, Status: event.Status, Content: projected[0].ToolCalls[i].ResultEvents[j].Content, Timestamp: event.Timestamp})
 		}
 		item.ToolCalls = append(item.ToolCalls, tool)
 	}

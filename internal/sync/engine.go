@@ -10493,6 +10493,29 @@ func (e *Engine) syncProviderDBBackedAgent(
 	var writeDuration time.Duration
 	flush := func(pending []pendingWrite) bool {
 		complete := true
+		ids := make([]string, 0, len(pending))
+		for _, pw := range pending {
+			ids = append(ids, applyIDPrefixToID(e.idPrefix, pw.sess.ID))
+		}
+		reserved, err := e.db.SessionPushReservations(ctx, ids)
+		if err != nil {
+			log.Printf("lookup %s push reservations: %v", agent, err)
+			stats.RecordFailed()
+			return false
+		}
+		active := pending[:0]
+		for _, pw := range pending {
+			if reserved[applyIDPrefixToID(e.idPrefix, pw.sess.ID)] {
+				stats.RecordSkip()
+				complete = false
+				continue
+			}
+			active = append(active, pw)
+		}
+		pending = active
+		if len(pending) == 0 {
+			return complete
+		}
 		pendingCount += len(pending)
 		for _, pw := range pending {
 			indexedMessages += len(pw.msgs)
@@ -10508,7 +10531,7 @@ func (e *Engine) syncProviderDBBackedAgent(
 					failedSessions:  failedWrites,
 					cwdFiltered:     cwdFiltered,
 				}
-				complete = failedWrites == 0 && cwdFiltered == 0 &&
+				complete = complete && failedWrites == 0 && cwdFiltered == 0 &&
 					batchWritten == len(pending)
 			} else {
 				outcome = e.writeBatchWithOutcomeContext(ctx, pending, writeMode, true)

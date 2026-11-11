@@ -10,16 +10,11 @@ import (
 	"reflect"
 
 	"github.com/danielgtaylor/huma/v2"
+	"go.kenn.io/agentsview/internal/apiclient"
 	"go.kenn.io/agentsview/internal/artifact"
 	"go.kenn.io/agentsview/internal/db"
 	syncpkg "go.kenn.io/agentsview/internal/sync"
 )
-
-type sessionPushResponse struct {
-	SessionID string `json:"session_id"`
-	Agent     string `json:"agent"`
-	Status    string `json:"status"`
-}
 
 // This native transfer route validates the packet before requesting the
 // archive write barrier. Huma describes it for clients without pre-decoding
@@ -31,7 +26,7 @@ func (s *Server) describeSessionPushRoute() {
 	// Raw JSON is deliberately preflighted by the native handler. Describe its
 	// actual wire shape rather than exposing an untyped raw-message schema.
 	request.Properties["manifest"] = &huma.Schema{Type: "object", AdditionalProperties: true}
-	maxSegments := 16
+	maxSegments := artifact.MaxManifestSegments
 	request.Properties["segments"] = &huma.Schema{Type: "array", MaxItems: &maxSegments, Items: &huma.Schema{
 		Type: "object", AdditionalProperties: false, Required: []string{"sha256", "ndjson"},
 		Properties: map[string]*huma.Schema{
@@ -42,7 +37,7 @@ func (s *Server) describeSessionPushRoute() {
 	op := &huma.Operation{
 		OperationID: operationID(http.MethodPost, "/api/v1/sessions/ingest"), Method: http.MethodPost, Path: "/api/v1/sessions/ingest", Summary: "Ingest one explicitly pushed normalized session", Tags: []string{"Sessions"},
 		RequestBody: &huma.RequestBody{Required: true, Content: map[string]*huma.MediaType{"application/json": {Schema: requestSchema}}},
-		Responses:   map[string]*huma.Response{"200": {Description: "Created or identical retry", Content: map[string]*huma.MediaType{"application/json": {Schema: schemas.Schema(reflect.TypeFor[sessionPushResponse](), true, "")}}}},
+		Responses:   map[string]*huma.Response{"200": {Description: "Created or identical retry", Content: map[string]*huma.MediaType{"application/json": {Schema: schemas.Schema(reflect.TypeFor[apiclient.SessionPushResponse](), true, "")}}}},
 	}
 	for _, status := range []string{"400", "401", "403", "404", "405", "409", "413", "415", "500", "501", "503"} {
 		op.Responses[status] = &huma.Response{Description: "Push rejected", Content: map[string]*huma.MediaType{"text/plain": {Schema: &huma.Schema{Type: "string"}}}}
@@ -135,6 +130,9 @@ func (s *Server) handleSessionPush(w http.ResponseWriter, r *http.Request) {
 		if errors.Is(err, db.ErrSessionPushConflict) {
 			status = http.StatusConflict
 		}
+		if errors.Is(err, db.ErrSessionPushNeedsUpgrade) {
+			w.Header().Set("X-AgentsView-Push-Error", "archive-rebuild-required")
+		}
 		if errors.Is(err, syncpkg.ErrSyncInProgress) || errors.Is(err, db.ErrCompactInProgress) || errors.Is(err, db.ErrWriterClosed) || errors.Is(err, db.ErrSessionPushNeedsUpgrade) || r.Context().Err() != nil {
 			status = http.StatusServiceUnavailable
 		}
@@ -146,5 +144,5 @@ func (s *Server) handleSessionPush(w http.ResponseWriter, r *http.Request) {
 		status = "created"
 	}
 	w.Header().Set("Content-Type", "application/json")
-	_ = json.MarshalWrite(w, sessionPushResponse{SessionID: write.Session.ID, Agent: write.Session.Agent, Status: status})
+	_ = json.MarshalWrite(w, apiclient.SessionPushResponse{SessionID: write.Session.ID, Agent: write.Session.Agent, Status: status})
 }

@@ -425,11 +425,20 @@ func TestSessionPushReservesOrdinaryWriterOwnership(t *testing.T) {
 }
 
 func TestSessionPushRejectsDirectTranscriptMutation(t *testing.T) {
-	for _, mode := range []string{"append", "replace", "replace content", "incremental", "usage", "plan"} {
+	for _, mode := range []string{"append", "replace", "replace content", "incremental", "usage", "plan", "staged", "staged checkpoint", "staged identical"} {
 		t.Run(mode, func(t *testing.T) {
 			d := testDB(t)
 			receipt, write := sessionPushFixture("reserved")
 			_, err := d.ApplySessionPush(t.Context(), receipt, write)
+			require.NoError(t, err)
+			if strings.HasPrefix(mode, "staged") {
+				require.NoError(t, d.UpsertParserCheckpoint(t.Context(), ParserCheckpoint{SessionID: "reserved", Agent: "claude", FilePath: "fixture", Offset: 10}, ParserCheckpointBlobs{Cursor: []byte("cursor"), HashState: []byte("hash")}))
+			}
+			before, err := d.GetSessionFull(t.Context(), "reserved")
+			require.NoError(t, err)
+			checkpoint, hasCheckpoint, err := d.GetParserCheckpoint(t.Context(), "reserved")
+			require.NoError(t, err)
+			blobs, hasBlobs, err := d.GetParserCheckpointBlobs(t.Context(), "reserved")
 			require.NoError(t, err)
 			switch mode {
 			case "append":
@@ -444,8 +453,34 @@ func TestSessionPushRejectsDirectTranscriptMutation(t *testing.T) {
 				err = d.ReplaceSessionUsageEvents(t.Context(), "reserved", []UsageEvent{{SessionID: "reserved", Source: "session", Model: "model", InputTokens: 999}})
 			case "plan":
 				err = d.ReplaceSessionPlanUsage(t.Context(), "reserved", &SessionPlanUsage{HasPlanUsage: true, DataStatus: "available"})
+			case "staged", "staged checkpoint", "staged identical":
+				messages := []Message{{SessionID: "reserved", Ordinal: 0, Role: "user", Content: "replacement"}}
+				if mode == "staged identical" {
+					messages = write.Messages
+				}
+				if mode == "staged checkpoint" {
+					err = d.ReplaceSessionContentStagedWithCheckpoint(t.Context(), "reserved", messages, newScratchStagedResults(t), nil, nil, &ParserCheckpoint{SessionID: "reserved", Agent: "claude", FilePath: "fixture", Offset: 20}, nil)
+				} else {
+					err = d.ReplaceSessionContentStaged(t.Context(), "reserved", messages, newScratchStagedResults(t), nil, nil)
+				}
 			}
 			require.ErrorIs(t, err, ErrSessionPushConflict)
+			messages, err := d.GetAllMessages(t.Context(), "reserved")
+			require.NoError(t, err)
+			require.Len(t, messages, 1)
+			assert.Equal(t, "first snapshot", messages[0].Content)
+			requireSessionPushReceipt(t, d, "reserved")
+			after, err := d.GetSessionFull(t.Context(), "reserved")
+			require.NoError(t, err)
+			assert.Equal(t, before, after)
+			afterCheckpoint, afterHasCheckpoint, err := d.GetParserCheckpoint(t.Context(), "reserved")
+			require.NoError(t, err)
+			assert.Equal(t, hasCheckpoint, afterHasCheckpoint)
+			assert.Equal(t, checkpoint, afterCheckpoint)
+			afterBlobs, afterHasBlobs, err := d.GetParserCheckpointBlobs(t.Context(), "reserved")
+			require.NoError(t, err)
+			assert.Equal(t, hasBlobs, afterHasBlobs)
+			assert.Equal(t, blobs, afterBlobs)
 		})
 	}
 }

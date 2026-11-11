@@ -21,12 +21,6 @@ import (
 	"go.kenn.io/agentsview/internal/db"
 )
 
-type sessionPushResult struct {
-	SessionID string `json:"session_id"`
-	Agent     string `json:"agent"`
-	Status    string `json:"status"`
-}
-
 func newPushSessionCommand() *cobra.Command {
 	var target, agent, tokenEnv, tokenFile string
 	cmd := &cobra.Command{
@@ -42,7 +36,8 @@ func newPushSessionCommand() *cobra.Command {
 			if cmd.Flags().Changed("token-file") && strings.TrimSpace(tokenFile) == "" {
 				return errors.New("push: selected token file must name a file")
 			}
-			if _, err := sessionPushURL(target); err != nil {
+			destination, err := sessionPushURL(target)
+			if err != nil {
 				return err
 			}
 			envName := tokenEnv
@@ -68,7 +63,7 @@ func newPushSessionCommand() *cobra.Command {
 			if err != nil {
 				return fmt.Errorf("push: %w", err)
 			}
-			result, err := sendSessionPush(cmd.Context(), target, token, payload, args[0], storedAgent)
+			result, err := sendSessionPush(cmd.Context(), destination, token, payload, args[0], storedAgent)
 			if err != nil {
 				return err
 			}
@@ -140,12 +135,8 @@ func sessionPushURL(base string) (*url.URL, error) {
 	return u, nil
 }
 
-func sendSessionPush(ctx context.Context, base, token string, payload []byte, id, agent string) (sessionPushResult, error) {
-	var result sessionPushResult
-	u, err := sessionPushURL(base)
-	if err != nil {
-		return result, err
-	}
+func sendSessionPush(ctx context.Context, u *url.URL, token string, payload []byte, id, agent string) (apiclient.SessionPushResponse, error) {
+	var result apiclient.SessionPushResponse
 	client := &http.Client{Timeout: artifact.SessionPushTimeout(int64(len(payload))), CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
 	requestBase := strings.TrimSuffix(u.String(), "/api/v1/sessions/ingest")
 	resp, err := apiclient.RawRequest(requestBase, client, func(api *apiclient.Client) error {
@@ -189,6 +180,9 @@ func sendSessionPush(ctx context.Context, base, token string, payload []byte, id
 			reason = "receiver does not support session pushes"
 		case http.StatusServiceUnavailable:
 			reason = "receiver is temporarily unavailable"
+			if resp.Header.Get("X-AgentsView-Push-Error") == "archive-rebuild-required" {
+				reason = "receiver must finish its archive rebuild"
+			}
 		}
 		return result, fmt.Errorf("push: %s (HTTP %d)", reason, resp.StatusCode)
 	}
@@ -197,7 +191,7 @@ func sendSessionPush(ctx context.Context, base, token string, payload []byte, id
 		return result, errors.New("push: invalid receiver confirmation")
 	}
 	if err := json.Unmarshal(data, &result); err != nil || result.SessionID != id || result.Agent != agent || (result.Status != "created" && result.Status != "unchanged") {
-		return sessionPushResult{}, errors.New("push: invalid receiver confirmation")
+		return apiclient.SessionPushResponse{}, errors.New("push: invalid receiver confirmation")
 	}
 	return result, nil
 }

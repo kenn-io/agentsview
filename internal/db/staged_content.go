@@ -333,7 +333,7 @@ func (db *DB) commitStagedDerivedStateAndCheckpoint(
 		return err
 	}
 	defer func() { _ = tx.Rollback() }()
-	if err := db.publishStagedSessionMetadataTx(ctx, tx, write); err != nil {
+	if err := db.publishStagedSessionMetadataTx(ctx, tx, sessionID, write); err != nil {
 		return err
 	}
 
@@ -431,7 +431,7 @@ func (db *DB) replaceSessionContentStaged(
 		return fmt.Errorf("beginning tx: %w", err)
 	}
 	defer func() { _ = tx.Rollback() }()
-	if err := db.publishStagedSessionMetadataTx(ctx, tx, write); err != nil {
+	if err := db.publishStagedSessionMetadataTx(ctx, tx, sessionID, write); err != nil {
 		return err
 	}
 
@@ -755,9 +755,9 @@ func (db *DB) WriteSessionBatchStaged(ctx context.Context, write SessionBatchWri
 	return nil
 }
 
-func (db *DB) publishStagedSessionMetadataTx(ctx context.Context, tx *sql.Tx, write *SessionBatchWrite) error {
+func (db *DB) publishStagedSessionMetadataTx(ctx context.Context, tx *sql.Tx, sessionID string, write *SessionBatchWrite) error {
 	if write == nil {
-		return nil
+		return checkSessionPushReservationTx(ctx, tx, sessionID)
 	}
 	result, err := db.upsertSessionBatchTx(ctx, tx, *write)
 	if err != nil {
