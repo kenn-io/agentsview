@@ -3,9 +3,11 @@
 package postgres
 
 import (
+	"slices"
 	"testing"
 
 	"github.com/stretchr/testify/require"
+	"go.kenn.io/agentsview/internal/db"
 )
 
 func TestPushSessionWithCodexScope(t *testing.T) {
@@ -27,4 +29,27 @@ func TestPushSessionWithCodexScope(t *testing.T) {
 	var id string
 	require.NoError(t, pg.QueryRowContext(ctx, `SELECT id FROM sessions WHERE id = $1`, "session-1").Scan(&id))
 	require.Equal(t, "session-1", id)
+
+	const marker = "marker_%"
+	const suffix = "_22222222-2222-4222-8222-222222222222"
+	threads := []string{
+		"codex:11111111-1111-4111-8111-111111111111",
+		"codex:22222222-2222-4222-8222-222222222222",
+		"codex:33333333-3333-4333-8333-333333333333",
+	}
+	for i, machine := range []string{"old-machine", "old-alias", "unrelated"} {
+		_, err = pg.ExecContext(ctx, `INSERT INTO excluded_sessions (id, owner_marker, machine, agent, include_codex_pages) VALUES ($1, '', $2, 'codex', TRUE)`, threads[i], machine)
+		require.NoError(t, err)
+	}
+	_, err = pg.ExecContext(ctx, `INSERT INTO sync_metadata (key, value) VALUES ($1, 'old-machine'), ($2, '["old-alias"]'), ($3, 'unrelated'), ($4, 'unrelated')`,
+		"push_marker:"+marker+":scope:one", "push_marker_machine_aliases:"+marker+":scope:two", "xpush_marker:"+marker+":scope:three", "push_marker:marker_AX:scope:four")
+	require.NoError(t, err)
+	sessions := []db.Session{
+		{ID: threads[0] + suffix, Agent: "codex", Machine: "workstation"},
+		{ID: threads[1] + suffix, Agent: "codex", Machine: "workstation"},
+		{ID: threads[2] + suffix, Agent: "codex", Machine: "workstation"},
+	}
+	excluded, err := readPGExcludedSessionIDs(ctx, pg, slices.Values(sessions), marker, "workstation", nil)
+	require.NoError(t, err)
+	require.Equal(t, map[string]bool{sessions[0].ID: true, sessions[1].ID: true}, excluded)
 }
