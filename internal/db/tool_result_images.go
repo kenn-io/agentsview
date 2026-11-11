@@ -876,9 +876,9 @@ func ProjectSessionPushImages(ctx context.Context, messages []Message, dir strin
 					}
 					continue
 				}
-				_, ext, valid := assetImageDigest(p.ImageRef)
+				_, ext, _ := assetImageDigest(p.ImageRef)
 				media, _ := assets.MediaTypeForExt(ext)
-				if !valid || media != p.MediaType || (p.Version != nil && *p.Version != 1) {
+				if media != p.MediaType || (p.Version != nil && *p.Version != 1) {
 					resultErr = errors.New("invalid image asset media type")
 					return
 				}

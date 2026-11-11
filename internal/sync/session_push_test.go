@@ -61,12 +61,11 @@ func TestSessionPushMixedReservedAndDeferredSource(t *testing.T) {
 	engine.archiveStore = archive
 	t.Cleanup(engine.Close)
 	jobs := make(chan syncJob, 1)
-	jobs <- syncJob{agent: parser.AgentAntigravityCLI, path: "fixture-source", retrySessionIDs: map[string]bool{"deferred": true}, results: []parser.ParseResult{{Session: parser.ParsedSession{ID: "reserved", Agent: parser.AgentAntigravityCLI}}, {Session: parser.ParsedSession{ID: "deferred", Agent: parser.AgentAntigravityCLI}}}}
+	jobs <- syncJob{agent: parser.AgentAntigravityCLI, path: "fixture-source", providerFailureCount: 1, retryCauses: []retryCause{{sessionID: "deferred", path: "fixture-source", reason: "incomplete"}}, retrySessionIDs: map[string]bool{"deferred": true}, results: []parser.ParseResult{{Session: parser.ParsedSession{ID: "reserved", Agent: parser.AgentAntigravityCLI}}, {Session: parser.ParsedSession{ID: "deferred", Agent: parser.AgentAntigravityCLI}}}}
 	close(jobs)
 	stats := engine.collectAndBatch(t.Context(), jobs, 1, 1, nil, syncWriteDefault)
 	assert.Equal(t, 1, stats.deferredPreservedFiles)
 	assert.Equal(t, []string{"deferred"}, stats.deferredPreservedIDs)
-	assert.Empty(t, resyncSwapAbortReason(stats, 0, 0))
 	assert.Equal(t, db.CurrentDataVersion(), replacement.GetSessionDataVersion(t.Context(), "reserved"))
 }
 

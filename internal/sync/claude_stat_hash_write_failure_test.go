@@ -340,6 +340,13 @@ func TestSyncClaudeDAGIntentionalSkipCompletesActiveMembers(t *testing.T) {
 					database.GetSessionDataVersion(t.Context(), "forked-i"),
 					"the trashed fork must not be demoted")
 			}
+			if tc.reserved {
+				assert.Equal(t, db.CurrentDataVersion(), database.GetSessionDataVersion(t.Context(), "forked-i"))
+				messages, err := database.GetAllMessages(t.Context(), "forked-i")
+				require.NoError(t, err)
+				require.Len(t, messages, 1)
+				assert.Equal(t, "accepted snapshot", messages[0].Content)
+			}
 			_, hasDigest, err := database.GetProviderStatHash(
 				t.Context(), parser.AgentClaude, path,
 			)

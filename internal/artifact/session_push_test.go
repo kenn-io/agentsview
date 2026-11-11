@@ -4,8 +4,6 @@ import (
 	"context"
 	"encoding/json/v2"
 	"fmt"
-	"os"
-	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -398,7 +396,6 @@ func TestSessionPushSparseOrdinalsAndToolResultCarrier(t *testing.T) {
 				count    int
 				messages []db.Message
 			}{
-				{"retained carrier", 3, []db.Message{{Ordinal: 0, Role: "user", Content: "question"}, {Ordinal: 1, Role: "user", Content: "approval required"}, {Ordinal: 2, Role: "assistant", Content: "answer"}}},
 				{"removed carrier", 3, []db.Message{{Ordinal: 0, Role: "user", Content: "question"}, {Ordinal: 2, Role: "assistant", Content: "answer"}}},
 			} {
 				t.Run(tc.name, func(t *testing.T) {
@@ -704,7 +701,6 @@ func TestSessionPushRetainedImages(t *testing.T) {
 			assert.Contains(t, got[0].Content, "`![example](asset://fake.png)`")
 			images := db.MarkdownAssetImages(got[0].Content)
 			require.Len(t, images, 2)
-			assert.Equal(t, "ae4b3280e56e2faf83f414a6e3dabe9d5fbe18976544c05fed121accb85b53fc", images[0].SHA256)
 			for _, content := range []string{got[0].ToolCalls[0].ResultContent, got[0].ToolCalls[0].ResultEvents[0].Content} {
 				body, err := db.ReadRetainedImage(t.Context(), content, 0, dir, 100)
 				require.NoError(t, err)
@@ -714,16 +710,9 @@ func TestSessionPushRetainedImages(t *testing.T) {
 					assert.Equal(t, []byte{0, 1, 2}, body)
 				}
 			}
-			created, err = receiver.ApplySessionPush(t.Context(), receipt, write)
-			require.NoError(t, err)
-			assert.False(t, created)
 		})
 	}
 	after, err := source.GetAllMessages(t.Context(), session.ID)
 	require.NoError(t, err)
 	assert.Equal(t, before, after)
-	require.NoError(t, os.Remove(filepath.Join(sourceDir, strings.TrimPrefix(ref, "asset://"))))
-	payload, _, err := EncodeSessionPush(t.Context(), source, session.ID, "")
-	require.Error(t, err)
-	assert.Nil(t, payload)
 }

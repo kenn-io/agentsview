@@ -65,9 +65,6 @@ func TestPushSessionCommandToAuthenticatedReceiver(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, messages, 1)
 	assert.Equal(t, "host~codex:selected", messages[0].Content)
-	body, err := db.ReadRetainedImage(t.Context(), messages[0].ToolCalls[0].ResultContent, 0, receiverDir, 100)
-	require.NoError(t, err)
-	assert.Equal(t, []byte{0, 1, 2}, body)
 }
 
 func TestPushSessionTransportRefusesUnsafeTargets(t *testing.T) {

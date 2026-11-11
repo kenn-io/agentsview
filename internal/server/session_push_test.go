@@ -110,7 +110,7 @@ func TestSessionPushCannotClaimReceiverOrigin(t *testing.T) {
 	assert.NotContains(t, owned, "selected")
 }
 
-func TestSessionPushReceiverReportsConflict(t *testing.T) {
+func TestSessionPushReceiverReportsErrors(t *testing.T) {
 	source := testServer(t, 30*time.Second).db.(*db.DB)
 	session := db.Session{ID: "source", Agent: "claude", Machine: "source", MessageCount: 1}
 	message := db.Message{SessionID: session.ID, Role: "user", Content: "first"}
@@ -145,46 +145,27 @@ func TestSessionPushReceiverReportsConflict(t *testing.T) {
 		})
 	}()
 	<-started
-	defer func() {
-		close(release)
-		require.NoError(t, <-done)
-	}()
 	assert.Equal(t, http.StatusServiceUnavailable, send(original).Code)
-}
+	close(release)
+	require.NoError(t, <-done)
 
-func TestSessionPushReportsVersionAndRebuildRequirements(t *testing.T) {
-	s := testServer(t, 30*time.Second)
-	s.cfg.AcceptSessionPush, s.cfg.RequireAuth, s.cfg.AuthToken = true, true, "fixture"
-	d := s.db.(*db.DB)
-	require.NoError(t, d.UpsertSession(t.Context(), db.Session{ID: "selected", Agent: "claude", Machine: "source"}))
-	packet, _, err := artifact.EncodeSessionPush(t.Context(), d, "selected", "")
-	require.NoError(t, err)
-	original := bytes.Clone(packet)
 	var envelope artifact.SessionPushEnvelope
-	require.NoError(t, json.Unmarshal(packet, &envelope))
+	require.NoError(t, json.Unmarshal(original, &envelope))
 	var manifest map[string]any
 	require.NoError(t, json.Unmarshal(envelope.Manifest, &manifest))
 	manifest["data_version"] = db.CurrentDataVersion() + 1
 	envelope.Manifest, err = json.Marshal(manifest)
 	require.NoError(t, err)
-	packet, err = json.Marshal(envelope)
+	future, err := json.Marshal(envelope)
 	require.NoError(t, err)
-	r := httptest.NewRequestWithContext(t.Context(), http.MethodPost, "/api/v1/sessions/ingest", bytes.NewReader(packet))
-	r.Header.Set("Authorization", "Bearer fixture")
-	r.Header.Set("Content-Type", "application/json")
-	w := httptest.NewRecorder()
-	s.Handler().ServeHTTP(w, r)
+	w := send(future)
 	assert.Equal(t, http.StatusBadRequest, w.Code)
 	assert.Equal(t, "future-data-version", w.Header().Get("X-AgentsView-Push-Error"))
-	require.NoError(t, d.Update(t.Context(), func(tx *sql.Tx) error {
-		_, err := tx.ExecContext(t.Context(), `PRAGMA user_version = 0`)
+	require.NoError(t, receiver.db.(*db.DB).Update(t.Context(), func(tx *sql.Tx) error {
+		_, err := tx.ExecContext(t.Context(), `PRAGMA user_version = 175`)
 		return err
 	}))
-	r = httptest.NewRequestWithContext(t.Context(), http.MethodPost, "/api/v1/sessions/ingest", bytes.NewReader(original))
-	r.Header.Set("Authorization", "Bearer fixture")
-	r.Header.Set("Content-Type", "application/json")
-	w = httptest.NewRecorder()
-	s.Handler().ServeHTTP(w, r)
+	w = send(original)
 	assert.Equal(t, http.StatusServiceUnavailable, w.Code)
 	assert.Equal(t, "archive-rebuild-required", w.Header().Get("X-AgentsView-Push-Error"))
 }

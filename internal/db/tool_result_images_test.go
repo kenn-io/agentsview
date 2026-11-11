@@ -880,6 +880,9 @@ func TestMarkdownAssetImages(t *testing.T) {
 	assert.Equal(t, "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad", images[0].SHA256)
 	assert.Nil(t, images[0].Size)
 	assert.Equal(t, "image/png", images[0].MediaType)
+	inline := MarkdownAssetImages("![chart](data:image/png;base64,YWJj)")
+	require.Len(t, inline, 1)
+	assert.Equal(t, "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad", inline[0].SHA256)
 }
 
 func TestRetainedToolResultFilesProducerFixture(t *testing.T) {
