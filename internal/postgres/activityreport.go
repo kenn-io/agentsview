@@ -15,6 +15,7 @@ import (
 	"go.kenn.io/agentsview/internal/export"
 	"go.kenn.io/agentsview/internal/kept"
 	"go.kenn.io/agentsview/internal/money"
+	"golang.org/x/sync/errgroup"
 )
 
 // GetActivityReport assembles a concurrency- and usage-oriented report
@@ -527,9 +528,11 @@ func (s *Store) activityReportCandidateSourceWithCounts(ids []string, q activity
 }
 
 // readActivityCandidates reads the sessions' terminal tool candidates, in
-// candidate stream order, and pairs their messages, appending each
-// session's pairs together. With withCounts, it also returns each counted
-// message from the range start to the effective end, in no set order.
+// candidate stream order, beside their message pairs, which come from
+// slices of the sessions read at once on the pool and in order on a read
+// snapshot. Each session's pairs sit together in the result. With
+// withCounts, it also returns each counted message from the range start to
+// the effective end, in no set order.
 func (s *Store) readActivityCandidates(
 	ctx context.Context, ids []string, q activity.Query, withCounts bool,
 ) (terminal, pairs []activity.IntervalCandidate, counted []pgActivityCountedMessage, err error) {
@@ -693,7 +696,33 @@ func (s *Store) readActivityCandidates(
 		}
 		return terminal, terminalRows.Close()
 	}
-	return s.readActivityCandidateParts(ctx, ids, q, readTerminal, withCounts)
+	n := max(1, min(activityMessageSlices, (len(ids)+activityMessageSliceSessions-1)/activityMessageSliceSessions))
+	parts := make([][]string, n)
+	for i, id := range ids {
+		parts[i%n] = append(parts[i%n], id)
+	}
+	slicePairs := make([][]activity.IntervalCandidate, n)
+	sliceCounted := make([][]pgActivityCountedMessage, n)
+	g, readCtx := errgroup.WithContext(ctx)
+	if !s.supportsConcurrentReads() {
+		// A read snapshot shares one transaction, which runs one statement
+		// at a time, so its reads run in order.
+		g.SetLimit(1)
+	}
+	g.Go(func() (err error) {
+		terminal, err = readTerminal(readCtx)
+		return err
+	})
+	for i, part := range parts {
+		g.Go(func() (err error) {
+			slicePairs[i], sliceCounted[i], err = s.readActivityMessagePairs(readCtx, part, q, withCounts)
+			return err
+		})
+	}
+	if err := g.Wait(); err != nil {
+		return nil, nil, nil, err
+	}
+	return terminal, slices.Concat(slicePairs...), slices.Concat(sliceCounted...), nil
 }
 
 // ActivityReportCandidateSource exposes the backend's mechanical pairing

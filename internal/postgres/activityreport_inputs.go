@@ -11,7 +11,6 @@ import (
 	"unsafe"
 
 	"github.com/jackc/pgx/v5"
-	"golang.org/x/sync/errgroup"
 
 	"go.kenn.io/agentsview/internal/activity"
 	"go.kenn.io/agentsview/internal/db"
@@ -342,45 +341,13 @@ func (s *Store) activityUsageInputs(ctx context.Context, ids []string, lower, up
 }
 
 // activityMessageSliceSessions is the fewest sessions worth a message read
-// of their own; see readActivityCandidateParts.
+// of their own; see readActivityCandidates.
 const activityMessageSliceSessions = 4096
 
 // activityMessageSlices caps the message reads one pairing runs at once.
 // The terminal read and the report's usage read run beside them on the
 // pool of 5 connections, which leaves one for other requests.
 const activityMessageSlices = 2
-
-// readActivityCandidateParts runs readTerminal beside the message reads of
-// the sessions in ids, which are dealt into slices read at once. Each
-// session's pairs sit together in the result. With withCounts, it also
-// returns each counted message from the range start to the effective end.
-func (s *Store) readActivityCandidateParts(
-	ctx context.Context, ids []string, q activity.Query,
-	readTerminal func(context.Context) ([]activity.IntervalCandidate, error), withCounts bool,
-) (terminal, pairs []activity.IntervalCandidate, counted []pgActivityCountedMessage, err error) {
-	n := max(1, min(activityMessageSlices, (len(ids)+activityMessageSliceSessions-1)/activityMessageSliceSessions))
-	parts := make([][]string, n)
-	for i, id := range ids {
-		parts[i%n] = append(parts[i%n], id)
-	}
-	slicePairs := make([][]activity.IntervalCandidate, n)
-	sliceCounted := make([][]pgActivityCountedMessage, n)
-	g, readCtx := errgroup.WithContext(ctx)
-	g.Go(func() (err error) {
-		terminal, err = readTerminal(readCtx)
-		return err
-	})
-	for i, part := range parts {
-		g.Go(func() (err error) {
-			slicePairs[i], sliceCounted[i], err = s.readActivityMessagePairs(readCtx, part, q, withCounts)
-			return err
-		})
-	}
-	if err := g.Wait(); err != nil {
-		return nil, nil, nil, err
-	}
-	return terminal, slices.Concat(slicePairs...), slices.Concat(sliceCounted...), nil
-}
 
 // readActivityMessagePairs pairs the messages of the sessions in ids, one
 // session at a time, so each session's pairs sit together in the result.
