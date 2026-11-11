@@ -691,6 +691,9 @@ test("the selected message stays marked while find is open", async ({ page }) =>
   await openSession(page);
   await openFind(page);
   releaseHistory();
+  // Finishing the search can scroll and replace virtual rows. Select a
+  // message after that work so the outline probe reads the clicked card.
+  await expectCompleteIndex(page);
   await page
     .locator(".virtual-row:not(.selected) p")
     .filter({ hasText: /^Message \d+$/ })
