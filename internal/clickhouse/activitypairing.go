@@ -3,7 +3,6 @@ package clickhouse
 import (
 	"cmp"
 	"context"
-	"database/sql"
 	"fmt"
 	"math"
 	"slices"
@@ -13,7 +12,7 @@ import (
 	"unsafe"
 
 	chdriver "github.com/ClickHouse/clickhouse-go/v2"
-	"github.com/ClickHouse/clickhouse-go/v2/ext"
+	"golang.org/x/sync/errgroup"
 
 	"go.kenn.io/agentsview/internal/activity"
 	"go.kenn.io/agentsview/internal/stringutil"
@@ -146,28 +145,16 @@ func (s *Store) activityReportDerived(
 	if len(uncached) == 0 {
 		return derived, nil
 	}
-	table, err := ext.NewTable("activity_uncached_ids", ext.Column("id", "String"))
-	if err != nil {
-		return nil, fmt.Errorf("creating activity pairing table: %w", err)
-	}
-	for _, id := range uncached {
-		if err := table.Append(id); err != nil {
-			return nil, fmt.Errorf("adding activity pairing session: %w", err)
-		}
-	}
-	ctx = chdriver.Context(ctx, chdriver.WithExternalTable(table))
-	inputs, err := s.readActivitySessionInputs(ctx, chSessionSet{body: "SELECT id FROM activity_uncached_ids"})
+	inputs, err := s.readActivitySessionInputs(ctx, uncached)
 	if err != nil {
 		return nil, err
 	}
-	deriver := newActivityDeriver(gapCap)
+	entries, err := deriveActivitySessions(ctx, uncached, inputs, gapCap)
+	if err != nil {
+		return nil, err
+	}
 	for i, id := range uncached {
-		if i%1024 == 0 {
-			if err := ctx.Err(); err != nil {
-				return nil, err
-			}
-		}
-		entry := deriver.derive(id, inputs[id])
+		entry := entries[i]
 		entry.pushVersion = versions[id]
 		s.activitySessions.store(id, entry)
 		derived[id] = entry
@@ -175,66 +162,176 @@ func (s *Store) activityReportDerived(
 	return derived, nil
 }
 
+// deriveActivitySessions derives each session in ids from its inputs in
+// parallel. Each session's derivation reads only its own inputs, so the
+// order the sessions are derived in does not change the result. The result
+// is in the order of ids.
+func deriveActivitySessions(
+	ctx context.Context, ids []string, inputs map[string]activitySessionInputs, gapCap float64,
+) ([]activitySessionDerived, error) {
+	out := make([]activitySessionDerived, len(ids))
+	if err := activity.EachInParallel(ctx, len(ids), func() *activityDeriver {
+		return newActivityDeriver(gapCap)
+	}, func(deriver *activityDeriver, i int) {
+		out[i] = deriver.derive(ids[i], inputs[ids[i]])
+	}); err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+// activityPairingSliceSessions is the fewest sessions worth a slice of
+// their own in a pairing read; see readActivitySessionInputs.
+const activityPairingSliceSessions = 4096
+
+// activityPairingMaxSlices caps the slices a pairing read runs at once. A
+// report runs its pairing read beside the usage read's
+// activityUsageMaxSlices slices, which usually finish last. On a year of
+// real sessions, two slices made the pairing read ready about as soon as
+// four did, and four made each usage query on the server about 40% slower.
+const activityPairingMaxSlices = 2
+
+// activitySessionMessages is one session's pairing messages in ordinal order.
+type activitySessionMessages struct {
+	id       string
+	messages []clickActivityMessage
+}
+
 // readActivitySessionInputs reads every message and every timestamped
-// terminal tool event of the candidate sessions.
-func (s *Store) readActivitySessionInputs(ctx context.Context, candidates chSessionSet) (map[string]activitySessionInputs, error) {
+// terminal tool event of the sessions in ids. One goroutine scanning
+// millions of message rows takes seconds while ClickHouse waits to send
+// them, so the sessions are dealt into slices whose messages are read at
+// once, beside the read of the tool events.
+func (s *Store) readActivitySessionInputs(ctx context.Context, ids []string) (map[string]activitySessionInputs, error) {
 	s.activityInputQueries.Add(1)
-	const settings = " SETTINGS optimize_move_to_prewhere_if_final=1"
-	sessionIn, args := candidates.in("session_id")
-	rows, err := s.queryContext(ctx, `SELECT session_id,ordinal,timestamp,role,model,
+	read := make(map[string]activitySessionInputs, len(ids))
+	if len(ids) == 0 {
+		return read, nil
+	}
+	n := min(activityPairingMaxSlices, (len(ids)+activityPairingSliceSessions-1)/activityPairingSliceSessions)
+	parts := make([][]string, n)
+	for i, id := range ids {
+		parts[i%n] = append(parts[i%n], id)
+	}
+	messages := make([][]activitySessionMessages, n)
+	var events map[string][]clickActivityTerminal
+	g, readCtx := errgroup.WithContext(ctx)
+	for i, part := range parts {
+		g.Go(func() error {
+			var err error
+			messages[i], err = s.readActivityMessages(readCtx, part)
+			return err
+		})
+	}
+	g.Go(func() error {
+		var err error
+		events, err = s.readActivityTerminalEvents(readCtx, ids)
+		return err
+	})
+	if err := g.Wait(); err != nil {
+		return nil, err
+	}
+	for _, part := range messages {
+		for _, session := range part {
+			read[session.id] = activitySessionInputs{messages: session.messages}
+		}
+	}
+	for id, es := range events {
+		entry := read[id]
+		entry.events = es
+		read[id] = entry
+	}
+	return read, nil
+}
+
+// activityPairingSettings lets ClickHouse filter before deduplicating
+// under the connection's final=1.
+const activityPairingSettings = " SETTINGS optimize_move_to_prewhere_if_final=1"
+
+// readActivityMessages reads the pairing messages of the sessions in ids
+// on the native connection, each session's in ordinal order.
+func (s *Store) readActivityMessages(ctx context.Context, ids []string) ([]activitySessionMessages, error) {
+	table, err := usageSessionListTable("activity_pairing_ids", ids)
+	if err != nil {
+		return nil, err
+	}
+	ctx = chdriver.Context(ctx, chdriver.WithExternalTable(table))
+	rows, err := s.bulk.Query(ctx, `SELECT session_id,ordinal,timestamp,role,model,
 		toBool(is_system = false AND source_subtype <> 'tool_result') FROM messages
-		WHERE `+sessionIn+` ORDER BY session_id,ordinal`+settings, args...)
+		WHERE session_id IN (SELECT id FROM activity_pairing_ids) ORDER BY session_id,ordinal`+activityPairingSettings)
 	if err != nil {
 		return nil, fmt.Errorf("querying pairing messages: %w", err)
 	}
 	defer rows.Close()
-	read := map[string]activitySessionInputs{}
+	out := make([]activitySessionMessages, 0, len(ids))
 	// Roles and models take few values; look each up in the global table once.
 	handles := stringutil.Interner{}
+	// The native API requires destinations that match the column types.
+	var id, role, model string
+	var ordinal int64
+	var ts *time.Time
+	var counted bool
 	for rows.Next() {
-		var id, role, model string
-		var ordinal int
-		var ts sql.NullTime
-		var counted bool
 		if err := rows.Scan(&id, &ordinal, &ts, &role, &model, &counted); err != nil {
 			return nil, fmt.Errorf("scanning pairing message: %w", err)
 		}
-		entry := read[id]
-		m := clickActivityMessage{ordinal: ordinal, us: noTimestamp, role: handles.Intern(role), model: handles.Intern(model), counted: counted}
-		if ts.Valid {
-			m.us = ts.Time.UnixMicro()
+		// Rows arrive grouped by session.
+		if len(out) == 0 || out[len(out)-1].id != id {
+			out = append(out, activitySessionMessages{id: id})
 		}
-		entry.messages = append(entry.messages, m)
-		read[id] = entry
+		m := clickActivityMessage{ordinal: int(ordinal), us: noTimestamp, role: handles.Intern(role), model: handles.Intern(model), counted: counted}
+		if ts != nil {
+			m.us = ts.UnixMicro()
+		}
+		session := &out[len(out)-1]
+		session.messages = append(session.messages, m)
 	}
 	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterating pairing messages: %w", err)
+	}
+	return out, nil
+}
+
+// readActivityTerminalEvents reads the timestamped terminal tool events of
+// the sessions in ids, each session's in time order.
+func (s *Store) readActivityTerminalEvents(ctx context.Context, ids []string) (map[string][]clickActivityTerminal, error) {
+	table, err := usageSessionListTable("activity_pairing_ids", ids)
+	if err != nil {
 		return nil, err
 	}
-	if err := rows.Close(); err != nil {
-		return nil, err
-	}
-	sessionIn, args = candidates.in("session_id")
-	rows, err = s.queryContext(ctx, `SELECT session_id,tool_call_message_ordinal,call_index,event_index,timestamp FROM tool_result_events
-		WHERE `+sessionIn+` AND source='tool_execution' AND status IN ('completed','errored')
-		AND timestamp IS NOT NULL ORDER BY session_id,timestamp,call_index,event_index`+settings, args...)
+	ctx = chdriver.Context(ctx, chdriver.WithExternalTable(table))
+	rows, err := s.queryContext(ctx, `SELECT session_id,tool_call_message_ordinal,call_index,event_index,timestamp FROM tool_result_events
+		WHERE session_id IN (SELECT id FROM activity_pairing_ids) AND source='tool_execution' AND status IN ('completed','errored')
+		AND timestamp IS NOT NULL ORDER BY session_id,timestamp,call_index,event_index`+activityPairingSettings)
 	if err != nil {
 		return nil, fmt.Errorf("querying pairing tool events: %w", err)
 	}
 	defer rows.Close()
+	read := map[string][]clickActivityTerminal{}
+	var id string
+	var session []clickActivityTerminal
 	for rows.Next() {
-		var id string
+		var next string
 		var e clickActivityTerminal
 		var ts time.Time
-		if err := rows.Scan(&id, &e.ordinal, &e.callIndex, &e.eventIndex, &ts); err != nil {
+		if err := rows.Scan(&next, &e.ordinal, &e.callIndex, &e.eventIndex, &ts); err != nil {
 			return nil, fmt.Errorf("scanning pairing tool event: %w", err)
 		}
+		// Rows arrive grouped by session.
+		if next != id {
+			if session != nil {
+				read[id] = session
+			}
+			id, session = next, nil
+		}
 		e.us = ts.UnixMicro()
-		entry := read[id]
-		entry.events = append(entry.events, e)
-		read[id] = entry
+		session = append(session, e)
 	}
 	if err := rows.Err(); err != nil {
 		return nil, err
+	}
+	if session != nil {
+		read[id] = session
 	}
 	return read, rows.Close()
 }

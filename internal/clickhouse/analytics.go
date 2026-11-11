@@ -239,14 +239,6 @@ func chSessionSetFromWhere(where string, args []any) chSessionSet {
 	}
 }
 
-// chSessionSetFromIDs embeds an explicit ID list. It exists for callers
-// that pin exact sessions, such as contract tests; the list still grows the
-// statement, so production paths derive the set in SQL instead.
-func chSessionSetFromIDs(ids []string) chSessionSet {
-	ph, args := db.InPlaceholders(ids)
-	return chSessionSet{body: "SELECT arrayJoin([" + strings.Trim(ph, "()") + "]) AS id", args: args}
-}
-
 // in returns `col IN (...)` with a fresh copy of the bound arguments so
 // callers can embed the set more than once in one statement.
 func (set chSessionSet) in(col string) (string, []any) {
