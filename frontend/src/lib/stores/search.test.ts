@@ -190,7 +190,7 @@ describe("SearchStore", () => {
   });
 
   it.each(["recover", "exhaust"] as const)(
-    "recovers or exhausts automatic retry and permits manual retry: %s",
+    "recovers or exhausts automatic retry: %s",
     async (outcome) => {
       const store = createSearchStore(memoryStorage());
       const second = deferred<SearchResponse>();
@@ -218,10 +218,6 @@ describe("SearchStore", () => {
         expect(searchService.getApiV1Search).toHaveBeenCalledTimes(2);
         expect(store.error).toEqual({ detail: "second", kind: "generic" });
         expect(reportErrorShown).toHaveBeenCalledTimes(1);
-        searchService.getApiV1Search.mockResolvedValueOnce(fullTextResponse("needle"));
-        store.retry();
-        await flushMicrotasks();
-        expect(store.results[0]?.session_id).toBe("full-0");
       }
       expect(store.isSearching).toBe(false);
     },

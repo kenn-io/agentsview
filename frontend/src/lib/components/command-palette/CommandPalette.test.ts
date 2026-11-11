@@ -658,7 +658,6 @@ describe("CommandPalette", () => {
       document.querySelectorAll<HTMLButtonElement>(".palette-error button"),
     ).find((button) => button.textContent?.trim() === "Retry");
     expect(retry).toBeDefined();
-    retry!.focus();
     retry!.click();
     expect(mockSearchStore.retry).toHaveBeenCalledOnce();
     expect(mockRouter.navigateToSession).not.toHaveBeenCalled();
@@ -672,6 +671,7 @@ describe("CommandPalette", () => {
     await enterSearchQuery();
     const input = document.querySelector<HTMLInputElement>(".palette-input")!;
     input.dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowDown", bubbles: true }));
+    mockSearchStore.error = null;
     mockSearchStore.results = [makeSearchResult()];
     input.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
     expect(mockRouter.navigateToSession).toHaveBeenCalledWith("codex:search123");
