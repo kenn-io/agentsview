@@ -625,8 +625,7 @@ func decodeShelleyMessage(
 	// as type="error"), and applyShelleyUsage no-ops on the all-zero
 	// usage blobs Shelley writes for user/tool messages.
 	if r.usageData != "" {
-		applyShelleyUsage(&msg, r.usageData, convModel)
-		if !jsontext.Value(r.usageData).IsValid() {
+		if applyShelleyUsage(&msg, r.usageData, convModel) != nil {
 			malformed = true
 		}
 	}
@@ -702,10 +701,12 @@ func shelleyUserDataText(userData string) string {
 	return ""
 }
 
-func applyShelleyUsage(msg *ParsedMessage, usageData, convModel string) {
+// applyShelleyUsage returns the decode error when usageData does not fit the
+// usage shape, so the caller can count the row as malformed.
+func applyShelleyUsage(msg *ParsedMessage, usageData, convModel string) error {
 	var u shelleyUsage
 	if err := json.Unmarshal([]byte(usageData), &u); err != nil {
-		return
+		return err
 	}
 	context := shelleyTokenCount(u.InputTokens) +
 		shelleyTokenCount(u.CacheCreationInputTokens) +
@@ -716,7 +717,7 @@ func applyShelleyUsage(msg *ParsedMessage, usageData, convModel string) {
 	// so they do not produce spurious token-presence flags or empty
 	// token_usage rows in the cost UNION.
 	if context == 0 && output == 0 {
-		return
+		return nil
 	}
 
 	// The usage_data keys are already the AgentsView canonical names, so
@@ -741,6 +742,7 @@ func applyShelleyUsage(msg *ParsedMessage, usageData, convModel string) {
 	if model != "" {
 		msg.Model = model
 	}
+	return nil
 }
 
 // shelleyTokenCount tolerantly decodes a token count, mapping

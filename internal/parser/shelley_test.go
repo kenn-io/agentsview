@@ -658,9 +658,9 @@ func TestShelleyNumericUserInitiatedScans(t *testing.T) {
 
 func TestApplyShelleyUsageTolerant(t *testing.T) {
 	var msg ParsedMessage
-	applyShelleyUsage(&msg,
+	require.NoError(t, applyShelleyUsage(&msg,
 		`{"input_tokens":"-5","cache_read_input_tokens":"100",`+
-			`"output_tokens":"42","model":""}`, "fallback-model")
+			`"output_tokens":"42","model":""}`, "fallback-model"))
 	assert.Equal(t, 100, msg.ContextTokens, "ContextTokens (negative input clamped)")
 	assert.Equal(t, 42, msg.OutputTokens, "OutputTokens")
 	assert.True(t, msg.HasContextTokens, "HasContextTokens")
@@ -678,9 +678,12 @@ func TestParseShelleyCountsUndecodableUsageAndUserData(t *testing.T) {
 	seedShelleyMessage(t, db, "cBAD1", 1, 1, "user",
 		`{"Role":0,"Content":[{"Type":2,"Text":"go"}]}`,
 		"", "", "2026-06-15T10:00:00Z")
-	// Usage-only row whose usage blob is corrupt: its tokens are lost.
+	// Usage-only rows whose usage blob does not decode: one is cut off, the
+	// other is valid JSON with a mistyped model. Their tokens are lost.
 	seedShelleyMessage(t, db, "cBAD1", 2, 1, "agent",
 		"", "", `{"input_tokens":700,"output_tokens"`, "2026-06-15T10:00:10Z")
+	seedShelleyMessage(t, db, "cBAD1", 5, 1, "agent",
+		"", "", `{"input_tokens":700,"output_tokens":20,"model":42}`, "2026-06-15T10:00:15Z")
 	// No llm_data, so the parser falls back to user_data, which is corrupt.
 	seedShelleyMessage(t, db, "cBAD1", 3, 1, "user",
 		"", `{"text":"lost prompt`, "", "2026-06-15T10:00:20Z")
@@ -693,7 +696,7 @@ func TestParseShelleyCountsUndecodableUsageAndUserData(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, result)
 
-	assert.Equal(t, 2, result.Session.MalformedLines)
+	assert.Equal(t, 3, result.Session.MalformedLines)
 	require.Len(t, result.Messages, 2)
 	assert.Equal(t, "go", result.Messages[0].Content)
 	assert.Equal(t, "done", result.Messages[1].Content)
