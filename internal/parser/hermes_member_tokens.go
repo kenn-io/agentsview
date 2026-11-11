@@ -19,7 +19,7 @@ func hermesHasTranscriptRevision(ctx context.Context, conn *sql.DB) (bool, error
 // The same three endpoints describe direct and seeded tokens. Native indexes
 // bound whole-store message work to three seeks per session, independent of
 // history length. Direct fingerprints also support legacy stores without them.
-func hermesMemberTokenQuery(revision bool, single bool) string {
+func hermesMemberTokenQuery(revision, single, indexed bool) string {
 	rev := "0"
 	if revision {
 		rev = "transcript_revision"
@@ -28,15 +28,20 @@ func hermesMemberTokenQuery(revision bool, single bool) string {
 	if single {
 		where = " WHERE id = ?"
 	}
+	idIndex, timeIndex := "", ""
+	if indexed {
+		idIndex = " INDEXED BY idx_messages_session_id"
+		timeIndex = " INDEXED BY idx_messages_session"
+	}
 	return `WITH members AS (SELECT ` + hermesStateSessionColumns + `, ` + rev + ` AS revision FROM sessions` + where + `)
  SELECT members.*,
- COALESCE((SELECT id FROM messages WHERE session_id=members.id ORDER BY id DESC LIMIT 1),0),
- (SELECT timestamp FROM messages WHERE session_id=members.id ORDER BY timestamp LIMIT 1),
- (SELECT timestamp FROM messages WHERE session_id=members.id ORDER BY timestamp DESC LIMIT 1)
+ COALESCE((SELECT id FROM messages` + idIndex + ` WHERE session_id=members.id ORDER BY id DESC LIMIT 1),0),
+ (SELECT timestamp FROM messages` + timeIndex + ` WHERE session_id=members.id ORDER BY timestamp LIMIT 1),
+ (SELECT timestamp FROM messages` + timeIndex + ` WHERE session_id=members.id ORDER BY timestamp DESC LIMIT 1)
  FROM members ORDER BY members.id`
 }
 
-func listHermesMemberTokens(ctx context.Context, conn *sql.DB, id string, yield func(string, string, bool) error) error {
+func listHermesMemberTokens(ctx context.Context, conn *sql.DB, id string, indexed bool, yield func(string, string, bool) error) error {
 	revision, err := hermesHasTranscriptRevision(ctx, conn)
 	if err != nil {
 		return err
@@ -49,7 +54,7 @@ func listHermesMemberTokens(ctx context.Context, conn *sql.DB, id string, yield 
 	if id != "" {
 		args = []any{id}
 	}
-	rows, err := conn.QueryContext(ctx, hermesMemberTokenQuery(revision, id != ""), args...)
+	rows, err := conn.QueryContext(ctx, hermesMemberTokenQuery(revision, id != "", indexed), args...)
 	if err != nil {
 		return err
 	}
@@ -87,7 +92,7 @@ func listHermesMemberTokens(ctx context.Context, conn *sql.DB, id string, yield 
 
 func hermesMemberToken(ctx context.Context, conn *sql.DB, id string) (string, error) {
 	var token string
-	err := listHermesMemberTokens(ctx, conn, id, func(_ string, value string, _ bool) error { token = value; return nil })
+	err := listHermesMemberTokens(ctx, conn, id, false, func(_ string, value string, _ bool) error { token = value; return nil })
 	return token, err
 }
 
@@ -194,7 +199,7 @@ func (s hermesSourceSet) changedHermesMembers(ctx context.Context, root, stateDB
 	}
 	var sources []SourceRef
 	selected := make(map[string]struct{})
-	err = listHermesMemberTokens(ctx, conn, "", func(id, token string, cron bool) error {
+	err = listHermesMemberTokens(ctx, conn, "", true, func(id, token string, cron bool) error {
 		row, found, err := cursor.Lookup(ctx, VirtualSourcePath(stateDB, id))
 		if err != nil {
 			return err

@@ -33,7 +33,7 @@ func hermesTokenFixture(t *testing.T) (*sql.DB, string) {
 func tokenMap(t *testing.T, c *sql.DB) map[string]string {
 	t.Helper()
 	out := map[string]string{}
-	require.NoError(t, listHermesMemberTokens(t.Context(), c, "", func(id, token string, _ bool) error { out[id] = token; return nil }))
+	require.NoError(t, listHermesMemberTokens(t.Context(), c, "", false, func(id, token string, _ bool) error { out[id] = token; return nil }))
 	return out
 }
 
@@ -230,7 +230,13 @@ func TestHermesMemberTokenLedgerOnlyWrite(t *testing.T) {
 
 func TestHermesMemberTokenHistoryGrowth(t *testing.T) {
 	c, _ := hermesTokenFixture(t)
-	rows, err := c.QueryContext(t.Context(), "EXPLAIN QUERY PLAN "+hermesMemberTokenQuery(true, false))
+	// Misleading statistics favor the wrong message index unless the gated query pins each seek.
+	_, err := c.ExecContext(t.Context(), `ANALYZE;
+ UPDATE sqlite_stat1 SET stat='1000000 1000000 1' WHERE idx='idx_messages_session';
+ UPDATE sqlite_stat1 SET stat='1000000 1 1' WHERE idx='idx_messages_session_id';
+ ANALYZE sqlite_schema`)
+	require.NoError(t, err)
+	rows, err := c.QueryContext(t.Context(), "EXPLAIN QUERY PLAN "+hermesMemberTokenQuery(true, false, true))
 	require.NoError(t, err)
 	defer func() { require.NoError(t, rows.Close()) }()
 	searches, endpoints := 0, 0
@@ -238,6 +244,7 @@ func TestHermesMemberTokenHistoryGrowth(t *testing.T) {
 		var id, parent, unused int
 		var detail string
 		require.NoError(t, rows.Scan(&id, &parent, &unused, &detail))
+		assert.NotContains(t, detail, "USE TEMP B-TREE")
 		if strings.Contains(detail, "SEARCH messages USING COVERING INDEX idx_messages_session_id (session_id=?)") {
 			searches++
 		}
