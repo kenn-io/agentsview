@@ -741,6 +741,7 @@ func TestPGUsageCacheDirectFallbackAndRecovery(t *testing.T) {
 			_, syncer, owner, counter := keptUsageFixture(t)
 			ctx := t.Context()
 			reader, roleURL := owner, testPGURL(t)
+			var role string
 			if name == "initial denial" || name == "granted role" {
 				roleURL = newUsageJournalRole(t, syncer, `GRANT SELECT ON ALL TABLES IN SCHEMA `+syncer.schema+` TO ROLE`)
 				var err error
@@ -748,7 +749,6 @@ func TestPGUsageCacheDirectFallbackAndRecovery(t *testing.T) {
 				require.NoError(t, err)
 				t.Cleanup(func() { require.NoError(t, reader.Close()) })
 				if name == "initial denial" {
-					var role string
 					require.NoError(t, reader.pg.QueryRowContext(ctx, `SELECT current_user`).Scan(&role))
 					_, err = owner.pg.ExecContext(ctx, `REVOKE SELECT ON usage_session_changes FROM `+role)
 					require.NoError(t, err)
@@ -913,11 +913,23 @@ func TestPGUsageCacheDirectFallbackAndRecovery(t *testing.T) {
 				assert.NotContains(t, output.String(), "falling back to direct read")
 				assert.NotContains(t, output.String(), "warming usage cache")
 			}
-			_, err := reader.usageCache.GetDailyUsage(ctx, filter)
-			require.ErrorIs(t, err, db.ErrUsageSourceUnavailable)
+			if name == "initial denial" {
+				_, err := (&pgUsageCacheSource{Store: reader}).SummarizeUsageChanges(ctx, 0)
+				require.ErrorIs(t, err, db.ErrUsageSourceUnavailable)
+			} else {
+				_, err := reader.usageCache.GetDailyUsage(ctx, filter)
+				require.ErrorIs(t, err, db.ErrUsageSourceUnavailable)
+			}
 			for _, grouped := range []bool{false, true} {
 				filter.TopSessionsByGroup = grouped
 				require.NoError(t, completeUsageParity(t.Context(), &Store{pg: reader.pg}, reader, filter, "paid-a", false))
+			}
+			if name == "initial denial" {
+				_, err := owner.pg.ExecContext(ctx, `GRANT SELECT ON usage_session_changes TO `+role)
+				require.NoError(t, err)
+				require.NoError(t, reader.usageCache.WaitWarm(ctx))
+				readWarmedUsage(t, reader, filter)
+				requireCachedUsageMatchesDirect(t, reader, filter)
 			}
 			if name == "late journal installation" {
 				require.NoError(t, EnsureSchema(ctx, syncer.pg, syncer.schema))
