@@ -161,7 +161,7 @@ func readConfiguredLocal(ctx context.Context, cfg config.Config, session *db.Ses
 	if !ok {
 		return nil, "", errors.New("native source provider unavailable")
 	}
-	name, err := localSourcePath(ctx, provider, session.ID, stored, id)
+	name, err := uniqueLocalSource(ctx, provider, stored, id)
 	if err != nil {
 		return nil, "", err
 	}
@@ -174,23 +174,14 @@ func readConfiguredLocal(ctx context.Context, cfg config.Config, session *db.Ses
 	return nil, "", errors.New("source is outside configured roots")
 }
 
-// localSourcePath keeps an archived path that still resolves exactly. A
-// missing or stale path falls back to the one physical copy under the roots.
-func localSourcePath(ctx context.Context, provider parser.Provider, fullID, stored, id string) (string, error) {
-	ref, found, err := provider.FindSource(ctx, parser.FindSourceRequest{RawSessionID: id, FullSessionID: fullID, StoredFilePath: stored, PreferStoredSource: true})
-	if err != nil {
-		return "", err
+// uniqueLocalSource keeps an archived path that still resolves exactly.
+// Otherwise it discovers id's transcript under the provider's roots;
+// incomplete discovery or a second physical file fails instead of guessing,
+// and aliases of one file, such as overlapping roots or symlinks, count once.
+func uniqueLocalSource(ctx context.Context, provider parser.Provider, stored, id string) (string, error) {
+	if ref, found, err := provider.FindSource(ctx, parser.FindSourceRequest{StoredFilePath: stored}); err != nil || found {
+		return ref.DisplayPath, err
 	}
-	if found && ref.Provider == parser.AgentClaude && filepath.Clean(ref.DisplayPath) == filepath.Clean(stored) {
-		return ref.DisplayPath, nil
-	}
-	return uniqueLocalSource(ctx, provider, id)
-}
-
-// uniqueLocalSource discovers id's transcript under the provider's roots.
-// Incomplete discovery or a second physical file fails instead of guessing;
-// aliases of one file, such as overlapping roots or symlinks, count once.
-func uniqueLocalSource(ctx context.Context, provider parser.Provider, id string) (string, error) {
 	discoverer, ok := provider.(parser.StreamingDiscoverer)
 	if !ok {
 		return "", errors.New("native source provider unavailable")
@@ -213,13 +204,10 @@ func uniqueLocalSource(ctx context.Context, provider parser.Provider, id string)
 		}
 		return nil
 	})
-	if err != nil {
-		return "", err
+	if err == nil && matchInfo == nil {
+		err = errors.New("native transcript is unavailable from configured sources")
 	}
-	if matchInfo == nil {
-		return "", errors.New("native transcript is unavailable from configured sources")
-	}
-	return match, nil
+	return match, err
 }
 
 func within(root, name string) bool {

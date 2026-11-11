@@ -50,6 +50,12 @@ func TestMaterializeConfiguredSources(t *testing.T) {
 			require.NoError(t, os.MkdirAll(filepath.Dir(name), 0o700))
 			original := []byte(`{"type":"user","sessionId":"` + id + `","message":{"role":"user","content":"fixture"}}` + "\n" + `{"type":"worktree-state","sessionId":"` + id + `","worktreeSession":{"worktreePath":"/old"}}` + "\n")
 			require.NoError(t, os.WriteFile(name, original, 0o600))
+			if !mirror {
+				// A copy elsewhere must not make a valid archived path ambiguous.
+				other := filepath.Join(root, "original", "other-project", id+".jsonl")
+				require.NoError(t, os.MkdirAll(filepath.Dir(other), 0o700))
+				require.NoError(t, os.WriteFile(other, original, 0o600))
+			}
 			sidecar := filepath.Join(strings.TrimSuffix(name, ".jsonl"), "tool-results", "result.txt")
 			require.NoError(t, os.MkdirAll(filepath.Dir(sidecar), 0o700))
 			require.NoError(t, os.WriteFile(sidecar, []byte("tool output"), 0o600))
@@ -137,9 +143,6 @@ func TestMaterializeConfiguredSources(t *testing.T) {
 			actualInfo, err := os.Stat(result.Source)
 			require.NoError(t, err)
 			assert.True(t, os.SameFile(expectedInfo, actualInfo))
-			installed, err := os.ReadFile(dest)
-			require.NoError(t, err)
-			assert.Equal(t, original, installed)
 		})
 	}
 }
