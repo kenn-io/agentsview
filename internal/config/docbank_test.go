@@ -17,8 +17,6 @@ func TestDocbankIntegrationValidation(t *testing.T) {
 			{"container without opt-in", "http://docbank:8485", "[integrations.docbank] %s must be https, or http to a loopback host; set allow_http = true to permit other HTTP hosts", false},
 			{"container with opt-in", "http://docbank:8485", "", true},
 			{"public IP with opt-in", "http://8.8.8.8:8485", "", true},
-			{"loopback", "http://127.0.0.1", "", false},
-			{"https", "https://example.com", "", false},
 			{"missing host", "https://:443", "[integrations.docbank] invalid %s", true},
 			{"unsupported scheme", "ftp://docbank:8485", "[integrations.docbank] %s must use http or https", true},
 		} {
@@ -38,6 +36,9 @@ func TestDocbankIntegrationValidation(t *testing.T) {
 				}
 			})
 		}
+	}
+	for _, endpoint := range []string{"http://127.0.0.1", "https://example.com"} {
+		assert.NoError(t, (DocbankIntegration{URL: endpoint, APIKeyEnv: "DOCBANK_TEST_KEY"}).Validate())
 	}
 	assert.NoError(t, (DocbankIntegration{}).Validate())
 	assert.EqualError(t, (DocbankIntegration{URL: "https://example.com"}).Validate(), "[integrations.docbank] url and api_key_env are required together")
