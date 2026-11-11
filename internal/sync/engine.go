@@ -2287,7 +2287,7 @@ func (e *Engine) classifyProviderChangedPath(
 				AllowWatermarkOnlySources: true,
 			}
 			if watermarkContainer != "" && watermarkPreStateOK &&
-				!e.forceParse && e.pathRewriter == nil {
+				!e.forceParse && !e.forceFullParse && e.pathRewriter == nil {
 				request.StoredMemberFreshnessPage = e.storedMemberFreshnessPager(watermarkContainer, def.IDPrefix, nil)
 			}
 			if provider.Capabilities().Source.StoredSourceHints == parser.CapabilitySupported {

@@ -708,6 +708,25 @@ func (s hermesSourceSet) discoverTranscriptEach(
 			membership.Close()
 		}
 	}()
+	return s.discoverTranscriptEachWithMembership(ctx, root, sessionsDir, func(id string) (bool, error) {
+		if stateDB == "" {
+			return false, nil
+		}
+		if membership == nil {
+			opened, err := openHermesStateMembership(ctx, stateDB)
+			if err != nil {
+				return false, err
+			}
+			membership = opened
+		}
+		return membership.Has(ctx, id)
+	}, yield)
+}
+
+func (s hermesSourceSet) discoverTranscriptEachWithMembership(
+	ctx context.Context, root, sessionsDir string,
+	has func(string) (bool, error), yield func(SourceRef) error,
+) error {
 	return streamDirectoryEntries(ctx, sessionsDir, func(entry os.DirEntry) error {
 		if entry.IsDir() {
 			return nil
@@ -720,27 +739,18 @@ func (s hermesSourceSet) discoverTranscriptEach(
 		switch {
 		case strings.HasSuffix(name, ".jsonl"):
 		case strings.HasPrefix(name, "session_") && strings.HasSuffix(name, ".json"):
-			if IsRegularFile(filepath.Join(sessionsDir, id+".jsonl")) {
+			if IsRegularFile(filepath.Join(sessionsDir, id+".jsonl")) || IsRegularFile(filepath.Join(sessionsDir, "session_"+id+".jsonl")) {
 				return nil
 			}
 		default:
 			return nil
 		}
-		if stateDB != "" {
-			if membership == nil {
-				opened, err := openHermesStateMembership(ctx, stateDB)
-				if err != nil {
-					return err
-				}
-				membership = opened
-			}
-			found, err := membership.Has(ctx, id)
-			if err != nil {
-				return err
-			}
-			if found {
-				return nil
-			}
+		found, err := has(id)
+		if err != nil {
+			return err
+		}
+		if found {
+			return nil
 		}
 		ref, ok := s.transcriptSourceRef(root, filepath.Join(sessionsDir, name))
 		if !ok {

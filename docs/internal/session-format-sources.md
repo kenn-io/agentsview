@@ -4221,8 +4221,11 @@ schemas keep their existing ordering behavior.
   Auxiliary same-key ledger UPSERTs can leave session fields/revision unchanged,
   so the full ledger read remains necessary under the current producer contract.
   Ledger keys aggregate route/task usage; their lifetime count has no verified
-  constant bound per session. Cron members still receive full fingerprint checks
-  because an ancestor can change their resolved job. Other selected members
+  constant bound per session. Database events also scan transcript directory
+  entries and check membership in the same read snapshot, so transcripts for
+  missing or unreadable rows remain discoverable. Cron members still receive
+  full fingerprint checks because an ancestor can change their resolved job.
+  Other selected members
   read transcript payloads. The new fingerprint format causes one reparse of
   previously imported sessions as they are checked.
 - **Model usage check (2026-10-22):**

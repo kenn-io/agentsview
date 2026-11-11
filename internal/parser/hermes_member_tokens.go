@@ -189,24 +189,6 @@ func (s hermesSourceSet) changedHermesMembers(ctx context.Context, root, stateDB
 		return nil, false, ctx.Err()
 	}
 	var sources []SourceRef
-	orphan := func(row StoredMemberFreshness) error {
-		if row.Suppressed {
-			return nil
-		}
-		dbPath, id, ok := ParseVirtualSourcePathForBase(row.Path, "state.db")
-		if !ok || !samePath(dbPath, stateDB) || !isValidHermesSessionID(id) {
-			return nil
-		}
-		if path := findHermesSourceFile(sessionsDir, id); path != "" {
-			source, ok := s.transcriptSourceRef(root, path)
-			if ok {
-				sources = append(sources, source)
-			}
-		}
-		return nil
-	}
-	cursor.Passed = orphan
-	var changed []string
 	err = listHermesMemberTokens(ctx, conn, "", func(id, token string, cron bool) error {
 		row, found, err := cursor.Lookup(ctx, VirtualSourcePath(stateDB, id))
 		if err != nil {
@@ -225,29 +207,20 @@ func (s hermesSourceSet) changedHermesMembers(ctx context.Context, root, stateDB
 		src.FingerprintSingleMember = true
 		source.Opaque = src
 		sources = append(sources, source)
-		changed = append(changed, id)
 		return nil
 	})
 	if err != nil {
 		return nil, false, err
 	}
-	// Absolute virtual paths sort below byte 0xff. Drain trailing rows through
-	// Lookup's existing Passed callback, which reports orphans.
-	if _, _, err := cursor.Lookup(ctx, "\xff"); err != nil {
+	// The token query has closed, so reuse the same snapshot for transcript membership.
+	err = s.discoverTranscriptEachWithMembership(ctx, root, sessionsDir, func(id string) (bool, error) {
+		return hermesStateDBHasReadableSession(ctx, conn, id)
+	}, func(source SourceRef) error {
+		sources = append(sources, source)
+		return nil
+	})
+	if err != nil {
 		return nil, false, err
-	}
-	// Close the streaming token query before using the one snapshot connection
-	// for member readability. Only selected members need these indexed probes.
-	for _, id := range changed {
-		readable, err := hermesStateDBHasReadableSession(ctx, conn, id)
-		if err != nil {
-			return nil, false, err
-		}
-		if !readable {
-			if err := orphan(StoredMemberFreshness{Path: VirtualSourcePath(stateDB, id)}); err != nil {
-				return nil, false, err
-			}
-		}
 	}
 	return sources, true, nil
 }
