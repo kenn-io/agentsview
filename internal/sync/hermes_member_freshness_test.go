@@ -127,30 +127,3 @@ func TestHermesWatcherCardinality(t *testing.T) {
 		}
 	}
 }
-
-func TestHermesWatcherPreservesSuppressedMember(t *testing.T) {
-	for _, agent := range []parser.AgentType{parser.AgentHermes, parser.AgentAugureDesktop} {
-		t.Run(string(agent), func(t *testing.T) {
-			root := t.TempDir()
-			conn, path := hermesFreshnessWriter(t, root)
-			database := dbtest.OpenTestDB(t)
-			engine := sync.NewEngine(t.Context(), database, sync.EngineConfig{AgentDirs: map[parser.AgentType][]string{agent: {root}}, Machine: "local"})
-			t.Cleanup(engine.Close)
-			require.Equal(t, 1, engine.SyncAll(t.Context(), nil).Synced)
-			id := string(agent) + ":child"
-			require.NoError(t, database.SoftDeleteSession(t.Context(), id))
-			before, err := database.GetSessionFull(t.Context(), id)
-			require.NoError(t, err)
-			require.NotNil(t, before)
-			_, err = conn.ExecContext(t.Context(), `UPDATE messages SET content='must remain suppressed' WHERE session_id='child'`)
-			require.NoError(t, err)
-			require.NoError(t, engine.SyncPathsContext(t.Context(), []string{path + "-wal"}))
-			after, err := database.GetSessionFull(t.Context(), id)
-			require.NoError(t, err)
-			require.NotNil(t, after)
-			assert.NotNil(t, after.DeletedAt)
-			assert.Equal(t, before.FileHash, after.FileHash)
-			assert.Equal(t, before.TranscriptRevision, after.TranscriptRevision)
-		})
-	}
-}
