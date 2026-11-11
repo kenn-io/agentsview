@@ -56,6 +56,13 @@ type httpStatusError struct {
 	body       []byte
 }
 
+type sessionRefreshNotStartedError struct{ error }
+
+func (e *sessionRefreshNotStartedError) Unwrap() error { return e.error }
+func (e *sessionRefreshNotStartedError) Is(target error) bool {
+	return target == syncpkg.ErrSessionRefreshNotStarted
+}
+
 func (e *httpStatusError) Error() string {
 	return fmt.Sprintf(
 		"%s %s: HTTP %d: %s", e.method, e.path, e.statusCode, e.body,
@@ -663,7 +670,7 @@ func (b *httpBackend) Sync(
 				Code string `json:"code"`
 			}
 			if json.Unmarshal(response.Body, &body) == nil && body.Code == service.SessionRefreshNotStartedCode {
-				return nil, fmt.Errorf("%w: %w", syncpkg.ErrSessionRefreshNotStarted, err)
+				return nil, &sessionRefreshNotStartedError{err}
 			}
 		}
 		return nil, err

@@ -360,7 +360,7 @@ func TestSyncClassifiesOnlyNeverStartedConflict(t *testing.T) {
 		body      string
 		wantRetry bool
 	}{
-		{name: "parent lock refused", status: 409, body: `{"code":"session_refresh_not_started","error":"busy"}`, wantRetry: true},
+		{name: "parent lock refused", status: 409, body: `{"code":"session_refresh_not_started","error":"session refresh did not start: sync already in progress"}`, wantRetry: true},
 		{name: "other conflict", status: 409, body: `{"error":"busy"}`},
 		{name: "server error", status: 500, body: `{"code":"session_refresh_not_started"}`},
 		{name: "interrupted response", status: 200, body: `{"id":`},
@@ -376,6 +376,12 @@ func TestSyncClassifiesOnlyNeverStartedConflict(t *testing.T) {
 			_, err := NewHTTPBackend(ts.URL, "", false, "").Sync(t.Context(), service.SyncInput{ID: "session-a", Subagents: true, UsageRefresh: true})
 			require.Error(t, err)
 			assert.Equal(t, tc.wantRetry, errors.Is(err, syncpkg.ErrSessionRefreshNotStarted))
+			if tc.wantRetry {
+				assert.Equal(t, "POST /api/v1/sessions/sync: HTTP 409: "+tc.body, err.Error())
+				statusErr, ok := errors.AsType[*httpStatusError](err)
+				require.True(t, ok)
+				assert.Equal(t, http.StatusConflict, statusErr.statusCode)
+			}
 		})
 	}
 }
