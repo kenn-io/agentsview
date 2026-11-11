@@ -55,6 +55,7 @@ type sessionPushIdentityMessage struct {
 	HasThinking       bool                          `json:"has_thinking"`
 	HasToolUse        bool                          `json:"has_tool_use"`
 	IsSystem          bool                          `json:"is_system"`
+	IsSidechain       bool                          `json:"is_sidechain,omitzero"`
 	SourceSubtype     string                        `json:"source_subtype"`
 	PromptSource      string                        `json:"prompt_source"`
 	IsCompactBoundary bool                          `json:"is_compact_boundary"`
@@ -81,7 +82,7 @@ type sessionPushIdentityEvent struct {
 }
 
 func sessionPushIdentity(m segmentMessage) sessionPushIdentityMessage {
-	item := sessionPushIdentityMessage{Ordinal: m.Ordinal, Role: m.Role, Content: m.Content, ThinkingText: m.ThinkingText, Timestamp: m.Timestamp, HasThinking: m.HasThinking, HasToolUse: m.HasToolUse, IsSystem: m.IsSystem, SourceSubtype: m.SourceSubtype, PromptSource: m.PromptSource, IsCompactBoundary: m.IsCompactBoundary}
+	item := sessionPushIdentityMessage{Ordinal: m.Ordinal, Role: m.Role, Content: m.Content, ThinkingText: m.ThinkingText, Timestamp: m.Timestamp, HasThinking: m.HasThinking, HasToolUse: m.HasToolUse, IsSystem: m.IsSystem, IsSidechain: m.IsSidechain, SourceSubtype: m.SourceSubtype, PromptSource: m.PromptSource, IsCompactBoundary: m.IsCompactBoundary}
 	// The offload projection requires a nonempty path; this variant writes no files.
 	projected, _ := db.ProjectToolResultImagesWithoutWriting([]db.Message{m.dbMessage()}, config.ToolResultImagesOffload, ".")
 	for i, call := range m.ToolCalls {

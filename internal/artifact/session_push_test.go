@@ -219,7 +219,6 @@ func TestSessionPushReceiptTracksTranscriptContent(t *testing.T) {
 			data.Messages[0].SourceUUID = "new-source-id"
 			data.Messages[0].SourceType = "updated-source-type"
 			data.Messages[0].SourceParentUUID = "new-parent-id"
-			data.Messages[0].IsSidechain = true
 			data.Messages[0].ContentLength = 123
 			data.Messages[0].ToolCalls[0].Category = "Other"
 			data.Messages[0].ToolCalls[0].FilePath = "resolved-file"
@@ -283,6 +282,33 @@ func TestSessionPushReceiptTracksTranscriptContent(t *testing.T) {
 	} {
 		t.Run(name, check)
 	}
+}
+
+func TestSessionPushSidechainChangeConflicts(t *testing.T) {
+	source, receiver := testDB(t), testDB(t)
+	session := db.Session{ID: "sample", Agent: "claude", Machine: "source", MessageCount: 1}
+	message := db.Message{SessionID: session.ID, Ordinal: 0, Role: "assistant", Content: "answer"}
+	push := func() (bool, error) {
+		packet, _, err := EncodeSessionPush(t.Context(), source, session.ID, "")
+		require.NoError(t, err)
+		receipt, write, err := DecodeSessionPush(packet)
+		require.NoError(t, err)
+		return receiver.ApplySessionPush(t.Context(), receipt, write)
+	}
+	_, err := source.WriteSessionBatchAtomic(t.Context(), []db.SessionBatchWrite{{Session: session, Messages: []db.Message{message}, ReplaceMessages: true}})
+	require.NoError(t, err)
+	created, err := push()
+	require.NoError(t, err)
+	require.True(t, created)
+	message.IsSidechain = true
+	_, err = source.WriteSessionBatchAtomic(t.Context(), []db.SessionBatchWrite{{Session: session, Messages: []db.Message{message}, ReplaceMessages: true}})
+	require.NoError(t, err)
+	_, err = push()
+	assert.ErrorIs(t, err, db.ErrSessionPushConflict)
+	stored, err := receiver.GetAllMessages(t.Context(), session.ID)
+	require.NoError(t, err)
+	require.Len(t, stored, 1)
+	assert.False(t, stored[0].IsSidechain)
 }
 
 func TestSessionPushIdentityV1(t *testing.T) {
