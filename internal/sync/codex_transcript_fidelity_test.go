@@ -22,6 +22,7 @@ func fidelityLine(t *testing.T, v any) string {
 }
 
 func fidelityReasoning(t *testing.T, ts, summary string) string {
+	t.Helper()
 	return fidelityLine(t, map[string]any{"type": "response_item", "timestamp": ts, "payload": map[string]any{
 		"type":              "reasoning",
 		"summary":           []any{map[string]any{"type": "summary_text", "text": summary}},
@@ -30,6 +31,7 @@ func fidelityReasoning(t *testing.T, ts, summary string) string {
 }
 
 func fidelityCompacted(t *testing.T, ts, message string) string {
+	t.Helper()
 	return fidelityLine(t, map[string]any{"type": "compacted", "timestamp": ts, "payload": map[string]any{
 		"message": message, "replacement_history": []any{},
 	}})
@@ -37,6 +39,7 @@ func fidelityCompacted(t *testing.T, ts, message string) string {
 
 // fidelityTokenCount writes one call's usage with the session's running total.
 func fidelityTokenCount(t *testing.T, ts string, input, output, cached, call int) string {
+	t.Helper()
 	usage := func(n int) map[string]int {
 		return map[string]int{
 			"input_tokens": input * n, "cached_input_tokens": cached * n, "output_tokens": output * n,
