@@ -669,7 +669,7 @@ CREATE INDEX IF NOT EXISTS idx_provider_freshness_updated_at
 // source and session identities are unchanged.)
 // (172: import Cursor IDE chunked conversation headers.)
 // (173: prevent older binaries from writing archives with an image-text index.)
-// (174: rebuild while preserving pushed sessions so older writers reject them.)
+// (174: prevent older binaries from writing archives with pushed sessions.)
 const dataVersion = 174
 
 const archiveOnlyVersionBase = 1 << 20

@@ -28,8 +28,6 @@ import (
 func TestImageTextCompatibilityUpgradeKeepsStrippedImagesRemoved(t *testing.T) {
 	ctx := t.Context()
 	version := db.ImageTextDataVersion
-	// Exercise the historical in-place image-text upgrade at the current boundary.
-	t.Cleanup(db.InstallDataVersionScopesForTest(map[int][]parser.AgentType{version: {}, db.CurrentDataVersion(): {}}))
 	database := dbtest.OpenTestDB(t)
 	root := t.TempDir()
 	const id = "019eb791-cf7d-75c1-8439-9ed74c122b06"

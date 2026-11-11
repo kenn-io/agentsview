@@ -188,6 +188,8 @@ archive-only mode, which disables source sync and publication. These archives
 store `1 << 20` plus their parser version in `PRAGMA user_version`, so older builds refuse them. This build decodes that range and preserves pending rebuilds; ordinary archives keep their parser version unchanged.
 Data version 173 requires no source reparse; it keeps older binaries from writing archives whose image-text index they cannot maintain.
 
+Data version 174 requires no source reparse; it keeps older binaries from writing archives with pushed sessions they cannot preserve.
+
 ### Artifact checkpoint landings
 
 Land artifact checkpoints only through
