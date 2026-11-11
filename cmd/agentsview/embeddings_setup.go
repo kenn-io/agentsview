@@ -20,6 +20,8 @@ import (
 var (
 	inspectLocalEmbeddings = embedlocal.Inspect
 	onBattery              = power.OnBattery
+	// Kit discovers Ollama at this fixed endpoint.
+	ollamaEmbeddingEndpoint = "http://127.0.0.1:11434/v1"
 )
 
 // liveVectorServing enables browser setup over the daemon's open indexes.
@@ -70,7 +72,7 @@ func (v *liveVectorServing) startSharedChoice() {
 				recordEmbeddingChoice()
 			}
 			v.mu.Lock()
-			err = v.startSetup(deployment, math.MaxInt64, false)
+			err = v.startSetup(deployment, math.MaxInt64, false, "")
 			v.mu.Unlock()
 			if err != nil {
 				log.Printf("search by meaning: start saved setup: %v", err)
@@ -91,7 +93,7 @@ func (v *liveVectorServing) startSharedChoice() {
 		if err == nil {
 			deployment.Local = true
 			v.mu.Lock()
-			err = v.startSetup(deployment, math.MaxInt64, true)
+			err = v.startSetup(deployment, math.MaxInt64, true, "")
 			v.mu.Unlock()
 		}
 	}
@@ -200,14 +202,20 @@ func (v *liveVectorServing) SetupStatus(ctx context.Context) (server.EmbeddingsS
 		status.Enabled = cfg.Vector.Enabled
 		return status, nil
 	}
-	status.Action = ""
 	if missingManager && cfg.DeploymentEmbeddings == nil {
-		status.Action = "turn-on"
 		var err error
 		cfg.Vector.Embeddings, err = cfg.VectorSetupEmbeddings(false)
 		if err != nil {
 			return status, setupRequestError(err)
 		}
+	}
+	return setupStatusForConfig(ctx, status, cfg, missingManager)
+}
+
+func setupStatusForConfig(ctx context.Context, status server.EmbeddingsSetupStatus, cfg config.Config, missingManager bool) (server.EmbeddingsSetupStatus, error) {
+	status.Action = ""
+	if missingManager && cfg.DeploymentEmbeddings == nil {
+		status.Action = "turn-on"
 	} else if status.Error != "" && cfg.DeploymentEmbeddings == nil {
 		status.Action = "turn-on"
 	}
@@ -262,23 +270,24 @@ func setupRequestError(err error) error {
 }
 
 func (v *liveVectorServing) Setup(approvedBytes int64, expectedProvider string) error {
-	status, err := v.SetupStatus(v.ctx)
-	if err != nil {
-		return err
-	}
 	v.mu.Lock()
 	defer v.mu.Unlock()
 	if v.setup.Busy {
 		return vector.ErrBuildRunning
 	}
-	embeddings := v.cfg.Vector.Embeddings
+	cfg := v.cfg
+	var err error
 	if v.serving.manager == nil {
-		embeddings, err = v.cfg.VectorSetupEmbeddings(false)
+		cfg.Vector.Embeddings, err = cfg.VectorSetupEmbeddings(false)
 		if err != nil {
 			return setupRequestError(err)
 		}
 	}
-	_, deployment, err := embeddings.Server("")
+	status, err := setupStatusForConfig(v.ctx, v.setup, cfg, v.serving.manager == nil)
+	if err != nil {
+		return err
+	}
+	_, deployment, err := cfg.Vector.Embeddings.Server("")
 	if err != nil {
 		return setupRequestError(err)
 	}
@@ -291,11 +300,19 @@ func (v *liveVectorServing) Setup(approvedBytes int64, expectedProvider string) 
 	if status.Provider == "built-in" && deployment.Endpoint == "" {
 		deployment.Local = true
 	}
-	return v.startSetup(deployment, approvedBytes, false)
+	var pinnedEndpoint string
+	if expectedProvider == "ollama" && deployment.Endpoint == "" {
+		pinnedEndpoint, err = localEmbeddingEndpoint(v.ctx, embedlocal.Options{})
+		if err != nil || pinnedEndpoint != ollamaEmbeddingEndpoint {
+			return server.ErrEmbeddingsProviderChanged
+		}
+		deployment.Endpoint = pinnedEndpoint
+	}
+	return v.startSetup(deployment, approvedBytes, false, pinnedEndpoint)
 }
 
 // startSetup starts the leased worker with v.mu held.
-func (v *liveVectorServing) startSetup(deployment config.VectorEmbeddingsServerConfig, approvedBytes int64, automatic bool) error {
+func (v *liveVectorServing) startSetup(deployment config.VectorEmbeddingsServerConfig, approvedBytes int64, automatic bool, pinnedEndpoint string) error {
 	if v.setup.Busy {
 		return vector.ErrBuildRunning
 	}
@@ -307,7 +324,7 @@ func (v *liveVectorServing) startSetup(deployment config.VectorEmbeddingsServerC
 	v.done = make(chan struct{})
 	go func() {
 		defer release()
-		err := v.activate(deployment, approvedBytes, automatic)
+		err := v.activate(deployment, approvedBytes, automatic, pinnedEndpoint)
 		v.mu.Lock()
 		v.setup.Busy = false
 		if err != nil {
@@ -325,7 +342,7 @@ func (v *liveVectorServing) startSetup(deployment config.VectorEmbeddingsServerC
 	return nil
 }
 
-func (v *liveVectorServing) activate(deployment config.VectorEmbeddingsServerConfig, approvedBytes int64, automatic bool) error {
+func (v *liveVectorServing) activate(deployment config.VectorEmbeddingsServerConfig, approvedBytes int64, automatic bool, pinnedEndpoint string) error {
 	cfg := v.cfg
 	_, builtin, err := resolveLocalEmbeddings(v.ctx, deployment,
 		func(_ context.Context, size int64) (bool, error) {
@@ -347,7 +364,7 @@ func (v *liveVectorServing) activate(deployment config.VectorEmbeddingsServerCon
 		return err
 	}
 	if v.serving.manager == nil {
-		if err := cfg.SaveVectorSetup(builtin, automatic); errors.Is(err, config.ErrVectorSetupIneligible) {
+		if err := cfg.SaveVectorSetup(builtin, automatic, pinnedEndpoint); errors.Is(err, config.ErrVectorSetupIneligible) {
 			return nil
 		} else if err != nil {
 			return err

@@ -4250,13 +4250,13 @@ func (c *Config) VectorSetupEmbeddings(automatic bool) (VectorEmbeddingsConfig, 
 }
 
 // SaveVectorSetup records the selected action while keeping omitted defaults omitted.
-func (c *Config) SaveVectorSetup(local, automatic bool) error {
+func (c *Config) SaveVectorSetup(local, automatic bool, endpoint string) error {
 	return c.withConfigLock(func() error {
 		existing, candidate, err := c.vectorSetupCandidate(automatic)
 		if err != nil {
 			return err
 		}
-		if local {
+		if local || endpoint != "" {
 			section := existing["vector"].(map[string]any)
 			embeddings, _ := section["embeddings"].(map[string]any)
 			if embeddings == nil {
@@ -4268,7 +4268,7 @@ func (c *Config) SaveVectorSetup(local, automatic bool) error {
 			if err != nil {
 				return err
 			}
-			if server.Endpoint != "" {
+			if server.Endpoint != "" || (endpoint != "" && server.Local) {
 				return invalidVectorSetupError{errors.New("embeddings provider changed during setup")}
 			}
 			if _, ok := embeddings["model"]; !ok {
@@ -4293,7 +4293,11 @@ func (c *Config) SaveVectorSetup(local, automatic bool) error {
 				selected = make(map[string]any)
 				servers[name] = selected
 			}
-			selected["local"] = true
+			if local {
+				selected["local"] = true
+			} else {
+				selected["endpoint"] = endpoint
+			}
 		}
 		return c.writeConfigMap(existing)
 	})
