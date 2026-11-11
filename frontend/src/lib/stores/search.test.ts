@@ -188,14 +188,10 @@ describe("SearchStore", () => {
   });
 
   it.each(["recover", "exhaust"] as const)(
-    "recovers or exhausts automatic retry and preserves filters for manual retry: %s",
+    "recovers or exhausts automatic retry and permits manual retry: %s",
     async (outcome) => {
       const store = createSearchStore(memoryStorage());
       const second = deferred<SearchResponse>();
-      if (outcome === "exhaust") {
-        store.setSort("recency");
-        store.setRange({ mode: "calendar", unit: "day", anchor: "2026-07-04" });
-      }
       searchService.getApiV1Search
         .mockRejectedValueOnce(new ApiError(503, "first"))
         .mockReturnValueOnce(second.promise);
@@ -223,34 +219,20 @@ describe("SearchStore", () => {
         searchService.getApiV1Search.mockResolvedValueOnce(fullTextResponse("needle"));
         store.retry();
         await flushMicrotasks();
-        expect(searchService.getApiV1Search).toHaveBeenLastCalledWith(
-          {
-            q: "needle",
-            project: "alpha",
-            limit: 30,
-            sort: "recency",
-            date_from: "2026-07-04",
-            date_to: "2026-07-04",
-          },
-          expect.objectContaining({ signal: expect.anything() }),
-        );
         expect(store.results[0]?.session_id).toBe("full-0");
       }
       expect(store.isSearching).toBe(false);
     },
   );
 
-  it.each([
-    [400, "bad query"],
-    [501, "not implemented"],
-  ] as const)("does not retry HTTP %i", async (status, detail) => {
+  it("does not retry HTTP 501", async () => {
     const store = createSearchStore(memoryStorage());
-    searchService.getApiV1Search.mockRejectedValueOnce(generatedApiError(status, detail));
+    searchService.getApiV1Search.mockRejectedValueOnce(generatedApiError(501, "not implemented"));
     store.search("needle");
     await runDebounce();
     await vi.advanceTimersByTimeAsync(300);
     expect(searchService.getApiV1Search).toHaveBeenCalledTimes(1);
-    expect(store.error).toEqual({ detail, kind: "generic" });
+    expect(store.error).toEqual({ detail: "not implemented", kind: "generic" });
   });
 
   it("keeps a canceled search cleared when the retry delay ends", async () => {

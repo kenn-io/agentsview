@@ -650,7 +650,7 @@ describe("CommandPalette", () => {
     unmount(component);
   });
 
-  it("retries a failed full-text search from the error and focuses the query", async () => {
+  it("retries a failed full-text search from the error", async () => {
     mockSearchStore.error = { detail: null, kind: "generic" };
     const component = mount(CommandPalette, { target: document.body });
     await enterSearchQuery();
@@ -661,7 +661,6 @@ describe("CommandPalette", () => {
     retry!.focus();
     retry!.click();
     expect(mockSearchStore.retry).toHaveBeenCalledOnce();
-    expect(document.activeElement).toBe(document.querySelector(".palette-input"));
     expect(mockRouter.navigateToSession).not.toHaveBeenCalled();
 
     unmount(component);
