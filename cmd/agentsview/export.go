@@ -303,15 +303,15 @@ func runExportSessions(cmd *cobra.Command, cfg exportSessionsConfig) error {
 		return fmt.Errorf("checking project identity evidence: %w", err)
 	}
 	if backfill.State != "not_needed" && backfill.State != "completed" {
-		if backfill.State == "failed" {
-			return exportBackfillFailure(backfill)
-		}
 		archiveOnly, err := database.IsArchiveOnly(ctx)
 		if err != nil {
 			return fmt.Errorf("checking archive mode: %w", err)
 		}
 		if archiveOnly {
 			return errors.New("archive-only databases have no project identity backfill worker; run `agentsview export sessions --wait` on the writable source, then restore an archive containing the evidence")
+		}
+		if backfill.State == "failed" {
+			return exportBackfillFailure(backfill)
 		}
 		if !cfg.Wait {
 			return fmt.Errorf("project identity evidence backfill is %s (%d/%d); run `agentsview export sessions --wait` or check `agentsview export status`", backfill.State, backfill.CompletedItems, backfill.TotalItems)
@@ -377,10 +377,14 @@ func exportBackfillFailure(status db.BackgroundMigrationStatus) error {
 	return fmt.Errorf("project identity evidence backfill failed: %s; run `agentsview daemon restart`, then check `agentsview export status`", status.LastError)
 }
 
+// Allow transient runtime discovery or ping failures before reporting daemon loss.
+const exportDaemonUnavailableGrace = 5 * time.Second
+
 func waitForExportBackfill(ctx context.Context, progress io.Writer, cfg *config.Config) error {
 	if err := startExportDaemon(ctx, cfg); err != nil {
 		return err
 	}
+	var unavailableSince time.Time
 	for {
 		database, err := openExportReadOnlyDB(ctx, *cfg)
 		if err != nil {
@@ -398,7 +402,13 @@ func waitForExportBackfill(ctx context.Context, progress io.Writer, cfg *config.
 			return exportBackfillFailure(status)
 		}
 		if FindWritableDaemonRuntime(cfg.DataDir, cfg.AuthToken) == nil {
-			return fmt.Errorf("project identity evidence backfill is %s (%d/%d), but the writable daemon is unavailable; run `agentsview daemon restart`, then check `agentsview export status`", status.State, status.CompletedItems, status.TotalItems)
+			if unavailableSince.IsZero() {
+				unavailableSince = time.Now()
+			} else if time.Since(unavailableSince) >= exportDaemonUnavailableGrace {
+				return fmt.Errorf("project identity evidence backfill is %s (%d/%d), but the writable daemon is unavailable; run `agentsview daemon restart`, then check `agentsview export status`", status.State, status.CompletedItems, status.TotalItems)
+			}
+		} else {
+			unavailableSince = time.Time{}
 		}
 		if _, err := fmt.Fprintf(progress, "project identity evidence backfill: %s (%d/%d)\n", status.State, status.CompletedItems, status.TotalItems); err != nil {
 			return err

@@ -14,6 +14,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -27,6 +28,7 @@ import (
 	"go.kenn.io/agentsview/internal/money"
 	"go.kenn.io/agentsview/internal/pricing"
 	agentsync "go.kenn.io/agentsview/internal/sync"
+	"go.kenn.io/kit/daemon"
 )
 
 type exportSessionsDocument struct {
@@ -735,6 +737,21 @@ func TestExportSessionsArchiveOnlyPending(t *testing.T) {
 	assert.Equal(t, 2, status.TotalItems)
 }
 
+func TestExportSessionsArchiveOnlyFailed(t *testing.T) {
+	database := seedExportSessionsArchive(t)
+	require.NoError(t, database.EnableArchiveOnly(t.Context()))
+	require.NoError(t, database.Close())
+	path := filepath.Join(os.Getenv("AGENTSVIEW_DATA_DIR"), "sessions.db")
+	raw, err := sql.Open("sqlite3", path)
+	require.NoError(t, err)
+	_, err = raw.ExecContext(t.Context(), `INSERT INTO background_migrations (name, state, total_items, completed_items, last_error) VALUES ('session_project_identity_snapshots_v1', 'failed', 2, 2, 'completion blocked')`)
+	require.NoError(t, err)
+	require.NoError(t, raw.Close())
+	stdout, _, err := executeExportSessionsCommand(newRootCommand(), "export", "sessions", "--wait")
+	require.ErrorContains(t, err, "writable source")
+	assert.Empty(t, stdout)
+}
+
 type exportProgressSignal chan struct{}
 
 func (s exportProgressSignal) Write(p []byte) (int, error) {
@@ -790,6 +807,40 @@ func TestExportWaitStopsWhenDaemonDisappears(t *testing.T) {
 	status, err := database.ProjectIdentityBackfillStatus(t.Context())
 	require.NoError(t, err)
 	assert.Equal(t, 2, status.TotalItems)
+}
+
+func TestExportWaitSurvivesTransientDiscoveryFailure(t *testing.T) {
+	path := pendingExportArchive(t, false)
+	dir := filepath.Dir(path)
+	host, port := testPingServer(t)
+	writeDaemonRuntimeForTest(t, dir, host, port, "test", false)
+	original := listDaemonRuntimeRecords
+	var fail atomic.Bool
+	var observed atomic.Bool
+	listDaemonRuntimeRecords = func(store daemonRuntimeStore) ([]daemon.RuntimeRecord, error) {
+		if fail.CompareAndSwap(true, false) {
+			observed.Store(true)
+			return nil, errors.New("temporary listing error")
+		}
+		return original(store)
+	}
+	t.Cleanup(func() { listDaemonRuntimeRecords = original })
+	ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
+	defer cancel()
+	progress := make(chan struct{}, 1)
+	out, done := exportWaitCommand(t, ctx, exportProgressSignal(progress))
+	waitExportProgress(t, progress, done)
+	fail.Store(true)
+	waitExportProgress(t, progress, done)
+	require.True(t, observed.Load())
+	database, err := db.Open(t.Context(), path)
+	require.NoError(t, err)
+	engine := agentsync.NewEngine(t.Context(), database, agentsync.EngineConfig{Machine: "local"})
+	require.NoError(t, engine.BackfillProjectIdentitySnapshots(t.Context()))
+	engine.Close()
+	require.NoError(t, database.Close())
+	require.NoError(t, <-done)
+	assert.Len(t, decodeExportSessionsDocument(t, out.String()).Sessions, 2)
 }
 
 func TestExportSessionsWaitsForWorker(t *testing.T) {

@@ -367,6 +367,9 @@ func (db *DB) AdvanceProjectIdentityBackfill(ctx context.Context) error {
 }
 
 func (db *DB) FailProjectIdentityBackfill(ctx context.Context, cause error) error {
+	if err := db.requireWritable(); err != nil {
+		return err
+	}
 	message := ""
 	if cause != nil {
 		message = cause.Error()
@@ -374,10 +377,11 @@ func (db *DB) FailProjectIdentityBackfill(ctx context.Context, cause error) erro
 	db.mu.Lock()
 	defer db.mu.Unlock()
 	_, err := db.getWriter().ExecContext(ctx, `
-		UPDATE background_migrations SET
-			state = 'failed', last_error = ?,
-			updated_at = strftime('%Y-%m-%dT%H:%M:%fZ','now')
-		WHERE name = ?`, message, ProjectIdentityBackfillName)
+		INSERT INTO background_migrations (name, state, last_error)
+		VALUES (?, 'failed', ?)
+		ON CONFLICT(name) DO UPDATE SET
+			state = 'failed', last_error = excluded.last_error,
+			updated_at = strftime('%Y-%m-%dT%H:%M:%fZ','now')`, ProjectIdentityBackfillName, message)
 	if err != nil {
 		return fmt.Errorf("recording project identity backfill failure: %w", err)
 	}
