@@ -69,16 +69,12 @@ func TestSessionPushSharedSourceImportsUnreservedMember(t *testing.T) {
 func TestSessionPushContributorMergePreservesRebuildDecision(t *testing.T) {
 	for name, merge := range map[string]func(*SyncStats, SyncStats){"contributors": mergeSyncStats, "reconciliation": mergeReconciliationSyncStats} {
 		t.Run(name, func(t *testing.T) {
-			for _, mixed := range []bool{false, true} {
-				aggregate := SyncStats{TotalSessions: 2, Skipped: 2, filesOK: 1, filesDiscovered: 1, nonContainerDiscovered: 1, sessionPushReservedFiles: 1}
-				if mixed {
-					merge(&aggregate, SyncStats{TotalSessions: 1, Failed: 1, filesOK: 1, filesDiscovered: 1, nonContainerDiscovered: 1, deferredPreservedIDs: []string{"deferred"}, deferredPreservedFiles: 1, preservedRetryFailures: 1})
-				}
-				assert.Empty(t, resyncSwapAbortReason(aggregate, 1, 0), "known reserved/deferred outcomes must survive aggregation")
-				if mixed {
-					assert.Equal(t, []string{"deferred"}, aggregate.deferredPreservedIDs)
-				}
-			}
+			var aggregate SyncStats
+			merge(&aggregate, SyncStats{TotalSessions: 1, Failed: 1, filesOK: 1, filesDiscovered: 1, nonContainerDiscovered: 1, deferredPreservedIDs: []string{"deferred"}, deferredPreservedFiles: 1, preservedRetryFailures: 1})
+			merge(&aggregate, SyncStats{TotalSessions: 2, Skipped: 2, filesOK: 1, filesDiscovered: 1, nonContainerDiscovered: 1, sessionPushReservedFiles: 1})
+			assert.Empty(t, resyncSwapAbortReason(aggregate, 1, 0), "known reserved/deferred outcomes must survive aggregation")
+			assert.Equal(t, 1, aggregate.sessionPushReservedFiles)
+			assert.Equal(t, []string{"deferred"}, aggregate.deferredPreservedIDs)
 		})
 	}
 }
@@ -94,7 +90,7 @@ func TestSessionPushDeferredRebuildWithMultipleSessionsPerSource(t *testing.T) {
 	stats.Failed = 0
 	stats.deferredPreservedIDs = append(stats.deferredPreservedIDs, "second")
 	stats.sessionPushReservedFiles = 0
-	assert.NotEmpty(t, resyncSwapAbortReason(stats, 1, 0), "two deferred IDs cannot account for two sources")
+	assert.NotEmpty(t, resyncSwapAbortReason(stats, 1, 0), "an extra deferred session cannot account for an unexplained source")
 }
 
 func TestSessionPushMixedReservedAndDeferredSource(t *testing.T) {
@@ -102,7 +98,7 @@ func TestSessionPushMixedReservedAndDeferredSource(t *testing.T) {
 	_, err := archive.WriteSessionBatchAtomic(t.Context(), []db.SessionBatchWrite{{Session: db.Session{ID: "deferred", Agent: string(parser.AgentAntigravityCLI), Machine: "local", MessageCount: 1}, Messages: []db.Message{{SessionID: "deferred", Role: "user", Content: "saved history"}}, ReplaceMessages: true}})
 	require.NoError(t, err)
 	receipt := db.SessionPushReceipt{SessionID: "reserved", SourceOrigin: "source", PayloadHash: strings.Repeat("a", 64)}
-	write := db.SessionBatchWrite{Session: db.Session{ID: "reserved", Agent: string(parser.AgentAntigravityCLI), Machine: "source", MessageCount: 1}, Messages: []db.Message{{SessionID: "reserved", Role: "user", Content: "snapshot"}}, ReplaceMessages: true}
+	write := db.SessionBatchWrite{Session: db.Session{ID: "reserved", Agent: string(parser.AgentAntigravityCLI), Machine: "source", MessageCount: 1}, Messages: []db.Message{{SessionID: "reserved", Role: "user", Content: "snapshot"}}, ReplaceMessages: true, DataVersion: db.CurrentDataVersion()}
 	_, err = replacement.ApplySessionPush(t.Context(), receipt, write)
 	require.NoError(t, err)
 	engine := NewEngine(t.Context(), replacement, EngineConfig{Machine: "local"})
@@ -115,6 +111,7 @@ func TestSessionPushMixedReservedAndDeferredSource(t *testing.T) {
 	assert.Equal(t, 1, stats.deferredPreservedFiles)
 	assert.Equal(t, []string{"deferred"}, stats.deferredPreservedIDs)
 	assert.Empty(t, resyncSwapAbortReason(stats, 0, 0))
+	assert.Equal(t, db.CurrentDataVersion(), replacement.GetSessionDataVersion(t.Context(), "reserved"))
 }
 
 func TestSessionPushDeferredCollisionPreservesDataVersion(t *testing.T) {

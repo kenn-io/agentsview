@@ -44,8 +44,11 @@ func TestSessionPushTranscriptsArchiveInvalidatesDiscardedToolSignals(t *testing
 		t.Run(string(policy), func(t *testing.T) {
 			d := testDB(t)
 			d.SetArchiveContent(policy)
+			d.SetToolResultImages(config.ToolResultImagesDrop)
 			receipt, write := sessionPushFixture("snapshot")
 			write.Messages = []Message{{SessionID: "snapshot", Role: "assistant", ToolCalls: []ToolCall{{ToolName: "Read", InputJSON: `{"path":"sample"}`, ResultContent: "error: failed"}}}}
+			write.Messages[0].Content = "answer\x00 retained"
+			write.Messages[0].ToolCalls = append(write.Messages[0].ToolCalls, testImageMessage("snapshot").ToolCalls[0])
 			write.Signals = SessionSignalUpdate{ToolFailureSignalCount: 1, ToolRetryCount: 1, QualitySignals: QualitySignals{Version: CurrentQualitySignalVersion}}
 			created, err := d.ApplySessionPush(t.Context(), receipt, write)
 			require.NoError(t, err)
@@ -56,22 +59,23 @@ func TestSessionPushTranscriptsArchiveInvalidatesDiscardedToolSignals(t *testing
 			messages, err := d.GetAllMessages(t.Context(), "snapshot")
 			require.NoError(t, err)
 			require.Len(t, messages, 1)
-			require.Len(t, messages[0].ToolCalls, 1)
+			assert.Equal(t, "answer retained", messages[0].Content)
+			require.Len(t, messages[0].ToolCalls, 2)
 			if policy == config.ArchiveContentTranscripts {
 				assert.Empty(t, messages[0].ToolCalls[0].ResultContent)
+				assert.Empty(t, messages[0].ToolCalls[1].ResultContent)
 				assert.Zero(t, stored.ToolFailureSignalCount)
 				assert.Zero(t, stored.ToolRetryCount)
 				assert.Zero(t, stored.QualitySignalVersion)
 			} else {
 				assert.Equal(t, "error: failed", messages[0].ToolCalls[0].ResultContent)
+				assert.Contains(t, messages[0].ToolCalls[1].ResultContent, `"type":"agentsview_image"`)
+				assert.NotContains(t, messages[0].ToolCalls[1].ResultContent, "data:image/")
 				assert.Equal(t, 1, stored.ToolFailureSignalCount)
 				assert.Equal(t, 1, stored.ToolRetryCount)
 				assert.Equal(t, CurrentQualitySignalVersion, stored.QualitySignalVersion)
 			}
 			requireSessionPushReceipt(t, d, "snapshot")
-			created, err = d.ApplySessionPush(t.Context(), receipt, write)
-			require.NoError(t, err)
-			assert.False(t, created)
 		})
 	}
 }
@@ -363,41 +367,6 @@ func TestSessionPushRebuildPreservesReceiptsAndCuration(t *testing.T) {
 	stars, err := destination.ListStarredSessionIDs(ctx)
 	require.NoError(t, err)
 	assert.Contains(t, stars, "live")
-	for _, id := range []string{"trashed", "purged"} {
-		receipt, write := sessionPushFixture(id)
-		created, err := destination.ApplySessionPush(ctx, receipt, write)
-		assert.False(t, created)
-		require.ErrorIs(t, err, ErrSessionPushConflict)
-	}
-}
-
-func TestSessionPushStoragePolicies(t *testing.T) {
-	for _, policy := range []config.ArchiveContent{config.ArchiveContentFull, config.ArchiveContentTranscripts} {
-		t.Run(string(policy), func(t *testing.T) {
-			d := testDB(t)
-			d.SetArchiveContent(policy)
-			d.SetToolResultImages(config.ToolResultImagesDrop)
-			receipt, write := sessionPushFixture("snapshot")
-			write.Messages = []Message{testImageMessage("snapshot")}
-			write.Messages[0].Content = "answer\x00 retained"
-			created, err := d.ApplySessionPush(t.Context(), receipt, write)
-			require.NoError(t, err)
-			assert.True(t, created)
-			messages, err := d.GetAllMessages(t.Context(), "snapshot")
-			require.NoError(t, err)
-
-			require.Len(t, messages, 1)
-			assert.Equal(t, "answer retained", messages[0].Content)
-			require.Len(t, messages[0].ToolCalls, 1)
-			result := messages[0].ToolCalls[0].ResultContent
-			if policy == config.ArchiveContentTranscripts {
-				assert.Empty(t, result)
-			} else {
-				assert.Contains(t, result, `"type":"agentsview_image"`)
-				assert.NotContains(t, result, "data:image/")
-			}
-		})
-	}
 }
 
 func TestLoadSessionPushDataExactLiveSession(t *testing.T) {

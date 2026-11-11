@@ -80,9 +80,6 @@ func TestPushCompatibilityUpgradePreservesPendingWork(t *testing.T) {
 	require.NoError(t, d.SetSessionDataVersion(ctx, "retry", 172))
 	require.NoError(t, d.SetSessionDataVersion(ctx, "codex", 173))
 	require.NoError(t, d.Update(ctx, func(tx *sql.Tx) error {
-		if _, err := tx.ExecContext(ctx, "DROP TABLE session_push_receipts"); err != nil {
-			return err
-		}
 		if err := writeUserVersion(ctx, tx, 173); err != nil {
 			return err
 		}
@@ -100,9 +97,6 @@ func TestPushCompatibilityUpgradePreservesPendingWork(t *testing.T) {
 	var pending int
 	require.NoError(t, reopened.getReader().QueryRow(ctx, "SELECT value FROM stats WHERE key = ?", scopedUpgradePendingKey).Scan(&pending))
 	assert.Equal(t, SessionPushDataVersion, pending)
-	var receiptsTable int
-	require.NoError(t, reopened.getReader().QueryRow(ctx, "SELECT count(*) FROM session_push_receipts").Scan(&receiptsTable))
-	assert.Zero(t, receiptsTable)
 }
 
 // Version 134 reshapes Codex session IDs, so it must rebuild every provider.

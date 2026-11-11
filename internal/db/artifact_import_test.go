@@ -525,9 +525,8 @@ func TestApplyArtifactImportedSessionPreservesDeletedPush(t *testing.T) {
 	_, err := database.ApplySessionPush(ctx, receipt, write)
 	require.NoError(t, err)
 	write.Session.Machine = origin
-	imported := ArtifactImportedSession{Origin: origin, GID: gid, ManifestHash: strings.Repeat("a", 64), ImportedSessionID: gid}
+	imported := ArtifactImportedSession{Origin: origin, GID: gid, ManifestHash: strings.Repeat("b", 64), ImportedSessionID: gid}
 	require.NoError(t, database.DeleteSession(ctx, gid))
-	imported.ManifestHash = strings.Repeat("b", 64)
 	landing := ArtifactCheckpointLanding{Origin: origin, Sequence: 7, CheckpointSHA256: strings.Repeat("c", 64), CheckpointSize: 321}
 	entry := ArtifactCheckpointSession{GID: gid, ManifestHash: imported.ManifestHash}
 	_, err = database.RecordArtifactPeerCheckpointHead(ctx, ArtifactPeerCheckpointHead(landing))
