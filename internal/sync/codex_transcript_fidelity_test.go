@@ -136,7 +136,8 @@ func TestCodexFidelityAppendMatchesFullParse(t *testing.T) {
 		testjsonl.CodexMsgJSON("assistant", "checking", "2026-11-01T10:00:02Z"),
 		fidelityTokenCount(t, "2026-11-01T10:00:02Z", 1000, 50, 400, 1),
 		// A call with no row of its own: neither the earlier reasoning row
-		// nor the later boundary may take it.
+		// nor the later boundary may take it, so it becomes a hidden
+		// usage-only row.
 		fidelityTokenCount(t, "2026-11-01T10:00:03Z", 1100, 20, 900, 2),
 		fidelityCompacted(t, "2026-11-01T10:00:04Z", summary),
 		fidelityTokenCount(t, "2026-11-01T10:00:04Z", 1200, 30, 1000, 3),
@@ -147,16 +148,18 @@ func TestCodexFidelityAppendMatchesFullParse(t *testing.T) {
 		testjsonl.CodexMsgJSON("user", "thanks", "2026-11-01T10:00:06Z"),
 	}
 	type row struct {
-		Role, Content, Usage string
-		Thinking, Boundary   bool
+		Role, Content, Usage       string
+		Thinking, Boundary, System bool
 	}
 	want := []row{
 		{Role: "user", Content: "fix it"},
 		{Role: "assistant", Content: "[Thinking]\nLooking at the parser.\n[/Thinking]", Thinking: true},
 		{Role: "assistant", Content: "checking", Usage: `{"cache_read_input_tokens":400,"input_tokens":600,"output_tokens":50}`},
-		{Role: "assistant", Content: summary, Boundary: true},
+		{Role: "assistant", Usage: `{"cache_read_input_tokens":900,"input_tokens":200,"output_tokens":20}`, System: true},
+		{Role: "assistant", Content: summary, Boundary: true, System: true},
+		{Role: "assistant", Usage: `{"cache_read_input_tokens":1000,"input_tokens":200,"output_tokens":30}`, System: true},
 		{Role: "assistant", Content: "[Thinking]\nDone; nothing else.\n[/Thinking]", Thinking: true, Usage: `{"cache_read_input_tokens":1100,"input_tokens":200,"output_tokens":40}`},
-		{Role: "assistant", Boundary: true},
+		{Role: "assistant", Boundary: true, System: true},
 		{Role: "user", Content: "thanks"},
 	}
 	for split := 4; split < len(lines); split++ {
@@ -186,6 +189,7 @@ func TestCodexFidelityAppendMatchesFullParse(t *testing.T) {
 					got = append(got, row{
 						Role: m.Role, Content: m.Content, Usage: string(m.TokenUsage),
 						Thinking: m.HasThinking, Boundary: m.IsCompactBoundary,
+						System: m.IsSystem,
 					})
 				}
 				assert.Equal(t, want, got)

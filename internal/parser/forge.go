@@ -255,10 +255,7 @@ func buildForgeSession(
 						display += "\n" + body
 					}
 				}
-				if display == "" && len(toolCalls) == 0 {
-					return true
-				}
-				messages = append(messages, ParsedMessage{
+				msg := ParsedMessage{
 					Ordinal:            ordinal,
 					Role:               RoleAssistant,
 					Content:            display,
@@ -275,7 +272,14 @@ func buildForgeSession(
 					HasContextTokens:   hasCtx,
 					HasOutputTokens:    hasOut,
 					tokenPresenceKnown: hasCtx || hasOut,
-				})
+				}
+				if display == "" && len(toolCalls) == 0 {
+					var ok bool
+					if msg, ok = usageOnlyMessage(msg); !ok {
+						return true
+					}
+				}
+				messages = append(messages, msg)
 				ordinal++
 			}
 			return true

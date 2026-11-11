@@ -571,8 +571,10 @@ func parseClineRawMessages(
 			textContent = cleanClinePrompt(textContent)
 		}
 
-		// Skip empty messages with no content, thinking, or tool calls/results
-		if textContent == "" && thinking == "" && len(toolCalls) == 0 && len(toolResults) == 0 {
+		// Skip empty messages with no content, thinking, or tool calls/results.
+		// An empty assistant message with metrics stays as a hidden usage row.
+		empty := textContent == "" && thinking == "" && len(toolCalls) == 0 && len(toolResults) == 0
+		if empty && (rawMsg.Role != "assistant" || rawMsg.Metrics == nil) {
 			continue
 		}
 
@@ -669,6 +671,12 @@ func parseClineRawMessages(
 				if j, err := json.Marshal(normalized, json.Deterministic(true)); err == nil {
 					msg.TokenUsage = j
 				}
+			}
+		}
+		if empty {
+			var ok bool
+			if msg, ok = usageOnlyMessage(msg); !ok {
+				continue
 			}
 		}
 
