@@ -77,6 +77,17 @@ func (db *DB) SetSessionExternalParent(
 	}
 	defer func() { _ = tx.Rollback() }()
 
+	link, err := setSessionExternalParentTx(ctx, tx, sessionID, parentID)
+	if err != nil {
+		return SessionExternalParent{}, err
+	}
+	if err := tx.Commit(); err != nil {
+		return SessionExternalParent{}, fmt.Errorf("committing session parent: %w", err)
+	}
+	return link, nil
+}
+
+func setSessionExternalParentTx(ctx context.Context, tx *sql.Tx, sessionID, parentID string) (SessionExternalParent, error) {
 	if err := rejectExternalParentCycle(ctx, tx, sessionID, parentID); err != nil {
 		return SessionExternalParent{}, err
 	}
@@ -109,9 +120,6 @@ func (db *DB) SetSessionExternalParent(
 		return SessionExternalParent{}, err
 	}
 	link.Changed = moved > 0
-	if err := tx.Commit(); err != nil {
-		return SessionExternalParent{}, fmt.Errorf("committing session parent: %w", err)
-	}
 	return link, nil
 }
 

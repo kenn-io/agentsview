@@ -32,10 +32,11 @@ func SessionPushTimeout(size int64) time.Duration {
 // segments use the existing artifact format; raw sources and checkpoints are
 // deliberately absent. Raw JSON defers allocation until collection preflights.
 type SessionPushEnvelope struct {
-	Version   int            `json:"v"`
-	SessionID string         `json:"session_id"`
-	Manifest  jsontext.Value `json:"manifest"`
-	Segments  jsontext.Value `json:"segments"`
+	Version                 int            `json:"v"`
+	SessionID               string         `json:"session_id"`
+	PendingExternalParentID *string        `json:"pending_external_parent_id,omitempty"`
+	Manifest                jsontext.Value `json:"manifest"`
+	Segments                jsontext.Value `json:"segments"`
 }
 
 type sessionPushSegment struct {
@@ -162,7 +163,7 @@ func encodeSessionPushData(ctx context.Context, origin string, session db.Sessio
 	if err != nil {
 		return nil, err
 	}
-	encoded, err := json.Marshal(SessionPushEnvelope{Version: 1, SessionID: session.ID, Manifest: sink.manifest, Segments: segments})
+	encoded, err := json.Marshal(SessionPushEnvelope{Version: 1, SessionID: session.ID, PendingExternalParentID: data.PendingExternalParentID, Manifest: sink.manifest, Segments: segments})
 	if err != nil {
 		return nil, err
 	}
@@ -197,6 +198,9 @@ func decodeSessionPush(data []byte) (db.SessionPushReceipt, db.SessionBatchWrite
 	}
 	if envelope.Version != 1 || envelope.SessionID == "" || len(envelope.SessionID) > 1024 {
 		return zero, noWrite, errors.New("unsupported version or session ID")
+	}
+	if envelope.PendingExternalParentID != nil && (*envelope.PendingExternalParentID == "" || len(*envelope.PendingExternalParentID) > 1024 || *envelope.PendingExternalParentID == envelope.SessionID) {
+		return zero, noWrite, errors.New("invalid pending parent session ID")
 	}
 	limits := productionArtifactLimits()
 	if int64(len(envelope.Manifest)) > manifestDecodedLimit {
@@ -287,7 +291,7 @@ func decodeSessionPush(data []byte) (db.SessionPushReceipt, db.SessionBatchWrite
 	if err != nil {
 		return zero, noWrite, err
 	}
-	receipt := db.SessionPushReceipt{SessionID: envelope.SessionID, SourceOrigin: m.Origin, PayloadHash: hashHex(canonical)}
+	receipt := db.SessionPushReceipt{SessionID: envelope.SessionID, SourceOrigin: m.Origin, PayloadHash: hashHex(canonical), PendingExternalParentID: envelope.PendingExternalParentID}
 	session := sessionFromManifest(m)
 	for i := range messages {
 		messages[i].SessionID = session.ID

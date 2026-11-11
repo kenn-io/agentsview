@@ -207,6 +207,41 @@ func TestSessionPushMalformedWriteRollsBack(t *testing.T) {
 	assert.True(t, created, "rollback must not reserve the receipt")
 }
 
+func TestSessionPushPendingParentFailureRollsBack(t *testing.T) {
+	d := testDB(t)
+	receipt, write := sessionPushFixture("snapshot")
+	receipt.PendingExternalParentID = new("parent")
+	_, err := d.getWriter().ExecContext(t.Context(), `CREATE TRIGGER fail_pushed_parent
+		BEFORE INSERT ON session_external_parents
+		BEGIN SELECT RAISE(ABORT, 'parent write failed'); END`)
+	require.NoError(t, err)
+	created, err := d.ApplySessionPush(t.Context(), receipt, write)
+	require.ErrorContains(t, err, "parent write failed")
+	assert.False(t, created)
+	session, err := d.GetSession(t.Context(), "snapshot")
+	require.NoError(t, err)
+	assert.Nil(t, session)
+	_, err = d.getWriter().ExecContext(t.Context(), "DROP TRIGGER fail_pushed_parent")
+	require.NoError(t, err)
+	created, err = d.ApplySessionPush(t.Context(), receipt, write)
+	require.NoError(t, err)
+	assert.True(t, created)
+}
+
+func TestSessionPushPreservesExistingExternalParent(t *testing.T) {
+	d := testDB(t)
+	_, err := d.SetSessionExternalParent(t.Context(), "snapshot", "local-parent")
+	require.NoError(t, err)
+	receipt, write := sessionPushFixture("snapshot")
+	receipt.PendingExternalParentID = new("source-parent")
+	created, err := d.ApplySessionPush(t.Context(), receipt, write)
+	require.NoError(t, err)
+	require.True(t, created)
+	link, err := d.GetSessionExternalParent(t.Context(), "snapshot")
+	require.NoError(t, err)
+	assert.Equal(t, "local-parent", link.ParentSessionID)
+}
+
 func TestSessionPushRejectsMismatchedReceiptIdentity(t *testing.T) {
 	d := testDB(t)
 	receipt, write := sessionPushFixture("snapshot")

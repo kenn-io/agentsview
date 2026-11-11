@@ -29,9 +29,10 @@ type ArtifactExportLoadLimits struct {
 // ArtifactExportData is one session's export-visible transcript and usage data
 // loaded from a single SQLite read snapshot.
 type ArtifactExportData struct {
-	Messages    []Message
-	UsageEvents []UsageEvent
-	PlanUsage   *SessionPlanUsage // nil when the session has none
+	Messages                []Message
+	UsageEvents             []UsageEvent
+	PlanUsage               *SessionPlanUsage // nil when the session has none
+	PendingExternalParentID *string
 }
 
 const artifactMessageRawBytesSQL = `
@@ -122,12 +123,19 @@ func (db *DB) loadArtifactExportData(
 	}()
 
 	var session *Session
+	var pendingParent *string
 	if includeSession {
 		cols := sessionFullColsBeforeParent + `parent_session_id, parser_parent_session_id, relationship_type` + sessionFullColsAfterRelationship
 		session, err = scanSessionFullRow(tx.QueryRowContext(ctx,
 			"SELECT "+cols+" FROM sessions WHERE id = ? AND deleted_at IS NULL", sessionID), sessionID)
 		if err != nil || session == nil {
 			return nil, ArtifactExportData{}, err
+		}
+		if session.ParentSessionID == nil {
+			err = tx.QueryRowContext(ctx, `SELECT parent_session_id FROM session_external_parents WHERE session_id = ?`, sessionID).Scan(&pendingParent)
+			if err != nil && !errors.Is(err, sql.ErrNoRows) {
+				return nil, ArtifactExportData{}, err
+			}
 		}
 	}
 
@@ -178,7 +186,7 @@ func (db *DB) loadArtifactExportData(
 	}
 	committed = true
 	return session, ArtifactExportData{
-		Messages: messages, UsageEvents: usage, PlanUsage: planUsage,
+		Messages: messages, UsageEvents: usage, PlanUsage: planUsage, PendingExternalParentID: pendingParent,
 	}, nil
 }
 

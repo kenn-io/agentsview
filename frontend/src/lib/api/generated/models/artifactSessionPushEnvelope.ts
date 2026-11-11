@@ -6,6 +6,7 @@ import type { ArtifactSessionPushEnvelopeSegmentsItem } from "./artifactSessionP
 
 export interface ArtifactSessionPushEnvelope {
   manifest: ArtifactSessionPushEnvelopeManifest;
+  pending_external_parent_id?: string;
   /** @maxItems 16 */
   segments: ArtifactSessionPushEnvelopeSegmentsItem[];
   session_id: string;

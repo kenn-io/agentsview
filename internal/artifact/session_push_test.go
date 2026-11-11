@@ -73,6 +73,39 @@ func TestSessionPushExactSelection(t *testing.T) {
 		require.NotNil(t, write.Session.ParentSessionID)
 		assert.Equal(t, "parent", *write.Session.ParentSessionID)
 	})
+	t.Run("pending launcher parent", func(t *testing.T) {
+		source, receiver := testDB(t), testDB(t)
+		require.NoError(t, source.UpsertSession(t.Context(), db.Session{ID: "child", Agent: "claude", Machine: "source"}))
+		link, err := source.SetSessionExternalParent(t.Context(), "child", "parent")
+		require.NoError(t, err)
+		assert.False(t, link.Applied)
+		push := func(id string) bool {
+			packet, _, err := EncodeSessionPush(t.Context(), source, id, "")
+			require.NoError(t, err)
+			receipt, write, err := DecodeSessionPush(packet)
+			require.NoError(t, err)
+			created, err := receiver.ApplySessionPush(t.Context(), receipt, write)
+			require.NoError(t, err)
+			return created
+		}
+		assert.True(t, push("child"))
+		require.NoError(t, source.UpsertSession(t.Context(), db.Session{ID: "parent", Agent: "claude", Machine: "source"}))
+		assert.True(t, push("parent"))
+		_, err = receiver.LinkSubagentSessionsContext(t.Context())
+		require.NoError(t, err)
+		child, err := receiver.GetSession(t.Context(), "child")
+		require.NoError(t, err)
+		require.NotNil(t, child.ParentSessionID)
+		assert.Equal(t, "parent", *child.ParentSessionID)
+		children, err := receiver.GetChildSessions(t.Context(), "parent")
+		require.NoError(t, err)
+		require.Len(t, children, 1)
+		assert.Equal(t, "child", children[0].ID)
+		link, err = receiver.GetSessionExternalParent(t.Context(), "child")
+		require.NoError(t, err)
+		assert.True(t, link.Applied)
+		assert.False(t, push("child"))
+	})
 }
 
 func TestSessionPushReceiptIgnoresSegmentBoundaries(t *testing.T) {

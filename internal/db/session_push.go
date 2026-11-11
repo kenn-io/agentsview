@@ -10,9 +10,10 @@ import (
 
 // SessionPushReceipt pins the first snapshot accepted for an exact session ID.
 type SessionPushReceipt struct {
-	SessionID    string
-	SourceOrigin string
-	PayloadHash  string
+	SessionID               string
+	SourceOrigin            string
+	PayloadHash             string
+	PendingExternalParentID *string
 }
 
 // ErrSessionPushConflict reports an ID whose first snapshot cannot be accepted
@@ -105,6 +106,20 @@ func (db *DB) ApplySessionPush(
 			return false, fmt.Errorf("%w: %w", ErrSessionPushConflict, err)
 		}
 		return false, err
+	}
+	if receipt.PendingExternalParentID != nil {
+		var exists bool
+		if err := tx.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM session_external_parents WHERE session_id = ?)`, receipt.SessionID).Scan(&exists); err != nil {
+			return false, err
+		}
+		if !exists {
+			if _, err := setSessionExternalParentTx(ctx, tx, receipt.SessionID, *receipt.PendingExternalParentID); err != nil {
+				if errors.Is(err, ErrSessionExternalParentInvalid) {
+					return false, fmt.Errorf("%w: %w", ErrSessionPushConflict, err)
+				}
+				return false, err
+			}
+		}
 	}
 	if _, err := tx.ExecContext(ctx, `
 		INSERT INTO session_push_receipts (session_id, source_origin, payload_hash)
