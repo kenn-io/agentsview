@@ -7,7 +7,9 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -94,11 +96,17 @@ func TestS3ConfiguredSource(t *testing.T) {
 	const base = "host/raw/claude/project/" + id
 	_, err := readS3Source(t.Context(), config.Config{}, "remote", "s3://other/project/"+id+".jsonl", id, maxSourceBytes)
 	require.ErrorContains(t, err, "configured roots")
+	var extraKey atomic.Value
+	extraKey.Store("")
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Query().Get("list-type") == "2" {
 			assert.True(t, strings.HasSuffix(r.URL.Query().Get("prefix"), "/"))
 			w.Header().Set("Content-Type", "application/xml")
 			if strings.Contains(r.URL.Query().Get("prefix"), "tool-results") {
+				if key := extraKey.Load().(string); key != "" {
+					_, _ = io.WriteString(w, `<ListBucketResult><IsTruncated>false</IsTruncated><Contents><Key>`+key+`</Key><Size>4</Size></Contents></ListBucketResult>`)
+					return
+				}
 				_, _ = io.WriteString(w, `<ListBucketResult><IsTruncated>false</IsTruncated><Contents><Key>`+base+`/tool-results/</Key><Size>0</Size></Contents><Contents><Key>`+base+`/tool-results/result.txt</Key><Size>4</Size></Contents><Contents><Key>`+base+`/tool-results/result2.txt</Key><Size>4</Size></Contents></ListBucketResult>`)
 			} else {
 				_, _ = io.WriteString(w, `<ListBucketResult><IsTruncated>false</IsTruncated><Contents><Key>`+base+`/subagents/</Key><Size>0</Size></Contents></ListBucketResult>`)
@@ -147,6 +155,13 @@ func TestS3ConfiguredSource(t *testing.T) {
 		s.SourceSessionID = invalid
 		_, err = Materialize(t.Context(), cfg, s, cwd)
 		require.ErrorContains(t, err, "invalid source session identity")
+	}
+	if runtime.GOOS == "windows" {
+		for _, invalid := range []string{"CON", "file:stream"} {
+			extraKey.Store(base + "/tool-results/" + invalid)
+			_, err = readS3Source(t.Context(), cfg, "host", uri, id, maxSourceBytes)
+			require.ErrorContains(t, err, "unsafe S3 file path")
+		}
 	}
 }
 
