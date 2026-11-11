@@ -47,8 +47,8 @@ func newSessionUsageCommand() *cobra.Command {
 			"Claude subagent transcripts beside the named session. " +
 			"--own-only reports the named transcript's usage.\n\n" +
 			"Missing daemon IDs return a retry error while startup ingestion or an archive rebuild is pending; " +
-			"otherwise they return exit 2. --wait retries missing IDs for up to 30 seconds after daemon discovery; at the deadline, clear status returns exit 2 and pending work returns a retry error. Known sessions can refresh during catch-up. Direct and --pg reads do not wait. " +
-			"HTTP --own-only reads archived usage and can start deferred ingestion for a missing session with --wait. --no-sync never starts source sync. " +
+			"otherwise they return exit 2. --wait retries missing IDs for up to 30 seconds after daemon discovery; at the deadline, a confirmed absence with clear status returns exit 2, and an incomplete check returns a retry error. Known sessions can refresh during catch-up. Direct and --pg reads do not wait. " +
+			"HTTP --own-only reads archived usage and can start deferred ingestion with --wait. --no-sync never starts source sync. " +
 			"If refresh is refused or fails, the command shows archived usage with a warning; " +
 			"JSON sets refresh_incomplete. Direct mode keeps its targeted source lookup.\n\n" +
 			"Exit 0 means token data, cost, or plan figures are present. " +
@@ -370,7 +370,6 @@ func sessionUsageStatusError(wait bool, err error) error {
 
 func waitSessionUsageReady(ctx context.Context, baseURL, token string, backend service.SessionService, sessionID, resolvedID string, wait, allowSync, refresh bool) (string, error) {
 	started := false
-	clearMissing := false
 	var startErr error
 	startupCtx, cancelStartup := context.WithCancel(ctx)
 	result := make(chan error, 1)
@@ -396,9 +395,6 @@ func waitSessionUsageReady(ctx context.Context, baseURL, token string, backend s
 		if statusErr != nil {
 			return resolvedID, sessionUsageStatusError(wait, statusErr)
 		}
-		if startup || stale || pending {
-			clearMissing = false
-		}
 		if !wait && (startup || stale || pending) {
 			return resolvedID, backoff.Permanent(errors.New("session usage is not ready; wait for syncing or rebuilding to finish, then retry"))
 		}
@@ -407,12 +403,8 @@ func waitSessionUsageReady(ctx context.Context, baseURL, token string, backend s
 			if lookupErr == nil {
 				resolvedID = found
 			} else if !errors.Is(lookupErr, errSessionNotFound) {
-				if ctx.Err() != nil && clearMissing {
-					return resolvedID, errSessionNotFound
-				}
 				return resolvedID, backoff.Permanent(lookupErr)
 			} else if !pending {
-				clearMissing = true
 				if !wait {
 					return resolvedID, backoff.Permanent(errSessionNotFound)
 				}
@@ -422,7 +414,7 @@ func waitSessionUsageReady(ctx context.Context, baseURL, token string, backend s
 		if resolvedID != "" && !startup && !stale && (!pending || refresh) {
 			return resolvedID, nil
 		}
-		if startup && !stale && allowSync && (refresh || resolvedID == "") && !started {
+		if startup && !stale && allowSync && !started {
 			started = true
 			// Startup may become ready before the sync finishes draining sources.
 			go func() {

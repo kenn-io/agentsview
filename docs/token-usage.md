@@ -1315,10 +1315,11 @@ retained archive with a stale warning.
 `session usage` and its `token-use` alias attempt to refresh known sessions
 without waiting by default. Pass `session usage --wait` to wait for startup or
 a rebuild before refreshing; known sessions can refresh during catch-up.
-Missing sessions are looked up until the wait expires. A missing ID returns exit 2
-when status is clear, or a retry error while work is pending or status is unavailable.
-`--own-only --wait` can start deferred ingestion to find a missing session, then
-reads its own archived usage. Combined totals include archived descendants.
+Missing sessions are looked up until the wait expires. A confirmed missing ID
+returns exit 2 when status is clear; an incomplete lookup, pending work, or
+unavailable status returns a retry error.
+`--own-only --wait` can start deferred ingestion, then reads its own archived
+usage. Combined totals include archived descendants.
 See the [session usage contract](/docs/session-api/#agentsview-session-usage)
 for refresh behavior, missing-session exit codes, and the `refresh_incomplete`
 JSON field.

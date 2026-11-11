@@ -2805,6 +2805,72 @@ func TestSessionUsageWaitMissingAfterStatusChanges(t *testing.T) {
 	}
 }
 
+func TestSessionUsageWaitMissingLookupTimesOut(t *testing.T) {
+	shortenSessionUsagePoll(t)
+	previous := sessionUsageWaitTimeout
+	sessionUsageWaitTimeout = 100 * time.Millisecond
+	t.Cleanup(func() { sessionUsageWaitTimeout = previous })
+	ts, _ := newRemoteUsageServer(t, remoteUsageSpec{canonicalID: "unused"})
+	original := ts.Config.Handler
+	lookups := 0
+	ts.Config.Handler = http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/api/v1/sync/status":
+			writeJSONResponse(w, `{}`)
+			return
+		case "/api/v1/sessions/codex:absent":
+			lookups++
+			if lookups > 2 {
+				<-r.Context().Done()
+				return
+			}
+			http.NotFound(w, r)
+			return
+		}
+		original.ServeHTTP(w, r)
+	})
+	out, code, err := httpSessionUsageData(t.Context(), ts.URL, "", sessionUsageQuery{SessionID: "codex:absent", Wait: true, NoSync: true})
+	require.ErrorContains(t, err, "waiting for session usage")
+	assert.Equal(t, tokenUseExitErr, code)
+	assert.Nil(t, out)
+}
+
+func TestSessionUsageWaitKnownOwnOnlyStartsDeferredIngestion(t *testing.T) {
+	shortenSessionUsagePoll(t)
+	previous := sessionUsageWaitTimeout
+	sessionUsageWaitTimeout = 100 * time.Millisecond
+	t.Cleanup(func() { sessionUsageWaitTimeout = previous })
+	ts, _ := newRemoteUsageServer(t, remoteUsageSpec{canonicalID: "codex:known"})
+	original := ts.Config.Handler
+	started := make(chan struct{})
+	refreshes := 0
+	ts.Config.Handler = http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/api/v1/sync/status":
+			select {
+			case <-started:
+				writeJSONResponse(w, `{}`)
+			default:
+				writeJSONResponse(w, `{"startup_pending":true}`)
+			}
+			return
+		case "/api/v1/sync":
+			close(started)
+			writeJSONResponse(w, `{}`)
+			return
+		case "/api/v1/sessions/sync":
+			refreshes++
+		}
+		original.ServeHTTP(w, r)
+	})
+	out, _, err := httpSessionUsageData(t.Context(), ts.URL, "", sessionUsageQuery{SessionID: "codex:known", Wait: true, OwnOnly: true})
+	require.NoError(t, err)
+	require.NotNil(t, out)
+	assert.False(t, out.WaitIncomplete)
+	assert.Equal(t, 42, out.TotalOutputTokens)
+	assert.Zero(t, refreshes)
+}
+
 func TestSessionUsageWaitArchiveOnly(t *testing.T) {
 	shortenSessionUsagePoll(t)
 	for _, tc := range []struct {
