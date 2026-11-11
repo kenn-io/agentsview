@@ -67,7 +67,6 @@ func TestImageTextCompatibilityVersion(t *testing.T) {
 		}))
 		assert.Equal(t, ImageTextDataVersion, d.GetSessionDataVersion(t.Context(), "complete"))
 		assert.Equal(t, 171, d.GetSessionDataVersion(t.Context(), "retry"))
-
 	})
 	t.Run("pending push upgrade", func(t *testing.T) {
 		ctx := t.Context()
@@ -98,7 +97,6 @@ func TestImageTextCompatibilityVersion(t *testing.T) {
 		var pending int
 		require.NoError(t, reopened.getReader().QueryRow(ctx, "SELECT value FROM stats WHERE key = ?", scopedUpgradePendingKey).Scan(&pending))
 		assert.Equal(t, SessionPushDataVersion, pending)
-
 	})
 }
 

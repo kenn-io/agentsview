@@ -598,7 +598,6 @@ func TestSessionPushRejectsUnresolvedAssetReference(t *testing.T) {
 	markdown := adversarialSessionPushPacket(t, db.Session{ID: "selected", Agent: "claude", Machine: "source", MessageCount: 1}, []db.Message{{Ordinal: 0, Role: "assistant", Content: "![image](asset:\x00//missing.png)"}})
 	_, _, err = DecodeSessionPush(markdown)
 	require.ErrorContains(t, err, "unresolved image assets")
-
 }
 
 func TestSessionPushUsageRoundTrip(t *testing.T) {
