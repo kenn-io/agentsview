@@ -87,7 +87,7 @@ func (b activityReportBackend) ActivityReportUsage(
 // ActivityReportCandidateSource is the candidate stream the report's runs
 // stand for. Reports sweep the runs; see ActivityReportRunSource.
 func (b activityReportBackend) ActivityReportCandidateSource(ids []string, q activity.Query) activity.CandidateSource {
-	return b.activityCandidateSource(b.candidates, ids, q)
+	return b.activityCandidateSource(ids, q)
 }
 
 func (b activityReportBackend) ActivityReportRunSource([]string, activity.Query) activity.RunSource {
@@ -555,20 +555,17 @@ func (pairing *activityReportPairing) runSource() activity.RunSource {
 func (s *Store) ActivityReportCandidateSource(
 	ids []string, q activity.Query,
 ) activity.CandidateSource {
-	return s.activityCandidateSource(chSessionSetFromIDs(ids), ids, q)
+	return s.activityCandidateSource(ids, q)
 }
 
-// activityCandidateSource reads and pairs the sessions in candidates and
-// streams their candidates in start order. Candidates of sessions outside
-// ids are dropped.
-func (s *Store) activityCandidateSource(
-	candidates chSessionSet, ids []string, q activity.Query,
-) activity.CandidateSource {
+// activityCandidateSource reads and pairs the sessions in ids and streams
+// their candidates in start order.
+func (s *Store) activityCandidateSource(ids []string, q activity.Query) activity.CandidateSource {
 	return func(ctx context.Context, yield func(activity.IntervalCandidate) error) error {
 		if len(ids) == 0 {
 			return nil
 		}
-		inputs, err := s.readActivitySessionInputs(ctx, candidates)
+		inputs, err := s.readActivitySessionInputs(ctx, ids)
 		if err != nil {
 			return err
 		}

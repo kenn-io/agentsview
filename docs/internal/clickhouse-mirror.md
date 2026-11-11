@@ -314,11 +314,20 @@ named `activity_candidate_ids`, and every later query reads
 `IN (...)` list is inlined into statement text.
 
 **Tool events pair per session in Go.** Serve loads the candidate sessions'
-messages and terminal tool events in two ordered scans, then pairs each tool
-event with the next stamped message or the next tool event per session. A
-segment tree over message timestamps finds the lowest eligible ordinal even when
-timestamps run backwards, so ordinal and timestamp behavior matches the old SQL,
-including reversed clocks and the tail pairing after the last message.
+messages and terminal tool events in ordered scans, then pairs each tool event
+with the next stamped message or the next tool event per session. A segment tree
+over message timestamps finds the lowest eligible ordinal even when timestamps
+run backwards, so ordinal and timestamp behavior matches the old SQL, including
+reversed clocks and the tail pairing after the last message.
+
+One goroutine scanning millions of message rows kept ClickHouse waiting to send
+them for seconds. So the sessions are dealt into one slice per 4,096 sessions,
+up to two, and each slice's messages are read at once on the native connection
+pool, beside the tool event read. The usage read's eight slices usually finish
+last, and more pairing slices slowed them on the server without making pairing
+ready sooner. Each session's messages arrive together, so a slice appends them
+without a map lookup per row. Pairing a session reads only its own inputs, so
+sessions are paired on every available core.
 
 **Each session keeps its runs.** After pairing a session over all time, serve
 caps each interval at the gap, trims it against the session's earlier activity,
