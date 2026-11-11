@@ -891,7 +891,7 @@ func mirrorFileScopedRoots(
 	var roots []string
 	for _, remoteDirs := range dirs {
 		for _, remoteDir := range remoteDirs {
-			root, err := safeRemappedRemotePath(mirrorRoot, remoteDir)
+			root, err := SafeRemappedRemotePath(mirrorRoot, remoteDir)
 			if err != nil {
 				return nil, err
 			}
@@ -1302,7 +1302,7 @@ func (p *PreparedRemote) antigravityTitlesPending() (bool, error) {
 	}
 	current := make(map[string]parser.SQLiteContainerState)
 	for _, remoteRoot := range p.targets.Dirs[parser.AgentAntigravity] {
-		root, err := safeRemappedRemotePath(p.root, remoteRoot)
+		root, err := SafeRemappedRemotePath(p.root, remoteRoot)
 		if err != nil {
 			return false, err
 		}

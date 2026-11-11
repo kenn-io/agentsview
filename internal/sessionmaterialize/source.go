@@ -40,7 +40,7 @@ type Result struct {
 // Materialize installs a Claude transcript and its own native dependencies.
 func Materialize(ctx context.Context, cfg config.Config, session *db.Session, cwd string) (Result, error) {
 	if session == nil || session.Agent != "claude" {
-		return Result{}, errors.New("materialization is not yet supported for this provider")
+		return Result{}, errors.New("only Claude sessions can currently be installed")
 	}
 	cwd, err := filepath.Abs(cwd)
 	if err != nil {
@@ -51,7 +51,7 @@ func Materialize(ctx context.Context, cfg config.Config, session *db.Session, cw
 	}
 	host, id := parser.StripHostPrefix(session.ID)
 	if !capture.ValidUUID(id) {
-		return Result{}, errors.New("invalid Claude session ID")
+		return Result{}, errors.New("native Claude UUID required; archive-only fork sessions are unsupported")
 	}
 	if session.FilePath == nil || *session.FilePath == "" {
 		return Result{}, errors.New("native transcript is unavailable from configured sources")

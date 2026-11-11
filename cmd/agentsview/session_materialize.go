@@ -1,7 +1,7 @@
 package main
 
 import (
-	"encoding/json"
+	"encoding/json/v2"
 	"errors"
 	"fmt"
 	"runtime"
@@ -61,7 +61,11 @@ func newSessionMaterializeCommand() *cobra.Command {
 			_, nativeID := parser.StripHostPrefix(id)
 			result.Command = claudeResumeCommand(result.Cwd, nativeID, result.ConfigDir, result.ProjectOverride, runtime.GOOS == "windows")
 			if outputFormat(cmd) == "json" {
-				return json.NewEncoder(cmd.OutOrStdout()).Encode(result)
+				if err := json.MarshalWrite(cmd.OutOrStdout(), result); err != nil {
+					return err
+				}
+				_, err := fmt.Fprintln(cmd.OutOrStdout())
+				return err
 			}
 			_, err = fmt.Fprintln(cmd.OutOrStdout(), result.Command)
 			return err

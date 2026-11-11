@@ -2,7 +2,8 @@ package sessionmaterialize
 
 import (
 	"bytes"
-	"encoding/json"
+	"encoding/json/jsontext"
+	"encoding/json/v2"
 	"errors"
 	"fmt"
 	"os"
@@ -54,7 +55,7 @@ func clearClaudeWorktree(data []byte, sessionID, sourceSessionID string) ([]byte
 		if len(bytes.TrimSpace(line)) == 0 {
 			continue
 		}
-		var entry map[string]json.RawMessage
+		var entry map[string]jsontext.Value
 		if err := json.Unmarshal(line, &entry); err != nil {
 			return nil, fmt.Errorf("invalid transcript record: %w", err)
 		}
@@ -64,7 +65,7 @@ func clearClaudeWorktree(data []byte, sessionID, sourceSessionID string) ([]byte
 		}
 		if kind == "user" || kind == "assistant" {
 			var id string
-			var message map[string]json.RawMessage
+			var message map[string]jsontext.Value
 			messageErr := json.Unmarshal(entry["message"], &message)
 			content, ok := message["content"]
 			if json.Unmarshal(entry["sessionId"], &id) == nil && (id == sessionID || (sourceSessionID != "" && id == sourceSessionID)) && messageErr == nil && ok && !bytes.Equal(bytes.TrimSpace(content), []byte("null")) {
@@ -76,7 +77,7 @@ func clearClaudeWorktree(data []byte, sessionID, sourceSessionID string) ([]byte
 		}
 		var id string
 		if err := json.Unmarshal(entry["sessionId"], &id); err != nil || !capture.ValidUUID(id) {
-			return nil, errors.New("worktree-state record has no valid sessionId")
+			return nil, errors.New("invalid worktree session ID")
 		}
 		if id == sessionID {
 			value, ok := entry["worktreeSession"]

@@ -251,7 +251,7 @@ func TestArchivesSnapshotWALCommitBeforeCheckpoint(t *testing.T) {
 				t.Context(), bytes.NewReader(archiveWriter.Bytes()), extracted,
 			)
 			require.NoError(t, err)
-			extractedDB, err := safeRemappedRemotePath(extracted, stateDB)
+			extractedDB, err := SafeRemappedRemotePath(extracted, stateDB)
 			require.NoError(t, err)
 			snapshot, err := sql.Open("sqlite3", extractedDB)
 			require.NoError(t, err)
@@ -597,7 +597,7 @@ func TestWriteArchivePreservesNanosecondMtime(t *testing.T) {
 	dstDir := t.TempDir()
 	_, err = ExtractTarStream(t.Context(), &buf, dstDir)
 	require.NoError(t, err)
-	extracted, err := safeRemappedRemotePath(dstDir, path)
+	extracted, err := SafeRemappedRemotePath(dstDir, path)
 	require.NoError(t, err)
 	extractedInfo, err := os.Stat(extracted)
 	require.NoError(t, err)

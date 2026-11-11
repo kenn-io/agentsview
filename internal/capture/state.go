@@ -324,7 +324,7 @@ func validateManifest(m manifest) error {
 		m.StartedAt.IsZero() {
 		return errors.New("capture manifest has invalid producer metadata")
 	}
-	if (m.ProviderSessionID != "" && !validUUID(m.ProviderSessionID)) ||
+	if (m.ProviderSessionID != "" && !ValidUUID(m.ProviderSessionID)) ||
 		provider == ProviderClaude && m.ProviderSessionID == "" {
 		return errors.New("capture manifest has an invalid provider session ID")
 	}

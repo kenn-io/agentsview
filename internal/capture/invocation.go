@@ -154,7 +154,7 @@ func hasNamedOption(args []string, names ...string) bool {
 }
 
 func validateClaudeSessionID(value string) error {
-	if !validUUID(value) {
+	if !ValidUUID(value) {
 		return errors.New("claude session ID must be a UUID")
 	}
 	if value != strings.ToLower(value) {
@@ -220,10 +220,6 @@ func newUUID() (string, error) {
 	encoded[23] = '-'
 	hex.Encode(encoded[24:36], raw[10:16])
 	return string(encoded), nil
-}
-
-func validUUID(value string) bool {
-	return ValidUUID(value)
 }
 
 // ValidUUID reports whether value has the native UUID text shape.
@@ -295,7 +291,7 @@ func (m *threadMarker) consumeLine() {
 		ThreadID string `json:"thread_id"`
 	}
 	if json.Unmarshal(m.line, &event) != nil || event.Type != "thread.started" ||
-		!validUUID(event.ThreadID) {
+		!ValidUUID(event.ThreadID) {
 		return
 	}
 	id := strings.ToLower(event.ThreadID)

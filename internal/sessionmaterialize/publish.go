@@ -27,7 +27,7 @@ func publishFiles(ctx context.Context, files []installFile) (changed bool, err e
 			}
 		}
 		if err != nil && changed {
-			err = fmt.Errorf("partial publication; retry to reuse installed files: %w", err)
+			err = fmt.Errorf("some files installed; retry to reuse them: %w", err)
 		}
 	}()
 	for i, file := range files {
