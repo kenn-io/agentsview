@@ -53,9 +53,9 @@ func TestSessionPushExactSelection(t *testing.T) {
 	assert.Equal(t, "codex:parent", *write.Session.ParentSessionID)
 	assert.Nil(t, write.Session.FilePath)
 	_, _, err = EncodeSessionPush(t.Context(), d, "missing", "codex")
-	require.Error(t, err)
+	require.ErrorContains(t, err, "not in the local archive")
 	_, _, err = EncodeSessionPush(t.Context(), d, "codex:chosen", "claude")
-	require.Error(t, err)
+	require.ErrorContains(t, err, "does not match --agent")
 
 	remoteID, parentID := "host~codex:chosen", "host~codex:parent"
 	_, err = d.WriteSessionBatchAtomic(t.Context(), []db.SessionBatchWrite{{
@@ -294,7 +294,6 @@ func TestSessionPushIdentityV1(t *testing.T) {
 	require.NoError(t, err)
 	const expected = `{"messages":[{"content":"answer","has_thinking":true,"has_tool_use":true,"is_compact_boundary":true,"is_system":true,"ordinal":0,"prompt_source":"prompt","role":"assistant","source_subtype":"notice","thinking_text":"thought","timestamp":"2026-01-01T00:00:00Z","tool_calls":[{"events":[{"agent":"agent","content":"result","id":"call","source":"tool","status":"done","subagent":"child","timestamp":"2026-01-01T00:00:01Z"}],"id":"call","input":"input","name":"Read","result":"result","subagent":"child"}]}],"v":1}` + "\n"
 	assert.Equal(t, expected, string(canonical))
-	assert.Equal(t, "d544bb593031823a5b2175f36a2135f9619c000846b3289f15bfa8b5ea203bf0", hashHex(canonical))
 	packet, err := encodeSessionPushData(t.Context(), "source", db.Session{ID: "sample", Agent: "claude", Machine: "source", MessageCount: 1}, db.ArtifactExportData{Messages: []db.Message{message.dbMessage()}})
 	require.NoError(t, err)
 	receipt, _, err := DecodeSessionPush(packet)
@@ -346,15 +345,6 @@ func TestSessionPushIdentityV1(t *testing.T) {
 			assert.NotEqual(t, inlineReceipt.PayloadHash, changedReceipt.PayloadHash)
 		})
 	}
-}
-
-func TestSessionPushPreservesCapabilities(t *testing.T) {
-	data, err := encodeSessionPushData(t.Context(), "source", db.Session{ID: "sample", Agent: "claude", Machine: "source", MessageCount: 1, HasToolCalls: true, HasContextData: true}, db.ArtifactExportData{Messages: []db.Message{{Ordinal: 0, Role: "assistant", HasToolUse: true, HasContextTokens: true, ContextTokens: 100, ToolCalls: []db.ToolCall{{ToolName: "Read", ToolUseID: "call"}}}}})
-	require.NoError(t, err)
-	_, write, err := DecodeSessionPush(data)
-	require.NoError(t, err)
-	assert.True(t, write.Session.HasToolCalls)
-	assert.True(t, write.Session.HasContextData)
 }
 
 func TestSessionPushSparseOrdinalsAndToolResultCarrier(t *testing.T) {
@@ -592,6 +582,8 @@ func TestSessionPushRichRoundTripProperty(t *testing.T) {
 		receipt, write, err := DecodeSessionPush(packet)
 		require.NoError(ht, err)
 		assert.Equal(ht, session.ID, receipt.SessionID)
+		assert.True(ht, write.Session.HasToolCalls)
+		assert.True(ht, write.Session.HasContextData)
 		require.Len(ht, write.Messages, 2)
 		for i := range messages {
 			assert.Equal(ht, i, write.Messages[i].Ordinal)

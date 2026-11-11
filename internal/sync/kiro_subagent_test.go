@@ -429,9 +429,9 @@ func TestKiroSubagentDelegationStatusFeedsToolHealth(t *testing.T) {
 	assert.Equal(t, 1, parent.ToolFailureSignalCount, "only the failed delegation is a tool failure")
 }
 
-// A rebuild reparses Kiro sources, so a session archived
+// Data version 151 reparses Kiro sources in place, so a session archived
 // before spawns were parsed gains its Task calls without changing identity.
-func TestKiroSubagentRebuildRecordsSpawns(t *testing.T) {
+func TestKiroSubagentUpgradeRecordsSpawnsInPlace(t *testing.T) {
 	ctx := t.Context()
 	root := t.TempDir()
 	writeKiroSessionWithSubagent(t, root)
@@ -460,11 +460,11 @@ func TestKiroSubagentRebuildRecordsSpawns(t *testing.T) {
 	reopened, err := db.OpenIsolated(ctx, archivePath)
 	require.NoError(t, err)
 	defer func() { require.NoError(t, reopened.Close()) }()
+	assert.False(t, reopened.NeedsResync(), "the archive upgrades in place")
 	require.Empty(t, kiroSpawnLinks(t, reopened, kiroSubagentParentID))
 	upgraded := sync.NewEngine(ctx, reopened, cfg)
 	defer upgraded.Close()
-	stats := upgraded.ResyncAll(ctx, nil)
-	require.True(t, stats.ArchiveRebuilt)
+	stats := upgraded.SyncAll(ctx, nil)
 	require.Zero(t, stats.Failed)
 	assert.Positive(t, stats.Synced)
 

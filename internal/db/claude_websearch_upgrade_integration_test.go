@@ -53,10 +53,7 @@ func TestClaudeSplitResponseWebSearchUpgradeRestoresTotal(t *testing.T) {
 
 	// Model version 170, which stored each record's own searches, without
 	// changing the source fingerprint.
-	scope := db.ScopedDataVersionProviders(170, 171)
-	version := db.CurrentDataVersion()
-	t.Cleanup(db.InstallDataVersionScopesForTest(map[int][]parser.AgentType{version: scope}))
-	previous := version - 1
+	const previous = 170
 	require.NoError(t, database.Update(ctx, func(tx *sql.Tx) error {
 		for uuid, count := range map[string]int{"a1": 2, "a2": 3} {
 			if _, err := tx.ExecContext(ctx, `UPDATE messages

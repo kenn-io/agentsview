@@ -53,10 +53,10 @@ func TestClaudeBlankThinkingUsageUpgradeRestoresUsage(t *testing.T) {
 	reopened, err := db.OpenIsolated(ctx, archivePath)
 	require.NoError(t, err)
 	defer func() { require.NoError(t, reopened.Close()) }()
+	assert.False(t, reopened.NeedsResync(), "the archive upgrades in place")
 	upgraded := sync.NewEngine(ctx, reopened, cfg)
 	defer upgraded.Close()
-	stats := upgraded.ResyncAll(ctx, nil)
-	require.True(t, stats.ArchiveRebuilt)
+	stats := upgraded.SyncAll(ctx, nil)
 	require.Zero(t, stats.Failed)
 	assert.Positive(t, stats.Synced)
 

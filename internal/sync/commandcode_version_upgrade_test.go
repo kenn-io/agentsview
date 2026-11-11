@@ -13,7 +13,7 @@ import (
 	"go.kenn.io/agentsview/internal/parser"
 )
 
-func TestCommandCodeRebuildReparsesPreviouslySkippedSource(t *testing.T) {
+func TestCommandCodeVersionUpgradeReparsesUnchangedSourceAndClearsSkip(t *testing.T) {
 	const (
 		rawSessionID = "00000000-0000-0000-0000-000000000001"
 		sessionID    = "commandcode:" + rawSessionID
@@ -52,9 +52,7 @@ func TestCommandCodeRebuildReparsesPreviouslySkippedSource(t *testing.T) {
 		Machine:   "local",
 	})
 	t.Cleanup(engine.Close)
-	stats := engine.ResyncAll(t.Context(), nil)
-	require.True(t, stats.ArchiveRebuilt)
-	assert.Equal(t, 1, stats.Synced)
+	assert.Equal(t, 1, engine.SyncAll(t.Context(), nil).Synced)
 	assert.Equal(t, db.CurrentDataVersion(), reopened.GetSessionDataVersion(t.Context(), sessionID))
 }
 

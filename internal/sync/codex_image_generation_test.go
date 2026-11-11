@@ -81,7 +81,7 @@ func TestCodexGeneratedImageStoredAsImageResult(t *testing.T) {
 	}
 }
 
-func TestCodexGeneratedImageRebuildReparsesUnchangedSource(t *testing.T) {
+func TestCodexGeneratedImageUpgradeReparsesUnchangedSource(t *testing.T) {
 	const uuid = "019eb791-cf7d-75c1-8439-9ed74c122b08"
 	png := testjsonl.SolidPNGBase64(2, 2, color.RGBA{G: 180, A: 255})
 	root := t.TempDir()
@@ -135,11 +135,10 @@ func TestCodexGeneratedImageRebuildReparsesUnchangedSource(t *testing.T) {
 	database, err := db.OpenIsolated(t.Context(), dbPath)
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, database.Close()) })
+	assert.False(t, database.NeedsResync(), "the archive upgrades in place")
 	engine = NewEngine(t.Context(), database, EngineConfig{AgentDirs: agentDirs, Machine: "local"})
 	t.Cleanup(engine.Close)
-	stats := engine.ResyncAll(t.Context(), nil)
-	require.True(t, stats.ArchiveRebuilt)
-	require.Zero(t, stats.Failed)
+	require.NoError(t, engine.ReconcileWatchRoots(t.Context(), []string{root}, false))
 	assert.Equal(t, db.CurrentDataVersion(), database.GetSessionDataVersion(t.Context(), sessionID))
 	assert.Equal(t, want, resultContent(t, database))
 }
