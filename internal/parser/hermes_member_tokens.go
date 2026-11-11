@@ -16,9 +16,8 @@ func hermesHasTranscriptRevision(ctx context.Context, conn *sql.DB) (bool, error
 	return count == 1, err
 }
 
-// The same three endpoints describe direct and seeded tokens. Native indexes
-// bound whole-store message work to three seeks per session, independent of
-// history length. Direct fingerprints also support legacy stores without them.
+// Index-free stores retain the full deep fingerprint without repeated message
+// scans for token endpoints. Only indexed stores can use token-based skipping.
 func hermesMemberTokenQuery(revision, single, indexed bool) string {
 	rev := "0"
 	if revision {
@@ -28,21 +27,31 @@ func hermesMemberTokenQuery(revision, single, indexed bool) string {
 	if single {
 		where = " WHERE id = ?"
 	}
-	idIndex, timeIndex := "", ""
+	endpoints := `0, NULL, NULL`
 	if indexed {
-		idIndex = " INDEXED BY idx_messages_session_id"
-		timeIndex = " INDEXED BY idx_messages_session"
+		endpoints = `COALESCE((SELECT id FROM messages INDEXED BY idx_messages_session_id WHERE session_id=members.id ORDER BY id DESC LIMIT 1),0),
+ (SELECT timestamp FROM messages INDEXED BY idx_messages_session WHERE session_id=members.id ORDER BY timestamp LIMIT 1),
+ (SELECT timestamp FROM messages INDEXED BY idx_messages_session WHERE session_id=members.id ORDER BY timestamp DESC LIMIT 1)`
 	}
 	return `WITH members AS (SELECT ` + hermesStateSessionColumns + `, ` + rev + ` AS revision FROM sessions` + where + `)
- SELECT members.*,
- COALESCE((SELECT id FROM messages` + idIndex + ` WHERE session_id=members.id ORDER BY id DESC LIMIT 1),0),
- (SELECT timestamp FROM messages` + timeIndex + ` WHERE session_id=members.id ORDER BY timestamp LIMIT 1),
- (SELECT timestamp FROM messages` + timeIndex + ` WHERE session_id=members.id ORDER BY timestamp DESC LIMIT 1)
- FROM members ORDER BY members.id`
+ SELECT members.*, ` + endpoints + ` FROM members ORDER BY members.id`
+}
+
+// Gated callers already proved both native indexes. Ungated direct and seeded
+// callers discover them once per listing, so their token matches the gated one
+// when the store has both indexes and omits endpoints otherwise.
+func hermesTokenMetadata(ctx context.Context, conn *sql.DB, indexed bool) (revision, hasIndexes bool, err error) {
+	revision, err = hermesHasTranscriptRevision(ctx, conn)
+	if err != nil || indexed {
+		return revision, indexed, err
+	}
+	var indexes int
+	err = conn.QueryRowContext(ctx, `SELECT COUNT(*) FROM sqlite_master WHERE type='index' AND name IN ('idx_messages_session_id','idx_messages_session')`).Scan(&indexes)
+	return revision, indexes == 2, err
 }
 
 func listHermesMemberTokens(ctx context.Context, conn *sql.DB, id string, indexed bool, yield func(string, string, bool) error) error {
-	revision, err := hermesHasTranscriptRevision(ctx, conn)
+	revision, indexed, err := hermesTokenMetadata(ctx, conn, indexed)
 	if err != nil {
 		return err
 	}

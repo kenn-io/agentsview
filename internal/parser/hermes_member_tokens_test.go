@@ -255,6 +255,20 @@ func TestHermesMemberTokenHistoryGrowth(t *testing.T) {
 	require.NoError(t, rows.Err())
 	assert.Equal(t, 1, searches, "greatest ID must use its covering seek")
 	assert.Equal(t, 2, endpoints, "both timestamp endpoints must use covering seeks")
+
+	legacy, _ := hermesTokenFixture(t)
+	_, err = legacy.ExecContext(t.Context(), `DROP INDEX idx_messages_session_id; DROP INDEX idx_messages_session`)
+	require.NoError(t, err)
+	legacyRows, err := legacy.QueryContext(t.Context(), "EXPLAIN QUERY PLAN "+hermesMemberTokenQuery(true, false, false))
+	require.NoError(t, err)
+	defer func() { require.NoError(t, legacyRows.Close()) }()
+	for legacyRows.Next() {
+		var id, parent, unused int
+		var detail string
+		require.NoError(t, legacyRows.Scan(&id, &parent, &unused, &detail))
+		assert.NotContains(t, detail, "messages", "legacy token listing must not scan message histories")
+	}
+	require.NoError(t, legacyRows.Err())
 }
 
 func TestHermesMemberSchemaGate(t *testing.T) {
