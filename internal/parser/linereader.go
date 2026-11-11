@@ -42,16 +42,17 @@ func (cr *countingReader) Read(p []byte) (int, error) {
 // lineReader reads JSONL files line by line, skipping lines that
 // exceed maxLen rather than aborting. The buffer starts small and
 // grows on demand up to maxLen. After iteration, call Err() to
-// check for I/O errors (as opposed to normal EOF).
+// check for I/O errors (as opposed to normal EOF) and SkippedLines()
+// to count records the caller never saw.
 type lineReader struct {
-	r                *bufio.Reader
-	cr               *countingReader
-	maxLen           int
-	buf              []byte
-	err              error
-	bytesRead        int64 // total bytes consumed (from countingReader)
-	terminated       bool  // the returned line ended with a newline
-	skippedOversized bool  // callers requiring complete input must reject skipped records
+	r            *bufio.Reader
+	cr           *countingReader
+	maxLen       int
+	buf          []byte
+	err          error
+	bytesRead    int64 // total bytes consumed (from countingReader)
+	terminated   bool  // the returned line ended with a newline
+	skippedLines int   // oversized records dropped before reaching the caller
 }
 
 const maxPooledLineBufferSize = 256 << 10
@@ -83,7 +84,7 @@ func newLineReaderContext(
 	lr.err = nil
 	lr.bytesRead = 0
 	lr.terminated = false
-	lr.skippedOversized = false
+	lr.skippedLines = 0
 	return lr
 }
 
@@ -103,7 +104,7 @@ func releaseLineReader(lr *lineReader) {
 	lr.err = nil
 	lr.bytesRead = 0
 	lr.terminated = false
-	lr.skippedOversized = false
+	lr.skippedLines = 0
 	lineReaderPool.Put(lr)
 }
 
@@ -141,6 +142,15 @@ func (lr *lineReader) nextBytes() ([]byte, bool) {
 // Err returns the first non-EOF read error encountered, or nil.
 func (lr *lineReader) Err() error {
 	return lr.err
+}
+
+// SkippedLines returns how many records the reader dropped without
+// returning them, because they exceeded maxLen. Blank lines are not
+// counted. Session parsers add this to ParsedSession.MalformedLines so
+// a session that lost records does not look complete; parsers that
+// require complete input reject the source when it is nonzero.
+func (lr *lineReader) SkippedLines() int {
+	return lr.skippedLines
 }
 
 // readLine reads a full line, returning "" for blank/oversized
@@ -185,7 +195,7 @@ func (lr *lineReader) readLineBytes() ([]byte, error) {
 			lr.updateBytesRead()
 			lr.terminated = lr.bytesRead-start > int64(len(chunk))
 			if len(chunk) > lr.maxLen {
-				lr.skippedOversized = true
+				lr.skippedLines++
 				return nil, nil
 			}
 			return chunk, nil
@@ -194,7 +204,7 @@ func (lr *lineReader) readLineBytes() ([]byte, error) {
 		lr.buf = append(lr.buf, chunk...)
 
 		if len(lr.buf) > lr.maxLen {
-			lr.skippedOversized = true
+			lr.skippedLines++
 			oversized = true
 			lr.buf = lr.buf[:0]
 			if !isPrefix {

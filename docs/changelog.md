@@ -57,6 +57,13 @@ The latest release is
   identity. Web searches spread across such a response are now all billed.
   After the upgrade, the SQLite usage cache rebuilds once and the next sync
   reparses Claude, Cowork, Qoder, and iCodeMate sessions in place.
+- Sessions that lost part of their source now say so instead of looking
+  complete. A transcript record larger than 64 MiB, or an OpenCode, Shelley, or
+  Forge database row that does not decode, now counts toward the session's
+  malformed-lines badge and the sync summary's parser anomalies. Any tokens on
+  the lost records are still missing, but the count shows that the totals may
+  be low. Existing sessions pick up the count the next time their source
+  changes; the upgrade does not trigger a resync.
 
 ## 0.47.0
 

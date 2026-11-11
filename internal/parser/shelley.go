@@ -411,7 +411,7 @@ func parseShelleyConversationFromDB(ctx context.Context,
 	if err != nil {
 		return nil, err
 	}
-	messages, fingerprint, err := loadShelleyMessages(ctx, conn, conv)
+	messages, fingerprint, malformed, err := loadShelleyMessages(ctx, conn, conv)
 	if err != nil {
 		return nil, err
 	}
@@ -421,6 +421,7 @@ func parseShelleyConversationFromDB(ctx context.Context,
 	if !ok {
 		return nil, nil
 	}
+	result.Session.MalformedLines = malformed
 	return &result, nil
 }
 
@@ -468,9 +469,11 @@ type shelleyMessageRow struct {
 	createdAt  string
 }
 
+// loadShelleyMessages also returns how many rows carried llm_data that did not
+// decode, so the session reports the content it could not read.
 func loadShelleyMessages(ctx context.Context,
 	conn *sql.DB, conv shelleyConversationRow,
-) ([]ParsedMessage, string, error) {
+) ([]ParsedMessage, string, int, error) {
 	// All generations are included, ordered by sequence_id. A generation
 	// bump is a context-reset/compaction boundary within the conversation
 	// (e.g. distillation); older-generation rows remain as real history
@@ -486,13 +489,14 @@ func loadShelleyMessages(ctx context.Context,
 		conv.conversationID,
 	)
 	if err != nil {
-		return nil, "", fmt.Errorf(
+		return nil, "", 0, fmt.Errorf(
 			"listing shelley messages for %s: %w", conv.conversationID, err,
 		)
 	}
 	defer rows.Close()
 
 	var messages []ParsedMessage
+	malformed := 0
 	h := fnv.New64a()
 	shelleyDigestConversation(h, conv)
 	for rows.Next() {
@@ -501,26 +505,32 @@ func loadShelleyMessages(ctx context.Context,
 			&r.sequenceID, &r.msgType, &r.llmData,
 			&r.userData, &r.usageData, &r.createdAt,
 		); err != nil {
-			return nil, "", fmt.Errorf("scanning shelley message: %w", err)
+			return nil, "", 0, fmt.Errorf("scanning shelley message: %w", err)
 		}
 		// Digest every parser-observed row field (even for rows
 		// decodeShelleyMessage drops) in sequence_id order, exactly as
 		// ListShelleyConversationMetas does, so the stored fingerprint
 		// matches the meta skip query; a mismatch would re-parse forever.
 		shelleyDigestMessage(h, r)
-		if msg, ok := decodeShelleyMessage(r, conv.model); ok {
+		msg, ok, rowMalformed := decodeShelleyMessage(r, conv.model)
+		if rowMalformed {
+			malformed++
+		}
+		if ok {
 			messages = append(messages, msg)
 		}
 	}
 	if err := rows.Err(); err != nil {
-		return nil, "", err
+		return nil, "", 0, err
 	}
-	return messages, shelleyFingerprint(h), nil
+	return messages, shelleyFingerprint(h), malformed, nil
 }
 
+// decodeShelleyMessage reports malformed when the row's llm_data does not
+// decode; the row may still yield a message from user_data or usage.
 func decodeShelleyMessage(
 	r shelleyMessageRow, convModel string,
-) (ParsedMessage, bool) {
+) (msg ParsedMessage, ok bool, malformed bool) {
 	var role RoleType
 	isSystem := false
 	switch r.msgType {
@@ -542,9 +552,11 @@ func decodeShelleyMessage(
 	)
 
 	if r.llmData != "" {
-		var msg shelleyLLMMessage
-		if err := json.Unmarshal([]byte(r.llmData), &msg); err == nil {
-			for _, c := range msg.Content {
+		var llm shelleyLLMMessage
+		if err := json.Unmarshal([]byte(r.llmData), &llm); err != nil {
+			malformed = true
+		} else {
+			for _, c := range llm.Content {
 				switch c.Type {
 				case shelleyContentText:
 					if c.Text != "" {
@@ -590,7 +602,7 @@ func decodeShelleyMessage(
 		content = shelleyUserDataText(r.userData)
 	}
 
-	msg := ParsedMessage{
+	msg = ParsedMessage{
 		Ordinal:       int(r.sequenceID),
 		Role:          role,
 		Content:       content,
@@ -614,11 +626,11 @@ func decodeShelleyMessage(
 	if content == "" && thinking == "" &&
 		len(toolCalls) == 0 && len(toolResults) == 0 {
 		if !msg.HasContextTokens && !msg.HasOutputTokens {
-			return ParsedMessage{}, false
+			return ParsedMessage{}, false, malformed
 		}
 		msg.IsSystem = true
 	}
-	return msg, true
+	return msg, true, malformed
 }
 
 // shelleyToolInput returns the raw tool input JSON, normalizing the

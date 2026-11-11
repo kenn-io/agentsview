@@ -464,7 +464,7 @@ func loadJunieIndexSnapshot(
 	if err := lr.Err(); err != nil {
 		return nil, false, fmt.Errorf("reading Junie index %s: %w", path, err)
 	}
-	if lr.skippedOversized {
+	if lr.SkippedLines() > 0 {
 		return nil, false, fmt.Errorf("%w %s: record exceeds %d bytes", errInvalidJunieIndex, path, maxLineSize)
 	}
 	return summaries, true, nil

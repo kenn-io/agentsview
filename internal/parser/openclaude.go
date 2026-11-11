@@ -645,7 +645,7 @@ func parseOpenClaudeSession(
 		EndedAt:          endedAt,
 		MessageCount:     len(messages),
 		UserMessageCount: userCount,
-		MalformedLines:   malformedLines,
+		MalformedLines:   malformedLines + lr.SkippedLines(),
 		IsTruncated:      isTruncated,
 		File: FileInfo{
 			Path:  path,

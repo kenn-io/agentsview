@@ -539,7 +539,7 @@ func parseGrokChatHistory(ctx context.Context, path string) ([]ParsedMessage, in
 	if err := lr.Err(); err != nil {
 		return nil, malformed, fmt.Errorf("reading %s: %w", path, err)
 	}
-	return messages, malformed, nil
+	return messages, malformed + lr.SkippedLines(), nil
 }
 
 type grokTimestampAnchor struct {

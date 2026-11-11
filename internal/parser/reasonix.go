@@ -278,6 +278,7 @@ func parseReasonixSession(
 	}
 
 	sess := &ParsedSession{
+		MalformedLines:   lr.SkippedLines(),
 		ID:               sessionID,
 		Project:          project,
 		Machine:          machine,

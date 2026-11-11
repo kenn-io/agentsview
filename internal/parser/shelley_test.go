@@ -451,6 +451,9 @@ func TestParseShelleyRobustContent(t *testing.T) {
 
 	// Errored-turn tokens roll up into the session totals.
 	assert.Equal(t, 40, result.Session.TotalOutputTokens, "session output total")
+	// Only the undecodable llm_data row is lost; the unknown content type
+	// in a decodable row is not.
+	assert.Equal(t, 1, result.Session.MalformedLines, "malformed llm_data row counted")
 }
 
 func TestParseShelleyUsageOnlyRows(t *testing.T) {

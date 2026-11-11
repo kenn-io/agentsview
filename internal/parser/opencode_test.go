@@ -2668,3 +2668,51 @@ func TestOpenCodeStorageFingerprintMissingDetectsContentRewrite(
 	assert.True(t, OpenCodeStorageFingerprintMissing(stored, current),
 		"expected content rewrite to invalidate fingerprint")
 }
+
+func TestParseOpenCodeDB_CountsUndecodableMessageRows(t *testing.T) {
+	tests := []struct {
+		name         string
+		withV2       bool
+		wantMessages []string
+	}{
+		{
+			name:         "legacy rows only",
+			wantMessages: []string{"Hello, help me with Go", "Sure, I can help with Go."},
+		},
+		{
+			// The v2 path merges legacy rows into the projection and builds
+			// the session separately, so the count must survive the merge.
+			name:         "legacy rows merged into v2 projection",
+			withV2:       true,
+			wantMessages: []string{"Hello, help me with Go", "Sure, I can help with Go.", "Projected reply"},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			dbPath, seeder, db := newTestDB(t)
+			defer db.Close()
+			seedStandardSession(t, seeder)
+			seeder.AddMessage("msg_bad", "ses_abc", 1700000005000, 1700000005000, `{"role":"assistant"`)
+			seeder.AddPart("prt_bad", "msg_bad", "ses_abc", 1700000005000, 1700000005000, `{"type":"text","text":"lost text"}`)
+			if tt.withV2 {
+				_, err := db.ExecContext(t.Context(), openCodeV2TestSchema)
+				require.NoError(t, err)
+				_, err = db.ExecContext(t.Context(), `INSERT INTO session_message VALUES
+ ('msg_v2', 'ses_abc', 'assistant', 10, 1700000020000, 1700000020000,
+ '{"agent":"build","model":{"id":"gpt-5.4","providerID":"openai"},"time":{"created":1700000020000},"content":[{"type":"text","id":"txt_v2","text":"Projected reply"}]}')`)
+				require.NoError(t, err)
+			}
+
+			sess, msgs, err := parseOpenCodeDBSession(dbPath, "ses_abc", "m")
+			require.NoError(t, err)
+			require.NotNil(t, sess)
+
+			assert.Equal(t, 1, sess.MalformedLines)
+			contents := make([]string, 0, len(msgs))
+			for _, m := range msgs {
+				contents = append(contents, m.Content)
+			}
+			assert.Equal(t, tt.wantMessages, contents)
+		})
+	}
+}

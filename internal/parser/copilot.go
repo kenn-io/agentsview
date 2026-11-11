@@ -749,6 +749,7 @@ func (p *copilotProvider) parseSessionWithStore(ctx context.Context,
 	}
 
 	sess := &ParsedSession{
+		MalformedLines:   lr.SkippedLines(),
 		ID:               sessionID,
 		Project:          b.project,
 		Machine:          machine,
