@@ -298,18 +298,11 @@ func rewriteManifestForImport(
 	m manifest, messages []db.Message,
 ) db.SessionBatchWrite {
 	importedID := m.Origin + "~" + m.NativeSessionID
-	session := m.Session.dbSession()
+	session := sessionFromManifest(m)
 	session.ID = importedID
 	session.Machine = m.Origin
-	session.SessionName = m.SessionName
 	session.DeletedAt = nil
 	session.DeletionCause = nil
-	clearImportedSessionSourceState(&session)
-	session.HasToolCalls = m.SessionHasToolCalls
-	session.HasContextData = m.SessionHasContextData
-	session.ApplyQualitySignals(m.SessionQualitySignals.dbQualitySignals())
-	session.SecretLeakCount = 0
-	session.SecretsRulesVersion = ""
 	session.SourceSessionID = prefixImportedSessionID(
 		m.Origin, session.SourceSessionID,
 	)
@@ -346,6 +339,18 @@ func rewriteManifestForImport(
 		DataVersion:     m.DataVersion,
 		ReplaceMessages: true,
 	}
+}
+
+func sessionFromManifest(m manifest) db.Session {
+	session := m.Session.dbSession()
+	clearImportedSessionSourceState(&session)
+	session.HasToolCalls = m.SessionHasToolCalls
+	session.HasContextData = m.SessionHasContextData
+	session.SessionName = m.SessionName
+	session.ApplyQualitySignals(m.SessionQualitySignals.dbQualitySignals())
+	session.SecretLeakCount = 0
+	session.SecretsRulesVersion = ""
+	return session
 }
 
 func clearImportedSessionSourceState(session *db.Session) {

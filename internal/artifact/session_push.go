@@ -206,23 +206,8 @@ func decodeSessionPush(data []byte) (db.SessionPushReceipt, db.SessionBatchWrite
 	if int64(len(envelope.Manifest)) > manifestDecodedLimit {
 		return zero, noWrite, errors.New("manifest exceeds limit")
 	}
-	// PR links are session metadata, outside the artifact graph preflights.
-	var metadata struct {
-		Session struct {
-			PRLinks jsontext.Value `json:"pr_links"`
-		} `json:"session"`
-	}
-	if err := json.Unmarshal(envelope.Manifest, &metadata); err != nil {
-		return zero, noWrite, err
-	}
-	if err := preflightJSONArrayCount(metadata.Session.PRLinks, "session push PR link", 256); err != nil {
-		return zero, noWrite, err
-	}
 	m, err := decodeManifestWithLimits(envelope.Manifest, limits)
 	if err != nil {
-		return zero, noWrite, err
-	}
-	if err := json.Unmarshal(envelope.Manifest, &m, json.RejectUnknownMembers(true)); err != nil {
 		return zero, noWrite, err
 	}
 	if err := validateOriginID(m.Origin); err != nil {
@@ -274,15 +259,9 @@ func decodeSessionPush(data []byte) (db.SessionPushReceipt, db.SessionBatchWrite
 				if call.CallIndex != callIndex {
 					return zero, noWrite, errors.New("invalid tool call coordinate")
 				}
-				if err := db.ValidateSessionPushResultCollections(call.ResultContent); err != nil {
-					return zero, noWrite, err
-				}
 				for eventIndex, event := range call.ResultEvents {
 					if event.EventIndex != eventIndex {
 						return zero, noWrite, errors.New("invalid result event coordinate")
-					}
-					if err := db.ValidateSessionPushResultCollections(event.Content); err != nil {
-						return zero, noWrite, err
 					}
 				}
 			}
@@ -320,14 +299,7 @@ func decodeSessionPush(data []byte) (db.SessionPushReceipt, db.SessionBatchWrite
 		return zero, noWrite, err
 	}
 	receipt := db.SessionPushReceipt{SessionID: envelope.SessionID, SourceOrigin: m.Origin, PayloadHash: hashHex(canonical)}
-	session := m.Session.dbSession()
-	clearImportedSessionSourceState(&session)
-	session.HasToolCalls = m.SessionHasToolCalls
-	session.HasContextData = m.SessionHasContextData
-	session.SessionName = m.SessionName
-	session.ApplyQualitySignals(m.SessionQualitySignals.dbQualitySignals())
-	session.SecretLeakCount = 0
-	session.SecretsRulesVersion = ""
+	session := sessionFromManifest(m)
 	for i := range messages {
 		messages[i].SessionID = session.ID
 		for j := range messages[i].ToolCalls {

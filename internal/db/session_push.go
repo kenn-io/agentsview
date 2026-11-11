@@ -3,10 +3,8 @@ package db
 import (
 	"context"
 	"database/sql"
-	"encoding/json/jsontext"
 	"errors"
 	"fmt"
-	"strings"
 )
 
 // SessionPushReceipt pins the first snapshot accepted for an exact session ID.
@@ -153,58 +151,4 @@ func copySessionPushReceiptsTx(ctx context.Context, tx *sql.Tx) error {
 	_, err := tx.ExecContext(ctx, `INSERT OR IGNORE INTO main.session_push_receipts(session_id,source_origin,payload_hash)
 		SELECT session_id,source_origin,payload_hash FROM old_db.session_push_receipts`)
 	return err
-}
-
-// ValidateSessionPushResultCollections bounds JSON collections that image
-// projection parses inside otherwise opaque tool-result text. Ordinary text
-// and small malformed JSON retain their usual rendering behavior.
-func ValidateSessionPushResultCollections(content string) error {
-	// Inspect the same text storage and downstream image/signal parsers see.
-	content = SanitizeUTF8(content)
-	if err := validateSessionPushResultJSON(content); err != nil {
-		return err
-	}
-	var invalid error
-	scanSummarySections(content, func(_, _ int, raw jsontext.Value) {
-		if invalid == nil {
-			invalid = validateSessionPushResultJSON(string(raw))
-		}
-	})
-	return invalid
-}
-
-func validateSessionPushResultJSON(content string) error {
-	dec := jsontext.NewDecoder(strings.NewReader(content))
-	first, _ := dec.ReadToken() // Non-JSON result text is allowed.
-	if first.Kind() == jsontext.KindBeginArray {
-		type collection struct {
-			kind  jsontext.Kind
-			count int
-		}
-		stack := []collection{{kind: first.Kind()}}
-		for len(stack) > 0 {
-			token, _ := dec.ReadToken() // Malformed result text remains displayable.
-			if token.Kind() == 0 {
-				break
-			}
-			kind := token.Kind()
-			if kind == jsontext.KindEndArray || kind == jsontext.KindEndObject {
-				stack = stack[:len(stack)-1]
-				continue
-			}
-			current := &stack[len(stack)-1]
-			current.count++
-			limit := 4096
-			if current.kind == jsontext.KindBeginObject {
-				limit = 512
-			} // 256 name/value pairs
-			if current.count > limit {
-				return errors.New("session push result collection exceeds limit")
-			}
-			if kind == jsontext.KindBeginArray || kind == jsontext.KindBeginObject {
-				stack = append(stack, collection{kind: kind})
-			}
-		}
-	}
-	return nil
 }
