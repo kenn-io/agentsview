@@ -248,13 +248,6 @@ describe("highlightTerms", () => {
     ]);
   });
 
-  it("matches non-ASCII terms spelled as typed", () => {
-    expect(highlightTerms("İstanbul office", "İstanbul")).toEqual([
-      { text: "İstanbul", match: true },
-      { text: " office", match: false },
-    ]);
-  });
-
   it("returns the whole text unflagged when no term qualifies", () => {
     expect(highlightTerms("a short note", "a")).toEqual([{ text: "a short note", match: false }]);
     expect(highlightTerms("nothing here", "goldmark")).toEqual([

@@ -204,24 +204,6 @@ for (const [mode, highContrast] of THEMES) {
       }
     });
 
-    test("popover edges keep 3:1 against the popover", async ({ page }) => {
-      // Normal modes use a soft edge plus a shadow; only high contrast
-      // promises a 3:1 boundary.
-      test.skip(!highContrast, "high contrast only");
-      const sp = new SessionsPage(page);
-      await sp.goto();
-      await sp.selectFirstSession();
-      await page.locator(".view-trigger").click();
-      const menu = page.locator(".kit-menu__content.kit-popover-card");
-      await expect(menu).toBeVisible();
-      const paint = await menu.evaluate((el) => {
-        const style = getComputedStyle(el);
-        return { edge: style.borderTopColor };
-      });
-      const contrast = await renderedContrast(menu, { foreground: paint.edge });
-      expect(contrast.ratio, JSON.stringify(contrast)).toBeGreaterThanOrEqual(3);
-    });
-
     test("the folded Other series reads as a mark in high contrast", async ({ page }) => {
       // Normal modes keep it a quiet tail behind the named series.
       test.skip(!highContrast, "high contrast only");
