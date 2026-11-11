@@ -786,6 +786,30 @@ func TestExportToStorePublishesDependenciesBeforeCheckpointAndSkipsUnchanged(t *
 	assert.False(t, store.creates[1].Created)
 }
 
+func TestExportSkipsPushedSessionWithLocalMachine(t *testing.T) {
+	database := testExportDB(t)
+	ctx := t.Context()
+	const origin = "push-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+	require.NoError(t, database.SetSyncState(ctx, "artifact_local_machine_name", origin))
+	created, err := database.ApplySessionPush(ctx, db.SessionPushReceipt{SessionID: "pushed", SourceOrigin: origin, PayloadHash: strings.Repeat("a", 64)}, db.SessionBatchWrite{Session: db.Session{ID: "pushed", Agent: "claude", Machine: origin}, ReplaceMessages: true})
+	require.NoError(t, err)
+	require.True(t, created)
+	claims, err := database.PendingArtifactExports(ctx, 10)
+	require.NoError(t, err)
+	require.Len(t, claims, 1)
+	assert.Equal(t, "pushed", claims[0].SessionID)
+	store, err := newProtocolTestStore(t.TempDir())
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, store.Close()) })
+	for _, full := range []bool{false, true} {
+		_, err := ExportToStore(ctx, database, store, ExportOptions{Origin: contractOrigin, Full: full})
+		require.NoError(t, err)
+		page, err := firstStoreEntryPage(ctx, store, contractOrigin, KindManifests, maxArtifactListPageSize)
+		require.NoError(t, err)
+		assert.Empty(t, page.Items)
+	}
+}
+
 func TestExportManifestVersionTracksPRLinks(t *testing.T) {
 	for _, links := range [][]db.PRLink{nil, {{URL: "https://github.com/owner/repo/pull/7", Host: "github.com", Repository: "owner/repo", Number: 7}}} {
 		database := testExportDB(t)
@@ -1517,7 +1541,7 @@ func TestExportToStorePublicationRevisionRejectsPhysicallyCreatedStaleCheckpoint
 	usageA, err := first.GetUsageEvents(ctx, "session-a")
 	require.NoError(t, err)
 	manifestA, _, err := exportLoadedSessionToStore(
-		ctx, filesystem, contractOrigin, sessionA, messagesA, usageA, nil, productionArtifactLimits(),
+		ctx, filesystem, contractOrigin, sessionA, messagesA, usageA, nil, productionArtifactLimits(), false,
 	)
 	require.NoError(t, err)
 	revisionA, changed, err := first.ApplyArtifactPublicationChanges(ctx, contractOrigin,
@@ -1543,7 +1567,7 @@ func TestExportToStorePublicationRevisionRejectsPhysicallyCreatedStaleCheckpoint
 	usageB, err := second.GetUsageEvents(ctx, "session-b")
 	require.NoError(t, err)
 	manifestB, _, err := exportLoadedSessionToStore(
-		ctx, filesystem, contractOrigin, sessionB, messagesB, usageB, nil, productionArtifactLimits(),
+		ctx, filesystem, contractOrigin, sessionB, messagesB, usageB, nil, productionArtifactLimits(), false,
 	)
 	require.NoError(t, err)
 	revisionB, changed, err := second.ApplyArtifactPublicationChanges(ctx, contractOrigin,

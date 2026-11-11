@@ -231,6 +231,7 @@ type Server struct {
 	telemetryCapture http.Handler
 
 	artifactExchangeRunner ArtifactExchangeRunner
+	sessionPushMu          gosync.Mutex
 	rawSyncTenant          string
 	frictionRunner         *review.Runner
 	// The friction job runs its automatic filing passes sequentially.

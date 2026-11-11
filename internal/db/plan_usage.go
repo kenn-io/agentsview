@@ -185,6 +185,9 @@ func (db *DB) ReplaceSessionPlanUsage(
 		return fmt.Errorf("beginning plan usage tx: %w", err)
 	}
 	defer func() { _ = tx.Rollback() }()
+	if err := checkSessionPushReservationTx(ctx, tx, sessionID); err != nil {
+		return err
+	}
 	if err := replaceSessionPlanUsageTx(tx, sessionID, p, true); err != nil {
 		return err
 	}

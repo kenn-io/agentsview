@@ -2,6 +2,7 @@ package db
 
 import (
 	"bytes"
+	"context"
 	"crypto/sha256"
 	"encoding/base64"
 	"encoding/hex"
@@ -17,6 +18,7 @@ import (
 
 	"go.kenn.io/agentsview/internal/assets"
 	"go.kenn.io/agentsview/internal/config"
+	"go.kenn.io/agentsview/internal/ctxio"
 )
 
 // ToolImageStats describes inline image payloads found by the projection.
@@ -721,7 +723,7 @@ func retainedInlineFile(raw jsontext.Value, index int, body io.Writer) (Retained
 var ErrImageTooLarge = errors.New("image exceeds size limit")
 
 // ReadRetainedImage reads the indexed retained image with a bounded byte limit.
-func ReadRetainedImage(content string, index int, assetsDir string, limit int64) ([]byte, error) {
+func ReadRetainedImage(ctx context.Context, content string, index int, assetsDir string, limit int64) ([]byte, error) {
 	var found jsontext.Value
 	var buf bytes.Buffer
 	count := 0
@@ -759,23 +761,11 @@ func ReadRetainedImage(content string, index int, assetsDir string, limit int64)
 		if p.ByteSize > limit {
 			return nil, fmt.Errorf("retained image %d exceeds %d bytes: %w", index, limit, ErrImageTooLarge)
 		}
-		hash, ext, ok := assetImageDigest(p.ImageRef)
-		if !ok {
-			return nil, errors.New("invalid image reference")
+		body, media, err := readImageAsset(ctx, p.ImageRef, assetsDir, limit, &p.ByteSize, nil)
+		if err == nil && media != p.MediaType {
+			return nil, errors.New("image asset media type mismatch")
 		}
-		root, err := os.OpenRoot(assetsDir)
-		if err != nil {
-			return nil, err
-		}
-		defer root.Close()
-		file, err := root.Open(hash + ext)
-		if err != nil {
-			return nil, err
-		}
-		defer file.Close()
-		if body, err = io.ReadAll(io.LimitReader(file, limit+1)); err != nil {
-			return nil, err
-		}
+		return body, err
 	} else if int64(len(body)) > limit {
 		return nil, fmt.Errorf("retained image %d exceeds %d bytes: %w", index, limit, ErrImageTooLarge)
 	}
@@ -783,4 +773,230 @@ func ReadRetainedImage(content string, index int, assetsDir string, limit int64)
 		return nil, fmt.Errorf("retained image %d exceeds %d bytes", index, limit)
 	}
 	return body, nil
+}
+
+// readImageAsset validates an asset before embedding it in another archive.
+func readImageAsset(ctx context.Context, ref, dir string, limit int64, expected *int64, charge func(int64) error) ([]byte, string, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, "", err
+	}
+	digest, ext, ok := assetImageDigest(ref)
+	if !ok {
+		return nil, "", errors.New("invalid image reference")
+	}
+	media, _ := assets.MediaTypeForExt(ext)
+	root, err := os.OpenRoot(dir)
+	if err != nil {
+		return nil, "", err
+	}
+	defer root.Close()
+	entry, err := root.Lstat(digest + ext)
+	if err != nil {
+		return nil, "", err
+	}
+	if !entry.Mode().IsRegular() {
+		return nil, "", errors.New("image asset is not a regular file")
+	}
+	file, err := root.Open(digest + ext)
+	if err != nil {
+		return nil, "", err
+	}
+	defer file.Close()
+	info, err := file.Stat()
+	if err != nil {
+		return nil, "", err
+	}
+	if !info.Mode().IsRegular() {
+		return nil, "", errors.New("image asset is not a regular file")
+	}
+	if info.Size() > limit {
+		return nil, "", fmt.Errorf("image asset exceeds %d bytes", limit)
+	}
+	if expected != nil && info.Size() != *expected {
+		return nil, "", errors.New("image asset size mismatch")
+	}
+	if charge != nil {
+		if err := charge(info.Size()); err != nil {
+			return nil, "", err
+		}
+	}
+	body, err := io.ReadAll(io.LimitReader(ctxio.Reader{Context: ctx, Reader: file}, info.Size()+1))
+	if err != nil {
+		return nil, "", err
+	}
+	if int64(len(body)) != info.Size() {
+		return nil, "", errors.New("image asset size changed")
+	}
+	sum := sha256.Sum256(body)
+	if hex.EncodeToString(sum[:]) != digest {
+		return nil, "", errors.New("image asset digest mismatch")
+	}
+	return body, media, nil
+}
+
+// ProjectSessionPushImages embeds the selected transcript's local image assets.
+func ProjectSessionPushImages(ctx context.Context, messages []Message, dir string, limit int64) ([]Message, error) {
+	remaining := limit
+	resolve := func(ref string, expected *int64) (string, error) {
+		body, media, err := readImageAsset(ctx, ref, dir, limit, expected, func(size int64) error {
+			// Charge the encoded body and conservative JSON/URI overhead per occurrence.
+			if size > (remaining-1024)/4*3 || remaining < 1024 {
+				return ErrImageTooLarge
+			}
+			remaining -= int64(base64.StdEncoding.EncodedLen(int(size))) + 1024
+			return nil
+		})
+		if err != nil {
+			return "", fmt.Errorf("read transcript image: %w", err)
+		}
+		return "data:" + media + ";base64," + base64.StdEncoding.EncodeToString(body), nil
+	}
+	markdown := func(content string) (string, error) {
+		return projectMarkdownAssetImages(content, func(ref string) (string, error) { return resolve(ref, nil) })
+	}
+	tool := func(content string) (string, error) {
+		var out strings.Builder
+		var resultErr error
+		copied := 0
+		scanSummarySections(content, func(start, end int, raw jsontext.Value) {
+			if resultErr != nil {
+				return
+			}
+			var blocks []jsontext.Value
+			if json.Unmarshal(raw, &blocks) != nil {
+				return
+			}
+			changed := false
+			for i, block := range blocks {
+				p, ok := parseOffloadedImagePlaceholder(block)
+				if !ok {
+					if containsToolImageReference(block) {
+						resultErr = errors.New("invalid image asset reference")
+						return
+					}
+					continue
+				}
+				_, ext, _ := assetImageDigest(p.ImageRef)
+				media, _ := assets.MediaTypeForExt(ext)
+				if media != p.MediaType || (p.Version != nil && *p.Version != 1) {
+					resultErr = errors.New("invalid image asset media type")
+					return
+				}
+				uri, err := resolve(p.ImageRef, &p.ByteSize)
+				if err != nil {
+					resultErr = err
+					return
+				}
+				var fields map[string]jsontext.Value
+				if err := json.Unmarshal(block, &fields); err != nil {
+					resultErr = err
+					return
+				}
+				for key := range fields {
+					n := strings.ReplaceAll(strings.ReplaceAll(key, "_", ""), "-", "")
+					if strings.EqualFold(n, "type") || strings.EqualFold(n, "imageref") || strings.EqualFold(n, "text") || strings.EqualFold(n, "mediatype") || strings.EqualFold(n, "bytesize") || strings.EqualFold(n, "sha256") || strings.EqualFold(n, "version") {
+						delete(fields, key)
+					}
+				}
+				fields["type"] = jsontext.Value(`"input_image"`)
+				fields["image_url"], _ = json.Marshal(uri)
+				blocks[i], resultErr = json.Marshal(fields, json.Deterministic(true))
+				if resultErr != nil {
+					return
+				}
+				changed = true
+			}
+			if changed {
+				projected, err := json.Marshal(blocks)
+				if err != nil {
+					resultErr = err
+					return
+				}
+				out.WriteString(content[copied:start])
+				out.Write(projected)
+				copied = end
+			}
+		})
+		if resultErr != nil {
+			return "", resultErr
+		}
+		out.WriteString(content[copied:])
+		return markdown(out.String())
+	}
+	out := append([]Message(nil), messages...)
+	for i := range out {
+		var err error
+		out[i].Content, err = markdown(out[i].Content)
+		if err != nil {
+			return nil, err
+		}
+		out[i].ThinkingText, err = markdown(out[i].ThinkingText)
+		if err != nil {
+			return nil, err
+		}
+		out[i].ToolCalls = append([]ToolCall(nil), out[i].ToolCalls...)
+		for j := range out[i].ToolCalls {
+			call := &out[i].ToolCalls[j]
+			call.ResultContent, err = tool(call.ResultContent)
+			if err != nil {
+				return nil, err
+			}
+			call.ResultContentLength = ResolveResultContentLength(call.ResultContent, call.ResultContentLength)
+			call.ResultEvents = append([]ToolResultEvent(nil), call.ResultEvents...)
+			for k := range call.ResultEvents {
+				event := &call.ResultEvents[k]
+				event.Content, err = tool(event.Content)
+				if err != nil {
+					return nil, err
+				}
+				event.ContentLength = ResolveResultContentLength(event.Content, event.ContentLength)
+			}
+		}
+	}
+	return out, nil
+}
+
+// HasSessionPushImageReferences reports unresolved local image dependencies.
+func HasSessionPushImageReferences(messages []Message) bool {
+	markdownHasAsset := func(content string) bool {
+		found := false
+		_ = walkMarkdownImages(nil, content, func(ref string) error {
+			found = found || strings.HasPrefix(ref, "asset://")
+			return nil
+		})
+		return found
+	}
+	toolHasAsset := func(content string) bool {
+		found := false
+		scanSummarySections(content, func(_, _ int, raw jsontext.Value) {
+			var blocks []jsontext.Value
+			if json.Unmarshal(raw, &blocks) == nil {
+				for _, block := range blocks {
+					found = found || containsToolImageReference(block)
+				}
+			}
+		})
+		return found || markdownHasAsset(content)
+	}
+	for _, message := range messages {
+		if markdownHasAsset(message.Content) || markdownHasAsset(message.ThinkingText) {
+			return true
+		}
+		for _, call := range message.ToolCalls {
+			if toolHasAsset(call.ResultContent) {
+				return true
+			}
+			for _, event := range call.ResultEvents {
+				if toolHasAsset(event.Content) {
+					return true
+				}
+			}
+		}
+	}
+	return false
+}
+
+func containsToolImageReference(raw jsontext.Value) bool {
+	var image offloadedImagePlaceholder
+	return json.Unmarshal(raw, &image, json.MatchCaseInsensitiveNames(true)) == nil && image.Type == "agentsview_image" && strings.HasPrefix(image.ImageRef, "asset://")
 }

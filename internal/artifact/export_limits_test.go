@@ -151,7 +151,7 @@ func TestExportRejectsNativeSessionIDsImporterCannotRepresent(t *testing.T) {
 				messages,
 				nil,
 				nil,
-				productionArtifactLimits(),
+				productionArtifactLimits(), false,
 			)
 			require.ErrorIs(t, err, ErrArtifactExportRejected)
 			assert.Contains(t, err.Error(), "native session ID")
@@ -174,7 +174,7 @@ func TestExportRejectsPlanUsageGroupsImporterRejects(t *testing.T) {
 	}
 
 	_, _, err := exportLoadedSessionToStore(
-		t.Context(), store, contractOrigin, session, messages, nil, planUsage, limits,
+		t.Context(), store, contractOrigin, session, messages, nil, planUsage, limits, false,
 	)
 	require.ErrorIs(t, err, ErrArtifactExportRejected)
 	assert.Contains(t, err.Error(), "manifest plan usage group limit exceeded for sess-1: got 3, limit 2")
@@ -554,7 +554,7 @@ func TestExportSessionRejectsAggregateLimitsBeforeWritingWithSmallLimits(t *test
 			messages, err := database.GetAllMessages(ctx, "sess-1")
 			require.NoError(t, err)
 			_, _, err = exportLoadedSessionToStore(
-				ctx, store, origin, sess, messages, nil, nil, limits,
+				ctx, store, origin, sess, messages, nil, nil, limits, false,
 			)
 			require.Error(t, err)
 			require.ErrorIs(t, err, ErrArtifactExportRejected)

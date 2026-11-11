@@ -678,7 +678,8 @@ CREATE INDEX IF NOT EXISTS idx_provider_freshness_updated_at
 // call as hidden usage-only rows. Re-parse OpenCode-format, OpenClaw, QClaw,
 // Forge, Cline, Codex-format, and Gemini sources in place; source and session
 // identities are unchanged.)
-const dataVersion = 175
+// (176: prevent older binaries from writing archives with pushed sessions.)
+const dataVersion = SessionPushDataVersion
 
 const archiveOnlyVersionBase = 1 << 20
 

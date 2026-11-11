@@ -111,6 +111,9 @@ func (db *DB) ReplaceSessionUsageEvents(ctx context.Context,
 		return fmt.Errorf("beginning usage events tx: %w", err)
 	}
 	defer func() { _ = tx.Rollback() }()
+	if err := checkSessionPushReservationTx(ctx, tx, sessionID); err != nil {
+		return err
+	}
 
 	if err := replaceSessionUsageEventsTx(tx, sessionID, events, true); err != nil {
 		return err
