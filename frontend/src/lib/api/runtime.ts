@@ -185,3 +185,14 @@ export function isAbortError(err: unknown): boolean {
   };
   return candidate.name === "AbortError";
 }
+
+// A network failure or 5xx answer may succeed on a later try.
+export function isTransient(err: unknown): boolean {
+  return (
+    (err instanceof TypeError &&
+      /^(Failed to fetch|NetworkError when attempting to fetch resource\.?|Load failed)$/.test(
+        err.message,
+      )) ||
+    (err instanceof ApiError && err.status >= 500 && err.status < 600)
+  );
+}

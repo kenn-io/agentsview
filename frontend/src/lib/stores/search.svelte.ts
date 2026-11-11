@@ -1,6 +1,6 @@
 import { debounce } from "@kenn-io/kit-ui";
 import { SearchService } from "../api/generated/index.js";
-import { ApiError, isAbortError } from "../api/runtime.js";
+import { ApiError, isAbortError, isTransient } from "../api/runtime.js";
 import type { DbSearchResult as SearchResult } from "../api/generated/index.js";
 import { resolveRange, type RangeSelection } from "../components/shared/rangeSelection.js";
 import { reportErrorShown, reportTelemetry } from "../utils/telemetry.js";
@@ -262,16 +262,26 @@ export class SearchStore {
     try {
       let results: PaletteSearchResult[];
       if (mode === "fulltext") {
-        const response = await SearchService.getApiV1Search(
-          {
-            q: query,
-            project: project || undefined,
-            limit: PALETTE_RESULT_LIMIT,
-            sort: this.sort,
-            ...dates,
-          },
-          { signal },
-        );
+        const params = {
+          q: query,
+          project: project || undefined,
+          limit: PALETTE_RESULT_LIMIT,
+          sort: this.sort,
+          ...dates,
+        };
+        let response;
+        try {
+          response = await SearchService.getApiV1Search(params, { signal });
+        } catch (error: unknown) {
+          if (
+            requestVersion !== this.requestVersion ||
+            signal.aborted ||
+            isAbortError(error) ||
+            !isTransient(error)
+          )
+            throw error;
+          response = await SearchService.getApiV1Search(params, { signal });
+        }
         results = normalizeFullText(response.results ?? []);
       } else {
         const response = await SearchService.getApiV1SearchContent(

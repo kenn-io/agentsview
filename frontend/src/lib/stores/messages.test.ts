@@ -16,15 +16,8 @@ const runtimeMocks = vi.hoisted(() => ({
   signals: [] as AbortSignal[],
 }));
 
-vi.mock("../api/runtime.js", () => ({
-  ApiError: class ApiError extends Error {
-    constructor(
-      public readonly status: number,
-      message: string,
-    ) {
-      super(message);
-    }
-  },
+vi.mock("../api/runtime.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../api/runtime.js")>()),
   isAbortError: (err: unknown) => {
     if (err instanceof DOMException && err.name === "AbortError") {
       return true;
