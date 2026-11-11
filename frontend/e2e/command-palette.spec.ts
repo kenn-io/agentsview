@@ -7,6 +7,12 @@ async function openSearch(page: Page, query: string) {
   await input.fill(query);
 }
 
+function heldRequest() {
+  let release: () => void = () => {};
+  const held = new Promise<void>((resolve) => (release = resolve));
+  return { held, release };
+}
+
 for (const theme of ["light", "dark"] as const) {
   test(`search filters share one enabled field style in ${theme}`, async ({ page }) => {
     await page.addInitScript((t) => localStorage.setItem("theme", t), theme);
@@ -37,8 +43,7 @@ for (const theme of ["light", "dark"] as const) {
 }
 
 test("search shows placeholder rows at a result-list size while it runs", async ({ page }) => {
-  let release: () => void = () => {};
-  const held = new Promise<void>((resolve) => (release = resolve));
+  const { held, release } = heldRequest();
   await page.route("**/api/v1/search**", async (route) => {
     await held;
     await route.continue();
@@ -71,9 +76,16 @@ test("search shows placeholder rows at a result-list size while it runs", async 
 });
 
 test("Retry keeps focus and filters through another failure and success", async ({ page }) => {
+  await page.goto("/usage");
+  await openSearch(page, "synchronous DB read");
+  await page.locator(".palette-controls .kit-typeahead__trigger").click();
+  await page.locator(".kit-typeahead__option", { hasText: "project-duration" }).click();
+  await page.locator(".palette-controls .kit-date-range-picker__trigger").click();
+  await page.getByRole("button", { name: "90d", exact: true }).click();
+  await page.getByRole("button", { name: "Recency", exact: true }).click();
+  await expect(page.locator(".palette-item").first()).toBeVisible();
   const urls: string[] = [];
-  let release: () => void = () => {};
-  const held = new Promise<void>((resolve) => (release = resolve));
+  const { held, release } = heldRequest();
   await page.route("**/api/v1/search?**", async (route) => {
     urls.push(route.request().url());
     if (urls.length === 3) await held;
@@ -83,8 +95,7 @@ test("Retry keeps focus and filters through another failure and success", async 
       await route.continue();
     }
   });
-  await page.goto("/usage");
-  await openSearch(page, "synchronous DB read");
+  await page.locator(".palette-input").fill("synchronous DB");
   const retry = page.getByRole("button", { name: "Retry" });
   const input = page.locator(".palette-input");
   await expect(retry).toBeVisible();
@@ -99,7 +110,15 @@ test("Retry keeps focus and filters through another failure and success", async 
   await page.keyboard.press("Enter");
   await expect(page.locator(".palette-item").first()).toBeVisible();
   await expect(input).toBeFocused();
-  await expect(input).toHaveValue("synchronous DB read");
+  await expect(input).toHaveValue("synchronous DB");
   expect(urls).toHaveLength(5);
+  for (const url of urls) {
+    const params = new URL(url).searchParams;
+    expect(params.get("q")).toBe("synchronous DB");
+    expect(params.get("project")).toBe("project-duration");
+    expect(params.get("sort")).toBe("recency");
+    expect(params.get("date_from")).toBeTruthy();
+    expect(params.get("date_to")).toBeTruthy();
+  }
   expect(new Set(urls).size).toBe(1);
 });
