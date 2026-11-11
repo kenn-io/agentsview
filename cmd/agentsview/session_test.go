@@ -7,6 +7,7 @@ import (
 	"encoding/json/v2"
 	"errors"
 	"fmt"
+	"io"
 	"net"
 	"net/http"
 	"net/http/httptest"
@@ -3119,4 +3120,42 @@ func TestSessionUsageWaitRetriesTransientStatusFailure(t *testing.T) {
 	require.NotNil(t, out)
 	assert.False(t, out.WaitIncomplete)
 	assert.Equal(t, 2, checks)
+}
+
+func TestSessionUsageWaitCapsStartedRefresh(t *testing.T) {
+	previous := sessionUsageWaitTimeout
+	sessionUsageWaitTimeout = 100 * time.Millisecond
+	t.Cleanup(func() { sessionUsageWaitTimeout = previous })
+	ts, _ := newRemoteUsageServer(t, remoteUsageSpec{canonicalID: "remote-session"})
+	original := ts.Config.Handler
+	canceled := make(chan struct{})
+	release := make(chan struct{})
+	t.Cleanup(func() { close(release) })
+	ts.Config.Handler = http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/api/v1/sync/status":
+			writeJSONResponse(w, `{}`)
+			return
+		case "/api/v1/sessions/sync":
+			_, _ = io.Copy(io.Discard, r.Body)
+			select {
+			case <-r.Context().Done():
+				close(canceled)
+			case <-release:
+			}
+			return
+		}
+		original.ServeHTTP(w, r)
+	})
+	out, code, err := httpSessionUsageData(t.Context(), ts.URL, "", sessionUsageQuery{SessionID: "remote-session", Wait: true})
+	require.NoError(t, err)
+	require.NotNil(t, out)
+	assert.Equal(t, tokenUseExitOK, code)
+	assert.Equal(t, 42, out.TotalOutputTokens)
+	assert.True(t, out.RefreshIncomplete)
+	select {
+	case <-canceled:
+	case <-time.After(5 * time.Second):
+		require.FailNow(t, "server did not observe refresh cancellation")
+	}
 }

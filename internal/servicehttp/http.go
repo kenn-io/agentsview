@@ -20,10 +20,8 @@ import (
 	"go.kenn.io/agentsview/internal/export"
 	"go.kenn.io/agentsview/internal/requestsign"
 	"go.kenn.io/agentsview/internal/service"
+	syncpkg "go.kenn.io/agentsview/internal/sync"
 )
-
-// ErrSessionRefreshNotStarted identifies a refresh refused before it acquired the lock.
-var ErrSessionRefreshNotStarted = errors.New("session refresh did not start")
 
 // errHTTPNotFound is returned by the generated client adapter for 404 responses so callers
 // can distinguish "no such resource" from other transport errors
@@ -665,7 +663,7 @@ func (b *httpBackend) Sync(
 				Code string `json:"code"`
 			}
 			if json.Unmarshal(response.Body, &body) == nil && body.Code == service.SessionRefreshNotStartedCode {
-				return nil, fmt.Errorf("%w: %w", ErrSessionRefreshNotStarted, err)
+				return nil, fmt.Errorf("%w: %w", syncpkg.ErrSessionRefreshNotStarted, err)
 			}
 		}
 		return nil, err
