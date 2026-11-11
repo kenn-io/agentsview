@@ -28875,6 +28875,38 @@ func (d DBSessionPlanUsageGroup) Validate() error {
 	return runtime.ConvertValidatorError(typesValidator.Struct(d))
 }
 
+type DBSessionRecordedCost struct {
+	Computed     MoneyMoney `json:"computed"`
+	Difference   MoneyMoney `json:"difference"`
+	FallbackRows int64      `json:"fallback_rows"`
+	Recorded     MoneyMoney `json:"recorded"`
+	Rows         int64      `json:"rows"`
+	UnpricedRows int64      `json:"unpriced_rows"`
+}
+
+func (d DBSessionRecordedCost) Validate() error {
+	var errors runtime.ValidationErrors
+	if v, ok := any(d.Computed).(runtime.Validator); ok {
+		if err := v.Validate(); err != nil {
+			errors = errors.Append("Computed", err)
+		}
+	}
+	if v, ok := any(d.Difference).(runtime.Validator); ok {
+		if err := v.Validate(); err != nil {
+			errors = errors.Append("Difference", err)
+		}
+	}
+	if v, ok := any(d.Recorded).(runtime.Validator); ok {
+		if err := v.Validate(); err != nil {
+			errors = errors.Append("Recorded", err)
+		}
+	}
+	if len(errors) == 0 {
+		return nil
+	}
+	return errors
+}
+
 type DBSessionStats = db.SessionStats
 
 type DBSignalCalibration struct {
@@ -31160,6 +31192,7 @@ type SessionUsageResponse struct {
 	PeakContextTokens   int64                           `json:"peak_context_tokens"`
 	PlanUsage           *DBPlanUsageView                `json:"plan_usage,omitempty"`
 	Project             string                          `json:"project" validate:"required"`
+	RecordedCost        *DBSessionRecordedCost          `json:"recorded_cost,omitempty"`
 	RollupCost          *MoneyMoney                     `json:"rollup_cost,omitempty"`
 	RollupCostSource    *string                         `json:"rollup_cost_source,omitempty"`
 	RollupSubagentCount *int64                          `json:"rollup_subagent_count,omitempty"`
@@ -31209,6 +31242,13 @@ func (s SessionUsageResponse) Validate() error {
 	}
 	if err := typesValidator.Var(s.Project, "required"); err != nil {
 		errors = errors.Append("Project", err)
+	}
+	if s.RecordedCost != nil {
+		if v, ok := any(s.RecordedCost).(runtime.Validator); ok {
+			if err := v.Validate(); err != nil {
+				errors = errors.Append("RecordedCost", err)
+			}
+		}
 	}
 	if s.RollupCost != nil {
 		if v, ok := any(s.RollupCost).(runtime.Validator); ok {

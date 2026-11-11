@@ -470,6 +470,9 @@ func renderSessionUsageHuman(w io.Writer, out *sessionUsageOutput) error {
 	default:
 		fmt.Fprintf(w, "%s n/a\n", label("Cost"))
 	}
+	if line := recordedCostLine(out.RecordedCost); line != "" {
+		fmt.Fprintf(w, "%s %s\n", label("Agent cost"), line)
+	}
 	if out.AICredits > 0 {
 		fmt.Fprintf(w, "%s %.0f\n", label("AI Credits"), out.AICredits)
 	}
@@ -483,6 +486,28 @@ func renderSessionUsageHuman(w io.Writer, out *sessionUsageOutput) error {
 		fmt.Fprintf(w, "%s %s\n", label("Captured"), sanitizeTerminal(line))
 	}
 	return nil
+}
+
+// recordedCostLine compares the cost the agent recorded with AgentsView's
+// cost for the same rows, "" when no row carries a recorded cost.
+func recordedCostLine(rc *db.SessionRecordedCost) string {
+	if rc == nil {
+		return ""
+	}
+	rows := "rows"
+	if rc.Rows == 1 {
+		rows = "row"
+	}
+	line := fmt.Sprintf("%s recorded for %d %s; AgentsView %s",
+		money.FormatUSD(rc.Recorded, money.DisplayCents), rc.Rows, rows,
+		money.FormatUSD(rc.Computed, money.DisplayCents))
+	if rc.FallbackRows > 0 {
+		line += fmt.Sprintf(" (%d priced by the agent's cost)", rc.FallbackRows)
+	}
+	if rc.UnpricedRows > 0 {
+		line += fmt.Sprintf(" (%d unpriced)", rc.UnpricedRows)
+	}
+	return line
 }
 
 // planUsageLine describes a session's plan usage in one line, "" for a

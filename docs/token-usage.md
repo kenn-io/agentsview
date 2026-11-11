@@ -529,6 +529,12 @@ what a provider or gateway billed rather than an estimate; they follow the same
 rule. fx costs are kept only when fx has a billing record for every request.
 Existing sessions from these agents are re-read once after upgrading.
 
+`agentsview session usage <id>` compares the two: an `Agent cost:` line, and a
+`recorded_cost` object in JSON, show what the agent recorded next to what
+AgentsView charged for the same rows. A large gap usually means the agent
+used different rates, or that the transcript is missing calls the agent
+billed.
+
 Costs that an agent or provider reports as billed keep their existing
 treatment: the reported cost is the price.
 

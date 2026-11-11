@@ -307,3 +307,23 @@ func TestRenderSessionUsageHuman_SubagentLines(t *testing.T) {
 		})
 	}
 }
+
+func TestRenderSessionUsageHuman_AgentRecordedCost(t *testing.T) {
+	out := &sessionUsageOutput{
+		SessionID: "pi:s1", Agent: "pi",
+		HasTokenData: true, Cost: money.MustParseDollars("0.42"), HasCost: true,
+		Models: []string{"custom-model"},
+	}
+	var b strings.Builder
+	require.NoError(t, renderSessionUsageHuman(&b, out))
+	assert.NotContains(t, b.String(), "Agent cost", "no line without a recorded cost")
+
+	out.RecordedCost = &db.SessionRecordedCost{
+		Recorded: money.MustParseDollars("0.50"), Computed: money.MustParseDollars("0.42"),
+		Rows: 3, FallbackRows: 1, UnpricedRows: 1,
+	}
+	b.Reset()
+	require.NoError(t, renderSessionUsageHuman(&b, out))
+	assert.Contains(t, b.String(),
+		"Agent cost:    $0.50 recorded for 3 rows; AgentsView $0.42 (1 priced by the agent's cost) (1 unpriced)")
+}

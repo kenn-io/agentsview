@@ -115,6 +115,7 @@ export * from "./dbSessionLabels.ts";
 export * from "./dbSessionPage.ts";
 export * from "./dbSessionPlanUsageGroup.ts";
 export * from "./dbSessionProjectAssignment.ts";
+export * from "./dbSessionRecordedCost.ts";
 export * from "./dbSessionShapeResponse.ts";
 export * from "./dbSessionStats.ts";
 export * from "./dbSessionTiming.ts";
