@@ -303,10 +303,17 @@ func TestChangeStreamResumesAfterCursorWithoutRepeats(t *testing.T) {
 	caughtUp.ready(t)
 	seedChangeStreamSession(t, te, "stream-c")
 	te.broadcaster.Emit("messages")
-	live := caughtUp.changes(t, 1)
-	require.Len(t, live, 1)
+	// The seed writes the session before its messages, so the stream's first
+	// catch-up can send the session alone before the messages arrive.
+	live := caughtUp.changesWithMessages(t, 2)
 	assert.Equal(t, changes.To, live[0].From)
-	assert.Equal(t, []string{"stream-c", "stream-c"}, []string{live[0].Messages[0].SessionID, live[0].Messages[1].SessionID})
+	var sessions []string
+	for _, event := range live {
+		for _, message := range event.Messages {
+			sessions = append(sessions, message.SessionID)
+		}
+	}
+	assert.Equal(t, []string{"stream-c", "stream-c"}, sessions)
 }
 
 func TestChangeStreamResetsForeignAndInvalidCursors(t *testing.T) {
