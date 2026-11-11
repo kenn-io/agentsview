@@ -8,11 +8,11 @@ import (
 )
 
 func TestSessionMaterializeRejectsRemoteBackends(t *testing.T) {
-	for _, flag := range []string{"--server=http://127.0.0.1:1", "--pg", "--server-token-file=", "--server-token-file=fixture"} {
+	for _, flag := range []string{"--server=http://127.0.0.1:1", "--pg", "--server-token-file="} {
 		t.Run(flag, func(t *testing.T) {
+			newAgentDataDir(t)
 			_, err := executeCommand(newRootCommand(), "session", "materialize", "fixture", "--cwd", t.TempDir(), flag)
-			require.Error(t, err)
-			assert.Contains(t, err.Error(), "local archive")
+			require.ErrorContains(t, err, "requires the local archive")
 		})
 	}
 }

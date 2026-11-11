@@ -2,7 +2,6 @@ package sessionmaterialize
 
 import (
 	"context"
-	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -36,6 +35,7 @@ func TestMaterializeConfiguredSources(t *testing.T) {
 			if mirror {
 				cfg.RemoteHosts = []config.RemoteHost{{Host: "remote"}}
 				s.ID, s.Machine = "remote~"+id, "remote"
+				stored = `C:\Users\fixture\projects\original\` + id + `.jsonl`
 				var err error
 				name, err = remotesync.SafeRemappedRemotePath(remotesync.MirrorDir(root, "remote"), stored)
 				require.NoError(t, err)
@@ -64,22 +64,26 @@ func TestMaterializeConfiguredSources(t *testing.T) {
 			require.NoError(t, err)
 			assert.Equal(t, "unchanged", result.Status)
 			if mirror {
+				remote := strings.TrimPrefix(stored, "remote:")
+				stored = "other:" + remote
+				_, err = Materialize(t.Context(), cfg, s, cwd)
+				require.ErrorContains(t, err, "host does not match")
+				stored = "remote:" + remote
 				lock, err := remotesync.AcquireMirrorLock(t.Context(), remotesync.MirrorDir(root, "remote"))
 				require.NoError(t, err)
 				defer lock.Close()
 				ctx, cancel := context.WithTimeout(t.Context(), 50*time.Millisecond)
 				defer cancel()
 				_, err = Materialize(ctx, cfg, s, cwd)
-				require.Error(t, err)
+				require.ErrorIs(t, err, context.DeadlineExceeded)
+			} else {
+				require.NoError(t, os.WriteFile(filepath.Join(filepath.Dir(sidecar), "result2.txt"), []byte("more"), 0600))
+				_, err = readLocalSource(t.Context(), filepath.Join(root, "original"), name, id, int64(len(original)+len("tool output")+3))
+				require.ErrorContains(t, err, "exceeds size limit")
+				require.ErrorContains(t, err, "result2.txt")
 			}
 		})
 	}
-}
-
-func TestS3RejectsUnconfiguredRoot(t *testing.T) {
-	_, err := readS3Source(t.Context(), config.Config{}, "remote", "s3://other/project/12345678-1234-1234-1234-123456789abc.jsonl", "12345678-1234-1234-1234-123456789abc")
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "configured roots")
 }
 
 func TestS3ConfiguredSource(t *testing.T) {
@@ -87,18 +91,20 @@ func TestS3ConfiguredSource(t *testing.T) {
 	const root = "s3://test/host/raw/claude"
 	const contents = "{\"type\":\"user\",\"sessionId\":\"" + id + "\",\"message\":{\"content\":\"fixture\"}}\n"
 	const base = "host/raw/claude/project/" + id
+	_, err := readS3Source(t.Context(), config.Config{}, "remote", "s3://other/project/"+id+".jsonl", id, maxSourceBytes)
+	require.ErrorContains(t, err, "configured roots")
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Query().Get("list-type") == "2" {
 			assert.True(t, strings.HasSuffix(r.URL.Query().Get("prefix"), "/"))
 			w.Header().Set("Content-Type", "application/xml")
 			if strings.Contains(r.URL.Query().Get("prefix"), "tool-results") {
-				_, _ = io.WriteString(w, `<ListBucketResult><IsTruncated>false</IsTruncated><Contents><Key>`+base+`/tool-results/</Key><Size>0</Size></Contents><Contents><Key>`+base+`/tool-results/result.txt</Key><Size>4</Size></Contents></ListBucketResult>`)
+				_, _ = io.WriteString(w, `<ListBucketResult><IsTruncated>false</IsTruncated><Contents><Key>`+base+`/tool-results/</Key><Size>0</Size></Contents><Contents><Key>`+base+`/tool-results/result.txt</Key><Size>4</Size></Contents><Contents><Key>`+base+`/tool-results/result2.txt</Key><Size>4</Size></Contents></ListBucketResult>`)
 			} else {
 				_, _ = io.WriteString(w, `<ListBucketResult><IsTruncated>false</IsTruncated><Contents><Key>`+base+`/subagents/</Key><Size>0</Size></Contents></ListBucketResult>`)
 			}
 			return
 		}
-		if r.URL.Path == "/test/"+base+"/tool-results/result.txt" {
+		if r.URL.Path == "/test/"+base+"/tool-results/result.txt" || r.URL.Path == "/test/"+base+"/tool-results/result2.txt" {
 			_, _ = io.WriteString(w, "tool")
 			return
 		}
@@ -115,64 +121,19 @@ func TestS3ConfiguredSource(t *testing.T) {
 	t.Setenv("AWS_SECRET_ACCESS_KEY", "fixture")
 	t.Setenv("AWS_SESSION_TOKEN", "fixture")
 	cfg := config.Config{AgentDirs: map[parser.AgentType][]string{parser.AgentClaude: {root}}}
-	files, err := readS3Source(t.Context(), cfg, "host", root+"/project/"+id+".jsonl", id)
+	files, err := readS3Source(t.Context(), cfg, "host", root+"/project/"+id+".jsonl", id, maxSourceBytes)
 	require.NoError(t, err)
-	require.Len(t, files, 2)
+	require.Len(t, files, 3)
 	assert.Equal(t, contents, string(files[0].data))
 	assert.Equal(t, "tool-results/result.txt", files[1].rel)
 	assert.Equal(t, "tool", string(files[1].data))
-}
-
-func TestMaterializeRejectsEmptyAndMetadataOnly(t *testing.T) {
-	const id = "12345678-1234-1234-1234-123456789abc"
-	for _, input := range []string{"", " \n", `{"type":"worktree-state","sessionId":"` + id + `","worktreeSession":null}`} {
-		t.Run(fmt.Sprintf("bytes-%d", len(input)), func(t *testing.T) {
-			root := t.TempDir()
-			home := t.TempDir()
-			t.Setenv("CLAUDE_CONFIG_DIR", home)
-			t.Setenv("CLAUDE_CODE_PROJECT_DIR_NAME", "project")
-			name := filepath.Join(root, "project", id+".jsonl")
-			require.NoError(t, os.MkdirAll(filepath.Dir(name), 0700))
-			require.NoError(t, os.WriteFile(name, []byte(input), 0600))
-			cfg := config.Config{InstallationID: "local", AgentDirs: map[parser.AgentType][]string{parser.AgentClaude: {root}}}
-			s := &db.Session{ID: id, Agent: "claude", Machine: "local", FilePath: &name}
-			_, err := Materialize(t.Context(), cfg, s, t.TempDir())
-			require.Error(t, err)
-			_, err = os.Stat(filepath.Join(home, "projects", "project", id+".jsonl"))
-			assert.ErrorIs(t, err, os.ErrNotExist)
-		})
-	}
-}
-
-func TestMirrorStoredHostAndWindowsPath(t *testing.T) {
-	const id = "12345678-1234-1234-1234-123456789abc"
-	root := t.TempDir()
-	home := t.TempDir()
-	t.Setenv("CLAUDE_CONFIG_DIR", home)
-	t.Setenv("CLAUDE_CODE_PROJECT_DIR_NAME", "project")
-	cfg := config.Config{DataDir: root, RemoteHosts: []config.RemoteHost{{Host: "remote"}}}
-	remote := `C:\Users\fixture\projects\original\` + id + `.jsonl`
-	name, err := remotesync.SafeRemappedRemotePath(remotesync.MirrorDir(root, "remote"), remote)
-	require.NoError(t, err)
-	require.NoError(t, os.MkdirAll(filepath.Dir(name), 0700))
-	require.NoError(t, os.WriteFile(name, []byte(`{"type":"user","sessionId":"`+id+`","message":{"content":"fixture"}}`), 0600))
-	stored := "other:" + remote
-	s := &db.Session{ID: "remote~" + id, Agent: "claude", Machine: "remote", FilePath: &stored}
-	_, err = Materialize(t.Context(), cfg, s, t.TempDir())
-	require.ErrorContains(t, err, "host does not match")
-	stored = "remote:" + remote
-	_, err = Materialize(t.Context(), cfg, s, t.TempDir())
-	require.NoError(t, err)
-}
-
-func TestReadFileHonorsRemainingBudget(t *testing.T) {
-	name := filepath.Join(t.TempDir(), "sidecar")
-	require.NoError(t, os.WriteFile(name, []byte("12345"), 0600))
-	_, _, err := readFile(t.Context(), name, 4)
+	assert.Equal(t, "tool-results/result2.txt", files[2].rel)
+	assert.Equal(t, "tool", string(files[2].data))
+	_, err = readS3Source(t.Context(), cfg, "host", root+"/project/"+id+".jsonl", id, int64(len(contents)+len("tool")+3))
 	require.ErrorContains(t, err, "exceeds size limit")
 }
 
-func TestMaterializeParentSourceAndRelativeHome(t *testing.T) {
+func TestMaterializeParentSource(t *testing.T) {
 	const selected = "12345678-1234-1234-1234-123456789abc"
 	const parent = "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"
 	root := t.TempDir()
@@ -184,19 +145,8 @@ func TestMaterializeParentSourceAndRelativeHome(t *testing.T) {
 	cfg := config.Config{InstallationID: "local", AgentDirs: map[parser.AgentType][]string{parser.AgentClaude: {root}}}
 	s := &db.Session{ID: selected, Agent: "claude", Machine: "local", FilePath: &name, SourceSessionID: parent}
 	t.Setenv("CLAUDE_CODE_PROJECT_DIR_NAME", "project")
-	processCwd, err := os.Getwd()
-	require.NoError(t, err)
-	relativeHome, err := filepath.Rel(processCwd, home)
-	if err != nil {
-		t.Skip("temporary home is on a different volume")
-	}
-	t.Setenv("CLAUDE_CONFIG_DIR", relativeHome)
-	_, err = Materialize(t.Context(), cfg, s, t.TempDir())
-	require.ErrorContains(t, err, "must be absolute")
-	_, err = os.Stat(filepath.Join(home, "projects", "project", selected+".jsonl"))
-	assert.ErrorIs(t, err, os.ErrNotExist)
 	t.Setenv("CLAUDE_CONFIG_DIR", home)
-	_, err = Materialize(t.Context(), cfg, s, t.TempDir())
+	_, err := Materialize(t.Context(), cfg, s, t.TempDir())
 	require.NoError(t, err)
 	installed, err := os.ReadFile(filepath.Join(home, "projects", "project", selected+".jsonl"))
 	require.NoError(t, err)

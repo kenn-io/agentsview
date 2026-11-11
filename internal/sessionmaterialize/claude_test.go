@@ -6,34 +6,44 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"go.kenn.io/agentsview/internal/capture"
 )
 
 func TestClearClaudeWorktree(t *testing.T) {
 	const id = "12345678-1234-1234-1234-123456789abc"
 	tests := []struct {
-		name, input, suffix string
-		invalid             bool
+		name, input, suffix, sourceID string
+		noPrefix, invalid             bool
 	}{
-		{"bound", `{"type":"worktree-state","sessionId":"` + id + `","worktreeSession":{"worktreePath":"/old"}}`, "\n" + `{"type":"worktree-state","worktreeSession":null,"sessionId":"` + id + `"}` + "\n", false},
-		{"bound with newline", `{"type":"worktree-state","sessionId":"` + id + `","worktreeSession":{}}` + "\n", `{"type":"worktree-state","worktreeSession":null,"sessionId":"` + id + `"}` + "\n", false},
-		{"already cleared", `{"type":"worktree-state","sessionId":"` + id + `","worktreeSession":null}`, "", false},
-		{"last clears", `{"type":"worktree-state","sessionId":"` + id + `","worktreeSession":{}}` + "\n" + `{"type":"worktree-state","sessionId":"` + id + `","worktreeSession":null}`, "", false},
-		{"no state", `{"type":"user","message":"hello"}`, "", false},
-		{"other session", `{"type":"worktree-state","sessionId":"aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa","worktreeSession":{}}`, "", false},
-		{"missing id", `{"type":"worktree-state","worktreeSession":{}}`, "", true},
-		{"invalid id", `{"type":"worktree-state","sessionId":"other","worktreeSession":{}}`, "", true},
-		{"numeric id", `{"type":"worktree-state","sessionId":5,"worktreeSession":{}}`, "", true},
+		{name: "bound", input: `{"type":"worktree-state","sessionId":"` + id + `","worktreeSession":{"worktreePath":"/old"}}`, suffix: "\n" + `{"type":"worktree-state","worktreeSession":null,"sessionId":"` + id + `"}` + "\n"},
+		{name: "bound with newline", input: `{"type":"worktree-state","sessionId":"` + id + `","worktreeSession":{}}` + "\n", suffix: `{"type":"worktree-state","worktreeSession":null,"sessionId":"` + id + `"}` + "\n"},
+		{name: "already cleared", input: `{"type":"worktree-state","sessionId":"` + id + `","worktreeSession":null}`},
+		{name: "last clears", input: `{"type":"worktree-state","sessionId":"` + id + `","worktreeSession":{}}` + "\n" + `{"type":"worktree-state","sessionId":"` + id + `","worktreeSession":null}`},
+		{name: "no state", input: `{"type":"user","message":"hello"}`},
+		{name: "other session", input: `{"type":"worktree-state","sessionId":"aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa","worktreeSession":{}}`},
+		{name: "missing id", input: `{"type":"worktree-state","worktreeSession":{}}`, invalid: true},
+		{name: "invalid id", input: `{"type":"worktree-state","sessionId":"other","worktreeSession":{}}`, invalid: true},
+		{name: "empty", noPrefix: true, invalid: true},
+		{name: "whitespace", input: " \n", noPrefix: true, invalid: true},
+		{name: "metadata only", input: `{"type":"worktree-state","sessionId":"` + id + `","worktreeSession":null}`, noPrefix: true, invalid: true},
+		{name: "other conversation", input: `{"type":"user","sessionId":"aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa","message":{"role":"user","content":"other"}}`, noPrefix: true, invalid: true},
+		{name: "parent", input: `{"type":"user","sessionId":"aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa","message":{"content":"parent"}}` + "\n", sourceID: "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa", noPrefix: true},
+		{name: "wrong parent", input: `{"type":"user","sessionId":"aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa","message":{"content":"parent"}}` + "\n", sourceID: "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb", noPrefix: true, invalid: true},
 	}
 	prefix := `{"type":"user","sessionId":"` + id + `","message":{"role":"user","content":"hello"}}` + "\n"
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got, err := clearClaudeWorktree([]byte(prefix+tt.input), id, "")
+			input := tt.input
+			if !tt.noPrefix {
+				input = prefix + input
+			}
+			got, err := clearClaudeWorktree([]byte(input), id, tt.sourceID)
 			if tt.invalid {
 				require.Error(t, err)
 				return
 			}
 			require.NoError(t, err)
-			assert.Equal(t, prefix+tt.input+tt.suffix, string(got))
+			assert.Equal(t, input+tt.suffix, string(got))
 		})
 	}
 }
@@ -43,26 +53,31 @@ func TestClaudeDestination(t *testing.T) {
 	t.Setenv("CLAUDE_CONFIG_DIR", home)
 	t.Setenv("CLAUDE_CODE_PROJECT_DIR_NAME", "project-1")
 	const id = "12345678-1234-1234-1234-123456789abc"
-	got, _, _, err := claudeDestination(t.TempDir(), id)
+	cwd := t.TempDir()
+	got, _, _, err := claudeDestination(cwd, id)
 	require.NoError(t, err)
 	assert.Equal(t, filepath.Join(home, "projects", "project-1", id+".jsonl"), got)
 	t.Setenv("CLAUDE_CODE_PROJECT_DIR_NAME", "CON")
-	got, _, _, err = claudeDestination(t.TempDir(), id)
+	got, raw, project, err := claudeDestination(cwd, id)
 	require.NoError(t, err)
-	assert.NotEqual(t, filepath.Join(home, "projects", "CON", id+".jsonl"), got)
+	assert.Equal(t, filepath.Join(home, "projects", capture.ClaudeProjectDir(cwd), id+".jsonl"), got)
+	assert.Equal(t, home, raw)
+	assert.Empty(t, project)
 	t.Setenv("HOME", home)
 	t.Setenv("USERPROFILE", home)
 	t.Setenv("CLAUDE_CONFIG_DIR", "")
 	t.Setenv("CLAUDE_CODE_PROJECT_DIR_NAME", "project-1")
-	got, _, _, err = claudeDestination(t.TempDir(), id)
+	got, raw, project, err = claudeDestination(cwd, id)
 	require.NoError(t, err)
-	assert.NotEqual(t, filepath.Join(home, ".claude", "projects", "project-1", id+".jsonl"), got)
+	assert.Equal(t, filepath.Join(home, ".claude", "projects", capture.ClaudeProjectDir(cwd), id+".jsonl"), got)
+	assert.Empty(t, raw)
+	assert.Empty(t, project)
 	t.Setenv("CLAUDE_CONFIG_DIR", "relative-config")
 	t.Setenv("CLAUDE_CODE_PROJECT_DIR_NAME", "project-1")
 	_, _, _, err = claudeDestination(t.TempDir(), id)
 	require.ErrorContains(t, err, "must be absolute")
 	t.Setenv("CLAUDE_CONFIG_DIR", home+string(filepath.Separator))
-	_, raw, project, err := claudeDestination(t.TempDir(), id)
+	_, raw, project, err = claudeDestination(t.TempDir(), id)
 	require.NoError(t, err)
 	assert.Equal(t, home+string(filepath.Separator), raw)
 	assert.Equal(t, "project-1", project)
@@ -72,23 +87,4 @@ func TestClaudeDestination(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, decomposed, raw)
 	assert.Equal(t, filepath.Join(home, "é", "projects", project, id+".jsonl"), got)
-}
-
-func TestRejectMissingConversation(t *testing.T) {
-	const id = "12345678-1234-1234-1234-123456789abc"
-	for _, raw := range []string{"", "  ", `{"type":"worktree-state","sessionId":"` + id + `","worktreeSession":null}`, `{"type":"user","sessionId":"aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa","message":{"role":"user","content":"other"}}`} {
-		_, err := clearClaudeWorktree([]byte(raw), id, "")
-		require.Error(t, err)
-	}
-}
-
-func TestClaudeTranscriptParentIdentity(t *testing.T) {
-	const selected = "12345678-1234-1234-1234-123456789abc"
-	const parent = "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"
-	raw := []byte(`{"type":"user","sessionId":"` + parent + `","message":{"content":"parent"}}` + "\n")
-	got, err := clearClaudeWorktree(raw, selected, parent)
-	require.NoError(t, err)
-	assert.Equal(t, raw, got)
-	_, err = clearClaudeWorktree(raw, selected, "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb")
-	require.Error(t, err)
 }

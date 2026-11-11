@@ -62,7 +62,7 @@ func Materialize(ctx context.Context, cfg config.Config, session *db.Session, cw
 		if host != "" && host != session.Machine {
 			return Result{}, errors.New("S3 source host does not match session identity")
 		}
-		files, err = readS3Source(ctx, cfg, session.Machine, source, id)
+		files, err = readS3Source(ctx, cfg, session.Machine, source, id, maxSourceBytes)
 	} else if host != "" {
 		if !slices.ContainsFunc(cfg.RemoteHosts, func(remote config.RemoteHost) bool { return remote.Host == host }) {
 			return Result{}, errors.New("session host is not configured")
@@ -79,7 +79,7 @@ func Materialize(ctx context.Context, cfg config.Config, session *db.Session, cw
 			if lockErr != nil {
 				return Result{}, lockErr
 			}
-			files, err = readLocalSource(ctx, root, name, id)
+			files, err = readLocalSource(ctx, root, name, id, maxSourceBytes)
 			err = errors.Join(err, lock.Close())
 		}
 	} else {
@@ -148,7 +148,7 @@ func readConfiguredLocal(ctx context.Context, cfg config.Config, session *db.Ses
 	}
 	for _, root := range roots {
 		if within(root, ref.DisplayPath) {
-			return readLocalSource(ctx, root, ref.DisplayPath, id)
+			return readLocalSource(ctx, root, ref.DisplayPath, id, maxSourceBytes)
 		}
 	}
 	return nil, errors.New("source is outside configured roots")
@@ -167,11 +167,11 @@ func within(root, name string) bool {
 	return err == nil && rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator)) && !filepath.IsAbs(rel)
 }
 
-func readLocalSource(ctx context.Context, root, name, id string) ([]sourceFile, error) {
+func readLocalSource(ctx context.Context, root, name, id string, limit int64) ([]sourceFile, error) {
 	if filepath.Base(name) != id+".jsonl" || !within(root, name) {
 		return nil, errors.New("source identity or root mismatch")
 	}
-	data, info, err := readFile(ctx, name, maxSourceBytes)
+	data, info, err := readFile(ctx, name, limit)
 	if err != nil {
 		return nil, err
 	}
@@ -201,13 +201,13 @@ func readLocalSource(ctx context.Context, root, name, id string) ([]sourceFile, 
 			if err != nil {
 				return err
 			}
-			data, info, err := readFile(ctx, name, maxSourceBytes-total)
+			data, info, err := readFile(ctx, name, limit-total)
 			if err != nil {
-				return err
+				return fmt.Errorf("reading sidecar %s: %w", rel, err)
 			}
 			snapshots[name] = info
 			total += int64(len(data))
-			if total > maxSourceBytes {
+			if total > limit {
 				return errors.New("native source exceeds size limit")
 			}
 			out = append(out, sourceFile{rel: filepath.ToSlash(rel), data: data})
@@ -256,7 +256,7 @@ func readBounded(r io.Reader, limit int64) ([]byte, error) {
 	return data, nil
 }
 
-func readS3Source(ctx context.Context, cfg config.Config, machine, uri, id string) ([]sourceFile, error) {
+func readS3Source(ctx context.Context, cfg config.Config, machine, uri, id string, limit int64) ([]sourceFile, error) {
 	p, ok := parser.S3ProviderFor(parser.AgentClaude)
 	if !ok || p.S3SessionID(uri) != id {
 		return nil, errors.New("S3 source identity mismatch")
@@ -289,7 +289,7 @@ func readS3Source(ctx context.Context, cfg config.Config, machine, uri, id strin
 			return nil, err
 		}
 		defer r.Close()
-		data, err := readBounded(ctxio.Reader{Context: ctx, Reader: r}, maxSourceBytes-total)
+		data, err := readBounded(ctxio.Reader{Context: ctx, Reader: r}, limit-total)
 		total += int64(len(data))
 		return data, err
 	}
