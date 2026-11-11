@@ -4265,34 +4265,32 @@ func (c *Config) SaveVectorSetup(local, automatic bool, endpoint string) error {
 			if server.Endpoint != "" || (endpoint != "" && server.Local) {
 				return invalidVectorSetupError{errors.New("embeddings provider changed during setup")}
 			}
-			embeddings, err := configTable(existing["vector"].(map[string]any), "embeddings")
-			if err != nil {
-				return err
-			}
-			if model, _ := embeddings["model"].(string); model == "" {
-				embeddings["model"] = recipe.Model
-				for key, value := range map[string]any{
-					"dimension": recipe.Dimension, "max_input_chars": recipe.MaxInputChars,
-					"model_context_tokens": recipe.ModelContextTokens, "query_prefix": recipe.QueryPrefix,
-					"document_prefix": recipe.DocumentPrefix,
-				} {
-					if _, ok := embeddings[key]; !ok {
-						embeddings[key] = value
+			if local {
+				embeddings, err := configTable(existing["vector"].(map[string]any), "embeddings")
+				if err != nil {
+					return err
+				}
+				if model, _ := embeddings["model"].(string); model == "" {
+					embeddings["model"] = recipe.Model
+					for key, value := range map[string]any{
+						"dimension": recipe.Dimension, "max_input_chars": recipe.MaxInputChars,
+						"model_context_tokens": recipe.ModelContextTokens, "query_prefix": recipe.QueryPrefix,
+						"document_prefix": recipe.DocumentPrefix,
+					} {
+						if _, ok := embeddings[key]; !ok {
+							embeddings[key] = value
+						}
 					}
 				}
-			}
-			servers, err := configTable(embeddings, "servers")
-			if err != nil {
-				return err
-			}
-			selected, err := configTable(servers, name)
-			if err != nil {
-				return err
-			}
-			if local {
+				servers, err := configTable(embeddings, "servers")
+				if err != nil {
+					return err
+				}
+				selected, err := configTable(servers, name)
+				if err != nil {
+					return err
+				}
 				selected["local"] = true
-			} else {
-				selected["endpoint"] = endpoint
 			}
 		}
 		encoded, err := toml.Marshal(existing)

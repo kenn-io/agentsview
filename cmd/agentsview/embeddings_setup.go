@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"maps"
 	"math"
 	"net/url"
 	"sync"
@@ -359,8 +360,22 @@ func (v *liveVectorServing) activate(deployment config.VectorEmbeddingsServerCon
 		if err != nil {
 			return err
 		}
+		// Pin this run while leaving the saved configuration open to discovery.
+		servingCfg := cfg
+		if pinnedEndpoint != "" {
+			name, server, err := cfg.Vector.Embeddings.Server("")
+			if err != nil {
+				return err
+			}
+			server.Endpoint = pinnedEndpoint
+			servingCfg.Vector.Embeddings.Servers = maps.Clone(cfg.Vector.Embeddings.Servers)
+			if servingCfg.Vector.Embeddings.Servers == nil {
+				servingCfg.Vector.Embeddings.Servers = make(map[string]config.VectorEmbeddingsServerConfig)
+			}
+			servingCfg.Vector.Embeddings.Servers[name] = server
+		}
 		// Opening can wait on another process's write lock; status stays available.
-		serving, err := setupVectorServing(v.ctx, cfg, v.database, v.idle)
+		serving, err := setupVectorServing(v.ctx, servingCfg, v.database, v.idle)
 		if err != nil {
 			return err
 		}

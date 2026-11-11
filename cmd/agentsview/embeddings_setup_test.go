@@ -517,6 +517,13 @@ func TestLiveEmbeddingsSetup(t *testing.T) {
 			if recipe == "automatic" {
 				assert.EqualValues(t, 1, discoveries.Load(), "indexing must use the pinned endpoint")
 				assert.Positive(t, encoded.Load())
+				saved, err := config.LoadReadOnly()
+				require.NoError(t, err)
+				_, deployment, err := saved.Vector.Embeddings.Server("")
+				require.NoError(t, err)
+				endpoint, err := resolveLocalEmbeddings(t.Context(), deployment, nil, nil)
+				require.NoError(t, err)
+				assert.Equal(t, "http://127.0.0.1:1/v1", endpoint, "a later start must discover its provider again")
 			}
 			if recipe == "fresh" || recipe == "nomic" || recipe == "automatic" {
 				chosen, err := embedlocal.ChoiceRecorded()

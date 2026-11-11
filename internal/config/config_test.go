@@ -3290,7 +3290,7 @@ func TestSaveVectorSetupPersistsSelectedServer(t *testing.T) {
 			_, selected, err := saved.Vector.Embeddings.Server("")
 			require.NoError(t, err)
 			assert.Equal(t, tc.endpoint == "", selected.Local)
-			assert.Equal(t, tc.endpoint, selected.Endpoint)
+			assert.Empty(t, selected.Endpoint)
 			if tc.batchSize > 0 {
 				assert.Equal(t, tc.batchSize, selected.BatchSize)
 			}
