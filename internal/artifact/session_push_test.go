@@ -193,6 +193,12 @@ func TestSessionPushIdentityV1(t *testing.T) {
 	receipt, _, err := DecodeSessionPush(packet)
 	require.NoError(t, err)
 	assert.Equal(t, "d544bb593031823a5b2175f36a2135f9619c000846b3289f15bfa8b5ea203bf0", receipt.PayloadHash)
+	message.ToolCalls[0].ResultContent = `[{"type":"input_image","image_url":"data:image/png;base64,AAEC"}]`
+	packet, err = encodeSessionPushData(t.Context(), "source", db.Session{ID: "sample", Agent: "claude", Machine: "source", MessageCount: 1}, db.ArtifactExportData{Messages: []db.Message{message.dbMessage()}})
+	require.NoError(t, err)
+	receipt, _, err = DecodeSessionPush(packet)
+	require.NoError(t, err)
+	assert.Equal(t, "e4411fff4c01f253d797d8b92db40d2b24f8bc49c224b23ed802e30b27754aec", receipt.PayloadHash)
 }
 
 func TestSessionPushPreservesCapabilities(t *testing.T) {
@@ -298,8 +304,8 @@ func TestSessionPushRejectMalformed(t *testing.T) {
 		name, want string
 		mutate     func(map[string]any)
 	}{
-		{"version", "unsupported version", func(v map[string]any) { v["v"] = 99 }},
-		{"session", "invalid selected session", func(v map[string]any) { v["session_id"] = "other" }},
+		{"version", "requires a newer parser", func(v map[string]any) { v["v"] = 99 }},
+		{"session", "global session ID is invalid", func(v map[string]any) { v["session_id"] = "other" }},
 		{"segments", "segment closure mismatch", func(v map[string]any) { v["segments"] = []any{} }},
 		{"unknown", "unknown", func(v map[string]any) { v["extra"] = "unrequested" }},
 		{"hash", "segment hash mismatch", func(v map[string]any) { v["segments"].([]any)[0].(map[string]any)["ndjson"] = "{}" }},

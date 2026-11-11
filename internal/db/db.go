@@ -49,6 +49,7 @@ CREATE INDEX IF NOT EXISTS idx_provider_freshness_updated_at
 `
 
 // Increment dataVersion for parser changes; declare safe scopes in data_version_scope.go.
+//
 // Bumped to 63: the Codex parser now persists current subagent lineage,
 // links spawn events, restores plaintext agent messages, suppresses opaque
 // encrypted payloads, and derives titles for encrypted child sessions.

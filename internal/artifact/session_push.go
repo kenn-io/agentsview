@@ -192,6 +192,9 @@ func decodeSessionPush(data []byte) (db.SessionPushReceipt, db.SessionBatchWrite
 	if err := json.Unmarshal(data, &envelope, json.RejectUnknownMembers(true)); err != nil {
 		return zero, noWrite, err
 	}
+	if envelope.Version > 1 {
+		return zero, noWrite, ErrSessionPushFutureDataVersion
+	}
 	if envelope.Version != 1 || envelope.SessionID == "" || len(envelope.SessionID) > 1024 {
 		return zero, noWrite, errors.New("unsupported version or session ID")
 	}
@@ -206,7 +209,7 @@ func decodeSessionPush(data []byte) (db.SessionPushReceipt, db.SessionBatchWrite
 	if err := validateOriginID(m.Origin); err != nil {
 		return zero, noWrite, err
 	}
-	if m.NativeSessionID != envelope.SessionID || m.RawSource != nil || m.Session.Agent == "" || m.Session.DeletedAt != nil {
+	if m.RawSource != nil || m.Session.Agent == "" || m.Session.DeletedAt != nil {
 		return zero, noWrite, errors.New("invalid selected session")
 	}
 	if m.DataVersion > db.CurrentDataVersion() {
@@ -228,7 +231,6 @@ func decodeSessionPush(data []byte) (db.SessionPushReceipt, db.SessionBatchWrite
 	var messages []db.Message
 	var identity []sessionPushIdentityMessage
 	var nested nestedCollectionCounts
-	var decodedBytes int64
 	for i, segment := range segments {
 		if segment.SHA256 != m.Segments[i] || hashHex([]byte(segment.NDJSON)) != segment.SHA256 {
 			return zero, noWrite, errors.New("segment hash mismatch")
@@ -237,7 +239,7 @@ func decodeSessionPush(data []byte) (db.SessionPushReceipt, db.SessionBatchWrite
 		if err != nil {
 			return zero, noWrite, err
 		}
-		if int64(len(segment.NDJSON)) > limits.sessionDecodedBytes-decodedBytes || exceedsCollectionLimit(len(messages), len(preflight.records), limits.sessionMessages) || exceedsCollectionLimit(nested.toolCalls, preflight.nested.toolCalls, limits.sessionToolCalls) || exceedsCollectionLimit(nested.resultEvents, preflight.nested.resultEvents, limits.sessionResultEvents) {
+		if exceedsCollectionLimit(len(messages), len(preflight.records), limits.sessionMessages) || exceedsCollectionLimit(nested.toolCalls, preflight.nested.toolCalls, limits.sessionToolCalls) || exceedsCollectionLimit(nested.resultEvents, preflight.nested.resultEvents, limits.sessionResultEvents) {
 			return zero, noWrite, errors.New("session aggregate limit exceeded")
 		}
 		for _, record := range preflight.records {
@@ -264,7 +266,6 @@ func decodeSessionPush(data []byte) (db.SessionPushReceipt, db.SessionBatchWrite
 		}
 		nested.toolCalls += preflight.nested.toolCalls
 		nested.resultEvents += preflight.nested.resultEvents
-		decodedBytes += int64(len(segment.NDJSON))
 	}
 	// Provider-authoritative counters can include removed carriers or exclude
 	// retained ones; validate graph coordinates independently of those counts.

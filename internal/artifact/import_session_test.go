@@ -175,7 +175,6 @@ func TestLoadImportedSessionCompleteClosure(t *testing.T) {
 	assert.Equal(t, contractOrigin+"~session", write.Session.ID)
 	require.Len(t, write.Messages, 1)
 	assert.Equal(t, "hello", write.Messages[0].Content)
-
 }
 
 func TestLoadImportedSessionDefersOversizedFutureSegment(t *testing.T) {
