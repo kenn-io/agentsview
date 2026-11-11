@@ -321,7 +321,7 @@ func TestEnsurePreparedUsageRebuildsOutdatedTable(t *testing.T) {
 	store, _, _ := newPushedStore(t)
 	conn := store.DB()
 	selection := clickUsageNormalizedQueryFrom("", chUsageStoredMessageEligibility, chUsageEventEligibility,
-		"usage_session_snapshots s ARRAY JOIN s.usage_facts AS m",
+		chSnapshotMessageFrom, chSnapshotMessageRecordedCost,
 		"usage_session_snapshots s ARRAY JOIN s.usage_events AS ue", "1", "")
 	for _, query := range []string{
 		"SYSTEM STOP VIEW prepare_usage",

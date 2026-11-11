@@ -15,6 +15,7 @@ import (
 	"go.kenn.io/agentsview/internal/export"
 	"go.kenn.io/agentsview/internal/kept"
 	"go.kenn.io/agentsview/internal/money"
+	"go.kenn.io/agentsview/internal/usagefacts"
 	"golang.org/x/sync/errgroup"
 )
 
@@ -350,6 +351,8 @@ func (s *Store) GetSessionUsageRows(
 			costRow.cost = sql.NullInt64{}
 			rateResolver.RecordUnattributedReported()
 		}
+		costRow.cost = db.ReportedCostForPricing(costRow.cost, costRow.costStatus,
+			pgCatalogPricesAt(rateResolver, costRow.model, costRow.pricingTS))
 		cost, priced, contributes, priceErr := pgSessionRowCostWithWebSearchRequests(
 			costRow, webSearches, rateResolver)
 		if priceErr != nil {
@@ -838,6 +841,15 @@ func (s *Store) activityReportUsage(
 			sessionCost = &v
 			costRow.costValid = false
 			rateResolver.RecordUnattributedReported()
+		}
+		if costRow.costValid && costRow.costRecorded {
+			pricingTS := sql.NullTime{
+				Time: time.UnixMicro(costRow.us).UTC(), Valid: !costRow.pricingTimeAbsent,
+			}
+			costRow.costValid = db.ReportedCostForPricing(
+				sql.NullInt64{Int64: costRow.cost, Valid: true},
+				usagefacts.CostStatusRecorded,
+				pgCatalogPricesAt(rateResolver, costRow.model.Value(), pricingTS)).Valid
 		}
 		cost, priced, contributes, priceErr := pgActivityReportRowStatusWithWebSearchRequests(
 			costRow, webSearchRequests[i], rateResolver)
