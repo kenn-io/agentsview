@@ -7023,6 +7023,7 @@ type SessionMirrorSnapshot struct {
 	Findings            []SecretFinding
 	Pins                []PinnedMessage
 	PlanUsage           *SessionPlanUsage // nil when the session has none
+	ImageText           []ImageTextRow
 	UsageFingerprint    string
 	ToolCallFingerprint string
 }
@@ -7070,6 +7071,9 @@ func (db *DB) loadSessionMirrorSnapshot(ctx context.Context, id string, afterSes
 		return nil, err
 	}
 	if result.PlanUsage, err = sessionPlanUsageWithQuerier(ctx, tx, id); err != nil {
+		return nil, err
+	}
+	if result.ImageText, err = sessionImageTextRows(ctx, tx, []string{id}); err != nil {
 		return nil, err
 	}
 	usage := make(map[string]string, 1)

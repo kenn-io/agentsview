@@ -184,9 +184,8 @@ as complete for draining attached archive sources.
 The `raw_archive_*` tables record retained captures, root identities, accepted
 sources and deletion evidence. Seed import and restore permanently enable
 archive-only mode, which disables source sync and publication. These archives
-store `1 << 20` plus their parser version in `PRAGMA user_version`, so older
-builds refuse them. This build decodes that range and preserves pending
-rebuilds; ordinary archives keep their parser version unchanged.
+store `1 << 20` plus their parser version in `PRAGMA user_version`, so older builds refuse them. This build decodes that range and preserves pending rebuilds; ordinary archives keep their parser version unchanged.
+Data version 173 requires no source reparse; it keeps older binaries from writing archives whose image-text index they cannot maintain.
 
 ### Artifact checkpoint landings
 
@@ -1366,3 +1365,26 @@ To use an existing dedicated instance, run:
 TEST_PG_URL="postgres://user:pass@host:5432/dbname?sslmode=disable" \
   CGO_ENABLED=1 go test -tags "fts5,pgtest" ./internal/postgres/... -v
 ```
+
+### Image text
+
+When `[image_text]` is enabled, the daemon extracts text from retained inline
+and offloaded tool-result images using the configured local GLM-OCR service. It
+caches normalized text by decoded image hash and processor identity, and tracks
+current occurrences in the same transaction as tool results. The first enabled pass builds occurrences for existing archives. Extraction
+passes start requests for two minutes; each request stops after Docbank's timeout. Each image is read from a copy whose bytes match its hash, and
+its type is detected from those bytes. Failed requests and missing or corrupt
+copies retry with backoff; oversized images, verified bytes that are not PNG,
+JPEG, or WebP, and invalid input are terminal. A full archive rebuild preserves
+cache entries for retained images and rebuilds their occurrences. Removing the last occurrence removes its cached text during the next pass.
+Disabling image text and restarting removes cached text and mirror matches;
+re-enabling extracts it again. Usage-only archives do not store image
+text.
+
+Successful text is published to PostgreSQL, DuckDB, and ClickHouse as
+session-owned `image_text` rows keyed by the tool call or result event,
+image index, and processor, with the image hash, provider, model, and revision.
+A new extraction advances the session's `sync_marker`, so the next incremental
+push sends it without changing the transcript revision. Global keyword search
+and substring and regex `tool_result` searches match this text in every
+backend, anchored to the message holding the tool call.

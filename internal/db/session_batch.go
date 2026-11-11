@@ -522,6 +522,7 @@ func (db *DB) writeOneSessionBatchTx(
 	msgs := write.Messages
 	var pins []savedPin
 	filled, extended := 0, 0
+	var imageDiff *messageDiffPlan
 	if replaceMessages && sessionExists {
 		if err := reconcileConversationMessagesTx(queries, write.Session.ID, msgs, true, usageOnly); err != nil {
 			return 0, err
@@ -563,6 +564,7 @@ func (db *DB) writeOneSessionBatchTx(
 			if err := applySessionMessageDiffTx(ctx, tx, write.Session.ID, plan); err != nil {
 				return 0, err
 			}
+			imageDiff = &plan
 			msgs = nil
 		}
 	} else {
@@ -637,6 +639,16 @@ func (db *DB) writeOneSessionBatchTx(
 		if err := bump(queries, write.Session.ID); err != nil {
 			return 0, err
 		}
+	}
+	if imageDiff != nil {
+		err = refreshMessageDiffImageTextTx(queries, write.Session.ID, *imageDiff, true)
+	} else if !sessionExists || replaceMessages || filled > 0 {
+		err = refreshImageTextOccurrencesTx(queries, write.Session.ID)
+	} else {
+		err = refreshIncrementalImageTextOccurrencesTx(queries, write.Session.ID, msgs, nil)
+	}
+	if err != nil {
+		return 0, err
 	}
 	if replaceMessages && sessionExists || filled > 0 || extended > 0 {
 		if err := reconcileRecallEvidenceForSessionTx(

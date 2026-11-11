@@ -1001,6 +1001,7 @@ func (s *Sync) deleteMirrorSession(
 	ctx context.Context, tx *sql.Tx, sessionID string,
 ) error {
 	for _, stmt := range []string{
+		`DELETE FROM image_text WHERE session_id = ?`,
 		`DELETE FROM pinned_messages WHERE session_id = ?`,
 		`DELETE FROM starred_sessions WHERE session_id = ?`,
 		`DELETE FROM secret_findings WHERE session_id = ?`,

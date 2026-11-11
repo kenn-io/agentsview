@@ -2827,3 +2827,28 @@ profile or pass them inline:
 ```bash
 AGENTSVIEW_DATA_DIR=/tmp/av-test agentsview serve
 ```
+
+### Search text in images
+
+AgentsView can index text in retained tool-result images with a local GLM-OCR
+service. Enable it in the [configuration](configuration.md#image-text) and
+restart the daemon.
+
+The endpoint must be loopback. It defaults to
+`http://127.0.0.1:30004/glmocr/parse` and must serve the
+[Docbank v0.17.0 deployment](https://github.com/kenn-io/docbank/tree/v0.17.0/deploy/glmocr),
+which requires an NVIDIA GB10 host. AgentsView reads PNG, JPEG, and WebP images
+up to 64 MiB stored inline or in the asset directory. Larger images are skipped
+and logged. Indexing starts with the daemon and
+continues in the background, so searches can initially return partial results.
+AgentsView checks for new images every minute. Missing or damaged assets and
+failed extractions retry with backoff. Images in other formats are skipped. Search in
+the web palette or with, for example,
+`agentsview session search 'invoice 42' --in tool_result`. Substring and regex
+`tool_result` searches include image text; other `--in` sources and in-session
+find search only text shown in the transcript. Each new extraction is sent on
+the next incremental push to PostgreSQL, DuckDB, and ClickHouse, so `pg serve`
+and the other mirrors return the same matches. Removing the last retained copy of an image removes its extracted text.
+Disabling image text and restarting clears extracted text and removes mirror
+matches on the next push. Session and artifact exports carry image references or
+placeholders rather than extracted text.

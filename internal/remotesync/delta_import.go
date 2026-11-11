@@ -176,7 +176,7 @@ func (im Importer) PreparePending(
 	pruned, pruneStats := pruneRemoteSkipCache(
 		remoteCache, layout, plan, request.Journal, invalidateProviders...,
 	)
-	if request.ResetAttemptCache && len(request.ScopedProviders) == 0 {
+	if request.ResetAttemptCache && request.ScopedProviders == nil {
 		pruned = make(map[string]int64)
 		pruneStats = CachePruneStats{
 			HostWideScope: true,
@@ -203,7 +203,7 @@ func (im Importer) PreparePending(
 	var persistErr error
 	if len(deleted) > 0 {
 		if request.Journal.InvalidateAll ||
-			request.ResetAttemptCache && len(request.ScopedProviders) == 0 {
+			request.ResetAttemptCache && request.ScopedProviders == nil {
 			persistErr = replace(ctx, im.Host, pruned)
 		} else {
 			persistErr = apply(ctx, im.Host, deleted, nil)

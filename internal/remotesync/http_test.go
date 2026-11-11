@@ -1467,6 +1467,25 @@ func TestHTTPUnchangedMirrorImportsIntoNewDatabaseGeneration(t *testing.T) {
 	assert.Equal(t, "generation refresh", messages[0].Content)
 }
 
+func TestHTTPCompatibilityVersionDoesNotForceFullImport(t *testing.T) {
+	remote := newMirrorTestRemote(t)
+	remote.writeSession(t, "session.jsonl", time.Date(2026, 8, 14, 10, 0, 0, 0, time.UTC), "unchanged")
+	database, hs := newMirrorSync(t, remote, t.TempDir())
+	_, err := hs.Run(t.Context())
+	require.NoError(t, err)
+	require.NoError(t, database.SetRemoteImportDataVersion(t.Context(), hs.Host, db.ImageTextDataVersion-1))
+	prepared, err := hs.Prepare(t.Context())
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, prepared.Close()) })
+	require.NotNil(t, prepared.mirrorImport)
+	if db.ScopedDataVersionProviders(db.ImageTextDataVersion-1, db.CurrentDataVersion()) == nil {
+		t.Skip("a later data version requires a full rebuild")
+	}
+	assert.Empty(t, prepared.mirrorImport.fullReason)
+	assert.False(t, prepared.mirrorImport.journal.FullImport)
+	assert.False(t, prepared.mirrorImport.pending.Stats.PruneHostWideScope)
+}
+
 func TestHTTPMirrorJournalFlipFailureRetainsArmedWork(t *testing.T) {
 	remote := newMirrorTestRemote(t)
 	remotePath := remote.writeSession(t, "session.jsonl",
