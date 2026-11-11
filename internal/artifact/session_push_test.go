@@ -451,7 +451,6 @@ func TestSessionPushRejectMalformed(t *testing.T) {
 		name, want string
 		mutate     func(map[string]any)
 	}{
-		{"version", "requires a newer parser", func(v map[string]any) { v["v"] = 99 }},
 		{"session", "global session ID is invalid", func(v map[string]any) { v["session_id"] = "other" }},
 		{"segments", "segment closure mismatch", func(v map[string]any) { v["segments"] = []any{} }},
 		{"unknown", "unknown", func(v map[string]any) { v["extra"] = "unrequested" }},

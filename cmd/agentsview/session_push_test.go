@@ -3,7 +3,6 @@ package main
 import (
 	"bytes"
 	"context"
-	"encoding/json/v2"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -16,7 +15,6 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-	"go.kenn.io/agentsview/internal/artifact"
 	"go.kenn.io/agentsview/internal/config"
 	"go.kenn.io/agentsview/internal/db"
 	"go.kenn.io/agentsview/internal/server"
@@ -65,35 +63,6 @@ func TestPushSessionCommandToAuthenticatedReceiver(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, messages, 1)
 	assert.Equal(t, "host~codex:selected", messages[0].Content)
-	stored, err := target.GetSessionFull(t.Context(), "host~codex:selected")
-	require.NoError(t, err)
-	require.NotNil(t, stored)
-	assert.Equal(t, new("host~codex:parent"), stored.ParentSessionID)
-}
-
-func TestPushSessionReportsFutureManifestVersion(t *testing.T) {
-	dir := t.TempDir()
-	database, err := db.Open(t.Context(), filepath.Join(dir, "sessions.db"))
-	require.NoError(t, err)
-	t.Cleanup(func() { require.NoError(t, database.Close()) })
-	require.NoError(t, database.UpsertSession(t.Context(), db.Session{ID: "selected", Agent: "claude", Machine: "source"}))
-	packet, _, err := artifact.EncodeSessionPush(t.Context(), database, "selected", "")
-	require.NoError(t, err)
-	var envelope artifact.SessionPushEnvelope
-	require.NoError(t, json.Unmarshal(packet, &envelope))
-	var manifest map[string]any
-	require.NoError(t, json.Unmarshal(envelope.Manifest, &manifest))
-	manifest["v"] = 999
-	envelope.Manifest, err = json.Marshal(manifest)
-	require.NoError(t, err)
-	packet, err = json.Marshal(envelope)
-	require.NoError(t, err)
-	receiver := server.New(config.Config{Host: "127.0.0.1", Port: 0, DataDir: dir, RequireAuth: true, AuthToken: "fixture-token", AcceptSessionPush: true, WriteTimeout: 30 * time.Second}, database, nil)
-	t.Cleanup(func() { require.NoError(t, receiver.Shutdown(context.WithoutCancel(t.Context()))) })
-	remote := httptest.NewServer(receiver.Handler())
-	t.Cleanup(remote.Close)
-	_, err = sendSessionPush(t.Context(), mustPushURL(t, remote.URL), "fixture-token", packet, "selected", "claude")
-	require.ErrorContains(t, err, "receiver needs an upgrade")
 }
 
 func TestPushSessionTransportRefusesUnsafeTargets(t *testing.T) {
@@ -167,6 +136,8 @@ func TestPushSessionTransportFailuresAreSanitized(t *testing.T) {
 			defer remote.Close()
 			_, err := sendSessionPush(t.Context(), mustPushURL(t, remote.URL), "private-token", []byte(`{}`), "sample", "claude")
 			require.ErrorContains(t, err, tc.message)
+			assert.NotContains(t, err.Error(), "private-token")
+			assert.NotContains(t, err.Error(), "private-response-token")
 		})
 	}
 

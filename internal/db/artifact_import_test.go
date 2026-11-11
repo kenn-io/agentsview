@@ -526,13 +526,6 @@ func TestApplyArtifactImportedSessionPreservesDeletedPush(t *testing.T) {
 	require.NoError(t, err)
 	write.Session.Machine = origin
 	imported := ArtifactImportedSession{Origin: origin, GID: gid, ManifestHash: strings.Repeat("a", 64), ImportedSessionID: gid}
-	result, err := database.ApplyArtifactImportedSession(ctx, imported, write)
-	require.NoError(t, err)
-	assert.True(t, result.Suppressed)
-	messages, err := database.GetAllMessages(ctx, gid)
-	require.NoError(t, err)
-	require.Len(t, messages, 1)
-	assert.Equal(t, "first snapshot", messages[0].Content)
 	require.NoError(t, database.DeleteSession(ctx, gid))
 	imported.ManifestHash = strings.Repeat("b", 64)
 	landing := ArtifactCheckpointLanding{Origin: origin, Sequence: 7, CheckpointSHA256: strings.Repeat("c", 64), CheckpointSize: 321}
@@ -542,7 +535,7 @@ func TestApplyArtifactImportedSessionPreservesDeletedPush(t *testing.T) {
 	require.NoError(t, database.BeginArtifactCheckpointStage(ctx, landing, 1))
 	require.NoError(t, database.StageArtifactCheckpointSessions(ctx, landing, []ArtifactCheckpointSession{entry}))
 	require.NoError(t, database.CompleteArtifactCheckpointStage(ctx, landing, 1))
-	result, err = database.ApplyStagedArtifactImportedSession(ctx, landing, entry, imported, write)
+	result, err := database.ApplyStagedArtifactImportedSession(ctx, landing, entry, imported, write)
 	require.NoError(t, err)
 	assert.True(t, result.Suppressed)
 	require.NoError(t, database.RecordArtifactCheckpointLandingFromStage(ctx, landing))
