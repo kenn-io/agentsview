@@ -16,6 +16,7 @@
 | --------------------------------------------------------------------------------------- | ------------------------------------ |
 | Features, bug fixes, tests, or test helpers                                             | `docs/agents/testing.md`             |
 | SQLite, PostgreSQL, CockroachDB, DuckDB, ClickHouse, archive resync, or storage queries | `docs/agents/storage.md`             |
+| Database or Go backend optimizations, including read, sync, and push paths              | `docs/agents/storage.md`             |
 | Watchers, polling, sync scheduling, background work, or memory investigations           | `docs/agents/background-work.md`     |
 | Build commands, toolchains, CI build tags, or dependencies                              | `docs/agents/build.md`               |
 | S3 ingest, `S3Provider`, or `Source.S3Discovery`                                        | `docs/agents/s3-providers.md`        |

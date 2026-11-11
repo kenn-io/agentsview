@@ -742,9 +742,10 @@ Keep identity-only corrections in the reporting digest. The wire contract is in
   PostgreSQL/CockroachDB, DuckDB and ClickHouse. Match queries, indexes,
   aggregations, filters and ordering unless a documented SQL, storage layout
   or disposable mirror constraint requires a difference.
-- Do not fix correctness or performance in only one backend unless the user
-  limits the task to that backend. If implementations must differ, explain why
-  and preserve the same behavior.
+- Do not fix correctness in only one backend unless the user limits the task to
+  that backend. If implementations must differ, explain why and preserve the
+  same behavior. Performance work follows
+  [Optimizations apply to every backend](#optimizations-apply-to-every-backend).
 - PostgreSQL, DuckDB and ClickHouse share catalog orchestration in
   `internal/readbase.Catalog`. Shared query builders own SQL that differs only
   in syntax. Each backend explicitly supplies every required SQL operation and
@@ -829,6 +830,19 @@ rows, so no usage, cost, or rollup query reads it. Session usage loads it as
 - Every backend stores `db.SessionUsageTotalColumns` and pushes on
   `SessionUsageTotalFingerprints` changes, like `session_plan_usage`.
   `dbtest.SeedSessionUsageTotal` and `AssertSessionUsageTotal` check each.
+
+### Optimizations apply to every backend
+
+Apply every database optimization and every Go-side backend optimization to each
+backend it applies to: SQLite, PostgreSQL, CockroachDB, DuckDB, and ClickHouse,
+plus shared read layers such as `internal/readbase`. This covers query shape,
+indexes, caching, batching, read paths, sync and push paths, and similar work.
+
+A change that optimizes one, two, or three of these backends while the
+optimization applies to the others is incomplete. When a backend cannot take the
+optimization, because the engine lacks the feature or the slow path does not
+exist there, the change names that backend and the reason in its commit message
+and pull request description.
 
 ### Usage cache divergence
 
