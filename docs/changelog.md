@@ -26,6 +26,11 @@ The latest release is
 - `agentsview diagnostics append` records failures outside agent sessions in
   the daily Friction Log, grouping repeated messages with their count.
 
+**Improvements**
+
+- `agentsview sync` no longer prints a deprecation warning. It stays a supported
+  shortcut for `agentsview source sync` and is listed in root help again.
+
 **Bug fixes**
 
 - Semantic search builds on Kit's built-in local embeddings server no longer

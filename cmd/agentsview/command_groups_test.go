@@ -22,7 +22,7 @@ func TestCommandGroupsCanonicalHelp(t *testing.T) {
 		"report stats", "report activity", "report usage daily", "report usage statusline",
 		"replica pg push", "replica pg vectors list", "replica pg service install",
 		"replica duckdb status", "replica duckdb quack serve", "replica clickhouse push",
-		"index embeddings build", "index classifier rebuild", "archive diff",
+		"index embeddings build", "index classifier rebuild", "archive diff", "sync",
 	} {
 		t.Run(path, func(t *testing.T) {
 			root := newRootCommand()
@@ -44,10 +44,10 @@ func TestCommandGroupsRootDiscovery(t *testing.T) {
 	help, err := executeCommand(newRootCommand(), "--help")
 	require.NoError(t, err)
 	assert.Less(t, len(help), 11500, "root help must remain compact")
-	for _, name := range []string{"source", "project", "report", "replica", "index", "session", "archive", "mcp", "openapi"} {
+	for _, name := range []string{"source", "sync", "project", "report", "replica", "index", "session", "archive", "mcp", "openapi"} {
 		assert.Contains(t, help, "\n  "+name+" ")
 	}
-	for _, name := range []string{"agents", "sync", "raw-sync", "projects", "health", "prune", "stats", "usage", "activity", "pg", "duckdb", "clickhouse", "embeddings", "parse-diff", "token-use"} {
+	for _, name := range []string{"agents", "raw-sync", "projects", "health", "prune", "stats", "usage", "activity", "pg", "duckdb", "clickhouse", "embeddings", "parse-diff", "token-use"} {
 		assert.NotContains(t, help, "\n  "+name+" ")
 	}
 	assert.NotContains(t, help, "\n  session list ", "subcommands belong in domain help")
@@ -68,6 +68,7 @@ func TestCommandGroupsRootDiscovery(t *testing.T) {
 	out, err := executeCommand(newRootCommand(), "__complete", "")
 	require.NoError(t, err)
 	assert.Contains(t, out, "source\t")
+	assert.Contains(t, out, "sync\t")
 	assert.NotContains(t, out, "raw-sync\t")
 	assert.NotContains(t, out, "token-use\t")
 	assert.NoFileExists(t, filepath.Join(dir, "sessions.db"))
