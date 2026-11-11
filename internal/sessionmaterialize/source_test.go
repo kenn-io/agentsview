@@ -39,6 +39,7 @@ func TestMaterializeConfiguredSources(t *testing.T) {
 				var err error
 				name, err = remotesync.SafeRemappedRemotePath(remotesync.MirrorDir(root, "remote"), stored)
 				require.NoError(t, err)
+				stored = "remote:" + stored
 			} else {
 				cfg.AgentDirs = map[parser.AgentType][]string{parser.AgentClaude: {filepath.Join(root, "original")}}
 				cfg.SessionSources = []config.SessionSource{{Agent: parser.AgentClaude, Dir: filepath.Join(root, "original"), Machine: "local"}}
@@ -88,6 +89,7 @@ func TestS3ConfiguredSource(t *testing.T) {
 	const base = "host/raw/claude/project/" + id
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Query().Get("list-type") == "2" {
+			assert.True(t, strings.HasSuffix(r.URL.Query().Get("prefix"), "/"))
 			w.Header().Set("Content-Type", "application/xml")
 			if strings.Contains(r.URL.Query().Get("prefix"), "tool-results") {
 				_, _ = io.WriteString(w, `<ListBucketResult><IsTruncated>false</IsTruncated><Contents><Key>`+base+`/tool-results/</Key><Size>0</Size></Contents><Contents><Key>`+base+`/tool-results/result.txt</Key><Size>4</Size></Contents></ListBucketResult>`)
@@ -140,4 +142,63 @@ func TestMaterializeRejectsEmptyAndMetadataOnly(t *testing.T) {
 			assert.ErrorIs(t, err, os.ErrNotExist)
 		})
 	}
+}
+
+func TestMirrorStoredHostAndWindowsPath(t *testing.T) {
+	const id = "12345678-1234-1234-1234-123456789abc"
+	root := t.TempDir()
+	home := t.TempDir()
+	t.Setenv("CLAUDE_CONFIG_DIR", home)
+	t.Setenv("CLAUDE_CODE_PROJECT_DIR_NAME", "project")
+	cfg := config.Config{DataDir: root, RemoteHosts: []config.RemoteHost{{Host: "remote"}}}
+	remote := `C:\Users\fixture\projects\original\` + id + `.jsonl`
+	name, err := remotesync.SafeRemappedRemotePath(remotesync.MirrorDir(root, "remote"), remote)
+	require.NoError(t, err)
+	require.NoError(t, os.MkdirAll(filepath.Dir(name), 0700))
+	require.NoError(t, os.WriteFile(name, []byte(`{"type":"user","sessionId":"`+id+`","message":{"content":"fixture"}}`), 0600))
+	stored := "other:" + remote
+	s := &db.Session{ID: "remote~" + id, Agent: "claude", Machine: "remote", FilePath: &stored}
+	_, err = Materialize(t.Context(), cfg, s, t.TempDir())
+	require.ErrorContains(t, err, "host does not match")
+	stored = "remote:" + remote
+	_, err = Materialize(t.Context(), cfg, s, t.TempDir())
+	require.NoError(t, err)
+}
+
+func TestReadFileHonorsRemainingBudget(t *testing.T) {
+	name := filepath.Join(t.TempDir(), "sidecar")
+	require.NoError(t, os.WriteFile(name, []byte("12345"), 0600))
+	_, _, err := readFile(t.Context(), name, 4)
+	require.ErrorContains(t, err, "exceeds size limit")
+}
+
+func TestMaterializeParentSourceAndRelativeHome(t *testing.T) {
+	const selected = "12345678-1234-1234-1234-123456789abc"
+	const parent = "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"
+	root := t.TempDir()
+	home := t.TempDir()
+	name := filepath.Join(root, "project", selected+".jsonl")
+	require.NoError(t, os.MkdirAll(filepath.Dir(name), 0700))
+	original := []byte(`{"type":"user","sessionId":"` + parent + `","message":{"content":"parent"}}` + "\n" + `{"type":"worktree-state","sessionId":"` + parent + `","worktreeSession":{}}` + "\n")
+	require.NoError(t, os.WriteFile(name, original, 0600))
+	cfg := config.Config{InstallationID: "local", AgentDirs: map[parser.AgentType][]string{parser.AgentClaude: {root}}}
+	s := &db.Session{ID: selected, Agent: "claude", Machine: "local", FilePath: &name, SourceSessionID: parent}
+	t.Setenv("CLAUDE_CODE_PROJECT_DIR_NAME", "project")
+	processCwd, err := os.Getwd()
+	require.NoError(t, err)
+	relativeHome, err := filepath.Rel(processCwd, home)
+	if err != nil {
+		t.Skip("temporary home is on a different volume")
+	}
+	t.Setenv("CLAUDE_CONFIG_DIR", relativeHome)
+	_, err = Materialize(t.Context(), cfg, s, t.TempDir())
+	require.ErrorContains(t, err, "must be absolute")
+	_, err = os.Stat(filepath.Join(home, "projects", "project", selected+".jsonl"))
+	assert.ErrorIs(t, err, os.ErrNotExist)
+	t.Setenv("CLAUDE_CONFIG_DIR", home)
+	_, err = Materialize(t.Context(), cfg, s, t.TempDir())
+	require.NoError(t, err)
+	installed, err := os.ReadFile(filepath.Join(home, "projects", "project", selected+".jsonl"))
+	require.NoError(t, err)
+	assert.Equal(t, original, installed)
 }

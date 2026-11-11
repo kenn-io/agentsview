@@ -2173,6 +2173,8 @@ are not yet supported. The transcript and companions together are limited to
 the source, installed paths, checkout, command, and installed or unchanged
 status. Claude's native home and supported environment overrides determine
 the destination, independently of discovery roots.
+An explicitly set `CLAUDE_CONFIG_DIR` must be an absolute path; the printed
+command preserves its spelling so Claude uses the same credentials.
 
 Existing identical files are reused; a different or non-regular file causes
 an error. Dependencies are installed before the transcript. If publication
@@ -2185,6 +2187,8 @@ An already-running Claude session can attach in that process's existing
 directory. Claude's in-app resume picker can also fall back to a recorded
 project path for an unbound session. Start the printed command in a new process
 when the selected checkout matters: end the existing running session first.
+Materialize after Claude and any S3 uploader finish; S3 files can otherwise
+reflect different upload moments.
 If the destination is a configured Claude source root, a later sync may also
 discover the installed copy as a separate local session.
 

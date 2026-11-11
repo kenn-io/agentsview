@@ -68,8 +68,12 @@ func Materialize(ctx context.Context, cfg config.Config, session *db.Session, cw
 			return Result{}, errors.New("session host is not configured")
 		}
 		root := remotesync.MirrorDir(cfg.DataDir, host)
+		remotePath, ok := strings.CutPrefix(source, host+":")
+		if !ok || remotePath == "" {
+			return Result{}, errors.New("mirror source host does not match session identity")
+		}
 		var name string
-		name, err = remotesync.SafeRemappedRemotePath(root, source)
+		name, err = remotesync.SafeRemappedRemotePath(root, remotePath)
 		if err == nil {
 			lock, lockErr := remotesync.AcquireMirrorLock(ctx, root)
 			if lockErr != nil {
@@ -84,7 +88,7 @@ func Materialize(ctx context.Context, cfg config.Config, session *db.Session, cw
 	if err != nil {
 		return Result{}, fmt.Errorf("reading native transcript: %w", err)
 	}
-	primary, err := clearClaudeWorktree(files[0].data, id)
+	primary, err := clearClaudeWorktree(files[0].data, id, session.SourceSessionID)
 	if err != nil {
 		return Result{}, err
 	}
@@ -167,7 +171,7 @@ func readLocalSource(ctx context.Context, root, name, id string) ([]sourceFile, 
 	if filepath.Base(name) != id+".jsonl" || !within(root, name) {
 		return nil, errors.New("source identity or root mismatch")
 	}
-	data, info, err := readFile(ctx, name)
+	data, info, err := readFile(ctx, name, maxSourceBytes)
 	if err != nil {
 		return nil, err
 	}
@@ -197,7 +201,7 @@ func readLocalSource(ctx context.Context, root, name, id string) ([]sourceFile, 
 			if err != nil {
 				return err
 			}
-			data, info, err := readFile(ctx, name)
+			data, info, err := readFile(ctx, name, maxSourceBytes-total)
 			if err != nil {
 				return err
 			}
@@ -222,7 +226,7 @@ func readLocalSource(ctx context.Context, root, name, id string) ([]sourceFile, 
 	return out, nil
 }
 
-func readFile(ctx context.Context, name string) ([]byte, os.FileInfo, error) {
+func readFile(ctx context.Context, name string, limit int64) ([]byte, os.FileInfo, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, nil, err
 	}
@@ -235,7 +239,7 @@ func readFile(ctx context.Context, name string) ([]byte, os.FileInfo, error) {
 	if err != nil {
 		return nil, nil, err
 	}
-	data, err := readBounded(ctxio.Reader{Context: ctx, Reader: f}, maxSourceBytes)
+	data, err := readBounded(ctxio.Reader{Context: ctx, Reader: f}, limit)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -296,7 +300,7 @@ func readS3Source(ctx context.Context, cfg config.Config, machine, uri, id strin
 	out := []sourceFile{{data: data}}
 	base := strings.TrimSuffix(uri, ".jsonl")
 	for _, sub := range []string{"tool-results", "subagents"} {
-		prefix := base + "/" + sub
+		prefix := base + "/" + sub + "/"
 		objects, err := parser.ListS3ObjectsContext(ctx, prefix)
 		if err != nil {
 			return nil, err

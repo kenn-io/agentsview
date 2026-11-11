@@ -8,7 +8,6 @@ import (
 
 	"github.com/spf13/cobra"
 	"go.kenn.io/agentsview/internal/config"
-	"go.kenn.io/agentsview/internal/db"
 	"go.kenn.io/agentsview/internal/parser"
 	"go.kenn.io/agentsview/internal/sessionmaterialize"
 	"go.kenn.io/agentsview/internal/shellquote"
@@ -31,7 +30,10 @@ func newSessionMaterializeCommand() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			database, err := db.OpenReadOnly(cmd.Context(), cfg.DBPath)
+			if cfg.ArchiveContent.UsageOnly() {
+				return errors.New("session materialize is unavailable with archive_content=usage")
+			}
+			database, err := openReadOnlyDB(cmd.Context(), cfg)
 			if err != nil {
 				return err
 			}
@@ -65,6 +67,12 @@ func newSessionMaterializeCommand() *cobra.Command {
 }
 
 func claudeResumeCommand(cwd, id, home, project string, windows bool) string {
+	if home == "" {
+		if windows {
+			return "Set-Location -LiteralPath " + shellquote.PowerShell(cwd) + "; if ($?) { claude --resume " + shellquote.PowerShell(id) + " }"
+		}
+		return "cd " + shellquote.POSIX(cwd) + " && claude --resume " + shellquote.POSIX(id)
+	}
 	if windows {
 		return "Set-Location -LiteralPath " + shellquote.PowerShell(cwd) + "; if ($?) { & { $oldHome = $env:CLAUDE_CONFIG_DIR; $oldProject = $env:CLAUDE_CODE_PROJECT_DIR_NAME; try { $env:CLAUDE_CONFIG_DIR = " + shellquote.PowerShell(home) + "; $env:CLAUDE_CODE_PROJECT_DIR_NAME = " + shellquote.PowerShell(project) + "; claude --resume " + shellquote.PowerShell(id) + " } finally { $env:CLAUDE_CONFIG_DIR = $oldHome; $env:CLAUDE_CODE_PROJECT_DIR_NAME = $oldProject } } }"
 	}

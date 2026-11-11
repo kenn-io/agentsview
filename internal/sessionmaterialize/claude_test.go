@@ -27,7 +27,7 @@ func TestClearClaudeWorktree(t *testing.T) {
 	prefix := `{"type":"user","sessionId":"` + id + `","message":{"role":"user","content":"hello"}}` + "\n"
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got, err := clearClaudeWorktree([]byte(prefix+tt.input), id)
+			got, err := clearClaudeWorktree([]byte(prefix+tt.input), id, "")
 			if tt.invalid {
 				require.Error(t, err)
 				return
@@ -59,19 +59,36 @@ func TestClaudeDestination(t *testing.T) {
 	assert.NotEqual(t, filepath.Join(home, ".claude", "projects", "project-1", id+".jsonl"), got)
 	t.Setenv("CLAUDE_CONFIG_DIR", "relative-config")
 	t.Setenv("CLAUDE_CODE_PROJECT_DIR_NAME", "project-1")
-	got, resolved, project, err := claudeDestination(t.TempDir(), id)
+	_, _, _, err = claudeDestination(t.TempDir(), id)
+	require.ErrorContains(t, err, "must be absolute")
+	t.Setenv("CLAUDE_CONFIG_DIR", home+string(filepath.Separator))
+	_, raw, project, err := claudeDestination(t.TempDir(), id)
 	require.NoError(t, err)
-	expected, err := filepath.Abs("relative-config")
-	require.NoError(t, err)
-	assert.Equal(t, expected, resolved)
+	assert.Equal(t, home+string(filepath.Separator), raw)
 	assert.Equal(t, "project-1", project)
-	assert.Equal(t, filepath.Join(expected, "projects", project, id+".jsonl"), got)
+	decomposed := filepath.Join(home, "e\u0301")
+	t.Setenv("CLAUDE_CONFIG_DIR", decomposed)
+	got, raw, project, err = claudeDestination(t.TempDir(), id)
+	require.NoError(t, err)
+	assert.Equal(t, decomposed, raw)
+	assert.Equal(t, filepath.Join(home, "é", "projects", project, id+".jsonl"), got)
 }
 
 func TestRejectMissingConversation(t *testing.T) {
 	const id = "12345678-1234-1234-1234-123456789abc"
 	for _, raw := range []string{"", "  ", `{"type":"worktree-state","sessionId":"` + id + `","worktreeSession":null}`, `{"type":"user","sessionId":"aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa","message":{"role":"user","content":"other"}}`} {
-		_, err := clearClaudeWorktree([]byte(raw), id)
+		_, err := clearClaudeWorktree([]byte(raw), id, "")
 		require.Error(t, err)
 	}
+}
+
+func TestClaudeTranscriptParentIdentity(t *testing.T) {
+	const selected = "12345678-1234-1234-1234-123456789abc"
+	const parent = "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"
+	raw := []byte(`{"type":"user","sessionId":"` + parent + `","message":{"content":"parent"}}` + "\n")
+	got, err := clearClaudeWorktree(raw, selected, parent)
+	require.NoError(t, err)
+	assert.Equal(t, raw, got)
+	_, err = clearClaudeWorktree(raw, selected, "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb")
+	require.Error(t, err)
 }

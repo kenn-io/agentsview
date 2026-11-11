@@ -10,6 +10,7 @@ import (
 	"regexp"
 
 	"go.kenn.io/agentsview/internal/capture"
+	"golang.org/x/text/unicode/norm"
 )
 
 var claudeProjectOverride = regexp.MustCompile(`^[A-Za-z0-9_-]{1,64}$`)
@@ -18,6 +19,10 @@ var reservedProjectOverride = regexp.MustCompile(`(?i)^(con|prn|aux|nul|com[0-9]
 func claudeDestination(cwd, sessionID string) (string, string, string, error) {
 	home := os.Getenv("CLAUDE_CONFIG_DIR")
 	explicitHome := home != ""
+	rawHome := home
+	if explicitHome && !filepath.IsAbs(home) {
+		return "", "", "", errors.New("CLAUDE_CONFIG_DIR must be absolute for materialize; use the absolute path when starting Claude")
+	}
 	if home == "" {
 		userHome, err := os.UserHomeDir()
 		if err != nil {
@@ -25,7 +30,7 @@ func claudeDestination(cwd, sessionID string) (string, string, string, error) {
 		}
 		home = filepath.Join(userHome, ".claude")
 	}
-	home, err := filepath.Abs(home)
+	home, err := filepath.Abs(norm.NFC.String(home))
 	if err != nil {
 		return "", "", "", err
 	}
@@ -35,12 +40,12 @@ func claudeDestination(cwd, sessionID string) (string, string, string, error) {
 		project = override
 		selectedOverride = override
 	}
-	return filepath.Join(home, "projects", project, sessionID+".jsonl"), home, selectedOverride, nil
+	return filepath.Join(home, "projects", project, sessionID+".jsonl"), rawHome, selectedOverride, nil
 }
 
 // clearClaudeWorktree preserves the transcript while preventing Claude from
 // restoring a worktree belonging to the machine that recorded it.
-func clearClaudeWorktree(data []byte, sessionID string) ([]byte, error) {
+func clearClaudeWorktree(data []byte, sessionID, sourceSessionID string) ([]byte, error) {
 	var bound bool
 	var found bool
 	for _, line := range bytes.Split(data, []byte{'\n'}) {
@@ -60,7 +65,7 @@ func clearClaudeWorktree(data []byte, sessionID string) ([]byte, error) {
 			var message map[string]json.RawMessage
 			messageErr := json.Unmarshal(entry["message"], &message)
 			content, ok := message["content"]
-			if json.Unmarshal(entry["sessionId"], &id) == nil && id == sessionID && messageErr == nil && ok && !bytes.Equal(bytes.TrimSpace(content), []byte("null")) {
+			if json.Unmarshal(entry["sessionId"], &id) == nil && (id == sessionID || (sourceSessionID != "" && id == sourceSessionID)) && messageErr == nil && ok && !bytes.Equal(bytes.TrimSpace(content), []byte("null")) {
 				found = true
 			}
 		}
