@@ -80,7 +80,16 @@ func (v *liveVectorServing) startSharedChoice() {
 		return
 	}
 	_, deployment, err := embeddings.Server("")
-	if err != nil || deployment.Endpoint != "" || (v.cfg.Vector.Enabled && !deployment.Local) {
+	if err != nil || deployment.Endpoint != "" {
+		return
+	}
+	if v.cfg.Vector.Enabled && !deployment.Local {
+		if embeddings.Servers == nil && embeddings.DefaultServer == "" {
+			status, err := inspectLocalEmbeddings(v.ctx, embedlocal.Options{})
+			if err == nil && !status.OllamaAvailable && status.DownloadBytes == 0 {
+				v.serving.Scheduler.Notify()
+			}
+		}
 		return
 	}
 	deployment.Local = true

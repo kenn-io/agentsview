@@ -205,6 +205,58 @@ func TestSharedChoiceLeavesConfiguredSearchAlone(t *testing.T) {
 	}
 }
 
+func TestSavedAutomaticBuiltInResumes(t *testing.T) {
+	setTestHome(t, t.TempDir())
+	dir := testDataDir(t)
+	raw := "[vector]\nenabled = true\n[vector.embed]\nrun_after_sync = false\nbackstop_interval = '-1s'\n"
+	writeTestConfig(t, dir, raw)
+	cfg, err := config.LoadReadOnly()
+	require.NoError(t, err)
+	database := dbtest.OpenTestDBAt(t, filepath.Join(dir, "sessions.db"))
+	dbtest.SeedSessionWithMessages(t, database, "session-one", "sample", []db.Message{dbtest.UserMsg("session-one", 0, "startup indexing")})
+	encoded := make(chan struct{}, 1)
+	encoder := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var request struct {
+			Input []string `json:"input"`
+		}
+		if !assert.NoError(t, json.UnmarshalRead(r.Body, &request)) {
+			w.WriteHeader(http.StatusBadRequest)
+			return
+		}
+		select {
+		case encoded <- struct{}{}:
+		default:
+		}
+		writeEmbeddingsResponse(t, w, len(request.Input), 768)
+	}))
+	defer encoder.Close()
+	oldInspect, oldEndpoint, oldBattery := inspectLocalEmbeddings, localEmbeddingEndpoint, onBattery
+	t.Cleanup(func() {
+		inspectLocalEmbeddings, localEmbeddingEndpoint, onBattery = oldInspect, oldEndpoint, oldBattery
+	})
+	inspectLocalEmbeddings = func(context.Context, embedlocal.Options) (embedlocal.Status, error) {
+		return embedlocal.Status{}, nil
+	}
+	localEmbeddingEndpoint = func(context.Context, embedlocal.Options) (string, error) {
+		return encoder.URL + "/v1", nil
+	}
+	onBattery = func() bool { return false }
+	owner, err := newLiveVectorServing(t.Context(), cfg, database, nil, config.LoadReadOnly)
+	require.NoError(t, err)
+	defer func() { require.NoError(t, owner.Close()) }()
+	select {
+	case <-encoded:
+	case <-time.After(45 * time.Second):
+		require.FailNow(t, "saved automatic setup did not start indexing")
+	}
+	data, err := os.ReadFile(filepath.Join(dir, "config.toml"))
+	require.NoError(t, err)
+	assert.Equal(t, raw, string(data))
+	chosen, err := embedlocal.ChoiceRecorded()
+	require.NoError(t, err)
+	assert.False(t, chosen)
+}
+
 func TestSavedLocalDownloadApproval(t *testing.T) {
 	for _, tc := range []struct {
 		name              string
