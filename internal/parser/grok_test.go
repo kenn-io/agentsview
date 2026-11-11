@@ -1344,3 +1344,22 @@ func TestGrokProviderArtifactBoundaries(t *testing.T) {
 	_, err = provider.Parse(t.Context(), ParseRequest{Source: source})
 	require.Error(t, err)
 }
+
+func TestGrokProviderCountsOversizedUpdatesRecordOnce(t *testing.T) {
+	if testing.Short() {
+		t.Skip("allocates a line larger than maxLineSize")
+	}
+	// The usage pass and the timestamp pass both read updates.jsonl; the
+	// dropped record must be counted once, and its neighbors still parsed.
+	oversized := `{"params":{"update":{"usage":{"inputTokens":5,"outputTokens":5}},"pad":"` +
+		strings.Repeat("x", maxLineSize) + `"}}`
+	result := parseGrokUsageFixture(t, strings.Join([]string{
+		`{"params":{"update":{"usage":{"inputTokens":100,"outputTokens":20}}}}`,
+		oversized,
+		`{"params":{"update":{"usage":{"inputTokens":8,"outputTokens":3}}}}`,
+	}, "\n"))
+
+	assert.Equal(t, 1, result.Session.MalformedLines)
+	require.Len(t, result.UsageEvents, 2)
+	assert.Equal(t, 23, result.Session.TotalOutputTokens)
+}

@@ -2694,6 +2694,8 @@ func TestParseOpenCodeDB_CountsUndecodableMessageRows(t *testing.T) {
 			seedStandardSession(t, seeder)
 			seeder.AddMessage("msg_bad", "ses_abc", 1700000005000, 1700000005000, `{"role":"assistant"`)
 			seeder.AddPart("prt_bad", "msg_bad", "ses_abc", 1700000005000, 1700000005000, `{"type":"text","text":"lost text"}`)
+			// A decodable message whose second part is corrupt keeps its first.
+			seeder.AddPart("prt_2_bad", "msg_2", "ses_abc", 1700000011000, 1700000011000, `{"type":"text","text":"lost`)
 			if tt.withV2 {
 				_, err := db.ExecContext(t.Context(), openCodeV2TestSchema)
 				require.NoError(t, err)
@@ -2707,7 +2709,7 @@ func TestParseOpenCodeDB_CountsUndecodableMessageRows(t *testing.T) {
 			require.NoError(t, err)
 			require.NotNil(t, sess)
 
-			assert.Equal(t, 1, sess.MalformedLines)
+			assert.Equal(t, 2, sess.MalformedLines, "one bad message row and one bad part row")
 			contents := make([]string, 0, len(msgs))
 			for _, m := range msgs {
 				contents = append(contents, m.Content)

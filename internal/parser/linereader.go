@@ -233,14 +233,23 @@ func (lr *lineReader) readLineBytes() ([]byte, error) {
 func readJSONLFrom(
 	ctx context.Context, path string, offset int64, fn func(line string),
 ) (consumed int64, err error) {
+	consumed, _, err = readJSONLFromCounting(ctx, path, offset, fn)
+	return consumed, err
+}
+
+// readJSONLFromCounting is readJSONLFrom for full-file passes that report
+// loss: it also returns how many oversized records the reader skipped.
+func readJSONLFromCounting(
+	ctx context.Context, path string, offset int64, fn func(line string),
+) (consumed int64, skipped int, err error) {
 	f, err := os.Open(path)
 	if err != nil {
-		return 0, fmt.Errorf("open %s: %w", path, err)
+		return 0, 0, fmt.Errorf("open %s: %w", path, err)
 	}
 	defer f.Close()
 
 	if _, err := f.Seek(offset, io.SeekStart); err != nil {
-		return 0, fmt.Errorf(
+		return 0, 0, fmt.Errorf(
 			"seek %s to %d: %w", path, offset, err,
 		)
 	}
@@ -259,5 +268,5 @@ func readJSONLFrom(
 			consumed = lr.bytesRead
 		}
 	}
-	return consumed, lr.Err()
+	return consumed, lr.SkippedLines(), lr.Err()
 }

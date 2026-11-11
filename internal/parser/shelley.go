@@ -469,8 +469,8 @@ type shelleyMessageRow struct {
 	createdAt  string
 }
 
-// loadShelleyMessages also returns how many rows carried llm_data that did not
-// decode, so the session reports the content it could not read.
+// loadShelleyMessages also returns how many rows carried data that did not
+// decode, so the session reports the content or usage it could not read.
 func loadShelleyMessages(ctx context.Context,
 	conn *sql.DB, conv shelleyConversationRow,
 ) ([]ParsedMessage, string, int, error) {
@@ -526,8 +526,9 @@ func loadShelleyMessages(ctx context.Context,
 	return messages, shelleyFingerprint(h), malformed, nil
 }
 
-// decodeShelleyMessage reports malformed when the row's llm_data does not
-// decode; the row may still yield a message from user_data or usage.
+// decodeShelleyMessage reports malformed when the row's llm_data or
+// usage_data, or the user_data it falls back to, does not decode. The row may
+// still yield a message from its other fields.
 func decodeShelleyMessage(
 	r shelleyMessageRow, convModel string,
 ) (msg ParsedMessage, ok bool, malformed bool) {
@@ -600,6 +601,9 @@ func decodeShelleyMessage(
 	// User-typed text may live only in user_data for some message types.
 	if content == "" && len(toolCalls) == 0 && len(toolResults) == 0 {
 		content = shelleyUserDataText(r.userData)
+		if r.userData != "" && !jsontext.Value(r.userData).IsValid() {
+			malformed = true
+		}
 	}
 
 	msg = ParsedMessage{
@@ -622,6 +626,9 @@ func decodeShelleyMessage(
 	// usage blobs Shelley writes for user/tool messages.
 	if r.usageData != "" {
 		applyShelleyUsage(&msg, r.usageData, convModel)
+		if !jsontext.Value(r.usageData).IsValid() {
+			malformed = true
+		}
 	}
 	if content == "" && thinking == "" &&
 		len(toolCalls) == 0 && len(toolResults) == 0 {

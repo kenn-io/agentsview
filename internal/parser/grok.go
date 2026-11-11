@@ -109,12 +109,13 @@ func ParseGrokSummary(
 	if transcriptErr != nil && !os.IsNotExist(transcriptErr) {
 		return ParseResult{}, transcriptErr
 	}
-	timestampAnchors, timestampErr := parseGrokUpdateTimestampAnchors(
+	timestampAnchors, updatesSkipped, timestampErr := parseGrokUpdateTimestampAnchors(
 		ctx, filepath.Join(sessionDir, "updates.jsonl"),
 	)
 	if timestampErr != nil && !errors.Is(timestampErr, os.ErrNotExist) {
 		return ParseResult{}, timestampErr
 	}
+	malformed += updatesSkipped
 	enrichGrokMessageTimestamps(messages, timestampAnchors)
 	enrichGrokToolResultEvents(messages, timestampAnchors)
 	grokAttachSpawnedSubagents(messages)
@@ -595,11 +596,14 @@ func (b *grokTimestampAnchorBuilder) addUserText(text string) {
 	b.content.WriteString(text)
 }
 
+// parseGrokUpdateTimestampAnchors also returns how many oversized updates.jsonl
+// records it skipped. The usage pass reads the same file, so the session counts
+// those records once, from here.
 func parseGrokUpdateTimestampAnchors(
 	ctx context.Context, path string,
-) ([]grokTimestampAnchor, error) {
+) ([]grokTimestampAnchor, int, error) {
 	var builder grokTimestampAnchorBuilder
-	_, err := readJSONLFrom(ctx, path, 0, func(line string) {
+	_, skipped, err := readJSONLFromCounting(ctx, path, 0, func(line string) {
 		if !gjson.Valid(line) {
 			return
 		}
@@ -666,7 +670,7 @@ func parseGrokUpdateTimestampAnchors(
 		}
 	})
 	builder.flush()
-	return builder.anchors, err
+	return builder.anchors, skipped, err
 }
 
 func enrichGrokMessageTimestamps(

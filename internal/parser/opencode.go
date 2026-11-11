@@ -1362,7 +1362,7 @@ func buildOpenCodeParsedSessionContext(
 
 // decodeOpenCodeMessageRowsContext turns legacy message rows into parsed
 // messages. It reports whether any row had a user or assistant role, and how
-// many rows were skipped because their data did not decode.
+// many message and part rows were skipped because their data did not decode.
 func decodeOpenCodeMessageRowsContext(
 	ctx context.Context,
 	cwd string,
@@ -1391,6 +1391,12 @@ func decodeOpenCodeMessageRowsContext(
 			return msgParts[a].timeCreated <
 				msgParts[b].timeCreated
 		})
+		// buildOpenCodeMessage drops a part whose data is not a JSON object.
+		for _, p := range msgParts {
+			if !gjson.Valid(p.data) || !gjson.Parse(p.data).IsObject() {
+				malformed++
+			}
+		}
 
 		pm := buildOpenCodeMessage(
 			ctx, ordinal, m.id, role, m.timeCreated, msgParts, cwd,
