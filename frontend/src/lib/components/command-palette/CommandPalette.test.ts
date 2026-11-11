@@ -563,12 +563,26 @@ describe("CommandPalette", () => {
   );
 
   it.each(["conflict", "started"])("handles setup %s", async (result) => {
-    const setup = { enabled: false, action: "turn-on", provider: "ollama", missing_bytes: 0, busy: false, installing: false, downloaded_bytes: 0, total_bytes: 0 };
+    const setup = {
+      enabled: false,
+      action: "turn-on",
+      provider: "ollama",
+      missing_bytes: 0,
+      busy: false,
+      installing: false,
+      downloaded_bytes: 0,
+      total_bytes: 0,
+    };
     mockEmbeddingsService.getApiV1EmbeddingsStatus
       .mockResolvedValueOnce({ running: false, setup })
-      .mockResolvedValueOnce({ running: false, setup: { ...setup, provider: "built-in", missing_bytes: 295000000 } });
+      .mockResolvedValueOnce({
+        running: false,
+        setup: { ...setup, provider: "built-in", missing_bytes: 295000000 },
+      });
     if (result === "conflict") {
-      mockEmbeddingsService.postApiV1EmbeddingsSetup.mockRejectedValue(new ApiError(409, "provider changed"));
+      mockEmbeddingsService.postApiV1EmbeddingsSetup.mockRejectedValue(
+        new ApiError(409, "provider changed"),
+      );
     } else {
       mockEmbeddingsService.postApiV1EmbeddingsSetup.mockResolvedValue({ started: true });
     }

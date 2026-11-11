@@ -57,7 +57,7 @@ func TestSetupUsesCandidateShownByStatus(t *testing.T) {
 	select {
 	case <-started:
 	case <-time.After(5 * time.Second):
-		t.Fatal("setup selected the changed provider")
+		require.FailNow(t, "setup selected the changed provider")
 	}
 }
 
@@ -139,7 +139,7 @@ func TestSharedSetupPreservesProviderAddedDuringDownload(t *testing.T) {
 			select {
 			case <-started:
 			case <-time.After(10 * time.Second):
-				t.Fatal("setup did not start")
+				require.FailNow(t, "setup did not start")
 			}
 			writeTestConfig(t, dir, raw)
 			release()
@@ -219,7 +219,10 @@ func TestSavedLocalDownloadApproval(t *testing.T) {
 				var request struct {
 					Input []string `json:"input"`
 				}
-				require.NoError(t, json.UnmarshalRead(r.Body, &request))
+				if !assert.NoError(t, json.UnmarshalRead(r.Body, &request)) {
+					w.WriteHeader(http.StatusBadRequest)
+					return
+				}
 				select {
 				case encoded <- struct{}{}:
 				default:
@@ -253,7 +256,7 @@ func TestSavedLocalDownloadApproval(t *testing.T) {
 				select {
 				case <-encoded:
 				case <-time.After(10 * time.Second):
-					t.Fatal("saved local setup did not start indexing")
+					require.FailNow(t, "saved local setup did not start indexing")
 				}
 				chosen, err := embedlocal.ChoiceRecorded()
 				require.NoError(t, err)
@@ -456,7 +459,7 @@ func TestLiveEmbeddingsSetup(t *testing.T) {
 			awaitBuild()
 			if recipe == "automatic" {
 				assert.EqualValues(t, 1, discoveries.Load(), "indexing must use the pinned endpoint")
-				assert.Greater(t, encoded.Load(), int64(0))
+				assert.Positive(t, encoded.Load())
 			}
 			if recipe == "shared" {
 				saved, err := config.LoadReadOnly()
@@ -464,7 +467,7 @@ func TestLiveEmbeddingsSetup(t *testing.T) {
 				_, selected, err := saved.Vector.Embeddings.Server("")
 				require.NoError(t, err)
 				assert.True(t, selected.Local)
-				assert.Greater(t, encoded.Load(), int64(0))
+				assert.Positive(t, encoded.Load())
 			}
 			if recipe == "fresh" || recipe == "nomic" || recipe == "automatic" {
 				chosen, err := embedlocal.ChoiceRecorded()
