@@ -207,6 +207,12 @@ func TestImportCollectionBoundaries(t *testing.T) {
 		_, err = decodeManifestWithLimits(body, limits)
 		require.NoError(t, err)
 
+		m.Segments[1] = m.Segments[0]
+		body, err = canonicalJSON(m)
+		require.NoError(t, err)
+		_, err = decodeManifestWithLimits(body, limits)
+		require.ErrorContains(t, err, "duplicate segment reference")
+		m.Segments[1] = strings.Repeat("b", 64)
 		m.Segments = append(m.Segments, strings.Repeat("c", 64))
 		body, err = canonicalJSON(m)
 		require.NoError(t, err)

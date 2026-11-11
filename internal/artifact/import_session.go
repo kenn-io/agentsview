@@ -187,9 +187,6 @@ func downgradeImportedAssetContent(content string) string {
 func validateImportedManifest(
 	m manifest, origin, gid string, limits artifactLimits, allowQualifiedID bool,
 ) error {
-	if m.Version < manifestMinDecodeVersion || m.Version > manifestFormatVersion {
-		return errors.New("manifest version is unsupported")
-	}
 	if m.Origin != origin {
 		return errors.New("manifest origin is invalid")
 	}
@@ -205,18 +202,13 @@ func validateImportedManifest(
 	if m.Session.Machine != origin {
 		return errors.New("manifest session machine is invalid")
 	}
-	if len(m.Segments) == 0 || len(m.Segments) > limits.manifestSegments {
+	if len(m.Segments) == 0 {
 		return errors.New("manifest segment references are invalid")
 	}
-	seen := make(map[string]struct{}, len(m.Segments))
 	for _, segmentHash := range m.Segments {
 		if err := validateHashHex(segmentHash); err != nil {
 			return err
 		}
-		if _, exists := seen[segmentHash]; exists {
-			return errors.New("manifest has duplicate segment reference")
-		}
-		seen[segmentHash] = struct{}{}
 	}
 	if len(m.UsageEvents) > limits.manifestUsageEvents {
 		return errors.New("manifest usage event limit exceeded")
