@@ -122,6 +122,8 @@ func TestCodexCloudMappingEveryItemType(t *testing.T) {
 	for _, msg := range msgs {
 		if msg.IsCompactBoundary {
 			compaction++
+			// The divider supplies the label; the row repeats nothing.
+			assert.Empty(t, msg.Content)
 		}
 		if msg.IsSystem && !msg.IsCompactBoundary {
 			notes++
