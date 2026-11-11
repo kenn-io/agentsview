@@ -3267,45 +3267,31 @@ func TestSaveVectorSetupPreservesSettings(t *testing.T) {
 	}
 }
 
-func TestSaveVectorSetupPersistsLocalRecipe(t *testing.T) {
-	for _, raw := range []string{
-		"[vector]\ninclude_automated = true\n[vector.embeddings]\nquery_prefix = 'custom: '\n",
-		"[vector.embeddings]\nmodel = 'nomic-embed-text'\ndimension = 768\n[vector.embeddings.servers.cpu]\nlocal = true\nbatch_size = 3\n",
+func TestSaveVectorSetupPersistsSelectedServer(t *testing.T) {
+	for _, tc := range []struct{ raw, endpoint string }{
+		{raw: "[vector]\ninclude_automated = true\n[vector.embeddings]\nquery_prefix = 'custom: '\n"},
+		{raw: "[vector.embeddings]\nmodel = 'nomic-embed-text'\ndimension = 768\n[vector.embeddings.servers.cpu]\nlocal = true\nbatch_size = 3\n"},
+		{endpoint: "http://127.0.0.1:11434/v1"},
 	} {
-		t.Run(raw, func(t *testing.T) {
+		t.Run(tc.raw+tc.endpoint, func(t *testing.T) {
 			dir := setupTestEnv(t)
-			require.NoError(t, os.WriteFile(filepath.Join(dir, configFileName), []byte(raw), 0o600))
+			require.NoError(t, os.WriteFile(filepath.Join(dir, configFileName), []byte(tc.raw), 0o600))
 			cfg, err := LoadReadOnly()
 			require.NoError(t, err)
 			before, err := cfg.VectorSetupEmbeddings(false)
 			require.NoError(t, err)
-			require.NoError(t, cfg.SaveVectorSetup(true, false, ""))
+			require.NoError(t, cfg.SaveVectorSetup(tc.endpoint == "", false, tc.endpoint))
 			saved, err := LoadReadOnly()
 			require.NoError(t, err)
 			assert.True(t, saved.Vector.Enabled)
 			_, selected, err := saved.Vector.Embeddings.Server("")
 			require.NoError(t, err)
-			assert.True(t, selected.Local)
+			assert.Equal(t, tc.endpoint == "", selected.Local)
+			assert.Equal(t, tc.endpoint, selected.Endpoint)
 			before.Servers = saved.Vector.Embeddings.Servers
 			assert.Equal(t, before, saved.Vector.Embeddings)
 		})
 	}
-}
-
-func TestSaveVectorSetupPersistsDiscoveredEndpoint(t *testing.T) {
-	setupTestEnv(t)
-	cfg, err := LoadReadOnly()
-	require.NoError(t, err)
-	before, err := cfg.VectorSetupEmbeddings(false)
-	require.NoError(t, err)
-	require.NoError(t, cfg.SaveVectorSetup(false, false, "http://127.0.0.1:11434/v1"))
-	saved, err := LoadReadOnly()
-	require.NoError(t, err)
-	_, selected, err := saved.Vector.Embeddings.Server("")
-	require.NoError(t, err)
-	assert.Equal(t, "http://127.0.0.1:11434/v1", selected.Endpoint)
-	before.Servers = saved.Vector.Embeddings.Servers
-	assert.Equal(t, before, saved.Vector.Embeddings)
 }
 
 func TestAutomaticVectorSetupRejectsExplicitSettings(t *testing.T) {

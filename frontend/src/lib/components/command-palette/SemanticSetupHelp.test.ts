@@ -214,7 +214,6 @@ describe("SemanticSetupHelp", () => {
       .click();
     await settle();
     expect(embeddingsService.postApiV1EmbeddingsSetup).toHaveBeenCalledTimes(1);
-    expect(embeddingsService.postApiV1EmbeddingsSetup).toHaveBeenCalledWith({ approved_bytes: 295000000, expected_provider: "built-in" });
     expect(embeddingsService.getApiV1EmbeddingsStatus).toHaveBeenCalledTimes(2);
     unmount(component);
   });

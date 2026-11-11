@@ -64,16 +64,16 @@ func (v *liveVectorServing) startSharedChoice() {
 	if err != nil {
 		log.Printf("search by meaning: read shared choice: %v", err)
 	}
+	var approvedBytes int64
+	if chosen {
+		approvedBytes = math.MaxInt64
+	}
 	embeddings := v.cfg.Vector.Embeddings
 	if v.cfg.Vector.Enabled {
 		_, deployment, err := embeddings.Server("")
 		if err == nil && deployment.Local && deployment.Endpoint == "" && v.serving.manager != nil {
-			var approvedBytes int64
-			if chosen {
-				approvedBytes = math.MaxInt64
-			}
 			v.mu.Lock()
-			err = v.startSetup(deployment, approvedBytes, false, false, "")
+			err = v.startSetup(deployment, approvedBytes, true, "")
 			v.mu.Unlock()
 			if err != nil {
 				log.Printf("search by meaning: start saved setup: %v", err)
@@ -88,26 +88,18 @@ func (v *liveVectorServing) startSharedChoice() {
 	if errors.Is(err, config.ErrVectorSetupIneligible) {
 		return
 	}
+	var deployment config.VectorEmbeddingsServerConfig
 	if err == nil {
-		_, deployment, resolveErr := embeddings.Server("")
-		err = resolveErr
-		if err == nil {
-			deployment.Local = true
-			v.mu.Lock()
-			err = v.startSetup(deployment, math.MaxInt64, true, false, "")
-			v.mu.Unlock()
-		}
+		_, deployment, err = embeddings.Server("")
+	}
+	deployment.Local = true
+	v.mu.Lock()
+	defer v.mu.Unlock()
+	if err == nil {
+		err = v.startSetup(deployment, approvedBytes, true, "")
 	}
 	if err != nil {
-		v.mu.Lock()
 		v.setup = server.EmbeddingsSetupStatus{Action: "turn-on", Error: err.Error()}
-		v.mu.Unlock()
-	}
-}
-
-func recordEmbeddingChoice() {
-	if err := embedlocal.RecordChoice(); err != nil {
-		log.Printf("search by meaning: record shared choice: %v", err)
 	}
 }
 
@@ -309,14 +301,11 @@ func (v *liveVectorServing) Setup(approvedBytes int64, expectedProvider string) 
 		}
 		deployment.Endpoint = pinnedEndpoint
 	}
-	return v.startSetup(deployment, approvedBytes, false, true, pinnedEndpoint)
+	return v.startSetup(deployment, approvedBytes, false, pinnedEndpoint)
 }
 
 // startSetup starts the leased worker with v.mu held.
-func (v *liveVectorServing) startSetup(deployment config.VectorEmbeddingsServerConfig, approvedBytes int64, automatic, recordChoice bool, pinnedEndpoint string) error {
-	if v.setup.Busy {
-		return vector.ErrBuildRunning
-	}
+func (v *liveVectorServing) startSetup(deployment config.VectorEmbeddingsServerConfig, approvedBytes int64, automatic bool, pinnedEndpoint string) error {
 	release, ok := v.idle.BeginWork()
 	if !ok {
 		return errors.New("server is shutting down")
@@ -325,7 +314,7 @@ func (v *liveVectorServing) startSetup(deployment config.VectorEmbeddingsServerC
 	v.done = make(chan struct{})
 	go func() {
 		defer release()
-		err := v.activate(deployment, approvedBytes, automatic, recordChoice, pinnedEndpoint)
+		err := v.activate(deployment, approvedBytes, automatic, pinnedEndpoint)
 		v.mu.Lock()
 		v.setup.Busy = false
 		if err != nil {
@@ -343,9 +332,10 @@ func (v *liveVectorServing) startSetup(deployment config.VectorEmbeddingsServerC
 	return nil
 }
 
-func (v *liveVectorServing) activate(deployment config.VectorEmbeddingsServerConfig, approvedBytes int64, automatic, recordChoice bool, pinnedEndpoint string) error {
+func (v *liveVectorServing) activate(deployment config.VectorEmbeddingsServerConfig, approvedBytes int64, automatic bool, pinnedEndpoint string) error {
 	cfg := v.cfg
-	_, builtin, err := resolveLocalEmbeddings(v.ctx, deployment,
+	builtin := deployment.Local && deployment.Endpoint == ""
+	_, err := resolveLocalEmbeddings(v.ctx, deployment,
 		func(_ context.Context, size int64) (bool, error) {
 			if size > approvedBytes {
 				v.mu.Lock()
@@ -393,8 +383,10 @@ func (v *liveVectorServing) activate(deployment config.VectorEmbeddingsServerCon
 	if errors.Is(err, vector.ErrBuildRunning) {
 		err = nil
 	}
-	if err == nil && builtin && recordChoice {
-		recordEmbeddingChoice()
+	if err == nil && builtin && !automatic {
+		if err := embedlocal.RecordChoice(); err != nil {
+			log.Printf("search by meaning: record shared choice: %v", err)
+		}
 	}
 	return err
 }

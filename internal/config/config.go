@@ -4257,12 +4257,6 @@ func (c *Config) SaveVectorSetup(local, automatic bool, endpoint string) error {
 			return err
 		}
 		if local || endpoint != "" {
-			section := existing["vector"].(map[string]any)
-			embeddings, _ := section["embeddings"].(map[string]any)
-			if embeddings == nil {
-				embeddings = make(map[string]any)
-				section["embeddings"] = embeddings
-			}
 			recipe := candidate.Vector.Embeddings
 			name, server, err := recipe.Server("")
 			if err != nil {
@@ -4270,6 +4264,10 @@ func (c *Config) SaveVectorSetup(local, automatic bool, endpoint string) error {
 			}
 			if server.Endpoint != "" || (endpoint != "" && server.Local) {
 				return invalidVectorSetupError{errors.New("embeddings provider changed during setup")}
+			}
+			embeddings, err := configTable(existing["vector"].(map[string]any), "embeddings")
+			if err != nil {
+				return err
 			}
 			if _, ok := embeddings["model"]; !ok {
 				embeddings["model"] = recipe.Model
@@ -4283,15 +4281,13 @@ func (c *Config) SaveVectorSetup(local, automatic bool, endpoint string) error {
 					}
 				}
 			}
-			servers, _ := embeddings["servers"].(map[string]any)
-			if servers == nil {
-				servers = make(map[string]any)
-				embeddings["servers"] = servers
+			servers, err := configTable(embeddings, "servers")
+			if err != nil {
+				return err
 			}
-			selected, _ := servers[name].(map[string]any)
-			if selected == nil {
-				selected = make(map[string]any)
-				servers[name] = selected
+			selected, err := configTable(servers, name)
+			if err != nil {
+				return err
 			}
 			if local {
 				selected["local"] = true

@@ -22,18 +22,18 @@ var (
 	errLocalApprovalRequired = errors.New("local embedding download requires approval")
 )
 
-func resolveLocalEmbeddings(ctx context.Context, server config.VectorEmbeddingsServerConfig, approve func(context.Context, int64) (bool, error), progress func(int64, int64)) (string, bool, error) {
+func resolveLocalEmbeddings(ctx context.Context, server config.VectorEmbeddingsServerConfig, approve func(context.Context, int64) (bool, error), progress func(int64, int64)) (string, error) {
 	if server.Endpoint != "" {
-		return server.Endpoint, false, nil
+		return server.Endpoint, nil
 	}
 	opts := embedlocal.Options{SkipOllama: server.Local}
 	endpoint, err := localEmbeddingEndpoint(ctx, opts)
 	if !errors.Is(err, embedlocal.ErrNotFound) {
-		return endpoint, server.Local && err == nil, err
+		return endpoint, err
 	}
 	opts.DataDir, err = embedlocal.DefaultDir()
 	if err != nil {
-		return "", false, err
+		return "", err
 	}
 	if approve == nil {
 		approve = func(context.Context, int64) (bool, error) { return false, errLocalApprovalRequired }
@@ -42,13 +42,12 @@ func resolveLocalEmbeddings(ctx context.Context, server config.VectorEmbeddingsS
 	installation, err := installLocalEmbeddings(ctx, installOpts)
 	if err != nil {
 		if errors.Is(err, errLocalApprovalRequired) {
-			return "", false, errors.New("local embeddings: run agentsview index embeddings build to approve the first download")
+			return "", errors.New("local embeddings: run agentsview index embeddings build to approve the first download")
 		}
-		return "", false, err
+		return "", err
 	}
 	opts.DataDir, opts.Executable = installation.DataDir, installation.Executable
-	endpoint, err = localEmbeddingEndpoint(ctx, opts)
-	return endpoint, server.Local && err == nil, err
+	return localEmbeddingEndpoint(ctx, opts)
 }
 
 // prepareLocalEmbeddings asks before downloading the local model. When the
@@ -60,7 +59,7 @@ func prepareLocalEmbeddings(ctx context.Context, cfg config.Config, name string,
 		return err
 	}
 	setupPending := false
-	_, _, err = resolveLocalEmbeddings(ctx, server, func(ctx context.Context, size int64) (bool, error) {
+	_, err = resolveLocalEmbeddings(ctx, server, func(ctx context.Context, size int64) (bool, error) {
 		_, setupPending = daemonSetupClient(ctx, cfg)
 		return !setupPending && confirmScanned(in, out, fmt.Sprintf("Download approximately %d MB for local semantic search?", downloadMegabytes(size))), nil
 	}, nil)
@@ -94,7 +93,7 @@ func lazyLocalEncoder(c config.VectorEmbeddingsConfig, name string, server confi
 		current := cached
 		mu.Unlock()
 		if current == nil {
-			endpoint, _, err := resolveLocalEmbeddings(ctx, server, nil, nil)
+			endpoint, err := resolveLocalEmbeddings(ctx, server, nil, nil)
 			if err != nil {
 				return nil, err
 			}
