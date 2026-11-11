@@ -72,18 +72,20 @@ func Materialize(ctx context.Context, cfg config.Config, session *db.Session, cw
 		if !ok || remotePath == "" {
 			return Result{}, errors.New("mirror source host does not match session identity")
 		}
-		var name string
-		name, err = remotesync.SafeRemappedRemotePath(root, remotePath)
-		if err == nil {
-			lock, lockErr := remotesync.AcquireMirrorLock(ctx, root)
-			if lockErr != nil {
-				return Result{}, lockErr
-			}
-			files, err = readLocalSource(ctx, root, name, id, maxSourceBytes)
-			if err != nil {
-				return Result{}, fmt.Errorf("reading native transcript: %w", errors.Join(err, lock.Close()))
-			}
-			err = lock.Close()
+		name, err := remotesync.SafeRemappedRemotePath(root, remotePath)
+		if err != nil {
+			return Result{}, fmt.Errorf("reading native transcript: %w", err)
+		}
+		lock, err := remotesync.AcquireMirrorLock(ctx, root)
+		if err != nil {
+			return Result{}, err
+		}
+		files, err = readLocalSource(ctx, root, name, id, maxSourceBytes)
+		if err != nil {
+			return Result{}, fmt.Errorf("reading native transcript: %w", errors.Join(err, lock.Close()))
+		}
+		if err := lock.Close(); err != nil {
+			return Result{}, fmt.Errorf("reading native transcript: %w", err)
 		}
 	} else {
 		files, err = readConfiguredLocal(ctx, cfg, session, source, id)
