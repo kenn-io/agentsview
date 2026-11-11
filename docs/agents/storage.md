@@ -684,7 +684,7 @@ target `push_vectors` is optional: omitted means the vector phase runs, the same
 default as the `[pg]` config key, and an explicit `false` opts out.
 
 Every change to the generated OpenAPI contract takes the next `server.APIVersion`
-and a `<version>-<digest>.json` record in `cmd/agentsview/testdata/api_versions`;
+and an empty `<version>-<digest>` record file in `cmd/agentsview/testdata/api_versions`;
 `make test-api-version` names both. When two PRs record different contracts
 under one version, the later one deletes its record, adds one under the version
 the check names, and moves any feature minimum it introduced to that version. A
