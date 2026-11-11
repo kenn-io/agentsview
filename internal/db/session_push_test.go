@@ -224,7 +224,10 @@ func TestSessionPushWriteFailuresRollBack(t *testing.T) {
 
 func TestSessionPushPreservesExistingExternalParent(t *testing.T) {
 	d := testDB(t)
-	_, err := d.SetSessionExternalParent(t.Context(), "snapshot", "local-parent")
+	insertSession(t, d, "source-parent", "project")
+	_, err := d.SetSessionExternalParent(t.Context(), "source-parent", "snapshot")
+	require.NoError(t, err)
+	_, err = d.SetSessionExternalParent(t.Context(), "snapshot", "local-parent")
 	require.NoError(t, err)
 	receipt, write := sessionPushFixture("snapshot")
 	receipt.ExternalParentSessionID = new("source-parent")
@@ -277,10 +280,14 @@ func TestSessionPushReceiverParentIgnoresExistingLocalReference(t *testing.T) {
 func TestSessionPushRejectsParentCycleWithoutSaving(t *testing.T) {
 	d := testDB(t)
 	ctx := t.Context()
+	dir := t.TempDir()
+	d.SetAssetsDir(dir)
+	d.SetToolResultImages(config.ToolResultImagesOffload)
 	insertSession(t, d, "parent", "proj")
 	_, err := d.SetSessionExternalParent(ctx, "parent", "snapshot")
 	require.NoError(t, err)
 	receipt, write := sessionPushFixture("snapshot")
+	write.Messages = []Message{testImageMessage("snapshot")}
 	receipt.ExternalParentSessionID = new("parent")
 	created, err := d.ApplySessionPush(ctx, receipt, write)
 	require.ErrorIs(t, err, ErrSessionPushConflict)
@@ -291,6 +298,9 @@ func TestSessionPushRejectsParentCycleWithoutSaving(t *testing.T) {
 	reserved, err := d.SessionPushReservations(ctx, []string{"snapshot"})
 	require.NoError(t, err)
 	assert.False(t, reserved["snapshot"])
+	entries, err := os.ReadDir(dir)
+	require.NoError(t, err)
+	assert.Empty(t, entries)
 }
 
 func TestSessionPushRebuildPreservesReceiptsAndCuration(t *testing.T) {

@@ -786,6 +786,26 @@ func TestExportToStorePublishesDependenciesBeforeCheckpointAndSkipsUnchanged(t *
 	assert.False(t, store.creates[1].Created)
 }
 
+func TestExportSkipsPushedSessionWithLocalMachine(t *testing.T) {
+	database := testExportDB(t)
+	ctx := t.Context()
+	const origin = "push-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+	require.NoError(t, database.SetSyncState(ctx, "artifact_local_machine_name", origin))
+	created, err := database.ApplySessionPush(ctx, db.SessionPushReceipt{SessionID: "pushed", SourceOrigin: origin, PayloadHash: strings.Repeat("a", 64)}, db.SessionBatchWrite{Session: db.Session{ID: "pushed", Agent: "claude", Machine: origin}, ReplaceMessages: true})
+	require.NoError(t, err)
+	require.True(t, created)
+	store, err := newProtocolTestStore(t.TempDir())
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, store.Close()) })
+	for _, full := range []bool{false, true} {
+		_, err := ExportToStore(ctx, database, store, ExportOptions{Origin: contractOrigin, Full: full})
+		require.NoError(t, err)
+		page, err := firstStoreEntryPage(ctx, store, contractOrigin, KindManifests, maxArtifactListPageSize)
+		require.NoError(t, err)
+		assert.Empty(t, page.Items)
+	}
+}
+
 func TestExportManifestVersionTracksPRLinks(t *testing.T) {
 	for _, links := range [][]db.PRLink{nil, {{URL: "https://github.com/owner/repo/pull/7", Host: "github.com", Repository: "owner/repo", Number: 7}}} {
 		database := testExportDB(t)

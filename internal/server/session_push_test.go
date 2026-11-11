@@ -80,6 +80,36 @@ func TestSessionPushReceiverInsertAndRetry(t *testing.T) {
 	assert.Equal(t, "claude", stored.Agent)
 }
 
+func TestSessionPushCannotClaimReceiverOrigin(t *testing.T) {
+	source := testServer(t, 30*time.Second).db.(*db.DB)
+	require.NoError(t, source.UpsertSession(t.Context(), db.Session{ID: "selected", Agent: "claude", Machine: "source"}))
+	packet, _, err := artifact.EncodeSessionPush(t.Context(), source, "selected", "")
+	require.NoError(t, err)
+	var envelope artifact.SessionPushEnvelope
+	require.NoError(t, json.Unmarshal(packet, &envelope))
+	var manifest map[string]any
+	require.NoError(t, json.Unmarshal(envelope.Manifest, &manifest))
+	manifest["origin"] = "receiver-box"
+	manifest["session"].(map[string]any)["machine"] = "receiver-box"
+	envelope.Manifest, err = json.Marshal(manifest)
+	require.NoError(t, err)
+	packet, err = json.Marshal(envelope)
+	require.NoError(t, err)
+	receiver := testServer(t, 30*time.Second)
+	receiver.cfg.AcceptSessionPush, receiver.cfg.RequireAuth, receiver.cfg.AuthToken = true, true, "secret"
+	database := receiver.db.(*db.DB)
+	require.NoError(t, database.SetSyncState(t.Context(), "artifact_local_machine_name", "receiver-box"))
+	r := httptest.NewRequestWithContext(t.Context(), http.MethodPost, "/api/v1/sessions/ingest", bytes.NewReader(packet))
+	r.Header.Set("Authorization", "Bearer secret")
+	r.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	receiver.Handler().ServeHTTP(w, r)
+	require.Equal(t, http.StatusOK, w.Code, w.Body.String())
+	owned, err := database.ListOwnedSessionIDsForExport(t.Context())
+	require.NoError(t, err)
+	assert.NotContains(t, owned, "selected")
+}
+
 func TestSessionPushReceiverReportsConflict(t *testing.T) {
 	source := testServer(t, 30*time.Second).db.(*db.DB)
 	session := db.Session{ID: "source", Agent: "claude", Machine: "source", MessageCount: 1}

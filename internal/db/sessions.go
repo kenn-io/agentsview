@@ -5672,6 +5672,7 @@ func (db *DB) ListOwnedSessionIDsForExport(ctx context.Context) ([]string, error
 				WHERE key IN ('artifact_local_machine_name', 'artifact_local_installation_id')
 			)
 		 ) AND deleted_at IS NULL
+		 AND NOT EXISTS (SELECT 1 FROM session_push_receipts r WHERE r.session_id = sessions.id)
 		 ORDER BY id`,
 	)
 	if err != nil {

@@ -32,6 +32,7 @@ type artifactCreator interface {
 type artifactExportStore interface {
 	artifactPublicationStreamer
 	ListOwnedSessionIDsForExport(context.Context) ([]string, error)
+	SessionPushReservations(context.Context, []string) (map[string]bool, error)
 	CountPendingArtifactExports(context.Context) (int, error)
 	PendingArtifactExports(context.Context, int) ([]db.ArtifactExportQueueItem, error)
 	ArtifactExportClaims(context.Context, []string) ([]db.ArtifactExportQueueItem, error)
@@ -140,6 +141,10 @@ func exportToStoreWithLimits(
 	if err != nil {
 		return ExportResult{}, err
 	}
+	reserved, err := database.SessionPushReservations(ctx, selected)
+	if err != nil {
+		return ExportResult{}, fmt.Errorf("checking pushed session reservations: %w", err)
+	}
 	changes := make([]db.ArtifactPublicationChange, 0, len(claims))
 	outcomes := make([]db.ArtifactExportOutcome, 0, len(claims))
 	result := ExportResult{}
@@ -152,7 +157,7 @@ func exportToStoreWithLimits(
 		if err != nil {
 			return result, fmt.Errorf("loading artifact export session %s: %w", sessionID, err)
 		}
-		if sess == nil || !slices.Contains(localMachines, sess.Machine) || sess.DeletedAt != nil {
+		if reserved[sessionID] || sess == nil || !slices.Contains(localMachines, sess.Machine) || sess.DeletedAt != nil {
 			if claimed {
 				changes = append(changes, db.ArtifactPublicationChange{
 					SessionID: sessionID, Generation: claim.Generation, Delete: true,
