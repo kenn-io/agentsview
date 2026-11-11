@@ -36,6 +36,10 @@ A deleted session remains visible as a missing record. Project filters use the
 project saved with its links in SQLite, including after a rebuild or a deletion
 before the first push.
 
+Search matches text extracted from tool-result images when
+[`[image_text]`](configuration.md#image-text) is enabled locally. The first
+push after upgrading rebuilds the mirror to copy existing image text.
+
 ## Quick Start
 
 ```bash

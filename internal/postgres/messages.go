@@ -357,14 +357,20 @@ func (s *Store) Search(
 	// Message branch matches every term (AND). Each term gets its own escaped
 	// ILIKE placeholder so a multi-word query requires all terms to be present
 	// without demanding they be contiguous, exactly like SQLite FTS5.
-	termClauses := make([]string, len(terms))
+	termParams := make([]int, len(terms))
 	for i, t := range terms {
-		termClauses[i] = fmt.Sprintf(
-			"m.content ILIKE '%%' || $%d || '%%' ESCAPE E'\\\\'", argIdx)
+		termParams[i] = argIdx
 		args = append(args, escapeLike(t))
 		argIdx++
 	}
-	msgTermPredicate := strings.Join(termClauses, "\n\t\t\t\t\tAND ")
+	termPredicate := func(column string) string {
+		clauses := make([]string, len(termParams))
+		for i, p := range termParams {
+			clauses[i] = fmt.Sprintf(
+				"%s ILIKE '%%' || $%d || '%%' ESCAPE E'\\\\'", column, p)
+		}
+		return strings.Join(clauses, "\n\t\t\t\t\tAND ")
+	}
 
 	msgProjectClause := ""
 	nameProjectClause := ""
@@ -419,6 +425,42 @@ func (s *Store) Search(
 				POSITION(LOWER($2) IN LOWER(m.content)) ASC,
 				m.ordinal ASC
 		),
+		-- Image text matches sessions without a message match. It ranks with
+		-- name-only rows and anchors at the tool call's message, which must
+		-- pass the message branch's visibility checks.
+		image_matches AS (
+			SELECT DISTINCT ON (s.id)
+				s.id AS session_id,
+				s.project,
+				s.agent,
+ s.machine,
+				COALESCE(s.display_name, s.session_name, s.first_message, '') AS name,
+				COALESCE(s.ended_at, s.started_at) AS session_ended_at,
+				im.ordinal,
+				0 AS match_pos,
+				CASE
+					WHEN POSITION(LOWER($2) IN LOWER(it.text)) > 100
+						THEN '...' || SUBSTRING(it.text
+							FROM GREATEST(1, POSITION(
+								LOWER($2) IN LOWER(it.text)
+							) - 50) FOR 200) || '...'
+					ELSE SUBSTRING(it.text FROM 1 FOR 200)
+						|| CASE WHEN LENGTH(it.text) > 200
+							THEN '...' ELSE '' END
+				END AS snippet
+			FROM image_text it
+			JOIN sessions s ON s.id = it.session_id
+			JOIN messages im ON im.session_id = it.session_id
+				AND im.ordinal = it.message_ordinal
+			WHERE %s
+				AND s.deleted_at IS NULL
+				AND im.is_system = FALSE
+				AND `+db.PostgresSystemPrefixSQL("im.content", "im.role")+`
+				AND s.id NOT IN (SELECT session_id FROM msg_matches)
+				%s
+			ORDER BY s.id, it.message_ordinal, it.call_index,
+				it.source_kind, it.event_index, it.image_index, it.processor
+		),
 		name_matches AS (
 			SELECT
 				s.id AS session_id,
@@ -447,6 +489,7 @@ func (s *Store) Search(
 					  AND `+db.PostgresSystemPrefixSQL("mx.content", "mx.role")+`
 				)
 				AND s.id NOT IN (SELECT session_id FROM msg_matches)
+				AND s.id NOT IN (SELECT session_id FROM image_matches)
 				%s
 		)
 		-- rank is a constant 1.0 because PostgreSQL ILIKE has no
@@ -458,12 +501,16 @@ func (s *Store) Search(
 		FROM (
 			SELECT *, 1 AS match_priority FROM msg_matches
 			UNION ALL
+			SELECT *, 2 AS match_priority FROM image_matches
+			UNION ALL
 			SELECT *, 2 AS match_priority FROM name_matches
 		) combined
 		ORDER BY %s
 		LIMIT $%d OFFSET $%d`,
-		msgTermPredicate,
+		termPredicate("m.content"),
 		msgProjectClause,
+		termPredicate("it.text"),
+		nameProjectClause,
 		nameProjectClause,
 		outerOrderBy,
 		argIdx, argIdx+1,

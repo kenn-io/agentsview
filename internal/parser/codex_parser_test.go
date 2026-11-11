@@ -4291,3 +4291,54 @@ func TestCodexUsageOnlyRowKeepsResumeOrdinals(t *testing.T) {
 	require.Len(t, cold.messages, 1)
 	assert.Equal(t, 4, cold.messages[0].Ordinal)
 }
+
+// A reasoning row takes usage only while no newer response has passed it. The
+// seed sink must apply the same rule: here the second call skips the older
+// reasoning row and becomes a hidden row, so the pending call sits at ordinal
+// 4. Attaching that call to the reasoning row would put it at ordinal 3.
+func TestCodexUsageOnlyRowAfterReasoningKeepsResumeOrdinals(t *testing.T) {
+	prefix := testjsonl.JoinJSONL(
+		testjsonl.CodexSessionMetaJSON(
+			"usage-only-reasoning-seed", "/workspace/project-a", "codex_cli_rs", tsEarly,
+		),
+		testjsonl.CodexTurnContextJSON("gpt-5.4", tsEarlyS1),
+		testjsonl.CodexMsgJSON("user", "Run the check", "2024-01-01T10:00:02Z"),
+		codexReasoningLine(t, "2024-01-01T10:00:03Z", []string{"Looking."}, nil, true),
+		testjsonl.CodexMsgJSON("assistant", "Checking", "2024-01-01T10:00:03Z"),
+		testjsonl.CodexTokenCountJSON("2024-01-01T10:00:04Z", 1_000, 50, 400),
+		testjsonl.CodexTokenCountJSON("2024-01-01T10:00:05Z", 2_000, 80, 900),
+		testjsonl.CodexFunctionCallWithCallIDJSON(
+			"shell", "call_reasoning_seed", map[string]any{"command": "make check"},
+			"2024-01-01T10:00:06Z",
+		),
+	)
+	path := createTestFile(t, "usage-only-reasoning-seed.jsonl", prefix)
+	warmProvider := newCodexTestProvider(t)
+	_, prefixMessages, err := warmProvider.parseSession(path, "local", false)
+	require.NoError(t, err)
+	require.Len(t, prefixMessages, 5)
+	assert.True(t, prefixMessages[1].HasThinking)
+	assert.Empty(t, prefixMessages[1].TokenUsage)
+	assert.Equal(t, 50, prefixMessages[2].OutputTokens)
+	assert.True(t, prefixMessages[3].IsSystem)
+	assert.Equal(t, 80, prefixMessages[3].OutputTokens)
+	require.Len(t, prefixMessages[4].ToolCalls, 1)
+
+	prefixInfo, err := os.Stat(path)
+	require.NoError(t, err)
+	f, err := os.OpenFile(path, os.O_APPEND|os.O_WRONLY, 0o644)
+	require.NoError(t, err)
+	_, err = f.WriteString(testjsonl.CodexFunctionCallOutputJSON(
+		"call_reasoning_seed", "ok", "2024-01-01T10:00:07Z",
+	) + "\n")
+	require.NoError(t, err)
+	require.NoError(t, f.Close())
+
+	cold, err := newCodexTestProvider(t).parseSessionFromDetailed(t.Context(),
+		path, prefixInfo.Size(), len(prefixMessages), false,
+	)
+	require.NoError(t, err)
+	require.Len(t, cold.toolCallUpdates, 1)
+	assert.Equal(t, 4, cold.toolCallUpdates[0].MessageOrdinal)
+	assert.True(t, cold.toolCallUpdates[0].TargetKnown)
+}

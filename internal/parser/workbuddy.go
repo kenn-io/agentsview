@@ -169,7 +169,7 @@ func parseWorkBuddySession(ctx context.Context, path, project, machine string) (
 		ParentSessionID:  parentID,
 		RelationshipType: sourceTypeIfRel(isSubagent),
 		Cwd:              cwd,
-		MalformedLines:   malformed,
+		MalformedLines:   malformed + lr.SkippedLines(),
 		FirstMessage:     firstMsg,
 		SessionName:      sessionName,
 		StartedAt:        startedAt,

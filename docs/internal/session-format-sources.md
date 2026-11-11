@@ -1,5 +1,5 @@
 ---
-last_edited: 2026-11-09
+last_edited: 2026-11-11
 ---
 
 # Session Format Source Inventory
@@ -740,6 +740,56 @@ fixtures retain this field; missing identities remain source-local.
 
 ## Codex (`codex`)
 
+- **Reasoning, compaction, and usage repeats (checked 2026-11-11 at
+  `87b7bdbf2efb9cb6fb15d821ef535061012c0138`):** The pinned
+  [response schema](https://github.com/openai/codex/blob/87b7bdbf2efb9cb6fb15d821ef535061012c0138/codex-rs/protocol/src/models.rs)
+  defines `reasoning` items with a `summary` array of `summary_text` parts,
+  an optional `content` array of `reasoning_text` or `text` parts, and
+  `encrypted_content`. The
+  [rollout policy](https://github.com/openai/codex/blob/87b7bdbf2efb9cb6fb15d821ef535061012c0138/codex-rs/rollout/src/policy.rs)
+  persists reasoning items and top-level `compacted` records. A
+  [`compacted` record](https://github.com/openai/codex/blob/87b7bdbf2efb9cb6fb15d821ef535061012c0138/codex-rs/history/src/rollout_payload.rs)
+  carries `message` and `replacement_history`. Local compaction stores its
+  summary in `message`
+  ([compact.rs](https://github.com/openai/codex/blob/87b7bdbf2efb9cb6fb15d821ef535061012c0138/codex-rs/core/src/compact.rs)),
+  and remote compaction leaves it empty. A read-only scan of 17,779 local
+  rollouts found 230,292 reasoning items: 27,822 had summary text, none had
+  raw `content`, and the rest were encrypted only. It also found 177
+  `compacted` records, 160 with a summary. Local compaction writes the
+  summary model's reply as an ordinary assistant message, followed by its
+  `token_count`, before the `compacted` record. Agentsview stores readable
+  reasoning as an assistant thinking row: summary text first, raw content
+  only when there is no summary, and no row for encrypted-only reasoning.
+  Each `compacted` record becomes a system compact-boundary row whose content
+  is `message`. When remote compaction leaves it empty, the row has no
+  content, because the transcript divider already labels every compaction.
+  `replacement_history` is not replayed. Usage attachment skips boundary
+  rows. A reasoning row takes usage only while it is the newest assistant row
+  of the turn, so the message or call that follows it in the same response
+  keeps that response's usage. In the scan, 9 `token_count` events from
+  responses that produced only reasoning used to be dropped and now count,
+  and 57 move from an older assistant message to their own response. Native
+  `token_usage_record` rows carry `response_id`, per-response `usage`, and
+  running turn and thread totals
+  ([protocol.rs](https://github.com/openai/codex/blob/87b7bdbf2efb9cb6fb15d821ef535061012c0138/codex-rs/protocol/src/protocol.rs)).
+  They mirror `token_count` (291,310 records against 292,444 `token_count`
+  events with usage in a second scan of the same, still-growing corpus), so
+  the parser still reads only `token_count` and adds no session totals.
+  Repeated `token_count` events are now recognized by their whole `info`
+  object, including the cumulative `total_token_usage`, so two calls with
+  equal per-call counts both count. The scan suppressed the same
+  753 repeats under both keys. Usage that still finds no row stays
+  unattached. Data version 174 reparses Codex, TraeX, Augure Code, Open
+  Interpreter, and Codex Cloud sources in place, and the parser checkpoint
+  moves to version 6, so a stored cursor makes the next append a full parse.
+  Covered by
+  `TestCodexReasoningKeptAsThinking`, `TestCodexReasoningUsageAttachment`,
+  `TestCodexCompactedRecordBecomesBoundary`,
+  `TestCodexTokenCountDedupUsesCumulativeTotal`,
+  `TestCodexFidelityUsageReachesCost`,
+  `TestCodexFidelityAppendMatchesFullParse`, and
+  `TestCodexTranscriptFidelityUpgradeReparsesInPlace`.
+
 - **Archived shell argv:** Older Codex shell calls record `command` as an
   argument array, including `bash -lc` scripts. Commit links read these arrays
   as shell words. Data version 170 reparses Codex sources.
@@ -1383,13 +1433,16 @@ fixtures retain this field; missing identities remain source-local.
   [compact.rs](https://github.com/openai/codex/blob/3535c22b43e5d7a67322f6e85b267ef65577c227/codex-rs/core/src/compact.rs#L898-L918)
   sends one for a compaction request.
   [policy.rs](https://github.com/openai/codex/blob/3535c22b43e5d7a67322f6e85b267ef65577c227/codex-rs/rollout/src/policy.rs#L128-L141)
-  always persists `TokenCount`. When no assistant message in the turn can take
-  the usage, Agentsview stores it as a hidden usage-only row. Rate-limit
-  updates resend the previous `last_token_usage`; the existing digest check
-  drops the repeat. An incremental parse with no stored target still falls
-  back to a full parse, and the prefix seed makes the same attach decision as
-  the full parse so later ordinals do not shift. TraeX, Augure Code, and Open
-  Interpreter share this decoder.
+  always persists `TokenCount`. A response whose reasoning has readable text
+  keeps its usage on its thinking row. When no row in the turn can take the
+  usage, Agentsview stores it as a hidden usage-only row. Examples are
+  encrypted-only reasoning, a compaction request, or a later call after the
+  reasoning row has stopped taking usage. Rate-limit updates resend the
+  previous usage, and the existing digest check drops the repeat. An
+  incremental parse with no stored target still falls back to a full parse.
+  The prefix seed applies the same attach rule as the full parse, so later
+  ordinals do not shift. TraeX, Augure Code, and Open Interpreter share this
+  decoder.
 - **Agentsview:** `internal/parser/codex.go` and
   `internal/parser/codex_provider.go`; usage is taken from the last-turn
   counters rather than repeatedly counting cumulative totals. Reverified
@@ -4082,6 +4135,11 @@ schemas keep their existing ordering behavior.
   these items empty. The parser keeps each one as a message because each marks
   a real turn. The transcript shows a run of consecutive empty messages as one
   collapsed row.
+- **Compaction items (2026-11-11):** A `contextCompaction` item carries no
+  summary text. The parser stores it as a system compact-boundary row with no
+  content; the transcript divider supplies the "Context compacted" label.
+  Before data version 174 the row repeated that label as its content, so the
+  divider showed it twice. Covered by `TestCodexCloudMappingEveryItemType`.
 - **Generated images (2026-10-29):** An `imageGeneration` item carries `id`,
   `status`, `revisedPrompt`, and `result`, where `result` is base64 image data
   (`no-public-source`; the shape came from a session the maintainer viewed).

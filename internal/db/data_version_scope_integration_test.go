@@ -15,6 +15,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"go.kenn.io/agentsview/internal/codexcloud/mirror"
+	"go.kenn.io/agentsview/internal/config"
 	"go.kenn.io/agentsview/internal/db"
 	"go.kenn.io/agentsview/internal/dbtest"
 	"go.kenn.io/agentsview/internal/export"
@@ -23,6 +24,65 @@ import (
 	"go.kenn.io/agentsview/internal/sync"
 	"go.kenn.io/agentsview/internal/testjsonl"
 )
+
+func TestImageTextCompatibilityUpgradeKeepsStrippedImagesRemoved(t *testing.T) {
+	ctx := t.Context()
+	version := db.ImageTextDataVersion
+	// Isolate the image-text version: a later version that reparses Codex
+	// rebuilds results from the source, which this test is not about.
+	scopes := map[int][]parser.AgentType{}
+	for v := version; v <= db.CurrentDataVersion(); v++ {
+		scopes[v] = []parser.AgentType{}
+	}
+	t.Cleanup(db.InstallDataVersionScopesForTest(scopes))
+	database := dbtest.OpenTestDB(t)
+	root := t.TempDir()
+	const id = "019eb791-cf7d-75c1-8439-9ed74c122b06"
+	const image = `[{"type":"input_image","image_url":"data:image/png;base64,AAEC"}]`
+	body := testjsonl.JoinJSONL(
+		testjsonl.CodexSessionMetaJSON(id, root, "user", "2024-01-01T10:00:00Z"),
+		testjsonl.CodexMsgJSON("user", "show image", "2024-01-01T10:00:01Z"),
+		testjsonl.CodexFunctionCallWithCallIDJSON("exec_command", "call", `{}`, "2024-01-01T10:00:02Z"),
+		testjsonl.CodexFunctionCallOutputJSON("call", json.RawMessage(image), "2024-01-01T10:00:03Z"),
+	)
+	dbtest.WriteTestFile(t, filepath.Join(root, "rollout-2024-01-01T10-00-00-"+id+".jsonl"), []byte(body))
+	cfg := sync.EngineConfig{Machine: "local", AgentDirs: map[parser.AgentType][]string{parser.AgentCodex: {root}}, ToolResultImages: config.ToolResultImagesKeep, DisableFilesystemProjectDiscovery: true}
+	engine := sync.NewEngine(ctx, database, cfg)
+	require.Equal(t, 1, engine.SyncAll(ctx, nil).Synced)
+	engine.Close()
+	_, err := database.StripToolImages(ctx, db.StripImagesFilter{})
+	require.NoError(t, err)
+	require.NoError(t, database.SetSessionDataVersion(ctx, "codex:"+id, version-1))
+	require.NoError(t, database.Update(ctx, func(tx *sql.Tx) error {
+		_, err := tx.ExecContext(ctx, fmt.Sprintf("PRAGMA user_version=%d", version-1))
+		return err
+	}))
+	path := database.Path()
+	require.NoError(t, database.Close())
+	_, full, err := db.ArchiveResyncState(ctx, path)
+	require.NoError(t, err)
+	require.False(t, full)
+	database, err = db.OpenIsolated(ctx, path)
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, database.Close()) })
+	engine = sync.NewEngine(ctx, database, cfg)
+	t.Cleanup(engine.Close)
+	engine.SyncAll(ctx, nil)
+	messages, err := database.GetAllMessages(ctx, "codex:"+id)
+	require.NoError(t, err)
+	calls := 0
+	for _, message := range messages {
+		for _, call := range message.ToolCalls {
+			calls++
+			assert.Contains(t, call.ResultContent, "agentsview_image")
+			assert.NotContains(t, call.ResultContent, "data:image")
+			for _, event := range call.ResultEvents {
+				assert.NotContains(t, event.Content, "data:image")
+			}
+		}
+	}
+	require.Equal(t, 1, calls)
+}
 
 func TestLegacyUpgradePreservesIncompleteRetry(t *testing.T) {
 	database := dbtest.OpenTestDB(t)
@@ -681,6 +741,80 @@ func TestCodexCodeModeWaitOutputUpgradeReparsesInPlace(t *testing.T) {
 		}
 	}
 	assert.Equal(t, output, resultContent)
+}
+
+func TestCodexTranscriptFidelityUpgradeReparsesInPlace(t *testing.T) {
+	scope := db.ScopedDataVersionProviders(173, 174)
+	assert.ElementsMatch(t,
+		[]parser.AgentType{parser.AgentCodex, parser.AgentTraeX, parser.AgentAugureCode, parser.AgentInterpreter, parser.AgentCodexCloud},
+		scope)
+	version := db.CurrentDataVersion()
+	t.Cleanup(db.InstallDataVersionScopesForTest(map[int][]parser.AgentType{version: scope}))
+	ctx := t.Context()
+	database := dbtest.OpenTestDB(t)
+	root := t.TempDir()
+	const id = "ffffffff-ffff-4fff-8fff-ffffffffffff"
+	sessionID := "codex:" + id
+	tokenCount := func(ts string, call int) string {
+		return fmt.Sprintf(`{"type":"event_msg","timestamp":%q,"payload":{"type":"token_count","info":{"last_token_usage":{"input_tokens":1000,"cached_input_tokens":400,"output_tokens":50,"total_tokens":1050},"total_token_usage":{"input_tokens":%d,"cached_input_tokens":%d,"output_tokens":%d,"total_tokens":%d}}}}`,
+			ts, 1000*call, 400*call, 50*call, 1050*call)
+	}
+	body := testjsonl.JoinJSONL(
+		testjsonl.CodexSessionMetaJSON(id, root, "codex_cli_rs", "2026-11-01T12:00:00Z"),
+		testjsonl.CodexTurnContextJSON("gpt-5.4", "2026-11-01T12:00:01Z"),
+		testjsonl.CodexMsgJSON("user", "keep going", "2026-11-01T12:00:01Z"),
+		`{"type":"response_item","timestamp":"2026-11-01T12:00:02Z","payload":{"type":"reasoning","summary":[{"type":"summary_text","text":"Reading the parser."}],"encrypted_content":"gAAAAopaque"}}`,
+		testjsonl.CodexFunctionCallJSON("exec_command", "ls", "2026-11-01T12:00:02Z"),
+		tokenCount("2026-11-01T12:00:02Z", 1),
+		testjsonl.CodexMsgJSON("assistant", "listed", "2026-11-01T12:00:03Z"),
+		tokenCount("2026-11-01T12:00:03Z", 2),
+		`{"type":"compacted","timestamp":"2026-11-01T12:00:04Z","payload":{"message":"Summary of earlier work.","replacement_history":[]}}`,
+	)
+	dbtest.WriteTestFile(t, filepath.Join(root, "rollout-"+id+".jsonl"), []byte(body))
+	cfg := sync.EngineConfig{Machine: "local", AgentDirs: map[parser.AgentType][]string{parser.AgentCodex: {root}}}
+	engine := sync.NewEngine(ctx, database, cfg)
+	require.Equal(t, 1, engine.SyncAll(ctx, nil).Synced)
+	engine.Close()
+
+	// Simulate the previous parser: no reasoning or compaction rows, and the
+	// second call's equal per-call counts collapsed into the first.
+	require.NoError(t, database.Update(ctx, func(tx *sql.Tx) error {
+		_, err := tx.ExecContext(ctx, fmt.Sprintf(
+			"DELETE FROM messages WHERE has_thinking = 1 OR is_compact_boundary = 1; UPDATE messages SET token_usage = '', output_tokens = 0, has_output_tokens = 0 WHERE content = 'listed'; UPDATE sessions SET data_version=%d; PRAGMA user_version=%d",
+			version-1, version-1,
+		))
+		return err
+	}))
+	path := database.Path()
+	require.NoError(t, database.Close())
+	database, err := db.OpenIsolated(ctx, path)
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, database.Close()) })
+	engine = sync.NewEngine(ctx, database, cfg)
+	t.Cleanup(engine.Close)
+	require.Equal(t, 1, engine.SyncAll(ctx, nil).Synced)
+
+	sessions, err := database.ListSessions(ctx, db.SessionFilter{Limit: 10})
+	require.NoError(t, err)
+	require.Len(t, sessions.Sessions, 1)
+	assert.Equal(t, sessionID, sessions.Sessions[0].ID)
+	messages, err := database.GetAllMessages(ctx, sessionID)
+	require.NoError(t, err)
+	var thinking, boundary string
+	outputs := 0
+	for _, message := range messages {
+		if message.HasThinking {
+			thinking = message.ThinkingText
+		}
+		if message.IsCompactBoundary {
+			boundary = message.Content
+		}
+		outputs += message.OutputTokens
+	}
+	assert.Equal(t, "Reading the parser.", thinking)
+	assert.Equal(t, "Summary of earlier work.", boundary)
+	assert.Equal(t, 100, outputs)
+	assert.Equal(t, version, database.GetSessionDataVersion(ctx, sessionID))
 }
 
 func TestCodexRepositoryUpgradeRepairsExistingIdentity(t *testing.T) {

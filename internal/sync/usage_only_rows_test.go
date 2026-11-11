@@ -256,8 +256,8 @@ func writeCodexUsageOnlySession(t *testing.T, dir string) {
 		testjsonl.CodexMsgJSON("user", "check the build", "2026-09-15T10:00:01Z"),
 		testjsonl.CodexMsgJSON("assistant", "the build passes", "2026-09-15T10:00:05Z"),
 		testjsonl.CodexTokenCountJSON("2026-09-15T10:00:05Z", 10, visibleOutputTokens, 0),
-		// A reasoning-only response: Codex counts it, but writes
-		// no message for it.
+		// A call with no row of its own, such as encrypted-only reasoning:
+		// Codex counts it, but writes no message for it.
 		testjsonl.CodexTokenCountJSON("2026-09-15T10:00:07Z",
 			usageOnlyInputTokens, usageOnlyOutputTokens, 0),
 	)), 0o644))
@@ -313,7 +313,7 @@ func TestUsageOnlyRecordsReachStoredUsage(t *testing.T) {
 }
 
 // TestUsageOnlyUpgradeRestoresUsageInPlace models an archive written before
-// data version 173, which dropped the usage-only record, and checks that the
+// data version 175, which dropped the usage-only record, and checks that the
 // scoped upgrade reparses the source in place: the usage returns, and the
 // session and a pinned message keep their identities.
 func TestUsageOnlyUpgradeRestoresUsageInPlace(t *testing.T) {
@@ -342,8 +342,8 @@ func TestUsageOnlyUpgradeRestoresUsageInPlace(t *testing.T) {
 			require.NoError(t, err)
 			_, err = raw.ExecContext(ctx, `
 				DELETE FROM messages WHERE session_id = ? AND ordinal = 2;
-				UPDATE sessions SET message_count = 2, data_version = 172 WHERE id = ?;
-				PRAGMA user_version = 172`, tc.sessionID, tc.sessionID)
+				UPDATE sessions SET message_count = 2, data_version = 174 WHERE id = ?;
+				PRAGMA user_version = 174`, tc.sessionID, tc.sessionID)
 			require.NoError(t, err)
 			require.NoError(t, raw.Close())
 

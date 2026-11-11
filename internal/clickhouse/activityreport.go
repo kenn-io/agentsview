@@ -1291,16 +1291,12 @@ func clickUsageNormalizedQueryFrom(ctes, messageWhere, eventWhere, messageFrom, 
 }
 
 func clickUsageNormalizedColumns() string {
-	maxTok := db.MaxPlausibleTokens
-	clamp := func(expr string) string {
-		return fmt.Sprintf("least(greatest(%s, 0), %d)", expr, maxTok)
-	}
-	msgInput := clamp("usage_input")
-	msgOutput := clamp("usage_output")
-	msgCacheCr := clamp("usage_cache_create")
-	msgCacheCr1h := clamp("usage_cache_create_1h")
-	msgCacheRd := clamp("usage_cache_read")
-	msgReasoning := clamp("usage_reasoning")
+	msgInput := chClampTokens("usage_input")
+	msgOutput := chClampTokens("usage_output")
+	msgCacheCr := chClampTokens("usage_cache_create")
+	msgCacheCr1h := chClampTokens("usage_cache_create_1h")
+	msgCacheRd := chClampTokens("usage_cache_read")
+	msgReasoning := chClampTokens("usage_reasoning")
 	msgWeb := "greatest(usage_web, 0)"
 	return fmt.Sprintf(`session_id, message_ordinal, ts, pricing_ts, source, model,
 			provider_id, agent, claude_message_id, claude_request_id, source_uuid,
@@ -1340,8 +1336,8 @@ func clickUsageNormalizedColumns() string {
 			END AS web_search_requests_norm,
 			cost_microdollars, cost_source`,
 		msgInput, msgOutput, msgCacheCr, msgCacheCr1h, msgCacheRd,
-		clamp("input_tokens"), clamp("output_tokens"), clamp("cache_create"),
-		clamp("cache_read"), msgReasoning, clamp("reasoning_tokens"), msgWeb,
+		chClampTokens("input_tokens"), chClampTokens("output_tokens"), chClampTokens("cache_create"),
+		chClampTokens("cache_read"), msgReasoning, chClampTokens("reasoning_tokens"), msgWeb,
 	)
 }
 

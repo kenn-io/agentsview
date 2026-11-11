@@ -873,6 +873,9 @@ func TestWatcherSchedulerSustainedEventsProgress(t *testing.T) {
 
 				start := time.Now()
 				for time.Since(start) < tt.duration {
+					// Settle a due batch timer before delivering an event at the
+					// same instant, so it belongs to the next batch.
+					synctest.Wait()
 					backend.sendEvent(t, "/sessions/active.jsonl")
 					synctest.Wait()
 					time.Sleep(tt.eventEvery)

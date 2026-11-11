@@ -75,7 +75,7 @@ func TestUsageSnapshotRanking(t *testing.T) {
 			query := usageCTEFor(state, db.UsageFilter{Timezone: "UTC"}, "")
 			readCtx, err := withUsageDeltaTables(t.Context(), state)
 			require.NoError(t, err)
-			rows, err := store.DB().QueryContext(readCtx, query.cte+` SELECT session_id, message_ordinal, output_tokens_norm, snapshot_deduplicated_output_tokens, web_search_requests_norm FROM usage_snapshot_survivors WHERE claude_message_id = 'ranking-message' AND claude_request_id = 'ranking-request'`, query.args...)
+			rows, err := store.DB().QueryContext(readCtx, query.cte+` SELECT session_id, message_ordinal, output_tokens_norm, snapshot_deduplicated_output_tokens, web_search_requests_norm FROM usage_localized WHERE claude_message_id = 'ranking-message' AND claude_request_id = 'ranking-request'`, query.args...)
 			require.NoError(t, err)
 			defer rows.Close()
 			require.True(t, rows.Next())

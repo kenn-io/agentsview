@@ -50,11 +50,15 @@ func (p *openClawProvider) parseSession(
 		return nil, nil, fmt.Errorf("reading %s: %w", path, err)
 	}
 
-	return builder.finish(
+	sess, messages, err := builder.finish(
 		ctx, path, project, machine, info,
 		openClawAgentIDFromPath(path),
 		OpenClawSessionID(filepath.Base(path)),
 	)
+	if sess != nil {
+		sess.MalformedLines += lr.SkippedLines()
+	}
+	return sess, messages, err
 }
 
 // openClawRecordBuilder contains the format decoder shared by JSONL files and

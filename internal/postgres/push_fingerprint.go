@@ -54,6 +54,7 @@ type pushLocalMessageFingerprint struct {
 	PlanUsageFP string             `json:",omitzero"`
 	DialogueFP  string             `json:",omitzero"`
 	CommitLinks []db.CommitLinkRow `json:",omitzero"`
+	ImageText   []db.ImageTextRow  `json:",omitzero"`
 }
 
 func localSessionDependencyPushFingerprint(
@@ -127,6 +128,7 @@ type localPushDependencyState struct {
 	pins           map[string][]db.PinnedMessage
 	planUsageFP    map[string]string
 	commitLinks    map[string][]db.CommitLinkRow
+	imageText      map[string][]db.ImageTextRow
 }
 
 func readLocalPushDependencyState(
@@ -193,6 +195,9 @@ func readLocalPushDependencyState(
 	if st.commitLinks, err = local.SessionCommitLinkRowsBySession(ctx, sessionIDs); err != nil {
 		return nil, err
 	}
+	if st.imageText, err = local.SessionImageTextRowsBySession(ctx, sessionIDs); err != nil {
+		return nil, fmt.Errorf("reading local image text: %w", err)
+	}
 	return st, nil
 }
 
@@ -224,6 +229,7 @@ func (st *localPushDependencyState) dependencyFingerprint(
 		PlanUsageFP:   st.planUsageFP[sessionID],
 		DialogueFP:    st.dialogueFP[sessionID],
 		CommitLinks:   st.commitLinks[sessionID],
+		ImageText:     st.imageText[sessionID],
 	}
 	if usageKnown {
 		msgFP.UsageEventFP = usageEventFingerprint
@@ -253,6 +259,9 @@ func localPushMessageFingerprint(ctx context.Context,
 		return fp, err
 	}
 	fp.CommitLinks = links
+	if fp.ImageText, err = local.SessionImageTextRows(ctx, sessionID); err != nil {
+		return fp, fmt.Errorf("reading local image text: %w", err)
+	}
 	fp.Sum, fp.Max, fp.Min, err = local.MessageContentFingerprint(ctx, sessionID)
 	if err != nil {
 		return fp, fmt.Errorf("computing local content fingerprint: %w", err)

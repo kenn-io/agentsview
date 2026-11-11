@@ -11,11 +11,18 @@ import (
 type codexSeedSink struct {
 	nextOrdinal    int
 	hadReservation bool
-	// usageTargets holds the ordinals of assistant messages without token
-	// usage since the last user message. It lets ApplyTokenUsageToLastAssistant
+	// turnAssistants holds the non-system assistant messages since the last
+	// user message, oldest first. It lets ApplyTokenUsageToLastAssistant
 	// answer as CodexCollectingSink does, so a usage-only row takes the same
 	// ordinal in the prefix scan as in a full parse.
-	usageTargets []int
+	turnAssistants []codexSeedAssistant
+}
+
+// codexSeedAssistant is what the usage attach rule reads from a message.
+type codexSeedAssistant struct {
+	ordinal       int
+	hasUsage      bool
+	reasoningOnly bool
 }
 
 func newCodexSeedSink() *codexSeedSink {
@@ -27,9 +34,13 @@ func (s *codexSeedSink) AppendMessage(m ParsedMessage) int {
 	s.nextOrdinal++
 	switch {
 	case m.Role == RoleUser:
-		s.usageTargets = s.usageTargets[:0]
-	case m.Role == RoleAssistant && m.TokenUsage == nil:
-		s.usageTargets = append(s.usageTargets, ordinal)
+		s.turnAssistants = s.turnAssistants[:0]
+	case m.Role == RoleAssistant && !m.IsSystem:
+		s.turnAssistants = append(s.turnAssistants, codexSeedAssistant{
+			ordinal:       ordinal,
+			hasUsage:      m.TokenUsage != nil,
+			reasoningOnly: codexReasoningOnly(&m),
+		})
 	}
 	return ordinal
 }
@@ -46,8 +57,8 @@ func (s *codexSeedSink) ReserveOrdinal() int {
 // CodexCollectingSink.
 func (s *codexSeedSink) InsertMessage(m ParsedMessage) int {
 	if m.Role == RoleUser {
-		s.usageTargets = slices.DeleteFunc(s.usageTargets, func(ordinal int) bool {
-			return ordinal < m.Ordinal
+		s.turnAssistants = slices.DeleteFunc(s.turnAssistants, func(a codexSeedAssistant) bool {
+			return a.ordinal < m.Ordinal
 		})
 	}
 	return 0
@@ -60,12 +71,20 @@ func (*codexSeedSink) AppendToolResultEvent(context.Context,
 
 func (*codexSeedSink) SetCallSubagentSessionID(string, *ParsedToolCallPosition, string) {}
 
+// ApplyTokenUsageToLastAssistant applies CodexCollectingSink's attach rule
+// to the recorded messages: the newest message without usage takes it, but a
+// reasoning row only while no newer response has passed it.
 func (s *codexSeedSink) ApplyTokenUsageToLastAssistant(string) bool {
-	if len(s.usageTargets) == 0 {
-		return false
+	newerResponse := false
+	for i := len(s.turnAssistants) - 1; i >= 0; i-- {
+		a := &s.turnAssistants[i]
+		if !a.hasUsage && (!newerResponse || !a.reasoningOnly) {
+			a.hasUsage = true
+			return true
+		}
+		newerResponse = true
 	}
-	s.usageTargets = s.usageTargets[:len(s.usageTargets)-1]
-	return true
+	return false
 }
 
 func (s *codexSeedSink) InsertOrphanMessage(_ string, m ParsedMessage) bool {

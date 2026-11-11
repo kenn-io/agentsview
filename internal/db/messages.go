@@ -1605,6 +1605,9 @@ func (db *DB) insertMessages(ctx context.Context,
 		if err := bumpTranscriptRevisionTx(tx, sessionID); err != nil {
 			return err
 		}
+		if err := refreshIncrementalImageTextOccurrencesTx(tx, sessionID, messagesForSession(msgs, sessionID), nil); err != nil {
+			return err
+		}
 	}
 	sessionIDs := messageSessionIDs(rawMessages)
 	for _, sessionID := range sessionIDs {
@@ -2161,6 +2164,9 @@ func (db *DB) replaceSessionMessages(ctx context.Context,
 			return err
 		}
 	}
+	if err := refreshMessageDiffImageTextTx(tx, sessionID, plan, useDiff); err != nil {
+		return err
+	}
 	if !useDiff || len(plan.updates) > 0 {
 		if err := reconcileRecallEvidenceForSessionTx(
 			ctx, tx, sessionID, &pendingRecallRevocations,
@@ -2609,6 +2615,9 @@ func (db *DB) replaceSessionContent(ctx context.Context,
 		if err := bumpTranscriptRevisionTx(tx, sessionID); err != nil {
 			return err
 		}
+	}
+	if err := refreshMessageDiffImageTextTx(tx, sessionID, plan, useDiff); err != nil {
+		return err
 	}
 	if !useDiff || len(plan.updates) > 0 {
 		if err := reconcileRecallEvidenceForSessionTx(

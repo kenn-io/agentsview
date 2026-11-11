@@ -578,6 +578,29 @@ func TestDailyUsageCustomRatesOverridePersistedPrices(t *testing.T) {
 	assert.Equal(t, money.Money{Microdollars: 55}, modelCost(t, got, "round-test"))
 }
 
+func TestDailyUsageAliasTargetCustomRateOverridesPersistedPrice(t *testing.T) {
+	t.Cleanup(func() { pricingpkg.SetConfiguredAliases(nil) })
+	for _, tc := range []struct{ target, customModel string }{
+		{"tier-test", "tier-test"},
+		{"kimi-for-coding", pricingpkg.KimiK26Canonical},
+	} {
+		t.Run(tc.target, func(t *testing.T) {
+			pricingpkg.SetConfiguredAliases(map[string]string{"round-test": tc.target})
+			store, _, local := newUsagePriceStore(t)
+			custom := map[string]config.CustomModelRate{
+				tc.customModel: {InputMicrodollarsPerMTok: 7_000_000},
+				"round-test":   {PriceAs: tc.target},
+			}
+			local.SetCustomPricing(custom)
+			store.SetCustomPricing(custom)
+			got, err := store.GetDailyUsage(t.Context(), db.UsageFilter{Timezone: "UTC", Agent: "hermes"})
+			require.NoError(t, err)
+			assert.Equal(t, money.Money{Microdollars: 77}, modelCost(t, got, "round-test"))
+			assertDailyUsageParity(t, local, store)
+		})
+	}
+}
+
 func TestPushPricesCursorUsageAddedLater(t *testing.T) {
 	t.Parallel()
 	store, syncer, local := newUsagePriceStore(t)
@@ -650,6 +673,35 @@ func TestUnpricedUsageFindsKeysWithoutRecordsUnderTheDigest(t *testing.T) {
 		unpriced(whole, pricer.digest))
 	assert.NotContains(t, unpriced(session, "another-digest"), sessionKey)
 	assert.NotContains(t, unpriced(cursor, "another-digest"), cursorKey)
+}
+
+// A session batch's pricing pass reads about as many rows as the batch has,
+// however many messages of other sessions share its index granules.
+func TestSessionPricingPassReadsOnlyTheBatchRows(t *testing.T) {
+	t.Parallel()
+	store, syncer, _ := newUsagePriceStore(t)
+	ctx := t.Context()
+	// 50,000 messages of other sessions sort right after the batch's session
+	// and merge into the same part.
+	execPreparedUsage(t, store, `INSERT INTO messages (session_id, ordinal, role, push_version)
+		SELECT concat('`+usagePriceRoundID+`-neighbor-', leftPad(toString(intDiv(number, 10)), 6, '0')),
+			number % 10, 'user', 1
+		FROM numbers(50000)`,
+		"OPTIMIZE TABLE messages FINAL",
+		"OPTIMIZE TABLE usage_messages FINAL")
+	pricer, err := syncer.newUsagePricer(ctx)
+	require.NoError(t, err)
+	require.NoError(t, syncer.priceUsageBatch(ctx, pricer,
+		usagePriceScope{sessionIDs: []string{usagePriceRoundID}}))
+
+	execPreparedUsage(t, store, "SYSTEM FLUSH LOGS")
+	var passes, readRows uint64
+	require.NoError(t, store.DB().QueryRowContext(ctx, `
+		SELECT count(), argMax(read_rows, event_time_microseconds) FROM system.query_log
+		WHERE current_database = currentDatabase() AND type = 'QueryFinish' AND is_initial_query = 1
+			AND position(query, 'WHERE price_key NOT IN') > 0`).Scan(&passes, &readRows))
+	require.Positive(t, passes, "the query log must hold the pricing pass")
+	assert.Less(t, readRows, uint64(1000))
 }
 
 // Serve installs custom rates after it opens the store. The background

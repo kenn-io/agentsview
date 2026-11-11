@@ -211,6 +211,7 @@ func (p *qClawProvider) parseSession(
 	}
 
 	sess := &ParsedSession{
+		MalformedLines:   lr.SkippedLines(),
 		ID:               fullID,
 		Project:          project,
 		Machine:          machine,

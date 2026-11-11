@@ -65,7 +65,7 @@ allow_insecure = true
 				server.Endpoint = endpoint.URL + "/v1"
 				cfg.Vector.Embeddings.Servers["local"] = server
 			}
-			startup, err := prepareReplicaServeImpl(t.Context(), pgReplica{}, cfg, "", &ReplicaPushConfig{Embed: embed, Debounce: time.Second, Interval: time.Second})
+			startup, err := prepareReplicaServeImpl(t.Context(), pgReplica{}, cfg, "", &ReplicaPushConfig{Embed: embed, Debounce: time.Second, Interval: time.Second}, false)
 			require.NoError(t, err)
 			ctx, cancel := context.WithCancel(startup.ctx)
 			startup.ctx = ctx

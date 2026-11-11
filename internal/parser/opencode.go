@@ -1299,6 +1299,7 @@ func buildOpenCodeSessionContext(
 	var msgs []openCodeMessageRow
 	var parts map[string][]openCodePartRow
 	parsed := projected
+	malformed := 0
 	if table == "session" {
 		msgs, err = loadOpenCodeMessages(ctx, db, s.id, v2 != openCodeProjectionAbsent)
 		if err != nil {
@@ -1308,10 +1309,8 @@ func buildOpenCodeSessionContext(
 		if err != nil {
 			return nil, nil, fmt.Errorf("loading parts for %s: %w", s.id, err)
 		}
-		_, legacy, err := buildOpenCodeParsedSessionContext(ctx, s, cwd, projectWorktree, dbPath+"#"+s.id, fileMtime*1_000_000, machine, msgs, parts)
-		if err != nil {
-			return nil, nil, err
-		}
+		var legacy []ParsedMessage
+		legacy, _, malformed = decodeOpenCodeMessageRowsContext(ctx, cwd, msgs, parts)
 		// Cross-path reuse in 1.18.25 appends projections without converting old
 		// messages. Keep v2 seq order and insert unmatched v1 rows by creation time.
 		parsed = make([]ParsedMessage, 0, len(legacy)+len(projected))
@@ -1331,6 +1330,7 @@ func buildOpenCodeSessionContext(
 	if err != nil || sess == nil {
 		return sess, parsed, err
 	}
+	sess.MalformedLines = malformed
 	metadata := buildOpenCodeSessionFingerprint(s, cwd, projectWorktree, msgs, parts)
 	sess.File.Hash = metadata
 	if v2 != openCodeProjectionAbsent {
@@ -1348,15 +1348,32 @@ func buildOpenCodeParsedSessionContext(
 	msgs []openCodeMessageRow,
 	parts map[string][]openCodePartRow,
 ) (*ParsedSession, []ParsedMessage, error) {
-	var (
-		parsed       []ParsedMessage
-		hasUserOrAst bool
-		ordinal      int
-	)
+	parsed, hasUserOrAst, malformed := decodeOpenCodeMessageRowsContext(ctx, cwd, msgs, parts)
+	if !hasUserOrAst || len(parsed) == 0 {
+		return nil, nil, nil
+	}
 
+	sess, parsed, err := finishOpenCodeSessionContext(ctx, s, cwd, projectWorktree, filePath, fileMtime, machine, parsed)
+	if sess != nil {
+		sess.MalformedLines = malformed
+	}
+	return sess, parsed, err
+}
+
+// decodeOpenCodeMessageRowsContext turns legacy message rows into parsed
+// messages. It reports whether any row had a user or assistant role, and how
+// many message and part rows were skipped because their data did not decode.
+func decodeOpenCodeMessageRowsContext(
+	ctx context.Context,
+	cwd string,
+	msgs []openCodeMessageRow,
+	parts map[string][]openCodePartRow,
+) (parsed []ParsedMessage, hasUserOrAst bool, malformed int) {
+	ordinal := 0
 	for _, m := range msgs {
 		var md openCodeMessageData
 		if json.Unmarshal([]byte(m.data), &md) != nil {
+			malformed++
 			continue
 		}
 		role := normalizeOpenCodeRole(md.Role)
@@ -1374,6 +1391,12 @@ func buildOpenCodeParsedSessionContext(
 			return msgParts[a].timeCreated <
 				msgParts[b].timeCreated
 		})
+		// buildOpenCodeMessage drops a part whose data is not a JSON object.
+		for _, p := range msgParts {
+			if !gjson.Valid(p.data) || !gjson.Parse(p.data).IsObject() {
+				malformed++
+			}
+		}
 
 		pm := buildOpenCodeMessage(
 			ctx, ordinal, m.id, role, m.timeCreated, msgParts, cwd,
@@ -1390,12 +1413,7 @@ func buildOpenCodeParsedSessionContext(
 		parsed = append(parsed, pm)
 		ordinal++
 	}
-
-	if !hasUserOrAst || len(parsed) == 0 {
-		return nil, nil, nil
-	}
-
-	return finishOpenCodeSessionContext(ctx, s, cwd, projectWorktree, filePath, fileMtime, machine, parsed)
+	return parsed, hasUserOrAst, malformed
 }
 
 func finishOpenCodeSessionContext(

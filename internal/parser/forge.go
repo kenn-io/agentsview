@@ -345,6 +345,12 @@ func buildForgeSession(
 		UserMessageCount: realUserCount,
 		File:             fileInfo,
 	}
+	// gjson reads a damaged context up to the damage, so a session built
+	// from it can be missing its later messages. Report the row as malformed
+	// rather than letting the partial transcript look complete.
+	if !gjson.Valid(c.context) {
+		sess.MalformedLines = 1
+	}
 	applyForgeMetrics(sess, c.metrics)
 	if !sess.aggregateTokenPresenceKnown {
 		accumulateMessageTokenUsage(sess, messages)

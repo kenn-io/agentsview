@@ -1242,3 +1242,9 @@ func TestServeSchemaErrorAsksForARebuildWhenColumnsAreMissing(t *testing.T) {
 
 	assert.Contains(t, serveSchemaError(missing, "agentsview").Error(), "Drop and recreate the PG schema")
 }
+
+func TestCheckSchemaCompatRequiresImageText(t *testing.T) {
+	pg, state := newSchemaProbeDB(t, nil)
+	state.execErrors = []schemaProbeQueryError{{contains: "from image_text", err: &pgconn.PgError{Code: "42P01", Message: "relation image_text does not exist"}}}
+	require.ErrorContains(t, CheckSchemaCompat(t.Context(), pg), "image_text table missing required columns")
+}

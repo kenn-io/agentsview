@@ -544,6 +544,7 @@ func parseZencoderSession(
 	}
 
 	sess := &ParsedSession{
+		MalformedLines:   lr.SkippedLines(),
 		ID:               sessionID,
 		Project:          b.project,
 		Machine:          machine,

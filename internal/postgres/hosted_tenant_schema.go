@@ -44,6 +44,7 @@ var hostedTables = append([]HostedTable{
 	{Name: "excluded_sessions", Key: []string{"id"}},
 	{Name: "session_aliases", Key: []string{"session_id", "alias_id"}, ForeignKeys: sessionHostedFK()},
 	{Name: "commit_links", Key: []string{"session_id", "sha"}},
+	{Name: "image_text", Key: []string{"session_id", "source_kind", "message_ordinal", "call_index", "event_index", "image_index", "processor"}, ForeignKeys: sessionHostedFK()},
 	{Name: "retained_commit_links", Key: []string{"source_archive_id", "session_id", "sha"}},
 	{Name: "pinned_messages", Key: []string{"id"}, ForeignKeys: sessionHostedFK()},
 	{Name: "tool_calls", Key: []string{"id"}, ForeignKeys: sessionHostedFK()},
@@ -85,6 +86,7 @@ var hostedTables = append([]HostedTable{
 var hostedCoreUpgradeTables = []struct{ name, ddl string }{
 	{"session_plan_usage", sessionPlanUsageDDL},
 	{"commit_links", commitLinksDDL},
+	{"image_text", imageTextDDL},
 	{"retained_commit_links", retainedCommitLinksDDL},
 }
 
