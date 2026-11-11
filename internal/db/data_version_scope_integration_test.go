@@ -739,7 +739,7 @@ func TestCodexCodeModeWaitOutputUpgradeReparsesInPlace(t *testing.T) {
 func TestCodexTranscriptFidelityUpgradeReparsesInPlace(t *testing.T) {
 	scope := db.ScopedDataVersionProviders(173, 174)
 	assert.ElementsMatch(t,
-		[]parser.AgentType{parser.AgentCodex, parser.AgentTraeX, parser.AgentAugureCode},
+		[]parser.AgentType{parser.AgentCodex, parser.AgentTraeX, parser.AgentAugureCode, parser.AgentInterpreter},
 		scope)
 	version := db.CurrentDataVersion()
 	t.Cleanup(db.InstallDataVersionScopesForTest(map[int][]parser.AgentType{version: scope}))

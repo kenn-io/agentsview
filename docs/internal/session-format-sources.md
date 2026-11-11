@@ -778,9 +778,9 @@ fixtures retain this field; missing identities remain source-local.
   object, including the cumulative `total_token_usage`, so two calls with
   equal per-call counts both count. The scan suppressed the same
   753 repeats under both keys. Usage that still finds no row stays
-  unattached. Data version 174 reparses Codex, TraeX, and Augure Code sources
-  in place, and the parser checkpoint moves to version 6, so a stored cursor
-  makes the next append a full parse. Covered by
+  unattached. Data version 174 reparses Codex, TraeX, Augure Code, and Open
+  Interpreter sources in place, and the parser checkpoint moves to version 6,
+  so a stored cursor makes the next append a full parse. Covered by
   `TestCodexReasoningKeptAsThinking`, `TestCodexReasoningUsageAttachment`,
   `TestCodexCompactedRecordBecomesBoundary`,
   `TestCodexTokenCountDedupUsesCumulativeTotal`,

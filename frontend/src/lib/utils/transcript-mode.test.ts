@@ -210,6 +210,37 @@ describe("filterDisplayItemsByTranscriptMode", () => {
     ]);
   });
 
+  it("keeps the answer when a reasoning-only response ends the turn", () => {
+    const thinking = (ordinal: number, text: string) =>
+      msg({
+        ordinal,
+        content: `[Thinking]\n${text}\n[/Thinking]`,
+        thinking_text: text,
+        has_thinking: true,
+      });
+    expect(
+      ordinalsOf([
+        userMsg(0),
+        thinking(1, "Plan the fix."),
+        assistantMsg(2, "first answer"),
+        thinking(3, "Nothing left to do."),
+        userMsg(4),
+      ]),
+    ).toEqual([0, 2, 4]);
+    // A turn interrupted after reasoning still shows that reasoning.
+    expect(ordinalsOf([userMsg(0), thinking(1, "Starting."), userMsg(2)])).toEqual([0, 1, 2]);
+    // Thinking beside answer text is an answer, not a thinking row.
+    const mixed = msg({
+      ordinal: 3,
+      content: "[Thinking]\nChecked.\n[/Thinking]\nsecond answer",
+      thinking_text: "Checked.",
+      has_thinking: true,
+    });
+    expect(ordinalsOf([userMsg(0), assistantMsg(1, "first"), mixed, userMsg(4)])).toEqual([
+      0, 3, 4,
+    ]);
+  });
+
   it("can pick the last assistant that still has visible segments", () => {
     const items = buildDisplayItems([
       userMsg(0),

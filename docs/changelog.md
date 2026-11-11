@@ -46,7 +46,7 @@ The latest release is
   summary. Encrypted reasoning still shows nothing. When a model response
   produced only reasoning, its tokens and cost now count. Two model calls with
   identical token counts can no longer collapse into one. The next sync reparses
-  Codex, TraeX, and Augure Code sessions in place.
+  Codex, TraeX, Augure Code, and Open Interpreter sessions in place.
 - Prune removes matching parent and child session chains in one pass, even
   without `--agent`.
 - Commit lookups keep live prompts and other archives' deleted-session links.

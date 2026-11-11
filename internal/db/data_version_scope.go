@@ -60,7 +60,8 @@ var dataVersionScopes = map[int][]parser.AgentType{
 	172: {parser.AgentCursorIDE},
 
 	ImageTextDataVersion: {}, // Older binaries cannot maintain image_text_occurrences; nothing to reparse.
-	174: {parser.AgentCodex, parser.AgentTraeX, parser.AgentAugureCode},
+
+	174: {parser.AgentCodex, parser.AgentTraeX, parser.AgentAugureCode, parser.AgentInterpreter},
 }
 
 // firstScopedDataVersion is the oldest version that may be declared. Released
