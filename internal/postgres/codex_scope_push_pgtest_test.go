@@ -31,7 +31,7 @@ func TestPushSessionWithCodexScope(t *testing.T) {
 	require.Equal(t, "session-1", id)
 
 	const marker = "marker_%"
-	const suffix = "_22222222-2222-4222-8222-222222222222"
+	const suffix = "_99999999-9999-4999-8999-999999999999"
 	threads := []string{
 		"codex:11111111-1111-4111-8111-111111111111",
 		"codex:22222222-2222-4222-8222-222222222222",
