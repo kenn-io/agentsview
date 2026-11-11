@@ -1375,6 +1375,21 @@ fixtures retain this field; missing identities remain source-local.
     and
     [Bedrock override](https://github.com/openai/codex/blob/ca466061d64f0b44f416135c7fd06aa7af850bbc/codex-rs/model-provider/src/amazon_bedrock/mod.rs#L290-L295).
 
+- **Usage-only records (checked 2026-11-11 at
+  `3535c22b43e5d7a67322f6e85b267ef65577c227`):**
+  [turn.rs](https://github.com/openai/codex/blob/3535c22b43e5d7a67322f6e85b267ef65577c227/codex-rs/core/src/session/turn.rs#L3238-L3278)
+  sends a `token_count` on every completed response, including a
+  reasoning-only one, and
+  [compact.rs](https://github.com/openai/codex/blob/3535c22b43e5d7a67322f6e85b267ef65577c227/codex-rs/core/src/compact.rs#L898-L918)
+  sends one for a compaction request.
+  [policy.rs](https://github.com/openai/codex/blob/3535c22b43e5d7a67322f6e85b267ef65577c227/codex-rs/rollout/src/policy.rs#L128-L141)
+  always persists `TokenCount`. When no assistant message in the turn can take
+  the usage, Agentsview stores it as a hidden usage-only row. Rate-limit
+  updates resend the previous `last_token_usage`; the existing digest check
+  drops the repeat. An incremental parse with no stored target still falls
+  back to a full parse, and the prefix seed makes the same attach decision as
+  the full parse so later ordinals do not shift. TraeX and Augure Code share
+  this decoder.
 - **Agentsview:** `internal/parser/codex.go` and
   `internal/parser/codex_provider.go`; usage is taken from the last-turn
   counters rather than repeatedly counting cumulative totals. Reverified
@@ -1881,6 +1896,12 @@ fixtures retain this field; missing identities remain source-local.
   tool, and total tokens derived from Gemini API usage metadata. Some records
   are cumulative or streamed, so Agentsview normalizes deltas. Model IDs are
   available; monetary cost is catalog-derived.
+- **Usage-only records (checked 2026-11-11 at the pinned commit, low
+  priority):**
+  [geminiChat.ts](https://github.com/google-gemini/gemini-cli/blob/acae7124bdd849e554eaa5e090199a0cf08cd782/packages/core/src/core/geminiChat.ts#L1306-L1322)
+  records a thoughts-only or empty reply as a `gemini` message with empty
+  `content`, and the queued tokens attach to it. Agentsview stores it as a
+  hidden usage-only row.
 - **Agentsview:** `internal/parser/gemini.go` and
   `internal/parser/gemini_provider.go`; both JSON and JSONL generations remain
   supported. Reverified the pinned recording source on 2026-09-11: token
@@ -2355,6 +2376,14 @@ preservation of archived messages for OpenCode, Kilo, MiMoCode, and Icodemate.
   token fields are available; usage-only resync guards check model loss before
   checking token counts.
 
+- **Usage-only records (checked 2026-11-11 at `v1.19.5`, the last release
+  that writes the v1 tables):** On every `step-finish`,
+  [processor.ts](https://github.com/anomalyco/opencode/blob/810c0eba1a7348036f8bdf61e6632d0c36c6876c/packages/opencode/src/session/processor.ts#L435-L470)
+  saves the step's tokens on the assistant message, whatever parts the step
+  produced. A v1 message can therefore carry usage with no text, reasoning
+  text, or tool part. Agentsview stores it as a hidden usage-only row, as the
+  v2 projection already did. Kilo, MiMo Code, and ICodeMate share this
+  decoder.
 - **Working directory:** SQLite sessions store a per-session `directory` and a
   `project_id`. The synthetic `global` project uses `worktree=/`. Agentsview
   prefers a concrete `session.directory` over `project.worktree` when
@@ -2628,6 +2657,14 @@ schemas keep their existing ordering behavior.
   Individual assistant messages also carry per-turn `metrics` (input, output,
   cache read/write tokens). Agentsview consumes the reported cost, including
   explicit zero, and tracks the peak context window across turns.
+- **Usage-only records (checked 2026-11-11 at the pinned commit):**
+  [agent-runtime.ts](https://github.com/cline/cline/blob/595f1dbf2ea819e987afeadb4ed4dd9a0ae9a55e/sdk/packages/agents/src/agent-runtime.ts#L745-L761)
+  keeps an assistant message with empty `content` when the turn was only
+  provider-executed tool activity, which lives in
+  `metadata.modelToolActivities`. Every assistant message carries `metrics`.
+  Agentsview stores such a message as a hidden usage-only row. When any
+  message carries metrics, the session aggregate event keeps only the
+  reported cost, so the row does not double count.
 - **Agentsview:** `internal/parser/cline.go` and
   `internal/parser/cline_provider.go`. User input in `<id>.messages.json` is
   wrapped in `<user_input mode="...">` envelopes and can contain internal
@@ -3401,6 +3438,12 @@ schemas keep their existing ordering behavior.
   cached-content, thoughts, and total tokens. Streaming records may repeat
   cumulative values, so Agentsview aggregates carefully. Price is
   catalog-derived.
+- **Usage-only records (checked 2026-11-11 at the pinned commit):**
+  [geminiChat.ts](https://github.com/QwenLM/qwen-code/blob/076427650d363ce9e9a0962f389361b474c170dc/packages/core/src/core/geminiChat.ts#L3906-L3931)
+  throws before recording a reply with no text, thought, or function call, so
+  no usage-only assistant record reaches the file. Thought-only replies with
+  `usageMetadata` are recorded, and Agentsview already keeps them. No change
+  was needed.
 - **Session names (2026-09-30):** `/rename` and the title generator append
   `{"type":"system","subtype":"custom_title","systemPayload":{"customTitle":"<name>","titleSource":"manual"|"auto"}}`
   to the same chat JSONL, and the last record wins. Records written before
@@ -3665,6 +3708,15 @@ schemas keep their existing ordering behavior.
   model identity, and sometimes `usage.cost.total`. Agentsview intentionally
   ignores the reported cost and catalog-prices normalized token fields to keep
   pricing attribution consistent.
+- **Usage-only records (checked 2026-11-11 at the pinned commit):** The agent
+  loop emits the provider's final message, usage included, as `message_end`
+  without checking its content
+  ([agent-loop.ts](https://github.com/openclaw/openclaw/blob/40d31f34813c2a01284b097c0d0d785fbb173400/packages/agent-core/src/agent-loop.ts#L528-L542)),
+  and
+  [agent-session-base.ts](https://github.com/openclaw/openclaw/blob/40d31f34813c2a01284b097c0d0d785fbb173400/src/agents/sessions/agent-session-base.ts#L345-L367)
+  appends every assistant `message_end`. Agentsview stores an assistant
+  message with usage and no text or tool call, such as `content: []`, as a
+  hidden usage-only row. QClaw shares this decoder.
 - **SQLite layout:** OpenClaw 2026.9.5 also stores each agent's transcript in
   `agent/openclaw-agent.sqlite`. Agentsview reads the ordered
   `transcript_events(session_id, seq, event_json, created_at)` rows and sends
@@ -3763,6 +3815,13 @@ schemas keep their existing ordering behavior.
   cache read, and cache creation. The aggregate fallback exposes only output
   and is therefore a lower bound. Agentsview catalog-prices usage with a
   model.
+
+- **Usage-only records (checked 2026-11-11 at the pinned commit):**
+  [\_generate.py](https://github.com/MoonshotAI/kimi-cli/blob/4a550effdfcb29a25a5d325bf935296cc50cd417/packages/kosong/src/kosong/_generate.py#L81-L96)
+  rejects empty and thinking-only replies before any usage is written. The
+  pinned source has no `step.end` or `usage.record`, so the Kimi Code wire
+  layout that carries per-step usage has no public producer to show a
+  usage-only step. Agentsview does not add hidden usage rows for Kimi.
 
 - **Agentsview:** `internal/parser/kimi.go` and
   `internal/parser/kimi_provider.go`.
@@ -4280,6 +4339,12 @@ schemas keep their existing ordering behavior.
   cached tokens. Although Forge domain data can discuss cost, Agentsview does
   not consume a direct persisted currency total from this store and instead
   catalog-prices normalized tokens.
+- **Usage-only records (checked 2026-11-11 at the pinned commit):**
+  [result_stream_ext.rs](https://github.com/tailcallhq/forgecode/blob/c5698103bce973d1c569ae905bca6f34ba85c1d0/crates/forge_domain/src/result_stream_ext.rs#L270-L277)
+  rejects an empty completion only when it has no finish reason. A `stop` or
+  `length` reply with no text, reasoning, or tool call is stored as an
+  assistant message with usage and `content: ""`. Agentsview stores it as a
+  hidden usage-only row.
 - **Agentsview:** `internal/parser/forge.go`. Reverified 2026-09-10 with
   isolated SQLite fixtures: hosted WAL snapshots use immutable reads in
   read-only materializations; live reads retain uncheckpointed WAL rows.

@@ -153,9 +153,6 @@ func (b *openClawRecordBuilder) consume(ctx context.Context, line string, reject
 		content := msg.Get("content")
 		text, thinkingText, dialogueText, hasThinking, hasToolUse, tcs, trs := ExtractTextContent(ctx, content)
 		text = strings.TrimSpace(text)
-		if text == "" && len(tcs) == 0 && len(trs) == 0 {
-			return nil
-		}
 		pm := ParsedMessage{
 			Ordinal:            b.ordinal,
 			Role:               RoleAssistant,
@@ -171,6 +168,12 @@ func (b *openClawRecordBuilder) consume(ctx context.Context, line string, reject
 			tokenPresenceKnown: true,
 		}
 		applyOpenClawAssistantUsage(&pm, msg)
+		if text == "" && len(tcs) == 0 && len(trs) == 0 {
+			var ok bool
+			if pm, ok = usageOnlyMessage(pm); !ok {
+				return nil
+			}
+		}
 		b.messages = append(b.messages, pm)
 		b.ordinal++
 

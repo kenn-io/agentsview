@@ -4219,3 +4219,75 @@ func TestCodexServiceTierMessages(t *testing.T) {
 		})
 	}
 }
+
+// A token_count that no assistant message in its turn can take becomes a
+// hidden usage-only row. A cold resume rebuilds the prefix with the seed sink,
+// so the seed must emit that row at the same ordinal as the full parse, or a
+// tool result in the tail targets the wrong message.
+func TestCodexUsageOnlyRowKeepsResumeOrdinals(t *testing.T) {
+	prefix := testjsonl.JoinJSONL(
+		testjsonl.CodexSessionMetaJSON(
+			"usage-only-seed", "/workspace/project-a", "codex_cli_rs", tsEarly,
+		),
+		testjsonl.CodexTurnContextJSON("gpt-5.4", tsEarlyS1),
+		testjsonl.CodexMsgJSON("user", "Run the check", "2024-01-01T10:00:02Z"),
+		testjsonl.CodexMsgJSON("assistant", "Checking", "2024-01-01T10:00:03Z"),
+		testjsonl.CodexTokenCountJSON("2024-01-01T10:00:04Z", 1_000, 50, 400),
+		// A second model call with no message of its own, such as a
+		// reasoning-only response.
+		testjsonl.CodexTokenCountJSON("2024-01-01T10:00:05Z", 2_000, 80, 900),
+		// A rate-limit update resends the same usage; it adds no row.
+		testjsonl.CodexTokenCountJSON("2024-01-01T10:00:05Z", 2_000, 80, 900),
+		testjsonl.CodexFunctionCallWithCallIDJSON(
+			"shell", "call_usage_seed", map[string]any{"command": "make check"},
+			"2024-01-01T10:00:06Z",
+		),
+	)
+	path := createTestFile(t, "usage-only-seed.jsonl", prefix)
+	warmProvider := newCodexTestProvider(t)
+	_, prefixMessages, err := warmProvider.parseSession(path, "local", false)
+	require.NoError(t, err)
+	require.Len(t, prefixMessages, 4)
+	assert.Equal(t, 50, prefixMessages[1].OutputTokens)
+	hidden := prefixMessages[2]
+	assert.Equal(t, RoleAssistant, hidden.Role)
+	assert.True(t, hidden.IsSystem)
+	assert.Empty(t, hidden.Content)
+	assert.Equal(t, "gpt-5.4", hidden.Model)
+	assert.Equal(t, 2_000, hidden.ContextTokens)
+	assert.Equal(t, 80, hidden.OutputTokens)
+	assert.JSONEq(t,
+		`{"input_tokens":1100,"output_tokens":80,"cache_read_input_tokens":900}`,
+		string(hidden.TokenUsage))
+	require.Len(t, prefixMessages[3].ToolCalls, 1)
+
+	prefixInfo, err := os.Stat(path)
+	require.NoError(t, err)
+	tail := testjsonl.JoinJSONL(
+		testjsonl.CodexFunctionCallOutputJSON(
+			"call_usage_seed", "ok", "2024-01-01T10:00:07Z",
+		),
+		testjsonl.CodexMsgJSON("assistant", "Done", "2024-01-01T10:00:08Z"),
+	)
+	f, err := os.OpenFile(path, os.O_APPEND|os.O_WRONLY, 0o644)
+	require.NoError(t, err)
+	_, err = f.WriteString(tail)
+	require.NoError(t, err)
+	require.NoError(t, f.Close())
+
+	warm, err := warmProvider.parseSessionFromDetailed(t.Context(),
+		path, prefixInfo.Size(), len(prefixMessages), false,
+	)
+	require.NoError(t, err)
+	cold, err := newCodexTestProvider(t).parseSessionFromDetailed(t.Context(),
+		path, prefixInfo.Size(), len(prefixMessages), false,
+	)
+	require.NoError(t, err)
+	assert.Equal(t, warm.toolCallUpdates, cold.toolCallUpdates)
+	assert.Equal(t, warm.messages, cold.messages)
+	require.Len(t, cold.toolCallUpdates, 1)
+	assert.Equal(t, 3, cold.toolCallUpdates[0].MessageOrdinal)
+	assert.True(t, cold.toolCallUpdates[0].TargetKnown)
+	require.Len(t, cold.messages, 1)
+	assert.Equal(t, 4, cold.messages[0].Ordinal)
+}

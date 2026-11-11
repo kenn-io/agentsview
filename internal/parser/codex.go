@@ -67,6 +67,8 @@ type codexSessionBuilder struct {
 	sourceTurnID       string
 	sourceInTurn       bool
 	sourceTurnContexts []string
+	// sourceTimestamp is the envelope timestamp of the line being processed.
+	sourceTimestamp time.Time
 	codexCursorState
 	agent       AgentType
 	incremental bool
@@ -388,6 +390,7 @@ func (b *codexSessionBuilder) processLine(ctx context.Context,
 	}
 	tsStr := gjson.Get(line, "timestamp").Str
 	ts := parseTimestamp(tsStr)
+	b.sourceTimestamp = ts
 	if ts.IsZero() {
 		if tsStr != "" {
 			logParseError(tsStr)
@@ -702,11 +705,17 @@ func (b *codexSessionBuilder) applyTokenUsage(raw, responseID string) {
 	if b.sink.ApplyTokenUsageToLastAssistant(raw) {
 		return
 	}
-	if b.committedUsageBlockedByUser {
-		return
-	}
 	if b.committedUsageTarget == nil {
-		b.unattachedTokenUsage = true
+		if b.incremental && !b.committedUsageBlockedByUser {
+			// The target may precede the resume offset; a full parse
+			// decides whether one exists.
+			b.unattachedTokenUsage = true
+			return
+		}
+		// No assistant message in this turn can take the usage, for
+		// example after a reasoning-only response. Keep it as a hidden
+		// usage-only row instead of dropping it.
+		b.appendUsageOnlyMessage(raw)
 		return
 	}
 	msg := ParsedMessage{}
@@ -723,6 +732,22 @@ func (b *codexSessionBuilder) applyTokenUsage(raw, responseID string) {
 		},
 	)
 	b.committedUsageTarget = nil
+}
+
+// appendUsageOnlyMessage appends the hidden row that carries token usage no
+// assistant message in the current turn can take.
+func (b *codexSessionBuilder) appendUsageOnlyMessage(raw string) {
+	msg := ParsedMessage{
+		CodexOrigin:     CodexMessageOrigin{Line: b.sourceLine, TurnID: b.sourceTurnID, InTurn: b.sourceInTurn, TurnContext: len(b.sourceTurnContexts)},
+		Timestamp:       b.sourceTimestamp,
+		Model:           b.model,
+		ReasoningEffort: b.reasoningEffort,
+		ProviderID:      b.serviceTierProviderID,
+	}
+	applyCodexTokenUsage(&msg, raw)
+	if msg, ok := usageOnlyMessage(msg); ok {
+		b.sink.AppendMessage(msg)
+	}
 }
 
 func (b *codexSessionBuilder) handleCollabAgentSpawnEnd(

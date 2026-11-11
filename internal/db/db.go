@@ -668,7 +668,11 @@ CREATE INDEX IF NOT EXISTS idx_provider_freshness_updated_at
 // the response's web-search total. Re-parse Claude-format sources in place;
 // source and session identities are unchanged.)
 // (172: import Cursor IDE chunked conversation headers.)
-const dataVersion = 172
+// (173: keep the token usage of assistant records that have no text or tool
+// call as hidden usage-only rows. Re-parse OpenCode-format, OpenClaw-format,
+// Forge, Cline, Codex-format, and Gemini sources in place; source and session
+// identities are unchanged.)
+const dataVersion = 173
 
 const archiveOnlyVersionBase = 1 << 20
 
