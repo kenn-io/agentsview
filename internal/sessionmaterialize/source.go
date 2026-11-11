@@ -322,11 +322,7 @@ func readS3Source(ctx context.Context, cfg config.Config, machine, uri, id strin
 				continue
 			}
 			rel, ok := strings.CutPrefix(obj.URI, base+"/")
-			if ok {
-				_, err = filepath.Localize(rel)
-				ok = err == nil
-			}
-			if !ok || !strings.HasPrefix(rel, sub+"/") || strings.Contains(rel, `\`) {
+			if _, err := filepath.Localize(rel); !ok || err != nil || !strings.HasPrefix(rel, sub+"/") || strings.Contains(rel, `\`) {
 				return nil, errors.New("unsafe S3 file path")
 			}
 			data, err := fetch(obj.URI)

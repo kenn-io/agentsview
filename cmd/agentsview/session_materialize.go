@@ -18,7 +18,12 @@ func newSessionMaterializeCommand() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "materialize <id>",
 		Short: "Install original session files for native resume",
-		Args:  cobra.ExactArgs(1),
+		Long: "Install a Claude session and its companions from configured local, mirror, or S3 sources for a local checkout, then print a resume command. " +
+			"Requires a local archive with conversation content; the original files must total at most 512 MiB. " +
+			"End the running Claude session and wait for any S3 uploader to finish before materializing. " +
+			"Retained and attached captures, Pi, and Codex are not yet supported.",
+		Example: "  agentsview session materialize <id> --cwd <path>",
+		Args:    cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			if cmd.Flags().Changed("server") || cmd.Flags().Changed("server-token-file") || cmd.Flags().Changed("pg") {
 				return errors.New("session materialize requires the local archive; --server, --server-token-file and --pg are unsupported")

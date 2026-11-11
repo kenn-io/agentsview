@@ -94,8 +94,6 @@ func TestS3ConfiguredSource(t *testing.T) {
 	const root = "s3://test/host/raw/claude"
 	const contents = "{\"type\":\"user\",\"sessionId\":\"" + parent + "\",\"message\":{\"content\":\"fixture\"}}\n"
 	const base = "host/raw/claude/project/" + id
-	_, err := readS3Source(t.Context(), config.Config{}, "remote", "s3://other/project/"+id+".jsonl", id, maxSourceBytes)
-	require.ErrorContains(t, err, "configured roots")
 	var extraKey atomic.Value
 	extraKey.Store("")
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -129,6 +127,8 @@ func TestS3ConfiguredSource(t *testing.T) {
 	t.Setenv("AWS_ACCESS_KEY_ID", "fixture")
 	t.Setenv("AWS_SECRET_ACCESS_KEY", "fixture")
 	t.Setenv("AWS_SESSION_TOKEN", "fixture")
+	_, err := readS3Source(t.Context(), config.Config{}, "remote", "s3://other/project/"+id+".jsonl", id, maxSourceBytes)
+	require.ErrorContains(t, err, "configured roots")
 	cfg := config.Config{AgentDirs: map[parser.AgentType][]string{parser.AgentClaude: {root}}}
 	files, err := readS3Source(t.Context(), cfg, "host", root+"/project/"+id+".jsonl", id, maxSourceBytes)
 	require.NoError(t, err)
@@ -151,11 +151,6 @@ func TestS3ConfiguredSource(t *testing.T) {
 	installed, err := os.ReadFile(filepath.Join(home, "projects", "project", id+".jsonl"))
 	require.NoError(t, err)
 	assert.Equal(t, contents, string(installed))
-	for _, invalid := range []string{"other~" + parent, "host~bad", "~" + parent} {
-		s.SourceSessionID = invalid
-		_, err = Materialize(t.Context(), cfg, s, cwd)
-		require.ErrorContains(t, err, "invalid source session identity")
-	}
 	extraKey.Store(base + "/tool-results/a/./b")
 	_, err = readS3Source(t.Context(), cfg, "host", uri, id, maxSourceBytes)
 	require.ErrorContains(t, err, "unsafe S3 file path")
@@ -181,7 +176,7 @@ func TestMaterializeParentSource(t *testing.T) {
 	home := t.TempDir()
 	name := filepath.Join(root, "project", selected+".jsonl")
 	require.NoError(t, os.MkdirAll(filepath.Dir(name), 0o700))
-	original := []byte(`{"type":"user","sessionId":"` + parent + `","message":{"content":"parent"}}` + "\n" + `{"type":"worktree-state","sessionId":"` + parent + `","worktreeSession":{}}` + "\n")
+	original := []byte(`{"type":"user","sessionId":"` + parent + `","message":{"content":"parent"}}` + "\n" + `{"type":"worktree-state","sessionId":"` + parent + `","worktreeSession":{"worktreePath":"/old"}}` + "\n")
 	require.NoError(t, os.WriteFile(name, original, 0o600))
 	cfg := config.Config{InstallationID: "local", AgentDirs: map[parser.AgentType][]string{parser.AgentClaude: {root}}}
 	s := &db.Session{ID: selected, Agent: "claude", Machine: "local", FilePath: &name, SourceSessionID: parent}
@@ -192,4 +187,9 @@ func TestMaterializeParentSource(t *testing.T) {
 	installed, err := os.ReadFile(filepath.Join(home, "projects", "project", selected+".jsonl"))
 	require.NoError(t, err)
 	assert.Equal(t, original, installed)
+	for _, invalid := range []string{"other~" + parent, "local~bad", "~" + parent} {
+		s.SourceSessionID = invalid
+		_, err = Materialize(t.Context(), cfg, s, t.TempDir())
+		require.ErrorContains(t, err, "invalid source session identity")
+	}
 }
