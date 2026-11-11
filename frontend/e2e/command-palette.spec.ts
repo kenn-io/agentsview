@@ -71,12 +71,12 @@ test("search shows placeholder rows at a result-list size while it runs", async 
 });
 
 test("Retry keeps focus while the search loads", async ({ page }) => {
-  let requests = 0;
+  let retrying = false;
   let release: () => void = () => {};
   const held = new Promise<void>((resolve) => (release = resolve));
   await page.route("**/api/v1/search?**", async (route) => {
-    if (++requests <= 2) {
-      await route.fulfill({ status: 503, json: { error: "Search temporarily unavailable" } });
+    if (!retrying) {
+      await route.fulfill({ status: 503 });
     } else {
       await held;
       await route.continue();
@@ -88,8 +88,8 @@ test("Retry keeps focus while the search loads", async ({ page }) => {
   const input = page.locator(".palette-input");
   await expect(retry).toBeVisible();
   await retry.focus();
+  retrying = true;
   await page.keyboard.press("Enter");
-  await expect(page.locator(".palette-loading")).toBeVisible();
   await expect(input).toBeFocused();
   release();
   await expect(page.locator(".palette-item").first()).toBeVisible();

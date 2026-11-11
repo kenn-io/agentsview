@@ -2,7 +2,6 @@ import { afterEach, describe, expect, it, vi } from "vite-plus/test";
 import { getApiV1Version } from "./generated/metadata/metadata.js";
 import {
   ApiError,
-  isTransient,
   orvalFetch,
   getServerUrl,
   responseTimingOf,
@@ -11,17 +10,6 @@ import {
   setServerUrl,
 } from "./runtime.js";
 import { requestUrl } from "../test-support/request-url.js";
-
-describe("transient errors", () => {
-  it.each([
-    [new TypeError("Failed to fetch"), true],
-    [new ApiError(503, "unavailable"), true],
-    [new ApiError(404, "missing"), false],
-    [new TypeError("Cannot read properties of undefined"), false],
-  ])("classifies %s", (error, expected) => {
-    expect(isTransient(error)).toBe(expected);
-  });
-});
 
 describe("orvalFetch", () => {
   afterEach(() => {

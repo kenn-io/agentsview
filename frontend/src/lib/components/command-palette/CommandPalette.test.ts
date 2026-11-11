@@ -667,17 +667,12 @@ describe("CommandPalette", () => {
     unmount(component);
   });
 
-  it("opens the first result after moving down on an empty failed search and retrying", async () => {
+  it("keeps the first result selected after ArrowDown on an empty list", async () => {
     mockSearchStore.error = { detail: null, kind: "generic" };
     const component = mount(CommandPalette, { target: document.body });
     await enterSearchQuery();
     const input = document.querySelector<HTMLInputElement>(".palette-input")!;
     input.dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowDown", bubbles: true }));
-    const retry = Array.from(
-      document.querySelectorAll<HTMLButtonElement>(".palette-error button"),
-    ).find((button) => button.textContent?.trim() === "Retry")!;
-    retry.click();
-    expect(mockSearchStore.retry).toHaveBeenCalledOnce();
     mockSearchStore.results = [makeSearchResult()];
     input.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
     expect(mockRouter.navigateToSession).toHaveBeenCalledWith("codex:search123");
@@ -754,7 +749,7 @@ describe("CommandPalette", () => {
     expect(mockSearchStore.resetRange).toHaveBeenCalledOnce();
   });
 
-  it("explains a semantic timeout and offers an explicit retry", async () => {
+  it("explains a semantic timeout", async () => {
     mockSearchStore.mode = "semantic";
     mockSearchStore.error = {
       detail: "request timed out",

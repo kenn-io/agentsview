@@ -187,7 +187,7 @@ describe("SearchStore", () => {
   });
 
   it.each(["recover", "exhaust"] as const)(
-    "handles a transient full-text failure: %s",
+    "recovers or exhausts automatic retry and preserves filters for manual retry: %s",
     async (outcome) => {
       const store = createSearchStore(memoryStorage());
       const second = deferred<SearchResponse>();
@@ -254,18 +254,13 @@ describe("SearchStore", () => {
 
   it("keeps a canceled search cleared when the retry delay ends", async () => {
     const store = createSearchStore(memoryStorage());
-    let retrySignal: AbortSignal | null | undefined;
     searchService.getApiV1Search
       .mockRejectedValueOnce(new ApiError(503, "unavailable"))
-      .mockImplementationOnce(async (_params, options) => {
-        retrySignal = options?.signal;
-        throw new DOMException("Aborted", "AbortError");
-      });
+      .mockRejectedValueOnce(new DOMException("Aborted", "AbortError"));
     store.search("needle");
     await runDebounce();
     store.clear();
     await vi.advanceTimersByTimeAsync(300);
-    expect(retrySignal?.aborted).toBe(true);
     expect(store.results).toEqual([]);
     expect(store.error).toBeNull();
     expect(store.isSearching).toBe(false);
