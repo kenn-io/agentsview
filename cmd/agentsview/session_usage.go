@@ -197,7 +197,7 @@ func resolveSessionUsageBackend(cmd *cobra.Command, noSync bool) (*sessionUsageB
 			return nil, fmt.Errorf("opening pg store: %w", err)
 		}
 		return &sessionUsageBackend{
-			service: service.NewReadOnlyBackend(store), cleanup: cleanup,
+			service: sessionUsageReadOnlyService(store, query), cleanup: cleanup,
 			read: func(id string) (*sessionUsageOutput, int, error) {
 				query.SessionID = id
 				return storeSessionUsageData(ctx, "pg", cfg, store, query)
@@ -223,7 +223,7 @@ func resolveSessionUsageBackend(cmd *cobra.Command, noSync bool) (*sessionUsageB
 	case daemonArchiveQueryBackend:
 		svc = servicehttp.NewHTTPBackend(b.tr.URL, b.authToken, b.tr.ReadOnly, b.tr.BrowserURL)
 	case localArchiveQueryBackend:
-		svc = service.NewReadOnlyBackend(b.database)
+		svc = sessionUsageReadOnlyService(b.database, query)
 	}
 	return &sessionUsageBackend{
 		service: svc, cleanup: cleanup,
@@ -232,6 +232,13 @@ func resolveSessionUsageBackend(cmd *cobra.Command, noSync bool) (*sessionUsageB
 			return backend.SessionUsage(ctx, query)
 		},
 	}, nil
+}
+
+func sessionUsageReadOnlyService(store db.Store, query sessionUsageQuery) service.SessionService {
+	if query.Wait {
+		fmt.Fprintln(os.Stderr, "warning: --wait has no effect when reading directly or from PostgreSQL")
+	}
+	return service.NewReadOnlyBackend(store)
 }
 
 func requireRemoteSubagentUsageSupport(
@@ -286,7 +293,7 @@ func httpSessionUsageData(
 		waitCtx, cancel = context.WithTimeout(ctx, sessionUsageWaitTimeout)
 		defer cancel()
 	}
-	resolvedID, err := resolveServiceSessionID(waitCtx, backend, sessionID)
+	resolvedID, err := resolveSessionUsageInitialID(waitCtx, backend, sessionID, query.Wait)
 	missing := errors.Is(err, errSessionNotFound)
 	known := err == nil
 	if err != nil && !missing && waitCtx.Err() == nil {
@@ -361,13 +368,35 @@ func httpSessionUsageData(
 	return out, usageExitCode(out), nil
 }
 
+func resolveSessionUsageInitialID(ctx context.Context, backend service.SessionService, id string, wait bool) (string, error) {
+	if !wait {
+		return resolveServiceSessionID(ctx, backend, id)
+	}
+	lookupCtx, cancel := context.WithTimeout(ctx, sessionUsageWaitTimeout/2)
+	resolvedID, err := resolveServiceSessionID(lookupCtx, backend, id)
+	lookupErr := lookupCtx.Err()
+	cancel()
+	if errors.Is(lookupErr, context.DeadlineExceeded) && ctx.Err() == nil {
+		return resolveServiceSessionID(ctx, backend, id)
+	}
+	return resolvedID, err
+}
+
+func sessionUsageStatusError(wait bool, err error) error {
+	err = fmt.Errorf("checking sync status: %w", err)
+	if !wait {
+		return backoff.Permanent(err)
+	}
+	return err
+}
+
 func waitSessionUsageReady(ctx context.Context, baseURL, token string, wait, known, refresh bool) error {
 	started := false
 	var startErr error
 	_, err := backoff.Retry(ctx, func() (struct{}, error) {
 		startup, stale, pending, statusErr := httpSessionSyncStatus(ctx, baseURL, token)
 		if statusErr != nil {
-			return struct{}{}, backoff.Permanent(fmt.Errorf("checking sync status: %w", statusErr))
+			return struct{}{}, sessionUsageStatusError(wait, statusErr)
 		}
 		if !startup && !stale && (!pending || (known && refresh)) {
 			return struct{}{}, nil

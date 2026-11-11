@@ -50,7 +50,8 @@ The latest release is
   See [Direct API Sessions](/docs/token-usage/#direct-api-sessions).
 
 - `agentsview session usage <id> --wait` waits for ingestion or a rebuild and
-  returns saved totals if the wait ends before a refresh completes.
+  returns saved totals if the wait ends before a refresh completes. Restart a
+  running older daemon to use the updated CLI.
 
 - A `[custom_model_pricing."<model>"]` entry can set `price_as` to price a model
   name exactly like a catalog model, such as a private gateway deployment name
