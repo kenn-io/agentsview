@@ -50,6 +50,16 @@ func TestRawTranscriptPrefixAcceptsAGrownSessionTotalOnTheSameTranscript(t *test
 			Cost: &money.Money{Microdollars: microdollars},
 		}
 	}
+	// tokens builds a total whose growth comes from cache reads, the counter
+	// that grows most between Claude Code snapshots.
+	tokens := func(cost *money.Money, cacheRead int64) *db.SessionUsageTotal {
+		return &db.SessionUsageTotal{
+			Source: "claude-cost-state", SubagentScope: "included", Cost: cost,
+			Models: []db.SessionUsageTotalModel{{
+				Model: "m", InputTokens: 10, OutputTokens: 5, CacheReadInputTokens: cacheRead,
+			}},
+		}
+	}
 	capture := func(change func(*ingest.PreparedSession)) ingest.PreparedSession {
 		p := ingest.PreparedSession{
 			Session:  db.Session{MessageCount: 1},
@@ -67,6 +77,22 @@ func TestRawTranscriptPrefixAcceptsAGrownSessionTotalOnTheSameTranscript(t *test
 		{"total grew", func(p *ingest.PreparedSession) { p.SessionTotal = total(42) }, func(p *ingest.PreparedSession) { p.SessionTotal = total(50) }, true},
 		{"total shrank", func(p *ingest.PreparedSession) { p.SessionTotal = total(50) }, func(p *ingest.PreparedSession) { p.SessionTotal = total(42) }, false},
 		{"same total", func(p *ingest.PreparedSession) { p.SessionTotal = total(42) }, func(p *ingest.PreparedSession) { p.SessionTotal = total(42) }, false},
+		{
+			"same cost, more cache tokens", func(p *ingest.PreparedSession) { p.SessionTotal = tokens(&money.Money{Microdollars: 42}, 100) },
+			func(p *ingest.PreparedSession) { p.SessionTotal = tokens(&money.Money{Microdollars: 42}, 150) }, true,
+		},
+		{
+			"no cost, more tokens", func(p *ingest.PreparedSession) { p.SessionTotal = tokens(nil, 100) },
+			func(p *ingest.PreparedSession) { p.SessionTotal = tokens(nil, 150) }, true,
+		},
+		{
+			"same cost, same tokens", func(p *ingest.PreparedSession) { p.SessionTotal = tokens(&money.Money{Microdollars: 42}, 100) },
+			func(p *ingest.PreparedSession) { p.SessionTotal = tokens(&money.Money{Microdollars: 42}, 100) }, false,
+		},
+		{
+			"same cost, fewer tokens", func(p *ingest.PreparedSession) { p.SessionTotal = tokens(&money.Money{Microdollars: 42}, 150) },
+			func(p *ingest.PreparedSession) { p.SessionTotal = tokens(&money.Money{Microdollars: 42}, 100) }, false,
+		},
 		{"changed message", func(*ingest.PreparedSession) {}, func(p *ingest.PreparedSession) {
 			p.SessionTotal = total(42)
 			p.Messages[0].Content = "different"
