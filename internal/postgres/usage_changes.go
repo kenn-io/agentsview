@@ -131,6 +131,17 @@ func installUsageAccountRevisionPG(ctx context.Context, tx *sql.Tx) error {
 	if version != strconv.Itoa(usageChangeJournalVersionPG) {
 		return nil
 	}
+	var installed bool
+	if err := tx.QueryRowContext(ctx, `SELECT EXISTS (SELECT 1 FROM sync_metadata WHERE key = 'usage_account_revision')`).Scan(&installed); err != nil {
+		return err
+	}
+	if !installed {
+		// Drain account transactions using the old trigger before seeding the
+		// marker; otherwise their commits would miss the account revision.
+		if _, err := tx.ExecContext(ctx, `LOCK TABLE cursor_usage_events IN SHARE ROW EXCLUSIVE MODE`); err != nil {
+			return err
+		}
+	}
 	var schema string
 	if err := tx.QueryRowContext(ctx, `SELECT current_schema()`).Scan(&schema); err != nil {
 		return err

@@ -1068,6 +1068,11 @@ func (c *usageFillCoordinator) installSpoolBatch(
 	if err := deleteUsageCachedSessions(ctx, conn, eligibleDeleted, spool.changeRevision); err != nil {
 		return nil, nil, err
 	}
+	if c.archive.usageSource != nil && len(eligibleDeleted)+len(eligibleStable) > 0 {
+		if err := recordUsageSourceMutation(ctx, conn, spool.changeRevision); err != nil {
+			return nil, nil, err
+		}
+	}
 	stableResults, err := installSpoolSessions(ctx, conn, eligibleStable)
 	if err != nil {
 		return nil, nil, err
@@ -1420,6 +1425,9 @@ func (c *usageFillCoordinator) ensureCursor(ctx context.Context, target int64) e
 		current, err := c.cursorHighWater(ctx)
 		if err != nil || current >= target {
 			return err
+		}
+		if usageWorkDeferred(ctx) {
+			return ErrUsageCacheWarming
 		}
 		c.mu.Lock()
 		if target > c.cursorTarget {
@@ -1895,6 +1903,11 @@ func (c *usageFillCoordinator) deleteNotificationSessions(ids []string, revision
 	if err := deleteUsageCachedSessions(c.ctx, conn, ids, revision); err != nil {
 		return err
 	}
+	if c.archive.usageSource != nil && len(ids) > 0 {
+		if err := recordUsageSourceMutation(c.ctx, conn, revision); err != nil {
+			return err
+		}
+	}
 	// Rebuild the survivors' rollups so groups the deleted sessions kept
 	// irreducible can finalize again.
 	sharers, err := invalidateUsageDedupSharers(c.ctx, conn, removed, excluded)
@@ -1907,6 +1920,11 @@ func (c *usageFillCoordinator) deleteNotificationSessions(ids []string, revision
 	committed = true
 	c.requeueSessions(sharers)
 	return nil
+}
+
+func recordUsageSourceMutation(ctx context.Context, conn *sql.Conn, revision int64) error {
+	_, err := conn.ExecContext(ctx, `UPDATE usage_cache_metadata SET value = MAX(CAST(value AS INTEGER), ?) WHERE key = ?`, revision, usageCacheMetadataSourceMutation)
+	return err
 }
 
 // deleteUsageCachedSessions runs inside the caller's cache write transaction.

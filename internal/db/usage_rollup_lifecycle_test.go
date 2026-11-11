@@ -1413,6 +1413,11 @@ func (s *rollupAccountSource) BuildProjectIdentityMap(ctx context.Context, label
 	return s.database.BuildProjectIdentityMap(ctx, labels)
 }
 
-func (s *rollupAccountSource) ReadUsageAccounts(context.Context) (string, int64, []UsageSourceAccount, error) {
-	return s.databaseID, s.revision, s.accounts, nil
+func (s *rollupAccountSource) StreamUsageAccounts(_ context.Context, emit func(UsageSourceAccount) error) (string, int64, error) {
+	for _, account := range s.accounts {
+		if err := emit(account); err != nil {
+			return "", 0, err
+		}
+	}
+	return s.databaseID, s.revision, nil
 }

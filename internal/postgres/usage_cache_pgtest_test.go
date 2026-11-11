@@ -5,10 +5,12 @@ package postgres
 import (
 	"bytes"
 	"context"
+	"database/sql"
 	"errors"
 	"fmt"
 	"log"
 	"maps"
+	"path/filepath"
 	"slices"
 	"sync"
 	"sync/atomic"
@@ -24,6 +26,183 @@ import (
 	"go.kenn.io/agentsview/internal/usagefacts"
 )
 
+func TestPGUsageCachePersistsRollupsBeforeInterruptedFill(t *testing.T) {
+	_, _, store, _ := keptUsageFixture(t)
+	ctx := t.Context()
+	_, err := store.pg.ExecContext(ctx, `INSERT INTO sessions(id,project,machine,agent,started_at)
+SELECT 'batch-' || n, 'project', 'test-machine', 'claude', '2026-01-01'
+FROM generate_series(1, 1100) n`)
+	require.NoError(t, err)
+	_, err = store.pg.ExecContext(ctx, `INSERT INTO usage_events(session_id,source,model,output_tokens,occurred_at,dedup_key)
+VALUES ('batch-1','provider','paid-a',20,'2026-01-01','shared'),
+       ('batch-999','provider','paid-a',30,'2026-01-01','shared')`)
+	require.NoError(t, err)
+	directory := t.TempDir()
+	probe := attachUsageCacheProbe(t, store, directory)
+	var calls atomic.Int64
+	var completed []string
+	interrupted := errors.New("interrupted fill")
+	probe.before = func(_ context.Context, ids []string) error {
+		if calls.Add(1) == 1 {
+			completed = slices.Clone(ids)
+		} else {
+			return interrupted
+		}
+		return nil
+	}
+	_, err = store.usageCache.GetDailyUsage(ctx, db.UsageFilter{Timezone: "UTC"})
+	require.ErrorIs(t, err, interrupted)
+	require.NoError(t, store.usageCache.Close())
+	files, err := filepath.Glob(filepath.Join(directory, "usage-cache-v*.db"))
+	require.NoError(t, err)
+	require.Len(t, files, 1)
+	cached, err := sql.Open("sqlite3", files[0])
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, cached.Close()) })
+	var count int
+	require.NoError(t, cached.QueryRowContext(ctx, `SELECT count(*) FROM usage_rollup_installs WHERE session_id <> ''`).Scan(&count))
+	assert.Positive(t, count, "finished batches must retain their daily rollups")
+	probe = attachUsageCacheProbe(t, store, directory)
+	store.usageCache.DeferWork()
+	t.Cleanup(func() { require.NoError(t, store.usageCache.Close()) })
+	release := make(chan struct{})
+	unblock := sync.OnceFunc(func() { close(release) })
+	t.Cleanup(unblock)
+	probe.before = func(ctx context.Context, _ []string) error {
+		select {
+		case <-release:
+			return nil
+		case <-ctx.Done():
+			return ctx.Err()
+		}
+	}
+	got, err := store.GetDailyUsage(ctx, db.UsageFilter{Timezone: "UTC"})
+	require.NoError(t, err, "restart should serve the direct read while the fill is blocked")
+	want, err := (&Store{pg: store.pg}).GetDailyUsage(ctx, db.UsageFilter{Timezone: "UTC"})
+	require.NoError(t, err)
+	assert.Equal(t, want, got)
+	unblock()
+	require.NoError(t, store.usageCache.WaitWarm(ctx))
+	for _, id := range probe.takeExtracted() {
+		assert.NotContains(t, completed, id)
+	}
+	requireCachedUsageMatchesDirect(t, store, db.UsageFilter{Timezone: "UTC"})
+}
+
+func TestPGUsageCacheWaitsForDirectReadBeforeWarm(t *testing.T) {
+	_, _, store, _ := keptUsageFixture(t)
+	ctx := t.Context()
+	_, err := store.pg.ExecContext(ctx, `INSERT INTO sessions(id,project,machine,agent,started_at)
+SELECT 'warm-' || n, 'project', 'test-machine', 'claude', '2026-01-01'
+FROM generate_series(1, 1100) n`)
+	require.NoError(t, err)
+	directory := t.TempDir()
+	probe := attachUsageCacheProbe(t, store, directory)
+	t.Cleanup(func() { require.NoError(t, store.usageCache.Close()) })
+	store.usageCache.DeferWork()
+	started := make(chan struct{})
+	signal := sync.OnceFunc(func() { close(started) })
+	probe.before = func(context.Context, []string) error { signal(); return nil }
+	release := store.usageCache.HoldWarm()
+	t.Cleanup(release)
+	_, err = store.usageCache.GetDailyUsage(ctx, db.UsageFilter{Timezone: "UTC"})
+	require.ErrorIs(t, err, db.ErrUsageCacheWarming)
+	select {
+	case <-started:
+		t.Fatal("warm pass started while the direct read was held")
+	case <-time.After(200 * time.Millisecond):
+	}
+	release()
+	select {
+	case <-started:
+	case <-time.After(10 * time.Second):
+		t.Fatal("warm pass did not start after the direct read finished")
+	}
+	require.Eventually(t, func() bool {
+		files, err := filepath.Glob(filepath.Join(directory, "usage-cache-v*.db"))
+		if err != nil || len(files) != 1 {
+			return false
+		}
+		cached, err := sql.Open("sqlite3", files[0])
+		if err != nil {
+			return false
+		}
+		defer cached.Close()
+		var count int
+		err = cached.QueryRowContext(ctx, `SELECT count(*) FROM usage_rollup_installs WHERE session_id <> ''`).Scan(&count)
+		return err == nil && count > 0
+	}, 10*time.Second, 10*time.Millisecond)
+}
+
+func TestPGUsageCacheRetriesFailedWarmWithoutAnotherRequest(t *testing.T) {
+	_, _, store, _ := keptUsageFixture(t)
+	probe := attachUsageCacheProbe(t, store, t.TempDir())
+	t.Cleanup(func() { require.NoError(t, store.usageCache.Close()) })
+	store.usageCache.DeferWork()
+	var calls atomic.Int64
+	probe.before = func(context.Context, []string) error {
+		if calls.Add(1) == 1 {
+			return errors.New("temporary source failure")
+		}
+		return nil
+	}
+	filter := db.UsageFilter{Timezone: "UTC"}
+	_, err := store.GetDailyUsage(t.Context(), filter)
+	require.NoError(t, err)
+	ctx, cancel := context.WithTimeout(t.Context(), 20*time.Second)
+	defer cancel()
+	require.NoError(t, store.usageCache.WaitWarm(ctx))
+	require.GreaterOrEqual(t, calls.Load(), int64(2))
+	requireCachedUsageMatchesDirect(t, store, filter)
+}
+
+func TestPGUsageCacheInterruptedAccountStreamKeepsLastCompleteResult(t *testing.T) {
+	_, _, store, _ := keptUsageFixture(t)
+	ctx := t.Context()
+	_, err := store.pg.ExecContext(ctx, `INSERT INTO cursor_usage_events(id,agent,occurred_at,model,charged_microdollars,dedup_key) VALUES
+(1,'cursor','2026-01-01','paid-a',100,'one'), (2,'cursor','2026-01-01','paid-a',200,'two')`)
+	require.NoError(t, err)
+	directory := t.TempDir()
+	probe := attachUsageCacheProbe(t, store, directory)
+	t.Cleanup(func() { require.NoError(t, store.usageCache.Close()) })
+	filter := db.UsageFilter{Timezone: "UTC"}
+	requireCachedUsageMatchesDirect(t, store, filter)
+	_, err = store.pg.ExecContext(ctx, `UPDATE cursor_usage_events SET charged_microdollars=400 WHERE id=1`)
+	require.NoError(t, err)
+	interrupted := errors.New("account stream interrupted")
+	probe.afterAccount = func() error { return interrupted }
+	_, err = store.usageCache.GetDailyUsage(ctx, filter)
+	require.ErrorIs(t, err, interrupted)
+	files, err := filepath.Glob(filepath.Join(directory, "usage-cache-v*.db"))
+	require.NoError(t, err)
+	require.Len(t, files, 1)
+	cached, err := sql.Open("sqlite3", files[0])
+	require.NoError(t, err)
+	var charged int64
+	require.NoError(t, cached.QueryRowContext(ctx, `SELECT charged_microdollars FROM cursor_usage_facts WHERE source_id=1`).Scan(&charged))
+	assert.Equal(t, int64(100), charged)
+	require.NoError(t, cached.Close())
+	probe.afterAccount = nil
+	requireCachedUsageMatchesDirect(t, store, filter)
+}
+
+func TestPGUsageCacheRefreshesLargeDeletion(t *testing.T) {
+	_, _, store, _ := keptUsageFixture(t)
+	ctx := t.Context()
+	_, err := store.pg.ExecContext(ctx, `INSERT INTO sessions(id,project,machine,agent,started_at)
+SELECT 'remove-' || n, 'project', 'test-machine', 'claude', '2026-01-01'
+FROM generate_series(1, 1100) n`)
+	require.NoError(t, err)
+	attachUsageCacheProbe(t, store, t.TempDir())
+	t.Cleanup(func() { require.NoError(t, store.usageCache.Close()) })
+	filter := db.UsageFilter{Timezone: "UTC"}
+	requireCachedUsageMatchesDirect(t, store, filter)
+	_, err = store.pg.ExecContext(ctx, `UPDATE sessions SET deleted_at=now() WHERE id LIKE 'remove-%';
+UPDATE usage_events SET output_tokens=output_tokens+10 WHERE session_id='paid-a'`)
+	require.NoError(t, err)
+	requireCachedUsageMatchesDirect(t, store, filter)
+}
+
 type usageCacheProbe struct {
 	*pgUsageCacheSource
 	mu             sync.Mutex
@@ -31,15 +210,33 @@ type usageCacheProbe struct {
 	before         func(context.Context, []string) error
 	after          func() error
 	beforeAccounts func(context.Context) error
+	afterAccount   func() error
+	afterCapture   func(context.Context) error
 }
 
-func (probe *usageCacheProbe) ReadUsageAccounts(ctx context.Context) (string, int64, []db.UsageSourceAccount, error) {
+func (probe *usageCacheProbe) CaptureUsage(ctx context.Context, request db.UsageSourceRequest) (db.UsageSourceSnapshot, error) {
+	snapshot, err := probe.pgUsageCacheSource.CaptureUsage(ctx, request)
+	if err == nil && probe.afterCapture != nil {
+		err = probe.afterCapture(ctx)
+	}
+	return snapshot, err
+}
+
+func (probe *usageCacheProbe) StreamUsageAccounts(ctx context.Context, emit func(db.UsageSourceAccount) error) (string, int64, error) {
 	if probe.beforeAccounts != nil {
 		if err := probe.beforeAccounts(ctx); err != nil {
-			return "", 0, nil, err
+			return "", 0, err
 		}
 	}
-	return probe.pgUsageCacheSource.ReadUsageAccounts(ctx)
+	return probe.pgUsageCacheSource.StreamUsageAccounts(ctx, func(account db.UsageSourceAccount) error {
+		if err := emit(account); err != nil {
+			return err
+		}
+		if probe.afterAccount != nil {
+			return probe.afterAccount()
+		}
+		return nil
+	})
 }
 
 func (probe *usageCacheProbe) StreamUsage(ctx context.Context, ids []string, emit func(string, usagefacts.Fact) error) (db.UsageSourceSnapshot, error) {
@@ -243,6 +440,43 @@ func TestPGUsageCacheAccountReplacementAndPricing(t *testing.T) {
 	requireCachedUsageMatchesDirect(t, store, filter)
 	store.SetCustomPricing(nil)
 	requireCachedUsageMatchesDirect(t, store, filter)
+}
+
+func TestPGUsageAccountUpgradeWaitsForOldWriter(t *testing.T) {
+	_, _, store, _ := keptUsageFixture(t)
+	ctx := t.Context()
+	var schema string
+	require.NoError(t, store.pg.QueryRowContext(ctx, `SELECT current_schema()`).Scan(&schema))
+	quoted, err := quoteIdentifier(schema)
+	require.NoError(t, err)
+	_, err = store.pg.ExecContext(ctx, fmt.Sprintf(`
+DELETE FROM sync_metadata WHERE key='usage_account_revision';
+CREATE OR REPLACE FUNCTION stamp_usage_change() RETURNS trigger LANGUAGE plpgsql SECURITY DEFINER SET search_path = pg_catalog, %[1]s, pg_temp AS $journal$%[2]s$journal$;
+CREATE OR REPLACE FUNCTION mark_usage_cursor_usage_events() RETURNS trigger LANGUAGE plpgsql SECURITY DEFINER SET search_path = pg_catalog, %[1]s, pg_temp AS $journal$%[3]s$journal$`, quoted, stampUsageChangeFunctionBodyPG, fmt.Sprintf(markUsageChangeFunctionBodyPG, "''", "true", "*")))
+	require.NoError(t, err)
+	writer, err := store.DB().BeginTx(ctx, nil)
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = writer.Rollback() })
+	_, err = writer.ExecContext(ctx, `INSERT INTO cursor_usage_events(id,agent,occurred_at,model,output_tokens,charged_microdollars,dedup_key) VALUES(1,'cursor','2026-01-01','paid-a',3,300,'upgrade')`)
+	require.NoError(t, err)
+	done := make(chan struct{})
+	go func() { ensureUsageChangeJournalPG(ctx, store.DB()); close(done) }()
+	require.Eventually(t, func() bool {
+		var waiting bool
+		err := store.pg.QueryRowContext(ctx, `SELECT EXISTS (SELECT 1 FROM pg_locks WHERE relation='cursor_usage_events'::regclass AND mode='ShareRowExclusiveLock' AND NOT granted)`).Scan(&waiting)
+		return err == nil && waiting
+	}, 10*time.Second, 20*time.Millisecond)
+	require.NoError(t, writer.Commit())
+	select {
+	case <-done:
+	case <-time.After(10 * time.Second):
+		t.Fatal("journal upgrade did not finish")
+	}
+	var accountRevision, changeRevision int64
+	require.NoError(t, store.pg.QueryRowContext(ctx, `SELECT (SELECT value::bigint FROM sync_metadata WHERE key='usage_account_revision'), (SELECT value::bigint FROM sync_metadata WHERE key='usage_change_revision')`).Scan(&accountRevision, &changeRevision))
+	require.Equal(t, changeRevision, accountRevision)
+	attachUsageCacheProbe(t, store, t.TempDir())
+	requireCachedUsageMatchesDirect(t, store, db.UsageFilter{Timezone: "UTC"})
 }
 
 func TestPGUsageCacheSnapshotPeersAndRanking(t *testing.T) {
@@ -832,6 +1066,93 @@ func TestPGUsageCacheRecoversRewoundJournal(t *testing.T) {
 	require.Empty(t, probe.takeExtracted(), "restart must reuse rebuilt cache")
 }
 
+func TestPGUsageCacheRewindWithUnclaimedTimezone(t *testing.T) {
+	_, _, store, _ := keptUsageFixture(t)
+	ctx := t.Context()
+	_, err := store.pg.ExecContext(ctx, `INSERT INTO cursor_usage_events(id,agent,occurred_at,model,output_tokens,charged_microdollars,dedup_key) VALUES(1,'cursor','2026-01-01','paid-a',3,100,'account')`)
+	require.NoError(t, err)
+	directory := t.TempDir()
+	attachUsageCacheProbe(t, store, directory)
+	_, err = store.usageCache.GetDailyUsage(ctx, db.UsageFilter{Timezone: "UTC"})
+	require.NoError(t, err)
+	_, err = store.pg.ExecContext(ctx, `UPDATE cursor_usage_events SET charged_microdollars=300 WHERE id=1`)
+	require.NoError(t, err)
+	_, err = store.usageCache.GetDailyUsage(ctx, db.UsageFilter{Timezone: "UTC"})
+	require.NoError(t, err)
+	_, err = store.pg.ExecContext(ctx, `UPDATE sync_metadata SET value=(value::bigint - 100)::text WHERE key IN ('usage_change_revision','usage_account_revision')`)
+	require.NoError(t, err)
+	store.usageCache.DeferWork()
+	t.Cleanup(func() { require.NoError(t, store.usageCache.Close()) })
+	filter := db.UsageFilter{Timezone: "America/Los_Angeles"}
+	want, err := (&Store{pg: store.pg}).GetDailyUsage(ctx, filter)
+	require.NoError(t, err)
+	got, err := store.GetDailyUsage(ctx, filter)
+	require.NoError(t, err)
+	require.Equal(t, want, got)
+	wait, cancel := context.WithTimeout(ctx, 20*time.Second)
+	defer cancel()
+	require.NoError(t, store.usageCache.WaitWarm(wait))
+	got, err = store.usageCache.GetDailyUsage(ctx, filter)
+	require.NoError(t, err)
+	require.Equal(t, want, got)
+}
+
+func TestPGUsageCacheNewerClaimDoesNotResetOlderSnapshot(t *testing.T) {
+	_, _, store, _ := keptUsageFixture(t)
+	ctx := t.Context()
+	directory := t.TempDir()
+	probe := attachUsageCacheProbe(t, store, directory)
+	peer := &Store{pg: store.pg, ownedDB: store.DB()}
+	attachUsageCacheProbe(t, peer, directory)
+	t.Cleanup(func() { require.NoError(t, store.usageCache.Close()) })
+	t.Cleanup(func() { require.NoError(t, peer.usageCache.Close()) })
+	_, err := store.usageCache.GetDailyUsage(ctx, db.UsageFilter{Timezone: "UTC"})
+	require.NoError(t, err)
+	files, err := filepath.Glob(filepath.Join(directory, "usage-cache-v*.db"))
+	require.NoError(t, err)
+	require.Len(t, files, 1)
+	cached, err := sql.Open("sqlite3", files[0])
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, cached.Close()) })
+	var before, after int64
+	require.NoError(t, cached.QueryRowContext(ctx, `SELECT value FROM usage_cache_metadata WHERE key='reset_epoch'`).Scan(&before))
+	started, release := make(chan struct{}), make(chan struct{})
+	signal := sync.OnceFunc(func() { close(started) })
+	unblock := sync.OnceFunc(func() { close(release) })
+	t.Cleanup(unblock)
+	probe.afterCapture = func(ctx context.Context) error {
+		signal()
+		select {
+		case <-release:
+			return nil
+		case <-ctx.Done():
+			return ctx.Err()
+		}
+	}
+	done := make(chan error, 1)
+	go func() {
+		_, err := store.usageCache.GetDailyUsage(ctx, db.UsageFilter{Timezone: "America/Los_Angeles"})
+		done <- err
+	}()
+	select {
+	case <-started:
+	case <-time.After(10 * time.Second):
+		t.Fatal("source snapshot did not finish")
+	}
+	_, err = store.pg.ExecContext(ctx, `UPDATE usage_events SET output_tokens=output_tokens+10 WHERE session_id='paid-a'`)
+	require.NoError(t, err)
+	_, err = peer.usageCache.GetDailyUsage(ctx, db.UsageFilter{Timezone: "UTC"})
+	require.NoError(t, err)
+	unblock()
+	select {
+	case <-done:
+	case <-time.After(10 * time.Second):
+		t.Fatal("older snapshot did not finish")
+	}
+	require.NoError(t, cached.QueryRowContext(ctx, `SELECT value FROM usage_cache_metadata WHERE key='reset_epoch'`).Scan(&after))
+	require.Equal(t, before, after)
+}
+
 func TestPGUsageCacheDefersAccountChange(t *testing.T) {
 	_, _, store, _ := keptUsageFixture(t)
 	ctx := t.Context()
@@ -901,14 +1222,16 @@ func TestPGUsageAccountRevisionTracksCommittedChanges(t *testing.T) {
 	_, syncer, store, _ := keptUsageFixture(t)
 	ctx := t.Context()
 	source := &pgUsageCacheSource{Store: store, target: "account-revision-test"}
-	_, before, _, err := source.ReadUsageAccounts(ctx)
+	_, before, err := source.StreamUsageAccounts(ctx, func(db.UsageSourceAccount) error { return nil })
 	require.NoError(t, err)
 	tx, err := syncer.pg.BeginTx(ctx, nil)
 	require.NoError(t, err)
 	_, err = tx.ExecContext(ctx, `INSERT INTO cursor_usage_events(id,agent,occurred_at,model,charged_microdollars,dedup_key) VALUES(1,'cursor','2026-01-01','paid-a',100,'one'); SET CONSTRAINTS ALL IMMEDIATE; UPDATE cursor_usage_events SET charged_microdollars=200 WHERE id=1`)
 	require.NoError(t, err)
 	require.NoError(t, tx.Commit())
-	_, after, rows, err := source.ReadUsageAccounts(ctx)
+	var rows []db.UsageSourceAccount
+	collect := func(account db.UsageSourceAccount) error { rows = append(rows, account); return nil }
+	_, after, err := source.StreamUsageAccounts(ctx, collect)
 	require.NoError(t, err)
 	require.Greater(t, after, before)
 	require.Len(t, rows, 1)
@@ -918,7 +1241,8 @@ func TestPGUsageAccountRevisionTracksCommittedChanges(t *testing.T) {
 	_, err = tx.ExecContext(ctx, `DELETE FROM cursor_usage_events WHERE id=1`)
 	require.NoError(t, err)
 	require.NoError(t, tx.Rollback())
-	_, rolledBack, rows, err := source.ReadUsageAccounts(ctx)
+	rows = nil
+	_, rolledBack, err := source.StreamUsageAccounts(ctx, collect)
 	require.NoError(t, err)
 	assert.Equal(t, after, rolledBack)
 	require.Len(t, rows, 1)

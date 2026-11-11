@@ -80,6 +80,7 @@ const (
 	usageCacheMetadataDeletionRevision    = "deletion_revision"
 	usageCacheMetadataCursorHighWaterMark = "cursor_high_water_mark"
 	usageCacheMetadataResetEpoch          = "reset_epoch"
+	usageCacheMetadataSourceMutation      = "source_mutation_revision"
 	usageCacheMetadataBackfillCompletedAt = "backfill_completed_at"
 	usageCacheMetadataRetirementProtocol  = "retirement_protocol_version"
 )
@@ -455,6 +456,7 @@ type usageCacheManager struct {
 
 	mu          sync.Mutex
 	retireMu    sync.Mutex
+	retireWait  sync.WaitGroup
 	generations map[string]*usageCache
 	currentID   string
 	closed      bool
@@ -777,6 +779,7 @@ func initializeUsageCache(
 		{usageCacheMetadataDeletionRevision, "0"},
 		{usageCacheMetadataCursorHighWaterMark, "0"},
 		{usageCacheMetadataResetEpoch, "0"},
+		{usageCacheMetadataSourceMutation, "0"},
 		{usageCacheMetadataBackfillCompletedAt, ""},
 		{
 			usageCacheMetadataRetirementProtocol,
@@ -1196,6 +1199,37 @@ func (m *usageCacheManager) RetireExcept(databaseID string) error {
 	return retireUsageCaches(caches, m.archivePath, true)
 }
 
+// retireExceptAsync detaches the old generation immediately; callers can hold
+// a lease on it until their request unwinds, so closing it must happen later.
+func (m *usageCacheManager) retireExceptAsync(databaseID string) {
+	m.mu.Lock()
+	if m.closed {
+		m.mu.Unlock()
+		return
+	}
+	m.currentID = databaseID
+	var caches []*usageCache
+	for id, cache := range m.generations {
+		if id != databaseID {
+			caches = append(caches, cache)
+			delete(m.generations, id)
+			cache.beginRetirement()
+		}
+	}
+	if len(caches) == 0 {
+		m.mu.Unlock()
+		return
+	}
+	m.retireWait.Add(1)
+	m.mu.Unlock()
+	go func() {
+		defer m.retireWait.Done()
+		if err := retireUsageCaches(caches, m.archivePath, true); err != nil {
+			log.Printf("warning: retiring usage cache generations: %v", err)
+		}
+	}()
+}
+
 func (m *usageCacheManager) Close() error {
 	m.retireMu.Lock()
 	defer m.retireMu.Unlock()
@@ -1208,5 +1242,7 @@ func (m *usageCacheManager) Close() error {
 	m.cancel()
 	caches := m.detachAllLocked()
 	m.mu.Unlock()
-	return retireUsageCaches(caches, m.archivePath, false)
+	err := retireUsageCaches(caches, m.archivePath, false)
+	m.retireWait.Wait()
+	return err
 }

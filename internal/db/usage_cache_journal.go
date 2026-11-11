@@ -12,6 +12,7 @@ import (
 
 type usageZoneCoverage struct {
 	resetEpoch                  int64
+	mutationRevision            int64
 	id                          int64
 	revision                    sql.NullInt64
 	installRevision, installSeq int64
@@ -36,7 +37,7 @@ func readUsageZoneCoverage(ctx context.Context, q sessionExportQuerier, key stri
 		SELECT CAST(value AS INTEGER) FROM usage_cache_metadata WHERE key = ?`,
 		usageCacheMetadataNextRollupRevision).Scan(&zone.installSeq)
 	if err == nil {
-		zone.resetEpoch, err = readUsageResetEpoch(ctx, q)
+		err = q.QueryRowContext(ctx, `SELECT CAST((SELECT value FROM usage_cache_metadata WHERE key = ?) AS INTEGER), CAST((SELECT value FROM usage_cache_metadata WHERE key = ?) AS INTEGER)`, usageCacheMetadataResetEpoch, usageCacheMetadataSourceMutation).Scan(&zone.resetEpoch, &zone.mutationRevision)
 	}
 	return zone, err
 }
@@ -81,6 +82,7 @@ func (cache *usageCache) resetRewoundUsage(ctx context.Context, expected int64) 
 		`DELETE FROM usage_cached_sessions`,
 		`DELETE FROM cursor_usage_facts`,
 		`UPDATE usage_cache_metadata SET value = '0' WHERE key = 'cursor_high_water_mark'`,
+		`UPDATE usage_cache_metadata SET value = '0' WHERE key = 'source_mutation_revision'`,
 	} {
 		if _, err := tx.ExecContext(ctx, query); err != nil {
 			return err

@@ -480,6 +480,10 @@ func invalidateUsageDedupSharers(
 			return nil, fmt.Errorf("recording changed usage identities: %w", err)
 		}
 	}
+	return invalidatePreparedUsageDedupSharers(ctx, runner, excluded)
+}
+
+func invalidatePreparedUsageDedupSharers(ctx context.Context, runner usageCacheStatementRunner, excluded map[string]bool) ([]string, error) {
 	sharerRows, err := runner.QueryContext(ctx, `
 		SELECT DISTINCT cs.session_id
 		FROM usage_changed_identities c

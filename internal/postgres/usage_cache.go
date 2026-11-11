@@ -333,38 +333,39 @@ func (source *pgUsageCacheSource) StreamUsage(ctx context.Context, ids []string,
 	return snapshot, tx.Commit()
 }
 
-func (source *pgUsageCacheSource) ReadUsageAccounts(ctx context.Context) (string, int64, []db.UsageSourceAccount, error) {
+func (source *pgUsageCacheSource) StreamUsageAccounts(ctx context.Context, emit func(db.UsageSourceAccount) error) (string, int64, error) {
 	tx, err := source.beginTx(ctx, &sql.TxOptions{ReadOnly: true, Isolation: sql.LevelRepeatableRead})
 	if err != nil {
-		return "", 0, nil, err
+		return "", 0, err
 	}
 	defer func() { _ = tx.Rollback() }()
 	snapshot, err := source.snapshot(ctx, source.readView(tx))
 	if err != nil {
-		return "", 0, nil, err
+		return "", 0, err
 	}
 	rows, err := tx.QueryContext(ctx, `SELECT id,agent,occurred_at,model,input_tokens,output_tokens,cache_write_tokens,cache_read_tokens,charged_microdollars,is_headless,dedup_key FROM cursor_usage_events ORDER BY id`)
 	if err != nil {
-		return "", 0, nil, err
+		return "", 0, err
 	}
 	defer rows.Close()
-	var accounts []db.UsageSourceAccount
 	for rows.Next() {
 		var account db.UsageSourceAccount
 		var timestamp sql.NullTime
 		if err := rows.Scan(&account.ID, &account.Agent, &timestamp, &account.Model, &account.InputTokens, &account.OutputTokens, &account.CacheWriteTokens, &account.CacheReadTokens, &account.ChargedMicrodollars, &account.Headless, &account.DedupKey); err != nil {
-			return "", 0, nil, err
+			return "", 0, err
 		}
 		account.Timestamp = pgUsageCacheTime(timestamp)
 		if account.Model == "" {
 			account.Model = "<unknown>"
 		}
-		accounts = append(accounts, account)
+		if err := emit(account); err != nil {
+			return "", 0, err
+		}
 	}
 	if err := errors.Join(rows.Err(), rows.Close()); err != nil {
-		return "", 0, nil, err
+		return "", 0, err
 	}
-	return snapshot.DatabaseID, snapshot.CursorHighWater, accounts, tx.Commit()
+	return snapshot.DatabaseID, snapshot.CursorHighWater, tx.Commit()
 }
 
 func (source *pgUsageCacheSource) UsageSessionNames(ctx context.Context, ids []string) (map[string][2]string, error) {

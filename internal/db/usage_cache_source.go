@@ -50,7 +50,7 @@ type UsageSourceAccount struct {
 type UsageCacheSource interface {
 	CaptureUsage(context.Context, UsageSourceRequest) (UsageSourceSnapshot, error)
 	StreamUsage(context.Context, []string, func(string, usagefacts.Fact) error) (UsageSourceSnapshot, error)
-	ReadUsageAccounts(context.Context) (string, int64, []UsageSourceAccount, error)
+	StreamUsageAccounts(context.Context, func(UsageSourceAccount) error) (string, int64, error)
 	BuildProjectIdentityMap(context.Context, []string) (map[string]export.ProjectMapEntry, error)
 	UsageSessionNames(context.Context, []string) (map[string][2]string, error)
 }
@@ -99,7 +99,10 @@ const (
 	// and its caller calling HoldWarm before its direct read.
 	usageWarmDeferGrace   = 20 * time.Millisecond
 	usageWarmPollInterval = 10 * time.Millisecond
+	usageWarmRetryDelay   = 5 * time.Second
 )
+
+type usageWarmCheckpointKey struct{}
 
 // NewUsageCacheReader keeps each remote target in its own retirement directory.
 // The source identity further separates incarnations inside that directory.
@@ -270,7 +273,6 @@ func (reader *UsageCacheReader) queueWarm(timezone string) {
 // sessions changed since. One worker keeps the warm's memory to one pass.
 func (reader *UsageCacheReader) runWarm(idle chan struct{}) {
 	for {
-		reader.waitForDirectReads()
 		reader.warmMu.Lock()
 		var timezone string
 		found := false
@@ -287,9 +289,23 @@ func (reader *UsageCacheReader) runWarm(idle chan struct{}) {
 		}
 		reader.warmBusy, reader.warmRunning = true, timezone
 		reader.warmMu.Unlock()
-		_, err := reader.engine.GetDailyUsage(reader.warmCtx, UsageFilter{Timezone: timezone})
+		reader.waitForDirectReads()
+		if reader.warmCtx.Err() != nil {
+			continue
+		}
+		ctx := context.WithValue(reader.warmCtx, usageWarmCheckpointKey{}, reader.waitForDirectReads)
+		_, err := reader.engine.GetDailyUsage(ctx, UsageFilter{Timezone: timezone})
 		if err != nil && reader.warmCtx.Err() == nil {
 			log.Printf("warming usage cache for timezone %q: %v", timezone, err)
+			// Keep failed work alive even when later requests hit a memoized
+			// direct result and do not queue another warm pass.
+			select {
+			case <-reader.warmCtx.Done():
+			case <-time.After(usageWarmRetryDelay):
+				reader.warmMu.Lock()
+				reader.warmPending[timezone] = true
+				reader.warmMu.Unlock()
+			}
 		}
 	}
 }
@@ -312,10 +328,16 @@ func (db *DB) captureExternalUsage(ctx context.Context, filter UsageFilter, ids 
 	if err != nil {
 		return snapshot, err
 	}
-	if snapshot.DatabaseID != "" {
-		db.usageSourceDatabaseID.Store(&snapshot.DatabaseID)
-	}
 	if snapshot.DatabaseID != databaseID {
+		// Retirement waits for users of the old generation, including this one.
+		release()
+		db.usageSourceIdentityMu.Lock()
+		defer db.usageSourceIdentityMu.Unlock()
+		current := db.usageSourceDatabaseID.Load()
+		if snapshot.DatabaseID != "" && current != nil && *current == databaseID {
+			db.usageSourceDatabaseID.Store(&snapshot.DatabaseID)
+			db.usageCache.retireExceptAsync(snapshot.DatabaseID)
+		}
 		return snapshot, errUsageCacheSourceChanged
 	}
 	snapshot.resetEpoch = epoch
@@ -442,18 +464,47 @@ func (c *usageFillCoordinator) replaceExternalAccounts(ctx context.Context, targ
 	if err != nil {
 		return err
 	}
-	databaseID, revision, accounts, err := c.archive.usageSource.ReadUsageAccounts(ctx)
+	spool, err := newUsageFactSpool(ctx)
+	if err != nil {
+		return err
+	}
+	defer spool.Close()
+	if _, err := spool.db.ExecContext(ctx, `CREATE TABLE accounts(source_id INTEGER PRIMARY KEY, agent TEXT, timestamp_ms INTEGER, raw_timestamp TEXT, model TEXT, input_tokens INTEGER, output_tokens INTEGER, cache_creation_tokens INTEGER, cache_read_tokens INTEGER, charged_microdollars INTEGER, is_headless INTEGER, dedup_key TEXT)`); err != nil {
+		return err
+	}
+	spoolTx, err := spool.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = spoolTx.Rollback() }()
+	insert, err := spoolTx.PrepareContext(ctx, `INSERT INTO accounts VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
+	if err != nil {
+		return err
+	}
+	databaseID, revision, err := c.archive.usageSource.StreamUsageAccounts(ctx, func(account UsageSourceAccount) error {
+		millis, _, _ := usagefacts.ParseTimestamp(account.Timestamp)
+		_, err := insert.ExecContext(ctx, account.ID, account.Agent, millis, account.Timestamp, account.Model, max(account.InputTokens, 0), max(account.OutputTokens, 0), max(account.CacheWriteTokens, 0), max(account.CacheReadTokens, 0), account.ChargedMicrodollars, boolInt(account.Headless), account.DedupKey)
+		return err
+	})
+	err = errors.Join(err, insert.Close())
 	if err != nil {
 		return err
 	}
 	if databaseID != c.cache.databaseID || revision != target {
 		return errUsageCacheSourceChanged
 	}
+	if err := spoolTx.Commit(); err != nil {
+		return err
+	}
 	tx, err := c.cache.db.Conn(ctx)
 	if err != nil {
 		return err
 	}
 	defer tx.Close()
+	if _, err := tx.ExecContext(ctx, `ATTACH DATABASE ? AS usage_account_spool`, spool.path); err != nil {
+		return err
+	}
+	defer func() { _, _ = tx.ExecContext(context.WithoutCancel(ctx), `DETACH DATABASE usage_account_spool`) }()
 	if _, err := tx.ExecContext(ctx, `BEGIN IMMEDIATE`); err != nil {
 		return err
 	}
@@ -472,21 +523,10 @@ func (c *usageFillCoordinator) replaceExternalAccounts(ctx context.Context, targ
 	if currentRevision >= target {
 		return nil
 	}
-	identities := newUsageDedupIdentitySet()
-	rows, err := tx.QueryContext(ctx, `SELECT dedup_key FROM cursor_usage_facts`)
-	if err != nil {
-		return err
-	}
-	defer rows.Close()
-	for rows.Next() {
-		var key string
-		if err := rows.Scan(&key); err != nil {
-			_ = rows.Close()
-			return err
-		}
-		identities.add("", "", "", key)
-	}
-	if err := errors.Join(rows.Err(), rows.Close()); err != nil {
+	if _, err := tx.ExecContext(ctx, `CREATE TEMP TABLE IF NOT EXISTS usage_changed_identities(kind INTEGER NOT NULL, first TEXT NOT NULL, second TEXT NOT NULL, PRIMARY KEY(kind, first, second)) WITHOUT ROWID;
+DELETE FROM usage_changed_identities;
+INSERT OR IGNORE INTO usage_changed_identities SELECT 2, dedup_key, '' FROM cursor_usage_facts WHERE dedup_key <> '';
+INSERT OR IGNORE INTO usage_changed_identities SELECT 2, dedup_key, '' FROM usage_account_spool.accounts WHERE dedup_key <> ''`); err != nil {
 		return err
 	}
 	if _, err := tx.ExecContext(ctx, `DELETE FROM usage_rollup_installs WHERE session_id=?`, usageRollupCursorSessionID); err != nil {
@@ -495,14 +535,10 @@ func (c *usageFillCoordinator) replaceExternalAccounts(ctx context.Context, targ
 	if _, err := tx.ExecContext(ctx, `DELETE FROM cursor_usage_facts`); err != nil {
 		return err
 	}
-	for _, account := range accounts {
-		identities.add("", "", "", account.DedupKey)
-		millis, _, _ := usagefacts.ParseTimestamp(account.Timestamp)
-		if _, err := tx.ExecContext(ctx, `INSERT INTO cursor_usage_facts VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`, account.ID, account.Agent, millis, account.Timestamp, account.Model, max(account.InputTokens, 0), max(account.OutputTokens, 0), max(account.CacheWriteTokens, 0), max(account.CacheReadTokens, 0), account.ChargedMicrodollars, boolInt(account.Headless), account.DedupKey); err != nil {
-			return err
-		}
+	if _, err := tx.ExecContext(ctx, `INSERT INTO cursor_usage_facts SELECT * FROM usage_account_spool.accounts`); err != nil {
+		return err
 	}
-	if _, err := invalidateUsageDedupSharers(ctx, tx, identities, nil); err != nil {
+	if _, err := invalidatePreparedUsageDedupSharers(ctx, tx, nil); err != nil {
 		return err
 	}
 	if _, err := tx.ExecContext(ctx, `UPDATE usage_cache_metadata SET value=? WHERE key=?`, strconv.FormatInt(target, 10), usageCacheMetadataCursorHighWaterMark); err != nil {
@@ -524,7 +560,7 @@ func (db *DB) captureExternalJournaledUsageWindow(ctx context.Context, filter Us
 	if snapshot.resetEpoch != zone.resetEpoch {
 		return snapshot, usageQuerySnapshot{}, nil, false, errUsageCacheSourceChanged
 	}
-	if zone.revision.Int64 > snapshot.ChangeRevision {
+	if zone.revision.Int64 > snapshot.ChangeRevision || zone.mutationRevision > snapshot.ChangeRevision {
 		return usageQuerySnapshot{}, usageQuerySnapshot{}, nil, false, errUsageCacheRevisionRewound
 	}
 	if snapshot.PricingIdentity != zone.pricing {

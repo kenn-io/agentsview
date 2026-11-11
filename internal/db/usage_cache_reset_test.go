@@ -18,15 +18,15 @@ type pausedResetAccounts struct {
 	release chan struct{}
 }
 
-func (s *pausedResetAccounts) ReadUsageAccounts(ctx context.Context) (string, int64, []UsageSourceAccount, error) {
-	id, revision, accounts, err := s.rollupAccountSource.ReadUsageAccounts(ctx)
+func (s *pausedResetAccounts) StreamUsageAccounts(ctx context.Context, emit func(UsageSourceAccount) error) (string, int64, error) {
+	id, revision, err := s.rollupAccountSource.StreamUsageAccounts(ctx, emit)
 	close(s.read)
 	select {
 	case <-s.release:
 	case <-ctx.Done():
-		return "", 0, nil, ctx.Err()
+		return "", 0, ctx.Err()
 	}
-	return id, revision, accounts, err
+	return id, revision, err
 }
 
 func TestUsageResetRejectsOldPublications(t *testing.T) {
@@ -113,4 +113,22 @@ func TestUsageResetRejectsOldPublications(t *testing.T) {
 		_, err = cache.usageRollupQuery(t.Context(), usagePreparedWindow{snapshot: snapshot}, UsageFilter{Timezone: "UTC"}, export.NewPricingResolver(snapshot.PricingRows), 0)
 		require.ErrorIs(t, err, errUsageCacheSourceChanged)
 	})
+}
+
+func TestUsageDeferredAccountFillAfterReset(t *testing.T) {
+	database := testDB(t)
+	id, err := database.GetDatabaseID(t.Context())
+	require.NoError(t, err)
+	source := &rollupAccountSource{database: database, databaseID: id, revision: 10, accounts: []UsageSourceAccount{{ID: 1, OutputTokens: 10}}}
+	reader, err := NewUsageCacheReader(t.TempDir(), source)
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, reader.Close()) })
+	cache, err := reader.engine.usageCache.Generation(t.Context(), id)
+	require.NoError(t, err)
+	require.NoError(t, cache.resetRewoundUsage(t.Context(), 0))
+	err = cache.fill.ensureCursor(withUsageWorkDeferred(t.Context()), 10)
+	require.ErrorIs(t, err, ErrUsageCacheWarming)
+	require.Zero(t, usageCacheCount(t, cache, "cursor_usage_facts"))
+	require.NoError(t, cache.fill.ensureCursor(t.Context(), 10))
+	require.Equal(t, 1, usageCacheCount(t, cache, "cursor_usage_facts"))
 }

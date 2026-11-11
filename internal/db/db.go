@@ -974,7 +974,8 @@ type DB struct {
 	// per query shape rather than one per page.
 	memberFreshnessPages atomic.Int64
 
-	usageSource UsageCacheSource
+	usageSource           UsageCacheSource
+	usageSourceIdentityMu sync.Mutex
 	// usageSourceDatabaseID holds the external source identity from the latest capture.
 	usageSourceDatabaseID atomic.Pointer[string]
 }
