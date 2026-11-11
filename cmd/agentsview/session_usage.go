@@ -416,7 +416,7 @@ func refreshSessionUsage(ctx context.Context, backend service.SessionService, id
 		if err == nil {
 			return struct{}{}, nil
 		}
-		if !wait || !errors.Is(err, servicehttp.ErrSessionRefreshNotStarted) {
+		if !wait || !errors.Is(err, sync.ErrSessionRefreshNotStarted) {
 			return struct{}{}, backoff.Permanent(err)
 		}
 		return struct{}{}, err

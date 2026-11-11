@@ -14,6 +14,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"go.kenn.io/agentsview/internal/service"
+	syncpkg "go.kenn.io/agentsview/internal/sync"
 )
 
 func TestWatchFiltersSessionReady(t *testing.T) {
@@ -374,7 +375,7 @@ func TestSyncClassifiesOnlyNeverStartedConflict(t *testing.T) {
 			t.Cleanup(ts.Close)
 			_, err := NewHTTPBackend(ts.URL, "", false, "").Sync(t.Context(), service.SyncInput{ID: "session-a", Subagents: true, UsageRefresh: true})
 			require.Error(t, err)
-			assert.Equal(t, tc.wantRetry, errors.Is(err, ErrSessionRefreshNotStarted))
+			assert.Equal(t, tc.wantRetry, errors.Is(err, syncpkg.ErrSessionRefreshNotStarted))
 		})
 	}
 }
