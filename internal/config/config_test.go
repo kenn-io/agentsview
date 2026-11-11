@@ -3268,9 +3268,12 @@ func TestSaveVectorSetupPreservesSettings(t *testing.T) {
 }
 
 func TestSaveVectorSetupPersistsSelectedServer(t *testing.T) {
-	for _, tc := range []struct{ raw, endpoint string }{
+	for _, tc := range []struct {
+		raw, endpoint string
+		batchSize     int
+	}{
 		{raw: "[vector]\ninclude_automated = true\n[vector.embeddings]\nquery_prefix = 'custom: '\n"},
-		{raw: "[vector.embeddings]\nmodel = 'nomic-embed-text'\ndimension = 768\n[vector.embeddings.servers.cpu]\nlocal = true\nbatch_size = 3\n"},
+		{raw: "[vector.embeddings]\nmodel = 'nomic-embed-text'\ndimension = 768\n[vector.embeddings.servers.cpu]\nlocal = true\nbatch_size = 3\n", batchSize: 3},
 		{endpoint: "http://127.0.0.1:11434/v1"},
 	} {
 		t.Run(tc.raw+tc.endpoint, func(t *testing.T) {
@@ -3288,6 +3291,9 @@ func TestSaveVectorSetupPersistsSelectedServer(t *testing.T) {
 			require.NoError(t, err)
 			assert.Equal(t, tc.endpoint == "", selected.Local)
 			assert.Equal(t, tc.endpoint, selected.Endpoint)
+			if tc.batchSize > 0 {
+				assert.Equal(t, tc.batchSize, selected.BatchSize)
+			}
 			before.Servers = saved.Vector.Embeddings.Servers
 			assert.Equal(t, before, saved.Vector.Embeddings)
 		})

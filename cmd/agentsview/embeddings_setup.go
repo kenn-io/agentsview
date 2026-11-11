@@ -69,37 +69,26 @@ func (v *liveVectorServing) startSharedChoice() {
 		approvedBytes = math.MaxInt64
 	}
 	embeddings := v.cfg.Vector.Embeddings
-	if v.cfg.Vector.Enabled {
-		_, deployment, err := embeddings.Server("")
-		if err == nil && deployment.Local && deployment.Endpoint == "" && v.serving.manager != nil {
-			v.mu.Lock()
-			err = v.startSetup(deployment, approvedBytes, true, "")
-			v.mu.Unlock()
-			if err != nil {
-				log.Printf("search by meaning: start saved setup: %v", err)
-			}
+	if !v.cfg.Vector.Enabled {
+		if !chosen {
+			return
 		}
+		// SetupStatus reports candidate errors other than an explicit choice.
+		if embeddings, err = v.cfg.VectorSetupEmbeddings(true); err != nil {
+			return
+		}
+	} else if v.serving.manager == nil {
 		return
 	}
-	if !chosen {
+	_, deployment, err := embeddings.Server("")
+	if err != nil || deployment.Endpoint != "" || (v.cfg.Vector.Enabled && !deployment.Local) {
 		return
-	}
-	embeddings, err = v.cfg.VectorSetupEmbeddings(true)
-	if errors.Is(err, config.ErrVectorSetupIneligible) {
-		return
-	}
-	var deployment config.VectorEmbeddingsServerConfig
-	if err == nil {
-		_, deployment, err = embeddings.Server("")
 	}
 	deployment.Local = true
 	v.mu.Lock()
 	defer v.mu.Unlock()
-	if err == nil {
-		err = v.startSetup(deployment, approvedBytes, true, "")
-	}
-	if err != nil {
-		v.setup = server.EmbeddingsSetupStatus{Action: "turn-on", Error: err.Error()}
+	if err := v.startSetup(deployment, approvedBytes, true, ""); err != nil {
+		log.Printf("search by meaning: start setup: %v", err)
 	}
 }
 
@@ -207,9 +196,7 @@ func (v *liveVectorServing) SetupStatus(ctx context.Context) (server.EmbeddingsS
 
 func setupStatusForConfig(ctx context.Context, status server.EmbeddingsSetupStatus, cfg config.Config, missingManager bool) (server.EmbeddingsSetupStatus, error) {
 	status.Action = ""
-	if missingManager && cfg.DeploymentEmbeddings == nil {
-		status.Action = "turn-on"
-	} else if status.Error != "" && cfg.DeploymentEmbeddings == nil {
+	if (missingManager || status.Error != "") && cfg.DeploymentEmbeddings == nil {
 		status.Action = "turn-on"
 	}
 	status, err := embeddingsSetupStatus(ctx, status, cfg)

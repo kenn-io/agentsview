@@ -4314,20 +4314,14 @@ func (c *Config) vectorSetupCandidate(automatic bool) (map[string]any, Config, e
 	if section == nil {
 		section = make(map[string]any)
 	}
-	if enabled, ok := section["enabled"].(bool); automatic && ok && !enabled {
-		return nil, Config{}, ErrVectorSetupIneligible
-	}
 	if automatic {
-		if embeddings, ok := section["embeddings"].(map[string]any); ok {
-			if model, ok := embeddings["model"].(string); ok && model != "" && model != defaultNomicModel {
-				return nil, Config{}, ErrVectorSetupIneligible
-			}
-			if _, ok := embeddings["servers"]; ok {
-				return nil, Config{}, ErrVectorSetupIneligible
-			}
-			if _, ok := embeddings["default_server"]; ok {
-				return nil, Config{}, ErrVectorSetupIneligible
-			}
+		enabled, setEnabled := section["enabled"].(bool)
+		embeddings, _ := section["embeddings"].(map[string]any)
+		model, _ := embeddings["model"].(string)
+		_, servers := embeddings["servers"]
+		_, defaultServer := embeddings["default_server"]
+		if (setEnabled && !enabled) || (model != "" && model != defaultNomicModel) || servers || defaultServer {
+			return nil, Config{}, ErrVectorSetupIneligible
 		}
 	}
 	section["enabled"] = true
