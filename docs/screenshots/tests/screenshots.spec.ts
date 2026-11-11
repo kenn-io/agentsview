@@ -1680,12 +1680,15 @@ test.describe('Settings', () => {
       await route.fulfill({ json: { ...current, ...route.request().postDataJSON() } });
     });
     await openSettings(page);
-    const section = await openSettingsPanel(page, 'Archive content');
-    const offload = section.getByRole('radio', { name: 'Offload', exact: true });
+    // The ingest policy heads the Tool-result images section; capture just
+    // its row so the image cleanup below stays out of this shot.
+    const section = await openSettingsPanel(page, 'Tool-result images');
+    const policy = section.locator('.archive-content-settings');
+    const offload = policy.getByRole('radio', { name: 'Offload', exact: true });
     await offload.click();
     await expect(offload).toHaveAttribute('aria-checked', 'true');
-    await expect(section.getByRole('status')).toContainText('Restart');
-    await snapEl(section, 'settings-archive-content');
+    await expect(policy.getByRole('status')).toContainText('Restart');
+    await snapEl(policy, 'settings-archive-content');
   });
 
   test('settings alternate agent homes', async ({ page }) => {
