@@ -32,6 +32,7 @@ import (
 )
 
 var sessionUsageWaitTimeout = startupWaitTimeout
+var sessionUsagePollInterval = time.Second
 
 var sessionUsageHTTPClient = &http.Client{Timeout: 30 * time.Second}
 
@@ -197,7 +198,7 @@ func resolveSessionUsageBackend(cmd *cobra.Command, noSync bool) (*sessionUsageB
 			return nil, fmt.Errorf("opening pg store: %w", err)
 		}
 		return &sessionUsageBackend{
-			service: sessionUsageReadOnlyService(store, query), cleanup: cleanup,
+			service: service.NewReadOnlyBackend(store), cleanup: cleanup,
 			read: func(id string) (*sessionUsageOutput, int, error) {
 				query.SessionID = id
 				return storeSessionUsageData(ctx, "pg", cfg, store, query)
@@ -223,7 +224,7 @@ func resolveSessionUsageBackend(cmd *cobra.Command, noSync bool) (*sessionUsageB
 	case daemonArchiveQueryBackend:
 		svc = servicehttp.NewHTTPBackend(b.tr.URL, b.authToken, b.tr.ReadOnly, b.tr.BrowserURL)
 	case localArchiveQueryBackend:
-		svc = sessionUsageReadOnlyService(b.database, query)
+		svc = service.NewReadOnlyBackend(b.database)
 	}
 	return &sessionUsageBackend{
 		service: svc, cleanup: cleanup,
@@ -232,13 +233,6 @@ func resolveSessionUsageBackend(cmd *cobra.Command, noSync bool) (*sessionUsageB
 			return backend.SessionUsage(ctx, query)
 		},
 	}, nil
-}
-
-func sessionUsageReadOnlyService(store db.Store, query sessionUsageQuery) service.SessionService {
-	if query.Wait {
-		fmt.Fprintln(os.Stderr, "warning: --wait has no effect when reading directly or from PostgreSQL")
-	}
-	return service.NewReadOnlyBackend(store)
 }
 
 func requireRemoteSubagentUsageSupport(
@@ -293,7 +287,7 @@ func httpSessionUsageData(
 		waitCtx, cancel = context.WithTimeout(ctx, sessionUsageWaitTimeout)
 		defer cancel()
 	}
-	resolvedID, err := resolveSessionUsageInitialID(waitCtx, backend, sessionID, query.Wait)
+	resolvedID, err := resolveServiceSessionID(waitCtx, backend, sessionID)
 	missing := errors.Is(err, errSessionNotFound)
 	known := err == nil
 	if err != nil && !missing && waitCtx.Err() == nil {
@@ -368,20 +362,6 @@ func httpSessionUsageData(
 	return out, usageExitCode(out), nil
 }
 
-func resolveSessionUsageInitialID(ctx context.Context, backend service.SessionService, id string, wait bool) (string, error) {
-	if !wait {
-		return resolveServiceSessionID(ctx, backend, id)
-	}
-	lookupCtx, cancel := context.WithTimeout(ctx, sessionUsageWaitTimeout/2)
-	resolvedID, err := resolveServiceSessionID(lookupCtx, backend, id)
-	lookupErr := lookupCtx.Err()
-	cancel()
-	if errors.Is(lookupErr, context.DeadlineExceeded) && ctx.Err() == nil {
-		return resolveServiceSessionID(ctx, backend, id)
-	}
-	return resolvedID, err
-}
-
 func sessionUsageStatusError(wait bool, err error) error {
 	err = fmt.Errorf("checking sync status: %w", err)
 	if !wait {
@@ -412,7 +392,7 @@ func waitSessionUsageReady(ctx context.Context, baseURL, token string, wait, kno
 			}
 		}
 		return struct{}{}, errors.New("session usage is not ready")
-	}, backoff.WithBackOff(backoff.NewConstantBackOff(time.Second)), backoff.WithMaxTries(0), backoff.WithMaxElapsedTime(0))
+	}, backoff.WithBackOff(backoff.NewConstantBackOff(sessionUsagePollInterval)), backoff.WithMaxTries(0), backoff.WithMaxElapsedTime(0))
 	if err == nil {
 		return nil
 	}
@@ -434,7 +414,7 @@ func refreshSessionUsage(ctx context.Context, backend service.SessionService, id
 			return struct{}{}, backoff.Permanent(err)
 		}
 		return struct{}{}, err
-	}, backoff.WithBackOff(backoff.NewConstantBackOff(time.Second)), backoff.WithMaxTries(0), backoff.WithMaxElapsedTime(0))
+	}, backoff.WithBackOff(backoff.NewConstantBackOff(sessionUsagePollInterval)), backoff.WithMaxTries(0), backoff.WithMaxElapsedTime(0))
 	if err == nil {
 		return nil
 	}

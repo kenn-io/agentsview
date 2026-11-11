@@ -15,6 +15,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -2633,7 +2634,15 @@ func TestSessionUsageIncompleteRefreshReturnsAvailableUsage(t *testing.T) {
 	assert.Contains(t, stderr, reason)
 }
 
+func shortenSessionUsagePoll(t *testing.T) {
+	t.Helper()
+	previous := sessionUsagePollInterval
+	sessionUsagePollInterval = 10 * time.Millisecond
+	t.Cleanup(func() { sessionUsagePollInterval = previous })
+}
+
 func TestSessionUsageWait(t *testing.T) {
+	shortenSessionUsagePoll(t)
 	for _, tc := range []struct {
 		name           string
 		missing        bool
@@ -2760,6 +2769,7 @@ func TestSessionUsageWaitPendingFallback(t *testing.T) {
 }
 
 func TestSessionUsageWaitArchiveOnly(t *testing.T) {
+	shortenSessionUsagePoll(t)
 	for _, ownOnly := range []bool{false, true} {
 		t.Run(fmt.Sprintf("ownOnly=%v", ownOnly), func(t *testing.T) {
 			ts, _ := newRemoteUsageServer(t, remoteUsageSpec{canonicalID: "remote-session"})
@@ -2879,9 +2889,10 @@ func TestSessionUsageWaitCancellation(t *testing.T) {
 	ts, _ := newRemoteUsageServer(t, remoteUsageSpec{canonicalID: "remote-session"})
 	original := ts.Config.Handler
 	statusSeen := make(chan struct{})
+	var statusOnce sync.Once
 	ts.Config.Handler = http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path == "/api/v1/sync/status" {
-			close(statusSeen)
+			statusOnce.Do(func() { close(statusSeen) })
 			writeJSONResponse(w, `{"archive_stale":true}`)
 			return
 		}
@@ -2944,33 +2955,6 @@ func TestSessionUsageArchiveOnlyWaitIncomplete(t *testing.T) {
 	}
 }
 
-func TestSessionUsageWaitExpiryAvoidsFallbackLookup(t *testing.T) {
-	previous := sessionUsageWaitTimeout
-	sessionUsageWaitTimeout = 100 * time.Millisecond //nolint:kennlint // deadlinetest: verifies no lookup follows expiry
-	t.Cleanup(func() { sessionUsageWaitTimeout = previous })
-	ts, _ := newRemoteUsageServer(t, remoteUsageSpec{canonicalID: "remote-session"})
-	original := ts.Config.Handler
-	pending := false
-	lookupsAfterPending := 0
-	ts.Config.Handler = http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path == "/api/v1/sync/status" {
-			pending = true
-			writeJSONResponse(w, `{"archive_stale":true}`)
-			return
-		}
-		if r.URL.Path == "/api/v1/sessions/remote-session" && pending {
-			lookupsAfterPending++
-		}
-		original.ServeHTTP(w, r)
-	})
-	out, _, err := httpSessionUsageData(t.Context(), ts.URL, "", sessionUsageQuery{SessionID: "remote-session", Wait: true})
-	require.NoError(t, err)
-	require.NotNil(t, out)
-	assert.Equal(t, 42, out.TotalOutputTokens)
-	assert.True(t, out.RefreshIncomplete)
-	assert.Zero(t, lookupsAfterPending)
-}
-
 func TestSessionUsageWaitDoesNotResolveKnownIDTwiceWhenClear(t *testing.T) {
 	ts, requests := newRemoteUsageServer(t, remoteUsageSpec{canonicalID: "remote-session"})
 	original := ts.Config.Handler
@@ -2990,7 +2974,7 @@ func TestSessionUsageWaitDoesNotResolveKnownIDTwiceWhenClear(t *testing.T) {
 
 func TestSessionUsageWaitKnownSessionRefreshesDuringCatchup(t *testing.T) {
 	previous := sessionUsageWaitTimeout
-	sessionUsageWaitTimeout = 100 * time.Millisecond //nolint:kennlint // deadlinetest: a blocked refresh reaches the deadline
+	sessionUsageWaitTimeout = 100 * time.Millisecond //nolint:kennlint // deadlinetest: a blocked catch-up would reach the deadline
 	t.Cleanup(func() { sessionUsageWaitTimeout = previous })
 	ts, reqs := newRemoteUsageServer(t, remoteUsageSpec{canonicalID: "remote-session"})
 	original := ts.Config.Handler
@@ -3012,6 +2996,7 @@ func TestSessionUsageWaitKnownSessionRefreshesDuringCatchup(t *testing.T) {
 }
 
 func TestSessionUsageWaitContinuesAfterStartupFailure(t *testing.T) {
+	shortenSessionUsagePoll(t)
 	for _, missing := range []bool{false, true} {
 		t.Run(fmt.Sprintf("missing=%v", missing), func(t *testing.T) {
 			ts, reqs := newRemoteUsageServer(t, remoteUsageSpec{canonicalID: "remote-session"})
@@ -3100,6 +3085,7 @@ func TestSessionUsageWaitStartupFailureAtDeadline(t *testing.T) {
 }
 
 func TestSessionUsageWaitRetriesTransientStatusFailure(t *testing.T) {
+	shortenSessionUsagePoll(t)
 	ts, _ := newRemoteUsageServer(t, remoteUsageSpec{canonicalID: "remote-session"})
 	original := ts.Config.Handler
 	checks := 0
@@ -3120,62 +3106,4 @@ func TestSessionUsageWaitRetriesTransientStatusFailure(t *testing.T) {
 	require.NotNil(t, out)
 	assert.False(t, out.WaitIncomplete)
 	assert.Equal(t, 2, checks)
-}
-
-func TestSessionUsageWaitRecoversAfterStalledLookup(t *testing.T) {
-	previous := sessionUsageWaitTimeout
-	sessionUsageWaitTimeout = time.Second
-	t.Cleanup(func() { sessionUsageWaitTimeout = previous })
-	ts, _ := newRemoteUsageServer(t, remoteUsageSpec{canonicalID: "remote-session"})
-	original := ts.Config.Handler
-	lookups := 0
-	ts.Config.Handler = http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path == "/api/v1/sessions/remote-session" {
-			lookups++
-			if lookups == 1 {
-				<-r.Context().Done()
-				return
-			}
-		}
-		if r.URL.Path == "/api/v1/sync/status" {
-			writeJSONResponse(w, `{}`)
-			return
-		}
-		original.ServeHTTP(w, r)
-	})
-	started := time.Now()
-	out, _, err := httpSessionUsageData(t.Context(), ts.URL, "", sessionUsageQuery{SessionID: "remote-session", Wait: true})
-	require.NoError(t, err)
-	require.NotNil(t, out)
-	assert.Equal(t, 42, out.TotalOutputTokens)
-	assert.Less(t, time.Since(started), 2*time.Second)
-}
-
-func TestSessionUsageWaitWarnsWhenNoDaemonWait(t *testing.T) {
-	for _, pg := range []bool{false, true} {
-		t.Run(fmt.Sprintf("pg=%v", pg), func(t *testing.T) {
-			dataDir := newAgentDataDir(t)
-			t.Setenv("AGENTSVIEW_NO_DAEMON", "1")
-			path := sessionsDBPath(dataDir)
-			if pg {
-				path = filepath.Join(dataDir, "pg.db")
-			}
-			database := dbtest.OpenTestDBAt(t, path)
-			seedUsageSession(t, database, "local-session", "project", "codex", 42)
-			args := []string{"session", "usage", "local-session", "--wait"}
-			if pg {
-				t.Setenv("AGENTSVIEW_PG_URL", "postgres://example.test/agentsview")
-				stubPGReadStore(t, database)
-				args = append(args, "--pg")
-			}
-			stderr := captureStderr(t, func() {
-				cmd := sessionUsageCommand(t, args...)
-				out, _, err := sessionUsageDataForCommand(cmd, "local-session")
-				require.NoError(t, err)
-				require.NotNil(t, out)
-				assert.Equal(t, 42, out.TotalOutputTokens)
-			})
-			assert.Contains(t, stderr, "--wait has no effect")
-		})
-	}
 }
