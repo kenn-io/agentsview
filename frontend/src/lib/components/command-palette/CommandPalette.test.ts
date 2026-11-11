@@ -667,6 +667,23 @@ describe("CommandPalette", () => {
     unmount(component);
   });
 
+  it("opens the first result after moving down on an empty failed search and retrying", async () => {
+    mockSearchStore.error = { detail: null, kind: "generic" };
+    const component = mount(CommandPalette, { target: document.body });
+    await enterSearchQuery();
+    const input = document.querySelector<HTMLInputElement>(".palette-input")!;
+    input.dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowDown", bubbles: true }));
+    const retry = Array.from(
+      document.querySelectorAll<HTMLButtonElement>(".palette-error button"),
+    ).find((button) => button.textContent?.trim() === "Retry")!;
+    retry.click();
+    expect(mockSearchStore.retry).toHaveBeenCalledOnce();
+    mockSearchStore.results = [makeSearchResult()];
+    input.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
+    expect(mockRouter.navigateToSession).toHaveBeenCalledWith("codex:search123");
+    unmount(component);
+  });
+
   it("shows the inherited project and can search all projects without changing the sidebar", async () => {
     mockSessions.filters.project = "proj-a";
     const component = mount(CommandPalette, { target: document.body });

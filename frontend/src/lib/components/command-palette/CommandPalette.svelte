@@ -139,7 +139,7 @@
 
     if (e.key === "ArrowDown") {
       e.preventDefault();
-      selectedIndex = Math.min(selectedIndex + 1, totalItems - 1);
+      selectedIndex = Math.max(0, Math.min(selectedIndex + 1, totalItems - 1));
     } else if (e.key === "ArrowUp") {
       e.preventDefault();
       selectedIndex = Math.max(selectedIndex - 1, 0);
