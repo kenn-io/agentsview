@@ -153,3 +153,23 @@ func TestSessionUsageBatchMissingDiagnostic(t *testing.T) {
 		})
 	}
 }
+
+func TestSessionUsageSharedPendingAdvice(t *testing.T) {
+	newAgentDataDir(t)
+	ts, _ := newRemoteUsageServer(t, remoteUsageSpec{canonicalID: "other-session"})
+	original := ts.Config.Handler
+	ts.Config.Handler = http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/api/v1/sync/status" {
+			writeJSONResponse(w, `{"startup_pending":true}`)
+			return
+		}
+		original.ServeHTTP(w, r)
+	})
+	cmd := sessionUsageCommand(t, "session", "usage-batch", "missing", "--server", ts.URL)
+	out, err := sessionUsageBatchDataForCommand(cmd, []string{"missing"})
+	require.NoError(t, err)
+	require.Len(t, out.Results, 1)
+	assert.Contains(t, out.Results[0].Error, "wait for syncing or rebuilding to finish, then retry")
+	_, err = executeCommand(newRootCommand(), "session", "diagnose", "missing", "--server", ts.URL)
+	require.ErrorContains(t, err, "wait for syncing or rebuilding to finish, then retry")
+}

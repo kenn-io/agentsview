@@ -2970,3 +2970,20 @@ func TestSessionUsageWaitExpiryAvoidsFallbackLookup(t *testing.T) {
 	assert.True(t, out.RefreshIncomplete)
 	assert.Zero(t, lookupsAfterPending)
 }
+
+func TestSessionUsageWaitDoesNotResolveKnownIDTwiceWhenClear(t *testing.T) {
+	ts, requests := newRemoteUsageServer(t, remoteUsageSpec{canonicalID: "remote-session"})
+	original := ts.Config.Handler
+	ts.Config.Handler = http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/api/v1/sync/status" {
+			writeJSONResponse(w, `{}`)
+			return
+		}
+		original.ServeHTTP(w, r)
+	})
+	out, _, err := httpSessionUsageData(t.Context(), ts.URL, "", sessionUsageQuery{SessionID: "remote-session", Wait: true})
+	require.NoError(t, err)
+	require.NotNil(t, out)
+	assert.Equal(t, 42, out.TotalOutputTokens)
+	assert.Equal(t, []string{"/api/v1/sessions/remote-session", "/api/v1/sessions/sync", "/api/v1/sessions/remote-session/usage"}, requests.RequestPath)
+}
