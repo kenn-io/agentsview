@@ -183,7 +183,13 @@ func systemReminderTerminalSQL(
 		"substr(%s, 1, %d) = '%s'",
 		trimmed, len(systemReminderOpenTag), systemReminderOpenTag,
 	)
-	return fmt.Sprintf(`(CASE WHEN %s THEN EXISTS (WITH RECURSIVE reminder_remainder(rest) AS (
+	prefix := "(" + seedReminder + " AND "
+	suffix := ")"
+	if dialect == systemPrefixPostgres {
+		prefix = "(CASE WHEN " + seedReminder + " THEN "
+		suffix = " ELSE FALSE END)"
+	}
+	return fmt.Sprintf(`%sEXISTS (WITH RECURSIVE reminder_remainder(rest) AS (
 SELECT %s
 UNION ALL
 SELECT %s FROM reminder_remainder
@@ -191,9 +197,9 @@ WHERE substr(rest, 1, %d) = '%s' AND %s > 0
 )
 SELECT 1 FROM reminder_remainder
 WHERE %s AND (rest = '' OR %s)
-LIMIT 1) ELSE FALSE END)`, seedReminder, trimmed, next,
+LIMIT 1)%s`, prefix, trimmed, next,
 		len(systemReminderOpenTag), systemReminderOpenTag, closePos,
-		terminal, classification)
+		terminal, classification, suffix)
 }
 
 func terminalRemainderSQL(content string, dialect systemPrefixSQLDialect) string {
