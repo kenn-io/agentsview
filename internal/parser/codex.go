@@ -2215,7 +2215,7 @@ func (p *codexProvider) parseCodexSessionSnapshotStreaming(
 		FirstMessage:       b.firstMessage,
 		SessionName:        sessionName,
 		SessionNamePresent: sessionNamePresent,
-		MalformedLines:     malformedLines,
+		MalformedLines:     malformedLines + lr.SkippedLines(),
 		StartedAt:          b.startedAt,
 		EndedAt:            b.endedAt,
 		MessageCount:       len(msgs),

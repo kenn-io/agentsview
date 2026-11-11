@@ -388,6 +388,7 @@ func parseHermesJSONLSession(path, project, machine string) (*ParsedSession, []P
 	}
 
 	sess := &ParsedSession{
+		MalformedLines:             lr.SkippedLines(),
 		ID:                         fullID,
 		Project:                    project,
 		projectSynthesizedByHermes: projectSynthesized,

@@ -172,6 +172,7 @@ func parseVibeResultFile(ctx context.Context, path string, fileInfo FileInfo) (P
 	if err := lr.Err(); err != nil {
 		return result, fmt.Errorf("failed to read Vibe session file: %w", err)
 	}
+	result.Session.MalformedLines += lr.SkippedLines()
 
 	setVibeMessageMetadata(&result)
 

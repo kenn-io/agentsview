@@ -3286,3 +3286,24 @@ func TestParseClaudeSession_BlankThinkingKeepsUsage(t *testing.T) {
 		assert.Equal(t, RoleUser, msgs[0].Role)
 	})
 }
+
+func TestParseClaudeSession_CountsOversizedAndInvalidLines(t *testing.T) {
+	if testing.Short() {
+		t.Skip("allocates a line larger than maxLineSize")
+	}
+	// The oversized record is valid JSON, so it would become a message if the
+	// reader returned it. It must instead be counted with the invalid line.
+	oversized := testjsonl.ClaudeUserJSON(strings.Repeat("x", maxLineSize+1), tsZeroS1)
+	content := testjsonl.ClaudeUserJSON("hello", tsZero) + "\n" +
+		oversized + "\n" +
+		"not valid json\n" +
+		testjsonl.ClaudeAssistantJSON("reply", "2024-01-01T00:00:02Z") + "\n"
+
+	sess, msgs := runClaudeParserTest(t, "", content)
+
+	assert.Equal(t, 2, sess.MalformedLines)
+	assert.False(t, sess.IsTruncated)
+	require.Len(t, msgs, 2)
+	assert.Equal(t, "hello", msgs[0].Content)
+	assert.Equal(t, "reply", msgs[1].Content)
+}

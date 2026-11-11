@@ -199,6 +199,7 @@ func parseQwenSession(
 	}
 
 	sess := &ParsedSession{
+		MalformedLines:   lr.SkippedLines(),
 		ID:               "qwen:" + sessionID,
 		Project:          project,
 		Machine:          machine,

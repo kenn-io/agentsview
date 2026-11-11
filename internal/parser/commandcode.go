@@ -221,7 +221,7 @@ func (p *commandCodeProvider) parseSessionContext(
 		Cwd:              cwd,
 		GitBranch:        gitBranch,
 		SourceVersion:    version,
-		MalformedLines:   malformedLines,
+		MalformedLines:   malformedLines + lr.SkippedLines(),
 		FirstMessage:     firstMessage,
 		SessionName:      sessionName,
 		StartedAt:        startedAt,

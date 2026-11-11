@@ -693,6 +693,7 @@ func parseKimiSessionWithFallbackModel(
 	}
 
 	sess := &ParsedSession{
+		MalformedLines:              lr.SkippedLines(),
 		ID:                          "kimi:" + sessionID,
 		Project:                     displayProject,
 		Machine:                     machine,

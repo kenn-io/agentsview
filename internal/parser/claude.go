@@ -494,7 +494,7 @@ func claudeParseFile(
 		entrypoint:      entrypoint,
 		sessionKind:     sessionKind,
 		prLinks:         prLinks.result(),
-		malformedLines:  malformedLines,
+		malformedLines:  malformedLines + lr.SkippedLines(),
 		isTruncated:     isTruncated,
 	}
 
