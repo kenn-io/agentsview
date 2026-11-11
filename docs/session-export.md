@@ -331,7 +331,7 @@ artifacts.
 The cursor embeds the archive `database_id`, filter parameters, ordering,
 watermark, last keyset position, snapshot digest, prefix digest, and limit.
 Passing `--cursor` with any query-affecting flag is an error. Only `--format`,
-`--json`, and `--limit` may be used with `--cursor`; filters such as
+`--json`, `--limit`, and `--wait` may be used with `--cursor`; filters such as
 `--project`, `--exclude-project`, `--machine`, `--git-branch`, `--agent`, date
 filters, `--active-since`, message-count filters, `--include-one-shot`,
 `--include-automated`, `--include-children`, `--outcome`, `--health-grade`,
