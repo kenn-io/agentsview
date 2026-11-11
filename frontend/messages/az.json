@@ -56,16 +56,21 @@
   "nav_trash": "Zibil qutusu",
   "nav_search_sessions": "Sessiyaları axtar...",
   "nav_search_sessions_shortcut": "Sessiyaları axtar ({shortcut})",
-  "header_transcript_normal_title": "Normal yazışma mətni - bütün mesajları göstər",
-  "header_transcript_normal_label": "Normal yazışma mətni rejimi",
-  "header_transcript_normal": "Normal",
-  "header_transcript_focused_title": "Fokuslanmış yazışma mətni - yalnız istifadəçi sorğuları və yekun cavablar",
-  "header_transcript_focused_label": "Fokuslanmış yazışma mətni rejimi",
-  "header_transcript_focused": "Fokuslanmış",
-  "header_transcript_filter_title": "Blok növlərini süz",
-  "header_transcript_filter_label": "Blok növlərini süz",
   "header_transcript_visibility": "Blokların görünməsi",
   "header_transcript_show_all": "Hamısını göstər",
+  "header_view_trigger": "Görünüş: {layout}",
+  "header_view_trigger_focused": "Görünüş: {layout} · Sorğular və cavablar",
+  "header_view_trigger_label": "Transkript görünüşü: {layout}",
+  "header_view_trigger_label_focused": "Transkript görünüşü: {layout}, sorğular və cavablar",
+  "header_view_menu_label": "Transkript görünüşü",
+  "header_view_layout_heading": "Düzülüş",
+  "header_view_layout_default_description": "Genişləndirilmiş mesajlar",
+  "header_view_layout_compact_description": "Eyni məzmun, daha sıx aralıqla",
+  "header_view_layout_stream_description": "Danışan etiketləri olmadan söhbət",
+  "header_view_layout_skim_description": "Hər mesaj və alət çağırışı üçün bir sətir",
+  "header_view_mode_heading": "Məzmun",
+  "header_view_mode_normal": "Bütün mesajlar və alət çağırışları",
+  "header_view_mode_focused": "Yalnız sorğularınız və son cavablar",
   "header_transcript_blocks_user": "İstifadəçi mesajları",
   "header_transcript_blocks_assistant": "Köməkçi mətni",
   "header_transcript_blocks_thinking": "Düşünmə blokları",
@@ -75,20 +80,12 @@
   "header_transcript_blocks_hook": "Hook-lar",
   "header_actions_follow_latest": "Son mesajları izlə",
   "header_actions_toggle_sort": "Sıralama ardıcıllığını dəyişdir (o)",
-  "header_actions_cycle_layout": "Düzülüşün növbəti variantına keç: {layout} (l)",
-  "header_actions_cycle_layout_label": "Mesaj düzülüşünün növbəti variantına keç",
-  "header_actions_export_options": "Sessiya ixracı seçimləri",
-  "header_actions_export_session": "Sessiyanı ixrac et",
   "header_actions_download_html": "HTML ixracını endir",
-  "header_actions_copied_markdown_link": "Markdown keçidi kopyalandı",
   "header_actions_copy_markdown_link": "Markdown ixracının keçidini kopyala",
   "header_actions_copy_source_path": "Mənbə faylının yolunu kopyala",
-  "header_actions_publish_title": "Gist-də dərc et (p)",
-  "header_actions_publish_label": "Gist-də dərc et",
   "header_actions_publish_public": "Açıq Gist dərc et",
   "header_actions_publish_secret": "Gizli Gist dərc et",
   "header_actions_more_actions": "Daha çox əməliyyat",
-  "header_actions_layout": "Düzülüş: {layout}",
   "header_actions_refresh_data": "Məlumatları yenilə",
   "header_actions_refresh_data_shortcut": "Məlumatları yenilə (r)",
   "header_actions_sync_sessions": "Sessiyaları sinxronlaşdır",
@@ -243,21 +240,21 @@
   "session_breadcrumb_summary_mode_tooltip": "Bu yazışma mətnində alət nəticələri, düşünmə və diff-lər yoxdur. Tam məzmun üçün agy-reader köməkçi xidməti lazımdır, onu quraşdırın və ya artıq quraşdırılıbsa, sinxronlaşdırmanın tamamlanmasını gözləyin. Necə edildiyini öyrənmək üçün klikləyin.",
   "session_breadcrumb_malformed_lines": [
     {
-      "declarations": ["input count", "local countPlural = count: plural"],
+      "declarations": ["input count", "input countLabel", "local countPlural = count: plural"],
       "selectors": ["countPlural"],
       "match": {
-        "countPlural=one": "{count} yanlış quruluşlu sətir",
-        "countPlural=other": "{count} yanlış quruluşlu sətir"
+        "countPlural=one": "{countLabel} yanlış quruluşlu sətir",
+        "countPlural=other": "{countLabel} yanlış quruluşlu sətir"
       }
     }
   ],
   "session_breadcrumb_malformed_lines_tooltip": [
     {
-      "declarations": ["input count", "local countPlural = count: plural"],
+      "declarations": ["input count", "input countLabel", "local countPlural = count: plural"],
       "selectors": ["countPlural"],
       "match": {
-        "countPlural=one": "Mənbə faylındakı {count} sətri təhlil etmək mümkün olmadı",
-        "countPlural=other": "Mənbə faylındakı {count} sətri təhlil etmək mümkün olmadı"
+        "countPlural=one": "Mənbə faylındakı {countLabel} sətri təhlil etmək mümkün olmadı",
+        "countPlural=other": "Mənbə faylındakı {countLabel} sətri təhlil etmək mümkün olmadı"
       }
     }
   ],
@@ -480,6 +477,16 @@
   "sidebar_row_star_session": "Sessiyanı ulduzla",
   "sidebar_row_unstar_session": "Sessiyanın ulduzunu çıxar",
   "sidebar_row_rename": "Adını dəyişdir",
+  "sidebar_row_user_message_count": [
+    {
+      "declarations": ["input count", "input countLabel", "local countPlural = count: plural"],
+      "selectors": ["countPlural"],
+      "match": {
+        "countPlural=one": "{countLabel} istifadəçi mesajı",
+        "countPlural=other": "{countLabel} istifadəçi mesajı"
+      }
+    }
+  ],
   "sidebar_row_open_in_new_tab": "Yeni vərəqdə aç",
   "sidebar_row_delete": "Sil",
   "sidebar_row_change_project": "Layihəni dəyişdir…",
@@ -792,9 +799,13 @@
       }
     }
   ],
-  "analytics_top_skills_agent_breakdown": "Agent bölgüsü",
   "analytics_top_skills_agents": "Agentlər",
-  "analytics_top_skills_projects": "Layihələr: {projects}",
+  "analytics_top_skills_col_skill": "Bacarıq",
+  "analytics_top_skills_col_share": "Pay",
+  "analytics_top_skills_col_calls": "Çağırışlar",
+  "analytics_top_skills_col_sessions": "Sessiyalar",
+  "analytics_top_skills_col_last_used": "Son istifadə",
+  "analytics_top_skills_projects_label": "Layihələr",
   "analytics_top_skills_empty": "Bacarıq istifadəsi məlumatları yoxdur",
   "analytics_skill_trend_title": "Zaman üzrə bacarıq istifadəsi",
   "analytics_skill_trend_other": "Digər",
@@ -886,12 +897,11 @@
   "settings_search_empty": "Uyğun gələn parametr yoxdur",
   "settings_search_clear": "Axtarışı təmizlə",
   "settings_search_result": "{category} göstərilir",
-  "settings_search_keywords_appearance": "Tema kontrast düzülüş mətn şrift bloklar miqyas rəng",
+  "settings_search_keywords_appearance": "Tema kontrast düzülüş mətn şrift bloklar miqyas rəng en",
   "settings_search_keywords_language": "Dil yerli parametrlər tərcümə",
   "settings_search_keywords_date_ranges": "Tarix aralıq əlaqəli səhifələr",
   "settings_search_keywords_terminal": "Terminal davam et işə sal icra faylı arqumentlər mübadilə buferi",
   "settings_search_keywords_agent_directories": "Agent qovluqlar yollar skan sessiyalar",
-  "settings_search_keywords_worktree_mappings": "worktree uyğunlaşdırmalar layihələr yollar düzülüşlər",
   "settings_search_keywords_embeddings": "Semantik vektorlar semantik axtarış vektorlar indeks yaratmalar",
   "settings_search_keywords_github": "GitHub Gist token dərc et inteqrasiya",
   "settings_search_keywords_remote_access": "Uzaq server əlaqə kimliyin təsdiqlənməsi token şəbəkə",
@@ -1264,9 +1274,14 @@
   "recent_edits_count": "{count} düzəliş",
   "recent_edits_truncated": "Cəmi {total} düzəlişdən son {shown} düzəliş göstərilir",
   "recent_edits_load_more": "Daha çox yüklə",
-  "recent_edits_refresh": "Yenilə",
+  "recent_edits_refresh": "Siyahını yenidən yüklə",
   "recent_edits_search_placeholder": "Fayl yoluna görə süz",
   "recent_edits_clear_search": "Fayl yolu axtarışını təmizlə",
+  "recent_edits_col_project": "Layihə",
+  "recent_edits_col_file": "Fayl",
+  "recent_edits_col_edits": "Redaktələr",
+  "recent_edits_col_last_edit": "Son redaktə",
+  "recent_edits_resize_column": "{column} sütununun enini dəyiş",
   "activity_insight_waiting_server": "Server versiyası gözlənilir",
   "activity_insight_generate_insight": "Analitik nəticə yarat",
   "activity_insight_generation_failed": "Yaratma uğursuz oldu",
@@ -1550,6 +1565,9 @@
   "recall_generated_export": "İxrac et",
   "recall_generated_publish": "Dərc et",
   "recall_generated_publish_secret": "Gizli",
+  "recall_generated_group_sessions": "Sessiyalar",
+  "recall_generated_group_report": "Hesabat",
+  "recall_generated_read_only_reason": "Bu arxiv yalnız oxumaq üçündür, ona görə burada yeni hesabat yaratmaq olmur.",
   "recall_page_subtitle": "Ümumiləşdirilmiş qeydlərə və biliklərin çıxarılmasının əhatə dairəsinə baxın.",
   "recall_page_search_placeholder": "Yada salma qeydlərini axtar…",
   "recall_page_clear_search": "Yada salma axtarışını təmizlə",
@@ -1771,6 +1789,10 @@
   "insights_page_calibration_no_affected": "Təsirlənmiş sessiya yoxdur",
   "insights_page_calibration_incomplete_rate": "{rate}% tamamlanmayıb",
   "insights_page_calibration_incomplete_lift": "Tamamlanmamış sessiyaların payı {lift} dəfə çoxdur",
+  "insights_page_column_signal": "Siqnal",
+  "insights_page_column_count": "Say",
+  "insights_page_column_sessions": "Sessiyalar",
+  "insights_page_column_outcome": "Nəticə",
   "insights_page_signal_examples": "Siqnal nümunələri",
   "insights_page_grade_badge": "Dərəcə {grade}",
   "insights_page_unscored": "Bal verilməmiş",
@@ -1814,11 +1836,16 @@
   "insights_page_pct_affected": "{pct}% təsirlənib",
   "insights_pattern_recommendation_rationale": [
     {
-      "declarations": ["input affected", "input total", "local totalPlural = total: plural"],
+      "declarations": [
+        "input affectedLabel",
+        "input total",
+        "input totalLabel",
+        "local totalPlural = total: plural"
+      ],
       "selectors": ["totalPlural"],
       "match": {
-        "totalPlural=one": "{total} sessiyadan {affected} sessiyada bu deterministik qanunauyğunluq var.",
-        "totalPlural=other": "{total} sessiyadan {affected} sessiyada bu deterministik qanunauyğunluq var."
+        "totalPlural=one": "{totalLabel} sessiyadan {affectedLabel} sessiyada bu deterministik qanunauyğunluq var.",
+        "totalPlural=other": "{totalLabel} sessiyadan {affectedLabel} sessiyada bu deterministik qanunauyğunluq var."
       }
     }
   ],
@@ -1870,14 +1897,15 @@
     {
       "declarations": [
         "input count",
+        "input countLabel",
         "input completedRate",
         "input failureSignals",
         "local countPlural = count: plural"
       ],
       "selectors": ["countPlural"],
       "match": {
-        "countPlural=one": "{count} sessiya, {completedRate}% tamamlanıb, orta hesabla {failureSignals} uğursuzluq",
-        "countPlural=other": "{count} sessiya, {completedRate}% tamamlanıb, orta hesabla {failureSignals} uğursuzluq"
+        "countPlural=one": "{countLabel} sessiya, {completedRate}% tamamlanıb, orta hesabla {failureSignals} uğursuzluq",
+        "countPlural=other": "{countLabel} sessiya, {completedRate}% tamamlanıb, orta hesabla {failureSignals} uğursuzluq"
       }
     }
   ],
@@ -2006,6 +2034,10 @@
   "resync_retry": "Yenidən cəhd et",
   "resync_error_read_only": "Yalnız oxumaq üçün olan server sistemlərində tam yenidən sinxronlaşdırma əlçatan deyil.",
   "resync_error_in_progress": "Sinxronlaşdırma artıq davam edir.",
+  "shortcuts_group_navigation": "Naviqasiya",
+  "shortcuts_group_messages": "Mesajlar",
+  "shortcuts_group_sessions": "Sessiyalar",
+  "shortcuts_group_actions": "Əməliyyatlar",
   "shortcuts_open_command_palette": "Əmr palitrasını aç",
   "shortcuts_find_in_session": "Sessiyada tap",
   "shortcuts_close_palette": "Palitranı / dialoq pəncərəsini / axtarışı bağla",
@@ -2059,7 +2091,7 @@
   "settings_session_providers_save_failed": "Sessiya provayderlərini yeniləmək mümkün olmadı. Əvvəlki seçiminiz hələ də aktivdir.",
   "settings_session_providers_homes_title": "Alternativ ev qovluqları",
   "settings_session_providers_homes_hint": "Fərdi {envVar} kimi agent ev qovluğu əlavə edin. AgentsView onun sessiya qovluqlarını avtomatik müəyyən edir.",
-  "settings_session_providers_homes_placeholder": "~/.{agent}-work",
+  "settings_session_providers_homes_placeholder": "məs. ~/.{agent}-work",
   "settings_session_providers_homes_add": "Ev qovluğu əlavə et",
   "settings_session_providers_homes_input_aria": "Yeni {provider} ev qovluğu",
   "settings_session_providers_homes_remove_aria": "{provider} üçün {home} ev qovluğunu çıxar",
@@ -2082,6 +2114,10 @@
   "appearance_chart_palette_matplotlib": "Matplotlib",
   "appearance_chart_palette_colorblind": "Rəng korluğu üçün təhlükəsiz",
   "appearance_message_layout": "Mesaj düzülüşü",
+  "appearance_reading_width": "Oxuma eni",
+  "appearance_reading_width_default": "Standart",
+  "appearance_reading_width_wider": "Daha geniş",
+  "appearance_reading_width_full": "Tam en",
   "appearance_block_visibility": "Blokların görünməsi",
   "settings_github_token_saved": "GitHub tokeni yadda saxlanıldı.",
   "settings_github_save_failed": "Tokeni yadda saxlamaq mümkün olmadı",
@@ -2162,8 +2198,6 @@
   "settings_terminal_args_hint": "(yer tutucu kimi \\{cmd\\} mətnindən istifadə edin)",
   "settings_terminal_saving": "Yadda saxlanılır...",
   "settings_terminal_save": "Yadda saxla",
-  "settings_worktree_moved": "Layihə təsnifatı qaydaları Məlumatlar bölməsinə köçürülüb.",
-  "settings_worktree_moved_link": "Məlumatlar › Qaydalar bölməsini aç",
   "worktree_failed_load": "Uyğunlaşdırmaları yükləmək mümkün olmadı",
   "worktree_failed_save": "Uyğunlaşdırmanı yadda saxlamaq mümkün olmadı",
   "worktree_failed_delete": "Uyğunlaşdırmanı silmək mümkün olmadı",
@@ -2191,6 +2225,8 @@
   "worktree_saving": "Yadda saxlanılır...",
   "worktree_add_mapping": "Uyğunlaşdırma əlavə et",
   "worktree_save_mapping": "Uyğunlaşdırmanı yadda saxla",
+  "worktree_form_new_title": "Yeni uyğunlaşdırma",
+  "worktree_form_edit_title": "Uyğunlaşdırmanı redaktə et",
   "worktree_cancel": "Ləğv et",
   "worktree_applying": "Tətbiq olunur...",
   "worktree_apply_mappings": "Uyğunlaşdırmaları tətbiq et",
@@ -2246,8 +2282,8 @@
   "trends_title": "Meyillər",
   "trends_date_range": "{from}-{to}",
   "trends_reset": "Sıfırla",
-  "trends_refreshing": "Yenilənir",
-  "trends_refresh": "Yenilə",
+  "trends_refreshing": "Yenidən hesablanır",
+  "trends_refresh": "Yenidən hesabla",
   "trends_terms": "Terminlər",
   "trends_one_per_line": "Hər sətirdə bir termin",
   "trends_group_by": "Qruplaşdırma meyarı",
@@ -2334,9 +2370,6 @@
   "appearance_on": "Aktivdir",
   "appearance_off": "Deaktiv",
   "appearance_zoom": "Miqyas",
-  "settings_archive_content_title": "Arxiv məzmunu",
-  "settings_archive_content_description": "Məlumatların qəbulu zamanı alət nəticələrindən saxlanılan məzmun.",
-  "settings_search_keywords_archive_content": "arxiv məzmun şəkillər saxlama alət nəticələri yer tutucular yaddaş ölçü",
   "settings_tool_result_images": "Alət nəticələrindəki şəkillər",
   "settings_tool_result_images_keep": "Saxla",
   "settings_tool_result_images_drop": "Sil",
@@ -2345,7 +2378,7 @@
   "settings_tool_result_images_restart_notice": "Bu dəyişikliyi yeni qəbul edilən sessiyalara tətbiq etmək üçün AgentsView fon xidmətini yenidən başladın.",
   "settings_tool_images_title": "Alət nəticələrindəki şəkillər",
   "settings_tool_images_description": "Alət nəticələrinin daxilində saxlanılmış şəkillər.",
-  "settings_search_keywords_tool_images": "şəkillər alət nəticələri silmə təmizləmə məlumat yükləri baytlar yaddaş",
+  "settings_search_keywords_tool_images": "şəkillər alət nəticələri silmə təmizləmə məlumat yükləri baytlar yaddaş arxiv məzmun saxlama yer tutucular ölçü",
   "settings_image_cleanup_intro": "Saxlanılmış alət nəticələrindən hansılarında hələ də şəkil məlumat yükləri olduğunu önbaxışda yoxlayın, sonra həmin məlumat yüklərini oxunaqlı yer tutucularla əvəz edin.",
   "settings_image_cleanup_project_label": "Layihə adında olan mətn",
   "settings_image_cleanup_project_placeholder": "Bütün layihələr",
@@ -3190,5 +3223,6 @@
   ],
   "empty_archive_title": "Hələ sessiya yoxdur",
   "empty_archive_desc": "AgentsView sessiyaları bu qovluqlardan oxuyur. Agent onlardan birinə yazan kimi sessiyalar burada görünəcək.",
-  "empty_archive_choose_folders": "Qovluqları seçin"
+  "empty_archive_choose_folders": "Qovluqları seçin",
+  "usage_tooltip_no_usage": "İstifadə yoxdur"
 }

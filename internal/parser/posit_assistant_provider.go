@@ -919,7 +919,7 @@ func readPositAssistantLMMessages(
 	if err := lr.Err(); err != nil {
 		return nil, 0, fmt.Errorf("read %s: %w", path, err)
 	}
-	return lines, malformed, nil
+	return lines, malformed + lr.SkippedLines(), nil
 }
 
 // readPositAssistantUsageEvents loads the usage-events.jsonl sidecar, where
@@ -971,7 +971,7 @@ func readPositAssistantUsageEvents(
 	if err := lr.Err(); err != nil {
 		return nil, 0, fmt.Errorf("read %s: %w", path, err)
 	}
-	return events, malformed, nil
+	return events, malformed + lr.SkippedLines(), nil
 }
 
 // positAssistantUsageEvent converts one sidecar line into a request-scoped

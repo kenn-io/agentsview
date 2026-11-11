@@ -52,6 +52,7 @@
       .map((panel) => ({
         id: panel.id,
         label: panel.label,
+        icon: panel.icon,
         group: panel.group,
         summary: panel.description,
       }));
@@ -208,16 +209,14 @@
               {:else if meta.id === "agent-directories"}
                 <AgentDirSettings />
               {:else if meta.id === "tool-result-images"}
-                <ToolImageCleanup />
-              {:else if meta.id === "worktree-mappings"}
-                <Button
-                  label={m.settings_worktree_moved_link()}
-                  onclick={() => router.navigate("data", { view: "rules" })}
-                />
+                <!-- What ingestion keeps from new tool results, then the
+                     cleanup of images already stored. -->
+                <div class="tool-images-panel">
+                  <ArchiveContentSettings />
+                  <ToolImageCleanup />
+                </div>
               {:else if meta.id === "embeddings"}
                 <EmbeddingsSettings />
-              {:else if meta.id === "archive-content"}
-                <ArchiveContentSettings />
               {:else if meta.id === "github"}
                 <GithubSettings />
               {:else if meta.id === "remote-access"}
@@ -257,6 +256,9 @@
     flex: 1 1 auto;
     min-height: 0;
     width: 100%;
+    /* Buttons (panel and footer) use the same 12px text as the segmented
+       options and inputs beside them. */
+    --kit-control-font-size: 12px;
   }
 
   .settings-standalone {
@@ -280,6 +282,12 @@
     margin: 0;
   }
 
+  .tool-images-panel {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-5);
+  }
+
   .settings-panel[hidden] {
     display: none;
   }
@@ -288,6 +296,223 @@
      shift when switching to a panel tall enough to scroll. */
   .settings-page :global(.kit-settings__scroll) {
     scrollbar-gutter: stable;
+  }
+
+  /* Local overrides of kit-ui SettingsLayout: readable nav summaries and
+     the app-wide neutral selected state. */
+  @media (min-width: 761px) {
+    .settings-page :global(.kit-settings .kit-settings__sidebar) {
+      width: 236px;
+    }
+
+    /* Tight vertical rhythm so every category, Remote access included,
+       fits a 900px-tall window without scrolling the nav. The small end
+       padding keeps the last item clear of the status bar when a shorter
+       window does scroll. Narrow widths show a horizontal strip instead. */
+    .settings-page :global(.kit-settings .kit-settings__sidebar) {
+      padding-block: var(--space-4) var(--space-2);
+      gap: var(--space-4);
+    }
+
+    /* A few pixels between items and between each name and its
+       description separate the entries; the tighter group-title margin and
+       description line height pay for them so the nav still fits. */
+    .settings-page :global(.kit-settings .kit-settings__nav) {
+      gap: var(--space-1);
+      padding-bottom: var(--space-2);
+    }
+
+    .settings-page :global(.kit-settings .kit-settings__nav-item) {
+      padding-block: var(--space-2);
+    }
+
+    .settings-page :global(.kit-settings .kit-settings__nav-text) {
+      gap: var(--space-2);
+    }
+
+    .settings-page :global(.kit-settings .kit-settings__group-title) {
+      padding-top: var(--space-3);
+      padding-bottom: var(--space-1);
+    }
+
+    .settings-page :global(.kit-settings .kit-settings__group-title:not(:first-child)) {
+      margin-top: var(--space-1);
+    }
+  }
+
+  /* Descriptions stay clearly below the item names, which use primary
+     ink at a heavier weight. Muted ink keeps them above 4.5:1 on the
+     selected row's fill as well as the nav surface. */
+  .settings-page :global(.kit-settings .kit-settings__nav-summary) {
+    font-size: 11px;
+    font-weight: 400;
+    line-height: 1.2;
+    color: var(--text-muted);
+  }
+
+  .settings-page :global(.kit-settings__nav-item) {
+    font-weight: 500;
+  }
+
+  .settings-page :global(.kit-settings .kit-settings__footer) {
+    padding-block: var(--space-3);
+  }
+
+  /* The footer action sits on the same 28px control height as the panel. */
+  .settings-page :global(.kit-settings__footer) {
+    --kit-control-height: 28px;
+  }
+
+  /* One row grid for every panel: a label column, then the control.
+     Panels keep their own markup; this replaces their per-panel
+     space-between rows so controls start on a shared edge everywhere.
+     Rows with a single child (checkboxes, notes) span both columns. */
+  .settings-page :global(.kit-settings__panel) {
+    /* Panels with their own row grids (providers, remote access, tool-result
+       images) read the same label width. */
+    --setting-label-width: 222px;
+    /* One control height for every settings control: buttons, inputs, and
+       typeahead triggers read this through kit-ui. */
+    --kit-control-height: 28px;
+    --typeahead-control-height: 28px;
+  }
+
+  .settings-page :global(.kit-settings__panel .setting-row:not(.column)) {
+    display: grid;
+    grid-template-columns: var(--setting-label-width) minmax(0, 1fr);
+    align-items: center;
+    justify-items: start;
+    gap: 12px;
+  }
+
+  /* A panel with a single setting has no other rows to line up with, so
+     its label column fits the label (up to the shared width, past which
+     long translations wrap) and the control follows one gap later. Phones
+     keep the stacked layout below. */
+  @media (min-width: 641px) {
+    .settings-page :global(.kit-settings__panel .setting-row.compact:not(.column)) {
+      grid-template-columns: fit-content(var(--setting-label-width)) minmax(0, 1fr);
+      column-gap: var(--space-6);
+    }
+  }
+
+  .settings-page :global(.kit-settings__panel .setting-row:not(.column) > :only-child) {
+    grid-column: 1 / -1;
+  }
+
+  /* Every panel's field labels share one size, weight, and ink, so no
+     panel reads bolder than another. Long translated labels wrap inside
+     the label column instead of running under the control. */
+  .settings-page :global(.kit-settings__panel .setting-row:not(.column) > .setting-label) {
+    font-size: 12px;
+    font-weight: 500;
+    color: var(--text-secondary);
+    white-space: normal;
+    overflow-wrap: anywhere;
+  }
+
+  /* Phones: one column, label above control, and option rows let their
+     segmented controls take the full width. */
+  @media (max-width: 640px) {
+    .settings-page :global(.kit-settings__panel .setting-row:not(.column)) {
+      grid-template-columns: minmax(0, 1fr);
+      gap: var(--space-2);
+    }
+
+    .settings-page :global(.kit-settings__panel .setting-row.option-row) {
+      justify-items: stretch;
+    }
+
+    .settings-page :global(.kit-settings__panel .setting-row.option-row > .setting-label) {
+      justify-self: start;
+    }
+  }
+
+  /* Segments sit inside the track's 2px padding, so the track itself
+     lands on the shared control height. */
+  .settings-page :global(.kit-settings__panel .kit-segmented:not(.kit-segmented--borderless) .kit-segmented__btn) {
+    min-height: calc(var(--kit-control-height) - 4px);
+  }
+
+  /* Disabled and read-only controls share app.css's disabled ink: clearly
+     fainter than enabled controls, without the uneven look of opacity. */
+  .settings-page :global(.kit-settings__panel button:disabled:not(.kit-button--solid.kit-button--info)),
+  .settings-page :global(.kit-settings__footer .kit-button:disabled:not(.kit-button--solid.kit-button--info)),
+  .settings-page :global(.kit-settings__panel .kit-segmented__btn:disabled),
+  .settings-page :global(.kit-settings__panel .kit-toggle--disabled),
+  .settings-page :global(.kit-settings__panel .kit-text-input--disabled) {
+    opacity: 1; /* kit-ui-check-ignore: deliberate local rule; disabled controls here use the disabled ink and edge instead of fading with opacity */
+    color: var(--disabled-ink);
+    cursor: not-allowed;
+  }
+
+  /* Inputs keep the surface fill whether or not they are editable; a
+     disabled one shows its state through the faint edge and muted text,
+     the same no-fill disabled look as the buttons, instead of a gray well
+     that made every field on a read-only server look broken. */
+  .settings-page :global(.kit-settings__panel .kit-text-input--disabled) {
+    background: var(--bg-surface);
+    border-color: var(--disabled-edge);
+  }
+
+  .settings-page :global(.kit-settings__panel .kit-text-input--disabled .kit-text-input__control) {
+    color: var(--text-muted);
+  }
+
+  /* Every other disabled button, destructive and footer included, matches
+     the disabled primary in app.css: faint edge, no fill, disabled ink. */
+  .settings-page :global(.kit-settings__panel .kit-button:disabled:not(.kit-button--solid.kit-button--info)),
+  .settings-page :global(.kit-settings__footer .kit-button:disabled:not(.kit-button--solid.kit-button--info)) {
+    background: transparent;
+    border-color: var(--disabled-edge);
+    box-shadow: none;
+    color: var(--disabled-ink);
+  }
+
+  /* Dark unselected segments already use muted ink (one step below the
+     secondary ink of other enabled controls), so the shared disabled ink
+     sat too close to them. Disabled segments take one more step down, the
+     same muted share light's disabled ink uses. */
+  :global(:root.dark) .settings-page :global(.kit-settings__panel .kit-segmented__btn:disabled:not(.active)) {
+    color: color-mix(in srgb, var(--text-muted) 58%, var(--bg-surface));
+  }
+
+  /* The selected segment of a disabled control keeps app.css's selected
+     fill, edge, and weight, and clearly stronger ink than its disabled
+     neighbours, so the current choice reads on a read-only server. The
+     extra .kit-segmented class outranks the disabled-button rule above,
+     whose :not(...) argument adds two classes of specificity. */
+  .settings-page :global(.kit-settings__panel .kit-segmented .kit-segmented__btn.active:disabled) {
+    color: var(--text-primary);
+  }
+
+  /* A disabled switch keeps its on/off state readable, but its track is
+     clearly quieter than a live switch so read-only rows do not look
+     editable beside their disabled inputs and buttons. The track mixes
+     the accent into the surface color in both themes (mixing into the
+     border kept dark tracks bright enough to look live), and the knob
+     steps down from white. */
+  .settings-page :global(.kit-settings__panel .kit-toggle--disabled .kit-toggle__input:checked + .kit-toggle__track) {
+    background: color-mix(in srgb, var(--accent-blue) 30%, var(--bg-surface));
+  }
+
+  .settings-page :global(.kit-settings__panel .kit-toggle--disabled .kit-toggle__knob) {
+    background: color-mix(in srgb, var(--text-muted) 35%, var(--bg-surface));
+  }
+
+  :global(:root.dark) .settings-page :global(.kit-settings__panel .kit-toggle--disabled .kit-toggle__knob) {
+    background: color-mix(in srgb, var(--text-muted) 70%, var(--bg-surface));
+  }
+
+  /* Panel titles step up from section headings (13px semibold) and row
+     labels (12px), so a panel reads as panel > section > row. */
+  .settings-page :global(.kit-settings__panel .kit-settings-section__title) {
+    font-size: calc(var(--font-size-md) + 2px);
+  }
+
+  /* Room below the panel so the sticky footer never clips the preview. */
+  .settings-page :global(.kit-settings .kit-settings__panel) {
+    padding-bottom: calc(var(--space-8) + var(--space-6));
   }
 
   .settings-page.settings-no-results :global(.kit-settings__nav),

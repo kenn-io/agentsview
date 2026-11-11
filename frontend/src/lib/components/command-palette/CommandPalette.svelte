@@ -15,9 +15,9 @@
   import {
     formatRelativeTime,
     truncate,
-    sanitizeSnippet,
+    sanitizeSnippet, highlightTerms,
   } from "../../utils/format.js";
-  import { agentColor } from "../../utils/agents.js";
+  import { agentInk, agentLabel } from "../../utils/agents.js";
   import { copyToClipboard } from "../../utils/clipboard.js";
   import { stripIdPrefix } from "../../utils/resume.js";
   import { normalizeMessagePreview } from "../../utils/messages.js";
@@ -45,6 +45,15 @@
     return () => controller.abort();
   });
   let inputRef: HTMLInputElement | undefined = $state(undefined);
+  // Title and snippet widths (percent) of the placeholder rows shown while
+  // a search runs; varied so they read as text, not as a striped block.
+  const SKELETON_ROWS = [
+    { title: 62, snippet: 88 },
+    { title: 48, snippet: 80 },
+    { title: 70, snippet: 92 },
+    { title: 54, snippet: 76 },
+    { title: 66, snippet: 84 },
+  ];
   let project = $state(sessions.filters.project);
   let selectedIndex: number = $state(0);
   let inputValue: string = $state(searchStore.query ?? "");
@@ -284,7 +293,7 @@
         value={inputValue}
         oninput={handleInput}
       />
-      <KbdBadge keys={["⎋"]} joiner="compact" ariaLabel="Escape" />
+      <KbdBadge keys={["Esc"]} joiner="compact" ariaLabel="Escape" />
     </div>
 
     <!-- svelte-ignore a11y_no_static_element_interactions -->
@@ -342,10 +351,29 @@
       {/if}
     </div>
 
-    <div class="palette-results">
+    <!-- Always mounted and outside the busy results, so screen readers
+         announce "Searching..." when the text appears. -->
+    <div class="kit-sr-only palette-search-status" role="status">
+      {showSearchResults && searchStore.isSearching ? m.command_palette_searching() : ""}
+    </div>
+
+    <div class="palette-results" aria-busy={showSearchResults && searchStore.isSearching}>
       {#if showSearchResults}
         {#if searchStore.isSearching}
-          <div class="palette-empty">{m.command_palette_searching()}</div>
+          <!-- Placeholder rows shaped like results keep the palette at a
+               result-list size instead of a large empty box. -->
+          <div class="palette-loading" aria-hidden="true">
+            {#each SKELETON_ROWS as row, i (i)}
+              <div class="skeleton-row" aria-hidden="true">
+                <span class="skeleton-body">
+                  <span class="skeleton-bar" style:width="{row.title}%"></span>
+                  <span class="skeleton-bar skeleton-snippet" style:width="{row.snippet}%"></span>
+                </span>
+                <span class="skeleton-bar skeleton-meta"></span>
+                <span class="skeleton-bar skeleton-id"></span>
+              </div>
+            {/each}
+          </div>
         {:else if searchStore.error?.kind === "semantic-unavailable"}
           <SemanticSetupHelp
             onResolved={() => searchStore.retry()}
@@ -380,24 +408,22 @@
               onclick={() => selectSearchResult(result)}
               onmouseenter={() => (selectedIndex = i)}
             >
-              <span
-                class="item-dot"
-                style:background={agentColor(result.agent)}
-              ></span>
               <span class="item-body">
                 {#if result.name}
                   <span class="item-name">{truncate(result.name, 60)}</span>
                 {/if}
                 {#if result.snippet && result.snippet.replace(/<\/?mark>/g, '') !== result.name}
                   <span class="item-snippet">
-                    {#if result.snippetFormat === "plain-text"}
-                      {result.snippet}
-                    {:else}
+                    {#if result.snippetFormat !== "plain-text" && /<mark>/i.test(result.snippet)}
                       {@html sanitizeSnippet(result.snippet)}
+                    {:else}
+                      <!-- Backends without match markers get the query words emphasized here. -->
+                      {#each highlightTerms(result.snippet, inputValue) as segment}{#if segment.match}<mark>{segment.text}</mark>{:else}{segment.text}{/if}{/each}
                     {/if}
                   </span>
                 {/if}
               </span>
+              <span class="item-agent" style:--agent-ink={agentInk(result.agent)}>{agentLabel(result.agent)}</span>
               <span class="item-meta">
                 {truncate(result.project, 20)}{result.timestamp ? ' · ' + formatRelativeTime(result.timestamp) : ''}
               </span>
@@ -424,12 +450,12 @@
             onclick={() => selectSession(session)}
             onmouseenter={() => (selectedIndex = i)}
           >
-            <span class="item-dot" style:background={agentColor(session.agent)}></span>
             <span class="item-body">
               <span class="item-name">{preview
                 ? truncate(preview, 60)
                 : session.project}</span>
             </span>
+            <span class="item-agent" style:--agent-ink={agentInk(session.agent)}>{agentLabel(session.agent, session.agent_label)}</span>
             <span class="item-meta">
               {formatRelativeTime(session.ended_at ?? session.started_at)}
             </span>
@@ -451,18 +477,21 @@
     inset: 0;
     background: var(--overlay-bg);
     display: flex;
+    /* The palette sizes to its content (up to its max height) instead of
+       stretching, so short states stay short. */
+    align-items: flex-start;
     justify-content: center;
-    padding-top: 20vh;
+    padding-top: 14vh;
     z-index: var(--z-overlay);
   }
 
   .palette {
-    width: 560px;
-    max-height: 400px;
+    width: min(720px, calc(100vw - 32px));
+    max-height: min(560px, 72vh);
     background: var(--bg-surface);
     border: 1px solid var(--border-default);
     border-radius: var(--radius-lg);
-    box-shadow: var(--shadow-md);
+    box-shadow: var(--shadow-lg);
     display: flex;
     flex-direction: column;
     overflow: hidden;
@@ -494,13 +523,25 @@
     color: var(--text-muted);
   }
 
+  /* Rows vary in height, so the list cannot always end on a whole row.
+     A short fade marks the cut row as "more below"; the matching bottom
+     padding lets the real last row scroll fully clear of the fade, and
+     scroll-padding keeps keyboard selection out of it. */
   .palette-results {
+    --palette-fade: 28px;
     overflow-y: auto;
     flex: 1;
-    padding: 4px 0;
+    padding: 4px 0 var(--palette-fade);
+    scroll-padding-bottom: var(--palette-fade);
+    mask-image: linear-gradient(
+      to bottom,
+      #000 calc(100% - var(--palette-fade)),
+      transparent
+    );
   }
 
   .palette-controls {
+    --kit-control-font-size: 12px;
     --typeahead-min-width: 120px;
     --typeahead-max-width: 140px;
     display: flex;
@@ -512,6 +553,29 @@
     border-bottom: 1px solid var(--border-default);
   }
 
+  /* The project filter takes the date filter's field chrome (white
+     surface, default edge, primary ink, same height), so the two filters
+     read as the same kind of enabled control. kit-ui's grey raised
+     trigger made the project filter look unavailable beside it. */
+  .palette-controls {
+    --typeahead-control-height: 28px;
+    --typeahead-control-font-size: var(--font-size-sm);
+  }
+
+  .palette-controls :global(.kit-typeahead__trigger:not(:disabled)) {
+    background: var(--bg-surface);
+    border-radius: var(--radius-md);
+    color: var(--text-primary);
+  }
+
+  .palette-controls :global(.kit-typeahead__trigger:not(:disabled):not(:focus)) {
+    border-color: var(--border-default);
+  }
+
+  .palette-controls :global(.kit-typeahead__trigger:not(:disabled):hover) {
+    background: var(--bg-surface-hover);
+  }
+
   .palette-section-label {
     padding: 6px 14px 4px;
     font-size: 10px;
@@ -521,28 +585,50 @@
     letter-spacing: 0.05em;
   }
 
+  /* Metadata sits on the title baseline instead of floating between the
+     title and the snippet. */
   .palette-item {
     display: flex;
-    align-items: center;
-    gap: 8px;
+    align-items: flex-start;
+    gap: var(--space-4);
     width: 100%;
-    padding: 6px 14px;
+    padding: 7px 14px;
     text-align: left;
     font-size: 13px;
     color: var(--text-primary);
     transition: background 0.05s;
   }
 
-  .palette-item:hover,
-  .palette-item.selected {
+:global(:root.dark) .item-snippet :global(mark) {
+    background: color-mix(in srgb, var(--accent-amber) 35%, transparent);
+    color: var(--text-primary);
+  }
+
+  :global(:root.dark) .palette-item.selected {
+    --selected-result-tint: 16%;
+  }
+
+  .palette-item:hover {
     background: var(--bg-surface-hover);
   }
 
-  .item-dot {
-    width: 6px;
-    height: 6px;
-    border-radius: 50%;
+  .palette-item.selected {
+    background: color-mix(in srgb, var(--accent-blue) var(--selected-result-tint, 9%), var(--bg-surface));
+    box-shadow: inset 3px 0 0 var(--accent-blue);
+    /* Square the stripe's edge so the bar stays straight. */
+    border-start-start-radius: 0;
+    border-end-start-radius: 0;
+  }
+
+  /* The agent is named in its color, as in the sidebar, instead of an
+     unlabeled dot. A touch of the text color keeps it legible. */
+  .item-agent {
     flex-shrink: 0;
+    padding-top: 2px;
+    font-size: 12px;
+    font-weight: 500;
+    color: color-mix(in srgb, var(--agent-ink, var(--text-muted)) 82%, var(--text-primary));
+    white-space: nowrap;
   }
 
   .item-body {
@@ -558,6 +644,7 @@
     overflow: hidden;
     text-overflow: ellipsis;
     font-size: 13px;
+    font-weight: 500;
     color: var(--text-primary);
   }
 
@@ -565,15 +652,79 @@
     white-space: nowrap;
     overflow: hidden;
     text-overflow: ellipsis;
-    font-size: 11px;
+    font-size: 12.5px;
+    /* Muted so the result titles carry the list; matches stay highlighted. */
     color: var(--text-muted);
   }
 
   .item-meta {
-    font-size: 11px;
-    color: var(--text-muted);
+    font-size: 12px;
+    color: var(--text-secondary);
     white-space: nowrap;
     flex-shrink: 0;
+    min-width: 108px;
+    padding-top: 2px;
+    text-align: right;
+    font-variant-numeric: tabular-nums;
+  }
+
+  /* Laid out like .palette-item, so rows land about where results will.
+     "Searching..." stays for screen readers only; the rows carry the
+     state visually. */
+  .skeleton-row {
+    display: flex;
+    align-items: flex-start;
+    gap: var(--space-5);
+    padding: 9px 14px;
+  }
+
+  .skeleton-body {
+    flex: 1;
+    min-width: 0;
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-4);
+  }
+
+  .skeleton-bar {
+    display: block;
+    height: 10px;
+    border-radius: 4px;
+    background: var(--bg-inset);
+    animation: palette-skeleton-pulse 1.6s ease-in-out infinite alternate;
+  }
+
+  :global(:root.dark) .skeleton-bar {
+    background: color-mix(in srgb, var(--text-primary) 8%, var(--bg-surface));
+  }
+
+  .skeleton-snippet {
+    height: 8px;
+  }
+
+  .skeleton-meta {
+    flex-shrink: 0;
+    width: 108px;
+  }
+
+  .skeleton-id {
+    flex-shrink: 0;
+    width: 56px;
+  }
+
+  @keyframes palette-skeleton-pulse {
+    from {
+      opacity: 1;
+    }
+    to {
+      opacity: 0.45;
+    }
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    .skeleton-bar {
+      animation: none;
+    }
   }
 
   .palette-empty {
@@ -608,32 +759,53 @@
     color: var(--text-secondary);
   }
 
+  /* Matches the shared segmented-control look: an inset track with a
+     raised selected option. */
   .palette-sort {
     display: flex;
-    gap: 4px;
+    gap: 2px;
     margin-left: auto;
+    padding: 2px;
+    border-radius: var(--radius-md);
+    background: var(--bg-inset);
   }
 
   .sort-btn {
-    padding: 2px 8px;
-    font-size: 11px;
-    border: 1px solid var(--border-default);
+    padding: 3px 10px;
+    font-size: 12px;
+    border: none;
     border-radius: var(--radius-sm);
     background: none;
     color: var(--text-muted);
     cursor: pointer;
     font-family: var(--font-sans);
+    font-weight: 500;
+  }
+
+  .sort-btn:hover:not(.active) {
+    color: var(--text-secondary);
   }
 
   .sort-btn.active {
-    background: var(--bg-surface-hover);
+    background: var(--selected-strong-bg);
+    box-shadow: var(--selected-strong-edge);
     color: var(--text-primary);
-    border-color: var(--accent-purple);
+    font-weight: var(--selected-strong-weight);
+  }
+
+  .item-snippet :global(mark) {
+    padding: 0 1px;
+    border-radius: 2px;
+    background: color-mix(in srgb, var(--accent-amber) 26%, transparent);
+    color: var(--text-primary);
   }
 
   .item-id {
+    margin-top: 1px;
+    width: 72px;
+    text-align: right;
     font-family: var(--font-mono);
-    font-size: 10px;
+    font-size: 12px;
     color: var(--text-muted);
     white-space: nowrap;
     flex-shrink: 0;
@@ -645,5 +817,47 @@
   .item-id:hover {
     background: var(--bg-inset);
     color: var(--text-primary);
+  }
+
+  /* Phones: the agent, metadata, and ID would leave the title and snippet
+     no room, so each result wraps. The title and snippet take the first
+     line; the agent and metadata shorten beside the ID on the second. */
+  .palette-results {
+    container-type: inline-size;
+  }
+
+  @container (max-width: 520px) {
+    .skeleton-meta {
+      width: 64px;
+    }
+
+    .skeleton-id {
+      display: none;
+    }
+
+    .palette-item {
+      flex-wrap: wrap;
+      row-gap: 2px;
+    }
+
+    .item-body {
+      flex: 1 0 100%;
+    }
+
+    .item-agent {
+      flex: 0 1 auto;
+      min-width: 0;
+      max-width: 40%;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+
+    .item-meta {
+      flex: 1 1 auto;
+      min-width: 0;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      text-align: left;
+    }
   }
 </style>

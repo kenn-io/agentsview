@@ -304,7 +304,7 @@ func parseFxSession(ctx context.Context, filePath, machine string) (*ParsedSessi
 	if err := reader.Err(); err != nil {
 		return nil, nil, fmt.Errorf("read fx events: %w", err)
 	}
-	if reader.skippedOversized {
+	if reader.SkippedLines() > 0 {
 		return nil, nil, errors.New("fx event exceeds maximum line size")
 	}
 	if err := ctx.Err(); err != nil {

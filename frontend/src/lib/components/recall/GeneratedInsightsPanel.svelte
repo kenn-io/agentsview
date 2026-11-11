@@ -1,10 +1,12 @@
 <script lang="ts">
+  import { formatCount } from "../../utils/format.js";
   import { errorTelemetry } from "../../utils/error-telemetry.js";
   import { onDestroy, onMount } from "svelte";
   import {
     Button,
     Card,
     CopyButton,
+    EmptyState,
     IconButton,
     Typeahead,
   } from "@kenn-io/kit-ui";
@@ -15,7 +17,7 @@
     AutomatedScope,
     CannedInsightKind,
   } from "../../api/types.js";
-  import { getLocale, m } from "../../i18n/index.js";
+  import { m } from "../../i18n/index.js";
   import { router, getBasePath } from "../../stores/router.svelte.js";
   import { insights } from "../../stores/insights.svelte.js";
   import { sessions } from "../../stores/sessions.svelte.js";
@@ -26,6 +28,7 @@
   import { loadAssetImages, renderMarkdown } from "../../utils/markdown.js";
   import ProjectTypeahead from "../layout/ProjectTypeahead.svelte";
   import RangePicker from "../shared/RangePicker.svelte";
+  import { InfoIcon, SparklesIcon } from "../../icons.js";
   import ToolEffectivenessReport from "./ToolEffectivenessReport.svelte";
   import {
     resolveRange,
@@ -54,6 +57,14 @@
   const generationUnavailable = $derived(
     sync.serverVersion === null || !insightGenerationAvailable,
   );
+  // Shown beside the disabled Generate button once the backend has said
+  // why; nothing while its version is still loading.
+  const generationReason = $derived.by((): string | null => {
+    if (sync.serverVersion === null || insightGenerationAvailable) return null;
+    return sync.serverVersion.read_only === true
+      ? m.recall_generated_read_only_reason()
+      : m.insights_page_generate_disabled();
+  });
 
   const generationAgentOptions = AGENT_NAMES.map((name) => ({
     name,
@@ -70,7 +81,7 @@
       .sort((a, b) => b.session_count - a.session_count)
       .map((agent) => ({
         name: agent.name,
-        label: `${agentLabel(agent.name)} (${agent.session_count})`,
+        label: `${agentLabel(agent.name)} (${formatCount(agent.session_count)})`,
         displayLabel: agentLabel(agent.name),
         count: agent.session_count,
       })),
@@ -284,95 +295,117 @@
   </header>
 
   <Card level="default" padding="none" class="scope-card">
-    <div class="scope-grid">
-      <div class="scope-field date-field">
-        <span>{m.recall_generated_date_range()}</span>
-        <RangePicker
-          selection={rangeSelection}
-          onSelect={applyRange}
-          {earliestSession}
-          block
+    <div class="scope-form">
+      <fieldset class="scope-group">
+        <legend>{m.recall_generated_group_sessions()}</legend>
+        <div class="scope-grid sessions-grid">
+          <div class="scope-field">
+            <span>{m.recall_generated_date_range()}</span>
+            <RangePicker
+              selection={rangeSelection}
+              onSelect={applyRange}
+              {earliestSession}
+              block
+            />
+          </div>
+          <div class="scope-field">
+            <span>{m.recall_generated_project()}</span>
+            <ProjectTypeahead
+              projects={sessions.projects}
+              value={insights.project}
+              onselect={(value) => insights.setProject(value)}
+            />
+          </div>
+          <div class="scope-field">
+            <span>{m.recall_generated_session_agent()}</span>
+            <Typeahead
+              options={sessionAgentOptions}
+              value={insights.sessionAgent}
+              fallbackLabel={insights.sessionAgent
+                ? agentLabel(insights.sessionAgent)
+                : m.insights_page_all_agents()}
+              placeholder={m.insights_page_filter_agents()}
+              title={m.recall_generated_select_session_agent()}
+              emptyLabel={m.insights_page_no_matching_agents()}
+              onselect={(value) => insights.setSessionAgent(value)}
+            />
+          </div>
+          <div class="scope-field">
+            <span>{m.insights_page_session_scope()}</span>
+            <Typeahead
+              options={scopeOptions}
+              value={insights.automatedScope}
+              fallbackLabel={m.insights_page_scope_no_automated()}
+              placeholder={m.insights_page_filter_scopes()}
+              title={m.insights_page_filter_by_scope()}
+              emptyLabel={m.insights_page_no_matching_scopes()}
+              onselect={(value) =>
+                insights.setAutomatedScope(value as AutomatedScope)}
+            />
+          </div>
+        </div>
+      </fieldset>
+
+      <fieldset class="scope-group">
+        <legend>{m.recall_generated_group_report()}</legend>
+        <div class="scope-grid report-grid">
+          <div class="scope-field">
+            <span>{m.insights_page_template_label()}</span>
+            <Typeahead
+              options={templateOptions}
+              value={insights.cannedKind}
+              fallbackLabel={cannedKindLabel(insights.cannedKind)}
+              placeholder={m.insights_page_filter_templates()}
+              title={m.insights_page_select_template()}
+              emptyLabel={m.insights_page_no_matching_templates()}
+              onselect={(value) =>
+                insights.setCannedKind(value as CannedInsightKind)}
+            />
+          </div>
+          <div class="scope-field">
+            <span>{m.insights_page_generator_label()}</span>
+            <Typeahead
+              options={generationAgentOptions}
+              value={insights.agent}
+              fallbackLabel={agentLabel(insights.agent)}
+              placeholder={m.insights_page_filter_generators()}
+              title={m.insights_page_select_generator()}
+              emptyLabel={m.insights_page_no_matching_generators()}
+              onselect={(value) => insights.setAgent(value as AgentName)}
+            />
+          </div>
+          <label class="scope-field focus-field">
+            <span>{m.insights_page_optional_focus()}</span>
+            <textarea
+              value={insights.promptText}
+              maxlength="1200"
+              rows="2"
+              placeholder={m.insights_page_focus_placeholder()}
+              oninput={handlePromptChange}
+            ></textarea>
+          </label>
+        </div>
+      </fieldset>
+
+      <!-- The action row: why Generate is unavailable, beside it. -->
+      <div class="scope-actions">
+        {#if generationReason}
+          <p class="generate-reason" id="generate-reason">
+            <InfoIcon size="14" strokeWidth="2" aria-hidden="true" />
+            <span>{generationReason}</span>
+          </p>
+        {/if}
+        <Button
+          tone="info"
+          surface="solid"
+          class="generate-action"
+          label={m.insights_page_generate()}
+          disabled={generationUnavailable}
+          title={generationReason ?? m.insights_page_generate_title()}
+          ariaDescribedby={generationReason ? "generate-reason" : undefined}
+          onclick={handleGenerate}
         />
       </div>
-      <div class="scope-field">
-        <span>{m.recall_generated_project()}</span>
-        <ProjectTypeahead
-          projects={sessions.projects}
-          value={insights.project}
-          onselect={(value) => insights.setProject(value)}
-        />
-      </div>
-      <div class="scope-field">
-        <span>{m.recall_generated_session_agent()}</span>
-        <Typeahead
-          options={sessionAgentOptions}
-          value={insights.sessionAgent}
-          fallbackLabel={insights.sessionAgent
-            ? agentLabel(insights.sessionAgent)
-            : m.insights_page_all_agents()}
-          placeholder={m.insights_page_filter_agents()}
-          title={m.recall_generated_select_session_agent()}
-          emptyLabel={m.insights_page_no_matching_agents()}
-          onselect={(value) => insights.setSessionAgent(value)}
-        />
-      </div>
-      <div class="scope-field">
-        <span>{m.insights_page_session_scope()}</span>
-        <Typeahead
-          options={scopeOptions}
-          value={insights.automatedScope}
-          fallbackLabel={m.insights_page_scope_no_automated()}
-          placeholder={m.insights_page_filter_scopes()}
-          title={m.insights_page_filter_by_scope()}
-          emptyLabel={m.insights_page_no_matching_scopes()}
-          onselect={(value) =>
-            insights.setAutomatedScope(value as AutomatedScope)}
-        />
-      </div>
-      <div class="scope-field">
-        <span>{m.insights_page_template_label()}</span>
-        <Typeahead
-          options={templateOptions}
-          value={insights.cannedKind}
-          fallbackLabel={cannedKindLabel(insights.cannedKind)}
-          placeholder={m.insights_page_filter_templates()}
-          title={m.insights_page_select_template()}
-          emptyLabel={m.insights_page_no_matching_templates()}
-          onselect={(value) =>
-            insights.setCannedKind(value as CannedInsightKind)}
-        />
-      </div>
-      <div class="scope-field">
-        <span>{m.insights_page_generator_label()}</span>
-        <Typeahead
-          options={generationAgentOptions}
-          value={insights.agent}
-          fallbackLabel={agentLabel(insights.agent)}
-          placeholder={m.insights_page_filter_generators()}
-          title={m.insights_page_select_generator()}
-          emptyLabel={m.insights_page_no_matching_generators()}
-          onselect={(value) => insights.setAgent(value as AgentName)}
-        />
-      </div>
-      <label class="scope-field focus-field">
-        <span>{m.insights_page_optional_focus()}</span>
-        <textarea
-          value={insights.promptText}
-          maxlength="1200"
-          rows="2"
-          placeholder={m.insights_page_focus_placeholder()}
-          oninput={handlePromptChange}
-        ></textarea>
-      </label>
-      <Button
-        class="generate-action"
-        label={m.insights_page_generate()}
-        disabled={generationUnavailable}
-        title={sync.serverVersion !== null && !insightGenerationAvailable
-          ? m.insights_page_generate_disabled()
-          : m.insights_page_generate_title()}
-        onclick={handleGenerate}
-      />
     </div>
   </Card>
 
@@ -381,10 +414,15 @@
       {m.insights_page_loading_archive()}
     </Card>
   {:else if insights.items.length === 0 && insights.tasks.length === 0}
-    <Card level="default" class="archive-state">
-      <strong>{m.insights_page_no_generated_saved()}</strong>
-      <span>{m.insights_page_no_generated_hint()}</span>
-    </Card>
+    <EmptyState
+      align="top"
+      title={m.insights_page_no_generated_saved()}
+      description={m.insights_page_no_generated_hint()}
+    >
+      {#snippet icon()}
+        <SparklesIcon size="24" strokeWidth="1.75" />
+      {/snippet}
+    </EmptyState>
   {:else}
     <div class="generated-layout">
       <div class="generated-list" aria-label={m.recall_generated_archive_label()}>
@@ -455,7 +493,7 @@
                   <span class="generated-meta-chip">
                     {m.tool_effectiveness_calls_judged({
                       count: selectedToolReport.call_count,
-                      countLabel: selectedToolReport.call_count.toLocaleString(getLocale()),
+                      countLabel: formatCount(selectedToolReport.call_count),
                     })}
                   </span>
                 {/if}
@@ -535,56 +573,168 @@
     display: flex;
     flex-direction: column;
     gap: 1rem;
-    padding: 1rem 1.5rem 1.5rem;
+    padding: 0.5rem 1.5rem 1.5rem;
   }
 
+  /* Section heading under the Recall page title. */
   .generated-heading h2 {
     margin: 0;
     color: var(--text-primary);
-    font-size: 1rem;
+    font-size: 14px;
+    font-weight: 600;
   }
 
   .generated-heading p {
     margin: 0.25rem 0 0;
     color: var(--text-secondary);
-    font-size: 0.82rem;
+    font-size: 13px;
+  }
+
+  /* The scope card: two labelled groups (which sessions, what report) and
+     an action row. Every field uses the same enabled field chrome as the
+     date range trigger: surface fill, default edge, primary ink. */
+  .scope-form {
+    --typeahead-max-width: none;
+    --typeahead-control-height: 30px;
+    --typeahead-control-font-size: var(--font-size-sm);
+    display: flex;
+    flex-direction: column;
+  }
+
+  .scope-group {
+    min-width: 0;
+    margin: 0;
+    padding: 14px 16px 16px;
+    border: 0;
+  }
+
+  .scope-group + .scope-group {
+    border-top: 1px solid var(--border-muted);
+  }
+
+  .scope-group legend {
+    float: left;
+    width: 100%;
+    margin: 0 0 10px;
+    padding: 0;
+    color: var(--text-muted);
+    font-size: 10.5px;
+    font-weight: 600;
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
   }
 
   .scope-grid {
+    clear: both;
     display: grid;
-    grid-template-columns: repeat(3, minmax(0, 1fr));
-    gap: 0.85rem;
-    padding: 1rem;
+    gap: 12px 16px;
   }
 
+  .sessions-grid {
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+  }
+
+  .report-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  /* Every control fills its column, so the columns share edges. */
+  .scope-field > :global(*:not(span)) {
+    width: 100%;
+    max-width: none;
+  }
+
+  /* Labels are medium weight; the values inside the controls stay
+     regular, so a label never reads as loud as its value. */
   .scope-field {
     display: flex;
     min-width: 0;
     flex-direction: column;
-    gap: 0.35rem;
+    gap: 6px;
     color: var(--text-secondary);
-    font-size: 0.72rem;
-    font-weight: 600;
+    font-size: 12px;
+    font-weight: 400;
+  }
+
+  .scope-field > span {
+    font-weight: 500;
+  }
+
+  .scope-form :global(.kit-typeahead__trigger:not(:disabled)),
+  .scope-form :global(.kit-date-range-picker__trigger),
+  .focus-field textarea {
+    background: var(--bg-surface);
+    border: 1px solid var(--border-default);
+    border-radius: var(--radius-md);
+    color: var(--text-primary);
+    font-size: var(--font-size-sm);
+  }
+
+  .scope-form :global(.kit-date-range-picker__trigger) {
+    height: 30px;
+  }
+
+  .scope-form :global(.kit-typeahead__trigger:not(:disabled):hover),
+  .scope-form :global(.kit-date-range-picker__trigger:hover) {
+    background: var(--bg-surface-hover);
+  }
+
+  .scope-form :global(.kit-typeahead__trigger:focus),
+  .scope-form :global(.kit-date-range-picker__trigger.open),
+  .focus-field textarea:focus {
+    border-color: var(--accent-blue);
   }
 
   .focus-field {
-    grid-column: span 2;
+    grid-column: 1 / -1;
   }
 
   .focus-field textarea {
     min-height: 3.75rem;
     resize: vertical;
-    border: 1px solid var(--border-primary);
-    border-radius: 6px;
-    background: var(--bg-secondary);
-    color: var(--text-primary);
-    font: inherit;
-    font-weight: 400;
-    padding: 0.55rem 0.65rem;
+    font-family: inherit;
+    line-height: 1.45;
+    padding: 7px 10px;
+    outline: none;
   }
 
-  :global(.scope-grid .generate-action) {
-    align-self: end;
+  .focus-field textarea::placeholder {
+    color: var(--text-muted);
+  }
+
+  /* Generate sits at the end of the card as the primary action. When the
+     backend cannot generate, the reason sits beside the disabled button
+     instead of only in a tooltip. */
+  .scope-actions {
+    display: flex;
+    align-items: center;
+    justify-content: flex-end;
+    gap: 16px;
+    padding: 12px 16px;
+    border-top: 1px solid var(--border-muted);
+    background: color-mix(in srgb, var(--bg-inset) 55%, var(--bg-surface));
+    border-radius: 0 0 var(--radius-md) var(--radius-md);
+  }
+
+  .generate-reason {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    min-width: 0;
+    margin: 0 auto 0 0;
+    color: var(--text-secondary);
+    font-size: 12px;
+    line-height: 1.4;
+  }
+
+  .generate-reason :global(svg) {
+    flex-shrink: 0;
+    color: var(--text-muted);
+  }
+
+  .scope-actions :global(.generate-action) {
+    flex-shrink: 0;
+    min-width: 112px;
   }
 
   :global(.archive-state) {
@@ -613,9 +763,9 @@
     flex-direction: column;
     gap: 0.2rem;
     width: 100%;
-    border: 1px solid var(--border-primary);
+    border: 1px solid var(--border-default);
     border-radius: 6px;
-    background: var(--bg-secondary);
+    background: var(--bg-inset);
     color: var(--text-primary);
     padding: 0.7rem 0.8rem;
     text-align: left;
@@ -624,7 +774,7 @@
   .generated-list button:hover,
   .generated-list button.selected {
     border-color: var(--accent-blue);
-    background: color-mix(in srgb, var(--accent-blue) 8%, var(--bg-secondary));
+    background: color-mix(in srgb, var(--accent-blue) 8%, var(--bg-inset));
   }
 
   .generated-list button span,
@@ -693,7 +843,7 @@
   }
 
   @media (max-width: 900px) {
-    .scope-grid {
+    .sessions-grid {
       grid-template-columns: repeat(2, minmax(0, 1fr));
     }
 
@@ -707,12 +857,13 @@
       padding: 0.85rem 1rem 1rem;
     }
 
-    .scope-grid {
+    .sessions-grid,
+    .report-grid {
       grid-template-columns: 1fr;
     }
 
-    .focus-field {
-      grid-column: auto;
+    .scope-actions {
+      flex-wrap: wrap;
     }
 
     .generated-detail-head {

@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { SegmentedControl, TextInput } from "@kenn-io/kit-ui";
+  import { Button, SegmentedControl, TextInput } from "@kenn-io/kit-ui";
   import { m } from "../../i18n/index.js";
   import { settings } from "../../stores/settings.svelte.js";
   import {
@@ -55,7 +55,7 @@
   </div>
 
   {#if localMode === "custom"}
-    <div class="setting-row column">
+    <div class="setting-row">
       <label class="setting-label" for="terminal-bin">{m.settings_terminal_terminal_binary()}</label>
       <TextInput
         id="terminal-bin"
@@ -68,7 +68,7 @@
       />
     </div>
 
-    <div class="setting-row column">
+    <div class="setting-row">
       <label class="setting-label" for="terminal-args">
         {m.settings_terminal_arguments()} <span class="hint">{m.settings_terminal_args_hint()}</span>
       </label>
@@ -85,14 +85,15 @@
   {/if}
 
   {#if dirty}
-    <div class="save-row">
-      <button
-        class="save-btn"
+    <div class="save-row control-offset">
+      <Button
+        tone="info"
+        surface="solid"
         disabled={settings.saving}
         onclick={saveTerminal}
       >
         {settings.saving ? m.settings_terminal_saving() : m.settings_terminal_save()}
-      </button>
+      </Button>
     </div>
   {/if}
 </div>
@@ -104,23 +105,12 @@
     gap: var(--space-5);
   }
 
-  .setting-row {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    gap: 12px;
-  }
-
-  .setting-row.column {
-    flex-direction: column;
-    align-items: flex-start;
-  }
-
+  /* Rows use the shared settings grid from SettingsPage: label column,
+     then the control. */
   .setting-label {
     font-size: 12px;
     font-weight: 500;
     color: var(--text-secondary);
-    white-space: nowrap;
   }
 
   .hint {
@@ -134,28 +124,15 @@
 
   .save-row {
     display: flex;
-    justify-content: flex-end;
   }
 
-  .save-btn {
-    height: 28px;
-    padding: 0 16px;
-    border-radius: var(--radius-sm);
-    font-size: 12px;
-    font-weight: 500;
-    color: var(--accent-blue-foreground);
-    background: var(--accent-blue);
-    border: none;
-    cursor: pointer;
-    transition: opacity 0.12s;
+  .control-offset {
+    padding-left: calc(var(--setting-label-width, 222px) + 12px);
   }
 
-  .save-btn:hover:not(:disabled) {
-    opacity: 0.9;
-  }
-
-  .save-btn:disabled {
-    opacity: var(--opacity-disabled);
-    cursor: default;
+  @media (max-width: 640px) {
+    .control-offset {
+      padding-left: 0;
+    }
   }
 </style>

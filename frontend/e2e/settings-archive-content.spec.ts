@@ -28,11 +28,13 @@ async function openSettledSettings(page: Page) {
   await expect(page.locator(".settings-loading")).toHaveCount(0);
 }
 
+// The ingest policy lives in the Tool-result images section, above the
+// cleanup of images already stored.
 async function openArchiveContent(page: Page) {
   await openSettledSettings(page);
   const nav = page.getByRole("navigation", { name: "Settings" });
-  await nav.locator("button", { hasText: "Archive content" }).click();
-  await expect(page.getByRole("heading", { name: "Archive content" })).toBeVisible();
+  await nav.locator("button", { hasText: "Tool-result images" }).click();
+  await expect(page.getByRole("heading", { name: "Tool-result images" })).toBeVisible();
 }
 
 // The chromium and webkit projects share one daemon and run this file
@@ -129,7 +131,7 @@ test.describe("Settings archive content", () => {
 
       await openSettledSettings(page);
       const nav = page.getByRole("navigation", { name: "Settings" });
-      await nav.locator("button", { hasText: "Archive content" }).click();
+      await nav.locator("button", { hasText: "Tool-result images" }).click();
 
       await expect(page.getByRole("radio", { name: "Offload" })).toHaveAttribute(
         "aria-checked",

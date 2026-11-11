@@ -31,6 +31,7 @@ const (
 	codexTypeEventMsg         = "event_msg"
 	codexTypeHistoryMutation  = "history_mutation"
 	codexTypeTokenUsageRecord = "token_usage_record"
+	codexTypeCompacted        = "compacted"
 	codexOriginatorExec       = "codex_exec"
 )
 
@@ -436,8 +437,37 @@ func (b *codexSessionBuilder) processLine(ctx context.Context,
 			return false, nil
 		}
 		b.handleTokenUsageRecord(payload)
+	case codexTypeCompacted:
+		if b.suppresses(codexTypeCompacted, payload) {
+			return false, nil
+		}
+		b.handleCompacted(payload, ts)
 	}
 	return false, nil
+}
+
+// handleCompacted records a compaction as a system boundary carrying the
+// summary Codex keeps in place of the earlier history. Remote compaction
+// writes no summary; its boundary stays empty, because the divider already
+// labels every compaction. The record's
+// replacement_history repeats messages already in the transcript and is not
+// replayed. The boundary is never a usage target: the compaction call's usage
+// belongs to the response that produced it.
+func (b *codexSessionBuilder) handleCompacted(payload gjson.Result, ts time.Time) {
+	// A copy keeps the stored row from holding the whole line, which carries
+	// replacement_history, in memory.
+	content := strings.Clone(strings.TrimSpace(payload.Get("message").Str))
+	b.sink.AppendMessage(ParsedMessage{
+		CodexOrigin:       CodexMessageOrigin{Line: b.sourceLine, TurnID: b.sourceTurnID, InTurn: b.sourceInTurn, TurnContext: len(b.sourceTurnContexts)},
+		Role:              RoleAssistant,
+		Content:           content,
+		Timestamp:         ts,
+		IsSystem:          true,
+		ContentLength:     len(content),
+		SourceType:        "system",
+		SourceSubtype:     "compact_boundary",
+		IsCompactBoundary: true,
+	})
 }
 
 // codexAcceptSessionMetaID keeps the first nonempty ID as the file's owner.
@@ -522,6 +552,9 @@ func (b *codexSessionBuilder) handleResponseItem(ctx context.Context,
 		return
 	case "image_generation_call":
 		b.handleImageGenerationCall(ctx, payload, ts)
+		return
+	case "reasoning":
+		b.handleReasoning(payload, ts)
 		return
 	}
 
@@ -609,6 +642,48 @@ func (b *codexSessionBuilder) handleAgentMessage(
 	})
 }
 
+// handleReasoning keeps a reasoning item's readable text as a thinking row.
+// Codex writes the summary under summary[].text and, for models that expose
+// it, raw reasoning under content[].text; the summary wins, as in Codex Cloud.
+// Encrypted reasoning with no readable text adds no row.
+func (b *codexSessionBuilder) handleReasoning(payload gjson.Result, ts time.Time) {
+	thinking := codexReasoningText(payload.Get("summary"))
+	if thinking == "" {
+		thinking = codexReasoningText(payload.Get("content"))
+	}
+	if thinking == "" {
+		return
+	}
+	content := "[Thinking]\n" + thinking + "\n[/Thinking]"
+	b.sink.AppendMessage(ParsedMessage{
+		CodexOrigin:     CodexMessageOrigin{Line: b.sourceLine, TurnID: b.sourceTurnID, InTurn: b.sourceInTurn, TurnContext: len(b.sourceTurnContexts)},
+		Role:            RoleAssistant,
+		Content:         content,
+		DialogueText:    new(""),
+		ThinkingText:    thinking,
+		HasThinking:     true,
+		Timestamp:       ts,
+		ContentLength:   len(content),
+		Model:           b.model,
+		ReasoningEffort: b.reasoningEffort,
+		ProviderID:      b.serviceTierProviderID,
+	})
+}
+
+// codexReasoningText joins the nonblank text parts of a reasoning summary or
+// content array with blank lines, the thinking-block boundary used elsewhere.
+func codexReasoningText(parts gjson.Result) string {
+	var texts []string
+	for _, part := range parts.Array() {
+		if text := strings.TrimSpace(part.Get("text").Str); text != "" {
+			texts = append(texts, text)
+		}
+	}
+	// Join returns a lone part as is; the copy keeps the row from holding
+	// the whole line, encrypted reasoning included, in memory.
+	return strings.Clone(strings.Join(texts, "\n\n"))
+}
+
 func (b *codexSessionBuilder) applyThreadSettings(payload gjson.Result) {
 	b.serviceTierProviderID = ""
 	if payload.Get("thread_settings.model_provider_id").Str == "openai" && payload.Get("thread_settings.service_tier").Str == "priority" {
@@ -671,7 +746,7 @@ func (b *codexSessionBuilder) handleTokenUsageRecord(
 	}
 	for _, counter := range []string{"input_tokens", "cached_input_tokens", "output_tokens", "cache_write_input_tokens"} {
 		if usage.Get(counter).Type == gjson.Number {
-			b.applyTokenUsage(usage.Raw, payload.Get("response_id").Str)
+			b.applyTokenUsage(usage.Raw, usage.Raw, payload.Get("response_id").Str)
 			return
 		}
 	}
@@ -684,15 +759,21 @@ func (b *codexSessionBuilder) markFirstUserReplayPossible() {
 func (b *codexSessionBuilder) handleTokenCountEvent(
 	payload gjson.Result,
 ) {
-	raw := payload.Get("info.last_token_usage").Raw
+	info := payload.Get("info")
+	raw := info.Get("last_token_usage").Raw
 	if raw == "" {
 		return
 	}
-	b.applyTokenUsage(raw, "")
+	// A repeated token_count carries the same cumulative total_token_usage;
+	// a new call with equal per-call counts raises it. Keying on the whole
+	// info object therefore drops only true repeats.
+	b.applyTokenUsage(raw, info.Raw, "")
 }
 
-func (b *codexSessionBuilder) applyTokenUsage(raw, responseID string) {
-	if b.observeTokenUsage(raw, responseID) {
+// applyTokenUsage attaches one call's usage, raw, unless dedupKey and
+// responseID repeat the previous observation.
+func (b *codexSessionBuilder) applyTokenUsage(raw, dedupKey, responseID string) {
+	if b.observeTokenUsage(dedupKey, responseID) {
 		return
 	}
 
@@ -2215,7 +2296,7 @@ func (p *codexProvider) parseCodexSessionSnapshotStreaming(
 		FirstMessage:       b.firstMessage,
 		SessionName:        sessionName,
 		SessionNamePresent: sessionNamePresent,
-		MalformedLines:     malformedLines,
+		MalformedLines:     malformedLines + lr.SkippedLines(),
 		StartedAt:          b.startedAt,
 		EndedAt:            b.endedAt,
 		MessageCount:       len(msgs),

@@ -54,16 +54,21 @@
   "nav_trash": "垃圾桶",
   "nav_search_sessions": "搜尋對話...",
   "nav_search_sessions_shortcut": "搜尋對話 ({shortcut})",
-  "header_transcript_normal_title": "普通 transcript - 顯示所有訊息",
-  "header_transcript_normal_label": "普通 transcript 模式",
-  "header_transcript_normal": "普通",
-  "header_transcript_focused_title": "聚焦 transcript - 僅顯示使用者提示和最終回答",
-  "header_transcript_focused_label": "聚焦 transcript 模式",
-  "header_transcript_focused": "聚焦",
-  "header_transcript_filter_title": "篩選 block 類型",
-  "header_transcript_filter_label": "篩選 block 類型",
   "header_transcript_visibility": "Block 可見性",
   "header_transcript_show_all": "全部顯示",
+  "header_view_trigger": "檢視：{layout}",
+  "header_view_trigger_focused": "檢視：{layout} · 提示和回答",
+  "header_view_trigger_label": "對話檢視：{layout}",
+  "header_view_trigger_label_focused": "對話檢視：{layout}，提示和回答",
+  "header_view_menu_label": "對話檢視",
+  "header_view_layout_heading": "版面",
+  "header_view_layout_default_description": "展開的訊息",
+  "header_view_layout_compact_description": "內容相同，間距更緊湊",
+  "header_view_layout_stream_description": "不顯示說話者標籤的聊天",
+  "header_view_layout_skim_description": "每則訊息和工具呼叫各佔一行",
+  "header_view_mode_heading": "內容",
+  "header_view_mode_normal": "所有訊息和工具呼叫",
+  "header_view_mode_focused": "只顯示你的提示和最終回答",
   "header_transcript_blocks_user": "使用者訊息",
   "header_transcript_blocks_assistant": "助手文本",
   "header_transcript_blocks_thinking": "思考區塊",
@@ -73,20 +78,12 @@
   "header_transcript_blocks_hook": "Hook",
   "header_actions_follow_latest": "跟隨最新訊息",
   "header_actions_toggle_sort": "切換排序 (o)",
-  "header_actions_cycle_layout": "切換佈局：{layout} (l)",
-  "header_actions_cycle_layout_label": "切換訊息佈局",
-  "header_actions_export_options": "匯出對話選項",
-  "header_actions_export_session": "匯出對話",
   "header_actions_download_html": "下載 HTML 匯出",
-  "header_actions_copied_markdown_link": "已複製 Markdown 連結",
   "header_actions_copy_markdown_link": "複製 Markdown 匯出連結",
   "header_actions_copy_source_path": "複製來源檔案路徑",
-  "header_actions_publish_title": "發布到 Gist (p)",
-  "header_actions_publish_label": "發布到 Gist",
   "header_actions_publish_public": "發布公開 Gist",
   "header_actions_publish_secret": "發布私密 Gist",
   "header_actions_more_actions": "更多操作",
-  "header_actions_layout": "佈局：{layout}",
   "header_actions_refresh_data": "重整資料",
   "header_actions_refresh_data_shortcut": "重整資料 (r)",
   "header_actions_sync_sessions": "同步對話",
@@ -237,19 +234,19 @@
   "session_breadcrumb_summary_mode_tooltip": "此 transcript 缺少工具結果、思考內容和程式碼差異。需要 agy-reader sidecar 才能獲得完整保真度 — 請安裝它，若已安裝，請等待其同步完成。點擊了解如何操作。",
   "session_breadcrumb_malformed_lines": [
     {
-      "declarations": ["input count", "local countPlural = count: plural"],
+      "declarations": ["input count", "input countLabel", "local countPlural = count: plural"],
       "selectors": ["countPlural"],
       "match": {
-        "countPlural=other": "{count} 行格式錯誤"
+        "countPlural=other": "{countLabel} 行格式錯誤"
       }
     }
   ],
   "session_breadcrumb_malformed_lines_tooltip": [
     {
-      "declarations": ["input count", "local countPlural = count: plural"],
+      "declarations": ["input count", "input countLabel", "local countPlural = count: plural"],
       "selectors": ["countPlural"],
       "match": {
-        "countPlural=other": "來源檔案中有 {count} 行無法解析"
+        "countPlural=other": "來源檔案中有 {countLabel} 行無法解析"
       }
     }
   ],
@@ -464,6 +461,13 @@
   "sidebar_row_star_session": "釘選對話",
   "sidebar_row_unstar_session": "取消釘選對話",
   "sidebar_row_rename": "重新命名",
+  "sidebar_row_user_message_count": [
+    {
+      "declarations": ["input count", "input countLabel", "local countPlural = count: plural"],
+      "selectors": ["countPlural"],
+      "match": { "countPlural=other": "{countLabel} 則使用者訊息" }
+    }
+  ],
   "sidebar_row_open_in_new_tab": "在新分頁開啟",
   "sidebar_row_delete": "刪除",
   "sidebar_row_change_project": "變更專案…",
@@ -765,9 +769,13 @@
       }
     }
   ],
-  "analytics_top_skills_agent_breakdown": "Agent 分解",
   "analytics_top_skills_agents": "Agents",
-  "analytics_top_skills_projects": "專案：{projects}",
+  "analytics_top_skills_col_skill": "Skill",
+  "analytics_top_skills_col_share": "占比",
+  "analytics_top_skills_col_calls": "調用",
+  "analytics_top_skills_col_sessions": "對話",
+  "analytics_top_skills_col_last_used": "最近使用",
+  "analytics_top_skills_projects_label": "專案",
   "analytics_top_skills_empty": "無 skill 使用資料",
   "analytics_skill_trend_title": "Skill 使用趨勢",
   "analytics_skill_trend_other": "其他",
@@ -856,12 +864,11 @@
   "settings_search_empty": "沒有相符的設定",
   "settings_search_clear": "清除搜尋",
   "settings_search_result": "顯示：{category}",
-  "settings_search_keywords_appearance": "主題 對比度 版面配置 文字 字體 區塊 theme contrast layout text font blocks 縮放 zoom 顏色 色盲 color",
+  "settings_search_keywords_appearance": "主題 對比度 版面配置 文字 字體 區塊 theme contrast layout text font blocks 縮放 zoom 顏色 色盲 color 寬度 width",
   "settings_search_keywords_language": "語言 地區設定 翻譯 language locale translation",
   "settings_search_keywords_date_ranges": "日期 範圍 關聯 頁面 date range linked pages",
   "settings_search_keywords_terminal": "終端機 繼續 啟動 執行檔 參數 剪貼簿 terminal resume launch binary arguments clipboard",
   "settings_search_keywords_agent_directories": "代理 目錄 路徑 掃描 對話 agent directories paths scan sessions",
-  "settings_search_keywords_worktree_mappings": "工作樹 對應 專案 路徑 版面配置 worktree mappings projects paths layouts",
   "settings_search_keywords_embeddings": "嵌入 語意 搜尋 向量 索引 世代 embeddings semantic search vectors index generations",
   "settings_search_keywords_github": "GitHub Gist 權杖 發佈 整合 token publish integration",
   "settings_search_keywords_remote_access": "遠端 伺服器 連線 驗證 權杖 網路 remote server connection auth token network",
@@ -1189,9 +1196,14 @@
   "recent_edits_count": "{count} 次編輯",
   "recent_edits_truncated": "顯示最新 {shown}（共 {total} 條）",
   "recent_edits_load_more": "載入更多",
-  "recent_edits_refresh": "重新整理",
+  "recent_edits_refresh": "重新載入清單",
   "recent_edits_search_placeholder": "按檔案路徑篩選",
   "recent_edits_clear_search": "清除檔案路徑搜尋",
+  "recent_edits_col_project": "專案",
+  "recent_edits_col_file": "檔案",
+  "recent_edits_col_edits": "編輯",
+  "recent_edits_col_last_edit": "最後編輯",
+  "recent_edits_resize_column": "調整「{column}」欄寬",
   "activity_insight_waiting_server": "正在等待伺服器版本",
   "activity_insight_generate_insight": "生成洞察",
   "activity_insight_generation_failed": "生成失敗",
@@ -1470,6 +1482,9 @@
   "recall_generated_export": "匯出",
   "recall_generated_publish": "發布",
   "recall_generated_publish_secret": "私密",
+  "recall_generated_group_sessions": "工作階段",
+  "recall_generated_group_report": "報告",
+  "recall_generated_read_only_reason": "此封存為唯讀，無法在此產生新報告。",
   "recall_page_subtitle": "瀏覽提煉項目和擷取涵蓋情況。",
   "recall_page_search_placeholder": "搜尋召回項目…",
   "recall_page_clear_search": "清除召回搜尋",
@@ -1689,6 +1704,10 @@
   "insights_page_calibration_no_affected": "無受影響對話",
   "insights_page_calibration_incomplete_rate": "{rate}% 未完成",
   "insights_page_calibration_incomplete_lift": "{lift}x 未完成",
+  "insights_page_column_signal": "訊號",
+  "insights_page_column_count": "次數",
+  "insights_page_column_sessions": "工作階段",
+  "insights_page_column_outcome": "結果",
   "insights_page_signal_examples": "信號示例",
   "insights_page_grade_badge": "評等 {grade}",
   "insights_page_unscored": "未評分",
@@ -1732,10 +1751,15 @@
   "insights_page_pct_affected": "{pct}% 受影響",
   "insights_pattern_recommendation_rationale": [
     {
-      "declarations": ["input affected", "input total", "local totalPlural = total: plural"],
+      "declarations": [
+        "input affectedLabel",
+        "input total",
+        "input totalLabel",
+        "local totalPlural = total: plural"
+      ],
       "selectors": ["totalPlural"],
       "match": {
-        "totalPlural=other": "{total} 個對話中有 {affected} 個觸發此確定性模式。"
+        "totalPlural=other": "{totalLabel} 個對話中有 {affectedLabel} 個觸發此確定性模式。"
       }
     }
   ],
@@ -1787,13 +1811,14 @@
     {
       "declarations": [
         "input count",
+        "input countLabel",
         "input completedRate",
         "input failureSignals",
         "local countPlural = count: plural"
       ],
       "selectors": ["countPlural"],
       "match": {
-        "countPlural=other": "{count} 個對話，{completedRate}% 已完成，平均 {failureSignals} 個失敗信號"
+        "countPlural=other": "{countLabel} 個對話，{completedRate}% 已完成，平均 {failureSignals} 個失敗信號"
       }
     }
   ],
@@ -1921,6 +1946,10 @@
   "resync_retry": "重試",
   "resync_error_read_only": "唯讀後端不支援完整重新同步。",
   "resync_error_in_progress": "同步已在進行中。",
+  "shortcuts_group_navigation": "導覽",
+  "shortcuts_group_messages": "訊息",
+  "shortcuts_group_sessions": "對話",
+  "shortcuts_group_actions": "操作",
   "shortcuts_open_command_palette": "開啟命令面板",
   "shortcuts_find_in_session": "在對話中尋找",
   "shortcuts_close_palette": "關閉面板 / 視窗 / 尋找",
@@ -1974,7 +2003,7 @@
   "settings_session_providers_save_failed": "無法更新工作階段提供者。先前的選擇仍然有效。",
   "settings_session_providers_homes_title": "備用主目錄",
   "settings_session_providers_homes_hint": "新增代理主目錄，例如自訂的 {envVar}。AgentsView 會自動推導其工作階段目錄。",
-  "settings_session_providers_homes_placeholder": "~/.{agent}-work",
+  "settings_session_providers_homes_placeholder": "例如 ~/.{agent}-work",
   "settings_session_providers_homes_add": "新增主目錄",
   "settings_session_providers_homes_input_aria": "新的 {provider} 主目錄",
   "settings_session_providers_homes_remove_aria": "移除 {provider} 主目錄 {home}",
@@ -1997,6 +2026,10 @@
   "appearance_chart_palette_matplotlib": "Matplotlib",
   "appearance_chart_palette_colorblind": "色盲友善",
   "appearance_message_layout": "訊息佈局",
+  "appearance_reading_width": "閱讀寬度",
+  "appearance_reading_width_default": "預設",
+  "appearance_reading_width_wider": "更寬",
+  "appearance_reading_width_full": "全寬",
   "appearance_block_visibility": "區塊可見性",
   "settings_github_token_saved": "GitHub token 已儲存。",
   "settings_github_save_failed": "儲存 token 失敗",
@@ -2076,8 +2109,6 @@
   "settings_terminal_args_hint": "（使用 \\{cmd\\} 作為佔位符）",
   "settings_terminal_saving": "正在儲存...",
   "settings_terminal_save": "儲存",
-  "settings_worktree_moved": "專案分類規則已移至資料。",
-  "settings_worktree_moved_link": "開啟資料 › 規則",
   "worktree_failed_load": "載入映射失敗",
   "worktree_failed_save": "儲存映射失敗",
   "worktree_failed_delete": "刪除映射失敗",
@@ -2105,6 +2136,8 @@
   "worktree_saving": "正在儲存...",
   "worktree_add_mapping": "新增映射",
   "worktree_save_mapping": "儲存映射",
+  "worktree_form_new_title": "新映射",
+  "worktree_form_edit_title": "編輯映射",
   "worktree_cancel": "取消",
   "worktree_applying": "正在套用...",
   "worktree_apply_mappings": "套用映射",
@@ -2159,8 +2192,8 @@
   "trends_title": "趨勢",
   "trends_date_range": "{from} 至 {to}",
   "trends_reset": "重置",
-  "trends_refreshing": "重整中",
-  "trends_refresh": "重新整理",
+  "trends_refreshing": "重新計算中",
+  "trends_refresh": "重新計算",
   "trends_terms": "詞項",
   "trends_one_per_line": "每行一個",
   "trends_group_by": "分組方式",
@@ -2249,9 +2282,6 @@
   "appearance_on": "開",
   "appearance_off": "關",
   "appearance_zoom": "縮放",
-  "settings_archive_content_title": "封存內容",
-  "settings_archive_content_description": "擷取時從工具結果保存的內容。",
-  "settings_search_keywords_archive_content": "封存 內容 圖片 影像 保留 工具結果 佔位符 儲存 archive content images retention tool results placeholders storage",
   "settings_tool_result_images": "工具結果圖片",
   "settings_tool_result_images_keep": "保留",
   "settings_tool_result_images_drop": "捨棄",
@@ -2260,7 +2290,7 @@
   "settings_tool_result_images_restart_notice": "重新啟動 AgentsView 常駐程式後，此變更才會套用到新擷取的對話。",
   "settings_tool_images_title": "工具結果圖像",
   "settings_tool_images_description": "儲存在工具結果中的內嵌圖像。",
-  "settings_search_keywords_tool_images": "圖像 工具結果 刪除 清理 有效載荷 位元組 儲存",
+  "settings_search_keywords_tool_images": "圖像 工具結果 刪除 清理 有效載荷 位元組 儲存 封存 內容 圖片 影像 保留 佔位符 archive content images retention tool results placeholders storage",
   "settings_image_cleanup_intro": "預覽仍包含內嵌圖像有效載荷的已儲存工具結果，然後用可讀的佔位符替換這些有效載荷。",
   "settings_image_cleanup_project_label": "專案包含",
   "settings_image_cleanup_project_placeholder": "所有專案",
@@ -3082,5 +3112,6 @@
   ],
   "empty_archive_title": "尚無對話",
   "empty_archive_desc": "AgentsView 會從這些資料夾讀取對話。代理寫入其中任一資料夾後，對話就會顯示在這裡。",
-  "empty_archive_choose_folders": "選擇資料夾"
+  "empty_archive_choose_folders": "選擇資料夾",
+  "usage_tooltip_no_usage": "無使用"
 }

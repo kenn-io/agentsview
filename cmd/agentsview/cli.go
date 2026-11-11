@@ -255,13 +255,7 @@ func newServeCommandWithDaemonDeps(deps daemonCommandDeps) *cobra.Command {
 		"Start serving before the initial sync",
 	)
 	_ = cmd.Flags().MarkHidden("skip-initial-sync")
-	cmd.Flags().BoolVar(
-		&pprofEnabled,
-		"pprof",
-		false,
-		"Serve net/http/pprof under /debug/pprof (developer use)",
-	)
-	_ = cmd.Flags().MarkHidden("pprof")
+	addPprofFlag(cmd, &pprofEnabled)
 	cmd.Flags().IntVar(
 		&restartPort,
 		"restart-port",
@@ -826,7 +820,20 @@ func newDuckDBStatusCommand() *cobra.Command {
 	}
 }
 
+// addPprofFlag registers the hidden --pprof flag shared by every command
+// that serves the web UI and API.
+func addPprofFlag(cmd *cobra.Command, enabled *bool) {
+	cmd.Flags().BoolVar(
+		enabled,
+		"pprof",
+		false,
+		"Serve net/http/pprof under /debug/pprof (developer use)",
+	)
+	_ = cmd.Flags().MarkHidden("pprof")
+}
+
 func newDuckDBServeCommand() *cobra.Command {
+	var pprofEnabled bool
 	cmd := &cobra.Command{
 		Use:          "serve",
 		Short:        "Serve from DuckDB (read-only)",
@@ -837,7 +844,7 @@ func newDuckDBServeCommand() *cobra.Command {
 			if err != nil {
 				fatal("%v", err)
 			}
-			runDuckDBServe(cmd.Context(), appCfg, basePath)
+			runDuckDBServe(cmd.Context(), appCfg, basePath, pprofEnabled)
 			return nil
 		},
 	}
@@ -846,6 +853,7 @@ func newDuckDBServeCommand() *cobra.Command {
 		"",
 		"URL prefix for reverse-proxy subpath (e.g. /agentsview)",
 	)
+	addPprofFlag(cmd, &pprofEnabled)
 	config.RegisterServePFlags(cmd.Flags())
 	return cmd
 }

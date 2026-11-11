@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { formatCount } from "../../utils/format.js";
   import { errorTelemetry } from "../../utils/error-telemetry.js";
   import { formatDateTime, m } from "../../i18n/index.js";
   import { onMount, untrack } from "svelte";
@@ -18,6 +19,7 @@
     type PanelDateState,
   } from "../../stores/yokedDates.svelte.js";
   import ProjectTypeahead from "../layout/ProjectTypeahead.svelte";
+  import FilterChip from "../shared/FilterChip.svelte";
   import { Card, Typeahead, type TypeaheadOption } from "@kenn-io/kit-ui";
   import RefreshControl from "../shared/RefreshControl.svelte";
   import {
@@ -177,11 +179,11 @@
     {
       name: "",
       label: m.activity_all_agents(),
-      displayLabel: m.activity_all_agents(),
+      displayLabel: m.filter_dropdown_all(),
     },
     ...activity.agents.map((agent) => ({
       name: agent.name,
-      label: `${agent.name} (${agent.session_count})`,
+      label: `${agent.name} (${formatCount(agent.session_count)})`,
       displayLabel: agent.name,
       count: agent.session_count,
     })),
@@ -199,7 +201,7 @@
       {
         name: "",
         label: m.activity_all_machines(),
-        displayLabel: m.activity_all_machines(),
+        displayLabel: m.filter_dropdown_all(),
       },
       ...activity.machines.map((machine) => {
         const label = sessions.machineLabel(machine);
@@ -218,7 +220,7 @@
     {
       name: "all",
       label: m.activity_all_sessions(),
-      displayLabel: m.activity_all_sessions(),
+      displayLabel: m.filter_dropdown_all(),
     },
     {
       name: "interactive",
@@ -422,47 +424,54 @@
       onSelect={applyRange}
     />
 
-    <ProjectTypeahead
-      projects={activity.projects}
-      value={activity.project}
-      onselect={onProjectSelect}
-    />
+    <FilterChip active={activity.project !== ""}>
+      <ProjectTypeahead
+        projects={activity.projects}
+        value={activity.project}
+        onselect={onProjectSelect}
+        triggerPrefix={`${m.analytics_col_project()}:`}
+        allLabel={m.filter_dropdown_all()}
+      />
+    </FilterChip>
 
-    <div class="toolbar-typeahead">
+    <FilterChip active={activity.agent !== ""}>
       <Typeahead
         options={agentOptions}
         value={activity.agent}
-        fallbackLabel={m.activity_all_agents()}
+        fallbackLabel={m.filter_dropdown_all()}
         placeholder={m.activity_filter_agents_placeholder()}
         title={m.activity_filter_by_agent()}
         emptyLabel={m.activity_no_matching_agents()}
+        triggerPrefix={`${m.analytics_col_agent()}:`}
         onselect={onAgentChange}
       />
-    </div>
+    </FilterChip>
 
-    <div class="toolbar-typeahead">
+    <FilterChip active={activity.machine !== ""}>
       <Typeahead
         options={machineOptions}
         value={activity.machine}
-        fallbackLabel={activity.machine || m.activity_all_machines()}
+        fallbackLabel={activity.machine || m.filter_dropdown_all()}
         placeholder={m.activity_filter_machines_placeholder()}
         title={m.activity_filter_by_machine()}
         emptyLabel={m.activity_no_matching_machines()}
+        triggerPrefix={`${m.sidebar_filters_machine()}:`}
         onselect={onMachineChange}
       />
-    </div>
+    </FilterChip>
 
-    <div class="toolbar-typeahead compact">
+    <FilterChip active={activity.automation !== "all"}>
       <Typeahead
         options={automationOptions}
         value={activity.automation}
-        fallbackLabel={m.activity_all_sessions()}
+        fallbackLabel={m.filter_dropdown_all()}
         placeholder={m.activity_filter_automation_placeholder()}
         title={m.activity_filter_by_automation()}
         emptyLabel={m.activity_no_automation_filters()}
+        triggerPrefix={`${m.analytics_col_sessions()}:`}
         onselect={onAutomationChange}
       />
-    </div>
+    </FilterChip>
 
     <div class="activity-refresh" aria-live="polite">
       <RefreshControl
@@ -520,7 +529,37 @@
         <Breakdowns report={activity.report} />
       </Card>
     {:else if activity.loading}
-      <div class="status">{m.activity_loading_report()}</div>
+      <!-- First load only: placeholders in the loaded layout (stat cards,
+           chart, sessions table) so the page does not jump when the report
+           lands. The toolbar's refresh status carries the live progress. -->
+      <div class="activity-skeleton" role="status">
+        <span class="kit-sr-only">{m.activity_loading_report()}</span>
+        <div class="skeleton-stats" aria-hidden="true">
+          {#each Array(7) as _, i (i)}
+            <Card level="default" padding="none" class="skeleton-stat">
+              <span class="skeleton-bar skeleton-value"></span>
+              <span class="skeleton-bar skeleton-label"></span>
+            </Card>
+          {/each}
+        </div>
+        <Card level="default" padding="none" class="chart-panel skeleton-chart">
+          <div class="skeleton-row" aria-hidden="true">
+            <span class="skeleton-bar skeleton-tabs"></span>
+            <span class="skeleton-bar skeleton-control"></span>
+          </div>
+          <span class="skeleton-bar skeleton-plot" aria-hidden="true"></span>
+        </Card>
+        <Card level="default" padding="none" class="chart-panel skeleton-table">
+          <span class="skeleton-bar skeleton-heading" aria-hidden="true"></span>
+          {#each Array(5) as _, i (i)}
+            <div class="skeleton-row" aria-hidden="true">
+              <span class="skeleton-bar skeleton-cell-wide"></span>
+              <span class="skeleton-bar skeleton-cell"></span>
+              <span class="skeleton-bar skeleton-cell"></span>
+            </div>
+          {/each}
+        </Card>
+      </div>
     {:else if activity.error}
       <div class="status error" {@attach errorTelemetry("analytics")}>
         <span>{activity.error}</span>
@@ -570,16 +609,6 @@
     flex-shrink: 0;
   }
 
-  .toolbar-typeahead {
-    --typeahead-min-width: 132px;
-    --typeahead-max-width: 184px;
-  }
-
-  .toolbar-typeahead.compact {
-    --typeahead-min-width: 118px;
-    --typeahead-max-width: 150px;
-  }
-
   /* The control reserves its own text widths (see shared/RefreshControl),
    * so it needs no clamp here: the age box clips a long progress status
    * instead of pushing the toolbar around. */
@@ -609,6 +638,80 @@
   .activity-content :global(.chart-panel) {
     padding: 12px;
     min-width: 0;
+  }
+
+  /* ── First-load skeleton ──
+   * Neutral blocks sized like the loaded report. A slow opacity pulse
+   * (no sweep) signals progress; reduced motion holds it still. */
+  .activity-skeleton {
+    display: flex;
+    flex-direction: column;
+    gap: 16px;
+  }
+
+  .skeleton-stats {
+    display: flex;
+    gap: 8px;
+    flex-wrap: wrap;
+  }
+
+  .skeleton-stats :global(.skeleton-stat) {
+    flex: 1;
+    min-width: 120px;
+    min-height: 78px;
+    padding: 10px;
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+  }
+
+  .skeleton-stats :global(.skeleton-stat > .kit-card__body) {
+    display: contents;
+  }
+
+  .activity-content :global(.skeleton-chart),
+  .activity-content :global(.skeleton-table) {
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+  }
+
+  .activity-content :global(.skeleton-chart > .kit-card__body),
+  .activity-content :global(.skeleton-table > .kit-card__body) {
+    display: contents;
+  }
+
+  .skeleton-row {
+    display: flex;
+    align-items: center;
+    gap: 16px;
+  }
+
+  .skeleton-bar {
+    display: block;
+    border-radius: var(--radius-sm);
+    background: color-mix(in srgb, var(--text-primary) 7%, transparent);
+    animation: skeleton-pulse 1.8s ease-in-out infinite alternate;
+  }
+
+  .skeleton-value { width: 44px; height: 18px; }
+  .skeleton-label { width: 72px; height: 10px; }
+  .skeleton-tabs { width: 300px; height: 22px; }
+  .skeleton-control { width: 140px; height: 22px; margin-left: auto; }
+  .skeleton-plot { height: 190px; }
+  .skeleton-heading { width: 80px; height: 12px; }
+  .skeleton-cell-wide { flex: 2; height: 10px; }
+  .skeleton-cell { flex: 1; height: 10px; }
+
+  @keyframes skeleton-pulse {
+    from { opacity: 1; }
+    to { opacity: 0.5; }
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    .skeleton-bar {
+      animation: none;
+    }
   }
 
   .status {

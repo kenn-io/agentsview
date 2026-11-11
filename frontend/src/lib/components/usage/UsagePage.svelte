@@ -58,6 +58,8 @@
   import { m } from "../../i18n/index.js";
   import { usageChartStyleMaps } from "../../utils/usageChartStyles.js";
   import { localDateStr } from "../../utils/dates.js";
+  import { resolveRootColor } from "../../utils/calmSeriesColor.js";
+  import { ui } from "../../stores/ui.svelte.js";
 
   let mounted = false;
   let unsubEvents: (() => void) | undefined;
@@ -97,12 +99,16 @@
     return () => clearTimeout(timer);
   });
 
-  const chartStyleMaps = $derived(
-    usageChartStyleMaps(
-      usage.colorSummary,
-      settings.chartPalette,
-    ),
-  );
+  // Series colors are calmed per theme, so reading the theme re-resolves
+  // the palette variables when it changes. High contrast keeps exact colors.
+  const chartStyleMaps = $derived.by(() => {
+    void ui.theme;
+    return usageChartStyleMaps(usage.colorSummary, settings.chartPalette, {
+      resolveColor: resolveRootColor,
+      calm: !ui.highContrast,
+      dark: ui.theme === "dark",
+    });
+  });
 
   // Keep projects already returned by the summary so a project remains
   // available after filtering removes it or the page is remounted.
@@ -674,6 +680,18 @@
     position: relative;
     display: flex;
     align-items: center;
+  }
+
+  /* In this chip row the filter button is the one funnel for the group,
+     so it gets the same framing as the Project/Agent/Model chips beside
+     it instead of floating as a bare glyph. */
+  .usage-filter-anchor :global(.filter-btn) {
+    width: var(--filter-chip-height);
+    height: var(--filter-chip-height);
+    background: var(--bg-raised, var(--bg-inset));
+    border: var(--border-width, 1px) solid var(--border-muted);
+    box-shadow: var(--shadow-raised, none);
+    border-radius: var(--kit-control-radius, var(--radius-sm));
   }
 
   .usage-content {

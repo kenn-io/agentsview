@@ -24,7 +24,7 @@ func sessionPushFixture(id string) (SessionPushReceipt, SessionBatchWrite) {
 
 func TestSessionPushRejectsArchiveAwaitingRebuild(t *testing.T) {
 	d := testDB(t)
-	_, err := d.getWriter().ExecContext(t.Context(), "PRAGMA user_version = 130")
+	_, err := d.getWriter().ExecContext(t.Context(), "PRAGMA user_version = 174")
 	require.NoError(t, err)
 	receipt, write := sessionPushFixture("snapshot")
 	_, err = d.ApplySessionPush(t.Context(), receipt, write)
@@ -32,7 +32,7 @@ func TestSessionPushRejectsArchiveAwaitingRebuild(t *testing.T) {
 	stored, err := d.GetSession(t.Context(), "snapshot")
 	require.NoError(t, err)
 	assert.Nil(t, stored)
-	_, err = d.getWriter().ExecContext(t.Context(), fmt.Sprintf("PRAGMA user_version = %d", sessionPushMinArchiveVersion))
+	_, err = d.getWriter().ExecContext(t.Context(), fmt.Sprintf("PRAGMA user_version = %d", SessionPushDataVersion))
 	require.NoError(t, err)
 	created, err := d.ApplySessionPush(t.Context(), receipt, write)
 	require.NoError(t, err)

@@ -81,5 +81,5 @@ func TestRunDuckDBRuntimeWarningHelperProcess(t *testing.T) {
 		DuckDB: config.DuckDBConfig{
 			Path: os.Getenv("AGENTSVIEW_DUCKDB_RUNTIME_WARNING_PATH"),
 		},
-	}, "")
+	}, "", false)
 }

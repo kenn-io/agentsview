@@ -82,7 +82,7 @@ func (r *pgRawRuntime) Stop() {
 	}
 }
 
-func prepareHostedPGServe(ctx context.Context, app config.Config, pg config.PGConfig, basePath string) (replicaServeStartup, error) {
+func prepareHostedPGServe(ctx context.Context, app config.Config, pg config.PGConfig, basePath string, pprof bool) (replicaServeStartup, error) {
 	if err := pg.ValidateRawDerivation(app.RequireAuth); err != nil {
 		return replicaServeStartup{}, err
 	}
@@ -190,7 +190,7 @@ func prepareHostedPGServe(ctx context.Context, app config.Config, pg config.PGCo
 		return fail(err)
 	}
 	closeUploads = closeUploadStore
-	opts := []server.Option{server.WithVersion(server.VersionInfo{Version: version, Commit: commit, BuildDate: buildDate, ReadOnly: true, InsightGenerationAvailable: store.InsightGenerationAvailable()}), server.WithDataDir(app.DataDir), server.WithBaseContext(ctx), server.WithRawSyncServices(auth, custody), server.WithRawSyncStatus(metadata), server.WithRawSyncJobHealth(metadata), server.WithRawSyncTenant(pg.RawTenant), uploadOption, pgKataConn(app)}
+	opts := []server.Option{server.WithVersion(server.VersionInfo{Version: version, Commit: commit, BuildDate: buildDate, ReadOnly: true, InsightGenerationAvailable: store.InsightGenerationAvailable()}), server.WithDataDir(app.DataDir), server.WithBaseContext(ctx), server.WithPprof(pprof), server.WithRawSyncServices(auth, custody), server.WithRawSyncStatus(metadata), server.WithRawSyncJobHealth(metadata), server.WithRawSyncTenant(pg.RawTenant), uploadOption, pgKataConn(app)}
 	if basePath != "" {
 		opts = append(opts, server.WithBasePath(basePath))
 	}

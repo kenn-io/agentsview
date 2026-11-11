@@ -2,6 +2,7 @@
   import { untrack, type Snippet } from "svelte";
   import { TextInput } from "@kenn-io/kit-ui";
   import { m } from "../../i18n/index.js";
+  import { formatCount } from "../../utils/format.js";
   import { sessions } from "../../stores/sessions.svelte.js";
   import { router } from "../../stores/router.svelte.js";
   import { hasSessionRouteDateIntent } from "../../stores/sessionRouteParams.js";
@@ -196,7 +197,7 @@
             class="toggle-check"
             class:on={groupMode === "agent"}
           ></span>
-          {m.sidebar_filters_group_by_agent()}
+          <span class="toggle-label" title={m.sidebar_filters_group_by_agent()}>{m.sidebar_filters_group_by_agent()}</span>
         </button>
         <button
           class="filter-toggle"
@@ -207,7 +208,7 @@
             class="toggle-check"
             class:on={groupMode === "project"}
           ></span>
-          {m.sidebar_filters_group_by_project()}
+          <span class="toggle-label" title={m.sidebar_filters_group_by_project()}>{m.sidebar_filters_group_by_project()}</span>
         </button>
       </div>
     {/if}
@@ -223,9 +224,9 @@
             class="toggle-check"
             class:on={starred.filterOnly}
           ></span>
-          {m.sidebar_filters_starred_only()}
+          <span class="toggle-label" title={m.sidebar_filters_starred_only()}>{m.sidebar_filters_starred_only()}</span>
           {#if starred.count > 0}
-            <span class="starred-count">{starred.count}</span>
+            <span class="starred-count">{formatCount(starred.count)}</span>
           {/if}
         </button>
       </div>
@@ -244,7 +245,7 @@
           class="toggle-check"
           class:on={isRecentlyActiveOn}
         ></span>
-        {m.sidebar_filters_recently_active()}
+        <span class="toggle-label" title={m.sidebar_filters_recently_active()}>{m.sidebar_filters_recently_active()}</span>
       </button>
     </div>
     <div class="filter-section">
@@ -263,7 +264,7 @@
           class="toggle-check"
           class:on={isHideSingleTurnOn}
         ></span>
-        {m.sidebar_filters_hide_single_turn()}
+        <span class="toggle-label" title={m.sidebar_filters_hide_single_turn()}>{m.sidebar_filters_hide_single_turn()}</span>
       </button>
       <button
         class="filter-toggle"
@@ -277,7 +278,7 @@
           class="toggle-check"
           class:on={isIncludeAutomatedOn}
         ></span>
-        {m.sidebar_filters_include_automated()}
+        <span class="toggle-label" title={m.sidebar_filters_include_automated()}>{m.sidebar_filters_include_automated()}</span>
       </button>
     </div>
     <div class="filter-section">
@@ -294,7 +295,7 @@
           class="toggle-check"
           class:on={isHideUnknownOn}
         ></span>
-        {m.sidebar_filters_hide_unknown()}
+        <span class="toggle-label" title={m.sidebar_filters_hide_unknown()}>{m.sidebar_filters_hide_unknown()}</span>
       </button>
     </div>
     <div class="filter-section">
@@ -320,7 +321,7 @@
             class:on={!sessions.filters.agent}
           >
             {#if !sessions.filters.agent}
-              <CheckIcon size="8" strokeWidth="2.4" aria-hidden="true" />
+              <CheckIcon size="9" strokeWidth="2.4" aria-hidden="true" />
             {/if}
           </span>
           <span class="agent-select-name">{m.sidebar_filters_all_agents()}</span>
@@ -341,7 +342,7 @@
               class:on={selected}
             >
               {#if selected}
-                <CheckIcon size="8" strokeWidth="2.4" aria-hidden="true" />
+                <CheckIcon size="9" strokeWidth="2.4" aria-hidden="true" />
               {/if}
             </span>
             <span
@@ -352,7 +353,7 @@
               {agentLabel(agent.name)}
             </span>
             <span class="agent-select-count">
-              {agent.session_count}
+              {formatCount(agent.session_count)}
             </span>
           </button>
         {:else}
@@ -397,7 +398,7 @@
                 class:on={selected}
               >
                 {#if selected}
-                  <CheckIcon size="8" strokeWidth="2.4" aria-hidden="true" />
+                  <CheckIcon size="9" strokeWidth="2.4" aria-hidden="true" />
                 {/if}
               </span>
               <span class="agent-select-name">
@@ -522,19 +523,46 @@
     top: 100%;
     right: 0;
     margin-top: 4px;
-    width: 220px;
+    /* Wide enough to keep every option on one line. The sidebar stretches
+       it across its own width. */
+    width: 240px;
     max-height: min(560px, calc(100vh - 128px));
     overflow-y: auto;
     overflow-x: hidden;
     overscroll-behavior: contain;
     scrollbar-gutter: stable;
-    /* card chrome comes from the shared kit-popover-card class */
-    padding: 8px;
+    /* Card chrome comes from the shared kit-popover-card class; a deeper
+       shadow lifts it clear of the rows underneath. */
+    padding: 6px;
+    box-shadow:
+      var(--shadow-lg),
+      0 1px 3px color-mix(in srgb, var(--text-primary) 12%, transparent);
     z-index: var(--z-popover);
     text-transform: none;
     letter-spacing: normal;
     animation: dropdown-in 0.12s ease-out;
     transform-origin: top right;
+  }
+
+  /* The card is usually shorter than its sections, so the clipped edge
+     fades out instead of slicing a row in half. The fade sticks to the
+     card's bottom while there is more below; at the end it sits under the
+     last section, over empty space, and the bottom padding moves into it. */
+  .filter-dropdown {
+    padding-bottom: 0;
+  }
+
+  .filter-dropdown::after {
+    content: "";
+    position: sticky;
+    bottom: 0;
+    display: block;
+    /* Taller than a section heading, so a heading cut by the edge fades
+       out completely instead of showing its top half. */
+    height: 28px;
+    margin-inline: -6px;
+    background: linear-gradient(transparent, var(--bg-popover));
+    pointer-events: none;
   }
 
   .filter-dropdown.left {
@@ -560,17 +588,17 @@
 
   .filter-section + .filter-section {
     border-top: 1px solid var(--border-muted);
-    margin-top: 4px;
-    padding-top: 8px;
+    margin-top: 2px;
+    padding-top: 6px;
   }
 
   .filter-section-label {
-    font-size: 9px;
+    font-size: 10.5px;
     font-weight: 600;
     color: var(--text-muted);
     text-transform: uppercase;
     letter-spacing: 0.04em;
-    margin-bottom: 6px;
+    margin-bottom: 2px;
   }
 
   .filter-toggle {
@@ -578,12 +606,19 @@
     align-items: center;
     gap: 6px;
     width: 100%;
-    padding: 4px 8px;
-    font-size: 11px;
+    padding: 3px 6px;
+    font-size: 12.5px;
     color: var(--text-secondary);
     text-align: left;
     border-radius: 4px;
     transition: background 0.1s, color 0.1s;
+  }
+
+  .toggle-label {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
   }
 
   .filter-toggle:hover {
@@ -609,10 +644,10 @@
   }
 
   .toggle-check {
-    width: 10px;
-    height: 10px;
-    border-radius: 2px;
-    border: 1.5px solid var(--border-default);
+    width: 12px;
+    height: 12px;
+    border-radius: 3px;
+    border: 1.5px solid var(--text-muted);
     flex-shrink: 0;
     transition: background 0.1s, border-color 0.1s;
   }
@@ -627,7 +662,7 @@
     height: 24px;
     padding: 0 8px;
     margin-bottom: 4px;
-    font-size: 10px;
+    font-size: 12px;
     color: var(--text-primary);
     background: var(--bg-inset);
     border: 1px solid var(--border-muted);
@@ -644,10 +679,15 @@
     border-color: var(--accent-blue);
   }
 
+  /* Rows have a fixed height so the list's visible area ends on a whole
+     row: six rows and their gaps, plus bottom padding that shows once the
+     list is scrolled to its end. */
   .agent-select-list {
+    --agent-row: 25px;
     display: flex;
     flex-direction: column;
-    max-height: 180px;
+    max-height: calc(6 * var(--agent-row) + 5px);
+    padding-bottom: 4px;
     overflow-y: auto;
     overflow-x: hidden;
     gap: 1px;
@@ -658,8 +698,10 @@
     align-items: center;
     gap: 6px;
     width: 100%;
-    padding: 3px 8px;
-    font-size: 11px;
+    box-sizing: border-box;
+    height: var(--agent-row);
+    padding: 0 6px;
+    font-size: 12.5px;
     color: var(--text-secondary);
     text-align: left;
     border-radius: 3px;
@@ -682,10 +724,10 @@
   }
 
   .agent-check {
-    width: 10px;
-    height: 10px;
-    border-radius: 2px;
-    border: 1.5px solid var(--border-default);
+    width: 12px;
+    height: 12px;
+    border-radius: 3px;
+    border: 1.5px solid var(--text-muted);
     flex-shrink: 0;
     transition: background 0.1s, border-color 0.1s;
     color: var(--agent-foreground, var(--accent-blue-foreground));
@@ -701,8 +743,8 @@
   }
 
   .agent-dot-mini {
-    width: 5px;
-    height: 5px;
+    width: 7px;
+    height: 7px;
     border-radius: 50%;
     flex-shrink: 0;
   }
@@ -717,7 +759,7 @@
 
   .agent-select-count {
     flex-shrink: 0;
-    font-size: 9px;
+    font-size: 10.5px;
     font-weight: 500;
     color: var(--text-muted);
     min-width: 14px;
@@ -728,7 +770,7 @@
   .agent-select-empty {
     display: block;
     padding: 6px 8px;
-    font-size: 10px;
+    font-size: 12px;
     color: var(--text-muted);
     text-align: center;
   }
@@ -744,7 +786,7 @@
     align-items: center;
     gap: 4px;
     padding: 2px 8px;
-    font-size: 10px;
+    font-size: 12px;
     color: var(--text-secondary);
     border: 1px solid var(--border-muted);
     border-radius: 4px;
@@ -770,8 +812,8 @@
     display: block;
     width: 100%;
     padding: 4px 8px;
-    margin-top: 8px;
-    font-size: 10px;
+    margin-top: 6px;
+    font-size: 12px;
     color: var(--text-muted);
     text-align: center;
     border-top: 1px solid var(--border-muted);
@@ -781,7 +823,7 @@
 
   .starred-count {
     margin-left: auto;
-    font-size: 9px;
+    font-size: 10.5px;
     font-weight: 600;
     color: var(--accent-amber);
     min-width: 14px;

@@ -117,8 +117,8 @@ describe("QualityPage", () => {
     component = mount(QualityPage, { target: document.body });
     await tick();
 
-    expect(document.body.textContent).toContain("Deterministic Recommendations");
-    expect(document.body.textContent).toContain("Quality Patterns");
+    expect(document.body.textContent).toContain("Deterministic recommendations");
+    expect(document.body.textContent).toContain("Quality patterns");
     expect(insightLoadCalls).toBe(0);
   });
 

@@ -1,5 +1,5 @@
 ---
-last_edited: 2026-11-09
+last_edited: 2026-11-11
 title: Changelog
 description: Release history for AgentsView
 ---
@@ -41,6 +41,14 @@ The latest release is
   retried as two smaller requests, and the error now says the request timed
   out. Set `batch_size`, `concurrency`, or `timeout` on a `local = true` server
   to tune it.
+- Codex sessions now show the model's readable reasoning summaries as
+  thinking blocks and mark each context compaction with a divider holding its
+  summary. Encrypted reasoning still shows nothing. When a model response
+  produced only reasoning, its tokens and cost now count. Two model calls with
+  identical token counts can no longer collapse into one. Codex and Codex Cloud
+  compaction dividers no longer say "Context compacted" twice when there is no
+  summary. The next sync reparses Codex, TraeX, Augure Code, Open Interpreter,
+  and Codex Cloud sessions in place.
 - Prune removes matching parent and child session chains in one pass, even
   without `--agent`.
 - Commit lookups keep live prompts and other archives' deleted-session links.
@@ -63,6 +71,13 @@ The latest release is
   identity. Web searches spread across such a response are now all billed.
   After the upgrade, the SQLite usage cache rebuilds once and the next sync
   reparses Claude, Cowork, Qoder, and iCodeMate sessions in place.
+- Sessions that lost part of their source now say so instead of looking
+  complete. A transcript record larger than 64 MiB, or an OpenCode, Shelley, or
+  Forge database row that does not decode, now counts toward the session's
+  malformed-lines badge and the sync summary's parser anomalies. Any tokens on
+  the lost records are still missing, but the count shows that the totals may
+  be low. Existing sessions pick up the count the next time their source
+  changes; the upgrade does not trigger a resync.
 
 ## 0.47.0
 

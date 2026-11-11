@@ -154,7 +154,7 @@ func parseIflowSession(
 		ctx,
 		entries, sessionID, project, machine,
 		parentSessionID, fileInfo, subagentMap,
-		globalStart, globalEnd,
+		globalStart, globalEnd, lr.SkippedLines(),
 	)
 }
 
@@ -166,6 +166,7 @@ func parseLinearIflow(
 	fileInfo FileInfo,
 	subagentMap map[string]string,
 	globalStart, globalEnd time.Time,
+	malformedLines int,
 ) ([]ParseResult, error) {
 	messages, startedAt, endedAt := extractMessagesIflow(ctx, entries)
 	startedAt = earlierTime(globalStart, startedAt)
@@ -195,6 +196,7 @@ func parseLinearIflow(
 		EndedAt:          endedAt,
 		MessageCount:     len(messages),
 		UserMessageCount: userCount,
+		MalformedLines:   malformedLines,
 		File:             fileInfo,
 	}
 

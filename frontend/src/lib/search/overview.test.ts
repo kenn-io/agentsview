@@ -48,11 +48,12 @@ describe("find overview model", () => {
     expect(overviewY(1, 0, 50)).toBe(0);
     expect(overviewTicks([], 10, 0)).toEqual([]);
   });
-  it("draws at least four pixels and merges gaps of two pixels", () => {
-    const locations = [10, 16, 40].map((offset, index) => ({ offset, match: match(index) }));
+  it("draws uniform two-pixel ticks and drops ticks that would touch", () => {
+    const locations = [10, 11, 16, 40].map((offset, index) => ({ offset, match: match(index) }));
     expect(overviewTicks(locations, 100, 100)).toEqual([
-      { y: 8, height: 10 },
-      { y: 38, height: 4 },
+      { y: 9, height: 2 },
+      { y: 15, height: 2 },
+      { y: 39, height: 2 },
     ]);
   });
   it("keeps edge ticks inside short rails", () => {
@@ -70,7 +71,10 @@ describe("find overview model", () => {
     const ticks = overviewTicks(locations, 5000, 120);
     expect(ticks.length).toBeLessThanOrEqual(120);
     expect(ticks[0]?.y).toBe(0);
-    expect(ticks.every((tick) => tick.height >= 4 && tick.y + tick.height <= 120)).toBe(true);
+    expect(ticks.every((tick) => tick.height === 2 && tick.y + tick.height <= 120)).toBe(true);
+    expect(ticks.every((tick, index) => index === 0 || tick.y >= ticks[index - 1]!.y + 3)).toBe(
+      true,
+    );
     expect(nearestOverviewMatch(locations, 4321.1)?.occurrence).toBe(4321);
   });
   it("selects real matches at endpoints and breaks equal-distance ties consistently", () => {

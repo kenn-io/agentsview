@@ -408,7 +408,7 @@ describe("AttributionPanel colors", () => {
     await tick();
 
     const value = document.querySelector(".tile-value")?.textContent?.trim();
-    expect(value).toBe("1M");
+    expect(value).toBe("1.0M");
     expect(value).not.toContain("$");
     unmount(component);
   });
@@ -462,7 +462,7 @@ describe("AttributionPanel colors", () => {
     const component = mountPanel();
     await tick();
 
-    expect(document.querySelector(".tile-value")?.textContent?.trim()).toBe("250k");
+    expect(document.querySelector(".tile-value")?.textContent?.trim()).toBe("250.0K");
     unmount(component);
   });
 
@@ -539,8 +539,8 @@ describe("AttributionPanel colors", () => {
     const railColors = Array.from(document.querySelectorAll<HTMLElement>(".rail-dot")).map(
       (dot) => dot.style.background,
     );
-    expect(tileColors).toEqual(["#1f77b4", "#ff7f0e"]);
-    expect(railColors).toEqual(["rgb(31, 119, 180)", "rgb(255, 127, 14)"]);
+    expect(tileColors).toEqual(["#3977a7", "#ef8a46"]);
+    expect(railColors).toEqual(["rgb(57, 119, 167)", "rgb(239, 138, 70)"]);
     unmount(component);
   });
 });

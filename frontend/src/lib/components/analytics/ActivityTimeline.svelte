@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { formatCount } from "../../utils/format.js";
   import { Bar, BarChart } from "layerchart";
   import { Button } from "@kenn-io/kit-ui";
   import { scaleUtc } from "d3-scale";
@@ -191,9 +192,27 @@
     if (!first || !last) return undefined;
     return [first.instant, xInterval.offset(last.instant, 1)];
   });
+  // The left padding holds the y-axis value labels; the selection
+  // overlay's inset in the styles below matches it.
+  const PLOT_PADDING = { top: 20, right: 24, bottom: 20, left: 40 };
+  const Y_TICKS = 4;
+  const percentTickFormat = $derived(
+    new Intl.NumberFormat(getLocale(), {
+      style: "percent",
+      maximumFractionDigits: 0,
+    }),
+  );
+  function formatYTick(value: number): string {
+    return percentScale
+      ? percentTickFormat.format(value / 100)
+      : formatCount(value);
+  }
   const barInset = $derived.by(() => {
     if (chart.bars.length === 0 || chartAreaWidth === 0) return 0;
-    const plotWidth = Math.max(chartAreaWidth - 48, 0);
+    const plotWidth = Math.max(
+      chartAreaWidth - PLOT_PADDING.left - PLOT_PADDING.right,
+      0,
+    );
     const bucketWidth = plotWidth / chart.bars.length;
     return Math.max(0, Math.min(1, (bucketWidth - 0.75) / 2));
   });
@@ -263,7 +282,7 @@
     const lines = [
       m.analytics_activity_timeline_tooltip_value({
         label,
-        value: bar.total.toLocaleString(getLocale()),
+        value: formatCount(bar.total),
         metric: metric === "messages"
           ? m.analytics_metric_messages()
           : m.analytics_metric_sessions(),
@@ -273,9 +292,9 @@
       const split = asPercent
         ? splitPercent(bar)
         : {
-            user: bar.userMessages.toLocaleString(getLocale()),
-            assistant: bar.assistantMessages.toLocaleString(getLocale()),
-            other: bar.otherMessages.toLocaleString(getLocale()),
+            user: formatCount(bar.userMessages),
+            assistant: formatCount(bar.assistantMessages),
+            other: formatCount(bar.otherMessages),
           };
       lines.push(
         m.analytics_activity_timeline_tooltip_messages({
@@ -542,11 +561,11 @@
         {xDomain}
         yDomain={[0, null]}
         yNice
-        padding={{ top: 20, right: 24, bottom: 20, left: 24 }}
+        padding={PLOT_PADDING}
         height={164}
         class="timeline-chart"
-        axis="x"
-        grid={{ class: "grid-line" }}
+        axis={true}
+        grid={{ class: "grid-line", yTicks: Y_TICKS }}
         rule={false}
         highlight={false}
         tooltipContext={false}
@@ -566,6 +585,13 @@
             tickMarks: false,
             rule: false,
             classes: { tickLabel: "x-label" },
+          },
+          yAxis: {
+            ticks: Y_TICKS,
+            format: (value) => formatYTick(value as number),
+            tickMarks: false,
+            rule: false,
+            classes: { tickLabel: "y-label" },
           },
         }}
       >
@@ -666,22 +692,27 @@
     display: flex;
     flex: 1;
     flex-wrap: wrap;
-    gap: 8px;
+    gap: 8px 12px;
     min-width: 0;
   }
 
+  /* Each choice group sits in its own inset track, like the shared
+     segmented control, so the three groups read as separate choices. */
   .metric-toggle,
   .granularity-toggle,
   .scale-toggle {
     display: flex;
     gap: 2px;
+    padding: 2px;
+    border-radius: var(--radius-md);
+    background: var(--bg-inset);
   }
 
   .toggle-btn {
     height: 22px;
     padding: 0 8px;
     border-radius: var(--radius-sm);
-    font-size: 10px;
+    font-size: 11px;
     font-weight: 500;
     color: var(--text-muted);
     cursor: pointer;
@@ -698,9 +729,12 @@
     cursor: not-allowed;
   }
 
+  /* Shared selected-segment idiom (app.css): raised pill, medium weight. */
   .toggle-btn.active {
-    background: var(--bg-inset);
+    background: var(--selected-strong-bg);
+    box-shadow: var(--selected-strong-edge);
     color: var(--text-primary);
+    font-weight: var(--selected-strong-weight);
   }
 
   .segment-legend {
@@ -714,7 +748,7 @@
     display: flex;
     align-items: center;
     gap: 4px;
-    font-size: 10px;
+    font-size: 11px;
     color: var(--text-muted);
   }
 
@@ -817,7 +851,7 @@
 
   .activity-selection-overlay {
     position: absolute;
-    inset: 20px 24px 24px;
+    inset: 20px 24px 24px 40px;
     pointer-events: none;
     background: color-mix(
       in srgb,
@@ -828,9 +862,18 @@
     border-right: 1px solid var(--accent-blue);
   }
 
-  .timeline-container :global(.x-label) {
-    font-size: 9px;
+  /* Value labels are quieter than the date labels: they give scale,
+     the dates locate the bars. */
+  .timeline-container :global(.y-label) {
+    font-size: 10px;
     fill: var(--text-muted);
+    font-family: var(--font-sans);
+    font-variant-numeric: tabular-nums;
+  }
+
+  .timeline-container :global(.x-label) {
+    font-size: 11px;
+    fill: var(--text-secondary);
     font-family: var(--font-sans);
   }
 
@@ -840,7 +883,7 @@
     padding: 4px 8px;
     background: var(--text-primary);
     color: var(--bg-primary);
-    font-size: 10px;
+    font-size: 11px;
     border-radius: var(--radius-sm);
     white-space: nowrap;
     pointer-events: none;

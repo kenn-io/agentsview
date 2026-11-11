@@ -943,6 +943,108 @@ describe("SessionBreadcrumb", () => {
     await unmount(component);
   });
 
+  it("shows the transcript controls beside the title only on wide screens", async () => {
+    ui.isMobileViewport = false;
+    const component = mount(SessionBreadcrumb, {
+      target: document.body,
+      props: { session: makeSession("claude"), onBack: () => {} },
+    });
+    await tick();
+    expect(document.querySelector(".session-breadcrumb .view-trigger")).not.toBeNull();
+    expect(
+      document.querySelector('.session-breadcrumb button[aria-label="Follow latest messages"]'),
+    ).not.toBeNull();
+
+    ui.isMobileViewport = true;
+    await tick();
+    expect(document.querySelector(".session-breadcrumb .view-trigger")).toBeNull();
+    ui.isMobileViewport = false;
+    unmount(component);
+  });
+
+  it("keeps the transcript controls when the session details are missing", async () => {
+    ui.isMobileViewport = false;
+    const component = mount(SessionBreadcrumb, {
+      target: document.body,
+      props: { session: undefined, onBack: () => {} },
+    });
+    await tick();
+    expect(document.querySelector(".session-breadcrumb .view-trigger")).not.toBeNull();
+    expect(
+      document.querySelector('.session-breadcrumb button[aria-label="Follow latest messages"]'),
+    ).not.toBeNull();
+    expect(document.querySelector(".session-breadcrumb .grade-badge")).toBeNull();
+    unmount(component);
+  });
+
+  describe("focus order follows the visual rows", () => {
+    const original = window.matchMedia;
+
+    function stubWidth(width: number) {
+      window.matchMedia = ((query: string) => {
+        const min = /min-width:\s*(\d+)px/.exec(query);
+        const max = /max-width:\s*(\d+)px/.exec(query);
+        const matches = (!min || width >= Number(min[1])) && (!max || width <= Number(max[1]));
+        return {
+          matches,
+          media: query,
+          addEventListener: () => {},
+          removeEventListener: () => {},
+        } as unknown as MediaQueryList;
+      }) as typeof window.matchMedia;
+    }
+
+    afterEach(() => {
+      window.matchMedia = original;
+    });
+
+    // Document order is the Tab order; return each landmark's position in it.
+    function tabOrder(): string[] {
+      const names: Record<string, string> = {
+        ".view-trigger": "view",
+        '[aria-label="Copy link to session"]': "actions",
+        ".grade-badge": "grade",
+        ".session-id": "id",
+      };
+      const all = Array.from(document.querySelectorAll<HTMLElement>(".session-breadcrumb button"));
+      return all.flatMap((element) => {
+        const hit = Object.entries(names).find(([selector]) => element.matches(selector));
+        return hit ? [hit[1]] : [];
+      });
+    }
+
+    it("puts the title-row controls before the metadata from 1100px", async () => {
+      stubWidth(1280);
+      mount(SessionBreadcrumb, {
+        target: document.body,
+        props: { session: makeSession("claude", { health_grade: "B" }), onBack: () => {} },
+      });
+      await tick();
+      expect(tabOrder()).toEqual(["view", "actions", "grade", "id"]);
+    });
+
+    it("puts the actions first and the transcript controls ahead of the metadata below 1100px", async () => {
+      stubWidth(900);
+      mount(SessionBreadcrumb, {
+        target: document.body,
+        props: { session: makeSession("claude", { health_grade: "B" }), onBack: () => {} },
+      });
+      await tick();
+      expect(tabOrder()).toEqual(["actions", "view", "grade", "id"]);
+    });
+
+    it("keeps the phone strip order with the actions last", async () => {
+      stubWidth(400);
+      ui.isMobileViewport = true;
+      mount(SessionBreadcrumb, {
+        target: document.body,
+        props: { session: makeSession("claude", { health_grade: "B" }), onBack: () => {} },
+      });
+      await tick();
+      expect(tabOrder()).toEqual(["grade", "id", "actions"]);
+    });
+  });
+
   it("renders gemini with rose badge color", async () => {
     const component = mount(SessionBreadcrumb, {
       target: document.body,
@@ -955,8 +1057,10 @@ describe("SessionBreadcrumb", () => {
     await tick();
     const badge = document.querySelector(".agent-badge");
     expect(badge).toBeTruthy();
-    expect(badge?.getAttribute("style")).toContain("var(--accent-rose)");
-    expect(badge?.getAttribute("style")).toContain("var(--accent-rose-foreground)");
+    // The agent name is written in its agent ink.
+    expect(badge?.getAttribute("style")).toContain(
+      "--agent-ink: var(--accent-rose-ink, var(--accent-rose))",
+    );
 
     unmount(component);
   });
@@ -1041,8 +1145,10 @@ describe("SessionBreadcrumb", () => {
 
     await tick();
     const badge = document.querySelector(".agent-badge");
-    expect(badge?.getAttribute("style")).toContain("var(--accent-blue)");
-    expect(badge?.getAttribute("style")).toContain("var(--accent-blue-foreground)");
+    // The agent name is written in its agent ink.
+    expect(badge?.getAttribute("style")).toContain(
+      "--agent-ink: var(--accent-blue-ink, var(--accent-blue))",
+    );
 
     unmount(component);
   });
@@ -1061,13 +1167,16 @@ describe("SessionBreadcrumb", () => {
 
     await tick();
     const badges = Array.from(document.querySelectorAll(".agent-badge"));
+    expect(badges).toHaveLength(1);
     expect(badges[0]?.textContent?.trim()).toBe("triage");
-    expect(document.querySelector(".entrypoint-badge")?.textContent?.trim()).toBe("sdk-cli");
+    // The entrypoint is detail: it is in the agent's hover text, not a chip.
+    expect(badges[0]?.getAttribute("title")).toBe("triage · sdk-cli");
+    expect(document.querySelector(".breadcrumb-meta")?.textContent).not.toContain("sdk-cli");
 
     unmount(component);
   });
 
-  it("suppresses the default cli entrypoint badge", async () => {
+  it("leaves the default cli entrypoint out of the agent hover text", async () => {
     const component = mount(SessionBreadcrumb, {
       target: document.body,
       props: {
@@ -1077,7 +1186,8 @@ describe("SessionBreadcrumb", () => {
     });
 
     await tick();
-    expect(document.querySelector(".entrypoint-badge")).toBeNull();
+    const badge = document.querySelector(".agent-badge");
+    expect(badge?.getAttribute("title")).toBe(badge?.textContent?.trim());
 
     unmount(component);
   });
@@ -1149,7 +1259,7 @@ describe("SessionBreadcrumb", () => {
 
     await tick();
     const tokenBadge = document.querySelector(".token-badge");
-    expect(tokenBadge?.textContent?.replace(/\s+/g, " ").trim()).toBe("2.4k ctx / 180 out");
+    expect(tokenBadge?.textContent?.replace(/\s+/g, " ").trim()).toBe("2.4K ctx / 180 out");
 
     unmount(component);
   });
@@ -1268,7 +1378,7 @@ describe("SessionBreadcrumb", () => {
     await tick();
 
     const mobileTokenBadge = document.querySelector(".token-badge--mobile");
-    expect(mobileTokenBadge?.textContent?.replace(/\s+/g, " ").trim()).toBe("2.4k ctx / 180 out");
+    expect(mobileTokenBadge?.textContent?.replace(/\s+/g, " ").trim()).toBe("2.4K ctx / 180 out");
 
     unmount(component);
   });
@@ -1874,7 +1984,7 @@ describe("SessionBreadcrumb", () => {
       unmount(component);
     });
 
-    it("renders the cost badge between the token badges and the model badge", async () => {
+    it("groups the metadata as identity, time, usage, then the chips", async () => {
       sessionsService.getApiV1SessionsByIdUsage.mockResolvedValue(
         makeUsage({ has_cost: true, cost: testMoney(4.12) }),
       );
@@ -1885,6 +1995,7 @@ describe("SessionBreadcrumb", () => {
         target: document.body,
         props: {
           session: makeSession("claude", {
+            health_grade: "D",
             peak_context_tokens: 2400,
             total_output_tokens: 180,
             has_peak_context_tokens: true,
@@ -1898,22 +2009,72 @@ describe("SessionBreadcrumb", () => {
         expect(document.querySelector(".cost-badge")).toBeTruthy();
       });
 
-      const meta = document.querySelector(".breadcrumb-meta");
-      expect(meta).toBeTruthy();
-      const children = Array.from(meta!.children);
-      const desktopTokenIdx = children.findIndex((el) =>
-        el.classList.contains("token-badge--desktop"),
+      const groups = Array.from(document.querySelectorAll(".breadcrumb-meta > .meta-group"));
+      const contents = groups.map((group) =>
+        Array.from(group.children).map((el) => el.classList[0]),
       );
-      const mobileTokenIdx = children.findIndex((el) =>
-        el.classList.contains("token-badge--mobile"),
-      );
-      const costIdx = children.findIndex((el) => el.classList.contains("cost-badge"));
-      const modelIdx = children.findIndex((el) => el.classList.contains("model-badge"));
+      expect(contents).toEqual([
+        ["agent-badge", "model-badge"],
+        ["session-time"],
+        ["token-badge", "token-badge", "cost-badge"],
+        ["grade-badge", "session-id"],
+      ]);
+      expect(groups[2]!.querySelector(".token-badge--desktop")).not.toBeNull();
+      expect(groups[3]!.querySelector(".grade-badge")?.textContent?.trim()).toBe("D");
 
-      expect(desktopTokenIdx).toBeGreaterThanOrEqual(0);
-      expect(mobileTokenIdx).toBeGreaterThan(desktopTokenIdx);
-      expect(costIdx).toBeGreaterThan(mobileTokenIdx);
-      expect(modelIdx).toBeGreaterThan(costIdx);
+      unmount(component);
+    });
+
+    it.each([
+      { grade: undefined, offered: true },
+      { grade: "B", offered: false },
+    ])(
+      "offers the health panel in the actions menu only without a grade chip (grade $grade)",
+      async ({ grade, offered }) => {
+        ui.signalPanelOpen = false;
+        const component = mount(SessionBreadcrumb, {
+          target: document.body,
+          props: {
+            session: makeSession("claude", { health_grade: grade }),
+            onBack: () => {},
+          },
+        });
+        await tick();
+        document.querySelector<HTMLButtonElement>(".actions-btn")!.click();
+        await tick();
+        const item = Array.from(
+          document.querySelectorAll<HTMLButtonElement>(".actions-menu-item"),
+        ).find((el) => el.textContent?.trim() === "Session health and tool sequences");
+        expect(item !== undefined).toBe(offered);
+        if (item) {
+          item.click();
+          await tick();
+          expect(ui.signalPanelOpen).toBe(true);
+          expect(document.querySelector(".actions-menu")).toBeNull();
+        }
+        ui.signalPanelOpen = false;
+        unmount(component);
+      },
+    );
+
+    it("leaves out the grade chip and empty groups when fields are missing", async () => {
+      const component = mount(SessionBreadcrumb, {
+        target: document.body,
+        props: {
+          session: makeSession("claude", { health_grade: undefined }),
+          onBack: () => {},
+        },
+      });
+      await tick();
+
+      const groups = Array.from(document.querySelectorAll(".breadcrumb-meta > .meta-group"));
+      expect(groups.map((group) => group.classList[1])).toEqual([
+        "meta-identity",
+        "meta-time",
+        "meta-ref",
+      ]);
+      expect(document.querySelector(".grade-badge")).toBeNull();
+      expect(document.querySelector(".breadcrumb-meta")?.textContent).not.toContain("--");
 
       unmount(component);
     });
@@ -2040,7 +2201,7 @@ describe("SessionBreadcrumb", () => {
       const second = renderedRows[1]!;
       expect(first.textContent).toContain("Prompt 1");
       expect(first.textContent).toContain("claude-opus-4-6");
-      expect(first.textContent).toContain("1,500 ctx");
+      expect(first.textContent).toContain("1.5K ctx");
       expect(first.textContent).toContain("500 out");
       expect(second.textContent).toContain("session");
       expect(second.textContent).toContain("gpt-5.4");
