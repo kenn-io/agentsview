@@ -305,7 +305,13 @@ func TestUsageDiskPartsChangeDuringFill(t *testing.T) {
 			}
 			var changed atomic.Bool
 			var mutationErr error
-			ctx := chdriver.Context(t.Context(), chdriver.WithProgress(func(*chdriver.Progress) {
+			// The daily read runs for about 100ms, the server's default
+			// interactive_delay. Under it, ClickHouse 26.10 sends the read's
+			// only progress packet after the query has left system.processes,
+			// so the change below never runs mid-read. A 1ms interval
+			// (the setting is in microseconds) makes the server report
+			// progress while the read is still running.
+			ctx := chdriver.Context(t.Context(), chdriver.WithSettings(chdriver.Settings{"interactive_delay": 1000}), chdriver.WithProgress(func(*chdriver.Progress) {
 				if changed.Load() {
 					return
 				}
