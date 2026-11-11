@@ -38,8 +38,8 @@ func TestDocbankIntegrationValidation(t *testing.T) {
 		}
 	}
 	for _, endpoint := range []string{"http://127.0.0.1", "https://example.com"} {
-		assert.NoError(t, (DocbankIntegration{URL: endpoint, APIKeyEnv: "DOCBANK_TEST_KEY"}).Validate())
+		require.NoError(t, (DocbankIntegration{URL: endpoint, APIKeyEnv: "DOCBANK_TEST_KEY"}).Validate())
 	}
-	assert.NoError(t, (DocbankIntegration{}).Validate())
+	require.NoError(t, (DocbankIntegration{}).Validate())
 	assert.EqualError(t, (DocbankIntegration{URL: "https://example.com"}).Validate(), "[integrations.docbank] url and api_key_env are required together")
 }
