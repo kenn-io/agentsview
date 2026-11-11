@@ -116,7 +116,61 @@ func ensureUsageChangeJournalPG(ctx context.Context, pg *sql.DB) {
 	if err != nil {
 		return
 	}
+	err = installUsageAccountRevisionPG(ctx, tx)
+	if err != nil {
+		return
+	}
 	err = tx.Commit()
+}
+
+func installUsageAccountRevisionPG(ctx context.Context, tx *sql.Tx) error {
+	var version string
+	if err := tx.QueryRowContext(ctx, `SELECT value FROM sync_metadata WHERE key = 'usage_change_journal_version'`).Scan(&version); err != nil {
+		return err
+	}
+	if version != strconv.Itoa(usageChangeJournalVersionPG) {
+		return nil
+	}
+	var schema string
+	if err := tx.QueryRowContext(ctx, `SELECT current_schema()`).Scan(&schema); err != nil {
+		return err
+	}
+	quoted, err := quoteIdentifier(schema)
+	if err != nil {
+		return err
+	}
+	stamp := strings.Replace(stampUsageChangeFunctionBodyPG,
+		`UPDATE usage_session_changes SET revision = stamped WHERE revision = 0;`,
+		`UPDATE usage_session_changes SET revision = stamped WHERE revision = 0;
+    IF current_setting('agentsview.uc_accounts_' || TG_RELID, true) = 'on' THEN
+        UPDATE sync_metadata SET value = stamped::text WHERE key = 'usage_account_revision';
+        PERFORM set_config('agentsview.uc_accounts_' || TG_RELID, '', true);
+    END IF;`, 1)
+	mark := fmt.Sprintf(markUsageChangeFunctionBodyPG, "''", "true", "*")
+	mark = strings.Replace(mark, "BEGIN\n", `DECLARE
+    changed boolean;
+BEGIN
+    IF TG_OP = 'INSERT' THEN
+        SELECT EXISTS (SELECT 1 FROM new_rows) INTO changed;
+    ELSIF TG_OP = 'DELETE' THEN
+        SELECT EXISTS (SELECT 1 FROM old_rows) INTO changed;
+    ELSE
+        SELECT EXISTS ((SELECT * FROM old_rows EXCEPT SELECT * FROM new_rows)
+            UNION ALL (SELECT * FROM new_rows EXCEPT SELECT * FROM old_rows)) INTO changed;
+    END IF;
+    IF changed THEN
+        PERFORM set_config('agentsview.uc_accounts_' || 'usage_session_changes'::regclass::oid, 'on', true);
+    END IF;
+`, 1)
+	_, err = tx.ExecContext(ctx, fmt.Sprintf(`
+ INSERT INTO sync_metadata(key,value)
+ SELECT 'usage_account_revision', value FROM sync_metadata WHERE key='usage_change_revision'
+ ON CONFLICT(key) DO NOTHING;
+ CREATE OR REPLACE FUNCTION stamp_usage_change() RETURNS trigger LANGUAGE plpgsql SECURITY DEFINER
+ SET search_path = pg_catalog, %[1]s, pg_temp AS $journal$%[2]s$journal$;
+ CREATE OR REPLACE FUNCTION mark_usage_cursor_usage_events() RETURNS trigger LANGUAGE plpgsql SECURITY DEFINER
+ SET search_path = pg_catalog, %[1]s, pg_temp AS $journal$%[3]s$journal$;`, quoted, stamp, mark))
+	return err
 }
 
 func installUsageChangeJournalPG(ctx context.Context, tx *sql.Tx) error {

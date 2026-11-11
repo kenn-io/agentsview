@@ -103,12 +103,15 @@ func (source *pgUsageCacheSource) snapshot(ctx context.Context, view *Store) (db
 		return snapshot, db.ErrUsageSourceUnavailable
 	}
 	snapshot.DatabaseID = fmt.Sprintf("%s|%d|%s|%s", source.target, oid, systemID, timeline)
-	err = view.pg.QueryRowContext(ctx, `SELECT COALESCE((SELECT revision FROM usage_session_changes WHERE session_id=''), 1)`).Scan(&snapshot.CursorHighWater)
+	err = view.pg.QueryRowContext(ctx, `SELECT COALESCE((SELECT value::bigint FROM sync_metadata WHERE key='usage_account_revision'), 0)`).Scan(&snapshot.CursorHighWater)
 	if isUndefinedTable(err) || isInsufficientPrivilege(err) {
 		return snapshot, db.ErrUsageSourceUnavailable
 	}
 	if err != nil {
 		return snapshot, err
+	}
+	if snapshot.CursorHighWater == 0 {
+		return snapshot, db.ErrUsageSourceUnavailable
 	}
 	snapshot.PricingRows, err = view.loadPricingMap(ctx)
 	return snapshot, err

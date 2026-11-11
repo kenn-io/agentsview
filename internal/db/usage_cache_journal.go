@@ -176,14 +176,13 @@ func (db *DB) prepareJournaledUsageWindow(ctx context.Context, filter UsageFilte
 		return usagePreparedWindow{claimZone: &zone, claimDatabaseID: databaseID}, false, fallback()
 	}
 	if summarizer, ok := db.usageSource.(UsageChangeSummarizer); ok && usageWorkDeferred(ctx) {
-		// One query decides most deferrals before the full source capture.
-		// Global changes include pricing, which leaves the zone untrusted.
+		// Check the batch size before capturing its source metadata. The
+		// capture separately checks the pricing and account revisions.
 		changes, err := summarizer.SummarizeUsageChanges(ctx, zone.revision.Int64)
 		if err != nil {
 			return usagePreparedWindow{}, false, err
 		}
-		if changes.Global ||
-			changes.Sessions+len(lost) > usageDeferredRefreshLimit {
+		if changes.Sessions+len(lost) > usageDeferredRefreshLimit {
 			return usagePreparedWindow{}, false, ErrUsageCacheWarming
 		}
 	}

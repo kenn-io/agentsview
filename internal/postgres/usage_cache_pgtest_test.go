@@ -218,19 +218,26 @@ func TestPGUsageCacheAccountReplacementAndPricing(t *testing.T) {
 	probe.takeExtracted()
 	var accountReads atomic.Int64
 	probe.beforeAccounts = func(context.Context) error { accountReads.Add(1); return nil }
-	for _, mutation := range []string{
-		`UPDATE cursor_usage_events SET charged_microdollars=500,input_tokens=80 WHERE id=100`,
-		`DELETE FROM cursor_usage_events WHERE id=100; INSERT INTO cursor_usage_events(id,agent,occurred_at,model,input_tokens,output_tokens,charged_microdollars,is_headless,dedup_key) VALUES(150,'cursor','2026-01-01','paid-a',40,50,300,false,'three')`,
-		`UPDATE model_pricing SET output_microdollars_per_mtok=20000000 WHERE model_pattern='paid-a'`,
-		`DELETE FROM model_pricing WHERE model_pattern='paid-a'`,
-		`INSERT INTO source_project_identity_observations(source_archive_id,project,machine,observed_at) VALUES('account-journal','project-a','test-machine',now())`,
+	for _, mutation := range []struct {
+		sql            string
+		accountChanged bool
+	}{
+		{`UPDATE cursor_usage_events SET charged_microdollars=500,input_tokens=80 WHERE id=100`, true},
+		{`DELETE FROM cursor_usage_events WHERE id=100; INSERT INTO cursor_usage_events(id,agent,occurred_at,model,input_tokens,output_tokens,charged_microdollars,is_headless,dedup_key) VALUES(150,'cursor','2026-01-01','paid-a',40,50,300,false,'three')`, true},
+		{`UPDATE model_pricing SET output_microdollars_per_mtok=20000000 WHERE model_pattern='paid-a'`, false},
+		{`DELETE FROM model_pricing WHERE model_pattern='paid-a'`, false},
+		{`INSERT INTO source_project_identity_observations(source_archive_id,project,machine,observed_at) VALUES('account-journal','project-a','test-machine',now())`, false},
 	} {
 		accountReads.Store(0)
-		_, err := store.pg.ExecContext(ctx, mutation)
+		_, err := store.pg.ExecContext(ctx, mutation.sql)
 		require.NoError(t, err)
 		requireCachedUsageMatchesDirect(t, store, filter)
 		require.Empty(t, probe.takeExtracted(), "account or metadata changes must reuse session facts")
-		assert.Equal(t, int64(1), accountReads.Load())
+		if mutation.accountChanged {
+			assert.Equal(t, int64(1), accountReads.Load())
+		} else {
+			assert.Zero(t, accountReads.Load())
+		}
 	}
 	store.SetCustomPricing(map[string]config.CustomModelRate{"paid-a": {OutputMicrodollarsPerMTok: 23000000}})
 	requireCachedUsageMatchesDirect(t, store, filter)
@@ -854,4 +861,78 @@ func TestPGUsageCacheDefersAccountChange(t *testing.T) {
 	require.Equal(t, want.Totals.TotalCost, cached.Totals.TotalCost)
 	require.Equal(t, int64(300), cached.Totals.TotalCost.Microdollars-before.Totals.TotalCost.Microdollars)
 	assert.NotContains(t, output.String(), "postgres usage cache: falling back to direct read")
+}
+
+func TestPGUsageCacheKeepsAccountFactsAfterIdentityWrite(t *testing.T) {
+	_, _, store, _ := keptUsageFixture(t)
+	ctx := t.Context()
+	_, err := store.pg.ExecContext(ctx, `INSERT INTO cursor_usage_events(id,agent,occurred_at,model,output_tokens,charged_microdollars,dedup_key) VALUES(1,'cursor','2026-01-01','paid-a',3,300,'account-one')`)
+	require.NoError(t, err)
+	probe := attachUsageCacheProbe(t, store, t.TempDir())
+	t.Cleanup(func() { require.NoError(t, store.usageCache.Close()) })
+	filter := db.UsageFilter{Timezone: "UTC"}
+	requireCachedUsageMatchesDirect(t, store, filter)
+	store.usageCache.DeferWork()
+	_, err = store.pg.ExecContext(ctx, `INSERT INTO source_project_identity_observations(source_archive_id,project,machine,observed_at) VALUES('identity-test','project-a','test-machine',now())`)
+	require.NoError(t, err)
+	accountsRead := false
+	probe.beforeAccounts = func(context.Context) error { accountsRead = true; return nil }
+	got, err := store.usageCache.GetDailyUsage(ctx, filter)
+	require.NoError(t, err)
+	want, err := (&Store{pg: store.pg}).GetDailyUsage(ctx, filter)
+	require.NoError(t, err)
+	require.Equal(t, want, got)
+	assert.False(t, accountsRead)
+	_, err = store.pg.ExecContext(ctx, `UPDATE cursor_usage_events SET output_tokens=output_tokens WHERE id=1`)
+	require.NoError(t, err)
+	_, err = store.usageCache.GetDailyUsage(ctx, filter)
+	require.NoError(t, err)
+	_, err = store.pg.ExecContext(ctx, `UPDATE cursor_usage_events SET charged_microdollars=500 WHERE id=1`)
+	require.NoError(t, err)
+	_, err = store.usageCache.GetDailyUsage(ctx, filter)
+	require.ErrorIs(t, err, db.ErrUsageCacheWarming)
+	got = readWarmedUsage(t, store, filter)
+	want, err = (&Store{pg: store.pg}).GetDailyUsage(ctx, filter)
+	require.NoError(t, err)
+	require.Equal(t, want, got)
+}
+
+func TestPGUsageAccountRevisionTracksCommittedChanges(t *testing.T) {
+	_, syncer, store, _ := keptUsageFixture(t)
+	ctx := t.Context()
+	source := &pgUsageCacheSource{Store: store, target: "account-revision-test"}
+	_, before, _, err := source.ReadUsageAccounts(ctx)
+	require.NoError(t, err)
+	tx, err := syncer.pg.BeginTx(ctx, nil)
+	require.NoError(t, err)
+	_, err = tx.ExecContext(ctx, `INSERT INTO cursor_usage_events(id,agent,occurred_at,model,charged_microdollars,dedup_key) VALUES(1,'cursor','2026-01-01','paid-a',100,'one'); SET CONSTRAINTS ALL IMMEDIATE; UPDATE cursor_usage_events SET charged_microdollars=200 WHERE id=1`)
+	require.NoError(t, err)
+	require.NoError(t, tx.Commit())
+	_, after, rows, err := source.ReadUsageAccounts(ctx)
+	require.NoError(t, err)
+	require.Greater(t, after, before)
+	require.Len(t, rows, 1)
+	assert.Equal(t, int64(200), rows[0].ChargedMicrodollars)
+	tx, err = syncer.pg.BeginTx(ctx, nil)
+	require.NoError(t, err)
+	_, err = tx.ExecContext(ctx, `DELETE FROM cursor_usage_events WHERE id=1`)
+	require.NoError(t, err)
+	require.NoError(t, tx.Rollback())
+	_, rolledBack, rows, err := source.ReadUsageAccounts(ctx)
+	require.NoError(t, err)
+	assert.Equal(t, after, rolledBack)
+	require.Len(t, rows, 1)
+}
+
+func TestPGUsageAccountRevisionLeavesNewerJournalUntouched(t *testing.T) {
+	_, syncer, _, _ := keptUsageFixture(t)
+	ctx := t.Context()
+	_, err := syncer.pg.ExecContext(ctx, `UPDATE sync_metadata SET value='999' WHERE key='usage_change_journal_version';
+CREATE OR REPLACE FUNCTION stamp_usage_change() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN RETURN NEW; END $$`)
+	require.NoError(t, err)
+	var before, after string
+	require.NoError(t, syncer.pg.QueryRowContext(ctx, `SELECT pg_get_functiondef('stamp_usage_change()'::regprocedure)`).Scan(&before))
+	ensureUsageChangeJournalPG(ctx, syncer.pg)
+	require.NoError(t, syncer.pg.QueryRowContext(ctx, `SELECT pg_get_functiondef('stamp_usage_change()'::regprocedure)`).Scan(&after))
+	assert.Equal(t, before, after)
 }

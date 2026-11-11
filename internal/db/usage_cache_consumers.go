@@ -308,9 +308,13 @@ func (cache *usageCache) fillAndRollupUsageWindow(ctx context.Context, snapshot,
 // splitting large windows across the bulk-read slots.
 func (cache *usageCache) fillUsageWindow(ctx context.Context, snapshot *usageQuerySnapshot) (map[string]usageFillResult, error) {
 	shards := max(1, min(bulkReadSlots, len(snapshot.Versions)/usageFillShardMinSessions))
+	remote := cache.fill.archive.usageSource != nil
+	if remote {
+		shards = 1
+	}
 	var fills map[string]usageFillResult
 	var err error
-	if shards == 1 {
+	if shards == 1 && (!remote || len(snapshot.Versions) <= usageFillShardMinSessions) {
 		fills, err = cache.fill.Ensure(ctx, snapshot.Versions, snapshot.CursorHighWater)
 	} else {
 		fills = make(map[string]usageFillResult, len(snapshot.Versions))

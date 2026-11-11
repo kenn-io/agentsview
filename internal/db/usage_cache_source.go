@@ -94,7 +94,7 @@ type UsageChangeSummarizer interface {
 const (
 	// usageWarmDirectReadWait bounds how long a warm pass yields to direct
 	// reads, so steady traffic cannot postpone it indefinitely.
-	usageWarmDirectReadWait = 5 * time.Second
+	usageWarmDirectReadWait = 30 * time.Second
 	// usageWarmDeferGrace covers the gap between a deferred read returning
 	// and its caller calling HoldWarm before its direct read.
 	usageWarmDeferGrace   = 20 * time.Millisecond
