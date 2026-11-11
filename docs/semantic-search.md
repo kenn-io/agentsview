@@ -31,13 +31,13 @@ during indexing.
 
 Turning on the built-in server records a shared choice after setup succeeds.
 Other apps using Kit can use that choice, and AgentsView can use it at startup
-to enable search and download missing built-in server files. Explicitly disabled
-or separately configured search keeps its settings.
+to enable search and download missing built-in server files when it has no
+enabled setup. Explicitly disabled or separately configured search keeps its
+settings.
 
 An enabled configuration with `local = true` starts indexing at startup using
 installed server files. It does not record a shared choice. If files are missing,
-startup can download them only when a shared choice has already been recorded;
-otherwise, use **Turn on** to approve the download.
+use **Turn on** to approve the download.
 
 For CLI setup, run `agentsview index embeddings build`. AgentsView uses a
 running Ollama server with Nomic or Kit's shared local server. If the local
