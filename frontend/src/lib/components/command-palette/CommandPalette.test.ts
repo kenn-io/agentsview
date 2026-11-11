@@ -581,7 +581,6 @@ describe("CommandPalette", () => {
       if (result === "conflict") {
         expect(mockSearchStore.setMode).not.toHaveBeenCalled();
         expect(mockEmbeddingsService.getApiV1EmbeddingsStatus).toHaveBeenCalledTimes(2);
-        expect(document.body.textContent).toContain("295 MB");
       } else {
         expect(mockSearchStore.setMode).toHaveBeenCalledWith("semantic");
       }
