@@ -76,6 +76,7 @@ type usageQueryInterval struct {
 }
 
 type usageQuerySnapshot struct {
+	resetEpoch           int64
 	exactAccountRevision bool
 	deferAccountBuild    bool
 	ChangeIDs            []string

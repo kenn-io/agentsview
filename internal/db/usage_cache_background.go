@@ -261,6 +261,7 @@ func (db *DB) runUsageCacheBackfillPass(
 			return err
 		}
 		zones[i].installSeq = installSeq
+		zones[i].resetEpoch = snapshot.resetEpoch
 	}
 	if err := cache.sweepDeletionJournal(ctx, db); err != nil {
 		return err

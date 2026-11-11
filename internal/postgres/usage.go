@@ -16,6 +16,7 @@ import (
 	"go.kenn.io/agentsview/internal/kept"
 	"go.kenn.io/agentsview/internal/money"
 	pricingpkg "go.kenn.io/agentsview/internal/pricing"
+	"go.kenn.io/agentsview/internal/usagefacts"
 )
 
 const pgUsageMessageEligibility = `
@@ -980,16 +981,16 @@ func pgDailyUsageAmounts(
 	cost, savings money.Money,
 	err error,
 ) {
-	inputTok, outputTok, cacheCrTok, cacheRdTok, reasoningTok := pgDailyUsageRowTokens(r)
-	cacheCr1hTok := pgUsageRowCacheCreation1hTokens(
-		r.usageSource, r.tokenJSON, cacheCrTok)
+	fact := pgDailyUsageRowFact(r)
+	inputTok, outputTok, cacheCrTok, cacheRdTok = int(fact.InputTokens), int(fact.OutputTokens), int(fact.CacheCreationTokens), int(fact.CacheReadTokens)
+	reasoningTok, cacheCr1hTok := int(fact.ReasoningTokens), int(fact.CacheCreation1hTokens)
 
 	pricedModel, lookup := pricing.ResolveAt(
 		r.model, pgUsageLookupModel(r.model, r.pricingTS),
 		pgUsagePricingTimestamp(r.pricingTS),
 	)
 	rates := lookup.Rates
-	requestScoped := db.UsageRowIsRequestScoped(r.usageSource, r.messageOrdinal)
+	requestScoped := fact.RequestScoped
 	if r.cost.Valid && r.costSource != db.CopilotReportedCostSource {
 		cost = money.Money{Microdollars: r.cost.Int64}
 		pricing.RecordResolvedReported(r.model, pricedModel, lookup)
@@ -1012,7 +1013,7 @@ func pgDailyUsageAmounts(
 		// Anthropic bills server-side web search per request on top of
 		// tokens; see db.sessionRowCost for why a reported cost skips it.
 		cost, err = export.AddWebSearchFee(
-			cost, pgDailyUsageRowWebSearchRequests(r))
+			cost, int(fact.WebSearchRequests))
 		if err != nil {
 			return 0, 0, 0, 0, money.Money{}, money.Money{},
 				fmt.Errorf("pricing pg usage row for model %q: %w", r.model, err)
@@ -1069,6 +1070,17 @@ func pgDailyUsageAmounts(
 			fmt.Errorf("pricing pg cache savings for model %q: %w", r.model, err)
 	}
 	return inputTok, outputTok, cacheCrTok, cacheRdTok, cost, savings, nil
+}
+
+func pgDailyUsageRowFact(r pgDailyUsageScanRow) usagefacts.Fact {
+	input, output, write, read, reasoning := pgDailyUsageRowTokens(r)
+	return usagefacts.Fact{
+		InputTokens: int64(input), OutputTokens: int64(output), ReasoningTokens: int64(reasoning),
+		CacheCreationTokens: int64(write), CacheReadTokens: int64(read),
+		CacheCreation1hTokens: int64(pgUsageRowCacheCreation1hTokens(r.usageSource, r.tokenJSON, write)),
+		WebSearchRequests:     int64(pgDailyUsageRowWebSearchRequests(r)),
+		RequestScoped:         db.UsageRowIsRequestScoped(r.usageSource, r.messageOrdinal),
+	}
 }
 
 func pgDailyUsageRowTokens(
@@ -1559,13 +1571,11 @@ type pgDailyUsageSessionCost struct {
 }
 
 func (s *Store) readDailyUsage(ctx context.Context, f db.UsageFilter) (db.DailyUsageResult, error) {
-	if cache := s.usageCache; cache != nil {
-		result, err := cache.GetDailyUsage(ctx, f)
-		if !directUsageRequired(ctx, err) {
-			return result, err
-		}
-		defer cache.HoldWarm()()
+	cached, release, handled, err := cachedUsage(ctx, s.usageCache, func(cache *db.UsageCacheReader) (db.DailyUsageResult, error) { return cache.GetDailyUsage(ctx, f) })
+	if handled {
+		return cached, err
 	}
+	defer release()
 	loc := f.Location()
 
 	pricing, err := s.loadPricingMap(ctx)
@@ -2168,13 +2178,13 @@ func (s *Store) GetTopSessionsByCost(
 		slot += fmt.Sprintf("|%t", f.TopSessionsByGroup)
 	}
 	version := s.keptUsageVersion(ctx, slot)
-	if cache := s.usageCache; cache != nil {
-		result, err := s.cachedTopSessions(ctx, cache, f, limit, slot, version)
-		if !directUsageRequired(ctx, err) {
-			return result, err
-		}
-		defer cache.HoldWarm()()
+	cached, release, handled, err := cachedUsage(ctx, s.usageCache, func(cache *db.UsageCacheReader) ([]db.TopSessionEntry, error) {
+		return s.cachedTopSessions(ctx, cache, f, limit, slot, version)
+	})
+	if handled {
+		return cached, err
 	}
+	defer release()
 	out, err := s.runtimeState().topUsage.Do(ctx, slot, version, func(ctx context.Context) ([]db.TopSessionEntry, error) {
 		if slot != "" && version != "" {
 			s.forgetPricingLoad()
@@ -2362,13 +2372,13 @@ func (s *Store) readTopSessions(ctx context.Context, f db.UsageFilter) ([]db.Top
 func (s *Store) GetUsageSessionCounts(
 	ctx context.Context, f db.UsageFilter,
 ) (db.UsageSessionCounts, error) {
-	if cache := s.usageCache; cache != nil {
-		result, err := cache.GetUsageSessionCounts(ctx, f)
-		if !directUsageRequired(ctx, err) {
-			return result, err
-		}
-		defer cache.HoldWarm()()
+	cached, release, handled, err := cachedUsage(ctx, s.usageCache, func(cache *db.UsageCacheReader) (db.UsageSessionCounts, error) {
+		return cache.GetUsageSessionCounts(ctx, f)
+	})
+	if handled {
+		return cached, err
 	}
+	defer release()
 	pb := &paramBuilder{}
 	query := pgTopSessionsUsageRowQuery(pb, f, false, s.sessionDialect())
 	query += ` ORDER BY u.ts ASC, u.session_id ASC,
@@ -2471,13 +2481,11 @@ func appendPGUsageMatchingActivityClauses(
 func (s *Store) GetUsageMatchingSessionCount(
 	ctx context.Context, f db.UsageFilter,
 ) (int, error) {
-	if cache := s.usageCache; cache != nil {
-		result, err := cache.GetUsageMatchingSessionCount(ctx, f)
-		if !directUsageRequired(ctx, err) {
-			return result, err
-		}
-		defer cache.HoldWarm()()
+	cached, release, handled, err := cachedUsage(ctx, s.usageCache, func(cache *db.UsageCacheReader) (int, error) { return cache.GetUsageMatchingSessionCount(ctx, f) })
+	if handled {
+		return cached, err
 	}
+	defer release()
 	pb := &paramBuilder{}
 
 	if f.From == "" && f.To == "" {

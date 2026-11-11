@@ -79,6 +79,7 @@ const (
 	usageCacheMetadataNextRollupRevision  = "next_rollup_install_revision"
 	usageCacheMetadataDeletionRevision    = "deletion_revision"
 	usageCacheMetadataCursorHighWaterMark = "cursor_high_water_mark"
+	usageCacheMetadataResetEpoch          = "reset_epoch"
 	usageCacheMetadataBackfillCompletedAt = "backfill_completed_at"
 	usageCacheMetadataRetirementProtocol  = "retirement_protocol_version"
 )
@@ -775,6 +776,7 @@ func initializeUsageCache(
 		{usageCacheMetadataNextRollupRevision, "1"},
 		{usageCacheMetadataDeletionRevision, "0"},
 		{usageCacheMetadataCursorHighWaterMark, "0"},
+		{usageCacheMetadataResetEpoch, "0"},
 		{usageCacheMetadataBackfillCompletedAt, ""},
 		{
 			usageCacheMetadataRetirementProtocol,
@@ -941,8 +943,8 @@ func usageCacheSchemaComplete(ctx context.Context, database *sql.DB) bool {
 			'source_database_id', 'next_install_revision',
 			'next_rollup_install_revision',
 			'deletion_revision', 'cursor_high_water_mark',
-			'backfill_completed_at', 'retirement_protocol_version'
-		)`).Scan(&metadataCount); err != nil || metadataCount != 9 {
+			'backfill_completed_at', 'retirement_protocol_version', 'reset_epoch'
+		)`).Scan(&metadataCount); err != nil || metadataCount != 10 {
 		return false
 	}
 	queries := []string{
@@ -1192,25 +1194,6 @@ func (m *usageCacheManager) RetireExcept(databaseID string) error {
 	}
 	m.mu.Unlock()
 	return retireUsageCaches(caches, m.archivePath, true)
-}
-
-func (m *usageCacheManager) retireGeneration(databaseID string, cache *usageCache) error {
-	m.retireMu.Lock()
-	defer m.retireMu.Unlock()
-	m.mu.Lock()
-	if m.generations[databaseID] != cache {
-		m.mu.Unlock()
-		return nil
-	}
-	cache.beginRetirement()
-	m.mu.Unlock()
-	err := retireUsageCaches([]*usageCache{cache}, m.archivePath, true)
-	m.mu.Lock()
-	if m.generations[databaseID] == cache {
-		delete(m.generations, databaseID)
-	}
-	m.mu.Unlock()
-	return err
 }
 
 func (m *usageCacheManager) Close() error {

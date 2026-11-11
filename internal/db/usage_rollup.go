@@ -597,7 +597,7 @@ func (c *usageRollupCoordinator) ensureAttempt(
 		c.observer.beforeInstall(slices.Clone(builds))
 	}
 	err = installUsageRollupBuilds(
-		ctx, conn, identity, snapshot.location, builds, cross)
+		ctx, conn, identity, snapshot.location, builds, cross, snapshot.resetEpoch)
 	metrics.InstallDuration = time.Since(installStarted)
 	if err != nil {
 		if snapshot.deferAccountBuild && errors.Is(err, errUsageCacheSourceChanged) {
@@ -754,7 +754,7 @@ func readUsageRollupInstalls(
 func installUsageRollupBuilds(
 	ctx context.Context, conn *sql.Conn, identity usageTimezoneIdentity,
 	location *time.Location, builds []usageRollupBuild,
-	buildCross usageDedupIdentitySet,
+	buildCross usageDedupIdentitySet, epoch int64,
 ) error {
 	// Take the cache write lock up front. A deferred transaction that
 	// reads before its first write fails with SQLITE_BUSY_SNAPSHOT
@@ -771,6 +771,9 @@ func installUsageRollupBuilds(
 			_, _ = conn.ExecContext(context.WithoutCancel(ctx), `ROLLBACK`)
 		}
 	}()
+	if err := verifyUsageResetEpoch(ctx, conn, epoch); err != nil {
+		return err
+	}
 	// A fill committing between classification and this install can add a
 	// sibling for an identity that was finalized into a daily row. Abort on
 	// new crossness; crossness that disappeared keeps the conservative

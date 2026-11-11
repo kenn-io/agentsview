@@ -803,7 +803,7 @@ func TestUsageSpoolRetainsOnlyChangedFacts(t *testing.T) {
 				assert.Equal(t, step.spooled, spooled, step.name)
 				assert.Equal(t, step.total, total, step.name)
 				_, lost, err := cache.fill.installSpool(t.Context(), spool,
-					[]usageSourceVersion{extracted["session"]}, nil, expected)
+					[]usageSourceVersion{extracted["session"]}, nil, expected, 0)
 				require.NoError(t, err, step.name)
 				assert.Empty(t, lost, step.name)
 				require.NoError(t, spool.Close())
@@ -833,7 +833,7 @@ func TestUsageSpoolFallsBackAfterCacheRevisionChanges(t *testing.T) {
 	require.NoError(t, spool.db.QueryRowContext(t.Context(), `SELECT COUNT(*) FROM facts`).Scan(&rows))
 	assert.Equal(t, 8, rows, "a changed baseline requires the complete snapshot")
 	installed, lost, err := cache.fill.installSpool(t.Context(), spool,
-		[]usageSourceVersion{extracted["session"]}, nil, expected)
+		[]usageSourceVersion{extracted["session"]}, nil, expected, 0)
 	require.NoError(t, err)
 	assert.Empty(t, installed)
 	assert.Equal(t, []string{"session"}, lost)
@@ -1743,7 +1743,7 @@ func TestUsageSpoolTokenAppendReadsOnlyNewMessages(t *testing.T) {
 			var rows int
 			require.NoError(t, spool.db.QueryRowContext(t.Context(), `SELECT COUNT(*) FROM facts`).Scan(&rows))
 			assert.Equal(t, 1, rows)
-			_, lost, err := cache.fill.installSpool(t.Context(), spool, []usageSourceVersion{extracted["session"]}, nil, expected)
+			_, lost, err := cache.fill.installSpool(t.Context(), spool, []usageSourceVersion{extracted["session"]}, nil, expected, 0)
 			require.NoError(t, err)
 			assert.Empty(t, lost)
 			for _, messages := range [][]Message{

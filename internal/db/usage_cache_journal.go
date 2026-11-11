@@ -11,6 +11,7 @@ import (
 )
 
 type usageZoneCoverage struct {
+	resetEpoch                  int64
 	id                          int64
 	revision                    sql.NullInt64
 	installRevision, installSeq int64
@@ -34,7 +35,58 @@ func readUsageZoneCoverage(ctx context.Context, q sessionExportQuerier, key stri
 	err = q.QueryRowContext(ctx, `
 		SELECT CAST(value AS INTEGER) FROM usage_cache_metadata WHERE key = ?`,
 		usageCacheMetadataNextRollupRevision).Scan(&zone.installSeq)
+	if err == nil {
+		zone.resetEpoch, err = readUsageResetEpoch(ctx, q)
+	}
 	return zone, err
+}
+
+func readUsageResetEpoch(ctx context.Context, q sessionExportQuerier) (int64, error) {
+	var epoch int64
+	err := q.QueryRowContext(ctx, `SELECT CAST(value AS INTEGER) FROM usage_cache_metadata WHERE key = ?`, usageCacheMetadataResetEpoch).Scan(&epoch)
+	return epoch, err
+}
+
+func verifyUsageResetEpoch(ctx context.Context, q sessionExportQuerier, expected int64) error {
+	epoch, err := readUsageResetEpoch(ctx, q)
+	if err != nil {
+		return err
+	}
+	if epoch != expected {
+		return errUsageCacheSourceChanged
+	}
+	return nil
+}
+
+func (cache *usageCache) resetRewoundUsage(ctx context.Context, expected int64) error {
+	tx, err := cache.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = tx.Rollback() }()
+	result, err := tx.ExecContext(ctx, `UPDATE usage_cache_metadata SET value = CAST(value AS INTEGER) + 1 WHERE key = ? AND CAST(value AS INTEGER) = ?`, usageCacheMetadataResetEpoch, expected)
+	if err != nil {
+		return err
+	}
+	changed, err := result.RowsAffected()
+	if err != nil {
+		return err
+	}
+	if changed == 0 {
+		return nil
+	}
+	for _, query := range []string{
+		`UPDATE usage_rollup_timezones SET change_revision = NULL, change_install_revision = 0, change_pricing = ''`,
+		`DELETE FROM usage_rollup_installs`,
+		`DELETE FROM usage_cached_sessions`,
+		`DELETE FROM cursor_usage_facts`,
+		`UPDATE usage_cache_metadata SET value = '0' WHERE key = 'cursor_high_water_mark'`,
+	} {
+		if _, err := tx.ExecContext(ctx, query); err != nil {
+			return err
+		}
+	}
+	return tx.Commit()
 }
 
 // A request only advances an existing claim. A completed archive pass can
@@ -42,7 +94,7 @@ func readUsageZoneCoverage(ctx context.Context, q sessionExportQuerier, key stri
 func (cache *usageCache) claimUsageZone(ctx context.Context, identity usageTimezoneIdentity, zone usageZoneCoverage, revision int64, catalog string, installs map[string]usageRollupInstall) error {
 	if zone.revision.Valid && zone.revision.Int64 == revision &&
 		zone.installRevision == zone.installSeq && zone.pricing == catalog {
-		return nil
+		return verifyUsageResetEpoch(ctx, cache.db, zone.resetEpoch)
 	}
 	stamps := make([][2]int64, 0, len(installs))
 	for _, install := range installs {
@@ -64,7 +116,8 @@ func (cache *usageCache) claimUsageZone(ctx context.Context, identity usageTimez
 				SELECT id FROM usage_rollup_timezones WHERE timezone_key = ?)
 			AND install_revision >= ?), ?)), ?, ?
 		-- Refuse a claim when any install since capture used another catalog.
-		WHERE NOT EXISTS (
+		WHERE (SELECT CAST(value AS INTEGER) FROM usage_cache_metadata WHERE key = 'reset_epoch') = ?
+		AND NOT EXISTS (
 			SELECT 1 FROM usage_rollup_installs WHERE timezone_id = (
 				SELECT id FROM usage_rollup_timezones WHERE timezone_key = ?)
 			AND install_revision >= ? AND source_pricing <> ?)
@@ -81,7 +134,7 @@ func (cache *usageCache) claimUsageZone(ctx context.Context, identity usageTimez
 		WHERE usage_rollup_timezones.change_revision IS ?
 			AND usage_rollup_timezones.change_install_revision = ?`,
 		identity.Key, identity.Name, identity.IntervalFingerprint, revision, identity.Key, zone.installSeq, revision, zone.installSeq, catalog,
-		identity.Key, zone.installSeq, catalog, string(encoded), len(stamps), zone.revision, zone.installRevision)
+		zone.resetEpoch, identity.Key, zone.installSeq, catalog, string(encoded), len(stamps), zone.revision, zone.installRevision)
 	return err
 }
 
@@ -136,8 +189,7 @@ func (db *DB) prepareJournaledUsageWindow(ctx context.Context, filter UsageFilte
 	}
 	snapshot, refresh, refreshIDs, trusted, err := db.captureJournaledUsageWindow(ctx, filter, kind, cursor, databaseID, zone, lost, window)
 	if errors.Is(err, errUsageCacheRevisionRewound) {
-		release()
-		if err := db.usageCache.retireGeneration(databaseID, cache); err != nil {
+		if err := cache.resetRewoundUsage(ctx, zone.resetEpoch); err != nil {
 			return usagePreparedWindow{}, false, err
 		}
 		return usagePreparedWindow{}, false, ErrUsageCacheWarming

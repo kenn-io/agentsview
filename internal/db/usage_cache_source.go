@@ -295,6 +295,19 @@ func (reader *UsageCacheReader) runWarm(idle chan struct{}) {
 }
 
 func (db *DB) captureExternalUsage(ctx context.Context, filter UsageFilter, ids *[]string, after *int64) (usageQuerySnapshot, error) {
+	databaseID, err := db.GetDatabaseID(ctx)
+	if err != nil {
+		return usageQuerySnapshot{}, err
+	}
+	cache, release, err := db.usageCache.acquireGeneration(ctx, databaseID)
+	if err != nil {
+		return usageQuerySnapshot{}, err
+	}
+	defer release()
+	epoch, err := readUsageResetEpoch(ctx, cache.db)
+	if err != nil {
+		return usageQuerySnapshot{}, err
+	}
 	snapshot, err := db.usageSource.CaptureUsage(ctx, UsageSourceRequest{Filter: filter, IDs: ids, AfterRevision: after})
 	if err != nil {
 		return snapshot, err
@@ -302,6 +315,10 @@ func (db *DB) captureExternalUsage(ctx context.Context, filter UsageFilter, ids 
 	if snapshot.DatabaseID != "" {
 		db.usageSourceDatabaseID.Store(&snapshot.DatabaseID)
 	}
+	if snapshot.DatabaseID != databaseID {
+		return snapshot, errUsageCacheSourceChanged
+	}
+	snapshot.resetEpoch = epoch
 	snapshot.exactAccountRevision = true
 	snapshot.location = filter.Location()
 	snapshot.Intervals = usageQueryIntervals(filter)
@@ -421,6 +438,10 @@ func (c *usageFillCoordinator) extractExternalSessions(ctx context.Context, vers
 // Account sources can update or delete existing IDs. Replace their facts and
 // invalidate both removed and arriving identities in the same transaction.
 func (c *usageFillCoordinator) replaceExternalAccounts(ctx context.Context, target int64) error {
+	epoch, err := readUsageResetEpoch(ctx, c.cache.db)
+	if err != nil {
+		return err
+	}
 	databaseID, revision, accounts, err := c.archive.usageSource.ReadUsageAccounts(ctx)
 	if err != nil {
 		return err
@@ -437,6 +458,9 @@ func (c *usageFillCoordinator) replaceExternalAccounts(ctx context.Context, targ
 		return err
 	}
 	defer func() { _, _ = tx.ExecContext(context.WithoutCancel(ctx), `ROLLBACK`) }()
+	if err := verifyUsageResetEpoch(ctx, tx, epoch); err != nil {
+		return err
+	}
 	var current string
 	if err := tx.QueryRowContext(ctx, `SELECT value FROM usage_cache_metadata WHERE key=?`, usageCacheMetadataCursorHighWaterMark).Scan(&current); err != nil {
 		return err
@@ -497,6 +521,9 @@ func (db *DB) captureExternalJournaledUsageWindow(ctx context.Context, filter Us
 	if snapshot.DatabaseID != databaseID {
 		return snapshot, usageQuerySnapshot{}, nil, false, errUsageCacheSourceChanged
 	}
+	if snapshot.resetEpoch != zone.resetEpoch {
+		return snapshot, usageQuerySnapshot{}, nil, false, errUsageCacheSourceChanged
+	}
 	if zone.revision.Int64 > snapshot.ChangeRevision {
 		return usageQuerySnapshot{}, usageQuerySnapshot{}, nil, false, errUsageCacheRevisionRewound
 	}
@@ -546,5 +573,5 @@ func (cache *usageCache) sweepAbsentUsageOwners(ctx context.Context, snapshot us
 	if err := errors.Join(rows.Err(), rows.Close()); err != nil {
 		return err
 	}
-	return cache.fill.deleteNotificationSessions(deleted, snapshot.ChangeRevision)
+	return cache.fill.deleteNotificationSessions(deleted, snapshot.ChangeRevision, snapshot.resetEpoch)
 }

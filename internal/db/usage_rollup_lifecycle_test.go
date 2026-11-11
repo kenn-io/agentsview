@@ -1267,7 +1267,7 @@ func TestUsageRollupOlderCursorBuildCannotReplaceNewerEvents(t *testing.T) {
 	require.NoError(t, err)
 	identity := usageTimezoneIdentityFor(newSnapshot.location, newSnapshot.Intervals)
 	require.NoError(t, installUsageRollupBuilds(t.Context(), conn, identity, newSnapshot.location,
-		[]usageRollupBuild{newBuild}, cross))
+		[]usageRollupBuild{newBuild}, cross, newSnapshot.resetEpoch))
 	newInstalls, stale, err := readUsageRollupInstalls(
 		t.Context(), conn, identity, newSnapshot, newFills, pricing)
 	require.NoError(t, err)
@@ -1276,11 +1276,11 @@ func TestUsageRollupOlderCursorBuildCannotReplaceNewerEvents(t *testing.T) {
 		newInstalls[usageRollupCursorSessionID].FactRevision)
 
 	err = installUsageRollupBuilds(t.Context(), conn, identity, newSnapshot.location,
-		[]usageRollupBuild{newBuild}, cross)
+		[]usageRollupBuild{newBuild}, cross, newSnapshot.resetEpoch)
 	require.ErrorIs(t, err, errUsageCacheSourceChanged, "a competing build already installed this range")
 
 	err = installUsageRollupBuilds(t.Context(), conn, identity, oldSnapshot.location,
-		[]usageRollupBuild{oldBuild}, cross)
+		[]usageRollupBuild{oldBuild}, cross, oldSnapshot.resetEpoch)
 	require.ErrorIs(t, err, errUsageCacheSourceChanged)
 	oldInstalls, stale, err := readUsageRollupInstalls(
 		t.Context(), conn, identity, oldSnapshot, oldFills, pricing)

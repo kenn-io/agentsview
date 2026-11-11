@@ -274,16 +274,12 @@ func (source *pgUsageCacheSource) StreamUsage(ctx context.Context, ids []string,
 					_ = rows.Close()
 					return err
 				}
-				input, output, write, read, reasoning := pgDailyUsageRowTokens(row)
-				fact := usagefacts.Fact{
-					Source: row.usageSource, Model: row.model, ProviderID: row.providerID,
-					RawTimestamp: pgUsageCacheTime(row.pricingTS), UsesSessionStart: !row.pricingTS.Valid,
-					InputTokens: int64(input), OutputTokens: int64(output), RankingOutputTokens: &rankingOutput, ReasoningTokens: int64(reasoning),
-					CacheCreationTokens: int64(write), CacheReadTokens: int64(read), CacheCreation1hTokens: int64(pgUsageRowCacheCreation1hTokens(row.usageSource, row.tokenJSON, write)),
-					WebSearchRequests: int64(pgDailyUsageRowWebSearchRequests(row)), CostSource: row.costSource,
-					ClaudeMessageID: row.claudeMessageID, ClaudeRequestID: row.claudeRequestID, SourceUUID: row.sourceUUID, UsageDedupKey: row.usageDedupKey,
-					TokenEligible: true, ActivityEligible: activityEligible,
-				}
+				fact := pgDailyUsageRowFact(row)
+				fact.Source, fact.Model, fact.ProviderID = row.usageSource, row.model, row.providerID
+				fact.RawTimestamp, fact.UsesSessionStart = pgUsageCacheTime(row.pricingTS), !row.pricingTS.Valid
+				fact.RankingOutputTokens, fact.CostSource = &rankingOutput, row.costSource
+				fact.ClaudeMessageID, fact.ClaudeRequestID, fact.SourceUUID, fact.UsageDedupKey = row.claudeMessageID, row.claudeRequestID, row.sourceUUID, row.usageDedupKey
+				fact.TokenEligible, fact.ActivityEligible = true, activityEligible
 				fact.TimestampMillis, _, _ = usagefacts.ParseTimestamp(fact.RawTimestamp)
 				fact.TimestampNanos = usagefacts.ParseTimestampNanos(fact.RawTimestamp)
 				if row.messageOrdinal.Valid {
@@ -294,7 +290,6 @@ func (source *pgUsageCacheSource) StreamUsage(ctx context.Context, ids []string,
 					cost := row.cost.Int64
 					fact.ReportedCostMicrodollars = &cost
 				}
-				fact.RequestScoped = db.UsageRowIsRequestScoped(row.usageSource, row.messageOrdinal)
 				if err := emit(row.sessionID, fact); err != nil {
 					_ = rows.Close()
 					return err
@@ -380,6 +375,17 @@ func (source *pgUsageCacheSource) UsageSessionNames(ctx context.Context, ids []s
 
 func directUsageRequired(ctx context.Context, err error) bool {
 	return err != nil && ctx.Err() == nil && logUsageFallback(err)
+}
+
+func cachedUsage[T any](ctx context.Context, cache *db.UsageCacheReader, read func(*db.UsageCacheReader) (T, error)) (result T, release func(), handled bool, err error) {
+	if cache == nil {
+		return result, func() {}, false, nil
+	}
+	result, err = read(cache)
+	if !directUsageRequired(ctx, err) {
+		return result, func() {}, true, err
+	}
+	return result, cache.HoldWarm(), false, nil
 }
 
 func logUsageFallback(err error) bool {

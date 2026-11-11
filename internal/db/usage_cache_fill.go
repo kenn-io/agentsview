@@ -255,6 +255,10 @@ func (c *usageFillCoordinator) fillSessionsDetached(
 	}
 	pending := slices.Clone(versions)
 	for sourceAttempt := 1; sourceAttempt <= usageFillMaxAttempts; sourceAttempt++ {
+		epoch, err := readUsageResetEpoch(ctx, c.cache.db)
+		if err != nil {
+			return nil, err
+		}
 		expected, err := c.captureFillInstallExpectations(ctx, pending)
 		if err != nil {
 			return nil, err
@@ -289,7 +293,7 @@ func (c *usageFillCoordinator) fillSessionsDetached(
 		var lost []string
 		for installAttempt := 1; installAttempt <= usageFillMaxAttempts; installAttempt++ {
 			installed, lost, err = c.installSpool(
-				ctx, spool, stable, deleted, expected)
+				ctx, spool, stable, deleted, expected, epoch)
 			if err == nil || !isUsageCacheBusy(err) {
 				break
 			}
@@ -960,7 +964,7 @@ const usageFillEventFactsSQL = `
 func (c *usageFillCoordinator) installSpool(
 	ctx context.Context, spool *usageFactSpool,
 	stable []usageSourceVersion, deleted []string,
-	expected map[string]usageFillInstallExpectation,
+	expected map[string]usageFillInstallExpectation, epoch int64,
 ) (map[string]usageFillResult, []string, error) {
 	installed := make(map[string]usageFillResult, len(stable))
 	if len(stable) == 0 && len(deleted) == 0 {
@@ -977,7 +981,7 @@ func (c *usageFillCoordinator) installSpool(
 			batchDeleted = nil
 		}
 		batchInstalled, batchLost, err := c.installSpoolBatch(
-			ctx, spool, stable[start:end], batchDeleted, expected,
+			ctx, spool, stable[start:end], batchDeleted, expected, epoch,
 		)
 		if err != nil {
 			return nil, nil, err
@@ -993,7 +997,7 @@ func (c *usageFillCoordinator) installSpool(
 
 func (c *usageFillCoordinator) installSpoolBatch(
 	ctx context.Context, spool *usageFactSpool, stable []usageSourceVersion,
-	deleted []string, expected map[string]usageFillInstallExpectation,
+	deleted []string, expected map[string]usageFillInstallExpectation, epoch int64,
 ) (map[string]usageFillResult, []string, error) {
 	conn, err := c.cache.db.Conn(ctx)
 	if err != nil {
@@ -1020,6 +1024,9 @@ func (c *usageFillCoordinator) installSpoolBatch(
 			_, _ = conn.ExecContext(context.WithoutCancel(ctx), `ROLLBACK`)
 		}
 	}()
+	if err := verifyUsageResetEpoch(ctx, conn, epoch); err != nil {
+		return nil, nil, err
+	}
 
 	sessionIDs := append(usageSourceVersionIDs(stable), deleted...)
 	cachedSessions, err := readUsageCachedSessions(ctx, conn, sessionIDs)
@@ -1832,7 +1839,7 @@ func (c *usageFillCoordinator) processNotificationBatch(
 				deleted = append(deleted, id)
 			}
 			if len(deleted) > 0 {
-				if err := c.deleteNotificationSessions(deleted, revision); err != nil &&
+				if err := c.deleteNotificationSessions(deleted, revision, 0); err != nil &&
 					c.ctx.Err() == nil {
 					log.Printf("usage cache notification delete: %v", err)
 				}
@@ -1848,7 +1855,7 @@ func (c *usageFillCoordinator) processNotificationBatch(
 	}
 }
 
-func (c *usageFillCoordinator) deleteNotificationSessions(ids []string, revision int64) error {
+func (c *usageFillCoordinator) deleteNotificationSessions(ids []string, revision, epoch int64) error {
 	conn, err := c.cache.db.Conn(c.ctx)
 	if err != nil {
 		return err
@@ -1867,6 +1874,9 @@ func (c *usageFillCoordinator) deleteNotificationSessions(ids []string, revision
 			_, _ = conn.ExecContext(context.WithoutCancel(c.ctx), `ROLLBACK`)
 		}
 	}()
+	if err := verifyUsageResetEpoch(c.ctx, conn, epoch); err != nil {
+		return err
+	}
 	removed, err := usageFactIdentitiesForSessions(c.ctx, conn, ids)
 	if err != nil {
 		return err

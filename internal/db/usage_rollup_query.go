@@ -62,11 +62,6 @@ func (cache *usageCache) usageRollupQuery(
 	resolver *export.PricingResolver, topSessionsLimit int,
 ) (usageFactsResult, error) {
 	snapshot := prepared.snapshot
-	if !prepared.journaled && len(snapshot.Sessions) == 0 && snapshot.CursorHighWater == 0 {
-		return usageFactsResult{
-			MatchingSessions: make(map[string]UsageSessionInfo),
-		}, nil
-	}
 	conn, err := cache.db.Conn(ctx)
 	if err != nil {
 		return usageFactsResult{}, err
@@ -82,6 +77,12 @@ func (cache *usageCache) usageRollupQuery(
 			_, _ = conn.ExecContext(context.WithoutCancel(ctx), `ROLLBACK`)
 		}
 	}()
+	if err := verifyUsageResetEpoch(ctx, conn, snapshot.resetEpoch); err != nil {
+		return usageFactsResult{}, err
+	}
+	if !prepared.journaled && len(snapshot.Sessions) == 0 && snapshot.CursorHighWater == 0 {
+		return usageFactsResult{MatchingSessions: make(map[string]UsageSessionInfo)}, nil
+	}
 	identity := usageTimezoneIdentityFor(snapshot.location, snapshot.Intervals)
 	timezoneID, err := verifyPreparedUsageRollup(ctx, conn, identity.Key, prepared)
 	if err != nil {
@@ -398,9 +399,6 @@ func (cache *usageCache) usageRollupActivityQuery(
 	ctx context.Context, snapshot usageQuerySnapshot, filter UsageFilter,
 	installs map[string]usageRollupInstall,
 ) (map[string]UsageSessionInfo, error) {
-	if len(snapshot.Sessions) == 0 {
-		return make(map[string]UsageSessionInfo), nil
-	}
 	conn, err := cache.db.Conn(ctx)
 	if err != nil {
 		return nil, err
@@ -416,6 +414,12 @@ func (cache *usageCache) usageRollupActivityQuery(
 			_, _ = conn.ExecContext(context.WithoutCancel(ctx), `ROLLBACK`)
 		}
 	}()
+	if err := verifyUsageResetEpoch(ctx, conn, snapshot.resetEpoch); err != nil {
+		return nil, err
+	}
+	if len(snapshot.Sessions) == 0 {
+		return make(map[string]UsageSessionInfo), nil
+	}
 	identity := usageTimezoneIdentityFor(snapshot.location, snapshot.Intervals)
 	timezoneID, err := verifyUsageRollupQuery(ctx, conn, identity.Key, snapshot, installs)
 	if err != nil {
