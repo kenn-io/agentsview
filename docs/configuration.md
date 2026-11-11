@@ -2718,12 +2718,12 @@ commands that connect to a daemon use the daemon's integration configuration.
 MCP offers `get_session_file_references` when its backend enables Docbank
 lookup. Connections through a signed reader listener omit this tool.
 
-| Setting                            | Purpose                                           |
-| ---------------------------------- | ------------------------------------------------- |
-| `integrations.docbank.url`         | Docbank API base URL. HTTPS, or HTTP under the policy below. |
-| `integrations.docbank.web_url`     | Optional browser base URL for version links.      |
-| `integrations.docbank.api_key_env` | Environment variable containing the API key.      |
-| `integrations.docbank.allow_http`  | Allow plaintext HTTP on a trusted private network. Default: `false`. |
+| Setting                            | Purpose                                                              |
+| ---------------------------------- | -------------------------------------------------------------------- |
+| `integrations.docbank.url`         | Docbank API base URL. HTTPS, or HTTP under the policy below.         |
+| `integrations.docbank.web_url`     | Optional browser base URL for version links.                         |
+| `integrations.docbank.api_key_env` | Environment variable containing the API key.                         |
+| `integrations.docbank.allow_http`  | Allow plaintext HTTP to any host. Default: `false`.                  |
 
 HTTPS and loopback HTTP work by default. For a trusted private container
 network, opt in explicitly:
@@ -2736,12 +2736,10 @@ allow_http = true
 ```
 
 `allow_http` applies to both `url` and the optional `web_url`. It permits HTTP
-to private, link-local, unspecified and carrier-grade NAT IP addresses, and to
-any DNS name. It does not check where DNS names resolve; public IP literals
-remain refused. HTTP exposes the API key and requested digests in plaintext,
-so enable it only on a network you trust. If you set `web_url`, use an address
-the browser can reach. API keys stay in request headers and redirects are
-refused.
+to any host, matching the Insights transport policy. HTTP exposes the API key
+and requested digests in plaintext, so enable it only on a network you trust.
+If you set `web_url`, use an address the browser can reach. API keys stay in
+request headers and redirects are refused.
 
 Lookup covers retained tool-result images, including offloaded assets, inline
 OpenCode `file.uri` payloads such as PDF and text files, and Markdown `asset://`

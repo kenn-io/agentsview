@@ -2,11 +2,10 @@ package config
 
 import (
 	"errors"
+	"fmt"
 	"net/url"
 	"os"
 	"strings"
-
-	"go.kenn.io/kit/embedconfig"
 )
 
 type IntegrationsConfig struct {
@@ -36,18 +35,17 @@ func (c DocbankIntegration) Validate() error {
 	if !c.Configured() {
 		return errors.New("[integrations.docbank] url and api_key_env are required together")
 	}
-	for _, endpoint := range []string{c.URL, c.WebURL} {
+	for _, item := range []struct{ field, endpoint string }{{"url", c.URL}, {"web_url", c.WebURL}} {
+		field, endpoint := item.field, item.endpoint
 		if endpoint == "" {
 			continue
 		}
 		u, err := url.Parse(strings.TrimSpace(endpoint))
-		if err != nil || u.Host == "" || u.User != nil || u.RawQuery != "" || u.Fragment != "" {
-			return errors.New("[integrations.docbank] invalid URL")
+		if err != nil || u.Hostname() == "" || u.User != nil || u.RawQuery != "" || u.Fragment != "" {
+			return fmt.Errorf("[integrations.docbank] invalid %s", field)
 		}
-		// Apply kit's host policy without changing existing base paths or URL spelling.
-		origin := (&url.URL{Scheme: u.Scheme, Host: u.Host}).String()
-		if _, err := embedconfig.CanonicalEndpoint(origin, c.AllowHTTP); err != nil {
-			return errors.New("[integrations.docbank] url must be https, or http to a loopback host; allow_http = true also permits trusted private addresses and DNS names")
+		if err := ValidateExtractTransport(u, c.AllowHTTP); err != nil {
+			return fmt.Errorf("[integrations.docbank] %s must be https, or http to a loopback host; set allow_http = true to permit other HTTP hosts", field)
 		}
 	}
 	return nil

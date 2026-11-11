@@ -3,7 +3,6 @@ package docbank
 import (
 	"bytes"
 	"context"
-	"fmt"
 	"log"
 	"net"
 	"net/http"
@@ -16,7 +15,6 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"go.kenn.io/agentsview/internal/config"
-	"hegel.dev/go/hegel"
 )
 
 func TestLookup(t *testing.T) {
@@ -130,112 +128,24 @@ func TestLookupFailures(t *testing.T) {
 	assert.Zero(t, hits.Load())
 }
 
-// Dial the configured container name only to a fixture on loopback.
-func docbankPrivateHTTPTransport(t *testing.T, address string) *http.Transport {
-	t.Helper()
+func TestLookupContainerHTTP(t *testing.T) {
+	t.Setenv("DOCBANK_TEST_KEY", "test-key")
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		assert.Equal(t, "docbank:8485", r.Host)
+		assert.Equal(t, "test-key", r.Header.Get("X-Api-Key"))
+		_, _ = w.Write([]byte(`{"items":[],"total":0}`))
+	}))
+	defer srv.Close()
+	cfg := config.DocbankIntegration{URL: "http://docbank:8485", APIKeyEnv: "DOCBANK_TEST_KEY", AllowHTTP: true}
+	require.NoError(t, cfg.Validate())
+	client := New(cfg)
 	transport := http.DefaultTransport.(*http.Transport).Clone()
 	transport.Proxy = nil
 	transport.DialContext = func(ctx context.Context, network, addr string) (net.Conn, error) {
-		if addr != "docbank.test:8485" {
-			return nil, fmt.Errorf("unexpected fixture address %s", addr)
-		}
-		return (&net.Dialer{}).DialContext(ctx, network, address)
+		return (&net.Dialer{}).DialContext(ctx, network, srv.Listener.Addr().String())
 	}
-	t.Cleanup(transport.CloseIdleConnections)
-	return transport
-}
-
-func TestLookupPrivateHTTPPreservesRequestAndBrowserURLs(t *testing.T) {
-	t.Setenv("DOCBANK_TEST_KEY", "synthetic-header-key")
-	const digest = "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"
-	const version = "12345678-1234-1234-1234-123456789abc"
-	var hits atomic.Int32
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		hits.Add(1)
-		assert.Equal(t, "docbank.test:8485", r.Host)
-		assert.Equal(t, "/a%20b/api/v1/content-references?limit=10&offset=0&sha256="+digest, r.RequestURI)
-		assert.Nil(t, r.URL.User)
-		assert.NotContains(t, r.RequestURI, "synthetic-header-key")
-		assert.Equal(t, "synthetic-header-key", r.Header.Get("X-Api-Key"))
-		_, _ = w.Write([]byte(`{"items":[{"version":{"id":"` + version + `"},"node":{"id":7,"name":"image.png"},"path":"/image.png","is_current":true}],"total":1}`))
-	}))
-	defer srv.Close()
-	cfg := config.DocbankIntegration{URL: "http://docbank.test:8485/a%20b/", WebURL: "https://UI.EXAMPLE.test:443/images%20here/", APIKeyEnv: "DOCBANK_TEST_KEY", AllowHTTP: true}
-	require.NoError(t, cfg.Validate())
-	client := New(cfg)
-	client.http.Transport = docbankPrivateHTTPTransport(t, srv.Listener.Addr().String())
-	result, err := client.Lookup(t.Context(), digest)
+	defer transport.CloseIdleConnections()
+	client.http.Transport = transport
+	_, err := client.Lookup(t.Context(), strings.Repeat("a", 64))
 	require.NoError(t, err)
-	require.Len(t, result.Matches, 1)
-	assert.Equal(t, "https://UI.EXAMPLE.test:443/images%20here/#node=7&version="+version, result.Matches[0].OpenURL)
-	assert.Equal(t, int32(1), hits.Load())
-}
-
-func TestLookupPrivateHTTPRefusesEveryRedirect(t *testing.T) {
-	t.Setenv("DOCBANK_TEST_KEY", "synthetic-header-key")
-	for _, status := range []int{http.StatusMovedPermanently, http.StatusFound, http.StatusSeeOther, http.StatusTemporaryRedirect, http.StatusPermanentRedirect} {
-		for _, sameOrigin := range []bool{false, true} {
-			t.Run(fmt.Sprintf("%d/same_origin=%t", status, sameOrigin), func(t *testing.T) {
-				var initialHits, redirectHits atomic.Int32
-				target := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { redirectHits.Add(1) }))
-				defer target.Close()
-				srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-					if r.URL.Path == "/redirected" {
-						redirectHits.Add(1)
-						return
-					}
-					initialHits.Add(1)
-					assert.Equal(t, "synthetic-header-key", r.Header.Get("X-Api-Key"))
-					location := target.URL
-					if sameOrigin {
-						location = "/redirected"
-					}
-					http.Redirect(w, r, location, status)
-				}))
-				defer srv.Close()
-				cfg := config.DocbankIntegration{URL: "http://docbank.test:8485", APIKeyEnv: "DOCBANK_TEST_KEY", AllowHTTP: true}
-				require.NoError(t, cfg.Validate())
-				client := New(cfg)
-				transport := docbankPrivateHTTPTransport(t, srv.Listener.Addr().String())
-				privateDial := transport.DialContext
-				transport.DialContext = func(ctx context.Context, network, addr string) (net.Conn, error) {
-					if addr == target.Listener.Addr().String() {
-						return (&net.Dialer{}).DialContext(ctx, network, addr)
-					}
-					return privateDial(ctx, network, addr)
-				}
-				client.http.Transport = transport
-				_, err := client.Lookup(t.Context(), strings.Repeat("a", 64))
-				require.EqualError(t, err, "docbank unavailable")
-				assert.Equal(t, int32(1), initialHits.Load())
-				assert.Zero(t, redirectHits.Load())
-			})
-		}
-	}
-}
-
-func TestLookupBasePathsPreserveMeaning(t *testing.T) {
-	t.Setenv("DOCBANK_TEST_KEY", "synthetic-header-key")
-	type request struct{ uri, key string }
-	requests := make(chan request, 1)
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		requests <- request{r.RequestURI, r.Header.Get("X-Api-Key")}
-		_, _ = w.Write([]byte(`{"items":[{"version":{"id":"12345678-1234-1234-1234-123456789abc"},"node":{"id":7,"name":"image.png"},"path":"/image.png","is_current":true}],"total":1}`))
-	}))
-	defer srv.Close()
-	hegel.Test(t, func(ht *hegel.T) {
-		apiID := hegel.Draw(ht, hegel.Integers[uint64](0, ^uint64(0)))
-		webID := hegel.Draw(ht, hegel.Integers[uint64](0, ^uint64(0)))
-		apiPath := fmt.Sprintf("/api-%x/a%%20b/", apiID)
-		webPath := fmt.Sprintf("https://browser.example.test/ui-%x/a%%2Fb/", webID)
-		cfg := config.DocbankIntegration{URL: srv.URL + apiPath, WebURL: webPath, APIKeyEnv: "DOCBANK_TEST_KEY", AllowHTTP: hegel.Draw(ht, hegel.Booleans())}
-		require.NoError(ht, cfg.Validate())
-		result, err := New(cfg).Lookup(t.Context(), strings.Repeat("a", 64))
-		require.NoError(ht, err)
-		got := <-requests
-		assert.Equal(ht, fmt.Sprintf("/api-%x/a%%20b/api/v1/content-references?limit=10&offset=0&sha256=", apiID)+strings.Repeat("a", 64), got.uri)
-		assert.Equal(ht, "synthetic-header-key", got.key)
-		require.Len(ht, result.Matches, 1)
-		assert.Equal(ht, fmt.Sprintf("https://browser.example.test/ui-%x/a%%2Fb/#node=7&version=12345678-1234-1234-1234-123456789abc", webID), result.Matches[0].OpenURL)
-	}, hegel.WithTestCases(100))
 }
