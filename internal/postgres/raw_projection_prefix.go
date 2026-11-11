@@ -96,9 +96,10 @@ func rawTranscriptPrefix(short, long ingest.PreparedSession) (bool, error) {
 		s.QualitySignals = nil
 		p.Signals = db.SessionSignalUpdate{}
 		p.Findings = nil
-		// Plan usage is a later report about the whole thread, so it
-		// changes as the thread grows.
+		// Plan usage and the agent's session total are later reports about
+		// the whole thread, so they change as the thread grows.
 		p.PlanUsage = nil
+		p.SessionTotal = nil
 		return rawContentRevision(p)
 	}
 	a, err := key(short)

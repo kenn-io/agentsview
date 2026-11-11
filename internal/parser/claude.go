@@ -362,7 +362,11 @@ func claudeParseFile(
 		}
 
 		if entryType == "cost-state" {
-			if total, ok := parseClaudeCostState(lineBytes); ok {
+			// Keep the last snapshot with usage: Claude Code can follow a
+			// total with an empty snapshot, which the incremental parser
+			// ignores too.
+			if total, ok := parseClaudeCostState(lineBytes); ok &&
+				claudeCostStateHasUsage(total) {
 				costState = total
 			}
 			continue
@@ -596,7 +600,7 @@ func claudeParseFile(
 		results[i].Session.claudeRenameSeen = renameSeen
 		// The last cost-state record totals the process that wrote this
 		// file, so it belongs to the file's own session, not its forks.
-		if results[i].Session.ID == sessionID && claudeCostStateHasUsage(costState) {
+		if results[i].Session.ID == sessionID && costState != nil {
 			results[i].Session.SessionTotal = costState
 		}
 	}

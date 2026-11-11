@@ -661,3 +661,33 @@ func TestHandleSessionUsage_ReportsAgentSessionTotal(t *testing.T) {
 	require.True(t, ok)
 	assert.Len(t, models, 2)
 }
+
+func TestUploadReplacesAgentSessionTotal(t *testing.T) {
+	te := setup(t)
+	costState := func(usd string) string {
+		return `{"type":"cost-state","sessionId":"upload-total","totalCostUSD":` + usd +
+			`,"modelUsage":{"claude-sonnet-4-20250514":{"inputTokens":10,"outputTokens":5,` +
+			`"thinkingTokens":0,"cacheReadInputTokens":0,"cacheCreationInputTokens":0,` +
+			`"webSearchRequests":0,"costUSD":` + usd + `}},"hasUnknownModelCost":false}`
+	}
+	transcript := testjsonl.NewSessionBuilder().
+		AddClaudeUser(tsEarly, "Hello upload").
+		AddClaudeAssistant(tsEarlyS5, "Hi!").
+		String()
+	total := func() *db.SessionUsageTotal {
+		t.Helper()
+		got, err := te.db.GetSessionUsageTotal(t.Context(), "upload-total")
+		require.NoError(t, err)
+		return got
+	}
+
+	assertStatus(t, te.upload(t, "upload-total.jsonl", transcript+costState("0.5")+"\n",
+		"project=myproj&machine=remote"), http.StatusOK)
+	require.NotNil(t, total())
+	assert.Equal(t, int64(500_000), total().Cost.Microdollars)
+
+	assertStatus(t, te.upload(t, "upload-total.jsonl", transcript+costState("0.75")+"\n",
+		"project=myproj&machine=remote"), http.StatusOK)
+	require.NotNil(t, total())
+	assert.Equal(t, int64(750_000), total().Cost.Microdollars, "a newer upload replaces the total")
+}

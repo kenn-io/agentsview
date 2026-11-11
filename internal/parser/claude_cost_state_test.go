@@ -93,3 +93,16 @@ func TestClaudeIncrementalCostStateNeedsFullParse(t *testing.T) {
 	assert.ErrorIs(t, err, ErrClaudeIncrementalNeedsFullParse,
 		"a new total replaces the stored one, which only a full parse writes")
 }
+
+func TestClaudeKeepsTotalBeforeTrailingEmptyCostState(t *testing.T) {
+	content := testjsonl.JoinJSONL(
+		testjsonl.ClaudeUserJSON("hello", "2026-10-01T10:00:00Z"),
+		testjsonl.ClaudeAssistantJSON("hi", "2026-10-01T10:00:01Z"),
+		claudeCostStateLine("0.25", "0.249", 5000, false),
+		`{"type":"cost-state","sessionId":"cost-sess","totalCostUSD":0,"modelUsage":{},"hasUnknownModelCost":false}`,
+	)
+	sess, _ := runClaudeParserTest(t, "cost-sess.jsonl", content)
+	require.NotNil(t, sess.SessionTotal, "an empty snapshot does not erase the total")
+	require.NotNil(t, sess.SessionTotal.Cost)
+	assert.Equal(t, money.Money{Microdollars: 250_000}, *sess.SessionTotal.Cost)
+}

@@ -7,6 +7,7 @@ import (
 	"github.com/stretchr/testify/require"
 	"go.kenn.io/agentsview/internal/db"
 	"go.kenn.io/agentsview/internal/ingest"
+	"go.kenn.io/agentsview/internal/money"
 )
 
 func TestRawTranscriptPrefixRequiresCompleteRowAgreement(t *testing.T) {
@@ -21,6 +22,9 @@ func TestRawTranscriptPrefixRequiresCompleteRowAgreement(t *testing.T) {
 		{"changed title", func(p *ingest.PreparedSession) { p.Session.SessionName = new("renamed") }, false},
 		{"newer plan usage", func(p *ingest.PreparedSession) {
 			p.PlanUsage = &db.SessionPlanUsage{HasPlanUsage: true, WeeklyPercent: new(2.5), HasCoverage: true, UncapturedTurns: 1}
+		}, true},
+		{"newer agent session total", func(p *ingest.PreparedSession) {
+			p.SessionTotal = &db.SessionUsageTotal{Source: "claude-cost-state", SubagentScope: "included", Cost: &money.Money{Microdollars: 42}}
 		}, true},
 		{"changed tool", func(p *ingest.PreparedSession) { p.Messages[0].ToolCalls[0].InputJSON = `{"command":"false"}` }, false},
 	} {
