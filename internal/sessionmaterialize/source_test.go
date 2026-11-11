@@ -86,6 +86,64 @@ func TestMaterializeConfiguredSources(t *testing.T) {
 			}
 		})
 	}
+	for _, tc := range []struct {
+		name      string
+		hint      string
+		duplicate bool
+		wrongID   bool
+		wantError string
+	}{
+		{name: "moved root", hint: "stale"},
+		{name: "missing path"},
+		{name: "empty path", hint: "empty"},
+		{name: "ambiguous fallback", duplicate: true, wantError: "ambiguous"},
+		{name: "mismatched transcript", wrongID: true, wantError: "no messages for this session"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			root := t.TempDir()
+			home := t.TempDir()
+			t.Setenv("CLAUDE_CONFIG_DIR", home)
+			t.Setenv("CLAUDE_CODE_PROJECT_DIR_NAME", "test-project")
+			cfg := config.Config{
+				InstallationID: "local", LocalMachineName: "local",
+				AgentDirs: map[parser.AgentType][]string{parser.AgentClaude: {root}},
+			}
+			name := filepath.Join(root, "project", id+".jsonl")
+			recordID := id
+			if tc.wrongID {
+				recordID = "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"
+			}
+			original := []byte(`{"type":"user","sessionId":"` + recordID + `","message":{"content":"fixture"}}` + "\n")
+			require.NoError(t, os.MkdirAll(filepath.Dir(name), 0o700))
+			require.NoError(t, os.WriteFile(name, original, 0o600))
+			if tc.duplicate {
+				other := filepath.Join(root, "other-project", id+".jsonl")
+				require.NoError(t, os.MkdirAll(filepath.Dir(other), 0o700))
+				require.NoError(t, os.WriteFile(other, original, 0o600))
+			}
+			s := &db.Session{ID: id, Agent: "claude", Machine: "local"}
+			switch tc.hint {
+			case "stale":
+				stored := filepath.Join(t.TempDir(), "old-project", id+".jsonl")
+				s.FilePath = &stored
+			case "empty":
+				s.FilePath = new(string)
+			}
+			result, err := Materialize(t.Context(), cfg, s, t.TempDir())
+			dest := filepath.Join(home, "projects", "test-project", id+".jsonl")
+			if tc.wantError != "" {
+				require.ErrorContains(t, err, tc.wantError)
+				_, err = os.Stat(dest)
+				require.ErrorIs(t, err, os.ErrNotExist)
+				return
+			}
+			require.NoError(t, err)
+			assert.Equal(t, name, result.Source)
+			installed, err := os.ReadFile(dest)
+			require.NoError(t, err)
+			assert.Equal(t, original, installed)
+		})
+	}
 }
 
 func TestS3ConfiguredSource(t *testing.T) {
