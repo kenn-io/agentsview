@@ -3271,10 +3271,12 @@ func TestSaveVectorSetupPersistsSelectedServer(t *testing.T) {
 	for _, tc := range []struct {
 		raw, endpoint string
 		batchSize     int
+		invalid       bool
 	}{
 		{raw: "[vector]\ninclude_automated = true\n[vector.embeddings]\nquery_prefix = 'custom: '\n"},
 		{raw: "[vector.embeddings]\nmodel = 'nomic-embed-text'\ndimension = 768\n[vector.embeddings.servers.cpu]\nlocal = true\nbatch_size = 3\n", batchSize: 3},
-		{endpoint: "http://127.0.0.1:11434/v1"},
+		{raw: "[vector.embeddings]\nmodel = 'nomic-embed-text'\ndimension = 768\n[vector.embeddings.servers.local]\nlocal = true\n", endpoint: "http://127.0.0.1:11434/v1", invalid: true},
+		{raw: "[vector.embeddings]\nmodel = 'nomic-embed-text'\ndimension = 768\n[vector.embeddings.servers.local]\nendpoint = 'http://127.0.0.1:11434/v1'\n", endpoint: "http://127.0.0.1:11434/v1", invalid: true},
 	} {
 		t.Run(tc.raw+tc.endpoint, func(t *testing.T) {
 			dir := setupTestEnv(t)
@@ -3283,7 +3285,15 @@ func TestSaveVectorSetupPersistsSelectedServer(t *testing.T) {
 			require.NoError(t, err)
 			before, err := cfg.VectorSetupEmbeddings(false)
 			require.NoError(t, err)
-			require.NoError(t, cfg.SaveVectorSetup(tc.endpoint == "", false, tc.endpoint))
+			err = cfg.SaveVectorSetup(tc.endpoint == "", false, tc.endpoint)
+			if tc.invalid {
+				require.ErrorIs(t, err, ErrInvalidVectorSetup)
+				data, err := os.ReadFile(filepath.Join(dir, configFileName))
+				require.NoError(t, err)
+				assert.Equal(t, tc.raw, string(data))
+				return
+			}
+			require.NoError(t, err)
 			saved, err := LoadReadOnly()
 			require.NoError(t, err)
 			assert.True(t, saved.Vector.Enabled)

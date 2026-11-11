@@ -106,7 +106,9 @@ describe("EmbeddingsSettings", () => {
       total_bytes: 0,
     };
     embeddingsService.getApiV1EmbeddingsStatus.mockResolvedValue({ running: false, setup });
-    embeddingsService.postApiV1EmbeddingsSetup.mockResolvedValue({ started: true });
+    embeddingsService.postApiV1EmbeddingsSetup
+      .mockRejectedValueOnce(new ApiError(409, "provider changed", "embeddings_provider_changed"))
+      .mockResolvedValue({ started: true });
     const component = mount(EmbeddingsSettings, { target: document.body });
     try {
       await settle();
@@ -117,7 +119,6 @@ describe("EmbeddingsSettings", () => {
         setup: {
           ...setup,
           provider: "built-in",
-          error: "embedding download declined; approve installation to use local embeddings",
         },
       });
       [...document.body.querySelectorAll("button")]
@@ -129,11 +130,8 @@ describe("EmbeddingsSettings", () => {
         expected_provider: "ollama",
       });
       expect(document.body.textContent).toContain("Downloads 295 MB");
-      expect(document.body.querySelector('[role="alert"]')?.textContent).toContain(
-        "download declined",
-      );
       [...document.body.querySelectorAll("button")]
-        .find((b) => b.textContent?.trim() === "Retry")!
+        .find((b) => b.textContent?.trim() === "Turn on")!
         .click();
       await settle();
       expect(embeddingsService.postApiV1EmbeddingsSetup).toHaveBeenNthCalledWith(2, {
