@@ -122,7 +122,7 @@ func TestPushSessionTransportFailuresAreSanitized(t *testing.T) {
 		{"bad request", http.StatusBadRequest, "", "receiver rejected the session"},
 		{"unauthorized", http.StatusUnauthorized, "", "receiver rejected the bearer token"},
 		{"forbidden", http.StatusForbidden, "", "receiver is unavailable"},
-		{"conflict", http.StatusConflict, "", "receiver cannot replace it"},
+		{"conflict", http.StatusConflict, "", "session may be in Trash or conflict"},
 		{"too large", http.StatusRequestEntityTooLarge, "", "session exceeds receiver size limit"},
 		{"unsupported", http.StatusNotImplemented, "", "receiver does not support session pushes"},
 		{"busy", http.StatusServiceUnavailable, "", "receiver is temporarily unavailable; try again later"},

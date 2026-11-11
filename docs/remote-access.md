@@ -121,8 +121,9 @@ resolve a native ID or search for another session. Missing sessions fail
 without syncing or reading provider files. The sender reads only its local
 SQLite archive, selected by `AGENTSVIEW_DATA_DIR` or the usual home directory.
 
-Only the selected session's normalized messages, tool calls and results, and
-usage data leave the archive. Parent and child references remain references;
+The selected session's metadata, normalized messages, tool calls and results,
+and usage data leave the archive. Metadata includes its project, working
+directory, branch, timestamps, and derived signals. Parent and child references remain references;
 their sessions are never loaded. Images retained in the selected transcript are
 included, including images read from the source asset directory. Missing, corrupt,
 or oversized image assets stop the push. Raw files, checkpoints, archive-wide
@@ -137,11 +138,13 @@ A sender archive with a new identity cannot retry a previously accepted ID;
 the receiver reports a conflict even when the transcript is unchanged.
 A changed transcript or an existing session with the same ID returns a conflict;
 there is no force replacement. Finish recording a session before pushing it.
+A retry while the session is in Trash returns a conflict; restore it before retrying.
 Permanently deleting a pushed session keeps its receipt, so that ID cannot be
 accepted again, even if the transcript is unchanged.
 There is no command or API to release that receipt.
 Ordinary source ingestion cannot replace a pushed snapshot. Rebuilds reserve
 its ID before parsing and preserve the archived transcript with its receipt.
+Received pushes are not published by the receiver's artifact exchange.
 References in a pushed transcript do not grant writes to other sessions.
 Successful JSON output contains `session_id`, `agent`, and `status` (`created`
 or `unchanged`). Failures return nonzero and leave stdout empty.
