@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test";
+import { createServer } from "node:http";
 import { SearchService } from "../api/generated/index.js";
-import { ApiError } from "../api/runtime.js";
+import { ApiError, setServerUrl } from "../api/runtime.js";
 import type { SearchResponse } from "../api/generated/index.js";
 import type { DbContentMatch, ServiceContentSearchResult } from "../api/generated/index.js";
 import { SEARCH_MODE_STORAGE_KEY, createSearchStore, type SearchMode } from "./search.svelte.js";
@@ -253,21 +254,52 @@ describe("SearchStore", () => {
   });
 
   it("keeps a canceled search cleared when the retry delay ends", async () => {
+    let received = 0;
+    const server = createServer((_req, res) => {
+      received++;
+      res.setHeader("Content-Type", "application/json");
+      res.end(JSON.stringify(fullTextResponse("needle")));
+    });
+    await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+    const address = server.address();
+    if (!address || typeof address === "string") throw new Error("missing server address");
+    setServerUrl(`http://127.0.0.1:${address.port}`);
+    const originalFetch = globalThis.fetch;
+    const finished = deferred<void>();
+    const fetchSpy = vi.spyOn(globalThis, "fetch").mockImplementation((input, options) => {
+      const response = originalFetch(input, options);
+      void response.then(
+        () => finished.resolve(),
+        () => finished.resolve(),
+      );
+      return response;
+    });
     const store = createSearchStore(memoryStorage());
-    searchService.getApiV1Search
-      .mockRejectedValueOnce(new ApiError(503, "unavailable"))
-      .mockImplementationOnce(async (_params, options) => {
-        if (options?.signal?.aborted) throw new DOMException("Aborted", "AbortError");
-        return fullTextResponse("needle");
+    try {
+      const actual = await vi.importActual<typeof import("../api/generated/index.js")>(
+        "../api/generated/index.js",
+      );
+      searchService.getApiV1Search
+        .mockRejectedValueOnce(new ApiError(503, "unavailable"))
+        .mockImplementationOnce(actual.SearchService.getApiV1Search);
+      store.search("needle");
+      await runDebounce();
+      store.clear();
+      await vi.advanceTimersByTimeAsync(300);
+      vi.useRealTimers();
+      if (fetchSpy.mock.calls.length > 0) await finished.promise;
+      expect(received).toBe(0);
+      expect(store.results).toEqual([]);
+      expect(store.error).toBeNull();
+      expect(store.isSearching).toBe(false);
+      expect(reportErrorShown).not.toHaveBeenCalled();
+    } finally {
+      fetchSpy.mockRestore();
+      setServerUrl("");
+      await new Promise<void>((resolve, reject) => {
+        server.close((err) => (err ? reject(err) : resolve()));
       });
-    store.search("needle");
-    await runDebounce();
-    store.clear();
-    await vi.advanceTimersByTimeAsync(300);
-    expect(store.results).toEqual([]);
-    expect(store.error).toBeNull();
-    expect(store.isSearching).toBe(false);
-    expect(reportErrorShown).not.toHaveBeenCalled();
+    }
   });
 
   it.each(["semantic", "hybrid"] as const)(
