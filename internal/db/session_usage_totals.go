@@ -203,37 +203,46 @@ func (db *DB) SessionUsageTotalFingerprints(
 	const batchSize = 900
 	for start := 0; start < len(sessionIDs); start += batchSize {
 		batch := sessionIDs[start:min(start+batchSize, len(sessionIDs))]
-		args := make([]any, len(batch))
-		for i, id := range batch {
-			args[i] = id
-		}
-		rows, err := db.getReader().QueryContext(ctx,
-			`SELECT session_id, `+SessionUsageTotalColumns+` FROM session_usage_totals
-			WHERE session_id IN (`+strings.TrimSuffix(strings.Repeat("?,", len(args)), ",")+`)`,
-			args...,
-		)
-		if err != nil {
-			return nil, fmt.Errorf("querying session total fingerprints: %w", err)
-		}
-		for rows.Next() {
-			var sessionID string
-			t, err := ScanSessionUsageTotal(func(dest ...any) error {
-				return rows.Scan(append([]any{&sessionID}, dest...)...)
-			})
-			if err != nil {
-				_ = rows.Close()
-				return nil, fmt.Errorf("scanning session total fingerprint: %w", err)
-			}
-			if out[sessionID], err = SessionUsageTotalFingerprint(t); err != nil {
-				_ = rows.Close()
-				return nil, err
-			}
-		}
-		err = rows.Err()
-		_ = rows.Close()
-		if err != nil {
+		if err := db.appendSessionUsageTotalFingerprints(ctx, out, batch); err != nil {
 			return nil, err
 		}
 	}
 	return out, nil
+}
+
+func (db *DB) appendSessionUsageTotalFingerprints(
+	ctx context.Context, out map[string]string, sessionIDs []string,
+) error {
+	args := make([]any, len(sessionIDs))
+	for i, id := range sessionIDs {
+		args[i] = id
+	}
+	rows, err := db.getReader().QueryContext(ctx,
+		`SELECT session_id, `+SessionUsageTotalColumns+` FROM session_usage_totals
+		WHERE session_id IN (`+strings.TrimSuffix(strings.Repeat("?,", len(args)), ",")+`)`,
+		args...,
+	)
+	if err != nil {
+		return fmt.Errorf("querying session total fingerprints: %w", err)
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var sessionID string
+		t, err := ScanSessionUsageTotal(scanAfter(rows.Scan, &sessionID))
+		if err != nil {
+			return fmt.Errorf("scanning session total fingerprint: %w", err)
+		}
+		if out[sessionID], err = SessionUsageTotalFingerprint(t); err != nil {
+			return err
+		}
+	}
+	return rows.Err()
+}
+
+// scanAfter adapts scan to read leading into dest before the columns the
+// returned function is asked for.
+func scanAfter(scan func(dest ...any) error, leading ...any) func(dest ...any) error {
+	return func(dest ...any) error {
+		return scan(append(append([]any{}, leading...), dest...)...)
+	}
 }

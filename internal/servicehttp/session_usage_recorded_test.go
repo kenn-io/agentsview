@@ -18,7 +18,10 @@ import (
 // decodes the agent's session total, so daemon and direct reads agree.
 func TestSessionUsageKeepsAgentFiguresOverHTTP(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		require.Equal(t, "/api/v1/sessions/claude:s1/usage", r.URL.Path)
+		if !assert.Equal(t, "/api/v1/sessions/claude:s1/usage", r.URL.Path) {
+			http.NotFound(w, r)
+			return
+		}
 		w.Header().Set("Content-Type", "application/json")
 		_, _ = w.Write([]byte(`{
 			"session_id":"claude:s1","agent":"claude","project":"p",

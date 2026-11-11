@@ -269,16 +269,16 @@ func SessionUsageTotalFixture() *db.SessionUsageTotal {
 
 // SeedSessionUsageTotal writes a session with one priced message and a
 // recorded session total through the full-parse batch write.
-func SeedSessionUsageTotal(t testing.TB, local *db.DB) {
-	t.Helper()
-	require.NoError(t, local.UpsertModelPricing([]db.ModelPricing{{
+func SeedSessionUsageTotal(tb testing.TB, local *db.DB) {
+	tb.Helper()
+	require.NoError(tb, local.UpsertModelPricing([]db.ModelPricing{{
 		ModelPattern:  "rc-priced",
 		InputPerMTok:  money.Money{Microdollars: 1_000_000},
 		OutputPerMTok: money.Money{Microdollars: 2_000_000},
 	}}), "seed session-total pricing")
 	started := RecordedCostDay + "T11:00:00Z"
 	at := RecordedCostDay + "T11:05:00Z"
-	_, err := local.WriteSessionBatchAtomic(t.Context(), []db.SessionBatchWrite{{
+	_, err := local.WriteSessionBatchAtomic(tb.Context(), []db.SessionBatchWrite{{
 		Session: db.Session{
 			ID: SessionTotalSessionID, Project: "recorded-cost", Machine: "local", Agent: "claude",
 			StartedAt: &started, EndedAt: &at, MessageCount: 1, UserMessageCount: 1,
@@ -289,7 +289,7 @@ func SeedSessionUsageTotal(t testing.TB, local *db.DB) {
 		}},
 		SessionTotal: SessionUsageTotalFixture(), ReplaceSessionTotal: true,
 	}})
-	require.NoError(t, err, "seed session total")
+	require.NoError(tb, err, "seed session total")
 }
 
 // AssertSessionUsageTotal checks that a store holding SeedSessionUsageTotal
