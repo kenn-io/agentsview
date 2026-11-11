@@ -919,6 +919,52 @@ func TestExportSessionsStartsRealWorker(t *testing.T) {
 	assert.Len(t, snapshots, 2)
 }
 
+func TestExportWaitAfterDaemonRestart(t *testing.T) {
+	for _, missing := range []bool{true, false} {
+		t.Run(fmt.Sprintf("missing evidence=%t", missing), func(t *testing.T) {
+			path := pendingExportArchive(t, false)
+			dir := filepath.Dir(path)
+			if !missing {
+				database, err := db.Open(t.Context(), path)
+				require.NoError(t, err)
+				engine := agentsync.NewEngine(t.Context(), database, agentsync.EngineConfig{Machine: "local"})
+				require.NoError(t, engine.BackfillProjectIdentitySnapshots(t.Context()))
+				engine.Close()
+				require.NoError(t, database.Close())
+			}
+			raw, err := sql.Open("sqlite3", path)
+			require.NoError(t, err)
+			defer raw.Close()
+			_, err = raw.ExecContext(t.Context(), `INSERT INTO background_migrations (name, state) VALUES ('session_project_identity_snapshots_v1', 'pending') ON CONFLICT(name) DO UPDATE SET state = 'pending'`)
+			require.NoError(t, err)
+			trigger := `CREATE TRIGGER fail_backfill BEFORE INSERT ON session_project_identity_snapshots BEGIN SELECT RAISE(FAIL, 'backfill blocked'); END`
+			if !missing {
+				trigger = `CREATE TRIGGER fail_backfill BEFORE UPDATE ON background_migrations WHEN NEW.state = 'completed' BEGIN SELECT RAISE(FAIL, 'backfill blocked'); END`
+			}
+			_, err = raw.ExecContext(t.Context(), trigger)
+			require.NoError(t, err)
+			stop := stubExportDaemon(t, dir)
+			cfg := config.Config{DataDir: dir}
+			require.NoError(t, startExportDaemon(t.Context(), &cfg))
+			ctx, cancel := context.WithTimeout(t.Context(), 15*time.Second)
+			defer cancel()
+			out, done := exportWaitCommand(t, ctx, io.Discard)
+			require.ErrorContains(t, <-done, "agentsview daemon restart")
+			assert.Empty(t, out.String())
+			var state string
+			require.NoError(t, raw.QueryRowContext(t.Context(), `SELECT state FROM background_migrations WHERE name = 'session_project_identity_snapshots_v1'`).Scan(&state))
+			require.Equal(t, "failed", state)
+			stop()
+			_, err = raw.ExecContext(t.Context(), `DROP TRIGGER fail_backfill`)
+			require.NoError(t, err)
+			require.NoError(t, startExportDaemon(t.Context(), &cfg))
+			out, done = exportWaitCommand(t, ctx, io.Discard)
+			require.NoError(t, <-done)
+			assert.Len(t, decodeExportSessionsDocument(t, out.String()).Sessions, 2)
+		})
+	}
+}
+
 func TestExportWaitReportsUnrecordableFailure(t *testing.T) {
 	path := pendingExportArchive(t, false)
 	dir := filepath.Dir(path)

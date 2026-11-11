@@ -64,7 +64,7 @@ func ensureProjectIdentityBackfillQueuedTx(
 		)`).Scan(&missing); err != nil {
 		return fmt.Errorf("checking project identity backfill candidates: %w", err)
 	}
-	if !missing {
+	if !missing && state != "failed" {
 		if state == "completed" {
 			if _, err := tx.ExecContext(ctx, `
 				INSERT INTO stats (key, value) VALUES (?, '1')
