@@ -650,6 +650,24 @@ describe("CommandPalette", () => {
     unmount(component);
   });
 
+  it("retries a failed full-text search from the error without changing the query", async () => {
+    mockSearchStore.error = { detail: null, kind: "generic" };
+    const component = mount(CommandPalette, { target: document.body });
+    await enterSearchQuery();
+    mockSearchStore.search.mockClear();
+
+    const retry = Array.from(
+      document.querySelectorAll<HTMLButtonElement>(".palette-error button"),
+    ).find((button) => button.textContent?.trim() === "Retry");
+    expect(retry).toBeDefined();
+    retry?.click();
+    expect(mockSearchStore.retry).toHaveBeenCalledOnce();
+    expect(mockSearchStore.search).not.toHaveBeenCalled();
+    expect(mockRouter.navigateToSession).not.toHaveBeenCalled();
+
+    unmount(component);
+  });
+
   it("shows the inherited project and can search all projects without changing the sidebar", async () => {
     mockSessions.filters.project = "proj-a";
     const component = mount(CommandPalette, { target: document.body });

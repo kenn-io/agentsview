@@ -384,19 +384,19 @@
             {#if searchStore.error.kind === "timeout"}
               <strong>{m.command_palette_search_timeout_title()}</strong>
               <span>{m.command_palette_search_timeout_detail()}</span>
-              <div class="palette-error-action">
-                <Button
-                  size="sm"
-                  tone="info"
-                  surface="soft"
-                  label={m.shared_retry()}
-                  onclick={() => searchStore.retry()}
-                />
-              </div>
             {:else}
               <strong>{m.command_palette_search_error()}</strong>
               <span>{searchStore.error.detail ?? m.command_palette_search_failed()}</span>
             {/if}
+            <div class="palette-error-action">
+              <Button
+                size="sm"
+                tone="info"
+                surface="soft"
+                label={m.shared_retry()}
+                onclick={() => searchStore.retry()}
+              />
+            </div>
           </div>
         {:else if searchStore.results.length === 0}
           <div class="palette-empty">{m.command_palette_no_results()}</div>
