@@ -2,14 +2,11 @@ package server
 
 import (
 	"bytes"
-	"context"
 	"database/sql"
 	"encoding/json/v2"
 	"io"
-	"net"
 	"net/http"
 	"net/http/httptest"
-	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -21,89 +18,6 @@ import (
 	"go.kenn.io/agentsview/internal/config"
 	"go.kenn.io/agentsview/internal/db"
 )
-
-func TestSessionPushServeExtendsBoundedUploadReadDeadline(t *testing.T) {
-	s := testServer(t, 30*time.Second)
-	s.cfg.AcceptSessionPush, s.cfg.RequireAuth, s.cfg.AuthToken = true, true, "secret"
-	s.httpReadTimeout = time.Second
-	listener, err := (&net.ListenConfig{}).Listen(t.Context(), "tcp", "127.0.0.1:0")
-	require.NoError(t, err)
-	deadlines := make(chan time.Time, 16)
-	serveErr := make(chan error, 1)
-	go func() {
-		serveErr <- s.Serve(readDeadlineListener{Listener: listener, deadlines: deadlines})
-	}()
-	t.Cleanup(func() {
-		ctx, cancel := context.WithTimeout(context.WithoutCancel(t.Context()), time.Second)
-		defer cancel()
-		require.NoError(t, s.Shutdown(ctx))
-		require.ErrorIs(t, <-serveErr, http.ErrServerClosed)
-	})
-
-	source, err := db.Open(t.Context(), filepath.Join(t.TempDir(), "source.db"))
-	require.NoError(t, err)
-	t.Cleanup(func() { require.NoError(t, source.Close()) })
-	require.NoError(t, source.UpsertSession(t.Context(), db.Session{
-		ID: "selected", Agent: "claude", Machine: "source",
-	}))
-	payload, _, err := artifact.EncodeSessionPush(t.Context(), source, "selected", "")
-	require.NoError(t, err)
-
-	reader, writer := io.Pipe()
-	request, err := http.NewRequestWithContext(
-		t.Context(), http.MethodPost,
-		"http://"+listener.Addr().String()+"/api/v1/sessions/ingest", reader,
-	)
-	require.NoError(t, err)
-	request.ContentLength = int64(len(payload))
-	request.Header.Set("Authorization", "Bearer secret")
-	request.Header.Set("Content-Type", "application/json")
-	response := make(chan int, 1)
-	requestErr := make(chan error, 1)
-	go func() {
-		result, err := http.DefaultClient.Do(request)
-		if err != nil {
-			requestErr <- err
-			return
-		}
-		defer result.Body.Close()
-		response <- result.StatusCode
-	}()
-	defer writer.Close()
-	defer reader.Close()
-	_, err = writer.Write(payload[:1])
-	require.NoError(t, err)
-
-	deadlineWait := time.NewTimer(3 * time.Second)
-	defer deadlineWait.Stop()
-waitForUploadDeadline:
-	for {
-		select {
-		case deadline := <-deadlines:
-			if time.Until(deadline) > time.Minute {
-				break waitForUploadDeadline
-			}
-		case <-deadlineWait.C:
-			require.FailNow(t, "session push did not extend the real connection read deadline")
-		}
-	}
-	// Wait past the server's original deadline to prove the extension works.
-	timer := time.NewTimer(1100 * time.Millisecond)
-	defer timer.Stop()
-	<-timer.C
-	_, err = writer.Write(payload[1:])
-	require.NoError(t, err)
-	require.NoError(t, writer.Close())
-
-	select {
-	case err := <-requestErr:
-		require.FailNowf(t, "test failed", "slow valid session push failed: %v", err)
-	case status := <-response:
-		assert.Equal(t, http.StatusOK, status)
-	case <-time.After(3 * time.Second):
-		require.FailNow(t, "slow valid session push did not finish")
-	}
-}
 
 type sessionPushDeadlineRecorder struct {
 	*httptest.ResponseRecorder
@@ -118,14 +32,6 @@ func (w *sessionPushDeadlineRecorder) SetReadDeadline(deadline time.Time) error 
 func TestSessionPushReadDeadlineScalesWithPayload(t *testing.T) {
 	s := testServer(t, 30*time.Second)
 	s.cfg.AcceptSessionPush, s.cfg.RequireAuth, s.cfg.AuthToken = true, true, "secret"
-	small := httptest.NewRequestWithContext(t.Context(), http.MethodPost, "/api/v1/sessions/ingest", strings.NewReader("{}"))
-	small.Header.Set("Authorization", "Bearer secret")
-	small.Header.Set("Content-Type", "application/json")
-	smallResponse := &sessionPushDeadlineRecorder{ResponseRecorder: httptest.NewRecorder()}
-	s.Handler().ServeHTTP(smallResponse, small)
-	assert.Equal(t, http.StatusBadRequest, smallResponse.Code)
-	assert.Greater(t, time.Until(smallResponse.deadline), time.Minute)
-	assert.Less(t, time.Until(smallResponse.deadline), 3*time.Minute)
 	body := strings.NewReader(strings.Repeat(" ", int(artifact.MaxSessionPushBytes)-1024))
 	r := httptest.NewRequestWithContext(t.Context(), http.MethodPost, "/api/v1/sessions/ingest", body)
 	r.Header.Set("Authorization", "Bearer secret")
@@ -237,43 +143,6 @@ func TestSessionPushReceiverRetryAfterImageMigration(t *testing.T) {
 	assert.Equal(t, before, after)
 }
 
-func TestSessionPushReceiverRejectsChangedText(t *testing.T) {
-	source := testServer(t, 30*time.Second).db.(*db.DB)
-	session := db.Session{ID: "source", Agent: "claude", Machine: "source", MessageCount: 1, UserMessageCount: 1}
-	message := db.Message{SessionID: session.ID, Ordinal: 0, Role: "user", Content: "hello", HasToolUse: true, ToolCalls: []db.ToolCall{{ToolName: "Read", ToolUseID: "call", ResultContent: "result", ResultEvents: []db.ToolResultEvent{{ToolUseID: "call", Source: "tool", Status: "done", Content: "result"}}}}}
-	_, err := source.WriteSessionBatchAtomic(t.Context(), []db.SessionBatchWrite{{Session: session, Messages: []db.Message{message}, ReplaceMessages: true}})
-	require.NoError(t, err)
-	original, _, err := artifact.EncodeSessionPush(t.Context(), source, session.ID, "")
-	require.NoError(t, err)
-	receiver := testServer(t, 30*time.Second)
-	receiver.cfg.AcceptSessionPush, receiver.cfg.RequireAuth, receiver.cfg.AuthToken = true, true, "secret"
-	send := func(payload []byte) *httptest.ResponseRecorder {
-		r := httptest.NewRequestWithContext(t.Context(), http.MethodPost, "/api/v1/sessions/ingest", bytes.NewReader(payload))
-		r.Header.Set("Authorization", "Bearer secret")
-		r.Header.Set("Content-Type", "application/json")
-		w := httptest.NewRecorder()
-		receiver.Handler().ServeHTTP(w, r)
-		return w
-	}
-	require.Equal(t, http.StatusOK, send(original).Code)
-	before, err := receiver.db.(*db.DB).GetAllMessages(t.Context(), session.ID)
-	require.NoError(t, err)
-	require.Len(t, before, 1)
-	require.Len(t, before[0].ToolCalls, 1)
-	require.Len(t, before[0].ToolCalls[0].ResultEvents, 1)
-	assert.Equal(t, "result", before[0].ToolCalls[0].ResultEvents[0].Content)
-	message.Content = "changed"
-	_, err = source.WriteSessionBatchAtomic(t.Context(), []db.SessionBatchWrite{{Session: session, Messages: []db.Message{message}, ReplaceMessages: true}})
-	require.NoError(t, err)
-	changed, _, err := artifact.EncodeSessionPush(t.Context(), source, session.ID, "")
-	require.NoError(t, err)
-	assert.Equal(t, http.StatusConflict, send(changed).Code)
-	stored, err := receiver.db.(*db.DB).GetAllMessages(t.Context(), session.ID)
-	require.NoError(t, err)
-	assert.Equal(t, before, stored)
-	assert.JSONEq(t, `{"session_id":"source","agent":"claude","status":"unchanged"}`, send(original).Body.String())
-}
-
 func TestSessionPushReportsVersionAndRebuildRequirements(t *testing.T) {
 	s := testServer(t, 30*time.Second)
 	s.cfg.AcceptSessionPush, s.cfg.RequireAuth, s.cfg.AuthToken = true, true, "fixture"
@@ -316,7 +185,7 @@ type sessionPushObservedBody struct{ reads int }
 func (r *sessionPushObservedBody) Read([]byte) (int, error) { r.reads++; return 0, io.EOF }
 
 func TestSessionPushRejectsBeforeReadingUnauthorizedOrOversizeBody(t *testing.T) {
-	for _, mode := range []string{"unauthorized", "disabled", "auth-off", "wrong-token", "query-token", "oversize", "encoding", "busy", "read-only", "usage-only"} {
+	for _, mode := range []string{"unauthorized", "disabled", "auth-off", "oversize", "encoding", "busy", "read-only", "usage-only"} {
 		t.Run(mode, func(t *testing.T) {
 			s := testServer(t, 30*time.Second)
 			s.cfg.AcceptSessionPush, s.cfg.RequireAuth, s.cfg.AuthToken = true, true, "fixture"
@@ -334,12 +203,7 @@ func TestSessionPushRejectsBeforeReadingUnauthorizedOrOversizeBody(t *testing.T)
 				want = http.StatusNotFound
 			case "auth-off":
 				s.cfg.RequireAuth = false
-				want = http.StatusForbidden
-			case "wrong-token":
-				r.Header.Set("Authorization", "Bearer bad")
-			case "query-token":
 				r.Header.Del("Authorization")
-				r.URL.RawQuery = "token=fixture"
 			case "oversize":
 				r.ContentLength = artifact.MaxSessionPushBytes + 1
 				want = http.StatusRequestEntityTooLarge

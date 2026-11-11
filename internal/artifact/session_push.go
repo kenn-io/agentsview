@@ -200,7 +200,7 @@ func decodeSessionPush(data []byte) (db.SessionPushReceipt, db.SessionBatchWrite
 		return zero, noWrite, errors.New("unsupported version or session ID")
 	}
 	if envelope.ExternalParentSessionID != nil && (*envelope.ExternalParentSessionID == "" || len(*envelope.ExternalParentSessionID) > 1024 || *envelope.ExternalParentSessionID == envelope.SessionID) {
-		return zero, noWrite, errors.New("invalid pending parent session ID")
+		return zero, noWrite, errors.New("invalid parent session ID")
 	}
 	limits := productionArtifactLimits()
 	if int64(len(envelope.Manifest)) > manifestDecodedLimit {

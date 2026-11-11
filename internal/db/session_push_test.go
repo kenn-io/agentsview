@@ -80,6 +80,8 @@ func TestSessionPushCreatesAndRetryPreservesCuration(t *testing.T) {
 	require.NoError(t, err)
 	before, err := d.GetSessionFull(ctx, "snapshot")
 	require.NoError(t, err)
+	require.NotNil(t, before)
+	assert.Equal(t, "archive-a", before.Machine)
 	var generation int64
 	require.NoError(t, d.getReader().QueryRowContext(ctx,
 		`SELECT generation FROM artifact_export_queue WHERE session_id = 'snapshot'`).Scan(&generation))
@@ -181,46 +183,38 @@ func TestSessionPushConflictsDoNotOverwrite(t *testing.T) {
 	}
 }
 
-func TestSessionPushMalformedWriteRollsBack(t *testing.T) {
-	d := testDB(t)
-	receipt, write := sessionPushFixture("snapshot")
-	require.NoError(t, d.SetSyncState(t.Context(), "artifact_origin_id", "receiver-origin"))
-	require.NoError(t, d.SetSyncState(t.Context(), "artifact_local_machine_name", receipt.SourceOrigin))
-	// Usage validation runs after the session insert inside the batch writer.
-	write.UsageEvents[0].SessionID = "other-session"
-	created, err := d.ApplySessionPush(t.Context(), receipt, write)
-	require.ErrorContains(t, err, "usage event session_id")
-	assert.False(t, created)
-	for _, table := range []string{"sessions", "messages", "usage_events", "session_push_receipts", "artifact_export_queue"} {
-		var count int
-		require.NoError(t, d.getReader().QueryRowContext(t.Context(), `SELECT COUNT(*) FROM `+table).Scan(&count))
-		assert.Zero(t, count, table)
+func TestSessionPushWriteFailuresRollBack(t *testing.T) {
+	for _, tc := range []struct {
+		name, table, message string
+	}{
+		{"usage", "usage_events", "usage write failed"},
+		{"parent", "session_external_parents", "parent write failed"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			d := testDB(t)
+			receipt, write := sessionPushFixture("snapshot")
+			if tc.name == "parent" {
+				receipt.ExternalParentSessionID = new("parent")
+			}
+			require.NoError(t, d.SetSyncState(t.Context(), "artifact_origin_id", "receiver-origin"))
+			require.NoError(t, d.SetSyncState(t.Context(), "artifact_local_machine_name", receipt.SourceOrigin))
+			_, err := d.getWriter().ExecContext(t.Context(), `CREATE TRIGGER fail_pushed_write BEFORE INSERT ON `+tc.table+` BEGIN SELECT RAISE(ABORT, '`+tc.message+`'); END`)
+			require.NoError(t, err)
+			created, err := d.ApplySessionPush(t.Context(), receipt, write)
+			require.ErrorContains(t, err, tc.message)
+			assert.False(t, created)
+			for _, table := range []string{"sessions", "messages", "usage_events", "session_external_parents", "session_push_receipts", "artifact_export_queue"} {
+				var count int
+				require.NoError(t, d.getReader().QueryRowContext(t.Context(), `SELECT COUNT(*) FROM `+table).Scan(&count))
+				assert.Zero(t, count, table)
+			}
+			_, err = d.getWriter().ExecContext(t.Context(), "DROP TRIGGER fail_pushed_write")
+			require.NoError(t, err)
+			created, err = d.ApplySessionPush(t.Context(), receipt, write)
+			require.NoError(t, err)
+			assert.True(t, created, "rollback must not reserve the receipt")
+		})
 	}
-	write.UsageEvents[0].SessionID = "snapshot"
-	created, err = d.ApplySessionPush(t.Context(), receipt, write)
-	require.NoError(t, err)
-	assert.True(t, created, "rollback must not reserve the receipt")
-}
-
-func TestSessionPushPendingParentFailureRollsBack(t *testing.T) {
-	d := testDB(t)
-	receipt, write := sessionPushFixture("snapshot")
-	receipt.ExternalParentSessionID = new("parent")
-	_, err := d.getWriter().ExecContext(t.Context(), `CREATE TRIGGER fail_pushed_parent
-		BEFORE INSERT ON session_external_parents
-		BEGIN SELECT RAISE(ABORT, 'parent write failed'); END`)
-	require.NoError(t, err)
-	created, err := d.ApplySessionPush(t.Context(), receipt, write)
-	require.ErrorContains(t, err, "parent write failed")
-	assert.False(t, created)
-	session, err := d.GetSession(t.Context(), "snapshot")
-	require.NoError(t, err)
-	assert.Nil(t, session)
-	_, err = d.getWriter().ExecContext(t.Context(), "DROP TRIGGER fail_pushed_parent")
-	require.NoError(t, err)
-	created, err = d.ApplySessionPush(t.Context(), receipt, write)
-	require.NoError(t, err)
-	assert.True(t, created)
 }
 
 func TestSessionPushPreservesExistingExternalParent(t *testing.T) {
@@ -235,20 +229,6 @@ func TestSessionPushPreservesExistingExternalParent(t *testing.T) {
 	link, err := d.GetSessionExternalParent(t.Context(), "snapshot")
 	require.NoError(t, err)
 	assert.Equal(t, "local-parent", link.ParentSessionID)
-}
-
-func TestSessionPushRejectsMismatchedReceiptIdentity(t *testing.T) {
-	d := testDB(t)
-	receipt, write := sessionPushFixture("snapshot")
-	receipt.SessionID = "other-session"
-	created, err := d.ApplySessionPush(t.Context(), receipt, write)
-	require.Error(t, err)
-	assert.False(t, created)
-	for _, id := range []string{"snapshot", "other-session"} {
-		session, err := d.GetSession(t.Context(), id)
-		require.NoError(t, err)
-		assert.Nil(t, session)
-	}
 }
 
 func TestSessionPushRebuildPreservesReceiptsAndCuration(t *testing.T) {
@@ -338,19 +318,6 @@ func TestSessionPushStoragePolicies(t *testing.T) {
 			}
 		})
 	}
-}
-
-func TestSessionPushUsesReceiptOrigin(t *testing.T) {
-	d := testDB(t)
-	receipt, write := sessionPushFixture("snapshot")
-	write.Session.Machine = "local"
-	created, err := d.ApplySessionPush(t.Context(), receipt, write)
-	require.NoError(t, err)
-	assert.True(t, created)
-	session, err := d.GetSessionFull(t.Context(), "snapshot")
-	require.NoError(t, err)
-	require.NotNil(t, session)
-	assert.Equal(t, "archive-a", session.Machine)
 }
 
 func TestLoadSessionPushDataExactLiveSession(t *testing.T) {

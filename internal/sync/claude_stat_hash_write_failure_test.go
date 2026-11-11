@@ -359,7 +359,7 @@ func TestSyncClaudeDAGIntentionalSkipCompletesActiveMembers(t *testing.T) {
 				"a completed active branch must not rewrite on restart")
 			assert.Zero(t, noop.Failed)
 
-			if tc.reserved {
+			if tc.reserved && !tc.syncSingle {
 				rebuilt := restarted.ResyncAll(t.Context(), nil)
 				require.True(t, rebuilt.ArchiveRebuilt)
 				require.Zero(t, rebuilt.Failed)

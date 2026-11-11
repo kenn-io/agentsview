@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -13,6 +14,13 @@ import (
 	"go.kenn.io/agentsview/internal/money"
 	"hegel.dev/go/hegel"
 )
+
+func TestSessionPushTimeout(t *testing.T) {
+	assert.Equal(t, 2*time.Minute, SessionPushTimeout(0))
+	assert.Equal(t, 2*time.Minute+time.Second, SessionPushTimeout(64<<10))
+	assert.Equal(t, 19*time.Minute+4*time.Second, SessionPushTimeout(64<<20))
+	assert.Equal(t, 19*time.Minute+4*time.Second, SessionPushTimeout(-1))
+}
 
 func TestSessionPushExactSelection(t *testing.T) {
 	d := testDB(t)
