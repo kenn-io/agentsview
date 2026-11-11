@@ -68,11 +68,12 @@ func (v *liveVectorServing) startSharedChoice() {
 	if v.cfg.Vector.Enabled {
 		_, deployment, err := embeddings.Server("")
 		if err == nil && deployment.Local && deployment.Endpoint == "" && v.serving.manager != nil {
-			if !chosen {
-				recordEmbeddingChoice()
+			var approvedBytes int64
+			if chosen {
+				approvedBytes = math.MaxInt64
 			}
 			v.mu.Lock()
-			err = v.startSetup(deployment, math.MaxInt64, false, "")
+			err = v.startSetup(deployment, approvedBytes, false, "")
 			v.mu.Unlock()
 			if err != nil {
 				log.Printf("search by meaning: start saved setup: %v", err)

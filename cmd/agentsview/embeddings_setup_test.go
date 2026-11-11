@@ -413,6 +413,7 @@ func TestEnabledBuiltinRecordsSharedChoice(t *testing.T) {
 	owner, err := newLiveVectorServing(t.Context(), cfg, database, nil, config.LoadReadOnly)
 	require.NoError(t, err)
 	defer func() { require.NoError(t, owner.Close()) }()
+	<-owner.done
 	chosen, err := embedlocal.ChoiceRecorded()
 	require.NoError(t, err)
 	assert.True(t, chosen)
@@ -424,6 +425,42 @@ func TestEnabledBuiltinRecordsSharedChoice(t *testing.T) {
 	saved, err := config.LoadReadOnly()
 	require.NoError(t, err)
 	assert.Equal(t, cfg.Vector, saved.Vector)
+}
+
+func TestSavedLocalDownloadApproval(t *testing.T) {
+	for _, shared := range []bool{false, true} {
+		t.Run(fmt.Sprintf("shared=%t", shared), func(t *testing.T) {
+			setTestHome(t, t.TempDir())
+			dir := testDataDir(t)
+			writeTestConfig(t, dir, "[vector]\nenabled = true\n[vector.embeddings]\nmodel = 'nomic-embed-text'\ndimension = 768\n[vector.embeddings.servers.local]\nlocal = true\n")
+			if shared {
+				require.NoError(t, embedlocal.RecordChoice())
+			}
+			cfg, err := config.LoadReadOnly()
+			require.NoError(t, err)
+			database := dbtest.OpenTestDBAt(t, filepath.Join(dir, "sessions.db"))
+			oldEndpoint, oldInstall := localEmbeddingEndpoint, installLocalEmbeddings
+			t.Cleanup(func() { localEmbeddingEndpoint, installLocalEmbeddings = oldEndpoint, oldInstall })
+			localEmbeddingEndpoint = func(context.Context, embedlocal.Options) (string, error) { return "", embedlocal.ErrNotFound }
+			var approved atomic.Bool
+			installLocalEmbeddings = func(ctx context.Context, opts embedlocal.InstallOptions) (embedlocal.Installation, error) {
+				allowed, err := opts.Confirm(ctx, 100)
+				if err != nil {
+					return embedlocal.Installation{}, err
+				}
+				approved.Store(allowed)
+				return embedlocal.Installation{}, errors.New("download stopped")
+			}
+			owner, err := newLiveVectorServing(t.Context(), cfg, database, nil, config.LoadReadOnly)
+			require.NoError(t, err)
+			defer func() { require.NoError(t, owner.Close()) }()
+			<-owner.done
+			assert.Equal(t, shared, approved.Load())
+			chosen, err := embedlocal.ChoiceRecorded()
+			require.NoError(t, err)
+			assert.Equal(t, shared, chosen)
+		})
+	}
 }
 
 func TestEnabledAutomaticDoesNotRecordChoice(t *testing.T) {

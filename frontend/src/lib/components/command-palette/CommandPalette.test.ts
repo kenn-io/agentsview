@@ -64,6 +64,7 @@ const {
   mockEmbeddingsService: {
     getApiV1EmbeddingsStatus: vi.fn(),
     postApiV1EmbeddingsBuild: vi.fn(),
+    postApiV1EmbeddingsSetup: vi.fn(),
   },
 }));
 
@@ -185,6 +186,7 @@ describe("CommandPalette", () => {
     mockEmbeddingsService.getApiV1EmbeddingsStatus.mockReset();
     mockEmbeddingsService.getApiV1EmbeddingsStatus.mockImplementation(() => new Promise(() => {}));
     mockEmbeddingsService.postApiV1EmbeddingsBuild.mockReset();
+    mockEmbeddingsService.postApiV1EmbeddingsSetup.mockReset();
     mockSessions.activeSessionId = null;
     mockSessions.deselectSession.mockImplementation(() => {
       mockSessions.activeSessionId = null;
@@ -559,6 +561,42 @@ describe("CommandPalette", () => {
       unmount(component);
     },
   );
+
+  it("refreshes the provider without changing search mode after setup conflicts", async () => {
+    const setup = { enabled: false, action: "turn-on", provider: "ollama", missing_bytes: 0, busy: false, installing: false, downloaded_bytes: 0, total_bytes: 0 };
+    mockEmbeddingsService.getApiV1EmbeddingsStatus
+      .mockResolvedValueOnce({ running: false, setup })
+      .mockResolvedValueOnce({ running: false, setup: { ...setup, provider: "built-in", missing_bytes: 295000000 } });
+    mockEmbeddingsService.postApiV1EmbeddingsSetup.mockRejectedValue(new ApiError(409, "provider changed"));
+    const component = mount(CommandPalette, { target: document.body });
+    try {
+      await enterSearchQuery();
+      const hint = await tickUntil(".meaning-hint button");
+      hint.click();
+      for (let i = 0; i < 20; i++) await tick();
+      expect(mockSearchStore.setMode).not.toHaveBeenCalled();
+      expect(mockEmbeddingsService.getApiV1EmbeddingsStatus).toHaveBeenCalledTimes(2);
+      expect(document.body.textContent).toContain("295 MB");
+    } finally {
+      unmount(component);
+    }
+  });
+
+  it("switches to search by meaning when setup starts", async () => {
+    const setup = { enabled: false, action: "turn-on", provider: "built-in", missing_bytes: 0, busy: false, installing: false, downloaded_bytes: 0, total_bytes: 0 };
+    mockEmbeddingsService.getApiV1EmbeddingsStatus.mockResolvedValue({ running: false, setup });
+    mockEmbeddingsService.postApiV1EmbeddingsSetup.mockResolvedValue({ started: true });
+    const component = mount(CommandPalette, { target: document.body });
+    try {
+      await enterSearchQuery();
+      const hint = await tickUntil(".meaning-hint button");
+      hint.click();
+      for (let i = 0; i < 20; i++) await tick();
+      expect(mockSearchStore.setMode).toHaveBeenCalledWith("semantic");
+    } finally {
+      unmount(component);
+    }
+  });
 
   it("shows sort only for full-text query results and activates it through the rendered button", async () => {
     mockSearchStore.results = [makeSearchResult()];
