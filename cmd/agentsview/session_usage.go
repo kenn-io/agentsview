@@ -160,6 +160,9 @@ func resolveSessionUsageBackend(cmd *cobra.Command, noSync bool) (*sessionUsageB
 			if err != nil {
 				return nil, err
 			}
+			if capabilities.APIVersion > server.APIVersion {
+				return nil, fmt.Errorf("server API version %d is newer than this client supports; upgrade the client", capabilities.APIVersion)
+			}
 			if capabilities.APIVersion < server.UsageWaitAPIVersion {
 				return nil, fmt.Errorf("server API version %d does not support --wait; upgrade or restart the server", capabilities.APIVersion)
 			}
@@ -285,6 +288,7 @@ func httpSessionUsageData(
 	}
 	resolvedID, err := resolveServiceSessionID(waitCtx, backend, sessionID)
 	missing := errors.Is(err, errSessionNotFound)
+	known := err == nil
 	if err != nil && !missing && waitCtx.Err() == nil {
 		return nil, tokenUseExitErr, err
 	}
@@ -293,7 +297,6 @@ func httpSessionUsageData(
 		return nil, tokenUseExitNotFound, nil
 	}
 	var waitErr error
-	clear := false
 	if query.Wait || missing {
 		started := false
 		_, waitErr = backoff.Retry(waitCtx, func() (struct{}, error) {
@@ -302,7 +305,6 @@ func httpSessionUsageData(
 				return struct{}{}, backoff.Permanent(fmt.Errorf("checking sync status: %w", statusErr))
 			}
 			if !startup && !stale && !pending {
-				clear = true
 				return struct{}{}, nil
 			}
 			if !query.Wait {
@@ -330,24 +332,20 @@ func httpSessionUsageData(
 		if !query.Wait && waitErr != nil {
 			return nil, tokenUseExitErr, waitErr
 		}
-		// Re-read with the caller's live context after a failed or expired wait.
-		lookupCtx := waitCtx
-		if waitErr != nil {
-			lookupCtx = ctx
-		}
-		resolvedID, err = resolveServiceSessionID(lookupCtx, backend, sessionID)
-		if waitErr == nil && waitCtx.Err() != nil && ctx.Err() == nil {
-			waitErr = waitCtx.Err()
-			resolvedID, err = resolveServiceSessionID(ctx, backend, sessionID)
-		}
-		if errors.Is(err, errSessionNotFound) {
-			if !clear && waitErr != nil {
-				return nil, tokenUseExitErr, fmt.Errorf("waiting for session usage: %w", waitErr)
+		if waitErr == nil {
+			previousID := resolvedID
+			resolvedID, err = resolveServiceSessionID(waitCtx, backend, sessionID)
+			if waitCtx.Err() != nil && ctx.Err() == nil {
+				waitErr = waitCtx.Err()
+				resolvedID = previousID
+			} else if errors.Is(err, errSessionNotFound) {
+				return nil, tokenUseExitNotFound, nil
+			} else if err != nil {
+				return nil, tokenUseExitErr, err
 			}
-			return nil, tokenUseExitNotFound, nil
 		}
-		if err != nil {
-			return nil, tokenUseExitErr, err
+		if waitErr != nil && !known {
+			return nil, tokenUseExitErr, fmt.Errorf("waiting for session usage: %w", waitErr)
 		}
 	}
 	refreshIncomplete := false
@@ -378,6 +376,9 @@ func httpSessionUsageData(
 			fmt.Fprintf(os.Stderr, "warning: couldn't refresh usage; saved totals may be out of date: %v\n", syncErr)
 		}
 	}
+	if waitErr != nil && !refresh {
+		fmt.Fprintf(os.Stderr, "warning: waiting for ingestion did not finish; saved totals may be out of date: %v\n", waitErr)
+	}
 	// The shared HTTP backend requests the full breakdown and the same
 	// subagent scope as the direct store paths, so --server and local
 	// agree field for field. The request keeps the CLI's usage timeout.
@@ -398,7 +399,7 @@ func httpSessionUsageData(
 	}
 	out := &sessionUsageOutput{
 		SessionUsageReport: *usage,
-		ServerRunning:      true, RefreshIncomplete: refreshIncomplete,
+		ServerRunning:      true, RefreshIncomplete: refreshIncomplete, WaitIncomplete: waitErr != nil && !refresh,
 	}
 	return out, usageExitCode(out), nil
 }
@@ -552,6 +553,9 @@ func renderSessionUsageHuman(w io.Writer, out *sessionUsageOutput) error {
 	}
 	if out.RefreshIncomplete {
 		fmt.Fprintln(w, "Usage refresh is incomplete. Saved totals may be out of date.")
+	}
+	if out.WaitIncomplete {
+		fmt.Fprintln(w, "Waiting for ingestion did not finish. Saved totals may be out of date.")
 	}
 	if line := planUsageLine(out.Agent, out.Plan); line != "" {
 		fmt.Fprintf(w, "%s %s\n", label("Plan usage"), sanitizeTerminal(line))
