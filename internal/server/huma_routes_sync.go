@@ -31,7 +31,9 @@ func (s *Server) registerSyncRoutes() {
 	s.stream(group, http.MethodPost, "/sync/remotes",
 		"Sync remote hosts", s.humaSyncRemotes, streamJSONResponseSchema("RemoteSyncResponse"),
 	)
-	s.postLong(group, "/sessions/sync", "Sync a session", s.humaSyncSession)
+	registerRoute(group, http.MethodPost, "/sessions/sync", "Sync a session", s.humaSyncSession, func(op *huma.Operation) {
+		op.Description = "A usage refresh refused before acquiring the parent sync lock returns HTTP 409 with code session_refresh_not_started. Other conflicts do not carry this code."
+	})
 }
 
 func syncEventDescription(op *huma.Operation) {
@@ -1216,6 +1218,9 @@ func (s *Server) humaSyncSession(
 		}
 		if handled := handleHumaReadOnly(err); handled != nil {
 			return nil, handled
+		}
+		if in.Body.UsageRefresh && errors.Is(err, syncpkg.ErrSessionRefreshNotStarted) {
+			return nil, apiErrorWithCode(http.StatusConflict, "session_refresh_not_started", err.Error())
 		}
 		if errors.Is(err, syncpkg.ErrSyncInProgress) ||
 			errors.Is(err, db.ErrSessionExcluded) ||

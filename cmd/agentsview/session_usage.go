@@ -40,7 +40,7 @@ func newSessionUsageCommand() *cobra.Command {
 			"Claude subagent transcripts beside the named session. " +
 			"--own-only reports the named transcript's usage.\n\n" +
 			"Missing daemon IDs return a retry error while startup ingestion or an archive rebuild is pending; " +
-			"otherwise they return exit 2. " +
+			"otherwise they return exit 2. --wait allows up to 30 seconds for ingestion and refresh. " +
 			"--no-sync and HTTP --own-only read only the archive; missing IDs return exit 2. " +
 			"If refresh is refused or fails, the command shows archived usage with a warning; " +
 			"JSON sets refresh_incomplete. Direct mode keeps its targeted source lookup.\n\n" +
@@ -54,6 +54,7 @@ func newSessionUsageCommand() *cobra.Command {
 			return runSessionUsage(cmd, args[0], outputFormat(cmd))
 		},
 	}
+	cmd.Flags().Bool("wait", false, "Wait up to 30 seconds for ingestion and refresh")
 	cmd.Flags().Bool("no-sync", false,
 		"Use archived usage without synchronizing source transcripts")
 	cmd.Flags().Bool("own-only", false,
@@ -136,8 +137,9 @@ func resolveSessionUsageBackend(cmd *cobra.Command, noSync bool) (*sessionUsageB
 	}
 
 	ownOnly, _ := cmd.Flags().GetBool("own-only")
+	wait, _ := cmd.Flags().GetBool("wait")
 	query := sessionUsageQuery{
-		OwnOnly: ownOnly, NoSync: noSync,
+		OwnOnly: ownOnly, NoSync: noSync, Wait: wait,
 	}
 
 	remote, _ := cmd.Flags().GetString("server")
@@ -262,49 +264,61 @@ func httpSessionUsageData(
 	}
 	sessionID := query.SessionID
 	backend := servicehttp.NewHTTPBackend(baseURL, token, false, "")
-	resolvedID, err := resolveServiceSessionID(ctx, backend, sessionID)
-	if err != nil {
-		if !errors.Is(err, errSessionNotFound) {
-			return nil, tokenUseExitErr, err
-		}
-		if query.OwnOnly || query.NoSync {
-			return nil, tokenUseExitNotFound, nil
-		}
-		startupPending, archiveStale, syncPending, statusErr := httpSessionSyncStatus(
-			ctx, baseURL, token,
-		)
-		if statusErr != nil {
-			return nil, tokenUseExitErr, fmt.Errorf(
-				"checking sync status: %w", statusErr,
-			)
-		}
-		if startupPending || archiveStale || syncPending {
-			return nil, tokenUseExitErr, errors.New(
-				"session usage is not ready; wait for syncing or rebuilding " +
-					"to finish, then retry",
-			)
-		}
-		// Startup or rebuild work can finish after the first lookup but before
-		// the status request. Resolve once more before declaring the ID absent.
-		resolvedID, err = resolveServiceSessionID(ctx, backend, sessionID)
-		if err != nil {
-			if !errors.Is(err, errSessionNotFound) {
-				return nil, tokenUseExitErr, err
+	waitCtx := ctx
+	if query.Wait && !query.OwnOnly && !query.NoSync {
+		var cancel context.CancelFunc
+		waitCtx, cancel = context.WithTimeout(ctx, startupWaitTimeout)
+		defer cancel()
+	}
+	resolvedID, err := resolveServiceSessionID(waitCtx, backend, sessionID)
+	missing := errors.Is(err, errSessionNotFound)
+	if err != nil && !missing {
+		return nil, tokenUseExitErr, err
+	}
+	if missing && (query.OwnOnly || query.NoSync) {
+		return nil, tokenUseExitNotFound, nil
+	}
+	if missing || (query.Wait && !query.OwnOnly && !query.NoSync) {
+		for {
+			startup, stale, pending, statusErr := httpSessionSyncStatus(waitCtx, baseURL, token)
+			if statusErr != nil {
+				return nil, tokenUseExitErr, fmt.Errorf("checking sync status: %w", statusErr)
 			}
+			if !startup && !stale && !pending {
+				break
+			}
+			if !query.Wait {
+				return nil, tokenUseExitErr, errors.New("session usage is not ready; retry with --wait after syncing or rebuilding starts")
+			}
+			if err := waitSessionUsagePoll(waitCtx); err != nil {
+				return nil, tokenUseExitErr, fmt.Errorf("waiting for session usage: %w", err)
+			}
+		}
+		resolvedID, err = resolveServiceSessionID(waitCtx, backend, sessionID)
+		if errors.Is(err, errSessionNotFound) {
 			return nil, tokenUseExitNotFound, nil
+		}
+		if err != nil {
+			return nil, tokenUseExitErr, err
 		}
 	}
 	refreshIncomplete := false
 	if !query.OwnOnly && !query.NoSync {
-		_, syncErr := backend.Sync(ctx, service.SyncInput{
-			ID: resolvedID, Subagents: true, UsageRefresh: true,
-		})
-		if syncErr != nil {
-			if !errors.Is(syncErr, db.ErrReadOnly) {
-				refreshIncomplete = true
-				fmt.Fprintf(os.Stderr,
-					"warning: couldn't refresh usage; saved totals may be out of date: %v\n", syncErr)
+		for {
+			_, syncErr := backend.Sync(waitCtx, service.SyncInput{
+				ID: resolvedID, Subagents: true, UsageRefresh: true,
+			})
+			if syncErr == nil || errors.Is(syncErr, db.ErrReadOnly) {
+				break
 			}
+			if query.Wait && errors.Is(syncErr, servicehttp.ErrSessionRefreshNotStarted) {
+				if waitErr := waitSessionUsagePoll(waitCtx); waitErr == nil {
+					continue
+				}
+			}
+			refreshIncomplete = true
+			fmt.Fprintf(os.Stderr, "warning: couldn't refresh usage; saved totals may be out of date: %v; retry with --wait\n", syncErr)
+			break
 		}
 	}
 	// The shared HTTP backend requests the full breakdown and the same
@@ -330,6 +344,17 @@ func httpSessionUsageData(
 		ServerRunning:      true, RefreshIncomplete: refreshIncomplete,
 	}
 	return out, usageExitCode(out), nil
+}
+
+func waitSessionUsagePoll(ctx context.Context) error {
+	timer := time.NewTimer(time.Second)
+	defer timer.Stop()
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-timer.C:
+		return nil
+	}
 }
 
 func httpSessionSyncStatus(

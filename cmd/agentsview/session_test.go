@@ -2632,3 +2632,92 @@ func TestSessionUsageIncompleteRefreshReturnsAvailableUsage(t *testing.T) {
 	assert.Contains(t, stderr, "warning: couldn't refresh usage; saved totals may be out of date")
 	assert.Contains(t, stderr, reason)
 }
+
+func TestSessionUsageWait(t *testing.T) {
+	for _, tc := range []struct {
+		name           string
+		missing        bool
+		missingForever bool
+		conflict       string
+		wantSyncs      int
+		wantIncomplete bool
+	}{
+		{name: "pending session appears", missing: true, wantSyncs: 1},
+		{name: "still missing after catch-up", missing: true, missingForever: true},
+		{name: "initial lock refusal retries", conflict: `{"code":"session_refresh_not_started","error":"busy"}`, wantSyncs: 2},
+		{name: "other conflict does not retry", conflict: `{"error":"busy"}`, wantSyncs: 1, wantIncomplete: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ts, _ := newRemoteUsageServer(t, remoteUsageSpec{canonicalID: "remote-session"})
+			original := ts.Config.Handler
+			statuses, syncs := 0, 0
+			ts.Config.Handler = http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				switch r.URL.Path {
+				case "/api/v1/sync/status":
+					statuses++
+					if statuses == 1 {
+						writeJSONResponse(w, `{"startup_pending":true}`)
+					} else {
+						writeJSONResponse(w, `{}`)
+					}
+					return
+				case "/api/v1/sessions/remote-session":
+					if tc.missing && (statuses < 2 || tc.missingForever) {
+						http.NotFound(w, r)
+						return
+					}
+				case "/api/v1/sessions/sync":
+					syncs++
+					if tc.conflict != "" && syncs == 1 {
+						w.Header().Set("Content-Type", "application/json")
+						w.WriteHeader(http.StatusConflict)
+						_, _ = w.Write([]byte(tc.conflict))
+						return
+					}
+				}
+				original.ServeHTTP(w, r)
+			})
+			out, code, err := httpSessionUsageData(t.Context(), ts.URL, "", sessionUsageQuery{SessionID: "remote-session", Wait: true})
+			require.NoError(t, err)
+			if tc.missingForever {
+				assert.Nil(t, out)
+				assert.Equal(t, tokenUseExitNotFound, code)
+				assert.Equal(t, 2, statuses)
+				assert.Zero(t, syncs)
+				return
+			}
+			require.NotNil(t, out)
+			assert.Equal(t, tokenUseExitOK, code)
+			assert.Equal(t, 42, out.TotalOutputTokens)
+			assert.Equal(t, tc.wantIncomplete, out.RefreshIncomplete)
+			assert.Equal(t, tc.wantSyncs, syncs)
+			assert.Equal(t, 2, statuses)
+		})
+	}
+}
+
+func TestSessionUsageWaitExpiresAfterRefusedRefresh(t *testing.T) {
+	ts, _ := newRemoteUsageServer(t, remoteUsageSpec{canonicalID: "remote-session"})
+	original := ts.Config.Handler
+	syncs := 0
+	ts.Config.Handler = http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/api/v1/sync/status":
+			writeJSONResponse(w, `{}`)
+			return
+		case "/api/v1/sessions/sync":
+			syncs++
+			w.WriteHeader(http.StatusConflict)
+			_, _ = w.Write([]byte(`{"code":"session_refresh_not_started","error":"busy"}`))
+			return
+		}
+		original.ServeHTTP(w, r)
+	})
+	out, code, err := httpSessionUsageData(t.Context(), ts.URL, "", sessionUsageQuery{SessionID: "remote-session", Wait: true})
+	require.NoError(t, err)
+	require.NotNil(t, out)
+	assert.Equal(t, tokenUseExitOK, code)
+	assert.Equal(t, 42, out.TotalOutputTokens)
+	assert.True(t, out.RefreshIncomplete)
+	assert.Greater(t, syncs, 1)
+}

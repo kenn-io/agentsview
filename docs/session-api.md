@@ -1054,7 +1054,7 @@ request.
   returns from the rollup branch first, so `subagents` has no effect.
 
 ```bash
-agentsview session usage <id> [--format json] [--own-only] [--no-sync]
+agentsview session usage <id> [--format json] [--own-only] [--no-sync] [--wait]
 ```
 
 ```json
@@ -1280,7 +1280,11 @@ without waiting for startup ingestion. The CLI requests this with
 returns archived totals with a warning; JSON sets `refresh_incomplete: true`.
 A missing daemon ID returns a retry error while `GET /api/v1/sync/status`
 reports `startup_pending`, `archive_stale`, or `sync_pending`. Once all three
-are clear, it returns exit 2. Scheduled ingestion owns retries.
+are clear, it returns exit 2. Scheduled ingestion owns retries. Pass `--wait`
+to wait up to 30 seconds for these states to clear and resolve the ID again.
+The same budget covers refresh retries when the daemon confirms the parent
+refresh did not start. If that wait expires after a refused refresh, the command
+reads saved totals and marks the refresh incomplete.
 
 Daemon API 15 adds `sync_pending`, which stays true while ingestion catches up
 after an idle period. Older local clients must upgrade to interpret it. The
@@ -1295,7 +1299,9 @@ refresh requires daemon API 12; upgrade or restart older servers, or use
 `--no-sync`. Archived combined reads require API 6. `POST /api/v1/sessions/sync`
 returns HTTP 409 for a stale local archive for every caller, including
 `session sync`. A usage refresh also returns HTTP 409 while startup ingestion
-is incomplete or another sync holds the engine. When startup ingestion is
+is incomplete or another sync holds the engine. Only a refusal before the parent
+refresh acquired its lock carries the code `session_refresh_not_started`; other
+conflicts do not authorize a refresh retry. When startup ingestion is
 deferred, its automatic fallback starts after a 30-second grace period.
 
 Pass `--no-sync` to read archived usage without refreshing source transcripts.

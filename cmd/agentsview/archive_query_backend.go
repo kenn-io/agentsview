@@ -51,6 +51,7 @@ type sessionUsageQuery struct {
 	SessionID string
 	OwnOnly   bool
 	NoSync    bool
+	Wait      bool
 }
 
 // dailyUsageReport is a daily usage result plus the sessions its token and

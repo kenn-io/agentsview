@@ -34,6 +34,7 @@ export const getPostApiV1SessionsSyncUrl = () => {
 };
 
 /**
+ * A usage refresh refused before acquiring the parent sync lock returns HTTP 409 with code session_refresh_not_started. Other conflicts do not carry this code.
  * @summary Sync a session
  */
 export const postApiV1SessionsSync = async (
