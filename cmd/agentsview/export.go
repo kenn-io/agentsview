@@ -399,6 +399,9 @@ func exportBackfillFailure(status db.BackgroundMigrationStatus) error {
 }
 
 func exportDaemonPing(ctx context.Context, rt *DaemonRuntime, token string) (failed, ok bool) {
+	if rt == nil {
+		return false, false
+	}
 	ctx, cancel := context.WithTimeout(ctx, time.Second)
 	defer cancel()
 	ep := rt.Record.Endpoint()
@@ -429,13 +432,10 @@ func exportDaemonPing(ctx context.Context, rt *DaemonRuntime, token string) (fai
 }
 
 func exportWritableDaemonPing(ctx context.Context, cfg *config.Config, rt **DaemonRuntime) (failed, ok bool) {
-	if *rt != nil {
-		failed, ok = exportDaemonPing(ctx, *rt, cfg.AuthToken)
-	}
+	failed, ok = exportDaemonPing(ctx, *rt, cfg.AuthToken)
 	if !ok {
-		if *rt = FindWritableDaemonRuntime(cfg.DataDir, cfg.AuthToken); *rt != nil {
-			failed, ok = exportDaemonPing(ctx, *rt, cfg.AuthToken)
-		}
+		*rt = FindWritableDaemonRuntime(cfg.DataDir, cfg.AuthToken)
+		failed, ok = exportDaemonPing(ctx, *rt, cfg.AuthToken)
 	}
 	return failed, ok
 }
