@@ -206,6 +206,9 @@ describe("SearchStore", () => {
       expect(store.error).toBeNull();
       expect(reportErrorShown).not.toHaveBeenCalled();
       if (outcome === "recover") {
+        expect(searchService.getApiV1Search.mock.calls[1]).toEqual(
+          searchService.getApiV1Search.mock.calls[0],
+        );
         second.resolve(fullTextResponse("needle"));
         await flushMicrotasks();
         expect(store.results[0]?.session_id).toBe("full-0");

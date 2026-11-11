@@ -291,12 +291,14 @@ describe("MessagesStore", () => {
     expect(messages.sessionId).toBe("s2");
   });
 
-  it.each(["recover", "exhaust", "switch"])("reload retry %s", async (outcome) => {
+  it.each(["recover", "exhaust", "switch", "permanent"])("reload retry %s", async (outcome) => {
     vi.useFakeTimers();
     try {
       await setupSession("s1", 1, [makeMessage(0)]);
       vi.mocked(api.getSession).mockClear();
-      vi.mocked(api.getSession).mockRejectedValue(new ApiError(503, "unavailable"));
+      vi.mocked(api.getSession).mockRejectedValue(
+        new ApiError(outcome === "permanent" ? 404 : 503, "unavailable"),
+      );
       if (outcome === "recover") {
         vi.mocked(api.getSession)
           .mockRejectedValueOnce(new ApiError(503, "unavailable"))

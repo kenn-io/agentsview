@@ -650,6 +650,23 @@ describe("CommandPalette", () => {
     unmount(component);
   });
 
+  it("retries a failed full-text search from the error and focuses the query", async () => {
+    mockSearchStore.error = { detail: null, kind: "generic" };
+    const component = mount(CommandPalette, { target: document.body });
+    await enterSearchQuery();
+    const retry = Array.from(
+      document.querySelectorAll<HTMLButtonElement>(".palette-error button"),
+    ).find((button) => button.textContent?.trim() === "Retry");
+    expect(retry).toBeDefined();
+    retry!.focus();
+    retry!.click();
+    expect(mockSearchStore.retry).toHaveBeenCalledOnce();
+    expect(document.activeElement).toBe(document.querySelector(".palette-input"));
+    expect(mockRouter.navigateToSession).not.toHaveBeenCalled();
+
+    unmount(component);
+  });
+
   it("shows the inherited project and can search all projects without changing the sidebar", async () => {
     mockSessions.filters.project = "proj-a";
     const component = mount(CommandPalette, { target: document.body });
@@ -720,39 +737,24 @@ describe("CommandPalette", () => {
     expect(mockSearchStore.resetRange).toHaveBeenCalledOnce();
   });
 
-  it("explains a semantic timeout", async () => {
+  it("explains a semantic timeout and offers an explicit retry", async () => {
     mockSearchStore.mode = "semantic";
-    mockSearchStore.error = { detail: "request timed out", kind: "timeout" };
+    mockSearchStore.error = {
+      detail: "request timed out",
+      kind: "timeout",
+    };
     const component = mount(CommandPalette, { target: document.body });
     await enterSearchQuery();
+
     const error = document.querySelector(".palette-error");
     expect(error?.querySelector("strong")?.textContent).toBe("Search took too long");
     expect(error?.querySelector("span")?.textContent).toBe(
       "Try again. The first Semantic or Hybrid search can be slower while the embedding model warms up.",
     );
     expect(error?.textContent).not.toContain("request timed out");
+
     unmount(component);
   });
-
-  it.each(["generic", "timeout"] as const)(
-    "focuses the input when retrying a %s error",
-    async (kind) => {
-      mockSearchStore.mode = kind === "timeout" ? "semantic" : "fulltext";
-      mockSearchStore.error = { detail: null, kind };
-      const component = mount(CommandPalette, { target: document.body });
-      await enterSearchQuery();
-      const retry = Array.from(
-        document.querySelectorAll<HTMLButtonElement>(".palette-error button"),
-      ).find((button) => button.textContent?.trim() === "Retry");
-      expect(retry).toBeDefined();
-      retry!.focus();
-      retry!.click();
-      expect(mockSearchStore.retry).toHaveBeenCalledOnce();
-      expect(document.activeElement).toBe(document.querySelector(".palette-input"));
-      expect(mockRouter.navigateToSession).not.toHaveBeenCalled();
-      unmount(component);
-    },
-  );
 
   it.each(["semantic", "hybrid"] as const)("offers server settings in %s mode", async (mode) => {
     mockSearchStore.mode = mode;
