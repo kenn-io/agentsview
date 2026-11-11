@@ -4,6 +4,8 @@ import (
 	"context"
 	"encoding/json/v2"
 	"fmt"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -11,6 +13,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"go.kenn.io/agentsview/internal/assets"
+	"go.kenn.io/agentsview/internal/config"
 	"go.kenn.io/agentsview/internal/db"
 	"go.kenn.io/agentsview/internal/money"
 	"hegel.dev/go/hegel"
@@ -343,6 +346,7 @@ func TestSessionPushIdentityV1(t *testing.T) {
 	inlineReceipt, _, err := DecodeSessionPush(inline)
 	require.NoError(t, err)
 	dir := t.TempDir()
+	source.SetAssetsDir(dir)
 	_, err = source.MigrateToolImages(t.Context(), db.StripImagesFilter{}, func(mediaType string, body []byte) (string, bool, error) {
 		return assets.Put(dir, mediaType, body)
 	})
@@ -598,17 +602,24 @@ func TestSessionPushRejectMalformed(t *testing.T) {
 	})
 }
 
-func TestSessionPushNormalizedAssetReferenceDowngrade(t *testing.T) {
+func TestSessionPushRejectsUnresolvedAssetReference(t *testing.T) {
 	content := "\x00" + `[{"byte_size":3,"image_ref":"asset://abc.png","media_type":"image/png","sha256":"abc","text":"![Image: image/png, 3 bytes](asset://abc.png)","type":"agentsview_image","version":1}]`
 	packet := adversarialSessionPushPacket(t, db.Session{ID: "selected", Agent: "claude", Machine: "source", MessageCount: 1}, []db.Message{{Ordinal: 0, Role: "assistant", ToolCalls: []db.ToolCall{{ToolName: "Read", ResultContent: content, ResultEvents: []db.ToolResultEvent{{EventIndex: 0, Content: content}}}}}})
-	_, write, err := DecodeSessionPush(packet)
+	_, _, err := DecodeSessionPush(packet)
+	require.ErrorContains(t, err, "unresolved image assets")
+	markdown := adversarialSessionPushPacket(t, db.Session{ID: "selected", Agent: "claude", Machine: "source", MessageCount: 1}, []db.Message{{Ordinal: 0, Role: "assistant", Content: "![image](asset:\x00//missing.png)"}})
+	_, _, err = DecodeSessionPush(markdown)
+	require.ErrorContains(t, err, "unresolved image assets")
+	receiver := testDB(t)
+	session, err := receiver.GetSession(t.Context(), "selected")
 	require.NoError(t, err)
-	require.Len(t, write.Messages, 1)
-	require.Len(t, write.Messages[0].ToolCalls, 1)
-	call := write.Messages[0].ToolCalls[0]
-	assert.NotContains(t, call.ResultContent, "asset://")
-	assert.NotContains(t, call.ResultEvents[0].Content, "asset://")
-	assert.NotContains(t, call.ResultContent, "\x00")
+	assert.Nil(t, session)
+	packet = adversarialSessionPushPacket(t, db.Session{ID: "selected", Agent: "claude", Machine: "source", MessageCount: 1}, []db.Message{{Ordinal: 0, Role: "assistant", ToolCalls: []db.ToolCall{{ToolName: "Read", ResultContent: `[{"type":"input_image","image_url":"data:image/png;base64,AAEC"}]`}}}})
+	receipt, write, err := DecodeSessionPush(packet)
+	require.NoError(t, err)
+	created, err := receiver.ApplySessionPush(t.Context(), receipt, write)
+	require.NoError(t, err)
+	assert.True(t, created)
 }
 
 func TestSessionPushUsageRoundTrip(t *testing.T) {
@@ -678,4 +689,60 @@ func adversarialSessionPushPacket(t *testing.T, session db.Session, messages []d
 	data, err := json.Marshal(SessionPushEnvelope{Version: 1, SessionID: session.ID, Manifest: sink.manifest, Segments: segments})
 	require.NoError(t, err)
 	return data
+}
+
+func TestSessionPushRetainedImages(t *testing.T) {
+	source := testDB(t)
+	sourceDir := t.TempDir()
+	source.SetAssetsDir(sourceDir)
+	source.SetToolResultImages(config.ToolResultImagesOffload)
+	image := `[ {"type":"input_image","image_url":"data:image/png;base64,AAEC"} ]`
+	ref, _, err := assets.Put(sourceDir, "image/png", []byte{0, 1, 2})
+	require.NoError(t, err)
+	session := db.Session{ID: "images", Agent: "claude", Machine: "source", MessageCount: 1}
+	message := db.Message{SessionID: session.ID, Role: "assistant", Content: "![chart](" + ref + ")\n\n![other][pic]\n\n[pic]: " + ref + "\n\n`![example](asset://fake.png)`", ToolCalls: []db.ToolCall{{ToolName: "Read", ResultContent: image, ResultEvents: []db.ToolResultEvent{{Source: "tool", Content: "worker:\n" + image}}}}}
+	_, err = source.WriteSessionBatchAtomic(t.Context(), []db.SessionBatchWrite{{Session: session, Messages: []db.Message{message}, ReplaceMessages: true}})
+	require.NoError(t, err)
+	before, err := source.GetAllMessages(t.Context(), session.ID)
+	require.NoError(t, err)
+	packet, _, err := EncodeSessionPush(t.Context(), source, session.ID, "")
+	require.NoError(t, err)
+	receipt, write, err := DecodeSessionPush(packet)
+	require.NoError(t, err)
+	for _, policy := range []config.ToolResultImages{config.ToolResultImagesKeep, config.ToolResultImagesOffload, config.ToolResultImagesDrop} {
+		t.Run(string(policy), func(t *testing.T) {
+			receiver := testDB(t)
+			dir := t.TempDir()
+			receiver.SetAssetsDir(dir)
+			receiver.SetToolResultImages(policy)
+			created, err := receiver.ApplySessionPush(t.Context(), receipt, write)
+			require.NoError(t, err)
+			require.True(t, created)
+			got, err := receiver.GetAllMessages(t.Context(), session.ID)
+			require.NoError(t, err)
+			require.Len(t, got, 1)
+			assert.Contains(t, got[0].Content, "![chart](data:image/png;base64,AAEC)")
+			assert.Contains(t, got[0].Content, "[pic]: data:image/png;base64,AAEC")
+			assert.Contains(t, got[0].Content, "`![example](asset://fake.png)`")
+			for _, content := range []string{got[0].ToolCalls[0].ResultContent, got[0].ToolCalls[0].ResultEvents[0].Content} {
+				body, err := db.ReadRetainedImage(t.Context(), content, 0, dir, 100)
+				require.NoError(t, err)
+				if policy == config.ToolResultImagesDrop {
+					assert.Empty(t, body)
+				} else {
+					assert.Equal(t, []byte{0, 1, 2}, body)
+				}
+			}
+			created, err = receiver.ApplySessionPush(t.Context(), receipt, write)
+			require.NoError(t, err)
+			assert.False(t, created)
+		})
+	}
+	after, err := source.GetAllMessages(t.Context(), session.ID)
+	require.NoError(t, err)
+	assert.Equal(t, before, after)
+	require.NoError(t, os.Remove(filepath.Join(sourceDir, strings.TrimPrefix(ref, "asset://"))))
+	payload, _, err := EncodeSessionPush(t.Context(), source, session.ID, "")
+	require.Error(t, err)
+	assert.Nil(t, payload)
 }

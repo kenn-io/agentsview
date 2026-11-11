@@ -148,6 +148,10 @@ func EncodeSessionPush(ctx context.Context, database *db.DB, id, expectedAgent s
 		return nil, "", errors.New("source archive identity is unavailable")
 	}
 	origin := "push-" + hashHex([]byte(archiveID))[:32]
+	data.Messages, err = db.ProjectSessionPushImages(ctx, data.Messages, database.AssetsDir(), MaxSessionPushBytes)
+	if err != nil {
+		return nil, "", err
+	}
 	payload, err := encodeSessionPushData(ctx, origin, *session, data)
 	return payload, session.Agent, err
 }
@@ -268,8 +272,9 @@ func decodeSessionPush(data []byte) (db.SessionPushReceipt, db.SessionBatchWrite
 			}
 			identity = append(identity, sessionPushIdentity(message))
 			converted := message.dbMessage()
-			// Normalize before asset downgrade and signal extraction. The receipt
+			// Normalize before asset checks and signal extraction. The receipt
 			// identity uses the validated wire content before these projections.
+			db.SanitizeMessage(&converted)
 			for i := range converted.ToolCalls {
 				db.SanitizeToolCall(&converted.ToolCalls[i])
 			}
@@ -306,7 +311,9 @@ func decodeSessionPush(data []byte) (db.SessionPushReceipt, db.SessionBatchWrite
 			messages[i].ToolCalls[j].SessionID = session.ID
 		}
 	}
-	downgradeImportedAssetReferences(messages)
+	if db.HasSessionPushImageReferences(messages) {
+		return zero, noWrite, errors.New("session contains unresolved image assets")
+	}
 	signals := signalsFromImportedSession(session)
 	signals.ToolObservations = ingest.ComputeToolObservations(session, ingest.ExtractToolCallRows(messages))
 	planUsage := importedPlanUsage(m)

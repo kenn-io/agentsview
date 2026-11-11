@@ -6,9 +6,11 @@ import (
 	"encoding/hex"
 	"encoding/json/jsontext"
 	"encoding/json/v2"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 
 	"go.kenn.io/agentsview/internal/assets"
@@ -147,4 +149,46 @@ func MarkdownAssetImages(content string) []RetainedImage {
 		return nil
 	})
 	return images
+}
+
+// projectMarkdownAssetImages replaces only parsed image destinations.
+func projectMarkdownAssetImages(content string, resolve func(string) (string, error)) (string, error) {
+	type edit struct {
+		start, end int
+		text       string
+	}
+	var edits []edit
+	seen := map[int]bool{}
+	err := ast.Walk(parseAssetMarkdown(nil, content), func(node ast.Node, entering bool) (ast.WalkStatus, error) {
+		image, ok := node.(*ast.Image)
+		if !ok || !entering {
+			return ast.WalkContinue, nil
+		}
+		ref := image.Destination.Value([]byte(content))
+		if !strings.HasPrefix(ref, "asset://") {
+			return ast.WalkContinue, nil
+		}
+		if image.Destination.IsOwned() {
+			return ast.WalkStop, errors.New("image destination has no source span")
+		}
+		pos := image.Destination.Index()
+		if seen[pos.Start] {
+			return ast.WalkContinue, nil
+		}
+		value, err := resolve(ref)
+		if err != nil {
+			return ast.WalkStop, err
+		}
+		seen[pos.Start] = true
+		edits = append(edits, edit{pos.Start, pos.Stop, value})
+		return ast.WalkContinue, nil
+	})
+	if err != nil {
+		return "", err
+	}
+	sort.Slice(edits, func(i, j int) bool { return edits[i].start > edits[j].start })
+	for _, e := range edits {
+		content = content[:e.start] + e.text + content[e.end:]
+	}
+	return content, nil
 }

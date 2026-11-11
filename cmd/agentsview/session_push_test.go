@@ -34,9 +34,11 @@ func TestPushSessionCommandToAuthenticatedReceiver(t *testing.T) {
 	t.Setenv("AGENTSVIEW_PUSH_TOKEN", "fixture-token")
 	source, err := db.Open(t.Context(), filepath.Join(sourceDir, "sessions.db"))
 	require.NoError(t, err)
+	source.SetAssetsDir(filepath.Join(sourceDir, "assets"))
+	source.SetToolResultImages(config.ToolResultImagesOffload)
 	_, err = source.WriteSessionBatchAtomic(t.Context(), []db.SessionBatchWrite{{
 		Session:  db.Session{ID: "host~codex:selected", Agent: "codex", Machine: "source", ParentSessionID: new("host~codex:parent"), RelationshipType: "subagent", MessageCount: 1, UserMessageCount: 1},
-		Messages: []db.Message{{SessionID: "host~codex:selected", Ordinal: 0, Role: "user", Content: "host~codex:selected"}}, ReplaceMessages: true,
+		Messages: []db.Message{{SessionID: "host~codex:selected", Ordinal: 0, Role: "user", Content: "host~codex:selected", ToolCalls: []db.ToolCall{{ToolName: "Read", ResultContent: `[{"type":"input_image","image_url":"data:image/png;base64,AAEC"}]`}}}}, ReplaceMessages: true,
 	}})
 	require.NoError(t, err)
 	require.NoError(t, source.Close())
@@ -63,6 +65,9 @@ func TestPushSessionCommandToAuthenticatedReceiver(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, messages, 1)
 	assert.Equal(t, "host~codex:selected", messages[0].Content)
+	body, err := db.ReadRetainedImage(t.Context(), messages[0].ToolCalls[0].ResultContent, 0, receiverDir, 100)
+	require.NoError(t, err)
+	assert.Equal(t, []byte{0, 1, 2}, body)
 }
 
 func TestPushSessionTransportRefusesUnsafeTargets(t *testing.T) {

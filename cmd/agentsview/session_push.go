@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"path/filepath"
 	"strings"
 
 	"github.com/spf13/cobra"
@@ -59,6 +60,7 @@ func newPushSessionCommand() *cobra.Command {
 			}
 			defer database.Close()
 			database.SetArchiveContent(cfg.ArchiveContent)
+			database.SetAssetsDir(filepath.Join(cfg.DataDir, "assets"))
 			payload, storedAgent, err := artifact.EncodeSessionPush(cmd.Context(), database, args[0], agent)
 			if err != nil {
 				return fmt.Errorf("push: %w", err)

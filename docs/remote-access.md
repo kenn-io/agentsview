@@ -123,9 +123,10 @@ SQLite archive, selected by `AGENTSVIEW_DATA_DIR` or the usual home directory.
 
 Only the selected session's normalized messages, tool calls and results, and
 usage data leave the archive. Parent and child references remain references;
-their sessions are never loaded. There is no raw-file, asset, checkpoint,
-archive-wide metadata or embedding transfer. Text and paths already present in
-the selected transcript are included. Receiver content and image policies
+their sessions are never loaded. Images retained in the selected transcript are
+included, including images read from the source asset directory. Missing, corrupt,
+or oversized image assets stop the push. Raw files, checkpoints, archive-wide
+metadata, and embeddings aren't transferred. Receiver content and image policies
 still apply. Usage-only archives cannot send or receive transcript pushes.
 
 The first accepted transcript is immutable in this version. Retrying it returns
