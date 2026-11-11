@@ -34,7 +34,7 @@ async function expectFollowingReplyBelowHook(page: Page) {
 test("Hooks menu choice filters hook rows", async ({ page }) => {
   await openHookTranscript(page);
   const menu = await openViewMenu(page);
-  await menu.getByRole("menuitem", { name: "Hooks", exact: true }).click();
+  await menu.getByRole("menuitemcheckbox", { name: "Hooks", exact: true }).click();
   await expect(hookCard(page)).toHaveCount(0);
   await menu.getByRole("menuitem", { name: "Show all", exact: true }).click();
   await expect(hookCard(page)).toBeVisible();

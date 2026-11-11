@@ -170,7 +170,12 @@
     <MenuSeparator />
     <div class="view-heading" role="presentation">{m.header_transcript_visibility()}</div>
     {#each ALL_BLOCK_TYPES as block (block)}
-      <MenuItem closeOnSelect={false} onselect={() => ui.toggleBlock(block)} textValue={BLOCK_LABELS[block]()}>
+      <MenuItem
+        checked={ui.isBlockVisible(block)}
+        closeOnSelect={false}
+        onselect={() => ui.toggleBlock(block)}
+        textValue={BLOCK_LABELS[block]()}
+      >
         {#snippet icon()}
           {#if ui.isBlockVisible(block)}<CheckIcon size="12" strokeWidth="2.2" />{/if}
         {/snippet}

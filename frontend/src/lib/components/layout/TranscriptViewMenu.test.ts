@@ -87,10 +87,13 @@ describe("TranscriptViewMenu", () => {
 
   it("toggles a block type without closing the menu", async () => {
     await open();
-    item("menuitem", "Tool calls").click();
+    // Each block type is a checkbox item, so assistive tech hears its state.
+    expect(item("menuitemcheckbox", "Tool calls").getAttribute("aria-checked")).toBe("true");
+    item("menuitemcheckbox", "Tool calls").click();
     await tick();
     expect(ui.isBlockVisible("tool")).toBe(false);
-    expect(item("menuitem", "Tool calls").querySelector(".kit-menu__icon svg")).toBeNull();
+    expect(item("menuitemcheckbox", "Tool calls").getAttribute("aria-checked")).toBe("false");
+    expect(item("menuitemcheckbox", "Tool calls").querySelector(".kit-menu__icon svg")).toBeNull();
     expect(item("menuitem", "Show all")).toBeDefined();
 
     item("menuitem", "Show all").click();

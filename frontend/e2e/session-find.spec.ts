@@ -142,7 +142,7 @@ async function toggleBlockFilter(page: Page, label: string) {
   await view.click();
   const menu = page.getByRole("menu", { name: "Transcript view" });
   await expect(menu).toBeVisible();
-  await menu.getByRole("menuitem", { name: label, exact: true }).click();
+  await menu.getByRole("menuitemcheckbox", { name: label, exact: true }).click();
   await view.click();
   await expect(menu).toHaveCount(0);
 }

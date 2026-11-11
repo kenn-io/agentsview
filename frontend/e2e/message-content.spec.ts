@@ -213,7 +213,7 @@ test.describe("Mixed content rendering", () => {
 
     // Open block filter dropdown and toggle thinking off
     await page.locator(".view-trigger").click();
-    await page.getByRole("menuitem", { name: "Thinking blocks", exact: true }).click();
+    await page.getByRole("menuitemcheckbox", { name: "Thinking blocks", exact: true }).click();
 
     // Thinking blocks should be hidden
     const thinkingBlocks = page.locator(".thinking-block");
