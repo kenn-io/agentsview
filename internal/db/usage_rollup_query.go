@@ -29,11 +29,10 @@ type usageFactsGroup struct {
 }
 
 type usageFactsResult struct {
-	Groups                         []usageFactsGroup
-	MatchingSessions               map[string]UsageSessionInfo
-	SessionCounts                  UsageSessionCounts
-	TopSessions                    []TopSessionEntry
-	InexactModels, InexactProjects map[string]bool
+	Groups           []usageFactsGroup
+	MatchingSessions map[string]UsageSessionInfo
+	SessionCounts    UsageSessionCounts
+	TopSessions      []TopSessionEntry
 }
 
 type usageCacheMissingSessionError struct{ SessionID string }
@@ -89,12 +88,7 @@ func (cache *usageCache) usageRollupQuery(
 		return usageFactsResult{}, err
 	}
 	var result usageFactsResult
-	if prepared.journaled && prepared.kind == usageQueryKindDayTotals && filter.Breakdowns {
-		err = readUsageOwners(ctx, conn, timezoneID, &snapshot, filter, true)
-		if err == nil {
-			result, err = readUsageDailyRollups(ctx, conn, timezoneID, snapshot, filter, "")
-		}
-	} else if prepared.journaled && prepared.kind == usageQueryKindDayTotals {
+	if prepared.journaled && prepared.kind == usageQueryKindDayTotals {
 		result, err = readUsageDayTotals(ctx, conn, timezoneID, &snapshot, filter)
 	} else if prepared.journaled && prepared.kind == usageQueryKindTopSessions {
 		result, err = readUsageTopSessionOwners(ctx, conn, timezoneID, &snapshot, filter)
@@ -113,10 +107,8 @@ func (cache *usageCache) usageRollupQuery(
 	if err != nil {
 		return usageFactsResult{}, err
 	}
-	if filter.Breakdowns {
-		result.InexactModels, result.InexactProjects = make(map[string]bool), make(map[string]bool)
-	}
-	exceptionGroups, err := aggregateUsageRollupExceptions(exceptions, accounts, snapshot, filter, resolver, result.InexactModels, result.InexactProjects)
+	exceptionGroups, err := aggregateUsageRollupExceptions(
+		exceptions, accounts, snapshot, filter, resolver)
 	if err != nil {
 		return usageFactsResult{}, err
 	}
@@ -535,7 +527,7 @@ func readUsageAccountTotals(
 func aggregateUsageRollupExceptions(
 	facts []usageRollupFact, accounts []usageAccountTotal,
 	snapshot usageQuerySnapshot, filter UsageFilter,
-	resolver *export.PricingResolver, inexactModels, inexactProjects map[string]bool,
+	resolver *export.PricingResolver,
 ) ([]usageFactsGroup, error) {
 	if len(facts) == 0 && len(accounts) == 0 {
 		return nil, nil
@@ -544,7 +536,7 @@ func aggregateUsageRollupExceptions(
 	plain, general, discarded := rankUsageRollupSnapshots(facts)
 	plain = filterUsageRollupOwners(plain, sessions, filter)
 	general = filterUsageRollupOwners(general, sessions, filter)
-	general = deduplicateUsageRollupGeneral(general, snapshot.MissingTimestampsLast, sessions, inexactModels, inexactProjects)
+	general = deduplicateUsageRollupGeneral(general, snapshot.MissingTimestampsLast)
 	survivors := slices.Concat(plain, general)
 	type key struct {
 		session, agent, date, model, providerID, priced, pattern, rateHash string
@@ -828,7 +820,7 @@ func usageCursorAutomatedScopePasses(filter UsageFilter, isHeadless bool) bool {
 	}
 }
 
-func deduplicateUsageRollupGeneral(facts []usageRollupFact, missingLast bool, sessions map[string]*usageQuerySession, inexactModels, inexactProjects map[string]bool) []usageRollupFact {
+func deduplicateUsageRollupGeneral(facts []usageRollupFact, missingLast bool) []usageRollupFact {
 	byKey := make(map[string][]usageRollupFact)
 	for _, fact := range facts {
 		byKey[usageRollupGeneralKey(fact)] = append(
@@ -837,25 +829,7 @@ func deduplicateUsageRollupGeneral(facts []usageRollupFact, missingLast bool, se
 	keys := SortedKeys(byKey)
 	result := make([]usageRollupFact, 0, len(keys))
 	for _, key := range keys {
-		winner := slices.MinFunc(byKey[key], usageFactTimestampOrder(missingLast, compareUsageGeneralWinner))
-		result = append(result, winner)
-		if inexactModels != nil {
-			for _, fact := range byKey[key] {
-				if fact.Model != winner.Model {
-					inexactModels[fact.Model] = true
-				}
-				var project, winnerProject string
-				if session := sessions[fact.AttributionSessionID]; session != nil {
-					project = session.Project
-				}
-				if session := sessions[winner.AttributionSessionID]; session != nil {
-					winnerProject = session.Project
-				}
-				if project != winnerProject {
-					inexactProjects[project] = true
-				}
-			}
-		}
+		result = append(result, slices.MinFunc(byKey[key], usageFactTimestampOrder(missingLast, compareUsageGeneralWinner)))
 	}
 	return result
 }

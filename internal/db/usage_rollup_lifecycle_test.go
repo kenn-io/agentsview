@@ -1391,10 +1391,6 @@ type rollupAccountSource struct {
 	accounts   []UsageSourceAccount
 }
 
-func (s *rollupAccountSource) UsageSourceIdentity(context.Context) (string, error) {
-	return s.databaseID, nil
-}
-
 func (s *rollupAccountSource) CaptureUsage(ctx context.Context, request UsageSourceRequest) (UsageSourceSnapshot, error) {
 	snapshot, err := s.database.captureUsageQuery(ctx, request.Filter, usageQueryKindToken)
 	snapshot.CursorHighWater = s.revision

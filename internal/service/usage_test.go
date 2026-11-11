@@ -949,7 +949,6 @@ func TestDirectBackend_UsagePairwiseComparison_ProjectDefault(t *testing.T) {
 			From: "2024-06-01", To: "2024-06-01", Timezone: "UTC", Breakdowns: true,
 		})
 		require.NoError(t, err)
-		ranking.Pairwise = nil
 		store := &pairwiseRankingStore{Store: d, filters: make(chan db.UsageFilter, 3), ranking: ranking}
 		res, err := service.NewReadOnlyBackend(store).UsagePairwiseComparison(t.Context(), service.UsagePairwiseComparisonRequest{
 			Timezone: "UTC", Breakdowns: new(false), IncludeOneShot: true,

@@ -75,32 +75,6 @@ func usageJournalOID(ctx context.Context, q storeExecutor) (uint32, error) {
 	return oid, err
 }
 
-func (source *pgUsageCacheSource) UsageSourceIdentity(ctx context.Context) (string, error) {
-	revision, err := source.UsageChangeRevision(ctx)
-	if err != nil {
-		return "", err
-	}
-	if revision == 0 {
-		return "", db.ErrUsageSourceUnavailable
-	}
-	oid, err := usageJournalOID(ctx, source.pg)
-	if isUndefinedTable(err) || isInsufficientPrivilege(err) {
-		return "", db.ErrUsageSourceUnavailable
-	}
-	if err != nil {
-		return "", err
-	}
-	var marker int64
-	err = source.pg.QueryRowContext(ctx, `SELECT COALESCE((SELECT revision FROM usage_session_changes WHERE session_id=''), 1)`).Scan(&marker)
-	if isUndefinedTable(err) || isInsufficientPrivilege(err) {
-		return "", db.ErrUsageSourceUnavailable
-	}
-	if err != nil {
-		return "", err
-	}
-	return fmt.Sprintf("%s|%d", source.target, oid), nil
-}
-
 func (source *pgUsageCacheSource) snapshot(ctx context.Context, view *Store) (db.UsageSourceSnapshot, error) {
 	snapshot := db.UsageSourceSnapshot{MissingTimestampsLast: true}
 	var err error

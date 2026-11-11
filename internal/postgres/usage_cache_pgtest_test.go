@@ -28,17 +28,9 @@ type usageCacheProbe struct {
 	*pgUsageCacheSource
 	mu             sync.Mutex
 	extracted      []string
-	captures       int
 	before         func(context.Context, []string) error
 	after          func() error
 	beforeAccounts func(context.Context) error
-}
-
-func (probe *usageCacheProbe) CaptureUsage(ctx context.Context, request db.UsageSourceRequest) (db.UsageSourceSnapshot, error) {
-	probe.mu.Lock()
-	probe.captures++
-	probe.mu.Unlock()
-	return probe.pgUsageCacheSource.CaptureUsage(ctx, request)
 }
 
 func (probe *usageCacheProbe) ReadUsageAccounts(ctx context.Context) (string, int64, []db.UsageSourceAccount, error) {
@@ -181,7 +173,7 @@ func TestPGUsageCacheWindowRestartAndSmallPush(t *testing.T) {
 	}
 }
 
-func TestPGUsageCacheRestartDefaultPairwiseCaptures(t *testing.T) {
+func TestPGUsageCacheRestartDefaultPairwiseParity(t *testing.T) {
 	_, _, store, _ := keptUsageFixture(t)
 	directory := t.TempDir()
 	attachUsageCacheProbe(t, store, directory)
@@ -198,87 +190,18 @@ func TestPGUsageCacheRestartDefaultPairwiseCaptures(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, store.usageCache.Close())
 	reopened := &Store{pg: store.pg, ownedDB: store.DB()}
-	probe := attachUsageCacheProbe(t, reopened, directory)
+	attachUsageCacheProbe(t, reopened, directory)
 	t.Cleanup(func() { require.NoError(t, reopened.usageCache.Close()) })
 	got, err := service.NewReadOnlyBackend(reopened).UsagePairwiseComparison(t.Context(), req)
 	require.NoError(t, err)
 	require.Equal(t, want, got)
-	probe.mu.Lock()
-	captures := probe.captures
-	probe.mu.Unlock()
-	require.LessOrEqual(t, captures, 1, "ranking and comparison sides should share a capture")
 	require.NoError(t, reopened.usageCache.Close())
 	reopened = &Store{pg: store.pg, ownedDB: store.DB()}
-	probe = attachUsageCacheProbe(t, reopened, directory)
+	attachUsageCacheProbe(t, reopened, directory)
 	backend := service.NewReadOnlyBackend(reopened)
 	_, err = backend.UsageSummary(t.Context(), req.UsageRequest)
 	require.NoError(t, err)
-	probe.mu.Lock()
-	before := probe.captures
-	probe.mu.Unlock()
 	got, err = backend.UsagePairwiseComparison(t.Context(), req)
-	require.NoError(t, err)
-	require.Equal(t, want, got)
-	probe.mu.Lock()
-	after := probe.captures
-	probe.mu.Unlock()
-	require.Equal(t, before, after, "Pairwise must reuse Summary ranking sides")
-}
-
-func TestPGUsageCachePairwiseRankingSides(t *testing.T) {
-	_, _, store, _ := keptUsageFixture(t)
-	ctx := t.Context()
-	_, err := store.pg.ExecContext(ctx, `UPDATE sessions SET project='project-b' WHERE id='paid-b';
-INSERT INTO messages(session_id,ordinal,role,content,timestamp,model,token_usage,source_uuid) VALUES
-('paid-a',5,'assistant','','2026-01-01 08:00:00','paid-a','{"output_tokens":10}','shared-uuid'),
-('paid-b',5,'assistant','','2026-01-01 09:00:00','paid-b','{"output_tokens":20}','shared-uuid');
-INSERT INTO sessions(id,project,machine,agent,started_at) VALUES('reported','project-c','test-machine','copilot','2026-01-01');
-INSERT INTO usage_events(session_id,source,model,input_tokens,output_tokens,cost_microdollars,cost_status,cost_source,occurred_at,dedup_key)
-VALUES('reported','shutdown','reported-model',1000,500,27500,'exact','copilot-reported','2026-01-01 10:00:00','reported');
-INSERT INTO cursor_usage_events(id,agent,occurred_at,model,output_tokens,charged_microdollars,dedup_key) VALUES(42,'cursor','2026-01-01','account-only',5,300,'account-only')`)
-	require.NoError(t, err)
-	attachUsageCacheProbe(t, store, t.TempDir())
-	filter := db.UsageFilter{From: "2026-01-01", To: "2026-01-01", Timezone: "UTC", Breakdowns: true}
-	ranking, err := store.usageCache.GetDailyUsage(ctx, filter)
-	require.NoError(t, err)
-	require.NotNil(t, ranking.Pairwise)
-	_, exact := ranking.Pairwise.Side("model", []string{"paid-b"})
-	require.False(t, exact, "a filtered read must include the other model's duplicate")
-	_, exact = ranking.Pairwise.Side("project", []string{"project-b"})
-	require.False(t, exact, "a filtered read must include the other project's duplicate")
-	_, exact = ranking.Pairwise.Side("model", []string{"paid-a"})
-	require.True(t, exact)
-	direct := &Store{pg: store.pg}
-	for _, tc := range []struct{ dimension, value string }{{"model", "paid-a"}, {"model", "paid-b"}, {"model", "account-only"}, {"model", "reported-model"}, {"project", "project-a"}, {"project", "project-b"}, {"project", "project-c"}} {
-		t.Run(tc.dimension+"/"+tc.value, func(t *testing.T) {
-			filtered := filter
-			filtered.Breakdowns = false
-			if tc.dimension == "model" {
-				filtered.Model = tc.value
-			} else {
-				filtered.Project = tc.value
-			}
-			want, err := direct.GetDailyUsage(ctx, filtered)
-			require.NoError(t, err)
-			got, exact := ranking.Pairwise.Side(tc.dimension, []string{tc.value})
-			if !exact {
-				got, err = store.usageCache.GetDailyUsage(ctx, filtered)
-				require.NoError(t, err)
-			}
-			require.Equal(t, want.Totals.InputTokens, got.Totals.InputTokens)
-			require.Equal(t, want.Totals.OutputTokens, got.Totals.OutputTokens)
-			require.Equal(t, want.Totals.TotalCost, got.Totals.TotalCost)
-			require.Equal(t, want.SessionCounts.Total, got.SessionCounts.Total)
-		})
-	}
-	groups := service.NewModelGroups(map[string]string{"paid-a": "paid-group", "paid-b": "paid-group"})
-	req := service.UsagePairwiseComparisonRequest{
-		UsageRequest:  service.UsageRequest{From: filter.From, To: filter.To, Timezone: filter.Timezone, IncludeOneShot: true, GroupModels: true},
-		LeftDimension: "model", LeftValue: "paid-group", RightDimension: "model", RightValue: "reported-model",
-	}
-	want, err := service.NewReadOnlyBackend(direct, service.WithModelGroups(groups)).UsagePairwiseComparison(ctx, req)
-	require.NoError(t, err)
-	got, err := service.NewReadOnlyBackend(store, service.WithModelGroups(groups)).UsagePairwiseComparison(ctx, req)
 	require.NoError(t, err)
 	require.Equal(t, want, got)
 }
@@ -334,13 +257,6 @@ func TestPGUsageCacheSnapshotPeersAndRanking(t *testing.T) {
 	daily, err := store.usageCache.GetDailyUsage(ctx, filter)
 	require.NoError(t, err)
 	require.Equal(t, 10, daily.Totals.OutputTokens, "SQL ranking rejects a decimal-formatted integer that Go billing accepts")
-	filter.Breakdowns = true
-	ranking, err := store.usageCache.GetDailyUsage(ctx, filter)
-	require.NoError(t, err)
-	_, exact := ranking.Pairwise.Side("model", []string{"paid-a"})
-	require.True(t, exact, "snapshot losers stay omitted after filtering")
-	_, exact = ranking.Pairwise.Side("model", []string{"paid-b"})
-	require.True(t, exact)
 	for _, mutation := range []string{`UPDATE sessions SET deleted_at=clock_timestamp() WHERE id='second'`, `UPDATE sessions SET deleted_at=NULL WHERE id='second'`, `UPDATE sessions SET group_key='job',session_name='daily job' WHERE id IN ('first','second')`} {
 		_, err := store.pg.ExecContext(ctx, mutation)
 		require.NoError(t, err)

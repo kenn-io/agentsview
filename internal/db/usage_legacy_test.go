@@ -63,8 +63,6 @@ func TestDailyUsageFactsMatchesLegacy(t *testing.T) {
 					t.Context(), test.filter,
 				)
 				require.NoError(t, err)
-				// Pairwise metadata is private to the current reader and has separate coverage.
-				legacy.Pairwise, facts.Pairwise = nil, nil
 				assert.Equal(t, legacy, facts)
 			})
 		}

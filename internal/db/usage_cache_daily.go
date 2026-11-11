@@ -7,7 +7,6 @@ import (
 	"sort"
 
 	"go.kenn.io/agentsview/internal/export"
-	"go.kenn.io/agentsview/internal/kept"
 	"go.kenn.io/agentsview/internal/money"
 )
 
@@ -169,49 +168,14 @@ func (db *DB) assembleDailyUsageFacts(
 	if err != nil {
 		return DailyUsageResult{}, fmt.Errorf("building pricing block: %w", err)
 	}
-	result := DailyUsageResult{
+	return DailyUsageResult{
 		SchemaVersion: export.UsageDailySchemaVersion,
 		Pricing:       &pricingBlock,
 		Projects:      export.ProjectMapForWire(projects),
 		Daily:         projectRows.Daily,
 		Totals:        totals,
 		SessionCounts: projectRows.SessionCounts,
-	}
-	if filter.Breakdowns {
-		result.Pairwise = usageDailyPairwiseSides(accum, sessionCosts, sessionIDs, facts.InexactModels, facts.InexactProjects)
-		if result.Bytes() > kept.DefaultMaxBytes {
-			result.Pairwise = nil
-		}
-	}
-	return result, nil
-}
-
-func usageDailyPairwiseSides(accum map[usageCostAllocationKey]*usageDailyFactsBucket, costs map[string]usageDailyFactsSessionCost, sessionIDs []string, inexactModels, inexactProjects map[string]bool) *UsagePairwiseSides {
-	sides := &UsagePairwiseSides{Models: make(UsagePairwiseValues), Projects: make(UsagePairwiseValues)}
-	for model := range inexactModels {
-		sides.Models.MarkInexact(model)
-	}
-	for project := range inexactProjects {
-		sides.Projects.MarkInexact(project)
-	}
-	for key, bucket := range accum {
-		totals := UsageTotals{InputTokens: bucket.input, OutputTokens: bucket.output, CacheCreationTokens: bucket.cacheWrite, CacheReadTokens: bucket.cacheRead}
-		sides.Models.AddTotals(key.model, totals)
-		if key.project != "" {
-			totals.TotalCost = bucket.cost
-			sides.Projects.AddTotals(key.project, totals)
-		}
-	}
-	for _, sessionID := range sessionIDs {
-		for key, estimated := range costs[sessionID].estimated {
-			sides.Models.AddTotals(key.model, UsageTotals{TotalCost: estimated})
-			sides.Models.AddSession(key.model, sessionID)
-			if key.project != "" {
-				sides.Projects.AddSession(key.project, sessionID)
-			}
-		}
-	}
-	return sides
+	}, nil
 }
 
 func recordUsageFactsPricing(
