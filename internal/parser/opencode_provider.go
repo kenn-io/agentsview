@@ -1368,8 +1368,6 @@ const storedMemberFreshnessPageSize = 512
 // freshness in step with an ascending virtual-path stream, retaining one page
 // at a time.
 type StoredMemberFreshnessCursor struct {
-	// Passed receives stored rows absent from the ascending live listing.
-	Passed func(StoredMemberFreshness) error
 	pager  StoredMemberFreshnessPager
 	rows   []StoredMemberFreshness
 	index  int
@@ -1392,18 +1390,12 @@ func (c *StoredMemberFreshnessCursor) Lookup(
 		for c.index < len(c.rows) {
 			row := c.rows[c.index]
 			if row.Path < path {
-				if c.Passed != nil {
-					if err := c.Passed(row); err != nil {
-						return StoredMemberFreshness{}, false, err
-					}
-				}
 				c.index++
 				continue
 			}
 			if row.Path > path {
 				return StoredMemberFreshness{}, false, nil
 			}
-			c.index++
 			return row, true, nil
 		}
 		if c.done {

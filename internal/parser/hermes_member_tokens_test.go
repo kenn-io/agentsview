@@ -110,7 +110,7 @@ func TestHermesMemberTokenChanges(t *testing.T) {
 }
 
 func TestHermesMemberListingFallbacksAndDeletion(t *testing.T) {
-	for _, kind := range []string{"deleted", "malformed", "legacy", "suppressed", "pager error", "trigger removed", "empty authority", "suppressed authority"} {
+	for _, kind := range []string{"deleted", "prefixed deleted", "malformed", "legacy", "suppressed", "pager error", "trigger removed", "empty authority", "suppressed authority"} {
 		t.Run(kind, func(t *testing.T) {
 			c, path := hermesTokenFixture(t)
 			root := filepath.Dir(path)
@@ -119,13 +119,18 @@ func TestHermesMemberListingFallbacksAndDeletion(t *testing.T) {
 			_, err := c.ExecContext(t.Context(), `DELETE FROM messages;DELETE FROM sessions; INSERT INTO sessions(id,source,started_at) VALUES ('s','cli',1778767200); INSERT INTO messages(session_id,role,content,timestamp) VALUES ('s','user','original',1778767200)`)
 			require.NoError(t, err)
 			require.NoError(t, os.MkdirAll(filepath.Join(root, "sessions"), 0o700))
-			writeSourceFile(t, filepath.Join(root, "sessions", "s.jsonl"), hermesProviderJSONLFixture("fallback"))
+			transcript := "s.jsonl"
+			if kind == "prefixed deleted" {
+				transcript = "session_s.jsonl"
+				writeSourceFile(t, filepath.Join(root, "sessions", "session_s.json"), hermesProviderJSONFixture("legacy"))
+			}
+			writeSourceFile(t, filepath.Join(root, "sessions", transcript), hermesProviderJSONLFixture("fallback"))
 			source := set.stateMemberSourceRef(root, path, "s")
 			fingerprint, err := set.Fingerprint(t.Context(), source)
 			require.NoError(t, err)
 			stored := StoredMemberFreshness{Path: VirtualSourcePath(path, "s"), FingerprintHash: fingerprint.Hash}
 			switch kind {
-			case "deleted":
+			case "deleted", "prefixed deleted":
 				_, err = c.ExecContext(t.Context(), `DELETE FROM messages;DELETE FROM sessions`)
 			case "malformed":
 				_, err = c.ExecContext(t.Context(), `UPDATE sessions SET started_at='invalid'`)
@@ -160,9 +165,9 @@ func TestHermesMemberListingFallbacksAndDeletion(t *testing.T) {
 			switch kind {
 			case "suppressed":
 				assert.Empty(t, sources)
-			case "deleted":
+			case "deleted", "prefixed deleted":
 				require.Len(t, sources, 1)
-				assert.Equal(t, filepath.Join(root, "sessions", "s.jsonl"), sources[0].DisplayPath)
+				assert.Equal(t, filepath.Join(root, "sessions", transcript), sources[0].DisplayPath)
 			case "malformed":
 				require.Len(t, sources, 2)
 			default:

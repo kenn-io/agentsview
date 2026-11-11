@@ -6,7 +6,6 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
-	"strconv"
 	"strings"
 	"testing"
 
@@ -370,23 +369,5 @@ func TestStoredMemberFreshnessCursorLookup(t *testing.T) {
 		got, err := c.covers(ctx, tc.path, tc.watermark)
 		require.NoError(t, err)
 		assert.Equal(t, tc.want, got, tc.path)
-	}
-	for _, pageSize := range []int{1, 2, 512} {
-		t.Run(strconv.Itoa(pageSize), func(t *testing.T) {
-			rows := []StoredMemberFreshness{{Path: "a"}, {Path: "b"}, {Path: "c"}, {Path: "d"}, {Path: "e"}}
-			cursor := NewStoredMemberFreshnessCursor(memoryFreshnessPager(rows, pageSize))
-			var missing []string
-			cursor.Passed = func(row StoredMemberFreshness) error { missing = append(missing, row.Path); return nil }
-			for _, path := range []string{"b", "d"} {
-				row, ok, err := cursor.Lookup(t.Context(), path)
-				require.NoError(t, err)
-				require.True(t, ok)
-				assert.Equal(t, path, row.Path)
-			}
-			_, found, err := cursor.Lookup(t.Context(), "\xff")
-			require.NoError(t, err)
-			assert.False(t, found)
-			assert.Equal(t, []string{"a", "c", "e"}, missing)
-		})
 	}
 }
