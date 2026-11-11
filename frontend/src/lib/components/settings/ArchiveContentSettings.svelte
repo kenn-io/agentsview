@@ -32,10 +32,11 @@
   });
 </script>
 
-<!-- One setting, so the row is compact: the label fits its text and the
-     notes sit under the control in the same cell. -->
+<!-- The ingest policy heads the Tool-result images section, so its row
+     shares the label column with the cleanup rows below it. The notes sit
+     under the control in the same cell. -->
 <div class="archive-content-settings">
-  <div class="setting-row option-row compact">
+  <div class="setting-row option-row">
     <span class="setting-label">{m.settings_tool_result_images()}</span>
     <div class="control-stack">
       <SegmentedControl

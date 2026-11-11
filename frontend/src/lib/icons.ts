@@ -1,6 +1,5 @@
 export { default as ActivityIcon } from "@lucide/svelte/icons/activity";
 export { default as AlignJustifyIcon } from "@lucide/svelte/icons/align-justify";
-export { default as ArchiveIcon } from "@lucide/svelte/icons/archive";
 export { default as ArrowDownIcon } from "@lucide/svelte/icons/arrow-down";
 export { default as ArrowDownToLineIcon } from "@lucide/svelte/icons/arrow-down-to-line";
 export { default as ArrowDownWideNarrowIcon } from "@lucide/svelte/icons/arrow-down-wide-narrow";

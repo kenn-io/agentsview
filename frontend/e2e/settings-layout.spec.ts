@@ -214,6 +214,8 @@ test.describe("Settings layout", () => {
     expect(new Set(await rowControlHeights())).toEqual(new Set([28]));
 
     await openPanel("Tool-result images");
+    // The ingest policy and the cleanup filters share one control edge.
+    expect(await leftOf(".setting-row > .control-stack")).toEqual([column]);
     expect(await leftOf(".setting-row > .kit-text-input")).toEqual([column, column]);
     expect(await leftOf(".action-row .kit-button")).toEqual([column]);
     expect(new Set(await rowControlHeights())).toEqual(new Set([28]));
@@ -224,7 +226,6 @@ test.describe("Settings layout", () => {
     const compactPanels = [
       ["GitHub", "GitHub integration", ".status-value"],
       ["Date ranges", "Date ranges", ".kit-toggle"],
-      ["Archive content", "Archive content", ".kit-segmented"],
       ["Language", "Language", ".kit-typeahead"],
     ] as const;
     for (const [name, heading, control] of compactPanels) {
@@ -253,8 +254,10 @@ test.describe("Settings layout", () => {
     await page.goto("/settings");
 
     const nav = page.getByRole("navigation", { name: "Configuración" });
-    await nav.locator("button", { hasText: "Contenido del archivo" }).click();
-    await expect(page.getByRole("heading", { name: "Contenido del archivo" })).toBeVisible();
+    await nav.locator("button", { hasText: "Imágenes de resultados de herramienta" }).click();
+    await expect(
+      page.getByRole("heading", { name: "Imágenes de resultados de herramienta" }),
+    ).toBeVisible();
 
     const row = page.locator(".archive-content-settings .setting-row.option-row");
     await expect(row.locator(".setting-label")).toHaveText("Imágenes de resultados de herramienta");

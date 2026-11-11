@@ -209,11 +209,14 @@
               {:else if meta.id === "agent-directories"}
                 <AgentDirSettings />
               {:else if meta.id === "tool-result-images"}
-                <ToolImageCleanup />
+                <!-- What ingestion keeps from new tool results, then the
+                     cleanup of images already stored. -->
+                <div class="tool-images-panel">
+                  <ArchiveContentSettings />
+                  <ToolImageCleanup />
+                </div>
               {:else if meta.id === "embeddings"}
                 <EmbeddingsSettings />
-              {:else if meta.id === "archive-content"}
-                <ArchiveContentSettings />
               {:else if meta.id === "github"}
                 <GithubSettings />
               {:else if meta.id === "remote-access"}
@@ -277,6 +280,12 @@
     font-weight: 600;
     color: var(--text-primary);
     margin: 0;
+  }
+
+  .tool-images-panel {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-5);
   }
 
   .settings-panel[hidden] {

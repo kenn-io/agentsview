@@ -222,7 +222,7 @@ describe("SettingsPage", () => {
 
     // Every destination carries an icon so the list scans by shape.
     const navItems = Array.from(nav!.querySelectorAll<HTMLElement>(".kit-settings__nav-item"));
-    expect(navItems).toHaveLength(10);
+    expect(navItems).toHaveLength(9);
     for (const item of navItems) {
       expect(
         item.querySelector(".kit-settings__nav-icon svg"),
@@ -353,11 +353,62 @@ describe("SettingsPage", () => {
     restoredSearch.dispatchEvent(new Event("input", { bubbles: true }));
     await tick();
 
-    expect(restoredNav.querySelectorAll("button")).toHaveLength(10);
+    expect(restoredNav.querySelectorAll("button")).toHaveLength(9);
     expect(
       document.body.querySelector(".settings-page")?.classList.contains("settings-no-results"),
     ).toBe(false);
     expect(restoredNav.querySelector('[aria-current="true"]')?.textContent).toContain("Terminal");
+
+    unmount(component);
+  });
+
+  it("keeps the image ingest policy and the image cleanup in one section", async () => {
+    settingsService.getApiV1Settings.mockResolvedValue({
+      agent_dirs: {},
+      chart_palette: "agentsview",
+      github_configured: false,
+      host: "127.0.0.1",
+      port: 8080,
+      read_only: false,
+      require_auth: false,
+      terminal: { mode: "auto" },
+      tool_result_images: "keep",
+    });
+    const component = mount(SettingsPage, { target: document.body });
+    await tick();
+    await tick();
+
+    const nav = document.body.querySelector('nav[aria-label="Settings"]')!;
+    expect(nav.textContent).not.toContain("Archive content");
+
+    // The words that used to find the Archive content section find this one.
+    const search = document.body.querySelector<HTMLInputElement>(
+      'input[type="search"][aria-label="Search settings"]',
+    )!;
+    for (const word of ["archive", "retention", "storage", "placeholders"]) {
+      search.value = word;
+      search.dispatchEvent(new Event("input", { bubbles: true }));
+      await tick();
+      const labels = Array.from(nav.querySelectorAll("button")).map((b) => b.textContent ?? "");
+      expect(
+        labels.some((label) => label.includes("Tool-result images")),
+        word,
+      ).toBe(true);
+    }
+
+    search.value = "";
+    search.dispatchEvent(new Event("input", { bubbles: true }));
+    await tick();
+    Array.from(nav.querySelectorAll<HTMLButtonElement>("button"))
+      .find((button) => button.textContent?.includes("Tool-result images"))!
+      .click();
+    await tick();
+
+    const panel = document.body.querySelector<HTMLElement>(".settings-panel:not([hidden])")!;
+    expect(
+      panel.querySelector('[role="radiogroup"][aria-label="Tool-result images"]'),
+    ).not.toBeNull();
+    expect(panel.querySelector(".tool-image-cleanup")).not.toBeNull();
 
     unmount(component);
   });
