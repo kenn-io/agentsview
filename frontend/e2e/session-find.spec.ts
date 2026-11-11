@@ -691,6 +691,9 @@ test("the selected message stays marked while find is open", async ({ page }) =>
   await openSession(page);
   await openFind(page);
   releaseHistory();
+  // Let the debounced search select and scroll to its first match before
+  // clicking a different message to inspect its selection marker.
+  await expectCompleteIndex(page);
   await page
     .locator(".virtual-row:not(.selected) p")
     .filter({ hasText: /^Message \d+$/ })
