@@ -446,12 +446,10 @@ func (b *codexSessionBuilder) processLine(ctx context.Context,
 	return false, nil
 }
 
-// codexCompactedFallback labels a compaction whose record carries no summary
-// text, as remote compaction writes it.
-const codexCompactedFallback = "Context compacted"
-
 // handleCompacted records a compaction as a system boundary carrying the
-// summary Codex keeps in place of the earlier history. The record's
+// summary Codex keeps in place of the earlier history. Remote compaction
+// writes no summary; its boundary stays empty, because the divider already
+// labels every compaction. The record's
 // replacement_history repeats messages already in the transcript and is not
 // replayed. The boundary is never a usage target: the compaction call's usage
 // belongs to the response that produced it.
@@ -459,9 +457,6 @@ func (b *codexSessionBuilder) handleCompacted(payload gjson.Result, ts time.Time
 	// A copy keeps the stored row from holding the whole line, which carries
 	// replacement_history, in memory.
 	content := strings.Clone(strings.TrimSpace(payload.Get("message").Str))
-	if content == "" {
-		content = codexCompactedFallback
-	}
 	b.sink.AppendMessage(ParsedMessage{
 		CodexOrigin:       CodexMessageOrigin{Line: b.sourceLine, TurnID: b.sourceTurnID, InTurn: b.sourceInTurn, TurnContext: len(b.sourceTurnContexts)},
 		Role:              RoleAssistant,

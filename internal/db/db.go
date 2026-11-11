@@ -670,9 +670,10 @@ CREATE INDEX IF NOT EXISTS idx_provider_freshness_updated_at
 // (172: import Cursor IDE chunked conversation headers.)
 // (173: prevent older binaries from writing archives with an image-text index.)
 // (174: keep Codex reasoning summaries as thinking rows and compaction records
-// as compact boundaries, and dedupe token_count by its whole info object.
-// Re-parse Codex, TraeX, Augure Code, and Open Interpreter sources in place;
-// source and session identities are unchanged.)
+// as compact boundaries, dedupe token_count by its whole info object, and stop
+// Codex Cloud compaction rows from repeating the divider label. Re-parse
+// Codex, TraeX, Augure Code, Open Interpreter, and Codex Cloud sources in
+// place; source and session identities are unchanged.)
 const dataVersion = 174
 
 const archiveOnlyVersionBase = 1 << 20

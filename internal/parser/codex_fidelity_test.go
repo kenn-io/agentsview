@@ -172,7 +172,7 @@ func TestCodexCompactedRecordBecomesBoundary(t *testing.T) {
 		name, message, want string
 	}{
 		{name: "local compaction summary", message: summary, want: summary},
-		{name: "remote compaction without summary", message: "", want: "Context compacted"},
+		{name: "remote compaction without summary", message: "", want: ""},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			content := testjsonl.JoinJSONL(

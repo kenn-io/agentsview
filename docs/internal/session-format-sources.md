@@ -761,7 +761,8 @@ fixtures retain this field; missing identities remain source-local.
   reasoning as an assistant thinking row: summary text first, raw content
   only when there is no summary, and no row for encrypted-only reasoning.
   Each `compacted` record becomes a system compact-boundary row whose content
-  is `message`, or `Context compacted` when it is empty;
+  is `message`. When remote compaction leaves it empty, the row has no
+  content, because the transcript divider already labels every compaction.
   `replacement_history` is not replayed. Usage attachment skips boundary
   rows. A reasoning row takes usage only while it is the newest assistant row
   of the turn, so the message or call that follows it in the same response
@@ -778,9 +779,10 @@ fixtures retain this field; missing identities remain source-local.
   object, including the cumulative `total_token_usage`, so two calls with
   equal per-call counts both count. The scan suppressed the same
   753 repeats under both keys. Usage that still finds no row stays
-  unattached. Data version 174 reparses Codex, TraeX, Augure Code, and Open
-  Interpreter sources in place, and the parser checkpoint moves to version 6,
-  so a stored cursor makes the next append a full parse. Covered by
+  unattached. Data version 174 reparses Codex, TraeX, Augure Code, Open
+  Interpreter, and Codex Cloud sources in place, and the parser checkpoint
+  moves to version 6, so a stored cursor makes the next append a full parse.
+  Covered by
   `TestCodexReasoningKeptAsThinking`, `TestCodexReasoningUsageAttachment`,
   `TestCodexCompactedRecordBecomesBoundary`,
   `TestCodexTokenCountDedupUsesCumulativeTotal`,
@@ -4069,6 +4071,11 @@ schemas keep their existing ordering behavior.
   these items empty. The parser keeps each one as a message because each marks
   a real turn. The transcript shows a run of consecutive empty messages as one
   collapsed row.
+- **Compaction items (2026-11-11):** A `contextCompaction` item carries no
+  summary text. The parser stores it as a system compact-boundary row with no
+  content; the transcript divider supplies the "Context compacted" label.
+  Before data version 174 the row repeated that label as its content, so the
+  divider showed it twice. Covered by `TestCodexCloudMappingEveryItemType`.
 - **Generated images (2026-10-29):** An `imageGeneration` item carries `id`,
   `status`, `revisedPrompt`, and `result`, where `result` is base64 image data
   (`no-public-source`; the shape came from a session the maintainer viewed).

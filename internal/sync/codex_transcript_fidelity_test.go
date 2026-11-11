@@ -142,6 +142,8 @@ func TestCodexFidelityAppendMatchesFullParse(t *testing.T) {
 		fidelityTokenCount(t, "2026-11-01T10:00:04Z", 1200, 30, 1000, 3),
 		fidelityReasoning(t, "2026-11-01T10:00:05Z", "Done; nothing else."),
 		fidelityTokenCount(t, "2026-11-01T10:00:05Z", 1300, 40, 1100, 4),
+		// Remote compaction writes no summary; its boundary stays empty.
+		fidelityCompacted(t, "2026-11-01T10:00:05Z", ""),
 		testjsonl.CodexMsgJSON("user", "thanks", "2026-11-01T10:00:06Z"),
 	}
 	type row struct {
@@ -154,6 +156,7 @@ func TestCodexFidelityAppendMatchesFullParse(t *testing.T) {
 		{Role: "assistant", Content: "checking", Usage: `{"cache_read_input_tokens":400,"input_tokens":600,"output_tokens":50}`},
 		{Role: "assistant", Content: summary, Boundary: true},
 		{Role: "assistant", Content: "[Thinking]\nDone; nothing else.\n[/Thinking]", Thinking: true, Usage: `{"cache_read_input_tokens":1100,"input_tokens":200,"output_tokens":40}`},
+		{Role: "assistant", Boundary: true},
 		{Role: "user", Content: "thanks"},
 	}
 	for split := 4; split < len(lines); split++ {
