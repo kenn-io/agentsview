@@ -1113,15 +1113,10 @@ func joinActiveSetup(ctx context.Context, out io.Writer, cfg config.Config, clie
 			return true, err
 		}
 		var err error
-		status, err = client.status(ctx)
-		if err != nil {
+		if status, err = client.status(ctx); err != nil {
 			return true, err
 		}
-		setup = status.Setup
-		if setup != nil && setup.Action != "" && setup.Error != "" {
-			return true, errors.New(setup.Error)
-		}
-		if setup == nil || !setup.Enabled || setup.Action != "" {
+		if setup = status.Setup; setup == nil || !setup.Enabled || setup.Action != "" {
 			return true, errors.New("search by meaning is off after setup")
 		}
 	}
