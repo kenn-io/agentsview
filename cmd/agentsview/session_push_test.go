@@ -151,29 +151,28 @@ func TestPushSessionTransportFailuresAreSanitized(t *testing.T) {
 	assert.NotContains(t, err.Error(), "fixture")
 }
 
-func TestPushSessionTransportPreservesPayloadBytes(t *testing.T) {
-	payload := []byte(" {\"counter\":9007199254740993,\"cost\":0.10000000000000001} \n")
-	remote := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		body, err := io.ReadAll(r.Body)
-		assert.NoError(t, err)
-		assert.Equal(t, payload, body, "transport must preserve validated bytes without a numeric JSON round trip")
-		_, _ = w.Write([]byte(`{"session_id":"selected","agent":"claude","status":"created"}`))
-	}))
-	defer remote.Close()
-	_, err := sendSessionPush(t.Context(), mustPushURL(t, remote.URL), "fixture-token", payload, "selected", "claude")
-	require.NoError(t, err)
-}
-
-func TestPushSessionPreservesEscapedBasePath(t *testing.T) {
-	var escaped string
-	remote := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		escaped = r.URL.EscapedPath()
-		_, _ = w.Write([]byte(`{"session_id":"selected","agent":"claude","status":"created"}`))
-	}))
-	defer remote.Close()
-	_, err := sendSessionPush(t.Context(), mustPushURL(t, remote.URL+"/tenant%2Fprivate"), "fixture-token", []byte(`{}`), "selected", "claude")
-	require.NoError(t, err)
-	assert.Equal(t, "/tenant%2Fprivate/api/v1/sessions/ingest", escaped)
+func TestPushSessionTransportWireFormat(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		base string
+	}{
+		{"payload", ""},
+		{"escaped path", "/tenant%2Fprivate"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			payload := []byte(" {\"counter\":9007199254740993,\"cost\":0.10000000000000001} \n")
+			remote := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				body, err := io.ReadAll(r.Body)
+				assert.NoError(t, err)
+				assert.Equal(t, payload, body)
+				assert.Equal(t, tc.base+"/api/v1/sessions/ingest", r.URL.EscapedPath())
+				_, _ = w.Write([]byte(`{"session_id":"selected","agent":"claude","status":"created"}`))
+			}))
+			defer remote.Close()
+			_, err := sendSessionPush(t.Context(), mustPushURL(t, remote.URL+tc.base), "fixture-token", payload, "selected", "claude")
+			require.NoError(t, err)
+		})
+	}
 }
 
 func TestPushSessionRedirectNeverReceivesCredentialsOrBody(t *testing.T) {

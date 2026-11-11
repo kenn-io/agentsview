@@ -274,7 +274,7 @@ func TestSessionPushReceiverRejectsChangedText(t *testing.T) {
 	assert.JSONEq(t, `{"session_id":"source","agent":"claude","status":"unchanged"}`, send(original).Body.String())
 }
 
-func TestSessionPushReportsFutureParserVersion(t *testing.T) {
+func TestSessionPushReportsVersionAndRebuildRequirements(t *testing.T) {
 	s := testServer(t, 30*time.Second)
 	s.cfg.AcceptSessionPush, s.cfg.RequireAuth, s.cfg.AuthToken = true, true, "fixture"
 	d := s.db.(*db.DB)
@@ -299,7 +299,7 @@ func TestSessionPushReportsFutureParserVersion(t *testing.T) {
 	assert.Equal(t, http.StatusBadRequest, w.Code)
 	assert.Equal(t, "future-data-version", w.Header().Get("X-AgentsView-Push-Error"))
 	require.NoError(t, d.Update(t.Context(), func(tx *sql.Tx) error {
-		_, err := tx.ExecContext(t.Context(), `PRAGMA user_version = 172`)
+		_, err := tx.ExecContext(t.Context(), `PRAGMA user_version = 0`)
 		return err
 	}))
 	r = httptest.NewRequestWithContext(t.Context(), http.MethodPost, "/api/v1/sessions/ingest", bytes.NewReader(original))

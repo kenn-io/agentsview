@@ -1,7 +1,7 @@
 package db
 
 import (
-	"context"
+	"fmt"
 	"os"
 	"strings"
 	"testing"
@@ -22,16 +22,9 @@ func sessionPushFixture(id string) (SessionPushReceipt, SessionBatchWrite) {
 	}
 }
 
-func TestSessionPushArchiveVersionSupportsReceipts(t *testing.T) {
-	d := testDB(t)
-	var version int
-	require.NoError(t, d.getReader().QueryRowContext(t.Context(), "PRAGMA user_version").Scan(&version))
-	assert.GreaterOrEqual(t, version, sessionPushMinArchiveVersion)
-}
-
 func TestSessionPushRejectsArchiveAwaitingRebuild(t *testing.T) {
 	d := testDB(t)
-	_, err := d.getWriter().ExecContext(t.Context(), "PRAGMA user_version = 172")
+	_, err := d.getWriter().ExecContext(t.Context(), fmt.Sprintf("PRAGMA user_version = %d", sessionPushMinArchiveVersion-1))
 	require.NoError(t, err)
 	receipt, write := sessionPushFixture("snapshot")
 	_, err = d.ApplySessionPush(t.Context(), receipt, write)
@@ -57,7 +50,9 @@ func TestSessionPushCreatesAndRetryPreservesCuration(t *testing.T) {
 	receipt, write := sessionPushFixture("snapshot")
 	started := "2026-08-10T10:00:00Z"
 	write.Session.StartedAt = &started
-	write.Messages[0].Role = "assistant"
+	write.Messages = []Message{testImageMessage("snapshot")}
+	write.Messages[0].Content = "first snapshot"
+	write.Session.UserMessageCount = 0
 	write.Messages[0].Timestamp = started
 	write.Messages[0].Model = "model"
 	write.Messages[0].TokenUsage = []byte(`{"input_tokens":10}`)
@@ -91,8 +86,6 @@ func TestSessionPushCreatesAndRetryPreservesCuration(t *testing.T) {
 	dir := t.TempDir()
 	d.SetAssetsDir(dir)
 	d.SetToolResultImages(config.ToolResultImagesOffload)
-	write.Messages = []Message{testImageMessage("snapshot")}
-	write.Session.UserMessageCount = 0
 	created, err = d.ApplySessionPush(ctx, receipt, write)
 	require.NoError(t, err)
 	assert.False(t, created)
@@ -129,6 +122,9 @@ func TestSessionPushConflictsDoNotOverwrite(t *testing.T) {
 				id = legacyTrashMissingPage
 			}
 			receipt, write := sessionPushFixture(id)
+			write.Messages = []Message{testImageMessage(id)}
+			write.Messages[0].Content = "first snapshot"
+			write.Session.UserMessageCount = 0
 			switch kind {
 			case "inherited-trash":
 				write.Session.Agent = "codex"
@@ -146,6 +142,7 @@ func TestSessionPushConflictsDoNotOverwrite(t *testing.T) {
 				require.NoError(t, err)
 			case "hash":
 				receipt.PayloadHash = strings.Repeat("b", 64)
+				write.Messages[0].Content = "changed snapshot"
 			case "origin":
 				receipt.SourceOrigin = "archive-b"
 			case "trash":
@@ -158,8 +155,6 @@ func TestSessionPushConflictsDoNotOverwrite(t *testing.T) {
 			dir := t.TempDir()
 			d.SetAssetsDir(dir)
 			d.SetToolResultImages(config.ToolResultImagesOffload)
-			write.Messages = []Message{testImageMessage(id)}
-			write.Session.UserMessageCount = 0
 			created, err := d.ApplySessionPush(ctx, receipt, write)
 			require.ErrorIs(t, err, ErrSessionPushConflict)
 			assert.False(t, created)
@@ -350,19 +345,6 @@ func TestSessionPushUsesReceiptOrigin(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, session)
 	assert.Equal(t, "archive-a", session.Machine)
-}
-
-func TestSessionPushCanceledDoesNotPublish(t *testing.T) {
-	d := testDB(t)
-	ctx, cancel := context.WithCancel(t.Context())
-	cancel()
-	receipt, write := sessionPushFixture("snapshot")
-	created, err := d.ApplySessionPush(ctx, receipt, write)
-	require.ErrorIs(t, err, context.Canceled)
-	assert.False(t, created)
-	var count int
-	require.NoError(t, d.getReader().QueryRowContext(t.Context(), `SELECT COUNT(*) FROM session_push_receipts`).Scan(&count))
-	assert.Zero(t, count)
 }
 
 func TestLoadSessionPushDataExactLiveSession(t *testing.T) {

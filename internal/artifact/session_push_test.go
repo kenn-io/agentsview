@@ -3,6 +3,7 @@ package artifact
 import (
 	"context"
 	"encoding/json/v2"
+	"fmt"
 	"strings"
 	"testing"
 
@@ -41,7 +42,7 @@ func TestSessionPushExactSelection(t *testing.T) {
 	require.NotNil(t, write.Session.ParentSessionID)
 	assert.Equal(t, "codex:parent", *write.Session.ParentSessionID)
 	assert.Nil(t, write.Session.FilePath)
-	_, _, err = EncodeSessionPush(t.Context(), d, "codex:cho", "codex")
+	_, _, err = EncodeSessionPush(t.Context(), d, "missing", "codex")
 	require.Error(t, err)
 	_, _, err = EncodeSessionPush(t.Context(), d, "codex:chosen", "claude")
 	require.Error(t, err)
@@ -191,8 +192,9 @@ func TestSessionPushReceiptIgnoresSegmentBoundaries(t *testing.T) {
 			require.NoError(t, err)
 			assert.Equal(t, original.PayloadHash, resegmented.PayloadHash)
 			for i := range segments {
-				require.Contains(t, segments[i].NDJSON, `"v":4`)
-				segments[i].NDJSON = strings.Replace(segments[i].NDJSON, `"v":4`, `"v":1`, 1)
+				version := fmt.Sprintf(`"v":%d`, messageSegmentFormatVersion)
+				require.Contains(t, segments[i].NDJSON, version)
+				segments[i].NDJSON = strings.Replace(segments[i].NDJSON, version, `"v":1`, 1)
 				segments[i].SHA256 = hashHex([]byte(segments[i].NDJSON))
 				m.Segments[i] = segments[i].SHA256
 			}
@@ -516,6 +518,7 @@ func TestSessionPushManyPRLinks(t *testing.T) {
 		links[i] = db.PRLink{URL: "https://example.test/project/pull/1", Host: "example.test", Repository: "project", Number: 1}
 	}
 	valid := adversarialSessionPushPacket(t, db.Session{ID: "selected", Agent: "claude", Machine: "source", PRLinks: links}, nil)
-	_, _, err := DecodeSessionPush(valid)
+	_, write, err := DecodeSessionPush(valid)
 	require.NoError(t, err)
+	assert.Len(t, write.Session.PRLinks, 4097)
 }
