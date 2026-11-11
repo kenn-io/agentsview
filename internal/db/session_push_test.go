@@ -223,7 +223,10 @@ func TestSessionPushWriteFailuresRollBack(t *testing.T) {
 
 func TestSessionPushPreservesExistingExternalParent(t *testing.T) {
 	d := testDB(t)
-	_, err := d.SetSessionExternalParent(t.Context(), "snapshot", "local-parent")
+	insertSession(t, d, "source-parent", "project")
+	_, err := d.SetSessionExternalParent(t.Context(), "source-parent", "snapshot")
+	require.NoError(t, err)
+	_, err = d.SetSessionExternalParent(t.Context(), "snapshot", "local-parent")
 	require.NoError(t, err)
 	receipt, write := sessionPushFixture("snapshot")
 	receipt.ExternalParentSessionID = new("source-parent")
@@ -290,6 +293,53 @@ func TestSessionPushRejectsParentCycleWithoutSaving(t *testing.T) {
 	reserved, err := d.SessionPushReservations(ctx, []string{"snapshot"})
 	require.NoError(t, err)
 	assert.False(t, reserved["snapshot"])
+}
+
+func TestSessionPushFailureImageHandling(t *testing.T) {
+	for _, failure := range []string{"cycle", "receipt"} {
+		t.Run(failure, func(t *testing.T) {
+			d := testDB(t)
+			ctx := t.Context()
+			dir := t.TempDir()
+			d.SetAssetsDir(dir)
+			d.SetToolResultImages(config.ToolResultImagesOffload)
+			receipt, write := sessionPushFixture("snapshot")
+			write.Messages = []Message{testImageMessage("snapshot")}
+			if failure == "cycle" {
+				insertSession(t, d, "parent", "project")
+				_, err := d.SetSessionExternalParent(ctx, "parent", "snapshot")
+				require.NoError(t, err)
+				receipt.ExternalParentSessionID = new("parent")
+			} else {
+				_, err := d.getWriter().ExecContext(ctx, `CREATE TRIGGER fail_push_receipt BEFORE INSERT ON session_push_receipts BEGIN SELECT RAISE(ABORT, 'receipt failure'); END`)
+				require.NoError(t, err)
+			}
+			_, err := d.ApplySessionPush(ctx, receipt, write)
+			require.Error(t, err)
+			session, err := d.GetSession(ctx, "snapshot")
+			require.NoError(t, err)
+			assert.Nil(t, session)
+			var receipts int
+			require.NoError(t, d.getReader().QueryRowContext(ctx, `SELECT count(*) FROM session_push_receipts WHERE session_id = 'snapshot'`).Scan(&receipts))
+			assert.Zero(t, receipts)
+			entries, err := os.ReadDir(dir)
+			require.NoError(t, err)
+			if failure == "cycle" {
+				assert.Empty(t, entries)
+			} else {
+				require.Len(t, entries, 1)
+				_, err := d.getWriter().ExecContext(ctx, `DROP TRIGGER fail_push_receipt`)
+				require.NoError(t, err)
+				created, err := d.ApplySessionPush(ctx, receipt, write)
+				require.NoError(t, err)
+				assert.True(t, created)
+				after, err := os.ReadDir(dir)
+				require.NoError(t, err)
+				require.Len(t, after, 1)
+				assert.Equal(t, entries[0].Name(), after[0].Name())
+			}
+		})
+	}
 }
 
 func TestSessionPushRebuildPreservesReceiptsAndCuration(t *testing.T) {

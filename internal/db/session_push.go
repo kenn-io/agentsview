@@ -95,6 +95,20 @@ func (db *DB) ApplySessionPush(
 	if hasSession {
 		return false, ErrSessionPushConflict
 	}
+	var existingParent bool
+	if receipt.ExternalParentSessionID != nil {
+		if err := tx.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM session_external_parents WHERE session_id = ?)`, receipt.SessionID).Scan(&existingParent); err != nil {
+			return false, err
+		}
+		if !existingParent {
+			if err := rejectExternalParentCycle(ctx, tx, receipt.SessionID, *receipt.ExternalParentSessionID); err != nil {
+				if errors.Is(err, ErrSessionExternalParentInvalid) {
+					return false, fmt.Errorf("%w: %w", ErrSessionPushConflict, err)
+				}
+				return false, err
+			}
+		}
+	}
 	// Image offload publishes files. Decide conflicts/no-ops before any policy I/O.
 	write = db.storageSessionBatchWrite(write)
 
@@ -112,18 +126,12 @@ func (db *DB) ApplySessionPush(
 		VALUES (?, ?, ?)`, receipt.SessionID, receipt.SourceOrigin, receipt.PayloadHash); err != nil {
 		return false, fmt.Errorf("recording session push receipt: %w", err)
 	}
-	if receipt.ExternalParentSessionID != nil {
-		var exists bool
-		if err := tx.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM session_external_parents WHERE session_id = ?)`, receipt.SessionID).Scan(&exists); err != nil {
-			return false, err
-		}
-		if !exists {
-			if _, err := setSessionExternalParentTx(ctx, tx, receipt.SessionID, *receipt.ExternalParentSessionID); err != nil {
-				if errors.Is(err, ErrSessionExternalParentInvalid) {
-					return false, fmt.Errorf("%w: %w", ErrSessionPushConflict, err)
-				}
-				return false, err
+	if receipt.ExternalParentSessionID != nil && !existingParent {
+		if _, err := setSessionExternalParentTx(ctx, tx, receipt.SessionID, *receipt.ExternalParentSessionID); err != nil {
+			if errors.Is(err, ErrSessionExternalParentInvalid) {
+				return false, fmt.Errorf("%w: %w", ErrSessionPushConflict, err)
 			}
+			return false, err
 		}
 	}
 	if _, err := applySessionExternalParentsFor(ctx, tx.ExecContext,
