@@ -230,7 +230,7 @@ describe("EmbeddingsSettings", () => {
       embeddingsService.getApiV1EmbeddingsStatus.mockResolvedValue(
         runningStatus(1, { setup: { ...setup, enabled: true, action: "" } }),
       );
-      throw new ApiError(409, "embedding build already running");
+      throw new ApiError(409, "embedding build already running", "embeddings_build_running");
     });
     const component = mount(EmbeddingsSettings, { target: document.body });
     await settle();

@@ -142,6 +142,28 @@ func TestEmbeddingsSetupRequiresProvider(t *testing.T) {
 	assertRecorderStatus(t, w, http.StatusBadRequest)
 }
 
+func TestEmbeddingsSetupConflictCodes(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		err  error
+		code string
+	}{
+		{"provider changed", ErrEmbeddingsProviderChanged, "embeddings_provider_changed"},
+		{"build running", vector.ErrBuildRunning, "embeddings_build_running"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			s := testServer(t, 0, WithEmbeddingsRuntime(fakeEmbeddingsRuntime{setupErr: tc.err}))
+			w := serveJSON(t, s.mux, http.MethodPost, "/api/v1/embeddings/setup", map[string]string{"expected_provider": "built-in"})
+			assertRecorderStatus(t, w, http.StatusConflict)
+			var body struct {
+				Code string `json:"code"`
+			}
+			require.NoError(t, json.Unmarshal(w.Body.Bytes(), &body))
+			assert.Equal(t, tc.code, body.Code)
+		})
+	}
+}
+
 func TestEmbeddingsBuildReturnsAcceptedAndStartsBuild(t *testing.T) {
 	fake := &fakeEmbeddingsManager{}
 	s := newEmbeddingsTestServer(t, fake)
@@ -452,6 +474,7 @@ type fakeEmbeddingsRuntime struct {
 	messages, recall EmbeddingsManager
 	includeAutomated bool
 	busy             bool
+	setupErr         error
 }
 
 func (r fakeEmbeddingsRuntime) Manager(store string) EmbeddingsManager {
@@ -468,7 +491,7 @@ func (r fakeEmbeddingsRuntime) IncludeAutomated() bool { return r.includeAutomat
 func (r fakeEmbeddingsRuntime) SetupStatus(context.Context) (EmbeddingsSetupStatus, error) {
 	return EmbeddingsSetupStatus{Enabled: true, Busy: r.busy}, nil
 }
-func (fakeEmbeddingsRuntime) Setup(int64, string) error { return nil }
+func (r fakeEmbeddingsRuntime) Setup(int64, string) error { return r.setupErr }
 
 func TestEmbeddingsStatusPreservesBuildDuringSetup(t *testing.T) {
 	manager := &fakeEmbeddingsManager{status: vector.BuildStatus{

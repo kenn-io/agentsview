@@ -1192,3 +1192,85 @@ func TestCLIEmbeddingsFreshSetup(t *testing.T) {
 	require.NoError(t, err, out)
 	assert.Contains(t, out, `"session_id":"session-one"`)
 }
+
+func TestSetupProbeAllowsReadersAndConcurrentSetup(t *testing.T) {
+	setTestHome(t, t.TempDir())
+	dir := testDataDir(t)
+	cfg, err := config.LoadReadOnly()
+	require.NoError(t, err)
+	database := dbtest.OpenTestDBAt(t, filepath.Join(dir, "sessions.db"))
+	oldInspect, oldEndpoint, oldInstall := inspectLocalEmbeddings, localEmbeddingEndpoint, installLocalEmbeddings
+	t.Cleanup(func() {
+		inspectLocalEmbeddings, localEmbeddingEndpoint, installLocalEmbeddings = oldInspect, oldEndpoint, oldInstall
+	})
+	entered := make(chan struct{}, 2)
+	unblock := make(chan struct{})
+	inspectLocalEmbeddings = func(ctx context.Context, _ embedlocal.Options) (embedlocal.Status, error) {
+		entered <- struct{}{}
+		select {
+		case <-unblock:
+			return embedlocal.Status{}, nil
+		case <-ctx.Done():
+			return embedlocal.Status{}, ctx.Err()
+		}
+	}
+	localEmbeddingEndpoint = func(context.Context, embedlocal.Options) (string, error) { return "", embedlocal.ErrNotFound }
+	started := make(chan struct{})
+	installLocalEmbeddings = func(ctx context.Context, _ embedlocal.InstallOptions) (embedlocal.Installation, error) {
+		close(started)
+		<-ctx.Done()
+		return embedlocal.Installation{}, ctx.Err()
+	}
+	owner, err := newLiveVectorServing(t.Context(), cfg, database, nil, config.LoadReadOnly)
+	require.NoError(t, err)
+	defer func() { require.NoError(t, owner.Close()) }()
+	defer func() {
+		select {
+		case <-unblock:
+		default:
+			close(unblock)
+		}
+	}()
+	results := make(chan error, 2)
+	go func() { results <- owner.Setup(0, "built-in") }()
+	select {
+	case <-entered:
+	case <-time.After(5 * time.Second):
+		require.FailNow(t, "probe did not start")
+	}
+	reader := make(chan bool, 1)
+	go func() { reader <- owner.IncludeAutomated() }()
+	select {
+	case <-reader:
+	case <-time.After(time.Second):
+		require.FailNow(t, "reader blocked on probe")
+	}
+	go func() { results <- owner.Setup(0, "built-in") }()
+	select {
+	case <-entered:
+	case <-time.After(5 * time.Second):
+		require.FailNow(t, "second probe did not start")
+	}
+	close(unblock)
+	var successes, busy int
+	for range 2 {
+		select {
+		case err := <-results:
+			if err == nil {
+				successes++
+			} else {
+				require.ErrorIs(t, err, vector.ErrBuildRunning)
+				busy++
+			}
+		case <-time.After(5 * time.Second):
+			require.FailNow(t, "setup did not return")
+		}
+	}
+	assert.Equal(t, 1, successes)
+	assert.Equal(t, 1, busy)
+	select {
+	case <-started:
+	case <-time.After(5 * time.Second):
+		require.FailNow(t, "setup did not start")
+	}
+}

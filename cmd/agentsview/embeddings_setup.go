@@ -249,19 +249,20 @@ func setupRequestError(err error) error {
 
 func (v *liveVectorServing) Setup(approvedBytes int64, expectedProvider string) error {
 	v.mu.Lock()
-	defer v.mu.Unlock()
 	if v.setup.Busy {
+		v.mu.Unlock()
 		return vector.ErrBuildRunning
 	}
-	cfg := v.cfg
+	cfg, setup, missingManager, done := v.cfg, v.setup, v.serving.manager == nil, v.done
+	v.mu.Unlock()
 	var err error
-	if v.serving.manager == nil {
+	if missingManager {
 		cfg.Vector.Embeddings, err = cfg.VectorSetupEmbeddings(false)
 		if err != nil {
 			return setupRequestError(err)
 		}
 	}
-	status, err := setupStatusForConfig(v.ctx, v.setup, cfg, v.serving.manager == nil)
+	status, err := setupStatusForConfig(v.ctx, setup, cfg, missingManager)
 	if err != nil {
 		return err
 	}
@@ -285,6 +286,15 @@ func (v *liveVectorServing) Setup(approvedBytes int64, expectedProvider string) 
 			return server.ErrEmbeddingsProviderChanged
 		}
 		deployment.Endpoint = pinnedEndpoint
+	}
+	v.mu.Lock()
+	defer v.mu.Unlock()
+	if v.setup.Busy {
+		return vector.ErrBuildRunning
+	}
+	// A setup may have finished and replaced the configuration during the probe.
+	if v.done != done {
+		return server.ErrEmbeddingsProviderChanged
 	}
 	return v.startSetup(deployment, approvedBytes, false, pinnedEndpoint)
 }

@@ -41,8 +41,8 @@
       await EmbeddingsService.postApiV1EmbeddingsSetup({ approved_bytes: shownBytes, expected_provider: provider });
       onchange(true);
     } catch (e) {
-      if (e instanceof ApiError && e.status === 409) {
-        onchange(false);
+      if (e instanceof ApiError && e.status === 409 && (e.code === "embeddings_provider_changed" || e.code === "embeddings_build_running")) {
+        onchange(e.code === "embeddings_build_running");
         return;
       }
       error = e instanceof Error ? e.message : m.settings_embeddings_load_failed();

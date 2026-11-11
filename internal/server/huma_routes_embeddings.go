@@ -39,8 +39,11 @@ func (s *Server) humaEmbeddingsSetup(_ context.Context, in *embeddingsSetupInput
 		return nil, s.embeddingsUnavailableError()
 	}
 	if err := s.embeddingsRuntime.Setup(in.Body.ApprovedBytes, in.Body.ExpectedProvider); err != nil {
-		if errors.Is(err, vector.ErrBuildRunning) || errors.Is(err, ErrEmbeddingsProviderChanged) {
-			return nil, apiError(http.StatusConflict, err.Error())
+		if errors.Is(err, vector.ErrBuildRunning) {
+			return nil, apiErrorWithCode(http.StatusConflict, "embeddings_build_running", err.Error())
+		}
+		if errors.Is(err, ErrEmbeddingsProviderChanged) {
+			return nil, apiErrorWithCode(http.StatusConflict, "embeddings_provider_changed", err.Error())
 		}
 		if errors.Is(err, vector.ErrInvalidBuildRequest) {
 			return nil, apiError(http.StatusBadRequest, err.Error())
