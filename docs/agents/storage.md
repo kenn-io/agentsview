@@ -683,6 +683,13 @@ must run the same `server.APIVersion`, which the CLI already enforces. In that
 target `push_vectors` is optional: omitted means the vector phase runs, the same
 default as the `[pg]` config key, and an explicit `false` opts out.
 
+Every change to the generated OpenAPI contract takes the next `server.APIVersion`
+and a `<version>-<digest>.json` record in `cmd/agentsview/testdata/api_versions`;
+`make test-api-version` names both. When two PRs record different contracts
+under one version, the later one deletes its record, adds one under the version
+the check names, and moves any feature minimum it introduced to that version. A
+daemon still running an older API version must be restarted after an upgrade.
+
 ## Backend Parity
 
 Automatic repository project naming belongs to the writable SQLite archive.
