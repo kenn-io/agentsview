@@ -88,8 +88,9 @@ func TestMaterializeConfiguredSources(t *testing.T) {
 
 func TestS3ConfiguredSource(t *testing.T) {
 	const id = "12345678-1234-1234-1234-123456789abc"
+	const parent = "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"
 	const root = "s3://test/host/raw/claude"
-	const contents = "{\"type\":\"user\",\"sessionId\":\"" + id + "\",\"message\":{\"content\":\"fixture\"}}\n"
+	const contents = "{\"type\":\"user\",\"sessionId\":\"" + parent + "\",\"message\":{\"content\":\"fixture\"}}\n"
 	const base = "host/raw/claude/project/" + id
 	_, err := readS3Source(t.Context(), config.Config{}, "remote", "s3://other/project/"+id+".jsonl", id, maxSourceBytes)
 	require.ErrorContains(t, err, "configured roots")
@@ -131,6 +132,22 @@ func TestS3ConfiguredSource(t *testing.T) {
 	assert.Equal(t, "tool", string(files[2].data))
 	_, err = readS3Source(t.Context(), cfg, "host", root+"/project/"+id+".jsonl", id, int64(len(contents)+len("tool")+3))
 	require.ErrorContains(t, err, "exceeds size limit")
+	home := t.TempDir()
+	t.Setenv("CLAUDE_CONFIG_DIR", home)
+	t.Setenv("CLAUDE_CODE_PROJECT_DIR_NAME", "project")
+	uri := root + "/project/" + id + ".jsonl"
+	s := &db.Session{ID: "host~" + id, Agent: "claude", Machine: "host", FilePath: &uri, SourceSessionID: "host~" + parent}
+	cwd := t.TempDir()
+	_, err = Materialize(t.Context(), cfg, s, cwd)
+	require.NoError(t, err)
+	installed, err := os.ReadFile(filepath.Join(home, "projects", "project", id+".jsonl"))
+	require.NoError(t, err)
+	assert.Equal(t, contents, string(installed))
+	for _, invalid := range []string{"other~" + parent, "host~bad", "~" + parent} {
+		s.SourceSessionID = invalid
+		_, err = Materialize(t.Context(), cfg, s, cwd)
+		require.ErrorContains(t, err, "invalid source session identity")
+	}
 }
 
 func TestMaterializeParentSource(t *testing.T) {

@@ -91,7 +91,15 @@ func Materialize(ctx context.Context, cfg config.Config, session *db.Session, cw
 	if err != nil {
 		return Result{}, fmt.Errorf("reading native transcript: %w", err)
 	}
-	primary, err := clearClaudeWorktree(files[0].data, id, session.SourceSessionID)
+	parent := session.SourceSessionID
+	if parent != "" {
+		parentHost, rawParent := parser.StripHostPrefix(parent)
+		if (strings.Contains(parent, "~") && (parentHost == "" || parentHost != session.Machine)) || !capture.ValidUUID(rawParent) {
+			return Result{}, errors.New("invalid source session identity")
+		}
+		parent = rawParent
+	}
+	primary, err := clearClaudeWorktree(files[0].data, id, parent)
 	if err != nil {
 		return Result{}, err
 	}
@@ -198,7 +206,7 @@ func readLocalSource(ctx context.Context, root, name, id string, limit int64) ([
 				return nil
 			}
 			if !entry.Type().IsRegular() || !within(root, name) {
-				return errors.New("invalid sidecar")
+				return errors.New("invalid session file")
 			}
 			rel, err := filepath.Rel(base, name)
 			if err != nil {
@@ -206,7 +214,7 @@ func readLocalSource(ctx context.Context, root, name, id string, limit int64) ([
 			}
 			data, info, err := readFile(ctx, name, limit-total)
 			if err != nil {
-				return fmt.Errorf("reading sidecar %s: %w", rel, err)
+				return fmt.Errorf("cannot read %s: %w", rel, err)
 			}
 			snapshots[name] = info
 			total += int64(len(data))
@@ -315,7 +323,7 @@ func readS3Source(ctx context.Context, cfg config.Config, machine, uri, id strin
 			}
 			rel, ok := strings.CutPrefix(obj.URI, base+"/")
 			if !ok || !strings.HasPrefix(rel, sub+"/") || path.Clean(rel) != rel || strings.Contains(rel, `\`) {
-				return nil, errors.New("unsafe S3 sidecar path")
+				return nil, errors.New("unsafe S3 file path")
 			}
 			data, err := fetch(obj.URI)
 			if err != nil {

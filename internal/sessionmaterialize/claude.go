@@ -84,7 +84,7 @@ func clearClaudeWorktree(data []byte, sessionID, sourceSessionID string) ([]byte
 		}
 	}
 	if !found {
-		return nil, errors.New("native transcript has no selected-session conversation record")
+		return nil, errors.New("transcript has no messages for this session")
 	}
 	if !bound {
 		return data, nil
