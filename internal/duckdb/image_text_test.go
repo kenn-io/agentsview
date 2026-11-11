@@ -112,6 +112,25 @@ func TestDuckDBImageTextFollowsIncrementalPushes(t *testing.T) {
 	}
 	assert.Equal(t, want(), mirrorRows())
 	assert.Equal(t, []int{1, 1, 1, 1, 1}, found("invoice 4827"))
+	conn, err := Open(ctx, path)
+	require.NoError(t, err)
+	_, err = conn.ExecContext(ctx, `INSERT INTO image_text
+		SELECT session_id, source_kind, message_ordinal, call_index, event_index, image_index,
+			image_hash, 'zzzz', provider, model, revision, 'invoice 4827 losing'
+		FROM image_text`)
+	require.NoError(t, err)
+	require.NoError(t, conn.Close())
+	store := openPushedStore(t, path)
+	page, err := store.Search(ctx, db.SearchFilter{Query: "invoice 4827", Limit: 1})
+	require.NoError(t, err)
+	require.Len(t, page.Results, 1)
+	assert.Equal(t, "invoice 4827", page.Results[0].Snippet)
+	require.NoError(t, store.Close())
+	conn, err = Open(ctx, path)
+	require.NoError(t, err)
+	_, err = conn.ExecContext(ctx, `DELETE FROM image_text WHERE processor = 'zzzz'`)
+	require.NoError(t, err)
+	require.NoError(t, conn.Close())
 	require.NoError(t, local.ClearImageText(ctx))
 	result = push()
 	require.False(t, result.Diagnostics.Full)
