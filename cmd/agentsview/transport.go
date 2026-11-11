@@ -7,6 +7,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"log"
 	"net"
 	"net/url"
@@ -23,6 +24,15 @@ import (
 	"go.kenn.io/agentsview/internal/servicehttp"
 	"go.kenn.io/agentsview/internal/update"
 )
+
+type daemonProgressContextKey struct{}
+
+func daemonProgressWriter(ctx context.Context) io.Writer {
+	if w, ok := ctx.Value(daemonProgressContextKey{}).(io.Writer); ok {
+		return w
+	}
+	return os.Stderr
+}
 
 type transportMode int
 
@@ -162,7 +172,7 @@ func detectTransportContext(
 		return transport{}, err
 	}
 	if isExternalDaemonStarting(dataDir) {
-		fmt.Fprintln(os.Stderr,
+		fmt.Fprintln(daemonProgressWriter(ctx),
 			"server is starting up, waiting...")
 		if waitTimeout <= 0 {
 			waitTimeout = startupWaitTimeout
@@ -181,7 +191,7 @@ func detectTransportContext(
 		return transportFromRuntime(sf), nil
 	}
 	if IsDaemonStarting(dataDir) {
-		fmt.Fprintln(os.Stderr,
+		fmt.Fprintln(daemonProgressWriter(ctx),
 			"server is starting up, waiting...")
 		if waitTimeout <= 0 {
 			waitTimeout = startupWaitTimeout
@@ -413,7 +423,7 @@ func waitForBackgroundLaunchBeforeArchiveWrite(
 	}
 	started := time.Now()
 	deadline := started.Add(waitTimeout)
-	progress := daemonLaunchProgressWriter{w: os.Stderr}
+	progress := daemonLaunchProgressWriter{w: daemonProgressWriter(ctx)}
 	var lastUpdate time.Time
 	for isBackgroundLaunchActive(dataDir) {
 		if backgroundServeProbeHook != nil {

@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"encoding/json/v2"
 	"errors"
@@ -383,6 +384,18 @@ func TestDetectTransport_DaemonStarting_FallsBackToDirect(t *testing.T) {
 	// only the start lock and returns direct (writable) since
 	// no runtime record means no daemon claim.
 	assert.Equal(t, transportDirect, tr.Mode)
+}
+
+func TestDetectTransportRoutesStartupProgress(t *testing.T) {
+	dir := daemonRuntimeDir(t)
+	MarkDaemonStarting(dir)
+	t.Cleanup(func() { UnmarkDaemonStarting(dir) })
+	stubWaitForDaemonStartupForTransport(t, func(context.Context, string, time.Duration, ...string) bool { return false })
+	var progress bytes.Buffer
+	ctx := context.WithValue(t.Context(), daemonProgressContextKey{}, &progress)
+	_, err := detectTransportContext(ctx, dir, "", time.Second)
+	require.NoError(t, err)
+	assert.Contains(t, progress.String(), "server is starting up, waiting")
 }
 
 func TestEnsureTransport_ReadIntentStartsDaemon(t *testing.T) {

@@ -1143,7 +1143,7 @@ func WaitForDaemonStartupContext(
 ) bool {
 	started := time.Now()
 	deadline := started.Add(timeout)
-	progress := daemonLaunchProgressWriter{w: os.Stderr}
+	progress := daemonLaunchProgressWriter{w: daemonProgressWriter(ctx)}
 	var lastUpdate time.Time
 	for time.Now().Before(deadline) {
 		if FindDaemonRuntime(dataDir, authToken...) != nil {

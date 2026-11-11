@@ -302,6 +302,11 @@ func runExportSessions(cmd *cobra.Command, cfg exportSessionsConfig) error {
 	if err != nil {
 		return fmt.Errorf("checking project identity evidence: %w", err)
 	}
+	switch backfill.State {
+	case "not_needed", "completed", "pending", "running", "failed":
+	default:
+		return unknownExportBackfillState(backfill.State)
+	}
 	if backfill.State != "not_needed" && backfill.State != "completed" {
 		archiveOnly, err := database.IsArchiveOnly(ctx)
 		if err != nil {
@@ -319,7 +324,13 @@ func runExportSessions(cmd *cobra.Command, cfg exportSessionsConfig) error {
 		if err := database.Close(); err != nil {
 			return err
 		}
-		if err := waitForExportBackfill(ctx, cmd.ErrOrStderr(), &appCfg); err != nil {
+		progress := cmd.ErrOrStderr()
+		if cfg.Cursor != "" {
+			// A cursor reset must be the only object on stderr.
+			progress = io.Discard
+			ctx = context.WithValue(ctx, daemonProgressContextKey{}, progress)
+		}
+		if err := waitForExportBackfill(ctx, progress, &appCfg); err != nil {
 			return err
 		}
 		reopened, err := openExportReadOnlyDB(ctx, appCfg)
@@ -373,6 +384,10 @@ func runExportSessions(cmd *cobra.Command, cfg exportSessionsConfig) error {
 	return json.MarshalEncode(enc, output)
 }
 
+func unknownExportBackfillState(state string) error {
+	return fmt.Errorf("unknown project identity evidence backfill state %q; run `agentsview export status`", state)
+}
+
 func exportBackfillFailure(status db.BackgroundMigrationStatus) error {
 	return fmt.Errorf("project identity evidence backfill failed: %s; run `agentsview daemon restart`, then check `agentsview export status`", status.LastError)
 }
@@ -402,7 +417,7 @@ func waitForExportBackfill(ctx context.Context, progress io.Writer, cfg *config.
 			return exportBackfillFailure(status)
 		case "pending", "running":
 		default:
-			return fmt.Errorf("unknown project identity evidence backfill state %q; run `agentsview export status`", status.State)
+			return unknownExportBackfillState(status.State)
 		}
 		if FindWritableDaemonRuntime(cfg.DataDir, cfg.AuthToken) == nil {
 			if unavailableSince.IsZero() {

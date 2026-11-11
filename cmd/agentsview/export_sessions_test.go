@@ -974,21 +974,72 @@ func TestExportSessionsReadySurvivesUnrelatedFailure(t *testing.T) {
 
 func TestExportWaitRejectsUnknownBackfillState(t *testing.T) {
 	path := pendingExportArchive(t, false)
-	dir := filepath.Dir(path)
 	raw, err := sql.Open("sqlite3", path)
 	require.NoError(t, err)
+	defer raw.Close()
 	_, err = raw.ExecContext(t.Context(), `INSERT INTO background_migrations (name, state) VALUES ('session_project_identity_snapshots_v1', 'unexpected')`)
 	require.NoError(t, err)
-	require.NoError(t, raw.Close())
-	host, port := testPingServer(t)
-	writeDaemonRuntimeForTest(t, dir, host, port, "test", false)
-	ctx, cancel := context.WithTimeout(t.Context(), 3*time.Second)
-	defer cancel()
-	out, done := exportWaitCommand(t, ctx, io.Discard)
-	err = <-done
+	started := false
+	stubStartBackgroundServeForTransport(t, func(context.Context, *config.Config, time.Duration, bool) (*DaemonRuntime, error) {
+		started = true
+		return nil, errors.New("unexpected launch")
+	})
+	stdout, _, err := executeExportSessionsCommand(newRootCommand(), "export", "sessions", "--wait")
 	require.ErrorContains(t, err, "unexpected")
 	require.ErrorContains(t, err, "agentsview export status")
-	assert.Empty(t, out.String())
+	assert.False(t, started)
+	assert.Empty(t, stdout)
+	var state string
+	require.NoError(t, raw.QueryRowContext(t.Context(), `SELECT state FROM background_migrations WHERE name = 'session_project_identity_snapshots_v1'`).Scan(&state))
+	assert.Equal(t, "unexpected", state)
+}
+
+func TestExportWaitCursorResetStderrIsOnlyJSON(t *testing.T) {
+	path := pendingExportArchive(t, false)
+	dir := filepath.Dir(path)
+	host, port := testPingServer(t)
+	writeDaemonRuntimeForTest(t, dir, host, port, "test", false)
+	ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
+	defer cancel()
+	polled := make(chan struct{})
+	original := listDaemonRuntimeRecords
+	var calls atomic.Int32
+	listDaemonRuntimeRecords = func(store daemonRuntimeStore) ([]daemon.RuntimeRecord, error) {
+		if calls.Add(1) == 3 {
+			close(polled)
+		}
+		return original(store)
+	}
+	t.Cleanup(func() { listDaemonRuntimeRecords = original })
+	workerDone := make(chan error, 1)
+	go func() {
+		select {
+		case <-ctx.Done():
+			workerDone <- ctx.Err()
+			return
+		case <-polled:
+		}
+		database, err := db.Open(ctx, path)
+		if err != nil {
+			workerDone <- err
+			return
+		}
+		engine := agentsync.NewEngine(ctx, database, agentsync.EngineConfig{Machine: "local"})
+		err = engine.BackfillProjectIdentitySnapshots(ctx)
+		engine.Close()
+		_ = database.Close()
+		workerDone <- err
+	}()
+	root := newRootCommand()
+	root.SetContext(ctx)
+	stdout, stderr, err := executeExportSessionsCommand(root, "export", "sessions", "--wait", "--cursor", "invalid")
+	require.NoError(t, <-workerDone)
+	require.Error(t, err)
+	assert.Equal(t, sessionExportCursorResetExitCode, exitCodeFromError(err))
+	assert.Empty(t, stdout)
+	var doc exportSessionsDocument
+	require.NoError(t, json.Unmarshal([]byte(stderr), &doc))
+	assert.Equal(t, "cursor_reset", doc.Error)
 }
 
 func TestExportSessionsWaitReadyDoesNotStartDaemon(t *testing.T) {
