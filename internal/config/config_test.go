@@ -3258,7 +3258,7 @@ func TestSaveVectorSetupPreservesSettings(t *testing.T) {
 			_, err = toml.Decode(raw, &expected)
 			require.NoError(t, err)
 			expected["vector"].(map[string]any)["enabled"] = true
-			require.NoError(t, cfg.SaveVectorSetup(false))
+			require.NoError(t, cfg.SaveVectorSetup(false, false))
 			var saved map[string]any
 			_, err = toml.DecodeFile(path, &saved)
 			require.NoError(t, err)
@@ -3279,7 +3279,7 @@ func TestSaveVectorSetupPersistsLocalRecipe(t *testing.T) {
 			require.NoError(t, err)
 			before, err := cfg.VectorSetupEmbeddings()
 			require.NoError(t, err)
-			require.NoError(t, cfg.SaveVectorSetup(true))
+			require.NoError(t, cfg.SaveVectorSetup(true, false))
 			saved, err := LoadReadOnly()
 			require.NoError(t, err)
 			assert.True(t, saved.Vector.Enabled)
@@ -3305,7 +3305,7 @@ func TestSaveVectorSetupRejectsInvalidCurrentSettings(t *testing.T) {
 			path := filepath.Join(dir, configFileName)
 			require.NoError(t, os.WriteFile(path, []byte(tc.raw), 0o600))
 			_, setupErr := cfg.VectorSetupEmbeddings()
-			saveErr := cfg.SaveVectorSetup(false)
+			saveErr := cfg.SaveVectorSetup(false, false)
 			data, err := os.ReadFile(path)
 			require.NoError(t, err)
 			assert.Equal(t, tc.raw, string(data))

@@ -113,20 +113,17 @@ func TestResolveLocalEmbeddingsProviderIdentity(t *testing.T) {
 	for _, tc := range []struct {
 		name, discovered, builtin string
 		server                    config.VectorEmbeddingsServerConfig
-		probeErr                  error
 		want                      bool
 	}{
 		{name: "explicit endpoint", server: config.VectorEmbeddingsServerConfig{Endpoint: "http://127.0.0.1:11434/v1"}},
 		{name: "forced local", server: config.VectorEmbeddingsServerConfig{Local: true}, builtin: "http://127.0.0.1:11434/v1", want: true},
-		{name: "matching discovery", discovered: "http://127.0.0.1:11434/v1", builtin: "http://127.0.0.1:11434/v1", want: true},
-		{name: "different discovery", discovered: "http://127.0.0.1:1234/v1", builtin: "http://127.0.0.1:5678/v1"},
-		{name: "failed probe", discovered: "http://127.0.0.1:1234/v1", probeErr: errors.New("unavailable")},
+		{name: "automatic discovery", discovered: "http://127.0.0.1:11434/v1", builtin: "http://127.0.0.1:11434/v1"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			localEmbeddingEndpoint = func(_ context.Context, opts embedlocal.Options) (string, error) {
 				if opts.SkipOllama {
 					assert.Empty(t, opts.Executable)
-					return tc.builtin, tc.probeErr
+					return tc.builtin, nil
 				}
 				return tc.discovered, nil
 			}
@@ -142,6 +139,22 @@ func TestResolveLocalEmbeddingsProviderIdentity(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestAutomaticResolutionDoesNotProbeBuiltin(t *testing.T) {
+	oldEndpoint := localEmbeddingEndpoint
+	t.Cleanup(func() { localEmbeddingEndpoint = oldEndpoint })
+	var probes int
+	localEmbeddingEndpoint = func(_ context.Context, opts embedlocal.Options) (string, error) {
+		probes++
+		assert.False(t, opts.SkipOllama)
+		return "http://127.0.0.1:1234/v1", nil
+	}
+	endpoint, builtin, err := resolveLocalEmbeddings(t.Context(), config.VectorEmbeddingsServerConfig{}, nil, nil)
+	require.NoError(t, err)
+	assert.Equal(t, "http://127.0.0.1:1234/v1", endpoint)
+	assert.False(t, builtin)
+	assert.Equal(t, 1, probes)
 }
 
 func TestLocalEmbeddingsResolution(t *testing.T) {

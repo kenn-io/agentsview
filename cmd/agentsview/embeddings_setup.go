@@ -70,7 +70,7 @@ func (v *liveVectorServing) startSharedChoice() {
 				recordEmbeddingChoice()
 			}
 			v.mu.Lock()
-			err = v.startSetup(deployment, math.MaxInt64)
+			err = v.startSetup(deployment, math.MaxInt64, false)
 			v.mu.Unlock()
 			if err != nil {
 				log.Printf("search by meaning: start saved setup: %v", err)
@@ -91,7 +91,7 @@ func (v *liveVectorServing) startSharedChoice() {
 		if err == nil {
 			deployment.Local = true
 			v.mu.Lock()
-			err = v.startSetup(deployment, math.MaxInt64)
+			err = v.startSetup(deployment, math.MaxInt64, true)
 			v.mu.Unlock()
 		}
 	}
@@ -285,11 +285,14 @@ func (v *liveVectorServing) Setup(approvedBytes int64) error {
 	if status.Action != "turn-on" {
 		return fmt.Errorf("%w: setup action is unavailable for the current embeddings provider", vector.ErrInvalidBuildRequest)
 	}
-	return v.startSetup(deployment, approvedBytes)
+	if status.Provider == "built-in" && deployment.Endpoint == "" {
+		deployment.Local = true
+	}
+	return v.startSetup(deployment, approvedBytes, false)
 }
 
 // startSetup starts the leased worker with v.mu held.
-func (v *liveVectorServing) startSetup(deployment config.VectorEmbeddingsServerConfig, approvedBytes int64) error {
+func (v *liveVectorServing) startSetup(deployment config.VectorEmbeddingsServerConfig, approvedBytes int64, automatic bool) error {
 	if v.setup.Busy {
 		return vector.ErrBuildRunning
 	}
@@ -301,7 +304,7 @@ func (v *liveVectorServing) startSetup(deployment config.VectorEmbeddingsServerC
 	v.done = make(chan struct{})
 	go func() {
 		defer release()
-		err := v.activate(deployment, approvedBytes)
+		err := v.activate(deployment, approvedBytes, automatic)
 		v.mu.Lock()
 		v.setup.Busy = false
 		if err != nil {
@@ -319,7 +322,7 @@ func (v *liveVectorServing) startSetup(deployment config.VectorEmbeddingsServerC
 	return nil
 }
 
-func (v *liveVectorServing) activate(deployment config.VectorEmbeddingsServerConfig, approvedBytes int64) error {
+func (v *liveVectorServing) activate(deployment config.VectorEmbeddingsServerConfig, approvedBytes int64, automatic bool) error {
 	cfg := v.cfg
 	_, builtin, err := resolveLocalEmbeddings(v.ctx, deployment,
 		func(_ context.Context, size int64) (bool, error) {
@@ -341,7 +344,9 @@ func (v *liveVectorServing) activate(deployment config.VectorEmbeddingsServerCon
 		return err
 	}
 	if v.serving.manager == nil {
-		if err := cfg.SaveVectorSetup(builtin); err != nil {
+		if err := cfg.SaveVectorSetup(builtin, automatic); errors.Is(err, config.ErrVectorSetupDisabled) {
+			return nil
+		} else if err != nil {
 			return err
 		}
 		cfg, err = v.reload()

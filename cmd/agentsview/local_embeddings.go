@@ -29,11 +29,7 @@ func resolveLocalEmbeddings(ctx context.Context, server config.VectorEmbeddingsS
 	opts := embedlocal.Options{SkipOllama: server.Local}
 	endpoint, err := localEmbeddingEndpoint(ctx, opts)
 	if !errors.Is(err, embedlocal.ErrNotFound) {
-		if err != nil || server.Local {
-			return endpoint, server.Local && err == nil, err
-		}
-		builtin, probeErr := localEmbeddingEndpoint(ctx, embedlocal.Options{SkipOllama: true})
-		return endpoint, probeErr == nil && endpoint == builtin, nil
+		return endpoint, server.Local && err == nil, err
 	}
 	opts.DataDir, err = embedlocal.DefaultDir()
 	if err != nil {
@@ -52,11 +48,7 @@ func resolveLocalEmbeddings(ctx context.Context, server config.VectorEmbeddingsS
 	}
 	opts.DataDir, opts.Executable = installation.DataDir, installation.Executable
 	endpoint, err = localEmbeddingEndpoint(ctx, opts)
-	if err != nil || server.Local {
-		return endpoint, server.Local && err == nil, err
-	}
-	builtin, probeErr := localEmbeddingEndpoint(ctx, embedlocal.Options{SkipOllama: true})
-	return endpoint, probeErr == nil && endpoint == builtin, nil
+	return endpoint, server.Local && err == nil, err
 }
 
 // prepareLocalEmbeddings asks before downloading the local model. When the

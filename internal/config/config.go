@@ -4229,6 +4229,9 @@ func (c *Config) SaveGithubToken(token string) error {
 // opposed to failures reading or locking the config file.
 var ErrInvalidVectorSetup = errors.New("invalid vector setup")
 
+// ErrVectorSetupDisabled means an automatic setup found an explicit opt-out.
+var ErrVectorSetupDisabled = errors.New("vector setup explicitly disabled")
+
 type invalidVectorSetupError struct{ error }
 
 func (e invalidVectorSetupError) Unwrap() error { return e.error }
@@ -4240,7 +4243,7 @@ func (invalidVectorSetupError) Is(target error) bool { return target == ErrInval
 func (c *Config) VectorSetupEmbeddings() (VectorEmbeddingsConfig, error) {
 	var embeddings VectorEmbeddingsConfig
 	err := c.withConfigLock(func() error {
-		_, candidate, err := c.vectorSetupCandidate()
+		_, candidate, err := c.vectorSetupCandidate(false)
 		if err == nil {
 			embeddings = candidate.Vector.Embeddings
 		}
@@ -4250,9 +4253,9 @@ func (c *Config) VectorSetupEmbeddings() (VectorEmbeddingsConfig, error) {
 }
 
 // SaveVectorSetup records the selected action while keeping omitted defaults omitted.
-func (c *Config) SaveVectorSetup(local bool) error {
+func (c *Config) SaveVectorSetup(local, automatic bool) error {
 	return c.withConfigLock(func() error {
-		existing, candidate, err := c.vectorSetupCandidate()
+		existing, candidate, err := c.vectorSetupCandidate(automatic)
 		if err != nil {
 			return err
 		}
@@ -4299,7 +4302,7 @@ func (c *Config) SaveVectorSetup(local bool) error {
 	})
 }
 
-func (c *Config) vectorSetupCandidate() (map[string]any, Config, error) {
+func (c *Config) vectorSetupCandidate(automatic bool) (map[string]any, Config, error) {
 	existing, err := c.readConfigMap()
 	if err != nil {
 		if _, ok := errors.AsType[toml.ParseError](err); ok {
@@ -4313,6 +4316,9 @@ func (c *Config) vectorSetupCandidate() (map[string]any, Config, error) {
 	}
 	if section == nil {
 		section = make(map[string]any)
+	}
+	if enabled, ok := section["enabled"].(bool); automatic && ok && !enabled {
+		return nil, Config{}, ErrVectorSetupDisabled
 	}
 	section["enabled"] = true
 	existing["vector"] = section
