@@ -522,10 +522,9 @@ func TestApplyArtifactImportedSessionPreservesDeletedPush(t *testing.T) {
 	ctx := t.Context()
 	origin, gid := "peer-a1b2c3", "peer-a1b2c3~native"
 	receipt, write := sessionPushFixture(gid)
-	receipt.SourceOrigin = origin
-	write.Session.Machine = origin
 	_, err := database.ApplySessionPush(ctx, receipt, write)
 	require.NoError(t, err)
+	write.Session.Machine = origin
 	imported := ArtifactImportedSession{Origin: origin, GID: gid, ManifestHash: strings.Repeat("a", 64), ImportedSessionID: gid}
 	result, err := database.ApplyArtifactImportedSession(ctx, imported, write)
 	require.NoError(t, err)

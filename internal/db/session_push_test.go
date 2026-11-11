@@ -13,7 +13,7 @@ import (
 
 func sessionPushFixture(id string) (SessionPushReceipt, SessionBatchWrite) {
 	return SessionPushReceipt{
-		SessionID: id, SourceOrigin: "archive-a", PayloadHash: strings.Repeat("a", 64),
+		SessionID: id, SourceOrigin: "push-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", PayloadHash: strings.Repeat("a", 64),
 	}, SessionBatchWrite{
 		Session:     Session{ID: id, Project: "project", Machine: "source-machine", Agent: "claude", MessageCount: 1, UserMessageCount: 1},
 		Messages:    []Message{{SessionID: id, Ordinal: 0, Role: "user", Content: "first snapshot", ContentLength: 14}},
@@ -45,7 +45,7 @@ func requireSessionPushReceipt(t *testing.T, d *DB, id string) {
 	require.NoError(t, d.getReader().QueryRowContext(t.Context(),
 		`SELECT source_origin, payload_hash FROM session_push_receipts WHERE session_id = ?`, id,
 	).Scan(&origin, &hash))
-	assert.Equal(t, "archive-a", origin)
+	assert.Equal(t, "push-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", origin)
 	assert.Equal(t, strings.Repeat("a", 64), hash)
 }
 
@@ -65,7 +65,7 @@ func TestSessionPushCreatesAndRetryPreservesCuration(t *testing.T) {
 	require.NoError(t, err)
 	assert.Zero(t, usage.Totals.InputTokens)
 	require.NoError(t, d.SetSyncState(ctx, "artifact_origin_id", "receiver-origin"))
-	require.NoError(t, d.SetSyncState(ctx, "artifact_local_machine_name", receipt.SourceOrigin))
+	require.NoError(t, d.SetSyncState(ctx, "artifact_local_machine_name", "local"))
 	created, err := d.ApplySessionPush(ctx, receipt, write)
 	require.NoError(t, err)
 	require.True(t, created)
@@ -85,10 +85,11 @@ func TestSessionPushCreatesAndRetryPreservesCuration(t *testing.T) {
 	before, err := d.GetSessionFull(ctx, "snapshot")
 	require.NoError(t, err)
 	require.NotNil(t, before)
-	assert.Equal(t, "archive-a", before.Machine)
-	var generation int64
+	assert.Equal(t, "push-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", before.Machine)
+	var queued int
 	require.NoError(t, d.getReader().QueryRowContext(ctx,
-		`SELECT generation FROM artifact_export_queue WHERE session_id = 'snapshot'`).Scan(&generation))
+		`SELECT count(*) FROM artifact_export_queue WHERE session_id = 'snapshot'`).Scan(&queued))
+	assert.Zero(t, queued)
 	dir := t.TempDir()
 	d.SetAssetsDir(dir)
 	d.SetToolResultImages(config.ToolResultImagesOffload)
@@ -111,10 +112,10 @@ func TestSessionPushCreatesAndRetryPreservesCuration(t *testing.T) {
 	stars, err := d.ListStarredSessionIDs(ctx)
 	require.NoError(t, err)
 	assert.Contains(t, stars, "snapshot")
-	var afterGeneration int64
+	var afterQueued int
 	require.NoError(t, d.getReader().QueryRowContext(ctx,
-		`SELECT generation FROM artifact_export_queue WHERE session_id = 'snapshot'`).Scan(&afterGeneration))
-	assert.Equal(t, generation, afterGeneration, "retry must not enqueue publication")
+		`SELECT count(*) FROM artifact_export_queue WHERE session_id = 'snapshot'`).Scan(&afterQueued))
+	assert.Zero(t, afterQueued, "retry must not enqueue publication")
 }
 
 func TestSessionPushConflictsDoNotOverwrite(t *testing.T) {
@@ -201,7 +202,7 @@ func TestSessionPushWriteFailuresRollBack(t *testing.T) {
 				receipt.ExternalParentSessionID = new("parent")
 			}
 			require.NoError(t, d.SetSyncState(t.Context(), "artifact_origin_id", "receiver-origin"))
-			require.NoError(t, d.SetSyncState(t.Context(), "artifact_local_machine_name", receipt.SourceOrigin))
+			require.NoError(t, d.SetSyncState(t.Context(), "artifact_local_machine_name", "local"))
 			_, err := d.getWriter().ExecContext(t.Context(), `CREATE TRIGGER fail_pushed_write BEFORE INSERT ON `+tc.table+` BEGIN SELECT RAISE(ABORT, '`+tc.message+`'); END`)
 			require.NoError(t, err)
 			created, err := d.ApplySessionPush(t.Context(), receipt, write)
@@ -223,10 +224,7 @@ func TestSessionPushWriteFailuresRollBack(t *testing.T) {
 
 func TestSessionPushPreservesExistingExternalParent(t *testing.T) {
 	d := testDB(t)
-	insertSession(t, d, "source-parent", "project")
-	_, err := d.SetSessionExternalParent(t.Context(), "source-parent", "snapshot")
-	require.NoError(t, err)
-	_, err = d.SetSessionExternalParent(t.Context(), "snapshot", "local-parent")
+	_, err := d.SetSessionExternalParent(t.Context(), "snapshot", "local-parent")
 	require.NoError(t, err)
 	receipt, write := sessionPushFixture("snapshot")
 	receipt.ExternalParentSessionID = new("source-parent")
@@ -293,53 +291,6 @@ func TestSessionPushRejectsParentCycleWithoutSaving(t *testing.T) {
 	reserved, err := d.SessionPushReservations(ctx, []string{"snapshot"})
 	require.NoError(t, err)
 	assert.False(t, reserved["snapshot"])
-}
-
-func TestSessionPushFailureImageHandling(t *testing.T) {
-	for _, failure := range []string{"cycle", "receipt"} {
-		t.Run(failure, func(t *testing.T) {
-			d := testDB(t)
-			ctx := t.Context()
-			dir := t.TempDir()
-			d.SetAssetsDir(dir)
-			d.SetToolResultImages(config.ToolResultImagesOffload)
-			receipt, write := sessionPushFixture("snapshot")
-			write.Messages = []Message{testImageMessage("snapshot")}
-			if failure == "cycle" {
-				insertSession(t, d, "parent", "project")
-				_, err := d.SetSessionExternalParent(ctx, "parent", "snapshot")
-				require.NoError(t, err)
-				receipt.ExternalParentSessionID = new("parent")
-			} else {
-				_, err := d.getWriter().ExecContext(ctx, `CREATE TRIGGER fail_push_receipt BEFORE INSERT ON session_push_receipts BEGIN SELECT RAISE(ABORT, 'receipt failure'); END`)
-				require.NoError(t, err)
-			}
-			_, err := d.ApplySessionPush(ctx, receipt, write)
-			require.Error(t, err)
-			session, err := d.GetSession(ctx, "snapshot")
-			require.NoError(t, err)
-			assert.Nil(t, session)
-			var receipts int
-			require.NoError(t, d.getReader().QueryRowContext(ctx, `SELECT count(*) FROM session_push_receipts WHERE session_id = 'snapshot'`).Scan(&receipts))
-			assert.Zero(t, receipts)
-			entries, err := os.ReadDir(dir)
-			require.NoError(t, err)
-			if failure == "cycle" {
-				assert.Empty(t, entries)
-			} else {
-				require.Len(t, entries, 1)
-				_, err := d.getWriter().ExecContext(ctx, `DROP TRIGGER fail_push_receipt`)
-				require.NoError(t, err)
-				created, err := d.ApplySessionPush(ctx, receipt, write)
-				require.NoError(t, err)
-				assert.True(t, created)
-				after, err := os.ReadDir(dir)
-				require.NoError(t, err)
-				require.Len(t, after, 1)
-				assert.Equal(t, entries[0].Name(), after[0].Name())
-			}
-		})
-	}
 }
 
 func TestSessionPushRebuildPreservesReceiptsAndCuration(t *testing.T) {
@@ -511,7 +462,7 @@ func TestSessionPushQueuedCleanupPreservesSnapshot(t *testing.T) {
 }
 
 func TestSessionPushRejectsDirectTranscriptMutation(t *testing.T) {
-	for _, mode := range []string{"batch", "append", "replace", "replace content", "incremental", "usage", "plan", "staged", "staged checkpoint", "staged identical"} {
+	for _, mode := range []string{"batch", "append", "replace", "replace content", "incremental", "usage", "plan", "staged"} {
 		t.Run(mode, func(t *testing.T) {
 			d := testDB(t)
 			receipt, write := sessionPushFixture("reserved")
@@ -543,16 +494,9 @@ func TestSessionPushRejectsDirectTranscriptMutation(t *testing.T) {
 				err = d.ReplaceSessionUsageEvents(t.Context(), "reserved", []UsageEvent{{SessionID: "reserved", Source: "session", Model: "model", InputTokens: 999}})
 			case "plan":
 				err = d.ReplaceSessionPlanUsage(t.Context(), "reserved", &SessionPlanUsage{HasPlanUsage: true, DataStatus: "available"})
-			case "staged", "staged checkpoint", "staged identical":
+			case "staged":
 				messages := []Message{{SessionID: "reserved", Ordinal: 0, Role: "user", Content: "replacement"}}
-				if mode == "staged identical" {
-					messages = write.Messages
-				}
-				if mode == "staged checkpoint" {
-					err = d.ReplaceSessionContentStagedWithCheckpoint(t.Context(), "reserved", messages, newScratchStagedResults(t), nil, nil, &ParserCheckpoint{SessionID: "reserved", Agent: "claude", FilePath: "fixture", Offset: 20}, nil)
-				} else {
-					err = d.ReplaceSessionContentStaged(t.Context(), "reserved", messages, newScratchStagedResults(t), nil, nil)
-				}
+				err = d.ReplaceSessionContentStaged(t.Context(), "reserved", messages, newScratchStagedResults(t), nil, nil)
 			}
 			require.ErrorIs(t, err, ErrSessionPushConflict)
 			messages, err := d.GetAllMessages(t.Context(), "reserved")

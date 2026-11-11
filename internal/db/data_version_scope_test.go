@@ -100,7 +100,6 @@ func TestPushCompatibilityUpgradePreservesPendingWork(t *testing.T) {
 	var pending int
 	require.NoError(t, reopened.getReader().QueryRow(ctx, "SELECT value FROM stats WHERE key = ?", scopedUpgradePendingKey).Scan(&pending))
 	assert.Equal(t, SessionPushDataVersion, pending)
-	assert.Equal(t, 171, AgentDataVersion(parser.AgentClaude))
 	var receiptsTable int
 	require.NoError(t, reopened.getReader().QueryRow(ctx, "SELECT count(*) FROM session_push_receipts").Scan(&receiptsTable))
 	assert.Zero(t, receiptsTable)

@@ -29,6 +29,7 @@ func TestSessionPushRealRebuildPreservesSnapshotAgainstNativeCollision(t *testin
 	t.Cleanup(engine.Close)
 	stats := engine.ResyncAll(t.Context(), nil)
 	require.False(t, stats.Aborted, "rebuild aborted: %v", stats.Warnings)
+	require.True(t, stats.ArchiveRebuilt)
 	messages, err := d.GetAllMessages(t.Context(), "reserved")
 	require.NoError(t, err)
 	require.Len(t, messages, 1)

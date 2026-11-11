@@ -127,15 +127,12 @@ their sessions are never loaded. There is no raw-file, asset, checkpoint,
 archive-wide metadata or embedding transfer. Text and paths already present in
 the selected transcript are included. Receiver content and image policies
 still apply. Usage-only archives cannot send or receive transcript pushes.
-The receiver groups pushed sessions under a `push-...` machine label derived
-from the source archive.
 
 The first accepted transcript is immutable in this version. Retrying it returns
 `"status":"unchanged"` without rewriting the receiver's session or curation,
 even if the sender's metadata or usage changes.
 A changed transcript or an existing session with the same ID returns a conflict;
 there is no force replacement. Finish recording a session before pushing it.
-A launcher parent link that would create a cycle also returns a conflict.
 Permanently deleting a pushed session keeps its receipt, so that ID cannot be
 accepted again, even if the transcript is unchanged.
 Ordinary source ingestion cannot replace a pushed snapshot. Rebuilds reserve

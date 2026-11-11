@@ -563,7 +563,7 @@ func TestSessionPushUsageRoundTrip(t *testing.T) {
 
 func TestSessionPushRichRoundTripProperty(t *testing.T) {
 	hegel.Test(t, func(ht *hegel.T) {
-		text := hegel.Draw(ht, hegel.Text())
+		text := db.SanitizeUTF8(hegel.Draw(ht, hegel.Text()))
 		// Model storage-valid text; distinct prefixes keep events separate.
 		if len(text) > 4096 {
 			text = string([]rune(text)[:min(1024, len([]rune(text)))])

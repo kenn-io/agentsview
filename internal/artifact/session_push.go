@@ -46,7 +46,6 @@ type sessionPushSegment struct {
 
 // These fields define version 1 of the receipt identity independently of
 // artifact versions, segment boundaries, and usage accounting.
-// Existing receipts rely on this encoding remaining stable across upgrades.
 type sessionPushIdentityMessage struct {
 	Ordinal           int                           `json:"ordinal"`
 	Role              string                        `json:"role"`

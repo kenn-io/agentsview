@@ -171,7 +171,7 @@ func sendSessionPush(ctx context.Context, u *url.URL, token string, payload []by
 		case http.StatusForbidden, http.StatusNotFound:
 			reason = "receiver is unavailable or does not accept session pushes"
 		case http.StatusConflict:
-			reason = "session conflicts with an accepted snapshot, existing session, or parent link; receiver cannot replace it"
+			reason = "session conflicts with an accepted snapshot or existing session; receiver cannot replace it"
 		case http.StatusRequestEntityTooLarge:
 			reason = "session exceeds receiver size limit"
 		case http.StatusUnsupportedMediaType:
