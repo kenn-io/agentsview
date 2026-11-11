@@ -189,6 +189,7 @@ func (s hermesSourceSet) changedHermesMembers(ctx context.Context, root, stateDB
 		return nil, false, ctx.Err()
 	}
 	var sources []SourceRef
+	selected := make(map[string]struct{})
 	err = listHermesMemberTokens(ctx, conn, "", func(id, token string, cron bool) error {
 		row, found, err := cursor.Lookup(ctx, VirtualSourcePath(stateDB, id))
 		if err != nil {
@@ -207,6 +208,7 @@ func (s hermesSourceSet) changedHermesMembers(ctx context.Context, root, stateDB
 		src.FingerprintSingleMember = true
 		source.Opaque = src
 		sources = append(sources, source)
+		selected[id] = struct{}{}
 		return nil
 	})
 	if err != nil {
@@ -214,7 +216,14 @@ func (s hermesSourceSet) changedHermesMembers(ctx context.Context, root, stateDB
 	}
 	// The token query has closed, so reuse the same snapshot for transcript membership.
 	err = s.discoverTranscriptEachWithMembership(ctx, root, sessionsDir, func(id string) (bool, error) {
-		return hermesStateDBHasReadableSession(ctx, conn, id)
+		if _, changed := selected[id]; changed {
+			return hermesStateDBHasReadableSession(ctx, conn, id)
+		}
+		// Unchanged and suppressed live members need only an indexed existence
+		// check. Orphans have no row; changed members get full readability checks.
+		var exists bool
+		err := conn.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM sessions WHERE id=?)`, id).Scan(&exists)
+		return exists, err
 	}, func(source SourceRef) error {
 		sources = append(sources, source)
 		return nil

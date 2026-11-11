@@ -1564,10 +1564,6 @@ func findHermesSourceFile(sessionsDir, sessionID string) string {
 	if _, err := os.Stat(candidate); err == nil {
 		return candidate
 	}
-	candidate = filepath.Join(sessionsDir, "session_"+sessionID+".jsonl")
-	if _, err := os.Stat(candidate); err == nil {
-		return candidate
-	}
 	candidate = filepath.Join(sessionsDir, "session_"+sessionID+".json")
 	if _, err := os.Stat(candidate); err == nil {
 		return candidate
