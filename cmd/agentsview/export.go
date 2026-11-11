@@ -400,6 +400,9 @@ func waitForExportBackfill(ctx context.Context, progress io.Writer, cfg *config.
 			return nil
 		case "failed":
 			return exportBackfillFailure(status)
+		case "pending", "running":
+		default:
+			return fmt.Errorf("unknown project identity evidence backfill state %q; run `agentsview export status`", status.State)
 		}
 		if FindWritableDaemonRuntime(cfg.DataDir, cfg.AuthToken) == nil {
 			if unavailableSince.IsZero() {

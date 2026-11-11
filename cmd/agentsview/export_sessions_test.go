@@ -959,6 +959,38 @@ func TestExportDaemonStartupCases(t *testing.T) {
 	})
 }
 
+func TestExportSessionsReadySurvivesUnrelatedFailure(t *testing.T) {
+	database := seedExportSessionsArchive(t)
+	require.NoError(t, database.FailProjectIdentityBackfill(t.Context(), errors.New("source check failed")))
+	require.NoError(t, database.Close())
+	forbidStartBackgroundServeForTransport(t, "ready export must not start a daemon")
+	for _, args := range [][]string{{"export", "sessions"}, {"export", "sessions", "--wait"}} {
+		stdout, stderr, err := executeExportSessionsCommand(newRootCommand(), args...)
+		require.NoError(t, err)
+		assert.Empty(t, stderr)
+		assert.Len(t, decodeExportSessionsDocument(t, stdout).Sessions, 2)
+	}
+}
+
+func TestExportWaitRejectsUnknownBackfillState(t *testing.T) {
+	path := pendingExportArchive(t, false)
+	dir := filepath.Dir(path)
+	raw, err := sql.Open("sqlite3", path)
+	require.NoError(t, err)
+	_, err = raw.ExecContext(t.Context(), `INSERT INTO background_migrations (name, state) VALUES ('session_project_identity_snapshots_v1', 'unexpected')`)
+	require.NoError(t, err)
+	require.NoError(t, raw.Close())
+	host, port := testPingServer(t)
+	writeDaemonRuntimeForTest(t, dir, host, port, "test", false)
+	ctx, cancel := context.WithTimeout(t.Context(), 3*time.Second)
+	defer cancel()
+	out, done := exportWaitCommand(t, ctx, io.Discard)
+	err = <-done
+	require.ErrorContains(t, err, "unexpected")
+	require.ErrorContains(t, err, "agentsview export status")
+	assert.Empty(t, out.String())
+}
+
 func TestExportSessionsWaitReadyDoesNotStartDaemon(t *testing.T) {
 	seedExportSessionsArchive(t)
 	forbidStartBackgroundServeForTransport(t, "ready export must not start a daemon")

@@ -6058,6 +6058,40 @@ func TestProjectIdentitySnapshotsDoNotCacheCheckoutHead(t *testing.T) {
 	assert.Equal(t, "branch-b", branches["app-b"])
 }
 
+func TestProjectIdentityBackfillReadySurvivesSourceError(t *testing.T) {
+	for _, completed := range []bool{false, true} {
+		t.Run(fmt.Sprintf("completed=%t", completed), func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), "sessions.db")
+			database := dbtest.OpenTestDBAt(t, path)
+			require.NoError(t, database.UpsertSession(t.Context(), db.Session{ID: "ready", Project: "project", Machine: "local", Agent: "codex"}))
+			require.NoError(t, database.UpsertProjectIdentityObservation(t.Context(), export.ProjectIdentityObservation{SessionID: "ready", Project: "project", Machine: "local", ObservedAt: time.Now().UTC()}))
+			if completed {
+				raw, err := sql.Open("sqlite3", path)
+				require.NoError(t, err)
+				_, err = raw.ExecContext(t.Context(), `INSERT INTO background_migrations (name, state) VALUES ('session_project_identity_snapshots_v1', 'completed')`)
+				require.NoError(t, err)
+				require.NoError(t, raw.Close())
+			}
+			before, err := database.ProjectIdentityBackfillStatus(t.Context())
+			require.NoError(t, err)
+			snapshots, err := database.ListSessionProjectIdentitySnapshots(t.Context())
+			require.NoError(t, err)
+			require.Len(t, snapshots, 1)
+			engine := NewEngine(t.Context(), database, EngineConfig{Machine: "local"})
+			defer engine.Close()
+			cause := errors.New("source check failed")
+			engine.sourceSyncErr = cause
+			require.ErrorIs(t, engine.BackfillProjectIdentitySnapshots(t.Context()), cause)
+			after, err := database.ProjectIdentityBackfillStatus(t.Context())
+			require.NoError(t, err)
+			assert.Equal(t, before, after)
+			afterSnapshots, err := database.ListSessionProjectIdentitySnapshots(t.Context())
+			require.NoError(t, err)
+			assert.Equal(t, snapshots, afterSnapshots)
+		})
+	}
+}
+
 func TestProjectIdentityBackfillFailureRecovers(t *testing.T) {
 	for _, tc := range []struct{ name, trigger string }{
 		{"queue", `CREATE TRIGGER block_backfill BEFORE INSERT ON background_migrations WHEN NEW.state = 'pending' BEGIN SELECT RAISE(FAIL, 'backfill blocked'); END`},

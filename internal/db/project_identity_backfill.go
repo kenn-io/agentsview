@@ -370,13 +370,20 @@ func (db *DB) FailProjectIdentityBackfill(ctx context.Context, cause error) erro
 	if err := db.requireWritable(); err != nil {
 		return err
 	}
+	status, err := db.ProjectIdentityBackfillStatus(ctx)
+	if err != nil {
+		return err
+	}
+	if status.State == "not_needed" || status.State == "completed" {
+		return nil
+	}
 	message := ""
 	if cause != nil {
 		message = cause.Error()
 	}
 	db.mu.Lock()
 	defer db.mu.Unlock()
-	_, err := db.getWriter().ExecContext(ctx, `
+	_, err = db.getWriter().ExecContext(ctx, `
 		INSERT INTO background_migrations (name, state, last_error)
 		VALUES (?, 'failed', ?)
 		ON CONFLICT(name) DO UPDATE SET
