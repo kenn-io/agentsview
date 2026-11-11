@@ -76,6 +76,8 @@ type VersionInfo struct {
 // CLI or daemon.
 const (
 	APIVersion = 16
+	// SyncPendingAPIVersion reports catch-up in sync status.
+	SyncPendingAPIVersion = 15
 	// UsageWaitAPIVersion supports bounded usage waits and safe refresh retries.
 	UsageWaitAPIVersion = 16
 	// KataAPIVersion is the first daemon API that serves /api/v1/kata/status.

@@ -164,7 +164,11 @@ func resolveSessionUsageBackend(cmd *cobra.Command, noSync bool) (*sessionUsageB
 			if capabilities.APIVersion > server.APIVersion {
 				return nil, fmt.Errorf("server API version %d is newer than this client supports; upgrade the client", capabilities.APIVersion)
 			}
-			if capabilities.APIVersion < server.UsageWaitAPIVersion {
+			minimum := server.UsageWaitAPIVersion
+			if query.OwnOnly || query.NoSync {
+				minimum = server.SyncPendingAPIVersion
+			}
+			if capabilities.APIVersion < minimum {
 				return nil, fmt.Errorf("server API version %d does not support --wait; upgrade or restart the server", capabilities.APIVersion)
 			}
 		}

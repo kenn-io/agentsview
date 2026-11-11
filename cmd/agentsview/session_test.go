@@ -2806,6 +2806,7 @@ func TestSessionUsageWaitArchiveOnly(t *testing.T) {
 }
 
 func TestSessionUsageWaitRemoteCapability(t *testing.T) {
+	shortenSessionUsagePoll(t)
 	for _, tc := range []struct {
 		name                       string
 		version                    int
@@ -2813,17 +2814,25 @@ func TestSessionUsageWaitRemoteCapability(t *testing.T) {
 	}{
 		{name: "old combined", version: 15},
 		{name: "future combined", version: server.APIVersion + 1},
-		{name: "old own only", version: 15, ownOnly: true},
-		{name: "old no sync", version: 15, noSync: true},
+		{name: "API 15 own only", version: 15, ownOnly: true, supported: true},
+		{name: "API 14 own only", version: 14, ownOnly: true},
+		{name: "API 15 no sync", version: 15, noSync: true, supported: true},
+		{name: "API 14 no sync", version: 14, noSync: true},
 		{name: "supported own only", version: server.UsageWaitAPIVersion, ownOnly: true, supported: true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			newAgentDataDir(t)
 			ts, requests := newRemoteUsageServer(t, remoteUsageSpec{canonicalID: "remote-session", apiVersion: tc.version})
 			original := ts.Config.Handler
+			statuses := 0
 			ts.Config.Handler = http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				if r.URL.Path == "/api/v1/sync/status" {
-					writeJSONResponse(w, `{}`)
+					statuses++
+					if statuses == 1 {
+						writeJSONResponse(w, `{"sync_pending":true}`)
+					} else {
+						writeJSONResponse(w, `{}`)
+					}
 					return
 				}
 				original.ServeHTTP(w, r)
@@ -2850,6 +2859,10 @@ func TestSessionUsageWaitRemoteCapability(t *testing.T) {
 			require.NoError(t, err)
 			require.NotNil(t, out)
 			assert.Equal(t, 42, out.TotalOutputTokens)
+			assert.Equal(t, 2, statuses)
+			assert.Empty(t, requests.SyncInput.ID)
+			assert.NotContains(t, requests.RequestPath, "/api/v1/sessions/sync")
+			assert.NotContains(t, requests.RequestPath, "/api/v1/sync")
 		})
 	}
 }
