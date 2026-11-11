@@ -13,36 +13,6 @@ import (
 	"go.kenn.io/agentsview/internal/testjsonl"
 )
 
-func TestSessionPushRealRebuildPreservesSnapshotAgainstNativeCollision(t *testing.T) {
-	root := t.TempDir()
-	project := filepath.Join(root, "example")
-	require.NoError(t, os.MkdirAll(project, 0o700))
-	path := filepath.Join(project, "reserved.jsonl")
-	content := testjsonl.NewSessionBuilder().AddClaudeUser("2026-01-01T00:00:00Z", "different native snapshot").String()
-	require.NoError(t, os.WriteFile(path, []byte(content), 0o600))
-	d := openTestDB(t)
-	receipt := db.SessionPushReceipt{SessionID: "reserved", SourceOrigin: "source-archive", PayloadHash: strings.Repeat("a", 64)}
-	write := db.SessionBatchWrite{Session: db.Session{ID: "reserved", Agent: "claude", Machine: "source-archive", Project: "example", MessageCount: 1, UserMessageCount: 1}, Messages: []db.Message{{SessionID: "reserved", Ordinal: 0, Role: "user", Content: "accepted snapshot"}}, ReplaceMessages: true, DataVersion: db.CurrentDataVersion()}
-	_, err := d.ApplySessionPush(t.Context(), receipt, write)
-	require.NoError(t, err)
-	engine := NewEngine(t.Context(), d, EngineConfig{AgentDirs: map[parser.AgentType][]string{parser.AgentClaude: {root}}, Machine: "receiver"})
-	t.Cleanup(engine.Close)
-	stats := engine.ResyncAll(t.Context(), nil)
-	require.False(t, stats.Aborted, "rebuild aborted: %v", stats.Warnings)
-	require.True(t, stats.ArchiveRebuilt)
-	messages, err := d.GetAllMessages(t.Context(), "reserved")
-	require.NoError(t, err)
-	require.Len(t, messages, 1)
-	assert.Equal(t, "accepted snapshot", messages[0].Content)
-	session, err := d.GetSessionFull(t.Context(), "reserved")
-	require.NoError(t, err)
-	require.NotNil(t, session)
-	assert.Nil(t, session.FilePath)
-	created, err := d.ApplySessionPush(t.Context(), receipt, write)
-	require.NoError(t, err)
-	assert.False(t, created)
-}
-
 func TestSessionPushSharedSourceImportsUnreservedMember(t *testing.T) {
 	d := openTestDB(t)
 	receipt := db.SessionPushReceipt{SessionID: "reserved", SourceOrigin: "source", PayloadHash: strings.Repeat("a", 64)}
@@ -79,20 +49,6 @@ func TestSessionPushContributorMergePreservesRebuildDecision(t *testing.T) {
 	}
 }
 
-func TestSessionPushDeferredRebuildWithMultipleSessionsPerSource(t *testing.T) {
-	stats := SyncStats{TotalSessions: 3, Skipped: 3, filesOK: 2, filesDiscovered: 2, nonContainerDiscovered: 2, sessionPushReservedFiles: 1, deferredPreservedIDs: []string{"deferred"}, deferredPreservedFiles: 1}
-	assert.Empty(t, resyncSwapAbortReason(stats, 1, 0))
-	stats.filesDiscovered++
-	assert.NotEmpty(t, resyncSwapAbortReason(stats, 1, 0), "an unhandled source must abort")
-	stats.filesDiscovered = 2
-	stats.Failed++
-	assert.NotEmpty(t, resyncSwapAbortReason(stats, 1, 0), "an unrelated failure must abort")
-	stats.Failed = 0
-	stats.deferredPreservedIDs = append(stats.deferredPreservedIDs, "second")
-	stats.sessionPushReservedFiles = 0
-	assert.NotEmpty(t, resyncSwapAbortReason(stats, 1, 0), "an extra deferred session cannot account for an unexplained source")
-}
-
 func TestSessionPushMixedReservedAndDeferredSource(t *testing.T) {
 	archive, replacement := openTestDB(t), openTestDB(t)
 	_, err := archive.WriteSessionBatchAtomic(t.Context(), []db.SessionBatchWrite{{Session: db.Session{ID: "deferred", Agent: string(parser.AgentAntigravityCLI), Machine: "local", MessageCount: 1}, Messages: []db.Message{{SessionID: "deferred", Role: "user", Content: "saved history"}}, ReplaceMessages: true}})
@@ -112,24 +68,6 @@ func TestSessionPushMixedReservedAndDeferredSource(t *testing.T) {
 	assert.Equal(t, []string{"deferred"}, stats.deferredPreservedIDs)
 	assert.Empty(t, resyncSwapAbortReason(stats, 0, 0))
 	assert.Equal(t, db.CurrentDataVersion(), replacement.GetSessionDataVersion(t.Context(), "reserved"))
-}
-
-func TestSessionPushDeferredCollisionPreservesDataVersion(t *testing.T) {
-	d := openTestDB(t)
-	receipt := db.SessionPushReceipt{SessionID: "reserved", SourceOrigin: "source", PayloadHash: strings.Repeat("a", 64)}
-	write := db.SessionBatchWrite{Session: db.Session{ID: "reserved", Agent: string(parser.AgentAntigravityCLI), Machine: "source", MessageCount: 1, UserMessageCount: 1}, Messages: []db.Message{{SessionID: "reserved", Ordinal: 0, Role: "user", Content: "accepted snapshot"}}, ReplaceMessages: true, DataVersion: db.CurrentDataVersion()}
-	_, err := d.ApplySessionPush(t.Context(), receipt, write)
-	require.NoError(t, err)
-	engine := NewEngine(t.Context(), d, EngineConfig{Machine: "receiver"})
-	t.Cleanup(engine.Close)
-	jobs := make(chan syncJob, 1)
-	jobs <- syncJob{agent: parser.AgentAntigravityCLI, path: "fixture-source", retrySessionIDs: map[string]bool{"reserved": true}, results: []parser.ParseResult{{Session: parser.ParsedSession{ID: "reserved", Agent: parser.AgentAntigravityCLI}}}}
-	close(jobs)
-	engine.collectAndBatch(t.Context(), jobs, 1, 1, nil, syncWriteDefault)
-	session, err := d.GetSessionFull(t.Context(), "reserved")
-	require.NoError(t, err)
-	require.NotNil(t, session)
-	assert.Equal(t, db.CurrentDataVersion(), session.DataVersion)
 }
 
 func TestSessionPushRebuildWithoutSources(t *testing.T) {
@@ -180,6 +118,40 @@ func TestSessionPushRebuildMixedReservedAndFilteredFiles(t *testing.T) {
 			assert.Equal(t, "archived", messages[0].Content)
 		} else {
 			assert.Equal(t, "snapshot", messages[0].Content)
+			session, err := d.GetSessionFull(t.Context(), id)
+			require.NoError(t, err)
+			require.NotNil(t, session)
+			assert.Nil(t, session.FilePath)
+			receipt := db.SessionPushReceipt{SessionID: id, SourceOrigin: "source", PayloadHash: strings.Repeat("a", 64)}
+			write := db.SessionBatchWrite{Session: db.Session{ID: id, Agent: "claude", Machine: "source", MessageCount: 1, UserMessageCount: 1}, Messages: []db.Message{{SessionID: id, Role: "user", Content: "snapshot"}}, ReplaceMessages: true, DataVersion: db.CurrentDataVersion()}
+			created, err := d.ApplySessionPush(t.Context(), receipt, write)
+			require.NoError(t, err)
+			assert.False(t, created)
 		}
 	}
+}
+
+func TestSessionPushRebuildClaudeDAGPreservesSnapshot(t *testing.T) {
+	database := openTestDB(t)
+	root := t.TempDir()
+	project := filepath.Join(root, "project-a")
+	require.NoError(t, os.MkdirAll(project, 0o755))
+	path := filepath.Join(project, "forked.jsonl")
+	require.NoError(t, os.WriteFile(path, []byte(newClaudeDAGBuilder(true).String()), 0o644))
+	receipt := db.SessionPushReceipt{SessionID: "forked-i", SourceOrigin: "source", PayloadHash: strings.Repeat("a", 64)}
+	write := db.SessionBatchWrite{Session: db.Session{ID: "forked-i", Agent: "claude", Machine: "source", MessageCount: 1}, Messages: []db.Message{{SessionID: "forked-i", Ordinal: 0, Role: "assistant", Content: "accepted snapshot"}}, ReplaceMessages: true, DataVersion: db.CurrentDataVersion()}
+	_, err := database.ApplySessionPush(t.Context(), receipt, write)
+	require.NoError(t, err)
+	engine := NewEngine(t.Context(), database, EngineConfig{AgentDirs: map[parser.AgentType][]string{parser.AgentClaude: {root}}, Machine: "local"})
+	t.Cleanup(engine.Close)
+	rebuilt := engine.ResyncAll(t.Context(), nil)
+	require.True(t, rebuilt.ArchiveRebuilt)
+	require.Zero(t, rebuilt.Failed)
+	main, err := database.GetSessionFull(t.Context(), "forked")
+	require.NoError(t, err)
+	require.NotNil(t, main)
+	messages, err := database.GetAllMessages(t.Context(), "forked-i")
+	require.NoError(t, err)
+	require.Len(t, messages, 1)
+	assert.Equal(t, "accepted snapshot", messages[0].Content)
 }

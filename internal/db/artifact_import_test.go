@@ -526,18 +526,11 @@ func TestApplyArtifactImportedSessionPreservesDeletedPush(t *testing.T) {
 	require.NoError(t, err)
 	write.Session.Machine = origin
 	imported := ArtifactImportedSession{Origin: origin, GID: gid, ManifestHash: strings.Repeat("b", 64), ImportedSessionID: gid}
-	require.NoError(t, database.DeleteSession(ctx, gid))
-	landing := ArtifactCheckpointLanding{Origin: origin, Sequence: 7, CheckpointSHA256: strings.Repeat("c", 64), CheckpointSize: 321}
-	entry := ArtifactCheckpointSession{GID: gid, ManifestHash: imported.ManifestHash}
-	_, err = database.RecordArtifactPeerCheckpointHead(ctx, ArtifactPeerCheckpointHead(landing))
+	_, err = database.getWriter().ExecContext(ctx, "DELETE FROM sessions WHERE id = ?", gid)
 	require.NoError(t, err)
-	require.NoError(t, database.BeginArtifactCheckpointStage(ctx, landing, 1))
-	require.NoError(t, database.StageArtifactCheckpointSessions(ctx, landing, []ArtifactCheckpointSession{entry}))
-	require.NoError(t, database.CompleteArtifactCheckpointStage(ctx, landing, 1))
-	result, err := database.ApplyStagedArtifactImportedSession(ctx, landing, entry, imported, write)
+	result, err := database.ApplyArtifactImportedSession(ctx, imported, write)
 	require.NoError(t, err)
 	assert.True(t, result.Suppressed)
-	require.NoError(t, database.RecordArtifactCheckpointLandingFromStage(ctx, landing))
 	session, err := database.GetSession(ctx, gid)
 	require.NoError(t, err)
 	assert.Nil(t, session)

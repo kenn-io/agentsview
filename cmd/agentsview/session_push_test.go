@@ -37,7 +37,7 @@ func TestPushSessionCommandToAuthenticatedReceiver(t *testing.T) {
 	source.SetAssetsDir(filepath.Join(sourceDir, "assets"))
 	source.SetToolResultImages(config.ToolResultImagesOffload)
 	_, err = source.WriteSessionBatchAtomic(t.Context(), []db.SessionBatchWrite{{
-		Session:  db.Session{ID: "host~codex:selected", Agent: "codex", Machine: "source", ParentSessionID: new("host~codex:parent"), RelationshipType: "subagent", MessageCount: 1, UserMessageCount: 1},
+		Session:  db.Session{ID: "host~codex:selected", Agent: "codex", Machine: "source", MessageCount: 1, UserMessageCount: 1},
 		Messages: []db.Message{{SessionID: "host~codex:selected", Ordinal: 0, Role: "user", Content: "host~codex:selected", ToolCalls: []db.ToolCall{{ToolName: "Read", ResultContent: `[{"type":"input_image","image_url":"data:image/png;base64,AAEC"}]`}}}}, ReplaceMessages: true,
 	}})
 	require.NoError(t, err)

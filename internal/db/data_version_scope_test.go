@@ -46,57 +46,60 @@ func TestCommitLinkUpgradeScope(t *testing.T) {
 }
 
 func TestImageTextCompatibilityVersion(t *testing.T) {
-	require.Equal(t, 173, ImageTextDataVersion)
-	require.ElementsMatch(t, []parser.AgentType{parser.AgentClaude, parser.AgentCowork, parser.AgentQoder, parser.AgentIcodemate}, ScopedDataVersionProviders(170, 171))
-	require.ElementsMatch(t, []parser.AgentType{parser.AgentCursorIDE}, ScopedDataVersionProviders(171, 172))
-	providers := ScopedDataVersionProviders(172, ImageTextDataVersion)
-	require.NotNil(t, providers)
-	require.Empty(t, providers)
-	d := testDB(t)
-	for _, id := range []string{"complete", "retry"} {
-		insertSession(t, d, id, "project", func(s *Session) { s.Agent = "codex" })
-	}
-	require.NoError(t, d.SetSessionDataVersion(t.Context(), "complete", 172))
-	require.NoError(t, d.SetSessionDataVersion(t.Context(), "retry", 171))
-	require.NoError(t, d.Update(t.Context(), func(tx *sql.Tx) error {
-		if err := writeUserVersion(t.Context(), tx, 172); err != nil {
-			return err
+	t.Run("image text", func(t *testing.T) {
+		require.Equal(t, 173, ImageTextDataVersion)
+		require.ElementsMatch(t, []parser.AgentType{parser.AgentClaude, parser.AgentCowork, parser.AgentQoder, parser.AgentIcodemate}, ScopedDataVersionProviders(170, 171))
+		require.ElementsMatch(t, []parser.AgentType{parser.AgentCursorIDE}, ScopedDataVersionProviders(171, 172))
+		providers := ScopedDataVersionProviders(172, ImageTextDataVersion)
+		require.NotNil(t, providers)
+		require.Empty(t, providers)
+		d := testDB(t)
+		for _, id := range []string{"complete", "retry"} {
+			insertSession(t, d, id, "project", func(s *Session) { s.Agent = "codex" })
 		}
-		return advanceDataVersion(t.Context(), tx, ImageTextDataVersion)
-	}))
-	assert.Equal(t, ImageTextDataVersion, d.GetSessionDataVersion(t.Context(), "complete"))
-	assert.Equal(t, 171, d.GetSessionDataVersion(t.Context(), "retry"))
-}
+		require.NoError(t, d.SetSessionDataVersion(t.Context(), "complete", 172))
+		require.NoError(t, d.SetSessionDataVersion(t.Context(), "retry", 171))
+		require.NoError(t, d.Update(t.Context(), func(tx *sql.Tx) error {
+			if err := writeUserVersion(t.Context(), tx, 172); err != nil {
+				return err
+			}
+			return advanceDataVersion(t.Context(), tx, ImageTextDataVersion)
+		}))
+		assert.Equal(t, ImageTextDataVersion, d.GetSessionDataVersion(t.Context(), "complete"))
+		assert.Equal(t, 171, d.GetSessionDataVersion(t.Context(), "retry"))
 
-func TestPushCompatibilityUpgradePreservesPendingWork(t *testing.T) {
-	ctx := t.Context()
-	path := filepath.Join(t.TempDir(), "archive.db")
-	d := testDBAtPath(t, path, "push compatibility upgrade")
-	for _, id := range []string{"complete", "retry"} {
-		insertSession(t, d, id, "project", func(s *Session) { s.Agent = "claude" })
-	}
-	insertSession(t, d, "codex", "project", func(s *Session) { s.Agent = "codex" })
-	require.NoError(t, d.SetSessionDataVersion(ctx, "complete", 173))
-	require.NoError(t, d.SetSessionDataVersion(ctx, "retry", 172))
-	require.NoError(t, d.SetSessionDataVersion(ctx, "codex", 173))
-	require.NoError(t, d.Update(ctx, func(tx *sql.Tx) error {
-		if err := writeUserVersion(ctx, tx, 173); err != nil {
-			return err
+	})
+	t.Run("pending push upgrade", func(t *testing.T) {
+		ctx := t.Context()
+		path := filepath.Join(t.TempDir(), "archive.db")
+		d := testDBAtPath(t, path, "push compatibility upgrade")
+		for _, id := range []string{"complete", "retry"} {
+			insertSession(t, d, id, "project", func(s *Session) { s.Agent = "claude" })
 		}
-		_, err := tx.ExecContext(ctx, "INSERT INTO stats(key, value) VALUES (?, ?)", scopedUpgradePendingKey, 173)
-		return err
-	}))
-	require.NoError(t, d.Close())
-	reopened, err := OpenIsolated(ctx, path)
-	require.NoError(t, err)
-	t.Cleanup(func() { require.NoError(t, reopened.Close()) })
-	assert.False(t, reopened.NeedsResync())
-	assert.Equal(t, SessionPushDataVersion, reopened.GetSessionDataVersion(ctx, "complete"))
-	assert.Equal(t, 172, reopened.GetSessionDataVersion(ctx, "retry"))
-	assert.Equal(t, 173, reopened.GetSessionDataVersion(ctx, "codex"))
-	var pending int
-	require.NoError(t, reopened.getReader().QueryRow(ctx, "SELECT value FROM stats WHERE key = ?", scopedUpgradePendingKey).Scan(&pending))
-	assert.Equal(t, SessionPushDataVersion, pending)
+		insertSession(t, d, "codex", "project", func(s *Session) { s.Agent = "codex" })
+		require.NoError(t, d.SetSessionDataVersion(ctx, "complete", 173))
+		require.NoError(t, d.SetSessionDataVersion(ctx, "retry", 172))
+		require.NoError(t, d.SetSessionDataVersion(ctx, "codex", 173))
+		require.NoError(t, d.Update(ctx, func(tx *sql.Tx) error {
+			if err := writeUserVersion(ctx, tx, 173); err != nil {
+				return err
+			}
+			_, err := tx.ExecContext(ctx, "INSERT INTO stats(key, value) VALUES (?, ?)", scopedUpgradePendingKey, 173)
+			return err
+		}))
+		require.NoError(t, d.Close())
+		reopened, err := OpenIsolated(ctx, path)
+		require.NoError(t, err)
+		t.Cleanup(func() { require.NoError(t, reopened.Close()) })
+		assert.False(t, reopened.NeedsResync())
+		assert.Equal(t, SessionPushDataVersion, reopened.GetSessionDataVersion(ctx, "complete"))
+		assert.Equal(t, 172, reopened.GetSessionDataVersion(ctx, "retry"))
+		assert.Equal(t, 173, reopened.GetSessionDataVersion(ctx, "codex"))
+		var pending int
+		require.NoError(t, reopened.getReader().QueryRow(ctx, "SELECT value FROM stats WHERE key = ?", scopedUpgradePendingKey).Scan(&pending))
+		assert.Equal(t, SessionPushDataVersion, pending)
+
+	})
 }
 
 // Version 134 reshapes Codex session IDs, so it must rebuild every provider.

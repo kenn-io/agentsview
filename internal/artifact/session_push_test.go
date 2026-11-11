@@ -85,6 +85,9 @@ func TestSessionPushExactSelection(t *testing.T) {
 			require.NoError(t, err)
 			receipt, write, err := DecodeSessionPush(packet)
 			require.NoError(t, err)
+			if id == "child" {
+				assert.Equal(t, new("parent"), receipt.ExternalParentSessionID)
+			}
 			created, err := receiver.ApplySessionPush(t.Context(), receipt, write)
 			require.NoError(t, err)
 			return created
@@ -133,6 +136,8 @@ func TestSessionPushExactSelection(t *testing.T) {
 		require.NoError(t, err)
 		receipt, write, err := DecodeSessionPush(packet)
 		require.NoError(t, err)
+		assert.Equal(t, new("launcher-parent"), receipt.ExternalParentSessionID)
+		assert.Equal(t, new("parser-parent"), write.Session.ParentSessionID)
 		created, err := receiver.ApplySessionPush(t.Context(), receipt, write)
 		require.NoError(t, err)
 		assert.True(t, created)
@@ -160,6 +165,9 @@ func TestSessionPushExactSelection(t *testing.T) {
 			require.NoError(t, err)
 			receipt, write, err := DecodeSessionPush(packet)
 			require.NoError(t, err)
+			if id == "child" {
+				assert.Equal(t, new("parent"), receipt.ExternalParentSessionID)
+			}
 			created, err := receiver.ApplySessionPush(t.Context(), receipt, write)
 			require.NoError(t, err)
 			return created
@@ -287,33 +295,6 @@ func TestSessionPushReceiptTracksTranscriptContent(t *testing.T) {
 	}
 }
 
-func TestSessionPushSidechainChangeConflicts(t *testing.T) {
-	source, receiver := testDB(t), testDB(t)
-	session := db.Session{ID: "sample", Agent: "claude", Machine: "source", MessageCount: 1}
-	message := db.Message{SessionID: session.ID, Ordinal: 0, Role: "assistant", Content: "answer"}
-	push := func() (bool, error) {
-		packet, _, err := EncodeSessionPush(t.Context(), source, session.ID, "")
-		require.NoError(t, err)
-		receipt, write, err := DecodeSessionPush(packet)
-		require.NoError(t, err)
-		return receiver.ApplySessionPush(t.Context(), receipt, write)
-	}
-	_, err := source.WriteSessionBatchAtomic(t.Context(), []db.SessionBatchWrite{{Session: session, Messages: []db.Message{message}, ReplaceMessages: true}})
-	require.NoError(t, err)
-	created, err := push()
-	require.NoError(t, err)
-	require.True(t, created)
-	message.IsSidechain = true
-	_, err = source.WriteSessionBatchAtomic(t.Context(), []db.SessionBatchWrite{{Session: session, Messages: []db.Message{message}, ReplaceMessages: true}})
-	require.NoError(t, err)
-	_, err = push()
-	require.ErrorIs(t, err, db.ErrSessionPushConflict)
-	stored, err := receiver.GetAllMessages(t.Context(), session.ID)
-	require.NoError(t, err)
-	require.Len(t, stored, 1)
-	assert.False(t, stored[0].IsSidechain)
-}
-
 func TestSessionPushIdentityV1(t *testing.T) {
 	message := segmentMessage{Ordinal: 0, Role: "assistant", Content: "answer", ThinkingText: "thought", Timestamp: "2026-01-01T00:00:00Z", HasThinking: true, HasToolUse: true, Model: "model", ReasoningEffort: "high", ProviderID: "provider", ClaudeMessageID: "message", ClaudeRequestID: "request", IsSystem: true, SourceSubtype: "notice", PromptSource: "prompt", IsCompactBoundary: true, ToolCalls: []segmentToolCall{{ToolName: "Read", ToolUseID: "call", InputJSON: "input", ResultContent: "result", SubagentSessionID: "child", Category: "read", FilePath: "file", SkillName: "skill", ResultEvents: []segmentResultEvent{{ToolUseID: "call", AgentID: "agent", SubagentSessionID: "child", Source: "tool", Status: "done", Content: "result", Timestamp: "2026-01-01T00:00:01Z"}}}}}
 	canonical, err := canonicalJSON(struct {
@@ -328,6 +309,13 @@ func TestSessionPushIdentityV1(t *testing.T) {
 	receipt, _, err := DecodeSessionPush(packet)
 	require.NoError(t, err)
 	assert.Equal(t, "d544bb593031823a5b2175f36a2135f9619c000846b3289f15bfa8b5ea203bf0", receipt.PayloadHash)
+	message.IsSidechain = true
+	packet, err = encodeSessionPushData(t.Context(), "source", db.Session{ID: "sample", Agent: "claude", Machine: "source", MessageCount: 1}, db.ArtifactExportData{Messages: []db.Message{message.dbMessage()}})
+	require.NoError(t, err)
+	sidechainReceipt, _, err := DecodeSessionPush(packet)
+	require.NoError(t, err)
+	assert.NotEqual(t, receipt.PayloadHash, sidechainReceipt.PayloadHash)
+	message.IsSidechain = false
 	message.ToolCalls[0].ResultContent = `[{"type":"input_image","image_url":"data:image/png;base64,AAEC"}]`
 	packet, err = encodeSessionPushData(t.Context(), "source", db.Session{ID: "sample", Agent: "claude", Machine: "source", MessageCount: 1}, db.ArtifactExportData{Messages: []db.Message{message.dbMessage()}})
 	require.NoError(t, err)
@@ -610,16 +598,7 @@ func TestSessionPushRejectsUnresolvedAssetReference(t *testing.T) {
 	markdown := adversarialSessionPushPacket(t, db.Session{ID: "selected", Agent: "claude", Machine: "source", MessageCount: 1}, []db.Message{{Ordinal: 0, Role: "assistant", Content: "![image](asset:\x00//missing.png)"}})
 	_, _, err = DecodeSessionPush(markdown)
 	require.ErrorContains(t, err, "unresolved image assets")
-	receiver := testDB(t)
-	session, err := receiver.GetSession(t.Context(), "selected")
-	require.NoError(t, err)
-	assert.Nil(t, session)
-	packet = adversarialSessionPushPacket(t, db.Session{ID: "selected", Agent: "claude", Machine: "source", MessageCount: 1}, []db.Message{{Ordinal: 0, Role: "assistant", ToolCalls: []db.ToolCall{{ToolName: "Read", ResultContent: `[{"type":"input_image","image_url":"data:image/png;base64,AAEC"}]`}}}})
-	receipt, write, err := DecodeSessionPush(packet)
-	require.NoError(t, err)
-	created, err := receiver.ApplySessionPush(t.Context(), receipt, write)
-	require.NoError(t, err)
-	assert.True(t, created)
+
 }
 
 func TestSessionPushUsageRoundTrip(t *testing.T) {

@@ -359,19 +359,6 @@ func TestSyncClaudeDAGIntentionalSkipCompletesActiveMembers(t *testing.T) {
 				"a completed active branch must not rewrite on restart")
 			assert.Zero(t, noop.Failed)
 
-			if tc.reserved && !tc.syncSingle {
-				rebuilt := restarted.ResyncAll(t.Context(), nil)
-				require.True(t, rebuilt.ArchiveRebuilt)
-				require.Zero(t, rebuilt.Failed)
-				main, err := database.GetSessionFull(t.Context(), "forked")
-				require.NoError(t, err)
-				require.NotNil(t, main)
-				messages, err := database.GetAllMessages(t.Context(), "forked-i")
-				require.NoError(t, err)
-				require.Len(t, messages, 1)
-				assert.Equal(t, "accepted snapshot", messages[0].Content)
-			}
-
 			if !tc.trashed {
 				return
 			}
