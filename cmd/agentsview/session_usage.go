@@ -47,8 +47,8 @@ func newSessionUsageCommand() *cobra.Command {
 			"Claude subagent transcripts beside the named session. " +
 			"--own-only reports the named transcript's usage.\n\n" +
 			"Missing daemon IDs return a retry error while startup ingestion or an archive rebuild is pending; " +
-			"otherwise they return exit 2. --wait gives HTTP lookup, startup, and refresh up to 30 seconds after daemon discovery. Known sessions can refresh during catch-up. Direct and --pg reads do not wait. " +
-			"--no-sync and HTTP --own-only read only the archive and can wait for existing work. " +
+			"otherwise they return exit 2. --wait retries missing IDs for up to 30 seconds after daemon discovery; at the deadline, clear status returns exit 2 and pending work returns a retry error. Known sessions can refresh during catch-up. Direct and --pg reads do not wait. " +
+			"HTTP --own-only reads archived usage and can start deferred ingestion for a missing session with --wait. --no-sync never starts source sync. " +
 			"If refresh is refused or fails, the command shows archived usage with a warning; " +
 			"JSON sets refresh_incomplete. Direct mode keeps its targeted source lookup.\n\n" +
 			"Exit 0 means token data, cost, or plan figures are present. " +
@@ -295,7 +295,6 @@ func httpSessionUsageData(
 	}
 	resolvedID, err := resolveServiceSessionID(waitCtx, backend, sessionID)
 	missing := errors.Is(err, errSessionNotFound)
-	known := err == nil
 	if err != nil && !missing && waitCtx.Err() == nil {
 		return nil, tokenUseExitErr, err
 	}
@@ -305,24 +304,17 @@ func httpSessionUsageData(
 	}
 	var waitErr error
 	if query.Wait || missing {
-		waitErr = waitSessionUsageReady(waitCtx, baseURL, token, query.Wait, known, refresh)
+		resolvedID, waitErr = waitSessionUsageReady(waitCtx, baseURL, token, backend, sessionID, resolvedID, query.Wait, !query.NoSync, refresh)
 		if ctx.Err() != nil {
 			return nil, tokenUseExitErr, ctx.Err()
+		}
+		if errors.Is(waitErr, errSessionNotFound) {
+			return nil, tokenUseExitNotFound, nil
 		}
 		if !query.Wait && waitErr != nil {
 			return nil, tokenUseExitErr, waitErr
 		}
-		if waitErr == nil && !known {
-			resolvedID, err = resolveServiceSessionID(waitCtx, backend, sessionID)
-			if waitCtx.Err() != nil && ctx.Err() == nil {
-				waitErr = waitCtx.Err()
-			} else if errors.Is(err, errSessionNotFound) {
-				return nil, tokenUseExitNotFound, nil
-			} else if err != nil {
-				return nil, tokenUseExitErr, err
-			}
-		}
-		if waitErr != nil && !known {
+		if waitErr != nil && resolvedID == "" {
 			return nil, tokenUseExitErr, fmt.Errorf("waiting for session usage: %w; wait for syncing or rebuilding to finish, then retry", waitErr)
 		}
 	}
@@ -376,8 +368,9 @@ func sessionUsageStatusError(wait bool, err error) error {
 	return err
 }
 
-func waitSessionUsageReady(ctx context.Context, baseURL, token string, wait, known, refresh bool) error {
+func waitSessionUsageReady(ctx context.Context, baseURL, token string, backend service.SessionService, sessionID, resolvedID string, wait, allowSync, refresh bool) (string, error) {
 	started := false
+	clearMissing := false
 	var startErr error
 	startupCtx, cancelStartup := context.WithCancel(ctx)
 	result := make(chan error, 1)
@@ -397,19 +390,39 @@ func waitSessionUsageReady(ctx context.Context, baseURL, token string, wait, kno
 		default:
 		}
 	}
-	_, err := backoff.Retry(ctx, func() (struct{}, error) {
+	id, err := backoff.Retry(ctx, func() (string, error) {
 		collectStart()
 		startup, stale, pending, statusErr := httpSessionSyncStatus(ctx, baseURL, token)
 		if statusErr != nil {
-			return struct{}{}, sessionUsageStatusError(wait, statusErr)
+			return resolvedID, sessionUsageStatusError(wait, statusErr)
 		}
-		if !startup && !stale && (!pending || (known && refresh)) {
-			return struct{}{}, nil
+		if startup || stale || pending {
+			clearMissing = false
 		}
-		if !wait {
-			return struct{}{}, backoff.Permanent(errors.New("session usage is not ready; wait for syncing or rebuilding to finish, then retry"))
+		if !wait && (startup || stale || pending) {
+			return resolvedID, backoff.Permanent(errors.New("session usage is not ready; wait for syncing or rebuilding to finish, then retry"))
 		}
-		if startup && !stale && refresh && !started {
+		if !startup && !stale && resolvedID == "" {
+			found, lookupErr := resolveServiceSessionID(ctx, backend, sessionID)
+			if lookupErr == nil {
+				resolvedID = found
+			} else if !errors.Is(lookupErr, errSessionNotFound) {
+				if ctx.Err() != nil && clearMissing {
+					return resolvedID, errSessionNotFound
+				}
+				return resolvedID, backoff.Permanent(lookupErr)
+			} else if !pending {
+				clearMissing = true
+				if !wait {
+					return resolvedID, backoff.Permanent(errSessionNotFound)
+				}
+				return resolvedID, errSessionNotFound
+			}
+		}
+		if resolvedID != "" && !startup && !stale && (!pending || refresh) {
+			return resolvedID, nil
+		}
+		if startup && !stale && allowSync && (refresh || resolvedID == "") && !started {
 			started = true
 			// Startup may become ready before the sync finishes draining sources.
 			go func() {
@@ -417,18 +430,20 @@ func waitSessionUsageReady(ctx context.Context, baseURL, token string, wait, kno
 				result <- err
 			}()
 		}
-		return struct{}{}, errors.New("session usage is not ready")
+		return resolvedID, errors.New("session usage is not ready")
 	}, backoff.WithBackOff(backoff.NewConstantBackOff(sessionUsagePollInterval)), backoff.WithMaxTries(0), backoff.WithMaxElapsedTime(0))
 	if err == nil {
-		return nil
+		return id, nil
 	}
 	collectStart()
-	if ctx.Err() != nil {
-		err = ctx.Err()
-	} else {
-		err = backoff.AsRetryError(err).LastErr
+	err = backoff.AsRetryError(err).LastErr
+	if errors.Is(err, errSessionNotFound) {
+		return id, err
 	}
-	return errors.Join(err, startErr)
+	if ctx.Err() != nil {
+		err = errors.Join(ctx.Err(), err)
+	}
+	return id, errors.Join(err, startErr)
 }
 
 func refreshSessionUsage(ctx context.Context, backend service.SessionService, id string, wait bool) error {
