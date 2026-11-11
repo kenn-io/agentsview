@@ -2067,7 +2067,12 @@ fixtures retain this field; missing identities remain source-local.
 - **Usage and cost:** Assistant message data persists input, output, reasoning,
   cache-read, cache-write, model, and a calculated currency cost. Agentsview
   reads the token/model fields but deliberately ignores the stored cost and
-  catalog-prices the normalized usage.
+  catalog-prices the normalized usage. Reverified 2026-11-11: the pinned
+  `getUsage` stores `output` as the SDK output minus reasoning and bills
+  `reasoning` separately at the output rate. Every tagged release from
+  v0.1.1 through v0.1.16 (where the file moved to `packages/cli`) and the
+  2026-11-09 default branch do the same. Stored output adds reasoning back;
+  see the shared rule in the `opencode` entry.
 - **Agentsview:** `internal/parser/mimocode.go` delegates to
   `internal/parser/opencode.go`; compare MiMo's pinned schema with OpenCode
   whenever their shared parser changes.
@@ -2347,13 +2352,36 @@ preservation of archived messages for OpenCode, Kilo, MiMoCode, and Icodemate.
   user message and falls back to the title only when there is none. Kilo and
   MiMo Code share this parser.
 
-- **Usage and cost:** Assistant messages persist input, output, cache-read, and
-  cache-write tokens, plus model/provider identity. Agentsview computes price
-  from those tokens rather than consuming a persisted USD total. Reverified
-  2026-09-07: the pinned `message-v2.ts` hydrates message data independently
-  of its part rows. Agentsview retains model identity even when no recognized
-  token fields are available; usage-only resync guards check model loss before
-  checking token counts.
+- **Usage and cost:** Assistant messages persist input, output, reasoning,
+  cache-read, and cache-write tokens, plus model/provider identity. Agentsview
+  computes price from those tokens rather than consuming a persisted USD total.
+  Reverified 2026-09-07: the pinned `message-v2.ts` hydrates message data
+  independently of its part rows. Agentsview retains model identity even when
+  no recognized token fields are available; usage-only resync guards check
+  model loss before checking token counts.
+
+- **Reasoning tokens (2026-11-11):** The `tokens.output` convention changed.
+  Through v1.3.15, `getUsage` stored the SDK output count, which includes
+  reasoning. Commit
+  [`280eb16e`](https://github.com/anomalyco/opencode/commit/280eb16e7704791b031481bc5415fbecfdec0319)
+  (#21047, first released in v1.3.16) stores output minus reasoning and bills
+  reasoning separately; the pinned
+  [session.ts](https://github.com/anomalyco/opencode/blob/67caf894e0843ee370e72839e8265e483233479b/packages/opencode/src/session/session.ts#L338)
+  still does. The v2 `session_message` writer,
+  [publish-llm-event.ts](https://github.com/anomalyco/opencode/blob/67caf894e0843ee370e72839e8265e483233479b/packages/core/src/session/runner/publish-llm-event.ts#L18),
+  stores `visibleOutputTokens`, also output minus reasoning, and first shipped
+  in v1.16.0; its tokens carry no `total`. Since v1.1.57 (commit `0fd6f365`)
+  v1 records also persist `tokens.total`, the SDK input-plus-output total.
+  Agentsview stores `output_tokens` with reasoning included and
+  `reasoning_tokens` as the subset, which pricing bills once. For a v1 record
+  it adds reasoning back only when `total` equals input, cache-read,
+  cache-write, output, and reasoning combined; a record without `total` (all
+  older than the change) or matching neither sum keeps its stored output. v2
+  projections always add it. Kilo, MiMo Code, and ICodeMate share this rule.
+  `TestParseOpenCodeDB_ReasoningTokens` and
+  `TestOpenCodeFamilyReasoningTokensArePricedOnce` cover both conventions
+  through parse, storage, and cost. Data version 173 reparses the four
+  providers in place.
 
 - **Working directory:** SQLite sessions store a per-session `directory` and a
   `project_id`. The synthetic `global` project uses `worktree=/`. Agentsview
@@ -2530,8 +2558,15 @@ preservation of archived messages for OpenCode, Kilo, MiMoCode, and Icodemate.
   and
   [message.ts](https://github.com/Kilo-Org/kilocode/blob/938919ab72e3977d1512e0363417270e3337c7b1/packages/core/src/session/message.ts).
 - **Usage and cost:** Compatible message data includes input, output,
-  cache-read, and cache-write tokens with model identity. The parser does not
-  consume a Kilo-reported currency total; Agentsview catalog-prices tokens.
+  reasoning, cache-read, and cache-write tokens with model identity. The parser
+  does not consume a Kilo-reported currency total; Agentsview catalog-prices
+  tokens. Reverified 2026-11-11: Kilo merged OpenCode's reasoning change
+  (`280eb16e`) in v7.2.6; v7.2.5 and earlier store output with reasoning
+  included. The pinned
+  [session.ts](https://github.com/Kilo-Org/kilocode/blob/938919ab72e3977d1512e0363417270e3337c7b1/packages/opencode/src/session/session.ts#L443)
+  subtracts reasoning, and its v2 writer stores `visibleOutputTokens`. Kilo
+  had no `session_message` writer before v7.2.6. The `opencode` entry's
+  reasoning rule applies.
 - **Agentsview:** `internal/parser/kilo.go` uses the OpenCode family parser.
   Kilo migrations mean the pinned current source must be compared with legacy
   fixtures when changing compatibility.
@@ -4849,7 +4884,10 @@ schemas keep their existing ordering behavior.
   entry.
 - **Usage and cost:** Compatible messages can persist input, output, cache-read,
   cache-write, and model identity. Agentsview catalog-prices these values and
-  consumes no product-reported USD total.
+  consumes no product-reported USD total. Without producer source, the
+  `opencode` entry's reasoning rule applies by inference: a v1 record adds
+  reasoning to output only when its own `tokens.total` shows output excludes
+  it, and a v2 projection always adds it.
 - **Agentsview:** `internal/parser/icodemate.go` delegates to
   `internal/parser/opencode.go` for the VSCode OpenCode path;
   `internal/parser/icodemate_cli.go` parses the Claude-format CLI projects

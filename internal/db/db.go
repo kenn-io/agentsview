@@ -668,7 +668,11 @@ CREATE INDEX IF NOT EXISTS idx_provider_freshness_updated_at
 // the response's web-search total. Re-parse Claude-format sources in place;
 // source and session identities are unchanged.)
 // (172: import Cursor IDE chunked conversation headers.)
-const dataVersion = 172
+// (173: count OpenCode-family reasoning tokens in output when the writer
+// stored output without them, and record reasoning_tokens. Re-parse OpenCode,
+// Kilo, MiMo Code and ICodeMate sources in place; source and session
+// identities are unchanged.)
+const dataVersion = 173
 
 const archiveOnlyVersionBase = 1 << 20
 

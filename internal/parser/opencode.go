@@ -1378,7 +1378,7 @@ func buildOpenCodeParsedSessionContext(
 		pm := buildOpenCodeMessage(
 			ctx, ordinal, m.id, role, m.timeCreated, msgParts, cwd,
 		)
-		applyOpenCodeTokenUsage(&pm, md, m.data, msgParts)
+		applyOpenCodeTokenUsage(&pm, md, m.data, msgParts, false)
 		if strings.TrimSpace(pm.Content) == "" &&
 			!pm.HasToolUse {
 			continue
@@ -1476,11 +1476,18 @@ func finishOpenCodeSessionContext(
 // sets its coverage flag, while a tokens object with no
 // recognized fields (empty `{}` or a foreign schema) leaves
 // TokenUsage empty so the usage query filter skips the row.
+//
+// Stored output_tokens includes reasoning and reasoning_tokens is the
+// subset, the convention pricing bills from. OpenCode-family writers
+// changed how they store tokens.output, so openCodeOutputExcludesReasoning
+// decides per record whether reasoning must be added back. projection marks
+// a v2 session_message row.
 func applyOpenCodeTokenUsage(
 	pm *ParsedMessage,
 	md openCodeMessageData,
 	dataRaw string,
 	parts []openCodePartRow,
+	projection bool,
 ) {
 	if md.ModelID != "" {
 		pm.Model = md.ModelID
@@ -1498,19 +1505,26 @@ func applyOpenCodeTokenUsage(
 		return
 	}
 
+	output := fields.output
+	if openCodeOutputExcludesReasoning(fields, projection) {
+		output += fields.reasoning
+	}
 	normalized := map[string]int{
 		"input_tokens":                fields.input,
-		"output_tokens":               fields.output,
+		"output_tokens":               output,
 		"cache_read_input_tokens":     fields.cacheRead,
 		"cache_creation_input_tokens": fields.cacheCreate,
+	}
+	if fields.reasoning > 0 {
+		normalized["reasoning_tokens"] = fields.reasoning
 	}
 	j, err := json.Marshal(normalized, json.Deterministic(true))
 	if err != nil {
 		return
 	}
 	pm.TokenUsage = j
-	pm.OutputTokens = fields.output
-	pm.HasOutputTokens = fields.hasOutput
+	pm.OutputTokens = output
+	pm.HasOutputTokens = fields.hasOutput || fields.reasoning > 0
 	pm.ContextTokens = fields.input +
 		fields.cacheRead + fields.cacheCreate
 	pm.HasContextTokens = fields.hasInput ||
@@ -1520,12 +1534,41 @@ func applyOpenCodeTokenUsage(
 type openCodeTokenFields struct {
 	input          int
 	output         int
+	reasoning      int
 	cacheRead      int
 	cacheCreate    int
+	total          int
 	hasInput       bool
 	hasOutput      bool
 	hasCacheRead   bool
 	hasCacheCreate bool
+	hasTotal       bool
+}
+
+// openCodeOutputExcludesReasoning reports whether a record's tokens.output
+// omits its tokens.reasoning, so the stored output must add it back.
+//
+// OpenCode before v1.3.16 and Kilo before v7.2.6 stored the SDK's output
+// count, which already includes reasoning. Later builds, every MiMo Code
+// release, and every v2 session_message writer store output minus reasoning
+// and bill reasoning separately. The v1 writers in both eras persist
+// tokens.total, the SDK's input-plus-output total, so the record shows which
+// convention wrote it: a total that counts reasoning on top of output means
+// output excludes it. A v1 record with no total or a total that matches
+// neither sum keeps its stored output, which never bills reasoning twice.
+// v2 projections carry no total; all of their writers postdate the change.
+func openCodeOutputExcludesReasoning(fields openCodeTokenFields, projection bool) bool {
+	if fields.reasoning <= 0 {
+		return false
+	}
+	if projection {
+		return true
+	}
+	if !fields.hasTotal {
+		return false
+	}
+	base := fields.input + fields.cacheRead + fields.cacheCreate + fields.output
+	return fields.total == base+fields.reasoning
 }
 
 func collectOpenCodeTokenFields(
@@ -1550,6 +1593,13 @@ func collectOpenCodeTokenFields(
 			fields.output = int(field.Int())
 			fields.hasOutput = true
 			value = true
+		}
+		if field := tokens.Get("reasoning"); field.Exists() {
+			fields.reasoning = max(int(field.Int()), 0)
+		}
+		if field := tokens.Get("total"); field.Exists() && field.Type == gjson.Number {
+			fields.total = int(field.Int())
+			fields.hasTotal = true
 		}
 		if field := tokens.Get("cache.read"); field.Exists() {
 			fields.cacheRead = int(field.Int())
