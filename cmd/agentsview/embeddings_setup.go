@@ -60,19 +60,17 @@ func (v *liveVectorServing) startSharedChoice() {
 	if v.cfg.ArchiveContent.UsageOnly() || v.database.ArchiveContent().UsageOnly() || v.cfg.DeploymentEmbeddings != nil {
 		return
 	}
-	chosen, err := embedlocal.ChoiceRecorded()
-	if err != nil {
-		log.Printf("search by meaning: read shared choice: %v", err)
-	}
 	var approvedBytes int64
-	if chosen && !v.cfg.Vector.Enabled {
-		approvedBytes = math.MaxInt64
-	}
 	embeddings := v.cfg.Vector.Embeddings
 	if !v.cfg.Vector.Enabled {
+		chosen, err := embedlocal.ChoiceRecorded()
+		if err != nil {
+			log.Printf("search by meaning: read shared choice: %v", err)
+		}
 		if !chosen {
 			return
 		}
+		approvedBytes = math.MaxInt64
 		// SetupStatus reports candidate errors other than an explicit choice.
 		if embeddings, err = v.cfg.VectorSetupEmbeddings(true); err != nil {
 			return
@@ -340,15 +338,6 @@ func (v *liveVectorServing) activate(deployment config.VectorEmbeddingsServerCon
 	)
 	if err != nil {
 		return err
-	}
-	if automatic && v.serving.manager != nil {
-		current, err := v.reload()
-		if err != nil {
-			return err
-		}
-		if !current.Vector.Enabled {
-			return nil
-		}
 	}
 	if v.serving.manager == nil {
 		if err := cfg.SaveVectorSetup(builtin, automatic, pinnedEndpoint); errors.Is(err, config.ErrVectorSetupIneligible) {
