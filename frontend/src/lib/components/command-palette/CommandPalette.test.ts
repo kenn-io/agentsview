@@ -660,8 +660,12 @@ describe("CommandPalette", () => {
       document.querySelectorAll<HTMLButtonElement>(".palette-error button"),
     ).find((button) => button.textContent?.trim() === "Retry");
     expect(retry).toBeDefined();
-    retry?.click();
+    retry!.focus();
+    expect(document.activeElement).toBe(retry);
+    retry!.click();
     expect(mockSearchStore.retry).toHaveBeenCalledOnce();
+    expect(document.activeElement).toBe(document.querySelector(".palette-input"));
+    expect(document.querySelector<HTMLInputElement>(".palette-input")?.value).toBe("match");
     expect(mockSearchStore.search).not.toHaveBeenCalled();
     expect(mockRouter.navigateToSession).not.toHaveBeenCalled();
 

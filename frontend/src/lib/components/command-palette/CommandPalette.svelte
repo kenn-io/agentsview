@@ -394,7 +394,10 @@
                 tone="info"
                 surface="soft"
                 label={m.shared_retry()}
-                onclick={() => searchStore.retry()}
+                onclick={() => {
+                  inputRef?.focus();
+                  searchStore.retry();
+                }}
               />
             </div>
           </div>

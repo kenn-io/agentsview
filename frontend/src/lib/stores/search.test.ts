@@ -196,6 +196,12 @@ describe("SearchStore", () => {
         .mockReturnValueOnce(second.promise);
       store.search("needle", "alpha");
       await runDebounce();
+      expect(searchService.getApiV1Search).toHaveBeenCalledTimes(1);
+      expect(store.isSearching).toBe(true);
+      expect(store.error).toBeNull();
+      await vi.advanceTimersByTimeAsync(299);
+      expect(searchService.getApiV1Search).toHaveBeenCalledTimes(1);
+      await vi.advanceTimersByTimeAsync(1);
       expect(searchService.getApiV1Search).toHaveBeenCalledTimes(2);
       expect(searchService.getApiV1Search.mock.calls[0]).toEqual(
         searchService.getApiV1Search.mock.calls[1],
@@ -217,6 +223,7 @@ describe("SearchStore", () => {
       .mockRejectedValueOnce(new ApiError(500, "second"));
     store.search("needle");
     await runDebounce();
+    await vi.advanceTimersByTimeAsync(300);
     expect(searchService.getApiV1Search).toHaveBeenCalledTimes(2);
     expect(store.error).toEqual({ detail: "second", kind: "generic" });
     expect(reportErrorShown).toHaveBeenCalledTimes(1);
@@ -252,6 +259,18 @@ describe("SearchStore", () => {
       expect(reportErrorShown).not.toHaveBeenCalled();
     },
   );
+
+  it("does not retry when the search is canceled during the delay", async () => {
+    const store = createSearchStore(memoryStorage());
+    searchService.getApiV1Search.mockRejectedValueOnce(new ApiError(503, "unavailable"));
+    store.search("needle");
+    await runDebounce();
+    store.clear();
+    await vi.advanceTimersByTimeAsync(300);
+    expect(searchService.getApiV1Search).toHaveBeenCalledTimes(1);
+    expect(store.error).toBeNull();
+    expect(reportErrorShown).not.toHaveBeenCalled();
+  });
 
   it.each(["semantic", "hybrid"] as const)(
     "calls content search with exact %s request and trimmed pattern",

@@ -279,6 +279,8 @@ export class SearchStore {
             !isTransient(error)
           )
             throw error;
+          await new Promise((resolve) => setTimeout(resolve, 300));
+          if (signal.aborted) return;
           response = await SearchService.getApiV1Search(params, { signal });
         }
         results = normalizeFullText(response.results ?? []);

@@ -70,11 +70,14 @@ test("search shows placeholder rows at a result-list size while it runs", async 
   await expect(page.locator(".palette-results")).toHaveAttribute("aria-busy", "false");
 });
 
-test("Retry runs the same search after both automatic attempts fail", async ({ page }) => {
-  let requests = 0;
+test("Retry keeps focus and filters through another failure and success", async ({ page }) => {
+  const urls: string[] = [];
+  let release: () => void = () => {};
+  const held = new Promise<void>((resolve) => (release = resolve));
   await page.route("**/api/v1/search?**", async (route) => {
-    requests++;
-    if (requests <= 2) {
+    urls.push(route.request().url());
+    if (urls.length === 3) await held;
+    if (urls.length <= 4) {
       await route.fulfill({ status: 503, json: { error: "Search temporarily unavailable" } });
     } else {
       await route.continue();
@@ -82,10 +85,21 @@ test("Retry runs the same search after both automatic attempts fail", async ({ p
   });
   await page.goto("/usage");
   await openSearch(page, "synchronous DB read");
-  await expect(page.getByRole("button", { name: "Retry" })).toBeVisible();
-  expect(requests).toBe(2);
-  await page.getByRole("button", { name: "Retry" }).click();
+  const retry = page.getByRole("button", { name: "Retry" });
+  const input = page.locator(".palette-input");
+  await expect(retry).toBeVisible();
+  await retry.focus();
+  await page.keyboard.press("Enter");
+  await expect(page.locator(".palette-loading")).toBeVisible();
+  await expect(input).toBeFocused();
+  release();
+  await expect(retry).toBeVisible();
+  await expect(input).toBeFocused();
+  await retry.focus();
+  await page.keyboard.press("Enter");
   await expect(page.locator(".palette-item").first()).toBeVisible();
-  await expect(page.locator(".palette-input")).toHaveValue("synchronous DB read");
-  expect(requests).toBe(3);
+  await expect(input).toBeFocused();
+  await expect(input).toHaveValue("synchronous DB read");
+  expect(urls).toHaveLength(5);
+  expect(new Set(urls).size).toBe(1);
 });
