@@ -165,6 +165,49 @@ func keptUsageFixture(t *testing.T) (*db.DB, *Sync, *Store, *usageReadCounter) {
 	return local, syncer, store, counter
 }
 
+func TestUsageKeptJournalReplacementAtSameRevision(t *testing.T) {
+	for _, cache := range []bool{false, true} {
+		t.Run(map[bool]string{false: "direct", true: "cache"}[cache], func(t *testing.T) {
+			_, _, store, _ := keptUsageFixture(t)
+			ctx := t.Context()
+			if cache {
+				attachUsageCacheProbe(t, store, t.TempDir())
+				t.Cleanup(func() { require.NoError(t, store.usageCache.Close()) })
+			}
+			filter := db.UsageFilter{From: "2026-01-01", To: "2026-01-01", Timezone: "UTC", Breakdowns: true}
+			before, err := store.GetDailyUsage(ctx, filter)
+			require.NoError(t, err)
+			topBefore, err := store.GetTopSessionsByCost(ctx, filter, 10)
+			require.NoError(t, err)
+			version := store.keptUsageVersion(ctx, "test")
+			require.NotEmpty(t, version)
+			var revision int64
+			require.NoError(t, store.pg.QueryRowContext(ctx, `SELECT value::bigint FROM sync_metadata WHERE key='usage_change_revision'`).Scan(&revision))
+			_, err = store.pg.ExecContext(ctx, `UPDATE usage_events SET output_tokens=900 WHERE session_id='paid-a'`)
+			require.NoError(t, err)
+			_, err = store.pg.ExecContext(ctx, `ALTER TABLE usage_session_changes RENAME TO old_usage_session_changes;
+CREATE TABLE usage_session_changes (LIKE old_usage_session_changes INCLUDING ALL);
+INSERT INTO usage_session_changes SELECT * FROM old_usage_session_changes`)
+			require.NoError(t, err)
+			_, err = store.pg.ExecContext(ctx, `UPDATE sync_metadata SET value=($1::bigint)::text WHERE key='usage_change_revision'`, revision)
+			require.NoError(t, err)
+			require.NotEqual(t, version, store.keptUsageVersion(ctx, "test"))
+			after, err := store.GetDailyUsage(ctx, filter)
+			require.NoError(t, err)
+			topAfter, err := store.GetTopSessionsByCost(ctx, filter, 10)
+			require.NoError(t, err)
+			want, err := (&Store{pg: store.pg}).GetDailyUsage(ctx, filter)
+			require.NoError(t, err)
+			wantTop, err := (&Store{pg: store.pg}).GetTopSessionsByCost(ctx, filter, 10)
+			require.NoError(t, err)
+			require.NotEqual(t, before.Totals, after.Totals)
+			require.NotEqual(t, topBefore, topAfter)
+			require.Equal(t, want.Totals, after.Totals)
+			require.Equal(t, wantTop, topAfter)
+		})
+	}
+}
+
 func TestUsageKeptPushBetweenReads(t *testing.T) {
 	local, syncer, store, counter := keptUsageFixture(t)
 	ctx := t.Context()

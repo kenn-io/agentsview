@@ -12,6 +12,7 @@ import (
 	"maps"
 	"path/filepath"
 	"slices"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -193,14 +194,22 @@ func TestPGUsageCacheRefreshesLargeDeletion(t *testing.T) {
 SELECT 'remove-' || n, 'project', 'test-machine', 'claude', '2026-01-01'
 FROM generate_series(1, 1100) n`)
 	require.NoError(t, err)
+	_, err = store.pg.ExecContext(ctx, `INSERT INTO usage_events(session_id,source,model,output_tokens,occurred_at,dedup_key)
+SELECT 'remove-' || n, 'provider', 'paid-a', 10, '2026-01-01', 'event'
+FROM generate_series(1, 1100) n`)
+	require.NoError(t, err)
 	attachUsageCacheProbe(t, store, t.TempDir())
 	t.Cleanup(func() { require.NoError(t, store.usageCache.Close()) })
 	filter := db.UsageFilter{Timezone: "UTC"}
 	requireCachedUsageMatchesDirect(t, store, filter)
-	_, err = store.pg.ExecContext(ctx, `UPDATE sessions SET deleted_at=now() WHERE id LIKE 'remove-%';
-UPDATE usage_events SET output_tokens=output_tokens+10 WHERE session_id='paid-a'`)
+	before, err := store.usageCache.GetDailyUsage(ctx, filter)
+	require.NoError(t, err)
+	_, err = store.pg.ExecContext(ctx, `UPDATE sessions SET deleted_at=now() WHERE id LIKE 'remove-%'`)
 	require.NoError(t, err)
 	requireCachedUsageMatchesDirect(t, store, filter)
+	after, err := store.usageCache.GetDailyUsage(ctx, filter)
+	require.NoError(t, err)
+	require.Equal(t, 11000, before.Totals.OutputTokens-after.Totals.OutputTokens)
 }
 
 type usageCacheProbe struct {
@@ -212,6 +221,24 @@ type usageCacheProbe struct {
 	beforeAccounts func(context.Context) error
 	afterAccount   func() error
 	afterCapture   func(context.Context) error
+}
+
+type heldKeptRevision struct {
+	storeExecutor
+	started chan struct{}
+	release chan struct{}
+}
+
+func (held *heldKeptRevision) QueryRowContext(ctx context.Context, query string, args ...any) *sql.Row {
+	row := held.storeExecutor.QueryRowContext(ctx, query, args...)
+	if strings.Contains(query, "to_regclass('usage_session_changes')") {
+		close(held.started)
+		select {
+		case <-held.release:
+		case <-ctx.Done():
+		}
+	}
+	return row
 }
 
 func (probe *usageCacheProbe) CaptureUsage(ctx context.Context, request db.UsageSourceRequest) (db.UsageSourceSnapshot, error) {
@@ -1015,6 +1042,17 @@ func TestPGUsageCacheRecoversRewoundJournal(t *testing.T) {
 	require.NoError(t, err)
 	_, err = peer.usageCache.GetDailyUsage(ctx, filter)
 	require.NoError(t, err)
+	_, err = peer.GetDailyUsage(ctx, filter)
+	require.NoError(t, err)
+	_, err = peer.GetTopSessionsByCost(ctx, filter, 10)
+	require.NoError(t, err)
+	held := &heldKeptRevision{storeExecutor: peer.pg, started: make(chan struct{}), release: make(chan struct{})}
+	peer.pg = held
+	release := sync.OnceFunc(func() { close(held.release) })
+	t.Cleanup(release)
+	version := make(chan string, 1)
+	go func() { version <- peer.keptUsageVersion(ctx, "held") }()
+	<-held.started
 	var oid uint32
 	var revision, marker int64
 	var sessionVersion string
@@ -1057,11 +1095,22 @@ func TestPGUsageCacheRecoversRewoundJournal(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, want, got)
 	require.NoError(t, store.usageCache.WaitWarm(ctx))
+	release()
+	require.Empty(t, <-version, "a recovery during version capture must disable retained reuse")
+	peer.pg = held.storeExecutor
 	got, err = store.usageCache.GetDailyUsage(ctx, filter)
 	require.NoError(t, err, "cache should warm after journal rewind")
 	require.Equal(t, want, got)
-	_, err = store.pg.ExecContext(ctx, `UPDATE sync_metadata SET value=($1::bigint)::text WHERE key='usage_change_revision'`, revision+1)
+	_, err = store.pg.ExecContext(ctx, `UPDATE sync_metadata SET value=($1::bigint)::text WHERE key='usage_change_revision'`, revision)
 	require.NoError(t, err)
+	got, err = peer.GetDailyUsage(ctx, filter)
+	require.NoError(t, err)
+	require.Equal(t, want.Totals, got.Totals)
+	top, err := peer.GetTopSessionsByCost(ctx, filter, 10)
+	require.NoError(t, err)
+	wantTop, err := (&Store{pg: store.pg}).GetTopSessionsByCost(ctx, filter, 10)
+	require.NoError(t, err)
+	require.Equal(t, wantTop, top)
 	got, err = peer.usageCache.GetDailyUsage(ctx, filter)
 	require.NoError(t, err)
 	require.Equal(t, want, got)

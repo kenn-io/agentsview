@@ -137,6 +137,27 @@ func (reader *UsageCacheReader) Close() error {
 // an error and queue a background warm pass instead. Call it before reads.
 func (reader *UsageCacheReader) DeferWork() { reader.deferWork = true }
 
+// ResetEpoch changes when a reader rejects a rewound source history.
+func (reader *UsageCacheReader) ResetEpoch(ctx context.Context) (int64, error) {
+	databaseID := reader.engine.usageSourceDatabaseID.Load()
+	if databaseID == nil {
+		return 0, ErrUsageCacheWarming
+	}
+	manager := reader.engine.usageCache
+	manager.mu.Lock()
+	cache := manager.generations[*databaseID]
+	var release func()
+	if cache != nil {
+		release, _ = cache.acquire()
+	}
+	manager.mu.Unlock()
+	if release == nil {
+		return 0, ErrUsageCacheWarming
+	}
+	defer release()
+	return readUsageResetEpoch(ctx, cache.db)
+}
+
 func (reader *UsageCacheReader) readContext(ctx context.Context) context.Context {
 	if !reader.deferWork {
 		return ctx
