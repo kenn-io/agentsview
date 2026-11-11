@@ -146,6 +146,19 @@ func TestSessionPushReportsVersionAndRebuildRequirements(t *testing.T) {
 	s.Handler().ServeHTTP(w, r)
 	assert.Equal(t, http.StatusBadRequest, w.Code)
 	assert.Equal(t, "future-data-version", w.Header().Get("X-AgentsView-Push-Error"))
+	manifest["data_version"] = db.CurrentDataVersion()
+	manifest["v"] = 999
+	envelope.Manifest, err = json.Marshal(manifest)
+	require.NoError(t, err)
+	packet, err = json.Marshal(envelope)
+	require.NoError(t, err)
+	r = httptest.NewRequestWithContext(t.Context(), http.MethodPost, "/api/v1/sessions/ingest", bytes.NewReader(packet))
+	r.Header.Set("Authorization", "Bearer fixture")
+	r.Header.Set("Content-Type", "application/json")
+	w = httptest.NewRecorder()
+	s.Handler().ServeHTTP(w, r)
+	assert.Equal(t, http.StatusBadRequest, w.Code)
+	assert.Equal(t, "future-data-version", w.Header().Get("X-AgentsView-Push-Error"))
 	require.NoError(t, d.Update(t.Context(), func(tx *sql.Tx) error {
 		_, err := tx.ExecContext(t.Context(), `PRAGMA user_version = 0`)
 		return err

@@ -506,6 +506,37 @@ func TestSessionPushRejectMalformed(t *testing.T) {
 		_, _, err = DecodeSessionPush(packet)
 		require.ErrorIs(t, err, ErrSessionPushFutureDataVersion)
 	})
+	for _, kind := range []string{"manifest", "segment"} {
+		t.Run("future "+kind+" version", func(t *testing.T) {
+			packet := adversarialSessionPushPacket(t, db.Session{ID: "selected", Agent: "claude", Machine: "source", MessageCount: 1}, []db.Message{{Ordinal: 0, Role: "user", Content: "fixture"}})
+			var envelope SessionPushEnvelope
+			require.NoError(t, json.Unmarshal(packet, &envelope))
+			var m manifest
+			require.NoError(t, json.Unmarshal(envelope.Manifest, &m))
+			if kind == "manifest" {
+				m.Version = manifestFormatVersion + 1
+			} else {
+				var segments []sessionPushSegment
+				require.NoError(t, json.Unmarshal(envelope.Segments, &segments))
+				require.Len(t, segments, 1)
+				old := fmt.Sprintf(`"v":%d`, messageSegmentFormatVersion)
+				require.Contains(t, segments[0].NDJSON, old)
+				segments[0].NDJSON = strings.Replace(segments[0].NDJSON, old, fmt.Sprintf(`"v":%d`, messageSegmentFormatVersion+1), 1)
+				segments[0].SHA256 = hashHex([]byte(segments[0].NDJSON))
+				m.Segments[0] = segments[0].SHA256
+				var err error
+				envelope.Segments, err = json.Marshal(segments)
+				require.NoError(t, err)
+			}
+			var err error
+			envelope.Manifest, err = json.Marshal(m)
+			require.NoError(t, err)
+			packet, err = json.Marshal(envelope)
+			require.NoError(t, err)
+			_, _, err = DecodeSessionPush(packet)
+			require.ErrorIs(t, err, ErrSessionPushFutureDataVersion)
+		})
+	}
 	t.Run("invalid tool call coordinate", func(t *testing.T) {
 		data := adversarialSessionPushPacket(t, db.Session{ID: "selected", Agent: "claude", Machine: "source", MessageCount: 1}, []db.Message{{Ordinal: 0, Role: "assistant", ToolCalls: []db.ToolCall{{ToolName: "Read", ResultEvents: []db.ToolResultEvent{{EventIndex: 0, Content: "first"}, {EventIndex: 1, Content: "second"}}}}}})
 		_, _, err := DecodeSessionPush(data)

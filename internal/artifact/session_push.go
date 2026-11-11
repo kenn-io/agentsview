@@ -178,6 +178,9 @@ func encodeSessionPushData(ctx context.Context, origin string, session db.Sessio
 func DecodeSessionPush(data []byte) (db.SessionPushReceipt, db.SessionBatchWrite, error) {
 	receipt, write, err := decodeSessionPush(data)
 	if err != nil {
+		if errors.Is(err, errFutureArtifactVersion) {
+			err = fmt.Errorf("%w: %w", ErrSessionPushFutureDataVersion, err)
+		}
 		return db.SessionPushReceipt{}, db.SessionBatchWrite{}, fmt.Errorf("invalid session push: %w", err)
 	}
 	return receipt, write, nil
