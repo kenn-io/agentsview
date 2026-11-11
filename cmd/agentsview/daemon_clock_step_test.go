@@ -230,7 +230,9 @@ func TestStopDaemonProcessForceKillsHungDaemonAfterClockStep(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	require.NoError(t, stopDaemonProcess(onlyLiveRuntimeRecord(t, dir), 50*time.Millisecond))
+	// The grace budget also bounds exit after SIGKILL. Allow the OS time to
+	// schedule the child under race-detector CI load.
+	require.NoError(t, stopDaemonProcess(onlyLiveRuntimeRecord(t, dir), time.Second))
 	<-reaped
 	assert.False(t, daemon.ProcessAlive(pid))
 	assert.NoFileExists(t, path)
