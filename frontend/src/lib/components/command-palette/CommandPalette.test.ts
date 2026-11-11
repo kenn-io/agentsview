@@ -585,7 +585,11 @@ describe("CommandPalette", () => {
       });
     if (result === "conflict") {
       mockEmbeddingsService.postApiV1EmbeddingsSetup.mockRejectedValue(
-        new ApiError(409, "provider changed", "embeddings_provider_changed"),
+        new ApiError(
+          409,
+          "embeddings provider changed; refresh setup and try again",
+          "embeddings_provider_changed",
+        ),
       );
     } else if (result === "running") {
       mockEmbeddingsService.postApiV1EmbeddingsSetup.mockRejectedValue(
@@ -603,6 +607,9 @@ describe("CommandPalette", () => {
       if (result === "conflict") {
         expect(mockSearchStore.setMode).not.toHaveBeenCalled();
         expect(mockEmbeddingsService.getApiV1EmbeddingsStatus).toHaveBeenCalledTimes(2);
+        expect(document.querySelector('[role="alert"]')?.textContent).toContain(
+          "embeddings provider changed; refresh setup and try again",
+        );
       } else {
         expect(mockSearchStore.setMode).toHaveBeenCalledWith("semantic");
       }
