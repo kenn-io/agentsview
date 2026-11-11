@@ -1242,7 +1242,7 @@ func TestFindDaemonRuntime_IgnoresIncompatibleRuntime(t *testing.T) {
 	dir := runtimeTestDir(t)
 	writeLiveRuntime(t, dir, false,
 		withRuntimeVersion("old"),
-		withRuntimeAPIVersion(server.APIVersion-1),
+		withRuntimeAPIVersion(14), // API 14 cannot interpret idle catch-up readiness.
 	)
 
 	assert.Nil(t, FindDaemonRuntime(dir))
