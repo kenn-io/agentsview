@@ -31,8 +31,10 @@ import (
 	"go.kenn.io/agentsview/internal/sync"
 )
 
-var sessionUsageWaitTimeout = startupWaitTimeout
-var sessionUsagePollInterval = time.Second
+var (
+	sessionUsageWaitTimeout  = startupWaitTimeout
+	sessionUsagePollInterval = time.Second
+)
 
 var sessionUsageHTTPClient = &http.Client{Timeout: 30 * time.Second}
 

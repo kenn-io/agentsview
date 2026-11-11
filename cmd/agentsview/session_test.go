@@ -2707,7 +2707,7 @@ func TestSessionUsageWait(t *testing.T) {
 
 func TestSessionUsageWaitExpiresAfterRefusedRefresh(t *testing.T) {
 	originalTimeout := sessionUsageWaitTimeout
-	sessionUsageWaitTimeout = 100 * time.Millisecond //nolint:kennlint // deadlinetest: verifies wait expiry while the daemon remains busy
+	sessionUsageWaitTimeout = 100 * time.Millisecond
 	t.Cleanup(func() { sessionUsageWaitTimeout = originalTimeout })
 	ts, _ := newRemoteUsageServer(t, remoteUsageSpec{canonicalID: "remote-session"})
 	original := ts.Config.Handler
@@ -2736,7 +2736,7 @@ func TestSessionUsageWaitExpiresAfterRefusedRefresh(t *testing.T) {
 
 func TestSessionUsageWaitPendingFallback(t *testing.T) {
 	originalTimeout := sessionUsageWaitTimeout
-	sessionUsageWaitTimeout = 100 * time.Millisecond //nolint:kennlint // deadlinetest: verifies wait expiry while the daemon remains busy
+	sessionUsageWaitTimeout = 100 * time.Millisecond
 	t.Cleanup(func() { sessionUsageWaitTimeout = originalTimeout })
 	for _, missing := range []bool{false, true} {
 		t.Run(fmt.Sprintf("missing=%v", missing), func(t *testing.T) {
@@ -2924,7 +2924,7 @@ func TestSessionUsageWaitCancellation(t *testing.T) {
 
 func TestSessionUsageArchiveOnlyWaitIncomplete(t *testing.T) {
 	previous := sessionUsageWaitTimeout
-	sessionUsageWaitTimeout = 100 * time.Millisecond //nolint:kennlint // deadlinetest: verifies the pending wait expires
+	sessionUsageWaitTimeout = 100 * time.Millisecond
 	t.Cleanup(func() { sessionUsageWaitTimeout = previous })
 	for _, tc := range []struct {
 		name                         string
@@ -2987,7 +2987,7 @@ func TestSessionUsageWaitDoesNotResolveKnownIDTwiceWhenClear(t *testing.T) {
 
 func TestSessionUsageWaitKnownSessionRefreshesDuringCatchup(t *testing.T) {
 	previous := sessionUsageWaitTimeout
-	sessionUsageWaitTimeout = 100 * time.Millisecond //nolint:kennlint // deadlinetest: a blocked catch-up would reach the deadline
+	sessionUsageWaitTimeout = 100 * time.Millisecond
 	t.Cleanup(func() { sessionUsageWaitTimeout = previous })
 	ts, reqs := newRemoteUsageServer(t, remoteUsageSpec{canonicalID: "remote-session"})
 	original := ts.Config.Handler
@@ -3051,7 +3051,7 @@ func TestSessionUsageWaitContinuesAfterStartupFailure(t *testing.T) {
 
 func TestSessionUsageWaitStartupFailureAtDeadline(t *testing.T) {
 	previous := sessionUsageWaitTimeout
-	sessionUsageWaitTimeout = 100 * time.Millisecond //nolint:kennlint // deadlinetest: verifies the pending startup deadline
+	sessionUsageWaitTimeout = 100 * time.Millisecond
 	t.Cleanup(func() { sessionUsageWaitTimeout = previous })
 	for _, missing := range []bool{false, true} {
 		t.Run(fmt.Sprintf("missing=%v", missing), func(t *testing.T) {
@@ -3079,7 +3079,7 @@ func TestSessionUsageWaitStartupFailureAtDeadline(t *testing.T) {
 				out, code, err := httpSessionUsageData(t.Context(), ts.URL, "", sessionUsageQuery{SessionID: "remote-session", Wait: true})
 				if missing {
 					require.ErrorContains(t, err, "startup failed")
-					assert.ErrorContains(t, err, "then retry")
+					require.ErrorContains(t, err, "then retry")
 					assert.Nil(t, out)
 					return
 				}

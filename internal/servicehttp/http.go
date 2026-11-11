@@ -665,7 +665,7 @@ func (b *httpBackend) Sync(
 				Code string `json:"code"`
 			}
 			if json.Unmarshal(response.Body, &body) == nil && body.Code == service.SessionRefreshNotStartedCode {
-				return nil, fmt.Errorf("%w: %v", ErrSessionRefreshNotStarted, err)
+				return nil, fmt.Errorf("%w: %w", ErrSessionRefreshNotStarted, err)
 			}
 		}
 		return nil, err
