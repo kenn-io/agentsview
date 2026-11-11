@@ -30,7 +30,7 @@ func TestPushSessionWithCodexScope(t *testing.T) {
 	require.NoError(t, pg.QueryRowContext(ctx, `SELECT id FROM sessions WHERE id = $1`, "session-1").Scan(&id))
 	require.Equal(t, "session-1", id)
 
-	const marker = "marker_%"
+	const marker = "0123456789abcdef0123456789abcdef"
 	const suffix = "_99999999-9999-4999-8999-999999999999"
 	threads := []string{
 		"codex:11111111-1111-4111-8111-111111111111",
@@ -42,7 +42,7 @@ func TestPushSessionWithCodexScope(t *testing.T) {
 		require.NoError(t, err)
 	}
 	_, err = pg.ExecContext(ctx, `INSERT INTO sync_metadata (key, value) VALUES ($1, 'old-machine'), ($2, '["old-alias"]'), ($3, 'unrelated'), ($4, 'unrelated')`,
-		"push_marker:"+marker+":scope:one", "push_marker_machine_aliases:"+marker+":scope:two", "xpush_marker:"+marker+":scope:three", "push_marker:marker_AX:scope:four")
+		"push_marker:"+marker+":scope:0000000000000001", "push_marker_machine_aliases:"+marker+":scope:0000000000000002", "xpush_marker:"+marker+":scope:0000000000000003", "pushXmarker:"+marker+":scope:0000000000000004")
 	require.NoError(t, err)
 	sessions := []db.Session{
 		{ID: threads[0] + suffix, Agent: "codex", Machine: "workstation"},
