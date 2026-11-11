@@ -20,6 +20,8 @@ func embeddableMessagePredicate(alias string) string {
 		db.ClickHouseSystemPrefixSQL(alias+".content", alias+".role")
 }
 
+const systemPrefixSettings = " SETTINGS short_circuit_function_evaluation = 'force_enable'"
+
 // toolCallMessageJoin joins tool calls to their message on the mirror's
 // stable (session_id, ordinal) key.
 const toolCallMessageJoin = `JOIN messages m ON m.session_id = tc.session_id
@@ -256,7 +258,7 @@ func (s *Store) Search(ctx context.Context, f db.SearchFilter) (db.SearchPage, e
 			SELECT * FROM name_matches
 		) AS combined
 		ORDER BY `+orderBy+`
-		LIMIT ? OFFSET ?`, args...)
+		LIMIT ? OFFSET ?`+systemPrefixSettings, args...)
 	if err != nil {
 		return db.SearchPage{}, fmt.Errorf("clickhouse search: %w", err)
 	}
@@ -303,7 +305,7 @@ func (s *Store) SearchSession(ctx context.Context, sessionID, query string) ([]i
 			AND (m.content ILIKE ?
 				OR tc.result_content ILIKE ?
 				OR tre.content ILIKE ?)
-		ORDER BY m.ordinal ASC`,
+		ORDER BY m.ordinal ASC`+systemPrefixSettings,
 		sessionID, pattern, pattern, pattern)
 	if err != nil {
 		return nil, fmt.Errorf("clickhouse session search: %w", err)
@@ -531,6 +533,9 @@ func (s *Store) collectContentSubstringMatches(
 			src ASC, row_id ASC, call_index ASC, event_index ASC, body ASC
 		LIMIT ? OFFSET ?`
 	args = append(args, f.Limit+1, f.Cursor)
+	if f.ExcludeSystem && (slices.Contains(f.Sources, "messages") || slices.Contains(f.Sources, "thinking")) {
+		query += systemPrefixSettings
+	}
 	rows, err := s.queryContext(ctx, query, args...)
 	if err != nil {
 		return nil, fmt.Errorf("clickhouse content search: %w", err)
@@ -695,6 +700,9 @@ func (s *Store) collectContentSource(
 			ORDER BY session_id, ordinal, src, row_id, call_index, event_index`
 	default:
 		return nil, &db.SearchInputError{Msg: fmt.Sprintf("search: unknown source %q", source)}
+	}
+	if f.ExcludeSystem && (source == "messages" || source == "thinking") {
+		query += systemPrefixSettings
 	}
 	rows, err := s.queryContext(ctx, query, args...)
 	if err != nil {

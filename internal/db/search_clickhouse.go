@@ -17,9 +17,25 @@ import (
 // dialects pass to LTRIM.
 func ClickHouseSystemPrefixSQL(contentCol, roleCol string) string {
 	trimmed := clickhouseLTrimSQL(contentCol)
-	return "NOT (" + roleCol + " = 'user' AND (" +
+	seen := make(map[byte]bool)
+	var bytes []string
+	add := func(b byte) {
+		if !seen[b] {
+			seen[b] = true
+			bytes = append(bytes, fmt.Sprintf("unhex('%02X')", b))
+		}
+	}
+	for _, prefix := range SystemMsgPrefixes {
+		add(prefix[0])
+	}
+	add(legacyGoalContextPrefix[0])
+	add(codexInternalContextTagPrefix[0])
+	for _, r := range systemPrefixTrimCutset {
+		add([]byte(string(r))[0])
+	}
+	return "NOT (" + roleCol + " = 'user' AND if(substring(" + contentCol + ", 1, 1) IN (" + strings.Join(bytes, ", ") + "), (" +
 		clickhouseTerminalRemainderSQL(trimmed) + " OR " +
-		clickhouseReminderTerminalSQL(trimmed) + "))"
+		clickhouseReminderTerminalSQL(trimmed) + "), false))"
 }
 
 func clickhouseLTrimSQL(expr string) string {
