@@ -223,19 +223,6 @@ func GroupSessionCandidates(ids []string, pairs, terminal []IntervalCandidate) [
 		}
 		lo = hi
 	}
-	counts := make([]int, len(ids))
-	total := 0
-	for _, c := range terminal {
-		if i, ok := index[c.SessionID]; ok {
-			counts[i]++
-			total++
-		}
-	}
-	buf := make([]IntervalCandidate, 0, total)
-	for i, n := range counts {
-		out[i].Terminal = buf[len(buf) : len(buf) : len(buf)+n]
-		buf = buf[:len(buf)+n]
-	}
 	for _, c := range terminal {
 		if i, ok := index[c.SessionID]; ok {
 			out[i].Terminal = append(out[i].Terminal, c)
