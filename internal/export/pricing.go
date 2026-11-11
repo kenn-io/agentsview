@@ -195,6 +195,13 @@ func NewPricingResolverWithDigest(rows []EffectivePricingRow, digest string) *Pr
 	return resolver
 }
 
+// Copy returns a resolver over the same rows and digest with empty lookup
+// caches. A resolver caches lookups without locking, so each goroutine that
+// resolves prices needs its own copy.
+func (r *PricingResolver) Copy() *PricingResolver {
+	return NewPricingResolverWithDigest(r.rows, r.digest)
+}
+
 func NewPricingResolver(rows []EffectivePricingRow) *PricingResolver {
 	copied := make([]EffectivePricingRow, len(rows))
 	byModel := make(map[string]ModelRates, len(rows))
@@ -696,27 +703,19 @@ func (r *PricingResolver) RecordResolvedComputedRequest(
 	lookup PricingLookup,
 	inputTokens, cacheWriteTokens, cacheReadTokens int,
 ) {
-	if r == nil || reportedModel == "" || pricedModel == "" {
-		return
+	var threshold *int
+	if band, ok := lookup.Rates.RequestBand(inputTokens, cacheWriteTokens, cacheReadTokens); ok {
+		threshold = &band
 	}
-	rec := r.record(reportedModel, pricedModel, lookup)
-	rec.computed = true
-	if !lookup.OK {
-		return
-	}
-	band, ok := lookup.Rates.pricingBandForTokens(
-		inputTokens,
-		cacheWriteTokens,
-		cacheReadTokens,
-	)
-	if !ok {
-		rec.baseRequestCount++
-		return
-	}
-	if rec.bandRequestCounts == nil {
-		rec.bandRequestCounts = make(map[int]int)
-	}
-	rec.bandRequestCounts[band.AboveInputTokens]++
+	r.accumulateResolved(reportedModel, pricedModel, lookup, false, true, 1, 0, threshold)
+}
+
+// RequestBand returns the input threshold of the band that prices a request
+// with these input-side tokens, or false when the base rates price it.
+// RecordResolvedCounts takes it to record many such requests at once.
+func (r ModelRates) RequestBand(inputTokens, cacheWriteTokens, cacheReadTokens int) (int, bool) {
+	band, ok := r.pricingBandForTokens(inputTokens, cacheWriteTokens, cacheReadTokens)
+	return band.AboveInputTokens, ok
 }
 
 func (r *PricingResolver) RecordComputedAggregate(model string, lookup PricingLookup) {
@@ -726,15 +725,7 @@ func (r *PricingResolver) RecordComputedAggregate(model string, lookup PricingLo
 func (r *PricingResolver) RecordResolvedComputedAggregate(
 	reportedModel, pricedModel string, lookup PricingLookup,
 ) {
-	if r == nil || reportedModel == "" || pricedModel == "" {
-		return
-	}
-	rec := r.record(reportedModel, pricedModel, lookup)
-	rec.computed = true
-	if !lookup.OK {
-		return
-	}
-	rec.aggregateRowCount++
+	r.accumulateResolved(reportedModel, pricedModel, lookup, false, true, 0, 1, nil)
 }
 
 func (r *PricingResolver) RecordReported(model string, lookup PricingLookup) {
@@ -744,21 +735,42 @@ func (r *PricingResolver) RecordReported(model string, lookup PricingLookup) {
 func (r *PricingResolver) RecordResolvedComputed(
 	reportedModel, pricedModel string, lookup PricingLookup,
 ) {
-	if r == nil || reportedModel == "" || pricedModel == "" {
-		return
-	}
-	rec := r.record(reportedModel, pricedModel, lookup)
-	rec.computed = true
+	r.accumulateResolved(reportedModel, pricedModel, lookup, false, true, 0, 0, nil)
 }
 
 func (r *PricingResolver) RecordResolvedReported(
 	reportedModel, pricedModel string, lookup PricingLookup,
 ) {
+	r.accumulateResolved(reportedModel, pricedModel, lookup, true, false, 0, 0, nil)
+}
+
+// RecordResolvedCounts records provenance for pre-aggregated usage rows.
+func (r *PricingResolver) RecordResolvedCounts(reportedModel, pricedModel string, lookup PricingLookup, reported, requests, aggregates int, band *int) {
+	if reported+requests+aggregates == 0 {
+		return
+	}
+	r.accumulateResolved(reportedModel, pricedModel, lookup, reported > 0, requests+aggregates > 0, requests, aggregates, band)
+}
+
+func (r *PricingResolver) accumulateResolved(reportedModel, pricedModel string, lookup PricingLookup, reported, computed bool, requests, aggregates int, band *int) {
 	if r == nil || reportedModel == "" || pricedModel == "" {
 		return
 	}
 	rec := r.record(reportedModel, pricedModel, lookup)
-	rec.reported = true
+	rec.reported = rec.reported || reported
+	rec.computed = rec.computed || computed
+	if !lookup.OK {
+		return
+	}
+	rec.aggregateRowCount += aggregates
+	if band == nil {
+		rec.baseRequestCount += requests
+	} else if requests > 0 {
+		if rec.bandRequestCounts == nil {
+			rec.bandRequestCounts = make(map[int]int)
+		}
+		rec.bandRequestCounts[*band] += requests
+	}
 }
 
 // RecordUnattributedReported records an authoritative aggregate cost that

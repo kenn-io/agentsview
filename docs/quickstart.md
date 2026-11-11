@@ -3,8 +3,8 @@ title: Quick Start
 description: Get AgentsView running in under a minute
 ---
 
-CLI examples follow `main`. For older releases, use the legacy spellings in
-the [command migration](commands.md#command-migration).
+CLI examples use the commands from 0.47.0 and later. For older releases, use
+the legacy names in the [command migration](commands.md#command-migration).
 
 ## Install
 
@@ -214,9 +214,9 @@ container 40 seconds to finish its final push.
 
 The desktop app handles startup automatically: it attaches to an existing local
 daemon or starts one in the background, then opens the discovered URL. The
-daemon is shared with CLI commands and may outlive the desktop window, but it
-self-exits after an idle period when no client request or daemon-owned job is
-active.
+daemon is shared with CLI commands and may outlive the desktop window.
+Automatically started daemons self-exit after an idle period when no client
+request or daemon-owned job is active.
 
 CLI users can start the web UI explicitly:
 
@@ -274,6 +274,14 @@ these commands finish. For scripts or CI jobs that must leave no background
 server, stop the daemon first, then run `AGENTSVIEW_NO_DAEMON=1 agentsview source sync`.
 That setting disables auto-start; it does not stop a running daemon or bypass
 its archive lock.
+
+### Search by meaning
+
+Choose **Settings → Embeddings → Turn on** or run `agentsview index embeddings build`
+and approve the download. Embeddings run locally by default; agents use keyword
+search until indexing is ready. Use `agentsview session search --semantic` or
+`--hybrid` to search by meaning. See [Semantic Search](/docs/semantic-search/#enabling-vector)
+to configure other providers.
 
 ## Customize
 
@@ -393,8 +401,3 @@ Once running, the web UI provides:
 Use the [Usage Guide](/docs/usage/) for navigation and resume controls. To
 correct project assignments, see the [Data page](/docs/data/) and its opt-in
 project workspace.
-
-Beyond full-text search, opt-in semantic search lets
-`agentsview session search --semantic` (or `--hybrid`) match session content by
-meaning, backed by a local or hosted embeddings endpoint. See
-[Semantic Search](/docs/semantic-search/) for setup.

@@ -24,8 +24,8 @@ import (
 )
 
 func TestAllSessionExportKeepsTerminationCutoffAcrossPages(t *testing.T) {
-	d := testSessionExportDB(t)
 	synctest.Test(t, func(t *testing.T) {
+		d := testSessionExportDB(t)
 		// Keep the older activity timestamps within the valid 2000..2100 range.
 		time.Sleep(time.Hour)
 		for _, id := range []string{"active-a", "active-b"} {
@@ -1711,7 +1711,6 @@ func TestSessionExportClaudeSnapshotPeersUsesSnapshotIndex(t *testing.T) {
 
 	for i, captured := range capture.queries {
 		assert.Contains(t, captured.query, "m.claude_message_id != ''")
-		assert.Contains(t, captured.query, "m.claude_request_id != ''")
 		assert.Contains(t, captured.query,
 			"(m.claude_message_id, m.claude_request_id) IN (VALUES")
 

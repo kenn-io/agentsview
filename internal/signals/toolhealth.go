@@ -181,8 +181,8 @@ func countFailures(
 const retryRunMinLen = 3
 
 // ToolRun is one maximal run of consecutive calls with the same
-// ToolName and byte-identical InputJSON, at least retryRunMinLen
-// long. First and Last are the run's outermost calls.
+// ToolName and byte-identical, non-empty InputJSON, at least
+// retryRunMinLen long. First and Last are the run's outermost calls.
 type ToolRun struct {
 	ToolName    string
 	Count       int
@@ -195,9 +195,7 @@ func RetryRuns(calls []ToolCallRow) []ToolRun {
 	var runs []ToolRun
 	start := 0
 	for i := 1; i <= len(calls); i++ {
-		if i < len(calls) &&
-			calls[i].ToolName == calls[i-1].ToolName &&
-			calls[i].InputJSON == calls[i-1].InputJSON {
+		if i < len(calls) && sameRetryInput(calls[i-1], calls[i]) {
 			continue
 		}
 		if n := i - start; n >= retryRunMinLen {
@@ -211,6 +209,14 @@ func RetryRuns(calls []ToolCallRow) []ToolRun {
 		start = i
 	}
 	return runs
+}
+
+// sameRetryInput reports whether b repeats a. A call without retained
+// input, such as one stored under archive_content = "transcripts", cannot
+// be shown to repeat another call.
+func sameRetryInput(a, b ToolCallRow) bool {
+	return b.InputJSON != "" &&
+		a.ToolName == b.ToolName && a.InputJSON == b.InputJSON
 }
 
 // countRetries counts retried calls: each run of 3+ consecutive calls

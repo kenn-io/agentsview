@@ -10,11 +10,12 @@ import (
 
 // Stats holds database-wide statistics.
 type Stats struct {
-	SessionCount    int     `json:"session_count"`
-	MessageCount    int     `json:"message_count"`
-	ProjectCount    int     `json:"project_count"`
-	MachineCount    int     `json:"machine_count"`
-	EarliestSession *string `json:"earliest_session"`
+	SessionCount         int     `json:"session_count"`
+	MessageCount         int     `json:"message_count"`
+	ProjectCount         int     `json:"project_count"`
+	MachineCount         int     `json:"machine_count"`
+	EarliestSession      *string `json:"earliest_session"`
+	EarliestAccountUsage *string `json:"earliest_account_usage,omitempty"`
 }
 
 // rootSessionFilter is the WHERE clause shared by session list
@@ -157,7 +158,7 @@ func (db *DB) FileBackedSessionCountForRebuildOwner(
 		seenAgents[exclusion.Agent] = struct{}{}
 		if exclusion.KeepJSONLRows {
 			conditions = append(conditions,
-				`(agent <> ? OR lower(file_path) LIKE '%.jsonl')`)
+				`(agent <> ? OR file_path LIKE '%.jsonl')`)
 			args = append(args, exclusion.Agent)
 			continue
 		}
@@ -209,8 +210,8 @@ func (db *DB) fileBackedSessionCount(
 	return count, nil
 }
 
-// GetStats returns database statistics, counting only root
-// sessions with messages (matching the session list filter).
+// GetStats counts sessions with the sidebar's canonical root rule.
+// Other totals exclude subagents and forks, and include continuations.
 func (db *DB) GetStats(
 	ctx context.Context,
 	excludeOneShot, excludeAutomated bool,
@@ -226,20 +227,24 @@ func (db *DB) GetStats(
 	if excludeAutomated {
 		filter += " AND is_automated = 0"
 	}
-	// Sidebar polling needs all totals for the same rows. Aggregate them
-	// together so each refresh visits the filtered sessions only once.
-	query := `SELECT COUNT(*), COALESCE(SUM(message_count), 0),
+	billingStart := "NULL"
+	if db.hasCursorUsageTable(ctx) {
+		billingStart = "(SELECT MIN(occurred_at) FROM cursor_usage_events)"
+	}
+	count, args := StatsRootCountSQL(SQLiteQueryDialect(), excludeOneShot, excludeAutomated)
+	query := `SELECT ` + count + `, COALESCE(SUM(message_count), 0),
 		COUNT(DISTINCT project), COUNT(DISTINCT machine),
-		MIN(COALESCE(NULLIF(started_at, ''), created_at))
+		MIN(COALESCE(NULLIF(started_at, ''), created_at)), ` + billingStart + `
 		FROM sessions WHERE ` + filter
 
 	var s Stats
-	err := db.getReader().QueryRowContext(ctx, query).Scan(
+	err := db.getReader().QueryRowContext(ctx, query, args...).Scan(
 		&s.SessionCount,
 		&s.MessageCount,
 		&s.ProjectCount,
 		&s.MachineCount,
 		&s.EarliestSession,
+		&s.EarliestAccountUsage,
 	)
 	if err != nil {
 		return Stats{}, fmt.Errorf("fetching stats: %w", err)

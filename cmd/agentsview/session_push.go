@@ -12,7 +12,6 @@ import (
 	"net/url"
 	"os"
 	"strings"
-	"time"
 
 	"github.com/spf13/cobra"
 	"go.kenn.io/agentsview/internal/apiclient"
@@ -34,7 +33,7 @@ func newPushSessionCommand() *cobra.Command {
 		Use: "push <session-id>", Short: "Push exactly one archived session to an opted-in remote instance", GroupID: groupData,
 		Long: "Push one exact canonical archive ID, without syncing sources or following parent/child references.\n" +
 			"Codex IDs start with codex:, Pi IDs with pi:, and Claude IDs are unprefixed.\n" +
-			"The first accepted snapshot is immutable: identical retries succeed, changed snapshots conflict.\n" +
+			"The first accepted transcript is immutable: matching retries succeed, changed transcripts conflict.\n" +
 			"The receiver needs writable SQLite, require_auth=true and accept_session_push=true.\n" +
 			"Literal token arguments are not accepted.\n" +
 			"Use AGENTSVIEW_DATA_DIR to select the local archive.",
@@ -152,7 +151,7 @@ func sendSessionPush(ctx context.Context, base, token string, payload []byte, id
 	if err != nil {
 		return result, err
 	}
-	client := &http.Client{Timeout: 2 * time.Minute, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
+	client := &http.Client{Timeout: artifact.SessionPushTimeout(int64(len(payload))), CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
 	requestBase := strings.TrimSuffix(u.String(), "/api/v1/sessions/ingest")
 	resp, err := apiclient.RawRequest(requestBase, client, func(api *apiclient.Client) error {
 		_, err := api.PostAPIV1SessionsIngestWithResponse(ctx, &apiclient.PostAPIV1SessionsIngestRequestOptions{})
@@ -182,7 +181,7 @@ func sendSessionPush(ctx context.Context, base, token string, payload []byte, id
 		case http.StatusForbidden, http.StatusNotFound:
 			reason = "receiver is unavailable or does not accept session pushes"
 		case http.StatusConflict:
-			reason = "session conflicts with receiver's accepted snapshot or maintenance is busy"
+			reason = "session conflicts with receiver's accepted snapshot"
 		case http.StatusRequestEntityTooLarge:
 			reason = "session exceeds receiver size limit"
 		case http.StatusUnsupportedMediaType:

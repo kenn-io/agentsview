@@ -25,8 +25,7 @@ func (s *Sync) migrateCodexPages(
 ) error {
 	threads := make(map[string]db.Session)
 	for _, sess := range batch {
-		switch sess.Agent {
-		case "codex", "traex", "augure-code":
+		if parser.IsCodexFormatAgent(parser.AgentType(sess.Agent)) {
 			prefixEnd := strings.LastIndex(sess.ID, ":") + 1
 			if prefixEnd > 0 {
 				id := sess.ID[:prefixEnd] + parser.CodexThreadIDFromSessionKey(sess.ID[prefixEnd:])
@@ -228,7 +227,9 @@ func retireCodexPageThread(ctx context.Context, tx *sql.Tx, threadID, pageID str
 	// thread-wide scope still needs an empty anchor for returning pages and
 	// restore/purge; retain its ownership and source/remote trash baselines.
 	_, err := tx.ExecContext(ctx, `
-		WITH retired AS (DELETE FROM sessions WHERE id = $1 RETURNING *)
+		WITH retired AS (DELETE FROM sessions WHERE id = $1 RETURNING *),
+		links AS (DELETE FROM commit_links WHERE NOT retained AND session_id IN (SELECT id FROM retired)
+			AND NOT EXISTS (SELECT 1 FROM retired WHERE trash_includes_codex_pages AND deleted_at IS NOT NULL))
 		INSERT INTO sessions (
 			id, machine, owner_marker, project, agent, created_at,
 			deleted_at, source_deleted_at, deletion_cause,

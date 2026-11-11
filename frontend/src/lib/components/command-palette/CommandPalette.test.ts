@@ -740,8 +740,7 @@ describe("CommandPalette", () => {
   it("renders the semantic setup panel instead of the raw error for semantic-unavailable", async () => {
     mockSearchStore.mode = "semantic";
     mockSearchStore.error = {
-      detail:
-        "semantic search not available: enable [vector] in config.toml and run 'agentsview index embeddings build'",
+      detail: "semantic search unavailable",
       kind: "semantic-unavailable",
     };
     const component = mount(CommandPalette, { target: document.body });
@@ -752,6 +751,40 @@ describe("CommandPalette", () => {
 
     unmount(component);
   });
+
+  it.each([
+    [
+      "while it is off",
+      { enabled: true, provider: "built-in", missing_bytes: 295000000, busy: false },
+      true,
+    ],
+    [
+      "not while Turn on runs",
+      { enabled: false, provider: "", missing_bytes: 0, busy: true },
+      false,
+    ],
+  ] as const)(
+    "fetches setup once across keyword queries and shows the footer hint %s",
+    async (_name, setup, shown) => {
+      mockEmbeddingsService.getApiV1EmbeddingsStatus.mockResolvedValue({
+        running: false,
+        done: 0,
+        total: 0,
+        eta_milliseconds: 0,
+        setup: { ...setup, action: "turn-on", installing: false },
+      });
+      const component = mount(CommandPalette, { target: document.body });
+      await enterSearchQuery();
+      for (let i = 0; i < 10; i++) await tick();
+      expect(document.body.textContent?.includes("Search by meaning is off")).toBe(shown);
+      await enterSearchQuery("another query");
+      for (let i = 0; i < 10; i++) await tick();
+      if (shown) {
+        expect(mockEmbeddingsService.getApiV1EmbeddingsStatus).toHaveBeenCalledTimes(1);
+      }
+      unmount(component);
+    },
+  );
 
   it.each([
     [
@@ -791,7 +824,7 @@ describe("CommandPalette", () => {
       mockSearchStore.mode = "semantic";
       mockSearchStore.error = {
         detail:
-          "semantic search not available: enable [vector] in config.toml and run 'agentsview index embeddings build'",
+          "semantic search not available: run 'agentsview index embeddings build' or turn it on in Settings → Embeddings → Turn on",
         kind: "semantic-unavailable",
       };
       const component = mount(CommandPalette, { target: document.body });
@@ -835,7 +868,7 @@ describe("CommandPalette", () => {
     mockSearchStore.mode = "semantic";
     mockSearchStore.error = {
       detail:
-        "semantic search not available: enable [vector] in config.toml and run 'agentsview index embeddings build'",
+        "semantic search not available: run 'agentsview index embeddings build' or turn it on in Settings → Embeddings → Turn on",
       kind: "semantic-unavailable",
     };
     mockSessions.activeSessionId = "session-1";

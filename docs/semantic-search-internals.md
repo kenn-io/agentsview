@@ -691,8 +691,12 @@ covers the invariants.
 
 ## Error taxonomy
 
-Two sentinel errors carry every semantic/hybrid failure across CLI, HTTP, and
-MCP:
+CLI and MCP hybrid requests opt into one keyword-only retry after
+`ErrSemanticUnavailable`. A successful retry returns `effective_mode: hybrid_keyword`
+and a reason in `note`. Semantic-only requests and HTTP callers that leave
+`allow_keyword_fallback` off still receive the errors below.
+
+Two sentinel errors classify semantic/hybrid failures:
 
 | Sentinel                 | Meaning                                                                                                                                        | HTTP |
 | ------------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------- | ---- |
@@ -706,8 +710,8 @@ stale-fingerprint case.
 
 The distinction matters for callers: 501 means the feature will not work until
 something is configured or built; 503 means it should work and is worth
-retrying. CLI and MCP surface the same cause-specific remediation text described
-in the [user-facing error taxonomy](/docs/semantic-search/#error-taxonomy).
+retrying. Calls that return an error surface the cause-specific remediation
+text described in the [user-facing error taxonomy](/docs/semantic-search/#error-taxonomy).
 
 ## Skill generation
 

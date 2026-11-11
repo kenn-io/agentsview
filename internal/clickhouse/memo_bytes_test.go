@@ -4,18 +4,17 @@ import (
 	"testing"
 
 	"github.com/stretchr/testify/assert"
-	"go.kenn.io/agentsview/internal/db"
 )
 
 func TestAggregateRowMemoCountsGroupMetadata(t *testing.T) {
-	base := aggregateRowBytes(chUsageAggregateRow{})
+	base := aggregateRowBytes(CHUsageAggregateRow{})
 	for _, tc := range []struct {
 		name  string
-		row   chUsageAggregateRow
+		row   CHUsageAggregateRow
 		bytes int64
 	}{
-		{"key", chUsageAggregateRow{groupKey: "job-a"}, 5},
-		{"title", chUsageAggregateRow{sessionName: "Daily digest · Oct 07 12:00"}, 28},
+		{"key", CHUsageAggregateRow{GroupKey: "job-a"}, 5},
+		{"title", CHUsageAggregateRow{SessionName: "Daily digest · Oct 07 12:00"}, 28},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			assert.Equal(t, tc.bytes, aggregateRowBytes(tc.row)-base)
@@ -23,20 +22,8 @@ func TestAggregateRowMemoCountsGroupMetadata(t *testing.T) {
 	}
 }
 
-func TestTopSessionMemoCountsGroupMetadata(t *testing.T) {
-	base := topSessionBytes(db.TopSessionEntry{})
-	for _, tc := range []struct {
-		name  string
-		entry db.TopSessionEntry
-		bytes int64
-	}{
-		{"machine", db.TopSessionEntry{Machine: "host-a.example"}, 14},
-		{"key", db.TopSessionEntry{GroupKey: "job-a"}, 5},
-		{"label", db.TopSessionEntry{GroupLabel: "Daily digest"}, 12},
-		{"title", db.TopSessionEntry{SessionName: "Daily digest · Oct 07 12:00"}, 28},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			assert.Equal(t, tc.bytes, topSessionBytes(tc.entry)-base)
-		})
-	}
+func TestDailyUsageMemoCountsDimensionEvidence(t *testing.T) {
+	base := dailyUsageRowBytes(chDailyUsageGroupRow{})
+	row := chDailyUsageGroupRow{InexactModels: []string{"model-a", "model-b"}, InexactProjects: []string{"project"}}
+	assert.Equal(t, int64(3*16+21), dailyUsageRowBytes(row)-base)
 }

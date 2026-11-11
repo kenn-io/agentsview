@@ -137,15 +137,17 @@ func newSessionListCommand() *cobra.Command {
 			}
 			defer cleanup()
 
+			f.ExclusionCounts = new(false)
+			if len(f.Labels) == 0 && f.PR == "" && (!f.IncludeChildren || !f.IncludeOneShot && !f.IncludeAutomated) {
+				f.ExclusionCounts = new(true)
+			}
 			list, err := svc.List(cmd.Context(), f)
 			if err != nil {
 				return err
 			}
-			notice, err := sessionListDefaultExclusionNotice(
-				cmd.Context(), svc, f, list.Total)
-			if err != nil {
-				return err
-			}
+			notice := sessionListDefaultExclusionNotice(
+				f, list.ExclusionCounts)
+			list.ExclusionCounts = nil
 			if notice != "" {
 				fmt.Fprintln(cmd.ErrOrStderr(), notice)
 			}
@@ -243,80 +245,61 @@ func newSessionListCommand() *cobra.Command {
 	return cmd
 }
 
-func sessionListDefaultExclusionNotice(
-	ctx context.Context,
-	svc service.SessionService,
-	f service.ListFilter,
-	visibleTotal int,
-) (string, error) {
-	if f.Cursor != "" || (f.IncludeOneShot && f.IncludeAutomated) {
-		return "", nil
+func sessionListDefaultExclusionNotice(f service.ListFilter, counts *db.SessionExclusionCounts) string {
+	if counts == nil {
+		return ""
 	}
-
-	hiddenOneShot := 0
-	if !f.IncludeOneShot {
-		withOneShot := sessionListCountFilter(f)
-		withOneShot.IncludeOneShot = true
-		withOneShot.IncludeAutomated = f.IncludeAutomated
-		list, err := svc.List(ctx, withOneShot)
-		if err != nil {
-			return "", fmt.Errorf(
-				"counting one-shot session exclusions: %w", err)
-		}
-		hiddenOneShot = hiddenSessionCount(list.Total, visibleTotal)
+	hiddenOneShot, hiddenAutomated, hiddenChildren := counts.OneShot, counts.Automated, counts.Children
+	lowerBound := ""
+	if counts.ChildrenLowerBound {
+		lowerBound = "at least "
 	}
-
-	hiddenAutomated := 0
-	if !f.IncludeAutomated {
-		withAutomated := sessionListCountFilter(f)
-		withAutomated.IncludeOneShot = f.IncludeOneShot
-		withAutomated.IncludeAutomated = true
-		list, err := svc.List(ctx, withAutomated)
-		if err != nil {
-			return "", fmt.Errorf(
-				"counting automated session exclusions: %w", err)
-		}
-		hiddenAutomated = hiddenSessionCount(list.Total, visibleTotal)
-	}
-
-	hiddenTotal := hiddenOneShot + hiddenAutomated
+	hiddenTotal := hiddenOneShot + hiddenAutomated + hiddenChildren
 	if hiddenTotal == 0 {
-		return "", nil
+		return ""
 	}
 
 	var hiddenParts []string
 	var flagParts []string
+	var flatClasses []string
 	if hiddenOneShot > 0 {
 		hiddenParts = append(hiddenParts,
 			fmt.Sprintf("%d one-shot", hiddenOneShot))
 		flagParts = append(flagParts, "--include-one-shot")
+		flatClasses = append(flatClasses, "one-shot")
 	}
 	if hiddenAutomated > 0 {
 		hiddenParts = append(hiddenParts,
 			fmt.Sprintf("%d automated", hiddenAutomated))
 		flagParts = append(flagParts, "--include-automated")
+		flatClasses = append(flatClasses, "automated")
 	}
 
-	return fmt.Sprintf(
-		"Excluded %d %s by default: %s. Use %s to include them.",
-		hiddenTotal,
-		pluralSession(hiddenTotal),
-		strings.Join(hiddenParts, ", "),
-		strings.Join(flagParts, " and/or "),
-	), nil
-}
-
-func sessionListCountFilter(f service.ListFilter) service.ListFilter {
-	f.Cursor = ""
-	f.Limit = 1
-	return f
-}
-
-func hiddenSessionCount(expandedTotal, visibleTotal int) int {
-	if expandedTotal <= visibleTotal {
-		return 0
+	separator := " and/or "
+	flatFlags := strings.Join(flagParts, separator)
+	if hiddenChildren > 0 {
+		hiddenParts = append(hiddenParts, fmt.Sprintf("%s%d child", lowerBound, hiddenChildren))
+		flagParts = nil
+		if !f.IncludeOneShot {
+			flagParts = append(flagParts, "--include-one-shot")
+		}
+		if !f.IncludeAutomated {
+			flagParts = append(flagParts, "--include-automated")
+		}
+		if !f.IncludeChildren {
+			flagParts = append(flagParts, "--include-children")
+		}
+		separator = " "
 	}
-	return expandedTotal - visibleTotal
+	summary := fmt.Sprintf("%s%d %s by default: %s", lowerBound, hiddenTotal, pluralSession(hiddenTotal), strings.Join(hiddenParts, ", "))
+	if hiddenOneShot == 0 && hiddenAutomated == 0 {
+		summary = fmt.Sprintf("%s%d child %s by default", lowerBound, hiddenChildren, pluralSession(hiddenChildren))
+	}
+	guidance := fmt.Sprintf("Use %s to include them.", strings.Join(flagParts, separator))
+	if hiddenChildren > 0 && flatFlags != "" && !f.IncludeChildren {
+		guidance = fmt.Sprintf("For %s sessions, use %s. For child sessions, use %s.", strings.Join(flatClasses, " or "), flatFlags, strings.Join(flagParts, separator))
+	}
+	return fmt.Sprintf("Excluded %s. %s", summary, guidance)
 }
 
 func pluralSession(n int) string {

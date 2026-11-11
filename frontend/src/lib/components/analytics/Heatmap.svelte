@@ -1,6 +1,7 @@
 <script lang="ts">
   import { Chart, Layer, Rect, Text } from "layerchart";
   import { analytics } from "../../stores/analytics.svelte.js";
+  import PanelStatus from "./PanelStatus.svelte";
   import type { HeatmapMetric } from "../../stores/analytics.svelte.js";
   import { formatDateTime, getLocale, m } from "../../i18n/index.js";
 
@@ -151,10 +152,6 @@
   const svgHeight = $derived(
     7 * cellStep + HEADER_HEIGHT + 4,
   );
-  const supportsOutputTokens = $derived(
-    analytics.summary?.total_output_tokens !== undefined &&
-      analytics.summary?.token_reporting_sessions !== undefined,
-  );
 </script>
 
 <div class="heatmap-container">
@@ -175,29 +172,23 @@
       >
         {m.analytics_metric_sessions()}
       </button>
-      {#if supportsOutputTokens}
-        <button
-          class="toggle-btn"
-          class:active={analytics.metric === "output_tokens"}
-          onclick={() => analytics.setMetric("output_tokens")}
-        >
-          {m.analytics_metric_output_tokens()}
-        </button>
-      {/if}
+      <button
+        class="toggle-btn"
+        class:active={analytics.metric === "output_tokens"}
+        onclick={() => analytics.setMetric("output_tokens")}
+      >
+        {m.analytics_metric_output_tokens()}
+      </button>
     </div>
   </div>
 
-  {#if analytics.errors.heatmap}
-    <div class="error">
-      {analytics.errors.heatmap}
-      <button
-        class="retry-btn"
-        onclick={() => analytics.fetchHeatmap()}
-      >
-        {m.shared_retry()}
-      </button>
-    </div>
-  {:else if grid.cols.length > 0}
+  <PanelStatus
+    hasData={analytics.heatmap !== null}
+    pending={analytics.querying.heatmap}
+    error={analytics.errors.heatmap}
+    onRetry={() => analytics.fetchHeatmap()}
+  />
+  {#if grid.cols.length > 0}
     {#if analytics.heatmap?.entries_from && analytics.heatmap.entries_from > analytics.from}
       <div class="clamp-note">{m.analytics_heatmap_showing_recent_year()}</div>
     {/if}
@@ -266,7 +257,7 @@
         <span>{tooltip.text}</span>
       </div>
     {/if}
-  {:else}
+  {:else if analytics.heatmap}
     <div class="empty">{m.shared_no_data_for_period()}</div>
   {/if}
 </div>
@@ -377,23 +368,5 @@
     font-size: 12px;
     padding: 24px;
     text-align: center;
-  }
-
-  .error {
-    color: var(--accent-red);
-    font-size: 12px;
-    padding: 12px;
-    display: flex;
-    align-items: center;
-    gap: 8px;
-  }
-
-  .retry-btn {
-    padding: 2px 8px;
-    border: 1px solid currentColor;
-    border-radius: var(--radius-sm);
-    font-size: 11px;
-    color: inherit;
-    cursor: pointer;
   }
 </style>

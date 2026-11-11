@@ -70,6 +70,7 @@
   "header_transcript_blocks_tool": "工具调用",
   "header_transcript_blocks_code": "代码块",
   "header_transcript_blocks_system": "系统边界",
+  "header_transcript_blocks_hook": "钩子",
   "header_actions_follow_latest": "跟随最新消息",
   "header_actions_toggle_sort": "切换排序 (o)",
   "header_actions_cycle_layout": "切换布局：{layout} (l)",
@@ -169,9 +170,6 @@
   "command_palette_semantic_ready_intro": "语义搜索已配置，但尚未为此归档构建嵌入索引。",
   "command_palette_semantic_build_button": "构建嵌入",
   "command_palette_semantic_build_hint": "构建在服务器后台运行；完成后将自动重新执行此搜索。",
-  "command_palette_semantic_building_title": "正在构建嵌入索引...",
-  "command_palette_semantic_building_scanning": "正在扫描归档...",
-  "command_palette_semantic_building_progress": "已嵌入 {percentLabel}",
   "command_palette_semantic_failed_title": "嵌入构建失败",
   "command_palette_search_timeout_title": "搜索耗时过长",
   "command_palette_search_timeout_detail": "请重试。嵌入模型预热时，首次语义或混合搜索可能会更慢。",
@@ -580,6 +578,7 @@
   "analytics_export_csv": "导出 CSV",
   "analytics_activity_by_day_hour": "按日期和小时查看活动",
   "analytics_summary_sessions": "会话",
+  "analytics_summary_sessions_scope": "{range} · 含 Subagent",
   "analytics_summary_messages": "消息",
   "analytics_summary_projects": "项目",
   "analytics_summary_active_days": "活跃天数",
@@ -1667,7 +1666,7 @@
   "insights_page_template_instruction_opportunities": "指令优化机会",
   "insights_page_template_friction_review": "摩擦复盘",
   "friction_review_summary_title": "模型撰写的摘要",
-  "friction_review_summary_notice": "由模型根据此日报的摘要和模式标题撰写。不会修改发现项、日报或问题。",
+  "friction_review_summary_notice": "由模型根据此日报的摘要、模式标题以及分组后的诊断来源和消息撰写。不会修改发现项、日报或问题。",
   "friction_review_summary_empty": "此日报尚无摘要。",
   "friction_review_summary_generate": "生成摘要",
   "friction_review_summary_regenerate": "重新生成",
@@ -2015,54 +2014,31 @@
   "settings_embeddings_load_failed": "加载嵌入状态失败",
   "settings_embeddings_model_label": "模型",
   "settings_embeddings_dimension_label": "维度",
-  "settings_embeddings_status_label": "状态",
-  "settings_embeddings_status_idle": "空闲",
-  "settings_embeddings_status_scanning": "扫描中",
-  "settings_embeddings_status_embedding": "嵌入中",
-  "settings_embeddings_status_running": "运行中",
   "settings_embeddings_scanning_hint": "正在扫描会话变更 - 总工作量尚未确定。",
-  "settings_embeddings_progress_chunks": [
-    {
-      "declarations": [
-        "input count",
-        "input doneLabel",
-        "input totalLabel",
-        "local countPlural = count: plural"
-      ],
-      "selectors": ["countPlural"],
-      "match": {
-        "countPlural=other": "{doneLabel} / {totalLabel} 个块"
-      }
-    }
-  ],
   "settings_embeddings_rate": [
     {
       "declarations": ["input count", "input rateLabel", "local countPlural = count: plural"],
       "selectors": ["countPlural"],
       "match": {
-        "countPlural=other": "{rateLabel} 块/秒"
+        "countPlural=other": "{rateLabel} 文本片段/秒"
       }
     }
   ],
   "settings_embeddings_elapsed": "已用 {duration}",
-  "settings_embeddings_eta": "预计剩余 {duration}",
-  "settings_embeddings_eta_estimating": "正在估算剩余时间...",
   "settings_embeddings_duration_hours_minutes": "{hours} 小时 {minutes} 分",
   "settings_embeddings_duration_minutes_seconds": "{minutes} 分 {seconds} 秒",
   "settings_embeddings_duration_seconds": "{seconds} 秒",
   "settings_embeddings_last_build_label": "上次构建",
   "settings_embeddings_last_build_completed": "已完成",
-  "settings_embeddings_last_build_failed": "失败",
   "settings_embeddings_last_build_activated": "已激活新代",
   "settings_embeddings_last_build_documents": "已嵌入文档数",
-  "settings_embeddings_last_build_chunks": "已嵌入块数",
+  "settings_embeddings_last_build_chunks": "已索引文本片段数",
   "settings_embeddings_generations_title": "嵌入代",
   "settings_embeddings_generations_empty": "尚无嵌入代。",
   "settings_embeddings_state_active": "活跃",
   "settings_embeddings_state_building": "构建中",
   "settings_embeddings_state_retired": "已停用",
   "settings_embeddings_coverage": "已嵌入 {embeddedLabel} · 缺少 {missingLabel}",
-  "settings_embeddings_progress_aria": "嵌入进度",
   "settings_remote_connected_version": "已连接 (v{version})",
   "settings_remote_server_returned": "服务器返回 {status}",
   "settings_remote_connection_failed": "连接失败",
@@ -2145,6 +2121,9 @@
   "system_boundary_interrupted": "请求中断",
   "system_boundary_task_notification": "任务通知",
   "system_boundary_stop_hook": "停止钩子反馈",
+  "system_boundary_hook_success": "钩子输出",
+  "system_boundary_stop_hook_summary": "停止钩子摘要",
+  "system_boundary_hook_cancelled": "钩子已取消",
   "system_boundary_peer_message": "来自其他会话的消息",
   "system_boundary_title": "系统边界：{subtype}",
   "system_boundary_show_content": "显示内容",
@@ -2932,6 +2911,10 @@
   "friction_issue_cancel": "取消",
   "friction_issue_unlink": "取消关联",
   "friction_issue_unlink_title": "移除关联；Kata 问题保持不变",
+  "friction_filing_retry": "提交失败，将重试",
+  "friction_filing_needs_person": "提交已停止",
+  "friction_filing_paused": "自动提交已暂停",
+  "friction_filing_paused_title": "此模式的关联已被移除，自动提交会跳过它。提交或关联后即可恢复。",
   "friction_digest_heading": "摩擦日志 — {date}",
   "friction_digest_built": "生成于 {when}（{timezone}）",
   "friction_p0_failed": [
@@ -3015,6 +2998,8 @@
   "friction_section_patterns": "模式",
   "friction_section_frustration": "挫败",
   "friction_section_interruptions": "中断",
+  "friction_section_diagnostics": "诊断",
+  "friction_diagnostic_count": "{count} 次",
   "friction_interruption_count": [
     {
       "declarations": [
@@ -3033,6 +3018,7 @@
   "friction_kind_pattern": "模式",
   "friction_kind_frustration": "挫败",
   "friction_kind_interruption": "中断",
+  "friction_kind_diagnostic": "诊断",
   "friction_disabled_title": "此服务器已关闭摩擦日志",
   "friction_disabled_hint": "此服务器不生成摘要。请在 config.toml 中设置 [friction] enabled = true 并重启守护进程。只读归档无法生成摘要。",
   "friction_markdown_title": "Markdown",
@@ -3065,5 +3051,33 @@
   "docbank_bytes_not_kept": "未保留图片字节",
   "docbank_file": "文件 {n} · {mediaType} · {size}",
   "docbank_file_without_size": "文件 {n} · {mediaType}",
-  "docbank_more": "Docbank 中还有 {count} 项"
+  "docbank_more": "Docbank 中还有 {count} 项",
+  "meaning_name": "按含义搜索",
+  "meaning_off": "关闭",
+  "meaning_on": "开启",
+  "meaning_uses_ollama": "开启后使用 Ollama",
+  "meaning_ollama": "开启 · Ollama",
+  "meaning_turning_on": "正在开启",
+  "meaning_turn_on": "开启",
+  "meaning_download": "一次下载 {size}，供所有 Kenn 应用共享",
+  "meaning_downloaded": "已在此计算机上",
+  "meaning_configured": "使用已配置的服务器",
+  "meaning_downloading": "正在下载 {done}，共 {total}",
+  "meaning_indexing": "正在索引 {done}，共 {total} {items}",
+  "meaning_time_left": "剩余 {time}",
+  "meaning_meanwhile": "期间仍可使用关键词搜索",
+  "meaning_under_minute": "不到一分钟",
+  "meaning_about_time": "约 {time}",
+  "meaning_progress": "按含义搜索设置",
+  "meaning_hint": "按含义搜索已关闭",
+  "meaning_chunks": [
+    {
+      "declarations": ["input count", "local countPlural = count: plural"],
+      "selectors": ["countPlural"],
+      "match": { "countPlural=one": "文本片段", "countPlural=other": "文本片段" }
+    }
+  ],
+  "empty_archive_title": "暂无会话",
+  "empty_archive_desc": "AgentsView 从这些文件夹读取会话。代理写入其中任一文件夹后，会话就会显示在这里。",
+  "empty_archive_choose_folders": "选择文件夹"
 }

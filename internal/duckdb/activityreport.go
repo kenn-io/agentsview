@@ -2,13 +2,16 @@ package duckdb
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"slices"
 	"sort"
 	"time"
 
 	"go.kenn.io/agentsview/internal/activity"
 	"go.kenn.io/agentsview/internal/db"
 	"go.kenn.io/agentsview/internal/export"
+	"go.kenn.io/agentsview/internal/kept"
 	"go.kenn.io/agentsview/internal/money"
 )
 
@@ -44,6 +47,31 @@ type activityReportBackend struct {
 	rangeStartUTC          string
 	rangeEndUTC            string
 	lowerBound, upperBound string
+	kept                   *activityReportKept
+}
+
+// activityReportKept holds the kept entries of the build's sessions, from
+// the memo or its pairing scan, so message counts read no messages.
+type activityReportKept struct {
+	sessions map[string]activityRunsEntry
+	complete bool
+}
+
+func (b activityReportBackend) ActivityReportRunSource(ids []string, q activity.Query) activity.RunSource {
+	return func(ctx context.Context, yield func(activity.Run) error) error {
+		runs, sessions, err := b.activityReportRuns(ctx, ids, q)
+		if err != nil {
+			return err
+		}
+		b.kept.sessions, b.kept.complete = sessions, true
+		// The consumer checks for cancellation before each run.
+		for _, run := range runs {
+			if err := yield(run); err != nil {
+				return err
+			}
+		}
+		return nil
+	}
 }
 
 func (b activityReportBackend) ActivityReportUsage(
@@ -55,10 +83,26 @@ func (b activityReportBackend) ActivityReportUsage(
 	)
 }
 
+// ActivityReportMessageCounts counts the messages the kept entries hold,
+// before the effective end cast to DuckDB's microsecond TIMESTAMP.
 func (b activityReportBackend) ActivityReportMessageCounts(
 	ctx context.Context, ids []string, q activity.Query, artifacts *activity.CandidateArtifacts,
 ) error {
-	return b.activityReportMessageCounts(ctx, ids, q, artifacts)
+	if !b.kept.complete {
+		return errors.New("activity message counts requested before pairing finished")
+	}
+	counts := activity.NewMessageAccumulator(q, artifacts)
+	upper := q.EffectiveEnd.UnixMicro()
+	before := func(micros []int64) []int64 {
+		i, _ := slices.BinarySearch(micros, upper)
+		return micros[:i]
+	}
+	for _, id := range ids {
+		session := b.kept.sessions[id]
+		counts.AddSorted(id, "user", before(session.users))
+		counts.AddSorted(id, "assistant", before(session.assistants))
+	}
+	return ctx.Err()
 }
 
 func (s *Store) BuildActivityReportArtifacts(
@@ -70,6 +114,18 @@ func (s *Store) BuildActivityReportArtifacts(
 	activity.ReportProgress(onProgress, activity.Progress{Phase: activity.ProgressLoadingSessions})
 	f.IncludeSubagents = true
 	f.IncludeForks = true
+	// Take the key before the first read. A build spanning a handle swap
+	// stays under the old stamp, which later requests cannot reach.
+	var selection, key string
+	onDisk := !q.Partial && kept.DayPreset(q, time.Now())
+	if stamp := s.mirrorStamp(); !q.Partial && stamp != "" && !db.TerminationUsesTime(f.Termination) {
+		selection = kept.Selection(f, q)
+		key = stamp + "|" + s.pricingDigest
+		if report, ok := s.reports.Get(selection, key, onDisk); ok {
+			activity.ReportProgress(onProgress, report.Done)
+			return report.Artifacts, nil
+		}
+	}
 	rangeStartUTC, rangeEndUTC := db.ActivityReportInstantBoundsUTC(q)
 	lowerBound := db.PaddedUTCBound(q.RangeStart.UTC().Format(time.RFC3339), -14)
 	upperBound := db.PaddedUTCBound(q.RangeEnd.UTC().Format(time.RFC3339), 14)
@@ -87,14 +143,21 @@ func (s *Store) BuildActivityReportArtifacts(
 		Store: s, filter: f,
 		rangeStartUTC: rangeStartUTC, rangeEndUTC: rangeEndUTC,
 		lowerBound: lowerBound, upperBound: upperBound,
+		kept: &activityReportKept{},
 	}
-	artifacts, _, err := activity.BuildReportArtifacts(
+	artifacts, done, err := activity.BuildReportArtifacts(
 		ctx, backend, sessions, ids, q, onProgress, "aggregating duckdb activity report")
+	if err == nil && key != "" {
+		s.reports.Put(selection, key, onDisk, kept.Report{Artifacts: artifacts, Done: done})
+	}
 	return artifacts, err
 }
 
-func (s *Store) activityReportMessageCounts(
-	ctx context.Context, ids []string, q activity.Query, artifacts *activity.CandidateArtifacts,
+// scanActivityCountedMessages passes add the sessions' counted messages from
+// q's range start to its effective end. Reports count the kept entries; see
+// ActivityReportMessageCounts.
+func (s *Store) scanActivityCountedMessages(
+	ctx context.Context, ids []string, q activity.Query, add func(sessionID, role string, at time.Time),
 ) error {
 	if len(ids) == 0 {
 		return nil
@@ -103,21 +166,20 @@ func (s *Store) activityReportMessageCounts(
 		SELECT session_id, role, timestamp FROM messages
 		WHERE session_id IN (SELECT unnest(?))
 			AND role IN ('user', 'assistant') AND is_system = false
-			AND COALESCE(source_subtype, '') <> 'tool_result'
+			AND source_subtype <> 'tool_result'
 			AND timestamp >= CAST(? AS TIMESTAMP) AND timestamp < CAST(? AS TIMESTAMP)`,
 		ids, q.RangeStart.UTC().Format(time.RFC3339Nano), q.EffectiveEnd.UTC().Format(time.RFC3339Nano))
 	if err != nil {
 		return fmt.Errorf("querying duckdb activity message counts: %w", err)
 	}
 	defer rows.Close()
-	counts := activity.NewMessageAccumulator(q, artifacts)
 	for rows.Next() {
 		var sessionID, role string
 		var timestamp time.Time
 		if err := rows.Scan(&sessionID, &role, &timestamp); err != nil {
 			return fmt.Errorf("scanning duckdb activity message counts: %w", err)
 		}
-		counts.Add(sessionID, role, timestamp)
+		add(sessionID, role, timestamp)
 	}
 	return rows.Err()
 }
@@ -161,7 +223,7 @@ func (s *Store) GetSessionUsageRows(
 			NULL AS cost_microdollars, '' AS cost_source,
 			s.project AS project, s.agent AS agent, s.machine AS machine,
 			s.user_message_count AS user_message_count, s.is_automated AS is_automated,
-			COALESCE(s.display_name, s.session_name, s.first_message, s.project, s.id) AS display_name,
+			COALESCE(s.display_name, s.session_name, s.first_message, s.project) AS display_name,
 			s.started_at AS started_at,
 			COALESCE(s.ended_at, s.started_at, s.created_at) AS activity_at
 		FROM messages m
@@ -177,7 +239,7 @@ func (s *Store) GetSessionUsageRows(
 			'' AS source_uuid,
 			CASE
 				WHEN ue.dedup_key != '' THEN ue.session_id || ':' || ue.source || ':' || ue.dedup_key
-				ELSE ue.session_id || ':' || ue.source || ':id:' || CAST(ue.id AS VARCHAR)
+				ELSE ue.session_id || ':' || ue.source || ':id:' || ue.id
 			END AS usage_dedup_key,
 			ue.input_tokens AS input_tokens, ue.output_tokens AS output_tokens,
 			ue.cache_creation_input_tokens AS cache_create,
@@ -187,7 +249,7 @@ func (s *Store) GetSessionUsageRows(
 			ue.cost_source AS cost_source,
 			s.project AS project, s.agent AS agent, s.machine AS machine,
 			s.user_message_count AS user_message_count, s.is_automated AS is_automated,
-			COALESCE(s.display_name, s.session_name, s.first_message, s.project, s.id) AS display_name,
+			COALESCE(s.display_name, s.session_name, s.first_message, s.project) AS display_name,
 			s.started_at AS started_at,
 			COALESCE(s.ended_at, s.started_at, s.created_at) AS activity_at
 		FROM usage_events ue
@@ -349,7 +411,7 @@ func (s *Store) activityReportSessions(
 		s.machine,
 		s.started_at,
 		s.ended_at,
-		COALESCE(s.is_automated, false) AS is_automated,
+		s.is_automated,
 		s.relationship_type = 'subagent' AS is_subagent
 	FROM sessions s
 	WHERE ` + where
@@ -903,7 +965,7 @@ func duckActivityReportUsageQuery(candidateWhere string) string {
 				'' AS source_uuid,
 				CASE
 					WHEN ue.dedup_key != '' THEN ue.session_id || ':' || ue.source || ':' || ue.dedup_key
-					ELSE ue.session_id || ':' || ue.source || ':id:' || CAST(ue.id AS VARCHAR)
+					ELSE ue.session_id || ':' || ue.source || ':id:' || ue.id
 				END AS usage_dedup_key,
 					ue.input_tokens AS input_tokens, ue.output_tokens AS output_tokens,
 					ue.cache_creation_input_tokens AS cache_create,
@@ -923,7 +985,7 @@ func duckActivityReportUsageQuery(candidateWhere string) string {
 		peer_keys AS (
 			SELECT DISTINCT claude_message_id, claude_request_id
 			FROM candidate_messages
-			WHERE claude_message_id != '' AND claude_request_id != ''
+			WHERE claude_message_id != ''
 		),
 		peer_messages AS (
 			SELECT m.session_id AS session_id, m.ordinal AS message_ordinal,

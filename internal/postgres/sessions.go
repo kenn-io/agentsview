@@ -16,6 +16,7 @@ import (
 
 	"go.kenn.io/agentsview/internal/config"
 	"go.kenn.io/agentsview/internal/db"
+	"go.kenn.io/agentsview/internal/kept"
 	"go.kenn.io/agentsview/internal/readbase"
 )
 
@@ -35,23 +36,34 @@ type Store struct {
 // storeRuntime is shared by the owning store and its borrowed read views.
 // Views never copy locks or start detached work with their transaction.
 type storeRuntime struct {
+	activityKept       kept.Memo[pgActivityKept]
+	activityInputs     kept.Memo[pgActivityInputs]
+	frustrationMarkers db.FrustrationMarkerMemo
+
 	cursorMu     sync.RWMutex
 	cursorSecret []byte
 
-	insightCapabilityMu        sync.RWMutex
-	insightGenerationAvailable bool
-	frictionAvailable          atomic.Bool
+	insightCapabilityMu          sync.RWMutex
+	insightGenerationAvailable   bool
+	frictionAvailable            atomic.Bool
+	frictionDiagnosticsAvailable atomic.Bool
 	// frictionIssueLinksPresent is set once a pattern read finds
 	// friction_issue_links; see frictionIssueSelect.
 	frictionIssueLinksPresent atomic.Bool
 	// frictionIssueLinksWritable is set when startup proved this role can
 	// write friction_issue_links.
 	frictionIssueLinksWritable atomic.Bool
+	// frictionFilingStatePresent is the same for friction_filing_state.
+	frictionFilingStatePresent atomic.Bool
 
-	pricingMu     sync.Mutex
-	pricingLoadMu sync.Mutex
-	pricingLoad   *pricingLoad
-	customPricing map[string]config.CustomModelRate
+	pricingMu         sync.Mutex
+	pricingLoadMu     sync.Mutex
+	pricingLoad       *pricingLoad
+	customPricing     map[string]config.CustomModelRate
+	pricingGeneration uint64
+	dailyUsage        kept.Reads[db.DailyUsageResult]
+	planUsage         kept.Reads[*db.PlanUsageCountSummary]
+	topUsage          kept.Reads[[]db.TopSessionEntry]
 
 	// vectorMu guards the semantic-search seam. vectorSearcher is the PG
 	// vector searcher wired at pg serve startup when a generation matches
@@ -385,7 +397,14 @@ func (s *Store) ListSessions(
 		total = cur.Total
 	}
 
-	if total <= 0 {
+	var exclusions *db.SessionExclusionCounts
+	if f.WantsExclusionCounts() {
+		var err error
+		total, exclusions, err = db.CountSessionExclusions(ctx, s.pg, f, s.sessionDialect())
+		if err != nil {
+			return db.SessionPage{}, fmt.Errorf("counting session exclusions: %w", err)
+		}
+	} else if total <= 0 {
 		countQ := "SELECT COUNT(*) FROM sessions WHERE " +
 			where
 		if err := s.pg.QueryRowContext(
@@ -433,7 +452,10 @@ func (s *Store) ListSessions(
 		return db.SessionPage{}, err
 	}
 
-	return db.BuildSessionPage(sessions, total, f, rs, s.EncodeCursor), nil
+	exclusions.LoadChildren(ctx, s.pg, f, s.sessionDialect(), total)
+	page := db.BuildSessionPage(sessions, total, f, rs, s.EncodeCursor)
+	page.ExclusionCounts = exclusions
+	return page, nil
 }
 
 // GetSidebarSessionIndex returns the skinny session rows needed by
@@ -833,10 +855,15 @@ func (s *Store) GetSession(
 	return &sess, nil
 }
 
+// pgSessionIDTailExpr computes db.SessionIDTail(id).
+// idx_sessions_id_tail indexes this exact expression.
+const pgSessionIDTailExpr = `substring(id, '[^:~]*$')`
+
 // FindSessionIDsByRawSuffix returns up to limit session IDs whose
 // stored id is either the exact raw input or the raw input preceded
 // by an agent or host prefix. The suffix comparison is literal and results
-// match SQLite ordering: exact match first, then most recent session.
+// match SQLite ordering: exact match first, then most recent session. The
+// tail predicate lets PostgreSQL seek idx_sessions_id_tail.
 func (s *Store) FindSessionIDsByRawSuffix(
 	ctx context.Context, raw string, limit int,
 ) ([]string, error) {
@@ -848,13 +875,14 @@ func (s *Store) FindSessionIDsByRawSuffix(
 	}
 	rows, err := s.pg.QueryContext(ctx,
 		`SELECT id FROM sessions
-		 WHERE (id = $1
+		 WHERE `+pgSessionIDTailExpr+` = $3
+		   AND (id = $1
 		        OR RIGHT(id, LENGTH($1) + 1) IN (':' || $1, '~' || $1))
 		   AND deleted_at IS NULL
 		 ORDER BY (id = $1) DESC,
 		          COALESCE(ended_at, started_at, created_at) DESC
 		 LIMIT $2`,
-		raw, limit,
+		raw, limit, db.SessionIDTail(raw),
 	)
 	if err != nil {
 		return nil, fmt.Errorf(
@@ -926,8 +954,8 @@ func (s *Store) GetChildSessions(
 	return scanPGSessionRows(rows)
 }
 
-// GetStats returns database statistics, counting only root
-// sessions with messages.
+// GetStats counts sessions with the sidebar's canonical root rule.
+// Other totals exclude subagents and forks, and include continuations.
 func (s *Store) GetStats(
 	ctx context.Context,
 	excludeOneShot, excludeAutomated bool,
@@ -943,11 +971,14 @@ func (s *Store) GetStats(
 	if excludeAutomated {
 		filter += " AND is_automated = FALSE"
 	}
-	// Sidebar polling needs all totals for the same rows. Aggregate them
-	// together so each refresh visits the filtered sessions only once.
-	query := `SELECT COUNT(*), COALESCE(SUM(message_count), 0),
+	billingStart := "NULL"
+	if pgHasTable(ctx, s.pg, "cursor_usage_events") {
+		billingStart = "(SELECT MIN(occurred_at) FROM cursor_usage_events)"
+	}
+	count, args := db.StatsRootCountSQL(s.sessionDialect(), excludeOneShot, excludeAutomated)
+	query := `SELECT ` + count + `, COALESCE(SUM(message_count), 0),
 		COUNT(DISTINCT project), COUNT(DISTINCT machine),
-		MIN(COALESCE(started_at, created_at))
+		MIN(COALESCE(started_at, created_at)), ` + billingStart + `
 		FROM sessions WHERE ` + filter
 	if s.hostedRelations {
 		query = `WITH filtered_sessions AS MATERIALIZED (
@@ -955,21 +986,23 @@ func (s *Store) GetStats(
 			       message_count,started_at,created_at
 			FROM sessions WHERE ` + filter + `
 		)` + hostedFilteredMachinesCTESQL + `
-		SELECT COUNT(*), COALESCE(SUM(message_count), 0),
+		SELECT ` + count + `, COALESCE(SUM(message_count), 0),
 		       COUNT(DISTINCT project),
 		       (SELECT COUNT(DISTINCT machine) FROM filtered_source_machines),
-		       MIN(COALESCE(started_at, created_at))
+		       MIN(COALESCE(started_at, created_at)), ` + billingStart + `
 		FROM filtered_sessions`
 	}
 
 	var st db.Stats
 	var earliest *time.Time
-	err := s.pg.QueryRowContext(ctx, query).Scan(
+	var earliestAccount *time.Time
+	err := s.pg.QueryRowContext(ctx, query, args...).Scan(
 		&st.SessionCount,
 		&st.MessageCount,
 		&st.ProjectCount,
 		&st.MachineCount,
 		&earliest,
+		&earliestAccount,
 	)
 	if err != nil {
 		return db.Stats{},
@@ -978,6 +1011,10 @@ func (s *Store) GetStats(
 	if earliest != nil {
 		str := FormatISO8601(*earliest)
 		st.EarliestSession = &str
+	}
+	if earliestAccount != nil {
+		str := FormatISO8601(*earliestAccount)
+		st.EarliestAccountUsage = &str
 	}
 	return st, nil
 }

@@ -42,7 +42,7 @@ func (s *Store) resolveAnalyticsMessageScope(
 
 	contentExpr := "''"
 	if includeContent {
-		contentExpr = "COALESCE(content, '')"
+		contentExpr = "content"
 	}
 
 	if err := pgQueryChunked(unique, func(chunk []string) error {
@@ -50,8 +50,8 @@ func (s *Store) resolveAnalyticsMessageScope(
 		pb := &paramBuilder{}
 		placeholders := pgInPlaceholders(chunk, pb)
 		rows, err := s.pg.QueryContext(ctx, `
-			SELECT session_id, ordinal, role, COALESCE(source_subtype, ''), is_system,
-				COALESCE(model, ''), has_thinking, has_tool_use,
+			SELECT session_id, ordinal, role, source_subtype, is_system,
+				model, has_thinking, has_tool_use,
 				timestamp,
 				output_tokens, has_output_tokens, content_length,
 				`+contentExpr+`

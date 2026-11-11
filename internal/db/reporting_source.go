@@ -243,12 +243,12 @@ func (src reportingExportSource) forDate(
 	usageCandidates := make([]activityReportUsageCandidate, 0, len(src.usageCandidates))
 	usageIDs := make(map[string]struct{}, len(src.usageCandidates))
 	for _, candidate := range src.usageCandidates {
-		if candidate.row.Timestamp < lowerBound || candidate.row.Timestamp > upperBound {
+		if candidate.scan.ts < lowerBound || candidate.scan.ts > upperBound {
 			continue
 		}
 		usageCandidates = append(usageCandidates, candidate)
-		if candidate.row.SessionID != "" {
-			usageIDs[candidate.row.SessionID] = struct{}{}
+		if candidate.scan.sessionID != "" {
+			usageIDs[candidate.scan.sessionID] = struct{}{}
 		}
 	}
 	usageSessions := make([]activity.SessionMeta, 0, len(src.usageSessions))

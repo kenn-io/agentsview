@@ -141,6 +141,7 @@ CREATE TABLE IF NOT EXISTS messages (
     content        TEXT NOT NULL,
     thinking_text  TEXT NOT NULL DEFAULT '',
     dialogue_text  TEXT,
+    dialogue_is_content INTEGER NOT NULL DEFAULT 0,
     timestamp      TEXT,
     has_thinking   INTEGER NOT NULL DEFAULT 0,
     has_tool_use   INTEGER NOT NULL DEFAULT 0,
@@ -334,6 +335,7 @@ CREATE TABLE IF NOT EXISTS session_plan_usage (
 
 CREATE TABLE IF NOT EXISTS cursor_usage_events (
     id INTEGER PRIMARY KEY,
+    agent TEXT NOT NULL DEFAULT 'cursor',
     occurred_at TEXT NOT NULL,
     model TEXT NOT NULL,
     kind TEXT NOT NULL DEFAULT '',
@@ -1042,7 +1044,7 @@ DROP TRIGGER IF EXISTS trg_session_project_identity_snapshots_revision_delete;
 CREATE TRIGGER IF NOT EXISTS trg_project_identity_observations_revision_insert
 AFTER INSERT ON project_identity_observations BEGIN
     INSERT INTO archive_metadata (key, value) VALUES ('project_identity_publication_revision', '1')
-    ON CONFLICT(key) DO UPDATE SET value = CAST(CAST(value AS INTEGER) + 1 AS TEXT),
+    ON CONFLICT(key) DO UPDATE SET value = CAST(value AS INTEGER) + 1,
         updated_at = strftime('%Y-%m-%dT%H:%M:%fZ','now');
     INSERT INTO project_identity_observation_changes (
         project, machine, root_path, git_remote, revision, deleted
@@ -1057,7 +1059,7 @@ END;
 CREATE TRIGGER IF NOT EXISTS trg_project_identity_observations_revision_update
 AFTER UPDATE ON project_identity_observations BEGIN
     INSERT INTO archive_metadata (key, value) VALUES ('project_identity_publication_revision', '1')
-    ON CONFLICT(key) DO UPDATE SET value = CAST(CAST(value AS INTEGER) + 1 AS TEXT),
+    ON CONFLICT(key) DO UPDATE SET value = CAST(value AS INTEGER) + 1,
         updated_at = strftime('%Y-%m-%dT%H:%M:%fZ','now');
     INSERT INTO project_identity_observation_changes (
         project, machine, root_path, git_remote, revision, deleted
@@ -1080,7 +1082,7 @@ END;
 CREATE TRIGGER IF NOT EXISTS trg_project_identity_observations_revision_delete
 AFTER DELETE ON project_identity_observations BEGIN
     INSERT INTO archive_metadata (key, value) VALUES ('project_identity_publication_revision', '1')
-    ON CONFLICT(key) DO UPDATE SET value = CAST(CAST(value AS INTEGER) + 1 AS TEXT),
+    ON CONFLICT(key) DO UPDATE SET value = CAST(value AS INTEGER) + 1,
         updated_at = strftime('%Y-%m-%dT%H:%M:%fZ','now');
     INSERT INTO project_identity_observation_changes (
         project, machine, root_path, git_remote, revision, deleted
@@ -1095,7 +1097,7 @@ END;
 CREATE TRIGGER IF NOT EXISTS trg_session_project_identity_snapshots_revision_insert
 AFTER INSERT ON session_project_identity_snapshots BEGIN
     INSERT INTO archive_metadata (key, value) VALUES ('project_identity_publication_revision', '1')
-    ON CONFLICT(key) DO UPDATE SET value = CAST(CAST(value AS INTEGER) + 1 AS TEXT),
+    ON CONFLICT(key) DO UPDATE SET value = CAST(value AS INTEGER) + 1,
         updated_at = strftime('%Y-%m-%dT%H:%M:%fZ','now');
     INSERT INTO session_project_identity_snapshot_changes (
         session_id, project, revision, deleted
@@ -1110,7 +1112,7 @@ END;
 CREATE TRIGGER IF NOT EXISTS trg_session_project_identity_snapshots_revision_update
 AFTER UPDATE ON session_project_identity_snapshots BEGIN
     INSERT INTO archive_metadata (key, value) VALUES ('project_identity_publication_revision', '1')
-    ON CONFLICT(key) DO UPDATE SET value = CAST(CAST(value AS INTEGER) + 1 AS TEXT),
+    ON CONFLICT(key) DO UPDATE SET value = CAST(value AS INTEGER) + 1,
         updated_at = strftime('%Y-%m-%dT%H:%M:%fZ','now');
     INSERT INTO session_project_identity_snapshot_changes (
         session_id, project, revision, deleted
@@ -1133,7 +1135,7 @@ END;
 CREATE TRIGGER IF NOT EXISTS trg_session_project_identity_snapshots_revision_delete
 AFTER DELETE ON session_project_identity_snapshots BEGIN
     INSERT INTO archive_metadata (key, value) VALUES ('project_identity_publication_revision', '1')
-    ON CONFLICT(key) DO UPDATE SET value = CAST(CAST(value AS INTEGER) + 1 AS TEXT),
+    ON CONFLICT(key) DO UPDATE SET value = CAST(value AS INTEGER) + 1,
         updated_at = strftime('%Y-%m-%dT%H:%M:%fZ','now');
     INSERT INTO session_project_identity_snapshot_changes (
         session_id, project, revision, deleted
@@ -1194,7 +1196,7 @@ BEGIN
     INSERT INTO archive_metadata (key, value)
         VALUES ('session_deletion_publication_revision', '1')
     ON CONFLICT(key) DO UPDATE SET
-        value = CAST(CAST(value AS INTEGER) + 1 AS TEXT),
+        value = CAST(value AS INTEGER) + 1,
         updated_at = strftime('%Y-%m-%dT%H:%M:%fZ','now');
     INSERT INTO session_deletion_changes (session_id, project, revision, deleted)
         SELECT OLD.id, OLD.project,
@@ -1212,7 +1214,7 @@ BEGIN
     INSERT INTO archive_metadata (key, value)
         VALUES ('session_deletion_publication_revision', '1')
     ON CONFLICT(key) DO UPDATE SET
-        value = CAST(CAST(value AS INTEGER) + 1 AS TEXT),
+        value = CAST(value AS INTEGER) + 1,
         updated_at = strftime('%Y-%m-%dT%H:%M:%fZ','now');
     INSERT INTO session_deletion_changes (session_id, project, revision, deleted)
         SELECT NEW.id, NEW.project,
@@ -1247,7 +1249,7 @@ BEGIN
     INSERT INTO archive_metadata (key, value)
     VALUES ('worktree_mapping_publication_revision', '1')
     ON CONFLICT(key) DO UPDATE SET
-        value = CAST(CAST(value AS INTEGER) + 1 AS TEXT),
+        value = CAST(value AS INTEGER) + 1,
         updated_at = strftime('%Y-%m-%dT%H:%M:%fZ','now');
     INSERT INTO worktree_project_mapping_changes
         (machine, path_prefix, revision, deleted)
@@ -1264,7 +1266,7 @@ BEGIN
     INSERT INTO archive_metadata (key, value)
     VALUES ('worktree_mapping_publication_revision', '1')
     ON CONFLICT(key) DO UPDATE SET
-        value = CAST(CAST(value AS INTEGER) + 1 AS TEXT),
+        value = CAST(value AS INTEGER) + 1,
         updated_at = strftime('%Y-%m-%dT%H:%M:%fZ','now');
     INSERT INTO worktree_project_mapping_changes
         (machine, path_prefix, revision, deleted)
@@ -1288,7 +1290,7 @@ BEGIN
     INSERT INTO archive_metadata (key, value)
     VALUES ('worktree_mapping_publication_revision', '1')
     ON CONFLICT(key) DO UPDATE SET
-        value = CAST(CAST(value AS INTEGER) + 1 AS TEXT),
+        value = CAST(value AS INTEGER) + 1,
         updated_at = strftime('%Y-%m-%dT%H:%M:%fZ','now');
     INSERT INTO worktree_project_mapping_changes
         (machine, path_prefix, revision, deleted)
@@ -1421,6 +1423,15 @@ CREATE TABLE IF NOT EXISTS friction_findings (
 CREATE INDEX IF NOT EXISTS idx_friction_findings_session
     ON friction_findings(session_id);
 
+CREATE TABLE IF NOT EXISTS diagnostic_events (
+    id TEXT PRIMARY KEY,
+    source TEXT NOT NULL,
+    message TEXT NOT NULL,
+    occurred_at TEXT NOT NULL,
+    accepted_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_diagnostic_events_occurred ON diagnostic_events (occurred_at);
+
 -- Friction Log review state is built independently by each store.
 -- One digest is kept for each completed local date.
 CREATE TABLE IF NOT EXISTS friction_digests (
@@ -1475,6 +1486,18 @@ CREATE TABLE IF NOT EXISTS friction_issue_links (
     web_url           TEXT NOT NULL DEFAULT '',
     source            TEXT NOT NULL,
     linked_at         TEXT NOT NULL
+);
+
+-- Why automatic filing has not linked a pattern: a failure to retry, a case
+-- a person must settle, or a link a person removed. Linking clears the row.
+CREATE TABLE IF NOT EXISTS friction_filing_state (
+    fingerprint     TEXT PRIMARY KEY,
+    state           TEXT NOT NULL,
+    attempts        INTEGER NOT NULL DEFAULT 0,
+    first_failed_at TEXT,
+    next_attempt_at TEXT,
+    last_error      TEXT NOT NULL DEFAULT '',
+    updated_at      TEXT NOT NULL
 );
 
 -- Durable normalized-artifact import claims. Artifact kinds evolve
@@ -1736,6 +1759,42 @@ CREATE TABLE IF NOT EXISTS archive_session_provenance (
 );
 CREATE INDEX IF NOT EXISTS idx_archive_session_source
     ON archive_session_provenance(archive_id,device_id,root_id,source_key);
+
+-- Transcript evidence survives permanent session deletion.
+CREATE TABLE IF NOT EXISTS commit_links (
+    session_id TEXT NOT NULL,
+    sha TEXT NOT NULL,
+    branch TEXT NOT NULL,
+    subject TEXT NOT NULL,
+    repository TEXT NOT NULL,
+    message_ordinal INTEGER NOT NULL,
+    call_index INTEGER NOT NULL,
+    tool_use_id TEXT NOT NULL,
+    committed_at TEXT NOT NULL,
+    project TEXT NOT NULL,
+    PRIMARY KEY (session_id, sha)
+);
+CREATE INDEX IF NOT EXISTS idx_commit_links_sha ON commit_links(sha);
+
+-- Capture moves since the last transcript write before losing the session row.
+CREATE TRIGGER IF NOT EXISTS trg_commit_links_deletion_project
+BEFORE DELETE ON sessions
+BEGIN
+    UPDATE commit_links SET project=OLD.project WHERE session_id=OLD.id;
+END;
+
+-- Git trailer evidence survives transcript rewrites and checkout removal.
+CREATE TABLE IF NOT EXISTS commit_trailers (
+    session_id TEXT NOT NULL,
+    sha TEXT NOT NULL,
+    branch TEXT NOT NULL,
+    subject TEXT NOT NULL,
+    repository TEXT NOT NULL,
+    committed_at TEXT NOT NULL,
+    project TEXT NOT NULL DEFAULT '',
+    PRIMARY KEY (session_id, sha)
+);
+CREATE INDEX IF NOT EXISTS idx_commit_trailers_sha ON commit_trailers(sha);
 
 -- Local replay evidence commits with fork messages and survives archive rebuilds.
 CREATE TABLE IF NOT EXISTS codex_fork_state (

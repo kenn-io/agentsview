@@ -31,6 +31,26 @@ without dialogue, and needs a role that can update the ClickHouse schema. Until
 the schema has `messages.dialogue_text`, reads fail with a schema compatibility
 error naming that column.
 
+The Analytics panels for Activity, Session Shape, Velocity, Tools, Skills, and
+Signals read per-session counts that push stores with each session, so they no
+longer scan every message on each load. The first push from each archive after
+upgrading is a full push that re-sends every session in the mirror scope to
+store those counts, reported as `publishing stored session counts`. Until it
+finishes, panels count the remaining sessions from their messages, with the
+same results. Serve reports a missing-column error until a push from the new
+binary has updated the schema.
+
+Commit lookups return the copied links and prompts.
+The first push after upgrading is a full push to copy existing commit links.
+Upgrade serving binaries before or with publishers; older readers cannot see the new table.
+A serving role that cannot create tables needs an upgraded push before commit
+lookups work. Each archive's rebuild removes only the deleted-session links that
+archive pushed. Links with no recorded archive, from older pushes, stay and can
+reappear after an archive discards its matching copy.
+A deleted session remains visible as a missing record. Project filters use the
+project saved with its links in SQLite, including after a rebuild or a deletion
+before the first push.
+
 ## Quick Start
 
 ### 1. Configure ClickHouse
@@ -274,24 +294,15 @@ matches a pushed generation.
 
 #### Enabling Semantic Search
 
-Follow these steps on the machine that owns the sessions. Approve the first
-local download in the CLI before running builds unattended.
+On the machine that owns the sessions, choose **Settings → Embeddings → Turn on** to approve the download and build the local index without restarting. For CLI setup, follow the steps below.
 
-1. Enable vectors in `~/.agentsview/config.toml`. AgentsView discovers Ollama
-   with Nomic or uses Kit's shared local server. Explicit recipes and server
-   settings are described in
-   [Enabling `[vector]`](/docs/semantic-search/#enabling-vector).
-
-    ```toml
-    [vector]
-    enabled = true
-    ```
-
-1. Restart the daemon, then build the local index. The CLI asks before the first
-   download; declining stops the download and build. `--yes` skips rebuild
-   confirmation but does not approve this download. Approve the first install
-   interactively before running unattended builds. Confirm an active
-   generation exists:
+1. Build the local index. AgentsView discovers Ollama with Nomic or uses Kit's
+   shared local server. For other providers, see
+   [Enabling `[vector]`](/docs/semantic-search/#enabling-vector). The CLI asks
+   before the first download; declining stops the download and build. `--yes`
+   skips rebuild confirmation but does not approve this download. Approve the
+   first install interactively before running unattended builds. Confirm an
+   active generation exists:
 
     ```bash
     agentsview index embeddings build --yes
@@ -495,11 +506,12 @@ create tables to finish it.
 If `clickhouse serve` runs with a read-only role, upgrade the machine that
 pushes first, run `agentsview replica clickhouse push` once, then upgrade the
 machines that serve. This release adds the `session_plan_usage` table, which
-holds Codex Cloud plan usage, and a read-only role cannot create it. Until a
-push creates it, an upgraded `clickhouse serve` with that role fails to start
-with "clickhouse mirror schema is missing session_plan_usage". A serve role that
-can create tables adds the table itself at startup, so the order does not matter
-for it.
+holds Codex Cloud plan usage, and the `usage_price_models` table, which lists
+the models stored usage prices cover. A read-only role cannot create them. Until
+a push creates them, an upgraded `clickhouse serve` with that role fails to
+start with "clickhouse mirror schema is missing session_plan_usage". A serve
+role that can create tables adds the tables itself at startup, so the order does
+not matter for it.
 
 #### Required system-table permissions
 
@@ -533,6 +545,12 @@ sets it, otherwise the user cache directory under
 only makes the next open of those days slower. A new binary rebuilds them on its
 own. If the directory cannot be created, serve logs a warning and keeps reports
 in memory only.
+
+Usage also keeps fully prepared selections under `agentsview/clickhouse-usage`
+in the same cache directory. Each selection can use up to 128 MiB, with a
+256 MiB limit per mirror. The next read rebuilds a selection after a push,
+pricing change, new binary, or deletion of the cache directory. If the cache is
+unavailable, Usage reads the mirror instead.
 
 When `require_auth` is enabled, a bearer token is generated if needed and
 printed on startup. Pass it via `Authorization: Bearer <token>` on API requests.
@@ -601,6 +619,32 @@ protocol, add `secure=true` to the URL (typical TLS port 9440). For HTTP, use an
 `allow_insecure` is set. Loopback (`127.0.0.1`, `localhost`) may stay plaintext
 or skip verification.
 
+### Connections and query threads
+
+Each agentsview process opens up to 12 ClickHouse connections, and each query
+uses at most 8 threads. The Analytics page sends 11 requests at once, so every
+panel's query can start right away, and the queries share the server's cores
+instead of each claiming one thread per core. `clickhouse serve` opens 4 more
+connections for the session list, sidebar filters, and single-session views,
+so page navigation never waits behind dashboard or Usage queries.
+
+To retune either limit, add a URL parameter:
+
+```toml
+[clickhouse]
+url = "clickhouse://user:pass@host:9440/agentsview?secure=true&max_open_conns=16&max_threads=4"
+```
+
+- `max_open_conns` sets the main pool size. The 4 page connections stay
+  fixed.
+- `max_threads` sets the per-query thread cap. `max_threads=0` restores the
+  ClickHouse server default, one thread per core.
+
+The best values depend on the server. A query thread costs more CPU when the
+data directory sits on network storage, so a host with slow storage or few
+cores may want fewer threads. The ClickHouse user must be allowed to change
+settings; a profile with `readonly=1` rejects them.
+
 ______________________________________________________________________
 
 ## Differences from PostgreSQL
@@ -645,14 +689,25 @@ The mirror is designed for MergeTree, not copied from PostgreSQL SQL.
   step tries one swap of two empty tables, and the server logs that failed
   swap as an `UNSUPPORTED_METHOD` error. The schema step tries it once after
   each server start and reuses the answer until the next restart. While that
-  lock table exists, each push rebuilds the prepared usage table itself before
-  it returns and logs how long the rebuild took. A push that changed nothing
-  skips the rebuild. A push that finds another push rebuilding also skips it
-  and logs which lock that push holds. The running rebuild checks once more
-  after it publishes and rebuilds again for data that arrived meanwhile. A
-  skipped or failed rebuild does not fail the push: usage reads stay correct
-  but slower until a later rebuild succeeds, and the next push tries again.
-  The mirror database keeps one small lock table between pushes.
+  lock table exists, a push rebuilds the prepared usage table itself before it
+  returns once a rebuild is due, and logs why and how long it took; the next
+  item says when a rebuild is due. A push that finds
+  another push rebuilding skips its rebuild and logs which lock that push
+  holds. The running rebuild checks once more after it publishes and rebuilds
+  again if the data that arrived meanwhile makes a rebuild due. A skipped or
+  failed rebuild does not fail the push: usage reads stay correct but slower
+  until a later rebuild succeeds, and the next push tries again. The mirror
+  database keeps one small lock table between pushes.
+- **Prepared usage rebuilds.** Usage reads stay exact while the prepared usage
+  table is behind: they compute the rows of sessions pushed since the last
+  rebuild themselves. A rebuild rewrites the whole table, so a push rebuilds it,
+  or starts the `prepare_usage` view's refresh, only when the table is empty,
+  prices changed, or the rows reads compute themselves reach one-fiftieth of the
+  stored rows. Other pushes write nothing to the table. Where the view exists,
+  it also refreshes the table once a day, at midnight in the ClickHouse
+  server's time zone, for a push that ended with errors or whose refresh
+  request failed. Rows of deleted sessions stay in the table until the next
+  rebuild; reads skip them.
 - **Lock of a stopped push.** A lock expires an hour after its push last renewed
   it, so a push stopped mid-rebuild makes later pushes skip their rebuilds for
   up to an hour. If the skip message names a held lock and you know no push is

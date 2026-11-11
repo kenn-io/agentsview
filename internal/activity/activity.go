@@ -374,7 +374,10 @@ type interval struct {
 	sessionID string
 	start     time.Time
 	end       time.Time
-	model     string // model attributed to this interval
+	// tail is the start of the interval's last piece, for an interval that
+	// joins touching pieces; bucket membership depends on it.
+	tail  time.Time
+	model string // model attributed to this interval
 }
 
 // parseTS parses an RFC3339(/Nano) timestamp; ok=false on empty/invalid.
@@ -401,6 +404,16 @@ func rangeWindows(p Params) []BucketWindow {
 		return []BucketWindow{{Start: p.RangeStart, End: p.RangeEnd}}
 	}
 	return windows
+}
+
+// QueryWindows returns the bucket windows a report over q sums usage into.
+func QueryWindows(q Query) []BucketWindow {
+	return rangeWindows(Params{RangeStart: q.RangeStart, RangeEnd: q.RangeEnd, Bucket: q.Bucket, Loc: q.Loc})
+}
+
+// WindowIndex returns the index of the window that holds t, or -1.
+func WindowIndex(windows []BucketWindow, t time.Time) int {
+	return windowIndex(windows, t)
 }
 
 // Aggregate builds the range's report from the three input streams.
@@ -550,9 +563,10 @@ type usageAgg struct {
 	models       map[string]money.Money // model -> cost (for primary/mixed)
 }
 
+// sessionIntervalAgg sums durations, which add exactly, so a session's
+// minutes do not depend on how its activity was split into intervals.
 type sessionIntervalAgg struct {
-	minutes       float64
-	modelMins     map[string]float64
+	duration      time.Duration
 	modelDuration map[string]time.Duration
 	first, last   time.Time
 	hasIv         bool
@@ -573,6 +587,9 @@ func AddUsageDedupToken(seen map[UsageDedupToken]struct{}, token UsageDedupToken
 	return true
 }
 
+// claudeUsageSnapshotToken identifies one Claude response. The message ID is
+// required; the request ID is empty when the transcript omits requestId, which
+// Claude Agent SDK transcripts do.
 type claudeUsageSnapshotToken struct {
 	messageID string
 	requestID string
@@ -598,11 +615,11 @@ func (row UsageRow) UsageIdentity() UsageIdentity {
 	}
 }
 
-// usageDedupTokenWithoutSourceGate picks the Claude pair, source UUID, or stored usage key,
+// usageDedupTokenWithoutSourceGate picks the Claude response identity, source UUID, or stored usage key,
 // accepting source UUIDs regardless of UsageSource. SessionUsageDedupTokenForRow
 // restricts source UUIDs to message rows.
 func usageDedupTokenWithoutSourceGate(row UsageIdentity) (UsageDedupToken, bool) {
-	if row.ClaudeMessageID != "" && row.ClaudeRequestID != "" {
+	if row.ClaudeMessageID != "" {
 		return UsageDedupToken{
 			Kind: "claude", Value: row.ClaudeMessageID + ":" + row.ClaudeRequestID,
 		}, true
@@ -675,7 +692,10 @@ func claudeSnapshotSelectionContext(
 	type snapshotSelection struct {
 		best, earliest, maximumWebSearchRequests int
 	}
-	selection := make(map[claudeUsageSnapshotToken]snapshotSelection)
+	// Each snapshot's selection lives in a slice so a row costs one map lookup.
+	groupOf := make(map[claudeUsageSnapshotToken]int)
+	groups := []snapshotSelection{}
+	rowGroup := make([]int, len(usage))
 	for i, u := range usage {
 		if err := ctx.Err(); err != nil {
 			return nil, nil, nil, nil, err
@@ -683,7 +703,7 @@ func claudeSnapshotSelectionContext(
 		if eligible != nil && !eligible[i] {
 			continue
 		}
-		if u.ClaudeMessageID == "" || u.ClaudeRequestID == "" {
+		if u.ClaudeMessageID == "" {
 			mask[i] = true
 			attribution[i] = u.SessionID
 			webSearchRequests[i] = u.WebSearchRequests
@@ -694,18 +714,24 @@ func claudeSnapshotSelectionContext(
 			messageID: u.ClaudeMessageID,
 			requestID: u.ClaudeRequestID,
 		}
-		selected, ok := selection[key]
-		if !ok || earlierClaudeSnapshotAttribution(u, usage[selected.earliest]) {
+		g, ok := groupOf[key]
+		if !ok {
+			g = len(groups)
+			groupOf[key] = g
+			groups = append(groups, snapshotSelection{best: i, earliest: i})
+		}
+		selected := &groups[g]
+		if ok && earlierClaudeSnapshotAttribution(u, usage[selected.earliest]) {
 			selected.earliest = i
 		}
-		if !ok || laterClaudeSnapshot(u, usage[selected.best]) {
+		if ok && laterClaudeSnapshot(u, usage[selected.best]) {
 			selected.best = i
 		}
 		selected.maximumWebSearchRequests = max(
 			selected.maximumWebSearchRequests, u.WebSearchRequests)
-		selection[key] = selected
+		rowGroup[i] = g
 	}
-	for _, selected := range selection {
+	for _, selected := range groups {
 		if err := ctx.Err(); err != nil {
 			return nil, nil, nil, nil, err
 		}
@@ -721,13 +747,10 @@ func claudeSnapshotSelectionContext(
 		if eligible != nil && !eligible[i] {
 			continue
 		}
-		if u.ClaudeMessageID == "" || u.ClaudeRequestID == "" {
+		if u.ClaudeMessageID == "" {
 			continue
 		}
-		canonical[i] = selection[claudeUsageSnapshotToken{
-			messageID: u.ClaudeMessageID,
-			requestID: u.ClaudeRequestID,
-		}].best
+		canonical[i] = groups[rowGroup[i]].best
 	}
 	return mask, attribution, webSearchRequests, canonical, nil
 }
@@ -1053,7 +1076,7 @@ func buildSessionsTableFromDedupedUsage(
 			Agent: s.Agent, TimingQuality: "untimed", IsAutomated: s.IsAutomated, IsSubagent: s.IsSubagent,
 		}
 		if a := agg[s.SessionID]; a != nil && a.hasIv {
-			mins := a.minutes
+			mins := a.duration.Minutes()
 			row.AgentMinutes = &mins
 			row.TimingQuality = "timed"
 			f := a.first.Format(time.RFC3339)
@@ -1066,8 +1089,8 @@ func buildSessionsTableFromDedupedUsage(
 			if err := addKey(byAgent, s.Agent, mins, money.Money{}, kind); err != nil {
 				return fmt.Errorf("summing activity agent minutes: %w", err)
 			}
-			for m, mm := range a.modelMins {
-				if err := addKey(byModel, m, mm, money.Money{}, kind); err != nil {
+			for m, d := range a.modelDuration {
+				if err := addKey(byModel, m, d.Minutes(), money.Money{}, kind); err != nil {
 					return fmt.Errorf("summing activity model minutes: %w", err)
 				}
 			}

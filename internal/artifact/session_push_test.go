@@ -38,6 +38,53 @@ func TestSessionPushExactSelection(t *testing.T) {
 	require.Error(t, err)
 }
 
+func TestSessionPushRetryAfterRename(t *testing.T) {
+	d := testDB(t)
+	require.NoError(t, d.UpsertSession(t.Context(), db.Session{ID: "sample", Agent: "claude", Machine: "source"}))
+	first, err := EncodeSessionPush(t.Context(), d, "sample", "")
+	require.NoError(t, err)
+	name := "renamed"
+	require.NoError(t, d.RenameSession(t.Context(), "sample", &name))
+	second, err := EncodeSessionPush(t.Context(), d, "sample", "")
+	require.NoError(t, err)
+	receipt1, _, err := DecodeSessionPush(first)
+	require.NoError(t, err)
+	receipt2, _, err := DecodeSessionPush(second)
+	require.NoError(t, err)
+	assert.Equal(t, receipt1.PayloadHash, receipt2.PayloadHash)
+}
+
+func TestSessionPushPreservesLauncherParent(t *testing.T) {
+	d := testDB(t)
+	for _, id := range []string{"parent", "child"} {
+		require.NoError(t, d.UpsertSession(t.Context(), db.Session{ID: id, Agent: "claude", Machine: "source"}))
+	}
+	_, err := d.SetSessionExternalParent(t.Context(), "child", "parent")
+	require.NoError(t, err)
+	packet, err := EncodeSessionPush(t.Context(), d, "child", "")
+	require.NoError(t, err)
+	_, write, err := DecodeSessionPush(packet)
+	require.NoError(t, err)
+	require.NotNil(t, write.Session.ParentSessionID)
+	assert.Equal(t, "parent", *write.Session.ParentSessionID)
+}
+
+func TestSessionPushRejectsFutureParserVersion(t *testing.T) {
+	packet, err := encodeSessionPushData(t.Context(), "source", db.Session{ID: "sample", Agent: "claude", Machine: "source"}, db.ArtifactExportData{})
+	require.NoError(t, err)
+	var envelope SessionPushEnvelope
+	require.NoError(t, json.Unmarshal(packet, &envelope))
+	var m manifest
+	require.NoError(t, json.Unmarshal(envelope.Manifest, &m))
+	m.DataVersion = db.CurrentDataVersion() + 1
+	envelope.Manifest, err = json.Marshal(m)
+	require.NoError(t, err)
+	packet, err = json.Marshal(envelope)
+	require.NoError(t, err)
+	_, _, err = DecodeSessionPush(packet)
+	require.ErrorContains(t, err, "unsupported parser data version")
+}
+
 func TestSessionPushPreservesCapabilities(t *testing.T) {
 	data, err := encodeSessionPushData(t.Context(), "source", db.Session{ID: "sample", Agent: "claude", Machine: "source", HasToolCalls: true, HasContextData: true}, db.ArtifactExportData{})
 	require.NoError(t, err)

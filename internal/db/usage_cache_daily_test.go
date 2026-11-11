@@ -146,3 +146,22 @@ func TestPositBillingUsesProviderPerUsageRow(t *testing.T) {
 	require.Len(t, daily.Daily, 1)
 	require.Equal(t, money.MustParseDollars("2.1"), daily.Totals.TotalCost)
 }
+
+func TestRecordUsageFactsPricingBulkCounts(t *testing.T) {
+	resolver := export.NewPricingResolver([]export.EffectivePricingRow{{
+		ModelPattern: "model", Rates: export.ModelRates{
+			InputPerMTok: money.Money{Microdollars: 1_000_000},
+			Bands:        []export.PricingBand{{AboveInputTokens: 100, InputPerMTok: money.Money{Microdollars: 2_000_000}}},
+		},
+	}})
+	require.NoError(t, recordUsageFactsPricing(resolver, usageFactsGroup{Model: "model", PricedModel: "model", ComputedRequestCount: 7, BaseRequestCount: 7, ComputedAggregateCount: 3, ReportedCount: 2}))
+	require.NoError(t, recordUsageFactsPricing(resolver, usageFactsGroup{Model: "model", PricedModel: "model", ComputedRequestCount: 5, BandThreshold: new(100)}))
+	block, err := resolver.BuildBlock()
+	require.NoError(t, err)
+	rate := block.Models["model"].Resolutions[0]
+	require.NotNil(t, rate.Application)
+	require.Equal(t, 7, rate.Application.BaseRequestCount)
+	require.Equal(t, 3, rate.Application.AggregateRowCount)
+	require.Len(t, rate.Application.Bands, 1)
+	require.Equal(t, 5, rate.Application.Bands[0].RequestCount)
+}

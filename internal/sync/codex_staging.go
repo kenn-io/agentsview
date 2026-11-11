@@ -293,7 +293,7 @@ func newCodexStagingSink(ctx context.Context,
 		os.Remove(path)
 		return nil, err
 	}
-	scratch, err := sql.Open("sqlite3", path)
+	scratch, err := sql.Open("sqlite3", sqliteScratchDSN(path))
 	if err != nil {
 		os.Remove(path)
 		return nil, fmt.Errorf("opening codex staging db: %w", err)

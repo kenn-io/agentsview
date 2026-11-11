@@ -44,6 +44,13 @@ type Sync struct {
 	// run, so a later failure can resume it.
 	fullRunRecorded bool
 
+	// usageWritten reports that the current push wrote or deleted usage
+	// snapshots, wrote or dropped price records, or wrote the pricing
+	// digest: the inputs of the prepared usage stamp. A push that changed
+	// none of them skips the prepared usage check; see
+	// preparedUsageRebuildDue.
+	usageWritten bool
+
 	// unownedPruned records that this Sync already removed this machine's
 	// mirror sessions without an archive id that the archive no longer
 	// holds. Pushes always record their archive, so no new ones appear.
@@ -54,6 +61,10 @@ type Sync struct {
 	// vectorBatchSessions overrides the vector flush session bound when
 	// positive; tests lower it to cover several flushes in one push.
 	vectorBatchSessions int
+	// vectorFlushKeysBytes overrides the bound on a vector flush DELETE's
+	// key parameters when positive; tests set it to split flushes over the
+	// native protocol too.
+	vectorFlushKeysBytes int
 
 	closeOnce sync.Once
 	closeErr  error

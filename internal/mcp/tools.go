@@ -734,7 +734,7 @@ func (t *toolset) getMessageBodyContinuation(
 type searchContentIn struct {
 	Pattern          string   `json:"pattern,omitempty" jsonschema:"Natural-language query for semantic/hybrid, whitespace-separated literals for terms, or exact substring/regex for lexical search across message text, thinking, and tool inputs/results. Mutually exclusive with concepts."`
 	Concepts         []string `json:"concepts,omitempty" jsonschema:"Two to five semantic concepts that must all have evidence in the same session, even in different messages. Implies mode semantic, does not page, and is mutually exclusive with pattern."`
-	Mode             string   `json:"mode,omitempty" jsonschema:"substring (default), regex, terms, semantic, or hybrid. Prefer hybrid or semantic for contextual questions when a vector search index is configured."`
+	Mode             string   `json:"mode,omitempty" jsonschema:"substring (default), regex, terms, semantic, or hybrid. Prefer hybrid for contextual questions. Hybrid returns keyword matches with a note when search by meaning is unavailable; semantic requires a ready index."`
 	Scope            string   `json:"scope,omitempty" jsonschema:"Substring/regex/terms/semantic/hybrid result scope: top, all (default), or subordinate."`
 	Project          string   `json:"project,omitempty" jsonschema:"Restrict to one project."`
 	Agent            string   `json:"agent,omitempty" jsonschema:"Restrict to one agent."`
@@ -800,10 +800,12 @@ type contentMatch struct {
 }
 
 type searchContentOut struct {
-	Matches        []contentMatch `json:"matches"`
-	NextCursor     *int           `json:"next_cursor,omitempty"`
-	ActivityCutoff string         `json:"activity_cutoff,omitempty" jsonschema:"Effective RFC3339 activity cutoff; pass it unchanged with next_cursor as cursor to continue."`
-	ExcludedActive int            `json:"excluded_active,omitempty"`
+	Note           string                      `json:"note,omitempty"`
+	Hints          []service.ContentSearchHint `json:"hints,omitempty"`
+	Matches        []contentMatch              `json:"matches"`
+	NextCursor     *int                        `json:"next_cursor,omitempty"`
+	ActivityCutoff string                      `json:"activity_cutoff,omitempty" jsonschema:"Effective RFC3339 activity cutoff; pass it unchanged with next_cursor as cursor to continue."`
+	ExcludedActive int                         `json:"excluded_active,omitempty"`
 	// EffectiveMode and EffectiveScope report the defaults the search
 	// resolved, which the caller cannot see in its own request.
 	EffectiveMode      string                  `json:"effective_mode"`
@@ -905,6 +907,7 @@ func (t *toolset) searchContent(
 		Pattern:            in.Pattern,
 		Concepts:           in.Concepts,
 		Mode:               in.Mode,
+		KeywordFallback:    mode == "hybrid",
 		Scope:              scope,
 		Project:            in.Project,
 		Agent:              in.Agent,
@@ -928,7 +931,8 @@ func (t *toolset) searchContent(
 	out := searchContentOut{
 		Matches:        make([]contentMatch, 0, len(res.Matches)),
 		ActivityCutoff: cutoff,
-		EffectiveMode:  cmp.Or(mode, "substring"),
+		EffectiveMode:  cmp.Or(res.EffectiveMode, mode, "substring"),
+		Note:           res.Note,
 		Exclusions: searchContentExclusions{
 			CurrentSessionID: currentSession,
 			RecentActive:     currentSession == "" && !in.IncludeActive,
@@ -943,16 +947,20 @@ func (t *toolset) searchContent(
 		out.EffectiveScope = scope
 	}
 	activity := make(map[string]string)
-	for _, m := range res.Matches {
-		if legacy {
+	var keepMatch func(db.ContentMatch) bool
+	if cutoff != "" {
+		keepMatch = func(m db.ContentMatch) bool {
 			ts, ok := t.lookupActivity(ctx, m.SessionID, activity)
 			if !ok {
 				ts = m.Timestamp
 			}
-			if isActiveSince(ts, cutoffTime.Add(activeExclusionWindow)) {
-				out.ExcludedActive++
-				continue
-			}
+			return !isActiveSince(ts, cutoffTime.Add(activeExclusionWindow))
+		}
+	}
+	for _, m := range res.Matches {
+		if legacy && !keepMatch(m) {
+			out.ExcludedActive++
+			continue
 		}
 		out.Matches = append(out.Matches, contentMatch{
 			WebURL: m.WebURL, SessionID: m.SessionID, Project: m.Project, Agent: m.Agent,
@@ -971,6 +979,7 @@ func (t *toolset) searchContent(
 		nc := res.NextCursor
 		out.NextCursor = &nc
 	}
+	out.Hints = service.SearchContentHints(ctx, t.svc, req, res, false, keepMatch)
 	return nil, out, nil
 }
 

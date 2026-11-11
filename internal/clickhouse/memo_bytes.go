@@ -3,18 +3,15 @@ package clickhouse
 import (
 	"unsafe"
 
-	"go.kenn.io/agentsview/internal/activity"
-	"go.kenn.io/agentsview/internal/db"
 	"go.kenn.io/agentsview/internal/readbase"
 )
 
-// Byte caps of the memos whose entries can be large. The two report memos
-// together hold as much as the server's own 256 MiB report cache; a range
-// in progress keeps every session's usage rows, so a year of a large mirror
-// still fits.
+// Byte caps of the memos whose entries can be large.
 const (
-	activityReportMemoBytes = 128 << 20
-	activityUsageRangeBytes = 256 << 20
+	// A range in progress keeps its rows and their survivors. A range of
+	// 1.5 million rows takes about 250 MiB, which spares deriving them again
+	// on every report, a pass that allocates several times that.
+	activityUsageRangeBytes = 512 << 20
 	activityUsageRowsBytes  = 128 << 20
 	dailyUsageRowsBytes     = 128 << 20
 )
@@ -41,22 +38,20 @@ func optionalStringBytes(values ...*string) int64 {
 	return n
 }
 
-func aggregateRowBytes(r chUsageAggregateRow) int64 {
-	return int64(unsafe.Sizeof(r)) + stringBytes(r.date, r.ts, r.pricingTS, r.sessionID, r.project,
-		r.agent, r.machine, r.model, r.providerID, r.priceModel, r.source, r.displayName, r.startedAt, r.groupKey, r.sessionName)
+func aggregateRowBytes(r CHUsageAggregateRow) int64 {
+	return int64(unsafe.Sizeof(r)) + stringBytes(r.Date, r.TS, r.PricingTS, r.SessionID, r.Project,
+		r.Agent, r.Machine, r.Model, r.ProviderID, r.PriceModel, r.Source, r.DisplayName, r.StartedAt, r.GroupKey, r.SessionName)
 }
 
 func dailyUsageRowBytes(r chDailyUsageGroupRow) int64 {
-	return aggregateRowBytes(r.chUsageAggregateRow) + int64(unsafe.Sizeof(r)-unsafe.Sizeof(r.chUsageAggregateRow)) +
-		stringBytes(r.kind, r.contextID, r.priceError)
+	return aggregateRowBytes(r.CHUsageAggregateRow) + int64(unsafe.Sizeof(r)-unsafe.Sizeof(r.CHUsageAggregateRow)) +
+		stringBytes(r.Kind, r.ContextID, r.PriceError) +
+		int64(len(r.InexactModels)+len(r.InexactProjects))*int64(unsafe.Sizeof("")) +
+		stringBytes(r.InexactModels...) + stringBytes(r.InexactProjects...)
 }
 
 func usageSessionRowBytes(r chUsageSessionRow) int64 {
 	return int64(unsafe.Sizeof(r)) + stringBytes(r.sessionID, r.project, r.agent)
-}
-
-func topSessionBytes(e db.TopSessionEntry) int64 {
-	return int64(unsafe.Sizeof(e)) + stringBytes(e.SessionID, e.DisplayName, e.Agent, e.Project, e.StartedAt, e.Machine, e.GroupKey, e.GroupLabel, e.SessionName)
 }
 
 func analyticsSessionBytes(r readbase.AnalyticsSession) int64 {
@@ -92,14 +87,44 @@ func keptUsageBytes(k *activityUsageKept) int64 {
 	return n
 }
 
-func usageRangeBytes(r activityUsageRange) int64 {
-	n := keptUsageBytes(r.rows)
+// usageRangeBytes estimates a kept range. Its caller holds the range's lock.
+func usageRangeBytes(r *activityUsageRange) int64 {
+	n := int64(unsafe.Sizeof(*r))
 	for session, revision := range r.revisions {
 		n += int64(len(session)+len(revision)) + 32
 	}
-	return n
+	// Every part of one read shares the read's dictionary; count it once.
+	dicts := make(map[*string]bool)
+	for _, session := range r.sessions {
+		n += int64(unsafe.Sizeof(session)) + int64(len(session.id)) + 8
+		k := session.rows
+		if k == nil {
+			continue
+		}
+		// Each session owns its arena and data; see splitKeptUsage.
+		n += int64(unsafe.Sizeof(*k)) + int64(len(k.arena)) + int64(cap(k.data)) + 8*int64(len(k.sessions))
+		if len(k.dict) > 0 && !dicts[&k.dict[0]] {
+			dicts[&k.dict[0]] = true
+			for _, v := range k.dict {
+				n += int64(unsafe.Sizeof(v)) + int64(len(v))
+			}
+		}
+	}
+	return n + usageSurvivorsBytes(&r.survivors)
 }
 
-func reportEntryBytes(e activityReportEntry) int64 {
-	return activity.EstimatedArtifactBytes(e.artifacts)
+// usageSurvivorsBytes counts the survivors' slices by capacity: a push
+// splices rows in and out of them, and a slice keeps its largest array.
+func usageSurvivorsBytes(u *usageSurvivors) int64 {
+	n := int64(cap(u.candidate)) +
+		int64(cap(u.tokens))*int64(unsafe.Sizeof(usageTokenRow{})) +
+		int64(cap(u.results))*int64(unsafe.Sizeof(usageTokenSurvivor{})) +
+		int64(len(u.pricing))*int64(unsafe.Sizeof(usagePricingTally{})+unsafe.Sizeof(usagePricingKey{}))
+	// A total row's strings point into its rows' dictionary and arena.
+	for _, totals := range u.totals {
+		n += int64(unsafe.Sizeof(totals)) +
+			int64(cap(totals.rows))*int64(unsafe.Sizeof(usageTotalRow{})) +
+			int64(cap(totals.pricing))*int64(unsafe.Sizeof(usagePricingCount{}))
+	}
+	return n
 }

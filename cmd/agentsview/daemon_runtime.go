@@ -40,6 +40,8 @@ const (
 	runtimePort            = "port"
 	runtimeExplicitPort    = "explicit_port"
 	runtimeRequireAuth     = "require_auth"
+	runtimePersistent      = "persistent"
+	runtimeIdleTimeout     = "idle_timeout"
 	runtimeNoSync          = "no_sync"
 	runtimeAPIVersion      = "api_version"
 	runtimeDataVersion     = "data_version"
@@ -69,6 +71,8 @@ type DaemonRuntime struct {
 	ReadOnly         bool
 	RequireAuth      bool
 	RequireAuthKnown bool
+	Persistent       bool
+	IdleTimeout      *time.Duration
 	NoSync           bool
 	API              int
 	Data             int
@@ -156,14 +160,19 @@ func WriteDaemonRuntimeWithAuth(
 	dataDir string, host string, port int, version, browserURL string,
 	readOnly bool, requireAuth bool, caddyPID ...int,
 ) (string, error) {
-	return WriteDaemonRuntimeWithAuthAndNoSync(
+	return WriteDaemonRuntimeWithAuthAndNoSync(nil,
 		dataDir, host, port, version, browserURL, readOnly, requireAuth, false,
 		nil, caddyPID...,
 	)
 }
 
+type daemonLifetime struct {
+	Persistent  bool
+	IdleTimeout time.Duration
+}
+
 func WriteDaemonRuntimeWithAuthAndNoSync(
-	dataDir string, host string, port int, version, browserURL string,
+	lifetime *daemonLifetime, dataDir string, host string, port int, version, browserURL string,
 	readOnly bool, requireAuth bool, noSync bool, explicitPort *int, caddyPID ...int,
 ) (string, error) {
 	ep := daemon.Endpoint{
@@ -180,6 +189,10 @@ func WriteDaemonRuntimeWithAuthAndNoSync(
 		runtimeNoSync:      strconv.FormatBool(noSync),
 		runtimeAPIVersion:  strconv.Itoa(daemonAPIVersion),
 		runtimeDataVersion: strconv.Itoa(db.CurrentDataVersion()),
+	}
+	if !readOnly && lifetime != nil {
+		rec.Metadata[runtimePersistent] = strconv.FormatBool(lifetime.Persistent)
+		rec.Metadata[runtimeIdleTimeout] = lifetime.IdleTimeout.String()
 	}
 	if explicitPort != nil {
 		rec.Metadata[runtimeExplicitPort] = strconv.Itoa(*explicitPort)
@@ -203,9 +216,7 @@ func WriteDaemonRuntimeWithAuthAndNoSync(
 	path, err := runtimeStore(dataDir).Write(rec)
 	if err != nil {
 		if !readOnly {
-			publishStartupStateFallback(
-				dataDir, host, port, browserURL, requireAuth, noSync, explicitPort, caddy, err,
-			)
+			publishStartupStateFallback(dataDir, host, port, browserURL, requireAuth, noSync, explicitPort, caddy, err)
 		}
 		return "", err
 	}
@@ -435,6 +446,10 @@ func findStartupStateFallback(dataDir, authToken string) *DaemonRuntime {
 	if st.RequireAuthKnown {
 		rec.Metadata[runtimeRequireAuth] = strconv.FormatBool(st.RequireAuth)
 	}
+	rec.Metadata[runtimePersistent] = strconv.FormatBool(st.Persistent)
+	if st.IdleTimeout != "" {
+		rec.Metadata[runtimeIdleTimeout] = st.IdleTimeout
+	}
 	if st.NoSyncKnown {
 		rec.Metadata[runtimeNoSync] = strconv.FormatBool(st.NoSync)
 	}
@@ -630,7 +645,13 @@ func daemonRuntimeFromRecord(rec daemon.RuntimeRecord) *DaemonRuntime {
 		apiVersion, _ = strconv.Atoi(rec.Metadata[runtimeAPIVersion])
 		dataVersion, _ = strconv.Atoi(rec.Metadata[runtimeDataVersion])
 	}
+	var idleTimeout *time.Duration
+	if parsed, err := time.ParseDuration(rec.Metadata[runtimeIdleTimeout]); err == nil {
+		idleTimeout = &parsed
+	}
+	persistent, _ := strconv.ParseBool(rec.Metadata[runtimePersistent])
 	return &DaemonRuntime{
+		Persistent: persistent, IdleTimeout: idleTimeout,
 		Record:           rec,
 		Port:             port,
 		ExplicitPort:     explicitPort,
@@ -1160,4 +1181,28 @@ func probeHostForDial(host string) string {
 	default:
 		return host
 	}
+}
+
+func publishPersistentDaemon(dataDir string) error {
+	store := runtimeStore(dataDir)
+	path, err := store.Path(os.Getpid())
+	if err != nil {
+		return err
+	}
+	rec, err := store.Read(path)
+	if err != nil {
+		st := readStartupState(dataDir)
+		if st == nil || st.PID != os.Getpid() || st.RuntimeError == "" {
+			return err
+		}
+		st.Persistent, st.IdleTimeout = true, "0s"
+		data, err := json.Marshal(st)
+		if err != nil {
+			return err
+		}
+		return writeStartupState(dataDir, data)
+	}
+	rec.Metadata[runtimePersistent], rec.Metadata[runtimeIdleTimeout] = "true", "0s"
+	_, err = store.Write(rec)
+	return err
 }

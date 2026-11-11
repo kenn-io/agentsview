@@ -11,9 +11,14 @@ import (
 // GetPlanUsageSessionCounts counts the sessions a usage report leaves out
 // as plan-only and the sessions it undercounts as partly captured, with
 // the same rules as the SQLite query (db.GetPlanUsageSessionCounts).
-func (s *Store) GetPlanUsageSessionCounts(
+func (s *Store) GetPlanUsageSessionCounts(ctx context.Context, f db.UsageFilter) (db.PlanUsageSessionCounts, error) {
+	slot := db.UsageSlot(f, false)
+	return db.PlanUsageCounts(ctx, &s.planUsage, slot, s.keptVersion(), f, s.readPlanUsageSessionCounts)
+}
+
+func (s *Store) readPlanUsageSessionCounts(
 	ctx context.Context, f db.UsageFilter,
-) (db.PlanUsageSessionCounts, error) {
+) (*db.PlanUsageCountSummary, error) {
 	b := duckUsageBoundsForFilter(f)
 	var args []any
 
@@ -64,9 +69,10 @@ func (s *Store) GetPlanUsageSessionCounts(
 		JOIN usage_events ue ON ue.session_id = s.id
 		WHERE ` + eventWhere
 
+	observeAnalyticsQuery(query)
 	rows, err := s.queryContext(ctx, query, args...)
 	if err != nil {
-		return db.PlanUsageSessionCounts{}, fmt.Errorf("querying duckdb plan usage session counts: %w", err)
+		return nil, fmt.Errorf("querying duckdb plan usage session counts: %w", err)
 	}
 	defer rows.Close()
 	tally := db.NewPlanUsageCountTally(f)
@@ -75,18 +81,18 @@ func (s *Store) GetPlanUsageSessionCounts(
 		var kind, sessionID, model string
 		var ts any
 		if err := rows.Scan(&kind, &sessionID, &model, &ts); err != nil {
-			return db.PlanUsageSessionCounts{}, fmt.Errorf("scanning duckdb plan usage session count: %w", err)
+			return nil, fmt.Errorf("scanning duckdb plan usage session count: %w", err)
 		}
 		date := ""
 		if t, ok := readbase.ParseAnalyticsTime(formatDBTime(ts)); ok {
 			date = t.In(loc).Format("2006-01-02")
 		}
 		if err := tally.Add(kind, sessionID, model, date); err != nil {
-			return db.PlanUsageSessionCounts{}, err
+			return nil, err
 		}
 	}
 	if err := rows.Err(); err != nil {
-		return db.PlanUsageSessionCounts{}, fmt.Errorf("iterating duckdb plan usage session counts: %w", err)
+		return nil, fmt.Errorf("iterating duckdb plan usage session counts: %w", err)
 	}
-	return tally.Counts(), nil
+	return tally.Compact(), nil
 }

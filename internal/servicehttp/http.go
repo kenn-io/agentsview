@@ -363,6 +363,7 @@ func (b *httpBackend) List(
 // server-side parser in internal/server/sessions.go.
 func filterToQuery(f service.ListFilter) (*apiclient.GetAPIV1SessionsQuery, error) {
 	q := &apiclient.GetAPIV1SessionsQuery{}
+	q.ExclusionCounts = f.ExclusionCounts
 	if f.IDs != nil {
 		ids, err := encodeSessionIDs(f.IDs)
 		if err != nil {
@@ -731,6 +732,7 @@ func (b *httpBackend) Stats(
 	q.IncludeAutomated = new(includeAutomated)
 	q.IncludeProject = append(q.IncludeProject, f.IncludeProjects...)
 	q.ExcludeProject = append(q.ExcludeProject, f.ExcludeProjects...)
+	q.OutcomesOnly = new(f.OutcomesOnly)
 	q.IncludeGitOutcomes = new(f.IncludeGitOutcomes)
 	q.IncludeGithubOutcomes = new(f.IncludeGitHubOutcomes)
 
@@ -822,6 +824,9 @@ func (b *httpBackend) SearchContent(
 	ctx context.Context, req service.ContentSearchRequest,
 ) (*service.ContentSearchResult, error) {
 	q := &apiclient.GetAPIV1SearchContentQuery{}
+	if req.KeywordFallback {
+		q.AllowKeywordFallback = new(true)
+	}
 	if req.Pattern != "" {
 		q.Pattern = new(req.Pattern)
 	}
@@ -1762,4 +1767,34 @@ func (b *httpBackend) sessionWebURL(id string) string {
 	base.Fragment = ""
 	base.RawFragment = ""
 	return strings.TrimRight(base.String(), "/") + "/sessions/" + path
+}
+
+func (b *httpBackend) SessionCommits(ctx context.Context, id string) (*db.SessionCommitList, error) {
+	api, err := b.apiClient(b.client)
+	if err != nil {
+		return nil, err
+	}
+	response, err := api.GetAPIV1SessionsIDCommitsWithResponse(ctx, &apiclient.GetAPIV1SessionsIDCommitsRequestOptions{PathParams: &apiclient.GetAPIV1SessionsIDCommitsPath{ID: url.PathEscape(id)}})
+	if response == nil {
+		return nil, err
+	}
+	if err := serviceResponseError(response.HTTPResponse, response.Body, err); err != nil {
+		return nil, err
+	}
+	return response.JSON200, nil
+}
+
+func (b *httpBackend) CommitSessions(ctx context.Context, shas []string) (*db.CommitSessionList, error) {
+	api, err := b.apiClient(b.client)
+	if err != nil {
+		return nil, err
+	}
+	response, err := api.PostAPIV1CommitsSessionsWithResponse(ctx, &apiclient.PostAPIV1CommitsSessionsRequestOptions{Body: &apiclient.PostAPIV1CommitsSessionsBody{Shas: shas}})
+	if response == nil {
+		return nil, err
+	}
+	if err := serviceResponseError(response.HTTPResponse, response.Body, err); err != nil {
+		return nil, err
+	}
+	return response.JSON200, nil
 }

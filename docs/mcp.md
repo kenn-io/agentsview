@@ -1,5 +1,5 @@
 ---
-last_edited: 2026-11-03
+last_edited: 2026-11-09
 title: MCP Server
 description: Connect assistant clients to your AgentsView session history with MCP
 ---
@@ -34,6 +34,14 @@ Use the MCP server when you want a coding assistant to answer questions such as:
 
 The tools are read-only. They expose session history and usage data, but they do
 not mutate the archive or resync files directly.
+
+Every tool explicitly declares read-only, non-destructive, and idempotent hints.
+`search_content` and `query_recall` are open-world because their semantic search
+modes can send queries to the configured embedding provider.
+`get_session_file_references` is also open-world because it queries the
+configured Docbank service. The other tools advertise a closed environment of
+archived data and bundled guides. These hints help clients classify calls; they
+do not authorize access.
 
 ### Discover running HTTP listeners
 
@@ -97,7 +105,9 @@ client will see these tools:
 The two Friction Log tools appear when the backend stores the Friction Log.
 `get_friction_digest` defaults to the latest digest; pass `date` (YYYY-MM-DD)
 and `format` (`markdown` or `summary`). `list_friction_patterns` accepts `kind`,
-`since`, and `limit` (default 20, max 100). Both report
+`since`, and `limit` (default 20, max 100). Each pattern includes its linked
+[Kata](/docs/kata/) issue as `issue`, or, when automatic filing has not linked
+it, the reason as `filing`. Both tools report
 [Friction Log](/docs/configuration/#friction-log) heuristics, not ground truth.
 
 `list_sessions` accepts `labels` (every listed label must match) and `pr`
@@ -105,6 +115,9 @@ and `format` (`markdown` or `summary`). `list_friction_patterns` accepts `kind`,
 include each session's labels, pull request links, and parent session. See
 [labels](/docs/session-api/#agentsview-session-label) and
 [pull request links](/docs/session-api/#pull-request-links).
+
+With Docbank and every optional tool listed, the tool list the server sends is
+about 87 KB. `TestNewServer_CatalogFitsBudget` fails when it grows past 96 KB.
 
 ### Focused memory profile
 
@@ -132,6 +145,8 @@ remote servers report `unknown` with an `unsupported` reason. The tools use the
 same schemas and backend selection as the full profile, over either stdio or
 StreamableHTTP. Omitting `--profile` or choosing `--profile full` preserves the
 complete tool list above.
+
+This profile's tool list is about 21 KB, and the same test holds it under 24 KB.
 
 The native
 [AgentsView Memory package](https://github.com/kenn-io/agentsview/tree/main/plugins/agentsview-memory)
@@ -195,13 +210,16 @@ default. Set `include_one_shot: true` or `include_automated: true` to include
 those classes. An empty result can therefore omit a matching one-shot or
 automated session.
 
-When a vector search index is configured, prefer `search_content` with
-`mode: "hybrid"` or `mode: "semantic"` for questions about prior work,
+Prefer `search_content` with `mode: "hybrid"` for questions about prior work,
 especially when the exact wording is unknown. Hybrid combines semantic
 similarity with keyword matching. Use `context` to include surrounding messages.
-If the index is unavailable, use `search_sessions` for keyword search, or
-`search_content` with substring/regex for exact errors, identifiers, and code
-fragments. The default search mode remains substring.
+Hybrid returns its keyword matches when search by meaning is unavailable. The
+response includes `effective_mode: "hybrid_keyword"` and a `note` beside
+`coverage` explaining why. Keyword matches need the query words to appear. If
+there are no matches or only a few, try one or two short substring queries with
+key terms or synonyms. Preserve `scope`, inclusion, and current-session filters.
+Disclose keyword-only results once. Use substring/regex for exact errors,
+identifiers, and code fragments. The default remains substring.
 
 `search_content` accepts a `mode` of `substring` (default), `regex`, `terms`,
 `semantic`, or `hybrid`. `terms` splits `pattern` on whitespace and requires
@@ -216,12 +234,11 @@ requires a SQLite or PostgreSQL backend.
 terms, semantic, and hybrid searches. `all` includes child sessions and
 sidechain messages; `top` excludes them, and `subordinate` returns only them.
 Child sessions bypass the one-shot exclusion; top-level one-shot sessions still
-require `include_one_shot: true`. The semantic and hybrid modes need the opt-in
-[semantic search](/docs/semantic-search/) index on the local SQLite archive;
-without it they return a "not available" error. Exact `session_id`,
-`git_branch`, `project`, `agent`, `date_from`, and `date_to` filters apply
-before the final limit. Limits default to 10 and go up to 50; a value outside
-that range falls back to the default.
+require `include_one_shot: true`. Semantic mode needs the opt-in
+[semantic search](/docs/semantic-search/) index and returns a "not available"
+error without it. Exact `session_id`, `git_branch`, `project`, `agent`,
+`date_from`, and `date_to` filters apply before the final limit. Limits default
+to 10 and go up to 50; a value outside that range falls back to the default.
 
 To find one past session that covered several ideas, pass `concepts` instead of
 `pattern`: two to five distinct natural-language strings. The mode defaults to
@@ -245,18 +262,27 @@ Every match carries a conversation-unit citation: an `ordinal_range` of
 `parent_session_id`, and `is_sidechain` fields that flag hits from sidechain
 runs and subagent or fork sessions. The response also reports the
 `effective_mode`, the `effective_scope` for modes that support scope, and the
-`exclusions` that applied by default. `next_cursor` is present when another page
-exists. To continue `search_content`, pass `next_cursor` as the numeric `cursor`
-and echo the returned RFC3339 `activity_cutoff` unchanged. The cutoff keeps the
-recent-activity exclusion fixed across pages of an unchanged archive, including
-on older servers. A positive cursor without the cutoff returns a restart error
-when that exclusion applies. Restart without a cursor to obtain both fields.
-`include_active: true` or an explicit `current_session_id` allows numeric-only
-continuation. Archive edits retain the existing offset-pagination behavior.
+`exclusions` that applied by default. Empty first pages also return `hints` when
+a diagnostic search finds hidden matches. Each entry has `code`, `message`, and
+`retry_with`, the arguments to change while keeping the rest of your request.
+Counts say `more than N` when a bounded probe has more results, or `at least N`
+for semantic and hybrid searches or when activity filtering or candidate limits
+prevent an exact count. Failed probes add no hint. Default scope already
+includes child sessions.
 
-`exclusions.children` reports whether child sessions were excluded, including
-in empty results. It is true for `scope: top` and FTS searches without an exact
-`session_id`. It stays false for `scope: subordinate`, which keeps child sessions.
+`next_cursor` is present when another page exists. To continue `search_content`,
+pass `next_cursor` as the numeric `cursor` and echo the returned RFC3339
+`activity_cutoff` unchanged. The cutoff keeps the recent-activity exclusion
+fixed across pages of an unchanged archive, including on older servers. A
+positive cursor without the cutoff returns a restart error when that exclusion
+applies. Restart without a cursor to obtain both fields. `include_active: true`
+or an explicit `current_session_id` allows numeric-only continuation. Archive
+edits retain the existing offset-pagination behavior.
+
+`exclusions.children` reports whether child sessions were excluded, including in
+empty results. It is true for `scope: top` and FTS searches without an exact
+`session_id`. It stays false for `scope: subordinate`, which keeps child
+sessions.
 
 SQLite and PostgreSQL search matches also carry `transcript_revision`, captured
 by the same storage query as the evidence. A `revision_bound` response flag says
@@ -507,11 +533,11 @@ configured bearer token and enforces `Authorization: Bearer <token>` on every
 request. If `require_auth` is enabled, loopback HTTP binds also require bearer
 auth so forwarded ports are not accidentally unauthenticated.
 
-## Server Identity (unreleased)
+## Server Identity
 
-On `main`, the MCP server declares the AgentsView website and icon. The icon is
-included as a PNG data URI, so stdio and HTTP clients can load it without an
-external request. Whether it appears depends on the client.
+The MCP server declares the AgentsView website and icon. The icon is included as
+a PNG data URI, so stdio and HTTP clients can load it without an external
+request. Whether it appears depends on the client.
 
 ## Security Notes
 

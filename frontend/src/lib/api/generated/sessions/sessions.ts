@@ -6,6 +6,7 @@ import type {
   BatchDeleteInputBody,
   DbSession,
   DbSessionActivityResponse,
+  DbSessionCommitList,
   DbSessionExternalParent,
   DbSessionLabels,
   DbSessionTiming,
@@ -16,6 +17,7 @@ import type {
   GetApiV1SessionIdsResolveParams,
   GetApiV1SessionsByIdActivityPathParameters,
   GetApiV1SessionsByIdChildrenPathParameters,
+  GetApiV1SessionsByIdCommitsPathParameters,
   GetApiV1SessionsByIdDirectoryPathParameters,
   GetApiV1SessionsByIdExportPathParameters,
   GetApiV1SessionsByIdFileReferencesPathParameters,
@@ -370,6 +372,25 @@ export const getApiV1SessionsByIdChildren = async (
   options?: Parameters<typeof orvalFetch>[1],
 ): Promise<DbSession[]> => {
   return orvalFetch<DbSession[]>(getGetApiV1SessionsByIdChildrenUrl({ id }), {
+    ...options,
+    method: "GET",
+  });
+};
+
+export const getGetApiV1SessionsByIdCommitsUrl = ({
+  id,
+}: GetApiV1SessionsByIdCommitsPathParameters) => {
+  return `/api/v1/sessions/${encodeURIComponent(String(id))}/commits`;
+};
+
+/**
+ * @summary List session commits
+ */
+export const getApiV1SessionsByIdCommits = async (
+  { id }: GetApiV1SessionsByIdCommitsPathParameters,
+  options?: Parameters<typeof orvalFetch>[1],
+): Promise<DbSessionCommitList> => {
+  return orvalFetch<DbSessionCommitList>(getGetApiV1SessionsByIdCommitsUrl({ id }), {
     ...options,
     method: "GET",
   });

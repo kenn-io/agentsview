@@ -10,6 +10,7 @@ import (
 	"strings"
 	"time"
 
+	"go.kenn.io/agentsview/internal/config"
 	"go.kenn.io/agentsview/internal/parser"
 )
 
@@ -1102,6 +1103,34 @@ const codexLegacyPageHeaderDataVersion = 134
 // codexThreadIdentityDataVersion preserves the first session_meta identity.
 const codexThreadIdentityDataVersion = 137
 
+// CopyCommitTrailersFrom preserves Git evidence before rebuild reconciliation.
+func (d *DB) CopyCommitTrailersFrom(ctx context.Context, sourcePath string) error {
+	if d.ArchiveContent().UsageOnly() {
+		return nil
+	}
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	conn, err := d.getWriter().Conn(ctx)
+	if err != nil {
+		return fmt.Errorf("acquiring connection: %w", err)
+	}
+	defer conn.Close()
+	if _, err := conn.ExecContext(ctx, "ATTACH DATABASE ? AS old_db", sourcePath); err != nil {
+		return fmt.Errorf("attaching source db: %w", err)
+	}
+	defer func() { _, _ = execWithoutCancel(ctx, conn, "DETACH DATABASE old_db") }()
+	var hasTrailers bool
+	if err := conn.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM old_db.sqlite_master WHERE type='table' AND name='commit_trailers')`).Scan(&hasTrailers); err != nil {
+		return err
+	}
+	if hasTrailers {
+		if _, err := conn.ExecContext(ctx, `INSERT OR IGNORE INTO commit_trailers SELECT * FROM old_db.commit_trailers`); err != nil {
+			return fmt.Errorf("copying commit trailers: %w", err)
+		}
+	}
+	return nil
+}
+
 // CopyExcludedSessionsFrom copies the excluded_sessions table
 // from the source DB so permanently deleted sessions survive
 // full DB rebuilds. The source must not have active connections.
@@ -1170,9 +1199,7 @@ func (d *DB) CopyExcludedSessionsFrom(
 	if sourceVersion < codexRevertPageDataVersion {
 		// Deleted rows no longer retain file names, so unknown page IDs cannot
 		// be enumerated. Preserve the old whole-thread deletion instead.
-		scope = `CASE WHEN id GLOB 'codex:*' OR id GLOB '*~codex:*'
-			OR id GLOB 'traex:*' OR id GLOB '*~traex:*'
-			OR id GLOB 'augure-code:*' OR id GLOB '*~augure-code:*'
+		scope = `CASE WHEN ` + codexFormatIDGlobSQL + `
 			THEN 1 ELSE ` + scope + ` END`
 	}
 	_, err = conn.ExecContext(ctx, `
@@ -1192,7 +1219,7 @@ func (d *DB) CopyExcludedSessionsFrom(
 		JOIN excluded_sessions thread
 		  ON thread.id = substr(page.id, 1, length(page.id) - 37)
 		WHERE thread.include_codex_pages = 1
-		  AND page.agent IN ('codex', 'traex', 'augure-code')
+		  AND page.agent IN (`+codexFormatAgentsSQL+`)
 		  AND substr(page.id, -37, 1) = '_'`)
 	if err != nil {
 		return fmt.Errorf("copying excluded Codex pages: %w", err)
@@ -1206,7 +1233,7 @@ func (d *DB) CopyExcludedSessionsFrom(
 			FROM main.sessions page
 			JOIN excluded_sessions legacy
 			  ON legacy.id = substr(page.id, 1, length(page.id) - 73) || substr(page.id, -36)
-			WHERE page.agent IN ('codex', 'traex', 'augure-code')
+			WHERE page.agent IN (`+codexFormatAgentsSQL+`)
 			  AND substr(page.id, -37, 1) = '_'`)
 		if err != nil {
 			return fmt.Errorf("copying excluded legacy Codex pages: %w", err)
@@ -1219,6 +1246,21 @@ func (d *DB) CopyExcludedSessionsFrom(
 			}
 		}
 	}
+	if d.ArchiveContent() == config.ArchiveContentFull {
+		var hasLinks bool
+		if err := conn.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM old_db.sqlite_master WHERE type='table' AND name='commit_links')`).Scan(&hasLinks); err != nil {
+			return err
+		}
+		if hasLinks {
+			if _, err := conn.ExecContext(ctx, `INSERT OR IGNORE INTO commit_links
+    (session_id,sha,branch,subject,repository,message_ordinal,call_index,tool_use_id,committed_at,project)
+    SELECT l.session_id,l.sha,l.branch,l.subject,l.repository,l.message_ordinal,l.call_index,l.tool_use_id,l.committed_at,l.project
+    FROM old_db.commit_links l WHERE NOT EXISTS (SELECT 1 FROM old_db.sessions s WHERE s.id=l.session_id)`); err != nil {
+				return fmt.Errorf("copying excluded commit links: %w", err)
+			}
+		}
+	}
+
 	return nil
 }
 
@@ -1321,7 +1363,7 @@ func (d *DB) CopySessionMetadataFrom(
 			SET deleted_at = old_s.deleted_at
 			FROM old_db.sessions old_s
 			WHERE old_s.id = substr(page.id, 1, length(page.id) - 37)
-			  AND page.agent IN ('codex', 'traex', 'augure-code')
+			  AND page.agent IN (`+codexFormatAgentsSQL+`)
 			  AND substr(page.id, -37, 1) = '_'
 			  AND `+trashFilter); err != nil {
 			return fmt.Errorf("copying Codex revert page trash: %w", err)
@@ -1330,7 +1372,7 @@ func (d *DB) CopySessionMetadataFrom(
 			UPDATE main.sessions SET trash_includes_codex_pages = 1
 			FROM old_db.sessions old_s
 			WHERE main.sessions.id = old_s.id
-			  AND old_s.agent IN ('codex', 'traex', 'augure-code')
+			  AND old_s.agent IN (`+codexFormatAgentsSQL+`)
 			  AND `+trashFilter); err != nil {
 			return fmt.Errorf("retaining legacy Codex trash scope: %w", err)
 		}
@@ -1646,15 +1688,20 @@ func (d *DB) CopySessionMetadataFrom(
 			DELETE FROM main.cursor_usage_events`); err != nil {
 			return fmt.Errorf("clearing cursor usage events: %w", err)
 		}
+		agentColumn := "'cursor'"
+		if oldDBHasColumn(ctx, tx, "cursor_usage_events", "agent") {
+			agentColumn = "agent"
+		}
 		if _, err := tx.ExecContext(ctx, `
 			INSERT INTO main.cursor_usage_events (
+				agent,
 				occurred_at, model, kind,
 				input_tokens, output_tokens,
 				cache_write_tokens, cache_read_tokens,
 				charged_microdollars, cursor_token_fee_microdollars,
 				user_id, user_email, is_headless, dedup_key
 			)
-			SELECT
+			SELECT `+agentColumn+`,
 				occurred_at, model, kind,
 				input_tokens, output_tokens,
 				cache_write_tokens, cache_read_tokens,
@@ -1686,7 +1733,9 @@ func (d *DB) CopySessionMetadataFrom(
 				'project_identity_publication_revision',
 				'session_deletion_publication_revision',
 				'usage_change_revision',
+				'usage_pricing_revision',
 				'conversation_publication_revision',
+				'conversation_usage_revision',
 				'worktree_mapping_publication_revision'
 			)
 			AND key NOT GLOB 'remote_import_data_version:*'
@@ -1795,6 +1844,14 @@ func (d *DB) CopySessionMetadataFrom(
 			WHERE NOT (
 				session_project_identity_snapshots.recorded_git_remote != ''
 				AND (excluded.remote_resolution = 'ambiguous' OR trim(excluded.git_remote) = '')
+			) AND NOT (
+				-- An old placeholder with no identity key and no recorded root
+				-- carries no historical evidence, so it never replaces a
+				-- publishable identity the rebuild just recorded.
+				trim(excluded.key_source) = '' AND trim(excluded.worktree_root_path) = ''
+				AND trim(excluded.root_path) = ''
+				AND (trim(session_project_identity_snapshots.key_source) != ''
+					OR trim(session_project_identity_snapshots.worktree_root_path) != '')
 			)`); err != nil {
 			return fmt.Errorf("copying session project identity snapshots: %w", err)
 		}
@@ -2301,7 +2358,7 @@ func reconcileTranscriptRevisionsTx(
 					FROM main.tool_result_events WHERE session_id = current.id
 				)
 			THEN old.transcript_revision
-			ELSE CAST(CAST(old.transcript_revision AS INTEGER) + 1 AS TEXT)
+			ELSE CAST(old.transcript_revision AS INTEGER) + 1
 			END
 			FROM old_db.sessions AS old
 			WHERE old.id = current.id
@@ -2444,7 +2501,7 @@ func copySessionDataForIDs(
 		"source_type", "source_subtype", "prompt_source",
 		"source_uuid", "source_parent_uuid",
 		"is_sidechain", "is_compact_boundary",
-		"thinking_text", "dialogue_text",
+		"thinking_text", "dialogue_text", "dialogue_is_content",
 	} {
 		if oldDBHasColumn(ctx, tx, "messages", c) {
 			msgCols.WriteString(", " + c)
@@ -2599,6 +2656,15 @@ func copySessionDataForIDs(
 			return fmt.Errorf(
 				"copying tool_result_events: %w", err,
 			)
+		}
+	}
+
+	if oldDBHasTable(ctx, tx, "commit_links") {
+		if _, err := tx.ExecContext(ctx, `INSERT OR IGNORE INTO commit_links
+   (session_id,sha,branch,subject,repository,message_ordinal,call_index,tool_use_id,committed_at,project)
+   SELECT `+sessionID+`,sha,branch,subject,repository,message_ordinal,call_index,tool_use_id,committed_at,project
+   FROM old_db.commit_links WHERE session_id IN (SELECT source_id FROM `+tempIDsTable+`)`); err != nil {
+			return fmt.Errorf("copying commit links: %w", err)
 		}
 	}
 
@@ -3166,10 +3232,24 @@ func prepareCodexSessionIDMap(ctx context.Context, conn *sql.Conn, includeLegacy
 	return version, nil
 }
 
+// codexFormatAgentsSQL is the quoted SQL IN list of agents whose sessions are
+// Codex rollout pages, and codexFormatIDGlobSQL matches their session IDs with
+// or without a host prefix. Agent names are fixed identifiers, so inlining
+// them is safe.
+var codexFormatAgentsSQL, codexFormatIDGlobSQL = func() (string, string) {
+	var in, globs []string
+	for _, agent := range parser.CodexFormatAgents() {
+		in = append(in, "'"+string(agent)+"'")
+		globs = append(globs,
+			"id GLOB '"+string(agent)+":*'", "id GLOB '*~"+string(agent)+":*'")
+	}
+	return strings.Join(in, ", "), strings.Join(globs, " OR ")
+}()
+
 func codexThreadCorrections(ctx context.Context, conn *sql.Conn) (map[string]string, error) {
 	rows, err := conn.QueryContext(ctx, `SELECT old.id, fresh.id
 		FROM old_db.sessions old JOIN main.sessions fresh ON fresh.file_path = old.file_path
-		WHERE old.agent IN ('codex', 'traex', 'augure-code') AND fresh.agent = old.agent
+		WHERE old.agent IN (`+codexFormatAgentsSQL+`) AND fresh.agent = old.agent
 		  AND old.id != fresh.id AND fresh.deleted_at IS NULL AND old.deleted_at IS NULL
 		  AND old.id NOT IN (SELECT id FROM main.excluded_sessions)`)
 	if err != nil {
@@ -3200,10 +3280,8 @@ func isCodexThreadCorrection(threads map[string]string, targets map[string]bool,
 func codexRowsReparsedElsewhere(ctx context.Context, conn *sql.Conn) (map[string]string, error) {
 	rows, err := conn.QueryContext(ctx, `
 		SELECT id, file_path FROM old_db.sessions
-		WHERE agent IN (?, ?, ?)
-		  AND file_path IS NOT NULL`,
-		string(parser.AgentCodex), string(parser.AgentTraeX), string(parser.AgentAugureCode),
-	)
+		WHERE agent IN (`+codexFormatAgentsSQL+`)
+		  AND file_path IS NOT NULL`)
 	if err != nil {
 		return nil, fmt.Errorf("finding stale codex rows: %w", err)
 	}
@@ -3233,9 +3311,7 @@ func excludeLegacyCodexPagesByFileName(ctx context.Context, conn *sql.Conn) erro
 	rows, err := conn.QueryContext(ctx, `
 		SELECT id, file_path, created_at FROM old_db.excluded_sessions
 		WHERE file_path IS NOT NULL
-		  AND (id GLOB 'codex:*' OR id GLOB '*~codex:*'
-		    OR id GLOB 'traex:*' OR id GLOB '*~traex:*'
-		    OR id GLOB 'augure-code:*' OR id GLOB '*~augure-code:*')`)
+		  AND (`+codexFormatIDGlobSQL+`)`)
 	if err != nil {
 		return fmt.Errorf("reading excluded Codex file names: %w", err)
 	}

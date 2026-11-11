@@ -8,15 +8,12 @@ import (
 	"mime"
 	"net/http"
 	"reflect"
-	"time"
 
 	"github.com/danielgtaylor/huma/v2"
 	"go.kenn.io/agentsview/internal/artifact"
 	"go.kenn.io/agentsview/internal/db"
 	syncpkg "go.kenn.io/agentsview/internal/sync"
 )
-
-const sessionPushReadTimeout = 2 * time.Minute
 
 type sessionPushResponse struct {
 	SessionID string `json:"session_id"`
@@ -94,11 +91,11 @@ func (s *Server) handleSessionPush(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if !s.sessionPushMu.TryLock() {
-		http.Error(w, "another session ingest is active", http.StatusConflict)
+		http.Error(w, "another session ingest is active", http.StatusServiceUnavailable)
 		return
 	}
 	defer s.sessionPushMu.Unlock()
-	if err := extendRequestReadDeadline(w, sessionPushReadTimeout); err != nil && !errors.Is(err, http.ErrNotSupported) {
+	if err := extendRequestReadDeadline(w, artifact.SessionPushTimeout(r.ContentLength)); err != nil && !errors.Is(err, http.ErrNotSupported) {
 		log.Printf("extending session push read deadline: %v", err)
 		http.Error(w, "cannot prepare session upload", http.StatusInternalServerError)
 		return
@@ -132,10 +129,10 @@ func (s *Server) handleSessionPush(w http.ResponseWriter, r *http.Request) {
 	})
 	if err != nil {
 		status := http.StatusInternalServerError
-		if errors.Is(err, db.ErrSessionPushConflict) || errors.Is(err, syncpkg.ErrSyncInProgress) || errors.Is(err, db.ErrCompactInProgress) {
+		if errors.Is(err, db.ErrSessionPushConflict) {
 			status = http.StatusConflict
 		}
-		if errors.Is(err, db.ErrWriterClosed) || r.Context().Err() != nil {
+		if errors.Is(err, syncpkg.ErrSyncInProgress) || errors.Is(err, db.ErrCompactInProgress) || errors.Is(err, db.ErrWriterClosed) || r.Context().Err() != nil {
 			status = http.StatusServiceUnavailable
 		}
 		http.Error(w, "session ingest failed", status)

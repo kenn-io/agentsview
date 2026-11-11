@@ -128,11 +128,21 @@ func newServer(opts ServeOptions) *mcp.Server {
 	})
 
 	t := &toolset{svc: opts.Service, now: opts.Now, version: version}
-	readOnly := &mcp.ToolAnnotations{ReadOnlyHint: true}
+	closedWorld, nonDestructive, openWorld := false, false, true
+	readOnly := &mcp.ToolAnnotations{
+		ReadOnlyHint: true, DestructiveHint: &nonDestructive,
+		IdempotentHint: true, OpenWorldHint: &closedWorld,
+	}
+	// Semantic content and Recall search can contact an embedding provider; file
+	// references query an independently configured Docbank service.
+	externalRead := &mcp.ToolAnnotations{
+		ReadOnlyHint: true, DestructiveHint: &nonDestructive,
+		IdempotentHint: true, OpenWorldHint: &openWorld,
+	}
 	memoryOnly := opts.Profile == ProfileMemory
 
 	if !memoryOnly {
-		addFileReferencesTool(s, t, readOnly)
+		addFileReferencesTool(s, t, externalRead)
 		mcp.AddTool(s, &mcp.Tool{
 			Name: ToolSearchSessions,
 			Description: "Full-text search across all recorded AI agent sessions (Claude Code, Codex, Gemini, " +
@@ -157,7 +167,7 @@ func newServer(opts ServeOptions) *mcp.Server {
 					"Use lexical mode for exact terms, vector mode for semantic similarity, " +
 					"or hybrid mode to fuse both rankings. Returns recall entries with their " +
 					"source-session evidence and retrieval scores.",
-				Annotations: readOnly,
+				Annotations: externalRead,
 			}, t.queryRecall)
 		}
 
@@ -181,7 +191,7 @@ func newServer(opts ServeOptions) *mcp.Server {
 
 	mcp.AddTool(s, &mcp.Tool{
 		Name: ToolGetMessages,
-		Description: "Read a slice of one session's transcript, either by linear pagination (from/direction/" +
+		Description: "Read a slice of one session's transcript. Choose linear pagination (from/direction/" +
 			"limit) or a symmetric window centered on an ordinal (around, with before/after sizing each " +
 			"side, default 5; mutually exclusive with from/direction). Defaults return only user and " +
 			"assistant messages, each truncated to 2000 characters; truncated messages are flagged so you " +
@@ -194,17 +204,18 @@ func newServer(opts ServeOptions) *mcp.Server {
 
 	mcp.AddTool(s, &mcp.Tool{
 		Name: ToolGetMemoryStatus,
-		Description: "Report whether conversation memory is ready, including archive backend, lexical " +
+		Description: "Report whether conversation memory is ready. Includes archive backend, lexical " +
 			"and semantic search capability, vector generation coverage, and source telemetry availability.",
 		Annotations: readOnly,
 	}, t.getMemoryStatus)
 
 	mcp.AddTool(s, &mcp.Tool{
 		Name: ToolSearchContent,
-		Description: "Search raw session text, including thinking, tool inputs, and results. When a vector search index is " +
-			"configured, prefer mode hybrid (semantic similarity plus keywords) or semantic for finding " +
+		Description: "Search raw session text, including thinking, tool inputs, and results. " +
+			"Prefer mode hybrid (semantic similarity plus keywords) for finding " +
 			"prior work and answering contextual questions, especially when the exact wording is unknown. " +
-			"If these modes report not available, use terms when every literal term must occur within one " +
+			"Hybrid returns keyword matches with effective_mode hybrid_keyword and a note when search by meaning is unavailable. " +
+			"Use terms when every literal term must occur within one " +
 			"user/assistant exchange, or substring/regex for exact error messages, identifiers, and code fragments. " +
 			"Use concepts with two to five semantic ideas to keep only sessions with evidence for every idea. " +
 			"The default mode remains substring. Scope defaults to all, including child sessions and sidechain messages; " +
@@ -213,8 +224,9 @@ func newServer(opts ServeOptions) *mcp.Server {
 			"surrounding conversation with each match. Matches from the last 10 minutes (including the " +
 			"current conversation) are excluded unless include_active is set; current_session_id replaces " +
 			"that heuristic with one exact exclusion. One-shot and automated " +
-			"sessions are excluded by default; set include_one_shot or include_automated to include them.",
-		Annotations: readOnly,
+			"sessions are excluded by default; set include_one_shot or include_automated to include them. " +
+			"Empty first pages return measured hints with code, message, and retry_with arguments; preserve other arguments when retrying.",
+		Annotations: externalRead,
 	}, t.searchContent)
 
 	if !memoryOnly {
@@ -268,7 +280,7 @@ func newServer(opts ServeOptions) *mcp.Server {
 
 		mcp.AddTool(s, &mcp.Tool{
 			Name: ToolGetActivityReport,
-			Description: "Report agent time, sessions, and cost for a day, week, month, or custom range: " +
+			Description: "Report agent time, sessions, and cost for a day, week, month, or custom range. Returns " +
 				"totals, the busiest moment, breakdowns by project, model, and agent, and a page of the " +
 				"sessions in the range. Page through the sessions with sessions_cursor. Call " +
 				"get_session_usage on a session to see where its cost came from.",
@@ -301,7 +313,7 @@ func newServer(opts ServeOptions) *mcp.Server {
 	if !memoryOnly && service.SupportsFriction(opts.Service) {
 		mcp.AddTool(s, &mcp.Tool{
 			Name: ToolGetFrictionDigest,
-			Description: "Read one dated Friction Log digest: heuristic findings (user corrections, " +
+			Description: "Read one dated Friction Log digest. Includes heuristic findings (user corrections, " +
 				"tool errors, workarounds, deferrals, health patterns, frustration, interruptions) and P0 " +
 				"alerts for one local day. " +
 				"format markdown returns the rendered digest; summary returns the counts-only object. " +
@@ -310,7 +322,7 @@ func newServer(opts ServeOptions) *mcp.Server {
 		}, t.frictionDigest)
 		mcp.AddTool(s, &mcp.Tool{
 			Name: ToolListFrictionPatterns,
-			Description: "List recurring friction patterns ranked by occurrences across digests, with " +
+			Description: "List recurring friction patterns ranked by occurrences across digests. Includes " +
 				"first/last seen dates, distinct session counts, and a web_url for the latest occurrence. " +
 				"Filter by kind or since (YYYY-MM-DD).",
 			Annotations: readOnly,

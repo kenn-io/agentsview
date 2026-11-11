@@ -3,6 +3,7 @@
 package postgres
 
 import (
+	"database/sql"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -84,4 +85,41 @@ func TestPGDialogueBackfillPerScope(t *testing.T) {
 	var dialogue string
 	require.NoError(t, pg.QueryRowContext(ctx, `SELECT dialogue_text FROM messages WHERE session_id='dialogue-search' AND ordinal=1`).Scan(&dialogue))
 	assert.Equal(t, "answerneedle", dialogue)
+}
+
+func TestPGPushStoresDialogueCopyOnceAndMigratesOldCopies(t *testing.T) {
+	syncer, local, pg, ctx := newSessionProvenancePushSync(t, "agentsview_dialogue_dedupe_test")
+	dbtest.SeedDialogueSearch(t, local)
+	session, err := local.GetSession(ctx, "dialogue-search")
+	require.NoError(t, err)
+	require.NotNil(t, session)
+	messages, err := local.GetMessages(ctx, session.ID, 0, 100, true)
+	require.NoError(t, err)
+	session.DataVersion = db.CurrentDataVersion()
+	_, err = local.WriteSessionBatchContext(ctx, []db.SessionBatchWrite{{Session: *session, Messages: messages, DataVersion: session.DataVersion, ReplaceMessages: true}})
+	require.NoError(t, err)
+	_, err = syncer.Push(ctx, true, nil)
+	require.NoError(t, err)
+	dialogueAt := func(ordinal int) sql.NullString {
+		var dialogue sql.NullString
+		require.NoError(t, pg.QueryRowContext(ctx, `SELECT dialogue_text FROM messages WHERE session_id=$1 AND ordinal=$2`, session.ID, ordinal).Scan(&dialogue))
+		return dialogue
+	}
+	assert.Equal(t, sql.NullString{}, dialogueAt(10), "a copy of content is stored as NULL")
+	assert.Equal(t, sql.NullString{String: "systemneedle", Valid: true}, dialogueAt(4), "a copy beside thinking text is kept")
+
+	// Model a mirror an older release pushed: the copy in dialogue_text and no
+	// record of the one-time rewrite.
+	_, err = pg.ExecContext(ctx, `UPDATE messages SET dialogue_text=content WHERE session_id=$1 AND ordinal=10`, session.ID)
+	require.NoError(t, err)
+	_, err = pg.ExecContext(ctx, `DELETE FROM sync_metadata WHERE key=$1`, dialogueDedupeMetadataKey)
+	require.NoError(t, err)
+	require.NoError(t, EnsureSchema(ctx, pg, syncer.schema))
+	assert.Equal(t, sql.NullString{}, dialogueAt(10))
+	assert.Equal(t, sql.NullString{String: "systemneedle", Valid: true}, dialogueAt(4))
+
+	// The rewritten rows match the archive's stored-dialogue fingerprint.
+	unchanged, err := syncer.Push(ctx, false, nil)
+	require.NoError(t, err)
+	assert.Zero(t, unchanged.SessionsPushed)
 }

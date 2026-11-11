@@ -46,7 +46,7 @@ func TestSessionPushRejectsBeforeReadingUnauthorizedOrOversizeBody(t *testing.T)
 			case "busy":
 				s.sessionPushMu.Lock()
 				defer s.sessionPushMu.Unlock()
-				want = http.StatusConflict
+				want = http.StatusServiceUnavailable
 			case "read-only":
 				readOnly, err := db.OpenReadOnly(t.Context(), s.db.(*db.DB).Path())
 				require.NoError(t, err)

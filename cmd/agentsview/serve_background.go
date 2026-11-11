@@ -8,6 +8,8 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
+	"strconv"
 	"strings"
 	"time"
 
@@ -29,6 +31,7 @@ var errServeStartupInProgress = errors.New(
 var (
 	waitForDaemonStartupForEnsure        = WaitForDaemonStartupContext
 	startServeBackgroundProcessForEnsure = startServeBackgroundProcess
+	startServeBackgroundForRun           = startServeBackground
 	startServeBackgroundProcessForRun    = startServeBackgroundProcess
 	backgroundServeProbeHook             func()
 )
@@ -37,6 +40,7 @@ type backgroundLaunchPolicy struct {
 	// ConfigOnly starts exclusively from persistent configuration. In
 	// particular, NoSync is a CLI/runtime option rather than a config key.
 	ConfigOnly bool
+	Persistent bool
 	Operation  string
 	Attached   bool
 	OnLaunch   func(pid int, logPath string)
@@ -66,7 +70,11 @@ func (p backgroundLaunchPolicy) operation() string {
 // backgroundChildEnvVar marks the re-exec'd serve process as the child of a
 // background launch. The child reads it to keep the auth token out of
 // serve.log; the parent prints the token to the invoking terminal instead.
-const backgroundChildEnvVar = "AGENTSVIEW_BACKGROUND_CHILD"
+const (
+	backgroundChildEnvVar         = "AGENTSVIEW_BACKGROUND_CHILD"
+	persistentDaemonEnvVar        = "AGENTSVIEW_PERSISTENT_DAEMON"
+	updateRestartPersistentEnvVar = "AGENTSVIEW_UPDATE_RESTART_PERSISTENT"
+)
 
 // runningAsBackgroundChild reports whether this process was spawned by
 // runServeBackground.
@@ -170,8 +178,12 @@ func runServeBackgroundCommand(
 func runServeBackground(ctx context.Context,
 	cfg config.Config, args []string, opts serveReplacementOptions,
 ) {
-	result, err := startServeBackground(ctx,
-		cfg, args, opts, backgroundLaunchPolicy{},
+	progress := &daemonLaunchProgressWriter{w: os.Stdout}
+	result, err := startServeBackgroundForRun(ctx,
+		cfg, args, opts, backgroundLaunchPolicy{
+			Persistent: os.Getenv(updateRestartPersistentEnvVar) == "true",
+			OnProgress: progress.progress,
+		},
 	)
 	if err != nil {
 		fatal("%v", err)
@@ -216,6 +228,7 @@ func startServeBackground(ctx context.Context,
 ) (backgroundLaunchResult, error) {
 	var result backgroundLaunchResult
 	operation := policy.operation()
+	cfg.PersistentDaemon = cfg.PersistentDaemon || policy.Persistent
 	if policy.ConfigOnly {
 		cfg.NoSync = false
 	}
@@ -424,10 +437,12 @@ func prepareAutoStartReplacement(ctx context.Context, cfg *config.Config, rt *Da
 	effective.DBPath = cfg.DBPath
 	effective.AuthToken = cfg.AuthToken
 	effective.NoSync = cfg.NoSync
+	effective.PersistentDaemon = cfg.PersistentDaemon
 	if err := prepareBackgroundReplacement(ctx, &effective, rt, true); err != nil {
 		return err
 	}
 	cfg.NoSync = effective.NoSync
+	cfg.PersistentDaemon = effective.PersistentDaemon
 	return nil
 }
 
@@ -744,9 +759,12 @@ func waitForExternalServeStartupBeforeReplacement(
 	authToken string,
 	waitTimeout time.Duration,
 ) (bool, error) {
-	_, waited, err := waitForExternalServeStartup(
+	rt, waited, err := waitForExternalServeStartup(
 		ctx, dataDir, authToken, waitTimeout,
 	)
+	if rt != nil && rt.RuntimeFallback {
+		return false, err
+	}
 	if !waited {
 		return false, nil
 	}
@@ -969,7 +987,7 @@ func startServeBackgroundProcess(ctx context.Context,
 	childArgs := serveBackgroundChildArgs(args)
 	// The daemon outlives the launcher; readiness still uses the caller context.
 	cmd := exec.CommandContext(context.WithoutCancel(ctx), exe, childArgs...)
-	cmd.Env = append(os.Environ(), backgroundChildEnvVar+"=1")
+	cmd.Env = append(slices.DeleteFunc(os.Environ(), func(env string) bool { return strings.HasPrefix(env, updateRestartPersistentEnvVar+"=") }), backgroundChildEnvVar+"=1", persistentDaemonEnvVar+"="+strconv.FormatBool(cfg.PersistentDaemon))
 	if cfg.DataDir != "" {
 		cmd.Env = append(cmd.Env, "AGENTSVIEW_DATA_DIR="+cfg.DataDir)
 	}
@@ -1026,6 +1044,7 @@ func adoptDaemonRuntimeLaunchOptions(cfg *config.Config, rt *DaemonRuntime) {
 	if cfg == nil || rt == nil {
 		return
 	}
+	cfg.PersistentDaemon = cfg.PersistentDaemon || rt.Persistent
 	if rt.NoSync {
 		cfg.NoSync = true
 	}

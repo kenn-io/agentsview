@@ -76,6 +76,54 @@ func TestSignalsFrustrationMemoInvalidation(t *testing.T) {
 	}
 }
 
+// The Signals count is the number of prompts signals.IsFrustrationMarker
+// flags: user rows that are neither system rows nor tool results. Each
+// expected count is worked out by hand from the rules, so a change to the
+// rules, the read, or the memo that alters a count fails here, before and
+// after the transcript changes.
+func TestSignalsFrustrationCountsFollowTranscriptChanges(t *testing.T) {
+	d := testDB(t)
+	ctx := t.Context()
+	insertSession(t, d, "session", "test")
+	count := func() int {
+		t.Helper()
+		// Message writes clear the stored signals until sync recomputes them.
+		require.NoError(t, d.UpdateSessionSignals(ctx, "session", SessionSignalUpdate{QualitySignals: QualitySignals{Version: CurrentQualitySignalVersion}}))
+		resp, err := d.GetAnalyticsSignals(ctx, AnalyticsFilter{})
+		require.NoError(t, err)
+		return resp.QualityHealth.Totals.FrustrationMarkerCount
+	}
+	require.NoError(t, d.InsertMessages(ctx, []Message{
+		// Kelvin sign lowercases to k: "you broke".
+		{SessionID: "session", Ordinal: 0, Role: "user", Content: "you bro\u212ae the build"},
+		{SessionID: "session", Ordinal: 1, Role: "assistant", Content: "this is broken"},
+		// Two of five words are capitals, exactly the 0.4 threshold.
+		{SessionID: "session", Ordinal: 2, Role: "user", Content: "AB CD ef gh ij"},
+		{SessionID: "session", Ordinal: 3, Role: "user", SourceSubtype: "tool_result", Content: "WTF WTF WTF WTF"},
+		{SessionID: "session", Ordinal: 4, Role: "user", IsSystem: true, Content: "this is broken"},
+		{SessionID: "session", Ordinal: 5, Role: "user", Content: "```text\nFUCK FUCK FUCK\n```\nplease handle the log"},
+		// The phrase needs an ASCII apostrophe.
+		{SessionID: "session", Ordinal: 6, Role: "user", Content: "why won\u2019t it build"},
+		// Whitespace runs collapse to one space: "come on".
+		{SessionID: "session", Ordinal: 7, Role: "user", Content: "come\n\t on, run it"},
+	}))
+	assert.Equal(t, 3, count())
+
+	require.NoError(t, d.InsertMessages(ctx, []Message{
+		// Two of six words are capitals, under the threshold.
+		{SessionID: "session", Ordinal: 8, Role: "user", Content: "ABC def GHI jkl mno pqr"},
+		// Long s matches s under case folding: "does not work".
+		{SessionID: "session", Ordinal: 9, Role: "user", Content: "doe\u017f not work"},
+	}))
+	assert.Equal(t, 4, count(), "an append must recount the session")
+
+	require.NoError(t, d.ReplaceSessionMessages(ctx, "session", []Message{
+		{SessionID: "session", Ordinal: 0, Role: "user", Content: "wtf"},
+		{SessionID: "session", Ordinal: 1, Role: "user", Content: "STILL BROKEN!!"},
+	}))
+	assert.Equal(t, 1, count(), "a replacement must recount the session")
+}
+
 func TestSignalsFrustrationMemoReaderSwap(t *testing.T) {
 	d := testDB(t)
 	ctx := t.Context()

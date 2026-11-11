@@ -34,6 +34,9 @@ type daemonIngestion struct {
 	load func() (config.Config, error)
 
 	cfg atomic.Pointer[config.Config]
+	// syncInterval is shared by every watcher generation, so a shorter
+	// interval requested by the server survives provider reloads.
+	syncInterval agentsync.IntervalOverride
 	// attached drains configured archive sources during an idle catch-up.
 	attached *archivesource.Manager
 
@@ -87,6 +90,12 @@ func newDaemonIngestion(
 	d.cfg.Store(&cfg)
 	d.watchers = d.startWatchers(cfg)
 	return d
+}
+
+// SyncIntervalOverride returns the override that can shorten the minimum
+// interval between watcher-triggered syncs.
+func (d *daemonIngestion) SyncIntervalOverride() *agentsync.IntervalOverride {
+	return &d.syncInterval
 }
 
 // Config returns the configuration whose provider set the daemon currently
@@ -428,6 +437,7 @@ func (d *daemonIngestion) startWatchers(cfg config.Config) *ingestionWatchers {
 	stopWatcher, openDispatch, _, queueRetry, flushPending := startFileWatcher(
 		cfg, d.engine, d.syncWatchBatch,
 		agentsync.WatcherOptions{
+			MinIntervalOverride: &d.syncInterval,
 			OnCoverageDegraded: func(degradedRoots []string) error {
 				scopes := make([]pollingScope, 0, len(degradedRoots))
 				for _, r := range degradedRoots {

@@ -62,6 +62,12 @@ func TestReportingRangeCoversDatedReportingSources(t *testing.T) {
 			want: "2024-06-07",
 		},
 		{
+			name: "standalone usage without a model",
+			seed: `INSERT INTO cursor_usage_events(agent, occurred_at, model, output_tokens)
+				VALUES('grok', '2024-06-07T12:00:00Z', '', 1)`,
+			want: "2024-06-07",
+		},
+		{
 			name: "terminal tool execution",
 			seed: `INSERT INTO sessions(id, project, machine, agent, message_count, started_at)
 				VALUES('session-a', 'project-a', 'local', 'agent-a', 1, '2026-07-28T10:00:00Z');
@@ -87,7 +93,7 @@ func TestReportingRangeCoversDatedReportingSources(t *testing.T) {
 				('deleted', 'fixture', 'model-a', '2024-01-01T00:00:00Z'),
 				('usage-only', 'fixture', '', '2024-01-01T00:00:00Z');
 				INSERT INTO cursor_usage_events(occurred_at, model) VALUES
-				('2024-01-01T00:00:00Z', ''), ('malformed', 'model-a'),
+				('malformed', 'model-a'),
 				('2026-07-29T14:00:00Z', 'model-a')`,
 		},
 	} {

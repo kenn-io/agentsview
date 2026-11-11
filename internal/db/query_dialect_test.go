@@ -116,11 +116,11 @@ func TestBuildSessionFilterSQLRendersEquivalentDialectFilters(t *testing.T) {
 				"project != ?",
 				"machine IN (?,?)",
 				"agent IN (?,?)",
-				"CAST(COALESCE(ended_at, (SELECT MAX(m.timestamp) FROM messages m WHERE m.session_id = sessions.id AND m.timestamp IS NOT NULL), started_at, created_at) AS TIMESTAMP) >= CAST(? AS TIMESTAMP)",
-				"CAST(COALESCE(started_at, created_at) AS TIMESTAMP) < CAST(? AS TIMESTAMP)",
-				"CAST(COALESCE(ended_at, (SELECT MAX(m.timestamp) FROM messages m WHERE m.session_id = sessions.id AND m.timestamp IS NOT NULL), started_at, created_at) AS TIMESTAMP) >= CAST(? AS TIMESTAMP)",
-				"CAST(COALESCE(started_at, created_at) AS TIMESTAMP) < CAST(? AS TIMESTAMP)",
-				"CAST(COALESCE(ended_at, (SELECT MAX(m.timestamp) FROM messages m WHERE m.session_id = sessions.id AND m.timestamp IS NOT NULL), started_at, created_at) AS TIMESTAMP) >= CAST(? AS TIMESTAMP)",
+				"COALESCE(ended_at, (SELECT MAX(m.timestamp) FROM messages m WHERE m.session_id = sessions.id AND m.timestamp IS NOT NULL), started_at, created_at) >= CAST(? AS TIMESTAMP)",
+				"COALESCE(started_at, created_at) < CAST(? AS TIMESTAMP)",
+				"COALESCE(ended_at, (SELECT MAX(m.timestamp) FROM messages m WHERE m.session_id = sessions.id AND m.timestamp IS NOT NULL), started_at, created_at) >= CAST(? AS TIMESTAMP)",
+				"COALESCE(started_at, created_at) < CAST(? AS TIMESTAMP)",
+				"COALESCE(ended_at, (SELECT MAX(m.timestamp) FROM messages m WHERE m.session_id = sessions.id AND m.timestamp IS NOT NULL), started_at, created_at) >= CAST(? AS TIMESTAMP)",
 				"message_count >= ?",
 				"message_count <= ?",
 				"user_message_count >= ?",
@@ -414,7 +414,7 @@ func TestBuildSessionFilterSQLPRHost(t *testing.T) {
 			numberPredicate := map[string]string{
 				"sqlite":     "EXISTS (SELECT 1 FROM json_each(NULLIF(pr_links, '')) pl WHERE 1=1 AND json_extract(pl.value, '$.number') = ?)",
 				"postgres":   "EXISTS (SELECT 1 FROM jsonb_array_elements(NULLIF(pr_links, '')::jsonb) pl WHERE TRUE AND (pl->>'number')::bigint = $1)",
-				"duckdb":     "len(list_filter(CAST(json_extract(NULLIF(pr_links, ''), '$[*]') AS JSON[]), lambda pl: true AND CAST(pl->>'number' AS BIGINT) = ?)) > 0",
+				"duckdb":     "len(list_filter(json_extract(NULLIF(pr_links, ''), '$[*]'), lambda pl: true AND CAST(pl->>'number' AS BIGINT) = ?)) > 0",
 				"clickhouse": "arrayExists(pl -> true AND JSONExtractInt(pl, 'number') = ?, JSONExtractArrayRaw(pr_links))",
 			}
 			assert.Contains(t, where, numberPredicate[dialect.name])

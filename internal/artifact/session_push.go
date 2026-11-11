@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"strings"
+	"time"
 
 	"go.kenn.io/agentsview/internal/db"
 	"go.kenn.io/agentsview/internal/ingest"
@@ -15,6 +16,14 @@ import (
 
 // MaxSessionPushBytes bounds the complete serialized single-session envelope.
 const MaxSessionPushBytes int64 = 64 << 20
+
+// SessionPushTimeout allows two minutes of overhead and 64 KiB/s for the body.
+func SessionPushTimeout(size int64) time.Duration {
+	if size < 0 || size > MaxSessionPushBytes {
+		size = MaxSessionPushBytes
+	}
+	return 2*time.Minute + time.Duration(size)*time.Second/(64<<10)
+}
 
 // SessionPushEnvelope carries exactly one normalized transcript. Manifests and
 // segments use the existing artifact format; raw sources and checkpoints are
@@ -165,6 +174,9 @@ func decodeSessionPush(data []byte) (db.SessionPushReceipt, db.SessionBatchWrite
 	if m.NativeSessionID != envelope.SessionID || m.RawSource != nil || m.Session.Agent == "" || m.Session.DeletedAt != nil {
 		return zero, noWrite, errors.New("invalid selected session")
 	}
+	if m.DataVersion > db.CurrentDataVersion() {
+		return zero, noWrite, errors.New("unsupported parser data version")
+	}
 	if err := validateImportedManifest(m, m.Origin, m.Origin+"~"+envelope.SessionID, limits); err != nil {
 		return zero, noWrite, err
 	}
@@ -246,14 +258,11 @@ func decodeSessionPush(data []byte) (db.SessionPushReceipt, db.SessionBatchWrite
 			return zero, noWrite, errors.New("usage has negative message ordinal")
 		}
 	}
-	// Hash the canonical validated manifest and ordered dependency digests, never
-	// sender-supplied receipt material or outer transport whitespace.
-	normalizeManifestSessionLocalState(&m.Session)
-	m.Session.TranscriptRevision = nil
+	// Identity follows the transcript, independent of local curation.
 	canonical, err := canonicalJSON(struct {
 		Version  int      `json:"v"`
-		Manifest manifest `json:"manifest"`
-	}{1, m})
+		Segments []string `json:"segments"`
+	}{1, m.Segments})
 	if err != nil {
 		return zero, noWrite, err
 	}

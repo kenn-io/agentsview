@@ -376,15 +376,15 @@ func DuckDBQueryDialect() QueryDialect {
 		trueLiteral:      "TRUE",
 		falseLiteral:     "FALSE",
 		dateStartExpr: func(q func(string) string) string {
-			return "CAST(COALESCE(" + q("started_at") + ", " +
-				q("created_at") + ") AS TIMESTAMP)"
+			return "COALESCE(" + q("started_at") + ", " +
+				q("created_at") + ")"
 		},
 		dateEndExpr: func(q func(string) string) string {
-			return "CAST(COALESCE(" + q("ended_at") +
+			return "COALESCE(" + q("ended_at") +
 				", (SELECT MAX(m.timestamp) FROM messages m" +
 				" WHERE m.session_id = " + outerSessionID(q) +
 				" AND m.timestamp IS NOT NULL), " + q("started_at") +
-				", " + q("created_at") + ") AS TIMESTAMP)"
+				", " + q("created_at") + ")"
 		},
 		dateParam: func(ph string) string {
 			return "CAST(" + ph + " AS TIMESTAMP)"
@@ -419,8 +419,8 @@ func DuckDBQueryDialect() QueryDialect {
 			if hostPh != "" {
 				cond += " AND lower(pl->>'host') = " + hostPh
 			}
-			return "len(list_filter(CAST(json_extract(NULLIF(" + col +
-				", ''), '$[*]') AS JSON[]), lambda pl: " + cond + ")) > 0"
+			return "len(list_filter(json_extract(NULLIF(" + col +
+				", ''), '$[*]'), lambda pl: " + cond + ")) > 0"
 		},
 	}
 }
@@ -686,7 +686,7 @@ func BuildSessionFilterSQL(
 func BuildSessionBaseFilterSQL(
 	f SessionFilter, dialect QueryDialect,
 ) (string, []any) {
-	f = f.withAnnotationSelection()
+	f = f.withSelectionDefaults(f.HasAnnotationFilter())
 	b := NewQueryBuilder(dialect, 0)
 	preds := []string{
 		"message_count > 0",
@@ -706,6 +706,16 @@ func BuildSessionBaseFilterSQL(
 		preds = append(preds, pred)
 	}
 	return strings.Join(preds, " AND "), b.Args()
+}
+
+// StatsRootCountSQL counts the same canonical roots as an unfiltered sidebar.
+// Its separate scan preserves the existing filters for the other stats totals.
+func StatsRootCountSQL(dialect QueryDialect, excludeOneShot, excludeAutomated bool) (string, []any) {
+	where, args := BuildSessionBaseFilterSQL(SessionFilter{
+		ExcludeOneShot: excludeOneShot, ExcludeAutomated: excludeAutomated,
+	}, dialect)
+	where += " AND " + BuildCanonicalRootWhere(dialect, "sessions", true)
+	return "(SELECT " + dialect.SignedAggregate("COUNT(*)") + " FROM sessions WHERE " + where + ")", args
 }
 
 func (d QueryDialect) SidebarChildRelationshipsSQL() string {
@@ -797,17 +807,11 @@ func buildSessionFilterWithBuilder(
 		}
 		return qualifier + "." + col
 	}
-	f = f.withAnnotationSelection()
+	f = f.withSelectionDefaults(f.IDs != nil || f.HasAnnotationFilter())
 
 	if f.IDs != nil {
 		// Explicit hydration selects the requested rows rather than sidebar
 		// roots and their descendants. Keep caller-supplied row filters.
-		if !f.OneShotFilterSet {
-			f.ExcludeOneShot = false
-		}
-		if !f.AutomatedFilterSet {
-			f.ExcludeAutomated = false
-		}
 		preds, oneShot := sessionFilterPredicates(f, b, q)
 		if oneShot != "" {
 			preds = append(preds, oneShot)
@@ -888,7 +892,7 @@ func buildSessionFilterWithBuilder(
 func SessionTreeMemberPredicate(
 	f SessionFilter, dialect QueryDialect, sessionAlias string,
 ) string {
-	f = f.withAnnotationSelection()
+	f = f.withSelectionDefaults(f.HasAnnotationFilter())
 	pred := sessionAlias + ".message_count > 0 AND " + sessionAlias + ".deleted_at IS NULL"
 	if scope := dialect.AutomatedScopePredicate(NormalizeAutomatedScope(f.AutomatedScope, f.ExcludeAutomated), sessionAlias+".is_automated"); scope != "" {
 		pred += " AND " + scope
@@ -1019,13 +1023,10 @@ func (f SessionFilter) HasAnnotationFilter() bool {
 	return len(f.Labels) > 0 || !f.PR.IsZero()
 }
 
-// withAnnotationSelection lifts the default one-shot and automated
-// exclusions when the filter selects by label or pull request link. Those
-// filters name the sessions the caller wants, the way explicit IDs do, and
-// sessions started by a launcher are usually headless single-prompt runs
-// that the defaults would hide. Explicit one-shot and AutomatedScope filters still apply.
-func (f SessionFilter) withAnnotationSelection() SessionFilter {
-	if f.HasAnnotationFilter() {
+// withSelectionDefaults lifts implicit exclusions for an explicit selection.
+// Caller-supplied one-shot and automation filters still apply.
+func (f SessionFilter) withSelectionDefaults(explicitSelection bool) SessionFilter {
+	if explicitSelection {
 		if !f.OneShotFilterSet {
 			f.ExcludeOneShot = false
 		}
@@ -1272,6 +1273,18 @@ func terminationPredicate(
 	status string, b *QueryBuilder, q func(string) string,
 ) string {
 	return renderTerminationPredicate(status, b.dialect.terminationExpr, q("termination_status"), b.terminationParam)
+}
+
+// TerminationUsesTime reports whether a termination filter compares
+// session times with the current time.
+func TerminationUsesTime(status string) bool {
+	for part := range strings.SplitSeq(status, ",") {
+		switch strings.TrimSpace(part) {
+		case "active", "stale", "unclean":
+			return true
+		}
+	}
+	return false
 }
 
 func renderTerminationPredicate(status, activityExpr, statusExpr string, param func(time.Time) string) string {

@@ -162,6 +162,7 @@ func TestFileLinksTheIssueAnEarlierCreateMade(t *testing.T) {
 }
 
 func TestFileRefusals(t *testing.T) {
+	assert.False(t, friction.Fileable(friction.KindDiagnostic))
 	tests := []struct {
 		name        string
 		project     string
@@ -459,9 +460,16 @@ func (b barrierStore) DeleteFrictionIssueLink(ctx context.Context, fingerprint s
 	return b.DB.DeleteFrictionIssueLink(ctx, fingerprint)
 }
 
+func (b barrierStore) SaveFrictionFilingState(ctx context.Context, st db.FrictionFilingState) error {
+	if !*b.inside {
+		return errOutsideBarrier
+	}
+	return b.DB.SaveFrictionFilingState(ctx, st)
+}
+
 func TestLinkWritesRunInsideTheExclusiveSection(t *testing.T) {
 	s := katatest.New(t)
-	f, d := newFiler(t, s, katatest.DefaultProjectName, correction)
+	f, d := newFiler(t, s, katatest.DefaultProjectName, correction, diagnostic)
 	fp := correction.Fingerprint()
 	inside := false
 	f.Store = barrierStore{DB: d, inside: &inside}
@@ -477,4 +485,10 @@ func TestLinkWritesRunInsideTheExclusiveSection(t *testing.T) {
 	_, err = f.Link(t.Context(), fp, is.UID)
 	require.NoError(t, err)
 	require.NoError(t, f.Unlink(t.Context(), fp))
+
+	// A failed automatic filing records its retry state the same way.
+	s.Fail(http.MethodPost, "/issues", katatest.Fault{Status: 503, Code: "unavailable"})
+	rep, err := f.Reconcile(t.Context(), filing.Policy{Kinds: []friction.Kind{friction.KindError}, Since: digestDate})
+	require.NoError(t, err)
+	assert.Equal(t, filing.ReconcileReport{Retry: 1}, rep)
 }

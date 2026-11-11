@@ -132,12 +132,12 @@ targets link back to the corresponding inventory row.
 
 ## Repair worktree project names
 
-In source builds after 0.46.1, SQLite imports use the repository URL recorded by
-the agent when a checkout cannot be identified on disk. This keeps temporary
-worktree folders from becoming separate projects. AgentsView reuses an existing
-project with the repository's name, or a single established Git checkout name.
-Otherwise it uses the repository name. Conflicting checkout names are left for
-an explicit rule. The chosen name is saved so later imports keep using it.
+In 0.47.0 and later, SQLite imports use the repository URL recorded by the agent
+when a checkout cannot be identified on disk. This keeps temporary worktree
+folders from becoming separate projects. AgentsView reuses an existing project
+with the repository's name, or a single established Git checkout name. Otherwise
+it uses the repository name. Conflicting checkout names are left for an explicit
+rule. The chosen name is saved so later imports keep using it.
 
 Session assignments and enabled folder rules take priority. The original parser
 label and repository evidence remain in the archive. Sessions with a previously

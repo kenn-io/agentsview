@@ -123,15 +123,7 @@ func (db *DB) loadArtifactExportData(
 
 	var session *Session
 	if includeSession {
-		// Match artifact metadata: keep names uncoalesced and omit parents
-		// applied only by the local launcher. Read through this transaction.
-		launcherApplied := `COALESCE(parser_parent_session_id, '') = ''
-			AND NOT ` + spawnEdgeExistsSQL("sessions") + `
-			AND EXISTS (SELECT 1 FROM session_external_parents ep
-				WHERE ep.session_id = sessions.id AND ep.parent_session_id = sessions.parent_session_id)`
-		parent := `CASE WHEN ` + launcherApplied + ` THEN NULL ELSE parent_session_id END`
-		relationship := `CASE WHEN ` + launcherApplied + ` THEN ` + parserRelationshipSQL + ` ELSE relationship_type END`
-		cols := sessionFullColsBeforeParent + parent + `, parser_parent_session_id, ` + relationship + sessionFullColsAfterRelationship
+		cols := sessionFullColsBeforeParent + `parent_session_id, parser_parent_session_id, relationship_type` + sessionFullColsAfterRelationship
 		session, err = scanSessionFullRow(tx.QueryRowContext(ctx,
 			"SELECT "+cols+" FROM sessions WHERE id = ? AND deleted_at IS NULL", sessionID), sessionID)
 		if err != nil || session == nil {

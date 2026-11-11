@@ -11,7 +11,6 @@ import (
 	"time"
 
 	"go.kenn.io/agentsview/internal/db"
-	"go.kenn.io/agentsview/internal/ingest"
 	"go.kenn.io/agentsview/internal/parser"
 )
 
@@ -875,7 +874,7 @@ func liveActivitySession(
 	if session != nil {
 		agent.Type = parser.AgentType(session.Agent)
 	}
-	if !ingest.IsCodexFormatAgent(agent.Type) {
+	if !parser.IsCodexFormatAgent(agent.Type) {
 		return session, nil
 	}
 	pageIDs, err := database.CodexRevertPageSessionIDs(ctx, id)

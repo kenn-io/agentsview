@@ -22,6 +22,38 @@ import (
 // friction review tables. pg serve runs the friction-review job only then.
 func (s *Store) FrictionAvailable() bool { return s.runtimeState().frictionAvailable.Load() }
 
+// FrictionDiagnosticsAvailable reports whether startup proved this role can
+// read diagnostic events. Session review remains available without this grant.
+func (s *Store) FrictionDiagnosticsAvailable() bool {
+	return s.runtimeState().frictionDiagnosticsAvailable.Load()
+}
+
+func (s *Store) probeFrictionDiagnosticRead(ctx context.Context) (available bool) {
+	rows, err := s.pg.QueryContext(ctx, "SELECT id FROM diagnostic_events LIMIT 0")
+	if err != nil {
+		if isInsufficientPrivilege(err) {
+			log.Printf(
+				"friction diagnostics unavailable: GRANT SELECT ON diagnostic_events TO <serve role>: %v",
+				err,
+			)
+		} else if !isUndefinedTable(err) {
+			log.Printf("friction diagnostics read probe: %v", err)
+		}
+		return false
+	}
+	defer func() {
+		if err := rows.Close(); err != nil {
+			log.Printf("friction diagnostics read probe: %v", err)
+			available = false
+		}
+	}()
+	if err := rows.Err(); err != nil {
+		log.Printf("friction diagnostics read probe: %v", err)
+		return false
+	}
+	return true
+}
+
 // sessionVersionColumnPG selects the engine's committed row version.
 // Both values change with session updates without relying on writer versions.
 func sessionVersionColumnPG(ctx context.Context, pg hostedQuerier) (string, error) {
@@ -35,11 +67,12 @@ func sessionVersionColumnPG(ctx context.Context, pg hostedQuerier) (string, erro
 	return "xmin", nil
 }
 
-// DetectFrictionAvailability probes the review tables inside a rolled-back
-// transaction. A missing table or a read-only role disables the job; any
-// other failure is logged and also disables it, so startup never fails on
-// an optional feature (spec §20).
+// DetectFrictionAvailability probes review writes and diagnostic reads
+// separately. A missing review table or a read-only role disables the job;
+// missing diagnostic access only disables diagnostic signals, so startup
+// never fails on this optional feature (spec §20).
 func (s *Store) DetectFrictionAvailability(ctx context.Context) {
+	s.runtimeState().frictionDiagnosticsAvailable.Store(s.probeFrictionDiagnosticRead(ctx))
 	s.runtimeState().frictionIssueLinksWritable.Store(s.probeFrictionIssueLinkWrite(ctx))
 	for _, table := range []string{"friction_digests", "friction_digest_sessions", "friction_patterns"} {
 		if !pgHasTable(ctx, s.pg, table) {

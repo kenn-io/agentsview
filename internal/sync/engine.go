@@ -3,6 +3,7 @@ package sync
 import (
 	"context"
 	"crypto/sha256"
+	"database/sql"
 	"encoding/binary"
 	"encoding/hex"
 	"encoding/json/jsontext"
@@ -621,8 +622,9 @@ type Engine struct {
 	scanProtectedPaths  bool
 	homeDir             string
 	goos                string
-	subagentLinkPending bool         // protected by syncMu; retains failed global linking
-	syncMu              gosync.Mutex // serializes all sync operations
+	subagentLinkPending bool                 // protected by syncMu; retains failed global linking
+	trailerScanAttempts map[string]time.Time // protected by syncMu; includes failed scans
+	syncMu              gosync.Mutex         // serializes all sync operations
 	mu                  gosync.RWMutex
 	lastSync            time.Time
 	lastSyncStats       SyncStats
@@ -3554,6 +3556,12 @@ func (e *Engine) resyncBuildLocked(
 		log.Printf("resync: pre-sync copy excluded sessions: %v", err)
 		// Non-fatal: worst case, deleted sessions reappear.
 	}
+	if err := newDB.CopyCommitTrailersFrom(ctx, origPath); err != nil {
+		newDB.Close()
+		removeTempDB(tempPath)
+		restoreSkipCache()
+		return SyncStats{Aborted: true}, err
+	}
 	trashedCopied := 0
 	var copiedSessionIDs []string
 	if ids, err := newDB.CopyTrashedDataFrom(ctx, origPath); err != nil {
@@ -4067,6 +4075,11 @@ func (e *Engine) resyncBuildLocked(
 	}
 	stats.RecordCwdUpdated(deferredCwdUpdated)
 	e.deferredSourceCwd = nil
+
+	// Scan once every session and its cwd have been restored.
+	e.db = newDB
+	pendingLinksUpdated += e.reconcileCommitTrailersLocked(ctx)
+	e.db = origDB
 
 	// Re-link subagent sessions after orphan copy so copied
 	// tool_calls.subagent_session_id references are resolved.
@@ -4649,7 +4662,7 @@ func countIcodemateContainerRootSessions(ctx context.Context,
 	err := database.Reader().QueryRow(ctx, `
 		SELECT COUNT(*) FROM sessions
 		WHERE agent = ?
-		  AND lower(file_path) NOT LIKE '%.jsonl'
+		  AND file_path NOT LIKE '%.jsonl'
 		  AND message_count > 0
 		  AND relationship_type NOT IN ('subagent', 'fork')
 		  AND deleted_at IS NULL
@@ -5938,6 +5951,9 @@ func (e *Engine) reconcileWatchRootsStreamedLocked(
 	}
 	ctx = parser.WithProjectRootMemo(ctx)
 	ctx = parser.WithCodexParentInventoryBatch(ctx)
+	// Share S3 Codex parent downloads across every reconciliation page.
+	ctx, closeS3ParentCache := withS3CodexParentCache(ctx)
+	defer closeS3ParentCache()
 	defer func() {
 		if cleanupErr := closeProviderCache(); cleanupErr != nil {
 			stats.Aborted = true
@@ -7091,13 +7107,12 @@ func isOpenCodeFormatAgent(agent parser.AgentType) bool {
 // rollout-JSONL layout: UUID-bearing filenames, a dated year/month/day tree
 // with an optional flat archive, and JSONL-tail incremental appends. It gates
 // the format-shaped branches (duplicate resolution, layout preference,
-// reconciliation identity, parse-diff mtime) so the Codex forks TraeX and
-// Augure Code get the same handling. Branches that depend on Codex's
-// session_index.jsonl sidecar or its S3 archive layout stay keyed to
-// parser.AgentCodex alone: those forks write no index file and have no S3
-// path convention.
+// reconciliation identity, parse-diff mtime) so the Codex forks get the same
+// handling. Branches that depend on Codex's session_index.jsonl sidecar or its
+// S3 archive layout stay keyed to parser.AgentCodex alone: agentsview reads
+// neither for the forks.
 func isCodexFormatAgent(agent parser.AgentType) bool {
-	return ingest.IsCodexFormatAgent(agent)
+	return parser.IsCodexFormatAgent(agent)
 }
 
 func reconciliationWatchRoot(
@@ -7490,8 +7505,8 @@ func reconciliationReplacementIdentity(
 		}
 		return ""
 	}
-	switch agent {
-	case parser.AgentCodex, parser.AgentTraeX, parser.AgentAugureCode:
+	switch {
+	case isCodexFormatAgent(agent):
 		uuid := parser.CodexSessionUUIDFromFilename(filepath.Base(storedPath))
 		if uuid == "" {
 			return ""
@@ -8804,6 +8819,9 @@ func (e *Engine) syncAllLocked(
 		MessagesIndexed: stats.messagesIndexed,
 	})
 
+	if since.IsZero() && scope == nil && e.archiveRebuildIndex == nil {
+		stats.RecordLinksUpdated(e.reconcileCommitTrailersLocked(ctx))
+	}
 	// Store the anomaly-folded stats so LastSyncStats (UI) matches the
 	// value returned to the CLI summary. The deferred applyTo only reads
 	// the accumulator, so folding a separate copy here does not
@@ -10584,6 +10602,9 @@ func (e *Engine) startWorkers(
 	jobs := make(chan parser.DiscoveredFile, buffer)
 	results := make(chan syncJob, buffer)
 	runtimeMetrics := reconciliationRuntimeMetricsFor(ctx)
+	// Children of one S3 Codex parent reuse its download while the pool
+	// runs; a caller that already scoped a cache to its pass keeps it.
+	ctx, closeS3ParentCache := withS3CodexParentCache(ctx)
 	emitResult := func(result syncJob) {
 		if runtimeMetrics != nil {
 			runtimeMetrics.workerQueued(1)
@@ -10623,6 +10644,7 @@ func (e *Engine) startWorkers(
 		}
 		close(jobs)
 		wg.Wait()
+		closeS3ParentCache()
 		close(results)
 	}()
 	return results
@@ -13746,6 +13768,8 @@ func (e *Engine) dropUnchangedSharedSQLiteResults(ctx context.Context,
 // remaining content. The emitted result still counts as present for
 // ownership reconciliation, so a preserved session stays active rather than
 // being marked source-missing.
+// Forced parses bypass archive verification. Empty truncated results are still
+// filtered during sync; read-only parse-diff receives them for comparison.
 // The returned verifyFailed reports that an archive read failed during
 // verification: the caller must not skip-cache the pass as clean, so the
 // dropped result is re-attempted instead of frozen behind a cached skip.
@@ -13754,8 +13778,18 @@ func (e *Engine) dropShrinkingTruncatedCursorIDEResults(
 	file parser.DiscoveredFile,
 	results []parser.ParseResult,
 ) (kept []parser.ParseResult, verifyFailed bool) {
-	if file.Agent != parser.AgentCursorIDE || len(results) == 0 ||
-		e.forceParseRequested(file) {
+	if file.Agent != parser.AgentCursorIDE || len(results) == 0 || e.forceParse {
+		return results, false
+	}
+	kept = results[:0]
+	for _, r := range results {
+		if r.Session.IsTruncated && len(r.Messages) == 0 {
+			continue
+		}
+		kept = append(kept, r)
+	}
+	results = kept
+	if len(results) == 0 || e.forceParseRequested(file) {
 		return results, false
 	}
 	type messageSourceUUIDReader interface {
@@ -16676,11 +16710,24 @@ func (e *Engine) tryProviderIncrementalAppend(
 		// same-message.id continuation; without it, every routine queued
 		// command followed by a fresh response would force a full parse.
 		var storedLastClaudeMessageID *string
+		var storedTailTimestamp time.Time
 		var storedSessionName *string
 		var storedPRLinks map[string]struct{}
 		if provider.Definition().Type == parser.AgentClaude {
 			id := e.db.LastClaudeMessageID(ctx, inc.ID)
 			storedLastClaudeMessageID = &id
+			var tailTimestamp string
+			terr := e.db.Reader().QueryRow(ctx, `
+				SELECT COALESCE(timestamp, '') FROM messages
+				WHERE session_id = ? AND ordinal < ?
+				ORDER BY ordinal DESC LIMIT 1`,
+				inc.ID, inc.NextOrdinal,
+			).Scan(&tailTimestamp)
+			if terr != nil && !errors.Is(terr, sql.ErrNoRows) {
+				return nil, nil, nil, nil, time.Time{}, 0, nil, nil,
+					parser.ErrIncrementalNeedsFullParse
+			}
+			storedTailTimestamp, _ = db.ParseStoredTimestamp(tailTimestamp)
 			links, lerr := e.db.GetSessionPRLinkURLs(ctx, inc.ID)
 			if lerr != nil {
 				return nil, nil, nil, nil, time.Time{}, 0, nil, nil,
@@ -16715,6 +16762,7 @@ func (e *Engine) tryProviderIncrementalAppend(
 				StoredUserMessageCount:    inc.UserMsgCount,
 				StoredClaudeLinearParse:   inc.ClaudeLinearParse,
 				StoredLastClaudeMessageID: storedLastClaudeMessageID,
+				StoredTailTimestamp:       storedTailTimestamp,
 				StoredSessionName:         storedSessionName,
 				StoredPRLinks:             storedPRLinks,
 				StoredPendingUsageOrdinal: inc.PendingUsageOrdinal,
@@ -17295,6 +17343,26 @@ func (e *Engine) tryClaudeSplitSuffixUpdate(
 	runOrdinal, ok := e.db.LastClaudeAssistantOrdinal(ctx, inc.ID)
 	if !ok {
 		return nil, nil
+	}
+	// Timestamp ordering can place a hook after this assistant even
+	// when its source bytes precede the run. Replacing the stored suffix
+	// would then delete a row the re-parse cannot reread. Only trailing
+	// hooks require a full parse; ordinary rows keep the bounded path.
+	if inc.NextOrdinal > runOrdinal+1 {
+		var hasHook bool
+		err := e.db.Reader().QueryRow(ctx, `
+			SELECT EXISTS(SELECT 1 FROM messages
+			WHERE session_id = ? AND ordinal >= ? AND ordinal < ?
+			  AND is_system = 1 AND source_type IN ('attachment', 'system')
+			  AND NOT (`+db.ExcludeClaudeHooksSQL("source_subtype")+`))`,
+			inc.ID, runOrdinal+1, inc.NextOrdinal,
+		).Scan(&hasHook)
+		if err != nil {
+			return nil, fmt.Errorf("read trailing Claude hook rows: %w", err)
+		}
+		if hasHook {
+			return nil, nil
+		}
 	}
 	scanInc := *inc
 	scanInc.FileSize = runStart
@@ -19958,6 +20026,19 @@ func (e *Engine) projectIdentityObservationForWrite(
 	return export.WithRecordedGitRemote(obs, pw.sess.GitRemote), true
 }
 
+// mayDiscoverLocalProject reports whether path may be probed on the local
+// filesystem. Only sessions recorded on this machine qualify: another
+// machine's cwd (e.g. /home/... from a synced Linux host) is meaningless
+// here, and on macOS merely stat'ing such paths wakes the /home automounter —
+// with tens of thousands of remote sessions and a one-minute cache TTL that
+// becomes a sustained automountd/opendirectoryd CPU storm.
+// mayProbeLocalPath also guards export.NormalizeRootPath, which resolves
+// symlinks and would reach into a protected location on its own.
+func (e *Engine) mayDiscoverLocalProject(machine, path string) bool {
+	return !e.disableProjectDiscovery && e.idPrefix == "" && e.pathRewriter == nil &&
+		e.isLocalMachineAttribution(machine) && e.mayProbeLocalPath(path)
+}
+
 func (e *Engine) cachedProjectIdentity(machine, rootPath string) projectIdentityCacheEntry {
 	e.projectIdentityMu.Lock()
 	defer e.projectIdentityMu.Unlock()
@@ -19971,16 +20052,7 @@ func (e *Engine) cachedProjectIdentity(machine, rootPath string) projectIdentity
 		return cached
 	}
 	identity := projectIdentityCacheEntry{rootPath: rootPath}
-	// Only probe the local filesystem for sessions recorded on this
-	// machine: another machine's cwd (e.g. /home/... from a synced Linux
-	// host) is meaningless here, and on macOS merely stat'ing such paths
-	// wakes the /home automounter — with tens of thousands of remote
-	// sessions and a one-minute cache TTL that becomes a sustained
-	// automountd/opendirectoryd CPU storm.
-	// mayProbeLocalPath also guards export.NormalizeRootPath below, which
-	// resolves symlinks and would reach into a protected location on its own.
-	if !e.disableProjectDiscovery && e.idPrefix == "" && e.pathRewriter == nil &&
-		e.isLocalMachineAttribution(machine) && e.mayProbeLocalPath(rootPath) {
+	if e.mayDiscoverLocalProject(machine, rootPath) {
 		if normalized, ok, err := export.NormalizeRootPath(rootPath); err == nil && ok {
 			identity.rootPath = normalized
 		}

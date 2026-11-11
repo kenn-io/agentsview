@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"encoding/json/v2"
 	"fmt"
+	"maps"
 	"slices"
 	"sort"
 	"strings"
@@ -98,6 +99,7 @@ type UsageFilter struct {
 	ActiveSince        string // RFC3339 session recency cutoff
 	Termination        string // "", "clean", "unclean", "active", or "stale"
 	Breakdowns         bool   // populate Project/AgentBreakdowns per day
+	PairwiseSides      bool   // request ranking-derived comparison metadata
 	SkipSessionCounts  bool   // skip distinct session counts when callers do not need them
 	TopSessionsByGroup bool   // merge runs by project and group before ranking
 	// TopSessionsSort ranks GetTopSessionsByCost results: ""/"cost"
@@ -260,8 +262,8 @@ func LoadLocationOr(name string, fallback *time.Location) *time.Location {
 // Note: this does NOT filter by s.relationship_type. Duplicate
 // messages across fork/subagent boundaries are handled by the
 // per-query usage dedup in GetDailyUsage, which prefers the
-// Claude message/request pair and falls back to persisted source
-// identity when the pair is incomplete. That is more precise than
+// Claude response identity and falls back to persisted source
+// identity when the message ID is missing. That is more precise than
 // a blanket exclusion: a fork session can legitimately contribute
 // unique-keyed messages that should still be counted (see
 // TestDailyTopSessionsAndSessionCountsDedupClaudeKeyVariants).
@@ -333,7 +335,7 @@ SELECT
 	s.agent,
 	s.machine,
 	s.user_message_count,
-	COALESCE(s.is_automated, 0) AS is_automated,
+	s.is_automated,
 	COALESCE(NULLIF(s.ended_at, ''), NULLIF(s.started_at, ''), s.created_at) AS session_activity_at,
 	COALESCE(s.termination_status, '') AS termination_status,
 	COALESCE(NULLIF(COALESCE(s.display_name, s.session_name), ''), NULLIF(s.first_message, ''), NULLIF(s.project, ''), s.id) AS display_name,
@@ -372,7 +374,7 @@ SELECT
 	s.agent,
 	s.machine,
 	s.user_message_count,
-	COALESCE(s.is_automated, 0) AS is_automated,
+	s.is_automated,
 	COALESCE(NULLIF(s.ended_at, ''), NULLIF(s.started_at, ''), s.created_at) AS session_activity_at,
 	COALESCE(s.termination_status, '') AS termination_status,
 	COALESCE(NULLIF(COALESCE(s.display_name, s.session_name), ''), NULLIF(s.first_message, ''), NULLIF(s.project, ''), s.id) AS display_name,
@@ -976,10 +978,10 @@ const dailyCursorUsageRowsSQLTemplate = `
 SELECT
 	'' AS session_id,
 	NULL AS message_ordinal,
-	'cursor' AS usage_source,
+	cu.agent AS usage_source,
 	cu.occurred_at AS ts,
 	cu.occurred_at AS pricing_ts,
-	cu.model,
+	COALESCE(NULLIF(cu.model, ''), '<unknown>') AS model,
 	'' AS provider_id,
 	'' AS token_usage,
 	cu.input_tokens,
@@ -988,13 +990,13 @@ SELECT
 	cu.cache_read_tokens AS cache_read_input_tokens,
 	0 AS reasoning_tokens,
 	cu.charged_microdollars AS cost_microdollars,
-	'cursor-reported' AS cost_source,
+	cu.agent || '-reported' AS cost_source,
 	'' AS claude_message_id,
 	'' AS claude_request_id,
 	'' AS source_uuid,
 	cu.dedup_key AS usage_dedup_key,
 	'' AS project,
-	'cursor' AS agent,
+	cu.agent AS agent,
 	'' AS machine
 FROM cursor_usage_events cu
 WHERE %s`
@@ -1003,7 +1005,7 @@ func cursorUsageRowsSQLForBounds(
 	f UsageFilter, b usageBounds,
 ) (string, []any, bool) {
 	termPred, _ := buildUsageTerminationPredSQLite(f.Termination)
-	// Cursor usage rows carry no project or git branch and bypass the session
+	// Account usage rows carry no project or git branch and bypass the session
 	// filter, so any filter they cannot satisfy (project, machine, branch)
 	// must exclude them entirely rather than let them leak into totals.
 	if len(f.ProjectFilterLabels()) > 0 ||
@@ -1013,22 +1015,31 @@ func cursorUsageRowsSQLForBounds(
 		f.ActiveSince != "" {
 		return "", nil, false
 	}
-	if vals := CSVFilterValues(f.Agent); len(vals) > 0 && !slices.Contains(vals, "cursor") {
-		return "", nil, false
-	}
-	if vals := CSVFilterValues(f.ExcludeAgent); slices.Contains(vals, "cursor") {
-		return "", nil, false
-	}
-
-	where := "cu.model != ''"
+	where := "1=1"
 	var args []any
 	scope := NormalizeAutomatedScope(f.AutomatedScope, f.ExcludeAutomated)
 	if pred := SQLiteQueryDialect().AutomatedScopePredicate(scope, "cu.is_headless"); pred != "" {
 		where += "\n\tAND " + pred
 	}
 	where, args = f.appendUsageSourceFilterClauses(
-		where, args, "cu.model",
+		where, args, "COALESCE(NULLIF(cu.model, ''), '<unknown>')",
 	)
+	var agentClauses []string
+	for _, filter := range []struct{ values, op string }{
+		{f.Agent, "IN"}, {f.ExcludeAgent, "NOT IN"},
+	} {
+		values := CSVFilterValues(filter.values)
+		if len(values) == 0 {
+			continue
+		}
+		placeholders := make([]string, len(values))
+		for i, value := range values {
+			placeholders[i] = "?"
+			args = append(args, value)
+		}
+		agentClauses = append(agentClauses, "\n\tAND cu.agent "+filter.op+" ("+strings.Join(placeholders, ",")+")")
+	}
+	where += strings.Join(agentClauses, "")
 	where, args = appendUsageColumnBounds(where, "cu.occurred_at", b, args)
 	rowsSQL := fmt.Sprintf(dailyCursorUsageRowsSQLTemplate, where)
 	return rowsSQL, args, true
@@ -1073,7 +1084,8 @@ func exactUsageUTCWindow(f UsageFilter) usageBounds {
 // (claude_message_id, claude_request_id) contributes one row: the greatest
 // output snapshot, attributed to the session that streamed the request
 // first, carrying the maximum billed web-search count across its snapshots.
-// Rows without complete Claude request identity bypass the ranking.
+// Rows without a Claude message ID bypass the ranking. The request ID is
+// optional: Claude Agent SDK transcripts omit requestId.
 //
 // Only requests that appear more than once are ranked. usage_snapshot_dups
 // finds them with an index-only pass over messages, usage_snapshot_ranked
@@ -1177,7 +1189,6 @@ func snapshotRankedDailyUsageRowsSQL(
 				AND NOT (
 					u.usage_source = 'message'
 					AND u.claude_message_id != ''
-					AND u.claude_request_id != ''
 					AND (%[8]s) IN (
 						SELECT %[9]s FROM usage_snapshot_dups
 					)
@@ -1232,11 +1243,10 @@ func usageSnapshotWindowWhere(f UsageFilter) (string, []any) {
 	return where, args
 }
 
-// usageSnapshotClaudeIdentity selects the message rows that carry complete
-// Claude request identity and could enter the usage row source.
+// usageSnapshotClaudeIdentity selects the message rows that carry a Claude
+// message ID and could enter the usage row source.
 const usageSnapshotClaudeIdentity = usageMessageSourceEligibility + `
-	AND m.claude_message_id != ''
-	AND m.claude_request_id != ''`
+	AND m.claude_message_id != ''`
 
 // usageSnapshotDuplicateRequestsSQL lists the Claude requests that appear on
 // more than one eligible message. It over-approximates the ranked set (it
@@ -1285,7 +1295,6 @@ func usageSnapshotDuplicateRequestsSQL(b usageBounds) (string, []any) {
 func usageSnapshotClaudeMessageRowsSQL(b usageBounds) (string, []any) {
 	where := usageMessageEligibility + `
 	AND m.claude_message_id != ''
-	AND m.claude_request_id != ''
 	AND (m.claude_message_id, m.claude_request_id) IN (
 		SELECT claude_message_id, claude_request_id FROM usage_snapshot_dups
 	)`
@@ -1557,6 +1566,7 @@ func dailyUsageFact(r dailyUsageScanRow) (usagefacts.Fact, bool) {
 		reportedCost = &value
 	}
 	return usagefacts.FromEvent(usagefacts.EventInput{
+		AccountBilling: r.sessionID == "",
 		MessageOrdinal: ordinal, Source: r.usageSource,
 		Timestamp: r.pricingTS, Model: r.model, ProviderID: r.providerID,
 		CostSource: r.costSource, DedupKey: r.usageDedupKey,
@@ -1762,12 +1772,108 @@ type UsageTotals struct {
 
 // DailyUsageResult wraps the daily entries and totals.
 type DailyUsageResult struct {
+	Pairwise      *UsagePairwiseSides               `json:"-"`
 	SchemaVersion int                               `json:"schema_version,omitempty"`
 	Pricing       *export.PricingBlock              `json:"pricing,omitempty"`
 	Projects      map[string]export.ProjectMapEntry `json:"projects"`
 	Daily         []DailyUsageEntry                 `json:"daily"`
 	Totals        UsageTotals                       `json:"totals"`
 	SessionCounts UsageSessionCounts                `json:"sessionCounts,omitempty"`
+}
+
+// UsagePairwiseValue contains a ranking value's totals and distinct sessions.
+// Inexact means filtering can select a duplicate omitted by the ranking.
+type UsagePairwiseValue struct {
+	Totals   UsageTotals
+	Sessions []string
+	Inexact  bool
+}
+
+// UsagePairwiseValues accumulates ranking totals and ordered session memberships.
+type UsagePairwiseValues map[string]UsagePairwiseValue
+
+// AddTotals marks overflowing sums inexact so callers use a filtered read.
+func (values UsagePairwiseValues) AddTotals(name string, totals UsageTotals) {
+	value := values[name]
+	value.Totals.InputTokens += totals.InputTokens
+	value.Totals.OutputTokens += totals.OutputTokens
+	value.Totals.CacheCreationTokens += totals.CacheCreationTokens
+	value.Totals.CacheReadTokens += totals.CacheReadTokens
+	var err error
+	value.Totals.TotalCost, err = money.Add(value.Totals.TotalCost, totals.TotalCost)
+	value.Inexact = value.Inexact || err != nil
+	values[name] = value
+}
+
+// AddSession requires session IDs in sorted order, so adjacent repeats suffice.
+func (values UsagePairwiseValues) AddSession(name, sessionID string) {
+	if sessionID == "" {
+		return
+	}
+	value := values[name]
+	if n := len(value.Sessions); n == 0 || value.Sessions[n-1] != sessionID {
+		value.Sessions = append(value.Sessions, sessionID)
+		values[name] = value
+	}
+}
+
+// MarkInexact requires a filtered read for this value.
+func (values UsagePairwiseValues) MarkInexact(name string) {
+	value := values[name]
+	value.Inexact = true
+	values[name] = value
+}
+
+// UsagePairwiseSides is immutable once attached to a daily usage result.
+type UsagePairwiseSides struct {
+	Models, Projects UsagePairwiseValues
+}
+
+// Side combines raw ranking values, including session unions for model groups.
+// A filtered read must supply values whose totals cannot be derived exactly.
+func (s *UsagePairwiseSides) Side(dimension string, values []string) (DailyUsageResult, bool) {
+	if s == nil {
+		return DailyUsageResult{}, false
+	}
+	entries := s.Models
+	if dimension == "project" {
+		entries = s.Projects
+	}
+	var result DailyUsageResult
+	sessions := make(map[string]struct{})
+	for _, value := range values {
+		entry := entries[value]
+		if entry.Inexact {
+			return DailyUsageResult{}, false
+		}
+		t := &result.Totals
+		t.InputTokens += entry.Totals.InputTokens
+		t.OutputTokens += entry.Totals.OutputTokens
+		t.CacheCreationTokens += entry.Totals.CacheCreationTokens
+		t.CacheReadTokens += entry.Totals.CacheReadTokens
+		var err error
+		t.TotalCost, err = money.Add(t.TotalCost, entry.Totals.TotalCost)
+		if err != nil {
+			return DailyUsageResult{}, false
+		}
+		for _, id := range entry.Sessions {
+			sessions[id] = struct{}{}
+		}
+	}
+	result.SessionCounts.Total = len(sessions)
+	return result, true
+}
+
+// Clone copies the slices and maps that usage response builders mutate.
+func (r DailyUsageResult) Clone() DailyUsageResult {
+	r.Daily = slices.Clone(r.Daily)
+	for i := range r.Daily {
+		r.Daily[i].ProjectBreakdowns = slices.Clone(r.Daily[i].ProjectBreakdowns)
+	}
+	r.Projects = maps.Clone(r.Projects)
+	r.SessionCounts.ByProject = maps.Clone(r.SessionCounts.ByProject)
+	r.SessionCounts.ByAgent = maps.Clone(r.SessionCounts.ByAgent)
+	return r
 }
 
 func SanitizeDailyUsageProjectLabelsWithCatalog(
@@ -2123,7 +2229,7 @@ func (db *DB) getDailyUsageLegacy(
 			continue
 		}
 
-		if seenSessions != nil && r.usageSource != "cursor" {
+		if seenSessions != nil && r.sessionID != "" {
 			if _, ok := seenSessions[r.sessionID]; !ok {
 				seenSessions[r.sessionID] = UsageSessionInfo{
 					Project: r.project,
@@ -3170,17 +3276,11 @@ func (db *DB) getSessionUsageLegacy(
 		return nil, nil
 	}
 
-	pricing, err := db.loadPricingMap(ctx)
-	if err != nil {
-		return nil, fmt.Errorf("loading pricing: %w", err)
-	}
-	rateResolver := export.NewPricingResolver(pricing)
-
 	query := usageRowSelect() + ` AND u.session_id = ?
 		ORDER BY u.ts ASC, u.session_id ASC,
 		COALESCE(u.message_ordinal, -1) ASC,
 		u.usage_source ASC,
-		COALESCE(u.usage_dedup_key, '') ASC`
+		u.usage_dedup_key ASC`
 	rows, err := db.getReader().QueryContext(ctx, query, sessionID)
 	if err != nil {
 		return nil, fmt.Errorf("querying session usage: %w", err)
@@ -3210,6 +3310,15 @@ func (db *DB) getSessionUsageLegacy(
 	}
 	if err := rows.Err(); err != nil {
 		return nil, fmt.Errorf("iterating session usage rows: %w", err)
+	}
+	// A session without usage rows has nothing to price.
+	var rateResolver *export.PricingResolver
+	if len(usageRows) > 0 {
+		pricing, err := db.loadPricingMap(ctx)
+		if err != nil {
+			return nil, fmt.Errorf("loading pricing: %w", err)
+		}
+		rateResolver = export.NewPricingResolver(pricing)
 	}
 	snapshotRows := make([]activity.UsageRow, len(usageRows))
 	for i, r := range usageRows {

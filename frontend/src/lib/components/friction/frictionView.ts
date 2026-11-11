@@ -15,6 +15,7 @@ export const FRICTION_KINDS = [
   "pattern",
   "frustration",
   "interruption",
+  "diagnostic",
 ] as const;
 export type FrictionKind = (typeof FRICTION_KINDS)[number];
 
@@ -46,7 +47,11 @@ export function groupSignals(signals: readonly FrictionSignal[]): SignalSection[
   for (const signal of signals) {
     byKind.get(signal.kind)?.push(signal);
   }
-  return FRICTION_KINDS.map((kind) => ({ kind, signals: byKind.get(kind)! }));
+  // Diagnostics come from outside producers, so their section shows only on
+  // days that have some, as in the Markdown.
+  return FRICTION_KINDS.filter((kind) => kind !== "diagnostic" || byKind.get(kind)!.length > 0).map(
+    (kind) => ({ kind, signals: byKind.get(kind)! }),
+  );
 }
 
 export interface InterruptionRow {

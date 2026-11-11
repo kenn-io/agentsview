@@ -42,7 +42,7 @@ type usagePriceResult struct {
 // persistence compute it on demand; provenance-only callers skip it.
 func (p usagePriceResult) rateHash() string {
 	return usageRateHash(
-		p.model, p.PricedModel, p.MatchedPattern, p.RateOK, p.lookup.Rates)
+		p.model, p.PricedModel, p.MatchedPattern, p.lookup.Adjustment, p.RateOK, p.lookup.Rates)
 }
 
 type usageRollupFact struct {
@@ -91,10 +91,18 @@ type usageExceptionRow struct {
 
 type usageRollupBuild struct {
 	SessionID, Agent, StartedAt string
+	Project, Machine, GitBranch string
+	GroupKey, GroupLabel        string
+	IsAutomated                 bool
+	UserMessageCount            int
+	HasAuthoritative            bool
 	// PricingInputs encodes the lookups Daily used; PricingHash is their identity.
 	PricingInputs, PricingHash string
 	Source                     usageSourceVersion
 	FactRevision               int64
+	CursorAfter                int64 // Installed Cursor fact revision, or zero for a full build.
+	ChangeRevision             int64
+	SourcePricing              string
 	Daily                      []usageDailyContribution
 	Activity                   []usageActivityContribution
 	Exceptions                 []usageExceptionRow
@@ -432,7 +440,7 @@ func loadUsageRollupFacts(
 }
 
 func loadCursorUsageRollupBuild(
-	ctx context.Context, conn *sql.Conn, highWater int64,
+	ctx context.Context, conn *sql.Conn, after, highWater int64,
 	location *time.Location, pricing *usagePricingIdentities,
 ) (usageRollupBuild, error) {
 	// Cursor rows price at read time, so only the policy identity applies.
@@ -448,13 +456,14 @@ func loadCursorUsageRollupBuild(
 			SyncMarker: strconv.FormatInt(highWater, 10),
 		},
 		FactRevision: highWater,
+		CursorAfter:  after,
 	}
-	rows, err := conn.QueryContext(ctx, `SELECT source_id, timestamp_ms,
+	rows, err := conn.QueryContext(ctx, `SELECT source_id, agent, timestamp_ms,
 		raw_timestamp, model, input_tokens, output_tokens,
 		cache_creation_tokens, cache_read_tokens, charged_microdollars,
 		is_headless, dedup_key
-		FROM cursor_usage_facts WHERE source_id <= ? ORDER BY source_id`,
-		highWater)
+		FROM cursor_usage_facts WHERE source_id > ? AND source_id <= ? ORDER BY source_id`,
+		after, highWater)
 	if err != nil {
 		return build, err
 	}
@@ -466,7 +475,7 @@ func loadCursorUsageRollupBuild(
 		var millis sql.NullInt64
 		var charged int64
 		var isHeadless int
-		if err := rows.Scan(&sourceID, &millis, &fact.Fact.RawTimestamp,
+		if err := rows.Scan(&sourceID, &fact.Agent, &millis, &fact.Fact.RawTimestamp,
 			&fact.Model, &fact.Fact.InputTokens, &fact.Fact.OutputTokens,
 			&fact.Fact.CacheCreationTokens, &fact.Fact.CacheReadTokens, &charged,
 			&isHeadless, &fact.Fact.UsageDedupKey); err != nil {
@@ -474,10 +483,10 @@ func loadCursorUsageRollupBuild(
 		}
 		fact.IsHeadless = isHeadless != 0
 		fact.FactIndex = int(sourceID)
-		fact.Fact.Source = "cursor"
+		fact.Fact.Source = fact.Agent
 		fact.Fact.Model = fact.Model
-		fact.Fact.CostSource = "cursor-reported"
-		fact.Fact.RequestScoped = true
+		fact.Fact.CostSource = fact.Agent + "-reported"
+		// Account totals do not establish a single request's context size.
 		fact.Fact.TokenEligible = true
 		fact.Fact.ReportedCostMicrodollars = &charged
 		if millis.Valid {
@@ -494,6 +503,7 @@ func loadCursorUsageRollupBuild(
 	// Cursor rows stay on the exception tier: their keys may collide with
 	// session usage keys and their filters depend on per-row headless state,
 	// so pricing remains deferred to the request-time group resolution.
+	// Rows append by source_id, so existing exception rows remain valid.
 	for _, fact := range facts {
 		if usageRollupGeneralKey(fact) == "" {
 			return build, fmt.Errorf(
@@ -538,9 +548,18 @@ func buildUsageRollupSessions(
 		if err != nil {
 			return nil, err
 		}
+		hasAuthoritative := false
+		for _, fact := range sessionFacts {
+			if usageFactHasAuthoritativeCost(fact) {
+				hasAuthoritative = true
+			}
+		}
 		builds = append(builds, usageRollupBuild{
 			SessionID: id, Agent: sessions[id].Agent, StartedAt: sessions[id].StartedAt,
-			PricingInputs: pricingInputs, PricingHash: pricingHash,
+			Project: sessions[id].Project, Machine: sessions[id].Machine, GitBranch: sessions[id].GitBranch, GroupKey: sessions[id].GroupKey, GroupLabel: bakedUsageSession(sessions[id]).GroupLabel,
+			IsAutomated: sessions[id].IsAutomated, UserMessageCount: sessions[id].UserMessageCount,
+			HasAuthoritative: hasAuthoritative,
+			PricingInputs:    pricingInputs, PricingHash: pricingHash,
 			Source: versions[id], FactRevision: fills[id].InstallRevision,
 			Daily: daily, Activity: usageRollupActivityContributions(id, sessionFacts),
 			Exceptions: usageRollupExceptionRows(exceptions),
@@ -550,7 +569,7 @@ func buildUsageRollupSessions(
 }
 
 func usageRollupSnapshotKey(fact usageRollupFact) string {
-	if fact.Fact.ClaudeMessageID == "" || fact.Fact.ClaudeRequestID == "" {
+	if fact.Fact.ClaudeMessageID == "" {
 		return ""
 	}
 	return fmt.Sprintf("%d:%s%s", len(fact.Fact.ClaudeMessageID),

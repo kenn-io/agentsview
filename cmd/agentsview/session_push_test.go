@@ -237,3 +237,20 @@ func TestPushSessionTransportFailuresAreSanitized(t *testing.T) {
 	require.Error(t, err)
 	assert.NotContains(t, err.Error(), "fixture")
 }
+
+func TestPushSessionDistinguishesConflictAndBusy(t *testing.T) {
+	for _, tc := range []struct {
+		status  int
+		message string
+	}{
+		{http.StatusConflict, "conflicts with receiver's accepted snapshot"},
+		{http.StatusServiceUnavailable, "receiver is temporarily unavailable"},
+	} {
+		t.Run(http.StatusText(tc.status), func(t *testing.T) {
+			remote := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(tc.status) }))
+			defer remote.Close()
+			_, err := sendSessionPush(t.Context(), remote.URL, "fixture", nil, "sample", "claude")
+			require.ErrorContains(t, err, tc.message)
+		})
+	}
+}

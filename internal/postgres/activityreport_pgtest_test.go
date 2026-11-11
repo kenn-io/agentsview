@@ -11,6 +11,7 @@ import (
 
 	"go.kenn.io/agentsview/internal/activity"
 	"go.kenn.io/agentsview/internal/db"
+	"go.kenn.io/agentsview/internal/export"
 	"go.kenn.io/agentsview/internal/money"
 )
 
@@ -59,6 +60,29 @@ func seedPGDailyFixture(t *testing.T, store *Store) {
 			('b', 2, 'assistant', 'x',
 			 '2026-06-16T10:03:00Z'::timestamptz, 1, 'gpt5')`)
 	require.NoError(t, err, "insert messages")
+}
+
+func TestPGActivityReportReadersAvoidPreparedStatements(t *testing.T) {
+	_, store := prepareUsageSchema(t, "agentsview_activity_fresh_plan_test")
+	seedPGDailyFixture(t, store)
+	tx, err := store.DB().BeginTx(t.Context(), nil)
+	require.NoError(t, err)
+	defer tx.Rollback()
+	view := store.readView(tx)
+	q := pgDayQuery(t, "2026-06-16", "UTC")
+	q.Partial, q.EffectiveEnd = true, q.RangeEnd.Add(-time.Second)
+	_, err = view.BuildActivityReportArtifacts(t.Context(), db.AnalyticsFilter{Timezone: "UTC"}, q, nil)
+	require.NoError(t, err)
+	for _, reader := range []string{
+		"%AS web_search_requests%",
+		"%SELECT session_id, ordinal, role, timestamp, model%",
+		"%WITH terminal_events AS%",
+	} {
+		var prepared int
+		require.NoError(t, tx.QueryRowContext(t.Context(),
+			"SELECT count(*) FROM pg_prepared_statements WHERE statement LIKE $1", reader).Scan(&prepared))
+		assert.Zero(t, prepared, "Activity reader must plan with its actual parameters: %s", reader)
+	}
 }
 
 func TestPGActivityReportSourceProbeUsesMirrorSchema(t *testing.T) {
@@ -118,6 +142,8 @@ func TestPGActivityReportSecondRead(t *testing.T) {
 	require.Len(t, pooled.Sessions, 2)
 	assert.Equal(t, 2, pooled.Report.Peak.Agents)
 
+	// Force the transaction view to build rather than reuse the pooled report.
+	store.runtimeState().activityKept.DeleteSlots(func(string) bool { return true })
 	tx, err := store.DB().BeginTx(ctx, nil)
 	require.NoError(t, err)
 	defer func() { require.NoError(t, tx.Rollback()) }()
@@ -585,12 +611,12 @@ func TestPGGetActivityReportDedupUsesChronologicalOrder(t *testing.T) {
 		INSERT INTO messages (
 			session_id, ordinal, role, content, timestamp,
 			content_length, model, token_usage,
-			claude_message_id, source_uuid
+			source_uuid
 		) VALUES (
 			'dup-a', 0, 'assistant', 'x',
 			'2026-06-16T10:00:00Z'::timestamptz, 1,
 			'claude-sonnet-4-20250514',
-			'{"input_tokens":250,"output_tokens":500}', 'M1', 'R1'
+			'{"input_tokens":250,"output_tokens":500}', 'R1'
 		)`)
 	require.NoError(t, err, "insert dup-a message")
 
@@ -611,12 +637,12 @@ func TestPGGetActivityReportDedupUsesChronologicalOrder(t *testing.T) {
 		INSERT INTO messages (
 			session_id, ordinal, role, content, timestamp,
 			content_length, model, token_usage,
-			claude_message_id, source_uuid
+			source_uuid
 		) VALUES (
 			'dup-b', 0, 'assistant', 'x',
 			'2026-06-16T10:05:00Z'::timestamptz, 1,
 			'claude-sonnet-4-20250514',
-			'{"input_tokens":450,"output_tokens":900}', 'M1', 'R1'
+			'{"input_tokens":450,"output_tokens":900}', 'R1'
 		)`)
 	require.NoError(t, err, "insert dup-b message")
 
@@ -625,7 +651,11 @@ func TestPGGetActivityReportDedupUsesChronologicalOrder(t *testing.T) {
 	q := pgDayQuery(t, "2026-06-16", "UTC")
 	lower := db.PaddedUTCBound(q.RangeStart.UTC().Format(time.RFC3339), -14)
 	upper := db.PaddedUTCBound(q.RangeEnd.UTC().Format(time.RFC3339), 14)
-	usage, _, err := store.activityReportUsage(ctx, ids, lower, upper, q)
+	pricing, err := store.loadPricingMap(ctx)
+	require.NoError(t, err)
+	digest, err := export.EffectivePricingDigest(pricing)
+	require.NoError(t, err)
+	usage, _, err := store.activityReportUsage(ctx, ids, lower, upper, q, nil, pricing, digest, nil)
 	require.NoError(t, err)
 
 	// The shared dedup identity leaves one survivor.
@@ -636,7 +666,7 @@ func TestPGGetActivityReportDedupUsesChronologicalOrder(t *testing.T) {
 		}
 	}
 	require.Len(t, shared, 1, "only one dedup-identity row survives")
-	require.NotEmpty(t, shared[0].ClaudeMessageID, "rows carry a message id")
+	require.Equal(t, "R1", shared[0].SourceUUID, "rows carry a source UUID")
 	assert.Equal(t, "dup-a", shared[0].SessionID,
 		"earlier-timestamp row sorts first")
 	assert.Equal(t, 500, shared[0].OutputTokens, "dup-a survives first-seen")

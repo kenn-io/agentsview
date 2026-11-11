@@ -1,22 +1,13 @@
 {
   "$schema": "https://docs.renovatebot.com/renovate-schema.json",
   "addLabels": ["dependencies"],
-  "extends": ["config:recommended", "schedule:weekly"],
+  "extends": ["config:recommended", "schedule:weekly", "github>kenn-io/actions//renovate/release-age"],
   "timezone": "America/New_York",
-  "dependencyDashboard": true,
   "enabledManagers": ["github-actions", "gomod", "npm"],
   "osvVulnerabilityAlerts": true,
-  "minimumReleaseAge": "7 days",
-  "minimumReleaseAgeBehaviour": "timestamp-required",
   "prCreation": "not-pending",
-  "internalChecksFilter": "strict",
   "constraints": {
     "ghActionsLock": "v0.3.0"
-  },
-  "vulnerabilityAlerts": {
-    "minimumReleaseAge": null,
-    "prCreation": "immediate",
-    "schedule": ["at any time"]
   },
   "packageRules": [
     {
@@ -82,12 +73,18 @@
       "allowedVersions": "<2"
     },
     {
-      "description": ["kenn-io releases open right away: no release-age wait and no weekly window."],
+      "description": [
+        "tools/go.mod pins the kit checkers by hand. kennlint config -check must match the kit plugin version in .custom-gcl.yml, so bump them together."
+      ],
+      "matchManagers": ["gomod"],
+      "matchFileNames": ["tools/go.mod"],
+      "enabled": false
+    },
+    {
+      "description": ["Group kenn-io releases. The shared release-age preset lets them skip the wait and the weekly window."],
       "matchPackageNames": ["kenn-io/**", "github.com/kenn-io/**", "go.kenn.io/**", "@kenn-io/**"],
       "groupName": "kenn-io dependencies",
-      "groupSlug": "kenn-io-dependencies",
-      "minimumReleaseAge": null,
-      "schedule": ["at any time"]
+      "groupSlug": "kenn-io-dependencies"
     }
   ]
 }

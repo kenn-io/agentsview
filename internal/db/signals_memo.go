@@ -3,8 +3,8 @@ package db
 import "sync"
 
 // FrustrationMarkerMemo reuses counts while a session's transcript is unchanged.
-// Backends whose handle swaps can change prompt text use it to reject stale
-// counts, even when a replacement preserves session revisions.
+// Backends use transcript versions for reuse and generations when replacing
+// an archive can change text without changing those versions.
 type FrustrationMarkerMemo struct {
 	mu         sync.Mutex
 	generation uint64

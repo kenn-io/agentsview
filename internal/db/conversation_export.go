@@ -144,8 +144,8 @@ func (db *DB) ExportConversationChanges(ctx context.Context, opts ConversationEx
 	// read-only and builds through the writer owner on
 	// ErrConversationInitializationRequired.
 	if !db.readOnly {
-		var active bool
-		if err := db.getReader().QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM archive_metadata WHERE key=?)`, conversationExportInitializedKey).Scan(&active); err != nil {
+		active, err := db.ConversationExportActive(ctx)
+		if err != nil {
 			return result, err
 		}
 		if !active {
@@ -504,9 +504,21 @@ func projectConversationMessagesTx(tx transactionQueries, sessionID string, msgs
 	}
 	equal := replace && len(old) == len(incoming)
 	for i := range incoming {
-		if equal && !conversationRowsEqual(old[i], incoming[i]) {
-			equal = false
+		if !equal || conversationRowsEqual(old[i], incoming[i]) {
+			continue
 		}
+		if !conversationRowGainsSourceID(old[i], incoming[i], counts) {
+			equal = false
+			continue
+		}
+		// A gained ID already held by a kept row or a tombstone needs the
+		// native-identity reconciliation below.
+		var held bool
+		if err := tx.QueryRow(`SELECT EXISTS(SELECT 1 FROM conversation_messages WHERE session_id=? AND source_id=?)`,
+			sessionID, incoming[i].sourceID).Scan(&held); err != nil {
+			return err
+		}
+		equal = !held
 	}
 	// Tombstones are absent from old, so only the table can prove a session is new.
 	fresh := len(old) == 0
@@ -521,8 +533,10 @@ func projectConversationMessagesTx(tx transactionQueries, sessionID string, msgs
 		if equal {
 			row.MessageID = old[i].MessageID
 			// Identity gaps survive an unchanged projection; policy gaps must
-			// reflect this write even when stored text is still absent.
-			if old[i].Gap != "archive_content_excluded" {
+			// reflect this write even when stored text is still absent. A row
+			// that gains its native ID no longer lacks one.
+			gainedSourceID := old[i].Gap == "identity_unavailable" && row.sourceID != ""
+			if old[i].Gap != "archive_content_excluded" && !gainedSourceID {
 				row.Gap = old[i].Gap
 			}
 		} else if row.sourceID != "" && fresh {
@@ -586,6 +600,18 @@ func projectConversationMessagesTx(tx transactionQueries, sessionID string, msgs
 	return putConversationRowsTx(tx, incoming, fresh)
 }
 
+// conversationRowGainsSourceID reports whether incoming is the stored row
+// with a native source ID it lacked before, unique within the projection.
+// Every other projected field must match, so the unchanged projection still
+// proves the identity.
+func conversationRowGainsSourceID(old, incoming conversationRow, counts map[string]int) bool {
+	if old.sourceID != "" || incoming.sourceID == "" || counts[incoming.sourceID] != 1 {
+		return false
+	}
+	old.sourceID = incoming.sourceID
+	return conversationRowsEqual(old, incoming)
+}
+
 func conversationRowsEqual(a, b conversationRow) bool {
 	sameTime := a.Timestamp == nil && b.Timestamp == nil || a.Timestamp != nil && b.Timestamp != nil && *a.Timestamp == *b.Timestamp
 	return a.Ordinal == b.Ordinal && a.Role == b.Role && sameTime && a.sourceID == b.sourceID && a.Digest == b.Digest
@@ -603,8 +629,8 @@ func putConversationRowsTx(tx transactionQueries, rows []conversationRow, fresh 
 	}
 	var revision int64
 	if fresh {
-		if err := tx.QueryRow(`INSERT INTO archive_metadata(key,value) VALUES(?,CAST(? AS TEXT))
-		 ON CONFLICT(key) DO UPDATE SET value=CAST(CAST(value AS INTEGER)+CAST(excluded.value AS INTEGER) AS TEXT) RETURNING CAST(value AS INTEGER)`, conversationRevisionKey, len(rows)).Scan(&revision); err != nil {
+		if err := tx.QueryRow(`INSERT INTO archive_metadata(key,value) VALUES(?,?)
+		 ON CONFLICT(key) DO UPDATE SET value=CAST(value AS INTEGER)+CAST(excluded.value AS INTEGER) RETURNING CAST(value AS INTEGER)`, conversationRevisionKey, len(rows)).Scan(&revision); err != nil {
 			return err
 		}
 		revision -= int64(len(rows))
@@ -649,7 +675,7 @@ func putConversationSessionChangeTx(tx transactionQueries, sessionID, gap string
 	}
 	var revision int64
 	if err := tx.QueryRow(`INSERT INTO archive_metadata(key,value) VALUES(?,'1')
-	 ON CONFLICT(key) DO UPDATE SET value=CAST(CAST(value AS INTEGER)+1 AS TEXT) RETURNING CAST(value AS INTEGER)`, conversationRevisionKey).Scan(&revision); err != nil {
+	 ON CONFLICT(key) DO UPDATE SET value=CAST(value AS INTEGER)+1 RETURNING CAST(value AS INTEGER)`, conversationRevisionKey).Scan(&revision); err != nil {
 		return err
 	}
 	_, err := tx.Exec(`INSERT INTO conversation_session_changes(session_id,revision,gap,deleted) VALUES(?,?,?,?)

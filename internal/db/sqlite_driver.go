@@ -6,6 +6,7 @@ import (
 	"database/sql/driver"
 	"fmt"
 	"sync"
+	"time"
 
 	"github.com/mattn/go-sqlite3"
 )
@@ -53,7 +54,9 @@ func (c *archiveReaderConnector) Connect(context.Context) (driver.Conn, error) {
 }
 
 func (db *DB) openReader(path string) *sql.DB {
-	reader := sql.OpenDB(&archiveReaderConnector{dsn: makeDSN(path, true), reads: &db.reads})
+	// Serving readers repeatedly execute the same session and transcript SQL.
+	dsn := makeDSN(path, true) + "&_stmt_cache_size=64"
+	reader := sql.OpenDB(&archiveReaderConnector{dsn: dsn, reads: &db.reads})
 	configureReaderPool(reader)
 	return reader
 }
@@ -78,6 +81,14 @@ func configureSQLiteConnection(conn *sqlite3.SQLiteConn) error {
 		parseUsageWebSearchRequests,
 		true,
 	); err != nil {
+		return err
+	}
+	if err := conn.RegisterFunc("agentsview_top_session_started_order", func(raw string) string {
+		// Match GroupTopSessions, including nanoseconds, offsets, and invalid dates.
+		started, _ := time.Parse(time.RFC3339Nano, raw)
+		// Flip the sign bit so lexicographic order matches signed seconds.
+		return fmt.Sprintf("%016x%08x", uint64(started.Unix())^(1<<63), started.Nanosecond())
+	}, true); err != nil {
 		return err
 	}
 	return nil

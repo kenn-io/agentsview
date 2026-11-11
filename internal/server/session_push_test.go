@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -98,6 +99,29 @@ waitForUploadDeadline:
 	case <-time.After(3 * time.Second):
 		require.FailNow(t, "slow valid session push did not finish")
 	}
+}
+
+type sessionPushDeadlineRecorder struct {
+	*httptest.ResponseRecorder
+	deadline time.Time
+}
+
+func (w *sessionPushDeadlineRecorder) SetReadDeadline(deadline time.Time) error {
+	w.deadline = deadline
+	return nil
+}
+
+func TestSessionPushReadDeadlineScalesWithPayload(t *testing.T) {
+	s := testServer(t, 30*time.Second)
+	s.cfg.AcceptSessionPush, s.cfg.RequireAuth, s.cfg.AuthToken = true, true, "secret"
+	r := httptest.NewRequestWithContext(t.Context(), http.MethodPost, "/api/v1/sessions/ingest", strings.NewReader("{}"))
+	r.ContentLength = artifact.MaxSessionPushBytes
+	r.Header.Set("Authorization", "Bearer secret")
+	r.Header.Set("Content-Type", "application/json")
+	w := &sessionPushDeadlineRecorder{ResponseRecorder: httptest.NewRecorder()}
+	s.Handler().ServeHTTP(w, r)
+	assert.Equal(t, http.StatusBadRequest, w.Code)
+	assert.Greater(t, time.Until(w.deadline), 18*time.Minute)
 }
 
 func TestSessionPushReceiverGates(t *testing.T) {

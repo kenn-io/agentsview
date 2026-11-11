@@ -768,6 +768,9 @@
           onIncludePullRequests={() => {
             if (outcomeWindow) void outcomeTotals.loadWithPullRequests(outcomeWindow);
           }}
+          onRetry={() => {
+            if (outcomeWindow) void outcomeTotals.retry(outcomeWindow);
+          }}
         />
       </Card>
     </div>

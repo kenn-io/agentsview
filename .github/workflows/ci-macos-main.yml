@@ -18,6 +18,7 @@ on:
       - '.golangci.yml'
       - '.golangci.overlay.yml'
       - 'Makefile'
+      - 'scripts/macos-watcher-tests.sh'
       - '.github/workflows/ci-macos-main.yml'
   push:
     branches: [main]
@@ -31,6 +32,7 @@ on:
       - '.golangci.yml'
       - '.golangci.overlay.yml'
       - 'Makefile'
+      - 'scripts/macos-watcher-tests.sh'
       - '.github/workflows/ci-macos-main.yml'
 
 permissions:
@@ -62,7 +64,7 @@ jobs:
         with:
           group: test-${{ runner.os }}-${{ runner.arch }}
 
-      - uses: kenn-io/kit/.github/actions/kit-retry@v0.47.5
+      - uses: kenn-io/kit/.github/actions/kit-retry@v0.48.3
 
       - name: Restore pricing snapshot
         run: kit-retry 3 5 go run ./internal/pricing/cmd/litellm-snapshot -restore
@@ -74,13 +76,36 @@ jobs:
         env:
           CGO_ENABLED: "1"
 
+      # Step timeouts end a hung test binary as a step failure, so the JSON
+      # events reach the summary and upload steps below before the job limit.
       - name: Run focused macOS FSEvents tests
         if: github.event_name == 'push'
+        timeout-minutes: 24
         run: CGO_ENABLED=1 go tool gotestsum --format pkgname-and-test-fails --format-icons text --jsonfile gotestsum/macos-fsevents.json --rerun-fails=2 --rerun-fails-report gotestsum/macos-fsevents-reruns.txt --packages "./internal/fsevents ./internal/sync ./internal/db ./cmd/agentsview" -- -tags "fts5" -count=1 -timeout=20m
 
+      # Pull requests run only the watcher tests that scripts/macos-watcher-tests.sh
+      # selects. The Linux Sync job runs the whole internal/sync package, and
+      # pushes to main run it here on macOS.
       - name: Run focused macOS FSEvents tests for pull requests
         if: github.event_name == 'pull_request'
-        run: CGO_ENABLED=1 go tool gotestsum --format pkgname-and-test-fails --format-icons text --jsonfile gotestsum/macos-fsevents.json --rerun-fails=2 --rerun-fails-report gotestsum/macos-fsevents-reruns.txt --packages "./internal/fsevents ./internal/sync" -- -tags "fts5" -count=1 -timeout=20m
+        timeout-minutes: 10
+        run: |
+          pattern=$(GOFLAGS="$GOFLAGS -tags=fts5" scripts/macos-watcher-tests.sh ./internal/fsevents ./internal/sync)
+          go tool gotestsum --format pkgname-and-test-fails --format-icons text --jsonfile gotestsum/macos-fsevents.json --rerun-fails=2 --rerun-fails-report gotestsum/macos-fsevents-reruns.txt --packages "./internal/fsevents ./internal/sync" -- -tags "fts5" -run "$pattern" -count=1 -timeout=5m
+        env:
+          CGO_ENABLED: "1"
+
+      # gotestsum prints a package's failures only after go test exits, and a
+      # test binary stuck in exit never lets it. The JSON events were written
+      # as they arrived, so list the tests that started without finishing and
+      # print any test-timeout goroutine dump.
+      - name: Show unfinished macOS FSEvents tests
+        if: failure() && hashFiles('gotestsum/macos-fsevents.json') != ''
+        run: |
+          jq -r 'select(.Test and (.Action | IN("run", "pass", "fail", "skip"))) | [.Package, .Test, .Action] | @tsv' gotestsum/macos-fsevents.json |
+            awk -F '\t' '{ key = $1 " " $2; open[key] += ($3 == "run") ? 1 : -1 } END { for (key in open) if (open[key] > 0) print "unfinished: " key }'
+          jq -rj 'select(.Action == "output") | .Output' gotestsum/macos-fsevents.json |
+            awk '/^panic: test timed out/ { dump = 1 } dump'
 
       # The push and pull request steps are exclusive, so they share one suite.
       - name: Upload gotestsum macos-fsevents results

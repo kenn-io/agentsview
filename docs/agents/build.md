@@ -9,10 +9,14 @@ Update the CI path filters when adding a reader of files in another lane.
 
 ## CI runner policy
 
-All CI jobs use standard GitHub-hosted runners, including fork pull requests,
+CI jobs use standard GitHub-hosted runners, including fork pull requests,
 scheduled checks, and desktop builds. Select labels from
 [GitHub's supported runners](https://docs.github.com/en/actions/reference/runners/github-hosted-runners).
 Keep the explicit architecture labels for Linux ARM64 and macOS desktop builds.
+
+The exceptions are the seconds-long `CI gate`, `changes`, and
+`Sibling pins on main` jobs. They run on the Namespace profile
+`namespace-profile-linux-1cpu` so they do not wait in the GitHub-hosted queue.
 
 Use the local `go-cache-restore` and `go-cache-save` actions for Go caches and
 disable the built-in cache in `actions/setup-go`. Use npm caching in
@@ -20,8 +24,11 @@ disable the built-in cache in `actions/setup-go`. Use npm caching in
 packages the job installs. Desktop jobs cache Rust dependencies through
 `Swatinem/rust-cache` with the GitHub cache backend. Pull-request workflow
 callers set `cache-mode: read` so jobs can restore caches without saving copies.
-Playwright jobs run browsers in Microsoft's public MCR image through a remote
-server.
+Cache owners opt in with `owner: true` to keep build entries used during the run
+and outputs referenced by fresh action records when refreshing a daily cache.
+Module caches stay on their existing restore and save paths, with all modules
+retained. Playwright jobs run browsers in Microsoft's public MCR image through a
+remote server.
 
 `desktop-artifacts.yml` builds the frontend once on Linux and packages those
 assets in its Windows, Linux, and Linux ARM64 desktop builds.
@@ -51,6 +58,23 @@ ancestor permissions satisfy their checks.
   `agentsview update` installs and point users at the package manager.
   `make homebrew` is the release build with `DISTRIBUTION=homebrew`, written
   to `$(BINDIR)/agentsview`.
+
+## Kit checkers
+
+`tools/go.mod` pins the kit checkers that CI and the hooks run: `kennlint` and
+`huma-check`. Makefile targets run them with `go tool -modfile=tools/go.mod`, so
+`tools/go.sum` verifies them.
+
+Do not run kit tools as `go run go.kenn.io/kit/cmd/...@version`. That form also
+fetches the newest kit `go.mod` to look for a deprecation notice and verifies it
+against the checksum database. A kit release the checksum database has not
+recorded yet then fails every such command.
+
+`kennlint config -check` compares `.golangci.yml` with the config from the kit
+version in `tools/go.mod`. That config must match the kit golangci plugin in
+`.custom-gcl.yml`. Bump both together with
+`go -C tools get -tool go.kenn.io/kit/cmd/kennlint@<version>` and
+`go -C tools mod tidy`. Renovate skips `tools/go.mod` for this reason.
 
 ## Frontend
 

@@ -34,6 +34,16 @@ func TestSessionPushRetryRequiresCurrentOwnership(t *testing.T) {
 	require.ErrorIs(t, err, ErrSessionPushConflict)
 }
 
+func TestSessionPushArchiveVersionRejectsPreviousWriter(t *testing.T) {
+	d := testDB(t)
+	receipt, write := sessionPushFixture("snapshot")
+	_, err := d.ApplySessionPush(t.Context(), receipt, write)
+	require.NoError(t, err)
+	var version int
+	require.NoError(t, d.getReader().QueryRowContext(t.Context(), "PRAGMA user_version").Scan(&version))
+	assert.Greater(t, version, 172)
+}
+
 func requireSessionPushReceipt(t *testing.T, d *DB, id string) {
 	t.Helper()
 	var origin, hash string

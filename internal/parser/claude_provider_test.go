@@ -1071,6 +1071,77 @@ func TestClaudeProviderParseIncrementalWebSearchResultNeedsFullParse(t *testing.
 		"the stored assistant row must be rewritten with the billed search")
 }
 
+// A tool result can split one response, so an appended search can belong to
+// a response whose earlier records and searches are already stored. Only a
+// full parse sees the response's whole search total.
+func TestClaudeProviderParseIncrementalSplitResponseSearchNeedsFullParse(t *testing.T) {
+	root := t.TempDir()
+	sourcePath := filepath.Join(
+		root, "-Users-dev-code-demo", "inc-split-search.jsonl")
+	initial := testjsonl.JoinJSONL(
+		`{"type":"user","timestamp":"2026-07-30T10:00:00Z",`+
+			`"uuid":"u1","message":{"content":"find something"}}`,
+		`{"type":"assistant","timestamp":"2026-07-30T10:00:01Z",`+
+			`"uuid":"a1","parentUuid":"u1","message":{"id":"msg_1",`+
+			`"model":"claude-sonnet-4-5","content":[{"type":"tool_use",`+
+			`"id":"toolu_s1","name":"WebSearch","input":{"query":"a"}}],`+
+			`"usage":{"input_tokens":10,"output_tokens":5,`+
+			`"server_tool_use":{"web_search_requests":0}}}}`,
+		`{"type":"user","timestamp":"2026-07-30T10:00:04Z",`+
+			`"uuid":"u2","parentUuid":"a1","message":{"content":[{"type":`+
+			`"tool_result","tool_use_id":"toolu_s1","content":"hits"}]},`+
+			`"toolUseResult":{"query":"a","searchCount":2}}`,
+	)
+	writeSourceFile(t, sourcePath, initial)
+
+	appended := testjsonl.JoinJSONL(
+		`{"type":"assistant","timestamp":"2026-07-30T10:00:05Z",`+
+			`"uuid":"a2","parentUuid":"u2","message":{"id":"msg_1",`+
+			`"model":"claude-sonnet-4-5","content":[{"type":"tool_use",`+
+			`"id":"toolu_s2","name":"WebSearch","input":{"query":"b"}}],`+
+			`"usage":{"input_tokens":10,"output_tokens":5,`+
+			`"server_tool_use":{"web_search_requests":0}}}}`,
+		`{"type":"user","timestamp":"2026-07-30T10:00:08Z",`+
+			`"uuid":"u3","parentUuid":"a2","message":{"content":[{"type":`+
+			`"tool_result","tool_use_id":"toolu_s2","content":"hits"}]},`+
+			`"toolUseResult":{"query":"b","searchCount":3}}`,
+	)
+	f, err := os.OpenFile(sourcePath, os.O_APPEND|os.O_WRONLY, 0o644)
+	require.NoError(t, err)
+	_, err = f.WriteString(appended)
+	require.NoError(t, err)
+	require.NoError(t, f.Close())
+
+	provider, ok := NewProvider(AgentClaude, ProviderConfig{
+		Roots:   []string{root},
+		Machine: "devbox",
+	})
+	require.True(t, ok)
+	source, ok, err := provider.FindSource(t.Context(), FindSourceRequest{
+		RawSessionID: "inc-split-search",
+	})
+	require.NoError(t, err)
+	require.True(t, ok)
+
+	outcome, status, err := provider.ParseIncremental(
+		t.Context(),
+		IncrementalRequest{
+			Source: source,
+			Fingerprint: SourceFingerprint{
+				Key:  sourcePath,
+				Size: int64(len(initial) + len(appended)),
+			},
+			SessionID:     "inc-split-search",
+			Offset:        int64(len(initial)),
+			StartOrdinal:  3,
+			LastEntryUUID: "u2",
+		},
+	)
+	require.NoError(t, err)
+	assert.Equal(t, IncrementalNeedsFullParse, status)
+	assert.True(t, outcome.ForceReplace)
+}
+
 func TestClaudeProviderParseIncrementalPreservesLinkWithoutMessage(t *testing.T) {
 	root := t.TempDir()
 	sourcePath := filepath.Join(root, "-Users-dev-code-demo", "inc-link-only.jsonl")

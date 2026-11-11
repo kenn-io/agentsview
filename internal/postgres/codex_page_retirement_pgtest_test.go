@@ -184,6 +184,21 @@ func TestCodexPageUpgradeRetiresMissingPostgresHead(t *testing.T) {
 				require.NoError(t, err)
 				require.NoError(t, store.SoftDeleteSession(ctx, page))
 			}
+			if tc.name == "restore_page" {
+				anchor := thread + "-anchor"
+				_, err = syncer.pg.ExecContext(ctx, `INSERT INTO sessions(id,project,agent,machine,deleted_at,trash_includes_codex_pages) VALUES($1,'sample','codex','machine',NOW(),true)`, anchor)
+				require.NoError(t, err)
+				_, err = syncer.pg.ExecContext(ctx, `INSERT INTO commit_links (session_id,sha,branch,subject,repository,message_ordinal,call_index,tool_use_id,committed_at,turn_ordinal,turn_text,project,retained) VALUES ($1,'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa','','','',0,0,'','',0,'prompt','',false)`, anchor)
+				require.NoError(t, err)
+				tx, err := syncer.pg.BeginTx(ctx, nil)
+				require.NoError(t, err)
+				require.NoError(t, retireCodexPageThread(ctx, tx, anchor, page, true))
+				require.NoError(t, tx.Commit())
+				var anchors, links int
+				require.NoError(t, syncer.pg.QueryRowContext(ctx, `SELECT (SELECT count(*) FROM sessions WHERE id=$1 AND deleted_at IS NOT NULL AND trash_includes_codex_pages), (SELECT count(*) FROM commit_links WHERE session_id=$1 AND turn_text='prompt')`, anchor).Scan(&anchors, &links))
+				assert.Equal(t, 1, anchors)
+				assert.Equal(t, 1, links)
+			}
 			for range 2 {
 				var batchEnds []int
 				pushed, err = upgraded.Push(ctx, true, func(progress storage.PushProgress) {

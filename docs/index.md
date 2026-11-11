@@ -15,7 +15,7 @@ New here? The [product overview](/){target=_self} explains what AgentsView is fo
 here explain how to use and maintain each feature.
 
 These guides follow `main` and may include changes newer than the latest
-release, **v0.46.1**. Check the [changelog](/docs/changelog/) for what each
+release, **v0.47.0**. Check the [changelog](/docs/changelog/) for what each
 release includes.
 
 <p class="hero-actions">
@@ -33,6 +33,7 @@ release includes.
 | Get daily token and cost reports                  | [Token Usage & Costs](/docs/token-usage/)                                                                                                                                                                  |
 | Search transcripts by meaning, not just words     | [Semantic Search](/docs/semantic-search/)                                                                                                                                                                  |
 | Correct project names and worktree assignments | [Data](/docs/data/) |
+| Review each day's corrections, tool errors, and recurring problems | [Friction Log](/docs/quality/#friction-log) |
 | Score session health and outcomes                 | [Session Intelligence](/docs/session-intelligence/)                                                                                                                                                        |
 | Browse extracted, provenance-linked knowledge     | [Recall](/docs/recall/)                                                                                                                                                                                    |
 | Give agents and scripts access to the archive     | [MCP Server](/docs/mcp/) and [Session API](/docs/session-api/)                                                                                                                                             |

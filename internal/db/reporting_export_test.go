@@ -464,7 +464,7 @@ func TestReportingExportPreservesZeroWeightAuthoritativeBreakdownKeys(
 	assert.Equal(t, dailyCosts, exportedCosts)
 }
 
-func TestReportingExportClampsStandaloneUsageTokens(t *testing.T) {
+func TestReportingExportPreservesStandaloneUsageTokens(t *testing.T) {
 	d := testDB(t)
 	require.NoError(t, d.InsertCursorUsageEvents(t.Context(), []CursorUsageEvent{
 		{
@@ -481,10 +481,10 @@ func TestReportingExportClampsStandaloneUsageTokens(t *testing.T) {
 			OccurredAt:       "2026-07-28T09:06:00Z",
 			Model:            "model-oversized",
 			Kind:             "usage",
-			InputTokens:      MaxPlausibleTokens + 1,
-			OutputTokens:     MaxPlausibleTokens + 2,
-			CacheWriteTokens: MaxPlausibleTokens + 3,
-			CacheReadTokens:  MaxPlausibleTokens + 4,
+			InputTokens:      300_000_001,
+			OutputTokens:     100_000_002,
+			CacheWriteTokens: 200_000_003,
+			CacheReadTokens:  400_000_004,
 			DedupKey:         "oversized",
 		},
 	}))
@@ -503,13 +503,13 @@ func TestReportingExportClampsStandaloneUsageTokens(t *testing.T) {
 	require.NoError(t, err)
 
 	hour := day.Hours[9]
-	assert.Equal(t, int64(MaxPlausibleTokens), hour.Usage.Totals.InputTokens)
-	assert.Equal(t, int64(MaxPlausibleTokens), hour.Usage.Totals.OutputTokens)
+	assert.Equal(t, int64(300_000_001), hour.Usage.Totals.InputTokens)
+	assert.Equal(t, int64(100_000_002), hour.Usage.Totals.OutputTokens)
 	assert.Equal(t,
-		int64(MaxPlausibleTokens),
+		int64(200_000_003),
 		hour.Usage.Totals.CacheCreationTokens,
 	)
-	assert.Equal(t, int64(MaxPlausibleTokens), hour.Usage.Totals.CacheReadTokens)
+	assert.Equal(t, int64(400_000_004), hour.Usage.Totals.CacheReadTokens)
 	assert.Equal(t, daily.Totals.InputTokens, int(hour.Usage.Totals.InputTokens))
 	assert.Equal(t, daily.Totals.OutputTokens, int(hour.Usage.Totals.OutputTokens))
 	assert.Equal(t,
@@ -520,6 +520,11 @@ func TestReportingExportClampsStandaloneUsageTokens(t *testing.T) {
 		daily.Totals.CacheReadTokens,
 		int(hour.Usage.Totals.CacheReadTokens),
 	)
+	live, err := d.getDailyUsageLegacy(t.Context(), UsageFilter{
+		From: "2026-07-28", To: "2026-07-28", Timezone: "UTC", Breakdowns: true,
+	})
+	require.NoError(t, err)
+	assert.Equal(t, daily.Totals, live.Totals)
 	require.Len(t, hour.Usage.ByModel, 2)
 	for _, breakdown := range hour.Usage.ByModel {
 		switch breakdown.Key {
@@ -529,13 +534,13 @@ func TestReportingExportClampsStandaloneUsageTokens(t *testing.T) {
 			assert.Zero(t, breakdown.CacheCreationTokens)
 			assert.Zero(t, breakdown.CacheReadTokens)
 		case "model-oversized":
-			assert.Equal(t, int64(MaxPlausibleTokens), breakdown.InputTokens)
-			assert.Equal(t, int64(MaxPlausibleTokens), breakdown.OutputTokens)
+			assert.Equal(t, int64(300_000_001), breakdown.InputTokens)
+			assert.Equal(t, int64(100_000_002), breakdown.OutputTokens)
 			assert.Equal(t,
-				int64(MaxPlausibleTokens),
+				int64(200_000_003),
 				breakdown.CacheCreationTokens,
 			)
-			assert.Equal(t, int64(MaxPlausibleTokens), breakdown.CacheReadTokens)
+			assert.Equal(t, int64(400_000_004), breakdown.CacheReadTokens)
 		default:
 			assert.Fail(t, "unexpected model breakdown", breakdown.Key)
 		}
@@ -853,27 +858,25 @@ func TestReportingExportPreservesMessageOrdinalForDedup(t *testing.T) {
 			Timestamp: "2026-07-28T09:00:00Z",
 		},
 		{
-			SessionID:       "fixture-ordinal",
-			Ordinal:         1,
-			Role:            "assistant",
-			Content:         "synthetic first response",
-			Timestamp:       "2026-07-28T09:05:00Z",
-			Model:           "model-z-ordinal-winner",
-			ClaudeMessageID: "fixture-shared-message",
-			SourceUUID:      "fixture-shared-source",
+			SessionID:  "fixture-ordinal",
+			Ordinal:    1,
+			Role:       "assistant",
+			Content:    "synthetic first response",
+			Timestamp:  "2026-07-28T09:05:00Z",
+			Model:      "model-z-ordinal-winner",
+			SourceUUID: "fixture-shared-source",
 			TokenUsage: jsontext.Value(
 				`{"input_tokens":29,"output_tokens":3}`,
 			),
 		},
 		{
-			SessionID:       "fixture-ordinal",
-			Ordinal:         2,
-			Role:            "assistant",
-			Content:         "synthetic rewritten response",
-			Timestamp:       "2026-07-28T09:05:00Z",
-			Model:           "model-a-semantic-runner-up",
-			ClaudeMessageID: "fixture-shared-message",
-			SourceUUID:      "fixture-shared-source",
+			SessionID:  "fixture-ordinal",
+			Ordinal:    2,
+			Role:       "assistant",
+			Content:    "synthetic rewritten response",
+			Timestamp:  "2026-07-28T09:05:00Z",
+			Model:      "model-a-semantic-runner-up",
+			SourceUUID: "fixture-shared-source",
 			TokenUsage: jsontext.Value(
 				`{"input_tokens":11,"output_tokens":3}`,
 			),

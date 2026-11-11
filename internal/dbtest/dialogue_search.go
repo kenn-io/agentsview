@@ -9,15 +9,16 @@ import (
 	"go.kenn.io/agentsview/internal/db"
 )
 
-// SeedDialogueSearch writes projected, legacy, and empty dialogue with a
-// structured tool result. Use AssertDialogueSearchParity after pushing it.
+// SeedDialogueSearch writes projected, legacy, empty, and content-copy
+// dialogue with a structured tool result. Backends store the content copy as
+// NULL dialogue (see db.StoredDialogue). Use AssertDialogueSearchParity after pushing it.
 func SeedDialogueSearch(t *testing.T, d *db.DB) {
 	t.Helper()
 	const id = "dialogue-search"
 	SeedSession(t, d, id, "dialogue-search", func(s *db.Session) {
 		s.StartedAt = new("2026-05-20T12:00:00Z")
 		s.UserMessageCount = 3
-		s.MessageCount = 10
+		s.MessageCount = 11
 	})
 	require.NoError(t, d.ReplaceSessionMessages(t.Context(), id, []db.Message{
 		{SessionID: id, Ordinal: 0, Role: "user", Content: "hello"},
@@ -65,6 +66,7 @@ func SeedDialogueSearch(t *testing.T, d *db.DB) {
 		{SessionID: id, Ordinal: 7, Role: "assistant", Content: "Sure.\n[Bash] $ true\nDone.", DialogueText: new("Sure.\nDone.")},
 		{SessionID: id, Ordinal: 8, Role: "tool", Content: "classifiedtoolneedle", DialogueText: new("")},
 		{SessionID: id, Ordinal: 9, Role: "tool", Content: "unclassifiedneedle"},
+		{SessionID: id, Ordinal: 10, Role: "assistant", Content: "copiedneedle", DialogueText: new("copiedneedle")},
 	}))
 }
 
@@ -107,6 +109,7 @@ func AssertDialogueSearchParity(t *testing.T, archive, mirror db.Store, modes ..
 						{"legacyneedle", 2, "message", "legacy answer\n[Thinking] legacyneedle"},
 						{"emptyneedle", 3, "thinking", "emptyneedle"},
 						{"unclassifiedneedle", 9, "message", "unclassifiedneedle"},
+						{"copiedneedle", 10, "message", "copiedneedle"},
 					} {
 						t.Run(tc.pattern, func(t *testing.T) {
 							f := db.ContentSearchFilter{Pattern: tc.pattern, Mode: mode, Project: "dialogue-search", Limit: 50}

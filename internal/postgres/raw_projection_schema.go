@@ -37,6 +37,7 @@ CREATE TABLE IF NOT EXISTS raw_content_revisions (
 );
 CREATE TABLE IF NOT EXISTS raw_message_dialogue (
  session_id TEXT NOT NULL, ordinal INTEGER NOT NULL, dialogue_text TEXT NOT NULL,
+ is_content BOOLEAN NOT NULL DEFAULT FALSE,
  PRIMARY KEY(session_id, ordinal)
 );
 CREATE TABLE IF NOT EXISTS raw_session_branches (
@@ -168,7 +169,7 @@ func installRawProjectionUpgrade(ctx context.Context, tx *sql.Tx, schema, tenant
 	if err := ensureRawProjectionJobColumns(ctx, tx); err != nil {
 		return err
 	}
-	migrations := append(schemaColumnMigrations(), columnMigration{"raw_pins", "created_at", `created_at TIMESTAMPTZ NOT NULL DEFAULT clock_timestamp()`, "adding durable raw pin creation time"}, columnMigration{"raw_content_revisions", "recency_state", `recency_state JSONB NOT NULL DEFAULT '{}'`, "adding raw content recency state"})
+	migrations := append(schemaColumnMigrations(), columnMigration{"raw_pins", "created_at", `created_at TIMESTAMPTZ NOT NULL DEFAULT clock_timestamp()`, "adding durable raw pin creation time"}, columnMigration{"raw_content_revisions", "recency_state", `recency_state JSONB NOT NULL DEFAULT '{}'`, "adding raw content recency state"}, columnMigration{"raw_message_dialogue", "is_content", `is_content BOOLEAN NOT NULL DEFAULT FALSE`, "adding raw dialogue content marker"})
 	columns, err := loadExistingColumns(ctx, tx, migrations)
 	if err != nil {
 		return err

@@ -3,8 +3,10 @@
 package clickhouse
 
 import (
+	"strings"
 	"testing"
 
+	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
 	"go.kenn.io/agentsview/internal/clickhouse/chtest"
@@ -63,4 +65,68 @@ func TestClickHouseStoredUsageUpgrade(t *testing.T) {
 	require.Equal(t, int64(99), input)
 	require.Zero(t, output)
 	require.Equal(t, 1, chtest.Count(t, conn, "messages", ""))
+}
+
+// An older release stored the counters as MATERIALIZED columns of messages,
+// and its view read them. The schema step must move the view to computing
+// them from token_usage, so the mirror no longer depends on those columns.
+func TestClickHouseStoredUsageViewUpgrade(t *testing.T) {
+	t.Parallel()
+	store, _, _ := newPushedStore(t)
+	ctx := t.Context()
+	conn := store.DB()
+	stored := make([]string, 0, len(usageColumns))
+	for _, column := range usageColumns {
+		_, err := conn.ExecContext(ctx, "ALTER TABLE messages ADD COLUMN "+column.name+" "+column.typ+
+			" MATERIALIZED "+column.expression)
+		require.NoError(t, err)
+		stored = append(stored, column.name)
+	}
+	for _, query := range []string{
+		"DROP VIEW usage_messages_mv",
+		"CREATE MATERIALIZED VIEW usage_messages_mv TO usage_messages AS SELECT " + usageMessageFields + ", " +
+			strings.Join(stored, ", ") + ", toUInt128(push_version) * 2 + 1 AS revision FROM messages",
+	} {
+		_, err := conn.ExecContext(ctx, query)
+		require.NoError(t, err)
+	}
+	require.NoError(t, EnsureSchemaOn(ctx, conn))
+	for _, column := range usageColumns {
+		_, err := conn.ExecContext(ctx, "ALTER TABLE messages DROP COLUMN "+column.name)
+		require.NoError(t, err)
+	}
+	_, err := conn.ExecContext(ctx, "INSERT INTO messages (session_id, ordinal, token_usage, push_version) VALUES (?, ?, ?, ?)",
+		"view-upgrade", int64(0), `{"input_tokens":12,"output_tokens":34}`, uint64(1))
+	require.NoError(t, err, "inserts must not need the dropped columns")
+	var input, output int64
+	require.NoError(t, conn.QueryRowContext(ctx,
+		"SELECT usage_input, usage_output FROM usage_messages WHERE session_id = 'view-upgrade'").Scan(&input, &output))
+	require.Equal(t, []int64{12, 34}, []int64{input, output})
+}
+
+// A mirror whose usage_messages carries the usage_time minmax from an older
+// release loses it on the next schema setup, and later setups queue no
+// further drop.
+func TestClickHouseUsageTimeIndexRetired(t *testing.T) {
+	t.Parallel()
+	ctx := t.Context()
+	dsn, database := chtest.FreshDatabase(t)
+	conn := chtest.Open(t, dsn, database)
+	require.NoError(t, EnsureSchemaOn(ctx, conn))
+	_, err := conn.ExecContext(ctx,
+		"ALTER TABLE usage_messages ADD INDEX usage_time timestamp TYPE minmax GRANULARITY 1")
+	require.NoError(t, err)
+
+	require.NoError(t, EnsureSchemaOn(ctx, conn))
+	require.NoError(t, EnsureSchemaOn(ctx, conn))
+
+	var indexes int
+	require.NoError(t, conn.QueryRowContext(ctx, `SELECT toInt64(count()) FROM system.data_skipping_indices
+		WHERE database = currentDatabase() AND table = 'usage_messages'`).Scan(&indexes))
+	assert.Zero(t, indexes)
+	var drops int
+	require.NoError(t, conn.QueryRowContext(ctx, `SELECT toInt64(count()) FROM system.mutations
+		WHERE database = currentDatabase() AND table = 'usage_messages'
+		  AND command LIKE '%DROP INDEX%'`).Scan(&drops))
+	assert.Equal(t, 1, drops)
 }

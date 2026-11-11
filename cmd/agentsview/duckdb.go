@@ -33,12 +33,8 @@ type DuckDBPushConfig struct {
 	Watch           bool
 	Debounce        time.Duration
 	Interval        time.Duration
-	// Automatic is set by the watch loops' automatic pushes: an
-	// incremental push blocked by read-only serve handles defers instead
-	// of rebuilding the whole archive on every changed batch, and
-	// archive-scale diagnostics are skipped (see
-	// storage.MirrorPushOptions.Automatic). Explicit `duckdb push` runs leave
-	// it false and do neither.
+	// Automatic marks watch-loop pushes, which skip archive-scale diagnostics
+	// and defer on rebuild-lock contention.
 	Automatic bool
 }
 
@@ -446,6 +442,9 @@ func openDuckDBServeStore(
 	}
 	if len(appCfg.CustomModelPricing) > 0 {
 		store.SetCustomPricing(appCfg.CustomModelPricing)
+	}
+	if err := store.OpenActivityReportDisk(ctx); err != nil {
+		log.Printf("duckdb serve: keeping activity reports in memory only: %v", err)
 	}
 	if appCfg.CursorSecret != "" {
 		secret, decErr := base64.StdEncoding.DecodeString(appCfg.CursorSecret)

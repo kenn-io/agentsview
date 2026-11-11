@@ -573,10 +573,7 @@ func (b daemonArchiveWriteBackend) DuckDBPushWatch(
 	) error {
 		pushCfg := cfg
 		pushCfg.Full = full
-		// Watch pushes are automatic: a mirror held by a live serve
-		// process defers instead of rebuilding the whole archive on
-		// every changed batch, and archive-scale diagnostics are
-		// skipped. Push ignores the defer behavior when full is set.
+		// Automatic watch pushes publish held mirrors and skip archive-scale diagnostics.
 		pushCfg.Automatic = true
 		var res storage.MirrorPushResult
 		var err error

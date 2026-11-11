@@ -212,11 +212,8 @@ type daemonPushRequest struct {
 	// request's fresh pusher can promote to generation-wide when the active
 	// generation id has changed (see storage.PushOptions).
 	LastReconciledVectorGeneration int64 `json:"last_reconciled_vector_generation,omitzero"`
-	// Automatic is set by the CLI's watch-mode mirror pushes: a mirror
-	// held by a live serve process defers instead of rebuilding the whole
-	// archive on every changed batch, and archive-scale diagnostics are
-	// skipped (see storage.MirrorPushOptions.Automatic). Explicit pushes
-	// leave it unset and do neither.
+	// Automatic marks watch-mode mirror pushes, which skip archive-scale
+	// diagnostics and defer on rebuild-lock contention.
 	Automatic     bool                        `json:"automatic,omitzero"`
 	WatchBatch    *syncpkg.WatchBatch         `json:"watch_batch,omitempty"`
 	WatchRecovery *syncpkg.WatchRecoveryScope `json:"watch_recovery,omitempty"`
@@ -249,7 +246,7 @@ func (t daemonReplicaTarget) target() storage.ReplicaTarget {
 
 // WithVectorPushSource wires the local vectors.db push source used by the
 // daemon's replica push handlers. Nil (the default) leaves the vector push
-// phase disabled, e.g. when [vector] is not configured.
+// phase disabled; a live source can also skip export while vectors are off.
 func WithVectorPushSource(src storage.VectorPushSource) Option {
 	return func(s *Server) { s.vectorPushSource = src }
 }
@@ -280,8 +277,8 @@ func (s *Server) localPushTarget(ctx context.Context) (*db.DB, error) {
 }
 
 // replicaPushVectorSource returns the vector push source to attach for this
-// push, or nil when the phase is gated off: no source is wired ([vector]
-// disabled), the target opts out via push_vectors=false, or the caller passed
+// push, or nil when the phase is gated off: no source is wired, the target
+// opts out via push_vectors=false, or the caller passed
 // --no-vectors. A nil source leaves the pusher's vector phase skipped.
 func (s *Server) replicaPushVectorSource(
 	target storage.ReplicaTarget, noVectors bool,

@@ -21,7 +21,7 @@ BEGIN
  INSERT INTO archive_metadata (key, value)
   VALUES ('session_deletion_publication_revision', '1')
  ON CONFLICT(key) DO UPDATE SET
-  value = CAST(CAST(value AS INTEGER) + 1 AS TEXT),
+  value = CAST(value AS INTEGER) + 1,
   updated_at = strftime('%Y-%m-%dT%H:%M:%fZ','now');
  INSERT INTO session_deletion_changes (session_id, project, revision, deleted)
   SELECT NEW.id, NEW.project, CAST(value AS INTEGER), 0
@@ -40,8 +40,12 @@ func (db *DB) archiveJournalRevision(ctx context.Context, key, description strin
 	if ctx == nil {
 		ctx = context.Background()
 	}
+	return archiveJournalRevision(ctx, db.getReader(), key, description)
+}
+
+func archiveJournalRevision(ctx context.Context, q sessionExportQuerier, key, description string) (int64, error) {
 	var raw string
-	err := db.getReader().QueryRowContext(ctx,
+	err := q.QueryRowContext(ctx,
 		`SELECT value FROM archive_metadata WHERE key = ?`,
 		key,
 	).Scan(&raw)
@@ -133,14 +137,15 @@ func (db *DB) loadSessionJournalChanges(
 			description, afterRevision, throughRevision,
 		)
 	}
+	return loadSessionJournalChanges(ctx, db.getReader(), table, description, afterRevision, throughRevision)
+}
+
+func loadSessionJournalChanges(ctx context.Context, q sessionExportQuerier, table, description string, afterRevision, throughRevision int64) ([]string, error) {
 	if afterRevision == throughRevision {
 		return nil, nil
 	}
-
-	where, args := sessionDeletionPublicationChangeWhere(
-		"c", afterRevision, throughRevision, nil, nil,
-	)
-	rows, err := db.getReader().QueryContext(ctx, `
+	where, args := sessionDeletionPublicationChangeWhere("c", afterRevision, throughRevision, nil, nil)
+	rows, err := q.QueryContext(ctx, `
 		SELECT c.session_id
 		FROM `+table+` c
 		`+where+`

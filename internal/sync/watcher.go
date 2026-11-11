@@ -104,6 +104,9 @@ type WatcherOptions struct {
 	OnCoverageDegraded func([]string) error
 	OnPollingRequired  func(PollingObligation) error
 	OnPollingReleased  func(string) error
+	// MinIntervalOverride, when set, can shorten the minimum interval
+	// between callbacks while the watcher runs.
+	MinIntervalOverride *IntervalOverride
 }
 
 // WatchRetryError carries the authoritative reconciliation scope selected by a
@@ -721,6 +724,7 @@ type Watcher struct {
 	eventSink          *watchEventSink
 	batchDelay         time.Duration
 	minInterval        time.Duration
+	intervalOverride   *IntervalOverride
 	maxEntries         int
 	dispatchEnabled    atomic.Bool
 	dispatchMu         sync.Mutex
@@ -865,6 +869,7 @@ func newWatcherWithBackendOptions(
 		eventSink:          newWatchEventSink(maxEntries, maxPathBytes),
 		batchDelay:         batchDelay,
 		minInterval:        minInterval,
+		intervalOverride:   options.MinIntervalOverride,
 		maxEntries:         maxEntries,
 		rootAgents:         make(map[string][]string),
 		rootScopes:         make(map[string][]WatchScope),
@@ -1172,8 +1177,10 @@ func (w *Watcher) beginStopping() {
 		return
 	}
 	w.stopping = true
-	w.callbackCancel()
+	// Publish shutdown before cancellation can release the worker and let a
+	// queued flush complete as if the watcher were still running.
 	close(w.stop)
+	w.callbackCancel()
 }
 
 func (w *Watcher) stopBackend() {
@@ -1221,6 +1228,17 @@ func (w *Watcher) loop() {
 	var retryDueAt time.Time
 	dispatchedRetry := false
 	var flush chan error
+	minInterval := w.minInterval
+	var intervalChanged <-chan struct{}
+	refreshInterval := func() {
+		if w.intervalOverride == nil {
+			return
+		}
+		var override time.Duration
+		override, intervalChanged = w.intervalOverride.Current()
+		minInterval = effectiveInterval(w.minInterval, override)
+	}
+	refreshInterval()
 	var flushBatch WatchBatch
 	var flushHasBatch bool
 	var flushErr error
@@ -1256,7 +1274,7 @@ func (w *Watcher) loop() {
 			return
 		}
 		if !lastDispatch.IsZero() {
-			floor := lastDispatch.Add(w.minInterval)
+			floor := lastDispatch.Add(minInterval)
 			if floor.After(deadline) {
 				deadline = floor
 			}
@@ -1390,6 +1408,12 @@ func (w *Watcher) loop() {
 				return
 			}
 			log.Printf("watcher error: %v", err)
+
+		case <-intervalChanged:
+			// A shorter interval can make a waiting sync due now.
+			refreshInterval()
+			stopTimer()
+			schedule()
 
 		case <-timerC:
 			timer = nil

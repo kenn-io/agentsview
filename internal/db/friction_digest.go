@@ -482,7 +482,7 @@ func (db *DB) UpdateFrictionDigestRender(
 }
 
 // CopyFrictionStateFrom carries friction review state (digests, membership,
-// recurrence and Kata issue links) across a full resync, like CopyInsightsFrom. Tables absent
+// recurrence, Kata issue links and filing state) across a full resync, like CopyInsightsFrom. Tables absent
 // from an older source archive are skipped.
 func (db *DB) CopyFrictionStateFrom(ctx context.Context, sourcePath string) error {
 	if err := db.requireDerivedTextStorage("friction review state"); err != nil {
@@ -501,10 +501,12 @@ func (db *DB) CopyFrictionStateFrom(ctx context.Context, sourcePath string) erro
 	defer func() { _, _ = execWithoutCancel(ctx, conn, "DETACH DATABASE old_db") }()
 
 	copies := []struct{ table, columns string }{
+		{"diagnostic_events", "id, source, message, occurred_at, accepted_at"},
 		{"friction_digests", "date, timezone, rules_version, built_at, revision, sessions_scanned, snapshot_json, summary_json, markdown, markdown_sha256, run_id"},
 		{"friction_digest_sessions", "subject_id, date, subject_kind"},
 		{"friction_patterns", "fingerprint, kind, title, first_seen_date, last_seen_date, occurrence_count, session_count, last_subject_id, last_ordinal"},
 		{"friction_issue_links", "fingerprint, kata_instance_uid, kata_project_uid, issue_uid, qualified_id, web_url, source, linked_at"},
+		{"friction_filing_state", "fingerprint, state, attempts, first_failed_at, next_attempt_at, last_error, updated_at"},
 	}
 	for _, c := range copies {
 		var present int

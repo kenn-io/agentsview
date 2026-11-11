@@ -292,7 +292,7 @@ func applySessionExternalParentsSQL(linksSQL string) string {
 	AND NOT ` + spawnEdgeExistsSQL("sessions") + `
 	AND (
 		COALESCE(sessions.parent_session_id, '') <> IIF(l.blocked, '', l.parent_session_id)
-		OR COALESCE(sessions.relationship_type, '') <> IIF(l.blocked, ` + parserRelationshipSQL + `, 'subagent')
+		OR sessions.relationship_type <> IIF(l.blocked, ` + parserRelationshipSQL + `, 'subagent')
 	)`
 }
 

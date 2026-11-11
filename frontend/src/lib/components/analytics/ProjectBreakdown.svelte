@@ -1,5 +1,6 @@
 <script lang="ts">
   import { analytics } from "../../stores/analytics.svelte.js";
+  import PanelStatus from "./PanelStatus.svelte";
   import type { DbProjectAnalytics as ProjectAnalytics } from "../../api/generated/index.js";
   import { m } from "../../i18n/index.js";
 
@@ -106,17 +107,13 @@
     {/if}
   </div>
 
-  {#if analytics.errors.projects}
-    <div class="error">
-      {analytics.errors.projects}
-      <button
-        class="retry-btn"
-        onclick={() => analytics.fetchProjects()}
-      >
-        {m.shared_retry()}
-      </button>
-    </div>
-  {:else if rows.length > 0}
+  <PanelStatus
+    hasData={analytics.projects !== null}
+    pending={analytics.querying.projects}
+    error={analytics.errors.projects}
+    onRetry={() => analytics.fetchProjects()}
+  />
+  {#if rows.length > 0}
     <div class="bar-list">
       {#each rows as project, i}
         <!-- svelte-ignore a11y_click_events_have_key_events -->
@@ -154,7 +151,7 @@
         <span>{tooltip.text}</span>
       </div>
     {/if}
-  {:else}
+  {:else if analytics.projects}
     <div class="empty">{m.analytics_projects_empty()}</div>
   {/if}
 </div>
@@ -272,23 +269,5 @@
     font-size: 12px;
     padding: 24px;
     text-align: center;
-  }
-
-  .error {
-    color: var(--accent-red);
-    font-size: 12px;
-    padding: 12px;
-    display: flex;
-    align-items: center;
-    gap: 8px;
-  }
-
-  .retry-btn {
-    padding: 2px 8px;
-    border: 1px solid currentColor;
-    border-radius: var(--radius-sm);
-    font-size: 11px;
-    color: inherit;
-    cursor: pointer;
   }
 </style>

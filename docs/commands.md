@@ -1,5 +1,5 @@
 ---
-last_edited: 2026-11-06
+last_edited: 2026-11-09
 title: CLI Reference
 description: All AgentsView commands, flags, and environment variables
 ---
@@ -21,13 +21,13 @@ Success reports `session_id`, `agent`, and `status` (`created` or `unchanged`).
 Use `--json` or `--format json` for this confirmation. Failures return nonzero
 without success output.
 
-The first accepted snapshot is immutable: a changed snapshot or an existing
+The first accepted transcript is immutable: a changed transcript or an existing
 unowned ID conflicts. HTTPS is required except for loopback receivers. See
 [receiver setup and transfer limits](/docs/remote-access/#push-one-archived-session).
 
 ## Start from help
 
-On `main` (unreleased), `agentsview --help` includes a numbered workflow for
+`agentsview --help` includes a numbered workflow for
 syncing sources, finding sessions, reading transcripts, and checking usage.
 It explains session IDs, backend selection, output streams, exit codes, and
 environment variables. Run `agentsview source list --json` for the provider
@@ -39,7 +39,7 @@ commands include examples and describe their limits.
 
 ## Recover from CLI errors
 
-On `main` (unreleased), failed commands print `fatal: <message>` followed by
+Failed commands print `fatal: <message>` followed by
 `hint: <next step>` on stderr. The hint names CLI commands, flags, or settings.
 Unknown commands and flags point to the relevant command's `--help`.
 
@@ -96,6 +96,26 @@ their per-host summary and add recovery advice.
 
 ## Commands
 
+### Find a command by task
+
+Describe a task to get up to five matching commands:
+
+```bash
+agentsview cli search "show token cost for a conversation"
+agentsview cli search list supported providers --limit 3 --json
+```
+
+Search reads the command tree locally. It needs no configuration, database,
+daemon, network connection, or credentials. Results use current command paths;
+hidden legacy commands, help-only groups, browser setup, and interactive
+service installation are omitted. Eligible actions inside groups remain
+searchable.
+
+`--limit` accepts 1–20 (default 5). `--json` and `--format json` return
+`{"query":"...","results":[{"command":"...","summary":"...","usage":"..."}]}`.
+An unmatched task succeeds with an empty `results` array. Text output includes
+a command help hint for flags and examples. Run `agentsview cli` for help.
+
 Root help lists command domains. Run `agentsview source --help`, for example,
 to find the actions in that domain, then `agentsview source sync --help` for
 flags. These command paths follow `main`; older releases use the legacy names
@@ -130,9 +150,94 @@ launch paths.
 | `parse-diff`                               | `archive diff`                                                     |
 | `token-use ID` (already deprecated)        | `session usage ID --json`                                          |
 
+Keep using `agentsview usage grok <csv>` to import xAI billing files. Its
+deprecation notice names `report usage grok`, which does not exist in 0.47.0.
+
 `session prune` operates on the local archive. It rejects the session group's
 inherited `--server`, `--server-token-file`, `--pg`, `--json`, and `--format`
 flags before accessing storage. Use `--dry-run` to inspect the selection.
+
+### `agentsview git-hook`
+
+Add the current agent session to commits in a repository:
+
+```sh
+agentsview git-hook install
+```
+
+The `prepare-commit-msg` and `commit-msg` hooks work together. The first records
+the message Git prepared; the second adds `Agent-Session:
+<agent>:<session-id>` to commits made without an editor, including `-m`, `-F`,
+`-C`, `--amend --no-edit`, and `merge --no-edit`. An unchanged commit template
+stays untouched so Git can reject it. A conflicted cherry-pick finished with
+`--no-edit` or `--continue` also carries the current session. Editor commits
+keep their original messages. Git doesn't run `commit-msg` for
+`git revert --no-edit` or rebase picks, so they get no new trailer. Rebase picks
+keep their existing trailers. Amending from a different session adds a second
+`Agent-Session` line.
+
+The hook skips messages containing only blank lines, Git comments, or signoffs.
+Git still rejects empty messages. A comment-only message such as `-m '#123 fix'`
+can still commit when Git retains comments, but gets no trailer. Git doesn't
+tell hooks whether `-s` added a signoff, so when a commit template already ends
+with your own signoff and another hook changes that line, the commit gets no
+trailer. With `core.commentChar=auto`, Git picks its comment character per
+commit and doesn't tell hooks which. The hook then treats lines starting with
+any of `#;@!$%^&|:` as possible comments, so a message made only of such lines
+gets no trailer, and commits that start from a commit template get none either.
+
+AgentsView must be on `PATH`. A missing or failing binary, or a missing,
+invalid, or ambiguous session, leaves the commit message unchanged.
+
+Discovery reads the session variable each supported harness sets for the
+commands its agent runs:
+
+| Agent | Variable |
+| --- | --- |
+| Claude Code | `CLAUDE_CODE_SESSION_ID` |
+| Codex | `CODEX_THREAD_ID`, or `CODEX_SESSION_ID` when that is unset or empty |
+| Cursor CLI | `CURSOR_CONVERSATION_ID` |
+| OpenCode 2.0.19 and later | `OPENCODE_SESSION_ID` |
+| Pi | `PI_SESSION_ID` |
+| Oh My Pi | `PI_SESSION_ID` with `OMPCODE=1` |
+| Qwen Code | `QWEN_CODE_SESSION_ID` |
+| Goose | `AGENT_SESSION_ID`, only in Goose's `YYYYMMDD_N` form |
+| Hermes | `HERMES_SESSION_ID` |
+
+Claude and Codex IDs must be UUIDs. Commits from unlisted harnesses get no
+trailer unless you set the override pair. When an agent runs inside another
+agent's shell, such as Pi started from Claude Code, both variables are set. The
+hook then leaves the message unchanged and prints a warning. Set both
+`AGENTSVIEW_SESSION_AGENT` and `AGENTSVIEW_SESSION_ID` to resolve this
+ambiguity or override discovery.
+Override agent names accept lowercase letters, digits, and hyphens, up to 32
+characters, starting with a letter or digit. IDs for agents other than Claude
+and Codex accept letters, digits, dots, underscores, and hyphens, up to 128
+characters, starting with a letter or digit.
+
+Installation writes both hooks into the directory Git uses. Rerunning it
+succeeds without changing byte-identical hooks. A `core.hooksPath` setting,
+including a global one, makes installation apply to every repository sharing
+that path. The two hooks only work as a pair. When either one already exists
+with other content, installation writes nothing and prints the steps for both:
+the line to add to each existing hook, and the file to create for a missing
+one. Put the `prepare-commit-msg` line right after the hook's first line, so it
+saves the template before your hook edits it:
+
+```sh
+if command -v agentsview >/dev/null 2>&1; then agentsview git-trailer-prepare "$@" || :; fi
+```
+
+Put the `commit-msg` line last, before any final `exit`, so it stamps after your
+hook's edits. It keeps the status of your hook's last command and doesn't exit,
+so a failing check still rejects the commit and a final `exit` still decides:
+
+```sh
+agentsview_status=$?; if command -v agentsview >/dev/null 2>&1; then agentsview git-trailer "$1" || :; fi; (exit "$agentsview_status") && :
+```
+
+To remove the hooks, delete the installed `prepare-commit-msg` and `commit-msg`
+files. For shared hooks, remove the added lines.
 
 ### `agentsview archive`
 
@@ -423,12 +528,43 @@ upload spool.
 
 ______________________________________________________________________
 
+### `agentsview why`
+
+Find recorded sessions and prompts behind a commit or file lines:
+
+```bash
+agentsview why internal/db/messages.go:120-140
+agentsview why --commit 1a2b3c4
+agentsview why main.go --format json
+```
+
+Use `path:N` for one line, `path:N-M` for an inclusive range, or `path` for the
+whole file. Line numbers start at 1. The file is blamed in its own Git
+repository, including when you run the command from another directory.
+Whitespace changes count, and uncommitted lines appear as a separate count. A
+file name ending in `:digits` is interpreted as a line range and can't be blamed
+by that name.
+
+`--commit` accepts a SHA or prefix and works outside a checkout. Ambiguous
+prefixes return all recorded candidates. Add `--format json` or `--json` for
+scripts. Each commit keeps its own session links and the prompt before each
+commit call, even when one session made several commits.
+
+The command calls no model. Run `agentsview source sync`
+first if you need newer records. A transcript link identifies the session that
+ran the commit; it doesn't prove who wrote each line. Deleted or trashed sessions
+appear as missing records without a prompt.
+
+______________________________________________________________________
+
 ### `agentsview daemon`
 
 Manage the writable SQLite server. The daemon provides the web UI, API, session
 sync, and file watchers in one process. `daemon start` launches the same server
 as `serve --background`, using saved configuration and without opening a
-browser. It does not require a separate `serve` command.
+browser. It does not require a separate `serve` command. Unlike
+`serve --background`, which exits after `daemon_idle_timeout` when idle,
+`daemon start` stays running until `daemon stop`.
 
 ```bash
 agentsview daemon start
@@ -437,12 +573,12 @@ agentsview daemon restart
 agentsview daemon stop
 ```
 
-| Command   | Behavior                                                                |
-| --------- | ----------------------------------------------------------------------- |
-| `start`   | Start the daemon, or report the existing writable daemon                |
-| `status`  | Show writable daemon state, URL, PID, version, and uptime               |
-| `restart` | Stop and restart the writable daemon; start it if it is already stopped |
-| `stop`    | Stop the writable daemon, or report that it is already stopped          |
+| Command   | Behavior                                                                   |
+| --------- | -------------------------------------------------------------------------- |
+| `start`   | Start a persistent daemon, or make the running automatic daemon persistent |
+| `status`  | Show writable daemon state, URL, PID, version, and uptime                  |
+| `restart` | Stop and restart the writable daemon; start it if it is already stopped    |
+| `stop`    | Stop the writable daemon, or report that it is already stopped             |
 
 `daemon start` and `daemon restart` load the normal effective configuration from
 `config.toml` and supported environment variables. They accept no serve-specific
@@ -659,10 +795,10 @@ guidance.
 Background servers also act as the shared local daemon for the desktop app and
 CLI. The daemon owns local SQLite writes for its data directory, so common write
 and freshness-sensitive commands proxy to it instead of opening the archive as a
-second writer. A background daemon self-exits after the idle timeout when no
-external request or daemon-owned job is active. Periodic sync and file-watcher
-work prevent exit while they run, but do not keep the daemon alive forever by
-themselves.
+second writer. An automatically started daemon self-exits after the idle timeout
+when no external request or daemon-owned job is active. Periodic sync and
+file-watcher work prevent exit while they run, but do not keep the daemon alive
+forever by themselves.
 
 `sync_idle_after = "10m"` pauses local collection while idle; `"0"` disables the
 pause.
@@ -856,10 +992,11 @@ agentsview session prune [flags]
 | `--dry-run`       | `false` | Show what would be pruned without deleting          |
 | `--yes`           | `false` | Skip confirmation prompt                            |
 
-Filters combine with AND. With `--agent`, one prune removes matching parents
-and descendants, including matching sessions in trash. A descendant that fails
-any filter keeps all its ancestors. Without `--agent`, prune skips trash and
-parents. The summary shows how many matches are in trash.
+Filters combine with AND. One prune removes matching parents and descendants.
+A descendant that fails any filter keeps all its ancestors. Without `--agent`,
+prune skips trash, so a trashed descendant keeps its ancestors. With `--agent`,
+prune includes matching sessions in trash. The summary shows how many matches
+are in trash.
 
 Prune keeps deleted sessions out of later syncs. To keep new sessions from
 that agent out of the archive, add it to
@@ -927,7 +1064,7 @@ ______________________________________________________________________
 
 ### `agentsview db repair-projects`
 
-Available in source builds after 0.46.1. Preview corrections for temporary
+Available in 0.47.0 and later. Preview corrections for temporary
 worktree project names using repository URLs already saved in the archive:
 
 ```bash
@@ -2023,6 +2160,7 @@ agentsview session get <id>              # metadata + signals
 agentsview session list [flags]          # filtered list
 agentsview session list --resume         # recently-active resume table
 agentsview session messages <id>         # paginated messages
+agentsview session commits <id>          # commits and their prompts
 agentsview session tool-calls <id>       # flat tool-call list
 agentsview session export <id>           # stream raw source file
 agentsview session sync <path-or-id>     # parse + insert
@@ -2036,6 +2174,31 @@ agentsview session label <id> k=v ...    # add or remove labels
 agentsview session parent <id> <parent>  # record the launching session
 ```
 
+`agentsview session commits <id>` lists transcript and Git trailer commits
+linked to a session. The `SOURCE` column distinguishes `transcript` from
+`commit message`. JSON keeps `source: "trailer"` for commit message links. Use
+`--format json` for structured output. The table shows the session, exact message ordinal,
+call time, source, recorded SHA, branch, subject, and user turn, shortened to
+100 terminal columns. Transcript links use the last real prompt before the
+commit call. Trailer links use the last real prompt at or before Git's author
+time and mark the turn as estimated. They require a session message within the
+five minutes before that time; an idle session has no suggested turn. The prompt
+can be older than five minutes when later messages keep the session active.
+Trashed or permanently deleted sessions carry `missing: true` and omit the turn. See
+[commit lookups](https://agentsview.io/docs/session-api/#commit-lookups) for
+retention and lookup limits. Transcript links require stored Git summaries with SHAs of 7
+to 64 characters. Quiet commits have no transcript link. Links include Codex
+poll results paired with the original call. Calls spanning repositories use the
+first directory; the last `cd` before the first commit invocation adjusts it.
+Archives retaining only transcripts keep trailer links; usage-only archives have
+no links. Hosted PostgreSQL returns HTTP 501. Sessions permanently deleted
+before this release have no transcript links. JSON output keeps `call_index`.
+Code-mode scripts with exactly one tool call and a fixed command literal can
+link commits, including output without a process ID. Command literals containing
+`${` have no links. A single-call `write_stdin` script can poll an earlier
+commit execution. Scripts with several tool calls cannot start new commit links;
+their polls need output process IDs matching an earlier commit call.
+
 `session list --label k=v` and `--pr owner/repo#123` filter by
 [labels](/docs/session-api/#agentsview-session-label) and
 [pull request links](/docs/session-api/#pull-request-links).
@@ -2045,11 +2208,24 @@ agentsview session parent <id> <parent>  # record the launching session
 refresh behavior, missing-session exit codes, and the `refresh_incomplete`
 JSON field.
 
+An empty first page of `session search` keeps `(no matches)` on stdout and prints
+measured hints on stderr when one-shot, automated, or child sessions contain
+matches. Each hint
+includes a command that preserves your filters and enables the required include
+flags. JSON adds `hints` entries with `code`, `message`, and a full `next` command.
+Counts use a bounded search and say `more than N` when more matches exist, or
+`at least N` for semantic and hybrid searches or when filtering or candidate
+limits prevent an exact count.
+For multi-word substring queries over messages, a hint offers `--fts` only when
+that retry finds matches. `excluded_combined` gives a retry with the remaining
+include flags for matches beyond the individual class hints. Failed diagnostic
+searches add no hint.
+
 `session search` supports substring (default), `--regex`, `--fts`, `--semantic`,
 and `--hybrid` modes. Repeatable `--exclude-session <id>` drops matches from
-those sessions before `--limit`. Semantic and hybrid results can be scoped with
-`--scope top|all|subordinate` (default `all`) to include or exclude sidechain
-and subagent content — see
+those sessions before `--limit`. Hybrid returns keyword matches with a note
+while the embedding index is unavailable. Semantic and hybrid
+results can be scoped with `--scope top|all|subordinate` (default `all`) to include or exclude sidechain and subagent content — see
 [Semantic Search](/docs/semantic-search/#scoping-results-scope). HTTP and MCP
 also accept `scope` for substring and regex searches. CLI lexical searches use
 `--include-children` instead. The human-readable table includes an `AGE` column derived from each match's
@@ -2063,10 +2239,18 @@ exceptions: they stream raw bytes and NDJSON respectively, so they reject
 `AGENTSVIEW_SERVER_TOKEN` or `--server-token-file <path>` when that daemon
 requires auth, or `--pg` to read from configured PostgreSQL.
 
-`agentsview session list` excludes one-shot and automated sessions by default.
-When that hides matching sessions on the first page, it reports the counts and
-the corresponding `--include-one-shot` or `--include-automated` flags on stderr.
-Stdout, including `--format json`, keeps its existing shape for pipelines.
+`agentsview session list` excludes one-shot, automated, and child sessions by
+default. When that hides matching sessions on the first page, it reports the
+counts and the corresponding `--include-one-shot`, `--include-automated`, or
+`--include-children` flags on stderr, including when the list has visible results.
+Child counts include sessions hidden by several defaults; the notice lists
+every remaining include flag to use together. Child counts use one bounded page;
+a positive count from a partial page says `at least N`. Stdout, including
+`--format json`, keeps its existing shape for pipelines.
+
+An older daemon can return sessions without exclusion counts. The CLI lists
+those sessions and omits the exclusion notice. Cursor pages and lists with all
+three `--include-*` flags also omit the notice.
 
 `AGENTSVIEW_PG_URL`, a legacy `[pg].url`, or the effective default target from
 `default_pg` plus `[pg.NAME]` are sync configuration only; they do not change
@@ -2091,9 +2275,9 @@ ______________________________________________________________________
 
 ### `agentsview index embeddings`
 
-Manage the local semantic search embedding index. Requires `[vector]` to be
-enabled in config. See [Semantic Search](/docs/semantic-search/) for full
-documentation, including configuration and the search surface.
+Manage the local semantic search embedding index. `build` turns search on when
+needed. The other commands require it to be enabled. See
+[Semantic Search](/docs/semantic-search/) for configuration and search details.
 
 ```bash
 agentsview index embeddings build           # build or refresh the index
@@ -2274,6 +2458,32 @@ those files.
 
 ______________________________________________________________________
 
+### `agentsview diagnostics append`
+
+Record a failure outside an agent session for the Friction Log:
+
+```bash
+agentsview diagnostics append --source worker --message "launch failed" [--at RFC3339] [--id UUID] [--server URL] [--json]
+```
+
+The occurrence time defaults to now. Supply `--at` to place a delayed report
+on the day it happened; it can be at most five minutes in the future. The
+zero timestamp `0001-01-01T00:00:00Z` is not accepted. The
+source is limited to 64 characters and the message to 500. The command prints
+its event ID and occurrence time; reuse both with the same source and message
+to retry without counting the event twice. When supplying `--id` without `--at`,
+reusing the ID and content also returns the original event. A local append reaches a PostgreSQL
+hub on the next replica push, including a project-filtered push. An explicit
+`--server` writes to that daemon instead. Read-only servers and `--pg` cannot
+append. Events appear in digests only when Friction review is enabled on the
+archive that builds them.
+
+`POST /api/v1/diagnostics` accepts `id`, `source`, `message`, and an optional
+RFC 3339 `occurred_at`. It requires an authenticated server or a localhost
+request. Reusing an ID with different content returns HTTP 409.
+
+______________________________________________________________________
+
 ### `agentsview friction`
 
 Build and read the [Friction Log](/docs/configuration/#friction-log). Review
@@ -2437,7 +2647,8 @@ hash: install updates safe generated files, refuses hand-edited or foreign files
 unless `--force` is passed, continues processing the other artifacts, and exits
 non-zero if anything was refused. `list` reports HARNESS, ARTIFACT, LEVEL, STATE
 (`missing`, `current`, `stale`, `modified`, `foreign`), and PATH for every
-artifact.
+artifact. When local semantic search is off, a successful install shows how to
+turn it on.
 
 `--server` / `--server-token-file` (or `AGENTSVIEW_SKILLS_SERVER` /
 `AGENTSVIEW_SKILLS_SERVER_TOKEN_FILE`) bake those flags into every example
@@ -2533,6 +2744,7 @@ agentsview help
 | `COWORK_DIR`                          | (platform-specific)                                                             | Claude Desktop cowork sessions directory                                                                        |
 | `CODEX_SESSIONS_DIR`                  | `~/.codex/sessions`                                                             | Codex sessions directory                                                                                        |
 | `CODEX_HOME`                          | unset                                                                           | Codex home that re-roots the default `sessions/` and `archived_sessions/` discovery paths                       |
+| `INTERPRETER_HOME`                    | unset                                                                           | Open Interpreter home that re-roots the default `sessions/` and `archived_sessions/` paths                      |
 | `CLINE_DIR`                           | `~/.cline`                                                                      | Cline CLI sessions directory (discovers under `<root>/data/sessions/` or direct sessions root)                  |
 | `CODEBUFF_DIR`                        | `~/.config/manicode/projects`                                                   | Codebuff/Freebuff sessions directory                                                                            |
 | `COMMANDCODE_PROJECTS_DIR`            | `~/.commandcode/projects`                                                       | Command Code projects directory                                                                                 |
@@ -2568,6 +2780,7 @@ agentsview help
 | `OPENCLAW_DIR`                        | `~/.openclaw/agents` and `~/.kimi_openclaw/agents`                              | OpenClaw agents directory                                                                                       |
 | `OPENCODE_DIR`                        | `~/.local/share/opencode`                                                       | OpenCode data directory                                                                                         |
 | `OPENCODEREVIEW_DIR`                  | `~/.opencodereview/sessions`                                                    | Open Code Review sessions directory                                                                             |
+| `OPEN_INTERPRETER_SESSIONS_DIR`       | `~/.openinterpreter/sessions` and `archived_sessions`                           | Open Interpreter sessions directory                                                                             |
 | `OPENHANDS_CONVERSATIONS_DIR`         | `~/.openhands/conversations`                                                    | OpenHands CLI conversations directory                                                                           |
 | `PI_DIR`                              | `~/.pi/agent/sessions`                                                          | Pi sessions directory                                                                                           |
 | `PI_CODING_AGENT_DIR`                 | unset                                                                           | Pi agent home that re-roots the default `sessions/` discovery path                                              |
@@ -2625,7 +2838,7 @@ agentsview help
 | `AGENTSVIEW_DISABLE_UPDATE_CHECK`     |                                                                                 | Set to `1` to disable the update check                                                                          |
 | `AGENTSVIEW_ARCHIVE_CONTENT`          | `full`                                                                          | Archive storage policy when `config.toml` sets none: `full`, `transcripts`, or `usage`                          |
 | `AGENTSVIEW_NO_DAEMON`                |                                                                                 | Set to `1`, `true`, `yes`, or `on` to disable CLI daemon auto-start                                             |
-| `AGENTSVIEW_DAEMON_IDLE_TIMEOUT`      | `20m`                                                                           | Override idle self-shutdown duration for detached background daemons                                            |
+| `AGENTSVIEW_DAEMON_IDLE_TIMEOUT`      | `20m`                                                                           | Override idle self-shutdown duration for automatically started and `serve --background` daemons                 |
 | `AGENTSVIEW_TELEMETRY_ENABLED`        |                                                                                 | Set to `0` to disable [anonymous daemon telemetry](/docs/configuration/#anonymous-daemon-telemetry)             |
 | `DO_NOT_TRACK`                        |                                                                                 | Set to `1` to disable telemetry                                                                                 |
 

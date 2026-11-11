@@ -129,7 +129,7 @@ func scopeLegacyDevinSourceUUIDsLocked(
 		return fmt.Errorf("scoping devin recall end uuids: %w", err)
 	}
 	for _, id := range sessionIDs {
-		if err := bumpTranscriptRevision(tx, id, true); err != nil {
+		if err := bumpTranscriptRevisionTx(tx, id); err != nil {
 			return err
 		}
 	}

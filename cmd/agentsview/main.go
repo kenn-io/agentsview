@@ -72,6 +72,21 @@ const (
 )
 
 func main() {
+	// Hooks must leave application data untouched, including temp-dir fallback.
+	if len(os.Args) > 1 && os.Args[1] == "git-trailer" {
+		cmd := newGitTrailerCommand()
+		cmd.SetArgs(os.Args[2:])
+		_ = cmd.Execute()
+		return
+	}
+	if len(os.Args) > 1 && os.Args[1] == "git-trailer-prepare" {
+		cmd := newGitTrailerPrepareCommand()
+		cmd.SetArgs(os.Args[2:])
+		if err := cmd.Execute(); err != nil {
+			os.Exit(1)
+		}
+		return
+	}
 	if handled, code := rawderive.RunParserChild(os.Args[1:]); handled {
 		os.Exit(code)
 	}
@@ -130,8 +145,7 @@ type serveOptions struct {
 	BasePath        string
 	Pprof           bool
 	// ReloadConfig rebuilds the configuration with the same layers and flags
-	// as startup so saved provider settings apply without a restart. Nil
-	// leaves the startup provider set in place until the daemon restarts.
+	// as startup so saved provider settings apply without a restart.
 	ReloadConfig func() (config.Config, error)
 }
 
@@ -156,6 +170,7 @@ func applyServeMemoryLimit() {
 }
 
 func runServe(ctx context.Context, cfg config.Config, opts serveOptions, restartPort int) {
+	cfg.PersistentDaemon = !runningAsBackgroundChild() || os.Getenv(persistentDaemonEnvVar) == "true"
 	setupDebugLogWriter(cfg.DataDir)
 	archiveOnly, err := archiveModeAfterRecovery(ctx, cfg)
 	if err != nil {
@@ -207,6 +222,8 @@ func runServe(ctx context.Context, cfg config.Config, opts serveOptions, restart
 	MarkDaemonStarting(cfg.DataDir)
 	defer UnmarkDaemonStarting(cfg.DataDir)
 	startupProgress := newStartupStateWriter(cfg.DataDir, time.Now)
+	startupProgress.state.Persistent = cfg.PersistentDaemon
+	startupProgress.state.IdleTimeout = effectiveDaemonIdleTimeout(cfg).String()
 
 	// The signal context is created before the startup worker so SIGTERM can
 	// interrupt the worker pass. The server is fully drained by
@@ -333,21 +350,17 @@ func runServe(ctx context.Context, cfg config.Config, opts serveOptions, restart
 
 	broadcaster := server.NewBroadcaster(cfg.EventsCoalesceInterval)
 
-	vectorServe, err := setupVectorServing(ctx, cfg, database, idleTracker)
+	vectorServe, err := newLiveVectorServing(ctx, cfg, database, idleTracker, opts.ReloadConfig)
 	if err != nil {
 		fatal("setting up vector index: %v", err)
 	}
-	if vectorServe.Close != nil {
-		defer func() {
-			if cerr := vectorServe.Close(); cerr != nil {
-				log.Printf("close vectors.db: %v", cerr)
-			}
-		}()
-	}
+	defer func() {
+		if cerr := vectorServe.Close(); cerr != nil {
+			log.Printf("close vectors.db: %v", cerr)
+		}
+	}()
 
-	emitter := wrapEmbeddingSyncEmitter(
-		broadcaster, vectorServe, cfg.Vector.Embed.RunAfterSyncEnabled(),
-	)
+	emitter := wrapEmbeddingSyncEmitter(broadcaster, vectorServe.Notify)
 
 	extractSched, err := setupRecallExtraction(ctx, cfg, database, idleTracker)
 	if err != nil {
@@ -358,9 +371,7 @@ func runServe(ctx context.Context, cfg config.Config, opts serveOptions, restart
 			extractSched.onBattery = power.OnBattery
 			extractSched.onBatteryMgr = extract.NewReconciler(database)
 		}
-		if vectorServe.RecallMutationNotify != nil {
-			extractSched.onPassFinished = vectorServe.RecallMutationNotify
-		}
+		extractSched.onPassFinished = func() { vectorServe.Notify(true) }
 		emitter = extractTeeEmitter{primary: emitter, scheduler: extractSched}
 	}
 
@@ -611,6 +622,7 @@ func runServe(ctx context.Context, cfg config.Config, opts serveOptions, restart
 		server.WithBaseContext(ctx),
 		server.WithBroadcaster(broadcaster),
 		server.WithIdleTracker(idleTracker),
+		server.WithDaemonPersistence(func() error { return publishPersistentDaemon(cfg.DataDir) }),
 		server.WithHTTPRemoteCleanupRegistry(httpRemoteCleanupRegistry),
 		server.WithPprof(opts.Pprof),
 		server.WithTelemetryCapture(telemetryCapture),
@@ -618,10 +630,12 @@ func runServe(ctx context.Context, cfg config.Config, opts serveOptions, restart
 	if rtOpts.BasePath != "" {
 		srvOpts = append(srvOpts, server.WithBasePath(rtOpts.BasePath))
 	}
+	if ingestion != nil {
+		srvOpts = append(srvOpts, server.WithSyncIntervalOverride(ingestion.SyncIntervalOverride()))
+	}
 	srvOpts = append(srvOpts, pushBackendOptions()...)
-	srvOpts = append(srvOpts, vectorServe.ServerOpts...)
-	if src := newVectorPushSource(cfg); src != nil {
-		srvOpts = append(srvOpts, server.WithVectorPushSource(src))
+	if !cfg.ArchiveContent.UsageOnly() && !database.ArchiveContent().UsageOnly() {
+		srvOpts = append(srvOpts, vectorServe.ServerOptions()...)
 	}
 	if extractSched != nil {
 		// Trash, restore, and permanent-delete routes change extraction
@@ -713,6 +727,7 @@ func runServe(ctx context.Context, cfg config.Config, opts serveOptions, restart
 		explicitPort = new(rtOpts.RequestedPort)
 	}
 	if _, sfErr := writeDaemonRuntimeWithAuthAndNoSync(
+		&daemonLifetime{Persistent: rt.Cfg.PersistentDaemon, IdleTimeout: effectiveDaemonIdleTimeout(rt.Cfg)},
 		rt.Cfg.DataDir, rt.Cfg.Host, rt.Cfg.Port, version, rt.PublicURL, false,
 		rt.Cfg.RequireAuth, rt.Cfg.NoSync, explicitPort,
 		rt.Caddy.Pid(),
@@ -765,20 +780,6 @@ func runServe(ctx context.Context, cfg config.Config, opts serveOptions, restart
 
 	startTelemetryPings(ctx, telemetryReporter, cfg)
 	defer startSetupTelemetry(ctx, telemetryReporter, cfg, database, broadcaster)()
-
-	if vectorServe.Scheduler != nil {
-		vectorServe.Scheduler.onBattery = power.OnBattery
-		go vectorServe.Scheduler.Run(ctx)
-		// Registered after the vectors.db Close defer above, so LIFO
-		// unwind order runs Stop (which waits for any in-flight
-		// TryBuild to return) before vectors.db is closed.
-		defer vectorServe.Scheduler.Stop()
-	}
-	if vectorServe.RecallScheduler != nil {
-		vectorServe.RecallScheduler.onBattery = power.OnBattery
-		go vectorServe.RecallScheduler.Run(ctx)
-		defer vectorServe.RecallScheduler.Stop()
-	}
 
 	if extractSched != nil {
 		go extractSched.Run(ctx)
@@ -1478,7 +1479,10 @@ func ensureServeAuthToken(cfg *config.Config) error {
 	return cfg.EnsureAuthToken()
 }
 
-func newDaemonIdleTracker(cfg config.Config, stop context.CancelFunc) *server.IdleTracker {
+func effectiveDaemonIdleTimeout(cfg config.Config) time.Duration {
+	if cfg.PersistentDaemon {
+		return 0
+	}
 	timeout := time.Duration(0)
 	if runningAsBackgroundChild() {
 		timeout = cfg.DaemonIdleTimeout
@@ -1494,6 +1498,11 @@ func newDaemonIdleTracker(cfg config.Config, stop context.CancelFunc) *server.Id
 			timeout = parsed
 		}
 	}
+	return max(timeout, 0)
+}
+
+func newDaemonIdleTracker(cfg config.Config, stop context.CancelFunc) *server.IdleTracker {
+	timeout := effectiveDaemonIdleTimeout(cfg)
 	if timeout <= 0 && (cfg.NoSync || cfg.SyncIdleAfter <= 0) {
 		return nil
 	}
@@ -3252,6 +3261,7 @@ func startPeriodicSync(
 				log.Printf("archive sources: %v", err)
 			}
 			recomputePendingSessions(ctx, engine, database)
+			engine.ReconcileCommitTrailers(ctx)
 			recomputeStaleFriction(ctx, engine)
 		})
 	}

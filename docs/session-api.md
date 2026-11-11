@@ -111,6 +111,9 @@ known.
 
 The HTTP `/api/v1/events` stream sends `events_ready` on every connection
 after subscribing to changes.
+To receive the changed session and message records themselves, with a cursor
+for resuming, use the
+[change stream](/docs/conversation-export/#follow-changes-live).
 
 The web UI and generated API clients use shared metadata endpoints for filter
 options:
@@ -261,6 +264,14 @@ reveals it. Human stdout stays unchanged, and the JSON catalog is additive, so
 redirecting or piping structured output remains safe. The JSON `total` continues
 to describe the filtered result, not the excluded sessions. Use the
 `--include-*` flags to opt back in.
+
+The list endpoint accepts `exclusion_counts=false` to return hidden one-shot and
+automated counts, or `exclusion_counts=true` to include the bounded child count.
+The optional `exclusion_counts` response contains `one_shot`, `automated`,
+`children`, and `children_lower_bound`. Cursor pages and fully included lists
+omit it. Other API callers leave this parameter unset to avoid the extra work.
+Servers that omit the summary still return a usable page; the CLI then omits
+the exclusion notice.
 
 Machine filters accept exact IDs, aliases, comma-separated ID/alias lists, or a
 unique whole display label. Exact ID/alias lists take precedence over a
@@ -426,9 +437,14 @@ emitted, separated from the flattened `content` which still contains inline
 
 Promoted `source_subtype` values on `is_system: true` messages: `continuation`,
 `resume`, `interrupted`, `task_notification`, `stop_hook`, `peer_message`,
-`compact_boundary`. `peer_message` is a message another Claude Code session
-sent; its `content` keeps the `<cross-session-message>` wrapper with the
-sender's name.
+`compact_boundary`, `hook_success`, `hook_additional_context`, `hook_cancelled`,
+`stop_hook_summary`.
+The three `hook_*` subtypes carry Claude hook output with
+`source_type: "attachment"`. `stop_hook_summary` carries stop hook results with
+`source_type: "system"`.
+`peer_message` is a message another Claude Code session sent; its `content`
+keeps the `<cross-session-message>` wrapper with the sender's name. The content
+may include a framing line before the wrapper and a notice after it.
 
 ______________________________________________________________________
 
@@ -1181,7 +1197,7 @@ When some contributing models are unpriced, the cost line reads
 GET /api/v1/sessions/{id}/usage
 ```
 
-On `main` after v0.46.1, this endpoint accepts raw agent session IDs
+In 0.47.0 and later, this endpoint accepts raw agent session IDs
 as well as canonical archive IDs. Exact matches take precedence. If an exact
 lookup misses or reports an ambiguous identity, an ID without a known agent
 prefix or `~` host namespace is matched literally against stored IDs ending in
@@ -1553,3 +1569,100 @@ against `pg serve`, with the same masking and `--reveal` constraints.
 ### Ingest-time image offload
 
 The normalized Markdown endpoint `/api/v1/sessions/{id}/md` carries stored tool-result content, including `agentsview_image` placeholders and `image_ref` asset references. The HTML export keeps its existing contract. A serving host needs the matching `{dataDir}/assets` directory. PostgreSQL and CockroachDB retain the reference text but cannot resolve local assets. The raw `agentsview session export` command streams provider source bytes and retains their original inline payloads.
+
+## Commit lookups
+
+`GET /api/v1/sessions/{id}/commits` returns `{"commits": [...]}` for one
+session. `POST /api/v1/commits/sessions` accepts `{"shas": ["abc1234"]}` and
+returns `{"commits": [{"sha": "abc1234", "links": [...]}]}` in request order.
+Send 1 to 200 hexadecimal SHAs or prefixes of 7 to 64 characters. Queries ignore
+case. Unknown SHAs have empty `links`. Invalid SHAs or array lengths return
+HTTP 400. PostgreSQL, DuckDB, and ClickHouse replicas answer transcript and
+trailer link lookups after a push with a version that stores commit links.
+Hosted PostgreSQL returns HTTP 501.
+
+Each link includes `session_id`, the recorded `sha`, `branch`, `subject`,
+`repository`, `message_ordinal`, `call_index`, `tool_use_id`, `committed_at`,
+and `source`. For `source: "transcript"`, `committed_at` is the tool call's
+message time. The SHA is exactly as Git printed it, usually a short prefix. Full
+SHAs match stored prefixes. `turn` contains `heuristic: false` and the `ordinal`
+and `text` of the last nonempty, non-system user prompt before the commit call.
+Tool-result messages are excluded. Text is limited to 2,000 UTF-8 bytes. The
+turn is omitted when no eligible prompt exists.
+
+Links to trashed or permanently deleted sessions carry `missing: true` and omit
+`turn`. Restoring a trashed session restores its turn. Every candidate link
+carries `ambiguous: true` when the matched SHAs cannot all describe one commit.
+The same SHA recorded by several sessions, or a short SHA and its full SHA,
+remains unambiguous.
+
+Sessions permanently deleted before this release have no transcript links
+because their stored tool calls are already gone.
+
+Transcript links require a `git commit` invocation, allowing Git global options,
+and Git's commit summary with a SHA of 7 to 64 characters in the call's stored
+output. Quiet commits and summaries with shorter SHAs have no link. Older Codex
+commands stored as argument arrays support direct Git calls and scripts passed
+to `sh`, `bash`, or `zsh` with `-c` or `-lc`. Codex output received
+through a later `write_stdin` poll links to the original commit call when its
+process ID matches. Polls with no originating commit call produce no links.
+Code-mode scripts with exactly one tool call and a fixed command literal can
+link commits, including output without a process ID. Command literals containing
+`${` have no links. A single-call `write_stdin` script can poll an earlier
+commit execution without an output process ID. Scripts with several tool calls
+cannot start new commit links because their output and working directories
+cannot be assigned to one execution. Their polls need output process IDs
+matching an earlier commit call. Each session records a SHA once, at its first
+matching call. Decorated log lines are excluded. A custom log format that prints
+one bare ref in the same shape as a commit summary can still create a link when
+the call also invokes `git commit`; this is a known limitation.
+
+Repository paths use the tool's `workdir` or `cwd`, or the session's working
+directory. The last `cd` before the first commit invocation adjusts that base,
+and `git -C` overrides it. Relative paths join onto the base using the
+transcript's path style; `~` paths stay literal. A `cd` after that invocation is
+ignored. A single shell execution that commits in two repositories records the
+first directory for both commits.
+
+Archives using `archive_content = "transcripts"` keep trailer links but no
+transcript links; `"usage"` archives keep neither.
+
+### Git trailer links
+
+Commits containing `Agent-Session: <agent>:<session-id>` lines appear with
+`source: "trailer"`, a full SHA, Git's author time, and a repository path.
+Claude IDs omit the `claude:` prefix in the archive; other agents use their
+registered prefix. Matching uses the exact archive ID. Sessions imported from
+other hosts as `host~<archive-id>` do not receive trailer links from the original
+session ID. Unknown agents and invalid trailer values are ignored.
+Every matching line in the commit message counts, including lines in squash
+commit bodies. Inline mentions don't create links. Merge commits count.
+
+`agentsview source sync` scans repositories used by local sessions. Under
+`agentsview serve`, editor commits appear at the next scheduled pass, within 15
+minutes. Each pass rereads every repository's history, including fetched older
+branches. Only checkouts a local session ran in are read. If a checkout has
+disappeared, another session must still resolve to its repository to read new
+commits. Stored rows survive checkout removal and archive rebuilds under policies
+that keep trailer links; rows for commits no longer reachable are kept.
+
+Known limitation: the protected-path guard doesn't follow a repository's `config.worktree` or config includes.
+
+Trailer links use `call_index: -1` and an empty `tool_use_id`. Their branch is
+Git's traversal source with `refs/heads/` or `refs/remotes/` removed, excluding
+remote `HEAD` aliases; other sources, such as tags and stash, leave it empty.
+Their `committed_at` is the Git author time in UTC. Their `message_ordinal`
+is the last message ordinal at or before commit time within the preceding five
+minutes, or `-1` when none exists. Messages of any role can satisfy this bound.
+
+The suggested `turn` is the last real user prompt in transcript order with a
+usable timestamp at or before commit time and an ordinal at or before
+`message_ordinal`. It carries `heuristic: true`; no recent message or eligible
+prompt means no turn. A squash commit made hours after the session went quiet
+therefore has no suggested turn. Rebased commits use their preserved author
+time. This time rule adapts
+[Pando's fallback](https://github.com/backnotprop/pando/blob/80c8f91f3c445b080d49a95d7600ca6a348e9828/worker/src/understand/lookups.ts).
+A transcript link for the same session takes precedence when its SHA is a
+prefix of the trailer SHA, including a full SHA match. Git prints a short SHA
+that uniquely identifies the commit when it is made. Other sessions' trailer
+links remain visible.

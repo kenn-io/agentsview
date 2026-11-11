@@ -11,6 +11,7 @@ filter:
   include:
     operation-ids:
       - get-startup-probe
+      - post-api-v1-daemon-persist
       - get-api-v1-version
       - get-api-v1-memory-status
       - get-api-v1-machines
@@ -18,6 +19,8 @@ filter:
       - get-api-v1-session-ids-resolve
       - get-api-v1-sessions
       - get-api-v1-sessions-id-messages
+      - get-api-v1-sessions-id-commits
+      - post-api-v1-commits-sessions
       - get-api-v1-sessions-id-file-references
       - get-api-v1-sessions-id-tool-calls
       - get-api-v1-sessions-id-tool-sequences
@@ -45,6 +48,7 @@ filter:
       - patch-api-v1-sessions-id-labels
       - put-api-v1-sessions-id-parent
       - post-api-v1-data-compact
+      - post-api-v1-embeddings-setup
       - post-api-v1-embeddings-build
       - get-api-v1-embeddings-status
       - get-api-v1-embeddings-generations
@@ -83,6 +87,7 @@ filter:
       - put-api-v1-friction-patterns-fingerprint-issue
       - delete-api-v1-friction-patterns-fingerprint-issue
       - post-api-v1-friction-run
+      - post-api-v1-diagnostics
       - post-api-v1-raw-sync-manifests
 overlay:
   sources:

@@ -1,46 +1,46 @@
-package server
+package kept
 
 import (
 	"context"
 	"sync"
-
-	"go.kenn.io/agentsview/internal/activity"
 )
 
-type activityReportFlight struct {
+type sharedFlight[T any] struct {
 	cancel    context.CancelFunc
 	done      chan struct{}
 	waiters   int
-	artifacts activity.CandidateArtifacts
+	artifacts T
 	err       error
 }
 
-type activityReportBuildGroup struct {
+// Flights shares a load until it finishes or its last waiter leaves.
+// Its zero value is ready to use.
+type Flights[T any] struct {
 	mu      sync.Mutex
-	flights map[string]*activityReportFlight
+	flights map[string]*sharedFlight[T]
 }
 
-func newActivityReportBuildGroup() *activityReportBuildGroup {
-	return &activityReportBuildGroup{flights: make(map[string]*activityReportFlight)}
-}
-
-func (group *activityReportBuildGroup) do(
+func (group *Flights[T]) Do(
 	ctx context.Context,
 	key string,
-	build func(context.Context) (activity.CandidateArtifacts, error),
-) (activity.CandidateArtifacts, error) {
+	build func(context.Context) (T, error),
+) (T, error) {
 	group.mu.Lock()
+	if group.flights == nil {
+		group.flights = make(map[string]*sharedFlight[T])
+	}
 	flight := group.flights[key]
 	if flight == nil {
 		// The shared build belongs to no single waiter, so it carries none
 		// of their request values. Release cancels it when the last waiter
 		// leaves.
 		buildCtx, cancel := context.WithCancel(context.Background())
-		flight = &activityReportFlight{
+		flight = &sharedFlight[T]{
 			cancel: cancel, done: make(chan struct{}), waiters: 1,
 		}
 		group.flights[key] = flight
-		go func(active *activityReportFlight) {
+		go func(active *sharedFlight[T]) {
+			defer cancel()
 			active.artifacts, active.err = build(buildCtx)
 			group.mu.Lock()
 			if group.flights[key] == active {
@@ -60,12 +60,13 @@ func (group *activityReportBuildGroup) do(
 		return flight.artifacts, flight.err
 	case <-ctx.Done():
 		group.release(key, flight, true)
-		return activity.CandidateArtifacts{}, ctx.Err()
+		var zero T
+		return zero, ctx.Err()
 	}
 }
 
-func (group *activityReportBuildGroup) release(
-	key string, flight *activityReportFlight, canceled bool,
+func (group *Flights[T]) release(
+	key string, flight *sharedFlight[T], canceled bool,
 ) {
 	group.mu.Lock()
 	defer group.mu.Unlock()

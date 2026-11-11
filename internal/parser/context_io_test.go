@@ -94,13 +94,10 @@ func TestClaudeDAGPostProcessingStopsAfterContextCancellation(t *testing.T) {
 			entryType: "user", line: `{"type":"user","message":{"content":"x"}}`,
 		}
 	}
-	ctx := newCancelOnErrCheckContext(t, 2)
-
-	_, err := parseDAG(
-		ctx, entries, "session", "project", "machine", "",
-		FileInfo{}, nil, time.Time{}, time.Time{}, claudeSessionMeta{},
+	_, _, err := parseDAG(
+		newCancelOnErrCheckContext(t, 2), entries, "session", "project", "machine", "",
+		FileInfo{}, nil, time.Time{}, time.Time{}, claudeSessionMeta{}, false,
 	)
-
 	require.ErrorIs(t, err, context.Canceled)
 }
 
@@ -114,7 +111,7 @@ func TestClaudeSubtreeUserTurnsStopsAfterContextCancellation(t *testing.T) {
 		}
 	}
 	// Four checks traverse the tree; the fifth cancels during counting.
-	turns, channel, err := subtreeUserTurnsContext(newCancelOnErrCheckContext(t, 5), entries, children, 0)
+	turns, channel, err := subtreeBranchWeightsContext(newCancelOnErrCheckContext(t, 5), entries, children, 0)
 
 	require.ErrorIs(t, err, context.Canceled)
 	assert.Nil(t, turns, "counting must stop before returning completed counts")

@@ -87,35 +87,31 @@ func (s *Store) Search(ctx context.Context, f db.SearchFilter) (db.SearchPage, e
 		orderBy = "session_ended_at DESC, session_id ASC"
 	}
 	args = append(args, f.Limit+1, f.Cursor)
-	// The name branch scopes its embeddable-message and msg_matches checks
+	// The name branch scopes its embeddable-message and msg_grouped checks
 	// to name_candidates. Unscoped, ClickHouse runs the system-prefix regex
-	// over every message and recomputes the inlined msg_matches CTE over the
+	// over every message and recomputes the inlined msg_grouped CTE over the
 	// whole table.
 	rows, err := s.queryContext(ctx, `
-		WITH msg_ranked AS (
-			SELECT m.session_id AS session_id, s.project AS project, s.agent AS agent, s.machine AS machine,
-				COALESCE(s.display_name, s.session_name, s.first_message, '') AS name,
-				COALESCE(s.ended_at, s.started_at, s.created_at) AS session_ended_at,
-				m.ordinal AS ordinal, substringUTF8(m.content, 1, 200) AS snippet,
-				1.0 AS rank, 1 AS match_priority,
-				positionCaseInsensitiveUTF8(m.content, ?) AS match_pos,
-				ROW_NUMBER() OVER (
-					PARTITION BY m.session_id
-					ORDER BY positionCaseInsensitiveUTF8(m.content, ?) ASC,
-						m.ordinal ASC, m.id ASC
-				) AS rn
-			FROM messages m
-			JOIN sessions s ON s.id = m.session_id
+		WITH msg_grouped AS (
+			SELECT m.session_id AS session_id,
+				argMin(
+					tuple(m.ordinal, substringUTF8(m.content, 1, 200), positionCaseInsensitiveUTF8(m.content, ?),
+						s.project, s.agent, s.machine, COALESCE(s.display_name, s.session_name, s.first_message, ''),
+						COALESCE(s.ended_at, s.started_at, s.created_at)),
+					tuple(positionCaseInsensitiveUTF8(m.content, ?), m.ordinal, m.id)
+				) AS winner
+			FROM messages m JOIN sessions s ON s.id = m.session_id
 			WHERE `+msgTermPredicate+`
-				AND s.deleted_at IS NULL
 				AND `+embeddableMessagePredicate("m")+`
-				`+project+`
+				AND s.deleted_at IS NULL `+project+`
+			GROUP BY m.session_id
 		),
 		msg_matches AS (
-			SELECT session_id, project, agent, machine, name, session_ended_at,
-				ordinal, snippet, rank, match_priority, match_pos
-			FROM msg_ranked
-			WHERE rn = 1
+			SELECT g.session_id AS session_id, g.winner.4 AS project, g.winner.5 AS agent, g.winner.6 AS machine,
+				g.winner.7 AS name, g.winner.8 AS session_ended_at,
+				g.winner.1 AS ordinal, g.winner.2 AS snippet,
+				1.0 AS rank, 1 AS match_priority, g.winner.3 AS match_pos
+			FROM msg_grouped g
 		),
 		name_candidates AS (
 			SELECT s.id AS id FROM sessions s
@@ -128,7 +124,7 @@ func (s *Store) Search(ctx context.Context, f db.SearchFilter) (db.SearchPage, e
 			SELECT s.id AS session_id, s.project AS project, s.agent AS agent, s.machine AS machine,
 				COALESCE(s.display_name, s.session_name, s.first_message, '') AS name,
 				COALESCE(s.ended_at, s.started_at, s.created_at) AS session_ended_at,
-				toInt64(-1) AS ordinal,
+				-1 AS ordinal,
 				CASE
 					WHEN COALESCE(s.display_name, s.session_name) ILIKE ?
 						THEN COALESCE(s.display_name, s.session_name, '')
@@ -136,7 +132,7 @@ func (s *Store) Search(ctx context.Context, f db.SearchFilter) (db.SearchPage, e
 						THEN COALESCE(s.first_message, '')
 					ELSE COALESCE(s.display_name, s.session_name, s.first_message, '')
 				END AS snippet,
-				1.0 AS rank, 2 AS match_priority, toUInt64(0) AS match_pos
+				1.0 AS rank, 2 AS match_priority, 0 AS match_pos
 			FROM sessions s
 			WHERE s.id IN (SELECT id FROM name_candidates)
 				AND s.id IN (
@@ -145,7 +141,7 @@ func (s *Store) Search(ctx context.Context, f db.SearchFilter) (db.SearchPage, e
 						AND `+embeddableMessagePredicate("mx")+`
 				)
 				AND s.id NOT IN (
-					SELECT session_id FROM msg_matches
+					SELECT session_id FROM msg_grouped
 					WHERE session_id IN (SELECT id FROM name_candidates)
 				)
 		)
@@ -234,7 +230,7 @@ func (s *Store) SearchContent(ctx context.Context, f db.ContentSearchFilter) (db
 		if err := db.ValidateSemanticFilter(f); err != nil {
 			return db.ContentSearchPage{}, err
 		}
-		if s.getVectorSearcher() == nil {
+		if s.getVectorSearcher() == nil && (f.Mode != "hybrid" || !f.KeywordOnly) {
 			return db.ContentSearchPage{}, s.semanticUnavailableError()
 		}
 		if f.Mode == "hybrid" {
@@ -391,7 +387,7 @@ func (s *Store) collectContentSubstringMatches(
 					tc.result_content AS body,
 					COALESCE(s.ended_at, s.started_at, s.created_at) AS sort_ts,
 					2 AS src, tc.message_id AS row_id,
-					tc.call_index AS call_index, toInt64(0) AS event_index
+					tc.call_index AS call_index, 0 AS event_index
 				FROM tool_calls tc JOIN sessions s ON s.id = tc.session_id
 				`+toolCallMessageJoin+`
 				WHERE `+contentPred+`
@@ -405,7 +401,7 @@ func (s *Store) collectContentSubstringMatches(
 					tre.timestamp AS ts,
 					tre.content AS body,
 					COALESCE(s.ended_at, s.started_at, s.created_at) AS sort_ts,
-					3 AS src, toInt64(0) AS row_id,
+					3 AS src, 0 AS row_id,
 					tre.call_index AS call_index,
 					tre.event_index AS event_index
 				FROM tool_result_events tre JOIN sessions s ON s.id = tre.session_id
@@ -564,7 +560,7 @@ func (s *Store) collectContentSource(
 					tc.result_content AS body,
 					COALESCE(s.ended_at, s.started_at, s.created_at) AS sort_ts,
 					2 AS src, tc.message_id AS row_id,
-					tc.call_index AS call_index, toInt64(0) AS event_index, false AS legacy_thinking
+					tc.call_index AS call_index, 0 AS event_index, false AS legacy_thinking
 				FROM tool_calls tc JOIN sessions s ON s.id = tc.session_id
 				` + toolCallMessageJoin + `
 				WHERE tc.session_id IN (SELECT id FROM sessions WHERE ` + scopeWhere + `) AND ` + db.LexicalAnchorScopeSQL(f, "s", "m", db.ClickHouseQueryDialect()) + `
@@ -575,7 +571,7 @@ func (s *Store) collectContentSource(
 					tre.tool_call_message_ordinal AS ordinal, tre.timestamp AS ts,
 					tre.content AS body,
 					COALESCE(s.ended_at, s.started_at, s.created_at) AS sort_ts,
-					3 AS src, toInt64(0) AS row_id,
+					3 AS src, 0 AS row_id,
 					tre.call_index AS call_index, tre.event_index AS event_index, false AS legacy_thinking
 				FROM tool_result_events tre JOIN sessions s ON s.id = tre.session_id
 				` + eventAnchorJoin + `

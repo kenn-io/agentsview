@@ -1,5 +1,5 @@
 ---
-last_edited: 2026-10-31
+last_edited: 2026-11-09
 title: PostgreSQL Sync
 description: Share sessions across machines with PostgreSQL push sync, an auto-push service, and a read-only server
 ---
@@ -12,6 +12,24 @@ multi-machine setups.
 
 The PostgreSQL usage optimization baseline and its architecture boundary are
 recorded in `docs/internal/pg-usage-native-optimization.md`.
+
+`pg push` and `pg serve` install a usage change journal that records changed
+sessions and advances a revision for usage, pricing, and project identity
+writes. In addition to normal table access, installation requires `CREATE` on
+the schema and `TRIGGER` on the watched tables. Installation takes a
+`SHARE ROW EXCLUSIVE` lock on those tables until it commits: reads continue, and
+writes wait. CockroachDB skips this journal.
+Activity reuse needs `SELECT` on `usage_session_changes` for `pg serve`
+roles given access later.
+
+On `pg serve`, ended Activity ranges are reused in memory until a push touches
+their sessions or range, pricing changes, or project identity changes.
+Hosted PostgreSQL and archives without the journal rebuild every time.
+
+`pg serve` keeps finished Usage results in memory, up to 64 selections and
+64 MiB per read kind, until the journal revision or custom pricing changes.
+Hosted PostgreSQL, archives without the journal, and filters that compare against
+the current time read every time.
 
 The sync direction is one-way: SQLite to PostgreSQL. Each machine pushes its own
 sessions; `pg serve` reads from the shared database. The resulting UI includes
@@ -28,6 +46,18 @@ dashboard as well.
     read-only PostgreSQL serving keep their existing behavior; `pg push` refuses
     a schema that has been adopted for hosted raw processing.
 
+Commit lookups return the copied links and prompts.
+The first push after upgrading is a full push to copy existing commit links.
+Upgrade serving binaries before or with publishers; older readers cannot see the new table.
+A serving role that cannot create tables needs an upgraded push, or
+`hosted-provision` for a hosted schema, before commit lookups work. Each
+archive's rebuild removes only the deleted-session links that archive pushed.
+Links with no recorded archive, from older pushes or permanent deletion in the
+replica, stay and can reappear after an archive discards its matching copy.
+A deleted session remains visible as a missing record. Project filters use the
+project saved with its links in SQLite, including after a rebuild or a deletion
+before the first push.
+
 ## Hosted raw processing
 
 For uploads that the server parses itself, provision a schema and tenant with
@@ -41,8 +71,8 @@ See [Hosted Raw Sync](/docs/hosted-raw-sync/#provision-a-hosted-instance) for
 the configuration, least-privilege grants and platform limits. Use `agentsview
 pg raw-reparse <runtime-target> --run-id <id> --batch-size 64` for bounded
 parser-version rollouts. Exhausted jobs can resume after a new source arrives,
-a processing-version selection changes, or an operator runs `agentsview pg
-raw-reparse <runtime-target> --repair --batch-size 64`. Repair uses this
+a processing-version selection changes, or an operator runs `agentsview replica
+pg raw-reparse <runtime-target> --repair --batch-size 64`. Repair uses this
 executable's processing version. It's safe to repeat until it prints
 `Rescheduled 0 failed jobs`, and leaves healthy jobs, in-progress jobs, and heads
 at other versions unchanged. Use `--repair` separately from `--run-id`.
@@ -233,8 +263,7 @@ catch up.
 
 #### Automatic Push Watcher
 
-Auto-push watching has been available since 0.32.0. On `main`, start it in
-the foreground with `agentsview replica pg push --watch`:
+Start the watcher in the foreground with `agentsview replica pg push --watch`:
 
 ```bash
 agentsview replica pg push --watch

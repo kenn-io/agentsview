@@ -51,8 +51,9 @@ type pushLocalMessageFingerprint struct {
 	// PlanUsageFP is the archive's session_plan_usage row as
 	// db.PlanUsageFingerprints renders it. It is omitted when empty so
 	// sessions without plan usage keep their stored fingerprints.
-	PlanUsageFP string `json:",omitzero"`
-	DialogueFP  string `json:",omitzero"`
+	PlanUsageFP string             `json:",omitzero"`
+	DialogueFP  string             `json:",omitzero"`
+	CommitLinks []db.CommitLinkRow `json:",omitzero"`
 }
 
 func localSessionDependencyPushFingerprint(
@@ -125,6 +126,7 @@ type localPushDependencyState struct {
 	secretFindings map[string][]db.SecretFinding
 	pins           map[string][]db.PinnedMessage
 	planUsageFP    map[string]string
+	commitLinks    map[string][]db.CommitLinkRow
 }
 
 func readLocalPushDependencyState(
@@ -188,6 +190,9 @@ func readLocalPushDependencyState(
 	if st.dialogueFP, err = local.MessageDialogueFingerprints(ctx, sessionIDs); err != nil {
 		return nil, fmt.Errorf("computing local dialogue fingerprints: %w", err)
 	}
+	if st.commitLinks, err = local.SessionCommitLinkRowsBySession(ctx, sessionIDs); err != nil {
+		return nil, err
+	}
 	return st, nil
 }
 
@@ -218,6 +223,7 @@ func (st *localPushDependencyState) dependencyFingerprint(
 		TokenFP:       st.tokenFP[sessionID],
 		PlanUsageFP:   st.planUsageFP[sessionID],
 		DialogueFP:    st.dialogueFP[sessionID],
+		CommitLinks:   st.commitLinks[sessionID],
 	}
 	if usageKnown {
 		msgFP.UsageEventFP = usageEventFingerprint
@@ -242,7 +248,11 @@ func localPushMessageFingerprint(ctx context.Context,
 	usageKnown bool,
 ) (pushLocalMessageFingerprint, error) {
 	fp := pushLocalMessageFingerprint{}
-	var err error
+	links, err := local.SessionCommitLinkRows(ctx, sessionID)
+	if err != nil {
+		return fp, err
+	}
+	fp.CommitLinks = links
 	fp.Sum, fp.Max, fp.Min, err = local.MessageContentFingerprint(ctx, sessionID)
 	if err != nil {
 		return fp, fmt.Errorf("computing local content fingerprint: %w", err)
@@ -431,7 +441,7 @@ func loadPushMessageContentHashFingerprints(
 	out map[string]string,
 ) error {
 	rows, err := tx.QueryContext(ctx, `
-		SELECT session_id, ordinal, sha256(convert_to(COALESCE(content, ''), 'UTF8')),
+		SELECT session_id, ordinal, sha256(convert_to(content, 'UTF8')),
 			content_length
 		FROM messages
 		WHERE session_id = ANY($1)
@@ -525,7 +535,7 @@ func loadPushMessageFlagFingerprints(
 ) error {
 	rows, err := tx.QueryContext(ctx, `
 		SELECT session_id, ordinal, is_system, has_thinking, has_tool_use,
-			sha256(convert_to(COALESCE(thinking_text, ''), 'UTF8'))
+			sha256(convert_to(thinking_text, 'UTF8'))
 		 FROM messages
 		WHERE session_id = ANY($1)
 		ORDER BY session_id, ordinal ASC
@@ -796,7 +806,7 @@ func loadPushToolResultEventFingerprints(
 		SELECT session_id, tool_call_message_ordinal, call_index, event_index,
 			COALESCE(tool_use_id, ''), COALESCE(agent_id, ''),
 			COALESCE(subagent_session_id, ''), source, status,
-			sha256(convert_to(COALESCE(content, ''), 'UTF8')), content_length, timestamp
+			sha256(convert_to(content, 'UTF8')), content_length, timestamp
 		 FROM tool_result_events
 		WHERE session_id = ANY($1)
 		ORDER BY session_id, tool_call_message_ordinal ASC, call_index ASC, event_index ASC

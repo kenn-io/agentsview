@@ -128,9 +128,10 @@ archive-wide metadata or embedding transfer. Text and paths already present in
 the selected transcript are included. Receiver content and image policies
 still apply. Usage-only archives cannot send or receive transcript pushes.
 
-The first accepted snapshot is immutable in this version. Retrying it returns
-`"status":"unchanged"` without rewriting the receiver's session or curation.
-A changed snapshot or an existing session with the same ID returns a conflict;
+The first accepted transcript is immutable in this version. Retrying it returns
+`"status":"unchanged"` without rewriting the receiver's session or curation,
+even if the sender's metadata or usage changes.
+A changed transcript or an existing session with the same ID returns a conflict;
 there is no force replacement. Finish recording a session before pushing it.
 Ordinary source ingestion cannot replace a pushed snapshot. Rebuilds reserve
 its ID before parsing and preserve the archived transcript with its receipt.
@@ -203,16 +204,8 @@ continues with local and reachable remote sources, and exits successfully unless
 another error occurs. `agentsview source sync --host X` remains strict and reports an
 unavailable explicitly selected host as an error.
 
-For always-available fleet nodes launched with `agentsview daemon start`, set:
-
-```toml
-daemon_idle_timeout = "0s"
-```
-
-That setting controls detached writable daemons, including config-driven and
-`serve --background` launches. Supervised daemons run under systemd, launchd,
-Docker, or a foreground shell never create the idle tracker and already stay
-alive until their supervisor stops them.
+Fleet nodes launched with `agentsview daemon start` stay available until
+stopped.
 
 Run `agentsview source sync` on the collector to sync local sessions and every
 configured host. Set `interval` on a `[[remote_hosts]]` entry when a running

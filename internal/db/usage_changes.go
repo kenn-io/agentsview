@@ -6,7 +6,10 @@ import (
 	"strings"
 )
 
-const archiveMetadataUsageChangeRevisionKey = "usage_change_revision"
+const (
+	archiveMetadataUsageChangeRevisionKey  = "usage_change_revision"
+	archiveMetadataUsagePricingRevisionKey = "usage_pricing_revision"
+)
 
 // Replace triggers atomically with column migrations.
 var usageChangeJournalTriggerDropsSQL, usageChangeJournalTriggerSQL = usageChangeJournalSQL()
@@ -16,7 +19,14 @@ func usageChangeJournalSQL() (string, string) {
  INSERT INTO archive_metadata (key, value)
   VALUES ('usage_change_revision', '1')
  ON CONFLICT(key) DO UPDATE SET
-  value = CAST(CAST(value AS INTEGER) + 1 AS TEXT),
+  value = CAST(value AS INTEGER) + 1,
+  updated_at = strftime('%Y-%m-%dT%H:%M:%fZ','now');`
+	const pricingRevisionBody = `
+ INSERT INTO archive_metadata (key, value)
+  VALUES ('usage_pricing_revision', (
+   SELECT value FROM archive_metadata WHERE key = 'usage_change_revision'))
+ ON CONFLICT(key) DO UPDATE SET
+  value = excluded.value,
   updated_at = strftime('%Y-%m-%dT%H:%M:%fZ','now');`
 	const sessionBody = counterBody + `
  INSERT INTO usage_session_changes (session_id, revision)
@@ -30,18 +40,25 @@ func usageChangeJournalSQL() (string, string) {
 		if sessionID != "" {
 			body = strings.ReplaceAll(sessionBody, "{{session_id}}", sessionID)
 		}
+		switch table {
+		case "model_pricing", "model_pricing_bands", "genai_pricing":
+			body += pricingRevisionBody
+		}
 		if condition != "" {
 			condition = "WHEN " + condition
 		}
 		fmt.Fprintf(&creates, "CREATE TRIGGER %s AFTER %s ON %s\n%s\nBEGIN%s\nEND;\n", name, event, table, condition, body)
 	}
 	add("trg_sessions_usage_change_insert", "INSERT", "sessions", "", "NEW.id")
-	columns := []string{"transcript_revision", "started_at", "deleted_at", "project", "agent", "machine", "git_branch", "group_key", "is_automated", "user_message_count", "ended_at", "termination_status"}
+	columns := []string{"transcript_revision", "started_at", "deleted_at", "project", "agent", "machine", "git_branch", "group_key", "is_automated", "user_message_count", "ended_at", "termination_status", "display_name", "session_name", "relationship_type", "message_count", "created_at"}
 	changes := make([]string, len(columns))
 	for i, column := range columns {
 		changes[i] = "OLD." + column + " IS NOT NEW." + column
 	}
 	add("trg_sessions_usage_change_update", "UPDATE OF "+strings.Join(columns, ", "), "sessions", strings.Join(changes, " OR "), "NEW.id")
+	// Installed group labels come from cron run names. Older writers recreate
+	// only the triggers they name, so this one survives their opens.
+	add("trg_sessions_usage_change_group_label", "UPDATE OF session_name", "sessions", "OLD.session_name IS NOT NEW.session_name AND (OLD.group_key!='' OR NEW.group_key!='')", "NEW.id")
 	add("trg_sessions_usage_change_delete", "DELETE", "sessions", "", "OLD.id")
 	add("trg_usage_events_usage_change_insert", "INSERT", "usage_events", "", "NEW.session_id")
 	columns = []string{"id", "session_id", "message_ordinal", "source", "model", "provider_id", "input_tokens", "output_tokens", "cache_creation_input_tokens", "cache_read_input_tokens", "reasoning_tokens", "cost_microdollars", "cost_status", "cost_source", "occurred_at", "dedup_key"}
@@ -89,9 +106,9 @@ func usageChangeJournalSQL() (string, string) {
 }
 
 // UsageChangeRevision returns the trigger-maintained revision for usage facts,
-// session filter dimensions, and pricing catalog writes. Revision 0 means no
-// history. Readers must pair it with database_id because rebuilt archives
-// restart the counter.
+// session filter dimensions, Activity session columns, and pricing catalog
+// writes. Revision 0 means no history. Readers must pair it with database_id
+// because rebuilt archives restart the counter.
 func (db *DB) UsageChangeRevision(ctx context.Context) (int64, error) {
 	return db.archiveJournalRevision(ctx, archiveMetadataUsageChangeRevisionKey, "usage change")
 }

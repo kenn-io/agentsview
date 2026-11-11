@@ -5,6 +5,7 @@ package clickhouse
 import (
 	"context"
 	"maps"
+	"slices"
 	"sync/atomic"
 	"testing"
 
@@ -16,11 +17,25 @@ import (
 )
 
 // QueryStart also records the identity probe while its progress callback runs.
+// Probes count the whole-table hashes of the small usage tables.
 func usageQueryCounts(t *testing.T, store *Store) (probes, results uint64) {
+	t.Helper()
+	return usageQueryCountsOf(t, store, "startsWith(query, 'SELECT [assumeNotNull(')")
+}
+
+// identityQueryCounts counts every row identity query as a probe: the
+// whole-table hashes and the queries of the row trackers.
+func identityQueryCounts(t *testing.T, store *Store) (probes, results uint64) {
+	t.Helper()
+	return usageQueryCountsOf(t, store,
+		"startsWith(query, 'SELECT [assumeNotNull(') OR startsWith(query, '"+finalRowsQueryMark+"')")
+}
+
+func usageQueryCountsOf(t *testing.T, store *Store, probe string) (probes, results uint64) {
 	t.Helper()
 	execPreparedUsage(t, store, "SYSTEM FLUSH LOGS")
 	require.NoError(t, store.DB().QueryRowContext(t.Context(), `
-		SELECT countIf(startsWith(query, 'SELECT [assumeNotNull(')),
+		SELECT countIf(`+probe+`),
 			countIf(startsWith(trimLeft(query, ' \n\t\r'), 'WITH usage_raw AS') AND
 				(position(query, 'FROM usage_classified') > 0 OR position(query, 'FROM usage_localized') > 0))
 		FROM system.query_log
@@ -33,7 +48,7 @@ func TestUsageRowsVersionProbeFailure(t *testing.T) {
 	for _, failure := range []string{"identity cancellation", "parts timeout"} {
 		t.Run(failure, func(t *testing.T) {
 			store, _, _ := newPushedStore(t)
-			_, ok, err := store.usageRowsVersion(t.Context(), chUsageReadTables)
+			_, ok, err := store.usageRowsVersion(t.Context(), chUsageReadTables, "")
 			require.NoError(t, err)
 			require.True(t, ok)
 			kept := maps.Clone(store.usageVersions.tables)
@@ -53,7 +68,7 @@ func TestUsageRowsVersionProbeFailure(t *testing.T) {
 					settings["max_execution_time"] = 0.000001
 				}))
 			}
-			_, ok, err = store.usageRowsVersion(failingContext(), chUsageReadTables)
+			_, ok, err = store.usageRowsVersion(failingContext(), chUsageReadTables, "")
 			require.NoError(t, err)
 			require.False(t, ok)
 			require.Equal(t, kept, store.usageVersions.tables)
@@ -67,9 +82,8 @@ func TestUsageRowsVersionProbeFailure(t *testing.T) {
 				require.NoError(t, store.DB().QueryRowContext(t.Context(), `
 			SELECT count() FROM system.query_log
 			WHERE current_database = currentDatabase() AND exception_code = 159
-				AND position(query, 'FROM system.parts') > 0
 		`).Scan(&timeouts))
-				require.EqualValues(t, 2, timeouts, "both optional parts re-reads must time out")
+				require.GreaterOrEqual(t, timeouts, uint64(2), "a probe query of both reads must time out")
 			}
 		})
 	}
@@ -91,14 +105,7 @@ func TestUsageMemosSurviveMerges(t *testing.T) {
 		t.Helper()
 		return readPreparedUsage(t, store, f)
 	}
-	memos := func() []any {
-		return []any{maps.Clone(store.dailyUsageRows.entries), maps.Clone(store.topSessionTotals.entries),
-			maps.Clone(store.usageSessionRows.entries)}
-	}
 	before := read()
-	for _, memo := range memos() {
-		require.NotEmpty(t, memo)
-	}
 	probes, results := usageQueryCounts(t, store)
 	require.EqualValues(t, 3, results, "cold read must run all three result queries")
 	require.Equal(t, before, read())
@@ -117,7 +124,13 @@ func TestUsageMemosSurviveMerges(t *testing.T) {
 			probes, results := usageQueryCounts(t, store)
 			require.Equal(t, before, read())
 			mergedProbes, mergedResults := usageQueryCounts(t, store)
-			require.Equal(t, probes+1, mergedProbes)
+			// The row trackers follow the sessions, snapshot, and price
+			// record rows without hashing their tables.
+			wantProbes := uint64(1)
+			if slices.Contains(chUsageCoverageTables, table) {
+				wantProbes = 0
+			}
+			require.Equal(t, probes+wantProbes, mergedProbes)
 			require.Equal(t, results, mergedResults, "merge must reuse daily usage, Top sessions, and session count results")
 		})
 	}
@@ -128,12 +141,11 @@ func TestUsageMemosSurviveMerges(t *testing.T) {
 	// particular result, such as session counts after repricing, stays equal.
 	requireMiss := func(change func()) {
 		t.Helper()
-		kept := memos()
+		_, results := usageQueryCounts(t, store)
 		change()
 		read()
-		for i, memo := range memos() {
-			require.NotEqual(t, kept[i], memo)
-		}
+		_, freshResults := usageQueryCounts(t, store)
+		require.Equal(t, results+3, freshResults, "changes must rerun all three result queries")
 	}
 	requireMiss(func() {
 		appendMessage(t, local, usagePriceRoundID, "more usage", "2026-01-12T04:00:00.000Z")
@@ -181,13 +193,13 @@ func TestUsageReadsStayFreshAfterPushDuringIdentityProbe(t *testing.T) {
 					DataVersion: 1, ReplaceMessages: true,
 				}})
 				require.NoError(t, err)
-				probes, _ := usageQueryCounts(t, store)
+				probes, _ := identityQueryCounts(t, store)
 				var pushed atomic.Bool
 				ctx := chdriver.Context(t.Context(), chdriver.WithProgress(func(*chdriver.Progress) {
 					if pushed.Load() {
 						return
 					}
-					current, _ := usageQueryCounts(t, store)
+					current, _ := identityQueryCounts(t, store)
 					if current > probes && pushed.CompareAndSwap(false, true) {
 						pushPreparedUsage(t, syncer)
 					}
@@ -199,11 +211,11 @@ func TestUsageReadsStayFreshAfterPushDuringIdentityProbe(t *testing.T) {
 					// Unstable coverage must not be stored under the empty version,
 					// which another push during a probe would reuse.
 					store.coverageCache.mu.Lock()
-					fingerprint := store.coverageCache.fingerprint
+					fingerprint := store.coverageCache.key
 					store.coverageCache.mu.Unlock()
 					require.NotEmpty(t, fingerprint)
 				}
-				want, err := read(t.Context(), NewStoreFromDB(syncer.conn))
+				want, err := read(t.Context(), newTestStore(t, syncer.conn, syncer.target))
 				require.NoError(t, err)
 				require.NotEqual(t, before, want)
 				got, err := read(t.Context(), store)

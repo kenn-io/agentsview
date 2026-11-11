@@ -82,9 +82,10 @@ func (s *Store) queryTurnRows(
 		SELECT id, ordinal, timestamp, has_tool_use,
 			role, is_system,
 			CASE WHEN `+db.DuckDBSystemPrefixSQL("content", "role")+` THEN FALSE ELSE TRUE END,
-			COALESCE(source_subtype, ''), content_length
+			source_subtype, content_length
 		FROM messages
 		WHERE session_id = ?
+			AND `+db.ExcludeClaudeHooksSQL("source_subtype")+`
 		ORDER BY ordinal`,
 		sess.ID,
 	)
@@ -127,7 +128,7 @@ func (s *Store) queryCallRows(
 	ctx context.Context, sessionID string,
 ) ([]db.CallRow, error) {
 	rows, err := s.queryContext(ctx, `
-		SELECT tc.message_id, COALESCE(tc.tool_use_id, ''),
+		SELECT tc.message_id, tc.tool_use_id,
 			tc.tool_name, tc.category, tc.skill_name,
 			tc.subagent_session_id, COALESCE(tc.input_json, ''),
 			(

@@ -79,6 +79,7 @@ func (s *Store) SetCustomPricing(p map[string]config.CustomModelRate) {
 	s.runtimeState().pricingMu.Lock()
 	defer s.runtimeState().pricingMu.Unlock()
 	s.runtimeState().customPricing = p
+	s.runtimeState().pricingGeneration++
 	s.forgetPricingLoad()
 }
 
@@ -158,7 +159,7 @@ func (s *Store) GetSessionVersion(ctx context.Context,
 	var count int
 	var updatedAt time.Time
 	err := s.pg.QueryRowContext(ctx,
-		`SELECT message_count, COALESCE(updated_at, created_at)
+		`SELECT message_count, updated_at
 		 FROM sessions WHERE id = $1`,
 		id,
 	).Scan(&count, &updatedAt)
@@ -540,7 +541,7 @@ func (s *Store) deleteSessionIfTrashed(ctx context.Context, id string) (int64, e
 			"deleting trashed session "+id, err,
 		)
 	}
-	if err := deletePGExcludedSessionRows(ctx, tx, excludedIDs); err != nil {
+	if err := deletePGExcludedTrashedSessionRows(ctx, tx, excludedIDs); err != nil {
 		return 0, mapPGWriteError(
 			"purging excluded session aliases for "+id, err,
 		)
@@ -614,7 +615,7 @@ func (s *Store) emptyTrashOnce(ctx context.Context, legacyOnly bool) (int, error
 	if legacyOnly {
 		err = deleteLegacyExcludedSessionRows(ctx, tx, excludedIDs)
 	} else {
-		err = deletePGExcludedSessionRows(ctx, tx, excludedIDs)
+		err = deletePGExcludedTrashedSessionRows(ctx, tx, excludedIDs)
 	}
 	if err != nil {
 		return 0, mapPGWriteError("purging excluded trashed session aliases", err)
@@ -732,6 +733,17 @@ func deletePGTrashedSessionRows(
 	if len(ids) == 0 {
 		return 0, nil
 	}
+	var hasCommitLinks bool
+	if err := tx.QueryRowContext(ctx, `SELECT to_regclass('commit_links') IS NOT NULL`).Scan(&hasCommitLinks); err != nil {
+		return 0, err
+	}
+	if hasCommitLinks {
+		if _, err := tx.ExecContext(ctx, `UPDATE commit_links
+			SET retained=TRUE,turn_ordinal=NULL,turn_text=''
+			WHERE session_id = ANY($1)`, ids); err != nil {
+			return 0, err
+		}
+	}
 	res, err := tx.ExecContext(ctx,
 		`DELETE FROM sessions
 		 WHERE id = ANY($1)`,
@@ -745,4 +757,19 @@ func deletePGTrashedSessionRows(
 		return 0, err
 	}
 	return n, nil
+}
+
+func deletePGExcludedTrashedSessionRows(ctx context.Context, tx *sql.Tx, ids []string) error {
+	if len(ids) == 0 {
+		return nil
+	}
+	var hasCommitLinks bool
+	if err := tx.QueryRowContext(ctx, `SELECT to_regclass('commit_links') IS NOT NULL`).Scan(&hasCommitLinks); err != nil {
+		return err
+	}
+	if hasCommitLinks {
+		return deletePGExcludedSessionRows(ctx, tx, ids)
+	}
+	_, err := tx.ExecContext(ctx, `DELETE FROM sessions WHERE id = ANY($1)`, ids)
+	return err
 }

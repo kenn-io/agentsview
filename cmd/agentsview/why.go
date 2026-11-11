@@ -1,0 +1,164 @@
+package main
+
+import (
+	"encoding/json/jsontext"
+	"encoding/json/v2"
+	"errors"
+	"fmt"
+	"path/filepath"
+	"regexp"
+	"strconv"
+	"strings"
+
+	"github.com/spf13/cobra"
+	"go.kenn.io/agentsview/internal/db"
+	gitdb "go.kenn.io/agentsview/internal/db/git"
+)
+
+type whyCommit struct {
+	SHA     string          `json:"sha"`
+	Subject string          `json:"subject,omitempty"`
+	Lines   *int            `json:"lines,omitempty"`
+	Links   []db.CommitLink `json:"links"`
+}
+
+type whyResult struct {
+	Commits     []whyCommit `json:"commits"`
+	Uncommitted *int        `json:"uncommitted,omitempty"`
+}
+
+var whyRangeRE = regexp.MustCompile(`:([0-9]+)(?:-([0-9]+))?$`)
+
+func splitWhyPath(arg string) (path string, start, end int, err error) {
+	match := whyRangeRE.FindStringSubmatchIndex(arg)
+	if match == nil {
+		return arg, 0, 0, nil
+	}
+	path = arg[:match[0]]
+	start, err = strconv.Atoi(arg[match[2]:match[3]])
+	if err != nil {
+		return "", 0, 0, fmt.Errorf("invalid line range: %w", err)
+	}
+	end = start
+	if match[4] >= 0 {
+		end, err = strconv.Atoi(arg[match[4]:match[5]])
+	}
+	if err != nil || start < 1 || end < start || path == "" {
+		return "", 0, 0, fmt.Errorf("invalid line range in %q", arg)
+	}
+	return path, start, end, nil
+}
+
+func newWhyCommand() *cobra.Command {
+	var commit string
+	cmd := &cobra.Command{
+		Use:     "why <path>[:<start>[-<end>]]",
+		Short:   "Find recorded sessions and prompts behind file lines or a commit",
+		GroupID: groupData,
+		Args:    cobra.MaximumNArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			if (len(args) == 1) == cmd.Flags().Changed("commit") {
+				return errors.New("provide exactly one path or --commit SHA")
+			}
+			result := whyResult{}
+			shas := []string{commit}
+			if len(args) == 1 {
+				path, start, end, err := splitWhyPath(args[0])
+				if err != nil {
+					return err
+				}
+				dir, file := filepath.Split(path)
+				blame, err := gitdb.BlameCommits(cmd.Context(), dir, file, start, end)
+				if err != nil {
+					return err
+				}
+				result.Uncommitted = new(blame.Uncommitted)
+				shas = nil
+				for _, c := range blame.Commits {
+					shas = append(shas, c.SHA)
+					result.Commits = append(result.Commits, whyCommit{SHA: c.SHA, Subject: c.Subject, Lines: new(c.Lines)})
+				}
+			}
+			svc, cleanup, err := resolveService(cmd)
+			if err != nil {
+				return err
+			}
+			defer cleanup()
+			for offset := 0; offset < len(shas); offset += db.MaxCommitSHAs {
+				matches, err := svc.CommitSessions(cmd.Context(), shas[offset:min(offset+db.MaxCommitSHAs, len(shas))])
+				if err != nil {
+					return err
+				}
+				for i, match := range matches.Commits {
+					if result.Uncommitted == nil {
+						result.Commits = append(result.Commits, whyCommit{SHA: match.SHA, Links: match.Links})
+					} else {
+						result.Commits[offset+i].Links = match.Links
+					}
+				}
+			}
+			if outputFormat(cmd) == "json" {
+				return json.MarshalEncode(jsontext.NewEncoder(cmd.OutOrStdout()), result)
+			}
+			w := &errWriter{w: cmd.OutOrStdout()}
+			for _, c := range result.Commits {
+				header := commit
+				if c.Lines != nil {
+					header = fmt.Sprintf("%.12s  %s  (%d line%s)", c.SHA, c.Subject, *c.Lines, pluralSuffix(*c.Lines))
+				}
+				fmt.Fprintln(w, sanitizeTerminal(header))
+				if len(c.Links) == 0 {
+					fmt.Fprintln(w, "  No recorded session.")
+				}
+				for _, link := range c.Links {
+					source := link.Source
+					if source == "trailer" {
+						source = "commit message"
+					}
+					line := fmt.Sprintf("  %s  %s  %s", source, link.SessionID, link.Repository)
+					if c.Lines == nil || link.Subject != c.Subject {
+						line += "  " + link.Subject
+					}
+					if link.Ambiguous {
+						line += "  (ambiguous: prefix matches several commits)  " + link.SHA
+					}
+					line += fmt.Sprintf("  %s  %s", link.Branch, link.CommittedAt)
+					// Commit-message links have no tool call, and may have no nearby message.
+					if link.MessageOrdinal >= 0 {
+						line += fmt.Sprintf("  message %d", link.MessageOrdinal)
+					}
+					if link.CallIndex >= 0 {
+						line += fmt.Sprintf("  call %d", link.CallIndex)
+					}
+					if link.ToolUseID != "" {
+						line += "  " + link.ToolUseID
+					}
+					if link.Missing {
+						fmt.Fprintln(w, sanitizeTerminal(line+"  (deleted or in trash)"))
+						continue
+					}
+					fmt.Fprintln(w, sanitizeTerminal(line))
+					if link.Turn != nil {
+						turn := sanitizeTerminal(link.Turn.Text)
+						if link.Turn.Heuristic {
+							turn += " (estimated)"
+						}
+						for text := range strings.SplitSeq(turn, "\n") {
+							fmt.Fprintln(w, "    "+text)
+						}
+					}
+				}
+			}
+			if result.Uncommitted != nil && *result.Uncommitted > 0 {
+				fmt.Fprintf(w, "%d selected lines are not committed yet.\n", *result.Uncommitted)
+			}
+			return w.err
+		},
+	}
+	cmd.Flags().StringVar(&commit, "commit", "", "Commit SHA or prefix")
+	cmd.Flags().String("server", "", "Remote daemon URL")
+	cmd.Flags().String("server-token-file", "", "File containing bearer token for explicit --server requests")
+	cmd.Flags().Bool("pg", false, "Read session data from configured PostgreSQL")
+	registerFormatFlags(cmd.Flags())
+	return cmd
+}

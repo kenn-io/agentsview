@@ -101,7 +101,7 @@ func (s sessionsSQL) ToolCallsSQL(ordinals int) string {
 	filter := readbase.OrdinalFilterSQL("m.ordinal", ordinals)
 	return `
 		SELECT m.ordinal, tc.call_index, tc.tool_name, tc.category,
-			COALESCE(tc.tool_use_id, ''), COALESCE(tc.input_json, ''),
+			tc.tool_use_id, COALESCE(tc.input_json, ''),
 			COALESCE(tc.skill_name, ''), COALESCE(tc.result_content_length, 0),
 			COALESCE(tc.result_content, ''),
 			COALESCE(tc.subagent_session_id, ''),
