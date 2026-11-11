@@ -67,33 +67,76 @@ func TestSetupReportsSharedChoiceWriteFailure(t *testing.T) {
 	cfg, err := config.LoadReadOnly()
 	require.NoError(t, err)
 	database := dbtest.OpenTestDBAt(t, filepath.Join(dir, "sessions.db"))
+	dbtest.SeedSessionWithMessages(t, database, "session-one", "sample", []db.Message{dbtest.UserMsg("session-one", 0, "startup indexing")})
+	started, resume := make(chan struct{}), make(chan struct{})
+	release := sync.OnceFunc(func() { close(resume) })
+	encoder := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var request struct {
+			Input []string `json:"input"`
+		}
+		if !assert.NoError(t, json.UnmarshalRead(r.Body, &request)) {
+			w.WriteHeader(http.StatusBadRequest)
+			return
+		}
+		close(started)
+		select {
+		case <-resume:
+		case <-r.Context().Done():
+			return
+		}
+		writeEmbeddingsResponse(t, w, len(request.Input), 768)
+	}))
+	defer encoder.Close()
 	oldInspect, oldEndpoint := inspectLocalEmbeddings, localEmbeddingEndpoint
 	t.Cleanup(func() { inspectLocalEmbeddings, localEmbeddingEndpoint = oldInspect, oldEndpoint })
 	inspectLocalEmbeddings = func(context.Context, embedlocal.Options) (embedlocal.Status, error) {
 		return embedlocal.Status{}, nil
 	}
 	localEmbeddingEndpoint = func(context.Context, embedlocal.Options) (string, error) {
-		return "http://127.0.0.1:1/v1", nil
+		return encoder.URL + "/v1", nil
 	}
-	owner, err := newLiveVectorServing(t.Context(), cfg, database, nil, config.LoadReadOnly)
+	idled := make(chan struct{})
+	idle := server.NewIdleTracker(time.Second, func() { close(idled) })
+	owner, err := newLiveVectorServing(t.Context(), cfg, database, idle, config.LoadReadOnly)
 	require.NoError(t, err)
-	defer func() { require.NoError(t, owner.Close()) }()
+	defer func() { release(); require.NoError(t, owner.Close()) }()
 	require.NoError(t, os.WriteFile(filepath.Join(home, ".kenn"), []byte("block directory"), 0o600))
 	require.NoError(t, owner.Setup(0, "built-in"))
 	<-owner.done
+	select {
+	case <-started:
+	case <-time.After(10 * time.Second):
+		require.FailNow(t, "indexing did not start")
+	}
 	status, err := owner.SetupStatus(t.Context())
 	require.NoError(t, err)
 	assert.Equal(t, "turn-on", status.Action)
 	assert.Contains(t, status.Error, "Can't save across apps")
+	idleCtx, stopIdle := context.WithCancel(t.Context())
+	idleDone := make(chan struct{})
+	go func() { defer close(idleDone); idle.Run(idleCtx) }()
+	defer func() { stopIdle(); <-idleDone }()
+	select {
+	case <-idled:
+		require.FailNow(t, "daemon idled while indexing")
+	case <-time.After(2 * time.Second):
+	}
+	release()
+	select {
+	case <-idled:
+	case <-time.After(10 * time.Second):
+		require.FailNow(t, "daemon did not idle after indexing")
+	}
 }
 
 func TestOllamaEndpointChangesBeforeSetup(t *testing.T) {
 	for _, tc := range []struct {
-		name, endpoint string
-		err            error
+		name, endpoint  string
+		err             error
+		ollamaAvailable bool
 	}{
 		{name: "Ollama disappeared after endpoint resolution", endpoint: "http://127.0.0.1:10001/v1"},
-		{name: "endpoint disappeared", err: embedlocal.ErrNotFound},
+		{name: "endpoint disappeared", err: embedlocal.ErrNotFound, ollamaAvailable: true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			setTestHome(t, t.TempDir())
@@ -106,7 +149,7 @@ func TestOllamaEndpointChangesBeforeSetup(t *testing.T) {
 			var inspections int
 			inspectLocalEmbeddings = func(context.Context, embedlocal.Options) (embedlocal.Status, error) {
 				inspections++
-				return embedlocal.Status{OllamaAvailable: tc.err != nil || inspections == 1}, nil
+				return embedlocal.Status{OllamaAvailable: tc.ollamaAvailable || inspections == 1}, nil
 			}
 			localEmbeddingEndpoint = func(context.Context, embedlocal.Options) (string, error) { return tc.endpoint, tc.err }
 			owner, err := newLiveVectorServing(t.Context(), cfg, database, nil, config.LoadReadOnly)

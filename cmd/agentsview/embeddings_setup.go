@@ -328,7 +328,7 @@ func (v *liveVectorServing) startSetup(deployment config.VectorEmbeddingsServerC
 		manager := v.serving.manager
 		close(v.done)
 		v.mu.Unlock()
-		if err == nil && manager != nil {
+		if manager != nil {
 			manager.Wait()
 		}
 	}()
