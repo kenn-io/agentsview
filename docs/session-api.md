@@ -1129,6 +1129,7 @@ agentsview session usage <id> [--format json] [--own-only] [--no-sync] [--wait]
 | `session_total`         | Present when the agent recorded a total for the whole session (Claude Code `cost-state`). `source`, `subagent_scope` (`included`, `excluded`, or omitted when unknown), `cost`, `incomplete` when the agent could not price every model, and per-model `models` token counts and costs. It overlaps the usage rows, so it is never part of `cost` or the token totals; compare it with a result that includes subagents when `subagent_scope` is `included`. The human output shows it as an `Agent total:` line |
 | `server_running`        | `true` when the report came from an already-running daemon                                                                                                                                                                                       |
 | `refresh_incomplete`   | Present as `true` when a requested source refresh was refused or failed; the result still contains archived totals                                                                                                                                 |
+| `wait_incomplete`      | Present as `true` when an archive-only wait failed; the result contains saved totals |
 | `rollup_cost`           | REST only, with `rollup=true`; integer microdollar object present only when `has_rollup_cost` is true, carrying the complete cost across the root and explicit subagent descendants                                                              |
 | `has_rollup_cost`       | REST only, with `rollup=true`; true only when at least one contributing row exists and every contributing row is priced                                                                                                                          |
 | `rollup_subagent_count` | REST only, with `rollup=true`; count of reachable explicit subagent descendants, including those without usage rows                                                                                                                              |
@@ -1285,8 +1286,8 @@ and refresh a shared 30-second budget after daemon discovery. When startup is
 deferred, combined usage starts it once; it does not start an archive rebuild.
 After pending work clears, the command resolves the ID again. Only a confirmed
 parent lock refusal permits a refresh retry. If waiting fails or expires, the
-command reads available saved totals and marks an incomplete refresh. An ID
-that is still absent while work remains pending returns a retry error.
+command reads available saved totals and reports that the wait did not finish.
+An ID that is still absent while work remains pending returns a retry error.
 
 Daemon API 15 adds `sync_pending`, which stays true while ingestion catches up
 after an idle period. Older local clients must upgrade to interpret it. The
@@ -1296,9 +1297,11 @@ catch-up is incomplete. A required parser rebuild uses the stale header
 independently.
 
 HTTP `--own-only` and `--no-sync` read only the archive. With `--wait`, they
-observe pending work without starting sync. Direct and PostgreSQL reads do not
-wait for a daemon. HTTP `--wait` requires daemon API 16; upgrade or restart
-an older server. Direct mode still refreshes the named transcript. Combined HTTP
+observe pending work without starting sync. If the wait fails, the command
+warns and JSON sets `wait_incomplete: true` without marking a refresh. Direct
+and PostgreSQL reads do not wait for a daemon. HTTP `--wait` requires daemon
+API 16; upgrade or restart an older server, and upgrade the client for a newer
+server API. Direct mode still refreshes the named transcript. Combined HTTP
 refresh requires daemon API 12; upgrade or restart older servers, or use
 `--no-sync`. Archived combined reads require API 6. `POST /api/v1/sessions/sync`
 returns HTTP 409 for a stale local archive for every caller, including

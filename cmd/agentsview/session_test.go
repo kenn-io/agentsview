@@ -2802,6 +2802,7 @@ func TestSessionUsageWaitRemoteCapability(t *testing.T) {
 		ownOnly, noSync, supported bool
 	}{
 		{name: "old combined", version: 15},
+		{name: "future combined", version: server.APIVersion + 1},
 		{name: "old own only", version: 15, ownOnly: true},
 		{name: "old no sync", version: 15, noSync: true},
 		{name: "supported own only", version: server.UsageWaitAPIVersion, ownOnly: true, supported: true},
@@ -2827,7 +2828,11 @@ func TestSessionUsageWaitRemoteCapability(t *testing.T) {
 			cmd := sessionUsageCommand(t, args...)
 			out, _, err := sessionUsageDataForCommand(cmd, "remote-session")
 			if !tc.supported {
-				require.ErrorContains(t, err, "does not support --wait")
+				if tc.version > server.APIVersion {
+					require.ErrorContains(t, err, "newer than this client supports")
+				} else {
+					require.ErrorContains(t, err, "does not support --wait")
+				}
 				assert.Nil(t, out)
 				assert.Equal(t, []string{"/api/v1/version"}, requests.RequestPath)
 				return
@@ -2891,4 +2896,77 @@ func TestSessionUsageWaitCancellation(t *testing.T) {
 	<-statusSeen
 	cancel()
 	assert.ErrorIs(t, <-done, context.Canceled)
+}
+
+func TestSessionUsageArchiveOnlyWaitIncomplete(t *testing.T) {
+	previous := sessionUsageWaitTimeout
+	sessionUsageWaitTimeout = 100 * time.Millisecond //nolint:kennlint // deadlinetest: verifies the pending wait expires
+	t.Cleanup(func() { sessionUsageWaitTimeout = previous })
+	for _, tc := range []struct {
+		name                         string
+		ownOnly, noSync, statusError bool
+	}{
+		{name: "own only pending", ownOnly: true},
+		{name: "no sync pending", noSync: true},
+		{name: "own only status error", ownOnly: true, statusError: true},
+		{name: "no sync status error", noSync: true, statusError: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ts, _ := newRemoteUsageServer(t, remoteUsageSpec{canonicalID: "remote-session"})
+			original := ts.Config.Handler
+			ts.Config.Handler = http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if r.URL.Path == "/api/v1/sync/status" {
+					if tc.statusError {
+						http.Error(w, "unavailable", http.StatusServiceUnavailable)
+					} else {
+						writeJSONResponse(w, `{"archive_stale":true}`)
+					}
+					return
+				}
+				original.ServeHTTP(w, r)
+			})
+			stderr := captureStderr(t, func() {
+				out, code, err := httpSessionUsageData(t.Context(), ts.URL, "", sessionUsageQuery{SessionID: "remote-session", Wait: true, OwnOnly: tc.ownOnly, NoSync: tc.noSync})
+				require.NoError(t, err)
+				require.NotNil(t, out)
+				assert.Equal(t, tokenUseExitOK, code)
+				assert.True(t, out.WaitIncomplete)
+				assert.False(t, out.RefreshIncomplete)
+				data, err := json.Marshal(out)
+				require.NoError(t, err)
+				assert.Contains(t, string(data), `"wait_incomplete":true`)
+				var human strings.Builder
+				require.NoError(t, renderSessionUsageHuman(&human, out))
+				assert.Contains(t, human.String(), "Waiting for ingestion did not finish")
+			})
+			assert.Contains(t, stderr, "waiting for ingestion did not finish")
+		})
+	}
+}
+
+func TestSessionUsageWaitExpiryAvoidsFallbackLookup(t *testing.T) {
+	previous := sessionUsageWaitTimeout
+	sessionUsageWaitTimeout = 100 * time.Millisecond //nolint:kennlint // deadlinetest: verifies no lookup follows expiry
+	t.Cleanup(func() { sessionUsageWaitTimeout = previous })
+	ts, _ := newRemoteUsageServer(t, remoteUsageSpec{canonicalID: "remote-session"})
+	original := ts.Config.Handler
+	pending := false
+	lookupsAfterPending := 0
+	ts.Config.Handler = http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/api/v1/sync/status" {
+			pending = true
+			writeJSONResponse(w, `{"archive_stale":true}`)
+			return
+		}
+		if r.URL.Path == "/api/v1/sessions/remote-session" && pending {
+			lookupsAfterPending++
+		}
+		original.ServeHTTP(w, r)
+	})
+	out, _, err := httpSessionUsageData(t.Context(), ts.URL, "", sessionUsageQuery{SessionID: "remote-session", Wait: true})
+	require.NoError(t, err)
+	require.NotNil(t, out)
+	assert.Equal(t, 42, out.TotalOutputTokens)
+	assert.True(t, out.RefreshIncomplete)
+	assert.Zero(t, lookupsAfterPending)
 }
