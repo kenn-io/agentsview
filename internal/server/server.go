@@ -76,7 +76,9 @@ type VersionInfo struct {
 // Bump it when a client-visible contract cannot be decoded safely by an older
 // CLI or daemon.
 const (
-	APIVersion = 25
+	APIVersion = 26
+	// UsageWaitAPIVersion supports bounded usage waits and safe refresh retries.
+	UsageWaitAPIVersion = 26
 	// KataAPIVersion is the first daemon API that serves /api/v1/kata/status.
 	KataAPIVersion = 14
 	// FrictionAPIVersion is the first daemon API that serves
