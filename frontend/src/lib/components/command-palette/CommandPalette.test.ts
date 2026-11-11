@@ -584,7 +584,7 @@ describe("CommandPalette", () => {
       });
     if (result === "conflict") {
       mockEmbeddingsService.postApiV1EmbeddingsSetup.mockRejectedValue(
-        new ApiError(409, "provider changed"),
+        new ApiError(409, "provider changed", "embeddings_provider_changed"),
       );
     } else {
       mockEmbeddingsService.postApiV1EmbeddingsSetup.mockResolvedValue({ started: true });

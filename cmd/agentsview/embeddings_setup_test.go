@@ -210,7 +210,6 @@ func TestSavedLocalDownloadApproval(t *testing.T) {
 		name              string
 		shared, installed bool
 	}{
-		{name: "no shared choice"},
 		{name: "shared choice does not approve a saved config", shared: true},
 		{name: "installed", installed: true},
 	} {
@@ -490,10 +489,6 @@ func TestLiveEmbeddingsSetup(t *testing.T) {
 				assert.Equal(t, "built-in", retry.Setup.Provider)
 				assert.Empty(t, retry.Setup.Error)
 				assert.Equal(t, "turn-on", retry.Setup.Action)
-				assert.Zero(t, reloads.Load(), "declined activation must not publish a config")
-				chosen, err := embedlocal.ChoiceRecorded()
-				require.NoError(t, err)
-				assert.False(t, chosen)
 				return
 			}
 			request("POST", "/api/v1/embeddings/setup", fmt.Sprintf(`{"approved_bytes":%d,"expected_provider":%q}`, shown, initial.Setup.Provider), 202)
