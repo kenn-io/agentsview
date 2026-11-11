@@ -37,14 +37,14 @@ func writeJSONFile(t *testing.T, path string, value any) {
 
 func writeJSONLFile(t *testing.T, path string, records ...any) {
 	t.Helper()
-	var content string
+	var content []byte
 	for _, record := range records {
 		raw, err := json.Marshal(record)
 		require.NoError(t, err)
-		content += string(raw) + "\n"
+		content = append(append(content, raw...), '\n')
 	}
 	require.NoError(t, os.MkdirAll(filepath.Dir(path), 0o755))
-	require.NoError(t, os.WriteFile(path, []byte(content), 0o644))
+	require.NoError(t, os.WriteFile(path, content, 0o644))
 }
 
 // usageOnlyCase is a native session with a user prompt, one visible reply,
@@ -64,6 +64,7 @@ func usageOnlyCases() []usageOnlyCase {
 			agent:     parser.AgentOpenCode,
 			sessionID: "opencode:ses_usage_only",
 			write: func(t *testing.T, dir string) {
+				t.Helper()
 				oc := createOpenCodeDB(t, dir)
 				oc.addProject(t, "prj_usage", "/workspace/project-a")
 				oc.addSession(t, "ses_usage_only", "prj_usage", 1_000, 5_000)
@@ -102,6 +103,7 @@ func usageOnlyCases() []usageOnlyCase {
 			agent:     parser.AgentForge,
 			sessionID: "forge:usage-only",
 			write: func(t *testing.T, dir string) {
+				t.Helper()
 				text := func(role, content string, completion int) map[string]any {
 					return map[string]any{
 						"message": map[string]any{"text": map[string]any{
@@ -135,6 +137,7 @@ func usageOnlyCases() []usageOnlyCase {
 			agent:     parser.AgentCline,
 			sessionID: "cline:usage-only",
 			write: func(t *testing.T, dir string) {
+				t.Helper()
 				sessionDir := filepath.Join(dir, "data", "sessions", "usage-only")
 				writeJSONFile(t, filepath.Join(sessionDir, "usage-only.json"), map[string]any{
 					"session_id": "usage-only", "cwd": "/workspace/project-a",
@@ -180,6 +183,7 @@ func usageOnlyCases() []usageOnlyCase {
 			agent:     parser.AgentGemini,
 			sessionID: "gemini:usage-only",
 			write: func(t *testing.T, dir string) {
+				t.Helper()
 				reply := func(id, ts, content string, output int) map[string]any {
 					return map[string]any{
 						"id": id, "timestamp": ts, "type": "gemini", "content": content,
