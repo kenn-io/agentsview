@@ -2172,8 +2172,9 @@ are not yet supported. Archive-only fork sessions cannot be installed; select a
 session with a native Claude UUID. The transcript and companions together are
 limited to 512 MiB. `--server`, `--server-token-file`, and `--pg` are
 unavailable. Use `--json` for the source, installed paths, checkout, command,
-and installed or unchanged status. Claude's native home and supported environment overrides
-determine the destination, independently of discovery roots.
+and installed or unchanged status. Claude's native home and supported
+environment overrides determine the destination, independently of discovery
+roots.
 An explicitly set `CLAUDE_CONFIG_DIR` must be an absolute path; the printed
 command preserves its spelling so Claude uses the same credentials.
 
