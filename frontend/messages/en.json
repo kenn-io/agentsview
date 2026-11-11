@@ -2877,7 +2877,7 @@
   "analytics_tool_empty_explanation": "{count}/{total} empty results among known outcomes.",
   "analytics_tool_repeat_explanation": "{count}/{total} identical or near-identical follow-ups among analyzed calls.",
   "analytics_tool_recovery_explanation": "{count}/{total} recovered sequences. Open: {open}. Unknown: {unknown}.",
-  "analytics_tool_coverage_explanation": "Analyzed / total calls. Some need analysis.",
+  "analytics_tool_coverage_explanation": "Analyzed / total. Some may need analysis.",
   "analytics_tool_recovery_note": "Recovery means a later call returned content. The tool that started the sequence owns its recovery rate.",
   "analytics_tool_evidence_count": [
     {
