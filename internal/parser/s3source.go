@@ -204,15 +204,11 @@ func parseS3URI(uri string) (bucket, key string) {
 // listS3 lists every object under an s3://bucket/prefix, returning each
 // object's full s3:// URI plus source metadata.
 func listS3(uri string) ([]S3Object, error) {
-	return listS3Context(context.Background(), uri)
+	return ListS3ObjectsContext(context.Background(), uri)
 }
 
 // ListS3ObjectsContext lists objects under a prefix for a caller-controlled read.
 func ListS3ObjectsContext(ctx context.Context, uri string) ([]S3Object, error) {
-	return listS3Context(ctx, uri)
-}
-
-func listS3Context(ctx context.Context, uri string) ([]S3Object, error) {
 	bucket, prefix := parseS3URI(uri)
 	cl, err := s3Client(ctx, bucket)
 	if err != nil {

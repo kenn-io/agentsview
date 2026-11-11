@@ -9,10 +9,12 @@ import (
 	"os"
 	"path"
 	"path/filepath"
+	"slices"
 	"strings"
 
 	"go.kenn.io/agentsview/internal/capture"
 	"go.kenn.io/agentsview/internal/config"
+	"go.kenn.io/agentsview/internal/ctxio"
 	"go.kenn.io/agentsview/internal/db"
 	"go.kenn.io/agentsview/internal/parser"
 	"go.kenn.io/agentsview/internal/remotesync"
@@ -62,14 +64,7 @@ func Materialize(ctx context.Context, cfg config.Config, session *db.Session, cw
 		}
 		files, err = readS3Source(ctx, cfg, session.Machine, source, id)
 	} else if host != "" {
-		allowed := false
-		for _, remote := range cfg.RemoteHosts {
-			if remote.Host == host {
-				allowed = true
-				break
-			}
-		}
-		if !allowed {
+		if !slices.ContainsFunc(cfg.RemoteHosts, func(remote config.RemoteHost) bool { return remote.Host == host }) {
 			return Result{}, errors.New("session host is not configured")
 		}
 		root := remotesync.MirrorDir(cfg.DataDir, host)
@@ -88,9 +83,6 @@ func Materialize(ctx context.Context, cfg config.Config, session *db.Session, cw
 	}
 	if err != nil {
 		return Result{}, fmt.Errorf("reading native transcript: %w", err)
-	}
-	if len(files) == 0 {
-		return Result{}, errors.New("native transcript is unavailable from configured sources")
 	}
 	primary, err := clearClaudeWorktree(files[0].data, id)
 	if err != nil {
@@ -196,9 +188,6 @@ func readLocalSource(ctx context.Context, root, name, id string) ([]sourceFile, 
 				return err
 			}
 			if entry.IsDir() {
-				if !within(root, name) {
-					return errors.New("sidecar escapes source root")
-				}
 				return nil
 			}
 			if !entry.Type().IsRegular() || !within(root, name) {
@@ -246,31 +235,11 @@ func readFile(ctx context.Context, name string) ([]byte, os.FileInfo, error) {
 	if err != nil {
 		return nil, nil, err
 	}
-	data, err := readBounded(contextReader{ctx: ctx, r: f}, maxSourceBytes)
+	data, err := readBounded(ctxio.Reader{Context: ctx, Reader: f}, maxSourceBytes)
 	if err != nil {
 		return nil, nil, err
 	}
-	after, err := f.Stat()
-	if err != nil {
-		return nil, nil, err
-	}
-	current, err := os.Stat(name)
-	if err != nil || !os.SameFile(before, current) || !os.SameFile(before, after) || before.Size() != after.Size() || before.ModTime() != after.ModTime() || after.Size() != current.Size() || after.ModTime() != current.ModTime() {
-		return nil, nil, fmt.Errorf("source changed while reading %s; retry when it is idle", name)
-	}
-	return data, after, nil
-}
-
-type contextReader struct {
-	ctx context.Context
-	r   io.Reader
-}
-
-func (r contextReader) Read(p []byte) (int, error) {
-	if err := r.ctx.Err(); err != nil {
-		return 0, err
-	}
-	return r.r.Read(p)
+	return data, before, nil
 }
 func readBounded(r io.Reader, limit int64) ([]byte, error) {
 	data, err := io.ReadAll(io.LimitReader(r, limit+1))
@@ -309,9 +278,6 @@ func readS3Source(ctx context.Context, cfg config.Config, machine, uri, id strin
 	if !allowed {
 		return nil, errors.New("S3 source is outside configured roots")
 	}
-	if _, err := p.S3TempRelPath(uri); err != nil {
-		return nil, err
-	}
 	var total int64
 	fetch := func(uri string) ([]byte, error) {
 		r, err := parser.FetchS3ObjectContext(ctx, uri)
@@ -319,7 +285,7 @@ func readS3Source(ctx context.Context, cfg config.Config, machine, uri, id strin
 			return nil, err
 		}
 		defer r.Close()
-		data, err := readBounded(contextReader{ctx: ctx, r: r}, maxSourceBytes-total)
+		data, err := readBounded(ctxio.Reader{Context: ctx, Reader: r}, maxSourceBytes-total)
 		total += int64(len(data))
 		return data, err
 	}
@@ -336,13 +302,10 @@ func readS3Source(ctx context.Context, cfg config.Config, machine, uri, id strin
 			return nil, err
 		}
 		for _, obj := range objects {
-			rel, ok := strings.CutPrefix(obj.URI, base+"/")
-			if ok && obj.Size == 0 && strings.HasPrefix(rel, sub+"/") && strings.HasSuffix(rel, "/") {
-				trimmed := strings.TrimSuffix(rel, "/")
-				if !strings.Contains(trimmed, `\`) && path.Clean(trimmed) == trimmed {
-					continue
-				}
+			if obj.Size == 0 && strings.HasSuffix(obj.URI, "/") {
+				continue
 			}
+			rel, ok := strings.CutPrefix(obj.URI, base+"/")
 			if !ok || !strings.HasPrefix(rel, sub+"/") || path.Clean(rel) != rel || strings.Contains(rel, `\`) {
 				return nil, errors.New("unsafe S3 sidecar path")
 			}

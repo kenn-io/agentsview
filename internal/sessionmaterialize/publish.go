@@ -30,15 +30,10 @@ func publishFiles(ctx context.Context, files []installFile) (changed bool, err e
 			err = fmt.Errorf("partial publication; retry to reuse installed files: %w", err)
 		}
 	}()
-	seen := make(map[string]bool, len(files))
 	for i, file := range files {
 		if err := ctx.Err(); err != nil {
 			return false, err
 		}
-		if seen[file.path] {
-			return false, fmt.Errorf("duplicate destination: %s", file.path)
-		}
-		seen[file.path] = true
 		if same, err := identicalDestination(file); err != nil {
 			return false, err
 		} else if same {
