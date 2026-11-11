@@ -517,6 +517,44 @@ func TestApplyArtifactImportedSessionPreservesLocalCollision(t *testing.T) {
 	assert.Equal(t, map[string]string{gid: imported.ManifestHash}, provenance)
 }
 
+func TestApplyArtifactImportedSessionPreservesDeletedPush(t *testing.T) {
+	database := testDB(t)
+	ctx := t.Context()
+	origin, gid := "peer-a1b2c3", "peer-a1b2c3~native"
+	receipt, write := sessionPushFixture(gid)
+	receipt.SourceOrigin = origin
+	write.Session.Machine = origin
+	_, err := database.ApplySessionPush(ctx, receipt, write)
+	require.NoError(t, err)
+	imported := ArtifactImportedSession{Origin: origin, GID: gid, ManifestHash: strings.Repeat("a", 64), ImportedSessionID: gid}
+	result, err := database.ApplyArtifactImportedSession(ctx, imported, write)
+	require.NoError(t, err)
+	assert.True(t, result.Suppressed)
+	messages, err := database.GetAllMessages(ctx, gid)
+	require.NoError(t, err)
+	require.Len(t, messages, 1)
+	assert.Equal(t, "first snapshot", messages[0].Content)
+	require.NoError(t, database.DeleteSession(ctx, gid))
+	imported.ManifestHash = strings.Repeat("b", 64)
+	landing := ArtifactCheckpointLanding{Origin: origin, Sequence: 7, CheckpointSHA256: strings.Repeat("c", 64), CheckpointSize: 321}
+	entry := ArtifactCheckpointSession{GID: gid, ManifestHash: imported.ManifestHash}
+	_, err = database.RecordArtifactPeerCheckpointHead(ctx, ArtifactPeerCheckpointHead(landing))
+	require.NoError(t, err)
+	require.NoError(t, database.BeginArtifactCheckpointStage(ctx, landing, 1))
+	require.NoError(t, database.StageArtifactCheckpointSessions(ctx, landing, []ArtifactCheckpointSession{entry}))
+	require.NoError(t, database.CompleteArtifactCheckpointStage(ctx, landing, 1))
+	result, err = database.ApplyStagedArtifactImportedSession(ctx, landing, entry, imported, write)
+	require.NoError(t, err)
+	assert.True(t, result.Suppressed)
+	require.NoError(t, database.RecordArtifactCheckpointLandingFromStage(ctx, landing))
+	session, err := database.GetSession(ctx, gid)
+	require.NoError(t, err)
+	assert.Nil(t, session)
+	hashes, err := database.ArtifactImportedManifestHashes(ctx, origin, []string{gid})
+	require.NoError(t, err)
+	assert.Equal(t, map[string]string{gid: imported.ManifestHash}, hashes)
+}
+
 func TestApplyArtifactImportedSessionProjectsToolResultImages(t *testing.T) {
 	database := testDB(t)
 	database.SetToolResultImages(config.ToolResultImagesOffload)

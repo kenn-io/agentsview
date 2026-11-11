@@ -11262,6 +11262,13 @@ func (e *Engine) collectAndBatchWithOptions(
 			r.releaseAll()
 			continue
 		}
+		if r.agent == parser.AgentAntigravityCLI {
+			for _, cause := range r.retryCauses {
+				if reserved[applyIDPrefixToID(e.idPrefix, cause.sessionID)] {
+					stats.Failed--
+				}
+			}
+		}
 		if r.incremental != nil && reserved[applyIDPrefixToID(e.idPrefix, r.incremental.sessionID)] {
 			stats.RecordSkip()
 			stats.filesOK++
@@ -11523,6 +11530,9 @@ func (e *Engine) collectAndBatchWithOptions(
 						continue
 					}
 					id := applyIDPrefixToID(e.idPrefix, pr.Session.ID)
+					if reserved[id] {
+						continue
+					}
 					stored, err := savedHistory(ctx, store, id)
 					if err != nil {
 						cause := fmt.Sprintf("read saved history of deferred session %s: %v", id, err)

@@ -235,6 +235,44 @@ func TestSessionPushPreservesExistingExternalParent(t *testing.T) {
 	assert.Equal(t, "local-parent", link.ParentSessionID)
 }
 
+func TestSessionPushLauncherParentIgnoresExistingLocalReference(t *testing.T) {
+	d := testDB(t)
+	ctx := t.Context()
+	insertSession(t, d, "local-spawner", "project")
+	insertSession(t, d, "launcher", "project")
+	require.NoError(t, d.InsertMessages(ctx, []Message{{SessionID: "local-spawner", Ordinal: 0, Role: "assistant", ToolCalls: []ToolCall{{ToolName: "Task", SubagentSessionID: "snapshot"}}}}))
+	receipt, write := sessionPushFixture("snapshot")
+	receipt.ExternalParentSessionID = new("launcher")
+	created, err := d.ApplySessionPush(ctx, receipt, write)
+	require.NoError(t, err)
+	require.True(t, created)
+	link, err := d.GetSessionExternalParent(ctx, "snapshot")
+	require.NoError(t, err)
+	assert.True(t, link.Applied)
+	session, err := d.GetSession(ctx, "snapshot")
+	require.NoError(t, err)
+	require.Equal(t, Ptr("launcher"), session.ParentSessionID)
+}
+
+func TestSessionPushReceiverParentIgnoresExistingLocalReference(t *testing.T) {
+	d := testDB(t)
+	ctx := t.Context()
+	insertSession(t, d, "local-spawner", "project")
+	insertSession(t, d, "launcher", "project")
+	require.NoError(t, d.InsertMessages(ctx, []Message{{SessionID: "local-spawner", Ordinal: 0, Role: "assistant", ToolCalls: []ToolCall{{ToolName: "Task", SubagentSessionID: "snapshot"}}}}))
+	_, err := d.SetSessionExternalParent(ctx, "snapshot", "launcher")
+	require.NoError(t, err)
+	receipt, write := sessionPushFixture("snapshot")
+	_, err = d.ApplySessionPush(ctx, receipt, write)
+	require.NoError(t, err)
+	link, err := d.GetSessionExternalParent(ctx, "snapshot")
+	require.NoError(t, err)
+	assert.True(t, link.Applied)
+	session, err := d.GetSession(ctx, "snapshot")
+	require.NoError(t, err)
+	assert.Equal(t, Ptr("launcher"), session.ParentSessionID)
+}
+
 func TestSessionPushRejectsParentCycleWithoutSaving(t *testing.T) {
 	d := testDB(t)
 	ctx := t.Context()

@@ -107,6 +107,11 @@ func (db *DB) ApplySessionPush(
 		}
 		return false, err
 	}
+	if _, err := tx.ExecContext(ctx, `
+		INSERT INTO session_push_receipts (session_id, source_origin, payload_hash)
+		VALUES (?, ?, ?)`, receipt.SessionID, receipt.SourceOrigin, receipt.PayloadHash); err != nil {
+		return false, fmt.Errorf("recording session push receipt: %w", err)
+	}
 	if receipt.ExternalParentSessionID != nil {
 		var exists bool
 		if err := tx.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM session_external_parents WHERE session_id = ?)`, receipt.SessionID).Scan(&exists); err != nil {
@@ -121,10 +126,11 @@ func (db *DB) ApplySessionPush(
 			}
 		}
 	}
-	if _, err := tx.ExecContext(ctx, `
-		INSERT INTO session_push_receipts (session_id, source_origin, payload_hash)
-		VALUES (?, ?, ?)`, receipt.SessionID, receipt.SourceOrigin, receipt.PayloadHash); err != nil {
-		return false, fmt.Errorf("recording session push receipt: %w", err)
+	if _, err := applySessionExternalParentsFor(ctx, tx.ExecContext,
+		func(ctx context.Context, query string, args ...any) rowScanner {
+			return tx.QueryRowContext(ctx, query, args...)
+		}, []string{receipt.SessionID}); err != nil {
+		return false, err
 	}
 	if err := tx.Commit(); err != nil {
 		return false, fmt.Errorf("committing session push: %w", err)
@@ -160,7 +166,7 @@ func (db *DB) SessionPushReservations(ctx context.Context, ids []string) (map[st
 }
 
 // checkSessionPushReservationTx applies to ordinary ingestion, not curation or
-// deletion. The first push writes its receipt after its transcript transaction.
+// deletion. The first push records its receipt after writing the transcript.
 func checkSessionPushReservationTx(ctx context.Context, tx *sql.Tx, id string) error {
 	var reserved bool
 	if err := tx.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM session_push_receipts WHERE session_id=?)`, id).Scan(&reserved); err != nil {
