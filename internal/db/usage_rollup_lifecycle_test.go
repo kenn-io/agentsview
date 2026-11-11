@@ -1001,10 +1001,9 @@ func TestUsageRollupDeferredAccountBuilds(t *testing.T) {
 		seedUsageSnapshotSession(t, database, id, "project-a", "2026-08-10T09:00:00Z", 0, 10, "model-a")
 		databaseID, err := database.GetDatabaseID(t.Context())
 		require.NoError(t, err)
-		source := &rollupRaceSource{rollupAccountSource: rollupAccountSource{
-			database: database, databaseID: databaseID, revision: 10,
-			accounts: []UsageSourceAccount{{ID: 1, Agent: "cursor", Timestamp: "2026-08-10T09:00:00Z", Model: "model-a", OutputTokens: 10, DedupKey: "shared"}},
-		}}
+		source := &rollupRaceSource{}
+		source.database, source.databaseID, source.revision = database, databaseID, 10
+		source.accounts = []UsageSourceAccount{{ID: 1, Agent: "cursor", Timestamp: "2026-08-10T09:00:00Z", Model: "model-a", OutputTokens: 10, DedupKey: "shared"}}
 		reader, err := NewUsageCacheReader(t.TempDir(), source)
 		require.NoError(t, err)
 		t.Cleanup(func() { require.NoError(t, reader.Close()) })
@@ -1134,7 +1133,7 @@ func TestUsageRollupDeferredAccountBuilds(t *testing.T) {
 		unblock()
 		select {
 		case err := <-done:
-			assert.ErrorIs(t, err, ErrUsageCacheWarming)
+			require.ErrorIs(t, err, ErrUsageCacheWarming)
 			assert.False(t, rebuiltAccount.Load(), "the foreground request must defer the account rebuild")
 		case <-time.After(10 * time.Second):
 			require.FailNow(t, "foreground rollup did not finish")

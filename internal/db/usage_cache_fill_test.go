@@ -1072,8 +1072,8 @@ func TestUsagePageFillShardsLargeWindow(t *testing.T) {
 	}, 10*time.Second, 10*time.Millisecond)
 	select {
 	case err := <-done:
-		t.Fatalf("partial request returned before all shards finished: %v", err)
-	case <-time.After(100 * time.Millisecond):
+		require.FailNow(t, "partial request returned before all shards finished", "%v", err)
+	default:
 	}
 	secondManager := newUsageCacheManager(database.path)
 	secondManager.attachArchive(database)

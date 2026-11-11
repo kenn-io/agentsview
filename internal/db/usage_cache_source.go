@@ -24,6 +24,9 @@ type UsageSourceSession = usageQuerySession
 // UsageSourceSnapshot contains values copied from one source transaction.
 type UsageSourceSnapshot = usageQuerySnapshot
 
+// ErrUsageSourceUnavailable means the source cannot currently support caching.
+var ErrUsageSourceUnavailable = errors.New("usage cache source unavailable")
+
 // UsageSourceRequest selects a window, explicit sessions, or journal changes.
 // A non-nil IDs selects exactly those sessions, including an empty set.
 type UsageSourceRequest struct {

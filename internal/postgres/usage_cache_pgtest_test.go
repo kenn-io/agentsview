@@ -614,14 +614,43 @@ func TestPGUsageCacheDirectFallbackAndRecovery(t *testing.T) {
 				require.Equal(t, want, got)
 				require.NoError(t, reader.usageCache.WaitWarm(ctx))
 				requireCachedUsageMatchesDirect(t, reader, filter)
+				var output bytes.Buffer
+				previous := log.Writer()
+				log.SetOutput(&output)
+				t.Cleanup(func() { log.SetOutput(previous) })
+				_, err = owner.pg.ExecContext(ctx, dropUsageChangeJournalSQL)
+				require.NoError(t, err)
+				filter.From = "2026-01-01"
+				got, err = reader.GetDailyUsage(ctx, filter)
+				require.NoError(t, err)
+				want, err = (&Store{pg: reader.pg}).GetDailyUsage(ctx, filter)
+				require.NoError(t, err)
+				require.Equal(t, want, got)
+				assert.NotContains(t, output.String(), "falling back to direct read")
 				return
 			}
 			require.NoError(t, reader.ConfigureUsageCache(ctx, directory, roleURL, syncer.schema))
 			require.NotNil(t, reader.usageCache)
+			if name == "late journal installation" {
+				var output bytes.Buffer
+				previous := log.Writer()
+				log.SetOutput(&output)
+				t.Cleanup(func() { log.SetOutput(previous) })
+				want, err := (&Store{pg: reader.pg}).GetDailyUsage(ctx, filter)
+				require.NoError(t, err)
+				for range 10 {
+					got, err := reader.GetDailyUsage(ctx, filter)
+					require.NoError(t, err)
+					require.Equal(t, want, got)
+				}
+				require.NoError(t, reader.usageCache.WaitWarm(ctx))
+				assert.NotContains(t, output.String(), "falling back to direct read")
+				assert.NotContains(t, output.String(), "warming usage cache")
+			}
 			_, err := reader.usageCache.GetDailyUsage(ctx, filter)
 			if name == "initial denial" {
-				require.True(t, isInsufficientPrivilege(err), "cache must preserve the PostgreSQL permission error: %v", err)
-			} else {
+				require.ErrorIs(t, err, db.ErrUsageSourceUnavailable)
+			} else if name != "late journal installation" {
 				require.True(t, isUndefinedTable(err), "cache must preserve the PostgreSQL missing-table error: %v", err)
 			}
 			for _, grouped := range []bool{false, true} {
@@ -705,10 +734,12 @@ func TestPGUsageCacheDefersAccountChange(t *testing.T) {
 	log.SetOutput(&output)
 	t.Cleanup(func() { log.SetOutput(previous) })
 	attachUsageCacheProbe(t, store, t.TempDir())
-	filter := db.UsageFilter{From: "2026-01-01", To: "2026-01-01", Timezone: "UTC"}
+	filter := db.UsageFilter{Timezone: "UTC"}
 	requireCachedUsageMatchesDirect(t, store, filter)
 	store.usageCache.DeferWork()
-	_, err := store.pg.ExecContext(ctx, `INSERT INTO cursor_usage_events(id,agent,occurred_at,model,output_tokens,charged_microdollars,dedup_key) VALUES(1,'cursor','2026-01-01','paid-a',3,300,'account-two')`)
+	before, err := store.usageCache.GetDailyUsage(ctx, filter)
+	require.NoError(t, err)
+	_, err = store.pg.ExecContext(ctx, `INSERT INTO cursor_usage_events(id,agent,occurred_at,model,output_tokens,charged_microdollars,dedup_key) VALUES(1,'cursor','2026-01-01','paid-a',3,300,'account-two')`)
 	require.NoError(t, err)
 	_, err = store.usageCache.GetDailyUsage(ctx, filter)
 	require.ErrorIs(t, err, db.ErrUsageCacheWarming)
@@ -719,5 +750,9 @@ func TestPGUsageCacheDefersAccountChange(t *testing.T) {
 	require.Equal(t, want, got)
 	require.NoError(t, store.usageCache.WaitWarm(ctx))
 	requireCachedUsageMatchesDirect(t, store, filter)
+	cached, err := store.usageCache.GetDailyUsage(ctx, filter)
+	require.NoError(t, err)
+	require.Equal(t, want.Totals.TotalCost, cached.Totals.TotalCost)
+	require.Equal(t, int64(300), cached.Totals.TotalCost.Microdollars-before.Totals.TotalCost.Microdollars)
 	assert.NotContains(t, output.String(), "postgres usage cache: falling back to direct read")
 }

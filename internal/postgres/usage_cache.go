@@ -40,7 +40,8 @@ func (s *Store) ConfigureUsageCache(ctx context.Context, directory, targetURL, s
 }
 
 // WaitUsageCacheWarm waits for background usage cache preparation queued by
-// earlier reads. Without a cache it returns at once.
+// earlier reads. Tests and operators can use it to observe a warm pass.
+// Without a cache it returns at once.
 func (s *Store) WaitUsageCacheWarm(ctx context.Context) error {
 	if s.usageCache == nil {
 		return nil
@@ -62,6 +63,9 @@ func (source *pgUsageCacheSource) SummarizeUsageChanges(ctx context.Context, aft
  COALESCE(bool_or(session_id = ''), false)
  FROM usage_session_changes WHERE revision > $1`, afterRevision).Scan(
 		&summary.Sessions, &summary.Global)
+	if isUndefinedTable(err) || isInsufficientPrivilege(err) {
+		return summary, db.ErrUsageSourceUnavailable
+	}
 	return summary, err
 }
 
@@ -73,19 +77,26 @@ func usageJournalOID(ctx context.Context, q storeExecutor) (uint32, error) {
 
 func (source *pgUsageCacheSource) snapshot(ctx context.Context, view *Store) (db.UsageSourceSnapshot, error) {
 	snapshot := db.UsageSourceSnapshot{MissingTimestampsLast: true}
-	oid, err := usageJournalOID(ctx, view.pg)
-	if err != nil {
-		return snapshot, err
-	}
-	snapshot.DatabaseID = fmt.Sprintf("%s|%d", source.target, oid)
+	var err error
 	snapshot.ChangeRevision, err = view.UsageChangeRevision(ctx)
 	if err != nil {
 		return snapshot, err
 	}
 	if snapshot.ChangeRevision == 0 {
-		return snapshot, errors.New("PostgreSQL usage journal unavailable")
+		return snapshot, db.ErrUsageSourceUnavailable
 	}
+	oid, err := usageJournalOID(ctx, view.pg)
+	if isUndefinedTable(err) || isInsufficientPrivilege(err) {
+		return snapshot, db.ErrUsageSourceUnavailable
+	}
+	if err != nil {
+		return snapshot, err
+	}
+	snapshot.DatabaseID = fmt.Sprintf("%s|%d", source.target, oid)
 	err = view.pg.QueryRowContext(ctx, `SELECT COALESCE((SELECT revision FROM usage_session_changes WHERE session_id=''), 1)`).Scan(&snapshot.CursorHighWater)
+	if isUndefinedTable(err) || isInsufficientPrivilege(err) {
+		return snapshot, db.ErrUsageSourceUnavailable
+	}
 	if err != nil {
 		return snapshot, err
 	}
@@ -254,7 +265,15 @@ func (source *pgUsageCacheSource) StreamUsage(ctx context.Context, ids []string,
 					return err
 				}
 				input, output, write, read, reasoning := pgDailyUsageRowTokens(row)
-				fact := usagefacts.Fact{Source: row.usageSource, Model: row.model, ProviderID: row.providerID, RawTimestamp: pgUsageCacheTime(row.pricingTS), UsesSessionStart: !row.pricingTS.Valid, InputTokens: int64(input), OutputTokens: int64(output), RankingOutputTokens: &rankingOutput, ReasoningTokens: int64(reasoning), CacheCreationTokens: int64(write), CacheReadTokens: int64(read), CacheCreation1hTokens: int64(pgUsageRowCacheCreation1hTokens(row.usageSource, row.tokenJSON, write)), WebSearchRequests: int64(pgDailyUsageRowWebSearchRequests(row)), CostSource: row.costSource, ClaudeMessageID: row.claudeMessageID, ClaudeRequestID: row.claudeRequestID, SourceUUID: row.sourceUUID, UsageDedupKey: row.usageDedupKey, TokenEligible: true, ActivityEligible: activityEligible}
+				fact := usagefacts.Fact{
+					Source: row.usageSource, Model: row.model, ProviderID: row.providerID,
+					RawTimestamp: pgUsageCacheTime(row.pricingTS), UsesSessionStart: !row.pricingTS.Valid,
+					InputTokens: int64(input), OutputTokens: int64(output), RankingOutputTokens: &rankingOutput, ReasoningTokens: int64(reasoning),
+					CacheCreationTokens: int64(write), CacheReadTokens: int64(read), CacheCreation1hTokens: int64(pgUsageRowCacheCreation1hTokens(row.usageSource, row.tokenJSON, write)),
+					WebSearchRequests: int64(pgDailyUsageRowWebSearchRequests(row)), CostSource: row.costSource,
+					ClaudeMessageID: row.claudeMessageID, ClaudeRequestID: row.claudeRequestID, SourceUUID: row.sourceUUID, UsageDedupKey: row.usageDedupKey,
+					TokenEligible: true, ActivityEligible: activityEligible,
+				}
 				fact.TimestampMillis, _, _ = usagefacts.ParseTimestamp(fact.RawTimestamp)
 				fact.TimestampNanos = usagefacts.ParseTimestampNanos(fact.RawTimestamp)
 				if row.messageOrdinal.Valid {
@@ -354,7 +373,7 @@ func directUsageRequired(ctx context.Context, err error) bool {
 }
 
 func logUsageFallback(err error) bool {
-	if !errors.Is(err, db.ErrUsageCacheWarming) {
+	if !errors.Is(err, db.ErrUsageCacheWarming) && !errors.Is(err, db.ErrUsageSourceUnavailable) {
 		log.Printf("postgres usage cache: falling back to direct read: %v", err)
 	}
 	return true
