@@ -29,6 +29,7 @@
   import type { Session } from "../../api/types.js";
   import type {
     PaletteSearchResult,
+    RetainedSearch,
     SearchMode,
   } from "../../stores/search.svelte.js";
 
@@ -45,21 +46,31 @@
     return () => controller.abort();
   });
   let inputRef: HTMLInputElement | undefined = $state(undefined);
-  let project = $state(sessions.filters.project);
-  let selectedIndex: number = $state(0);
-  let inputValue: string = $state(searchStore.query ?? "");
+  // An open after a picked result reopens that search, with the picked
+  // result selected. Any other open starts from the sidebar's project.
+  const restored = searchStore.restore();
+  let project = $state(restored?.project ?? sessions.filters.project);
+  let selectedIndex: number = $state(restored?.selectedIndex ?? 0);
+  let inputValue: string = $state(restored?.query ?? "");
+  // Set when the palette closes on a picked result.
+  let retainOnClose: RetainedSearch | null = null;
   let searchModeOptions = $derived<SegmentedControlOption[]>([
     { value: "fulltext", label: m.command_palette_mode_fulltext() },
     { value: "semantic", label: m.command_palette_mode_semantic() },
     { value: "hybrid", label: m.command_palette_mode_hybrid() },
   ]);
 
-  // Clear state and reset sort whenever the palette is unmounted, regardless
-  // of close path (Escape key, overlay click, command-palette toggle, or any other
-  // mechanism). This ensures stale results and in-flight requests are always
-  // cancelled even when the caller bypasses close().
+  // Closing on a picked result keeps the search for the next open. Every
+  // other close path (Escape key, overlay click, command-palette toggle, or any
+  // other mechanism) clears state and resets sort and range on unmount, so
+  // stale results and in-flight requests are cancelled even when the caller
+  // bypasses close().
   onDestroy(() => {
     searchStore.endSession();
+    if (retainOnClose) {
+      searchStore.retain(retainOnClose);
+      return;
+    }
     searchStore.clear();
     searchStore.resetSort();
     searchStore.resetRange();
@@ -202,11 +213,13 @@
   // starts hydration under the old route, where it can be cancelled
   // or lost (#1190).
   function selectSession(s: Session) {
+    retainSelection(recentSessions.indexOf(s));
     router.navigateToSession(s.id);
     close();
   }
 
   function selectSearchResult(r: PaletteSearchResult) {
+    retainSelection(searchStore.results.indexOf(r));
     router.navigateToSession(r.session_id);
     if (r.ordinal !== -1) {
       ui.scrollToOrdinal(r.ordinal, r.session_id);
@@ -216,6 +229,10 @@
       ui.clearScrollState();
     }
     close();
+  }
+
+  function retainSelection(index: number) {
+    retainOnClose = { query: inputValue, project, selectedIndex: Math.max(index, 0) };
   }
 
   function close() {
