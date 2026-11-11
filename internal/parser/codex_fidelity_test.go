@@ -155,14 +155,18 @@ func TestCodexReasoningUsageAttachment(t *testing.T) {
 			codexReasoningLine(t, tsEarlyS5, []string{"Looking."}, nil, true),
 			testjsonl.CodexMsgJSON("assistant", "done", tsEarlyS5),
 			codexTokenCountTotalsLine(t, tsEarlyS5, 1000, 50, 400, 1000, 50, 400),
-			// A later call with no row of its own stays unattached, as before.
+			// A later call with no row of its own becomes a hidden
+			// usage-only row instead of landing on the older reasoning row.
 			codexTokenCountTotalsLine(t, tsLate, 1100, 20, 900, 2100, 70, 1300),
 		)...)
 		sess, msgs := runCodexParserTest(t, "test.jsonl", content, false)
-		require.Len(t, msgs, 3)
+		require.Len(t, msgs, 4)
 		assert.Empty(t, msgs[1].TokenUsage)
 		assert.Equal(t, 50, msgs[2].OutputTokens)
-		assert.Equal(t, 50, sess.TotalOutputTokens)
+		assert.True(t, msgs[3].IsSystem)
+		assert.Empty(t, msgs[3].Content)
+		assert.Equal(t, 20, msgs[3].OutputTokens)
+		assert.Equal(t, 70, sess.TotalOutputTokens)
 	})
 }
 
@@ -182,12 +186,13 @@ func TestCodexCompactedRecordBecomesBoundary(t *testing.T) {
 				testjsonl.CodexMsgJSON("assistant", "summary reply", tsEarlyS5),
 				codexTokenCountTotalsLine(t, tsEarlyS5, 1000, 50, 400, 1000, 50, 400),
 				codexCompactedLine(t, tsLate, tc.message),
-				// A call with no row of its own must not land on the boundary.
+				// The compaction call has no row of its own. Its usage must
+				// not land on the boundary; it becomes a hidden usage-only row.
 				codexTokenCountTotalsLine(t, tsLate, 1100, 20, 900, 2100, 70, 1300),
 				testjsonl.CodexMsgJSON("user", "next", tsLateS5),
 			)
 			sess, msgs := runCodexParserTest(t, "test.jsonl", content, false)
-			require.Len(t, msgs, 4, "replacement_history is not replayed")
+			require.Len(t, msgs, 5, "replacement_history is not replayed")
 			boundary := msgs[2]
 			assert.True(t, boundary.IsCompactBoundary)
 			assert.True(t, boundary.IsSystem)
@@ -197,8 +202,13 @@ func TestCodexCompactedRecordBecomesBoundary(t *testing.T) {
 			assert.Equal(t, tc.want, boundary.Content)
 			assert.Empty(t, boundary.TokenUsage)
 			assert.Equal(t, 50, msgs[1].OutputTokens)
-			assert.Equal(t, 50, sess.TotalOutputTokens)
-			assert.Equal(t, "next", msgs[3].Content)
+			usageOnly := msgs[3]
+			assert.True(t, usageOnly.IsSystem)
+			assert.False(t, usageOnly.IsCompactBoundary)
+			assert.Empty(t, usageOnly.Content)
+			assert.Equal(t, 20, usageOnly.OutputTokens)
+			assert.Equal(t, 70, sess.TotalOutputTokens)
+			assert.Equal(t, "next", msgs[4].Content)
 		})
 	}
 }

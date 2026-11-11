@@ -132,6 +132,8 @@ The first accepted transcript is immutable in this version. Retrying it returns
 `"status":"unchanged"` without rewriting the receiver's session or curation,
 even if the sender's metadata, usage, or parent link changes. Retries don't
 update the receiver's parent link.
+A sender archive with a new identity cannot retry a previously accepted ID;
+the receiver reports a conflict even when the transcript is unchanged.
 A changed transcript or an existing session with the same ID returns a conflict;
 there is no force replacement. Finish recording a session before pushing it.
 Permanently deleting a pushed session keeps its receipt, so that ID cannot be

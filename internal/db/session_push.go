@@ -23,7 +23,7 @@ var ErrSessionPushConflict = errors.New("session push conflicts with archived se
 // ErrSessionPushNeedsUpgrade means the archive cannot yet protect receipts.
 var ErrSessionPushNeedsUpgrade = errors.New("session push requires archive rebuild")
 
-const SessionPushDataVersion = 175
+const SessionPushDataVersion = 176
 
 // ApplySessionPush atomically publishes a first snapshot and its receipt.
 // Matching receipts are no-ops only while their session still exists outside

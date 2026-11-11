@@ -1404,7 +1404,10 @@ func decodeOpenCodeMessageRowsContext(
 		applyOpenCodeTokenUsage(&pm, md, m.data, msgParts)
 		if strings.TrimSpace(pm.Content) == "" &&
 			!pm.HasToolUse {
-			continue
+			var ok bool
+			if pm, ok = usageOnlyMessage(pm); !ok {
+				continue
+			}
 		}
 
 		parsed = append(parsed, pm)

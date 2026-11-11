@@ -189,12 +189,18 @@ func DecodeSessionPush(data []byte) (db.SessionPushReceipt, db.SessionBatchWrite
 func decodeSessionPush(data []byte) (db.SessionPushReceipt, db.SessionBatchWrite, error) {
 	var zero db.SessionPushReceipt
 	var noWrite db.SessionBatchWrite
+	var header struct {
+		Version int `json:"v"`
+	}
+	if err := json.Unmarshal(data, &header); err != nil {
+		return zero, noWrite, err
+	}
+	if header.Version > 1 {
+		return zero, noWrite, ErrSessionPushFutureDataVersion
+	}
 	var envelope SessionPushEnvelope
 	if err := json.Unmarshal(data, &envelope, json.RejectUnknownMembers(true)); err != nil {
 		return zero, noWrite, err
-	}
-	if envelope.Version > 1 {
-		return zero, noWrite, ErrSessionPushFutureDataVersion
 	}
 	if envelope.Version != 1 || envelope.SessionID == "" || len(envelope.SessionID) > 1024 {
 		return zero, noWrite, errors.New("unsupported version or session ID")

@@ -946,6 +946,15 @@ older form after column migrations and log that startup is waiting; the rebuild
 took about 6 s on that archive and needs no parser resync. Read-only opens use
 whichever form the archive has. PostgreSQL keeps the five-column index.
 
+The terminal candidates query and the message read need no result of each other.
+When a bulk-read slot is free, SQLite runs the terminal query on it beside the
+message read; otherwise it runs the two in turn. PostgreSQL runs them together
+on its pool, with the message read split into one slice per 4,096 sessions, up
+to two; a read snapshot shares one transaction, so there they run in turn.
+Both then derive each session's runs on every available core through
+`activity.DeriveSessionRunsInParallel`, which gives the runs the merged
+candidate stream gives. DuckDB keeps its reads in turn on its single connection.
+
 The terminal candidates query names `idx_messages_assistant_model` with
 `INDEXED BY` for its prior-model lookup. The wider velocity index also covers
 that lookup, and SQLite can otherwise choose it and step back through every

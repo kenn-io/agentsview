@@ -3,10 +3,14 @@ package activity
 import (
 	"cmp"
 	"context"
+	"runtime"
 	"slices"
 	"sort"
+	"sync/atomic"
 	"time"
 	"unsafe"
+
+	"golang.org/x/sync/errgroup"
 )
 
 // Run is a stretch of one session's activity that needs no further
@@ -144,8 +148,11 @@ func (r SessionRuns) pieceTrimmed(i int32) bool {
 // Finish returns the session's runs and resets the builder for the next
 // session, keeping its buffers.
 func (b *SessionRunsBuilder) Finish() SessionRuns {
+	// Appending to nil keeps an empty part nil, as a fresh builder leaves it.
 	runs := SessionRuns{
-		bounds: slices.Clone(b.runs.bounds), trimmed: slices.Clone(b.runs.trimmed), runs: slices.Clone(b.runs.runs),
+		bounds:  append([]int64(nil), b.runs.bounds...),
+		trimmed: append([]uint64(nil), b.runs.trimmed...),
+		runs:    append([]sessionRun(nil), b.runs.runs...),
 	}
 	b.runs.bounds, b.runs.trimmed, b.runs.runs = b.runs.bounds[:0], b.runs.trimmed[:0], b.runs.runs[:0]
 	b.reach, b.reached = 0, false
@@ -179,6 +186,135 @@ func DeriveSessionRuns(
 		runs[id] = builders[i].Finish()
 	}
 	return runs, nil
+}
+
+// SessionCandidates are one session's interval candidates as a backend
+// read them: its message pairs in any order, and its terminal tool
+// candidates in the order the backend's candidate stream emits them.
+type SessionCandidates struct {
+	Pairs, Terminal []IntervalCandidate
+}
+
+// GroupSessionCandidates arranges the candidates a pairing read found for
+// ids as DeriveSessionRunsInParallel takes them. A session's pairs are
+// expected next to each other, as a read that pairs one session at a time
+// appends them; pairs of one session found apart are joined. Each session's
+// terminal candidates keep their order. Candidates of sessions outside ids
+// are dropped.
+func GroupSessionCandidates(ids []string, pairs, terminal []IntervalCandidate) []SessionCandidates {
+	index := make(map[string]int, len(ids))
+	for i, id := range ids {
+		index[id] = i
+	}
+	out := make([]SessionCandidates, len(ids))
+	for lo := 0; lo < len(pairs); {
+		hi := lo + 1
+		for hi < len(pairs) && pairs[hi].SessionID == pairs[lo].SessionID {
+			hi++
+		}
+		if i, ok := index[pairs[lo].SessionID]; ok {
+			if out[i].Pairs == nil {
+				// Capping the capacity makes a later join copy instead of
+				// overwriting the next session's pairs.
+				out[i].Pairs = pairs[lo:hi:hi]
+			} else {
+				out[i].Pairs = append(out[i].Pairs, pairs[lo:hi]...)
+			}
+		}
+		lo = hi
+	}
+	for _, c := range terminal {
+		if i, ok := index[c.SessionID]; ok {
+			out[i].Terminal = append(out[i].Terminal, c)
+		}
+	}
+	return out
+}
+
+// parallelChunk is how many items an EachInParallel worker takes at a
+// time. Sessions differ widely in size, so workers take small chunks in
+// turn instead of one equal share each.
+const parallelChunk = 256
+
+// EachInParallel calls each(w, i) for every i in [0, n) on as many
+// goroutines as can run at once. Every goroutine gets its own w from
+// newWorker, so each may reuse w's scratch space between calls. It stops
+// taking items once ctx is done and returns ctx's error.
+func EachInParallel[W any](ctx context.Context, n int, newWorker func() W, each func(w W, i int)) error {
+	workers := min(runtime.GOMAXPROCS(0), (n+parallelChunk-1)/parallelChunk)
+	var next atomic.Int64
+	g, ctx := errgroup.WithContext(ctx)
+	for range workers {
+		g.Go(func() error {
+			w := newWorker()
+			for {
+				start := int(next.Add(parallelChunk)) - parallelChunk
+				if start >= n {
+					return nil
+				}
+				if err := ctx.Err(); err != nil {
+					return err
+				}
+				for i := start; i < min(start+parallelChunk, n); i++ {
+					each(w, i)
+				}
+			}
+		})
+	}
+	return g.Wait()
+}
+
+// DeriveSessionRunsInParallel is DeriveSessionRuns over the stream that
+// merges each session's terminal candidates into its message pairs, sorted
+// by CandidateLess, as MergeCandidateSlice merges them. sessions[i] holds
+// the candidates of ids[i]. A session's runs depend only on its own
+// candidates, in the order the stream gives them, so sessions are derived
+// in parallel. It sorts each session's pairs in place.
+func DeriveSessionRunsInParallel(
+	ctx context.Context, ids []string, gapCapSeconds float64, sessions []SessionCandidates,
+) (map[string]SessionRuns, error) {
+	derived := make([]SessionRuns, len(ids))
+	if err := EachInParallel(ctx, len(ids), func() *SessionRunsBuilder {
+		return NewSessionRunsBuilder(gapCapSeconds)
+	}, func(builder *SessionRunsBuilder, i int) {
+		derived[i] = deriveSession(builder, sessions[i])
+	}); err != nil {
+		return nil, err
+	}
+	runs := make(map[string]SessionRuns, len(ids))
+	for i, id := range ids {
+		runs[id] = derived[i]
+	}
+	return runs, nil
+}
+
+// deriveSession merges one session's candidates as MergeCandidateSlice
+// does, emitting a terminal candidate only before a pair it sorts strictly
+// before, and reduces them to runs.
+func deriveSession(builder *SessionRunsBuilder, session SessionCandidates) SessionRuns {
+	slices.SortFunc(session.Pairs, compareCandidates)
+	terminal := session.Terminal
+	for _, c := range session.Pairs {
+		for len(terminal) > 0 && CandidateLess(terminal[0], c) {
+			builder.Add(terminal[0])
+			terminal = terminal[1:]
+		}
+		builder.Add(c)
+	}
+	for _, c := range terminal {
+		builder.Add(c)
+	}
+	return builder.Finish()
+}
+
+func compareCandidates(a, b IntervalCandidate) int {
+	switch {
+	case CandidateLess(a, b):
+		return -1
+	case CandidateLess(b, a):
+		return 1
+	}
+	return 0
 }
 
 // AppendClipped appends the session's runs clipped to [start, end), the

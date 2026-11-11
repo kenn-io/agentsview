@@ -674,7 +674,11 @@ CREATE INDEX IF NOT EXISTS idx_provider_freshness_updated_at
 // Codex Cloud compaction rows from repeating the divider label. Re-parse
 // Codex, TraeX, Augure Code, Open Interpreter, and Codex Cloud sources in
 // place; source and session identities are unchanged.)
-// (175: prevent older binaries from writing archives with pushed sessions.)
+// (175: keep the token usage of assistant records that have no text or tool
+// call as hidden usage-only rows. Re-parse OpenCode-format, OpenClaw, QClaw,
+// Forge, Cline, Codex-format, and Gemini sources in place; source and session
+// identities are unchanged.)
+// (176: prevent older binaries from writing archives with pushed sessions.)
 const dataVersion = SessionPushDataVersion
 
 const archiveOnlyVersionBase = 1 << 20

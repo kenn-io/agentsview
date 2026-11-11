@@ -437,6 +437,16 @@ func TestSessionPushRejectMalformed(t *testing.T) {
 	require.NoError(t, d.UpsertSession(t.Context(), db.Session{ID: "sample", Agent: "claude", Machine: "source"}))
 	data, _, err := EncodeSessionPush(t.Context(), d, "sample", "")
 	require.NoError(t, err)
+	t.Run("future envelope with new field", func(t *testing.T) {
+		var value map[string]any
+		require.NoError(t, json.Unmarshal(data, &value))
+		value["v"] = 2
+		value["compression"] = "new-format"
+		packet, err := json.Marshal(value)
+		require.NoError(t, err)
+		_, _, err = DecodeSessionPush(packet)
+		require.ErrorIs(t, err, ErrSessionPushFutureDataVersion)
+	})
 	for _, tc := range []struct {
 		name, want string
 		mutate     func(map[string]any)
