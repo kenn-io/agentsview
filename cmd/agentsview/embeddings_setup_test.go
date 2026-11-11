@@ -92,7 +92,7 @@ func TestOllamaEndpointChangesBeforeSetup(t *testing.T) {
 		name, endpoint string
 		err            error
 	}{
-		{name: "endpoint changed", endpoint: "http://127.0.0.1:10001/v1"},
+		{name: "Ollama disappeared after endpoint resolution", endpoint: "http://127.0.0.1:10001/v1"},
 		{name: "endpoint disappeared", err: embedlocal.ErrNotFound},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -103,8 +103,10 @@ func TestOllamaEndpointChangesBeforeSetup(t *testing.T) {
 			database := dbtest.OpenTestDBAt(t, filepath.Join(dir, "sessions.db"))
 			oldInspect, oldEndpoint := inspectLocalEmbeddings, localEmbeddingEndpoint
 			t.Cleanup(func() { inspectLocalEmbeddings, localEmbeddingEndpoint = oldInspect, oldEndpoint })
+			var inspections int
 			inspectLocalEmbeddings = func(context.Context, embedlocal.Options) (embedlocal.Status, error) {
-				return embedlocal.Status{OllamaAvailable: true}, nil
+				inspections++
+				return embedlocal.Status{OllamaAvailable: inspections == 1}, nil
 			}
 			localEmbeddingEndpoint = func(context.Context, embedlocal.Options) (string, error) { return tc.endpoint, tc.err }
 			owner, err := newLiveVectorServing(t.Context(), cfg, database, nil, config.LoadReadOnly)
@@ -440,11 +442,6 @@ func TestLiveEmbeddingsSetup(t *testing.T) {
 				writeEmbeddingsResponse(t, w, len(request.Input), dimension)
 			}))
 			defer stub.Close()
-			if recipe == "automatic" {
-				oldOllama := ollamaEmbeddingEndpoint
-				t.Cleanup(func() { ollamaEmbeddingEndpoint = oldOllama })
-				ollamaEmbeddingEndpoint = stub.URL + "/v1"
-			}
 			cfg, err := config.Default()
 			require.NoError(t, err)
 			cfg.DataDir, cfg.DBPath = dir, filepath.Join(dir, "sessions.db")
@@ -610,11 +607,9 @@ func TestLiveEmbeddingsSetup(t *testing.T) {
 
 func TestLiveEmbeddingsSetupStatusAndExportDuringWriteLockRetry(t *testing.T) {
 	oldInspect, oldEndpoint := inspectLocalEmbeddings, localEmbeddingEndpoint
-	oldOllama := ollamaEmbeddingEndpoint
 	t.Cleanup(func() {
-		inspectLocalEmbeddings, localEmbeddingEndpoint, ollamaEmbeddingEndpoint = oldInspect, oldEndpoint, oldOllama
+		inspectLocalEmbeddings, localEmbeddingEndpoint = oldInspect, oldEndpoint
 	})
-	ollamaEmbeddingEndpoint = "http://127.0.0.1:1/v1"
 	setTestHome(t, t.TempDir())
 	dir := testDataDir(t)
 	require.NoError(t, os.WriteFile(filepath.Join(dir, "config.toml"), []byte("[vector]\nenabled = false\n"), 0o600))

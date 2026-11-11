@@ -21,8 +21,6 @@ import (
 var (
 	inspectLocalEmbeddings = embedlocal.Inspect
 	onBattery              = power.OnBattery
-	// Kit discovers Ollama at this fixed endpoint.
-	ollamaEmbeddingEndpoint = "http://127.0.0.1:11434/v1"
 )
 
 // liveVectorServing enables browser setup over the daemon's open indexes.
@@ -292,7 +290,7 @@ func (v *liveVectorServing) Setup(approvedBytes int64, expectedProvider string) 
 	var pinnedEndpoint string
 	if expectedProvider == "ollama" && deployment.Endpoint == "" {
 		pinnedEndpoint, err = localEmbeddingEndpoint(v.ctx, embedlocal.Options{})
-		if err != nil || pinnedEndpoint != ollamaEmbeddingEndpoint {
+		if status, inspectErr := inspectLocalEmbeddings(v.ctx, embedlocal.Options{}); err != nil || inspectErr != nil || !status.OllamaAvailable {
 			return server.ErrEmbeddingsProviderChanged
 		}
 		deployment.Endpoint = pinnedEndpoint
