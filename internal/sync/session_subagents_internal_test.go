@@ -83,6 +83,7 @@ func TestTrySessionRefreshRefusesContentionAtEachStage(t *testing.T) {
 				require.ErrorIs(t, err, ErrSyncInProgress)
 				if stage == "parent" {
 					require.ErrorIs(t, err, ErrSessionRefreshNotStarted)
+					assert.NotContains(t, err.Error(), "\n")
 				} else {
 					require.NotErrorIs(t, err, ErrSessionRefreshNotStarted)
 				}
