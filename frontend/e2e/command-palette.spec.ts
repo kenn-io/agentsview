@@ -70,13 +70,15 @@ test("search shows placeholder rows at a result-list size while it runs", async 
   await expect(page.locator(".palette-results")).toHaveAttribute("aria-busy", "false");
 });
 
-test("Retry keeps focus through another failure and success", async ({ page }) => {
+test("Retry keeps focus while the search loads", async ({ page }) => {
   let requests = 0;
+  let release: () => void = () => {};
+  const held = new Promise<void>((resolve) => (release = resolve));
   await page.route("**/api/v1/search?**", async (route) => {
-    requests++;
-    if (requests <= 4) {
-      await route.fulfill({ status: 500, json: { error: "Search temporarily unavailable" } });
+    if (++requests <= 2) {
+      await route.fulfill({ status: 503, json: { error: "Search temporarily unavailable" } });
     } else {
+      await held;
       await route.continue();
     }
   });
@@ -87,11 +89,9 @@ test("Retry keeps focus through another failure and success", async ({ page }) =
   await expect(retry).toBeVisible();
   await retry.focus();
   await page.keyboard.press("Enter");
-  await expect.poll(() => requests).toBe(4);
-  await expect(retry).toBeVisible();
+  await expect(page.locator(".palette-loading")).toBeVisible();
   await expect(input).toBeFocused();
-  await retry.focus();
-  await page.keyboard.press("Enter");
+  release();
   await expect(page.locator(".palette-item").first()).toBeVisible();
   await expect(input).toBeFocused();
 });

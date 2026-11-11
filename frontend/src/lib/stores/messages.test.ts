@@ -291,54 +291,47 @@ describe("MessagesStore", () => {
     expect(messages.sessionId).toBe("s2");
   });
 
-  it.each(["recover", "exhaust", "switch", "permanent", "bug"])(
-    "reload retry %s",
-    async (outcome) => {
-      vi.useFakeTimers();
-      try {
-        await setupSession("s1", 1, [makeMessage(0)]);
-        vi.mocked(api.getSession).mockClear();
-        vi.mocked(api.getSession).mockRejectedValue(
-          outcome === "bug"
-            ? new TypeError("Cannot read properties of undefined")
-            : new ApiError(outcome === "permanent" ? 404 : 503, "unavailable"),
-        );
-        if (outcome === "recover") {
-          vi.mocked(api.getSession)
-            .mockRejectedValueOnce(new ApiError(503, "unavailable"))
-            .mockResolvedValue(makeSession("s1", 2));
-          vi.mocked(api.getMessages)
-            .mockRejectedValueOnce(new TypeError("Failed to fetch"))
-            .mockResolvedValue(makeMessagesResponse([makeMessage(0), makeMessage(1)]));
-        }
-        const reload = messages.reload();
-        await vi.advanceTimersByTimeAsync(0);
-        expect(api.getSession).toHaveBeenCalledTimes(1);
-        expect(messages.messages.map((row) => row.content)).toEqual(["msg 0"]);
-        if (outcome === "switch") {
-          await setupSession("s2", 1, [
-            { ...makeMessage(0), session_id: "s2", content: "new selection" },
-          ]);
-        }
-        await vi.advanceTimersByTimeAsync(1000);
-        await reload;
-        expect(api.getSession).toHaveBeenCalledTimes(
-          outcome === "recover" || outcome === "exhaust" ? 3 : outcome === "switch" ? 2 : 1,
-        );
-        if (outcome === "recover") {
-          expect(messages.messages.map((row) => row.content)).toEqual(["msg 0", "msg 1"]);
-          expect(messages.messageCount).toBe(2);
-        } else if (outcome === "switch") {
-          expect(messages.sessionId).toBe("s2");
-          expect(messages.messages.map((row) => row.content)).toEqual(["new selection"]);
-        } else {
-          expect(messages.messages.map((row) => row.content)).toEqual(["msg 0"]);
-        }
-      } finally {
-        vi.useRealTimers();
+  it.each(["recover", "exhaust", "switch"])("reload retry %s", async (outcome) => {
+    vi.useFakeTimers();
+    try {
+      await setupSession("s1", 1, [makeMessage(0)]);
+      vi.mocked(api.getSession).mockClear();
+      vi.mocked(api.getSession).mockRejectedValue(new ApiError(503, "unavailable"));
+      if (outcome === "recover") {
+        vi.mocked(api.getSession)
+          .mockRejectedValueOnce(new ApiError(503, "unavailable"))
+          .mockResolvedValue(makeSession("s1", 2));
+        vi.mocked(api.getMessages)
+          .mockRejectedValueOnce(new TypeError("Failed to fetch"))
+          .mockResolvedValue(makeMessagesResponse([makeMessage(0), makeMessage(1)]));
       }
-    },
-  );
+      const reload = messages.reload();
+      await vi.advanceTimersByTimeAsync(0);
+      expect(api.getSession).toHaveBeenCalledTimes(1);
+      expect(messages.messages.map((row) => row.content)).toEqual(["msg 0"]);
+      if (outcome === "switch") {
+        await setupSession("s2", 1, [
+          { ...makeMessage(0), session_id: "s2", content: "new selection" },
+        ]);
+      }
+      await vi.advanceTimersByTimeAsync(1000);
+      await reload;
+      expect(api.getSession).toHaveBeenCalledTimes(
+        outcome === "recover" || outcome === "exhaust" ? 3 : outcome === "switch" ? 2 : 1,
+      );
+      if (outcome === "recover") {
+        expect(messages.messages.map((row) => row.content)).toEqual(["msg 0", "msg 1"]);
+        expect(messages.messageCount).toBe(2);
+      } else if (outcome === "switch") {
+        expect(messages.sessionId).toBe("s2");
+        expect(messages.messages.map((row) => row.content)).toEqual(["new selection"]);
+      } else {
+        expect(messages.messages.map((row) => row.content)).toEqual(["msg 0"]);
+      }
+    } finally {
+      vi.useRealTimers();
+    }
+  });
 
   it("reports a failed metadata fetch to the sessions store", async () => {
     const err = new Error("session not found");

@@ -191,8 +191,10 @@ describe("SearchStore", () => {
     async (outcome) => {
       const store = createSearchStore(memoryStorage());
       const second = deferred<SearchResponse>();
-      store.setSort("recency");
-      store.setRange({ mode: "calendar", unit: "day", anchor: "2026-07-04" });
+      if (outcome === "exhaust") {
+        store.setSort("recency");
+        store.setRange({ mode: "calendar", unit: "day", anchor: "2026-07-04" });
+      }
       searchService.getApiV1Search
         .mockRejectedValueOnce(new ApiError(503, "first"))
         .mockReturnValueOnce(second.promise);
@@ -210,6 +212,8 @@ describe("SearchStore", () => {
       } else {
         second.reject(new ApiError(500, "second"));
         await flushMicrotasks();
+        await vi.advanceTimersByTimeAsync(300);
+        expect(searchService.getApiV1Search).toHaveBeenCalledTimes(2);
         expect(store.error).toEqual({ detail: "second", kind: "generic" });
         expect(reportErrorShown).toHaveBeenCalledTimes(1);
         searchService.getApiV1Search.mockResolvedValueOnce(fullTextResponse("needle"));
@@ -237,7 +241,7 @@ describe("SearchStore", () => {
     [501, "not implemented"],
   ] as const)("does not retry HTTP %i", async (status, detail) => {
     const store = createSearchStore(memoryStorage());
-    searchService.getApiV1Search.mockRejectedValueOnce(new ApiError(status, detail));
+    searchService.getApiV1Search.mockRejectedValueOnce(generatedApiError(status, detail));
     store.search("needle");
     await runDebounce();
     await vi.advanceTimersByTimeAsync(300);

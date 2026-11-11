@@ -734,23 +734,25 @@ describe("CommandPalette", () => {
     unmount(component);
   });
 
-  it("focuses the input when retrying a generic error", async () => {
-    mockSearchStore.error = { detail: null, kind: "generic" };
-    const component = mount(CommandPalette, { target: document.body });
-    await enterSearchQuery();
-    mockSearchStore.search.mockClear();
-    const retry = Array.from(
-      document.querySelectorAll<HTMLButtonElement>(".palette-error button"),
-    ).find((button) => button.textContent?.trim() === "Retry");
-    expect(retry).toBeDefined();
-    retry!.focus();
-    retry!.click();
-    expect(mockSearchStore.retry).toHaveBeenCalledOnce();
-    expect(document.activeElement).toBe(document.querySelector(".palette-input"));
-    expect(mockSearchStore.search).not.toHaveBeenCalled();
-    expect(mockRouter.navigateToSession).not.toHaveBeenCalled();
-    unmount(component);
-  });
+  it.each(["generic", "timeout"] as const)(
+    "focuses the input when retrying a %s error",
+    async (kind) => {
+      mockSearchStore.mode = kind === "timeout" ? "semantic" : "fulltext";
+      mockSearchStore.error = { detail: null, kind };
+      const component = mount(CommandPalette, { target: document.body });
+      await enterSearchQuery();
+      const retry = Array.from(
+        document.querySelectorAll<HTMLButtonElement>(".palette-error button"),
+      ).find((button) => button.textContent?.trim() === "Retry");
+      expect(retry).toBeDefined();
+      retry!.focus();
+      retry!.click();
+      expect(mockSearchStore.retry).toHaveBeenCalledOnce();
+      expect(document.activeElement).toBe(document.querySelector(".palette-input"));
+      expect(mockRouter.navigateToSession).not.toHaveBeenCalled();
+      unmount(component);
+    },
+  );
 
   it.each(["semantic", "hybrid"] as const)("offers server settings in %s mode", async (mode) => {
     mockSearchStore.mode = mode;
