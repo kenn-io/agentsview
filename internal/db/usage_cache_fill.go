@@ -1823,6 +1823,13 @@ func (c *usageFillCoordinator) processNotificationBatch(
 		for index, id := range ids {
 			requested[index].SessionID = id
 		}
+		epoch, err := readUsageResetEpoch(c.ctx, c.cache.db)
+		if err != nil {
+			if c.ctx.Err() == nil {
+				log.Printf("usage cache notification epoch: %v", err)
+			}
+			return
+		}
 		versions, revision, err := c.recheckSourceVersions(c.ctx, requested)
 		if err != nil {
 			if c.ctx.Err() == nil {
@@ -1839,7 +1846,7 @@ func (c *usageFillCoordinator) processNotificationBatch(
 				deleted = append(deleted, id)
 			}
 			if len(deleted) > 0 {
-				if err := c.deleteNotificationSessions(deleted, revision, 0); err != nil &&
+				if err := c.deleteNotificationSessions(deleted, revision, epoch); err != nil &&
 					c.ctx.Err() == nil {
 					log.Printf("usage cache notification delete: %v", err)
 				}
