@@ -2445,6 +2445,9 @@ func startFileWatcher(
 ) {
 	t := time.Now()
 	roots, unwatchedDirs, symlinkGatedDirs, persistentDirAgents := collectWatchRoots(cfg)
+	if engine != nil && options.OnNativeEventsLost == nil {
+		options.OnNativeEventsLost = engine.InvalidateEventDependentTrust
+	}
 	watcher, err := sync.NewWatcherWithCallback(
 		watcherBatchDelay,
 		cfg.SyncInterval,

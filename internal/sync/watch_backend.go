@@ -220,6 +220,13 @@ type createdSubtreePathFilter interface {
 	includeCreatedSubtreePath(root, path string, isDir bool) bool
 }
 
+// nativeEventLossBackend reports that a native stream lost events for one
+// root, so event-dependent freshness trust can be revoked before that root is
+// reconciled without the archive-wide reset of lost-events recovery.
+type nativeEventLossBackend interface {
+	bindNativeEventsLost(func())
+}
+
 // pollingOwnershipBackend reports independently keyed polling obligations so
 // overlapping configured roots cannot release one another's coverage.
 type pollingOwnershipBackend interface {

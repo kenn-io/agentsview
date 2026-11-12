@@ -388,7 +388,7 @@ type Engine struct {
 	goos                string
 	subagentLinkPending bool                 // protected by syncMu; retains failed global linking
 	trailerScanAttempts map[string]time.Time // protected by syncMu; includes failed scans
-	syncMu              gosync.Mutex         // serializes all sync operations
+	syncMu              engineSyncLock       // serializes all sync operations
 	mu                  gosync.RWMutex
 	lastSync            time.Time
 	lastSyncStats       SyncStats
@@ -498,6 +498,9 @@ type Engine struct {
 	// incrementalCommittedHook is a test seam called after an incremental
 	// session write commits; nil in production.
 	incrementalCommittedHook func(sessionID string)
+	// groupedReconcileGroupHook is a test seam called with syncMu held at the
+	// start of each ReconcileProviderRootsGrouped group; nil in production.
+	groupedReconcileGroupHook func(index int)
 	// claudeProjectSessionFiles is an observability seam for cardinality tests
 	// around duplicate-session discovery.
 	claudeProjectSessionFiles func(string) []parser.DiscoveredFile
@@ -4098,11 +4101,13 @@ type ProviderRootsGroup struct {
 // attempted even when an earlier one fails; per-group failures are wrapped
 // with the provider and joined.
 //
-// syncMu is held across every group and the epilogue: releasing it between a
-// group and the deferred persistSkipCache would let a concurrent pass update
-// and persist newer skip state that the epilogue's snapshot then overwrites,
-// resurrecting removed entries after a restart. "sessions" emits happen after
-// the lock is released, coalesced into one event for the batch.
+// A poll pass can take far longer than one provider group, so between groups
+// the pass yields syncMu to any sync already waiting for it. Watcher syncs and
+// scheduled reconciliation therefore wait for at most one group, not the whole
+// batch. The epilogue still runs under syncMu, and persistSkipCache snapshots
+// the in-memory skip cache at that point, so state written by a sync that ran
+// between groups is included rather than overwritten. "sessions" emits happen
+// after the lock is released, coalesced into one event for the batch.
 //
 // Epilogue eligibility is recorded at each pass's own gate sites — after
 // page writes commit, before tombstoning and spool cleanup — so a later
@@ -4122,9 +4127,16 @@ func (e *Engine) ReconcileProviderRootsGrouped(
 		repairEligible := false
 		linkEligible := false
 		persistEligible := false
-		for _, group := range groups {
+		for i, group := range groups {
 			if ctx.Err() != nil {
 				break
+			}
+			if i > 0 {
+				// The waiting sync owns CurrentProgress while it runs.
+				e.syncMu.yield(e.clearCurrentProgress)
+			}
+			if e.groupedReconcileGroupHook != nil {
+				e.groupedReconcileGroupHook(i)
 			}
 			stats, tombstoned, eligibility, err := e.reconcileScopedWatchRootsLocked(
 				deferredCtx, group.Agent, group.Roots, false, false, nil,
@@ -4409,8 +4421,8 @@ func reconciliationPlansNeedPass(plans []providerReconciliationPlan) bool {
 
 // reconcileWatchRootsStreamedLocked runs one streamed reconciliation pass.
 // The caller must hold syncMu: reconcileScopedWatchRoots takes it per pass,
-// and ReconcileProviderRootsGrouped holds it across every group plus the
-// shared epilogue so no other pass can interleave with a pending epilogue.
+// and ReconcileProviderRootsGrouped holds it for each group and for the
+// shared epilogue, yielding only between groups.
 // It accepts resolved plans rather than raw roots so no caller can bypass
 // provider scope resolution with a string slice.
 func (e *Engine) reconcileWatchRootsStreamedLocked(
