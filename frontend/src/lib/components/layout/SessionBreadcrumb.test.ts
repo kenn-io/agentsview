@@ -1043,6 +1043,55 @@ describe("SessionBreadcrumb", () => {
       await tick();
       expect(tabOrder()).toEqual(["grade", "id", "actions"]);
     });
+
+    it("keeps the open menu open when the header moves it to the other row", async () => {
+      let width = 1280;
+      const lists: Array<{ query: string; listeners: Array<() => void> }> = [];
+      const matchesWidth = (query: string) => {
+        const min = /min-width:\s*(\d+)px/.exec(query);
+        const max = /max-width:\s*(\d+)px/.exec(query);
+        return (!min || width >= Number(min[1])) && (!max || width <= Number(max[1]));
+      };
+      window.matchMedia = ((query: string) => {
+        const entry = { query, listeners: [] as Array<() => void> };
+        lists.push(entry);
+        return {
+          get matches() {
+            return matchesWidth(query);
+          },
+          media: query,
+          addEventListener: (_type: string, listener: () => void) => entry.listeners.push(listener),
+          removeEventListener: () => {},
+        } as unknown as MediaQueryList;
+      }) as typeof window.matchMedia;
+      sessionsService.getApiV1SessionsByIdDirectory.mockResolvedValue({ path: "/tmp/project" });
+
+      const component = mount(SessionBreadcrumb, {
+        target: document.body,
+        props: {
+          session: makeSession("claude", { file_path: "/tmp/project/session.jsonl" }),
+          onBack: () => {},
+        },
+      });
+      await vi.waitFor(() => {
+        expect(document.querySelector(".resume-btn")).toBeTruthy();
+      });
+      await flushPromises();
+      // From 641px the actions share the title row, ahead of the metadata.
+      expect(document.querySelector(".breadcrumb-meta .open-group")).toBeNull();
+      document.querySelector<HTMLButtonElement>(".resume-btn")?.click();
+      await tick();
+      expect(document.querySelector('[data-testid="claude-code-link"]')).toBeTruthy();
+
+      width = 600;
+      for (const entry of lists) for (const listener of entry.listeners) listener();
+      await tick();
+
+      // Below 641px the actions move into the metadata strip.
+      expect(document.querySelector(".breadcrumb-meta .open-group")).toBeTruthy();
+      expect(document.querySelector('[data-testid="claude-code-link"]')).toBeTruthy();
+      unmount(component);
+    });
   });
 
   it("renders gemini with rose badge color", async () => {
