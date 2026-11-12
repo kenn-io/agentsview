@@ -94,10 +94,7 @@ func findPiSource(ctx context.Context, cfg config.Config, session *db.Session, s
 	}
 	name, err := uniqueLocalSource(ctx, provider, stored, func(name string) (bool, error) {
 		_, err := read(name)
-		if ctx.Err() != nil {
-			return false, ctx.Err()
-		}
-		return err == nil, nil
+		return err == nil, ctx.Err()
 	})
 	if err != nil {
 		return "", nil, err
@@ -163,10 +160,7 @@ func relocatePiHeader(data []byte, id, basename, cwd string) ([]byte, error) {
 	if count != 1 {
 		return nil, errors.New("Pi session header requires one cwd")
 	}
-	encoded, err := json.Marshal(cwd)
-	if err != nil {
-		return nil, err
-	}
+	encoded, _ := json.Marshal(cwd)
 	return slices.Concat(data[:start], encoded, data[end:]), nil
 }
 
