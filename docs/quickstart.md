@@ -210,6 +210,99 @@ PostgreSQL and push-watch block in `docker-compose.prod.yaml` and set your
 database URL. That file mounts the session roots and `/data` and gives the
 container 40 seconds to finish its final push.
 
+### Verify a download
+
+Every GitHub release since v0.43.0 includes two independent ways to check that
+a file came from the AgentsView release pipeline:
+
+- `SHA256SUMS` lists the checksum of every file in the release.
+  `SHA256SUMS.sig` signs it with the AgentsView release key.
+- `<file>.intoto.jsonl`, published next to each file, is a
+  [Sigstore](https://www.sigstore.dev/) bundle. It holds signed build
+  provenance that names the AgentsView tag and commit the file was built from.
+
+The shell and PowerShell installers check the download against `SHA256SUMS`.
+Starting with the first release after v0.47.0, `agentsview update` also checks
+`SHA256SUMS.sig` and refuses to install a release whose signature does not
+match.
+
+#### Check the release signature
+
+You need `curl`, `openssl`, and `sha256sum` (on macOS, use `shasum -a 256`
+instead of `sha256sum`). Set the version and file you downloaded:
+
+```bash
+version=0.47.0
+file=agentsview_${version}_linux_amd64.tar.gz
+base=https://github.com/kenn-io/agentsview/releases/download/v$version
+curl -fsSLO "$base/SHA256SUMS"
+curl -fsSLO "$base/SHA256SUMS.sig"
+```
+
+Download the release public key from this repository and confirm its
+fingerprint:
+
+```bash
+curl -fsSL -o agentsview-release.pem \
+  https://raw.githubusercontent.com/kenn-io/agentsview/main/internal/releasesig/keys/2026-07-r1.pem
+sha256sum agentsview-release.pem
+# e49d3eb53edc2d856e9a6d047a8c79e62f3bfb03101f566bba0d98d35052602c
+```
+
+`SHA256SUMS.sig` is a base64-encoded ECDSA P-256 signature over the SHA-256
+digest of `SHA256SUMS`. Decode it, check it, then check your file:
+
+```bash
+openssl base64 -d -A -in SHA256SUMS.sig -out SHA256SUMS.sig.der
+openssl dgst -sha256 -verify agentsview-release.pem \
+  -signature SHA256SUMS.sig.der SHA256SUMS
+# Verified OK
+grep " $file\$" SHA256SUMS | sha256sum --check
+# agentsview_0.47.0_linux_amd64.tar.gz: OK
+```
+
+Any other output means the file does not match what the release pipeline
+signed. Do not install it.
+
+#### Check the build provenance
+
+With the [GitHub CLI](https://cli.github.com/), download the bundle and check
+it against the file. This works without signing in:
+
+```bash
+curl -fsSLO "$base/$file.intoto.jsonl"
+gh attestation verify "$file" --bundle "$file.intoto.jsonl" --owner kenn-io
+```
+
+The check confirms that a GitHub Actions workflow in the `kenn-io` organization
+signed the provenance, that the signature is in the public Sigstore
+transparency log, and that the file's digest matches. Pass `--bundle`: GitHub's
+attestation store does not hold these records, so
+`gh attestation verify "$file" --repo kenn-io/agentsview` without it reports
+`404 Not Found`.
+
+[cosign](https://docs.sigstore.dev/cosign/) 3 checks the same bundle:
+
+```bash
+cosign verify-blob-attestation \
+  --bundle "$file.intoto.jsonl" \
+  --type slsaprovenance1 \
+  --certificate-oidc-issuer https://token.actions.githubusercontent.com \
+  --certificate-identity-regexp '^https://github\.com/kenn-io/' \
+  "$file"
+```
+
+cosign refuses files larger than 128 MiB, which includes the Linux AppImages.
+For those, replace the final `"$file"` argument with
+`--digest "$(sha256sum "$file" | cut -d' ' -f1)" --digestAlg sha256`.
+
+#### Limits
+
+- Container images on GitHub Container Registry are not signed. Their
+  BuildKit SBOM and provenance records are attached to the image unsigned.
+- Releases before v0.43.0 have only `SHA256SUMS`, with no signature or
+  provenance bundle.
+
 ## Run
 
 The desktop app handles startup automatically: it attaches to an existing local

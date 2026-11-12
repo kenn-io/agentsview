@@ -21,6 +21,8 @@ import (
 
 	"go.kenn.io/kit/atomicfile"
 	"golang.org/x/mod/semver"
+
+	"go.kenn.io/agentsview/internal/releasesig"
 )
 
 const (
@@ -33,6 +35,11 @@ const (
 	cacheFileName             = "update_check.json"
 	cacheDuration             = 1 * time.Hour
 	devCacheDuration          = 15 * time.Minute
+
+	// Release SHA256SUMS files are about 9 KB and their signatures under
+	// 100 bytes; the limits only stop a misbehaving server.
+	maxChecksumsBytes = 1 << 20
+	maxSignatureBytes = 4 << 10
 )
 
 // UpdateInfo contains information about an available update.
@@ -44,6 +51,9 @@ type UpdateInfo struct {
 	Size           int64
 	Checksum       string
 	IsDevBuild     bool
+	// checksumErr explains an empty Checksum, such as a SHA256SUMS
+	// signature that did not verify.
+	checksumErr error
 	// cacheOnly is set when the info came from cache and lacks
 	// download metadata. The caller must re-fetch for installs.
 	cacheOnly bool
@@ -117,7 +127,12 @@ func CheckForUpdate(ctx context.Context,
 		)
 	}
 
-	checksum, _ := fetchChecksumFromFile(ctx, checksumsURL, assetName)
+	// A checksum failure does not fail the check, so `update --check` and
+	// the UI still report the new version. PerformUpdate refuses the
+	// install and reports checksumErr.
+	checksum, checksumErr := fetchVerifiedChecksum(
+		ctx, releasesig.Release(), checksumsURL, assetName,
+	)
 
 	return &UpdateInfo{
 		CurrentVersion: currentVersion,
@@ -127,6 +142,7 @@ func CheckForUpdate(ctx context.Context,
 		Size:           size,
 		Checksum:       checksum,
 		IsDevBuild:     isDevBuild,
+		checksumErr:    checksumErr,
 	}, nil
 }
 
@@ -136,6 +152,12 @@ func PerformUpdate(ctx context.Context,
 	progressFn func(downloaded, total int64),
 ) error {
 	if info.Checksum == "" {
+		if info.checksumErr != nil {
+			return fmt.Errorf(
+				"no verified checksum for %s - refusing unverified binary: %w",
+				info.AssetName, info.checksumErr,
+			)
+		}
 		return fmt.Errorf(
 			"no checksum for %s - refusing unverified binary",
 			info.AssetName,
@@ -660,31 +682,56 @@ func copyFile(src, dst string) error {
 	return out.Close()
 }
 
-func fetchChecksumFromFile(ctx context.Context,
-	url, assetName string,
+// fetchVerifiedChecksum downloads the release's SHA256SUMS and
+// SHA256SUMS.sig, checks the signature against keys, and returns the
+// checksum SHA256SUMS lists for assetName.
+func fetchVerifiedChecksum(ctx context.Context,
+	keys releasesig.KeySet, sumsURL, assetName string,
 ) (string, error) {
+	sums, err := fetchSmallFile(ctx, sumsURL, maxChecksumsBytes)
+	if err != nil {
+		return "", fmt.Errorf("fetch SHA256SUMS: %w", err)
+	}
+	sig, err := fetchSmallFile(ctx, sumsURL+".sig", maxSignatureBytes)
+	if err != nil {
+		return "", fmt.Errorf("fetch SHA256SUMS.sig: %w", err)
+	}
+	if err := keys.Verify(sums, sig); err != nil {
+		return "", err
+	}
+	checksum := extractChecksum(string(sums), assetName)
+	if checksum == "" {
+		return "", fmt.Errorf("SHA256SUMS has no entry for %s", assetName)
+	}
+	return checksum, nil
+}
+
+// fetchSmallFile GETs url and returns its body, failing when the body
+// exceeds limit bytes.
+func fetchSmallFile(ctx context.Context, url string, limit int64) ([]byte, error) {
 	client := &http.Client{Timeout: 30 * time.Second}
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	if err != nil {
-		return "", err
+		return nil, err
 	}
+	req.Header.Set("User-Agent", updateUserAgent)
 	resp, err := client.Do(req)
 	if err != nil {
-		return "", err
+		return nil, err
 	}
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
-		return "", fmt.Errorf(
-			"failed to fetch checksums: %s", resp.Status,
-		)
+		return nil, fmt.Errorf("GET %s returned %s", url, resp.Status)
 	}
-
-	body, err := io.ReadAll(resp.Body)
+	body, err := io.ReadAll(io.LimitReader(resp.Body, limit+1))
 	if err != nil {
-		return "", err
+		return nil, err
 	}
-	return extractChecksum(string(body), assetName), nil
+	if int64(len(body)) > limit {
+		return nil, fmt.Errorf("%s is larger than %d bytes", url, limit)
+	}
+	return body, nil
 }
 
 func extractChecksum(releaseBody, assetName string) string {
