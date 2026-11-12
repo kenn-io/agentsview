@@ -300,7 +300,7 @@ func placeShelleyFuzzInput(t *testing.T, root string, data []byte) {
 // CLI's data.sqlite3. The JSONL session layouts Kiro also reads are not
 // covered by this target.
 func placeKiroFuzzInput(t *testing.T, root string, data []byte) {
-	_, db := newKiroProviderSQLiteDBAt(t, root)
+	db := openProviderFuzzDB(t, filepath.Join(root, kiroSQLiteDBName), kiroSQLiteSchema)
 	seedKiroSQLiteSession(t, db, "/home/user/code/kiro-app", "fuzz-session",
 		string(data), 1_779_012_000_000, 1_779_012_030_000)
 	require.NoError(t, db.Close())

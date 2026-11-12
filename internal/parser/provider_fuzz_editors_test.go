@@ -1,7 +1,6 @@
 package parser
 
 import (
-	"database/sql"
 	"os"
 	"path/filepath"
 	"testing"
@@ -191,8 +190,7 @@ func init() {
 func placeAntigravityIDEFuzzInput(t *testing.T, root string, data []byte) {
 	dir := filepath.Join(root, "conversations")
 	require.NoError(t, os.MkdirAll(dir, 0o755))
-	db, err := sql.Open("sqlite3", filepath.Join(dir, providerFuzzEditorsSessionID+".db"))
-	require.NoError(t, err)
+	db := openProviderFuzzSQLite(t, filepath.Join(dir, providerFuzzEditorsSessionID+".db"))
 	defer db.Close()
 	createAntigravityStepTables(t, db)
 	mustExec(t, db, `INSERT INTO steps (idx, step_type, step_payload) VALUES (?, ?, ?)`,
@@ -208,8 +206,7 @@ func placeAntigravityIDEFuzzInput(t *testing.T, root string, data []byte) {
 func placeAntigravityCLIFuzzInput(t *testing.T, root string, data []byte) {
 	dir := filepath.Join(root, "conversations")
 	require.NoError(t, os.MkdirAll(dir, 0o755))
-	db, err := sql.Open("sqlite3", filepath.Join(dir, providerFuzzEditorsSessionID+".db"))
-	require.NoError(t, err)
+	db := openProviderFuzzSQLite(t, filepath.Join(dir, providerFuzzEditorsSessionID+".db"))
 	defer db.Close()
 	createAntigravityStepTables(t, db)
 	mustExec(t, db, `INSERT INTO steps (idx, step_type, step_payload) VALUES (?, ?, ?)`,
