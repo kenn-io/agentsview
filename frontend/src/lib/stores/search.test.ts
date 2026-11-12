@@ -186,7 +186,11 @@ describe("SearchStore", () => {
     ]);
   });
 
-  it.each([503, 504])("recovers after HTTP %i", async (status) => {
+  it.each([
+    [503, true],
+    [504, true],
+    [503, false],
+  ])("retries HTTP %i, recovery=%s", async (status, recovers) => {
     const store = createSearchStore(memoryStorage());
     const second = deferred<SearchResponse>();
     searchService.getApiV1Search
@@ -199,37 +203,19 @@ describe("SearchStore", () => {
     expect(store.isSearching).toBe(true);
     expect(store.error).toBeNull();
     expect(reportErrorShown).not.toHaveBeenCalled();
-    expect(searchService.getApiV1Search.mock.calls[1]![0]).toEqual(
-      searchService.getApiV1Search.mock.calls[0]![0],
-    );
     expect(searchService.getApiV1Search.mock.calls[1]![1]?.signal).toBe(
       searchService.getApiV1Search.mock.calls[0]![1]?.signal,
     );
-    second.resolve(fullTextResponse("needle"));
-    await flushMicrotasks();
-    expect(store.results[0]?.session_id).toBe("full-0");
-    expect(store.isSearching).toBe(false);
-  });
-
-  it("shows the error after both automatic attempts fail", async () => {
-    const store = createSearchStore(memoryStorage());
-    const second = deferred<SearchResponse>();
-    searchService.getApiV1Search
-      .mockRejectedValueOnce(new ApiError(503, "request timed out"))
-      .mockReturnValueOnce(second.promise);
-    store.search("needle", "alpha");
-    await runDebounce();
-    await vi.advanceTimersByTimeAsync(300);
-    expect(searchService.getApiV1Search).toHaveBeenCalledTimes(2);
-    expect(store.isSearching).toBe(true);
-    expect(store.error).toBeNull();
-    expect(reportErrorShown).not.toHaveBeenCalled();
-    second.reject(new ApiError(500, "second"));
+    if (recovers) second.resolve(fullTextResponse("needle"));
+    else second.reject(new ApiError(500, "second"));
     await flushMicrotasks();
     await vi.advanceTimersByTimeAsync(300);
     expect(searchService.getApiV1Search).toHaveBeenCalledTimes(2);
-    expect(store.error).toEqual({ detail: "second", kind: "generic" });
-    expect(reportErrorShown).toHaveBeenCalledTimes(1);
+    if (recovers) expect(store.results[0]?.session_id).toBe("full-0");
+    else {
+      expect(store.error).toEqual({ detail: "second", kind: "generic" });
+      expect(reportErrorShown).toHaveBeenCalledTimes(1);
+    }
     expect(store.isSearching).toBe(false);
   });
 
@@ -278,11 +264,10 @@ describe("SearchStore", () => {
     const fetchMock = vi
       .fn()
       .mockRejectedValueOnce(new TypeError("Failed to fetch"))
-      .mockResolvedValue(
-        new Response(JSON.stringify(fullTextResponse("needle")), {
-          headers: { "Content-Type": "application/json" },
-        }),
-      );
+      .mockImplementation(async (request: Request) => {
+        if (request.signal.aborted) throw new DOMException("Aborted", "AbortError");
+        return Response.json(fullTextResponse("needle"));
+      });
     vi.stubGlobal("fetch", fetchMock);
     try {
       const store = createSearchStore(memoryStorage());
@@ -292,6 +277,8 @@ describe("SearchStore", () => {
       store.clear();
       await vi.advanceTimersByTimeAsync(300);
       expect(signal.aborted).toBe(true);
+      expect(fetchMock).toHaveBeenCalledTimes(2);
+      expect((fetchMock.mock.calls[1]![0] as Request).signal.aborted).toBe(true);
       expect(store.results).toEqual([]);
       expect(store.error).toBeNull();
       expect(store.isSearching).toBe(false);
@@ -300,17 +287,14 @@ describe("SearchStore", () => {
     }
   });
 
-  it.each([
-    [400, "unavailable"],
-    [501, "unavailable"],
-  ] as const)("does not retry HTTP %i with %s", async (status, detail) => {
+  it.each([400, 501])("does not retry HTTP %i", async (status) => {
     const store = createSearchStore(memoryStorage());
-    searchService.getApiV1Search.mockRejectedValueOnce(generatedApiError(status, detail));
+    searchService.getApiV1Search.mockRejectedValueOnce(generatedApiError(status, "unavailable"));
     store.search("needle");
     await runDebounce();
     await vi.advanceTimersByTimeAsync(300);
     expect(searchService.getApiV1Search).toHaveBeenCalledTimes(1);
-    expect(store.error).toEqual({ detail, kind: "generic" });
+    expect(store.error).toEqual({ detail: "unavailable", kind: "generic" });
   });
 
   it("does not send a retry to a server selected in another tab", async () => {

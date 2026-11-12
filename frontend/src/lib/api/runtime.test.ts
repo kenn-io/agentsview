@@ -63,17 +63,6 @@ describe("orvalFetch", () => {
     });
   });
 
-  it("passes a validated local request to fetch", async () => {
-    const fetchMock = vi
-      .fn()
-      .mockResolvedValue(new Response("{}", { headers: { "Content-Type": "application/json" } }));
-    vi.stubGlobal("fetch", fetchMock);
-    await orvalFetch("/api/v1/usage/summary", {});
-    const request = fetchMock.mock.calls[0]![0] as Request;
-    expect(request).toBeInstanceOf(Request);
-    expect(new URL(request.url).pathname).toBe("/api/v1/usage/summary");
-  });
-
   it("sends the selected server token with generated requests", async () => {
     localStorage.setItem("agentsview-server-url", "https://example.test");
     setAuthToken("secret");

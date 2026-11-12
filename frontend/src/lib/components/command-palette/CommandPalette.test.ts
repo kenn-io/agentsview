@@ -650,8 +650,8 @@ describe("CommandPalette", () => {
     unmount(component);
   });
 
-  it("retries a failed full-text search from the error", async () => {
-    mockSearchStore.error = { detail: null, kind: "generic" };
+  it.each(["generic", "timeout"] as const)("retries a %s search error", async (kind) => {
+    mockSearchStore.error = { detail: null, kind };
     const component = mount(CommandPalette, { target: document.body });
     await enterSearchQuery();
     const retry = Array.from(
