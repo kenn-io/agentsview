@@ -55,9 +55,7 @@ func checkAPIVersionContract(apiVersion int, digest string, records []apiVersion
 	highest := 0
 	for _, r := range records {
 		if previous, ok := byVersion[r.version]; ok && previous.digest != r.digest {
-			if conflict.digest == "" {
-				first, conflict = previous, r
-			}
+			first, conflict = previous, r
 		} else {
 			byVersion[r.version] = r
 		}
@@ -75,18 +73,11 @@ func checkAPIVersionContract(apiVersion int, digest string, records []apiVersion
 		"introduced to %d (see docs/agents/storage.md)",
 		digest, next, apiVersionRecordDir, apiVersionRecord{next, digest}.name(), next, next)
 
-	matches := func(v int) bool {
-		return byVersion[v].digest == digest
-	}
 	if apiVersion < highest {
-		if matches(highest) {
-			return fmt.Errorf("generated contract %s is recorded as API version %d; "+
-				"set server.APIVersion to %d", digest, highest, highest)
-		}
 		return fmt.Errorf("server.APIVersion %d is below recorded API version %d; %s",
 			apiVersion, highest, move)
 	}
-	if matches(apiVersion) {
+	if byVersion[apiVersion].digest == digest {
 		return nil
 	}
 	if apiVersion > highest {
@@ -131,14 +122,12 @@ func TestCheckAPIVersionContract(t *testing.T) {
 		// The queue merges both PRs, so the generated contract carries both
 		// changes and matches neither version 16 record.
 		records := []apiVersionRecord{rec(15, base), rec(16, left), rec(16, right)}
-		for _, apiVersion := range []int{16, 15} {
-			err := checkAPIVersionContract(apiVersion, merged, records)
-			require.ErrorContains(t, err, "API version 16 has different contract digests (16-bbbb, 16-cccc)")
-			assert.ErrorContains(t, err, "delete the file this PR added, rebase onto main after the earlier PR merges")
-			assert.ErrorContains(t, err, "rerun make test-api-version. The next free version is 17")
-		}
+		err := checkAPIVersionContract(16, merged, records)
+		require.ErrorContains(t, err, "API version 16 has different contract digests (16-bbbb, 16-cccc)")
+		assert.ErrorContains(t, err, "delete the file this PR added, rebase onto main after the earlier PR merges")
+		assert.ErrorContains(t, err, "rerun make test-api-version. The next free version is 17")
 
-		err := checkAPIVersionContract(16, merged, []apiVersionRecord{rec(15, base), rec(16, left)})
+		err = checkAPIVersionContract(16, merged, []apiVersionRecord{rec(15, base), rec(16, left)})
 		require.ErrorContains(t, err, "add an empty file 17-dddd, set server.APIVersion to 17")
 		assert.ErrorContains(t, err, "feature minimum")
 		repaired := []apiVersionRecord{rec(15, base), rec(16, left), rec(17, merged)}
@@ -149,9 +138,6 @@ func TestCheckAPIVersionContract(t *testing.T) {
 		err := checkAPIVersionContract(15, base, []apiVersionRecord{rec(15, base), rec(16, left)})
 		require.ErrorContains(t, err, "server.APIVersion 15 is below recorded API version 16")
 		assert.ErrorContains(t, err, "needs API version 17")
-
-		err = checkAPIVersionContract(15, left, []apiVersionRecord{rec(15, base), rec(16, left)})
-		assert.ErrorContains(t, err, "set server.APIVersion to 16")
 	})
 
 	t.Run("current version without record asks for one", func(t *testing.T) {
