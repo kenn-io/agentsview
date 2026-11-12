@@ -68,9 +68,9 @@ func cloneAnalytics[T analyticsReport](value T) T {
 		result.ByTool = slices.Clone(result.ByTool)
 		for i := range result.ByTool {
 			tool := &result.ByTool[i]
-			tool.EmptyRate = cloneAnalyticsFloat(tool.EmptyRate)
-			tool.RepeatRate = cloneAnalyticsFloat(tool.RepeatRate)
-			tool.RecoveryRate = cloneAnalyticsFloat(tool.RecoveryRate)
+			tool.EmptyRate = clonePtr(tool.EmptyRate)
+			tool.RepeatRate = clonePtr(tool.RepeatRate)
+			tool.RecoveryRate = clonePtr(tool.RecoveryRate)
 		}
 		result.Trend = slices.Clone(result.Trend)
 		for i := range result.Trend {
@@ -85,35 +85,28 @@ func cloneAnalytics[T analyticsReport](value T) T {
 		result.GradeDistribution = maps.Clone(result.GradeDistribution)
 		result.OutcomeDistribution = maps.Clone(result.OutcomeDistribution)
 		result.OutcomeConfidenceDistribution = maps.Clone(result.OutcomeConfidenceDistribution)
-		result.AvgHealthScore = cloneAnalyticsFloat(result.AvgHealthScore)
-		result.ContextHealth.AvgContextPressure = cloneAnalyticsFloat(result.ContextHealth.AvgContextPressure)
+		result.AvgHealthScore = clonePtr(result.AvgHealthScore)
+		result.ContextHealth.AvgContextPressure = clonePtr(result.ContextHealth.AvgContextPressure)
 		result.Trend = slices.Clone(result.Trend)
 		for i := range result.Trend {
-			result.Trend[i].AvgHealthScore = cloneAnalyticsFloat(result.Trend[i].AvgHealthScore)
+			result.Trend[i].AvgHealthScore = clonePtr(result.Trend[i].AvgHealthScore)
 		}
 		result.ByAgent = slices.Clone(result.ByAgent)
 		for i := range result.ByAgent {
-			result.ByAgent[i].AvgHealthScore = cloneAnalyticsFloat(result.ByAgent[i].AvgHealthScore)
+			result.ByAgent[i].AvgHealthScore = clonePtr(result.ByAgent[i].AvgHealthScore)
 		}
 		result.ByProject = slices.Clone(result.ByProject)
 		for i := range result.ByProject {
-			result.ByProject[i].AvgHealthScore = cloneAnalyticsFloat(result.ByProject[i].AvgHealthScore)
+			result.ByProject[i].AvgHealthScore = clonePtr(result.ByProject[i].AvgHealthScore)
 		}
 		result.Calibration = maps.Clone(result.Calibration)
 		for key, calibration := range result.Calibration {
-			calibration.IncompleteLift = cloneAnalyticsFloat(calibration.IncompleteLift)
-			calibration.AvgScoreDelta = cloneAnalyticsFloat(calibration.AvgScoreDelta)
+			calibration.IncompleteLift = clonePtr(calibration.IncompleteLift)
+			calibration.AvgScoreDelta = clonePtr(calibration.AvgScoreDelta)
 			result.Calibration[key] = calibration
 		}
 		return any(result).(T)
 	default:
 		panic("unsupported analytics report")
 	}
-}
-
-func cloneAnalyticsFloat(value *float64) *float64 {
-	if value == nil {
-		return nil
-	}
-	return new(*value)
 }
