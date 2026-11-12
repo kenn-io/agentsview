@@ -583,7 +583,7 @@ func (f AnalyticsFilter) HasTimeFilter() bool {
 
 // ToolsUseDayGroups reports whether tool calls can be grouped by local date.
 func (f AnalyticsFilter) ToolsUseDayGroups() bool {
-	return f.ToolMetric == "" && !f.HasTimeFilter()
+	return !f.HasTimeFilter()
 }
 
 // matchesTimeFilter checks whether a local time matches the

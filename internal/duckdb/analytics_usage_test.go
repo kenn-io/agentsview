@@ -996,6 +996,45 @@ func assertDuckAnalyticsToolsModelFilterCountsOnlyMatchingToolCalls(
 	assert.Zero(t, byTool["Grep"], "Grep tool")
 }
 
+func TestDuckAnalyticsToolEvidenceDatesAndLinks(t *testing.T) {
+	id := "duck-tool-evidence"
+	store := newDuckAnalyticsStore(t, []db.SessionBatchWrite{{
+		Session: syncSession(id, "alpha", "evidence", "2025-06-01T23:59:00Z", 4),
+		Messages: []db.Message{
+			duckModelMessage(id, 2, "assistant", "read", "2025-06-01T23:59:00Z", "model-a", db.ToolCall{ToolName: "Read", Category: "Read"}),
+			duckModelMessage(id, 4, "assistant", "read", "2025-06-02T00:01:00Z", "model-b", db.ToolCall{ToolName: "Read", Category: "Read"}),
+			duckModelMessage(id, 5, "assistant", "read", "2025-06-02T00:30:00Z", "model-b", db.ToolCall{ToolName: "Read", Category: "Read"}),
+			duckModelMessage(id, 6, "assistant", "read", "2025-06-02T01:30:00Z", "model-b", db.ToolCall{ToolName: "Read", Category: "Read"}),
+		},
+		Signals: db.SessionSignalUpdate{
+			QualitySignals: db.QualitySignals{Version: db.CurrentQualitySignalVersion},
+			ToolObservations: []db.ToolObservation{
+				{MessageOrdinal: 2, Outcome: "empty"},
+				{MessageOrdinal: 4, Outcome: "empty"},
+				{MessageOrdinal: 5, Outcome: "empty"},
+				{MessageOrdinal: 6, Outcome: "empty"},
+			},
+		},
+		DataVersion: 1, ReplaceMessages: true,
+	}})
+	filter := db.AnalyticsFilter{Timezone: "UTC", ToolName: "Read", ToolCategory: "Read"}
+	response, err := store.GetAnalyticsSignalSessions(t.Context(), filter, "tool_empty_rate", 10)
+	require.NoError(t, err)
+	assert.Equal(t, new(1), response.Total)
+	require.Len(t, response.Sessions, 1)
+	assert.Equal(t, id, response.Sessions[0].SessionID)
+	assert.Equal(t, 4, response.Sessions[0].SignalTotal)
+	assert.Equal(t, "2025-06-02", response.Sessions[0].Date)
+	assert.Equal(t, new(2), response.Sessions[0].MessageOrdinal)
+	hour := 0
+	filter.Hour = &hour
+	response, err = store.GetAnalyticsSignalSessions(t.Context(), filter, "tool_empty_rate", 10)
+	require.NoError(t, err)
+	require.Len(t, response.Sessions, 1)
+	assert.Equal(t, 2, response.Sessions[0].SignalTotal)
+	assert.Equal(t, new(4), response.Sessions[0].MessageOrdinal)
+}
+
 func TestDuckAnalyticsToolsLocalDayBoundaries(t *testing.T) {
 	id := "duck-tool-boundary"
 	store := newDuckAnalyticsStore(t, []db.SessionBatchWrite{{
