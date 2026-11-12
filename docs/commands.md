@@ -2185,7 +2185,7 @@ unsupported. JSON output includes the source, destination paths, checkout, comma
 and installed or unchanged status. Claude's native home and supported
 environment overrides determine the destination, independently of discovery
 roots. Pi uses its native agent directory, or its configured session directory
-from settings or `PI_CODING_AGENT_SESSION_DIR` (which takes priority). Local companions must resolve inside
+from settings or `PI_CODING_AGENT_SESSION_DIR` (which takes priority). For discovery, `PI_DIR` takes precedence over `PI_CODING_AGENT_SESSION_DIR`; either overrides configured discovery roots. Local companions must resolve inside
 the configured root when the transcript is inside it; an externally linked
 project is confined to that project. Remote mirror files must remain inside the
 mirror root.
@@ -2216,8 +2216,8 @@ project path for an unbound session. Start the printed command in a new process
 when the selected checkout matters: end the existing running session first.
 Materialize after Claude and any S3 uploader finish; S3 files can otherwise
 reflect different upload moments.
-If the destination is a configured Claude source root, a later sync may also
-discover the installed copy as a separate local session.
+If the destination is a configured Claude or Pi source root, a later sync may
+also discover the installed copy as a separate local session.
 
 `agentsview session commits <id>` lists transcript and Git trailer commits
 linked to a session. The `SOURCE` column distinguishes `transcript` from
