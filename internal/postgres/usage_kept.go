@@ -16,15 +16,14 @@ func (s *Store) directUsageVersion(ctx context.Context, slot string) string {
 	if slot == "" || s.readTx != nil || s.hostedRelations {
 		return ""
 	}
-	var revision int64
-	err := s.pg.QueryRowContext(ctx, `SELECT coalesce((SELECT value::bigint FROM sync_metadata WHERE key = 'usage_change_revision' AND EXISTS (SELECT 1 FROM sync_metadata WHERE key = 'usage_change_journal_version' AND value IN ('1', '2'))), 0)`).Scan(&revision)
+	revision, err := s.directUsageChangeRevision(ctx)
 	if err != nil || revision == 0 {
 		return ""
 	}
 	runtime := s.runtimeState()
 	runtime.pricingMu.Lock()
 	defer runtime.pricingMu.Unlock()
-	return fmt.Sprintf("direct|%d|%d", revision, runtime.pricingGeneration)
+	return fmt.Sprintf("%d|%d", revision, runtime.pricingGeneration)
 }
 
 func (s *Store) deferUsage(f db.UsageFilter) bool {

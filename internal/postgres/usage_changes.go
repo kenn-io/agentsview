@@ -314,6 +314,16 @@ func (s *Store) UsageChangeRevision(ctx context.Context) (int64, error) {
 	return revision, err
 }
 
+// directUsageChangeRevision accepts the journal versions supported by direct reads.
+func (s *Store) directUsageChangeRevision(ctx context.Context) (int64, error) {
+	var revision int64
+	err := s.pg.QueryRowContext(ctx, `SELECT coalesce((SELECT value::bigint FROM sync_metadata WHERE key = 'usage_change_revision' AND EXISTS (SELECT 1 FROM sync_metadata WHERE key = 'usage_change_journal_version' AND value IN ('1', '2'))), 0)`).Scan(&revision)
+	if isInsufficientPrivilege(err) || isUndefinedTable(err) {
+		return 0, nil
+	}
+	return revision, err
+}
+
 // LoadUsageChanges returns the current revision and sessions changed after
 // afterRevision from one snapshot, including hard-deleted sessions. Pricing
 // and project identity changes only advance the revision. A write committed
