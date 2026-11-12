@@ -1,0 +1,14 @@
+{
+  "version": 1,
+  "sessionId": "0e4ba1a2-6f43-4c47-9c35-4d1f2c3b8a10",
+  "creationDate": 1710000000000,
+  "lastMessageDate": 1710000001000,
+  "requests": [
+    {
+      "requestId": "request-1",
+      "message": {"text": "How do I add a new provider?"},
+      "response": [{"value": "Register a factory beside the existing parsers."}],
+      "timestamp": 1710000000000
+    }
+  ]
+}

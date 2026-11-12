@@ -1,0 +1,29 @@
+{
+  "messages": [
+    {
+      "id": "msg_user_001",
+      "role": "user",
+      "content": [{"type": "text", "text": "<user_input mode=\"act\">Run the migration dry run</user_input>"}],
+      "ts": 1789034400000
+    },
+    {
+      "id": "msg_asst_001",
+      "role": "assistant",
+      "content": [
+        {"type": "text", "text": "Starting the dry run."},
+        {"type": "tool_use", "id": "call_cmd_01", "name": "execute_command", "input": {"commands": ["make migrate-dry-run"]}}
+      ],
+      "ts": 1789034402000,
+      "modelInfo": {"id": "deepseek/deepseek-v4-flash", "provider": "cline"},
+      "metrics": {"inputTokens": 900, "outputTokens": 40, "cacheReadTokens": 0, "cacheWriteTokens": 0}
+    },
+    {
+      "id": "msg_user_002",
+      "role": "user",
+      "content": [
+        {"type": "tool_result", "tool_use_id": "call_cmd_01", "name": "execute_command", "content": [{"query": "make migrate-dry-run", "result": "error: missing DATABASE_URL", "success": false}]}
+      ],
+      "ts": 1789034403000
+    }
+  ]
+}

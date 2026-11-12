@@ -1,0 +1,5 @@
+{"role":"session_meta","platform":"darwin","timestamp":"2026-04-03T15:00:00.000000"}
+{"role":"user","content":"Read main.go","timestamp":"2026-04-03T15:00:01.000000"}
+{"role":"assistant","content":"","reasoning":"Let me read it.","finish_reason":"tool_calls","tool_calls":[{"id":"tc1","function":{"name":"read_file","arguments":"{\"path\":\"cmd/server/main.go\"}"}}],"timestamp":"2026-04-03T15:00:02.000000"}
+{"role":"tool","content":"package main\n","tool_call_id":"tc1","timestamp":"2026-04-03T15:00:03.000000"}
+{"role":"assistant","content":"main.go only declares the package.","timestamp":"2026-04-03T15:00:04.000000"}

@@ -1,0 +1,5 @@
+{"id":"abc-123","chatId":"chat-1","modelId":"model-1","parentId":"","creationReason":"newChat","createdAt":"2024-01-01T00:00:00Z","updatedAt":"2024-01-01T00:01:00Z","version":"1"}
+{"role":"system","content":"You are an AI assistant.\n\n# Environment\n\nWorking directory: /home/user/code/app\n\nOS: linux"}
+{"role":"user","content":[{"type":"text","text":"Fix the off-by-one error in pagination.","tag":"user-input"}]}
+{"role":"assistant","content":[{"type":"text","text":"The loop should stop at page_count, not page_count + 1."}]}
+{"role":"finish","reason":"endTurn"}

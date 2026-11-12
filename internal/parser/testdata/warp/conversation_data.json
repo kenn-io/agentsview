@@ -1,0 +1,11 @@
+{
+  "conversation_usage_metadata": {
+    "token_usage": [{"model_id": "Claude Opus 4", "warp_tokens": 1200, "byok_tokens": 0}],
+    "tool_usage_metadata": {
+      "run_command_stats": {"count": 2, "commands_executed": 2},
+      "read_files_stats": {"count": 1},
+      "grep_stats": {"count": 1},
+      "apply_file_diff_stats": {"count": 1, "lines_added": 5, "lines_removed": 2, "files_changed": 1}
+    }
+  }
+}
