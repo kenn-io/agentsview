@@ -292,6 +292,35 @@ func TestMaterializeLinkedClaudeProject(t *testing.T) {
 	}
 }
 
+func TestMaterializeInRootLinkedSessionDirectory(t *testing.T) {
+	const id = "12345678-1234-1234-1234-123456789abc"
+	root, home, cwd := t.TempDir(), t.TempDir(), t.TempDir()
+	t.Setenv("CLAUDE_CONFIG_DIR", home)
+	t.Setenv("CLAUDE_CODE_PROJECT_DIR_NAME", "fixture")
+	project := filepath.Join(root, "project")
+	other := filepath.Join(root, "other-project", "session")
+	require.NoError(t, os.MkdirAll(project, 0o700))
+	require.NoError(t, os.MkdirAll(filepath.Join(other, "tool-results"), 0o700))
+	original := `{"type":"user","sessionId":"` + id + `","message":{"role":"user","content":"fixture"}}` + "\n"
+	name := filepath.Join(project, id+".jsonl")
+	require.NoError(t, os.WriteFile(name, []byte(original), 0o600))
+	require.NoError(t, os.WriteFile(filepath.Join(other, "tool-results", "result.txt"), []byte("linked output"), 0o600))
+	if err := os.Symlink(other, filepath.Join(project, id)); err != nil {
+		t.Skipf("symlink unavailable: %v", err)
+	}
+	cfg := config.Config{InstallationID: "local", LocalMachineName: "local", AgentDirs: map[parser.AgentType][]string{parser.AgentClaude: {root}}}
+	session := &db.Session{ID: id, Agent: "claude", Machine: "local", FilePath: &name}
+	result, err := Materialize(t.Context(), cfg, session, cwd)
+	require.NoError(t, err)
+	assert.Equal(t, "installed", result.Status)
+	got, err := os.ReadFile(filepath.Join(home, "projects", "fixture", id, "tool-results", "result.txt"))
+	require.NoError(t, err)
+	assert.Equal(t, "linked output", string(got))
+	result, err = Materialize(t.Context(), cfg, session, cwd)
+	require.NoError(t, err)
+	assert.Equal(t, "unchanged", result.Status)
+}
+
 func TestMaterializeMirrorRejectsLinkedProjectOutsideMirror(t *testing.T) {
 	const id = "12345678-1234-1234-1234-123456789abc"
 	data, outside := t.TempDir(), t.TempDir()
