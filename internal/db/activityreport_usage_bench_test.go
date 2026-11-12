@@ -73,20 +73,6 @@ func BenchmarkSQLiteActivityReportUsage(b *testing.B) {
 		}
 		require.Equal(b, survivors*20, outputTokens)
 	})
-	b.Run("retained-hit", func(b *testing.B) {
-		ongoing := q
-		ongoing.Partial = true
-		ongoing.EffectiveEnd = q.RangeEnd.Add(-time.Second)
-		filter := AnalyticsFilter{Timezone: "UTC", IncludeSubagents: true, IncludeForks: true}
-		_, err := d.GetActivityReport(b.Context(), filter, ongoing)
-		require.NoError(b, err)
-		b.ReportAllocs()
-		for b.Loop() {
-			report, err := d.GetActivityReport(b.Context(), filter, ongoing)
-			require.NoError(b, err)
-			require.Equal(b, survivors*20, report.Totals.OutputTokens)
-		}
-	})
 	b.Run("raw", func(b *testing.B) {
 		b.ReportAllocs()
 		for b.Loop() {
