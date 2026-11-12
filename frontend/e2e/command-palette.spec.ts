@@ -95,29 +95,40 @@ test("keeps a real result selected when a new search returns fewer rows", async 
   let release: () => void = () => {};
   const held = new Promise<void>((resolve) => (release = resolve));
   let first: Record<string, unknown> | undefined;
-  await page.route((url) => url.pathname === "/api/v1/search", async (route) => {
-    const query = new URL(route.request().url()).searchParams.get("q");
-    const response = await route.fetch();
-    const body = await response.json();
-    if (query === "test") {
-      first = body.results?.[0];
-      expect(first, "the fixture has a result for the query").toBeTruthy();
-      body.results = [0, 1, 2].map((i) => ({ ...first, session_id: `${first!.session_id}-${i}` }));
-    } else {
-      await held;
-      body.results = [first];
-    }
-    await route.fulfill({ response, json: body });
-  });
+  await page.route(
+    (url) => url.pathname === "/api/v1/search",
+    async (route) => {
+      const query = new URL(route.request().url()).searchParams.get("q");
+      const response = await route.fetch();
+      const body = await response.json();
+      if (query === "test") {
+        first = body.results?.[0];
+        expect(first, "the fixture has a result for the query").toBeTruthy();
+        body.results = [0, 1, 2].map((i) => ({
+          ...first,
+          session_id: `${first!.session_id}-${i}`,
+        }));
+      } else {
+        await held;
+        body.results = [first];
+      }
+      await route.fulfill({ response, json: body });
+    },
+  );
   await page.goto("/usage");
   await openSearch(page, "test");
   await expect(page.locator(".palette-item")).toHaveCount(3);
 
   await page.locator(".palette-input").press("s");
   await expect(page.locator(".palette-loading")).toBeVisible();
-  // Arrows while the new search runs must not select the old, hidden rows.
+  // Arrows and Enter while the new search runs must not act on the old,
+  // hidden rows.
   await page.keyboard.press("ArrowDown");
   await page.keyboard.press("ArrowDown");
+  const before = page.url();
+  await page.keyboard.press("Enter");
+  await expect(page.locator(".palette")).toBeVisible();
+  expect(page.url()).toBe(before);
   release();
   await expect(page.locator(".palette-item")).toHaveCount(1);
 

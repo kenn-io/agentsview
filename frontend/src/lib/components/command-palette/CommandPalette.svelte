@@ -165,8 +165,8 @@
   // opens the result; column 1, on search results, copies its session ID.
   function handleKeydown(e: KeyboardEvent) {
     // While a search runs, the store still holds the previous results, which
-    // are not shown; arrows must not select rows the next response may lack.
-    if ((e.key === "ArrowDown" || e.key === "ArrowUp") && !resultsListed) {
+    // are not shown; arrows and Enter must not act on those hidden rows.
+    if ((e.key === "ArrowDown" || e.key === "ArrowUp" || e.key === "Enter") && !resultsListed) {
       e.preventDefault();
     } else if (e.key === "ArrowDown") {
       e.preventDefault();
