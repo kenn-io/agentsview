@@ -115,6 +115,7 @@ enabled = true`;
         detail = status.last_error;
         retryAction = "build";
         phase = "failed";
+        if (status.setup?.waiting) schedulePoll();
       } else if (!status.running && status.setup && (status.setup.action === "turn-on" || !status.setup.enabled || status.setup.busy || status.setup.installing || status.setup.waiting || status.setup.error)) {
         phase = "unconfigured";
         if (status.setup.busy || status.setup.installing || status.setup.waiting) schedulePoll();
@@ -124,8 +125,7 @@ enabled = true`;
       } else if (status.last_result) {
         const buildKey = resolvedBuildKey(status);
         if (resolvedBuildIds.has(buildKey)) {
-          // Already auto-retried this build once and the search still 501s, so
-          // stop looping and offer the setup controls instead.
+          // Retry search only once for each completed build.
           phase = "ready";
         } else {
           resolvedBuildIds.add(buildKey);
@@ -188,7 +188,7 @@ enabled = true`;
         detail = status.last_error;
         retryAction = "build";
         phase = "failed";
-        return;
+        if (!status.setup?.waiting) return;
       }
       if (status.running || status.setup?.waiting) {
         schedulePoll();

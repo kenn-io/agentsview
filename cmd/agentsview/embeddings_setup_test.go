@@ -604,7 +604,7 @@ func TestLiveEmbeddingsSetup(t *testing.T) {
 				generations, err := owner.serving.manager.Generations(t.Context())
 				require.NoError(t, err)
 				assert.EqualValues(t, 2, generations[0].Embedded)
-				// Quiesce the consumers so the notification remains observable.
+				// A stopped scheduler must not accept further notifications.
 				owner.cancel()
 				require.Eventually(t, func() bool {
 					select {
@@ -615,9 +615,8 @@ func TestLiveEmbeddingsSetup(t *testing.T) {
 					}
 				}, time.Second, time.Millisecond)
 				request("DELETE", "/api/v1/sessions/session-one", "", 204)
-				require.Len(t, owner.serving.Scheduler.dirty, 1,
-					"DELETE must queue the scheduler created by the setup reload")
-				(<-owner.serving.Scheduler.dirty)()
+				assert.Empty(t, owner.serving.Scheduler.dirty,
+					"DELETE must not queue work after scheduler shutdown")
 			}
 		})
 	}
