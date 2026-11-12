@@ -2176,9 +2176,9 @@ saved archive database of up to 16 GiB. It holds a snapshot repository lease;
 if the repository is busy, retry after the other operation finishes. `--server`,
 `--server-token-file`, and `--pg` are unavailable. Use `--json` for the source,
 installed paths, checkout, command, and installed or unchanged status. For
-snapshot recovery, the source is `snapshot:<id>`. Claude's native home and supported
-environment overrides determine the destination, independently of discovery
-roots. Local companions must resolve inside the configured root when the
+snapshot recovery, the source is `snapshot:<id>`. Claude's native home and
+supported environment overrides determine the destination, independently of
+discovery roots. Local companions must resolve inside the configured root when the
 transcript is inside it; an externally linked project is confined to that
 project. Remote mirror files must remain inside the mirror root.
 An explicitly set `CLAUDE_CONFIG_DIR` must be an absolute path; the printed
