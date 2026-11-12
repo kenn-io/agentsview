@@ -95,9 +95,10 @@ func TestSearchUsesLongRunningClient(t *testing.T) {
 		srv := httptest.NewTestServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			assert.Equal(t, "/api/v1/search", r.URL.Path)
 			assert.Equal(t, "needle", r.URL.Query().Get("q"))
+			assert.Equal(t, "42", r.URL.Query().Get("cursor"))
 			time.Sleep(50 * time.Millisecond)
 			w.Header().Set("Content-Type", "application/json")
-			_, _ = w.Write([]byte(`{"results":[{"session_id":"session-a"}],"next":42}`))
+			_, _ = w.Write([]byte(`{"results":[{"session_id":"session-a"}],"next":84}`))
 		}))
 		transport := srv.Client().Transport
 		backend := NewHTTPBackend(srv.URL, "", false, "").(*httpBackend)
@@ -105,34 +106,41 @@ func TestSearchUsesLongRunningClient(t *testing.T) {
 		backend.longRunningClient.Transport = transport
 		backend.client.Timeout = 10 * time.Millisecond
 
-		result, err := backend.Search(t.Context(), service.SearchRequest{Query: "needle"})
+		result, err := backend.Search(t.Context(), service.SearchRequest{Query: "needle", Cursor: 42})
 		require.NoError(t, err)
 		require.Len(t, result.Results, 1)
 		assert.Equal(t, "session-a", result.Results[0].SessionID)
-		assert.Equal(t, 42, result.NextCursor)
+		assert.Equal(t, 84, result.NextCursor)
 	})
 }
 
 func TestSearchCancelStopsRequest(t *testing.T) {
-	started := make(chan struct{})
-	stopped := make(chan struct{})
-	srv := httptest.NewServer(http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
-		close(started)
-		<-r.Context().Done()
-		close(stopped)
-	}))
-	t.Cleanup(srv.Close)
-	ctx, cancel := context.WithCancel(t.Context())
-	t.Cleanup(cancel)
-	errCh := make(chan error, 1)
-	go func() {
-		_, err := NewHTTPBackend(srv.URL, "", false, "").Search(ctx, service.SearchRequest{Query: "needle"})
-		errCh <- err
-	}()
-	<-started
-	cancel()
-	require.ErrorIs(t, <-errCh, context.Canceled)
-	<-stopped
+	synctest.Test(t, func(t *testing.T) {
+		started := make(chan struct{})
+		stopped := make(chan struct{})
+		srv := httptest.NewTestServer(t, http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
+			close(started)
+			<-r.Context().Done()
+			close(stopped)
+		}))
+		transport := srv.Client().Transport
+		backend := NewHTTPBackend(srv.URL, "", false, "").(*httpBackend)
+		backend.client.Transport = transport
+		backend.longRunningClient.Transport = transport
+		backend.client.Timeout = 10 * time.Millisecond
+		ctx, cancel := context.WithCancel(t.Context())
+		t.Cleanup(cancel)
+		errCh := make(chan error, 1)
+		go func() {
+			_, err := backend.Search(ctx, service.SearchRequest{Query: "needle"})
+			errCh <- err
+		}()
+		<-started
+		time.Sleep(50 * time.Millisecond)
+		cancel()
+		require.ErrorIs(t, <-errCh, context.Canceled)
+		<-stopped
+	})
 }
 
 func TestSearchContentForwardsRecallContract(t *testing.T) {

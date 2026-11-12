@@ -627,6 +627,10 @@ with a `{"error":"request timed out"}` body, and affected dashboard panels show
 archives but can be tight for large shared datasets — heatmap, activity, and
 usage summaries scan the full message history.
 
+Session search (`/api/v1/search`) and content search (`/api/v1/search/content`)
+are exempt from this deadline. Cancelling a request stops its search. A reverse
+proxy may impose its own timeout.
+
 Raise the deadline with `--write-timeout` (a Go duration). The flag is available
 on both the local SQLite server and the PostgreSQL read server:
 
@@ -741,7 +745,7 @@ Changes that affect bind or auth behavior may require a server restart.
 | `--require-auth`    | `false`     | Require a bearer token for API requests             |
 | `--public-url`      |             | Browser URL, also added to trusted origins             |
 | `--public-origin`   |             | Trusted browser origin (repeatable/comma-separated) |
-| `--write-timeout`   | `30s`       | API response write deadline; `0` disables it        |
+| `--write-timeout`   | `30s`       | API response deadline with search exceptions; `0` disables it |
 | `--proxy`           |             | Managed proxy mode (`caddy`)                        |
 | `--caddy-bin`       | `caddy`     | Caddy binary path                                   |
 | `--proxy-bind-host` | `127.0.0.1` | Interface for managed proxy                         |
