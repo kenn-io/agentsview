@@ -1062,45 +1062,64 @@ func TestReconcileHermesUnreadableStateDBSyncsTranscriptsWithoutTombstones(
 }
 
 func TestReconcileHermesScopedRootPreservesStateMemberMovedToAnotherRoot(t *testing.T) {
-	firstRoot := t.TempDir()
-	secondRoot := t.TempDir()
-	firstStateDB := writeHermesArchiveStateDB(t, firstRoot)
-	firstSessions := filepath.Join(firstRoot, "sessions")
-	secondSessions := filepath.Join(secondRoot, "sessions")
-	require.NoError(t, os.MkdirAll(firstSessions, 0o755))
-	require.NoError(t, os.MkdirAll(secondSessions, 0o755))
+	for _, test := range []struct {
+		name          string
+		removeProfile bool
+	}{
+		{name: "existing archive"},
+		{name: "removed profile", removeProfile: true},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			profilesRoot := filepath.Join(t.TempDir(), ".hermes", "profiles")
+			firstRoot := filepath.Join(profilesRoot, "first")
+			require.NoError(t, os.MkdirAll(firstRoot, 0o755))
+			secondRoot := t.TempDir()
+			firstStateDB := writeHermesArchiveStateDB(t, firstRoot)
+			firstSessions := filepath.Join(firstRoot, "sessions")
+			secondSessions := filepath.Join(secondRoot, "sessions")
+			require.NoError(t, os.MkdirAll(firstSessions, 0o755))
+			require.NoError(t, os.MkdirAll(secondSessions, 0o755))
 
-	database := dbtest.OpenTestDB(t)
-	engine := NewEngine(t.Context(), database, EngineConfig{
-		AgentDirs: map[parser.AgentType][]string{
-			parser.AgentHermes: {firstSessions, secondSessions},
-		},
-		Machine: "local",
-	})
-	t.Cleanup(engine.Close)
-	require.NoError(t, engine.ReconcileWatchRootsAfterLostEvents(
-		t.Context(), nil, true,
-	))
+			configuredRoot := firstSessions
+			if test.removeProfile {
+				configuredRoot = profilesRoot
+			}
+			database := dbtest.OpenTestDB(t)
+			engine := NewEngine(t.Context(), database, EngineConfig{
+				AgentDirs: map[parser.AgentType][]string{
+					parser.AgentHermes: {configuredRoot, secondSessions},
+				},
+				Machine: "local",
+			})
+			t.Cleanup(engine.Close)
+			require.NoError(t, engine.ReconcileWatchRootsAfterLostEvents(
+				t.Context(), nil, true,
+			))
 
-	before, err := database.GetSessionFull(t.Context(), "hermes:child")
-	require.NoError(t, err)
-	require.NotNil(t, before)
-	require.Nil(t, before.SourceMissingAt)
+			before, err := database.GetSessionFull(t.Context(), "hermes:child")
+			require.NoError(t, err)
+			require.NotNil(t, before)
+			require.Nil(t, before.SourceMissingAt)
 
-	writeHermesArchiveStateDB(t, secondRoot)
-	conn, err := sql.Open("sqlite3", firstStateDB)
-	require.NoError(t, err)
-	_, err = conn.ExecContext(t.Context(), "DELETE FROM sessions WHERE id = 'child'")
-	require.NoError(t, err)
-	require.NoError(t, conn.Close())
+			writeHermesArchiveStateDB(t, secondRoot)
+			conn, err := sql.Open("sqlite3", firstStateDB)
+			require.NoError(t, err)
+			_, err = conn.ExecContext(t.Context(), "DELETE FROM sessions WHERE id = 'child'")
+			require.NoError(t, err)
+			require.NoError(t, conn.Close())
+			if test.removeProfile {
+				require.NoError(t, os.Rename(firstRoot, filepath.Join(t.TempDir(), "removed-profile")))
+			}
 
-	require.NoError(t, engine.ReconcileWatchRootsAfterLostEvents(
-		t.Context(), []string{firstSessions}, false,
-	))
-	stored, err := database.GetSessionFull(t.Context(), "hermes:child")
-	require.NoError(t, err)
-	assert.Equal(t, before, stored,
-		"a scoped pass must preserve the source-present session while its virtual member exists under another root")
+			require.NoError(t, engine.ReconcileWatchRootsAfterLostEvents(
+				t.Context(), []string{firstSessions}, false,
+			))
+			stored, err := database.GetSessionFull(t.Context(), "hermes:child")
+			require.NoError(t, err)
+			assert.Equal(t, before, stored,
+				"a scoped pass must preserve the source-present session while its virtual member exists under another root")
+		})
+	}
 }
 
 func writeHermesArchiveStateDB(t *testing.T, root string) string {

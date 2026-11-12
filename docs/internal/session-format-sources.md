@@ -4510,9 +4510,11 @@ schemas keep their existing ordering behavior.
   ancestors were pruned keeps its stored job, including transcript-only parses
   and Augure Desktop. Cron member fingerprints include the resolved job ID in
   direct and cached reads for both providers. Scoped reconciliation recognises
-  virtual state members from provider-issued membership proofs. Reverified
-  2026-11-12 with a state session moved between two configured roots: syncing
-  its former root preserves the complete archived session as source-present.
+  virtual state members from membership proofs or configured archive paths,
+  including after a profile disappears. Reverified 2026-11-12 with a state
+  session moved between two configured roots: syncing its former root, even
+  after removing the old profile, preserves the complete archived session as
+  source-present.
 
 ## Forge (`forge`)
 

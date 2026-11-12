@@ -139,6 +139,25 @@ func (p *hermesProvider) SourceForReconciliation(
 	return p.sources.SourceForReconciliation(ctx, path, project)
 }
 
+// StoredSourceHintScopes identifies state members even after their archive or
+// profile disappears. Membership spelling does not claim discovery completeness.
+func (p *hermesProvider) StoredSourceHintScopes(req ChangedPathRequest) []StoredSourceHintScope {
+	for _, root := range p.sources.roots {
+		if isHermesProfilesContainer(root) {
+			var ok bool
+			root, ok = hermesProfileRootForPath(root, req.Path)
+			if !ok {
+				continue
+			}
+		}
+		stateDB, _, ok := hermesArchivePathsForEvent(root, req.Path)
+		if ok && samePath(req.Path, stateDB) {
+			return []StoredSourceHintScope{{Path: stateDB, IncludeVirtualMembers: true}}
+		}
+	}
+	return nil
+}
+
 // ReconciliationAggregateMemberPaths maps an aggregate-owned state.db row to
 // the sources streamed discovery emits for that member: the virtual
 // state.db#<id> path for state-backed sessions and both transcript file
