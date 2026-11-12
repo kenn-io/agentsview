@@ -1025,7 +1025,7 @@ func TestUsageJournaledMemoSeparatesTotalsFromTop(t *testing.T) {
 		readTop()
 		want, err := database.getDailyUsageLegacy(t.Context(), filter)
 		require.NoError(t, err)
-		got, err := database.GetDailyUsage(ctx, filter)
+		got, err := database.getDailyUsageUncached(ctx, filter)
 		require.NoError(t, err)
 		assert.Equal(t, want, got)
 		readTop()
@@ -1180,7 +1180,7 @@ func TestUsageJournaledConcurrentWriterInstallConflicts(t *testing.T) {
 		for ordinal := range writes {
 			err := other.InsertMessages(t.Context(), []Message{{SessionID: "session", Ordinal: ordinal, Role: "assistant", Timestamp: "2026-08-10T23:31:00Z", Model: "journal-model", TokenUsage: []byte(`{"input_tokens":1}`)}})
 			if err == nil {
-				_, err = other.GetDailyUsage(t.Context(), UsageFilter{Timezone: "UTC", SkipSessionCounts: true})
+				_, err = other.getDailyUsageUncached(t.Context(), UsageFilter{Timezone: "UTC", SkipSessionCounts: true})
 			}
 			results <- err
 		}
@@ -1206,7 +1206,7 @@ func TestUsageJournaledConcurrentWriterInstallConflicts(t *testing.T) {
 		}
 		readers.Go(func() {
 			for range 10 {
-				got, err := database.GetDailyUsage(t.Context(), filter)
+				got, err := database.getDailyUsageUncached(t.Context(), filter)
 				if err != nil {
 					readerErrors <- err
 					return
@@ -1223,7 +1223,7 @@ func TestUsageJournaledConcurrentWriterInstallConflicts(t *testing.T) {
 	}
 	assert.GreaterOrEqual(t, prepares.Load(), int64(7*10+3), "each displaced journaled reader must recapture")
 	filter.Progress = nil
-	got, err := database.GetDailyUsage(t.Context(), filter)
+	got, err := database.getDailyUsageUncached(t.Context(), filter)
 	require.NoError(t, err)
 	assert.Equal(t, 3003, got.Totals.InputTokens)
 }

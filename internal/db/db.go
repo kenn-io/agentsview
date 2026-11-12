@@ -934,6 +934,8 @@ type DB struct {
 	usageCache           *usageCacheManager
 	activityMemo         activityCandidateMemo
 	activityKept         kept.Memo[activityKept]
+	usageKept            kept.Memo[DailyUsageResult]
+	usageKeptEpoch       atomic.Uint64
 	sessionStatsFacts    *sessionStatsFactsMemo
 	frustrationMemo      FrustrationMarkerMemo
 	usageBackfillMu      sync.Mutex
@@ -1267,6 +1269,8 @@ func (db *DB) SetCustomPricing(p map[string]config.CustomModelRate) {
 	db.customPricing = p
 	db.effectivePricing = nil
 	db.invalidateSessionStatsFacts()
+	db.usageKeptEpoch.Add(1)
+	db.usageKept.DeleteSlots(func(string) bool { return true })
 }
 
 // SetEffectivePricing installs in-memory pricing rows with explicit provenance
@@ -1281,6 +1285,8 @@ func (db *DB) SetEffectivePricing(
 		db.effectivePricing[model] = rates
 	}
 	db.invalidateSessionStatsFacts()
+	db.usageKeptEpoch.Add(1)
+	db.usageKept.DeleteSlots(func(string) bool { return true })
 }
 
 // SetEmptyCatalogPricing installs in-memory rates that are used only when the
@@ -1294,6 +1300,8 @@ func (db *DB) SetEmptyCatalogPricing(
 		db.emptyCatalogPricing[model] = rates
 	}
 	db.invalidateSessionStatsFacts()
+	db.usageKeptEpoch.Add(1)
+	db.usageKept.DeleteSlots(func(string) bool { return true })
 }
 
 // SetCursorSecret updates the secret key used for cursor signing.
@@ -2048,6 +2056,7 @@ func OpenReadOnly(ctx context.Context, path string) (*DB, error) {
 	db := &DB{
 		path: path, readOnly: true,
 		usageCache: newUsageCacheManager(path),
+		usageKept:  newDailyUsageMemo(),
 	}
 	db.dataStale.Store(dataStale)
 	db.usageCache.attachArchive(db)
@@ -4993,6 +5002,7 @@ func openAndInit(
 
 	db := &DB{
 		path: path, usageCache: newUsageCacheManager(path),
+		usageKept:         newDailyUsageMemo(),
 		activityKept:      newActivityKeptMemo(),
 		sessionStatsFacts: newSessionStatsFactsMemo(),
 	}
@@ -5826,9 +5836,12 @@ func (db *DB) reopenLockedWithBarrier(keepWriterBarrier bool) error {
 	oldWriter := db.writer.Swap(writer)
 	var oldReader *sql.DB
 	db.activityKept.DeleteSlots(func(string) bool { return true })
+	db.usageKeptEpoch.Add(1)
+	db.usageKept.DeleteSlots(func(string) bool { return true })
 	db.activityMemo.swap(func() {
 		db.frustrationMemo.Swap(func() { db.sessionStatsFacts.Swap(func() { oldReader = db.reader.Swap(reader) }) })
 	})
+	db.usageKeptEpoch.Add(1)
 	// Reopen fully restores the writer pool, so clear any writer-closed barrier
 	// a prior CloseWriter set unless the caller keeps it. Without the clear a
 	// resync swap that ran behind the worker write barrier would reopen the

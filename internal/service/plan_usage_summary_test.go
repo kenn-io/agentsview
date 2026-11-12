@@ -71,6 +71,17 @@ func TestUsageModelGroupsPlanOnly(t *testing.T) {
 				assert.Equal(t, 40, res.ModelTotals[0].InputTokens)
 				assert.Equal(t, 7, res.ModelTotals[0].OutputTokens)
 			}
+			if tc.group && !tc.metered && tc.model == "" {
+				raw, err := be.UsageSummary(t.Context(), service.UsageRequest{
+					From: "2026-09-10", To: "2026-09-10", IncludeOneShot: true,
+				})
+				require.NoError(t, err)
+				counts := map[string]int{}
+				for _, total := range raw.ModelTotals {
+					counts[total.Model] = total.PlanOnlySessions
+				}
+				assert.Equal(t, map[string]int{"model-a": 1, "model-b": 2, "group": 1}, counts)
+			}
 		})
 	}
 }
