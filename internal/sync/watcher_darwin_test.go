@@ -2463,18 +2463,25 @@ func TestDarwinWatcherNativeDropReconcilesOnlyThatRoot(t *testing.T) {
 // recovery: close only that stream and hand only that root to polling. A
 // replaced root then gets a new stream and releases its polling.
 func TestDarwinWatcherNativeDropRecoversHiddenRootLoss(t *testing.T) {
+	replace := func(t *testing.T, root string) {
+		require.NoError(t, os.Rename(root, root+".old"))
+		require.NoError(t, os.Mkdir(root, 0o700))
+	}
 	for _, tc := range []struct {
 		name     string
 		mutate   func(t *testing.T, root string)
 		recovers bool
+		// duringActivation replaces the root while its first stream is being
+		// created, so the identity recorded at activation must be the
+		// directory that existed before the stream, not its replacement.
+		duringActivation bool
 	}{
 		{name: "removed", mutate: func(t *testing.T, root string) {
 			require.NoError(t, os.RemoveAll(root))
 		}},
-		{name: "replaced", recovers: true, mutate: func(t *testing.T, root string) {
-			require.NoError(t, os.Rename(root, root+".old"))
-			require.NoError(t, os.Mkdir(root, 0o700))
-		}},
+		{name: "replaced", recovers: true, mutate: replace},
+		{name: "replaced during activation", recovers: true, mutate: replace,
+			duringActivation: true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			base := t.TempDir()
@@ -2494,6 +2501,9 @@ func TestDarwinWatcherNativeDropRecoversHiddenRootLoss(t *testing.T) {
 			backend.newStream = func(root string, sink func([]fsevents.Event)) (darwinStream, error) {
 				sinksMu.Lock()
 				defer sinksMu.Unlock()
+				if tc.duringActivation && root == dropped && created[root] == 0 {
+					tc.mutate(t, root)
+				}
 				sinks[root] = sink
 				created[root]++
 				return &handoffRecordingStream{close: func() {
@@ -2537,7 +2547,9 @@ func TestDarwinWatcherNativeDropRecoversHiddenRootLoss(t *testing.T) {
 			}, 10)
 			require.NoError(t, watcher.Start())
 
-			tc.mutate(t, dropped)
+			if !tc.duringActivation {
+				tc.mutate(t, dropped)
+			}
 			sinksMu.Lock()
 			sink := sinks[dropped]
 			sinksMu.Unlock()

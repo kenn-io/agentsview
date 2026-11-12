@@ -755,13 +755,15 @@ func (b *darwinWatchBackend) handleRootDropLocked(
 
 // rootReplacedLocked reports whether an active recursive root no longer names
 // the directory its stream was opened on: it is missing, no longer a
-// directory, or a different directory now sits at its path.
+// directory, or a different directory now sits at its path. An identity that
+// could not be recorded counts as replaced, so the root is rearmed rather
+// than trusted.
 func (b *darwinWatchBackend) rootReplacedLocked(state *darwinLogicalRoot) bool {
 	info, err := b.statPath(state.plan.Path)
-	if err != nil || !info.IsDir() {
+	if err != nil || !info.IsDir() || state.identity == nil {
 		return true
 	}
-	return state.identity != nil && !os.SameFile(state.identity, info)
+	return !os.SameFile(state.identity, info)
 }
 
 func (b *darwinWatchBackend) statPath(path string) (os.FileInfo, error) {
@@ -1912,6 +1914,15 @@ func (b *darwinWatchBackend) activateRootLocked(state *darwinLogicalRoot) error 
 		b.storeRootLocked(registration)
 		return nil
 	}
+	// Record the directory before its stream exists. If it is replaced after
+	// this point the stream may watch the newer directory, and the mismatch
+	// only makes a later drop rearm the root, which is the safe direction. A
+	// failed stat leaves the identity unknown, which a drop also treats as
+	// replaced.
+	var identity os.FileInfo
+	if info, err := b.statPath(root); err == nil {
+		identity = info
+	}
 	stream, err := b.newStream(root, func(events []fsevents.Event) {
 		b.consumeFSEvents(registration, events)
 	})
@@ -1935,10 +1946,7 @@ func (b *darwinWatchBackend) activateRootLocked(state *darwinLogicalRoot) error 
 	state.active = true
 	state.ancestor = ""
 	state.stream = stream
-	state.identity = nil
-	if info, err := b.statPath(root); err == nil {
-		state.identity = info
-	}
+	state.identity = identity
 	return nil
 }
 

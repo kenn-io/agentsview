@@ -67,7 +67,7 @@ func TestReconcileProviderRootsGroupedYieldsToWaitingSyncBetweenGroups(t *testin
 			filepath.Join(rootLive, "project", "live-session.jsonl"),
 		})
 	}()
-	require.Eventually(t, func() bool { return engine.syncMu.waiters.Load() > 0 },
+	require.Eventually(t, func() bool { return engine.syncMu.waiting() > 0 },
 		10*time.Second, time.Millisecond, "the live sync must be waiting on syncMu")
 	release()
 

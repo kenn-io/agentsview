@@ -32,7 +32,7 @@ func TestEngineSyncLockYieldHandsLockToBlockedWaiter(t *testing.T) {
 		order <- "waiter"
 		lock.Unlock()
 	}()
-	require.Eventually(t, func() bool { return lock.waiters.Load() == 1 },
+	require.Eventually(t, func() bool { return lock.waiting() == 1 },
 		10*time.Second, time.Millisecond)
 
 	assert.True(t, lock.yield(func() { order <- "before-release" }))
@@ -42,13 +42,13 @@ func TestEngineSyncLockYieldHandsLockToBlockedWaiter(t *testing.T) {
 
 	got := []string{<-order, <-order, <-order}
 	assert.Equal(t, []string{"before-release", "waiter", "holder"}, got)
-	assert.Zero(t, lock.waiters.Load())
+	assert.Zero(t, lock.waiting())
 }
 
 // TestEngineSyncLockYieldAdmitsEveryCallerWaitingAtTheBoundary covers a short
 // maintenance call and a watcher sync that are both waiting when a poll pass
-// yields. The yielder must not take the lock back after only the first one
-// has run.
+// yields. Both must run, oldest first, before the yielder resumes; the first
+// one finishing must not let the yielder back in ahead of the second.
 func TestEngineSyncLockYieldAdmitsEveryCallerWaitingAtTheBoundary(t *testing.T) {
 	var lock engineSyncLock
 	lock.Lock()
@@ -62,9 +62,10 @@ func TestEngineSyncLockYieldAdmitsEveryCallerWaitingAtTheBoundary(t *testing.T) 
 			order <- name
 			lock.Unlock()
 		}()
+		// Queue them in a known order.
+		require.Eventually(t, func() bool { return lock.waiting() == i+1 },
+			10*time.Second, time.Millisecond)
 	}
-	require.Eventually(t, func() bool { return lock.waiters.Load() == 2 },
-		10*time.Second, time.Millisecond)
 
 	assert.True(t, lock.yield(nil))
 	order <- "holder"
@@ -74,7 +75,52 @@ func TestEngineSyncLockYieldAdmitsEveryCallerWaitingAtTheBoundary(t *testing.T) 
 	}
 
 	got := []string{<-order, <-order, <-order}
-	assert.ElementsMatch(t, []string{"maintenance", "watcher"}, got[:2],
-		"both callers waiting at the yield must run before the yielder resumes")
-	assert.Equal(t, "holder", got[2])
+	assert.Equal(t, []string{"maintenance", "watcher", "holder"}, got,
+		"callers waiting at the yield run oldest first, before the yielder resumes")
+}
+
+// TestEngineSyncLockOverlappingYieldsAllResume covers two grouped passes on
+// one engine that both yield while another sync waits. Each yield must hand
+// the lock on and resume later; neither may strand the other.
+func TestEngineSyncLockOverlappingYieldsAllResume(t *testing.T) {
+	var lock engineSyncLock
+	lock.Lock() // pass A
+	order := make(chan string, 8)
+	passBDone := make(chan struct{})
+	syncDone := make(chan struct{})
+	go func() {
+		defer close(passBDone)
+		lock.Lock()
+		order <- "B-group-1"
+		lock.yield(nil)
+		order <- "B-group-2"
+		lock.Unlock()
+	}()
+	require.Eventually(t, func() bool { return lock.waiting() == 1 },
+		10*time.Second, time.Millisecond)
+	go func() {
+		defer close(syncDone)
+		lock.Lock()
+		order <- "sync"
+		lock.Unlock()
+	}()
+	require.Eventually(t, func() bool { return lock.waiting() == 2 },
+		10*time.Second, time.Millisecond)
+
+	assert.True(t, lock.yield(nil))
+	order <- "A-group-2"
+	lock.Unlock()
+	requireReceiveWithin(t, passBDone, 10*time.Second)
+	requireReceiveWithin(t, syncDone, 10*time.Second)
+
+	got := make([]string, 0, 4)
+	for range 4 {
+		got = append(got, <-order)
+	}
+	assert.Equal(t, []string{"B-group-1", "sync"}, got[:2],
+		"the passes' next groups wait for the sync queued at the first yield")
+	assert.ElementsMatch(t, []string{"A-group-2", "B-group-2"}, got[2:])
+	assert.Zero(t, lock.waiting())
+	assert.True(t, lock.TryLock(), "the lock is free once both passes finish")
+	lock.Unlock()
 }
