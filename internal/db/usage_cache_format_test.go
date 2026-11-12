@@ -101,14 +101,17 @@ func TestUsageCacheFormat(t *testing.T) {
 				JOIN usage_rollup_timezones z ON z.id=i.timezone_id WHERE z.timezone_name='UTC'
 				ORDER BY i.session_id, d.local_date, d.reported_model, d.provider_id, d.rate_hash, d.band_threshold`,
 		} {
-			result = append(result, usageSpoolFactValues(t, cache.db, query))
+			rows := usageSpoolFactValues(t, cache.db, query)
+			require.NotEmpty(t, rows)
+			result = append(result, rows)
 		}
 		return result
 	}
 	before := read()
 	require.NoError(t, database.InsertMessages(t.Context(), []Message{{SessionID: "computed", Ordinal: 4, Role: "assistant", Timestamp: "2026-08-10T12:00:00Z", Model: "format-model", TokenUsage: []byte(`{"input_tokens":75,"output_tokens":5}`), ClaudeMessageID: "append", ClaudeRequestID: "request"}}))
-	_, err = database.prepareUsageWindow(t.Context(), filter, usageQueryKindToken, false, true, nil)
+	prepared, err := database.prepareUsageWindow(t.Context(), filter, usageQueryKindToken, false, true, nil)
 	require.NoError(t, err)
+	require.True(t, prepared.journaled)
 	after := read()
 	encoded, err := json.Marshal([][][][]any{before, after})
 	require.NoError(t, err)
