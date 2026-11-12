@@ -33,6 +33,24 @@ The `prepare-sidecar` step runs automatically for `tauri:dev` and `tauri:build`.
 It builds `agentsview` and copies it to
 `src-tauri/binaries/agentsview-<target-triple>`.
 
+## Updates
+
+The app checks
+`https://github.com/kenn-io/agentsview/releases/download/updater/latest.json`
+for new versions. It installs an update only when the update's signature
+matches the public key in `plugins.updater.pubkey` in
+`src-tauri/tauri.conf.json`. That key belongs to the AgentsView release
+pipeline. Set `AGENTSVIEW_DESKTOP_AUTOUPDATE=0` to turn off update checks.
+
+A build that publishes its own updates passes its key at build time:
+
+```bash
+npx tauri build --config '{"plugins":{"updater":{"pubkey":"<base64 key>"}}}'
+```
+
+The build stops with an error if the key is missing or is not a minisign
+public key, because that updater would refuse every update.
+
 ## Deep Links
 
 The desktop app registers the `agentsview://` URL scheme. External tools can
