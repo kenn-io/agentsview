@@ -5261,7 +5261,7 @@ func TestSQLiteToolsDateKeyMatchesResolver(t *testing.T) {
 		"2025-03-10T04:00:00Z", "2025-03-09T18:14:59Z", "2025-03-09T18:15:00Z",
 		"2025-11-02T05:59:59Z", "2025-11-02T06:00:00Z", "2025-03-10T00:30:00+01:00",
 		"2025-03-10T24:00:00Z", "2025-03-10 malformed", "2025-03-10Z", "2024-01-01T00:00:00Z",
-		"", "\t", "bad",
+		"", "\t", "bad", "２０２５-03-09T12:00:00Z",
 	}
 	for n, ts := range stamps {
 		insertMessages(t, d, asstMsgAt("keys", n, "read", ts))

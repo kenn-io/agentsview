@@ -3024,7 +3024,8 @@ func sqliteToolsDateKey(f AnalyticsFilter) string {
 	fallback := `agentsview_local_date(COALESCE(m.timestamp, ''), ` + sessionTS + `, ?)`
 	loc := f.location()
 	if loc == time.UTC {
-		return `(CASE WHEN substr(` + ts + `, -1) = 'Z' AND length(` + ts + `) >= 10 THEN substr(` + ts + `, 1, 10) ELSE ` + fallback + ` END)`
+		// SQLite counts characters; Go's invalid-date fallback takes ten bytes.
+		return `(CASE WHEN substr(` + ts + `, -1) = 'Z' AND length(CAST(substr(` + ts + `, 1, 10) AS BLOB)) = 10 THEN substr(` + ts + `, 1, 10) ELSE ` + fallback + ` END)`
 	}
 	if f.From == "" || f.To == "" {
 		return ""
