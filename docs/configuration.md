@@ -2442,7 +2442,9 @@ its polling obligations. Budget or native watch resource exhaustion keeps
 root-level polling. Event-buffer overflow puts every recursive root on polling.
 On macOS, when FSEvents reports dropped or must-rescan events for one session
 folder, AgentsView rescans only that folder and keeps watching it natively.
-Other folders are not affected and nothing moves to polling.
+Other folders are not affected and nothing moves to polling. If the drop hid
+the folder's own removal or replacement, only that folder is polled until it
+can be watched again.
 
 Roots that fall back to polling are picked up by:
 

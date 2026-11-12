@@ -89,12 +89,17 @@ runner noise and fail loudly:
   (`internal/sync/watcher_darwin_test.go`, macOS only) — a dropped FSEvents
   batch, or a storm of them, on one root reconciles only that root. It
   registers no polling obligation, closes or recreates no stream, and every
-  root keeps delivering native events.
+  root keeps delivering native events. Event-dependent trust is revoked before
+  the root is reconciled. `TestDarwinWatcherNativeDropRecoversHiddenRootLoss`
+  covers a drop that hid the root's removal or replacement: only that root
+  moves to polling.
+  `TestNativeDropTrustRevocationReverifiesSameStatOpenCodeStorage` shows the
+  per-root reconciliation re-reads a same-stat rewrite after that revocation.
 - `TestReconcileProviderRootsGroupedYieldsToWaitingSyncBetweenGroups`
   (`internal/sync/grouped_reconcile_yield_test.go`) and the
-  `TestEngineSyncLock*` tests — a sync waiting on the engine lock during one
-  poll group runs before the next group starts, so a long poll pass cannot
-  starve watcher syncs.
+  `TestEngineSyncLock*` tests — every sync waiting on the engine lock when a
+  poll group ends runs before the next group starts, so a long poll pass
+  cannot starve watcher syncs.
 - `TestUnwatchedPollWaitsAfterAPassLongerThanTheInterval`
   (`cmd/agentsview/poll_coordinator_scope_test.go`) — the unwatched-poll
   cooldown is at least as long as the previous pass, so polling uses at most

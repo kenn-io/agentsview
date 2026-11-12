@@ -44,3 +44,37 @@ func TestEngineSyncLockYieldHandsLockToBlockedWaiter(t *testing.T) {
 	assert.Equal(t, []string{"before-release", "waiter", "holder"}, got)
 	assert.Zero(t, lock.waiters.Load())
 }
+
+// TestEngineSyncLockYieldAdmitsEveryCallerWaitingAtTheBoundary covers a short
+// maintenance call and a watcher sync that are both waiting when a poll pass
+// yields. The yielder must not take the lock back after only the first one
+// has run.
+func TestEngineSyncLockYieldAdmitsEveryCallerWaitingAtTheBoundary(t *testing.T) {
+	var lock engineSyncLock
+	lock.Lock()
+	order := make(chan string, 4)
+	var done [2]chan struct{}
+	for i, name := range []string{"maintenance", "watcher"} {
+		done[i] = make(chan struct{})
+		go func() {
+			defer close(done[i])
+			lock.Lock()
+			order <- name
+			lock.Unlock()
+		}()
+	}
+	require.Eventually(t, func() bool { return lock.waiters.Load() == 2 },
+		10*time.Second, time.Millisecond)
+
+	assert.True(t, lock.yield(nil))
+	order <- "holder"
+	lock.Unlock()
+	for _, ch := range done {
+		requireReceiveWithin(t, ch, 10*time.Second)
+	}
+
+	got := []string{<-order, <-order, <-order}
+	assert.ElementsMatch(t, []string{"maintenance", "watcher"}, got[:2],
+		"both callers waiting at the yield must run before the yielder resumes")
+	assert.Equal(t, "holder", got[2])
+}

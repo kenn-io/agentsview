@@ -33,7 +33,13 @@ const (
 	fseventFlagItemIsDir       fsevents.EventFlags = 0x00020000
 )
 
-const darwinRootSignalLoss uint32 = 1
+const (
+	darwinRootSignalLoss uint32 = 1 << iota
+	// darwinRootSignalDrop marks a root whose stream reported dropped or
+	// must-rescan events. The lifecycle worker revalidates the root and
+	// reconciles it; the native callback does no filesystem work.
+	darwinRootSignalDrop
+)
 
 const (
 	darwinRetryInitial       = 100 * time.Millisecond
@@ -131,9 +137,12 @@ type darwinLogicalRoot struct {
 	lossRequested     bool
 	retryAt           time.Time
 	retryDelay        time.Duration
-	// dropLoggedAt is the UnixNano time of the last logged native drop, so a
-	// drop storm logs at most once per darwinDropLogInterval per root.
-	dropLoggedAt atomic.Int64
+	// identity is the root directory's stat when its stream was opened, so a
+	// drop that hid the root's replacement can still be detected.
+	identity os.FileInfo
+	// dropLoggedAt is the time of the last logged native drop, so a drop
+	// storm logs at most once per darwinDropLogInterval per root.
+	dropLoggedAt time.Time
 }
 
 type darwinRootPhase uint8
@@ -203,6 +212,7 @@ type darwinWatchBackend struct {
 	onCoverageDegraded func([]string) error
 	onPollingRequired  func(PollingObligation) error
 	onPollingReleased  func(string) error
+	onNativeEventsLost func()
 
 	mu        sync.Mutex
 	lifecycle darwinBackendLifecycle
@@ -345,6 +355,12 @@ func (b *darwinWatchBackend) bindPollingOwnership(
 	defer b.mu.Unlock()
 	b.onPollingRequired = required
 	b.onPollingReleased = released
+}
+
+func (b *darwinWatchBackend) bindNativeEventsLost(callback func()) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	b.onNativeEventsLost = callback
 }
 
 func (b *darwinWatchBackend) fallbackPhaseValue() darwinFallbackPhase {
@@ -616,7 +632,7 @@ func (b *darwinWatchBackend) consumeFSEvents(
 ) {
 	if nativeDeliveryRequestsFallback(events) {
 		b.nativeDrops.Inc()
-		if b.reconcileRootAfterDrop(registration) {
+		if b.signalRootDrop(registration) {
 			return
 		}
 		b.requestFallback(darwinFallbackNativeDrop)
@@ -681,44 +697,78 @@ func (b *darwinWatchBackend) consumeFSEvents(
 	})
 }
 
-// reconcileRootAfterDrop handles a dropped or must-rescan delivery from one
-// root's stream by queueing a reconciliation of only that root's scopes. Each
-// recursive root has its own FSEvents stream, and a drop loses notifications
-// on that stream alone, so the stream stays open and keeps delivering while
-// the reconciliation runs. Other roots keep native coverage and nothing moves
-// to the unwatched poll. Dropped notifications do not change file stats, so
-// the ordinary stat-based freshness checks in that reconciliation find every
-// change the stream missed; it does not clear archive-wide skip state the way
-// lost-events recovery does.
+// signalRootDrop handles a dropped or must-rescan delivery from one root's
+// stream by handing the root to the lifecycle worker, which revalidates it and
+// reconciles only that root's scopes (see processLifecycle). Each recursive
+// root has its own FSEvents stream, and a drop loses notifications on that
+// stream alone, so the stream stays open and keeps delivering. Other roots
+// keep native coverage and nothing moves to the unwatched poll.
 //
 // It returns false, leaving the backend-wide fallback in charge, when the
 // stream has no logical root (no scopes to reconcile) or the backend is
 // already in fallback or recovery, whose own authoritative pass owns
 // coverage.
-func (b *darwinWatchBackend) reconcileRootAfterDrop(registration darwinWatchRoot) bool {
+func (b *darwinWatchBackend) signalRootDrop(registration darwinWatchRoot) bool {
 	state := registration.state
 	if state == nil || len(appendWatchScopeRoots(nil, state.plan.Scopes)) == 0 ||
 		b.fallbackPhaseValue() != darwinFallbackInactive ||
 		darwinFallbackReason(b.fallbackReason.Load()) != darwinFallbackReasonNone {
 		return false
 	}
-	// A root still waiting for its activation or loss reconciliation keeps
-	// that gate: the token makes this reconciliation acknowledge it.
-	var token backendLifecycleToken
-	if !state.isOpen(registration.generation) {
-		token = backendLifecycleToken{gate: state, generation: registration.generation}
-	}
-	b.accumulateReconcile(state.plan.Scopes, token)
-	now := time.Now().UnixNano()
-	last := state.dropLoggedAt.Load()
-	if (last == 0 || now-last >= int64(darwinDropLogInterval)) &&
-		state.dropLoggedAt.CompareAndSwap(last, now) {
+	state.signal.Or(darwinRootSignalDrop)
+	b.signalLifecycle()
+	return true
+}
+
+// handleRootDropLocked turns a root's drop signal into work. A drop can hide
+// the root's own removal or replacement, because the FSEvents bridge collapses
+// a batch with a drop flag into one pathless must-rescan event and discards a
+// RootChanged flag in the same batch. A root that no longer names the
+// directory its stream opened on is therefore treated as lost and goes through
+// root-local loss recovery. Otherwise the root keeps its stream and gets one
+// ordinary reconciliation of its scopes. Dropped notifications do not change
+// file stats, so the stat-based freshness checks in that reconciliation find
+// what the stream missed; the caller revokes the event-dependent trust that
+// stats cannot cover first. It does not clear archive-wide skip state the way
+// lost-events recovery does.
+func (b *darwinWatchBackend) handleRootDropLocked(
+	state *darwinLogicalRoot, now time.Time,
+) (lost bool, request darwinReconcileRequest) {
+	if now.Sub(state.dropLoggedAt) >= darwinDropLogInterval {
+		state.dropLoggedAt = now
 		log.Printf(
 			"watcher: backend=%s native-drop root=%s reconcile=root native_drops=%d",
 			b.Name(), state.plan.Path, b.nativeDrops.Load(),
 		)
 	}
-	return true
+	if state.active && state.plan.Recursive && b.rootReplacedLocked(state) {
+		return true, darwinReconcileRequest{}
+	}
+	request = darwinReconcileRequest{scopes: state.plan.Scopes}
+	// A root still waiting for its activation reconciliation keeps that gate:
+	// the token makes this reconciliation acknowledge it.
+	if state.active && !state.isOpen(state.generation) {
+		request.token = backendLifecycleToken{gate: state, generation: state.generation}
+	}
+	return false, request
+}
+
+// rootReplacedLocked reports whether an active recursive root no longer names
+// the directory its stream was opened on: it is missing, no longer a
+// directory, or a different directory now sits at its path.
+func (b *darwinWatchBackend) rootReplacedLocked(state *darwinLogicalRoot) bool {
+	info, err := b.statPath(state.plan.Path)
+	if err != nil || !info.IsDir() {
+		return true
+	}
+	return state.identity != nil && !os.SameFile(state.identity, info)
+}
+
+func (b *darwinWatchBackend) statPath(path string) (os.FileInfo, error) {
+	if b.stat != nil {
+		return b.stat(path)
+	}
+	return os.Stat(path)
 }
 
 func nativeDeliveryRequestsFallback(events []fsevents.Event) bool {
@@ -907,8 +957,21 @@ func (b *darwinWatchBackend) processLifecycle(checkPending bool) {
 		b.mu.Unlock()
 		return
 	}
+	nativeEventsLost := false
 	for _, state := range b.logical {
-		lossSignaled := state.signal.Swap(0)&darwinRootSignalLoss != 0
+		signals := state.signal.Swap(0)
+		lossSignaled := signals&darwinRootSignalLoss != 0
+		if signals&darwinRootSignalDrop != 0 {
+			nativeEventsLost = true
+			if !lossSignaled {
+				lost, request := b.handleRootDropLocked(state, now)
+				if lost {
+					lossSignaled = true
+				} else {
+					requests = append(requests, request)
+				}
+			}
+		}
 		if lossSignaled && state.active {
 			state.lossRequested = true
 		}
@@ -1063,7 +1126,14 @@ func (b *darwinWatchBackend) processLifecycle(checkPending bool) {
 		}
 	}
 	releaseCallback := b.onPollingReleased
+	eventsLostCallback := b.onNativeEventsLost
 	b.mu.Unlock()
+	// Revoke event-dependent trust before any reconciliation for the dropped
+	// roots is queued, so that reconciliation cannot skip a change the lost
+	// events would have reported.
+	if nativeEventsLost && eventsLostCallback != nil {
+		eventsLostCallback()
+	}
 	if releaseCallback != nil {
 		for _, key := range releasedPolling {
 			if err := releaseCallback(key); err != nil {
@@ -1338,6 +1408,7 @@ type darwinRecoveryStream struct {
 	registration darwinWatchRoot
 	stream       darwinStream
 	started      bool
+	identity     os.FileInfo
 }
 
 func (b *darwinWatchBackend) processNativeRecoveryRetry() {
@@ -1422,6 +1493,7 @@ func (b *darwinWatchBackend) beginNativeRecovery(now time.Time) error {
 		}
 		recovering = append(recovering, darwinRecoveryStream{
 			state: state, registration: registration, stream: stream,
+			identity: info,
 		})
 	}
 	for _, state := range skipped {
@@ -1489,6 +1561,9 @@ func (b *darwinWatchBackend) beginNativeRecovery(now time.Time) error {
 		state.active = true
 		state.ancestor = ""
 		state.stream = candidate.stream
+		if candidate.identity != nil {
+			state.identity = candidate.identity
+		}
 		state.open.Store(true)
 		b.streams[state.plan.Path] = candidate.stream
 		b.storeRootLocked(candidate.registration)
@@ -1860,6 +1935,10 @@ func (b *darwinWatchBackend) activateRootLocked(state *darwinLogicalRoot) error 
 	state.active = true
 	state.ancestor = ""
 	state.stream = stream
+	state.identity = nil
+	if info, err := b.statPath(root); err == nil {
+		state.identity = info
+	}
 	return nil
 }
 

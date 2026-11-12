@@ -2,6 +2,7 @@ package sync
 
 import (
 	"path/filepath"
+	gosync "sync"
 	"testing"
 	"time"
 
@@ -34,6 +35,10 @@ func TestReconcileProviderRootsGroupedYieldsToWaitingSyncBetweenGroups(t *testin
 
 	groupStarted := make(chan int, 2)
 	releaseFirst := make(chan struct{})
+	// Release the parked first group even when an assertion stops the test
+	// early; otherwise it keeps holding syncMu and engine.Close hangs.
+	release := gosync.OnceFunc(func() { close(releaseFirst) })
+	t.Cleanup(release)
 	liveSyncedBeforeSecond := make(chan bool, 1)
 	engine.groupedReconcileGroupHook = func(index int) {
 		groupStarted <- index
@@ -64,7 +69,7 @@ func TestReconcileProviderRootsGroupedYieldsToWaitingSyncBetweenGroups(t *testin
 	}()
 	require.Eventually(t, func() bool { return engine.syncMu.waiters.Load() > 0 },
 		10*time.Second, time.Millisecond, "the live sync must be waiting on syncMu")
-	close(releaseFirst)
+	release()
 
 	require.Equal(t, 1, requireReceiveWithin(t, groupStarted, 10*time.Second))
 	assert.True(t, requireReceiveWithin(t, liveSyncedBeforeSecond, 10*time.Second),
