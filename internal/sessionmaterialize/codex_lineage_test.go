@@ -49,6 +49,13 @@ func TestCodexLineageIncludesParentThreadAndCompressedPage(t *testing.T) {
 	_, err = codexLineage(t.Context(), thread, names, read)
 	require.ErrorContains(t, err, "cutoff")
 	files[firstName] = firstBytes
+	files[parentName] = []byte(fmt.Sprintf(`{"type":"session_meta","payload":{"id":%q}}`+"\n", parent))
+	_, err = codexLineage(t.Context(), thread, names, read)
+	require.ErrorContains(t, err, "cutoff")
+	files[parentName] = parentBytes
+	unrelated := "rollout-2026-01-01T00-00-00-44444444-4444-4444-4444-444444444444.jsonl"
+	_, err = codexLineage(t.Context(), thread, append(names, unrelated, "other/"+unrelated), read)
+	require.NoError(t, err)
 	_, err = codexLineage(t.Context(), thread, names[1:], read)
 	require.ErrorContains(t, err, "missing Codex ancestor")
 	files[parentName] = []byte(fmt.Sprintf(`{"type":"session_meta","payload":{"id":%q,"history_mode":"paginated","history_base":{"thread_id":%q,"end_ordinal_exclusive":1,"end_byte_offset":1}}}`+"\n", parent, page))
