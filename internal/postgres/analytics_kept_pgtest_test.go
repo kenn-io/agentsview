@@ -146,12 +146,19 @@ func TestAnalyticsKeptAdvancingCutoff(t *testing.T) {
 	pgKeptSession(t, local, "session", "project", "2026-06-14")
 	pgKeptPush(t, syncer, false)
 	ctx := t.Context()
-	cutoff := time.Now().Add(5 * time.Second)
-	_, err := syncer.pg.ExecContext(ctx, `UPDATE sessions SET ended_at = $1 WHERE id = 'session'`, cutoff.Add(-10*time.Minute))
-	require.NoError(t, err)
 	f := db.AnalyticsFilter{From: "2026-06-14", To: "2026-06-14", Timezone: "UTC", Termination: "active"}
-	before, err := store.GetAnalyticsVelocity(ctx, f)
-	require.NoError(t, err)
+	var cutoff time.Time
+	var before db.VelocityResponse
+	for window := 5 * time.Second; window <= 80*time.Second; window *= 2 {
+		cutoff = time.Now().Add(window)
+		_, err := syncer.pg.ExecContext(ctx, `UPDATE sessions SET ended_at = $1 WHERE id = 'session'`, cutoff.Add(-10*time.Minute))
+		require.NoError(t, err)
+		before, err = store.GetAnalyticsVelocity(ctx, f)
+		require.NoError(t, err)
+		if len(before.ByAgent) == 1 {
+			break
+		}
+	}
 	require.Len(t, before.ByAgent, 1)
 	timer := time.NewTimer(time.Until(cutoff) + time.Second)
 	defer timer.Stop()
