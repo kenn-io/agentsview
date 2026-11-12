@@ -201,6 +201,11 @@ package list, sample count, and per-tier iteration counts for these benchmarks:
   cases contain one or 100 file entries sharing one object. Their fixtures
   grow by one generation per iteration, so comparisons use fixed iteration
   counts. They run in `./internal/rawcheckpoint`.
+- `BenchmarkReplayAdmission` and `BenchmarkSignedRequestDispatch` — durable
+  nonce admission and signed HTTP request verification through handler
+  dispatch. Request creation and signing stay outside the timer; retained
+  nonce counts grow during each sample, so comparisons use fixed iteration
+  counts.
 - `BenchmarkGetStats` — the repeatedly polled sidebar totals over 10k sessions.
   Computes all totals together so a refresh scans filtered sessions once.
 - `BenchmarkArchiveSessionReads` — session metadata, full session details, and
