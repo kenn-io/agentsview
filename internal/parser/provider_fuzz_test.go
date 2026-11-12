@@ -23,7 +23,7 @@ package parser
 //
 // Plain `go test` runs the seeds plus any regression inputs committed under
 // testdata/fuzz/<Target>/. `go test -run '^$' -fuzz '^<Target>$'` explores
-// from there; .github/workflows/fuzz.yml does that on a schedule.
+// from there; .github/workflows/fuzz.yml does that weekly for every target.
 
 import (
 	"context"
