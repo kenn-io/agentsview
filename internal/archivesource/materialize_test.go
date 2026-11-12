@@ -144,7 +144,7 @@ func TestMaterializeSnapshotCaptureLayouts(t *testing.T) {
 				require.ErrorIs(t, err, rawderive.ErrSizeLimit)
 				assert.Nil(t, refused)
 				assert.Equal(t, selected, path)
-				assert.Equal(t, owner.Attachment, attachment)
+				assert.Equal(t, owner.Attachment.SnapshotID, attachment)
 			}
 			files, err := os.ReadDir(scratch)
 			require.NoError(t, err)
@@ -192,7 +192,7 @@ func TestMaterializeSnapshotEquivalentCandidates(t *testing.T) {
 	other.Attachment.SnapshotID = "unconfigured"
 	tree, primary, chosen, err := MaterializeSnapshot(ctx, []config.ArchiveSource{source}, []db.ArchiveSessionProvenance{other, owner}, "claude", 512<<20)
 	require.NoError(t, err)
-	assert.Equal(t, owner.Attachment, chosen)
+	assert.Equal(t, owner.Attachment.SnapshotID, chosen)
 	name, err := tree.EntryPath(primary)
 	require.NoError(t, err)
 	data, err := os.ReadFile(name)
@@ -229,7 +229,7 @@ func TestMaterializeSnapshotEquivalentCandidates(t *testing.T) {
 	missingSource.Name, missingSource.Snapshot = "missing", missing.Attachment.SnapshotID
 	tree, _, chosen, err = MaterializeSnapshot(t.Context(), []config.ArchiveSource{missingSource, source}, []db.ArchiveSessionProvenance{wrongRepo, missing, owner}, "claude", 512<<20)
 	require.NoError(t, err)
-	assert.Equal(t, owner.Attachment, chosen)
+	assert.Equal(t, owner.Attachment.SnapshotID, chosen)
 	require.NoError(t, tree.Cleanup())
 	t.Run("newer inventory", func(t *testing.T) {
 		modified := owner

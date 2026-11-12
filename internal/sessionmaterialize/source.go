@@ -402,7 +402,7 @@ func readS3Source(ctx context.Context, cfg config.Config, machine, uri, id strin
 
 // readSnapshotSource extracts only the selected transcript and its native companions.
 func readSnapshotSource(ctx context.Context, cfg config.Config, owners []db.ArchiveSessionProvenance, id string) (_ []sourceFile, snapshot string, retErr error) {
-	tree, primary, attachment, err := archivesource.MaterializeSnapshot(ctx, cfg.ArchiveSources, owners, "claude", maxSourceBytes)
+	tree, primary, snapshot, err := archivesource.MaterializeSnapshot(ctx, cfg.ArchiveSources, owners, "claude", maxSourceBytes)
 	if err != nil {
 		return nil, "", err
 	}
@@ -412,5 +412,5 @@ func readSnapshotSource(ctx context.Context, cfg config.Config, owners []db.Arch
 		return nil, "", err
 	}
 	files, err := readLocalSource(ctx, tree.Root(), name, id, maxSourceBytes)
-	return files, attachment.SnapshotID, err
+	return files, snapshot, err
 }

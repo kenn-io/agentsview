@@ -144,15 +144,13 @@ func (m Materializer) MaterializeEntries(ctx context.Context, identity rawsync.A
 	if capturedAt.IsZero() {
 		return nil, fmt.Errorf("%w: capture time is required", rawsync.ErrInvalid)
 	}
+	// A selection can combine many individually valid manifests. Give it a
+	// separate bound rather than applying one manifest's cardinality limit.
 	limits := rawsync.DefaultManifestLimits()
-	limits.MaxEntries = max(limits.MaxEntries, len(entries))
-	objects := 0
-	for _, entry := range entries {
-		objects += len(entry.Objects)
-	}
-	limits.MaxObjects = max(limits.MaxObjects, objects)
+	limits.MaxEntries = 1 << 20
+	limits.MaxObjects = 4 << 20
 	if _, err := rawsync.ValidateEntryBatch(entries, limits); err != nil {
-		return nil, err
+		return nil, fmt.Errorf("validating selected raw entries: %w", err)
 	}
 	return m.materializeValidated(ctx, identity, capturedAt, entries)
 }
