@@ -490,7 +490,7 @@
   <LoadError
     class="sidebar-load-error"
     message={sessions.sidebarLoadError}
-    onRetry={() => void sessions.load({ force: true })}
+    onRetry={() => void sessions.retrySidebar()}
   />
 {/if}
 

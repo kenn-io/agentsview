@@ -253,6 +253,34 @@ describe("MessagesStore", () => {
     expect(messages.activeSessionToken).toBe("rev-1");
   });
 
+  it("starts read tracking when session search loads a transcript whose first page failed", async () => {
+    const all = Array.from({ length: 1500 }, (_, ordinal) => makeMessage(ordinal));
+    let failFirstPage = true;
+    vi.mocked(api.getSession).mockResolvedValue({
+      ...makeSession("s1", 1500),
+      transcript_revision: "rev-1",
+    } as Session);
+    vi.mocked(api.getMessages).mockImplementation(
+      async (_id: string, params: { from?: number; limit?: number }) => {
+        const limit = params.limit ?? 1000;
+        const from = params.from ?? 0;
+        if (failFirstPage) throw new Error("first page failed");
+        return makeMessagesResponse(all.slice(from, from + limit));
+      },
+    );
+    await messages.loadSession("s1");
+    expect(messages.messages).toEqual([]);
+    expect(messages.loadError).toBe("first page failed");
+    expect(messages.activeSessionToken).toBeNull();
+
+    failFirstPage = false;
+    await messages.ensureHistoryLoaded();
+
+    expect(messages.messages).toHaveLength(1500);
+    expect(messages.loadError).toBeNull();
+    expect(messages.activeSessionToken).toBe("rev-1");
+  });
+
   it("clears an older-page failure once a later older page loads", async () => {
     vi.mocked(api.getSession).mockResolvedValue(makeSession("s1", 3_001));
     vi.mocked(api.getMessages).mockResolvedValueOnce(

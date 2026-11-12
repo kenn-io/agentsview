@@ -2161,15 +2161,38 @@ describe("SessionsStore", () => {
       expect(sessions.nextCursor).toBe("current");
     });
 
-    it("preserves unrelated pagination failures", async () => {
-      sessions.nextCursor = "valid";
-      const error = new ApiError(400, "invalid timezone");
-      api.getSidebarSessionIndex.mockRejectedValueOnce(error);
+    it("reports a failed later page and retries that page", async () => {
+      api.getSidebarSessionIndex.mockResolvedValueOnce({
+        sessions: [makeSkinnyRow({ id: "listed" })],
+        total: 2,
+        next_cursor: "page-2",
+      });
+      await sessions.load();
+      api.getSidebarSessionIndex.mockRejectedValueOnce(
+        new ApiError(503, "archive is rebuilding"),
+      );
 
-      await expect(sessions.loadMore()).rejects.toBe(error);
+      await sessions.loadMore();
 
-      expect(api.getSidebarSessionIndex).toHaveBeenCalledTimes(1);
-      expect(sessions.nextCursor).toBe("valid");
+      expect(sessions.sidebarLoadError).toBe("archive is rebuilding");
+      expect(sessions.sessions.map((s) => s.id)).toEqual(["listed"]);
+      expect(sessions.nextCursor).toBe("page-2");
+      expect(sessions.loading).toBe(false);
+
+      api.getSidebarSessionIndex.mockResolvedValueOnce({
+        sessions: [makeSkinnyRow({ id: "second" })],
+        total: 2,
+        next_cursor: null,
+      });
+      await sessions.retrySidebar();
+
+      expect(api.getSidebarSessionIndex.mock.calls.map(([params]) => params.cursor)).toEqual([
+        undefined,
+        "page-2",
+        "page-2",
+      ]);
+      expect(sessions.sessions.map((s) => s.id)).toEqual(["listed", "second"]);
+      expect(sessions.sidebarLoadError).toBeNull();
     });
 
     it("should pass the browser timezone in loadMore", async () => {

@@ -186,10 +186,10 @@ export class MessagesStore {
       if (this.loadGeneration === generation && isTransient(err)) void this.reload();
       if (this.sessionId === id && this.loadGeneration === generation) {
         this.failLoad(err, "load");
-        // Rows that landed still belong to this revision. Keep its token
-        // pending so whichever read completes the history, Retry or session
-        // search, publishes it and read tracking starts.
-        if (this.messages.length > 0 && !this.hasPendingSessionToken) {
+        // Keep this revision's token pending so whichever read completes
+        // the history, Retry or session search, publishes it and read
+        // tracking starts. A full reload replaces it with its own.
+        if (!this.hasPendingSessionToken) {
           this.pendingSessionToken = pendingToken;
           this.hasPendingSessionToken = true;
           this.pendingSessionUnreadOrdinal = null;

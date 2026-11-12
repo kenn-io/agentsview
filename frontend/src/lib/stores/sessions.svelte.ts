@@ -98,8 +98,10 @@ class SessionsStore {
   total: number = $state(0);
   archiveEmpty: boolean = $state(false);
   loading: boolean = $state(false);
-  /** Why the server rejected the current sidebar filters, or null. */
+  /** Why the last sidebar read failed, or null. */
   sidebarLoadError: string | null = $state(null);
+  // The failure came from a later page, so Retry repeats that page.
+  private sidebarPageFailed = false;
   #savedFilters = loadSavedFilters();
   private filterPersistenceHeld = false;
   filters: Filters = $state(this.#savedFilters.filters);
@@ -421,8 +423,10 @@ class SessionsStore {
       this.total = index.total;
       void this.refreshArchiveEmpty(version);
       this.sidebarLoadError = null;
+      this.sidebarPageFailed = false;
     } catch (error) {
       if (this.loadVersion !== version) return;
+      this.sidebarPageFailed = false;
       // A rejected filter has no matching rows; showing the previous
       // filter's rows under it would mislabel them.
       if (error instanceof ApiError && error.status >= 400 && error.status < 500) {
@@ -593,11 +597,16 @@ class SessionsStore {
       ]);
       this.nextCursor = index.next_cursor ?? null;
       this.total = index.total;
+      if (this.sidebarPageFailed) {
+        this.sidebarLoadError = null;
+        this.sidebarPageFailed = false;
+      }
     } catch (error) {
       if (signal.aborted || isAbortError(error) || this.loadVersion !== version) return;
       if (error instanceof ApiError && error.code === "invalid_machine_filter") {
         this.resetPagination();
         this.sidebarLoadError = error.message;
+        this.sidebarPageFailed = false;
         return;
       }
       if (error instanceof ApiError && error.status === 400 && error.message === "invalid cursor") {
@@ -605,12 +614,21 @@ class SessionsStore {
         await this.load({ force: true });
         return;
       }
-      throw error;
+      // The rows and cursor already loaded stay, so Retry asks for the
+      // same page again.
+      this.sidebarLoadError = failureMessage(error);
+      this.sidebarPageFailed = true;
     } finally {
       if (this.loadVersion === version) {
         this.loading = false;
       }
     }
+  }
+
+  /** Repeat the sidebar read behind sidebarLoadError. */
+  retrySidebar(): Promise<void> {
+    if (this.sidebarPageFailed && this.nextCursor) return this.loadMore();
+    return this.load({ force: true });
   }
 
   /**
