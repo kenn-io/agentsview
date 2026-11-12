@@ -153,9 +153,11 @@ func (db *DB) activityReportCachedUsage(
 				next = timestamp
 			}
 		}
-		if _, ok := seen[row.SessionID]; collectRead && !ok {
-			read = append(read, row.SessionID)
-			seen[row.SessionID] = struct{}{}
+		if seen != nil {
+			if _, ok := seen[row.SessionID]; !ok {
+				read = append(read, row.SessionID)
+				seen[row.SessionID] = struct{}{}
+			}
 		}
 		selection[i] = activity.UsageSelectionRow{Agent: row.Agent, ClaudeMessageID: row.ClaudeMessageID, ClaudeRequestID: row.ClaudeRequestID, SourceUUID: row.SourceUUID, UsageDedupKey: row.UsageDedupKey, SessionID: row.SessionID, MessageOrdinal: row.MessageOrdinal, Timestamp: time.UnixMilli(fact.millis).Add(time.Duration(fact.nanos)), TimestampValid: fact.validTS, OutputTokens: fact.tokens.output, WebSearchRequests: row.WebSearchRequests}
 	}
@@ -241,7 +243,7 @@ func sumActivityUsageRows(rows []activity.UsageRow, q activity.Query) ([]activit
 			return nil, fmt.Errorf("parsing activity usage timestamp: %w", err)
 		}
 		k := key{row.SessionID, row.Model, activity.WindowIndex(windows, ts)}
-		if i, ok := indexes[k]; ok {
+		if i, ok := indexes[k]; ok && out != nil {
 			sum := &out[i]
 			sum.InputTokens += row.InputTokens
 			sum.OutputTokens += row.OutputTokens

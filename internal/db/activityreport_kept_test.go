@@ -522,12 +522,20 @@ func TestActivityReportKeptReadOnlyAndSwappedArchives(t *testing.T) {
 func TestActivityOngoingUsageClock(t *testing.T) {
 	d := testDB(t)
 	keptActivitySession(t, d, "past", "project-a", "2026-06-14")
+	insertSession(t, d, "empty", "project-empty", func(s *Session) {
+		s.StartedAt = new("2026-06-14T09:00:00Z")
+		s.EndedAt = new("2026-06-14T09:01:00Z")
+	})
 	q := dayQuery(t, "2026-06-14", "UTC")
 	q.Partial = true
 	q.EffectiveEnd = time.Date(2026, 6, 14, 10, 0, 30, 0, time.UTC)
-	f := AnalyticsFilter{Timezone: "UTC"}
+	f := AnalyticsFilter{Timezone: "UTC", Project: "project-a"}
+	emptyFilter := AnalyticsFilter{Timezone: "UTC", Project: "project-empty"}
 	before := keptActivityBuild(t, d, f, q, true)
 	assert.Zero(t, before.Report.Totals.OutputTokens)
+	empty := keptActivityBuild(t, d, emptyFilter, q, true)
+	require.Len(t, empty.Sessions, 1)
+	assert.Zero(t, empty.Report.Totals.OutputTokens)
 	id, err := d.GetDatabaseID(t.Context())
 	require.NoError(t, err)
 	cache, release, err := d.usageCache.acquireGeneration(t.Context(), id)
@@ -550,6 +558,10 @@ func TestActivityOngoingUsageClock(t *testing.T) {
 	require.NoError(t, conn.Close())
 	q.EffectiveEnd = q.EffectiveEnd.Add(time.Second)
 	hit := keptActivityBuild(t, d, f, q, true)
+	emptyHit := keptActivityBuild(t, d, emptyFilter, q, true)
+	q.EffectiveEnd = time.Date(2026, 6, 14, 10, 1, 0, 0, time.UTC)
+	boundaryHit := keptActivityBuild(t, d, f, q, true)
+	assert.Zero(t, boundaryHit.Report.Totals.OutputTokens)
 	conn, err = cache.db.Conn(t.Context())
 	require.NoError(t, err)
 	require.NoError(t, conn.Raw(func(raw any) error {
@@ -558,8 +570,13 @@ func TestActivityOngoingUsageClock(t *testing.T) {
 	}))
 	require.NoError(t, conn.Close())
 	clearKeptActivity(d)
+	q.EffectiveEnd = time.Date(2026, 6, 14, 10, 0, 31, 0, time.UTC)
 	fresh := keptActivityBuild(t, d, f, q, true)
 	require.Equal(t, fresh, hit)
+	require.Equal(t, keptActivityBuild(t, d, emptyFilter, q, true), emptyHit)
+	clearKeptActivity(d)
+	q.EffectiveEnd = time.Date(2026, 6, 14, 10, 1, 0, 0, time.UTC)
+	require.Equal(t, keptActivityBuild(t, d, f, q, true), boundaryHit)
 	q.EffectiveEnd = time.Date(2026, 6, 14, 10, 1, 0, 1, time.UTC)
 	after := keptActivityBuild(t, d, f, q, true)
 	assert.Equal(t, 500, after.Report.Totals.OutputTokens)

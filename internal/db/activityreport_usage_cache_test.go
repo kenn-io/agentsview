@@ -242,7 +242,7 @@ func TestActivityReportCachedUsageMatchesRawUsage(t *testing.T) {
 		}
 		uniqueRead := slices.Clone(read)
 		slices.Sort(uniqueRead)
-		assert.Equal(t, len(read), len(slices.Compact(uniqueRead)))
+		assert.Len(t, slices.Compact(uniqueRead), len(read))
 		gotRead := append(slices.Clone(ids), read...)
 		slices.Sort(gotRead)
 		assert.Equal(t, wantRead, slices.Compact(gotRead))
