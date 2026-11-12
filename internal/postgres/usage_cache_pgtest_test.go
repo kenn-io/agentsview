@@ -1348,7 +1348,7 @@ CREATE OR REPLACE FUNCTION stamp_usage_change() RETURNS trigger LANGUAGE plpgsql
 	assert.Equal(t, before, after)
 }
 
-func TestPGUsageCacheReportsIdentityPermissionFailure(t *testing.T) {
+func TestPGUsageCacheIdentityPermissionUnavailable(t *testing.T) {
 	_, syncer, owner, _ := keptUsageFixture(t)
 	ctx := t.Context()
 	roleURL := newUsageJournalRole(t, syncer, `GRANT SELECT ON ALL TABLES IN SCHEMA `+syncer.schema+` TO ROLE`)
@@ -1365,6 +1365,5 @@ func TestPGUsageCacheReportsIdentityPermissionFailure(t *testing.T) {
 	_, err = tx.ExecContext(ctx, `SET LOCAL ROLE `+role)
 	require.NoError(t, err)
 	_, err = (&pgUsageCacheSource{}).snapshot(ctx, owner.readView(tx))
-	require.Error(t, err)
-	require.True(t, isInsufficientPrivilege(err), "the identity permission failure should remain visible: %v", err)
+	require.ErrorIs(t, err, db.ErrUsageSourceUnavailable)
 }

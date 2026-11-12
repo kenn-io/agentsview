@@ -96,7 +96,7 @@ func (source *pgUsageCacheSource) snapshot(ctx context.Context, view *Store) (db
 	err = view.pg.QueryRowContext(ctx, `SELECT (pg_control_system()).system_identifier::text,
  substring(pg_walfile_name(pg_current_wal_lsn()), 1, 8)
  WHERE NOT pg_is_in_recovery()`).Scan(&systemID, &timeline)
-	if errors.Is(err, sql.ErrNoRows) {
+	if errors.Is(err, sql.ErrNoRows) || isInsufficientPrivilege(err) {
 		return snapshot, db.ErrUsageSourceUnavailable
 	}
 	if err != nil {

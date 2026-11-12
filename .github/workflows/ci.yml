@@ -1097,10 +1097,12 @@ jobs:
       - name: Start PostgreSQL standby
         if: matrix.name == 'PostgreSQL core'
         run: |
-          docker run -d --rm --network host --name usage-test-standby --user postgres \
+          docker exec -u postgres ${{ job.services.postgres.id }} sh -c \
+            'printf "host replication agentsview_test 0.0.0.0/0 scram-sha-256\n" >> "$PGDATA/pg_hba.conf"; pg_ctl -D "$PGDATA" reload'
+          docker run -d --network host --name usage-test-standby --user postgres \
             -e PGPASSWORD=agentsview_test_password --entrypoint bash pgvector/pgvector:pg18 \
             -ec 'pg_basebackup -h 127.0.0.1 -p 5433 -U agentsview_test -D /tmp/standby -R -X stream; exec postgres -D /tmp/standby -p 5434'
-          for attempt in {1..60}; do
+          for attempt in {1..180}; do
             if docker exec usage-test-standby pg_isready -h 127.0.0.1 -p 5434 -U agentsview_test; then exit 0; fi
             sleep 1
           done
@@ -1116,7 +1118,9 @@ jobs:
 
       - name: Stop PostgreSQL standby
         if: always() && matrix.name == 'PostgreSQL core'
-        run: docker stop usage-test-standby || true
+        run: |
+          docker stop usage-test-standby || true
+          docker rm usage-test-standby || true
 
       - name: Run ClickHouse integration tests
         if: matrix.clickhouse

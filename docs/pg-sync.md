@@ -36,11 +36,13 @@ so restarts reuse work and reads refresh sessions and prices changed by a push.
 When a read would first have to rebuild much of that cache, such as on first
 use, after a price or project identity change, or after new account usage, it
 returns the direct PostgreSQL result and the cache rebuilds in the background.
-Journals upgraded by a current writer need only `SELECT` access. Hosted and
-borrowed transaction readers, CockroachDB, and unavailable journals keep
-direct reads. PostgreSQL standbys retain complete results in memory when a
-current writer has installed the journal history token; otherwise they read
-directly.
+Journals upgraded by a current writer need `SELECT` access. Persistent caching
+also needs `EXECUTE` access to PostgreSQL's `pg_control_system()`,
+`pg_current_wal_lsn()`, and `pg_walfile_name(pg_lsn)` functions. Readers without
+these permissions use direct reads. Hosted and borrowed transaction readers,
+CockroachDB, and unavailable journals also use direct reads. PostgreSQL
+standbys retain complete results in memory when a current writer has installed
+the journal history token; otherwise they read directly.
 Recovery onto a different PostgreSQL timeline starts a new cache generation.
 If a cache attempt fails while the request is active, the existing direct
 PostgreSQL read supplies its result or error. A journal installed later enables
