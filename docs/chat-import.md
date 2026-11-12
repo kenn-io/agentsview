@@ -35,16 +35,19 @@ chats use the separate opt-in
 2. Under **My Activity**, select **Gemini Apps**.
 3. Create an export and download the `.zip` file.
 
-AgentsView imports `Prompted` activity records and reports Canvas, feedback,
-and unknown activity kinds as skipped. Each prompt becomes a one-turn session,
-with its timestamp resolved using the explicit exported timezone rather than
-your host timezone. If a mixed Takeout archive contains activity from other
-products, AgentsView ignores those explicitly identified cells. The current
-parser supports the observed English rendering for Gemini Apps cells, including
-the named timezones it currently recognizes and complete `GMT±H`, `GMT±HH`,
-`GMT±H:MM`, and `GMT±HH:MM` zones where omitted minutes mean zero. Declared
-non-English or otherwise unsupported localized Gemini candidates and malformed
-zone tokens are reported as unsupported before any sessions are emitted.
+Import the `.zip`, the extracted folder, or
+`Takeout/My Activity/Gemini Apps/MyActivity.html` itself. Each `Prompted`
+activity record becomes a session with your prompt and Gemini's response.
+Other activity, such as feedback, is reported as skipped. Mixed Takeout
+archives may contain other products' activity; AgentsView ignores it.
+
+The parser reads the English rendering of the export. Takeout labels each
+timestamp with a time zone abbreviation, such as `PST` or `IST`. AgentsView
+uses your computer's time zone to resolve an abbreviation it shares, and also
+knows the US zones, `UTC`, `GMT`, and `GMT+5:30`-style offsets. If the import
+reports an unsupported zone, rerun it with `TZ` set to your Google account's
+time zone, for example `TZ=Asia/Kolkata agentsview source import ...`.
+Non-English exports are reported as unsupported before anything is imported.
 
 ## Import from the web UI
 

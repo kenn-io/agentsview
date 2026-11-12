@@ -7,6 +7,17 @@ description: Release history for AgentsView
 The latest release is
 [0.48.0](https://github.com/kenn-io/agentsview/releases/tag/v0.48.0).
 
+## Unreleased
+
+**Bug fixes**
+
+- `agentsview source import --type gemini-apps` now imports real Google
+  Takeout exports. It used to reject every export with `input does not contain
+  a Gemini Apps My Activity HTML document`, because it expected a layout that
+  Takeout does not write. Each prompt now becomes a session with your prompt
+  and Gemini's response as separate messages. Time zone abbreviations that your
+  computer's time zone uses, such as `IST`, are now recognized.
+
 ## 0.48.0
 
 <small>2026-11-22</small>
