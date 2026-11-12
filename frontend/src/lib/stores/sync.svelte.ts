@@ -2,6 +2,7 @@ import type { EventSource } from "eventsource";
 import { triggerResync, triggerSync, watchSession, type SyncHandle } from "../api/client.js";
 import { MetadataService, SyncService } from "../api/generated/index";
 import { ApiError, isAbortError, isRemoteConnection } from "../api/runtime.js";
+import { failureMessage } from "../utils/failure.js";
 import { m } from "../i18n/index.js";
 import { reportSyncFailed } from "../utils/telemetry.js";
 import { fileReferences } from "./file-references.svelte.js";
@@ -71,6 +72,10 @@ class SyncStore {
   // becomes reachable.
   backendDegraded: boolean = $state(false);
   backendDegradedMessage: string | null = $state(null);
+  // Why the last status or stats read from a local server failed, when
+  // neither flag above covers it; null after a read succeeds. Surfaced in
+  // the status bar so stale sync times and counts are not silent.
+  statusError: string | null = $state(null);
   updateAvailable: boolean = $state(false);
   latestVersion: string | null = $state(null);
   readonly buildCommit: string = import.meta.env.VITE_BUILD_COMMIT;
@@ -118,6 +123,7 @@ class SyncStore {
   private markRemoteReachable(reachable: boolean) {
     if (reachable) {
       this.remoteUnreachable = false;
+      this.statusError = null;
       return;
     }
     this.clearBackendDegraded();
@@ -143,6 +149,12 @@ class SyncStore {
       return;
     }
     this.markRemoteReachable(false);
+    if (!isRemoteConnection()) this.statusError = failureMessage(error);
+  }
+
+  /** Re-read sync status and stats after a failure the status bar reported. */
+  retryStatus(): Promise<void> {
+    return this.loadStatus().then(() => this.loadStats());
   }
 
   async loadStatus() {
@@ -191,7 +203,6 @@ class SyncStore {
     } catch (error) {
       this.markBackendFailure(error);
       this.pendingHydration = false;
-      console.warn("Failed to load sync status:", error);
     }
   }
 
@@ -228,11 +239,11 @@ class SyncStore {
       if (this.statsVersion === version) {
         this.stats = result;
         this.clearBackendDegraded();
+        this.statusError = null;
       }
     } catch (error) {
       if (this.statsVersion === version) {
         this.markBackendFailure(error);
-        console.warn("Failed to load sync stats:", error);
       }
     }
   }

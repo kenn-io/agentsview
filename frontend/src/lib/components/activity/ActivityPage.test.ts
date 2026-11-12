@@ -129,7 +129,7 @@ it("reports the analytics kind for a displayed report failure", async () => {
   const component = mount(ActivityPage, { target: document.body });
   try {
     await vi.waitFor(() =>
-      expect(document.querySelector(".status.error")?.textContent).toContain("Report failed"),
+      expect(document.querySelector('[role="alert"]')?.textContent).toContain("Report failed"),
     );
     expect(reportErrorShown).toHaveBeenCalledExactlyOnceWith("analytics");
   } finally {

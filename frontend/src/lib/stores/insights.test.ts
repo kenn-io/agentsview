@@ -96,6 +96,7 @@ beforeEach(() => {
   insights.selectedId = null;
   insights.selectedTaskId = null;
   insights.loading = false;
+  insights.error = null;
   insights.tasks = [];
   insights.setDateFrom("2025-01-15");
   insights.setDateTo("2025-01-15");
@@ -149,6 +150,20 @@ describe("load", () => {
     expect(api.listInsights).toHaveBeenCalledWith();
     expect(insights.items).toHaveLength(2);
     expect(insights.loading).toBe(false);
+  });
+
+  it("reports a failed list read and clears it after a later load succeeds", async () => {
+    vi.mocked(api.listInsights).mockRejectedValueOnce(new Error("insights table missing"));
+    await insights.load();
+
+    expect(insights.items).toEqual([]);
+    expect(insights.error).toBe("insights table missing");
+
+    vi.mocked(api.listInsights).mockResolvedValueOnce({ insights: [makeInsight({ id: 3 })] });
+    await insights.load();
+
+    expect(insights.error).toBeNull();
+    expect(insights.items).toHaveLength(1);
   });
 
   it("clears selectedId when insight no longer in list", async () => {

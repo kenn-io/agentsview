@@ -152,6 +152,46 @@ describe("MessagesStore", () => {
     runtimeMocks.signals.length = 0;
   });
 
+  it("reports a failed transcript load and recovers through retryLoad", async () => {
+    vi.mocked(api.getSession).mockResolvedValue(makeSession("s1", 2));
+    vi.mocked(api.getMessages).mockRejectedValueOnce(new Error("database is locked"));
+    await messages.loadSession("s1");
+
+    expect(messages.messages).toEqual([]);
+    expect(messages.loadError).toBe("database is locked");
+
+    vi.mocked(api.getMessages).mockResolvedValueOnce(
+      makeMessagesResponse([makeMessage(0), makeMessage(1)]),
+    );
+    await messages.retryLoad();
+
+    expect(messages.messages.map((m) => m.ordinal)).toEqual([0, 1]);
+    expect(messages.loadError).toBeNull();
+  });
+
+  it("reports a failed older page and retries that page", async () => {
+    vi.mocked(api.getSession).mockResolvedValue(makeSession("s1", 3_001));
+    vi.mocked(api.getMessages).mockResolvedValueOnce(
+      makeMessagesResponse(Array.from({ length: 100 }, (_, i) => makeMessage(3_000 - i))),
+    );
+    await messages.loadSession("s1");
+    expect(messages.loadError).toBeNull();
+
+    vi.mocked(api.getMessages).mockRejectedValueOnce(new Error("older page failed"));
+    await messages.loadOlder();
+    expect(messages.loadError).toBe("older page failed");
+    expect(messages.messages).toHaveLength(100);
+
+    vi.mocked(api.getMessages).mockResolvedValueOnce(
+      makeMessagesResponse(Array.from({ length: 100 }, (_, i) => makeMessage(2_900 - i))),
+    );
+    await messages.retryLoad();
+
+    expect(messages.loadError).toBeNull();
+    expect(messages.messages).toHaveLength(200);
+    expect(messages.messages[0]!.ordinal).toBe(2_801);
+  });
+
   it("fetches metadata immediately, then gates multi-page reads and folds ready reloads", async () => {
     for (const [count, metadataPending] of [
       [1001, false],

@@ -5,8 +5,8 @@
   import { router } from "../../stores/router.svelte.js";
   import { ui } from "../../stores/ui.svelte.js";
   import { agentLabel } from "../../utils/agents.js";
-  import { errorTelemetry } from "../../utils/error-telemetry.js";
   import { formatCount } from "../../utils/format.js";
+  import LoadError from "../shared/LoadError.svelte";
   import type { SignalEvidence } from "./signalEvidence.svelte.js";
 
   // The sessions behind the quality signal someone picked. The page shows
@@ -94,7 +94,11 @@
     {#if evidence.loading}
       <p class="evidence-state">{m.insights_page_loading_examples()}</p>
     {:else if evidence.error}
-      <p class="evidence-state error" {@attach errorTelemetry("analytics")}>{evidence.error}</p>
+      <LoadError
+        message={evidence.error}
+        onRetry={() => evidence.selectedSignalId && void evidence.open(evidence.selectedSignalId)}
+        telemetry="analytics"
+      />
     {:else if evidence.examples.length === 0}
       <p class="evidence-state">
         {m.insights_page_no_triggering_sessions()}
@@ -160,10 +164,6 @@
   .evidence-state {
     color: var(--text-secondary);
     font-size: 12px;
-  }
-
-  .evidence-state.error {
-    color: var(--accent-red);
   }
 
   .evidence-list {

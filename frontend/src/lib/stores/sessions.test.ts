@@ -2723,6 +2723,23 @@ describe("SessionsStore", () => {
       expect(sessions.sessions.map((s) => s.id)).toEqual(["after-fix"]);
     });
 
+    it("keeps the listed rows and reports a failed refresh until one succeeds", async () => {
+      mockSidebarIndex([makeSkinnyRow({ id: "listed" })]);
+      await sessions.load();
+
+      vi.mocked(api.getSidebarSessionIndex).mockRejectedValueOnce(
+        new ApiError(503, "archive is rebuilding"),
+      );
+      await sessions.load({ force: true });
+
+      expect(sessions.sidebarLoadError).toBe("archive is rebuilding");
+      expect(sessions.sessions.map((s) => s.id)).toEqual(["listed"]);
+
+      mockSidebarIndex([makeSkinnyRow({ id: "listed" })]);
+      await sessions.load({ force: true });
+      expect(sessions.sidebarLoadError).toBeNull();
+    });
+
     it("passes label and pull request filters to later pages", async () => {
       sessions.filters.labels = ["ticket=example"];
       sessions.filters.pr = "acme/widgets";

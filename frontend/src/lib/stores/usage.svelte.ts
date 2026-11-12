@@ -1069,7 +1069,8 @@ class UsageStore {
         ) {
           this.errors.summary = e instanceof Error ? e.message : m.shared_failed_to_load();
         } else {
-          console.warn("usage.fetchSummary refetch failed:", e);
+          // The last good summary stays on screen with the error above it.
+          this.errors.summary = e instanceof Error ? e.message : m.shared_failed_to_load();
         }
       }
     } finally {
@@ -1209,11 +1210,8 @@ class UsageStore {
       if (this.versions.pairwise === pairwiseVersion) {
         if (e instanceof ApiError && e.code === "invalid_machine_filter")
           this.pairwiseComparison = null;
-        if (this.pairwiseComparison === null) {
-          this.errors.pairwise = e instanceof Error ? e.message : m.shared_failed_to_load();
-        } else {
-          console.warn("usage.fetchPairwise failed:", e);
-        }
+        // A comparison from an earlier load stays on screen with the error above it.
+        this.errors.pairwise = e instanceof Error ? e.message : m.shared_failed_to_load();
       }
       return "error";
     } finally {
@@ -1245,7 +1243,7 @@ class UsageStore {
     else void this.fetchZoom();
   }
 
-  private async fetchZoom(params: UsageParams = this.baseParams()): Promise<FetchResult> {
+  async fetchZoom(params: UsageParams = this.baseParams()): Promise<FetchResult> {
     const projectKey = this.zoomedProject?.key;
     if (!projectKey) return "ok";
     return this.fetchRanking("zoom", { ...params, group_by: "group", limit: 100 });
@@ -1307,9 +1305,10 @@ class UsageStore {
           if (panel === "zoom") this.zoomRows = null;
           else this.topSessions = null;
           this.errors[panel] = error.message;
-        } else if ((panel === "zoom" ? this.zoomRows : this.topSessions) === null) {
+        } else {
+          // Rows from an earlier load stay on screen with the error above them.
           this.errors[panel] = error instanceof Error ? error.message : m.shared_failed_to_load();
-        } else console.warn(`usage.${panel} refetch failed:`, error);
+        }
       }
       return status;
     } finally {

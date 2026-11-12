@@ -1,5 +1,4 @@
 <script lang="ts">
-  import { errorTelemetry } from "../../utils/error-telemetry.js";
   import { m } from "../../i18n/index.js";
   import { onMount } from "svelte";
   import { trends } from "../../stores/trends.svelte.js";
@@ -17,6 +16,7 @@
   import { chartSeriesStyleMap } from "../../utils/chartPalette.js";
   import type { TrendsGranularity } from "../../api/types.js";
   import { Button, SegmentedControl, Spinner, Toggle } from "@kenn-io/kit-ui";
+  import LoadError from "../shared/LoadError.svelte";
   import RangePicker from "../shared/RangePicker.svelte";
   import {
     resolveRange,
@@ -301,7 +301,12 @@
             spellcheck="false"
           ></textarea>
           {#if trends.errors.terms}
-            <div class="error" {@attach errorTelemetry("analytics")}>{trends.errors.terms}</div>
+            <LoadError
+              class="terms-error"
+              message={trends.errors.terms}
+              onRetry={() => void trends.fetchTerms()}
+              telemetry="analytics"
+            />
           {/if}
         </div>
         {#if (trends.response?.series.length ?? 0) > 0}
@@ -519,11 +524,8 @@
     border-color: var(--accent-blue);
   }
 
-  .error {
+  .terms-input :global(.terms-error) {
     margin-top: 8px;
-    color: var(--accent-rose);
-    font-size: 12px;
-    line-height: 1.35;
   }
 
   /* Takes only the rows it needs, and scrolls once they outgrow the

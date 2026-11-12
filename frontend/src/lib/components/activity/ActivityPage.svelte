@@ -1,6 +1,5 @@
 <script lang="ts">
   import { formatCount } from "../../utils/format.js";
-  import { errorTelemetry } from "../../utils/error-telemetry.js";
   import { formatDateTime, m } from "../../i18n/index.js";
   import { onMount, untrack } from "svelte";
   import {
@@ -20,7 +19,8 @@
   } from "../../stores/yokedDates.svelte.js";
   import ProjectTypeahead from "../layout/ProjectTypeahead.svelte";
   import FilterChip from "../shared/FilterChip.svelte";
-  import { Card, Typeahead, type TypeaheadOption } from "@kenn-io/kit-ui";
+  import { Card, EmptyState, Typeahead, type TypeaheadOption } from "@kenn-io/kit-ui";
+  import LoadError from "../shared/LoadError.svelte";
   import RefreshControl from "../shared/RefreshControl.svelte";
   import {
     addDays,
@@ -499,8 +499,12 @@
          every background refresh, so a periodic/SSE-driven reload updates props
          in place instead of swapping in the full-screen "Loading" state and
          remounting the charts (which read as a blank flash). The loading and
-         error states only show before the first report exists. -->
+         error states only show before the first report exists; a failed
+         refresh shows its error above the report it kept. -->
     {#if activity.report}
+      {#if activity.error}
+        <LoadError message={activity.error} onRetry={() => activity.load()} telemetry="analytics" />
+      {/if}
       <SummaryCards report={activity.report} />
       <Card level="default" padding="none" class="chart-panel">
         <ConcurrencyTimeline
@@ -561,14 +565,9 @@
         </Card>
       </div>
     {:else if activity.error}
-      <div class="status error" {@attach errorTelemetry("analytics")}>
-        <span>{activity.error}</span>
-        <button class="retry-btn" onclick={() => activity.load()}>
-          {m.shared_retry()}
-        </button>
-      </div>
+      <LoadError message={activity.error} onRetry={() => activity.load()} telemetry="analytics" />
     {:else}
-      <div class="status">{m.shared_no_data_for_period()}</div>
+      <EmptyState align="top" title={m.shared_no_data_for_period()} />
     {/if}
 
     <!-- Range-scoped, not report-filter-scoped: kept outside the loading/error
@@ -714,32 +713,7 @@
     }
   }
 
-  .status {
-    color: var(--text-muted);
-    font-size: 12px;
-    padding: 24px;
-    text-align: center;
-  }
 
-  .status.error {
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    gap: 8px;
-    color: var(--accent-red);
-  }
 
-  .retry-btn {
-    padding: 2px 8px;
-    border: 1px solid var(--accent-red);
-    border-radius: var(--radius-sm);
-    font-size: 11px;
-    color: var(--accent-red);
-    cursor: pointer;
-  }
 
-  .retry-btn:hover {
-    background: var(--accent-red);
-    color: var(--accent-red-foreground);
-  }
 </style>

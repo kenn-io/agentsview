@@ -10,6 +10,8 @@
   import GeneratedInsightsPanel from "./GeneratedInsightsPanel.svelte";
   import RecallCorpusPanel from "./RecallCorpusPanel.svelte";
   import LibraryPageHeader from "../shared/LibraryPageHeader.svelte";
+  import LoadError from "../shared/LoadError.svelte";
+  import LoadingState from "../shared/LoadingState.svelte";
 
   type RecallTab = "corpus" | "generated";
 
@@ -66,8 +68,12 @@
     </LibraryPageHeader>
   </div>
 
-  {#if !backendKnown}
-    <p class="workspace-loading">{m.recall_page_loading()}</p>
+  {#if !backendKnown && settings.error}
+    <div class="workspace-state">
+      <LoadError message={settings.error} onRetry={() => void settings.load()} />
+    </div>
+  {:else if !backendKnown}
+    <LoadingState label={m.recall_page_loading()} />
   {:else if selectedTab === "corpus"}
     <RecallCorpusPanel />
   {:else}
@@ -87,11 +93,8 @@
     padding: 28px 24px 0;
   }
 
-  .workspace-loading {
-    margin: 0;
-    padding: 0 24px;
-    color: var(--text-secondary);
-    font-size: 13px;
+  .workspace-state {
+    padding: 16px 24px 0;
   }
 
   @media (max-width: 760px) {

@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { errorTelemetry } from "../../utils/error-telemetry.js";
+  import LoadError from "../shared/LoadError.svelte";
   import { usage } from "../../stores/usage.svelte.js";
   import { router } from "../../stores/router.svelte.js";
   import { formatCount } from "../../utils/format.js";
@@ -49,16 +49,13 @@
   </h3>
 
   {#if usage.errors.topSessions}
-    <div class="error" {@attach errorTelemetry("analytics")}>
-      {usage.errors.topSessions}
-      <button
-        class="retry-btn"
-        onclick={() => usage.fetchTopSessions()}
-      >
-        {m.shared_retry()}
-      </button>
-    </div>
-  {:else if sessions.length > 0}
+    <LoadError
+      message={usage.errors.topSessions}
+      onRetry={() => void usage.fetchTopSessions()}
+      telemetry="analytics"
+    />
+  {/if}
+  {#if sessions.length > 0}
     <div class="session-list">
       {#each sessions as row, i (row.sessionId)}
         <!-- svelte-ignore a11y_click_events_have_key_events -->
@@ -94,7 +91,7 @@
         </div>
       {/each}
     </div>
-  {:else}
+  {:else if !usage.errors.topSessions}
     <div class="empty">{m.shared_no_sessions_in_range()}</div>
   {/if}
 </div>
@@ -208,21 +205,5 @@
     text-align: center;
   }
 
-  .error {
-    color: var(--accent-red);
-    font-size: 12px;
-    padding: 12px;
-    display: flex;
-    align-items: center;
-    gap: 8px;
-  }
 
-  .retry-btn {
-    padding: 2px 8px;
-    border: 1px solid currentColor;
-    border-radius: var(--radius-sm);
-    font-size: 11px;
-    color: inherit;
-    cursor: pointer;
-  }
 </style>

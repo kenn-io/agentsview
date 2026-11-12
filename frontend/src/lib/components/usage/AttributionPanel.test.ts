@@ -609,7 +609,7 @@ describe("AttributionPanel job groups", () => {
       await tick();
       await vi.waitFor(() => expect(usage.errors.zoom).toBe("Project failed"));
       await tick();
-      expect(document.querySelector(".empty")?.textContent).toBe("Project failed");
+      expect(document.querySelector('[role="alert"]')?.textContent).toContain("Project failed");
       expect(reportErrorShown).toHaveBeenCalledExactlyOnceWith("analytics");
     } finally {
       await unmount(component);

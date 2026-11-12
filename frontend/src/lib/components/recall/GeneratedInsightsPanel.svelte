@@ -20,6 +20,8 @@
   import { m } from "../../i18n/index.js";
   import { router, getBasePath } from "../../stores/router.svelte.js";
   import { insights } from "../../stores/insights.svelte.js";
+  import LoadError from "../shared/LoadError.svelte";
+  import LoadingState from "../shared/LoadingState.svelte";
   import { sessions } from "../../stores/sessions.svelte.js";
   import { sync } from "../../stores/sync.svelte.js";
   import { ui } from "../../stores/ui.svelte.js";
@@ -409,10 +411,10 @@
     </div>
   </Card>
 
-  {#if insights.loading}
-    <Card level="default" class="archive-state">
-      {m.insights_page_loading_archive()}
-    </Card>
+  {#if insights.error && insights.items.length === 0 && insights.tasks.length === 0}
+    <LoadError message={insights.error} onRetry={() => void insights.load()} telemetry="insight" />
+  {:else if insights.loading}
+    <LoadingState label={m.insights_page_loading_archive()} />
   {:else if insights.items.length === 0 && insights.tasks.length === 0}
     <EmptyState
       align="top"
@@ -735,13 +737,6 @@
   .scope-actions :global(.generate-action) {
     flex-shrink: 0;
     min-width: 112px;
-  }
-
-  :global(.archive-state) {
-    display: flex;
-    flex-direction: column;
-    gap: 0.25rem;
-    color: var(--text-secondary);
   }
 
   .generated-layout {

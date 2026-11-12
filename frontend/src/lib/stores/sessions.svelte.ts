@@ -1,4 +1,5 @@
 import { SvelteMap } from "svelte/reactivity";
+import { failureMessage } from "../utils/failure.js";
 import type { DataChangedEvent } from "../api/client.js";
 import {
   DataService,
@@ -429,6 +430,9 @@ class SessionsStore {
         this.sidebarLoadError = error.message;
         return;
       }
+      // Any other failure keeps the rows already listed and says the list
+      // is out of date until a later load succeeds.
+      if (!isAbortError(error)) this.sidebarLoadError = failureMessage(error);
     } finally {
       if (this.loadVersion === version) {
         this.loading = false;

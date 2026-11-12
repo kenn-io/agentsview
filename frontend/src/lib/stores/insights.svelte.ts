@@ -16,6 +16,7 @@ import {
   type InsightLogEvent,
 } from "../api/client.js";
 import { localDateStr } from "../utils/dates.js";
+import { failureMessage } from "../utils/failure.js";
 import { LatestRead } from "../utils/latest-read.js";
 
 /** Agent used until the server reports a configured default. */
@@ -75,6 +76,8 @@ class InsightsStore {
   selectedId: number | null = $state(null);
   selectedTaskId: string | null = $state(null);
   loading = $state(false);
+  /** Why the last list load failed; null after a load succeeds. */
+  error: string | null = $state(null);
   promptText: string = $state("");
   tasks: InsightTask[] = $state([]);
 
@@ -104,6 +107,7 @@ class InsightsStore {
       const res = await InsightsService.getApiV1Insights({}, { signal });
       if (this.#version === v && this.#listRead.isCurrent(signal)) {
         this.items = res.insights;
+        this.error = null;
         if (this.selectedId !== null && !this.items.some((s) => s.id === this.selectedId)) {
           this.selectedId = null;
         }
@@ -112,6 +116,7 @@ class InsightsStore {
       if (isAbortError(e) || !this.#listRead.isCurrent(signal)) return;
       if (this.#version === v) {
         this.items = [];
+        this.error = failureMessage(e);
       }
     } finally {
       if (this.#listRead.finish(signal)) {

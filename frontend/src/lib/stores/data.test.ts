@@ -232,7 +232,7 @@ describe("load", () => {
     expect(data.loading).toBe(false);
   });
 
-  it("keeps existing inventory and suppresses the error when a background load fails", async () => {
+  it("keeps existing inventory and reports the error when a background load fails", async () => {
     const inventory = makeInventory([makeRow()]);
     api.getApiV1DataProjects.mockResolvedValueOnce(inventory);
     await expect(data.load()).resolves.toBe(true);
@@ -242,7 +242,7 @@ describe("load", () => {
     await expect(data.load({ background: true })).resolves.toBe(false);
 
     expect(data.inventory).toEqual(inventory);
-    expect(data.error).toBe("");
+    expect(data.error).toBe("network down");
     expect(data.loading).toBe(false);
   });
 });
