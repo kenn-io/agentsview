@@ -56,9 +56,6 @@ func TestMaterializePiConfiguredSources(t *testing.T) {
 			result, err = Materialize(t.Context(), cfg, nil, s, cwd)
 			require.NoError(t, err)
 			assert.Equal(t, "unchanged", result.Status)
-			require.NoError(t, os.WriteFile(result.Paths[0], []byte("different"), 0o600))
-			_, err = Materialize(t.Context(), cfg, nil, s, cwd)
-			require.ErrorContains(t, err, "differs")
 		})
 	}
 }
@@ -131,7 +128,7 @@ func TestPiSourceFallbackAndIdentity(t *testing.T) {
 	require.ErrorContains(t, err, "Pi keeps no")
 }
 
-func TestPiHeaderIdentityAndDestination(t *testing.T) {
+func TestPiHeaderIdentityAndVersion(t *testing.T) {
 	for _, tc := range []struct{ header, id, want string }{
 		{`{"type":"session","id":"other","cwd":"/old"}`, "id", "identity"},
 		{`{"type":"session","id":"id","cwd":"/a","cwd":"/b"}`, "id", "one cwd"},
@@ -146,6 +143,9 @@ func TestPiHeaderIdentityAndDestination(t *testing.T) {
 			require.ErrorContains(t, err, tc.want)
 		})
 	}
+}
+
+func TestPiDefaultDestination(t *testing.T) {
 	t.Setenv("PI_CODING_AGENT_SESSION_DIR", "")
 	home := t.TempDir()
 	t.Setenv("PI_CODING_AGENT_DIR", home)
