@@ -1004,6 +1004,11 @@ func TestExportWaitAfterDaemonRestart(t *testing.T) {
 				assert.Contains(t, status, "backfill writes blocked")
 				assert.Contains(t, status, "agentsview daemon restart")
 				assert.Contains(t, status, "agentsview export status")
+				stdout, _, err := executeExportSessionsCommand(newRootCommand(), "export", "sessions")
+				require.ErrorContains(t, err, "backfill writes blocked")
+				assert.Contains(t, err.Error(), "agentsview daemon restart")
+				assert.Contains(t, err.Error(), "agentsview export status")
+				assert.Empty(t, stdout)
 			}
 			stop()
 			_, err = raw.ExecContext(t.Context(), `DROP TRIGGER fail_backfill`)

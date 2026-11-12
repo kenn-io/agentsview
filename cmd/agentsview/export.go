@@ -144,13 +144,7 @@ func newExportStatusCommand() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			if status.State != "completed" && status.State != "not_needed" {
-				if appCfg.ApplyDeploymentAuth() == nil {
-					rt := FindWritableDaemonRuntime(appCfg.DataDir, appCfg.AuthToken)
-					failure, _ := exportDaemonPing(cmd.Context(), rt, appCfg.AuthToken)
-					status = exportStatusWithFailure(status, failure)
-				}
-			}
+			status = exportStatusWithLiveFailure(cmd.Context(), &appCfg, status)
 			if _, err = fmt.Fprintf(cmd.OutOrStdout(), "project identity evidence: %s\n", exportStatusText(status)); err != nil {
 				return err
 			}
@@ -327,7 +321,7 @@ func runExportSessions(cmd *cobra.Command, cfg exportSessionsConfig) error {
 			return exportBackfillFailure(backfill)
 		}
 		if !cfg.Wait {
-			return fmt.Errorf("project identification is %s; run `agentsview export sessions --wait` or check `agentsview export status`", exportStatusText(backfill))
+			return exportPendingError(ctx, database, &appCfg, backfill)
 		}
 		if err := database.Close(); err != nil {
 			return err
@@ -426,6 +420,26 @@ func exportStatusWithFailure(status db.BackgroundMigrationStatus, failure string
 		status.State, status.LastError = "failed", failure
 	}
 	return status
+}
+
+func exportStatusWithLiveFailure(ctx context.Context, cfg *config.Config, status db.BackgroundMigrationStatus) db.BackgroundMigrationStatus {
+	if status.State != "completed" && status.State != "not_needed" && cfg.ApplyDeploymentAuth() == nil {
+		rt := FindWritableDaemonRuntime(cfg.DataDir, cfg.AuthToken)
+		failure, _ := exportDaemonPing(ctx, rt, cfg.AuthToken)
+		status = exportStatusWithFailure(status, failure)
+	}
+	return status
+}
+
+func exportPendingError(ctx context.Context, database *db.DB, cfg *config.Config, status db.BackgroundMigrationStatus) error {
+	if err := database.Close(); err != nil {
+		return err
+	}
+	status = exportStatusWithLiveFailure(ctx, cfg, status)
+	if status.State == "failed" {
+		return exportBackfillFailure(status)
+	}
+	return fmt.Errorf("project identification is %s; run `agentsview export sessions --wait` or check `agentsview export status`", exportStatusText(status))
 }
 
 func exportStatusText(status db.BackgroundMigrationStatus) string {
