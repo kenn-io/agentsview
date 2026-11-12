@@ -104,7 +104,9 @@ class SettingsStore {
   restartRequired: boolean = $state(false);
   restarting: boolean = $state(false);
   restartFailed: boolean = $state(false);
+  restartCanRetry: boolean = $state(false);
   private originalInstance = "";
+  private restartUncertain = false;
   /** The server's reason when it refused the restart. */
   restartError: string | null = $state(null);
   /** True when the API returned 401, indicating the user needs
@@ -193,6 +195,8 @@ class SettingsStore {
     this.restarting = true;
     this.restartFailed = false;
     this.restartError = null;
+    this.restartCanRetry = false;
+    this.restartUncertain = false;
     return this.runMutation(() => this.performRestart(true));
   }
 
@@ -207,6 +211,7 @@ class SettingsStore {
     while (await delay(RESTART_POLL_MS, signal)) {
       try {
         const { instance_id: id } = await HealthService.getApiPing({ signal });
+        this.restartCanRetry = this.restartUncertain && !!id && id === this.originalInstance;
         if (
           typeof id === "string" &&
           id &&
@@ -216,6 +221,7 @@ class SettingsStore {
         )
           return true;
       } catch (e) {
+        this.restartCanRetry = false;
         if (e instanceof ApiError && e.status === 401) throw e;
       }
     }
@@ -259,6 +265,7 @@ class SettingsStore {
         } catch (e) {
           // A lost response may still mean the server accepted the request.
           if (e instanceof ApiError) throw e;
+          this.restartUncertain = true;
         }
       }
       if (await this.waitForReplacement(deadline.signal)) {

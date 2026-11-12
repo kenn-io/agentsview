@@ -730,6 +730,24 @@ describe("SettingsStore.restartDaemon", () => {
     expect(reload).not.toHaveBeenCalled();
   });
 
+  it("offers retry when a lost request leaves the original server answering", async () => {
+    ping.mockResolvedValue({ healthy: true, ok: true, pid: 100, instance_id: "old" });
+    restartDaemon.mockRejectedValueOnce(new TypeError("Failed to fetch"));
+    const first = settings.restartDaemon();
+    await vi.advanceTimersByTimeAsync(30_000);
+    await first;
+    expect(settings.restartCanRetry).toBe(true);
+
+    restartDaemon.mockResolvedValueOnce({ restarting: true });
+    ping.mockResolvedValueOnce({ healthy: true, ok: true, pid: 100, instance_id: "old" });
+    ping.mockResolvedValue({ healthy: true, ok: true, pid: 100, instance_id: "new" });
+    const retry = settings.restartDaemon();
+    await vi.advanceTimersByTimeAsync(1_000);
+    await retry;
+    expect(restartDaemon).toHaveBeenCalledTimes(2);
+    expect(reload).toHaveBeenCalledOnce();
+  });
+
   it.each([
     ["the original instance", { healthy: true, ok: true, pid: 100, instance_id: "old" }],
     ["an unidentified server", { healthy: true, ok: true, pid: 100 }],
@@ -743,6 +761,7 @@ describe("SettingsStore.restartDaemon", () => {
     await vi.advanceTimersByTimeAsync(30_000);
     await restart;
     expect(settings.restartFailed).toBe(true);
+    expect(settings.restartCanRetry).toBe(false);
     expect(reload).not.toHaveBeenCalled();
 
     if (answer instanceof ApiError) ping.mockRejectedValueOnce(answer);

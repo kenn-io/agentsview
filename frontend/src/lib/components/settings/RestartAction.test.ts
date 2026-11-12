@@ -7,6 +7,7 @@ import RestartAction from "./RestartAction.svelte";
 beforeEach(() => {
   settings.restartSupported = true;
   settings.restartFailed = false;
+  settings.restartCanRetry = false;
   settings.restartError = null;
   settings.restarting = false;
   settings.saving = false;
@@ -66,6 +67,14 @@ describe("RestartAction", () => {
     expect(getByText(/restart AgentsView the way you started it/i)).toBeTruthy();
     expect(getByText(/open the address/i)).toBeTruthy();
     expect(queryByRole("button", { name: "Restart now" })).toBeNull();
+    expect(getByRole("button", { name: "Check connection" })).toBeTruthy();
+  });
+
+  it("offers a retry when the original server still answers", () => {
+    settings.restartFailed = true;
+    settings.restartCanRetry = true;
+    const { getByRole } = render(RestartAction, { notice: "Example notice" });
+    expect(getByRole("button", { name: "Restart now" })).toBeTruthy();
     expect(getByRole("button", { name: "Check connection" })).toBeTruthy();
   });
 });

@@ -691,7 +691,7 @@ func runServe(ctx context.Context, cfg config.Config, opts serveOptions, restart
 			args = append([]string{"serve"}, args...)
 			args = append(args, serveHandoffPortArgs(cfg.Port, restartExplicitPort)...)
 			// Let the HTTP response finish before draining its server.
-			restart := &foregroundRestartError{args: args, dataDir: cfg.DataDir, release: release}
+			restart := &foregroundRestartError{args: args, release: release}
 			context.AfterFunc(ctx, func() {
 				requestRestart(restart)
 				if context.Cause(serverContext) != restart {
@@ -883,7 +883,6 @@ func runServe(ctx context.Context, cfg config.Config, opts serveOptions, restart
 
 type foregroundRestartError struct {
 	args    []string
-	dataDir string
 	release func()
 }
 

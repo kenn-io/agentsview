@@ -278,7 +278,7 @@ func TestRestartReleasesLaunchLockWhenNextCommandFails(t *testing.T) {
 	args := os.Args
 	t.Cleanup(func() { os.Args = args })
 	err = execForegroundRestart(&foregroundRestartError{
-		args: []string{"serve", "--unknown-restart-option"}, dataDir: dir, release: release,
+		args: []string{"serve", "--unknown-restart-option"}, release: release,
 	})
 	require.Error(t, err)
 	lock, ok := acquireBackgroundLaunchLock(dir)

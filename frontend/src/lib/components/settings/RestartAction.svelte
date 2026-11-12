@@ -19,8 +19,18 @@
     </p>
   {:else if settings.restartFailed && !settings.restartError}
     <p class="restart-text" role="status" aria-live="polite">
-      {notice} {m.settings_restart_reconnect_failed()}
+      {notice}
+      {#if settings.restartCanRetry}
+        {m.settings_restart_consequence()}
+      {:else}
+        {m.settings_restart_reconnect_failed()}
+      {/if}
     </p>
+    {#if settings.restartCanRetry}
+      <Button disabled={settings.saving || settings.restarting} onclick={() => settings.restartDaemon()}>
+        {m.settings_restart_now()}
+      </Button>
+    {/if}
     <Button disabled={settings.restarting} onclick={() => settings.checkConnection()}>
       {settings.restarting ? m.settings_restart_restarting() : m.settings_restart_check_connection()}
     </Button>

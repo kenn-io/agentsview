@@ -434,24 +434,8 @@ func TestServeRestartPortChoiceWhenOccupied(t *testing.T) {
 }
 
 func TestServeRestartHandoffPreservesLaunchOptions(t *testing.T) {
-	dir := t.TempDir()
-	t.Setenv("HOME", dir)
-	t.Setenv("XDG_CONFIG_HOME", filepath.Join(dir, "config"))
-	t.Setenv("XDG_CACHE_HOME", filepath.Join(dir, "cache"))
-	t.Setenv("XDG_STATE_HOME", filepath.Join(dir, "state"))
-	t.Setenv("AGENTSVIEW_DATA_DIR", filepath.Join(dir, "data"))
-	t.Setenv("AGENTSVIEW_TEST_REAL_CLI", "1")
-	dataDir := filepath.Join(dir, "data")
-	t.Cleanup(func() {
-		ctx, cancel := context.WithTimeout(context.WithoutCancel(t.Context()), 30*time.Second)
-		defer cancel()
-		_, err := stopWritableDaemonsForUpdate(ctx, config.Config{DataDir: dataDir})
-		assert.NoError(t, err)
-	})
-
-	start := exec.CommandContext(t.Context(), os.Args[0], "serve", "--background", "--host=127.0.0.1", "--port=0", "--base-path=/example", "--no-sync", "--require-auth=false")
-	out, err := start.CombinedOutput()
-	require.NoError(t, err, "%s", out)
+	_, dataDir := isolateServeTestHome(t)
+	startRestartFixture(t, dataDir, "background", "--base-path=/example", "--no-sync", "--require-auth=false")
 	rt := FindDaemonRuntime(dataDir)
 	require.NotNil(t, rt)
 	require.True(t, rt.NoSync)
@@ -511,59 +495,12 @@ func TestServeRestartHandoffPreservesLaunchOptions(t *testing.T) {
 
 func startRestartAuthFixture(t *testing.T, mode string, args ...string) (config.Config, string, string) {
 	t.Helper()
-	dir := t.TempDir()
-	t.Setenv("HOME", dir)
-	t.Setenv("XDG_CONFIG_HOME", filepath.Join(dir, "config"))
-	t.Setenv("XDG_CACHE_HOME", filepath.Join(dir, "cache"))
-	t.Setenv("XDG_STATE_HOME", filepath.Join(dir, "state"))
-	dataDir := filepath.Join(dir, "data")
-	t.Setenv("AGENTSVIEW_DATA_DIR", dataDir)
-	t.Setenv("AGENTSVIEW_TEST_REAL_CLI", "1")
-	args = append([]string{"serve", "--host=127.0.0.1", "--port=0", "--no-sync", "--no-browser", "--no-update-check"}, args...)
-	if mode == "background" {
-		args = append(args, "--background")
-	}
-	processCtx, cancel := context.WithCancel(context.WithoutCancel(t.Context()))
-	t.Cleanup(cancel)
-	cmd := exec.CommandContext(processCtx, os.Args[0], args...)
-	var done chan error
-	if mode == "background" {
-		out, err := cmd.CombinedOutput()
-		require.NoError(t, err, "%s", out)
-	} else {
-		require.NoError(t, cmd.Start())
-		done = make(chan error, 1)
-		go func() { done <- cmd.Wait() }()
-	}
+	_, dataDir := isolateServeTestHome(t)
+	startRestartFixture(t, dataDir, mode, append([]string{"--no-sync"}, args...)...)
 	cfg, err := config.Load(nil)
 	require.NoError(t, err)
 	require.NoError(t, cfg.EnsureAuthToken())
 	token := cfg.AuthToken
-	t.Cleanup(func() {
-		if mode == "background" {
-			assert.Eventually(t, func() bool {
-				lock, acquired := acquireBackgroundLaunchLock(dataDir)
-				if !acquired {
-					return false
-				}
-				assert.NoError(t, lock.Unlock())
-				return true
-			}, 30*time.Second, 100*time.Millisecond)
-		}
-		ctx, stop := context.WithTimeout(context.WithoutCancel(t.Context()), 30*time.Second)
-		defer stop()
-		assert.Eventually(t, func() bool {
-			_, err := stopWritableDaemonsForUpdate(ctx, config.Config{DataDir: dataDir, AuthToken: token})
-			return err == nil
-		}, 30*time.Second, 100*time.Millisecond)
-		if done != nil {
-			select {
-			case <-done:
-			case <-ctx.Done():
-				assert.Fail(t, "foreground server did not stop")
-			}
-		}
-	})
 	return cfg, dataDir, token
 }
 
