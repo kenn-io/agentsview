@@ -192,7 +192,7 @@ describe("SearchStore", () => {
       const store = createSearchStore(memoryStorage());
       const second = deferred<SearchResponse>();
       searchService.getApiV1Search
-        .mockRejectedValueOnce(new ApiError(503, "first"))
+        .mockRejectedValueOnce(new ApiError(503, "request timed out"))
         .mockReturnValueOnce(second.promise);
       store.search("needle", "alpha");
       await runDebounce();
@@ -226,7 +226,6 @@ describe("SearchStore", () => {
   it.each([
     [501, "unavailable"],
     [504, "unavailable"],
-    [503, "request timed out"],
   ] as const)("does not retry HTTP %i with %s", async (status, detail) => {
     const store = createSearchStore(memoryStorage());
     searchService.getApiV1Search.mockRejectedValueOnce(generatedApiError(status, detail));

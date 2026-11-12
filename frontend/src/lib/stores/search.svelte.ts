@@ -132,7 +132,7 @@ async function searchFullText(params: GetApiV1SearchParams, signal: AbortSignal)
   try {
     return await SearchService.getApiV1Search(params, { signal });
   } catch (error: unknown) {
-    if ((error instanceof ApiError && ([501, 504].includes(error.status) || isTimeoutDetail(error.message))) || !isTransient(error))
+    if ((error instanceof ApiError && [501, 504].includes(error.status)) || !isTransient(error))
       throw error;
     await new Promise((resolve) => setTimeout(resolve, 300));
     if (getServerUrl() !== server) throw error;
