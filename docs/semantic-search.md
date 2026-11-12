@@ -32,8 +32,9 @@ during indexing.
 Turning on the built-in server records a shared choice after setup succeeds.
 Other apps using Kit can use that choice, and AgentsView can use it at startup
 to enable search and download missing built-in server files when it has no
-enabled setup. Explicitly disabled or separately configured search keeps its
-settings.
+enabled setup. Set `vector.enabled = false` in `config.toml` to opt out of the
+shared choice; removing the `[vector]` section does not. Separately configured
+search keeps its settings.
 
 An enabled configuration with `local = true` starts indexing at startup using
 installed server files. It does not record a shared choice. If files are missing,

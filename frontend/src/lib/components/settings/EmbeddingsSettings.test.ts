@@ -94,43 +94,6 @@ describe("EmbeddingsSettings", () => {
     flushSync();
   }
 
-  it("refreshes setup after Ollama stops", async () => {
-    const setup = {
-      enabled: false,
-      action: "turn-on",
-      provider: "ollama",
-      missing_bytes: 295000000,
-      busy: false,
-      installing: false,
-      downloaded_bytes: 0,
-      total_bytes: 0,
-    };
-    embeddingsService.getApiV1EmbeddingsStatus.mockResolvedValue({ running: false, setup });
-    embeddingsService.postApiV1EmbeddingsSetup
-      .mockRejectedValueOnce(new ApiError(409, "provider changed", "embeddings_provider_changed"))
-      .mockResolvedValue({ started: true });
-    const component = mount(EmbeddingsSettings, { target: document.body });
-    try {
-      await settle();
-      expect(document.body.textContent).toContain("Uses Ollama");
-      expect(document.body.textContent).not.toContain("Downloads 295 MB");
-      embeddingsService.getApiV1EmbeddingsStatus.mockResolvedValue({
-        running: false,
-        setup: {
-          ...setup,
-          provider: "built-in",
-        },
-      });
-      [...document.body.querySelectorAll("button")]
-        .find((b) => b.textContent?.trim() === "Turn on")!
-        .click();
-      await settle();
-      expect(document.body.textContent).toContain("Downloads 295 MB");
-    } finally {
-      unmount(component);
-    }
-  });
-
   it("shows an enabled Ollama setup as on, with no switch", async () => {
     embeddingsService.getApiV1EmbeddingsStatus.mockResolvedValue({
       running: false,
