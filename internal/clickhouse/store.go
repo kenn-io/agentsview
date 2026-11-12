@@ -53,6 +53,9 @@ type Store struct {
 	afterUsageSlices func()
 	// beforeUsageExtent lets tests change source rows after the request snapshot.
 	beforeUsageExtent func()
+	// afterTrackerReads, when set, runs after the row trackers read and
+	// before the parts are checked again. Tests use it to move parts.
+	afterTrackerReads func()
 	cursorMu          sync.RWMutex
 	cursorSecret      []byte
 	customPricing     map[string]config.CustomModelRate

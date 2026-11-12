@@ -2670,8 +2670,10 @@ func (s *Store) usageRowsVersion(ctx context.Context, tables []string, pricingDi
 }
 
 // usageIdentitiesLocked returns each table's row identity as of snapshot,
-// keeping what it read. It reports false, keeping nothing, when a probe
-// fails or the parts move while it reads. The caller holds usageVersions.
+// keeping what it read. It reports false when a probe fails or the parts
+// move while it reads. After a move each tracker still keeps a read that
+// its parts still account for; see finalRowsChange.settle. The caller
+// holds usageVersions.
 func (s *Store) usageIdentitiesLocked(
 	ctx context.Context, snapshot partsSnapshot, tables []string, pricingDigest string,
 ) (map[string]string, bool) {
@@ -2705,15 +2707,28 @@ func (s *Store) usageIdentitiesLocked(
 		}
 	}
 	if len(changed) > 0 || len(changes) > 0 {
+		if s.afterTrackerReads != nil {
+			s.afterTrackerReads()
+		}
 		fresh, err := s.readPartsSnapshot(ctx)
 		if err != nil {
 			s.logUsageReadiness(fmt.Sprintf("parts recheck failed, serving uncached: %v", err))
 			return nil, false
 		}
-		for _, table := range tables {
-			if fresh[table].digest != snapshot[table].digest {
-				return nil, false
+		moved := slices.ContainsFunc(tables, func(table string) bool {
+			return fresh[table].digest != snapshot[table].digest
+		})
+		if moved {
+			// Each tracker keeps what it read while its parts still hold
+			// those rows, so the next check reads only the parts that
+			// changed. The trackers may now stand at different parts, so
+			// their identities are not returned.
+			for _, c := range changes {
+				if c.change.settle(fresh[c.tracker.spec.table]) {
+					c.tracker.apply(c.change)
+				}
 			}
+			return nil, false
 		}
 	}
 	for _, c := range changes {
@@ -2903,10 +2918,10 @@ func (s *Store) readPartsSnapshot(ctx context.Context) (partsSnapshot, error) {
 	snapshot := partsSnapshot{}
 	digests := map[string]hash.Hash{}
 	for rows.Next() {
-		var table, files string
+		var table string
 		var p partInfo
 		var dataVersion uint64
-		if err := rows.Scan(&table, &p.name, &p.partition, &p.minBlock, &p.maxBlock, &dataVersion, &p.rows, &files); err != nil {
+		if err := rows.Scan(&table, &p.name, &p.partition, &p.minBlock, &p.maxBlock, &dataVersion, &p.rows, &p.files); err != nil {
 			return nil, fmt.Errorf("scanning clickhouse parts: %w", err)
 		}
 		// A part's data version is its first block until a mutation
@@ -2922,7 +2937,7 @@ func (s *Store) readPartsSnapshot(ctx context.Context) (partsSnapshot, error) {
 			sum = sha256.New()
 			digests[table] = sum
 		}
-		fmt.Fprintf(sum, "%s\x00%s\x00", p.name, files)
+		fmt.Fprintf(sum, "%s\x00%s\x00", p.name, p.files)
 	}
 	if err := rows.Err(); err != nil {
 		return nil, fmt.Errorf("iterating clickhouse parts: %w", err)
