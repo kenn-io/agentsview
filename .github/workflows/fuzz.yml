@@ -176,6 +176,11 @@ jobs:
           exit "$status"
         env:
           CGO_ENABLED: "1"
+          # Each input gets fresh temp files, and database targets build
+          # a SQLite store per input. On tmpfs that costs about a
+          # millisecond instead of a disk sync. Build files stay on disk.
+          TMPDIR: /dev/shm
+          GOTMPDIR: ${{ runner.temp }}
           SHARD: ${{ matrix.shard }}
           SHARDS: ${{ needs.fuzz-budget.outputs.shards }}
           TARGETS: ${{ needs.fuzz-budget.outputs.targets }}

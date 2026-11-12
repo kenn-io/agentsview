@@ -24,6 +24,9 @@ package parser
 // Plain `go test` runs the seeds plus any regression inputs committed under
 // testdata/fuzz/<Target>/. `go test -run '^$' -fuzz '^<Target>$'` explores
 // from there; .github/workflows/fuzz.yml does that weekly for every target.
+// Inputs land in os.TempDir. Database targets build a SQLite store per
+// input, so point TMPDIR at tmpfs (TMPDIR=/dev/shm on Linux) when fuzzing
+// locally; on a disk each input waits on syncs.
 
 import (
 	"bufio"
