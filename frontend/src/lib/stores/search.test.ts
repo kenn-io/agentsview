@@ -223,14 +223,18 @@ describe("SearchStore", () => {
     },
   );
 
-  it.each([501, 504])("does not retry HTTP %i", async (status) => {
+  it.each([
+    [501, "unavailable"],
+    [504, "unavailable"],
+    [503, "request timed out"],
+  ] as const)("does not retry HTTP %i with %s", async (status, detail) => {
     const store = createSearchStore(memoryStorage());
-    searchService.getApiV1Search.mockRejectedValueOnce(generatedApiError(status, "unavailable"));
+    searchService.getApiV1Search.mockRejectedValueOnce(generatedApiError(status, detail));
     store.search("needle");
     await runDebounce();
     await vi.advanceTimersByTimeAsync(300);
     expect(searchService.getApiV1Search).toHaveBeenCalledTimes(1);
-    expect(store.error).toEqual({ detail: "unavailable", kind: "generic" });
+    expect(store.error).toEqual({ detail, kind: "generic" });
   });
 
   it("does not send a retry to a server selected in another tab", async () => {
