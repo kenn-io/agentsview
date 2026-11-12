@@ -1,5 +1,5 @@
 ---
-last_edited: 2026-11-09
+last_edited: 2026-11-12
 title: PostgreSQL Sync
 description: Share sessions across machines with PostgreSQL push sync, an auto-push service, and a read-only server
 ---
@@ -596,8 +596,9 @@ and the server falls back to the schema compatibility check.
 
 When `require_auth` is enabled, a bearer token is generated if needed and
 printed on startup. Pass it via `Authorization: Bearer <token>` on API requests.
-The SSE watch endpoint also accepts `?token=<token>` as a query parameter since
-the `EventSource` API cannot set custom headers.
+The SSE watch endpoint also accepts `?token=<token>` for native `EventSource`
+clients; see [SSE Endpoints](/docs/remote-access/#sse-endpoints) for when to use
+it.
 
 The raw-sync machine routes do not accept this shared bearer token. They use
 their own device credentials and operation-scoped tokens as described in the
