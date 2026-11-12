@@ -799,25 +799,12 @@ func selectActivityUsage(
 	ctx context.Context, ordered iter.Seq[*clickActivityReportUsageRow], count int,
 	ids []string, q activity.Query, rateResolver *export.PricingResolver,
 ) ([]activity.UsageRow, error) {
-	baseRows := make([]activity.UsageRow, 0, count)
+	selection := make([]activity.UsageSelectionRow, 0, count)
 	for r := range ordered {
-		baseRows = append(baseRows, activity.UsageRow{
-			SessionID:         r.sessionID,
-			Model:             r.model,
-			Timestamp:         r.ts,
-			InputTokens:       r.inputTok,
-			OutputTokens:      r.outputTok,
-			WebSearchRequests: r.webSearchRequests,
-			Agent:             r.agent,
-			ClaudeMessageID:   r.claudeMessageID,
-			ClaudeRequestID:   r.claudeRequestID,
-			SourceUUID:        r.sourceUUID,
-			UsageDedupKey:     r.usageDedupKey,
-		})
+		ts, err := time.Parse(time.RFC3339Nano, r.ts)
+		selection = append(selection, activity.UsageSelectionRow{SessionID: r.sessionID, Timestamp: ts, TimestampValid: err == nil, OutputTokens: r.outputTok, WebSearchRequests: r.webSearchRequests, Agent: r.agent, ClaudeMessageID: r.claudeMessageID, ClaudeRequestID: r.claudeRequestID, SourceUUID: r.sourceUUID, UsageDedupKey: r.usageDedupKey})
 	}
-	mask, attribution, webSearchRequests, err := activity.UsageSurvivorSelectionForSessions(
-		ctx, q.RangeStart, q.RangeEnd, q.EffectiveEnd, baseRows, ids,
-	)
+	mask, attribution, webSearchRequests, err := activity.SelectUsageSurvivorsForSessions(ctx, q.RangeStart, q.RangeEnd, q.EffectiveEnd, selection, ids)
 	if err != nil {
 		return nil, err
 	}

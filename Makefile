@@ -68,7 +68,7 @@ override GOFLAGS += -trimpath
 endif
 export GOFLAGS
 
-.PHONY: build build-release homebrew install install-cjk-fts simple-fts frontend frontend-dev dev check-air air-install desktop-dev desktop-build desktop-macos-app desktop-macos-dmg desktop-windows-installer desktop-linux-appimage desktop-app docs-install docs-build docs-serve docs-check docs-screenshots docs-assets-branch docs-generated-assets-branch docs-deploy-staging docs-deploy test test-short test-evalingest bench-backends bench-gate bench-gate-config bench-pg-usage test-postgres test-postgres-ci test-postgres-raw-sync-ci test-postgres-core-ci test-postgres-core-fast-ci test-postgres-core-heavy-ci test-s3 postgres-up postgres-down test-clickhouse test-clickhouse-ci clickhouse-up clickhouse-down e2e e2e-duckdb memory-e2e vet lint lint-ci lint-golangci lint-golangci-ci nilaway nilaway-golangci-build lint-tools tidy clean release release-darwin-arm64 release-darwin-amd64 release-linux-amd64 install-hooks ensure-embed-dir pricing-snapshot sqlite-vec-header dev-snapshot help
+.PHONY: build build-release homebrew install install-cjk-fts simple-fts frontend frontend-dev dev check-air air-install desktop-dev desktop-build desktop-macos-app desktop-macos-dmg desktop-windows-installer desktop-linux-appimage desktop-app docs-install docs-build docs-serve docs-check docs-screenshots docs-assets-branch docs-generated-assets-branch docs-deploy-staging docs-deploy test test-short test-api-version test-evalingest bench-backends bench-gate bench-gate-config bench-pg-usage test-postgres test-postgres-ci test-postgres-raw-sync-ci test-postgres-core-ci test-postgres-core-fast-ci test-postgres-core-heavy-ci test-s3 postgres-up postgres-down test-clickhouse test-clickhouse-ci clickhouse-up clickhouse-down e2e e2e-duckdb memory-e2e vet lint lint-ci lint-golangci lint-golangci-ci nilaway nilaway-golangci-build lint-tools tidy clean release release-darwin-arm64 release-darwin-amd64 release-linux-amd64 install-hooks ensure-embed-dir pricing-snapshot sqlite-vec-header dev-snapshot help
 
 # Ensure go:embed has at least one file (no-op if frontend is built)
 ensure-embed-dir:
@@ -363,6 +363,11 @@ test: pricing-snapshot ensure-embed-dir
 PERF_SIM_FLAGS ?=
 perf-sim: pricing-snapshot ensure-embed-dir
 	CGO_ENABLED=1 go run -buildvcs=true -tags fts5 ./cmd/perfsim $(PERF_SIM_FLAGS)
+
+# Check that the generated OpenAPI contract matches its API version record
+test-api-version: pricing-snapshot ensure-embed-dir
+	@base="$${API_VERSION_BASE:-}"; if [ -z "$$base" ]; then base=$$(git merge-base HEAD origin/main) || exit 1; fi; \
+	API_VERSION_BASE="$$base" go test -tags "fts5" ./cmd/agentsview -run '^(TestAPIVersionContract|TestCheckAPIVersionContract|TestLoadAPIVersionRecords|TestOpenAPIProsePreservesSchemaValues|TestBaseAPIVersionRecords)$$' -v
 
 # Run fast tests only
 test-short: pricing-snapshot ensure-embed-dir
