@@ -1872,7 +1872,7 @@ func (s *Store) dailyUsageForCatalog(
 	}
 	var sides *db.UsagePairwiseSides
 	if f.PairwiseSides {
-		sides = &db.UsagePairwiseSides{Models: make(map[string]db.UsagePairwiseValue), Projects: make(map[string]db.UsagePairwiseValue)}
+		sides = db.NewUsagePairwiseSides()
 	}
 	var totalSavings money.Money
 	err = s.forEachDailyUsageGroupRow(ctx, f, catalog.digest, customModels, false, func(r chDailyUsageGroupRow) error {
@@ -1948,11 +1948,8 @@ func (s *Store) dailyUsageForCatalog(
 		// A model filter uses estimates even when Copilot reports a session total.
 		if sides != nil {
 			for key, estimated := range sc.estimated {
-				sides.Models.AddTotals(key.model, db.UsageTotals{TotalCost: estimated})
-				sides.Models.AddSession(key.model, sessionID)
-				if key.project != "" {
-					sides.Projects.AddSession(key.project, sessionID)
-				}
+				sides.AddEstimate(key.model, estimated)
+				sides.AddMembership(key.model, key.project, sessionID)
 			}
 		}
 		if sc.authoritative != nil {
@@ -2023,11 +2020,8 @@ func (s *Store) dailyUsageForCatalog(
 	for key, b := range accum {
 		if sides != nil {
 			totals := db.UsageTotals{InputTokens: b.inputTok, OutputTokens: b.outputTok, CacheCreationTokens: b.cacheCr, CacheReadTokens: b.cacheRd}
-			sides.Models.AddTotals(key.model, totals)
-			if key.project != "" {
-				totals.TotalCost = b.cost
-				sides.Projects.AddTotals(key.project, totals)
-			}
+			totals.TotalCost = b.cost
+			sides.AddBucket(key.model, key.project, totals)
 		}
 		day := days[key.date]
 		if day == nil {

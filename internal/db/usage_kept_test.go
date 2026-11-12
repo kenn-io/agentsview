@@ -161,6 +161,55 @@ func TestDailyUsageKeptCountsAfterOmission(t *testing.T) {
 	assert.EqualValues(t, 1, prepares.Load())
 }
 
+func TestDailyUsageKeptPairwiseAfterSummary(t *testing.T) {
+	database := testDB(t)
+	seedLiveWriteSession(t, database, "one", "project,one", "2026-08-10T09:00:00Z", 0, 10)
+	var prepares atomic.Int32
+	database.SetUsageWindowPrepareForTest(func(context.Context) { prepares.Add(1) })
+	filter := UsageFilter{From: "2026-08-10", To: "2026-08-10", Timezone: "UTC", Breakdowns: true}
+	_, err := database.GetDailyUsage(t.Context(), filter)
+	require.NoError(t, err)
+	filter.PairwiseSides, filter.SkipSessionCounts = true, true
+	got, err := database.GetDailyUsage(t.Context(), filter)
+	require.NoError(t, err)
+	require.NotNil(t, got.Pairwise)
+	assert.Equal(t, UsageSessionCounts{}, got.SessionCounts)
+	model, ok := got.Pairwise.Side("model", []string{"model-a"})
+	require.True(t, ok)
+	assert.Equal(t, 10, model.Totals.InputTokens)
+	assert.Equal(t, 1, model.SessionCounts.Total)
+	project, ok := got.Pairwise.Side("project", []string{"project,one"})
+	require.True(t, ok)
+	assert.Equal(t, 10, project.Totals.InputTokens)
+	assert.Equal(t, 1, project.SessionCounts.Total)
+	assert.EqualValues(t, 1, prepares.Load())
+	appendLiveWriteMessage(t, database, "one", "2026-08-10T10:00:00Z", 1, 7)
+	database.SetCustomPricing(map[string]config.CustomModelRate{"model-a": {InputMicrodollarsPerMTok: 1000000}})
+	got, err = database.GetDailyUsage(t.Context(), filter)
+	require.NoError(t, err)
+	model, ok = got.Pairwise.Side("model", []string{"model-a"})
+	require.True(t, ok)
+	assert.Equal(t, 17, model.Totals.InputTokens)
+	assert.EqualValues(t, 17, model.Totals.TotalCost.Microdollars)
+}
+
+func TestDailyUsageKeptSummaryAfterPairwise(t *testing.T) {
+	database := testDB(t)
+	seedLiveWriteSession(t, database, "one", "project", "2026-08-10T09:00:00Z", 0, 10)
+	var prepares atomic.Int32
+	database.SetUsageWindowPrepareForTest(func(context.Context) { prepares.Add(1) })
+	filter := UsageFilter{From: "2026-08-10", To: "2026-08-10", Timezone: "UTC", Breakdowns: true, PairwiseSides: true}
+	ranking, err := database.GetDailyUsage(t.Context(), filter)
+	require.NoError(t, err)
+	require.NotNil(t, ranking.Pairwise)
+	filter.PairwiseSides = false
+	summary, err := database.GetDailyUsage(t.Context(), filter)
+	require.NoError(t, err)
+	assert.Equal(t, 10, summary.Totals.InputTokens)
+	assert.Equal(t, 1, summary.SessionCounts.Total)
+	assert.EqualValues(t, 1, prepares.Load())
+}
+
 func TestDailyUsageKeptReopen(t *testing.T) {
 	database := testDB(t)
 	seedLiveWriteSession(t, database, "reported", "project", "2026-08-10T09:00:00Z", 0, 10)
