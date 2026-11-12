@@ -146,17 +146,9 @@ func assertPreparedUsageMatchesSQLite(t *testing.T, local *db.DB, store *Store, 
 	for _, row := range got.BySession {
 		gotRows[row.SessionID] = row
 	}
-	require.ElementsMatch(t, mapKeys(wantRows), mapKeys(gotRows), "%s: activity sessions", step)
+	require.Equal(t, db.SortedKeys(wantRows), db.SortedKeys(gotRows), "%s: activity sessions", step)
 	for id, ref := range wantRows {
 		assert.Equal(t, ref.Cost, gotRows[id].Cost, "%s: activity cost of %s", step, id)
 		assert.Equal(t, ref.OutputTokens, gotRows[id].OutputTokens, "%s: activity output of %s", step, id)
 	}
-}
-
-func mapKeys[V any](m map[string]V) []string {
-	keys := make([]string, 0, len(m))
-	for k := range m {
-		keys = append(keys, k)
-	}
-	return keys
 }
