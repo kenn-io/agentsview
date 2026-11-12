@@ -114,10 +114,8 @@ class InsightsStore {
       }
     } catch (e) {
       if (isAbortError(e) || !this.#listRead.isCurrent(signal)) return;
-      if (this.#version === v) {
-        this.items = [];
-        this.error = failureMessage(e);
-      }
+      // Saved reports from an earlier read stay listed under the error.
+      if (this.#version === v) this.error = failureMessage(e);
     } finally {
       if (this.#listRead.finish(signal)) {
         this.loading = false;

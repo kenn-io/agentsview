@@ -152,11 +152,13 @@ describe("load", () => {
     expect(insights.loading).toBe(false);
   });
 
-  it("reports a failed list read and clears it after a later load succeeds", async () => {
+  it("reports a failed list read, keeps saved reports, and clears the error on success", async () => {
+    const saved = makeInsight({ id: 2 });
+    insights.items = [saved];
     vi.mocked(api.listInsights).mockRejectedValueOnce(new Error("insights table missing"));
     await insights.load();
 
-    expect(insights.items).toEqual([]);
+    expect(insights.items).toEqual([saved]);
     expect(insights.error).toBe("insights table missing");
 
     vi.mocked(api.listInsights).mockResolvedValueOnce({ insights: [makeInsight({ id: 3 })] });
@@ -844,13 +846,14 @@ describe("cancelAll", () => {
 });
 
 describe("load error handling", () => {
-  it("clears items on API error", async () => {
+  it("keeps items and reports the error on API error", async () => {
     insights.items = [makeInsight({ id: 1 })];
     vi.mocked(api.listInsights).mockRejectedValueOnce(new Error("network error"));
 
     await insights.load();
 
-    expect(insights.items).toHaveLength(0);
+    expect(insights.items).toHaveLength(1);
+    expect(insights.error).toBe("network error");
     expect(insights.loading).toBe(false);
   });
 

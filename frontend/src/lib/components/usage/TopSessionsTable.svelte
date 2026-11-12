@@ -54,8 +54,7 @@
       onRetry={() => void usage.fetchTopSessions()}
       telemetry="analytics"
     />
-  {/if}
-  {#if sessions.length > 0}
+  {:else if sessions.length > 0}
     <div class="session-list">
       {#each sessions as row, i (row.sessionId)}
         <!-- svelte-ignore a11y_click_events_have_key_events -->
@@ -91,7 +90,7 @@
         </div>
       {/each}
     </div>
-  {:else if !usage.errors.topSessions && usage.topSessions !== null}
+  {:else if usage.topSessions !== null}
     <div class="empty">{m.shared_no_sessions_in_range()}</div>
   {/if}
 </div>

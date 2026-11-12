@@ -59,8 +59,8 @@
   <h3 class="chart-title">{m.usage_cache_efficiency_title()}</h3>
 
   {#if bars.length === 0}
-    <!-- With no summary loaded, the summary error or refresh status says why. -->
-    {#if usage.summary !== null}
+    <!-- Without a current summary, the summary error or refresh status says why. -->
+    {#if usage.summary !== null && !usage.errors.summary}
       <div class="empty">{m.usage_no_token_data()}</div>
     {/if}
   {:else}

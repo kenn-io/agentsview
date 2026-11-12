@@ -311,10 +311,9 @@ describe("UsageSummaryCards", () => {
     expect(cardValue("Total Input")).toBe("505");
   });
 
-  it("keeps the last summary under a failed refresh and retries the full refresh", async () => {
+  it("renders the total input card in the summary error state and retries the full refresh", async () => {
     const refresh = vi.spyOn(usage, "fetchAll").mockResolvedValue();
     usage.summary = issueSummary();
-    usage.summaryOutOfScope = false;
     usage.errors.summary = "boom";
 
     component = mount(UsageSummaryCards, {
@@ -323,27 +322,13 @@ describe("UsageSummaryCards", () => {
     await tick();
 
     expect(document.querySelectorAll(".summary-cards .card")).toHaveLength(10);
-    expect(cardValue("Total Input")).toBe("7.9B");
+    // The kept summary may answer other filters or dates, so no totals show.
+    expect(cardValue("Total Input")).toBe("--");
     const alert = document.querySelector('[role="alert"]')!;
     expect(alert.textContent).toContain("boom");
     // Retry keeps the brush and refetches its full-window context like any refresh.
     alert.querySelector<HTMLButtonElement>("button")!.click();
     expect(refresh).toHaveBeenCalledExactlyOnceWith({ preserveTimeRange: true });
     refresh.mockRestore();
-  });
-
-  it("hides totals that answered other filters after a failed read", async () => {
-    usage.summary = issueSummary();
-    usage.summaryOutOfScope = true;
-    usage.errors.summary = "boom";
-    try {
-      component = mount(UsageSummaryCards, { target: document.body });
-      await tick();
-
-      expect(cardValue("Total Input")).toBe("--");
-      expect(document.querySelector('[role="alert"]')?.textContent).toContain("boom");
-    } finally {
-      usage.summaryOutOfScope = false;
-    }
   });
 });

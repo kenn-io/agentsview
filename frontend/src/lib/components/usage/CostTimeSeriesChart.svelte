@@ -693,8 +693,8 @@
   </div>
 
   {#if seriesData.points.length === 0}
-    <!-- With no summary loaded, the summary error or refresh status says why. -->
-    {#if usage.timeSeriesSummary !== null}
+    <!-- Without a current summary, the summary error or refresh status says why. -->
+    {#if usage.timeSeriesSummary !== null && !usage.errors.summary}
       <div class="empty">{m.shared_no_data_for_period()}</div>
     {/if}
   {:else}

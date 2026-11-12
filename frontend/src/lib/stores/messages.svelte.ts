@@ -184,7 +184,10 @@ export class MessagesStore {
       }
       // A reload queued behind this load retries a transient failure with the reload's bounded backoff.
       if (this.loadGeneration === generation && isTransient(err)) void this.reload();
-      if (this.sessionId === id && this.loadGeneration === generation) this.failLoad(err, "load");
+      // Once rows have landed, the rest is missing history: a later history
+      // read clears the failure, and Retry completes the history.
+      if (this.sessionId === id && this.loadGeneration === generation)
+        this.failLoad(err, this.messages.length > 0 ? "history" : "load");
     } finally {
       if (this.sessionId === id && this.loadingOwner === owner) {
         this.loading = false;

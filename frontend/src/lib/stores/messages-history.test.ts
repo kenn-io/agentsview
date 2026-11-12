@@ -86,8 +86,10 @@ describe("complete search history", () => {
     expect(store.messages).toHaveLength(1000);
     expect(store.historyComplete).toBe(false);
     expect(store.hasOlder).toBe(false);
+    expect(store.loadError).not.toBeNull();
     control.failFrom = null;
     await store.ensureHistoryLoaded();
+    expect(store.loadError).toBeNull();
     expect(store.messages).toHaveLength(1500);
     expect(store.historyComplete).toBe(true);
     expect(store.messages[0]).toBe(first);

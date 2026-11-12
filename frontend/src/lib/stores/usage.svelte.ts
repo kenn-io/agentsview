@@ -119,11 +119,6 @@ class UsageStore {
   // The selected-dimension-free summary over the full unbrushed window.
   referenceSummary = $state<UsageSummaryResponse | null>(null);
   private timeSeriesContextSummary = $state<UsageSummaryResponse | null>(null);
-  // Which filters and dates the shown summary answers. After a failed read
-  // for another scope, summaryOutOfScope tells the summary cards not to show
-  // its totals.
-  private summaryScope: string | null = null;
-  summaryOutOfScope = $state(false);
   // A full-window refresh is in flight, so a brush must refetch the window instead of slicing old data.
   private fullWindowPending = false;
   isTimeRangeSummaryProvisional = $state(false);
@@ -145,8 +140,6 @@ class UsageStore {
   zoomRows = $state<DbTopSessionEntry[] | null>(null);
   // The zoom query the current rows (or the request filling them) belong to.
   private zoomScope = "";
-  // The filters and dates the shown top sessions answer; see summaryScope.
-  private topSessionsScope = "";
   // The sort metric and token types the current rows were ranked by.
   private zoomRanking = "";
   topSessions = $state<DbTopSessionEntry[] | null>(null);
@@ -940,8 +933,6 @@ class UsageStore {
       }
       if (this.versions.summary === v) {
         this.summary = data;
-        this.summaryScope = refreshScopeKey(params);
-        this.summaryOutOfScope = false;
         if (contextData !== null || this.selectedTimeRange === null) this.fullWindowPending = false;
         this.attributionSummary = attributionData;
         if (!attributionParams) this.referenceSummary = null;
@@ -1067,10 +1058,9 @@ class UsageStore {
           }
         } else {
           // The last good summary stays loaded so the charts keep their
-          // colors, with the error above it. When it answered other filters
-          // or dates, its totals would be wrong for the current scope, so the
-          // summary cards hide them.
-          this.summaryOutOfScope = refreshScopeKey(params) !== this.summaryScope;
+          // colors. It may answer other filters or dates, so while this error
+          // stands the summary cards show no totals and no panel claims the
+          // period is empty.
           this.errors.summary = e instanceof Error ? e.message : m.shared_failed_to_load();
         }
       }
@@ -1295,10 +1285,7 @@ class UsageStore {
       );
       if (this.versions[panel] !== version) return "aborted";
       if (panel === "zoom") this.zoomRows = data;
-      else {
-        this.topSessions = data;
-        this.topSessionsScope = refreshScopeKey(query);
-      }
+      else this.topSessions = data;
       this.errors[panel] = null;
       this.noteStep(panel, liveStep, started, data);
       return "ok";
@@ -1310,10 +1297,8 @@ class UsageStore {
           else this.topSessions = null;
           this.errors[panel] = error.message;
         } else {
-          // Rows from an earlier load stay on screen with the error above
-          // them, unless they answered other filters or dates.
-          if (panel === "topSessions" && refreshScopeKey(query) !== this.topSessionsScope)
-            this.topSessions = null;
+          // Zoom rows from an earlier load stay under the error; the top
+          // sessions table shows the error in place of its rows.
           this.errors[panel] = error instanceof Error ? error.message : m.shared_failed_to_load();
         }
       }

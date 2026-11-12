@@ -323,8 +323,8 @@
   {:else if zoomedProject && usage.loading.zoom && usage.zoomRows === null}
     <div class="empty">{m.usage_loading()}</div>
   {:else if rows.length === 0}
-    <!-- With no summary loaded, the summary error or refresh status says why. -->
-    {#if zoomedProject || usage.attributionSummary !== null || usage.summary !== null}
+    <!-- Without a current summary, the summary error or refresh status says why. -->
+    {#if zoomedProject || ((usage.attributionSummary !== null || usage.summary !== null) && !usage.errors.summary)}
       <div class="empty">{m.shared_no_data_for_period()}</div>
     {/if}
   {:else}
