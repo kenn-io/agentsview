@@ -407,3 +407,111 @@ func TestGrokEarlierCheckpointKeepsResultLaterCompactionDropped(t *testing.T) {
 	assert.Equal(t, []string{"Command interrupted by the user."}, results)
 	assert.Equal(t, []string{"First.", "Second."}, boundaries)
 }
+
+func TestGrokRebuiltRowsCarryTheirTurnModel(t *testing.T) {
+	result := parseGrokGolden(t, "compacted")
+	var models []string
+	for _, msg := range result.Messages {
+		if msg.Role == RoleAssistant && !msg.IsCompactBoundary {
+			models = append(models, msg.Model)
+		}
+	}
+	// The second turn runs across the first checkpoint and completes after
+	// the second, so its turn_completed record names the model of rows in
+	// both rebuilt segments. Rebuilt rows use the same name as the rows
+	// read from chat_history.jsonl.
+	require.NotEmpty(t, models)
+	for i, model := range models {
+		assert.Equal(t, "grok-4.7-build", model, "assistant row %d", i)
+	}
+}
+
+func TestGrokRebuiltTurnModel(t *testing.T) {
+	tests := []struct {
+		name       string
+		modelUsage string
+		want       string
+	}{
+		{"one model", `{"grok-4.6-build":{"modelCalls":1}}`, "grok-4.6-build"},
+		// The record does not say which row each model wrote.
+		{"several models", `{"grok-4.6-build":{"modelCalls":1},"grok-4.7-build":{"modelCalls":1}}`, ""},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			r := newGrokSegmentReducer(t.Context())
+			at := time.Unix(grokCompactedBase, 0)
+			for _, line := range []string{
+				`{"sessionUpdate":"user_message_chunk","content":{"type":"text","text":"Read it"}}`,
+				`{"sessionUpdate":"tool_call","toolCallId":"a","title":"read_file","rawInput":{"target_file":"/w/a.go"}}`,
+				`{"sessionUpdate":"tool_call_update","toolCallId":"a","status":"completed","content":[{"type":"content","content":{"type":"text","text":"one"}}]}`,
+				`{"sessionUpdate":"agent_message_chunk","content":{"type":"text","text":"Done."}}`,
+				`{"sessionUpdate":"turn_completed","usage":{"modelUsage":` + tt.modelUsage + `}}`,
+				`{"sessionUpdate":"user_message_chunk","content":{"type":"text","text":"Next"}}`,
+				`{"sessionUpdate":"agent_message_chunk","content":{"type":"text","text":"Still running."}}`,
+			} {
+				r.process(gjson.Parse(line), at)
+			}
+			var models []string
+			for _, msg := range r.finish() {
+				if msg.Role == RoleAssistant {
+					models = append(models, msg.Model)
+				}
+			}
+			// The open turn has no turn_completed record yet, so its row
+			// stays without a model rather than borrowing the last one.
+			assert.Equal(t, []string{tt.want, tt.want, ""}, models)
+		})
+	}
+}
+
+func TestGrokRebuiltWebSearchKeepsItsQuery(t *testing.T) {
+	r := newGrokSegmentReducer(t.Context())
+	at := time.Unix(grokCompactedBase, 0)
+	// Grok Build records a backend web search this way: a "Web search:"
+	// title and no query until the finished update's raw output.
+	for _, line := range []string{
+		`{"sessionUpdate":"tool_call","toolCallId":"ws-1","title":"Web search:","kind":"search","status":"in_progress","rawInput":{"variant":"WebSearch","backend":true},"_meta":{"backend":true}}`,
+		`{"sessionUpdate":"tool_call_update","toolCallId":"ws-1","title":"Web search:","status":"completed","rawOutput":{"action":{"type":"search","query":"go retry backoff"},"status":"completed"}}`,
+	} {
+		r.process(gjson.Parse(line), at)
+	}
+	msgs := r.finish()
+	require.NotEmpty(t, msgs)
+	require.Len(t, msgs[0].ToolCalls, 1)
+	call := msgs[0].ToolCalls[0]
+	assert.Equal(t, "web_search", call.ToolName)
+	assert.JSONEq(t, `{"type":"search","query":"go retry backoff"}`, call.InputJSON)
+	assert.Equal(t, "[backend web_search] search: go retry backoff", call.Rendering)
+	assert.Equal(t, "[backend web_search] search: go retry backoff", msgs[0].Content)
+}
+
+func TestGrokParseReplacesStoredRowsOnlyWhenComplete(t *testing.T) {
+	tests := []struct {
+		name   string
+		remove string
+		want   bool
+	}{
+		{"every source present", "", true},
+		{"checkpoint file missing", "compaction_checkpoints/0a7c0000-0000-4000-8000-0000000000c1.json", false},
+		{"chat history missing", "chat_history.jsonl", false},
+		{"updates missing after a compaction", "updates.jsonl", false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			root := t.TempDir()
+			require.NoError(t, os.CopyFS(root, os.DirFS(filepath.Join("testdata", "grok-build", "compacted"))))
+			if tt.remove != "" {
+				require.NoError(t, os.Remove(filepath.Join(root, filepath.FromSlash(grokCompactedDir), filepath.FromSlash(tt.remove))))
+			}
+			provider := newGrokTestProvider(t, root)
+			sources, err := provider.Discover(t.Context())
+			require.NoError(t, err)
+			require.Len(t, sources, 1)
+			outcome, err := provider.Parse(t.Context(), ParseRequest{Source: sources[0]})
+			require.NoError(t, err)
+			// A parse missing a source file must not replace what an earlier
+			// sync stored from it.
+			assert.Equal(t, tt.want, outcome.ForceReplace)
+		})
+	}
+}

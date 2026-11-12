@@ -88,6 +88,9 @@ func grokTextParts(content gjson.Result) string {
 type grokCheckpointContent struct {
 	summary string
 	results []ParsedMessage
+	// read reports that the file was present and held valid JSON. When it
+	// is false the parse lacks this compaction's summary and carried results.
+	read bool
 }
 
 // grokReadCheckpoint reads a checkpoint file's compacted_history. A missing,
@@ -117,6 +120,7 @@ func grokReadCheckpoint(
 	if err != nil || !gjson.ValidBytes(data) {
 		return out, nil
 	}
+	out.read = true
 	gjson.GetBytes(data, "compacted_history").ForEach(func(_, item gjson.Result) bool {
 		switch item.Get("type").Str {
 		case "tool_result":
@@ -140,16 +144,22 @@ func grokReadCheckpoint(
 // checkpoint. Grok Build truncates chat_history.jsonl at every checkpoint and
 // keeps updates.jsonl, its source of truth, whole; without this pass a
 // compacted session loses everything before its last compaction.
+//
+// One reducer reads the whole stream, as Grok Build's rebuild does, and each
+// checkpoint closes the open items and cuts a segment. A turn can run across
+// a checkpoint, so its turn_completed record, which names the turn's model,
+// may come after the cut; rows past the last checkpoint are dropped, since
+// chat_history.jsonl holds them.
 func parseGrokCompactedSegments(
 	ctx context.Context, path string, checkpoints []grokCheckpoint,
 ) ([]grokCompactedSegment, error) {
 	if len(checkpoints) == 0 {
 		return nil, nil
 	}
-	segments := make([]grokCompactedSegment, 0, len(checkpoints))
+	cuts := make([]int, 0, len(checkpoints))
 	reducer := newGrokSegmentReducer(ctx)
 	_, err := readJSONLFrom(ctx, path, 0, func(line string) {
-		if len(segments) == len(checkpoints) || !gjson.Valid(line) {
+		if !gjson.Valid(line) {
 			return
 		}
 		root := gjson.Parse(line)
@@ -157,18 +167,28 @@ func parseGrokCompactedSegments(
 		if !update.Exists() {
 			return
 		}
-		timestamp := hermesUnixTime(root.Get("timestamp").Float())
 		if update.Get("sessionUpdate").Str == "compaction_checkpoint" {
-			segments = append(segments, grokCompactedSegment{
-				messages:   reducer.finish(),
-				checkpoint: checkpoints[len(segments)],
-			})
-			reducer = newGrokSegmentReducer(ctx)
+			if len(cuts) < len(checkpoints) {
+				reducer.closeItems()
+				cuts = append(cuts, len(reducer.messages))
+			}
 			return
 		}
-		reducer.process(update, timestamp)
+		reducer.process(update, hermesUnixTime(root.Get("timestamp").Float()))
 	})
-	return segments, err
+	if err != nil {
+		return nil, err
+	}
+	segments := make([]grokCompactedSegment, len(cuts))
+	from := 0
+	for i, cut := range cuts {
+		segments[i] = grokCompactedSegment{
+			messages:   reducer.messages[from:cut:cut],
+			checkpoint: checkpoints[i],
+		}
+		from = cut
+	}
+	return segments, nil
 }
 
 // grokUpdatePayload returns the session update a updates.jsonl record wraps.
@@ -199,6 +219,13 @@ type grokSegmentReducer struct {
 	thinking       strings.Builder
 	agentTimestamp time.Time
 	calls          []ParsedToolCall
+	// turnStart is the first row of the turn still running. At its
+	// turn_completed record the turn's model is stamped on its assistant
+	// rows; agent output records carry no model. completedModel holds that
+	// model for the agent item still open when the turn completed.
+	turnStart      int
+	completedModel string
+	closesTurn     bool
 
 	// callAt locates a call by ID: a negative message index means it is
 	// still in calls, waiting for its agent item to close.
@@ -242,7 +269,35 @@ func (r *grokSegmentReducer) process(update gjson.Result, timestamp time.Time) {
 		r.onToolCall(update, timestamp)
 	case "tool_call_update":
 		r.onToolCallUpdate(update, timestamp)
+	case "turn_completed":
+		r.onTurnCompleted(update)
 	}
+}
+
+// onTurnCompleted stamps the turn's model on its assistant rows. The model is
+// the one key of the turn's usage.modelUsage, the name chat_history.jsonl and
+// the usage events record. A turn billed to several models leaves its rows
+// without one, since the record does not say which row each model wrote.
+func (r *grokSegmentReducer) onTurnCompleted(update gjson.Result) {
+	var models []string
+	update.Get("usage.modelUsage").ForEach(func(key, _ gjson.Result) bool {
+		models = append(models, key.Str)
+		return true
+	})
+	model := ""
+	if len(models) == 1 {
+		model = strings.TrimSpace(models[0])
+	}
+	for i := r.turnStart; i < len(r.messages); i++ {
+		if r.messages[i].Role == RoleAssistant && r.messages[i].Model == "" {
+			r.messages[i].Model = model
+		}
+	}
+	if r.agentText.Len() > 0 || r.thinking.Len() > 0 || len(r.calls) > 0 {
+		r.completedModel, r.closesTurn = model, true
+		return
+	}
+	r.turnStart = len(r.messages)
 }
 
 func (r *grokSegmentReducer) hostTurnBoundary(update gjson.Result) bool {
@@ -286,6 +341,7 @@ func (r *grokSegmentReducer) onToolCall(update gjson.Result, timestamp time.Time
 	id := strings.TrimSpace(update.Get("toolCallId").Str)
 	name := firstNonEmptyJSONLString(
 		update.Get(`_meta.x\.ai/tool.name`).Str,
+		grokStreamBackendToolName(update.Get("rawInput")),
 		update.Get("title").Str,
 	)
 	if name == "" {
@@ -293,7 +349,10 @@ func (r *grokSegmentReducer) onToolCall(update gjson.Result, timestamp time.Time
 	}
 	r.closeUserTurn()
 	r.markAgent(timestamp)
-	input := grokRawInputJSON(update.Get("rawInput"))
+	input := ""
+	if name != grokStreamWebSearch {
+		input = grokRawInputJSON(update.Get("rawInput"))
+	}
 	call := ParsedToolCall{
 		ToolUseID: id,
 		ToolName:  name,
@@ -320,7 +379,7 @@ func (r *grokSegmentReducer) onToolCallUpdate(update gjson.Result, timestamp tim
 	}
 	call := r.call(id)
 	if call != nil && call.InputJSON == "" {
-		if input := grokRawInputJSON(update.Get("rawInput")); input != "" {
+		if input := grokToolUpdateInputJSON(call.ToolName, update); input != "" {
 			call.InputJSON = input
 			call.SkillName = inferToolSkillName(r.ctx, call.ToolName, input)
 			if pos := r.callAt[id]; pos.message >= 0 {
@@ -411,21 +470,26 @@ func (r *grokSegmentReducer) flushAgent() {
 	text := strings.TrimSpace(r.agentText.String())
 	thinking := strings.TrimSpace(r.thinking.String())
 	calls, timestamp := r.calls, r.agentTimestamp
+	model, closesTurn := r.completedModel, r.closesTurn
 	r.agentText.Reset()
 	r.thinking.Reset()
 	r.calls, r.agentTimestamp = nil, time.Time{}
-	if text == "" && thinking == "" && len(calls) == 0 {
-		return
-	}
-	msg := grokAssistantMessage(text, thinking, "", calls)
-	msg.Timestamp = timestamp
-	index := len(r.messages)
-	for i, call := range msg.ToolCalls {
-		if call.ToolUseID != "" {
-			r.callAt[call.ToolUseID] = grokCallPosition{message: index, call: i}
+	r.completedModel, r.closesTurn = "", false
+	if text != "" || thinking != "" || len(calls) > 0 {
+		msg := grokAssistantMessage(text, thinking, model, calls)
+		msg.Timestamp = timestamp
+		index := len(r.messages)
+		for i, call := range msg.ToolCalls {
+			if call.ToolUseID != "" {
+				r.callAt[call.ToolUseID] = grokCallPosition{message: index, call: i}
+			}
 		}
+		r.messages = append(r.messages, msg)
 	}
-	r.messages = append(r.messages, msg)
+	if closesTurn {
+		// This item closed a completed turn; the next row starts a new one.
+		r.turnStart = len(r.messages)
+	}
 }
 
 // rerender rebuilds an emitted assistant row after one of its calls
@@ -441,12 +505,42 @@ func (r *grokSegmentReducer) rerender(index int) {
 	r.messages[index] = msg
 }
 
-// finish closes the open items and returns the segment's rows.
-func (r *grokSegmentReducer) finish() []ParsedMessage {
+// closeItems closes the open user and agent items, as a compaction does.
+func (r *grokSegmentReducer) closeItems() {
 	r.flushUser()
 	r.inUserTurn = false
 	r.flushAgent()
+}
+
+// finish closes the open items and returns the rows.
+func (r *grokSegmentReducer) finish() []ParsedMessage {
+	r.closeItems()
 	return r.messages
+}
+
+// grokStreamWebSearch names a backend web search rebuilt from the stream, the
+// name chat_history.jsonl gives the same call.
+const grokStreamWebSearch = "web_search"
+
+// grokStreamBackendToolName names a backend tool call whose stream record has
+// no tool name. Grok Build titles a backend web search "Web search:" and gives
+// it only {"variant":"WebSearch","backend":true} as input; its query arrives
+// with the finished update.
+func grokStreamBackendToolName(rawInput gjson.Result) string {
+	if rawInput.Get("backend").Bool() && rawInput.Get("variant").Str == "WebSearch" {
+		return grokStreamWebSearch
+	}
+	return ""
+}
+
+// grokToolUpdateInputJSON returns the input a tool_call_update supplies for a
+// call that started without one. A backend web search's input is the action
+// in its raw output, the same input chat_history.jsonl records.
+func grokToolUpdateInputJSON(name string, update gjson.Result) string {
+	if name == grokStreamWebSearch {
+		return update.Get("rawOutput.action").Raw
+	}
+	return grokRawInputJSON(update.Get("rawInput"))
 }
 
 // grokRawInputJSON keeps a tool call's raw input as JSON text. An absent or
@@ -495,13 +589,17 @@ func grokToolUpdateResultText(update gjson.Result) string {
 // A call the stream never finished can have its only result in a compacted
 // context: an earlier checkpoint file or the dropped prefix. Such results
 // are kept after the segment that holds the call.
+//
+// complete is false when a checkpoint file the transcript needs could not be
+// read, so the transcript lacks content an earlier sync may have stored.
 func grokAssembleTranscript(
 	ctx context.Context, sessionDir string,
 	segments []grokCompactedSegment, chat []ParsedMessage,
-) ([]ParsedMessage, error) {
+) (messages []ParsedMessage, complete bool, err error) {
 	if len(segments) == 0 {
-		return chat, nil
+		return chat, true, nil
 	}
+	complete = true
 	summaryAt := -1
 	for i := range chat {
 		if chat[i].IsCompactBoundary {
@@ -524,8 +622,9 @@ func grokAssembleTranscript(
 		}
 		checkpoint, err := grokReadCheckpoint(ctx, sessionDir, segment.checkpoint.file)
 		if err != nil {
-			return nil, err
+			return nil, false, err
 		}
+		complete = complete && checkpoint.read
 		out = append(out, open.answer(checkpoint.results)...)
 		out = append(out, grokCompactBoundary(checkpoint.summary, segment.checkpoint.timestamp))
 	}
@@ -539,7 +638,7 @@ func grokAssembleTranscript(
 	for i := range out {
 		out[i].Ordinal = i
 	}
-	return out, nil
+	return out, complete, nil
 }
 
 // grokOpenCalls tracks rebuilt calls that no result row answers yet.

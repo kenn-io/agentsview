@@ -8,6 +8,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"time"
 
@@ -119,15 +120,21 @@ func ParseGrokSummary(
 	enrichGrokToolResultEvents(messages, updates.anchors)
 	// Without chat_history.jsonl the turns after the last compaction are
 	// missing, so the session keeps its summary-only fallback.
+	complete := false
 	if len(messages) > 0 {
 		segments, err := parseGrokCompactedSegments(ctx, updatesPath, updates.checkpoints)
 		if err != nil {
 			return ParseResult{}, err
 		}
-		messages, err = grokAssembleTranscript(ctx, sessionDir, segments, messages)
+		// A compacted chat_history.jsonl without updates.jsonl has lost the
+		// turns before the compaction.
+		lostHistory := timestampErr != nil && slices.ContainsFunc(messages,
+			func(msg ParsedMessage) bool { return msg.IsCompactBoundary })
+		messages, complete, err = grokAssembleTranscript(ctx, sessionDir, segments, messages)
 		if err != nil {
 			return ParseResult{}, err
 		}
+		complete = complete && !lostHistory
 	}
 	grokDropLoneStartEvents(messages)
 	grokAttachSpawnedSubagents(messages)
@@ -217,6 +224,11 @@ func ParseGrokSummary(
 			},
 		},
 		Messages: messages,
+		// Later records change stored rows: a result pairs onto a stored
+		// call, and a compaction renumbers rebuilt rows. A complete
+		// transcript therefore replaces the stored one. A parse missing a
+		// source file appends instead and keeps what an earlier sync stored.
+		replacesStored: complete,
 	}
 	if signals.TotalOutputTokens > 0 {
 		result.Session.TotalOutputTokens = signals.TotalOutputTokens
@@ -1156,6 +1168,9 @@ func grokAssistantMessage(
 // grokToolRendering renders a Grok Build tool call with the shared tool
 // formats, mapping Grok's argument names onto them.
 func grokToolRendering(name, inputJSON string) string {
+	if name == grokStreamWebSearch && inputJSON != "" {
+		return grokToolUseRendering(name, inputJSON)
+	}
 	if rendering, ok := grokNativeToolRendering(name, inputJSON); ok {
 		return rendering
 	}
