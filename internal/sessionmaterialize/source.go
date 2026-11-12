@@ -12,6 +12,7 @@ import (
 	"slices"
 	"strings"
 
+	"go.kenn.io/agentsview/internal/archivesource"
 	"go.kenn.io/agentsview/internal/capture"
 	"go.kenn.io/agentsview/internal/config"
 	"go.kenn.io/agentsview/internal/ctxio"
@@ -41,6 +42,15 @@ type Result struct {
 
 // Materialize installs a Claude transcript and its own native dependencies.
 func Materialize(ctx context.Context, cfg config.Config, session *db.Session, cwd string) (Result, error) {
+	return materialize(ctx, cfg, nil, session, cwd)
+}
+
+// MaterializeWithArchive also resolves source ownership recorded by the archive.
+func MaterializeWithArchive(ctx context.Context, cfg config.Config, database *db.DB, session *db.Session, cwd string) (Result, error) {
+	return materialize(ctx, cfg, database, session, cwd)
+}
+
+func materialize(ctx context.Context, cfg config.Config, database *db.DB, session *db.Session, cwd string) (Result, error) {
 	if session == nil || session.Agent != "claude" {
 		return Result{}, errors.New("only Claude sessions can currently be installed")
 	}
@@ -55,42 +65,58 @@ func Materialize(ctx context.Context, cfg config.Config, session *db.Session, cw
 	if !capture.ValidUUID(id) {
 		return Result{}, errors.New("native Claude UUID required; archive-only fork sessions are unsupported")
 	}
-	source, err := storedSource(session, host)
-	if err != nil {
-		return Result{}, err
-	}
-	var files []sourceFile
-	if strings.HasPrefix(source, "s3://") {
-		if host != "" && host != session.Machine {
-			return Result{}, errors.New("S3 source host does not match session identity")
-		}
-		files, err = readS3Source(ctx, cfg, session.Machine, source, id, maxSourceBytes)
-	} else if host != "" {
-		if !slices.ContainsFunc(cfg.RemoteHosts, func(remote config.RemoteHost) bool { return remote.Host == host }) {
-			return Result{}, errors.New("session host is not configured")
-		}
-		root := remotesync.MirrorDir(cfg.DataDir, host)
-		remotePath, ok := strings.CutPrefix(source, host+":")
-		if !ok || remotePath == "" {
-			return Result{}, errors.New("mirror source host does not match session identity")
-		}
-		name, err := remotesync.SafeRemappedRemotePath(root, remotePath)
-		if err != nil {
-			return Result{}, fmt.Errorf("reading native transcript: %w", err)
-		}
-		lock, err := remotesync.AcquireMirrorLock(ctx, root)
+	var owner *db.ArchiveSessionProvenance
+	if database != nil {
+		owner, err = database.ArchiveSessionOwner(ctx, session.ID)
 		if err != nil {
 			return Result{}, err
 		}
-		files, err = readLocalSource(ctx, root, name, id, maxSourceBytes)
-		if err != nil {
-			return Result{}, fmt.Errorf("reading native transcript: %w", errors.Join(err, lock.Close()))
+	}
+	var source string
+	var files []sourceFile
+	if owner != nil {
+		if owner.NativeSessionID != id || owner.Source.DeviceID != session.Machine {
+			return Result{}, errors.New("archive session identity differs")
 		}
-		if err := lock.Close(); err != nil {
-			return Result{}, fmt.Errorf("reading native transcript: %w", err)
-		}
+		files, err = readSnapshotSource(ctx, cfg, *owner, id, session.SourceSessionID)
+		source = "snapshot:" + owner.Attachment.SnapshotID
 	} else {
-		files, source, err = readConfiguredLocal(ctx, cfg, session, source, id)
+		source, err = storedSource(session, host)
+		if err != nil {
+			return Result{}, err
+		}
+		if strings.HasPrefix(source, "s3://") {
+			if host != "" && host != session.Machine {
+				return Result{}, errors.New("S3 source host does not match session identity")
+			}
+			files, err = readS3Source(ctx, cfg, session.Machine, source, id, maxSourceBytes)
+		} else if host != "" {
+			if !slices.ContainsFunc(cfg.RemoteHosts, func(remote config.RemoteHost) bool { return remote.Host == host }) {
+				return Result{}, errors.New("session host is not configured")
+			}
+			root := remotesync.MirrorDir(cfg.DataDir, host)
+			remotePath, ok := strings.CutPrefix(source, host+":")
+			if !ok || remotePath == "" {
+				return Result{}, errors.New("mirror source host does not match session identity")
+			}
+			name, err := remotesync.SafeRemappedRemotePath(root, remotePath)
+			if err != nil {
+				return Result{}, fmt.Errorf("reading native transcript: %w", err)
+			}
+			lock, err := remotesync.AcquireMirrorLock(ctx, root)
+			if err != nil {
+				return Result{}, err
+			}
+			files, err = readLocalSource(ctx, root, name, id, maxSourceBytes)
+			if err != nil {
+				return Result{}, fmt.Errorf("reading native transcript: %w", errors.Join(err, lock.Close()))
+			}
+			if err := lock.Close(); err != nil {
+				return Result{}, fmt.Errorf("reading native transcript: %w", err)
+			}
+		} else {
+			files, source, err = readConfiguredLocal(ctx, cfg, session, source, id)
+		}
 	}
 	if err != nil {
 		return Result{}, fmt.Errorf("reading native transcript: %w", err)
@@ -387,4 +413,62 @@ func readS3Source(ctx context.Context, cfg config.Config, machine, uri, id strin
 		}
 	}
 	return out, nil
+}
+
+// readSnapshotSource extracts only the selected transcript and its native companions.
+func readSnapshotSource(ctx context.Context, cfg config.Config, owner db.ArchiveSessionProvenance, id, parent string) (_ []sourceFile, retErr error) {
+	tree, manifest, err := archivesource.MaterializeSnapshot(ctx, cfg.ArchiveSources, owner, "claude", maxSourceBytes)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { retErr = errors.Join(retErr, tree.Cleanup()) }()
+	_, parent = parser.StripHostPrefix(parent)
+	var primary string
+	for _, entry := range manifest.Manifest.Entries {
+		if path.Base(entry.Path) == id+".jsonl" {
+			if primary != "" {
+				return nil, errors.New("ambiguous snapshot transcript")
+			}
+			primary = entry.Path
+		}
+	}
+	if primary == "" && capture.ValidUUID(parent) {
+		for _, entry := range manifest.Manifest.Entries {
+			if path.Base(entry.Path) == parent+".jsonl" {
+				if primary != "" {
+					return nil, errors.New("ambiguous snapshot transcript")
+				}
+				primary = entry.Path
+			}
+		}
+	}
+	if primary == "" {
+		return nil, errors.New("snapshot transcript is unavailable")
+	}
+	name, err := tree.EntryPath(primary)
+	if err != nil {
+		return nil, err
+	}
+	data, _, err := readFile(ctx, name, maxSourceBytes)
+	if err != nil {
+		return nil, err
+	}
+	files := []sourceFile{{data: data}}
+	base := strings.TrimSuffix(primary, ".jsonl") + "/"
+	for _, entry := range manifest.Manifest.Entries {
+		rel, ok := strings.CutPrefix(entry.Path, base)
+		if !ok || !(strings.HasPrefix(rel, "tool-results/") || strings.HasPrefix(rel, "subagents/")) {
+			continue
+		}
+		name, err := tree.EntryPath(entry.Path)
+		if err != nil {
+			return nil, err
+		}
+		data, _, err := readFile(ctx, name, maxSourceBytes)
+		if err != nil {
+			return nil, err
+		}
+		files = append(files, sourceFile{rel: rel, data: data})
+	}
+	return files, nil
 }

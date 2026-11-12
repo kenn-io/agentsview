@@ -164,7 +164,8 @@ evidence; they do not establish whether a tool helped the task.
   producer reads `worktree-state` records last-wins per session and recognizes
   `worktreeSession: null` as an explicit clear. Materialization appends that
   native clear only for a selected session whose final binding is non-null;
-  the rest of the source bytes remain unchanged. The
+  the rest of the source bytes remain unchanged. Snapshot-attached originals
+  use the same native files and worktree clear. The
   [official session documentation](https://code.claude.com/docs/en/sessions)
   describes project storage and resume behavior. A running-session attachment
   can retain its existing directory; the in-app picker may use recorded paths.

@@ -18,10 +18,10 @@ func newSessionMaterializeCommand() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "materialize <id>",
 		Short: "Install original session files for native resume",
-		Long: "Install a Claude session and its companions from configured local, mirror, or S3 sources for a local checkout, then print a resume command. " +
+		Long: "Install a Claude session and its companions from configured local, mirror, S3, or snapshot sources for a local checkout, then print a resume command. " +
 			"Requires a local archive with conversation content; the original files must total at most 512 MiB. " +
 			"End the running Claude session and wait for any S3 uploader to finish before materializing. " +
-			"Retained and attached captures, Pi, and Codex are not yet supported.",
+			"Local retained and directory captures, Pi, and Codex are not yet supported.",
 		Example: "  agentsview session materialize <id> --cwd <path>",
 		Args:    cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
@@ -54,7 +54,7 @@ func newSessionMaterializeCommand() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			result, err := sessionmaterialize.Materialize(cmd.Context(), cfg, session, cwd)
+			result, err := sessionmaterialize.MaterializeWithArchive(cmd.Context(), cfg, database, session, cwd)
 			if err != nil {
 				return err
 			}

@@ -326,3 +326,34 @@ func (d *DB) RecordArchiveSourceError(ctx context.Context, p ArchiveSourceProven
 		return err
 	})
 }
+
+// ArchiveSessionOwner returns the single snapshot membership that owns a session.
+// A nil result means the session was not imported from an attachment.
+func (d *DB) ArchiveSessionOwner(ctx context.Context, sessionID string) (*ArchiveSessionProvenance, error) {
+	rows, err := d.getReader().QueryContext(ctx, `SELECT p.archive_id,p.device_id,p.root_id,p.source_key,p.manifest_id,p.native_session_id,
+		a.repository_id,a.snapshot_id FROM archive_session_provenance p
+		LEFT JOIN archive_attachment_sources a ON a.archive_id=p.archive_id AND a.device_id=p.device_id AND a.root_id=p.root_id AND a.source_key=p.source_key
+		WHERE p.session_id=?`, sessionID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var owner *ArchiveSessionProvenance
+	for rows.Next() {
+		if owner != nil {
+			return nil, fmt.Errorf("%w: ambiguous snapshot ownership", ErrArchiveSourceConflict)
+		}
+		var p ArchiveSessionProvenance
+		var repository, snapshot sql.NullString
+		s := &p.Source
+		if err := rows.Scan(&s.ArchiveID, &s.DeviceID, &s.RootID, &s.SourceKey, &p.ManifestID, &p.NativeSessionID, &repository, &snapshot); err != nil {
+			return nil, err
+		}
+		if !repository.Valid || !snapshot.Valid {
+			return nil, fmt.Errorf("%w: missing snapshot ownership", ErrArchiveSourceConflict)
+		}
+		p.Attachment = ArchiveAttachmentKey{RepositoryID: repository.String, SnapshotID: snapshot.String}
+		owner = &p
+	}
+	return owner, rows.Err()
+}
