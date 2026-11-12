@@ -6,6 +6,7 @@ import (
 	"encoding/json/jsontext"
 	"encoding/json/v2"
 	"errors"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -360,10 +361,20 @@ const CodexCloudRequestSource = "codex-cloud-request"
 // posit-assistant-keepalive, posit-assistant-classifier) each record one
 // provider request, so the whole prefix is request-scoped.
 func SourceIsRequestScoped(source string) bool {
-	return source == "message" || source == "goose-request" || source == "session-store" ||
-		source == "usage-record" || source == "deepseek-harness" || source == CodexCloudRequestSource ||
-		strings.HasPrefix(source, "posit-assistant-")
+	return slices.Contains(RequestScopedSources, source) ||
+		strings.HasPrefix(source, RequestScopedSourcePrefix)
 }
+
+// RequestScopedSources are the usage sources SourceIsRequestScoped accepts
+// by name; it also accepts every source starting with
+// RequestScopedSourcePrefix. SQL that classifies rows reads both.
+var RequestScopedSources = []string{
+	"message", "goose-request", "session-store", "usage-record",
+	"deepseek-harness", CodexCloudRequestSource,
+}
+
+// RequestScopedSourcePrefix names the Posit Assistant sidecar sources.
+const RequestScopedSourcePrefix = "posit-assistant-"
 
 func isTokenCounterKey(key string) bool {
 	switch key {
