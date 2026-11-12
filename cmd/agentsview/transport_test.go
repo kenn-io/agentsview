@@ -388,44 +388,43 @@ func TestDetectTransport_DaemonStarting_FallsBackToDirect(t *testing.T) {
 }
 
 func TestDetectTransportRoutesStartupProgress(t *testing.T) {
-	for _, mode := range []string{"detect", "detect external", "startup wait"} {
-		t.Run(mode, func(t *testing.T) {
-			dir := daemonRuntimeDir(t)
-			require.NoError(t, os.MkdirAll(dir, 0o700))
-			var progress bytes.Buffer
-			ctx, cancel := context.WithTimeout(t.Context(), 250*time.Millisecond) //nolint:kennlint // deadlinetest: the held startup must time out after reporting progress
-			defer cancel()
-			ctx = context.WithValue(ctx, daemonProgressContextKey{}, &progress)
-			switch mode {
-			case "detect":
-				MarkDaemonStarting(dir)
-				t.Cleanup(func() { UnmarkDaemonStarting(dir) })
-				stubWaitForDaemonStartupForTransport(t, func(context.Context, string, time.Duration, ...string) bool { return false })
-				_, err := detectTransportContext(ctx, dir, "", time.Second)
-				require.NoError(t, err)
-				assert.Contains(t, progress.String(), "server is starting up, waiting")
-				return
-			case "detect external":
-				holdExternalStartupLockForTest(t, dir)
-			case "startup wait":
-				MarkDaemonStarting(dir)
-				t.Cleanup(func() { UnmarkDaemonStarting(dir) })
-			}
-			state := newStartupStateWriter(dir, time.Now)
-			state.SetPhase("Opening archive")
-			switch mode {
-			case "detect external":
-				_, _ = detectTransportContext(ctx, dir, "", 50*time.Millisecond) //nolint:kennlint // deadlinetest: the held startup ends at the deadline
-				assert.Contains(t, progress.String(), "server is starting up, waiting")
-			case "startup wait":
-				WaitForDaemonStartupContext(ctx, dir, 50*time.Millisecond) //nolint:kennlint // deadlinetest: the held startup ends at the deadline
-				assert.Contains(t, progress.String(), "Opening archive")
-			}
-		})
+	setup := func(t *testing.T) (string, context.Context, *bytes.Buffer) {
+		t.Helper()
+		dir := daemonRuntimeDir(t)
+		require.NoError(t, os.MkdirAll(dir, 0o700))
+		progress := new(bytes.Buffer)
+		ctx, cancel := context.WithTimeout(t.Context(), 250*time.Millisecond) //nolint:kennlint // deadlinetest: the held startup must time out after reporting progress
+		t.Cleanup(cancel)
+		return dir, context.WithValue(ctx, daemonProgressContextKey{}, progress), progress
 	}
+	t.Run("detect", func(t *testing.T) {
+		dir, ctx, progress := setup(t)
+		MarkDaemonStarting(dir)
+		t.Cleanup(func() { UnmarkDaemonStarting(dir) })
+		stubWaitForDaemonStartupForTransport(t, func(context.Context, string, time.Duration, ...string) bool { return false })
+		_, err := detectTransportContext(ctx, dir, "", time.Second)
+		require.NoError(t, err)
+		assert.Contains(t, progress.String(), "server is starting up, waiting")
+	})
+	t.Run("detect external", func(t *testing.T) {
+		dir, ctx, progress := setup(t)
+		holdExternalStartupLockForTest(t, dir)
+		newStartupStateWriter(dir, time.Now).SetPhase("Opening archive")
+		_, err := detectTransportContext(ctx, dir, "", 50*time.Millisecond) //nolint:kennlint // deadlinetest: the held startup ends at the deadline
+		require.ErrorIs(t, err, errServeStartupInProgress)
+		assert.Contains(t, progress.String(), "server is starting up, waiting")
+	})
+	t.Run("startup wait", func(t *testing.T) {
+		dir, ctx, progress := setup(t)
+		MarkDaemonStarting(dir)
+		t.Cleanup(func() { UnmarkDaemonStarting(dir) })
+		newStartupStateWriter(dir, time.Now).SetPhase("Opening archive")
+		WaitForDaemonStartupContext(ctx, dir, 50*time.Millisecond) //nolint:kennlint // deadlinetest: the held startup ends at the deadline
+		assert.Contains(t, progress.String(), "Opening archive")
+	})
 }
 
-func TestEnsureBackgroundServeRoutesStartupProgress(t *testing.T) {
+func TestEnsureBackgroundServeRoutesLaunchProgress(t *testing.T) {
 	t.Setenv("PATH", t.TempDir())
 	dir := daemonRuntimeDir(t)
 	require.NoError(t, os.MkdirAll(dir, 0o700))

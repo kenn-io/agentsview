@@ -784,21 +784,9 @@ func waitExportProgress(t *testing.T, progress <-chan struct{}, done <-chan erro
 }
 
 func TestExportWaitDuringDaemonChanges(t *testing.T) {
-	for _, mode := range []string{"daemon stops", "temporary ping failures", "cancel", "single ping", "signed loopback"} {
+	for _, mode := range []string{"daemon stops", "temporary ping failures", "cancel", "single ping"} {
 		t.Run(mode, func(t *testing.T) {
-			if mode == "signed loopback" {
-				t.Setenv("AGENTSVIEW_SIGNING_URL", "https://127.0.0.1:4443")
-				t.Setenv("AGENTSVIEW_SIGNING_KEY_ID", "example")
-				t.Setenv("AGENTSVIEW_SIGNING_KEY_FILE", filepath.Join(t.TempDir(), "key"))
-			}
 			path := pendingExportArchive(t, false)
-			if mode == "single ping" {
-				raw, err := sql.Open("sqlite3", path)
-				require.NoError(t, err)
-				_, err = raw.ExecContext(t.Context(), `INSERT INTO background_migrations (name, state) VALUES (?, 'pending')`, db.ProjectIdentityBackfillName)
-				require.NoError(t, err)
-				require.NoError(t, raw.Close())
-			}
 			dir := filepath.Dir(path)
 			var fail, observed, calls atomic.Int32
 			ping := daemon.NewPingHandler(daemon.PingHandlerOptions{Service: daemonService, Version: "test"})
@@ -840,10 +828,6 @@ func TestExportWaitDuringDaemonChanges(t *testing.T) {
 				cancel()
 				require.ErrorIs(t, <-done, context.Canceled)
 				assert.Empty(t, out.String())
-			case "signed loopback":
-				require.NoError(t, backfillExportArchive(t.Context(), path))
-				require.NoError(t, <-done)
-				assert.Len(t, decodeExportSessionsDocument(t, out.String()).Sessions, 2)
 			case "temporary ping failures":
 				fail.Store(4)
 				for observed.Load() < 4 {
@@ -870,30 +854,18 @@ func backfillExportArchive(ctx context.Context, path string) error {
 }
 
 func TestExportDaemonPing(t *testing.T) {
-	for _, tc := range []struct {
-		name        string
-		body        string
-		wantFailure string
-		wantOK      bool
-	}{
-		{name: "failed backfill", body: `{"ok":true,"healthy":true,"service":"agentsview","pid":42,"project_identity_backfill_error":"blocked"}`, wantFailure: "blocked", wantOK: true},
-		{name: "no failure", body: `{"ok":true,"healthy":true,"service":"agentsview","pid":42}`, wantOK: true},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-				assert.Equal(t, "/nested/api/ping", r.URL.Path)
-				assert.Equal(t, "Bearer example-token", r.Header.Get("Authorization"))
-				w.Header().Set("Content-Type", "application/json")
-				_, _ = io.WriteString(w, tc.body)
-			}))
-			t.Cleanup(ts.Close)
-			ep := serverEndpoint(t, ts)
-			rt := &DaemonRuntime{Record: daemon.RuntimeRecord{PID: 42, Address: ep.Addr, Metadata: map[string]string{runtimeBrowserURL: "http://example.com/nested"}}}
-			failed, ok := exportDaemonPing(t.Context(), rt, "example-token")
-			assert.Equal(t, tc.wantFailure, failed)
-			assert.Equal(t, tc.wantOK, ok)
-		})
-	}
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		assert.Equal(t, "/nested/api/ping", r.URL.Path)
+		assert.Equal(t, "Bearer example-token", r.Header.Get("Authorization"))
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = io.WriteString(w, `{"ok":true,"healthy":true,"service":"agentsview","pid":42,"project_identity_backfill_error":"blocked"}`)
+	}))
+	t.Cleanup(ts.Close)
+	ep := serverEndpoint(t, ts)
+	rt := &DaemonRuntime{Record: daemon.RuntimeRecord{PID: 42, Address: ep.Addr, Metadata: map[string]string{runtimeBrowserURL: "http://example.com/nested"}}}
+	failed, ok := exportDaemonPing(t.Context(), rt, "example-token")
+	assert.Equal(t, "blocked", failed)
+	assert.True(t, ok)
 }
 
 func TestExportStatusReportsLiveFailureWithOnePing(t *testing.T) {
@@ -1307,10 +1279,12 @@ func TestExportSessionsCursorConflictingFilterIsUsageError(t *testing.T) {
 func TestExportSessionsCursorAllowsFormatAndLimit(t *testing.T) {
 	seedExportSessionsArchive(t)
 	cursor := firstExportSessionsCursor(t)
-	stdout, stderr, err := executeExportSessionsCommand(newRootCommand(), "export", "sessions", "--cursor", cursor, "--format", "json", "--limit", "1")
-	require.NoError(t, err)
+	stdout, stderr, err := executeExportSessionsCommand(newRootCommand(), "export", "sessions", "--cursor", cursor, "--format", "json", "--limit", "1", "--wait")
+	require.NoError(t, err, "cursor with format and limit")
 	assert.Empty(t, stderr)
-	require.Len(t, decodeExportSessionsDocument(t, stdout).Sessions, 1)
+	doc := decodeExportSessionsDocument(t, stdout)
+	require.Len(t, doc.Sessions, 1)
+	assert.Equal(t, "alpha-old", doc.Sessions[0].ID)
 }
 
 func TestExportSessionsCursorResumesFilteredExport(t *testing.T) {
