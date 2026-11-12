@@ -1,5 +1,10 @@
 import { expect, test, type Page } from "@playwright/test";
 
+const searchResults = [
+  { session_id: "first", project: "project", agent: "codex", ordinal: 0, snippet: "first" },
+  { session_id: "second", project: "project", agent: "codex", ordinal: 0, snippet: "second" },
+];
+
 async function openSearch(page: Page, query: string) {
   await page.keyboard.press("ControlOrMeta+k");
   const input = page.locator(".palette-input");
@@ -74,20 +79,7 @@ test("Retry sends a new search and shows its results", async ({ page }) => {
   let attempts = 0;
   await page.route("**/api/v1/search?**", async (route) => {
     if (++attempts <= 2) await route.fulfill({ status: 503 });
-    else
-      await route.fulfill({
-        json: {
-          results: [
-            {
-              session_id: "first",
-              project: "project",
-              agent: "codex",
-              ordinal: 0,
-              snippet: "first",
-            },
-          ],
-        },
-      });
+    else await route.fulfill({ json: { results: [searchResults[0]] } });
   });
   await page.goto("/usage");
   await openSearch(page, "synchronous DB read");
@@ -99,21 +91,17 @@ test("Retry sends a new search and shows its results", async ({ page }) => {
 });
 
 test("automatic recovery selects the first result after a populated search", async ({ page }) => {
-  const results = [
-    { session_id: "first", project: "project", agent: "codex", ordinal: 0, snippet: "first" },
-    { session_id: "second", project: "project", agent: "codex", ordinal: 0, snippet: "second" },
-  ];
   let attempts = 0;
   let release: () => void = () => {};
   const held = new Promise<void>((resolve) => (release = resolve));
   await page.route("**/api/v1/search?**", async (route) => {
     if (new URL(route.request().url()).searchParams.get("q") === "initial search") {
-      await route.fulfill({ json: { results } });
+      await route.fulfill({ json: { results: searchResults } });
     } else if (++attempts === 1) {
       await held;
       await route.fulfill({ status: 503 });
     } else {
-      await route.fulfill({ json: { results: [results[0]] } });
+      await route.fulfill({ json: { results: [searchResults[0]] } });
     }
   });
   await page.goto("/usage");
