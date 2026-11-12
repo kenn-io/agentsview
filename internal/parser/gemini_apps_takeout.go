@@ -424,7 +424,9 @@ func normalizeGeminiAppsVisibleTextWithMarkers(value string) string {
 			b.WriteString(value)
 			break
 		}
-		b.WriteString(value[:endIndex])
+		// Keep the markers so callers trim only generated block newlines,
+		// not newlines authored at the edges of preformatted text.
+		b.WriteString(start + value[:endIndex] + end)
 		value = value[endIndex+len(end):]
 	}
 	return b.String()
