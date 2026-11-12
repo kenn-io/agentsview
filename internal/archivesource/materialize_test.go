@@ -15,6 +15,7 @@ import (
 	"go.kenn.io/agentsview/internal/dbtest"
 	"go.kenn.io/agentsview/internal/rawarchive"
 	"go.kenn.io/agentsview/internal/rawderive"
+	"go.kenn.io/agentsview/internal/rawsync"
 	"go.kenn.io/agentsview/internal/testjsonl"
 )
 
@@ -41,6 +42,8 @@ func TestSelectedInventoryAuthorityAndScope(t *testing.T) {
 			}
 			primary := "project/id.jsonl"
 			insert("root", primary, strings.Repeat("a", 64), true)
+			insert("root", primary, strings.Repeat("9", 64), true)
+			bound := rawsync.Entry{Path: primary, Type: "file", Length: 1, Objects: []rawsync.ObjectRef{{SHA256: strings.Repeat("a", 64), Length: 1}}}
 			for i := 0; i < tc.covered; i++ {
 				insert("root", "project/id/subagents/meta.json", strings.Repeat(string(rune('b'+i)), 64), true)
 			}
@@ -49,7 +52,7 @@ func TestSelectedInventoryAuthorityAndScope(t *testing.T) {
 			}
 			insert("root", "project/sibling/subagents/agent.jsonl", strings.Repeat("e", 64), true)
 			insert("other", "project/id/subagents/other.json", strings.Repeat("f", 64), true)
-			entries, err := selectedInventory(t.Context(), conn, "root", primary, "project/id/")
+			entries, err := selectedInventory(t.Context(), conn, "root", bound, "project/id/")
 			if tc.wantError {
 				require.ErrorContains(t, err, "ambiguous")
 				return
@@ -62,9 +65,15 @@ func TestSelectedInventoryAuthorityAndScope(t *testing.T) {
 				want = "b"
 			}
 			assert.Equal(t, strings.Repeat(want, 64), entries[1].Objects[0].SHA256)
+			assert.Equal(t, bound.Objects, entries[0].Objects)
+			_, err = conn.Exec(`DELETE FROM raw_archive_files WHERE path=? AND sha256=?`, primary, strings.Repeat("a", 64))
+			require.NoError(t, err)
+			_, err = selectedInventory(t.Context(), conn, "root", bound, "project/id/")
+			require.ErrorContains(t, err, "differs from manifest")
+			insert("root", primary, strings.Repeat("a", 64), true)
 			_, err = conn.Exec(`INSERT INTO raw_archive_files VALUES(?,?,?,?,?,?)`, "root", "project/id/subagents/corrupt.json", strings.Repeat("a", 64), 1, 1, 2)
 			require.NoError(t, err)
-			_, err = selectedInventory(t.Context(), conn, "root", primary, "project/id/")
+			_, err = selectedInventory(t.Context(), conn, "root", bound, "project/id/")
 			require.Error(t, err)
 		})
 	}
@@ -260,4 +269,82 @@ func TestMaterializeSnapshotEquivalentCandidates(t *testing.T) {
 		assert.Empty(t, attachment)
 		assertScratchEmpty(t)
 	})
+}
+
+func TestSnapshotPrimaryWindowsCoordinates(t *testing.T) {
+	entry := rawsync.Entry{Path: "project/id.jsonl", Type: "file"}
+	bound, primary, err := snapshotPrimaryPath(`C:\agent\projects\project\id.jsonl`, `C:\agent`, "id", []rawsync.Entry{entry})
+	require.NoError(t, err)
+	assert.Equal(t, entry, bound)
+	assert.Equal(t, "projects/project/id.jsonl", primary)
+	_, _, err = snapshotPrimaryPath(`D:\elsewhere\project\id.jsonl`, `C:\agent`, "id", []rawsync.Entry{entry})
+	require.ErrorContains(t, err, "outside capture root")
+}
+
+func TestMaterializeSnapshotUsesAcceptedPrimaryAfterSiblingCapture(t *testing.T) {
+	ctx := t.Context()
+	const id = "019eb791-cf7d-75c1-8439-9ed74c122e02"
+	const siblingID = "019eb791-cf7d-75c1-8439-9ed74c122e03"
+	inputs := t.TempDir()
+	root := filepath.Join(inputs, "projects")
+	primary := filepath.Join(root, "project", id+".jsonl")
+	original := testjsonl.NewSessionBuilder().AddClaudeUserWithSessionID("2026-01-01T00:00:00Z", "original", id).String()
+	dbtest.WriteTestFile(t, primary, []byte(original))
+	dbtest.WriteTestFile(t, filepath.Join(root, "project", id, "tool-results", "tool.txt"), []byte("original tool"))
+	source := backupSourceRoots(t, inputs, []rawarchive.RootSpec{{Provider: "claude", Path: root}})
+	changed := testjsonl.NewSessionBuilder().AddClaudeUserWithSessionID("2026-01-01T00:00:00Z", "changed", id).String()
+	require.NoError(t, os.WriteFile(primary, []byte(changed), 0o600))
+	dbtest.WriteTestFile(t, filepath.Join(root, "project", siblingID+".jsonl"), []byte(testjsonl.NewSessionBuilder().AddClaudeUserWithSessionID("2026-01-01T00:01:00Z", "sibling", siblingID).String()))
+	settings := rawarchive.RecoverySettings{LocalMachineName: "retired-desktop"}
+	capture := filepath.Join(inputs, "capture-next")
+	_, err := rawarchive.Capture(ctx, rawarchive.CaptureOptions{DataDir: filepath.Join(inputs, "application"), Destination: capture, IdentityFrom: filepath.Join(inputs, "capture", "capture.json"), Roots: []rawarchive.RootSpec{{Provider: "claude", Path: root}}, Settings: settings})
+	require.NoError(t, err)
+	spec, err := rawarchive.LoadImportSpec(ctx, filepath.Join(capture, "capture.json"))
+	require.NoError(t, err)
+	seed := filepath.Join(inputs, "seed")
+	database, err := db.OpenIsolatedContext(ctx, filepath.Join(seed, "sessions.db"))
+	require.NoError(t, err)
+	archive, err := rawarchive.Open(ctx, database, seed, nil)
+	require.NoError(t, err)
+	_, err = archive.Import(ctx, spec)
+	require.NoError(t, err)
+	files, err := database.ListRawArchiveFiles(ctx, 0, 100)
+	require.NoError(t, err)
+	covered := 0
+	for _, file := range files {
+		if file.Path == "project/"+id+".jsonl" && file.Covered {
+			covered++
+		}
+	}
+	require.Equal(t, 2, covered, "the later accepted sibling must cover the changed primary")
+	report, err := archive.Backup(ctx, source.Repository, settings, "test")
+	require.NoError(t, err)
+	require.NoError(t, archive.Close())
+	require.NoError(t, database.Close())
+	source.Snapshot = report.SnapshotID
+	index, err := OpenIndex(ctx, source, t.TempDir(), nil)
+	require.NoError(t, err)
+	defer index.Close()
+	sources, err := index.Sources(ctx, "", 100)
+	require.NoError(t, err)
+	var owner db.ArchiveSessionProvenance
+	for _, item := range sources {
+		if strings.HasSuffix(item.SourceKey, id+".jsonl") {
+			owner = db.ArchiveSessionProvenance{ArchiveSourceProvenance: index.provenance(item), NativeSessionID: id}
+		}
+	}
+	require.NotEmpty(t, owner.ManifestID)
+	tree, selected, _, err := MaterializeSnapshot(ctx, []config.ArchiveSource{source}, []db.ArchiveSessionProvenance{owner}, "claude", 512<<20)
+	require.NoError(t, err)
+	defer tree.Cleanup()
+	name, err := tree.EntryPath(selected)
+	require.NoError(t, err)
+	data, err := os.ReadFile(name)
+	require.NoError(t, err)
+	assert.Equal(t, original, string(data))
+	tool, err := tree.EntryPath(strings.TrimSuffix(selected, ".jsonl") + "/tool-results/tool.txt")
+	require.NoError(t, err)
+	data, err = os.ReadFile(tool)
+	require.NoError(t, err)
+	assert.Equal(t, "original tool", string(data))
 }

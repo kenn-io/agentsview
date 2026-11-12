@@ -146,32 +146,13 @@ func MaterializeSnapshot(ctx context.Context, sources []config.ArchiveSource, ow
 	if manifest.Manifest.ConfiguredRootID != configuredRoot || manifest.Manifest.SourceKey != s.SourceKey || string(manifest.Manifest.Provider) != provider {
 		return nil, "", db.ArchiveAttachmentKey{}, errors.New("snapshot manifest identity differs")
 	}
-	portable := func(name string) string { return path.Clean(strings.ReplaceAll(name, `\`, "/")) }
-	key, root := portable(s.SourceKey), strings.TrimSuffix(portable(originalRoot), "/")
-	var bound rawsync.Entry
-	for _, entry := range manifest.Manifest.Entries {
-		if path.Base(entry.Path) == owner.NativeSessionID+".jsonl" && rawderive.SourceKeyEndsWithEntry(key, entry.Path) {
-			if bound.Path != "" {
-				return nil, "", db.ArchiveAttachmentKey{}, errors.New("ambiguous snapshot transcript source")
-			}
-			bound = entry
-		}
+	bound, primary, err := snapshotPrimaryPath(s.SourceKey, originalRoot, owner.NativeSessionID, manifest.Manifest.Entries)
+	if err != nil {
+		return nil, "", db.ArchiveAttachmentKey{}, err
 	}
-	if bound.Path == "" {
-		return nil, "", db.ArchiveAttachmentKey{}, errors.New("snapshot transcript source differs")
-	}
-	providerRoot := strings.TrimSuffix(strings.TrimSuffix(key, bound.Path), "/")
-	var relativeRoot string
-	if providerRoot != root {
-		var ok bool
-		relativeRoot, ok = strings.CutPrefix(providerRoot, root+"/")
-		if !ok || relativeRoot == "" || path.Clean(relativeRoot) != relativeRoot {
-			return nil, "", db.ArchiveAttachmentKey{}, errors.New("snapshot transcript outside capture root")
-		}
-	}
-	primary = path.Join(relativeRoot, bound.Path)
 	base := strings.TrimSuffix(primary, ".jsonl") + "/"
-	entries, err := selectedInventory(ctx, conn, s.RootID, primary, base)
+	bound.Path = primary
+	entries, err := selectedInventory(ctx, conn, s.RootID, bound, base)
 	if err != nil {
 		return nil, "", db.ArchiveAttachmentKey{}, err
 	}
@@ -193,10 +174,38 @@ func MaterializeSnapshot(ctx context.Context, sources []config.ArchiveSource, ow
 	return tree, primary, owner.Attachment, err
 }
 
+// snapshotPrimaryPath binds a canonical entry to its capture-root coordinate.
+func snapshotPrimaryPath(sourceKey, originalRoot, nativeID string, entries []rawsync.Entry) (rawsync.Entry, string, error) {
+	portable := func(name string) string { return path.Clean(strings.ReplaceAll(name, `\`, "/")) }
+	key, root := portable(sourceKey), strings.TrimSuffix(portable(originalRoot), "/")
+	var bound rawsync.Entry
+	for _, entry := range entries {
+		if path.Base(entry.Path) == nativeID+".jsonl" && rawderive.SourceKeyEndsWithEntry(key, entry.Path) {
+			if bound.Path != "" {
+				return rawsync.Entry{}, "", errors.New("ambiguous snapshot transcript source")
+			}
+			bound = entry
+		}
+	}
+	if bound.Path == "" {
+		return rawsync.Entry{}, "", errors.New("snapshot transcript source differs")
+	}
+	providerRoot := strings.TrimSuffix(strings.TrimSuffix(key, bound.Path), "/")
+	var relativeRoot string
+	if providerRoot != root {
+		var ok bool
+		relativeRoot, ok = strings.CutPrefix(providerRoot, root+"/")
+		if !ok || relativeRoot == "" || path.Clean(relativeRoot) != relativeRoot {
+			return rawsync.Entry{}, "", errors.New("snapshot transcript outside capture root")
+		}
+	}
+	return bound, path.Join(relativeRoot, bound.Path), nil
+}
+
 // selectedInventory chooses immutable accepted bytes, or one unambiguous supplemental version.
-func selectedInventory(ctx context.Context, conn *sql.DB, rootID, primary, base string) (_ []rawsync.Entry, retErr error) {
+func selectedInventory(ctx context.Context, conn *sql.DB, rootID string, bound rawsync.Entry, base string) (_ []rawsync.Entry, retErr error) {
 	tools, agents := base+"tool-results/", base+"subagents/"
-	rows, err := conn.QueryContext(ctx, `SELECT path,sha256,size,mod_time_ns,covered FROM raw_archive_files WHERE root_id=? AND (path=? OR substr(path,1,length(?))=? OR substr(path,1,length(?))=?) ORDER BY path`, rootID, primary, tools, tools, agents, agents)
+	rows, err := conn.QueryContext(ctx, `SELECT path,sha256,size,mod_time_ns,covered FROM raw_archive_files WHERE root_id=? AND (path=? OR substr(path,1,length(?))=? OR substr(path,1,length(?))=?) ORDER BY path`, rootID, bound.Path, tools, tools, agents, agents)
 	if err != nil {
 		return nil, err
 	}
@@ -213,7 +222,11 @@ func selectedInventory(ctx context.Context, conn *sql.DB, rootID, primary, base 
 		e.Type = "file"
 		e.Objects = []rawsync.ObjectRef{{SHA256: digest, Length: e.Length}}
 		c := choices[e.Path]
-		if covered {
+		if e.Path == bound.Path {
+			if e.Length == bound.Length && slices.Equal(e.Objects, bound.Objects) {
+				c.covered = append(c.covered, e)
+			}
+		} else if covered {
 			c.covered = append(c.covered, e)
 		} else {
 			c.supplemental = append(c.supplemental, e)
@@ -222,6 +235,9 @@ func selectedInventory(ctx context.Context, conn *sql.DB, rootID, primary, base 
 	}
 	if err := rows.Err(); err != nil {
 		return nil, err
+	}
+	if len(choices[bound.Path].covered) != 1 {
+		return nil, errors.New("snapshot transcript inventory differs from manifest")
 	}
 	var entries []rawsync.Entry
 	for _, c := range choices {

@@ -2170,10 +2170,11 @@ and finds originals in configured local roots, remote mirrors, or configured
 S3 roots, or from a configured snapshot attachment that owns the session.
 Local retained and directory captures, Pi, and Codex are not yet supported.
 Archive-only fork sessions cannot be installed; select a session with a native
-Claude UUID. The transcript and companions together are
-limited to 512 MiB. Snapshot recovery also needs scratch space for a saved
-archive database of up to 16 GiB. `--server`, `--server-token-file`, and `--pg` are
-unavailable. Use `--json` for the source, installed paths, checkout, command,
+Claude UUID. The transcript and companions together are limited to 512 MiB
+and are buffered in memory. Snapshot recovery also needs scratch space for a
+saved archive database of up to 16 GiB. It holds a snapshot repository lease;
+if the repository is busy, retry after the other operation finishes. `--server`,
+`--server-token-file`, and `--pg` are unavailable. Use `--json` for the source, installed paths, checkout, command,
 and installed or unchanged status. Claude's native home and supported
 environment overrides determine the destination, independently of discovery
 roots. Local companions must resolve inside the configured root when the

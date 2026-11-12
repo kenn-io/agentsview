@@ -528,3 +528,27 @@ func TestMaterializerEntryBatch(t *testing.T) {
 	require.ErrorIs(t, err, ErrSizeLimit)
 	assert.Equal(t, []rawsync.ObjectRef{ref}, store.opened)
 }
+
+func TestMaterializerAcceptsValidatedCardinalityBeyondDefaults(t *testing.T) {
+	ref := objectRefForBytes(t, nil)
+	identity, err := rawsync.NewAuthIdentity("tenant-a", "device-a")
+	require.NoError(t, err)
+	limits := rawsync.DefaultManifestLimits()
+	entries := make([]rawsync.Entry, limits.MaxEntries+1)
+	for i := range entries {
+		entries[i] = rawsync.Entry{Path: fmt.Sprintf("file-%05d.jsonl", i), Type: "file", Objects: []rawsync.ObjectRef{ref}}
+	}
+	limits.MaxEntries = len(entries)
+	limits.MaxCanonicalBytes = 4 << 20
+	manifest, err := rawsync.ValidateAndCanonicalize(identity, rawsync.Manifest{
+		SchemaVersion: rawsync.ManifestSchemaVersion, Provider: "claude", ConfiguredRootID: "root-a", SourceKey: "fixture", CaptureID: "capture-a", CapturedAt: time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC), Kind: rawsync.ManifestSnapshot, Entries: entries,
+	}, limits)
+	require.NoError(t, err)
+	copyReached := errors.New("copy reached")
+	store := &materializerStore{objects: map[rawsync.ObjectRef][]byte{ref: nil}, copyObject: func(context.Context, []byte, io.Writer) error { return copyReached }}
+	materializer := Materializer{Store: store, BaseDir: t.TempDir(), MaxTotalBytes: 1}
+	_, err = materializer.Materialize(t.Context(), manifest)
+	require.ErrorIs(t, err, copyReached)
+	_, err = materializer.MaterializeEntries(t.Context(), identity, manifest.Manifest.CapturedAt, entries)
+	require.ErrorIs(t, err, copyReached)
+}

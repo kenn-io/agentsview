@@ -7,6 +7,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -132,22 +133,34 @@ func (m Materializer) Materialize(
 	if err := rawsync.ValidateCanonicalManifest(manifest); err != nil {
 		return nil, err
 	}
-	return m.MaterializeEntries(ctx, manifest.Identity, manifest.Manifest.CapturedAt, manifest.Manifest.Entries)
+	return m.materializeValidated(ctx, manifest.Identity, manifest.Manifest.CapturedAt, manifest.Manifest.Entries)
 }
 
 // MaterializeEntries reconstructs a validated batch from one authenticated tenant.
 func (m Materializer) MaterializeEntries(ctx context.Context, identity rawsync.AuthIdentity, capturedAt time.Time, entries []rawsync.Entry) (_ *Materialization, resultErr error) {
-	if m.Store == nil || strings.TrimSpace(m.BaseDir) == "" || m.MaxTotalBytes <= 0 {
-		return nil, fmt.Errorf("%w: materializer requires a store, base directory and positive limit", rawsync.ErrInvalid)
-	}
 	if _, err := rawsync.NewAuthIdentity(identity.TenantID, identity.DeviceID); err != nil {
 		return nil, err
 	}
 	if capturedAt.IsZero() {
 		return nil, fmt.Errorf("%w: capture time is required", rawsync.ErrInvalid)
 	}
-	if _, err := rawsync.ValidateEntryBatch(entries, rawsync.DefaultManifestLimits()); err != nil {
+	limits := rawsync.DefaultManifestLimits()
+	limits.MaxEntries = max(limits.MaxEntries, len(entries))
+	objects := 0
+	for _, entry := range entries {
+		objects += len(entry.Objects)
+	}
+	limits.MaxObjects = max(limits.MaxObjects, objects)
+	if _, err := rawsync.ValidateEntryBatch(entries, limits); err != nil {
 		return nil, err
+	}
+	return m.materializeValidated(ctx, identity, capturedAt, entries)
+}
+
+// materializeValidated is shared only by entry points that validated their input.
+func (m Materializer) materializeValidated(ctx context.Context, identity rawsync.AuthIdentity, capturedAt time.Time, entries []rawsync.Entry) (_ *Materialization, resultErr error) {
+	if m.Store == nil || strings.TrimSpace(m.BaseDir) == "" || m.MaxTotalBytes <= 0 {
+		return nil, fmt.Errorf("%w: materializer requires a store, base directory and positive limit", rawsync.ErrInvalid)
 	}
 	var total int64
 	for _, entry := range entries {
