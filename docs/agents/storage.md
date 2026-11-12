@@ -1276,11 +1276,11 @@ The SQL follows `IsFrustrationMarker` step by step. Port it with these rules:
   The caps rule is therefore ruled out with a bound: all-capital words are at
   most the `[A-Z]{2,}` runs, and words of two or more letters are at least 32
   per match of 32 such words in a row and at least `FrustrationCapsMinWords`.
-  The caps-run count divided by `FrustrationCapsMinWords` is tested first,
-  avoiding the 32-word split when that ratio is below the threshold. When
-  either bound is below the threshold, so is the exact ratio. SQL counts
-  every word only for stripped prompts of at most 16 KiB, which covers typed
-  prompts and short prompts after a fenced paste. `translate()` is slower
+  The caps-run count divided by `FrustrationCapsMinWords` is tested first.
+  When that bound is below the threshold, so is the exact ratio. SQL counts
+  every word for unresolved prompts of at most 16 KiB, which covers typed
+  prompts and short prompts after a fenced paste. Longer prompts use the
+  32-word bound before falling back to Go. `translate()` is slower
   still (42 s), so the SQL never uses it.
 
 On a fixture of 2,500 sessions with 41,162 prompts (484 MiB of prompt text, 1.9%
