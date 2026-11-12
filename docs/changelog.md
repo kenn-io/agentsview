@@ -39,6 +39,12 @@ The latest release is
 
 **Bug fixes**
 
+- OpenCode, Kilo, and MiMo Code costs now include reasoning tokens. Current
+  versions of these tools record reasoning separately from output, and
+  AgentsView priced only the output, so sessions on reasoning models were
+  under-billed by the whole reasoning share. Output now counts reasoning once
+  for both new and older recordings, and existing sessions are reparsed in
+  place on upgrade.
 - A busy daemon no longer logs `a long-running reader is holding the WAL`, or
   a goroutine dump, when its reads only overlap. The warning now appears only
   when three checkpoints in a row stop at the same point, which means one read
