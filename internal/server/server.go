@@ -73,8 +73,7 @@ type VersionInfo struct {
 
 // APIVersion is shared by HTTP version reporting and local daemon discovery.
 // Bump it when a client-visible contract cannot be decoded safely by an older
-// CLI or daemon. Stream event payloads follow this rule; they are not covered
-// by the generated OpenAPI document.
+// CLI or daemon.
 // Every generated OpenAPI contract change takes a new API version and a digest
 // record in cmd/agentsview/testdata/api_versions; TestAPIVersionContract names
 // both.

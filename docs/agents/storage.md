@@ -688,10 +688,7 @@ and an empty `<version>-<digest>` record file in `cmd/agentsview/testdata/api_ve
 `make test-api-version` names both. When two PRs record different contracts
 under one version, the later one deletes its record, rebases onto `main` after
 the earlier PR merges, and reruns the check. It then adds the record and moves
-any feature minimum it introduced to the version the check names. The digest
-covers only the generated OpenAPI document. Stream event payloads still require
-a manual version bump when older clients cannot decode them. A daemon whose API
-version differs from the upgraded CLI must be restarted after an upgrade.
+any feature minimum it introduced to the version the check names.
 
 ## Backend Parity
 
