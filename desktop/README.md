@@ -42,10 +42,12 @@ matches the public key in `plugins.updater.pubkey` in
 `src-tauri/tauri.conf.json`. That key belongs to the AgentsView release
 pipeline. Set `AGENTSVIEW_DESKTOP_AUTOUPDATE=0` to turn off update checks.
 
-A build that publishes its own updates passes its key at build time:
+A build that publishes its own updates passes its public key and its own
+update manifest URL at build time. The manifest must list updates signed with
+the matching private key:
 
 ```bash
-npx tauri build --config '{"plugins":{"updater":{"pubkey":"<base64 key>"}}}'
+npx tauri build --config '{"plugins":{"updater":{"pubkey":"<base64 key>","endpoints":["https://example.com/latest.json"]}}}'
 ```
 
 The build stops with an error if the key is missing or is not a minisign
