@@ -13,6 +13,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/stdlib"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"go.kenn.io/agentsview/internal/config"
@@ -166,6 +168,24 @@ func keptUsageFixture(t *testing.T) (*db.DB, *Sync, *Store, *usageReadCounter) {
 	return local, syncer, store, counter
 }
 
+// usageQueryTracer observes real queries on both pooled connections and
+// transactions opened from them.
+type usageQueryTracer struct {
+	mu      sync.Mutex
+	queries map[string]int
+}
+
+func (trace *usageQueryTracer) TraceQueryStart(ctx context.Context, _ *pgx.Conn, data pgx.TraceQueryStartData) context.Context {
+	if strings.Contains(data.SQL, "usage_event_timestamp_rows AS MATERIALIZED") || strings.Contains(data.SQL, "FROM session_plan_usage p") {
+		trace.mu.Lock()
+		trace.queries[data.SQL]++
+		trace.mu.Unlock()
+	}
+	return ctx
+}
+
+func (*usageQueryTracer) TraceQueryEnd(context.Context, *pgx.Conn, pgx.TraceQueryEndData) {}
+
 func TestUsageStandbyRetainsResults(t *testing.T) {
 	standbyURL := os.Getenv("TEST_PG_STANDBY_URL")
 	if standbyURL == "" {
@@ -182,12 +202,18 @@ func TestUsageStandbyRetainsResults(t *testing.T) {
 		var caughtUp bool
 		return connection.QueryRowContext(ctx, `SELECT pg_last_wal_replay_lsn() >= $1::pg_lsn`, lsn).Scan(&caughtUp) == nil && caughtUp
 	}, 20*time.Second, 50*time.Millisecond)
-	standby, err := NewStore(ctx, standbyURL, syncer.schema, true)
+	config, err := pgx.ParseConfig(standbyURL)
 	require.NoError(t, err)
+	quotedSchema, err := quoteIdentifier(syncer.schema)
+	require.NoError(t, err)
+	config.RuntimeParams["search_path"] = quotedSchema
+	config.RuntimeParams["TimeZone"] = "UTC"
+	trace := &usageQueryTracer{queries: map[string]int{}}
+	config.Tracer = trace
+	pool := stdlib.OpenDB(*config)
+	standby := &Store{pg: pool, ownedDB: pool}
 	t.Cleanup(func() { require.NoError(t, standby.Close()) })
 	require.NoError(t, standby.ConfigureUsageCache(ctx, t.TempDir(), standbyURL, syncer.schema))
-	counter := &usageReadCounter{storeExecutor: standby.pg, queries: map[string]int{}}
-	standby.pg = counter
 	filter := db.UsageFilter{From: "2026-01-01", To: "2026-01-01", Timezone: "UTC"}
 	want, err := primary.GetDailyUsage(ctx, filter)
 	require.NoError(t, err)
@@ -204,9 +230,10 @@ func TestUsageStandbyRetainsResults(t *testing.T) {
 	gotPlan, err := standby.GetPlanUsageSessionCounts(ctx, filter)
 	require.NoError(t, err)
 	require.Equal(t, wantPlan, gotPlan)
-	counter.mu.Lock()
-	reads := maps.Clone(counter.queries)
-	counter.mu.Unlock()
+	trace.mu.Lock()
+	reads := maps.Clone(trace.queries)
+	trace.mu.Unlock()
+	require.GreaterOrEqual(t, len(reads), 3, "daily, top sessions, and plan counts must load their source rows")
 	got, err = standby.GetDailyUsage(ctx, filter)
 	require.NoError(t, err)
 	require.Equal(t, want, got)
@@ -216,10 +243,10 @@ func TestUsageStandbyRetainsResults(t *testing.T) {
 	gotPlan, err = standby.GetPlanUsageSessionCounts(ctx, filter)
 	require.NoError(t, err)
 	require.Equal(t, wantPlan, gotPlan)
-	counter.mu.Lock()
-	again := maps.Clone(counter.queries)
-	counter.mu.Unlock()
-	require.Equal(t, reads, again)
+	trace.mu.Lock()
+	again := maps.Clone(trace.queries)
+	trace.mu.Unlock()
+	require.Equal(t, reads, again, "repeats must reuse the retained reports")
 
 	// A restored history may reach the same numeric revision with different
 	// data. The token must prevent reusing the prior standby result.
