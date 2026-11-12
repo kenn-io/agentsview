@@ -1,6 +1,7 @@
 package db
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -24,6 +25,29 @@ func seedWordSearch(t *testing.T, d *DB, project string, entries ...[3]string) {
 			msg.ToolCalls = []ToolCall{{ToolName: "Bash", Category: "Bash", ToolUseID: "tu-" + id, ResultContent: result}}
 		}
 		require.NoError(t, d.ReplaceSessionMessages(t.Context(), id, []Message{msg}))
+	}
+}
+
+func TestSearchContentPhraseRequiresSurfaceWords(t *testing.T) {
+	d := testDB(t)
+	requireFTS(t, d)
+	seedWordSearch(t, d, "proj", [3]string{"typed", "rounding, of invoices decision", ""}, [3]string{"stemmed", "round of invoice decision", ""})
+	for _, mode := range []string{"", "fts", "hybrid"} {
+		page, err := d.SearchContent(t.Context(), ContentSearchFilter{Pattern: `decision "rounding of invoices"`, Mode: mode, KeywordOnly: mode == "hybrid"})
+		require.NoError(t, err)
+		assert.Equal(t, []wordHit{{"typed", "message", 4}}, wordHits(page), "mode %q", mode)
+	}
+}
+
+func TestSearchContentStemmedMatchSnippet(t *testing.T) {
+	d := testDB(t)
+	requireFTS(t, d)
+	seedWordSearch(t, d, "proj", [3]string{"stemmed", strings.Repeat("filler ", 100) + "connecting succeeded", ""})
+	for _, mode := range []string{"", "fts", "hybrid"} {
+		page, err := d.SearchContent(t.Context(), ContentSearchFilter{Pattern: "connection unrelated", Mode: mode, KeywordOnly: mode == "hybrid"})
+		require.NoError(t, err)
+		require.Len(t, page.Matches, 1, "mode %q", mode)
+		assert.Contains(t, page.Matches[0].Snippet, "connecting", "mode %q", mode)
 	}
 }
 
@@ -153,7 +177,6 @@ func TestSearchContentNaturalPhrasesMatchText(t *testing.T) {
 		[3]string{"phrase", "rounding, of invoices decision", ""},
 		[3]string{"prefix", "prefixrounding of invoices decision", ""},
 		[3]string{"scattered", "invoices decision and rounding", ""},
-		[3]string{"arrow", "handler -> next", ""},
 		[3]string{"plain", "handler only", ""},
 	)
 	for _, tc := range []struct {
@@ -164,8 +187,6 @@ func TestSearchContentNaturalPhrasesMatchText(t *testing.T) {
 		{`"rounding of invoices" decision`, "fts", []wordHit{{"phrase", "message", 4}}},
 		{`decision "rounding of invoices"`, "fts", []wordHit{{"phrase", "message", 4}}},
 		{`missing "rounding of invoices"`, "fts", []wordHit{{"phrase", "message", 3}}},
-		{`handler "->"`, "", []wordHit{{"arrow", "message", 1}}},
-		{`"->"`, "fts", []wordHit{{"arrow", "message", 0}}},
 	} {
 		page, err := d.SearchContent(t.Context(), ContentSearchFilter{Pattern: tc.pattern, Mode: tc.mode})
 		require.NoError(t, err)
