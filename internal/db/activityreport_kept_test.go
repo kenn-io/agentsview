@@ -572,3 +572,36 @@ func TestActivityOngoingUsageChanges(t *testing.T) {
 		})
 	}
 }
+
+func TestActivityOngoingUsageLateTerminal(t *testing.T) {
+	d := testDB(t)
+	keptActivitySession(t, d, "active", "project-a", "2026-06-16")
+	insertSession(t, d, "old", "project-a", func(s *Session) {
+		s.Agent = "claude"
+		s.StartedAt = new("2026-06-15T09:00:00Z")
+		s.EndedAt = new("2026-06-15T10:00:00Z")
+		s.MessageCount = 1
+	})
+	insertMessages(t, d, Message{SessionID: "old", Ordinal: 0, Role: "assistant", Content: "x", Timestamp: "2026-06-15T09:00:00Z", HasToolUse: true, ToolCalls: []ToolCall{{SessionID: "old", ToolName: "exec_command", Category: "Bash", ToolUseID: "late"}}})
+	require.NoError(t, d.ReplaceSessionUsageEvents(t.Context(), "old", []UsageEvent{{Source: "request", Model: "model", OutputTokens: 700, OccurredAt: "2026-06-16T10:00:00Z", DedupKey: "request"}}))
+	q := dayQuery(t, "2026-06-16", "UTC")
+	q.Partial = true
+	q.EffectiveEnd = time.Date(2026, 6, 16, 12, 0, 0, 0, time.UTC)
+	f := AnalyticsFilter{Timezone: "UTC", IncludeSubagents: true, IncludeForks: true}
+	before := keptActivityBuild(t, d, f, q, true)
+	require.Equal(t, 500, before.Report.Totals.OutputTokens)
+	rev, err := d.UsageChangeRevision(t.Context())
+	require.NoError(t, err)
+	_, err = d.WriteSessionIncremental(t.Context(), "old", nil, IncrementalSessionUpdate{MsgCount: 1, NextOrdinal: 1, ToolCallResultUpdates: []ToolCallResultUpdate{{ToolUseID: "late", Position: ToolCallPosition{MessageOrdinal: 0, CallIndex: 0}, Events: []ToolResultEvent{{Source: "tool_execution", Status: "completed", Content: "done", Timestamp: "2026-06-16T11:00:00Z"}}}}})
+	require.NoError(t, err)
+	next, err := d.UsageChangeRevision(t.Context())
+	require.NoError(t, err)
+	require.Greater(t, next, rev)
+	changes, err := d.LoadUsageChanges(t.Context(), rev, next)
+	require.NoError(t, err)
+	require.Contains(t, changes, "old")
+	got := keptActivityBuild(t, d, f, q, true)
+	require.Equal(t, 1200, got.Report.Totals.OutputTokens)
+	clearKeptActivity(d)
+	require.Equal(t, got, keptActivityBuild(t, d, f, q, true))
+}

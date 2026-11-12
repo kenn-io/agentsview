@@ -2,7 +2,6 @@ package db
 
 import (
 	"context"
-	"crypto/sha256"
 	"encoding/json/v2"
 	"fmt"
 	"math"
@@ -27,22 +26,12 @@ type activityKept struct {
 type activityKeptUsage struct {
 	rows       []activity.UsageRow
 	pricing    *export.PricingBlock
-	candidates [32]byte
 	from, next time.Time
 }
 
 func activityUsageSelection(f AnalyticsFilter, q activity.Query) string {
 	q.EffectiveEnd = q.RangeEnd
 	return "usage|" + kept.Selection(f, q)
-}
-
-// activityCandidateDigest receives the IDs sorted by activityReportSessions.
-func activityCandidateDigest(ids []string) ([32]byte, error) {
-	encoded, err := json.Marshal(ids)
-	if err != nil {
-		return [32]byte{}, err
-	}
-	return sha256.Sum256(encoded), nil
 }
 
 func newActivityKeptMemo() kept.Memo[activityKept] {

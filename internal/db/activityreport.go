@@ -198,15 +198,10 @@ func (db *DB) BuildActivityReportArtifacts(
 	// cache alone.
 	var usage activityUsageWindow
 	var cachedUsage *activityKeptUsage
-	var candidates [32]byte
 	if q.Partial && selection != "" && len(ids) > 0 {
-		candidates, err = activityCandidateDigest(ids)
-		if err != nil {
-			return activity.CandidateArtifacts{}, err
-		}
 		if entries, ok := db.activityKept.Get(selection, version); ok {
 			entry := entries[0]
-			if entry.usage != nil && entry.usage.candidates == candidates && !q.EffectiveEnd.Before(entry.usage.from) && !q.EffectiveEnd.After(entry.usage.next) {
+			if entry.usage != nil && !q.EffectiveEnd.Before(entry.usage.from) && !q.EffectiveEnd.After(entry.usage.next) {
 				var valid bool
 				valid, err = db.keptActivityChangesValid(ctx, entry.revision, entry.read, ids, f, q)
 				if err != nil {
@@ -245,7 +240,7 @@ func (db *DB) BuildActivityReportArtifacts(
 	}
 	var usageResult *activityKeptUsage
 	if q.Partial && selection != "" && len(ids) > 0 && cachedUsage == nil {
-		usageResult = &activityKeptUsage{candidates: candidates}
+		usageResult = &activityKeptUsage{}
 	}
 	backend := activityReportBackend{
 		keptUsage: cachedUsage, usageResult: usageResult,
