@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"time"
 
 	"go.kenn.io/agentsview/internal/db"
 	"go.kenn.io/agentsview/internal/readbase"
@@ -220,9 +221,20 @@ func (s analyticsSQL) VisitTools(ctx context.Context, f db.AnalyticsFilter, ids 
 		from, to := readbase.AnalyticsWindowBounds(f)
 		windowPred, windowArgs := duckAnalyticsMessageWindowPred("m.timestamp", from, to)
 		args = append(args, windowArgs...)
+		timestamp := "m.timestamp"
+		group := "date_trunc('minute', m.timestamp)"
+		// Local may come from a timezone file without an IANA name.
+		if f.ToolsUseDayGroups() && f.Timezone != "Local" {
+			timestamp = "COALESCE(m.timestamp, s.started_at, s.created_at)"
+			zoneFilter := f
+			zoneFilter.Timezone = db.LoadLocationOr(f.Timezone, time.UTC).String()
+			var groupArgs []any
+			group, groupArgs = duckAnalyticsLocalDateExpr(timestamp, zoneFilter)
+			args = append(args, groupArgs...)
+		}
 		query := `SELECT tc.session_id, tc.category,
 				TRIM(tc.tool_name), COUNT(*),
-				MAX(m.timestamp), MIN(m.ordinal)` + db.ToolEffectivenessSQL("tc", "s.quality_signal_version") + `
+				MAX(` + timestamp + `), MIN(m.ordinal)` + db.ToolEffectivenessSQL("tc", "s.quality_signal_version") + `
 				FROM tool_calls tc
 				JOIN sessions s ON s.id = tc.session_id
 				LEFT JOIN messages m
@@ -236,7 +248,7 @@ func (s analyticsSQL) VisitTools(ctx context.Context, f db.AnalyticsFilter, ids 
 		query += readbase.AnalyticsAndClause(windowPred)
 		query += `
 				GROUP BY tc.session_id, tc.category,
-					TRIM(tc.tool_name), date_trunc('minute', m.timestamp)`
+					TRIM(tc.tool_name), ` + group
 		observeAnalyticsQuery(query)
 		rows, qErr := s.store.queryContext(ctx, query, args...)
 		if qErr != nil {

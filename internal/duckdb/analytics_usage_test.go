@@ -18,6 +18,7 @@ import (
 	pricingpkg "go.kenn.io/agentsview/internal/pricing"
 	"go.kenn.io/agentsview/internal/readbase"
 	"go.kenn.io/agentsview/internal/storage"
+	"go.kenn.io/agentsview/internal/timeutil"
 )
 
 func TestDuckUsageAggregateCostRecordsMixedReportedAndComputed(t *testing.T) {
@@ -993,6 +994,105 @@ func assertDuckAnalyticsToolsModelFilterCountsOnlyMatchingToolCalls(
 	assert.Equal(t, 1, byTool["Read"], "Read tool")
 	assert.Equal(t, 1, byTool["Skill"], "Skill tool")
 	assert.Zero(t, byTool["Grep"], "Grep tool")
+}
+
+func TestDuckAnalyticsToolsLocalDayBoundaries(t *testing.T) {
+	id := "duck-tool-boundary"
+	store := newDuckAnalyticsStore(t, []db.SessionBatchWrite{{
+		Session: syncSession(id, "alpha", "boundary", "2025-03-09T12:00:00Z", 4),
+		Messages: []db.Message{
+			duckModelMessage(id, 0, "assistant", "read", "2025-03-10T03:59:59Z", "model", db.ToolCall{ToolName: "Read", Category: "Read"}),
+			duckModelMessage(id, 1, "assistant", "read", "2025-03-10T04:00:00Z", "model", db.ToolCall{ToolName: "Read", Category: "Read"}),
+			duckModelMessage(id, 2, "assistant", "read", "2025-03-10T04:01:00Z", "model", db.ToolCall{ToolName: "Read", Category: "Read"}),
+			duckModelMessage(id, 3, "assistant", "read", "", "model", db.ToolCall{ToolName: "Read", Category: "Read"}),
+		},
+		DataVersion: 1, ReplaceMessages: true,
+	}})
+	resp, err := store.GetAnalyticsTools(t.Context(), db.AnalyticsFilter{Timezone: "America/New_York"})
+	require.NoError(t, err)
+	assert.Equal(t, 4, resp.TotalCalls)
+	require.Len(t, resp.ByTool, 1)
+	assert.Equal(t, 1, resp.ByTool[0].SessionCount)
+	assert.Equal(t, []db.ToolTrendEntry{
+		{Date: "2025-03-03", ByCat: map[string]int{"Read": 2}},
+		{Date: "2025-03-10", ByCat: map[string]int{"Read": 2}},
+	}, resp.Trend)
+	for _, zone := range []string{"", "Local"} {
+		resp, err := store.GetAnalyticsTools(t.Context(), db.AnalyticsFilter{Timezone: zone})
+		require.NoError(t, err)
+		assert.Equal(t, 4, resp.TotalCalls, "zone %q", zone)
+		assert.Equal(t, 1, resp.ByTool[0].SessionCount, "zone %q", zone)
+	}
+}
+
+func TestDuckAnalyticsToolsLocalWeeks(t *testing.T) {
+	for _, tc := range []struct {
+		name, zone, before, after, firstWeek, secondWeek string
+	}{
+		{"fall DST", "America/New_York", "2025-11-03T04:59:59Z", "2025-11-03T05:00:00Z", "2025-10-27", "2025-11-03"},
+		{"fractional offset", "Asia/Kathmandu", "2025-03-09T18:14:59Z", "2025-03-09T18:15:00Z", "2025-03-03", "2025-03-10"},
+		{"unknown zone", "Invalid/Zone", "2025-03-09T23:59:59Z", "2025-03-10T00:00:00Z", "2025-03-03", "2025-03-10"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			id := "duck-tool-weeks"
+			store := newDuckAnalyticsStore(t, []db.SessionBatchWrite{{
+				Session: syncSession(id, "alpha", "boundary", tc.before, 2),
+				Messages: []db.Message{
+					duckModelMessage(id, 0, "assistant", "read", tc.before, "model", db.ToolCall{ToolName: "Read", Category: "Read"}),
+					duckModelMessage(id, 1, "assistant", "read", tc.after, "model", db.ToolCall{ToolName: "Read", Category: "Read"}),
+				},
+				DataVersion: 1, ReplaceMessages: true,
+			}})
+			resp, err := store.GetAnalyticsTools(t.Context(), db.AnalyticsFilter{Timezone: tc.zone})
+			require.NoError(t, err)
+			require.Len(t, resp.Trend, 2)
+			assert.Equal(t, tc.firstWeek, resp.Trend[0].Date)
+			assert.Equal(t, tc.secondWeek, resp.Trend[1].Date)
+			assert.Equal(t, 1, resp.Trend[0].ByCat["Read"])
+			assert.Equal(t, 1, resp.Trend[1].ByCat["Read"])
+			assert.Equal(t, 2, resp.TotalCalls)
+			assert.Equal(t, 1, resp.ByTool[0].SessionCount)
+			sunday := 6
+			resp, err = store.GetAnalyticsTools(t.Context(), db.AnalyticsFilter{Timezone: tc.zone, DayOfWeek: &sunday})
+			require.NoError(t, err)
+			assert.Equal(t, 1, resp.TotalCalls)
+			require.Len(t, resp.Trend, 1)
+			assert.Equal(t, 1, resp.Trend[0].ByCat["Read"])
+		})
+	}
+}
+
+func TestDuckAnalyticsToolsLocalTimezoneWithoutName(t *testing.T) {
+	t.Setenv("TZ", "")
+	// Keep the pointer stable for callers that have already cached time.Local.
+	_ = time.Now().In(time.Local)
+	local := *time.Local
+	t.Cleanup(func() { *time.Local = local })
+	*time.Local = *time.FixedZone("Local", 12*60*60)
+	zone, err := time.LoadLocation(timeutil.LocalTimezoneOrUTC())
+	require.NoError(t, err)
+	_, offset := time.Date(2025, 3, 9, 12, 0, 0, 0, time.UTC).In(zone).Zone()
+	before, after := "2025-03-09T11:59:59Z", "2025-03-09T12:00:01Z"
+	if offset == 12*60*60 || offset == -12*60*60 {
+		*time.Local = *time.FixedZone("Local", 0)
+		before, after = "2025-03-09T23:59:59Z", "2025-03-10T00:00:01Z"
+	}
+	id := "duck-local-file-zone"
+	store := newDuckAnalyticsStore(t, []db.SessionBatchWrite{{
+		Session: syncSession(id, "alpha", "local", before, 2),
+		Messages: []db.Message{
+			duckModelMessage(id, 0, "assistant", "read", before, "model", db.ToolCall{ToolName: "Read", Category: "Read"}),
+			duckModelMessage(id, 1, "assistant", "read", after, "model", db.ToolCall{ToolName: "Read", Category: "Read"}),
+		},
+		DataVersion: 1, ReplaceMessages: true,
+	}})
+	resp, err := store.GetAnalyticsTools(t.Context(), db.AnalyticsFilter{From: "2025-03-09", To: "2025-03-10", Timezone: "Local"})
+	require.NoError(t, err)
+	assert.Equal(t, 2, resp.TotalCalls)
+	assert.Equal(t, []db.ToolTrendEntry{
+		{Date: "2025-03-03", ByCat: map[string]int{"Read": 1}},
+		{Date: "2025-03-10", ByCat: map[string]int{"Read": 1}},
+	}, resp.Trend)
 }
 
 func TestDuckAnalyticsToolsModelAndHourFilterCountsOnlyMatchingHourToolCalls(

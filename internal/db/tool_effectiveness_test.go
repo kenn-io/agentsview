@@ -100,6 +100,7 @@ func TestToolEffectivenessFilteredRatesAndEvidence(t *testing.T) {
 	require.Len(t, evidence.Sessions, 1)
 	assert.Equal(t, "recovered", evidence.Sessions[0].SessionID)
 	assert.Equal(t, 1, evidence.Sessions[0].SignalTotal)
+	assert.Equal(t, new(2), evidence.Sessions[0].MessageOrdinal)
 	f.ToolName = "Read"
 	f.ToolCategory = "Read"
 	evidence, err = d.GetAnalyticsSignalSessions(t.Context(), f, "tool_recovery_rate", 20)
