@@ -291,8 +291,10 @@
     font-weight: 500;
   }
 
+  /* Plain accent green is about 3:1 on the light status bar; mixing toward
+     primary ink keeps the hue and clears 4.5:1 in both themes. */
   .sync-progress {
-    color: var(--accent-green);
+    color: color-mix(in srgb, var(--accent-green) 65%, var(--text-primary));
   }
 
   .codex-cloud-status {
