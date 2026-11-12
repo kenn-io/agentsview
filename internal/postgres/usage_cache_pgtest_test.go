@@ -118,7 +118,7 @@ FROM generate_series(1, 1100) n`)
 	select {
 	case <-started:
 		require.FailNow(t, "warm pass started while the direct read was held")
-	case <-time.After(200 * time.Millisecond):
+	case <-time.After(2 * time.Second):
 	}
 	release()
 	select {

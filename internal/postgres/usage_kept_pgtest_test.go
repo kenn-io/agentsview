@@ -166,7 +166,7 @@ func keptUsageFixture(t *testing.T) (*db.DB, *Sync, *Store, *usageReadCounter) {
 	return local, syncer, store, counter
 }
 
-func TestUsageKeptOnStandby(t *testing.T) {
+func TestUsageStandbyReadsDirect(t *testing.T) {
 	standbyURL := os.Getenv("TEST_PG_STANDBY_URL")
 	if standbyURL == "" {
 		t.Skip("TEST_PG_STANDBY_URL must point to a standby of TEST_PG_URL")
@@ -188,7 +188,7 @@ func TestUsageKeptOnStandby(t *testing.T) {
 	require.NoError(t, standby.ConfigureUsageCache(ctx, t.TempDir(), standbyURL, syncer.schema))
 	counter := &usageReadCounter{storeExecutor: standby.pg, queries: map[string]int{}}
 	standby.pg = counter
-	require.NotEmpty(t, standby.keptUsageVersion(ctx, "test"))
+	require.Empty(t, standby.keptUsageVersion(ctx, "test"))
 	filter := db.UsageFilter{From: "2026-01-01", To: "2026-01-01", Timezone: "UTC"}
 	want, err := primary.GetDailyUsage(ctx, filter)
 	require.NoError(t, err)
@@ -221,7 +221,7 @@ func TestUsageKeptOnStandby(t *testing.T) {
 	counter.mu.Lock()
 	again := maps.Clone(counter.queries)
 	counter.mu.Unlock()
-	require.Equal(t, reads, again)
+	require.NotEqual(t, reads, again)
 	primaryVersion := primary.keptUsageVersion(ctx, "test")
 	primary.pg = counter
 	require.NotEqual(t, primaryVersion, primary.keptUsageVersion(ctx, "test"))
