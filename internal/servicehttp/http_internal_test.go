@@ -64,53 +64,81 @@ func TestListForwardsListOptions(t *testing.T) {
 	require.NoError(t, err)
 }
 
-func TestSearchContentUsesLongRunningClient(t *testing.T) {
-	synctest.Test(t, func(t *testing.T) {
-		srv := httptest.NewTestServer(t, http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-			time.Sleep(50 * time.Millisecond)
-			w.Header().Set("Content-Type", "application/json")
-			_, _ = w.Write([]byte(`{"matches":[]}`))
-		}))
-		transport := srv.Client().Transport
-
-		svc := NewHTTPBackend(srv.URL, "", false, "")
-		backend, ok := svc.(*httpBackend)
-		require.True(t, ok)
-		backend.client.Transport = transport
-		backend.longRunningClient.Transport = transport
-		backend.client.Timeout = 10 * time.Millisecond
-
-		result, err := svc.SearchContent(t.Context(), service.ContentSearchRequest{
-			Pattern: "slow first query",
-			Mode:    "semantic",
+func TestLongRunningClient(t *testing.T) {
+	tests := []struct {
+		name         string
+		path         string
+		body         string
+		checkRequest func(*testing.T, *http.Request)
+		call         func(*testing.T, *httpBackend)
+	}{
+		{
+			name: "search", path: "/api/v1/search", body: `{"results":[{"session_id":"session-a"}],"next":84}`,
+			checkRequest: func(t *testing.T, r *http.Request) {
+				assert.Equal(t, "needle", r.URL.Query().Get("q"))
+				assert.Equal(t, "42", r.URL.Query().Get("cursor"))
+			},
+			call: func(t *testing.T, backend *httpBackend) {
+				result, err := backend.Search(t.Context(), service.SearchRequest{Query: "needle", Cursor: 42})
+				require.NoError(t, err)
+				require.Len(t, result.Results, 1)
+				assert.Equal(t, "session-a", result.Results[0].SessionID)
+				assert.Equal(t, 84, result.NextCursor)
+			},
+		},
+		{
+			name: "content search", path: "/api/v1/search/content", body: `{"matches":[]}`,
+			call: func(t *testing.T, backend *httpBackend) {
+				result, err := backend.SearchContent(t.Context(), service.ContentSearchRequest{Pattern: "slow first query", Mode: "semantic"})
+				require.NoError(t, err)
+				assert.Empty(t, result.Matches)
+			},
+		},
+		{
+			name: "usage summary", path: "/api/v1/usage/summary", body: `{"daily":[{"date":"2026-09-01"}]}`,
+			call: func(t *testing.T, backend *httpBackend) {
+				result, err := backend.UsageSummary(t.Context(), service.UsageRequest{})
+				require.NoError(t, err)
+				require.Len(t, result.Daily, 1)
+				assert.Equal(t, "2026-09-01", result.Daily[0].Date)
+			},
+		},
+		{
+			name: "stats", path: "/api/v1/session-stats", body: `{"generated_at":"2026-09-01T00:00:00Z","outcome_stats":{"repos_active":2,"commits":7}}`,
+			checkRequest: func(t *testing.T, r *http.Request) {
+				assert.Equal(t, "true", r.URL.Query().Get("include_github_outcomes"))
+			},
+			call: func(t *testing.T, backend *httpBackend) {
+				result, err := backend.Stats(t.Context(), service.StatsFilter{Since: "30d", IncludeGitOutcomes: true, IncludeGitHubOutcomes: true})
+				require.NoError(t, err)
+				require.NotNil(t, result)
+				require.NotNil(t, result.OutcomeStats)
+				assert.Equal(t, 2, result.OutcomeStats.ReposActive)
+				assert.Equal(t, 7, result.OutcomeStats.Commits)
+			},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			synctest.Test(t, func(t *testing.T) {
+				srv := httptest.NewTestServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+					assert.Equal(t, tt.path, r.URL.Path)
+					if tt.checkRequest != nil {
+						tt.checkRequest(t, r)
+					}
+					time.Sleep(50 * time.Millisecond)
+					w.Header().Set("Content-Type", "application/json")
+					_, _ = w.Write([]byte(tt.body))
+				}))
+				transport := srv.Client().Transport
+				backend := NewHTTPBackend(srv.URL, "", false, "").(*httpBackend)
+				backend.client.Transport = transport
+				backend.longRunningClient.Transport = transport
+				backend.client.Timeout = 10 * time.Millisecond
+				tt.call(t, backend)
+			})
 		})
-		require.NoError(t, err)
-		assert.Empty(t, result.Matches)
-	})
-}
-
-func TestSearchUsesLongRunningClient(t *testing.T) {
-	synctest.Test(t, func(t *testing.T) {
-		srv := httptest.NewTestServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			assert.Equal(t, "/api/v1/search", r.URL.Path)
-			assert.Equal(t, "needle", r.URL.Query().Get("q"))
-			assert.Equal(t, "42", r.URL.Query().Get("cursor"))
-			time.Sleep(50 * time.Millisecond)
-			w.Header().Set("Content-Type", "application/json")
-			_, _ = w.Write([]byte(`{"results":[{"session_id":"session-a"}],"next":84}`))
-		}))
-		transport := srv.Client().Transport
-		backend := NewHTTPBackend(srv.URL, "", false, "").(*httpBackend)
-		backend.client.Transport = transport
-		backend.longRunningClient.Transport = transport
-		backend.client.Timeout = 10 * time.Millisecond
-
-		result, err := backend.Search(t.Context(), service.SearchRequest{Query: "needle", Cursor: 42})
-		require.NoError(t, err)
-		require.Len(t, result.Results, 1)
-		assert.Equal(t, "session-a", result.Results[0].SessionID)
-		assert.Equal(t, 84, result.NextCursor)
-	})
+	}
 }
 
 func TestSearchContentForwardsRecallContract(t *testing.T) {
@@ -168,61 +196,6 @@ func TestMessagesMapsSourceChangedConflict(t *testing.T) {
 		t.Context(), "session", service.MessageFilter{ExpectedRevision: "old"},
 	)
 	require.ErrorIs(t, err, service.ErrSourceChanged)
-}
-
-func TestUsageSummaryUsesLongRunningClient(t *testing.T) {
-	synctest.Test(t, func(t *testing.T) {
-		srv := httptest.NewTestServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			assert.Equal(t, "/api/v1/usage/summary", r.URL.Path)
-			time.Sleep(50 * time.Millisecond)
-			w.Header().Set("Content-Type", "application/json")
-			_, _ = w.Write([]byte(`{"daily":[{"date":"2026-09-01"}]}`))
-		}))
-		transport := srv.Client().Transport
-		backend := NewHTTPBackend(srv.URL, "", false, "").(*httpBackend)
-		backend.client.Transport = transport
-		backend.longRunningClient.Transport = transport
-		backend.client.Timeout = 10 * time.Millisecond
-		result, err := backend.UsageSummary(t.Context(), service.UsageRequest{})
-		require.NoError(t, err)
-		require.Len(t, result.Daily, 1)
-		assert.Equal(t, "2026-09-01", result.Daily[0].Date)
-	})
-}
-
-// TestStatsUsesLongRunningClient pins that `agentsview stats` can outlast the
-// 30-second default client. Git and GitHub aggregation shells out to `git log`
-// and `gh pr list` once per repository, so the operation routinely runs for
-// minutes; the flags that request it are offered by the command, so the command
-// has to be able to wait for the answer.
-func TestStatsUsesLongRunningClient(t *testing.T) {
-	synctest.Test(t, func(t *testing.T) {
-		srv := httptest.NewTestServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			assert.Equal(t, "/api/v1/session-stats", r.URL.Path)
-			assert.Equal(t, "true", r.URL.Query().Get("include_github_outcomes"))
-			time.Sleep(50 * time.Millisecond)
-			w.Header().Set("Content-Type", "application/json")
-			_, _ = w.Write([]byte(
-				`{"generated_at":"2026-09-01T00:00:00Z",` +
-					`"outcome_stats":{"repos_active":2,"commits":7}}`,
-			))
-		}))
-		transport := srv.Client().Transport
-		backend := NewHTTPBackend(srv.URL, "", false, "").(*httpBackend)
-		backend.client.Transport = transport
-		backend.longRunningClient.Transport = transport
-		backend.client.Timeout = 10 * time.Millisecond
-		result, err := backend.Stats(t.Context(), service.StatsFilter{
-			Since:                 "30d",
-			IncludeGitOutcomes:    true,
-			IncludeGitHubOutcomes: true,
-		})
-		require.NoError(t, err)
-		require.NotNil(t, result)
-		require.NotNil(t, result.OutcomeStats)
-		assert.Equal(t, 2, result.OutcomeStats.ReposActive)
-		assert.Equal(t, 7, result.OutcomeStats.Commits)
-	})
 }
 
 func TestUsagePairwiseComparisonUsesLongRunningClient(t *testing.T) {
