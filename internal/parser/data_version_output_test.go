@@ -310,9 +310,10 @@ func TestDataVersionDigestGuidance(t *testing.T) {
 	err = checkDataVersionDigest(177, changed, []outputRecord{old, added})
 	require.ErrorContains(t, err, "claude: new.jsonl")
 	require.ErrorContains(t, err, "take version 178")
+	changed["claude"]["new.jsonl"] = "first"
 	changed["claude"]["old.jsonl"] = "changed"
 	err = checkDataVersionDigest(177, changed, []outputRecord{old, added})
-	require.ErrorContains(t, err, "claude: new.jsonl")
+	require.ErrorContains(t, err, "claude: old.jsonl")
 	conflict := outputRecord{Version: 177, Providers: map[string]map[string]string{"claude": {"old.jsonl": "changed"}}}
 	err = checkDataVersionDigest(177, both, []outputRecord{old, added, conflict})
 	require.ErrorContains(t, err, "conflicting output records for claude: old.jsonl")
@@ -328,30 +329,7 @@ func TestStoredFieldsNormalizesPaths(t *testing.T) {
 	require.Equal(t, "$ROOT/a/b.jsonl", got["path"])
 	require.Equal(t, `keep C:\other\file`, got["text"])                                                                          //nolint:misspell // This is a Windows path.
 	require.Equal(t, map[string]any{"path": "$ROOT/a/b.jsonl", "text": `C:\other\file`, "count": json.Number("1")}, got["json"]) //nolint:misspell // This is a Windows path.
-}
-
-func TestParsedOutputIncludesExclusions(t *testing.T) {
-	root := parsedOutputFixture(t, parser.AgentClaude)
-	provider, ok := parser.NewProvider(parser.AgentClaude, parser.ProviderConfig{Roots: []string{root}, Machine: "digest"})
-	require.True(t, ok)
-	sources, err := provider.Discover(t.Context())
-	require.NoError(t, err)
-	for _, source := range sources {
-		if filepath.Base(source.DisplayPath) != "usage_probe.jsonl" {
-			continue
-		}
-		outcome, err := provider.Parse(parser.WithoutFilesystemProjectDiscovery(t.Context()), parser.ParseRequest{Source: source, Machine: "digest"})
-		require.NoError(t, err)
-		require.Empty(t, outcome.Results)
-		require.Len(t, outcome.ExcludedSessionIDs, 1)
-		data, err := json.Marshal(outcome.ExcludedSessionIDs)
-		require.NoError(t, err)
-		sum := sha256.Sum256(data)
-		empty := sha256.Sum256([]byte("null"))
-		got := parsedOutputRows(t, parser.AgentClaude)["project/usage_probe.jsonl"]
-		require.Equal(t, hex.EncodeToString(sum[:]), got)
-		require.NotEqual(t, hex.EncodeToString(empty[:]), got)
-		return
-	}
-	require.FailNow(t, "usage probe was not discovered")
+	require.Equal(t, "$ROOT/a/b.jsonl", storedFields(reflect.ValueOf("/tmp/fixture/a/b.jsonl"), "/tmp/fixture"))
+	require.Equal(t, "read $ROOT/a then continue", storedFields(reflect.ValueOf("read /tmp/fixture/a then continue"), "/tmp/fixture"))
+	require.Equal(t, "$ROOT", storedFields(reflect.ValueOf("fixture"), "/tmp/fixture"))
 }

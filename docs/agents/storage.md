@@ -55,9 +55,10 @@ The parsed-output digest records each provider and corpus input under
 recorded input, take a new data version and record its digest with `bump` set
 to true. Keep records already on main. For a new input, append its first digest
 at the current version using output from the current main parser, and leave
-`bump` unset. This also applies when the input accompanies a parser change. A new provider can append its first digest at the
-current version. If records conflict, keep the record from main, remove your
-unmerged conflicting record, and take the next version.
+`bump` unset. This also applies when the input accompanies a parser change.
+A new provider can append its first digest at the current version. If records
+conflict, keep the record from main, remove your unmerged conflicting record,
+and take the next version.
 
 The digest covers only inputs in `internal/parser/testdata/data-version-corpus`.
 Parser behavior outside that corpus is unguarded. Add a representative input
