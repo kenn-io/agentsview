@@ -157,6 +157,53 @@ func TestWALStallNotReportedWhileOverlappingReadsFinish(t *testing.T) {
 	assert.NotContains(t, output.String(), "sqlite wal goroutine dump")
 }
 
+// Between ticks the WAL can drain and start over. A new generation can stop
+// at the same counts as the last one, but no read was open across both.
+func TestWALStallNotReportedWhenWALStartsOverBetweenChecks(t *testing.T) {
+	d := testDB(t)
+	ctx := t.Context()
+	w := d.getWriter()
+	_, err := w.ExecContext(ctx, `CREATE TABLE wal_probe(id INTEGER PRIMARY KEY, v TEXT);
+		INSERT INTO wal_probe(id, v) VALUES (1, '')`)
+	require.NoError(t, err)
+	update := func() {
+		t.Helper()
+		_, err := w.ExecContext(ctx,
+			`UPDATE wal_probe SET v = hex(randomblob(64)) WHERE id = 1`)
+		require.NoError(t, err)
+	}
+	drained, err := d.checkpointWALPassive(ctx)
+	require.NoError(t, err)
+	require.Zero(t, drained.unmovedPages())
+
+	var tracker walStallTracker
+	var observed []walCheckpointProgress
+	for attempt := range walStallLogAttempts + 1 {
+		update() // The first write after a full drain starts the WAL over.
+		reader := holdDiagnosticTransaction(t, d)
+		update()
+		progress, err := d.checkpointWALPassive(ctx)
+		require.NoError(t, err)
+		observed = append(observed, progress)
+		_, ok := tracker.observe(progress)
+		assert.False(t, ok, "attempt %d", attempt)
+
+		require.NoError(t, reader.Rollback())
+		drained, err := d.checkpointWALPassive(ctx)
+		require.NoError(t, err)
+		require.Zero(t, drained.unmovedPages())
+	}
+	generations := map[uint64]bool{}
+	for _, progress := range observed {
+		assert.Positive(t, progress.unmovedPages())
+		assert.Equal(t, observed[0].logPages, progress.logPages)
+		assert.Equal(t, observed[0].checkpointedPages, progress.checkpointedPages)
+		assert.NotZero(t, progress.generation)
+		generations[progress.generation] = true
+	}
+	assert.Len(t, generations, len(observed))
+}
+
 func TestWALStallTrackerRestartsCountWhenCheckpointMoves(t *testing.T) {
 	for _, tc := range []struct {
 		name string

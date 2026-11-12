@@ -4,9 +4,12 @@ import (
 	"bytes"
 	"context"
 	"database/sql"
+	"encoding/binary"
 	"errors"
 	"fmt"
+	"io"
 	"log"
+	"os"
 	"runtime/pprof"
 	"time"
 )
@@ -23,9 +26,12 @@ const (
 
 // walCheckpointProgress is what a passive checkpoint reports: the pages in
 // the WAL and how many of them have been copied into the database file.
+// generation identifies the WAL's current contents; it is zero when the WAL
+// header could not be read.
 type walCheckpointProgress struct {
 	logPages          int
 	checkpointedPages int
+	generation        uint64
 }
 
 func (p walCheckpointProgress) unmovedPages() int {
@@ -50,7 +56,25 @@ func (db *DB) checkpointWALPassive(
 		return walCheckpointProgress{},
 			fmt.Errorf("wal checkpoint passive: %w", err)
 	}
+	progress.generation = readWALGeneration(db.path + "-wal")
 	return progress, nil
+}
+
+// readWALGeneration returns the salt from a WAL file header. SQLite writes new
+// salt values each time the WAL starts over from its first frame, so equal page
+// counts from different generations can be told apart. It returns zero when
+// the header cannot be read.
+func readWALGeneration(path string) uint64 {
+	file, err := os.Open(path)
+	if err != nil {
+		return 0
+	}
+	defer file.Close()
+	var header [24]byte
+	if _, err := io.ReadFull(file, header[:]); err != nil {
+		return 0
+	}
+	return binary.BigEndian.Uint64(header[16:24])
 }
 
 // walStall describes a WAL that consecutive checkpoints could not drain.
@@ -86,6 +110,7 @@ func (t *walStallTracker) observe(
 		return walStall{}, false
 	}
 	if t.attempts == 0 ||
+		progress.generation != previous.generation ||
 		progress.checkpointedPages != previous.checkpointedPages ||
 		progress.logPages < previous.logPages {
 		t.attempts = 1
