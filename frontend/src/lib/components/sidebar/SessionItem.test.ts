@@ -4,6 +4,7 @@ import { flushSync, mount, unmount } from "svelte";
 import { createClassComponent } from "svelte/legacy";
 import SessionItem from "./SessionItem.svelte";
 import { sessions } from "../../stores/sessions.svelte.js";
+import { starred } from "../../stores/starred.svelte.js";
 
 let component: ReturnType<typeof mount> | undefined;
 
@@ -158,6 +159,34 @@ describe("SessionItem identity", () => {
     const input = document.querySelector<HTMLInputElement>(".rename-input")!;
     expect(document.activeElement).toBe(input);
     expect(document.querySelector(".context-menu")).toBeNull();
+  });
+
+  it("offers star and expand in the context menu as full-size equivalents", () => {
+    const onToggleExpand = vi.fn();
+    mountSession({ id: "menu-star" }, { continuationCount: 2, onToggleExpand });
+    const menuItem = (label: string) =>
+      Array.from(document.querySelectorAll<HTMLButtonElement>(".context-menu-item")).find(
+        (button) => button.textContent?.trim() === label,
+      );
+    const openMenu = () => {
+      document
+        .querySelector<HTMLElement>(".session-info-link")!
+        .dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, cancelable: true }));
+      flushSync();
+    };
+
+    openMenu();
+    menuItem("Star session")!.click();
+    flushSync();
+    expect(starred.isStarred("menu-star")).toBe(true);
+    expect(document.querySelector(".context-menu")).toBeNull();
+
+    openMenu();
+    expect(menuItem("Unstar session")).toBeTruthy();
+    menuItem("Expand")!.click();
+    flushSync();
+    expect(onToggleExpand).toHaveBeenCalledOnce();
+    starred.toggle("menu-star");
   });
 
   it("lets keyboard users expand a continuation chain and reports its state", () => {

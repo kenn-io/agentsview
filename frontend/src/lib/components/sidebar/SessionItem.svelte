@@ -562,6 +562,28 @@
     use:mountOverlay
     style="left: {contextMenu.x}px; top: {contextMenu.y}px;"
   >
+    <!-- Full-size equivalents of the small star and expand buttons in the
+         row's gutter, which cannot both reach 24px in a 42px row. -->
+    <button
+      class="context-menu-item"
+      onclick={() => {
+        starred.toggle(session.id);
+        closeContextMenu();
+      }}
+    >
+      {isStarred ? m.sidebar_row_unstar_session() : m.sidebar_row_star_session()}
+    </button>
+    {#if hasChildren}
+      <button
+        class="context-menu-item"
+        onclick={() => {
+          onToggleExpand?.();
+          closeContextMenu();
+        }}
+      >
+        {expanded ? m.sidebar_row_collapse() : m.sidebar_row_expand()}
+      </button>
+    {/if}
     <button class="context-menu-item" onclick={startRename}>
       {m.sidebar_row_rename()}
     </button>

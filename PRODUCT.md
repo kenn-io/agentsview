@@ -46,9 +46,9 @@ dark, and high-contrast themes, at every interface zoom level the app offers.
 
 `frontend/e2e/axe-routes.spec.ts` runs axe-core against every main route with
 the WCAG 2.2 A and AA rules and fails on any serious or critical violation,
-except one known kit-ui gap on `StatusDot` that
+with two documented exceptions: a kit-ui gap on `StatusDot` that
 [DESIGN.md](DESIGN.md#known-kit-ui-gaps-tracked-upstream) tracks with its
-removal condition.
+removal condition, and the sidebar gutter buttons described under Main routes.
 `frontend/e2e/appearance-a11y.spec.ts` and `frontend/e2e/text-contrast.spec.ts`
 cover zoom and contrast cases that axe cannot see. Automated checks catch only
 part of WCAG, so review new controls with a keyboard and a screen reader too.
@@ -78,7 +78,10 @@ part of WCAG, so review new controls with a keyboard and a screen reader too.
 
 - **Sessions list:** each session row is one link to the session. Its expand
   toggle, select checkbox, and star are separate controls beside the link, and
-  its actions open from the context menu. `[` and `]` move between sessions.
+  its actions open from the context menu. The gutter's star and expand buttons
+  are smaller than 24px because they share a 42px row; the context menu offers
+  both at full size, the equivalent-control exception in WCAG 2.5.8. `[` and
+  `]` move between sessions.
 - **Session transcript:** the header's copy, grade, and usage controls are
   buttons named by their visible text. Long tool previews are focusable
   scrolling regions with a label.

@@ -62,10 +62,15 @@ async function waitForQuietDom(page: Page): Promise<void> {
   );
 }
 
-// kit-ui's StatusDot puts aria-label on a role-less <span>. DESIGN.md tracks
-// it as a kit-ui gap; drop this filter once kit-ui gives the dot role="img".
-function isKnownKitUiGap(rule: string, target: string): boolean {
-  return rule === "aria-prohibited-attr" && target.includes(".kit-status-dot");
+// Documented exceptions, each with its reason in PRODUCT.md or DESIGN.md.
+function isDocumentedException(rule: string, target: string): boolean {
+  // kit-ui's StatusDot puts aria-label on a role-less <span>. DESIGN.md tracks
+  // it as a kit-ui gap; drop this once kit-ui gives the dot role="img".
+  if (rule === "aria-prohibited-attr" && target.includes(".kit-status-dot")) return true;
+  // The sidebar row's gutter stacks its star and expand buttons in 42px, so
+  // neither can reach 24px. The row's context menu offers both at full size,
+  // which WCAG 2.5.8 accepts as an equivalent control.
+  return rule === "target-size" && /\.(star-btn|tree-toggle)\b/.test(target);
 }
 
 async function seriousViolations(page: Page): Promise<Finding[]> {
@@ -79,7 +84,7 @@ async function seriousViolations(page: Page): Promise<Finding[]> {
       help: v.help,
       targets: v.nodes
         .map((node) => node.target.join(" "))
-        .filter((target) => !isKnownKitUiGap(v.id, target)),
+        .filter((target) => !isDocumentedException(v.id, target)),
     }))
     .filter((finding) => finding.targets.length > 0);
 }
