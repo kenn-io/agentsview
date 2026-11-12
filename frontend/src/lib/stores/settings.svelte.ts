@@ -11,8 +11,11 @@ import {
   ApiError,
   generatedErrorMessage,
   setAuthToken,
+  getAuthToken,
+  getGeneratedBase,
   getServerUrl,
   isRemoteConnection,
+  type ApiRequestOptions,
 } from "../api/runtime.js";
 import { DEFAULT_CHART_PALETTE, isChartPalette, type ChartPalette } from "../utils/chartPalette.js";
 import { insights } from "./insights.svelte.js";
@@ -20,6 +23,13 @@ import { ui } from "./ui.svelte.js";
 
 const RESTART_TIMEOUT_MS = 30_000;
 const RESTART_POLL_MS = 1_000;
+function restartTarget(): ApiRequestOptions {
+  const token = getAuthToken();
+  return {
+    baseUrl: getGeneratedBase(),
+    headers: token ? { Authorization: `Bearer ${token}` } : {},
+  };
+}
 /** Wait, resolving false instead when the signal aborts first. */
 function delay(ms: number, signal: AbortSignal): Promise<boolean> {
   return new Promise((resolve) => {
@@ -197,20 +207,25 @@ class SettingsStore {
     this.restartError = null;
     this.restartCanRetry = false;
     this.restartUncertain = false;
-    return this.runMutation(() => this.performRestart(true));
+    const target = restartTarget();
+    return this.runMutation(() => this.performRestart(true, target));
   }
 
   /** Check again for the same replacement without sending another restart. */
   checkConnection(): Promise<void> {
     if (this.restarting) return Promise.resolve();
     this.restarting = true;
-    return this.runMutation(() => this.performRestart(false));
+    const target = restartTarget();
+    return this.runMutation(() => this.performRestart(false, target));
   }
 
-  private async waitForReplacement(signal: AbortSignal): Promise<boolean> {
+  private async waitForReplacement(
+    signal: AbortSignal,
+    target: ApiRequestOptions,
+  ): Promise<boolean> {
     while (await delay(RESTART_POLL_MS, signal)) {
       try {
-        const { instance_id: id } = await HealthService.getApiPing({ signal });
+        const { instance_id: id } = await HealthService.getApiPing({ ...target, signal });
         this.restartCanRetry = this.restartUncertain && !!id && id === this.originalInstance;
         if (
           typeof id === "string" &&
@@ -229,9 +244,9 @@ class SettingsStore {
   }
 
   /** Record the running server's identity for this attempt, clearing any earlier one. */
-  private async identify(signal: AbortSignal): Promise<void> {
+  private async identify(signal: AbortSignal, target: ApiRequestOptions): Promise<void> {
     this.originalInstance = "";
-    const id = (await HealthService.getApiPing({ signal })).instance_id;
+    const id = (await HealthService.getApiPing({ ...target, signal })).instance_id;
     if (typeof id !== "string" || !id) throw new Error("Missing server identity");
     this.originalInstance = id;
   }
@@ -253,22 +268,22 @@ class SettingsStore {
   }
 
   /** Restart, or with `send` off only wait again for the replacement. */
-  private async performRestart(send: boolean): Promise<void> {
+  private async performRestart(send: boolean, target: ApiRequestOptions): Promise<void> {
     const deadline = new AbortController();
     const timer = setTimeout(() => deadline.abort(), RESTART_TIMEOUT_MS);
     let navigating = false;
     try {
       if (send) {
-        await this.identify(deadline.signal);
+        await this.identify(deadline.signal, target);
         try {
-          await DaemonService.postApiV1DaemonRestart({ signal: deadline.signal });
+          await DaemonService.postApiV1DaemonRestart({ ...target, signal: deadline.signal });
         } catch (e) {
           // A lost response may still mean the server accepted the request.
           if (e instanceof ApiError) throw e;
           this.restartUncertain = true;
         }
       }
-      if (await this.waitForReplacement(deadline.signal)) {
+      if (await this.waitForReplacement(deadline.signal, target)) {
         navigating = true;
         window.location.reload();
         return;

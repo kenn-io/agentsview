@@ -625,6 +625,73 @@ describe("SettingsStore.restartDaemon", () => {
     expect(settings.restartSupported).toBe(true);
   });
 
+  it("sends restart to the server on which the action began", async () => {
+    const generated =
+      await vi.importActual<typeof import("../api/generated/index")>("../api/generated/index");
+    ping.mockImplementation((options) => generated.HealthService.getApiPing(options));
+    restartDaemon.mockImplementation((options) =>
+      generated.DaemonService.postApiV1DaemonRestart(options),
+    );
+    setServerUrl("https://first.example");
+    localStorage.setItem("agentsview-auth-token::https://first.example", "first-token");
+    localStorage.setItem("agentsview-auth-token::https://second.example", "second-token");
+    let finishPing!: (response: Response) => void;
+    const calls: { url: string; auth: string | null }[] = [];
+    const fetchSpy = vi.spyOn(globalThis, "fetch").mockImplementation(async (url, options) => {
+      calls.push({ url: String(url), auth: new Headers(options?.headers).get("Authorization") });
+      if (calls.length === 1) return new Promise((resolve) => (finishPing = resolve));
+      return new Response(
+        JSON.stringify(calls.length === 2 ? { restarting: true } : { instance_id: "new" }),
+        {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        },
+      );
+    });
+    try {
+      const restart = settings.restartDaemon();
+      expect(finishPing).toBeDefined();
+      setServerUrl("https://second.example");
+      finishPing(
+        new Response(JSON.stringify({ instance_id: "old" }), {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        }),
+      );
+      await vi.advanceTimersByTimeAsync(1_000);
+      await restart;
+      expect(calls.map((call) => call.url)).toEqual([
+        "https://first.example/api/ping",
+        "https://first.example/api/v1/daemon/restart",
+        "https://first.example/api/ping",
+      ]);
+      expect(calls.map((call) => call.auth)).toEqual(Array(3).fill("Bearer first-token"));
+    } finally {
+      fetchSpy.mockRestore();
+    }
+  });
+
+  it("captures the server before a queued restart begins", async () => {
+    let finishSave!: () => void;
+    const save = settings.runMutation(() => new Promise<void>((resolve) => (finishSave = resolve)));
+    setServerUrl("https://first.example");
+    localStorage.setItem("agentsview-auth-token::https://first.example", "first-token");
+    ping
+      .mockResolvedValueOnce({ healthy: true, ok: true, pid: 100, instance_id: "old" })
+      .mockResolvedValueOnce({ healthy: true, ok: true, pid: 100, instance_id: "new" });
+    restartDaemon.mockResolvedValue({ restarting: true });
+    const restart = settings.restartDaemon();
+    setServerUrl("https://second.example");
+    finishSave();
+    await save;
+    await vi.advanceTimersByTimeAsync(1_000);
+    await restart;
+    expect(ping.mock.calls.at(0)?.[0]).toMatchObject({
+      baseUrl: "https://first.example",
+      headers: { Authorization: "Bearer first-token" },
+    });
+  });
+
   it("reloads when the instance changes with the same process", async () => {
     let finishSave!: () => void;
     const save = settings.runMutation(() => new Promise<void>((resolve) => (finishSave = resolve)));
@@ -746,6 +813,18 @@ describe("SettingsStore.restartDaemon", () => {
     await retry;
     expect(restartDaemon).toHaveBeenCalledTimes(2);
     expect(reload).toHaveBeenCalledOnce();
+  });
+
+  it("keeps recovery available when the server stops during an accepted restart", async () => {
+    ping.mockResolvedValueOnce({ healthy: true, ok: true, pid: 100, instance_id: "old" });
+    ping.mockRejectedValue(new TypeError("Failed to fetch"));
+    restartDaemon.mockResolvedValue({ restarting: true });
+    const restart = settings.restartDaemon();
+    await vi.advanceTimersByTimeAsync(30_000);
+    await restart;
+    expect(settings.restartFailed).toBe(true);
+    expect(settings.restartCanRetry).toBe(false);
+    expect(reload).not.toHaveBeenCalled();
   });
 
   it.each([
