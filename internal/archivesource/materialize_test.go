@@ -26,13 +26,13 @@ func TestSelectedInventoryAuthorityAndScope(t *testing.T) {
 	for _, tc := range []struct {
 		name                  string
 		covered, supplemental int
-		wantError             bool
+		wantError, deferred   bool
 	}{
-		{"covered wins over supplemental", 1, 1, false},
-		{"single supplemental", 0, 1, false},
-		{"covered conflict", 2, 0, true},
-		{"supplemental conflict", 0, 2, true},
-		{"deferred conflict", 2, 0, false},
+		{"covered wins over supplemental", 1, 1, false, false},
+		{"single supplemental", 0, 1, false, false},
+		{"covered conflict", 2, 0, true, false},
+		{"supplemental conflict", 0, 2, true, false},
+		{"deferred conflict", 2, 0, false, true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			conn, err := sql.Open("sqlite3", ":memory:")
@@ -56,7 +56,7 @@ func TestSelectedInventoryAuthorityAndScope(t *testing.T) {
 			}
 			insert("root", "project/sibling/subagents/agent.jsonl", strings.Repeat("e", 64), true)
 			insert("other", "project/id/subagents/other.json", strings.Repeat("f", 64), true)
-			if tc.name == "deferred conflict" {
+			if tc.deferred {
 				rows, err := conn.QueryContext(t.Context(), `SELECT path,sha256,size,mod_time_ns,covered FROM raw_archive_files WHERE root_id=? AND (path=? OR path=?) ORDER BY path`, "root", primary, "project/id/subagents/meta.json")
 				require.NoError(t, err)
 				conflicts := map[string]bool{}

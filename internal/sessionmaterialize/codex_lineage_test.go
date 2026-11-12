@@ -60,8 +60,13 @@ func TestCodexLineageIncludesParentThreadAndCompressedPage(t *testing.T) {
 	files[live] = []byte("corrupt")
 	files[archive] = last
 	_, err = codexLineage(t.Context(), thread, []string{parentName, firstName, live, archive}, read)
-	require.Error(t, err)
+	require.ErrorContains(t, err, "metadata")
+	delete(files, live)
+	delete(files, archive)
+	delete(files, duplicate)
 	_, err = codexLineage(t.Context(), thread, append(names, "rollout-invalid-"+thread+".jsonl"), read)
+	require.NoError(t, err)
+	_, err = codexLineage(t.Context(), thread, []string{"rollout-invalid-" + thread + ".jsonl"}, read)
 	require.ErrorContains(t, err, "date")
 	files[firstName] = []byte(fmt.Sprintf(`{"type":"session_meta","payload":{"id":%q,"history_mode":"paginated","history_base":{"thread_id":%q,"end_ordinal_exclusive":1,"end_byte_offset":9999}}}`+"\n", thread, parent))
 	_, err = codexLineage(t.Context(), thread, names, read)
@@ -99,10 +104,29 @@ func TestCodexLegacyFilenameAndInvalidLineage(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, data, page.data)
 	revert := "22222222-2222-4222-8222-222222222222"
-	revertName := "rollout-20240115-" + id + "_" + revert + ".jsonl"
+	revertName := "rollout-2024-01-15T00-00-00-" + id + "_" + revert + ".jsonl"
 	legacy := []byte(fmt.Sprintf(`{"type":"session_meta","payload":{"id":%q,"session_id":%q}}`, revert, id))
 	_, err = inspectCodexPage(t.Context(), revertName, legacy)
 	require.NoError(t, err)
-	_, err = codexLineage(t.Context(), id, []string{name, "elsewhere/" + name}, func(context.Context, string, int64) ([]byte, error) { return data, nil })
-	require.ErrorContains(t, err, "ambiguous")
+	for _, mode := range []string{`null`, `""`, `"future"`, `1`} {
+		_, err := inspectCodexPage(t.Context(), name, []byte(fmt.Sprintf(`{"type":"session_meta","payload":{"id":%q,"history_mode":%s}}`, id, mode)))
+		require.ErrorContains(t, err, "history mode")
+	}
+	_, err = inspectCodexPage(t.Context(), "rollout-20240115-"+id+"_"+revert+".jsonl", legacy)
+	require.ErrorContains(t, err, "canonical")
+	paginated := []byte(fmt.Sprintf(`{"type":"session_meta","payload":{"id":%q,"session_id":%q,"history_mode":"paginated"}}`, revert, id))
+	_, err = codexLineage(t.Context(), id, []string{revertName}, func(context.Context, string, int64) ([]byte, error) { return paginated, nil })
+	require.ErrorContains(t, err, "identity")
+	canonical := "rollout-2024-01-15T00-00-00-" + id + ".jsonl"
+	pages, err := codexLineage(t.Context(), id, []string{name, canonical}, func(context.Context, string, int64) ([]byte, error) { return data, nil })
+	require.NoError(t, err)
+	assert.Equal(t, canonical, pages[0].name)
+	later := "rollout-2024-01-15T03-00-00-" + id + ".jsonl"
+	pages, err = codexLineage(t.Context(), id, []string{canonical, later}, func(context.Context, string, int64) ([]byte, error) { return data, nil })
+	require.NoError(t, err)
+	assert.Equal(t, later, pages[0].name)
+	tied := "rollout-2024-01-15T00-00-00-" + id + "_" + revert + ".jsonl"
+	pages, err = codexLineage(t.Context(), id, []string{canonical, tied}, func(context.Context, string, int64) ([]byte, error) { return data, nil })
+	require.NoError(t, err)
+	assert.Equal(t, tied, pages[0].name)
 }

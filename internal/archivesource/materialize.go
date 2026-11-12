@@ -166,75 +166,29 @@ func materializeSnapshot(ctx context.Context, sources []config.ArchiveSource, ow
 	var entries []rawsync.Entry
 	var conflicts map[string]bool
 	if use != nil {
+		var duplicate bool
+		err = conn.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM raw_archive_roots WHERE device_id=? AND provider='codex' AND original_path=? AND id<>?)`, s.DeviceID, originalRoot, s.RootID).Scan(&duplicate)
+		if err != nil {
+			return nil, "", "", err
+		}
+		if duplicate {
+			return nil, "", "", errors.New("ambiguous snapshot root coordinates")
+		}
+		rows, err := conn.QueryContext(ctx, `SELECT path,sha256,size,mod_time_ns,covered FROM raw_archive_files WHERE root_id=? AND (path LIKE '%.jsonl' OR path LIKE '%.jsonl.zst') ORDER BY path`, s.RootID)
+		if err != nil {
+			return nil, "", "", err
+		}
 		conflicts = make(map[string]bool)
-		portable := func(name string) string { return path.Clean(strings.ReplaceAll(name, `\`, "/")) }
-		ownerRoot := portable(originalRoot)
-		home := ownerRoot
-		if base := path.Base(home); base == "sessions" || base == "archived_sessions" {
-			home = path.Dir(home)
+		items, err := inventoryEntries(rows, bound, conflicts)
+		if err != nil {
+			return nil, "", "", err
 		}
-		rows, queryErr := conn.QueryContext(ctx, `SELECT id,original_path FROM raw_archive_roots WHERE device_id=? AND provider='codex'`, s.DeviceID)
-		if queryErr != nil {
-			return nil, "", "", queryErr
-		}
-		type inventoryRoot struct{ id, original, prefix string }
-		var roots []inventoryRoot
-		coordinates := make(map[string]string)
-		for rows.Next() {
-			var root inventoryRoot
-			if err := rows.Scan(&root.id, &root.original); err != nil {
-				rows.Close()
-				return nil, "", "", err
+		for _, entry := range items {
+			name := entry.Path
+			if path.IsAbs(name) || path.Clean(name) != name || name == ".." || strings.HasPrefix(name, "../") || strings.Contains(name, `\`) {
+				return nil, "", "", errors.New("invalid saved rollout path")
 			}
-			root.original = portable(root.original)
-			if root.original != home && !(path.Dir(root.original) == home && (path.Base(root.original) == "sessions" || path.Base(root.original) == "archived_sessions")) {
-				continue
-			}
-			if old := coordinates[root.original]; old != "" && old != root.id {
-				rows.Close()
-				return nil, "", "", errors.New("ambiguous snapshot root coordinates")
-			}
-			coordinates[root.original] = root.id
-			if root.original != home {
-				root.prefix = path.Base(root.original)
-			}
-			roots = append(roots, root)
-		}
-		queryErr = errors.Join(rows.Err(), rows.Close())
-		if queryErr != nil {
-			return nil, "", "", queryErr
-		}
-		seenPaths := make(map[string]string)
-		for _, root := range roots {
-			rows, queryErr := conn.QueryContext(ctx, `SELECT path,sha256,size,mod_time_ns,covered FROM raw_archive_files WHERE root_id=? AND (path LIKE '%.jsonl' OR path LIKE '%.jsonl.zst') ORDER BY path`, root.id)
-			if queryErr != nil {
-				return nil, "", "", queryErr
-			}
-			var rootBound rawsync.Entry
-			if root.id == s.RootID {
-				rootBound = bound
-			}
-			rootConflicts := make(map[string]bool)
-			items, queryErr := inventoryEntries(rows, rootBound, rootConflicts)
-			if queryErr != nil {
-				return nil, "", "", queryErr
-			}
-			for _, entry := range items {
-				oldPath := entry.Path
-				if path.IsAbs(oldPath) || path.Clean(oldPath) != oldPath || oldPath == ".." || strings.HasPrefix(oldPath, "../") || strings.Contains(oldPath, `\`) {
-					return nil, "", "", errors.New("invalid saved rollout path")
-				}
-				entry.Path = path.Join(root.prefix, entry.Path)
-				if !strings.HasPrefix(entry.Path, "sessions/") && !strings.HasPrefix(entry.Path, "archived_sessions/") {
-					continue
-				}
-				if prior := seenPaths[entry.Path]; prior != "" && prior != root.id {
-					return nil, "", "", errors.New("ambiguous snapshot root coordinates")
-				}
-				seenPaths[entry.Path] = root.id
-				if rootConflicts[oldPath] {
-					conflicts[entry.Path] = true
-				}
+			if strings.HasPrefix(name, "sessions/") || strings.HasPrefix(name, "archived_sessions/") {
 				entries = append(entries, entry)
 			}
 		}
@@ -362,7 +316,7 @@ func inventoryEntries(rows *sql.Rows, bound rawsync.Entry, conflicts map[string]
 	if err := rows.Err(); err != nil {
 		return nil, err
 	}
-	if bound.Path != "" && len(choices[bound.Path].covered) != 1 {
+	if len(choices[bound.Path].covered) != 1 {
 		return nil, errors.New("saved transcript does not match snapshot")
 	}
 	var entries []rawsync.Entry

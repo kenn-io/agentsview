@@ -97,7 +97,7 @@ func FindCodexS3ParentSessionObjects(
 		if CodexThreadIDFromSessionKey(key) != parentID {
 			continue
 		}
-		if current, seen := byKey[key]; !seen || CodexS3URIPreferred(obj.URI, current.URI) {
+		if current, seen := byKey[key]; !seen || codexS3URIPreferred(obj.URI, current.URI) {
 			byKey[key] = obj
 		}
 	}
@@ -131,10 +131,10 @@ func codexS3PreferredFiles(files []DiscoveredFile) []DiscoveredFile {
 	return kept
 }
 
-// CodexS3URIPreferred reports whether a should replace b as the copy of one
+// codexS3URIPreferred reports whether a should replace b as the copy of one
 // session: live layout before archived, plain before compressed, then the
 // lexically smaller URI.
-func CodexS3URIPreferred(a, b string) bool {
+func codexS3URIPreferred(a, b string) bool {
 	aArchived := strings.Contains(a, "/archived_sessions/")
 	bArchived := strings.Contains(b, "/archived_sessions/")
 	if aArchived != bArchived {

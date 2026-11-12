@@ -118,7 +118,7 @@ func TestMaterializeSnapshotInstallsCapturedCompanions(t *testing.T) {
 		dbtest.WriteTestFile(t, filepath.Join(data, "telemetry-install-id"), []byte(device))
 		codexHome := filepath.Join(root, "codex")
 		live := filepath.Join(codexHome, "sessions")
-		parentName := "rollout-20240115-" + parent + ".jsonl"
+		parentName := "rollout-2024-01-15T00-00-00-" + parent + ".jsonl"
 		pageName := "rollout-2026-01-01T00-00-00-" + thread + ".jsonl"
 		ancestor := testjsonl.JoinJSONL(testjsonl.CodexSessionMetaWithFieldsJSON(parent, "/work", "codex_cli_rs", "2024-01-15T00:00:00Z", map[string]any{"history_mode": "paginated"}), testjsonl.CodexMsgJSON("user", "ancestor", "2024-01-15T00:00:01Z"))
 		page := testjsonl.JoinJSONL(testjsonl.CodexSessionMetaWithFieldsJSON(thread, "/work", "codex_cli_rs", "2026-01-01T00:00:00Z", map[string]any{"history_mode": "paginated", "history_base": map[string]any{"thread_id": parent, "end_ordinal_exclusive": 1, "end_byte_offset": 1}}), testjsonl.CodexMsgJSON("user", "question", "2026-01-01T00:00:01Z"))

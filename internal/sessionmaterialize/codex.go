@@ -1,9 +1,11 @@
 package sessionmaterialize
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
+	"io/fs"
 	"os"
 	"path"
 	"path/filepath"
@@ -54,13 +56,14 @@ func materializeCodex(ctx context.Context, cfg config.Config, database *db.DB, s
 	var names []string
 	var read func(context.Context, string, int64) ([]byte, error)
 	var closeSource func() error
-	if host != "" && strings.HasPrefix(source, "s3://") {
+	if host != "" && host != session.Machine && strings.HasPrefix(source, "s3://") {
 		return Result{}, errors.New("native Codex S3 source host differs")
 	}
 	if strings.HasPrefix(source, "s3://") {
 		root := ""
+		var matchingRoots []string
 		for _, candidate := range cfg.ResolveDirs(parser.AgentCodex) {
-			if !strings.HasPrefix(candidate, "s3://") || !strings.HasPrefix(source, strings.TrimSuffix(candidate, "/")+"/") {
+			if !strings.HasPrefix(candidate, "s3://") {
 				continue
 			}
 			machine := parser.S3MachineFromRoot(candidate, parser.AgentCodex)
@@ -70,8 +73,11 @@ func materializeCodex(ctx context.Context, cfg config.Config, database *db.DB, s
 					machine = cfg.InstallationID
 				}
 			}
-			if machine == session.Machine && len(candidate) > len(root) {
-				root = candidate
+			if machine == session.Machine {
+				matchingRoots = append(matchingRoots, candidate)
+				if strings.HasPrefix(source, strings.TrimSuffix(candidate, "/")+"/") && len(candidate) > len(root) {
+					root = candidate
+				}
 			}
 		}
 		p, valid := parser.S3ProviderFor(parser.AgentCodex)
@@ -81,16 +87,9 @@ func materializeCodex(ctx context.Context, cfg config.Config, database *db.DB, s
 		roots := []string{root}
 		base := path.Base(root)
 		if base == "sessions" || base == "archived_sessions" {
-			for _, candidate := range cfg.ResolveDirs(parser.AgentCodex) {
-				machine := parser.S3MachineFromRoot(candidate, parser.AgentCodex)
-				if machine == "" {
-					machine = cfg.SourceMachines[parser.AgentCodex][candidate]
-					if machine == "" {
-						machine = cfg.InstallationID
-					}
-				}
+			for _, candidate := range matchingRoots {
 				other := path.Base(candidate)
-				if candidate != root && strings.HasPrefix(candidate, "s3://") && path.Dir(candidate) == path.Dir(root) && (other == "sessions" || other == "archived_sessions") && machine == session.Machine {
+				if candidate != root && path.Dir(candidate) == path.Dir(root) && (other == "sessions" || other == "archived_sessions") {
 					roots = append(roots, candidate)
 				}
 			}
@@ -163,10 +162,7 @@ func materializeCodex(ctx context.Context, cfg config.Config, database *db.DB, s
 			}()
 			roots = []string{root}
 			if base := filepath.Base(root); base == "sessions" || base == "archived_sessions" {
-				other := "sessions"
-				if base == other {
-					other = "archived_sessions"
-				}
+				other := map[string]string{"sessions": "archived_sessions", "archived_sessions": "sessions"}[base]
 				sibling := filepath.Join(filepath.Dir(root), other)
 				if _, err := os.Lstat(sibling); err == nil {
 					if !within(mirror, sibling) {
@@ -254,6 +250,47 @@ func installCodex(ctx context.Context, cwd, source, requestedID string, pages []
 		dest := filepath.Join(root, filepath.FromSlash(date), path.Base(page.name))
 		files = append(files, installFile{dest, page.data})
 		paths = append(paths, dest)
+	}
+	// Native lookup can find the same rollout in either tree, under another
+	// date or compression spelling. Refuse different raw bytes before writing.
+	for _, nativeRoot := range []string{root, filepath.Join(filepath.Dir(root), "archived_sessions")} {
+		if info, err := os.Lstat(nativeRoot); errors.Is(err, os.ErrNotExist) {
+			continue
+		} else if err != nil {
+			return Result{}, err
+		} else if !info.IsDir() {
+			return Result{}, fmt.Errorf("invalid native Codex root: %s", nativeRoot)
+		}
+		err := filepath.WalkDir(nativeRoot, func(name string, entry fs.DirEntry, walkErr error) error {
+			if walkErr != nil {
+				return walkErr
+			}
+			if err := ctx.Err(); err != nil {
+				return err
+			}
+			key := parser.CodexSessionUUIDFromFilename(entry.Name())
+			thread := parser.CodexThreadIDFromSessionKey(key)
+			rollout := strings.TrimPrefix(key, thread+"_")
+			for _, page := range pages {
+				if key == "" || rollout != page.rollout {
+					continue
+				}
+				if !entry.Type().IsRegular() {
+					return fmt.Errorf("invalid native Codex destination: %s", name)
+				}
+				data, err := readStableFile(ctx, nativeRoot, name, maxSourceBytes)
+				if err != nil {
+					return err
+				}
+				if !bytes.Equal(data, page.data) {
+					return fmt.Errorf("native Codex destination differs: %s", name)
+				}
+			}
+			return nil
+		})
+		if err != nil {
+			return Result{}, err
+		}
 	}
 	changed, err := publishFiles(ctx, files)
 	if err != nil {

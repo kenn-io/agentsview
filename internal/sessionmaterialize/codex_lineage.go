@@ -4,7 +4,8 @@ import (
 	"bufio"
 	"bytes"
 	"context"
-	"encoding/json"
+	"encoding/json/jsontext"
+	"encoding/json/v2"
 	"errors"
 	"fmt"
 	"io"
@@ -78,25 +79,37 @@ func inspectCodexPage(ctx context.Context, name string, data []byte) (codexPage,
 		Payload struct {
 			ID        string         `json:"id"`
 			SessionID string         `json:"session_id"`
-			Mode      string         `json:"history_mode"`
+			Mode      jsontext.Value `json:"history_mode"`
 			Base      *codexPosition `json:"history_base"`
 		} `json:"payload"`
 	}
-	if err := json.Unmarshal(line, &record); err != nil || record.Type != "session_meta" {
+	if err := json.Unmarshal(line, &record, jsontext.AllowDuplicateNames(true), jsontext.AllowInvalidUTF8(true)); err != nil || record.Type != "session_meta" {
 		return codexPage{}, errors.New("invalid Codex session metadata")
+	}
+	mode := "legacy"
+	if record.Payload.Mode != nil {
+		if bytes.Equal(bytes.TrimSpace(record.Payload.Mode), []byte("null")) {
+			return codexPage{}, errors.New("invalid native Codex history mode")
+		}
+		if err := json.Unmarshal(record.Payload.Mode, &mode); err != nil || (mode != "legacy" && mode != "paginated") {
+			return codexPage{}, errors.New("invalid native Codex history mode")
+		}
+	}
+	if (mode == "paginated" || record.Payload.Base != nil || key != thread) && codexTimestamp(name) == "" {
+		return codexPage{}, errors.New("native Codex lineage requires canonical filename")
 	}
 	// Early revert pages recorded the rollout ID as id and the thread as
 	// session_id; newer producers record the thread in id.
 	if record.Payload.ID != thread && !(record.Payload.ID == rollout && record.Payload.SessionID == thread) {
 		return codexPage{}, errors.New("native Codex rollout identity differs")
 	}
-	if record.Payload.Base != nil && record.Payload.Mode != "paginated" {
+	if record.Payload.Base != nil && mode != "paginated" {
 		return codexPage{}, errors.New("native Codex lineage requires paginated history")
 	}
 	if record.Payload.Base != nil && (!capture.ValidUUID(record.Payload.Base.Rollout) || record.Payload.Base.Ordinal == 0 || record.Payload.Base.Ordinal == ^uint64(0)) {
 		return codexPage{}, errors.New("invalid Codex history base")
 	}
-	return codexPage{name: name, thread: thread, rollout: rollout, data: data, mode: record.Payload.Mode, base: record.Payload.Base, decodedSize: uint64(len(line)) + uint64(remaining)}, nil
+	return codexPage{name: name, thread: record.Payload.ID, rollout: rollout, data: data, mode: mode, base: record.Payload.Base, decodedSize: uint64(len(line)) + uint64(remaining)}, nil
 }
 
 // codexLineage validates every ancestor before returning files in publication
@@ -107,9 +120,13 @@ func codexLineage(ctx context.Context, thread string, names []string, read func(
 		rank        int
 		ambiguous   bool
 		invalidDate bool
+		stamp       string
+		canonical   bool
 	}
 	byRollout := make(map[string]choice)
-	var newest, newestDate, newestRollout string
+	var newest, newestStamp, newestRollout string
+	var newestCanonical bool
+	var invalidRequested bool
 	for _, name := range names {
 		key := parser.CodexSessionUUIDFromFilename(path.Base(name))
 		if key == "" {
@@ -119,7 +136,7 @@ func codexLineage(ctx context.Context, thread string, names []string, read func(
 		rollout := strings.TrimPrefix(key, threadID+"_")
 		date, dateErr := codexDate(name)
 		if dateErr != nil && threadID == thread {
-			return nil, dateErr
+			invalidRequested = true
 		}
 		rank := 0
 		if strings.Contains("/"+name, "/archived_sessions/") {
@@ -128,19 +145,28 @@ func codexLineage(ctx context.Context, thread string, names []string, read func(
 		if strings.HasSuffix(name, ".zst") {
 			rank++
 		}
+		stamp := codexTimestamp(name)
+		canonical := stamp != ""
+		if !canonical {
+			stamp = date
+		}
 		current := byRollout[rollout]
-		if current.name == "" || rank < current.rank {
-			current = choice{name: name, rank: rank, invalidDate: dateErr != nil}
-		} else if rank == current.rank && name != current.name {
+		newer := threadID == thread && dateErr == nil && (current.invalidDate || (canonical && !current.canonical) || (canonical == current.canonical && stamp > current.stamp))
+		older := threadID == thread && !current.invalidDate && (dateErr != nil || (!canonical && current.canonical) || (canonical == current.canonical && stamp < current.stamp))
+		if current.name == "" || newer || (!older && rank < current.rank) {
+			current = choice{name: name, rank: rank, invalidDate: dateErr != nil, stamp: stamp, canonical: canonical}
+		} else if !older && rank == current.rank && name != current.name {
 			current.ambiguous = true
 		}
 		byRollout[rollout] = current
-		base := strings.TrimSuffix(path.Base(name), ".zst")
-		if dateErr == nil && threadID == thread && (newest == "" || date > newestDate || (date == newestDate && base > strings.TrimSuffix(path.Base(newest), ".zst"))) {
-			newest, newestDate, newestRollout = name, date, rollout
+		if dateErr == nil && threadID == thread && (newest == "" || (canonical && !newestCanonical) || (canonical == newestCanonical && (stamp > newestStamp || (stamp == newestStamp && rollout > newestRollout)))) {
+			newest, newestStamp, newestRollout, newestCanonical = name, stamp, rollout, canonical
 		}
 	}
 	if newest == "" {
+		if invalidRequested {
+			return nil, errors.New("invalid Codex rollout date")
+		}
 		return nil, errors.New("native Codex transcript is unavailable")
 	}
 	seen := make(map[string]bool)
@@ -168,6 +194,12 @@ func codexLineage(ctx context.Context, thread string, names []string, read func(
 		page, err := inspectCodexPage(ctx, name, data)
 		if err != nil {
 			return nil, err
+		}
+		if cutoff == nil && page.mode == "paginated" && page.thread != thread {
+			return nil, errors.New("native Codex rollout identity differs")
+		}
+		if cutoff != nil && codexTimestamp(name) == "" {
+			return nil, errors.New("native Codex lineage requires canonical filename")
 		}
 		if seen[page.rollout] {
 			return nil, errors.New("native Codex lineage cycle")
@@ -208,4 +240,18 @@ func codexDate(name string) (string, error) {
 		}
 	}
 	return "", errors.New("invalid Codex rollout date")
+}
+
+// codexTimestamp returns the full timestamp only for native canonical names.
+func codexTimestamp(name string) string {
+	base := path.Base(name)
+	key := parser.CodexSessionUUIDFromFilename(base)
+	if key == "" {
+		return ""
+	}
+	stamp := strings.TrimPrefix(base[:strings.LastIndex(base, "-"+key)], "rollout-")
+	if _, err := time.Parse("2006-01-02T15-04-05", stamp); err != nil {
+		return ""
+	}
+	return stamp
 }

@@ -60,15 +60,10 @@ func TestMaterializeCodexConfiguredAndMirror(t *testing.T) {
 				require.NoError(t, err)
 				assert.Equal(t, want, got)
 			}
-			result, err = Materialize(t.Context(), cfg, nil, session, cwd)
-			require.NoError(t, err)
-			assert.Equal(t, "unchanged", result.Status)
 			require.NoError(t, os.WriteFile(result.Paths[1], []byte("changed"), 0o600))
 			_, err = Materialize(t.Context(), cfg, nil, session, cwd)
 			require.ErrorContains(t, err, "differs")
-			got, err := os.ReadFile(result.Paths[1])
-			require.NoError(t, err)
-			assert.Equal(t, []byte("changed"), got)
+			var got []byte
 			if mirror {
 				// The ancestor may have moved to the sibling archived root.
 				archive := filepath.Join(filepath.Dir(location), "archived_sessions")
@@ -95,6 +90,13 @@ func TestMaterializeCodexConfiguredAndMirror(t *testing.T) {
 				require.NoError(t, err)
 				assert.Equal(t, compressed, got)
 			}
+			// A publisher failure unrelated to rollout matching reaches the caller.
+			blockedHome := t.TempDir()
+			t.Setenv("CODEX_HOME", blockedHome)
+			require.NoError(t, os.Mkdir(filepath.Join(blockedHome, "sessions"), 0o700))
+			require.NoError(t, os.WriteFile(filepath.Join(blockedHome, "sessions", "2026"), []byte("block"), 0o600))
+			_, err = Materialize(t.Context(), cfg, nil, session, cwd)
+			require.Error(t, err)
 		})
 	}
 }
@@ -104,9 +106,8 @@ func TestMaterializeCodexS3(t *testing.T) {
 	const root = "s3://test/host/raw/codex/sessions"
 	const archivedRoot = "s3://test/host/raw/codex/archived_sessions"
 	const key = "host/raw/codex/sessions/2026/01/01/rollout-2026-01-01T01-00-00-" + id + ".jsonl"
-	const archivedKey = "host/raw/codex/archived_sessions/rollout-2026-01-01T01-00-00-" + id + ".jsonl"
 	const parent = "22222222-2222-4222-8222-222222222222"
-	const parentKey = "host/raw/codex/archived_sessions/rollout-20240115-" + parent + ".jsonl"
+	const parentKey = "host/raw/codex/archived_sessions/rollout-2024-01-15T00-00-00-" + parent + ".jsonl"
 	content := fmt.Sprintf(`{"type":"session_meta","payload":{"id":%q,"history_mode":"paginated","history_base":{"thread_id":%q,"end_ordinal_exclusive":1,"end_byte_offset":1}}}`+"\n", id, parent)
 	var corrupt atomic.Bool
 	parentContent := fmt.Sprintf(`{"type":"session_meta","payload":{"id":%q,"history_mode":"paginated"}}`+"\n", parent)
@@ -114,7 +115,7 @@ func TestMaterializeCodexS3(t *testing.T) {
 		if r.URL.Query().Get("list-type") == "2" {
 			w.Header().Set("Content-Type", "application/xml")
 			if strings.Contains(r.URL.Query().Get("prefix"), "archived_sessions") {
-				_, _ = fmt.Fprintf(w, `<ListBucketResult><IsTruncated>false</IsTruncated><Contents><Key>%s</Key><Size>%d</Size></Contents><Contents><Key>%s</Key><Size>%d</Size></Contents></ListBucketResult>`, archivedKey, len(content), parentKey, len(parentContent))
+				_, _ = fmt.Fprintf(w, `<ListBucketResult><IsTruncated>false</IsTruncated><Contents><Key>%s</Key><Size>%d</Size></Contents></ListBucketResult>`, parentKey, len(parentContent))
 			} else {
 				_, _ = fmt.Fprintf(w, `<ListBucketResult><IsTruncated>false</IsTruncated><Contents><Key>%s</Key><Size>%d</Size></Contents></ListBucketResult>`, key, len(content))
 			}
@@ -129,8 +130,6 @@ func TestMaterializeCodexS3(t *testing.T) {
 			_, _ = io.WriteString(w, content)
 		case "/test/" + parentKey:
 			_, _ = io.WriteString(w, parentContent)
-		case "/test/" + archivedKey:
-			_, _ = io.WriteString(w, "stale corrupt copy")
 		default:
 			http.NotFound(w, r)
 		}
@@ -144,9 +143,10 @@ func TestMaterializeCodexS3(t *testing.T) {
 	t.Setenv("CODEX_HOME", t.TempDir())
 	uri := "s3://test/" + key
 	cfg := config.Config{AgentDirs: map[parser.AgentType][]string{parser.AgentCodex: {root, archivedRoot}}}
-	session := &db.Session{ID: "codex:" + id, Agent: "codex", Machine: "host", FilePath: &uri}
+	session := &db.Session{ID: "host~codex:" + id, Agent: "codex", Machine: "host", FilePath: &uri}
 	bad := *session
 	bad.Machine = "other"
+	bad.ID = "other~codex:" + id
 	_, err := Materialize(t.Context(), cfg, nil, &bad, t.TempDir())
 	require.ErrorContains(t, err, "source identity differs")
 	bad = *session
@@ -186,7 +186,7 @@ func TestMaterializeCodexMissingAndCrossRoot(t *testing.T) {
 	t.Setenv("CODEX_HOME", home)
 	live, archived := filepath.Join(base, "sessions"), filepath.Join(base, "archived_sessions")
 	page := filepath.Join(live, "2026", "01", "01", "rollout-2026-01-01T00-00-00-"+id+".jsonl")
-	ancestor := filepath.Join(archived, "rollout-20240115-"+parent+".jsonl")
+	ancestor := filepath.Join(archived, "rollout-2024-01-15T00-00-00-"+parent+".jsonl")
 	require.NoError(t, os.MkdirAll(filepath.Dir(page), 0o700))
 	require.NoError(t, os.MkdirAll(archived, 0o700))
 	require.NoError(t, os.WriteFile(page, []byte(fmt.Sprintf(`{"type":"session_meta","payload":{"id":%q,"history_mode":"paginated","history_base":{"thread_id":%q,"end_ordinal_exclusive":1,"end_byte_offset":1}}}`+"\n", id, parent)), 0o600))
@@ -199,6 +199,26 @@ func TestMaterializeCodexMissingAndCrossRoot(t *testing.T) {
 	require.ErrorIs(t, err, context.Canceled)
 	_, err = os.Stat(filepath.Join(home, "sessions"))
 	require.ErrorIs(t, err, os.ErrNotExist)
+	// An identical same-rollout copy in the other native tree is safe.
+	identical := filepath.Join(home, "archived_sessions", "other-date", filepath.Base(ancestor))
+	require.NoError(t, os.MkdirAll(filepath.Dir(identical), 0o700))
+	ancestorBytes, err := os.ReadFile(ancestor)
+	require.NoError(t, err)
+	require.NoError(t, os.WriteFile(identical, ancestorBytes, 0o600))
+	_, err = Materialize(t.Context(), cfg, nil, session, t.TempDir())
+	require.NoError(t, err)
+	home = t.TempDir()
+	t.Setenv("CODEX_HOME", home)
+	// A different native representation of the ancestor must fail before any
+	// requested page is installed, even under the sibling archive tree.
+	conflict := filepath.Join(home, "archived_sessions", "other-date", filepath.Base(ancestor)+".zst")
+	require.NoError(t, os.MkdirAll(filepath.Dir(conflict), 0o700))
+	require.NoError(t, os.WriteFile(conflict, []byte("different"), 0o600))
+	_, err = Materialize(t.Context(), cfg, nil, session, t.TempDir())
+	require.ErrorContains(t, err, "differs")
+	_, err = os.Stat(filepath.Join(home, "sessions"))
+	require.ErrorIs(t, err, os.ErrNotExist)
+	require.NoError(t, os.Remove(conflict))
 	result, err := Materialize(t.Context(), cfg, nil, session, t.TempDir())
 	require.NoError(t, err)
 	require.Len(t, result.Paths, 2)

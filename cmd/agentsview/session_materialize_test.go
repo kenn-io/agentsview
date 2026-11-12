@@ -167,6 +167,7 @@ func TestCodexMaterializeCommand(t *testing.T) {
 	}
 	require.NoError(t, json.Unmarshal([]byte(output), &result))
 	assert.Equal(t, "codex:"+id, result.RequestedID)
+	assert.Equal(t, filepath.Base(name), result.InstalledPage)
 	want := "codex resume " + id + " -C '" + cwd + "'"
 	if runtime.GOOS == "windows" {
 		want = "codex resume '" + id + "' -C '" + cwd + "'"
