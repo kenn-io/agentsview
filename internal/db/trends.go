@@ -63,7 +63,12 @@ func (db *DB) GetTrendsTerms(
 	if granularity == "" {
 		granularity = "week"
 	}
-	acc := NewTrendAccumulator(f.From, f.To, granularity, terms)
+	acc := NewTrendWorkers(ctx, f.From, f.To, granularity, terms)
+	defer func() {
+		if acc != nil {
+			_, _ = acc.Finish()
+		}
+	}()
 	loc := f.location()
 	sessionFilter := f
 	sessionFilter.From = ""
@@ -96,9 +101,12 @@ func (db *DB) GetTrendsTerms(
 		args = append(args, wargs...)
 	}
 	args = append(selectArgs, args...)
-	query := `SELECT m.session_id, m.ordinal, m.role, m.is_system,
-			m.model, ` + content + `, COALESCE(m.timestamp, ''),
-			COALESCE(s.started_at, ''), s.created_at
+	columns := `m.content, agentsview_trend_timestamp(COALESCE(m.timestamp, ''), COALESCE(s.started_at, ''), COALESCE(s.created_at, ''))`
+	if modelFiltering {
+		columns = `m.session_id, m.ordinal, m.role, m.is_system,
+			m.model, ` + content + `, COALESCE(m.timestamp, ''), COALESCE(s.started_at, ''), s.created_at`
+	}
+	query := `SELECT ` + columns + `
 		FROM sessions s
 		JOIN messages m ON m.session_id = s.id
 		WHERE ` + where + `
@@ -123,31 +131,27 @@ func (db *DB) GetTrendsTerms(
 		startedAt string
 		createdAt string
 	}
-	processRow := func(row trendRow) {
-		msgTime, ok := trendMessageLocalTime(row.msgTS, row.startedAt, row.createdAt, loc)
-		if !ok {
-			return
-		}
-		acc.Add(row.content, msgTime)
-	}
-	rowStartedAt := make(map[string]string)
-	rowCreatedAt := make(map[string]string)
 	emit := func(m ScopedMessage) {
-		processRow(trendRow{
-			sessionID: m.SessionID,
-			role:      m.Role,
-			isSystem:  m.IsSystem,
-			content:   m.Content,
-			msgTS:     m.Timestamp,
-			startedAt: rowStartedAt[m.SessionID],
-			createdAt: rowCreatedAt[m.SessionID],
-		})
+		if m.HasLocalTime {
+			acc.Add(m.Content, m.LocalTime)
+		}
 	}
 	reducer := NewScopeReducer(flt, emit)
 
 	for rows.Next() {
 		var row trendRow
 		var ordinal int
+		if !modelFiltering {
+			var timestamp string
+			if err := rows.Scan(&row.content, &timestamp); err != nil {
+				return TrendsTermsResponse{}, fmt.Errorf("scanning trends term row: %w", err)
+			}
+			local, ok := LocalTime(timestamp, loc)
+			if ok && flt.MatchesDayHour(local, true) {
+				acc.Add(row.content, local)
+			}
+			continue
+		}
 		if err := rows.Scan(
 			&row.sessionID, &ordinal, &row.role, &row.isSystem,
 			&row.model, &row.content, &row.msgTS, &row.startedAt,
@@ -155,15 +159,7 @@ func (db *DB) GetTrendsTerms(
 		); err != nil {
 			return TrendsTermsResponse{}, fmt.Errorf("scanning trends term row: %w", err)
 		}
-		if !modelFiltering {
-			msgTime, ok := trendMessageLocalTime(row.msgTS, row.startedAt, row.createdAt, loc)
-			if ok && flt.MatchesDayHour(msgTime, true) {
-				processRow(row)
-			}
-			continue
-		}
-		rowStartedAt[row.sessionID] = row.startedAt
-		rowCreatedAt[row.sessionID] = row.createdAt
+
 		msgTime, has := trendMessageLocalTime(row.msgTS, row.startedAt, row.createdAt, loc)
 		if err := reducer.Push(MessageInput{
 			SessionID:    row.sessionID,
@@ -183,7 +179,9 @@ func (db *DB) GetTrendsTerms(
 		return TrendsTermsResponse{}, fmt.Errorf("iterating trends term rows: %w", err)
 	}
 
-	return acc.Response(), nil
+	response, err := acc.Finish()
+	acc = nil
+	return response, err
 }
 
 // TrendAccumulator counts term occurrences per trend bucket. Backends feed it
