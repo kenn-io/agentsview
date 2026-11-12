@@ -214,7 +214,7 @@ func TestMaterializeSnapshotEquivalentCandidates(t *testing.T) {
 		{"archive", func(p *db.ArchiveSessionProvenance) { p.Source.ArchiveID = "wrong" }, "snapshot archive identity differs"},
 		{"root", func(p *db.ArchiveSessionProvenance) { p.Source.RootID = "wrong" }, "snapshot source ownership"},
 		{"manifest", func(p *db.ArchiveSessionProvenance) { p.ManifestID = "wrong" }, "snapshot source ownership"},
-		{"session", func(p *db.ArchiveSessionProvenance) { p.NativeSessionID = "wrong" }, "snapshot transcript source differs"},
+		{"unbound unknown native id", func(p *db.ArchiveSessionProvenance) { p.NativeSessionID = "wrong" }, "snapshot transcript source differs"},
 		{"repository", func(p *db.ArchiveSessionProvenance) { p.Attachment.RepositoryID = "wrong" }, "owning snapshot is not configured"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -360,7 +360,6 @@ func TestMaterializeSnapshotUsesAcceptedPrimaryAfterSiblingCapture(t *testing.T)
 
 func TestMaterializeSnapshotSavedSessionBinding(t *testing.T) {
 	const id = "019eb791-cf7d-75c1-8439-9ed74c122e02"
-	const otherID = "019eb791-cf7d-75c1-8439-9ed74c122e03"
 	for _, conflict := range []bool{false, true} {
 		name := "matching"
 		if conflict {
@@ -372,7 +371,7 @@ func TestMaterializeSnapshotSavedSessionBinding(t *testing.T) {
 			projects := filepath.Join(inputs, "claude", "projects")
 			primary := testjsonl.NewSessionBuilder().AddClaudeUserWithSessionID("2026-01-01T00:00:00Z", "selected", id).String()
 			dbtest.WriteTestFile(t, filepath.Join(projects, "project", id+".jsonl"), []byte(primary))
-			dbtest.WriteTestFile(t, filepath.Join(projects, "project", otherID+".jsonl"), []byte(testjsonl.NewSessionBuilder().AddClaudeUserWithSessionID("2026-01-01T00:00:00Z", "other", otherID).String()))
+			dbtest.WriteTestFile(t, filepath.Join(projects, "other-project", id+".jsonl"), []byte(primary))
 			source := backupSourceRoots(t, inputs, []rawarchive.RootSpec{{Provider: "claude", Path: projects}})
 			seed := filepath.Join(inputs, "seed")
 			database, err := db.OpenIsolatedContext(ctx, filepath.Join(seed, "sessions.db"))
@@ -385,10 +384,10 @@ func TestMaterializeSnapshotSavedSessionBinding(t *testing.T) {
 			var root db.RawArchiveRoot
 			var selected, alternate db.RawArchiveSource
 			for _, item := range sources {
-				if strings.HasSuffix(item.SourceKey, id+".jsonl") {
+				if strings.HasSuffix(item.SourceKey, string(filepath.Separator)+filepath.Join("project", id+".jsonl")) {
 					selected = item
 				}
-				if strings.HasSuffix(item.SourceKey, otherID+".jsonl") {
+				if strings.HasSuffix(item.SourceKey, string(filepath.Separator)+filepath.Join("other-project", id+".jsonl")) {
 					alternate = item
 				}
 			}

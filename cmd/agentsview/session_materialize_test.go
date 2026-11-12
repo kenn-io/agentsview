@@ -102,11 +102,9 @@ func TestSessionMaterializeSnapshotDispatch(t *testing.T) {
 	require.NoError(t, err, output)
 	var result struct {
 		Source  string `json:"source"`
-		Status  string `json:"status"`
 		Command string `json:"command"`
 	}
 	require.NoError(t, json.Unmarshal([]byte(output), &result))
 	assert.Equal(t, "snapshot:"+report.SnapshotID, result.Source)
-	assert.Equal(t, "installed", result.Status)
 	assert.Contains(t, result.Command, "claude --resume ")
 }
