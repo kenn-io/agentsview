@@ -23,13 +23,7 @@ func TestReadsRetention(t *testing.T) {
 		require.Equal(t, "finished", got)
 	}
 	require.Equal(t, 1, loads)
-	canceled, cancel := context.WithCancel(t.Context())
-	cancel()
-	got, err := reads.Do(canceled, "selection", "v1", load)
-	require.ErrorIs(t, err, context.Canceled)
-	require.Empty(t, got)
-	require.Equal(t, 1, loads)
-	_, err = reads.Do(t.Context(), "selection", "v2", load)
+	_, err := reads.Do(t.Context(), "selection", "v2", load)
 	require.NoError(t, err)
 	require.Equal(t, 2, loads)
 	reads.Clear()
@@ -79,6 +73,19 @@ func TestReadsUnkept(t *testing.T) {
 }
 
 func TestReadsConcurrentCancellation(t *testing.T) {
+	t.Run("completed", func(t *testing.T) {
+		var reads kept.Reads[string]
+		loads := 0
+		load := func(context.Context) (string, error) { loads++; return "finished", nil }
+		_, err := reads.Do(t.Context(), "selection", "v1", load)
+		require.NoError(t, err)
+		canceled, cancel := context.WithCancel(t.Context())
+		cancel()
+		got, err := reads.Do(canceled, "selection", "v1", load)
+		require.ErrorIs(t, err, context.Canceled)
+		require.Empty(t, got)
+		require.Equal(t, 1, loads)
+	})
 	for _, cancelBoth := range []bool{false, true} {
 		t.Run(map[bool]string{false: "one leaves", true: "both leave"}[cancelBoth], func(t *testing.T) {
 			synctest.Test(t, func(t *testing.T) {

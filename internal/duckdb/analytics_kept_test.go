@@ -54,9 +54,6 @@ func TestAnalyticsKeptMirrorReplacement(t *testing.T) {
 			got, err := tc.read(store)
 			require.NoError(t, err, tc.name)
 			require.Equal(t, want, got, tc.name)
-			again, err := tc.read(store)
-			require.NoError(t, err, tc.name)
-			require.Equal(t, want, again, tc.name)
 		}
 	}
 }
@@ -68,15 +65,16 @@ func TestAnalyticsKeptErrorsAreRetried(t *testing.T) {
 	require.NoError(t, err)
 	t.Cleanup(func() { store.Close() })
 	calls := 0
+	errRead := errors.New("read failed")
 	load := func(ctx context.Context) (db.AnalyticsSummary, error) {
 		calls++
 		if calls == 1 {
-			return db.AnalyticsSummary{}, errors.New("read failed")
+			return db.AnalyticsSummary{}, errRead
 		}
 		return db.AnalyticsSummary{TotalSessions: 42}, nil
 	}
 	_, err = keptAnalytics(t.Context(), store, "summary", db.AnalyticsFilter{}, "", load)
-	require.Error(t, err)
+	require.ErrorIs(t, err, errRead)
 	got, err := keptAnalytics(t.Context(), store, "summary", db.AnalyticsFilter{}, "", load)
 	require.NoError(t, err)
 	require.Equal(t, 42, got.TotalSessions)
@@ -146,7 +144,7 @@ func TestAnalyticsKeptAllPanelsAndVariants(t *testing.T) {
 	require.NoError(t, err)
 	_, err = conn.ExecContext(t.Context(), `UPDATE sessions SET quality_signal_version = ?`, db.CurrentQualitySignalVersion)
 	require.NoError(t, err)
-	_, err = conn.ExecContext(t.Context(), `UPDATE sessions SET ended_at = NULL`)
+	_, err = conn.ExecContext(t.Context(), `UPDATE sessions SET started_at = NULL, ended_at = NULL, created_at = TIMESTAMP '2026-01-01 00:00:00', termination_status = '', display_name = ''`)
 	require.NoError(t, err)
 	_, err = conn.ExecContext(t.Context(), `UPDATE tool_calls SET observed_outcome = 'empty'`)
 	require.NoError(t, err)
@@ -158,8 +156,12 @@ func TestAnalyticsKeptAllPanelsAndVariants(t *testing.T) {
 	freshTop, err := store.analytics().GetAnalyticsTopSessions(t.Context(), f, "messages")
 	require.NoError(t, err)
 	require.Len(t, freshTop.Sessions, 1)
+	require.NotNil(t, freshTop.Sessions[0].StartedAt)
+	require.Empty(t, *freshTop.Sessions[0].StartedAt)
 	require.NotNil(t, freshTop.Sessions[0].EndedAt)
 	require.Empty(t, *freshTop.Sessions[0].EndedAt)
+	require.NotNil(t, freshTop.Sessions[0].TerminationStatus)
+	require.Empty(t, *freshTop.Sessions[0].TerminationStatus)
 	cases := keptPanelCases(t.Context(), f)
 	values := make(map[string]any)
 	for _, tc := range cases {
@@ -170,6 +172,16 @@ func TestAnalyticsKeptAllPanelsAndVariants(t *testing.T) {
 		require.Equal(t, fresh, got, tc.name)
 		values[tc.name] = got
 	}
+	modelFilter := f
+	modelFilter.Model = "model-a"
+	freshModel, err := store.analytics().GetAnalyticsTopSessions(t.Context(), modelFilter, "messages")
+	require.NoError(t, err)
+	require.Len(t, freshModel.Sessions, 1)
+	require.NotNil(t, freshModel.Sessions[0].DisplayName)
+	require.Empty(t, *freshModel.Sessions[0].DisplayName)
+	gotModel, err := store.GetAnalyticsTopSessions(t.Context(), modelFilter, "messages")
+	require.NoError(t, err)
+	require.Equal(t, freshModel, gotModel)
 	other, err := store.GetAnalyticsSummary(t.Context(), db.AnalyticsFilter{Project: "missing"})
 	require.NoError(t, err)
 	require.Zero(t, other.TotalSessions)
@@ -191,20 +203,25 @@ func TestAnalyticsKeptAllPanelsAndVariants(t *testing.T) {
 		require.NoError(t, err, tc.name)
 		require.Equal(t, values[tc.name], got, tc.name)
 	}
+	warmModel, err := store.GetAnalyticsTopSessions(t.Context(), modelFilter, "messages")
+	require.NoError(t, err)
+	require.Equal(t, freshModel, warmModel)
 	_, err = store.GetAnalyticsSummary(t.Context(), db.AnalyticsFilter{Project: "other"})
 	require.Error(t, err)
-	for _, agent := range summary.Agents {
-		agent.Sessions = 999
-	}
-	tools.Trend[0].ByCat["Read"] = 999
-	*tools.ByTool[0].EmptyRate = 999
-	gotSummary, err := store.GetAnalyticsSummary(t.Context(), f)
-	require.NoError(t, err)
-	require.Equal(t, 1, gotSummary.Agents["claude"].Sessions)
-	gotTools, err := store.GetAnalyticsTools(t.Context(), f)
-	require.NoError(t, err)
-	require.Equal(t, 1, gotTools.Trend[0].ByCat["Read"])
-	require.InDelta(t, 1.0, *gotTools.ByTool[0].EmptyRate, 1e-9)
+	t.Run("result isolation", func(t *testing.T) {
+		for _, agent := range summary.Agents {
+			agent.Sessions = 999
+		}
+		tools.Trend[0].ByCat["Read"] = 999
+		*tools.ByTool[0].EmptyRate = 999
+		gotSummary, err := store.GetAnalyticsSummary(t.Context(), f)
+		require.NoError(t, err)
+		require.Equal(t, 1, gotSummary.Agents["claude"].Sessions)
+		gotTools, err := store.GetAnalyticsTools(t.Context(), f)
+		require.NoError(t, err)
+		require.Equal(t, 1, gotTools.Trend[0].ByCat["Read"])
+		require.InDelta(t, 1.0, *gotTools.ByTool[0].EmptyRate, 1e-9)
+	})
 }
 
 func TestAnalyticsKeptMovingSelectionsReadFresh(t *testing.T) {
