@@ -75,6 +75,16 @@ func TestSumActivityUsageRowsPreservesSessionTotals(t *testing.T) {
 		{SessionID: "reported", Model: "model", Timestamp: "2026-06-16T10:01:00Z", InputTokens: 6, SessionCost: &reported},
 		{SessionID: "ordinary", Model: "model", Timestamp: "2026-06-16T11:00:00Z", InputTokens: 2},
 	}, got)
+
+	negative := money.Money{Microdollars: -1}
+	rows = []activity.UsageRow{
+		{SessionID: "ordinary", Model: "model", Timestamp: "2026-06-16T10:00:00Z", InputTokens: 1},
+		{SessionID: "ordinary", Model: "model", Timestamp: "2026-06-16T10:01:00Z", InputTokens: 2},
+		{SessionID: "reported", Model: "model", Timestamp: "2026-06-16T10:02:00Z", SessionCost: &negative},
+	}
+	got, err = sumActivityUsageRows(rows, q)
+	require.NoError(t, err)
+	assert.Equal(t, rows, got)
 }
 
 func (b rawUsageActivityBackend) ActivityReportUsage(

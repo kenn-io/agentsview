@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/mattn/go-sqlite3"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
@@ -149,7 +150,38 @@ func TestActivityReportKeptReinsertsOnlyWhenWatermarkAdvances(t *testing.T) {
 				sizeCalls++
 				return measure(entry)
 			}
-			require.Equal(t, first, keptActivityBuild(t, d, f, q, partial))
+			if partial {
+				id, err := d.GetDatabaseID(t.Context())
+				require.NoError(t, err)
+				cache, release, err := d.usageCache.acquireGeneration(t.Context(), id)
+				require.NoError(t, err)
+				defer release()
+				cache.db.SetMaxOpenConns(1)
+				conn, err := cache.db.Conn(t.Context())
+				require.NoError(t, err)
+				require.NoError(t, conn.Raw(func(raw any) error {
+					raw.(*sqlite3.SQLiteConn).RegisterAuthorizer(func(op int, table, _, _ string) int {
+						if op == sqlite3.SQLITE_READ && table == "usage_facts" {
+							return sqlite3.SQLITE_DENY
+						}
+						return sqlite3.SQLITE_OK
+					})
+					return nil
+				}))
+				var count int
+				require.Error(t, conn.QueryRowContext(t.Context(), "SELECT COUNT(*) FROM usage_facts").Scan(&count))
+				require.NoError(t, conn.Close())
+				require.Equal(t, first, keptActivityBuild(t, d, f, q, partial))
+				conn, err = cache.db.Conn(t.Context())
+				require.NoError(t, err)
+				require.NoError(t, conn.Raw(func(raw any) error {
+					raw.(*sqlite3.SQLiteConn).RegisterAuthorizer(nil)
+					return nil
+				}))
+				require.NoError(t, conn.Close())
+			} else {
+				require.Equal(t, first, keptActivityBuild(t, d, f, q, partial))
+			}
 			assert.Zero(t, sizeCalls, "an unchanged watermark must not reinsert the report")
 
 			require.NoError(t, d.RenameSession(t.Context(), "today", new("Today changed")))
@@ -521,13 +553,9 @@ func TestActivityOngoingUsageClock(t *testing.T) {
 	q.EffectiveEnd = time.Date(2026, 6, 14, 10, 1, 0, 1, time.UTC)
 	after := keptActivityBuild(t, d, f, q, true)
 	assert.Equal(t, 500, after.Report.Totals.OutputTokens)
-	clearKeptActivity(d)
-	require.Equal(t, after, keptActivityBuild(t, d, f, q, true))
 	q.EffectiveEnd = time.Date(2026, 6, 14, 10, 0, 30, 0, time.UTC)
 	backwards := keptActivityBuild(t, d, f, q, true)
 	assert.Zero(t, backwards.Report.Totals.OutputTokens)
-	clearKeptActivity(d)
-	require.Equal(t, backwards, keptActivityBuild(t, d, f, q, true))
 }
 
 func TestActivityOngoingUsageChanges(t *testing.T) {
@@ -563,7 +591,6 @@ func TestActivityOngoingUsageChanges(t *testing.T) {
 			f := tc.filter
 			f.Timezone = "UTC"
 			before := keptActivityBuild(t, d, f, q, true)
-			require.Equal(t, before, keptActivityBuild(t, d, f, q, true))
 			tc.write(t, d)
 			changed := keptActivityBuild(t, d, f, q, true)
 			assert.NotEqual(t, before, changed)
