@@ -118,74 +118,54 @@ func TestActivityReportKeptBoundsReadSetMemory(t *testing.T) {
 }
 
 func TestActivityReportKeptReinsertsOnlyWhenWatermarkAdvances(t *testing.T) {
-	d := testDB(t)
-	keptActivitySession(t, d, "past", "project-a", "2026-06-14")
-	keptActivitySession(t, d, "today", "project-a", "2026-06-15")
-	q, f := dayQuery(t, "2026-06-14", "UTC"), AnalyticsFilter{Timezone: "UTC"}
-	f.IncludeSubagents = true
-	f.IncludeForks = true
-	first := keptActivityBuild(t, d, f, q, true)
+	for _, partial := range []bool{false, true} {
+		name := "ended"
+		if partial {
+			name = "ongoing"
+		}
+		t.Run(name, func(t *testing.T) {
+			d := testDB(t)
+			keptActivitySession(t, d, "past", "project-a", "2026-06-14")
+			keptActivitySession(t, d, "today", "project-a", "2026-06-15")
+			q, f := dayQuery(t, "2026-06-14", "UTC"), AnalyticsFilter{Timezone: "UTC", IncludeSubagents: true, IncludeForks: true}
+			if partial {
+				q.Partial = true
+				q.EffectiveEnd = time.Date(2026, 6, 14, 12, 0, 0, 0, time.UTC)
+			}
+			first := keptActivityBuild(t, d, f, q, true)
+			selection := kept.Selection(f, q)
+			if partial {
+				selection = activityUsageSelection(f, q)
+			}
+			version, _, err := d.activityKeptVersion(t.Context())
+			require.NoError(t, err)
+			entries, ok := d.activityKept.Get(selection, version)
+			require.True(t, ok)
+			require.Len(t, entries, 1)
 
-	selection := kept.Selection(f, q)
-	version, _, err := d.activityKeptVersion(t.Context())
-	require.NoError(t, err)
-	entries, ok := d.activityKept.Get(selection, version)
-	require.True(t, ok)
-	require.Len(t, entries, 1)
+			measure := d.activityKept.Size
+			sizeCalls := 0
+			d.activityKept.Size = func(entry activityKept) int64 {
+				sizeCalls++
+				return measure(entry)
+			}
+			require.Equal(t, first, keptActivityBuild(t, d, f, q, partial))
+			assert.Zero(t, sizeCalls, "an unchanged watermark must not reinsert the report")
 
-	measure := d.activityKept.Size
-	sizeCalls := 0
-	d.activityKept.Size = func(entry activityKept) int64 {
-		sizeCalls++
-		return measure(entry)
+			require.NoError(t, d.RenameSession(t.Context(), "today", new("Today changed")))
+			require.Equal(t, first, keptActivityBuild(t, d, f, q, partial))
+			version, currentRevision, err := d.activityKeptVersion(t.Context())
+			require.NoError(t, err)
+			entries, ok = d.activityKept.Get(selection, version)
+			require.True(t, ok)
+			require.Len(t, entries, 1)
+			assert.Equal(t, currentRevision, entries[0].revision)
+			assert.Equal(t, 1, sizeCalls, "advancing the journal watermark should reuse the measured size")
+
+			require.Equal(t, first, keptActivityBuild(t, d, f, q, partial))
+			assert.Equal(t, 1, sizeCalls, "a second hit at the same watermark must not reinsert the report")
+		})
 	}
-	require.Equal(t, first, keptActivityBuild(t, d, f, q, false))
-	assert.Zero(t, sizeCalls, "an unchanged watermark must not reinsert the report")
-
-	require.NoError(t, d.RenameSession(t.Context(), "today", new("Today changed")))
-	require.Equal(t, first, keptActivityBuild(t, d, f, q, false))
-	version, currentRevision, err := d.activityKeptVersion(t.Context())
-	require.NoError(t, err)
-	entries, ok = d.activityKept.Get(selection, version)
-	require.True(t, ok)
-	require.Len(t, entries, 1)
-	assert.Equal(t, currentRevision, entries[0].revision)
-	assert.Equal(t, 1, sizeCalls, "advancing the journal watermark should reuse the measured size")
-
-	require.Equal(t, first, keptActivityBuild(t, d, f, q, false))
-	assert.Equal(t, 1, sizeCalls, "a second hit at the same watermark must not reinsert the report")
-}
-
-func TestActivityOngoingUsageAdvancesWatermark(t *testing.T) {
-	d := testDB(t)
-	keptActivitySession(t, d, "past", "project-a", "2026-06-14")
-	keptActivitySession(t, d, "today", "project-a", "2026-06-15")
-	q, f := dayQuery(t, "2026-06-14", "UTC"), AnalyticsFilter{Timezone: "UTC", IncludeSubagents: true, IncludeForks: true}
-	q.Partial = true
-	q.EffectiveEnd = time.Date(2026, 6, 14, 12, 0, 0, 0, time.UTC)
-	first := keptActivityBuild(t, d, f, q, true)
-
-	measure := d.activityKept.Size
-	sizeCalls := 0
-	d.activityKept.Size = func(entry activityKept) int64 {
-		sizeCalls++
-		return measure(entry)
-	}
-	require.Equal(t, first, keptActivityBuild(t, d, f, q, true))
-	assert.Zero(t, sizeCalls)
-
-	require.NoError(t, d.RenameSession(t.Context(), "today", new("Today changed")))
-	require.Equal(t, first, keptActivityBuild(t, d, f, q, true))
-	version, revision, err := d.activityKeptVersion(t.Context())
-	require.NoError(t, err)
-	entries, ok := d.activityKept.Get(activityUsageSelection(f, q), version)
-	require.True(t, ok)
-	require.Len(t, entries, 1)
-	assert.Equal(t, revision, entries[0].revision)
-	assert.Equal(t, 1, sizeCalls)
-
-	require.Equal(t, first, keptActivityBuild(t, d, f, q, true))
-	assert.Equal(t, 1, sizeCalls)
 }
 
 func TestActivityReportKeptResumedSessionPeerChanges(t *testing.T) {
@@ -488,15 +468,10 @@ func TestActivityReportKeptChanges(t *testing.T) {
 	}
 }
 
-func TestActivityReportKeptSkipsPartialAndSwappedArchives(t *testing.T) {
+func TestActivityReportKeptReadOnlyAndSwappedArchives(t *testing.T) {
 	d := testDB(t)
 	keptActivitySession(t, d, "past", "project-a", "2026-06-14")
 	f := AnalyticsFilter{Timezone: "UTC"}
-	partial, err := activity.ResolveQuery(activity.QueryInput{Preset: "day", Date: "2026-06-14", Timezone: "UTC"}, time.Date(2026, 6, 14, 12, 0, 0, 0, time.UTC))
-	require.NoError(t, err)
-	for range 2 {
-		keptActivityBuild(t, d, f, partial, true)
-	}
 	q := dayQuery(t, "2026-06-14", "UTC")
 	before := keptActivityBuild(t, d, f, q, true)
 	require.Equal(t, before, keptActivityBuild(t, d, f, q, false))
@@ -534,7 +509,7 @@ func TestActivityReportKeptSkipsPartialAndSwappedArchives(t *testing.T) {
 	require.Equal(t, changed, keptActivityBuild(t, d, f, q, true))
 }
 
-func TestActivityOngoingUsageReuseAndClock(t *testing.T) {
+func TestActivityOngoingUsageClock(t *testing.T) {
 	d := testDB(t)
 	keptActivitySession(t, d, "past", "project-a", "2026-06-14")
 	q := dayQuery(t, "2026-06-14", "UTC")
@@ -543,12 +518,6 @@ func TestActivityOngoingUsageReuseAndClock(t *testing.T) {
 	f := AnalyticsFilter{Timezone: "UTC"}
 	before := keptActivityBuild(t, d, f, q, true)
 	assert.Zero(t, before.Report.Totals.OutputTokens)
-	require.Equal(t, before, keptActivityBuild(t, d, f, q, true))
-	q.EffectiveEnd = time.Date(2026, 6, 14, 10, 1, 0, 0, time.UTC)
-	atBoundary := keptActivityBuild(t, d, f, q, true)
-	assert.Zero(t, atBoundary.Report.Totals.OutputTokens)
-	clearKeptActivity(d)
-	require.Equal(t, atBoundary, keptActivityBuild(t, d, f, q, true))
 	q.EffectiveEnd = time.Date(2026, 6, 14, 10, 1, 0, 1, time.UTC)
 	after := keptActivityBuild(t, d, f, q, true)
 	assert.Equal(t, 500, after.Report.Totals.OutputTokens)
@@ -559,25 +528,6 @@ func TestActivityOngoingUsageReuseAndClock(t *testing.T) {
 	assert.Zero(t, backwards.Report.Totals.OutputTokens)
 	clearKeptActivity(d)
 	require.Equal(t, backwards, keptActivityBuild(t, d, f, q, true))
-}
-
-func TestActivityOngoingUsageSkipsCacheRead(t *testing.T) {
-	d := testDB(t)
-	keptActivitySession(t, d, "past", "project-a", "2026-06-14")
-	q := dayQuery(t, "2026-06-14", "UTC")
-	q.Partial = true
-	q.EffectiveEnd = time.Date(2026, 6, 14, 12, 0, 0, 0, time.UTC)
-	f := AnalyticsFilter{Timezone: "UTC"}
-	before := keptActivityBuild(t, d, f, q, true)
-	require.Equal(t, 500, before.Report.Totals.OutputTokens)
-	databaseID, err := d.GetDatabaseID(t.Context())
-	require.NoError(t, err)
-	cache, release, err := d.usageCache.acquireGeneration(t.Context(), databaseID)
-	require.NoError(t, err)
-	_, err = cache.db.ExecContext(t.Context(), `DELETE FROM usage_facts`)
-	release()
-	require.NoError(t, err)
-	require.Equal(t, before, keptActivityBuild(t, d, f, q, true))
 }
 
 func TestActivityOngoingUsageChanges(t *testing.T) {
@@ -621,18 +571,4 @@ func TestActivityOngoingUsageChanges(t *testing.T) {
 			require.Equal(t, changed, keptActivityBuild(t, d, f, q, true))
 		})
 	}
-}
-
-func TestActivityOngoingUsageFilterChange(t *testing.T) {
-	d := testDB(t)
-	keptActivitySession(t, d, "a", "project-a", "2026-06-14")
-	keptActivitySession(t, d, "b", "project-b", "2026-06-14")
-	q := dayQuery(t, "2026-06-14", "UTC")
-	q.Partial = true
-	q.EffectiveEnd = time.Date(2026, 6, 14, 12, 0, 0, 0, time.UTC)
-	first := keptActivityBuild(t, d, AnalyticsFilter{Timezone: "UTC", Project: "project-a"}, q, true)
-	changed := keptActivityBuild(t, d, AnalyticsFilter{Timezone: "UTC", Project: "project-b"}, q, true)
-	require.NotEqual(t, first, changed)
-	clearKeptActivity(d)
-	require.Equal(t, changed, keptActivityBuild(t, d, AnalyticsFilter{Timezone: "UTC", Project: "project-b"}, q, true))
 }

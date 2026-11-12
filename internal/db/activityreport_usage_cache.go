@@ -203,6 +203,10 @@ func (db *DB) activityReportCachedUsage(
 func sumActivityUsageRows(rows []activity.UsageRow, q activity.Query) ([]activity.UsageRow, error) {
 	withTotal := make(map[string]bool)
 	for _, row := range rows {
+		// Reordering signed costs can make an otherwise valid report overflow.
+		if row.Cost.Microdollars < 0 || (row.SessionCost != nil && row.SessionCost.Microdollars < 0) {
+			return slices.Clone(rows), nil
+		}
 		if row.SessionCost != nil {
 			withTotal[row.SessionID] = true
 		}
