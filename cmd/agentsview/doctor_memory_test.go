@@ -27,7 +27,8 @@ func init() {
 	if runtime.GOOS != "windows" || os.Getenv("AGENTSVIEW_FAKE_AGENT") != "1" {
 		return
 	}
-	if strings.EqualFold(filepath.Base(os.Args[0]), "codex.exe") {
+	executable, _ := os.Executable()
+	if strings.EqualFold(filepath.Base(executable), "codex.exe") {
 		scanner := bufio.NewScanner(os.Stdin)
 		scanner.Scan()
 		fmt.Println(`{"id":1,"result":{}}`)
@@ -345,6 +346,11 @@ func TestDoctorMemoryReportsInstalledAgentSetup(t *testing.T) {
 		require.EqualValues(t, "missing", report.Client.Rows[index].State)
 		require.Equal(t, "agentsview agent setup", report.Client.Rows[index].NextStep)
 	}
+	out, err = executeCommand(newRootCommand(), "doctor", "memory", "--server", server.URL)
+	require.NoError(t, err, out)
+	require.Contains(t, out, "Client integration: partial")
+	require.Contains(t, out, "agentsview agent setup")
+	require.NotContains(t, out, "agent_setup_incomplete")
 }
 
 func TestDoctorMemoryRedactsMCPFailure(t *testing.T) {

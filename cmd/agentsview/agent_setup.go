@@ -96,8 +96,15 @@ func setupItems(agent string, force bool) ([]agentsetup.Item, error) {
 	installMCP := mcp.Install
 	mcp.Install = func(ctx context.Context) error {
 		if !force {
-			status, _ := mcp.Check(ctx)
-			if status.State == agentsetup.StateOutdated {
+			status, err := mcp.Check(ctx)
+			if err != nil {
+				return err
+			}
+			plan, err := agentmcp.PlanInstall(agentmcp.Agent(agent), agentmcp.InstallOptions{Name: "agentsview", Server: memoryMCPServer()})
+			if err != nil {
+				return err
+			}
+			if status.State != agentsetup.StateMissing && plan.Changed {
 				return errors.New(
 					"existing agentsview MCP entry differs; rerun with --force")
 			}

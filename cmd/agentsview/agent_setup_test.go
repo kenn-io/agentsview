@@ -74,6 +74,22 @@ func TestAgentSetupFormatJSON(t *testing.T) {
 	require.NotEmpty(t, report.Rows)
 }
 
+func TestAgentSetupPreservesCodexOptions(t *testing.T) {
+	home := t.TempDir()
+	setDoctorMemoryTestEnvironment(t, home)
+	fakeAgent(t, "codex", "")
+	path := filepath.Join(home, ".codex", "config.toml")
+	require.NoError(t, os.MkdirAll(filepath.Dir(path), 0o700))
+	config := "[mcp_servers.agentsview]\ncommand = 'agentsview'\nargs = ['mcp', '--profile', 'memory']\nenabled_tools = ['get_memory_status']\n"
+	require.NoError(t, os.WriteFile(path, []byte(config), 0o600))
+	out, err := executeCommand(newRootCommand(), "agent", "setup", "--agent", "codex")
+	require.Error(t, err, out)
+	require.Contains(t, out, "--force")
+	got, err := os.ReadFile(path)
+	require.NoError(t, err)
+	require.Equal(t, config, string(got))
+}
+
 func TestAgentSetupUpdatesOrProtectsSkillChanges(t *testing.T) {
 	for _, tc := range []struct {
 		name            string

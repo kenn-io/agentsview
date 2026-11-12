@@ -460,8 +460,11 @@ func writeDoctorMemoryReport(w io.Writer, report doctorMemoryReport) error {
 	}
 	writeDoctorMemoryCapability(w, "Source freshness", report.Target.Sources.Status,
 		report.Target.Sources.Reason)
-	writeDoctorMemoryCapability(w, "Client integration", report.Client.Status,
-		report.Client.Reason)
+	reason := report.Client.Reason
+	if reason == "agent_setup_incomplete" {
+		reason = ""
+	}
+	writeDoctorMemoryCapability(w, "Client integration", report.Client.Status, reason)
 	if len(report.Client.Rows) > 0 {
 		_ = (agentsetup.Report{Rows: report.Client.Rows}).WriteText(w, "")
 	} else {
