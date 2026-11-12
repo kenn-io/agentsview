@@ -334,25 +334,29 @@ func TestMaterializeMirrorRejectsLinkedProjectOutsideMirror(t *testing.T) {
 }
 
 func TestReadFileBudgetAndInvalidCompanionPath(t *testing.T) {
-	name := filepath.Join(t.TempDir(), "file")
-	require.NoError(t, os.WriteFile(name, []byte("data"), 0o600))
-	got, _, err := readFile(t.Context(), name, 4)
-	require.NoError(t, err)
-	assert.Equal(t, "data", string(got))
-	_, _, err = readFile(t.Context(), name, 3)
-	require.ErrorIs(t, err, errSourceSize)
-	_, _, err = readFile(t.Context(), name, 0)
-	require.ErrorIs(t, err, errSourceSize)
-	const id = "12345678-1234-1234-1234-123456789abc"
-	root := t.TempDir()
-	primary := filepath.Join(root, id+".jsonl")
-	require.NoError(t, os.WriteFile(primary, []byte("x"), 0o600))
-	companion := filepath.Join(root, id, "tool-results")
-	require.NoError(t, os.MkdirAll(filepath.Dir(companion), 0o700))
-	if err := os.Symlink(t.TempDir(), companion); err != nil {
-		t.Skipf("symlink unavailable: %v", err)
-	}
-	_, err = readLocalSource(t.Context(), root, primary, id, 32)
-	require.ErrorContains(t, err, "invalid session file")
-	require.ErrorContains(t, err, companion)
+	t.Run("budget", func(t *testing.T) {
+		name := filepath.Join(t.TempDir(), "file")
+		require.NoError(t, os.WriteFile(name, []byte("data"), 0o600))
+		got, _, err := readFile(t.Context(), name, 4)
+		require.NoError(t, err)
+		assert.Equal(t, "data", string(got))
+		_, _, err = readFile(t.Context(), name, 3)
+		require.ErrorIs(t, err, errSourceSize)
+		_, _, err = readFile(t.Context(), name, 0)
+		require.ErrorIs(t, err, errSourceSize)
+	})
+	t.Run("invalid companion", func(t *testing.T) {
+		const id = "12345678-1234-1234-1234-123456789abc"
+		root := t.TempDir()
+		primary := filepath.Join(root, id+".jsonl")
+		require.NoError(t, os.WriteFile(primary, []byte("x"), 0o600))
+		companion := filepath.Join(root, id, "tool-results")
+		require.NoError(t, os.MkdirAll(filepath.Dir(companion), 0o700))
+		if err := os.Symlink(t.TempDir(), companion); err != nil {
+			t.Skipf("symlink unavailable: %v", err)
+		}
+		_, err := readLocalSource(t.Context(), root, primary, id, 32)
+		require.ErrorContains(t, err, "invalid session file")
+		require.ErrorContains(t, err, companion)
+	})
 }
