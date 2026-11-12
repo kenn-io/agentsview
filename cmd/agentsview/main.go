@@ -622,7 +622,7 @@ func runServe(ctx context.Context, cfg config.Config, opts serveOptions, restart
 	}()
 
 	var restartExplicitPort *int
-	if cfg.PortExplicit {
+	if cfg.PortExplicit && cfg.Port > 0 {
 		restartExplicitPort = new(cfg.Port)
 	}
 	preparedCfg, rtOpts, prepErr := prepareRunServeRuntimeConfig(ctx,
@@ -652,7 +652,13 @@ func runServe(ctx context.Context, cfg config.Config, opts serveOptions, restart
 			}
 			return ""
 		}),
-		server.WithDaemonPersistence(func() error { return publishPersistentDaemon(cfg.DataDir) }),
+		server.WithDaemonPersistence(func() error {
+			err := publishPersistentDaemon(cfg.DataDir)
+			if err == nil || errors.Is(err, atomicfile.ErrPublished) {
+				err = errors.Join(err, os.Setenv(persistentDaemonEnvVar, "true"))
+			}
+			return err
+		}),
 		server.WithHTTPRemoteCleanupRegistry(httpRemoteCleanupRegistry),
 		server.WithPprof(opts.Pprof),
 		server.WithTelemetryCapture(telemetryCapture),

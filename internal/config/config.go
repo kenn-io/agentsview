@@ -3996,11 +3996,6 @@ func (c *Config) SaveTerminalConfig(tc TerminalConfig) error {
 // The patch map contains config keys mapped to their new values. Only
 // the keys present in patch are written; other config keys are preserved.
 func (c *Config) SaveSettings(patch map[string]any) error {
-	if value, ok := patch["require_auth"].(bool); ok {
-		if err := validateDeploymentAuthSave(value); err != nil {
-			return err
-		}
-	}
 	patch = maps.Clone(patch)
 	if value, ok := patch["tool_result_images"]; ok {
 		policy, ok := value.(ToolResultImages)

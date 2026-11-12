@@ -83,10 +83,13 @@ func runningAsBackgroundChild() bool {
 }
 
 func serveHandoffPortArgs(port int, explicitPort *int) []string {
-	if explicitPort != nil && *explicitPort > 0 {
-		return []string{"--port=" + strconv.Itoa(*explicitPort)}
+	if explicitPort != nil {
+		return []string{"--port", strconv.Itoa(*explicitPort)}
 	}
-	return []string{"--restart-port=" + strconv.Itoa(port)}
+	if port > 0 {
+		return []string{"--restart-port", strconv.Itoa(port)}
+	}
+	return nil
 }
 
 // backgroundLaunchLockPath is the advisory lock that serializes concurrent

@@ -678,6 +678,17 @@ func TestRestartPreservesDeploymentAuthOverride(t *testing.T) {
 	}
 	require.NoError(t, json.UnmarshalRead(resp.Body, &first))
 	require.NoError(t, resp.Body.Close())
+	matching, err := http.NewRequestWithContext(t.Context(), http.MethodPut, base+"/api/v1/settings", strings.NewReader(`{"require_auth":false}`))
+	require.NoError(t, err)
+	matching.Header.Set("Origin", base)
+	matching.Header.Set("Content-Type", "application/json")
+	accepted, err := client.Do(matching)
+	require.NoError(t, err)
+	require.Equal(t, http.StatusOK, accepted.StatusCode)
+	require.NoError(t, accepted.Body.Close())
+	configPath := filepath.Join(dataDir, "config.toml")
+	before, err := os.ReadFile(configPath)
+	require.NoError(t, err)
 	save, err := http.NewRequestWithContext(t.Context(), http.MethodPut, base+"/api/v1/settings", strings.NewReader(`{"require_auth":true}`))
 	require.NoError(t, err)
 	save.Header.Set("Origin", base)
@@ -689,6 +700,9 @@ func TestRestartPreservesDeploymentAuthOverride(t *testing.T) {
 	require.NoError(t, err)
 	assert.Contains(t, string(body), "AGENTSVIEW_REQUIRE_AUTH")
 	require.NoError(t, denied.Body.Close())
+	after, err := os.ReadFile(configPath)
+	require.NoError(t, err)
+	assert.Equal(t, before, after)
 	req, err := http.NewRequestWithContext(t.Context(), http.MethodPost, base+"/api/v1/daemon/restart", nil)
 	require.NoError(t, err)
 	req.Header.Set("Origin", base)
@@ -833,4 +847,63 @@ func TestRestartClosesStalledRequest(t *testing.T) {
 	body, err := io.ReadAll(reader)
 	require.NoError(t, err)
 	assert.Empty(t, body)
+}
+
+func TestRestartKeepsPromotedDaemonLifetime(t *testing.T) {
+	_, dataDir, _ := startRestartAuthFixture(t, "background")
+	rt := FindDaemonRuntime(dataDir)
+	require.NotNil(t, rt)
+	require.False(t, rt.Persistent)
+	output, err := exec.CommandContext(t.Context(), os.Args[0], "daemon", "start").CombinedOutput()
+	require.NoError(t, err, "%s", output)
+	rt = FindDaemonRuntime(dataDir)
+	require.NotNil(t, rt)
+	require.True(t, rt.Persistent)
+	base := fmt.Sprintf("http://127.0.0.1:%d", rt.Port)
+	client := &http.Client{Timeout: time.Second}
+	resp, err := restartTestPing(t, client, base)
+	require.NoError(t, err)
+	var first struct {
+		InstanceID string `json:"instance_id"`
+	}
+	require.NoError(t, json.UnmarshalRead(resp.Body, &first))
+	require.NoError(t, resp.Body.Close())
+	req, err := http.NewRequestWithContext(t.Context(), http.MethodPost, base+"/api/v1/daemon/restart", nil)
+	require.NoError(t, err)
+	req.Header.Set("Origin", base)
+	resp, err = client.Do(req)
+	require.NoError(t, err)
+	require.Equal(t, http.StatusOK, resp.StatusCode)
+	require.NoError(t, resp.Body.Close())
+	require.Eventually(t, func() bool {
+		resp, err := restartTestPing(t, client, base)
+		if err != nil {
+			return false
+		}
+		defer resp.Body.Close()
+		var ping struct {
+			InstanceID string `json:"instance_id"`
+		}
+		return json.UnmarshalRead(resp.Body, &ping) == nil && ping.InstanceID != "" && ping.InstanceID != first.InstanceID
+	}, 30*time.Second, 100*time.Millisecond)
+	var replacement *DaemonRuntime
+	require.Eventually(t, func() bool { replacement = FindDaemonRuntime(dataDir); return replacement != nil }, 30*time.Second, 100*time.Millisecond)
+	assert.Equal(t, rt.Record.PID, replacement.Record.PID)
+	assert.True(t, replacement.Persistent)
+}
+
+func TestServeHandoffPortArgs(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		port     int
+		explicit *int
+		want     []string
+	}{
+		{name: "automatic", port: 8080, want: []string{"--restart-port", "8080"}},
+		{name: "fixed", port: 8080, explicit: new(9090), want: []string{"--port", "9090"}},
+		{name: "explicit zero", explicit: new(0), want: []string{"--port", "0"}},
+		{name: "unknown"},
+	} {
+		t.Run(tc.name, func(t *testing.T) { assert.Equal(t, tc.want, serveHandoffPortArgs(tc.port, tc.explicit)) })
+	}
 }

@@ -46,8 +46,13 @@ func TestRecoveryPreservesSetupClaim(t *testing.T) {
 	report, err := archive.Backup(ctx, backup, opts.Settings, "test")
 	require.NoError(t, err)
 	restored := filepath.Join(t.TempDir(), "restored")
+	t.Setenv("AGENTSVIEW_MODE", "serve")
+	t.Setenv("AGENTSVIEW_REQUIRE_AUTH", "false")
 	_, err = Restore(ctx, backup, report.SnapshotID, restored, nil)
 	require.NoError(t, err)
+	data, err := os.ReadFile(filepath.Join(restored, "config.toml"))
+	require.NoError(t, err)
+	assert.Contains(t, string(data), "require_auth = true")
 	restoredCfg := config.Config{DataDir: restored, InstallationID: installation}
 	require.NoError(t, restoredCfg.ClaimSetupFinished(func() error {
 		assert.Fail(t, "restore reported setup again")

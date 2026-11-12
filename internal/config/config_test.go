@@ -3309,20 +3309,3 @@ func TestAuthFlagRetiredOnlyBySuccessfulAuthSave(t *testing.T) {
 	require.NoError(t, cfg.SaveSettings(map[string]any{"require_auth": false}))
 	assert.False(t, cfg.RequireAuthExplicit)
 }
-
-func TestSaveSettingsRejectsDeploymentAuthConflict(t *testing.T) {
-	t.Setenv("AGENTSVIEW_MODE", "serve")
-	t.Setenv("AGENTSVIEW_REQUIRE_AUTH", "false")
-	cfg, err := loadConfigFromPFlags(t)
-	require.NoError(t, err)
-	path := cfg.configPath()
-	before, err := os.ReadFile(path)
-	require.NoError(t, err)
-	err = cfg.SaveSettings(map[string]any{"require_auth": true})
-	require.ErrorContains(t, err, "AGENTSVIEW_REQUIRE_AUTH")
-	after, err := os.ReadFile(path)
-	require.NoError(t, err)
-	assert.Equal(t, before, after)
-	assert.False(t, cfg.RequireAuth)
-	require.NoError(t, cfg.SaveSettings(map[string]any{"require_auth": false}))
-}
