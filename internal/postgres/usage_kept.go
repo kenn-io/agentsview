@@ -3,9 +3,12 @@ package postgres
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 	"strconv"
 )
+
+const standbyUsageMarker = "standby"
 
 func (s *Store) keptUsageVersion(ctx context.Context, slot string) string {
 	if slot == "" || s.readTx != nil || s.hostedRelations {
@@ -16,6 +19,10 @@ func (s *Store) keptUsageVersion(ctx context.Context, slot string) string {
 		var err error
 		epoch, err = s.usageCache.ResetEpoch(ctx)
 		if err != nil {
+			var standby bool
+			if s.pg.QueryRowContext(ctx, `SELECT pg_is_in_recovery()`).Scan(&standby) == nil && standby {
+				return standbyUsageMarker
+			}
 			return ""
 		}
 	}
@@ -27,6 +34,9 @@ func (s *Store) keptUsageVersion(ctx context.Context, slot string) string {
  substring(pg_walfile_name(pg_current_wal_lsn()), 1, 8)
  WHERE NOT pg_is_in_recovery()`, strconv.Itoa(usageChangeJournalVersionPG)).Scan(&revision, &journalOID, &systemID, &timeline)
 	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return standbyUsageMarker
+		}
 		return ""
 	}
 	if revision == 0 || !journalOID.Valid {

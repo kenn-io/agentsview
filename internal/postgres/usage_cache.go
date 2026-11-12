@@ -99,11 +99,11 @@ func (source *pgUsageCacheSource) snapshot(ctx context.Context, view *Store) (db
 	err = view.pg.QueryRowContext(ctx, `SELECT (pg_control_system()).system_identifier::text,
  substring(pg_walfile_name(pg_current_wal_lsn()), 1, 8)
  WHERE NOT pg_is_in_recovery()`).Scan(&systemID, &timeline)
-	if err != nil {
-		if ctx.Err() != nil {
-			return snapshot, ctx.Err()
-		}
+	if errors.Is(err, sql.ErrNoRows) {
 		return snapshot, db.ErrUsageSourceUnavailable
+	}
+	if err != nil {
+		return snapshot, err
 	}
 	snapshot.DatabaseID = fmt.Sprintf("%s|%d|%s|%s", source.target, oid, systemID, timeline)
 	err = view.pg.QueryRowContext(ctx, `SELECT COALESCE((SELECT value::bigint FROM sync_metadata WHERE key='usage_account_revision'), 0)`).Scan(&snapshot.CursorHighWater)
@@ -336,6 +336,8 @@ func (source *pgUsageCacheSource) StreamUsage(ctx context.Context, ids []string,
 	return snapshot, tx.Commit()
 }
 
+const pgCursorUsageCacheColumns = `id,agent,occurred_at,model,input_tokens,output_tokens,cache_write_tokens,cache_read_tokens,charged_microdollars,is_headless,dedup_key`
+
 func (source *pgUsageCacheSource) StreamUsageAccounts(ctx context.Context, emit func(db.UsageSourceAccount) error) (string, int64, error) {
 	tx, err := source.beginTx(ctx, &sql.TxOptions{ReadOnly: true, Isolation: sql.LevelRepeatableRead})
 	if err != nil {
@@ -346,7 +348,7 @@ func (source *pgUsageCacheSource) StreamUsageAccounts(ctx context.Context, emit 
 	if err != nil {
 		return "", 0, err
 	}
-	rows, err := tx.QueryContext(ctx, `SELECT id,agent,occurred_at,model,input_tokens,output_tokens,cache_write_tokens,cache_read_tokens,charged_microdollars,is_headless,dedup_key FROM cursor_usage_events ORDER BY id`)
+	rows, err := tx.QueryContext(ctx, `SELECT `+pgCursorUsageCacheColumns+` FROM cursor_usage_events ORDER BY id`)
 	if err != nil {
 		return "", 0, err
 	}

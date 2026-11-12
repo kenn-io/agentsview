@@ -1313,6 +1313,11 @@ func TestPGUsageAccountRevisionTracksCommittedChanges(t *testing.T) {
 	_, unchanged, err := source.StreamUsageAccounts(ctx, func(db.UsageSourceAccount) error { return nil })
 	require.NoError(t, err)
 	assert.Equal(t, after, unchanged)
+	_, err = syncer.pg.ExecContext(ctx, `UPDATE cursor_usage_events SET user_email='updated@example.invalid' WHERE id=1`)
+	require.NoError(t, err)
+	_, unchanged, err = source.StreamUsageAccounts(ctx, func(db.UsageSourceAccount) error { return nil })
+	require.NoError(t, err)
+	assert.Equal(t, after, unchanged)
 	tx, err = syncer.pg.BeginTx(ctx, nil)
 	require.NoError(t, err)
 	_, err = tx.ExecContext(ctx, `DELETE FROM cursor_usage_events WHERE id=1`)
@@ -1341,4 +1346,25 @@ CREATE OR REPLACE FUNCTION stamp_usage_change() RETURNS trigger LANGUAGE plpgsql
 	ensureUsageChangeJournalPG(ctx, syncer.pg)
 	require.NoError(t, syncer.pg.QueryRowContext(ctx, `SELECT pg_get_functiondef('stamp_usage_change()'::regprocedure)`).Scan(&after))
 	assert.Equal(t, before, after)
+}
+
+func TestPGUsageCacheReportsIdentityPermissionFailure(t *testing.T) {
+	_, syncer, owner, _ := keptUsageFixture(t)
+	ctx := t.Context()
+	roleURL := newUsageJournalRole(t, syncer, `GRANT SELECT ON ALL TABLES IN SCHEMA `+syncer.schema+` TO ROLE`)
+	reader, err := NewStore(ctx, roleURL, syncer.schema, true)
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, reader.Close()) })
+	var role string
+	require.NoError(t, reader.pg.QueryRowContext(ctx, `SELECT current_user`).Scan(&role))
+	tx, err := owner.beginTx(ctx, nil)
+	require.NoError(t, err)
+	defer func() { _ = tx.Rollback() }()
+	_, err = tx.ExecContext(ctx, `REVOKE EXECUTE ON FUNCTION pg_catalog.pg_control_system() FROM PUBLIC`)
+	require.NoError(t, err)
+	_, err = tx.ExecContext(ctx, `SET LOCAL ROLE `+role)
+	require.NoError(t, err)
+	_, err = (&pgUsageCacheSource{}).snapshot(ctx, owner.readView(tx))
+	require.Error(t, err)
+	require.True(t, isInsufficientPrivilege(err), "the identity permission failure should remain visible: %v", err)
 }

@@ -1594,6 +1594,21 @@ func (s *Store) GetDailyUsage(
 ) (db.DailyUsageResult, error) {
 	slot := db.UsageSlot(f, true)
 	version := s.keptUsageVersion(ctx, slot)
+	if version == standbyUsageMarker {
+		full := f
+		full.SkipSessionCounts = false
+		result, handled, err := standbyRetained(ctx, s, slot, &s.runtimeState().dailyUsage, func(ctx context.Context, view *Store) (db.DailyUsageResult, error) {
+			return view.readDailyUsage(ctx, full)
+		})
+		if handled {
+			result = result.Clone()
+			if f.SkipSessionCounts {
+				result.SessionCounts = db.UsageSessionCounts{}
+			}
+			return result, err
+		}
+		return s.readDailyUsage(ctx, f)
+	}
 	if version == "" {
 		return s.readDailyUsage(ctx, f)
 	}
@@ -2231,6 +2246,23 @@ func (s *Store) GetTopSessionsByCost(
 		slot += fmt.Sprintf("|%t", f.TopSessionsByGroup)
 	}
 	version := s.keptUsageVersion(ctx, slot)
+	if version == standbyUsageMarker {
+		standbySlot := ""
+		if slot != "" {
+			standbySlot = fmt.Sprintf("standby|%s|%s|%d|%d", slot, f.TopSessionsSort, f.TopSessionsTokenTypes, limit)
+		}
+		result, handled, err := standbyRetained(ctx, s, standbySlot, &s.runtimeState().topUsage, func(ctx context.Context, view *Store) ([]db.TopSessionEntry, error) {
+			out, err := view.readTopSessions(ctx, f)
+			if err != nil {
+				return nil, err
+			}
+			return view.finishTopSessions(ctx, f, limit, out)
+		})
+		if handled {
+			return slices.Clone(result), err
+		}
+		version = ""
+	}
 	cached, release, handled, err := cachedUsage(ctx, s.usageCache, func(cache *db.UsageCacheReader) ([]db.TopSessionEntry, error) {
 		return s.cachedTopSessions(ctx, cache, f, limit, slot, version)
 	})
@@ -2247,7 +2279,12 @@ func (s *Store) GetTopSessionsByCost(
 	if err != nil {
 		return nil, err
 	}
+	return s.finishTopSessions(ctx, f, limit, out)
+}
+
+func (s *Store) finishTopSessions(ctx context.Context, f db.UsageFilter, limit int, out []db.TopSessionEntry) ([]db.TopSessionEntry, error) {
 	result := slices.Clone(out)
+	var err error
 	if f.TopSessionsByGroup {
 		result, err = db.GroupTopSessions(result, limit, f.TopSessionsSort, f.TopSessionsTokenTypes)
 		if err != nil {

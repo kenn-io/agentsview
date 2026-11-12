@@ -38,8 +38,9 @@ use, after a price or project identity change, or after new account usage, it
 returns the direct PostgreSQL result and the cache rebuilds in the background.
 Journals upgraded by a current writer need only `SELECT` access. Hosted and
 borrowed transaction readers, CockroachDB, and unavailable journals keep
-direct reads. PostgreSQL standbys also read directly because their recovery
-history can change between connections.
+direct reads. PostgreSQL standbys retain complete results in memory when a
+current writer has installed the journal history token; otherwise they read
+directly.
 Recovery onto a different PostgreSQL timeline starts a new cache generation.
 If a cache attempt fails while the request is active, the existing direct
 PostgreSQL read supplies its result or error. A journal installed later enables

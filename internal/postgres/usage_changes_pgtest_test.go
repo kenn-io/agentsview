@@ -411,3 +411,28 @@ func TestUsageChangeJournalLateGrantedReader(t *testing.T) {
 	assert.Zero(t, through)
 	assert.Empty(t, ids)
 }
+
+func TestUsageJournalUpgradesHistoryToken(t *testing.T) {
+	_, syncer, store := newUsageJournalFixture(t)
+	ctx := t.Context()
+	_, err := store.pg.ExecContext(ctx, `UPDATE sync_metadata SET value='1' WHERE key='usage_change_journal_version'; DELETE FROM sync_metadata WHERE key='usage_history_token'`)
+	require.NoError(t, err)
+	require.NoError(t, EnsureSchema(ctx, syncer.pg, syncer.schema))
+	var version, before string
+	require.NoError(t, store.pg.QueryRowContext(ctx, `SELECT (SELECT value FROM sync_metadata WHERE key='usage_change_journal_version'), (SELECT value FROM sync_metadata WHERE key='usage_history_token')`).Scan(&version, &before))
+	require.Equal(t, "2", version)
+	require.NotEmpty(t, before)
+	_, err = store.pg.ExecContext(ctx, `INSERT INTO sessions(id,machine,project,agent) VALUES('history-token','machine','project','codex')`)
+	require.NoError(t, err)
+	var after string
+	require.NoError(t, store.pg.QueryRowContext(ctx, `SELECT value FROM sync_metadata WHERE key='usage_history_token'`).Scan(&after))
+	require.NotEqual(t, before, after)
+	tx, err := store.beginTx(ctx, nil)
+	require.NoError(t, err)
+	_, err = tx.ExecContext(ctx, `UPDATE sessions SET project='rolled-back' WHERE id='history-token'`)
+	require.NoError(t, err)
+	require.NoError(t, tx.Rollback())
+	var rolledBack string
+	require.NoError(t, store.pg.QueryRowContext(ctx, `SELECT value FROM sync_metadata WHERE key='usage_history_token'`).Scan(&rolledBack))
+	require.Equal(t, after, rolledBack)
+}

@@ -166,7 +166,7 @@ func keptUsageFixture(t *testing.T) (*db.DB, *Sync, *Store, *usageReadCounter) {
 	return local, syncer, store, counter
 }
 
-func TestUsageStandbyReadsDirect(t *testing.T) {
+func TestUsageStandbyRetainsResults(t *testing.T) {
 	standbyURL := os.Getenv("TEST_PG_STANDBY_URL")
 	if standbyURL == "" {
 		t.Skip("TEST_PG_STANDBY_URL must point to a standby of TEST_PG_URL")
@@ -188,7 +188,6 @@ func TestUsageStandbyReadsDirect(t *testing.T) {
 	require.NoError(t, standby.ConfigureUsageCache(ctx, t.TempDir(), standbyURL, syncer.schema))
 	counter := &usageReadCounter{storeExecutor: standby.pg, queries: map[string]int{}}
 	standby.pg = counter
-	require.Empty(t, standby.keptUsageVersion(ctx, "test"))
 	filter := db.UsageFilter{From: "2026-01-01", To: "2026-01-01", Timezone: "UTC"}
 	want, err := primary.GetDailyUsage(ctx, filter)
 	require.NoError(t, err)
@@ -208,7 +207,6 @@ func TestUsageStandbyReadsDirect(t *testing.T) {
 	counter.mu.Lock()
 	reads := maps.Clone(counter.queries)
 	counter.mu.Unlock()
-	require.NotEmpty(t, reads)
 	got, err = standby.GetDailyUsage(ctx, filter)
 	require.NoError(t, err)
 	require.Equal(t, want, got)
@@ -221,10 +219,36 @@ func TestUsageStandbyReadsDirect(t *testing.T) {
 	counter.mu.Lock()
 	again := maps.Clone(counter.queries)
 	counter.mu.Unlock()
-	require.NotEqual(t, reads, again)
-	primaryVersion := primary.keptUsageVersion(ctx, "test")
-	primary.pg = counter
-	require.NotEqual(t, primaryVersion, primary.keptUsageVersion(ctx, "test"))
+	require.Equal(t, reads, again)
+
+	// A restored history may reach the same numeric revision with different
+	// data. The token must prevent reusing the prior standby result.
+	var revision int64
+	var oldToken string
+	require.NoError(t, primary.pg.QueryRowContext(ctx, `SELECT (SELECT value::bigint FROM sync_metadata WHERE key='usage_change_revision'), (SELECT value FROM sync_metadata WHERE key='usage_history_token')`).Scan(&revision, &oldToken))
+	tx, err := primary.beginTx(ctx, nil)
+	require.NoError(t, err)
+	_, err = tx.ExecContext(ctx, `UPDATE usage_events SET output_tokens=output_tokens+100 WHERE session_id='paid-a'`)
+	require.NoError(t, err)
+	_, err = tx.ExecContext(ctx, `UPDATE sync_metadata SET value=$1::bigint::text WHERE key='usage_change_revision'`, revision-1)
+	require.NoError(t, err)
+	require.NoError(t, tx.Commit())
+	var newRevision int64
+	var newToken string
+	require.NoError(t, primary.pg.QueryRowContext(ctx, `SELECT (SELECT value::bigint FROM sync_metadata WHERE key='usage_change_revision'), (SELECT value FROM sync_metadata WHERE key='usage_history_token')`).Scan(&newRevision, &newToken))
+	require.Equal(t, revision, newRevision)
+	require.NotEqual(t, oldToken, newToken)
+	require.NoError(t, primary.pg.QueryRowContext(ctx, `SELECT pg_current_wal_lsn()::text`).Scan(&lsn))
+	require.Eventually(t, func() bool {
+		var caughtUp bool
+		return connection.QueryRowContext(ctx, `SELECT pg_last_wal_replay_lsn() >= $1::pg_lsn`, lsn).Scan(&caughtUp) == nil && caughtUp
+	}, 20*time.Second, 50*time.Millisecond)
+	want, err = (&Store{pg: primary.pg}).readDailyUsage(ctx, filter)
+	require.NoError(t, err)
+	got, err = standby.GetDailyUsage(ctx, filter)
+	require.NoError(t, err)
+	require.Equal(t, want, got)
+	require.NotEqual(t, 1250, got.Totals.OutputTokens)
 }
 
 func TestUsageKeptJournalReplacementAtSameRevision(t *testing.T) {

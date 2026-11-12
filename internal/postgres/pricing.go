@@ -9,6 +9,7 @@ import (
 
 	"github.com/ccoveille/go-safecast/v2"
 
+	"go.kenn.io/agentsview/internal/config"
 	"go.kenn.io/agentsview/internal/db"
 	"go.kenn.io/agentsview/internal/export"
 	"go.kenn.io/agentsview/internal/money"
@@ -29,6 +30,8 @@ type pricingLoad struct {
 type pricingSnapshot struct {
 	loaded bool
 	rows   []export.EffectivePricingRow
+	frozen bool
+	custom map[string]config.CustomModelRate
 }
 
 func pricingRowsToMap(prices []db.ModelPricing) map[string]export.ModelRates {
@@ -207,9 +210,13 @@ func (s *Store) readPricingMap(ctx context.Context) ([]export.EffectivePricingRo
 	}
 	var prices []export.EffectivePricingRow
 	if err == nil {
-		s.runtimeState().pricingMu.Lock()
-		s.applyCustomPricing(out)
-		s.runtimeState().pricingMu.Unlock()
+		if s.pricingSnapshot != nil && s.pricingSnapshot.frozen {
+			applyCustomPricing(out, s.pricingSnapshot.custom)
+		} else {
+			s.runtimeState().pricingMu.Lock()
+			s.applyCustomPricing(out)
+			s.runtimeState().pricingMu.Unlock()
+		}
 		prices = db.PricingMapRows(out)
 		var document *db.GenAIPricingDocument
 		if s.readTx == nil {
@@ -303,7 +310,11 @@ func (s *Store) mergeDBPricing(
 // model. Kept separate from loadPricingMap so unit tests can exercise
 // the override step without a live PostgreSQL connection.
 func (s *Store) applyCustomPricing(out map[string]export.ModelRates) {
-	for model, cp := range s.runtimeState().customPricing {
+	applyCustomPricing(out, s.runtimeState().customPricing)
+}
+
+func applyCustomPricing(out map[string]export.ModelRates, custom map[string]config.CustomModelRate) {
+	for model, cp := range custom {
 		if cp.PriceAs != "" {
 			continue
 		}
