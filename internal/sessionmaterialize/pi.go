@@ -54,9 +54,9 @@ func materializePi(ctx context.Context, cfg config.Config, session *db.Session, 
 		if err != nil {
 			return Result{}, err
 		}
-		lock, err := remotesync.AcquireMirrorLock(ctx, root)
-		if err != nil {
-			return Result{}, err
+		lock, lockErr := remotesync.AcquireMirrorLock(ctx, root)
+		if lockErr != nil {
+			return Result{}, lockErr
 		}
 		data, err = readPiFile(ctx, root, name)
 		err = errors.Join(err, lock.Close())
@@ -74,7 +74,7 @@ func materializePi(ctx context.Context, cfg config.Config, session *db.Session, 
 	basename := filepath.Base(name)
 	if !strings.HasSuffix(basename, "_"+id+".jsonl") {
 		if !parser.IsValidSessionID(id) || !filepath.IsLocal(id+".jsonl") {
-			return Result{}, errors.New("Pi session identity cannot be used as a filename")
+			return Result{}, errors.New("pi session identity cannot be used as a filename")
 		}
 		basename = id + ".jsonl"
 	}
@@ -97,7 +97,7 @@ func findPiSource(ctx context.Context, cfg config.Config, session *db.Session, s
 	roots := configuredRoots(cfg, session, parser.AgentPi)
 	provider, ok := parser.NewProvider(parser.AgentPi, parser.ProviderConfig{Roots: roots, Machine: cfg.InstallationID, SourceMachines: cfg.SourceMachines[parser.AgentPi]})
 	if !ok {
-		return "", nil, errors.New("Pi source provider unavailable")
+		return "", nil, errors.New("pi source provider unavailable")
 	}
 	rootFor := func(name string) string {
 		for _, root := range roots {
@@ -137,7 +137,7 @@ func readPiFile(ctx context.Context, root, name string) ([]byte, error) {
 		return nil, err
 	}
 	if !within(root, name) || !strings.HasSuffix(name, ".jsonl") {
-		return nil, errors.New("Pi source outside configured root")
+		return nil, errors.New("pi source outside configured root")
 	}
 	info, err := os.Stat(name)
 	if err != nil {
@@ -152,13 +152,15 @@ func readPiFile(ctx context.Context, root, name string) ([]byte, error) {
 	}
 	after, err := os.Stat(name)
 	if err != nil || !os.SameFile(before, after) || before.Size() != after.Size() || before.ModTime() != after.ModTime() {
-		return nil, errors.New("Pi source changed while reading; retry when idle")
+		return nil, errors.New("pi source changed while reading; retry when idle")
 	}
 	return data, nil
 }
 
-var errPiIdentity = errors.New("Pi session identity differs")
-var errPiNotSession = errors.New("invalid Pi session header; first parsed record is not a session")
+var (
+	errPiIdentity   = errors.New("pi session identity differs")
+	errPiNotSession = errors.New("invalid Pi session header; first parsed record is not a session")
+)
 
 // Pi scans at most 1 MiB to identify a session before its full-load fallback.
 // The bounded lookup fails closed when a candidate cannot be identified.
@@ -173,7 +175,7 @@ func piHeader(ctx context.Context, r io.Reader, id string) ([]byte, int, error) 
 		start := offset
 		offset += len(line)
 		if offset > 1<<20 {
-			return nil, 0, errors.New("Pi session header exceeds 1 MiB lookup limit")
+			return nil, 0, errors.New("pi session header exceeds 1 MiB lookup limit")
 		}
 		if json.Valid(line) {
 			trimmed := bytes.TrimSpace(line)
@@ -231,7 +233,7 @@ func checkPiHeaderFile(ctx context.Context, name, id string) error {
 	_, _, err = piHeader(ctx, file, id)
 	after, statErr := os.Stat(name)
 	if statErr != nil || !os.SameFile(before, after) || before.Size() != after.Size() || before.ModTime() != after.ModTime() {
-		return errors.New("Pi source changed while reading; retry when idle")
+		return errors.New("pi source changed while reading; retry when idle")
 	}
 	return err
 }
@@ -263,12 +265,15 @@ func relocatePiHeader(ctx context.Context, data []byte, id, cwd string) ([]byte,
 		}
 	}
 	if count != 1 {
-		return nil, errors.New("Pi session header requires one cwd")
+		return nil, errors.New("pi session header requires one cwd")
 	}
 	if !utf8.ValidString(cwd) {
-		return nil, errors.New("Pi checkout path is not valid UTF-8")
+		return nil, errors.New("pi checkout path is not valid UTF-8")
 	}
-	encoded, _ := json.Marshal(cwd)
+	encoded, err := json.Marshal(cwd)
+	if err != nil {
+		return nil, err
+	}
 	return slices.Concat(data[:offset+start], encoded, data[offset+end:]), nil
 }
 
@@ -314,7 +319,7 @@ func piSettingsSessionDir(ctx context.Context, agentDir, cwd, projectConfig stri
 		if value, ok := settings["sessionDir"]; ok {
 			dir = ""
 			if err := json.Unmarshal(value, &dir); err != nil {
-				return "", errors.New("Pi settings sessionDir must be a string")
+				return "", errors.New("pi settings sessionDir must be a string")
 			}
 		}
 	}
@@ -336,7 +341,7 @@ func piResolveDir(cwd, dir string) (string, error) {
 		}
 		if u.Host != "" && u.Host != "localhost" {
 			if runtime.GOOS != "windows" {
-				return "", errors.New("Pi directory file URL must be local")
+				return "", errors.New("pi directory file URL must be local")
 			}
 			dir = "//" + u.Host + u.Path
 		} else {

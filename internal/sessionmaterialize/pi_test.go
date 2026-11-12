@@ -24,6 +24,7 @@ func TestPiDestination(t *testing.T) {
 		run  func(*testing.T)
 	}{
 		{"TestPiSettingsSessionDirectoryPrecedence", func(t *testing.T) {
+			t.Helper()
 			cwd, agent := t.TempDir(), t.TempDir()
 			t.Setenv("PI_CODING_AGENT_DIR", agent)
 			t.Setenv("PI_CODING_AGENT_SESSION_DIR", "")
@@ -46,6 +47,7 @@ func TestPiDestination(t *testing.T) {
 			assert.Equal(t, filepath.Join(cwd, "environment-sessions", "id.jsonl"), got)
 		}},
 		{"TestPiRelativeDestinationUsesCheckout", func(t *testing.T) {
+			t.Helper()
 			cwd := t.TempDir()
 			t.Setenv("PI_CODING_AGENT_SESSION_DIR", "relative-sessions")
 			t.Setenv("PI_CODING_AGENT_DIR", "")
@@ -83,6 +85,7 @@ func TestPiSourceLookup(t *testing.T) {
 		run  func(*testing.T)
 	}{
 		{"TestPiFallbackReadsOnlyHeadersAndRejectsUncertainCandidates", func(t *testing.T) {
+			t.Helper()
 			root, dest := t.TempDir(), t.TempDir()
 			t.Setenv("PI_CODING_AGENT_SESSION_DIR", dest)
 			t.Setenv("PI_CODING_AGENT_DIR", "")
@@ -117,6 +120,7 @@ func TestPiSourceLookup(t *testing.T) {
 			require.ErrorContains(t, err, "exceeds size limit")
 		}},
 		{"TestPiSourceFallbackAndIdentity", func(t *testing.T) {
+			t.Helper()
 			root, dest := t.TempDir(), t.TempDir()
 			t.Setenv("PI_CODING_AGENT_SESSION_DIR", dest)
 			t.Setenv("PI_CODING_AGENT_DIR", "")
@@ -143,6 +147,7 @@ func TestPiSourceLookup(t *testing.T) {
 			require.ErrorContains(t, err, "ambiguous")
 		}},
 		{"TestPiFallbackSkipsOtherParsedRecords", func(t *testing.T) {
+			t.Helper()
 			root := t.TempDir()
 			t.Setenv("PI_CODING_AGENT_SESSION_DIR", t.TempDir())
 			t.Setenv("PI_CODING_AGENT_DIR", "")
@@ -231,7 +236,7 @@ func TestMaterializePiConfiguredSources(t *testing.T) {
 }
 
 func TestPiLinkedSources(t *testing.T) {
-	root, external := t.TempDir(), t.TempDir()
+	root, external, cwd := t.TempDir(), t.TempDir(), t.TempDir()
 	t.Setenv("PI_CODING_AGENT_DIR", "")
 	t.Setenv("PI_CODING_AGENT_SESSION_DIR", t.TempDir())
 	cfg := config.Config{InstallationID: "local", LocalMachineName: "local", AgentDirs: map[parser.AgentType][]string{parser.AgentPi: {root}}}
@@ -243,19 +248,21 @@ func TestPiLinkedSources(t *testing.T) {
 	}
 	linked := filepath.Join(link, "target.jsonl")
 	s := &db.Session{ID: "pi:target", Agent: "pi", Machine: "local", FilePath: &linked}
-	result, err := Materialize(t.Context(), cfg, nil, s, t.TempDir())
+	result, err := Materialize(t.Context(), cfg, nil, s, cwd)
 	require.NoError(t, err)
 	assert.Equal(t, linked, result.Source)
 	missing := filepath.Join(root, "missing.jsonl")
 	s.FilePath = &missing
-	result, err = Materialize(t.Context(), cfg, nil, s, t.TempDir())
+	result, err = Materialize(t.Context(), cfg, nil, s, cwd)
 	require.NoError(t, err)
 	assert.Equal(t, linked, result.Source)
+	assert.Equal(t, "unchanged", result.Status)
 	// A saved path outside the provider roots is not itself authoritative.
 	s.FilePath = &original
-	result, err = Materialize(t.Context(), cfg, nil, s, t.TempDir())
+	result, err = Materialize(t.Context(), cfg, nil, s, cwd)
 	require.NoError(t, err)
 	assert.Equal(t, linked, result.Source)
+	assert.Equal(t, "unchanged", result.Status)
 }
 
 func TestPiHeaderIdentityAndVersion(t *testing.T) {

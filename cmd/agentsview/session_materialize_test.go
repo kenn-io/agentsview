@@ -57,7 +57,7 @@ func TestPiMaterializeCommandReturnsNativeResume(t *testing.T) {
 	root, dest, cwd := t.TempDir(), t.TempDir(), t.TempDir()
 	t.Setenv("PI_CODING_AGENT_DIR", "")
 	t.Setenv("PI_CODING_AGENT_SESSION_DIR", dest)
-	t.Setenv("PI_DIR", "")
+	t.Setenv("PI_DIR", root)
 	const machine = "0123456789abcdef0123456789abcdef"
 	require.NoError(t, os.WriteFile(filepath.Join(dataDir, "telemetry-install-id"), []byte(machine), 0o600))
 	require.NoError(t, os.WriteFile(filepath.Join(dataDir, "config.toml"), []byte(fmt.Sprintf("[agents.pi]\ndirs = [%q]\n", root)), 0o600))
