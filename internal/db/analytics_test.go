@@ -5217,7 +5217,16 @@ func TestGetAnalyticsToolsLocalDayBoundaries(t *testing.T) {
 		m.ToolCalls = []ToolCall{{SessionID: "boundary", ToolName: "Read", Category: "Read"}}
 		insertMessages(t, d, m)
 	}
-	resp, err := d.GetAnalyticsTools(t.Context(), AnalyticsFilter{From: "2025-03-01", To: "2025-03-12", Timezone: "America/New_York"})
+	filter := AnalyticsFilter{From: "2025-03-01", To: "2025-03-12", Timezone: "America/New_York"}
+	rows, err := d.analyticsToolRows(t.Context(), filter)
+	require.NoError(t, err)
+	require.Len(t, rows, 2)
+	counts := make(map[string]int)
+	for _, row := range rows {
+		counts[row.Date] = row.Count
+	}
+	assert.Equal(t, map[string]int{"2025-03-09": 3, "2025-03-10": 4}, counts)
+	resp, err := d.GetAnalyticsTools(t.Context(), filter)
 	require.NoError(t, err)
 	assert.Equal(t, 7, resp.TotalCalls)
 	require.Len(t, resp.ByTool, 1)
@@ -5225,6 +5234,31 @@ func TestGetAnalyticsToolsLocalDayBoundaries(t *testing.T) {
 	assert.Equal(t, []ToolTrendEntry{
 		{Date: "2025-03-03", ByCat: map[string]int{"Read": 3}},
 		{Date: "2025-03-10", ByCat: map[string]int{"Read": 4}},
+	}, resp.Trend)
+}
+
+func TestGetAnalyticsToolsBlankAndMalformedTimestamps(t *testing.T) {
+	d := testDB(t)
+	insertSession(t, d, "blank-time", "window", func(s *Session) {
+		s.StartedAt = new("2025-03-09T12:00:00Z")
+	})
+	for n, ts := range []string{"\t", "\u00a0", "bad"} {
+		m := asstMsgAt("blank-time", n, "read", ts)
+		m.ToolCalls = []ToolCall{{SessionID: "blank-time", ToolName: "Read", Category: "Read"}}
+		insertMessages(t, d, m)
+	}
+	for _, zone := range []string{"UTC", "America/New_York"} {
+		resp, err := d.GetAnalyticsTools(t.Context(), AnalyticsFilter{From: "2025-03-09", To: "2025-03-09", Timezone: zone})
+		require.NoError(t, err)
+		assert.Equal(t, 2, resp.TotalCalls, "zone %s", zone)
+		assert.Equal(t, []ToolTrendEntry{{Date: "2025-03-03", ByCat: map[string]int{"Read": 2}}}, resp.Trend, "zone %s", zone)
+	}
+	resp, err := d.GetAnalyticsTools(t.Context(), AnalyticsFilter{Timezone: "America/New_York"})
+	require.NoError(t, err)
+	assert.Equal(t, 3, resp.TotalCalls)
+	assert.Equal(t, []ToolTrendEntry{
+		{Date: "", ByCat: map[string]int{"Read": 1}},
+		{Date: "2025-03-03", ByCat: map[string]int{"Read": 2}},
 	}, resp.Trend)
 }
 
