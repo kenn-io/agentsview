@@ -44,3 +44,32 @@ func TestPiResumeCommandQuotesPaths(t *testing.T) {
 	assert.Equal(t, "cd '/work dir' && pi --session '/data/a b.jsonl'", piResumeCommand("/work dir", "/data/a b.jsonl", false))
 	assert.Equal(t, "Set-Location -LiteralPath 'C:\\work dir'; if ($?) { pi --session 'C:\\data\\a b.jsonl' }", piResumeCommand(`C:\work dir`, `C:\data\a b.jsonl`, true))
 }
+
+func TestPiMaterializeCommandReturnsNativeResume(t *testing.T) {
+	dataDir := newAgentDataDir(t)
+	root, dest, cwd := t.TempDir(), t.TempDir(), t.TempDir()
+	t.Setenv("PI_CODING_AGENT_DIR", "")
+	t.Setenv("PI_CODING_AGENT_SESSION_DIR", dest)
+	t.Setenv("PI_DIR", root)
+	const machine = "0123456789abcdef0123456789abcdef"
+	require.NoError(t, os.WriteFile(filepath.Join(dataDir, "telemetry-install-id"), []byte(machine), 0o600))
+	require.NoError(t, os.WriteFile(filepath.Join(dataDir, "config.toml"), []byte(fmt.Sprintf("[agents.pi]\ndirs = [%q]\n", root)), 0o600))
+	name := filepath.Join(root, "session.jsonl")
+	require.NoError(t, os.WriteFile(name, []byte(`{"type":"session","id":"example","cwd":"/old"}`+"\n"), 0o600))
+	database, err := db.OpenIsolatedContext(t.Context(), filepath.Join(dataDir, "sessions.db"))
+	require.NoError(t, err)
+	require.NoError(t, database.UpsertSession(t.Context(), db.Session{ID: "pi:example", Agent: "pi", Machine: machine, Project: "fixture", FilePath: &name}))
+	require.NoError(t, database.Close())
+	output, err := executeCommand(newRootCommand(), "session", "materialize", "pi:example", "--cwd", cwd, "--json")
+	require.NoError(t, err, output)
+	var result struct {
+		Command string   `json:"command"`
+		Paths   []string `json:"paths"`
+		Status  string   `json:"status"`
+	}
+	require.NoError(t, json.Unmarshal([]byte(output), &result))
+	assert.Contains(t, result.Command, "pi --session ")
+	assert.NotContains(t, result.Command, "claude --resume")
+	assert.Equal(t, "installed", result.Status)
+	assert.Equal(t, []string{filepath.Join(dest, "example.jsonl")}, result.Paths)
+}
