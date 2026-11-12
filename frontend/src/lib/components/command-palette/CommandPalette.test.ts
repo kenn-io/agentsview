@@ -578,10 +578,7 @@ describe("CommandPalette", () => {
     };
     mockEmbeddingsService.getApiV1EmbeddingsStatus
       .mockResolvedValueOnce({ running: false, setup })
-      .mockResolvedValueOnce({
-        running: false,
-        setup: { ...setup, provider: "built-in", missing_bytes: 295000000 },
-      });
+      .mockResolvedValueOnce({ running: false, setup });
     if (result === "conflict") {
       mockEmbeddingsService.postApiV1EmbeddingsSetup.mockRejectedValue(
         new ApiError(409, "provider changed", "embeddings_provider_changed"),
