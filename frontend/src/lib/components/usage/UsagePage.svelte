@@ -8,12 +8,8 @@
     mergeUsageAndSessionUrlParams,
     parseWindowDays,
   } from "../../stores/usageUrl.js";
-  import {
-    sessions,
-    filtersToParams,
-    parseFiltersFromParams,
-    splitExcludeProjectParam,
-  } from "../../stores/sessions.svelte.js";
+  import { sessions } from "../../stores/sessions.svelte.js";
+  import { filtersToParams, parseFiltersFromParams, splitExcludeProjectParam } from "../../stores/sessionFilters.js";
   import {
     SESSION_LABEL_PARAM,
     SESSION_PR_PARAM,
