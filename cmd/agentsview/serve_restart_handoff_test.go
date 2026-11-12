@@ -491,6 +491,7 @@ func TestServeRestartUsesEditedAuthAfterSettingsSave(t *testing.T) {
 		assert.Equal(t, rt.Record.PID, replacement.Record.PID)
 		assert.True(t, replacement.NoSync)
 		assert.NotEmpty(t, restartTestInstance(t, base, ""))
+		assert.False(t, replacement.RequireAuth)
 	})
 	t.Run("file edit without launch flag", checkServeRestartUsesEditedAuthConfig)
 	for _, mode := range []string{"foreground", "background"} {

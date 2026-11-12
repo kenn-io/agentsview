@@ -590,21 +590,7 @@ describe("SettingsStore.load auth handling", () => {
   });
 });
 
-describe("SettingsStore.restartDaemon", () => {
-  let reload: ReturnType<typeof vi.fn>;
-  const originalLocation = window.location;
-
-  beforeEach(() => {
-    vi.useFakeTimers();
-    reload = vi.fn();
-    Object.defineProperty(window, "location", { value: { reload }, writable: true });
-  });
-
-  afterEach(() => {
-    vi.useRealTimers();
-    Object.defineProperty(window, "location", { value: originalLocation, writable: true });
-  });
-
+describe("SettingsStore.save", () => {
   it("reports a saved image policy when restart status is missing", async () => {
     settingsService.putApiV1Settings.mockResolvedValue({
       agent_dirs: {},
@@ -621,6 +607,22 @@ describe("SettingsStore.restartDaemon", () => {
     expect(settings.toolResultImages).toBe("drop");
     expect(settings.saveError).toMatch(/saved/i);
     expect(settings.saveError).toMatch(/update|restart/i);
+  });
+});
+
+describe("SettingsStore.restartDaemon", () => {
+  let reload: ReturnType<typeof vi.fn>;
+  const originalLocation = window.location;
+
+  beforeEach(() => {
+    vi.useFakeTimers();
+    reload = vi.fn();
+    Object.defineProperty(window, "location", { value: { reload }, writable: true });
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+    Object.defineProperty(window, "location", { value: originalLocation, writable: true });
   });
 
   it("reads the pending restart from the settings response", async () => {
