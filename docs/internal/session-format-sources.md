@@ -1998,8 +1998,9 @@ fixtures retain this field; missing identities remain source-local.
   cells from other products are ignored. Inline code stays inline text;
   preformatted text keeps authored spaces, tabs, newlines, and backticks.
   Session IDs use the canonical UTC timestamp plus a zero-based occurrence
-  index among `Prompted` records sharing that timestamp, so inserted or
-  reordered records keep existing IDs.
+  index among `Prompted` records sharing that timestamp. Records with other
+  timestamps can be inserted or reordered without changing existing IDs;
+  order remains a tie-breaker only for exact timestamp collisions.
 - **Timestamps:** English rendering such as `Nov 9, 2026, 9:15:42 PM PST`, with
   a plain or narrow no-break space before `AM`/`PM`. The zone is an
   abbreviation for the account's zone when the export ran, so a summer
@@ -2011,6 +2012,10 @@ fixtures retain this field; missing identities remain source-local.
   abbreviations, malformed zones, declared non-English documents, and
   date-and-clock lines in other renderings fail the whole import before any
   session is written, and the error tells the user to rerun with `TZ` set.
+  The zone comes from `timeutil.LocalLocation`, which honors `TZ` on every
+  platform. A record with more than one line matching the timestamp format
+  is counted as an error, because a prompt can contain such a line and the
+  markup does not mark which one is metadata.
 - **Evidence:** `no-public-source`. Google publishes no schema for this HTML.
 - **Upstream:** searched 2026-08-01 and again 2026-11-12. Two independent
   parsers of real exports agree on the cell layout:

@@ -238,9 +238,10 @@ directory containing the extracted export.
 
 Conversation turns are imported as sessions. Providers that emit
 thinking/reasoning blocks or tool usage preserve those message types;
-each Gemini Apps `Prompted` record becomes one user message containing its
-complete visible plain text. HTML presentation does not infer speaker roles;
-inline code and preformatted text remain text without generated Markdown.
+each Gemini Apps `Prompted` record becomes a user message with the prompt and,
+when the record has a response, an assistant message with the response's
+visible plain text. Inline code and preformatted text remain text without
+generated Markdown.
 
 ### Images (ChatGPT)
 
@@ -302,8 +303,8 @@ You can safely re-import the same export file:
 - **Gemini Apps** — existing sessions are matched by the canonical UTC
   timestamp and its zero-based occurrence among records sharing that
   timestamp. Inserting or reordering records with other timestamps doesn't
-  change existing IDs. Content changes update the same one-message session;
-  unchanged records are skipped.
+  change existing IDs. Content changes update the same session; unchanged
+  records are skipped.
 
 Claude.ai and ChatGPT import results list each conversation that could not be
 imported under `refusals`, with its AgentsView session ID

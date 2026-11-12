@@ -237,8 +237,8 @@ func TestParseGeminiAppsSplitsPromptAndResponse(t *testing.T) {
 			want: []string{"prompt", "The old log says Jan 2, 2025, 3:04:05 PM EDT."},
 		},
 		{
-			name: "response keeps a standalone timestamp line", prompt: "prompt", response: "Jan 2, 2025, 3:04:05 PM EDT<br><p>answer</p>",
-			want: []string{"prompt", "Jan 2, 2025, 3:04:05 PM EDT\n\nanswer"},
+			name: "preformatted prompt keeps authored whitespace", prompt: "<pre>  x\n  </pre>", response: "",
+			want: []string{"  x\n  "},
 		},
 		{
 			name: "prompt line with a date and clock", prompt: "Summarize this log<br>12/03/2025 10:00:00 server restarted", response: "<p>It restarted.</p>",
@@ -354,6 +354,14 @@ func TestParseGeminiAppsMalformedPromptRecordsAreCountedErrors(t *testing.T) {
 		{
 			name: "empty prompt",
 			cell: geminiAppsCellHTML("Gemini Apps", "Prompted&nbsp;", "Jan 3, 2025, 3:04:05 PM EDT", "<p>answer</p>"),
+		},
+		{
+			name: "prompt line that matches the timestamp",
+			cell: geminiAppsPromptedCellHTML("Jan 3, 2025, 3:04:05 PM EDT", "Summarize this log<br>Jan 2, 2025, 3:04:05 PM EDT<br>Explain it", ""),
+		},
+		{
+			name: "response line that matches the timestamp",
+			cell: geminiAppsPromptedCellHTML("Jan 3, 2025, 3:04:05 PM EDT", "prompt", "Jan 2, 2025, 3:04:05 PM EDT<br><p>answer</p>"),
 		},
 		{
 			name: "no content cell",

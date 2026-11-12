@@ -15,6 +15,8 @@ import (
 	"unicode"
 
 	"golang.org/x/net/html"
+
+	"go.kenn.io/agentsview/internal/timeutil"
 )
 
 type GeminiAppsParseSummary struct{ Skipped, Errors int }
@@ -44,7 +46,7 @@ type geminiAppsUnsupportedError struct{ err error }
 func (e geminiAppsUnsupportedError) Error() string { return e.err.Error() }
 
 func (p *geminiAppsImportOnlyProvider) ParseGeminiAppsExport(root string, callback func(ParseResult) error) (GeminiAppsParseSummary, error) {
-	return parseGeminiAppsExport(root, time.Local, callback)
+	return parseGeminiAppsExport(root, timeutil.LocalLocation(), callback)
 }
 
 // parseGeminiAppsExport parses every Gemini Apps HTML file under root. host
@@ -220,15 +222,22 @@ func planGeminiAppsCell(cell *html.Node, host *time.Location) (bool, ParseResult
 		return false, ParseResult{}, nil
 	}
 
+	// A prompt can contain a line that looks exactly like the timestamp.
+	// Nothing in the markup tells the two apart, so a record with more than
+	// one candidate is counted as an error instead of guessing.
 	stampLine := -1
 	var match []string
 	texts := make([]string, len(lines))
 	for i, line := range lines {
 		texts[i] = normalizeMetadata(geminiAppsRender(children[line[0]:line[1]]))
-		if i > 0 && stampLine < 0 {
-			if match = geminiAppsTimestampLineRE.FindStringSubmatch(texts[i]); match != nil {
-				stampLine = i
+		if i == 0 {
+			continue
+		}
+		if m := geminiAppsTimestampLineRE.FindStringSubmatch(texts[i]); m != nil {
+			if stampLine >= 0 {
+				return false, ParseResult{}, errors.New("prompted activity record has more than one timestamp line")
 			}
+			stampLine, match = i, m
 		}
 	}
 	if stampLine < 0 {
@@ -327,14 +336,35 @@ func geminiAppsIsPrompted(line string) bool {
 	return len(fields) > 0 && strings.EqualFold(fields[0], geminiAppsPromptedLabel)
 }
 
-// geminiAppsPromptText renders the lines before the timestamp and removes the
-// leading Prompted label.
+// geminiAppsPromptText renders the lines before the timestamp without the
+// leading Prompted label. The label is removed before rendering so authored
+// whitespace in preformatted prompt text survives.
 func geminiAppsPromptText(nodes []*html.Node) string {
-	text := strings.TrimLeftFunc(normalizeGeminiAppsContentText(geminiAppsRender(nodes)), unicode.IsSpace)
-	if len(text) < len(geminiAppsPromptedLabel) || !strings.EqualFold(text[:len(geminiAppsPromptedLabel)], geminiAppsPromptedLabel) {
+	var b strings.Builder
+	labelled := false
+	for _, n := range nodes {
+		if !labelled {
+			if n.Type == html.CommentNode || (n.Type == html.TextNode && strings.TrimSpace(n.Data) == "") {
+				continue
+			}
+			if n.Type != html.TextNode {
+				return ""
+			}
+			text := strings.TrimLeftFunc(sanitizeGeminiAppsText(n.Data), unicode.IsSpace)
+			if len(text) < len(geminiAppsPromptedLabel) || !strings.EqualFold(text[:len(geminiAppsPromptedLabel)], geminiAppsPromptedLabel) {
+				return ""
+			}
+			labelled = true
+			b.WriteString(geminiAppsTextValue(text[len(geminiAppsPromptedLabel):], false))
+			continue
+		}
+		b.WriteString(geminiAppsVisibleTextInContext(n, false))
+	}
+	prompt := normalizeGeminiAppsContentText(b.String())
+	if strings.TrimSpace(prompt) == "" {
 		return ""
 	}
-	return strings.TrimFunc(text[len(geminiAppsPromptedLabel):], unicode.IsSpace)
+	return prompt
 }
 
 func normalizeGeminiAppsContentText(value string) string {

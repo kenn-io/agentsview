@@ -25,7 +25,9 @@ import (
 	"go.kenn.io/agentsview/internal/testjsonl"
 )
 
-const geminiAppsCLIHTML = `<html><head><title>My Activity History</title></head><body><div class="outer-cell"><div class="header-cell"><h3>Gemini Apps</h3><p>Prompted</p><p>Jan 2, 2025, 3:04:05 PM EDT</p></div><div class="content-cell"><p>cli prompt</p><p>cli answer</p></div></div></body></html>`
+// geminiAppsCLIHTML is one Prompted record in the cell layout Google Takeout
+// writes.
+const geminiAppsCLIHTML = `<html><head><title>My Activity History</title></head><body><div class="mdl-grid"><div class="outer-cell mdl-cell mdl-cell--12-col mdl-shadow--2dp"><div class="mdl-grid"><div class="header-cell mdl-cell mdl-cell--12-col"><p class="mdl-typography--title">Gemini Apps<br></p></div><div class="content-cell mdl-cell mdl-cell--6-col mdl-typography--body-1">Prompted&nbsp;cli prompt<br>Jan 2, 2025, 3:04:05 PM EDT<br><p>cli answer</p></div><div class="content-cell mdl-cell mdl-cell--12-col mdl-typography--caption"><b>Products:</b><br>&emsp;Gemini Apps<br></div></div></div></div></body></html>`
 
 func TestGeminiAppsImportDispatchesDirectAndZipSources(t *testing.T) {
 	database := dbtest.OpenTestDB(t)
@@ -68,7 +70,7 @@ func TestGeminiAppsImportDispatchesDirectAndZipSources(t *testing.T) {
 	nonPrompt := filepath.Join(t.TempDir(), "non-prompt.html")
 	require.NoError(t, os.WriteFile(
 		nonPrompt,
-		[]byte(strings.Replace(geminiAppsCLIHTML, "<p>Prompted</p>", "<p>Canvas</p>", 1)),
+		[]byte(strings.Replace(geminiAppsCLIHTML, "Prompted&nbsp;cli prompt", "Gave feedback: Good response", 1)),
 		0o644,
 	))
 	stats, err = runImportDispatch(
