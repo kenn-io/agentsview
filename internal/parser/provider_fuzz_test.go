@@ -25,8 +25,9 @@ package parser
 // testdata/fuzz/<Target>/. `go test -run '^$' -fuzz '^<Target>$'` explores
 // from there; .github/workflows/fuzz.yml does that weekly for every target.
 // Inputs land in os.TempDir. Database targets build a SQLite store per
-// input, so point TMPDIR at tmpfs (TMPDIR=/dev/shm on Linux) when fuzzing
-// locally; on a disk each input waits on syncs.
+// input, so put temp files on tmpfs when fuzzing locally; on a disk each
+// input waits on syncs. On Linux, use TMPDIR=/dev/shm GOTMPDIR=/tmp: the
+// second keeps the test binary off /dev/shm, which is often noexec.
 
 import (
 	"bufio"
