@@ -36,10 +36,9 @@ func activityUsageSelection(f AnalyticsFilter, q activity.Query) string {
 	return "usage|" + kept.Selection(f, q)
 }
 
+// activityCandidateDigest receives the IDs sorted by activityReportSessions.
 func activityCandidateDigest(ids []string) ([32]byte, error) {
-	ordered := slices.Clone(ids)
-	slices.Sort(ordered)
-	encoded, err := json.Marshal(ordered)
+	encoded, err := json.Marshal(ids)
 	if err != nil {
 		return [32]byte{}, err
 	}
