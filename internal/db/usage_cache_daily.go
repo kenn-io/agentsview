@@ -4,9 +4,12 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"slices"
 	"sort"
+	"strings"
 
 	"go.kenn.io/agentsview/internal/export"
+	"go.kenn.io/agentsview/internal/kept"
 	"go.kenn.io/agentsview/internal/money"
 )
 
@@ -174,14 +177,42 @@ func (db *DB) assembleDailyUsageFacts(
 	if err != nil {
 		return DailyUsageResult{}, fmt.Errorf("building pricing block: %w", err)
 	}
-	return DailyUsageResult{
+	result := DailyUsageResult{
 		SchemaVersion: export.UsageDailySchemaVersion,
 		Pricing:       &pricingBlock,
 		Projects:      export.ProjectMapForWire(projects),
 		Daily:         projectRows.Daily,
 		Totals:        totals,
 		SessionCounts: projectRows.SessionCounts,
-	}, nil
+	}
+	if filter.PairwiseSides {
+		sides := facts.PairwiseEvidence
+		if sides == nil {
+			sides = NewUsagePairwiseSides()
+		}
+		for key, bucket := range accum {
+			t := UsageTotals{InputTokens: bucket.input, OutputTokens: bucket.output, CacheCreationTokens: bucket.cacheWrite, CacheReadTokens: bucket.cacheRead}
+			t.TotalCost = bucket.cost
+			sides.AddBucket(key.model, key.project, t)
+		}
+		for _, id := range sessionIDs {
+			for key, cost := range sessionCosts[id].estimated {
+				sides.AddEstimate(key.model, cost)
+				if id != usageDayTotalsSessionID && id != usageRollupCursorSessionID {
+					facts.SideMemberships = append(facts.SideMemberships, usageSideMembership{id, key.model, key.project})
+				}
+			}
+		}
+		slices.SortFunc(facts.SideMemberships, func(a, b usageSideMembership) int { return strings.Compare(a.SessionID, b.SessionID) })
+		for _, member := range facts.SideMemberships {
+			sides.AddMembership(member.Model, member.Project, member.SessionID)
+		}
+		result.Pairwise = sides
+		if result.Bytes() > kept.DefaultMaxBytes {
+			result.Pairwise = nil
+		}
+	}
+	return result, nil
 }
 
 func recordUsageFactsPricing(

@@ -8,6 +8,8 @@ import (
 	"go.kenn.io/agentsview/internal/usagefacts"
 )
 
+const usageDayTotalsSessionID = "\x00usage-day-totals"
+
 // readUsageDayTotals reads ordinary totals and prepares the exceptional session
 // metadata for the shared rollup query's exception fold.
 func readUsageDayTotals(ctx context.Context, conn *sql.Conn, timezoneID int64, snapshot *usageQuerySnapshot, filter UsageFilter) (usageFactsResult, error) {
@@ -38,7 +40,7 @@ func readUsageDayTotals(ctx context.Context, conn *sql.Conn, timezoneID int64, s
 	for rows.Next() {
 		var group usageFactsGroup
 		var band int
-		group.SessionID = "\x00usage-day-totals"
+		group.SessionID = usageDayTotalsSessionID
 		if err := rows.Scan(&group.Date, &group.Project, &group.Agent, &group.Machine,
 			&group.Model, &group.ProviderID, &group.PricedModel, &group.PricingTimestamp,
 			&group.InputTokens, &group.OutputTokens, &group.CacheCreationTokens, &group.CacheReadTokens,
@@ -64,7 +66,7 @@ func readUsageDayTotals(ctx context.Context, conn *sql.Conn, timezoneID int64, s
 	}
 	result.Groups = append(result.Groups, authoritative.Groups...)
 	result.MatchingSessions = authoritative.MatchingSessions
-	if !filter.SkipSessionCounts {
+	if !filter.SkipSessionCounts || filter.PairwiseSides {
 		if err := readUsageSessionCounts(ctx, conn, timezoneID, *snapshot, filter, &result); err != nil {
 			return usageFactsResult{}, err
 		}
@@ -76,25 +78,32 @@ func readUsageDayTotals(ctx context.Context, conn *sql.Conn, timezoneID int64, s
 // for distinct counting after the exception fold.
 func readUsageSessionCounts(ctx context.Context, conn *sql.Conn, timezoneID int64, snapshot usageQuerySnapshot, filter UsageFilter, result *usageFactsResult) error {
 	b := NewQueryBuilder(SQLiteQueryDialect(), 0)
-	where, owner := usageOrdinaryWindowWhere(b, timezoneID, snapshot, filter)
-	rows, err := conn.QueryContext(ctx, `SELECT CASE WHEN (`+owner+`) THEN s.session_id ELSE '' END AS owner_id, s.project, s.baked_agent, COUNT(DISTINCT s.session_id)
+	where, owner := usageOrdinaryWindowWhere(b, timezoneID, snapshot, filter, !filter.PairwiseSides)
+	selectOwner, model, count := `s.session_id`, `r.reported_model`, `0`
+	if !filter.PairwiseSides {
+		selectOwner, model, count = `CASE WHEN (`+owner+`) THEN s.session_id ELSE '' END`, `''`, `COUNT(DISTINCT s.session_id)`
+	}
+	rows, err := conn.QueryContext(ctx, `SELECT `+selectOwner+` AS owner_id, s.project, s.baked_agent, `+model+` AS model, `+count+`
             FROM usage_daily_rollups r
             JOIN (SELECT *, baked_agent AS agent FROM usage_rollup_installs) s ON s.id=r.rollup_install_id
             WHERE `+where+`
-            GROUP BY owner_id, s.project, s.baked_agent`, b.Args()...)
+            GROUP BY owner_id, s.project, s.baked_agent, model`, b.Args()...)
 	if err != nil {
 		return err
 	}
 	defer rows.Close()
 	result.SessionCounts = NewUsageSessionCounts(nil)
 	for rows.Next() {
-		var id, project, agent string
+		var id, project, agent, model string
 		var count int
-		if err := rows.Scan(&id, &project, &agent, &count); err != nil {
+		if err := rows.Scan(&id, &project, &agent, &model, &count); err != nil {
 			return err
 		}
 		if id != "" {
 			result.MatchingSessions[id] = UsageSessionInfo{Project: project, Agent: agent}
+			if filter.PairwiseSides {
+				result.SideMemberships = append(result.SideMemberships, usageSideMembership{id, model, project})
+			}
 			continue
 		}
 		result.SessionCounts.Total += count
@@ -177,9 +186,12 @@ func usageOwnerPredicate(alias string, b *QueryBuilder, from, to, authoritativeS
 
 // usageOrdinaryWindowWhere shares the daily-row window and owner classification.
 // Bind the owner expression first because counts select it before their WHERE.
-func usageOrdinaryWindowWhere(b *QueryBuilder, timezoneID int64, snapshot usageQuerySnapshot, filter UsageFilter) (string, string) {
+func usageOrdinaryWindowWhere(b *QueryBuilder, timezoneID int64, snapshot usageQuerySnapshot, filter UsageFilter, includeOwner bool) (string, string) {
 	from, to := usageRollupDateBounds(snapshot)
-	owner := usageOwnerPredicate("s", b, from, to, "")
+	owner := ""
+	if includeOwner {
+		owner = usageOwnerPredicate("s", b, from, to, "")
+	}
 	where := `s.timezone_id=` + b.Add(timezoneID)
 	if from != "" {
 		where += ` AND r.local_date>=` + b.Add(from)

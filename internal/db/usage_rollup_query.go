@@ -33,7 +33,11 @@ type usageFactsResult struct {
 	MatchingSessions map[string]UsageSessionInfo
 	SessionCounts    UsageSessionCounts
 	TopSessions      []TopSessionEntry
+	SideMemberships  []usageSideMembership
+	PairwiseEvidence *UsagePairwiseSides
 }
+
+type usageSideMembership struct{ SessionID, Model, Project string }
 
 type usageCacheMissingSessionError struct{ SessionID string }
 
@@ -98,13 +102,16 @@ func (cache *usageCache) usageRollupQuery(
 	if err != nil {
 		return usageFactsResult{}, err
 	}
+	if filter.PairwiseSides {
+		result.PairwiseEvidence = NewUsagePairwiseSides()
+	}
 	exceptions, err := readUsageRollupExceptions(
 		ctx, conn, timezoneID, snapshot, filter)
 	if err != nil {
 		return usageFactsResult{}, err
 	}
 	exceptionGroups, err := aggregateUsageRollupExceptions(
-		exceptions, snapshot, filter, resolver)
+		exceptions, snapshot, filter, resolver, &result)
 	if err != nil {
 		return usageFactsResult{}, err
 	}
@@ -456,7 +463,7 @@ func (cache *usageCache) usageRollupActivityQuery(
 
 func aggregateUsageRollupExceptions(
 	facts []usageRollupFact, snapshot usageQuerySnapshot, filter UsageFilter,
-	resolver *export.PricingResolver,
+	resolver *export.PricingResolver, evidence *usageFactsResult,
 ) ([]usageFactsGroup, error) {
 	if len(facts) == 0 {
 		return nil, nil
@@ -465,7 +472,7 @@ func aggregateUsageRollupExceptions(
 	plain, general, discarded := rankUsageRollupSnapshots(facts)
 	plain = filterUsageRollupOwners(plain, sessions, filter)
 	general = filterUsageRollupOwners(general, sessions, filter)
-	general = deduplicateUsageRollupGeneral(general)
+	general = deduplicateUsageRollupGeneral(general, sessions, evidence.PairwiseEvidence)
 	survivors := slices.Concat(plain, general)
 	type key struct {
 		session, agent, date, model, providerID, priced, pattern, rateHash string
@@ -711,7 +718,7 @@ func usageCursorAutomatedScopePasses(filter UsageFilter, isHeadless bool) bool {
 	}
 }
 
-func deduplicateUsageRollupGeneral(facts []usageRollupFact) []usageRollupFact {
+func deduplicateUsageRollupGeneral(facts []usageRollupFact, sessions map[string]*usageQuerySession, sides *UsagePairwiseSides) []usageRollupFact {
 	byKey := make(map[string][]usageRollupFact)
 	for _, fact := range facts {
 		byKey[usageRollupGeneralKey(fact)] = append(
@@ -720,7 +727,20 @@ func deduplicateUsageRollupGeneral(facts []usageRollupFact) []usageRollupFact {
 	keys := SortedKeys(byKey)
 	result := make([]usageRollupFact, 0, len(keys))
 	for _, key := range keys {
-		result = append(result, slices.MinFunc(byKey[key], compareUsageGeneralWinner))
+		winner := slices.MinFunc(byKey[key], compareUsageGeneralWinner)
+		if sides != nil {
+			for _, fact := range byKey[key] {
+				var project, winnerProject string
+				if session := sessions[fact.AttributionSessionID]; session != nil {
+					project = session.Project
+				}
+				if session := sessions[winner.AttributionSessionID]; session != nil {
+					winnerProject = session.Project
+				}
+				sides.MarkDifference(fact.Model, project, winner.Model, winnerProject)
+			}
+		}
+		result = append(result, winner)
 	}
 	return result
 }
