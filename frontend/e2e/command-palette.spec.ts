@@ -150,12 +150,20 @@ test("clearing a failed search prevents its delayed retry from reaching the serv
     await route.fulfill({ status: 503 });
   });
   await page.goto("/usage");
+  await page.clock.install();
+  await page.clock.pauseAt(await page.evaluate(() => Date.now() + 60_000));
   await openSearch(page, "cancel this search");
-  await page.waitForResponse(
+  const failedResponse = page.waitForResponse(
     (response) => response.url().includes("/api/v1/search?") && response.status() === 503,
   );
+  // Run the search debounce, then keep the retry clock paused while clearing.
+  // Real time here lets a slow test controller lose the race to the retry.
+  await page.clock.runFor(300);
+  await (await failedResponse).finished();
   const input = page.locator(".palette-input");
   await input.fill("");
+  await page.clock.runFor(500);
+  // Timer callbacks can start fetches whose route events arrive asynchronously.
   await page.waitForTimeout(500);
   expect(attempts).toBe(1);
   await expect(input).toHaveValue("");
