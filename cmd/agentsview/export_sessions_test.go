@@ -716,7 +716,7 @@ func pendingExportArchive(t *testing.T, archiveOnly bool) string {
 	path := filepath.Join(os.Getenv("AGENTSVIEW_DATA_DIR"), "sessions.db")
 	raw, err := sql.Open("sqlite3", path)
 	require.NoError(t, err)
-	_, err = raw.ExecContext(t.Context(), `DELETE FROM session_project_identity_snapshots; DELETE FROM background_migrations WHERE name = 'session_project_identity_snapshots_v1'; DELETE FROM stats WHERE key = 'project_identity_backfill_verified'`)
+	_, err = raw.ExecContext(t.Context(), `DELETE FROM session_project_identity_snapshots; DELETE FROM background_migrations WHERE name = 'session_project_identity_snapshots_v1'; DELETE FROM stats WHERE key = 'session_project_identity_snapshots_v1_verified'`)
 	require.NoError(t, err)
 	require.NoError(t, raw.Close())
 	return path
