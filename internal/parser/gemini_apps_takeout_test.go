@@ -245,6 +245,10 @@ func TestParseGeminiAppsSplitsPromptAndResponse(t *testing.T) {
 			want: []string{"Summarize this log\n12/03/2025 10:00:00 server restarted", "It restarted."},
 		},
 		{
+			name: "preformatted prompt keeps boundary newlines", prompt: "<pre><code>\n  x\n</code></pre>", response: "",
+			want: []string{"\n  x\n"},
+		},
+		{
 			name: "label word inside prompt", prompt: "Prompted by what?", response: "",
 			want: []string{"Prompted by what?"},
 		},
@@ -287,6 +291,7 @@ func TestParseGeminiAppsResponseRenderingIsPlainText(t *testing.T) {
 			want:     "intro\n\n  line one\n\tline  two  \n`one` and ```three```  \n\n\ninline x",
 		},
 		{name: "boundary preformatted whitespace", response: "<pre><code>  leading\n\tbody\n  </code></pre>", want: "  leading\n\tbody\n  "},
+		{name: "boundary preformatted newlines", response: "<pre><code>\nbody\n</code></pre>", want: "\nbody\n"},
 		{
 			name:     "hidden elements and comments",
 			response: "\n<!-- generated marker -->\n<script>secret script</script><style>secret style</style><template><p>secret template</p></template><noscript>secret noscript</noscript>\n<p>answer</p>\n",
