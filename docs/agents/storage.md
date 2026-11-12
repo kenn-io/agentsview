@@ -683,21 +683,6 @@ must run the same `server.APIVersion`, which the CLI already enforces. In that
 target `push_vectors` is optional: omitted means the vector phase runs, the same
 default as the `[pg]` config key, and an explicit `false` opts out.
 
-Every change to the generated OpenAPI contract needs a record in
-`cmd/agentsview/testdata/api_versions`. Run `make test-api-version` to find the
-version and contract digest. The check also runs with `make test`. For a PR
-targeting another branch, set `API_VERSION_BASE` to that branch's ref, for
-example `API_VERSION_BASE=origin/feature make test-api-version`.
-Name the record `<version>-<contract digest>-<summary digest>`
-and put a trimmed one-line summary in it. The summary digest is the SHA-256 of
-the summary without its trailing newline: `printf %s "summary" | sha256sum`.
-Keep records from the target base. When a used version's contract changes, take
-the next `server.APIVersion` and move any feature minimum introduced by the PR.
-A record added only on the current branch can be replaced at the same version.
-When two PRs record different contracts under one version, the later one deletes
-its new record, rebases onto `main` after the earlier PR merges, and reruns the
-check.
-
 ## Backend Parity
 
 Automatic repository project naming belongs to the writable SQLite archive.

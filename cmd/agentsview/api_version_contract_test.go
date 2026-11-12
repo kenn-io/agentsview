@@ -93,16 +93,16 @@ func baseAPIVersionRecords(ctx context.Context) ([]string, error) {
 
 func checkAPIVersionContract(apiVersion int, digest string, records []apiVersionRecord, base []string) error {
 	path := func(version int) string { return apiVersionRecord{version, digest, "<summary digest>"}.name() }
-	nextVersion := func() string {
-		next := apiVersion + 1
-		return fmt.Sprintf("generated OpenAPI contract changed under API version %d; in %s add %s with a one-line summary and its SHA-256 digest in the filename, set server.APIVersion to %d, and move any feature minimum this PR introduced to %d (see docs/agents/storage.md)", apiVersion, apiVersionRecordDir, path(next), next, next)
-	}
-	byVersion := map[int]apiVersionRecord{}
-	paths := map[string]bool{}
 	highest := apiVersion
 	for _, r := range records {
 		highest = max(highest, r.version)
 	}
+	nextVersion := func() string {
+		next := highest + 1
+		return fmt.Sprintf("generated OpenAPI contract changed under API version %d; in %s add %s with a one-line summary and its SHA-256 digest in the filename, set server.APIVersion to %d, and move any feature minimum this PR introduced to %d (see docs/internal/huma-api-routes.md)", apiVersion, apiVersionRecordDir, path(next), next, next)
+	}
+	byVersion := map[int]apiVersionRecord{}
+	paths := map[string]bool{}
 	for _, r := range records {
 		paths[r.name()] = true
 		if previous, ok := byVersion[r.version]; ok && previous.digest != r.digest {
@@ -263,6 +263,14 @@ func TestCheckAPIVersionContract(t *testing.T) {
 		err := checkAPIVersionContract(15, base.digest, []apiVersionRecord{base, left}, []string{base.name()})
 		require.ErrorContains(t, err, "16")
 		require.NoError(t, checkAPIVersionContract(15, base.digest, []apiVersionRecord{base, left}, []string{base.name(), left.name()}))
+	})
+	t.Run("changed restored contract uses next free version", func(t *testing.T) {
+		records := []apiVersionRecord{base, left}
+		history := []string{base.name(), left.name()}
+		require.NoError(t, checkAPIVersionContract(15, base.digest, records, history))
+		err := checkAPIVersionContract(15, merged, records, history)
+		require.ErrorContains(t, err, "17-dddd-<summary digest>")
+		require.ErrorContains(t, err, "set server.APIVersion to 17")
 	})
 	t.Run("unknown history", func(t *testing.T) {
 		err := checkAPIVersionContract(15, left.digest, []apiVersionRecord{base}, nil)
