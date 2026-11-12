@@ -2,6 +2,7 @@ package main
 
 import (
 	"bufio"
+	"bytes"
 	"context"
 	"encoding/json/v2"
 	"fmt"
@@ -342,24 +343,40 @@ func TestRestartKeepsAdoptedNoSync(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.WithoutCancel(t.Context()))
 	t.Cleanup(cancel)
 	cmd := exec.CommandContext(ctx, os.Args[0], "serve", "--replace", "--host=127.0.0.1", "--port=0", "--no-browser", "--no-update-check")
+	var output bytes.Buffer
+	cmd.Stdout, cmd.Stderr = &output, &output
 	require.NoError(t, cmd.Start())
 	done := make(chan error, 1)
-	go func() { done <- cmd.Wait() }()
+	go func() { done <- cmd.Wait(); close(done) }()
 	t.Cleanup(func() {
 		stopCtx, stop := context.WithTimeout(context.WithoutCancel(t.Context()), 30*time.Second)
 		defer stop()
 		_, _ = stopWritableDaemonsForUpdate(stopCtx, config.Config{DataDir: dataDir})
 		select {
 		case <-done:
+			if t.Failed() {
+				t.Logf("replacement output: %s", output.String())
+			}
 		case <-stopCtx.Done():
 			assert.Fail(t, "replacement did not exit")
 		}
 	})
 	var current *DaemonRuntime
+	var processErr error
+	var processExited bool
 	require.Eventually(t, func() bool {
+		select {
+		case err := <-done:
+			processErr, processExited = err, true
+			return true
+		default:
+		}
 		current = FindDaemonRuntime(dataDir)
 		return current != nil && current.Record.PID != old.Record.PID
 	}, 30*time.Second, 100*time.Millisecond)
+	if processExited {
+		require.FailNow(t, "replacement exited before publishing its runtime", "%v: %s", processErr, output.String())
+	}
 	require.True(t, current.NoSync)
 	current = restartAndWait(t, dataDir, fmt.Sprintf("http://127.0.0.1:%d", current.Port), "")
 	assert.True(t, current.NoSync)
