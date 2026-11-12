@@ -928,6 +928,32 @@ func TestPGUsageCacheChronologicalTimestamps(t *testing.T) {
 	}
 }
 
+func TestPGUsageCacheUnreadableJournalStopsWarming(t *testing.T) {
+	_, syncer, _, _ := keptUsageFixture(t)
+	ctx := t.Context()
+	roleURL := newUsageJournalRole(t, syncer, `GRANT SELECT ON ALL TABLES IN SCHEMA `+syncer.schema+` TO ROLE; REVOKE SELECT ON usage_session_changes FROM ROLE`)
+	reader, err := NewStore(ctx, roleURL, syncer.schema, true)
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, reader.Close()) })
+	source := &pgUsageCacheSource{Store: reader, target: "read-only-target"}
+	var systemID string
+	require.NoError(t, reader.pg.QueryRowContext(ctx, `SELECT (pg_control_system()).system_identifier::text`).Scan(&systemID))
+	for _, after := range []*int64{nil, new(int64)} {
+		_, err := source.CaptureUsage(ctx, db.UsageSourceRequest{Filter: db.UsageFilter{Timezone: "UTC"}, AfterRevision: after})
+		require.ErrorIs(t, err, db.ErrUsageSourceUnavailable)
+		require.True(t, isInsufficientPrivilege(err))
+	}
+	require.NoError(t, reader.ConfigureUsageCache(ctx, t.TempDir(), roleURL, syncer.schema))
+	t.Cleanup(func() { require.NoError(t, reader.usageCache.Close()) })
+	filter := db.UsageFilter{Timezone: "UTC"}
+	got, err := reader.GetDailyUsage(ctx, filter)
+	require.NoError(t, err)
+	require.Equal(t, 1250, got.Totals.OutputTokens)
+	wait, cancel := context.WithTimeout(ctx, 3*time.Second)
+	defer cancel()
+	require.NoError(t, reader.usageCache.WaitWarm(wait))
+}
+
 func TestPGUsageCacheDirectFallbackAndRecovery(t *testing.T) {
 	for _, name := range []string{"granted role", "initial denial", "cancelled caller", "extraction failure", "busy sessions", "busy accounts", "pricing mutation", "late journal installation"} {
 		t.Run(name, func(t *testing.T) {

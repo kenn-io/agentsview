@@ -126,6 +126,9 @@ func (source *pgUsageCacheSource) CaptureUsage(ctx context.Context, request db.U
 	ids := request.IDs
 	if request.AfterRevision != nil {
 		_, changes, err := view.loadUsageChanges(ctx, *request.AfterRevision)
+		if isInsufficientPrivilege(err) || isUndefinedTable(err) {
+			return snapshot, fmt.Errorf("%w: %w", db.ErrUsageSourceUnavailable, err)
+		}
 		if err != nil {
 			return snapshot, err
 		}
@@ -196,6 +199,9 @@ func pgCaptureUsageMetadata(ctx context.Context, view *Store, ids []string, filt
    COALESCE(NULLIF(COALESCE(s.display_name,s.session_name),''),NULLIF(s.first_message,''),NULLIF(s.project,''),s.id), s.user_message_count, s.total_output_tokens, s.peak_context_tokens, COALESCE(s.has_total_output_tokens,false), COALESCE(s.has_peak_context_tokens,false), COALESCE(s.is_automated,false), COALESCE(s.termination_status,''), COALESCE((` + passes + `), false), s.xmin::text, COALESCE(c.revision,0)::text
    FROM sessions s LEFT JOIN usage_session_changes c ON c.session_id=s.id WHERE s.deleted_at IS NULL AND s.id IN (` + strings.Join(params, ",") + `) ORDER BY s.id`
 			rows, err := view.pg.QueryContext(ctx, query, pb.args...)
+			if isInsufficientPrivilege(err) || isUndefinedTable(err) {
+				return fmt.Errorf("%w: capturing PostgreSQL usage metadata: %w", db.ErrUsageSourceUnavailable, err)
+			}
 			if err != nil {
 				return fmt.Errorf("capturing PostgreSQL usage metadata: %w", err)
 			}
