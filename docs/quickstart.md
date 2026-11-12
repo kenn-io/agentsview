@@ -212,8 +212,8 @@ container 40 seconds to finish its final push.
 
 ### Verify a download
 
-Every GitHub release since v0.43.0 includes two independent ways to check that
-a file came from the AgentsView release pipeline:
+Every GitHub release since v0.43.0 includes two ways to check a downloaded
+file:
 
 - `SHA256SUMS` lists the checksum of every file in the release.
   `SHA256SUMS.sig` signs it with the AgentsView release key.
@@ -280,6 +280,14 @@ transparency log, and that the file's digest matches. Pass `--bundle`: GitHub's
 attestation store does not hold these records, so
 `gh attestation verify "$file" --repo kenn-io/agentsview` without it reports
 `404 Not Found`.
+
+To see which AgentsView tag the provenance names, add
+`--format json --jq '.[].verificationResult.statement.predicate.buildDefinition.resolvedDependencies[].uri'`.
+For v0.47.0 it prints `git+https://github.com/kenn-io/agentsview@refs/tags/v0.47.0`.
+
+The provenance check accepts any workflow in the `kenn-io` organization, not one
+specific release workflow. The release signature check above is the one tied to
+a single key, so run it as well.
 
 [cosign](https://docs.sigstore.dev/cosign/) 3 checks the same bundle:
 
