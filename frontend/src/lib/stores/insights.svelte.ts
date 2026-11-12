@@ -368,6 +368,9 @@ class InsightsStore {
         return;
       }
     }
+    // A list read still in flight may predate the delete and would bring
+    // the report back, so drop its result.
+    this.#version++;
     this.items = this.items.filter((s) => s.id !== id);
     if (this.selectedId === id) {
       this.selectedId = null;

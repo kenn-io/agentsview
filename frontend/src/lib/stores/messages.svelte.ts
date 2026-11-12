@@ -184,10 +184,7 @@ export class MessagesStore {
       }
       // A reload queued behind this load retries a transient failure with the reload's bounded backoff.
       if (this.loadGeneration === generation && isTransient(err)) void this.reload();
-      // Once rows have landed, the rest is missing history: a later history
-      // read clears the failure, and Retry completes the history.
-      if (this.sessionId === id && this.loadGeneration === generation)
-        this.failLoad(err, this.messages.length > 0 ? "history" : "load");
+      if (this.sessionId === id && this.loadGeneration === generation) this.failLoad(err, "load");
     } finally {
       if (this.sessionId === id && this.loadingOwner === owner) {
         this.loading = false;
@@ -247,10 +244,11 @@ export class MessagesStore {
     this.loadErrorKind = kind;
   }
 
-  /** A history read landed, so an earlier history failure no longer applies;
-   * a transcript failure still does. */
+  /** A history read landed. It settles an earlier history failure, and
+   * any failure once the whole transcript is loaded. */
   private historyRecovered() {
-    if (this.loadError !== null && this.loadErrorKind !== "load") this.loadError = null;
+    if (this.loadError === null) return;
+    if (this.loadErrorKind !== "load" || this.historyComplete) this.loadError = null;
   }
 
   /** Repeat the read behind loadError. */

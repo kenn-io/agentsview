@@ -809,6 +809,26 @@ describe("AttributionPanel job groups", () => {
     },
   );
 
+  it("does not call an open project empty while its refresh is failing", async () => {
+    usage.setOpenProject("pl1:sha256:first");
+    await vi.waitFor(() => expect(usage.loading.zoom).toBe(false));
+    await vi.waitFor(() => expect(usage.isQuerying).toBe(false));
+    usage.zoomRows = [];
+    usage.errors.zoom = "zoom refresh failed";
+    try {
+      const component = mountPanel();
+      await tick();
+
+      expect(document.querySelector('[role="alert"]')?.textContent).toContain(
+        "zoom refresh failed",
+      );
+      expect(document.body.textContent).not.toContain("No data for this period");
+      unmount(component);
+    } finally {
+      usage.errors.zoom = null;
+    }
+  });
+
   it.each(["switching attribution dimensions", "the project leaving the refreshed summary"])(
     "handles zoom after %s",
     async (event) => {

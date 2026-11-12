@@ -324,7 +324,7 @@
     <div class="empty">{m.usage_loading()}</div>
   {:else if rows.length === 0}
     <!-- Without a current summary, the summary error or refresh status says why. -->
-    {#if zoomedProject || ((usage.attributionSummary !== null || usage.summary !== null) && !usage.errors.summary)}
+    {#if zoomedProject ? !usage.errors.zoom : (usage.attributionSummary !== null || usage.summary !== null) && !usage.errors.summary}
       <div class="empty">{m.shared_no_data_for_period()}</div>
     {/if}
   {:else}

@@ -846,6 +846,24 @@ describe("cancelAll", () => {
 });
 
 describe("load error handling", () => {
+  it("does not bring back a report deleted while a list read was in flight", async () => {
+    const kept = makeInsight({ id: 1 });
+    const deleted = makeInsight({ id: 2 });
+    insights.items = [kept, deleted];
+    let resolveList!: (value: { insights: Insight[] }) => void;
+    vi.mocked(api.listInsights).mockImplementationOnce(
+      () => new Promise((resolve) => (resolveList = resolve)),
+    );
+    const listing = insights.load();
+
+    await insights.deleteItem(2);
+    resolveList({ insights: [kept, deleted] });
+    await listing;
+
+    expect(insights.items.map((item) => item.id)).toEqual([1]);
+    expect(insights.loading).toBe(false);
+  });
+
   it("keeps items and reports the error on API error", async () => {
     insights.items = [makeInsight({ id: 1 })];
     vi.mocked(api.listInsights).mockRejectedValueOnce(new Error("network error"));
