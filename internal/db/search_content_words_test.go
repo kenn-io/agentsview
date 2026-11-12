@@ -171,8 +171,8 @@ func TestSearchContentCurlyPhraseMatchesText(t *testing.T) {
 		[3]string{"phrase", "alpha beta gamma", ""},
 		[3]string{"separated", "alpha beta then gamma", ""},
 	)
-	for _, mode := range []string{"", "fts"} {
-		page, err := d.SearchContent(t.Context(), ContentSearchFilter{Pattern: "alpha “beta gamma”", Mode: mode})
+	for _, mode := range []string{"", "fts", "hybrid"} {
+		page, err := d.SearchContent(t.Context(), ContentSearchFilter{Pattern: "alpha “beta gamma”", Mode: mode, KeywordOnly: mode == "hybrid"})
 		require.NoError(t, err)
 		var ids []string
 		for _, match := range page.Matches {
