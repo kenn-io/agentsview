@@ -43,13 +43,14 @@ type Client struct {
 	HTTPClient *http.Client
 
 	// RequestInterval is the minimum time between the starts of consecutive
-	// page requests in FetchAllUsageEvents. NewClient sets it to one second;
-	// zero disables pacing.
+	// requests in FetchAllUsageEvents, retries included. NewClient sets it to
+	// one second; zero disables pacing.
 	RequestInterval time.Duration
 
 	// OnRetry, when set, is called before FetchAllUsageEvents waits to retry
-	// a page after a rate-limit or server error, with that error and the wait.
-	OnRetry func(err error, wait time.Duration)
+	// a page after a rate-limit or server error, with the page number, that
+	// error and the wait.
+	OnRetry func(page int, err error, wait time.Duration)
 }
 
 // StatusError reports a non-2xx response from the Cursor Admin API.
@@ -248,9 +249,9 @@ func requestUserID(raw string) (int64, error) {
 	return userID, nil
 }
 
-// FetchAllUsageEvents requests every page of q, starting at q.Page. Page
-// requests start at least RequestInterval apart. A page that fails with a
-// rate limit or server error is requested again after the server's
+// FetchAllUsageEvents requests every page of q, starting at q.Page. Requests,
+// retries included, start at least RequestInterval apart. A page that fails
+// with a rate limit or server error is requested again after the server's
 // Retry-After wait, or after an exponential backoff when the response has
 // none, up to maxPageAttempts times; any other failure ends the fetch.
 func (c *Client) FetchAllUsageEvents(
@@ -266,13 +267,11 @@ func (c *Client) FetchAllUsageEvents(
 	}
 
 	var out []UsageEvent
+	// lastRequest spans the whole fetch so the request after a retried page
+	// is paced from the retry, not from the page's first attempt.
 	var lastRequest time.Time
 	for {
-		if err := c.waitForRequestSlot(ctx, lastRequest); err != nil {
-			return nil, err
-		}
-		lastRequest = time.Now()
-		resp, err := c.listUsageEventsWithRetry(ctx, Query{
+		resp, err := c.listUsageEventsWithRetry(ctx, &lastRequest, Query{
 			StartDate: q.StartDate,
 			EndDate:   q.EndDate,
 			Page:      page,
@@ -320,11 +319,16 @@ func (c *Client) waitForRequestSlot(
 }
 
 // listUsageEventsWithRetry requests one page, retrying a rate limit or server
-// error as FetchAllUsageEvents describes.
+// error as FetchAllUsageEvents describes. Every attempt waits for its request
+// slot and records its start in lastRequest.
 func (c *Client) listUsageEventsWithRetry(
-	ctx context.Context, q Query,
+	ctx context.Context, lastRequest *time.Time, q Query,
 ) (Page, error) {
 	page, err := backoff.Retry(ctx, func() (Page, error) {
+		if err := c.waitForRequestSlot(ctx, *lastRequest); err != nil {
+			return Page{}, backoff.Permanent(err)
+		}
+		*lastRequest = time.Now()
 		page, err := c.ListUsageEvents(ctx, q)
 		if err == nil {
 			return page, nil
@@ -352,7 +356,7 @@ func (c *Client) listUsageEventsWithRetry(
 			if statusErr, ok := errors.AsType[*StatusError](err); ok {
 				err = statusErr
 			}
-			c.OnRetry(err, wait)
+			c.OnRetry(q.Page, err, wait)
 		}),
 	)
 	retryErr := backoff.AsRetryError(err)

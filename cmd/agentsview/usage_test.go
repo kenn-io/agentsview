@@ -1561,7 +1561,9 @@ func TestNewUsageCursorCommandUsesConfigFallbacksAndSharedPagination(t *testing.
 				}]
 			}`))
 		default:
-			http.Error(w, fmt.Sprintf("unexpected page request: %#v", req), http.StatusInternalServerError)
+			// A 400 is not retried, so an unexpected request fails the
+			// test at once instead of after the client's retry backoff.
+			http.Error(w, fmt.Sprintf("unexpected page request: %#v", req), http.StatusBadRequest)
 		}
 	}))
 	t.Cleanup(server.Close)
