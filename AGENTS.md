@@ -253,12 +253,12 @@ and can mirror data to PostgreSQL, DuckDB, or ClickHouse.
   anything without a caller.
 - When review findings keep landing in the same code, rethink the design there
   instead of patching each one.
-- Keep one unreviewed PR per stack. Open the next only after a maintainer has
-  reviewed the one below, even if you were asked to open the whole plan.
+- For PRs from a fork, keep one unreviewed PR per stack. Open the next only
+  after a maintainer has reviewed the one below, even if you were asked to
+  open the whole plan.
   Review usually reshapes a PR, and everything built on it then has to be
   rebuilt.
-- Keep at most five PRs open per person in this repo, counting every agent
-  working for you. Each one waits for a maintainer, and the ones nobody gets
-  to go stale.
+- Keep at most five PRs open from your fork, counting every agent working for
+  you. Each one waits for a maintainer, and the ones nobody gets to go stale.
 - Before each push, check that your schema, API, and protocol version numbers
   are still the next ones free on `main`.
