@@ -162,7 +162,7 @@ func TestQueryRecallErrorMapping(t *testing.T) {
 				require.ErrorIs(t, err, tt.wantIs)
 			}
 			if tt.wantNotIs != nil {
-				assert.NotErrorIs(t, err, tt.wantNotIs)
+				require.NotErrorIs(t, err, tt.wantNotIs)
 			}
 			if tt.wantMsgSubstr != "" {
 				assert.Contains(t, err.Error(), tt.wantMsgSubstr)
@@ -288,7 +288,7 @@ func TestMessagesStatusMapping(t *testing.T) {
 			t.Context(), "claude:s1", service.MessageFilter{},
 		)
 		require.Error(t, err)
-		assert.NotErrorIs(t, err, service.ErrSourceChanged)
+		require.NotErrorIs(t, err, service.ErrSourceChanged)
 		status, message, ok := HTTPErrorDetails(err)
 		require.True(t, ok)
 		assert.Equal(t, http.StatusConflict, status)

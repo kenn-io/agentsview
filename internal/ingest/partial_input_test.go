@@ -223,11 +223,15 @@ func TestCodexCloudKeepReason(t *testing.T) {
 		current  bool
 		want     string
 	}{
-		{name: "shorter mirror, current parser", messages: 3, saved: 5, current: true,
-			want: "the mirror file has fewer messages than the saved copy (5 saved, 3 found)"},
+		{
+			name: "shorter mirror, current parser", messages: 3, saved: 5, current: true,
+			want: "the mirror file has fewer messages than the saved copy (5 saved, 3 found)",
+		},
 		{name: "shorter mirror, older parser reparses", messages: 3, saved: 5},
-		{name: "empty mirror, older parser", messages: 0, saved: 5,
-			want: "the mirror file has fewer messages than the saved copy (5 saved, 0 found)"},
+		{
+			name: "empty mirror, older parser", messages: 0, saved: 5,
+			want: "the mirror file has fewer messages than the saved copy (5 saved, 0 found)",
+		},
 		{name: "same length", messages: 5, saved: 5, current: true},
 		{name: "longer mirror", messages: 6, saved: 5, current: true},
 		{name: "nothing saved", messages: 0, saved: 0, current: true},
