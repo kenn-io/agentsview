@@ -1908,6 +1908,45 @@ type UsagePairwiseSides struct {
 	Models, Projects UsagePairwiseValues
 }
 
+// NewUsagePairwiseSides creates the side totals and membership maps.
+func NewUsagePairwiseSides() *UsagePairwiseSides {
+	return &UsagePairwiseSides{Models: make(UsagePairwiseValues), Projects: make(UsagePairwiseValues)}
+}
+
+// AddBucket records token totals and allocated project cost.
+func (s *UsagePairwiseSides) AddBucket(model, project string, totals UsageTotals) {
+	cost := totals.TotalCost
+	totals.TotalCost = money.Money{}
+	s.Models.AddTotals(model, totals)
+	if project != "" {
+		totals.TotalCost = cost
+		s.Projects.AddTotals(project, totals)
+	}
+}
+
+// AddEstimate records the cost used by model-filtered reads.
+func (s *UsagePairwiseSides) AddEstimate(model string, cost money.Money) {
+	s.Models.AddTotals(model, UsageTotals{TotalCost: cost})
+}
+
+// AddMembership records a session for each applicable dimension.
+func (s *UsagePairwiseSides) AddMembership(model, project, sessionID string) {
+	s.Models.AddSession(model, sessionID)
+	if project != "" {
+		s.Projects.AddSession(project, sessionID)
+	}
+}
+
+// MarkDifference records losing values whose filtered winner can differ.
+func (s *UsagePairwiseSides) MarkDifference(model, project, winnerModel, winnerProject string) {
+	if model != winnerModel {
+		s.Models.MarkInexact(model)
+	}
+	if project != winnerProject {
+		s.Projects.MarkInexact(project)
+	}
+}
+
 // Side combines raw ranking values, including session unions for model groups.
 // A filtered read must supply values whose totals cannot be derived exactly.
 func (s *UsagePairwiseSides) Side(dimension string, values []string) (DailyUsageResult, bool) {

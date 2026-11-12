@@ -1,0 +1,19 @@
+{
+				"version": 3,
+				"sessionId": "tools-456",
+				"creationDate": 1755347684754,
+				"lastMessageDate": 1755347728048,
+				"customTitle": "Tool session",
+				"requests": [{
+					"requestId": "req1",
+					"message": {"text": "Read the file", "parts": []},
+					"response": [
+						{"value": "Reading the file... "},
+						{"kind": "prepareToolInvocation", "toolName": "copilot_readFile"},
+						{"kind": "toolInvocationSerialized", "toolId": "copilot_readFile", "toolCallId": "tc1", "isConfirmed": true, "isComplete": true},
+						{"value": "Done reading."}
+					],
+					"timestamp": 1755347728047,
+					"modelId": "copilot/gpt-5"
+				}]
+			}

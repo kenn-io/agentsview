@@ -1700,7 +1700,7 @@ func (s *Store) readDailyUsage(ctx context.Context, f db.UsageFilter) (db.DailyU
 	type dimensionPair struct{ project, model string }
 	dimensions := make(map[dimensionPair]int)
 	dimensionValues := make([]dimensionPair, 0)
-	inexactModels, inexactProjects := make(map[string]bool), make(map[string]bool)
+	sides := db.NewUsagePairwiseSides()
 	var seenSessions map[string]db.UsageSessionInfo
 	if !f.SkipSessionCounts {
 		seenSessions = make(map[string]db.UsageSessionInfo)
@@ -1725,8 +1725,7 @@ func (s *Store) readDailyUsage(ctx context.Context, f db.UsageFilter) (db.DailyU
 		if token, ok := activity.SessionUsageDedupTokenForRow(r.UsageIdentity()); ok {
 			if first, duplicate := seen[token]; duplicate {
 				if f.Breakdowns {
-					inexactModels[r.model] = inexactModels[r.model] || dimensionValues[first].model != r.model
-					inexactProjects[r.project] = inexactProjects[r.project] || dimensionValues[first].project != r.project
+					sides.MarkDifference(r.model, r.project, dimensionValues[first].model, dimensionValues[first].project)
 				}
 				continue
 			}
@@ -2252,7 +2251,7 @@ func (s *Store) readDailyUsage(ctx context.Context, f db.UsageFilter) (db.DailyU
 		Totals:        totals,
 		SessionCounts: sessionCounts,
 	}
-	result.Pairwise = pgDailyPairwiseSides(accum, sessionCosts, sessionIDs, inexactModels, inexactProjects)
+	result.Pairwise = pgDailyPairwiseSides(accum, sessionCosts, sessionIDs, sides)
 	if result.Bytes() > kept.DefaultMaxBytes {
 		result.Pairwise = nil
 	}
@@ -2578,33 +2577,16 @@ WHERE `+where, pb.args...).Scan(&count); err != nil {
 
 // pgDailyPairwiseSides folds the ranking's existing buckets, preserving its
 // allocated project costs and the pre-allocation estimates model filters use.
-func pgDailyPairwiseSides(accum map[pgDailyUsageKey]*pgDailyUsageBucket, costs map[string]pgDailyUsageSessionCost, sessionIDs []string, inexactModels, inexactProjects map[string]bool) *db.UsagePairwiseSides {
-	sides := &db.UsagePairwiseSides{Models: make(map[string]db.UsagePairwiseValue), Projects: make(map[string]db.UsagePairwiseValue)}
-	for model, inexact := range inexactModels {
-		if inexact {
-			sides.Models.MarkInexact(model)
-		}
-	}
-	for project, inexact := range inexactProjects {
-		if inexact {
-			sides.Projects.MarkInexact(project)
-		}
-	}
+func pgDailyPairwiseSides(accum map[pgDailyUsageKey]*pgDailyUsageBucket, costs map[string]pgDailyUsageSessionCost, sessionIDs []string, sides *db.UsagePairwiseSides) *db.UsagePairwiseSides {
 	for key, b := range accum {
 		totals := db.UsageTotals{InputTokens: b.inputTok, OutputTokens: b.outputTok, CacheCreationTokens: b.cacheCr, CacheReadTokens: b.cacheRd}
-		sides.Models.AddTotals(key.model, totals)
-		if key.project != "" {
-			totals.TotalCost = b.cost
-			sides.Projects.AddTotals(key.project, totals)
-		}
+		totals.TotalCost = b.cost
+		sides.AddBucket(key.model, key.project, totals)
 	}
 	for _, sessionID := range sessionIDs {
 		for key, estimated := range costs[sessionID].estimated {
-			sides.Models.AddTotals(key.model, db.UsageTotals{TotalCost: estimated})
-			sides.Models.AddSession(key.model, sessionID)
-			if key.project != "" {
-				sides.Projects.AddSession(key.project, sessionID)
-			}
+			sides.AddEstimate(key.model, estimated)
+			sides.AddMembership(key.model, key.project, sessionID)
 		}
 	}
 	return sides

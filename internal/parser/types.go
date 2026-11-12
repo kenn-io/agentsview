@@ -2136,6 +2136,9 @@ type ParseResult struct {
 	// checkpoint so it never re-reads the source after a full parse.
 	CheckpointHashState    []byte
 	CheckpointAnchorDigest string
+	// replacesStored marks a single-file parse whose messages replace the
+	// stored transcript instead of appending to it (ParseOutcome.ForceReplace).
+	replacesStored bool
 }
 
 // PromoteParentlessWorker classifies workers without an existing parent or relationship.

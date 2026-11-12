@@ -300,7 +300,7 @@ func TestRenderSessionUsageHuman_SubagentLines(t *testing.T) {
 				return
 			}
 			if tt.refreshIncomplete {
-				assert.Contains(t, b.String(), "Usage refresh: incomplete; showing archived totals")
+				assert.Contains(t, b.String(), "Usage refresh is incomplete. Saved totals may be out of date.")
 				return
 			}
 			assert.NotContains(t, b.String(), "Subagents")

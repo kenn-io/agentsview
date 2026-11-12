@@ -3376,6 +3376,31 @@ func TestAuthRequiredProtectsPing(t *testing.T) {
 	assertStatus(t, w, http.StatusOK)
 }
 
+func TestAuthRequiredMatchesWholeToken(t *testing.T) {
+	te := setup(t, withAuth("secret-token"))
+
+	tests := []struct {
+		name string
+		path string
+		opts []requestOpt
+		want int
+	}{
+		{"exact bearer", "/api/ping", []requestOpt{withBearer("secret-token")}, http.StatusOK},
+		{"wrong bearer", "/api/ping", []requestOpt{withBearer("wrong-token!")}, http.StatusUnauthorized},
+		{"bearer prefix", "/api/ping", []requestOpt{withBearer("secret")}, http.StatusUnauthorized},
+		{"bearer with suffix", "/api/ping", []requestOpt{withBearer("secret-token-extra")}, http.StatusUnauthorized},
+		{"empty bearer", "/api/ping", []requestOpt{withHeader("Authorization", "Bearer ")}, http.StatusUnauthorized},
+		{"query token off stream paths", "/api/ping?token=secret-token", nil, http.StatusUnauthorized},
+		{"query token prefix on stream path", "/api/v1/events?token=secret", nil, http.StatusUnauthorized},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			w := te.rawRequest(http.MethodGet, tt.path, tt.opts...)
+			assertStatus(t, w, tt.want)
+		})
+	}
+}
+
 // Serial: waits only one second for real synchronization.
 func TestPingReportsStalledSyncWithoutLosingDaemonIdentity(t *testing.T) {
 	dir := tempDirWithRetryCleanup(t)

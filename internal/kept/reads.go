@@ -18,6 +18,10 @@ type Reads[T any] struct {
 
 // Do returns a kept value or loads it. Empty slots or versions bypass reuse.
 func (r *Reads[T]) Do(ctx context.Context, slot, version string, load func(context.Context) (T, error)) (T, error) {
+	if err := ctx.Err(); err != nil {
+		var zero T
+		return zero, err
+	}
 	if slot == "" || version == "" {
 		return load(ctx)
 	}

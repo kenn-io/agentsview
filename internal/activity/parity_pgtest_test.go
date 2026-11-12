@@ -394,7 +394,7 @@ func paritySessionWrite(fs parityFixtureSession) db.SessionBatchWrite {
 // Sync and returns a read-only PG store over the same database. The schema is
 // dropped before and after so the test is self-contained.
 func pushParityPostgres(
-	t *testing.T, ctx context.Context, local *db.DB,
+	t *testing.T, ctx context.Context, local *db.DB, sessions int,
 ) *postgresstore.Store {
 	t.Helper()
 	pgURL := os.Getenv("TEST_PG_URL")
@@ -414,7 +414,7 @@ func pushParityPostgres(
 
 	res, err := ps.Push(ctx, false, nil)
 	require.NoError(t, err, "pushing to pg")
-	require.Equal(t, len(parityFixture()), res.SessionsPushed,
+	require.Equal(t, sessions, res.SessionsPushed,
 		"pg sessions pushed")
 
 	store, err := postgresstore.NewStore(t.Context(), pgURL, paritySchema, true)
@@ -438,7 +438,7 @@ func dropParitySchema(t *testing.T, pgURL string) {
 // production Push entry point and returns a read-only DuckDB store over
 // the built mirror file.
 func pushParityDuckDB(
-	t *testing.T, ctx context.Context, local *db.DB,
+	t *testing.T, ctx context.Context, local *db.DB, sessions int,
 ) *duckdbstore.Store {
 	t.Helper()
 	target := filepath.Join(t.TempDir(), "parity.duckdb")
@@ -447,7 +447,7 @@ func pushParityDuckDB(
 		storage.MirrorPushOptions{}, true, nil,
 	)
 	require.NoError(t, err, "pushing to duckdb")
-	require.Equal(t, len(parityFixture()), res.SessionsPushed,
+	require.Equal(t, sessions, res.SessionsPushed,
 		"duckdb sessions pushed")
 
 	store, err := duckdbstore.NewStore(ctx, target)
@@ -461,7 +461,7 @@ func pushParityDuckDB(
 // returns nil when TEST_CLICKHOUSE_URL is unset so PostgreSQL-only runs
 // do not skip.
 func pushParityClickHouse(
-	t *testing.T, ctx context.Context, local *db.DB,
+	t *testing.T, ctx context.Context, local *db.DB, sessions int,
 ) *clickhousestore.Store {
 	t.Helper()
 	if os.Getenv("TEST_CLICKHOUSE_URL") == "" {
@@ -476,7 +476,7 @@ func pushParityClickHouse(
 	t.Cleanup(func() { require.NoError(t, syncer.Close()) })
 	res, err := syncer.Push(ctx, true, nil)
 	require.NoError(t, err, "pushing to clickhouse")
-	require.Equal(t, len(parityFixture()), res.SessionsPushed,
+	require.Equal(t, sessions, res.SessionsPushed,
 		"clickhouse sessions pushed")
 	store, err := clickhousestore.NewStore(ctx, target)
 	require.NoError(t, err, "opening clickhouse store")
@@ -522,13 +522,13 @@ func TestGetActivityReportParityAcrossBackends(t *testing.T) {
 
 	var pgStore *postgresstore.Store
 	if os.Getenv("TEST_PG_URL") != "" {
-		pgStore = pushParityPostgres(t, ctx, local)
+		pgStore = pushParityPostgres(t, ctx, local, len(parityFixture()))
 	}
-	chStore := pushParityClickHouse(t, ctx, local)
+	chStore := pushParityClickHouse(t, ctx, local, len(parityFixture()))
 	if pgStore == nil && chStore == nil {
 		t.Skip("TEST_PG_URL and TEST_CLICKHOUSE_URL are unset; skipping cross-backend parity")
 	}
-	duckStore := pushParityDuckDB(t, ctx, local)
+	duckStore := pushParityDuckDB(t, ctx, local, len(parityFixture()))
 	assertCandidateParity(t, ctx, local, pgStore, duckStore, chStore)
 
 	fixedNow, err := time.Parse(time.RFC3339, "2030-01-01T00:00:00Z")
@@ -636,12 +636,12 @@ func TestActivityReportMessageCountsAcrossBackends(t *testing.T) {
 	}
 	stores := map[string]db.ActivityReportArtifactStore{
 		"sqlite": local,
-		"duckdb": pushParityDuckDB(t, ctx, local),
+		"duckdb": pushParityDuckDB(t, ctx, local, len(parityFixture())),
 	}
 	if os.Getenv("TEST_PG_URL") != "" {
-		stores["postgres"] = pushParityPostgres(t, ctx, local)
+		stores["postgres"] = pushParityPostgres(t, ctx, local, len(parityFixture()))
 	}
-	if store := pushParityClickHouse(t, ctx, local); store != nil {
+	if store := pushParityClickHouse(t, ctx, local, len(parityFixture())); store != nil {
 		stores["clickhouse"] = store
 	}
 	q, err := activity.ResolveQuery(activity.QueryInput{
@@ -686,13 +686,13 @@ func TestGetActivityReportIncludesTerminalAfterSessionEndAcrossBackends(
 	local := seedParitySQLite(t)
 	var pgStore *postgresstore.Store
 	if os.Getenv("TEST_PG_URL") != "" {
-		pgStore = pushParityPostgres(t, ctx, local)
+		pgStore = pushParityPostgres(t, ctx, local, len(parityFixture()))
 	}
-	chStore := pushParityClickHouse(t, ctx, local)
+	chStore := pushParityClickHouse(t, ctx, local, len(parityFixture()))
 	if pgStore == nil && chStore == nil {
 		t.Skip("TEST_PG_URL and TEST_CLICKHOUSE_URL are unset; skipping cross-backend parity")
 	}
-	duckStore := pushParityDuckDB(t, ctx, local)
+	duckStore := pushParityDuckDB(t, ctx, local, len(parityFixture()))
 
 	q, err := activity.ResolveQuery(activity.QueryInput{
 		Preset: "day", Date: "2026-06-15", Timezone: "UTC",

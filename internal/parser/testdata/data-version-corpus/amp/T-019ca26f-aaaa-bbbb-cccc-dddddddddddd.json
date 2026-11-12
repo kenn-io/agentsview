@@ -1,0 +1,18 @@
+{
+		"v": 1,
+		"id": "T-019ca26f-aaaa-bbbb-cccc-dddddddddddd",
+		"created": 1704067200000,
+		"messages": [
+			{"role": "user", "content": [{"type": "text", "text": "Read the file."}]},
+			{"role": "assistant", "content": [
+				{"type": "thinking", "thinking": "Let me plan this."},
+				{"type": "text", "text": "I will read it now."},
+				{"type": "tool_use", "complete": true, "id": "tu1", "name": "Read", "input": {"file_path": "main.go"}}
+			]},
+			{"role": "user", "content": [
+				{"type": "tool_result", "tool_use_id": "tu1", "content": "package main"}
+			]}
+		],
+		"env": {"initial": {"trees": [{"displayName": "myrepo"}]}},
+		"meta": {"traces": []}
+	}

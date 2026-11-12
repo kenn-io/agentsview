@@ -1443,6 +1443,57 @@ func TestWatcherOverflowReverifiesSameStatOpenCodeStorage(t *testing.T) {
 	assertMessageContent(t, env.db, sessionID, "modified prompt")
 }
 
+// TestNativeDropTrustRevocationReverifiesSameStatOpenCodeStorage covers the
+// per-root reconciliation that follows a native FSEvents drop. It does not
+// clear archive-wide caches the way lost-events recovery does, so on its own
+// it trusts a storage session whose child was rewritten with the same size and
+// mtime. Revoking event-dependent trust first, as the watcher does after a
+// drop, must make that same scoped reconciliation re-read the session.
+func TestNativeDropTrustRevocationReverifiesSameStatOpenCodeStorage(t *testing.T) {
+	env := setupSingleAgentTestEnv(t, parser.AgentOpenCode)
+	storage := createOpenCodeStorageFixture(t, env.opencodeDir)
+	storage.addSession(
+		t, "proj", "drop-same-stat",
+		"/home/user/code/opencode-app", "Drop Guard",
+		1779012000000, 1779012030000,
+	)
+	storage.addMessage(
+		t, "drop-same-stat", "msg-user", "user",
+		1779012000000, nil,
+	)
+	partPath := storage.addTextPart(
+		t, "drop-same-stat", "msg-user", "part-user",
+		"original prompt", 1779012000000,
+	)
+
+	stats := env.engine.SyncAll(t.Context(), nil)
+	require.False(t, stats.Aborted)
+	require.Equal(t, 1, stats.Synced)
+	const sessionID = "opencode:drop-same-stat"
+	assertMessageContent(t, env.db, sessionID, "original prompt")
+	partInfo, err := os.Stat(partPath)
+	require.NoError(t, err)
+
+	storage.addTextPart(
+		t, "drop-same-stat", "msg-user", "part-user",
+		"modified prompt", 1779012000000,
+	)
+	require.NoError(t, os.Chtimes(partPath, partInfo.ModTime(), partInfo.ModTime()))
+	rewrittenInfo, err := os.Stat(partPath)
+	require.NoError(t, err)
+	require.Equal(t, partInfo.Size(), rewrittenInfo.Size())
+	require.Equal(t, partInfo.ModTime(), rewrittenInfo.ModTime())
+
+	roots := []string{env.opencodeDir}
+	require.NoError(t, env.engine.ReconcileWatchRoots(t.Context(), roots, false))
+	assertMessageContent(t, env.db, sessionID, "original prompt")
+
+	env.engine.InvalidateEventDependentTrust()
+	require.NoError(t, env.engine.ReconcileWatchRoots(t.Context(), roots, false))
+	assert.True(t, env.engine.LastReconciliationResult().Complete)
+	assertMessageContent(t, env.db, sessionID, "modified prompt")
+}
+
 func TestSyncEngineKiroSQLiteUpdatePaths(t *testing.T) {
 	env := setupSingleAgentTestEnv(t, parser.AgentKiro)
 	ks := createKiroSQLiteDB(t, env.kiroDir)

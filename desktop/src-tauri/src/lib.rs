@@ -37,6 +37,11 @@ use tauri_plugin_shell::process::{CommandChild, CommandEvent};
 use tauri_plugin_shell::ShellExt;
 use tauri_plugin_updater::UpdaterExt;
 
+#[cfg(all(test, windows))]
+mod update_archive_tests;
+#[cfg(test)]
+mod updater_key;
+
 const HOST: &str = "127.0.0.1";
 const LOCALHOST: &str = "localhost";
 const IPV6_HOST: &str = "[::1]";
@@ -365,22 +370,13 @@ pub fn run() {
     #[cfg(target_os = "linux")]
     apply_appimage_host_wayland_preload();
 
-    let mut updater_builder = tauri_plugin_updater::Builder::new();
-    // Override the placeholder pubkey from tauri.conf.json with
-    // the real key when baked in at compile time via env var.
-    if let Some(pubkey) = option_env!("AGENTSVIEW_UPDATER_PUBKEY") {
-        if !pubkey.is_empty() {
-            updater_builder = updater_builder.pubkey(pubkey.to_string());
-        }
-    }
-
     let builder = tauri::Builder::default()
         .plugin(tauri_plugin_single_instance::init(|app, _argv, _cwd| {
             show_main_window(app);
         }))
         .plugin(tauri_plugin_shell::init())
         .plugin(tauri_plugin_opener::init())
-        .plugin(updater_builder.build())
+        .plugin(tauri_plugin_updater::Builder::new().build())
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_deep_link::init())
         .plugin(init_navigation_guard_plugin())

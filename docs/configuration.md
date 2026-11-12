@@ -775,8 +775,10 @@ one or more explicit roots.
 Grok sessions are read from `summary.json` (title, timestamps, project),
 optional `signals.json` (token counters), and `chat_history.jsonl` when present
 for the full transcript (user turns, assistant replies, thinking, and tool
-calls). If `chat_history.jsonl` is missing, AgentsView falls back to
-summary-only mode. Set `GROK_DIR` or `agents.grok.dirs` to override the default
+calls). Grok trims `chat_history.jsonl` each time it compacts a session, so
+AgentsView rebuilds the turns before each compaction from `updates.jsonl` and
+marks each compaction in the transcript. If `chat_history.jsonl` is missing,
+AgentsView falls back to summary-only mode. Set `GROK_DIR` or `agents.grok.dirs` to override the default
 directory.
 
 **Goose default directories** are:
@@ -2449,12 +2451,23 @@ A regular file replacing the directory or an ancestor releases polling.
 A directory symlink keeps polling. Removing a root from the watch plan releases
 its polling obligations. Budget or native watch resource exhaustion keeps
 root-level polling. Event-buffer overflow puts every recursive root on polling.
+On macOS, when FSEvents reports dropped or must-rescan events for one session
+folder, AgentsView rescans only that folder and keeps watching it natively.
+Other folders are not affected and nothing moves to polling. If the drop hid
+the folder's own removal or replacement, only that folder is polled until it
+can be watched again.
 
 Roots that fall back to polling are picked up by:
 
 - the existing 15-minute periodic full sync, plus
-- a new 2-minute fallback sync loop that runs whenever any roots are unwatched
+- a 2-minute fallback sync loop that runs whenever any roots are unwatched
     (it reconciles the affected scopes)
+
+After a fallback pass finishes, the loop waits 2 minutes or as long as that pass
+took, whichever is longer, so polling uses at most about half of wall-clock
+time. A pass reconciles one provider at a time, and watcher syncs that are
+waiting run between providers, so live sessions keep updating during a long
+pass.
 
 The startup polling summary counts roots handed to fallback polling. It excludes
 folders already covered by separate polling obligations. Runtime

@@ -1,10 +1,8 @@
 <script lang="ts">
   import { m } from "../../i18n/index.js";
-  import {
-    getSessionStatus,
-    sessions,
-    type SessionGroupInput,
-  } from "../../stores/sessions.svelte.js";
+  import { getSessionStatus } from "../../stores/sessionStatus.svelte.js";
+  import { sessions } from "../../stores/sessions.svelte.js";
+  import type { SessionGroupInput } from "../../stores/sessionGroups.js";
   import {
     buildReadProgressToken,
     readProgress,

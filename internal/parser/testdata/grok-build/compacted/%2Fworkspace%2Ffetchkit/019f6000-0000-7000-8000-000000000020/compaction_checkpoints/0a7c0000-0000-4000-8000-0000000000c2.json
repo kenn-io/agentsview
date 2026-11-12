@@ -1,0 +1,60 @@
+{
+  "checkpoint_id": "0a7c0000-0000-4000-8000-0000000000c2",
+  "compacted_history": [
+    {
+      "type": "system",
+      "content": "You are Grok, a coding agent working in /workspace/fetchkit."
+    },
+    {
+      "type": "user",
+      "content": [
+        {
+          "type": "text",
+          "text": "<user_info>\nOS Version: linux\nShell: /bin/bash\nWorkspace Path: /workspace/fetchkit\n</user_info>\n\n<rules>\n<user_rules>\n<user_rule>\nKeep changes small.\n</user_rule>\n</user_rules>\n</rules>"
+        }
+      ],
+      "synthetic_reason": "compaction_meta"
+    },
+    {
+      "type": "user",
+      "content": [
+        {
+          "type": "text",
+          "text": "<user_query>\nAdd a retry with backoff to the fetch helper and run the tests.\n</user_query>"
+        }
+      ]
+    },
+    {
+      "type": "assistant",
+      "content": "There is no doWithRetry yet, so I'll add it in retry.go.",
+      "model_id": "grok-4.7-build",
+      "model_fingerprint": "fp_0001",
+      "reasoning_effort": "high"
+    },
+    {
+      "type": "user",
+      "content": [
+        {
+          "type": "text",
+          "text": "This session is being continued from a previous conversation that ran out of context. The summary below covers the earlier portion of the conversation.\n\nSummary:\n1. The user asked for a retry with backoff in the fetch helper.\n2. doWithRetry is missing; it belongs in retry.go."
+        }
+      ],
+      "synthetic_reason": "compaction_meta"
+    },
+    {
+      "type": "user",
+      "content": [
+        {
+          "type": "text",
+          "text": "<system-reminder>\nCall search_tool before use_tool.\n</system-reminder>"
+        }
+      ],
+      "synthetic_reason": "system_reminder"
+    }
+  ],
+  "created_at": "2026-07-23T09:47:30.000000000+00:00",
+  "original_user_info": "<user_info>\nOS Version: linux\nShell: /bin/bash\nWorkspace Path: /workspace/fetchkit\n</user_info>",
+  "prompt_index_at_compaction": 1,
+  "reread_file_paths": [],
+  "schema_version": 1
+}

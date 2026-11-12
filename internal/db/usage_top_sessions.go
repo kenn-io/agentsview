@@ -48,7 +48,7 @@ func readUsageTopSessions(ctx context.Context, conn *sql.Conn, timezoneID int64,
 		return nil, err
 	}
 	b := NewQueryBuilder(SQLiteQueryDialect(), 0)
-	where, owner := usageOrdinaryWindowWhere(b, timezoneID, snapshot, filter)
+	where, owner := usageOrdinaryWindowWhere(b, timezoneID, snapshot, filter, true)
 	where = `NOT (` + owner + `) AND ` + where
 	contributions := `WITH sessions AS MATERIALIZED (
         SELECT s.session_id, s.project, s.machine, s.group_key, s.group_label, s.agent, s.baked_started_at AS started_at,
