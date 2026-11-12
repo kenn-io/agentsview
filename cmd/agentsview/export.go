@@ -319,11 +319,11 @@ func runExportSessions(cmd *cobra.Command, cfg exportSessionsConfig) error {
 		if archiveOnly {
 			return errors.New("projects cannot be identified in an archive-only database; run `agentsview export sessions --wait` on the writable source, then restore an updated archive")
 		}
-		if backfill.State == "failed" {
-			return exportBackfillFailure(backfill)
-		}
 		if !cfg.Wait {
 			return exportPendingError(ctx, database, &appCfg, backfill)
+		}
+		if backfill = exportStatusWithLiveFailure(ctx, &appCfg, backfill); backfill.State == "failed" {
+			return exportBackfillFailure(backfill)
 		}
 		if err := database.Close(); err != nil {
 			return err
@@ -408,16 +408,12 @@ func exportDaemonPing(ctx context.Context, rt *DaemonRuntime, token string) (fai
 	return info.BackfillError, err == nil && info.PID == rt.Record.PID
 }
 
-func exportWritableDaemonPing(ctx context.Context, cfg *config.Config, rt **DaemonRuntime) (failure string, ok bool) {
-	failure, ok = exportDaemonPing(ctx, *rt, cfg.AuthToken)
-	if !ok {
-		next := FindWritableDaemonRuntime(cfg.DataDir, cfg.AuthToken)
+func exportWritableDaemonPing(cfg *config.Config, rt **DaemonRuntime) (failure string, ok bool) {
+	if next := FindWritableDaemonRuntime(cfg.DataDir, cfg.AuthToken); next != nil {
 		*rt = next
-		if next != nil {
-			return next.BackfillError, true
-		}
+		return next.BackfillError, true
 	}
-	return failure, ok
+	return "", false
 }
 
 func exportStatusWithFailure(status db.BackgroundMigrationStatus, failure string) db.BackgroundMigrationStatus {
@@ -431,10 +427,20 @@ func exportStatusWithLiveFailure(ctx context.Context, cfg *config.Config, status
 	if status.State != "completed" && status.State != "not_needed" && cfg.ApplyDeploymentAuth() == nil {
 		rt := FindWritableDaemonRuntime(cfg.DataDir, cfg.AuthToken)
 		if rt != nil {
-			status = exportStatusWithFailure(status, rt.BackfillError)
+			status = exportStatusWithDaemon(status, rt, rt.BackfillError)
 		}
 	}
 	return status
+}
+
+// A failure recorded before the live daemon started is pending: that daemon retries it, and a retry that fails again is recorded later.
+func exportStatusWithDaemon(status db.BackgroundMigrationStatus, rt *DaemonRuntime, failure string) db.BackgroundMigrationStatus {
+	if status.State == "failed" && failure == "" && status.UpdatedAt != nil {
+		if at, err := time.Parse(time.RFC3339Nano, *status.UpdatedAt); err == nil && rt.Record.StartedAt.After(at) {
+			status.State, status.LastError = "pending", ""
+		}
+	}
+	return exportStatusWithFailure(status, failure)
 }
 
 func exportPendingError(ctx context.Context, database *db.DB, cfg *config.Config, status db.BackgroundMigrationStatus) error {
@@ -453,6 +459,14 @@ func exportStatusText(status db.BackgroundMigrationStatus) string {
 		return status.State
 	}
 	return fmt.Sprintf("%s (%d/%d)", status.State, status.CompletedItems, status.TotalItems)
+}
+
+// A failure the stopped daemon never retried keeps its recorded error.
+func exportDaemonUnavailable(status db.BackgroundMigrationStatus) error {
+	if status.State == "failed" {
+		return exportBackfillFailure(status)
+	}
+	return fmt.Errorf("project identification is %s, but the writable daemon is unavailable; run `agentsview daemon restart`, then check `agentsview export status`", exportStatusText(status))
 }
 
 // Allow transient runtime discovery or ping failures before reporting daemon loss.
@@ -477,22 +491,20 @@ func waitForExportBackfill(ctx context.Context, progress io.Writer, cfg *config.
 		switch status.State {
 		case "completed", "not_needed":
 			return nil
-		case "failed":
-			return exportBackfillFailure(status)
-		case "pending", "running":
+		case "pending", "running", "failed":
 		default:
 			return unknownExportBackfillState(status.State)
 		}
-		failure, ok := exportWritableDaemonPing(ctx, cfg, &rt)
+		failure, ok := exportWritableDaemonPing(cfg, &rt)
 		if !ok {
 			if unavailableSince.IsZero() {
 				unavailableSince = time.Now()
 			} else if time.Since(unavailableSince) >= exportDaemonUnavailableGrace {
-				return fmt.Errorf("project identification is %s, but the writable daemon is unavailable; run `agentsview daemon restart`, then check `agentsview export status`", exportStatusText(status))
+				return exportDaemonUnavailable(status)
 			}
 		} else {
 			unavailableSince = time.Time{}
-			status = exportStatusWithFailure(status, failure)
+			status = exportStatusWithDaemon(status, rt, failure)
 			if status.State == "failed" {
 				return exportBackfillFailure(status)
 			}
