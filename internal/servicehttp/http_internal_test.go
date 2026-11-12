@@ -1,7 +1,6 @@
 package servicehttp
 
 import (
-	"context"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -111,35 +110,6 @@ func TestSearchUsesLongRunningClient(t *testing.T) {
 		require.Len(t, result.Results, 1)
 		assert.Equal(t, "session-a", result.Results[0].SessionID)
 		assert.Equal(t, 84, result.NextCursor)
-	})
-}
-
-func TestSearchCancelStopsRequest(t *testing.T) {
-	synctest.Test(t, func(t *testing.T) {
-		started := make(chan struct{})
-		stopped := make(chan struct{})
-		srv := httptest.NewTestServer(t, http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
-			close(started)
-			<-r.Context().Done()
-			close(stopped)
-		}))
-		transport := srv.Client().Transport
-		backend := NewHTTPBackend(srv.URL, "", false, "").(*httpBackend)
-		backend.client.Transport = transport
-		backend.longRunningClient.Transport = transport
-		backend.client.Timeout = 10 * time.Millisecond
-		ctx, cancel := context.WithCancel(t.Context())
-		t.Cleanup(cancel)
-		errCh := make(chan error, 1)
-		go func() {
-			_, err := backend.Search(ctx, service.SearchRequest{Query: "needle"})
-			errCh <- err
-		}()
-		<-started
-		time.Sleep(50 * time.Millisecond)
-		cancel()
-		require.ErrorIs(t, <-errCh, context.Canceled)
-		<-stopped
 	})
 }
 

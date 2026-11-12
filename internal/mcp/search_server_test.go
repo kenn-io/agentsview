@@ -37,7 +37,7 @@ func (s *delayedSearchStore) Search(ctx context.Context, f db.SearchFilter) (db.
 		return db.SearchPage{}, &db.SearchInputError{Msg: "search fixture error"}
 	}
 	select {
-	case <-time.After(2 * time.Second):
+	case <-time.After(150 * time.Millisecond): //nolint:kennlint // deadlinetest: search must outlast the server write timeout
 	case <-ctx.Done():
 		return db.SearchPage{}, ctx.Err()
 	}
@@ -55,7 +55,7 @@ func TestServer_SearchSessionsThroughHTTP(t *testing.T) {
 	store := &delayedSearchStore{Store: d, started: make(chan struct{}), stopped: make(chan struct{})}
 	ln, err := (&net.ListenConfig{}).Listen(t.Context(), "tcp", "127.0.0.1:0")
 	require.NoError(t, err)
-	srv := server.New(config.Config{Host: "127.0.0.1", Port: ln.Addr().(*net.TCPAddr).Port, DataDir: t.TempDir(), WriteTimeout: time.Second}, store, nil)
+	srv := server.New(config.Config{Host: "127.0.0.1", Port: ln.Addr().(*net.TCPAddr).Port, DataDir: t.TempDir(), WriteTimeout: 50 * time.Millisecond}, store, nil) //nolint:kennlint // deadlinetest: the search must outlast this timeout
 	httpServer := httptest.NewUnstartedServer(srv.Handler())
 	require.NoError(t, httpServer.Listener.Close())
 	httpServer.Listener = ln
@@ -95,11 +95,16 @@ func TestServer_SearchSessionsThroughHTTP(t *testing.T) {
 		assert.Contains(t, message.Text, "search fixture error")
 	})
 	t.Run("cancel", func(t *testing.T) {
+		st, ct := newInMemoryPair(t, newServer(ServeOptions{Service: servicehttp.NewHTTPBackend(httpServer.URL, "", false, "")}))
+		t.Cleanup(func() {
+			_ = ct.Close()
+			_ = st.Wait()
+		})
 		ctx, cancel := context.WithCancel(t.Context())
 		defer cancel()
 		done := make(chan error, 1)
 		go func() {
-			_, err := remote.CallTool(ctx, callParams(ToolSearchSessions, map[string]any{"query": "cancelterm"}))
+			_, err := ct.CallTool(ctx, callParams(ToolSearchSessions, map[string]any{"query": "cancelterm"}))
 			done <- err
 		}()
 		<-store.started
