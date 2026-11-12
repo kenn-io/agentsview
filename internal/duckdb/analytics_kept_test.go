@@ -22,7 +22,7 @@ func TestAnalyticsKeptMirrorReplacement(t *testing.T) {
 	buildMirrorFixture(t, path, "session-a")
 	data, err := os.ReadFile(path)
 	require.NoError(t, err)
-	require.NoError(t, os.WriteFile(next, data, 0600))
+	require.NoError(t, os.WriteFile(next, data, 0o600))
 	conn, err := Open(t.Context(), next)
 	require.NoError(t, err)
 	_, err = conn.ExecContext(t.Context(), `UPDATE sessions SET project = 'beta', message_count = 5, health_score = 80, health_grade = 'B', outcome = 'success', ended_at = TIMESTAMP '2026-01-01 00:05:00'`)
@@ -204,7 +204,7 @@ func TestAnalyticsKeptAllPanelsAndVariants(t *testing.T) {
 	gotTools, err := store.GetAnalyticsTools(t.Context(), f)
 	require.NoError(t, err)
 	require.Equal(t, 1, gotTools.Trend[0].ByCat["Read"])
-	require.Equal(t, 1.0, *gotTools.ByTool[0].EmptyRate)
+	require.InDelta(t, 1.0, *gotTools.ByTool[0].EmptyRate, 1e-9)
 }
 
 func TestAnalyticsKeptMovingSelectionsReadFresh(t *testing.T) {
