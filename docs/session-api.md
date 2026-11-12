@@ -568,8 +568,11 @@ so structured-output and remote-store flags don't apply.
 
 Detected secrets, such as API keys, tokens and private keys, are masked by
 default, with the same detector and masked form as search results. The command
-reads the whole source before writing, so a secret that spans lines is still
-masked. Pass `--reveal` to stream the source unchanged.
+reads the whole source before writing. A JSON Lines source is masked inside each
+record's decoded strings, so JSON escapes such as `\n` cannot hide a key, and
+each record stays valid JSON. Any other source is masked as a whole, so a key
+block that spans lines is still caught. Pass `--reveal` to stream the source
+unchanged.
 
 ```bash
 agentsview session export <id>

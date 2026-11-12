@@ -92,16 +92,16 @@ func newSessionExportCommand() *cobra.Command {
 			out := cmd.OutOrStdout()
 			var unmasked *bytes.Buffer
 			if !reveal {
-				// Mask the whole export at once: a multi-line secret such as
-				// a private key block in a Markdown source would slip past a
-				// line-by-line pass.
+				// Buffer the whole export: a JSONL source is masked in decoded
+				// strings line by line, and any other source is masked whole
+				// so a key block spanning lines is still caught.
 				unmasked = new(bytes.Buffer)
 				out = unmasked
 			}
 			if err := writeSessionSource(cmd.Context(), out, cfg.AgentDirs, session, id, storedPath); err != nil || unmasked == nil {
 				return err
 			}
-			_, err = io.WriteString(cmd.OutOrStdout(), secrets.Redact(unmasked.String()))
+			_, err = io.WriteString(cmd.OutOrStdout(), secrets.RedactJSONLines(unmasked.String()))
 			return err
 		},
 	}

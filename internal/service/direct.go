@@ -1407,7 +1407,9 @@ func (b *directBackend) enrichContentContext(
 // every ResultEvent's Content). It mirrors the masking the search-snippet
 // path already applies via secrets.RedactWindow, but a context message has
 // no known match offset to window around, so the whole-string secrets.Redact
-// scan is used instead. Session HTML and Markdown exports use it too. m.ToolResults is not touched: it is a transient
+// scan is used instead. Tool payloads go through secrets.RedactJSON, which
+// scans decoded strings so JSON escapes cannot hide a secret. Session HTML
+// and Markdown exports use it too. m.ToolResults is not touched: it is a transient
 // parse-time field (json:"-") that GetMessagesWindow never populates, so it
 // never reaches a transport response.
 func RedactMessageSecrets(m db.Message) db.Message {
@@ -1418,12 +1420,12 @@ func RedactMessageSecrets(m db.Message) db.Message {
 	}
 	toolCalls := make([]db.ToolCall, len(m.ToolCalls))
 	for i, tc := range m.ToolCalls {
-		tc.InputJSON = secrets.Redact(tc.InputJSON)
-		tc.ResultContent = secrets.Redact(tc.ResultContent)
+		tc.InputJSON = secrets.RedactJSON(tc.InputJSON)
+		tc.ResultContent = secrets.RedactJSON(tc.ResultContent)
 		if len(tc.ResultEvents) > 0 {
 			events := make([]db.ToolResultEvent, len(tc.ResultEvents))
 			for j, ev := range tc.ResultEvents {
-				ev.Content = secrets.Redact(ev.Content)
+				ev.Content = secrets.RedactJSON(ev.Content)
 				events[j] = ev
 			}
 			tc.ResultEvents = events

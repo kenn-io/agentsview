@@ -47,6 +47,25 @@ func TestSessionExportsMaskSecretsUnlessRevealed(t *testing.T) {
 	}
 }
 
+// TestMarkdownExportMasksSecretsInToolArguments covers a key that JSON escapes
+// hide from a plain-text scan: in serialized tool input, the "n" of "\n" sits
+// against the key and removes its word boundary.
+func TestMarkdownExportMasksSecretsInToolArguments(t *testing.T) {
+	te := setup(t)
+	te.seedSession(t, "tool-leak", "my-app", 1)
+	input := `{"file_path":"creds.txt","content":"[default]\n` + exportFakeAWSKey + `\n"}`
+	require.NoError(t, te.db.InsertMessages(t.Context(), []db.Message{{
+		SessionID: "tool-leak", Role: "assistant", Content: "writing creds",
+		ToolCalls: []db.ToolCall{{ToolUseID: "call", ToolName: "Write", Category: "Write", InputJSON: input}},
+	}}))
+
+	w := te.get(t, "/api/v1/sessions/tool-leak/md")
+	require.Equal(t, http.StatusOK, w.Code, "body: %s", w.Body.String())
+	assert.NotContains(t, w.Body.String(), exportFakeAWSKey)
+	assert.Contains(t, w.Body.String(), exportMaskedAWSKey)
+	assert.Contains(t, w.Body.String(), "creds.txt", "unmasked arguments are kept")
+}
+
 func TestSessionExportRevealRejectsProxiedCallers(t *testing.T) {
 	te := setup(t)
 	seedSecretSession(t, te)

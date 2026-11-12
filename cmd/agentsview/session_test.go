@@ -1054,7 +1054,10 @@ func TestSessionExportMasksSecretsUnlessRevealed(t *testing.T) {
 	dataDir := newAgentDataDir(t)
 
 	src := filepath.Join(t.TempDir(), "session.jsonl")
+	// The second record's key follows a JSON-escaped newline, which hides
+	// it from a scan of the serialized line.
 	body := "{\"type\":\"user\",\"content\":\"use " + exportFakeAWSKey + " now\"}\n" +
+		"{\"type\":\"tool_result\",\"content\":\"creds:\\n" + exportFakeAWSKey + "\"}\n" +
 		"{\"type\":\"assistant\",\"content\":\"done\"}\n"
 	require.NoError(t, os.WriteFile(src, []byte(body), 0o600))
 	seedSessionWithOpts(t, dataDir, "s-secret", "proj",
@@ -1064,6 +1067,7 @@ func TestSessionExportMasksSecretsUnlessRevealed(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t,
 		"{\"type\":\"user\",\"content\":\"use AKIA…PLJM now\"}\n"+
+			"{\"type\":\"tool_result\",\"content\":\"creds:\\nAKIA…PLJM\"}\n"+
 			"{\"type\":\"assistant\",\"content\":\"done\"}\n",
 		out)
 
