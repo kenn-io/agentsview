@@ -238,7 +238,7 @@ func TestReadCodexSnapshotUsesAcceptedOriginal(t *testing.T) {
 			case parent:
 				assert.Equal(t, "parent bytes", string(data))
 			default:
-				t.Fatalf("unexpected candidate %q", candidate)
+				require.FailNowf(t, "unexpected candidate", "%q", candidate)
 			}
 		}
 		for _, candidate := range names {

@@ -18,6 +18,7 @@ import (
 	"go.kenn.io/agentsview/internal/ctxio"
 	"go.kenn.io/agentsview/internal/db"
 	"go.kenn.io/agentsview/internal/parser"
+	"go.kenn.io/agentsview/internal/pathutil"
 	"go.kenn.io/agentsview/internal/remotesync"
 )
 
@@ -180,8 +181,19 @@ func materializeCodex(ctx context.Context, cfg config.Config, database *db.DB, s
 				}
 			}
 		} else {
+			if source == "" {
+				return Result{}, errors.New("native Codex source outside configured roots")
+			}
+			anchor, err = pathutil.ResolveAbsolute(source)
+			if err != nil {
+				return Result{}, err
+			}
 			for _, candidate := range configuredRoots(cfg, session, parser.AgentCodex) {
-				rel, err := filepath.Rel(candidate, source)
+				resolved, err := pathutil.ResolveAbsolute(candidate)
+				if err != nil {
+					return Result{}, err
+				}
+				rel, err := filepath.Rel(resolved, anchor)
 				if err == nil && filepath.IsLocal(rel) && len(candidate) > len(root) {
 					root = candidate
 				}
@@ -257,6 +269,9 @@ func codexArchived(root, relative string) bool {
 }
 
 func installCodex(ctx context.Context, cwd, source, requestedID string, pages []codexPage) (Result, error) {
+	if pages == nil {
+		return Result{}, errors.New("native Codex lineage is unavailable")
+	}
 	root, err := capture.ProducerRoot(capture.ProviderCodex, "")
 	if err != nil {
 		return Result{}, err

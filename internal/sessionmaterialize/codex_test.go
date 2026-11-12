@@ -60,6 +60,24 @@ func TestMaterializeCodexConfiguredAndMirror(t *testing.T) {
 				require.NoError(t, err)
 				assert.Equal(t, want, got)
 			}
+			if !mirror {
+				t.Run("recorded directory alias", func(t *testing.T) {
+					alias := filepath.Join(t.TempDir(), "source-link")
+					if err := os.Symlink(location, alias); err != nil {
+						t.Skipf("directory symlinks unavailable: %v", err)
+					}
+					linked := *session
+					linked.FilePath = new(filepath.Join(alias, "2026", "01", "01", oldName))
+					result, err := Materialize(t.Context(), cfg, nil, &linked, cwd)
+					require.NoError(t, err)
+					assert.Equal(t, "unchanged", result.Status)
+					outside := filepath.Join(t.TempDir(), oldName)
+					require.NoError(t, os.WriteFile(outside, old, 0o600))
+					linked.FilePath = &outside
+					_, err = Materialize(t.Context(), cfg, nil, &linked, cwd)
+					require.ErrorContains(t, err, "outside configured roots")
+				})
+			}
 			var got []byte
 			if mirror {
 				// The ancestor may have moved to the sibling archived root.

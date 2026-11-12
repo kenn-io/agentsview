@@ -98,7 +98,7 @@ func inspectCodexPage(ctx context.Context, name string, data []byte) (codexPage,
 	}
 	// Early revert pages recorded the rollout ID as id and the thread as
 	// session_id; newer producers record the thread in id.
-	if record.Payload.ID != thread && !(record.Payload.ID == rollout && record.Payload.SessionID == thread) {
+	if record.Payload.ID != thread && (record.Payload.ID != rollout || record.Payload.SessionID != thread) {
 		return codexPage{}, errors.New("native Codex rollout identity differs")
 	}
 	if record.Payload.Base != nil && mode != "paginated" {

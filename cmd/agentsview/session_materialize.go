@@ -65,11 +65,12 @@ func newSessionMaterializeCommand() *cobra.Command {
 				return err
 			}
 			_, nativeID := parser.StripHostPrefix(id)
-			if session.Agent == "codex" {
+			switch session.Agent {
+			case "codex":
 				result.Command = codexResumeCommand(parser.CodexThreadIDFromSessionKey(strings.TrimPrefix(nativeID, "codex:")), result.Cwd, runtime.GOOS == "windows")
-			} else if session.Agent == "pi" {
+			case "pi":
 				result.Command = piResumeCommand(result.Cwd, result.Paths[0], runtime.GOOS == "windows")
-			} else {
+			default:
 				result.Command = claudeResumeCommand(result.Cwd, nativeID, result.ConfigDir, result.ProjectOverride, runtime.GOOS == "windows")
 			}
 			if outputFormat(cmd) == "json" {
