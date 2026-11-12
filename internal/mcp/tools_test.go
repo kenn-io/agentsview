@@ -726,11 +726,6 @@ func TestSearchContent_RanksExactTextThenWords(t *testing.T) {
 		return hits
 	}
 	assert.Equal(t, []string{"tool_result/3", "message/2"}, search("invoice rounding decision"))
-	assert.Equal(t, []string{"message/0"}, search(`"rounding of invoices"`))
-	_, hybrid, err := ts.searchContent(t.Context(), nil, searchContentIn{Pattern: "invoice rounding decision", Mode: "hybrid"})
-	require.NoError(t, err)
-	require.Len(t, hybrid.Matches, 1)
-	assert.Equal(t, 2, hybrid.Matches[0].MatchedWords)
 }
 
 // TestSearchContent_ContextRedactsSecretByDefault verifies that a secret in

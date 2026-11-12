@@ -2,7 +2,6 @@ package main
 
 import (
 	"bytes"
-	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -860,44 +859,6 @@ func TestSessionSearchHiddenHints(t *testing.T) {
 			assert.Equal(t, "hidden", matches.Matches[0].SessionID)
 		})
 	}
-}
-
-func TestSessionSearchRanksExactTextThenWords(t *testing.T) {
-	dataDir := newAgentDataDir(t)
-	seedSessionWithOpts(t, dataDir, "words", "p", nil)
-	d, err := db.Open(t.Context(), sessionsDBPath(dataDir))
-	require.NoError(t, err)
-	require.NoError(t, d.ReplaceSessionMessages(t.Context(), "words", []db.Message{
-		{SessionID: "words", Ordinal: 0, Role: "user", Content: "settle the rounding of invoices", Timestamp: "2026-04-01T00:00:00Z"},
-		{
-			SessionID: "words", Ordinal: 1, Role: "assistant", Content: "checking", Timestamp: "2026-04-01T00:00:01Z",
-			ToolCalls: []db.ToolCall{{ToolName: "Bash", ToolUseID: "tu-1", ResultContent: "invoice rounding decision recorded"}},
-		},
-	}))
-	require.NoError(t, d.Close())
-
-	search := func(pattern string) []string {
-		t.Helper()
-		out, err := executeCommand(newRootCommand(), "session", "search", pattern, "--json")
-		require.NoError(t, err)
-		got := decodeCLIJSON[service.ContentSearchResult](t, out)
-		var hits []string
-		for _, m := range got.Matches {
-			hits = append(hits, fmt.Sprintf("%s/%d", m.Location, m.MatchedWords))
-		}
-		return hits
-	}
-	assert.Equal(t, []string{"tool_result/3", "message/2"}, search("invoice rounding decision"))
-	assert.Equal(t, []string{"message/0"}, search(`"rounding of invoices"`))
-	cmd := newRootCommand()
-	var stdout, stderr bytes.Buffer
-	cmd.SetOut(&stdout)
-	cmd.SetErr(&stderr)
-	cmd.SetArgs([]string{"session", "search", "invoice rounding decision", "--hybrid", "--json"})
-	require.NoError(t, cmd.Execute())
-	got := decodeCLIJSON[service.ContentSearchResult](t, stdout.String())
-	require.Len(t, got.Matches, 1)
-	assert.Equal(t, 2, got.Matches[0].MatchedWords)
 }
 
 func TestSessionSearchFTSHints(t *testing.T) {

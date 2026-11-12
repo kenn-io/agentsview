@@ -82,40 +82,31 @@ func unquoteContentSearch(pattern string) (string, bool) {
 	return pattern, false
 }
 
-// explicitFTSExpression reports whether an --fts pattern is FTS5 syntax: a
-// leading quote with only quoted phrases, or with operators outside them. A
-// quoted phrase mixed with ordinary words, and a phrase with no word in it,
-// stay natural text.
+// explicitFTSExpression reports whether a leading-quote pattern uses FTS5 syntax.
 func explicitFTSExpression(pattern string) bool {
-	trimmed := strings.TrimSpace(pattern)
-	if !strings.HasPrefix(trimmed, `"`) {
+	if !strings.HasPrefix(strings.TrimSpace(pattern), `"`) {
 		return false
 	}
-	parts := strings.Split(trimmed, `"`)
-	if len(parts)%2 == 0 {
-		return true // unbalanced; FTS5 reports the error
+	tokens, err := ftsTokens(pattern)
+	if err != nil {
+		return true // FTS5 reports malformed expressions
 	}
-	var outside, inside strings.Builder
-	for i, part := range parts {
-		if i%2 == 0 {
-			outside.WriteString(part + " ")
-		} else {
-			inside.WriteString(part)
-		}
-	}
-	if !strings.ContainsFunc(inside.String(), func(r rune) bool { return unicode.IsLetter(r) || unicode.IsNumber(r) }) {
-		return false
-	}
-	words := strings.Fields(outside.String())
-	if len(words) == 0 || strings.ContainsAny(outside.String(), "*+():^") {
-		return true
-	}
-	for _, word := range words {
-		if word == "AND" || word == "OR" || word == "NOT" || word == "NEAR" {
+	natural := false
+	for _, token := range tokens {
+		if token.kind != "term" {
 			return true
 		}
+		if strings.HasPrefix(token.raw, `"`) {
+			if strings.HasSuffix(token.raw, "*") {
+				return true
+			}
+		} else if token.text == "NEAR" || strings.ContainsAny(token.raw, "*+:^") {
+			return true
+		} else {
+			natural = true
+		}
 	}
-	return false
+	return !natural
 }
 
 // buildContentWordHits fills a temporary table with every message that holds
@@ -151,11 +142,13 @@ func contentWordRows(
 	}
 	where += phraseWhere.String()
 	from := "messages_fts CROSS JOIN content_word_hits h ON h.id = messages_fts.rowid"
+	id := "h.id"
 	count := "h.n"
 	sortKey := "julianday(COALESCE(s.ended_at, s.started_at, ''))"
 	order := "sort_key DESC, m.session_id ASC, m.ordinal ASC, m.id ASC"
 	if full {
 		from = "messages_fts"
+		id = "messages_fts.rowid"
 		count = fmt.Sprint(len(q.terms))
 		where += " AND messages_fts.content MATCH ?"
 		match := strings.Join(q.terms, " AND ")
@@ -177,10 +170,6 @@ func contentWordRows(
 		if f.Mode == "fts" {
 			order = "sort_key ASC, m.ordinal ASC, m.id ASC"
 		}
-	}
-	id := "h.id"
-	if full {
-		id = "messages_fts.rowid"
 	}
 	query := `SELECT m.session_id, s.project, s.agent, s.transcript_revision, 'message', m.role, '',
 			m.ordinal, COALESCE(m.timestamp,''), COALESCE(m.dialogue_text, m.content), snippet(messages_fts, 0, '', '', '...', 32), p.n

@@ -1069,9 +1069,6 @@ func (db *DB) searchContentFTS(
 		if q, ok := contentWordsQuery(f.Pattern); ok {
 			return db.searchContentWords(ctx, f, q, false)
 		}
-		// Punctuation alone has no FTS token; match it as text.
-		f.Sources = []string{"messages"}
-		return db.searchContentSubstring(ctx, f)
 	}
 	ftsQuery, err := db.prepareMessageFTSQuery(ctx, f.Pattern)
 	if err != nil {

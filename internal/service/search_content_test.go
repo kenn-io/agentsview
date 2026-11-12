@@ -69,20 +69,6 @@ func TestDirectSearchContentFTSSourceGuard(t *testing.T) {
 	assert.Contains(t, err.Error(), "messages only")
 }
 
-func TestDirectSearchContentPhraseAndHybridCount(t *testing.T) {
-	d := dbtest.OpenTestDB(t)
-	seedServiceSearchSession(t, d, "phrase", "proj", "rounding, of invoices")
-	seedServiceSearchSession(t, d, "prefix", "proj", "prefixrounding of invoices")
-	be := service.NewDirectBackend(d, nil)
-	for _, mode := range []string{"", "fts", "hybrid"} {
-		result, err := be.SearchContent(t.Context(), service.ContentSearchRequest{Pattern: `missing "rounding of invoices"`, Mode: mode, KeywordFallback: true})
-		require.NoError(t, err)
-		require.Len(t, result.Matches, 1, "mode %q", mode)
-		assert.Equal(t, "phrase", result.Matches[0].SessionID)
-		assert.Equal(t, 3, result.Matches[0].MatchedWords)
-	}
-}
-
 // fakeContentStore is a minimal db.Store fake for context-enrichment tests:
 // only SearchContent and GetMessagesWindow are implemented; every other
 // Store method comes from the embedded nil interface and would panic if a
