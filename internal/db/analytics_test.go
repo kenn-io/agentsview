@@ -5259,6 +5259,47 @@ func TestGetAnalyticsToolsBlankAndMalformedTimestamps(t *testing.T) {
 	}, resp.Trend)
 }
 
+func TestSQLiteToolsDateKeyMatchesResolver(t *testing.T) {
+	d := testDB(t)
+	insertSession(t, d, "keys", "window", func(s *Session) { s.StartedAt = new("2025-03-09T12:00:00Z") })
+	stamps := []string{
+		"2025-03-09T06:59:59Z", "2025-03-09T07:00:00Z", "2025-03-10T03:59:59.999999999Z",
+		"2025-03-10T04:00:00Z", "2025-03-09T18:14:59Z", "2025-03-09T18:15:00Z",
+		"2025-11-02T05:59:59Z", "2025-11-02T06:00:00Z", "2025-03-10T00:30:00+01:00",
+		"2025-03-10T24:00:00Z", "2025-03-10 malformed", "2025-03-10Z", "2024-01-01T00:00:00Z",
+		"", "\t", "bad",
+	}
+	for n, ts := range stamps {
+		insertMessages(t, d, asstMsgAt("keys", n, "read", ts))
+	}
+	for _, f := range []AnalyticsFilter{
+		{From: "2025-03-01", To: "2025-03-12", Timezone: "UTC"},
+		{From: "2025-03-01", To: "2025-03-12", Timezone: "America/New_York"},
+		{From: "2025-03-01", To: "2025-03-12", Timezone: "Asia/Kathmandu"},
+		{From: "2025-10-30", To: "2025-11-04", Timezone: "America/New_York"},
+		{From: "1970-01-01", To: "2025-12-31", Timezone: "America/New_York"},
+		{From: "bad", To: "2025-12-31", Timezone: "America/New_York"},
+	} {
+		key := sqliteToolsDateKey(f)
+		require.NotEmpty(t, key)
+		rows, err := d.getReader().QueryContext(t.Context(), `SELECT COALESCE(m.timestamp, ''), COALESCE(NULLIF(s.started_at, ''), s.created_at), `+key+`
+			FROM messages m JOIN sessions s ON s.id = m.session_id WHERE m.session_id = 'keys'`, f.Timezone)
+		require.NoError(t, err)
+		seen := 0
+		for rows.Next() {
+			var msg, session, got string
+			require.NoError(t, rows.Scan(&msg, &session, &got))
+			_, want, _ := (AnalyticsFilter{Timezone: f.Timezone}).ResolveSkillRowTime(msg, session)
+			assert.Equal(t, want, got, "%s %s..%s %q", f.Timezone, f.From, f.To, msg)
+			seen++
+		}
+		require.NoError(t, rows.Err())
+		require.NoError(t, rows.Close())
+		assert.Equal(t, len(stamps), seen)
+	}
+	assert.Empty(t, sqliteToolsDateKey(AnalyticsFilter{Timezone: "America/New_York"}))
+}
+
 func TestGetAnalyticsToolsLocalWeeks(t *testing.T) {
 	for _, tc := range []struct {
 		name, zone, before, after, firstWeek, secondWeek string

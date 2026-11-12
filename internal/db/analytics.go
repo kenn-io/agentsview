@@ -3014,6 +3014,55 @@ func analyticsToolsQuery(
 	return query
 }
 
+// sqliteToolsDateKey uses SQLite for canonical UTC timestamps and keeps Go's
+// timestamp parsing for other inputs. The bounded offset periods cover the
+// padded message window; timestamps outside it use the same Go fallback. An
+// empty result means minute groups, which avoid calling Go for every row.
+func sqliteToolsDateKey(f AnalyticsFilter) string {
+	sessionTS := `COALESCE(NULLIF(s.started_at, ''), s.created_at)`
+	ts := `(CASE WHEN COALESCE(m.timestamp, '') = '' THEN ` + sessionTS + ` ELSE m.timestamp END)`
+	fallback := `agentsview_local_date(COALESCE(m.timestamp, ''), ` + sessionTS + `, ?)`
+	loc := f.location()
+	if loc == time.UTC {
+		return `(CASE WHEN substr(` + ts + `, -1) = 'Z' AND length(` + ts + `) >= 10 THEN substr(` + ts + `, 1, 10) ELSE ` + fallback + ` END)`
+	}
+	// Unbounded non-UTC ranges would call Go for every row.
+	if f.From == "" || f.To == "" {
+		return ""
+	}
+	start, err := time.Parse("2006-01-02", f.From)
+	if err != nil {
+		return fallback
+	}
+	end, err := time.Parse("2006-01-02", f.To)
+	if err != nil || end.Before(start) {
+		return fallback
+	}
+	start = start.Add(-48 * time.Hour)
+	end = end.Add(72 * time.Hour)
+	seconds := `substr(` + ts + `, 1, 19)`
+	localDate := `(CASE WHEN ` + seconds + ` < '` + start.Format("2006-01-02T15:04:05") + `' THEN NULL`
+	periods := 0
+	for cursor := start; cursor.Before(end); {
+		_, offset := cursor.In(loc).Zone()
+		_, until := cursor.In(loc).ZoneBounds()
+		if until.IsZero() || until.After(end) {
+			until = end
+		}
+		if !until.After(cursor) || periods == 32 {
+			return fallback
+		}
+		localDate += ` WHEN ` + seconds + ` < '` + until.UTC().Format("2006-01-02T15:04:05") + `' THEN strftime('%Y-%m-%d', ` + seconds + `, '` + fmt.Sprintf("%+d seconds", offset) + `')`
+		cursor = until
+		periods++
+	}
+	localDate += ` END)`
+	// Invalid timestamps use their first ten bytes. When SQLite's date agrees
+	// with those bytes, both parsers produce the same date. Strip fractions
+	// before SQLite rounds; resolve the remaining cases with Go.
+	return `(CASE WHEN substr(` + ts + `, -1) = 'Z' AND ` + localDate + ` = substr(` + ts + `, 1, 10) THEN substr(` + ts + `, 1, 10) ELSE ` + fallback + ` END)`
+}
+
 func analyticsSkillsQuery(
 	placeholders string,
 	modelPred string,
@@ -3120,8 +3169,10 @@ func (db *DB) analyticsToolRows(
 			chunkArgs = append(chunkArgs, windowArgs...)
 			groupExpr := sqliteAnalyticsMinuteKey()
 			if !f.HasTimeFilter() {
-				groupExpr = "agentsview_local_date(COALESCE(m.timestamp, ''), COALESCE(NULLIF(s.started_at, ''), s.created_at), ?)"
-				chunkArgs = append(chunkArgs, f.Timezone)
+				if dateKey := sqliteToolsDateKey(f); dateKey != "" {
+					groupExpr = dateKey
+					chunkArgs = append(chunkArgs, f.Timezone)
+				}
 			}
 			q := analyticsToolsQuery(ph, modelPred, windowPred, true, groupExpr)
 			observeAnalyticsQuery(q)

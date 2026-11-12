@@ -119,6 +119,9 @@ func TestAnalyticsMetadataIndexLifecycle(t *testing.T) {
 			dayGroup := "agentsview_local_date(COALESCE(m.timestamp, ''), COALESCE(NULLIF(s.started_at, ''), s.created_at), ?)"
 			dayPlan := queryPlanOf(t, d, analyticsToolsQuery("(?)", "", "", true, dayGroup), "a", "America/New_York")
 			assert.Contains(t, dayPlan, "USING COVERING INDEX idx_messages_analytics_metadata")
+			fastKey := sqliteToolsDateKey(AnalyticsFilter{From: "2025-03-01", To: "2025-03-31", Timezone: "America/New_York"})
+			fastPlan := queryPlanOf(t, d, analyticsToolsQuery("(?)", "", "", true, fastKey), "a", "America/New_York")
+			assert.Contains(t, fastPlan, "USING COVERING INDEX idx_messages_analytics_metadata")
 		})
 	}
 }
