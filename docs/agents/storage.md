@@ -1061,7 +1061,7 @@ Read-only archives and reports filtered by active, stale, or unclean termination
 status bypass this cache.
 
 PostgreSQL keeps ongoing Activity reports' per-session activity and raw usage
-inputs in memory with a 128 MiB estimated-size budget. Each session keeps its
+inputs in memory with a 256 MiB estimated-size budget. Each session keeps its
 runs and the ascending times of its counted user and assistant messages, derived
 from one pairing over all time: the candidates a report range leaves out are
 ones the aggregator rejects for that range anyway, so one entry serves every
