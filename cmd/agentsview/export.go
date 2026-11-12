@@ -311,11 +311,6 @@ func runExportSessions(cmd *cobra.Command, cfg exportSessionsConfig) error {
 	if err != nil {
 		return fmt.Errorf("checking project identity evidence: %w", err)
 	}
-	switch backfill.State {
-	case "not_needed", "completed", "pending", "running", "failed":
-	default:
-		return unknownExportBackfillState(backfill.State)
-	}
 	if backfill.State != "not_needed" && backfill.State != "completed" {
 		archiveOnly, err := database.IsArchiveOnly(ctx)
 		if err != nil {

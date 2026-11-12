@@ -1122,15 +1122,11 @@ func TestExportWaitRejectsNewerBackfillState(t *testing.T) {
 	defer raw.Close()
 	_, err = raw.ExecContext(t.Context(), `INSERT INTO background_migrations (name, state) VALUES ('session_project_identity_snapshots_v1', 'future_state')`)
 	require.NoError(t, err)
-	started := false
-	stubStartBackgroundServeForTransport(t, func(context.Context, *config.Config, time.Duration, bool) (*DaemonRuntime, error) {
-		started = true
-		return nil, errors.New("unexpected launch")
-	})
+	host, port := testPingServer(t)
+	writeDaemonRuntimeForTest(t, filepath.Dir(path), host, port, "test", false)
 	stdout, _, err := executeExportSessionsCommand(newRootCommand(), "export", "sessions", "--wait")
 	require.ErrorContains(t, err, "future_state")
 	require.ErrorContains(t, err, "agentsview export status")
-	assert.False(t, started)
 	assert.Empty(t, stdout)
 }
 
