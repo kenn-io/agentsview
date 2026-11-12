@@ -211,7 +211,7 @@ func TestTrendWorkersStopCountingAfterCancellation(t *testing.T) {
 		workers.Add("seam", time.Date(2024, 6, 1, 9, 0, 0, 0, time.UTC))
 	}
 	_, err = workers.Finish()
-	assert.ErrorIs(t, err, context.Canceled)
+	require.ErrorIs(t, err, context.Canceled)
 	processed := 0
 	for _, worker := range workers.workers {
 		processed += worker.messageCounts[0]
