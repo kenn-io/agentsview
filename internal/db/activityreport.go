@@ -708,15 +708,17 @@ type activityCountedMessage struct {
 	user      bool
 }
 
+// Materialize terminal events once and drive their lookup from the requested
+// sessions, even when SQLite has stale statistics for the terminal index.
 const activityReportTerminalCandidatesSQL = `WITH
 	session_ids AS (
 		SELECT value AS session_id FROM json_each(?)
 	),
-	terminal_events AS (
+	terminal_events AS MATERIALIZED (
 		SELECT tre.session_id, tre.tool_call_message_ordinal AS ordinal,
 			tre.call_index, tre.event_index, tre.timestamp
-		FROM tool_result_events tre
-		JOIN session_ids ids ON ids.session_id = tre.session_id
+		FROM session_ids ids
+		CROSS JOIN tool_result_events tre ON tre.session_id = ids.session_id
 		WHERE tre.source = 'tool_execution'
 			AND tre.status IN ('completed', 'errored')
 			AND tre.timestamp IS NOT NULL
