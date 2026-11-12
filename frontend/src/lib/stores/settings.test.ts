@@ -1,5 +1,5 @@
-import { beforeEach, describe, expect, it, vi } from "vite-plus/test";
-import { SettingsService } from "../api/generated/index";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test";
+import { DaemonService, HealthService, SettingsService } from "../api/generated/index";
 import { ApiError, setServerUrl } from "../api/runtime.js";
 
 let settings: typeof import("./settings.svelte.js").settings;
@@ -28,8 +28,13 @@ vi.mock("../api/generated/index", async (importOriginal) => {
       getApiV1Settings: vi.fn(),
       putApiV1Settings: vi.fn(),
     },
+    DaemonService: { postApiV1DaemonRestart: vi.fn() },
+    HealthService: { getApiPing: vi.fn() },
   };
 });
+
+const restartDaemon = vi.mocked(DaemonService.postApiV1DaemonRestart);
+const ping = vi.mocked(HealthService.getApiPing);
 
 const settingsService = SettingsService as unknown as {
   getApiV1Settings: ReturnType<typeof vi.fn>;
@@ -44,6 +49,7 @@ beforeEach(async () => {
   vi.resetModules();
   vi.clearAllMocks();
   localStorage.clear();
+  sessionStorage.clear();
   ({ ui } = await import("./ui.svelte.js"));
   ({ settings } = await import("./settings.svelte.js"));
 });
@@ -581,5 +587,227 @@ describe("SettingsStore.load auth handling", () => {
 
     expect(settings.needsAuth).toBe(false);
     expect(settings.error).toBe(detail);
+  });
+});
+
+describe("SettingsStore.restartDaemon", () => {
+  let reload: ReturnType<typeof vi.fn>;
+  const originalLocation = window.location;
+
+  beforeEach(() => {
+    vi.useFakeTimers();
+    reload = vi.fn();
+    Object.defineProperty(window, "location", { value: { reload }, writable: true });
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+    Object.defineProperty(window, "location", { value: originalLocation, writable: true });
+  });
+
+  it("reads the pending restart from the settings response", async () => {
+    settingsService.getApiV1Settings.mockResolvedValue({
+      agent_dirs: {},
+      chart_palette: "agentsview",
+      github_configured: false,
+      host: "127.0.0.1",
+      port: 8080,
+      read_only: false,
+      require_auth: false,
+      restart_required: true,
+      restart_supported: true,
+      terminal: { mode: "auto" },
+    });
+
+    await settings.load();
+
+    expect(settings.restartRequired).toBe(true);
+    expect(settings.restartSupported).toBe(true);
+  });
+
+  it("reloads when the instance changes with the same process", async () => {
+    let finishSave!: () => void;
+    const save = settings.runMutation(() => new Promise<void>((resolve) => (finishSave = resolve)));
+    ping
+      .mockResolvedValueOnce({ healthy: true, ok: true, pid: 100, instance_id: "old" })
+      .mockRejectedValueOnce(new TypeError("Failed to fetch"))
+      .mockResolvedValueOnce({ healthy: true, ok: true, pid: 100, instance_id: "old" })
+      .mockResolvedValueOnce({ healthy: true, ok: true, pid: 100, instance_id: "new" });
+    settings.restartRequired = true;
+    // The old process can drop the connection before it answers.
+    restartDaemon.mockRejectedValue(new TypeError("Failed to fetch"));
+
+    const restart = settings.restartDaemon();
+    void settings.restartDaemon();
+    expect(settings.restarting).toBe(true);
+    expect(restartDaemon).not.toHaveBeenCalled();
+
+    finishSave();
+    await save;
+    await vi.advanceTimersByTimeAsync(3_000);
+    await restart;
+
+    expect(restartDaemon).toHaveBeenCalledOnce();
+    expect(reload).toHaveBeenCalledOnce();
+    expect(settings.restarting).toBe(true);
+    expect(settings.restartFailed).toBe(false);
+  });
+
+  it("releases the settings queue when the first request stalls", async () => {
+    ping.mockImplementation(
+      (options) =>
+        new Promise((_, reject) =>
+          options?.signal?.addEventListener("abort", () =>
+            reject(new DOMException("aborted", "AbortError")),
+          ),
+        ),
+    );
+
+    const restart = settings.restartDaemon();
+    await vi.advanceTimersByTimeAsync(30_000);
+    await restart;
+
+    expect(restartDaemon).not.toHaveBeenCalled();
+    expect(settings.saving).toBe(false);
+    expect(settings.restarting).toBe(false);
+    expect(settings.restartFailed).toBe(true);
+    expect(settings.restartError).toContain("identify");
+    ping.mockResolvedValueOnce({ healthy: true, ok: true, pid: 100, instance_id: "old" });
+    ping.mockResolvedValue({ healthy: true, ok: true, pid: 100, instance_id: "new" });
+    restartDaemon.mockResolvedValue({ restarting: true });
+    const retry = settings.restartDaemon();
+    await vi.advanceTimersByTimeAsync(1_000);
+    await retry;
+    expect(restartDaemon).toHaveBeenCalledOnce();
+    expect(reload).toHaveBeenCalledOnce();
+  });
+
+  it("reports the server's reason without polling when it refuses", async () => {
+    ping.mockResolvedValue({ healthy: true, ok: true, pid: 100, instance_id: "old" });
+    restartDaemon.mockRejectedValue(new ApiError(500, "restart failed"));
+
+    await settings.restartDaemon();
+
+    expect(ping).toHaveBeenCalledOnce();
+    expect(settings.saving).toBe(false);
+    expect(settings.restartFailed).toBe(true);
+    expect(settings.restartError).toBe("restart failed");
+  });
+
+  it("stops offering the restart when the server cannot restart itself", async () => {
+    settings.restartSupported = true;
+    ping.mockResolvedValue({ healthy: true, ok: true, pid: 100, instance_id: "old" });
+    restartDaemon.mockRejectedValue(new ApiError(501, "restart unavailable"));
+
+    await settings.restartDaemon();
+
+    expect(settings.restartSupported).toBe(false);
+    expect(settings.restartFailed).toBe(false);
+    expect(settings.restartError).toBeNull();
+    expect(settings.restarting).toBe(false);
+  });
+
+  it.each(["lost response", "unchanged instance", "stalled POST"])(
+    "shows recovery after a %s",
+    async (scenario) => {
+      ping.mockResolvedValue({ healthy: true, ok: true, pid: 100, instance_id: "old" });
+      if (scenario === "lost response")
+        restartDaemon.mockRejectedValue(new TypeError("Failed to fetch"));
+      else if (scenario === "stalled POST")
+        restartDaemon.mockImplementation(
+          (options) =>
+            new Promise((_, reject) =>
+              options?.signal?.addEventListener("abort", () =>
+                reject(new DOMException("aborted", "AbortError")),
+              ),
+            ),
+        );
+      else restartDaemon.mockResolvedValue({ restarting: true });
+      const restart = settings.restartDaemon();
+      await vi.advanceTimersByTimeAsync(30_000);
+      await restart;
+      expect(restartDaemon).toHaveBeenCalledOnce();
+      expect(settings.restartFailed).toBe(true);
+      expect(settings.restarting).toBe(false);
+      expect(reload).not.toHaveBeenCalled();
+    },
+  );
+
+  it.each([
+    ["the original instance", { healthy: true, ok: true, pid: 100, instance_id: "old" }],
+    ["an unidentified server", { healthy: true, ok: true, pid: 100 }],
+    ["a non-string identity", { healthy: true, ok: true, pid: 100, instance_id: 123 }],
+    ["an API error", new ApiError(500, "unavailable")],
+  ])("checks again without accepting %s as the replacement", async (_, answer) => {
+    ping.mockResolvedValue(
+      answer && !(answer instanceof ApiError) && !("instance_id" in answer)
+        ? (answer as never)
+        : { healthy: true, ok: true, pid: 100, instance_id: "old" },
+    );
+    ping.mockResolvedValueOnce({ healthy: true, ok: true, pid: 100, instance_id: "old" });
+    restartDaemon.mockResolvedValue({ restarting: true });
+    const restart = settings.restartDaemon();
+    await vi.advanceTimersByTimeAsync(30_000);
+    await restart;
+    expect(settings.restartFailed).toBe(true);
+    expect(reload).not.toHaveBeenCalled();
+
+    if (answer instanceof ApiError) ping.mockRejectedValueOnce(answer);
+    else ping.mockResolvedValueOnce(answer as never);
+    const check = settings.checkConnection();
+    await vi.advanceTimersByTimeAsync(1_000);
+    expect(reload).not.toHaveBeenCalled();
+    ping.mockResolvedValueOnce({ healthy: true, ok: true, pid: 100, instance_id: "new" });
+    await vi.advanceTimersByTimeAsync(1_000);
+    await check;
+    expect(reload).toHaveBeenCalledOnce();
+    expect(restartDaemon).toHaveBeenCalledOnce();
+  });
+
+  it("keeps checking until a delayed replacement answers", async () => {
+    ping.mockResolvedValue({ healthy: true, ok: true, pid: 100, instance_id: "old" });
+    restartDaemon.mockResolvedValue({ restarting: true });
+    const restart = settings.restartDaemon();
+    await vi.advanceTimersByTimeAsync(30_000);
+    await restart;
+    const check = settings.checkConnection();
+    expect(settings.restarting).toBe(true);
+    await vi.advanceTimersByTimeAsync(2_000);
+    expect(reload).not.toHaveBeenCalled();
+    ping.mockResolvedValue({ healthy: true, ok: true, pid: 100, instance_id: "new" });
+    await vi.advanceTimersByTimeAsync(1_000);
+    await check;
+    expect(restartDaemon).toHaveBeenCalledOnce();
+    expect(reload).toHaveBeenCalledOnce();
+  });
+
+  it("asks for a token when the restarted daemon requires one", async () => {
+    ping
+      .mockResolvedValueOnce({ healthy: true, ok: true, pid: 100, instance_id: "old" })
+      .mockRejectedValue(new ApiError(401, "Unauthorized"));
+    restartDaemon.mockResolvedValue({ restarting: true });
+
+    const restart = settings.restartDaemon();
+    await vi.advanceTimersByTimeAsync(1_000);
+    await restart;
+
+    expect(settings.needsAuth).toBe(true);
+    expect(settings.restarting).toBe(false);
+    expect(settings.restartFailed).toBe(false);
+    expect(reload).not.toHaveBeenCalled();
+  });
+
+  it("asks for a token when checking the replacement connection", async () => {
+    ping.mockResolvedValue({ healthy: true, ok: true, pid: 100, instance_id: "old" });
+    restartDaemon.mockResolvedValue({ restarting: true });
+    const restart = settings.restartDaemon();
+    await vi.advanceTimersByTimeAsync(30_000);
+    await restart;
+    ping.mockRejectedValueOnce(new ApiError(401, "Unauthorized"));
+    const check = settings.checkConnection();
+    await vi.advanceTimersByTimeAsync(1_000);
+    await check;
+    expect(settings.needsAuth).toBe(true);
+    expect(reload).not.toHaveBeenCalled();
   });
 });

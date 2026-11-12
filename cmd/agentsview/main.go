@@ -100,7 +100,12 @@ func main() {
 	ensureUsableTempDir(os.Stderr)
 
 	if err := executeCLI(); err != nil {
-		os.Exit(reportCLIError(err, os.Stderr))
+		if restart, ok := errors.AsType[*foregroundRestartError](err); ok {
+			err = execForegroundRestart(restart)
+		}
+		if err != nil {
+			os.Exit(reportCLIError(err, os.Stderr))
+		}
 	}
 }
 
@@ -145,6 +150,7 @@ type serveOptions struct {
 	SkipInitialSync bool
 	BasePath        string
 	Pprof           bool
+	RestartArgs     []string
 	// ReloadConfig rebuilds the configuration with the same layers and flags
 	// as startup so saved provider settings apply without a restart.
 	ReloadConfig func() (config.Config, error)
@@ -170,9 +176,12 @@ func applyServeMemoryLimit() {
 	debug.SetMemoryLimit(serveMemoryLimitBytes)
 }
 
-func runServe(ctx context.Context, cfg config.Config, opts serveOptions, restartPort int) {
+func runServe(ctx context.Context, cfg config.Config, opts serveOptions, restartPort int) error {
 	cfg.PersistentDaemon = !runningAsBackgroundChild() || os.Getenv(persistentDaemonEnvVar) == "true"
-	setupDebugLogWriter(cfg.DataDir)
+	previousLog := log.Writer()
+	if writer := setupDebugLogWriter(cfg.DataDir); writer != nil {
+		defer func() { log.SetOutput(previousLog); _ = writer.Close() }()
+	}
 	archiveOnly, err := archiveModeAfterRecovery(ctx, cfg)
 	if err != nil {
 		fatal("reading archive mode: %v", err)
@@ -212,7 +221,7 @@ func runServe(ctx context.Context, cfg config.Config, opts serveOptions, restart
 		fatal("%v", err)
 	}
 	if !cont {
-		return
+		return nil
 	}
 	defer releaseForegroundServeLaunch()
 	rotateLogFile(filepath.Join(cfg.DataDir, "debug.log"), maxLogSize)
@@ -234,6 +243,8 @@ func runServe(ctx context.Context, cfg config.Config, opts serveOptions, restart
 		ctx, os.Interrupt, syscall.SIGTERM,
 	)
 	defer stop()
+	ctx, requestRestart := context.WithCancelCause(ctx)
+	defer requestRestart(nil)
 
 	// Run the archive-scale startup sync in a short-lived worker process before
 	// taking the write lock, so its allocation high-water returns to the OS
@@ -495,7 +506,7 @@ func runServe(ctx context.Context, cfg config.Config, opts serveOptions, restart
 				runInitialSync(ctx, engine, startupProgress)
 			}
 			if ctx.Err() != nil {
-				return
+				return nil
 			}
 		}
 		if database.NeedsResync() && !startupRebuild {
@@ -610,6 +621,10 @@ func runServe(ctx context.Context, cfg config.Config, opts serveOptions, restart
 		codexCloudMonitor.CloseAll()
 	}()
 
+	var restartExplicitPort *int
+	if cfg.PortExplicit {
+		restartExplicitPort = new(cfg.Port)
+	}
 	preparedCfg, rtOpts, prepErr := prepareRunServeRuntimeConfig(ctx,
 		cfg, restartPort, startupProgress.SetCaddyProcess,
 	)
@@ -641,6 +656,31 @@ func runServe(ctx context.Context, cfg config.Config, opts serveOptions, restart
 		server.WithHTTPRemoteCleanupRegistry(httpRemoteCleanupRegistry),
 		server.WithPprof(opts.Pprof),
 		server.WithTelemetryCapture(telemetryCapture),
+	}
+	if opts.ReloadConfig != nil {
+		srvOpts = append(srvOpts, server.WithDaemonRestart(func(ctx context.Context, current config.Config) error {
+			args := serveBackgroundArgsWithNoSync(serveReplacementArgs(opts.RestartArgs, current), cfg.NoSync)
+			flags := newServeCommand().Flags()
+			if err := flags.Parse(args); err != nil {
+				return fmt.Errorf("parsing replacement flags: %w", err)
+			}
+			replacement, err := config.LoadPFlags(flags)
+			if err != nil {
+				return fmt.Errorf("loading replacement config: %w", err)
+			}
+			if err := prepareBackgroundReplacement(ctx, &replacement, nil, false); err != nil {
+				return err
+			}
+			exe, err := os.Executable()
+			if err != nil {
+				return fmt.Errorf("finding executable: %w", err)
+			}
+			args = append([]string{"serve"}, args...)
+			args = append(args, serveHandoffPortArgs(cfg.Port, restartExplicitPort)...)
+			// Let the HTTP response finish before draining its server.
+			context.AfterFunc(ctx, func() { requestRestart(&foregroundRestartError{exe: exe, args: args}) })
+			return nil
+		}))
 	}
 	if rtOpts.BasePath != "" {
 		srvOpts = append(srvOpts, server.WithBasePath(rtOpts.BasePath))
@@ -719,14 +759,14 @@ func runServe(ctx context.Context, cfg config.Config, opts serveOptions, restart
 		}
 	}
 	if ctx.Err() != nil {
-		return
+		return nil
 	}
 	startupProgress.SetPhase("starting HTTP server")
 	rt, err := startServerWithOptionalCaddy(ctx, cfg, srv, rtOpts)
 	if err != nil {
 		stopAudit()
 		if errors.Is(err, context.Canceled) {
-			return
+			return nil
 		}
 		fatal("%v", err)
 	}
@@ -811,10 +851,22 @@ func runServe(ctx context.Context, cfg config.Config, opts serveOptions, restart
 		completeWorkerStartup()
 	}
 
-	if err := waitForServerRuntime(ctx, srv, rt); err != nil {
-		fatal("%v", err)
+	err = waitForServerRuntime(ctx, srv, rt)
+	if restart, ok := errors.AsType[*foregroundRestartError](context.Cause(ctx)); ok {
+		if err != nil {
+			log.Printf("restart cleanup: %v", err)
+		}
+		return restart
 	}
+	return err
 }
+
+type foregroundRestartError struct {
+	exe  string
+	args []string
+}
+
+func (r *foregroundRestartError) Error() string { return "restart foreground server" }
 
 type usageCacheBackfiller interface {
 	StartUsageCacheBackfill(context.Context) error
@@ -1633,11 +1685,14 @@ func setupLogFile(dataDir string) {
 }
 
 // setupDebugLogWriter captures startup messages without rotating an incumbent's log.
-func setupDebugLogWriter(dataDir string) {
+func setupDebugLogWriter(dataDir string) *lockedLogWriter {
 	path := filepath.Join(dataDir, "debug.log")
 	if f := openLogFile(path); f != nil {
-		log.SetOutput(&lockedLogWriter{file: f, lock: flock.New(logRotationLockPath(path))})
+		writer := &lockedLogWriter{file: f, lock: flock.New(logRotationLockPath(path))}
+		log.SetOutput(writer)
+		return writer
 	}
+	return nil
 }
 
 // setupLogFileNamed redirects the standard logger to the named file

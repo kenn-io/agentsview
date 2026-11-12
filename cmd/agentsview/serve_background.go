@@ -82,6 +82,13 @@ func runningAsBackgroundChild() bool {
 	return os.Getenv(backgroundChildEnvVar) == "1"
 }
 
+func serveHandoffPortArgs(port int, explicitPort *int) []string {
+	if explicitPort != nil && *explicitPort > 0 {
+		return []string{"--port=" + strconv.Itoa(*explicitPort)}
+	}
+	return []string{"--restart-port=" + strconv.Itoa(port)}
+}
+
 // backgroundLaunchLockPath is the advisory lock that serializes concurrent
 // `serve --background` launches for a data dir.
 func backgroundLaunchLockPath(dataDir string) string {
@@ -163,13 +170,10 @@ func runServeBackgroundCommand(
 
 	launchLock, ok := acquireBackgroundLaunchLock(dataDir)
 	if !ok {
-		// Another launch holds the lock and owns the config writes. Report
-		// without loading config so this process never touches config.toml.
 		reportBackgroundLaunchInProgress(cmd.Context(), dataDir, "")
 		return
 	}
 	defer func() { _ = launchLock.Unlock() }()
-
 	runServeBackground(cmd.Context(), mustLoadConfig(cmd), os.Args[1:], opts)
 }
 

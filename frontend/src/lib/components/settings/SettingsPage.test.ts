@@ -58,6 +58,42 @@ afterEach(() => {
 });
 
 describe("SettingsPage", () => {
+  it("retains the selected panel and other parameters across a reload", async () => {
+    router.route = "settings";
+    router.params = { source: "example" };
+    settingsService.getApiV1Settings.mockResolvedValue({
+      agent_dirs: {},
+      chart_palette: "agentsview",
+      github_configured: false,
+      host: "127.0.0.1",
+      port: 8080,
+      read_only: false,
+      require_auth: false,
+      terminal: { mode: "auto" },
+    });
+    let component = mount(SettingsPage, { target: document.body });
+    try {
+      await tick();
+      await tick();
+      const nav = document.querySelector(".kit-settings__nav")!;
+      const button = [...nav.querySelectorAll("button")].find((item) =>
+        item.textContent?.includes("Tool-result images"),
+      )!;
+      button.click();
+      await tick();
+      expect(router.params).toMatchObject({ panel: "tool-result-images", source: "example" });
+      unmount(component);
+      component = mount(SettingsPage, { target: document.body });
+      await tick();
+      await tick();
+      expect(document.querySelector(".settings-panel:not([hidden])")?.textContent).toContain(
+        "Tool-result images",
+      );
+    } finally {
+      unmount(component);
+    }
+  });
+
   it("opens Session Providers from the requested panel", async () => {
     router.params = { panel: "agent-directories" };
     settingsService.getApiV1Settings.mockResolvedValue({

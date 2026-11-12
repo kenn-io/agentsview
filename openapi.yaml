@@ -6115,6 +6115,9 @@ components:
       properties:
         healthy:
           type: boolean
+        instance_id:
+          format: uuid
+          type: string
         ok:
           type: boolean
         pid:
@@ -6129,6 +6132,7 @@ components:
         version:
           type: string
       required:
+        - instance_id
         - ok
         - healthy
       type: object
@@ -8477,6 +8481,10 @@ components:
           type: boolean
         require_auth:
           type: boolean
+        restart_required:
+          type: boolean
+        restart_supported:
+          type: boolean
         session_providers:
           items:
             $ref: "#/components/schemas/SessionProviderResponse"
@@ -8518,6 +8526,8 @@ components:
         - insight_default_agent
         - require_auth
         - read_only
+        - restart_supported
+        - restart_required
       type: object
     SettingsUpdateRequest:
       additionalProperties: false
@@ -13342,6 +13352,81 @@ paths:
                 $ref: "#/components/schemas/ApiErrorResponse"
           description: Gateway Timeout
       summary: Keep the daemon running until stopped
+      tags:
+        - Daemon
+  /api/v1/daemon/restart:
+    post:
+      operationId: post-api-v1-daemon-restart
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                additionalProperties:
+                  type: boolean
+                type: object
+          description: OK
+        "400":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+          description: Bad Request
+        "401":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+          description: Unauthorized
+        "403":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+          description: Forbidden
+        "404":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+          description: Not Found
+        "409":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+          description: Conflict
+        "500":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+          description: Internal Server Error
+        "501":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+          description: Not Implemented
+        "502":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+          description: Bad Gateway
+        "503":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+          description: Service Unavailable
+        "504":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+          description: Gateway Timeout
+      summary: Restart the daemon with saved settings
       tags:
         - Daemon
   /api/v1/data/compact:

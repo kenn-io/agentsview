@@ -230,3 +230,21 @@ func lookupEnvBool(name string) (value, set bool, err error) {
 	}
 	return value, true, nil
 }
+
+// ErrDeploymentAuthConflict means the deployment controls authentication.
+var ErrDeploymentAuthConflict = errors.New("authentication is controlled by AGENTSVIEW_REQUIRE_AUTH; change it in the deployment")
+
+func validateDeploymentAuthSave(value bool) error {
+	active, err := deploymentVarsActive("AGENTSVIEW_REQUIRE_AUTH")
+	if err != nil || !active {
+		return err
+	}
+	override, set, err := lookupEnvBool("AGENTSVIEW_REQUIRE_AUTH")
+	if err != nil {
+		return err
+	}
+	if set && override != value {
+		return ErrDeploymentAuthConflict
+	}
+	return nil
+}

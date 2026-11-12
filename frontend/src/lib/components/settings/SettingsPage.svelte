@@ -87,6 +87,10 @@
   });
 
   $effect(() => {
+    if (router.params.panel !== active) router.replaceParams({ ...router.params, panel: active });
+  });
+
+  $effect(() => {
     void displayedActive;
     const scroller = pageElement?.querySelector<HTMLElement>(
       ".kit-settings__scroll",

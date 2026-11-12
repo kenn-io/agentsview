@@ -4133,3 +4133,45 @@ func TestNewDaemonIdleTrackerExplicitLifetime(t *testing.T) {
 		assert.False(t, stopped)
 	})
 }
+
+func TestServeLifetimesReleaseDebugLog(t *testing.T) {
+	dir := testDataDir(t)
+	t.Setenv("HOME", dir)
+	t.Setenv("XDG_CONFIG_HOME", filepath.Join(dir, "config"))
+	t.Setenv("XDG_CACHE_HOME", filepath.Join(dir, "cache"))
+	t.Setenv("XDG_STATE_HOME", filepath.Join(dir, "state"))
+	for _, agent := range parser.Registry {
+		if agent.EnvVar != "" {
+			t.Setenv(agent.EnvVar, filepath.Join(dir, "empty", string(agent.Type)))
+		}
+		if agent.DefaultRootEnvVar != "" {
+			t.Setenv(agent.DefaultRootEnvVar, filepath.Join(dir, "empty-root", string(agent.Type)))
+		}
+	}
+	cfg, err := config.Load(nil)
+	require.NoError(t, err)
+	cfg.Host = "127.0.0.1"
+	cfg.Port = 0
+	cfg.NoSync = true
+	original := log.Writer()
+	for range 2 {
+		ctx, cancel := context.WithCancel(t.Context())
+		done := make(chan error, 1)
+		go func() { done <- runServe(ctx, cfg, serveOptions{}, 0) }()
+		require.Eventually(t, func() bool { return FindDaemonRuntime(dir) != nil }, 30*time.Second, 100*time.Millisecond)
+		cancel()
+		select {
+		case err := <-done:
+			require.NoError(t, err)
+		case <-time.After(30 * time.Second):
+			require.FailNow(t, "server did not stop")
+		}
+		require.Same(t, original, log.Writer())
+		if runtime.GOOS == "windows" {
+			path := filepath.Join(dir, "debug.log")
+			moved := filepath.Join(dir, "debug-moved.log")
+			require.NoError(t, os.Rename(path, moved))
+			require.NoError(t, os.Remove(moved))
+		}
+	}
+}

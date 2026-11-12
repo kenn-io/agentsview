@@ -19,6 +19,8 @@ export interface SettingsResponse {
   port: number;
   read_only: boolean;
   require_auth: boolean;
+  restart_required: boolean;
+  restart_supported: boolean;
   session_providers: SessionProviderResponse[];
   terminal: TerminalResponse;
   /** Inline tool-result image retention applied to ingestion after a daemon restart */

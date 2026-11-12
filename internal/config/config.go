@@ -1229,6 +1229,8 @@ type Config struct {
 	HostExplicit bool `json:"-" toml:"-"`
 	// PortExplicit is true when the user passed --port on the CLI.
 	PortExplicit bool `json:"-" toml:"-"`
+	// RequireAuthExplicit records a launch flag until Settings saves authentication.
+	RequireAuthExplicit bool `json:"-" toml:"-"`
 
 	// DeploymentEmbeddings is the embedding transport from deployment env,
 	// set only without a [vector] section.
@@ -2878,6 +2880,7 @@ func applyFlagValue(cfg *Config, name, value string) {
 		cfg.DisableUpdateCheck = value == "true"
 	case "require-auth":
 		cfg.RequireAuth = value == "true"
+		cfg.RequireAuthExplicit = true
 	case "events-coalesce-interval":
 		if d, err := time.ParseDuration(value); err == nil {
 			cfg.EventsCoalesceInterval = d
@@ -3993,6 +3996,11 @@ func (c *Config) SaveTerminalConfig(tc TerminalConfig) error {
 // The patch map contains config keys mapped to their new values. Only
 // the keys present in patch are written; other config keys are preserved.
 func (c *Config) SaveSettings(patch map[string]any) error {
+	if value, ok := patch["require_auth"].(bool); ok {
+		if err := validateDeploymentAuthSave(value); err != nil {
+			return err
+		}
+	}
 	patch = maps.Clone(patch)
 	if value, ok := patch["tool_result_images"]; ok {
 		policy, ok := value.(ToolResultImages)
@@ -4113,6 +4121,7 @@ func (c *Config) SaveSettings(patch map[string]any) error {
 		if v, ok := patch["require_auth"]; ok {
 			if b, ok := v.(bool); ok {
 				c.RequireAuth = b
+				c.RequireAuthExplicit = false
 			}
 		}
 		if v, ok := patch["chart_palette"]; ok {

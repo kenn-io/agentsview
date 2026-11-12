@@ -14,6 +14,7 @@ beforeEach(() => {
   settings.authToken = "";
   settings.host = "127.0.0.1";
   settings.port = 8080;
+  settings.restartSupported = true;
 });
 
 afterEach(() => {
@@ -25,6 +26,25 @@ afterEach(() => {
 });
 
 describe("RemoteSettings", () => {
+  it("offers a restart beside the auth notice before any save", async () => {
+    const restart = vi.spyOn(settings, "restartDaemon").mockResolvedValue();
+    const { getByRole } = render(RemoteSettings);
+
+    expect(getByRole("status").textContent).toContain("Auth changes take effect immediately.");
+    await fireEvent.click(getByRole("button", { name: "Restart now" }));
+
+    expect(restart).toHaveBeenCalledOnce();
+  });
+
+  it("shows only the auth notice when the server can't restart itself", () => {
+    settings.restartSupported = false;
+    const { getByRole, queryByRole } = render(RemoteSettings);
+
+    expect(getByRole("status").textContent?.trim()).toBe("Auth changes take effect immediately.");
+    expect(queryByRole("alert")).toBeNull();
+    expect(queryByRole("button", { name: /Restart/ })).toBeNull();
+  });
+
   it("shows the requested authentication state while saving", async () => {
     let releaseSave!: () => void;
     const saveSpy = vi.spyOn(settings, "save").mockImplementation(async (patch) => {

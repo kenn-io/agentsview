@@ -127,6 +127,12 @@ func (s *Server) humaGetSettings(
 		InsightDefaultAgent: resolvedInsightDefaultAgent(s.cfg),
 		RequireAuth:         s.cfg.RequireAuth,
 		ReadOnly:            s.db.ReadOnly(),
+		RestartSupported:    s.restartSupported(),
+	}
+	if active, ok := s.db.(interface {
+		ToolResultImages() config.ToolResultImages
+	}); ok {
+		resp.RestartRequired = toolResultImagesValue(s.cfg.ToolResultImages) != toolResultImagesValue(active.ToolResultImages())
 	}
 	if isLocalhostContext(ctx) {
 		resp.AuthToken = s.cfg.AuthToken
@@ -197,6 +203,9 @@ func (s *Server) humaUpdateSettings(
 			err = s.cfg.EnsureAuthToken()
 		}
 		s.mu.Unlock()
+		if errors.Is(err, config.ErrDeploymentAuthConflict) {
+			return nil, apiError(http.StatusConflict, err.Error())
+		}
 		if err != nil {
 			return nil, internalError("save settings", err)
 		}

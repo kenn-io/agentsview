@@ -3292,3 +3292,37 @@ func TestSaveVectorSetupRejectsInvalidCurrentSettings(t *testing.T) {
 		})
 	}
 }
+
+func TestAuthFlagRetiredOnlyBySuccessfulAuthSave(t *testing.T) {
+	cfg, err := loadConfigFromPFlags(t, "--require-auth=false")
+	require.NoError(t, err)
+	require.True(t, cfg.RequireAuthExplicit)
+	require.NoError(t, cfg.SaveSettings(map[string]any{"tool_result_images": ToolResultImages("drop")}))
+	assert.True(t, cfg.RequireAuthExplicit)
+	configPath := cfg.configPath()
+	saved, err := os.ReadFile(configPath)
+	require.NoError(t, err)
+	require.NoError(t, os.WriteFile(configPath, []byte("[invalid"), 0o600))
+	require.Error(t, cfg.SaveSettings(map[string]any{"require_auth": false}))
+	assert.True(t, cfg.RequireAuthExplicit)
+	require.NoError(t, os.WriteFile(configPath, saved, 0o600))
+	require.NoError(t, cfg.SaveSettings(map[string]any{"require_auth": false}))
+	assert.False(t, cfg.RequireAuthExplicit)
+}
+
+func TestSaveSettingsRejectsDeploymentAuthConflict(t *testing.T) {
+	t.Setenv("AGENTSVIEW_MODE", "serve")
+	t.Setenv("AGENTSVIEW_REQUIRE_AUTH", "false")
+	cfg, err := loadConfigFromPFlags(t)
+	require.NoError(t, err)
+	path := cfg.configPath()
+	before, err := os.ReadFile(path)
+	require.NoError(t, err)
+	err = cfg.SaveSettings(map[string]any{"require_auth": true})
+	require.ErrorContains(t, err, "AGENTSVIEW_REQUIRE_AUTH")
+	after, err := os.ReadFile(path)
+	require.NoError(t, err)
+	assert.Equal(t, before, after)
+	assert.False(t, cfg.RequireAuth)
+	require.NoError(t, cfg.SaveSettings(map[string]any{"require_auth": false}))
+}
