@@ -679,7 +679,13 @@ func pgThinkingCandidateBranch(f db.ContentSearchFilter, lit string, pb *paramBu
 	predicate := pgPrefilterClause("m.thinking_text", lit, pb)
 	sysPred := "TRUE"
 	if f.ExcludeSystem {
-		sysPred = "m.is_system = FALSE AND " + db.PostgresSystemPrefixSQL("m.content", "m.role")
+		var prefix string
+		if f.SessionID != "" {
+			prefix = db.PostgresSystemPrefixSQLWithoutGuard("m.content", "m.role")
+		} else {
+			prefix = db.PostgresSystemPrefixSQL("m.content", "m.role")
+		}
+		sysPred = "m.is_system = FALSE AND " + prefix
 	}
 	sysPred += " AND " + db.LexicalAnchorScopeSQL(f, "s", "m", db.PostgresQueryDialect())
 	return fmt.Sprintf(`SELECT m.session_id, s.project, s.agent,

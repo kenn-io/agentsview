@@ -79,21 +79,26 @@ const (
 // (e.g. "m.content" or "m2.content"). Uses case-sensitive substr and
 // position checks instead of LIKE, which is case-insensitive on SQLite.
 func SystemPrefixSQL(contentCol, roleCol string) string {
-	return systemPrefixSQL(contentCol, roleCol, systemPrefixSQLite)
+	return systemPrefixSQL(contentCol, roleCol, systemPrefixSQLite, true)
 }
 
 // PostgresSystemPrefixSQL is the PostgreSQL form of SystemPrefixSQL.
 func PostgresSystemPrefixSQL(contentCol, roleCol string) string {
-	return systemPrefixSQL(contentCol, roleCol, systemPrefixPostgres)
+	return systemPrefixSQL(contentCol, roleCol, systemPrefixPostgres, true)
+}
+
+// PostgresSystemPrefixSQLWithoutGuard avoids guard overhead on small candidate sets.
+func PostgresSystemPrefixSQLWithoutGuard(contentCol, roleCol string) string {
+	return systemPrefixSQL(contentCol, roleCol, systemPrefixPostgres, false)
 }
 
 // DuckDBSystemPrefixSQL is the DuckDB form of SystemPrefixSQL.
 func DuckDBSystemPrefixSQL(contentCol, roleCol string) string {
-	return systemPrefixSQL(contentCol, roleCol, systemPrefixDuckDB)
+	return systemPrefixSQL(contentCol, roleCol, systemPrefixDuckDB, false)
 }
 
 func systemPrefixSQL(
-	contentCol, roleCol string, dialect systemPrefixSQLDialect,
+	contentCol, roleCol string, dialect systemPrefixSQLDialect, firstCharGuard bool,
 ) string {
 	// LTRIM strips the same whitespace as Go's strings.TrimSpace,
 	// JS .trim(), and the parser's isSystem helpers: ASCII whitespace,
@@ -111,8 +116,7 @@ func systemPrefixSQL(
 	parts = append(parts, systemReminderTerminalSQL(trimmed, dialect))
 	parts = append(parts, goalContextPrefixSQL(trimmed, dialect))
 	guard := ""
-	// The DuckDB guard showed no reliable gain and a possible slowdown.
-	if dialect != systemPrefixDuckDB {
+	if firstCharGuard {
 		guard = systemPrefixFirstCPGuardSQL(contentCol, dialect) + " AND "
 	}
 	return "NOT (" + roleCol + " = 'user' AND " + guard + "(" +
