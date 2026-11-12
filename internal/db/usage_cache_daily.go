@@ -198,7 +198,7 @@ func (db *DB) assembleDailyUsageFacts(
 		for _, id := range sessionIDs {
 			for key, cost := range sessionCosts[id].estimated {
 				sides.AddEstimate(key.model, cost)
-				if id != usageDayTotalsSessionID && id != usageRollupCursorSessionID && id != "" {
+				if id != usageDayTotalsSessionID && id != usageRollupCursorSessionID {
 					facts.SideMemberships = append(facts.SideMemberships, usageSideMembership{id, key.model, key.project})
 				}
 			}
