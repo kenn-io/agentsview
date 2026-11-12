@@ -4,7 +4,10 @@ import (
 	"encoding/json/v2"
 	"errors"
 	"fmt"
+	"os"
+	"os/signal"
 	"runtime"
+	"syscall"
 
 	"github.com/spf13/cobra"
 	"go.kenn.io/agentsview/internal/config"
@@ -25,6 +28,8 @@ func newSessionMaterializeCommand() *cobra.Command {
 		Example: "  agentsview session materialize <id> --cwd <path>",
 		Args:    cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
+			ctx, stop := signal.NotifyContext(cmd.Context(), os.Interrupt, syscall.SIGTERM)
+			defer stop()
 			if cmd.Flags().Changed("server") || cmd.Flags().Changed("server-token-file") || cmd.Flags().Changed("pg") {
 				return errors.New("session materialize requires the local archive; --server, --server-token-file and --pg are unsupported")
 			}
@@ -38,23 +43,23 @@ func newSessionMaterializeCommand() *cobra.Command {
 			if cfg.ArchiveContent.UsageOnly() {
 				return errors.New("session materialize is unavailable with archive_content=usage")
 			}
-			database, err := openReadOnlyDB(cmd.Context(), cfg)
+			database, err := openReadOnlyDB(ctx, cfg)
 			if err != nil {
 				return err
 			}
 			defer database.Close()
-			id, err := resolveSessionID(cmd.Context(), database, args[0])
+			id, err := resolveSessionID(ctx, database, args[0])
 			if err != nil {
 				return err
 			}
 			if id == "" {
 				return fmt.Errorf("session not in local archive: %s", args[0])
 			}
-			session, err := database.GetSessionFull(cmd.Context(), id)
+			session, err := database.GetSessionFull(ctx, id)
 			if err != nil {
 				return err
 			}
-			result, err := sessionmaterialize.MaterializeWithArchive(cmd.Context(), cfg, database, session, cwd)
+			result, err := sessionmaterialize.Materialize(ctx, cfg, database, session, cwd)
 			if err != nil {
 				return err
 			}

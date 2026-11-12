@@ -300,21 +300,24 @@ func TestArchiveRebuildRetainsOwnerAuthority(t *testing.T) {
 	}
 }
 
-func TestArchiveSessionOwnerRejectsAmbiguousMembership(t *testing.T) {
+func TestArchiveSessionOwnersAcceptsEquivalentMemberships(t *testing.T) {
 	database := testDB(t)
 	write := archiveProvenanceWrite(t, database)
 	_, err := database.WriteSessionBatchAtomic(t.Context(), []SessionBatchWrite{write})
 	require.NoError(t, err)
-	owner, err := database.ArchiveSessionOwner(t.Context(), write.Session.ID)
+	owner, err := database.ArchiveSessionOwners(t.Context(), write.Session.ID)
 	require.NoError(t, err)
-	require.Equal(t, write.ArchiveProvenance, owner)
-	absent, err := database.ArchiveSessionOwner(t.Context(), "missing")
+	require.Equal(t, []ArchiveSessionProvenance{*write.ArchiveProvenance}, owner)
+	absent, err := database.ArchiveSessionOwners(t.Context(), "missing")
 	require.NoError(t, err)
 	assert.Nil(t, absent)
 	second := write.ArchiveProvenance.ArchiveSourceProvenance
 	second.Attachment = ArchiveAttachmentKey{RepositoryID: "another-repository", SnapshotID: "another-snapshot"}
 	require.NoError(t, database.RegisterArchiveAttachment(t.Context(), second.Attachment, second.Source.ArchiveID))
 	require.NoError(t, database.SetArchiveAttachmentTargets(t.Context(), second.Attachment, "target", []ArchiveSourceTarget{{Provenance: second, Target: "target"}}))
-	_, err = database.ArchiveSessionOwner(t.Context(), write.Session.ID)
-	require.ErrorIs(t, err, ErrArchiveSourceConflict)
+	owners, err := database.ArchiveSessionOwners(t.Context(), write.Session.ID)
+	require.NoError(t, err)
+	require.Len(t, owners, 2)
+	assert.Equal(t, owners[0].Source, owners[1].Source)
+	assert.Equal(t, owners[0].ManifestID, owners[1].ManifestID)
 }

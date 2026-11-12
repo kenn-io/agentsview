@@ -327,22 +327,19 @@ func (d *DB) RecordArchiveSourceError(ctx context.Context, p ArchiveSourceProven
 	})
 }
 
-// ArchiveSessionOwner returns the single snapshot membership that owns a session.
-// A nil result means the session was not imported from an attachment.
-func (d *DB) ArchiveSessionOwner(ctx context.Context, sessionID string) (*ArchiveSessionProvenance, error) {
+// ArchiveSessionOwners returns equivalent snapshot memberships for one source.
+// No memberships means the session was not imported from an attachment.
+func (d *DB) ArchiveSessionOwners(ctx context.Context, sessionID string) ([]ArchiveSessionProvenance, error) {
 	rows, err := d.getReader().QueryContext(ctx, `SELECT p.archive_id,p.device_id,p.root_id,p.source_key,p.manifest_id,p.native_session_id,
 		a.repository_id,a.snapshot_id FROM archive_session_provenance p
 		LEFT JOIN archive_attachment_sources a ON a.archive_id=p.archive_id AND a.device_id=p.device_id AND a.root_id=p.root_id AND a.source_key=p.source_key
-		WHERE p.session_id=?`, sessionID)
+		WHERE p.session_id=? ORDER BY a.repository_id,a.snapshot_id`, sessionID)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
-	var owner *ArchiveSessionProvenance
+	var owners []ArchiveSessionProvenance
 	for rows.Next() {
-		if owner != nil {
-			return nil, fmt.Errorf("%w: ambiguous snapshot ownership", ErrArchiveSourceConflict)
-		}
 		var p ArchiveSessionProvenance
 		var repository, snapshot sql.NullString
 		s := &p.Source
@@ -353,7 +350,10 @@ func (d *DB) ArchiveSessionOwner(ctx context.Context, sessionID string) (*Archiv
 			return nil, fmt.Errorf("%w: missing snapshot ownership", ErrArchiveSourceConflict)
 		}
 		p.Attachment = ArchiveAttachmentKey{RepositoryID: repository.String, SnapshotID: snapshot.String}
-		owner = &p
+		if len(owners) > 0 && (owners[0].Source != p.Source || owners[0].ManifestID != p.ManifestID || owners[0].NativeSessionID != p.NativeSessionID) {
+			return nil, fmt.Errorf("%w: differing snapshot source identities", ErrArchiveSourceConflict)
+		}
+		owners = append(owners, p)
 	}
-	return owner, rows.Err()
+	return owners, rows.Err()
 }

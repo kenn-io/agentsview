@@ -59,7 +59,7 @@ func TestMaterializeConfiguredSources(t *testing.T) {
 			sidecar := filepath.Join(strings.TrimSuffix(name, ".jsonl"), "tool-results", "result.txt")
 			require.NoError(t, os.MkdirAll(filepath.Dir(sidecar), 0o700))
 			require.NoError(t, os.WriteFile(sidecar, []byte("tool output"), 0o600))
-			result, err := Materialize(t.Context(), cfg, s, cwd)
+			result, err := Materialize(t.Context(), cfg, nil, s, cwd)
 			require.NoError(t, err)
 			assert.Equal(t, "installed", result.Status)
 			got, err := os.ReadFile(filepath.Join(home, "projects", "test-project", id+".jsonl"))
@@ -68,13 +68,13 @@ func TestMaterializeConfiguredSources(t *testing.T) {
 			got, err = os.ReadFile(filepath.Join(home, "projects", "test-project", id, "tool-results", "result.txt"))
 			require.NoError(t, err)
 			assert.Equal(t, "tool output", string(got))
-			result, err = Materialize(t.Context(), cfg, s, cwd)
+			result, err = Materialize(t.Context(), cfg, nil, s, cwd)
 			require.NoError(t, err)
 			assert.Equal(t, "unchanged", result.Status)
 			if mirror {
 				remote := strings.TrimPrefix(stored, "remote:")
 				stored = "other:" + remote
-				_, err = Materialize(t.Context(), cfg, s, cwd)
+				_, err = Materialize(t.Context(), cfg, nil, s, cwd)
 				require.ErrorContains(t, err, "host does not match")
 				stored = "remote:" + remote
 				lock, err := remotesync.AcquireMirrorLock(t.Context(), remotesync.MirrorDir(root, "remote"))
@@ -82,7 +82,7 @@ func TestMaterializeConfiguredSources(t *testing.T) {
 				defer lock.Close()
 				ctx, cancel := context.WithTimeout(t.Context(), time.Second)
 				defer cancel()
-				_, err = Materialize(ctx, cfg, s, cwd)
+				_, err = Materialize(ctx, cfg, nil, s, cwd)
 				require.ErrorIs(t, err, context.DeadlineExceeded)
 			} else {
 				require.NoError(t, os.WriteFile(filepath.Join(filepath.Dir(sidecar), "result2.txt"), []byte("more"), 0o600))
@@ -129,7 +129,7 @@ func TestMaterializeConfiguredSources(t *testing.T) {
 			case "empty":
 				s.FilePath = new(string)
 			}
-			result, err := Materialize(t.Context(), cfg, s, t.TempDir())
+			result, err := Materialize(t.Context(), cfg, nil, s, t.TempDir())
 			dest := filepath.Join(home, "projects", "test-project", id+".jsonl")
 			if tc.wantError != "" {
 				require.ErrorContains(t, err, tc.wantError)
@@ -209,7 +209,7 @@ func TestS3ConfiguredSource(t *testing.T) {
 	uri := root + "/project/" + id + ".jsonl"
 	s := &db.Session{ID: "host~" + id, Agent: "claude", Machine: "host", FilePath: &uri, SourceSessionID: "host~" + parent}
 	cwd := t.TempDir()
-	_, err = Materialize(t.Context(), cfg, s, cwd)
+	_, err = Materialize(t.Context(), cfg, nil, s, cwd)
 	require.NoError(t, err)
 	installed, err := os.ReadFile(filepath.Join(home, "projects", "project", id+".jsonl"))
 	require.NoError(t, err)
@@ -245,14 +245,14 @@ func TestMaterializeParentSource(t *testing.T) {
 	s := &db.Session{ID: selected, Agent: "claude", Machine: "local", FilePath: &name, SourceSessionID: parent}
 	t.Setenv("CLAUDE_CODE_PROJECT_DIR_NAME", "project")
 	t.Setenv("CLAUDE_CONFIG_DIR", home)
-	_, err := Materialize(t.Context(), cfg, s, t.TempDir())
+	_, err := Materialize(t.Context(), cfg, nil, s, t.TempDir())
 	require.NoError(t, err)
 	installed, err := os.ReadFile(filepath.Join(home, "projects", "project", selected+".jsonl"))
 	require.NoError(t, err)
 	assert.Equal(t, original, installed)
 	for _, invalid := range []string{"other~" + parent, "local~bad", "~" + parent} {
 		s.SourceSessionID = invalid
-		_, err = Materialize(t.Context(), cfg, s, t.TempDir())
+		_, err = Materialize(t.Context(), cfg, nil, s, t.TempDir())
 		require.ErrorContains(t, err, "invalid source session identity")
 	}
 }
@@ -294,7 +294,7 @@ func TestMaterializeLinkedClaudeSources(t *testing.T) {
 			}
 			session := &db.Session{ID: id, Agent: "claude", Machine: "local", FilePath: &stored}
 			cfg := config.Config{InstallationID: "local", LocalMachineName: "local", AgentDirs: map[parser.AgentType][]string{parser.AgentClaude: {root}}}
-			result, err := Materialize(t.Context(), cfg, session, cwd)
+			result, err := Materialize(t.Context(), cfg, nil, session, cwd)
 			require.NoError(t, err)
 			assert.Equal(t, "installed", result.Status)
 			got, err := os.ReadFile(filepath.Join(home, "projects", "fixture", id+".jsonl"))
@@ -305,7 +305,7 @@ func TestMaterializeLinkedClaudeSources(t *testing.T) {
 				require.NoError(t, err)
 				assert.Equal(t, content, string(got))
 			}
-			result, err = Materialize(t.Context(), cfg, session, cwd)
+			result, err = Materialize(t.Context(), cfg, nil, session, cwd)
 			require.NoError(t, err)
 			assert.Equal(t, "unchanged", result.Status)
 		})
@@ -329,7 +329,7 @@ func TestMaterializeMirrorRejectsLinkedProjectOutsideMirror(t *testing.T) {
 	stored := "remote:" + remote
 	cfg := config.Config{DataDir: data, RemoteHosts: []config.RemoteHost{{Host: "remote"}}}
 	session := &db.Session{ID: "remote~" + id, Agent: "claude", Machine: "remote", FilePath: &stored}
-	_, err = Materialize(t.Context(), cfg, session, t.TempDir())
+	_, err = Materialize(t.Context(), cfg, nil, session, t.TempDir())
 	require.ErrorContains(t, err, "source identity or root mismatch")
 }
 

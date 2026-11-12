@@ -41,16 +41,7 @@ type Result struct {
 }
 
 // Materialize installs a Claude transcript and its own native dependencies.
-func Materialize(ctx context.Context, cfg config.Config, session *db.Session, cwd string) (Result, error) {
-	return materialize(ctx, cfg, nil, session, cwd)
-}
-
-// MaterializeWithArchive also resolves source ownership recorded by the archive.
-func MaterializeWithArchive(ctx context.Context, cfg config.Config, database *db.DB, session *db.Session, cwd string) (Result, error) {
-	return materialize(ctx, cfg, database, session, cwd)
-}
-
-func materialize(ctx context.Context, cfg config.Config, database *db.DB, session *db.Session, cwd string) (Result, error) {
+func Materialize(ctx context.Context, cfg config.Config, database *db.DB, session *db.Session, cwd string) (Result, error) {
 	if session == nil || session.Agent != "claude" {
 		return Result{}, errors.New("only Claude sessions can currently be installed")
 	}
@@ -65,21 +56,22 @@ func materialize(ctx context.Context, cfg config.Config, database *db.DB, sessio
 	if !capture.ValidUUID(id) {
 		return Result{}, errors.New("native Claude UUID required; archive-only fork sessions are unsupported")
 	}
-	var owner *db.ArchiveSessionProvenance
+	var owners []db.ArchiveSessionProvenance
 	if database != nil {
-		owner, err = database.ArchiveSessionOwner(ctx, session.ID)
+		owners, err = database.ArchiveSessionOwners(ctx, session.ID)
 		if err != nil {
 			return Result{}, err
 		}
 	}
 	var source string
 	var files []sourceFile
-	if owner != nil {
-		if owner.NativeSessionID != id || owner.Source.DeviceID != session.Machine {
+	if len(owners) != 0 {
+		if owners[0].NativeSessionID != id || owners[0].Source.DeviceID != session.Machine {
 			return Result{}, errors.New("archive session identity differs")
 		}
-		files, err = readSnapshotSource(ctx, cfg, *owner, id, session.SourceSessionID)
-		source = "snapshot:" + owner.Attachment.SnapshotID
+		var snapshot string
+		files, snapshot, err = readSnapshotSource(ctx, cfg, owners, id)
+		source = "snapshot:" + snapshot
 	} else {
 		source, err = storedSource(session, host)
 		if err != nil {
@@ -416,59 +408,28 @@ func readS3Source(ctx context.Context, cfg config.Config, machine, uri, id strin
 }
 
 // readSnapshotSource extracts only the selected transcript and its native companions.
-func readSnapshotSource(ctx context.Context, cfg config.Config, owner db.ArchiveSessionProvenance, id, parent string) (_ []sourceFile, retErr error) {
-	tree, manifest, err := archivesource.MaterializeSnapshot(ctx, cfg.ArchiveSources, owner, "claude", maxSourceBytes)
+func readSnapshotSource(ctx context.Context, cfg config.Config, owners []db.ArchiveSessionProvenance, id string) (_ []sourceFile, snapshot string, retErr error) {
+	tree, manifest, attachment, err := archivesource.MaterializeSnapshot(ctx, cfg.ArchiveSources, owners, "claude", maxSourceBytes)
 	if err != nil {
-		return nil, err
+		return nil, "", err
 	}
 	defer func() { retErr = errors.Join(retErr, tree.Cleanup()) }()
-	_, parent = parser.StripHostPrefix(parent)
 	var primary string
 	for _, entry := range manifest.Manifest.Entries {
 		if path.Base(entry.Path) == id+".jsonl" {
 			if primary != "" {
-				return nil, errors.New("ambiguous snapshot transcript")
+				return nil, "", errors.New("ambiguous snapshot transcript")
 			}
 			primary = entry.Path
 		}
 	}
-	if primary == "" && capture.ValidUUID(parent) {
-		for _, entry := range manifest.Manifest.Entries {
-			if path.Base(entry.Path) == parent+".jsonl" {
-				if primary != "" {
-					return nil, errors.New("ambiguous snapshot transcript")
-				}
-				primary = entry.Path
-			}
-		}
-	}
 	if primary == "" {
-		return nil, errors.New("snapshot transcript is unavailable")
+		return nil, "", errors.New("snapshot transcript is unavailable")
 	}
 	name, err := tree.EntryPath(primary)
 	if err != nil {
-		return nil, err
+		return nil, "", err
 	}
-	data, _, err := readFile(ctx, name, maxSourceBytes)
-	if err != nil {
-		return nil, err
-	}
-	files := []sourceFile{{data: data}}
-	base := strings.TrimSuffix(primary, ".jsonl") + "/"
-	for _, entry := range manifest.Manifest.Entries {
-		rel, ok := strings.CutPrefix(entry.Path, base)
-		if !ok || !(strings.HasPrefix(rel, "tool-results/") || strings.HasPrefix(rel, "subagents/")) {
-			continue
-		}
-		name, err := tree.EntryPath(entry.Path)
-		if err != nil {
-			return nil, err
-		}
-		data, _, err := readFile(ctx, name, maxSourceBytes)
-		if err != nil {
-			return nil, err
-		}
-		files = append(files, sourceFile{rel: rel, data: data})
-	}
-	return files, nil
+	files, err := readLocalSource(ctx, tree.Root(), name, id, maxSourceBytes)
+	return files, attachment.SnapshotID, err
 }

@@ -10,6 +10,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -499,4 +500,28 @@ func materializerTestManifest(
 	}, rawsync.DefaultManifestLimits())
 	require.NoError(t, err)
 	return identity, canonical
+}
+
+func TestMaterializerSelectedEntriesExcludeLargeSiblingFromBudget(t *testing.T) {
+	primary := []byte("selected")
+	ref := objectRefForBytes(t, primary)
+	large := rawsync.ObjectRef{SHA256: strings.Repeat("a", 64), Length: 513 << 20}
+	_, manifest := materializerTestManifest(t, []rawsync.Entry{
+		{Path: "project/session.jsonl", Type: "file", Length: int64(len(primary)), Objects: []rawsync.ObjectRef{ref}},
+		{Path: "project/sibling.jsonl", Type: "file", Length: large.Length, Objects: []rawsync.ObjectRef{large}},
+	})
+	store := &materializerStore{objects: map[rawsync.ObjectRef][]byte{ref: primary}}
+	tree, err := (Materializer{Store: store, BaseDir: t.TempDir(), MaxTotalBytes: 512 << 20,
+		SelectEntry: func(_ rawsync.CanonicalManifest, entry rawsync.Entry) bool {
+			return entry.Path == "project/session.jsonl"
+		},
+	}).Materialize(t.Context(), manifest)
+	require.NoError(t, err)
+	defer tree.Cleanup()
+	name, err := tree.EntryPath("project/session.jsonl")
+	require.NoError(t, err)
+	got, err := os.ReadFile(name)
+	require.NoError(t, err)
+	assert.Equal(t, primary, got)
+	assert.Equal(t, []rawsync.ObjectRef{ref}, store.opened)
 }

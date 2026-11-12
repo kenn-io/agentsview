@@ -47,10 +47,10 @@ func TestMaterializeAttachedSnapshotOwnership(t *testing.T) {
 	_, err = index.syncSource(ctx, source.Repository, claude, cfg, engine, t.TempDir(), claudeTarget, nil)
 	require.NoError(t, err)
 	id := sourceDevice + "~019eb791-cf7d-75c1-8439-9ed74c122e02"
-	owner, err := receiver.ArchiveSessionOwner(ctx, id)
+	owner, err := receiver.ArchiveSessionOwners(ctx, id)
 	require.NoError(t, err)
-	require.NotNil(t, owner)
-	tree, manifest, err := MaterializeSnapshot(ctx, cfg.ArchiveSources, *owner, "claude", 512<<20)
+	require.Len(t, owner, 1)
+	tree, manifest, _, err := MaterializeSnapshot(ctx, cfg.ArchiveSources, owner, "claude", 512<<20)
 	require.NoError(t, err)
 	root := tree.Root()
 	var transcript []byte
@@ -66,6 +66,18 @@ func TestMaterializeAttachedSnapshotOwnership(t *testing.T) {
 	require.NoError(t, tree.Cleanup())
 	_, err = os.Stat(root)
 	assert.True(t, os.IsNotExist(err))
+	// Duplicate configuration and an unavailable equivalent membership do not
+	// make the configured, verified snapshot ambiguous.
+	other := owner[0]
+	other.Attachment.SnapshotID = "unconfigured"
+	duplicate := []config.ArchiveSource{source, source}
+	tree, _, chosen, err := MaterializeSnapshot(ctx, duplicate, []db.ArchiveSessionProvenance{other, owner[0]}, "claude", 512<<20)
+	require.NoError(t, err)
+	assert.Equal(t, owner[0].Attachment, chosen)
+	require.NoError(t, tree.Cleanup())
+	other.Source.DeviceID = "different"
+	_, _, _, err = MaterializeSnapshot(ctx, duplicate, []db.ArchiveSessionProvenance{owner[0], other}, "claude", 512<<20)
+	require.ErrorContains(t, err, "conflicting snapshot source identities")
 	for _, tc := range []struct {
 		name   string
 		change func(*db.ArchiveSessionProvenance)
@@ -77,10 +89,23 @@ func TestMaterializeAttachedSnapshotOwnership(t *testing.T) {
 		{"repository", func(p *db.ArchiveSessionProvenance) { p.Attachment.RepositoryID = "wrong" }},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			modified := *owner
+			modified := owner[0]
 			tc.change(&modified)
-			_, _, err := MaterializeSnapshot(t.Context(), cfg.ArchiveSources, modified, "claude", 512<<20)
+			_, _, _, err := MaterializeSnapshot(t.Context(), cfg.ArchiveSources, []db.ArchiveSessionProvenance{modified}, "claude", 512<<20)
 			require.Error(t, err)
 		})
 	}
+}
+
+func TestMaterializeSnapshotRejectsNewerInventory(t *testing.T) {
+	source, inputs := archiveFixture(t)
+	broken := invalidIndexSnapshot(t, source, inputs, "inventory version")
+	index, err := OpenIndex(t.Context(), source, t.TempDir(), nil)
+	require.NoError(t, err)
+	defer index.Close()
+	owner := db.ArchiveSessionProvenance{ArchiveSourceProvenance: db.ArchiveSourceProvenance{
+		Attachment: db.ArchiveAttachmentKey{RepositoryID: index.Info.RepositoryID, SnapshotID: broken.Snapshot},
+	}}
+	_, _, _, err = MaterializeSnapshot(t.Context(), []config.ArchiveSource{broken}, []db.ArchiveSessionProvenance{owner}, "claude", 512<<20)
+	require.ErrorContains(t, err, "unsupported recovery inventory version")
 }
