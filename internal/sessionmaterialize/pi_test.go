@@ -93,6 +93,7 @@ func TestPiSourceLookup(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, good, result.Source)
 	// An invalid stored identity is returned rather than falling back.
+	require.NoError(t, os.WriteFile(other, []byte(`{"type":"session","id":"other","cwd":"/old"}`+"\n"), 0o600))
 	s.FilePath = &other
 	_, err = Materialize(t.Context(), cfg, nil, s, cwd)
 	require.ErrorIs(t, err, errPiIdentity)
