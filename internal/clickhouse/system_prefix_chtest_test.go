@@ -4,6 +4,7 @@ package clickhouse
 
 import (
 	"database/sql"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -17,7 +18,7 @@ func TestSystemPrefixSQLClassification(t *testing.T) {
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, conn.Close()) })
 	query := "SELECT " + db.ClickHouseSystemPrefixSQL("content", "role") + " FROM (SELECT ? AS content, ? AS role)" + systemPrefixSettings
-	for _, tc := range []struct {
+	cases := []struct {
 		content string
 		role    string
 		visible bool
@@ -31,9 +32,30 @@ func TestSystemPrefixSQLClassification(t *testing.T) {
 		{"<system-reminder>a</system-reminder>ordinary", "user", true},
 		{"<system-reminder>unfinished", "user", true},
 		{"<goal_context>state", "assistant", true},
-	} {
+	}
+	for _, tc := range cases {
 		var visible bool
 		require.NoError(t, conn.QueryRowContext(t.Context(), query, tc.content, tc.role).Scan(&visible))
 		assert.Equal(t, tc.visible, visible, "%q", tc.content)
 	}
+
+	args := make([]any, 0, len(cases)*3)
+	for i, tc := range cases {
+		args = append(args, i, tc.content, tc.role)
+	}
+	tuples := strings.TrimSuffix(strings.Repeat("tuple(?, ?, ?),", len(cases)), ",")
+	query = "SELECT i, " + db.ClickHouseSystemPrefixSQL("content", "role") + " FROM (SELECT item.1 AS i, item.2 AS content, item.3 AS role FROM (SELECT arrayJoin([" + tuples + "]) AS item)) ORDER BY i" + systemPrefixSettings
+	rows, err := conn.QueryContext(t.Context(), query, args...)
+	require.NoError(t, err)
+	defer rows.Close()
+	for i, tc := range cases {
+		require.True(t, rows.Next())
+		var index uint64
+		var visible bool
+		require.NoError(t, rows.Scan(&index, &visible))
+		assert.Equal(t, uint64(i), index)
+		assert.Equal(t, tc.visible, visible, "%q", tc.content)
+	}
+	assert.False(t, rows.Next())
+	require.NoError(t, rows.Err())
 }
