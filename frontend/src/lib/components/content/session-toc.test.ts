@@ -59,6 +59,7 @@ describe("isPromptMessage", () => {
     ["a reminder-only row", { content: "<system-reminder>ctx</system-reminder>" }],
     ["shell output", { content: "<bash-stdout>hello</bash-stdout>" }],
     ["shell output and errors", { content: "<bash-stdout>a</bash-stdout><bash-stderr>oops</bash-stderr>" }],
+    ["shell output that prints a closing tag", { content: "<bash-stdout>before </bash-stdout> after</bash-stdout>" }],
   ] satisfies [string, Partial<Message>][])("drops %s", (_name, extra) => {
     expect(isPromptMessage(msg(0, extra))).toBe(false);
   });
@@ -70,6 +71,9 @@ describe("isPromptMessage on long shell output", () => {
     const started = performance.now();
     expect(isPromptMessage(msg(1, { content: `${envelopes}then a question` }))).toBe(true);
     expect(isPromptMessage(msg(2, { content: envelopes }))).toBe(false);
+    expect(
+      isPromptMessage(msg(3, { content: `<bash-stdout>a </bash-stdout> b</bash-stdout>${envelopes}typed` })),
+    ).toBe(true);
     expect(performance.now() - started).toBeLessThan(1000);
   });
 });

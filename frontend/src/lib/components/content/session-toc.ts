@@ -37,6 +37,7 @@ const LABEL_MAX_CHARS = 160;
 // backtrack exponentially over many envelopes.
 function isShellOutputOnly(text: string): boolean {
   const opener = /<bash-(stdout|stderr)>/y;
+  const peek = /<bash-(?:stdout|stderr)>/y;
   const skipSpace = (from: number) => {
     let i = from;
     while (i < text.length && /\s/.test(text[i]!)) i++;
@@ -44,14 +45,27 @@ function isShellOutputOnly(text: string): boolean {
   };
   let pos = skipSpace(0);
   if (pos === text.length) return false;
+  const startsEnvelope = (at: number) => {
+    peek.lastIndex = at;
+    return peek.test(text);
+  };
   while (pos < text.length) {
     opener.lastIndex = pos;
     const open = opener.exec(text);
     if (!open) return false;
     const close = `</bash-${open[1]}>`;
-    const end = text.indexOf(close, opener.lastIndex);
-    if (end < 0) return false;
-    pos = skipSpace(end + close.length);
+    // Output can print the closing tag itself, so an envelope ends at the
+    // first closing tag followed by another envelope or the end of the row.
+    let end = text.indexOf(close, opener.lastIndex);
+    for (;;) {
+      if (end < 0) return false;
+      const next = skipSpace(end + close.length);
+      if (next === text.length || startsEnvelope(next)) {
+        pos = next;
+        break;
+      }
+      end = text.indexOf(close, end + close.length);
+    }
   }
   return true;
 }
