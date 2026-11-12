@@ -3,11 +3,13 @@
 package main
 
 import (
+	"bytes"
 	"cmp"
 	"context"
 	"encoding/json/v2"
 	"errors"
 	"fmt"
+	"io"
 	"net"
 	"net/http"
 	"net/url"
@@ -584,35 +586,44 @@ func probeRuntime(
 		Timeout:           timeout,
 		DisableKeepAlives: true,
 	})
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, ep.BaseURL()+opts.Path, nil)
+	var body bytes.Buffer
+	client.Transport = runtimeProbeTransport{base: client.Transport, token: authToken, body: &body}
+	info, err := daemon.ProbeHTTP(ctx, client, ep.BaseURL(), opts)
 	if err != nil {
 		return runtimePing{}, err
 	}
-	if authToken != "" {
-		req.Header.Set("Authorization", "Bearer "+authToken)
-	}
-	resp, err := client.Do(req)
-	if err != nil {
-		return runtimePing{}, err
-	}
-	defer func() { _ = resp.Body.Close() }()
-	if resp.StatusCode != http.StatusOK {
-		return runtimePing{}, fmt.Errorf("daemon ping returned %d", resp.StatusCode)
-	}
-	var info struct {
-		daemon.PingInfo
+	var details struct {
 		BackfillError string `json:"project_identity_backfill_error"`
 	}
-	if err := json.UnmarshalRead(resp.Body, &info); err != nil {
+	if err := json.Unmarshal(body.Bytes(), &details); err != nil {
 		return runtimePing{}, fmt.Errorf("decode daemon ping: %w", err)
 	}
-	if !info.OK {
-		return runtimePing{}, errors.New("daemon ping returned ok=false")
+	return runtimePing{PingInfo: info, BackfillError: details.BackfillError}, nil
+}
+
+type runtimeProbeTransport struct {
+	base  http.RoundTripper
+	token string
+	body  *bytes.Buffer
+}
+
+func (t runtimeProbeTransport) RoundTrip(req *http.Request) (*http.Response, error) {
+	if t.token != "" {
+		req = req.Clone(req.Context())
+		req.Header.Set("Authorization", "Bearer "+t.token)
 	}
-	if opts.ExpectedService != "" && info.Service != opts.ExpectedService {
-		return runtimePing{}, fmt.Errorf("unexpected daemon service %q", info.Service)
+	base := t.base
+	if base == nil {
+		base = http.DefaultTransport
 	}
-	return runtimePing{PingInfo: info.PingInfo, BackfillError: info.BackfillError}, nil
+	resp, err := base.RoundTrip(req)
+	if err == nil {
+		resp.Body = struct {
+			io.Reader
+			io.Closer
+		}{io.TeeReader(resp.Body, t.body), resp.Body}
+	}
+	return resp, err
 }
 
 func daemonRuntimeFromRecord(rec daemon.RuntimeRecord) *DaemonRuntime {

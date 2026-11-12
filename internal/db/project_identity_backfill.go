@@ -207,23 +207,6 @@ func (db *DB) projectIdentityBackfillStatus(ctx context.Context, countPending bo
 	return status, nil
 }
 
-// RetryFailedProjectIdentityBackfill resumes a recorded failure at daemon startup.
-func (db *DB) RetryFailedProjectIdentityBackfill(ctx context.Context) error {
-	if err := db.requireWritable(); err != nil {
-		return err
-	}
-	db.mu.Lock()
-	defer db.mu.Unlock()
-	_, err := db.getWriter().ExecContext(ctx, `
-		UPDATE background_migrations SET state = 'pending', last_error = '',
-			updated_at = strftime('%Y-%m-%dT%H:%M:%fZ','now')
-		WHERE name = ? AND state = 'failed'`, ProjectIdentityBackfillName)
-	if err != nil {
-		return fmt.Errorf("retrying project identity backfill: %w", err)
-	}
-	return nil
-}
-
 func (db *DB) countMissingProjectIdentitySnapshots(ctx context.Context) (int, error) {
 	var missing int
 	if err := db.getReader().QueryRowContext(ctx, `

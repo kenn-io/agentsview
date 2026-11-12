@@ -1,7 +1,6 @@
 package db
 
 import (
-	"database/sql"
 	"errors"
 	"path/filepath"
 	"testing"
@@ -65,38 +64,6 @@ func TestWritableOpenPreservesFailedProjectIdentityBackfill(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, "failed", status.State)
 	assert.Equal(t, "completion failed", status.LastError)
-}
-
-func TestRetryFailedProjectIdentityBackfill(t *testing.T) {
-	for _, state := range []string{"absent", "pending", "completed", "failed"} {
-		t.Run(state, func(t *testing.T) {
-			d := testDB(t)
-			ctx := t.Context()
-			if state != "absent" {
-				_, err := d.getWriter().ExecContext(ctx, `INSERT INTO background_migrations (name, state, last_error, total_items, completed_items) VALUES (?, ?, 'previous error', 7, 3)`, ProjectIdentityBackfillName, state)
-				require.NoError(t, err)
-			}
-			require.NoError(t, d.RetryFailedProjectIdentityBackfill(ctx))
-			var got, lastError string
-			err := d.getReader().QueryRowContext(ctx, `SELECT state, last_error FROM background_migrations WHERE name = ?`, ProjectIdentityBackfillName).Scan(&got, &lastError)
-			if state == "absent" {
-				assert.ErrorIs(t, err, sql.ErrNoRows)
-				return
-			}
-			require.NoError(t, err)
-			if state == "failed" {
-				assert.Equal(t, "pending", got)
-				assert.Empty(t, lastError)
-				status, err := d.ProjectIdentityBackfillStatus(ctx)
-				require.NoError(t, err)
-				assert.Equal(t, 7, status.TotalItems)
-				assert.Equal(t, 3, status.CompletedItems)
-			} else {
-				assert.Equal(t, state, got)
-				assert.Equal(t, "previous error", lastError)
-			}
-		})
-	}
 }
 
 func TestPendingProjectIdentityStatusCountsMissingSnapshots(t *testing.T) {

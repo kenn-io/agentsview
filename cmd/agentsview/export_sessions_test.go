@@ -948,6 +948,22 @@ func TestExportWaitAfterDaemonRestart(t *testing.T) {
 	}
 }
 
+func TestExportFailureSurvivesInterruptedDaemonStartup(t *testing.T) {
+	path := pendingExportArchive(t, false)
+	raw, err := sql.Open("sqlite3", path)
+	require.NoError(t, err)
+	_, err = raw.ExecContext(t.Context(), `INSERT INTO background_migrations (name, state, last_error) VALUES (?, 'failed', 'disk error')`, db.ProjectIdentityBackfillName)
+	require.NoError(t, err)
+	require.NoError(t, raw.Close())
+	database, err := openDBWithProgress(t.Context(), config.Config{DBPath: path, DataDir: filepath.Dir(path)}, nil)
+	require.NoError(t, err)
+	require.NoError(t, database.Close())
+	status, _, err := executeExportSessionsCommand(newRootCommand(), "export", "status")
+	require.NoError(t, err)
+	assert.Contains(t, status, "failed")
+	assert.Contains(t, status, "disk error")
+}
+
 func TestExportLiveFailureReporting(t *testing.T) {
 	testExportFailureRecovery(t, "unrecordable failure", func(t *testing.T) {
 		t.Helper()
