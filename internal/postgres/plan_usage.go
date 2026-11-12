@@ -84,7 +84,7 @@ func (s *Store) GetPlanUsageSessionCounts(
 ) (db.PlanUsageSessionCounts, error) {
 	slot := db.UsageSlot(f, false)
 	var version string
-	deferred := s.deferUsage(f)
+	deferred := s.deferUsage(ctx, f)
 	if deferred {
 		version = s.directUsageVersion(ctx, slot)
 	} else {

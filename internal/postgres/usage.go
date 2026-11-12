@@ -1595,7 +1595,7 @@ func (s *Store) GetDailyUsage(
 	slot := db.UsageSlot(f, true)
 	var version string
 	load := s.readDailyUsage
-	if s.deferUsage(f) {
+	if s.deferUsage(ctx, f) {
 		defer s.usageCache.HoldWarm()()
 		version = s.directUsageVersion(ctx, slot)
 		load = s.readDirectDailyUsage
@@ -2272,7 +2272,7 @@ func (s *Store) GetTopSessionsByCost(
 		slot += fmt.Sprintf("|%t", f.TopSessionsByGroup)
 	}
 	var version string
-	if s.deferUsage(f) {
+	if s.deferUsage(ctx, f) {
 		defer s.usageCache.HoldWarm()()
 		version = s.directUsageVersion(ctx, slot)
 	} else {

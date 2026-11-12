@@ -26,8 +26,11 @@ func (s *Store) directUsageVersion(ctx context.Context, slot string) string {
 	return fmt.Sprintf("%d|%d", revision, runtime.pricingGeneration)
 }
 
-func (s *Store) deferUsage(f db.UsageFilter) bool {
-	return s.usageCache != nil && s.usageCache.DeferRead(f)
+func (s *Store) deferUsage(ctx context.Context, f db.UsageFilter) bool {
+	if s.usageCache == nil || !s.usageCache.DeferRead(f) {
+		return false
+	}
+	return !s.runtimeState().usageIdentityDenied.Load() || snapshotUsageVersion(ctx, s.pg, 0) == ""
 }
 
 // standbyMarker returns standbyUsageMarker when the connected server is a
