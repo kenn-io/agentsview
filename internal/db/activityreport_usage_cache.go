@@ -120,30 +120,50 @@ const activityUsagePeerFactsSQL = `SELECT DISTINCT ` + activityUsageFactColumns 
 // re-parsing raw message usage.
 func (db *DB) activityReportCachedUsage(
 	ctx context.Context, window activityUsageWindow, ids []string,
-	lowerBound, upperBound string, q activity.Query, collectRead bool,
-) ([]activity.UsageRow, *export.PricingBlock, []string, error) {
+	lowerBound, upperBound string, q activity.Query, collectRead, compact bool,
+) ([]activity.UsageRow, *export.PricingBlock, []string, time.Time, error) {
 	pricing, err := db.loadPricingMap(ctx)
 	if err != nil {
-		return nil, nil, nil, fmt.Errorf("loading pricing: %w", err)
+		return nil, nil, nil, time.Time{}, fmt.Errorf("loading pricing: %w", err)
 	}
 	rateResolver := export.NewPricingResolver(pricing)
 	facts, err := db.loadActivityUsageFacts(ctx, window, ids, lowerBound, upperBound)
 	if err != nil {
-		return nil, nil, nil, err
+		return nil, nil, nil, time.Time{}, err
 	}
 	slices.SortFunc(facts, compareActivityUsageFacts)
 	selection := make([]activity.UsageSelectionRow, len(facts))
 	var read []string
+	var seen map[string]struct{}
+	if collectRead {
+		seen = make(map[string]struct{}, len(ids))
+		for _, id := range ids {
+			seen[id] = struct{}{}
+		}
+	}
+	var next time.Time
+	if compact {
+		next = q.RangeEnd
+	}
 	for i, fact := range facts {
 		row := fact.row
-		if collectRead {
-			read = append(read, row.SessionID)
+		if compact && fact.validTS {
+			timestamp := time.UnixMilli(fact.millis).Add(time.Duration(fact.nanos))
+			if !timestamp.Before(q.EffectiveEnd) && timestamp.Before(next) {
+				next = timestamp
+			}
+		}
+		if seen != nil {
+			if _, ok := seen[row.SessionID]; !ok {
+				read = append(read, row.SessionID)
+				seen[row.SessionID] = struct{}{}
+			}
 		}
 		selection[i] = activity.UsageSelectionRow{Agent: row.Agent, ClaudeMessageID: row.ClaudeMessageID, ClaudeRequestID: row.ClaudeRequestID, SourceUUID: row.SourceUUID, UsageDedupKey: row.UsageDedupKey, SessionID: row.SessionID, MessageOrdinal: row.MessageOrdinal, Timestamp: time.UnixMilli(fact.millis).Add(time.Duration(fact.nanos)), TimestampValid: fact.validTS, OutputTokens: fact.tokens.output, WebSearchRequests: row.WebSearchRequests}
 	}
 	mask, attribution, webSearchRequests, err := activity.SelectUsageSurvivorsForSessions(ctx, q.RangeStart, q.RangeEnd, q.EffectiveEnd, selection, ids)
 	if err != nil {
-		return nil, nil, nil, err
+		return nil, nil, nil, time.Time{}, err
 	}
 	survivors := 0
 	for _, keep := range mask {
@@ -170,7 +190,7 @@ func (db *DB) activityReportCachedUsage(
 			row.Model, fact.pricingTS, row.ProviderID, reported,
 			fact.requestScoped, fact.tokens, webSearchRequests[k], rateResolver)
 		if err != nil {
-			return nil, nil, nil, err
+			return nil, nil, nil, time.Time{}, err
 		}
 		row.CostSource = export.CostSourceComputed
 		if reported.Valid {
@@ -182,9 +202,67 @@ func (db *DB) activityReportCachedUsage(
 	}
 	block, err := rateResolver.BuildBlock()
 	if err != nil {
-		return nil, nil, nil, fmt.Errorf("building pricing block: %w", err)
+		return nil, nil, nil, time.Time{}, fmt.Errorf("building pricing block: %w", err)
 	}
-	return out, &block, read, nil
+	if compact {
+		out, err = sumActivityUsageRows(out, q)
+		if err != nil {
+			return nil, nil, nil, time.Time{}, err
+		}
+	}
+	return out, &block, read, next, nil
+}
+
+// sumActivityUsageRows retains individual rows for sessions with a reported
+// session total, whose cost is allocated across those rows.
+func sumActivityUsageRows(rows []activity.UsageRow, q activity.Query) ([]activity.UsageRow, error) {
+	withTotal := make(map[string]bool)
+	for _, row := range rows {
+		// Reordering signed costs can make an otherwise valid report overflow.
+		if row.Cost.Microdollars < 0 || (row.SessionCost != nil && row.SessionCost.Microdollars < 0) {
+			return rows, nil
+		}
+		if row.SessionCost != nil {
+			withTotal[row.SessionID] = true
+		}
+	}
+	type key struct {
+		session, model string
+		window         int
+	}
+	indexes := make(map[key]int)
+	windows := activity.QueryWindows(q)
+	out := rows[:0]
+	for _, row := range rows {
+		if withTotal[row.SessionID] {
+			out = append(out, row)
+			continue
+		}
+		ts, err := time.Parse(time.RFC3339Nano, row.Timestamp)
+		if err != nil {
+			return nil, fmt.Errorf("parsing activity usage timestamp: %w", err)
+		}
+		k := key{row.SessionID, row.Model, activity.WindowIndex(windows, ts)}
+		if i, ok := indexes[k]; ok && out != nil {
+			sum := &out[i]
+			sum.InputTokens += row.InputTokens
+			sum.OutputTokens += row.OutputTokens
+			sum.CacheCreationTokens += row.CacheCreationTokens
+			sum.CacheReadTokens += row.CacheReadTokens
+			sum.WebSearchRequests += row.WebSearchRequests
+			sum.Cost, err = money.Add(sum.Cost, row.Cost)
+			if err != nil {
+				return nil, fmt.Errorf("summing activity usage: %w", err)
+			}
+		} else {
+			indexes[k] = len(out)
+			out = append(out, row)
+		}
+	}
+	if len(out) < len(rows) {
+		out = slices.Clone(out)
+	}
+	return out, nil
 }
 
 // activityUsageFactBlock bounds each allocation of scanned facts: facts are
