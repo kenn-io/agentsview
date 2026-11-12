@@ -228,6 +228,7 @@ func (s *Store) swapHandle(conn *sql.DB, alias string, info os.FileInfo) {
 	// Replacement aliases open the checkpointed main file without a sibling WAL.
 	s.walStamp = "nowal"
 	s.reports.Clear()
+	s.analyticsReads.Clear()
 	s.dailyUsage.Clear()
 	s.planUsage.Clear()
 	s.topUsage.Clear()
