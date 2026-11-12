@@ -396,6 +396,7 @@
                 label={m.shared_retry()}
                 onclick={() => {
                   inputRef?.focus();
+                  selectedIndex = 0;
                   searchStore.retry();
                 }}
               />

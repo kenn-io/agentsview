@@ -665,6 +665,26 @@ describe("CommandPalette", () => {
     unmount(component);
   });
 
+  it("selects the first recovered result after navigating hidden results", async () => {
+    mockSearchStore.results = [makeSearchResult(), makeSearchResult({ session_id: "old-second" })];
+    mockSearchStore.error = { detail: null, kind: "generic" };
+    const component = mount(CommandPalette, { target: document.body });
+    await enterSearchQuery();
+    const input = document.querySelector<HTMLInputElement>(".palette-input")!;
+    input.dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowDown", bubbles: true }));
+    mockSearchStore.results = [];
+    const retry = document.querySelector<HTMLButtonElement>(".palette-error button")!;
+    retry.click();
+    mockSearchStore.error = null;
+    mockSearchStore.results = [
+      makeSearchResult({ session_id: "first" }),
+      makeSearchResult({ session_id: "second" }),
+    ];
+    input.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
+    expect(mockRouter.navigateToSession).toHaveBeenCalledWith("first");
+    unmount(component);
+  });
+
   it("keeps the first result selected after ArrowDown on an empty list", async () => {
     mockSearchStore.error = { detail: null, kind: "generic" };
     const component = mount(CommandPalette, { target: document.body });
