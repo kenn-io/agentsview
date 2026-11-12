@@ -209,22 +209,25 @@ func stripOpenAPIProse(value jsontext.Value, namedMap bool) (jsontext.Value, err
 }
 
 func TestCheckAPIVersionContract(t *testing.T) {
-	base := apiVersionRecord{15, "sha256:aaaa", "summary-a"}
-	left := apiVersionRecord{16, "sha256:bbbb", "summary-b"}
-	right := apiVersionRecord{16, "sha256:cccc", "summary-c"}
-	merged := "sha256:dddd"
+	base := apiVersionRecord{15, "sha256:" + strings.Repeat("a", 64), strings.Repeat("a", 64)}
+	left := apiVersionRecord{16, "sha256:" + strings.Repeat("b", 64), strings.Repeat("b", 64)}
+	right := apiVersionRecord{16, "sha256:" + strings.Repeat("c", 64), strings.Repeat("c", 64)}
+	merged := "sha256:" + strings.Repeat("d", 64)
 
 	t.Run("used version requires next version", func(t *testing.T) {
 		err := checkAPIVersionContract(15, left.digest, []apiVersionRecord{base}, []string{base.name()})
-		require.ErrorContains(t, err, "16-bbbb-<summary digest>")
+		require.ErrorContains(t, err, "16-"+strings.Repeat("b", 64)+"-<summary digest>")
 		require.ErrorContains(t, err, "set server.APIVersion to 16")
 		require.ErrorContains(t, err, "feature minimum")
+		err = checkAPIVersionContract(15, merged, []apiVersionRecord{base, left}, []string{base.name(), left.name()})
+		require.ErrorContains(t, err, "17-"+strings.Repeat("d", 64)+"-<summary digest>")
+		require.ErrorContains(t, err, "set server.APIVersion to 17")
 	})
 	t.Run("replacing a base record requires the next version", func(t *testing.T) {
-		old := apiVersionRecord{16, "sha256:aaaa", "summary-a"}
+		old := apiVersionRecord{16, base.digest, base.summaryDigest}
 		err := checkAPIVersionContract(16, left.digest, []apiVersionRecord{left}, []string{old.name()})
 		require.ErrorContains(t, err, old.name()+" from the target base is missing; restore it")
-		require.ErrorContains(t, err, "17-bbbb-<summary digest>")
+		require.ErrorContains(t, err, "17-"+strings.Repeat("b", 64)+"-<summary digest>")
 		require.ErrorContains(t, err, "set server.APIVersion to 17")
 		require.ErrorContains(t, err, "feature minimum")
 	})
@@ -234,7 +237,7 @@ func TestCheckAPIVersionContract(t *testing.T) {
 	})
 	t.Run("branch record can be replaced at the same version", func(t *testing.T) {
 		err := checkAPIVersionContract(16, merged, []apiVersionRecord{base, left}, []string{base.name()})
-		require.ErrorContains(t, err, "replace this branch's record with 16-dddd-<summary digest>")
+		require.ErrorContains(t, err, "replace this branch's record with 16-"+strings.Repeat("d", 64)+"-<summary digest>")
 	})
 	t.Run("collision", func(t *testing.T) {
 		err := checkAPIVersionContract(16, merged, []apiVersionRecord{base, left, right}, []string{base.name()})
@@ -243,24 +246,17 @@ func TestCheckAPIVersionContract(t *testing.T) {
 		require.ErrorContains(t, err, "next free version is 17")
 	})
 	t.Run("same contract with different summaries", func(t *testing.T) {
-		require.NoError(t, checkAPIVersionContract(16, left.digest, []apiVersionRecord{left, {16, left.digest, "other"}}, nil))
+		require.NoError(t, checkAPIVersionContract(16, left.digest, []apiVersionRecord{left, {16, left.digest, strings.Repeat("d", 64)}}, nil))
 	})
 	t.Run("missing current record", func(t *testing.T) {
 		err := checkAPIVersionContract(16, left.digest, []apiVersionRecord{base}, nil)
-		require.ErrorContains(t, err, "16-bbbb-<summary digest>")
+		require.ErrorContains(t, err, "16-"+strings.Repeat("b", 64)+"-<summary digest>")
 		require.ErrorContains(t, err, "one-line summary")
 	})
 	t.Run("future record", func(t *testing.T) {
 		err := checkAPIVersionContract(15, base.digest, []apiVersionRecord{base, left}, []string{base.name()})
 		require.ErrorContains(t, err, "ahead of server.APIVersion 15")
 		require.NoError(t, checkAPIVersionContract(15, base.digest, []apiVersionRecord{base, left}, []string{base.name(), left.name()}))
-	})
-	t.Run("changed restored contract uses next free version", func(t *testing.T) {
-		records := []apiVersionRecord{base, left}
-		history := []string{base.name(), left.name()}
-		err := checkAPIVersionContract(15, merged, records, history)
-		require.ErrorContains(t, err, "17-dddd-<summary digest>")
-		require.ErrorContains(t, err, "set server.APIVersion to 17")
 	})
 	t.Run("unknown history", func(t *testing.T) {
 		err := checkAPIVersionContract(15, left.digest, []apiVersionRecord{base}, nil)
