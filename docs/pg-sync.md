@@ -661,7 +661,7 @@ expose child rows through a set-based predicate such as
 once per scanned row. If shared-dataset aggregates still need more time, raise
 the API deadline with `--write-timeout`; the
 [Remote Access](/docs/remote-access/#slow-aggregates-behind-a-proxy) page covers
-the flag and the larger troubleshooting path.
+the flag, its search exceptions, and the larger troubleshooting path.
 
 When a reverse proxy reaches the backend by an internal hostname or service
 name, keep `--public-url` on the browser origin and add the proxy's upstream
