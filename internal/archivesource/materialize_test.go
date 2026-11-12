@@ -168,6 +168,7 @@ func TestReadCodexSnapshotUsesAcceptedOriginal(t *testing.T) {
 	parent := "rollout-20240115-11111111-1111-4111-8111-111111111111.jsonl"
 	unrelated := "rollout-20240115-22222222-2222-4222-8222-222222222222.jsonl"
 	conflicted := "rollout-20240115-33333333-3333-4333-8333-333333333333.jsonl"
+	unsafeName := "../rollout-20240115-44444444-4444-4444-8444-444444444444.jsonl"
 	original := testjsonl.NewSessionBuilder().AddCodexMeta("2026-01-01T00:00:00Z", id, "/workspace/project-a", "codex_cli_rs").AddCodexMessage("2026-01-01T00:00:01Z", "user", "saved Codex question").String()
 	dbtest.WriteTestFile(t, filepath.Join(root, name), []byte(original))
 	dbtest.WriteTestFile(t, filepath.Join(filepath.Dir(root), "archived_sessions", parent), []byte("parent bytes"))
@@ -200,7 +201,9 @@ func TestReadCodexSnapshotUsesAcceptedOriginal(t *testing.T) {
 		count, err := result.RowsAffected()
 		require.NoError(t, err)
 		require.EqualValues(t, 2, count)
-		return nil
+		_, err = tx.ExecContext(ctx, `INSERT INTO raw_archive_files(root_id,path,sha256,size,mod_time_ns,covered)
+			SELECT root_id,?,sha256,size,mod_time_ns,0 FROM raw_archive_files WHERE path LIKE ? LIMIT 1`, unsafeName, "%"+parent)
+		return err
 	}))
 	report, err := archive.Backup(ctx, source.Repository, settings, "test")
 	require.NoError(t, err)
@@ -221,9 +224,9 @@ func TestReadCodexSnapshotUsesAcceptedOriginal(t *testing.T) {
 	}
 	require.NotEmpty(t, owner.ManifestID)
 	selected, err := ReadCodexSnapshot(t.Context(), []config.ArchiveSource{source}, []db.ArchiveSessionProvenance{owner}, 512<<20, func(_ string, names []string, read func(context.Context, string, int64) ([]byte, error)) error {
-		require.Len(t, names, 3)
+		require.Len(t, names, 4)
 		for _, candidate := range names {
-			if path.Base(candidate) == conflicted {
+			if path.Base(candidate) == conflicted || candidate == unsafeName {
 				continue
 			}
 			data, err := read(t.Context(), candidate, 512<<20)
@@ -244,6 +247,8 @@ func TestReadCodexSnapshotUsesAcceptedOriginal(t *testing.T) {
 				require.ErrorContains(t, err, "conflicting saved file versions")
 			}
 		}
+		_, err := read(t.Context(), unsafeName, 512<<20)
+		require.Error(t, err)
 		return nil
 	})
 	require.NoError(t, err)
