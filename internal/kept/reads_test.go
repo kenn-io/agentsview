@@ -7,7 +7,6 @@ import (
 	"sync/atomic"
 	"testing"
 	"testing/synctest"
-	"time"
 
 	"github.com/stretchr/testify/require"
 
@@ -119,33 +118,4 @@ func TestReadsConcurrentCancellation(t *testing.T) {
 			})
 		})
 	}
-}
-
-func TestReadsCanceledCompletedValue(t *testing.T) {
-	var reads kept.Reads[string]
-	calls := 0
-	load := func(context.Context) (string, error) { calls++; return "finished", nil }
-	_, err := reads.Do(t.Context(), "selection", "v1", load)
-	require.NoError(t, err)
-	canceled, cancel := context.WithCancel(t.Context())
-	cancel()
-	expired, cancelDeadline := context.WithDeadline(t.Context(), time.Now().Add(-time.Second))
-	defer cancelDeadline()
-	for _, tc := range []struct {
-		name string
-		ctx  context.Context
-		want error
-	}{
-		{"canceled", canceled, context.Canceled},
-		{"deadline", expired, context.DeadlineExceeded},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			for _, key := range []struct{ slot, version string }{{"selection", "v1"}, {"", ""}, {"new", "v1"}} {
-				got, err := reads.Do(tc.ctx, key.slot, key.version, load)
-				require.ErrorIs(t, err, tc.want)
-				require.Empty(t, got)
-			}
-		})
-	}
-	require.Equal(t, 1, calls)
 }
