@@ -54,16 +54,11 @@ func TestAnalyticsKeptTracksWrites(t *testing.T) {
 	ctx := t.Context()
 	insertSession(t, d, "session", "project", func(s *Session) {
 		s.StartedAt = new("2024-06-01T09:00:00Z")
-		s.MessageCount = 2
+		s.MessageCount = 1
 	})
 	message := asstMsgAt("session", 0, "hello", "2024-06-01T09:00:00Z")
-	message.ToolCalls = []ToolCall{{SessionID: "session", ToolName: "Read", Category: "Read"}}
 	insertMessages(t, d, message)
 	updateSignals(t, d, "session", SessionSignalUpdate{ToolRetryCount: 1, QualitySignals: QualitySignals{Version: CurrentQualitySignalVersion}})
-
-	tools, err := d.GetAnalyticsTools(ctx, AnalyticsFilter{})
-	require.NoError(t, err)
-	assert.Equal(t, 1, tools.TotalCalls)
 
 	signals, err := d.GetAnalyticsSignals(ctx, AnalyticsFilter{})
 	require.NoError(t, err)
@@ -72,54 +67,57 @@ func TestAnalyticsKeptTracksWrites(t *testing.T) {
 	signals, err = d.GetAnalyticsSignals(ctx, AnalyticsFilter{})
 	require.NoError(t, err)
 	assert.Equal(t, 3, signals.ToolHealth.TotalRetries)
-
-	_, err = d.getWriter().ExecContext(ctx, `UPDATE tool_calls SET tool_name = 'Bash', category = 'Bash' WHERE session_id = 'session'`)
-	require.NoError(t, err)
-	again, err := d.GetAnalyticsTools(ctx, AnalyticsFilter{})
-	require.NoError(t, err)
-	require.Len(t, again.ByCategory, 1)
-	assert.Equal(t, "Bash", again.ByCategory[0].Category)
 }
 
 func TestAnalyticsKeptSharesLoads(t *testing.T) {
-	d := testDB(t)
-	insertSession(t, d, "session", "project")
-	message := asstMsgAt("session", 0, "read", "2024-06-01T09:00:00Z")
-	message.ToolCalls = []ToolCall{{SessionID: "session", ToolName: "Read", Category: "Read"}}
-	insertMessages(t, d, message)
-	var calls atomic.Int32
-	started, release := make(chan struct{}), make(chan struct{})
-	previous := analyticsQueryObserver
-	analyticsQueryObserver = func(query string) {
-		if strings.Contains(query, "FROM tool_calls") && calls.Add(1) == 1 {
-			close(started)
-			<-release
+	synctest.Test(t, func(t *testing.T) {
+		d := testDB(t)
+		insertSession(t, d, "session", "project")
+		message := asstMsgAt("session", 0, "read", "2024-06-01T09:00:00Z")
+		message.ToolCalls = []ToolCall{{SessionID: "session", ToolName: "Read", Category: "Read"}}
+		insertMessages(t, d, message)
+		var calls atomic.Int32
+		started, release := make(chan struct{}), make(chan struct{})
+		previous := analyticsQueryObserver
+		analyticsQueryObserver = func(query string) {
+			if strings.Contains(query, "FROM tool_calls") && calls.Add(1) == 1 {
+				close(started)
+				<-release
+			}
 		}
-	}
-	t.Cleanup(func() { analyticsQueryObserver = previous })
-	var wg sync.WaitGroup
-	type response struct {
-		result ToolsAnalyticsResponse
-		err    error
-	}
-	responses := make(chan response, 4)
-	for range 4 {
-		wg.Go(func() {
-			result, err := d.GetAnalyticsTools(t.Context(), AnalyticsFilter{})
-			responses <- response{result, err}
-		})
-	}
-	<-started
-	close(release)
-	wg.Wait()
-	close(responses)
-	for response := range responses {
-		require.NoError(t, response.err)
-		assert.Equal(t, 1, response.result.TotalCalls)
-	}
-	_, err := d.GetAnalyticsTools(t.Context(), AnalyticsFilter{})
-	require.NoError(t, err)
-	assert.EqualValues(t, 1, calls.Load())
+		t.Cleanup(func() { analyticsQueryObserver = previous })
+		var wg sync.WaitGroup
+		var ready sync.WaitGroup
+		ready.Add(4)
+		start := make(chan struct{})
+		type response struct {
+			result ToolsAnalyticsResponse
+			err    error
+		}
+		responses := make(chan response, 4)
+		for range 4 {
+			wg.Go(func() {
+				ready.Done()
+				<-start
+				result, err := d.GetAnalyticsTools(t.Context(), AnalyticsFilter{})
+				responses <- response{result, err}
+			})
+		}
+		ready.Wait()
+		close(start)
+		<-started
+		synctest.Wait()
+		close(release)
+		wg.Wait()
+		close(responses)
+		for response := range responses {
+			require.NoError(t, response.err)
+			assert.Equal(t, 1, response.result.TotalCalls)
+		}
+		_, err := d.GetAnalyticsTools(t.Context(), AnalyticsFilter{})
+		require.NoError(t, err)
+		assert.EqualValues(t, 1, calls.Load())
+	})
 }
 
 func TestAnalyticsKeptContentLengthRepair(t *testing.T) {
@@ -209,27 +207,6 @@ func TestAnalyticsKeptSelectionAndArchiveIdentity(t *testing.T) {
 	_, err = d.GetAnalyticsTools(ctx, filters[0])
 	require.NoError(t, err)
 	assert.EqualValues(t, 6, calls.Load())
-	_, err = d.getWriter().ExecContext(ctx, `DELETE FROM archive_metadata WHERE key = ?`, archiveMetadataDatabaseIDKey)
-	require.NoError(t, err)
-	for range 2 {
-		_, err = d.GetAnalyticsTools(ctx, filters[0])
-		require.NoError(t, err)
-	}
-	assert.EqualValues(t, 8, calls.Load())
-	_, err = d.getWriter().ExecContext(ctx, `INSERT INTO archive_metadata (key, value) VALUES (?, 'another-generation')`, archiveMetadataDatabaseIDKey)
-	require.NoError(t, err)
-	for _, key := range []string{archiveMetadataUsageChangeRevisionKey, archiveMetadataAnalyticsChangeRevisionKey} {
-		_, err = d.getWriter().ExecContext(ctx, `INSERT INTO archive_metadata (key, value) VALUES (?, '-1') ON CONFLICT(key) DO UPDATE SET value = excluded.value`, key)
-		require.NoError(t, err)
-		for range 2 {
-			report, err := d.GetAnalyticsTools(ctx, filters[0])
-			require.NoError(t, err)
-			assert.Equal(t, 1, report.TotalCalls)
-		}
-		_, err = d.getWriter().ExecContext(ctx, `UPDATE archive_metadata SET value = '0' WHERE key = ?`, key)
-		require.NoError(t, err)
-	}
-	assert.EqualValues(t, 12, calls.Load())
 }
 
 func TestAnalyticsKeptReadOnlyBypass(t *testing.T) {

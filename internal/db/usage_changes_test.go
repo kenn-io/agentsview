@@ -22,14 +22,21 @@ func TestAnalyticsChangesKeepUsageRevision(t *testing.T) {
 	require.NoError(t, err)
 	analyticsBefore, err := d.archiveJournalRevision(ctx, archiveMetadataAnalyticsChangeRevisionKey, "analytics change")
 	require.NoError(t, err)
-	_, err = d.getWriter().ExecContext(ctx, `UPDATE messages SET content_length = 123 WHERE session_id = 'session'; UPDATE tool_calls SET observed_outcome = 'empty' WHERE session_id = 'session'; UPDATE sessions SET tool_retry_count = 3 WHERE id = 'session'`)
-	require.NoError(t, err)
-	after, err := d.UsageChangeRevision(ctx)
-	require.NoError(t, err)
-	assert.Equal(t, before, after)
-	analyticsAfter, err := d.archiveJournalRevision(ctx, archiveMetadataAnalyticsChangeRevisionKey, "analytics change")
-	require.NoError(t, err)
-	assert.Equal(t, analyticsBefore+3, analyticsAfter)
+	for _, query := range []string{
+		`UPDATE messages SET content_length = 123 WHERE session_id = 'session'`,
+		`UPDATE tool_calls SET observed_outcome = 'empty' WHERE session_id = 'session'`,
+		`UPDATE sessions SET tool_retry_count = 3 WHERE id = 'session'`,
+	} {
+		_, err = d.getWriter().ExecContext(ctx, query)
+		require.NoError(t, err)
+		after, err := d.UsageChangeRevision(ctx)
+		require.NoError(t, err)
+		assert.Equal(t, before, after)
+		analyticsAfter, err := d.archiveJournalRevision(ctx, archiveMetadataAnalyticsChangeRevisionKey, "analytics change")
+		require.NoError(t, err)
+		analyticsBefore++
+		assert.Equal(t, analyticsBefore, analyticsAfter)
+	}
 }
 
 func TestUsageChangeJournal(t *testing.T) {
