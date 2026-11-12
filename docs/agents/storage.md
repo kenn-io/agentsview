@@ -50,6 +50,20 @@ block startup. A failed or unlaunchable startup rebuild keeps serving with
 writes allowed and retries on the archive audit cadence. Startup uses no
 in-process fallback.
 
+The parsed-output digest records each provider and corpus input under
+`internal/parser/testdata/data-version-output-digests`. If output changes for a
+recorded input, take a new data version and record its digest with `bump` set
+to true. Keep records already on main. For a new input, append its first digest
+at the current version using output from the current main parser, and leave
+`bump` unset. This also applies when the input accompanies a parser change.
+A new provider can append its first digest at the current version. If records
+conflict, keep the record from main, remove your unmerged conflicting record,
+and take the next version.
+
+The digest covers only inputs in `internal/parser/testdata/data-version-corpus`.
+Parser behavior outside that corpus is unguarded. Add a representative input
+for each new stored-output behavior.
+
 A parser upgrade can instead reparse only the affected providers in place.
 Declare it in `dataVersionScopes` in `internal/db/data_version_scope.go`:
 

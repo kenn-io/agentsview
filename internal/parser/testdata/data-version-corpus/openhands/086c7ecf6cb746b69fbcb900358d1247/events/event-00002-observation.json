@@ -1,0 +1,15 @@
+{
+			"id":"e2",
+			"timestamp":"2026-04-02T15:25:42.706887",
+			"source":"environment",
+			"tool_name":"terminal",
+			"tool_call_id":"toolu_123",
+			"observation":{
+				"content":[{"type":"text","text":"panic: boom"}],
+				"is_error":false,
+				"metadata":{"working_dir":"/workspace/demo-repo"},
+				"kind":"TerminalObservation"
+			},
+			"action_id":"e1",
+			"kind":"ObservationEvent"
+		}
