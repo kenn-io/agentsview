@@ -91,6 +91,11 @@ jobs:
                   if err != nil || duration <= 0 {
                       fail("fuzztime must be a positive Go duration or positive Nx iterations")
                   }
+                  // Reject before rounding: adding to a duration near the
+                  // int64 limit would overflow into a negative budget.
+                  if duration > jobMinutes*time.Minute {
+                      fail(fmt.Sprintf("fuzztime %s exceeds the %d-minute job cap", fuzztime, jobMinutes))
+                  }
                   each := int64((duration+time.Minute-1)/time.Minute) + perTargetMinutes
                   minutes = int64(perShard)*each + setupMinutes
                   if minutes > jobMinutes {
