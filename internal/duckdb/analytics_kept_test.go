@@ -52,18 +52,17 @@ func TestAnalyticsKeptMirrorReplacement(t *testing.T) {
 	after, err := store.GetAnalyticsSummary(t.Context(), f)
 	require.NoError(t, err)
 	require.Equal(t, "beta", after.MostActive)
-	fresh, err := NewStore(t.Context(), path)
-	require.NoError(t, err)
-	t.Cleanup(func() { fresh.Close() })
-	expected, err := fresh.GetAnalyticsSummary(t.Context(), f)
-	require.NoError(t, err)
-	require.Equal(t, expected, after)
-	for _, tc := range cases {
-		got, err := tc.read(store)
-		require.NoError(t, err, tc.name)
-		want, err := tc.read(fresh)
-		require.NoError(t, err, tc.name)
-		require.Equal(t, want, got, tc.name)
+	for _, filter := range []db.AnalyticsFilter{f, {Timezone: "UTC", Project: "missing"}} {
+		for _, tc := range keptPanelCases(t.Context(), filter) {
+			want, err := tc.read(store.analytics())
+			require.NoError(t, err, tc.name)
+			got, err := tc.read(store)
+			require.NoError(t, err, tc.name)
+			require.Equal(t, want, got, tc.name)
+			again, err := tc.read(store)
+			require.NoError(t, err, tc.name)
+			require.Equal(t, want, again, tc.name)
+		}
 	}
 }
 
@@ -89,36 +88,50 @@ func TestAnalyticsKeptErrorsAreRetried(t *testing.T) {
 	require.Equal(t, 2, calls)
 }
 
+type analyticsReports interface {
+	GetAnalyticsSummary(context.Context, db.AnalyticsFilter) (db.AnalyticsSummary, error)
+	GetAnalyticsActivity(context.Context, db.AnalyticsFilter, string) (db.ActivityResponse, error)
+	GetAnalyticsHeatmap(context.Context, db.AnalyticsFilter, string) (db.HeatmapResponse, error)
+	GetAnalyticsProjects(context.Context, db.AnalyticsFilter) (db.ProjectsAnalyticsResponse, error)
+	GetAnalyticsHourOfWeek(context.Context, db.AnalyticsFilter) (db.HourOfWeekResponse, error)
+	GetAnalyticsSessionShape(context.Context, db.AnalyticsFilter) (db.SessionShapeResponse, error)
+	GetAnalyticsTools(context.Context, db.AnalyticsFilter) (db.ToolsAnalyticsResponse, error)
+	GetAnalyticsSkills(context.Context, db.AnalyticsFilter, string) (db.SkillsAnalyticsResponse, error)
+	GetAnalyticsVelocity(context.Context, db.AnalyticsFilter) (db.VelocityResponse, error)
+	GetAnalyticsTopSessions(context.Context, db.AnalyticsFilter, string) (db.TopSessionsResponse, error)
+	GetAnalyticsSignals(context.Context, db.AnalyticsFilter) (db.SignalsAnalyticsResponse, error)
+}
+
 type keptPanelCase struct {
 	name string
-	read func(*Store) (any, error)
+	read func(analyticsReports) (any, error)
 }
 
 func keptPanelCases(ctx context.Context, f db.AnalyticsFilter) []keptPanelCase {
 	return []keptPanelCase{
-		{"summary", func(s *Store) (any, error) { return s.GetAnalyticsSummary(ctx, f) }},
-		{"activity-default", func(s *Store) (any, error) { return s.GetAnalyticsActivity(ctx, f, "") }},
-		{"activity-day", func(s *Store) (any, error) { return s.GetAnalyticsActivity(ctx, f, "day") }},
-		{"activity-week", func(s *Store) (any, error) { return s.GetAnalyticsActivity(ctx, f, "week") }},
-		{"activity-month", func(s *Store) (any, error) { return s.GetAnalyticsActivity(ctx, f, "month") }},
-		{"heatmap-default", func(s *Store) (any, error) { return s.GetAnalyticsHeatmap(ctx, f, "") }},
-		{"heatmap-messages", func(s *Store) (any, error) { return s.GetAnalyticsHeatmap(ctx, f, "messages") }},
-		{"heatmap-sessions", func(s *Store) (any, error) { return s.GetAnalyticsHeatmap(ctx, f, "sessions") }},
-		{"heatmap-tokens", func(s *Store) (any, error) { return s.GetAnalyticsHeatmap(ctx, f, "output_tokens") }},
-		{"projects", func(s *Store) (any, error) { return s.GetAnalyticsProjects(ctx, f) }},
-		{"hours", func(s *Store) (any, error) { return s.GetAnalyticsHourOfWeek(ctx, f) }},
-		{"shape", func(s *Store) (any, error) { return s.GetAnalyticsSessionShape(ctx, f) }},
-		{"tools", func(s *Store) (any, error) { return s.GetAnalyticsTools(ctx, f) }},
-		{"skills-default", func(s *Store) (any, error) { return s.GetAnalyticsSkills(ctx, f, "") }},
-		{"skills-day", func(s *Store) (any, error) { return s.GetAnalyticsSkills(ctx, f, "day") }},
-		{"skills-week", func(s *Store) (any, error) { return s.GetAnalyticsSkills(ctx, f, "week") }},
-		{"skills-month", func(s *Store) (any, error) { return s.GetAnalyticsSkills(ctx, f, "month") }},
-		{"velocity", func(s *Store) (any, error) { return s.GetAnalyticsVelocity(ctx, f) }},
-		{"top-default", func(s *Store) (any, error) { return s.GetAnalyticsTopSessions(ctx, f, "") }},
-		{"top-messages", func(s *Store) (any, error) { return s.GetAnalyticsTopSessions(ctx, f, "messages") }},
-		{"top-duration", func(s *Store) (any, error) { return s.GetAnalyticsTopSessions(ctx, f, "duration") }},
-		{"top-tokens", func(s *Store) (any, error) { return s.GetAnalyticsTopSessions(ctx, f, "output_tokens") }},
-		{"signals", func(s *Store) (any, error) { return s.GetAnalyticsSignals(ctx, f) }},
+		{"summary", func(s analyticsReports) (any, error) { return s.GetAnalyticsSummary(ctx, f) }},
+		{"activity-default", func(s analyticsReports) (any, error) { return s.GetAnalyticsActivity(ctx, f, "") }},
+		{"activity-day", func(s analyticsReports) (any, error) { return s.GetAnalyticsActivity(ctx, f, "day") }},
+		{"activity-week", func(s analyticsReports) (any, error) { return s.GetAnalyticsActivity(ctx, f, "week") }},
+		{"activity-month", func(s analyticsReports) (any, error) { return s.GetAnalyticsActivity(ctx, f, "month") }},
+		{"heatmap-default", func(s analyticsReports) (any, error) { return s.GetAnalyticsHeatmap(ctx, f, "") }},
+		{"heatmap-messages", func(s analyticsReports) (any, error) { return s.GetAnalyticsHeatmap(ctx, f, "messages") }},
+		{"heatmap-sessions", func(s analyticsReports) (any, error) { return s.GetAnalyticsHeatmap(ctx, f, "sessions") }},
+		{"heatmap-tokens", func(s analyticsReports) (any, error) { return s.GetAnalyticsHeatmap(ctx, f, "output_tokens") }},
+		{"projects", func(s analyticsReports) (any, error) { return s.GetAnalyticsProjects(ctx, f) }},
+		{"hours", func(s analyticsReports) (any, error) { return s.GetAnalyticsHourOfWeek(ctx, f) }},
+		{"shape", func(s analyticsReports) (any, error) { return s.GetAnalyticsSessionShape(ctx, f) }},
+		{"tools", func(s analyticsReports) (any, error) { return s.GetAnalyticsTools(ctx, f) }},
+		{"skills-default", func(s analyticsReports) (any, error) { return s.GetAnalyticsSkills(ctx, f, "") }},
+		{"skills-day", func(s analyticsReports) (any, error) { return s.GetAnalyticsSkills(ctx, f, "day") }},
+		{"skills-week", func(s analyticsReports) (any, error) { return s.GetAnalyticsSkills(ctx, f, "week") }},
+		{"skills-month", func(s analyticsReports) (any, error) { return s.GetAnalyticsSkills(ctx, f, "month") }},
+		{"velocity", func(s analyticsReports) (any, error) { return s.GetAnalyticsVelocity(ctx, f) }},
+		{"top-default", func(s analyticsReports) (any, error) { return s.GetAnalyticsTopSessions(ctx, f, "") }},
+		{"top-messages", func(s analyticsReports) (any, error) { return s.GetAnalyticsTopSessions(ctx, f, "messages") }},
+		{"top-duration", func(s analyticsReports) (any, error) { return s.GetAnalyticsTopSessions(ctx, f, "duration") }},
+		{"top-tokens", func(s analyticsReports) (any, error) { return s.GetAnalyticsTopSessions(ctx, f, "output_tokens") }},
+		{"signals", func(s analyticsReports) (any, error) { return s.GetAnalyticsSignals(ctx, f) }},
 	}
 }
 
@@ -157,6 +170,9 @@ func TestAnalyticsKeptAllPanelsAndVariants(t *testing.T) {
 	for _, tc := range cases {
 		got, err := tc.read(store)
 		require.NoError(t, err, tc.name)
+		fresh, err := tc.read(store.analytics())
+		require.NoError(t, err, tc.name)
+		require.Equal(t, fresh, got, tc.name)
 		values[tc.name] = got
 	}
 	require.Equal(t, freshTop, values["top-messages"])
