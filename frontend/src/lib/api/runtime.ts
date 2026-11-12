@@ -121,7 +121,7 @@ export async function orvalRequest<T extends Response = Response>(
   options: ApiRequestOptions = {},
 ): Promise<T> {
   const { baseUrl, ...init } = options;
-  const requestUrl = `${baseUrl ?? getGeneratedBase()}${url}`;
+  const requestUrl = new URL(`${baseUrl ?? getGeneratedBase()}${url}`, document.baseURI).href;
   const requestInit = {
     ...init,
     headers: baseUrl === undefined ? generatedHeaders(init.headers) : init.headers,
