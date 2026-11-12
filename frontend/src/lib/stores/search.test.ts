@@ -186,12 +186,7 @@ describe("SearchStore", () => {
     ]);
   });
 
-  it.each([
-    ["recover", 503],
-    ["exhaust", 503],
-    ["recover", 504],
-    ["exhaust", 504],
-  ] as const)("recovers or exhausts automatic retry: %s after HTTP %i", async (outcome, status) => {
+  it.each([503, 504])("recovers after HTTP %i", async (status) => {
     const store = createSearchStore(memoryStorage());
     const second = deferred<SearchResponse>();
     searchService.getApiV1Search
@@ -204,25 +199,105 @@ describe("SearchStore", () => {
     expect(store.isSearching).toBe(true);
     expect(store.error).toBeNull();
     expect(reportErrorShown).not.toHaveBeenCalled();
-    if (outcome === "recover") {
-      expect(searchService.getApiV1Search.mock.calls[1]![0]).toEqual(
-        searchService.getApiV1Search.mock.calls[0]![0],
-      );
-      expect(searchService.getApiV1Search.mock.calls[1]![1]?.signal).toBe(
-        searchService.getApiV1Search.mock.calls[0]![1]?.signal,
-      );
-      second.resolve(fullTextResponse("needle"));
-      await flushMicrotasks();
-      expect(store.results[0]?.session_id).toBe("full-0");
-    } else {
-      second.reject(new ApiError(500, "second"));
-      await flushMicrotasks();
-      await vi.advanceTimersByTimeAsync(300);
-      expect(searchService.getApiV1Search).toHaveBeenCalledTimes(2);
-      expect(store.error).toEqual({ detail: "second", kind: "generic" });
-      expect(reportErrorShown).toHaveBeenCalledTimes(1);
-    }
+    expect(searchService.getApiV1Search.mock.calls[1]![0]).toEqual(
+      searchService.getApiV1Search.mock.calls[0]![0],
+    );
+    expect(searchService.getApiV1Search.mock.calls[1]![1]?.signal).toBe(
+      searchService.getApiV1Search.mock.calls[0]![1]?.signal,
+    );
+    second.resolve(fullTextResponse("needle"));
+    await flushMicrotasks();
+    expect(store.results[0]?.session_id).toBe("full-0");
     expect(store.isSearching).toBe(false);
+  });
+
+  it("shows the error after both automatic attempts fail", async () => {
+    const store = createSearchStore(memoryStorage());
+    const second = deferred<SearchResponse>();
+    searchService.getApiV1Search
+      .mockRejectedValueOnce(new ApiError(503, "request timed out"))
+      .mockReturnValueOnce(second.promise);
+    store.search("needle", "alpha");
+    await runDebounce();
+    await vi.advanceTimersByTimeAsync(300);
+    expect(searchService.getApiV1Search).toHaveBeenCalledTimes(2);
+    expect(store.isSearching).toBe(true);
+    expect(store.error).toBeNull();
+    expect(reportErrorShown).not.toHaveBeenCalled();
+    second.reject(new ApiError(500, "second"));
+    await flushMicrotasks();
+    await vi.advanceTimersByTimeAsync(300);
+    expect(searchService.getApiV1Search).toHaveBeenCalledTimes(2);
+    expect(store.error).toEqual({ detail: "second", kind: "generic" });
+    expect(reportErrorShown).toHaveBeenCalledTimes(1);
+    expect(store.isSearching).toBe(false);
+  });
+
+  it("recovers a search after its response body is interrupted", async () => {
+    const actual = await vi.importActual<typeof import("../api/generated/index.js")>(
+      "../api/generated/index.js",
+    );
+    searchService.getApiV1Search.mockImplementation(actual.SearchService.getApiV1Search);
+    const broken = new Response(
+      new ReadableStream({
+        start(controller) {
+          controller.error(
+            new TypeError("Content-Length header of network response exceeds response Body."),
+          );
+        },
+      }),
+      { headers: { "Content-Type": "application/json" } },
+    );
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(broken)
+      .mockResolvedValueOnce(
+        new Response(JSON.stringify(fullTextResponse("needle")), {
+          headers: { "Content-Type": "application/json" },
+        }),
+      );
+    vi.stubGlobal("fetch", fetchMock);
+    try {
+      const store = createSearchStore(memoryStorage());
+      store.search("needle", "alpha");
+      await runDebounce();
+      await vi.advanceTimersByTimeAsync(300);
+      expect(fetchMock).toHaveBeenCalledTimes(2);
+      expect(store.results[0]?.session_id).toBe("full-0");
+      expect(store.error).toBeNull();
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it("keeps a search cleared when canceled during its retry delay", async () => {
+    const actual = await vi.importActual<typeof import("../api/generated/index.js")>(
+      "../api/generated/index.js",
+    );
+    searchService.getApiV1Search.mockImplementation(actual.SearchService.getApiV1Search);
+    const fetchMock = vi
+      .fn()
+      .mockRejectedValueOnce(new TypeError("Failed to fetch"))
+      .mockResolvedValue(
+        new Response(JSON.stringify(fullTextResponse("needle")), {
+          headers: { "Content-Type": "application/json" },
+        }),
+      );
+    vi.stubGlobal("fetch", fetchMock);
+    try {
+      const store = createSearchStore(memoryStorage());
+      store.search("needle");
+      await runDebounce();
+      const signal = fetchMock.mock.calls[0]![1].signal as AbortSignal;
+      store.clear();
+      await vi.advanceTimersByTimeAsync(300);
+      expect(signal.aborted).toBe(true);
+      expect(store.results).toEqual([]);
+      expect(store.error).toBeNull();
+      expect(store.isSearching).toBe(false);
+    } finally {
+      vi.unstubAllGlobals();
+    }
   });
 
   it.each([

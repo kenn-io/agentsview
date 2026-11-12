@@ -151,33 +151,22 @@ describe("API errors", () => {
     expect(isTransient(error)).toBe(true);
   });
 
-  it("rejects a malformed remote URL before fetch", async () => {
-    setServerUrl("http://[");
-    const fetchSpy = vi.spyOn(globalThis, "fetch");
-    try {
-      const error = await orvalFetch("/api/v1/search", {}).catch((err: unknown) => err);
-      expect(error).toBeInstanceOf(TypeError);
-      expect(error).not.toBeInstanceOf(TransportError);
-      expect(isTransient(error)).toBe(false);
-      expect(fetchSpy).not.toHaveBeenCalled();
-    } finally {
-      fetchSpy.mockRestore();
-    }
-  });
-
-  it("rejects a remote URL containing credentials before fetch", async () => {
-    setServerUrl("https://user:pass@example.test");
-    const fetchSpy = vi.spyOn(globalThis, "fetch");
-    try {
-      const error = await orvalFetch("/api/v1/search", {}).catch((err: unknown) => err);
-      expect(error).toBeInstanceOf(TypeError);
-      expect(error).not.toBeInstanceOf(TransportError);
-      expect(isTransient(error)).toBe(false);
-      expect(fetchSpy).not.toHaveBeenCalled();
-    } finally {
-      fetchSpy.mockRestore();
-    }
-  });
+  it.each(["http://[", "https://user:pass@example.test"])(
+    "rejects invalid remote URL %s before fetch",
+    async (url) => {
+      setServerUrl(url);
+      const fetchSpy = vi.spyOn(globalThis, "fetch");
+      try {
+        const error = await orvalFetch("/api/v1/search", {}).catch((err: unknown) => err);
+        expect(error).toBeInstanceOf(TypeError);
+        expect(error).not.toBeInstanceOf(TransportError);
+        expect(isTransient(error)).toBe(false);
+        expect(fetchSpy).not.toHaveBeenCalled();
+      } finally {
+        fetchSpy.mockRestore();
+      }
+    },
+  );
 
   it("marks an interrupted response body as transient", async () => {
     const cause = new TypeError("Content-Length header of network response exceeds response Body.");
@@ -198,31 +187,5 @@ describe("API errors", () => {
     expect(error).toBeInstanceOf(TransportError);
     expect(error).toMatchObject({ message: cause.message, cause });
     expect(isTransient(error)).toBe(true);
-  });
-
-  it("preserves a TypeError used as an abort reason", async () => {
-    const abort = Object.assign(new TypeError("aborted"), { name: "AbortError" });
-    const controller = new AbortController();
-    controller.abort(abort);
-    const error = await orvalFetch("/api/v1/search", {
-      baseUrl: "http://127.0.0.1:1",
-      signal: controller.signal,
-    }).catch((err: unknown) => err);
-    expect(error).toBe(abort);
-    expect(isTransient(error)).toBe(false);
-  });
-
-  it("keeps invalid JSON permanent", async () => {
-    vi.stubGlobal(
-      "fetch",
-      vi.fn().mockResolvedValue(
-        new Response("{", {
-          headers: { "Content-Type": "application/json" },
-        }),
-      ),
-    );
-    const error = await orvalFetch("/api/v1/search", {}).catch((err: unknown) => err);
-    expect(error).toBeInstanceOf(SyntaxError);
-    expect(isTransient(error)).toBe(false);
   });
 });

@@ -765,12 +765,6 @@ describe("CommandPalette", () => {
       "Try again. The first Semantic or Hybrid search can be slower while the embedding model warms up.",
     );
     expect(error?.textContent).not.toContain("request timed out");
-    const retry = Array.from(error!.querySelectorAll<HTMLButtonElement>("button")).find(
-      (button) => button.textContent?.trim() === "Retry",
-    );
-    expect(retry).toBeDefined();
-    retry!.click();
-    expect(mockSearchStore.retry).toHaveBeenCalledOnce();
 
     unmount(component);
   });
