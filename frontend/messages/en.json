@@ -2208,6 +2208,7 @@
   "settings_restart_address": "Run agentsview serve status and open the address it prints.",
   "settings_restart_if_stopped": "If the server stopped or never restarted, restart AgentsView the way you started it, then reload this page.",
   "settings_restart_identify_failed": "Could not identify the running server",
+  "settings_restart_status_missing": "The setting was saved, but the server did not report whether a restart is needed. Update AgentsView and restart it to apply the setting.",
   "settings_restart_refused": "AgentsView couldn't restart from this page.",
   "settings_restart_reason": "Reason: {error}.",
   "settings_terminal_mode_auto": "Auto-detect",

@@ -692,6 +692,27 @@ describe("SettingsStore.restartDaemon", () => {
     });
   });
 
+  it("checks the original server after switching servers during recovery", async () => {
+    setServerUrl("https://first.example");
+    localStorage.setItem("agentsview-auth-token::https://first.example", "first-token");
+    localStorage.setItem("agentsview-auth-token::https://second.example", "second-token");
+    ping.mockResolvedValue({ healthy: true, ok: true, pid: 100, instance_id: "old" });
+    restartDaemon.mockResolvedValue({ restarting: true });
+    const restart = settings.restartDaemon();
+    await vi.advanceTimersByTimeAsync(30_000);
+    await restart;
+    expect(settings.restartFailed).toBe(true);
+    setServerUrl("https://second.example");
+    ping.mockResolvedValue({ healthy: true, ok: true, pid: 100, instance_id: "new" });
+    const check = settings.checkConnection();
+    await vi.advanceTimersByTimeAsync(1_000);
+    await check;
+    expect(ping.mock.calls.at(-1)?.[0]).toMatchObject({
+      baseUrl: "https://first.example",
+      headers: { Authorization: "Bearer first-token" },
+    });
+  });
+
   it("reloads when the instance changes with the same process", async () => {
     let finishSave!: () => void;
     const save = settings.runMutation(() => new Promise<void>((resolve) => (finishSave = resolve)));

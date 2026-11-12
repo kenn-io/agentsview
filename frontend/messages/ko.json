@@ -2110,6 +2110,7 @@
   "settings_restart_address": "agentsview serve status를 실행하고 표시된 주소를 여세요.",
   "settings_restart_if_stopped": "서버가 중지되었거나 다시 시작되지 않았다면 처음 시작한 방법으로 AgentsView를 다시 시작하고 이 페이지를 새로고침하세요.",
   "settings_restart_identify_failed": "실행 중인 서버를 확인할 수 없습니다",
+  "settings_restart_status_missing": "설정은 저장되었지만 서버가 재시작 필요 여부를 알리지 않았습니다. 설정을 적용하려면 AgentsView를 업데이트하고 재시작하세요.",
   "settings_restart_refused": "이 페이지에서 AgentsView를 다시 시작하지 못했습니다.",
   "settings_restart_reason": "이유: {error}.",
   "settings_terminal_mode_auto": "자동 감지",

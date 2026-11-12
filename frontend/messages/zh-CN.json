@@ -2108,6 +2108,7 @@
   "settings_restart_address": "运行 agentsview serve status 并打开显示的地址。",
   "settings_restart_if_stopped": "如果服务器已停止或未重新启动，请使用原来的方式重启 AgentsView，然后重新加载此页面。",
   "settings_restart_identify_failed": "无法识别正在运行的服务器",
+  "settings_restart_status_missing": "设置已保存，但服务器未报告是否需要重启。请更新并重启 AgentsView 以应用此设置。",
   "settings_restart_refused": "无法从此页面重启 AgentsView。",
   "settings_restart_reason": "原因：{error}。",
   "settings_terminal_mode_auto": "自动检测",

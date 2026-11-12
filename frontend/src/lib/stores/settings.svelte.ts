@@ -117,6 +117,8 @@ class SettingsStore {
   restartCanRetry: boolean = $state(false);
   private originalInstance = "";
   private restartUncertain = false;
+  /** The server the last restart attempt was sent to, kept for rechecks. */
+  private restartTargetUsed!: ApiRequestOptions;
   /** The server's reason when it refused the restart. */
   restartError: string | null = $state(null);
   /** True when the API returned 401, indicating the user needs
@@ -160,6 +162,16 @@ class SettingsStore {
         this.loading = false;
         this.loaded = true;
       }
+    }
+  }
+
+  /** The image policy only takes effect after a restart, so its saved response must say whether one is pending. */
+  private applySaved(patch: Partial<AppSettings>, data: SettingsResponse): void {
+    this.applySettings(data);
+    const unknown =
+      typeof data.restart_required !== "boolean" || typeof data.restart_supported !== "boolean";
+    if (patch.tool_result_images !== undefined && unknown) {
+      throw new Error(m.settings_restart_status_missing());
     }
   }
 
@@ -207,16 +219,15 @@ class SettingsStore {
     this.restartError = null;
     this.restartCanRetry = false;
     this.restartUncertain = false;
-    const target = restartTarget();
-    return this.runMutation(() => this.performRestart(true, target));
+    this.restartTargetUsed = restartTarget();
+    return this.runMutation(() => this.performRestart(true, this.restartTargetUsed));
   }
 
   /** Check again for the same replacement without sending another restart. */
   checkConnection(): Promise<void> {
     if (this.restarting) return Promise.resolve();
     this.restarting = true;
-    const target = restartTarget();
-    return this.runMutation(() => this.performRestart(false, target));
+    return this.runMutation(() => this.performRestart(false, this.restartTargetUsed));
   }
 
   private async waitForReplacement(
@@ -309,7 +320,7 @@ class SettingsStore {
     this.saveError = null;
     try {
       const data = await SettingsService.putApiV1Settings(patch);
-      this.applySettings(data);
+      this.applySaved(patch, data);
       return true;
     } catch (e) {
       this.saveError = e instanceof Error ? e.message : m.settings_save_failed();

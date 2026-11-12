@@ -2197,6 +2197,7 @@
   "settings_restart_address": "agentsview serve status əmrini işlədin və göstərilən ünvanı açın.",
   "settings_restart_if_stopped": "Server dayanıbsa və ya yenidən başlamayıbsa, AgentsView-i başladığınız kimi yenidən başladın və bu səhifəni yeniləyin.",
   "settings_restart_identify_failed": "İşləyən serveri müəyyən etmək mümkün olmadı",
+  "settings_restart_status_missing": "Parametr yadda saxlanıldı, lakin server yenidən başlatmanın lazım olub-olmadığını bildirmədi. Parametri tətbiq etmək üçün AgentsView-i yeniləyin və yenidən başladın.",
   "settings_restart_refused": "AgentsView bu səhifədən yenidən başlaya bilmədi.",
   "settings_restart_reason": "Səbəb: {error}.",
   "settings_terminal_mode_auto": "Avtomatik aşkarlama",

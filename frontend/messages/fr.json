@@ -2209,6 +2209,7 @@
   "settings_restart_address": "Exécutez agentsview serve status et ouvrez l’adresse indiquée.",
   "settings_restart_if_stopped": "Si le serveur s’est arrêté ou n’a pas redémarré, redémarrez AgentsView comme vous l’avez lancé, puis rechargez cette page.",
   "settings_restart_identify_failed": "Impossible d’identifier le serveur en cours d’exécution",
+  "settings_restart_status_missing": "Le paramètre a été enregistré, mais le serveur n’a pas indiqué si un redémarrage est nécessaire. Mettez AgentsView à jour et redémarrez-le pour appliquer le paramètre.",
   "settings_restart_refused": "AgentsView n’a pas pu redémarrer depuis cette page.",
   "settings_restart_reason": "Motif : {error}.",
   "settings_terminal_mode_auto": "Détection automatique",

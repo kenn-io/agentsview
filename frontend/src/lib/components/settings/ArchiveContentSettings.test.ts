@@ -42,6 +42,7 @@ describe("ArchiveContentSettings", () => {
     settings.toolResultImages = "keep";
     settings.readOnly = false;
     settings.saving = false;
+    settings.saveError = null;
     settings.restartSupported = true;
     settings.restartRequired = false;
   });
@@ -92,6 +93,20 @@ describe("ArchiveContentSettings", () => {
 
     await fireEvent.click(getByRole("radio", { name: "Keep" }));
     await vi.waitFor(() => expect(queryByRole("status")).toBeNull());
+  });
+
+  it("reports a saved policy whose server omits pending restart status", async () => {
+    const {
+      restart_required: _pending,
+      restart_supported: _supported,
+      ...olderResponse
+    } = makeSettingsResponse("drop");
+    settingsService.putApiV1Settings.mockResolvedValue(olderResponse);
+    const { getByRole } = render(ArchiveContentSettings);
+    await fireEvent.click(getByRole("radio", { name: "Drop" }));
+    await vi.waitFor(() => expect(settings.saveError).toMatch(/saved/i));
+    expect(settings.saveError).toMatch(/update|restart/i);
+    expect(getByRole("radio", { name: "Drop" }).getAttribute("aria-checked")).toBe("true");
   });
 
   it("shows no restart notice when the save fails", async () => {
