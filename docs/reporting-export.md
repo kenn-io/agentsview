@@ -526,6 +526,15 @@ previously saved digests when updating. Adding, renaming, or removing a field,
 changing a type or accounting rule, or changing canonicalization requires a new
 schema version.
 
+## Content boundary
+
+Hour, day, digest, and range exports contain counts, durations, token totals,
+costs, and model, agent, and project labels. They contain no message text,
+thinking text, or tool input and output, so they have no secret masking or
+`--reveal` flag.
+[Conversation export](conversation-export.md#secrets-are-masked-by-default) is
+the export that returns message text, and it masks detected secrets by default.
+
 ## Local SQLite scope
 
 Reporting export intentionally uses the existing read-only local SQLite export

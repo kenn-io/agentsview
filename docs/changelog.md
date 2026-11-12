@@ -34,6 +34,13 @@ The latest release is
 
 **Improvements**
 
+- `agentsview export conversations message` now masks API keys, tokens, and
+  other detected secrets in message text by default, using the same masked form
+  as search results. A body with a masked secret reports `redacted: true`, and
+  its offsets count the masked text. Pass `--reveal` to export the stored text
+  unchanged. See
+  [Conversation Export](/docs/conversation-export/#secrets-are-masked-by-default).
+
 - `agentsview sync` no longer prints a deprecation warning. It stays a supported
   shortcut for `agentsview source sync` and is listed in root help again.
 

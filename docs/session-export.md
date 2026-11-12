@@ -255,6 +255,10 @@ Session summary export omits transcript text, first-message text, thinking text,
 tool input, tool output, and raw transcript bytes. It may include metadata that
 came from sessions, such as sanitized project labels, branch names, model names,
 token totals, and cost totals. It does not emit raw working-directory paths.
+Because no message text leaves the archive, this export has no secret masking or
+`--reveal` flag.
+[Conversation export](conversation-export.md#secrets-are-masked-by-default) is
+the export that returns message text, and it masks detected secrets by default.
 
 ## Project Evidence
 
