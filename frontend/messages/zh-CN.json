@@ -3111,10 +3111,8 @@
   "empty_archive_desc": "AgentsView 从这些文件夹读取会话。代理写入其中任一文件夹后，会话就会显示在这里。",
   "empty_archive_choose_folders": "选择文件夹",
   "usage_tooltip_no_usage": "无使用",
-  "session_toc_title": "提示",
-  "session_toc_toggle": "提示大纲",
-  "session_toc_toggle_shortcut": "提示大纲 (T)",
-  "session_toc_close": "关闭提示大纲",
+  "session_toc_toggle": "跳转到提示",
+  "session_toc_toggle_shortcut": "跳转到提示 (T)",
   "session_toc_count": [
     {
       "declarations": ["input count", "input countLabel", "local countPlural = count: plural"],
@@ -3129,5 +3127,10 @@
   "session_toc_loading_older": "正在加载更早的提示…",
   "session_toc_load_failed": "无法加载更早的提示",
   "session_toc_empty_prompt": "空提示",
-  "shortcuts_toggle_session_toc": "显示或隐藏提示大纲"
+  "session_toc_search": "搜索提示",
+  "session_toc_matches": "{total} 条提示中的 {matched} 条",
+  "session_toc_matches_capped": "{matched} 条匹配，显示前 {limit} 条",
+  "session_toc_window": "提示 {from}–{to}，共 {total} 条。输入即可搜索全部。",
+  "session_toc_no_match": "没有匹配的提示",
+  "shortcuts_toggle_session_toc": "跳转到提示"
 }

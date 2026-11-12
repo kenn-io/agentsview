@@ -7,7 +7,6 @@
     LightbulbIcon,
     LinkIcon,
     SearchIcon,
-    TableOfContentsIcon,
   } from "../../icons.js";
   import { MediaQuery } from "svelte/reactivity";
   import type { Session } from "../../api/types.js";
@@ -40,9 +39,7 @@
   import { ui } from "../../stores/ui.svelte.js";
   import TranscriptControls from "./TranscriptControls.svelte";
   import { m } from "../../i18n/index.js";
-  import { IconButton } from "@kenn-io/kit-ui";
-  import { sessionToc } from "../../stores/sessionToc.svelte.js";
-  import { SESSION_TOC_ID } from "../content/session-toc.js";
+  import SessionPromptPicker from "./SessionPromptPicker.svelte";
 
   interface Props {
     session: Session | undefined;
@@ -262,17 +259,7 @@
       >
         <ChartColumnIcon size="14" aria-hidden="true" />
       </button>
-      <IconButton
-        ariaLabel={m.session_toc_toggle()}
-        title={m.session_toc_toggle_shortcut()}
-        ariaPressed={sessionToc.open}
-        ariaExpanded={sessionToc.open}
-        ariaControls={SESSION_TOC_ID}
-        ariaKeyshortcuts="T"
-        onclick={() => sessionToc.toggle()}
-      >
-        <TableOfContentsIcon size="14" aria-hidden="true" />
-      </IconButton>
+      <SessionPromptPicker />
       <button
         class="insight-btn"
         title={m.insights_page_agent_analysis()}

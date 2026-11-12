@@ -3185,10 +3185,8 @@
   "empty_archive_desc": "AgentsView はこれらのフォルダーからセッションを読み取ります。エージェントがいずれかに書き込むと、ここに表示されます。",
   "empty_archive_choose_folders": "フォルダーを選択",
   "usage_tooltip_no_usage": "使用なし",
-  "session_toc_title": "プロンプト",
-  "session_toc_toggle": "プロンプトの目次",
-  "session_toc_toggle_shortcut": "プロンプトの目次 (T)",
-  "session_toc_close": "プロンプトの目次を閉じる",
+  "session_toc_toggle": "プロンプトへ移動",
+  "session_toc_toggle_shortcut": "プロンプトへ移動 (T)",
   "session_toc_count": [
     {
       "declarations": ["input count", "input countLabel", "local countPlural = count: plural"],
@@ -3204,5 +3202,10 @@
   "session_toc_loading_older": "以前のプロンプトを読み込み中…",
   "session_toc_load_failed": "以前のプロンプトを読み込めませんでした",
   "session_toc_empty_prompt": "空のプロンプト",
-  "shortcuts_toggle_session_toc": "プロンプトの目次を表示/非表示"
+  "session_toc_search": "プロンプトを検索",
+  "session_toc_matches": "{total} 件中 {matched} 件のプロンプト",
+  "session_toc_matches_capped": "{matched} 件一致、最初の {limit} 件を表示",
+  "session_toc_window": "プロンプト {from}–{to} / {total} 件。入力するとすべてを検索します。",
+  "session_toc_no_match": "一致するプロンプトはありません",
+  "shortcuts_toggle_session_toc": "プロンプトへ移動"
 }

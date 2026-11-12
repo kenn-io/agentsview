@@ -213,7 +213,7 @@ export function registerShortcuts(opts: ShortcutOptions): () => void {
         sessions.navigateSession(-1, starredSessionFilter());
       },
       t: () => {
-        if (sessions.activeSessionId) sessionToc.toggle({ focus: true });
+        if (sessions.activeSessionId) sessionToc.requestOpen();
       },
       o: () => ui.toggleSort(),
       l: () => ui.cycleLayout(),

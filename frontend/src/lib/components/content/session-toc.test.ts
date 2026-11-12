@@ -5,6 +5,7 @@ import {
   entryVisible,
   isPromptMessage,
   mergeTocEntries,
+  pickPrompts,
   promptEntries,
   tocEntry,
   type TocEntry,
@@ -32,9 +33,11 @@ function msg(ordinal: number, extra: Partial<Message> = {}): Message {
   };
 }
 
-const entry = (ordinal: number): TocEntry => ({
+const entry = (ordinal: number, search = `prompt ${ordinal}`): TocEntry => ({
   ordinal,
+  timestamp: "2026-01-01T00:00:00Z",
   label: `prompt ${ordinal}`,
+  search,
   isShell: false,
   blocks: ["user"],
 });
@@ -138,7 +141,14 @@ describe("mergeTocEntries", () => {
     );
     expect(merged).toEqual([
       entry(2),
-      { ordinal: 10, label: "fresh", isShell: false, blocks: ["user"] },
+      {
+        ordinal: 10,
+        timestamp: "2026-01-01T00:00:00Z",
+        label: "fresh",
+        search: "fresh",
+        isShell: false,
+        blocks: ["user"],
+      },
     ]);
   });
 
@@ -174,5 +184,54 @@ describe("currentEntryIndex", () => {
   it("marks nothing above the first prompt or without a view", () => {
     expect(currentEntryIndex(promptEntries([msg(3)]), view(1, 1, 2), null)).toBe(-1);
     expect(currentEntryIndex(entries, null, null)).toBe(-1);
+  });
+});
+
+describe("tocEntry search text", () => {
+  it("searches past the first line, lowercased with whitespace collapsed", () => {
+    const e = tocEntry(msg(0, { content: "Fix the CACHE\n\n  eviction   bug" }));
+    expect(e.label).toBe("Fix the CACHE");
+    expect(e.search).toBe("fix the cache eviction bug");
+  });
+});
+
+describe("pickPrompts", () => {
+  const many = Array.from({ length: 300 }, (_, i) => entry(i));
+  const ordinals = (entries: readonly TocEntry[]) => entries.map((e) => e.ordinal);
+
+  it("opens on a window around the current prompt when there is no query", () => {
+    const pick = pickPrompts(many, "", 150, 10);
+    expect(ordinals(pick.shown)).toEqual([145, 146, 147, 148, 149, 150, 151, 152, 153, 154]);
+    expect(pick).toMatchObject({ matched: 300, start: 145 });
+  });
+
+  it("keeps the window full at either end of the session", () => {
+    expect(ordinals(pickPrompts(many, "", 2, 4).shown)).toEqual([0, 1, 2, 3]);
+    expect(ordinals(pickPrompts(many, "", 299, 4).shown)).toEqual([296, 297, 298, 299]);
+    expect(ordinals(pickPrompts(many, "", -1, 4).shown)).toEqual([0, 1, 2, 3]);
+  });
+
+  it("lists every prompt when there are fewer than the limit", () => {
+    const pick = pickPrompts([entry(0), entry(1)], "", 1, 10);
+    expect(ordinals(pick.shown)).toEqual([0, 1]);
+    expect(pick.start).toBe(0);
+  });
+
+  it("matches prompts containing every word, in any order and case", () => {
+    const entries = [
+      entry(0, "fix the cache eviction bug"),
+      entry(1, "cache hit rate is low"),
+      entry(2, "eviction policy for the cache"),
+      entry(3, "unrelated"),
+    ];
+    expect(ordinals(pickPrompts(entries, "  Cache   EVICTION ", -1).shown)).toEqual([0, 2]);
+    expect(pickPrompts(entries, "nothing here", -1)).toEqual({ shown: [], matched: 0, start: 0 });
+  });
+
+  it("counts every match but shows only the first ones up to the limit", () => {
+    // Prompts containing "29": 29, 129, 229, and 290-299.
+    const pick = pickPrompts(many, "prompt 29", 0, 3);
+    expect(pick.matched).toBe(13);
+    expect(ordinals(pick.shown)).toEqual([29, 129, 229]);
   });
 });

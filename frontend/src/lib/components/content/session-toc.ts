@@ -3,14 +3,17 @@ import type { BlockType } from "../../stores/ui.svelte.js";
 import { hasVisibleSegments } from "../../utils/content-parser.js";
 import { isSystemBoundaryMessage, isSystemMessage, previewMessage } from "../../utils/messages.js";
 
-/** DOM id of the outline panel, which its toggle controls. */
-export const SESSION_TOC_ID = "session-toc";
+/** Most rows the prompt picker renders at once. */
+export const PICKER_LIMIT = 100;
 
-/** One prompt in the session outline. */
+/** One prompt in the session prompt picker. */
 export interface TocEntry {
   ordinal: number;
+  timestamp: string;
   /** First line of the prompt, whitespace collapsed; empty for an empty prompt. */
   label: string;
+  /** The prompt's text, lowercased and whitespace collapsed, for search. */
+  search: string;
   /** The prompt was a shell shortcut, so the label reads as code. */
   isShell: boolean;
   /** Block types the prompt's card renders; the block filter hides the
@@ -28,8 +31,12 @@ export interface TocView {
   atEnd: boolean;
 }
 
-// Long enough to fill the panel's widest line; CSS adds the ellipsis.
+// Long enough to fill the picker's widest row; CSS adds the ellipsis.
 const LABEL_MAX_CHARS = 160;
+// Search covers the start of each prompt. A prompt with a pasted log can
+// run to megabytes, and thousands of them must stay cheap to filter on
+// every keystroke.
+const SEARCH_MAX_CHARS = 4000;
 
 // Claude Code records a shell shortcut's output as its own user row that
 // opens with its stdout block (then stderr); the row holding the typed
@@ -80,7 +87,9 @@ export function tocEntry(m: Message): TocEntry {
   const label = firstLine.replace(/\s+/g, " ").trim();
   return {
     ordinal: m.ordinal,
+    timestamp: m.timestamp,
     label: label.length > LABEL_MAX_CHARS ? label.slice(0, LABEL_MAX_CHARS) : label,
+    search: preview.text.slice(0, SEARCH_MAX_CHARS).replace(/\s+/g, " ").toLowerCase(),
     isShell: preview.isShell,
     blocks: renderedBlocks(m),
   };
@@ -141,4 +150,42 @@ export function currentEntryIndex(
     }
   }
   return found;
+}
+
+/** The prompts the picker lists for a query. */
+export interface PromptPick {
+  /** At most `limit` prompts, oldest first. */
+  shown: TocEntry[];
+  /** How many prompts match the query; all of them when it is empty. */
+  matched: number;
+  /** Index in the matches of the first shown prompt. */
+  start: number;
+}
+
+/**
+ * Chooses the prompts the picker lists. A query keeps prompts whose text
+ * contains every word of it, oldest first, up to `limit`. With no query,
+ * the list is a window of `limit` prompts around the current one, so the
+ * picker opens where the reader is.
+ */
+export function pickPrompts(
+  entries: readonly TocEntry[],
+  query: string,
+  currentIndex: number,
+  limit: number = PICKER_LIMIT,
+): PromptPick {
+  const words = query.toLowerCase().split(/\s+/).filter(Boolean);
+  if (words.length === 0) {
+    const centered = currentIndex < 0 ? 0 : currentIndex - Math.floor(limit / 2);
+    const start = Math.max(0, Math.min(centered, entries.length - limit));
+    return { shown: entries.slice(start, start + limit), matched: entries.length, start };
+  }
+  const shown: TocEntry[] = [];
+  let matched = 0;
+  for (const entry of entries) {
+    if (!words.every((word) => entry.search.includes(word))) continue;
+    matched += 1;
+    if (shown.length < limit) shown.push(entry);
+  }
+  return { shown, matched, start: 0 };
 }

@@ -8,36 +8,26 @@ import {
   type TocView,
 } from "../components/content/session-toc.js";
 
-const OPEN_KEY = "agentsview-session-toc";
 const PAGE_SIZE = 1000;
 
-function readStoredOpen(): boolean {
-  try {
-    return localStorage?.getItem(OPEN_KEY) === "true";
-  } catch {
-    return false;
-  }
-}
-
 /**
- * State for the session prompt outline. Large sessions load their newest
- * messages first, so the outline reads the prompts older than the loaded
+ * State for the session prompt picker. Large sessions load their newest
+ * messages first, so the picker reads the prompts older than the loaded
  * window from the server, one user-only read per session. Prompts in the
  * loaded window come from the messages store, which stays current as a
  * live session grows.
  */
 class SessionTocStore {
-  open: boolean = $state(readStoredOpen());
   /** The transcript rows on screen, published by the message list. */
   view: TocView | null = $state(null);
-  /** The prompt last picked from the outline. */
+  /** The prompt last picked from the picker. */
   picked: number | null = $state(null);
   /** Prompts with ordinals below `olderBefore`, oldest first. */
   older: TocEntry[] = $state.raw([]);
   olderLoading: boolean = $state(false);
   olderFailed: boolean = $state(false);
-  /** Bumped when the outline should take keyboard focus. */
-  focusRequest: number = $state(0);
+  /** Bumped when the picker should open, as the `t` shortcut asks. */
+  openRequest: number = $state(0);
 
   private olderSessionId: string | null = $state(null);
   /** Every prompt below this ordinal is in `older`; 0 when nothing is. */
@@ -45,31 +35,24 @@ class SessionTocStore {
   private read = new LatestRead();
   private loadingSignal: AbortSignal | null = null;
 
-  /** Open or close the outline; `focus` moves focus into it on open. */
-  toggle(options: { focus?: boolean } = {}) {
-    this.setOpen(!this.open);
-    if (this.open && options.focus) this.focusRequest += 1;
+  requestOpen() {
+    this.openRequest += 1;
   }
 
-  setOpen(open: boolean) {
-    // A resync can rewrite prompts the outline read earlier, and no signal
-    // tells that apart from an append. Read them again on each opening,
-    // keeping the old list on screen until the new one lands.
-    if (open && !this.open) {
-      // A read still running started before the reopening, so it may hold
-      // the old prompts; drop it and let the outline start a fresh one.
-      this.read.cancel();
-      this.loadingSignal = null;
-      this.olderLoading = false;
-      this.olderBefore = 0;
-      this.olderFailed = false;
-    }
-    this.open = open;
-    try {
-      localStorage?.setItem(OPEN_KEY, String(open));
-    } catch {
-      // ignore
-    }
+  /**
+   * Called each time the picker opens. A resync can rewrite prompts read
+   * earlier, and no signal tells that apart from an append, so the next
+   * `ensureOlder` reads them again. The old list stays until the new one
+   * lands.
+   */
+  refreshOlder() {
+    // A read still running started before this opening, so it may hold
+    // the old prompts; drop it and let the picker start a fresh one.
+    this.read.cancel();
+    this.loadingSignal = null;
+    this.olderLoading = false;
+    this.olderBefore = 0;
+    this.olderFailed = false;
   }
 
   /** Reports whether every prompt older than `before` is loaded. */
@@ -155,11 +138,6 @@ class SessionTocStore {
         this.olderLoading = false;
       }
     }
-  }
-
-  /** Clear a failed read so the next `ensureOlder` tries again. */
-  retryOlder() {
-    this.olderFailed = false;
   }
 }
 

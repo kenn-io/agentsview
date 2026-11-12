@@ -3225,10 +3225,8 @@
   "empty_archive_desc": "AgentsView sessiyaları bu qovluqlardan oxuyur. Agent onlardan birinə yazan kimi sessiyalar burada görünəcək.",
   "empty_archive_choose_folders": "Qovluqları seçin",
   "usage_tooltip_no_usage": "İstifadə yoxdur",
-  "session_toc_title": "Sorğular",
-  "session_toc_toggle": "Sorğu siyahısı",
-  "session_toc_toggle_shortcut": "Sorğu siyahısı (T)",
-  "session_toc_close": "Sorğu siyahısını bağla",
+  "session_toc_toggle": "Sorğuya keç",
+  "session_toc_toggle_shortcut": "Sorğuya keç (T)",
   "session_toc_count": [
     {
       "declarations": ["input count", "input countLabel", "local countPlural = count: plural"],
@@ -3244,5 +3242,10 @@
   "session_toc_loading_older": "Əvvəlki sorğular yüklənir…",
   "session_toc_load_failed": "Əvvəlki sorğular yüklənmədi",
   "session_toc_empty_prompt": "Boş sorğu",
-  "shortcuts_toggle_session_toc": "Sorğu siyahısını göstər və ya gizlət"
+  "session_toc_search": "Sorğularda axtar",
+  "session_toc_matches": "{total} sorğudan {matched}",
+  "session_toc_matches_capped": "{matched} uyğunluq, ilk {limit} göstərilir",
+  "session_toc_window": "{total} sorğudan {from}–{to}. Hamısında axtarmaq üçün yazın.",
+  "session_toc_no_match": "Uyğun sorğu yoxdur",
+  "shortcuts_toggle_session_toc": "Sorğuya keç"
 }

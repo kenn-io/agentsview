@@ -28,7 +28,6 @@
   import { inSessionSearch } from "../../stores/inSessionSearch.svelte.js";
   import { sessionActivity } from "../../stores/sessionActivity.svelte.js";
   import SessionFindView from "./SessionFindView.svelte";
-  import SessionToc from "./SessionToc.svelte";
   import { sessionToc } from "../../stores/sessionToc.svelte.js";
   import {
     getLatestDisplayIndex,
@@ -335,7 +334,7 @@
     return ordinals;
   }
 
-  // Tell the prompt outline which rows are on screen, so it can mark the
+  // Tell the prompt picker which rows are on screen, so it can open at the
   // turn being read.
   function publishTocView() {
     const v = virtualizer.instance;
@@ -386,7 +385,6 @@
   });
 
   $effect(() => {
-    if (!sessionToc.open) return;
     void virtualizer.instance;
     void displayItemsAsc;
     void containerScrollTop;
@@ -1149,7 +1147,6 @@
       {/each}
     </div>
   </div>
-  <SessionToc />
   </SessionFindView>
 {/if}
 
