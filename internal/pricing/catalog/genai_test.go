@@ -262,3 +262,46 @@ func TestGenAIPricesCaseInsensitiveRulesKeepDeclarationOrder(t *testing.T) {
 		})
 	}
 }
+
+func TestGenAIPricesPriceChangesListsEveryRateBoundary(t *testing.T) {
+	prices, err := ParseGenAIPrices([]byte(`[
+		{
+			"id": "offpeak",
+			"name": "Off Peak",
+			"api_pattern": "https://example.invalid",
+			"model_match": {"contains": "night-model"},
+			"models": [{
+				"id": "night-model",
+				"match": {"equals": "night-model"},
+				"prices": [
+					{"prices": {"input_mtok": 10}},
+					{"constraint": {"start_date": "2026-08-02"}, "prices": {"input_mtok": 8}},
+					{"constraint": {"start_time": "22:00:00+00:00", "end_time": "02:00:00+00:00"},
+					 "prices": {"input_mtok": 2}}
+				]
+			}]
+		}
+	]`))
+	require.NoError(t, err)
+	from := time.Date(2026, 8, 1, 12, 0, 0, 0, time.UTC)
+	to := time.Date(2026, 8, 2, 23, 30, 0, 0, time.UTC)
+	changes := prices.PriceChanges(from, to)
+	assert.Equal(t, []time.Time{
+		time.Date(2026, 8, 1, 22, 0, 0, 0, time.UTC),
+		time.Date(2026, 8, 2, 0, 0, 0, 0, time.UTC),
+		time.Date(2026, 8, 2, 2, 0, 0, 0, time.UTC),
+		time.Date(2026, 8, 2, 22, 0, 0, 0, time.UTC),
+	}, changes)
+	// Between two adjacent boundaries every instant resolves alike.
+	bounds := append(append([]time.Time{from}, changes...), to)
+	for i := range len(bounds) - 1 {
+		first, ok := prices.Resolve("", "night-model", bounds[i])
+		require.True(t, ok)
+		for at := bounds[i]; at.Before(bounds[i+1]); at = at.Add(7 * time.Minute) {
+			got, ok := prices.Resolve("", "night-model", at)
+			require.True(t, ok)
+			assert.Equal(t, first.InputPerMTok, got.InputPerMTok, "at %s", at)
+		}
+	}
+	assert.Empty(t, prices.PriceChanges(to, from))
+}
