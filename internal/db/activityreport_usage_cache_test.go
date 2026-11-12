@@ -223,7 +223,7 @@ func TestActivityReportCachedUsageMatchesRawUsage(t *testing.T) {
 		sessions, ids, err := d.activityReportSessions(ctx, filter, rangeStart, rangeEnd)
 		require.NoError(t, err)
 
-		_, wantPricing, wantRead, err := d.activityReportUsage(ctx, ids, lower, upper, q, true)
+		wantRows, wantPricing, wantRead, err := d.activityReportUsage(ctx, ids, lower, upper, q, true)
 		require.NoError(t, err)
 		window, err := d.prepareActivityUsageWindow(ctx, lower, upper)
 		require.NoError(t, err)
@@ -232,9 +232,12 @@ func TestActivityReportCachedUsageMatchesRawUsage(t *testing.T) {
 		wantRead = slices.Compact(wantRead)
 		var gotRead []string
 		for _, compact := range []bool{false, true} {
-			_, gotPricing, read, _, err := d.activityReportCachedUsage(
+			gotRows, gotPricing, read, _, err := d.activityReportCachedUsage(
 				ctx, window, ids, lower, upper, q, true, compact)
 			require.NoError(t, err)
+			if !compact {
+				assert.Equal(t, wantRows, gotRows)
+			}
 			assert.Equal(t, wantPricing, gotPricing)
 			gotRead = append(slices.Clone(ids), read...)
 			slices.Sort(gotRead)
