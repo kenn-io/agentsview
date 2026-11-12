@@ -108,3 +108,8 @@ func TestSessionMaterializeSnapshotDispatch(t *testing.T) {
 	assert.Equal(t, "snapshot:"+report.SnapshotID, result.Source)
 	assert.Contains(t, result.Command, "claude --resume ")
 }
+
+func TestPiResumeCommandQuotesPaths(t *testing.T) {
+	assert.Equal(t, "cd '/work dir' && pi --session '/data/a b.jsonl'", piResumeCommand("/work dir", "/data/a b.jsonl", false))
+	assert.Equal(t, "Set-Location -LiteralPath 'C:\\work dir'; if ($?) { pi --session 'C:\\data\\a b.jsonl' }", piResumeCommand(`C:\work dir`, `C:\data\a b.jsonl`, true))
+}

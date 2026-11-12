@@ -3328,6 +3328,14 @@ schemas keep their existing ordering behavior.
 
 ## Pi (`pi`)
 
+- **Native resume:** Rechecked 2026-11-12 against the pinned
+  [session manager](https://github.com/earendil-works/pi/blob/acaa253cc8e3f159e6100b6f3874861b1f0bfc99/packages/coding-agent/src/core/session-manager.ts)
+  and [CLI](https://github.com/earendil-works/pi/blob/acaa253cc8e3f159e6100b6f3874861b1f0bfc99/packages/coding-agent/src/main.ts).
+  `--session` opens the supplied file and uses its header `cwd`. Materialize
+  changes that value to the requested checkout and preserves the remaining
+  bytes. It places the original filename under the native encoded checkout
+  directory, or directly in `PI_CODING_AGENT_SESSION_DIR` when set.
+
 - **Dialogue projection:** Reverified 2026-10-17 against Pi block-order and
   ingest fixtures. Text blocks retain quoted markers, thinking blocks populate
   `thinking_text`, and tool calls retain their separate inputs and results.

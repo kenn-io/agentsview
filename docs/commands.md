@@ -2163,24 +2163,27 @@ agentsview session label <id> k=v ...    # add or remove labels
 agentsview session parent <id> <parent>  # record the launching session
 ```
 
-`session materialize <id> --cwd <path>` installs the original Claude Code
+`session materialize <id> --cwd <path>` installs the original Claude Code or Pi
 transcript and its native companions for an existing local checkout, then
 prints a resume command. It reads the local archive without starting a daemon
-and finds originals in configured local roots, remote mirrors, or configured
-S3 roots, or from a configured snapshot attachment that owns the session.
-Local retained and directory captures, Pi, and Codex are not yet supported.
-Archive-only fork sessions cannot be installed; select a session with a native
-Claude UUID. The transcript and companions together are limited to 512 MiB
-and are buffered in memory. Snapshot recovery also needs scratch space for a
-saved archive database of up to 16 GiB. It holds a snapshot repository lease;
-if the repository is busy, retry after the other operation finishes. `--server`,
-`--server-token-file`, and `--pg` are unavailable. Use `--json` for the source,
-installed paths, checkout, command, and installed or unchanged status. For
-snapshot recovery, the source is `snapshot:<id>`. Claude's native home and
-supported environment overrides determine the destination, independently of
-discovery roots. Local companions must resolve inside the configured root when the
-transcript is inside it; an externally linked project is confined to that
-project. Remote mirror files must remain inside the mirror root.
+and finds originals in configured local roots or remote mirrors. Claude also
+supports configured S3 roots and snapshot attachments that own the session.
+Local retained and directory captures and Codex are not yet supported. Pi has
+no retained captures. Claude archive-only fork sessions cannot be installed;
+select a session with a native Claude UUID. The transcript and companions
+together are limited to 512 MiB and are buffered in memory. Snapshot recovery
+also needs scratch space for a saved archive database of up to 16 GiB. It holds
+a snapshot repository lease; if the repository is busy, retry after the other
+operation finishes. `--server`, `--server-token-file`, and `--pg` are unavailable.
+Use `--json` for the source, installed paths, checkout, command, and installed
+or unchanged status. For snapshot recovery, the source is `snapshot:<id>`.
+Claude's native home and supported
+environment overrides determine its destination, independently of discovery
+roots. Pi uses its native agent directory, or its explicit session directory
+when `PI_CODING_AGENT_SESSION_DIR` is set. Local companions must resolve inside
+the configured root when the transcript is inside it; an externally linked
+project is confined to that project. Remote mirror files must remain inside the
+mirror root.
 An explicitly set `CLAUDE_CONFIG_DIR` must be an absolute path; the printed
 command preserves its spelling so Claude uses the same credentials.
 
@@ -2189,7 +2192,9 @@ an error. Dependencies are installed before the transcript. If publication
 stops partway through, retry to reuse the files already installed. The command
 does not rewrite existing transcript records. If its last worktree binding is
 non-null, it appends Claude's native null worktree-state record to prevent
-restoring the original checkout, as observed in Claude Code 2.1.322.
+restoring the original checkout, as observed in Claude Code 2.1.322. For Pi,
+the command changes only the session header `cwd` to the selected checkout;
+all other transcript bytes, including branch and parent records, stay intact.
 
 An already-running Claude session can attach in that process's existing
 directory. Claude's in-app resume picker can also fall back to a recorded

@@ -42,8 +42,8 @@ type Result struct {
 
 // Materialize installs a Claude transcript and its own native dependencies.
 func Materialize(ctx context.Context, cfg config.Config, database *db.DB, session *db.Session, cwd string) (Result, error) {
-	if session == nil || session.Agent != "claude" {
-		return Result{}, errors.New("only Claude sessions can currently be installed")
+	if session == nil || (session.Agent != "claude" && session.Agent != "pi") {
+		return Result{}, errors.New("only Claude and Pi sessions can currently be installed")
 	}
 	cwd, err := filepath.Abs(cwd)
 	if err != nil {
@@ -51,6 +51,9 @@ func Materialize(ctx context.Context, cfg config.Config, database *db.DB, sessio
 	}
 	if info, err := os.Stat(cwd); err != nil || !info.IsDir() {
 		return Result{}, fmt.Errorf("cwd must be an existing directory: %s", cwd)
+	}
+	if session.Agent == "pi" {
+		return materializePi(ctx, cfg, session, cwd)
 	}
 	host, id := parser.StripHostPrefix(session.ID)
 	if !capture.ValidUUID(id) {
@@ -157,19 +160,7 @@ func storedSource(session *db.Session, host string) (string, error) {
 }
 
 func readConfiguredLocal(ctx context.Context, cfg config.Config, session *db.Session, stored, id string) ([]sourceFile, string, error) {
-	var roots []string
-	for _, root := range cfg.ResolveDirs(parser.AgentClaude) {
-		if strings.HasPrefix(root, "s3://") {
-			continue
-		}
-		machine := cfg.SourceMachines[parser.AgentClaude][root]
-		if machine == "" {
-			machine = cfg.InstallationID
-		}
-		if machine == session.Machine || (session.Machine == cfg.LocalMachineName && machine == cfg.InstallationID) {
-			roots = append(roots, root)
-		}
-	}
+	roots := configuredRoots(cfg, session, parser.AgentClaude)
 	provider, ok := parser.NewProvider(parser.AgentClaude, parser.ProviderConfig{Roots: roots, Machine: cfg.InstallationID, SourceMachines: cfg.SourceMachines[parser.AgentClaude]})
 	if !ok {
 		return nil, "", errors.New("native source provider unavailable")
@@ -189,6 +180,24 @@ func readConfiguredLocal(ctx context.Context, cfg config.Config, session *db.Ses
 	}
 	files, err := readLocalSource(ctx, boundary, name, id, maxSourceBytes)
 	return files, name, err
+}
+
+// configuredRoots selects roots belonging to the archived session's machine.
+func configuredRoots(cfg config.Config, session *db.Session, agent parser.AgentType) []string {
+	var roots []string
+	for _, root := range cfg.ResolveDirs(agent) {
+		if strings.HasPrefix(root, "s3://") {
+			continue
+		}
+		machine := cfg.SourceMachines[agent][root]
+		if machine == "" {
+			machine = cfg.InstallationID
+		}
+		if machine == session.Machine || (session.Machine == cfg.LocalMachineName && machine == cfg.InstallationID) {
+			roots = append(roots, root)
+		}
+	}
+	return roots
 }
 
 // uniqueLocalSource keeps an archived path that still resolves exactly.
