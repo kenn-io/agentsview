@@ -60,6 +60,21 @@ func usageChangeJournalSQL() (string, string) {
 	// only the triggers they name, so this one survives their opens.
 	add("trg_sessions_usage_change_group_label", "UPDATE OF session_name", "sessions", "OLD.session_name IS NOT NEW.session_name AND (OLD.group_key!='' OR NEW.group_key!='')", "NEW.id")
 	add("trg_sessions_usage_change_delete", "DELETE", "sessions", "", "OLD.id")
+	columns = []string{"first_message", "health_score", "health_grade", "outcome", "outcome_confidence", "tool_failure_signal_count", "tool_retry_count", "edit_churn_count", "compaction_count", "mid_task_compaction_count", "context_pressure_max", "quality_signal_version", "short_prompt_count", "unstructured_start", "missing_success_criteria_count", "missing_verification_count", "duplicate_prompt_count", "no_code_context_count", "runaway_tool_loop_count"}
+	changes = make([]string, len(columns))
+	for i, column := range columns {
+		changes[i] = "OLD." + column + " IS NOT NEW." + column
+	}
+	add("trg_sessions_analytics_change_update", "UPDATE OF "+strings.Join(columns, ", "), "sessions", strings.Join(changes, " OR "), "")
+	add("trg_messages_analytics_change_length", "UPDATE OF content_length", "messages", "OLD.content_length IS NOT NEW.content_length", "")
+	add("trg_tool_calls_analytics_change_insert", "INSERT", "tool_calls", "", "")
+	add("trg_tool_calls_analytics_change_delete", "DELETE", "tool_calls", "", "")
+	columns = []string{"session_id", "message_id", "category", "tool_name", "observed_outcome", "observed_repeat", "sequence_ending"}
+	changes = make([]string, len(columns))
+	for i, column := range columns {
+		changes[i] = "OLD." + column + " IS NOT NEW." + column
+	}
+	add("trg_tool_calls_analytics_change_update", "UPDATE OF "+strings.Join(columns, ", "), "tool_calls", strings.Join(changes, " OR "), "")
 	add("trg_usage_events_usage_change_insert", "INSERT", "usage_events", "", "NEW.session_id")
 	columns = []string{"id", "session_id", "message_ordinal", "source", "model", "provider_id", "input_tokens", "output_tokens", "cache_creation_input_tokens", "cache_read_input_tokens", "reasoning_tokens", "cost_microdollars", "cost_status", "cost_source", "occurred_at", "dedup_key"}
 	changes = make([]string, len(columns))

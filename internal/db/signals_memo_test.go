@@ -26,10 +26,10 @@ func TestSignalsFrustrationMemoReuse(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, 1, resp.QualityHealth.Totals.FrustrationMarkerCount)
 	require.Len(t, d.frustrationMemo.counts, 1)
-	// A distinctive cached count proves the next request uses the memo.
+	// Use another report selection to exercise the per-session memo.
 	entry := d.frustrationMemo.counts["session"]
 	d.frustrationMemo.Store(d.frustrationMemo.generation, "session", entry.version, 7)
-	resp, err = d.GetAnalyticsSignals(ctx, AnalyticsFilter{})
+	resp, err = d.GetAnalyticsSignals(ctx, AnalyticsFilter{Timezone: "UTC"})
 	require.NoError(t, err)
 	assert.Equal(t, 7, resp.QualityHealth.Totals.FrustrationMarkerCount)
 }
