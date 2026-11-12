@@ -46,6 +46,9 @@ func prepareForegroundServeDaemon(ctx context.Context,
 	decision := decideServeDaemonReplacement(*cfg, opts)
 	switch decision.Action {
 	case serveReplacementNone:
+		if release, ok := foregroundServeLaunchLocks.Load(backgroundLaunchLockPath(cfg.DataDir)); ok {
+			return true, release.(func()), nil
+		}
 		if runningAsBackgroundChild() {
 			return true, noRelease, nil
 		}
@@ -116,11 +119,12 @@ func acquireForegroundServeLaunchLock(cfg config.Config) (func(), error) {
 		)
 	}
 	path := backgroundLaunchLockPath(cfg.DataDir)
-	foregroundServeLaunchLocks.Store(path, struct{}{})
-	return sync.OnceFunc(func() {
+	release := sync.OnceFunc(func() {
 		foregroundServeLaunchLocks.Delete(path)
 		_ = lock.Unlock()
-	}), nil
+	})
+	foregroundServeLaunchLocks.Store(path, release)
+	return release, nil
 }
 
 func ownsForegroundServeLaunchLock(dataDir string) bool {

@@ -663,8 +663,19 @@ func runServe(ctx context.Context, cfg config.Config, opts serveOptions, restart
 		server.WithPprof(opts.Pprof),
 		server.WithTelemetryCapture(telemetryCapture),
 	}
+	serverContext := ctx
 	if opts.ReloadConfig != nil {
 		srvOpts = append(srvOpts, server.WithDaemonRestart(func(ctx context.Context, current config.Config) error {
+			release, err := acquireForegroundServeLaunchLock(cfg)
+			if err != nil {
+				return err
+			}
+			accepted := false
+			defer func() {
+				if !accepted {
+					release()
+				}
+			}()
 			args := serveBackgroundArgsWithNoSync(serveReplacementArgs(opts.RestartArgs, current), cfg.NoSync)
 			flags := newServeCommand().Flags()
 			if err := flags.Parse(args); err != nil {
@@ -677,14 +688,17 @@ func runServe(ctx context.Context, cfg config.Config, opts serveOptions, restart
 			if err := prepareBackgroundReplacement(ctx, &replacement, nil, false); err != nil {
 				return err
 			}
-			exe, err := os.Executable()
-			if err != nil {
-				return fmt.Errorf("finding executable: %w", err)
-			}
 			args = append([]string{"serve"}, args...)
 			args = append(args, serveHandoffPortArgs(cfg.Port, restartExplicitPort)...)
 			// Let the HTTP response finish before draining its server.
-			context.AfterFunc(ctx, func() { requestRestart(&foregroundRestartError{exe: exe, args: args}) })
+			restart := &foregroundRestartError{args: args, dataDir: cfg.DataDir, release: release}
+			context.AfterFunc(ctx, func() {
+				requestRestart(restart)
+				if context.Cause(serverContext) != restart {
+					release()
+				}
+			})
+			accepted = true
 			return nil
 		}))
 	}
@@ -868,8 +882,9 @@ func runServe(ctx context.Context, cfg config.Config, opts serveOptions, restart
 }
 
 type foregroundRestartError struct {
-	exe  string
-	args []string
+	args    []string
+	dataDir string
+	release func()
 }
 
 func (r *foregroundRestartError) Error() string { return "restart foreground server" }

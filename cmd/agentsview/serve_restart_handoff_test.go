@@ -292,6 +292,9 @@ func TestServeRestartRefusesInvalidConfig(t *testing.T) {
 	require.NoError(t, resp.Body.Close())
 	require.Equal(t, http.StatusInternalServerError, resp.StatusCode)
 	assert.Contains(t, string(body), "parsing config")
+	lock, acquired := acquireBackgroundLaunchLock(dataDir)
+	require.True(t, acquired, "refused restart must release launch ownership")
+	require.NoError(t, lock.Unlock())
 	require.NoError(t, os.WriteFile(path, saved, 0o600))
 	current := FindDaemonRuntime(dataDir)
 	require.NotNil(t, current)
@@ -329,31 +332,65 @@ func TestRestartKeepsAdoptedNoSync(t *testing.T) {
 }
 
 func TestRestartClosesStalledRequest(t *testing.T) {
-	_, dataDir := isolateServeTestHome(t)
-	startRestartFixture(t, dataDir, "foreground", "--no-sync")
-	rt := waitForRestartRuntime(t, dataDir)
-	base := fmt.Sprintf("http://127.0.0.1:%d", rt.Port)
-	conn, err := (&net.Dialer{}).DialContext(t.Context(), "tcp", fmt.Sprintf("127.0.0.1:%d", rt.Port))
-	require.NoError(t, err)
-	defer conn.Close()
-	_, err = fmt.Fprintf(conn, "PUT /api/v1/settings HTTP/1.1\r\nHost: 127.0.0.1:%d\r\nOrigin: %s\r\nContent-Type: application/json\r\nContent-Length: 1000\r\nExpect: 100-continue\r\n\r\n", rt.Port, base)
-	require.NoError(t, err)
-	require.NoError(t, conn.SetReadDeadline(time.Now().Add(5*time.Second)))
-	reader := bufio.NewReader(conn)
-	line, err := reader.ReadString('\n')
-	require.NoError(t, err)
-	require.Contains(t, line, "100 Continue")
-	line, err = reader.ReadString('\n')
-	require.NoError(t, err)
-	require.Equal(t, "\r\n", line)
-	_, err = io.WriteString(conn, "{")
-	require.NoError(t, err)
-	require.NoError(t, conn.SetReadDeadline(time.Time{}))
-	restartAndWait(t, dataDir, base, "")
-	require.NoError(t, conn.SetReadDeadline(time.Now().Add(time.Second)))
-	body, err := io.ReadAll(reader)
-	require.NoError(t, err)
-	assert.Empty(t, body)
+	for _, mode := range []string{"foreground", "background"} {
+		t.Run(mode, func(t *testing.T) {
+			_, dataDir := isolateServeTestHome(t)
+			startRestartFixture(t, dataDir, mode, "--no-sync", "--base-path=/example")
+			rt := waitForRestartRuntime(t, dataDir)
+			base := fmt.Sprintf("http://127.0.0.1:%d/example", rt.Port)
+			conn, err := (&net.Dialer{}).DialContext(t.Context(), "tcp", fmt.Sprintf("127.0.0.1:%d", rt.Port))
+			require.NoError(t, err)
+			defer conn.Close()
+			_, err = fmt.Fprintf(conn, "PUT /example/api/v1/settings HTTP/1.1\r\nHost: 127.0.0.1:%d\r\nOrigin: http://127.0.0.1:%d\r\nContent-Type: application/json\r\nContent-Length: 1000\r\nExpect: 100-continue\r\n\r\n", rt.Port, rt.Port)
+			require.NoError(t, err)
+			require.NoError(t, conn.SetReadDeadline(time.Now().Add(5*time.Second)))
+			reader := bufio.NewReader(conn)
+			line, err := reader.ReadString('\n')
+			require.NoError(t, err)
+			require.Contains(t, line, "100 Continue")
+			line, err = reader.ReadString('\n')
+			require.NoError(t, err)
+			require.Equal(t, "\r\n", line)
+			_, err = io.WriteString(conn, "{")
+			require.NoError(t, err)
+			require.NoError(t, conn.SetReadDeadline(time.Time{}))
+			previous := restartTestInstance(t, base, "")
+			restartTestSend(t, http.MethodPost, base+"/api/v1/daemon/restart", "", "", http.StatusOK)
+			lock, acquired := acquireBackgroundLaunchLock(dataDir)
+			if acquired {
+				require.NoError(t, lock.Unlock())
+			}
+			assert.False(t, acquired, "restart must reserve the launch lock while the old server drains")
+
+			type result struct {
+				runtime *DaemonRuntime
+				err     error
+			}
+			resultCh := make(chan result, 1)
+			go func() {
+				cfg, err := config.Load(nil)
+				if err != nil {
+					resultCh <- result{err: err}
+					return
+				}
+				current, err := ensureBackgroundServe(t.Context(), &cfg, 30*time.Second, false)
+				resultCh <- result{runtime: current, err: err}
+			}()
+			require.Eventually(t, func() bool {
+				current := restartTestInstance(t, base, "")
+				return current != "" && current != previous
+			}, 30*time.Second, 100*time.Millisecond)
+			outcome := <-resultCh
+			require.NoError(t, outcome.err)
+			require.NotNil(t, outcome.runtime)
+			assert.Equal(t, rt.Record.PID, outcome.runtime.Record.PID)
+			assert.Equal(t, "/example", outcome.runtime.BasePath)
+			require.NoError(t, conn.SetReadDeadline(time.Now().Add(time.Second)))
+			body, err := io.ReadAll(reader)
+			require.NoError(t, err)
+			assert.Empty(t, body)
+		})
+	}
 }
 
 func TestServeRestartPortChoiceWhenOccupied(t *testing.T) {

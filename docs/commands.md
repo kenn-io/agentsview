@@ -561,9 +561,10 @@ agentsview daemon stop
 | `stop`    | Stop the writable daemon, or report that it is already stopped             |
 
 Settings offers **Restart now** on writable detached daemons and foreground
-servers. It preserves launch options and can interrupt sync. On Unix, the
-server replaces its process image in place. On Windows, it starts a new server
-lifetime within the original process. Both keep their process ID.
+servers. It preserves launch options and can interrupt sync. It reloads the
+configuration within the existing process, keeping its process ID, foreground
+attachment, and loaded executable. Use the external restart or update workflow
+to apply a newly installed binary.
 The settings page reloads after an identified replacement answers and returns to
 the selected panel. Read-only servers cannot restart from Settings.
 Authentication changes take effect immediately.

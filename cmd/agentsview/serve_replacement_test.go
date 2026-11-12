@@ -253,10 +253,37 @@ func TestPrepareForegroundServeDaemonKeepsLaunchLockForFreshStart(
 	assert.False(t, ok,
 		"foreground startup must hold launch lock until startup handoff")
 
+	cont, adopted, err := prepareForegroundServeDaemon(t.Context(),
+		&config.Config{DataDir: dir}, serveReplacementOptions{},
+	)
+	require.NoError(t, err)
+	require.True(t, cont)
+	launchLock, ok = acquireBackgroundLaunchLock(dir)
+	if ok {
+		require.NoError(t, launchLock.Unlock())
+	}
+	assert.False(t, ok, "replacement must retain launch ownership until readiness")
+	adopted()
 	release()
 	launchLock, ok = acquireBackgroundLaunchLock(dir)
 	require.True(t, ok)
 	require.NoError(t, launchLock.Unlock())
+}
+
+func TestRestartReleasesLaunchLockWhenNextCommandFails(t *testing.T) {
+	dir := runtimeTestDir(t)
+	release, err := acquireForegroundServeLaunchLock(config.Config{DataDir: dir})
+	require.NoError(t, err)
+	t.Cleanup(release)
+	args := os.Args
+	t.Cleanup(func() { os.Args = args })
+	err = execForegroundRestart(&foregroundRestartError{
+		args: []string{"serve", "--unknown-restart-option"}, dataDir: dir, release: release,
+	})
+	require.Error(t, err)
+	lock, ok := acquireBackgroundLaunchLock(dir)
+	require.True(t, ok, "failed replacement must release launch ownership")
+	require.NoError(t, lock.Unlock())
 }
 
 func TestPrepareForegroundServeDaemonBackgroundChildUsesParentLaunchLock(
