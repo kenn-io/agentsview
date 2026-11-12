@@ -416,9 +416,10 @@ func exportDaemonPing(ctx context.Context, rt *DaemonRuntime, token string) (fai
 func exportWritableDaemonPing(ctx context.Context, cfg *config.Config, rt **DaemonRuntime) (failure string, ok bool) {
 	failure, ok = exportDaemonPing(ctx, *rt, cfg.AuthToken)
 	if !ok {
-		*rt = FindWritableDaemonRuntime(cfg.DataDir, cfg.AuthToken)
-		if *rt != nil {
-			return (*rt).BackfillError, true
+		next := FindWritableDaemonRuntime(cfg.DataDir, cfg.AuthToken)
+		*rt = next
+		if next != nil {
+			return next.BackfillError, true
 		}
 	}
 	return failure, ok

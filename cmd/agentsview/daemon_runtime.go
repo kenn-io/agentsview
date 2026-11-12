@@ -5,7 +5,6 @@ package main
 import (
 	"cmp"
 	"context"
-	stdjson "encoding/json"
 	"encoding/json/v2"
 	"errors"
 	"fmt"
@@ -604,7 +603,7 @@ func probeRuntime(
 		daemon.PingInfo
 		BackfillError string `json:"project_identity_backfill_error"`
 	}
-	if err := stdjson.NewDecoder(resp.Body).Decode(&info); err != nil {
+	if err := json.UnmarshalRead(resp.Body, &info); err != nil {
 		return runtimePing{}, fmt.Errorf("decode daemon ping: %w", err)
 	}
 	if !info.OK {
