@@ -1,10 +1,11 @@
 import { expect, test } from "@playwright/test";
-import { AUTH_SERVER_TOKEN, authServerURL } from "./helpers/auth-server";
+import { AUTH_SERVER_TOKEN, authServerURL, waitForAuthServer } from "./helpers/auth-server";
 
 const authHeaders = { Authorization: `Bearer ${AUTH_SERVER_TOKEN}` };
 
 test("the authenticated server rejects missing and wrong tokens", async ({ request, baseURL }) => {
   const server = authServerURL(baseURL!);
+  await waitForAuthServer(server);
   const sessions = `${server}/api/v1/sessions?limit=1`;
   expect((await request.get(sessions)).status()).toBe(401);
   const wrong = { Authorization: `Bearer ${AUTH_SERVER_TOKEN}-wrong` };
@@ -19,6 +20,7 @@ for (const remote of [true, false]) {
     baseURL,
   }, testInfo) => {
     const server = authServerURL(baseURL!);
+    await waitForAuthServer(server);
     const list = await request.get(`${server}/api/v1/sessions?limit=8`, { headers: authHeaders });
     expect(list.status()).toBe(200);
     const { sessions } = (await list.json()) as { sessions: { id: string }[] };

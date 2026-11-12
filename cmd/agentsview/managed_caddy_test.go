@@ -401,8 +401,13 @@ func TestManagedCaddyLogsOmitQueryToken(t *testing.T) {
 	cmd.Stderr = logWriter
 	require.NoError(t, cmd.Start())
 	_ = logWriter.Close()
+	// Closing after the send lets cleanup return even when the readiness
+	// wait already took the exit result.
 	exited := make(chan error, 1)
-	go func() { exited <- cmd.Wait() }()
+	go func() {
+		exited <- cmd.Wait()
+		close(exited)
+	}()
 	t.Cleanup(func() {
 		_ = cmd.Process.Kill()
 		<-exited

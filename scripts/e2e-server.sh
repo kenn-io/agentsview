@@ -129,12 +129,8 @@ case "$BACKEND" in
         --no-browser \
         --require-auth \
         --events-coalesce-interval 0 &
-      # Playwright waits only for the main port, so wait for this one here.
-      curl -s -o /dev/null --retry 30 --retry-connrefused --retry-delay 1 \
-        "http://127.0.0.1:$AGENTSVIEW_E2E_AUTH_PORT/api/ping" || {
-        echo "authenticated e2e server did not start" >&2
-        exit 1
-      }
+      # Playwright waits only for the main port. Specs that use this server
+      # wait for it themselves, so it does not delay the main server.
     fi
     echo "Starting sqlite e2e server on :$E2E_PORT..."
     exec env "${agent_env[@]}" "$SERVER" serve \
