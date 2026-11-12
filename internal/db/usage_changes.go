@@ -16,18 +16,14 @@ const (
 var usageChangeJournalTriggerDropsSQL, usageChangeJournalTriggerSQL = usageChangeJournalSQL()
 
 func usageChangeJournalSQL() (string, string) {
-	const counterBody = `
+	const counterTemplate = `
  INSERT INTO archive_metadata (key, value)
-  VALUES ('usage_change_revision', '1')
+  VALUES ('{{counter}}', '1')
  ON CONFLICT(key) DO UPDATE SET
   value = CAST(value AS INTEGER) + 1,
   updated_at = strftime('%Y-%m-%dT%H:%M:%fZ','now');`
-	const analyticsCounterBody = `
- INSERT INTO archive_metadata (key, value)
-  VALUES ('analytics_change_revision', '1')
- ON CONFLICT(key) DO UPDATE SET
-  value = CAST(value AS INTEGER) + 1,
-  updated_at = strftime('%Y-%m-%dT%H:%M:%fZ','now');`
+	counterBody := strings.ReplaceAll(counterTemplate, "{{counter}}", archiveMetadataUsageChangeRevisionKey)
+	analyticsCounterBody := strings.ReplaceAll(counterTemplate, "{{counter}}", archiveMetadataAnalyticsChangeRevisionKey)
 	const pricingRevisionBody = `
  INSERT INTO archive_metadata (key, value)
   VALUES ('usage_pricing_revision', (
@@ -35,7 +31,7 @@ func usageChangeJournalSQL() (string, string) {
  ON CONFLICT(key) DO UPDATE SET
   value = excluded.value,
   updated_at = strftime('%Y-%m-%dT%H:%M:%fZ','now');`
-	const sessionBody = counterBody + `
+	sessionBody := counterBody + `
  INSERT INTO usage_session_changes (session_id, revision)
   SELECT {{session_id}}, CAST(value AS INTEGER)
   FROM archive_metadata WHERE key = 'usage_change_revision'
