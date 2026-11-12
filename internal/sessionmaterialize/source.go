@@ -207,16 +207,22 @@ func configuredRoots(cfg config.Config, session *db.Session, agent parser.AgentT
 // incomplete discovery or a second physical file fails instead of guessing,
 // and aliases of one file, such as overlapping roots or symlinks, count once.
 func uniqueLocalSource(ctx context.Context, provider parser.Provider, stored string, matches func(string) (bool, error)) (string, error) {
+	return uniqueLocalSourceWithDiscovery(ctx, provider, stored, func(ctx context.Context, yield func(parser.SourceRef) error) error {
+		discoverer, ok := provider.(parser.StreamingDiscoverer)
+		if !ok {
+			return errors.New("native source provider unavailable")
+		}
+		return discoverer.DiscoverEach(ctx, yield)
+	}, matches)
+}
+
+func uniqueLocalSourceWithDiscovery(ctx context.Context, provider parser.Provider, stored string, discover func(context.Context, func(parser.SourceRef) error) error, matches func(string) (bool, error)) (string, error) {
 	if ref, found, err := provider.FindSource(ctx, parser.FindSourceRequest{StoredFilePath: stored}); err != nil || found {
 		return ref.DisplayPath, err
 	}
-	discoverer, ok := provider.(parser.StreamingDiscoverer)
-	if !ok {
-		return "", errors.New("native source provider unavailable")
-	}
 	var match string
 	var matchInfo os.FileInfo
-	err := discoverer.DiscoverEach(ctx, func(ref parser.SourceRef) error {
+	err := discover(ctx, func(ref parser.SourceRef) error {
 		name := filepath.Clean(ref.DisplayPath)
 		matched, err := matches(name)
 		if err != nil {

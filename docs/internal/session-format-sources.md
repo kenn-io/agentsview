@@ -3436,6 +3436,14 @@ schemas keep their existing ordering behavior.
   stored path or fingerprint hint scans discovered session headers after the
   filename and directory lookups miss. Data version 109 reparses stored native
   Pi sessions to repair lineage edges and fork classification.
+- **Native resume, reverified 2026-11-12:** At the pinned session manager,
+  current format version is 3; the first parsed entry must be a session with a
+  string ID. Blank and malformed lines can precede that entry, while a parsed
+  title cannot. An idless legacy file can be indexed by Agentsview but cannot
+  be opened by this Pi version. `SessionManager.open` uses the header cwd;
+  materialization changes only that value, resolves the checkout through
+  symlinks, and preserves the native ID. The installer bounds header lookup to
+  1 MiB and refuses newer formats or unsafe identity-derived filenames.
 
 ## Prime Agent (`prime-agent`)
 

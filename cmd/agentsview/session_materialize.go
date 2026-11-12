@@ -23,7 +23,7 @@ func newSessionMaterializeCommand() *cobra.Command {
 		Short: "Install original session files for native resume",
 		Long: "Install a Claude or Pi session and its companions from configured local, mirror, S3, or snapshot sources for a local checkout, then print a resume command. " +
 			"Requires a local archive with conversation content; the original files must total at most 512 MiB. " +
-			"End the running Claude session and wait for any S3 uploader to finish before materializing. " +
+			"End the running session and wait for any S3 uploader to finish before materializing. " +
 			"Local retained and directory captures and Codex are not yet supported. Pi keeps no captures.",
 		Example: "  agentsview session materialize <id> --cwd <path>",
 		Args:    cobra.ExactArgs(1),
