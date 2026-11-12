@@ -792,6 +792,13 @@ func TestExportWaitDuringDaemonChanges(t *testing.T) {
 				t.Setenv("AGENTSVIEW_SIGNING_KEY_FILE", filepath.Join(t.TempDir(), "key"))
 			}
 			path := pendingExportArchive(t, false)
+			if mode == "single ping" {
+				raw, err := sql.Open("sqlite3", path)
+				require.NoError(t, err)
+				_, err = raw.ExecContext(t.Context(), `INSERT INTO background_migrations (name, state) VALUES (?, 'pending')`, db.ProjectIdentityBackfillName)
+				require.NoError(t, err)
+				require.NoError(t, raw.Close())
+			}
 			dir := filepath.Dir(path)
 			var fail, observed, calls atomic.Int32
 			ping := daemon.NewPingHandler(daemon.PingHandlerOptions{Service: daemonService, Version: "test"})
@@ -881,12 +888,30 @@ func TestExportDaemonPing(t *testing.T) {
 			}))
 			t.Cleanup(ts.Close)
 			ep := serverEndpoint(t, ts)
-			rt := &DaemonRuntime{Record: daemon.RuntimeRecord{PID: 42, Address: ep.Addr}, BasePath: "/nested"}
+			rt := &DaemonRuntime{Record: daemon.RuntimeRecord{PID: 42, Address: ep.Addr, Metadata: map[string]string{runtimeBrowserURL: "http://example.com/nested"}}}
 			failed, ok := exportDaemonPing(t.Context(), rt, "example-token")
 			assert.Equal(t, tc.wantFailure, failed)
 			assert.Equal(t, tc.wantOK, ok)
 		})
 	}
+}
+
+func TestExportStatusReportsLiveFailureWithOnePing(t *testing.T) {
+	path := pendingExportArchive(t, false)
+	var calls atomic.Int32
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		calls.Add(1)
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = fmt.Fprintf(w, `{"ok":true,"service":"agentsview","pid":%d,"project_identity_backfill_error":"blocked"}`, os.Getpid())
+	}))
+	t.Cleanup(ts.Close)
+	ep := serverEndpoint(t, ts)
+	writeDaemonRuntimeForTest(t, filepath.Dir(path), ep.Host, ep.Port, "test", false)
+	stdout, _, err := executeExportSessionsCommand(newRootCommand(), "export", "status")
+	require.NoError(t, err)
+	assert.Contains(t, stdout, "blocked")
+	assert.Contains(t, stdout, "agentsview daemon restart")
+	assert.EqualValues(t, 1, calls.Load())
 }
 
 func stubExportDaemon(t *testing.T, dir string) func() {

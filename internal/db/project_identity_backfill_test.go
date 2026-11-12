@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/mattn/go-sqlite3"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
@@ -110,6 +111,33 @@ func TestPendingProjectIdentityStatusCountsMissingSnapshots(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, "pending", status.State)
 	assert.Equal(t, 1, status.TotalItems)
+}
+
+func TestPendingProjectIdentityWaitSkipsSessionScan(t *testing.T) {
+	d := testDB(t)
+	ctx := t.Context()
+	_, err := d.getWriter().ExecContext(ctx, `INSERT INTO background_migrations (name, state) VALUES (?, 'pending')`, ProjectIdentityBackfillName)
+	require.NoError(t, err)
+	d.rawReader().SetMaxOpenConns(1)
+	conn, err := d.getReader().Conn(ctx)
+	require.NoError(t, err)
+	require.NoError(t, conn.Raw(func(raw any) error {
+		raw.(interface {
+			RegisterAuthorizer(func(int, string, string, string) int)
+		}).RegisterAuthorizer(func(op int, table, _, _ string) int {
+			if op == sqlite3.SQLITE_READ && table == "sessions" {
+				return sqlite3.SQLITE_DENY
+			}
+			return sqlite3.SQLITE_OK
+		})
+		return nil
+	}))
+	require.NoError(t, conn.Close())
+	for range 3 {
+		status, err := d.ProjectIdentityBackfillProgress(ctx)
+		require.NoError(t, err)
+		assert.Equal(t, "pending", status.State)
+	}
 }
 
 func TestEnsureProjectIdentityBackfillRequeuesUnverifiedCompletedGap(

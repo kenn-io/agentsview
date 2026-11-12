@@ -7,7 +7,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"net/http"
 	"sort"
 	"strings"
 	"time"
@@ -17,7 +16,6 @@ import (
 	"go.kenn.io/agentsview/internal/config"
 	"go.kenn.io/agentsview/internal/db"
 	"go.kenn.io/agentsview/internal/export"
-	"go.kenn.io/agentsview/internal/server"
 	"go.kenn.io/kit/daemon"
 )
 
@@ -403,34 +401,17 @@ func exportDaemonPing(ctx context.Context, rt *DaemonRuntime, token string) (fai
 	if rt == nil {
 		return "", false
 	}
-	ctx, cancel := context.WithTimeout(ctx, time.Second)
-	defer cancel()
-	ep := rt.Record.Endpoint()
-	client := ep.HTTPClient(daemon.HTTPClientOptions{Timeout: time.Second, DisableKeepAlives: true})
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, ep.BaseURL()+rt.BasePath+daemon.DefaultPingPath, nil)
-	if err != nil {
-		return "", false
-	}
-	if token != "" {
-		req.Header.Set("Authorization", "Bearer "+token)
-	}
-	resp, err := client.Do(req)
-	if err != nil {
-		return "", false
-	}
-	defer func() { _ = resp.Body.Close() }()
-	var info server.PingInfo
-	if resp.StatusCode != http.StatusOK || json.UnmarshalRead(resp.Body, &info) != nil || !info.OK || info.Service != daemonService || info.PID != rt.Record.PID {
-		return "", false
-	}
-	return info.ProjectIdentityBackfillError, true
+	info, err := probeRuntime(ctx, rt.Record, token, daemon.ProbeOptions{ExpectedService: daemonService, Timeout: time.Second})
+	return info.BackfillError, err == nil && info.PID == rt.Record.PID
 }
 
 func exportWritableDaemonPing(ctx context.Context, cfg *config.Config, rt **DaemonRuntime) (failure string, ok bool) {
 	failure, ok = exportDaemonPing(ctx, *rt, cfg.AuthToken)
 	if !ok {
 		*rt = FindWritableDaemonRuntime(cfg.DataDir, cfg.AuthToken)
-		failure, ok = exportDaemonPing(ctx, *rt, cfg.AuthToken)
+		if *rt != nil {
+			return (*rt).BackfillError, true
+		}
 	}
 	return failure, ok
 }
@@ -445,8 +426,9 @@ func exportStatusWithFailure(status db.BackgroundMigrationStatus, failure string
 func exportStatusWithLiveFailure(ctx context.Context, cfg *config.Config, status db.BackgroundMigrationStatus) db.BackgroundMigrationStatus {
 	if status.State != "completed" && status.State != "not_needed" && cfg.ApplyDeploymentAuth() == nil {
 		rt := FindWritableDaemonRuntime(cfg.DataDir, cfg.AuthToken)
-		failure, _ := exportDaemonPing(ctx, rt, cfg.AuthToken)
-		status = exportStatusWithFailure(status, failure)
+		if rt != nil {
+			status = exportStatusWithFailure(status, rt.BackfillError)
+		}
 	}
 	return status
 }
@@ -463,6 +445,9 @@ func exportPendingError(ctx context.Context, database *db.DB, cfg *config.Config
 }
 
 func exportStatusText(status db.BackgroundMigrationStatus) string {
+	if status.State == "pending" && status.TotalItems == 0 {
+		return status.State
+	}
 	return fmt.Sprintf("%s (%d/%d)", status.State, status.CompletedItems, status.TotalItems)
 }
 
@@ -480,7 +465,7 @@ func waitForExportBackfill(ctx context.Context, progress io.Writer, cfg *config.
 		if err != nil {
 			return err
 		}
-		status, err := database.ProjectIdentityBackfillStatus(ctx)
+		status, err := database.ProjectIdentityBackfillProgress(ctx)
 		_ = database.Close()
 		if err != nil {
 			return fmt.Errorf("checking project identity evidence: %w", err)

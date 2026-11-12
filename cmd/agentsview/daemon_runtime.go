@@ -3,11 +3,13 @@
 package main
 
 import (
+	"bytes"
 	"cmp"
 	"context"
 	"encoding/json/v2"
 	"errors"
 	"fmt"
+	"io"
 	"net"
 	"net/http"
 	"net/url"
@@ -63,6 +65,7 @@ func startProbeTick() time.Duration {
 // DaemonRuntime is the agentsview-specific view of a kit daemon runtime record.
 type DaemonRuntime struct {
 	Record           daemon.RuntimeRecord
+	BackfillError    string
 	Host             string
 	BrowserURL       string
 	BasePath         string
@@ -338,6 +341,7 @@ func FindDaemonRuntime(dataDir string, authToken ...string) *DaemonRuntime {
 			continue
 		}
 		rt := daemonRuntimeFromRecord(rec)
+		rt.BackfillError = info.BackfillError
 		if daemonRuntimeCompatibilityError(rt) != nil {
 			continue
 		}
@@ -466,6 +470,7 @@ func findStartupStateFallback(dataDir, authToken string) *DaemonRuntime {
 	}
 	rec.Version = info.Version
 	rt := daemonRuntimeFromRecord(rec)
+	rt.BackfillError = info.BackfillError
 	rt.RuntimeFallback = true
 	rt.RuntimeError = st.RuntimeError
 	return rt
@@ -557,20 +562,22 @@ func firstAuthToken(tokens []string) string {
 	return tokens[0]
 }
 
+type runtimePing struct {
+	daemon.PingInfo
+	BackfillError string
+}
+
 func probeRuntime(
 	ctx context.Context,
 	rec daemon.RuntimeRecord,
 	authToken string,
 	opts daemon.ProbeOptions,
-) (daemon.PingInfo, error) {
+) (runtimePing, error) {
 	ep := rec.Endpoint()
 	if opts.Path == "" {
 		opts.Path = daemon.DefaultPingPath
 	}
 	opts.Path = daemonRuntimeFromRecord(rec).BasePath + opts.Path
-	if authToken == "" {
-		return daemon.Probe(ctx, ep, opts)
-	}
 	timeout := opts.Timeout
 	if timeout == 0 {
 		timeout = time.Second
@@ -582,11 +589,42 @@ func probeRuntime(
 		Timeout:           timeout,
 		DisableKeepAlives: true,
 	})
-	client.Transport = bearerAuthTransport{
-		token: authToken,
-		base:  client.Transport,
+	if authToken != "" {
+		client.Transport = bearerAuthTransport{token: authToken, base: client.Transport}
 	}
-	return daemon.ProbeHTTP(ctx, client, ep.BaseURL(), opts)
+	var body bytes.Buffer
+	client.Transport = pingCaptureTransport{base: client.Transport, body: &body}
+	info, err := daemon.ProbeHTTP(ctx, client, ep.BaseURL(), opts)
+	if err != nil {
+		return runtimePing{}, err
+	}
+	var outcome struct {
+		BackfillError string `json:"project_identity_backfill_error"`
+	}
+	if err := json.Unmarshal(body.Bytes(), &outcome); err != nil {
+		return runtimePing{}, err
+	}
+	return runtimePing{PingInfo: info, BackfillError: outcome.BackfillError}, nil
+}
+
+type pingCaptureTransport struct {
+	base http.RoundTripper
+	body *bytes.Buffer
+}
+
+func (t pingCaptureTransport) RoundTrip(req *http.Request) (*http.Response, error) {
+	base := t.base
+	if base == nil {
+		base = http.DefaultTransport
+	}
+	resp, err := base.RoundTrip(req)
+	if err == nil {
+		resp.Body = struct {
+			io.Reader
+			io.Closer
+		}{io.TeeReader(resp.Body, t.body), resp.Body}
+	}
+	return resp, err
 }
 
 type bearerAuthTransport struct {

@@ -134,6 +134,15 @@ func (db *DB) EnsureProjectIdentityBackfillQueued(ctx context.Context) error {
 func (db *DB) ProjectIdentityBackfillStatus(
 	ctx context.Context,
 ) (BackgroundMigrationStatus, error) {
+	return db.projectIdentityBackfillStatus(ctx, true)
+}
+
+// ProjectIdentityBackfillProgress avoids recounting an unstarted queued job.
+func (db *DB) ProjectIdentityBackfillProgress(ctx context.Context) (BackgroundMigrationStatus, error) {
+	return db.projectIdentityBackfillStatus(ctx, false)
+}
+
+func (db *DB) projectIdentityBackfillStatus(ctx context.Context, countPending bool) (BackgroundMigrationStatus, error) {
 	if ctx == nil {
 		ctx = context.Background()
 	}
@@ -173,7 +182,7 @@ func (db *DB) ProjectIdentityBackfillStatus(
 			}
 			return status, nil
 		}
-		if status.State == "pending" && status.TotalItems == 0 {
+		if countPending && status.State == "pending" && status.TotalItems == 0 {
 			missing, countErr := db.countMissingProjectIdentitySnapshots(ctx)
 			if countErr != nil {
 				return status, countErr
