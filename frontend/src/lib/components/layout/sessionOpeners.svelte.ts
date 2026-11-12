@@ -172,10 +172,9 @@ export class SessionOpeners {
     if (!session) return;
     this.menuOpen = false;
     try {
-      const resp = await SessionsService.postApiV1SessionsByIdResume(
-        { id: session.id },
-        { opener_id: opener.id } satisfies ResumeRequest,
-      );
+      const resp = await SessionsService.postApiV1SessionsByIdResume({ id: session.id }, {
+        opener_id: opener.id,
+      } satisfies ResumeRequest);
       if (resp.launched) {
         this.showFeedback(
           m.session_breadcrumb_resumed_in({
@@ -205,10 +204,9 @@ export class SessionOpeners {
     if (!session) return;
     this.menuOpen = false;
     try {
-      const resp = await SessionsService.postApiV1SessionsByIdResume(
-        { id: session.id },
-        { command_only: true } satisfies ResumeRequest,
-      );
+      const resp = await SessionsService.postApiV1SessionsByIdResume({ id: session.id }, {
+        command_only: true,
+      } satisfies ResumeRequest);
       if (resp.command) {
         const cmd = formatResumeResponseCommand(session.agent, resp);
         const ok = cmd ? await copyToClipboard(cmd) : false;
@@ -242,10 +240,7 @@ export class SessionOpeners {
     if (!session) return;
     this.menuOpen = false;
     try {
-      await SessionsService.postApiV1SessionsByIdOpen(
-        { id: session.id },
-        { opener_id: opener.id },
-      );
+      await SessionsService.postApiV1SessionsByIdOpen({ id: session.id }, { opener_id: opener.id });
       this.showFeedback(
         m.session_breadcrumb_opened_in({
           target: opener.name,

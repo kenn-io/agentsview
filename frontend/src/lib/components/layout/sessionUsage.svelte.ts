@@ -119,7 +119,9 @@ export class SessionUsage {
 
   // The usage root's title names the link; the link itself needs only the ID.
   readonly rootId = $derived(
-    this.planUsage?.outcome_kind === "counted_under" ? (this.planUsage.counted_under ?? null) : null,
+    this.planUsage?.outcome_kind === "counted_under"
+      ? (this.planUsage.counted_under ?? null)
+      : null,
   );
 
   // Waits for the usage read, so a slow read never shows "not checked yet"
@@ -254,11 +256,7 @@ export class SessionUsage {
         this.costFetchKey = key;
         this.rollupSubagentCount = res.rollup_subagent_count ?? 0;
         this.costIsRollup = this.rollupSubagentCount > 0 && res.has_rollup_cost === true;
-        this.cost = this.costIsRollup
-          ? (res.rollup_cost ?? null)
-          : res.has_cost
-            ? res.cost
-            : null;
+        this.cost = this.costIsRollup ? (res.rollup_cost ?? null) : res.has_cost ? res.cost : null;
         this.breakdownCount = res.breakdown_count ?? 0;
         this.planUsage = res.plan_usage ?? null;
         this.captureCoverage = res.capture_coverage ?? null;
