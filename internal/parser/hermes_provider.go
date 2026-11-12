@@ -143,15 +143,21 @@ func (p *hermesProvider) SourceForReconciliation(
 // profile disappears. Membership spelling does not claim discovery completeness.
 func (p *hermesProvider) StoredSourceHintScopes(req ChangedPathRequest) []StoredSourceHintScope {
 	for _, root := range p.sources.roots {
+		var stateDB string
 		if isHermesProfilesContainer(root) {
+			profileRoot, ok := hermesProfileRootForPath(root, req.Path)
+			if !ok {
+				continue
+			}
+			stateDB = filepath.Join(profileRoot, "state.db")
+		} else {
 			var ok bool
-			root, ok = hermesProfileRootForPath(root, req.Path)
+			stateDB, _, ok = hermesArchivePathsForEvent(root, req.Path)
 			if !ok {
 				continue
 			}
 		}
-		stateDB, _, ok := hermesArchivePathsForEvent(root, req.Path)
-		if ok && samePath(req.Path, stateDB) {
+		if samePath(req.Path, stateDB) {
 			return []StoredSourceHintScope{{Path: stateDB, IncludeVirtualMembers: true}}
 		}
 	}

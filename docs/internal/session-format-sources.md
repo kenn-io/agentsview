@@ -4514,7 +4514,7 @@ schemas keep their existing ordering behavior.
   including after a profile disappears. Reverified 2026-11-12 with a state
   session moved between two configured roots: syncing its former root, even
   after removing the old profile, preserves the complete archived session as
-  source-present.
+  source-present. This includes profiles named `sessions` or `state.db`.
 
 ## Forge (`forge`)
 

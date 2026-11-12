@@ -1064,14 +1064,17 @@ func TestReconcileHermesUnreadableStateDBSyncsTranscriptsWithoutTombstones(
 func TestReconcileHermesScopedRootPreservesStateMemberMovedToAnotherRoot(t *testing.T) {
 	for _, test := range []struct {
 		name          string
+		profileName   string
 		removeProfile bool
 	}{
-		{name: "existing archive"},
-		{name: "removed profile", removeProfile: true},
+		{name: "existing archive", profileName: "first"},
+		{name: "removed profile", profileName: "first", removeProfile: true},
+		{name: "removed sessions profile", profileName: "sessions", removeProfile: true},
+		{name: "removed state.db profile", profileName: "state.db", removeProfile: true},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			profilesRoot := filepath.Join(t.TempDir(), ".hermes", "profiles")
-			firstRoot := filepath.Join(profilesRoot, "first")
+			firstRoot := filepath.Join(profilesRoot, test.profileName)
 			require.NoError(t, os.MkdirAll(firstRoot, 0o755))
 			secondRoot := t.TempDir()
 			firstStateDB := writeHermesArchiveStateDB(t, firstRoot)
@@ -1092,9 +1095,9 @@ func TestReconcileHermesScopedRootPreservesStateMemberMovedToAnotherRoot(t *test
 				Machine: "local",
 			})
 			t.Cleanup(engine.Close)
-			require.NoError(t, engine.ReconcileWatchRootsAfterLostEvents(
-				t.Context(), nil, true,
-			))
+			stats := engine.SyncAll(t.Context(), nil)
+			require.Zero(t, stats.Failed)
+			require.Positive(t, stats.Synced)
 
 			before, err := database.GetSessionFull(t.Context(), "hermes:child")
 			require.NoError(t, err)
