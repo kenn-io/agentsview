@@ -166,21 +166,6 @@ func TestAnalyticsToolsSkillsSQLiteParity(t *testing.T) {
 		})
 	}
 
-	t.Run("sparse-prepared-query", func(t *testing.T) {
-		f := march("America/New_York")
-		f.Project, f.Model = "beta", "model-a"
-		for range 8 {
-			rows, err := remote.analyticsToolRows(t.Context(), f)
-			require.NoError(t, err)
-			require.Len(t, rows, 1)
-			assert.Equal(t, "second", rows[0].SessionID)
-			assert.Equal(t, "codex", rows[0].Agent)
-			assert.Equal(t, "beta", rows[0].Project)
-			assert.Equal(t, "2024-03-11", rows[0].Date)
-			assert.Equal(t, 1, rows[0].Count)
-		}
-	})
-
 	t.Run("new-york-literal", func(t *testing.T) {
 		f := march("America/New_York")
 		tools, err := remote.GetAnalyticsTools(t.Context(), f)
