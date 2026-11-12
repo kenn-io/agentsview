@@ -371,7 +371,7 @@ func doctorMemoryTargetMatches(
 	selection doctorMemoryTargetSelection, remote skills.Remote,
 ) bool {
 	switch selection.Kind {
-	case "local":
+	case "local", "postgresql":
 		return remote.Empty()
 	case "server":
 		return strings.TrimRight(strings.TrimSpace(remote.Server), "/") == selection.server

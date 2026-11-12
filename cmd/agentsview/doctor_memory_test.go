@@ -278,3 +278,20 @@ func TestDoctorMemoryReportsInstalledAgentSetup(t *testing.T) {
 	require.EqualValues(t, "missing", report.Client.Rows[1].State)
 	require.Equal(t, "agentsview agent setup", report.Client.Rows[1].NextStep)
 }
+
+func TestDoctorMemoryPostgresWithStandaloneSkill(t *testing.T) {
+	home := t.TempDir()
+	setDoctorMemoryTestEnvironment(t, home)
+	t.Setenv("CLAUDE_CONFIG_DIR", "")
+	t.Setenv("CODEX_HOME", "")
+	t.Setenv("AGENTSVIEW_MEMORY_PG", "true")
+	bin := t.TempDir()
+	t.Setenv("PATH", bin)
+	require.NoError(t, os.WriteFile(filepath.Join(bin, "claude"), []byte("#!/bin/sh\nprintf 'Scope: User config\\nStatus: Connected\\n'\n"), 0755))
+	out, err := executeCommand(newRootCommand(), "agent", "setup", "--agent", "claude")
+	require.NoError(t, err, out)
+	selection := doctorMemoryTargetSelection{Kind: "postgresql"}
+	client := inspectDoctorAgentSetup(t.Context(), inspectDoctorMemoryClient("", selection), selection)
+	require.Equal(t, service.MemoryReady, client.Status)
+	require.Empty(t, client.Reason)
+}

@@ -24,6 +24,9 @@ func newAgentCommand() *cobra.Command {
 		if err != nil {
 			return nil, err
 		}
+		if !remote.explicit && strings.TrimSpace(os.Getenv("AGENTSVIEW_MEMORY_SERVER")) == "" && strings.TrimSpace(os.Getenv("AGENTSVIEW_MEMORY_SERVER_TOKEN_FILE")) != "" {
+			return nil, errors.New("AGENTSVIEW_MEMORY_SERVER_TOKEN_FILE requires AGENTSVIEW_MEMORY_SERVER")
+		}
 		if !remote.explicit && strings.TrimSpace(os.Getenv("AGENTSVIEW_MEMORY_SERVER")) != "" {
 			remote.flag = skills.Remote{Server: strings.TrimSpace(os.Getenv("AGENTSVIEW_MEMORY_SERVER")), TokenFile: strings.TrimSpace(os.Getenv("AGENTSVIEW_MEMORY_SERVER_TOKEN_FILE"))}
 			remote.explicit = true
@@ -89,7 +92,11 @@ func setupItems(agent string, source skillRemoteSource, force bool) ([]agentsetu
 		case agentsetup.StateOutdated:
 			status.Reason, status.NextStep = "MCP entry differs from requested setup", "Remove it in the client or run agentsview agent setup --force"
 		case agentsetup.StateFailed, agentsetup.StateUnknown:
-			status.Reason, status.NextStep = "MCP client check could not verify the server", "agentsview agent setup --check"
+			if strings.Contains(strings.ToLower(status.Reason), "connection refused") {
+				status.Reason, status.NextStep = "MCP connection refused", "Check that the server is running, then retry"
+			} else {
+				status.Reason, status.NextStep = "MCP client check could not verify the server", "agentsview agent setup --check"
+			}
 		}
 		return status, nil
 	}
@@ -139,10 +146,6 @@ func setupItems(agent string, source skillRemoteSource, force bool) ([]agentsetu
 		}
 		if mcpStatus.State == agentsetup.StateUnknown && plan.Changed {
 			return errors.New("Unable to inspect MCP configuration")
-		}
-		if !plan.Changed && mcpStatus.State != agentsetup.StateOK {
-			cached = &mcpStatus
-			return errors.New("MCP client could not confirm the server; rerun setup")
 		}
 		if err := runSkillsInstall(io.Discard, []skills.Harness{harness}, home, force, source); err != nil {
 			return errors.New("Unable to install skill files")

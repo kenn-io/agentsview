@@ -77,21 +77,19 @@ func newSkillsInstallCommand() *cobra.Command {
 			if err := runSkillsInstall(cmd.OutOrStdout(), harnesses, base, force, remote); err != nil {
 				return err
 			}
-			if !project {
-				for _, h := range harnesses {
-					agent := "codex"
-					if h == skills.HarnessClaude {
-						agent = "claude"
-					}
-					items, err := setupItems(agent, remote, false)
-					if err != nil {
-						continue
-					}
-					status, err := items[1].Check(cmd.Context())
-					if err == nil && status.State == "missing" {
-						fmt.Fprintln(cmd.OutOrStdout(), "Set up MCP with agentsview agent setup")
-						break
-					}
+			for _, h := range harnesses {
+				agent := "codex"
+				if h == skills.HarnessClaude {
+					agent = "claude"
+				}
+				items, err := setupItems(agent, remote, false)
+				if err != nil {
+					continue
+				}
+				status, err := items[1].Check(cmd.Context())
+				if err == nil && status.State == "missing" {
+					fmt.Fprintln(cmd.OutOrStdout(), "Set up MCP with agentsview agent setup")
+					break
 				}
 			}
 			return nil
@@ -139,6 +137,11 @@ func runSkillsInstall(
 			}
 			state := skills.Classify(existing, rendered)
 
+			if state == skills.StateCurrent {
+				fmt.Fprintf(out, "up to date %s\n", path)
+				continue
+			}
+
 			if !force && (state == skills.StateModified || state == skills.StateForeign) {
 				fmt.Fprintf(out, "%s was modified (or not generated); use --force to overwrite\n", path)
 				refused = append(refused, path)
@@ -156,8 +159,6 @@ func runSkillsInstall(
 			switch state {
 			case skills.StateMissing:
 				fmt.Fprintf(out, "installed %s\n", path)
-			case skills.StateCurrent:
-				fmt.Fprintf(out, "up to date %s\n", path)
 			default: // StateStale, or StateModified/StateForeign forced
 				fmt.Fprintf(out, "updated %s\n", path)
 			}
