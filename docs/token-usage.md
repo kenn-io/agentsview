@@ -876,8 +876,9 @@ workflow also:
   second index to keep fresh.
 - **Reads committed archive data** — daily reports can run while the daemon
   imports new source changes. Run `agentsview source sync` first when those changes
-  must be included. Session usage and statusline finish any pending startup
-  ingestion before querying, including when they reuse an existing daemon.
+  must be included. Statusline finishes pending startup ingestion before querying.
+  Session usage attempts a targeted refresh by default and may return saved totals
+  while startup is pending.
 
 <a id="agentsview-usage-daily"></a>
 
@@ -1311,8 +1312,14 @@ daemon's file watcher handles later source changes.
 During a full parser rebuild, statusline skips startup ingestion and reads the
 retained archive with a stale warning.
 
-`session usage` and its `token-use` alias refresh known sessions without
-waiting for startup ingestion. Combined totals include archived descendants.
+`session usage` and its `token-use` alias attempt to refresh known sessions
+without waiting by default. Pass `session usage --wait` to wait for startup or
+a rebuild before refreshing; known sessions can refresh during catch-up.
+Missing sessions are looked up until the wait expires. A confirmed missing ID
+returns exit 2 when status is clear; an incomplete lookup, pending work, or
+unavailable status returns a retry error.
+`--own-only --wait` can start deferred ingestion, then reads its own archived
+usage. Combined totals include archived descendants.
 See the [session usage contract](/docs/session-api/#agentsview-session-usage)
 for refresh behavior, missing-session exit codes, and the `refresh_incomplete`
 JSON field.

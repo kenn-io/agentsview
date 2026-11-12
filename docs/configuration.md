@@ -2514,7 +2514,9 @@ curl http://127.0.0.1:8080/api/v1/sync/status
 ```
 
 The JSON response includes `startup_pending`, `archive_stale`, and, starting
-with daemon API 15, `sync_pending` alongside sync progress.
+with daemon API 15, `sync_pending` alongside sync progress. See the
+[session usage contract](/docs/session-api/#agentsview-session-usage) for how
+`session usage --wait` uses these states.
 
 ## Privacy and Telemetry
 

@@ -1054,7 +1054,7 @@ request.
   returns from the rollup branch first, so `subagents` has no effect.
 
 ```bash
-agentsview session usage <id> [--format json] [--own-only] [--no-sync]
+agentsview session usage <id> [--format json] [--own-only] [--no-sync] [--wait]
 ```
 
 ```json
@@ -1129,6 +1129,7 @@ agentsview session usage <id> [--format json] [--own-only] [--no-sync]
 | `session_total`         | Present when the agent recorded a total for the whole session (Claude Code `cost-state`). `source`, `subagent_scope` (`included`, `excluded`, or omitted when unknown), `cost`, `incomplete` when the agent could not price every model, and per-model `models` token counts and costs. It overlaps the usage rows, so it is never part of `cost` or the token totals; compare it with a result that includes subagents when `subagent_scope` is `included`. The human output shows it as an `Agent total:` line |
 | `server_running`        | `true` when the report came from an already-running daemon                                                                                                                                                                                       |
 | `refresh_incomplete`   | Present as `true` when a requested source refresh was refused or failed; the result still contains archived totals                                                                                                                                 |
+| `wait_incomplete`      | Present as `true` when an archive-only wait failed; the result contains saved totals |
 | `rollup_cost`           | REST only, with `rollup=true`; integer microdollar object present only when `has_rollup_cost` is true, carrying the complete cost across the root and explicit subagent descendants                                                              |
 | `has_rollup_cost`       | REST only, with `rollup=true`; true only when at least one contributing row exists and every contributing row is priced                                                                                                                          |
 | `rollup_subagent_count` | REST only, with `rollup=true`; count of reachable explicit subagent descendants, including those without usage rows                                                                                                                              |
@@ -1273,14 +1274,24 @@ did before. A Codex Cloud session with plan usage figures but no captured tokens
 exits `0`. A sub-agent chat counted under its root, or a session whose plan
 usage has not been reported, exits `3`.
 
-Combined usage refreshes a known session and nearby Claude subagent transcripts
-without waiting for startup ingestion. The CLI requests this with
+By default, combined usage attempts to refresh a known session and nearby
+Claude subagent transcripts without waiting for startup ingestion. The CLI requests this with
 `usage_refresh: true`, `id`, and `subagents: true` on
 `POST /api/v1/sessions/sync`. If refresh is refused or fails, the command
 returns archived totals with a warning; JSON sets `refresh_incomplete: true`.
 A missing daemon ID returns a retry error while `GET /api/v1/sync/status`
 reports `startup_pending`, `archive_stale`, or `sync_pending`. Once all three
-are clear, it returns exit 2. Scheduled ingestion owns retries.
+are clear, it returns exit 2 without `--wait`. Pass `--wait` to give HTTP lookup, ingestion,
+and refresh a shared 30-second budget after daemon discovery. When startup is
+deferred, combined usage requests it once and keeps observing status if that
+request fails; it does not start an archive rebuild. A known session may refresh
+while catch-up is pending once startup and rebuild are clear. A missing ID is
+looked up repeatedly after startup and rebuild clear, including during catch-up.
+At the deadline, a confirmed absent ID returns exit 2 if status is clear; an
+incomplete lookup, pending work, or unavailable status returns a retry error.
+Only a confirmed parent lock refusal permits a refresh retry. If waiting fails or expires, the
+command reads available saved totals and reports that the wait did not finish.
+An ID that is still absent while work remains pending returns a retry error.
 
 Daemon API 15 adds `sync_pending`, which stays true while ingestion catches up
 after an idle period. Older local clients must upgrade to interpret it. The
@@ -1289,13 +1300,20 @@ are logged. Archive responses carry `X-Agentsview-Archive-Stale: true` while
 catch-up is incomplete. A required parser rebuild uses the stale header
 independently.
 
-HTTP `--own-only` and `--no-sync` read only the archive and return exit 2 for
-missing IDs. Direct mode still refreshes the named transcript. Combined HTTP
+HTTP `--own-only` reads usage from the archive and, with `--wait`, can start
+deferred ingestion. HTTP `--no-sync` reads the archive and never starts source
+sync. If the wait fails, the command
+warns and JSON sets `wait_incomplete: true` without marking a refresh. Direct
+and PostgreSQL reads do not wait for a daemon. HTTP archive-only waits require
+daemon API 15; waits that refresh require API 17. Upgrade or restart an older
+server, and upgrade the client for a newer server API. Direct mode still refreshes the named transcript. Combined HTTP
 refresh requires daemon API 12; upgrade or restart older servers, or use
 `--no-sync`. Archived combined reads require API 6. `POST /api/v1/sessions/sync`
 returns HTTP 409 for a stale local archive for every caller, including
 `session sync`. A usage refresh also returns HTTP 409 while startup ingestion
-is incomplete or another sync holds the engine. When startup ingestion is
+is incomplete or another sync holds the engine. Only a refusal before the parent
+refresh acquired its lock carries the code `session_refresh_not_started`; other
+conflicts do not authorize a refresh retry. When startup ingestion is
 deferred, its automatic fallback starts after a 30-second grace period.
 
 Pass `--no-sync` to read archived usage without refreshing source transcripts.

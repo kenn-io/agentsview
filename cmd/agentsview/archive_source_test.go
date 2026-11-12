@@ -5,10 +5,12 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json/v2"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	stdsync "sync"
 	"testing"
 	"time"
 
@@ -134,6 +136,59 @@ func TestDaemonIngestionWakeIncludesAttachedHistory(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, messages, 1)
 	assert.Equal(t, "archived message", messages[0].Content)
+}
+
+func TestSessionUsageWaitFindsLateAttachedHistory(t *testing.T) {
+	shortenSessionUsagePoll(t)
+	cfg := testConfigWithClaudeFixture(t)
+	cfg.Host = "127.0.0.1"
+	cfg.ArchiveSources = []config.ArchiveSource{archiveSourceCommandFixture(t)}
+	database := dbtest.OpenTestDBAt(t, cfg.DBPath)
+	engine := sync.NewEngine(t.Context(), database, localSyncEngineConfig(cfg))
+	t.Cleanup(engine.Close)
+	engine.SyncAll(t.Context(), nil)
+	require.True(t, engine.StartupReconciled())
+	attached, err := archivesource.NewManager(t.Context(), cfg, database, engine, nil)
+	require.NoError(t, err)
+	t.Cleanup(attached.Close)
+	release := make(chan struct{})
+	var releaseOnce stdsync.Once
+	drained := make(chan error, 1)
+	done := make(chan struct{})
+	t.Cleanup(func() { releaseOnce.Do(func() { close(release) }); <-done })
+	go func() {
+		defer close(done)
+		select {
+		case <-release:
+			_, err := attached.Drain(t.Context(), nil)
+			drained <- err
+		case <-t.Context().Done():
+			drained <- t.Context().Err()
+		}
+	}()
+	const id = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa~saved"
+	ln, err := (&net.ListenConfig{}).Listen(t.Context(), "tcp", "127.0.0.1:0")
+	require.NoError(t, err)
+	cfg.Port = ln.Addr().(*net.TCPAddr).Port
+	srv := server.New(cfg, database, engine, server.WithArchiveSources(attached))
+	lookups := 0
+	ts := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		srv.Handler().ServeHTTP(w, r)
+		if r.URL.Path == "/api/v1/sessions/"+id {
+			lookups++
+			if lookups == 2 {
+				releaseOnce.Do(func() { close(release) })
+			}
+		}
+	}))
+	ts.Listener = ln
+	ts.Start()
+	t.Cleanup(ts.Close)
+	out, _, err := httpSessionUsageData(t.Context(), ts.URL, "", sessionUsageQuery{SessionID: id, Wait: true, NoSync: true})
+	require.NoError(t, err)
+	require.NotNil(t, out)
+	assert.Equal(t, id, out.SessionID)
+	require.NoError(t, <-drained)
 }
 
 func TestAttachedSourcesDrainAfterRebuildWithDeferredFork(t *testing.T) {

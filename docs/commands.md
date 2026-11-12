@@ -2157,6 +2157,7 @@ agentsview session search <pattern>      # content search across sessions
 agentsview session diagnose <id> --format json  # archived usage and diagnostic evidence
 agentsview session usage <id>            # token usage and cost estimate
 agentsview session usage <id> --own-only # exclude subagent transcripts
+agentsview session usage <id> --wait     # wait up to 30 seconds after daemon discovery
 agentsview session usage-batch <id>...   # ordered usage results for several sessions
 agentsview session label <id> k=v ...    # add or remove labels
 agentsview session parent <id> <parent>  # record the launching session

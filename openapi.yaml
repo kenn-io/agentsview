@@ -21227,6 +21227,7 @@ paths:
         - Sessions
   /api/v1/sessions/sync:
     post:
+      description: A usage refresh refused before acquiring the parent sync lock returns HTTP 409 with code session_refresh_not_started. Other conflicts do not carry this code.
       operationId: post-api-v1-sessions-sync
       requestBody:
         content:

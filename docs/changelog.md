@@ -11,6 +11,10 @@ The latest release is
 
 **New features**
 
+- `agentsview session usage <id> --wait` waits for ingestion or a rebuild and
+  returns saved totals if the wait ends before a refresh completes. Restart a
+  running older daemon to use the updated CLI.
+
 - A `[custom_model_pricing."<model>"]` entry can set `price_as` to price a model
   name exactly like a catalog model, such as a private gateway deployment name
   that serves `gpt-6-sol`. The name inherits that model's long-context tiers

@@ -12898,7 +12898,7 @@ func (e *Engine) syncSingleSessionContext(ctx context.Context, sessionID string,
 	}
 	ctx = e.parsePolicyContext(ctx)
 	if err := e.lockSync(try); err != nil {
-		return err
+		return fmt.Errorf("%w: %w", ErrSessionRefreshNotStarted, err)
 	}
 	preserved := false
 	sessionsChanged := false

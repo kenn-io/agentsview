@@ -20,6 +20,7 @@ import (
 	"go.kenn.io/agentsview/internal/export"
 	"go.kenn.io/agentsview/internal/requestsign"
 	"go.kenn.io/agentsview/internal/service"
+	syncpkg "go.kenn.io/agentsview/internal/sync"
 )
 
 // errHTTPNotFound is returned by the generated client adapter for 404 responses so callers
@@ -53,6 +54,13 @@ type httpStatusError struct {
 	path       string
 	statusCode int
 	body       []byte
+}
+
+type sessionRefreshNotStartedError struct{ error }
+
+func (e *sessionRefreshNotStartedError) Unwrap() error { return e.error }
+func (e *sessionRefreshNotStartedError) Is(target error) bool {
+	return target == syncpkg.ErrSessionRefreshNotStarted
 }
 
 func (e *httpStatusError) Error() string {
@@ -657,6 +665,14 @@ func (b *httpBackend) Sync(
 		return nil, fmt.Errorf("sync: daemon at %s: %w", b.baseURL, db.ErrReadOnly)
 	}
 	if err := serviceResponseError(response.HTTPResponse, response.Body, err); err != nil {
+		if response.StatusCode == http.StatusConflict {
+			var body struct {
+				Code string `json:"code"`
+			}
+			if json.Unmarshal(response.Body, &body) == nil && body.Code == service.SessionRefreshNotStartedCode {
+				return nil, &sessionRefreshNotStartedError{err}
+			}
+		}
 		return nil, err
 	}
 
