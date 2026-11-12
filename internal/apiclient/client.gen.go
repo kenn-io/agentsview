@@ -28333,8 +28333,11 @@ type DBContentMatch struct {
 	IsSidechain     *bool               `json:"is_sidechain,omitempty"`
 
 	// Location Where the match occurred: message, thinking, tool_input, or tool_result.
-	Location        string   `json:"location" validate:"required"`
-	Machine         string   `json:"machine" validate:"required"`
+	Location string `json:"location" validate:"required"`
+	Machine  string `json:"machine" validate:"required"`
+
+	// MatchedWords Number of query words the match holds in ranked word search; zero for other searches.
+	MatchedWords    int64    `json:"matched_words"`
 	Ordinal         int64    `json:"ordinal"`
 	OrdinalRange    []int64  `json:"ordinal_range" validate:"required"`
 	ParentSessionID *string  `json:"parent_session_id,omitempty"`

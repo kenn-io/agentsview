@@ -110,8 +110,10 @@ func TestSearchContentExcludeActiveSince(t *testing.T) {
 func TestSearchContentExcludeActiveChildBeforeLimit(t *testing.T) {
 	d := testDB(t)
 	seedSearchSession(t, d, "parent", "project-a", [][2]string{{"user", "parent text"}})
-	seedSearchSession(t, d, "child", "child-project", [][2]string{{"user", "needle"}})
+	// Word search lists newer messages first among equal matches, so the
+	// child's message is stored last to rank ahead of the independent one.
 	seedSearchSession(t, d, "independent", "project-a", [][2]string{{"user", "needle"}})
+	seedSearchSession(t, d, "child", "child-project", [][2]string{{"user", "needle"}})
 	_, err := d.getWriter().Exec(t.Context(), "UPDATE sessions SET parent_session_id = 'parent', relationship_type = 'subagent' WHERE id = 'child'")
 	require.NoError(t, err)
 	_, err = d.getWriter().Exec(t.Context(), "UPDATE messages SET timestamp = '2024-06-15T11:59:00Z' WHERE session_id = 'child'")

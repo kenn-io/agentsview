@@ -75,6 +75,7 @@ function contentMatch(sessionId: string, ordinal: number, score: number): DbCont
     ordinal_range: [ordinal, ordinal],
     timestamp: `2026-06-${String(ordinal).padStart(2, "0")}T10:00:00Z`,
     snippet: `semantic snippet ${ordinal}`,
+    matched_words: 0,
     score,
   };
 }

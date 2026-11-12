@@ -699,6 +699,36 @@ func TestSearchContent_SubstringMatch(t *testing.T) {
 	assert.Equal(t, "s1", out.Matches[0].SessionID)
 }
 
+func TestSearchContent_RanksExactTextThenWords(t *testing.T) {
+	ts, d := newTestToolset(t)
+	dbtest.SeedSession(t, d, "s1", "proj", func(s *db.Session) {
+		s.MessageCount = 2
+		s.UserMessageCount = 2
+		ended := "2024-06-15T10:00:00Z"
+		s.EndedAt = &ended
+	})
+	require.NoError(t, d.ReplaceSessionMessages(t.Context(), "s1", []db.Message{
+		dbtest.UserMsg("s1", 0, "settle the rounding of invoices"),
+		{
+			SessionID: "s1", Ordinal: 1, Role: "assistant", Content: "checking",
+			ToolCalls: []db.ToolCall{{ToolName: "Bash", ToolUseID: "tu-1", ResultContent: "invoice rounding decision recorded"}},
+		},
+	}))
+
+	search := func(pattern string) []string {
+		t.Helper()
+		_, out, err := ts.searchContent(t.Context(), nil, searchContentIn{Pattern: pattern})
+		require.NoError(t, err)
+		var hits []string
+		for _, m := range out.Matches {
+			hits = append(hits, fmt.Sprintf("%s/%d", m.Location, m.MatchedWords))
+		}
+		return hits
+	}
+	assert.Equal(t, []string{"tool_result/3", "message/2"}, search("invoice rounding decision"))
+	assert.Equal(t, []string{"message/0"}, search(`"rounding of invoices"`))
+}
+
 // TestSearchContent_ContextRedactsSecretByDefault verifies that a secret in
 // a message adjacent to a search match comes back redacted in
 // context_before through the real service (not a fake), proving the MCP
@@ -2113,9 +2143,11 @@ func TestSearchContent_LexicalChildScope(t *testing.T) {
 	svc := servicehttp.NewHTTPBackend(httpServer.URL, "", false, "")
 	st, ct := newInMemoryPair(t, newServer(ServeOptions{Service: svc}))
 	defer func() { require.NoError(t, ct.Close()); require.NoError(t, st.Wait()) }()
-	for _, mode := range []string{"", "regex"} {
+	// Quotes keep the default search to the exact text instead of every
+	// message holding its words.
+	for mode, pattern := range map[string]string{"": `"a-child first prompt"`, "regex": "a-child first prompt"} {
 		result, err := ct.CallTool(t.Context(), callParams(ToolSearchContent, map[string]any{
-			"pattern": "a-child first prompt", "mode": mode, "include_active": true,
+			"pattern": pattern, "mode": mode, "include_active": true,
 		}))
 		require.NoError(t, err)
 		require.False(t, result.IsError)

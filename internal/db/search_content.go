@@ -100,6 +100,8 @@ type ContentMatch struct {
 	Ordinal        int      `json:"ordinal"`
 	Timestamp      string   `json:"timestamp"`
 	Snippet        string   `json:"snippet"`
+	// MatchedWords counts the query words a ranked word search found.
+	MatchedWords int `json:"matched_words" doc:"Number of query words the match holds in ranked word search; zero for other searches."`
 	// Score is the searcher's relevance score for "semantic"/"hybrid" modes,
 	// nil for the other modes which have no comparable ranking signal.
 	Score *float64 `json:"score,omitempty"`
@@ -346,10 +348,20 @@ func hasSource(f ContentSearchFilter, name string) bool {
 
 // searchContentSubstring builds a UNION ALL across the selected sources
 // with a case-insensitive LIKE, scoped to qualifying sessions, ordered by
-// recency then ordinal, fetching Limit+1 rows for cursor detection.
+// recency then ordinal, fetching Limit+1 rows for cursor detection. A query
+// of several words that can search messages also lists messages holding its
+// words after those exact matches; a fully quoted query drops its quotes and
+// matches its text only.
 func (db *DB) searchContentSubstring(
 	ctx context.Context, f ContentSearchFilter,
 ) (ContentSearchPage, error) {
+	if inner, quoted := unquoteContentSearch(f.Pattern); quoted {
+		f.Pattern = inner
+	} else if hasSource(f, "messages") && len(strings.Fields(f.Pattern)) > 1 && db.HasFTS(ctx) {
+		if q, ok := contentWordsQuery(f.Pattern); ok {
+			return db.searchContentWords(ctx, f, q, true)
+		}
+	}
 	if f.SessionID == "" {
 		release, err := db.acquireBulkRead(ctx)
 		if err != nil {
@@ -368,6 +380,25 @@ func (db *DB) searchContentSubstring(
 func (db *DB) substringSearchPage(
 	ctx context.Context, f ContentSearchFilter, candidates substringCandidateFilters,
 ) (ContentSearchPage, error) {
+	union, args := substringUnion(f, candidates)
+	if union == "" {
+		return ContentSearchPage{}, nil
+	}
+	query := "SELECT session_id, project, agent, transcript_revision, location, role, tool_name, " +
+		"ordinal, ts, snippet, '', 0 FROM (" + union + ") ORDER BY " + substringOrder + " LIMIT ? OFFSET ?"
+	args = append(args, f.Limit+1, f.Cursor)
+
+	return db.scanContentMatches(ctx, query, args, f.Limit, f.Cursor, func(body, _ string) string {
+		return f.substringSnippet(body)
+	})
+}
+
+// substringOrder sorts substring matches by session recency, then position.
+const substringOrder = "julianday(sort_ts) DESC, session_id ASC, ordinal ASC, src ASC, row_id ASC, snippet ASC"
+
+// substringUnion selects matches from every chosen source, or returns an
+// empty query when no source is chosen.
+func substringUnion(f ContentSearchFilter, candidates substringCandidateFilters) (string, []any) {
 	scope, scopeArgs := sessionScopeSubquery(f)
 	eventAnchorJoin := LexicalEventAnchorJoinSQL(f.Scope)
 
@@ -492,20 +523,7 @@ func (db *DB) substringSearchPage(
 		args = append(args, like)
 		args = append(args, scopeArgs...)
 	}
-	if len(branches) == 0 {
-		return ContentSearchPage{}, nil
-	}
-
-	query := "SELECT session_id, project, agent, transcript_revision, location, role, tool_name, " +
-		"ordinal, ts, snippet, '' FROM (" +
-		strings.Join(branches, " UNION ALL ") +
-		") ORDER BY julianday(sort_ts) DESC, session_id ASC, ordinal ASC, src ASC, row_id ASC, snippet ASC " +
-		"LIMIT ? OFFSET ?"
-	args = append(args, f.Limit+1, f.Cursor)
-
-	return db.scanContentMatches(ctx, query, args, f.Limit, f.Cursor, func(body, _ string) string {
-		return f.substringSnippet(body)
-	})
+	return strings.Join(branches, " UNION ALL "), args
 }
 
 // scanContentMatches runs query and assembles a ContentSearchPage, treating
@@ -513,41 +531,62 @@ func (db *DB) substringSearchPage(
 // source field; makeSnippet derives the (windowed, redacted) snippet from it
 // so redaction sees whole secrets rather than a pre-truncated window. A final
 // text column passes FTS per-term hits to makeSnippet; other queries select an
-// empty string for it. The returned page then gets its derived unit ranges and
-// lineage assigned by the shared deriveLexicalUnits pass (post-truncation,
-// O(page)).
+// empty string for it. The last column is the matched word count. The
+// returned page then gets its derived unit ranges and lineage assigned by the
+// shared deriveLexicalUnits pass (post-truncation, O(page)).
 func (db *DB) scanContentMatches(
 	ctx context.Context, query string, args []any, limit, cursor int,
 	makeSnippet func(body, termHits string) string,
 ) (ContentSearchPage, error) {
-	rows, err := db.getReader().QueryContext(ctx, query, args...)
+	out, err := scanContentRows(ctx, db.getReader(), query, args, makeSnippet)
 	if err != nil {
-		return ContentSearchPage{}, fmt.Errorf("content search: %w", err)
+		return ContentSearchPage{}, err
+	}
+	return db.contentMatchPage(ctx, out, limit, cursor)
+}
+
+// scanContentRows reads the columns scanContentMatches describes. Columns
+// after them scan into extra, which holds the last row's values.
+func scanContentRows(
+	ctx context.Context, reader messageRowsQuerier, query string, args []any,
+	makeSnippet func(body, termHits string) string, extra ...any,
+) ([]ContentMatch, error) {
+	rows, err := reader.QueryContext(ctx, query, args...)
+	if err != nil {
+		return nil, fmt.Errorf("content search: %w", err)
 	}
 	defer rows.Close()
 	out := make([]ContentMatch, 0)
 	for rows.Next() {
 		var m ContentMatch
 		var body, termHits string
-		if err := rows.Scan(&m.SessionID, &m.Project, &m.Agent,
+		if err := rows.Scan(append([]any{
+			&m.SessionID, &m.Project, &m.Agent,
 			&m.TranscriptRevision,
 			&m.Location, &m.Role, &m.ToolName, &m.Ordinal,
-			&m.Timestamp, &body, &termHits); err != nil {
-			return ContentSearchPage{}, fmt.Errorf("scan match: %w", err)
+			&m.Timestamp, &body, &termHits, &m.MatchedWords,
+		}, extra...)...); err != nil {
+			return nil, fmt.Errorf("scan match: %w", err)
 		}
 		m.Snippet = makeSnippet(body, termHits)
 		out = append(out, m)
 	}
 	if err := rows.Err(); err != nil {
-		return ContentSearchPage{}, err
+		return nil, err
 	}
 	// Close the cursor before deriving units (exhausting Next already
 	// auto-closed it; this keeps the release explicit): deriveLexicalUnits
 	// issues new queries, which must never wait on a connection this cursor
 	// would otherwise still pin.
 	if err := rows.Close(); err != nil {
-		return ContentSearchPage{}, fmt.Errorf("closing content matches: %w", err)
+		return nil, fmt.Errorf("closing content matches: %w", err)
 	}
+	return out, nil
+}
+
+// contentMatchPage treats the (limit+1)-th match as the cursor sentinel and
+// derives unit ranges for the rest.
+func (db *DB) contentMatchPage(ctx context.Context, out []ContentMatch, limit, cursor int) (ContentSearchPage, error) {
 	page := ContentSearchPage{Matches: out}
 	if len(out) > limit {
 		page.Matches = out[:limit]
@@ -1024,6 +1063,14 @@ func (db *DB) searchContentFTS(
 	if !db.HasFTS(ctx) {
 		return ContentSearchPage{}, errFTSUnavailable
 	}
+	if !explicitFTSExpression(f.Pattern) && !containsCJK(f.Pattern) {
+		if q, ok := contentWordsQuery(f.Pattern); ok {
+			return db.searchContentWords(ctx, f, q, false)
+		}
+		// Punctuation alone has no FTS token; match it as text.
+		f.Sources = []string{"messages"}
+		return db.searchContentSubstring(ctx, f)
+	}
 	ftsQuery, err := db.prepareMessageFTSQuery(ctx, f.Pattern)
 	if err != nil {
 		return ContentSearchPage{}, err
@@ -1050,7 +1097,7 @@ func (db *DB) searchContentFTS(
 		SELECT m.session_id, s.project, s.agent,
 			s.transcript_revision, 'message', m.role, '',
 			m.ordinal, COALESCE(m.timestamp,'') AS ts, COALESCE(m.dialogue_text, m.content) AS snippet,
-			%s AS term_hits
+			%s AS term_hits, 0
 		FROM messages_fts
 		JOIN messages m ON m.id = messages_fts.rowid
 		JOIN sessions s ON s.id = m.session_id
@@ -1722,8 +1769,21 @@ func (db *DB) hybridFTSLeg(
 	ctx context.Context, f ContentSearchFilter, searcher VectorSearcher, k int,
 ) (hybridLeg, error) {
 	leg := hybridLeg{display: make(map[string]hybridDisplay, k)}
+	q, words := contentWordsQuery(f.Pattern)
+	words = words && !explicitFTSExpression(f.Pattern)
+	var ranked []hybridDisplay
+	if words {
+		var err error
+		if ranked, err = db.hybridWordHits(ctx, f, q, k*maxHybridFTSBatches); err != nil {
+			return hybridLeg{}, err
+		}
+	}
 	for batch := range maxHybridFTSBatches {
-		hits, err := db.fetchHybridFTSBatch(ctx, f, k, batch*k)
+		hits := ranked[min(batch*k, len(ranked)):min((batch+1)*k, len(ranked))]
+		var err error
+		if !words {
+			hits, err = db.fetchHybridFTSBatch(ctx, f, k, batch*k)
+		}
 		if err != nil {
 			return hybridLeg{}, err
 		}
@@ -1735,6 +1795,34 @@ func (db *DB) hybridFTSLeg(
 		}
 	}
 	return leg, nil
+}
+
+// hybridWordHits lists up to limit embeddable messages by how many query
+// words they hold. It reads them all before the leg resolves units, which
+// queries outside the snapshot.
+func (db *DB) hybridWordHits(
+	ctx context.Context, f ContentSearchFilter, q contentWords, limit int,
+) ([]hybridDisplay, error) {
+	snapshot, err := db.BeginMessageSnapshot(ctx)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = snapshot.Close() }()
+	if err := buildContentWordHits(ctx, snapshot.tx, q); err != nil {
+		return nil, err
+	}
+	scope, args := semanticSessionScopeSubquery(f)
+	where := "m.role IN ('user','assistant') AND m.is_system = 0 AND " +
+		SystemPrefixSQL("m.content", "m.role") + " AND m." + scope
+	matches, err := contentWordRows(ctx, snapshot.tx, f, q, where, args, 0, limit)
+	if err != nil {
+		return nil, err
+	}
+	hits := make([]hybridDisplay, len(matches))
+	for i, m := range matches {
+		hits[i] = hybridDisplay{sessionID: m.SessionID, ordinal: m.Ordinal, snippet: m.Snippet}
+	}
+	return hits, nil
 }
 
 // fetchHybridFTSBatch fetches one rank-ordered batch of at most k FTS message

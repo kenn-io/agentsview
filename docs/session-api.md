@@ -816,7 +816,8 @@ agentsview session search <pattern> [flags]
       "ordinal_range": [12, 24],
       "location": "tool_result",
       "tool_name": "Bash",
-      "snippet": "...connecting to db with token ***REDACTED***..."
+      "snippet": "...connecting to db with token ***REDACTED***...",
+      "matched_words": 3
     }
   ]
 }
@@ -917,6 +918,14 @@ substring (the default) and regex modes also walk `tool_calls.input_json`,
 `--hybrid` require an embedding index and return a single ranked page
 (`--cursor` is rejected) — see [Semantic Search](/docs/semantic-search/) for
 setup, scoring, and limitations.
+
+On SQLite, a default search of several words that includes `messages` returns
+exact text matches first, then messages ordered by how many query words they
+hold, with that count in `matched_words`. Regular word forms count, and a quoted
+phrase inside the query must appear as typed. `--fts` and hybrid's keyword leg
+use the same word matching unless the query starts with a quote and holds only
+quoted phrases or FTS5 operators, which keeps FTS5 behavior. Other searches
+report `matched_words` as `0`.
 
 On PostgreSQL, `--fts` matches each word or quoted phrase as a case-insensitive substring; a query that starts with a quote also honors `AND`, `OR`, `NOT`, and parentheses as SQLite does. `NEAR(...)` and prefix `*` are not supported there; `*` matches literally.
 

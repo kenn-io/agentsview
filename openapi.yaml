@@ -1375,6 +1375,10 @@ components:
           type: string
         machine:
           type: string
+        matched_words:
+          description: Number of query words the match holds in ranked word search; zero for other searches.
+          format: int64
+          type: integer
         ordinal:
           format: int64
           type: integer
@@ -1426,6 +1430,7 @@ components:
         - ordinal
         - timestamp
         - snippet
+        - matched_words
         - ordinal_range
       type: object
     DbCursorAttributionMetrics:
