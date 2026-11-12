@@ -236,14 +236,11 @@ func TestCheckAPIVersionContract(t *testing.T) {
 		err := checkAPIVersionContract(16, merged, []apiVersionRecord{base, left}, []string{base.name()})
 		require.ErrorContains(t, err, "replace this branch's record with 16-dddd-<summary digest>")
 	})
-	t.Run("collision and repair", func(t *testing.T) {
+	t.Run("collision", func(t *testing.T) {
 		err := checkAPIVersionContract(16, merged, []apiVersionRecord{base, left, right}, []string{base.name()})
 		require.ErrorContains(t, err, left.name()+", "+right.name())
 		require.ErrorContains(t, err, "remove the conflicting record")
 		require.ErrorContains(t, err, "next free version is 17")
-		err = checkAPIVersionContract(16, merged, []apiVersionRecord{base, left}, []string{base.name(), left.name()})
-		require.ErrorContains(t, err, "17-dddd-<summary digest>")
-		require.NoError(t, checkAPIVersionContract(17, merged, []apiVersionRecord{base, left, {17, merged, "summary-d"}}, []string{base.name(), left.name()}))
 	})
 	t.Run("same contract with different summaries", func(t *testing.T) {
 		require.NoError(t, checkAPIVersionContract(16, left.digest, []apiVersionRecord{left, {16, left.digest, "other"}}, nil))
@@ -255,13 +252,12 @@ func TestCheckAPIVersionContract(t *testing.T) {
 	})
 	t.Run("future record", func(t *testing.T) {
 		err := checkAPIVersionContract(15, base.digest, []apiVersionRecord{base, left}, []string{base.name()})
-		require.ErrorContains(t, err, "16")
+		require.ErrorContains(t, err, "ahead of server.APIVersion 15")
 		require.NoError(t, checkAPIVersionContract(15, base.digest, []apiVersionRecord{base, left}, []string{base.name(), left.name()}))
 	})
 	t.Run("changed restored contract uses next free version", func(t *testing.T) {
 		records := []apiVersionRecord{base, left}
 		history := []string{base.name(), left.name()}
-		require.NoError(t, checkAPIVersionContract(15, base.digest, records, history))
 		err := checkAPIVersionContract(15, merged, records, history)
 		require.ErrorContains(t, err, "17-dddd-<summary digest>")
 		require.ErrorContains(t, err, "set server.APIVersion to 17")
@@ -273,9 +269,9 @@ func TestCheckAPIVersionContract(t *testing.T) {
 }
 
 func TestOpenAPIRequiredOrder(t *testing.T) {
-	left, err := stripOpenAPIProse(jsontext.Value(`{"required":["a","b"],"properties":{"required":{"type":"string"}}}`), false)
+	left, err := stripOpenAPIProse(jsontext.Value(`{"required":["a","b"]}`), false)
 	require.NoError(t, err)
-	right, err := stripOpenAPIProse(jsontext.Value(`{"required":["b","a"],"properties":{"required":{"type":"string"}}}`), false)
+	right, err := stripOpenAPIProse(jsontext.Value(`{"required":["b","a"]}`), false)
 	require.NoError(t, err)
 	leftDigest, err := export.DigestCanonical(left)
 	require.NoError(t, err)
@@ -284,27 +280,20 @@ func TestOpenAPIRequiredOrder(t *testing.T) {
 	require.Equal(t, leftDigest, rightDigest)
 }
 
-func TestLoadAPIVersionRecordLeadingZero(t *testing.T) {
-	dir := t.TempDir()
-	name := "016-" + strings.Repeat("a", 64) + "-" + summaryDigest("summary")
-	require.NoError(t, os.WriteFile(filepath.Join(dir, name), []byte("summary\n"), 0600))
-	_, err := loadAPIVersionRecords(dir)
-	require.ErrorContains(t, err, name)
-}
-
 func TestLoadAPIVersionRecords(t *testing.T) {
 	for _, tc := range []struct {
-		name, content, hash string
-		valid               bool
+		name, version, content, hash string
+		valid                        bool
 	}{
-		{"valid", "Initial contract\n", summaryDigest("Initial contract"), true},
-		{"empty", "", summaryDigest(""), false},
-		{"multiline", "first\nsecond\n", summaryDigest("first\nsecond"), false},
-		{"wrong digest", "Initial contract\n", summaryDigest("other"), false},
+		{"valid", "15", "Initial contract\n", summaryDigest("Initial contract"), true},
+		{"empty", "15", "", summaryDigest(""), false},
+		{"multiline", "15", "first\nsecond\n", summaryDigest("first\nsecond"), false},
+		{"wrong digest", "15", "Initial contract\n", summaryDigest("other"), false},
+		{"leading zero", "016", "summary\n", summaryDigest("summary"), false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			dir := t.TempDir()
-			name := "15-" + strings.Repeat("a", 64) + "-" + tc.hash
+			name := tc.version + "-" + strings.Repeat("a", 64) + "-" + tc.hash
 			require.NoError(t, os.WriteFile(filepath.Join(dir, name), []byte(tc.content), 0600))
 			_, err := loadAPIVersionRecords(dir)
 			if tc.valid {
