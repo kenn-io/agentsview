@@ -625,72 +625,83 @@ func TestServeRestartUsesEditedAuthAfterSettingsSave(t *testing.T) {
 }
 
 func TestRestartPreservesDeploymentAuthOverride(t *testing.T) {
-	t.Setenv("AGENTSVIEW_MODE", "serve")
-	t.Setenv("AGENTSVIEW_REQUIRE_AUTH", "false")
-	cfg, dataDir, _ := startRestartAuthFixture(t, "foreground")
-	var rt *DaemonRuntime
-	require.Eventually(t, func() bool { rt = FindDaemonRuntime(dataDir); return rt != nil }, 30*time.Second, 100*time.Millisecond)
-	base := fmt.Sprintf("http://127.0.0.1:%d", rt.Port)
-	client := &http.Client{Timeout: time.Second}
-	resp, err := restartTestPing(t, client, base)
-	require.NoError(t, err)
-	var first struct {
-		InstanceID string `json:"instance_id"`
+	for _, mode := range []string{"foreground", "background"} {
+		for _, initial := range []bool{false, true} {
+			t.Run(fmt.Sprintf("%s/initial-%t", mode, initial), func(t *testing.T) {
+				t.Setenv("AGENTSVIEW_MODE", "serve")
+				t.Setenv("AGENTSVIEW_REQUIRE_AUTH", strconv.FormatBool(initial))
+				cfg, dataDir, token := startRestartAuthFixture(t, mode)
+				rt := waitForRestartRuntime(t, dataDir, token)
+				base := fmt.Sprintf("http://127.0.0.1:%d", rt.Port)
+				body := fmt.Sprintf(`{"require_auth":%t}`, !initial)
+				restartTestSend(t, http.MethodPut, base+"/api/v1/settings", body, token, http.StatusOK)
+				want := http.StatusOK
+				if !initial {
+					want = http.StatusUnauthorized
+				}
+				restartTestSend(t, http.MethodGet, base+"/api/ping", "", "", want)
+				replacement := restartAndWait(t, dataDir, base, token)
+				assert.Equal(t, !initial, replacement.RequireAuth)
+				restartTestSend(t, http.MethodGet, base+"/api/ping", "", "", want)
+				restartTestSend(t, http.MethodGet, base+"/api/ping", "", token, http.StatusOK)
+				if mode == "background" {
+					waitForBackgroundLaunchLock(t, dataDir)
+				}
+				replacement = restartAndWait(t, dataDir, base, token)
+				assert.Equal(t, !initial, replacement.RequireAuth)
+				restartTestSend(t, http.MethodGet, base+"/api/ping", "", "", want)
+				restartTestSend(t, http.MethodGet, base+"/api/ping", "", token, http.StatusOK)
+				if mode == "background" {
+					waitForBackgroundLaunchLock(t, dataDir)
+				}
+				require.NoError(t, cfg.SaveSettings(map[string]any{"require_auth": initial}))
+				replacement = restartAndWait(t, dataDir, base, token)
+				assert.Equal(t, initial, replacement.RequireAuth)
+			})
+		}
 	}
-	require.NoError(t, json.UnmarshalRead(resp.Body, &first))
-	require.NoError(t, resp.Body.Close())
-	matching, err := http.NewRequestWithContext(t.Context(), http.MethodPut, base+"/api/v1/settings", strings.NewReader(`{"require_auth":false}`))
-	require.NoError(t, err)
-	matching.Header.Set("Origin", base)
-	matching.Header.Set("Content-Type", "application/json")
-	accepted, err := client.Do(matching)
-	require.NoError(t, err)
-	require.Equal(t, http.StatusOK, accepted.StatusCode)
-	require.NoError(t, accepted.Body.Close())
-	configPath := filepath.Join(dataDir, "config.toml")
-	before, err := os.ReadFile(configPath)
-	require.NoError(t, err)
-	save, err := http.NewRequestWithContext(t.Context(), http.MethodPut, base+"/api/v1/settings", strings.NewReader(`{"require_auth":true}`))
-	require.NoError(t, err)
-	save.Header.Set("Origin", base)
-	save.Header.Set("Content-Type", "application/json")
-	denied, err := client.Do(save)
-	require.NoError(t, err)
-	assert.Equal(t, http.StatusConflict, denied.StatusCode)
-	body, err := io.ReadAll(denied.Body)
-	require.NoError(t, err)
-	assert.Contains(t, string(body), "AGENTSVIEW_REQUIRE_AUTH")
-	require.NoError(t, denied.Body.Close())
-	after, err := os.ReadFile(configPath)
-	require.NoError(t, err)
-	assert.Equal(t, before, after)
-	require.NoError(t, cfg.SaveSettings(map[string]any{"require_auth": true}))
-	req, err := http.NewRequestWithContext(t.Context(), http.MethodPost, base+"/api/v1/daemon/restart", nil)
-	require.NoError(t, err)
-	req.Header.Set("Origin", base)
-	resp, err = client.Do(req)
-	require.NoError(t, err)
-	require.Equal(t, http.StatusOK, resp.StatusCode)
-	require.NoError(t, resp.Body.Close())
-	require.Eventually(t, func() bool {
-		resp, err := restartTestPing(t, client, base)
-		if err != nil {
-			return false
+}
+
+func TestRestartDeploymentAuthSaveAuthority(t *testing.T) {
+	for _, mode := range []string{"foreground", "background"} {
+		for _, scenario := range []string{"untouched", "matching save", "external restart"} {
+			t.Run(mode+"/"+scenario, func(t *testing.T) {
+				t.Setenv("AGENTSVIEW_MODE", "serve")
+				t.Setenv("AGENTSVIEW_REQUIRE_AUTH", "false")
+				cfg, dataDir, token := startRestartAuthFixture(t, mode)
+				rt := waitForRestartRuntime(t, dataDir, token)
+				base := fmt.Sprintf("http://127.0.0.1:%d", rt.Port)
+				if scenario == "external restart" {
+					restartTestSend(t, http.MethodPut, base+"/api/v1/settings", `{"require_auth":true}`, token, http.StatusOK)
+					output, err := exec.CommandContext(t.Context(), os.Args[0], "daemon", "restart").CombinedOutput()
+					require.NoError(t, err, "%s", output)
+					replacement := waitForRestartRuntime(t, dataDir, token)
+					assert.False(t, replacement.RequireAuth)
+					restartTestSend(t, http.MethodGet, fmt.Sprintf("http://127.0.0.1:%d/api/ping", replacement.Port), "", "", http.StatusOK)
+					return
+				}
+				if scenario == "matching save" {
+					restartTestSend(t, http.MethodPut, base+"/api/v1/settings", `{"require_auth":false}`, token, http.StatusOK)
+				}
+				require.NoError(t, cfg.SaveSettings(map[string]any{"require_auth": true}))
+				replacement := restartAndWait(t, dataDir, base, token)
+				assert.Equal(t, scenario == "matching save", replacement.RequireAuth)
+			})
 		}
-		defer resp.Body.Close()
-		var ping struct {
-			InstanceID string `json:"instance_id"`
-		}
-		return resp.StatusCode == http.StatusOK && json.UnmarshalRead(resp.Body, &ping) == nil && ping.InstanceID != "" && ping.InstanceID != first.InstanceID
-	}, 30*time.Second, 100*time.Millisecond)
-	output, err := exec.CommandContext(t.Context(), os.Args[0], "daemon", "restart").CombinedOutput()
-	require.NoError(t, err, "%s", output)
-	restarted := FindDaemonRuntime(dataDir)
-	require.NotNil(t, restarted)
-	response, err := restartTestPing(t, client, fmt.Sprintf("http://127.0.0.1:%d", restarted.Port))
-	require.NoError(t, err)
-	assert.Equal(t, http.StatusOK, response.StatusCode)
-	require.NoError(t, response.Body.Close())
+		t.Run(mode+"/external restart with auth", func(t *testing.T) {
+			t.Setenv("AGENTSVIEW_MODE", "serve")
+			t.Setenv("AGENTSVIEW_REQUIRE_AUTH", "true")
+			_, dataDir, token := startRestartAuthFixture(t, mode)
+			rt := waitForRestartRuntime(t, dataDir, token)
+			base := fmt.Sprintf("http://127.0.0.1:%d", rt.Port)
+			restartTestSend(t, http.MethodPut, base+"/api/v1/settings", `{"require_auth":false}`, token, http.StatusOK)
+			output, err := exec.CommandContext(t.Context(), os.Args[0], "daemon", "restart").CombinedOutput()
+			require.NoError(t, err, "%s", output)
+			replacement := waitForRestartRuntime(t, dataDir, token)
+			assert.True(t, replacement.RequireAuth)
+			restartTestSend(t, http.MethodGet, fmt.Sprintf("http://127.0.0.1:%d/api/ping", replacement.Port), "", "", http.StatusUnauthorized)
+		})
+	}
 }
 
 func restartTestPing(t *testing.T, client *http.Client, base string) (*http.Response, error) {

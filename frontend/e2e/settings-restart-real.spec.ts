@@ -55,6 +55,8 @@ test("retries a lost restart request against the real daemon", async ({
           XDG_STATE_HOME: path.join(dir, "state"),
           AGENTSVIEW_DATA_DIR: path.join(dir, "data"),
           AGENTSVIEW_TELEMETRY_ENABLED: "0",
+          AGENTSVIEW_MODE: "serve",
+          AGENTSVIEW_REQUIRE_AUTH: "false",
         },
         stdio: "ignore",
       },
@@ -72,7 +74,16 @@ test("retries a lost restart request against the real daemon", async ({
       )
       .toBe(true);
     const before = await (await page.request.get(`${base}/api/ping`)).json();
+    const { auth_token: token } = await (await page.request.get(`${base}/api/v1/settings`)).json();
+    expect(token).toBeTruthy();
     await page.goto(`${base}/settings`);
+    await page
+      .getByRole("navigation", { name: "Settings" })
+      .getByRole("button", { name: /Remote access/ })
+      .click();
+    await page.getByRole("switch", { name: "Require auth token" }).click();
+    await expect(page.getByRole("switch", { name: "Require auth token" })).toBeChecked();
+    expect((await page.request.get(`${base}/api/ping`)).status()).toBe(401);
     await page
       .getByRole("navigation", { name: "Settings" })
       .getByRole("button", { name: /Tool-result images/ })
@@ -96,7 +107,10 @@ test("retries a lost restart request against the real daemon", async ({
     await expect(page.getByRole("heading", { name: "Tool-result images" })).toBeVisible();
     await expect(page).toHaveURL(/panel=tool-result-images/);
     await expect(page.getByRole("radio", { name: "Drop" })).toHaveAttribute("aria-checked", "true");
-    const after = await (await page.request.get(`${base}/api/ping`)).json();
+    expect((await page.request.get(`${base}/api/ping`)).status()).toBe(401);
+    const after = await (
+      await page.request.get(`${base}/api/ping`, { headers: { Authorization: `Bearer ${token}` } })
+    ).json();
     expect(after.instance_id).not.toBe(before.instance_id);
   } finally {
     if (server && server.exitCode === null && server.signalCode === null) {

@@ -570,9 +570,9 @@ the selected panel. Read-only servers cannot restart from Settings.
 Authentication changes take effect immediately.
 
 An explicit `--require-auth` flag takes precedence until authentication is saved
-in Settings. Later restarts use the latest saved value, including subsequent
-file edits. When `AGENTSVIEW_REQUIRE_AUTH` controls authentication, Settings
-rejects a conflicting change. Change the deployment setting instead.
+in Settings. Later Settings restarts use the latest saved value, including
+subsequent file edits. A fresh CLI start or restart uses normal deployment and
+flag precedence.
 
 If the page cannot reconnect within 30 seconds, **Check connection** polls for
 another 30 seconds. To find the server address, run `agentsview serve status`

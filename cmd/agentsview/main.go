@@ -100,12 +100,7 @@ func main() {
 	ensureUsableTempDir(os.Stderr)
 
 	if err := executeCLI(); err != nil {
-		if restart, ok := errors.AsType[*foregroundRestartError](err); ok {
-			err = execForegroundRestart(restart)
-		}
-		if err != nil {
-			os.Exit(reportCLIError(err, os.Stderr))
-		}
+		os.Exit(reportCLIError(err, os.Stderr))
 	}
 }
 
@@ -677,21 +672,30 @@ func runServe(ctx context.Context, cfg config.Config, opts serveOptions, restart
 				}
 			}()
 			args := serveBackgroundArgsWithNoSync(serveReplacementArgs(opts.RestartArgs, current), cfg.NoSync)
+			args = append(args, serveHandoffPortArgs(cfg.Port, restartExplicitPort)...)
 			flags := newServeCommand().Flags()
 			if err := flags.Parse(args); err != nil {
 				return fmt.Errorf("parsing replacement flags: %w", err)
 			}
-			replacement, err := config.LoadPFlags(flags)
+			replacement, err := config.LoadSettingsRestartConfig(current, flags)
 			if err != nil {
 				return fmt.Errorf("loading replacement config: %w", err)
 			}
 			if err := prepareBackgroundReplacement(ctx, &replacement, nil, false); err != nil {
 				return err
 			}
+			nextOpts := opts
+			nextOpts.ReplaceDaemon = false
+			nextOpts.NoSyncExplicit = flags.Changed("no-sync")
+			nextOpts.RestartArgs = serveRestartArgs(flags)
+			nextOpts.ReloadConfig = func() (config.Config, error) { return config.LoadPFlags(flags) }
+			nextPort, err := flags.GetInt("restart-port")
+			if err != nil {
+				return err
+			}
 			args = append([]string{"serve"}, args...)
-			args = append(args, serveHandoffPortArgs(cfg.Port, restartExplicitPort)...)
 			// Let the HTTP response finish before draining its server.
-			restart := &foregroundRestartError{args: args, release: release}
+			restart := &foregroundRestartError{args: args, release: release, cfg: replacement, opts: nextOpts, port: nextPort}
 			context.AfterFunc(ctx, func() {
 				requestRestart(restart)
 				if !errors.Is(context.Cause(serverContext), restart) {
@@ -884,6 +888,9 @@ func runServe(ctx context.Context, cfg config.Config, opts serveOptions, restart
 type foregroundRestartError struct {
 	args    []string
 	release func()
+	cfg     config.Config
+	opts    serveOptions
+	port    int
 }
 
 func (r *foregroundRestartError) Error() string { return "restart foreground server" }

@@ -211,7 +211,7 @@ func newServeCommandWithDaemonDeps(deps daemonCommandDeps) *cobra.Command {
 				)
 				return nil
 			}
-			return runServe(cmd.Context(), mustLoadConfig(cmd), serveOptions{
+			return runServeLoop(cmd.Context(), mustLoadConfig(cmd), serveOptions{
 				ReplaceDaemon:   replace,
 				NoSyncExplicit:  cmd.Flags().Changed("no-sync"),
 				SkipInitialSync: skipInitialSync,
@@ -221,7 +221,7 @@ func newServeCommandWithDaemonDeps(deps daemonCommandDeps) *cobra.Command {
 				ReloadConfig: func() (config.Config, error) {
 					return config.LoadPFlags(cmd.Flags())
 				},
-			}, restartPort)
+			}, restartPort, runServe)
 		},
 	}
 	cmd.Flags().BoolVar(
@@ -285,7 +285,7 @@ func serveRestartArgs(flags *pflag.FlagSet) []string {
 
 func serveReplacementArgs(args []string, current config.Config) []string {
 	return slices.DeleteFunc(slices.Clone(args), func(arg string) bool {
-		return !current.RequireAuthExplicit && strings.HasPrefix(arg, "--require-auth=")
+		return current.AuthSettingsSaved && strings.HasPrefix(arg, "--require-auth=")
 	})
 }
 

@@ -1229,8 +1229,8 @@ type Config struct {
 	HostExplicit bool `json:"-" toml:"-"`
 	// PortExplicit is true when the user passed --port on the CLI.
 	PortExplicit bool `json:"-" toml:"-"`
-	// RequireAuthExplicit records a launch flag until Settings saves authentication.
-	RequireAuthExplicit bool `json:"-" toml:"-"`
+	// AuthSettingsSaved records that Settings owns authentication for this lifetime.
+	AuthSettingsSaved bool `json:"-" toml:"-"`
 
 	// DeploymentEmbeddings is the embedding transport from deployment env,
 	// set only without a [vector] section.
@@ -1618,6 +1618,22 @@ func Load(fs *flag.FlagSet) (Config, error) {
 // LoadPFlags builds a Config from a parsed Cobra/pflag FlagSet.
 func LoadPFlags(fs *pflag.FlagSet) (Config, error) {
 	return LoadPFlagsFor(fs, 0)
+}
+
+// LoadSettingsRestartConfig keeps a successful Settings auth save authoritative
+// across Settings restarts while reading later edits to the saved config.
+func LoadSettingsRestartConfig(current Config, fs *pflag.FlagSet) (Config, error) {
+	cfg, err := LoadPFlags(fs)
+	if err != nil || !current.AuthSettingsSaved {
+		return cfg, err
+	}
+	saved, err := loadReadOnlyFor(ScopeLocal, current.DataDir)
+	if err != nil {
+		return cfg, err
+	}
+	cfg.RequireAuth = saved.RequireAuth
+	cfg.AuthSettingsSaved = true
+	return cfg, nil
 }
 
 // LoadPFlagsFor loads a command's config, warning about invalid unused sections.
@@ -2880,7 +2896,6 @@ func applyFlagValue(cfg *Config, name, value string) {
 		cfg.DisableUpdateCheck = value == "true"
 	case "require-auth":
 		cfg.RequireAuth = value == "true"
-		cfg.RequireAuthExplicit = true
 	case "events-coalesce-interval":
 		if d, err := time.ParseDuration(value); err == nil {
 			cfg.EventsCoalesceInterval = d
@@ -4116,7 +4131,7 @@ func (c *Config) SaveSettings(patch map[string]any) error {
 		if v, ok := patch["require_auth"]; ok {
 			if b, ok := v.(bool); ok {
 				c.RequireAuth = b
-				c.RequireAuthExplicit = false
+				c.AuthSettingsSaved = true
 			}
 		}
 		if v, ok := patch["chart_palette"]; ok {

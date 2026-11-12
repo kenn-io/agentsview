@@ -1,23 +1,32 @@
 package main
 
 import (
+	"context"
 	"errors"
 	"os"
+
+	"go.kenn.io/agentsview/internal/config"
 )
 
-func execForegroundRestart(next *foregroundRestartError) error {
+func runServeLoop(ctx context.Context, cfg config.Config, opts serveOptions, port int, run func(context.Context, config.Config, serveOptions, int) error) error {
 	exe := os.Args[0]
-	release := next.release
-	defer func() { release() }()
+	var release func()
+	defer func() {
+		if release != nil {
+			release()
+		}
+	}()
 	for {
-		os.Args = append([]string{exe}, next.args...)
-		err := executeCLI()
+		err := run(ctx, cfg, opts, port)
 		restart, ok := errors.AsType[*foregroundRestartError](err)
 		if !ok {
 			return err
 		}
-		release()
-		next = restart
-		release = next.release
+		if release != nil {
+			release()
+		}
+		release = restart.release
+		os.Args = append([]string{exe}, restart.args...)
+		cfg, opts, port = restart.cfg, restart.opts, restart.port
 	}
 }

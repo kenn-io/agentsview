@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -272,8 +273,13 @@ func TestRestartReleasesLaunchLockWhenNextCommandFails(t *testing.T) {
 	t.Cleanup(release)
 	args := os.Args
 	t.Cleanup(func() { os.Args = args })
-	err = execForegroundRestart(&foregroundRestartError{
-		args: []string{"serve", "--unknown-restart-option"}, release: release,
+	calls := 0
+	err = runServeLoop(t.Context(), config.Config{}, serveOptions{}, 0, func(context.Context, config.Config, serveOptions, int) error {
+		calls++
+		if calls == 1 {
+			return &foregroundRestartError{args: []string{"serve"}, release: release}
+		}
+		return errors.New("replacement failed")
 	})
 	require.Error(t, err)
 	lock, ok := acquireBackgroundLaunchLock(dir)

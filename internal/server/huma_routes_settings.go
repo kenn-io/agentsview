@@ -191,12 +191,6 @@ func (s *Server) humaUpdateSettings(
 		patch["auth_token"] = *in.Body.AuthToken
 	}
 	if in.Body.RequireAuth != nil {
-		if err := config.ValidateDeploymentAuthSave(*in.Body.RequireAuth); err != nil {
-			if errors.Is(err, config.ErrDeploymentAuthConflict) {
-				return nil, apiError(http.StatusConflict, err.Error())
-			}
-			return nil, internalError("validate authentication", err)
-		}
 		patch["require_auth"] = *in.Body.RequireAuth
 	}
 	if len(patch) > 0 {
