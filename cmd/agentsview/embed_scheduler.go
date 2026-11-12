@@ -152,11 +152,7 @@ func (s *embedScheduler) Notify() {
 		release()
 		return
 	}
-	s.sequence++
-	if manager, ok := s.mgr.(interface{ Status() vector.BuildStatus }); ok {
-		s.buildID = manager.Status().BuildID
-	}
-	s.waiting = "queued"
+	s.markQueued()
 	select {
 	case s.dirty <- release:
 	default:
@@ -177,9 +173,7 @@ func (s *embedScheduler) Waiting() string {
 	return s.waiting
 }
 
-func (s *embedScheduler) markBackstop() {
-	s.mu.Lock()
-	defer s.mu.Unlock()
+func (s *embedScheduler) markQueued() {
 	s.sequence++
 	if manager, ok := s.mgr.(interface{ Status() vector.BuildStatus }); ok {
 		s.buildID = manager.Status().BuildID
@@ -350,7 +344,9 @@ func (s *embedScheduler) run(
 				pendingBackstop = true
 				continue
 			}
-			s.markBackstop()
+			s.mu.Lock()
+			s.markQueued()
+			s.mu.Unlock()
 			if s.onBattery != nil && s.onBattery() {
 				s.setWaiting("power")
 				s.setBatteryDeferred(true)

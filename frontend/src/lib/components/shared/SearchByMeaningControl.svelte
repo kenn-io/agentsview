@@ -10,7 +10,6 @@
     onchange?: (started: boolean) => void;
   } = $props();
   let error = $state<string | null>(null);
-  let startingBuild = $state(false);
   const setup = $derived(status?.setup);
   const waiting = $derived(!status?.running && !!setup?.waiting);
   const rowState = $derived.by((): SearchByMeaningState => {
@@ -37,17 +36,13 @@
   });
   async function activate() {
     if (waiting) {
-      if (startingBuild) return;
       error = null;
-      startingBuild = true;
       try {
         await EmbeddingsService.postApiV1EmbeddingsBuild({});
         onchange(true);
       } catch (e) {
         if (e instanceof ApiError && e.status === 409) onchange(true);
         else error = e instanceof Error ? e.message : m.settings_embeddings_load_failed();
-      } finally {
-        startingBuild = false;
       }
       return;
     }
@@ -74,7 +69,7 @@
       <SearchByMeaningHint {labels} onturnon={() => void activate()} />
     {/if}
   {:else}
-    <SearchByMeaningRow state={rowState} {labels} locale={getLocale()} readonly={(!waiting && !setup.action) || !!setup.error || startingBuild} itemNoun={m.meaning_chunks({ count: status?.total ?? 0 })} onturnon={() => void activate()} onusebuiltin={() => {}} />
+    <SearchByMeaningRow state={rowState} {labels} locale={getLocale()} readonly={(!waiting && !setup.action) || !!setup.error} itemNoun={m.meaning_chunks({ count: status?.total ?? 0 })} onturnon={() => void activate()} onusebuiltin={() => {}} />
   {/if}
   {#if error || setup.error}
     <div class="setup-error">

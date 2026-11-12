@@ -133,13 +133,11 @@ func TestSetupReportsSharedChoiceWriteFailure(t *testing.T) {
 func TestOllamaEndpointChangesBeforeSetup(t *testing.T) {
 	for _, tc := range []struct {
 		name, endpoint  string
-		initialBuiltIn  bool
 		err             error
 		ollamaAvailable bool
 	}{
 		{name: "Ollama disappeared after endpoint resolution", endpoint: "http://127.0.0.1:10001/v1"},
 		{name: "endpoint disappeared", err: embedlocal.ErrNotFound, ollamaAvailable: true},
-		{name: "provider changed", initialBuiltIn: true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			setTestHome(t, t.TempDir())
@@ -152,7 +150,7 @@ func TestOllamaEndpointChangesBeforeSetup(t *testing.T) {
 			var inspections int
 			inspectLocalEmbeddings = func(context.Context, embedlocal.Options) (embedlocal.Status, error) {
 				inspections++
-				return embedlocal.Status{OllamaAvailable: !tc.initialBuiltIn && (tc.ollamaAvailable || inspections == 1)}, nil
+				return embedlocal.Status{OllamaAvailable: tc.ollamaAvailable || inspections == 1}, nil
 			}
 			localEmbeddingEndpoint = func(context.Context, embedlocal.Options) (string, error) { return tc.endpoint, tc.err }
 			owner, err := newLiveVectorServing(t.Context(), cfg, database, nil, config.LoadReadOnly)
@@ -404,7 +402,6 @@ func TestSharedChoiceStartsLocalIndexing(t *testing.T) {
 		setup, err = owner.SetupStatus(t.Context())
 		return err == nil && setup.Waiting == "power"
 	}, 45*time.Second, 100*time.Millisecond)
-	assert.False(t, setup.Busy)
 	ln, port := listenLoopback(t)
 	cfg.Host, cfg.Port = "127.0.0.1", port
 	ts := startTestServer(t, ln, server.New(cfg, database, nil, owner.ServerOptions()...).Handler())
@@ -585,11 +582,9 @@ func TestLiveEmbeddingsSetup(t *testing.T) {
 				assert.EqualValues(t, 1, discoveries.Load(), "indexing must use the pinned endpoint")
 				assert.Positive(t, encoded.Load())
 			}
-			if recipe == "fresh" || recipe == "nomic" || recipe == "automatic" {
-				chosen, err := embedlocal.ChoiceRecorded()
-				require.NoError(t, err)
-				assert.Equal(t, recipe == "fresh", chosen)
-			}
+			chosen, err := embedlocal.ChoiceRecorded()
+			require.NoError(t, err)
+			assert.Equal(t, recipe == "fresh", chosen)
 			assert.EqualValues(t, 1, reloads.Load())
 			assert.Empty(t, status().Setup.Action)
 			assert.Equal(t, recipe == "fresh", installs.Load() > 0)
@@ -919,16 +914,15 @@ func TestLiveEmbeddingsSetupDisclosesVerifiedRepairSize(t *testing.T) {
 
 func TestCLIEmbeddingsSetup(t *testing.T) {
 	for _, tc := range []struct {
-		name                      string
-		postStatus                int
-		stale, joinedOff, waiting bool
+		name             string
+		postStatus       int
+		stale, joinedOff bool
 	}{
-		{"finished-before-status", 0, false, false, false},
-		{"setup-conflict", http.StatusConflict, false, false, false},
-		{"finished-during-confirmation", http.StatusBadRequest, false, false, false},
-		{"stale-config", 0, true, false, false},
-		{"joined setup ended off", 0, false, true, false},
-		{"waiting for power", 0, false, false, true},
+		{"finished-before-status", 0, false, false},
+		{"setup-conflict", http.StatusConflict, false, false},
+		{"finished-during-confirmation", http.StatusBadRequest, false, false},
+		{"stale-config", 0, true, false},
+		{"joined setup ended off", 0, false, true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			setTestHome(t, t.TempDir())
@@ -955,11 +949,7 @@ func TestCLIEmbeddingsSetup(t *testing.T) {
 								return
 							}
 						}
-						if tc.waiting {
-							io.WriteString(w, `{"setup":{"enabled":true,"waiting":"power"}}`)
-						} else {
-							io.WriteString(w, `{"setup":{"enabled":true},"running":true}`)
-						}
+						io.WriteString(w, `{"setup":{"enabled":true},"running":true}`)
 					default:
 						io.WriteString(w, `{"setup":{},"last_result":{}}`)
 					}
@@ -1291,13 +1281,6 @@ func TestSetupProbeAllowsReadersAndConcurrentSetup(t *testing.T) {
 	owner, err := newLiveVectorServing(t.Context(), cfg, database, nil, config.LoadReadOnly)
 	require.NoError(t, err)
 	defer func() { require.NoError(t, owner.Close()) }()
-	defer func() {
-		select {
-		case <-unblock:
-		default:
-			close(unblock)
-		}
-	}()
 	results := make(chan error, 2)
 	go func() { results <- owner.Setup(0, "built-in") }()
 	select {

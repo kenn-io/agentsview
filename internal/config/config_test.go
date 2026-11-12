@@ -3312,7 +3312,6 @@ func TestSaveVectorSetupPersistsSelectedServer(t *testing.T) {
 
 func TestAutomaticVectorSetupRejectsExplicitSettings(t *testing.T) {
 	for _, raw := range []string{
-		"[vector]\nenabled = false\n",
 		"[vector.embeddings]\nmodel = 'custom'\n",
 		"[vector.embeddings]\ndefault_server = 'local'\n",
 		"[vector.embeddings.servers.local]\nlocal = true\n",

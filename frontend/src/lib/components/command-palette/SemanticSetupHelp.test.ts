@@ -381,7 +381,7 @@ describe("SemanticSetupHelp", () => {
 
   it("surfaces a build failure returned by the initial status probe", async () => {
     embeddingsService.getApiV1EmbeddingsStatus.mockResolvedValueOnce(
-      idleStatus({ last_error: "background build failed", setup: { ...idleStatus().setup!, waiting: "power" } }),
+      idleStatus({ last_error: "background build failed" }),
     );
 
     const { component, onResolved } = mountHelp();

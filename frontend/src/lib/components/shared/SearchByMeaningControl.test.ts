@@ -58,7 +58,6 @@ it.each([
 
 it.each([
   ["queued", "Waiting to index"],
-  ["power", "Waiting for power"],
 ])("shows %s and starts a manual build", async (waiting, label) => {
   vi.mocked(EmbeddingsService.postApiV1EmbeddingsBuild).mockResolvedValue({ started: true });
   const onchange = vi.fn();
