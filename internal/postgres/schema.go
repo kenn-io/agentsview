@@ -1523,6 +1523,7 @@ func backfillCodexThreadScopePG(ctx context.Context, pg pgSessionExecer) error {
 		), exclusions AS (
 			UPDATE excluded_sessions SET include_codex_pages = TRUE
 			WHERE id ~ $2 AND EXISTS (SELECT 1 FROM migration)
+			RETURNING id
 		)
 		UPDATE sessions SET trash_includes_codex_pages = TRUE,
 			source_trash_includes_codex_pages = (source_deleted_at IS NOT NULL)
