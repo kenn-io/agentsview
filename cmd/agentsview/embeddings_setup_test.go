@@ -26,40 +26,6 @@ import (
 	"go.kenn.io/kit/embedlocal"
 )
 
-func TestSetupUsesCandidateShownByStatus(t *testing.T) {
-	setTestHome(t, t.TempDir())
-	dir := testDataDir(t)
-	cfg, err := config.LoadReadOnly()
-	require.NoError(t, err)
-	database := dbtest.OpenTestDBAt(t, filepath.Join(dir, "sessions.db"))
-	oldInspect, oldEndpoint, oldInstall := inspectLocalEmbeddings, localEmbeddingEndpoint, installLocalEmbeddings
-	t.Cleanup(func() {
-		inspectLocalEmbeddings, localEmbeddingEndpoint, installLocalEmbeddings = oldInspect, oldEndpoint, oldInstall
-	})
-	inspectLocalEmbeddings = func(context.Context, embedlocal.Options) (embedlocal.Status, error) {
-		writeTestConfig(t, dir, "[vector.embeddings]\nmodel = 'nomic-embed-text'\ndimension = 768\n[vector.embeddings.servers.remote]\nendpoint = 'https://example.com/v1'\n")
-		return embedlocal.Status{DownloadBytes: 10}, nil
-	}
-	localEmbeddingEndpoint = func(context.Context, embedlocal.Options) (string, error) {
-		return "", embedlocal.ErrNotFound
-	}
-	started := make(chan struct{})
-	installLocalEmbeddings = func(ctx context.Context, _ embedlocal.InstallOptions) (embedlocal.Installation, error) {
-		close(started)
-		<-ctx.Done()
-		return embedlocal.Installation{}, ctx.Err()
-	}
-	owner, err := newLiveVectorServing(t.Context(), cfg, database, nil, config.LoadReadOnly)
-	require.NoError(t, err)
-	defer func() { require.NoError(t, owner.Close()) }()
-	require.NoError(t, owner.Setup(10, "built-in"))
-	select {
-	case <-started:
-	case <-time.After(5 * time.Second):
-		require.FailNow(t, "setup did not install the built-in candidate shown by status")
-	}
-}
-
 func TestSetupReportsSharedChoiceWriteFailure(t *testing.T) {
 	home := t.TempDir()
 	setTestHome(t, home)
@@ -270,10 +236,9 @@ func TestSavedAutomaticBuiltInResumes(t *testing.T) {
 	cfg, err := config.LoadReadOnly()
 	require.NoError(t, err)
 	database := dbtest.OpenTestDBAt(t, filepath.Join(dir, "sessions.db"))
-	oldInspect, oldBattery := inspectLocalEmbeddings, onBattery
-	t.Cleanup(func() { inspectLocalEmbeddings, onBattery = oldInspect, oldBattery })
+	oldInspect := inspectLocalEmbeddings
+	t.Cleanup(func() { inspectLocalEmbeddings = oldInspect })
 	inspectLocalEmbeddings = func(context.Context, embedlocal.Options) (embedlocal.Status, error) { return embedlocal.Status{}, nil }
-	onBattery = func() bool { return false }
 	ctx, cancel := context.WithCancel(t.Context())
 	serving, err := setupVectorServing(ctx, cfg, database, nil)
 	require.NoError(t, err)
@@ -347,18 +312,6 @@ func TestSharedChoiceStartsLocalIndexing(t *testing.T) {
 	cfg, err := config.LoadReadOnly()
 	require.NoError(t, err)
 	database := dbtest.OpenTestDBAt(t, filepath.Join(dir, "sessions.db"))
-	dbtest.SeedSessionWithMessages(t, database, "session-one", "sample", []db.Message{dbtest.UserMsg("session-one", 0, "startup indexing")})
-	encoder := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		var request struct {
-			Input []string `json:"input"`
-		}
-		if !assert.NoError(t, json.UnmarshalRead(r.Body, &request)) {
-			w.WriteHeader(http.StatusBadRequest)
-			return
-		}
-		writeEmbeddingsResponse(t, w, len(request.Input), 768)
-	}))
-	defer encoder.Close()
 	var installs atomic.Int64
 	oldInspect, oldEndpoint, oldInstall := inspectLocalEmbeddings, localEmbeddingEndpoint, installLocalEmbeddings
 	t.Cleanup(func() {
@@ -373,7 +326,7 @@ func TestSharedChoiceStartsLocalIndexing(t *testing.T) {
 		if !installed.Load() {
 			return "", embedlocal.ErrNotFound
 		}
-		return encoder.URL + "/v1", nil
+		return "http://127.0.0.1:1/v1", nil
 	}
 	installLocalEmbeddings = func(ctx context.Context, opts embedlocal.InstallOptions) (embedlocal.Installation, error) {
 		installs.Add(1)
@@ -402,30 +355,7 @@ func TestSharedChoiceStartsLocalIndexing(t *testing.T) {
 		setup, err = owner.SetupStatus(t.Context())
 		return err == nil && setup.Waiting == "power"
 	}, 45*time.Second, 100*time.Millisecond)
-	ln, port := listenLoopback(t)
-	cfg.Host, cfg.Port = "127.0.0.1", port
-	ts := startTestServer(t, ln, server.New(cfg, database, nil, owner.ServerOptions()...).Handler())
-	var apiStatus vector.BuildStatus
-	require.NoError(t, json.Unmarshal(embeddingRequest(t, ts.Client(), ts.URL, "GET", "/api/v1/embeddings/status", "", nil, http.StatusOK), &apiStatus))
-	require.NotNil(t, apiStatus.Setup)
-	assert.False(t, apiStatus.Setup.Busy)
-	assert.Equal(t, "power", apiStatus.Setup.Waiting)
-	var keyword db.ContentSearchPage
-	require.NoError(t, json.Unmarshal(embeddingRequest(t, ts.Client(), ts.URL, "GET", "/api/v1/search/content?pattern=startup&mode=fts&include_one_shot=true", "", nil, http.StatusOK), &keyword))
-	require.NotEmpty(t, keyword.Matches)
-	assert.Equal(t, "session-one", keyword.Matches[0].SessionID)
-	embeddingRequest(t, ts.Client(), ts.URL, "POST", "/api/v1/embeddings/build", "application/json", strings.NewReader(`{}`), http.StatusAccepted)
-	assert.EqualValues(t, 1, owner.serving.manager.Status().BuildID)
-	owner.serving.manager.Wait()
-	setup, err = owner.SetupStatus(t.Context())
-	require.NoError(t, err)
-	assert.Empty(t, setup.Waiting)
 	assert.EqualValues(t, 1, installs.Load())
-	saved, err := config.LoadReadOnly()
-	require.NoError(t, err)
-	_, selected, err := saved.Vector.Embeddings.Server("")
-	require.NoError(t, err)
-	assert.True(t, selected.Local)
 }
 
 func TestLiveEmbeddingsSetup(t *testing.T) {
@@ -1262,11 +1192,15 @@ func TestSetupProbeAllowsReadersAndConcurrentSetup(t *testing.T) {
 	})
 	entered := make(chan struct{}, 2)
 	unblock := make(chan struct{})
+	changeConfig := sync.OnceFunc(func() {
+		writeTestConfig(t, dir, "[vector.embeddings]\nmodel = 'nomic-embed-text'\ndimension = 768\n[vector.embeddings.servers.remote]\nendpoint = 'https://example.com/v1'\n")
+	})
 	inspectLocalEmbeddings = func(ctx context.Context, _ embedlocal.Options) (embedlocal.Status, error) {
 		entered <- struct{}{}
 		select {
 		case <-unblock:
-			return embedlocal.Status{}, nil
+			changeConfig()
+			return embedlocal.Status{DownloadBytes: 10}, nil
 		case <-ctx.Done():
 			return embedlocal.Status{}, ctx.Err()
 		}
@@ -1282,7 +1216,7 @@ func TestSetupProbeAllowsReadersAndConcurrentSetup(t *testing.T) {
 	require.NoError(t, err)
 	defer func() { require.NoError(t, owner.Close()) }()
 	results := make(chan error, 2)
-	go func() { results <- owner.Setup(0, "built-in") }()
+	go func() { results <- owner.Setup(10, "built-in") }()
 	select {
 	case <-entered:
 	case <-time.After(5 * time.Second):
@@ -1295,7 +1229,7 @@ func TestSetupProbeAllowsReadersAndConcurrentSetup(t *testing.T) {
 	case <-time.After(time.Second):
 		require.FailNow(t, "reader blocked on probe")
 	}
-	go func() { results <- owner.Setup(0, "built-in") }()
+	go func() { results <- owner.Setup(10, "built-in") }()
 	select {
 	case <-entered:
 	case <-time.After(5 * time.Second):

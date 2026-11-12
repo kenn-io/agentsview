@@ -3299,7 +3299,7 @@ func TestSaveVectorSetupPersistsSelectedServer(t *testing.T) {
 			assert.True(t, saved.Vector.Enabled)
 			_, selected, err := saved.Vector.Embeddings.Server("")
 			require.NoError(t, err)
-			assert.Equal(t, tc.endpoint == "", selected.Local)
+			assert.True(t, selected.Local)
 			assert.Empty(t, selected.Endpoint)
 			if tc.batchSize > 0 {
 				assert.Equal(t, tc.batchSize, selected.BatchSize)
@@ -3312,6 +3312,7 @@ func TestSaveVectorSetupPersistsSelectedServer(t *testing.T) {
 
 func TestAutomaticVectorSetupRejectsExplicitSettings(t *testing.T) {
 	for _, raw := range []string{
+		"[vector]\nenabled = false\n",
 		"[vector.embeddings]\nmodel = 'custom'\n",
 		"[vector.embeddings]\ndefault_server = 'local'\n",
 		"[vector.embeddings.servers.local]\nlocal = true\n",

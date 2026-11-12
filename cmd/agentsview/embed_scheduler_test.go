@@ -1909,6 +1909,7 @@ func TestEmbedSchedulerDefersBuildOnBatteryUntilAC(t *testing.T) {
 						synctest.Wait()
 						assert.Zero(t, mgr.callCount())
 						assert.FileExists(t, s.batteryDeferredPath)
+						assert.Equal(t, "power", s.Waiting())
 						if idleExit {
 							select {
 							case <-idled:
@@ -1925,6 +1926,7 @@ func TestEmbedSchedulerDefersBuildOnBatteryUntilAC(t *testing.T) {
 						synctest.Wait()
 						assert.Equal(t, []vector.BuildRequest{{Backstop: tc.backstop || tc.replay}}, mgr.callsSnapshot())
 						assert.NoFileExists(t, s.batteryDeferredPath)
+						assert.Empty(t, s.Waiting())
 					})
 				})
 			}
@@ -1960,27 +1962,6 @@ func TestMessageSchedulerAutomaticBuildSettings(t *testing.T) {
 			}
 		})
 	}
-}
-
-func TestEmbedSchedulerWaitingForPower(t *testing.T) {
-	synctest.Test(t, func(t *testing.T) {
-		fake := &fakeEmbedManager{}
-		s := newEmbedScheduler(fake, time.Second, 0, false, nil)
-		var battery atomic.Bool
-		battery.Store(true)
-		s.onBattery = battery.Load
-		go s.Run(t.Context())
-		defer s.Stop()
-		s.Notify()
-		assert.Equal(t, "queued", s.Waiting())
-		synctest.Sleep(time.Second)
-		assert.Equal(t, "power", s.Waiting())
-		assert.Zero(t, fake.callCount())
-		battery.Store(false)
-		synctest.Sleep(batteryRecheckInterval)
-		assert.Equal(t, 1, fake.callCount())
-		assert.Empty(t, s.Waiting())
-	})
 }
 
 func TestEmbedSchedulerWaitingAcrossBuildAndShutdown(t *testing.T) {

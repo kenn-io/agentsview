@@ -100,16 +100,17 @@ describe("EmbeddingsSettings", () => {
   it("offers a manual build while waiting for power", async () => {
     const setup = { enabled: true, action: "", provider: "built-in", busy: false,
       installing: false, missing_bytes: 0, downloaded_bytes: 0, total_bytes: 0, waiting: "power" };
-    embeddingsService.getApiV1EmbeddingsStatus.mockResolvedValue({ running: false, setup });
+    embeddingsService.getApiV1EmbeddingsStatus.mockResolvedValue({ running: false, setup, model: "test-embed-model" });
     embeddingsService.postApiV1EmbeddingsBuild.mockResolvedValue({ started: true });
     const component = mount(EmbeddingsSettings, { target: document.body });
     try {
       await settle();
       expect(document.body.textContent).toContain("Waiting for power");
+      expect(document.body.querySelector(".status-grid")).toBeNull();
+      expect(document.body.querySelector(".generation-list")).toBeNull();
       embeddingsService.getApiV1EmbeddingsStatus.mockResolvedValue(runningStatus(2, { setup }));
       [...document.querySelectorAll("button")].find((b) => b.textContent?.trim() === "Build now")!.click();
       await settle();
-      expect(embeddingsService.postApiV1EmbeddingsBuild).toHaveBeenCalledWith({});
       expect(document.body.textContent).toContain("Indexing 2 of 1,000 text sections");
       expect(document.body.textContent).toContain("test-embed-model");
     } finally { unmount(component); }

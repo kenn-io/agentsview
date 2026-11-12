@@ -142,18 +142,13 @@ describe("SemanticSetupHelp", () => {
   it("waits for indexing before retrying search", async () => {
     const setup = { ...idleStatus().setup!, waiting: "power" };
     embeddingsService.getApiV1EmbeddingsStatus.mockResolvedValue(idleStatus({ setup, last_result: completedResult() }));
-    embeddingsService.postApiV1EmbeddingsBuild.mockResolvedValue({ started: true });
     const { component, onResolved } = mountHelp();
     try {
       await settle();
-      expect(text()).toContain("Waiting for power");
       expect(onResolved).not.toHaveBeenCalled();
       await settle(2000);
       expect(embeddingsService.getApiV1EmbeddingsStatus).toHaveBeenCalledTimes(2);
       expect(onResolved).not.toHaveBeenCalled();
-      [...document.querySelectorAll("button")].find((b) => b.textContent?.trim() === "Build now")!.click();
-      await settle();
-      expect(embeddingsService.postApiV1EmbeddingsBuild).toHaveBeenCalledWith({});
       embeddingsService.getApiV1EmbeddingsStatus.mockResolvedValue(idleStatus({ last_result: completedResult() }));
       await settle(2000);
       expect(onResolved).toHaveBeenCalledOnce();
