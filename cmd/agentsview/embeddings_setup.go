@@ -56,37 +56,46 @@ func newLiveVectorServing(ctx context.Context, cfg config.Config, database *db.D
 
 func (v *liveVectorServing) startSharedChoice() {
 	if v.cfg.ArchiveContent.UsageOnly() || v.database.ArchiveContent().UsageOnly() || v.cfg.DeploymentEmbeddings != nil {
+		log.Print("search by meaning: shared choice skipped for archive or deployment configuration")
 		return
 	}
 	var approvedBytes int64
 	embeddings := v.cfg.Vector.Embeddings
 	if !v.cfg.Vector.Enabled {
-		targets, err := v.cfg.ResolvePGTargets()
+		blocked, err := hasImplicitVectorPush(&v.cfg)
 		if err != nil {
+			log.Printf("search by meaning: resolve push targets: %v", err)
 			return
 		}
-		for _, target := range targets {
-			if target.Config.URL != "" && target.Config.PushVectors == nil {
-				return
-			}
+		if blocked {
+			log.Print("search by meaning: shared choice skipped for implicit vector push")
+			return
 		}
 		chosen, err := embedlocal.ChoiceRecorded()
 		if err != nil {
 			log.Printf("search by meaning: read shared choice: %v", err)
 		}
 		if !chosen {
+			log.Print("search by meaning: no shared choice recorded")
 			return
 		}
 		approvedBytes = math.MaxInt64
 		// SetupStatus reports candidate errors other than an explicit choice.
 		if embeddings, err = v.cfg.VectorSetupEmbeddings(true); err != nil {
+			log.Printf("search by meaning: shared choice setup unavailable: %v", err)
 			return
 		}
 	} else if v.serving.manager == nil {
+		log.Print("search by meaning: shared choice skipped without vector manager")
 		return
 	}
 	_, deployment, err := embeddings.Server("")
-	if err != nil || deployment.Endpoint != "" {
+	if err != nil {
+		log.Printf("search by meaning: resolve embeddings server: %v", err)
+		return
+	}
+	if deployment.Endpoint != "" {
+		log.Print("search by meaning: shared choice skipped for configured endpoint")
 		return
 	}
 	if v.cfg.Vector.Enabled && !deployment.Local {
@@ -94,8 +103,13 @@ func (v *liveVectorServing) startSharedChoice() {
 			status, err := inspectLocalEmbeddings(v.ctx, embedlocal.Options{})
 			if err == nil && !status.OllamaAvailable && status.DownloadBytes == 0 {
 				v.serving.Scheduler.Notify()
+				log.Print("search by meaning: queued saved local index")
+				return
+			} else if err != nil {
+				log.Printf("search by meaning: inspect local embeddings: %v", err)
 			}
 		}
+		log.Print("search by meaning: shared choice skipped for saved provider")
 		return
 	}
 	deployment.Local = true
@@ -104,6 +118,28 @@ func (v *liveVectorServing) startSharedChoice() {
 	if err := v.startSetup(deployment, approvedBytes, true); err != nil {
 		log.Printf("search by meaning: start setup: %v", err)
 	}
+}
+
+func hasImplicitVectorPush(cfg *config.Config) (bool, error) {
+	pg, err := cfg.ResolvePGTargets()
+	if err != nil {
+		return false, err
+	}
+	for _, target := range pg {
+		if target.Config.URL != "" && target.Config.PushVectors == nil {
+			return true, nil
+		}
+	}
+	clickhouse, err := cfg.ResolveClickHouseTargets()
+	if err != nil {
+		return false, err
+	}
+	for _, target := range clickhouse {
+		if target.Config.URL != "" && target.Config.PushVectors == nil {
+			return true, nil
+		}
+	}
+	return false, nil
 }
 
 func (v *liveVectorServing) startSchedulers() {
@@ -320,7 +356,7 @@ func (v *liveVectorServing) startSetup(deployment config.VectorEmbeddingsServerC
 	return nil
 }
 
-func (v *liveVectorServing) reloadSetup(local bool) (config.Config, error) {
+func (v *liveVectorServing) reloadSetup(approved config.VectorEmbeddingsServerConfig) (config.Config, error) {
 	cfg, err := v.reload()
 	if err != nil {
 		return config.Config{}, err
@@ -329,7 +365,7 @@ func (v *liveVectorServing) reloadSetup(local bool) (config.Config, error) {
 	if err != nil {
 		return config.Config{}, err
 	}
-	if selected.Local != local {
+	if selected.Local != approved.Local || selected.Endpoint != approved.Endpoint {
 		return config.Config{}, server.ErrEmbeddingsProviderChanged
 	}
 	return cfg, nil
@@ -362,7 +398,7 @@ func (v *liveVectorServing) activate(deployment config.VectorEmbeddingsServerCon
 		} else if err != nil {
 			return err
 		}
-		cfg, err = v.reloadSetup(deployment.Local)
+		cfg, err = v.reloadSetup(deployment)
 		if err != nil {
 			return err
 		}

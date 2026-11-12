@@ -176,6 +176,7 @@ func TestSharedChoiceLeavesConfiguredSearchAlone(t *testing.T) {
 		{name: "explicit off", shared: true, config: "[vector]\nenabled = false\n"},
 		{name: "postgres unspecified push", shared: true, config: "[pg]\nurl = 'postgres://example.com/db'\n"},
 		{name: "named postgres unspecified push", shared: true, config: "[pg.example]\nurl = 'postgres://example.com/db'\n"},
+		{name: "clickhouse unspecified push", shared: true, config: "[clickhouse]\nurl = 'clickhouse://example.com/default'\n"},
 		{name: "enabled default server", config: "[vector]\nenabled = true\n"},
 		{name: "deployment", shared: true, deployment: true},
 		{name: "usage-only archive", shared: true, usage: true},
@@ -310,6 +311,8 @@ func TestSharedChoiceStartsLocalIndexing(t *testing.T) {
 		{name: "no postgres"},
 		{name: "postgres push disabled", config: "[pg]\nurl = 'postgres://example.com/db'\npush_vectors = false\n"},
 		{name: "postgres push enabled", config: "[pg]\nurl = 'postgres://example.com/db'\npush_vectors = true\n"},
+		{name: "clickhouse push disabled", config: "[clickhouse]\nurl = 'clickhouse://example.com/default'\npush_vectors = false\n"},
+		{name: "clickhouse push enabled", config: "[clickhouse]\nurl = 'clickhouse://example.com/default'\npush_vectors = true\n"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			setTestHome(t, t.TempDir())
@@ -381,7 +384,7 @@ func TestLiveEmbeddingsSetup(t *testing.T) {
 		inspectLocalEmbeddings, localEmbeddingEndpoint, installLocalEmbeddings = oldInspect, oldEndpoint, oldInstall
 		onBattery = oldOnBattery
 	})
-	for _, recipe := range []string{"fresh", "automatic", "nomic", "changed"} {
+	for _, recipe := range []string{"fresh", "automatic", "nomic", "changed", "endpoint"} {
 		t.Run(recipe, func(t *testing.T) {
 			setTestHome(t, t.TempDir())
 			dir := testDataDir(t)
@@ -417,7 +420,8 @@ func TestLiveEmbeddingsSetup(t *testing.T) {
 			require.NoError(t, err)
 			cfg.DataDir, cfg.DBPath = dir, filepath.Join(dir, "sessions.db")
 			raw := map[string]string{
-				"nomic": "[vector]\nenabled = false\n[vector.embeddings]\nmodel = 'nomic-embed-text:v1.5'\ndimension = 768\n[vector.embeddings.servers.local]\nendpoint = '" + stub.URL + "/v1'\nollama_cpu_fallback = true\n",
+				"nomic":    "[vector]\nenabled = false\n[vector.embeddings]\nmodel = 'nomic-embed-text:v1.5'\ndimension = 768\n[vector.embeddings.servers.local]\nendpoint = '" + stub.URL + "/v1'\nollama_cpu_fallback = true\n",
+				"endpoint": "[vector]\nenabled = false\n[vector.embeddings]\nmodel = 'nomic-embed-text:v1.5'\ndimension = 768\n[vector.embeddings.servers.remote]\nendpoint = '" + stub.URL + "/v1'\n",
 			}[recipe]
 			if raw != "" {
 				require.NoError(t, os.WriteFile(filepath.Join(dir, "config.toml"), []byte(raw), 0o600))
@@ -475,6 +479,8 @@ func TestLiveEmbeddingsSetup(t *testing.T) {
 				reloads.Add(1)
 				if recipe == "changed" {
 					writeTestConfig(t, dir, "[vector]\nenabled = true\n[vector.embeddings]\nmodel = 'nomic-embed-text:v1.5'\ndimension = 768\n[vector.embeddings.servers.remote]\nendpoint = '"+stub.URL+"/v1'\n")
+				} else if recipe == "endpoint" {
+					writeTestConfig(t, dir, "[vector]\nenabled = true\n[vector.embeddings]\nmodel = 'nomic-embed-text:v1.5'\ndimension = 768\n[vector.embeddings.servers.remote]\nendpoint = 'http://127.0.0.1:1/v1'\n")
 				}
 				return config.LoadReadOnly()
 			})
@@ -504,12 +510,18 @@ func TestLiveEmbeddingsSetup(t *testing.T) {
 			}
 
 			request("POST", "/api/v1/embeddings/setup", fmt.Sprintf(`{"approved_bytes":%d,"expected_provider":%q}`, shown, initial.Setup.Provider), 202)
-			if recipe == "changed" {
+			if recipe == "changed" || recipe == "endpoint" {
 				<-owner.done
 				result := status()
 				require.NotNil(t, result.Setup)
 				assert.Equal(t, server.ErrEmbeddingsProviderChanged.Error(), result.Setup.Error)
 				assert.Nil(t, owner.Manager(""))
+				assert.Zero(t, encoded.Load())
+				if recipe == "endpoint" {
+					saved, err := os.ReadFile(filepath.Join(dir, "config.toml"))
+					require.NoError(t, err)
+					assert.Contains(t, string(saved), "http://127.0.0.1:1/v1")
+				}
 				return
 			}
 			if recipe == "fresh" {

@@ -35,7 +35,10 @@
   async function activate() {
     if (setup?.action !== "turn-on") return;
     const provider = setup.provider;
-    if (provider !== "built-in" && provider !== "ollama" && provider !== "configured") return;
+    if (provider !== "built-in" && provider !== "ollama" && provider !== "configured") {
+      error = m.settings_embeddings_load_failed();
+      return;
+    }
     error = null;
     try {
       await EmbeddingsService.postApiV1EmbeddingsSetup({ approved_bytes: shownBytes, expected_provider: provider });
