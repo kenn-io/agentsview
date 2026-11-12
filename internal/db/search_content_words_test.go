@@ -242,3 +242,41 @@ func TestHasFTSProbesIndex(t *testing.T) {
 	require.NoError(t, err)
 	assert.False(t, d.HasFTS(t.Context()))
 }
+
+func TestSearchContentWordTierOrder(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		filter  ContentSearchFilter
+		entries [][3]string
+		want    []wordHit
+	}{
+		{"default", ContentSearchFilter{Pattern: "alpha beta missing"}, [][3]string{{"newer", "alpha beta long", ""}, {"older", "alpha beta", ""}}, []wordHit{{"newer", "message", 2}, {"older", "message", 2}}},
+		{"fts", ContentSearchFilter{Pattern: "alpha beta missing", Mode: "fts"}, [][3]string{{"older", "alpha beta", ""}, {"newer", "alpha beta filler filler filler filler filler filler filler filler", ""}}, []wordHit{{"older", "message", 2}, {"newer", "message", 2}}},
+		{"hybrid", ContentSearchFilter{Pattern: "alpha beta missing", Mode: "hybrid", KeywordOnly: true}, [][3]string{{"older", "alpha beta", ""}, {"newer", "alpha beta filler filler filler filler filler filler filler filler", ""}}, []wordHit{{"older", "message", 0}, {"newer", "message", 0}}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			d := testDB(t)
+			requireFTS(t, d)
+			seedWordSearch(t, d, "proj", tc.entries...)
+			if tc.name != "default" {
+				_, err := d.getWriter().Exec(t.Context(), `UPDATE sessions SET ended_at = CASE id WHEN 'older' THEN '2026-01-01T00:00:00Z' ELSE '2026-06-01T00:00:00Z' END`)
+				require.NoError(t, err)
+			}
+			page, err := d.SearchContent(t.Context(), tc.filter)
+			require.NoError(t, err)
+			assert.Equal(t, tc.want, wordHits(page))
+			if tc.name != "hybrid" {
+				tc.filter.Limit = 1
+				first, err := d.SearchContent(t.Context(), tc.filter)
+				require.NoError(t, err)
+				assert.Equal(t, tc.want[:1], wordHits(first))
+				require.Equal(t, 1, first.NextCursor)
+				tc.filter.Cursor = first.NextCursor
+				second, err := d.SearchContent(t.Context(), tc.filter)
+				require.NoError(t, err)
+				assert.Equal(t, tc.want[1:], wordHits(second))
+				assert.Zero(t, second.NextCursor)
+			}
+		})
+	}
+}

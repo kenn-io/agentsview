@@ -105,8 +105,7 @@ func explicitFTSExpression(pattern string) bool {
 
 // buildContentWordHits fills a temporary table with every message that holds
 // a query word and the number of words it holds. The key orders hits by that
-// count, then newest message first, so a page reads only the hits before it
-// rather than sorting them all.
+// count and message ID.
 func buildContentWordHits(ctx context.Context, tx *sql.Tx, q contentWords) error {
 	terms, err := json.Marshal(q.terms)
 	if err != nil {
@@ -138,10 +137,26 @@ func contentWordRows(
 		args = append(args, "%"+escapeLike(phrase)+"%")
 	}
 	where += whereSb135.String()
+	from := "content_word_hits h"
+	sortKey := "julianday(COALESCE(s.ended_at, s.started_at, ''))"
+	order := "sort_key DESC, m.session_id ASC, m.ordinal ASC, m.id ASC"
+	if f.Mode == "fts" || f.Mode == "hybrid" {
+		if _, err := tx.ExecContext(ctx, `CREATE INDEX content_word_hits_id ON content_word_hits(id)`); err != nil {
+			return nil, fmt.Errorf("indexing word matches: %w", err)
+		}
+		from = "messages_fts CROSS JOIN content_word_hits h ON h.id = messages_fts.rowid"
+		where += " AND messages_fts.content MATCH ?"
+		args = append(args, q.snippetTerm())
+		sortKey = "messages_fts.rank"
+		order = "sort_key ASC, m.id ASC"
+	}
 	query := `SELECT m.session_id, s.project, s.agent, s.transcript_revision, 'message', m.role, '',
-			m.ordinal, COALESCE(m.timestamp,''), COALESCE(m.dialogue_text, m.content), '', h.n
-		FROM content_word_hits h CROSS JOIN messages m ON m.id = h.id CROSS JOIN sessions s ON s.id = m.session_id
-		WHERE ` + where + ` ORDER BY h.n DESC, h.id DESC LIMIT ? OFFSET ?`
+			m.ordinal, COALESCE(m.timestamp,''), COALESCE(m.dialogue_text, m.content), '', p.n
+		FROM (SELECT m.id, h.n, ` + sortKey + ` AS sort_key
+			FROM ` + from + ` CROSS JOIN messages m ON m.id = h.id CROSS JOIN sessions s ON s.id = m.session_id
+			WHERE ` + where + ` ORDER BY h.n DESC, ` + order + ` LIMIT ? OFFSET ?) p
+		CROSS JOIN messages m ON m.id = p.id CROSS JOIN sessions s ON s.id = m.session_id
+		ORDER BY p.n DESC, ` + order
 	args = append(args, need, offset)
 	return scanContentRows(ctx, tx, query, args, func(body, _ string) string {
 		start, end := FTSSnippetRange(q.snippetTerm(), body)
