@@ -18,7 +18,6 @@ function msg(ordinal: number, extra: Partial<Message> = {}): Message {
     ordinal,
     role: "user",
     content: `prompt ${ordinal}`,
-    content_length: 8,
     timestamp: "2026-01-01T00:00:00Z",
     has_thinking: false,
     thinking_text: "",
@@ -30,6 +29,7 @@ function msg(ordinal: number, extra: Partial<Message> = {}): Message {
     has_output_tokens: false,
     is_system: false,
     ...extra,
+    content_length: (extra.content ?? `prompt ${ordinal}`).length,
   };
 }
 
@@ -213,5 +213,125 @@ describe("SessionToc", () => {
     flushSync();
     expect(document.querySelector(".toc-note")?.textContent).toBe("Prompts are hidden by the message filter");
     expect(document.querySelector(".toc-entry")).toBeNull();
+  });
+
+  it("keeps listing prompts the user filter leaves on screen", () => {
+    load([
+      msg(0, { content: "plain words" }),
+      msg(2, { content: "Why does this fail?\n```go\nfunc main() {}\n```" }),
+    ]);
+    ui.setBlockVisible("user", false);
+    render();
+
+    // The code fence keeps the second prompt's card in the transcript, and
+    // it keeps its place in the session's numbering.
+    expect(labels()).toEqual(["2 Why does this fail?"]);
+    expect(document.querySelector(".toc-note")).toBeNull();
+  });
+
+  it("moves focus in once a keyboard-opened outline has an entry", async () => {
+    let answer!: (value: unknown) => void;
+    vi.spyOn(SessionsService, "getApiV1SessionsByIdMessages").mockReturnValue(
+      new Promise((resolve) => (answer = resolve)) as never,
+    );
+    sessionToc.setOpen(false);
+    load([msg(100, { role: "assistant" })], true);
+    render();
+
+    sessionToc.toggle({ focus: true });
+    await settle();
+    expect(document.querySelector(".toc-entry")).toBeNull();
+
+    answer({ messages: [msg(40, { content: "older" })] });
+    await settle();
+    expect(document.activeElement?.getAttribute("data-ordinal")).toBe("40");
+  });
+
+  it("reads the gap when a newer window starts past an unfinished read", async () => {
+    let answer!: (value: unknown) => void;
+    const read = vi
+      .spyOn(SessionsService, "getApiV1SessionsByIdMessages")
+      .mockReturnValueOnce(new Promise((resolve) => (answer = resolve)) as never)
+      .mockResolvedValueOnce({ messages: [msg(150, { content: "in the gap" })] } as never);
+    load([msg(100)], true);
+    render();
+    await settle();
+
+    load([msg(200)], true);
+    await settle();
+    expect(read).toHaveBeenCalledTimes(1);
+
+    answer({ messages: [msg(10, { content: "first" })] });
+    await settle();
+
+    expect(read).toHaveBeenCalledTimes(2);
+    expect(read.mock.calls[1]![1]).toMatchObject({ from: 199 });
+    expect(labels()).toEqual(["1 in the gap", "2 prompt 200"]);
+  });
+
+  it("binds later pages to the first page's revision and drops a read that a rewrite interrupts", async () => {
+    vi.spyOn(console, "warn").mockImplementation(() => {});
+    const fullPage = Array.from({ length: 1000 }, (_, i) => msg(4998 - i * 2));
+    const read = vi
+      .spyOn(SessionsService, "getApiV1SessionsByIdMessages")
+      .mockResolvedValueOnce({ messages: fullPage, transcript_revision: "rev-1" } as never)
+      .mockRejectedValueOnce(new Error("source changed"));
+    load([msg(5000)], true);
+    render();
+    await settle();
+
+    expect(read).toHaveBeenCalledTimes(2);
+    expect(read.mock.calls[0]![1]).not.toHaveProperty("expected_revision");
+    expect(read.mock.calls[1]![1]).toMatchObject({ from: 2999, expected_revision: "rev-1" });
+    expect(document.querySelector('[role="alert"]')).not.toBeNull();
+    expect(labels()).toEqual(["prompt 5000"]);
+  });
+
+  it("reads earlier prompts again when the outline reopens", async () => {
+    const read = vi
+      .spyOn(SessionsService, "getApiV1SessionsByIdMessages")
+      .mockResolvedValueOnce({ messages: [msg(10, { content: "before resync" })] } as never)
+      .mockResolvedValueOnce({ messages: [msg(10, { content: "after resync" })] } as never);
+    load([msg(100)], true);
+    render();
+    await settle();
+    expect(labels()).toEqual(["1 before resync", "2 prompt 100"]);
+
+    sessionToc.setOpen(false);
+    flushSync();
+    sessionToc.setOpen(true);
+    await settle();
+
+    expect(read).toHaveBeenCalledTimes(2);
+    expect(labels()).toEqual(["1 after resync", "2 prompt 100"]);
+  });
+
+  it("leaves a browsed list where it is when the transcript grows", () => {
+    // jsdom has no layout: give each entry a 20px row in a 100px list.
+    const offsetTop = vi
+      .spyOn(HTMLElement.prototype, "offsetTop", "get")
+      .mockImplementation(function (this: HTMLElement) {
+        const ordinal = Number(this.dataset.ordinal);
+        return Number.isNaN(ordinal) ? 0 : ordinal * 10;
+      });
+    vi.spyOn(HTMLElement.prototype, "offsetHeight", "get").mockReturnValue(20);
+    vi.spyOn(HTMLElement.prototype, "clientHeight", "get").mockReturnValue(100);
+    const rows = Array.from({ length: 30 }, (_, i) => msg(i * 2));
+    load(rows);
+    sessionToc.view = { topOrdinal: 40, minOrdinal: 40, maxOrdinal: 41, atEnd: false };
+    render();
+    const list = document.querySelector<HTMLElement>(".toc-list")!;
+    expect(list.scrollTop).toBe(320);
+
+    list.scrollTop = 0;
+    load([...rows, msg(60, { role: "assistant" })]);
+    flushSync();
+    expect(list.scrollTop).toBe(0);
+
+    // A new current prompt still brings its entry into view.
+    sessionToc.view = { topOrdinal: 50, minOrdinal: 50, maxOrdinal: 51, atEnd: false };
+    flushSync();
+    expect(list.scrollTop).toBe(420);
+    offsetTop.mockRestore();
   });
 });

@@ -52,6 +52,13 @@ class SessionTocStore {
   }
 
   setOpen(open: boolean) {
+    // A resync can rewrite prompts the outline read earlier, and no signal
+    // tells that apart from an append. Read them again on each opening,
+    // keeping the old list on screen until the new one lands.
+    if (open && !this.open) {
+      this.olderBefore = 0;
+      this.olderFailed = false;
+    }
     this.open = open;
     try {
       localStorage?.setItem(OPEN_KEY, String(open));
@@ -103,13 +110,23 @@ class SessionTocStore {
     try {
       const entries: TocEntry[] = [];
       let from = before - 1;
+      // Later pages are bound to the first page's revision, so a rewrite
+      // between pages fails the read instead of mixing two transcripts.
+      let revision: string | undefined;
       while (from >= 0) {
         const res = await SessionsService.getApiV1SessionsByIdMessages(
           { id: sessionId },
-          { roles: "user", direction: "desc", from, limit: PAGE_SIZE },
+          {
+            roles: "user",
+            direction: "desc",
+            from,
+            limit: PAGE_SIZE,
+            ...(revision ? { expected_revision: revision } : {}),
+          },
           { signal },
         );
         if (!this.read.isCurrent(signal)) return;
+        revision ??= res.transcript_revision || undefined;
         const page = res.messages;
         for (const message of page) {
           if (isPromptMessage(message)) entries.push(tocEntry(message));

@@ -2,6 +2,7 @@ import { describe, expect, it } from "vite-plus/test";
 import type { DbMessage as Message } from "../../api/generated/index.js";
 import {
   currentEntryIndex,
+  entryVisible,
   isPromptMessage,
   mergeTocEntries,
   promptEntries,
@@ -16,7 +17,6 @@ function msg(ordinal: number, extra: Partial<Message> = {}): Message {
     ordinal,
     role: "user",
     content: `prompt ${ordinal}`,
-    content_length: 8,
     timestamp: "2026-01-01T00:00:00Z",
     has_thinking: false,
     thinking_text: "",
@@ -28,15 +28,25 @@ function msg(ordinal: number, extra: Partial<Message> = {}): Message {
     has_output_tokens: false,
     is_system: false,
     ...extra,
+    content_length: (extra.content ?? `prompt ${ordinal}`).length,
   };
 }
 
-const entry = (ordinal: number): TocEntry => ({ ordinal, label: `prompt ${ordinal}`, isShell: false });
+const entry = (ordinal: number): TocEntry => ({
+  ordinal,
+  label: `prompt ${ordinal}`,
+  isShell: false,
+  blocks: ["user"],
+});
 
 describe("isPromptMessage", () => {
-  it("keeps typed user prompts, including empty ones", () => {
+  it("keeps typed user prompts, including empty ones and shell commands", () => {
     expect(isPromptMessage(msg(0))).toBe(true);
     expect(isPromptMessage(msg(1, { content: "" }))).toBe(true);
+    expect(isPromptMessage(msg(2, { content: "<bash-input>ls</bash-input>" }))).toBe(true);
+    expect(
+      isPromptMessage(msg(3, { content: "<bash-input>ls</bash-input><bash-stdout>a</bash-stdout>" })),
+    ).toBe(true);
   });
 
   it.each([
@@ -47,6 +57,8 @@ describe("isPromptMessage", () => {
     ["stored tool output", { source_subtype: "tool_result" }],
     ["injected command output", { content: "<local-command-stdout>ok</local-command-stdout>" }],
     ["a reminder-only row", { content: "<system-reminder>ctx</system-reminder>" }],
+    ["shell output", { content: "<bash-stdout>hello</bash-stdout>" }],
+    ["shell output and errors", { content: "<bash-stdout>a</bash-stdout><bash-stderr>oops</bash-stderr>" }],
   ] satisfies [string, Partial<Message>][])("drops %s", (_name, extra) => {
     expect(isPromptMessage(msg(0, extra))).toBe(false);
   });
@@ -55,7 +67,7 @@ describe("isPromptMessage", () => {
 describe("tocEntry", () => {
   it("labels a prompt with its first line, whitespace collapsed", () => {
     const e = tocEntry(msg(3, { content: "<system-reminder>ctx</system-reminder>\n  Fix   the\tbug\nand more" }));
-    expect(e).toEqual({ ordinal: 3, label: "Fix the bug", isShell: false });
+    expect(e).toMatchObject({ ordinal: 3, label: "Fix the bug", isShell: false });
   });
 
   it("shows a shell shortcut as the command typed", () => {
@@ -69,6 +81,23 @@ describe("tocEntry", () => {
   });
 });
 
+describe("entryVisible", () => {
+  const hiding = (...hidden: string[]) => (type: string) => !hidden.includes(type);
+
+  it("hides a text-only prompt with the user filter", () => {
+    const e = tocEntry(msg(1, { content: "just words" }));
+    expect(entryVisible(e, hiding())).toBe(true);
+    expect(entryVisible(e, hiding("user"))).toBe(false);
+  });
+
+  it("keeps a prompt with a code fence, as the transcript keeps its card", () => {
+    const e = tocEntry(msg(1, { content: "Why does this fail?\n```go\nfunc main() {}\n```" }));
+    expect(e.blocks).toContain("code");
+    expect(entryVisible(e, hiding("user"))).toBe(true);
+    expect(entryVisible(e, hiding("user", "code"))).toBe(true);
+  });
+});
+
 describe("mergeTocEntries", () => {
   it("puts prompts read before the loaded window ahead of the window's own prompts", () => {
     const loaded = [msg(10), msg(11, { role: "assistant" }), msg(12, { content: "newest" })];
@@ -79,7 +108,7 @@ describe("mergeTocEntries", () => {
 
   it("takes the loaded copy where an earlier read overlaps the window", () => {
     const merged = mergeTocEntries([entry(2), { ...entry(10), label: "stale" }], [msg(10, { content: "fresh" })]);
-    expect(merged).toEqual([entry(2), { ordinal: 10, label: "fresh", isShell: false }]);
+    expect(merged).toEqual([entry(2), { ordinal: 10, label: "fresh", isShell: false, blocks: ["user"] }]);
   });
 
   it("keeps every earlier prompt when nothing is loaded", () => {

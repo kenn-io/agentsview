@@ -1,4 +1,6 @@
 import type { DbMessage as Message } from "../../api/generated/index.js";
+import type { BlockType } from "../../stores/ui.svelte.js";
+import { hasVisibleSegments } from "../../utils/content-parser.js";
 import { isSystemBoundaryMessage, isSystemMessage, previewMessage } from "../../utils/messages.js";
 
 /** DOM id of the outline panel, which its toggle controls. */
@@ -11,6 +13,9 @@ export interface TocEntry {
   label: string;
   /** The prompt was a shell shortcut, so the label reads as code. */
   isShell: boolean;
+  /** Block types the prompt's card renders; the block filter hides the
+   *  card only when it hides all of them. */
+  blocks: BlockType[];
 }
 
 /** The part of the transcript on screen, in message ordinals. */
@@ -26,6 +31,11 @@ export interface TocView {
 // Long enough to fill the panel's widest line; CSS adds the ellipsis.
 const LABEL_MAX_CHARS = 160;
 
+// Claude Code records a shell shortcut's output as its own user row. Only
+// the row holding the typed command is a prompt.
+const SHELL_OUTPUT_ONLY_RE =
+  /^(?:\s*<bash-(stdout|stderr)>[\s\S]*?<\/bash-\1>)+\s*$/;
+
 /**
  * Reports whether a message is a prompt someone typed: a user row the
  * transcript renders as a user card. Injected context, boundary cards, and
@@ -34,7 +44,33 @@ const LABEL_MAX_CHARS = 160;
 export function isPromptMessage(m: Message): boolean {
   if (m.role !== "user" || m.is_compact_boundary || m.is_system) return false;
   if (m.source_subtype === "tool_result") return false;
+  if (SHELL_OUTPUT_ONLY_RE.test(previewSource(m.content))) return false;
   return !isSystemMessage(m) && !isSystemBoundaryMessage(m);
+}
+
+// The content a preview starts from, without leading reminder envelopes.
+function previewSource(content: string): string {
+  return content.replace(/^(?:\s*<system-reminder(?:\s[^>]*)?>[\s\S]*?<\/system-reminder>)+/, "");
+}
+
+/** Block types a message's card renders, as the transcript's filter sees them. */
+function renderedBlocks(m: Message): BlockType[] {
+  const blocks = new Set<BlockType>();
+  // A predicate that never matches makes the check visit every segment.
+  hasVisibleSegments(m, (type) => {
+    blocks.add(type);
+    return false;
+  });
+  return [...blocks];
+}
+
+/**
+ * Reports whether the transcript shows an entry's prompt under the block
+ * filter. A filtered code fence still renders its placeholder, so code
+ * keeps a prompt on screen, as it does in the transcript.
+ */
+export function entryVisible(entry: TocEntry, isVisible: (type: BlockType) => boolean): boolean {
+  return entry.blocks.some((type) => type === "code" || isVisible(type));
 }
 
 export function tocEntry(m: Message): TocEntry {
@@ -45,6 +81,7 @@ export function tocEntry(m: Message): TocEntry {
     ordinal: m.ordinal,
     label: label.length > LABEL_MAX_CHARS ? label.slice(0, LABEL_MAX_CHARS) : label,
     isShell: preview.isShell,
+    blocks: renderedBlocks(m),
   };
 }
 

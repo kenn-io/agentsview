@@ -352,8 +352,14 @@
       if (row.end <= top || row.start >= bottom) continue;
       const item = itemAt(row.index);
       if (!item) continue;
-      topOrdinal ??= ui.sortNewestFirst ? item.ordinals.at(-1)! : item.ordinals[0]!;
-      for (const ordinal of item.ordinals) {
+      // An open empty row holds a card per prompt, so only the cards on
+      // screen count; the first of them, in page order, is the top one.
+      const onScreen = item.kind === "empty-group" && emptyGroupOpen(item)
+        ? visibleToolGroupOrdinals(row.index)
+        : ui.sortNewestFirst ? [...item.ordinals].reverse() : item.ordinals;
+      if (onScreen.length === 0) continue;
+      topOrdinal ??= onScreen[0]!;
+      for (const ordinal of onScreen) {
         minOrdinal = Math.min(minOrdinal, ordinal);
         maxOrdinal = Math.max(maxOrdinal, ordinal);
       }

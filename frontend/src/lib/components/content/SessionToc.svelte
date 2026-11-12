@@ -12,6 +12,7 @@
   import { formatNumber } from "../../utils/format.js";
   import {
     currentEntryIndex,
+    entryVisible,
     mergeTocEntries,
     SESSION_TOC_ID as TOC_ID,
     type TocEntry,
@@ -26,27 +27,36 @@
     !needsOlder || (messages.sessionId !== null && sessionToc.covers(messages.sessionId, oldestLoaded)),
   );
 
-  // Oldest first; the list shows them in transcript order.
-  let entries = $derived(mergeTocEntries(sessionToc.olderFor(messages.sessionId), messages.messages));
+  // Every prompt, oldest first. Numbers come from this list, so a prompt
+  // keeps its number when the block filter hides others.
+  let allEntries = $derived(
+    sessionToc.open ? mergeTocEntries(sessionToc.olderFor(messages.sessionId), messages.messages) : [],
+  );
+  // The prompts the transcript shows under the block filter.
+  let entries = $derived(allEntries.filter((entry) => entryVisible(entry, (type) => ui.isBlockVisible(type))));
   let ordered: TocEntry[] = $derived(ui.sortNewestFirst ? [...entries].reverse() : entries);
   let currentOrdinal = $derived.by(() => {
     const index = currentEntryIndex(entries, sessionToc.view, sessionToc.picked);
     return index >= 0 ? entries[index]!.ordinal : null;
   });
-  let promptNumbers = $derived(new Map(entries.map((entry, index) => [entry.ordinal, index + 1])));
+  let currentIndex = $derived(
+    currentOrdinal === null ? -1 : ordered.findIndex((entry) => entry.ordinal === currentOrdinal),
+  );
+  let promptNumbers = $derived(new Map(allEntries.map((entry, index) => [entry.ordinal, index + 1])));
   let tabOrdinal = $derived.by(() => {
     if (focusedOrdinal !== null && promptNumbers.has(focusedOrdinal)) return focusedOrdinal;
     return currentOrdinal ?? ordered[0]?.ordinal ?? null;
   });
-  let userVisible = $derived(ui.isBlockVisible("user"));
   let olderLoading = $derived(needsOlder && sessionToc.olderLoading);
   let olderFailed = $derived(needsOlder && sessionToc.olderFailed);
 
   $effect(() => {
     const sessionId = messages.sessionId;
     const before = oldestLoaded;
-    // A retry clears the failure, which runs this again.
+    // A retry clears the failure, and a finished read may cover less than
+    // a newer window needs, so both run this again.
     void sessionToc.olderFailed;
+    void sessionToc.olderLoading;
     if (!sessionToc.open || !sessionId || messages.loading || !needsOlder) return;
     untrack(() => void sessionToc.ensureOlder(sessionId, before));
   });
@@ -54,15 +64,19 @@
   $effect(() => {
     void messages.sessionId;
     focusedOrdinal = null;
+    focusPending = false;
   });
 
   // Keep the current entry in the list's view without scrolling anything
-  // else on the page, as scrollIntoView would.
+  // else on the page, as scrollIntoView would. It runs when the current
+  // entry changes or moves in the list, such as when earlier prompts
+  // arrive, but not on every transcript refresh, so someone browsing the
+  // list keeps their place.
   $effect(() => {
+    if (!sessionToc.open) return;
     const ordinal = currentOrdinal;
     const list = listEl;
-    // Earlier prompts arriving move the current entry down the list.
-    void ordered;
+    void currentIndex;
     if (ordinal === null || !list) return;
     const button = entryButton(ordinal);
     if (!button) return;
@@ -72,16 +86,30 @@
     else if (bottom > list.scrollTop + list.clientHeight) list.scrollTop = bottom - list.clientHeight;
   });
 
-  // Opening the outline from the keyboard moves focus into it. A request
-  // made before this panel mounted, such as on another page, is not one.
+  // Opening the outline from the keyboard moves focus into it, as soon as
+  // it has an entry to focus; a large session may have none until earlier
+  // prompts arrive. A request made before this panel mounted, such as on
+  // another page, is not one.
   let handledFocusRequest = untrack(() => sessionToc.focusRequest);
+  let focusPending = $state(false);
   $effect(() => {
     const request = sessionToc.focusRequest;
-    if (request === handledFocusRequest || !sessionToc.open) return;
+    if (request === handledFocusRequest) return;
     handledFocusRequest = request;
+    focusPending = untrack(() => sessionToc.open);
+  });
+  $effect(() => {
+    if (!focusPending) return;
+    if (!sessionToc.open) {
+      focusPending = false;
+      return;
+    }
+    const ordinal = tabOrdinal;
+    if (ordinal === null) return;
     void tick().then(() => {
-      if (request !== sessionToc.focusRequest || tabOrdinal === null) return;
-      entryButton(tabOrdinal)?.focus();
+      if (!focusPending || !sessionToc.open) return;
+      focusPending = false;
+      entryButton(ordinal)?.focus();
     });
   });
 
@@ -156,7 +184,7 @@
       </IconButton>
     </div>
 
-    {#if !userVisible}
+    {#if allEntries.length > 0 && entries.length === 0}
       <p class="toc-note">{m.session_toc_hidden_by_filter()}</p>
     {:else if entries.length === 0 && !olderLoading && !olderFailed}
       <p class="toc-note">{m.session_toc_empty()}</p>
