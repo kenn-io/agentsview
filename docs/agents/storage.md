@@ -810,8 +810,10 @@ The cache format version is also the extractor compatibility version. Bump
 `usageCacheFormatVersion` whenever fact extraction, `priceUsageFact`, web-search
 fees, deduplication, rollup semantics, or query-time model canonicalization
 change. Add a record in `internal/db/testdata/usage-cache-format-digests`
-for each format bump. The digest covers the fixture's inputs; add a case when
-new usage behavior needs another input. For fixture-only changes, verify the
+for each format bump. If this PR added the record, replace it when its output
+changes; otherwise bump the format and record the new digest. The digest covers
+stored facts and daily rollups for the fixture; add a case when new usage
+behavior needs another input. For fixture-only changes, verify the
 old and new fixtures produce the same cached output for unchanged inputs, then
 replace the current format's record.
 Each rollup install records the distinct

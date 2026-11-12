@@ -27,7 +27,7 @@ func TestUsageCacheFormatRecordGuidance(t *testing.T) {
 		digest, want string
 	}{
 		{"missing", files(fmt.Sprintf("22-%s.txt", a)), 23, b, "record digest " + b + " for usage cache format 23"},
-		{"changed", files(fmt.Sprintf("22-%s.txt", a)), 22, b, "bump to format 23"},
+		{"changed", files(fmt.Sprintf("22-%s.txt", a)), 22, b, "if this PR added the record, replace it; otherwise bump to format 23"},
 		{"duplicate", files(fmt.Sprintf("23-%s.txt", a), fmt.Sprintf("23-%s.txt", b)), 23, a, "bump to format 24"},
 		{"newer gap", files(fmt.Sprintf("22-%s.txt", a), fmt.Sprintf("25-%s.txt", b)), 22, a, "format 26"},
 		{"same output after bump", files(fmt.Sprintf("22-%s.txt", a), fmt.Sprintf("23-%s.txt", a)), 23, a, ""},

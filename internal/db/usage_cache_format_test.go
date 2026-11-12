@@ -41,7 +41,7 @@ func checkUsageCacheFormatRecords(files fs.FS, version int, digest string) error
 		return fmt.Errorf("record digest %s for usage cache format %d", digest, version)
 	}
 	if len(current) > 1 || current[0] != fmt.Sprintf("%d-%s.txt", version, digest) {
-		return fmt.Errorf("usage cache format %d output changed or has multiple records (digest %s); bump to format %d and record the new digest", version, digest, version+1)
+		return fmt.Errorf("usage cache format %d output changed or has multiple records (digest %s); if this PR added the record, replace it; otherwise bump to format %d and record the new digest", version, digest, version+1)
 	}
 	return nil
 }
@@ -61,7 +61,7 @@ func TestUsageCacheFormat(t *testing.T) {
 		pricing.GPT56LunaCanonical: {InputPerMTok: money.Money{Microdollars: 1_500_000}, OutputPerMTok: money.Money{Microdollars: 3_000_000}, Source: export.PricingRowSourceFetched},
 	})
 	started := "2026-08-10T08:00:00Z"
-	for _, session := range []struct{ id, project, agent string }{{"computed", "project-a", "claude"}, {"duplicate", "project-b", "claude"}, {"reported", "project-c", "copilot"}, {"activity", "activity", "copilot"}, {"posit", "project-posit", "posit-assistant"}, {"priority", "project-priority", "codex"}, {"openai", "project-openai", "codex"}, {"alias", "project-alias", "codex"}, {"recorded", "project-recorded", "opencode"}, {"recorded-priced", "project-recorded-priced", "opencode"}} {
+	for _, session := range []struct{ id, project, agent string }{{"computed", "project-a", "claude"}, {"reasoning", "project-reasoning", "codex"}, {"duplicate", "project-b", "claude"}, {"reported", "project-c", "copilot"}, {"activity", "activity", "copilot"}, {"posit", "project-posit", "posit-assistant"}, {"priority", "project-priority", "codex"}, {"openai", "project-openai", "codex"}, {"alias", "project-alias", "codex"}, {"recorded", "project-recorded", "opencode"}, {"recorded-priced", "project-recorded-priced", "opencode"}} {
 		insertSession(t, database, session.id, session.project, func(s *Session) { s.Agent = session.agent; s.StartedAt = &started })
 	}
 	require.NoError(t, database.InsertMessages(t.Context(), []Message{
@@ -70,6 +70,7 @@ func TestUsageCacheFormat(t *testing.T) {
 		{SessionID: "duplicate", Ordinal: 0, Role: "assistant", Timestamp: "2026-08-10T10:01:00Z", Model: "format-model", TokenUsage: []byte(`{"input_tokens":50,"output_tokens":15}`), ClaudeMessageID: "shared", ClaudeRequestID: "request"},
 		{SessionID: "computed", Ordinal: 2, Role: "assistant", Timestamp: "2026-08-10T10:02:00Z", Model: "format-model", TokenUsage: []byte(`{"input_tokens":10,"output_tokens":5,"cache_creation_input_tokens":20,"cache_creation":{"ephemeral_1h_input_tokens":20}}`), ClaudeMessageID: "no-request"},
 		{SessionID: "computed", Ordinal: 3, Role: "assistant", Timestamp: "2026-08-10T10:03:00Z", Model: "format-model", TokenUsage: []byte(`{"input_tokens":10,"output_tokens":10,"cache_creation_input_tokens":30,"cache_creation":{"ephemeral_1h_input_tokens":30}}`), ClaudeMessageID: "no-request"},
+		{SessionID: "reasoning", Ordinal: 0, Role: "assistant", Timestamp: "2026-08-10T11:00:00Z", Model: "format-model", SourceUUID: "reasoning-source", TokenUsage: []byte(`{"reasoning_tokens":100}`)},
 		{SessionID: "alias", Ordinal: 0, Role: "assistant", Timestamp: "2026-08-10T09:00:00Z", Model: pricing.GPTReserveModelName, TokenUsage: []byte(`{"input_tokens":1000000,"output_tokens":500000}`)},
 		{SessionID: "recorded-priced", Ordinal: 0, Role: "assistant", Timestamp: "2026-08-10T09:00:00Z", Model: "format-model", TokenUsage: []byte(`{"input_tokens":1000,"output_tokens":500,"recorded_cost_microdollars":9000}`)},
 		{SessionID: "recorded", Ordinal: 0, Role: "assistant", Timestamp: "2026-08-10T09:00:00Z", Model: "unpriced-harness-model", TokenUsage: []byte(`{"input_tokens":1000,"output_tokens":500,"recorded_cost_microdollars":7000}`)},
@@ -82,37 +83,52 @@ func TestUsageCacheFormat(t *testing.T) {
 	require.NoError(t, database.ReplaceSessionUsageEvents(t.Context(), "reported", []UsageEvent{{Source: "shutdown", Model: "format-model", InputTokens: 10, Cost: &cost, CostStatus: "exact", CostSource: CopilotReportedCostSource, OccurredAt: "2026-08-10T09:30:00Z", DedupKey: "reported"}}))
 	require.NoError(t, database.InsertCursorUsageEvents(t.Context(), []CursorUsageEvent{{OccurredAt: "2026-08-10T09:00:00Z", Model: "format-model", InputTokens: 11, Charged: money.Money{Microdollars: 100000}, DedupKey: "cursor"}}))
 	filter := UsageFilter{From: "2026-08-10", To: "2026-08-10", Timezone: "UTC", Breakdowns: true}
-	warmJournaledUsage(t, database, filter)
-	type topEntry struct {
-		SessionID string
-		Cost      money.Money
-	}
-	type result struct {
-		Daily    []DailyUsageEntry
-		Totals   UsageTotals
-		Top      []topEntry
-		Counts   UsageSessionCounts
-		Activity int
-	}
-	read := func() result {
-		daily, err := database.GetDailyUsage(t.Context(), filter)
-		require.NoError(t, err)
-		top, err := database.GetTopSessionsByCost(t.Context(), filter, 10)
-		require.NoError(t, err)
-		counts, err := database.GetUsageSessionCounts(t.Context(), filter)
-		require.NoError(t, err)
-		activity, err := database.GetUsageMatchingSessionCount(t.Context(), UsageFilter{From: filter.From, To: filter.To, Timezone: "UTC", Project: "activity"})
-		require.NoError(t, err)
-		var sessions []topEntry
-		for _, entry := range top {
-			sessions = append(sessions, topEntry{entry.SessionID, entry.Cost})
+	cache := warmJournaledUsage(t, database, filter)
+	read := func() [][][]any {
+		var result [][][]any
+		for _, query := range []string{
+			`SELECT s.session_id, f.fact_index, f.source, f.message_ordinal, f.timestamp_ms, f.timestamp_ns,
+				f.raw_timestamp, f.uses_session_start, f.model, f.provider_id, f.input_tokens, f.output_tokens,
+				f.reasoning_tokens, f.cache_creation_tokens, f.cache_creation_1h_tokens, f.cache_read_tokens,
+				f.web_search_requests, f.reported_cost_microdollars, f.cost_source, f.cost_status, f.request_scoped,
+				f.claude_message_id, f.claude_request_id, f.source_uuid, f.usage_dedup_key, f.token_eligible, f.activity_eligible
+				FROM usage_facts f JOIN usage_cached_sessions s ON s.id=f.cached_session_id ORDER BY s.session_id, f.fact_index`,
+			`SELECT i.session_id, d.local_date, d.reported_model, d.provider_id, d.priced_model, d.matched_pattern,
+				d.rate_ok, d.rate_hash, d.pricing_timestamp, d.band_threshold, d.input_tokens, d.output_tokens,
+				d.reasoning_tokens, d.cache_creation_tokens, d.cache_read_tokens, d.web_search_requests,
+				d.estimated_cost_microdollars, d.savings_microdollars, d.authoritative_cost_microdollars,
+				d.computed_request_count, d.computed_aggregate_count, d.reported_count, d.base_request_count,
+				d.discarded_snapshot_output_tokens FROM usage_daily_rollups d
+				JOIN usage_rollup_installs i ON i.id=d.rollup_install_id
+				JOIN usage_rollup_timezones z ON z.id=i.timezone_id WHERE z.timezone_name='UTC'
+				ORDER BY i.session_id, d.local_date, d.reported_model, d.provider_id, d.rate_hash, d.band_threshold`,
+		} {
+			rows, err := cache.db.QueryContext(t.Context(), query)
+			require.NoError(t, err)
+			columns, err := rows.Columns()
+			require.NoError(t, err)
+			var table [][]any
+			for rows.Next() {
+				values := make([]any, len(columns))
+				args := make([]any, len(columns))
+				for i := range values {
+					args[i] = &values[i]
+				}
+				require.NoError(t, rows.Scan(args...))
+				table = append(table, values)
+			}
+			require.NoError(t, rows.Err())
+			require.NoError(t, rows.Close())
+			result = append(result, table)
 		}
-		return result{daily.Daily, daily.Totals, sessions, counts, activity}
+		return result
 	}
 	before := read()
 	require.NoError(t, database.InsertMessages(t.Context(), []Message{{SessionID: "computed", Ordinal: 4, Role: "assistant", Timestamp: "2026-08-10T12:00:00Z", Model: "format-model", TokenUsage: []byte(`{"input_tokens":75,"output_tokens":5}`), ClaudeMessageID: "append", ClaudeRequestID: "request"}}))
+	_, err = database.prepareUsageWindow(t.Context(), filter, usageQueryKindToken, false, true, nil)
+	require.NoError(t, err)
 	after := read()
-	encoded, err := json.Marshal([]result{before, after})
+	encoded, err := json.Marshal([][][][]any{before, after})
 	require.NoError(t, err)
 	digest := hexSHA256(encoded)
 	require.NoError(t, checkUsageCacheFormatRecords(os.DirFS("testdata/usage-cache-format-digests"), usageCacheFormatVersion, digest))
