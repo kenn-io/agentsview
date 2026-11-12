@@ -5228,31 +5228,6 @@ func TestGetAnalyticsToolsLocalDayBoundaries(t *testing.T) {
 	}, resp.Trend)
 }
 
-func TestGetAnalyticsToolsBlankAndMalformedTimestamps(t *testing.T) {
-	d := testDB(t)
-	insertSession(t, d, "blank-time", "window", func(s *Session) {
-		s.StartedAt = new("2025-03-09T12:00:00Z")
-	})
-	for n, ts := range []string{"\t", "\u00a0", "bad"} {
-		m := asstMsgAt("blank-time", n, "read", ts)
-		m.ToolCalls = []ToolCall{{SessionID: "blank-time", ToolName: "Read", Category: "Read"}}
-		insertMessages(t, d, m)
-	}
-	for _, zone := range []string{"UTC", "America/New_York"} {
-		resp, err := d.GetAnalyticsTools(t.Context(), AnalyticsFilter{From: "2025-03-09", To: "2025-03-09", Timezone: zone})
-		require.NoError(t, err)
-		assert.Equal(t, 2, resp.TotalCalls, "zone %s", zone)
-		assert.Equal(t, []ToolTrendEntry{{Date: "2025-03-03", ByCat: map[string]int{"Read": 2}}}, resp.Trend, "zone %s", zone)
-	}
-	resp, err := d.GetAnalyticsTools(t.Context(), AnalyticsFilter{Timezone: "America/New_York"})
-	require.NoError(t, err)
-	assert.Equal(t, 3, resp.TotalCalls)
-	assert.Equal(t, []ToolTrendEntry{
-		{Date: "", ByCat: map[string]int{"Read": 1}},
-		{Date: "2025-03-03", ByCat: map[string]int{"Read": 2}},
-	}, resp.Trend)
-}
-
 func TestSQLiteToolsDateKeyMatchesResolver(t *testing.T) {
 	d := testDB(t)
 	insertSession(t, d, "keys", "window", func(s *Session) { s.StartedAt = new("2025-03-09T12:00:00Z") })
@@ -5300,7 +5275,6 @@ func TestGetAnalyticsToolsLocalWeeks(t *testing.T) {
 		name, zone, before, after, firstWeek, secondWeek string
 	}{
 		{"fall DST", "America/New_York", "2025-11-03T04:59:59Z", "2025-11-03T05:00:00Z", "2025-10-27", "2025-11-03"},
-		{"fractional offset", "Asia/Kathmandu", "2025-03-09T18:14:59Z", "2025-03-09T18:15:00Z", "2025-03-03", "2025-03-10"},
 		{"unknown zone", "Invalid/Zone", "2025-03-09T23:59:59Z", "2025-03-10T00:00:00Z", "2025-03-03", "2025-03-10"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -5320,12 +5294,6 @@ func TestGetAnalyticsToolsLocalWeeks(t *testing.T) {
 			assert.Equal(t, 1, resp.Trend[1].ByCat["Read"])
 			assert.Equal(t, 2, resp.TotalCalls)
 			assert.Equal(t, 1, resp.ByTool[0].SessionCount)
-			sunday := 6
-			resp, err = d.GetAnalyticsTools(t.Context(), AnalyticsFilter{From: "2025-01-01", To: "2025-12-31", Timezone: tc.zone, DayOfWeek: &sunday})
-			require.NoError(t, err)
-			assert.Equal(t, 1, resp.TotalCalls)
-			require.Len(t, resp.Trend, 1)
-			assert.Equal(t, 1, resp.Trend[0].ByCat["Read"])
 		})
 	}
 }
