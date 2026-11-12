@@ -34,7 +34,8 @@ Other apps using Kit can use that choice, and AgentsView can use it at startup
 to enable search and download missing built-in server files when it has no
 enabled setup. Set `vector.enabled = false` in `config.toml` to opt out of the
 shared choice; removing the `[vector]` section does not. Separately configured
-search keeps its settings.
+search keeps its settings. Automatic setup also waits for an explicit
+`push_vectors` setting on each configured PostgreSQL target.
 
 An enabled configuration with `local = true` starts indexing at startup using
 installed server files. It does not record a shared choice. If files are missing,
@@ -1012,8 +1013,9 @@ indexing. Replica and DuckDB servers have no local setup control.
 
 `GET /api/v1/embeddings/status` includes `setup` when browser setup is
 available. `POST /api/v1/embeddings/setup` accepts `approved_bytes`, the
-download size disclosed to the user. It returns `202` with `{"started":true}`
-when setup is accepted. A concurrent setup returns `409`.
+download size disclosed to the user, and optional `expected_provider` from the
+status shown to the user. It returns `202` with `{"started":true}` when setup is
+accepted. A concurrent setup or a changed provider returns `409`.
 
 Approval covers at most `approved_bytes`. If installation verifies that a larger
 download is required, it declines the download and reports the verified size in

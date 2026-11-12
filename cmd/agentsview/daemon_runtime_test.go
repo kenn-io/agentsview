@@ -1231,7 +1231,7 @@ func TestFindDaemonRuntime_IgnoresIncompatibleRuntime(t *testing.T) {
 	dir := runtimeTestDir(t)
 	writeLiveRuntime(t, dir, false,
 		withRuntimeVersion("old"),
-		withRuntimeAPIVersion(15), // API 15 cannot send the selected setup provider.
+		withRuntimeAPIVersion(14), // API 14 is older than the current daemon API.
 	)
 
 	assert.Nil(t, FindDaemonRuntime(dir))

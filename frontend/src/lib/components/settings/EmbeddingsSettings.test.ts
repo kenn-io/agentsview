@@ -126,6 +126,7 @@ describe("EmbeddingsSettings", () => {
       await settle();
       expect(embeddingsService.postApiV1EmbeddingsSetup).toHaveBeenNthCalledWith(1, {
         approved_bytes: 0,
+        expected_provider: "ollama",
       });
       expect(document.body.textContent).toContain("Downloads 295 MB");
       expect(document.body.querySelector('[role="alert"]')?.textContent).toContain(
@@ -137,6 +138,7 @@ describe("EmbeddingsSettings", () => {
       await settle();
       expect(embeddingsService.postApiV1EmbeddingsSetup).toHaveBeenNthCalledWith(2, {
         approved_bytes: 295000000,
+        expected_provider: "built-in",
       });
     } finally {
       unmount(component);

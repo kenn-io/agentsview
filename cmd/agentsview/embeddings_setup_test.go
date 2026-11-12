@@ -68,7 +68,7 @@ func TestSetupReportsSharedChoiceWriteFailure(t *testing.T) {
 	require.NoError(t, err)
 	defer func() { release(); require.NoError(t, owner.Close()) }()
 	require.NoError(t, os.WriteFile(filepath.Join(home, ".kenn"), []byte("block directory"), 0o600))
-	require.NoError(t, owner.Setup(0))
+	require.NoError(t, owner.Setup(0, ""))
 	<-owner.done
 	select {
 	case <-started:
@@ -94,6 +94,35 @@ func TestSetupReportsSharedChoiceWriteFailure(t *testing.T) {
 	case <-time.After(10 * time.Second):
 		require.FailNow(t, "daemon did not idle after indexing")
 	}
+}
+
+func TestSetupRejectsChangedProvider(t *testing.T) {
+	setTestHome(t, t.TempDir())
+	dir := testDataDir(t)
+	cfg, err := config.LoadReadOnly()
+	require.NoError(t, err)
+	database := dbtest.OpenTestDBAt(t, filepath.Join(dir, "sessions.db"))
+	oldInspect, oldEndpoint := inspectLocalEmbeddings, localEmbeddingEndpoint
+	t.Cleanup(func() { inspectLocalEmbeddings, localEmbeddingEndpoint = oldInspect, oldEndpoint })
+	ollama := true
+	inspectLocalEmbeddings = func(context.Context, embedlocal.Options) (embedlocal.Status, error) {
+		return embedlocal.Status{OllamaAvailable: ollama}, nil
+	}
+	localEmbeddingEndpoint = func(context.Context, embedlocal.Options) (string, error) { return "http://127.0.0.1:1/v1", nil }
+	owner, err := newLiveVectorServing(t.Context(), cfg, database, nil, config.LoadReadOnly)
+	require.NoError(t, err)
+	defer func() { require.NoError(t, owner.Close()) }()
+	status, err := owner.SetupStatus(t.Context())
+	require.NoError(t, err)
+	require.Equal(t, "ollama", status.Provider)
+	ollama = false
+	ln, port := listenLoopback(t)
+	cfg.Host, cfg.Port = "127.0.0.1", port
+	ts := startTestServer(t, ln, server.New(cfg, database, nil, owner.ServerOptions()...).Handler())
+	embeddingRequest(t, ts.Client(), ts.URL, "POST", "/api/v1/embeddings/setup", "application/json", strings.NewReader(`{"approved_bytes":0,"expected_provider":"ollama"}`), http.StatusConflict)
+	chosen, err := embedlocal.ChoiceRecorded()
+	require.NoError(t, err)
+	assert.False(t, chosen)
 }
 
 func TestSharedSetupKeepsOptOutAddedDuringDownload(t *testing.T) {
@@ -151,6 +180,8 @@ func TestSharedChoiceLeavesConfiguredSearchAlone(t *testing.T) {
 	}{
 		{name: "absent"},
 		{name: "explicit off", shared: true, config: "[vector]\nenabled = false\n"},
+		{name: "postgres unspecified push", shared: true, config: "[pg]\nurl = 'postgres://example.com/db'\n"},
+		{name: "named postgres unspecified push", shared: true, config: "[pg.example]\nurl = 'postgres://example.com/db'\n"},
 		{name: "enabled default server", config: "[vector]\nenabled = true\n"},
 		{name: "deployment", shared: true, deployment: true},
 		{name: "usage-only archive", shared: true, usage: true},
@@ -274,51 +305,62 @@ func TestSavedLocalSetupDoesNotRecordOrApproveChoice(t *testing.T) {
 }
 
 func TestSharedChoiceStartsLocalIndexing(t *testing.T) {
-	setTestHome(t, t.TempDir())
-	dir := testDataDir(t)
-	require.NoError(t, embedlocal.RecordChoice())
-	cfg, err := config.LoadReadOnly()
-	require.NoError(t, err)
-	database := dbtest.OpenTestDBAt(t, filepath.Join(dir, "sessions.db"))
-	var installs atomic.Int64
-	oldInspect, oldEndpoint, oldInstall := inspectLocalEmbeddings, localEmbeddingEndpoint, installLocalEmbeddings
-	t.Cleanup(func() {
-		inspectLocalEmbeddings, localEmbeddingEndpoint, installLocalEmbeddings = oldInspect, oldEndpoint, oldInstall
-	})
-	inspectLocalEmbeddings = func(context.Context, embedlocal.Options) (embedlocal.Status, error) { return embedlocal.Status{}, nil }
-	var installed atomic.Bool
-	localEmbeddingEndpoint = func(_ context.Context, opts embedlocal.Options) (string, error) {
-		if !opts.SkipOllama {
-			return "http://127.0.0.1:11434/v1", nil
-		}
-		if !installed.Load() {
-			return "", embedlocal.ErrNotFound
-		}
-		return "http://127.0.0.1:1/v1", nil
+	for _, tc := range []struct{ name, config string }{
+		{name: "no postgres"},
+		{name: "postgres push disabled", config: "[pg]\nurl = 'postgres://example.com/db'\npush_vectors = false\n"},
+		{name: "postgres push enabled", config: "[pg]\nurl = 'postgres://example.com/db'\npush_vectors = true\n"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			setTestHome(t, t.TempDir())
+			dir := testDataDir(t)
+			if tc.config != "" {
+				writeTestConfig(t, dir, tc.config)
+			}
+			require.NoError(t, embedlocal.RecordChoice())
+			cfg, err := config.LoadReadOnly()
+			require.NoError(t, err)
+			database := dbtest.OpenTestDBAt(t, filepath.Join(dir, "sessions.db"))
+			var installs atomic.Int64
+			oldInspect, oldEndpoint, oldInstall := inspectLocalEmbeddings, localEmbeddingEndpoint, installLocalEmbeddings
+			t.Cleanup(func() {
+				inspectLocalEmbeddings, localEmbeddingEndpoint, installLocalEmbeddings = oldInspect, oldEndpoint, oldInstall
+			})
+			inspectLocalEmbeddings = func(context.Context, embedlocal.Options) (embedlocal.Status, error) { return embedlocal.Status{}, nil }
+			var installed atomic.Bool
+			localEmbeddingEndpoint = func(_ context.Context, opts embedlocal.Options) (string, error) {
+				if !opts.SkipOllama {
+					return "http://127.0.0.1:11434/v1", nil
+				}
+				if !installed.Load() {
+					return "", embedlocal.ErrNotFound
+				}
+				return "http://127.0.0.1:1/v1", nil
+			}
+			installLocalEmbeddings = func(ctx context.Context, opts embedlocal.InstallOptions) (embedlocal.Installation, error) {
+				installs.Add(1)
+				approved, err := opts.Confirm(ctx, 295_000_000)
+				if err != nil {
+					return embedlocal.Installation{}, err
+				}
+				if !approved {
+					return embedlocal.Installation{}, errors.New("download was not approved")
+				}
+				installed.Store(true)
+				return embedlocal.Installation{DataDir: opts.DataDir, Executable: "fixture"}, nil
+			}
+			oldBattery := onBattery
+			t.Cleanup(func() { onBattery = oldBattery })
+			onBattery = func() bool { return true }
+			owner, err := newLiveVectorServing(t.Context(), cfg, database, nil, config.LoadReadOnly)
+			require.NoError(t, err)
+			defer func() { require.NoError(t, owner.Close()) }()
+			<-owner.done
+			setup, err := owner.SetupStatus(t.Context())
+			require.NoError(t, err)
+			assert.False(t, setup.Busy)
+			assert.EqualValues(t, 1, installs.Load())
+		})
 	}
-	installLocalEmbeddings = func(ctx context.Context, opts embedlocal.InstallOptions) (embedlocal.Installation, error) {
-		installs.Add(1)
-		approved, err := opts.Confirm(ctx, 295_000_000)
-		if err != nil {
-			return embedlocal.Installation{}, err
-		}
-		if !approved {
-			return embedlocal.Installation{}, errors.New("download was not approved")
-		}
-		installed.Store(true)
-		return embedlocal.Installation{DataDir: opts.DataDir, Executable: "fixture"}, nil
-	}
-	oldBattery := onBattery
-	t.Cleanup(func() { onBattery = oldBattery })
-	onBattery = func() bool { return true }
-	owner, err := newLiveVectorServing(t.Context(), cfg, database, nil, config.LoadReadOnly)
-	require.NoError(t, err)
-	defer func() { require.NoError(t, owner.Close()) }()
-	<-owner.done
-	setup, err := owner.SetupStatus(t.Context())
-	require.NoError(t, err)
-	assert.False(t, setup.Busy)
-	assert.EqualValues(t, 1, installs.Load())
 }
 
 func TestLiveEmbeddingsSetup(t *testing.T) {
@@ -604,9 +646,9 @@ func TestLiveEmbeddingsSetupProgress(t *testing.T) {
 	owner, err := newLiveVectorServing(t.Context(), cfg, database, nil, config.LoadReadOnly)
 	require.NoError(t, err)
 	defer func() { require.NoError(t, owner.Close()) }()
-	require.NoError(t, owner.Setup(0))
+	require.NoError(t, owner.Setup(0, ""))
 	<-started
-	require.ErrorIs(t, owner.Setup(0), vector.ErrBuildRunning)
+	require.ErrorIs(t, owner.Setup(0, ""), vector.ErrBuildRunning)
 	status, err := owner.SetupStatus(t.Context())
 	require.NoError(t, err)
 	assert.True(t, status.Busy)
@@ -676,7 +718,7 @@ func TestLiveEmbeddingsSetupFailures(t *testing.T) {
 				return
 			}
 			if failure == "model inspection" {
-				err := owner.Setup(0)
+				err := owner.Setup(0, "")
 				require.ErrorIs(t, err, inspectionError)
 				assert.NotErrorIs(t, err, vector.ErrInvalidBuildRequest)
 				return
@@ -684,7 +726,7 @@ func TestLiveEmbeddingsSetupFailures(t *testing.T) {
 			if failure == "config read" {
 				require.NoError(t, os.Mkdir(filepath.Join(dir, "config.toml"), 0o700))
 				var pathError *os.PathError
-				err := owner.Setup(0)
+				err := owner.Setup(0, "")
 				require.ErrorAs(t, err, &pathError)
 				assert.NotErrorIs(t, err, vector.ErrInvalidBuildRequest)
 				return
@@ -694,7 +736,7 @@ func TestLiveEmbeddingsSetupFailures(t *testing.T) {
 				require.NoError(t, err)
 				assert.Empty(t, status.Action)
 			}
-			err = owner.Setup(0)
+			err = owner.Setup(0, "")
 			require.ErrorIs(t, err, vector.ErrInvalidBuildRequest)
 		})
 	}
@@ -779,7 +821,7 @@ func TestLiveEmbeddingsSetupDisclosesVerifiedRepairSize(t *testing.T) {
 	initial, err := owner.SetupStatus(t.Context())
 	require.NoError(t, err)
 	require.Positive(t, initial.MissingBytes)
-	require.NoError(t, owner.Setup(initial.MissingBytes))
+	require.NoError(t, owner.Setup(initial.MissingBytes, ""))
 	<-owner.done
 	assert.False(t, approved.Load())
 	retry, err := owner.SetupStatus(t.Context())
@@ -789,7 +831,7 @@ func TestLiveEmbeddingsSetupDisclosesVerifiedRepairSize(t *testing.T) {
 	assert.Contains(t, retry.Error, "declined")
 	assert.Greater(t, retry.MissingBytes, initial.MissingBytes)
 	assert.Equal(t, requiredBytes.Load(), retry.MissingBytes)
-	require.NoError(t, owner.Setup(retry.MissingBytes))
+	require.NoError(t, owner.Setup(retry.MissingBytes, ""))
 	<-owner.done
 	assert.Equal(t, retry.MissingBytes, requiredBytes.Load())
 	assert.True(t, approved.Load(), "Retry must approve the verified size disclosed after repair was refused")
@@ -907,13 +949,15 @@ func TestCLIEmbeddingsSetup(t *testing.T) {
 				"POST /api/v1/embeddings/setup": func(w http.ResponseWriter, r *http.Request) {
 					posts++
 					var body struct {
-						ApprovedBytes int64 `json:"approved_bytes"`
+						ApprovedBytes    int64  `json:"approved_bytes"`
+						ExpectedProvider string `json:"expected_provider"`
 					}
 					if !assert.NoError(t, json.UnmarshalRead(r.Body, &body)) {
 						w.WriteHeader(http.StatusBadRequest)
 						return
 					}
 					approved = body.ApprovedBytes
+					assert.Equal(t, tc.provider, body.ExpectedProvider)
 					w.WriteHeader(http.StatusAccepted)
 					io.WriteString(w, `{"started":true}`)
 				},

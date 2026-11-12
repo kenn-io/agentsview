@@ -1094,7 +1094,7 @@ func setupEmbeddingsBuild(ctx context.Context, out io.Writer, in *bufio.Scanner,
 	if !confirmScanned(in, out, question) {
 		return errors.New("search setup declined")
 	}
-	if err := client.startSetup(ctx, approved); err != nil {
+	if err := client.startSetup(ctx, approved, setup.Provider); err != nil {
 		if status, statusErr := client.status(ctx); statusErr == nil {
 			if handled, joinErr := joinActiveSetup(ctx, out, cfg, client, status); handled {
 				return joinErr
@@ -1135,12 +1135,13 @@ func joinActiveSetup(ctx context.Context, out io.Writer, cfg config.Config, clie
 	return false, nil
 }
 
-func (c embeddingsDaemonClient) startSetup(ctx context.Context, approved int64) error {
+func (c embeddingsDaemonClient) startSetup(ctx context.Context, approved int64, provider string) error {
 	api, err := apiclient.NewHTTPClient(c.baseURL, c.token, embeddingsDaemonHTTPClient)
 	if err != nil {
 		return err
 	}
-	response, err := api.PostAPIV1EmbeddingsSetupWithResponse(ctx, &apiclient.PostAPIV1EmbeddingsSetupRequestOptions{Body: &apiclient.EmbeddingsSetupInputBody{ApprovedBytes: &approved}})
+	expected := apiclient.EmbeddingsSetupInputBodyExpectedProvider(provider)
+	response, err := api.PostAPIV1EmbeddingsSetupWithResponse(ctx, &apiclient.PostAPIV1EmbeddingsSetupRequestOptions{Body: &apiclient.EmbeddingsSetupInputBody{ApprovedBytes: &approved, ExpectedProvider: &expected}})
 	if response == nil {
 		return err
 	}

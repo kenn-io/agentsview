@@ -61,6 +61,15 @@ func (v *liveVectorServing) startSharedChoice() {
 	var approvedBytes int64
 	embeddings := v.cfg.Vector.Embeddings
 	if !v.cfg.Vector.Enabled {
+		targets, err := v.cfg.ResolvePGTargets()
+		if err != nil {
+			return
+		}
+		for _, target := range targets {
+			if target.Config.URL != "" && target.Config.PushVectors == nil {
+				return
+			}
+		}
 		chosen, err := embedlocal.ChoiceRecorded()
 		if err != nil {
 			log.Printf("search by meaning: read shared choice: %v", err)
@@ -254,7 +263,7 @@ func setupRequestError(err error) error {
 	return err
 }
 
-func (v *liveVectorServing) Setup(approvedBytes int64) error {
+func (v *liveVectorServing) Setup(approvedBytes int64, expectedProvider string) error {
 	status, err := v.SetupStatus(v.ctx)
 	if err != nil {
 		return err
@@ -277,6 +286,9 @@ func (v *liveVectorServing) Setup(approvedBytes int64) error {
 	}
 	if status.Action != "turn-on" {
 		return fmt.Errorf("%w: setup action is unavailable for the current embeddings provider", vector.ErrInvalidBuildRequest)
+	}
+	if expectedProvider != "" && status.Provider != expectedProvider {
+		return server.ErrEmbeddingsProviderChanged
 	}
 	if status.Provider == "built-in" {
 		deployment.Local = true

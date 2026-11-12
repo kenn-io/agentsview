@@ -7,7 +7,7 @@
   let { status, hint = false, onchange = () => {} }: {
     status: VectorBuildStatus | null;
     hint?: boolean;
-    onchange?: () => void;
+    onchange?: (started: boolean) => void;
   } = $props();
   let error = $state<string | null>(null);
   const setup = $derived(status?.setup);
@@ -34,13 +34,17 @@
   });
   async function activate() {
     if (setup?.action !== "turn-on") return;
+    const provider = setup.provider;
+    if (provider !== "built-in" && provider !== "ollama" && provider !== "configured") return;
     error = null;
     try {
-      await EmbeddingsService.postApiV1EmbeddingsSetup({ approved_bytes: shownBytes }).catch((e) => {
-        if (!(e instanceof ApiError && e.status === 409)) throw e;
-      });
-      onchange();
+      await EmbeddingsService.postApiV1EmbeddingsSetup({ approved_bytes: shownBytes, expected_provider: provider });
+      onchange(true);
     } catch (e) {
+      if (e instanceof ApiError && e.status === 409) {
+        onchange(e.code !== "embeddings_provider_changed");
+        return;
+      }
       error = e instanceof Error ? e.message : m.settings_embeddings_load_failed();
     }
   }

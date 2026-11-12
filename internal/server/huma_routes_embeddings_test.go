@@ -462,7 +462,7 @@ func (r fakeEmbeddingsRuntime) IncludeAutomated() bool { return r.includeAutomat
 func (r fakeEmbeddingsRuntime) SetupStatus(context.Context) (EmbeddingsSetupStatus, error) {
 	return EmbeddingsSetupStatus{Enabled: true, Busy: r.busy}, nil
 }
-func (fakeEmbeddingsRuntime) Setup(int64) error { return nil }
+func (fakeEmbeddingsRuntime) Setup(int64, string) error { return nil }
 
 func TestEmbeddingsStatusPreservesBuildDuringSetup(t *testing.T) {
 	manager := &fakeEmbeddingsManager{status: vector.BuildStatus{
