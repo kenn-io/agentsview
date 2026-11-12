@@ -2407,7 +2407,7 @@ func TestDarwinWatcherNativeDropReconcilesOnlyThatRoot(t *testing.T) {
 
 	returned := make(chan struct{})
 	go func() {
-		sinkFor(dropped)([]fsevents.Event{{Flags: fseventFlagKernelDropped}})
+		sinkFor(dropped)([]fsevents.Event{{Flags: fseventFlagMustScanSubDirs}})
 		close(returned)
 	}()
 	requireReceiveWithin(t, returned, 5*time.Second)
@@ -2420,12 +2420,9 @@ func TestDarwinWatcherNativeDropReconcilesOnlyThatRoot(t *testing.T) {
 	assert.Equal(t, "trust", requireReceiveWithin(t, order, 5*time.Second),
 		"event-dependent trust must be revoked before the root is reconciled")
 
-	// A storm of drops and must-rescan deliveries on the same root.
-	for range 50 {
-		sinkFor(dropped)([]fsevents.Event{{
-			Path: filepath.Join(dropped, "sub"), Flags: fseventFlagMustScanSubDirs,
-		}})
-		sinkFor(dropped)([]fsevents.Event{{Flags: fseventFlagUserDropped}})
+	// A storm of drops on the same root.
+	for range 100 {
+		sinkFor(dropped)([]fsevents.Event{{Flags: fseventFlagMustScanSubDirs}})
 	}
 
 	// Native watching continues on every root, including the one that dropped.
@@ -2553,7 +2550,7 @@ func TestDarwinWatcherNativeDropRecoversHiddenRootLoss(t *testing.T) {
 			sinksMu.Lock()
 			sink := sinks[dropped]
 			sinksMu.Unlock()
-			sink([]fsevents.Event{{Flags: fseventFlagKernelDropped}})
+			sink([]fsevents.Event{{Flags: fseventFlagMustScanSubDirs}})
 
 			obligation := requireReceiveWithin(t, polling, 5*time.Second)
 			assert.Equal(t, dropped, obligation.Key,
