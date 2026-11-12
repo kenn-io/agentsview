@@ -132,7 +132,7 @@ func buildContentWordHits(ctx context.Context, tx *sql.Tx, q contentWords) error
 // skipping offset. where filters the message m and its session s.
 func contentWordRows(
 	ctx context.Context, tx *sql.Tx, f ContentSearchFilter, q contentWords,
-	where string, args []any, offset, need, floor int, full bool,
+	where string, args []any, offset, need int, full bool,
 ) ([]ContentMatch, error) {
 	args = append([]any(nil), args...)
 	var phraseWhere strings.Builder
@@ -157,12 +157,12 @@ func contentWordRows(
 		}
 		args = append(args, match)
 	} else {
-		where += " AND h.n >= ? AND messages_fts.content MATCH ?"
+		where += " AND messages_fts.content MATCH ?"
 		match := q.snippetTerm()
 		if q.match != "" {
 			match = q.match
 		}
-		args = append(args, floor, match)
+		args = append(args, match)
 	}
 	if f.Mode == "fts" || f.Mode == "hybrid" {
 		sortKey = "messages_fts.rank"
@@ -185,43 +185,16 @@ func contentWordRows(
 }
 
 // selectContentWordPage avoids collecting partial hits when all-word matches
-// already fill the requested page. Counts are unfiltered, so a short filtered
-// page retries with all tiers and the original offset.
+// already fill the requested page.
 func selectContentWordPage(ctx context.Context, tx *sql.Tx, f ContentSearchFilter, q contentWords, where string, args []any, offset, need int) ([]ContentMatch, error) {
-	full, err := contentWordRows(ctx, tx, f, q, where, args, offset, need, 0, true)
+	full, err := contentWordRows(ctx, tx, f, q, where, args, offset, need, true)
 	if err != nil || len(full) == need {
 		return full, err
 	}
 	if err := buildContentWordHits(ctx, tx, q); err != nil {
 		return nil, err
 	}
-	rows, err := tx.QueryContext(ctx, `SELECT n, count(*) FROM content_word_hits GROUP BY n ORDER BY n DESC`)
-	if err != nil {
-		return nil, err
-	}
-	floor, total := 1, 0
-	for rows.Next() {
-		var n, count int
-		if err := rows.Scan(&n, &count); err != nil {
-			rows.Close()
-			return nil, err
-		}
-		total += count
-		if total >= offset+need {
-			floor = n
-			break
-		}
-	}
-	err = rows.Err()
-	rows.Close()
-	if err != nil {
-		return nil, err
-	}
-	page, err := contentWordRows(ctx, tx, f, q, where, args, offset, need, floor, false)
-	if err == nil && len(page) < need && floor > 1 {
-		return contentWordRows(ctx, tx, f, q, where, args, offset, need, 1, false)
-	}
-	return page, err
+	return contentWordRows(ctx, tx, f, q, where, args, offset, need, false)
 }
 
 // lexicalMessageWhere is the system, scope, and anchor filter the substring
