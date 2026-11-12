@@ -1305,7 +1305,7 @@ deferred ingestion. HTTP `--no-sync` reads the archive and never starts source
 sync. If the wait fails, the command
 warns and JSON sets `wait_incomplete: true` without marking a refresh. Direct
 and PostgreSQL reads do not wait for a daemon. HTTP archive-only waits require
-daemon API 15; waits that refresh require API 16. Upgrade or restart an older
+daemon API 15; waits that refresh require API 17. Upgrade or restart an older
 server, and upgrade the client for a newer server API. Direct mode still refreshes the named transcript. Combined HTTP
 refresh requires daemon API 12; upgrade or restart older servers, or use
 `--no-sync`. Archived combined reads require API 6. `POST /api/v1/sessions/sync`
