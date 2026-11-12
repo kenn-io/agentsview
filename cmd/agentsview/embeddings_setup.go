@@ -5,7 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"log"
-	"maps"
 	"math"
 	"net/url"
 	"sync"
@@ -93,7 +92,7 @@ func (v *liveVectorServing) startSharedChoice() {
 	deployment.Local = true
 	v.mu.Lock()
 	defer v.mu.Unlock()
-	if err := v.startSetup(deployment, approvedBytes, true, ""); err != nil {
+	if err := v.startSetup(deployment, approvedBytes, true); err != nil {
 		log.Printf("search by meaning: start setup: %v", err)
 	}
 }
@@ -185,9 +184,6 @@ func (v *liveVectorServing) IncludeAutomated() bool {
 func (v *liveVectorServing) SetupStatus(ctx context.Context) (server.EmbeddingsSetupStatus, error) {
 	v.mu.Lock()
 	status, cfg, missingManager := v.setup, v.cfg, v.serving.manager == nil
-	if v.serving.Scheduler != nil {
-		status.Waiting = v.serving.Scheduler.Waiting()
-	}
 	v.mu.Unlock()
 	if status.Busy {
 		status.Enabled = cfg.Vector.Enabled
@@ -258,60 +254,38 @@ func setupRequestError(err error) error {
 	return err
 }
 
-func (v *liveVectorServing) Setup(approvedBytes int64, expectedProvider string) error {
-	v.mu.Lock()
-	if v.setup.Busy {
-		v.mu.Unlock()
-		return vector.ErrBuildRunning
-	}
-	cfg, setup, missingManager, done := v.cfg, v.setup, v.serving.manager == nil, v.done
-	v.mu.Unlock()
-	var err error
-	if missingManager {
-		cfg.Vector.Embeddings, err = cfg.VectorSetupEmbeddings(false)
-		if err != nil {
-			return setupRequestError(err)
-		}
-	}
-	status, err := setupStatusForConfig(v.ctx, setup, cfg, missingManager)
+func (v *liveVectorServing) Setup(approvedBytes int64) error {
+	status, err := v.SetupStatus(v.ctx)
 	if err != nil {
 		return err
-	}
-	_, deployment, err := cfg.Vector.Embeddings.Server("")
-	if err != nil {
-		return setupRequestError(err)
-	}
-	if status.Action != "turn-on" {
-		return fmt.Errorf("%w: setup action is unavailable for the current embeddings provider", vector.ErrInvalidBuildRequest)
-	}
-	if status.Provider != expectedProvider {
-		return server.ErrEmbeddingsProviderChanged
-	}
-	if status.Provider == "built-in" {
-		deployment.Local = true
-	}
-	var pinnedEndpoint string
-	if expectedProvider == "ollama" && deployment.Endpoint == "" {
-		pinnedEndpoint, err = localEmbeddingEndpoint(v.ctx, embedlocal.Options{})
-		if status, inspectErr := inspectLocalEmbeddings(v.ctx, embedlocal.Options{}); err != nil || inspectErr != nil || !status.OllamaAvailable {
-			return server.ErrEmbeddingsProviderChanged
-		}
-		deployment.Endpoint = pinnedEndpoint
 	}
 	v.mu.Lock()
 	defer v.mu.Unlock()
 	if v.setup.Busy {
 		return vector.ErrBuildRunning
 	}
-	// A setup may have finished and replaced the configuration during the probe.
-	if v.done != done {
-		return server.ErrEmbeddingsProviderChanged
+	embeddings := v.cfg.Vector.Embeddings
+	if v.serving.manager == nil {
+		embeddings, err = v.cfg.VectorSetupEmbeddings(false)
+		if err != nil {
+			return setupRequestError(err)
+		}
 	}
-	return v.startSetup(deployment, approvedBytes, false, pinnedEndpoint)
+	_, deployment, err := embeddings.Server("")
+	if err != nil {
+		return setupRequestError(err)
+	}
+	if status.Action != "turn-on" {
+		return fmt.Errorf("%w: setup action is unavailable for the current embeddings provider", vector.ErrInvalidBuildRequest)
+	}
+	if status.Provider == "built-in" {
+		deployment.Local = true
+	}
+	return v.startSetup(deployment, approvedBytes, false)
 }
 
 // startSetup starts the leased worker with v.mu held.
-func (v *liveVectorServing) startSetup(deployment config.VectorEmbeddingsServerConfig, approvedBytes int64, automatic bool, pinnedEndpoint string) error {
+func (v *liveVectorServing) startSetup(deployment config.VectorEmbeddingsServerConfig, approvedBytes int64, automatic bool) error {
 	release, ok := v.idle.BeginWork()
 	if !ok {
 		return errors.New("server is shutting down")
@@ -320,7 +294,7 @@ func (v *liveVectorServing) startSetup(deployment config.VectorEmbeddingsServerC
 	v.done = make(chan struct{})
 	go func() {
 		defer release()
-		err := v.activate(deployment, approvedBytes, automatic, pinnedEndpoint)
+		err := v.activate(deployment, approvedBytes, automatic)
 		v.mu.Lock()
 		v.setup.Busy = false
 		if err != nil {
@@ -338,7 +312,7 @@ func (v *liveVectorServing) startSetup(deployment config.VectorEmbeddingsServerC
 	return nil
 }
 
-func (v *liveVectorServing) activate(deployment config.VectorEmbeddingsServerConfig, approvedBytes int64, automatic bool, pinnedEndpoint string) error {
+func (v *liveVectorServing) activate(deployment config.VectorEmbeddingsServerConfig, approvedBytes int64, automatic bool) error {
 	cfg := v.cfg
 	builtin := deployment.Local && deployment.Endpoint == ""
 	_, err := resolveLocalEmbeddings(v.ctx, deployment,
@@ -361,7 +335,7 @@ func (v *liveVectorServing) activate(deployment config.VectorEmbeddingsServerCon
 		return err
 	}
 	if v.serving.manager == nil {
-		if err := cfg.SaveVectorSetup(builtin, automatic, pinnedEndpoint); errors.Is(err, config.ErrVectorSetupIneligible) {
+		if err := cfg.SaveVectorSetup(builtin, automatic); errors.Is(err, config.ErrVectorSetupIneligible) {
 			return nil
 		} else if err != nil {
 			return err
@@ -370,20 +344,8 @@ func (v *liveVectorServing) activate(deployment config.VectorEmbeddingsServerCon
 		if err != nil {
 			return err
 		}
-		// Pin this run while leaving the saved configuration open to discovery.
-		servingCfg := cfg
-		if pinnedEndpoint != "" {
-			name, server, err := cfg.Vector.Embeddings.Server("")
-			if err != nil {
-				return err
-			}
-			server.Endpoint = pinnedEndpoint
-			servingCfg.Vector.Embeddings.Servers = map[string]config.VectorEmbeddingsServerConfig{}
-			maps.Copy(servingCfg.Vector.Embeddings.Servers, cfg.Vector.Embeddings.Servers)
-			servingCfg.Vector.Embeddings.Servers[name] = server
-		}
 		// Opening can wait on another process's write lock; status stays available.
-		serving, err := setupVectorServing(v.ctx, servingCfg, v.database, v.idle)
+		serving, err := setupVectorServing(v.ctx, cfg, v.database, v.idle)
 		if err != nil {
 			return err
 		}
@@ -397,6 +359,11 @@ func (v *liveVectorServing) activate(deployment config.VectorEmbeddingsServerCon
 		v.startSchedulers()
 		v.mu.Unlock()
 	}
+	_, selected, err := cfg.Vector.Embeddings.Server("")
+	if err != nil {
+		return err
+	}
+	builtin = selected.Local && selected.Endpoint == ""
 	if automatic {
 		v.serving.Scheduler.Notify()
 		return nil

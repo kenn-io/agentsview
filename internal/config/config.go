@@ -4250,48 +4250,46 @@ func (c *Config) VectorSetupEmbeddings(automatic bool) (VectorEmbeddingsConfig, 
 }
 
 // SaveVectorSetup records the selected action while keeping omitted defaults omitted.
-func (c *Config) SaveVectorSetup(local, automatic bool, endpoint string) error {
+func (c *Config) SaveVectorSetup(local, automatic bool) error {
 	return c.withConfigLock(func() error {
 		existing, candidate, err := c.vectorSetupCandidate(automatic)
 		if err != nil {
 			return err
 		}
-		if local || endpoint != "" {
+		if local {
 			recipe := candidate.Vector.Embeddings
 			name, server, err := recipe.Server("")
 			if err != nil {
 				return err
 			}
-			if server.Endpoint != "" || (endpoint != "" && server.Local) {
+			if server.Endpoint != "" {
 				return invalidVectorSetupError{errors.New("embeddings provider changed during setup")}
 			}
-			if local {
-				embeddings, err := configTable(existing["vector"].(map[string]any), "embeddings")
-				if err != nil {
-					return err
-				}
-				if model, _ := embeddings["model"].(string); model == "" {
-					embeddings["model"] = recipe.Model
-					for key, value := range map[string]any{
-						"dimension": recipe.Dimension, "max_input_chars": recipe.MaxInputChars,
-						"model_context_tokens": recipe.ModelContextTokens, "query_prefix": recipe.QueryPrefix,
-						"document_prefix": recipe.DocumentPrefix,
-					} {
-						if _, ok := embeddings[key]; !ok {
-							embeddings[key] = value
-						}
+			embeddings, err := configTable(existing["vector"].(map[string]any), "embeddings")
+			if err != nil {
+				return err
+			}
+			if model, _ := embeddings["model"].(string); model == "" {
+				embeddings["model"] = recipe.Model
+				for key, value := range map[string]any{
+					"dimension": recipe.Dimension, "max_input_chars": recipe.MaxInputChars,
+					"model_context_tokens": recipe.ModelContextTokens, "query_prefix": recipe.QueryPrefix,
+					"document_prefix": recipe.DocumentPrefix,
+				} {
+					if _, ok := embeddings[key]; !ok {
+						embeddings[key] = value
 					}
 				}
-				servers, err := configTable(embeddings, "servers")
-				if err != nil {
-					return err
-				}
-				selected, err := configTable(servers, name)
-				if err != nil {
-					return err
-				}
-				selected["local"] = true
 			}
+			servers, err := configTable(embeddings, "servers")
+			if err != nil {
+				return err
+			}
+			selected, err := configTable(servers, name)
+			if err != nil {
+				return err
+			}
+			selected["local"] = true
 		}
 		encoded, err := toml.Marshal(existing)
 		if err != nil {

@@ -38,7 +38,7 @@
 
   const numberFormat = $derived(new Intl.NumberFormat(getLocale()));
   const running = $derived(status?.running ?? false);
-  const settingUp = $derived(status?.setup?.busy || status?.setup?.installing || status?.setup?.waiting);
+  const settingUp = $derived(status?.setup?.busy || status?.setup?.installing);
   const phase = $derived(status?.phase ?? "");
   const estimateReady = $derived(status?.estimate_ready ?? false);
   const ratePerSecond = $derived(status?.rate_per_second ?? null);
@@ -192,7 +192,7 @@
     <p class="muted detail">{unavailableReason}</p>
   {:else if loadError !== null}
     <p class="msg error" role="alert">{loadError}</p>
-  {:else if status && status.setup?.enabled !== false && status.setup?.action !== "turn-on" && !status.setup?.busy && (!status.setup?.waiting || running || status.last_error)}
+  {:else if status && status.setup?.enabled !== false && status.setup?.action !== "turn-on" && !status.setup?.busy}
     {#if running}
       {#if phase === "scanning" || status.total <= 0}
         <p class="muted scanning-hint" aria-live="polite">

@@ -139,47 +139,6 @@ describe("SemanticSetupHelp", () => {
     return { component, onResolved };
   }
 
-  it("waits for indexing before retrying search", async () => {
-    const setup = { ...idleStatus().setup!, waiting: "power" };
-    embeddingsService.getApiV1EmbeddingsStatus.mockResolvedValue(idleStatus({ setup, last_result: completedResult() }));
-    const { component, onResolved } = mountHelp();
-    try {
-      await settle();
-      expect(onResolved).not.toHaveBeenCalled();
-      await settle(2000);
-      expect(embeddingsService.getApiV1EmbeddingsStatus).toHaveBeenCalledTimes(2);
-      expect(onResolved).not.toHaveBeenCalled();
-      embeddingsService.getApiV1EmbeddingsStatus.mockResolvedValue(idleStatus({ last_result: completedResult() }));
-      await settle(2000);
-      expect(onResolved).toHaveBeenCalledOnce();
-    } finally { unmount(component); }
-  });
-
-  it("follows scheduled recovery after a build failure while waiting", async () => {
-    const setup = { ...idleStatus().setup!, waiting: "power" };
-    embeddingsService.getApiV1EmbeddingsStatus.mockResolvedValueOnce(
-      idleStatus({ setup, last_error: "background build failed" }),
-    );
-    const { component, onResolved } = mountHelp();
-    try {
-      await settle();
-      expect(text()).toContain("background build failed");
-      expect(onResolved).not.toHaveBeenCalled();
-      embeddingsService.getApiV1EmbeddingsStatus.mockResolvedValueOnce(
-        runningStatus(2, 10, { build_id: 2 }),
-      );
-      await settle(2000);
-      expect(text()).toContain("Indexing 2 of 10");
-      embeddingsService.getApiV1EmbeddingsStatus.mockResolvedValueOnce(
-        idleStatus({ build_id: 2, last_result: completedResult() }),
-      );
-      await settle(2000);
-      expect(onResolved).toHaveBeenCalledOnce();
-    } finally {
-      unmount(component);
-    }
-  });
-
   it("keeps build polling quiet while hidden and resumes when visible", async () => {
     const visibility = vi.spyOn(document, "hidden", "get").mockReturnValue(false);
     embeddingsService.getApiV1EmbeddingsStatus.mockResolvedValue(runningStatus(1, 10));

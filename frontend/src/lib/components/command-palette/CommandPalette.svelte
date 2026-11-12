@@ -33,10 +33,8 @@
   } from "../../stores/search.svelte.js";
 
   let hintStatus = $state<VectorBuildStatus | null>(null);
-  let hintRefresh = $state(0);
   $effect(() => {
     if (searchStore.mode !== "fulltext") return;
-    void hintRefresh;
     hintStatus = null;
     const controller = new AbortController();
     void EmbeddingsService.getApiV1EmbeddingsStatus({}, { signal: controller.signal })
@@ -470,7 +468,7 @@
         {/each}
       {/if}
       {#if showSearchResults && !searchStore.isSearching && !searchStore.error && searchStore.mode === "fulltext"}
-        <div class="meaning-hint"><SearchByMeaningControl status={hintStatus} hint onchange={(started) => { if (started) { hintStatus = null; searchStore.setMode("semantic"); } else { hintRefresh++; } }} /></div>
+        <div class="meaning-hint"><SearchByMeaningControl status={hintStatus} hint onchange={() => { hintStatus = null; searchStore.setMode("semantic"); }} /></div>
       {/if}
     </div>
   </div>

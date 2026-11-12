@@ -3116,8 +3116,5 @@
   "empty_archive_title": "아직 세션이 없습니다",
   "empty_archive_desc": "AgentsView는 이 폴더에서 세션을 읽습니다. 에이전트가 이 중 한 곳에 기록하면 여기에 표시됩니다.",
   "empty_archive_choose_folders": "폴더 선택",
-  "usage_tooltip_no_usage": "사용 없음",
-  "meaning_waiting_index": "색인 대기 중",
-  "meaning_waiting_power": "전원 연결 대기 중",
-  "meaning_build_now": "지금 색인"
+  "usage_tooltip_no_usage": "사용 없음"
 }

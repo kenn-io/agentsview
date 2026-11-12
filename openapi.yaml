@@ -5065,15 +5065,6 @@ components:
           format: int64
           minimum: 0
           type: integer
-        expected_provider:
-          description: Provider shown before setup
-          enum:
-            - built-in
-            - ollama
-            - configured
-          type: string
-      required:
-        - expected_provider
       type: object
     EmptyTrashResponse:
       additionalProperties: false
@@ -9177,8 +9168,6 @@ components:
         total_bytes:
           format: int64
           type: integer
-        waiting:
-          type: string
       required:
         - enabled
         - provider

@@ -139,7 +139,6 @@ type SetupStatus struct {
 	MissingBytes    int64  `json:"missing_bytes"`
 	Installing      bool   `json:"installing"`
 	Busy            bool   `json:"busy"`
-	Waiting         string `json:"waiting,omitempty"`
 	DownloadedBytes int64  `json:"downloaded_bytes"`
 	TotalBytes      int64  `json:"total_bytes"`
 	Error           string `json:"error,omitempty"`

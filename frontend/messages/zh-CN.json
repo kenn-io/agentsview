@@ -3110,8 +3110,5 @@
   "empty_archive_title": "暂无会话",
   "empty_archive_desc": "AgentsView 从这些文件夹读取会话。代理写入其中任一文件夹后，会话就会显示在这里。",
   "empty_archive_choose_folders": "选择文件夹",
-  "usage_tooltip_no_usage": "无使用",
-  "meaning_waiting_index": "等待建立索引",
-  "meaning_waiting_power": "等待接通电源",
-  "meaning_build_now": "立即建立索引"
+  "usage_tooltip_no_usage": "无使用"
 }

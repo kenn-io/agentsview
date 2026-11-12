@@ -16,10 +16,8 @@ type EmbeddingsRuntime interface {
 	IncludeAutomated() bool
 	SetupStatus(context.Context) (EmbeddingsSetupStatus, error)
 	// Setup approves at most approvedBytes of download, the size the user saw.
-	Setup(approvedBytes int64, expectedProvider string) error
+	Setup(approvedBytes int64) error
 }
-
-var ErrEmbeddingsProviderChanged = errors.New("embeddings provider changed; refresh setup and try again")
 
 type EmbeddingsSetupStatus = vector.SetupStatus
 
@@ -29,8 +27,7 @@ func WithEmbeddingsRuntime(runtime EmbeddingsRuntime) Option {
 
 type embeddingsSetupInput struct {
 	Body struct {
-		ApprovedBytes    int64  `json:"approved_bytes,omitempty" minimum:"0" doc:"Download size the user saw; a larger download is declined"`
-		ExpectedProvider string `json:"expected_provider" enum:"built-in,ollama,configured" doc:"Provider shown before setup"`
+		ApprovedBytes int64 `json:"approved_bytes,omitempty" minimum:"0" doc:"Download size the user saw; a larger download is declined"`
 	}
 }
 
@@ -38,12 +35,9 @@ func (s *Server) humaEmbeddingsSetup(_ context.Context, in *embeddingsSetupInput
 	if s.embeddingsRuntime == nil {
 		return nil, s.embeddingsUnavailableError()
 	}
-	if err := s.embeddingsRuntime.Setup(in.Body.ApprovedBytes, in.Body.ExpectedProvider); err != nil {
+	if err := s.embeddingsRuntime.Setup(in.Body.ApprovedBytes); err != nil {
 		if errors.Is(err, vector.ErrBuildRunning) {
-			return nil, apiErrorWithCode(http.StatusConflict, "embeddings_build_running", err.Error())
-		}
-		if errors.Is(err, ErrEmbeddingsProviderChanged) {
-			return nil, apiErrorWithCode(http.StatusConflict, "embeddings_provider_changed", err.Error())
+			return nil, embeddingsActionError(err)
 		}
 		if errors.Is(err, vector.ErrInvalidBuildRequest) {
 			return nil, apiError(http.StatusBadRequest, err.Error())

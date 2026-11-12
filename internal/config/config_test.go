@@ -3258,7 +3258,7 @@ func TestSaveVectorSetupPreservesSettings(t *testing.T) {
 			_, err = toml.Decode(raw, &expected)
 			require.NoError(t, err)
 			expected["vector"].(map[string]any)["enabled"] = true
-			require.NoError(t, cfg.SaveVectorSetup(false, false, ""))
+			require.NoError(t, cfg.SaveVectorSetup(false, false))
 			var saved map[string]any
 			_, err = toml.DecodeFile(path, &saved)
 			require.NoError(t, err)
@@ -3275,7 +3275,6 @@ func TestSaveVectorSetupPersistsSelectedServer(t *testing.T) {
 	}{
 		{raw: "[vector]\ninclude_automated = true\n[vector.embeddings]\nquery_prefix = 'custom: '\n"},
 		{raw: "[vector.embeddings]\nmodel = 'nomic-embed-text'\ndimension = 768\n[vector.embeddings.servers.cpu]\nlocal = true\nbatch_size = 3\n", batchSize: 3},
-		{raw: "[vector.embeddings]\nmodel = 'nomic-embed-text'\ndimension = 768\n[vector.embeddings.servers.local]\nlocal = true\n", endpoint: "http://127.0.0.1:11434/v1", invalid: true},
 		{raw: "[vector.embeddings]\nmodel = 'nomic-embed-text'\ndimension = 768\n[vector.embeddings.servers.local]\nendpoint = 'http://127.0.0.1:11434/v1'\n", endpoint: "http://127.0.0.1:11434/v1", invalid: true},
 	} {
 		t.Run(tc.raw+tc.endpoint, func(t *testing.T) {
@@ -3285,7 +3284,7 @@ func TestSaveVectorSetupPersistsSelectedServer(t *testing.T) {
 			require.NoError(t, err)
 			before, err := cfg.VectorSetupEmbeddings(false)
 			require.NoError(t, err)
-			err = cfg.SaveVectorSetup(tc.endpoint == "", false, tc.endpoint)
+			err = cfg.SaveVectorSetup(true, false)
 			if tc.invalid {
 				require.ErrorIs(t, err, ErrInvalidVectorSetup)
 				data, err := os.ReadFile(filepath.Join(dir, configFileName))
@@ -3325,7 +3324,7 @@ func TestAutomaticVectorSetupRejectsExplicitSettings(t *testing.T) {
 			require.NoError(t, os.WriteFile(path, []byte(raw), 0o600))
 			_, err = cfg.VectorSetupEmbeddings(true)
 			require.ErrorIs(t, err, ErrVectorSetupIneligible)
-			require.ErrorIs(t, cfg.SaveVectorSetup(true, true, ""), ErrVectorSetupIneligible)
+			require.ErrorIs(t, cfg.SaveVectorSetup(true, true), ErrVectorSetupIneligible)
 			data, err := os.ReadFile(path)
 			require.NoError(t, err)
 			assert.Equal(t, raw, string(data))
@@ -3346,7 +3345,7 @@ func TestSaveVectorSetupRejectsInvalidCurrentSettings(t *testing.T) {
 			path := filepath.Join(dir, configFileName)
 			require.NoError(t, os.WriteFile(path, []byte(tc.raw), 0o600))
 			_, setupErr := cfg.VectorSetupEmbeddings(false)
-			saveErr := cfg.SaveVectorSetup(false, false, "")
+			saveErr := cfg.SaveVectorSetup(false, false)
 			data, err := os.ReadFile(path)
 			require.NoError(t, err)
 			assert.Equal(t, tc.raw, string(data))

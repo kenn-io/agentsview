@@ -22327,25 +22327,6 @@ func (c *Client) GetAPIV1VersionWithResponse(ctx context.Context, reqEditors ...
 
 var _ ClientInterface = (*Client)(nil)
 
-// EmbeddingsSetupInputBodyExpectedProvider Provider shown before setup
-type EmbeddingsSetupInputBodyExpectedProvider string
-
-const (
-	BuiltIn    EmbeddingsSetupInputBodyExpectedProvider = "built-in"
-	Configured EmbeddingsSetupInputBodyExpectedProvider = "configured"
-	Ollama     EmbeddingsSetupInputBodyExpectedProvider = "ollama"
-)
-
-// Validate checks if the EmbeddingsSetupInputBodyExpectedProvider value is valid
-func (e EmbeddingsSetupInputBodyExpectedProvider) Validate() error {
-	switch e {
-	case BuiltIn, Configured, Ollama:
-		return nil
-	default:
-		return runtime.NewValidationErrorsFromString("Enum", fmt.Sprintf("must be a valid EmbeddingsSetupInputBodyExpectedProvider value, got: %v", e))
-	}
-}
-
 // FrictionFilingItemState retry: waiting for the next attempt; needs_person: file or link it by hand; paused: a person removed its link
 type FrictionFilingItemState string
 
@@ -29545,27 +29526,10 @@ func (e EmbeddingsGenerationsResponse) Validate() error {
 type EmbeddingsSetupInputBody struct {
 	// ApprovedBytes Download size the user saw; a larger download is declined
 	ApprovedBytes *int64 `json:"approved_bytes,omitempty" validate:"omitempty,gte=0"`
-
-	// ExpectedProvider Provider shown before setup
-	ExpectedProvider EmbeddingsSetupInputBodyExpectedProvider `json:"expected_provider" validate:"required"`
 }
 
 func (e EmbeddingsSetupInputBody) Validate() error {
-	var errors runtime.ValidationErrors
-	if e.ApprovedBytes != nil {
-		if err := typesValidator.Var(e.ApprovedBytes, "omitempty,gte=0"); err != nil {
-			errors = errors.Append("ApprovedBytes", err)
-		}
-	}
-	if v, ok := any(e.ExpectedProvider).(runtime.Validator); ok {
-		if err := v.Validate(); err != nil {
-			errors = errors.Append("ExpectedProvider", err)
-		}
-	}
-	if len(errors) == 0 {
-		return nil
-	}
-	return errors
+	return runtime.ConvertValidatorError(typesValidator.Struct(e))
 }
 
 type ExportAppliedPricingBand struct {
@@ -31765,7 +31729,6 @@ type VectorSetupStatus struct {
 	MissingBytes    int64   `json:"missing_bytes"`
 	Provider        string  `json:"provider" validate:"required"`
 	TotalBytes      int64   `json:"total_bytes"`
-	Waiting         *string `json:"waiting,omitempty"`
 }
 
 func (v VectorSetupStatus) Validate() error {

@@ -23,7 +23,6 @@ vi.mock("../../api/generated/index", async (importOriginal) => {
       getApiV1EmbeddingsStatus: vi.fn(),
       getApiV1EmbeddingsGenerations: vi.fn(),
       postApiV1EmbeddingsSetup: vi.fn(),
-      postApiV1EmbeddingsBuild: vi.fn(),
     },
   };
 });
@@ -32,7 +31,6 @@ const embeddingsService = EmbeddingsService as unknown as {
   getApiV1EmbeddingsStatus: ReturnType<typeof vi.fn>;
   getApiV1EmbeddingsGenerations: ReturnType<typeof vi.fn>;
   postApiV1EmbeddingsSetup: ReturnType<typeof vi.fn>;
-  postApiV1EmbeddingsBuild: ReturnType<typeof vi.fn>;
 };
 
 function runningStatus(
@@ -80,7 +78,6 @@ describe("EmbeddingsSettings", () => {
     embeddingsService.getApiV1EmbeddingsStatus.mockReset();
     embeddingsService.getApiV1EmbeddingsGenerations.mockReset();
     embeddingsService.postApiV1EmbeddingsSetup.mockReset();
-    embeddingsService.postApiV1EmbeddingsBuild.mockReset();
     embeddingsService.getApiV1EmbeddingsGenerations.mockResolvedValue({
       generations: [BUILDING_GENERATION],
     });
@@ -97,23 +94,53 @@ describe("EmbeddingsSettings", () => {
     flushSync();
   }
 
-  it("offers a manual build while waiting for power", async () => {
-    const setup = { enabled: true, action: "", provider: "built-in", busy: false,
-      installing: false, missing_bytes: 0, downloaded_bytes: 0, total_bytes: 0, waiting: "power" };
-    embeddingsService.getApiV1EmbeddingsStatus.mockResolvedValue({ running: false, setup, model: "test-embed-model" });
-    embeddingsService.postApiV1EmbeddingsBuild.mockResolvedValue({ started: true });
+  it("approves only the disclosed download when retrying after Ollama stops", async () => {
+    const setup = {
+      enabled: false,
+      action: "turn-on",
+      provider: "ollama",
+      missing_bytes: 295000000,
+      busy: false,
+      installing: false,
+      downloaded_bytes: 0,
+      total_bytes: 0,
+    };
+    embeddingsService.getApiV1EmbeddingsStatus.mockResolvedValue({ running: false, setup });
+    embeddingsService.postApiV1EmbeddingsSetup.mockResolvedValue({ started: true });
     const component = mount(EmbeddingsSettings, { target: document.body });
     try {
       await settle();
-      expect(document.body.textContent).toContain("Waiting for power");
-      expect(document.body.querySelector(".status-grid")).toBeNull();
-      expect(document.body.querySelector(".generation-list")).toBeNull();
-      embeddingsService.getApiV1EmbeddingsStatus.mockResolvedValue(runningStatus(2, { setup }));
-      [...document.querySelectorAll("button")].find((b) => b.textContent?.trim() === "Build now")!.click();
+      expect(document.body.textContent).toContain("Uses Ollama");
+      expect(document.body.textContent).not.toContain("Downloads 295 MB");
+      embeddingsService.getApiV1EmbeddingsStatus.mockResolvedValue({
+        running: false,
+        setup: {
+          ...setup,
+          provider: "built-in",
+          error: "embedding download declined; approve installation to use local embeddings",
+        },
+      });
+      [...document.body.querySelectorAll("button")]
+        .find((b) => b.textContent?.trim() === "Turn on")!
+        .click();
       await settle();
-      expect(document.body.textContent).toContain("Indexing 2 of 1,000 text sections");
-      expect(document.body.textContent).toContain("test-embed-model");
-    } finally { unmount(component); }
+      expect(embeddingsService.postApiV1EmbeddingsSetup).toHaveBeenNthCalledWith(1, {
+        approved_bytes: 0,
+      });
+      expect(document.body.textContent).toContain("Downloads 295 MB");
+      expect(document.body.querySelector('[role="alert"]')?.textContent).toContain(
+        "download declined",
+      );
+      [...document.body.querySelectorAll("button")]
+        .find((b) => b.textContent?.trim() === "Retry")!
+        .click();
+      await settle();
+      expect(embeddingsService.postApiV1EmbeddingsSetup).toHaveBeenNthCalledWith(2, {
+        approved_bytes: 295000000,
+      });
+    } finally {
+      unmount(component);
+    }
   });
 
   it("shows an enabled Ollama setup as on, with no switch", async () => {
@@ -201,7 +228,7 @@ describe("EmbeddingsSettings", () => {
       embeddingsService.getApiV1EmbeddingsStatus.mockResolvedValue(
         runningStatus(1, { setup: { ...setup, enabled: true, action: "" } }),
       );
-      throw new ApiError(409, "embedding build already running", "embeddings_build_running");
+      throw new ApiError(409, "embedding build already running");
     });
     const component = mount(EmbeddingsSettings, { target: document.body });
     await settle();

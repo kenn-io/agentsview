@@ -111,21 +111,21 @@ enabled = true`;
       const status = await EmbeddingsService.getApiV1EmbeddingsStatus({});
       if (disposed) return;
       setupStatus = status;
-      if (!status.running && status.last_error) {
-        detail = status.last_error;
-        retryAction = "build";
-        phase = "failed";
-        if (status.setup?.waiting) schedulePoll();
-      } else if (!status.running && status.setup && (status.setup.action === "turn-on" || !status.setup.enabled || status.setup.busy || status.setup.installing || status.setup.waiting || status.setup.error)) {
+      if (!status.running && status.setup && (status.setup.action === "turn-on" || !status.setup.enabled || status.setup.busy || status.setup.installing || status.setup.error)) {
         phase = "unconfigured";
-        if (status.setup.busy || status.setup.installing || status.setup.waiting) schedulePoll();
+        if (status.setup.busy || status.setup.installing) schedulePoll();
       } else if (status.running) {
         phase = "building";
         schedulePoll();
+      } else if (status.last_error) {
+        detail = status.last_error;
+        retryAction = "build";
+        phase = "failed";
       } else if (status.last_result) {
         const buildKey = resolvedBuildKey(status);
         if (resolvedBuildIds.has(buildKey)) {
-          // Retry search only once for each completed build.
+          // Already auto-retried this build once and the search still 501s, so
+          // stop looping and offer the setup controls instead.
           phase = "ready";
         } else {
           resolvedBuildIds.add(buildKey);
@@ -179,19 +179,19 @@ enabled = true`;
   }
 
   async function poll(): Promise<void> {
-    if (setupStatus?.setup && (!setupStatus.setup.enabled || setupStatus.setup.busy || setupStatus.setup.installing || setupStatus.setup.waiting)) { await probe(); return; }
+    if (setupStatus?.setup && (!setupStatus.setup.enabled || setupStatus.setup.busy || setupStatus.setup.installing)) { await probe(); return; }
     try {
       const status = await EmbeddingsService.getApiV1EmbeddingsStatus({});
       if (disposed) return;
       setupStatus = status;
-      if (!status.running && status.last_error) {
+      if (status.running) {
+        schedulePoll();
+        return;
+      }
+      if (status.last_error) {
         detail = status.last_error;
         retryAction = "build";
         phase = "failed";
-        if (!status.setup?.waiting) return;
-      }
-      if (status.running || status.setup?.waiting) {
-        schedulePoll();
         return;
       }
       resolvedBuildIds.add(resolvedBuildKey(status));
