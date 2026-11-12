@@ -2179,6 +2179,15 @@ Change detection uses file size, mtime, inode, and device tracking to validate
 incremental parses more reliably. A pool of 8 workers processes files in
 parallel during sync.
 
+On `main` (not yet released), shared JSONL discovery can isolate an inaccessible
+file or subtree when the provider supports scoped traversal. A dangling symlink
+remains incomplete, but retries inspect only the unfinished scope. Archived
+sessions beneath that scope remain available, and unrelated session changes
+continue importing. Restoring access lets the retained retry complete without a
+daemon restart. Actual source removal still follows the normal source-missing
+policy. Opaque failures and passes with more than 256 reported failure scopes
+retain the original conservative retry scope.
+
 Codex history hints are available when the producing frontend writes
 `history.jsonl`. In Codex configuration, `[history] persistence = "none"`
 disables those writes; sessions whose stored activity is recent still get

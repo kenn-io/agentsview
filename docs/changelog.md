@@ -77,6 +77,14 @@ The latest release is
 - Prune removes matching parent and child session chains in one pass, even
   without `--agent`.
 - Commit lookups keep live prompts and other archives' deleted-session links.
+- Junie session titles, projects, and working directories refresh during scoped
+  reconciliation even when an index-change notification was missed. Metadata
+  changes for other sessions remain pending for their next index event.
+- An inaccessible subtree no longer makes shared JSONL discovery repeatedly
+  process healthy sibling sessions when the provider supports scoped traversal.
+  Retries remain limited to unfinished paths, and archived sessions under a
+  broken symlink remain available until discovery can establish their source
+  state.
 - Antigravity app and IDE sessions now show their project and working directory
   instead of all landing in one unlabeled project. AgentsView reads each
   conversation's workspace folder from Antigravity's

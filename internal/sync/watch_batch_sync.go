@@ -7,6 +7,8 @@ import (
 	"os"
 	"slices"
 	"strings"
+
+	"go.kenn.io/agentsview/internal/parser"
 )
 
 // WatchBatchSyncer is the engine surface needed to classify and apply one
@@ -185,6 +187,7 @@ func composeWatchBatchErrors(phases ...error) error {
 		return present[0]
 	}
 	combined := WatchBatch{}
+	var preparationSet bool
 	causes := make([]error, 0, len(present))
 	for _, phase := range present {
 		causes = append(causes, phase)
@@ -196,12 +199,19 @@ func composeWatchBatchErrors(phases ...error) error {
 			continue
 		}
 		batch := retry.WatchRetryBatch()
+		if !preparationSet {
+			combined.preparedRecovery = batch.preparedRecovery
+			preparationSet = true
+		} else if combined.preparedRecovery != batch.preparedRecovery {
+			combined.preparedRecovery = nil
+		}
 		combined.Paths = append(combined.Paths, batch.Paths...)
 		combined.ReconcileRoots = append(combined.ReconcileRoots, batch.ReconcileRoots...)
 		combined.FullSync = combined.FullSync || batch.FullSync
 		combined.LostEvents = combined.LostEvents || batch.LostEvents
 	}
 	if combined.FullSync {
+		combined.preparedRecovery = nil
 		combined.Paths = nil
 		combined.ReconcileRoots = nil
 	} else {
@@ -393,6 +403,8 @@ func (e *Engine) SyncWatchBatchThenRun(
 		return SyncStats{}, err
 	}
 	changed := false
+	preparation := &recoveryCachePreparation{prepared: batch.preparedRecovery == e && !batch.FullSync && len(batch.Renames) == 0}
+	ctx = context.WithValue(ctx, recoveryCachePreparationKey{}, preparation)
 	var titleRetry WatchBatch
 	ctx = context.WithValue(ctx, nativeTitleRetryContextKey{}, &titleRetry)
 	e.syncMu.Lock()
@@ -456,6 +468,13 @@ func (e *Engine) SyncWatchBatchThenRun(
 			reconcilePhaseErr = watchBatchReconciliationError(
 				reconcileErr, nil, reconcileRoots, plan.full, plan.lostEvents,
 			)
+			_, localised := parser.IncompleteDiscoveryScopes(reconcileErr)
+			if preparation.prepared && localised && reconcileStats.Failed == 0 &&
+				reconcileStats.Deferred == 0 && !reconcileStats.Aborted {
+				if retry, ok := errors.AsType[*watchBatchApplyError](reconcilePhaseErr); ok && !retry.retry.FullSync {
+					retry.retry.preparedRecovery = e
+				}
+			}
 		}
 	}
 	if err := composeWatchBatchErrors(pathPhaseErr, reconcilePhaseErr); err != nil {
