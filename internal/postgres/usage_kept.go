@@ -26,8 +26,11 @@ func (s *Store) keptUsageVersion(ctx context.Context, slot string) string {
  to_regclass('usage_session_changes')::oid, (pg_control_system()).system_identifier::text,
  substring(pg_walfile_name(pg_current_wal_lsn()), 1, 8)
  WHERE NOT pg_is_in_recovery()`, strconv.Itoa(usageChangeJournalVersionPG)).Scan(&revision, &journalOID, &systemID, &timeline)
-	if err != nil || revision == 0 || !journalOID.Valid {
+	if err != nil {
 		return s.standbyUsageVersion(ctx)
+	}
+	if revision == 0 || !journalOID.Valid {
+		return ""
 	}
 	if s.usageCache != nil {
 		after, err := s.usageCache.ResetEpoch(ctx)
