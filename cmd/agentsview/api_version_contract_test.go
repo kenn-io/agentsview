@@ -1,7 +1,8 @@
 package main
 
 import (
-	"encoding/json"
+	"encoding/json/jsontext"
+	"encoding/json/v2"
 	"fmt"
 	"os"
 	"strconv"
@@ -91,36 +92,52 @@ func checkAPIVersionContract(apiVersion int, digest string, records []apiVersion
 func TestAPIVersionContract(t *testing.T) {
 	data, err := server.OpenAPIJSON(server.VersionInfo{}, pushBackendOptions()...)
 	require.NoError(t, err)
-	var document any
-	decoder := json.NewDecoder(strings.NewReader(string(data)))
-	decoder.UseNumber()
-	require.NoError(t, decoder.Decode(&document))
-	stripOpenAPIProse(document, false)
+	document, err := stripOpenAPIProse(jsontext.Value(data), false)
+	require.NoError(t, err)
 	digest, err := export.DigestCanonical(document)
 	require.NoError(t, err)
 	require.NoError(t, checkAPIVersionContract(server.APIVersion, digest, loadAPIVersionRecords(t)))
 }
 
 // Named maps contain contract names, including names that match prose fields.
-func stripOpenAPIProse(value any, namedMap bool) {
-	switch value := value.(type) {
-	case []any:
-		for _, item := range value {
-			stripOpenAPIProse(item, false)
+func stripOpenAPIProse(value jsontext.Value, namedMap bool) (jsontext.Value, error) {
+	switch value.Kind() {
+	case '[':
+		var items []jsontext.Value
+		if err := json.Unmarshal(value, &items); err != nil {
+			return nil, err
 		}
-	case map[string]any:
-		for key, item := range value {
+		for i, item := range items {
+			var err error
+			items[i], err = stripOpenAPIProse(item, false)
+			if err != nil {
+				return nil, err
+			}
+		}
+		return json.Marshal(items)
+	case '{':
+		var fields map[string]jsontext.Value
+		if err := json.Unmarshal(value, &fields); err != nil {
+			return nil, err
+		}
+		for key, item := range fields {
 			if !namedMap && (key == "title" || key == "description" || key == "summary" || key == "example" || key == "examples") {
-				delete(value, key)
+				delete(fields, key)
 				continue
 			}
 			if !namedMap && (key == "default" || key == "const" || key == "enum") {
 				continue
 			}
 			childNamedMap := !namedMap && (key == "paths" || key == "schemas" || key == "properties" || key == "patternProperties" || key == "$defs" || key == "parameters" || key == "responses" || key == "headers" || key == "content" || key == "securitySchemes" || key == "requestBodies" || key == "links" || key == "callbacks" || key == "encoding")
-			stripOpenAPIProse(item, childNamedMap)
+			var err error
+			fields[key], err = stripOpenAPIProse(item, childNamedMap)
+			if err != nil {
+				return nil, err
+			}
 		}
+		return json.Marshal(fields)
 	}
+	return value, nil
 }
 
 func TestCheckAPIVersionContract(t *testing.T) {
