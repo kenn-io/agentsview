@@ -2021,7 +2021,7 @@ agentsview export sessions [flags]
 | `--limit`             | `500`   | Maximum sessions to return; max `db.MaxSessionLimit`      |
 | `--cursor`            |         | Opaque cursor from a previous response                    |
 | `--all`               | `false` | Export every eligible page as one output stream           |
-| `--wait`              | `false` | Wait for project identification                          |
+| `--wait`              | `false` | Wait for project identification                           |
 | `--project`           |         | Filter by exact project name                              |
 | `--exclude-project`   |         | Exclude sessions from the given project                   |
 | `--machine`           |         | ID, alias, ID/alias list, or unique display name          |
@@ -2043,9 +2043,8 @@ agentsview export sessions [flags]
 | `--has-secret`        | `false` | Only sessions with detected secret leaks                  |
 
 With `--wait`, export starts or discovers the local daemon and waits for project
-identity evidence to finish. A daemon started by export continues running after
-the command until its idle timeout. Progress goes to standard error. Cancel the
-command to stop waiting. A failed backfill or unavailable daemon reports recovery
+identity evidence to finish. Progress goes to standard error. Cancel the command
+to stop waiting. A failed backfill or unavailable daemon reports recovery
 commands. Archive-only databases cannot run the backfill; finish it on the
 writable source and restore an archive containing the evidence.
 

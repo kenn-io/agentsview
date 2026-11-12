@@ -59,9 +59,13 @@ func ensureProjectIdentityBackfillQueuedTx(
 	}
 	var missing bool
 	if err := tx.QueryRowContext(ctx, `
-		SELECT EXISTS(SELECT 1 FROM sessions s WHERE NOT EXISTS (
-			SELECT 1 FROM session_project_identity_snapshots p WHERE p.session_id = s.id
-		))`).Scan(&missing); err != nil {
+		SELECT EXISTS(
+			SELECT 1 FROM sessions s
+			WHERE NOT EXISTS (
+				SELECT 1 FROM session_project_identity_snapshots p
+				WHERE p.session_id = s.id
+			)
+		)`).Scan(&missing); err != nil {
 		return fmt.Errorf("checking project identity backfill candidates: %w", err)
 	}
 	if !missing {

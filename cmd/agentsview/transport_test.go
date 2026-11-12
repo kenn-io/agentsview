@@ -388,7 +388,7 @@ func TestDetectTransport_DaemonStarting_FallsBackToDirect(t *testing.T) {
 }
 
 func TestDetectTransportRoutesStartupProgress(t *testing.T) {
-	for _, mode := range []string{"detect", "detect external", "startup wait", "launch"} {
+	for _, mode := range []string{"detect", "detect external", "startup wait"} {
 		t.Run(mode, func(t *testing.T) {
 			dir := daemonRuntimeDir(t)
 			require.NoError(t, os.MkdirAll(dir, 0o700))
@@ -411,10 +411,8 @@ func TestDetectTransportRoutesStartupProgress(t *testing.T) {
 				MarkDaemonStarting(dir)
 				t.Cleanup(func() { UnmarkDaemonStarting(dir) })
 			}
-			if mode != "launch" {
-				state := newStartupStateWriter(dir, time.Now)
-				state.SetPhase("Opening archive")
-			}
+			state := newStartupStateWriter(dir, time.Now)
+			state.SetPhase("Opening archive")
 			switch mode {
 			case "detect external":
 				_, _ = detectTransportContext(ctx, dir, "", 50*time.Millisecond) //nolint:kennlint // deadlinetest: the held startup ends at the deadline
@@ -422,28 +420,36 @@ func TestDetectTransportRoutesStartupProgress(t *testing.T) {
 			case "startup wait":
 				WaitForDaemonStartupContext(ctx, dir, 50*time.Millisecond) //nolint:kennlint // deadlinetest: the held startup ends at the deadline
 				assert.Contains(t, progress.String(), "Opening archive")
-			case "launch":
-				host, port := testPingServer(t)
-				old := startServeBackgroundProcessForEnsure
-				startServeBackgroundProcessForEnsure = func(ctx context.Context, _ config.Config, _ []string) (*exec.Cmd, string, error) {
-					if _, err := WriteDaemonRuntime(dir, host, port, version, false); err != nil {
-						return nil, "", err
-					}
-					child := exec.CommandContext(ctx, "sleep", "30")
-					if err := child.Start(); err != nil {
-						return nil, "", err
-					}
-					t.Cleanup(func() { _ = child.Process.Kill() })
-					return child, "test.log", nil
-				}
-				t.Cleanup(func() { startServeBackgroundProcessForEnsure = old; RemoveDaemonRuntime(dir) })
-				cfg := config.Config{DataDir: dir}
-				_, err := ensureBackgroundServe(ctx, &cfg, time.Second, false)
-				require.NoError(t, err)
-				assert.Contains(t, progress.String(), "Starting agentsview")
 			}
 		})
 	}
+}
+
+func TestEnsureBackgroundServeRoutesStartupProgress(t *testing.T) {
+	dir := daemonRuntimeDir(t)
+	require.NoError(t, os.MkdirAll(dir, 0o700))
+	var progress bytes.Buffer
+	ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
+	defer cancel()
+	ctx = context.WithValue(ctx, daemonProgressContextKey{}, &progress)
+	host, port := testPingServer(t)
+	old := startServeBackgroundProcessForEnsure
+	startServeBackgroundProcessForEnsure = func(ctx context.Context, _ config.Config, _ []string) (*exec.Cmd, string, error) {
+		if _, err := WriteDaemonRuntime(dir, host, port, version, false); err != nil {
+			return nil, "", err
+		}
+		child := exec.CommandContext(ctx, "sleep", "30")
+		if err := child.Start(); err != nil {
+			return nil, "", err
+		}
+		t.Cleanup(func() { _ = child.Process.Kill() })
+		return child, "test.log", nil
+	}
+	t.Cleanup(func() { startServeBackgroundProcessForEnsure = old; RemoveDaemonRuntime(dir) })
+	cfg := config.Config{DataDir: dir}
+	_, err := ensureBackgroundServe(ctx, &cfg, time.Second, false)
+	require.NoError(t, err)
+	assert.Contains(t, progress.String(), "Starting agentsview")
 }
 
 func TestEnsureTransport_ReadIntentStartsDaemon(t *testing.T) {

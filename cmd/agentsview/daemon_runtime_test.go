@@ -41,6 +41,25 @@ func requirePOSIXSignals(t *testing.T, reason string) {
 	}
 }
 
+func TestProbeRuntimeRejectsInvalidIdentity(t *testing.T) {
+	for _, tc := range []struct{ name, body string }{
+		{"different process", `{"ok":true,"service":"agentsview","pid":43}`},
+		{"not ok", `{"ok":false,"service":"agentsview","pid":42}`},
+		{"wrong service", `{"ok":true,"service":"other","pid":42}`},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				w.Header().Set("Content-Type", "application/json")
+				_, _ = io.WriteString(w, tc.body)
+			}))
+			t.Cleanup(ts.Close)
+			ep := serverEndpoint(t, ts)
+			_, err := probeRuntime(t.Context(), daemon.RuntimeRecord{PID: 42, Address: ep.Addr}, "", daemon.ProbeOptions{ExpectedService: daemonService})
+			require.Error(t, err)
+		})
+	}
+}
+
 func setStartProbeTickForTest(t *testing.T, tick time.Duration) {
 	t.Helper()
 	require.Positive(t, tick)
