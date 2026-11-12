@@ -3,6 +3,7 @@ package archivesource
 import (
 	"context"
 	"database/sql"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -295,13 +296,14 @@ func TestMaterializeSnapshotUsesAcceptedPrimaryAfterSiblingCapture(t *testing.T)
 	inputs := t.TempDir()
 	root := filepath.Join(inputs, "claude", "projects")
 	primary := filepath.Join(root, "project", id+".jsonl")
-	original := testjsonl.NewSessionBuilder().AddClaudeUserWithSessionID("2026-01-01T00:00:00Z", "original", id).String()
+	original := fmt.Sprintf(`{"type":"user","uuid":"root-message","parentUuid":null,"timestamp":"2026-01-01T00:00:00Z","sessionId":%q,"message":{"content":"original"}}`+"\n", id)
 	dbtest.WriteTestFile(t, primary, []byte(original))
 	dbtest.WriteTestFile(t, filepath.Join(root, "project", id, "tool-results", "tool.txt"), []byte("original tool"))
 	source := backupSourceRoots(t, inputs, []rawarchive.RootSpec{{Provider: "claude", Path: root}})
-	changed := testjsonl.NewSessionBuilder().AddClaudeUserWithSessionID("2026-01-01T00:00:00Z", "changed", id).String()
+	changed := original + fmt.Sprintf(`{"type":"user","uuid":"next-message","parentUuid":"root-message","timestamp":"2026-01-01T00:00:01Z","sessionId":%q,"message":{"content":"changed"}}`+"\n", id)
 	require.NoError(t, os.WriteFile(primary, []byte(changed), 0o600))
-	dbtest.WriteTestFile(t, filepath.Join(root, "project", siblingID+".jsonl"), []byte(testjsonl.NewSessionBuilder().AddClaudeUserWithSessionID("2026-01-01T00:01:00Z", "sibling", siblingID).String()))
+	sibling := fmt.Sprintf(`{"type":"user","uuid":"root-message","parentUuid":null,"timestamp":"2026-01-01T00:00:00Z","sessionId":%q,"sessionKind":"bg","message":{"content":"original"}}`+"\n", siblingID)
+	dbtest.WriteTestFile(t, filepath.Join(root, "project", siblingID+".jsonl"), []byte(sibling))
 	settings := rawarchive.RecoverySettings{LocalMachineName: "retired-desktop"}
 	capture := filepath.Join(inputs, "capture-next")
 	_, err := rawarchive.Capture(ctx, rawarchive.CaptureOptions{DataDir: filepath.Join(inputs, "application"), Destination: capture, IdentityFrom: filepath.Join(inputs, "capture", "capture.json"), Roots: []rawarchive.RootSpec{{Provider: "claude", Path: root}}, Settings: settings})
@@ -317,6 +319,15 @@ func TestMaterializeSnapshotUsesAcceptedPrimaryAfterSiblingCapture(t *testing.T)
 	t.Cleanup(func() { require.NoError(t, archive.Close()) })
 	_, err = archive.Import(ctx, spec)
 	require.NoError(t, err)
+	accepted, err := database.ListRawArchiveSources(ctx, "", 100)
+	require.NoError(t, err)
+	var siblingManifest []byte
+	for _, item := range accepted {
+		if strings.HasSuffix(item.SourceKey, siblingID+".jsonl") {
+			siblingManifest = item.CanonicalJSON
+		}
+	}
+	require.Contains(t, string(siblingManifest), id+".jsonl", "the accepted background sibling must retain the primary")
 	files, err := database.ListRawArchiveFiles(ctx, 0, 100)
 	require.NoError(t, err)
 	rel, err := filepath.Rel(filepath.Dir(root), primary)
