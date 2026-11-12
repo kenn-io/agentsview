@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/require"
 	"go.kenn.io/agentsview/internal/db"
@@ -304,4 +305,38 @@ func TestAnalyticsKeptMovingSelectionsReadFresh(t *testing.T) {
 			require.Error(t, err)
 		})
 	}
+}
+
+func TestAnalyticsKeptTerminationClockBoundary(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "mirror.duckdb")
+	buildMirrorFixture(t, path, "session-a")
+	conn, err := Open(t.Context(), path)
+	require.NoError(t, err)
+	boundary := time.Now().UTC().Add(8 * time.Second)
+	_, err = conn.ExecContext(t.Context(), `UPDATE sessions SET ended_at = ?`, boundary.Add(-10*time.Minute))
+	require.NoError(t, err)
+	require.NoError(t, conn.Close())
+	store, err := NewStore(t.Context(), path)
+	require.NoError(t, err)
+	t.Cleanup(func() { store.Close() })
+	f := db.AnalyticsFilter{Termination: "active"}
+	before, err := store.GetAnalyticsSummary(t.Context(), f)
+	require.NoError(t, err)
+	freshBefore, err := store.analytics().GetAnalyticsSummary(t.Context(), f)
+	require.NoError(t, err)
+	require.Equal(t, 1, before.TotalSessions)
+	require.Equal(t, freshBefore, before)
+	timer := time.NewTimer(time.Until(boundary.Add(time.Second)))
+	defer timer.Stop()
+	select {
+	case <-timer.C:
+	case <-t.Context().Done():
+		t.Fatal(t.Context().Err())
+	}
+	after, err := store.GetAnalyticsSummary(t.Context(), f)
+	require.NoError(t, err)
+	freshAfter, err := store.analytics().GetAnalyticsSummary(t.Context(), f)
+	require.NoError(t, err)
+	require.Equal(t, 0, after.TotalSessions)
+	require.Equal(t, freshAfter, after)
 }
