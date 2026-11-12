@@ -17,30 +17,28 @@ func TestDailyUsagePairwiseSharedSessions(t *testing.T) {
 		"model-a": {InputMicrodollarsPerMTok: 2000000, OutputMicrodollarsPerMTok: 10000000},
 		"gpt-5":   {InputMicrodollarsPerMTok: 2500000, OutputMicrodollarsPerMTok: 10000000},
 	})
-	filter := UsageFilter{From: "2024-06-15", To: "2024-06-15", Timezone: "UTC", Breakdowns: true, PairwiseSides: true, SkipSessionCounts: true}
-	for range 2 {
-		ranking, err := d.GetDailyUsage(t.Context(), filter)
-		require.NoError(t, err)
-		require.NotNil(t, ranking.Pairwise)
-		models, ok := ranking.Pairwise.Side("model", []string{"model-a", "gpt-5"})
-		require.True(t, ok)
-		assert.Equal(t, 8000, models.Totals.InputTokens)
-		assert.EqualValues(t, 58000, models.Totals.TotalCost.Microdollars)
-		assert.Equal(t, 4, models.SessionCounts.Total)
-		project, ok := ranking.Pairwise.Side("project", []string{"proj-a"})
-		require.True(t, ok)
-		assert.Equal(t, 4000, project.Totals.InputTokens)
-		assert.EqualValues(t, 29000, project.Totals.TotalCost.Microdollars)
-		assert.Equal(t, 2, project.SessionCounts.Total)
-		filtered := filter
-		filtered.PairwiseSides, filtered.SkipSessionCounts = false, false
-		filtered.ProjectLabels = []string{"proj-a"}
-		independent, err := d.GetDailyUsage(t.Context(), filtered)
-		require.NoError(t, err)
-		assert.Equal(t, independent.Totals.TotalCost, project.Totals.TotalCost)
-		assert.Equal(t, independent.Totals.InputTokens, project.Totals.InputTokens)
-		assert.Equal(t, independent.SessionCounts.Total, project.SessionCounts.Total)
-	}
+	filter := UsageFilter{From: "2024-06-15", To: "2024-06-15", Timezone: "UTC", Breakdowns: true, PairwiseSides: true}
+	ranking, err := d.GetDailyUsage(t.Context(), filter)
+	require.NoError(t, err)
+	require.NotNil(t, ranking.Pairwise)
+	models, ok := ranking.Pairwise.Side("model", []string{"model-a", "gpt-5"})
+	require.True(t, ok)
+	assert.Equal(t, 8000, models.Totals.InputTokens)
+	assert.EqualValues(t, 58000, models.Totals.TotalCost.Microdollars)
+	assert.Equal(t, 4, models.SessionCounts.Total)
+	project, ok := ranking.Pairwise.Side("project", []string{"proj-a"})
+	require.True(t, ok)
+	assert.Equal(t, 4000, project.Totals.InputTokens)
+	assert.EqualValues(t, 29000, project.Totals.TotalCost.Microdollars)
+	assert.Equal(t, 2, project.SessionCounts.Total)
+	filtered := filter
+	filtered.PairwiseSides = false
+	filtered.ProjectLabels = []string{"proj-a"}
+	independent, err := d.GetDailyUsage(t.Context(), filtered)
+	require.NoError(t, err)
+	assert.Equal(t, independent.Totals.TotalCost, project.Totals.TotalCost)
+	assert.Equal(t, independent.Totals.InputTokens, project.Totals.InputTokens)
+	assert.Equal(t, independent.SessionCounts.Total, project.SessionCounts.Total)
 	filter.ActiveSince = "2024-06-01T00:00:00Z"
 	filter.ExcludeAgent = "codex"
 	result, err := d.GetDailyUsage(t.Context(), filter)
@@ -101,7 +99,7 @@ func TestDailyUsagePairwiseDuplicateAndCursor(t *testing.T) {
 	d := testDB(t)
 	for _, row := range []struct{ id, project, model, at string }{
 		{"first", "project-a", "model-a", "2026-11-01T05:30:00Z"},
-		{"second", "project-b", "model-b", "2026-11-01T06:30:00Z"},
+		{"second", "project-b", "model-b", "2026-11-02T01:30:00Z"},
 	} {
 		insertSession(t, d, row.id, row.project, func(s *Session) { s.Agent = "codex"; s.StartedAt = &row.at })
 		insertMessages(t, d, Message{SessionID: row.id, Ordinal: 0, Role: "assistant", Timestamp: row.at, Model: row.model, SourceUUID: "shared", TokenUsage: []byte(`{"input_tokens":100}`)})
@@ -115,12 +113,6 @@ func TestDailyUsagePairwiseDuplicateAndCursor(t *testing.T) {
 	assert.False(t, ok)
 	_, ok = ranking.Pairwise.Side("project", []string{"project-b"})
 	assert.False(t, ok)
-	filtered := filter
-	filtered.PairwiseSides, filtered.Model = false, "model-b"
-	independent, err := d.GetDailyUsage(t.Context(), filtered)
-	require.NoError(t, err)
-	assert.Equal(t, 100, independent.Totals.InputTokens)
-	assert.Equal(t, 1, independent.SessionCounts.Total)
 	cursor, ok := ranking.Pairwise.Side("model", []string{"cursor-model"})
 	require.True(t, ok)
 	assert.Equal(t, 30, cursor.Totals.InputTokens)

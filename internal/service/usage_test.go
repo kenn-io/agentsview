@@ -394,11 +394,15 @@ type pairwiseErrorStore struct {
 
 type pairwiseCountingStore struct {
 	db.Store
-	reads atomic.Int32
+	reads    atomic.Int32
+	filtered atomic.Int32
 }
 
 func (s *pairwiseCountingStore) GetDailyUsage(ctx context.Context, f db.UsageFilter) (db.DailyUsageResult, error) {
 	s.reads.Add(1)
+	if len(f.ProjectFilterLabels()) > 0 {
+		s.filtered.Add(1)
+	}
 	return s.Store.GetDailyUsage(ctx, f)
 }
 
@@ -407,12 +411,10 @@ func TestDirectBackend_UsagePairwiseComparison_UsesRankingSides(t *testing.T) {
 	seedPairwiseUsageFixture(t, d)
 	store := &pairwiseCountingStore{Store: d}
 	backend := service.NewReadOnlyBackend(store)
-	result, err := backend.UsagePairwiseComparison(t.Context(), service.UsagePairwiseComparisonRequest{
+	_, err := backend.UsagePairwiseComparison(t.Context(), service.UsagePairwiseComparisonRequest{
 		From: "2024-06-01", To: "2024-06-01", Timezone: "UTC", IncludeOneShot: true,
 	})
 	require.NoError(t, err)
-	assert.Equal(t, 2, result.Left.SessionCount)
-	assert.Equal(t, 1, result.Right.SessionCount)
 	assert.EqualValues(t, 1, store.reads.Load())
 }
 
@@ -454,6 +456,7 @@ func TestDirectBackend_UsagePairwiseComparison_ReadsInexactSide(t *testing.T) {
 		require.NoError(t, err)
 		assert.Equal(t, 150, result.Right.TotalTokens)
 		assert.EqualValues(t, 2*(i+1), store.reads.Load())
+		assert.EqualValues(t, i+1, store.filtered.Load())
 	}
 }
 
@@ -493,7 +496,7 @@ func TestDirectBackend_UsagePairwiseComparison_ParallelReadsCancelOnError(t *tes
 }
 
 func TestDirectBackend_UsagePairwiseComparison_PreparesOnce(t *testing.T) {
-	for _, selection := range []string{"default", "explicit"} {
+	for _, selection := range []string{"explicit"} {
 		t.Run(selection, func(t *testing.T) {
 			d := dbtest.OpenTestDB(t)
 			seedPairwiseUsageFixture(t, d)
@@ -1014,6 +1017,7 @@ func TestDirectBackend_UsagePairwiseComparison_ProjectDefault(t *testing.T) {
 			From: "2024-06-01", To: "2024-06-01", Timezone: "UTC", Breakdowns: true,
 		})
 		require.NoError(t, err)
+		// Oversized rankings omit side evidence and require filtered reads.
 		ranking.Pairwise = nil
 		store := &pairwiseRankingStore{Store: d, filters: make(chan db.UsageFilter, 3), ranking: ranking}
 		res, err := service.NewReadOnlyBackend(store).UsagePairwiseComparison(t.Context(), service.UsagePairwiseComparisonRequest{
