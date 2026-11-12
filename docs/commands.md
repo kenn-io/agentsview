@@ -2219,8 +2219,9 @@ counts them, excluding unquoted stop words. Regular word forms match, so
 `invoice` also finds `invoices`.
 A single word, a fully quoted query such as `'"rounding of invoices"'`, and a
 search whose `--in` leaves out `messages` match the exact text only. A quoted
-phrase inside a longer query must appear as typed. `--fts` and hybrid's keyword
-matches rank messages by words the same way. An `--fts` query made only of
+phrase inside a longer query requires its words together and in order. `--fts`
+and hybrid's keyword matches rank messages by words the same way; hybrid
+keyword matches report their word count. An `--fts` query made only of
 quoted phrases, or one that uses FTS5 operators after a leading quote, such as
 `'"fix" OR "missing"'`, keeps its FTS5 meaning. Repeatable `--exclude-session <id>` drops matches from
 those sessions before `--limit`. Hybrid returns keyword matches with a note

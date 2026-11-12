@@ -1656,6 +1656,7 @@ type hybridDisplay struct {
 	ordinalEnd   int
 	subordinate  bool
 	snippet      string
+	matchedWords int
 }
 
 // hybridLeg is one rank-ordered fusion leg: entries for RRFMerge plus each
@@ -1819,7 +1820,7 @@ func (db *DB) hybridWordHits(
 	}
 	hits := make([]hybridDisplay, len(matches))
 	for i, m := range matches {
-		hits[i] = hybridDisplay{sessionID: m.SessionID, ordinal: m.Ordinal, snippet: m.Snippet}
+		hits[i] = hybridDisplay{sessionID: m.SessionID, ordinal: m.Ordinal, snippet: m.Snippet, matchedWords: m.MatchedWords}
 	}
 	return hits, nil
 }
@@ -1995,6 +1996,7 @@ func (db *DB) enrichHybridMatches(
 			Sidechain:          info.isSidechain,
 			Timestamp:          info.timestamp,
 			Snippet:            f.SemanticSnippet(content, d.snippet),
+			MatchedWords:       d.matchedWords,
 			Score:              &score,
 		})
 	}

@@ -62,6 +62,7 @@ func TestSearchContentRanksExactTextThenWords(t *testing.T) {
 		{"one-word", "message", 1},
 	}, search("invoice rounding decision", ""))
 	assert.Equal(t, []wordHit{{"two-words", "message", 0}}, search(`"rounding of invoices"`, ""))
+	assert.Equal(t, []wordHit{{"tool", "tool_result", 0}}, search(`“invoice rounding decision”`, ""))
 	assert.Equal(t, []wordHit{
 		{"two-words", "message", 2},
 		{"one-word", "message", 1},
@@ -74,6 +75,7 @@ func TestSearchContentKeepsSubstringSearch(t *testing.T) {
 	seedWordSearch(t, d, "proj",
 		[3]string{"embedded", "prefixrounding happened", ""},
 		[3]string{"words", "rounding of invoices", "invoices need rounding"},
+		[3]string{"curly-tool", "no match", "found “invoices need” here"},
 	)
 	for _, tc := range []struct {
 		name   string
@@ -88,7 +90,12 @@ func TestSearchContentKeepsSubstringSearch(t *testing.T) {
 		{
 			"no messages source",
 			ContentSearchFilter{Pattern: "invoices need", Sources: []string{"tool_result"}},
-			[]wordHit{{"words", "tool_result", 0}},
+			[]wordHit{{"words", "tool_result", 0}, {"curly-tool", "tool_result", 0}},
+		},
+		{
+			"curly quotes without messages are literal",
+			ContentSearchFilter{Pattern: `“invoices need”`, Sources: []string{"tool_result"}},
+			[]wordHit{{"curly-tool", "tool_result", 0}},
 		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -143,7 +150,8 @@ func TestSearchContentNaturalPhrasesMatchText(t *testing.T) {
 	d := testDB(t)
 	requireFTS(t, d)
 	seedWordSearch(t, d, "proj",
-		[3]string{"phrase", "prefixrounding of invoices decision", ""},
+		[3]string{"phrase", "rounding, of invoices decision", ""},
+		[3]string{"prefix", "prefixrounding of invoices decision", ""},
 		[3]string{"scattered", "invoices decision and rounding", ""},
 		[3]string{"arrow", "handler -> next", ""},
 		[3]string{"plain", "handler only", ""},
@@ -152,9 +160,10 @@ func TestSearchContentNaturalPhrasesMatchText(t *testing.T) {
 		pattern, mode string
 		want          []wordHit
 	}{
-		{`decision "rounding of invoices"`, "", []wordHit{{"phrase", "message", 3}}},
-		{`"rounding of invoices" decision`, "fts", []wordHit{{"phrase", "message", 3}}},
-		{`decision "rounding of invoices"`, "fts", []wordHit{{"phrase", "message", 3}}},
+		{`decision "rounding of invoices"`, "", []wordHit{{"phrase", "message", 4}}},
+		{`"rounding of invoices" decision`, "fts", []wordHit{{"phrase", "message", 4}}},
+		{`decision "rounding of invoices"`, "fts", []wordHit{{"phrase", "message", 4}}},
+		{`missing "rounding of invoices"`, "fts", []wordHit{{"phrase", "message", 3}}},
 		{`handler "->"`, "", []wordHit{{"arrow", "message", 1}}},
 		{`"->"`, "fts", []wordHit{{"arrow", "message", 0}}},
 	} {
@@ -245,8 +254,8 @@ func TestSearchContentWordTierOrder(t *testing.T) {
 	}{
 		{"default", ContentSearchFilter{Pattern: "alpha beta missing"}, [][3]string{{"newer", "alpha beta long", ""}, {"older", "alpha beta", ""}}, []wordHit{{"newer", "message", 2}, {"older", "message", 2}}},
 		{"fts", ContentSearchFilter{Pattern: "alpha beta missing", Mode: "fts"}, [][3]string{{"older", "alpha beta", ""}, {"newer", "alpha beta filler filler filler filler filler filler filler filler", ""}}, []wordHit{{"older", "message", 2}, {"newer", "message", 2}}},
-		{"hybrid", ContentSearchFilter{Pattern: "alpha beta missing", Mode: "hybrid", KeywordOnly: true}, [][3]string{{"older", "alpha beta", ""}, {"newer", "alpha beta filler filler filler filler filler filler filler filler", ""}}, []wordHit{{"older", "message", 0}, {"newer", "message", 0}}},
-		{"hybrid-full", ContentSearchFilter{Pattern: "alpha beta", Mode: "hybrid", KeywordOnly: true}, [][3]string{{"older", "alpha beta", ""}, {"newer", "alpha beta filler filler filler filler filler filler filler filler", ""}}, []wordHit{{"older", "message", 0}, {"newer", "message", 0}}},
+		{"hybrid", ContentSearchFilter{Pattern: "alpha beta missing", Mode: "hybrid", KeywordOnly: true}, [][3]string{{"older", "alpha beta", ""}, {"newer", "alpha beta filler filler filler filler filler filler filler filler", ""}}, []wordHit{{"older", "message", 2}, {"newer", "message", 2}}},
+		{"hybrid-full", ContentSearchFilter{Pattern: "alpha beta", Mode: "hybrid", KeywordOnly: true}, [][3]string{{"older", "alpha beta", ""}, {"newer", "alpha beta filler filler filler filler filler filler filler filler", ""}}, []wordHit{{"older", "message", 2}, {"newer", "message", 2}}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			d := testDB(t)
@@ -273,6 +282,21 @@ func TestSearchContentWordTierOrder(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestSearchContentFTSTiesUseOrdinal(t *testing.T) {
+	d := testDB(t)
+	requireFTS(t, d)
+	for _, tc := range []struct {
+		id      string
+		ordinal int
+	}{{"later", 5}, {"earlier", 1}} {
+		insertSession(t, d, tc.id, "proj", func(s *Session) { s.UserMessageCount = 2 })
+		require.NoError(t, d.InsertMessages(t.Context(), []Message{{SessionID: tc.id, Ordinal: tc.ordinal, Role: "user", Content: "alpha beta"}}))
+	}
+	page, err := d.SearchContent(t.Context(), ContentSearchFilter{Pattern: "alpha beta", Mode: "fts"})
+	require.NoError(t, err)
+	assert.Equal(t, []wordHit{{"earlier", "message", 2}, {"later", "message", 2}}, wordHits(page))
 }
 
 func TestSearchContentWordPagesWithFilteredTiers(t *testing.T) {

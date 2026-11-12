@@ -117,10 +117,13 @@ func TestSearchContentHybridVectorOnlyAndFTSOnlyBothAppear(t *testing.T) {
 	require.Len(t, page.Matches, 2, "matches")
 
 	var ids []string
+	counts := make(map[string]int)
 	for _, m := range page.Matches {
 		ids = append(ids, m.SessionID)
+		counts[m.SessionID] = m.MatchedWords
 	}
 	assert.ElementsMatch(t, []string{"fts-only", "vec-only"}, ids)
+	assert.Equal(t, map[string]int{"fts-only": 1, "vec-only": 0}, counts)
 }
 
 func TestSearchContentHybridFTSSnippetUsesDialogue(t *testing.T) {

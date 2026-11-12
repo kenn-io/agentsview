@@ -10,10 +10,11 @@ import (
 )
 
 // contentWords is a natural-language query: the words a message can hold,
-// counted per message, and the quoted phrases it must contain as typed.
+// counted per message, and the quoted phrases it must contain.
 type contentWords struct {
 	terms   []string // one FTS expression per word, covering its regular forms
-	phrases []string
+	phrases []string // punctuation-only phrases checked literally
+	match   string   // FTS expression requiring word-bearing phrases
 }
 
 // contentWordsQuery prepares pattern for ranked word search. It reports false
@@ -23,37 +24,30 @@ func contentWordsQuery(pattern string) (contentWords, bool) {
 	if containsCJK(pattern) {
 		return contentWords{}, false
 	}
-	segments := strings.Split(pattern, `"`)
+	natural, err := literalFTSAnalyzer.PrepareNatural(pattern)
 	var q contentWords
-	analyzed := make([]string, 0, len(segments))
-	for i, segment := range segments {
-		if i%2 == 1 && i < len(segments)-1 {
-			q.phrases = append(q.phrases, segment)
-			// FTS has no token for a punctuation-only phrase, so only the
-			// literal check below requires it.
-			if !strings.ContainsFunc(segment, func(r rune) bool { return unicode.IsLetter(r) || unicode.IsNumber(r) }) {
+	if err != nil {
+		// FTS cannot tokenize punctuation-only phrases; retain their literal
+		// checks while preparing the remaining query words.
+		segments := strings.Split(pattern, `"`)
+		var analyzed []string
+		for i, segment := range segments {
+			if i%2 == 1 && i < len(segments)-1 && !strings.ContainsFunc(segment, func(r rune) bool { return unicode.IsLetter(r) || unicode.IsNumber(r) }) {
+				q.phrases = append(q.phrases, segment)
 				continue
 			}
-			segment = `"` + segment + `"`
+			if i%2 == 1 && i < len(segments)-1 {
+				segment = `"` + segment + `"`
+			}
+			analyzed = append(analyzed, segment)
 		}
-		analyzed = append(analyzed, segment)
+		natural, err = literalFTSAnalyzer.PrepareNatural(strings.Join(analyzed, " "))
 	}
-	natural, err := literalFTSAnalyzer.PrepareNatural(strings.Join(analyzed, " "))
 	if err != nil || len(natural.CountTerms) == 0 {
 		return contentWords{}, false
 	}
-	matched := make([]bool, len(q.phrases))
-	for _, phrase := range natural.Phrases {
-		found := false
-		for i, raw := range q.phrases[:len(matched)] {
-			if !matched[i] && strings.Join(strings.Fields(raw), " ") == phrase {
-				matched[i], found = true, true
-				break
-			}
-		}
-		if !found {
-			q.phrases = append(q.phrases, phrase)
-		}
+	if len(natural.Phrases) > 0 {
+		q.match = natural.Match
 	}
 	for _, term := range natural.CountTerms {
 		q.terms = append(q.terms, term.Match)
@@ -72,7 +66,8 @@ func unquoteContentSearch(pattern string) (string, bool) {
 	}
 	inner := string(runes[1 : len(runes)-1])
 	ascii := runes[0] == '"' && runes[len(runes)-1] == '"' && !strings.ContainsRune(inner, '"')
-	if ascii && strings.TrimSpace(inner) != "" {
+	curly := (runes[0] == '“' || runes[0] == '„') && (runes[len(runes)-1] == '”' || runes[len(runes)-1] == '“') && !strings.ContainsAny(inner, `“”„`)
+	if (ascii || curly) && strings.TrimSpace(inner) != "" {
 		return inner, true
 	}
 	return pattern, false
@@ -134,8 +129,7 @@ func buildContentWordHits(ctx context.Context, tx *sql.Tx, q contentWords) error
 }
 
 // contentWordRows reads need message matches from content_word_hits, after
-// skipping offset. where filters the message m and its session s; each
-// quoted phrase must also appear as typed.
+// skipping offset. where filters the message m and its session s.
 func contentWordRows(
 	ctx context.Context, tx *sql.Tx, f ContentSearchFilter, q contentWords,
 	where string, args []any, offset, need, floor int, full bool,
@@ -155,14 +149,25 @@ func contentWordRows(
 		from = "messages_fts"
 		count = fmt.Sprint(len(q.terms))
 		where += " AND messages_fts.content MATCH ?"
-		args = append(args, strings.Join(q.terms, " AND "))
+		match := strings.Join(q.terms, " AND ")
+		if q.match != "" {
+			match = "(" + q.match + ") AND " + match
+		}
+		args = append(args, match)
 	} else {
 		where += " AND h.n >= ? AND messages_fts.content MATCH ?"
-		args = append(args, floor, q.snippetTerm())
+		match := q.snippetTerm()
+		if q.match != "" {
+			match = q.match
+		}
+		args = append(args, floor, match)
 	}
 	if f.Mode == "fts" || f.Mode == "hybrid" {
 		sortKey = "messages_fts.rank"
 		order = "sort_key ASC, m.id ASC"
+		if f.Mode == "fts" {
+			order = "sort_key ASC, m.ordinal ASC, m.id ASC"
+		}
 	}
 	id := "h.id"
 	if full {

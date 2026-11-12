@@ -889,6 +889,15 @@ func TestSessionSearchRanksExactTextThenWords(t *testing.T) {
 	}
 	assert.Equal(t, []string{"tool_result/3", "message/2"}, search("invoice rounding decision"))
 	assert.Equal(t, []string{"message/0"}, search(`"rounding of invoices"`))
+	cmd := newRootCommand()
+	var stdout, stderr bytes.Buffer
+	cmd.SetOut(&stdout)
+	cmd.SetErr(&stderr)
+	cmd.SetArgs([]string{"session", "search", "invoice rounding decision", "--hybrid", "--json"})
+	require.NoError(t, cmd.Execute())
+	got := decodeCLIJSON[service.ContentSearchResult](t, stdout.String())
+	require.Len(t, got.Matches, 1)
+	assert.Equal(t, 2, got.Matches[0].MatchedWords)
 }
 
 func TestSessionSearchFTSHints(t *testing.T) {

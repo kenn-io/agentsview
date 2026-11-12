@@ -217,7 +217,9 @@ first, from every selected source, then messages holding every word, then those
 holding fewer of the words. Each match reports `matched_words`, the number of
 query words it holds, excluding unquoted stop words; other searches report `0`.
 A single word, a fully quoted pattern, and searches without the `messages`
-source match the exact text only.
+source match the exact text only. A quoted phrase inside a longer query requires
+its words together and in order. Hybrid keyword matches also report their word
+count.
 
 `search_content` accepts a `mode` of `substring` (default), `regex`, `terms`,
 `semantic`, or `hybrid`. `terms` splits `pattern` on whitespace and requires
