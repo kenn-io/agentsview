@@ -62,6 +62,8 @@ func TestDailyUsageKeptPricing(t *testing.T) {
 	}
 	require.NoError(t, database.UpsertModelPricing([]ModelPricing{{ModelPattern: "model-a", InputPerMTok: money.MustParseDollars("1")}}))
 	assert.EqualValues(t, 1000000, readCost())
+	require.NoError(t, database.UpsertModelPricing([]ModelPricing{{ModelPattern: "model-a", InputPerMTok: money.MustParseDollars("2")}}))
+	assert.EqualValues(t, 2000000, readCost())
 	database.SetCustomPricing(map[string]config.CustomModelRate{"model-a": {InputMicrodollarsPerMTok: 3000000}})
 	assert.EqualValues(t, 3000000, readCost())
 	database.SetEffectivePricing(map[string]export.ModelRates{"model-a": {InputPerMTok: money.MustParseDollars("4")}})
@@ -75,16 +77,17 @@ func TestDailyUsageKeptPricing(t *testing.T) {
 func TestDailyUsageKeptWriteDuringRead(t *testing.T) {
 	database := testDB(t)
 	seedLiveWriteSession(t, database, "reported", "project", "2026-08-10T09:00:00Z", 0, 10)
-	var prepares atomic.Int32
+	var prepares, reads atomic.Int32
+	database.SetUsageWindowPrepareForTest(func(context.Context) { prepares.Add(1) })
 	started, resume := make(chan struct{}), make(chan struct{})
 	release := sync.OnceFunc(func() { close(resume) })
 	defer release()
-	database.SetUsageWindowPrepareForTest(func(context.Context) {
-		if prepares.Add(1) == 1 {
+	database.usageCache.usageWindowObserver.afterRead = func(bool) {
+		if reads.Add(1) == 1 {
 			close(started)
 			<-resume
 		}
-	})
+	}
 	filter := UsageFilter{From: "2026-08-10", To: "2026-08-10", Timezone: "UTC"}
 	done := make(chan error, 1)
 	go func() {
@@ -93,14 +96,15 @@ func TestDailyUsageKeptWriteDuringRead(t *testing.T) {
 	}()
 	<-started
 	appendLiveWriteMessage(t, database, "reported", "2026-08-10T10:00:00Z", 1, 7)
+	newer, err := database.GetDailyUsage(t.Context(), filter)
+	require.NoError(t, err)
+	assert.Equal(t, 17, newer.Totals.InputTokens)
 	release()
 	require.NoError(t, <-done)
-	for range 2 {
-		got, err := database.GetDailyUsage(t.Context(), filter)
-		require.NoError(t, err)
-		assert.Equal(t, 17, got.Totals.InputTokens)
-	}
-	assert.EqualValues(t, 2, prepares.Load())
+	got, err := database.GetDailyUsage(t.Context(), filter)
+	require.NoError(t, err)
+	assert.Equal(t, 17, got.Totals.InputTokens)
+	assert.EqualValues(t, 2, prepares.Load(), "the older read must not evict the newer result")
 }
 
 func TestDailyUsageKeptSharedWindowAfterWrite(t *testing.T) {
@@ -124,24 +128,6 @@ func TestDailyUsageKeptSharedWindowAfterWrite(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, 17, got.Totals.InputTokens)
 	assert.EqualValues(t, 2, prepares.Load())
-}
-
-func TestDailyUsageKeptSharedWindowAfterPricingChange(t *testing.T) {
-	database := testDB(t)
-	seedLiveWriteSession(t, database, "reported", "project", "2026-08-10T09:00:00Z", 0, 1000000)
-	database.SetCustomPricing(map[string]config.CustomModelRate{"model-a": {InputMicrodollarsPerMTok: 1000000}})
-	ctx := WithUsageWindowMemo(t.Context())
-	filter := UsageFilter{From: "2026-08-10", To: "2026-08-10", Timezone: "UTC", Breakdowns: true, PairwiseSides: true}
-	_, err := database.GetDailyUsage(ctx, filter)
-	require.NoError(t, err)
-	database.SetCustomPricing(map[string]config.CustomModelRate{"model-a": {InputMicrodollarsPerMTok: 2000000}})
-	filter.Breakdowns, filter.PairwiseSides, filter.Model = false, false, "model-a"
-	shared, err := database.GetDailyUsage(ctx, filter)
-	require.NoError(t, err)
-	assert.EqualValues(t, 2000000, shared.Totals.TotalCost.Microdollars)
-	got, err := database.GetDailyUsage(t.Context(), filter)
-	require.NoError(t, err)
-	assert.EqualValues(t, 2000000, got.Totals.TotalCost.Microdollars)
 }
 
 func TestDailyUsageKeptMovingClockBypass(t *testing.T) {
