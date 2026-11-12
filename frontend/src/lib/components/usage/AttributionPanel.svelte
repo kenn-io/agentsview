@@ -184,7 +184,10 @@
       label: r.label,
       value: r.value,
       style: r.style,
-      title: rowTitle(r.id, r.label),
+      // Zoomed tiles cannot be selected, so the title names them; selectable
+      // tiles take their name from the label and describe the click instead.
+      title: zoomedProject ? rowTitle(r.id, r.label) : undefined,
+      hint: zoomedProject ? undefined : rowTitle(r.id, r.label),
       selected: usage.isSelected(groupBy, r.id),
       dimmed: !zoomedProject && hasSelection && !usage.isSelected(groupBy, r.id),
       meta: fmtPct(r.value, rows.reduce(
@@ -239,6 +242,46 @@
     log: m.usage_label_scale_log,
   };
 </script>
+
+{#snippet rowValue(row: Row)}
+  {row.planOnly
+    ? m.plan_usage_title()
+    : isTokenMode
+      ? formatCount(row.value)
+      : formatMoney(moneyFromMicrodollars(row.value))}
+{/snippet}
+
+{#snippet railRowBody(row: Row, i: number)}
+  <span class="rail-rank">{i + 1}</span>
+  <span
+    class="rail-dot"
+    class:patterned={row.style.fill !== "solid"}
+    style="background: {row.swatch}"
+  ></span>
+  <span class="rail-label">{row.label}</span>
+  <span class="rail-cost">{@render rowValue(row)}</span>
+{/snippet}
+
+{#snippet listRowBody(row: Row, i: number)}
+  <span class="list-rank">{i + 1}</span>
+  <span
+    class="list-dot"
+    class:patterned={row.style.fill !== "solid"}
+    style="background: {row.swatch}"
+  ></span>
+  <span class="list-label">{row.label}</span>
+  <div class="list-bar-track">
+    <div
+      class="list-bar-fill"
+      style="width: {row.planOnly ? 0 : Math.max(row.pct * 100, 1)}%;
+             background: {row.swatch};"
+    ></div>
+  </div>
+  <span class="list-pct">
+    {row.planOnly ? "" : `${(row.pct * 100).toFixed(1)}%`}
+  </span>
+  <span class="list-cost">{@render rowValue(row)}</span>
+{/snippet}
 
 <svelte:window onkeydown={handleBackKey} />
 
@@ -340,35 +383,32 @@
         </div>
         <div class="side-rail">
           {#each rows as row, i (row.id)}
-            <!-- svelte-ignore a11y_no_noninteractive_tabindex (Only selectable rows receive a button role and tab stop.) -->
-            <div
-              class="rail-row"
-              data-row-id={row.id}
-              class:selected={usage.isSelected(groupBy, row.id)}
-              class:dimmed={!zoomedProject && hasSelection && !usage.isSelected(groupBy, row.id)}
-              role={zoomedProject ? undefined : "button"}
-              tabindex={zoomedProject ? undefined : 0}
-              aria-pressed={zoomedProject ? undefined : usage.isSelected(groupBy, row.id)}
-              title={rowTitle(row.id, row.label)}
-              onclick={zoomedProject ? undefined : (event) => handleClick(event, row.id)}
-              ondblclick={!zoomedProject && groupBy === "project" ? () => handleOpen(row.id) : undefined}
-              onkeydown={zoomedProject ? undefined : (event) => handleKey(event, row.id)}
-            >
-              <span class="rail-rank">{i + 1}</span>
-              <span
-                class="rail-dot"
-                class:patterned={row.style.fill !== "solid"}
-                style="background: {row.swatch}"
-              ></span>
-              <span class="rail-label">{row.label}</span>
-              <span class="rail-cost">
-                {row.planOnly
-                  ? m.plan_usage_title()
-                  : isTokenMode
-                    ? formatCount(row.value)
-                    : formatMoney(moneyFromMicrodollars(row.value))}
-              </span>
-            </div>
+            {#if zoomedProject}
+              <div
+                class="rail-row"
+                data-row-id={row.id}
+                class:selected={usage.isSelected(groupBy, row.id)}
+                title={rowTitle(row.id, row.label)}
+              >
+                {@render railRowBody(row, i)}
+              </div>
+            {:else}
+              <div
+                class="rail-row selectable"
+                data-row-id={row.id}
+                class:selected={usage.isSelected(groupBy, row.id)}
+                class:dimmed={hasSelection && !usage.isSelected(groupBy, row.id)}
+                role="button"
+                tabindex="0"
+                aria-pressed={usage.isSelected(groupBy, row.id)}
+                title={rowTitle(row.id, row.label)}
+                onclick={(event) => handleClick(event, row.id)}
+                ondblclick={groupBy === "project" ? () => handleOpen(row.id) : undefined}
+                onkeydown={(event) => handleKey(event, row.id)}
+              >
+                {@render railRowBody(row, i)}
+              </div>
+            {/if}
           {/each}
         </div>
       </div>
@@ -376,45 +416,32 @@
       <div class="list-view-frame">
       <div class="list-view">
         {#each rows as row, i (row.id)}
-          <!-- svelte-ignore a11y_no_noninteractive_tabindex (Only selectable rows receive a button role and tab stop.) -->
-          <div
-            class="list-row"
-            data-row-id={row.id}
-            class:selected={usage.isSelected(groupBy, row.id)}
-            class:dimmed={!zoomedProject && hasSelection && !usage.isSelected(groupBy, row.id)}
-            role={zoomedProject ? undefined : "button"}
-            tabindex={zoomedProject ? undefined : 0}
-            aria-pressed={zoomedProject ? undefined : usage.isSelected(groupBy, row.id)}
-            title={rowTitle(row.id, row.label)}
-            onclick={zoomedProject ? undefined : (event) => handleClick(event, row.id)}
-            ondblclick={!zoomedProject && groupBy === "project" ? () => handleOpen(row.id) : undefined}
-            onkeydown={zoomedProject ? undefined : (event) => handleKey(event, row.id)}
-          >
-            <span class="list-rank">{i + 1}</span>
-            <span
-              class="list-dot"
-              class:patterned={row.style.fill !== "solid"}
-              style="background: {row.swatch}"
-            ></span>
-            <span class="list-label">{row.label}</span>
-            <div class="list-bar-track">
-              <div
-                class="list-bar-fill"
-                style="width: {row.planOnly ? 0 : Math.max(row.pct * 100, 1)}%;
-                       background: {row.swatch};"
-              ></div>
+          {#if zoomedProject}
+            <div
+              class="list-row"
+              data-row-id={row.id}
+              class:selected={usage.isSelected(groupBy, row.id)}
+              title={rowTitle(row.id, row.label)}
+            >
+              {@render listRowBody(row, i)}
             </div>
-            <span class="list-pct">
-              {row.planOnly ? "" : `${(row.pct * 100).toFixed(1)}%`}
-            </span>
-            <span class="list-cost">
-              {row.planOnly
-                ? m.plan_usage_title()
-                : isTokenMode
-                  ? formatCount(row.value)
-                  : formatMoney(moneyFromMicrodollars(row.value))}
-            </span>
-          </div>
+          {:else}
+            <div
+              class="list-row selectable"
+              data-row-id={row.id}
+              class:selected={usage.isSelected(groupBy, row.id)}
+              class:dimmed={hasSelection && !usage.isSelected(groupBy, row.id)}
+              role="button"
+              tabindex="0"
+              aria-pressed={usage.isSelected(groupBy, row.id)}
+              title={rowTitle(row.id, row.label)}
+              onclick={(event) => handleClick(event, row.id)}
+              ondblclick={groupBy === "project" ? () => handleOpen(row.id) : undefined}
+              onkeydown={(event) => handleKey(event, row.id)}
+            >
+              {@render listRowBody(row, i)}
+            </div>
+          {/if}
         {/each}
       </div>
       </div>
@@ -505,10 +532,10 @@
     border-radius: var(--radius-md);
   }
 
+  /* Rows meet edge to edge so each keeps a 24px target at a 24px pitch. */
   .side-rail {
     display: flex;
     flex-direction: column;
-    gap: 2px;
     overflow-y: auto;
     max-height: 280px;
   }
@@ -516,6 +543,7 @@
   .rail-row {
     display: flex;
     align-items: center;
+    min-height: 24px;
     gap: 6px;
     padding: 2px 4px;
     line-height: 1.45;
@@ -523,7 +551,7 @@
     transition: background 0.1s;
   }
 
-  .rail-row[role="button"]:hover {
+  .rail-row.selectable:hover {
     background: var(--bg-surface-hover);
   }
 
@@ -539,7 +567,7 @@
     background: var(--bg-surface-hover);
   }
 
-  .rail-row[role="button"], .list-row[role="button"] {
+  .rail-row.selectable, .list-row.selectable {
     cursor: pointer;
   }
 
@@ -637,7 +665,7 @@
     transition: background 0.1s;
   }
 
-  .list-row[role="button"]:hover {
+  .list-row.selectable:hover {
     background: var(--bg-surface-hover);
   }
 

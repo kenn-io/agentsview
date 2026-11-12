@@ -105,6 +105,23 @@ describe("Breakdowns", () => {
     target.remove();
   });
 
+  it("names each bar with the tooltip's details for screen readers", async () => {
+    const target = document.createElement("div");
+    document.body.appendChild(target);
+    const c = mount(Breakdowns, { target, props: { report: makeReport() } });
+    await tick();
+    const row = target.querySelector(".bar-row") as HTMLElement;
+    const bar = row.querySelector('[role="img"]');
+    row.dispatchEvent(new MouseEvent("mouseenter", { bubbles: true }));
+    await tick();
+    const tip = target.querySelector(".tooltip")!.textContent!.trim();
+    expect(bar?.getAttribute("aria-label")).toBe(tip);
+    expect(tip).toContain("75%");
+    expect(row.closest('[role="list"]')).not.toBeNull();
+    unmount(c);
+    target.remove();
+  });
+
   it("stacks three disjoint classes for minutes and cost and shows each contribution", async () => {
     const target = document.createElement("div");
     document.body.appendChild(target);

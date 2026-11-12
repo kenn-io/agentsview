@@ -1611,7 +1611,6 @@
               class="session-id"
               title={m.session_breadcrumb_copy_session_id_value({ id: rawId })}
               onclick={() => copySessionId(rawId, session.id)}
-              aria-label={m.session_breadcrumb_copy_session_id()}
             >
               {copiedSessionId === session.id
                 ? m.session_breadcrumb_copied()
@@ -1782,24 +1781,36 @@
      session ID: an 11px outlined label on no fill. Figures (date, usage,
      cost, model) are plain muted text, so the title stays the strongest
      element in the header. */
+  /* The visible chip is the padding box: an inset shadow draws its edge
+     and the hover fill stops at it. A transparent border grows the hit box
+     to 24px tall around the 18px chip, and the negative margin keeps the
+     chip's footprint. It grows mostly downward: the header row above sits
+     1px away, and an overlap would shrink both targets. The side borders
+     match the top so they cannot read as a stripe. The outer radii keep
+     the chip's own corner radius. */
   .grade-badge,
   .session-id {
     display: inline-flex;
     align-items: center;
-    padding: 0 5px;
+    margin: -1px -1px -5px;
+    padding: 1px 6px;
     font-size: 11px;
     font-weight: 500;
     line-height: 16px;
     background: transparent;
-    border: 1px solid var(--border-default);
-    border-radius: var(--radius-sm);
+    background-clip: padding-box;
+    border: solid transparent;
+    border-width: 1px 1px 5px;
+    border-radius: calc(var(--radius-sm) + 1px) / calc(var(--radius-sm) + 1px)
+      calc(var(--radius-sm) + 1px) calc(var(--radius-sm) + 5px) calc(var(--radius-sm) + 5px);
+    box-shadow: inset 0 0 0 1px var(--border-default);
     white-space: nowrap;
     flex-shrink: 0;
   }
 
   .grade-badge:hover,
   .session-id:hover {
-    background: var(--bg-surface-hover);
+    background-color: var(--bg-surface-hover);
   }
 
   .summary-badge {
@@ -1879,6 +1890,9 @@
 
   /* The grade keeps its ink so the chip still signals health. */
   .grade-badge {
+    /* A one-letter grade still gets a 24px-wide hit box. */
+    min-width: 10px;
+    justify-content: center;
     font-weight: 600;
     color: color-mix(in srgb, var(--grade-ink) 62%, var(--text-primary));
     cursor: pointer;
@@ -2094,8 +2108,14 @@
 
   /* Usage menus open from plain figures; a dotted underline marks them as
      triggers without adding a chip. */
+  /* The block padding grows the hit box to 24px around the 16px line,
+     mostly downward to stay clear of the header row above; the negative
+     margin keeps the figure's footprint. */
   .usage-breakdown-trigger {
     list-style: none;
+    line-height: 16px;
+    padding-block: 2px 6px;
+    margin-block: -2px -6px;
     cursor: pointer;
     text-decoration: underline dotted;
     text-decoration-color: color-mix(in srgb, currentColor 45%, transparent);
@@ -2434,7 +2454,7 @@
 
     .usage-breakdown-trigger {
       font-size: 9px;
-      padding: 1px 4px;
+      padding-inline: 4px;
     }
 
     .usage-breakdown-menu {

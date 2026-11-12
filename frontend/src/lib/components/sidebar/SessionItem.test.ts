@@ -117,6 +117,49 @@ describe("SessionItem identity", () => {
     expect(document.querySelector(".star-btn")).not.toBeNull();
   });
 
+  it("focuses the rename input with its text selected", () => {
+    mountSession({ id: "rename-focus", display_name: "Current name" });
+
+    document
+      .querySelector<HTMLElement>(".session-name")!
+      .dispatchEvent(new MouseEvent("dblclick", { bubbles: true, cancelable: true }));
+    flushSync();
+
+    const input = document.querySelector<HTMLInputElement>(".rename-input")!;
+    expect(document.activeElement).toBe(input);
+    expect(input.value).toBe("Current name");
+    expect(input.selectionStart).toBe(0);
+    expect(input.selectionEnd).toBe("Current name".length);
+  });
+
+  it("renames only on a double-click of the title, not the rest of the row", () => {
+    mountSession({ id: "rename-meta" });
+
+    document
+      .querySelector<HTMLElement>(".session-count")!
+      .dispatchEvent(new MouseEvent("dblclick", { bubbles: true, cancelable: true }));
+    flushSync();
+
+    expect(document.querySelector(".rename-input")).toBeNull();
+  });
+
+  it("starts a focused rename from the context menu", () => {
+    mountSession({ id: "rename-menu", display_name: "Menu name" });
+
+    document
+      .querySelector<HTMLElement>(".session-info-link")!
+      .dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, cancelable: true }));
+    flushSync();
+    Array.from(document.querySelectorAll<HTMLButtonElement>(".context-menu-item"))
+      .find((button) => button.textContent?.trim() === "Rename")!
+      .click();
+    flushSync();
+
+    const input = document.querySelector<HTMLInputElement>(".rename-input")!;
+    expect(document.activeElement).toBe(input);
+    expect(document.querySelector(".context-menu")).toBeNull();
+  });
+
   it("uses the singular for one message", () => {
     mountSession({ id: "count-one", user_message_count: 1 });
     expect(document.querySelector<HTMLElement>(".session-count")?.title).toBe("1 user message");

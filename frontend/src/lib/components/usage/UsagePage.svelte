@@ -636,8 +636,11 @@
     </Card>
 
     <div class="bottom-grid">
-      <Card level="default" padding="none" class="chart-panel bounded">
-        <TopSessionsTable />
+      <Card level="default" padding="none" class="chart-panel scroll-panel">
+        <!-- svelte-ignore a11y_no_noninteractive_tabindex (scrollable region needs keyboard access) -->
+        <div class="panel-scroll" role="region" tabindex="0" aria-label={m.analytics_top_sessions_title()}>
+          <TopSessionsTable />
+        </div>
       </Card>
       <Card level="default" padding="none" class="chart-panel bounded">
         <CacheEfficiencyPanel />
@@ -761,6 +764,20 @@
   .usage-content :global(.chart-panel.bounded) {
     max-height: min(420px, 48vh);
     overflow: auto;
+  }
+
+  /* A list that can outgrow its panel scrolls in a focusable region, so
+     keyboard users can scroll it too. The region takes the panel padding
+     to keep its scrollbar at the card edge. */
+  .usage-content :global(.chart-panel.scroll-panel) {
+    padding: 0;
+  }
+
+  .panel-scroll {
+    max-height: min(420px, 48vh);
+    overflow: auto;
+    padding: 12px;
+    border-radius: inherit;
   }
 
   @media (max-width: 760px) {

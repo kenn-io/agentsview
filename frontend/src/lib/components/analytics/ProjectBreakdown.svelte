@@ -52,7 +52,7 @@
   }
 
   function handleClick(project: ProjectAnalytics) {
-    if (project.name.startsWith("Other (")) return;
+    if (isOther(project)) return;
     analytics.setProject(project.name);
   }
 
@@ -62,13 +62,11 @@
     text: string;
   } | null>(null);
 
-  function handleHover(
-    e: MouseEvent,
-    project: ProjectAnalytics,
-  ) {
-    const rect = (
-      e.currentTarget as HTMLElement
-    ).getBoundingClientRect();
+  function isOther(project: ProjectAnalytics): boolean {
+    return project.name.startsWith("Other (");
+  }
+
+  function detailParts(project: ProjectAnalytics): string[] {
     const agents = Object.entries(project.agents)
       .sort(([, a], [, b]) => b - a)
       .map(([name, count]) => `${name}: ${count}`)
@@ -84,10 +82,17 @@
       }),
     ];
     if (agents) parts.push(agents);
+    return parts;
+  }
+
+  // Hover and keyboard focus show the same details; screen readers get
+  // them from the row text.
+  function showTip(el: EventTarget | null, project: ProjectAnalytics) {
+    const rect = (el as HTMLElement).getBoundingClientRect();
     tooltip = {
       x: rect.left + rect.width / 2,
       y: rect.top - 4,
-      text: parts.join(" | "),
+      text: detailParts(project).join(" | "),
     };
   }
 
@@ -95,6 +100,22 @@
     tooltip = null;
   }
 </script>
+
+{#snippet rowContent(project: ProjectAnalytics)}
+  <span class="project-name" title={project.name} aria-hidden="true">
+    {truncateName(project.name, 24)}
+  </span>
+  <span class="bar-track" aria-hidden="true">
+    <span
+      class="bar-fill"
+      style="width: {barWidth(project.messages)}%"
+    ></span>
+  </span>
+  <span class="bar-value" aria-hidden="true">
+    {formatCount(project.messages)}
+  </span>
+  <span class="kit-sr-only">{[project.name, ...detailParts(project)].join(", ")}</span>
+{/snippet}
 
 <div class="breakdown-container">
   <div class="breakdown-header">
@@ -115,31 +136,34 @@
     onRetry={() => analytics.fetchProjects()}
   />
   {#if rows.length > 0}
-    <div class="bar-list">
-      {#each rows as project, i}
-        <!-- svelte-ignore a11y_click_events_have_key_events -->
-        <!-- svelte-ignore a11y_no_static_element_interactions -->
+    <div class="bar-list" role="list">
+      {#each rows as project}
         <div
-          class="bar-row"
-          class:clickable={!project.name.startsWith("Other (")}
-          class:selected={analytics.project === project.name}
-          class:dimmed={analytics.project !== "" && analytics.project !== project.name}
-          onclick={() => handleClick(project)}
-          onmouseenter={(e) => handleHover(e, project)}
+          role="listitem"
+          onmouseenter={(e) => showTip(e.currentTarget, project)}
           onmouseleave={handleLeave}
         >
-          <span class="project-name" title={project.name}>
-            {truncateName(project.name, 24)}
-          </span>
-          <div class="bar-track">
+          {#if isOther(project)}
             <div
-              class="bar-fill"
-              style="width: {barWidth(project.messages)}%"
-            ></div>
-          </div>
-          <span class="bar-value">
-            {formatCount(project.messages)}
-          </span>
+              class="bar-row"
+              class:dimmed={analytics.project !== ""}
+            >
+              {@render rowContent(project)}
+            </div>
+          {:else}
+            <button
+              type="button"
+              class="bar-row clickable"
+              class:selected={analytics.project === project.name}
+              class:dimmed={analytics.project !== "" && analytics.project !== project.name}
+              aria-pressed={analytics.project === project.name}
+              onclick={() => handleClick(project)}
+              onfocus={(e) => showTip(e.currentTarget, project)}
+              onblur={handleLeave}
+            >
+              {@render rowContent(project)}
+            </button>
+          {/if}
         </div>
       {/each}
     </div>
@@ -189,6 +213,8 @@
 
   .bar-row {
     display: flex;
+    width: 100%;
+    text-align: left;
     align-items: center;
     gap: 8px;
     padding: 2px 4px;
@@ -229,6 +255,7 @@
   }
 
   .bar-track {
+    display: block;
     flex: 1;
     height: 14px;
     background: var(--bg-inset);
@@ -237,6 +264,7 @@
   }
 
   .bar-fill {
+    display: block;
     height: 100%;
     background: var(--accent-blue);
     border-radius: 2px;

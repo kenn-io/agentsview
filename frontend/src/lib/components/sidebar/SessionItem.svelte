@@ -196,7 +196,12 @@
   // Rename state
   let renaming = $state(false);
   let renameValue = $state("");
-  let renameInput: HTMLInputElement | undefined = $state(undefined);
+
+  /** Focus the rename input and select its text as soon as it mounts. */
+  function focusRenameInput(node: HTMLInputElement) {
+    node.focus();
+    node.select();
+  }
 
   function mountOverlay(node: HTMLElement) {
     document.body.appendChild(node);
@@ -272,7 +277,6 @@
       ?? "";
     renaming = true;
     closeContextMenu();
-    requestAnimationFrame(() => renameInput?.select());
   }
 
   async function submitRename() {
@@ -295,11 +299,26 @@
     }
   }
 
+  /** Double-clicking the title renames the session. The link stretches
+   * over the whole row, so ignore double-clicks that land elsewhere. */
   function handleDblClick(e: MouseEvent) {
+    if (!(e.target instanceof Element) || !e.target.closest(".session-name")) {
+      return;
+    }
     e.preventDefault();
     startRename();
   }
 
+  function activateSession() {
+    if (selectMode) {
+      sessions.toggleSelection(session.id);
+    } else {
+      sessions.selectSession(session.id);
+    }
+  }
+
+  /** The session link covers the whole row, so this handles clicks
+   * anywhere on it. Modified clicks keep the browser's link behavior. */
   function handleSessionClick(e: MouseEvent) {
     if (
       e.metaKey ||
@@ -311,35 +330,14 @@
       return;
     }
     e.preventDefault();
-    if (selectMode) {
-      sessions.toggleSelection(session.id);
-    } else {
-      sessions.selectSession(session.id);
-    }
+    activateSession();
   }
 
-  function handleRowClick(e: MouseEvent) {
-    if (
-      e.metaKey ||
-      e.ctrlKey ||
-      e.shiftKey ||
-      e.altKey ||
-      e.button !== 0
-    ) {
-      return;
-    }
-    const target = e.target;
-    if (!(target instanceof Element)) {
-      return;
-    }
-    if (target.closest("a, button, input")) {
-      return;
-    }
-    if (selectMode) {
-      sessions.toggleSelection(session.id);
-    } else {
-      sessions.selectSession(session.id);
-    }
+  /** Space activates the row too, as it did when the row was a button. */
+  function handleSessionKeydown(e: KeyboardEvent) {
+    if (e.key !== " " || e.metaKey || e.ctrlKey || e.altKey) return;
+    e.preventDefault();
+    activateSession();
   }
 
   function handleSelectClick(e: MouseEvent) {
@@ -379,9 +377,6 @@
   });
 </script>
 
-<!-- svelte-ignore a11y_no_static_element_interactions -->
-<!-- svelte-ignore a11y_no_static_element_interactions -->
-<!-- svelte-ignore a11y_click_events_have_key_events -->
 <div
   class="session-item"
   class:active={isActive}
@@ -390,25 +385,8 @@
   class:depth-2={depth >= 2}
   class:orphaned-teammate={isOrphanedTeammate}
   data-session-id={session.id}
-  role="button"
   aria-current={isActive ? "page" : undefined}
-  tabindex="0"
   style:padding-left="{8 + depth * 16}px"
-  onclick={handleRowClick}
-  onkeydown={(e) => {
-    if (e.target !== e.currentTarget) {
-      return;
-    }
-    if (e.key === "Enter" || e.key === " ") {
-      e.preventDefault();
-      if (selectMode) {
-        sessions.toggleSelection(session.id);
-      } else {
-        sessions.selectSession(session.id);
-      }
-    }
-  }}
-  oncontextmenu={handleContextMenu}
 >
   <!-- Tree expand/collapse or connector -->
   {#if hasChildren}
@@ -455,12 +433,11 @@
 
   <div class="session-info">
     {#if renaming}
-      <!-- svelte-ignore a11y_autofocus -->
       <input
-        bind:this={renameInput}
         bind:value={renameValue}
         class="rename-input"
-        autofocus
+        aria-label={m.sidebar_row_rename()}
+        {@attach focusRenameInput}
         onclick={(e) => e.stopPropagation()}
         onblur={submitRename}
         onkeydown={(e) => {
@@ -475,10 +452,17 @@
         }}
       />
     {:else}
+      <!-- The link is the row's one primary control: its ::before stretches
+           over the whole row, so a click anywhere opens the session. The
+           toggle, checkbox, and star sit above it. -->
       <a
         class="session-info-link"
         href={sessionHref}
+        aria-current={isActive ? "page" : undefined}
         onclick={handleSessionClick}
+        onkeydown={handleSessionKeydown}
+        ondblclick={handleDblClick}
+        oncontextmenu={handleContextMenu}
       >
         <!-- Two lines: the title with its time, then project, message count,
              machine, and agent. Compact child rows put the time on the meta line. -->
@@ -487,7 +471,6 @@
             class="session-name"
             class:shell={displayLabel.isShell}
             title={displayLabel.text}
-            ondblclick={handleDblClick}
           >
             {#if displayLabel.isShell}
               <code>{displayLabel.text}</code>
@@ -715,7 +698,8 @@
     font-weight: 600;
   }
 
-  .session-item.active .session-meta {
+  .session-item.active .session-meta,
+  .session-item.active .session-time {
     color: var(--text-secondary);
   }
 
@@ -729,6 +713,9 @@
      surface, so it reads as "expand" rather than a stray mark. */
   .tree-toggle {
     all: unset;
+    /* Above the stretched session link. */
+    position: relative;
+    z-index: 1;
     display: flex;
     align-items: center;
     justify-content: center;
@@ -792,6 +779,31 @@
     color: inherit;
     text-decoration: none;
     min-width: 0;
+  }
+
+  /* Stretch the link over the whole row (the nearest positioned
+     ancestor), so a click in the gutter or padding opens the session. */
+  .session-info-link::before {
+    content: "";
+    position: absolute;
+    /* kit-ui-check-ignore: an absolute stretched-link layer inside the row, not a viewport overlay. */
+    inset: 0;
+  }
+
+  .session-info-link:focus-visible {
+    outline: none;
+  }
+
+  .session-info-link:focus-visible::before {
+    outline: var(--focus-ring);
+    outline-offset: -2px;
+  }
+
+  /* The link's text sits above its stretched layer, so hover tooltips
+     still show and a double-click can tell the title apart. */
+  .session-name-row,
+  .session-meta {
+    position: relative;
   }
 
   .session-name-row {
@@ -922,6 +934,13 @@
 
 
 
+  /* The dot sits above the stretched session link so its tooltip shows. */
+  .session-item > :global(.kit-status-dot),
+  .session-item > :global(.kit-status-bubble) {
+    position: relative;
+    z-index: 1;
+  }
+
   /* The running dot sits on the title line, like the expand chevron. */
   .session-item:not(.compact) > :global(.kit-status-dot) {
     align-self: flex-start;
@@ -975,6 +994,8 @@
      status dot, so it never takes the title's width or hides the time. */
   .star-btn {
     position: absolute;
+    /* Above the stretched session link. */
+    z-index: 1;
     /* Below the 18px expand button (4px to 22px) with a 2px gap, and
        inside the 42px row. */
     top: 24px;
@@ -1116,6 +1137,9 @@
 
   .select-checkbox {
     all: unset;
+    /* Above the stretched session link. */
+    position: relative;
+    z-index: 1;
     display: flex;
     align-items: center;
     justify-content: center;

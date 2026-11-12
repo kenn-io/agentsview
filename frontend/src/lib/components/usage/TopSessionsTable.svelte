@@ -61,14 +61,13 @@
   {:else if sessions.length > 0}
     <div class="session-list">
       {#each sessions as row, i (row.sessionId)}
-        <!-- svelte-ignore a11y_click_events_have_key_events -->
-        <!-- svelte-ignore a11y_no_static_element_interactions -->
-        <div
+        <button
+          type="button"
           class="session-row"
           onclick={() => handleRowClick(row.sessionId)}
         >
           <span class="rank">{i + 1}</span>
-          <div class="session-info">
+          <span class="session-info">
             <span class="session-label">
               <span class="agent-pill">
                 {formatAgentName(row.agent)}
@@ -78,7 +77,7 @@
             <span class="session-project">
               {row.project} &middot; {row.sessionId}
             </span>
-          </div>
+          </span>
           <span class="session-tokens">
             {formatCount(
               isTokenMode
@@ -91,7 +90,7 @@
               {formatMoney(row.cost)}
             </span>
           {/if}
-        </div>
+        </button>
       {/each}
     </div>
   {:else}
@@ -123,6 +122,8 @@
 
   .session-row {
     display: flex;
+    width: 100%;
+    text-align: left;
     align-items: center;
     gap: 8px;
     padding: 4px 6px;

@@ -127,7 +127,6 @@
       class:active={perf.panelOpen}
       onclick={() => perf.togglePanel()}
       title={m.status_bar_open_performance_debug()}
-      aria-label={m.status_bar_open_performance_debug()}
     >
       <ActivityIcon size="12" strokeWidth="2" aria-hidden="true" />
       <span>{m.status_bar_perf()}</span>

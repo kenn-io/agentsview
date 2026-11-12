@@ -55,8 +55,8 @@
   }
 </script>
 
-<!-- svelte-ignore a11y_no_static_element_interactions -->
-<!-- svelte-ignore a11y_no_noninteractive_tabindex -->
+<!-- The chevron is a sibling of the clickable body, never inside it, so the
+     row has no control nested in another. -->
 <div
   class="call"
   class:slow={isSlow}
@@ -64,18 +64,6 @@
   class:dimmed
   class:untimed={!showTiming}
   class:interactive={!!onClick}
-  role={onClick ? "button" : undefined}
-  tabindex={onClick ? 0 : undefined}
-  onclick={onClick}
-  onkeydown={onClick
-    ? (e) => {
-        if (e.target !== e.currentTarget) return;
-        if (e.key === "Enter" || e.key === " ") {
-          e.preventDefault();
-          onClick();
-        }
-      }
-    : undefined}
 >
   {#if isSubagent && expandable}
     <button
@@ -88,6 +76,18 @@
   {:else}
     <span class="chev spacer">▸</span>
   {/if}
+  {#if onClick}
+    <button type="button" class="call-body" onclick={onClick}>
+      {@render body()}
+    </button>
+  {:else}
+    <div class="call-body">
+      {@render body()}
+    </div>
+  {/if}
+</div>
+
+{#snippet body()}
   <span class="cn" style="color: {categoryToken(call.category)}">{displayToolName(call)}</span>
   <span class="ca">{call.input_preview}</span>
   {#if showTiming}
@@ -106,7 +106,7 @@
       {durationLabel}
     </span>
   {/if}
-</div>
+{/snippet}
 
 <style>
   /* Adapted from the session-duration UX mockup, with the raw dark-theme colors
@@ -121,9 +121,32 @@
     padding: 4px 5px;
     font-size: 10px;
     border-radius: 2px;
+    position: relative;
   }
   .call.untimed {
     grid-template-columns: 14px 38px 1fr;
+  }
+  /* The name, preview, bar, and duration share the row's columns. */
+  .call .call-body {
+    grid-column: 2 / -1;
+    display: grid;
+    grid-template-columns: subgrid;
+    align-items: center;
+    min-width: 0;
+    margin: 0;
+    padding: 0;
+    text-align: left;
+  }
+  /* A click anywhere on the row, padding included, opens the turn; the
+     chevron sits above this layer. */
+  .call button.call-body::before {
+    content: "";
+    position: absolute;
+    inset: 0;
+  }
+  .call button.chev {
+    position: relative;
+    z-index: 1;
   }
   .call.interactive {
     cursor: pointer;
