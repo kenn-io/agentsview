@@ -6,6 +6,7 @@ import (
 	"encoding/json/v2"
 	"fmt"
 	"slices"
+	"strconv"
 	"strings"
 	"unicode"
 )
@@ -139,7 +140,7 @@ func contentWordRows(
 	if full {
 		from = "messages_fts"
 		id = "messages_fts.rowid"
-		count = fmt.Sprint(len(q.terms))
+		count = strconv.Itoa(len(q.terms))
 		where += " AND messages_fts.content MATCH ?"
 		match := strings.Join(q.terms, " AND ")
 		if q.match != "" {
@@ -189,6 +190,7 @@ func selectContentWordPage(ctx context.Context, tx *sql.Tx, f ContentSearchFilte
 	if err != nil {
 		return nil, err
 	}
+	defer rows.Close()
 	floor, total := 1, 0
 	for rows.Next() {
 		var n, count int
