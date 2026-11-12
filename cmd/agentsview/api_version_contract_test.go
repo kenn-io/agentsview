@@ -109,7 +109,7 @@ func stripOpenAPIProse(value jsontext.Value, namedMap bool) (jsontext.Value, err
 		}
 		for i, item := range items {
 			var err error
-			items[i], err = stripOpenAPIProse(item, false)
+			items[i], err = stripOpenAPIProse(item, namedMap)
 			if err != nil {
 				return nil, err
 			}
@@ -128,7 +128,7 @@ func stripOpenAPIProse(value jsontext.Value, namedMap bool) (jsontext.Value, err
 			if !namedMap && (key == "default" || key == "const" || key == "enum") {
 				continue
 			}
-			childNamedMap := !namedMap && (key == "paths" || key == "schemas" || key == "properties" || key == "patternProperties" || key == "$defs" || key == "parameters" || key == "responses" || key == "headers" || key == "content" || key == "securitySchemes" || key == "requestBodies" || key == "links" || key == "callbacks" || key == "encoding")
+			childNamedMap := !namedMap && (key == "security" || (item.Kind() == '{' && (key == "paths" || key == "schemas" || key == "properties" || key == "patternProperties" || key == "$defs" || key == "dependentRequired" || key == "mapping" || key == "parameters" || key == "responses" || key == "headers" || key == "content" || key == "securitySchemes" || key == "requestBodies" || key == "links" || key == "callbacks" || key == "pathItems" || key == "encoding")))
 			var err error
 			fields[key], err = stripOpenAPIProse(item, childNamedMap)
 			if err != nil {
