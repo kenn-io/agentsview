@@ -84,105 +84,6 @@ type QueryDialect struct {
 	// orphanPredicate renders the "parent row is missing" test used by
 	// BuildCanonicalRootWhere. Nil uses the configured parent relation.
 	orphanPredicate func(sessionAlias, parentAlias string) string
-	// wideInt casts an integer expression to a 128-bit integer, so exact
-	// money arithmetic cannot overflow before it is checked.
-	wideInt func(expr string) string
-	// intDiv divides two integers, truncating toward zero.
-	intDiv func(numerator, denominator string) string
-	// narrowInt casts an integer expression known to fit to a 64-bit integer.
-	narrowInt func(expr string) string
-	// valuesRelation renders a relation of rows of placeholders.
-	valuesRelation func(columns []ValuesColumn, rows int) string
-	// nullable makes an expression's type admit NULL, so a window function
-	// past the end of its frame yields NULL instead of a default value.
-	nullable func(expr string) string
-	// lastNonNull renders a window function, without its OVER clause, for
-	// the last non-NULL value of expr in the frame.
-	lastNonNull func(expr string) string
-}
-
-// ValuesColumn names and types one column of a ValuesRelation.
-type ValuesColumn struct {
-	Name string
-	Type ValuesType
-}
-
-// ValuesType is the type of a ValuesRelation column.
-type ValuesType uint8
-
-const (
-	ValuesInt64 ValuesType = iota
-	ValuesString
-)
-
-func (d QueryDialect) requireAccounting() {
-	if d.wideInt == nil {
-		panic("usage accounting SQL is unsupported for dialect " + d.name)
-	}
-}
-
-// WideInt casts an integer expression to a 128-bit integer.
-func (d QueryDialect) WideInt(expr string) string {
-	d.requireAccounting()
-	return d.wideInt(expr)
-}
-
-// IntDiv divides two integers, truncating toward zero.
-func (d QueryDialect) IntDiv(numerator, denominator string) string {
-	d.requireAccounting()
-	return d.intDiv(numerator, denominator)
-}
-
-// NarrowInt casts an integer expression known to fit to a 64-bit integer.
-func (d QueryDialect) NarrowInt(expr string) string {
-	d.requireAccounting()
-	return d.narrowInt(expr)
-}
-
-// ValuesRelation renders a relation with the given columns and rows of
-// placeholders, bound in row-major order. rows must be positive.
-func (d QueryDialect) ValuesRelation(columns []ValuesColumn, rows int) string {
-	d.requireAccounting()
-	if rows <= 0 {
-		panic("values relation needs at least one row")
-	}
-	return d.valuesRelation(columns, rows)
-}
-
-// Nullable makes an expression's type admit NULL. A window function over
-// it, such as lag or max, then yields NULL where its frame holds no row.
-func (d QueryDialect) Nullable(expr string) string {
-	d.requireAccounting()
-	return d.nullable(expr)
-}
-
-// LastNonNull renders a window function for the last non-NULL value of expr
-// in the frame. The caller appends the OVER clause.
-func (d QueryDialect) LastNonNull(expr string) string {
-	d.requireAccounting()
-	return d.lastNonNull(expr)
-}
-
-func valuesRows(columns []ValuesColumn, rows int, value func(ValuesColumn) string) string {
-	row := make([]string, len(columns))
-	for i, column := range columns {
-		row[i] = value(column)
-	}
-	one := "(" + strings.Join(row, ", ") + ")"
-	return strings.TrimSuffix(strings.Repeat(one+", ", rows), ", ")
-}
-
-func duckValuesRelation(columns []ValuesColumn, rows int) string {
-	names := make([]string, len(columns))
-	for i, column := range columns {
-		names[i] = column.Name
-	}
-	return "(SELECT * FROM (VALUES " + valuesRows(columns, rows, func(column ValuesColumn) string {
-		if column.Type == ValuesString {
-			return "CAST(? AS VARCHAR)"
-		}
-		return "CAST(? AS BIGINT)"
-	}) + ") AS v(" + strings.Join(names, ", ") + "))"
 }
 
 // Position renders substring position syntax and panics for unsupported dialects.
@@ -507,12 +408,6 @@ func DuckDBQueryDialect() QueryDialect {
 		labelPredicate: func(q func(string) string, ph string) string {
 			return "list_contains(" + q("labels") + ", " + ph + ")"
 		},
-		wideInt:        func(expr string) string { return "CAST(" + expr + " AS HUGEINT)" },
-		intDiv:         func(n, d string) string { return "(" + n + ") // (" + d + ")" },
-		narrowInt:      func(expr string) string { return "CAST(" + expr + " AS BIGINT)" },
-		valuesRelation: duckValuesRelation,
-		nullable:       func(expr string) string { return expr },
-		lastNonNull:    func(expr string) string { return "last_value(" + expr + " IGNORE NULLS)" },
 		prLinkPredicate: func(col, repoPh, numPh, hostPh string) string {
 			cond := "true"
 			if repoPh != "" {

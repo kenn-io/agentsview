@@ -13,7 +13,6 @@ import (
 	"go.kenn.io/agentsview/internal/export"
 	"go.kenn.io/agentsview/internal/kept"
 	"go.kenn.io/agentsview/internal/money"
-	"go.kenn.io/agentsview/internal/readbase"
 	"go.kenn.io/agentsview/internal/usagefacts"
 )
 
@@ -712,7 +711,7 @@ func (s *Store) activityReportCandidateSource(
 // duckMicrosBound renders t rounded up to DuckDB's microsecond TIMESTAMP,
 // so a comparison with it matches a comparison with t itself.
 func duckMicrosBound(t time.Time) string {
-	return time.UnixMicro(readbase.CeilMicros(t)).UTC().Format(time.RFC3339Nano)
+	return time.UnixMicro(ceilMicros(t)).UTC().Format(time.RFC3339Nano)
 }
 
 // ActivityReportCandidateSource exposes the backend's mechanical pairing
@@ -782,18 +781,9 @@ func (s *Store) activityReportUsage(
 
 	candidateWhere, candidateArgs := duckActivityReportCandidateWhere(
 		f, rangeStartUTC, rangeEndUTC)
-	src := readbase.ActivityUsageSource{
-		With: duckActivityUsageWith(candidateWhere),
-		Models: `SELECT DISTINCT model, provider_id FROM messages WHERE model != ''
-			UNION SELECT DISTINCT model, provider_id FROM usage_events WHERE model != ''`,
-	}
-	src.Args = append(src.Args, lowerBound, upperBound)
-	src.Args = append(src.Args, candidateArgs...)
-	src.Args = append(src.Args, int64(readbase.ActivityUsageNullPricingUS))
-	out, err = readbase.ActivityReportUsage(ctx, db.DuckDBQueryDialect(),
-		func(ctx context.Context, query string, args []any) (readbase.ActivityUsageRows, error) {
-			return s.queryContext(ctx, query, args...)
-		}, src, q, rateResolver)
+	args := append([]any{lowerBound, upperBound}, candidateArgs...)
+	args = append(args, int64(activityUsageNullPricingUS))
+	out, err = s.sumActivityUsage(ctx, duckActivityUsageWith(candidateWhere), args, q, rateResolver)
 	if err != nil {
 		return nil, nil, fmt.Errorf("selecting duckdb activity report usage: %w", err)
 	}
@@ -804,14 +794,14 @@ func (s *Store) activityReportUsage(
 	return out, &block, nil
 }
 
-// duckActivityUsageWith defines the relations readbase.ActivityReportUsage
+// duckActivityUsageWith defines the relations sumActivityUsage
 // reads over the padded time range. Candidate sessions, their usage rows,
 // and matching Claude snapshot peers are relations in one statement, so the
 // query shape stays constant as the peer-key set grows. It applies the same
 // message and usage-event eligibility predicates as GetDailyUsage and
 // normalizes rows in SQL. Its placeholders take the lower and upper bounds,
 // the candidate predicate's arguments, then
-// readbase.ActivityUsageNullPricingUS.
+// activityUsageNullPricingUS.
 func duckActivityUsageWith(candidateWhere string) string {
 	return fmt.Sprintf(`
 		report_bounds AS (

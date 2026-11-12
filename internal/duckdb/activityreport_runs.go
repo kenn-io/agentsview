@@ -10,8 +10,6 @@ import (
 	"unsafe"
 
 	"go.kenn.io/agentsview/internal/activity"
-	"go.kenn.io/agentsview/internal/db"
-	"go.kenn.io/agentsview/internal/readbase"
 )
 
 // activityRunsMaxBytes bounds the kept runs and counted messages. A report
@@ -91,7 +89,7 @@ func (m *activityRunsMemo) store(entries []activityRunsEntry) {
 	}
 }
 
-// duckActivityRunWith defines the relations readbase.ActivitySessionRuns
+// duckActivityRunWith defines the relations activitySessionRuns
 // reads. Both placeholders take the session IDs.
 const duckActivityRunWith = `activity_run_messages AS (
 		SELECT session_id, ordinal, epoch_us(timestamp) AS ts_us, role, model
@@ -124,10 +122,7 @@ func (s *Store) activityReportRuns(
 	}
 	sessions, misses := s.activityRuns.lookup(ids, versions, q.GapCapSeconds)
 	if len(misses) > 0 {
-		derived, err := readbase.ActivitySessionRuns(ctx, db.DuckDBQueryDialect(),
-			func(ctx context.Context, query string, args []any) (readbase.ActivityUsageRows, error) {
-				return s.queryContext(ctx, query, args...)
-			}, readbase.ActivityRunSource{With: duckActivityRunWith, Args: []any{misses, misses}}, q.GapCapSeconds)
+		derived, err := s.activitySessionRuns(ctx, duckActivityRunWith, []any{misses, misses}, q.GapCapSeconds)
 		if err != nil {
 			return nil, nil, err
 		}

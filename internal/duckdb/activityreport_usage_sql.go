@@ -1,4 +1,4 @@
-package readbase
+package duckdb
 
 import (
 	"cmp"
@@ -17,19 +17,25 @@ import (
 	"go.kenn.io/agentsview/internal/usagefacts"
 )
 
-// ActivityUsageNullPricingUS is the pricing_us of a usage row without a
+// activityUsageNullPricingUS is the pricing_us of a usage row without a
 // pricing timestamp. Such a row prices as usage without a timestamp.
-const ActivityUsageNullPricingUS = math.MinInt64
+const activityUsageNullPricingUS = math.MinInt64
 
-// ActivityUsageSource is one backend's usage rows for an Activity report.
-// With is a WITH list, without the WITH keyword, that defines two
-// relations:
+// activityUsageModels selects the (model, provider_id) pairs usage rows can
+// carry. A pair it misses costs one more read of the rows.
+const activityUsageModels = `SELECT DISTINCT model, provider_id FROM messages WHERE model != ''
+	UNION SELECT DISTINCT model, provider_id FROM usage_events WHERE model != ''`
+
+// sumActivityUsage selects, prices, and sums the usage survivors of an
+// Activity report in SQL, and records the pricing it used on pricing.
+//
+// with is a WITH list, without the WITH keyword, that defines two relations:
 //
 //   - activity_usage_candidates(id): the report's candidate sessions.
 //   - activity_usage_rows: the candidates' normalized usage rows, plus
 //     every row that shares a Claude response with one of them, with the
 //     columns session_id, ord (-1 without a message ordinal), has_ordinal
-//     (0 or 1), ts_us, pricing_us (ActivityUsageNullPricingUS without a
+//     (0 or 1), ts_us, pricing_us (activityUsageNullPricingUS without a
 //     pricing timestamp), source, model, provider_id, agent,
 //     claude_message_id, claude_request_id, source_uuid, usage_dedup_key,
 //     input, output, reasoning, cache_create, cache_create_1h, cache_read,
@@ -41,28 +47,6 @@ const ActivityUsageNullPricingUS = math.MinInt64
 //
 // Rows outside the report range may be included; the query drops them.
 //
-// Models is a query without arguments for the (model, provider_id) pairs
-// the rows can carry. A pair it misses costs one more read of the rows.
-type ActivityUsageSource struct {
-	With   string
-	Args   []any
-	Models string
-}
-
-// ActivityUsageRows is the result of one query.
-type ActivityUsageRows interface {
-	Next() bool
-	Scan(dest ...any) error
-	Err() error
-	Close() error
-}
-
-// ActivityUsageQuery runs one query.
-type ActivityUsageQuery func(ctx context.Context, query string, args []any) (ActivityUsageRows, error)
-
-// ActivityReportUsage selects, prices, and sums the usage survivors of an
-// Activity report in SQL, and records the pricing it used on pricing.
-//
 // The query applies the report's rules in order: rows must carry a
 // timestamp inside the report range and before its effective end; each
 // Claude response keeps its fullest snapshot, credited to the earliest
@@ -73,19 +57,18 @@ type ActivityUsageQuery func(ctx context.Context, query string, args []any) (Act
 // survivors are summed per session, model, and bucket window. A session
 // carrying a Copilot session cost returns its survivors one by one, in
 // report order, for activity.AllocateUsageCosts to apportion.
-func ActivityReportUsage(
-	ctx context.Context, d db.QueryDialect, query ActivityUsageQuery,
-	src ActivityUsageSource, q activity.Query, pricing *export.PricingResolver,
+func (s *Store) sumActivityUsage(
+	ctx context.Context, with string, withArgs []any, q activity.Query, pricing *export.PricingResolver,
 ) ([]activity.UsageRow, error) {
 	end := q.RangeEnd
 	if q.EffectiveEnd.Before(end) {
 		end = q.EffectiveEnd
 	}
-	startUS, endUS := CeilMicros(q.RangeStart), CeilMicros(end)
+	startUS, endUS := ceilMicros(q.RangeStart), ceilMicros(end)
 	if startUS >= endUS {
 		return []activity.UsageRow{}, nil
 	}
-	keys, err := activityUsageRateKeys(ctx, query, src.Models, nil)
+	keys, err := s.activityUsageRateKeys(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -96,7 +79,7 @@ func ActivityReportUsage(
 	for attempt := 0; ; attempt++ {
 		schedule = buildUsageRateSchedule(pricing, keys, startUS, endUS)
 		var missing []usageRateKey
-		groups, missing, err = readActivityUsageGroups(ctx, d, query, src, schedule, q, startUS, endUS)
+		groups, missing, err = s.readActivityUsageGroups(ctx, with, withArgs, schedule, q, startUS, endUS)
 		if err != nil {
 			return nil, err
 		}
@@ -154,12 +137,12 @@ func ActivityReportUsage(
 
 // readActivityUsageGroups runs the usage query under schedule. It returns
 // the models of rows the schedule has no rate for instead of their groups.
-func readActivityUsageGroups(
-	ctx context.Context, d db.QueryDialect, query ActivityUsageQuery,
-	src ActivityUsageSource, schedule usageRateSchedule, q activity.Query, startUS, endUS int64,
+func (s *Store) readActivityUsageGroups(
+	ctx context.Context, with string, withArgs []any, schedule usageRateSchedule,
+	q activity.Query, startUS, endUS int64,
 ) ([]activityUsageGroup, []usageRateKey, error) {
-	sqlText, args := activityUsageSQL(d, src, schedule, activity.QueryWindows(q), startUS, endUS)
-	rows, err := query(ctx, sqlText, args)
+	sqlText, args := activityUsageSQL(with, withArgs, schedule, activity.QueryWindows(q), startUS, endUS)
+	rows, err := s.queryContext(ctx, sqlText, args...)
 	if err != nil {
 		return nil, nil, fmt.Errorf("querying activity usage: %w", err)
 	}
@@ -286,7 +269,7 @@ func buildUsageRateSchedule(
 ) usageRateSchedule {
 	starts := []int64{startUS}
 	for _, change := range pricing.PriceChanges(time.UnixMicro(startUS), time.UnixMicro(endUS)) {
-		starts = append(starts, CeilMicros(change))
+		starts = append(starts, ceilMicros(change))
 	}
 	starts = slices.Compact(starts)
 	var schedule usageRateSchedule
@@ -294,7 +277,7 @@ func buildUsageRateSchedule(
 		schedule.rates = append(schedule.rates, usageRate{
 			UsageRate: pricing.UsageRateAt(key.providerID, key.model, time.Time{}),
 			model:     key.model, providerID: key.providerID,
-			fromUS: ActivityUsageNullPricingUS,
+			fromUS: activityUsageNullPricingUS,
 		})
 		var previous *export.UsageRate
 		for i, from := range starts {
@@ -304,7 +287,7 @@ func buildUsageRateSchedule(
 			}
 			if i == 0 {
 				// Real timestamps sort after every row without one.
-				from = ActivityUsageNullPricingUS + 1
+				from = activityUsageNullPricingUS + 1
 			}
 			schedule.rates = append(schedule.rates, usageRate{
 				UsageRate: rate, model: key.model, providerID: key.providerID, fromUS: from,
@@ -315,11 +298,9 @@ func buildUsageRateSchedule(
 	return schedule
 }
 
-// activityUsageRateKeys reads the model and provider pairs models selects.
-func activityUsageRateKeys(
-	ctx context.Context, query ActivityUsageQuery, models string, args []any,
-) ([]usageRateKey, error) {
-	rows, err := query(ctx, models, args)
+// activityUsageRateKeys reads the pairs activityUsageModels selects.
+func (s *Store) activityUsageRateKeys(ctx context.Context) ([]usageRateKey, error) {
+	rows, err := s.queryContext(ctx, activityUsageModels)
 	if err != nil {
 		return nil, fmt.Errorf("querying activity usage models: %w", err)
 	}
@@ -343,10 +324,10 @@ func compareUsageRateKeys(a, b usageRateKey) int {
 	return cmp.Or(cmp.Compare(a.model, b.model), cmp.Compare(a.providerID, b.providerID))
 }
 
-// CeilMicros returns the first whole microsecond at or after t, so a
+// ceilMicros returns the first whole microsecond at or after t, so a
 // microsecond timestamp is at or after t exactly when it is at or after
-// CeilMicros(t).
-func CeilMicros(t time.Time) int64 {
+// ceilMicros(t).
+func ceilMicros(t time.Time) int64 {
 	us := t.UnixMicro()
 	if time.UnixMicro(us).Before(t) {
 		us++
@@ -368,39 +349,34 @@ const activityUsageSnapshotPartition = `PARTITION BY claude_message_id, claude_r
 // maxInt64SQL is the largest cost a row or sum may carry.
 const maxInt64SQL = "9223372036854775807"
 
+// Columns of the relations activityUsageSQL binds, as "name TYPE".
 var (
-	usageSegmentColumns = []db.ValuesColumn{
-		{Name: "rate_id", Type: db.ValuesInt64},
-		{Name: "rate_model", Type: db.ValuesString},
-		{Name: "rate_provider", Type: db.ValuesString},
-		{Name: "from_us", Type: db.ValuesInt64},
-		{Name: "billed_ok", Type: db.ValuesInt64},
-		{Name: "catalog_ok", Type: db.ValuesInt64},
-		{Name: "billed_err", Type: db.ValuesInt64},
-		{Name: "rate_in", Type: db.ValuesInt64},
-		{Name: "rate_out", Type: db.ValuesInt64},
-		{Name: "rate_cw", Type: db.ValuesInt64},
-		{Name: "rate_cw1h", Type: db.ValuesInt64},
-		{Name: "rate_cr", Type: db.ValuesInt64},
-		{Name: "rate_hit", Type: db.ValuesInt64},
+	usageSegmentColumns = []string{
+		"rate_id BIGINT", "rate_model VARCHAR", "rate_provider VARCHAR", "from_us BIGINT",
+		"billed_ok BIGINT", "catalog_ok BIGINT", "billed_err BIGINT", "rate_in BIGINT",
+		"rate_out BIGINT", "rate_cw BIGINT", "rate_cw1h BIGINT", "rate_cr BIGINT",
 	}
-	usageBandColumns = []db.ValuesColumn{
-		{Name: "band_rate", Type: db.ValuesInt64},
-		{Name: "band_floor", Type: db.ValuesInt64},
-		{Name: "band_above", Type: db.ValuesInt64},
-		{Name: "band_in", Type: db.ValuesInt64},
-		{Name: "band_out", Type: db.ValuesInt64},
-		{Name: "band_cw", Type: db.ValuesInt64},
-		{Name: "band_cw1h", Type: db.ValuesInt64},
-		{Name: "band_cr", Type: db.ValuesInt64},
-		{Name: "band_hit", Type: db.ValuesInt64},
+	usageBandColumns = []string{
+		"band_rate BIGINT", "band_floor BIGINT", "band_above BIGINT", "band_in BIGINT",
+		"band_out BIGINT", "band_cw BIGINT", "band_cw1h BIGINT", "band_cr BIGINT",
 	}
-	usageBucketColumns = []db.ValuesColumn{
-		{Name: "bucket_key", Type: db.ValuesInt64},
-		{Name: "bucket_start", Type: db.ValuesInt64},
-		{Name: "bucket", Type: db.ValuesInt64},
-	}
+	usageBucketColumns = []string{"bucket_start BIGINT", "bucket BIGINT"}
 )
+
+// duckValuesRelation renders a relation of rows of placeholders, bound in
+// row-major order, with columns given as "name TYPE".
+func duckValuesRelation(columns []string, rows int) string {
+	names := make([]string, len(columns))
+	casts := make([]string, len(columns))
+	for i, column := range columns {
+		name, typ, _ := strings.Cut(column, " ")
+		names[i] = name
+		casts[i] = "CAST(? AS " + typ + ")"
+	}
+	row := "(" + strings.Join(casts, ", ") + ")"
+	return "(SELECT * FROM (VALUES " + strings.TrimSuffix(strings.Repeat(row+", ", rows), ", ") +
+		") AS v(" + strings.Join(names, ", ") + "))"
+}
 
 func boolInt(b bool) int64 {
 	if b {
@@ -410,10 +386,10 @@ func boolInt(b bool) int64 {
 }
 
 func activityUsageSQL(
-	d db.QueryDialect, src ActivityUsageSource, schedule usageRateSchedule,
+	with string, withArgs []any, schedule usageRateSchedule,
 	windows []activity.BucketWindow, startUS, endUS int64,
 ) (string, []any) {
-	args := slices.Clone(src.Args)
+	args := slices.Clone(withArgs)
 	args = append(args, startUS, endUS)
 
 	var segmentArgs, bandArgs, bucketArgs []any
@@ -423,7 +399,7 @@ func activityUsageSQL(
 		segmentArgs = append(segmentArgs, int64(id), rate.model, rate.providerID, rate.fromUS,
 			boolInt(rate.Billed.OK), boolInt(rate.Catalog.OK), boolInt(rate.BilledErr != nil),
 			r.InputPerMTok.Microdollars, r.OutputPerMTok.Microdollars, r.CacheWritePerMTok.Microdollars,
-			r.EffectiveCacheWrite1hPerMTok().Microdollars, r.CacheReadPerMTok.Microdollars, int64(1))
+			r.EffectiveCacheWrite1hPerMTok().Microdollars, r.CacheReadPerMTok.Microdollars)
 		seen := map[int]bool{}
 		for _, band := range r.Bands {
 			// The first band with a threshold prices it.
@@ -436,17 +412,26 @@ func activityUsageSQL(
 			}
 			bandArgs = append(bandArgs, int64(id), int64(band.AboveInputTokens)+1, int64(band.AboveInputTokens),
 				band.InputPerMTok.Microdollars, band.OutputPerMTok.Microdollars, band.CacheWritePerMTok.Microdollars,
-				bandRates.EffectiveCacheWrite1hPerMTok().Microdollars, band.CacheReadPerMTok.Microdollars, int64(1))
+				bandRates.EffectiveCacheWrite1hPerMTok().Microdollars, band.CacheReadPerMTok.Microdollars)
 			bands++
 		}
 	}
+	// A relation needs a row. These match no usage row: a NULL model equals
+	// nothing, and no rate has ID -1.
+	segments := len(schedule.rates)
+	if segments == 0 {
+		segmentArgs = []any{
+			int64(-1), nil, nil, int64(0), int64(0), int64(0), int64(0),
+			int64(0), int64(0), int64(0), int64(0), int64(0),
+		}
+		segments = 1
+	}
 	if bands == 0 {
-		// A relation needs a row; no rate matches this one.
-		bandArgs = []any{int64(-1), int64(math.MaxInt64), int64(0), int64(0), int64(0), int64(0), int64(0), int64(0), int64(0)}
+		bandArgs = []any{int64(-1), int64(math.MaxInt64), int64(0), int64(0), int64(0), int64(0), int64(0), int64(0)}
 		bands = 1
 	}
 	for i, window := range windows {
-		bucketArgs = append(bucketArgs, int64(0), CeilMicros(window.Start), int64(i))
+		bucketArgs = append(bucketArgs, ceilMicros(window.Start), int64(i))
 	}
 
 	requestSources := make([]string, len(usagefacts.RequestScopedSources))
@@ -455,22 +440,23 @@ func activityUsageSQL(
 	}
 	requestScoped := "source IN (" + strings.Join(requestSources, ", ") + ") OR source LIKE '" +
 		usagefacts.RequestScopedSourcePrefix + "%' OR has_ordinal = 1"
-	wide := d.WideInt
+	// HUGEINT keeps exact money arithmetic from overflowing before the
+	// final sums are checked against the int64 range.
+	wide := func(expr string) string { return "CAST(" + expr + " AS HUGEINT)" }
 	bout := "CASE WHEN output = 0 THEN reasoning ELSE output END"
 	cw1h := "CASE WHEN cache_create_1h < cache_create THEN cache_create_1h ELSE cache_create END"
 	pick := func(band, base string) string {
-		return "CASE WHEN COALESCE(band_hit, 0) = 1 THEN " + band + " ELSE " + base + " END"
+		return "CASE WHEN band_rate IS NOT NULL THEN " + band + " ELSE " + base + " END"
 	}
-	tokenCost := d.IntDiv(
-		wide("input")+" * "+pick("band_in", "rate_in")+" + "+
-			wide(bout)+" * "+pick("band_out", "rate_out")+" + "+
-			wide("cache_create - "+cw1h)+" * "+pick("band_cw", "rate_cw")+" + "+
-			wide(cw1h)+" * "+pick("band_cw1h", "rate_cw1h")+" + "+
-			wide("cache_read")+" * "+pick("band_cr", "rate_cr")+" + 500000",
-		"1000000")
+	tokenCost := "(" + wide("input") + " * " + pick("band_in", "rate_in") + " + " +
+		wide(bout) + " * " + pick("band_out", "rate_out") + " + " +
+		wide("cache_create - "+cw1h) + " * " + pick("band_cw", "rate_cw") + " + " +
+		wide(cw1h) + " * " + pick("band_cw1h", "rate_cw1h") + " + " +
+		wide("cache_read") + " * " + pick("band_cr", "rate_cr") + " + 500000) // 1000000"
 	webFee := wide("web_billed") + " * " + strconv.FormatInt(export.WebSearchRequestMicrodollars, 10)
+	costOverflows := "max(row_cost) > " + maxInt64SQL + " OR sum(row_cost) > " + maxInt64SQL
 
-	query := "WITH " + src.With + `,
+	query := "WITH " + with + `,
 		activity_usage_eligible AS (
 			SELECT * FROM activity_usage_rows WHERE ts_us >= ? AND ts_us < ?
 		),
@@ -517,9 +503,9 @@ func activityUsageSQL(
 		),
 		activity_usage_rated AS (
 			SELECT s.*, r.rate_id, r.billed_ok, r.catalog_ok, r.billed_err,
-				r.rate_in, r.rate_out, r.rate_cw, r.rate_cw1h, r.rate_cr, r.rate_hit
+				r.rate_in, r.rate_out, r.rate_cw, r.rate_cw1h, r.rate_cr
 			FROM activity_usage_survivors s
-			ASOF LEFT JOIN ` + d.ValuesRelation(usageSegmentColumns, len(schedule.rates)) + ` r
+			ASOF LEFT JOIN ` + duckValuesRelation(usageSegmentColumns, segments) + ` r
 				ON s.model = r.rate_model AND s.provider_id = r.rate_provider AND s.pricing_us >= r.from_us
 		),
 		activity_usage_classified AS (
@@ -534,7 +520,7 @@ func activityUsageSQL(
 		activity_usage_kinds AS (
 			SELECT *,
 				CASE
-					WHEN COALESCE(rate_hit, 0) = 0 THEN '` + usageKindMissingRate + `'
+					WHEN rate_id IS NULL THEN '` + usageKindMissingRate + `'
 					WHEN reported_cost IS NOT NULL THEN '` + usageKindReported + `'
 					WHEN input = 0 AND output = 0 AND reasoning = 0 AND cache_create = 0
 						AND cache_read = 0 AND web_billed = 0 THEN '` + usageKindZero + `'
@@ -546,13 +532,13 @@ func activityUsageSQL(
 			FROM activity_usage_classified
 		),
 		activity_usage_banded AS (
-			SELECT k.*, b.band_above, b.band_in, b.band_out, b.band_cw, b.band_cw1h, b.band_cr, b.band_hit
+			SELECT k.*, b.band_rate, b.band_above, b.band_in, b.band_out, b.band_cw, b.band_cw1h, b.band_cr
 			FROM (
 				SELECT *, CASE WHEN price_kind = '` + usageKindRequest + `'
 					THEN input + cache_create + cache_read ELSE -1 END AS band_probe
 				FROM activity_usage_kinds
 			) k
-			ASOF LEFT JOIN ` + d.ValuesRelation(usageBandColumns, bands) + ` b
+			ASOF LEFT JOIN ` + duckValuesRelation(usageBandColumns, bands) + ` b
 				ON k.rate_id = b.band_rate AND k.band_probe >= b.band_floor
 		),
 		activity_usage_priced AS (
@@ -564,16 +550,16 @@ func activityUsageSQL(
 					WHEN '` + usageKindAggregate + `' THEN ` + tokenCost + ` + ` + webFee + `
 					ELSE ` + wide("0") + `
 				END AS row_cost,
-				CASE WHEN COALESCE(band_hit, 0) = 1 THEN band_above ELSE -1 END AS price_band
+				CASE WHEN band_rate IS NOT NULL THEN band_above ELSE -1 END AS price_band
 			FROM activity_usage_banded
 		),
 		activity_usage_bucketed AS (
 			SELECT p.*, w.bucket,
 				max(CASE WHEN session_cost IS NULL THEN 0 ELSE 1 END)
 					OVER (PARTITION BY account_session) AS session_has_cost
-			FROM (SELECT *, CAST(0 AS BIGINT) AS bucket_probe FROM activity_usage_priced) p
-			ASOF LEFT JOIN ` + d.ValuesRelation(usageBucketColumns, len(windows)) + ` w
-				ON p.bucket_probe = w.bucket_key AND p.ts_us >= w.bucket_start
+			FROM activity_usage_priced p
+			ASOF LEFT JOIN ` + duckValuesRelation(usageBucketColumns, len(windows)) + ` w
+				ON p.ts_us >= w.bucket_start
 		),
 		activity_usage_keyed AS (
 			SELECT *,
@@ -584,16 +570,14 @@ func activityUsageSQL(
 				CASE WHEN session_has_cost = 1 THEN usage_dedup_key ELSE '' END AS raw_key
 			FROM activity_usage_bucketed
 		)
-		SELECT account_session, model, provider_id, ` + d.NarrowInt("COALESCE(bucket, -1)") + `,
-			` + d.NarrowInt("COALESCE(rate_id, -1)") + `, price_kind, ` + d.NarrowInt("price_band") + `,
-			` + d.NarrowInt("max(session_has_cost)") + `, ` + d.NarrowInt("raw_ts") + `, raw_session,
-			` + d.NarrowInt("raw_ord") + `, raw_source, raw_key,
-			` + d.NarrowInt("count(*)") + `, ` + d.NarrowInt("sum(input)") + `, ` + d.NarrowInt("sum(output)") + `,
-			` + d.NarrowInt("CASE WHEN max(row_cost) > "+maxInt64SQL+" OR sum(row_cost) > "+maxInt64SQL+
-		" THEN 0 ELSE sum(row_cost) END") + `,
-			` + d.NarrowInt("CASE WHEN max(row_cost) > "+maxInt64SQL+" OR sum(row_cost) > "+maxInt64SQL+
-		" THEN 1 ELSE 0 END") + `,
-			` + d.NarrowInt("min(ts_us)") + `, max(session_cost)
+		SELECT account_session, model, provider_id, CAST(COALESCE(bucket, -1) AS BIGINT),
+			CAST(COALESCE(rate_id, -1) AS BIGINT), price_kind, CAST(price_band AS BIGINT),
+			CAST(max(session_has_cost) AS BIGINT), CAST(raw_ts AS BIGINT), raw_session,
+			CAST(raw_ord AS BIGINT), raw_source, raw_key,
+			CAST(count(*) AS BIGINT), CAST(sum(input) AS BIGINT), CAST(sum(output) AS BIGINT),
+			CAST(CASE WHEN ` + costOverflows + ` THEN 0 ELSE sum(row_cost) END AS BIGINT),
+			CAST(CASE WHEN ` + costOverflows + ` THEN 1 ELSE 0 END AS BIGINT),
+			CAST(min(ts_us) AS BIGINT), max(session_cost)
 		FROM activity_usage_keyed
 		GROUP BY account_session, model, provider_id, bucket, rate_id, price_kind, price_band,
 			raw_ts, raw_session, raw_ord, raw_source, raw_key`

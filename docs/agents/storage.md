@@ -731,25 +731,23 @@ Keep identity-only corrections in the reporting digest. The wire contract is in
   message counts and project maps; SQL, pricing, caches and read lifetimes
   stay in each backend. Daily usage query strategies and aggregation loops
   remain per backend.
-- DuckDB Activity reports select, price, and sum usage in SQL through
-  `readbase.ActivityReportUsage`, and derive session runs in SQL through
-  `readbase.ActivitySessionRuns`. Both are written once against
-  `db.QueryDialect`; only DuckDB implements its usage-accounting methods
-  (`WideInt`, `IntDiv`, `NarrowInt`, `ValuesRelation`, `Nullable`,
-  `LastNonNull`). Go resolves each model to its rates over the range as a
-  schedule of segments; SQL picks a row's segment and pricing band and does
-  the integer cost math. The SQLite, PostgreSQL, and ClickHouse reports keep
-  the Go rules in `internal/activity`, because the SQL was slower for them on
-  a one-year archive of 30,000 sessions:
-  - SQLite: the usage step took 6.2 s in SQL and 0.99 s in Go. One sort of
-    the 600,000 usage rows already takes 1.1 s, and the rules need several.
-    The runs SQL took 11.1 s, against 1.9 s for the Go pairing, even with an
-    inexact stand-in for `LastNonNull`, which SQLite lacks.
-  - PostgreSQL: the usage selection alone took 1.86 s at best, against about
-    1 s for the whole Go usage step.
-  - ClickHouse: the SQL was up to 1.7x faster cold, but reopening a range
-    that includes today was 1.2x to 2.8x slower than the kept usage ranges
-    and pairing memo.
+- DuckDB Activity reports select, price, and sum usage in SQL with
+  `sumActivityUsage`, and derive session runs in SQL with `activitySessionRuns`,
+  both in `internal/duckdb`. Go resolves each model to its rates over the range
+  as a schedule of segments; SQL picks a row's segment and pricing band and does
+  the integer cost math. The SQLite, PostgreSQL, and ClickHouse reports keep the
+  Go rules in `internal/activity`, because the SQL was slower for them on a
+  one-year archive of 30,000 sessions:
+  - SQLite: the usage step took 6.2 s in SQL and 0.99 s in Go, 6.3x slower. One
+    sort of the 600,000 usage rows already takes 1.1 s, and the rules need
+    several. The runs SQL took 11.1 s against 1.9 s for the Go pairing, 5.8x
+    slower, even with an inexact stand-in for DuckDB's
+    `last_value(... IGNORE NULLS)`, which SQLite lacks.
+  - PostgreSQL: the usage selection alone took 1.86 s at best, against about 1 s
+    for the whole Go usage step, at least 1.9x slower.
+  - ClickHouse: the SQL was up to 1.7x faster cold, but reopening a range that
+    includes today was 1.2x to 2.8x slower than the kept usage ranges and
+    pairing memo.
 
 ### Harness-recorded costs
 
@@ -1056,11 +1054,11 @@ and gap cap, within a 128 MiB budget, at the session's
 session's messages or tool events change, so entries survive mirror replacements
 and a refresh derives only changed sessions. A session without a fingerprint is
 derived on every report. DuckDB derives the runs over all time in one SQL query,
-`readbase.ActivitySessionRuns`, which pairs, caps, and trims the candidates and
-returns each run's pieces, and clips them at the report's effective end. On the
-same scratch data, deriving every session took 2.4 s instead of 4.8 s, the kept
-runs took 74 MiB, and a refresh with ten changed sessions spent 189 ms instead of
-315 ms on runs, 216 ms sweeping, and 46 ms counting messages.
+`activitySessionRuns`, which pairs, caps, and trims the candidates and returns
+each run's pieces, and clips them at the report's effective end. On the same
+scratch data, deriving every session took 2.4 s instead of 4.8 s (2.0x), the
+kept runs took 74 MiB, and a refresh with ten changed sessions spent 189 ms
+instead of 315 ms on runs (1.7x), 216 ms sweeping, and 46 ms counting messages.
 
 ### PostgreSQL push preparation indexes
 

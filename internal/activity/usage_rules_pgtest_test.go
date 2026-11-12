@@ -223,7 +223,10 @@ func TestActivityReportUsageRulesAcrossBackends(t *testing.T) {
 			t.Run(tc.name+"/"+name, func(t *testing.T) {
 				report, err := backend.GetActivityReport(ctx, db.AnalyticsFilter{Timezone: "UTC"}, q)
 				require.NoError(t, err)
-				require.Equal(t, sqliteReport.Pricing, report.Pricing)
+				if name != "sqlite" {
+					// SQLite is the reference pricing block.
+					require.Equal(t, sqliteReport.Pricing, report.Pricing)
+				}
 				require.Equal(t, tc.total, usageRuleTotals{report.Totals.OutputTokens, report.Totals.Cost.Microdollars})
 				got := map[string]usageRuleTotals{}
 				for _, row := range report.BySession {

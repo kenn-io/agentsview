@@ -1,4 +1,4 @@
-package readbase
+package duckdb
 
 import (
 	"context"
@@ -7,12 +7,18 @@ import (
 	"time"
 
 	"go.kenn.io/agentsview/internal/activity"
-	"go.kenn.io/agentsview/internal/db"
 )
 
-// ActivityRunSource is one backend's pairing inputs for activity runs. With
-// is a WITH list, without the WITH keyword, that defines two relations over
-// the sessions to pair:
+// activityRunOrder is the order a session's candidates are resolved in:
+// by start, then by start ordinal, message pairs before tool candidates.
+const activityRunOrder = "start_us, start_ordinal, kind, call_index, event_index"
+
+// activitySessionRuns pairs the sessions' messages and tool events into
+// interval candidates and resolves them in SQL into each session's runs over
+// all time, which activity.SessionRuns clips to any report range.
+//
+// with is a WITH list, without the WITH keyword, that defines two relations
+// over the sessions to pair:
 //
 //   - activity_run_messages: every message, with the columns session_id,
 //     ordinal, ts_us (NULL without a timestamp), role, and model.
@@ -21,18 +27,6 @@ import (
 //     tool call's message ordinal), call_index, event_index, and ts_us.
 //
 // Timestamps are microseconds since the epoch.
-type ActivityRunSource struct {
-	With string
-	Args []any
-}
-
-// activityRunOrder is the order a session's candidates are resolved in:
-// by start, then by start ordinal, message pairs before tool candidates.
-const activityRunOrder = "start_us, start_ordinal, kind, call_index, event_index"
-
-// ActivitySessionRuns pairs the sessions' messages and tool events into
-// interval candidates and resolves them in SQL into each session's runs over
-// all time, which activity.SessionRuns clips to any report range.
 //
 // A message pairs with the next message that has a timestamp. A tool event
 // pairs with whichever comes first of the session's next tool event and
@@ -41,13 +35,12 @@ const activityRunOrder = "start_us, start_ordinal, kind, call_index, event_index
 // candidate is capped at the gap, trimmed to start where the session's
 // earlier candidates reach, and dropped when they already cover it. Pieces
 // that touch and share a model join into one run.
-func ActivitySessionRuns(
-	ctx context.Context, d db.QueryDialect, query ActivityUsageQuery,
-	src ActivityRunSource, gapCapSeconds float64,
+func (s *Store) activitySessionRuns(
+	ctx context.Context, with string, withArgs []any, gapCapSeconds float64,
 ) (map[string]activity.SessionRuns, error) {
 	gapCap := time.Duration(gapCapSeconds) * time.Second
-	sqlText, args := activityRunsSQL(d, src, gapCap.Microseconds())
-	rows, err := query(ctx, sqlText, args)
+	sqlText, args := activityRunsSQL(with, withArgs, gapCap.Microseconds())
+	rows, err := s.queryContext(ctx, sqlText, args...)
 	if err != nil {
 		return nil, fmt.Errorf("querying activity session runs: %w", err)
 	}
@@ -79,23 +72,22 @@ func ActivitySessionRuns(
 	return out, nil
 }
 
-func activityRunsSQL(d db.QueryDialect, src ActivityRunSource, gapUS int64) (string, []any) {
-	n := d.Nullable
-	query := "WITH " + src.With + `,
+func activityRunsSQL(with string, withArgs []any, gapUS int64) (string, []any) {
+	query := "WITH " + with + `,
 		activity_run_stamped AS (
 			SELECT session_id, ordinal, ts_us, role, model,
-				lead(` + n("ordinal") + `) OVER w AS next_ordinal,
-				lead(` + n("ts_us") + `) OVER w AS next_us,
-				lead(` + n("role") + `) OVER w AS next_role,
-				lead(` + n("model") + `) OVER w AS next_model,
-				lag(` + n("ts_us") + `) OVER w AS previous_us
+				lead(ordinal) OVER w AS next_ordinal,
+				lead(ts_us) OVER w AS next_us,
+				lead(role) OVER w AS next_role,
+				lead(model) OVER w AS next_model,
+				lag(ts_us) OVER w AS previous_us
 			FROM activity_run_messages
 			WHERE ts_us IS NOT NULL
 			WINDOW w AS (PARTITION BY session_id ORDER BY ordinal)
 		),
 		activity_run_paired AS (
 			SELECT *,
-				` + d.LastNonNull("CASE WHEN role = 'assistant' AND model != '' AND ts_us > previous_us THEN model END") + `
+				last_value(CASE WHEN role = 'assistant' AND model != '' AND ts_us > previous_us THEN model END IGNORE NULLS)
 					OVER (PARTITION BY session_id ORDER BY ordinal ROWS UNBOUNDED PRECEDING) AS prior_model
 			FROM activity_run_stamped
 		),
@@ -105,7 +97,7 @@ func activityRunsSQL(d db.QueryDialect, src ActivityRunSource, gapUS int64) (str
 			FROM activity_run_messages
 			WHERE session_id IN (SELECT session_id FROM activity_run_terminals)
 			UNION ALL
-			SELECT session_id, ordinal, 1, ` + n("ts_us") + `, '', '', call_index, event_index
+			SELECT session_id, ordinal, 1, ts_us, '', '', call_index, event_index
 			FROM activity_run_terminals
 		),
 		activity_run_tool_ordered AS (
@@ -114,21 +106,21 @@ func activityRunsSQL(d db.QueryDialect, src ActivityRunSource, gapUS int64) (str
 					ORDER BY ordinal, is_terminal ROWS UNBOUNDED PRECEDING) AS reached_us,
 				max(CASE WHEN is_terminal = 0 THEN ts_us END) OVER (PARTITION BY session_id
 					ORDER BY ordinal, is_terminal ROWS BETWEEN UNBOUNDED PRECEDING AND 1 PRECEDING) AS earlier_us,
-				` + d.LastNonNull("CASE WHEN is_terminal = 0 AND role = 'assistant' AND model != '' THEN model END") + `
+				last_value(CASE WHEN is_terminal = 0 AND role = 'assistant' AND model != '' THEN model END IGNORE NULLS)
 					OVER (PARTITION BY session_id ORDER BY ordinal, is_terminal ROWS UNBOUNDED PRECEDING) AS prior_model
 			FROM activity_run_tool_stream
 		),
 		activity_run_tool_timed AS (
 			SELECT *,
-				` + d.LastNonNull("CASE WHEN is_record = 1 THEN ordinal END") + ` OVER r AS record_ordinal,
-				` + d.LastNonNull("CASE WHEN is_record = 1 THEN ts_us END") + ` OVER r AS record_us,
-				` + d.LastNonNull("CASE WHEN is_record = 1 THEN role END") + ` OVER r AS record_role,
-				` + d.LastNonNull("CASE WHEN is_record = 1 THEN model END") + ` OVER r AS record_model,
-				lead(` + n("ts_us") + `) OVER t AS next_terminal_us,
-				lag(` + n("ts_us") + `) OVER t AS previous_terminal_us,
-				` + d.LastNonNull("CASE WHEN is_terminal = 0 AND ts_us IS NOT NULL THEN ts_us END") + ` OVER s AS last_us,
-				` + d.LastNonNull("CASE WHEN is_terminal = 0 AND ts_us IS NOT NULL THEN ordinal END") + ` OVER s AS last_ordinal,
-				` + d.LastNonNull("CASE WHEN is_terminal = 0 AND ts_us IS NOT NULL THEN COALESCE(prior_model, '') END") + `
+				last_value(CASE WHEN is_record = 1 THEN ordinal END IGNORE NULLS) OVER r AS record_ordinal,
+				last_value(CASE WHEN is_record = 1 THEN ts_us END IGNORE NULLS) OVER r AS record_us,
+				last_value(CASE WHEN is_record = 1 THEN role END IGNORE NULLS) OVER r AS record_role,
+				last_value(CASE WHEN is_record = 1 THEN model END IGNORE NULLS) OVER r AS record_model,
+				lead(ts_us) OVER t AS next_terminal_us,
+				lag(ts_us) OVER t AS previous_terminal_us,
+				last_value(CASE WHEN is_terminal = 0 AND ts_us IS NOT NULL THEN ts_us END IGNORE NULLS) OVER s AS last_us,
+				last_value(CASE WHEN is_terminal = 0 AND ts_us IS NOT NULL THEN ordinal END IGNORE NULLS) OVER s AS last_ordinal,
+				last_value(CASE WHEN is_terminal = 0 AND ts_us IS NOT NULL THEN COALESCE(prior_model, '') END IGNORE NULLS)
 					OVER s AS last_prior
 			FROM (
 				SELECT *,
@@ -221,7 +213,7 @@ func activityRunsSQL(d db.QueryDialect, src ActivityRunSource, gapUS int64) (str
 		),
 		activity_run_reached AS (
 			SELECT *,
-				max(` + n("end_us") + `) OVER (PARTITION BY session_id ORDER BY ` + activityRunOrder + `
+				max(end_us) OVER (PARTITION BY session_id ORDER BY ` + activityRunOrder + `
 					ROWS BETWEEN UNBOUNDED PRECEDING AND 1 PRECEDING) AS reach_us
 			FROM activity_run_capped
 		),
@@ -232,10 +224,10 @@ func activityRunsSQL(d db.QueryDialect, src ActivityRunSource, gapUS int64) (str
 			FROM activity_run_reached
 			WHERE reach_us IS NULL OR end_us > reach_us
 		)
-		SELECT session_id, model, ` + d.NarrowInt("piece_start") + `, ` + d.NarrowInt("piece_end") + `, ` + d.NarrowInt("trimmed") + `
+		SELECT session_id, model, CAST(piece_start AS BIGINT), CAST(piece_end AS BIGINT), CAST(trimmed AS BIGINT)
 		FROM activity_run_pieces
 		ORDER BY session_id, piece_start`
-	args := slices.Clone(src.Args)
+	args := slices.Clone(withArgs)
 	args = append(args, gapUS, gapUS)
 	return query, args
 }
