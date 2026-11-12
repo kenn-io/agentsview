@@ -38,20 +38,12 @@ func isolateServeTestHome(t *testing.T) (string, string) {
 	t.Helper()
 	dir := t.TempDir()
 	dataDir := filepath.Join(dir, "data")
-	setTestHome(t, dir)
+	isolateCLISources(t, dir)
 	t.Setenv("XDG_CONFIG_HOME", filepath.Join(dir, "config"))
 	t.Setenv("XDG_CACHE_HOME", filepath.Join(dir, "cache"))
 	t.Setenv("XDG_STATE_HOME", filepath.Join(dir, "state"))
 	t.Setenv("AGENTSVIEW_DATA_DIR", dataDir)
 	t.Setenv("AGENTSVIEW_TEST_REAL_CLI", "1")
-	for _, agent := range parser.Registry {
-		if agent.EnvVar != "" {
-			t.Setenv(agent.EnvVar, filepath.Join(dir, "empty", string(agent.Type)))
-		}
-		if agent.DefaultRootEnvVar != "" {
-			t.Setenv(agent.DefaultRootEnvVar, filepath.Join(dir, "empty-root", string(agent.Type)))
-		}
-	}
 	return dir, dataDir
 }
 
