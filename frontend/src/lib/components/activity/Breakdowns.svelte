@@ -127,15 +127,20 @@
     return total;
   }
 
-  function showTip(e: MouseEvent, row: ActivityKeyMinutes, total: number) {
-    const rect = (e.currentTarget as HTMLElement).getBoundingClientRect();
+  // The hover tooltip and the bar's accessible name share this text.
+  function rowSummary(row: ActivityKeyMinutes, total: number): string {
     const pct = total > 0 ? Math.round((rowValue(row) / total) * 100) : 0;
     const unit = metric === "cost" ? "" : m.activity_min_unit();
     const split = m.activity_class_split({ int: fmtSeg(interactiveValue(row)), sub: fmtSeg(subagentValue(row)), auto: fmtSeg(automatedValue(row)) });
+    return `${row.key} · ${fmtValue(row)}${unit} · ${pct}% · ${split}`;
+  }
+
+  function showTip(e: MouseEvent, row: ActivityKeyMinutes, total: number) {
+    const rect = (e.currentTarget as HTMLElement).getBoundingClientRect();
     tooltip = {
       x: rect.left + rect.width / 2,
       y: rect.top - 4,
-      text: `${row.key} · ${fmtValue(row)}${unit} · ${pct}% · ${split}`,
+      text: rowSummary(row, total),
     };
   }
 
@@ -189,11 +194,11 @@
       <div class="breakdown-panel">
         <h4 class="panel-title">{panel.title}</h4>
         {#if panel.rows.length > 0}
-          <div class="bar-list">
+          <div class="bar-list" role="list">
             {#each panel.rows as row (rowIdentity(row, panel.projectRows))}
-              <!-- svelte-ignore a11y_no_static_element_interactions -->
               <div
                 class="bar-row"
+                role="listitem"
                 onmouseenter={(e) => showTip(e, row, total)}
                 onmouseleave={hideTip}
               >
@@ -211,7 +216,7 @@
                     {truncate(row.key, 22)}
                   </span>
                 {/if}
-                <div class="bar-track">
+                <div class="bar-track" role="img" aria-label={rowSummary(row, total)}>
                   <div
                     class="bar-seg interactive"
                     style="width: {barWidth(interactiveValue(row), max)}%"

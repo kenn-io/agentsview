@@ -4,6 +4,7 @@ vi.mock("../../utils/telemetry.js", () => ({ reportErrorShown: vi.fn() }));
 import { afterEach, describe, expect, it, vi } from "vite-plus/test";
 import { mount, tick, unmount } from "svelte";
 import { usage } from "../../stores/usage.svelte.js";
+import { router } from "../../stores/router.svelte.js";
 import { testMoney } from "../../test/money.js";
 import TopSessionsTable from "./TopSessionsTable.svelte";
 
@@ -15,12 +16,39 @@ afterEach(() => {
     component = undefined;
   }
   usage.topSessions = null;
+  vi.restoreAllMocks();
   usage.mode = "cost";
   usage.setSelectedTokenTypes(["input", "cache_write", "cache_read", "output"]);
   document.body.innerHTML = "";
 });
 
 describe("TopSessionsTable", () => {
+  it("opens a ranked session from its row button", async () => {
+    const nav = vi.spyOn(router, "navigateToSession").mockImplementation(() => {});
+    usage.topSessions = [
+      {
+        sessionId: "session-1",
+        displayName: "Costly session",
+        agent: "codex",
+        project: "demo",
+        startedAt: "2026-07-01T00:00:00Z",
+        inputTokens: 1,
+        cacheCreationTokens: 0,
+        cacheReadTokens: 0,
+        outputTokens: 1,
+        totalTokens: 2,
+        cost: testMoney(1),
+      },
+    ];
+    component = mount(TopSessionsTable, { target: document.body });
+    await tick();
+
+    const row = document.querySelector<HTMLButtonElement>("button.session-row")!;
+    expect(row.textContent).toContain("Costly session");
+    row.click();
+    expect(nav).toHaveBeenCalledExactlyOnceWith("session-1");
+  });
+
   it("reports the analytics kind for a visible ranking error", async () => {
     usage.errors.topSessions = "Ranking failed";
     component = mount(TopSessionsTable, { target: document.body });

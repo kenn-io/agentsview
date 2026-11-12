@@ -195,6 +195,22 @@
     };
   }
 
+  // The hover tooltip and each bar's accessible name share this text.
+  function trendSummary(
+    entry: { date: string; by_category: Record<string, number> },
+  ): string {
+    const total = trendTotal(entry.by_category);
+    const parts = Object.entries(entry.by_category)
+      .sort(([, a], [, b]) => b - a)
+      .slice(0, 4)
+      .map(([cat, count]) => `${cat}: ${count}`);
+    return m.analytics_tool_usage_trend_tooltip({
+      date: entry.date,
+      total,
+      parts: parts.join(", "),
+    });
+  }
+
   function handleTrendHover(
     e: MouseEvent,
     entry: { date: string; by_category: Record<string, number> },
@@ -202,19 +218,10 @@
     const rect = (
       e.currentTarget as HTMLElement
     ).getBoundingClientRect();
-    const total = trendTotal(entry.by_category);
-    const parts = Object.entries(entry.by_category)
-      .sort(([, a], [, b]) => b - a)
-      .slice(0, 4)
-      .map(([cat, count]) => `${cat}: ${count}`);
     tooltip = {
       x: rect.left + rect.width / 2,
       y: rect.top - 4,
-      text: m.analytics_tool_usage_trend_tooltip({
-        date: entry.date,
-        total,
-        parts: parts.join(", "),
-      }),
+      text: trendSummary(entry),
     };
   }
 
@@ -325,16 +332,17 @@
 
       <div class="section">
         <h4 class="section-title">{m.analytics_by_category()}</h4>
-        <div class="bar-list">
+        <!-- Each row shows its tooltip's values as text. -->
+        <div class="bar-list" role="list">
           {#each categories as cat}
-            <!-- svelte-ignore a11y_no_static_element_interactions -->
             <div
               class="bar-row"
+              role="listitem"
               onmouseenter={(e) => handleCatHover(e, cat)}
               onmouseleave={handleLeave}
             >
               <span class="cat-name">{cat.category}</span>
-              <div class="bar-track">
+              <div class="bar-track" aria-hidden="true">
                 <div
                   class="bar-fill"
                   style="width: {barWidth(cat.count)}%;
@@ -355,9 +363,10 @@
           <h4 class="section-title">{m.analytics_weekly_trend()}</h4>
           <div class="trend-chart">
             {#each trendEntries as entry}
-              <!-- svelte-ignore a11y_no_static_element_interactions -->
               <div
                 class="trend-bar-wrapper"
+                role="img"
+                aria-label={trendSummary(entry)}
                 onmouseenter={(e) => handleTrendHover(e, entry)}
                 onmouseleave={handleLeave}
               >

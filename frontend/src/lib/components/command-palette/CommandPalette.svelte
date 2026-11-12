@@ -4,6 +4,7 @@
     Button,
     KbdBadge,
     SegmentedControl,
+    trapFocus,
     type SegmentedControlOption,
   } from "@kenn-io/kit-ui";
   import { SearchIcon } from "../../icons.js";
@@ -56,6 +57,10 @@
   ];
   let project = $state(sessions.filters.project);
   let selectedIndex: number = $state(0);
+  // 0: the result itself; 1: its copy-session-ID cell.
+  let selectedColumn = $state<0 | 1>(0);
+  const uid = $props.id();
+  const gridId = `${uid}-results`;
   let inputValue: string = $state(searchStore.query ?? "");
   let searchModeOptions = $derived<SegmentedControlOption[]>([
     { value: "fulltext", label: m.command_palette_mode_fulltext() },
@@ -113,10 +118,40 @@
       : recentSessions.length,
   );
 
+  // Whether the results grid is on screen; the input names it only then.
+  let resultsListed = $derived(
+    showSearchResults
+      ? !searchStore.isSearching && !searchStore.error && searchStore.results.length > 0
+      : recentSessions.length > 0,
+  );
+
+  // Only search results have a copy cell.
+  let activeColumn = $derived<0 | 1>(
+    selectedColumn === 1 &&
+      showSearchResults &&
+      resultsListed &&
+      selectedIndex >= 0 &&
+      selectedIndex < searchStore.results.length
+      ? 1
+      : 0,
+  );
+
+  // A shorter result list can leave the selection past its end; keep it on
+  // a row that exists so the input's active cell and Enter still work.
+  $effect.pre(() => {
+    const last = Math.max(totalItems - 1, 0);
+    if (selectedIndex > last) selectedIndex = last;
+  });
+
+  function cellId(row: number, column: 0 | 1): string {
+    return `${uid}-cell-${row}-${column}`;
+  }
+
   function handleInput(e: Event) {
     const target = e.target as HTMLInputElement;
     inputValue = target.value;
     selectedIndex = 0;
+    selectedColumn = 0;
 
     if (isServerSearchQuery(inputValue)) {
       searchStore.search(inputValue, project);
@@ -125,28 +160,44 @@
     }
   }
 
+  // Result rows form a grid the input controls (the ARIA combobox pattern):
+  // focus stays in the input, and arrows move the active cell. Column 0
+  // opens the result; column 1, on search results, copies its session ID.
   function handleKeydown(e: KeyboardEvent) {
-    const interactiveTarget =
-      e.target !== inputRef &&
-      e.target instanceof Element &&
-      e.target.closest(
-        "button, a[href], input, select, textarea, [contenteditable='true'], " +
-          "[role='button'], [role='checkbox'], [role='combobox'], " +
-          // kit-ui-check-ignore: selector list for interactive event targets, not toggle markup
-          "[role='menuitem'], [role='radio'], [role='switch'], [role='tab']",
-      );
-    if (e.key !== "Escape" && interactiveTarget) return;
-
-    if (e.key === "ArrowDown") {
+    // While a search runs, the store still holds the previous results, which
+    // are not shown; arrows and Enter must not act on those hidden rows.
+    if ((e.key === "ArrowDown" || e.key === "ArrowUp" || e.key === "Enter") && !resultsListed) {
       e.preventDefault();
-      selectedIndex = Math.min(selectedIndex + 1, totalItems - 1);
+    } else if (e.key === "ArrowDown") {
+      e.preventDefault();
+      selectedIndex = Math.max(0, Math.min(selectedIndex + 1, totalItems - 1));
     } else if (e.key === "ArrowUp") {
       e.preventDefault();
       selectedIndex = Math.max(selectedIndex - 1, 0);
+    } else if (e.key === "ArrowRight" && activeColumn === 0 && showSearchResults && resultsListed) {
+      // Only past the end of the text, so the caret still moves within it.
+      const input = e.currentTarget as HTMLInputElement;
+      const end = input.value.length;
+      if (input.selectionStart === end && input.selectionEnd === end) {
+        e.preventDefault();
+        selectedColumn = 1;
+      }
+    } else if (e.key === "ArrowLeft" && activeColumn === 1) {
+      e.preventDefault();
+      selectedColumn = 0;
     } else if (e.key === "Enter") {
       e.preventDefault();
-      selectCurrent();
+      if (activeColumn === 1) {
+        const result = searchStore.results[selectedIndex];
+        if (result) copySessionId(result);
+      } else {
+        selectCurrent();
+      }
     }
+  }
+
+  function copySessionId(r: PaletteSearchResult) {
+    copyToClipboard(r.session_id);
   }
 
   // The range picker claims Escape at document level. Handle the outer
@@ -156,38 +207,6 @@
       e.preventDefault();
       e.stopPropagation();
       close();
-    }
-  }
-
-  function retryActiveMode(target: EventTarget | null): boolean {
-    const radio = target instanceof Element
-      ? target.closest<HTMLElement>('[role="radio"]')
-      : null;
-    if (
-      radio?.getAttribute("aria-checked") !== "true" ||
-      searchStore.mode === "fulltext" ||
-      searchStore.error === null ||
-      !inputValue.trim()
-    ) {
-      return false;
-    }
-    searchStore.retry();
-    selectedIndex = 0;
-    return true;
-  }
-
-  function handleControlClick(e: MouseEvent) {
-    retryActiveMode(e.target);
-  }
-
-  function handleControlKeydown(e: KeyboardEvent) {
-    if (e.key === "Escape") return;
-    e.stopPropagation();
-    if (
-      (e.key === "Enter" || e.key === " ") &&
-      retryActiveMode(e.target)
-    ) {
-      e.preventDefault();
     }
   }
 
@@ -275,33 +294,47 @@
 
 <svelte:window onkeydown={handleEscape} />
 
-<!-- svelte-ignore a11y_no_static_element_interactions -->
+<!-- The backdrop: a press that starts and ends on it closes the palette;
+     keyboard users close it with Escape (handled on the window). -->
 <div
   class="palette-overlay"
+  role="presentation"
   onmousedown={handleOverlayMousedown}
   onmouseup={handleOverlayMouseup}
-  onkeydown={handleKeydown}
 >
-  <div class="palette">
+  <!-- trapFocus keeps Tab inside the modal and restores focus on close. -->
+  <div
+    class="palette"
+    role="dialog"
+    aria-modal="true"
+    aria-label={m.command_palette_dialog_label()}
+    tabindex="-1"
+    {@attach trapFocus}
+  >
     <div class="palette-input-wrap">
       <SearchIcon class="search-icon" size="14" strokeWidth="2" aria-hidden="true" />
       <input
         bind:this={inputRef}
         type="text"
         class="palette-input"
+        role="combobox" /* kit-ui-check-ignore: the ARIA combobox pattern for a search launcher; kit-ui dropdowns pick a value instead. */
+        aria-label={m.command_palette_input_label()}
+        aria-autocomplete="list"
+        aria-haspopup="grid"
+        aria-expanded={resultsListed}
+        aria-controls={resultsListed ? gridId : undefined}
+        aria-activedescendant={resultsListed && selectedIndex >= 0
+          ? cellId(selectedIndex, activeColumn)
+          : undefined}
         placeholder={m.command_palette_placeholder()}
         value={inputValue}
         oninput={handleInput}
+        onkeydown={handleKeydown}
       />
       <KbdBadge keys={["Esc"]} joiner="compact" ariaLabel="Escape" />
     </div>
 
-    <!-- svelte-ignore a11y_no_static_element_interactions -->
-    <div
-      class="palette-controls"
-      onclick={handleControlClick}
-      onkeydown={handleControlKeydown}
-    >
+    <div class="palette-controls">
       <SegmentedControl
         options={searchModeOptions}
         value={searchStore.mode}
@@ -396,71 +429,116 @@
             {:else}
               <strong>{m.command_palette_search_error()}</strong>
               <span>{searchStore.error.detail ?? m.command_palette_search_failed()}</span>
+              <div class="palette-error-action">
+                <Button
+                  size="sm"
+                  tone="info"
+                  surface="soft"
+                  label={m.shared_retry()}
+                  onclick={() => {
+                    searchStore.retry();
+                    selectedIndex = 0;
+                  }}
+                />
+              </div>
             {/if}
           </div>
         {:else if searchStore.results.length === 0}
           <div class="palette-empty">{m.command_palette_no_results()}</div>
         {:else}
-          {#each searchStore.results as result, i}
-            <button
-              class="palette-item"
-              class:selected={i === selectedIndex}
-              onclick={() => selectSearchResult(result)}
-              onmouseenter={() => (selectedIndex = i)}
-            >
-              <span class="item-body">
-                {#if result.name}
-                  <span class="item-name">{truncate(result.name, 60)}</span>
-                {/if}
-                {#if result.snippet && result.snippet.replace(/<\/?mark>/g, '') !== result.name}
-                  <span class="item-snippet">
-                    {#if result.snippetFormat !== "plain-text" && /<mark>/i.test(result.snippet)}
-                      {@html sanitizeSnippet(result.snippet)}
-                    {:else}
-                      <!-- Backends without match markers get the query words emphasized here. -->
-                      {#each highlightTerms(result.snippet, inputValue) as segment}{#if segment.match}<mark>{segment.text}</mark>{:else}{segment.text}{/if}{/each}
+          <!-- Cells are virtual-focus targets of the input (aria-activedescendant),
+               so they stay out of the tab order and keep focus in the input
+               when pressed. -->
+          <div role="grid" id={gridId} aria-label={m.command_palette_search_results()}>
+            {#each searchStore.results as result, i}
+              {@const shortId = stripIdPrefix(result.session_id, result.agent).slice(0, 8)}
+              <div class="palette-row" role="row">
+                <button
+                  type="button"
+                  role="gridcell"
+                  id={cellId(i, 0)}
+                  tabindex="-1"
+                  class="palette-item has-copy"
+                  class:selected={i === selectedIndex}
+                  aria-selected={i === selectedIndex && activeColumn === 0}
+                  onmousedown={(e) => e.preventDefault()}
+                  onclick={() => selectSearchResult(result)}
+                  onmouseenter={() => {
+                    selectedIndex = i;
+                    selectedColumn = 0;
+                  }}
+                >
+                  <span class="item-body">
+                    {#if result.name}
+                      <span class="item-name">{truncate(result.name, 60)}</span>
+                    {/if}
+                    {#if result.snippet && result.snippet.replace(/<\/?mark>/g, '') !== result.name}
+                      <span class="item-snippet">
+                        {#if result.snippetFormat !== "plain-text" && /<mark>/i.test(result.snippet)}
+                          {@html sanitizeSnippet(result.snippet)}
+                        {:else}
+                          <!-- Backends without match markers get the query words emphasized here. -->
+                          {#each highlightTerms(result.snippet, inputValue) as segment}{#if segment.match}<mark>{segment.text}</mark>{:else}{segment.text}{/if}{/each}
+                        {/if}
+                      </span>
                     {/if}
                   </span>
-                {/if}
-              </span>
-              <span class="item-agent" style:--agent-ink={agentInk(result.agent)}>{agentLabel(result.agent)}</span>
-              <span class="item-meta">
-                {truncate(result.project, 20)}{result.timestamp ? ' · ' + formatRelativeTime(result.timestamp) : ''}
-              </span>
-              <!-- svelte-ignore a11y_click_events_have_key_events -->
-              <!-- svelte-ignore a11y_no_static_element_interactions -->
-              <span
-                class="item-id"
-                title={m.command_palette_copy_session_id()}
-                onclick={(e) => {
-                  e.stopPropagation();
-                  copyToClipboard(result.session_id);
-                }}
-              >{stripIdPrefix(result.session_id, result.agent).slice(0, 8)}</span>
-            </button>
-          {/each}
+                  <span class="item-agent" style:--agent-ink={agentInk(result.agent)}>{agentLabel(result.agent)}</span>
+                  <span class="item-meta">
+                    {truncate(result.project, 20)}{result.timestamp ? ' · ' + formatRelativeTime(result.timestamp) : ''}
+                  </span>
+                </button>
+                <button
+                  type="button"
+                  role="gridcell"
+                  id={cellId(i, 1)}
+                  tabindex="-1"
+                  class="item-id"
+                  class:active={i === selectedIndex && activeColumn === 1}
+                  aria-selected={i === selectedIndex && activeColumn === 1}
+                  aria-label={m.command_palette_copy_session_id_value({ id: shortId })}
+                  title={m.command_palette_copy_session_id()}
+                  onmousedown={(e) => e.preventDefault()}
+                  onclick={() => copySessionId(result)}
+                  onmouseenter={() => (selectedIndex = i)}
+                >{shortId}</button>
+              </div>
+            {/each}
+          </div>
         {/if}
       {:else}
-        <div class="palette-section-label">{m.command_palette_recent_sessions()}</div>
-        {#each recentSessions as session, i}
-          {@const preview = session.display_name ?? normalizeMessagePreview(sessions.view(session).first_message)}
-          <button
-            class="palette-item"
-            class:selected={i === selectedIndex}
-            onclick={() => selectSession(session)}
-            onmouseenter={() => (selectedIndex = i)}
-          >
-            <span class="item-body">
-              <span class="item-name">{preview
-                ? truncate(preview, 60)
-                : session.project}</span>
-            </span>
-            <span class="item-agent" style:--agent-ink={agentInk(session.agent)}>{agentLabel(session.agent, session.agent_label)}</span>
-            <span class="item-meta">
-              {formatRelativeTime(session.ended_at ?? session.started_at)}
-            </span>
-          </button>
-        {/each}
+        <div class="palette-section-label" id="{uid}-recent-label">{m.command_palette_recent_sessions()}</div>
+        {#if recentSessions.length > 0}
+          <div role="grid" id={gridId} aria-labelledby="{uid}-recent-label">
+            {#each recentSessions as session, i}
+              {@const preview = session.display_name ?? normalizeMessagePreview(sessions.view(session).first_message)}
+              <div class="palette-row" role="row">
+                <button
+                  type="button"
+                  role="gridcell"
+                  id={cellId(i, 0)}
+                  tabindex="-1"
+                  class="palette-item"
+                  class:selected={i === selectedIndex}
+                  aria-selected={i === selectedIndex}
+                  onmousedown={(e) => e.preventDefault()}
+                  onclick={() => selectSession(session)}
+                  onmouseenter={() => (selectedIndex = i)}
+                >
+                  <span class="item-body">
+                    <span class="item-name">{preview
+                      ? truncate(preview, 60)
+                      : session.project}</span>
+                  </span>
+                  <span class="item-agent" style:--agent-ink={agentInk(session.agent)}>{agentLabel(session.agent, session.agent_label)}</span>
+                  <span class="item-meta">
+                    {formatRelativeTime(session.ended_at ?? session.started_at)}
+                  </span>
+                </button>
+              </div>
+            {/each}
+          </div>
+        {/if}
       {/if}
       {#if showSearchResults && !searchStore.isSearching && !searchStore.error && searchStore.mode === "fulltext"}
         <div class="meaning-hint"><SearchByMeaningControl status={hintStatus} hint onchange={() => { hintStatus = null; searchStore.setMode("semantic"); }} /></div>
@@ -529,6 +607,7 @@
      scroll-padding keeps keyboard selection out of it. */
   .palette-results {
     --palette-fade: 28px;
+    --palette-id-width: 72px;
     overflow-y: auto;
     flex: 1;
     padding: 4px 0 var(--palette-fade);
@@ -585,6 +664,12 @@
     letter-spacing: 0.05em;
   }
 
+  /* The copy-ID cell is a sibling of the result cell, laid over the
+     gutter the result reserves for it, so the row reads as one line. */
+  .palette-row {
+    position: relative;
+  }
+
   /* Metadata sits on the title baseline instead of floating between the
      title and the snippet. */
   .palette-item {
@@ -599,6 +684,10 @@
     transition: background 0.05s;
   }
 
+  .palette-item.has-copy {
+    padding-right: calc(14px + var(--palette-id-width) + var(--space-4));
+  }
+
 :global(:root.dark) .item-snippet :global(mark) {
     background: color-mix(in srgb, var(--accent-amber) 35%, transparent);
     color: var(--text-primary);
@@ -608,7 +697,13 @@
     --selected-result-tint: 16%;
   }
 
-  .palette-item:hover {
+  /* Muted ink sits just under 4.5:1 on the stronger dark selection tint. */
+  :global(:root.dark) .palette-item.selected .item-snippet,
+  :global(:root.dark) .palette-row:has(.palette-item.selected) .item-id {
+    color: var(--text-secondary);
+  }
+
+  .palette-row:hover .palette-item:not(.selected) {
     background: var(--bg-surface-hover);
   }
 
@@ -801,8 +896,10 @@
   }
 
   .item-id {
-    margin-top: 1px;
-    width: 72px;
+    position: absolute;
+    top: 8px;
+    right: 14px;
+    width: var(--palette-id-width);
     text-align: right;
     font-family: var(--font-mono);
     font-size: 12px;
@@ -814,7 +911,8 @@
     border-radius: var(--radius-sm);
   }
 
-  .item-id:hover {
+  .item-id:hover,
+  .item-id.active {
     background: var(--bg-inset);
     color: var(--text-primary);
   }
@@ -858,6 +956,20 @@
       overflow: hidden;
       text-overflow: ellipsis;
       text-align: left;
+    }
+
+    /* The ID moves to the second line, beside the agent and metadata. */
+    .palette-item.has-copy {
+      padding-right: 14px;
+    }
+
+    .palette-item.has-copy .item-meta {
+      margin-right: calc(var(--palette-id-width) + var(--space-4));
+    }
+
+    .item-id {
+      top: auto;
+      bottom: 7px;
     }
   }
 </style>

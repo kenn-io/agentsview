@@ -180,7 +180,7 @@ describe("SessionList filter dropdown", () => {
     expect(document.body.textContent).toContain("Machine");
     expect(document.body.textContent).toContain("最少提示数");
 
-    const row = document.querySelector<HTMLElement>(".session-item");
+    const row = document.querySelector<HTMLElement>(".session-info-link");
     expect(row).not.toBeNull();
     row!.dispatchEvent(
       new MouseEvent("contextmenu", {
@@ -250,7 +250,7 @@ describe("SessionList filter dropdown", () => {
     component = mount(SessionList, { target: document.body });
     await tick();
     document
-      .querySelector<HTMLElement>(".session-item")!
+      .querySelector<HTMLElement>(".session-info-link")!
       .dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, clientX: 12, clientY: 12 }));
     await tick();
     Array.from(document.querySelectorAll<HTMLButtonElement>(".context-menu-item"))
@@ -291,7 +291,7 @@ describe("SessionList filter dropdown", () => {
     component = mount(SessionList, { target: document.body });
     await tick();
     document
-      .querySelector<HTMLElement>(".session-item")!
+      .querySelector<HTMLElement>(".session-info-link")!
       .dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, clientX: 12, clientY: 12 }));
     await tick();
     Array.from(document.querySelectorAll<HTMLButtonElement>(".context-menu-item"))
@@ -656,12 +656,12 @@ describe("SessionList visible hydration", () => {
     expect([...sessions.selectedIds]).toEqual(["link-select-session"]);
   });
 
-  it("keeps the non-link parts of the row selectable", async () => {
+  it("activates the session link with Space as well as Enter", async () => {
     const selectSession = vi.spyOn(sessions, "selectSession").mockImplementation(() => {});
     sessions.sessions = [
       makeSession({
-        id: "row-session",
-        display_name: "Row target",
+        id: "space-session",
+        display_name: "Space target",
         is_index_only: false,
       }),
     ];
@@ -670,20 +670,19 @@ describe("SessionList visible hydration", () => {
     component = mount(SessionList, { target: document.body });
     await tick();
 
-    // The star and status sit outside the session link; clicking the row
-    // itself still selects the session.
-    const row = document.querySelector<HTMLElement>(".session-item");
-    expect(row).not.toBeNull();
-    row!.click();
+    const link = document.querySelector<HTMLAnchorElement>(".session-info-link")!;
+    const space = new KeyboardEvent("keydown", { key: " ", bubbles: true, cancelable: true });
+    link.dispatchEvent(space);
 
-    expect(selectSession).toHaveBeenCalledWith("row-session");
+    expect(space.defaultPrevented).toBe(true);
+    expect(selectSession).toHaveBeenCalledWith("space-session");
   });
 
-  it("keeps button-discoverable rows alongside native session links", async () => {
+  it("gives each row one focusable session link with no control nested in it", async () => {
     sessions.sessions = [
       makeSession({
-        id: "button-session",
-        display_name: "Button target",
+        id: "link-session",
+        display_name: "Link target",
         is_index_only: false,
       }),
     ];
@@ -692,13 +691,15 @@ describe("SessionList visible hydration", () => {
     component = mount(SessionList, { target: document.body });
     await tick();
 
-    const row = document.querySelector<HTMLElement>(".session-item");
-    const link = document.querySelector<HTMLAnchorElement>(".session-info-link");
-    expect(row).not.toBeNull();
-    expect(row?.getAttribute("role")).toBe("button");
-    expect(row?.getAttribute("tabindex")).toBe("0");
-    expect(link).not.toBeNull();
-    expect(link?.getAttribute("href")).toBe("/sessions/button-session");
+    const row = document.querySelector<HTMLElement>(".session-item")!;
+    const link = row.querySelector<HTMLAnchorElement>(".session-info-link")!;
+    // The row is not a control itself, so the link and the star are
+    // siblings rather than controls nested inside a button.
+    expect(row.hasAttribute("role")).toBe(false);
+    expect(row.tabIndex).toBe(-1);
+    expect(link.getAttribute("href")).toBe("/sessions/link-session");
+    expect(link.querySelector("a, button, input")).toBeNull();
+    expect(row.querySelector(".star-btn")?.closest("a")).toBeNull();
   });
 
   it("opens the same canonical href from the context menu in a new tab", async () => {
@@ -715,7 +716,7 @@ describe("SessionList visible hydration", () => {
     component = mount(SessionList, { target: document.body });
     await tick();
 
-    const row = document.querySelector<HTMLElement>(".session-item");
+    const row = document.querySelector<HTMLElement>(".session-info-link");
     expect(row).not.toBeNull();
     row!.dispatchEvent(
       new MouseEvent("contextmenu", {

@@ -101,6 +101,15 @@ describe("ToolUsage", () => {
     expect(document.body.textContent).toContain("By Category");
     expect(document.body.textContent).toContain("Weekly Trend");
 
+    // Each weekly bar's hover details are also its accessible name.
+    const week = document.querySelector<HTMLElement>(".trend-bar-wrapper")!;
+    expect(week.getAttribute("role")).toBe("img");
+    week.dispatchEvent(new MouseEvent("mouseenter"));
+    await tick();
+    const tip = document.querySelector(".tooltip")!.textContent!.trim();
+    expect(tip).toBe("2024-06-03 | 5 total | Read: 3, Bash: 2");
+    expect(week.getAttribute("aria-label")).toBe(tip);
+
     await unmount(component);
   });
 

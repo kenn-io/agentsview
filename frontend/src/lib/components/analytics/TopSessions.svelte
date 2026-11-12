@@ -144,9 +144,8 @@
       {#each analytics.topSessions.sessions as session, i}
         {@const label = sessionLabel(session)}
         {@const status = getSessionStatus(session)}
-        <!-- svelte-ignore a11y_click_events_have_key_events -->
-        <!-- svelte-ignore a11y_no_static_element_interactions -->
-        <div
+        <button
+          type="button"
           class="session-row"
           onclick={() => handleSessionClick(session.id)}
         >
@@ -154,12 +153,12 @@
           <span class="session-status">
             <StatusDot {status} label={sessionStatusLabel(status)} size={7} />
           </span>
-          <div class="session-info">
+          <span class="session-info">
             <span class="session-label">
               {truncate(label, 50)}
             </span>
             <span class="session-project">{session.project}</span>
-          </div>
+          </span>
           <span class="session-metric">
             {#if analytics.topMetric === "duration"}
               <span
@@ -177,7 +176,7 @@
               {formatCount(session.message_count)}
             {/if}
           </span>
-        </div>
+        </button>
       {/each}
     </div>
   {:else if analytics.topSessions}
@@ -283,6 +282,8 @@
 
   .session-row {
     display: flex;
+    width: 100%;
+    text-align: left;
     align-items: center;
     gap: 8px;
     padding: 3px 6px;

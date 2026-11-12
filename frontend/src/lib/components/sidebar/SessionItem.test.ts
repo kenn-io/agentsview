@@ -1,9 +1,10 @@
 // @vitest-environment jsdom
-import { afterEach, describe, expect, it } from "vite-plus/test";
+import { afterEach, describe, expect, it, vi } from "vite-plus/test";
 import { flushSync, mount, unmount } from "svelte";
 import { createClassComponent } from "svelte/legacy";
 import SessionItem from "./SessionItem.svelte";
 import { sessions } from "../../stores/sessions.svelte.js";
+import { starred } from "../../stores/starred.svelte.js";
 
 let component: ReturnType<typeof mount> | undefined;
 
@@ -115,6 +116,120 @@ describe("SessionItem identity", () => {
 
     expect(document.querySelector(".rename-input")).toBeNull();
     expect(document.querySelector(".star-btn")).not.toBeNull();
+  });
+
+  it("focuses the rename input with its text selected", () => {
+    mountSession({ id: "rename-focus", display_name: "Current name" });
+
+    document
+      .querySelector<HTMLElement>(".session-name")!
+      .dispatchEvent(new MouseEvent("dblclick", { bubbles: true, cancelable: true }));
+    flushSync();
+
+    const input = document.querySelector<HTMLInputElement>(".rename-input")!;
+    expect(document.activeElement).toBe(input);
+    expect(input.value).toBe("Current name");
+    expect(input.selectionStart).toBe(0);
+    expect(input.selectionEnd).toBe("Current name".length);
+  });
+
+  it("renames only on a double-click of the title, not the rest of the row", () => {
+    mountSession({ id: "rename-meta" });
+
+    document
+      .querySelector<HTMLElement>(".session-count")!
+      .dispatchEvent(new MouseEvent("dblclick", { bubbles: true, cancelable: true }));
+    flushSync();
+
+    expect(document.querySelector(".rename-input")).toBeNull();
+  });
+
+  it("starts a focused rename from the context menu", () => {
+    mountSession({ id: "rename-menu", display_name: "Menu name" });
+
+    document
+      .querySelector<HTMLElement>(".session-info-link")!
+      .dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, cancelable: true }));
+    flushSync();
+    Array.from(document.querySelectorAll<HTMLButtonElement>(".context-menu-item"))
+      .find((button) => button.textContent?.trim() === "Rename")!
+      .click();
+    flushSync();
+
+    const input = document.querySelector<HTMLInputElement>(".rename-input")!;
+    expect(document.activeElement).toBe(input);
+    expect(document.querySelector(".context-menu")).toBeNull();
+  });
+
+  it("offers star and expand in the context menu as full-size equivalents", () => {
+    const onToggleExpand = vi.fn();
+    mountSession({ id: "menu-star" }, { continuationCount: 2, onToggleExpand });
+    const menuItem = (label: string) =>
+      Array.from(document.querySelectorAll<HTMLButtonElement>(".context-menu-item")).find(
+        (button) => button.textContent?.trim() === label,
+      );
+    const openMenu = () => {
+      document
+        .querySelector<HTMLElement>(".session-info-link")!
+        .dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, cancelable: true }));
+      flushSync();
+    };
+
+    openMenu();
+    menuItem("Star session")!.click();
+    flushSync();
+    expect(starred.isStarred("menu-star")).toBe(true);
+    expect(document.querySelector(".context-menu")).toBeNull();
+
+    openMenu();
+    expect(menuItem("Unstar session")).toBeTruthy();
+    menuItem("Expand")!.click();
+    flushSync();
+    expect(onToggleExpand).toHaveBeenCalledOnce();
+    starred.toggle("menu-star");
+  });
+
+  it("keeps a context menu opened near the viewport corner fully on screen", () => {
+    vi.spyOn(window, "innerWidth", "get").mockReturnValue(800);
+    vi.spyOn(window, "innerHeight", "get").mockReturnValue(600);
+    const rect = HTMLElement.prototype.getBoundingClientRect;
+    vi.spyOn(HTMLElement.prototype, "getBoundingClientRect").mockImplementation(function (
+      this: HTMLElement,
+    ) {
+      return this.classList.contains("context-menu")
+        ? DOMRect.fromRect({ width: 150, height: 190 })
+        : rect.call(this);
+    });
+    mountSession({ id: "menu-edge" });
+
+    document
+      .querySelector<HTMLElement>(".session-info-link")!
+      .dispatchEvent(
+        new MouseEvent("contextmenu", {
+          bubbles: true,
+          cancelable: true,
+          clientX: 780,
+          clientY: 565,
+        }),
+      );
+    flushSync();
+
+    const menu = document.querySelector<HTMLElement>(".context-menu")!;
+    expect(menu.style.left).toBe(`${800 - 4 - 150}px`);
+    expect(menu.style.top).toBe(`${600 - 4 - 190}px`);
+    vi.restoreAllMocks();
+  });
+
+  it("lets keyboard users expand a continuation chain and reports its state", () => {
+    const onToggleExpand = vi.fn();
+    mountSession({}, { continuationCount: 3, onToggleExpand, expanded: false });
+    const toggle = document.querySelector<HTMLButtonElement>(".tree-toggle")!;
+
+    expect(toggle.tabIndex).toBe(0);
+    expect(toggle.getAttribute("aria-expanded")).toBe("false");
+    toggle.focus();
+    toggle.click();
+    expect(onToggleExpand).toHaveBeenCalledOnce();
   });
 
   it("uses the singular for one message", () => {

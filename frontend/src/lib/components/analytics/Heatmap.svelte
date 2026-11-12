@@ -2,6 +2,7 @@
   import { formatCount } from "../../utils/format.js";
   import { Chart, Layer, Rect, Text } from "layerchart";
   import { analytics } from "../../stores/analytics.svelte.js";
+  import { Table } from "@kenn-io/kit-ui";
   import PanelStatus from "./PanelStatus.svelte";
   import type { HeatmapMetric } from "../../stores/analytics.svelte.js";
   import { formatDateTime, getLocale, m } from "../../i18n/index.js";
@@ -39,6 +40,14 @@
   } | null>(null);
   let chartAreaWidth = $state(0);
 
+  function dayLabel(date: string): string {
+    return formatDateTime(`${date}T00:00:00`, {
+      month: "short",
+      day: "numeric",
+      year: "numeric",
+    });
+  }
+
   function handleCellHover(
     e: MouseEvent,
     cell: DayCell,
@@ -46,15 +55,10 @@
     const rect = (
       e.currentTarget as SVGElement
     ).getBoundingClientRect();
-    const label = formatDateTime(`${cell.date}T00:00:00`, {
-      month: "short",
-      day: "numeric",
-      year: "numeric",
-    });
     tooltip = {
       x: rect.left + rect.width / 2,
       y: rect.top - 4,
-      text: `${label}: ${formatCount(cell.value)} ${metricLabel(analytics.metric)}`,
+      text: `${dayLabel(cell.date)}: ${formatCount(cell.value)} ${metricLabel(analytics.metric)}`,
     };
   }
 
@@ -109,6 +113,8 @@
 
     return { cols, months: monthLabels };
   });
+
+  const activeDays = $derived(grid.cols.flat().filter((cell) => cell.value > 0));
 
   const cellStep = $derived.by(() => {
     if (grid.cols.length === 0 || chartAreaWidth === 0) {
@@ -170,7 +176,11 @@
     {#if analytics.heatmap?.entries_from && analytics.heatmap.entries_from > analytics.from}
       <div class="clamp-note">{m.analytics_heatmap_showing_recent_year()}</div>
     {/if}
-    <div class="heatmap-scroll" bind:clientWidth={chartAreaWidth}>
+    <!-- Clicking a day is a pointer shortcut; the date range picker can
+         filter to the same day from the keyboard. Screen readers read the
+         active days from the table below instead of a year of unlabelled
+         squares. -->
+    <div class="heatmap-scroll" bind:clientWidth={chartAreaWidth} aria-hidden="true">
       <Chart
         width={svgWidth}
         height={svgHeight}
@@ -208,16 +218,10 @@
                 rx={2}
                 fill={heatmapLevelColor(cell.level)}
                 class={`heatmap-cell${cell.value > 0 || analytics.selectedDate === cell.date ? " clickable" : ""}${analytics.selectedDate === cell.date ? " selected" : ""}`}
-                role="button"
-                tabindex={-1}
                 onmouseenter={(event) => handleCellHover(event, cell)}
                 onmouseleave={handleCellLeave}
                 onclick={() => {
                   if (cell.value > 0 || analytics.selectedDate === cell.date)
-                    handleCellClick(cell);
-                }}
-                onkeydown={(event) => {
-                  if (event.key === "Enter" && (cell.value > 0 || analytics.selectedDate === cell.date))
                     handleCellClick(cell);
                 }}
               />
@@ -226,6 +230,25 @@
         </Layer>
       </Chart>
     </div>
+
+    <!-- A screen-reader copy of the chart data: never shown, so nothing to sort. -->
+    <Table bare unsorted class="kit-sr-only">
+      <caption>{m.analytics_activity_title()}</caption>
+      <thead>
+        <tr>
+          <th scope="col">{m.analytics_skill_trend_date()}</th>
+          <th scope="col">{metricLabel(analytics.metric)}</th>
+        </tr>
+      </thead>
+      <tbody>
+        {#each activeDays as cell (cell.date)}
+          <tr>
+            <th scope="row">{dayLabel(cell.date)}</th>
+            <td>{formatCount(cell.value)}</td>
+          </tr>
+        {/each}
+      </tbody>
+    </Table>
 
     {#if tooltip}
       <div

@@ -534,9 +534,17 @@ describe("QualityPage evidence navigation", () => {
     expect(head).toEqual(["Signal", "Count", "Sessions", "Outcome"]);
 
     const row = card.querySelector<HTMLButtonElement>(".driver-row")!;
-    const [label, ...values] = Array.from(row.children, (cell) => cell.textContent?.trim());
-    expect(values).toEqual(["2", "2", "Examples only"]);
-    expect(row.getAttribute("aria-label")).toBe(`${label}: 2, 2 sessions, Examples only`);
+    // What each cell shows, and what a screen reader reads from it.
+    const shown = Array.from(row.children, (cell) =>
+      (cell.querySelector('[aria-hidden="true"]') ?? cell).textContent?.trim(),
+    );
+    const spoken = Array.from(row.children, (cell) =>
+      (cell.querySelector(".kit-sr-only") ?? cell).textContent?.trim(),
+    );
+    expect(shown.slice(1)).toEqual(["2", "2", "Examples only"]);
+    // The row's name is its visible text, with the session count's noun added.
+    expect(row.hasAttribute("aria-label")).toBe(false);
+    expect(spoken).toEqual([shown[0], "2", "2 sessions", "Examples only"]);
 
     const grades = Array.from(document.querySelectorAll(".grade-bar"), (bar) =>
       Array.from(bar.children, (cell) => cell.textContent?.trim()).slice(0, 2),

@@ -41,7 +41,58 @@ cards or ornamental motion.
 
 ## Accessibility & Inclusion
 
-No project-specific accessibility profile is documented yet. Default to clear
-focus states, keyboard-reachable controls, readable contrast in light and dark
-themes, reduced-motion-safe transitions, and chart labels that remain visible
-across supported viewport sizes.
+agentsview targets [WCAG 2.2](https://www.w3.org/TR/WCAG22/) level AA in light,
+dark, and high-contrast themes, at every interface zoom level the app offers.
+
+`frontend/e2e/axe-routes.spec.ts` runs axe-core against every main route with
+the WCAG 2.2 A and AA rules and fails on any serious or critical violation,
+with two documented exceptions: a kit-ui gap on `StatusDot` that
+[DESIGN.md](DESIGN.md#known-kit-ui-gaps-tracked-upstream) tracks with its
+removal condition, and the sidebar gutter buttons described under Main routes.
+`frontend/e2e/appearance-a11y.spec.ts` and `frontend/e2e/text-contrast.spec.ts`
+cover zoom and contrast cases that axe cannot see. Automated checks catch only
+part of WCAG, so review new controls with a keyboard and a screen reader too.
+
+### Everywhere
+
+- Every control works from the keyboard. Tab moves between controls and
+  composite widgets; inside a composite widget such as the command palette's
+  results, arrow keys move between items. Enter or Space activates. Focus is
+  always visible, and its order follows the reading order.
+- A control's accessible name contains its visible text, so speech input can
+  find it. Icon-only controls carry a localized `aria-label`.
+- Interactive elements are never nested inside each other. A row with a
+  primary action and secondary buttons makes the primary action its own link
+  or button.
+- Click targets are at least 24 by 24 CSS pixels, or have that much clear
+  space around them. Dense rows can keep a small look by growing the hit box
+  with padding and a matching negative margin.
+- Text meets 4.5:1 contrast, and status marks and focus rings meet 3:1.
+- Hover-only detail, such as chart tooltips, is also exposed as visible text,
+  an accessible name, or a screen-reader table.
+- Overlays (command palette, menus, dialogs) close with Escape.
+- Transitions respect `prefers-reduced-motion`. Chart labels stay visible at
+  every supported viewport size.
+
+### Main routes
+
+- **Sessions list:** each session row is one link to the session. Its expand
+  toggle, select checkbox, and star are separate controls beside the link, and
+  its actions open from the context menu. The gutter's star and expand buttons
+  are smaller than 24px because they share a 42px row; the context menu offers
+  both at full size, the equivalent-control exception in WCAG 2.5.8. `[` and
+  `]` move between sessions.
+- **Session transcript:** the header's copy, grade, and usage controls are
+  buttons named by their visible text. Long tool previews are focusable
+  scrolling regions with a label.
+- **Command palette** (`Ctrl+K` or `Cmd+K`): a modal dialog. The search box is
+  a combobox; arrow keys move through the results, Enter opens one, and the
+  right arrow reaches its copy-ID button.
+- **Analytics, Usage, Activity, Trends, Quality:** rows that filter or open
+  something are buttons. Charts expose their numbers as accessible names or a
+  screen-reader table, and selection controls have keyboard equivalents.
+- **Settings, Data, Recent edits, Pinned, Trash, Recall, Friction:** standard
+  forms and tables, named by their headings.
+
+Known gaps and their removal conditions are tracked in
+[DESIGN.md](DESIGN.md#known-kit-ui-gaps-tracked-upstream).

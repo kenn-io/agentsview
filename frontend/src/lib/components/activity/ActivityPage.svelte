@@ -622,7 +622,9 @@
   .activity-partial-note {
     margin-left: auto;
     font-size: 11px;
-    color: var(--accent-amber);
+    /* Amber mixed toward the primary ink keeps the 11px note above 4.5:1;
+       plain light amber is about 3.2:1 on white. */
+    color: color-mix(in srgb, var(--accent-amber) 65%, var(--text-primary));
     white-space: nowrap;
   }
 

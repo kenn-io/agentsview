@@ -1033,8 +1033,7 @@
       {#each virtualizer.instance?.getVirtualItems() ?? [] as row (row.key)}
         {@const item = itemAt(row.index)}
         {#if item}
-          <!-- svelte-ignore a11y_click_events_have_key_events -->
-          <!-- svelte-ignore a11y_no_static_element_interactions -->
+          <!-- svelte-ignore a11y_click_events_have_key_events, a11y_no_static_element_interactions (pointer shortcut for message selection; keyboard users select with j/k and the arrow keys, so a tab stop per message would add nothing) -->
           <div
             class="virtual-row"
             class:selected={ui.selectedOrdinal !== null &&

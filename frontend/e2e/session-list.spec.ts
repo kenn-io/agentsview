@@ -113,7 +113,7 @@ test.describe("Session list", () => {
     await expect(sessionWithMessages).toHaveClass(/active/);
     await expect(sp.sessionItems).toHaveCount(TOTAL_SESSIONS);
 
-    await sessionWithMessages.focus();
+    await sessionWithMessages.locator(".session-info-link").focus();
     const activeSessionBefore = await sessionWithMessages.getAttribute("data-session-id");
     await page.keyboard.press("ArrowDown");
     await expect(page.locator('.session-item[aria-current="page"]')).not.toHaveAttribute(

@@ -46,10 +46,7 @@
   }
 </script>
 
-<!-- The Escape handler is a scoped keyboard shortcut for the panel, not the
-     panel's primary interaction; the close button remains the accessible
-     control. -->
-<!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
+<!-- svelte-ignore a11y_no_noninteractive_element_interactions (Escape is a scoped shortcut; the All projects button is the accessible close control) -->
 <section class="workspace" aria-label={displayLabel} {onkeydown}>
   <header class="workspace-header">
     <span class="back-btn">

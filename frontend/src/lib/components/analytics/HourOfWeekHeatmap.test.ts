@@ -90,6 +90,24 @@ describe("HourOfWeekHeatmap", () => {
     unmount(component);
   });
 
+  it("names each cell by day, hour, and count, and reports the keyboard-selected cell", async () => {
+    const component = mountWithData();
+    await tick();
+    stubFetches();
+
+    const sundayMidnight = document.querySelector<SVGElement>(".how-cell");
+    expect(sundayMidnight?.getAttribute("aria-label")).toMatch(/Sun.*00.*9/);
+    expect(sundayMidnight?.getAttribute("aria-pressed")).toBe("false");
+
+    sundayMidnight!.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
+    await tick();
+
+    expect(analytics.selectedDow).toBe(6);
+    expect(analytics.selectedHour).toBe(0);
+    expect(sundayMidnight?.getAttribute("aria-pressed")).toBe("true");
+    unmount(component);
+  });
+
   it("fits all 24 hour columns inside the available width", async () => {
     Object.defineProperty(HTMLElement.prototype, "clientWidth", {
       configurable: true,

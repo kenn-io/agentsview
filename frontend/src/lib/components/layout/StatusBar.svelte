@@ -127,7 +127,6 @@
       class:active={perf.panelOpen}
       onclick={() => perf.togglePanel()}
       title={m.status_bar_open_performance_debug()}
-      aria-label={m.status_bar_open_performance_debug()}
     >
       <ActivityIcon size="12" strokeWidth="2" aria-hidden="true" />
       <span>{m.status_bar_perf()}</span>
@@ -292,8 +291,10 @@
     font-weight: 500;
   }
 
+  /* Plain accent green is about 3:1 on the light status bar; mixing toward
+     primary ink keeps the hue and clears 4.5:1 in both themes. */
   .sync-progress {
-    color: var(--accent-green);
+    color: color-mix(in srgb, var(--accent-green) 65%, var(--text-primary));
   }
 
   .codex-cloud-status {

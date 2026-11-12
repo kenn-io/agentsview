@@ -138,7 +138,7 @@ kit-ui's `RangePicker`, which seeds its Custom tab from the same math.
 ### Known kit-ui gaps (tracked upstream)
 
 No app override waits on a kit-ui pull request at the current pin. One
-override and one accepted behavior remain:
+override, one axe exception, and one accepted behavior remain:
 
 - In light theme, an unclean `StatusDot` mixes the app's `--accent-orange`
   toward primary ink (`frontend/src/app.css`). kit-ui paints the dot in plain
@@ -146,6 +146,10 @@ override and one accepted behavior remain:
   about 2.6:1 on white, below the 3:1 a status mark needs. Drop the rule only
   if kit-ui darkens the light dot itself; `e2e/text-contrast.spec.ts` checks
   it.
+- `StatusDot` draws its dot as a `<span>` with `aria-label` but no role, which
+  axe reports as `aria-prohibited-attr`, so screen readers may skip the
+  status. `e2e/axe-routes.spec.ts` ignores that one rule on `.kit-status-dot`
+  only. Remove the exception once kit-ui gives the dot `role="img"`.
 - With no current tab and the tabs collapsed, `TopBar`'s menu trigger reads
   "Primary navigation: —", and the open menu shows a disabled, checked "—"
   row. That is kit-ui's behavior, accepted as is; a kit-ui follow-up could

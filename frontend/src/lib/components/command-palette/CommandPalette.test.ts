@@ -300,6 +300,142 @@ describe("CommandPalette", () => {
     unmount(component);
   });
 
+  it("copies a session ID on click without opening the result or closing", async () => {
+    mockSearchStore.results = [makeSearchResult()];
+    const component = mount(CommandPalette, { target: document.body });
+    await enterSearchQuery();
+
+    const copy = await tickUntil(".item-id");
+    expect(copy.tagName).toBe("BUTTON");
+    expect(copy.closest(".palette-item")).toBeNull();
+    expect(copy.getAttribute("aria-label")).toBe("Copy session ID search12");
+    copy.click();
+    await tick();
+
+    expect(mockCopyToClipboard).toHaveBeenCalledWith("codex:search123");
+    expect(mockRouter.navigateToSession).not.toHaveBeenCalled();
+    expect(mockUi.activeModal).toBe("commandPalette");
+
+    unmount(component);
+  });
+
+  function pressOnInput(key: string) {
+    const input = document.querySelector<HTMLInputElement>(".palette-input")!;
+    input.dispatchEvent(new KeyboardEvent("keydown", { key, bubbles: true, cancelable: true }));
+  }
+
+  function activeCell(): HTMLElement | null {
+    const input = document.querySelector<HTMLInputElement>(".palette-input")!;
+    const id = input.getAttribute("aria-activedescendant");
+    return id ? document.getElementById(id) : null;
+  }
+
+  it("names the dialog and wires the input to the result grid", async () => {
+    const component = mount(CommandPalette, { target: document.body });
+    await tick();
+
+    const dialog = document.querySelector<HTMLElement>(".palette")!;
+    expect(dialog.getAttribute("role")).toBe("dialog");
+    expect(dialog.getAttribute("aria-modal")).toBe("true");
+    expect(dialog.getAttribute("aria-label")).toBe("Search sessions");
+
+    const input = document.querySelector<HTMLInputElement>(".palette-input")!;
+    expect(input.getAttribute("role")).toBe("combobox");
+    expect(input.getAttribute("aria-label")).toBe("Search sessions and messages");
+    expect(input.getAttribute("aria-expanded")).toBe("true");
+    const grid = document.getElementById(input.getAttribute("aria-controls")!)!;
+    expect(grid.getAttribute("role")).toBe("grid");
+    expect(grid.getAttribute("aria-labelledby")).toBeTruthy();
+    expect(document.getElementById(grid.getAttribute("aria-labelledby")!)?.textContent).toBe(
+      "Recent Sessions",
+    );
+    expect(grid.contains(activeCell())).toBe(true);
+    expect(activeCell()?.textContent).toContain("Cursor");
+
+    unmount(component);
+  });
+
+  it("collapses the combobox when no results are listed", async () => {
+    mockSearchStore.results = [];
+    const component = mount(CommandPalette, { target: document.body });
+    await enterSearchQuery();
+
+    const input = document.querySelector<HTMLInputElement>(".palette-input")!;
+    expect(input.getAttribute("aria-expanded")).toBe("false");
+    expect(input.hasAttribute("aria-controls")).toBe(false);
+    expect(input.hasAttribute("aria-activedescendant")).toBe(false);
+    expect(document.querySelector("[role='grid']")).toBeNull();
+
+    unmount(component);
+  });
+
+  it("moves the selection with arrow keys on the input and opens it with Enter", async () => {
+    const component = mount(CommandPalette, { target: document.body });
+    await tick();
+
+    const items = () => Array.from(document.querySelectorAll<HTMLElement>(".palette-item"));
+    expect(items()[0]?.classList.contains("selected")).toBe(true);
+
+    pressOnInput("ArrowDown");
+    await tick();
+    expect(items()[1]?.classList.contains("selected")).toBe(true);
+    expect(activeCell()).toBe(items()[1]);
+    expect(activeCell()?.getAttribute("aria-selected")).toBe("true");
+
+    pressOnInput("ArrowDown");
+    await tick();
+    expect(activeCell()).toBe(items()[1]);
+
+    pressOnInput("ArrowUp");
+    await tick();
+    expect(activeCell()).toBe(items()[0]);
+
+    pressOnInput("ArrowDown");
+    pressOnInput("Enter");
+    await tick();
+    expect(mockRouter.navigateToSession).toHaveBeenCalledWith("s2");
+    expect(mockUi.activeModal).toBeNull();
+
+    unmount(component);
+  });
+
+  it("moves to the copy cell past the end of the query and copies with Enter", async () => {
+    mockSearchStore.results = [
+      makeSearchResult({ session_id: "codex:first0000000" }),
+      makeSearchResult({ session_id: "codex:second000000" }),
+    ];
+    const component = mount(CommandPalette, { target: document.body });
+    await enterSearchQuery("match");
+    const input = document.querySelector<HTMLInputElement>(".palette-input")!;
+
+    // With the caret inside the text, ArrowRight stays with the text.
+    input.setSelectionRange(2, 2);
+    pressOnInput("ArrowRight");
+    await tick();
+    expect(activeCell()?.classList.contains("palette-item")).toBe(true);
+
+    input.setSelectionRange(5, 5);
+    pressOnInput("ArrowDown");
+    pressOnInput("ArrowRight");
+    await tick();
+    const copies = document.querySelectorAll<HTMLElement>(".item-id");
+    expect(activeCell()).toBe(copies[1]);
+    expect(copies[1]?.classList.contains("active")).toBe(true);
+
+    pressOnInput("Enter");
+    await tick();
+    expect(mockCopyToClipboard).toHaveBeenCalledWith("codex:second000000");
+    expect(mockRouter.navigateToSession).not.toHaveBeenCalled();
+    expect(mockUi.activeModal).toBe("commandPalette");
+
+    pressOnInput("ArrowLeft");
+    pressOnInput("Enter");
+    await tick();
+    expect(mockRouter.navigateToSession).toHaveBeenCalledWith("codex:second000000");
+
+    unmount(component);
+  });
+
   it("omits relative-time segment when timestamp is empty", async () => {
     mockSearchStore.results = [
       makeSearchResult({
@@ -517,48 +653,29 @@ describe("CommandPalette", () => {
     unmount(component);
   });
 
-  it.each([
-    ["semantic", "click"],
-    ["semantic", "Enter"],
-    ["semantic", " "],
-    ["hybrid", "click"],
-    ["hybrid", "Enter"],
-    ["hybrid", " "],
-  ] as const)(
-    "retries an errored active %s mode once on %s without navigating",
-    async (mode, activation) => {
-      mockSearchStore.mode = mode;
-      mockSearchStore.error = {
-        detail: "temporarily unavailable",
-        kind: "generic",
-      };
-      mockSearchStore.results = [makeSearchResult()];
-      const component = mount(CommandPalette, { target: document.body });
-      await enterSearchQuery();
+  it("offers an explicit retry for a generic search error", async () => {
+    mockSearchStore.mode = "hybrid";
+    mockSearchStore.error = {
+      detail: "temporarily unavailable",
+      kind: "generic",
+    };
+    const component = mount(CommandPalette, { target: document.body });
+    await enterSearchQuery();
 
-      const activeMode = document.querySelector<HTMLButtonElement>(
-        '.palette-controls [role="radio"][aria-checked="true"]',
-      )!;
-      if (activation === "click") {
-        activeMode.click();
-      } else {
-        activeMode.dispatchEvent(
-          new KeyboardEvent("keydown", {
-            key: activation,
-            bubbles: true,
-            cancelable: true,
-          }),
-        );
-      }
-      await tick();
+    const error = document.querySelector(".palette-error")!;
+    const retry = Array.from(error.querySelectorAll<HTMLButtonElement>("button")).find(
+      (button) => button.textContent?.trim() === "Retry",
+    );
+    expect(retry).toBeDefined();
+    retry?.click();
+    await tick();
 
-      expect(mockSearchStore.retry).toHaveBeenCalledOnce();
-      expect(mockSearchStore.setMode).not.toHaveBeenCalled();
-      expect(mockRouter.navigateToSession).not.toHaveBeenCalled();
+    expect(mockSearchStore.retry).toHaveBeenCalledOnce();
+    expect(mockSearchStore.setMode).not.toHaveBeenCalled();
+    expect(mockRouter.navigateToSession).not.toHaveBeenCalled();
 
-      unmount(component);
-    },
-  );
+    unmount(component);
+  });
 
   it("shows sort only for full-text query results and activates it through the rendered button", async () => {
     mockSearchStore.results = [makeSearchResult()];
@@ -694,7 +811,7 @@ describe("CommandPalette", () => {
       trigger.click();
       await tick();
       const preset = Array.from(
-        document.querySelectorAll<HTMLButtonElement>("[role='dialog'] button"),
+        document.querySelectorAll<HTMLButtonElement>(".palette [role='dialog'] button"),
       ).find((button) => button.textContent?.trim() === "7d")!;
       expect(preset).toBeDefined();
       preset.click();
@@ -707,7 +824,7 @@ describe("CommandPalette", () => {
         new KeyboardEvent("keydown", { key: "Escape", bubbles: true, cancelable: true }),
       );
       await tick();
-      expect(document.querySelector("[role='dialog']")).toBeNull();
+      expect(document.querySelector(".palette [role='dialog']")).toBeNull();
       expect(mockUi.activeModal).toBe("commandPalette");
       trigger.dispatchEvent(
         new KeyboardEvent("keydown", { key: "Escape", bubbles: true, cancelable: true }),
