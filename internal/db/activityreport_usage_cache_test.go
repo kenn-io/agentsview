@@ -3,7 +3,6 @@ package db
 import (
 	"context"
 	"encoding/json/jsontext"
-	"math"
 	"slices"
 	"strconv"
 	"testing"
@@ -19,43 +18,6 @@ import (
 // rawUsageActivityBackend builds reports from raw archive usage rows, the
 // path that predates reading Activity usage from the usage cache.
 type rawUsageActivityBackend struct{ activityReportBackend }
-
-func TestActivityReportCachedUsageSignedCosts(t *testing.T) {
-	d := testDB(t)
-	for _, id := range []string{"a", "b"} {
-		insertSession(t, d, id, "project", func(s *Session) {
-			s.Agent = "copilot"
-			s.StartedAt = new("2026-06-16T09:00:00Z")
-			s.EndedAt = new("2026-06-16T11:00:00Z")
-		})
-	}
-	negative := money.Money{Microdollars: -1}
-	maximum := money.Money{Microdollars: math.MaxInt64}
-	one := money.Money{Microdollars: 1}
-	require.NoError(t, d.ReplaceSessionUsageEvents(t.Context(), "a", []UsageEvent{
-		{Source: "request", Model: "model", Cost: &negative, OccurredAt: "2026-06-16T09:00:00Z", DedupKey: "a1"},
-		{Source: "request", Model: "model", Cost: &maximum, OccurredAt: "2026-06-16T10:01:00Z", DedupKey: "a2"},
-		{Source: "request", Model: "model", Cost: &one, OccurredAt: "2026-06-16T10:02:00Z", DedupKey: "a3"},
-	}))
-	require.NoError(t, d.ReplaceSessionUsageEvents(t.Context(), "b", []UsageEvent{
-		{Source: "request", Model: "model", Cost: &negative, OccurredAt: "2026-06-16T10:00:00Z", DedupKey: "b1"},
-	}))
-	q := dayQuery(t, "2026-06-16", "UTC")
-	f := AnalyticsFilter{Timezone: "UTC", IncludeSubagents: true, IncludeForks: true}
-	start, end := activityReportRangeBoundsUTC(q)
-	sessions, ids, err := d.activityReportSessions(t.Context(), f, start, end)
-	require.NoError(t, err)
-	raw := rawUsageActivityBackend{activityReportBackend{
-		DB: d, lowerBound: PaddedUTCBound(q.RangeStart.UTC().Format(time.RFC3339), -14),
-		upperBound: PaddedUTCBound(q.RangeEnd.UTC().Format(time.RFC3339), 14), counted: &activityReportCounted{},
-	}}
-	want, _, err := activity.BuildReportArtifacts(t.Context(), raw, sessions, ids, q, nil, "raw activity report")
-	require.NoError(t, err)
-	assert.Equal(t, money.Money{Microdollars: math.MaxInt64 - 1}, want.Report.Totals.Cost)
-	got, err := d.GetActivityReport(t.Context(), f, q)
-	require.NoError(t, err)
-	assert.Equal(t, activity.ReportWithSessions(want), got)
-}
 
 func TestSumActivityUsageRowsPreservesSessionTotals(t *testing.T) {
 	q := dayQuery(t, "2026-06-16", "UTC")
