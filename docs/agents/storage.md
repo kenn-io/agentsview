@@ -768,20 +768,24 @@ A row describes an account, so it has no foreign key to `sessions` and outlives
 the session that carried it.
 
 - The sync engine writes reports as soon as a parse yields them, outside the
-  session write: in `providerResultAdmission.admit` for full parses and in the
-  provider incremental append callback. `(session_id, limit_id, observed_at)`
-  is the identity, and the insert ignores rows already stored, so retries and
-  reparses add nothing. Report-only parse-diff runs write nothing.
+  session write: in `providerResultAdmission.admit` for full parses, in the
+  provider incremental append callback, and in `processS3Session` for S3
+  sources. `(session_id, limit_id, observed_at)` is the identity, and the
+  insert ignores rows already stored, so retries and reparses add nothing. A
+  failed write fails the parse, so the source keeps its checkpoint and the next
+  pass reads the reports again. Report-only parse-diff runs write nothing.
 - The table is append-only. PostgreSQL, DuckDB, and ClickHouse push it by an id
   high-water mark, like `cursor_usage_events`, and skip it on project-filtered
-  pushes. A full resync rebuild copies old rows with `INSERT OR IGNORE`, so
-  reports from deleted rollouts survive.
+  pushes. A rebuild renumbers the rows: PostgreSQL keys its mark to the
+  database generation, DuckDB rebuilds its file, and ClickHouse resends every
+  row on the full push the new database ID forces. A full resync rebuild copies
+  old rows with `INSERT OR IGNORE`, so reports from deleted rollouts survive.
 - `db.LatestRateLimitSnapshotsSQL` is the one read query: the latest report
   per agent, account, and limit. Every backend runs it and formats times with
   `db.FormatRateLimitTime`. `dbtest.SeedRateLimitSnapshots` and
   `dbtest.AssertLatestRateLimits` are the cross-backend acceptance check.
-- Hosted tenants return no reports, because raw derivation does not produce
-  them.
+- Hosted tenants carry the table in their inventory but return no reports,
+  because raw derivation does not produce them.
 
 ### Session usage totals
 

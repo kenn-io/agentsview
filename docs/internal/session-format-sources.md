@@ -800,7 +800,9 @@ fixtures retain this field; missing identities remain source-local.
   `premium`, all without windows. 18,395 of 18,483 `session_meta` lines carried
   `creator_account_id`. Agentsview reads `rate_limits` from Codex
   `token_count` events only (not from forks that share the parser, whose
-  producers were not checked), skips reports with no window, and stores one
+  producers were not checked), skips reports with no window, withholds the
+  reports of a fork whose parent cannot be read (its replayed parent lines are
+  restamped at fork creation), and stores one
   row per change in the reported values in `rate_limit_snapshots`, with a
   digest of the account ID instead of the ID. Window lengths are shown as
   recorded; no plan limit is inferred. Parsing the 3,958 rollouts from the last
@@ -809,7 +811,7 @@ fixtures retain this field; missing identities remain source-local.
   account key and the last report digest. Covered by
   `TestCodexRateLimitsRecordChangesOnly`,
   `TestCodexRateLimitsIncrementalMatchesFullParse`,
-  `TestCodexRateLimitsRecordedOnAppend`, and
+  `TestCodexRateLimitsForkReplay`, `TestCodexRateLimitsRecordedOnAppend`, and
   `TestCodexRateLimitUpgradeReparsesInPlace`.
 
 - **Reasoning, compaction, and usage repeats (checked 2026-11-11 at

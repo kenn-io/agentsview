@@ -109,9 +109,14 @@ func (s ParsedRateLimitSnapshot) valueDigest() [sha256.Size]byte {
 // observeRateLimits records the rate_limits object of a Codex token_count
 // event when it reports at least one window and differs from the previous
 // report. Only Codex itself is read: the forks sharing this parser have not
-// been checked against their producers.
+// been checked against their producers. A fork whose parent could not be
+// read keeps the parent's replayed lines, restamped at fork creation, so its
+// reports are withheld; the fork is parsed again once the parent appears.
 func (b *codexSessionBuilder) observeRateLimits(raw gjson.Result) {
 	if b.agent != AgentCodex || !raw.IsObject() || b.sourceTimestamp.IsZero() {
+		return
+	}
+	if b.forkGate.retryReason() != "" {
 		return
 	}
 	primary := parseCodexRateLimitWindow(raw.Get("primary"))

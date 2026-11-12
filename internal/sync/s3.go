@@ -400,6 +400,10 @@ func (e *Engine) processS3Session(
 	// Persist object metadata instead of transient materialization metadata.
 	for i := range res.results {
 		applyIDPrefixToParsedResult(idPrefix, &res.results[i])
+		session := res.results[i].Session
+		if err := e.recordRateLimits(ctx, session.Agent, session.ID, session.RateLimits); err != nil {
+			return processResult{err: err, noCacheSkip: true, retentionLease: lease}
+		}
 		res.results[i].Session.File.Size = sourceInfo.Size()
 		res.results[i].Session.File.Mtime = sourceInfo.ModTime().UnixNano()
 		if sourceFingerprint != "" {

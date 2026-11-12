@@ -2641,6 +2641,9 @@ func seedCodexIncrementalStateFromReader(ctx context.Context, agent AgentType,
 		if _, err := b.processLine(ctx, line); err != nil {
 			return codexIncrementalSeed{}, err
 		}
+		// The prefix only rebuilds cursor state; its reports were stored
+		// when it was parsed.
+		b.rateLimits = b.rateLimits[:0]
 	}
 	if err := lr.Err(); err != nil {
 		return codexIncrementalSeed{}, err

@@ -1,6 +1,8 @@
 package parser
 
 import (
+	"os"
+	"path/filepath"
 	"testing"
 	"time"
 
@@ -181,4 +183,56 @@ func TestCodexRateLimitsIncrementalMatchesFullParse(t *testing.T) {
 			assert.Equal(t, rateLimitAccountKey("account-b"), outcome.RateLimits[0].AccountKey)
 		})
 	}
+}
+
+// A fork replays its parent's lines, restamped at fork creation. With the
+// parent readable, the replay is suppressed and only the fork's own reports
+// count; with the parent missing, the replay cannot be told apart, so every
+// report waits for the reparse that follows once the parent appears.
+func TestCodexRateLimitsForkReplay(t *testing.T) {
+	forkCreatedMs := time.Date(2024, 1, 1, 10, 0, 0, 0, time.UTC).UnixMilli()
+	forkID := testUUIDv7(forkCreatedMs, 1)
+	parentID := testUUIDv7(forkCreatedMs-7200_000, 0)
+	parentTurnID := testUUIDv7(forkCreatedMs-3600_000, 2)
+	genuineTurnID := testUUIDv7(forkCreatedMs+1000, 3)
+	stale := &codexRateLimitWindow{used: 90, minutes: 300, resets: 1704100000}
+	fresh := &codexRateLimitWindow{used: 5, minutes: 300, resets: 1704110000}
+	fork := testjsonl.JoinJSONL(
+		testjsonl.CodexForkedSessionMetaJSON(forkID, parentID, "/tmp", "user", tsEarly),
+		testjsonl.CodexSessionMetaJSON(parentID, "/tmp", "user", tsEarly),
+		testjsonl.CodexTurnContextWithIDJSON("gpt-5.4", parentTurnID, tsEarly),
+		testjsonl.CodexMsgJSON("user", "replayed question", tsEarly),
+		codexRateLimitLine(t, tsEarly, "codex", "pro", stale, nil),
+		testjsonl.CodexTurnContextWithIDJSON("gpt-5.5", genuineTurnID, tsEarlyS1),
+		testjsonl.CodexMsgJSON("user", "genuine question", tsEarlyS1),
+		codexRateLimitLine(t, tsEarlyS5, "codex", "pro", fresh, nil),
+	)
+	parse := func(t *testing.T, root string) *ParsedSession {
+		t.Helper()
+		path := filepath.Join(root, "rollout-2024-01-01T10-00-00-"+forkID+".jsonl")
+		require.NoError(t, os.WriteFile(path, []byte(fork), 0o600))
+		sess, _, err := newCodexTestProvider(t, root).parseSession(path, "local", false)
+		require.NoError(t, err)
+		require.NotNil(t, sess)
+		return sess
+	}
+
+	t.Run("parent readable", func(t *testing.T) {
+		root := t.TempDir()
+		require.NoError(t, os.WriteFile(
+			filepath.Join(root, "rollout-2024-01-01T08-00-00-"+parentID+".jsonl"),
+			[]byte(testjsonl.JoinJSONL(
+				testjsonl.CodexSessionMetaJSON(parentID, "/tmp", "user", tsEarly),
+				testjsonl.CodexTurnContextWithIDJSON("gpt-5.4", parentTurnID, tsEarly),
+			)), 0o600,
+		))
+		sess := parse(t, root)
+		require.Len(t, sess.RateLimits, 1)
+		require.NotNil(t, sess.RateLimits[0].Primary)
+		assert.InDelta(t, 5.0, sess.RateLimits[0].Primary.UsedPercent, 0)
+	})
+	t.Run("parent missing", func(t *testing.T) {
+		sess := parse(t, t.TempDir())
+		assert.Empty(t, sess.RateLimits)
+	})
 }

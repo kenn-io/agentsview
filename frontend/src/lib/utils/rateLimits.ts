@@ -73,7 +73,9 @@ function windowRow(
 /**
  * Turns the latest rate-limit reports into display groups, one per agent,
  * account, and limit, in the order the API returns them (newest first).
- * Accounts are numbered only when one agent reports more than one.
+ * Accounts are numbered only when one agent reports more than one, in
+ * account-key order, so a number keeps naming the same account when a newer
+ * report reorders the list.
  */
 export function rateLimitGroups(
   snapshots: DbRateLimitSnapshot[],
@@ -85,6 +87,7 @@ export function rateLimitGroups(
     if (!keys.includes(snap.account_key)) keys.push(snap.account_key);
     accounts.set(snap.agent, keys);
   }
+  for (const keys of accounts.values()) keys.sort();
   return snapshots.map((snap) => {
     const key = `${snap.agent}:${snap.account_key}:${snap.limit_id}`;
     const parts = [agentLabel(snap.agent)];

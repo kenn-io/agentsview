@@ -209,7 +209,7 @@ func (s *Sync) pushWithOptions(
 	if err := s.syncCursorUsageEvents(ctx); err != nil {
 		return result, err
 	}
-	if err := s.syncRateLimitSnapshots(ctx); err != nil {
+	if err := s.syncRateLimitSnapshots(ctx, full); err != nil {
 		return result, err
 	}
 	// The run that wrote the record already priced the whole mirror.

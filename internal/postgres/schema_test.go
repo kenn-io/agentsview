@@ -600,6 +600,7 @@ func setPushSchemaProbeCurrent(state *schemaProbeState) {
 		"source_worktree_project_mappings":                true,
 		"source_worktree_project_mapping_scopes":          true,
 		"cursor_usage_events":                             true,
+		"rate_limit_snapshots":                            true,
 		"friction_findings":                               true,
 		"friction_digests":                                true,
 		"friction_digest_sessions":                        true,
@@ -609,12 +610,13 @@ func setPushSchemaProbeCurrent(state *schemaProbeState) {
 		"diagnostic_events":                               true,
 	}
 	state.existingIndexes = map[string]bool{
-		"idx_cursor_usage_events_dedup":   true,
-		"idx_tool_result_events_terminal": true,
-		"idx_sessions_id_tail":            true,
-		"idx_sessions_data_version":       true,
-		"idx_sessions_parentless_workers": true,
-		"idx_sessions_source_missing":     true,
+		"idx_cursor_usage_events_dedup":     true,
+		"idx_rate_limit_snapshots_identity": true,
+		"idx_tool_result_events_terminal":   true,
+		"idx_sessions_id_tail":              true,
+		"idx_sessions_data_version":         true,
+		"idx_sessions_parentless_workers":   true,
+		"idx_sessions_source_missing":       true,
 	}
 }
 
@@ -990,7 +992,7 @@ func TestSyncEnsureSchemaRunsDDLWhenPushMetadataMissing(t *testing.T) {
 }
 
 func TestSyncEnsureSchemaRunsDDLWhenPushTableMissing(t *testing.T) {
-	for _, missing := range []string{"model_pricing", "retained_commit_links"} {
+	for _, missing := range []string{"model_pricing", "retained_commit_links", "rate_limit_snapshots"} {
 		t.Run(missing, func(t *testing.T) {
 			pg, state := newSchemaProbeDB(t, map[string][]string{
 				"sessions": {

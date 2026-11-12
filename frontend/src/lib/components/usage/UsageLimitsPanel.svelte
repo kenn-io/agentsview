@@ -25,7 +25,16 @@
     return () => controller.abort();
   });
 
-  const groups = $derived(rateLimitGroups(snapshots));
+  // Ages and "reset since" follow the clock even when nothing refreshes.
+  let now = $state(Date.now());
+  $effect(() => {
+    const timer = setInterval(() => {
+      now = Date.now();
+    }, 60_000);
+    return () => clearInterval(timer);
+  });
+
+  const groups = $derived(rateLimitGroups(snapshots, now));
 </script>
 
 {#if groups.length > 0}
@@ -73,7 +82,7 @@
 
   .limit-groups {
     display: grid;
-    grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
+    grid-template-columns: repeat(auto-fill, minmax(min(320px, 100%), 1fr));
     gap: 12px 24px;
   }
 

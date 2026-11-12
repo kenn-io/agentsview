@@ -88,6 +88,15 @@ describe("rateLimitGroups", () => {
       "Codex · pro · account 1",
       "Codex · plus · account 2",
     ]);
+    // A newer report from account b moves it first without renumbering.
+    const reordered = rateLimitGroups(
+      [snapshot({ account_key: "b", plan_type: "plus" }), snapshot({ account_key: "a" })],
+      NOW,
+    );
+    expect(reordered.map((g) => g.title)).toEqual([
+      "Codex · plus · account 2",
+      "Codex · pro · account 1",
+    ]);
   });
 
   it("names a limit other than the agent's own", () => {

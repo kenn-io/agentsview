@@ -11,10 +11,12 @@ import (
 )
 
 // syncRateLimitSnapshots appends the rate-limit reports the mirror has not
-// consumed yet, tracked by a per-archive high-water id in sync_metadata, as
-// syncCursorUsageEvents does for account usage rows. Reports describe
-// accounts, not projects, so project-filtered pushes skip them.
-func (s *Sync) syncRateLimitSnapshots(ctx context.Context) error {
+// consumed yet, tracked by a per-archive high-water id in sync_metadata.
+// A rebuilt archive renumbers its rows and forces a full push, so a full push
+// sends every row again; the sorting key makes rows the mirror holds replace
+// themselves. Reports describe accounts, not projects, so project-filtered
+// pushes skip them.
+func (s *Sync) syncRateLimitSnapshots(ctx context.Context, full bool) error {
 	if s.isFiltered() {
 		return nil
 	}
@@ -24,7 +26,7 @@ func (s *Sync) syncRateLimitSnapshots(ctx context.Context) error {
 		return err
 	}
 	var sinceID int64
-	if v := stored[key]; v != "" {
+	if v := stored[key]; v != "" && !full {
 		if sinceID, err = strconv.ParseInt(v, 10, 64); err != nil {
 			return fmt.Errorf("parsing rate limit high-water id %q: %w", v, err)
 		}

@@ -16774,7 +16774,9 @@ func (e *Engine) tryProviderIncrementalAppend(
 		case parser.IncrementalNoNewData:
 			return nil, nil, nil, nil, time.Time{}, 0, nil, nil, nil
 		default:
-			e.recordRateLimits(ctx, provider.Definition().Type, inc.ID, outcome.RateLimits)
+			if err := e.recordRateLimits(ctx, provider.Definition().Type, inc.ID, outcome.RateLimits); err != nil {
+				return nil, nil, nil, nil, time.Time{}, 0, nil, nil, err
+			}
 			var terminationStatus *string
 			if outcome.TerminationStatus != nil {
 				status := string(*outcome.TerminationStatus)

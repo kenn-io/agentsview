@@ -1,6 +1,7 @@
 package sync_test
 
 import (
+	"database/sql"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -58,4 +59,39 @@ func TestCodexRateLimitsRecordedOnAppend(t *testing.T) {
 	assert.InDelta(t, 21.0, all[1].Primary.UsedPercent, 0)
 	assert.Equal(t, first[0].AccountKey, all[1].AccountKey)
 	assert.NotEmpty(t, all[1].AccountKey)
+}
+
+// A failed report write fails the source instead of advancing its
+// checkpoint past the reports, so the next pass over the unchanged file
+// stores them.
+func TestCodexRateLimitWriteFailureIsRetried(t *testing.T) {
+	env := setupTestEnv(t)
+	ctx := t.Context()
+	const id = "019eb791-cf7d-75c1-8439-9ed74c122c0a"
+	env.writeCodexSession(t, filepath.Join("2026", "11", "01"),
+		"rollout-2026-11-01T12-00-00-"+id+".jsonl",
+		testjsonl.JoinJSONL(
+			testjsonl.CodexSessionMetaJSON(id, "/tmp/proj", "codex_cli_rs", "2026-11-01T12:00:00Z"),
+			testjsonl.CodexMsgJSON("user", "first", "2026-11-01T12:00:01Z"),
+			codexRateLimitEvent("2026-11-01T12:00:02Z", 30),
+		))
+	require.NoError(t, env.db.Update(ctx, func(tx *sql.Tx) error {
+		_, err := tx.ExecContext(ctx, `CREATE TRIGGER fail_rate_limits BEFORE INSERT ON rate_limit_snapshots
+			BEGIN SELECT RAISE(ABORT, 'database is busy'); END`)
+		return err
+	}))
+	env.engine.SyncAll(ctx, nil)
+	none, err := env.db.GetRateLimitSnapshots(ctx, 0)
+	require.NoError(t, err)
+	require.Empty(t, none)
+
+	require.NoError(t, env.db.Update(ctx, func(tx *sql.Tx) error {
+		_, err := tx.ExecContext(ctx, `DROP TRIGGER fail_rate_limits`)
+		return err
+	}))
+	env.engine.SyncAll(ctx, nil)
+	got, err := env.db.GetRateLimitSnapshots(ctx, 0)
+	require.NoError(t, err)
+	require.Len(t, got, 1, "the unchanged source is read again")
+	assert.Equal(t, "codex:"+id, got[0].SessionID)
 }
