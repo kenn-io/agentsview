@@ -653,7 +653,7 @@ func runServe(ctx context.Context, cfg config.Config, opts serveOptions, restart
 	serverContext := ctx
 	if opts.ReloadConfig != nil {
 		srvOpts = append(srvOpts, server.WithDaemonRestart(func(ctx context.Context, current config.Config) error {
-			release, err := acquireForegroundServeLaunchLock(cfg)
+			release, err := waitForegroundServeLaunchLock(ctx, cfg)
 			if err != nil {
 				return err
 			}
