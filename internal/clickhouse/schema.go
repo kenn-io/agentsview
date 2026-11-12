@@ -939,7 +939,8 @@ func CheckSchemaCompat(ctx context.Context, conn *sql.DB) error {
 	if snapshot, err := usageSessionSnapshotSpec(); err != nil {
 		return err
 	} else if cols, ok := existing[snapshot.name]; ok {
-		for _, c := range append(slices.Clip(snapshot.columns), col(chSnapshotPreparesUsage, "Bool")) {
+		for _, c := range append(slices.Clip(snapshot.columns), col(chSnapshotPreparesUsage, "Bool"),
+			col(usageRecordedCostsColumn, "Array(Nullable(Int64))")) {
 			if _, has := cols[c.name]; !has {
 				missing = append(missing, snapshot.name+"."+c.name)
 			}
@@ -948,6 +949,11 @@ func CheckSchemaCompat(ctx context.Context, conn *sql.DB) error {
 	for _, table := range []string{"usage_messages", "terminal_event_snapshots"} {
 		if _, has := existing[table]; !has {
 			missing = append(missing, table)
+		}
+	}
+	if cols, ok := existing["usage_messages"]; ok {
+		if _, has := cols[usageRecordedCostColumn]; !has {
+			missing = append(missing, "usage_messages."+usageRecordedCostColumn)
 		}
 	}
 	if len(missing) == 0 {

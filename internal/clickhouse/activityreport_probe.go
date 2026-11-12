@@ -749,7 +749,7 @@ func (s *Store) readUsageDeltaRows(ctx context.Context, snapshot *pricingSnapsho
 	}
 	bySession := map[string][][]any{}
 	for _, row := range out {
-		record := records[row[22].(string)]
+		record := records[row[23].(string)]
 		row = append(row, int64(1), record.tokenCost.Microdollars, record.savings.Microdollars,
 			record.billedContextID, record.unbilledContextID, record.requestScoped, record.bandAbove, record.priceError)
 		id := row[0].(string)
@@ -764,9 +764,9 @@ func chUsageDeltaPriceInput(row []any) chUsagePriceInput {
 	cost, _ := row[19].(*int64)
 	ordinal, _ := row[1].(*int64)
 	return chUsagePriceInput{
-		priceKey:     row[22].(string),
+		priceKey:     row[23].(string),
 		model:        row[5].(string),
-		priceModel:   row[21].(string),
+		priceModel:   row[22].(string),
 		providerID:   row[6].(string),
 		pricingTS:    formatDBTime(row[3]),
 		source:       row[4].(string),

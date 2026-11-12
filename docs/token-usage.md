@@ -513,6 +513,22 @@ fetched and embedded catalogs. Processing variants such as Batch, Flex,
 regional, Ultrafast, and one-hour cache pricing are not inferred when the stored
 usage does not identify that service tier. Codex Fast is the exception; see below.
 
+### Costs the Agent Records Itself
+
+Some agents compute a cost from their own price table and write it into the
+session. AgentsView keeps that figure as a recorded cost, but uses it as the
+price only when its own catalog has no rate for the model. When the catalog can
+price the model, the catalog price is used and the recorded cost is kept for
+comparison. A recorded cost of $0 never prices a row, because agents write $0
+for models they have no rate for; those rows stay unpriced.
+
+Costs that an agent or provider reports as billed keep their existing
+treatment: the reported cost is the price.
+
+A usage record that carries a cost but names no model is counted under the
+`<unknown>` model, the same label Cursor account imports use. Its cost and
+tokens appear in totals and breakdowns instead of being dropped.
+
 ### Anthropic Web Search Fee
 
 Anthropic charges a flat

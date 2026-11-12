@@ -64,7 +64,9 @@ const (
 	// Version 21 stores group keys and labels separately from version 20 writers.
 	// Version 22 deduplicates Claude snapshots by message ID when requestId is
 	// absent.
-	usageCacheFormatVersion             = 22
+	// Version 23 stores each fact's cost status so harness-recorded costs
+	// price a row only when the catalog cannot.
+	usageCacheFormatVersion             = 23
 	usageCacheApplicationID             = 0x41565543
 	usageCacheKind                      = "agentsview-usage-facts"
 	usageCacheRetirementProtocolVersion = 1
@@ -203,6 +205,7 @@ CREATE TABLE usage_facts (
     web_search_requests INTEGER NOT NULL,
     reported_cost_microdollars INTEGER,
     cost_source TEXT NOT NULL DEFAULT '',
+    cost_status TEXT NOT NULL DEFAULT '',
     request_scoped INTEGER NOT NULL,
     claude_message_id TEXT NOT NULL DEFAULT '',
     claude_request_id TEXT NOT NULL DEFAULT '',
@@ -368,6 +371,7 @@ CREATE TABLE usage_rollup_exceptions (
     web_search_requests INTEGER NOT NULL,
     reported_cost_microdollars INTEGER,
     cost_source TEXT NOT NULL,
+    cost_status TEXT NOT NULL,
     request_scoped INTEGER NOT NULL,
     is_headless INTEGER NOT NULL,
     claude_message_id TEXT NOT NULL,
@@ -920,7 +924,7 @@ func usageCacheSchemaComplete(ctx context.Context, database *sql.DB) bool {
 		        input_tokens, output_tokens, reasoning_tokens,
 		        cache_creation_tokens, cache_creation_1h_tokens,
 		        cache_read_tokens, web_search_requests,
-		        reported_cost_microdollars, cost_source, request_scoped,
+		        reported_cost_microdollars, cost_source, cost_status, request_scoped,
 		        claude_message_id, claude_request_id, source_uuid,
 		        usage_dedup_key, token_eligible, activity_eligible
 		 FROM usage_facts LIMIT 0`,
@@ -959,7 +963,7 @@ func usageCacheSchemaComplete(ctx context.Context, database *sql.DB) bool {
 		        reasoning_tokens, cache_creation_tokens,
 		        cache_creation_1h_tokens, cache_read_tokens,
 		        web_search_requests, reported_cost_microdollars, cost_source,
-		        request_scoped, is_headless, claude_message_id, claude_request_id,
+		        cost_status, request_scoped, is_headless, claude_message_id, claude_request_id,
 		        source_uuid, usage_dedup_key
 		 FROM usage_rollup_exceptions LIMIT 0`,
 	}

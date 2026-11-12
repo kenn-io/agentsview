@@ -25,6 +25,52 @@ import (
 // reported by Copilot CLI shutdown records.
 const CopilotReportedCostSource = "copilot-reported"
 
+// ReportedCostForPricing returns the reported cost that prices a usage row.
+// It drops a harness-recorded cost (usagefacts.CostStatusRecorded) when
+// usagefacts.ReportedCostIsPrice says the catalog price wins, so the row is
+// charged at catalog rates and the recorded figure stays evidence. Every
+// other status passes through unchanged. catalogPriced reports whether the
+// catalog resolves a rate for the row's model; it runs only for recorded
+// costs. Callers strip Copilot's authoritative session cost first.
+func ReportedCostForPricing(
+	cost sql.NullInt64, status string, catalogPriced func() bool,
+) sql.NullInt64 {
+	if !cost.Valid || status != usagefacts.CostStatusRecorded {
+		return cost
+	}
+	if usagefacts.ReportedCostIsPrice(status, cost.Int64, catalogPriced()) {
+		return cost
+	}
+	return sql.NullInt64{}
+}
+
+// MessageRecordedCost returns a message row's harness-recorded cost and its
+// cost status from the token usage JSON (usagefacts.RecordedCostKey). Usage
+// queries select no cost for message rows, so scanners fill it here.
+func MessageRecordedCost(tokenJSON string) (sql.NullInt64, string) {
+	if !strings.Contains(tokenJSON, usagefacts.RecordedCostKey) {
+		return sql.NullInt64{}, ""
+	}
+	cost := usagefacts.ParseTokenUsage(tokenJSON).RecordedCostMicrodollars
+	if cost == nil {
+		return sql.NullInt64{}, ""
+	}
+	return sql.NullInt64{Int64: *cost, Valid: true}, usagefacts.CostStatusRecorded
+}
+
+// catalogPricesAt returns a ReportedCostForPricing probe for an archive row
+// with a raw pricing timestamp.
+func catalogPricesAt(
+	pricing *export.PricingResolver, model, pricingTS string,
+) func() bool {
+	return func() bool {
+		_, lookup := pricing.ResolveAt(
+			model, usageLookupModel(model, pricingTS),
+			usagePricingTimestamp(pricingTS))
+		return lookup.OK
+	}
+}
+
 // aiCreditUSD is the USD value of one AI credit for agents whose cost
 // is denominated in AI credits (the AICreditsDenominated capability).
 const microdollarsPerAICredit = 10_000
@@ -412,6 +458,7 @@ SELECT
 		ELSE 0
 	END AS reasoning_tokens,
 	NULL AS cost_microdollars,
+	'' AS cost_status,
 	'' AS cost_source,
 	m.claude_message_id,
 	m.claude_request_id,
@@ -441,6 +488,7 @@ SELECT
 	ue.cache_read_input_tokens,
 	ue.reasoning_tokens,
 	ue.cost_microdollars,
+	ue.cost_status,
 	ue.cost_source,
 	'' AS claude_message_id,
 	'' AS claude_request_id,
@@ -475,6 +523,7 @@ SELECT
 		ELSE 0
 	END AS reasoning_tokens,
 	NULL AS cost_microdollars,
+	'' AS cost_status,
 	'' AS cost_source,
 	m.claude_message_id,
 	m.claude_request_id,
@@ -503,6 +552,7 @@ SELECT
 	ue.cache_read_input_tokens,
 	ue.reasoning_tokens,
 	ue.cost_microdollars,
+	ue.cost_status,
 	ue.cost_source,
 	'' AS claude_message_id,
 	'' AS claude_request_id,
@@ -564,6 +614,7 @@ usage_event_timestamp_rows AS MATERIALIZED (
 			ue.cache_read_input_tokens,
 			ue.reasoning_tokens,
 			ue.cost_microdollars,
+			ue.cost_status,
 			ue.cost_source,
 		ue.dedup_key
 	FROM usage_events ue
@@ -657,6 +708,7 @@ type dailyUsageScanRow struct {
 	cacheReadInputTokens     int
 	reasoningTokens          int
 	cost                     sql.NullInt64
+	costStatus               string
 	costSource               string
 	claudeMessageID          string
 	claudeRequestID          string
@@ -806,6 +858,7 @@ SELECT
 		u.cache_read_input_tokens,
 	u.reasoning_tokens,
 	u.cost_microdollars,
+	u.cost_status,
 	u.cost_source,
 	u.claude_message_id,
 	u.claude_request_id,
@@ -990,6 +1043,7 @@ SELECT
 	cu.cache_read_tokens AS cache_read_input_tokens,
 	0 AS reasoning_tokens,
 	cu.charged_microdollars AS cost_microdollars,
+	'' AS cost_status,
 	cu.agent || '-reported' AS cost_source,
 	'' AS claude_message_id,
 	'' AS claude_request_id,
@@ -1346,6 +1400,9 @@ func scanUsageRow(rows *sql.Rows) (usageScanRow, error) {
 		&r.displayName,
 		&r.startedAt,
 	)
+	if err == nil && r.usageSource == "message" {
+		r.cost, r.costStatus = MessageRecordedCost(r.tokenJSON)
+	}
 	return r, err
 }
 
@@ -1373,6 +1430,7 @@ func scanDailyUsageRowWithMachine(
 		&r.cacheReadInputTokens,
 		&r.reasoningTokens,
 		&r.cost,
+		&r.costStatus,
 		&r.costSource,
 		&r.claudeMessageID,
 		&r.claudeRequestID,
@@ -1385,6 +1443,9 @@ func scanDailyUsageRowWithMachine(
 		dest = append(dest, &r.machine)
 	}
 	err := rows.Scan(dest...)
+	if err == nil && r.usageSource == "message" {
+		r.cost, r.costStatus = MessageRecordedCost(r.tokenJSON)
+	}
 	return r, err
 }
 
@@ -1522,9 +1583,14 @@ func dailyUsageAmounts(
 	}
 	// Record the exact lookup behind the charge, including provider billing
 	// adjustments, rather than resolving the row again for provenance.
-	if priced.Reported > 0 {
+	switch {
+	case priced.Reported > 0:
 		pricing.RecordResolvedReported(r.model, priced.PricedModel, priced.lookup)
-	} else {
+	case priced.ComputedRequest == 0 && priced.ComputedAggregate == 0:
+		// A cost-only row whose recorded cost lost to the catalog is not a
+		// priced request.
+		pricing.RecordResolvedComputed(r.model, priced.PricedModel, priced.lookup)
+	default:
 		RecordComputedUsagePricing(
 			pricing, r.model, priced.PricedModel, priced.lookup, fact.RequestScoped,
 			inputTok, cacheCrTok, cacheRdTok,
@@ -1569,7 +1635,8 @@ func dailyUsageFact(r dailyUsageScanRow) (usagefacts.Fact, bool) {
 		AccountBilling: r.sessionID == "",
 		MessageOrdinal: ordinal, Source: r.usageSource,
 		Timestamp: r.pricingTS, Model: r.model, ProviderID: r.providerID,
-		CostSource: r.costSource, DedupKey: r.usageDedupKey,
+		CostStatus: r.costStatus, CostSource: r.costSource,
+		DedupKey:                 r.usageDedupKey,
 		InputTokens:              int64(r.inputTokens),
 		OutputTokens:             int64(r.outputTokens),
 		ReasoningTokens:          int64(r.reasoningTokens),
@@ -3373,6 +3440,8 @@ func (db *DB) getSessionUsageLegacy(
 			authoritativeCost = &v
 			costRow.cost = sql.NullInt64{}
 		}
+		costRow.cost = ReportedCostForPricing(costRow.cost, costRow.costStatus,
+			catalogPricesAt(rateResolver, costRow.model, costRow.pricingTS))
 		c, priced, contributes, priceErr := sessionRowCostWithWebSearchRequests(
 			costRow, snapshotWebSearchRequests[i], rateResolver)
 		if priceErr != nil {
@@ -3384,7 +3453,7 @@ func (db *DB) getSessionUsageLegacy(
 		contributing = true
 		modelsSet[r.model] = struct{}{}
 		if !authoritative {
-			if r.cost.Valid {
+			if costRow.cost.Valid {
 				hasReportedCost = true
 			} else {
 				hasComputedCost = true

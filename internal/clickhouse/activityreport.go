@@ -28,6 +28,7 @@ import (
 	"go.kenn.io/agentsview/internal/kept"
 	"go.kenn.io/agentsview/internal/money"
 	"go.kenn.io/agentsview/internal/readbase"
+	"go.kenn.io/agentsview/internal/usagefacts"
 	"golang.org/x/sync/errgroup"
 )
 
@@ -288,7 +289,7 @@ func (s *Store) endedActivityReportRowsKey(
 	for _, row := range state.deltaRows {
 		ts, ok := chDeltaRowTime(row[2])
 		if ok && !ts.Before(lower) && !ts.After(upper) {
-			delta = append(delta, fmt.Sprintf("%s@%v", row[0], row[23]))
+			delta = append(delta, fmt.Sprintf("%s@%v", row[0], row[24]))
 		}
 	}
 	slices.Sort(delta)
@@ -611,6 +612,9 @@ type clickActivityReportUsageRow struct {
 	webSearchRequests int
 	cost              sql.NullInt64
 	costSource        string
+	// recordedCost is a harness-recorded cost the SQL left out of cost;
+	// clickActivityUsagePrice decides whether it prices the row.
+	recordedCost sql.NullInt64
 }
 
 type clickSessionUsageOrderedRow struct {
@@ -1207,15 +1211,35 @@ func clickUsageNormalizedQuery(messageWhere, eventWhere string) string {
 // (each terminated by a comma) ahead of usage_raw.
 func clickUsageNormalizedQueryWith(ctes, messageWhere, eventWhere string) string {
 	return clickUsageNormalizedQueryFrom(ctes, messageWhere, eventWhere,
-		"usage_messages m JOIN sessions s ON s.id = m.session_id",
+		"usage_messages m JOIN sessions s ON s.id = m.session_id", chStoredMessageRecordedCost,
 		"usage_events ue JOIN sessions s ON s.id = ue.session_id", chUsageMessageCurrent, "")
 }
+
+// chStoredMessageRecordedCost is a usage_messages row's recorded cost.
+const chStoredMessageRecordedCost = "m." + usageRecordedCostColumn
+
+// chSnapshotMessageFrom pairs each snapshot message fact with its recorded
+// cost; both arrays map usage_messages, so they have the same length.
+const chSnapshotMessageFrom = "usage_session_snapshots s ARRAY JOIN s.usage_facts AS m, s." +
+	usageRecordedCostsColumn + " AS m_recorded_cost"
+
+// chSnapshotMessageRecordedCost is the recorded cost chSnapshotMessageFrom
+// pairs with a fact.
+const chSnapshotMessageRecordedCost = "m_recorded_cost"
 
 // clickUsageNormalizedQueryFrom renders the normalized usage rows read from
 // the message and event sources. A non-empty revision expression is carried
 // on every row as snapshot_revision, naming the session snapshot the row was
 // derived from.
-func clickUsageNormalizedQueryFrom(ctes, messageWhere, eventWhere, messageFrom, eventFrom, currentVersion, revision string) string {
+//
+// A harness-recorded event cost (usagefacts.CostStatusRecorded) is evidence,
+// not a price: it is moved out of cost_microdollars into
+// recorded_cost_microdollars, so price keys and the SQL sums treat the row as
+// computed, and Go decides per row whether the recorded cost prices it
+// (db.ReportedCostForPricing). chUsageRawSQL applies the same split. A
+// message's recorded cost comes from messageRecordedCost, an expression over
+// messageFrom, and its cost_microdollars stays NULL.
+func clickUsageNormalizedQueryFrom(ctes, messageWhere, eventWhere, messageFrom, messageRecordedCost, eventFrom, currentVersion, revision string) string {
 	revisionColumn, revisionSelect := "", ""
 	if revision != "" {
 		revisionColumn = ",\n\t\t\t\t" + revision + " AS snapshot_revision"
@@ -1246,6 +1270,7 @@ func clickUsageNormalizedQueryFrom(ctes, messageWhere, eventWhere, messageFrom, 
 				0 AS reasoning_tokens,
 				NULL AS cost_microdollars,
 				'' AS cost_source,
+				%[8]s AS recorded_cost_microdollars,
 				COALESCE(m.timestamp, s.started_at) AS ts_raw,
 				s.started_at AS started_at_raw%[7]s
 			FROM %[5]s
@@ -1276,14 +1301,16 @@ func clickUsageNormalizedQueryFrom(ctes, messageWhere, eventWhere, messageFrom, 
 				ue.cache_creation_input_tokens AS cache_create,
 				ue.cache_read_input_tokens AS cache_read,
 				ue.reasoning_tokens AS reasoning_tokens,
-				ue.cost_microdollars AS cost_microdollars,
+				if(ue.cost_status = 'recorded' AND ue.cost_source != 'copilot-reported', NULL, ue.cost_microdollars) AS cost_microdollars,
 				ue.cost_source AS cost_source,
+				if(ue.cost_status = 'recorded' AND ue.cost_source != 'copilot-reported', ue.cost_microdollars, NULL) AS recorded_cost_microdollars,
 				COALESCE(ue.occurred_at, s.started_at) AS ts_raw,
 				s.started_at AS started_at_raw%[7]s
 			FROM %[6]s
 			WHERE %[2]s
 		)`,
 		messageWhere, eventWhere, ctes, currentVersion, messageFrom, eventFrom, revisionColumn,
+		messageRecordedCost,
 	) + " SELECT " + clickUsageNormalizedColumns() + revisionSelect + " FROM usage_raw"
 }
 
@@ -1331,7 +1358,7 @@ func clickUsageNormalizedColumns() string {
 				WHEN source = 'message' THEN %[12]s
 				ELSE 0
 			END AS web_search_requests_norm,
-			cost_microdollars, cost_source`,
+			cost_microdollars, cost_source, recorded_cost_microdollars`,
 		msgInput, msgOutput, msgCacheCr, msgCacheCr1h, msgCacheRd,
 		chClampTokens("input_tokens"), chClampTokens("output_tokens"), chClampTokens("cache_create"),
 		chClampTokens("cache_read"), msgReasoning, chClampTokens("reasoning_tokens"), msgWeb,
@@ -1409,7 +1436,7 @@ func (s *Store) eachActivityUsageRow(
 // types exactly, which the native API requires.
 func scanActivityUsageRow(rows chnative.Rows, out *clickSessionUsageOrderedRow) error {
 	var r clickActivityReportUsageRow
-	var messageOrdinal, cost *int64
+	var messageOrdinal, cost, recorded *int64
 	var ts, pricingTS *time.Time
 	var input, output, cacheCr, cacheCr1h, cacheRd, reasoning, webSearch int64
 	if err := rows.Scan(
@@ -1417,7 +1444,7 @@ func scanActivityUsageRow(rows chnative.Rows, out *clickSessionUsageOrderedRow) 
 		&r.providerID, &r.agent, &r.claudeMessageID, &r.claudeRequestID, &r.sourceUUID,
 		&r.usageDedupKey,
 		&input, &output, &cacheCr, &cacheCr1h, &cacheRd,
-		&reasoning, &webSearch, &cost, &r.costSource,
+		&reasoning, &webSearch, &cost, &r.costSource, &recorded,
 	); err != nil {
 		return fmt.Errorf("scanning clickhouse activity usage: %w", err)
 	}
@@ -1425,6 +1452,9 @@ func scanActivityUsageRow(rows chnative.Rows, out *clickSessionUsageOrderedRow) 
 	r.cacheRd, r.reasoningTok, r.webSearchRequests = int(cacheRd), int(reasoning), int(webSearch)
 	if cost != nil {
 		r.cost = sql.NullInt64{Int64: *cost, Valid: true}
+	}
+	if recorded != nil {
+		r.recordedCost = sql.NullInt64{Int64: *recorded, Valid: true}
 	}
 	*out = clickSessionUsageOrderedRow{ordinal: -1}
 	if messageOrdinal != nil {
@@ -1514,6 +1544,11 @@ func clickActivityUsagePrice(
 		price.sessionCost = &v
 		costRow.cost = sql.NullInt64{}
 		unattributed = true
+	}
+	if !costRow.cost.Valid {
+		costRow.cost = db.ReportedCostForPricing(costRow.recordedCost,
+			usagefacts.CostStatusRecorded,
+			chCatalogPricesAt(pricing, costRow.model, costRow.pricingTS))
 	}
 	cost, priced, contributes, record, err := clickActivityReportRowPrice(costRow, pricing)
 	if err != nil {
@@ -1663,6 +1698,7 @@ const (
 	keptCostValid
 	keptPricingIsTS
 	keptTSValid
+	keptRecordedValid
 )
 
 // keptUsageRefs are the dictionary indexes of a row's session, source,
@@ -1777,6 +1813,9 @@ func (e *keptUsageEncoder) encode(r *clickActivityReportUsageRow, refs keptUsage
 	if validTS {
 		flags |= keptTSValid
 	}
+	if r.recordedCost.Valid {
+		flags |= keptRecordedValid
+	}
 	e.data = append(e.data, flags)
 	data := e.data
 	for _, id := range refs {
@@ -1806,6 +1845,9 @@ func (e *keptUsageEncoder) encode(r *clickActivityReportUsageRow, refs keptUsage
 	}
 	if r.cost.Valid {
 		data = binary.AppendVarint(data, r.cost.Int64)
+	}
+	if r.recordedCost.Valid {
+		data = binary.AppendVarint(data, r.recordedCost.Int64)
 	}
 	e.data = data
 	e.k.count++
@@ -1892,6 +1934,9 @@ func (k *activityUsageKept) decode(data []byte, arena string, prevUS int64, r *k
 	r.webSearchRequests = int(varint())
 	if flags&keptCostValid != 0 {
 		r.cost.Int64, r.cost.Valid = varint(), true
+	}
+	if flags&keptRecordedValid != 0 {
+		r.recordedCost.Int64, r.recordedCost.Valid = varint(), true
 	}
 	return data, arena
 }

@@ -1822,6 +1822,18 @@ type ParsedPlanUsageGroup struct {
 // ParsedUsageEvent records session-level usage emitted by parsers
 // when an agent exposes aggregate accounting instead of per-message
 // token_usage rows.
+//
+// Every event is additive: usage reads sum it with the session's message
+// rows and its other events. A total that already covers those rows must
+// not be emitted as an event.
+//
+// Cost carries a cost the harness wrote itself; CostStatus says how much to
+// trust it. usagefacts.CostStatusRecorded marks a harness estimate kept as
+// evidence: it prices the row only when the catalog has no rate for Model,
+// and a recorded $0 never does. Any other status makes Cost the row's price.
+// A recorded cost for one message belongs on that message instead, through
+// ParsedMessage.SetRecordedCost. An event with a Cost and no Model is stored
+// under usagefacts.UnknownModel.
 type ParsedUsageEvent struct {
 	SessionID                string
 	MessageOrdinal           *int

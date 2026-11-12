@@ -18,6 +18,7 @@ import (
 	pricingpkg "go.kenn.io/agentsview/internal/pricing"
 	"go.kenn.io/agentsview/internal/readbase"
 	"go.kenn.io/agentsview/internal/storage"
+	"go.kenn.io/agentsview/internal/usagefacts"
 )
 
 func TestDuckUsageAggregateCostRecordsMixedReportedAndComputed(t *testing.T) {
@@ -1753,11 +1754,11 @@ func TestDuckUsageCopilotCostFollowsLatestEvent(t *testing.T) {
 // parser (internal/parser/codebuff.go) sets Model = <agentType>
 // (e.g. "base2-deepseek", "base2-free-minimax-m3") rather than the
 // agent name so the per-model breakdown in the usage report stays
-// granular. The aggregate must accept any non-empty Model value and
-// reject empty-model rows: hard-coding an accepted model literal
-// would drop the template-attributed cost (TotalCost falls to zero),
-// and dropping the non-empty-model requirement would leak the
-// empty-model row's cost into TotalCost.
+// granular. The aggregate must accept any non-empty Model value:
+// hard-coding an accepted model literal would drop the
+// template-attributed cost (TotalCost falls to zero). A costed event
+// with no model is written under usagefacts.UnknownModel, so its cost
+// stays in TotalCost as its own model row instead of being dropped.
 func TestDuckDailyUsageEventModelEligibility(t *testing.T) {
 	ctx := t.Context()
 	templateCost := money.MustParseDollars("0.05")
@@ -1791,15 +1792,19 @@ func TestDuckDailyUsageEventModelEligibility(t *testing.T) {
 		From: "2026-07-15", To: "2026-07-15", Timezone: "UTC",
 	})
 	require.NoError(t, err, "GetDailyUsage")
-	assert.Equal(t, templateCost, daily.Totals.TotalCost,
-		"the template-model cost must be included and the "+
-			"empty-model cost excluded")
+	total, err := money.Add(templateCost, emptyModelCost)
+	require.NoError(t, err)
+	assert.Equal(t, total, daily.Totals.TotalCost,
+		"both the template-model and the unknown-model cost count")
 	require.Len(t, daily.Daily, 1)
-	assert.Equal(t, templateCost, daily.Daily[0].TotalCost)
-	require.Len(t, daily.Daily[0].ModelBreakdowns, 1,
-		"only the template-attributed model may surface")
-	assert.Equal(t, "base2-deepseek",
-		daily.Daily[0].ModelBreakdowns[0].ModelName)
+	models := map[string]money.Money{}
+	for _, model := range daily.Daily[0].ModelBreakdowns {
+		models[model.ModelName] = model.Cost
+	}
+	assert.Equal(t, map[string]money.Money{
+		"base2-deepseek":        templateCost,
+		usagefacts.UnknownModel: emptyModelCost,
+	}, models)
 }
 
 func TestDuckAnalyticsToolsWindowsMessagesInSQL(t *testing.T) {

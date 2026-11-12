@@ -25,6 +25,7 @@ import (
 
 	chdriver "github.com/ClickHouse/clickhouse-go/v2"
 	"github.com/ClickHouse/clickhouse-go/v2/ext"
+	"go.kenn.io/agentsview/internal/usagefacts"
 )
 
 const chTimestampSQL = "parseDateTime64BestEffort(?, 6, 'UTC')"
@@ -161,6 +162,7 @@ SELECT
 	toInt64(0) AS cache_create_1h, toInt64(0) AS web_search_requests,
 	CAST(cu.charged_microdollars AS Nullable(Int64)) AS cost_microdollars,
 	concat(cu.agent, '-reported') AS cost_source,
+	CAST(NULL AS Nullable(Int64)) AS recorded_cost_microdollars,
 	'' AS project,
 	cu.agent AS agent,
 	'' AS machine,
@@ -261,7 +263,7 @@ const chUsageUnjoinedSessionColumns = `
 
 // chUsageRawMessageUsage selects a messages row's usage. Message rows carry
 // the token JSON, which chUsageRawNormSource reads.
-const chUsageRawMessageUsage = `m.token_usage AS token_json,
+var chUsageRawMessageUsage = `m.token_usage AS token_json,
 			m.claude_message_id AS claude_message_id,
 			m.claude_request_id AS claude_request_id,
 			m.source_uuid AS source_uuid,
@@ -270,7 +272,9 @@ const chUsageRawMessageUsage = `m.token_usage AS token_json,
 				0 AS cache_create, 0 AS cache_read,
 				JSONExtractInt(m.token_usage, 'reasoning_tokens') AS reasoning_tokens,
 				JSONExtractInt(m.token_usage, 'cache_creation', 'ephemeral_1h_input_tokens') AS cache_create_1h,
-				JSONExtractInt(m.token_usage, 'server_tool_use', 'web_search_requests') AS web_search_requests,`
+				JSONExtractInt(m.token_usage, 'server_tool_use', 'web_search_requests') AS web_search_requests,
+				NULL AS cost_microdollars, '' AS cost_source,
+				` + chRecordedCostSQL("m.token_usage") + ` AS recorded_cost_microdollars,`
 
 // chUsageStoredMessageUsage selects a usage_messages row's usage. The view
 // extracted the counters from the token JSON at insert time, so message rows
@@ -284,7 +288,9 @@ const chUsageStoredMessageUsage = `'' AS token_json,
 				m.usage_cache_create AS cache_create, m.usage_cache_read AS cache_read,
 				m.usage_reasoning AS reasoning_tokens,
 				m.usage_cache_create_1h AS cache_create_1h,
-				m.usage_web AS web_search_requests,`
+				m.usage_web AS web_search_requests,
+				NULL AS cost_microdollars, '' AS cost_source,
+				m.` + usageRecordedCostColumn + ` AS recorded_cost_microdollars,`
 
 // chUsageRawSQLFromWheres renders the message and usage-event raw rows.
 // Readers join each row's session and read messages.
@@ -318,8 +324,7 @@ func chUsageRawSQLFromWheres(
 		SELECT m.session_id AS session_id, m.ordinal AS message_ordinal,
 			'message' AS source, %[1]s AS ts,
 			m.timestamp AS pricing_ts,
-			m.model AS model, m.provider_id AS provider_id, %[8]s
-				NULL AS cost_microdollars, '' AS cost_source,%[5]s
+			m.model AS model, m.provider_id AS provider_id, %[8]s%[5]s
 		FROM %[9]s%[3]s
 		WHERE %[6]s
 		UNION ALL
@@ -338,8 +343,9 @@ func chUsageRawSQLFromWheres(
 				ue.cache_read_input_tokens AS cache_read,
 				ue.reasoning_tokens AS reasoning_tokens,
 				0 AS cache_create_1h, 0 AS web_search_requests,
-				ue.cost_microdollars AS cost_microdollars,
-				ue.cost_source AS cost_source,%[5]s
+				if(ue.cost_status = 'recorded' AND ue.cost_source != 'copilot-reported', NULL, ue.cost_microdollars) AS cost_microdollars,
+				ue.cost_source AS cost_source,
+				if(ue.cost_status = 'recorded' AND ue.cost_source != 'copilot-reported', ue.cost_microdollars, NULL) AS recorded_cost_microdollars,%[5]s
 		FROM usage_events ue%[4]s
 		WHERE %[7]s`,
 		messageTS, eventTS, messageJoin, eventJoin, sessionColumns,
@@ -500,6 +506,7 @@ func chPreparedUsageRawSQL(state preparedUsageState, f db.UsageFilter, sessionID
 			p.cache_create_1h_norm AS cache_create_1h,
 			p.web_search_requests_norm AS web_search_requests,
 			p.cost_microdollars AS cost_microdollars, p.cost_source AS cost_source,
+			p.recorded_cost_microdollars AS recorded_cost_microdollars,
 			'' AS project, p.agent AS agent, '' AS machine,
 			toInt64(0) AS user_message_count, false AS is_automated,
 			'' AS display_name, '' AS group_key, '' AS session_name,
@@ -1115,6 +1122,31 @@ type CHUsageAggregateRow struct {
 	// BreakdownEntry reports that the row is one of the session's usage
 	// breakdown entries; see chSessionUsageBreakdownEntrySQL.
 	BreakdownEntry bool
+	// RecordedCost is a harness-recorded cost the SQL left out of
+	// ExplicitCost; applyRecordedCost decides whether it prices the row.
+	RecordedCost sql.NullInt64
+}
+
+// applyRecordedCost makes a harness-recorded cost the row's price when
+// db.ReportedCostForPricing keeps it: the catalog has no rate for the model
+// and the cost is above zero. It then counts as a reported cost and nothing
+// on the row is billed from tokens. It reports whether it kept the cost.
+func (r *CHUsageAggregateRow) applyRecordedCost(pricing *export.PricingResolver) bool {
+	kept := db.ReportedCostForPricing(r.RecordedCost, usagefacts.CostStatusRecorded,
+		func() bool {
+			_, lookup := pricing.ResolveAt(
+				r.Model, r.PriceModel, chUsagePricingTimestamp(r.PricingTS))
+			return lookup.OK
+		})
+	if !kept.Valid {
+		return false
+	}
+	r.ExplicitCost += kept.Int64
+	r.ReportedCostRows++
+	r.BillableInput, r.BillableOutput, r.BillableReason = 0, 0, 0
+	r.BillableCacheCr, r.BillableCacheCr1h, r.BillableCacheRd = 0, 0, 0
+	r.BillableWebSearch = 0
+	return true
 }
 
 // chSessionUsageBreakdownEntrySQL selects the usage_localized rows that a
@@ -1144,6 +1176,8 @@ type chSessionUsageRow struct {
 	webSearchRequests int
 	cost              sql.NullInt64
 	costSource        string
+	// recordedCost is a harness-recorded cost the SQL left out of cost.
+	recordedCost sql.NullInt64
 }
 
 func chUsageLookupModel(model, ts string) string {
@@ -1152,6 +1186,19 @@ func chUsageLookupModel(model, ts string) string {
 		return canonical
 	}
 	return model
+}
+
+// chCatalogPricesAt returns a db.ReportedCostForPricing probe for a
+// ClickHouse usage row.
+func chCatalogPricesAt(
+	pricing *export.PricingResolver, model, pricingTS string,
+) func() bool {
+	return func() bool {
+		_, lookup := pricing.ResolveAt(
+			model, chUsageLookupModel(model, pricingTS),
+			chUsagePricingTimestamp(pricingTS))
+		return lookup.OK
+	}
 }
 
 func chUsagePricingTimestamp(ts string) time.Time {
@@ -1283,6 +1330,10 @@ func chSessionUsageRowCost(
 ) (money.Money, bool, bool, error) {
 	if r.cost.Valid && r.costSource != db.CopilotReportedCostSource {
 		return money.Money{Microdollars: r.cost.Int64}, true, true, nil
+	}
+	if recorded := db.ReportedCostForPricing(r.recordedCost, usagefacts.CostStatusRecorded,
+		chCatalogPricesAt(pricing, r.model, r.pricingTS)); recorded.Valid {
+		return money.Money{Microdollars: recorded.Int64}, true, true, nil
 	}
 	if r.inputTok == 0 && r.outputTok == 0 && r.reasoningTok == 0 &&
 		r.cacheCr == 0 && r.cacheRd == 0 && r.webSearchRequests == 0 {
@@ -1532,7 +1583,8 @@ func (s *Store) forEachDailyUsageGroupRow(
 		usage_classified AS (
 			SELECT *,
 				` + machineSelect + ` AS group_machine,
-				authoritative_cost_rows = 1 OR p_priced != 1 OR ` + customPred + ` AS explicit_row,
+				authoritative_cost_rows = 1 OR p_priced != 1 OR ` + customPred + `
+					OR recorded_cost_microdollars IS NOT NULL AS explicit_row,
 				multiIf(
 					reported_cost_rows = 1, '` + chUsagePriceKindReported + `',
 					input_tokens_norm = 0 AND output_tokens_norm = 0
@@ -1568,7 +1620,8 @@ func (s *Store) forEachDailyUsageGroupRow(
 			any(billable_reasoning_tokens), any(billable_cache_creation_tokens),
 			any(billable_cache_creation_1h_tokens), any(billable_cache_read_tokens),
 			toInt64(any(reported_cost_rows)),
-			any(authoritative_cost), toInt64(any(authoritative_cost_rows))` + evidenceSelect + `
+			any(authoritative_cost), toInt64(any(authoritative_cost_rows)),
+			any(recorded_cost_microdollars)` + evidenceSelect + `
 		FROM usage_classified
 		GROUP BY session_id, local_date, project, agent, group_machine, model, provider_id,
 			explicit_key, group_kind, group_context, group_band
@@ -1603,6 +1656,7 @@ func (s *Store) forEachDailyUsageGroupRow(
 			&r.BillableCacheCr, &r.BillableCacheCr1h, &r.BillableCacheRd,
 			&r.ReportedCostRows,
 			&r.AuthoritativeCost, &r.AuthoritativeCostRows,
+			&r.RecordedCost,
 		}
 		if f.PairwiseSides && !top {
 			targets = append(targets, &r.InexactModels, &r.InexactProjects)
@@ -1682,6 +1736,7 @@ func chUsageGroupCost(
 	if !r.Explicit {
 		return chPricedUsageGroupCost(r, contexts, pricingDigest, pricing)
 	}
+	r.applyRecordedCost(pricing)
 	cost, savings, _, _, err := chUsageAggregateResolvedCost(
 		r.Model, r.PriceModel, r.ProviderID, chUsagePricingTimestamp(r.PricingTS),
 		r.InputTok, r.OutputTok, r.CacheCr, r.CacheCr1h, r.CacheRd,
@@ -2182,7 +2237,8 @@ func (s *Store) forEachSessionUsageAggregateRow(
 			cache_create_norm AS cache_creation_tokens,
 			cache_create_1h_norm AS cache_creation_1h_tokens,
 			cache_read_norm AS cache_read_tokens,` + chUsageBillableSelect + `,
-			toBool(` + chSessionUsageBreakdownEntrySQL + `) AS breakdown_entry
+			toBool(` + chSessionUsageBreakdownEntrySQL + `) AS breakdown_entry,
+			recorded_cost_microdollars
 		FROM usage_localized
 		-- Visit rows in time order so the last Copilot-reported total is the session cost.
 		ORDER BY session_id ASC, ts ASC, COALESCE(message_ordinal, -1) ASC,
@@ -2212,6 +2268,7 @@ func (s *Store) forEachSessionUsageAggregateRow(
 			&r.ExplicitCost, &r.ReportedCostRows,
 			&r.AuthoritativeCost, &r.AuthoritativeCostRows,
 			&r.BreakdownEntry,
+			&r.RecordedCost,
 		); err != nil {
 			return fmt.Errorf("scanning clickhouse session usage aggregate: %w", err)
 		}
@@ -2239,7 +2296,7 @@ func (s *Store) sessionUsageRows(
 			input_tokens_norm, output_tokens_norm,
 			cache_create_norm, cache_create_1h_norm, cache_read_norm,
 			reasoning_tokens_norm, web_search_requests_norm,
-			cost_microdollars, cost_source
+			cost_microdollars, cost_source, recorded_cost_microdollars
 		FROM usage_localized
 		ORDER BY ts ASC, session_id ASC,
 			COALESCE(message_ordinal, -1) ASC,
@@ -2258,6 +2315,7 @@ func (s *Store) sessionUsageRows(
 			&r.sessionID, &r.messageOrdinal, &r.source, &ts, &pricingTS, &r.model, &r.providerID,
 			&r.inputTok, &r.outputTok, &r.cacheCr, &r.cacheCr1h, &r.cacheRd,
 			&r.reasoningTok, &r.webSearchRequests, &r.cost, &r.costSource,
+			&r.recordedCost,
 		); err != nil {
 			return nil, fmt.Errorf("scanning clickhouse session usage row: %w", err)
 		}
@@ -3054,7 +3112,9 @@ func (s *Store) GetSessionUsage(
 			ctx, db.UsageFilter{}, sessionID,
 			func(r CHUsageAggregateRow) error {
 				deduplicatedOutputTokens += r.SnapshotDedupOutput
-				if r.BreakdownEntry {
+				// A cost-only evidence row is a breakdown entry only when its
+				// recorded cost prices it.
+				if r.applyRecordedCost(rateResolver) || r.BreakdownEntry {
 					breakdownCount++
 				}
 				if r.AuthoritativeCostRows > 0 {
