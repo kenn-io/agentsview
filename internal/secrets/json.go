@@ -3,6 +3,7 @@ package secrets
 import (
 	"bytes"
 	"encoding/json/jsontext"
+	"errors"
 	"io"
 	"strings"
 )
@@ -32,7 +33,7 @@ func RedactJSON(text string) string {
 	for {
 		prevEnd := dec.InputOffset()
 		tok, err := dec.ReadToken()
-		if err == io.EOF {
+		if errors.Is(err, io.EOF) {
 			break
 		}
 		if err != nil {
@@ -78,7 +79,7 @@ func isJSONValue(text string) bool {
 		return false
 	}
 	_, err := dec.ReadToken()
-	return err == io.EOF
+	return errors.Is(err, io.EOF)
 }
 
 // RedactJSONLines masks a JSON Lines document line by line with RedactJSON.

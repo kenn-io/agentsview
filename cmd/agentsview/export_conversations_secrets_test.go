@@ -4,6 +4,7 @@ import (
 	"encoding/json/v2"
 	"path/filepath"
 	"strconv"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -67,17 +68,17 @@ func TestExportConversationMessageMasksSecretsUnlessRevealed(t *testing.T) {
 	t.Run("small chunks walk the masked text", func(t *testing.T) {
 		// Five-byte chunks split the key across several reads; each read
 		// masks the whole message first, so no read sees a partial key.
-		var text string
+		var text strings.Builder
 		var offset int64
 		for {
 			body := readMessage(t, offset, 5)
-			text += *body.Text
+			text.WriteString(*body.Text)
 			offset = body.NextOffset
 			if offset >= body.TextBytes {
 				break
 			}
 		}
-		assert.Equal(t, "use key AKIA…PLJM for the deploy", text)
+		assert.Equal(t, "use key AKIA…PLJM for the deploy", text.String())
 	})
 
 	t.Run("reveal returns stored text", func(t *testing.T) {
