@@ -25,19 +25,17 @@ var (
 
 // liveVectorServing enables browser setup over the daemon's open indexes.
 type liveVectorServing struct {
-	mu            sync.Mutex
-	serving       vectorServing
-	cfg           config.Config
-	database      *db.DB
-	ctx           context.Context
-	idle          *server.IdleTracker
-	cancel        context.CancelFunc
-	done          chan struct{}
-	setup         server.EmbeddingsSetupStatus
-	queuedBuildID int64
-	startupQueued bool
-	reload        func() (config.Config, error)
-	push          *vectorPushSource
+	mu       sync.Mutex
+	serving  vectorServing
+	cfg      config.Config
+	database *db.DB
+	ctx      context.Context
+	idle     *server.IdleTracker
+	cancel   context.CancelFunc
+	done     chan struct{}
+	setup    server.EmbeddingsSetupStatus
+	reload   func() (config.Config, error)
+	push     *vectorPushSource
 }
 
 func newLiveVectorServing(ctx context.Context, cfg config.Config, database *db.DB, idle *server.IdleTracker, reload func() (config.Config, error)) (*liveVectorServing, error) {
@@ -187,10 +185,9 @@ func (v *liveVectorServing) IncludeAutomated() bool {
 func (v *liveVectorServing) SetupStatus(ctx context.Context) (server.EmbeddingsSetupStatus, error) {
 	v.mu.Lock()
 	status, cfg, missingManager := v.setup, v.cfg, v.serving.manager == nil
-	if v.startupQueued && v.serving.manager.Status().BuildID != v.queuedBuildID {
-		v.startupQueued = false
+	if v.serving.Scheduler != nil {
+		status.Waiting = v.serving.Scheduler.Waiting()
 	}
-	status.Busy = status.Busy || v.startupQueued
 	v.mu.Unlock()
 	if status.Busy {
 		status.Enabled = cfg.Vector.Enabled
@@ -401,11 +398,6 @@ func (v *liveVectorServing) activate(deployment config.VectorEmbeddingsServerCon
 		v.mu.Unlock()
 	}
 	if automatic {
-		v.mu.Lock()
-		v.queuedBuildID = v.serving.manager.Status().BuildID
-		v.startupQueued = true
-		v.setup.DownloadedBytes, v.setup.TotalBytes = 0, 0
-		v.mu.Unlock()
 		v.serving.Scheduler.Notify()
 		return nil
 	}

@@ -9177,6 +9177,8 @@ components:
         total_bytes:
           format: int64
           type: integer
+        waiting:
+          type: string
       required:
         - enabled
         - provider

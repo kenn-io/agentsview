@@ -40,6 +40,11 @@ An enabled configuration with `local = true` starts indexing at startup using
 installed server files. It does not record a shared choice. If files are missing,
 use **Turn on** to approve the download, even if a shared choice exists.
 
+Automatic indexing waits on battery power. Settings shows **Waiting for power**;
+choose **Build now** to start immediately. The CLI build command also starts a
+build while on battery power. Keyword search remains available while indexing
+waits.
+
 For CLI setup, run `agentsview index embeddings build`. AgentsView uses a
 running Ollama server with Nomic or Kit's shared local server. If the local
 server needs files, the CLI asks before downloading them. Search and automatic
@@ -1011,7 +1016,10 @@ enables semantic search, installs missing shared server files, and starts
 indexing. Replica and DuckDB servers have no local setup control.
 
 `GET /api/v1/embeddings/status` includes `setup` when browser setup is
-available. `POST /api/v1/embeddings/setup` requires `expected_provider` from
+available. `setup.waiting` is `queued` while indexing is scheduled and `power`
+while it waits for power. An empty or absent value means no work is waiting.
+The provider-bound setup request uses daemon API version 16.
+`POST /api/v1/embeddings/setup` requires `expected_provider` from
 `setup.provider` (`built-in`, `ollama`, or `configured`) and accepts
 `approved_bytes`, the download size disclosed to the user. It returns `202`
 with `{"started":true}` when setup is accepted. A concurrent setup or a changed

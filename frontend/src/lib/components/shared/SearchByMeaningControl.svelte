@@ -10,10 +10,13 @@
     onchange?: (started: boolean) => void;
   } = $props();
   let error = $state<string | null>(null);
+  let startingBuild = $state(false);
   const setup = $derived(status?.setup);
+  const waiting = $derived(!status?.running && !!setup?.waiting);
   const rowState = $derived.by((): SearchByMeaningState => {
     if (setup?.busy || setup?.installing) return { kind: "downloading", doneBytes: setup?.downloaded_bytes ?? 0, totalBytes: setup?.total_bytes ?? 0 };
     if (status?.running) return { kind: "indexing", done: status.done, total: status.total, etaMs: status.estimate_ready ? status.eta_milliseconds : undefined };
+    if (waiting) return { kind: "downloaded" };
     if (setup?.action === "turn-on" || !setup?.enabled) return setup?.missing_bytes && setup.provider === "built-in" ? { kind: "off", downloadBytes: setup.missing_bytes } : { kind: "downloaded" };
     if (setup.provider === "ollama") return { kind: "ollama" };
     return { kind: "on" };
@@ -22,17 +25,32 @@
   const shownBytes = $derived(setup?.provider === "built-in" ? (setup.missing_bytes ?? 0) : 0);
   const downloadLabel = $derived(m.meaning_download({ size: formatSize(setup?.missing_bytes ?? 0, getLocale()) }));
   const labels = $derived({
-    name: m.meaning_name(), off: m.meaning_off(),
+    name: m.meaning_name(), off: waiting ? (setup?.waiting === "power" ? m.meaning_waiting_power() : m.meaning_waiting_index()) : m.meaning_off(),
     on: m.meaning_on(),
     ollama: m.meaning_ollama(),
-    turningOn: m.meaning_turning_on(), turnOn: m.meaning_turn_on(),
-    download: m.meaning_download({ size: "{size}" }), downloaded: setup?.provider === "ollama" ? m.meaning_uses_ollama() : setup?.provider === "configured" ? m.meaning_configured() : m.meaning_downloaded(),
+    turningOn: m.meaning_turning_on(), turnOn: waiting ? m.meaning_build_now() : m.meaning_turn_on(),
+    download: m.meaning_download({ size: "{size}" }), downloaded: waiting ? "" : setup?.provider === "ollama" ? m.meaning_uses_ollama() : setup?.provider === "configured" ? m.meaning_configured() : m.meaning_downloaded(),
     // An Ollama setup prints no line: nothing switches providers.
     keepsIndex: "", downloading: m.meaning_downloading({ done: "{done}", total: "{total}" }),
     indexing: m.meaning_indexing({ done: "{done}", total: "{total}", items: "{items}" }), timeLeft: m.meaning_time_left({ time: "{time}" }), meanwhile: m.meaning_meanwhile(),
     underMinute: m.meaning_under_minute(), aboutTime: m.meaning_about_time({ time: "{time}" }), progress: m.meaning_progress(), hint: setup?.provider === "built-in" && setup.missing_bytes > 0 ? `${m.meaning_hint()} · ${downloadLabel}` : m.meaning_hint(),
   });
   async function activate() {
+    if (waiting) {
+      if (startingBuild) return;
+      error = null;
+      startingBuild = true;
+      try {
+        await EmbeddingsService.postApiV1EmbeddingsBuild({});
+        onchange(true);
+      } catch (e) {
+        if (e instanceof ApiError && e.status === 409) onchange(true);
+        else error = e instanceof Error ? e.message : m.settings_embeddings_load_failed();
+      } finally {
+        startingBuild = false;
+      }
+      return;
+    }
     if (setup?.action !== "turn-on") return;
     const provider = setup.provider;
     if (provider !== "built-in" && provider !== "ollama" && provider !== "configured") return;
@@ -56,7 +74,7 @@
       <SearchByMeaningHint {labels} onturnon={() => void activate()} />
     {/if}
   {:else}
-    <SearchByMeaningRow state={rowState} {labels} locale={getLocale()} readonly={!setup.action || !!setup.error} itemNoun={m.meaning_chunks({ count: status?.total ?? 0 })} onturnon={() => void activate()} onusebuiltin={() => {}} />
+    <SearchByMeaningRow state={rowState} {labels} locale={getLocale()} readonly={(!waiting && !setup.action) || !!setup.error || startingBuild} itemNoun={m.meaning_chunks({ count: status?.total ?? 0 })} onturnon={() => void activate()} onusebuiltin={() => {}} />
   {/if}
   {#if error || setup.error}
     <div class="setup-error">

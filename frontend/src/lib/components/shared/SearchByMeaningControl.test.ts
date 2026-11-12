@@ -6,7 +6,7 @@ import { EmbeddingsService } from "../../api/generated/index.js";
 import { ApiError } from "../../api/runtime.js";
 
 vi.mock("../../api/generated/index.js", () => ({
-  EmbeddingsService: { postApiV1EmbeddingsSetup: vi.fn() },
+  EmbeddingsService: { postApiV1EmbeddingsSetup: vi.fn(), postApiV1EmbeddingsBuild: vi.fn() },
 }));
 
 afterEach(() => {
@@ -53,4 +53,47 @@ it.each([
   });
   flushSync();
   unmount(component);
+});
+
+
+it.each([
+  ["queued", "Waiting to index"],
+  ["power", "Waiting for power"],
+])("shows %s and starts a manual build", async (waiting, label) => {
+  vi.mocked(EmbeddingsService.postApiV1EmbeddingsBuild).mockResolvedValue({ started: true });
+  const onchange = vi.fn();
+  const component = mount(SearchByMeaningControl, {
+    target: document.body,
+    props: {
+      status: {
+        running: false, done: 0, total: 0, eta_milliseconds: 0,
+        setup: { enabled: true, action: "", provider: "built-in", busy: false,
+          installing: false, missing_bytes: 0, downloaded_bytes: 0, total_bytes: 0, waiting },
+      },
+      onchange,
+    },
+  });
+  expect(document.body.textContent).toContain(label);
+  expect(document.querySelector('[role="progressbar"]')).toBeNull();
+  const button = [...document.querySelectorAll("button")].find((b) => b.textContent?.trim() === "Build now");
+  expect(button).toBeDefined();
+  button!.click();
+  await vi.waitFor(() => expect(onchange).toHaveBeenCalledWith(true));
+  expect(EmbeddingsService.postApiV1EmbeddingsBuild).toHaveBeenCalledWith({});
+  unmount(component);
+});
+
+it("follows a build already started by another client", async () => {
+  vi.mocked(EmbeddingsService.postApiV1EmbeddingsBuild).mockRejectedValue(new ApiError(409, "build already running"));
+  const onchange = vi.fn();
+  const component = mount(SearchByMeaningControl, {
+    target: document.body,
+    props: { status: { running: false, done: 0, total: 0, eta_milliseconds: 0,
+      setup: { enabled: true, action: "", provider: "built-in", busy: false,
+        installing: false, missing_bytes: 0, downloaded_bytes: 0, total_bytes: 0, waiting: "queued" } }, onchange },
+  });
+  try {
+    [...document.querySelectorAll("button")].find((b) => b.textContent?.trim() === "Build now")!.click();
+    await vi.waitFor(() => expect(onchange).toHaveBeenCalledWith(true));
+  } finally { unmount(component); }
 });

@@ -40,6 +40,7 @@ type fakeEmbedManager struct {
 	mu      sync.Mutex
 	calls   []vector.BuildRequest
 	results []fakeTryBuildResult
+	status  vector.BuildStatus
 }
 
 type fakeTryBuildResult struct {
@@ -82,6 +83,12 @@ func (f *fakeEmbedManager) TryBuild(
 		return r.started, r.err
 	}
 	return true, nil
+}
+
+func (f *fakeEmbedManager) Status() vector.BuildStatus {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.status
 }
 
 func (f *fakeEmbedManager) callCount() int {
@@ -1953,4 +1960,67 @@ func TestMessageSchedulerAutomaticBuildSettings(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestEmbedSchedulerWaitingForPower(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		fake := &fakeEmbedManager{}
+		s := newEmbedScheduler(fake, time.Second, 0, false, nil)
+		var battery atomic.Bool
+		battery.Store(true)
+		s.onBattery = battery.Load
+		go s.Run(t.Context())
+		defer s.Stop()
+		s.Notify()
+		assert.Equal(t, "queued", s.Waiting())
+		synctest.Sleep(time.Second)
+		assert.Equal(t, "power", s.Waiting())
+		assert.Zero(t, fake.callCount())
+		battery.Store(false)
+		synctest.Sleep(batteryRecheckInterval)
+		assert.Equal(t, 1, fake.callCount())
+		assert.Empty(t, s.Waiting())
+	})
+}
+
+func TestEmbedSchedulerWaitingAcrossBuildAndShutdown(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		fake := &blockingEmbedManager{started: make(chan struct{}), release: make(chan struct{})}
+		s := newEmbedScheduler(fake, time.Second, 0, false, nil)
+		go s.Run(t.Context())
+		s.Notify()
+		synctest.Sleep(time.Second)
+		<-fake.started
+		s.Notify()
+		assert.Equal(t, "queued", s.Waiting())
+		fake.releaseOnce()
+		synctest.Wait()
+		assert.Equal(t, "queued", s.Waiting(), "a notification during a build remains pending")
+		synctest.Sleep(time.Second)
+		assert.Empty(t, s.Waiting())
+		s.Stop()
+		s.Notify()
+		assert.Empty(t, s.Waiting())
+	})
+}
+
+func TestEmbedSchedulerManualBuildSatisfiesWaiting(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		fake := &fakeEmbedManager{}
+		s := newEmbedScheduler(fake, time.Second, 0, false, nil)
+		s.onBattery = func() bool { return true }
+		go s.Run(t.Context())
+		defer s.Stop()
+		s.Notify()
+		synctest.Sleep(time.Second)
+		require.Equal(t, "power", s.Waiting())
+		fake.mu.Lock()
+		fake.status = vector.BuildStatus{BuildID: 1, LastResult: &vector.BuildResult{}}
+		fake.mu.Unlock()
+		assert.Empty(t, s.Waiting())
+		synctest.Sleep(batteryRecheckInterval)
+		assert.Empty(t, s.Waiting(), "battery recheck must not hide a completed manual build")
+		s.Notify()
+		assert.Equal(t, "queued", s.Waiting(), "new work after the build remains pending")
+	})
 }

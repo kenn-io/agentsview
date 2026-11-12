@@ -12,4 +12,5 @@ export interface VectorSetupStatus {
   missing_bytes: number;
   provider: string;
   total_bytes: number;
+  waiting?: string;
 }

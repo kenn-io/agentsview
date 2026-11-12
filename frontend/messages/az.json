@@ -3224,5 +3224,8 @@
   "empty_archive_title": "Hələ sessiya yoxdur",
   "empty_archive_desc": "AgentsView sessiyaları bu qovluqlardan oxuyur. Agent onlardan birinə yazan kimi sessiyalar burada görünəcək.",
   "empty_archive_choose_folders": "Qovluqları seçin",
-  "usage_tooltip_no_usage": "İstifadə yoxdur"
+  "usage_tooltip_no_usage": "İstifadə yoxdur",
+  "meaning_waiting_index": "İndeksləmə gözlənilir",
+  "meaning_waiting_power": "Enerji gözlənilir",
+  "meaning_build_now": "İndi indekslə"
 }

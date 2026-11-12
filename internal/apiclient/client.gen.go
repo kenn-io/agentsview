@@ -31765,6 +31765,7 @@ type VectorSetupStatus struct {
 	MissingBytes    int64   `json:"missing_bytes"`
 	Provider        string  `json:"provider" validate:"required"`
 	TotalBytes      int64   `json:"total_bytes"`
+	Waiting         *string `json:"waiting,omitempty"`
 }
 
 func (v VectorSetupStatus) Validate() error {

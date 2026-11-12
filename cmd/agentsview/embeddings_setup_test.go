@@ -349,6 +349,18 @@ func TestSharedChoiceStartsLocalIndexing(t *testing.T) {
 	cfg, err := config.LoadReadOnly()
 	require.NoError(t, err)
 	database := dbtest.OpenTestDBAt(t, filepath.Join(dir, "sessions.db"))
+	dbtest.SeedSessionWithMessages(t, database, "session-one", "sample", []db.Message{dbtest.UserMsg("session-one", 0, "startup indexing")})
+	encoder := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var request struct {
+			Input []string `json:"input"`
+		}
+		if !assert.NoError(t, json.UnmarshalRead(r.Body, &request)) {
+			w.WriteHeader(http.StatusBadRequest)
+			return
+		}
+		writeEmbeddingsResponse(t, w, len(request.Input), 768)
+	}))
+	defer encoder.Close()
 	var installs atomic.Int64
 	oldInspect, oldEndpoint, oldInstall := inspectLocalEmbeddings, localEmbeddingEndpoint, installLocalEmbeddings
 	t.Cleanup(func() {
@@ -363,7 +375,7 @@ func TestSharedChoiceStartsLocalIndexing(t *testing.T) {
 		if !installed.Load() {
 			return "", embedlocal.ErrNotFound
 		}
-		return "http://127.0.0.1:1/v1", nil
+		return encoder.URL + "/v1", nil
 	}
 	installLocalEmbeddings = func(ctx context.Context, opts embedlocal.InstallOptions) (embedlocal.Installation, error) {
 		installs.Add(1)
@@ -377,28 +389,40 @@ func TestSharedChoiceStartsLocalIndexing(t *testing.T) {
 		installed.Store(true)
 		return embedlocal.Installation{DataDir: opts.DataDir, Executable: "fixture"}, nil
 	}
-	idled := make(chan struct{})
-	idle := server.NewIdleTracker(time.Second, func() { close(idled) })
-	owner, err := newLiveVectorServing(t.Context(), cfg, database, idle, config.LoadReadOnly)
+	oldBattery := onBattery
+	t.Cleanup(func() { onBattery = oldBattery })
+	onBattery = func() bool { return true }
+	owner, err := newLiveVectorServing(t.Context(), cfg, database, nil, config.LoadReadOnly)
 	require.NoError(t, err)
 	defer func() { require.NoError(t, owner.Close()) }()
 	<-owner.done
 	setup, err := owner.SetupStatus(t.Context())
 	require.NoError(t, err)
-	assert.True(t, setup.Busy, "queued startup must remain busy")
-	idleCtx, stopIdle := context.WithCancel(t.Context())
-	idleDone := make(chan struct{})
-	go func() { defer close(idleDone); idle.Run(idleCtx) }()
-	defer func() { stopIdle(); <-idleDone }()
-	select {
-	case <-idled:
-		require.FailNow(t, "queued indexing did not hold the idle lease")
-	case <-time.After(2 * time.Second):
-	}
-	require.NoError(t, owner.serving.manager.StartBuild(vector.BuildRequest{}))
+	assert.False(t, setup.Busy)
+	assert.Equal(t, "queued", setup.Waiting)
+	require.Eventually(t, func() bool {
+		setup, err = owner.SetupStatus(t.Context())
+		return err == nil && setup.Waiting == "power"
+	}, 45*time.Second, 100*time.Millisecond)
+	assert.False(t, setup.Busy)
+	ln, port := listenLoopback(t)
+	cfg.Host, cfg.Port = "127.0.0.1", port
+	ts := startTestServer(t, ln, server.New(cfg, database, nil, owner.ServerOptions()...).Handler())
+	var apiStatus vector.BuildStatus
+	require.NoError(t, json.Unmarshal(embeddingRequest(t, ts.Client(), ts.URL, "GET", "/api/v1/embeddings/status", "", nil, http.StatusOK), &apiStatus))
+	require.NotNil(t, apiStatus.Setup)
+	assert.False(t, apiStatus.Setup.Busy)
+	assert.Equal(t, "power", apiStatus.Setup.Waiting)
+	var keyword db.ContentSearchPage
+	require.NoError(t, json.Unmarshal(embeddingRequest(t, ts.Client(), ts.URL, "GET", "/api/v1/search/content?pattern=startup&mode=fts&include_one_shot=true", "", nil, http.StatusOK), &keyword))
+	require.NotEmpty(t, keyword.Matches)
+	assert.Equal(t, "session-one", keyword.Matches[0].SessionID)
+	embeddingRequest(t, ts.Client(), ts.URL, "POST", "/api/v1/embeddings/build", "application/json", strings.NewReader(`{}`), http.StatusAccepted)
+	assert.EqualValues(t, 1, owner.serving.manager.Status().BuildID)
+	owner.serving.manager.Wait()
 	setup, err = owner.SetupStatus(t.Context())
 	require.NoError(t, err)
-	assert.False(t, setup.Busy, "setup must leave the queued state when a build starts")
+	assert.Empty(t, setup.Waiting)
 	assert.EqualValues(t, 1, installs.Load())
 	saved, err := config.LoadReadOnly()
 	require.NoError(t, err)
@@ -896,15 +920,16 @@ func TestLiveEmbeddingsSetupDisclosesVerifiedRepairSize(t *testing.T) {
 
 func TestCLIEmbeddingsSetup(t *testing.T) {
 	for _, tc := range []struct {
-		name             string
-		postStatus       int
-		stale, joinedOff bool
+		name                      string
+		postStatus                int
+		stale, joinedOff, waiting bool
 	}{
-		{"finished-before-status", 0, false, false},
-		{"setup-conflict", http.StatusConflict, false, false},
-		{"finished-during-confirmation", http.StatusBadRequest, false, false},
-		{"stale-config", 0, true, false},
-		{"joined setup ended off", 0, false, true},
+		{"finished-before-status", 0, false, false, false},
+		{"setup-conflict", http.StatusConflict, false, false, false},
+		{"finished-during-confirmation", http.StatusBadRequest, false, false, false},
+		{"stale-config", 0, true, false, false},
+		{"joined setup ended off", 0, false, true, false},
+		{"waiting for power", 0, false, false, true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			setTestHome(t, t.TempDir())
@@ -931,7 +956,11 @@ func TestCLIEmbeddingsSetup(t *testing.T) {
 								return
 							}
 						}
-						io.WriteString(w, `{"setup":{"enabled":true},"running":true}`)
+						if tc.waiting {
+							io.WriteString(w, `{"setup":{"enabled":true,"waiting":"power"}}`)
+						} else {
+							io.WriteString(w, `{"setup":{"enabled":true},"running":true}`)
+						}
 					default:
 						io.WriteString(w, `{"setup":{},"last_result":{}}`)
 					}

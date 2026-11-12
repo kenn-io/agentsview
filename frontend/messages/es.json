@@ -3261,5 +3261,8 @@
   "empty_archive_title": "Aún no hay sesiones",
   "empty_archive_desc": "AgentsView lee las sesiones de estas carpetas. Aparecerán aquí cuando un agente escriba en alguna de ellas.",
   "empty_archive_choose_folders": "Elegir carpetas",
-  "usage_tooltip_no_usage": "Sin uso"
+  "usage_tooltip_no_usage": "Sin uso",
+  "meaning_waiting_index": "Esperando para indexar",
+  "meaning_waiting_power": "Esperando alimentación",
+  "meaning_build_now": "Crear índice ahora"
 }

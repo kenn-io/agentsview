@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"log"
 	"os"
+	stdsync "sync"
 	"time"
 
 	"github.com/cenkalti/backoff/v7"
@@ -105,6 +106,12 @@ type embedScheduler struct {
 	onBattery           func() bool
 	batteryDeferredPath string
 
+	mu       stdsync.Mutex
+	waiting  string
+	sequence uint64
+	buildID  int64
+	closed   bool
+
 	dirty chan func()
 	stop  chan struct{}
 	done  chan struct{}
@@ -139,10 +146,59 @@ func (s *embedScheduler) Notify() {
 	if !ok {
 		return
 	}
+	s.mu.Lock()
+	if s.closed {
+		s.mu.Unlock()
+		release()
+		return
+	}
+	s.sequence++
+	if manager, ok := s.mgr.(interface{ Status() vector.BuildStatus }); ok {
+		s.buildID = manager.Status().BuildID
+	}
+	s.waiting = "queued"
 	select {
 	case s.dirty <- release:
 	default:
 		release()
+	}
+	s.mu.Unlock()
+}
+
+func (s *embedScheduler) Waiting() string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if manager, ok := s.mgr.(interface{ Status() vector.BuildStatus }); ok && s.waiting != "" {
+		status := manager.Status()
+		if !status.Running && status.BuildID > s.buildID && status.LastResult != nil && status.LastError == "" {
+			s.waiting = ""
+		}
+	}
+	return s.waiting
+}
+
+func (s *embedScheduler) markBackstop() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.sequence++
+	if manager, ok := s.mgr.(interface{ Status() vector.BuildStatus }); ok {
+		s.buildID = manager.Status().BuildID
+	}
+	s.waiting = "queued"
+}
+
+func (s *embedScheduler) setWaiting(reason string) uint64 {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.waiting = reason
+	return s.sequence
+}
+
+func (s *embedScheduler) clearWaiting(sequence uint64) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.sequence == sequence && len(s.dirty) == 0 {
+		s.waiting = ""
 	}
 }
 
@@ -191,6 +247,10 @@ func (s *embedScheduler) run(
 	var pendingRelease func()
 	var buildErrorRetries int
 	defer func() {
+		s.mu.Lock()
+		s.closed = true
+		s.waiting = ""
+		s.mu.Unlock()
 		if pendingRelease != nil {
 			pendingRelease()
 		}
@@ -226,6 +286,7 @@ func (s *embedScheduler) run(
 			resetTimer(debounceTimer, s.debounce)
 		case <-debounceTimer.C:
 			if s.onBattery != nil && s.onBattery() {
+				s.setWaiting("power")
 				if pendingRelease != nil {
 					s.setBatteryDeferred(true)
 					pendingRelease()
@@ -241,6 +302,7 @@ func (s *embedScheduler) run(
 					continue
 				}
 			}
+			sequence := s.setWaiting("queued")
 			req := vector.BuildRequest{Backstop: pendingBackstop, IncludeAutomated: s.includeAutomated}
 			started, err := s.mgr.TryBuild(ctx, req)
 			if err != nil {
@@ -255,6 +317,7 @@ func (s *embedScheduler) run(
 					// lifecycle and release its lease; a later periodic tick or
 					// fresh notification can begin another lifecycle.
 					buildErrorRetries = 0
+					s.clearWaiting(sequence)
 					continue
 				}
 				buildErrorRetries++
@@ -269,6 +332,7 @@ func (s *embedScheduler) run(
 				continue
 			}
 			s.setBatteryDeferred(false)
+			s.clearWaiting(sequence)
 			if pendingRelease != nil {
 				pendingRelease()
 				pendingRelease = nil
@@ -286,7 +350,9 @@ func (s *embedScheduler) run(
 				pendingBackstop = true
 				continue
 			}
+			s.markBackstop()
 			if s.onBattery != nil && s.onBattery() {
+				s.setWaiting("power")
 				s.setBatteryDeferred(true)
 				if pendingRelease != nil {
 					pendingRelease()
@@ -303,6 +369,7 @@ func (s *embedScheduler) run(
 			if !ok {
 				continue
 			}
+			sequence := s.setWaiting("queued")
 			started, err := s.mgr.TryBuild(ctx,
 				vector.BuildRequest{Backstop: true, IncludeAutomated: s.includeAutomated})
 			if err != nil {
@@ -323,6 +390,7 @@ func (s *embedScheduler) run(
 			}
 
 			s.setBatteryDeferred(false)
+			s.clearWaiting(sequence)
 			release()
 			pendingBackstop = false
 			if pendingRelease != nil {

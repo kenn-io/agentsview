@@ -23,6 +23,7 @@ vi.mock("../../api/generated/index", async (importOriginal) => {
       getApiV1EmbeddingsStatus: vi.fn(),
       getApiV1EmbeddingsGenerations: vi.fn(),
       postApiV1EmbeddingsSetup: vi.fn(),
+      postApiV1EmbeddingsBuild: vi.fn(),
     },
   };
 });
@@ -31,6 +32,7 @@ const embeddingsService = EmbeddingsService as unknown as {
   getApiV1EmbeddingsStatus: ReturnType<typeof vi.fn>;
   getApiV1EmbeddingsGenerations: ReturnType<typeof vi.fn>;
   postApiV1EmbeddingsSetup: ReturnType<typeof vi.fn>;
+  postApiV1EmbeddingsBuild: ReturnType<typeof vi.fn>;
 };
 
 function runningStatus(
@@ -78,6 +80,7 @@ describe("EmbeddingsSettings", () => {
     embeddingsService.getApiV1EmbeddingsStatus.mockReset();
     embeddingsService.getApiV1EmbeddingsGenerations.mockReset();
     embeddingsService.postApiV1EmbeddingsSetup.mockReset();
+    embeddingsService.postApiV1EmbeddingsBuild.mockReset();
     embeddingsService.getApiV1EmbeddingsGenerations.mockResolvedValue({
       generations: [BUILDING_GENERATION],
     });
@@ -93,6 +96,24 @@ describe("EmbeddingsSettings", () => {
     await vi.advanceTimersByTimeAsync(ms);
     flushSync();
   }
+
+  it("offers a manual build while waiting for power", async () => {
+    const setup = { enabled: true, action: "", provider: "built-in", busy: false,
+      installing: false, missing_bytes: 0, downloaded_bytes: 0, total_bytes: 0, waiting: "power" };
+    embeddingsService.getApiV1EmbeddingsStatus.mockResolvedValue({ running: false, setup });
+    embeddingsService.postApiV1EmbeddingsBuild.mockResolvedValue({ started: true });
+    const component = mount(EmbeddingsSettings, { target: document.body });
+    try {
+      await settle();
+      expect(document.body.textContent).toContain("Waiting for power");
+      embeddingsService.getApiV1EmbeddingsStatus.mockResolvedValue(runningStatus(2, { setup }));
+      [...document.querySelectorAll("button")].find((b) => b.textContent?.trim() === "Build now")!.click();
+      await settle();
+      expect(embeddingsService.postApiV1EmbeddingsBuild).toHaveBeenCalledWith({});
+      expect(document.body.textContent).toContain("Indexing 2 of 1,000 text sections");
+      expect(document.body.textContent).toContain("test-embed-model");
+    } finally { unmount(component); }
+  });
 
   it("shows an enabled Ollama setup as on, with no switch", async () => {
     embeddingsService.getApiV1EmbeddingsStatus.mockResolvedValue({
