@@ -78,10 +78,7 @@ func setupItems(agent string, force bool) ([]agentsetup.Item, error) {
 	skill := agentsetup.Item{
 		Name:  "skill",
 		Check: checkSkills,
-		Install: func(ctx context.Context) error {
-			if status, _ := checkSkills(ctx); status.State == agentsetup.StateOK && !force {
-				return nil
-			}
+		Install: func(context.Context) error {
 			return runSkillsInstall(
 				io.Discard, []skills.Harness{harness}, home, force, skillRemote)
 		},
@@ -90,10 +87,7 @@ func setupItems(agent string, force bool) ([]agentsetup.Item, error) {
 	installMCP := mcp.Install
 	mcp.Install = func(ctx context.Context) error {
 		if !force {
-			status, err := mcp.Check(ctx)
-			if err != nil {
-				return err
-			}
+			status, _ := mcp.Check(ctx)
 			if status.State == agentsetup.StateOutdated {
 				return errors.New(
 					"existing agentsview MCP entry differs; rerun with --force")

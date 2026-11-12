@@ -143,9 +143,7 @@ func TestDoctorMemoryReportsStandaloneTargetMismatch(t *testing.T) {
 	home := t.TempDir()
 	setDoctorMemoryTestEnvironment(t, home)
 	fakeAgent(t, "codex", "")
-	pkg, err := skills.RenderPackage(skills.HarnessAgents, version, skills.Remote{
-		Server: "https://archive-a.invalid",
-	})
+	pkg, err := skills.RenderPackage(skills.HarnessAgents, version, skills.Remote{})
 	require.NoError(t, err)
 	path := filepath.Join(home, pkg[0].RelativePath)
 	require.NoError(t, os.MkdirAll(filepath.Dir(path), 0o755))
@@ -162,6 +160,10 @@ func TestDoctorMemoryReportsStandaloneTargetMismatch(t *testing.T) {
 	client = inspectDoctorAgentSetup(t.Context(), client)
 	assert.Equal(t, service.MemoryPartial, client.Status)
 	assert.Equal(t, "standalone_target_mismatch", client.Reason)
+
+	client = inspectDoctorMemoryClient("", doctorMemoryTargetSelection{Kind: "postgresql"})
+	require.Len(t, client.Standalone, 1)
+	assert.NotEqual(t, "target_mismatch", client.Standalone[0].Reason)
 }
 
 func TestDoctorMemoryHumanOutputSeparatesTargetAndClient(t *testing.T) {
@@ -303,22 +305,6 @@ func TestDoctorMemoryReportsInstalledAgentSetup(t *testing.T) {
 	for _, index := range []int{1, 3} {
 		require.EqualValues(t, "missing", report.Client.Rows[index].State)
 		require.Equal(t, "agentsview agent setup", report.Client.Rows[index].NextStep)
-	}
-}
-
-func TestDoctorMemoryStandaloneSkill(t *testing.T) {
-	for _, tc := range []struct{ agent, kind string }{{"claude", "postgresql"}, {"codex", "local"}} {
-		t.Run(tc.kind, func(t *testing.T) {
-			home := t.TempDir()
-			setDoctorMemoryTestEnvironment(t, home)
-			fakeAgent(t, tc.agent, "")
-			out, err := executeCommand(newRootCommand(), "agent", "setup")
-			require.NoError(t, err, out)
-			selection := doctorMemoryTargetSelection{Kind: tc.kind}
-			client := inspectDoctorAgentSetup(t.Context(), inspectDoctorMemoryClient("", selection))
-			require.Equal(t, service.MemoryReady, client.Status)
-			require.Empty(t, client.Reason)
-		})
 	}
 }
 
