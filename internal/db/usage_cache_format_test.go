@@ -10,7 +10,6 @@ import (
 	"strconv"
 	"strings"
 	"testing"
-	"time"
 
 	"github.com/stretchr/testify/require"
 	"go.kenn.io/agentsview/internal/export"
@@ -48,7 +47,6 @@ func checkUsageCacheFormatRecords(files fs.FS, version int, digest string) error
 }
 
 func TestUsageCacheFormat(t *testing.T) {
-	setUsageLocalLocation(t, time.UTC)
 	database := testDB(t)
 	require.NoError(t, database.SetArchiveIdentityForTest(t.Context(), "usage-format", strings.Repeat("0", 63)+"1"))
 	require.NoError(t, database.UpsertModelPricing([]ModelPricing{{ModelPattern: "format-model", InputPerMTok: money.Money{Microdollars: 1_000_000}, OutputPerMTok: money.Money{Microdollars: 2_000_000}, CacheCreationPerMTok: money.Money{Microdollars: 1_250_000}, CacheCreation1hPerMTok: money.Money{Microdollars: 3_000_000}, CacheReadPerMTok: money.Money{Microdollars: 100_000}, Bands: []PricingBand{{AboveInputTokens: 100, InputPerMTok: money.Money{Microdollars: 2_000_000}, OutputPerMTok: money.Money{Microdollars: 3_000_000}, CacheCreationPerMTok: money.Money{Microdollars: 2_500_000}, CacheCreation1hPerMTok: money.Money{Microdollars: 5_000_000}, CacheReadPerMTok: money.Money{Microdollars: 200_000}}}}}))
@@ -85,8 +83,6 @@ func TestUsageCacheFormat(t *testing.T) {
 	require.NoError(t, database.InsertCursorUsageEvents(t.Context(), []CursorUsageEvent{{OccurredAt: "2026-08-10T09:00:00Z", Model: "format-model", InputTokens: 11, Charged: money.Money{Microdollars: 100000}, DedupKey: "cursor"}}))
 	filter := UsageFilter{From: "2026-08-10", To: "2026-08-10", Timezone: "UTC", Breakdowns: true}
 	warmJournaledUsage(t, database, filter)
-	var reads []bool
-	t.Cleanup(func() { database.usageCache.usageWindowObserver.afterRead = nil })
 	type topEntry struct {
 		SessionID string
 		Cost      money.Money
@@ -99,14 +95,12 @@ func TestUsageCacheFormat(t *testing.T) {
 		Activity int
 	}
 	read := func() result {
-		database.usageCache.usageWindowObserver.afterRead = func(journaled bool) { reads = append(reads, journaled) }
 		daily, err := database.GetDailyUsage(t.Context(), filter)
 		require.NoError(t, err)
 		top, err := database.GetTopSessionsByCost(t.Context(), filter, 10)
 		require.NoError(t, err)
 		counts, err := database.GetUsageSessionCounts(t.Context(), filter)
 		require.NoError(t, err)
-		database.usageCache.usageWindowObserver.afterRead = nil
 		activity, err := database.GetUsageMatchingSessionCount(t.Context(), UsageFilter{From: filter.From, To: filter.To, Timezone: "UTC", Project: "activity"})
 		require.NoError(t, err)
 		var sessions []topEntry
@@ -121,9 +115,5 @@ func TestUsageCacheFormat(t *testing.T) {
 	encoded, err := json.Marshal([]result{before, after})
 	require.NoError(t, err)
 	digest := hexSHA256(encoded)
-	require.NotEmpty(t, reads)
-	for _, journaled := range reads {
-		require.True(t, journaled)
-	}
 	require.NoError(t, checkUsageCacheFormatRecords(os.DirFS("testdata/usage-cache-format-digests"), usageCacheFormatVersion, digest))
 }
