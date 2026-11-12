@@ -17,6 +17,11 @@ import (
 
 func backupSourceRoots(t *testing.T, inputs string, roots []rawarchive.RootSpec) config.ArchiveSource {
 	t.Helper()
+	return backupSourceRootsWithNative(t, inputs, roots, "")
+}
+
+func backupSourceRootsWithNative(t *testing.T, inputs string, roots []rawarchive.RootSpec, native string) config.ArchiveSource {
+	t.Helper()
 	ctx := t.Context()
 	data := filepath.Join(inputs, "application")
 	require.NoError(t, os.MkdirAll(data, 0o700))
@@ -35,6 +40,18 @@ func backupSourceRoots(t *testing.T, inputs string, roots []rawarchive.RootSpec)
 	require.NoError(t, err)
 	archive, err := rawarchive.Open(ctx, database, seed, nil)
 	require.NoError(t, err)
+	if native != "" {
+		_, err = archive.Reparse(ctx, rawarchive.ReparseOptions{All: true, ScratchBytes: 512 << 20})
+		require.NoError(t, err)
+		var count int
+		err = database.Reader().QueryRow(ctx, `SELECT count(*) FROM raw_archive_sessions WHERE device_id=? AND provider='claude' AND parser_id=?`, sourceDevice, native).Scan(&count)
+		require.NoError(t, err)
+		require.Equal(t, 1, count)
+		session, err := database.GetSessionFull(ctx, native)
+		require.NoError(t, err)
+		require.NotNil(t, session)
+		assert.Equal(t, native, session.ID)
+	}
 	repo := filepath.Join(t.TempDir(), "repository")
 	report, err := archive.Backup(ctx, repo, settings, "test")
 	require.NoError(t, err)

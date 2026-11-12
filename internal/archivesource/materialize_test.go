@@ -103,7 +103,7 @@ func TestMaterializeSnapshotCaptureLayouts(t *testing.T) {
 			if layout == "projects" {
 				selectedRoot = projects
 			}
-			source := backupSourceRoots(t, inputs, []rawarchive.RootSpec{{Provider: "claude", Path: selectedRoot}})
+			source := backupSourceRootsWithNative(t, inputs, []rawarchive.RootSpec{{Provider: "claude", Path: selectedRoot}}, id)
 			index, err := OpenIndex(t.Context(), source, t.TempDir(), nil)
 			require.NoError(t, err)
 			defer index.Close()
@@ -154,7 +154,11 @@ func TestMaterializeSnapshotCaptureLayouts(t *testing.T) {
 }
 
 func TestMaterializeSnapshotEquivalentCandidates(t *testing.T) {
-	source, inputs := archiveFixture(t)
+	const id = "019eb791-cf7d-75c1-8439-9ed74c122e02"
+	inputs := t.TempDir()
+	projects := filepath.Join(inputs, "claude", "projects")
+	dbtest.WriteTestFile(t, filepath.Join(projects, "project-a", id+".jsonl"), []byte(testjsonl.NewSessionBuilder().AddClaudeUserWithSessionID("2026-01-01T00:00:00Z", "saved Claude question", id).String()))
+	source := backupSourceRootsWithNative(t, inputs, []rawarchive.RootSpec{{Provider: "claude", Path: projects}}, id)
 	index, err := OpenIndex(t.Context(), source, t.TempDir(), nil)
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, index.Close()) })
@@ -163,7 +167,7 @@ func TestMaterializeSnapshotEquivalentCandidates(t *testing.T) {
 	var owner db.ArchiveSessionProvenance
 	for _, item := range sources {
 		if item.Root.Provider == "claude" {
-			owner = db.ArchiveSessionProvenance{ArchiveSourceProvenance: index.provenance(item), NativeSessionID: "019eb791-cf7d-75c1-8439-9ed74c122e02"}
+			owner = db.ArchiveSessionProvenance{ArchiveSourceProvenance: index.provenance(item), NativeSessionID: id}
 		}
 	}
 	require.NotEmpty(t, owner.ManifestID)
@@ -286,12 +290,12 @@ func TestMaterializeSnapshotUsesAcceptedPrimaryAfterSiblingCapture(t *testing.T)
 	const id = "019eb791-cf7d-75c1-8439-9ed74c122e02"
 	const siblingID = "019eb791-cf7d-75c1-8439-9ed74c122e03"
 	inputs := t.TempDir()
-	root := filepath.Join(inputs, "projects")
+	root := filepath.Join(inputs, "claude", "projects")
 	primary := filepath.Join(root, "project", id+".jsonl")
 	original := testjsonl.NewSessionBuilder().AddClaudeUserWithSessionID("2026-01-01T00:00:00Z", "original", id).String()
 	dbtest.WriteTestFile(t, primary, []byte(original))
 	dbtest.WriteTestFile(t, filepath.Join(root, "project", id, "tool-results", "tool.txt"), []byte("original tool"))
-	source := backupSourceRoots(t, inputs, []rawarchive.RootSpec{{Provider: "claude", Path: root}})
+	source := backupSourceRootsWithNative(t, inputs, []rawarchive.RootSpec{{Provider: "claude", Path: root}}, id)
 	changed := testjsonl.NewSessionBuilder().AddClaudeUserWithSessionID("2026-01-01T00:00:00Z", "changed", id).String()
 	require.NoError(t, os.WriteFile(primary, []byte(changed), 0o600))
 	dbtest.WriteTestFile(t, filepath.Join(root, "project", siblingID+".jsonl"), []byte(testjsonl.NewSessionBuilder().AddClaudeUserWithSessionID("2026-01-01T00:01:00Z", "sibling", siblingID).String()))
