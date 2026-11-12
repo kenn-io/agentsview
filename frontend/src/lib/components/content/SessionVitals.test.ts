@@ -582,10 +582,8 @@ describe("SessionVitals", () => {
 
     await vi.waitFor(() => {
       expect(fetchMock).toHaveBeenCalledWith(
-        expect.objectContaining({
-          url: expect.stringContaining("/api/v1/recall/entries?source_session_id=sess-1"),
-          signal: expect.any(AbortSignal),
-        }),
+        expect.stringContaining("/api/v1/recall/entries?source_session_id=sess-1"),
+        expect.objectContaining({ signal: expect.any(AbortSignal) }),
       );
     });
     await vi.waitFor(() => {

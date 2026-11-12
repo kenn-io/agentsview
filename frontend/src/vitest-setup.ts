@@ -6,14 +6,6 @@
 import "@testing-library/svelte/vitest";
 import { initI18n } from "./lib/i18n/index.js";
 
-// Node's Request requires absolute URLs; browsers resolve them against the document.
-const NodeRequest = globalThis.Request;
-globalThis.Request = class extends NodeRequest {
-  constructor(input: RequestInfo | URL, init?: RequestInit) {
-    super(typeof input === "string" ? new URL(input, document.baseURI) : input, init);
-  }
-};
-
 export function installFallbackResizeObserver(): void {
   if (typeof globalThis.ResizeObserver !== "undefined") return;
 

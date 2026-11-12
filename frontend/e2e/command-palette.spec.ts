@@ -168,3 +168,24 @@ test("client errors stay visible after another manual attempt", async ({ page })
   await expect(retry).toBeVisible();
   expect(attempts).toBe(2);
 });
+
+test("clearing a failed search prevents its delayed retry from reaching the server", async ({
+  page,
+}) => {
+  let attempts = 0;
+  await page.route("**/api/v1/search?**", async (route) => {
+    attempts++;
+    await route.fulfill({ status: 503 });
+  });
+  await page.goto("/usage");
+  await openSearch(page, "cancel this search");
+  await page.waitForResponse(
+    (response) => response.url().includes("/api/v1/search?") && response.status() === 503,
+  );
+  const input = page.locator(".palette-input");
+  await input.fill("");
+  await page.waitForTimeout(500);
+  expect(attempts).toBe(1);
+  await expect(input).toHaveValue("");
+  await expect(page.locator(".palette-error")).toHaveCount(0);
+});

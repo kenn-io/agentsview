@@ -30,7 +30,7 @@ describe("RawSyncService generated client", () => {
     );
 
     expect(fetchMock).toHaveBeenCalledOnce();
-    const [request] = fetchMock.mock.calls[0]!;
-    expect((request as Request).headers.get("Authorization")).toBe("Bearer device-credential");
+    const [, init] = fetchMock.mock.calls[0]!;
+    expect(new Headers(init?.headers).get("Authorization")).toBe("Bearer device-credential");
   });
 });

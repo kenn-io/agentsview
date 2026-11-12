@@ -23,8 +23,8 @@ describe("feature outcomes", () => {
     "bounds a %s request with a ten-second deadline",
     async (state) => {
       let signal: AbortSignal | undefined;
-      const fetch = vi.fn((input: RequestInfo | URL) => {
-        signal = (input as Request).signal;
+      const fetch = vi.fn((_input: RequestInfo | URL, init?: RequestInit) => {
+        signal = init?.signal ?? undefined;
         return new Promise<Response>((resolve, reject) => {
           if (state === "completed") resolve(new Response('{"status":"queued"}', { status: 202 }));
           signal?.addEventListener("abort", () => reject(signal?.reason), { once: true });
@@ -58,9 +58,7 @@ describe("feature outcomes", () => {
       expect(fetch).toHaveBeenCalledOnce();
       reply(new Response(status === 202 ? '{"status":"queued"}' : null, { status }));
       await vi.advanceTimersByTimeAsync(status === 404 ? 60_000 : 0);
-      expect(
-        await Promise.all(fetch.mock.calls.map(([request]) => (request as Request).clone().json())),
-      ).toEqual([
+      expect(fetch.mock.calls.map(([, init]) => JSON.parse(init!.body as string))).toEqual([
         { event: "app_opened", properties: { surface: "web" } },
         ...(status === 202 ? [{ event: "error_shown", properties: { kind: "search" } }] : []),
       ]);
@@ -87,7 +85,7 @@ describe("feature outcomes", () => {
     fetch.mockClear();
     reportSyncFailed(error);
     await vi.advanceTimersByTimeAsync(0);
-    expect(await (fetch.mock.calls[0]![0] as Request).clone().json()).toEqual({
+    expect(JSON.parse(fetch.mock.calls[0]![1].body)).toEqual({
       event: "sync_failed",
       properties: { reason },
     });
@@ -107,11 +105,11 @@ describe("feature outcomes", () => {
       await vi.advanceTimersByTimeAsync(0);
       stop();
     }
-    expect(
-      (
-        await Promise.all(fetch.mock.calls.map(([request]) => (request as Request).clone().json()))
-      ).map((event) => event.event),
-    ).toEqual(["app_opened", "screen_viewed", "screen_viewed"]);
+    expect(fetch.mock.calls.map(([, init]) => JSON.parse(init.body as string).event)).toEqual([
+      "app_opened",
+      "screen_viewed",
+      "screen_viewed",
+    ]);
   });
 
   it.each([false, true])(
@@ -142,16 +140,11 @@ describe("feature outcomes", () => {
       setAuthToken("remote-token");
       await vi.advanceTimersByTimeAsync(0);
       expect(
-        await Promise.all(
-          fetch.mock.calls.map(async ([input]) => {
-            const request = input as Request;
-            return [
-              request.url,
-              request.headers.get("Authorization"),
-              (await request.clone().json()).event,
-            ];
-          }),
-        ),
+        fetch.mock.calls.map(([url, init]) => [
+          url,
+          new Headers(init.headers).get("Authorization"),
+          JSON.parse(init.body).event,
+        ]),
       ).toEqual([
         ["https://example.org/api/v1/telemetry/events", "Bearer remote-token", "app_opened"],
         ["https://example.org/api/v1/telemetry/events", "Bearer remote-token", "screen_viewed"],
@@ -160,9 +153,9 @@ describe("feature outcomes", () => {
       window.dispatchEvent(new Event("pagehide"));
       await vi.advanceTimersByTimeAsync(0);
       expect(
-        (
-          await Promise.all(fetch.mock.calls.map(([input]) => (input as Request).clone().json()))
-        ).filter((event) => event.event === "visit_ended"),
+        fetch.mock.calls
+          .map(([, init]) => JSON.parse(init.body))
+          .filter((event) => event.event === "visit_ended"),
       ).toEqual([
         { event: "visit_ended", properties: { surface: "web", duration_bucket: "under_1m" } },
       ]);

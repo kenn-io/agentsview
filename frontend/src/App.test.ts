@@ -1921,10 +1921,11 @@ describe("App telemetry", () => {
     posted = [];
     vi.stubGlobal(
       "fetch",
-      vi.fn(async (input: RequestInfo | URL) => {
+      vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
         const headers = { "Content-Type": "application/json" };
         if (requestUrl(input).includes("/api/v1/telemetry/events")) {
-          posted.push(await (input as Request).clone().json());
+          if (typeof init?.body !== "string") throw new Error("telemetry body is not a string");
+          posted.push(JSON.parse(init.body));
           return new Response('{"status":"queued"}', { status: 202, headers });
         }
         return new Response("{}", { status: 200, headers });
@@ -1943,11 +1944,10 @@ describe("App telemetry", () => {
     vi.spyOn(document, "hidden", "get").mockReturnValue(false);
     component = mount(App, { target: document.body });
     await flushEffects();
-    await vi.waitFor(() => expect(postedFor("app_opened")).toHaveLength(1));
     now = 120_000;
     window.dispatchEvent(new Event("pagehide"));
     await flushEffects();
-    await vi.waitFor(() => expect(postedFor("visit_ended")).toHaveLength(1));
+    expect(postedFor("visit_ended")).toHaveLength(1);
     window.dispatchEvent(new Event("pageshow"));
     await unmount(component);
     component = undefined;

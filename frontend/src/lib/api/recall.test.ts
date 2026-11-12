@@ -18,7 +18,7 @@ describe("generated recall import", () => {
     await RecallService.postApiV1RecallImport(body);
 
     expect(fetchMock).toHaveBeenCalledOnce();
-    const request = fetchMock.mock.calls[0]?.[0] as Request;
-    expect(await request.clone().text()).toBe(ndjson);
+    const init = fetchMock.mock.calls[0]?.[1];
+    expect(init?.body).toBe(body);
   });
 });

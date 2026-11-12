@@ -2,6 +2,5 @@
 export function requestUrl(input: RequestInfo | URL): string {
   if (typeof input === "string") return input;
   if (input instanceof URL) return input.href;
-  const url = new URL(input.url);
-  return url.origin === window.location.origin ? `${url.pathname}${url.search}` : input.url;
+  return input.url;
 }

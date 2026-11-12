@@ -64,8 +64,8 @@ describe("setupVisibilityHealthCheck", () => {
     let signal: AbortSignal | undefined;
     const fetch = vi
       .fn<(input: RequestInfo | URL, init?: RequestInit) => Promise<Response>>()
-      .mockImplementationOnce((input) => {
-        signal = (input as Request).signal;
+      .mockImplementationOnce((_input, init) => {
+        signal = init?.signal ?? undefined;
         return new Promise<Response>((_resolve, reject) => {
           signal?.addEventListener("abort", () => reject(signal?.reason), { once: true });
         });
@@ -149,10 +149,8 @@ describe("setupVisibilityHealthCheck", () => {
     fireVisible();
     await new Promise((r) => setTimeout(r, 50));
     expect(globalThis.fetch).toHaveBeenCalledWith(
-      expect.objectContaining({
-        url: "https://example.com/first/api/v1/version",
-        signal: expect.any(AbortSignal),
-      }),
+      "https://example.com/first/api/v1/version",
+      expect.objectContaining({ signal: expect.any(AbortSignal) }),
     );
     cleanup();
   });
@@ -163,9 +161,12 @@ describe("setupVisibilityHealthCheck", () => {
     const cleanup = setupVisibilityHealthCheck();
     fireVisible();
     await new Promise((r) => setTimeout(r, 50));
-    const request = (globalThis.fetch as ReturnType<typeof vi.fn>).mock.calls[0]![0] as Request;
-    expect(new URL(request.url).pathname).toBe("/api/v1/version");
-    expect(request.headers.get("Authorization")).toBe("Bearer test-secret");
+    expect(globalThis.fetch).toHaveBeenCalledWith(
+      "/api/v1/version",
+      expect.objectContaining({
+        headers: new Headers({ Authorization: "Bearer test-secret" }),
+      }),
+    );
     cleanup();
   });
 
@@ -175,8 +176,8 @@ describe("setupVisibilityHealthCheck", () => {
     fireVisible();
     await new Promise((r) => setTimeout(r, 50));
     const call = (globalThis.fetch as ReturnType<typeof vi.fn>).mock.calls[0]!;
-    const request = call[0] as Request;
-    expect(request.headers.has("Authorization")).toBe(false);
+    const init = call[1] as RequestInit;
+    expect(new Headers(init.headers).has("Authorization")).toBe(false);
     cleanup();
   });
 

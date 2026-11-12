@@ -14,7 +14,6 @@ import { ApiError, setAuthToken, setServerUrl } from "./runtime.js";
 import type { SyncProgress } from "./generated/index.js";
 import * as telemetry from "../utils/telemetry.js";
 import type { BrowserHost } from "./browserHost.js";
-import { requestUrl } from "../test-support/request-url.js";
 
 vi.mock("../utils/telemetry.js", () => ({ reportTelemetry: vi.fn() }));
 
@@ -32,10 +31,10 @@ describe("syncClaudeAI browser relay", () => {
       );
     vi.stubGlobal("fetch", fetch);
     await expect(syncClaudeAI(undefined)).resolves.toMatchObject({ imported: 1 });
-    expect(fetch).toHaveBeenCalledOnce();
-    const request = fetch.mock.calls[0]![0] as Request;
-    expect(requestUrl(request)).toBe("/api/v1/import/claude-ai/sync?browser=chrome");
-    expect(request.method).toBe("POST");
+    expect(fetch).toHaveBeenCalledExactlyOnceWith(
+      "/api/v1/import/claude-ai/sync?browser=chrome",
+      expect.objectContaining({ method: "POST" }),
+    );
   });
 
   it.each(["claude_ai_auth_required"])("preserves recovery code %s", async (code) => {
@@ -191,10 +190,9 @@ describe("syncClaudeAI browser relay", () => {
       close: vi.fn().mockResolvedValue(undefined),
       fetch: vi.fn().mockResolvedValue({ status, body: "browser response", retryAfter: "12" }),
     };
-    const fetch = vi.fn(async (request: Request) => {
-      const url = requestUrl(request);
+    const fetch = vi.fn(async (url: string, options: RequestInit) => {
       if (url === "/api/v1/import/claude-ai/sync") {
-        expect(request.body).toBeNull();
+        expect(options.body).toBeUndefined();
         stream.enqueue(
           encoder.encode(
             'event: fetch\ndata: {"id":"request-1","path":"/api/organizations/org/chat_conversations_v2?limit=50&offset=0"}\n\n',
@@ -203,12 +201,12 @@ describe("syncClaudeAI browser relay", () => {
         return response;
       }
       expect(url).toBe("/api/v1/import/claude-ai/sync/results/request-1");
-      expect(await request.clone().json()).toEqual({
+      expect(JSON.parse(options.body as string)).toEqual({
         status: 429,
         body: "browser response",
         retry_after: "12",
       });
-      expect(request.headers.get("Content-Type")).toBe("application/json");
+      expect(new Headers(options.headers).get("Content-Type")).toBe("application/json");
       stream.enqueue(
         encoder.encode(
           'event: progress\ndata: {"imported":1,"updated":0,"skipped":0,"errors":0}\n\nevent: done\ndata: {"imported":1,"updated":0,"skipped":0,"errors":0}\n\n',
@@ -247,8 +245,7 @@ describe("syncClaudeAI browser relay", () => {
     const expected = kind === "returned" ? message : "Error: " + message;
     vi.stubGlobal(
       "fetch",
-      vi.fn(async (request: Request) => {
-        const url = requestUrl(request);
+      vi.fn(async (url: string, options: RequestInit) => {
         if (url === "/api/v1/import/claude-ai/sync") {
           return new Response(
             new ReadableStream<Uint8Array>({
@@ -265,7 +262,7 @@ describe("syncClaudeAI browser relay", () => {
           );
         }
         expect(url).toBe("/api/v1/import/claude-ai/sync/results/failed");
-        expect(await request.clone().json()).toEqual({
+        expect(JSON.parse(options.body as string)).toEqual({
           status: 0,
           body: "",
           error: expected,
@@ -293,8 +290,8 @@ describe("syncClaudeAI browser relay", () => {
     } as unknown as BrowserHost;
     vi.stubGlobal(
       "fetch",
-      vi.fn(async (request: Request) => {
-        if (request.signal.aborted) throw new DOMException("Aborted", "AbortError");
+      vi.fn(async (_url: string, options: RequestInit) => {
+        if (options.signal?.aborted) throw new DOMException("Aborted", "AbortError");
         events.push("sync");
         return new Response(
           'event: done\ndata: {"imported":0,"updated":0,"skipped":0,"errors":0}\n\n',
@@ -334,8 +331,7 @@ describe("syncClaudeAI browser relay", () => {
     } as unknown as BrowserHost;
     let stream!: ReadableStreamDefaultController<Uint8Array>;
     const encoder = new TextEncoder();
-    const fetch = vi.fn(async (request: Request) => {
-      const url = requestUrl(request);
+    const fetch = vi.fn(async (url: string, _options: RequestInit) => {
       if (url === "/api/v1/import/claude-ai/sync") {
         return new Response(
           new ReadableStream<Uint8Array>({
@@ -363,9 +359,9 @@ describe("syncClaudeAI browser relay", () => {
       setAuthToken("remote-token");
       respond({ status: 200, body: "chat contents" });
       await expect(run).resolves.toMatchObject({ imported: 1 });
-      const [request] = fetch.mock.calls[1]!;
-      expect(requestUrl(request)).toBe("/api/v1/import/claude-ai/sync/results/late");
-      expect(request.headers.get("Authorization")).toBe("Bearer local-token");
+      const [url, options] = fetch.mock.calls[1]!;
+      expect(url).toBe("/api/v1/import/claude-ai/sync/results/late");
+      expect(new Headers(options.headers).get("Authorization")).toBe("Bearer local-token");
     } finally {
       localStorage.clear();
     }
@@ -381,8 +377,8 @@ describe("syncClaudeAI browser relay", () => {
       "fetch",
       vi
         .fn()
-        .mockImplementationOnce(async (request: Request) => {
-          signal = request.signal;
+        .mockImplementationOnce(async (_url, options) => {
+          signal = options.signal;
           return new Response(
             new ReadableStream({
               start(controller) {
@@ -413,11 +409,11 @@ describe("syncClaudeAI browser relay", () => {
     const host = { close: vi.fn().mockResolvedValue(undefined) } as unknown as BrowserHost;
     vi.stubGlobal(
       "fetch",
-      vi.fn(async (request: Request) => {
+      vi.fn(async (_url, options: RequestInit) => {
         return new Response(
           new ReadableStream({
             start(stream) {
-              request.signal.addEventListener(
+              options.signal!.addEventListener(
                 "abort",
                 () => stream.error(new DOMException("Aborted", "AbortError")),
                 { once: true },
@@ -867,10 +863,13 @@ describe("watchEvents", () => {
       cache: "no-store",
       redirect: "follow",
     });
-    const request = fetchMock.mock.calls[0]![0] as Request;
-    expect(requestUrl(request)).toBe("/api/v1/events");
-    expect(request.method).toBe("GET");
-    expect(request.headers.get("Authorization")).toBe("Bearer secret");
+    expect(fetchMock).toHaveBeenCalledWith(
+      "/api/v1/events",
+      expect.objectContaining({ method: "GET" }),
+    );
+    expect(new Headers(fetchMock.mock.calls[0]![1].headers).get("Authorization")).toBe(
+      "Bearer secret",
+    );
   });
 
   it("invokes onEvent with parsed scope for valid data_changed frames", () => {

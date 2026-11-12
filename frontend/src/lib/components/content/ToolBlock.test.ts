@@ -8,7 +8,6 @@ const SMALL_PNG_DATA_URI =
   "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=";
 import ToolBlock from "./ToolBlock.svelte";
 import { ui } from "../../stores/ui.svelte.js";
-import { requestUrl } from "../../test-support/request-url.js";
 
 const copyToClipboardMock = vi.hoisted(() => vi.fn().mockResolvedValue(true));
 const searchState = vi.hoisted(() => ({ active: false, current: "", query: "" }));
@@ -300,9 +299,10 @@ describe("ToolBlock output and controls", () => {
         ),
       ).toEqual(["blob:first", "blob:second"]);
     });
-    expect(fetchMock.mock.calls.map(([input]) => new URL((input as Request).url).pathname)).toEqual(
-      ["/app/api/v1/assets/first", "/app/api/v1/assets/nested%2Fsecond"],
-    );
+    expect(fetchMock.mock.calls.map(([url]) => url)).toEqual([
+      "/app/api/v1/assets/first",
+      "/app/api/v1/assets/nested%2Fsecond",
+    ]);
     base.remove();
   });
 
@@ -930,7 +930,7 @@ describe("ToolBlock result images", () => {
         "blob:full-size",
       );
     });
-    expect(fetchMock.mock.calls.map(([url]) => requestUrl(url))).toEqual([
+    expect(fetchMock.mock.calls.map(([url]) => String(url))).toEqual([
       expect.stringMatching(/\/api\/v1\/assets\/abc\.png$/),
       expect.stringMatching(/\/api\/v1\/assets\/abc\.png$/),
     ]);

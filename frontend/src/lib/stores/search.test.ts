@@ -263,28 +263,6 @@ describe("SearchStore", () => {
     }
   });
 
-  it("keeps a search cleared when canceled during its retry delay", async () => {
-    const actual = await vi.importActual<typeof import("../api/generated/index.js")>(
-      "../api/generated/index.js",
-    );
-    searchService.getApiV1Search.mockImplementation(actual.SearchService.getApiV1Search);
-    const fetchMock = vi.fn().mockRejectedValueOnce(new TypeError("Failed to fetch"));
-    vi.stubGlobal("fetch", fetchMock);
-    try {
-      const store = createSearchStore(memoryStorage());
-      store.search("needle");
-      await runDebounce();
-      store.clear();
-      await vi.advanceTimersByTimeAsync(300);
-      expect(fetchMock).toHaveBeenCalledOnce();
-      expect(store.results).toEqual([]);
-      expect(store.error).toBeNull();
-      expect(store.isSearching).toBe(false);
-    } finally {
-      vi.unstubAllGlobals();
-    }
-  });
-
   it.each([400, 501])("does not retry HTTP %i", async (status) => {
     const store = createSearchStore(memoryStorage());
     searchService.getApiV1Search.mockRejectedValueOnce(generatedApiError(status, "unavailable"));

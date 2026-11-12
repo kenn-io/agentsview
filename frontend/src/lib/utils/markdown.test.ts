@@ -1041,9 +1041,9 @@ describe("renderMarkdown", () => {
 
         await vi.waitFor(() => expect(image.src).toBe("blob:asset"));
 
-        const [request] = fetchMock.mock.calls[0]! as [Request];
-        expect(request.url).toBe("https://remote.example.test/agentsview/api/v1/assets/abc.png");
-        expect(request.headers.get("Authorization")).toBe("Bearer secret");
+        const [requestURL, requestInit] = fetchMock.mock.calls[0]!;
+        expect(requestURL).toBe("https://remote.example.test/agentsview/api/v1/assets/abc.png");
+        expect(new Headers(requestInit?.headers).get("Authorization")).toBe("Bearer secret");
         handle.destroy();
         expect(createObjectURL).toHaveBeenCalledTimes(1);
       } finally {

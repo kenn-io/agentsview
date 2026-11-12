@@ -76,9 +76,9 @@ describe("orvalFetch", () => {
 
     await orvalFetch("/api/v1/usage/summary", {});
 
-    const [input] = fetchMock.mock.calls[0]!;
+    const [input, init] = fetchMock.mock.calls[0]!;
     expect(requestUrl(input)).toBe("https://example.test/api/v1/usage/summary");
-    expect((input as Request).headers.get("Authorization")).toBe("Bearer secret");
+    expect(new Headers(init?.headers).get("Authorization")).toBe("Bearer secret");
   });
   it("tests a candidate server with only the supplied credentials", async () => {
     localStorage.setItem("agentsview-server-url", "https://selected.example.test");
@@ -93,12 +93,12 @@ describe("orvalFetch", () => {
       baseUrl: "https://candidate.example.test",
       headers: { Authorization: "Bearer candidate-token" },
     });
-    expect(fetchMock.mock.calls.map(([input]) => requestUrl(input))).toEqual([
+    expect(fetchMock.mock.calls.map(([input]) => input)).toEqual([
       "https://candidate.example.test/api/v1/version",
       "https://candidate.example.test/api/v1/version",
     ]);
-    expect((fetchMock.mock.calls[0]![0] as Request).headers.get("Authorization")).toBeNull();
-    expect((fetchMock.mock.calls[1]![0] as Request).headers.get("Authorization")).toBe(
+    expect(new Headers(fetchMock.mock.calls[0]![1]?.headers).get("Authorization")).toBeNull();
+    expect(new Headers(fetchMock.mock.calls[1]![1]?.headers).get("Authorization")).toBe(
       "Bearer candidate-token",
     );
   });
@@ -140,6 +140,16 @@ describe("API errors", () => {
     expect(error).toBeInstanceOf(TransportError);
     expect(error).toMatchObject({ message: cause.message, cause });
     expect(isTransient(error)).toBe(true);
+  });
+
+  it("rejects invalid request options before fetch", async () => {
+    const fetchSpy = vi.spyOn(globalThis, "fetch");
+    const error = await orvalFetch("/api/v1/search", { method: "TRACE" }).catch(
+      (err: unknown) => err,
+    );
+    expect(error).toBeInstanceOf(TypeError);
+    expect(isTransient(error)).toBe(false);
+    expect(fetchSpy).not.toHaveBeenCalled();
   });
 
   it.each(["http://[", "https://user:pass@example.test"])(
