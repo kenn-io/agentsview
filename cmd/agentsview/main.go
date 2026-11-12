@@ -172,6 +172,7 @@ func applyServeMemoryLimit() {
 }
 
 func runServe(ctx context.Context, cfg config.Config, opts serveOptions, restartPort int) error {
+	parser.SetAllowProtectedPathProbes(cfg.ScanProtectedPaths)
 	cfg.PersistentDaemon = !runningAsBackgroundChild() || os.Getenv(persistentDaemonEnvVar) == "true"
 	previousLog := log.Writer()
 	if writer := setupDebugLogWriter(cfg.DataDir); writer != nil {
