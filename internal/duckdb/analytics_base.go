@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"strings"
 	"time"
 
 	"go.kenn.io/agentsview/internal/db"
@@ -217,11 +218,13 @@ func (s analyticsSQL) VisitTools(ctx context.Context, f db.AnalyticsFilter, ids 
 			group = "strftime(" + effective + ", '%Y-%m-%d')"
 		} else if periods := db.ToolsDatePeriods(f); len(periods) > 0 {
 			timestamp = effective
-			group = "CASE"
+			var dateGroup strings.Builder
+			dateGroup.WriteString("CASE")
 			for _, period := range periods {
-				group += fmt.Sprintf(" WHEN %[1]s >= TIMESTAMP '%[2]s' AND %[1]s < TIMESTAMP '%[3]s' THEN strftime(%[1]s + INTERVAL (%[4]d) SECOND, '%%Y-%%m-%%d')", effective, period.Start.Format("2006-01-02 15:04:05"), period.End.Format("2006-01-02 15:04:05"), period.Offset)
+				fmt.Fprintf(&dateGroup, " WHEN %[1]s >= TIMESTAMP '%[2]s' AND %[1]s < TIMESTAMP '%[3]s' THEN strftime(%[1]s + INTERVAL (%[4]d) SECOND, '%%Y-%%m-%%d')", effective, period.Start.Format("2006-01-02 15:04:05"), period.End.Format("2006-01-02 15:04:05"), period.Offset)
 			}
-			group += " ELSE strftime(" + effective + ", '%Y-%m-%dT%H:%M') END"
+			dateGroup.WriteString(" ELSE strftime(" + effective + ", '%Y-%m-%dT%H:%M') END")
+			group = dateGroup.String()
 		}
 	}
 	err := db.QueryChunkedSize(ids, readbase.MaxSQLVars, func(chunk []string) error {

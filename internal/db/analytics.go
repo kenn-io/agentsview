@@ -3034,15 +3034,16 @@ func sqliteToolsDateKey(f AnalyticsFilter) string {
 		return fallback
 	}
 	seconds := `substr(` + ts + `, 1, 19)`
-	localDate := `(CASE WHEN ` + seconds + ` < '` + periods[0].Start.Format("2006-01-02T15:04:05") + `' THEN NULL`
+	var localDate strings.Builder
+	localDate.WriteString(`(CASE WHEN ` + seconds + ` < '` + periods[0].Start.Format("2006-01-02T15:04:05") + `' THEN NULL`)
 	for _, period := range periods {
-		localDate += ` WHEN ` + seconds + ` < '` + period.End.Format("2006-01-02T15:04:05") + `' THEN strftime('%Y-%m-%d', ` + seconds + `, '` + fmt.Sprintf("%+d seconds", period.Offset) + `')`
+		localDate.WriteString(` WHEN ` + seconds + ` < '` + period.End.Format("2006-01-02T15:04:05") + `' THEN strftime('%Y-%m-%d', ` + seconds + `, '` + fmt.Sprintf("%+d seconds", period.Offset) + `')`)
 	}
-	localDate += ` END)`
+	localDate.WriteString(` END)`)
 	// Invalid timestamps use their first ten bytes. When SQLite's date agrees
 	// with those bytes, both parsers produce the same date. Strip fractions
 	// before SQLite rounds; resolve the remaining cases with Go.
-	return `(CASE WHEN substr(` + ts + `, -1) = 'Z' AND ` + localDate + ` = substr(` + ts + `, 1, 10) THEN substr(` + ts + `, 1, 10) ELSE ` + fallback + ` END)`
+	return `(CASE WHEN substr(` + ts + `, -1) = 'Z' AND ` + localDate.String() + ` = substr(` + ts + `, 1, 10) THEN substr(` + ts + `, 1, 10) ELSE ` + fallback + ` END)`
 }
 
 // ToolsDatePeriod describes one UTC interval with a constant local offset.

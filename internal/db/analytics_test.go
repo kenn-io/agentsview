@@ -5279,6 +5279,7 @@ func TestSQLiteToolsDateKeyMatchesResolver(t *testing.T) {
 		rows, err := d.getReader().QueryContext(t.Context(), `SELECT COALESCE(m.timestamp, ''), COALESCE(NULLIF(s.started_at, ''), s.created_at), `+key+`
 			FROM messages m JOIN sessions s ON s.id = m.session_id WHERE m.session_id = 'keys'`, f.Timezone)
 		require.NoError(t, err)
+		defer rows.Close()
 		seen := 0
 		for rows.Next() {
 			var msg, session, got string

@@ -1086,9 +1086,9 @@ func TestDuckToolsTimezoneDatabaseDisagreement(t *testing.T) {
 	}
 	require.NoError(t, err)
 	dir := t.TempDir()
-	require.NoError(t, os.Mkdir(filepath.Join(dir, "America"), 0700))
-	require.NoError(t, os.WriteFile(filepath.Join(dir, "America", "New_York"), zone, 0600))
-	cmd := exec.Command(os.Args[0], "-test.run=^TestDuckToolsTimezoneDatabaseDisagreement$")
+	require.NoError(t, os.Mkdir(filepath.Join(dir, "America"), 0o700))
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "America", "New_York"), zone, 0o600))
+	cmd := exec.CommandContext(t.Context(), os.Args[0], "-test.run=^TestDuckToolsTimezoneDatabaseDisagreement$")
 	cmd.Env = append(os.Environ(), "DUCK_TZ_SKEW_TEST=1", "ZONEINFO="+dir)
 	out, err := cmd.CombinedOutput()
 	require.NoError(t, err, "%s", out)
@@ -1165,10 +1165,11 @@ func TestDuckAnalyticsToolsLocalWeeks(t *testing.T) {
 
 func TestDuckAnalyticsToolsLocalTimezoneWithoutName(t *testing.T) {
 	// Keep the pointer stable for callers that have already cached time.Local.
-	_ = time.Now().In(time.Local)
-	local := *time.Local
-	t.Cleanup(func() { *time.Local = local })
-	*time.Local = *time.FixedZone("Local", 12*60*60)
+	local := time.Local //nolint:forbidigo // Exercise the process-local timezone used by this filter.
+	_ = time.Now().In(local)
+	original := *local
+	t.Cleanup(func() { *local = original })
+	*local = *time.FixedZone("Local", 12*60*60)
 	before, after := "2025-03-09T11:59:59Z", "2025-03-09T12:00:01Z"
 	id := "duck-local-file-zone"
 	store := newDuckAnalyticsStore(t, []db.SessionBatchWrite{{
@@ -2037,16 +2038,16 @@ func TestDuckAnalyticsToolsWindowsMessagesInSQL(t *testing.T) {
 func TestDuckToolsBoundedRangeGroupsByLocalDay(t *testing.T) {
 	id := "duck-long-range"
 	store := newDuckAnalyticsStore(t, []db.SessionBatchWrite{{
-		Session: syncSession(id, "alpha", "long", "2024-06-10T12:00:00Z", 2),
+		Session: syncSession(id, "alpha", "long", "2005-06-10T12:00:00Z", 2),
 		Messages: []db.Message{
-			duckModelMessage(id, 0, "assistant", "read", "2024-06-10T12:00:00Z", "model", db.ToolCall{ToolName: "Read", Category: "Read"}),
-			duckModelMessage(id, 1, "assistant", "read", "2024-06-10T12:05:00Z", "model", db.ToolCall{ToolName: "Read", Category: "Read"}),
+			duckModelMessage(id, 0, "assistant", "read", "2005-06-10T12:00:00Z", "model", db.ToolCall{ToolName: "Read", Category: "Read"}),
+			duckModelMessage(id, 1, "assistant", "read", "2005-06-10T12:05:00Z", "model", db.ToolCall{ToolName: "Read", Category: "Read"}),
 		}, DataVersion: 1, ReplaceMessages: true,
 	}})
 	var queries []string
 	analyticsQueryObserver = func(query string) { queries = append(queries, query) }
 	t.Cleanup(func() { analyticsQueryObserver = nil })
-	response, err := store.GetAnalyticsTools(t.Context(), db.AnalyticsFilter{From: "2000-01-01", To: "2025-12-31", Timezone: "America/New_York"})
+	response, err := store.GetAnalyticsTools(t.Context(), db.AnalyticsFilter{From: "1990-01-01", To: "2007-12-31", Timezone: "America/New_York"})
 	require.NoError(t, err)
 	assert.Equal(t, 2, response.TotalCalls)
 	require.Len(t, response.Trend, 1)

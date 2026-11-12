@@ -118,8 +118,10 @@ func TestToolEffectivenessEvidenceDayAndHour(t *testing.T) {
 	updateSignals(t, d, "evidence-day", SessionSignalUpdate{
 		QualitySignals: QualitySignals{Version: CurrentQualitySignalVersion},
 		ToolObservations: []ToolObservation{
-			{MessageOrdinal: 2, Outcome: "empty"}, {MessageOrdinal: 3, Outcome: "empty"},
-			{MessageOrdinal: 4, Outcome: "empty"}, {MessageOrdinal: 5, Outcome: "empty"},
+			{MessageOrdinal: 2, Outcome: "empty"},
+			{MessageOrdinal: 3, Outcome: "empty"},
+			{MessageOrdinal: 4, Outcome: "empty"},
+			{MessageOrdinal: 5, Outcome: "empty"},
 		},
 	})
 	f := AnalyticsFilter{Timezone: "UTC", ToolName: "Read", ToolCategory: "Read"}
