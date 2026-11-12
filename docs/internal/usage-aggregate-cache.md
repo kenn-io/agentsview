@@ -8,9 +8,9 @@ remains authoritative; deleting a recognized cache generation loses no user
 data.
 
 The cache serves daily usage, top sessions, billed-session counts, and relaxed
-matching counts. Per-session detail remains on the bounded live path. PostgreSQL
-keeps its live implementation and is checked against SQLite by the
-complete-result `pgtest` fixture.
+matching counts. Per-session detail remains on the bounded live path. Native PostgreSQL uses
+the same cache for aggregate reads and retains direct reads while it fills.
+The complete-result `pgtest` fixture compares it with SQLite.
 
 The release target is a complete warm 30-day CLI result in at most two seconds
 on the protected production-scale clone, with byte-identical results before and

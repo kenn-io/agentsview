@@ -30,7 +30,7 @@ import (
 
 // TestUsagePGCachePerf compares Usage page loads served by the persistent
 // PostgreSQL usage cache against direct PostgreSQL reads. It is a measuring
-// tool with heap bounds: set AGENTSVIEW_USAGE_PG_PERF=1 and TEST_PG_URL.
+// tool that reports heap usage: set AGENTSVIEW_USAGE_PG_PERF=1 and TEST_PG_URL.
 // AGENTSVIEW_BENCH_SESSIONS, AGENTSVIEW_BENCH_MESSAGES,
 // AGENTSVIEW_BENCH_ACCOUNTS and AGENTSVIEW_BENCH_REPEATS size the fixture.
 func TestUsagePGCachePerf(t *testing.T) {
@@ -256,10 +256,10 @@ func waitWarm(t *testing.T, s *Server) usagePerfSample {
 	return usagePerfSample{elapsed: elapsed, heap: heap.finish()}
 }
 
-func logUsageWarm(t *testing.T, scenario, window string, warm usagePerfSample, directAll usagePerfSample) {
+func logUsageWarm(t *testing.T, scenario, window string, warm usagePerfSample) {
 	t.Helper()
-	// The measured warm peak was at most 1.3 times the all-history direct peak.
-	require.LessOrEqual(t, warm.heap, 3*directAll.heap, "%s %s warm heap", scenario, window)
+	// Compare PostgreSQL and SQLite process peaks in the page benchmark;
+	// this in-process heap sample is diagnostic only.
 	t.Logf("%-26s %-12s background warm=%8s heap=%6.1fMiB", scenario, window,
 		warm.elapsed.Round(time.Millisecond), float64(warm.heap)/(1<<20))
 }
@@ -335,8 +335,6 @@ func medianSample(samples []usagePerfSample) usagePerfSample {
 
 func logUsagePerf(t *testing.T, scenario, window string, direct, cached usagePerfSample) {
 	t.Helper()
-	// Current measurements put cache peaks within 7 MiB of direct reads.
-	require.LessOrEqual(t, cached.heap, direct.heap+64<<20, "%s %s cached heap", scenario, window)
 	ratio := float64(direct.elapsed) / float64(max(cached.elapsed, time.Microsecond))
 	verdict := "ok"
 	if cached.elapsed > direct.elapsed+direct.elapsed/10 {
@@ -364,7 +362,6 @@ func requireSamePage(t *testing.T, scenario string, want, got [3][]byte) {
 }
 
 func (f *usagePerfFixture) measureSessions(t *testing.T, repeats int) {
-	directAll, _ := f.directSample(t, "2026-05-01", 1)
 	for _, window := range []struct{ name, from string }{
 		{"all-history", "2026-05-01"}, {"30-days", "2026-07-12"}, {"7-days", "2026-08-04"},
 	} {
@@ -420,15 +417,15 @@ func (f *usagePerfFixture) measureSessions(t *testing.T, repeats int) {
 		}
 		direct := medianSample(directs)
 		logUsagePerf(t, "empty cache", window.name, direct, medianSample(cold))
-		logUsageWarm(t, "empty cache", window.name, medianSample(coldWarm), directAll)
+		logUsageWarm(t, "empty cache", window.name, medianSample(coldWarm))
 		logUsagePerf(t, "after restart", window.name, direct, medianSample(restart))
 		logUsagePerf(t, "repeat visit", window.name, direct, medianSample(repeat))
 		logUsagePerf(t, "after small push", window.name, direct, medianSample(push))
-		logUsageWarm(t, "after small push", window.name, medianSample(pushWarm), directAll)
+		logUsageWarm(t, "after small push", window.name, medianSample(pushWarm))
 		logUsagePerf(t, "after price change", window.name, direct, medianSample(price))
-		logUsageWarm(t, "after price change", window.name, medianSample(priceWarm), directAll)
+		logUsageWarm(t, "after price change", window.name, medianSample(priceWarm))
 		logUsagePerf(t, "after account push", window.name, direct, medianSample(account))
-		logUsageWarm(t, "after account push", window.name, medianSample(accountWarm), directAll)
+		logUsageWarm(t, "after account push", window.name, medianSample(accountWarm))
 	}
 }
 
@@ -437,7 +434,6 @@ func (f *usagePerfFixture) measureSessions(t *testing.T, repeats int) {
 func (f *usagePerfFixture) measureAccounts(t *testing.T, repeats int) {
 	const concurrent = 4
 	from := "2026-05-01"
-	directAll, _ := f.directSample(t, from, concurrent)
 	dir := t.TempDir()
 	s, closeStore := f.cachedServer(t, dir)
 	defer closeStore()
@@ -465,7 +461,7 @@ func (f *usagePerfFixture) measureAccounts(t *testing.T, repeats int) {
 			requireSamePage(t, push.name+" warmed", want, got)
 		}
 		logUsagePerf(t, "accounts "+push.name, "all-history", medianSample(directs), medianSample(cached))
-		logUsageWarm(t, "accounts "+push.name, "all-history", medianSample(warms), directAll)
+		logUsageWarm(t, "accounts "+push.name, "all-history", medianSample(warms))
 		logUsagePerf(t, "accounts warmed "+push.name, "all-history", medianSample(directs), medianSample(warmed))
 	}
 }

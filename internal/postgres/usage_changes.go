@@ -213,26 +213,8 @@ func installUsageHistoryTokenPG(ctx context.Context, tx *sql.Tx) error {
 	if _, err := tx.ExecContext(ctx, `LOCK TABLE usage_session_changes IN SHARE ROW EXCLUSIVE MODE`); err != nil {
 		return err
 	}
-	var schema string
-	if err := tx.QueryRowContext(ctx, `SELECT current_schema()`).Scan(&schema); err != nil {
-		return err
-	}
-	quoted, err := quoteIdentifier(schema)
-	if err != nil {
-		return err
-	}
-	stamp := strings.Replace(stampUsageChangeFunctionBodyPG,
-		`UPDATE usage_session_changes SET revision = stamped WHERE revision = 0;`,
-		`UPDATE usage_session_changes SET revision = stamped WHERE revision = 0;
-    UPDATE sync_metadata SET value = pg_catalog.gen_random_uuid()::text WHERE key = 'usage_history_token';
-    IF current_setting('agentsview.uc_accounts_' || TG_RELID, true) = 'on' THEN
-        UPDATE sync_metadata SET value = stamped::text WHERE key = 'usage_account_revision';
-        PERFORM set_config('agentsview.uc_accounts_' || TG_RELID, '', true);
-    END IF;`, 1)
-	_, err = tx.ExecContext(ctx, fmt.Sprintf(`INSERT INTO sync_metadata(key,value) VALUES('usage_history_token',pg_catalog.gen_random_uuid()::text) ON CONFLICT(key) DO UPDATE SET value=EXCLUDED.value;
- CREATE OR REPLACE FUNCTION stamp_usage_change() RETURNS trigger LANGUAGE plpgsql SECURITY DEFINER
- SET search_path = pg_catalog, %[1]s, pg_temp AS $journal$%[2]s$journal$;
- UPDATE sync_metadata SET value='%[3]d' WHERE key='usage_change_journal_version'`, quoted, stamp, usageChangeJournalVersionPG))
+	_, err := tx.ExecContext(ctx, fmt.Sprintf(`INSERT INTO sync_metadata(key,value) VALUES('usage_history_token',pg_catalog.gen_random_uuid()::text) ON CONFLICT(key) DO UPDATE SET value=EXCLUDED.value;
+ UPDATE sync_metadata SET value='%d' WHERE key='usage_change_journal_version'`, usageChangeJournalVersionPG))
 	return err
 }
 
