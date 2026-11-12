@@ -63,7 +63,7 @@ func (db *DB) prepareActivityUsageWindow(
 // activityUsageFact is one cached usage fact with the session fields and
 // parsed instant that Activity's survivor order needs.
 type activityUsageFact struct {
-	row           activity.UsageRow
+	row           activityUsageFactRow
 	tokens        activityReportRowTokens
 	reported      sql.NullInt64
 	costStatus    string
@@ -72,6 +72,14 @@ type activityUsageFact struct {
 	requestScoped bool
 	validTS       bool
 	millis, nanos int64
+}
+
+type activityUsageFactRow struct {
+	SessionID, UsageSource, Model, ProviderID                   string
+	ClaudeMessageID, ClaudeRequestID, SourceUUID, UsageDedupKey string
+	Timestamp, Project, Machine, Agent                          string
+	MessageOrdinal                                              int64
+	WebSearchRequests                                           int
 }
 
 const activityUsageFactColumns = `cs.session_id, f.source, f.message_ordinal,
@@ -124,26 +132,32 @@ func (db *DB) activityReportCachedUsage(
 		return nil, nil, nil, err
 	}
 	slices.SortFunc(facts, compareActivityUsageFacts)
-	rows := make([]activity.UsageRow, len(facts))
+	selection := make([]activity.UsageSelectionRow, len(facts))
 	var read []string
-	for k, fact := range facts {
-		rows[k] = fact.row
+	for i, fact := range facts {
+		row := fact.row
 		if collectRead {
-			read = append(read, fact.row.SessionID)
+			read = append(read, row.SessionID)
 		}
+		selection[i] = activity.UsageSelectionRow{Agent: row.Agent, ClaudeMessageID: row.ClaudeMessageID, ClaudeRequestID: row.ClaudeRequestID, SourceUUID: row.SourceUUID, UsageDedupKey: row.UsageDedupKey, SessionID: row.SessionID, MessageOrdinal: row.MessageOrdinal, Timestamp: time.UnixMilli(fact.millis).Add(time.Duration(fact.nanos)), TimestampValid: fact.validTS, OutputTokens: fact.tokens.output, WebSearchRequests: row.WebSearchRequests}
 	}
-	mask, attribution, webSearchRequests, err := activity.UsageSurvivorSelectionForSessions(
-		ctx, q.RangeStart, q.RangeEnd, q.EffectiveEnd, rows, ids,
-	)
+	mask, attribution, webSearchRequests, err := activity.SelectUsageSurvivorsForSessions(ctx, q.RangeStart, q.RangeEnd, q.EffectiveEnd, selection, ids)
 	if err != nil {
 		return nil, nil, nil, err
 	}
-	out := rows[:0]
+	survivors := 0
+	for _, keep := range mask {
+		if keep {
+			survivors++
+		}
+	}
+	out := make([]activity.UsageRow, 0, survivors)
 	for k, fact := range facts {
 		if !mask[k] {
 			continue
 		}
-		row := rows[k]
+		f := fact.row
+		row := activity.UsageRow{SessionID: f.SessionID, UsageSource: f.UsageSource, Model: f.Model, ProviderID: f.ProviderID, ClaudeMessageID: f.ClaudeMessageID, ClaudeRequestID: f.ClaudeRequestID, SourceUUID: f.SourceUUID, UsageDedupKey: f.UsageDedupKey, Timestamp: f.Timestamp, Project: f.Project, Machine: f.Machine, Agent: f.Agent, MessageOrdinal: f.MessageOrdinal, WebSearchRequests: f.WebSearchRequests, InputTokens: fact.tokens.input, OutputTokens: fact.tokens.output, CacheCreationTokens: fact.tokens.cacheCreation, CacheReadTokens: fact.tokens.cacheRead}
 		reported := fact.reported
 		if fact.costSource == CopilotReportedCostSource && reported.Valid {
 			row.SessionCost = &money.Money{Microdollars: reported.Int64}
@@ -328,8 +342,6 @@ func (scan *activityUsageScan) fact(
 	fact.validTS, fact.millis, fact.nanos = scan.millis.Valid, scan.millis.Int64, scan.nanos.Int64
 	row.MessageOrdinal = UsageRowMessageOrdinal(scan.ordinal)
 	row.Project, row.Machine, row.Agent = session.Project, session.Machine, session.Agent
-	row.InputTokens, row.OutputTokens = fact.tokens.input, fact.tokens.output
-	row.CacheCreationTokens, row.CacheReadTokens = fact.tokens.cacheCreation, fact.tokens.cacheRead
 	return true, nil
 }
 
