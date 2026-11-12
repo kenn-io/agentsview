@@ -36,7 +36,7 @@ import (
 //     per match of a run of 32 such words, and at least
 //     FrustrationCapsMinWords when the rule can fire. When that bound on
 //     the ratio is under FrustrationCapsRatio, the exact ratio is too.
-//     Try the caps-run count alone first: the 32-word split costs about 300 µs per prompt.
+//     Try the caps-run count alone before the costlier 32-word split.
 //  4. Caps, exactly, for a stripped prompt of at most pgExactCapsMaxBytes,
 //     where counting every word costs little. A longer prompt goes to Go.
 //

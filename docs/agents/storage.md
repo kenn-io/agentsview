@@ -1287,8 +1287,6 @@ On a fixture of 2,500 sessions with 41,162 prompts (484 MiB of prompt text, 1.9%
 of it outside the plain alphabet), one Signals load with an empty memo took 4.1
 s instead of 6.6 s. It sent 15.8 MiB to Go instead of 485.5 MiB, and Go
 allocated 139 MiB instead of 1.62 GiB, with the same per-session counts.
-On a fixture with about 500,000 mostly short prompts, the 32-word split alone
-accounted for about 153 s of a 175 s cold read before the first test was added.
 
 `frustration_sql_pgtest_test.go` compares the counts with `IsFrustrationMarker`
 on hand-labeled edge cases and on a seeded random corpus, and checks which
