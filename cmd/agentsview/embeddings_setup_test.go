@@ -119,6 +119,72 @@ func TestSetupRejectsChangedProvider(t *testing.T) {
 	require.ErrorIs(t, owner.Setup(0, status.Provider), server.ErrEmbeddingsProviderChanged)
 }
 
+func TestSetupLeavesChangedProviderDisabled(t *testing.T) {
+	setTestHome(t, t.TempDir())
+	dir := testDataDir(t)
+	cfg, err := config.LoadReadOnly()
+	require.NoError(t, err)
+	database := dbtest.OpenTestDBAt(t, filepath.Join(dir, "sessions.db"))
+	oldInspect, oldEndpoint := inspectLocalEmbeddings, localEmbeddingEndpoint
+	t.Cleanup(func() { inspectLocalEmbeddings, localEmbeddingEndpoint = oldInspect, oldEndpoint })
+	inspectLocalEmbeddings = func(_ context.Context, opts embedlocal.Options) (embedlocal.Status, error) {
+		return embedlocal.Status{OllamaAvailable: !opts.SkipOllama}, nil
+	}
+	localEmbeddingEndpoint = func(context.Context, embedlocal.Options) (string, error) {
+		writeTestConfig(t, dir, "[vector]\nenabled = false\n[vector.embeddings]\nmodel = 'nomic-embed-text:v1.5'\ndimension = 768\n[vector.embeddings.servers.local]\nlocal = true\n")
+		return "http://127.0.0.1:11434/v1", nil
+	}
+	owner, err := newLiveVectorServing(t.Context(), cfg, database, nil, config.LoadReadOnly)
+	require.NoError(t, err)
+	defer func() { require.NoError(t, owner.Close()) }()
+	status, err := owner.SetupStatus(t.Context())
+	require.NoError(t, err)
+	require.Equal(t, "ollama", status.Provider)
+	require.NoError(t, owner.Setup(0, status.Provider))
+	<-owner.done
+	assert.Equal(t, server.ErrEmbeddingsProviderChanged.Error(), owner.setup.Error)
+	assert.Nil(t, owner.Manager(""))
+	status, err = owner.SetupStatus(t.Context())
+	require.NoError(t, err)
+	assert.Equal(t, "built-in", status.Provider)
+	saved, err := config.LoadReadOnly()
+	require.NoError(t, err)
+	assert.False(t, saved.Vector.Enabled)
+	chosen, err := embedlocal.ChoiceRecorded()
+	require.NoError(t, err)
+	assert.False(t, chosen)
+}
+
+func TestSharedChoiceRechecksPushAddedDuringSetup(t *testing.T) {
+	setTestHome(t, t.TempDir())
+	dir := testDataDir(t)
+	require.NoError(t, embedlocal.RecordChoice())
+	cfg, err := config.LoadReadOnly()
+	require.NoError(t, err)
+	database := dbtest.OpenTestDBAt(t, filepath.Join(dir, "sessions.db"))
+	oldEndpoint, oldBattery := localEmbeddingEndpoint, onBattery
+	t.Cleanup(func() { localEmbeddingEndpoint, onBattery = oldEndpoint, oldBattery })
+	onBattery = func() bool { return true }
+	localEmbeddingEndpoint = func(context.Context, embedlocal.Options) (string, error) {
+		writeTestConfig(t, dir, "[clickhouse]\nurl = 'clickhouse://example.com/default'\n")
+		return "http://127.0.0.1:11434/v1", nil
+	}
+	owner, err := newLiveVectorServing(t.Context(), cfg, database, nil, config.LoadReadOnly)
+	require.NoError(t, err)
+	defer func() { require.NoError(t, owner.Close()) }()
+	<-owner.done
+	saved, err := config.LoadReadOnly()
+	require.NoError(t, err)
+	assert.False(t, saved.Vector.Enabled)
+	assert.Nil(t, owner.Manager(""))
+	export, ok, err := owner.push.BeginExport(t.Context(), nil)
+	require.NoError(t, err)
+	assert.False(t, ok)
+	if export != nil {
+		require.NoError(t, export.Close())
+	}
+}
+
 func TestSharedSetupKeepsOptOutAddedDuringDownload(t *testing.T) {
 	setTestHome(t, t.TempDir())
 	dir := testDataDir(t)
@@ -477,10 +543,11 @@ func TestLiveEmbeddingsSetup(t *testing.T) {
 			var reloads atomic.Int64
 			owner, err := newLiveVectorServing(t.Context(), cfg, database, idle, func() (config.Config, error) {
 				reloads.Add(1)
-				if recipe == "changed" {
-					writeTestConfig(t, dir, "[vector]\nenabled = true\n[vector.embeddings]\nmodel = 'nomic-embed-text:v1.5'\ndimension = 768\n[vector.embeddings.servers.remote]\nendpoint = '"+stub.URL+"/v1'\n")
-				} else if recipe == "endpoint" {
-					writeTestConfig(t, dir, "[vector]\nenabled = true\n[vector.embeddings]\nmodel = 'nomic-embed-text:v1.5'\ndimension = 768\n[vector.embeddings.servers.remote]\nendpoint = 'http://127.0.0.1:1/v1'\n")
+				switch recipe {
+				case "changed":
+					writeTestConfig(t, dir, "[vector]\nenabled = false\n[vector.embeddings]\nmodel = 'nomic-embed-text:v1.5'\ndimension = 768\n[vector.embeddings.servers.remote]\nendpoint = '"+stub.URL+"/v1'\n")
+				case "endpoint":
+					writeTestConfig(t, dir, "[vector]\nenabled = false\n[vector.embeddings]\nmodel = 'nomic-embed-text:v1.5'\ndimension = 768\n[vector.embeddings.servers.remote]\nendpoint = 'http://127.0.0.1:1/v1'\n")
 				}
 				return config.LoadReadOnly()
 			})
@@ -517,6 +584,9 @@ func TestLiveEmbeddingsSetup(t *testing.T) {
 				assert.Equal(t, server.ErrEmbeddingsProviderChanged.Error(), result.Setup.Error)
 				assert.Nil(t, owner.Manager(""))
 				assert.Zero(t, encoded.Load())
+				savedConfig, err := config.LoadReadOnly()
+				require.NoError(t, err)
+				assert.False(t, savedConfig.Vector.Enabled)
 				if recipe == "endpoint" {
 					saved, err := os.ReadFile(filepath.Join(dir, "config.toml"))
 					require.NoError(t, err)

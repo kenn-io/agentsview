@@ -4226,8 +4226,13 @@ func (c *Config) SaveGithubToken(token string) error {
 // opposed to failures reading or locking the config file.
 var ErrInvalidVectorSetup = errors.New("invalid vector setup")
 
-// ErrVectorSetupIneligible means automatic setup found an explicit choice.
-var ErrVectorSetupIneligible = errors.New("vector setup has explicit settings")
+// ErrVectorSetupIneligible means automatic setup found settings or an export
+// target that requires a manual choice.
+var ErrVectorSetupIneligible = errors.New("automatic vector setup is ineligible")
+
+// ErrVectorSetupProviderChanged means the selected provider changed during
+// setup.
+var ErrVectorSetupProviderChanged = errors.New("embeddings provider changed during setup")
 
 type invalidVectorSetupError struct{ error }
 
@@ -4249,21 +4254,27 @@ func (c *Config) VectorSetupEmbeddings(automatic bool) (VectorEmbeddingsConfig, 
 	return embeddings, err
 }
 
-// SaveVectorSetup records the selected action and, for local setup, the built-in recipe.
-func (c *Config) SaveVectorSetup(local, automatic bool) error {
-	return c.withConfigLock(func() error {
+// SaveVectorSetup saves an enabled setup if its provider is still selected.
+// Automatic setup also rechecks whether vector exports need an explicit choice.
+func (c *Config) SaveVectorSetup(approved VectorEmbeddingsServerConfig, automatic bool) (Config, error) {
+	var saved Config
+	err := c.withConfigLock(func() error {
 		existing, candidate, err := c.vectorSetupCandidate(automatic)
 		if err != nil {
 			return err
 		}
-		if local {
+		_, selected, err := candidate.Vector.Embeddings.Server("")
+		if err != nil {
+			return err
+		}
+		if selected.Endpoint != approved.Endpoint || selected.Local && !approved.Local {
+			return ErrVectorSetupProviderChanged
+		}
+		if approved.Local {
 			recipe := candidate.Vector.Embeddings
 			name, server, err := recipe.Server("")
 			if err != nil {
 				return err
-			}
-			if server.Endpoint != "" {
-				return invalidVectorSetupError{errors.New("embeddings provider changed during setup")}
 			}
 			embeddings, err := configTable(existing["vector"].(map[string]any), "embeddings")
 			if err != nil {
@@ -4290,9 +4301,22 @@ func (c *Config) SaveVectorSetup(local, automatic bool) error {
 				return err
 			}
 			selected["local"] = true
+			server.Local = true
+			if candidate.Vector.Embeddings.Servers == nil {
+				candidate.Vector.Embeddings.Servers = make(map[string]VectorEmbeddingsServerConfig)
+			}
+			candidate.Vector.Embeddings.Servers[name] = server
+			if err := candidate.Vector.Validate(); err != nil {
+				return invalidVectorSetupError{err}
+			}
 		}
-		return c.writeConfigMap(existing)
+		if err := c.writeConfigMap(existing); err != nil {
+			return err
+		}
+		saved = candidate
+		return nil
 	})
+	return saved, err
 }
 
 func (c *Config) vectorSetupCandidate(automatic bool) (map[string]any, Config, error) {
@@ -4337,5 +4361,38 @@ func (c *Config) vectorSetupCandidate(automatic bool) (map[string]any, Config, e
 	if err := candidate.Vector.Validate(); err != nil {
 		return nil, Config{}, invalidVectorSetupError{err}
 	}
+	if automatic {
+		blocked, err := candidate.HasImplicitVectorPush()
+		if err != nil {
+			return nil, Config{}, err
+		}
+		if blocked {
+			return nil, Config{}, ErrVectorSetupIneligible
+		}
+	}
 	return existing, candidate, nil
+}
+
+// HasImplicitVectorPush reports whether a configured PostgreSQL or ClickHouse
+// target will export vectors without an explicit push_vectors setting.
+func (c *Config) HasImplicitVectorPush() (bool, error) {
+	pg, err := c.ResolvePGTargets()
+	if err != nil {
+		return false, err
+	}
+	for _, target := range pg {
+		if target.Config.URL != "" && target.Config.PushVectors == nil {
+			return true, nil
+		}
+	}
+	clickhouse, err := c.ResolveClickHouseTargets()
+	if err != nil {
+		return false, err
+	}
+	for _, target := range clickhouse {
+		if target.Config.URL != "" && target.Config.PushVectors == nil {
+			return true, nil
+		}
+	}
+	return false, nil
 }

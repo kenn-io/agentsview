@@ -62,7 +62,7 @@ func (v *liveVectorServing) startSharedChoice() {
 	var approvedBytes int64
 	embeddings := v.cfg.Vector.Embeddings
 	if !v.cfg.Vector.Enabled {
-		blocked, err := hasImplicitVectorPush(&v.cfg)
+		blocked, err := v.cfg.HasImplicitVectorPush()
 		if err != nil {
 			log.Printf("search by meaning: resolve push targets: %v", err)
 			return
@@ -118,28 +118,6 @@ func (v *liveVectorServing) startSharedChoice() {
 	if err := v.startSetup(deployment, approvedBytes, true); err != nil {
 		log.Printf("search by meaning: start setup: %v", err)
 	}
-}
-
-func hasImplicitVectorPush(cfg *config.Config) (bool, error) {
-	pg, err := cfg.ResolvePGTargets()
-	if err != nil {
-		return false, err
-	}
-	for _, target := range pg {
-		if target.Config.URL != "" && target.Config.PushVectors == nil {
-			return true, nil
-		}
-	}
-	clickhouse, err := cfg.ResolveClickHouseTargets()
-	if err != nil {
-		return false, err
-	}
-	for _, target := range clickhouse {
-		if target.Config.URL != "" && target.Config.PushVectors == nil {
-			return true, nil
-		}
-	}
-	return false, nil
 }
 
 func (v *liveVectorServing) startSchedulers() {
@@ -356,21 +334,6 @@ func (v *liveVectorServing) startSetup(deployment config.VectorEmbeddingsServerC
 	return nil
 }
 
-func (v *liveVectorServing) reloadSetup(approved config.VectorEmbeddingsServerConfig) (config.Config, error) {
-	cfg, err := v.reload()
-	if err != nil {
-		return config.Config{}, err
-	}
-	_, selected, err := cfg.Vector.Embeddings.Server("")
-	if err != nil {
-		return config.Config{}, err
-	}
-	if selected.Local != approved.Local || selected.Endpoint != approved.Endpoint {
-		return config.Config{}, server.ErrEmbeddingsProviderChanged
-	}
-	return cfg, nil
-}
-
 func (v *liveVectorServing) activate(deployment config.VectorEmbeddingsServerConfig, approvedBytes int64, automatic bool) error {
 	cfg := v.cfg
 	_, err := resolveLocalEmbeddings(v.ctx, deployment,
@@ -393,12 +356,27 @@ func (v *liveVectorServing) activate(deployment config.VectorEmbeddingsServerCon
 		return err
 	}
 	if v.serving.manager == nil {
-		if err := cfg.SaveVectorSetup(deployment.Local, automatic); errors.Is(err, config.ErrVectorSetupIneligible) {
-			return nil
-		} else if err != nil {
+		var err error
+		cfg, err = v.reload()
+		if err != nil {
 			return err
 		}
-		cfg, err = v.reloadSetup(deployment)
+		cfg, err = cfg.SaveVectorSetup(deployment, automatic)
+		if errors.Is(err, config.ErrVectorSetupIneligible) {
+			log.Print("search by meaning: shared setup became ineligible before activation")
+			return nil
+		}
+		if errors.Is(err, config.ErrVectorSetupProviderChanged) {
+			if current, reloadErr := v.reload(); reloadErr != nil {
+				log.Printf("search by meaning: reload changed provider: %v", reloadErr)
+			} else {
+				v.mu.Lock()
+				v.cfg = current
+				v.push.reconfigure(current)
+				v.mu.Unlock()
+			}
+			return server.ErrEmbeddingsProviderChanged
+		}
 		if err != nil {
 			return err
 		}

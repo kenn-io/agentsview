@@ -3244,7 +3244,7 @@ func TestLoadFile_ModelAliases(t *testing.T) {
 
 func TestSaveVectorSetupPreservesSettings(t *testing.T) {
 	for _, raw := range []string{
-		"port = 12345\n[vector]\nenabled = false\ninclude_automated = true\n",
+		"port = 12345\n[vector]\nenabled = false\ninclude_automated = true\n[vector.embeddings]\nmodel = 'nomic-embed-text'\ndimension = 768\n",
 		"[vector]\nenabled = false\n[vector.embeddings]\nmodel = 'test-model'\ndimension = 3\nmodel_context_tokens = 0\nquery_prefix = ''\ndocument_prefix = ''\ninput_suffix = '!'\nrequest_dimensions = false\n[vector.embeddings.servers.local]\nendpoint = 'https://example.com/v1'\nmax_retries = 0\n",
 	} {
 		t.Run(raw, func(t *testing.T) {
@@ -3254,11 +3254,16 @@ func TestSaveVectorSetupPreservesSettings(t *testing.T) {
 			require.NoError(t, err)
 			// Setup reads edits made after the daemon loaded its config.
 			require.NoError(t, os.WriteFile(path, []byte(raw), 0o600))
+			embeddings, err := cfg.VectorSetupEmbeddings(false)
+			require.NoError(t, err)
+			_, approved, err := embeddings.Server("")
+			require.NoError(t, err)
 			var expected map[string]any
 			_, err = toml.Decode(raw, &expected)
 			require.NoError(t, err)
 			expected["vector"].(map[string]any)["enabled"] = true
-			require.NoError(t, cfg.SaveVectorSetup(false, false))
+			_, err = cfg.SaveVectorSetup(approved, false)
+			require.NoError(t, err)
 			var saved map[string]any
 			_, err = toml.DecodeFile(path, &saved)
 			require.NoError(t, err)
@@ -3284,9 +3289,15 @@ func TestSaveVectorSetupPersistsSelectedServer(t *testing.T) {
 			require.NoError(t, err)
 			before, err := cfg.VectorSetupEmbeddings(false)
 			require.NoError(t, err)
-			err = cfg.SaveVectorSetup(true, false)
+			approved := VectorEmbeddingsServerConfig{Local: true}
+			if !tc.invalid {
+				_, approved, err = before.Server("")
+				require.NoError(t, err)
+				approved.Local = true
+			}
+			_, err = cfg.SaveVectorSetup(approved, false)
 			if tc.invalid {
-				require.ErrorIs(t, err, ErrInvalidVectorSetup)
+				require.ErrorIs(t, err, ErrVectorSetupProviderChanged)
 				data, err := os.ReadFile(filepath.Join(dir, configFileName))
 				require.NoError(t, err)
 				assert.Equal(t, tc.raw, string(data))
@@ -3324,11 +3335,60 @@ func TestAutomaticVectorSetupRejectsExplicitSettings(t *testing.T) {
 			require.NoError(t, os.WriteFile(path, []byte(raw), 0o600))
 			_, err = cfg.VectorSetupEmbeddings(true)
 			require.ErrorIs(t, err, ErrVectorSetupIneligible)
-			require.ErrorIs(t, cfg.SaveVectorSetup(true, true), ErrVectorSetupIneligible)
+			_, saveErr := cfg.SaveVectorSetup(VectorEmbeddingsServerConfig{Local: true}, true)
+			require.ErrorIs(t, saveErr, ErrVectorSetupIneligible)
 			data, err := os.ReadFile(path)
 			require.NoError(t, err)
 			assert.Equal(t, raw, string(data))
 		})
+	}
+}
+
+func TestAutomaticVectorSetupRechecksImplicitPush(t *testing.T) {
+	for _, target := range []struct{ name, config string }{
+		{name: "PostgreSQL", config: "[pg]\nurl = 'postgres://example.com/db'\n"},
+		{name: "ClickHouse", config: "[clickhouse]\nurl = 'clickhouse://example.com/default'\n"},
+	} {
+		for _, setting := range []struct {
+			name      string
+			push      string
+			automatic bool
+			blocked   bool
+		}{
+			{name: "unset automatic", automatic: true, blocked: true},
+			{name: "explicit false", push: "push_vectors = false\n", automatic: true},
+			{name: "explicit true", push: "push_vectors = true\n", automatic: true},
+			{name: "unset direct turn on"},
+		} {
+			t.Run(target.name+"/"+setting.name, func(t *testing.T) {
+				dir := setupTestEnv(t)
+				path := filepath.Join(dir, configFileName)
+				raw := target.config + setting.push
+				require.NoError(t, os.WriteFile(path, []byte(raw), 0o600))
+				cfg, err := LoadReadOnly()
+				require.NoError(t, err)
+				saved, err := cfg.SaveVectorSetup(VectorEmbeddingsServerConfig{Local: true}, setting.automatic)
+				if setting.blocked {
+					require.ErrorIs(t, err, ErrVectorSetupIneligible)
+					data, readErr := os.ReadFile(path)
+					require.NoError(t, readErr)
+					assert.Equal(t, raw, string(data))
+					return
+				}
+				require.NoError(t, err)
+				assert.True(t, saved.Vector.Enabled)
+				if setting.push != "" {
+					var configured *bool
+					if target.name == "PostgreSQL" {
+						configured = saved.PG.PushVectors
+					} else {
+						configured = saved.ClickHouse.PushVectors
+					}
+					require.NotNil(t, configured)
+					assert.Equal(t, setting.push == "push_vectors = true\n", *configured)
+				}
+			})
+		}
 	}
 }
 
@@ -3345,7 +3405,7 @@ func TestSaveVectorSetupRejectsInvalidCurrentSettings(t *testing.T) {
 			path := filepath.Join(dir, configFileName)
 			require.NoError(t, os.WriteFile(path, []byte(tc.raw), 0o600))
 			_, setupErr := cfg.VectorSetupEmbeddings(false)
-			saveErr := cfg.SaveVectorSetup(false, false)
+			_, saveErr := cfg.SaveVectorSetup(VectorEmbeddingsServerConfig{}, false)
 			data, err := os.ReadFile(path)
 			require.NoError(t, err)
 			assert.Equal(t, tc.raw, string(data))
