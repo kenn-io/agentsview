@@ -212,6 +212,30 @@
     };
   }
 
+  const MENU_EDGE_GAP = 4;
+
+  /** Keeps the open context menu inside the viewport. Opened near the
+   * bottom or right edge, it moves up or left so every action stays
+   * visible; the page does not scroll to reveal a clipped menu. */
+  function keepInViewport(node: HTMLElement, at: { x: number; y: number } | null) {
+    const place = (point: { x: number; y: number } | null) => {
+      if (!point) return;
+      const { width, height } = node.getBoundingClientRect();
+      const x = Math.max(
+        MENU_EDGE_GAP,
+        Math.min(point.x, window.innerWidth - MENU_EDGE_GAP - width),
+      );
+      const y = Math.max(
+        MENU_EDGE_GAP,
+        Math.min(point.y, window.innerHeight - MENU_EDGE_GAP - height),
+      );
+      node.style.left = `${x}px`;
+      node.style.top = `${y}px`;
+    };
+    place(at);
+    return { update: place };
+  }
+
   function handleContextMenu(e: MouseEvent) {
     e.preventDefault();
     contextMenu = { x: e.clientX, y: e.clientY };
@@ -560,7 +584,7 @@
   <div
     class="context-menu"
     use:mountOverlay
-    style="left: {contextMenu.x}px; top: {contextMenu.y}px;"
+    use:keepInViewport={contextMenu}
   >
     <!-- Full-size equivalents of the small star and expand buttons in the
          row's gutter, which cannot both reach 24px in a 42px row. -->

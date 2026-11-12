@@ -189,6 +189,37 @@ describe("SessionItem identity", () => {
     starred.toggle("menu-star");
   });
 
+  it("keeps a context menu opened near the viewport corner fully on screen", () => {
+    vi.spyOn(window, "innerWidth", "get").mockReturnValue(800);
+    vi.spyOn(window, "innerHeight", "get").mockReturnValue(600);
+    const rect = HTMLElement.prototype.getBoundingClientRect;
+    vi.spyOn(HTMLElement.prototype, "getBoundingClientRect").mockImplementation(function (
+      this: HTMLElement,
+    ) {
+      return this.classList.contains("context-menu")
+        ? DOMRect.fromRect({ width: 150, height: 190 })
+        : rect.call(this);
+    });
+    mountSession({ id: "menu-edge" });
+
+    document
+      .querySelector<HTMLElement>(".session-info-link")!
+      .dispatchEvent(
+        new MouseEvent("contextmenu", {
+          bubbles: true,
+          cancelable: true,
+          clientX: 780,
+          clientY: 565,
+        }),
+      );
+    flushSync();
+
+    const menu = document.querySelector<HTMLElement>(".context-menu")!;
+    expect(menu.style.left).toBe(`${800 - 4 - 150}px`);
+    expect(menu.style.top).toBe(`${600 - 4 - 190}px`);
+    vi.restoreAllMocks();
+  });
+
   it("lets keyboard users expand a continuation chain and reports its state", () => {
     const onToggleExpand = vi.fn();
     mountSession({}, { continuationCount: 3, onToggleExpand, expanded: false });
