@@ -32,3 +32,9 @@ not also the test oracle.
 `subagents/` is a hand-written layout for spawn parenting. It is not produced by
 `generate.rs`. The parent writes `subagents/<id>/meta.json`. Child sessions stay
 sibling directories, including a worktree child under a second encoded cwd.
+
+`compacted/` is a hand-written session with two compactions. Its
+`updates.jsonl`, `chat_history.jsonl`, and `compaction_checkpoints/` follow the
+record shapes of a Grok Build 1.0.77 session: `chat_history.jsonl` holds only
+the history after the last compaction, and `updates.jsonl` holds every turn.
+Paths, IDs, prompts, and tool output are invented.

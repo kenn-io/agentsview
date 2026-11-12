@@ -1,5 +1,5 @@
 ---
-last_edited: 2026-11-11
+last_edited: 2026-11-12
 ---
 
 # Session Format Source Inventory
@@ -2064,6 +2064,38 @@ fixtures retain this field; missing identities remain source-local.
   derived `chat_history.jsonl` model-message cache, and an authoritative
   `updates.jsonl` stream of timestamped ACP and xAI session notifications.
 
+- **Compaction (reverified 2026-11-12):** A compaction appends a
+  `compaction_checkpoint` record to `updates.jsonl`, writes
+  `compaction_checkpoints/<id>.json`, and replaces `chat_history.jsonl` with
+  the compacted history. The pinned
+  [chat rebuild reducer](https://github.com/xai-org/grok-build/blob/2bdd1d6a6369de0e8c68132ea4539e9abd9e14a8/crates/codegen/xai-grok-shell/src/session/storage/mod.rs#L256-L620)
+  truncates the cache at each checkpoint, so only `updates.jsonl` keeps the
+  turns before it. The
+  [compacted history](https://github.com/xai-org/grok-build/blob/2bdd1d6a6369de0e8c68132ea4539e9abd9e14a8/crates/codegen/xai-chat-state/src/compaction_utils.rs#L920-L1000)
+  opens with the system prompt, a user-info `compaction_meta` row, the carried
+  user query, and recent messages, then the summary row. That row is the
+  `compaction_meta` row whose text starts with the
+  [continuation preamble](https://github.com/xai-org/grok-build/blob/2bdd1d6a6369de0e8c68132ea4539e9abd9e14a8/crates/codegen/xai-chat-state/src/compaction_utils.rs#L811-L819);
+  the checkpoint file's `compacted_history` holds the same rows. Agentsview
+  rebuilds each pre-checkpoint segment from `updates.jsonl` with the reducer's
+  turn rules: a switch between user and agent output closes the open item, and
+  a finished tool call closes the agent item before its result. Unlike the
+  reducer, it keeps `agent_thought_chunk` text as thinking. It names calls
+  from `_meta["x.ai/tool"].name`, because later updates replace `title` with
+  display text. Chunks marked `hostTurn` close the open items, and user chunks
+  marked `syntheticPrompt` are dropped. Each checkpoint becomes a compact
+  boundary carrying its summary. The replayed prefix before the summary row in
+  `chat_history.jsonl` is dropped when the stream supplied those turns. Local
+  Grok Build 1.0.77 sessions match this shape: 11 compacted sessions with up
+  to 8 checkpoints each, every checkpoint file present, and only the latest
+  compaction's rows in `chat_history.jsonl`. The `syntheticPrompt` marker was
+  observed there and is absent from the pinned source.
+
+- **Tool rows:** Assistant rows keep their calls in `tool_calls` and add a
+  rendered block per call to the row text, as Claude rows do. Results pair
+  onto their calls by `tool_call_id`. This matches the Claude and Codex
+  layout, so Grok emits no standalone tool-role rows.
+
 - **Evidence:** `source`.
 
 - **Upstream:** Clone `https://github.com/xai-org/grok-build.git` at
@@ -2078,7 +2110,9 @@ fixtures retain this field; missing identities remain source-local.
   confirm that the derived chat rows themselves carry no message timestamps.
   Agentsview maps timestamped `tool_call` and terminal `tool_call_update`
   records to the existing tool-result event model, so Activity can use tool
-  completion time without adding derived transcript messages.
+  completion time. Transcript rows after the last compaction come from
+  `chat_history.jsonl`; earlier rows are rebuilt from the stream, as the
+  compaction entry below describes.
 
 - **Usage and cost:** Durable `turn_completed` updates may carry per-model
   input, output, cache-read, cache-creation, and reasoning tokens plus
@@ -2135,9 +2169,11 @@ fixtures retain this field; missing identities remain source-local.
   [copied-fork](https://github.com/xai-org/grok-build/blob/d71f6e0c1f5acc5469e503e192fe14824e6f8c90/crates/codegen/xai-grok-shell/src/agent/subagent/mod.rs#L1291-L1306)
   summary writes in `subagent/mod.rs` at the commit above.
 
-- **Agentsview:** `internal/parser/grok.go`, `internal/parser/grok_provider.go`,
-  colocated tests, and the sanitized upstream-generated fixtures in
-  `internal/parser/testdata/grok-build`.
+- **Agentsview:** `internal/parser/grok.go`,
+  `internal/parser/grok_compaction.go`, `internal/parser/grok_provider.go`,
+  colocated tests, and the sanitized fixtures in
+  `internal/parser/testdata/grok-build`. The `compacted` fixture follows the
+  record shapes of a Grok Build 1.0.77 session with invented content.
 
 - **Watcher evidence (2026-09-20):** Rechecked the pinned session guide above:
   `summary.json` indexes the session, while transcript and signal files are

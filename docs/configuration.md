@@ -775,8 +775,10 @@ one or more explicit roots.
 Grok sessions are read from `summary.json` (title, timestamps, project),
 optional `signals.json` (token counters), and `chat_history.jsonl` when present
 for the full transcript (user turns, assistant replies, thinking, and tool
-calls). If `chat_history.jsonl` is missing, AgentsView falls back to
-summary-only mode. Set `GROK_DIR` or `agents.grok.dirs` to override the default
+calls). Grok trims `chat_history.jsonl` each time it compacts a session, so
+AgentsView rebuilds the turns before each compaction from `updates.jsonl` and
+marks each compaction in the transcript. If `chat_history.jsonl` is missing,
+AgentsView falls back to summary-only mode. Set `GROK_DIR` or `agents.grok.dirs` to override the default
 directory.
 
 **Goose default directories** are:

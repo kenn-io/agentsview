@@ -1665,3 +1665,64 @@ func TestClaudeCostStateUpgradeKeepsSessionTotalApart(t *testing.T) {
 	requireTotal(database)
 	assert.Equal(t, source, database.GetSessionFilePath(ctx, id))
 }
+
+func TestGrokCompactionUpgradeReparsesInPlace(t *testing.T) {
+	scope := db.ScopedDataVersionProviders(177, 178)
+	assert.ElementsMatch(t, []parser.AgentType{parser.AgentGrok}, scope)
+	version := db.CurrentDataVersion()
+	t.Cleanup(db.InstallDataVersionScopesForTest(map[int][]parser.AgentType{version: scope}))
+	ctx := t.Context()
+	database := dbtest.OpenTestDB(t)
+	root := t.TempDir()
+	require.NoError(t, os.CopyFS(root, os.DirFS(filepath.Join("..", "parser", "testdata", "grok-build", "compacted"))))
+	const id = "grok:019f6000-0000-7000-8000-000000000020"
+	source := filepath.Join(root, "%2Fworkspace%2Ffetchkit", "019f6000-0000-7000-8000-000000000020", "summary.json")
+	cfg := sync.EngineConfig{Machine: "local", AgentDirs: map[parser.AgentType][]string{parser.AgentGrok: {root}}}
+	engine := sync.NewEngine(ctx, database, cfg)
+	require.Equal(t, 1, engine.SyncAll(ctx, nil).Synced)
+	engine.Close()
+
+	// Reproduce the previous parser, which kept only the rows after the last
+	// compaction and never marked a boundary.
+	var lastBoundary int
+	require.NoError(t, database.Reader().QueryRow(ctx,
+		"SELECT max(ordinal) FROM messages WHERE session_id=? AND is_compact_boundary=1", id).Scan(&lastBoundary))
+	require.NoError(t, database.Update(ctx, func(tx *sql.Tx) error {
+		if _, err := tx.ExecContext(ctx,
+			"DELETE FROM tool_calls WHERE session_id=? AND message_id IN (SELECT id FROM messages WHERE session_id=? AND ordinal<=?)",
+			id, id, lastBoundary); err != nil {
+			return err
+		}
+		if _, err := tx.ExecContext(ctx,
+			"DELETE FROM messages WHERE session_id=? AND ordinal<=?", id, lastBoundary); err != nil {
+			return err
+		}
+		_, err := tx.ExecContext(ctx, fmt.Sprintf(
+			"UPDATE sessions SET compaction_count=0, data_version=%d; PRAGMA user_version=%d", version-1, version-1))
+		return err
+	}))
+	path := database.Path()
+	require.NoError(t, database.Close())
+	database, err := db.OpenIsolated(ctx, path)
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, database.Close()) })
+	_, fullRebuild, err := db.ArchiveResyncState(ctx, path)
+	require.NoError(t, err)
+	assert.False(t, fullRebuild, "the Grok compaction upgrade must reparse in place")
+
+	engine = sync.NewEngine(ctx, database, cfg)
+	t.Cleanup(engine.Close)
+	require.Equal(t, 1, engine.SyncAll(ctx, nil).Synced)
+	session, err := database.GetSession(ctx, id)
+	require.NoError(t, err)
+	require.NotNil(t, session)
+	assert.Equal(t, 2, session.CompactionCount)
+	assert.Equal(t, source, database.GetSessionFilePath(ctx, id), "source path is unchanged")
+	var first string
+	require.NoError(t, database.Reader().QueryRow(ctx,
+		"SELECT content FROM messages WHERE session_id=? AND ordinal=0", id).Scan(&first))
+	assert.Equal(t, "Add a retry with backoff to the fetch helper and run the tests.", first)
+	var sessions int
+	require.NoError(t, database.Reader().QueryRow(ctx, "SELECT count(*) FROM sessions").Scan(&sessions))
+	assert.Equal(t, 1, sessions)
+}

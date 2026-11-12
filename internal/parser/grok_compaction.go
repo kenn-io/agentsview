@@ -1,0 +1,493 @@
+package parser
+
+import (
+	"context"
+	"encoding/json/v2"
+	"os"
+	"path/filepath"
+	"strings"
+	"time"
+
+	"github.com/tidwall/gjson"
+)
+
+// grokCompactionSummaryPreamble opens the user_meta row that carries a
+// compaction summary. Grok Build's format_compact_summary_content writes it
+// verbatim; the other compaction_meta rows (the user-info prefix and the
+// attached-image note) never start with it.
+const grokCompactionSummaryPreamble = "This session is being continued from a previous conversation that ran out of context."
+
+// grokMaxCheckpointFileSize bounds the compaction checkpoint read. A
+// checkpoint holds one compacted context window, so a larger file is not a
+// checkpoint this parser understands.
+const grokMaxCheckpointFileSize = 64 << 20
+
+// grokCheckpoint is one compaction_checkpoint record from updates.jsonl.
+type grokCheckpoint struct {
+	file      string
+	timestamp time.Time
+}
+
+// grokCompactedSegment is the transcript Grok Build dropped from
+// chat_history.jsonl at one compaction, rebuilt from updates.jsonl, and the
+// checkpoint that ended it.
+type grokCompactedSegment struct {
+	messages   []ParsedMessage
+	checkpoint grokCheckpoint
+}
+
+// grokCompactBoundary is the row a compaction leaves in the transcript, shaped
+// like the Claude and Codex boundaries so compaction counts and dividers treat
+// every provider alike.
+func grokCompactBoundary(summary string, timestamp time.Time) ParsedMessage {
+	return ParsedMessage{
+		Role:              RoleAssistant,
+		Content:           summary,
+		ContentLength:     len(summary),
+		Timestamp:         timestamp,
+		IsSystem:          true,
+		SourceType:        "system",
+		SourceSubtype:     "compact_boundary",
+		IsCompactBoundary: true,
+	}
+}
+
+// grokCompactionSummary returns the summary text of a compaction_meta row,
+// or false for the other compaction_meta rows.
+func grokCompactionSummary(content gjson.Result) (string, bool) {
+	text := strings.TrimSpace(grokTextParts(content))
+	if !strings.HasPrefix(text, grokCompactionSummaryPreamble) {
+		return "", false
+	}
+	return text, true
+}
+
+// grokTextParts joins the text parts of a Grok content value.
+func grokTextParts(content gjson.Result) string {
+	if content.Type == gjson.String {
+		return content.Str
+	}
+	var parts []string
+	content.ForEach(func(_, part gjson.Result) bool {
+		if part.Get("type").Str == "text" {
+			if text := part.Get("text").Str; text != "" {
+				parts = append(parts, text)
+			}
+		}
+		return true
+	})
+	return strings.Join(parts, "\n")
+}
+
+// grokCheckpointSummary reads the compaction summary from a checkpoint file's
+// compacted_history. It returns "" when the file is missing, unreadable, or
+// carries no summary; the boundary still marks the compaction.
+func grokCheckpointSummary(sessionDir, rel string) string {
+	rel = filepath.FromSlash(strings.TrimSpace(rel))
+	if rel == "" || !filepath.IsLocal(rel) {
+		return ""
+	}
+	path := filepath.Join(sessionDir, rel)
+	info, err := os.Stat(path)
+	if err != nil || info.Size() > grokMaxCheckpointFileSize {
+		return ""
+	}
+	data, err := os.ReadFile(path)
+	if err != nil || !gjson.ValidBytes(data) {
+		return ""
+	}
+	summary := ""
+	gjson.GetBytes(data, "compacted_history").ForEach(func(_, item gjson.Result) bool {
+		if item.Get("type").Str != "user" ||
+			item.Get("synthetic_reason").Str != "compaction_meta" {
+			return true
+		}
+		if text, ok := grokCompactionSummary(item.Get("content")); ok {
+			summary = text
+			return false
+		}
+		return true
+	})
+	return summary
+}
+
+// parseGrokCompactedSegments rebuilds the transcript before each compaction
+// checkpoint. Grok Build truncates chat_history.jsonl at every checkpoint and
+// keeps updates.jsonl, its source of truth, whole; without this pass a
+// compacted session loses everything before its last compaction.
+func parseGrokCompactedSegments(
+	ctx context.Context, path string, checkpoints []grokCheckpoint,
+) ([]grokCompactedSegment, error) {
+	if len(checkpoints) == 0 {
+		return nil, nil
+	}
+	segments := make([]grokCompactedSegment, 0, len(checkpoints))
+	reducer := newGrokSegmentReducer(ctx)
+	_, err := readJSONLFrom(ctx, path, 0, func(line string) {
+		if len(segments) == len(checkpoints) || !gjson.Valid(line) {
+			return
+		}
+		root := gjson.Parse(line)
+		update := grokUpdatePayload(root)
+		if !update.Exists() {
+			return
+		}
+		timestamp := hermesUnixTime(root.Get("timestamp").Float())
+		if update.Get("sessionUpdate").Str == "compaction_checkpoint" {
+			segments = append(segments, grokCompactedSegment{
+				messages:   reducer.finish(),
+				checkpoint: checkpoints[len(segments)],
+			})
+			reducer = newGrokSegmentReducer(ctx)
+			return
+		}
+		reducer.process(update, timestamp)
+	})
+	return segments, err
+}
+
+// grokUpdatePayload returns the session update a updates.jsonl record wraps.
+func grokUpdatePayload(root gjson.Result) gjson.Result {
+	if update := root.Get("params.update"); update.Exists() {
+		return update
+	}
+	return root.Get("update")
+}
+
+// grokSegmentReducer turns an updates.jsonl stream into transcript rows with
+// the turn rules of Grok Build's chat_rebuild reducer: a switch between user
+// and agent output closes the open item, and a finished tool call closes the
+// agent item before its result. Unlike that reducer it keeps the streamed
+// thinking, which the dropped reasoning rows used to carry, and the record
+// timestamps.
+type grokSegmentReducer struct {
+	ctx      context.Context
+	messages []ParsedMessage
+
+	inUserTurn       bool
+	userParts        []string
+	userTimestamp    time.Time
+	userInterjection bool
+	userSynthetic    bool
+
+	agentText      strings.Builder
+	thinking       strings.Builder
+	agentTimestamp time.Time
+	calls          []ParsedToolCall
+
+	// callAt locates a call by ID: a negative message index means it is
+	// still in calls, waiting for its agent item to close.
+	callAt  map[string]grokCallPosition
+	emitted map[string]struct{}
+}
+
+type grokCallPosition struct {
+	message int
+	call    int
+}
+
+func newGrokSegmentReducer(ctx context.Context) *grokSegmentReducer {
+	return &grokSegmentReducer{
+		ctx:     ctx,
+		callAt:  make(map[string]grokCallPosition),
+		emitted: make(map[string]struct{}),
+	}
+}
+
+func (r *grokSegmentReducer) process(update gjson.Result, timestamp time.Time) {
+	switch update.Get("sessionUpdate").Str {
+	case "user_message_chunk":
+		r.onUserChunk(update, timestamp)
+	case "agent_message_chunk":
+		if r.hostTurnBoundary(update) {
+			return
+		}
+		r.closeUserTurn()
+		if update.Get("content.type").Str == "text" {
+			r.markAgent(timestamp)
+			r.agentText.WriteString(update.Get("content.text").Str)
+		}
+	case "agent_thought_chunk":
+		r.closeUserTurn()
+		if update.Get("content.type").Str == "text" {
+			r.markAgent(timestamp)
+			r.thinking.WriteString(update.Get("content.text").Str)
+		}
+	case "tool_call":
+		r.onToolCall(update, timestamp)
+	case "tool_call_update":
+		r.onToolCallUpdate(update, timestamp)
+	}
+}
+
+func (r *grokSegmentReducer) hostTurnBoundary(update gjson.Result) bool {
+	if !update.Get("_meta.hostTurn").Bool() {
+		return false
+	}
+	r.closeUserTurn()
+	r.flushAgent()
+	return true
+}
+
+func (r *grokSegmentReducer) onUserChunk(update gjson.Result, timestamp time.Time) {
+	if r.hostTurnBoundary(update) {
+		return
+	}
+	if !r.inUserTurn {
+		r.flushAgent()
+		r.inUserTurn = true
+	}
+	interjection := update.Get("_meta.interjection").Bool()
+	synthetic := update.Get("_meta.syntheticPrompt").Bool()
+	isText := update.Get("content.type").Str == "text"
+	// Each interjection text chunk opens its own item, as Grok Build's
+	// rebuild does; synthetic prompts stay apart so they can be dropped.
+	if interjection != r.userInterjection || synthetic != r.userSynthetic ||
+		(interjection && isText) {
+		r.flushUser()
+	}
+	r.userInterjection = interjection
+	r.userSynthetic = synthetic
+	if !isText {
+		return
+	}
+	if r.userTimestamp.IsZero() {
+		r.userTimestamp = timestamp
+	}
+	r.userParts = append(r.userParts, update.Get("content.text").Str)
+}
+
+func (r *grokSegmentReducer) onToolCall(update gjson.Result, timestamp time.Time) {
+	id := strings.TrimSpace(update.Get("toolCallId").Str)
+	name := firstNonEmptyJSONLString(
+		update.Get(`_meta.x\.ai/tool.name`).Str,
+		update.Get("title").Str,
+	)
+	if name == "" {
+		return
+	}
+	r.closeUserTurn()
+	r.markAgent(timestamp)
+	input := grokRawInputJSON(update.Get("rawInput"))
+	call := ParsedToolCall{
+		ToolUseID: id,
+		ToolName:  name,
+		Category:  NormalizeToolCategory(name),
+		InputJSON: input,
+		SkillName: inferToolSkillName(r.ctx, name, input),
+	}
+	if id != "" {
+		call.ResultEvents = []ParsedToolResultEvent{{
+			ToolUseID: id,
+			Source:    "tool_execution",
+			Status:    "started",
+			Timestamp: timestamp,
+		}}
+		r.callAt[id] = grokCallPosition{message: -1, call: len(r.calls)}
+	}
+	r.calls = append(r.calls, call)
+}
+
+func (r *grokSegmentReducer) onToolCallUpdate(update gjson.Result, timestamp time.Time) {
+	id := strings.TrimSpace(update.Get("toolCallId").Str)
+	if id == "" {
+		return
+	}
+	call := r.call(id)
+	if call != nil && call.InputJSON == "" {
+		if input := grokRawInputJSON(update.Get("rawInput")); input != "" {
+			call.InputJSON = input
+			call.SkillName = inferToolSkillName(r.ctx, call.ToolName, input)
+		}
+	}
+	status := update.Get("status").Str
+	if status != "completed" && status != "failed" {
+		return
+	}
+	if _, done := r.emitted[id]; done {
+		return
+	}
+	r.emitted[id] = struct{}{}
+	r.flushAgent()
+	content := grokToolUpdateResultText(update)
+	if call = r.call(id); call != nil {
+		eventStatus := status
+		if status == "failed" {
+			eventStatus = "errored"
+		}
+		call.ResultEvents = append(call.ResultEvents, ParsedToolResultEvent{
+			ToolUseID: id,
+			Source:    "tool_execution",
+			Status:    eventStatus,
+			Content:   content,
+			Timestamp: timestamp,
+		})
+	}
+	quoted, _ := json.Marshal(content)
+	r.messages = append(r.messages, ParsedMessage{
+		Role:          RoleUser,
+		Timestamp:     timestamp,
+		ContentLength: len(content),
+		ToolResults: []ParsedToolResult{{
+			ToolUseID:     id,
+			ContentRaw:    string(quoted),
+			ContentLength: len(content),
+		}},
+	})
+}
+
+func (r *grokSegmentReducer) call(id string) *ParsedToolCall {
+	pos, ok := r.callAt[id]
+	if !ok {
+		return nil
+	}
+	if pos.message < 0 {
+		return &r.calls[pos.call]
+	}
+	return &r.messages[pos.message].ToolCalls[pos.call]
+}
+
+func (r *grokSegmentReducer) markAgent(timestamp time.Time) {
+	if r.agentTimestamp.IsZero() {
+		r.agentTimestamp = timestamp
+	}
+}
+
+func (r *grokSegmentReducer) closeUserTurn() {
+	if r.inUserTurn {
+		r.flushUser()
+		r.inUserTurn = false
+	}
+}
+
+func (r *grokSegmentReducer) flushUser() {
+	parts, timestamp, synthetic := r.userParts, r.userTimestamp, r.userSynthetic
+	r.userParts, r.userTimestamp = nil, time.Time{}
+	r.userInterjection, r.userSynthetic = false, false
+	if len(parts) == 0 || synthetic {
+		return
+	}
+	content := grokNormalizeUserText(strings.Join(parts, "\n"))
+	if content == "" {
+		return
+	}
+	r.messages = append(r.messages, ParsedMessage{
+		Role:          RoleUser,
+		Content:       content,
+		ContentLength: len(content),
+		Timestamp:     timestamp,
+	})
+}
+
+func (r *grokSegmentReducer) flushAgent() {
+	text := strings.TrimSpace(r.agentText.String())
+	thinking := strings.TrimSpace(r.thinking.String())
+	calls, timestamp := r.calls, r.agentTimestamp
+	r.agentText.Reset()
+	r.thinking.Reset()
+	r.calls, r.agentTimestamp = nil, time.Time{}
+	if text == "" && thinking == "" && len(calls) == 0 {
+		return
+	}
+	msg := grokAssistantMessage(text, thinking, "", calls)
+	msg.Timestamp = timestamp
+	index := len(r.messages)
+	for i, call := range msg.ToolCalls {
+		if call.ToolUseID != "" {
+			r.callAt[call.ToolUseID] = grokCallPosition{message: index, call: i}
+		}
+	}
+	r.messages = append(r.messages, msg)
+}
+
+// finish closes the open items and returns the segment's rows.
+func (r *grokSegmentReducer) finish() []ParsedMessage {
+	r.flushUser()
+	r.inUserTurn = false
+	r.flushAgent()
+	return r.messages
+}
+
+// grokRawInputJSON keeps a tool call's raw input as JSON text. An absent or
+// null input leaves the call without one, as Grok Build's rebuild does.
+func grokRawInputJSON(raw gjson.Result) string {
+	if !raw.Exists() || raw.Type == gjson.Null {
+		return ""
+	}
+	if raw.Type == gjson.String {
+		return raw.Str
+	}
+	return raw.Raw
+}
+
+// grokToolUpdateResultText extracts a finished tool call's output the way
+// Grok Build writes the tool_result row: the joined text content blocks, or
+// the raw output's JSON when there are none.
+func grokToolUpdateResultText(update gjson.Result) string {
+	var text strings.Builder
+	update.Get("content").ForEach(func(_, block gjson.Result) bool {
+		if block.Get("type").Str == "content" &&
+			block.Get("content.type").Str == "text" {
+			text.WriteString(block.Get("content.text").Str)
+		}
+		return true
+	})
+	if text.Len() > 0 {
+		return text.String()
+	}
+	if raw := update.Get("rawOutput"); raw.Exists() {
+		return raw.Raw
+	}
+	return ""
+}
+
+// grokAssembleTranscript places the rebuilt pre-compaction segments, each
+// followed by its boundary, ahead of the live chat_history.jsonl rows.
+//
+// After a compaction chat_history.jsonl opens with the compacted context:
+// the system prompt, injected metadata, the carried user query and recent
+// messages, then the summary row. That prefix replays rows the rebuilt
+// segment already holds, so it is dropped up to the summary, which becomes
+// the last checkpoint's boundary. When chat_history.jsonl has no summary
+// row, the last boundary comes from the checkpoint file and every row stays.
+func grokAssembleTranscript(
+	sessionDir string, segments []grokCompactedSegment, chat []ParsedMessage,
+) []ParsedMessage {
+	if len(segments) == 0 {
+		return chat
+	}
+	summaryAt := -1
+	for i := range chat {
+		if chat[i].IsCompactBoundary {
+			summaryAt = i
+			break
+		}
+	}
+	total := len(chat) + len(segments)
+	for _, segment := range segments {
+		total += len(segment.messages)
+	}
+	out := make([]ParsedMessage, 0, total)
+	for i, segment := range segments {
+		out = append(out, segment.messages...)
+		last := i == len(segments)-1
+		if last && summaryAt >= 0 {
+			break
+		}
+		out = append(out, grokCompactBoundary(
+			grokCheckpointSummary(sessionDir, segment.checkpoint.file),
+			segment.checkpoint.timestamp,
+		))
+	}
+	if summaryAt >= 0 {
+		chat = chat[summaryAt:]
+		if chat[0].Timestamp.IsZero() {
+			chat[0].Timestamp = segments[len(segments)-1].checkpoint.timestamp
+		}
+	}
+	out = append(out, chat...)
+	for i := range out {
+		out[i].Ordinal = i
+	}
+	return out
+}

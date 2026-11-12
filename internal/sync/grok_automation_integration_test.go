@@ -123,3 +123,71 @@ func TestGrokPromptContextSubagentMatchesParseDiff(t *testing.T) {
 	assert.Equal(t, 1, report.Totals.Identical)
 	assert.False(t, report.HasFailures())
 }
+
+func TestGrokCompactedSessionKeepsHistoryAndToolOutput(t *testing.T) {
+	root := t.TempDir()
+	require.NoError(t, os.CopyFS(root, os.DirFS(filepath.Join("..", "parser", "testdata", "grok-build", "compacted"))))
+	database := dbtest.OpenTestDB(t)
+	engine := sync.NewEngine(t.Context(), database, sync.EngineConfig{
+		AgentDirs: map[parser.AgentType][]string{parser.AgentGrok: {root}}, Machine: "local",
+	})
+	t.Cleanup(engine.Close)
+	require.Equal(t, 1, engine.SyncAll(t.Context(), nil).Synced)
+
+	const id = "grok:019f6000-0000-7000-8000-000000000020"
+	session, err := database.GetSession(t.Context(), id)
+	require.NoError(t, err)
+	require.NotNil(t, session)
+	assert.Equal(t, 2, session.CompactionCount)
+
+	messages, err := database.GetAllMessages(t.Context(), id)
+	require.NoError(t, err)
+	outputs := map[string]string{}
+	for _, msg := range messages {
+		assert.False(t, msg.Role == "user" && msg.Content == "", "result carriers are paired away")
+		for _, call := range msg.ToolCalls {
+			outputs[call.ToolUseID] = call.ResultContent
+		}
+	}
+	// Two calls ran before the first compaction, one between, one after;
+	// each serves its own output from the messages read.
+	assert.Equal(t, map[string]string{
+		"call-0001-a-0": "1|package fetchkit\n2|\n3|func (c *Client) Get(url string) (*Response, error) {",
+		"call-0002-b-0": `{"type":"EditsApplied","EditsApplied":{"path":"/workspace/fetchkit/fetch.go","count":1}}`,
+		"call-0002-b-1": "--- FAIL: TestGetRetries (0.00s)\n    fetch_test.go:18: doWithRetry undefined\nFAIL",
+		"call-0003-c-0": "No matches found.",
+		"call-0004-d-0": "1|package fetchkit\n2|\n3|func (c *Client) doWithRetry(req *Request, n int) (*Response, error) {",
+	}, outputs)
+}
+
+func TestGrokInterruptedCallKeepsChatHistoryResult(t *testing.T) {
+	root := t.TempDir()
+	sessionDir := filepath.Join(root, "%2Fworkspace%2Ffetchkit", "019f6000-0000-7000-8000-000000000023")
+	require.NoError(t, os.MkdirAll(sessionDir, 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(sessionDir, "summary.json"), []byte(
+		`{"info":{"id":"019f6000-0000-7000-8000-000000000023","cwd":"/workspace/fetchkit"},"created_at":"2026-07-23T09:46:40Z"}`), 0o600))
+	require.NoError(t, os.WriteFile(filepath.Join(sessionDir, "chat_history.jsonl"), []byte(
+		`{"type":"user","content":"Run the tests"}`+"\n"+
+			`{"type":"assistant","content":"","tool_calls":[{"id":"call-9","name":"run_terminal_command","arguments":"{\"command\":\"go test ./...\"}"}]}`+"\n"+
+			`{"type":"tool_result","tool_call_id":"call-9","content":"Command interrupted by the user."}`+"\n"), 0o600))
+	// The stream recorded the call starting and nothing after it.
+	require.NoError(t, os.WriteFile(filepath.Join(sessionDir, "updates.jsonl"), []byte(
+		`{"timestamp":1784800001,"method":"session/update","params":{"sessionId":"019f6000-0000-7000-8000-000000000023","update":{"sessionUpdate":"user_message_chunk","content":{"type":"text","text":"Run the tests"}}}}`+"\n"+
+			`{"timestamp":1784800003,"method":"session/update","params":{"sessionId":"019f6000-0000-7000-8000-000000000023","update":{"sessionUpdate":"tool_call","toolCallId":"call-9","title":"run_terminal_command","rawInput":{"command":"go test ./..."}}}}`+"\n"), 0o600))
+	database := dbtest.OpenTestDB(t)
+	engine := sync.NewEngine(t.Context(), database, sync.EngineConfig{
+		AgentDirs: map[parser.AgentType][]string{parser.AgentGrok: {root}}, Machine: "local",
+	})
+	t.Cleanup(engine.Close)
+	require.Equal(t, 1, engine.SyncAll(t.Context(), nil).Synced)
+
+	messages, err := database.GetAllMessages(t.Context(), "grok:019f6000-0000-7000-8000-000000000023")
+	require.NoError(t, err)
+	var outputs []string
+	for _, msg := range messages {
+		for _, call := range msg.ToolCalls {
+			outputs = append(outputs, call.ResultContent)
+		}
+	}
+	assert.Equal(t, []string{"Command interrupted by the user."}, outputs)
+}
