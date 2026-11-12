@@ -580,7 +580,7 @@ describe("CommandPalette", () => {
   );
 
   it.each([
-    { result: "conflict", name: "refreshes status after a setup conflict" },
+    { result: "provider-changed", name: "refreshes status after the setup provider changes" },
     { result: "started", name: "switches to semantic search after setup starts" },
   ])("$name", async ({ result }) => {
     const setup = {
@@ -604,7 +604,7 @@ describe("CommandPalette", () => {
       const hint = await tickUntil(".meaning-hint button");
       hint.click();
       for (let i = 0; i < 20; i++) await tick();
-      if (result === "conflict") {
+      if (result === "provider-changed") {
         expect(mockSearchStore.setMode).not.toHaveBeenCalled();
         expect(mockEmbeddingsService.getApiV1EmbeddingsStatus).toHaveBeenCalledTimes(2);
       } else {

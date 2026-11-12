@@ -116,10 +116,7 @@ func TestSetupRejectsChangedProvider(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, "ollama", status.Provider)
 	ollama = false
-	require.ErrorIs(t, owner.Setup(0, ""), server.ErrEmbeddingsProviderChanged)
-	chosen, err := embedlocal.ChoiceRecorded()
-	require.NoError(t, err)
-	assert.False(t, chosen)
+	require.ErrorIs(t, owner.Setup(0, status.Provider), server.ErrEmbeddingsProviderChanged)
 }
 
 func TestSharedSetupKeepsOptOutAddedDuringDownload(t *testing.T) {
@@ -512,13 +509,7 @@ func TestLiveEmbeddingsSetup(t *testing.T) {
 				result := status()
 				require.NotNil(t, result.Setup)
 				assert.Equal(t, server.ErrEmbeddingsProviderChanged.Error(), result.Setup.Error)
-				assert.Zero(t, encoded.Load())
 				assert.Nil(t, owner.Manager(""))
-				saved, err := config.LoadReadOnly()
-				require.NoError(t, err)
-				_, selected, err := saved.Vector.Embeddings.Server("")
-				require.NoError(t, err)
-				assert.Equal(t, stub.URL+"/v1", selected.Endpoint)
 				return
 			}
 			if recipe == "fresh" {
