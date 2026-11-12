@@ -15,12 +15,17 @@ afterEach(() => {
 });
 
 it.each([
-  ["embeddings_provider_changed", false, "ollama", 0],
-  ["conflict", true, "built-in", 295000000],
-])("handles %s", async (code, started, provider, approvedBytes) => {
-  vi.mocked(EmbeddingsService.postApiV1EmbeddingsSetup).mockRejectedValueOnce(
-    new ApiError(409, "conflict", code),
-  );
+  ["embeddings_provider_changed", false, "ollama", 0, false],
+  ["conflict", true, "built-in", 295000000, false],
+  ["started", true, "ollama", 0, true],
+])("handles %s", async (code, started, provider, approvedBytes, success) => {
+  if (success) {
+    vi.mocked(EmbeddingsService.postApiV1EmbeddingsSetup).mockResolvedValueOnce({ started: true });
+  } else {
+    vi.mocked(EmbeddingsService.postApiV1EmbeddingsSetup).mockRejectedValueOnce(
+      new ApiError(409, "conflict", code),
+    );
+  }
   const onchange = vi.fn();
   const component = mount(SearchByMeaningControl, {
     target: document.body,

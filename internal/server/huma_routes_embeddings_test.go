@@ -446,6 +446,7 @@ type fakeEmbeddingsRuntime struct {
 	messages, recall EmbeddingsManager
 	includeAutomated bool
 	busy             bool
+	setupErr         error
 }
 
 func (r fakeEmbeddingsRuntime) Manager(store string) EmbeddingsManager {
@@ -462,7 +463,28 @@ func (r fakeEmbeddingsRuntime) IncludeAutomated() bool { return r.includeAutomat
 func (r fakeEmbeddingsRuntime) SetupStatus(context.Context) (EmbeddingsSetupStatus, error) {
 	return EmbeddingsSetupStatus{Enabled: true, Busy: r.busy}, nil
 }
-func (fakeEmbeddingsRuntime) Setup(int64, string) error { return nil }
+func (r fakeEmbeddingsRuntime) Setup(int64, string) error { return r.setupErr }
+
+func TestEmbeddingsSetupRejectsMissingOrChangedProvider(t *testing.T) {
+	s := testServer(t, 0, WithEmbeddingsRuntime(fakeEmbeddingsRuntime{setupErr: ErrEmbeddingsProviderChanged}))
+	for _, tc := range []struct {
+		name   string
+		body   map[string]any
+		status int
+	}{
+		{name: "missing", body: map[string]any{"approved_bytes": 0}, status: http.StatusBadRequest},
+		{name: "empty", body: map[string]any{"expected_provider": ""}, status: http.StatusBadRequest},
+		{name: "changed", body: map[string]any{"approved_bytes": 0, "expected_provider": "ollama"}, status: http.StatusConflict},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			w := serveJSON(t, s.mux, http.MethodPost, "/api/v1/embeddings/setup", tc.body)
+			assertRecorderStatus(t, w, tc.status)
+			if tc.name == "changed" {
+				assert.Contains(t, w.Body.String(), "embeddings_provider_changed")
+			}
+		})
+	}
+}
 
 func TestEmbeddingsStatusPreservesBuildDuringSetup(t *testing.T) {
 	manager := &fakeEmbeddingsManager{status: vector.BuildStatus{

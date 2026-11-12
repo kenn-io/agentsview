@@ -117,12 +117,6 @@ func TestSetupRejectsChangedProvider(t *testing.T) {
 	require.Equal(t, "ollama", status.Provider)
 	ollama = false
 	require.ErrorIs(t, owner.Setup(0, ""), server.ErrEmbeddingsProviderChanged)
-	ln, port := listenLoopback(t)
-	cfg.Host, cfg.Port = "127.0.0.1", port
-	ts := startTestServer(t, ln, server.New(cfg, database, nil, owner.ServerOptions()...).Handler())
-	embeddingRequest(t, ts.Client(), ts.URL, "POST", "/api/v1/embeddings/setup", "application/json", strings.NewReader(`{"approved_bytes":0}`), http.StatusBadRequest)
-	embeddingRequest(t, ts.Client(), ts.URL, "POST", "/api/v1/embeddings/setup", "application/json", strings.NewReader(`{"expected_provider":""}`), http.StatusBadRequest)
-	embeddingRequest(t, ts.Client(), ts.URL, "POST", "/api/v1/embeddings/setup", "application/json", strings.NewReader(`{"approved_bytes":0,"expected_provider":"ollama"}`), http.StatusConflict)
 	chosen, err := embedlocal.ChoiceRecorded()
 	require.NoError(t, err)
 	assert.False(t, chosen)
@@ -233,7 +227,7 @@ func TestSharedChoiceLeavesConfiguredSearchAlone(t *testing.T) {
 func TestSavedAutomaticBuiltInResumes(t *testing.T) {
 	setTestHome(t, t.TempDir())
 	dir := testDataDir(t)
-	raw := "[vector]\nenabled = true\n[vector.embed]\nrun_after_sync = false\nbackstop_interval = '-1s'\n"
+	raw := "[vector]\nenabled = true\n[vector.embed]\nrun_after_sync = false\n"
 	writeTestConfig(t, dir, raw)
 	cfg, err := config.LoadReadOnly()
 	require.NoError(t, err)
@@ -241,13 +235,20 @@ func TestSavedAutomaticBuiltInResumes(t *testing.T) {
 	oldInspect := inspectLocalEmbeddings
 	t.Cleanup(func() { inspectLocalEmbeddings = oldInspect })
 	inspectLocalEmbeddings = func(context.Context, embedlocal.Options) (embedlocal.Status, error) { return embedlocal.Status{}, nil }
-	ctx, cancel := context.WithCancel(t.Context())
-	serving, err := setupVectorServing(ctx, cfg, database, nil)
+	idled := make(chan struct{})
+	idle := server.NewIdleTracker(time.Second, func() { close(idled) })
+	owner, err := newLiveVectorServing(t.Context(), cfg, database, idle, config.LoadReadOnly)
 	require.NoError(t, err)
-	owner := &liveVectorServing{serving: serving, cfg: cfg, database: database, ctx: ctx, cancel: cancel, reload: config.LoadReadOnly, push: &vectorPushSource{cfg: cfg}}
-	defer func() { owner.startSchedulers(); require.NoError(t, owner.Close()) }()
-	owner.startSharedChoice()
-	require.Len(t, owner.serving.Scheduler.dirty, 1, "startup must queue indexing")
+	defer func() { require.NoError(t, owner.Close()) }()
+	idleCtx, stopIdle := context.WithCancel(t.Context())
+	idleDone := make(chan struct{})
+	go func() { defer close(idleDone); idle.Run(idleCtx) }()
+	defer func() { stopIdle(); <-idleDone }()
+	select {
+	case <-idled:
+		require.FailNow(t, "queued indexing did not hold the idle lease")
+	case <-time.After(2 * time.Second):
+	}
 }
 
 func TestSavedLocalSetupDoesNotRecordOrApproveChoice(t *testing.T) {
@@ -351,17 +352,26 @@ func TestSharedChoiceStartsLocalIndexing(t *testing.T) {
 				installed.Store(true)
 				return embedlocal.Installation{DataDir: opts.DataDir, Executable: "fixture"}, nil
 			}
-			oldBattery := onBattery
-			t.Cleanup(func() { onBattery = oldBattery })
-			onBattery = func() bool { return true }
-			owner, err := newLiveVectorServing(t.Context(), cfg, database, nil, config.LoadReadOnly)
+			idled := make(chan struct{})
+			idle := server.NewIdleTracker(time.Second, func() { close(idled) })
+			owner, err := newLiveVectorServing(t.Context(), cfg, database, idle, config.LoadReadOnly)
 			require.NoError(t, err)
 			defer func() { require.NoError(t, owner.Close()) }()
 			<-owner.done
 			setup, err := owner.SetupStatus(t.Context())
 			require.NoError(t, err)
 			assert.False(t, setup.Busy)
+			assert.True(t, setup.Enabled)
 			assert.EqualValues(t, 1, installs.Load())
+			idleCtx, stopIdle := context.WithCancel(t.Context())
+			idleDone := make(chan struct{})
+			go func() { defer close(idleDone); idle.Run(idleCtx) }()
+			defer func() { stopIdle(); <-idleDone }()
+			select {
+			case <-idled:
+				require.FailNow(t, "queued indexing did not hold the idle lease")
+			case <-time.After(2 * time.Second):
+			}
 		})
 	}
 }
@@ -539,7 +549,11 @@ func TestLiveEmbeddingsSetup(t *testing.T) {
 				generations, err := owner.serving.manager.Generations(t.Context())
 				require.NoError(t, err)
 				assert.EqualValues(t, 2, generations[0].Embedded)
-
+				owner.cancel()
+				<-owner.serving.Scheduler.done
+				request("DELETE", "/api/v1/sessions/session-one", "", 204)
+				require.Len(t, owner.serving.Scheduler.dirty, 1, "DELETE must queue the scheduler created by setup")
+				(<-owner.serving.Scheduler.dirty)()
 			}
 		})
 	}

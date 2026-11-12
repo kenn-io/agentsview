@@ -11,6 +11,7 @@ const {
   mockRouter,
   mockCopyToClipboard,
   mockEmbeddingsService,
+  mockMeaningControl,
 } = vi.hoisted(() => ({
   mockUi: {
     activeModal: "commandPalette" as "commandPalette" | null,
@@ -66,7 +67,23 @@ const {
     postApiV1EmbeddingsBuild: vi.fn(),
     postApiV1EmbeddingsSetup: vi.fn(),
   },
+  mockMeaningControl: { enabled: false, started: false },
 }));
+
+vi.mock("../shared/SearchByMeaningControl.svelte", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../shared/SearchByMeaningControl.svelte")>();
+  return {
+    default: (
+      anchor: Parameters<typeof actual.default>[0],
+      props: Parameters<typeof actual.default>[1],
+    ) => {
+      if (!mockMeaningControl.enabled) return actual.default(anchor, props);
+      const button = document.createElement("button");
+      button.onclick = () => props.onchange?.(mockMeaningControl.started);
+      (anchor as unknown as Comment).before(button);
+    },
+  };
+});
 
 vi.mock("../../stores/ui.svelte.js", () => ({
   ui: mockUi,
@@ -579,13 +596,8 @@ describe("CommandPalette", () => {
     mockEmbeddingsService.getApiV1EmbeddingsStatus
       .mockResolvedValueOnce({ running: false, setup })
       .mockResolvedValueOnce({ running: false, setup });
-    if (result === "conflict") {
-      mockEmbeddingsService.postApiV1EmbeddingsSetup.mockRejectedValue(
-        new ApiError(409, "provider changed", "embeddings_provider_changed"),
-      );
-    } else {
-      mockEmbeddingsService.postApiV1EmbeddingsSetup.mockResolvedValue({ started: true });
-    }
+    mockMeaningControl.enabled = true;
+    mockMeaningControl.started = result === "started";
     const component = mount(CommandPalette, { target: document.body });
     try {
       await enterSearchQuery();
@@ -600,6 +612,7 @@ describe("CommandPalette", () => {
       }
     } finally {
       unmount(component);
+      mockMeaningControl.enabled = false;
     }
   });
 

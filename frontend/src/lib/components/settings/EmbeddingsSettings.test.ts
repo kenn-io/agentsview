@@ -124,10 +124,10 @@ describe("EmbeddingsSettings", () => {
         .find((b) => b.textContent?.trim() === "Turn on")!
         .click();
       await settle();
-      expect(embeddingsService.postApiV1EmbeddingsSetup).toHaveBeenNthCalledWith(1, {
-        approved_bytes: 0,
-        expected_provider: "ollama",
-      });
+      expect(embeddingsService.postApiV1EmbeddingsSetup).toHaveBeenNthCalledWith(
+        1,
+        expect.objectContaining({ approved_bytes: 0 }),
+      );
       expect(document.body.textContent).toContain("Downloads 295 MB");
       expect(document.body.querySelector('[role="alert"]')?.textContent).toContain(
         "download declined",
@@ -136,10 +136,10 @@ describe("EmbeddingsSettings", () => {
         .find((b) => b.textContent?.trim() === "Retry")!
         .click();
       await settle();
-      expect(embeddingsService.postApiV1EmbeddingsSetup).toHaveBeenNthCalledWith(2, {
-        approved_bytes: 295000000,
-        expected_provider: "built-in",
-      });
+      expect(embeddingsService.postApiV1EmbeddingsSetup).toHaveBeenNthCalledWith(
+        2,
+        expect.objectContaining({ approved_bytes: 295000000 }),
+      );
     } finally {
       unmount(component);
     }
