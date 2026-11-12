@@ -143,9 +143,10 @@ func TestPiMaterializeCommandReturnsNativeResume(t *testing.T) {
 
 func TestCodexMaterializeCommand(t *testing.T) {
 	dataDir := newAgentDataDir(t)
-	root, home, cwd := t.TempDir(), t.TempDir(), t.TempDir()
+	root, home, cwd := t.TempDir(), t.TempDir(), filepath.Join(t.TempDir(), "checkout space")
+	require.NoError(t, os.Mkdir(cwd, 0o700))
 	t.Setenv("CODEX_HOME", home)
-	t.Setenv("CODEX_DIR", "")
+	t.Setenv("CODEX_SESSIONS_DIR", "")
 	const machine = "0123456789abcdef0123456789abcdef"
 	const id = "11111111-1111-4111-8111-111111111111"
 	require.NoError(t, os.WriteFile(filepath.Join(dataDir, "telemetry-install-id"), []byte(machine), 0o600))
@@ -166,8 +167,7 @@ func TestCodexMaterializeCommand(t *testing.T) {
 	}
 	require.NoError(t, json.Unmarshal([]byte(output), &result))
 	assert.Equal(t, "codex:"+id, result.RequestedID)
-	assert.Equal(t, filepath.Base(name), result.InstalledPage)
-	want := "codex resume " + id + " -C " + cwd
+	want := "codex resume " + id + " -C '" + cwd + "'"
 	if runtime.GOOS == "windows" {
 		want = "codex resume '" + id + "' -C '" + cwd + "'"
 	}
@@ -176,4 +176,8 @@ func TestCodexMaterializeCommand(t *testing.T) {
 	require.NoError(t, err, human)
 	assert.Contains(t, human, "Requested: codex:"+id)
 	assert.Contains(t, human, "Installed page: "+filepath.Base(name))
+	require.NoError(t, os.Remove(name))
+	output, err = executeCommand(newRootCommand(), "session", "materialize", "codex:"+id, "--cwd", cwd)
+	require.Error(t, err)
+	assert.NotContains(t, output, "codex resume")
 }

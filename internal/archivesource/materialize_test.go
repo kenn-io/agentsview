@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"fmt"
 	"os"
+	"path"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -31,6 +32,7 @@ func TestSelectedInventoryAuthorityAndScope(t *testing.T) {
 		{"single supplemental", 0, 1, false},
 		{"covered conflict", 2, 0, true},
 		{"supplemental conflict", 0, 2, true},
+		{"deferred conflict", 2, 0, false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			conn, err := sql.Open("sqlite3", ":memory:")
@@ -54,6 +56,17 @@ func TestSelectedInventoryAuthorityAndScope(t *testing.T) {
 			}
 			insert("root", "project/sibling/subagents/agent.jsonl", strings.Repeat("e", 64), true)
 			insert("other", "project/id/subagents/other.json", strings.Repeat("f", 64), true)
+			if tc.name == "deferred conflict" {
+				rows, err := conn.QueryContext(t.Context(), `SELECT path,sha256,size,mod_time_ns,covered FROM raw_archive_files WHERE root_id=? AND (path=? OR path=?) ORDER BY path`, "root", primary, "project/id/subagents/meta.json")
+				require.NoError(t, err)
+				conflicts := map[string]bool{}
+				entries, err := inventoryEntries(rows, bound, conflicts)
+				require.NoError(t, err)
+				require.Len(t, entries, 2)
+				assert.False(t, conflicts[primary])
+				assert.True(t, conflicts["project/id/subagents/meta.json"])
+				return
+			}
 			entries, err := selectedInventory(t.Context(), conn, "root", bound, "project/id/")
 			if tc.wantError {
 				require.ErrorContains(t, err, "conflicting saved file versions")
@@ -76,17 +89,6 @@ func TestSelectedInventoryAuthorityAndScope(t *testing.T) {
 			_, err = selectedInventory(t.Context(), conn, "root", bound, "project/id/")
 			require.ErrorContains(t, err, "saved transcript does not match snapshot")
 			insert("root", primary, strings.Repeat("a", 64), true)
-			// Codex enumeration must defer an unrelated path's conflict until read.
-			other := "project/id/subagents/meta.json"
-			insert("root", other, strings.Repeat("c", 64), true)
-			rows, err := conn.QueryContext(t.Context(), `SELECT path,sha256,size,mod_time_ns,covered FROM raw_archive_files WHERE root_id=? AND (path=? OR path=?) ORDER BY path`, "root", primary, other)
-			require.NoError(t, err)
-			conflicts := map[string]bool{}
-			entries, err = inventoryEntries(rows, bound, nil, conflicts)
-			require.NoError(t, err)
-			require.Len(t, entries, 2)
-			assert.False(t, conflicts[primary])
-			assert.True(t, conflicts[other])
 			_, err = conn.ExecContext(t.Context(), `INSERT INTO raw_archive_files VALUES(?,?,?,?,?,?)`, "root", "project/id/subagents/corrupt.json", strings.Repeat("a", 64), 1, 1, 2)
 			require.NoError(t, err)
 			_, err = selectedInventory(t.Context(), conn, "root", bound, "project/id/")
@@ -172,17 +174,22 @@ func TestMaterializeSnapshotCaptureLayouts(t *testing.T) {
 func TestReadCodexSnapshotUsesAcceptedOriginal(t *testing.T) {
 	const id = "019eb791-cf7d-75c1-8439-9ed74c122e02"
 	inputs := t.TempDir()
-	root := filepath.Join(inputs, "sessions")
+	root := filepath.Join(inputs, "codex", "sessions")
 	name := "rollout-2026-01-01T00-00-00-" + id + ".jsonl"
+	parent := "rollout-20240115-11111111-1111-4111-8111-111111111111.jsonl"
+	unrelated := "rollout-20240115-22222222-2222-4222-8222-222222222222.jsonl"
 	original := testjsonl.NewSessionBuilder().AddCodexMeta("2026-01-01T00:00:00Z", id, "/workspace/project-a", "codex_cli_rs").AddCodexMessage("2026-01-01T00:00:01Z", "user", "saved Codex question").String()
 	dbtest.WriteTestFile(t, filepath.Join(root, name), []byte(original))
-	source := backupSourceRoots(t, inputs, []rawarchive.RootSpec{{Provider: "codex", Path: root}})
+	dbtest.WriteTestFile(t, filepath.Join(filepath.Dir(root), "archived_sessions", parent), []byte("parent bytes"))
+	other := filepath.Join(inputs, "other", "sessions")
+	dbtest.WriteTestFile(t, filepath.Join(other, unrelated), []byte("unrelated bytes"))
+	source := backupSourceRoots(t, inputs, []rawarchive.RootSpec{{Provider: "codex", Path: root}, {Provider: "codex", Path: other}})
 	changed := testjsonl.NewSessionBuilder().AddCodexMeta("2026-01-01T00:00:00Z", id, "/workspace/project-a", "codex_cli_rs").AddCodexMessage("2026-01-01T00:00:01Z", "user", "later question").String()
 	dbtest.WriteTestFile(t, filepath.Join(root, name), []byte(changed))
 	ctx := t.Context()
 	capture := filepath.Join(inputs, "capture-next")
 	settings := rawarchive.RecoverySettings{LocalMachineName: "retired-desktop"}
-	_, err := rawarchive.Capture(ctx, rawarchive.CaptureOptions{DataDir: filepath.Join(inputs, "application"), Destination: capture, IdentityFrom: filepath.Join(inputs, "capture", "capture.json"), Roots: []rawarchive.RootSpec{{Provider: "codex", Path: root}}, Settings: settings})
+	_, err := rawarchive.Capture(ctx, rawarchive.CaptureOptions{DataDir: filepath.Join(inputs, "application"), Destination: capture, IdentityFrom: filepath.Join(inputs, "capture", "capture.json"), Roots: []rawarchive.RootSpec{{Provider: "codex", Path: root}, {Provider: "codex", Path: other}}, Settings: settings})
 	require.NoError(t, err)
 	spec, err := rawarchive.LoadImportSpec(ctx, filepath.Join(capture, "capture.json"))
 	require.NoError(t, err)
@@ -205,17 +212,26 @@ func TestReadCodexSnapshotUsesAcceptedOriginal(t *testing.T) {
 	require.NoError(t, err)
 	var owner db.ArchiveSessionProvenance
 	for _, item := range sources {
-		if item.Root.Provider == "codex" {
+		if item.Root.Provider == "codex" && strings.HasSuffix(item.SourceKey, name) {
 			owner = db.ArchiveSessionProvenance{ArchiveSourceProvenance: index.provenance(item), NativeSessionID: "codex:" + id}
 		}
 	}
 	require.NotEmpty(t, owner.ManifestID)
 	selected, err := ReadCodexSnapshot(t.Context(), []config.ArchiveSource{source}, []db.ArchiveSessionProvenance{owner}, 512<<20, func(names []string, read func(context.Context, string, int64) ([]byte, error)) error {
-		require.Len(t, names, 1)
-		data, err := read(t.Context(), names[0], 512<<20)
-		require.NoError(t, err)
-		assert.Contains(t, string(data), "saved Codex question")
-		assert.NotContains(t, string(data), "later question")
+		require.Len(t, names, 2)
+		for _, candidate := range names {
+			data, err := read(t.Context(), candidate, 512<<20)
+			require.NoError(t, err)
+			switch path.Base(candidate) {
+			case name:
+				assert.Contains(t, string(data), "saved Codex question")
+				assert.NotContains(t, string(data), "later question")
+			case parent:
+				assert.Equal(t, "parent bytes", string(data))
+			default:
+				t.Fatalf("unexpected candidate %q", candidate)
+			}
+		}
 		return nil
 	})
 	require.NoError(t, err)
@@ -225,7 +241,7 @@ func TestReadCodexSnapshotUsesAcceptedOriginal(t *testing.T) {
 func TestReadCodexSnapshotPreservesCompressedLegacyBytes(t *testing.T) {
 	const id = "019eb791-cf7d-75c1-8439-9ed74c122e02"
 	inputs := t.TempDir()
-	root := filepath.Join(inputs, "sessions")
+	root := filepath.Join(inputs, "codex", "sessions")
 	name := "rollout-20240115-" + id + ".jsonl.zst"
 	data := []byte(testjsonl.NewSessionBuilder().AddCodexMeta("2024-01-15T00:00:00Z", id, "/workspace/project-a", "codex_cli_rs").AddCodexMessage("2024-01-15T00:00:01Z", "user", "saved question").String())
 	encoder, err := zstd.NewWriter(nil)

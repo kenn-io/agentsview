@@ -785,7 +785,12 @@ fixtures retain this field; missing identities remain source-local.
   [lineage reader](https://github.com/openai/codex/blob/6b9826e3aa83b1a5947db50f4332cb9c65f1b340/codex-rs/thread-store/src/local/rollout_lineage.rs)
   follows `history_base` across rollout IDs and checks cutoff bounds. The
   [rollout list](https://github.com/openai/codex/blob/6b9826e3aa83b1a5947db50f4332cb9c65f1b340/codex-rs/rollout/src/list.rs)
-  supplies the dated filename layout. Materialization preserves the original
+  supplies the dated filename layout and searches live before archived
+  rollouts. The
+  [compression reader](https://github.com/openai/codex/blob/6b9826e3aa83b1a5947db50f4332cb9c65f1b340/codex-rs/rollout/src/compression.rs)
+  chooses a plain file before its compressed sibling. The
+  [prefix reader](https://github.com/openai/codex/blob/6b9826e3aa83b1a5947db50f4332cb9c65f1b340/codex-rs/rollout/src/seekable_reader.rs)
+  checks the cutoff against decoded bytes. Materialization preserves the original
   bytes and installs the newest available page and its ancestors without
   modifying Codex state or launching Codex.
 

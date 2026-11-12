@@ -2163,8 +2163,8 @@ agentsview session label <id> k=v ...    # add or remove labels
 agentsview session parent <id> <parent>  # record the launching session
 ```
 
-`session materialize <id> --cwd <path>` installs the original Claude Code, Pi, or Codex
-transcript and its native companions for an existing local checkout, then
+`session materialize <id> --cwd <path>` installs the original Claude Code, Pi,
+or Codex transcript and its native companions for an existing local checkout, then
 prints a resume command. It reads the local archive without starting a daemon
 and finds originals in configured local roots or remote mirrors. Claude and
 Codex also support configured S3 roots and snapshot attachments that own the
@@ -2209,10 +2209,16 @@ as the filename.
 
 For Codex, the command installs the newest available page and its complete
 `history_base` chain with their original names and bytes, including compressed
-files. JSON reports `requested_id` and `installed_page`. The printed command
-resumes the native thread in the requested checkout. Codex may choose an
+files. It chooses live before archived originals, and plain before compressed
+copies. Equal-rank locations for a selected page are refused. Archived
+originals are installed under the live sessions directory. Human output reports
+the requested ID and installed page; JSON uses `requested_id` and
+`installed_page`. The printed command resumes the native thread in the requested
+checkout. Codex may choose an
 already-running thread or an existing indexed path before these installed files;
-materialization does not update its index.
+materialization does not update its index. When the destination is a configured
+source root, a later sync may discover the installed copy as a separate local
+session.
 
 An already-running Claude session can attach in that process's existing
 directory. Claude's in-app resume picker can also fall back to a recorded

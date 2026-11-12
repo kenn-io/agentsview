@@ -45,6 +45,24 @@ func TestCodexLineageIncludesParentThreadAndCompressedPage(t *testing.T) {
 	selected, err := codexLineage(t.Context(), thread, append(names, plainName), read)
 	require.NoError(t, err)
 	assert.Equal(t, plainName, selected[len(selected)-1].name)
+	// Native ranks prefer live even when archived is plain and live is compressed.
+	live := "sessions/" + newName
+	archive := "archived_sessions/" + plainName
+	files[live] = compressed
+	files[archive] = []byte("stale corrupt copy")
+	selected, err = codexLineage(t.Context(), thread, []string{parentName, firstName, archive, live}, read)
+	require.NoError(t, err)
+	assert.Equal(t, live, selected[len(selected)-1].name)
+	duplicate := "sessions/other/" + newName
+	files[duplicate] = compressed
+	_, err = codexLineage(t.Context(), thread, []string{parentName, firstName, live, duplicate}, read)
+	require.ErrorContains(t, err, "ambiguous")
+	files[live] = []byte("corrupt")
+	files[archive] = last
+	_, err = codexLineage(t.Context(), thread, []string{parentName, firstName, live, archive}, read)
+	require.Error(t, err)
+	_, err = codexLineage(t.Context(), thread, append(names, "rollout-invalid-"+thread+".jsonl"), read)
+	require.ErrorContains(t, err, "date")
 	files[firstName] = []byte(fmt.Sprintf(`{"type":"session_meta","payload":{"id":%q,"history_mode":"paginated","history_base":{"thread_id":%q,"end_ordinal_exclusive":1,"end_byte_offset":9999}}}`+"\n", thread, parent))
 	_, err = codexLineage(t.Context(), thread, names, read)
 	require.ErrorContains(t, err, "cutoff")
@@ -63,24 +81,19 @@ func TestCodexLineageIncludesParentThreadAndCompressedPage(t *testing.T) {
 	require.ErrorContains(t, err, "cycle")
 }
 
-func TestCodexLineageRejectsWrongIdentityAndCutoff(t *testing.T) {
-	const id = "11111111-1111-1111-1111-111111111111"
-	name := "rollout-2026-01-01T00-00-00-" + id + ".jsonl"
-	_, err := inspectCodexPage(t.Context(), name, []byte(`{"type":"session_meta","payload":{"id":"22222222-2222-2222-2222-222222222222"}}`))
-	require.ErrorContains(t, err, "identity")
-	date, err := codexDate(name)
-	require.NoError(t, err)
-	assert.Equal(t, "2026/01/01", date)
-	_, err = codexDate(strings.Replace(name, "01-01T", "99-01T", 1))
-	require.ErrorContains(t, err, "date")
-}
-
 func TestCodexLegacyFilenameAndInvalidLineage(t *testing.T) {
 	const id = "11111111-1111-4111-8111-111111111111"
-	name := "2024/01/15/rollout-20240115-" + id + ".jsonl"
+	name := "rollout-20240115-" + id + ".jsonl"
 	date, err := codexDate(name)
 	require.NoError(t, err)
 	assert.Equal(t, "2024/01/15", date)
+	date, err = codexDate("2024/01/16/rollout-invalid-" + id + ".jsonl")
+	require.NoError(t, err)
+	assert.Equal(t, "2024/01/16", date)
+	_, err = codexDate("rollout-invalid-" + id + ".jsonl")
+	require.ErrorContains(t, err, "date")
+	_, err = inspectCodexPage(t.Context(), name, []byte(`{"type":"session_meta","payload":{"id":"22222222-2222-2222-2222-222222222222"}}`))
+	require.ErrorContains(t, err, "identity")
 	data := []byte(fmt.Sprintf(`{"type":"session_meta","payload":{"id":%q}}`+"\n", id))
 	page, err := inspectCodexPage(t.Context(), name, data)
 	require.NoError(t, err)

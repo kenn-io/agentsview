@@ -78,25 +78,39 @@ func materializeCodex(ctx context.Context, cfg config.Config, database *db.DB, s
 		if root == "" || !valid || p.S3SessionID(source) != raw {
 			return Result{}, errors.New("native Codex S3 source identity differs")
 		}
-		objects, err := parser.ListS3ObjectsContext(ctx, root)
-		if err != nil {
-			return Result{}, err
-		}
-		sizes := make(map[string]int64, len(objects))
-		preferred := make(map[string]string)
-		for _, obj := range objects {
-			rel, ok := strings.CutPrefix(obj.URI, strings.TrimSuffix(root, "/")+"/")
-			if !ok || path.Clean(rel) != rel || !p.S3Scanner().Keep(rel, strings.Split(rel, "/")) {
-				continue
+		roots := []string{root}
+		base := path.Base(root)
+		if base == "sessions" || base == "archived_sessions" {
+			for _, candidate := range cfg.ResolveDirs(parser.AgentCodex) {
+				machine := parser.S3MachineFromRoot(candidate, parser.AgentCodex)
+				if machine == "" {
+					machine = cfg.SourceMachines[parser.AgentCodex][candidate]
+					if machine == "" {
+						machine = cfg.InstallationID
+					}
+				}
+				other := path.Base(candidate)
+				if candidate != root && strings.HasPrefix(candidate, "s3://") && path.Dir(candidate) == path.Dir(root) && (other == "sessions" || other == "archived_sessions") && machine == session.Machine {
+					roots = append(roots, candidate)
+				}
 			}
-			key := parser.CodexSessionUUIDFromFilename(path.Base(obj.URI))
-			if previous := preferred[key]; previous == "" || parser.CodexS3URIPreferred(obj.URI, previous) {
-				preferred[key] = obj.URI
-			}
-			sizes[obj.URI] = obj.Size
 		}
-		for _, name := range preferred {
-			names = append(names, name)
+		sizes := make(map[string]int64)
+		for _, candidate := range roots {
+			objects, err := parser.ListS3ObjectsContext(ctx, candidate)
+			if err != nil {
+				return Result{}, err
+			}
+			for _, obj := range objects {
+				rel, ok := strings.CutPrefix(obj.URI, strings.TrimSuffix(candidate, "/")+"/")
+				if !ok || path.Clean(rel) != rel || !p.S3Scanner().Keep(rel, strings.Split(rel, "/")) {
+					continue
+				}
+				if _, exists := sizes[obj.URI]; !exists {
+					names = append(names, obj.URI)
+				}
+				sizes[obj.URI] = obj.Size
+			}
 		}
 		read = func(ctx context.Context, name string, limit int64) (_ []byte, readErr error) {
 			if size, ok := sizes[name]; !ok || size < 0 || size > limit {
@@ -142,7 +156,27 @@ func materializeCodex(ctx context.Context, cfg config.Config, database *db.DB, s
 				return Result{}, err
 			}
 			closeSource = lock.Close
+			defer func() {
+				if closeSource != nil {
+					retErr = errors.Join(retErr, closeSource())
+				}
+			}()
 			roots = []string{root}
+			if base := filepath.Base(root); base == "sessions" || base == "archived_sessions" {
+				other := "sessions"
+				if base == other {
+					other = "archived_sessions"
+				}
+				sibling := filepath.Join(filepath.Dir(root), other)
+				if _, err := os.Lstat(sibling); err == nil {
+					if !within(mirror, sibling) {
+						return Result{}, errors.New("native Codex mirror source is unavailable")
+					}
+					roots = append(roots, sibling)
+				} else if !errors.Is(err, os.ErrNotExist) {
+					return Result{}, err
+				}
+			}
 		} else {
 			for _, candidate := range configuredRoots(cfg, session, parser.AgentCodex) {
 				rel, err := filepath.Rel(candidate, source)
@@ -159,11 +193,6 @@ func materializeCodex(ctx context.Context, cfg config.Config, database *db.DB, s
 				}
 			}
 		}
-		defer func() {
-			if closeSource != nil {
-				retErr = errors.Join(retErr, closeSource())
-			}
-		}()
 		if _, err := os.Lstat(anchor); err == nil {
 			if !within(root, anchor) {
 				return Result{}, errors.New("native Codex source outside configured root")

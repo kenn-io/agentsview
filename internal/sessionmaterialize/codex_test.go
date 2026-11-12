@@ -8,6 +8,8 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strings"
+	"sync/atomic"
 	"testing"
 
 	"github.com/klauspost/compress/zstd"
@@ -64,10 +66,22 @@ func TestMaterializeCodexConfiguredAndMirror(t *testing.T) {
 			require.NoError(t, os.WriteFile(result.Paths[1], []byte("changed"), 0o600))
 			_, err = Materialize(t.Context(), cfg, nil, session, cwd)
 			require.ErrorContains(t, err, "differs")
-			got, err := os.ReadFile(newPath)
+			got, err := os.ReadFile(result.Paths[1])
 			require.NoError(t, err)
-			assert.Equal(t, newPage, got)
+			assert.Equal(t, []byte("changed"), got)
 			if mirror {
+				// The ancestor may have moved to the sibling archived root.
+				archive := filepath.Join(filepath.Dir(location), "archived_sessions")
+				require.NoError(t, os.MkdirAll(archive, 0o700))
+				archivedPath := filepath.Join(archive, oldName)
+				require.NoError(t, os.Rename(oldPath, archivedPath))
+				t.Setenv("CODEX_HOME", t.TempDir())
+				result, err = Materialize(t.Context(), cfg, nil, session, cwd)
+				require.NoError(t, err)
+				got, err = os.ReadFile(result.Paths[0])
+				require.NoError(t, err)
+				assert.Equal(t, old, got)
+				require.NoError(t, os.Rename(archivedPath, oldPath))
 				encoder, err := zstd.NewWriter(nil)
 				require.NoError(t, err)
 				compressed := encoder.EncodeAll(old, nil)
@@ -87,21 +101,39 @@ func TestMaterializeCodexConfiguredAndMirror(t *testing.T) {
 
 func TestMaterializeCodexS3(t *testing.T) {
 	const id = "11111111-1111-4111-8111-111111111111"
-	const root = "s3://test/host/raw/codex"
+	const root = "s3://test/host/raw/codex/sessions"
+	const archivedRoot = "s3://test/host/raw/codex/archived_sessions"
 	const key = "host/raw/codex/sessions/2026/01/01/rollout-2026-01-01T01-00-00-" + id + ".jsonl"
 	const archivedKey = "host/raw/codex/archived_sessions/rollout-2026-01-01T01-00-00-" + id + ".jsonl"
-	content := fmt.Sprintf(`{"type":"session_meta","payload":{"id":%q}}`+"\n", id)
+	const parent = "22222222-2222-4222-8222-222222222222"
+	const parentKey = "host/raw/codex/archived_sessions/rollout-20240115-" + parent + ".jsonl"
+	content := fmt.Sprintf(`{"type":"session_meta","payload":{"id":%q,"history_mode":"paginated","history_base":{"thread_id":%q,"end_ordinal_exclusive":1,"end_byte_offset":1}}}`+"\n", id, parent)
+	var corrupt atomic.Bool
+	parentContent := fmt.Sprintf(`{"type":"session_meta","payload":{"id":%q,"history_mode":"paginated"}}`+"\n", parent)
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Query().Get("list-type") == "2" {
 			w.Header().Set("Content-Type", "application/xml")
-			_, _ = fmt.Fprintf(w, `<ListBucketResult><IsTruncated>false</IsTruncated><Contents><Key>%s</Key><Size>%d</Size></Contents><Contents><Key>%s</Key><Size>%d</Size></Contents></ListBucketResult>`, key, len(content), archivedKey, len(content))
+			if strings.Contains(r.URL.Query().Get("prefix"), "archived_sessions") {
+				_, _ = fmt.Fprintf(w, `<ListBucketResult><IsTruncated>false</IsTruncated><Contents><Key>%s</Key><Size>%d</Size></Contents><Contents><Key>%s</Key><Size>%d</Size></Contents></ListBucketResult>`, archivedKey, len(content), parentKey, len(parentContent))
+			} else {
+				_, _ = fmt.Fprintf(w, `<ListBucketResult><IsTruncated>false</IsTruncated><Contents><Key>%s</Key><Size>%d</Size></Contents></ListBucketResult>`, key, len(content))
+			}
 			return
 		}
-		if r.URL.Path != "/test/"+key {
+		switch r.URL.Path {
+		case "/test/" + key:
+			if corrupt.Load() {
+				_, _ = io.WriteString(w, "corrupt")
+				return
+			}
+			_, _ = io.WriteString(w, content)
+		case "/test/" + parentKey:
+			_, _ = io.WriteString(w, parentContent)
+		case "/test/" + archivedKey:
+			_, _ = io.WriteString(w, "stale corrupt copy")
+		default:
 			http.NotFound(w, r)
-			return
 		}
-		_, _ = io.WriteString(w, content)
 	}))
 	defer server.Close()
 	t.Setenv("AWS_S3_ENDPOINT", server.URL)
@@ -111,7 +143,7 @@ func TestMaterializeCodexS3(t *testing.T) {
 	t.Setenv("AWS_SESSION_TOKEN", "fixture")
 	t.Setenv("CODEX_HOME", t.TempDir())
 	uri := "s3://test/" + key
-	cfg := config.Config{AgentDirs: map[parser.AgentType][]string{parser.AgentCodex: {root}}}
+	cfg := config.Config{AgentDirs: map[parser.AgentType][]string{parser.AgentCodex: {root, archivedRoot}}}
 	session := &db.Session{ID: "codex:" + id, Agent: "codex", Machine: "host", FilePath: &uri}
 	bad := *session
 	bad.Machine = "other"
@@ -123,24 +155,30 @@ func TestMaterializeCodexS3(t *testing.T) {
 	require.ErrorContains(t, err, "source host differs")
 	result, err := Materialize(t.Context(), cfg, nil, session, t.TempDir())
 	require.NoError(t, err)
-	require.Len(t, result.Paths, 1)
+	require.Len(t, result.Paths, 2)
 	got, err := os.ReadFile(result.Paths[0])
 	require.NoError(t, err)
+	assert.Equal(t, parentContent, string(got))
+	got, err = os.ReadFile(result.Paths[1])
+	require.NoError(t, err)
 	assert.Equal(t, content, string(got))
+	home := t.TempDir()
+	t.Setenv("CODEX_HOME", home)
+	corrupt.Store(true)
+	_, err = Materialize(t.Context(), cfg, nil, session, t.TempDir())
+	require.ErrorContains(t, err, "metadata")
+	_, err = os.Stat(filepath.Join(home, "sessions"))
+	require.ErrorIs(t, err, os.ErrNotExist)
 }
 
-func TestMaterializeCodexMissingAndCanceled(t *testing.T) {
+func TestMaterializeCodexMissingAndCrossRoot(t *testing.T) {
 	const id = "11111111-1111-4111-8111-111111111111"
 	root := t.TempDir()
 	missing := filepath.Join(root, "2026", "01", "01", "rollout-2026-01-01T01-00-00-"+id+".jsonl")
 	cfg := config.Config{InstallationID: "local", LocalMachineName: "local", AgentDirs: map[parser.AgentType][]string{parser.AgentCodex: {root}}}
 	session := &db.Session{ID: "codex:" + id, Agent: "codex", Machine: "local", FilePath: &missing}
 	_, err := Materialize(t.Context(), cfg, nil, session, t.TempDir())
-	require.Error(t, err)
-	ctx, cancel := context.WithCancel(t.Context())
-	cancel()
-	_, err = Materialize(ctx, cfg, nil, session, t.TempDir())
-	require.ErrorIs(t, err, context.Canceled)
+	require.ErrorContains(t, err, "unavailable")
 
 	// The requested page can refer to a parent in a configured sibling archive.
 	const parent = "22222222-2222-4222-8222-222222222222"
@@ -155,6 +193,12 @@ func TestMaterializeCodexMissingAndCanceled(t *testing.T) {
 	require.NoError(t, os.WriteFile(ancestor, []byte(fmt.Sprintf(`{"type":"session_meta","payload":{"id":%q,"history_mode":"paginated"}}`+"\n", parent)), 0o600))
 	cfg.AgentDirs[parser.AgentCodex] = []string{live, archived}
 	session.FilePath = &page
+	ctx, cancel := context.WithCancel(t.Context())
+	cancel()
+	_, err = Materialize(ctx, cfg, nil, session, t.TempDir())
+	require.ErrorIs(t, err, context.Canceled)
+	_, err = os.Stat(filepath.Join(home, "sessions"))
+	require.ErrorIs(t, err, os.ErrNotExist)
 	result, err := Materialize(t.Context(), cfg, nil, session, t.TempDir())
 	require.NoError(t, err)
 	require.Len(t, result.Paths, 2)

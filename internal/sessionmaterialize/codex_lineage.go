@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"io"
 	"path"
+	"slices"
 	"strings"
 	"time"
 
@@ -102,48 +103,63 @@ func inspectCodexPage(ctx context.Context, name string, data []byte) (codexPage,
 // order, with the requested thread's newest page last.
 func codexLineage(ctx context.Context, thread string, names []string, read func(context.Context, string, int64) ([]byte, error)) ([]codexPage, error) {
 	type choice struct {
-		name      string
-		ambiguous bool
+		name        string
+		rank        int
+		ambiguous   bool
+		invalidDate bool
 	}
 	byRollout := make(map[string]choice)
 	var newest, newestDate, newestRollout string
 	for _, name := range names {
-		date, err := codexDate(name)
-		if err != nil {
+		key := parser.CodexSessionUUIDFromFilename(path.Base(name))
+		if key == "" {
 			continue
 		}
-		key := parser.CodexSessionUUIDFromFilename(path.Base(name))
 		threadID := parser.CodexThreadIDFromSessionKey(key)
 		rollout := strings.TrimPrefix(key, threadID+"_")
+		date, dateErr := codexDate(name)
+		if dateErr != nil && threadID == thread {
+			return nil, dateErr
+		}
+		rank := 0
+		if strings.Contains("/"+name, "/archived_sessions/") {
+			rank += 2
+		}
+		if strings.HasSuffix(name, ".zst") {
+			rank++
+		}
 		current := byRollout[rollout]
-		if current.name != "" && strings.TrimSuffix(current.name, ".zst") != strings.TrimSuffix(name, ".zst") {
+		if current.name == "" || rank < current.rank {
+			current = choice{name: name, rank: rank, invalidDate: dateErr != nil}
+		} else if rank == current.rank && name != current.name {
 			current.ambiguous = true
-		} else if current.name == "" || !strings.HasSuffix(name, ".zst") {
-			current.name = name
 		}
 		byRollout[rollout] = current
 		base := strings.TrimSuffix(path.Base(name), ".zst")
-		if threadID == thread && (newest == "" || date > newestDate || (date == newestDate && base > strings.TrimSuffix(path.Base(newest), ".zst"))) {
+		if dateErr == nil && threadID == thread && (newest == "" || date > newestDate || (date == newestDate && base > strings.TrimSuffix(path.Base(newest), ".zst"))) {
 			newest, newestDate, newestRollout = name, date, rollout
 		}
 	}
 	if newest == "" {
 		return nil, errors.New("native Codex transcript is unavailable")
 	}
-	selected := byRollout[newestRollout]
-	if selected.ambiguous {
-		return nil, errors.New("ambiguous Codex rollout location")
-	}
-	newest = selected.name
 	seen := make(map[string]bool)
 	var pages []codexPage
 	var cutoff *codexPosition
 	var total int64
-	name := newest
+	rollout := newestRollout
 	for {
-		if err := ctx.Err(); err != nil {
-			return nil, err
+		selected := byRollout[rollout]
+		if selected.ambiguous {
+			return nil, fmt.Errorf("ambiguous Codex rollout %s", rollout)
 		}
+		if selected.name == "" {
+			return nil, fmt.Errorf("missing Codex ancestor %s", rollout)
+		}
+		if selected.invalidDate {
+			return nil, errors.New("invalid Codex rollout date")
+		}
+		name := selected.name
 		data, err := read(ctx, name, maxSourceBytes-total)
 		if err != nil {
 			return nil, err
@@ -157,7 +173,7 @@ func codexLineage(ctx context.Context, thread string, names []string, read func(
 			return nil, errors.New("native Codex lineage cycle")
 		}
 		seen[page.rollout] = true
-		if cutoff != nil && (page.rollout != cutoff.Rollout || page.mode != "paginated" || cutoff.Offset > page.decodedSize) {
+		if cutoff != nil && (page.mode != "paginated" || cutoff.Offset > page.decodedSize) {
 			return nil, errors.New("native Codex lineage cutoff or source differs")
 		}
 		pages = append(pages, page)
@@ -165,18 +181,9 @@ func codexLineage(ctx context.Context, thread string, names []string, read func(
 			break
 		}
 		cutoff = page.base
-		selected := byRollout[cutoff.Rollout]
-		if selected.ambiguous {
-			return nil, fmt.Errorf("ambiguous Codex rollout %s", cutoff.Rollout)
-		}
-		if selected.name == "" {
-			return nil, fmt.Errorf("missing Codex ancestor %s", cutoff.Rollout)
-		}
-		name = selected.name
+		rollout = cutoff.Rollout
 	}
-	for i, j := 0, len(pages)-1; i < j; i, j = i+1, j-1 {
-		pages[i], pages[j] = pages[j], pages[i]
-	}
+	slices.Reverse(pages)
 	return pages, nil
 }
 
@@ -187,11 +194,7 @@ func codexDate(name string) (string, error) {
 	if key == "" {
 		return "", errors.New("invalid Codex rollout date")
 	}
-	ext := ".jsonl"
-	if strings.HasSuffix(base, ".jsonl.zst") {
-		ext += ".zst"
-	}
-	stamp := strings.TrimSuffix(strings.TrimPrefix(base, "rollout-"), "-"+key+ext)
+	stamp := strings.TrimPrefix(base[:strings.LastIndex(base, "-"+key)], "rollout-")
 	for _, layout := range []string{"2006-01-02T15-04-05", "20060102"} {
 		if date, err := time.Parse(layout, stamp); err == nil {
 			return date.Format("2006/01/02"), nil
