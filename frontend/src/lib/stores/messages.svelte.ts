@@ -140,9 +140,9 @@ export class MessagesStore {
 
     // Taken before the metadata read, so a reload that starts while it is in flight outranks this load.
     const ticket = ++this.loadTicket;
+    let pendingToken: string | null = null;
     try {
       let countHint: number | null = null;
-      let pendingToken: string | null = null;
       try {
         const sess = await SessionsService.getApiV1SessionsById({ id }, { signal: ac.signal });
         countHint = sess.message_count ?? 0;
@@ -184,7 +184,17 @@ export class MessagesStore {
       }
       // A reload queued behind this load retries a transient failure with the reload's bounded backoff.
       if (this.loadGeneration === generation && isTransient(err)) void this.reload();
-      if (this.sessionId === id && this.loadGeneration === generation) this.failLoad(err, "load");
+      if (this.sessionId === id && this.loadGeneration === generation) {
+        this.failLoad(err, "load");
+        // Rows that landed still belong to this revision. Keep its token
+        // pending so whichever read completes the history, Retry or session
+        // search, publishes it and read tracking starts.
+        if (this.messages.length > 0 && !this.hasPendingSessionToken) {
+          this.pendingSessionToken = pendingToken;
+          this.hasPendingSessionToken = true;
+          this.pendingSessionUnreadOrdinal = null;
+        }
+      }
     } finally {
       if (this.sessionId === id && this.loadingOwner === owner) {
         this.loading = false;
