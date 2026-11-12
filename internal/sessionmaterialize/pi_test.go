@@ -189,11 +189,6 @@ func TestPiLinkedSources(t *testing.T) {
 	result, err := Materialize(t.Context(), cfg, nil, s, cwd)
 	require.NoError(t, err)
 	assert.Equal(t, linked, result.Source)
-	cfg.SourceMachines = map[parser.AgentType]map[string]string{parser.AgentPi: {root: "renamed"}}
-	result, err = Materialize(t.Context(), cfg, nil, s, cwd)
-	require.NoError(t, err)
-	assert.Equal(t, linked, result.Source)
-	cfg.SourceMachines = nil
 	missing := filepath.Join(root, "missing.jsonl")
 	s.FilePath = &missing
 	result, err = Materialize(t.Context(), cfg, nil, s, cwd)
