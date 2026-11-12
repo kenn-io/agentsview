@@ -865,7 +865,7 @@ func (s *Store) activityReportUsage(
 	for i, o := range rowsAcc {
 		r := o.scan
 		ts, err := time.Parse(time.RFC3339Nano, r.ts)
-		selection[i] = activity.UsageSelectionRow{SessionID: r.sessionID, Timestamp: ts, TimestampValid: err == nil, OutputTokens: r.outputTok, WebSearchRequests: r.webSearchRequests, UsageIdentity: activity.UsageIdentity{Agent: r.agent, ClaudeMessageID: r.claudeMessageID, ClaudeRequestID: r.claudeRequestID, SourceUUID: r.sourceUUID, UsageDedupKey: r.usageDedupKey}}
+		selection[i] = activity.UsageSelectionRow{SessionID: r.sessionID, Timestamp: ts, TimestampValid: err == nil, OutputTokens: r.outputTok, WebSearchRequests: r.webSearchRequests, Agent: r.agent, ClaudeMessageID: r.claudeMessageID, ClaudeRequestID: r.claudeRequestID, SourceUUID: r.sourceUUID, UsageDedupKey: r.usageDedupKey}
 	}
 	mask, attribution, webSearchRequests, err := activity.SelectUsageSurvivorsForSessions(ctx, q.RangeStart, q.RangeEnd, q.EffectiveEnd, selection, ids)
 	if err != nil {

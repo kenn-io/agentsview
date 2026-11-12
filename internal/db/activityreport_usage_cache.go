@@ -138,7 +138,7 @@ func (db *DB) activityReportCachedUsage(
 		if collectRead {
 			read = append(read, row.SessionID)
 		}
-		selection[i] = activity.UsageSelectionRow{UsageIdentity: activity.UsageIdentity{Agent: row.Agent, ClaudeMessageID: row.ClaudeMessageID, ClaudeRequestID: row.ClaudeRequestID, SourceUUID: row.SourceUUID, UsageDedupKey: row.UsageDedupKey}, SessionID: row.SessionID, MessageOrdinal: row.MessageOrdinal, Timestamp: time.UnixMilli(fact.millis).Add(time.Duration(fact.nanos)), TimestampValid: fact.validTS, OutputTokens: fact.tokens.output, WebSearchRequests: row.WebSearchRequests}
+		selection[i] = activity.UsageSelectionRow{Agent: row.Agent, ClaudeMessageID: row.ClaudeMessageID, ClaudeRequestID: row.ClaudeRequestID, SourceUUID: row.SourceUUID, UsageDedupKey: row.UsageDedupKey, SessionID: row.SessionID, MessageOrdinal: row.MessageOrdinal, Timestamp: time.UnixMilli(fact.millis).Add(time.Duration(fact.nanos)), TimestampValid: fact.validTS, OutputTokens: fact.tokens.output, WebSearchRequests: row.WebSearchRequests}
 	}
 	mask, attribution, webSearchRequests, err := activity.SelectUsageSurvivorsForSessions(ctx, q.RangeStart, q.RangeEnd, q.EffectiveEnd, selection, ids)
 	if err != nil {

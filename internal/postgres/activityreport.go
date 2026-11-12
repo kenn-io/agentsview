@@ -796,7 +796,7 @@ func (s *Store) activityReportUsage(
 	selection := make([]activity.UsageSelectionRow, len(order))
 	for i, index := range order {
 		r := raw[index]
-		selection[i] = activity.UsageSelectionRow{SessionID: r.sessionID.Value(), Timestamp: time.UnixMicro(r.us).UTC(), TimestampValid: true, OutputTokens: int(r.output), WebSearchRequests: int(r.webSearches), UsageIdentity: activity.UsageIdentity{Agent: r.agent.Value(), ClaudeMessageID: r.claudeMessageID, ClaudeRequestID: r.claudeRequestID, SourceUUID: r.sourceUUID, UsageDedupKey: r.usageDedupKey}}
+		selection[i] = activity.UsageSelectionRow{SessionID: r.sessionID.Value(), Timestamp: time.UnixMicro(r.us).UTC(), TimestampValid: true, OutputTokens: int(r.output), WebSearchRequests: int(r.webSearches), Agent: r.agent.Value(), ClaudeMessageID: r.claudeMessageID, ClaudeRequestID: r.claudeRequestID, SourceUUID: r.sourceUUID, UsageDedupKey: r.usageDedupKey}
 	}
 	mask, attribution, webSearchRequests, err := activity.SelectUsageSurvivorsForSessions(ctx, q.RangeStart, q.RangeEnd, q.EffectiveEnd, selection, ids)
 	if err != nil {
@@ -804,7 +804,7 @@ func (s *Store) activityReportUsage(
 	}
 	out = make([]activity.UsageRow, 0, len(order))
 	for i, index := range order {
-		r := raw[index]
+		r := raw[index] //nolint:nilaway // order contains only indices from raw.
 		if !mask[i] {
 			continue
 		}

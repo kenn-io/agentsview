@@ -1073,7 +1073,7 @@ func (db *DB) activityReportUsageFrom(
 			read = append(read, r.sessionID)
 		}
 		_, output, _, _, _ := dailyUsageRowTokens(*r)
-		selection[i] = activity.UsageSelectionRow{SessionID: r.sessionID, MessageOrdinal: c.ordinal, Timestamp: c.ts, TimestampValid: c.validTS, OutputTokens: output, WebSearchRequests: usageRowWebSearchRequests(r.usageSource, r.tokenJSON), UsageIdentity: activity.UsageIdentity{Agent: r.agent, ClaudeMessageID: r.claudeMessageID, ClaudeRequestID: r.claudeRequestID, SourceUUID: r.sourceUUID, UsageDedupKey: r.usageDedupKey}}
+		selection[i] = activity.UsageSelectionRow{SessionID: r.sessionID, MessageOrdinal: c.ordinal, Timestamp: c.ts, TimestampValid: c.validTS, OutputTokens: output, WebSearchRequests: usageRowWebSearchRequests(r.usageSource, r.tokenJSON), Agent: r.agent, ClaudeMessageID: r.claudeMessageID, ClaudeRequestID: r.claudeRequestID, SourceUUID: r.sourceUUID, UsageDedupKey: r.usageDedupKey}
 	}
 	mask, attribution, webSearchRequests, err := activity.SelectUsageSurvivorsForSessions(ctx, q.RangeStart, q.RangeEnd, q.EffectiveEnd, selection, ids)
 	if err != nil {
