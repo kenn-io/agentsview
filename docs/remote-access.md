@@ -627,10 +627,10 @@ with a `{"error":"request timed out"}` body, and affected dashboard panels show
 archives but can be tight for large shared datasets.
 
 Long-running routes are exempt from this deadline. They include session and
-content search, session statistics, usage summaries and comparisons, activity
-report sessions, Kata status, sync, archive maintenance, friction reviews, and
-conversation export. Cancelling a search request stops its search. A reverse
-proxy may impose its own timeout.
+content search, session statistics, usage summaries, comparisons, and top
+sessions, activity report sessions, Kata status, single-session sync, archive
+maintenance, friction reviews, and conversation export. Cancelling a search
+request stops its search. A reverse proxy may impose its own timeout.
 
 Raise the deadline with `--write-timeout` (a Go duration). The flag is available
 on both the local SQLite server and the PostgreSQL read server:
