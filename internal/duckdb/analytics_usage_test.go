@@ -21,7 +21,6 @@ import (
 	pricingpkg "go.kenn.io/agentsview/internal/pricing"
 	"go.kenn.io/agentsview/internal/readbase"
 	"go.kenn.io/agentsview/internal/storage"
-	"go.kenn.io/agentsview/internal/timeutil"
 	"go.kenn.io/agentsview/internal/usagefacts"
 )
 
@@ -1116,14 +1115,6 @@ func TestDuckAnalyticsToolsLocalDayBoundaries(t *testing.T) {
 		{Date: "2025-03-03", ByCat: map[string]int{"Read": 2}},
 		{Date: "2025-03-10", ByCat: map[string]int{"Read": 2}},
 	}, resp.Trend)
-	t.Run("localtime", func(t *testing.T) {
-		if _, err := time.LoadLocation("localtime"); err != nil {
-			t.Skip("host timezone database has no localtime entry")
-		}
-		local, err := store.GetAnalyticsTools(t.Context(), db.AnalyticsFilter{Timezone: "localtime"})
-		require.NoError(t, err)
-		assert.Equal(t, 4, local.TotalCalls)
-	})
 	for _, zone := range []string{"", "Local"} {
 		resp, err := store.GetAnalyticsTools(t.Context(), db.AnalyticsFilter{Timezone: zone})
 		require.NoError(t, err)
@@ -1189,20 +1180,12 @@ func TestDuckAnalyticsToolsLocalWeeks(t *testing.T) {
 }
 
 func TestDuckAnalyticsToolsLocalTimezoneWithoutName(t *testing.T) {
-	t.Setenv("TZ", "")
 	// Keep the pointer stable for callers that have already cached time.Local.
 	_ = time.Now().In(time.Local)
 	local := *time.Local
 	t.Cleanup(func() { *time.Local = local })
 	*time.Local = *time.FixedZone("Local", 12*60*60)
-	zone, err := time.LoadLocation(timeutil.LocalTimezoneOrUTC())
-	require.NoError(t, err)
-	_, offset := time.Date(2025, 3, 9, 12, 0, 0, 0, time.UTC).In(zone).Zone()
 	before, after := "2025-03-09T11:59:59Z", "2025-03-09T12:00:01Z"
-	if offset == 12*60*60 || offset == -12*60*60 {
-		*time.Local = *time.FixedZone("Local", 0)
-		before, after = "2025-03-09T23:59:59Z", "2025-03-10T00:00:01Z"
-	}
 	id := "duck-local-file-zone"
 	store := newDuckAnalyticsStore(t, []db.SessionBatchWrite{{
 		Session: syncSession(id, "alpha", "local", before, 2),

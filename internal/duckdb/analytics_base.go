@@ -208,9 +208,6 @@ func (s analyticsSQL) HourOfWeekSQL(f db.AnalyticsFilter) (string, []any) {
 }
 
 func (s analyticsSQL) VisitTools(ctx context.Context, f db.AnalyticsFilter, ids []string, emit func(readbase.AnalyticsToolVisit)) error {
-	if len(ids) == 0 {
-		return nil
-	}
 	timestamp := "m.timestamp"
 	group := "date_trunc('minute', m.timestamp)"
 	if !f.HasTimeFilter() {

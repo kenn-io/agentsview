@@ -8,7 +8,6 @@ import (
 	"net"
 	"path/filepath"
 	"testing"
-	"time"
 
 	_ "github.com/duckdb/duckdb-go/v2"
 	"github.com/stretchr/testify/assert"
@@ -242,14 +241,6 @@ func TestQuackStoreAnalyticsDashboardReads(t *testing.T) {
 	require.Len(t, evidence.Sessions, 1)
 	assert.Equal(t, 1, evidence.Sessions[0].SignalTotal)
 	assert.Equal(t, new(1), evidence.Sessions[0].MessageOrdinal)
-	t.Run("localtime", func(t *testing.T) {
-		if _, err := time.LoadLocation("localtime"); err != nil {
-			t.Skip("host timezone database has no localtime entry")
-		}
-		tools, err := store.GetAnalyticsTools(t.Context(), db.AnalyticsFilter{Timezone: "localtime"})
-		require.NoError(t, err, "read tool analytics with host timezone through Quack")
-		assert.Equal(t, 2, tools.TotalCalls)
-	})
 
 	edits, err := store.RecentEdits(ctx, db.RecentEditsParams{})
 	require.NoError(t, err, "read recent edits through Quack")

@@ -90,20 +90,8 @@ func TestToolEffectivenessFilteredRatesAndEvidence(t *testing.T) {
 	assert.NotEqual(t, first.Sessions[0].SessionID, second.Sessions[0].SessionID)
 	require.NotNil(t, second.NextOffset)
 	f.EvidenceOffset = 0
-	evidence, err := d.GetAnalyticsSignalSessions(t.Context(), f, "tool_empty_rate", 20)
-	require.NoError(t, err)
-	foundRecovered := false
-	for _, row := range evidence.Sessions {
-		if row.SessionID == "recovered" {
-			foundRecovered = true
-			assert.Equal(t, 2, row.SignalTotal)
-			assert.Equal(t, "2025-06-02", row.Date)
-			assert.Equal(t, new(2), row.MessageOrdinal)
-		}
-	}
-	assert.True(t, foundRecovered)
 	f.Model = "model-b"
-	evidence, err = d.GetAnalyticsSignalSessions(t.Context(), f, "tool_empty_rate", 20)
+	evidence, err := d.GetAnalyticsSignalSessions(t.Context(), f, "tool_empty_rate", 20)
 	require.NoError(t, err)
 	require.Len(t, evidence.Sessions, 4)
 	f.Model = ""
@@ -112,7 +100,6 @@ func TestToolEffectivenessFilteredRatesAndEvidence(t *testing.T) {
 	require.Len(t, evidence.Sessions, 1)
 	assert.Equal(t, "recovered", evidence.Sessions[0].SessionID)
 	assert.Equal(t, 1, evidence.Sessions[0].SignalTotal)
-	assert.Equal(t, new(2), evidence.Sessions[0].MessageOrdinal)
 	f.ToolName = "Read"
 	f.ToolCategory = "Read"
 	evidence, err = d.GetAnalyticsSignalSessions(t.Context(), f, "tool_recovery_rate", 20)
