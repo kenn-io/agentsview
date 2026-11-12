@@ -934,7 +934,7 @@ type DB struct {
 	usageCache           *usageCacheManager
 	activityMemo         activityCandidateMemo
 	activityKept         kept.Memo[activityKept]
-	analyticsKept        kept.Reads[[]byte]
+	analyticsKept        kept.Reads[any]
 	sessionStatsFacts    *sessionStatsFactsMemo
 	frustrationMemo      FrustrationMarkerMemo
 	usageBackfillMu      sync.Mutex

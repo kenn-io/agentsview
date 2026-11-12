@@ -41,10 +41,10 @@ func usageChangeJournalSQL() (string, string) {
   FROM archive_metadata WHERE key = 'usage_change_revision'
  ON CONFLICT(session_id) DO UPDATE SET revision = excluded.revision;`
 	var drops, creates strings.Builder
-	add := func(name, event, table, condition, sessionID string) {
+	add := func(name, event, table, condition, sessionID string, analytics bool) {
 		fmt.Fprintf(&drops, "DROP TRIGGER IF EXISTS %s;\n", name)
 		body := counterBody
-		if strings.Contains(name, "_analytics_change_") {
+		if analytics {
 			body = analyticsCounterBody
 		}
 		if sessionID != "" {
@@ -59,41 +59,41 @@ func usageChangeJournalSQL() (string, string) {
 		}
 		fmt.Fprintf(&creates, "CREATE TRIGGER %s AFTER %s ON %s\n%s\nBEGIN%s\nEND;\n", name, event, table, condition, body)
 	}
-	add("trg_sessions_usage_change_insert", "INSERT", "sessions", "", "NEW.id")
+	add("trg_sessions_usage_change_insert", "INSERT", "sessions", "", "NEW.id", false)
 	columns := []string{"transcript_revision", "started_at", "deleted_at", "project", "agent", "machine", "git_branch", "group_key", "is_automated", "user_message_count", "ended_at", "termination_status", "display_name", "session_name", "relationship_type", "message_count", "created_at"}
 	changes := make([]string, len(columns))
 	for i, column := range columns {
 		changes[i] = "OLD." + column + " IS NOT NEW." + column
 	}
-	add("trg_sessions_usage_change_update", "UPDATE OF "+strings.Join(columns, ", "), "sessions", strings.Join(changes, " OR "), "NEW.id")
+	add("trg_sessions_usage_change_update", "UPDATE OF "+strings.Join(columns, ", "), "sessions", strings.Join(changes, " OR "), "NEW.id", false)
 	// Installed group labels come from cron run names. Older writers recreate
 	// only the triggers they name, so this one survives their opens.
-	add("trg_sessions_usage_change_group_label", "UPDATE OF session_name", "sessions", "OLD.session_name IS NOT NEW.session_name AND (OLD.group_key!='' OR NEW.group_key!='')", "NEW.id")
-	add("trg_sessions_usage_change_delete", "DELETE", "sessions", "", "OLD.id")
+	add("trg_sessions_usage_change_group_label", "UPDATE OF session_name", "sessions", "OLD.session_name IS NOT NEW.session_name AND (OLD.group_key!='' OR NEW.group_key!='')", "NEW.id", false)
+	add("trg_sessions_usage_change_delete", "DELETE", "sessions", "", "OLD.id", false)
 	columns = []string{"first_message", "health_score", "health_grade", "outcome", "outcome_confidence", "tool_failure_signal_count", "tool_retry_count", "edit_churn_count", "compaction_count", "mid_task_compaction_count", "context_pressure_max", "quality_signal_version", "short_prompt_count", "unstructured_start", "missing_success_criteria_count", "missing_verification_count", "duplicate_prompt_count", "no_code_context_count", "runaway_tool_loop_count"}
 	changes = make([]string, len(columns))
 	for i, column := range columns {
 		changes[i] = "OLD." + column + " IS NOT NEW." + column
 	}
-	add("trg_sessions_analytics_change_update", "UPDATE OF "+strings.Join(columns, ", "), "sessions", strings.Join(changes, " OR "), "")
-	add("trg_messages_analytics_change_length", "UPDATE OF content_length", "messages", "OLD.content_length IS NOT NEW.content_length", "")
-	add("trg_tool_calls_analytics_change_insert", "INSERT", "tool_calls", "", "")
-	add("trg_tool_calls_analytics_change_delete", "DELETE", "tool_calls", "", "")
+	add("trg_sessions_analytics_change_update", "UPDATE OF "+strings.Join(columns, ", "), "sessions", strings.Join(changes, " OR "), "", true)
+	add("trg_messages_analytics_change_length", "UPDATE OF content_length", "messages", "OLD.content_length IS NOT NEW.content_length", "", true)
+	add("trg_tool_calls_analytics_change_insert", "INSERT", "tool_calls", "", "", true)
+	add("trg_tool_calls_analytics_change_delete", "DELETE", "tool_calls", "", "", true)
 	columns = []string{"session_id", "message_id", "category", "tool_name", "observed_outcome", "observed_repeat", "sequence_ending"}
 	changes = make([]string, len(columns))
 	for i, column := range columns {
 		changes[i] = "OLD." + column + " IS NOT NEW." + column
 	}
-	add("trg_tool_calls_analytics_change_update", "UPDATE OF "+strings.Join(columns, ", "), "tool_calls", strings.Join(changes, " OR "), "")
-	add("trg_usage_events_usage_change_insert", "INSERT", "usage_events", "", "NEW.session_id")
+	add("trg_tool_calls_analytics_change_update", "UPDATE OF "+strings.Join(columns, ", "), "tool_calls", strings.Join(changes, " OR "), "", true)
+	add("trg_usage_events_usage_change_insert", "INSERT", "usage_events", "", "NEW.session_id", false)
 	columns = []string{"id", "session_id", "message_ordinal", "source", "model", "provider_id", "input_tokens", "output_tokens", "cache_creation_input_tokens", "cache_read_input_tokens", "reasoning_tokens", "cost_microdollars", "cost_status", "cost_source", "occurred_at", "dedup_key"}
 	changes = make([]string, len(columns))
 	for i, column := range columns {
 		changes[i] = "OLD." + column + " IS NOT NEW." + column
 	}
-	add("trg_usage_events_usage_change_update", "UPDATE", "usage_events", strings.Join(changes, " OR "), "NEW.session_id")
-	add("trg_usage_events_usage_change_update_old_session", "UPDATE", "usage_events", "OLD.session_id IS NOT NEW.session_id", "OLD.session_id")
-	add("trg_usage_events_usage_change_delete", "DELETE", "usage_events", "", "OLD.session_id")
+	add("trg_usage_events_usage_change_update", "UPDATE", "usage_events", strings.Join(changes, " OR "), "NEW.session_id", false)
+	add("trg_usage_events_usage_change_update_old_session", "UPDATE", "usage_events", "OLD.session_id IS NOT NEW.session_id", "OLD.session_id", false)
+	add("trg_usage_events_usage_change_delete", "DELETE", "usage_events", "", "OLD.session_id", false)
 	for _, table := range []struct {
 		name    string
 		columns []string
@@ -124,14 +124,14 @@ func usageChangeJournalSQL() (string, string) {
 			if event == "UPDATE" {
 				condition += "(" + strings.Join(changes, " OR ") + ")"
 			}
-			add("trg_"+table.name+"_usage_change_"+strings.ToLower(event), event, table.name, condition, "")
+			add("trg_"+table.name+"_usage_change_"+strings.ToLower(event), event, table.name, condition, "", false)
 		}
 	}
 	return drops.String(), creates.String()
 }
 
 // UsageChangeRevision returns the trigger-maintained revision for usage facts,
-// session filter dimensions, and pricing catalog writes. Pricing changes advance
+// session filter dimensions, Activity session columns, and pricing catalog writes. Pricing changes advance
 // the counter without recording a session in usage_session_changes. Revision 0
 // means no history. Readers must pair it with database_id because rebuilt
 // archives restart the counter.

@@ -827,7 +827,7 @@ func TestCopySessionMetadataDoesNotCarryUsagePricingRevision(t *testing.T) {
 	sourcePath := filepath.Join(dir, "source.db")
 	source := testDBAtPath(t, sourcePath, "source")
 	_, err := source.getWriter().ExecContext(t.Context(), `
-		INSERT INTO archive_metadata (key, value) VALUES ('usage_pricing_revision', '42')`)
+		INSERT INTO archive_metadata (key, value) VALUES ('usage_pricing_revision', '42'), ('analytics_change_revision', '42')`)
 	require.NoError(t, err)
 	require.NoError(t, source.Close())
 
@@ -838,5 +838,8 @@ func TestCopySessionMetadataDoesNotCarryUsagePricingRevision(t *testing.T) {
 	var revision string
 	err = destination.getReader().QueryRowContext(t.Context(), `
 		SELECT value FROM archive_metadata WHERE key = 'usage_pricing_revision'`).Scan(&revision)
+	assert.ErrorIs(t, err, sql.ErrNoRows)
+	err = destination.getReader().QueryRowContext(t.Context(), `
+		SELECT value FROM archive_metadata WHERE key = 'analytics_change_revision'`).Scan(&revision)
 	assert.ErrorIs(t, err, sql.ErrNoRows)
 }
