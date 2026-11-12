@@ -371,3 +371,30 @@ func TestParsedOutputBytesCountsEveryField(t *testing.T) {
 	// abc + hello + hi + model-x + high + {"in":1} + dlg + {} + out + cp
 	assert.Equal(t, 3+5+2+7+4+8+3+2+3+2, parsedOutputBytes(reflect.ValueOf(result), 0))
 }
+
+// providerFuzzExempt lists registered agents that have no session
+// provider to fuzz, with the reason.
+var providerFuzzExempt = map[AgentType]string{
+	AgentClaudeAI:   "import-only: archives are parsed by internal/importer",
+	AgentChatGPT:    "import-only: archives are parsed by internal/importer",
+	AgentGeminiApps: "import-only: archives are parsed by internal/importer",
+}
+
+// TestProviderFuzzTargetsCoverRegistry fails when a provider is added
+// without a FuzzProvider target.
+func TestProviderFuzzTargetsCoverRegistry(t *testing.T) {
+	var missing []string
+	for _, def := range Registry {
+		if _, exempt := providerFuzzExempt[def.Type]; exempt {
+			continue
+		}
+		providerFuzzRegistry.Lock()
+		_, ok := providerFuzzRegistry.targets[def.Type]
+		providerFuzzRegistry.Unlock()
+		if !ok {
+			missing = append(missing, string(def.Type))
+		}
+	}
+	slices.Sort(missing)
+	assert.Empty(t, missing, "providers without a FuzzProvider target")
+}
