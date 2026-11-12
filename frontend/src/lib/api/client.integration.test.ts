@@ -25,11 +25,10 @@ describe("generated session watch", () => {
     const source = watchSession("session/one", onUpdate);
     try {
       await vi.waitFor(() => expect(onUpdate).toHaveBeenCalledOnce());
-      expect(fetchMock).toHaveBeenCalledWith(
-        "/api/v1/sessions/session%2Fone/watch",
-        expect.objectContaining({ method: "GET" }),
-      );
-      const headers = new Headers(fetchMock.mock.calls[0]![1].headers);
+      const request = fetchMock.mock.calls[0]![0] as Request;
+      expect(new URL(request.url).pathname).toBe("/api/v1/sessions/session%2Fone/watch");
+      expect(request.method).toBe("GET");
+      const headers = request.headers;
       expect(headers.get("Authorization")).toBe("Bearer test-token");
       expect(headers.get("Accept")).toBe("text/event-stream");
     } finally {

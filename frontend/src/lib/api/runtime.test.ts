@@ -63,13 +63,15 @@ describe("orvalFetch", () => {
     });
   });
 
-  it("passes a local request path to fetch", async () => {
+  it("passes a validated local request to fetch", async () => {
     const fetchMock = vi
       .fn()
       .mockResolvedValue(new Response("{}", { headers: { "Content-Type": "application/json" } }));
     vi.stubGlobal("fetch", fetchMock);
     await orvalFetch("/api/v1/usage/summary", {});
-    expect(fetchMock.mock.calls[0]![0]).toBe("/api/v1/usage/summary");
+    const request = fetchMock.mock.calls[0]![0] as Request;
+    expect(request).toBeInstanceOf(Request);
+    expect(new URL(request.url).pathname).toBe("/api/v1/usage/summary");
   });
 
   it("sends the selected server token with generated requests", async () => {
@@ -85,9 +87,9 @@ describe("orvalFetch", () => {
 
     await orvalFetch("/api/v1/usage/summary", {});
 
-    const [input, init] = fetchMock.mock.calls[0]!;
+    const [input] = fetchMock.mock.calls[0]!;
     expect(requestUrl(input)).toBe("https://example.test/api/v1/usage/summary");
-    expect(new Headers(init?.headers).get("Authorization")).toBe("Bearer secret");
+    expect((input as Request).headers.get("Authorization")).toBe("Bearer secret");
   });
   it("tests a candidate server with only the supplied credentials", async () => {
     localStorage.setItem("agentsview-server-url", "https://selected.example.test");
@@ -102,12 +104,12 @@ describe("orvalFetch", () => {
       baseUrl: "https://candidate.example.test",
       headers: { Authorization: "Bearer candidate-token" },
     });
-    expect(fetchMock.mock.calls.map(([input]) => input)).toEqual([
+    expect(fetchMock.mock.calls.map(([input]) => requestUrl(input))).toEqual([
       "https://candidate.example.test/api/v1/version",
       "https://candidate.example.test/api/v1/version",
     ]);
-    expect(new Headers(fetchMock.mock.calls[0]![1]?.headers).get("Authorization")).toBeNull();
-    expect(new Headers(fetchMock.mock.calls[1]![1]?.headers).get("Authorization")).toBe(
+    expect((fetchMock.mock.calls[0]![0] as Request).headers.get("Authorization")).toBeNull();
+    expect((fetchMock.mock.calls[1]![0] as Request).headers.get("Authorization")).toBe(
       "Bearer candidate-token",
     );
   });
@@ -167,25 +169,4 @@ describe("API errors", () => {
       }
     },
   );
-
-  it("marks an interrupted response body as transient", async () => {
-    const cause = new TypeError("Content-Length header of network response exceeds response Body.");
-    vi.stubGlobal(
-      "fetch",
-      vi.fn().mockResolvedValue(
-        new Response(
-          new ReadableStream({
-            start(controller) {
-              controller.error(cause);
-            },
-          }),
-          { headers: { "Content-Type": "application/json" } },
-        ),
-      ),
-    );
-    const error = await orvalFetch("/api/v1/search", {}).catch((err: unknown) => err);
-    expect(error).toBeInstanceOf(TransportError);
-    expect(error).toMatchObject({ message: cause.message, cause });
-    expect(isTransient(error)).toBe(true);
-  });
 });

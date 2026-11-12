@@ -121,12 +121,11 @@ export async function orvalRequest<T extends Response = Response>(
   options: ApiRequestOptions = {},
 ): Promise<T> {
   const { baseUrl, ...init } = options;
-  const requestUrl = `${baseUrl ?? getGeneratedBase()}${url}`;
-  new Request(new URL(requestUrl, document.baseURI));
-  const response = await fetch(requestUrl, {
+  const request = new Request(new URL(`${baseUrl ?? getGeneratedBase()}${url}`, document.baseURI), {
     ...init,
     headers: baseUrl === undefined ? generatedHeaders(init.headers) : init.headers,
-  }).catch(transportFailure);
+  });
+  const response = await fetch(request).catch(transportFailure);
   if (response.ok) return response as T;
 
   const body = await response.text().catch(() => "");

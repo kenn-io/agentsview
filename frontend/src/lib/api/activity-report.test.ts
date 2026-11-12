@@ -42,9 +42,9 @@ describe("activity report API", () => {
 
     expect(progress).toEqual([{ phase: "loading_sessions", processed: 12 }]);
     expect(report).toMatchObject({ report_id: "signed", sessions_total: 301 });
-    const [url, init] = fetchMock.mock.calls[0]!;
-    expect(String(url)).toContain("/api/v1/activity/report?preset=month");
-    expect((init.headers as Headers).get("Accept")).toBe("text/event-stream, application/json");
+    const [request] = fetchMock.mock.calls[0]! as [Request];
+    expect(request.url).toContain("/api/v1/activity/report?preset=month");
+    expect(request.headers.get("Accept")).toBe("text/event-stream, application/json");
   });
 
   it("requests a deterministic server page with bucket range and sort state", async () => {
@@ -71,7 +71,7 @@ describe("activity report API", () => {
     });
 
     expect(page).toMatchObject({ next_cursor: "next", total: 8 });
-    const requested = new URL(String(fetchMock.mock.calls[0]![0]));
+    const requested = new URL((fetchMock.mock.calls[0]![0] as Request).url);
     expect(requested.pathname).toBe("/api/v1/activity/report/signed/sessions");
     expect(Object.fromEntries(requested.searchParams)).toEqual({
       limit: "200",

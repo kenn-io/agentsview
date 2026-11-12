@@ -59,7 +59,9 @@ describe("downloadFrictionDigestMarkdown", () => {
     await downloadFrictionDigestMarkdown("2026-09-21");
 
     expect(fetchMock).toHaveBeenCalledTimes(1);
-    expect(String(fetchMock.mock.calls[0]![0])).toContain("/api/v1/friction/digests/2026-09-21/md");
+    expect((fetchMock.mock.calls[0]![0] as Request).url).toContain(
+      "/api/v1/friction/digests/2026-09-21/md",
+    );
     expect(downloadName).toBe("friction-log-2026-09-21.md");
   });
 });

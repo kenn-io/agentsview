@@ -278,12 +278,16 @@ describe("RecallCorpusPanel", () => {
     expect(document.body.textContent).toContain("3 eligible");
     expect(document.body.textContent).toContain("active");
     expect(fetchMock).toHaveBeenCalledWith(
-      expect.stringContaining("/recall/entries?limit=200"),
-      expect.objectContaining({ signal: expect.any(AbortSignal) }),
+      expect.objectContaining({
+        url: expect.stringContaining("/recall/entries?limit=200"),
+        signal: expect.any(AbortSignal),
+      }),
     );
     expect(fetchMock).toHaveBeenCalledWith(
-      expect.stringContaining("/recall/extraction/status"),
-      expect.objectContaining({ signal: expect.any(AbortSignal) }),
+      expect.objectContaining({
+        url: expect.stringContaining("/recall/extraction/status"),
+        signal: expect.any(AbortSignal),
+      }),
     );
   });
 
@@ -543,8 +547,12 @@ describe("RecallCorpusPanel", () => {
       expect(document.body.textContent).toContain("Retry ready");
     });
     expect(fetchMock).toHaveBeenCalledWith(
-      expect.stringContaining("/recall/extraction/progress?limit=50&generation=generation-active"),
-      expect.objectContaining({ signal: expect.any(AbortSignal) }),
+      expect.objectContaining({
+        url: expect.stringContaining(
+          "/recall/extraction/progress?limit=50&generation=generation-active",
+        ),
+        signal: expect.any(AbortSignal),
+      }),
     );
 
     const sessionLink = Array.from(document.querySelectorAll<HTMLAnchorElement>("a")).find(
@@ -567,8 +575,10 @@ describe("RecallCorpusPanel", () => {
     failedFilter!.click();
     await vi.waitFor(() => {
       expect(fetchMock).toHaveBeenCalledWith(
-        expect.stringContaining("state=failed"),
-        expect.objectContaining({ signal: expect.any(AbortSignal) }),
+        expect.objectContaining({
+          url: expect.stringContaining("state=failed"),
+          signal: expect.any(AbortSignal),
+        }),
       );
       expect(document.body.textContent).not.toContain("Trace the pending extraction");
     });
@@ -582,7 +592,7 @@ describe("RecallCorpusPanel", () => {
     fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
       if (requestUrl(input).includes("/recall/extraction/progress")) {
         return await new Promise<Response>((_resolve, reject) => {
-          init?.signal?.addEventListener(
+          (input as Request).signal.addEventListener(
             "abort",
             () => {
               reject(new DOMException("Aborted", "AbortError"));
@@ -654,8 +664,7 @@ describe("RecallCorpusPanel", () => {
       ),
     ).toBeUndefined();
     expect(fetchMock).not.toHaveBeenCalledWith(
-      expect.stringContaining("/recall/extraction/progress"),
-      expect.anything(),
+      expect.objectContaining({ url: expect.stringContaining("/recall/extraction/progress") }),
     );
   });
 
@@ -717,7 +726,7 @@ describe("RecallCorpusPanel", () => {
           },
         );
       }
-      if (init?.method === "POST") {
+      if ((input as Request).method === "POST") {
         return new Response(null, { status: 204 });
       }
       return defaultFetch(input, init);
@@ -743,8 +752,10 @@ describe("RecallCorpusPanel", () => {
     confirmActivate!.click();
     await vi.waitFor(() => {
       expect(fetchMock).toHaveBeenCalledWith(
-        "/api/v1/recall/extraction/activate",
-        expect.objectContaining({ method: "POST" }),
+        expect.objectContaining({
+          url: expect.stringContaining("/api/v1/recall/extraction/activate"),
+          method: "POST",
+        }),
       );
       expect(
         Array.from(document.querySelectorAll<HTMLButtonElement>("button")).find(
@@ -767,8 +778,12 @@ describe("RecallCorpusPanel", () => {
     confirmRetire!.click();
     await vi.waitFor(() => {
       expect(fetchMock).toHaveBeenCalledWith(
-        "/api/v1/recall/extraction/generations/generation-abandoned/retire",
-        expect.objectContaining({ method: "POST" }),
+        expect.objectContaining({
+          url: expect.stringContaining(
+            "/api/v1/recall/extraction/generations/generation-abandoned/retire",
+          ),
+          method: "POST",
+        }),
       );
     });
   });
@@ -790,8 +805,10 @@ describe("RecallCorpusPanel", () => {
       expect(document.body.textContent).toContain("Review the next Recall page");
     });
     expect(fetchMock).toHaveBeenCalledWith(
-      expect.stringContaining("cursor=cursor-2"),
-      expect.objectContaining({ signal: expect.any(AbortSignal) }),
+      expect.objectContaining({
+        url: expect.stringContaining("cursor=cursor-2"),
+        signal: expect.any(AbortSignal),
+      }),
     );
     expect(
       Array.from(document.querySelectorAll<HTMLButtonElement>("button")).find(
@@ -819,8 +836,10 @@ describe("RecallCorpusPanel", () => {
       );
     });
     expect(fetchMock).toHaveBeenCalledWith(
-      expect.stringContaining("q=bounded"),
-      expect.objectContaining({ signal: expect.any(AbortSignal) }),
+      expect.objectContaining({
+        url: expect.stringContaining("q=bounded"),
+        signal: expect.any(AbortSignal),
+      }),
     );
   });
 
@@ -1026,13 +1045,11 @@ describe("RecallCorpusPanel", () => {
     );
     expect(document.documentElement.scrollTop).toBe(240);
     expect(entryRequests).toBe(1);
-    expect(fetchMock).toHaveBeenCalledWith(
-      "/api/v1/recall/entries/recall-1/review",
-      expect.objectContaining({
-        method: "POST",
-        body: JSON.stringify({ action: "approve" }),
-      }),
-    );
+    const reviewRequest = fetchMock.mock.calls
+      .map(([input]) => input as Request)
+      .find((request) => requestUrl(request).endsWith("/recall/entries/recall-1/review"))!;
+    expect(reviewRequest.method).toBe("POST");
+    expect(await reviewRequest.clone().json()).toEqual({ action: "approve" });
   });
 
   it("removes an approved row that no longer matches the review filter", async () => {
@@ -1080,8 +1097,7 @@ describe("RecallCorpusPanel", () => {
     );
     await vi.waitFor(() => {
       expect(fetchMock).toHaveBeenCalledWith(
-        expect.stringContaining("review_state=unreviewed_auto"),
-        expect.anything(),
+        expect.objectContaining({ url: expect.stringContaining("review_state=unreviewed_auto") }),
       );
     });
     const requestsBeforeReview = entryRequests;
@@ -1151,12 +1167,10 @@ describe("RecallCorpusPanel", () => {
       expect(document.body.textContent).toContain("Rejected Recall entry");
     });
     expect(fetchMock).toHaveBeenCalledWith(
-      expect.stringContaining("review_state=human_rejected"),
-      expect.anything(),
+      expect.objectContaining({ url: expect.stringContaining("review_state=human_rejected") }),
     );
     expect(fetchMock).toHaveBeenCalledWith(
-      expect.stringContaining("status=archived"),
-      expect.anything(),
+      expect.objectContaining({ url: expect.stringContaining("status=archived") }),
     );
   });
 
@@ -1204,8 +1218,9 @@ describe("RecallCorpusPanel", () => {
     await tick();
     expect(document.body.textContent).toContain("Archive Recall entry");
     expect(fetchMock).not.toHaveBeenCalledWith(
-      "/api/v1/recall/entries/recall-1/review",
-      expect.anything(),
+      expect.objectContaining({
+        url: expect.stringContaining("/api/v1/recall/entries/recall-1/review"),
+      }),
     );
     Array.from(document.querySelectorAll<HTMLButtonElement>("button"))
       .find((button) => button.textContent?.trim() === "Cancel")!
@@ -1223,13 +1238,11 @@ describe("RecallCorpusPanel", () => {
     await vi.waitFor(() => {
       expect(document.body.textContent).not.toContain("Keep extraction passes bounded");
     });
-    expect(fetchMock).toHaveBeenCalledWith(
-      "/api/v1/recall/entries/recall-1/review",
-      expect.objectContaining({
-        method: "POST",
-        body: JSON.stringify({ action: "archive" }),
-      }),
-    );
+    const reviewRequest = fetchMock.mock.calls
+      .map(([input]) => input as Request)
+      .find((request) => requestUrl(request).endsWith("/recall/entries/recall-1/review"))!;
+    expect(reviewRequest.method).toBe("POST");
+    expect(await reviewRequest.clone().json()).toEqual({ action: "archive" });
   });
 
   it("keeps a failed decision local and restores both row actions", async () => {

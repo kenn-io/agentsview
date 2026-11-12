@@ -288,7 +288,7 @@ describe("SearchStore", () => {
       const store = createSearchStore(memoryStorage());
       store.search("needle");
       await runDebounce();
-      const signal = fetchMock.mock.calls[0]![1].signal as AbortSignal;
+      const signal = (fetchMock.mock.calls[0]![0] as Request).signal;
       store.clear();
       await vi.advanceTimersByTimeAsync(300);
       expect(signal.aborted).toBe(true);

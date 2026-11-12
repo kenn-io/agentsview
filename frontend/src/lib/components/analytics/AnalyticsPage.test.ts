@@ -934,10 +934,10 @@ describe("AnalyticsPage refresh behavior", () => {
       resolvePRs = resolve;
     });
     const statsRequests: { url: string; signal: AbortSignal | null | undefined }[] = [];
-    vi.spyOn(globalThis, "fetch").mockImplementation(async (url, options) => {
+    vi.spyOn(globalThis, "fetch").mockImplementation(async (url) => {
       if (!requestUrl(url).includes("/api/v1/session-stats"))
         return Response.json({ models: [], agents: [] });
-      statsRequests.push({ url: requestUrl(url), signal: options?.signal });
+      statsRequests.push({ url: requestUrl(url), signal: (url as Request).signal });
       if (requestUrl(url).includes("include_github_outcomes=true")) return pending;
       return Response.json({
         outcome_stats: {

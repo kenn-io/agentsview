@@ -20,8 +20,9 @@ describe("visit ended reporting", () => {
   };
   const buckets = async () => {
     await vi.advanceTimersByTimeAsync(0);
-    return fetch.mock.calls
-      .map(([, init]) => JSON.parse(init?.body as string))
+    return (
+      await Promise.all(fetch.mock.calls.map(([request]) => (request as Request).clone().json()))
+    )
       .filter((event) => event.event === "visit_ended")
       .map((event) => event.properties.duration_bucket);
   };
@@ -63,16 +64,7 @@ describe("visit ended reporting", () => {
     close();
     close();
     expect(await buckets()).toEqual([bucket]);
-    expect(fetch).toHaveBeenCalledWith(
-      expect.any(String),
-      expect.objectContaining({
-        keepalive: true,
-        body: JSON.stringify({
-          event: "visit_ended",
-          properties: { surface: "web", duration_bucket: bucket },
-        }),
-      }),
-    );
+    expect(fetch.mock.calls.some(([request]) => (request as Request).keepalive)).toBe(true);
   });
 
   it("sums twenty visible minutes across short tab switches", async () => {
