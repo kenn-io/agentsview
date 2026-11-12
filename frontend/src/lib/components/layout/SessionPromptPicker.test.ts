@@ -95,11 +95,17 @@ describe("SessionPromptPicker", () => {
     sessionToc.view = { topOrdinal: 4, minOrdinal: 3, maxOrdinal: 4, atEnd: false };
     await open();
 
-    expect(optionLabels()).toEqual(["Set up the repo", "Add tests", "Ship it"]);
+    // The prompt being read comes first, then the ones before it.
+    expect(optionLabels()).toEqual(["Add tests", "Set up the repo"]);
     expect(status()).toBe("3 prompts");
     const current = screen.getByRole("option", { selected: true });
     expect(current.textContent).toContain("Add tests");
     expect(current.querySelector(".kit-typeahead__option-meta")!.textContent).toContain("#2");
+
+    // Enter on the highlighted first row keeps the reader where they are.
+    await fireEvent.keyDown(screen.getByRole("combobox"), { key: "Enter" });
+    await settle();
+    expect(ui.pendingScrollOrdinal).toBe(3);
   });
 
   it("searches the whole prompt, not just its first line", async () => {
@@ -131,13 +137,14 @@ describe("SessionPromptPicker", () => {
     expect(sessionToc.picked).toBe(1);
   });
 
-  it("renders a window of the first 100 prompts in a very long session", async () => {
+  it("renders at most 100 prompts in a very long session", async () => {
     load(Array.from({ length: 250 }, (_, i) => msg(i)));
     await open();
 
+    // Nothing is on screen yet, so the list starts at the last prompt.
     expect(screen.getAllByRole("option")).toHaveLength(100);
-    expect(optionLabels()[0]).toBe("prompt 0");
-    expect(status()).toBe("Prompts 1–100 of 250. Type to search them all.");
+    expect(optionLabels()[0]).toBe("prompt 249");
+    expect(status()).toBe("Prompts 151–250 of 250. Type to search them all.");
 
     await fireEvent.input(screen.getByRole("combobox"), { target: { value: "prompt" } });
     await settle();
@@ -170,9 +177,43 @@ describe("SessionPromptPicker", () => {
       from: 3,
       limit: 1000,
     });
-    expect(optionLabels()).toEqual(["First prompt", "Second prompt", "Loaded prompt"]);
+    expect(optionLabels()).toEqual(["Loaded prompt", "Second prompt", "First prompt"]);
     const loaded = screen.getByRole("option", { name: /Loaded prompt/ });
     expect(loaded.querySelector(".kit-typeahead__option-meta")!.textContent).toContain("#3");
+  });
+
+  it("hides counts that would cover only the loaded page when earlier prompts fail to load", async () => {
+    vi.spyOn(console, "warn").mockImplementation(() => {});
+    vi.spyOn(SessionsService, "getApiV1SessionsByIdMessages").mockRejectedValue(new Error("down"));
+    load([msg(4, { content: "Loaded prompt" })], true);
+    await open();
+
+    expect(document.querySelector(".picker-status [role=status]")).toBeNull();
+    expect(screen.getByRole("alert").textContent).toContain("Could not load earlier prompts");
+    expect(optionLabels()).toEqual(["Loaded prompt"]);
+  });
+
+  it("does not jump on the Enter that confirms an input method's text", async () => {
+    load([msg(0, { content: "検索" }), msg(1, { content: "Other" })]);
+    await open();
+    const search = screen.getByRole("combobox");
+    await fireEvent.keyDown(search, { key: "Enter", isComposing: true });
+    await fireEvent.keyDown(search, { key: "Escape", keyCode: 229 });
+    await settle();
+
+    expect(ui.pendingScrollOrdinal).toBeNull();
+    expect(screen.getByRole("combobox")).toBeTruthy();
+  });
+
+  it("opens with an empty search when t is pressed on its button", async () => {
+    load([msg(0, { content: "Only prompt" })]);
+    const button = screen.getByRole("button", { name: "Jump to prompt" });
+    button.focus();
+    await fireEvent.keyDown(button, { key: "t" });
+    await settle();
+
+    expect((screen.getByRole("combobox") as HTMLInputElement).value).toBe("");
+    expect(optionLabels()).toEqual(["Only prompt"]);
   });
 
   it("opens from the keyboard shortcut's request", async () => {

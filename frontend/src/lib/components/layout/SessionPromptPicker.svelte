@@ -6,6 +6,7 @@
   import type { Attachment } from "svelte/attachments";
   import { IconButton, Typeahead, type TypeaheadOption } from "@kenn-io/kit-ui";
   import { m } from "../../i18n/index.js";
+  import { isComposingKey } from "../../search/find-input.js";
   import { TableOfContentsIcon } from "../../icons.js";
   import { messages } from "../../stores/messages.svelte.js";
   import { sessionToc } from "../../stores/sessionToc.svelte.js";
@@ -56,8 +57,9 @@
   let value = $derived(currentIndex >= 0 ? String(entries[currentIndex]!.ordinal) : "");
 
   let status = $derived.by(() => {
-    // Counts and positions are wrong until every earlier prompt is known.
-    if (olderLoading) return m.session_toc_loading_older();
+    // Counts and positions are wrong until every earlier prompt is known;
+    // a failed read shows its error instead.
+    if (!complete) return olderFailed ? "" : m.session_toc_loading_older();
     const total = entries.length;
     if (query.trim() !== "") {
       return pick.matched > PICKER_LIMIT
@@ -108,12 +110,49 @@
     };
   };
 
+  // Typeahead opens a search for any letter typed on its button, so `t`
+  // there would search for "t". Open it empty, as `t` does elsewhere. A
+  // capture listener runs before Typeahead's own.
   const bindTrigger: Attachment<HTMLButtonElement> = (node) => {
     triggerEl = node;
+    const keydown = (event: KeyboardEvent) => {
+      if (event.key !== "t" || event.ctrlKey || event.metaKey || event.altKey) return;
+      if (node.getAttribute("aria-expanded") === "true") return;
+      event.preventDefault();
+      event.stopImmediatePropagation();
+      node.click();
+    };
+    node.addEventListener("keydown", keydown, { capture: true });
     return () => {
+      node.removeEventListener("keydown", keydown, { capture: true });
       if (triggerEl === node) triggerEl = undefined;
     };
   };
+
+  // Typeahead does not scroll its list to follow the highlighted row, and
+  // the list holds up to 100 rows, so keep the row it names in view.
+  const revealHighlighted: Attachment<HTMLElement> = (node) => {
+    const observer = new MutationObserver(() => {
+      const input = node.querySelector("input[aria-activedescendant]");
+      const id = input?.getAttribute("aria-activedescendant");
+      if (id) document.getElementById(id)?.scrollIntoView?.({ block: "nearest" });
+    });
+    observer.observe(node, {
+      subtree: true,
+      childList: true,
+      attributes: true,
+      attributeFilter: ["aria-activedescendant"],
+    });
+    return () => observer.disconnect();
+  };
+
+  // Typeahead acts on Enter and Escape even while an input method is
+  // composing, which would jump or close instead of confirming the text.
+  function guardComposition(event: KeyboardEvent) {
+    if ((event.key === "Enter" || event.key === "Escape") && isComposingKey(event)) {
+      event.stopPropagation();
+    }
+  }
 
   // The `t` shortcut opens the list the way a click on its button does.
   let handledOpenRequest = untrack(() => sessionToc.openRequest);
@@ -131,7 +170,7 @@
   }
 </script>
 
-<span class="prompt-picker">
+<span class="prompt-picker" onkeydowncapture={guardComposition} {@attach revealHighlighted}>
   <Typeahead
     remote
     {options}
@@ -159,7 +198,7 @@
     {/snippet}
     {#snippet header()}
       <div class="picker-status" {@attach trackOpen}>
-        <span role="status">{status}</span>
+        {#if status}<span role="status">{status}</span>{/if}
       </div>
     {/snippet}
   </Typeahead>

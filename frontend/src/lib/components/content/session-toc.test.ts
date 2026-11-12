@@ -199,22 +199,15 @@ describe("pickPrompts", () => {
   const many = Array.from({ length: 300 }, (_, i) => entry(i));
   const ordinals = (entries: readonly TocEntry[]) => entries.map((e) => e.ordinal);
 
-  it("opens on a window around the current prompt when there is no query", () => {
-    const pick = pickPrompts(many, "", 150, 10);
-    expect(ordinals(pick.shown)).toEqual([145, 146, 147, 148, 149, 150, 151, 152, 153, 154]);
-    expect(pick).toMatchObject({ matched: 300, start: 145 });
+  it("lists the current prompt first, then the ones before it, with no query", () => {
+    const pick = pickPrompts(many, "", 150, 4);
+    expect(ordinals(pick.shown)).toEqual([150, 149, 148, 147]);
+    expect(pick).toMatchObject({ matched: 300, start: 147 });
   });
 
-  it("keeps the window full at either end of the session", () => {
-    expect(ordinals(pickPrompts(many, "", 2, 4).shown)).toEqual([0, 1, 2, 3]);
-    expect(ordinals(pickPrompts(many, "", 299, 4).shown)).toEqual([296, 297, 298, 299]);
-    expect(ordinals(pickPrompts(many, "", -1, 4).shown)).toEqual([0, 1, 2, 3]);
-  });
-
-  it("lists every prompt when there are fewer than the limit", () => {
-    const pick = pickPrompts([entry(0), entry(1)], "", 1, 10);
-    expect(ordinals(pick.shown)).toEqual([0, 1]);
-    expect(pick.start).toBe(0);
+  it("stops at the first prompt and starts at the last one without a current prompt", () => {
+    expect(ordinals(pickPrompts(many, "", 1, 4).shown)).toEqual([1, 0]);
+    expect(ordinals(pickPrompts(many, "", -1, 4).shown)).toEqual([299, 298, 297, 296]);
   });
 
   it("matches prompts containing every word, in any order and case", () => {

@@ -154,19 +154,21 @@ export function currentEntryIndex(
 
 /** The prompts the picker lists for a query. */
 export interface PromptPick {
-  /** At most `limit` prompts, oldest first. */
+  /** At most `limit` prompts, in the order the picker lists them. */
   shown: TocEntry[];
   /** How many prompts match the query; all of them when it is empty. */
   matched: number;
-  /** Index in the matches of the first shown prompt. */
+  /** Index in `entries` of the oldest prompt shown with no query. */
   start: number;
 }
 
 /**
  * Chooses the prompts the picker lists. A query keeps prompts whose text
  * contains every word of it, oldest first, up to `limit`. With no query,
- * the list is a window of `limit` prompts around the current one, so the
- * picker opens where the reader is.
+ * the list starts at the current prompt and runs back through the ones
+ * before it, newest first: the picker highlights its first row, so Enter
+ * stays put and Down steps back through the conversation. Without a
+ * current prompt it starts at the last one.
  */
 export function pickPrompts(
   entries: readonly TocEntry[],
@@ -176,9 +178,9 @@ export function pickPrompts(
 ): PromptPick {
   const words = query.toLowerCase().split(/\s+/).filter(Boolean);
   if (words.length === 0) {
-    const centered = currentIndex < 0 ? 0 : currentIndex - Math.floor(limit / 2);
-    const start = Math.max(0, Math.min(centered, entries.length - limit));
-    return { shown: entries.slice(start, start + limit), matched: entries.length, start };
+    const end = (currentIndex < 0 ? entries.length - 1 : currentIndex) + 1;
+    const start = Math.max(0, end - limit);
+    return { shown: entries.slice(start, end).reverse(), matched: entries.length, start };
   }
   const shown: TocEntry[] = [];
   let matched = 0;

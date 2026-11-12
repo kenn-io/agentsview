@@ -47,13 +47,12 @@ test.describe("session prompt picker", () => {
     const button = page.getByRole("button", { name: "Jump to prompt" });
     await button.click();
     // The transcript opens at the top of its newest page, prompt 2,251, so
-    // the picker opens on the prompts around it.
+    // the picker lists it first, then the 99 prompts before it.
     await expect(page.locator(".picker-status")).toHaveText(
-      "Prompts 2,201–2,300 of 2,750. Type to search them all.",
+      "Prompts 2,152–2,251 of 2,750. Type to search them all.",
     );
-    await expect(page.getByRole("option", { selected: true })).toContainText(
-      "User message 4500 of 5500.",
-    );
+    await expect(page.getByRole("option").first()).toHaveAttribute("aria-selected", "true");
+    await expect(page.getByRole("option").first()).toContainText("User message 4500 of 5500.");
 
     await page.getByRole("combobox", { name: "Search prompts" }).fill("1000");
     await page.getByRole("option", { name: /User message 1000 of 5500\./ }).click();
@@ -63,11 +62,13 @@ test.describe("session prompt picker", () => {
 
     await button.click();
     await expect(page.locator(".picker-status")).toHaveText(
-      "Prompts 451–550 of 2,750. Type to search them all.",
+      "Prompts 402–501 of 2,750. Type to search them all.",
     );
-    await expect(page.getByRole("option", { selected: true })).toContainText(
-      "User message 1000 of 5500.",
-    );
+    await expect(page.getByRole("option").first()).toHaveAttribute("aria-selected", "true");
+    await expect(page.getByRole("option").first()).toContainText("User message 1000 of 5500.");
+    // The list follows the keyboard highlight past its visible rows.
+    for (let i = 0; i < 30; i++) await page.keyboard.press("ArrowDown");
+    await expect(page.getByRole("option", { name: /User message 940 of 5500\./ })).toBeInViewport();
     await page.keyboard.press("Escape");
     await expect(page.getByRole("combobox", { name: "Search prompts" })).toHaveCount(0);
     await expect(button).toBeFocused();
