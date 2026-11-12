@@ -259,7 +259,7 @@ func relocatePiHeader(ctx context.Context, data []byte, id, cwd string) ([]byte,
 	if count != 1 {
 		return nil, errors.New("native Pi session header requires one cwd")
 	}
-	if data == nil || offset < 0 || start < 0 || end < start || offset > len(data) || end > len(data)-offset {
+	if data == nil {
 		return nil, errors.New("invalid native Pi header offsets")
 	}
 	if !utf8.ValidString(cwd) {
