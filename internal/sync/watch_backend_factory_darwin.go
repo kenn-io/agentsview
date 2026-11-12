@@ -39,6 +39,7 @@ const (
 	darwinRetryInitial       = 100 * time.Millisecond
 	darwinRetryMax           = 5 * time.Second
 	darwinFallbackPollingKey = "watcher-fallback"
+	darwinDropLogInterval    = time.Minute
 )
 
 // darwinFallbackPollPlan preserves one physical watch plan's path-to-scope
@@ -130,6 +131,9 @@ type darwinLogicalRoot struct {
 	lossRequested     bool
 	retryAt           time.Time
 	retryDelay        time.Duration
+	// dropLoggedAt is the UnixNano time of the last logged native drop, so a
+	// drop storm logs at most once per darwinDropLogInterval per root.
+	dropLoggedAt atomic.Int64
 }
 
 type darwinRootPhase uint8
@@ -612,6 +616,9 @@ func (b *darwinWatchBackend) consumeFSEvents(
 ) {
 	if nativeDeliveryRequestsFallback(events) {
 		b.nativeDrops.Inc()
+		if b.reconcileRootAfterDrop(registration) {
+			return
+		}
 		b.requestFallback(darwinFallbackNativeDrop)
 		return
 	}
@@ -672,6 +679,46 @@ func (b *darwinWatchBackend) consumeFSEvents(
 		}
 		return meaningful
 	})
+}
+
+// reconcileRootAfterDrop handles a dropped or must-rescan delivery from one
+// root's stream by queueing a reconciliation of only that root's scopes. Each
+// recursive root has its own FSEvents stream, and a drop loses notifications
+// on that stream alone, so the stream stays open and keeps delivering while
+// the reconciliation runs. Other roots keep native coverage and nothing moves
+// to the unwatched poll. Dropped notifications do not change file stats, so
+// the ordinary stat-based freshness checks in that reconciliation find every
+// change the stream missed; it does not clear archive-wide skip state the way
+// lost-events recovery does.
+//
+// It returns false, leaving the backend-wide fallback in charge, when the
+// stream has no logical root (no scopes to reconcile) or the backend is
+// already in fallback or recovery, whose own authoritative pass owns
+// coverage.
+func (b *darwinWatchBackend) reconcileRootAfterDrop(registration darwinWatchRoot) bool {
+	state := registration.state
+	if state == nil || len(appendWatchScopeRoots(nil, state.plan.Scopes)) == 0 ||
+		b.fallbackPhaseValue() != darwinFallbackInactive ||
+		darwinFallbackReason(b.fallbackReason.Load()) != darwinFallbackReasonNone {
+		return false
+	}
+	// A root still waiting for its activation or loss reconciliation keeps
+	// that gate: the token makes this reconciliation acknowledge it.
+	var token backendLifecycleToken
+	if !state.isOpen(registration.generation) {
+		token = backendLifecycleToken{gate: state, generation: registration.generation}
+	}
+	b.accumulateReconcile(state.plan.Scopes, token)
+	now := time.Now().UnixNano()
+	last := state.dropLoggedAt.Load()
+	if (last == 0 || now-last >= int64(darwinDropLogInterval)) &&
+		state.dropLoggedAt.CompareAndSwap(last, now) {
+		log.Printf(
+			"watcher: backend=%s native-drop root=%s reconcile=root native_drops=%d",
+			b.Name(), state.plan.Path, b.nativeDrops.Load(),
+		)
+	}
+	return true
 }
 
 func nativeDeliveryRequestsFallback(events []fsevents.Event) bool {

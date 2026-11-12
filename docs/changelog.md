@@ -54,6 +54,11 @@ The latest release is
   the request fails. The server also compares bearer tokens in constant time,
   as the MCP endpoint already did. See
   [SSE Endpoints](/docs/remote-access/#sse-endpoints).
+- On macOS, live sessions keep updating after FSEvents drops events. A drop now
+  rescans only the session folder that lost events and keeps its native watch,
+  instead of moving every folder onto the 2-minute poll. When folders do need
+  polling, the poll waits at least as long as its last pass took, and watcher
+  syncs run between providers instead of queueing behind the whole pass.
 - Semantic search builds on Kit's built-in local embeddings server no longer
   fail on every attempt with `embed request failed`. The built-in server runs
   the model on the CPU, so it now defaults to 8 inputs per request, one request

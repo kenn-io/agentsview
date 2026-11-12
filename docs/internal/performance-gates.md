@@ -85,6 +85,20 @@ runner noise and fail loudly:
   (`internal/sync/watcher_test.go`) — watcher callbacks remain throttled and
   serialized, sustained writes make progress, event intake continues during a
   sync, and an event storm becomes a bounded full rescan.
+- `TestDarwinWatcherNativeDropReconcilesOnlyThatRoot`
+  (`internal/sync/watcher_darwin_test.go`, macOS only) — a dropped FSEvents
+  batch, or a storm of them, on one root reconciles only that root. It
+  registers no polling obligation, closes or recreates no stream, and every
+  root keeps delivering native events.
+- `TestReconcileProviderRootsGroupedYieldsToWaitingSyncBetweenGroups`
+  (`internal/sync/grouped_reconcile_yield_test.go`) and the
+  `TestEngineSyncLock*` tests — a sync waiting on the engine lock during one
+  poll group runs before the next group starts, so a long poll pass cannot
+  starve watcher syncs.
+- `TestUnwatchedPollWaitsAfterAPassLongerThanTheInterval`
+  (`cmd/agentsview/poll_coordinator_scope_test.go`) — the unwatched-poll
+  cooldown is at least as long as the previous pass, so polling uses at most
+  about half of wall-clock time.
 - `TestCodexCursorCache`, `TestCodexCursorWarmColdParity`, and the cursor
   boundary tests in `internal/parser` — continuation state stays bounded and
   warm/cold parsing remains equivalent at safe offsets.
