@@ -252,3 +252,63 @@ func TestMaterializeParentSource(t *testing.T) {
 		require.ErrorContains(t, err, "invalid source session identity")
 	}
 }
+
+func TestMaterializeLinkedClaudeProject(t *testing.T) {
+	const id = "12345678-1234-1234-1234-123456789abc"
+	for _, saved := range []bool{true, false} {
+		t.Run(map[bool]string{true: "saved path", false: "moved path"}[saved], func(t *testing.T) {
+			root, project, home := t.TempDir(), t.TempDir(), t.TempDir()
+			t.Setenv("CLAUDE_CONFIG_DIR", home)
+			t.Setenv("CLAUDE_CODE_PROJECT_DIR_NAME", "fixture")
+			link := filepath.Join(root, "linked-project")
+			if err := os.Symlink(project, link); err != nil {
+				t.Skipf("symlink unavailable: %v", err)
+			}
+			original := `{"type":"user","sessionId":"` + id + `","message":{"role":"user","content":"linked session"}}` + "\n"
+			require.NoError(t, os.WriteFile(filepath.Join(project, id+".jsonl"), []byte(original), 0o600))
+			for name, content := range map[string]string{"tool-results/result.txt": "tool output", "subagents/agent.jsonl": "child transcript"} {
+				file := filepath.Join(project, id, filepath.FromSlash(name))
+				require.NoError(t, os.MkdirAll(filepath.Dir(file), 0o700))
+				require.NoError(t, os.WriteFile(file, []byte(content), 0o600))
+			}
+			stored := filepath.Join(link, id+".jsonl")
+			if !saved {
+				stored = filepath.Join(root, "old-project", id+".jsonl")
+			}
+			session := &db.Session{ID: id, Agent: "claude", Machine: "local", FilePath: &stored}
+			cfg := config.Config{InstallationID: "local", LocalMachineName: "local", AgentDirs: map[parser.AgentType][]string{parser.AgentClaude: {root}}}
+			result, err := Materialize(t.Context(), cfg, session, t.TempDir())
+			require.NoError(t, err)
+			assert.Equal(t, "installed", result.Status)
+			got, err := os.ReadFile(filepath.Join(home, "projects", "fixture", id+".jsonl"))
+			require.NoError(t, err)
+			assert.Equal(t, original, string(got))
+			for name, content := range map[string]string{"tool-results/result.txt": "tool output", "subagents/agent.jsonl": "child transcript"} {
+				got, err := os.ReadFile(filepath.Join(home, "projects", "fixture", id, filepath.FromSlash(name)))
+				require.NoError(t, err)
+				assert.Equal(t, content, string(got))
+			}
+		})
+	}
+}
+
+func TestMaterializeMirrorRejectsLinkedProjectOutsideMirror(t *testing.T) {
+	const id = "12345678-1234-1234-1234-123456789abc"
+	data, outside := t.TempDir(), t.TempDir()
+	t.Setenv("CLAUDE_CONFIG_DIR", t.TempDir())
+	t.Setenv("CLAUDE_CODE_PROJECT_DIR_NAME", "fixture")
+	remote := "/projects/linked/" + id + ".jsonl"
+	root := remotesync.MirrorDir(data, "remote")
+	name, err := remotesync.SafeRemappedRemotePath(root, remote)
+	require.NoError(t, err)
+	require.NoError(t, os.MkdirAll(filepath.Dir(filepath.Dir(name)), 0o700))
+	if err := os.Symlink(outside, filepath.Dir(name)); err != nil {
+		t.Skipf("symlink unavailable: %v", err)
+	}
+	require.NoError(t, os.WriteFile(filepath.Join(outside, id+".jsonl"), []byte(`{"type":"user","sessionId":"`+id+`","message":{"content":"outside"}}`+"\n"), 0o600))
+	stored := "remote:" + remote
+	cfg := config.Config{DataDir: data, RemoteHosts: []config.RemoteHost{{Host: "remote"}}}
+	session := &db.Session{ID: "remote~" + id, Agent: "claude", Machine: "remote", FilePath: &stored}
+	_, err = Materialize(t.Context(), cfg, session, t.TempDir())
+	require.ErrorContains(t, err, "source identity or root mismatch")
+}

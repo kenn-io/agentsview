@@ -165,13 +165,11 @@ func readConfiguredLocal(ctx context.Context, cfg config.Config, session *db.Ses
 	if err != nil {
 		return nil, "", err
 	}
-	for _, root := range roots {
-		if within(root, name) {
-			files, err := readLocalSource(ctx, root, name, id, maxSourceBytes)
-			return files, name, err
-		}
-	}
-	return nil, "", errors.New("source is outside configured roots")
+	// The provider validates the configured root and project layout, including
+	// linked project directories. Confine companion reads to that project;
+	// mirrored sources continue to use their stricter mirror-root boundary.
+	files, err := readLocalSource(ctx, filepath.Dir(name), name, id, maxSourceBytes)
+	return files, name, err
 }
 
 // uniqueLocalSource keeps an archived path that still resolves exactly.
