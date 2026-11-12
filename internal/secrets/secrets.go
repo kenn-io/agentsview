@@ -187,8 +187,29 @@ func Redact(text string) string {
 // its value, but the reference names a local image by the hash of its bytes
 // and carries no secret. Masking it would break every exported image. Scan
 // still reports the candidate, so findings and RulesVersion are unchanged.
+//
+// Text can also hold escaped JSON or Go string literals, such as a Codex
+// terminal-input preview or the cut-off tail of a JSON Lines record. There the
+// "n" of a "\n" escape removes a key's leading word boundary, and a key
+// block's "\n" escapes fail the PEM body check. maskableSpans also scans a
+// copy of text where each "\n", "\r", and "\t" escape is whitespace, so the
+// mask covers those secrets too. Scan does not, so findings are unchanged.
 func maskableSpans(text string) []Match {
 	raw := scanRaw(text)
+	if shadow, ok := unescapeWhitespace(text); ok {
+		for _, m := range scanRaw(shadow) {
+			// Mask the original bytes, so a mask that keeps a span's ends
+			// never writes the copy's real newline into escaped text.
+			m.Redacted = ruleMask(m.Rule, text[m.Start:m.End])
+			raw = append(raw, m)
+		}
+		sort.Slice(raw, func(i, j int) bool {
+			if raw[i].Start != raw[j].Start {
+				return raw[i].Start < raw[j].Start
+			}
+			return raw[i].End > raw[j].End
+		})
+	}
 	kept := raw[:0]
 	for _, m := range raw {
 		if !isAssetReferencePath(text, m) {
@@ -196,6 +217,42 @@ func maskableSpans(text string) []Match {
 		}
 	}
 	return kept
+}
+
+// ruleMask masks span with the mask of the rule named name. Rule names are
+// unique.
+func ruleMask(name, span string) string {
+	for i := range rules {
+		if rules[i].name == name {
+			return rules[i].mask(span)
+		}
+	}
+	return maskKeepEnds(span, 0, 4)
+}
+
+// unescapeWhitespace returns text with each "\n", "\r", and "\t" escape
+// replaced by a space and a newline, so offsets into the copy are offsets into
+// text. An escaped backslash ("\\") is skipped, so "\\n" stays a backslash and
+// a letter. ok is false when text has no such escape.
+func unescapeWhitespace(text string) (string, bool) {
+	var b []byte
+	for i := 0; i+1 < len(text); i++ {
+		if text[i] != '\\' {
+			continue
+		}
+		switch text[i+1] {
+		case 'n', 'r', 't':
+			if b == nil {
+				b = []byte(text)
+			}
+			b[i], b[i+1] = ' ', '\n'
+		}
+		i++
+	}
+	if b == nil {
+		return "", false
+	}
+	return string(b), true
 }
 
 func isAssetReferencePath(text string, m Match) bool {

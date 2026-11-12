@@ -996,6 +996,42 @@ func (s *Server) humaOpenSession(
 	}, nil
 }
 
+// gistDescription names a published session by its project and the start of
+// its first prompt. Unless reveal is set, the prompt is masked. The stored
+// first prompt is a preview cut to 300 characters, so a long private key block
+// can lose its END line, and the detector needs that line to match the block.
+// The description therefore ends before any private key header that masking
+// left in place.
+func gistDescription(project string, firstMessage *string, reveal bool) string {
+	first := ""
+	if firstMessage != nil {
+		first = *firstMessage
+		if !reveal {
+			first = cutAtPrivateKeyHeader(secrets.Redact(first))
+		}
+		first = stringutil.TruncateRunes(first, 100, "...")
+	}
+	return fmt.Sprintf("Agent session: %s - %s", project, first)
+}
+
+// cutAtPrivateKeyHeader returns text up to its first "-----BEGIN ... PRIVATE
+// KEY-----" header, with trailing whitespace removed.
+func cutAtPrivateKeyHeader(text string) string {
+	const begin = "-----BEGIN "
+	for i := 0; ; {
+		j := strings.Index(text[i:], begin)
+		if j < 0 {
+			return text
+		}
+		start := i + j
+		i = start + len(begin)
+		name, _, closed := strings.Cut(text[i:], "-----")
+		if closed && strings.HasSuffix(name, "PRIVATE KEY") && !strings.Contains(name, "\n") {
+			return strings.TrimRight(text[:start], " \t\r\n")
+		}
+	}
+}
+
 func (s *Server) humaPublishSession(
 	ctx context.Context,
 	in *publishSessionInput,
@@ -1013,15 +1049,7 @@ func (s *Server) humaPublishSession(
 	}
 	htmlContent := generateExportHTML(session, msgs)
 	filename := session.Project + "-" + formatDateShort(session.StartedAt) + ".html"
-	first := ""
-	if session.FirstMessage != nil {
-		first = *session.FirstMessage
-		if !in.Reveal {
-			first = secrets.Redact(first)
-		}
-		first = stringutil.TruncateRunes(first, 100, "...")
-	}
-	description := fmt.Sprintf("Agent session: %s - %s", session.Project, first)
+	description := gistDescription(session.Project, session.FirstMessage, in.Reveal)
 	gist, err := createGist(ctx, token, filename, description, htmlContent, !in.Secret)
 	if err != nil {
 		return nil, apiError(http.StatusBadGateway, err.Error())
