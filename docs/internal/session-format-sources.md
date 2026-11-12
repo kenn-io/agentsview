@@ -1,5 +1,5 @@
 ---
-last_edited: 2026-11-11
+last_edited: 2026-11-12
 ---
 
 # Session Format Source Inventory
@@ -1984,31 +1984,54 @@ fixtures retain this field; missing identities remain source-local.
 
 ## Gemini Apps (`gemini-apps`)
 
-- **Format:** Google Takeout `My Activity` HTML containing Gemini Apps activity
-  cells. Each compatible `Prompted` record is imported as one one-turn session
-  with exactly one user message containing the complete visible plain text;
-  HTML presentation does not infer speaker roles or generate Markdown. Canvas,
-  feedback, and unknown record kinds are counted as skipped. Explicitly
-  identified cells from other Takeout products are ignored. The current parser
-  supports the observed English rendering for Gemini Apps cells and reports
-  declared non-English or otherwise unsupported localized Gemini candidates
-  before emitting sessions. Inline code remains inline text, while
-  preformatted text preserves authored spaces, tabs, newlines, and backticks
-  as data. Session IDs use the canonical UTC timestamp plus a zero-based
-  occurrence index among admitted `Prompted` records sharing that timestamp.
-  Records with other timestamps can be inserted or reordered without changing
-  existing IDs; order remains a tie-breaker only for exact timestamp
-  collisions.
-- **Evidence:** `no-public-source`.
-- **Upstream:** Google's Takeout documentation and public format references were
-  searched 2026-08-01. Google does not publish a versioned Gemini Apps
-  activity HTML schema, so markup, labels, timestamp zones, and future record
-  kinds remain observed compatibility evidence from sanitized exports. No
-  translated label or timestamp vocabulary is claimed. Timestamp compatibility
-  includes the existing named zones and complete `GMT±H`, `GMT±HH`,
-  `GMT±H:MM`, and `GMT±HH:MM` forms, with omitted minutes treated as zero;
-  unsupported localized formats and malformed zone tokens return an explicit
-  compatibility error.
+- **Format:** Google Takeout `My Activity` HTML, normally
+  `Takeout/My Activity/Gemini Apps/MyActivity.html`. Each record is an
+  `outer-cell` whose `header-cell` holds the product name in
+  `<p class="mdl-typography--title">Gemini Apps<br></p>`. The body content cell
+  (`content-cell mdl-typography--body-1`) holds, as direct children separated
+  by `<br>`, the activity line (`Prompted&nbsp;<prompt>`, with further prompt
+  lines after it), the timestamp line, and then the response HTML. An empty
+  right-aligned content cell and a caption cell listing products follow.
+- **Mapping:** each `Prompted` record becomes one session with a user message
+  for the prompt and, when the record has a response, one assistant message
+  with its visible plain text. Other activity lines count as skipped, and
+  cells from other products are ignored. Inline code stays inline text;
+  preformatted text keeps authored spaces, tabs, newlines, and backticks.
+  Session IDs use the canonical UTC timestamp plus a zero-based occurrence
+  index among `Prompted` records sharing that timestamp, so inserted or
+  reordered records keep existing IDs.
+- **Timestamps:** English rendering such as `Nov 9, 2026, 9:15:42 PM PST`, with
+  a plain or narrow no-break space before `AM`/`PM`. The zone is an
+  abbreviation for the account's zone when the export ran, so a summer
+  abbreviation can label a winter record. When the importing machine's zone
+  uses the same abbreviation in the record's year, its offset wins; this
+  resolves abbreviations such as `IST` and `CST` that name different zones in
+  different countries. Otherwise the fixed US and UTC/GMT names and complete
+  `GMT±H`, `GMT±HH`, `GMT±H:MM`, and `GMT±HH:MM` forms apply. Unknown
+  abbreviations, malformed zones, declared non-English documents, and
+  date-and-clock lines in other renderings fail the whole import before any
+  session is written, and the error tells the user to rerun with `TZ` set.
+- **Evidence:** `no-public-source`. Google publishes no schema for this HTML.
+- **Upstream:** searched 2026-08-01 and again 2026-11-12. Two independent
+  parsers of real exports agree on the cell layout:
+  [`google_takeout_parser` `_parse_activity_div`](https://github.com/purarue/google_takeout_parser/blob/aebb2dcade4b9156c59ea04a4ced6063dc209c82/google_takeout_parser/parse_html/activity.py#L271-L330)
+  and its recorded
+  [`My Activity` fixture](https://github.com/purarue/google_takeout_parser/blob/aebb2dcade4b9156c59ea04a4ced6063dc209c82/tests/testdata/HtmlTakeout/My%20Activity/Chrome/MyActivity.html)
+  show the header title paragraph and the body, right-aligned, and caption
+  content cells.
+  [`split-gemini-activities-by-chats` `parseContentCell`](https://github.com/spookyrunt/split-gemini-activities-by-chats/blob/2153a01d7fb00f3591a47a1b48d058793be0391d/main.go#L517-L589)
+  reads Gemini Apps records as prompt lines, a timestamp line, then response
+  nodes, and its
+  [timestamp pattern](https://github.com/spookyrunt/split-gemini-activities-by-chats/blob/2153a01d7fb00f3591a47a1b48d058793be0391d/main.go#L45)
+  expects zone abbreviations.
+  [`parse_html_dt`](https://github.com/purarue/google_takeout_parser/blob/aebb2dcade4b9156c59ea04a4ced6063dc209c82/google_takeout_parser/parse_html/html_time_utils.py#L43-L71)
+  documents that the abbreviation reflects the export-time offset. Issue
+  [#2947](https://github.com/kenn-io/agentsview/issues/2947) reported a real
+  `Takeout/My Activity/Gemini Apps/MyActivity.html` that the earlier parser,
+  written against an assumed `<h3>` header layout, rejected. Activity labels
+  other than `Prompted` and translated vocabulary are not documented; the
+  scrubbed fixture at `internal/parser/testdata/gemini-apps/MyActivity.html`
+  follows the layout above.
 - **Usage and cost:** Takeout activity records expose no authoritative token,
   cache, reasoning, credit, or monetary-cost fields to Agentsview.
 - **Agentsview:** `internal/parser/gemini_apps_takeout.go` and
