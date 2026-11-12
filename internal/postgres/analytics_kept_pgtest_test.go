@@ -8,6 +8,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -66,6 +67,7 @@ func TestAnalyticsKeptPushAndSelection(t *testing.T) {
 	assert.Equal(t, velocity, velocityAgain)
 	assert.Equal(t, reads, counter.count())
 	toolsAgain.ByTool[0].ToolName = "changed"
+	toolsAgain.Trend[0].ByCat["Read"] = 99
 	velocityAgain.ByAgent[0].Label = "changed"
 	toolsAgain, err = store.GetAnalyticsTools(ctx, f)
 	require.NoError(t, err)
@@ -92,6 +94,16 @@ func TestAnalyticsKeptPushAndSelection(t *testing.T) {
 	changedVelocity, err := store.GetAnalyticsVelocity(ctx, f)
 	require.NoError(t, err)
 	assert.NotEqual(t, velocity.Overall.CharsPerActiveMin, changedVelocity.Overall.CharsPerActiveMin)
+	session, err := local.GetSession(ctx, "session")
+	require.NoError(t, err)
+	session.Project = "other-project"
+	require.NoError(t, local.UpsertSession(ctx, *session))
+	pgKeptPush(t, syncer, true)
+	projectFilter := f
+	projectFilter.Project = "project"
+	projectTools, err := store.GetAnalyticsTools(ctx, projectFilter)
+	require.NoError(t, err)
+	assert.Zero(t, projectTools.TotalCalls)
 	require.NoError(t, local.DeleteSession(ctx, "session"))
 	pgKeptPush(t, syncer, true)
 	deleted, err := store.GetAnalyticsTools(ctx, f)
@@ -100,6 +112,30 @@ func TestAnalyticsKeptPushAndSelection(t *testing.T) {
 	deletedVelocity, err := store.GetAnalyticsVelocity(ctx, f)
 	require.NoError(t, err)
 	assert.Empty(t, deletedVelocity.ByAgent)
+}
+
+func TestAnalyticsKeptAdvancingCutoff(t *testing.T) {
+	local, syncer, store := newUsageJournalFixture(t)
+	pgKeptSession(t, local, "session", "project", "2026-06-14")
+	pgKeptPush(t, syncer, false)
+	ctx := t.Context()
+	cutoff := time.Now().Add(5 * time.Second)
+	_, err := syncer.pg.ExecContext(ctx, `UPDATE sessions SET ended_at = $1 WHERE id = 'session'`, cutoff.Add(-10*time.Minute))
+	require.NoError(t, err)
+	f := db.AnalyticsFilter{From: "2026-06-14", To: "2026-06-14", Timezone: "UTC", Termination: "active"}
+	before, err := store.GetAnalyticsVelocity(ctx, f)
+	require.NoError(t, err)
+	require.Len(t, before.ByAgent, 1)
+	timer := time.NewTimer(time.Until(cutoff) + time.Second)
+	defer timer.Stop()
+	select {
+	case <-timer.C:
+	case <-ctx.Done():
+		t.Fatal(ctx.Err())
+	}
+	after, err := store.GetAnalyticsVelocity(ctx, f)
+	require.NoError(t, err)
+	assert.Empty(t, after.ByAgent)
 }
 
 func TestAnalyticsKeptBypasses(t *testing.T) {
