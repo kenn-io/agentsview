@@ -3,7 +3,6 @@ package duckdb
 import (
 	"context"
 	"fmt"
-	"slices"
 	"time"
 
 	"go.kenn.io/agentsview/internal/activity"
@@ -17,17 +16,6 @@ const activityRunOrder = "start_us, start_ordinal, kind, call_index, event_index
 // interval candidates and resolves them in SQL into each session's runs over
 // all time, which activity.SessionRuns clips to any report range.
 //
-// with is a WITH list, without the WITH keyword, that defines two relations
-// over the sessions to pair:
-//
-//   - activity_run_messages: every message, with the columns session_id,
-//     ordinal, ts_us (NULL without a timestamp), role, and model.
-//   - activity_run_terminals: every completed or errored tool_execution
-//     event with a timestamp, with the columns session_id, ordinal (the
-//     tool call's message ordinal), call_index, event_index, and ts_us.
-//
-// Timestamps are microseconds since the epoch.
-//
 // A message pairs with the next message that has a timestamp. A tool event
 // pairs with whichever comes first of the session's next tool event and
 // its first later message, by ordinal, with a later timestamp; the
@@ -36,10 +24,10 @@ const activityRunOrder = "start_us, start_ordinal, kind, call_index, event_index
 // earlier candidates reach, and dropped when they already cover it. Pieces
 // that touch and share a model join into one run.
 func (s *Store) activitySessionRuns(
-	ctx context.Context, with string, withArgs []any, gapCapSeconds float64,
+	ctx context.Context, ids []string, gapCapSeconds float64,
 ) (map[string]activity.SessionRuns, error) {
 	gapCap := time.Duration(gapCapSeconds) * time.Second
-	sqlText, args := activityRunsSQL(with, withArgs, gapCap.Microseconds())
+	sqlText, args := activityRunsSQL(ids, gapCap.Microseconds())
 	rows, err := s.queryContext(ctx, sqlText, args...)
 	if err != nil {
 		return nil, fmt.Errorf("querying activity session runs: %w", err)
@@ -72,8 +60,22 @@ func (s *Store) activitySessionRuns(
 	return out, nil
 }
 
-func activityRunsSQL(with string, withArgs []any, gapUS int64) (string, []any) {
-	query := "WITH " + with + `,
+// activityRunsSQL reads the sessions' messages, with timestamps as
+// microseconds since the epoch, and their completed or errored
+// tool_execution events with a timestamp.
+func activityRunsSQL(ids []string, gapUS int64) (string, []any) {
+	query := `WITH
+		activity_run_messages AS (
+			SELECT session_id, ordinal, epoch_us(timestamp) AS ts_us, role, model
+			FROM messages WHERE session_id IN (SELECT unnest(?))
+		),
+		activity_run_terminals AS (
+			SELECT session_id, tool_call_message_ordinal AS ordinal, call_index, event_index,
+				epoch_us(timestamp) AS ts_us
+			FROM tool_result_events
+			WHERE session_id IN (SELECT unnest(?)) AND source = 'tool_execution'
+				AND status IN ('completed', 'errored') AND timestamp IS NOT NULL
+		),
 		activity_run_stamped AS (
 			SELECT session_id, ordinal, ts_us, role, model,
 				lead(ordinal) OVER w AS next_ordinal,
@@ -227,7 +229,5 @@ func activityRunsSQL(with string, withArgs []any, gapUS int64) (string, []any) {
 		SELECT session_id, model, CAST(piece_start AS BIGINT), CAST(piece_end AS BIGINT), CAST(trimmed AS BIGINT)
 		FROM activity_run_pieces
 		ORDER BY session_id, piece_start`
-	args := slices.Clone(withArgs)
-	args = append(args, gapUS, gapUS)
-	return query, args
+	return query, []any{ids, ids, gapUS, gapUS}
 }

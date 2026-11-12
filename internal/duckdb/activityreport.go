@@ -781,9 +781,7 @@ func (s *Store) activityReportUsage(
 
 	candidateWhere, candidateArgs := duckActivityReportCandidateWhere(
 		f, rangeStartUTC, rangeEndUTC)
-	args := append([]any{lowerBound, upperBound}, candidateArgs...)
-	args = append(args, int64(activityUsageNullPricingUS))
-	out, err = s.sumActivityUsage(ctx, duckActivityUsageWith(candidateWhere), args, q, rateResolver)
+	out, err = s.sumActivityUsage(ctx, candidateWhere, candidateArgs, lowerBound, upperBound, q, rateResolver)
 	if err != nil {
 		return nil, nil, fmt.Errorf("selecting duckdb activity report usage: %w", err)
 	}
@@ -794,8 +792,10 @@ func (s *Store) activityReportUsage(
 	return out, &block, nil
 }
 
-// duckActivityUsageWith defines the relations sumActivityUsage
-// reads over the padded time range. Candidate sessions, their usage rows,
+// duckActivityUsageWith defines the relations sumActivityUsage reads over
+// the padded time range: activity_usage_candidates, the report's candidate
+// sessions, and activity_usage_rows, their usage rows normalized to the
+// columns activityUsageSQL reads. Candidate sessions, their usage rows,
 // and matching Claude snapshot peers are relations in one statement, so the
 // query shape stays constant as the peer-key set grows. It applies the same
 // message and usage-event eligibility predicates as GetDailyUsage and

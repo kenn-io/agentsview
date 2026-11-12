@@ -29,23 +29,19 @@ const activityUsageModels = `SELECT DISTINCT model, provider_id FROM messages WH
 // sumActivityUsage selects, prices, and sums the usage survivors of an
 // Activity report in SQL, and records the pricing it used on pricing.
 //
-// with is a WITH list, without the WITH keyword, that defines two relations:
-//
-//   - activity_usage_candidates(id): the report's candidate sessions.
-//   - activity_usage_rows: the candidates' normalized usage rows, plus
-//     every row that shares a Claude response with one of them, with the
-//     columns session_id, ord (-1 without a message ordinal), has_ordinal
-//     (0 or 1), ts_us, pricing_us (activityUsageNullPricingUS without a
-//     pricing timestamp), source, model, provider_id, agent,
-//     claude_message_id, claude_request_id, source_uuid, usage_dedup_key,
-//     input, output, reasoning, cache_create, cache_create_1h, cache_read,
-//     web, cost, cost_source, and recorded_cost. Timestamps are
-//     microseconds since the epoch, counters are 64-bit integers, and cost
-//     and recorded_cost are nullable microdollars: cost is a reported or
-//     Copilot session cost, and recorded_cost is a harness-recorded cost
-//     (usagefacts.CostStatusRecorded) the catalog may override.
-//
-// Rows outside the report range may be included; the query drops them.
+// The usage rows come from duckActivityUsageWith over the bounds, for the
+// candidate sessions candidateWhere selects. Its activity_usage_rows carry
+// session_id, ord (-1 without a message ordinal), has_ordinal (0 or 1),
+// ts_us, pricing_us (activityUsageNullPricingUS without a pricing
+// timestamp), source, model, provider_id, agent, claude_message_id,
+// claude_request_id, source_uuid, usage_dedup_key, input, output, reasoning,
+// cache_create, cache_create_1h, cache_read, web, cost, cost_source, and
+// recorded_cost. Timestamps are microseconds since the epoch, counters are
+// 64-bit integers, and cost and recorded_cost are nullable microdollars:
+// cost is a reported or Copilot session cost, and recorded_cost is a
+// harness-recorded cost (usagefacts.CostStatusRecorded) the catalog may
+// override. Rows outside the report range may be included; the query drops
+// them.
 //
 // The query applies the report's rules in order: rows must carry a
 // timestamp inside the report range and before its effective end; each
@@ -58,7 +54,8 @@ const activityUsageModels = `SELECT DISTINCT model, provider_id FROM messages WH
 // carrying a Copilot session cost returns its survivors one by one, in
 // report order, for activity.AllocateUsageCosts to apportion.
 func (s *Store) sumActivityUsage(
-	ctx context.Context, with string, withArgs []any, q activity.Query, pricing *export.PricingResolver,
+	ctx context.Context, candidateWhere string, candidateArgs []any, lowerBound, upperBound string,
+	q activity.Query, pricing *export.PricingResolver,
 ) ([]activity.UsageRow, error) {
 	end := q.RangeEnd
 	if q.EffectiveEnd.Before(end) {
@@ -68,6 +65,9 @@ func (s *Store) sumActivityUsage(
 	if startUS >= endUS {
 		return []activity.UsageRow{}, nil
 	}
+	with := duckActivityUsageWith(candidateWhere)
+	withArgs := append([]any{lowerBound, upperBound}, candidateArgs...)
+	withArgs = append(withArgs, int64(activityUsageNullPricingUS))
 	keys, err := s.activityUsageRateKeys(ctx)
 	if err != nil {
 		return nil, err

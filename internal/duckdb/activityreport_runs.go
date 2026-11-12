@@ -89,20 +89,6 @@ func (m *activityRunsMemo) store(entries []activityRunsEntry) {
 	}
 }
 
-// duckActivityRunWith defines the relations activitySessionRuns
-// reads. Both placeholders take the session IDs.
-const duckActivityRunWith = `activity_run_messages AS (
-		SELECT session_id, ordinal, epoch_us(timestamp) AS ts_us, role, model
-		FROM messages WHERE session_id IN (SELECT unnest(?))
-	),
-	activity_run_terminals AS (
-		SELECT session_id, tool_call_message_ordinal AS ordinal, call_index, event_index,
-			epoch_us(timestamp) AS ts_us
-		FROM tool_result_events
-		WHERE session_id IN (SELECT unnest(?)) AND source = 'tool_execution'
-			AND status IN ('completed', 'errored') AND timestamp IS NOT NULL
-	)`
-
 // activityReportRuns returns the sessions' runs clipped to q, in start
 // order, and the kept entries that hold their counted messages. Sessions
 // the memo holds at their current push fingerprint are not paired again;
@@ -122,7 +108,7 @@ func (s *Store) activityReportRuns(
 	}
 	sessions, misses := s.activityRuns.lookup(ids, versions, q.GapCapSeconds)
 	if len(misses) > 0 {
-		derived, err := s.activitySessionRuns(ctx, duckActivityRunWith, []any{misses, misses}, q.GapCapSeconds)
+		derived, err := s.activitySessionRuns(ctx, misses, q.GapCapSeconds)
 		if err != nil {
 			return nil, nil, err
 		}
