@@ -312,15 +312,6 @@ func TestSQLiteActivityReportCandidatesMatchGoPairingWithoutModels(t *testing.T)
 	}, priors)
 }
 
-func TestSQLiteActivityReportTerminalPriorModelSeeksAssistantModelIndex(t *testing.T) {
-	d := testDB(t)
-	q := dayQuery(t, "2026-06-16", "UTC")
-	plan := queryPlanOf(t, d, activityReportTerminalCandidatesSQL, `["session"]`,
-		q.RangeStart.Add(-5*time.Minute).UnixMicro(), q.EffectiveEnd.UnixMicro())
-	assert.Contains(t, plan,
-		"SEARCH prior USING INDEX idx_messages_assistant_model (session_id=? AND ordinal<?)")
-}
-
 func TestSQLiteActivityReportTerminalQuerySeeksSessionsWithStaleStats(t *testing.T) {
 	d := testDB(t)
 	ctx := t.Context()
@@ -337,8 +328,11 @@ func TestSQLiteActivityReportTerminalQuerySeeksSessionsWithStaleStats(t *testing
 	q := dayQuery(t, "2026-06-16", "UTC")
 	plan := queryPlanOf(t, reader, activityReportTerminalCandidatesSQL, `["session"]`,
 		q.RangeStart.Add(-5*time.Minute).UnixMicro(), q.EffectiveEnd.UnixMicro())
+	assert.Contains(t, plan, "MATERIALIZE terminal_events")
 	assert.Contains(t, plan, "SEARCH tre USING INDEX idx_tool_result_events_terminal (session_id=?")
 	assert.NotContains(t, plan, "SCAN tre")
+	assert.Contains(t, plan,
+		"SEARCH prior USING INDEX idx_messages_assistant_model (session_id=? AND ordinal<?)")
 }
 
 func TestSQLiteActivityReportCandidateSourceStopsOnCancellation(t *testing.T) {
