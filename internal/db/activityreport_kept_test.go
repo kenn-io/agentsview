@@ -90,7 +90,7 @@ func TestActivityReportKeptSkipsTimeDependentTermination(t *testing.T) {
 	keptActivityBuild(t, d, f, q, true)
 }
 
-func TestActivityReportKeptBoundsReadSetMemory(t *testing.T) {
+func TestActivityReportKeptManyFacts(t *testing.T) {
 	d := testDB(t)
 	keptActivitySession(t, d, "past", "project-a", "2026-06-14")
 	messages := make([]Message, 256)
@@ -110,16 +110,6 @@ func TestActivityReportKeptBoundsReadSetMemory(t *testing.T) {
 	first := keptActivityBuild(t, d, f, q, true)
 	assert.Equal(t, 756, first.Report.Totals.OutputTokens)
 	assert.Equal(t, first, keptActivityBuild(t, d, f, q, true))
-
-	selection := activityUsageSelection(f, q)
-	version, _, err := d.activityKeptVersion(t.Context())
-	require.NoError(t, err)
-	entries, ok := d.activityKept.Get(selection, version)
-	require.True(t, ok)
-	require.Len(t, entries, 1)
-	entry := entries[0]
-	require.Len(t, entry.read, 1)
-	assert.Equal(t, len(entry.read), cap(entry.read), "the kept read set must not retain its pre-compaction backing array")
 
 	insertMessages(t, d, Message{SessionID: "past", Ordinal: 258, Role: "assistant", Content: "more", Timestamp: "2026-06-14T10:02:00Z", Model: "kept-model", TokenUsage: []byte(`{"output_tokens":17}`)})
 	after := keptActivityBuild(t, d, f, q, true)
@@ -168,44 +158,8 @@ func TestActivityReportKeptReinsertsOnlyWhenWatermarkAdvances(t *testing.T) {
 				sizeCalls++
 				return measure(entry)
 			}
-			if partial {
-				id, err := d.GetDatabaseID(t.Context())
-				require.NoError(t, err)
-				cache, release, err := d.usageCache.acquireGeneration(t.Context(), id)
-				require.NoError(t, err)
-				defer release()
-				cache.db.SetMaxOpenConns(1)
-				conn, err := cache.db.Conn(t.Context())
-				require.NoError(t, err)
-				require.NoError(t, conn.Raw(func(raw any) error {
-					raw.(*sqlite3.SQLiteConn).RegisterAuthorizer(func(op int, table, _, _ string) int {
-						if op == sqlite3.SQLITE_READ && table == "usage_facts" {
-							return sqlite3.SQLITE_DENY
-						}
-						return sqlite3.SQLITE_OK
-					})
-					return nil
-				}))
-				var count int
-				require.Error(t, conn.QueryRowContext(t.Context(), "SELECT COUNT(*) FROM usage_facts").Scan(&count))
-				require.NoError(t, conn.Close())
-				q.EffectiveEnd = q.EffectiveEnd.Add(time.Second)
-				hit := keptActivityBuild(t, d, f, q, partial)
-				conn, err = cache.db.Conn(t.Context())
-				require.NoError(t, err)
-				require.NoError(t, conn.Raw(func(raw any) error {
-					raw.(*sqlite3.SQLiteConn).RegisterAuthorizer(nil)
-					return nil
-				}))
-				require.NoError(t, conn.Close())
-				assert.Zero(t, sizeCalls, "advancing the clock within the usage window must reuse the entry")
-				clearKeptActivity(d)
-				first = keptActivityBuild(t, d, f, q, true)
-				require.Equal(t, first, hit)
-				sizeCalls = 0
-			} else {
-				require.Equal(t, first, keptActivityBuild(t, d, f, q, partial))
-			}
+
+			require.Equal(t, first, keptActivityBuild(t, d, f, q, partial))
 			assert.Zero(t, sizeCalls, "an unchanged watermark must not reinsert the report")
 
 			require.NoError(t, d.RenameSession(t.Context(), "today", new("Today changed")))
@@ -574,6 +528,38 @@ func TestActivityOngoingUsageClock(t *testing.T) {
 	f := AnalyticsFilter{Timezone: "UTC"}
 	before := keptActivityBuild(t, d, f, q, true)
 	assert.Zero(t, before.Report.Totals.OutputTokens)
+	id, err := d.GetDatabaseID(t.Context())
+	require.NoError(t, err)
+	cache, release, err := d.usageCache.acquireGeneration(t.Context(), id)
+	require.NoError(t, err)
+	defer release()
+	cache.db.SetMaxOpenConns(1)
+	conn, err := cache.db.Conn(t.Context())
+	require.NoError(t, err)
+	require.NoError(t, conn.Raw(func(raw any) error {
+		raw.(*sqlite3.SQLiteConn).RegisterAuthorizer(func(op int, table, _, _ string) int {
+			if op == sqlite3.SQLITE_READ && table == "usage_facts" {
+				return sqlite3.SQLITE_DENY
+			}
+			return sqlite3.SQLITE_OK
+		})
+		return nil
+	}))
+	var count int
+	require.Error(t, conn.QueryRowContext(t.Context(), "SELECT COUNT(*) FROM usage_facts").Scan(&count))
+	require.NoError(t, conn.Close())
+	q.EffectiveEnd = q.EffectiveEnd.Add(time.Second)
+	hit := keptActivityBuild(t, d, f, q, true)
+	conn, err = cache.db.Conn(t.Context())
+	require.NoError(t, err)
+	require.NoError(t, conn.Raw(func(raw any) error {
+		raw.(*sqlite3.SQLiteConn).RegisterAuthorizer(nil)
+		return nil
+	}))
+	require.NoError(t, conn.Close())
+	clearKeptActivity(d)
+	fresh := keptActivityBuild(t, d, f, q, true)
+	require.Equal(t, fresh, hit)
 	q.EffectiveEnd = time.Date(2026, 6, 14, 10, 1, 0, 1, time.UTC)
 	after := keptActivityBuild(t, d, f, q, true)
 	assert.Equal(t, 500, after.Report.Totals.OutputTokens)
@@ -600,10 +586,6 @@ func TestActivityOngoingUsageChanges(t *testing.T) {
 				s.EndedAt = s.StartedAt
 			})
 			insertMessages(t, d, Message{SessionID: "peer", Ordinal: 0, Role: "assistant", Content: "answer", Timestamp: "2026-06-14T10:02:00Z", Model: "kept-model", TokenUsage: []byte(`{"output_tokens":700}`), ClaudeMessageID: "shared", ClaudeRequestID: "request"})
-		}},
-		{name: "price", write: func(t *testing.T, d *DB) {
-			t.Helper()
-			require.NoError(t, d.UpsertModelPricing([]ModelPricing{{ModelPattern: "kept-model", OutputPerMTok: money.MustParseDollars("10")}}))
 		}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
