@@ -101,6 +101,9 @@ func runUsageCursor(ctx context.Context, cfg UsageCursorConfig) error {
 	}
 
 	client := newCursorUsageClient(apiKey)
+	client.OnRetry = func(err error, wait time.Duration) {
+		fmt.Fprintf(os.Stderr, "%v; retrying in %s\n", err, wait.Round(time.Second))
+	}
 	events, err := client.FetchAllUsageEvents(ctx, cursorusage.Query{
 		StartDate: start,
 		EndDate:   end,

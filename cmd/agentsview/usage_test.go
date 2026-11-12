@@ -1568,7 +1568,9 @@ func TestNewUsageCursorCommandUsesConfigFallbacksAndSharedPagination(t *testing.
 
 	origNewCursorUsageClient := newCursorUsageClient
 	newCursorUsageClient = func(apiKey string) *cursorusage.Client {
-		return cursorusage.NewClientWithBaseURL(server.URL, apiKey)
+		client := cursorusage.NewClientWithBaseURL(server.URL, apiKey)
+		client.RequestInterval = 0
+		return client
 	}
 	t.Cleanup(func() {
 		newCursorUsageClient = origNewCursorUsageClient
@@ -1737,7 +1739,9 @@ func TestNewUsageCursorCommandExplicitMemberFilterDoesNotReuseConfigSibling(t *t
 
 			origNewCursorUsageClient := newCursorUsageClient
 			newCursorUsageClient = func(apiKey string) *cursorusage.Client {
-				return cursorusage.NewClientWithBaseURL(server.URL, apiKey)
+				client := cursorusage.NewClientWithBaseURL(server.URL, apiKey)
+				client.RequestInterval = 0
+				return client
 			}
 			t.Cleanup(func() {
 				newCursorUsageClient = origNewCursorUsageClient
