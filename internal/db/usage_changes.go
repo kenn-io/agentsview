@@ -19,13 +19,12 @@ const counterTemplate = `
   value = CAST(value AS INTEGER) + 1,
   updated_at = strftime('%Y-%m-%dT%H:%M:%fZ','now');`
 
-var analyticsCounterBody = strings.ReplaceAll(counterTemplate, "{{counter}}", archiveMetadataAnalyticsChangeRevisionKey)
-
 // Replace triggers atomically with column migrations.
-var usageChangeJournalTriggerDropsSQL, usageChangeJournalTriggerSQL, analyticsToolInsertTriggerSQL = usageChangeJournalSQL()
+var usageChangeJournalTriggerDropsSQL, usageChangeJournalTriggerSQL = usageChangeJournalSQL()
 
-func usageChangeJournalSQL() (string, string, string) {
+func usageChangeJournalSQL() (string, string) {
 	counterBody := strings.ReplaceAll(counterTemplate, "{{counter}}", archiveMetadataUsageChangeRevisionKey)
+	analyticsCounterBody := strings.ReplaceAll(counterTemplate, "{{counter}}", archiveMetadataAnalyticsChangeRevisionKey)
 	const pricingRevisionBody = `
  INSERT INTO archive_metadata (key, value)
   VALUES ('usage_pricing_revision', (
@@ -39,7 +38,6 @@ func usageChangeJournalSQL() (string, string, string) {
   FROM archive_metadata WHERE key = 'usage_change_revision'
  ON CONFLICT(session_id) DO UPDATE SET revision = excluded.revision;`
 	var drops, creates strings.Builder
-	var toolInsert string
 	add := func(name, event, table, condition, sessionID string, analytics bool) {
 		fmt.Fprintf(&drops, "DROP TRIGGER IF EXISTS %s;\n", name)
 		body := counterBody
@@ -56,11 +54,7 @@ func usageChangeJournalSQL() (string, string, string) {
 		if condition != "" {
 			condition = "WHEN " + condition
 		}
-		statement := fmt.Sprintf("CREATE TRIGGER %s AFTER %s ON %s\n%s\nBEGIN%s\nEND;\n", name, event, table, condition, body)
-		creates.WriteString(statement)
-		if name == "trg_tool_calls_analytics_change_insert" {
-			toolInsert = statement
-		}
+		fmt.Fprintf(&creates, "CREATE TRIGGER %s AFTER %s ON %s\n%s\nBEGIN%s\nEND;\n", name, event, table, condition, body)
 	}
 	add("trg_sessions_usage_change_insert", "INSERT", "sessions", "", "NEW.id", false)
 	columns := []string{"transcript_revision", "started_at", "deleted_at", "project", "agent", "machine", "git_branch", "group_key", "is_automated", "user_message_count", "ended_at", "termination_status", "display_name", "session_name", "relationship_type", "message_count", "created_at"}
@@ -82,7 +76,6 @@ func usageChangeJournalSQL() (string, string, string) {
 	}
 	add("trg_sessions_analytics_change_update", "UPDATE OF "+strings.Join(columns, ", "), "sessions", strings.Join(changes, " OR "), "", true)
 	add("trg_messages_analytics_change_length", "UPDATE OF content_length", "messages", "OLD.content_length IS NOT NEW.content_length", "", true)
-	add("trg_tool_calls_analytics_change_insert", "INSERT", "tool_calls", "", "", true)
 	add("trg_tool_calls_analytics_change_delete", "DELETE", "tool_calls", "", "", true)
 	columns = []string{"session_id", "message_id", "category", "tool_name", "observed_outcome", "observed_repeat", "sequence_ending"}
 	changes = make([]string, len(columns))
@@ -132,7 +125,7 @@ func usageChangeJournalSQL() (string, string, string) {
 			add("trg_"+table.name+"_usage_change_"+strings.ToLower(event), event, table.name, condition, "", false)
 		}
 	}
-	return drops.String(), creates.String(), toolInsert
+	return drops.String(), creates.String()
 }
 
 // UsageChangeRevision returns the trigger-maintained revision for usage facts,

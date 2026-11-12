@@ -29,43 +29,24 @@ func TestAnalyticsKeptPreservesMalformedToolName(t *testing.T) {
 	}
 }
 
-func TestAnalyticsKeptAfterBulkImport(t *testing.T) {
+func TestAnalyticsKeptAppendUsesTranscriptRevision(t *testing.T) {
 	d := testDB(t)
 	ctx := t.Context()
 	insertSession(t, d, "session", "project")
-	insertMessages(t, d, asstMsgAt("session", 0, "read", "2024-06-01T09:00:00Z"))
-	var messageID int64
-	require.NoError(t, d.getReader().QueryRowContext(ctx, `SELECT id FROM messages WHERE session_id = 'session'`).Scan(&messageID))
-	require.NoError(t, d.DropBulkImportIndexes(ctx))
-	before, err := d.archiveJournalRevision(ctx, archiveMetadataAnalyticsChangeRevisionKey, "analytics change")
+	before, err := d.GetAnalyticsTools(ctx, AnalyticsFilter{})
 	require.NoError(t, err)
-	report, err := d.GetAnalyticsTools(ctx, AnalyticsFilter{})
+	assert.Zero(t, before.TotalCalls)
+	revision, err := d.archiveJournalRevision(ctx, archiveMetadataAnalyticsChangeRevisionKey, "analytics change")
 	require.NoError(t, err)
-	assert.Zero(t, report.TotalCalls)
-	insertCalls := func(count int) {
-		t.Helper()
-		calls := make([]ToolCall, count)
-		for i := range calls {
-			calls[i] = ToolCall{MessageID: messageID, SessionID: "session", ToolName: "Read", Category: "Read"}
-		}
-		tx, err := d.getWriter().BeginTx(ctx, nil)
-		require.NoError(t, err)
-		defer func() { _ = tx.Rollback() }()
-		require.NoError(t, insertToolCallsChunkTx(tx, calls))
-		require.NoError(t, tx.Commit())
-	}
-	insertCalls(100)
-	during, err := d.archiveJournalRevision(ctx, archiveMetadataAnalyticsChangeRevisionKey, "analytics change")
+	message := asstMsgAt("session", 0, "read", "2024-06-01T09:00:00Z")
+	message.ToolCalls = []ToolCall{{SessionID: "session", ToolName: "Read", Category: "Read"}, {SessionID: "session", ToolName: "Bash", Category: "Bash"}}
+	insertMessages(t, d, message)
+	afterRevision, err := d.archiveJournalRevision(ctx, archiveMetadataAnalyticsChangeRevisionKey, "analytics change")
 	require.NoError(t, err)
-	assert.Equal(t, before, during)
-	require.NoError(t, d.RebuildBulkImportIndexes(ctx))
-	report, err = d.GetAnalyticsTools(ctx, AnalyticsFilter{})
+	assert.Equal(t, revision, afterRevision)
+	after, err := d.GetAnalyticsTools(ctx, AnalyticsFilter{})
 	require.NoError(t, err)
-	assert.Equal(t, 100, report.TotalCalls)
-	insertCalls(1)
-	report, err = d.GetAnalyticsTools(ctx, AnalyticsFilter{})
-	require.NoError(t, err)
-	assert.Equal(t, 101, report.TotalCalls)
+	assert.Equal(t, 2, after.TotalCalls)
 }
 
 func TestAnalyticsKeptTracksWrites(t *testing.T) {

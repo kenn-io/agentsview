@@ -1009,7 +1009,7 @@ invalidates it. Partial reports, read-only archives, and reports filtered by
 active, stale, or unclean termination status bypass this cache.
 
 SQLite uses `usage_change_revision` and `analytics_change_revision` to invalidate
-kept Tools, Velocity, and Signals reports. Tool-call writes, message
+kept Tools, Velocity, and Signals reports. Tool-call updates and deletes, message
 content-length repairs, and signal updates advance the analytics counter.
 Read-only archives and reports filtered by active, stale, or unclean termination
 status bypass this cache.
