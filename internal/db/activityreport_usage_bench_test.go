@@ -63,7 +63,7 @@ func BenchmarkSQLiteActivityReportUsage(b *testing.B) {
 		for b.Loop() {
 			window, err := d.prepareActivityUsageWindow(b.Context(), lower, upper)
 			require.NoError(b, err)
-			rows, _, _, err := d.activityReportCachedUsage(b.Context(), window, ids, lower, upper, q, true)
+			rows, _, _, _, err := d.activityReportCachedUsage(b.Context(), window, ids, lower, upper, q, true)
 			require.NoError(b, err)
 			require.Len(b, rows, survivors)
 		}

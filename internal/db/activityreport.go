@@ -67,6 +67,8 @@ type activityReportBackend struct {
 	read                   *[]string
 	counted                *activityReportCounted
 	usage                  activityUsageWindow
+	keptUsage              *activityKeptUsage
+	usageResult            *activityKeptUsage
 }
 
 // activityReportCounted holds the counted messages of the build's sessions,
@@ -108,8 +110,14 @@ func (b activityReportBackend) ActivityReportSecondRead() (func(), bool) {
 func (b activityReportBackend) ActivityReportUsage(
 	ctx context.Context, ids []string, q activity.Query,
 ) ([]activity.UsageRow, *export.PricingBlock, error) {
-	rows, pricing, read, err := b.activityReportCachedUsage(
+	if b.keptUsage != nil {
+		return b.keptUsage.rows, b.keptUsage.pricing, nil
+	}
+	rows, pricing, read, next, err := b.activityReportCachedUsage(
 		ctx, b.usage, ids, b.lowerBound, b.upperBound, q, b.read != nil)
+	if err == nil && b.usageResult != nil {
+		b.usageResult.rows, b.usageResult.pricing, b.usageResult.from, b.usageResult.next = rows, pricing, q.EffectiveEnd, next
+	}
 	if b.read != nil {
 		*b.read = append(*b.read, read...)
 	}
@@ -153,12 +161,18 @@ func (db *DB) BuildActivityReportArtifacts(
 
 	var selection, version string
 	var revision int64
-	if !q.Partial && !db.readOnly && !TerminationUsesTime(f.Termination) {
+	if !db.readOnly && !TerminationUsesTime(f.Termination) {
 		version, revision, err = db.activityKeptVersion(ctx)
 		if err != nil {
 			return activity.CandidateArtifacts{}, err
 		}
-		selection = kept.Selection(f, q)
+		if q.Partial {
+			selection = activityUsageSelection(f, q)
+		} else {
+			selection = kept.Selection(f, q)
+		}
+	}
+	if selection != "" && !q.Partial {
 		report, hit, err := db.keptActivityReport(ctx, selection, version, revision, f, q)
 		if err != nil {
 			return activity.CandidateArtifacts{}, err
@@ -183,7 +197,28 @@ func (db *DB) BuildActivityReportArtifacts(
 	// A report without candidate sessions reads no usage, so it leaves the
 	// cache alone.
 	var usage activityUsageWindow
-	if len(ids) > 0 {
+	var cachedUsage *activityKeptUsage
+	var candidates [32]byte
+	if q.Partial && selection != "" && len(ids) > 0 {
+		candidates, err = activityCandidateDigest(ids)
+		if err != nil {
+			return activity.CandidateArtifacts{}, err
+		}
+		if entries, ok := db.activityKept.Get(selection, version); ok {
+			entry := entries[0]
+			if entry.usage != nil && entry.usage.candidates == candidates && !q.EffectiveEnd.Before(entry.usage.from) && !q.EffectiveEnd.After(entry.usage.next) {
+				var valid bool
+				valid, err = db.keptActivityChangesValid(ctx, entry.revision, entry.read, ids, f, q)
+				if err != nil {
+					return activity.CandidateArtifacts{}, err
+				}
+				if valid {
+					cachedUsage = entry.usage
+				}
+			}
+		}
+	}
+	if len(ids) > 0 && cachedUsage == nil {
 		// Filling the usage cache takes its own archive reads. Waiting for
 		// them while holding one could exhaust the bulk-read slots.
 		release()
@@ -204,7 +239,12 @@ func (db *DB) BuildActivityReportArtifacts(
 		read = slices.Clone(ids)
 		readSet = &read
 	}
+	var usageResult *activityKeptUsage
+	if q.Partial && selection != "" && len(ids) > 0 && cachedUsage == nil {
+		usageResult = &activityKeptUsage{candidates: candidates}
+	}
 	backend := activityReportBackend{
+		keptUsage: cachedUsage, usageResult: usageResult,
 		read:       readSet,
 		DB:         db,
 		lowerBound: lowerBound, upperBound: upperBound,
@@ -213,15 +253,18 @@ func (db *DB) BuildActivityReportArtifacts(
 	}
 	artifacts, done, err := activity.BuildReportArtifacts(
 		ctx, backend, sessions, ids, q, onProgress, "aggregating activity report")
-	if err == nil && selection != "" {
+	if err == nil && selection != "" && (!q.Partial || usageResult != nil) {
 		slices.Sort(read)
 		read = slices.Compact(read)
 		boundedRead := make([]string, len(read))
 		copy(boundedRead, read)
 		read = boundedRead
-		entry := activityKept{
-			report: kept.Report{Artifacts: artifacts, Done: done}, revision: revision,
-			read: read, labels: activity.ProjectLabels(sessions),
+		entry := activityKept{revision: revision, read: read}
+		if q.Partial {
+			entry.usage = usageResult
+		} else {
+			entry.report = kept.Report{Artifacts: artifacts, Done: done}
+			entry.labels = activity.ProjectLabels(sessions)
 		}
 		entry.size = activityKeptSize(entry)
 		db.activityKept.Put(selection, version, []activityKept{entry})

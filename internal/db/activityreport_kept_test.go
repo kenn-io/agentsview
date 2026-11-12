@@ -501,3 +501,106 @@ func TestActivityReportKeptSkipsPartialAndSwappedArchives(t *testing.T) {
 	clearKeptActivity(d)
 	require.Equal(t, changed, keptActivityBuild(t, d, f, q, true))
 }
+
+func TestActivityOngoingUsageReuseAndClock(t *testing.T) {
+	d := testDB(t)
+	keptActivitySession(t, d, "past", "project-a", "2026-06-14")
+	q := dayQuery(t, "2026-06-14", "UTC")
+	q.Partial = true
+	q.EffectiveEnd = time.Date(2026, 6, 14, 10, 0, 30, 0, time.UTC)
+	f := AnalyticsFilter{Timezone: "UTC"}
+	before := keptActivityBuild(t, d, f, q, true)
+	assert.Zero(t, before.Report.Totals.OutputTokens)
+	require.Equal(t, before, keptActivityBuild(t, d, f, q, true))
+	q.EffectiveEnd = time.Date(2026, 6, 14, 10, 1, 0, 0, time.UTC)
+	atBoundary := keptActivityBuild(t, d, f, q, true)
+	assert.Zero(t, atBoundary.Report.Totals.OutputTokens)
+	clearKeptActivity(d)
+	require.Equal(t, atBoundary, keptActivityBuild(t, d, f, q, true))
+	q.EffectiveEnd = time.Date(2026, 6, 14, 10, 1, 0, 1, time.UTC)
+	after := keptActivityBuild(t, d, f, q, true)
+	assert.Equal(t, 500, after.Report.Totals.OutputTokens)
+	clearKeptActivity(d)
+	require.Equal(t, after, keptActivityBuild(t, d, f, q, true))
+	q.EffectiveEnd = time.Date(2026, 6, 14, 10, 0, 30, 0, time.UTC)
+	backwards := keptActivityBuild(t, d, f, q, true)
+	assert.Zero(t, backwards.Report.Totals.OutputTokens)
+	clearKeptActivity(d)
+	require.Equal(t, backwards, keptActivityBuild(t, d, f, q, true))
+}
+
+func TestActivityOngoingUsageSkipsCacheRead(t *testing.T) {
+	d := testDB(t)
+	keptActivitySession(t, d, "past", "project-a", "2026-06-14")
+	q := dayQuery(t, "2026-06-14", "UTC")
+	q.Partial = true
+	q.EffectiveEnd = time.Date(2026, 6, 14, 12, 0, 0, 0, time.UTC)
+	f := AnalyticsFilter{Timezone: "UTC"}
+	before := keptActivityBuild(t, d, f, q, true)
+	require.Equal(t, 500, before.Report.Totals.OutputTokens)
+	databaseID, err := d.GetDatabaseID(t.Context())
+	require.NoError(t, err)
+	cache, release, err := d.usageCache.acquireGeneration(t.Context(), databaseID)
+	require.NoError(t, err)
+	_, err = cache.db.ExecContext(t.Context(), `DELETE FROM usage_facts`)
+	release()
+	require.NoError(t, err)
+	require.Equal(t, before, keptActivityBuild(t, d, f, q, true))
+}
+
+func TestActivityOngoingUsageChanges(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		write  func(*testing.T, *DB)
+		filter AnalyticsFilter
+	}{
+		{name: "new session", write: func(t *testing.T, d *DB) {
+			t.Helper()
+			keptActivitySession(t, d, "new", "project-a", "2026-06-14")
+		}},
+		{name: "snapshot peer", filter: AnalyticsFilter{Project: "project-a"}, write: func(t *testing.T, d *DB) {
+			t.Helper()
+			insertSession(t, d, "peer", "project-b", func(s *Session) {
+				s.Agent = "claude"
+				s.StartedAt = new("2026-06-14T10:02:00Z")
+				s.EndedAt = s.StartedAt
+			})
+			insertMessages(t, d, Message{SessionID: "peer", Ordinal: 0, Role: "assistant", Content: "answer", Timestamp: "2026-06-14T10:02:00Z", Model: "kept-model", TokenUsage: []byte(`{"output_tokens":700}`), ClaudeMessageID: "shared", ClaudeRequestID: "request"})
+		}},
+		{name: "price", write: func(t *testing.T, d *DB) {
+			t.Helper()
+			require.NoError(t, d.UpsertModelPricing([]ModelPricing{{ModelPattern: "kept-model", OutputPerMTok: money.MustParseDollars("10")}}))
+		}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			d := testDB(t)
+			keptActivitySessionWithClaudePair(t, d, "past", "project-a", "2026-06-14", "shared", "request")
+			q := dayQuery(t, "2026-06-14", "UTC")
+			q.Partial = true
+			q.EffectiveEnd = time.Date(2026, 6, 14, 12, 0, 0, 0, time.UTC)
+			f := tc.filter
+			f.Timezone = "UTC"
+			before := keptActivityBuild(t, d, f, q, true)
+			require.Equal(t, before, keptActivityBuild(t, d, f, q, true))
+			tc.write(t, d)
+			changed := keptActivityBuild(t, d, f, q, true)
+			assert.NotEqual(t, before, changed)
+			clearKeptActivity(d)
+			require.Equal(t, changed, keptActivityBuild(t, d, f, q, true))
+		})
+	}
+}
+
+func TestActivityOngoingUsageFilterChange(t *testing.T) {
+	d := testDB(t)
+	keptActivitySession(t, d, "a", "project-a", "2026-06-14")
+	keptActivitySession(t, d, "b", "project-b", "2026-06-14")
+	q := dayQuery(t, "2026-06-14", "UTC")
+	q.Partial = true
+	q.EffectiveEnd = time.Date(2026, 6, 14, 12, 0, 0, 0, time.UTC)
+	first := keptActivityBuild(t, d, AnalyticsFilter{Timezone: "UTC", Project: "project-a"}, q, true)
+	changed := keptActivityBuild(t, d, AnalyticsFilter{Timezone: "UTC", Project: "project-b"}, q, true)
+	require.NotEqual(t, first, changed)
+	clearKeptActivity(d)
+	require.Equal(t, changed, keptActivityBuild(t, d, AnalyticsFilter{Timezone: "UTC", Project: "project-b"}, q, true))
+}

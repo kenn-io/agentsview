@@ -119,8 +119,8 @@ func seedActivityUsageParity(t *testing.T, d *DB) {
 }
 
 // TestActivityReportCachedUsageMatchesRawUsage holds Activity reports read
-// from the usage cache to the raw archive path: same rows, pricing, sessions
-// read for invalidation, and whole report, across filters and time zones.
+// from the usage cache to the raw archive path: same pricing, sessions read
+// for invalidation, and whole report, across filters and time zones.
 func TestActivityReportCachedUsageMatchesRawUsage(t *testing.T) {
 	d := testDB(t)
 	ctx := t.Context()
@@ -155,14 +155,13 @@ func TestActivityReportCachedUsageMatchesRawUsage(t *testing.T) {
 		sessions, ids, err := d.activityReportSessions(ctx, filter, rangeStart, rangeEnd)
 		require.NoError(t, err)
 
-		wantRows, wantPricing, wantRead, err := d.activityReportUsage(ctx, ids, lower, upper, q, true)
+		_, wantPricing, wantRead, err := d.activityReportUsage(ctx, ids, lower, upper, q, true)
 		require.NoError(t, err)
 		window, err := d.prepareActivityUsageWindow(ctx, lower, upper)
 		require.NoError(t, err)
-		gotRows, gotPricing, gotRead, err := d.activityReportCachedUsage(
+		_, gotPricing, gotRead, _, err := d.activityReportCachedUsage(
 			ctx, window, ids, lower, upper, q, true)
 		require.NoError(t, err)
-		assert.Equal(t, wantRows, gotRows)
 		assert.Equal(t, wantPricing, gotPricing)
 		slices.Sort(wantRead)
 		slices.Sort(gotRead)
