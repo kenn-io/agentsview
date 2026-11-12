@@ -130,6 +130,9 @@ class SettingsStore {
     if (serverUrl !== this.serverUrl) {
       this.serverUrl = serverUrl;
       insights.resetAgent();
+      this.restartFailed = false;
+      this.restartCanRetry = false;
+      this.restartError = null;
     }
     if (this.saving && this.mutationQueue) {
       await this.mutationQueue;

@@ -43,7 +43,7 @@ func isolateServeTestHome(t *testing.T) (string, string) {
 	t.Helper()
 	dir := t.TempDir()
 	dataDir := filepath.Join(dir, "data")
-	t.Setenv("HOME", dir)
+	setTestHome(t, dir)
 	t.Setenv("XDG_CONFIG_HOME", filepath.Join(dir, "config"))
 	t.Setenv("XDG_CACHE_HOME", filepath.Join(dir, "cache"))
 	t.Setenv("XDG_STATE_HOME", filepath.Join(dir, "state"))
@@ -178,6 +178,53 @@ func restartAndWait(t *testing.T, dataDir, base, token string) *DaemonRuntime {
 		return replacement != "" && replacement != previous && runtime != nil && runtime.Record.StartedAt.After(oldRuntime.Record.StartedAt)
 	}, 30*time.Second, 100*time.Millisecond)
 	return runtime
+}
+
+func TestServeRestartPreservesSkipInitialSyncAfterArchiveUpgrade(t *testing.T) {
+	_, dataDir := isolateServeTestHome(t)
+	require.NoError(t, os.MkdirAll(dataDir, 0o755))
+	dbPath := filepath.Join(dataDir, "sessions.db")
+	database, err := db.Open(t.Context(), dbPath)
+	require.NoError(t, err)
+	require.NoError(t, database.Close())
+	markArchiveStale(t, dbPath)
+	needsResync, _, err := db.ArchiveResyncState(t.Context(), dbPath)
+	require.NoError(t, err)
+	require.True(t, needsResync)
+
+	output, err := os.CreateTemp(t.TempDir(), "server-output-*")
+	require.NoError(t, err)
+	t.Cleanup(func() { assert.NoError(t, output.Close()) })
+	ctx, cancel := context.WithCancel(context.WithoutCancel(t.Context()))
+	t.Cleanup(cancel)
+	cmd := exec.CommandContext(ctx, os.Args[0], "serve", "--host=127.0.0.1", "--port=0", "--no-browser", "--no-update-check", "--skip-initial-sync", "--require-auth=false")
+	cmd.Stdout = output
+	cmd.Stderr = output
+	configureRestartTestProcess(cmd)
+	require.NoError(t, cmd.Start())
+	done := make(chan error, 1)
+	go func() { done <- cmd.Wait() }()
+	t.Cleanup(func() {
+		ctx, stop := context.WithTimeout(context.WithoutCancel(t.Context()), 30*time.Second)
+		defer stop()
+		_, err := stopWritableDaemonsForUpdate(ctx, config.Config{DataDir: dataDir})
+		assert.NoError(t, err)
+		select {
+		case <-done:
+		case <-ctx.Done():
+			assert.Fail(t, "foreground server did not stop")
+		}
+	})
+	rt := waitForRestartRuntime(t, dataDir)
+	require.Eventually(t, func() bool {
+		needs, _, err := db.ArchiveResyncState(t.Context(), dbPath)
+		return err == nil && !needs
+	}, 30*time.Second, 100*time.Millisecond)
+	base := fmt.Sprintf("http://127.0.0.1:%d", rt.Port)
+	restartAndWait(t, dataDir, base, "")
+	contents, err := os.ReadFile(output.Name())
+	require.NoError(t, err)
+	assert.NotContains(t, string(contents), "Running initial sync...")
 }
 
 func TestServeRestartHandoffAppliesImagePolicy(t *testing.T) {

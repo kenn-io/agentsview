@@ -251,18 +251,19 @@ func runServe(ctx context.Context, cfg config.Config, opts serveOptions, restart
 	var workerStartupResult workerResult
 	workerSyncDone := false
 	startupRebuild := false
+	skipInitialSync := opts.SkipInitialSync
 	if !cfg.NoSync || archiveOnly {
 		needsResync, fullRebuild, err := db.ArchiveResyncState(ctx, cfg.DBPath)
-		if err != nil && opts.SkipInitialSync {
+		if err != nil && skipInitialSync {
 			fatal("checking archive before startup: %v", err)
 		}
 		// Scoped upgrades and schema repairs finish before startup publishes readiness.
 		startupRebuild = err == nil && fullRebuild
-		if opts.SkipInitialSync {
-			opts.SkipInitialSync = !needsResync
+		if skipInitialSync {
+			skipInitialSync = !needsResync
 		}
 	}
-	if !startupRebuild && !opts.SkipInitialSync && !cfg.NoSync && !testing.Testing() {
+	if !startupRebuild && !skipInitialSync && !cfg.NoSync && !testing.Testing() {
 		startupProgress.SetPhase("opening database")
 		result, syncErr := runStartupSyncViaWorker(ctx, cfg, startupProgress)
 		workerStartupResult, workerSyncDone = startupWorkerOutcome(result, syncErr)
@@ -419,7 +420,7 @@ func runServe(ctx context.Context, cfg config.Config, opts serveOptions, restart
 			FrictionEnabled:         cfg.Friction.Enabled,
 			Emitter:                 emitter,
 			DeferStartupMaintenance: deferStartupMaintenance(
-				opts.SkipInitialSync || startupRebuild, workerSyncDone,
+				skipInitialSync || startupRebuild, workerSyncDone,
 			),
 			OnStartupReconciled: func(stats sync.SyncStats, err error) {
 				onStartupReconciled(stats, err)
@@ -462,7 +463,7 @@ func runServe(ctx context.Context, cfg config.Config, opts serveOptions, restart
 			}
 		}
 
-		if !opts.SkipInitialSync && !startupRebuild {
+		if !skipInitialSync && !startupRebuild {
 			if workerSyncDone {
 				// The worker already ran the full startup pass out of process.
 				// Close the worker-to-watcher event gap with a bounded streaming
@@ -826,7 +827,7 @@ func runServe(ctx context.Context, cfg config.Config, opts serveOptions, restart
 		go idleTracker.Run(ctx)
 	}
 	startDaemonUsageCacheBackfill(ctx, database, idleTracker)
-	if engine != nil && !cfg.NoSync && opts.SkipInitialSync {
+	if engine != nil && !cfg.NoSync && skipInitialSync {
 		go func() {
 			timer := time.NewTimer(deferredStartupSyncGracePeriod)
 			defer timer.Stop()

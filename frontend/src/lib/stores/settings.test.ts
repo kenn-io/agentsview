@@ -724,6 +724,29 @@ describe("SettingsStore.restartDaemon", () => {
     });
   });
 
+  it("clears restart recovery when settings are loaded for another server", async () => {
+    setServerUrl("https://first.example");
+    settingsService.getApiV1Settings.mockResolvedValue({
+      agent_dirs: {},
+      chart_palette: "agentsview",
+      terminal: { mode: "auto" },
+      restart_required: true,
+      restart_supported: true,
+    });
+    await settings.load();
+    ping.mockResolvedValue({ healthy: true, ok: true, pid: 100, instance_id: "old" });
+    restartDaemon.mockResolvedValue({ restarting: true });
+    const restart = settings.restartDaemon();
+    await vi.advanceTimersByTimeAsync(30_000);
+    await restart;
+    expect(settings.restartFailed).toBe(true);
+    setServerUrl("https://second.example");
+    await settings.load();
+    expect(settings.restartFailed).toBe(false);
+    expect(settings.restartSupported).toBe(true);
+    expect(settings.restartRequired).toBe(true);
+  });
+
   it("queues restart behind saves and reconnects after a lost response", async () => {
     let finishSave!: () => void;
     const save = settings.runMutation(() => new Promise<void>((resolve) => (finishSave = resolve)));
