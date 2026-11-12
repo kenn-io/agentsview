@@ -694,7 +694,7 @@ func runServe(ctx context.Context, cfg config.Config, opts serveOptions, restart
 			restart := &foregroundRestartError{args: args, release: release}
 			context.AfterFunc(ctx, func() {
 				requestRestart(restart)
-				if context.Cause(serverContext) != restart {
+				if !errors.Is(context.Cause(serverContext), restart) {
 					release()
 				}
 			})
