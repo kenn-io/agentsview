@@ -70,6 +70,7 @@ describe("RestartAction", () => {
     expect(getByText(/open the address/i)).toBeTruthy();
     expect(Boolean(queryByRole("button", { name: "Restart now" }))).toBe(canRetry);
     expect(getByRole("button", { name: "Check connection" })).toBeTruthy();
-    if (!canRetry) expect(getByRole("status").textContent).toContain("has not reconnected");
+    if (canRetry) expect(getByRole("status").textContent).toContain("may not have reached");
+    else expect(getByRole("status").textContent).toContain("has not reconnected");
   });
 });

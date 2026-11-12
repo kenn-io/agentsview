@@ -818,7 +818,7 @@
   $effect(() => {
     const saveError = settings.saveError;
     if (saveError) {
-      untrack(() => showFlash(saveError, { tone: "danger" }));
+      untrack(() => showFlash(saveError.charAt(0).toLocaleUpperCase() + saveError.slice(1), { tone: "danger" }));
     }
   });
 

@@ -237,7 +237,8 @@ class SettingsStore {
     while (await delay(RESTART_POLL_MS, signal)) {
       try {
         const { instance_id: id } = await HealthService.getApiPing({ ...target, signal });
-        this.restartCanRetry = this.restartUncertain && !!id && id === this.originalInstance;
+        if (getGeneratedBase() === target.baseUrl)
+          this.restartCanRetry = this.restartUncertain && !!id && id === this.originalInstance;
         if (
           typeof id === "string" &&
           id &&
@@ -247,7 +248,7 @@ class SettingsStore {
         )
           return true;
       } catch (e) {
-        this.restartCanRetry = false;
+        if (getGeneratedBase() === target.baseUrl) this.restartCanRetry = false;
         if (e instanceof ApiError && e.status === 401) throw e;
       }
     }
@@ -294,13 +295,16 @@ class SettingsStore {
           this.restartUncertain = true;
         }
       }
-      if (await this.waitForReplacement(deadline.signal, target)) {
+      const replaced = await this.waitForReplacement(deadline.signal, target);
+      if (getGeneratedBase() !== target.baseUrl) return;
+      if (replaced) {
         navigating = true;
         window.location.reload();
         return;
       }
       this.restartFailed = true;
     } catch (e) {
+      if (getGeneratedBase() !== target.baseUrl) return;
       if (e instanceof ApiError && e.status === 401) {
         this.needsAuth = true;
       } else if (e instanceof ApiError && e.status === 501) {

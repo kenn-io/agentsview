@@ -7,6 +7,7 @@
   import { Button } from "@kenn-io/kit-ui";
   import { m } from "../../i18n/index.js";
   import { settings } from "../../stores/settings.svelte.js";
+  import InlineCode from "../shared/InlineCode.svelte";
 
   let { notice, manual = true }: { notice: string; manual?: boolean } = $props();
 </script>
@@ -21,6 +22,7 @@
     <p class="restart-text" role="status" aria-live="polite">
       {notice}
       {#if settings.restartCanRetry}
+        {m.settings_restart_request_uncertain()}
         {m.settings_restart_consequence()}
       {:else}
         {m.settings_restart_reconnect_failed()}
@@ -56,7 +58,7 @@
         </p>
       {/if}
       <ol class="restart-text restart-steps">
-        <li>{m.settings_restart_address()}</li>
+        <li>{#each m.settings_restart_address({ command: "agentsview serve status" }).split("agentsview serve status") as part, i}{#if i}<InlineCode>agentsview serve status</InlineCode>{/if}{part}{/each}</li>
         <li>{m.settings_restart_if_stopped()}</li>
       </ol>
     </div>

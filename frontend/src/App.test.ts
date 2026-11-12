@@ -135,7 +135,7 @@ it("shows settings save errors through the app shell", async () => {
     '.kit-flash-banner[data-kit-tone="danger"]',
   );
   expect(flash).not.toBeNull();
-  expect(flash?.textContent).toContain("settings endpoint unavailable");
+  expect(flash?.textContent).toContain("Settings endpoint unavailable");
 });
 
 it("keeps the first analytics range for a window_days=90 deep link", async () => {

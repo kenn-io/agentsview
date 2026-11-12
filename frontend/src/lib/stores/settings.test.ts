@@ -899,6 +899,38 @@ describe("SettingsStore.restartDaemon", () => {
     expect(reload).not.toHaveBeenCalled();
   });
 
+  it("does not ask the selected server for a token when another server rejects the restart", async () => {
+    setServerUrl("https://first.example");
+    ping.mockResolvedValueOnce({ healthy: true, ok: true, pid: 100, instance_id: "old" });
+    let rejectRestart!: (error: Error) => void;
+    restartDaemon.mockImplementationOnce(
+      () => new Promise((_, reject) => (rejectRestart = reject)),
+    );
+    const restart = settings.restartDaemon();
+    await vi.advanceTimersByTimeAsync(0);
+    setServerUrl("https://second.example");
+    rejectRestart(new ApiError(401, "Unauthorized"));
+    await restart;
+    expect(settings.needsAuth).toBe(false);
+    expect(settings.restarting).toBe(false);
+    expect(reload).not.toHaveBeenCalled();
+  });
+
+  it("does not reload the selected server when another server finishes restarting", async () => {
+    setServerUrl("https://first.example");
+    ping.mockResolvedValueOnce({ healthy: true, ok: true, pid: 100, instance_id: "old" });
+    restartDaemon.mockResolvedValue({ restarting: true });
+    const restart = settings.restartDaemon();
+    await vi.advanceTimersByTimeAsync(0);
+    setServerUrl("https://second.example");
+    ping.mockResolvedValueOnce({ healthy: true, ok: true, pid: 100, instance_id: "new" });
+    await vi.advanceTimersByTimeAsync(1_000);
+    await restart;
+    expect(reload).not.toHaveBeenCalled();
+    expect(settings.restarting).toBe(false);
+    expect(settings.restartFailed).toBe(false);
+  });
+
   it("asks for a token when checking the replacement connection", async () => {
     ping.mockResolvedValue({ healthy: true, ok: true, pid: 100, instance_id: "old" });
     restartDaemon.mockResolvedValue({ restarting: true });
