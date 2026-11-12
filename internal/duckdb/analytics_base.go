@@ -396,7 +396,9 @@ func (s analyticsSQL) PopulateFrustrationMarkers(ctx context.Context, rows []db.
 func (s *Store) GetAnalyticsSummary(
 	ctx context.Context, f db.AnalyticsFilter,
 ) (db.AnalyticsSummary, error) {
-	return s.analytics().GetAnalyticsSummary(ctx, f)
+	return keptAnalytics(ctx, s, "summary", f, "", func(ctx context.Context) (db.AnalyticsSummary, error) {
+		return s.analytics().GetAnalyticsSummary(ctx, f)
+	})
 }
 
 func (s *Store) GetAnalyticsActivity(
@@ -432,13 +434,17 @@ func (s *Store) GetAnalyticsSessionShape(
 func (s *Store) GetAnalyticsTools(
 	ctx context.Context, f db.AnalyticsFilter,
 ) (db.ToolsAnalyticsResponse, error) {
-	return s.analytics().GetAnalyticsTools(ctx, f)
+	return keptAnalytics(ctx, s, "tools", f, "", func(ctx context.Context) (db.ToolsAnalyticsResponse, error) {
+		return s.analytics().GetAnalyticsTools(ctx, f)
+	})
 }
 
 func (s *Store) GetAnalyticsSkills(
 	ctx context.Context, f db.AnalyticsFilter, granularity string,
 ) (db.SkillsAnalyticsResponse, error) {
-	return s.analytics().GetAnalyticsSkills(ctx, f, granularity)
+	return keptAnalytics(ctx, s, "skills", f, granularity, func(ctx context.Context) (db.SkillsAnalyticsResponse, error) {
+		return s.analytics().GetAnalyticsSkills(ctx, f, granularity)
+	})
 }
 
 func (s *Store) GetAnalyticsVelocity(
