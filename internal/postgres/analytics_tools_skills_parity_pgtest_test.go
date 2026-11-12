@@ -274,10 +274,10 @@ func TestAnalyticsToolsSkillsSQLiteParity(t *testing.T) {
 		started := "2024-11-03T05:30:00Z"
 		require.NoError(t, local.UpsertSession(t.Context(), db.Session{
 			ID: "fall", Project: "gamma", Machine: "parity-machine", Agent: "codex",
-			StartedAt: &started, MessageCount: 3, UserMessageCount: 3,
+			StartedAt: &started, MessageCount: 4, UserMessageCount: 3,
 		}))
 		var messages []db.Message
-		for i, timestamp := range []string{"2024-11-03T05:30:00Z", "2024-11-03T06:30:00Z", "2024-11-04T05:30:00Z"} {
+		for i, timestamp := range []string{"2024-11-03T05:30:00Z", "2024-11-03T06:30:00Z", "2024-11-03T20:00:00Z", "2024-11-04T05:30:00Z"} {
 			messages = append(messages, db.Message{
 				SessionID: "fall", Ordinal: i, Role: "assistant", Content: "call", Timestamp: timestamp,
 				Model: "model-a", HasToolUse: true,
@@ -287,17 +287,23 @@ func TestAnalyticsToolsSkillsSQLiteParity(t *testing.T) {
 		require.NoError(t, local.InsertMessages(t.Context(), messages))
 		_, err := syncer.Push(t.Context(), false, nil)
 		require.NoError(t, err)
-		for _, zone := range []string{"America/New_York", "Asia/Kathmandu"} {
-			f := db.AnalyticsFilter{From: "2024-11-03", To: "2024-11-04", Timezone: zone, Project: "gamma"}
+		for _, tc := range []struct {
+			zone                  string
+			firstWeek, secondWeek int
+		}{
+			{"America/New_York", 3, 1},
+			{"Asia/Kathmandu", 2, 2},
+		} {
+			f := db.AnalyticsFilter{From: "2024-11-03", To: "2024-11-04", Timezone: tc.zone, Project: "gamma"}
 			want, err := local.GetAnalyticsTools(t.Context(), f)
 			require.NoError(t, err)
 			got, err := remote.GetAnalyticsTools(t.Context(), f)
 			require.NoError(t, err)
 			assert.Equal(t, want, got)
-			assert.Equal(t, 3, got.TotalCalls)
+			assert.Equal(t, 4, got.TotalCalls)
 			assert.Equal(t, []db.ToolTrendEntry{
-				{Date: "2024-10-28", ByCat: map[string]int{"Read": 2}},
-				{Date: "2024-11-04", ByCat: map[string]int{"Read": 1}},
+				{Date: "2024-10-28", ByCat: map[string]int{"Read": tc.firstWeek}},
+				{Date: "2024-11-04", ByCat: map[string]int{"Read": tc.secondWeek}},
 			}, got.Trend)
 		}
 	})
