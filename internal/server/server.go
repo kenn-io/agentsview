@@ -74,9 +74,6 @@ type VersionInfo struct {
 // APIVersion is shared by HTTP version reporting and local daemon discovery.
 // Bump it when a client-visible contract cannot be decoded safely by an older
 // CLI or daemon.
-// Every generated OpenAPI contract change takes a new API version and a digest
-// record in cmd/agentsview/testdata/api_versions; TestAPIVersionContract names
-// both.
 const (
 	APIVersion = 16
 	// KataAPIVersion is the first daemon API that serves /api/v1/kata/status.
