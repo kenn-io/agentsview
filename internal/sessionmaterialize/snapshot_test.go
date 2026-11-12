@@ -67,10 +67,14 @@ func TestMaterializeSnapshotInstallsCapturedCompanions(t *testing.T) {
 	session, err := receiver.GetSessionFull(ctx, device+"~"+id)
 	require.NoError(t, err)
 	require.NotNil(t, session)
+	// Attached ownership is sufficient even when no archived path remains.
+	session.FilePath = nil
 	home, scratch, cwd := t.TempDir(), t.TempDir(), t.TempDir()
 	t.Setenv("CLAUDE_CONFIG_DIR", home)
 	t.Setenv("CLAUDE_CODE_PROJECT_DIR_NAME", "fixture")
 	t.Setenv("TMPDIR", scratch)
+	t.Setenv("TMP", scratch)
+	t.Setenv("TEMP", scratch)
 	result, err := Materialize(ctx, cfg, receiver, session, cwd)
 	require.NoError(t, err)
 	assert.Equal(t, "snapshot:"+report.SnapshotID, result.Source)

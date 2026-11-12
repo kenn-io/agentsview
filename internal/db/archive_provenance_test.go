@@ -318,4 +318,20 @@ func TestArchiveSessionOwnersAcceptsEquivalentMemberships(t *testing.T) {
 	owners, err := database.ArchiveSessionOwners(t.Context(), write.Session.ID)
 	require.NoError(t, err)
 	require.Len(t, owners, 2)
+	assert.Equal(t, second.Attachment, owners[0].Attachment)
+	assert.Equal(t, write.ArchiveProvenance.Attachment, owners[1].Attachment)
+}
+
+func TestArchiveSessionOwnersRejectsMissingMembership(t *testing.T) {
+	database := testDB(t)
+	write := archiveProvenanceWrite(t, database)
+	_, err := database.WriteSessionBatchAtomic(t.Context(), []SessionBatchWrite{write})
+	require.NoError(t, err)
+	require.NoError(t, database.Update(t.Context(), func(tx *sql.Tx) error {
+		_, err := tx.ExecContext(t.Context(), `DELETE FROM archive_attachment_sources WHERE repository_id=? AND snapshot_id=?`, write.ArchiveProvenance.Attachment.RepositoryID, write.ArchiveProvenance.Attachment.SnapshotID)
+		return err
+	}))
+	_, err = database.ArchiveSessionOwners(t.Context(), write.Session.ID)
+	require.ErrorIs(t, err, ErrArchiveSourceConflict)
+	require.ErrorContains(t, err, "missing snapshot ownership")
 }

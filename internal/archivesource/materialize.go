@@ -36,20 +36,34 @@ func MaterializeSnapshot(ctx context.Context, sources []config.ArchiveSource, ow
 	var owner db.ArchiveSessionProvenance
 	var candidateErr error
 	for _, source := range sources {
-		i := slices.IndexFunc(owners, func(owner db.ArchiveSessionProvenance) bool { return owner.Attachment.SnapshotID == source.Snapshot })
-		if source.Directory != "" || i < 0 {
+		if source.Directory != "" || !slices.ContainsFunc(owners, func(o db.ArchiveSessionProvenance) bool { return o.Attachment.SnapshotID == source.Snapshot }) {
 			continue
+		}
+		if err := ctx.Err(); err != nil {
+			return nil, "", db.ArchiveAttachmentKey{}, err
 		}
 		repo, err := docbank.OpenBackupRepository(source.Repository)
 		if err != nil {
+			if !errors.Is(err, os.ErrNotExist) {
+				return nil, "", db.ArchiveAttachmentKey{}, err
+			}
 			candidateErr = errors.Join(candidateErr, err)
 			continue
 		}
-		if repo.ID() != owners[i].Attachment.RepositoryID {
+		i := slices.IndexFunc(owners, func(o db.ArchiveSessionProvenance) bool {
+			return o.Attachment.RepositoryID == repo.ID() && o.Attachment.SnapshotID == source.Snapshot
+		})
+		if i < 0 {
 			continue
 		}
 		selected, err = repo.OpenSnapshot(ctx, source.Snapshot)
 		if err != nil {
+			// LoadManifest reads exactly this path before opening the index or members.
+			var pe *os.PathError
+			if errors.Is(err, os.ErrNotExist) && errors.As(err, &pe) && pe.Path == source.Snapshot+".mvmanifest" {
+				candidateErr = errors.Join(candidateErr, err)
+				continue
+			}
 			return nil, "", db.ArchiveAttachmentKey{}, err
 		}
 		owner = owners[i]
@@ -73,7 +87,11 @@ func MaterializeSnapshot(ctx context.Context, sources []config.ArchiveSource, ow
 	if err != nil {
 		return nil, "", db.ArchiveAttachmentKey{}, err
 	}
-	defer func() { retErr = errors.Join(retErr, os.RemoveAll(scratch)) }()
+	defer func() {
+		if scratch != "" {
+			retErr = errors.Join(retErr, os.RemoveAll(scratch))
+		}
+	}()
 	object, err := selected.Extra("application/sessions.db")
 	if err != nil {
 		return nil, "", db.ArchiveAttachmentKey{}, err
@@ -90,7 +108,11 @@ func MaterializeSnapshot(ctx context.Context, sources []config.ArchiveSource, ow
 	if err != nil {
 		return nil, "", db.ArchiveAttachmentKey{}, err
 	}
-	defer func() { retErr = errors.Join(retErr, conn.Close()) }()
+	defer func() {
+		if conn != nil {
+			retErr = errors.Join(retErr, conn.Close())
+		}
+	}()
 	archiveID, err := checkSavedSchema(ctx, conn)
 	if err != nil {
 		return nil, "", db.ArchiveAttachmentKey{}, err
@@ -135,46 +157,93 @@ func MaterializeSnapshot(ctx context.Context, sources []config.ArchiveSource, ow
 		return nil, "", db.ArchiveAttachmentKey{}, err
 	}
 	portable := func(name string) string { return path.Clean(strings.ReplaceAll(name, `\`, "/")) }
-	primary, ok := strings.CutPrefix(portable(s.SourceKey), strings.TrimSuffix(portable(originalRoot), "/")+"/")
-	if !ok || path.Base(primary) != owner.NativeSessionID+".jsonl" || !slices.ContainsFunc(manifest.Manifest.Entries, func(entry rawsync.Entry) bool { return entry.Path == primary }) {
+	key, root := portable(s.SourceKey), strings.TrimSuffix(portable(originalRoot), "/")
+	var bound rawsync.Entry
+	for _, entry := range manifest.Manifest.Entries {
+		if path.Base(entry.Path) == owner.NativeSessionID+".jsonl" && rawderive.SourceKeyEndsWithEntry(key, entry.Path) {
+			if bound.Path != "" {
+				return nil, "", db.ArchiveAttachmentKey{}, errors.New("ambiguous snapshot transcript source")
+			}
+			bound = entry
+		}
+	}
+	if bound.Path == "" {
 		return nil, "", db.ArchiveAttachmentKey{}, errors.New("snapshot transcript source differs")
 	}
-	// Subagent transcripts are captured as independent sources. Select only
-	// source keys beneath this session's own native subagent directory.
+	providerRoot := strings.TrimSuffix(strings.TrimSuffix(key, bound.Path), "/")
+	var relativeRoot string
+	if providerRoot != root {
+		var ok bool
+		relativeRoot, ok = strings.CutPrefix(providerRoot, root+"/")
+		if !ok || relativeRoot == "" || path.Clean(relativeRoot) != relativeRoot {
+			return nil, "", db.ArchiveAttachmentKey{}, errors.New("snapshot transcript outside capture root")
+		}
+	}
+	primary = path.Join(relativeRoot, bound.Path)
 	base := strings.TrimSuffix(primary, ".jsonl") + "/"
-	prefix := strings.TrimSuffix(portable(s.SourceKey), ".jsonl") + "/subagents/"
-	rows, err := conn.QueryContext(ctx, `SELECT source_key,manifest_id,canonical_json FROM raw_archive_sources WHERE root_id=? AND substr(replace(source_key,char(92),'/'),1,length(?))=?`, s.RootID, prefix, prefix)
+	entries, err := selectedInventory(ctx, conn, s.RootID, primary, base)
 	if err != nil {
 		return nil, "", db.ArchiveAttachmentKey{}, err
 	}
-	defer rows.Close()
-	manifests := []rawsync.CanonicalManifest{manifest}
-	for rows.Next() {
-		var key, manifestID string
-		var data []byte
-		if err := rows.Scan(&key, &manifestID, &data); err != nil {
-			return nil, "", db.ArchiveAttachmentKey{}, err
-		}
-		child, err := parseManifest(key, manifestID, data)
-		if err != nil {
-			return nil, "", db.ArchiveAttachmentKey{}, err
-		}
-		rel, ok := strings.CutPrefix(portable(key), strings.TrimSuffix(portable(originalRoot), "/")+"/")
-		if !ok || !slices.ContainsFunc(child.Manifest.Entries, func(entry rawsync.Entry) bool { return entry.Path == rel }) {
-			return nil, "", db.ArchiveAttachmentKey{}, errors.New("snapshot subagent transcript is unavailable")
-		}
-		manifests = append(manifests, child)
+	if !slices.ContainsFunc(entries, func(e rawsync.Entry) bool {
+		return e.Path == primary && e.Length == bound.Length && slices.Equal(e.Objects, bound.Objects)
+	}) {
+		return nil, "", db.ArchiveAttachmentKey{}, errors.New("snapshot transcript inventory differs from manifest")
 	}
-	if err := rows.Err(); err != nil {
+	if err := conn.Close(); err != nil {
+		conn = nil
 		return nil, "", db.ArchiveAttachmentKey{}, err
 	}
-	selectEntry := func(source rawsync.CanonicalManifest, entry rawsync.Entry) bool {
-		if source.ManifestID == manifest.ManifestID {
-			return entry.Path == primary || strings.HasPrefix(entry.Path, base+"tool-results/")
-		}
-		// One captured subagent source can own continuation transcripts.
-		return strings.HasPrefix(entry.Path, base+"subagents/")
+	conn = nil
+	if err := os.RemoveAll(scratch); err != nil {
+		return nil, "", db.ArchiveAttachmentKey{}, err
 	}
-	tree, err = (rawderive.Materializer{Store: snapshotObjects{selected}, BaseDir: os.TempDir(), MaxTotalBytes: limit, SelectEntry: selectEntry}).MaterializeMany(ctx, manifests)
+	scratch = ""
+	tree, err = (rawderive.Materializer{Store: snapshotObjects{selected}, BaseDir: os.TempDir(), MaxTotalBytes: limit}).MaterializeEntries(ctx, identity, manifest.Manifest.CapturedAt, entries)
 	return tree, primary, owner.Attachment, err
+}
+
+// selectedInventory chooses immutable accepted bytes, or one unambiguous supplemental version.
+func selectedInventory(ctx context.Context, conn *sql.DB, rootID, primary, base string) (_ []rawsync.Entry, retErr error) {
+	tools, agents := base+"tool-results/", base+"subagents/"
+	rows, err := conn.QueryContext(ctx, `SELECT path,sha256,size,mod_time_ns,covered FROM raw_archive_files WHERE root_id=? AND (path=? OR substr(path,1,length(?))=? OR substr(path,1,length(?))=?) ORDER BY path`, rootID, primary, tools, tools, agents, agents)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { retErr = errors.Join(retErr, rows.Close()) }()
+	type choice struct{ covered, supplemental []rawsync.Entry }
+	choices := map[string]choice{}
+	for rows.Next() {
+		var e rawsync.Entry
+		var digest string
+		var covered bool
+		if err := rows.Scan(&e.Path, &digest, &e.Length, &e.ModTimeNS, &covered); err != nil {
+			return nil, err
+		}
+		e.Type = "file"
+		e.Objects = []rawsync.ObjectRef{{SHA256: digest, Length: e.Length}}
+		c := choices[e.Path]
+		if covered {
+			c.covered = append(c.covered, e)
+		} else {
+			c.supplemental = append(c.supplemental, e)
+		}
+		choices[e.Path] = c
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	var entries []rawsync.Entry
+	for _, c := range choices {
+		versions := c.covered
+		if len(versions) == 0 {
+			versions = c.supplemental
+		}
+		if len(versions) != 1 {
+			return nil, errors.New("ambiguous snapshot inventory versions")
+		}
+		entries = append(entries, versions[0])
+	}
+	slices.SortFunc(entries, func(a, b rawsync.Entry) int { return strings.Compare(a.Path, b.Path) })
+	return entries, nil
 }

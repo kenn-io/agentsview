@@ -56,17 +56,11 @@ func Materialize(ctx context.Context, cfg config.Config, database *db.DB, sessio
 	if !capture.ValidUUID(id) {
 		return Result{}, errors.New("native Claude UUID required; archive-only fork sessions are unsupported")
 	}
-	var owners []db.ArchiveSessionProvenance
-	if database != nil {
-		owners, err = database.ArchiveSessionOwners(ctx, session.ID)
-		if err != nil {
-			return Result{}, err
-		}
-	}
-	source, err := storedSource(session, host)
+	owners, err := database.ArchiveSessionOwners(ctx, session.ID)
 	if err != nil {
 		return Result{}, err
 	}
+	var source string
 	var files []sourceFile
 	if len(owners) != 0 {
 		if owners[0].NativeSessionID != id || owners[0].Source.DeviceID != session.Machine {
@@ -75,6 +69,8 @@ func Materialize(ctx context.Context, cfg config.Config, database *db.DB, sessio
 		var snapshot string
 		files, snapshot, err = readSnapshotSource(ctx, cfg, owners, id)
 		source = "snapshot:" + snapshot
+	} else if source, err = storedSource(session, host); err != nil {
+		return Result{}, err
 	} else if strings.HasPrefix(source, "s3://") {
 		if host != "" && host != session.Machine {
 			return Result{}, errors.New("S3 source host does not match session identity")
