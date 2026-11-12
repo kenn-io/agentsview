@@ -809,7 +809,12 @@ Do not widen or narrow this live/baked boundary implicitly.
 The cache format version is also the extractor compatibility version. Bump
 `usageCacheFormatVersion` whenever fact extraction, `priceUsageFact`, web-search
 fees, deduplication, rollup semantics, or query-time model canonicalization
-change. Each rollup install records the distinct
+change. Add a record in `internal/db/testdata/usage-cache-format-digests`
+for each format bump. The digest covers the fixture's inputs; add a case when
+new usage behavior needs another input. For fixture-only changes, verify the
+old and new fixtures produce the same cached output for unchanged inputs, then
+replace the current format's record.
+Each rollup install records the distinct
 `(provider, reported model, canonical model)` lookups its daily rows used, and a
 full-path read re-resolves only those against the current catalog. A catalog
 digest change sends reads through that path until a coverage pass claims the
