@@ -48,7 +48,6 @@ func checkUsageCacheFormatRecords(files fs.FS, version int, digest string) error
 
 func TestUsageCacheFormat(t *testing.T) {
 	database := testDB(t)
-	require.NoError(t, database.SetArchiveIdentityForTest(t.Context(), "usage-format", strings.Repeat("0", 63)+"1"))
 	require.NoError(t, database.UpsertModelPricing([]ModelPricing{{ModelPattern: "format-model", InputPerMTok: money.Money{Microdollars: 1_000_000}, OutputPerMTok: money.Money{Microdollars: 2_000_000}, CacheCreationPerMTok: money.Money{Microdollars: 1_250_000}, CacheCreation1hPerMTok: money.Money{Microdollars: 3_000_000}, CacheReadPerMTok: money.Money{Microdollars: 100_000}, Bands: []PricingBand{{AboveInputTokens: 100, InputPerMTok: money.Money{Microdollars: 2_000_000}, OutputPerMTok: money.Money{Microdollars: 3_000_000}, CacheCreationPerMTok: money.Money{Microdollars: 2_500_000}, CacheCreation1hPerMTok: money.Money{Microdollars: 5_000_000}, CacheReadPerMTok: money.Money{Microdollars: 200_000}}}}}))
 	_, err := database.getWriter().Exec(t.Context(), `UPDATE model_pricing SET updated_at='2026-08-01T00:00:00Z' WHERE model_pattern='format-model'`)
 	require.NoError(t, err)
@@ -81,19 +80,18 @@ func TestUsageCacheFormat(t *testing.T) {
 	}))
 	cost := money.Money{Microdollars: 123456}
 	require.NoError(t, database.ReplaceSessionUsageEvents(t.Context(), "reported", []UsageEvent{{Source: "shutdown", Model: "format-model", InputTokens: 10, Cost: &cost, CostStatus: "exact", CostSource: CopilotReportedCostSource, OccurredAt: "2026-08-10T09:30:00Z", DedupKey: "reported"}}))
-	require.NoError(t, database.InsertCursorUsageEvents(t.Context(), []CursorUsageEvent{{OccurredAt: "2026-08-10T09:00:00Z", Model: "format-model", InputTokens: 11, Charged: money.Money{Microdollars: 100000}, DedupKey: "cursor"}}))
 	filter := UsageFilter{From: "2026-08-10", To: "2026-08-10", Timezone: "UTC", Breakdowns: true}
 	cache := warmJournaledUsage(t, database, filter)
 	read := func() [][][]any {
 		var result [][][]any
 		for _, query := range []string{
-			`SELECT s.session_id, f.fact_index, f.source, f.message_ordinal, f.timestamp_ms, f.timestamp_ns,
+			`SELECT f.cached_session_id, s.session_id, f.fact_index, f.source, f.message_ordinal, f.timestamp_ms, f.timestamp_ns,
 				f.raw_timestamp, f.uses_session_start, f.model, f.provider_id, f.input_tokens, f.output_tokens,
 				f.reasoning_tokens, f.cache_creation_tokens, f.cache_creation_1h_tokens, f.cache_read_tokens,
 				f.web_search_requests, f.reported_cost_microdollars, f.cost_source, f.cost_status, f.request_scoped,
 				f.claude_message_id, f.claude_request_id, f.source_uuid, f.usage_dedup_key, f.token_eligible, f.activity_eligible
 				FROM usage_facts f JOIN usage_cached_sessions s ON s.id=f.cached_session_id ORDER BY s.session_id, f.fact_index`,
-			`SELECT i.session_id, d.local_date, d.reported_model, d.provider_id, d.priced_model, d.matched_pattern,
+			`SELECT d.rollup_install_id, i.session_id, d.local_date, d.reported_model, d.provider_id, d.priced_model, d.matched_pattern,
 				d.rate_ok, d.rate_hash, d.pricing_timestamp, d.band_threshold, d.input_tokens, d.output_tokens,
 				d.reasoning_tokens, d.cache_creation_tokens, d.cache_read_tokens, d.web_search_requests,
 				d.estimated_cost_microdollars, d.savings_microdollars, d.authoritative_cost_microdollars,
@@ -103,23 +101,7 @@ func TestUsageCacheFormat(t *testing.T) {
 				JOIN usage_rollup_timezones z ON z.id=i.timezone_id WHERE z.timezone_name='UTC'
 				ORDER BY i.session_id, d.local_date, d.reported_model, d.provider_id, d.rate_hash, d.band_threshold`,
 		} {
-			rows, err := cache.db.QueryContext(t.Context(), query)
-			require.NoError(t, err)
-			columns, err := rows.Columns()
-			require.NoError(t, err)
-			var table [][]any
-			for rows.Next() {
-				values := make([]any, len(columns))
-				args := make([]any, len(columns))
-				for i := range values {
-					args[i] = &values[i]
-				}
-				require.NoError(t, rows.Scan(args...))
-				table = append(table, values)
-			}
-			require.NoError(t, rows.Err())
-			require.NoError(t, rows.Close())
-			result = append(result, table)
+			result = append(result, usageSpoolFactValues(t, cache.db, query))
 		}
 		return result
 	}

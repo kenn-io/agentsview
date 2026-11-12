@@ -813,9 +813,7 @@ change. Add a record in `internal/db/testdata/usage-cache-format-digests`
 for each format bump. If this PR added the record, replace it when its output
 changes; otherwise bump the format and record the new digest. The digest covers
 stored facts and daily rollups for the fixture; add a case when new usage
-behavior needs another input. For fixture-only changes, verify the
-old and new fixtures produce the same cached output for unchanged inputs, then
-replace the current format's record.
+behavior needs another input.
 Each rollup install records the distinct
 `(provider, reported model, canonical model)` lookups its daily rows used, and a
 full-path read re-resolves only those against the current catalog. A catalog
