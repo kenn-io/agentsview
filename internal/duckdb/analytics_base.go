@@ -4,6 +4,8 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"strings"
+	"time"
 
 	"go.kenn.io/agentsview/internal/db"
 	"go.kenn.io/agentsview/internal/readbase"
@@ -207,6 +209,24 @@ func (s analyticsSQL) HourOfWeekSQL(f db.AnalyticsFilter) (string, []any) {
 }
 
 func (s analyticsSQL) VisitTools(ctx context.Context, f db.AnalyticsFilter, ids []string, emit func(readbase.AnalyticsToolVisit)) error {
+	timestamp := "m.timestamp"
+	group := "date_trunc('minute', m.timestamp)"
+	if !f.HasTimeFilter() {
+		effective := "COALESCE(m.timestamp, s.started_at, s.created_at)"
+		if db.LoadLocationOr(f.Timezone, time.UTC) == time.UTC {
+			timestamp = effective
+			group = "strftime(" + effective + ", '%Y-%m-%d')"
+		} else if periods := db.ToolsDatePeriods(f); len(periods) > 0 {
+			timestamp = effective
+			var dateGroup strings.Builder
+			dateGroup.WriteString("CASE")
+			for _, period := range periods {
+				fmt.Fprintf(&dateGroup, " WHEN %[1]s >= TIMESTAMP '%[2]s' AND %[1]s < TIMESTAMP '%[3]s' THEN strftime(%[1]s + INTERVAL (%[4]d) SECOND, '%%Y-%%m-%%d')", effective, period.Start.Format("2006-01-02 15:04:05"), period.End.Format("2006-01-02 15:04:05"), period.Offset)
+			}
+			dateGroup.WriteString(" ELSE strftime(" + effective + ", '%Y-%m-%dT%H:%M') END")
+			group = dateGroup.String()
+		}
+	}
 	err := db.QueryChunkedSize(ids, readbase.MaxSQLVars, func(chunk []string) error {
 		ph, args := db.InPlaceholders(chunk)
 		modelPred, modelArgs := readbase.AnalyticsCSVPredicate("m.model", f.Model, db.DuckDBQueryDialect())
@@ -222,7 +242,7 @@ func (s analyticsSQL) VisitTools(ctx context.Context, f db.AnalyticsFilter, ids 
 		args = append(args, windowArgs...)
 		query := `SELECT tc.session_id, tc.category,
 				TRIM(tc.tool_name), COUNT(*),
-				MAX(m.timestamp), MIN(m.ordinal)` + db.ToolEffectivenessSQL("tc", "s.quality_signal_version") + `
+				MAX(` + timestamp + `), MIN(m.ordinal)` + db.ToolEffectivenessSQL("tc", "s.quality_signal_version") + `
 				FROM tool_calls tc
 				JOIN sessions s ON s.id = tc.session_id
 				LEFT JOIN messages m
@@ -236,7 +256,7 @@ func (s analyticsSQL) VisitTools(ctx context.Context, f db.AnalyticsFilter, ids 
 		query += readbase.AnalyticsAndClause(windowPred)
 		query += `
 				GROUP BY tc.session_id, tc.category,
-					TRIM(tc.tool_name), date_trunc('minute', m.timestamp)`
+					TRIM(tc.tool_name), ` + group
 		observeAnalyticsQuery(query)
 		rows, qErr := s.store.queryContext(ctx, query, args...)
 		if qErr != nil {
