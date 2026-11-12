@@ -218,15 +218,15 @@ func (reader *UsageCacheReader) WaitWarm(ctx context.Context) error {
 }
 
 func (reader *UsageCacheReader) GetDailyUsage(ctx context.Context, filter UsageFilter) (DailyUsageResult, error) {
-	if reader.warming(filter) {
+	if reader.DeferRead(filter) {
 		return DailyUsageResult{}, ErrUsageCacheWarming
 	}
-	result, err := reader.engine.GetDailyUsage(reader.readContext(ctx), filter)
+	result, err := reader.engine.getDailyUsageUncached(reader.readContext(ctx), filter)
 	return result, reader.deferred(filter, err)
 }
 
 func (reader *UsageCacheReader) GetTopSessionsByCost(ctx context.Context, filter UsageFilter, limit int) ([]TopSessionEntry, error) {
-	if reader.warming(filter) {
+	if reader.DeferRead(filter) {
 		return nil, ErrUsageCacheWarming
 	}
 	result, err := reader.engine.GetTopSessionsByCost(reader.readContext(ctx), filter, limit)
@@ -234,7 +234,7 @@ func (reader *UsageCacheReader) GetTopSessionsByCost(ctx context.Context, filter
 }
 
 func (reader *UsageCacheReader) GetUsageSessionCounts(ctx context.Context, filter UsageFilter) (UsageSessionCounts, error) {
-	if reader.warming(filter) {
+	if reader.DeferRead(filter) {
 		return UsageSessionCounts{}, ErrUsageCacheWarming
 	}
 	result, err := reader.engine.GetUsageSessionCounts(reader.readContext(ctx), filter)
@@ -242,17 +242,17 @@ func (reader *UsageCacheReader) GetUsageSessionCounts(ctx context.Context, filte
 }
 
 func (reader *UsageCacheReader) GetUsageMatchingSessionCount(ctx context.Context, filter UsageFilter) (int, error) {
-	if reader.warming(filter) {
+	if reader.DeferRead(filter) {
 		return 0, ErrUsageCacheWarming
 	}
 	result, err := reader.engine.GetUsageMatchingSessionCount(reader.readContext(ctx), filter)
 	return result, reader.deferred(filter, err)
 }
 
-// warming reports whether a deferring read should skip the cache because a
+// DeferRead reports whether a read should skip the cache because a
 // warm pass for its timezone is queued or running. The pass will replace
 // what the read would have checked.
-func (reader *UsageCacheReader) warming(filter UsageFilter) bool {
+func (reader *UsageCacheReader) DeferRead(filter UsageFilter) bool {
 	if !reader.deferWork {
 		return false
 	}
@@ -381,7 +381,7 @@ func (reader *UsageCacheReader) runWarm(idle chan struct{}) {
 			continue
 		}
 		ctx := context.WithValue(reader.warmCtx, usageWarmCheckpointKey{}, reader.waitForDirectReads)
-		_, err := reader.engine.GetDailyUsage(ctx, UsageFilter{Timezone: timezone})
+		_, err := reader.engine.getDailyUsageUncached(ctx, UsageFilter{Timezone: timezone})
 		if err == nil {
 			err = reader.LoadReadiness(ctx)
 		}

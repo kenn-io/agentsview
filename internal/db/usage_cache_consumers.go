@@ -89,7 +89,10 @@ func (db *DB) SetUsageWindowPrepareForTest(beforePrepare func(context.Context)) 
 	db.usageCache.usageWindowObserver.beforePrepare = beforePrepare
 }
 
-type usageWindowMemoKey struct{}
+type (
+	usageWindowMemoKey    struct{}
+	usageWindowVersionKey struct{}
+)
 
 type usageWindowMemo struct {
 	mu      sync.Mutex
@@ -453,6 +456,10 @@ func (db *DB) queryUsageRollups(
 	var key string
 	if memo != nil {
 		key = usageWindowKey(filter, kind, cursor)
+		// A retained result must use a window prepared for its own version.
+		if version, ok := ctx.Value(usageWindowVersionKey{}).(string); ok {
+			key += "|" + version
+		}
 	}
 	// Totals readers get one fresh journaled attempt after concurrent installs.
 	// Further conflicts use full-window preparation within the same budget.

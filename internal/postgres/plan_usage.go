@@ -83,6 +83,10 @@ func (s *Store) GetPlanUsageSessionCounts(
 	ctx context.Context, f db.UsageFilter,
 ) (db.PlanUsageSessionCounts, error) {
 	slot := db.UsageSlot(f, false)
+	if s.deferUsage(f) {
+		defer s.usageCache.HoldWarm()()
+		return db.PlanUsageCounts(ctx, &s.runtimeState().planUsage, slot, s.directUsageVersion(ctx, slot), f, s.readPlanUsageSessionCounts)
+	}
 	version := s.keptUsageVersion(ctx, slot)
 	if version == standbyUsageMarker || (version == "" && s.runtimeState().usageIdentityDenied.Load()) {
 		raw := f

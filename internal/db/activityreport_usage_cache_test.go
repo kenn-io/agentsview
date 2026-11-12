@@ -3,6 +3,7 @@ package db
 import (
 	"context"
 	"encoding/json/jsontext"
+	"math"
 	"slices"
 	"strconv"
 	"testing"
@@ -18,6 +19,75 @@ import (
 // rawUsageActivityBackend builds reports from raw archive usage rows, the
 // path that predates reading Activity usage from the usage cache.
 type rawUsageActivityBackend struct{ activityReportBackend }
+
+func TestActivityReportCachedUsageSignedCosts(t *testing.T) {
+	d := testDB(t)
+	for _, id := range []string{"a", "b"} {
+		insertSession(t, d, id, "project", func(s *Session) {
+			s.Agent = "copilot"
+			s.StartedAt = new("2026-06-16T09:00:00Z")
+			s.EndedAt = new("2026-06-16T11:00:00Z")
+		})
+	}
+	negative := money.Money{Microdollars: -1}
+	maximum := money.Money{Microdollars: math.MaxInt64}
+	one := money.Money{Microdollars: 1}
+	require.NoError(t, d.ReplaceSessionUsageEvents(t.Context(), "a", []UsageEvent{
+		{Source: "request", Model: "model", Cost: &negative, OccurredAt: "2026-06-16T09:00:00Z", DedupKey: "a1"},
+		{Source: "request", Model: "model", Cost: &maximum, OccurredAt: "2026-06-16T10:01:00Z", DedupKey: "a2"},
+		{Source: "request", Model: "model", Cost: &one, OccurredAt: "2026-06-16T10:02:00Z", DedupKey: "a3"},
+	}))
+	require.NoError(t, d.ReplaceSessionUsageEvents(t.Context(), "b", []UsageEvent{
+		{Source: "request", Model: "model", Cost: &negative, OccurredAt: "2026-06-16T10:00:00Z", DedupKey: "b1"},
+	}))
+	q := dayQuery(t, "2026-06-16", "UTC")
+	q.Partial = true
+	q.EffectiveEnd = time.Date(2026, 6, 16, 12, 0, 0, 0, time.UTC)
+	f := AnalyticsFilter{Timezone: "UTC", IncludeSubagents: true, IncludeForks: true}
+	start, end := activityReportRangeBoundsUTC(q)
+	sessions, ids, err := d.activityReportSessions(t.Context(), f, start, end)
+	require.NoError(t, err)
+	raw := rawUsageActivityBackend{activityReportBackend{
+		DB: d, lowerBound: PaddedUTCBound(q.RangeStart.UTC().Format(time.RFC3339), -14),
+		upperBound: PaddedUTCBound(q.RangeEnd.UTC().Format(time.RFC3339), 14), counted: &activityReportCounted{},
+	}}
+	want, _, err := activity.BuildReportArtifacts(t.Context(), raw, sessions, ids, q, nil, "raw activity report")
+	require.NoError(t, err)
+	assert.Equal(t, money.Money{Microdollars: math.MaxInt64 - 1}, want.Report.Totals.Cost)
+	got, err := d.GetActivityReport(t.Context(), f, q)
+	require.NoError(t, err)
+	assert.Equal(t, activity.ReportWithSessions(want), got)
+}
+
+func TestSumActivityUsageRowsPreservesSessionTotals(t *testing.T) {
+	q := dayQuery(t, "2026-06-16", "UTC")
+	reported := money.Money{Microdollars: 100}
+	rows := []activity.UsageRow{
+		{SessionID: "ordinary", Model: "model", Timestamp: "2026-06-16T10:00:00Z", InputTokens: 10, OutputTokens: 3, Cost: money.Money{Microdollars: 2}},
+		{SessionID: "reported", Model: "model", Timestamp: "2026-06-16T10:00:00Z", InputTokens: 5},
+		{SessionID: "ordinary", Model: "model", Timestamp: "2026-06-16T10:01:00Z", InputTokens: 20, OutputTokens: 7, Cost: money.Money{Microdollars: 4}},
+		{SessionID: "reported", Model: "model", Timestamp: "2026-06-16T10:01:00Z", InputTokens: 6, SessionCost: &reported},
+		{SessionID: "ordinary", Model: "model", Timestamp: "2026-06-16T11:00:00Z", InputTokens: 2},
+	}
+	got, err := sumActivityUsageRows(rows, q)
+	require.NoError(t, err)
+	assert.Equal(t, []activity.UsageRow{
+		{SessionID: "ordinary", Model: "model", Timestamp: "2026-06-16T10:00:00Z", InputTokens: 30, OutputTokens: 10, Cost: money.Money{Microdollars: 6}},
+		{SessionID: "reported", Model: "model", Timestamp: "2026-06-16T10:00:00Z", InputTokens: 5},
+		{SessionID: "reported", Model: "model", Timestamp: "2026-06-16T10:01:00Z", InputTokens: 6, SessionCost: &reported},
+		{SessionID: "ordinary", Model: "model", Timestamp: "2026-06-16T11:00:00Z", InputTokens: 2},
+	}, got)
+
+	negative := money.Money{Microdollars: -1}
+	rows = []activity.UsageRow{
+		{SessionID: "ordinary", Model: "model", Timestamp: "2026-06-16T10:00:00Z", InputTokens: 1},
+		{SessionID: "ordinary", Model: "model", Timestamp: "2026-06-16T10:01:00Z", InputTokens: 2},
+		{SessionID: "reported", Model: "model", Timestamp: "2026-06-16T10:02:00Z", SessionCost: &negative},
+	}
+	got, err = sumActivityUsageRows(rows, q)
+	require.NoError(t, err)
+	assert.Equal(t, rows, got)
+}
 
 func (b rawUsageActivityBackend) ActivityReportUsage(
 	ctx context.Context, ids []string, q activity.Query,
@@ -119,8 +189,8 @@ func seedActivityUsageParity(t *testing.T, d *DB) {
 }
 
 // TestActivityReportCachedUsageMatchesRawUsage holds Activity reports read
-// from the usage cache to the raw archive path: same rows, pricing, sessions
-// read for invalidation, and whole report, across filters and time zones.
+// from the usage cache to the raw archive path: same pricing, sessions read
+// for invalidation, and whole report, across filters and time zones.
 func TestActivityReportCachedUsageMatchesRawUsage(t *testing.T) {
 	d := testDB(t)
 	ctx := t.Context()
@@ -159,15 +229,23 @@ func TestActivityReportCachedUsageMatchesRawUsage(t *testing.T) {
 		require.NoError(t, err)
 		window, err := d.prepareActivityUsageWindow(ctx, lower, upper)
 		require.NoError(t, err)
-		gotRows, gotPricing, gotRead, err := d.activityReportCachedUsage(
-			ctx, window, ids, lower, upper, q, true)
+		wantRead = append(wantRead, ids...)
+		slices.Sort(wantRead)
+		wantRead = slices.Compact(wantRead)
+		gotRows, gotPricing, read, _, err := d.activityReportCachedUsage(
+			ctx, window, ids, lower, upper, q, true, false)
 		require.NoError(t, err)
 		assert.Equal(t, wantRows, gotRows)
 		assert.Equal(t, wantPricing, gotPricing)
-		slices.Sort(wantRead)
+		for _, id := range ids {
+			assert.NotContains(t, read, id)
+		}
+		uniqueRead := slices.Clone(read)
+		slices.Sort(uniqueRead)
+		assert.Len(t, slices.Compact(uniqueRead), len(read))
+		gotRead := append(slices.Clone(ids), read...)
 		slices.Sort(gotRead)
-		gotRead = slices.Compact(gotRead)
-		assert.Equal(t, slices.Compact(wantRead), gotRead)
+		assert.Equal(t, wantRead, slices.Compact(gotRead))
 
 		raw := rawUsageActivityBackend{activityReportBackend{
 			DB: d, lowerBound: lower, upperBound: upper,
@@ -193,7 +271,7 @@ func TestActivityReportCachedUsageMatchesRawUsage(t *testing.T) {
 	// completed in project b's session, and the in-padding peer before the
 	// range, but neither the deleted copy nor the out-of-bounds pairs.
 	read := compare(t, AnalyticsFilter{Project: "proj-a"}, queries["utc day"])
-	assert.Equal(t, []string{"a", "b", "c", "copilot:s"}, read)
+	assert.Equal(t, []string{"a", "b", "c", "copilot:s", "early"}, read)
 
 	// A session written after the cache filled is refilled before reading.
 	insertMessages(t, d, Message{

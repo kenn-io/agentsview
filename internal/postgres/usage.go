@@ -1593,6 +1593,17 @@ func (s *Store) GetDailyUsage(
 	ctx context.Context, f db.UsageFilter,
 ) (db.DailyUsageResult, error) {
 	slot := db.UsageSlot(f, true)
+	if s.deferUsage(f) {
+		defer s.usageCache.HoldWarm()()
+		version := s.directUsageVersion(ctx, slot)
+		if version == "" {
+			return s.readDirectDailyUsage(ctx, f)
+		}
+		return db.DailyUsage(ctx, &s.runtimeState().dailyUsage, slot, version, f, func(ctx context.Context, full db.UsageFilter) (db.DailyUsageResult, error) {
+			s.forgetPricingLoad()
+			return s.readDirectDailyUsage(ctx, full)
+		})
+	}
 	version := s.keptUsageVersion(ctx, slot)
 	if version == standbyUsageMarker {
 		full := f
@@ -1658,6 +1669,10 @@ func (s *Store) readDailyUsage(ctx context.Context, f db.UsageFilter) (db.DailyU
 			return result, err
 		}
 	}
+	return s.readDirectDailyUsage(ctx, f)
+}
+
+func (s *Store) readDirectDailyUsage(ctx context.Context, f db.UsageFilter) (db.DailyUsageResult, error) {
 	loc := f.Location()
 
 	pricing, err := s.loadPricingMap(ctx)
@@ -2258,6 +2273,20 @@ func (s *Store) GetTopSessionsByCost(
 	slot := db.UsageSlot(f, false)
 	if slot != "" {
 		slot += fmt.Sprintf("|%t", f.TopSessionsByGroup)
+	}
+	if s.deferUsage(f) {
+		defer s.usageCache.HoldWarm()()
+		version := s.directUsageVersion(ctx, slot)
+		out, err := s.runtimeState().topUsage.Do(ctx, slot, version, func(ctx context.Context) ([]db.TopSessionEntry, error) {
+			if slot != "" && version != "" {
+				s.forgetPricingLoad()
+			}
+			return s.readTopSessions(ctx, f)
+		})
+		if err != nil {
+			return nil, err
+		}
+		return s.finishTopSessions(ctx, f, limit, out)
 	}
 	version := s.keptUsageVersion(ctx, slot)
 	if version == standbyUsageMarker {

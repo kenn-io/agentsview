@@ -1,12 +1,15 @@
 package db
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
 	"sort"
 	"strings"
 	"time"
+	"unicode"
+	"unicode/utf8"
 )
 
 const (
@@ -192,6 +195,8 @@ type TrendAccumulator struct {
 	index                 map[string]int
 	counts                [][]int
 	messageCounts         []int
+	lower                 []byte
+	matchers              [][]trendMatcher
 }
 
 // NewTrendAccumulator returns an accumulator for the buckets spanning
@@ -204,7 +209,12 @@ func NewTrendAccumulator(
 	for i := range counts {
 		counts[i] = make([]int, len(buckets))
 	}
+	matchers := make([][]trendMatcher, len(terms))
+	for i, term := range terms {
+		matchers[i] = prepareTrendMatchers(term)
+	}
 	return &TrendAccumulator{
+		matchers:      matchers,
 		from:          from,
 		to:            to,
 		granularity:   granularity,
@@ -227,8 +237,9 @@ func (a *TrendAccumulator) Add(content string, local time.Time) {
 		return
 	}
 	a.messageCounts[bucket]++
-	for i, term := range a.terms {
-		a.counts[i][bucket] += CountTrendOccurrences(content, term)
+	a.lower = appendTrendLower(a.lower, content)
+	for i, matchers := range a.matchers {
+		a.counts[i][bucket] += countTrendOccurrences(a.lower, matchers)
 	}
 }
 
@@ -340,28 +351,58 @@ type matchSpan struct {
 	end   int
 }
 
-func CountTrendOccurrences(text string, term TrendTermInput) int {
-	spans := make([]matchSpan, 0)
+type trendMatcher struct {
+	needle      []byte
+	wordBounded bool
+}
+
+func prepareTrendMatchers(term TrendTermInput) []trendMatcher {
+	var matchers []trendMatcher
 	for _, matcher := range term.Matchers {
 		matcher = strings.TrimSpace(matcher)
-		if matcher == "" {
-			continue
+		if matcher != "" {
+			matchers = append(matchers, trendMatcher{[]byte(strings.ToLower(matcher)), isSingleWordMatcher(matcher)})
 		}
-		wordBounded := isSingleWordMatcher(matcher)
-		spans = append(spans, collectTrendSpans(text, matcher, wordBounded)...)
+	}
+	return matchers
+}
+
+func appendTrendLower(dst []byte, text string) []byte {
+	dst = append(dst[:0], text...)
+	for i, c := range dst {
+		if c >= utf8.RuneSelf {
+			dst = dst[:0]
+			for _, r := range text {
+				dst = utf8.AppendRune(dst, unicode.ToLower(r))
+			}
+			return dst
+		}
+		if 'A' <= c && c <= 'Z' {
+			dst[i] = c + ('a' - 'A')
+		}
+	}
+	return dst
+}
+
+func CountTrendOccurrences(text string, term TrendTermInput) int {
+	return countTrendOccurrences(appendTrendLower(nil, text), prepareTrendMatchers(term))
+}
+
+func countTrendOccurrences(haystack []byte, matchers []trendMatcher) int {
+	var spans []matchSpan
+	for _, matcher := range matchers {
+		spans = append(spans, collectTrendSpans(haystack, matcher.needle, matcher.wordBounded)...)
 	}
 	return mergeCountSpans(spans)
 }
 
-func collectTrendSpans(text string, matcher string, wordBounded bool) []matchSpan {
-	needle := strings.ToLower(matcher)
-	haystack := strings.ToLower(text)
-	if needle == "" || haystack == "" {
+func collectTrendSpans(haystack, needle []byte, wordBounded bool) []matchSpan {
+	if len(needle) == 0 || len(haystack) == 0 {
 		return nil
 	}
-	spans := make([]matchSpan, 0)
+	var spans []matchSpan
 	for offset := 0; offset < len(haystack); {
-		idx := strings.Index(haystack[offset:], needle)
+		idx := bytes.Index(haystack[offset:], needle)
 		if idx < 0 {
 			break
 		}
@@ -387,7 +428,7 @@ func isSingleWordMatcher(matcher string) bool {
 	return true
 }
 
-func hasWordBoundaries(text string, start, end int) bool {
+func hasWordBoundaries(text []byte, start, end int) bool {
 	if start > 0 && isWordByte(text[start-1]) {
 		return false
 	}

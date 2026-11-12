@@ -97,6 +97,65 @@ VALUES ('batch-1','provider','paid-a',20,'2026-01-01','shared'),
 	requireCachedUsageMatchesDirect(t, store, db.UsageFilter{Timezone: "UTC"})
 }
 
+func TestPGUsageCacheDeferredReadsReuseDirectResults(t *testing.T) {
+	for _, state := range []string{"version 1", "fill in progress"} {
+		t.Run(state, func(t *testing.T) {
+			_, _, store, counter := keptUsageFixture(t)
+			ctx := t.Context()
+			if state == "version 1" {
+				_, err := store.pg.ExecContext(ctx, `UPDATE sync_metadata SET value='1' WHERE key='usage_change_journal_version'`)
+				require.NoError(t, err)
+			}
+			probe := attachUsageCacheProbe(t, store, t.TempDir())
+			store.usageCache.DeferWork()
+			t.Cleanup(func() { require.NoError(t, store.usageCache.Close()) })
+			filter := db.UsageFilter{From: "2026-01-01", To: "2026-01-01", Timezone: "UTC"}
+			if state == "fill in progress" {
+				started, release := make(chan struct{}), make(chan struct{})
+				signal := sync.OnceFunc(func() { close(started) })
+				probe.before = func(ctx context.Context, _ []string) error {
+					signal()
+					select {
+					case <-release:
+						return nil
+					case <-ctx.Done():
+						return ctx.Err()
+					}
+				}
+				_, err := store.usageCache.GetDailyUsage(ctx, filter)
+				require.ErrorIs(t, err, db.ErrUsageCacheWarming)
+				t.Cleanup(func() { close(release) })
+				select {
+				case <-started:
+				case <-time.After(30 * time.Second):
+					t.Fatal("warm fill did not start")
+				}
+			} else {
+				hold := store.usageCache.HoldWarm()
+				t.Cleanup(hold)
+			}
+			daily, err := store.GetDailyUsage(ctx, filter)
+			require.NoError(t, err)
+			top, err := store.GetTopSessionsByCost(ctx, filter, 10)
+			require.NoError(t, err)
+			require.Equal(t, 1250, daily.Totals.OutputTokens)
+			require.Len(t, top, 2)
+			counter.mu.Lock()
+			queries := maps.Clone(counter.queries)
+			counter.mu.Unlock()
+			again, err := store.GetDailyUsage(ctx, filter)
+			require.NoError(t, err)
+			assert.Equal(t, daily, again)
+			topAgain, err := store.GetTopSessionsByCost(ctx, filter, 10)
+			require.NoError(t, err)
+			assert.Equal(t, top, topAgain)
+			counter.mu.Lock()
+			assert.Equal(t, queries, counter.queries)
+			counter.mu.Unlock()
+		})
+	}
+}
+
 func TestPGUsageCacheWaitsForDirectReadBeforeWarm(t *testing.T) {
 	_, _, store, _ := keptUsageFixture(t)
 	ctx := t.Context()

@@ -64,6 +64,7 @@ type storeRuntime struct {
 	pricingGeneration   uint64
 	usageIdentityDenied atomic.Bool
 	dailyUsage          kept.Reads[db.DailyUsageResult]
+	analytics           kept.Reads[[]byte]
 	planUsage           kept.Reads[*db.PlanUsageCountSummary]
 	topUsage            kept.Reads[[]db.TopSessionEntry]
 	standbyDaily        kept.Flights[snapshotResult[db.DailyUsageResult]]
