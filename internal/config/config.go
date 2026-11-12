@@ -4246,6 +4246,78 @@ func (c *Config) VectorSetupEmbeddings() (VectorEmbeddingsConfig, error) {
 	return embeddings, err
 }
 
+// VectorExplicitlyDisabled reports a saved opt-out.
+func (c *Config) VectorExplicitlyDisabled() (bool, error) {
+	existing, err := c.readConfigMap()
+	if err != nil {
+		return false, err
+	}
+	section, _ := existing["vector"].(map[string]any)
+	enabled, ok := section["enabled"].(bool)
+	return ok && !enabled, nil
+}
+
+// SharedVectorSetup returns an in-memory setup when the current settings permit it.
+func (c *Config) SharedVectorSetup() (Config, bool, error) {
+	var candidate Config
+	eligible := false
+	err := c.withConfigLock(func() error {
+		existing, err := c.readConfigMap()
+		if err != nil {
+			return err
+		}
+		if c.Vector.Embeddings.Servers != nil || c.Vector.Embeddings.DefaultServer != "" || (c.Vector.Embeddings.Model != "" && c.Vector.Embeddings.Model != defaultNomicModel) {
+			return nil
+		}
+		section, _ := existing["vector"].(map[string]any)
+		if enabled, ok := section["enabled"].(bool); ok && !enabled {
+			return nil
+		}
+		embeddings, _ := section["embeddings"].(map[string]any)
+		if model, _ := embeddings["model"].(string); model != "" && model != defaultNomicModel {
+			return nil
+		}
+		if _, ok := embeddings["servers"]; ok {
+			return nil
+		}
+		if _, ok := embeddings["default_server"]; ok {
+			return nil
+		}
+		pg, err := c.ResolvePGTargets()
+		if err != nil {
+			return err
+		}
+		for _, target := range pg {
+			if target.Config.URL != "" && target.Config.PushVectorsEnabled() {
+				return nil
+			}
+		}
+		ch, err := c.ResolveClickHouseTargets()
+		if err != nil {
+			return err
+		}
+		for _, target := range ch {
+			if target.Config.URL != "" && target.Config.PushVectorsEnabled() {
+				return nil
+			}
+		}
+		_, candidate, err = c.vectorSetupCandidate()
+		if err != nil {
+			return err
+		}
+		candidate.Vector.DBPath = c.Vector.DBPath
+		name, server, err := candidate.Vector.Embeddings.Server("")
+		if err != nil {
+			return err
+		}
+		server.Local = true
+		candidate.Vector.Embeddings.Servers = map[string]VectorEmbeddingsServerConfig{name: server}
+		eligible = true
+		return nil
+	})
+	return candidate, eligible, err
+}
+
 // SaveVectorSetup records the selected action while keeping omitted defaults omitted.
 func (c *Config) SaveVectorSetup() error {
 	return c.withConfigLock(func() error {

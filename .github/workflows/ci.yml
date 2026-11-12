@@ -1126,7 +1126,7 @@ jobs:
           docker stop usage-test-standby || true
           docker rm usage-test-standby || true
 
-      - name: Run CockroachDB schema setup test
+      - name: Run CockroachDB integration tests
         if: matrix.cockroach
         run: |
           docker run -d --name cockroach-schema -p 127.0.0.1:26257:26257 --entrypoint /cockroach/cockroach cockroachdb/cockroach:v25.4.6 start-single-node --insecure --listen-addr=0.0.0.0:26257
@@ -1135,6 +1135,9 @@ jobs:
             sleep 1
           done
           make test-postgres-core-heavy-ci POSTGRES_CORE_HEAVY_TEST=TestCockroachSchemaAndCodexScope
+          mv gotestsum/postgres-core-heavy.json gotestsum/cockroach-schema.json
+          if [ -f gotestsum/postgres-core-heavy-reruns.txt ]; then mv gotestsum/postgres-core-heavy-reruns.txt gotestsum/cockroach-schema-reruns.txt; fi
+          make test-postgres-core-heavy-ci POSTGRES_CORE_HEAVY_TEST=TestPushSessionWithCodexScope
         env:
           TEST_PG_URL: postgres://root@127.0.0.1:26257/defaultdb?sslmode=disable
 
@@ -1177,11 +1180,13 @@ jobs:
           if-no-files-found: ignore
 
       - name: Upload gotestsum postgres-core-heavy results
-        if: failure() || github.run_attempt > 1 || hashFiles('gotestsum/postgres-core-heavy-reruns.txt') != ''
+        if: failure() || github.run_attempt > 1 || hashFiles('gotestsum/postgres-core-heavy-reruns.txt', 'gotestsum/cockroach-schema-reruns.txt') != ''
         uses: actions/upload-artifact@v7.0.2
         with:
           name: gotestsum-postgres-core-heavy-${{ matrix.name }}-attempt-${{ github.run_attempt }}
-          path: gotestsum/postgres-core-heavy.json
+          path: |
+            gotestsum/postgres-core-heavy.json
+            gotestsum/cockroach-schema.json
           retention-days: 14
           if-no-files-found: ignore
 
