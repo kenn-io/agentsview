@@ -1153,7 +1153,8 @@ func TestUsageJournaledConcurrentWriter(t *testing.T) {
 		assert.GreaterOrEqual(t, got.Totals.InputTokens, 99+ordinal)
 		assert.LessOrEqual(t, got.Totals.InputTokens, 100+ordinal)
 		before := journaled.Load()
-		warm, err := database.GetDailyUsage(t.Context(), filter)
+		// Read the journal to verify the completed notification's install.
+		warm, err := database.getDailyUsageUncached(t.Context(), filter)
 		require.NoError(t, err)
 		assert.Equal(t, 100+ordinal, warm.Totals.InputTokens)
 		assert.Equal(t, before+1, journaled.Load(), "a completed notification must leave a journaled warm read")

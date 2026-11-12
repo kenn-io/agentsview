@@ -15,27 +15,26 @@ func newDailyUsageMemo() kept.Memo[DailyUsageResult] {
 
 // dailyUsageVersion reads the archive change tokens from one SQLite snapshot.
 func (db *DB) dailyUsageVersion(ctx context.Context) string {
-	var id, usage, pricing, project string
+	var id, usage, project string
 	var cursor int64
 	err := db.getReader().QueryRowContext(ctx, `SELECT
 		COALESCE((SELECT value FROM archive_metadata WHERE key = ?), ''),
 		COALESCE((SELECT value FROM archive_metadata WHERE key = ?), '0'),
 		COALESCE((SELECT value FROM archive_metadata WHERE key = ?), '0'),
-		COALESCE((SELECT value FROM archive_metadata WHERE key = ?), '0'),
 		COALESCE((SELECT MAX(id) FROM cursor_usage_events), 0)`,
 		archiveMetadataDatabaseIDKey, archiveMetadataUsageChangeRevisionKey,
-		archiveMetadataUsagePricingRevisionKey, archiveMetadataProjectIdentityRevisionKey,
-	).Scan(&id, &usage, &pricing, &project, &cursor)
+		archiveMetadataProjectIdentityRevisionKey,
+	).Scan(&id, &usage, &project, &cursor)
 	if err != nil || strings.TrimSpace(id) == "" || cursor < 0 {
 		return ""
 	}
-	for _, raw := range []string{usage, pricing, project} {
+	for _, raw := range []string{usage, project} {
 		n, err := strconv.ParseInt(strings.TrimSpace(raw), 10, 64)
 		if err != nil || n < 0 {
 			return ""
 		}
 	}
-	return fmt.Sprintf("%q:%s:%s:%s:%d", id, usage, pricing, project, cursor)
+	return fmt.Sprintf("%q:%s:%s:%d", id, usage, project, cursor)
 }
 
 func (db *DB) keptDailyUsage(ctx context.Context, filter UsageFilter) (DailyUsageResult, error) {
