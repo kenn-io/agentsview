@@ -426,6 +426,7 @@ func TestDetectTransportRoutesStartupProgress(t *testing.T) {
 }
 
 func TestEnsureBackgroundServeRoutesStartupProgress(t *testing.T) {
+	t.Setenv("PATH", t.TempDir())
 	dir := daemonRuntimeDir(t)
 	require.NoError(t, os.MkdirAll(dir, 0o700))
 	var progress bytes.Buffer
@@ -438,7 +439,8 @@ func TestEnsureBackgroundServeRoutesStartupProgress(t *testing.T) {
 		if _, err := WriteDaemonRuntime(dir, host, port, version, false); err != nil {
 			return nil, "", err
 		}
-		child := exec.CommandContext(ctx, "sleep", "30")
+		child := exec.CommandContext(ctx, os.Args[0], "-test.run=^TestEnsureBackgroundServeHelperProcess$")
+		child.Env = append(os.Environ(), "AGENTSVIEW_STARTUP_PROGRESS_HELPER=1")
 		if err := child.Start(); err != nil {
 			return nil, "", err
 		}
@@ -450,6 +452,12 @@ func TestEnsureBackgroundServeRoutesStartupProgress(t *testing.T) {
 	_, err := ensureBackgroundServe(ctx, &cfg, time.Second, false)
 	require.NoError(t, err)
 	assert.Contains(t, progress.String(), "Starting agentsview")
+}
+
+func TestEnsureBackgroundServeHelperProcess(t *testing.T) {
+	if os.Getenv("AGENTSVIEW_STARTUP_PROGRESS_HELPER") == "1" {
+		time.Sleep(30 * time.Second) //nolint:kennlint // sleeptest: the child remains alive until the parent stops it
+	}
 }
 
 func TestEnsureTransport_ReadIntentStartsDaemon(t *testing.T) {

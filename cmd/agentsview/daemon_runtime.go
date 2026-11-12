@@ -3,13 +3,12 @@
 package main
 
 import (
-	"bytes"
 	"cmp"
 	"context"
+	stdjson "encoding/json"
 	"encoding/json/v2"
 	"errors"
 	"fmt"
-	"io"
 	"net"
 	"net/http"
 	"net/url"
@@ -582,66 +581,39 @@ func probeRuntime(
 	if timeout == 0 {
 		timeout = time.Second
 	}
-	ctx, cancel := context.WithTimeout(ctx, timeout)
-	defer cancel()
-
 	client := ep.HTTPClient(daemon.HTTPClientOptions{
 		Timeout:           timeout,
 		DisableKeepAlives: true,
 	})
-	if authToken != "" {
-		client.Transport = bearerAuthTransport{token: authToken, base: client.Transport}
-	}
-	var body bytes.Buffer
-	client.Transport = pingCaptureTransport{base: client.Transport, body: &body}
-	info, err := daemon.ProbeHTTP(ctx, client, ep.BaseURL(), opts)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, ep.BaseURL()+opts.Path, nil)
 	if err != nil {
 		return runtimePing{}, err
 	}
-	var outcome struct {
-		BackfillError string `json:"project_identity_backfill_error"`
+	if authToken != "" {
+		req.Header.Set("Authorization", "Bearer "+authToken)
 	}
-	if err := json.Unmarshal(body.Bytes(), &outcome); err != nil {
+	resp, err := client.Do(req)
+	if err != nil {
 		return runtimePing{}, err
 	}
-	return runtimePing{PingInfo: info, BackfillError: outcome.BackfillError}, nil
-}
-
-type pingCaptureTransport struct {
-	base http.RoundTripper
-	body *bytes.Buffer
-}
-
-func (t pingCaptureTransport) RoundTrip(req *http.Request) (*http.Response, error) {
-	base := t.base
-	if base == nil {
-		base = http.DefaultTransport
+	defer func() { _ = resp.Body.Close() }()
+	if resp.StatusCode != http.StatusOK {
+		return runtimePing{}, fmt.Errorf("daemon ping returned %d", resp.StatusCode)
 	}
-	resp, err := base.RoundTrip(req)
-	if err == nil {
-		resp.Body = struct {
-			io.Reader
-			io.Closer
-		}{io.TeeReader(resp.Body, t.body), resp.Body}
+	var info struct {
+		daemon.PingInfo
+		BackfillError string `json:"project_identity_backfill_error"`
 	}
-	return resp, err
-}
-
-type bearerAuthTransport struct {
-	token string
-	base  http.RoundTripper
-}
-
-func (t bearerAuthTransport) RoundTrip(
-	req *http.Request,
-) (*http.Response, error) {
-	clone := req.Clone(req.Context())
-	clone.Header.Set("Authorization", "Bearer "+t.token)
-	base := t.base
-	if base == nil {
-		base = http.DefaultTransport
+	if err := stdjson.NewDecoder(resp.Body).Decode(&info); err != nil {
+		return runtimePing{}, fmt.Errorf("decode daemon ping: %w", err)
 	}
-	return base.RoundTrip(clone)
+	if !info.OK {
+		return runtimePing{}, errors.New("daemon ping returned ok=false")
+	}
+	if opts.ExpectedService != "" && info.Service != opts.ExpectedService {
+		return runtimePing{}, fmt.Errorf("unexpected daemon service %q", info.Service)
+	}
+	return runtimePing{PingInfo: info.PingInfo, BackfillError: info.BackfillError}, nil
 }
 
 func daemonRuntimeFromRecord(rec daemon.RuntimeRecord) *DaemonRuntime {
