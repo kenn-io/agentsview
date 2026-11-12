@@ -30,7 +30,11 @@ func (s *Store) deferUsage(ctx context.Context, f db.UsageFilter) bool {
 	if s.usageCache == nil || !s.usageCache.DeferRead(f) {
 		return false
 	}
-	return !s.runtimeState().usageIdentityDenied.Load() || snapshotUsageVersion(ctx, s.pg, 0) == ""
+	if s.runtimeState().usageIdentityDenied.Load() {
+		return false
+	}
+	var standby bool
+	return s.pg.QueryRowContext(ctx, `SELECT pg_is_in_recovery()`).Scan(&standby) == nil && !standby
 }
 
 // standbyMarker returns standbyUsageMarker when the connected server is a
