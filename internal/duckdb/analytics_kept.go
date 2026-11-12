@@ -2,6 +2,7 @@ package duckdb
 
 import (
 	"context"
+	jsonv1 "encoding/json"
 	"encoding/json/v2"
 	"fmt"
 
@@ -27,7 +28,7 @@ func keptAnalytics[T any](ctx context.Context, s *Store, panel string, f db.Anal
 		if err != nil {
 			return nil, err
 		}
-		return json.Marshal(value, json.FormatNilSliceAsNull(true), json.FormatNilMapAsNull(true))
+		return json.Marshal(value, json.FormatNilSliceAsNull(true), json.FormatNilMapAsNull(true), jsonv1.OmitEmptyWithLegacySemantics(true))
 	})
 	var result T
 	if err != nil {

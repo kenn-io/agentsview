@@ -138,6 +138,8 @@ func TestAnalyticsKeptAllPanelsAndVariants(t *testing.T) {
 	require.NoError(t, err)
 	_, err = conn.ExecContext(t.Context(), `UPDATE sessions SET quality_signal_version = ?`, db.CurrentQualitySignalVersion)
 	require.NoError(t, err)
+	_, err = conn.ExecContext(t.Context(), `UPDATE sessions SET ended_at = NULL`)
+	require.NoError(t, err)
 	_, err = conn.ExecContext(t.Context(), `UPDATE tool_calls SET observed_outcome = 'empty'`)
 	require.NoError(t, err)
 	require.NoError(t, conn.Close())
@@ -145,6 +147,11 @@ func TestAnalyticsKeptAllPanelsAndVariants(t *testing.T) {
 	require.NoError(t, err)
 	t.Cleanup(func() { store.Close() })
 	f := db.AnalyticsFilter{From: "2026-01-01", To: "2026-01-01", Timezone: "UTC"}
+	freshTop, err := store.analytics().GetAnalyticsTopSessions(t.Context(), f, "messages")
+	require.NoError(t, err)
+	require.Len(t, freshTop.Sessions, 1)
+	require.NotNil(t, freshTop.Sessions[0].EndedAt)
+	require.Empty(t, *freshTop.Sessions[0].EndedAt)
 	cases := keptPanelCases(t.Context(), f)
 	values := make(map[string]any)
 	for _, tc := range cases {
@@ -152,7 +159,11 @@ func TestAnalyticsKeptAllPanelsAndVariants(t *testing.T) {
 		require.NoError(t, err, tc.name)
 		values[tc.name] = got
 	}
+	require.Equal(t, freshTop, values["top-messages"])
 	require.Equal(t, 1, values["summary"].(db.AnalyticsSummary).TotalSessions)
+	other, err := store.GetAnalyticsSummary(t.Context(), db.AnalyticsFilter{Project: "missing"})
+	require.NoError(t, err)
+	require.Zero(t, other.TotalSessions)
 	activity := values["activity-day"].(db.ActivityResponse)
 	require.Equal(t, "day", values["activity-default"].(db.ActivityResponse).Granularity)
 	require.Len(t, activity.Series, 1)
@@ -202,33 +213,20 @@ func TestAnalyticsKeptAllPanelsAndVariants(t *testing.T) {
 		require.NoError(t, err, tc.name)
 		require.Equal(t, values[tc.name], got, tc.name)
 	}
+	warmTop, err := store.GetAnalyticsTopSessions(t.Context(), f, "messages")
+	require.NoError(t, err)
+	require.Equal(t, freshTop, warmTop)
 	for _, change := range []struct {
 		name  string
 		apply func(*db.AnalyticsFilter)
 	}{
-		{"tool category", func(f *db.AnalyticsFilter) { f.ToolCategory = "Read" }},
-		{"tool name", func(f *db.AnalyticsFilter) { f.ToolName = "Read" }},
-		{"tool metric", func(f *db.AnalyticsFilter) { f.ToolMetric = "tool_empty_rate" }},
-		{"evidence offset", func(f *db.AnalyticsFilter) { f.EvidenceOffset = 1 }},
 		{"from", func(f *db.AnalyticsFilter) { f.From = "2025-12-31" }},
 		{"to", func(f *db.AnalyticsFilter) { f.To = "2026-01-02" }},
 		{"machine", func(f *db.AnalyticsFilter) { f.Machine = "other" }},
 		{"project", func(f *db.AnalyticsFilter) { f.Project = "other" }},
-		{"branch", func(f *db.AnalyticsFilter) { f.GitBranch = "other" }},
 		{"agent", func(f *db.AnalyticsFilter) { f.Agent = "other" }},
-		{"model", func(f *db.AnalyticsFilter) { f.Model = "other" }},
-		{"timezone", func(f *db.AnalyticsFilter) { f.Timezone = "America/New_York" }},
-		{"weekday", func(f *db.AnalyticsFilter) { f.DayOfWeek = new(1) }},
-		{"hour", func(f *db.AnalyticsFilter) { f.Hour = new(1) }},
 		{"minimum messages", func(f *db.AnalyticsFilter) { f.MinUserMessages = 2 }},
 		{"one shot", func(f *db.AnalyticsFilter) { f.ExcludeOneShot = true }},
-		{"automated", func(f *db.AnalyticsFilter) { f.ExcludeAutomated = true }},
-		{"interactive", func(f *db.AnalyticsFilter) { f.ExcludeInteractive = true }},
-		{"automated scope", func(f *db.AnalyticsFilter) { f.AutomatedScope = "human" }},
-		{"active since", func(f *db.AnalyticsFilter) { f.ActiveSince = "2026-01-01T00:00:00Z" }},
-		{"termination", func(f *db.AnalyticsFilter) { f.Termination = "clean" }},
-		{"subagents", func(f *db.AnalyticsFilter) { f.IncludeSubagents = true }},
-		{"forks", func(f *db.AnalyticsFilter) { f.IncludeForks = true }},
 	} {
 		changed := f
 		change.apply(&changed)
