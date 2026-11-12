@@ -11,7 +11,6 @@ const {
   mockRouter,
   mockCopyToClipboard,
   mockEmbeddingsService,
-  mockMeaningControl,
 } = vi.hoisted(() => ({
   mockUi: {
     activeModal: "commandPalette" as "commandPalette" | null,
@@ -65,25 +64,8 @@ const {
   mockEmbeddingsService: {
     getApiV1EmbeddingsStatus: vi.fn(),
     postApiV1EmbeddingsBuild: vi.fn(),
-    postApiV1EmbeddingsSetup: vi.fn(),
   },
-  mockMeaningControl: { enabled: false, started: false },
 }));
-
-vi.mock("../shared/SearchByMeaningControl.svelte", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../shared/SearchByMeaningControl.svelte")>();
-  return {
-    default: (
-      anchor: Parameters<typeof actual.default>[0],
-      props: Parameters<typeof actual.default>[1],
-    ) => {
-      if (!mockMeaningControl.enabled) return actual.default(anchor, props);
-      const button = document.createElement("button");
-      button.onclick = () => props.onchange?.(mockMeaningControl.started);
-      (anchor as unknown as Comment).before(button);
-    },
-  };
-});
 
 vi.mock("../../stores/ui.svelte.js", () => ({
   ui: mockUi,
@@ -203,7 +185,6 @@ describe("CommandPalette", () => {
     mockEmbeddingsService.getApiV1EmbeddingsStatus.mockReset();
     mockEmbeddingsService.getApiV1EmbeddingsStatus.mockImplementation(() => new Promise(() => {}));
     mockEmbeddingsService.postApiV1EmbeddingsBuild.mockReset();
-    mockEmbeddingsService.postApiV1EmbeddingsSetup.mockReset();
     mockSessions.activeSessionId = null;
     mockSessions.deselectSession.mockImplementation(() => {
       mockSessions.activeSessionId = null;
@@ -578,43 +559,6 @@ describe("CommandPalette", () => {
       unmount(component);
     },
   );
-
-  it.each([
-    { result: "provider-changed", name: "refreshes status after the setup provider changes" },
-    { result: "started", name: "switches to semantic search after setup starts" },
-  ])("$name", async ({ result }) => {
-    const setup = {
-      enabled: false,
-      action: "turn-on",
-      provider: "ollama",
-      missing_bytes: 0,
-      busy: false,
-      installing: false,
-      downloaded_bytes: 0,
-      total_bytes: 0,
-    };
-    mockEmbeddingsService.getApiV1EmbeddingsStatus
-      .mockResolvedValueOnce({ running: false, setup })
-      .mockResolvedValueOnce({ running: false, setup });
-    mockMeaningControl.enabled = true;
-    mockMeaningControl.started = result === "started";
-    const component = mount(CommandPalette, { target: document.body });
-    try {
-      await enterSearchQuery();
-      const hint = await tickUntil(".meaning-hint button");
-      hint.click();
-      for (let i = 0; i < 20; i++) await tick();
-      if (result === "provider-changed") {
-        expect(mockSearchStore.setMode).not.toHaveBeenCalled();
-        expect(mockEmbeddingsService.getApiV1EmbeddingsStatus).toHaveBeenCalledTimes(2);
-      } else {
-        expect(mockSearchStore.setMode).toHaveBeenCalledWith("semantic");
-      }
-    } finally {
-      unmount(component);
-      mockMeaningControl.enabled = false;
-    }
-  });
 
   it("shows sort only for full-text query results and activates it through the rendered button", async () => {
     mockSearchStore.results = [makeSearchResult()];

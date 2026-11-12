@@ -29,18 +29,6 @@ the required download through that button, shows download and indexing progress,
 and starts semantic search without a restart. Full-text search remains available
 during indexing.
 
-Turning on the built-in server records a shared choice after setup succeeds.
-Other apps using Kit can use that choice, and AgentsView can use it at startup
-to enable search and download missing built-in server files when it has no
-enabled setup. Set `vector.enabled = false` in `config.toml` to opt out of the
-shared choice; removing the `[vector]` section does not. Separately configured
-search keeps its settings. Automatic setup also waits for an explicit
-`push_vectors` setting on each configured PostgreSQL or ClickHouse target.
-
-An enabled configuration with `local = true` starts indexing at startup using
-installed server files. It does not record a shared choice. If files are missing,
-use **Turn on** to approve the download, even if a shared choice exists.
-
 For CLI setup, run `agentsview index embeddings build`. AgentsView uses a
 running Ollama server with Nomic or Kit's shared local server. If the local
 server needs files, the CLI asks before downloading them. Search and automatic
@@ -1013,18 +1001,8 @@ indexing. Replica and DuckDB servers have no local setup control.
 
 `GET /api/v1/embeddings/status` includes `setup` when browser setup is
 available. `POST /api/v1/embeddings/setup` accepts `approved_bytes`, the
-download size disclosed to the user, and required `expected_provider` from the
-status shown to the user. It returns `202` with `{"started":true}` when setup is
-accepted. A concurrent setup or a changed provider returns `409`.
-
-The setup contract requires daemon API version 16. The CLI checks the daemon's
-API version and asks for a restart when they differ. After upgrading, restart
-the daemon before using the new CLI.
-
-Saving built-in setup persists the resolved model recipe and local provider
-choice, so future defaults do not silently replace that setup. If installed
-model files are missing, use **Turn on** to download them again. Setup can show
-**On** while indexing is queued and has yet to start.
+download size disclosed to the user. It returns `202` with `{"started":true}`
+when setup is accepted. A concurrent setup returns `409`.
 
 Approval covers at most `approved_bytes`. If installation verifies that a larger
 download is required, it declines the download and reports the verified size in

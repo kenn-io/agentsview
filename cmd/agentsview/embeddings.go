@@ -449,7 +449,7 @@ func runEmbeddingsBuild(
 		if tr.Mode != transportHTTP || tr.ReadOnly {
 			return errors.New("search setup requires a writable daemon; start it with `agentsview daemon start` and retry `agentsview index embeddings build`, or use Settings → Embeddings → Turn on")
 		}
-		cfg.Vector.Embeddings, err = cfg.VectorSetupEmbeddings(false)
+		cfg.Vector.Embeddings, err = cfg.VectorSetupEmbeddings()
 		if err != nil {
 			return err
 		}
@@ -730,14 +730,14 @@ func buildViaDaemon(
 			return err
 		}
 	}
-	return pollDaemonBuildStatus(ctx, out, client, false, false)
+	return pollDaemonBuildStatus(ctx, out, client, false)
 }
 
 // pollDaemonBuildStatus polls the daemon's build status at
 // embeddingsPollInterval, printing a progress line on every poll while the
 // build is running, until it reports Running == false.
 func pollDaemonBuildStatus(
-	ctx context.Context, out io.Writer, client embeddingsDaemonClient, setup, setupOnly bool,
+	ctx context.Context, out io.Writer, client embeddingsDaemonClient, setup bool,
 ) error {
 	var progress buildProgressPrinter
 	for {
@@ -752,9 +752,6 @@ func pollDaemonBuildStatus(
 			progress.printDownload(out, status.Setup.DownloadedBytes, status.Setup.TotalBytes)
 		}
 		if !setup || status.Setup == nil || !status.Setup.Busy {
-			if setupOnly {
-				return nil
-			}
 			if !status.Running {
 				return finalizeBuildStatus(out, status)
 			}
@@ -1094,7 +1091,7 @@ func setupEmbeddingsBuild(ctx context.Context, out io.Writer, in *bufio.Scanner,
 	if !confirmScanned(in, out, question) {
 		return errors.New("search setup declined")
 	}
-	if err := client.startSetup(ctx, approved, setup.Provider); err != nil {
+	if err := client.startSetup(ctx, approved); err != nil {
 		if status, statusErr := client.status(ctx); statusErr == nil {
 			if handled, joinErr := joinActiveSetup(ctx, out, cfg, client, status); handled {
 				return joinErr
@@ -1102,23 +1099,14 @@ func setupEmbeddingsBuild(ctx context.Context, out io.Writer, in *bufio.Scanner,
 		}
 		return err
 	}
-	return pollDaemonBuildStatus(ctx, out, client, true, false)
+	return pollDaemonBuildStatus(ctx, out, client, true)
 }
 
 func joinActiveSetup(ctx context.Context, out io.Writer, cfg config.Config, client embeddingsDaemonClient, status vector.BuildStatus) (bool, error) {
 	setup := status.Setup
 	if setup != nil && setup.Busy {
 		fmt.Fprintln(out, "Search setup is already running.")
-		if err := pollDaemonBuildStatus(ctx, out, client, true, true); err != nil {
-			return true, err
-		}
-		var err error
-		if status, err = client.status(ctx); err != nil {
-			return true, err
-		}
-		if setup = status.Setup; setup == nil || !setup.Enabled || setup.Action != "" {
-			return true, errors.New("search by meaning is off after setup")
-		}
+		return true, pollDaemonBuildStatus(ctx, out, client, true)
 	}
 	if setup != nil && setup.Enabled && setup.Action == "" {
 		var err error
@@ -1135,13 +1123,12 @@ func joinActiveSetup(ctx context.Context, out io.Writer, cfg config.Config, clie
 	return false, nil
 }
 
-func (c embeddingsDaemonClient) startSetup(ctx context.Context, approved int64, provider string) error {
+func (c embeddingsDaemonClient) startSetup(ctx context.Context, approved int64) error {
 	api, err := apiclient.NewHTTPClient(c.baseURL, c.token, embeddingsDaemonHTTPClient)
 	if err != nil {
 		return err
 	}
-	expected := apiclient.EmbeddingsSetupInputBodyExpectedProvider(provider)
-	response, err := api.PostAPIV1EmbeddingsSetupWithResponse(ctx, &apiclient.PostAPIV1EmbeddingsSetupRequestOptions{Body: &apiclient.EmbeddingsSetupInputBody{ApprovedBytes: &approved, ExpectedProvider: expected}})
+	response, err := api.PostAPIV1EmbeddingsSetupWithResponse(ctx, &apiclient.PostAPIV1EmbeddingsSetupRequestOptions{Body: &apiclient.EmbeddingsSetupInputBody{ApprovedBytes: &approved}})
 	if response == nil {
 		return err
 	}

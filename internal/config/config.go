@@ -4226,14 +4226,6 @@ func (c *Config) SaveGithubToken(token string) error {
 // opposed to failures reading or locking the config file.
 var ErrInvalidVectorSetup = errors.New("invalid vector setup")
 
-// ErrVectorSetupIneligible means automatic setup found settings or an export
-// target that requires a manual choice.
-var ErrVectorSetupIneligible = errors.New("automatic vector setup is ineligible")
-
-// ErrVectorSetupProviderChanged means the selected provider changed during
-// setup.
-var ErrVectorSetupProviderChanged = errors.New("embeddings provider changed during setup")
-
 type invalidVectorSetupError struct{ error }
 
 func (e invalidVectorSetupError) Unwrap() error { return e.error }
@@ -4242,10 +4234,10 @@ func (invalidVectorSetupError) Is(target error) bool { return target == ErrInval
 
 // VectorSetupEmbeddings returns the validated embeddings recipe SaveVectorSetup
 // would save now, so status and activation select the same provider.
-func (c *Config) VectorSetupEmbeddings(automatic bool) (VectorEmbeddingsConfig, error) {
+func (c *Config) VectorSetupEmbeddings() (VectorEmbeddingsConfig, error) {
 	var embeddings VectorEmbeddingsConfig
 	err := c.withConfigLock(func() error {
-		_, candidate, err := c.vectorSetupCandidate(automatic)
+		_, candidate, err := c.vectorSetupCandidate()
 		if err == nil {
 			embeddings = candidate.Vector.Embeddings
 		}
@@ -4254,69 +4246,78 @@ func (c *Config) VectorSetupEmbeddings(automatic bool) (VectorEmbeddingsConfig, 
 	return embeddings, err
 }
 
-// SaveVectorSetup saves an enabled setup if its provider is still selected.
-// Automatic setup also rechecks whether vector exports need an explicit choice.
-func (c *Config) SaveVectorSetup(approved VectorEmbeddingsServerConfig, automatic bool) (Config, error) {
-	var saved Config
+// SharedVectorSetup returns an in-memory setup when the current settings permit it.
+func (c *Config) SharedVectorSetup() (Config, bool, error) {
+	var candidate Config
+	eligible := false
 	err := c.withConfigLock(func() error {
-		existing, candidate, err := c.vectorSetupCandidate(automatic)
+		existing, err := c.readConfigMap()
 		if err != nil {
 			return err
 		}
-		_, selected, err := candidate.Vector.Embeddings.Server("")
+		if c.Vector.Embeddings.Servers != nil || c.Vector.Embeddings.DefaultServer != "" || (c.Vector.Embeddings.Model != "" && c.Vector.Embeddings.Model != defaultNomicModel) {
+			return nil
+		}
+		section, _ := existing["vector"].(map[string]any)
+		if enabled, ok := section["enabled"].(bool); ok && !enabled {
+			return nil
+		}
+		embeddings, _ := section["embeddings"].(map[string]any)
+		if model, _ := embeddings["model"].(string); model != "" && model != defaultNomicModel {
+			return nil
+		}
+		if _, ok := embeddings["servers"]; ok {
+			return nil
+		}
+		if _, ok := embeddings["default_server"]; ok {
+			return nil
+		}
+		pg, err := c.ResolvePGTargets()
 		if err != nil {
 			return err
 		}
-		if selected.Endpoint != approved.Endpoint || selected.Local && !approved.Local {
-			return ErrVectorSetupProviderChanged
+		for _, target := range pg {
+			if target.Config.URL != "" && target.Config.PushVectorsEnabled() {
+				return nil
+			}
 		}
-		if approved.Local {
-			recipe := candidate.Vector.Embeddings
-			name, server, err := recipe.Server("")
-			if err != nil {
-				return err
-			}
-			embeddings, err := configTable(existing["vector"].(map[string]any), "embeddings")
-			if err != nil {
-				return err
-			}
-			if model, _ := embeddings["model"].(string); model == "" {
-				embeddings["model"] = recipe.Model
-				for key, value := range map[string]any{
-					"dimension": recipe.Dimension, "max_input_chars": recipe.MaxInputChars,
-					"model_context_tokens": recipe.ModelContextTokens, "query_prefix": recipe.QueryPrefix,
-					"document_prefix": recipe.DocumentPrefix,
-				} {
-					if _, ok := embeddings[key]; !ok {
-						embeddings[key] = value
-					}
-				}
-			}
-			servers, err := configTable(embeddings, "servers")
-			if err != nil {
-				return err
-			}
-			selected, err := configTable(servers, name)
-			if err != nil {
-				return err
-			}
-			selected["local"] = true
-			server.Local = true
-			if candidate.Vector.Embeddings.Servers == nil {
-				candidate.Vector.Embeddings.Servers = make(map[string]VectorEmbeddingsServerConfig)
-			}
-			candidate.Vector.Embeddings.Servers[name] = server
-		}
-		if err := c.writeConfigMap(existing); err != nil {
+		ch, err := c.ResolveClickHouseTargets()
+		if err != nil {
 			return err
 		}
-		saved = candidate
+		for _, target := range ch {
+			if target.Config.URL != "" && target.Config.PushVectorsEnabled() {
+				return nil
+			}
+		}
+		_, candidate, err = c.vectorSetupCandidate()
+		if err != nil {
+			return err
+		}
+		name, server, err := candidate.Vector.Embeddings.Server("")
+		if err != nil {
+			return err
+		}
+		server.Local = true
+		candidate.Vector.Embeddings.Servers = map[string]VectorEmbeddingsServerConfig{name: server}
+		eligible = true
 		return nil
 	})
-	return saved, err
+	return candidate, eligible, err
 }
 
-func (c *Config) vectorSetupCandidate(automatic bool) (map[string]any, Config, error) {
+// SaveVectorSetup records the selected action while keeping omitted defaults omitted.
+func (c *Config) SaveVectorSetup() error {
+	return c.withConfigLock(func() error {
+		existing, _, err := c.vectorSetupCandidate()
+		if err != nil {
+			return err
+		}
+		return c.writeConfigMap(existing)
+	})
+}
+
+func (c *Config) vectorSetupCandidate() (map[string]any, Config, error) {
 	existing, err := c.readConfigMap()
 	if err != nil {
 		if _, ok := errors.AsType[toml.ParseError](err); ok {
@@ -4331,16 +4332,6 @@ func (c *Config) vectorSetupCandidate(automatic bool) (map[string]any, Config, e
 	if section == nil {
 		section = make(map[string]any)
 	}
-	if automatic {
-		enabled, setEnabled := section["enabled"].(bool)
-		embeddings, _ := section["embeddings"].(map[string]any)
-		model, _ := embeddings["model"].(string)
-		_, servers := embeddings["servers"]
-		_, defaultServer := embeddings["default_server"]
-		if (setEnabled && !enabled) || (model != "" && model != defaultNomicModel) || servers || defaultServer {
-			return nil, Config{}, ErrVectorSetupIneligible
-		}
-	}
 	section["enabled"] = true
 	existing["vector"] = section
 	encoded, err := toml.Marshal(existing)
@@ -4351,7 +4342,6 @@ func (c *Config) vectorSetupCandidate(automatic bool) (map[string]any, Config, e
 	if err != nil {
 		return nil, Config{}, err
 	}
-	candidate.loadEnv()
 	candidate.DataDir = c.DataDir
 	if err := candidate.applyConfigTOML(string(encoded)); err != nil {
 		return nil, Config{}, invalidVectorSetupError{err}
@@ -4359,38 +4349,5 @@ func (c *Config) vectorSetupCandidate(automatic bool) (map[string]any, Config, e
 	if err := candidate.Vector.Validate(); err != nil {
 		return nil, Config{}, invalidVectorSetupError{err}
 	}
-	if automatic {
-		blocked, err := candidate.HasImplicitVectorPush()
-		if err != nil {
-			return nil, Config{}, err
-		}
-		if blocked {
-			return nil, Config{}, ErrVectorSetupIneligible
-		}
-	}
 	return existing, candidate, nil
-}
-
-// HasImplicitVectorPush reports whether a configured PostgreSQL or ClickHouse
-// target will export vectors without an explicit push_vectors setting.
-func (c *Config) HasImplicitVectorPush() (bool, error) {
-	pg, err := c.ResolvePGTargets()
-	if err != nil {
-		return false, err
-	}
-	for _, target := range pg {
-		if target.Config.URL != "" && target.Config.PushVectors == nil {
-			return true, nil
-		}
-	}
-	clickhouse, err := c.ResolveClickHouseTargets()
-	if err != nil {
-		return false, err
-	}
-	for _, target := range clickhouse {
-		if target.Config.URL != "" && target.Config.PushVectors == nil {
-			return true, nil
-		}
-	}
-	return false, nil
 }

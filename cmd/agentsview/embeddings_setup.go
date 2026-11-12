@@ -5,7 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"log"
-	"math"
 	"net/url"
 	"sync"
 
@@ -39,6 +38,25 @@ type liveVectorServing struct {
 
 func newLiveVectorServing(ctx context.Context, cfg config.Config, database *db.DB, idle *server.IdleTracker, reload func() (config.Config, error)) (*liveVectorServing, error) {
 	ctx, cancel := context.WithCancel(ctx)
+	automatic := false
+	if !cfg.Vector.Enabled && cfg.DeploymentEmbeddings == nil && !cfg.ArchiveContent.UsageOnly() && !database.ArchiveContent().UsageOnly() {
+		chosen, err := embedlocal.ChoiceRecorded()
+		if err != nil {
+			log.Printf("search by meaning: read shared choice: %v", err)
+		} else if chosen {
+			status, err := inspectLocalEmbeddings(ctx, embedlocal.Options{SkipOllama: true})
+			if err != nil {
+				log.Printf("search by meaning: inspect shared files: %v", err)
+			} else if status.DownloadBytes == 0 {
+				candidate, eligible, err := cfg.SharedVectorSetup()
+				if err != nil {
+					log.Printf("search by meaning: shared setup: %v", err)
+				} else if eligible {
+					cfg.Vector, automatic = candidate.Vector, true
+				}
+			}
+		}
+	}
 	serving, err := setupVectorServing(ctx, cfg, database, idle)
 	if err != nil {
 		cancel()
@@ -50,65 +68,10 @@ func newLiveVectorServing(ctx context.Context, cfg config.Config, database *db.D
 		push: &vectorPushSource{cfg: cfg},
 	}
 	v.startSchedulers()
-	v.startSharedChoice()
+	if automatic && serving.Scheduler != nil {
+		serving.Scheduler.Notify()
+	}
 	return v, nil
-}
-
-func (v *liveVectorServing) startSharedChoice() {
-	if v.cfg.ArchiveContent.UsageOnly() || v.database.ArchiveContent().UsageOnly() || v.cfg.DeploymentEmbeddings != nil {
-		log.Print("search by meaning: shared choice skipped for archive or deployment configuration")
-		return
-	}
-	var approvedBytes int64
-	embeddings := v.cfg.Vector.Embeddings
-	if !v.cfg.Vector.Enabled {
-		chosen, err := embedlocal.ChoiceRecorded()
-		if err != nil {
-			log.Printf("search by meaning: read shared choice: %v", err)
-		}
-		if !chosen {
-			log.Print("search by meaning: no shared choice recorded")
-			return
-		}
-		approvedBytes = math.MaxInt64
-		// SetupStatus reports candidate errors other than an explicit choice.
-		if embeddings, err = v.cfg.VectorSetupEmbeddings(true); err != nil {
-			log.Printf("search by meaning: shared choice setup unavailable: %v", err)
-			return
-		}
-	} else if v.serving.manager == nil {
-		log.Print("search by meaning: shared choice skipped without vector manager")
-		return
-	}
-	_, deployment, err := embeddings.Server("")
-	if err != nil {
-		log.Printf("search by meaning: resolve embeddings server: %v", err)
-		return
-	}
-	if deployment.Endpoint != "" {
-		log.Print("search by meaning: shared choice skipped for configured endpoint")
-		return
-	}
-	if v.cfg.Vector.Enabled && !deployment.Local {
-		if embeddings.Servers == nil && embeddings.DefaultServer == "" {
-			status, err := inspectLocalEmbeddings(v.ctx, embedlocal.Options{})
-			if err == nil && !status.OllamaAvailable && status.DownloadBytes == 0 {
-				v.serving.Scheduler.Notify()
-				log.Print("search by meaning: queued saved local index")
-				return
-			} else if err != nil {
-				log.Printf("search by meaning: inspect local embeddings: %v", err)
-			}
-		}
-		log.Print("search by meaning: shared choice skipped for saved provider")
-		return
-	}
-	deployment.Local = true
-	v.mu.Lock()
-	defer v.mu.Unlock()
-	if err := v.startSetup(deployment, approvedBytes, true, false); err != nil {
-		log.Printf("search by meaning: start setup: %v", err)
-	}
 }
 
 func (v *liveVectorServing) startSchedulers() {
@@ -175,8 +138,6 @@ func (v *liveVectorServing) Manager(store string) server.EmbeddingsManager {
 }
 
 func (v *liveVectorServing) ServerOptions() []server.Option {
-	v.mu.Lock()
-	defer v.mu.Unlock()
 	options := []server.Option{
 		server.WithEmbeddingsRuntime(v),
 		server.WithVectorPushSource(v.push),
@@ -196,34 +157,27 @@ func (v *liveVectorServing) IncludeAutomated() bool {
 }
 
 func (v *liveVectorServing) SetupStatus(ctx context.Context) (server.EmbeddingsSetupStatus, error) {
-	status, _, err := v.setupStatus(ctx)
-	return status, err
-}
-
-func (v *liveVectorServing) setupStatus(ctx context.Context) (server.EmbeddingsSetupStatus, config.VectorEmbeddingsConfig, error) {
 	v.mu.Lock()
 	status, cfg, missingManager := v.setup, v.cfg, v.serving.manager == nil
 	v.mu.Unlock()
 	if status.Busy {
 		status.Enabled = cfg.Vector.Enabled
-		return status, cfg.Vector.Embeddings, nil
-	}
-	if missingManager && cfg.DeploymentEmbeddings == nil {
-		var err error
-		cfg.Vector.Embeddings, err = cfg.VectorSetupEmbeddings(false)
-		if err != nil {
-			return status, cfg.Vector.Embeddings, setupRequestError(err)
-		}
+		return status, nil
 	}
 	status.Action = ""
-	if (missingManager || status.Error != "") && cfg.DeploymentEmbeddings == nil {
+	if missingManager && cfg.DeploymentEmbeddings == nil {
 		status.Action = "turn-on"
+		var err error
+		cfg.Vector.Embeddings, err = cfg.VectorSetupEmbeddings()
+		if err != nil {
+			return status, setupRequestError(err)
+		}
 	}
 	status, err := embeddingsSetupStatus(ctx, status, cfg)
 	if status.Action == "" {
 		status.Error = ""
 	}
-	return status, cfg.Vector.Embeddings, err
+	return status, err
 }
 
 func embeddingsSetupStatus(ctx context.Context, status server.EmbeddingsSetupStatus, cfg config.Config) (server.EmbeddingsSetupStatus, error) {
@@ -269,8 +223,8 @@ func setupRequestError(err error) error {
 	return err
 }
 
-func (v *liveVectorServing) Setup(approvedBytes int64, expectedProvider string) error {
-	status, embeddings, err := v.setupStatus(v.ctx)
+func (v *liveVectorServing) Setup(approvedBytes int64) error {
+	status, err := v.SetupStatus(v.ctx)
 	if err != nil {
 		return err
 	}
@@ -279,24 +233,23 @@ func (v *liveVectorServing) Setup(approvedBytes int64, expectedProvider string) 
 	if v.setup.Busy {
 		return vector.ErrBuildRunning
 	}
-	if status.Action != "turn-on" {
-		return fmt.Errorf("%w: setup action is unavailable for the current embeddings provider", vector.ErrInvalidBuildRequest)
-	}
-	if status.Provider != expectedProvider {
-		return server.ErrEmbeddingsProviderChanged
+	embeddings := v.cfg.Vector.Embeddings
+	if v.serving.manager == nil {
+		embeddings, err = v.cfg.VectorSetupEmbeddings()
+		if err != nil {
+			return setupRequestError(err)
+		}
 	}
 	_, deployment, err := embeddings.Server("")
 	if err != nil {
 		return setupRequestError(err)
 	}
+	if status.Action != "turn-on" {
+		return fmt.Errorf("%w: setup action is unavailable for the current embeddings provider", vector.ErrInvalidBuildRequest)
+	}
 	if status.Provider == "built-in" {
 		deployment.Local = true
 	}
-	return v.startSetup(deployment, approvedBytes, false, status.Provider == "ollama" && deployment.Endpoint == "")
-}
-
-// startSetup starts the leased worker with v.mu held.
-func (v *liveVectorServing) startSetup(deployment config.VectorEmbeddingsServerConfig, approvedBytes int64, automatic, approvedOllama bool) error {
 	release, ok := v.idle.BeginWork()
 	if !ok {
 		return errors.New("server is shutting down")
@@ -305,7 +258,7 @@ func (v *liveVectorServing) startSetup(deployment config.VectorEmbeddingsServerC
 	v.done = make(chan struct{})
 	go func() {
 		defer release()
-		err := v.activate(deployment, approvedBytes, automatic, approvedOllama)
+		err := v.activate(deployment, approvedBytes, status.Provider == "built-in")
 		v.mu.Lock()
 		v.setup.Busy = false
 		if err != nil {
@@ -316,15 +269,16 @@ func (v *liveVectorServing) startSetup(deployment config.VectorEmbeddingsServerC
 		manager := v.serving.manager
 		close(v.done)
 		v.mu.Unlock()
-		if manager != nil {
+		if err == nil && manager != nil {
 			manager.Wait()
 		}
 	}()
 	return nil
 }
 
-func (v *liveVectorServing) resolveSetup(deployment config.VectorEmbeddingsServerConfig, approvedBytes int64, approvedOllama bool) error {
-	endpoint, err := resolveLocalEmbeddings(v.ctx, deployment,
+func (v *liveVectorServing) activate(deployment config.VectorEmbeddingsServerConfig, approvedBytes int64, builtin bool) error {
+	cfg := v.cfg
+	_, err := resolveLocalEmbeddings(v.ctx, deployment,
 		func(_ context.Context, size int64) (bool, error) {
 			if size > approvedBytes {
 				v.mu.Lock()
@@ -340,32 +294,14 @@ func (v *liveVectorServing) resolveSetup(deployment config.VectorEmbeddingsServe
 			v.mu.Unlock()
 		},
 	)
-	if err == nil && approvedOllama && endpoint != "http://127.0.0.1:11434/v1" {
-		return server.ErrEmbeddingsProviderChanged
-	}
-	return err
-}
-
-func (v *liveVectorServing) activate(deployment config.VectorEmbeddingsServerConfig, approvedBytes int64, automatic, approvedOllama bool) error {
-	cfg := v.cfg
-	err := v.resolveSetup(deployment, approvedBytes, approvedOllama)
 	if err != nil {
 		return err
 	}
 	if v.serving.manager == nil {
-		var err error
-		cfg, err = v.reload()
-		if err != nil {
+		if err := cfg.SaveVectorSetup(); err != nil {
 			return err
 		}
-		cfg, err = cfg.SaveVectorSetup(deployment, automatic)
-		if errors.Is(err, config.ErrVectorSetupIneligible) {
-			log.Print("search by meaning: shared setup became ineligible before activation")
-			return nil
-		}
-		if errors.Is(err, config.ErrVectorSetupProviderChanged) {
-			return server.ErrEmbeddingsProviderChanged
-		}
+		cfg, err = v.reload()
 		if err != nil {
 			return err
 		}
@@ -384,21 +320,13 @@ func (v *liveVectorServing) activate(deployment config.VectorEmbeddingsServerCon
 		v.startSchedulers()
 		v.mu.Unlock()
 	}
-	if automatic {
-		v.serving.Scheduler.Notify()
-		return nil
-	}
-	_, selected, err := cfg.Vector.Embeddings.Server("")
-	if err != nil {
-		return err
-	}
 	err = v.serving.manager.StartBuild(vector.BuildRequest{IncludeAutomated: cfg.Vector.IncludeAutomated})
 	if errors.Is(err, vector.ErrBuildRunning) {
 		err = nil
 	}
-	if err == nil && selected.Local {
+	if err == nil && builtin {
 		if err := embedlocal.RecordChoice(); err != nil {
-			return fmt.Errorf("Can't save across apps: %w", err) //nolint:staticcheck // ST1005: This message appears directly in the UI.
+			log.Printf("search by meaning: record shared choice: %v", err)
 		}
 	}
 	return err
