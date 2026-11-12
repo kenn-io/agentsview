@@ -1,0 +1,1 @@
+[{"id":"call_t1","type":"function","function":{"name":"terminal","arguments":"{\"command\":\"ls internal/parser\"}"}}]

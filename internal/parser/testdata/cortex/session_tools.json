@@ -1,0 +1,16 @@
+{
+  "session_id": "11111111-2222-3333-4444-555555555555",
+  "working_directory": "/home/user/code/app",
+  "created_at": "2024-06-01T10:00:00Z",
+  "last_updated": "2024-06-01T10:05:00Z",
+  "history": [
+    {"role": "user", "id": "m1", "content": [{"type": "text", "text": "Read models/orders.sql"}]},
+    {"role": "assistant", "id": "m2", "content": [
+      {"type": "tool_use", "tool_use": {"tool_use_id": "tu1", "name": "read", "input": {"file_path": "/home/user/code/app/models/orders.sql"}}}
+    ]},
+    {"role": "user", "id": "m3", "content": [
+      {"type": "tool_result", "tool_result": {"tool_use_id": "tu1", "name": "read", "content": [{"type": "text", "text": "select * from orders"}], "status": "success"}}
+    ]},
+    {"role": "assistant", "id": "m4", "content": [{"type": "text", "text": "It selects every order row."}]}
+  ]
+}

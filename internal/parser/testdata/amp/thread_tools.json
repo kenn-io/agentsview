@@ -1,0 +1,17 @@
+{
+  "v": 1,
+  "id": "T-019ca26f-aaaa-bbbb-cccc-dddddddddddd",
+  "created": 1704067200000,
+  "messages": [
+    {"role": "user", "content": [{"type": "text", "text": "Read main.go and tell me what it does."}]},
+    {"role": "assistant", "content": [
+      {"type": "thinking", "thinking": "Open the file before answering."},
+      {"type": "text", "text": "Reading it now."},
+      {"type": "tool_use", "complete": true, "id": "toolu_01read", "name": "Read", "input": {"file_path": "/home/user/code/app/main.go"}}
+    ]},
+    {"role": "user", "content": [{"type": "tool_result", "tool_use_id": "toolu_01read", "content": "package main\n\nfunc main() {}\n"}]},
+    {"role": "assistant", "content": [{"type": "text", "text": "It is an empty program with a main function."}]}
+  ],
+  "env": {"initial": {"trees": [{"displayName": "app"}]}},
+  "meta": {"traces": []}
+}
