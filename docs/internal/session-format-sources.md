@@ -3431,6 +3431,25 @@ schemas keep their existing ordering behavior.
   [scoped retries][pi-scoped-retries] without changing configured source
   identities. The transcript format, parsed output, and data version are
   unchanged.
+- **Artifact directories:** Reverified 2026-11-12 against pi-subagents at
+  `7e2794efba0b727af51d08c36614ea939f1a827b`: the
+  [artifact writer](https://github.com/nicobailon/pi-subagents/blob/7e2794efba0b727af51d08c36614ea939f1a827b/src/shared/artifacts.ts),
+  [session-root helper](https://github.com/nicobailon/pi-subagents/blob/7e2794efba0b727af51d08c36614ea939f1a827b/src/extension/index.ts),
+  and
+  [child launcher](https://github.com/nicobailon/pi-subagents/blob/7e2794efba0b727af51d08c36614ea939f1a827b/src/runs/foreground/subagent-executor.ts).
+  Session-local outputs go into a `subagent-artifacts` directory beside the
+  transcript. Child transcripts use the parent transcript's stem as their
+  directory, separately from artifacts. A local reproduction with a dangling
+  package-cache symlink inside an artifact output caused incomplete Pi
+  discovery and repeated reconciliation. Pi, OMO, and StepCode exclude
+  `subagent-artifacts` descendants from discovery, changed-path mapping, and
+  source lookup. They classify excluded changes as non-data so remote delta
+  planning does not scan the provider. An explicitly configured root with that
+  basename remains supported, including when a broader root also contains it.
+  Nested child transcripts outside artifact directories remain
+  discoverable, and unreadable session directories still report incomplete
+  discovery. The transcript format, parsed output, and data version are
+  unchanged.
 - **Agentsview:** `internal/parser/pi.go` and `internal/parser/pi_provider.go`;
   alternate branches remain in the file but only the active ancestry is a
   conversation. Reverified 2026-09-03 against 156 local Pi transcripts: the

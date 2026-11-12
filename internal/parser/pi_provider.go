@@ -73,6 +73,32 @@ func (p *piProvider) WatchPlan(ctx context.Context) (WatchPlan, error) {
 	return p.sources.WatchPlan(ctx)
 }
 
+func (p *piProvider) ChangedPathRelevance(
+	ctx context.Context,
+	req ChangedPathRequest,
+) (ChangedPathRelevance, error) {
+	if err := ctx.Err(); err != nil {
+		return ChangedPathUnclassified, err
+	}
+	excluded := false
+	for _, root := range p.sources.roots {
+		if req.WatchRoot != "" && !samePath(root, filepath.Clean(req.WatchRoot)) {
+			continue
+		}
+		if !p.sources.pathAllowedByRoot(root, req.Path) {
+			continue
+		}
+		if p.sources.sourcePathAllowedByDescendPath(root, req.Path) {
+			return ChangedPathUnclassified, nil
+		}
+		excluded = true
+	}
+	if excluded {
+		return ChangedPathNonData, nil
+	}
+	return ChangedPathUnclassified, nil
+}
+
 func (p *piProvider) SourcesForChangedPath(
 	ctx context.Context,
 	req ChangedPathRequest,
@@ -318,6 +344,9 @@ func newPiSourceSet(agent AgentType, roots []string) JSONLSourceSet {
 		return NewJSONLSourceSet(agent, roots,
 			WithRecursive(),
 			WithSymlinkFollowing(),
+			WithDescendPath(func(_, path string) bool {
+				return filepath.Base(path) != "subagent-artifacts"
+			}),
 			WithIncludePath(isPiSourcePathAtAnyDepth),
 			WithProjectHint(func(root, path string) string { return "" }),
 			WithSessionIDFromPath(piSessionIDFromPath),
@@ -426,6 +455,9 @@ func piProviderCapabilities(agent AgentType) Capabilities {
 		},
 	}
 	caps.Source.StreamingDiscovery = CapabilitySupported
+	if agent == AgentPi || agent == AgentOMO || agent == AgentStepCode {
+		caps.Source.ChangedPathRelevance = CapabilitySupported
+	}
 	if agent == AgentPrimeAgent {
 		caps.Source.ForceReplaceOnParse = CapabilitySupported
 	}
