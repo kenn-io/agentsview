@@ -63,6 +63,15 @@ describe("orvalFetch", () => {
     });
   });
 
+  it("passes a local request path to fetch", async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValue(new Response("{}", { headers: { "Content-Type": "application/json" } }));
+    vi.stubGlobal("fetch", fetchMock);
+    await orvalFetch("/api/v1/usage/summary", {});
+    expect(fetchMock.mock.calls[0]![0]).toBe("/api/v1/usage/summary");
+  });
+
   it("sends the selected server token with generated requests", async () => {
     localStorage.setItem("agentsview-server-url", "https://example.test");
     setAuthToken("secret");
@@ -181,9 +190,10 @@ describe("API errors", () => {
     const abort = Object.assign(new TypeError("aborted"), { name: "AbortError" });
     const controller = new AbortController();
     controller.abort(abort);
-    const error = await orvalFetch("/api/v1/search", { signal: controller.signal }).catch(
-      (err: unknown) => err,
-    );
+    const error = await orvalFetch("/api/v1/search", {
+      baseUrl: "http://127.0.0.1:1",
+      signal: controller.signal,
+    }).catch((err: unknown) => err);
     expect(error).toBe(abort);
     expect(isTransient(error)).toBe(false);
   });
