@@ -23,7 +23,7 @@ func contentWordsQuery(pattern string) (contentWords, bool) {
 	if containsCJK(pattern) {
 		return contentWords{}, false
 	}
-	segments := strings.Split(strings.NewReplacer("“", `"`, "”", `"`, "„", `"`).Replace(pattern), `"`)
+	segments := strings.Split(pattern, `"`)
 	var q contentWords
 	analyzed := make([]string, 0, len(segments))
 	for i, segment := range segments {
@@ -59,9 +59,7 @@ func unquoteContentSearch(pattern string) (string, bool) {
 	}
 	inner := string(runes[1 : len(runes)-1])
 	ascii := runes[0] == '"' && runes[len(runes)-1] == '"' && !strings.ContainsRune(inner, '"')
-	curly := (runes[0] == '“' || runes[0] == '„') && (runes[len(runes)-1] == '”' || runes[len(runes)-1] == '“') &&
-		!strings.ContainsAny(inner, `“”„`)
-	if (ascii || curly) && strings.TrimSpace(inner) != "" {
+	if ascii && strings.TrimSpace(inner) != "" {
 		return inner, true
 	}
 	return pattern, false
@@ -104,19 +102,18 @@ func explicitFTSExpression(pattern string) bool {
 }
 
 // buildContentWordHits fills a temporary table with every message that holds
-// a query word and the number of words it holds. The key orders hits by that
-// count and message ID.
+// a query word and the number of words it holds.
 func buildContentWordHits(ctx context.Context, tx *sql.Tx, q contentWords) error {
 	terms, err := json.Marshal(q.terms)
 	if err != nil {
 		return err
 	}
 	if _, err := tx.ExecContext(ctx, `CREATE TEMP TABLE content_word_hits (
-		n INTEGER NOT NULL, id INTEGER NOT NULL, PRIMARY KEY (n DESC, id DESC)) WITHOUT ROWID`); err != nil {
+		id INTEGER PRIMARY KEY, n INTEGER NOT NULL)`); err != nil {
 		return fmt.Errorf("collecting word matches: %w", err)
 	}
 	if _, err := tx.ExecContext(ctx, `INSERT INTO content_word_hits
-		SELECT count(*), f.rowid FROM json_each(?) t
+		SELECT f.rowid, count(*) FROM json_each(?) t
 		CROSS JOIN messages_fts f WHERE f.content MATCH t.value GROUP BY f.rowid`, string(terms)); err != nil {
 		return classifyFTSError(fmt.Errorf("collecting word matches: %w", err))
 	}
@@ -128,7 +125,7 @@ func buildContentWordHits(ctx context.Context, tx *sql.Tx, q contentWords) error
 // quoted phrase must also appear as typed.
 func contentWordRows(
 	ctx context.Context, tx *sql.Tx, f ContentSearchFilter, q contentWords,
-	where string, args []any, offset, need int,
+	where string, args []any, offset, need, floor int, full bool,
 ) ([]ContentMatch, error) {
 	args = append([]any(nil), args...)
 	var whereSb135 strings.Builder
@@ -137,24 +134,32 @@ func contentWordRows(
 		args = append(args, "%"+escapeLike(phrase)+"%")
 	}
 	where += whereSb135.String()
-	from := "content_word_hits h"
+	from := "messages_fts CROSS JOIN content_word_hits h ON h.id = messages_fts.rowid"
+	count := "h.n"
 	sortKey := "julianday(COALESCE(s.ended_at, s.started_at, ''))"
 	order := "sort_key DESC, m.session_id ASC, m.ordinal ASC, m.id ASC"
-	if f.Mode == "fts" || f.Mode == "hybrid" {
-		if _, err := tx.ExecContext(ctx, `CREATE INDEX content_word_hits_id ON content_word_hits(id)`); err != nil {
-			return nil, fmt.Errorf("indexing word matches: %w", err)
-		}
-		from = "messages_fts CROSS JOIN content_word_hits h ON h.id = messages_fts.rowid"
+	if full {
+		from = "messages_fts"
+		count = fmt.Sprint(len(q.terms))
 		where += " AND messages_fts.content MATCH ?"
-		args = append(args, q.snippetTerm())
+		args = append(args, strings.Join(q.terms, " AND "))
+	} else {
+		where += " AND h.n >= ? AND messages_fts.content MATCH ?"
+		args = append(args, floor, q.snippetTerm())
+	}
+	if f.Mode == "fts" || f.Mode == "hybrid" {
 		sortKey = "messages_fts.rank"
 		order = "sort_key ASC, m.id ASC"
 	}
+	id := "h.id"
+	if full {
+		id = "messages_fts.rowid"
+	}
 	query := `SELECT m.session_id, s.project, s.agent, s.transcript_revision, 'message', m.role, '',
 			m.ordinal, COALESCE(m.timestamp,''), COALESCE(m.dialogue_text, m.content), '', p.n
-		FROM (SELECT m.id, h.n, ` + sortKey + ` AS sort_key
-			FROM ` + from + ` CROSS JOIN messages m ON m.id = h.id CROSS JOIN sessions s ON s.id = m.session_id
-			WHERE ` + where + ` ORDER BY h.n DESC, ` + order + ` LIMIT ? OFFSET ?) p
+		FROM (SELECT m.id, ` + count + ` AS n, ` + sortKey + ` AS sort_key
+			FROM ` + from + ` CROSS JOIN messages m ON m.id = ` + id + ` CROSS JOIN sessions s ON s.id = m.session_id
+			WHERE ` + where + ` ORDER BY n DESC, ` + order + ` LIMIT ? OFFSET ?) p
 		CROSS JOIN messages m ON m.id = p.id CROSS JOIN sessions s ON s.id = m.session_id
 		ORDER BY p.n DESC, ` + order
 	args = append(args, need, offset)
@@ -162,6 +167,46 @@ func contentWordRows(
 		start, end := FTSSnippetRange(q.snippetTerm(), body)
 		return f.BuildSnippet(body, start, end)
 	})
+}
+
+// selectContentWordPage avoids collecting partial hits when all-word matches
+// already fill the requested page. Counts are unfiltered, so a short filtered
+// page retries with all tiers and the original offset.
+func selectContentWordPage(ctx context.Context, tx *sql.Tx, f ContentSearchFilter, q contentWords, where string, args []any, offset, need int) ([]ContentMatch, error) {
+	full, err := contentWordRows(ctx, tx, f, q, where, args, offset, need, 0, true)
+	if err != nil || len(full) == need {
+		return full, err
+	}
+	if err := buildContentWordHits(ctx, tx, q); err != nil {
+		return nil, err
+	}
+	rows, err := tx.QueryContext(ctx, `SELECT n, count(*) FROM content_word_hits GROUP BY n ORDER BY n DESC`)
+	if err != nil {
+		return nil, err
+	}
+	floor, total := 1, 0
+	for rows.Next() {
+		var n, count int
+		if err := rows.Scan(&n, &count); err != nil {
+			rows.Close()
+			return nil, err
+		}
+		total += count
+		if total >= offset+need {
+			floor = n
+			break
+		}
+	}
+	err = rows.Err()
+	rows.Close()
+	if err != nil {
+		return nil, err
+	}
+	page, err := contentWordRows(ctx, tx, f, q, where, args, offset, need, floor, false)
+	if err == nil && len(page) < need && floor > 1 {
+		return contentWordRows(ctx, tx, f, q, where, args, offset, need, 1, false)
+	}
+	return page, err
 }
 
 // lexicalMessageWhere is the system, scope, and anchor filter the substring
@@ -202,10 +247,7 @@ func (db *DB) searchContentWords(
 		if len(matches) > f.Limit {
 			return matches, nil
 		}
-		if err := buildContentWordHits(ctx, snapshot.tx, q); err != nil {
-			return nil, err
-		}
-		words, err := contentWordRows(ctx, snapshot.tx, f, q, where, args,
+		words, err := selectContentWordPage(ctx, snapshot.tx, f, q, where, args,
 			max(0, f.Cursor-total), f.Limit+1-len(matches))
 		return append(matches, words...), err
 	}

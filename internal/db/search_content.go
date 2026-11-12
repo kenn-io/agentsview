@@ -101,7 +101,7 @@ type ContentMatch struct {
 	Timestamp      string   `json:"timestamp"`
 	Snippet        string   `json:"snippet"`
 	// MatchedWords counts the query words a ranked word search found.
-	MatchedWords int `json:"matched_words" doc:"Number of query words the match holds in ranked word search; zero for other searches."`
+	MatchedWords int `json:"matched_words" doc:"Number of retained query words the match holds in ranked word search; unquoted stop words are dropped. Zero for other searches."`
 	// Score is the searcher's relevance score for "semantic"/"hybrid" modes,
 	// nil for the other modes which have no comparable ranking signal.
 	Score *float64 `json:"score,omitempty"`
@@ -356,7 +356,9 @@ func (db *DB) searchContentSubstring(
 	ctx context.Context, f ContentSearchFilter,
 ) (ContentSearchPage, error) {
 	var quoted bool
-	f.Pattern, quoted = unquoteContentSearch(f.Pattern)
+	if hasSource(f, "messages") {
+		f.Pattern, quoted = unquoteContentSearch(f.Pattern)
+	}
 	if f.SessionID == "" {
 		release, err := db.acquireBulkRead(ctx)
 		if err != nil {
@@ -1808,13 +1810,10 @@ func (db *DB) hybridWordHits(
 		return nil, err
 	}
 	defer func() { _ = snapshot.Close() }()
-	if err := buildContentWordHits(ctx, snapshot.tx, q); err != nil {
-		return nil, err
-	}
 	scope, args := semanticSessionScopeSubquery(f)
 	where := "m.role IN ('user','assistant') AND m.is_system = 0 AND " +
 		SystemPrefixSQL("m.content", "m.role") + " AND m." + scope
-	matches, err := contentWordRows(ctx, snapshot.tx, f, q, where, args, 0, limit)
+	matches, err := selectContentWordPage(ctx, snapshot.tx, f, q, where, args, 0, limit)
 	if err != nil {
 		return nil, err
 	}

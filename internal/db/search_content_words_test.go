@@ -62,7 +62,6 @@ func TestSearchContentRanksExactTextThenWords(t *testing.T) {
 		{"one-word", "message", 1},
 	}, search("invoice rounding decision", ""))
 	assert.Equal(t, []wordHit{{"two-words", "message", 0}}, search(`"rounding of invoices"`, ""))
-	assert.Equal(t, []wordHit{{"two-words", "message", 0}}, search(`“rounding of invoices”`, ""))
 	assert.Equal(t, []wordHit{
 		{"two-words", "message", 2},
 		{"one-word", "message", 1},
@@ -98,6 +97,23 @@ func TestSearchContentKeepsSubstringSearch(t *testing.T) {
 			assert.Equal(t, tc.want, wordHits(page))
 		})
 	}
+}
+
+func TestSearchContentToolInputKeepsQuotes(t *testing.T) {
+	d := testDB(t)
+	insertSession(t, d, "quoted-tool", "proj", func(s *Session) { s.UserMessageCount = 2 })
+	require.NoError(t, d.ReplaceSessionMessages(t.Context(), "quoted-tool", []Message{{
+		SessionID: "quoted-tool", Role: "assistant", Content: "run",
+		ToolCalls: []ToolCall{{ToolName: "Bash", ToolUseID: "call", InputJSON: `{"command":"quoted phrase"}`}},
+	}}))
+	insertSession(t, d, "unquoted-tool", "proj", func(s *Session) { s.UserMessageCount = 2 })
+	require.NoError(t, d.ReplaceSessionMessages(t.Context(), "unquoted-tool", []Message{{
+		SessionID: "unquoted-tool", Role: "assistant", Content: "run",
+		ToolCalls: []ToolCall{{ToolName: "Bash", ToolUseID: "other", InputJSON: `{"command":"prefix quoted phrase suffix"}`}},
+	}}))
+	page, err := d.SearchContent(t.Context(), ContentSearchFilter{Pattern: `"quoted phrase"`, Sources: []string{"tool_input"}})
+	require.NoError(t, err)
+	assert.Equal(t, []wordHit{{"quoted-tool", "tool_input", 0}}, wordHits(page))
 }
 
 func TestSearchContentExplicitFTSKeepsFTS5(t *testing.T) {
@@ -212,6 +228,7 @@ func TestSearchContentWordTierOrder(t *testing.T) {
 		{"default", ContentSearchFilter{Pattern: "alpha beta missing"}, [][3]string{{"newer", "alpha beta long", ""}, {"older", "alpha beta", ""}}, []wordHit{{"newer", "message", 2}, {"older", "message", 2}}},
 		{"fts", ContentSearchFilter{Pattern: "alpha beta missing", Mode: "fts"}, [][3]string{{"older", "alpha beta", ""}, {"newer", "alpha beta filler filler filler filler filler filler filler filler", ""}}, []wordHit{{"older", "message", 2}, {"newer", "message", 2}}},
 		{"hybrid", ContentSearchFilter{Pattern: "alpha beta missing", Mode: "hybrid", KeywordOnly: true}, [][3]string{{"older", "alpha beta", ""}, {"newer", "alpha beta filler filler filler filler filler filler filler filler", ""}}, []wordHit{{"older", "message", 0}, {"newer", "message", 0}}},
+		{"hybrid-full", ContentSearchFilter{Pattern: "alpha beta", Mode: "hybrid", KeywordOnly: true}, [][3]string{{"older", "alpha beta", ""}, {"newer", "alpha beta filler filler filler filler filler filler filler filler", ""}}, []wordHit{{"older", "message", 0}, {"newer", "message", 0}}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			d := testDB(t)
@@ -224,7 +241,7 @@ func TestSearchContentWordTierOrder(t *testing.T) {
 			page, err := d.SearchContent(t.Context(), tc.filter)
 			require.NoError(t, err)
 			assert.Equal(t, tc.want, wordHits(page))
-			if tc.name != "hybrid" {
+			if tc.filter.Mode != "hybrid" {
 				tc.filter.Limit = 1
 				first, err := d.SearchContent(t.Context(), tc.filter)
 				require.NoError(t, err)
@@ -237,5 +254,48 @@ func TestSearchContentWordTierOrder(t *testing.T) {
 				assert.Zero(t, second.NextCursor)
 			}
 		})
+	}
+}
+
+func TestContentWordPageSkipsPartialTableForFullPage(t *testing.T) {
+	d := testDB(t)
+	requireFTS(t, d)
+	seedWordSearch(t, d, "proj", [3]string{"full-1", "gamma beta alpha", ""}, [3]string{"full-2", "beta alpha gamma", ""})
+	q, ok := contentWordsQuery("alpha beta gamma")
+	require.True(t, ok)
+	for _, mode := range []string{"", "fts", "hybrid"} {
+		t.Run(mode, func(t *testing.T) {
+			snapshot, err := d.BeginMessageSnapshot(t.Context())
+			require.NoError(t, err)
+			defer snapshot.Close()
+			f := ContentSearchFilter{Pattern: "alpha beta gamma", Mode: mode}
+			where, args := lexicalMessageWhere(f)
+			page, err := selectContentWordPage(t.Context(), snapshot.tx, f, q, where, args, 0, 2)
+			require.NoError(t, err)
+			assert.Len(t, page, 2)
+			var count int
+			require.NoError(t, snapshot.tx.QueryRowContext(t.Context(), `SELECT count(*) FROM sqlite_temp_master WHERE name = 'content_word_hits'`).Scan(&count))
+			assert.Zero(t, count)
+		})
+	}
+}
+
+func TestSearchContentWordPagesWithFilteredTiers(t *testing.T) {
+	d := testDB(t)
+	requireFTS(t, d)
+	seedWordSearch(t, d, "other", [3]string{"excluded-1", "alpha beta", ""}, [3]string{"excluded-2", "alpha beta", ""})
+	seedWordSearch(t, d, "chosen", [3]string{"partial-2", "alpha beta", ""}, [3]string{"partial-1", "gamma", ""})
+	for _, mode := range []string{"", "fts"} {
+		for _, tc := range []struct {
+			cursor int
+			want   []wordHit
+		}{
+			{0, []wordHit{{"partial-2", "message", 2}, {"partial-1", "message", 1}}},
+			{1, []wordHit{{"partial-1", "message", 1}}},
+		} {
+			page, err := d.SearchContent(t.Context(), ContentSearchFilter{Pattern: "alpha beta gamma", Project: "chosen", Mode: mode, Limit: 2, Cursor: tc.cursor})
+			require.NoError(t, err)
+			assert.Equal(t, tc.want, wordHits(page), "mode %s cursor %d", mode, tc.cursor)
+		}
 	}
 }
