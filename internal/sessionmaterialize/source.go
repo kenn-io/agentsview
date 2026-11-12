@@ -40,7 +40,7 @@ type Result struct {
 	ProjectOverride string   `json:"-"`
 }
 
-// Materialize installs a Claude transcript and its own native dependencies.
+// Materialize installs a native transcript and its dependencies.
 func Materialize(ctx context.Context, cfg config.Config, database *db.DB, session *db.Session, cwd string) (Result, error) {
 	if session == nil || (session.Agent != "claude" && session.Agent != "pi") {
 		return Result{}, errors.New("only Claude and Pi sessions can currently be installed")

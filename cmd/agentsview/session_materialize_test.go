@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"runtime"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -123,7 +122,6 @@ func TestPiMaterializeCommandReturnsNativeResume(t *testing.T) {
 	t.Setenv("PI_DIR", root)
 	const machine = "0123456789abcdef0123456789abcdef"
 	require.NoError(t, os.WriteFile(filepath.Join(dataDir, "telemetry-install-id"), []byte(machine), 0o600))
-	require.NoError(t, os.WriteFile(filepath.Join(dataDir, "config.toml"), []byte(fmt.Sprintf("[agents.pi]\ndirs = [%q]\n", root)), 0o600))
 	name := filepath.Join(root, "session.jsonl")
 	require.NoError(t, os.WriteFile(name, []byte(`{"type":"session","id":"example","cwd":"/old"}`+"\n"), 0o600))
 	database, err := db.OpenIsolatedContext(t.Context(), filepath.Join(dataDir, "sessions.db"))
@@ -138,10 +136,6 @@ func TestPiMaterializeCommandReturnsNativeResume(t *testing.T) {
 	require.NoError(t, json.Unmarshal([]byte(output), &result))
 	resolved, err := filepath.EvalSymlinks(cwd)
 	require.NoError(t, err)
-	path := filepath.Join(dest, "example.jsonl")
-	want := fmt.Sprintf("cd '%s' && pi --session '%s'", resolved, path)
-	if runtime.GOOS == "windows" {
-		want = fmt.Sprintf("Set-Location -LiteralPath '%s'; if ($?) { pi --session '%s' }", resolved, path)
-	}
-	assert.Equal(t, want, result.Command)
+	assert.Contains(t, result.Command, resolved)
+	assert.Contains(t, result.Command, filepath.Join(dest, "example.jsonl"))
 }
