@@ -53,9 +53,9 @@ func TestAnalyticsKeptCopiesNestedValues(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, "Read", againTools.ByCategory[0].Category)
 	assert.Equal(t, "Read", againTools.ByAgent[0].Categories[0].Category)
-	assert.Equal(t, 0.1, *againTools.ByTool[0].EmptyRate)
-	assert.Equal(t, 0.2, *againTools.ByTool[0].RepeatRate)
-	assert.Equal(t, 0.3, *againTools.ByTool[0].RecoveryRate)
+	assert.InDelta(t, 0.1, *againTools.ByTool[0].EmptyRate, 0)
+	assert.InDelta(t, 0.2, *againTools.ByTool[0].RepeatRate, 0)
+	assert.InDelta(t, 0.3, *againTools.ByTool[0].RecoveryRate, 0)
 	assert.Equal(t, 1, againTools.Trend[0].ByCat["Read"])
 
 	velocity := VelocityResponse{ByAgent: []VelocityBreakdown{{Label: "agent"}}, ByComplexity: []VelocityBreakdown{{Label: "simple"}}}
@@ -95,13 +95,13 @@ func TestAnalyticsKeptCopiesNestedValues(t *testing.T) {
 	assert.Equal(t, 1, againSignals.GradeDistribution["A"])
 	assert.Equal(t, 1, againSignals.OutcomeDistribution["done"])
 	assert.Equal(t, 1, againSignals.OutcomeConfidenceDistribution["high"])
-	assert.Equal(t, 1.0, *againSignals.AvgHealthScore)
-	assert.Equal(t, 2.0, *againSignals.ContextHealth.AvgContextPressure)
-	assert.Equal(t, 3.0, *againSignals.Trend[0].AvgHealthScore)
-	assert.Equal(t, 4.0, *againSignals.ByAgent[0].AvgHealthScore)
-	assert.Equal(t, 5.0, *againSignals.ByProject[0].AvgHealthScore)
-	assert.Equal(t, 6.0, *againSignals.Calibration["signal"].IncompleteLift)
-	assert.Equal(t, 7.0, *againSignals.Calibration["signal"].AvgScoreDelta)
+	assert.InDelta(t, 1.0, *againSignals.AvgHealthScore, 0)
+	assert.InDelta(t, 2.0, *againSignals.ContextHealth.AvgContextPressure, 0)
+	assert.InDelta(t, 3.0, *againSignals.Trend[0].AvgHealthScore, 0)
+	assert.InDelta(t, 4.0, *againSignals.ByAgent[0].AvgHealthScore, 0)
+	assert.InDelta(t, 5.0, *againSignals.ByProject[0].AvgHealthScore, 0)
+	assert.InDelta(t, 6.0, *againSignals.Calibration["signal"].IncompleteLift, 0)
+	assert.InDelta(t, 7.0, *againSignals.Calibration["signal"].AvgScoreDelta, 0)
 	assert.NotContains(t, againSignals.Calibration, "other")
 
 	empty, err := keptAnalytics(ctx, d, "empty-tools", filter, func(context.Context, AnalyticsFilter) (ToolsAnalyticsResponse, error) {
@@ -164,16 +164,25 @@ func TestAnalyticsKeptSharesLoads(t *testing.T) {
 	}
 	t.Cleanup(func() { analyticsQueryObserver = previous })
 	var wg sync.WaitGroup
+	type response struct {
+		result ToolsAnalyticsResponse
+		err    error
+	}
+	responses := make(chan response, 4)
 	for range 4 {
 		wg.Go(func() {
 			result, err := d.GetAnalyticsTools(t.Context(), AnalyticsFilter{})
-			assert.NoError(t, err)
-			assert.Equal(t, 1, result.TotalCalls)
+			responses <- response{result, err}
 		})
 	}
 	<-started
 	close(release)
 	wg.Wait()
+	close(responses)
+	for response := range responses {
+		require.NoError(t, response.err)
+		assert.Equal(t, 1, response.result.TotalCalls)
+	}
 	_, err := d.GetAnalyticsTools(t.Context(), AnalyticsFilter{})
 	require.NoError(t, err)
 	assert.EqualValues(t, 1, calls.Load())
@@ -192,12 +201,12 @@ func TestAnalyticsKeptContentLengthRepair(t *testing.T) {
 	)
 	before, err := d.GetAnalyticsVelocity(ctx, AnalyticsFilter{})
 	require.NoError(t, err)
-	assert.Equal(t, float64(10), before.Overall.CharsPerActiveMin)
+	assert.InDelta(t, 10, before.Overall.CharsPerActiveMin, 0)
 	_, err = d.getWriter().ExecContext(ctx, `UPDATE messages SET content_length = 20 WHERE session_id = 'session' AND ordinal = 1`)
 	require.NoError(t, err)
 	after, err := d.GetAnalyticsVelocity(ctx, AnalyticsFilter{})
 	require.NoError(t, err)
-	assert.Equal(t, float64(20), after.Overall.CharsPerActiveMin)
+	assert.InDelta(t, 20, after.Overall.CharsPerActiveMin, 0)
 }
 
 func TestAnalyticsKeptToolFactsAfterDialogueRepair(t *testing.T) {
@@ -248,8 +257,10 @@ func TestAnalyticsKeptSelectionAndArchiveIdentity(t *testing.T) {
 	}
 	t.Cleanup(func() { analyticsQueryObserver = previous })
 	filters := []AnalyticsFilter{
-		{Timezone: "UTC"}, {Timezone: "America/New_York"},
-		{Timezone: "UTC", Hour: new(9)}, {Timezone: "UTC", DayOfWeek: new(5)},
+		{Timezone: "UTC"},
+		{Timezone: "America/New_York"},
+		{Timezone: "UTC", Hour: new(9)},
+		{Timezone: "UTC", DayOfWeek: new(5)},
 		{Timezone: "UTC", Model: "model-a"},
 	}
 	for _, filter := range filters {

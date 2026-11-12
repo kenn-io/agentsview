@@ -838,8 +838,8 @@ func TestCopySessionMetadataDoesNotCarryRevisionCounters(t *testing.T) {
 	var revision string
 	err = destination.getReader().QueryRowContext(t.Context(), `
 		SELECT value FROM archive_metadata WHERE key = 'usage_pricing_revision'`).Scan(&revision)
-	assert.ErrorIs(t, err, sql.ErrNoRows)
+	require.ErrorIs(t, err, sql.ErrNoRows)
 	err = destination.getReader().QueryRowContext(t.Context(), `
 		SELECT value FROM archive_metadata WHERE key = 'analytics_change_revision'`).Scan(&revision)
-	assert.ErrorIs(t, err, sql.ErrNoRows)
+	require.ErrorIs(t, err, sql.ErrNoRows)
 }

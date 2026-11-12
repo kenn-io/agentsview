@@ -41,7 +41,7 @@ func TestChangeStreamUsageCacheServesLongSessionAcrossPages(t *testing.T) {
 			score := 70
 			require.NoError(t, d.UpdateSessionSignals(t.Context(), "long", SessionSignalUpdate{HealthScore: &score, QualitySignals: QualitySignals{Version: CurrentQualitySignalVersion}}))
 		} else {
-			assert.True(t, cachedUsage == cache.sessions["long"], "page %d should reuse cached usage", pages)
+			assert.Same(t, cachedUsage, cache.sessions["long"], "page %d should reuse cached usage", pages)
 		}
 		require.Len(t, batch.Sessions, 1)
 		require.NotNil(t, batch.Sessions[0].Usage)
