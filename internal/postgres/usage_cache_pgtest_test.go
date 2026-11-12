@@ -336,11 +336,16 @@ func requireCachedUsageMatchesDirect(t *testing.T, store *Store, filter db.Usage
 // for the background pass that a deferring read queues.
 func readWarmedUsage(t *testing.T, store *Store, filter db.UsageFilter) db.DailyUsageResult {
 	t.Helper()
-	got, err := store.usageCache.GetDailyUsage(t.Context(), filter)
-	if errors.Is(err, db.ErrUsageCacheWarming) {
-		require.NoError(t, store.usageCache.WaitWarm(t.Context()))
+	var got db.DailyUsageResult
+	var err error
+	require.Eventually(t, func() bool {
 		got, err = store.usageCache.GetDailyUsage(t.Context(), filter)
-	}
+		if errors.Is(err, db.ErrUsageCacheWarming) {
+			err = store.usageCache.WaitWarm(t.Context())
+			return false
+		}
+		return true
+	}, 30*time.Second, 100*time.Millisecond)
 	require.NoError(t, err)
 	return got
 }
