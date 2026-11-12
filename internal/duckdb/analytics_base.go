@@ -404,31 +404,41 @@ func (s *Store) GetAnalyticsSummary(
 func (s *Store) GetAnalyticsActivity(
 	ctx context.Context, f db.AnalyticsFilter, granularity string,
 ) (db.ActivityResponse, error) {
-	return s.analytics().GetAnalyticsActivity(ctx, f, granularity)
+	return keptAnalytics(ctx, s, "activity", f, granularity, func(ctx context.Context) (db.ActivityResponse, error) {
+		return s.analytics().GetAnalyticsActivity(ctx, f, granularity)
+	})
 }
 
 func (s *Store) GetAnalyticsHeatmap(
 	ctx context.Context, f db.AnalyticsFilter, metric string,
 ) (db.HeatmapResponse, error) {
-	return s.analytics().GetAnalyticsHeatmap(ctx, f, metric)
+	return keptAnalytics(ctx, s, "heatmap", f, metric, func(ctx context.Context) (db.HeatmapResponse, error) {
+		return s.analytics().GetAnalyticsHeatmap(ctx, f, metric)
+	})
 }
 
 func (s *Store) GetAnalyticsProjects(
 	ctx context.Context, f db.AnalyticsFilter,
 ) (db.ProjectsAnalyticsResponse, error) {
-	return s.analytics().GetAnalyticsProjects(ctx, f)
+	return keptAnalytics(ctx, s, "projects", f, "", func(ctx context.Context) (db.ProjectsAnalyticsResponse, error) {
+		return s.analytics().GetAnalyticsProjects(ctx, f)
+	})
 }
 
 func (s *Store) GetAnalyticsHourOfWeek(
 	ctx context.Context, f db.AnalyticsFilter,
 ) (db.HourOfWeekResponse, error) {
-	return s.analytics().GetAnalyticsHourOfWeek(ctx, f)
+	return keptAnalytics(ctx, s, "hourofweek", f, "", func(ctx context.Context) (db.HourOfWeekResponse, error) {
+		return s.analytics().GetAnalyticsHourOfWeek(ctx, f)
+	})
 }
 
 func (s *Store) GetAnalyticsSessionShape(
 	ctx context.Context, f db.AnalyticsFilter,
 ) (db.SessionShapeResponse, error) {
-	return s.analytics().GetAnalyticsSessionShape(ctx, f)
+	return keptAnalytics(ctx, s, "sessionshape", f, "", func(ctx context.Context) (db.SessionShapeResponse, error) {
+		return s.analytics().GetAnalyticsSessionShape(ctx, f)
+	})
 }
 
 func (s *Store) GetAnalyticsTools(
@@ -450,19 +460,25 @@ func (s *Store) GetAnalyticsSkills(
 func (s *Store) GetAnalyticsVelocity(
 	ctx context.Context, f db.AnalyticsFilter,
 ) (db.VelocityResponse, error) {
-	return s.analytics().GetAnalyticsVelocity(ctx, f)
+	return keptAnalytics(ctx, s, "velocity", f, "", func(ctx context.Context) (db.VelocityResponse, error) {
+		return s.analytics().GetAnalyticsVelocity(ctx, f)
+	})
 }
 
 func (s *Store) GetAnalyticsTopSessions(
 	ctx context.Context, f db.AnalyticsFilter, metric string,
 ) (db.TopSessionsResponse, error) {
-	return s.analytics().GetAnalyticsTopSessions(ctx, f, metric)
+	return keptAnalytics(ctx, s, "topsessions", f, metric, func(ctx context.Context) (db.TopSessionsResponse, error) {
+		return s.analytics().GetAnalyticsTopSessions(ctx, f, metric)
+	})
 }
 
 func (s *Store) GetAnalyticsSignals(
 	ctx context.Context, f db.AnalyticsFilter,
 ) (db.SignalsAnalyticsResponse, error) {
-	return s.analytics().GetAnalyticsSignals(ctx, f)
+	return keptAnalytics(ctx, s, "signals", f, "", func(ctx context.Context) (db.SignalsAnalyticsResponse, error) {
+		return s.analytics().GetAnalyticsSignals(ctx, f)
+	})
 }
 
 func (s *Store) GetAnalyticsSignalSessions(

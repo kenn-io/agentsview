@@ -8,16 +8,16 @@ import (
 	"go.kenn.io/agentsview/internal/db"
 )
 
-func keptAnalytics[T any](ctx context.Context, s *Store, panel string, f db.AnalyticsFilter, granularity string, load func(context.Context) (T, error)) (T, error) {
+func keptAnalytics[T any](ctx context.Context, s *Store, panel string, f db.AnalyticsFilter, variant string, load func(context.Context) (T, error)) (T, error) {
 	version := s.keptVersion()
 	if version == "" || db.TerminationUsesTime(f.Termination) {
 		return load(ctx)
 	}
 	key, err := json.Marshal(struct {
-		Panel       string
-		Filter      db.AnalyticsFilter
-		Granularity string
-	}{panel, f, granularity})
+		Panel   string
+		Filter  db.AnalyticsFilter
+		Variant string
+	}{panel, f, variant})
 	if err != nil {
 		var zero T
 		return zero, fmt.Errorf("encoding analytics selection: %w", err)
