@@ -206,6 +206,7 @@ func TestDoctorMemoryHumanOutputSeparatesTargetAndClient(t *testing.T) {
 func setDoctorMemoryTestEnvironment(t *testing.T, home string) {
 	t.Helper()
 	setTestHome(t, home)
+	t.Setenv("PATH", t.TempDir())
 	for _, name := range []string{
 		"AGENTSVIEW_MEMORY_SERVER",
 		"AGENTSVIEW_MEMORY_SERVER_TOKEN_FILE",
@@ -250,4 +251,30 @@ func writeDoctorMemoryPlugin(t *testing.T) string {
 	write("hooks/hooks.json", `{"hooks":{"SessionStart":[{"hooks":[{"type":"command","command":"scripts/session-start.sh"}]}]}}`, 0o644)
 	write("scripts/session-start.sh", "#!/bin/sh\nexec agentsview memory session-start --hook\n", 0o755)
 	return root
+}
+
+func TestDoctorMemoryReportsInstalledAgentSetup(t *testing.T) {
+	home := t.TempDir()
+	setDoctorMemoryTestEnvironment(t, home)
+	t.Setenv("CLAUDE_CONFIG_DIR", "")
+	t.Setenv("CODEX_HOME", "")
+	bin := t.TempDir()
+	t.Setenv("PATH", bin)
+	require.NoError(t, os.WriteFile(filepath.Join(bin, "claude"), []byte("#!/bin/sh\nprintf 'Scope: User config\\nStatus: Connected\\n'\n"), 0755))
+	_, err := executeCommand(newRootCommand(), "agent", "setup", "--agent", "claude")
+	require.NoError(t, err)
+	server := memoryStatusServer(t, service.MemoryStatus{Status: service.MemoryReady, ObservedAt: time.Now()})
+	out, err := executeCommand(newRootCommand(), "doctor", "memory", "--server", server.URL, "--format", "json")
+	require.NoError(t, err, out)
+	var report doctorMemoryReport
+	require.NoError(t, json.Unmarshal([]byte(out), &report))
+	require.Len(t, report.Client.Rows, 2)
+	require.Equal(t, "mcp agentsview", report.Client.Rows[1].Piece)
+	require.EqualValues(t, "ok", report.Client.Rows[1].State)
+	require.NoError(t, os.Remove(filepath.Join(home, ".claude.json")))
+	out, err = executeCommand(newRootCommand(), "doctor", "memory", "--server", server.URL, "--format", "json")
+	require.NoError(t, err, out)
+	require.NoError(t, json.Unmarshal([]byte(out), &report))
+	require.EqualValues(t, "missing", report.Client.Rows[1].State)
+	require.Equal(t, "agentsview agent setup", report.Client.Rows[1].NextStep)
 }

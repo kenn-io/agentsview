@@ -148,27 +148,18 @@ complete tool list above.
 
 This profile's tool list is about 21 KB, and the same test holds it under 24 KB.
 
-The native
-[AgentsView Memory package](https://github.com/kenn-io/agentsview/tree/main/plugins/agentsview-memory)
-registers this profile for Claude Code and Codex and bundles the recall skill,
-Claude's focused search agent, and a session-start hook. Install it through your
-client's native plugin flow and ensure `agentsview` is on the client's `PATH`.
-The package README explains local and hosted setup.
+Run `agentsview agent setup` to install the recall skill and focused MCP profile for installed Claude Code and Codex clients. Use `--agent claude` or `--agent codex` to select a client, and `--check` to inspect setup. Existing MCP entries that differ from the requested configuration are preserved; remove the entry in the client or use `--force` to replace it. The same flag overwrites edited skills.
 
-For a standalone skill installation, use `agentsview skills install`; see
-[the CLI reference](/docs/commands/#agentsview-skills) for client and project
-scope. Choose one installation route per client to avoid loading duplicate
-skills. Both routes teach agents to search relevant history, distinguish
-proposals from accepted decisions, and cite transcript evidence.
+For a remote archive, run `agentsview agent setup --server URL --server-token-file PATH`. The focused profile also honors the hosted environment variables below. For skill-only or project-level installation, use `agentsview skills install`; see [the CLI reference](/docs/commands/#agentsview-skills).
 
-The native package's MCP process reads `AGENTSVIEW_MEMORY_SERVER`,
+The memory profile reads `AGENTSVIEW_MEMORY_SERVER`,
 `AGENTSVIEW_MEMORY_SERVER_TOKEN_FILE`, or `AGENTSVIEW_MEMORY_PG`; explicit
 command flags still win. A token-file setting without a server fails instead of
 falling back to the local archive. PostgreSQL reads use the configured
 `default_pg` target.
 
 Run `agentsview doctor memory` to inspect this server status together with the
-local client integration. Pass the native package root with `--plugin-root` to
+installed client integrations. Pass the native package root with `--plugin-root` to
 check its skill, MCP profile, and SessionStart hook. The diagnostic uses
 read-only metadata and does not start a daemon, sync transcripts, or rebuild
 vectors.

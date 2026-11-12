@@ -60,6 +60,7 @@ docker run --rm -p 127.0.0.1:8080:8080 \
 ## Quick Start
 
 ```bash
+agentsview agent setup     # connect Claude Code and Codex to conversation memory
 agentsview serve           # start the server in the foreground
 agentsview daemon start    # alternatively, start the same server in the background
 agentsview daemon status   # show daemon status
@@ -367,7 +368,7 @@ agentsview report stats --include-git-outcomes
   adds folder suggestions, session previews, and bulk corrections
 - **Recall corpus browser** -- approve or archive experimental extracted
   knowledge and jump from entries to their supporting transcript evidence
-- **Conversation memory** -- native Claude Code and Codex plugins let agents
+- **Conversation memory** -- Claude Code and Codex setup lets agents
   search past decisions and cite source messages; see
   [MCP memory setup](https://agentsview.io/docs/mcp/#focused-memory-profile)
 - **Eight interface languages** -- Azerbaijani, English, French, Japanese,

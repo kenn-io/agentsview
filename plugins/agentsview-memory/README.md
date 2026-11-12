@@ -9,7 +9,7 @@ through the focused AgentsView MCP profile. It bundles the same generated skill
 used by `agentsview skills install`, plus Claude's bounded search agent and a
 fail-open `SessionStart` hook for `startup`, `resume`, and `clear`.
 
-Install the package with the client's native plugin flow and ensure `agentsview`
+Run `agentsview agent setup` to install the skill and focused MCP profile for Claude Code and Codex. Ensure `agentsview`
 is on the client's `PATH`. The default target is the local archive owner. Select
 one hosted role through the client's local environment:
 
@@ -36,10 +36,7 @@ SessionStart hook. The diagnostic reads metadata only and omits package paths,
 server URLs, and tokens from its output.
 
 The startup diagnostic reports a standalone AgentsView skill installed in the
-same client home because loading both routes would duplicate the skill. It never
-changes or removes that file. Remove the standalone copy manually after
-reviewing any local edits. Native client uninstall owns only this package and
-leaves the AgentsView archive intact.
+same client home because loading both routes duplicates the skill.
 
 The recall instructions and search agent adapt Episodic Memory at commit
 `7e06519357777badd7a115d2014a7ef845904310`, Copyright (c) 2025 Jesse Vincent,

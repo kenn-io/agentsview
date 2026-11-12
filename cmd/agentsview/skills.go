@@ -74,7 +74,27 @@ func newSkillsInstallCommand() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			return runSkillsInstall(cmd.OutOrStdout(), harnesses, base, force, remote)
+			if err := runSkillsInstall(cmd.OutOrStdout(), harnesses, base, force, remote); err != nil {
+				return err
+			}
+			if !project {
+				for _, h := range harnesses {
+					agent := "codex"
+					if h == skills.HarnessClaude {
+						agent = "claude"
+					}
+					items, err := setupItems(agent, remote, false)
+					if err != nil {
+						continue
+					}
+					status, err := items[1].Check(cmd.Context())
+					if err == nil && status.State == "missing" {
+						fmt.Fprintln(cmd.OutOrStdout(), "Set up MCP with agentsview agent setup")
+						break
+					}
+				}
+			}
+			return nil
 		},
 	}
 	flags := cmd.Flags()
