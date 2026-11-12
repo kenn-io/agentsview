@@ -5241,7 +5241,8 @@ func bulkImportWALAutocheckpointPages(pageSize int) int {
 // full-resync archive and defers its automatic WAL checkpoints. It also drops
 // the usage generation insert trigger: any row trigger makes SQLite stage each
 // multi-row message INSERT through a temporary table, and with the search
-// triggers already dropped this one carried that cost alone.
+// triggers already dropped this one carried that cost alone. It also suspends
+// the analytics tool insert trigger's per-row work.
 // RebuildBulkImportIndexes and CheckpointWALTruncate must succeed before the swap.
 func (db *DB) DropBulkImportIndexes(ctx context.Context) error {
 	db.mu.Lock()
@@ -5269,9 +5270,9 @@ func (db *DB) DropBulkImportIndexes(ctx context.Context) error {
 			return fmt.Errorf("dropping bulk import index %s: %w", name, err)
 		}
 	}
-	if _, err := w.Exec(ctx,
-		`DROP TRIGGER IF EXISTS messages_usage_generation_insert`); err != nil {
-		return fmt.Errorf("dropping usage generation insert trigger: %w", err)
+	if _, err := w.Exec(ctx, `DROP TRIGGER IF EXISTS messages_usage_generation_insert;
+		DROP TRIGGER IF EXISTS trg_tool_calls_analytics_change_insert`); err != nil {
+		return fmt.Errorf("dropping bulk import insert triggers: %w", err)
 	}
 	return nil
 }
@@ -5305,10 +5306,10 @@ func (db *DB) RebuildBulkImportIndexes(ctx context.Context) error {
 	return ensureAnalyticsIndexLocked(ctx, db.getWriter())
 }
 
-// restoreUsageGenerationsLocked reinstalls the usage generation insert trigger
-// and gives every session a new generation. Inserts made while the trigger was
-// dropped may have landed before an existing ordinal, so no generation from
-// that window may vouch for a cached usage prefix. The replacement has a new
+// restoreUsageGenerationsLocked reinstalls the deferred insert triggers,
+// invalidates analytics, and gives every session a new generation. Inserts
+// made while the trigger was dropped may have landed before an existing ordinal,
+// so no generation from that window may vouch for a cached usage prefix. The replacement has a new
 // database ID and starts with an empty usage cache, so the only prefixes this
 // discards were filled from the replacement during the load.
 func restoreUsageGenerationsLocked(ctx context.Context, w *writerHandle) error {
@@ -5319,6 +5320,9 @@ func restoreUsageGenerationsLocked(ctx context.Context, w *writerHandle) error {
 	defer func() { _ = tx.Rollback() }()
 	if _, err := tx.ExecContext(ctx, messagesUsageGenerationInsertTriggerSQL); err != nil {
 		return fmt.Errorf("reinstalling usage generation insert trigger: %w", err)
+	}
+	if _, err := tx.ExecContext(ctx, `DROP TRIGGER IF EXISTS trg_tool_calls_analytics_change_insert;`+analyticsToolInsertTriggerSQL+analyticsCounterBody); err != nil {
+		return fmt.Errorf("restoring analytics insert trigger: %w", err)
 	}
 	if _, err := tx.ExecContext(ctx,
 		`UPDATE sessions SET usage_generation=lower(hex(randomblob(8)))`); err != nil {
