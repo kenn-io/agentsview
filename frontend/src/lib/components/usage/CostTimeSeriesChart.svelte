@@ -8,11 +8,8 @@
   import { seriesSwatchBackground, type SeriesStyle } from "@kenn-io/kit-ui/utils/palette";
   import { scaleLinear } from "d3-scale";
   import { curveLinear, curveMonotoneX } from "d3-shape";
-  import {
-    usage,
-    type GroupBy,
-    type TimeSeriesView,
-  } from "../../stores/usage.svelte.js";
+  import { usage } from "../../stores/usage.svelte.js";
+  import type { GroupBy, TimeSeriesView } from "../../stores/usagePreferences.js";
   import { formatDateTime, m } from "../../i18n/index.js";
   import { formatMoney, moneyFromMicrodollars } from "../../money.js";
   import { sumSelectedTokens } from "../../stores/usageTokenTypes.js";
