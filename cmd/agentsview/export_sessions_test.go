@@ -964,6 +964,43 @@ func TestExportFailureSurvivesInterruptedDaemonStartup(t *testing.T) {
 	assert.Contains(t, status, "disk error")
 }
 
+func TestExportWaitDuringRestartBeforeWorkerStarts(t *testing.T) {
+	for _, mode := range []string{"status", "wait", "daemon stops"} {
+		t.Run(mode, func(t *testing.T) {
+			path := pendingExportArchive(t, false)
+			raw, err := sql.Open("sqlite3", path)
+			require.NoError(t, err)
+			_, err = raw.ExecContext(t.Context(), `INSERT INTO background_migrations (name, state, last_error, updated_at) VALUES (?, 'failed', 'disk error', strftime('%Y-%m-%dT%H:%M:%fZ', 'now', '-1 hour'))`, db.ProjectIdentityBackfillName)
+			require.NoError(t, err)
+			require.NoError(t, raw.Close())
+			dir := filepath.Dir(path)
+			writeLiveRuntime(t, dir, false)
+			if mode == "status" {
+				status, _, err := executeExportSessionsCommand(newRootCommand(), "export", "status")
+				require.NoError(t, err)
+				assert.Contains(t, status, "pending")
+				assert.NotContains(t, status, "disk error")
+				return
+			}
+			ctx, cancel := context.WithTimeout(t.Context(), 15*time.Second)
+			defer cancel()
+			progress := make(chan struct{}, 1)
+			out, done := exportWaitCommand(t, ctx, exportProgressSignal(progress))
+			waitExportProgress(t, progress, done)
+			assert.Empty(t, out.String())
+			if mode == "daemon stops" {
+				RemoveDaemonRuntime(dir)
+				err = <-done
+				require.ErrorContains(t, err, "disk error")
+				assert.Contains(t, err.Error(), "agentsview daemon restart")
+				return
+			}
+			cancel()
+			require.ErrorIs(t, <-done, context.Canceled)
+		})
+	}
+}
+
 func TestExportLiveFailureReporting(t *testing.T) {
 	testExportFailureRecovery(t, "unrecordable failure", func(t *testing.T) {
 		t.Helper()
