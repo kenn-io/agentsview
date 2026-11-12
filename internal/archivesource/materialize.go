@@ -59,8 +59,7 @@ func MaterializeSnapshot(ctx context.Context, sources []config.ArchiveSource, ow
 		selected, err = repo.OpenSnapshot(ctx, source.Snapshot)
 		if err != nil {
 			// LoadManifest reads exactly this path before opening the index or members.
-			var pe *os.PathError
-			if errors.Is(err, os.ErrNotExist) && errors.As(err, &pe) && pe.Path == source.Snapshot+".mvmanifest" {
+			if pe, ok := errors.AsType[*os.PathError](err); errors.Is(err, os.ErrNotExist) && ok && pe.Path == source.Snapshot+".mvmanifest" {
 				candidateErr = errors.Join(candidateErr, err)
 				continue
 			}

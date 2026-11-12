@@ -34,20 +34,20 @@ func TestSelectedInventoryAuthorityAndScope(t *testing.T) {
 			conn, err := sql.Open("sqlite3", ":memory:")
 			require.NoError(t, err)
 			defer conn.Close()
-			_, err = conn.Exec(`CREATE TABLE raw_archive_files(root_id TEXT,path TEXT,sha256 TEXT,size INTEGER,mod_time_ns INTEGER,covered INTEGER)`)
+			_, err = conn.ExecContext(t.Context(), `CREATE TABLE raw_archive_files(root_id TEXT,path TEXT,sha256 TEXT,size INTEGER,mod_time_ns INTEGER,covered INTEGER)`)
 			require.NoError(t, err)
 			insert := func(root, name, hash string, covered bool) {
-				_, err := conn.Exec(`INSERT INTO raw_archive_files VALUES(?,?,?,?,?,?)`, root, name, hash, 1, 1, covered)
+				_, err := conn.ExecContext(t.Context(), `INSERT INTO raw_archive_files VALUES(?,?,?,?,?,?)`, root, name, hash, 1, 1, covered)
 				require.NoError(t, err)
 			}
 			primary := "project/id.jsonl"
 			insert("root", primary, strings.Repeat("a", 64), true)
 			insert("root", primary, strings.Repeat("9", 64), true)
 			bound := rawsync.Entry{Path: primary, Type: "file", Length: 1, Objects: []rawsync.ObjectRef{{SHA256: strings.Repeat("a", 64), Length: 1}}}
-			for i := 0; i < tc.covered; i++ {
+			for i := range tc.covered {
 				insert("root", "project/id/subagents/meta.json", strings.Repeat(string(rune('b'+i)), 64), true)
 			}
-			for i := 0; i < tc.supplemental; i++ {
+			for i := range tc.supplemental {
 				insert("root", "project/id/subagents/meta.json", strings.Repeat(string(rune('d'+i)), 64), false)
 			}
 			insert("root", "project/sibling/subagents/agent.jsonl", strings.Repeat("e", 64), true)
@@ -66,12 +66,12 @@ func TestSelectedInventoryAuthorityAndScope(t *testing.T) {
 			}
 			assert.Equal(t, strings.Repeat(want, 64), entries[1].Objects[0].SHA256)
 			assert.Equal(t, bound.Objects, entries[0].Objects)
-			_, err = conn.Exec(`DELETE FROM raw_archive_files WHERE path=? AND sha256=?`, primary, strings.Repeat("a", 64))
+			_, err = conn.ExecContext(t.Context(), `DELETE FROM raw_archive_files WHERE path=? AND sha256=?`, primary, strings.Repeat("a", 64))
 			require.NoError(t, err)
 			_, err = selectedInventory(t.Context(), conn, "root", bound, "project/id/")
 			require.ErrorContains(t, err, "differs from manifest")
 			insert("root", primary, strings.Repeat("a", 64), true)
-			_, err = conn.Exec(`INSERT INTO raw_archive_files VALUES(?,?,?,?,?,?)`, "root", "project/id/subagents/corrupt.json", strings.Repeat("a", 64), 1, 1, 2)
+			_, err = conn.ExecContext(t.Context(), `INSERT INTO raw_archive_files VALUES(?,?,?,?,?,?)`, "root", "project/id/subagents/corrupt.json", strings.Repeat("a", 64), 1, 1, 2)
 			require.NoError(t, err)
 			_, err = selectedInventory(t.Context(), conn, "root", bound, "project/id/")
 			require.Error(t, err)
