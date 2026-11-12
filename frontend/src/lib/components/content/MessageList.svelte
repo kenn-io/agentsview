@@ -28,6 +28,8 @@
   import { inSessionSearch } from "../../stores/inSessionSearch.svelte.js";
   import { sessionActivity } from "../../stores/sessionActivity.svelte.js";
   import SessionFindView from "./SessionFindView.svelte";
+  import SessionToc from "./SessionToc.svelte";
+  import { sessionToc } from "../../stores/sessionToc.svelte.js";
   import {
     getLatestDisplayIndex,
     type ScrollAlign,
@@ -332,6 +334,59 @@
     }
     return ordinals;
   }
+
+  // Tell the prompt outline which rows are on screen, so it can mark the
+  // turn being read.
+  function publishTocView() {
+    const v = virtualizer.instance;
+    if (!v || !containerRef) {
+      sessionToc.view = null;
+      return;
+    }
+    const top = containerRef.scrollTop;
+    const bottom = top + containerRef.clientHeight;
+    let topOrdinal: number | null = null;
+    let minOrdinal = Number.POSITIVE_INFINITY;
+    let maxOrdinal = Number.NEGATIVE_INFINITY;
+    for (const row of v.getVirtualItems()) {
+      if (row.end <= top || row.start >= bottom) continue;
+      const item = itemAt(row.index);
+      if (!item) continue;
+      topOrdinal ??= ui.sortNewestFirst ? item.ordinals.at(-1)! : item.ordinals[0]!;
+      for (const ordinal of item.ordinals) {
+        minOrdinal = Math.min(minOrdinal, ordinal);
+        maxOrdinal = Math.max(maxOrdinal, ordinal);
+      }
+    }
+    if (topOrdinal === null) {
+      sessionToc.view = null;
+      return;
+    }
+    const atEnd = !ui.sortNewestFirst &&
+      top + containerRef.clientHeight >= containerRef.scrollHeight - 2;
+    const prev = sessionToc.view;
+    if (
+      prev?.topOrdinal === topOrdinal && prev.minOrdinal === minOrdinal &&
+      prev.maxOrdinal === maxOrdinal && prev.atEnd === atEnd
+    ) {
+      return;
+    }
+    sessionToc.view = { topOrdinal, minOrdinal, maxOrdinal, atEnd };
+  }
+
+  $effect(() => {
+    void messages.sessionId;
+    untrack(() => sessionToc.resetView());
+  });
+
+  $effect(() => {
+    if (!sessionToc.open) return;
+    void virtualizer.instance;
+    void displayItemsAsc;
+    void containerScrollTop;
+    void ui.sortNewestFirst;
+    untrack(publishTocView);
+  });
 
   // Recompute visible timestamp when minimap opens or
   // message content changes (e.g. SSE reload).
@@ -1088,6 +1143,7 @@
       {/each}
     </div>
   </div>
+  <SessionToc />
   </SessionFindView>
 {/if}
 

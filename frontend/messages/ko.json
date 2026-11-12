@@ -3116,5 +3116,24 @@
   "empty_archive_title": "아직 세션이 없습니다",
   "empty_archive_desc": "AgentsView는 이 폴더에서 세션을 읽습니다. 에이전트가 이 중 한 곳에 기록하면 여기에 표시됩니다.",
   "empty_archive_choose_folders": "폴더 선택",
-  "usage_tooltip_no_usage": "사용 없음"
+  "usage_tooltip_no_usage": "사용 없음",
+  "session_toc_title": "프롬프트",
+  "session_toc_toggle": "프롬프트 개요",
+  "session_toc_toggle_shortcut": "프롬프트 개요 (T)",
+  "session_toc_close": "프롬프트 개요 닫기",
+  "session_toc_count": [
+    {
+      "declarations": ["input count", "input countLabel", "local countPlural = count: plural"],
+      "selectors": ["countPlural"],
+      "match": {
+        "countPlural=other": "프롬프트 {countLabel}개"
+      }
+    }
+  ],
+  "session_toc_empty": "이 세션에 프롬프트가 없습니다",
+  "session_toc_hidden_by_filter": "메시지 필터로 프롬프트가 숨겨져 있습니다",
+  "session_toc_loading_older": "이전 프롬프트를 불러오는 중…",
+  "session_toc_load_failed": "이전 프롬프트를 불러올 수 없습니다",
+  "session_toc_empty_prompt": "빈 프롬프트",
+  "shortcuts_toggle_session_toc": "프롬프트 개요 표시 또는 숨기기"
 }

@@ -3261,5 +3261,25 @@
   "empty_archive_title": "Aún no hay sesiones",
   "empty_archive_desc": "AgentsView lee las sesiones de estas carpetas. Aparecerán aquí cuando un agente escriba en alguna de ellas.",
   "empty_archive_choose_folders": "Elegir carpetas",
-  "usage_tooltip_no_usage": "Sin uso"
+  "usage_tooltip_no_usage": "Sin uso",
+  "session_toc_title": "Prompts",
+  "session_toc_toggle": "Índice de prompts",
+  "session_toc_toggle_shortcut": "Índice de prompts (T)",
+  "session_toc_close": "Cerrar el índice de prompts",
+  "session_toc_count": [
+    {
+      "declarations": ["input count", "input countLabel", "local countPlural = count: plural"],
+      "selectors": ["countPlural"],
+      "match": {
+        "countPlural=one": "{countLabel} prompt",
+        "countPlural=other": "{countLabel} prompts"
+      }
+    }
+  ],
+  "session_toc_empty": "No hay prompts en esta sesión",
+  "session_toc_hidden_by_filter": "El filtro de mensajes oculta los prompts",
+  "session_toc_loading_older": "Cargando prompts anteriores…",
+  "session_toc_load_failed": "No se pudieron cargar los prompts anteriores",
+  "session_toc_empty_prompt": "Prompt vacío",
+  "shortcuts_toggle_session_toc": "Mostrar u ocultar el índice de prompts"
 }

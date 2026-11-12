@@ -3235,5 +3235,25 @@
   "empty_archive_title": "No sessions yet",
   "empty_archive_desc": "AgentsView reads sessions from these folders. They appear here once an agent writes to one of them.",
   "empty_archive_choose_folders": "Choose folders",
-  "usage_tooltip_no_usage": "No usage"
+  "usage_tooltip_no_usage": "No usage",
+  "session_toc_title": "Prompts",
+  "session_toc_toggle": "Prompt outline",
+  "session_toc_toggle_shortcut": "Prompt outline (T)",
+  "session_toc_close": "Close prompt outline",
+  "session_toc_count": [
+    {
+      "declarations": ["input count", "input countLabel", "local countPlural = count: plural"],
+      "selectors": ["countPlural"],
+      "match": {
+        "countPlural=one": "{countLabel} prompt",
+        "countPlural=other": "{countLabel} prompts"
+      }
+    }
+  ],
+  "session_toc_empty": "No prompts in this session",
+  "session_toc_hidden_by_filter": "Prompts are hidden by the message filter",
+  "session_toc_loading_older": "Loading earlier prompts…",
+  "session_toc_load_failed": "Could not load earlier prompts",
+  "session_toc_empty_prompt": "Empty prompt",
+  "shortcuts_toggle_session_toc": "Show or hide prompt outline"
 }

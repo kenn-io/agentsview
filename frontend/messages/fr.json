@@ -3261,5 +3261,25 @@
   "empty_archive_title": "Aucune session pour l'instant",
   "empty_archive_desc": "AgentsView lit les sessions dans ces dossiers. Elles apparaîtront ici dès qu'un agent écrira dans l'un d'eux.",
   "empty_archive_choose_folders": "Choisir les dossiers",
-  "usage_tooltip_no_usage": "Aucune utilisation"
+  "usage_tooltip_no_usage": "Aucune utilisation",
+  "session_toc_title": "Prompts",
+  "session_toc_toggle": "Plan des prompts",
+  "session_toc_toggle_shortcut": "Plan des prompts (T)",
+  "session_toc_close": "Fermer le plan des prompts",
+  "session_toc_count": [
+    {
+      "declarations": ["input count", "input countLabel", "local countPlural = count: plural"],
+      "selectors": ["countPlural"],
+      "match": {
+        "countPlural=one": "{countLabel} prompt",
+        "countPlural=other": "{countLabel} prompts"
+      }
+    }
+  ],
+  "session_toc_empty": "Aucun prompt dans cette session",
+  "session_toc_hidden_by_filter": "Les prompts sont masqués par le filtre de messages",
+  "session_toc_loading_older": "Chargement des prompts précédents…",
+  "session_toc_load_failed": "Impossible de charger les prompts précédents",
+  "session_toc_empty_prompt": "Prompt vide",
+  "shortcuts_toggle_session_toc": "Afficher ou masquer le plan des prompts"
 }

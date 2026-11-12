@@ -68,6 +68,7 @@ export { default as SparklesIcon } from "@lucide/svelte/icons/sparkles";
 export { default as SquareTerminalIcon } from "@lucide/svelte/icons/square-terminal";
 export { default as StarIcon } from "@lucide/svelte/icons/star";
 export { default as SunIcon } from "@lucide/svelte/icons/sun";
+export { default as TableOfContentsIcon } from "@lucide/svelte/icons/table-of-contents";
 export { default as TrashIcon } from "@lucide/svelte/icons/trash-2";
 export { default as TriangleAlertIcon } from "@lucide/svelte/icons/triangle-alert";
 export { default as UploadIcon } from "@lucide/svelte/icons/upload";

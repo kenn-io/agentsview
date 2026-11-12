@@ -14,6 +14,7 @@
     LinkIcon,
     SearchIcon,
     SquareTerminalIcon,
+    TableOfContentsIcon,
     TriangleAlertIcon,
   } from "../../icons.js";
   import { onDestroy, onMount, untrack } from "svelte";
@@ -73,7 +74,9 @@
   import { ui } from "../../stores/ui.svelte.js";
   import TranscriptControls from "./TranscriptControls.svelte";
   import { m } from "../../i18n/index.js";
-  import { Table, TableHeaderCell } from "@kenn-io/kit-ui";
+  import { IconButton, Table, TableHeaderCell } from "@kenn-io/kit-ui";
+  import { sessionToc } from "../../stores/sessionToc.svelte.js";
+  import { SESSION_TOC_ID } from "../content/session-toc.js";
 
   interface Props {
     session: Session | undefined;
@@ -1251,6 +1254,17 @@
       >
         <ChartColumnIcon size="14" aria-hidden="true" />
       </button>
+      <IconButton
+        ariaLabel={m.session_toc_toggle()}
+        title={m.session_toc_toggle_shortcut()}
+        ariaPressed={sessionToc.open}
+        ariaExpanded={sessionToc.open}
+        ariaControls={SESSION_TOC_ID}
+        ariaKeyshortcuts="T"
+        onclick={() => sessionToc.toggle()}
+      >
+        <TableOfContentsIcon size="14" aria-hidden="true" />
+      </IconButton>
       <button
         class="insight-btn"
         title={m.insights_page_agent_analysis()}
