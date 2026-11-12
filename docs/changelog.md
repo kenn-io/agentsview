@@ -18,7 +18,8 @@ The latest release is
   [Custom Model Pricing](/docs/token-usage/#custom-model-pricing).
 
 - Resume a Claude session in a local checkout by installing its original files
-  from configured sources with `agentsview session materialize`.
+  from configured sources or attached snapshots with
+  `agentsview session materialize`.
 
 - Follow archive changes live from the local daemon with
   `GET /api/v1/changes/stream`. A sync client or dashboard receives every

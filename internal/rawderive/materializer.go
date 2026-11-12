@@ -7,7 +7,6 @@ import (
 	"io"
 	"os"
 	"path/filepath"
-	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -147,32 +146,15 @@ func (m Materializer) MaterializeEntries(ctx context.Context, identity rawsync.A
 	if capturedAt.IsZero() {
 		return nil, fmt.Errorf("%w: capture time is required", rawsync.ErrInvalid)
 	}
-	limits := rawsync.DefaultManifestLimits()
-	if len(entries) > limits.MaxEntries {
-		return nil, fmt.Errorf("%w: entry limit exceeded", rawsync.ErrInvalid)
+	if _, err := rawsync.ValidateEntryBatch(entries, rawsync.DefaultManifestLimits()); err != nil {
+		return nil, err
 	}
-	seen := make(map[string]rawsync.Entry)
-	selected := make([]rawsync.Entry, 0, len(entries))
 	var total int64
 	for _, entry := range entries {
-		if _, err := rawsync.ValidateEntryBatch([]rawsync.Entry{entry}, limits); err != nil {
-			return nil, err
-		}
-		if previous, ok := seen[entry.Path]; ok {
-			if previous.Length != entry.Length || !slices.Equal(previous.Objects, entry.Objects) {
-				return nil, fmt.Errorf("%w: conflicting materialized entry %q", rawsync.ErrInvalid, entry.Path)
-			}
-			continue
-		}
-		if entry.Length < 0 || entry.Length > m.MaxTotalBytes-total {
+		if entry.Length > m.MaxTotalBytes-total {
 			return nil, fmt.Errorf("%w: %w: materialization exceeds %d bytes", rawsync.ErrInvalid, ErrSizeLimit, m.MaxTotalBytes)
 		}
-		seen[entry.Path] = entry
 		total += entry.Length
-		selected = append(selected, entry)
-	}
-	if _, err := rawsync.ValidateEntryBatch(selected, limits); err != nil {
-		return nil, err
 	}
 
 	root, err := os.MkdirTemp(m.BaseDir, "agentsview-raw-")
@@ -190,7 +172,7 @@ func (m Materializer) MaterializeEntries(ctx context.Context, identity rawsync.A
 		}
 	}()
 
-	for _, entry := range selected {
+	for _, entry := range entries {
 		if err := ctx.Err(); err != nil {
 			return nil, err
 		}

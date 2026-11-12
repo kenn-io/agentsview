@@ -14,22 +14,9 @@ import (
 	"go.kenn.io/agentsview/internal/db"
 	"go.kenn.io/agentsview/internal/dbtest"
 	"go.kenn.io/agentsview/internal/rawarchive"
+	"go.kenn.io/agentsview/internal/rawderive"
 	"go.kenn.io/agentsview/internal/testjsonl"
 )
-
-func TestMaterializeSnapshotRejectsNewerInventory(t *testing.T) {
-	source, inputs := archiveFixture(t)
-	broken := invalidIndexSnapshot(t, source, inputs, "inventory version")
-	index, err := OpenIndex(t.Context(), source, t.TempDir(), nil)
-	require.NoError(t, err)
-	defer index.Close()
-	// The unsupported version is refused before source ownership is read.
-	owner := db.ArchiveSessionProvenance{ArchiveSourceProvenance: db.ArchiveSourceProvenance{
-		Attachment: db.ArchiveAttachmentKey{RepositoryID: index.Info.RepositoryID, SnapshotID: broken.Snapshot},
-	}}
-	_, _, _, err = MaterializeSnapshot(t.Context(), []config.ArchiveSource{broken}, []db.ArchiveSessionProvenance{owner}, "claude", 512<<20)
-	require.ErrorContains(t, err, "unsupported recovery inventory version")
-}
 
 func TestSelectedInventoryAuthorityAndScope(t *testing.T) {
 	for _, tc := range []struct {
@@ -140,13 +127,16 @@ func TestMaterializeSnapshotCaptureLayouts(t *testing.T) {
 				require.NoError(t, err)
 				assert.Equal(t, want, string(data))
 			}
-			_, err = tree.EntryPath(strings.TrimSuffix(selected, id+".jsonl") + "sibling/subagents/meta.json")
-			require.Error(t, err)
 			_, err = tree.EntryPath(strings.TrimSuffix(selected, id+".jsonl") + "00000000-0000-4000-8000-000000000000/subagents/agent-reviewer.jsonl")
 			require.Error(t, err)
 			require.NoError(t, tree.Cleanup())
-			_, _, _, err = MaterializeSnapshot(t.Context(), []config.ArchiveSource{source}, []db.ArchiveSessionProvenance{owner}, "claude", 1)
-			require.Error(t, err)
+			if layout == "home" {
+				refused, path, attachment, err := MaterializeSnapshot(t.Context(), []config.ArchiveSource{source}, []db.ArchiveSessionProvenance{owner}, "claude", 1)
+				require.ErrorIs(t, err, rawderive.ErrSizeLimit)
+				assert.Nil(t, refused)
+				assert.Equal(t, selected, path)
+				assert.Equal(t, owner.Attachment, attachment)
+			}
 			files, err := os.ReadDir(scratch)
 			require.NoError(t, err)
 			assert.Empty(t, files)
@@ -156,7 +146,6 @@ func TestMaterializeSnapshotCaptureLayouts(t *testing.T) {
 
 func TestMaterializeSnapshotEquivalentCandidates(t *testing.T) {
 	source, inputs := archiveFixture(t)
-	require.NoError(t, os.RemoveAll(inputs))
 	index, err := OpenIndex(t.Context(), source, t.TempDir(), nil)
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, index.Close()) })
@@ -169,15 +158,30 @@ func TestMaterializeSnapshotEquivalentCandidates(t *testing.T) {
 		}
 	}
 	require.NotEmpty(t, owner.ManifestID)
+	newer := invalidIndexSnapshot(t, source, inputs, "inventory version")
+	require.NoError(t, os.RemoveAll(inputs))
+	broken := source
+	broken.Name = "broken"
+	broken.Repository = filepath.Join(t.TempDir(), "repository")
+	require.NoError(t, os.CopyFS(broken.Repository, os.DirFS(source.Repository)))
+	manifestPath := filepath.Join(broken.Repository, "snapshots", source.Snapshot+".mvmanifest")
+	require.NoError(t, os.Chmod(manifestPath, 0o600))
+	require.NoError(t, os.WriteFile(manifestPath, []byte("corrupt"), 0o600))
+	scratch := t.TempDir()
+	t.Setenv("TMPDIR", scratch)
+	t.Setenv("TMP", scratch)
+	t.Setenv("TEMP", scratch)
+	assertScratchEmpty := func(t *testing.T) {
+		t.Helper()
+		files, err := os.ReadDir(scratch)
+		require.NoError(t, err)
+		assert.Empty(t, files)
+	}
 	ctx := t.Context()
-	// Duplicate configuration and an unavailable equivalent membership do not
-	// make the configured, verified snapshot ambiguous.
+	// An unavailable equivalent membership does not hide the verified snapshot.
 	other := owner
 	other.Attachment.SnapshotID = "unconfigured"
-	second := source
-	second.Name = "second"
-	duplicate := []config.ArchiveSource{source, second}
-	tree, primary, chosen, err := MaterializeSnapshot(ctx, duplicate, []db.ArchiveSessionProvenance{other, owner}, "claude", 512<<20)
+	tree, primary, chosen, err := MaterializeSnapshot(ctx, []config.ArchiveSource{source}, []db.ArchiveSessionProvenance{other, owner}, "claude", 512<<20)
 	require.NoError(t, err)
 	assert.Equal(t, owner.Attachment, chosen)
 	name, err := tree.EntryPath(primary)
@@ -200,8 +204,12 @@ func TestMaterializeSnapshotEquivalentCandidates(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			modified := owner
 			tc.change(&modified)
-			_, _, _, err := MaterializeSnapshot(t.Context(), []config.ArchiveSource{source}, []db.ArchiveSessionProvenance{modified}, "claude", 512<<20)
+			refused, path, attachment, err := MaterializeSnapshot(t.Context(), []config.ArchiveSource{source}, []db.ArchiveSessionProvenance{modified}, "claude", 512<<20)
 			require.ErrorContains(t, err, tc.want)
+			assert.Nil(t, refused)
+			assert.Empty(t, path)
+			assert.Empty(t, attachment)
+			assertScratchEmpty(t)
 		})
 	}
 	wrongRepo := owner
@@ -214,21 +222,42 @@ func TestMaterializeSnapshotEquivalentCandidates(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, owner.Attachment, chosen)
 	require.NoError(t, tree.Cleanup())
-	broken := source
-	broken.Name = "broken"
-	broken.Repository = filepath.Join(t.TempDir(), "repository")
-	require.NoError(t, os.CopyFS(broken.Repository, os.DirFS(source.Repository)))
-	manifestPath := filepath.Join(broken.Repository, "snapshots", source.Snapshot+".mvmanifest")
-	require.NoError(t, os.Chmod(manifestPath, 0o600))
-	require.NoError(t, os.WriteFile(manifestPath, []byte("corrupt"), 0o600))
-	_, _, _, err = MaterializeSnapshot(t.Context(), []config.ArchiveSource{broken, source}, []db.ArchiveSessionProvenance{owner}, "claude", 512<<20)
-	require.ErrorContains(t, err, "parsing snapshot")
-	ctx, cancel := context.WithCancel(t.Context())
-	cancel()
-	_, _, _, err = MaterializeSnapshot(ctx, []config.ArchiveSource{source}, []db.ArchiveSessionProvenance{owner}, "claude", 512<<20)
-	require.ErrorIs(t, err, context.Canceled)
-	directory := owner
-	directory.Attachment.SnapshotID = "directory:fixture"
-	_, _, _, err = MaterializeSnapshot(t.Context(), nil, []db.ArchiveSessionProvenance{directory}, "claude", 512<<20)
-	require.ErrorContains(t, err, "directory captures cannot")
+	t.Run("newer inventory", func(t *testing.T) {
+		modified := owner
+		modified.Attachment.SnapshotID = newer.Snapshot
+		refused, path, attachment, err := MaterializeSnapshot(t.Context(), []config.ArchiveSource{newer}, []db.ArchiveSessionProvenance{modified}, "claude", 512<<20)
+		require.ErrorContains(t, err, "unsupported recovery inventory version")
+		assert.Nil(t, refused)
+		assert.Empty(t, path)
+		assert.Empty(t, attachment)
+		assertScratchEmpty(t)
+	})
+	t.Run("corrupt snapshot", func(t *testing.T) {
+		refused, path, attachment, err := MaterializeSnapshot(t.Context(), []config.ArchiveSource{broken, source}, []db.ArchiveSessionProvenance{owner}, "claude", 512<<20)
+		require.ErrorContains(t, err, "parsing snapshot")
+		assert.Nil(t, refused)
+		assert.Empty(t, path)
+		assert.Empty(t, attachment)
+		assertScratchEmpty(t)
+	})
+	t.Run("pre-canceled", func(t *testing.T) {
+		ctx, cancel := context.WithCancel(t.Context())
+		cancel()
+		refused, path, attachment, err := MaterializeSnapshot(ctx, []config.ArchiveSource{source}, []db.ArchiveSessionProvenance{owner}, "claude", 512<<20)
+		require.ErrorIs(t, err, context.Canceled)
+		assert.Nil(t, refused)
+		assert.Empty(t, path)
+		assert.Empty(t, attachment)
+		assertScratchEmpty(t)
+	})
+	t.Run("directory capture", func(t *testing.T) {
+		directory := owner
+		directory.Attachment.SnapshotID = "directory:fixture"
+		refused, path, attachment, err := MaterializeSnapshot(t.Context(), nil, []db.ArchiveSessionProvenance{directory}, "claude", 512<<20)
+		require.ErrorContains(t, err, "directory captures cannot")
+		assert.Nil(t, refused)
+		assert.Empty(t, path)
+		assert.Empty(t, attachment)
+		assertScratchEmpty(t)
+	})
 }

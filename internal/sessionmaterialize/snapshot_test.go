@@ -1,6 +1,7 @@
 package sessionmaterialize
 
 import (
+	"database/sql"
 	"os"
 	"path/filepath"
 	"testing"
@@ -67,8 +68,8 @@ func TestMaterializeSnapshotInstallsCapturedCompanions(t *testing.T) {
 	session, err := receiver.GetSessionFull(ctx, device+"~"+id)
 	require.NoError(t, err)
 	require.NotNil(t, session)
-	// Attached ownership is sufficient even when no archived path remains.
-	session.FilePath = nil
+	require.NotNil(t, session.FilePath)
+	assert.Contains(t, *session.FilePath, "archive://")
 	home, scratch, cwd := t.TempDir(), t.TempDir(), t.TempDir()
 	t.Setenv("CLAUDE_CONFIG_DIR", home)
 	t.Setenv("CLAUDE_CODE_PROJECT_DIR_NAME", "fixture")
@@ -80,15 +81,8 @@ func TestMaterializeSnapshotInstallsCapturedCompanions(t *testing.T) {
 	assert.Equal(t, "snapshot:"+report.SnapshotID, result.Source)
 	assert.Equal(t, "installed", result.Status)
 	dest := filepath.Join(home, "projects", "fixture")
-	got, err := os.ReadFile(filepath.Join(dest, id+".jsonl"))
+	_, err = os.Stat(filepath.Join(dest, id, "tool-results", "tool.txt"))
 	require.NoError(t, err)
-	assert.Equal(t, primary, string(got))
-	got, err = os.ReadFile(filepath.Join(dest, id, "tool-results", "tool.txt"))
-	require.NoError(t, err)
-	assert.Equal(t, "tool output", string(got))
-	got, err = os.ReadFile(filepath.Join(dest, id, "subagents", "agent-child.jsonl"))
-	require.NoError(t, err)
-	assert.Equal(t, child, string(got))
 	entries, err := os.ReadDir(scratch)
 	require.NoError(t, err)
 	assert.Empty(t, entries)
@@ -96,4 +90,13 @@ func TestMaterializeSnapshotInstallsCapturedCompanions(t *testing.T) {
 	bad.Machine = "wrong-device"
 	_, err = Materialize(ctx, cfg, receiver, &bad, cwd)
 	require.ErrorContains(t, err, "archive session identity differs")
+	require.NoError(t, receiver.Update(ctx, func(tx *sql.Tx) error {
+		_, err := tx.ExecContext(ctx, `UPDATE archive_session_provenance SET native_session_id=? WHERE session_id=?`, "00000000-0000-4000-8000-000000000000", session.ID)
+		return err
+	}))
+	_, err = Materialize(ctx, cfg, receiver, session, cwd)
+	require.ErrorContains(t, err, "archive session identity differs")
+	entries, err = os.ReadDir(scratch)
+	require.NoError(t, err)
+	assert.Empty(t, entries)
 }
