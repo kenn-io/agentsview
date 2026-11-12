@@ -415,7 +415,20 @@ func TestUsageChangeJournalLateGrantedReader(t *testing.T) {
 func TestUsageJournalUpgradesHistoryToken(t *testing.T) {
 	_, syncer, store := newUsageJournalFixture(t)
 	ctx := t.Context()
-	_, err := store.pg.ExecContext(ctx, `UPDATE sync_metadata SET value='1' WHERE key='usage_change_journal_version'; DELETE FROM sync_metadata WHERE key='usage_history_token'`)
+	// Version 1 stamped revisions and account changes without a history token.
+	oldStamp := strings.Replace(stampUsageChangeFunctionBodyPG,
+		`UPDATE usage_session_changes SET revision = stamped WHERE revision = 0;`,
+		`UPDATE usage_session_changes SET revision = stamped WHERE revision = 0;
+    IF current_setting('agentsview.uc_accounts_' || TG_RELID, true) = 'on' THEN
+        UPDATE sync_metadata SET value = stamped::text WHERE key = 'usage_account_revision';
+        PERFORM set_config('agentsview.uc_accounts_' || TG_RELID, '', true);
+    END IF;`, 1)
+	quotedSchema, err := quoteIdentifier(syncer.schema)
+	require.NoError(t, err)
+	_, err = store.pg.ExecContext(ctx, fmt.Sprintf(`UPDATE sync_metadata SET value='1' WHERE key='usage_change_journal_version';
+ DELETE FROM sync_metadata WHERE key='usage_history_token';
+ CREATE OR REPLACE FUNCTION stamp_usage_change() RETURNS trigger LANGUAGE plpgsql SECURITY DEFINER
+ SET search_path = pg_catalog, %s, pg_temp AS $journal$%s$journal$`, quotedSchema, oldStamp))
 	require.NoError(t, err)
 	require.NoError(t, EnsureSchema(ctx, syncer.pg, syncer.schema))
 	var version, before string

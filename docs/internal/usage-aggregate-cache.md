@@ -90,9 +90,9 @@ greatest-output snapshot wins, attribution follows the earliest row, the maximum
 web-search count carries over, and losing snapshot output is recorded as
 discarded. Only irreducible groups are stored as narrow exceptions, so exception
 volume scales with genuine cross-session, cross-day, and cross-model duplicates
-rather than with token-bearing messages. Cursor facts stay entirely on the
-exception tier: their keys may collide with session usage keys and their filters
-depend on per-row headless state.
+rather than with token-bearing messages. Native SQLite keeps account facts on
+the exception tier. External caches aggregate non-colliding account facts by
+day, model, agent, and headless state; colliding keys stay as exceptions.
 
 At read time the query loads only exception rows intersecting the requested
 window from the currently verified candidate sessions. It then applies the
