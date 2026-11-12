@@ -148,7 +148,12 @@ func newExportStatusCommand() *cobra.Command {
 				return err
 			}
 			if status.State == "failed" {
-				_, err = fmt.Fprintln(cmd.OutOrStdout(), exportBackfillFailure(status))
+				if status.LastError != "" {
+					if _, err = fmt.Fprintf(cmd.OutOrStdout(), "last error: %s\n", status.LastError); err != nil {
+						return err
+					}
+				}
+				_, err = fmt.Fprintln(cmd.OutOrStdout(), "run `agentsview daemon restart`")
 			}
 			return err
 		},

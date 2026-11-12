@@ -990,7 +990,7 @@ func TestExportLiveFailureReporting(t *testing.T) {
 		assert.Contains(t, status, "failed")
 		assert.Contains(t, status, "backfill writes blocked")
 		assert.Contains(t, status, "agentsview daemon restart")
-		assert.Contains(t, status, "agentsview export status")
+		assert.NotContains(t, status, "agentsview export status")
 		stdout, _, err := executeExportSessionsCommand(newRootCommand(), "export", "sessions")
 		require.ErrorContains(t, err, "backfill writes blocked")
 		assert.Contains(t, err.Error(), "agentsview daemon restart")
@@ -1246,7 +1246,7 @@ func TestExportStatusReportsBackfillFailure(t *testing.T) {
 	require.NoError(t, err)
 	assert.Empty(t, stderr)
 	assert.Equal(t, "project identity evidence: failed (1/3)\n"+
-		"project identification failed: git metadata unavailable; run `agentsview daemon restart`, then check `agentsview export status`\n",
+		"last error: git metadata unavailable\nrun `agentsview daemon restart`\n",
 		stdout)
 }
 
