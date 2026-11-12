@@ -573,14 +573,9 @@ func loadCursorUsageRollupBuild(
 	return build, nil
 }
 
-// usageAccountCollisionSQL finds account keys that request-time
-// deduplication can resolve against another row: a duplicate account key, or
-// a key a cached session also reports. The empty-key predicate lets SQLite
-// probe the partial usage key index instead of scanning every fact per row.
-const usageAccountCollisionSQL = `SELECT dedup_key FROM cursor_usage_facts
-	GROUP BY dedup_key HAVING COUNT(*) > 1
-	UNION
-	SELECT c.dedup_key FROM cursor_usage_facts c
+// usageAccountCollisionSQL finds account keys a cached session also reports.
+// The empty-key predicate lets SQLite probe the partial usage key index.
+const usageAccountCollisionSQL = `SELECT c.dedup_key FROM cursor_usage_facts c
 	WHERE EXISTS (SELECT 1 FROM usage_facts f
 		WHERE f.usage_dedup_key = c.dedup_key AND f.usage_dedup_key != '')`
 

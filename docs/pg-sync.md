@@ -36,8 +36,9 @@ so restarts reuse work and reads refresh sessions and prices changed by a push.
 When a read would first have to rebuild much of that cache, such as on first
 use, after a price or project identity change, or after new account usage, it
 returns the direct PostgreSQL result and the cache rebuilds in the background.
-Version 1 journals need only `SELECT` access. Hosted and borrowed
-transaction readers, CockroachDB, and unavailable journals keep direct reads.
+Journals upgraded by a current writer need only `SELECT` access. Hosted and
+borrowed transaction readers, CockroachDB, and unavailable journals keep
+direct reads.
 Recovery onto a different PostgreSQL timeline starts a new cache generation.
 If a cache attempt fails while the request is active, the existing direct
 PostgreSQL read supplies its result or error. A journal installed later enables

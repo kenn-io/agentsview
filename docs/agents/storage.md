@@ -785,10 +785,10 @@ Per-session detail continues to read archive rows.
 
 PostgreSQL stores its disposable cache under the configured data directory,
 partitioned by a credential-free target fingerprint and the change journal's
-table identity. Existing supported journals work with SELECT-only roles. Hosted
-and borrowed transaction readers, CockroachDB, and connections without a usable
-journal retain direct reads. A journal installed later enables persistent reuse
-without a server restart. If a cache attempt fails while the request is active,
+table identity. SELECT-only roles can use journals upgraded by a current
+writer. Hosted and borrowed transaction readers, CockroachDB, and connections
+without a usable journal retain direct reads. A journal installed later enables
+persistent reuse without a server restart. If a cache attempt fails while the request is active,
 the existing direct PostgreSQL read supplies its result or error. Failure to
 create the cache directory uses temporary storage. Pairwise retains its exactness
 fallback and can make two extra filtered cache reads. Plan usage, per-session
@@ -802,7 +802,7 @@ than warm reads. Native PostgreSQL serves its direct read instead whenever the
 cache lacks current coverage for the timezone, the catalog or account
 generation changed, or more than 64 sessions changed. A background worker then
 reads all history in that timezone to rebuild the cache and claim coverage; see
-[Usage cache backfill](background-work.md#usage-cache-backfill). Format 23
+[Usage cache backfill](background-work.md#usage-cache-backfill). Format 24
 rebuilds each SQLite usage cache once after upgrading; the 31,000-session
 fixture previously took about 19 seconds and 92 MB.
 Both implementations are co-maintained under the same

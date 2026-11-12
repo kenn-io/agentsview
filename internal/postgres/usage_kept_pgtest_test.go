@@ -6,6 +6,7 @@ import (
 	"context"
 	"database/sql"
 	"maps"
+	"os"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -163,6 +164,67 @@ func keptUsageFixture(t *testing.T) (*db.DB, *Sync, *Store, *usageReadCounter) {
 	counter := &usageReadCounter{storeExecutor: store.pg, queries: map[string]int{}}
 	store.pg = counter
 	return local, syncer, store, counter
+}
+
+func TestUsageKeptOnStandby(t *testing.T) {
+	standbyURL := os.Getenv("TEST_PG_STANDBY_URL")
+	if standbyURL == "" {
+		t.Skip("TEST_PG_STANDBY_URL must point to a standby of TEST_PG_URL")
+	}
+	_, syncer, primary, _ := keptUsageFixture(t)
+	ctx := t.Context()
+	var lsn string
+	require.NoError(t, primary.pg.QueryRowContext(ctx, `SELECT pg_current_wal_lsn()::text`).Scan(&lsn))
+	connection, err := sql.Open("pgx", standbyURL)
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, connection.Close()) })
+	require.Eventually(t, func() bool {
+		var caughtUp bool
+		return connection.QueryRowContext(ctx, `SELECT pg_last_wal_replay_lsn() >= $1::pg_lsn`, lsn).Scan(&caughtUp) == nil && caughtUp
+	}, 20*time.Second, 50*time.Millisecond)
+	standby, err := NewStore(ctx, standbyURL, syncer.schema, true)
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, standby.Close()) })
+	require.NoError(t, standby.ConfigureUsageCache(ctx, t.TempDir(), standbyURL, syncer.schema))
+	counter := &usageReadCounter{storeExecutor: standby.pg, queries: map[string]int{}}
+	standby.pg = counter
+	require.NotEmpty(t, standby.keptUsageVersion(ctx, "test"))
+	filter := db.UsageFilter{From: "2026-01-01", To: "2026-01-01", Timezone: "UTC"}
+	want, err := primary.GetDailyUsage(ctx, filter)
+	require.NoError(t, err)
+	got, err := standby.GetDailyUsage(ctx, filter)
+	require.NoError(t, err)
+	require.Equal(t, want, got)
+	wantTop, err := primary.GetTopSessionsByCost(ctx, filter, 10)
+	require.NoError(t, err)
+	gotTop, err := standby.GetTopSessionsByCost(ctx, filter, 10)
+	require.NoError(t, err)
+	require.Equal(t, wantTop, gotTop)
+	wantPlan, err := primary.GetPlanUsageSessionCounts(ctx, filter)
+	require.NoError(t, err)
+	gotPlan, err := standby.GetPlanUsageSessionCounts(ctx, filter)
+	require.NoError(t, err)
+	require.Equal(t, wantPlan, gotPlan)
+	counter.mu.Lock()
+	reads := maps.Clone(counter.queries)
+	counter.mu.Unlock()
+	require.NotEmpty(t, reads)
+	got, err = standby.GetDailyUsage(ctx, filter)
+	require.NoError(t, err)
+	require.Equal(t, want, got)
+	gotTop, err = standby.GetTopSessionsByCost(ctx, filter, 10)
+	require.NoError(t, err)
+	require.Equal(t, wantTop, gotTop)
+	gotPlan, err = standby.GetPlanUsageSessionCounts(ctx, filter)
+	require.NoError(t, err)
+	require.Equal(t, wantPlan, gotPlan)
+	counter.mu.Lock()
+	again := maps.Clone(counter.queries)
+	counter.mu.Unlock()
+	require.Equal(t, reads, again)
+	primaryVersion := primary.keptUsageVersion(ctx, "test")
+	primary.pg = counter
+	require.NotEqual(t, primaryVersion, primary.keptUsageVersion(ctx, "test"))
 }
 
 func TestUsageKeptJournalReplacementAtSameRevision(t *testing.T) {
