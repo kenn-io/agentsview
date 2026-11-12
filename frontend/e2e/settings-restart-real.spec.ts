@@ -72,7 +72,12 @@ test("retries a lost restart request against the real daemon", async ({
       )
       .toBe(true);
     const before = await (await page.request.get(`${base}/api/ping`)).json();
-    await page.goto(`${base}/settings?panel=tool-result-images`);
+    await page.goto(`${base}/settings`);
+    await page
+      .getByRole("navigation", { name: "Settings" })
+      .getByRole("button", { name: /Tool-result images/ })
+      .click();
+    await expect(page).toHaveURL(/panel=tool-result-images/);
     await expect(page.getByRole("heading", { name: "Tool-result images" })).toBeVisible();
     await page.getByRole("radio", { name: "Drop" }).click();
     await expect(page.getByRole("button", { name: "Restart now" })).toBeVisible();
@@ -89,6 +94,7 @@ test("retries a lost restart request against the real daemon", async ({
     await page.getByRole("button", { name: "Restart now" }).click();
     await reloaded;
     await expect(page.getByRole("heading", { name: "Tool-result images" })).toBeVisible();
+    await expect(page).toHaveURL(/panel=tool-result-images/);
     await expect(page.getByRole("radio", { name: "Drop" })).toHaveAttribute("aria-checked", "true");
     const after = await (await page.request.get(`${base}/api/ping`)).json();
     expect(after.instance_id).not.toBe(before.instance_id);

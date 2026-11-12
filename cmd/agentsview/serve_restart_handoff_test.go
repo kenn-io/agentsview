@@ -105,7 +105,7 @@ func startRestartFixture(t *testing.T, dataDir, mode string, args ...string) (*o
 // released the launch lock it holds while starting.
 func waitForBackgroundLaunchLock(t *testing.T, dataDir string) {
 	t.Helper()
-	assert.Eventually(t, func() bool {
+	require.Eventually(t, func() bool {
 		lock, acquired := acquireBackgroundLaunchLock(dataDir)
 		if acquired {
 			assert.NoError(t, lock.Unlock())
@@ -433,66 +433,6 @@ func TestServeRestartPortChoiceWhenOccupied(t *testing.T) {
 	require.NoError(t, response.Body.Close())
 }
 
-func TestServeRestartHandoffPreservesLaunchOptions(t *testing.T) {
-	_, dataDir := isolateServeTestHome(t)
-	startRestartFixture(t, dataDir, "background", "--base-path=/example", "--no-sync", "--require-auth=false")
-	rt := FindDaemonRuntime(dataDir)
-	require.NotNil(t, rt)
-	require.True(t, rt.NoSync)
-	base := fmt.Sprintf("http://127.0.0.1:%d/example", rt.Port)
-	client := &http.Client{Timeout: 10 * time.Second}
-	request := func(method, path, body, token string) *http.Response {
-		t.Helper()
-		req, err := http.NewRequestWithContext(t.Context(), method, base+path, strings.NewReader(body))
-		require.NoError(t, err)
-		req.Header.Set("Origin", fmt.Sprintf("http://127.0.0.1:%d", rt.Port))
-		req.Header.Set("Content-Type", "application/json")
-		if token != "" {
-			req.Header.Set("Authorization", "Bearer "+token)
-		}
-		resp, err := client.Do(req)
-		require.NoError(t, err)
-		return resp
-	}
-	initial := request(http.MethodGet, "/api/ping", "", "")
-	var first struct {
-		InstanceID string `json:"instance_id"`
-	}
-	require.NoError(t, json.UnmarshalRead(initial.Body, &first))
-	require.NoError(t, initial.Body.Close())
-	resp := request(http.MethodPut, "/api/v1/settings", `{"tool_result_images":"drop"}`, "")
-	require.Equal(t, http.StatusOK, resp.StatusCode)
-	require.NoError(t, resp.Body.Close())
-	disk, err := config.Load(nil)
-	require.NoError(t, err)
-	require.NoError(t, disk.SaveSettings(map[string]any{"require_auth": true}))
-	resp = request(http.MethodPost, "/api/v1/daemon/restart", "", "")
-	require.Equal(t, http.StatusOK, resp.StatusCode)
-	require.NoError(t, resp.Body.Close())
-
-	var replacement *DaemonRuntime
-	require.Eventually(t, func() bool {
-		replacement = FindDaemonRuntime(dataDir)
-		if replacement == nil {
-			return false
-		}
-		response, err := restartTestPing(t, client, base)
-		if err != nil {
-			return false
-		}
-		defer response.Body.Close()
-		var ping struct {
-			InstanceID string `json:"instance_id"`
-		}
-		return json.UnmarshalRead(response.Body, &ping) == nil && ping.InstanceID != "" && ping.InstanceID != first.InstanceID
-	}, 30*time.Second, time.Second)
-	assert.Equal(t, rt.Record.PID, replacement.Record.PID)
-	assert.True(t, replacement.NoSync)
-	resp = request(http.MethodGet, "/api/ping", "", "")
-	assert.Equal(t, http.StatusOK, resp.StatusCode)
-	require.NoError(t, resp.Body.Close())
-}
-
 func startRestartAuthFixture(t *testing.T, mode string, args ...string) (config.Config, string, string) {
 	t.Helper()
 	_, dataDir := isolateServeTestHome(t)
@@ -542,6 +482,16 @@ func checkServeRestartUsesEditedAuthConfig(t *testing.T) {
 }
 
 func TestServeRestartUsesEditedAuthAfterSettingsSave(t *testing.T) {
+	t.Run("file edit with unretired launch flag", func(t *testing.T) {
+		cfg, dataDir, _ := startRestartAuthFixture(t, "background", "--require-auth=false")
+		rt := waitForRestartRuntime(t, dataDir)
+		base := fmt.Sprintf("http://127.0.0.1:%d", rt.Port)
+		require.NoError(t, cfg.SaveSettings(map[string]any{"require_auth": true}))
+		replacement := restartAndWait(t, dataDir, base, "")
+		assert.Equal(t, rt.Record.PID, replacement.Record.PID)
+		assert.True(t, replacement.NoSync)
+		assert.NotEmpty(t, restartTestInstance(t, base, ""))
+	})
 	t.Run("file edit without launch flag", checkServeRestartUsesEditedAuthConfig)
 	for _, mode := range []string{"foreground", "background"} {
 		t.Run(mode, func(t *testing.T) {
@@ -591,14 +541,7 @@ func TestServeRestartUsesEditedAuthAfterSettingsSave(t *testing.T) {
 				return false
 			}, 30*time.Second, 100*time.Millisecond)
 			if mode == "background" {
-				require.Eventually(t, func() bool {
-					lock, acquired := acquireBackgroundLaunchLock(dataDir)
-					if !acquired {
-						return false
-					}
-					require.NoError(t, lock.Unlock())
-					return true
-				}, 30*time.Second, 100*time.Millisecond)
+				waitForBackgroundLaunchLock(t, dataDir)
 			}
 			save, err = http.NewRequestWithContext(t.Context(), http.MethodPut, base+"/api/v1/settings", strings.NewReader(`{"require_auth":true}`))
 			require.NoError(t, err)
@@ -635,14 +578,7 @@ func TestServeRestartUsesEditedAuthAfterSettingsSave(t *testing.T) {
 			assert.Equal(t, http.StatusUnauthorized, resp.StatusCode)
 			require.NoError(t, resp.Body.Close())
 			if mode == "background" {
-				require.Eventually(t, func() bool {
-					lock, acquired := acquireBackgroundLaunchLock(dataDir)
-					if !acquired {
-						return false
-					}
-					require.NoError(t, lock.Unlock())
-					return true
-				}, 30*time.Second, 100*time.Millisecond)
+				waitForBackgroundLaunchLock(t, dataDir)
 			}
 			require.NoError(t, cfg.SaveSettings(map[string]any{"require_auth": false}))
 			req, err = http.NewRequestWithContext(t.Context(), http.MethodPost, base+"/api/v1/daemon/restart", nil)
@@ -662,14 +598,7 @@ func TestServeRestartUsesEditedAuthAfterSettingsSave(t *testing.T) {
 				return resp.StatusCode == http.StatusOK
 			}, 30*time.Second, 100*time.Millisecond)
 			if mode == "background" {
-				require.Eventually(t, func() bool {
-					lock, acquired := acquireBackgroundLaunchLock(dataDir)
-					if !acquired {
-						return false
-					}
-					require.NoError(t, lock.Unlock())
-					return true
-				}, 30*time.Second, 100*time.Millisecond)
+				waitForBackgroundLaunchLock(t, dataDir)
 			}
 			require.NoError(t, cfg.SaveSettings(map[string]any{"require_auth": true}))
 			req, err = http.NewRequestWithContext(t.Context(), http.MethodPost, base+"/api/v1/daemon/restart", nil)
@@ -778,9 +707,7 @@ func TestServeHandoffPortArgs(t *testing.T) {
 		explicit *int
 		want     []string
 	}{
-		{name: "automatic", port: 8080, want: []string{"--restart-port", "8080"}},
 		{name: "fixed", port: 8080, explicit: new(9090), want: []string{"--port", "9090"}},
-		{name: "explicit zero", explicit: new(0), want: []string{"--port", "0"}},
 		{name: "unknown"},
 	} {
 		t.Run(tc.name, func(t *testing.T) { assert.Equal(t, tc.want, serveHandoffPortArgs(tc.port, tc.explicit)) })

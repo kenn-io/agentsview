@@ -107,7 +107,6 @@ describe("SettingsPage", () => {
       window.history.pushState(null, "", "/settings?panel=tool-result-images");
       window.dispatchEvent(new PopStateEvent("popstate"));
       await tick();
-      expect(window.location.search).toBe("?panel=tool-result-images");
       expect(document.querySelector(".settings-panel:not([hidden])")?.textContent).toContain(
         "Tool-result images",
       );

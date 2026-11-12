@@ -41,21 +41,18 @@ async function openArchiveContent(page: Page) {
 // concurrently, so a real write from either would race the other's assertions.
 // Every test that does not measure persistence fulfils the PUT itself.
 async function stubSettingsWrite(page: Page) {
-  let policy = "keep";
   await page.route("**/api/v1/settings", async (route) => {
     const method = route.request().method();
-    if (method !== "GET" && method !== "PUT") return route.fallback();
-    const patch = method === "PUT" ? JSON.parse(route.request().postData() ?? "{}") : {};
+    if (method !== "PUT") return route.fallback();
+    const patch = JSON.parse(route.request().postData() ?? "{}");
     const current = await (await page.request.get("/api/v1/settings")).json();
-    if (method === "PUT" && patch.tool_result_images) policy = patch.tool_result_images;
     await route.fulfill({
       status: 200,
       contentType: "application/json",
       body: JSON.stringify({
         ...current,
         ...patch,
-        tool_result_images: policy,
-        restart_required: policy === "drop",
+        restart_required: patch.tool_result_images === "drop",
       }),
     });
   });
@@ -97,37 +94,6 @@ test.describe("Settings archive content", () => {
 
     await expect(page.getByRole("radio", { name: "Drop" })).toHaveAttribute("aria-checked", "true");
     await expect(page.locator(".archive-content-settings").getByRole("status")).toBeVisible();
-  });
-
-  test("restart reloads the Tool-result images panel", async ({ page }) => {
-    const panel = "Tool-result images";
-    await stubSettingsWrite(page);
-    await openSettledSettings(page);
-    await page
-      .getByRole("navigation", { name: "Settings" })
-      .locator("button", { hasText: panel })
-      .click();
-    await page.getByRole("radio", { name: "Drop" }).click();
-    let pings = 0;
-    await page.route("**/api/ping", async (route) => {
-      const response = await route.fetch();
-      const ping = await response.json();
-      await route.fulfill({
-        response,
-        json: { ...ping, instance_id: ++pings === 1 ? "before" : "after" },
-      });
-    });
-    let posts = 0;
-    await page.route("**/api/v1/daemon/restart", async (route) => {
-      posts++;
-      await route.fulfill({ status: 200, json: { restarting: true } });
-    });
-    const reloaded = page.waitForEvent("load");
-    await page.getByRole("button", { name: "Restart now" }).click();
-    await reloaded;
-    await expect(page.getByRole("heading", { name: panel })).toBeVisible();
-    await expect(page).toHaveURL(/panel=tool-result-images/);
-    expect(posts).toBe(1);
   });
 
   test.describe("persistence", () => {

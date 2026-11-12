@@ -20,19 +20,22 @@ afterEach(() => {
 });
 
 describe("RestartAction", () => {
-  it("tells a server that can't restart itself how to restart", () => {
-    settings.restartSupported = false;
-
-    const { getByRole, queryByRole } = render(RestartAction, {
-      notice: "Example notice",
-      manual: true,
-    });
-
-    expect(queryByRole("button", { name: /Restart/ })).toBeNull();
-    expect(getByRole("status").textContent).toContain(
-      "Restart AgentsView the way you started it, then reload this page.",
-    );
-  });
+  it.each([true, false])(
+    "shows manual guidance for an unsupported server when manual is %s",
+    (manual) => {
+      settings.restartSupported = false;
+      const { getByRole, queryByRole } = render(RestartAction, {
+        notice: "Example notice",
+        manual,
+      });
+      expect(queryByRole("button", { name: /Restart/ })).toBeNull();
+      if (manual)
+        expect(getByRole("status").textContent).toContain(
+          "Restart AgentsView the way you started it",
+        );
+      else expect(getByRole("status").textContent?.trim()).toBe("Example notice");
+    },
+  );
 
   it("shows the recovery commands when restart fails", () => {
     settings.restartFailed = true;
@@ -57,24 +60,16 @@ describe("RestartAction", () => {
     expect(getByRole("status").textContent).toContain("You may need to sign in again.");
   });
 
-  it("shows manual recovery without another restart after the deadline", () => {
+  it.each([false, true])("shows recovery with retry availability %s", (canRetry) => {
     settings.restartFailed = true;
+    settings.restartCanRetry = canRetry;
     const { getByRole, getByText, queryByRole } = render(RestartAction, {
       notice: "Example notice",
-      manual: true,
     });
-    expect(getByRole("status").textContent).toContain("has not reconnected");
     expect(getByText(/restart AgentsView the way you started it/i)).toBeTruthy();
     expect(getByText(/open the address/i)).toBeTruthy();
-    expect(queryByRole("button", { name: "Restart now" })).toBeNull();
+    expect(Boolean(queryByRole("button", { name: "Restart now" }))).toBe(canRetry);
     expect(getByRole("button", { name: "Check connection" })).toBeTruthy();
-  });
-
-  it("offers a retry when the original server still answers", () => {
-    settings.restartFailed = true;
-    settings.restartCanRetry = true;
-    const { getByRole } = render(RestartAction, { notice: "Example notice" });
-    expect(getByRole("button", { name: "Restart now" })).toBeTruthy();
-    expect(getByRole("button", { name: "Check connection" })).toBeTruthy();
+    if (!canRetry) expect(getByRole("status").textContent).toContain("has not reconnected");
   });
 });

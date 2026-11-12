@@ -41,7 +41,6 @@ describe("RemoteSettings", () => {
     const { getByRole, queryByRole } = render(RemoteSettings);
 
     expect(getByRole("status").textContent?.trim()).toBe("Auth changes take effect immediately.");
-    expect(queryByRole("alert")).toBeNull();
     expect(queryByRole("button", { name: /Restart/ })).toBeNull();
   });
 

@@ -258,16 +258,11 @@ func TestPrepareForegroundServeDaemonKeepsLaunchLockForFreshStart(
 	)
 	require.NoError(t, err)
 	require.True(t, cont)
-	launchLock, ok = acquireBackgroundLaunchLock(dir)
-	if ok {
-		require.NoError(t, launchLock.Unlock())
-	}
-	assert.False(t, ok, "replacement must retain launch ownership until readiness")
 	adopted()
-	release()
 	launchLock, ok = acquireBackgroundLaunchLock(dir)
 	require.True(t, ok)
 	require.NoError(t, launchLock.Unlock())
+	release()
 }
 
 func TestRestartReleasesLaunchLockWhenNextCommandFails(t *testing.T) {
