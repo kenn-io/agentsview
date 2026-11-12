@@ -43,8 +43,7 @@ ConvertTo-Json -Compress -InputObject ($command.CommandElements[1].Value)
 					cmd := exec.CommandContext(t.Context(), binary, "-NoProfile", "-NonInteractive", "-Command", parser)
 					cmd.Stdin = strings.NewReader("pi " + PowerShell(value))
 					output, err := cmd.Output()
-					var exit *exec.ExitError
-					if errors.As(err, &exit) {
+					if exit, ok := errors.AsType[*exec.ExitError](err); ok {
 						require.NoError(t, err, "%s", exit.Stderr)
 					}
 					require.NoError(t, err)

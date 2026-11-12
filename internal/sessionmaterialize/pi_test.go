@@ -207,6 +207,7 @@ func TestPiHeaderIdentityAndVersion(t *testing.T) {
 	for _, tc := range []struct{ header, id, want string }{
 		{`{"type":"session","id":"other","cwd":"/old"}`, "id", "identity"},
 		{`{"type":"session","id":"id","cwd":"/a","cwd":"/b"}`, "id", "one cwd"},
+		{`{"type":"session","id":"id","cwd":"/a","c\u0077d":"/b"}`, "id", "one cwd"},
 		{`{"type":"session","id":"id"}`, "id", "one cwd"},
 		{`{"type":"message","id":"id","cwd":"/old"}`, "id", "header"},
 		{`{"type":"session","cwd":"/old"}`, "id", "identity"},
