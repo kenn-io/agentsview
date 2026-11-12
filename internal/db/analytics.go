@@ -3051,7 +3051,8 @@ type ToolsDatePeriod struct {
 	Offset     int
 }
 
-// ToolsDatePeriods bounds the timezone transitions used for tool date grouping.
+// ToolsDatePeriods bounds the timezone transitions used for tool date grouping;
+// ranges needing more than 128 periods return nil.
 func ToolsDatePeriods(f AnalyticsFilter) []ToolsDatePeriod {
 	if f.From == "" || f.To == "" {
 		return nil
@@ -3073,7 +3074,7 @@ func ToolsDatePeriods(f AnalyticsFilter) []ToolsDatePeriod {
 		if until.IsZero() || until.After(end) {
 			until = end
 		}
-		if !until.After(cursor) || len(periods) == 32 {
+		if !until.After(cursor) || len(periods) == 128 {
 			return nil
 		}
 		periods = append(periods, ToolsDatePeriod{Start: cursor.UTC(), End: until.UTC(), Offset: offset})

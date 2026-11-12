@@ -2061,3 +2061,30 @@ func TestDuckAnalyticsToolsWindowsMessagesInSQL(t *testing.T) {
 	assert.Equal(t, 3, skills.TotalSkillCalls)
 	t.Log("production tool query carried the message window predicate; SQL admitted 3 calls; tools and skills retain UTC+14 boundary and null fallback")
 }
+
+func TestDuckToolsLongRangeGroupsByLocalDay(t *testing.T) {
+	id := "duck-long-range"
+	store := newDuckAnalyticsStore(t, []db.SessionBatchWrite{{
+		Session: syncSession(id, "alpha", "long", "2024-06-10T12:00:00Z", 2),
+		Messages: []db.Message{
+			duckModelMessage(id, 0, "assistant", "read", "2024-06-10T12:00:00Z", "model", db.ToolCall{ToolName: "Read", Category: "Read"}),
+			duckModelMessage(id, 1, "assistant", "read", "2024-06-10T12:05:00Z", "model", db.ToolCall{ToolName: "Read", Category: "Read"}),
+		}, DataVersion: 1, ReplaceMessages: true,
+	}})
+	var queries []string
+	analyticsQueryObserver = func(query string) { queries = append(queries, query) }
+	t.Cleanup(func() { analyticsQueryObserver = nil })
+	response, err := store.GetAnalyticsTools(t.Context(), db.AnalyticsFilter{From: "2000-01-01", To: "2025-12-31", Timezone: "America/New_York"})
+	require.NoError(t, err)
+	assert.Equal(t, 2, response.TotalCalls)
+	require.Len(t, response.Trend, 1)
+	assert.Equal(t, 2, response.Trend[0].ByCat["Read"])
+	var toolQueries int
+	for _, query := range queries {
+		if strings.Contains(query, "FROM tool_calls tc") {
+			toolQueries++
+			assert.NotContains(t, query, "date_trunc('minute'", "long ranges must still group by day")
+		}
+	}
+	assert.Positive(t, toolQueries)
+}
