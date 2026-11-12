@@ -621,14 +621,15 @@ location.reload()
 
 ### Slow Aggregates Behind A Proxy
 
-API responses have a write deadline; a request that exceeds it returns `503`
+Most API responses have a write deadline; a request that exceeds it returns `503`
 with a `{"error":"request timed out"}` body, and affected dashboard panels show
 "request timed out". The default is 30 seconds, which is comfortable for local
-archives but can be tight for large shared datasets — heatmap, activity, and
-usage summaries scan the full message history.
+archives but can be tight for large shared datasets.
 
-Session search (`/api/v1/search`) and content search (`/api/v1/search/content`)
-are exempt from this deadline. Cancelling a request stops its search. A reverse
+Long-running routes are exempt from this deadline. They include session and
+content search, session statistics, usage summaries and comparisons, activity
+report sessions, Kata status, sync, archive maintenance, friction reviews, and
+conversation export. Cancelling a search request stops its search. A reverse
 proxy may impose its own timeout.
 
 Raise the deadline with `--write-timeout` (a Go duration). The flag is available
@@ -745,7 +746,7 @@ Changes that affect bind or auth behavior may require a server restart.
 | `--require-auth`    | `false`     | Require a bearer token for API requests             |
 | `--public-url`      |             | Browser URL, also added to trusted origins             |
 | `--public-origin`   |             | Trusted browser origin (repeatable/comma-separated) |
-| `--write-timeout`   | `30s`       | API response deadline with search exceptions; `0` disables it |
+| `--write-timeout`   | `30s`       | API response deadline; long-running routes are exempt; `0` disables it |
 | `--proxy`           |             | Managed proxy mode (`caddy`)                        |
 | `--caddy-bin`       | `caddy`     | Caddy binary path                                   |
 | `--proxy-bind-host` | `127.0.0.1` | Interface for managed proxy                         |

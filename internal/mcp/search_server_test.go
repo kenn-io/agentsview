@@ -24,15 +24,20 @@ type delayedSearchStore struct {
 	db.Store
 	started chan struct{}
 	stopped chan struct{}
+	release chan struct{}
 }
 
 func (s *delayedSearchStore) Search(ctx context.Context, f db.SearchFilter) (db.SearchPage, error) {
 	switch f.Query {
 	case "cancelterm":
 		close(s.started)
-		<-ctx.Done()
-		close(s.stopped)
-		return db.SearchPage{}, ctx.Err()
+		select {
+		case <-ctx.Done():
+			close(s.stopped)
+			return db.SearchPage{}, ctx.Err()
+		case <-s.release:
+			return db.SearchPage{}, context.Canceled
+		}
 	case "errorterm":
 		return db.SearchPage{}, &db.SearchInputError{Msg: "search fixture error"}
 	}
@@ -52,7 +57,7 @@ func TestServer_SearchSessionsThroughHTTP(t *testing.T) {
 	for i := range 4 {
 		seedFTSSession(t, d, fmt.Sprintf("p%d", i), "proj", "pageterm body", fmt.Sprintf("2024-06-1%dT10:00:00Z", i))
 	}
-	store := &delayedSearchStore{Store: d, started: make(chan struct{}), stopped: make(chan struct{})}
+	store := &delayedSearchStore{Store: d, started: make(chan struct{}), stopped: make(chan struct{}), release: make(chan struct{})}
 	ln, err := (&net.ListenConfig{}).Listen(t.Context(), "tcp", "127.0.0.1:0")
 	require.NoError(t, err)
 	srv := server.New(config.Config{Host: "127.0.0.1", Port: ln.Addr().(*net.TCPAddr).Port, DataDir: t.TempDir(), WriteTimeout: 50 * time.Millisecond}, store, nil) //nolint:kennlint // deadlinetest: the search must outlast this timeout
@@ -97,6 +102,7 @@ func TestServer_SearchSessionsThroughHTTP(t *testing.T) {
 	t.Run("cancel", func(t *testing.T) {
 		st, ct := newInMemoryPair(t, newServer(ServeOptions{Service: servicehttp.NewHTTPBackend(httpServer.URL, "", false, "")}))
 		t.Cleanup(func() {
+			close(store.release)
 			_ = ct.Close()
 			_ = st.Wait()
 		})
@@ -107,9 +113,22 @@ func TestServer_SearchSessionsThroughHTTP(t *testing.T) {
 			_, err := ct.CallTool(ctx, callParams(ToolSearchSessions, map[string]any{"query": "cancelterm"}))
 			done <- err
 		}()
-		<-store.started
+		select {
+		case <-store.started:
+		case <-time.After(5 * time.Second):
+			t.Fatal("search did not reach the store")
+		}
 		cancel()
-		require.ErrorIs(t, <-done, context.Canceled)
-		<-store.stopped
+		select {
+		case err := <-done:
+			require.ErrorIs(t, err, context.Canceled)
+		case <-time.After(5 * time.Second):
+			t.Fatal("tool call did not return after cancellation")
+		}
+		select {
+		case <-store.stopped:
+		case <-time.After(5 * time.Second):
+			t.Fatal("cancellation did not reach the store")
+		}
 	})
 }

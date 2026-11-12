@@ -2751,7 +2751,7 @@ func RegisterServeFlags(fs *flag.FlagSet) {
 	)
 	fs.Duration(
 		"write-timeout", 30*time.Second,
-		"Max API response time before a 503 (0 disables); session and content search are exempt",
+		"Max API response time before a 503 (0 disables); some long-running routes are exempt",
 	)
 }
 
@@ -2819,7 +2819,7 @@ func RegisterServePFlags(fs *pflag.FlagSet) {
 	)
 	fs.Duration(
 		"write-timeout", 30*time.Second,
-		"Max API response time before a 503 (0 disables); session and content search are exempt",
+		"Max API response time before a 503 (0 disables); some long-running routes are exempt",
 	)
 }
 
