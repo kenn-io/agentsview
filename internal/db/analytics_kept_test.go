@@ -109,6 +109,61 @@ func TestAnalyticsKeptContentLengthRepair(t *testing.T) {
 	assert.Equal(t, float64(20), after.Overall.CharsPerActiveMin)
 }
 
+func TestAnalyticsKeptVelocityTracksMessageAndToolChanges(t *testing.T) {
+	d := testDB(t)
+	ctx := t.Context()
+	insertSession(t, d, "session", "project", func(s *Session) {
+		s.StartedAt = new("2024-06-01T09:00:00Z")
+		s.MessageCount = 2
+	})
+	user := Message{SessionID: "session", Ordinal: 0, Role: "user", Content: "hello", Timestamp: "2024-06-01T09:00:00Z"}
+	assistant := Message{SessionID: "session", Ordinal: 1, Role: "assistant", Content: "reply", Timestamp: "2024-06-01T09:01:00Z"}
+	insertMessages(t, d, user, assistant)
+	before, err := d.GetAnalyticsVelocity(ctx, AnalyticsFilter{})
+	require.NoError(t, err)
+	assert.Equal(t, float64(60), before.Overall.FirstResponseSec.P50)
+	assert.Zero(t, before.Overall.ToolCallsPerActiveMin)
+
+	assistant.Timestamp = "2024-06-01T09:02:00Z"
+	assistant.ToolCalls = []ToolCall{{SessionID: "session", ToolName: "Read", Category: "Read"}}
+	require.NoError(t, d.ReplaceSessionMessages(ctx, "session", []Message{user, assistant}))
+	after, err := d.GetAnalyticsVelocity(ctx, AnalyticsFilter{})
+	require.NoError(t, err)
+	assert.Equal(t, float64(120), after.Overall.FirstResponseSec.P50)
+	assert.Equal(t, 0.5, after.Overall.ToolCallsPerActiveMin)
+}
+
+func TestAnalyticsKeptToolFactsAfterDialogueRepair(t *testing.T) {
+	d := testDB(t)
+	ctx := t.Context()
+	insertSession(t, d, "session", "project")
+	message := asstMsgAt("session", 0, "read", "2024-06-01T09:00:00Z")
+	message.ToolCalls = []ToolCall{{SessionID: "session", ToolName: "Read", Category: "Read"}}
+	insertMessages(t, d, message)
+	updateSignals(t, d, "session", SessionSignalUpdate{ToolObservations: []ToolObservation{{Outcome: "empty", Repeat: "none"}}, QualitySignals: QualitySignals{Version: CurrentQualitySignalVersion}})
+	before, err := d.GetAnalyticsTools(ctx, AnalyticsFilter{})
+	require.NoError(t, err)
+	require.Len(t, before.ByTool, 1)
+	assert.Equal(t, 1, before.ByTool[0].AnalyzedCalls)
+
+	session, err := d.GetSession(ctx, "session")
+	require.NoError(t, err)
+	require.NotNil(t, session)
+	messages, err := d.GetAllMessages(ctx, "session")
+	require.NoError(t, err)
+	require.Len(t, messages, 1)
+	messages[0].DialogueText = new("repaired dialogue")
+	messages[0].ToolCalls[0].ObservedOutcome = nil
+	messages[0].ToolCalls[0].ObservedRepeat = nil
+	result, err := d.WriteSessionBatchContext(ctx, []SessionBatchWrite{{Session: *session, Messages: messages, ReplaceMessages: true, SkipSignalUpdates: true}})
+	require.NoError(t, err)
+	require.Zero(t, result.FailedSessions)
+	after, err := d.GetAnalyticsTools(ctx, AnalyticsFilter{})
+	require.NoError(t, err)
+	require.Len(t, after.ByTool, 1)
+	assert.Equal(t, 1, after.ByTool[0].MissingCalls)
+}
+
 func TestAnalyticsKeptSelectionAndArchiveIdentity(t *testing.T) {
 	d := testDB(t)
 	ctx := t.Context()

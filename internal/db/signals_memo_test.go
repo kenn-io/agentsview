@@ -22,14 +22,14 @@ func TestSignalsFrustrationMemoReuse(t *testing.T) {
 	assert.Equal(t, "session", examples.Sessions[0].SessionID)
 	assert.Empty(t, d.frustrationMemo.counts, "unrelated drill-down must skip the prompt scan")
 
-	resp, err := d.GetAnalyticsSignals(ctx, AnalyticsFilter{})
+	resp, err := d.analyticsSignals(ctx, AnalyticsFilter{})
 	require.NoError(t, err)
 	assert.Equal(t, 1, resp.QualityHealth.Totals.FrustrationMarkerCount)
 	require.Len(t, d.frustrationMemo.counts, 1)
-	// Use another report selection to exercise the per-session memo.
+	// A distinctive cached count proves the repeated read uses the memo.
 	entry := d.frustrationMemo.counts["session"]
 	d.frustrationMemo.Store(d.frustrationMemo.generation, "session", entry.version, 7)
-	resp, err = d.GetAnalyticsSignals(ctx, AnalyticsFilter{Timezone: "UTC"})
+	resp, err = d.analyticsSignals(ctx, AnalyticsFilter{})
 	require.NoError(t, err)
 	assert.Equal(t, 7, resp.QualityHealth.Totals.FrustrationMarkerCount)
 }

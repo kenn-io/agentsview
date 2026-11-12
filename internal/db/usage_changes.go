@@ -121,9 +121,11 @@ func usageChangeJournalSQL() (string, string) {
 }
 
 // UsageChangeRevision returns the trigger-maintained revision for usage facts,
-// session filter dimensions, Activity session columns, and pricing catalog
-// writes. Revision 0 means no history. Readers must pair it with database_id
-// because rebuilt archives restart the counter.
+// session filter dimensions, Activity and Signals session columns, tool calls,
+// message content lengths, and pricing catalog writes. Some changes advance the
+// counter without recording a session in usage_session_changes. Revision 0
+// means no history. Readers must pair it with database_id because rebuilt
+// archives restart the counter.
 func (db *DB) UsageChangeRevision(ctx context.Context) (int64, error) {
 	return db.archiveJournalRevision(ctx, archiveMetadataUsageChangeRevisionKey, "usage change")
 }
