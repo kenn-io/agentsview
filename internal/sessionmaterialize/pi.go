@@ -19,13 +19,6 @@ import (
 )
 
 func materializePi(ctx context.Context, cfg config.Config, session *db.Session, cwd string) (Result, error) {
-	cwd, err := filepath.Abs(cwd)
-	if err != nil {
-		return Result{}, err
-	}
-	if info, err := os.Stat(cwd); err != nil || !info.IsDir() {
-		return Result{}, errors.New("cwd must be an existing directory")
-	}
 	host, raw := parser.StripHostPrefix(session.ID)
 	id, ok := strings.CutPrefix(raw, "pi:")
 	if !ok || (id == "" || strings.ContainsAny(id, "~\x00")) {
@@ -91,55 +84,26 @@ func findPiSource(ctx context.Context, cfg config.Config, session *db.Session, s
 	if !ok {
 		return "", nil, errors.New("Pi source provider unavailable")
 	}
-	if ref, found, err := provider.FindSource(ctx, parser.FindSourceRequest{StoredFilePath: stored}); err != nil {
-		return "", nil, err
-	} else if found {
+	read := func(name string) ([]byte, error) {
 		for _, root := range roots {
-			if within(root, ref.DisplayPath) {
-				if data, err := readPiFile(ctx, root, ref.DisplayPath, id); err == nil {
-					return ref.DisplayPath, data, nil
-				}
+			if within(root, name) {
+				return readPiFile(ctx, root, name, id)
 			}
 		}
+		return nil, errors.New("Pi source outside configured root")
 	}
-	discoverer, ok := provider.(parser.StreamingDiscoverer)
-	if !ok {
-		return "", nil, errors.New("Pi source discovery unavailable")
-	}
-	var name string
-	var data []byte
-	var foundInfo os.FileInfo
-	err := discoverer.DiscoverEach(ctx, func(ref parser.SourceRef) error {
-		for _, root := range roots {
-			if !within(root, ref.DisplayPath) {
-				continue
-			}
-			candidate, err := readPiFile(ctx, root, ref.DisplayPath, id)
-			if err != nil {
-				if ctx.Err() != nil {
-					return ctx.Err()
-				}
-				continue
-			}
-			info, err := os.Stat(ref.DisplayPath)
-			if err != nil {
-				return err
-			}
-			if foundInfo != nil && !os.SameFile(foundInfo, info) {
-				return errors.New("ambiguous native Pi transcript")
-			}
-			name, data, foundInfo = ref.DisplayPath, candidate, info
-			break
+	name, err := uniqueLocalSource(ctx, provider, stored, func(name string) (bool, error) {
+		_, err := read(name)
+		if ctx.Err() != nil {
+			return false, ctx.Err()
 		}
-		return nil
+		return err == nil, nil
 	})
 	if err != nil {
 		return "", nil, err
 	}
-	if foundInfo == nil {
-		return "", nil, errors.New("native Pi transcript is unavailable from configured sources")
-	}
-	return name, data, nil
+	data, err := read(name)
+	return name, data, err
 }
 
 func readPiFile(ctx context.Context, root, name, id string) ([]byte, error) {
@@ -186,19 +150,14 @@ func relocatePiHeader(data []byte, id, basename, cwd string) ([]byte, error) {
 		if err != nil {
 			return nil, err
 		}
-		offset := int(decoder.InputOffset())
 		var value json.RawMessage
 		if err := decoder.Decode(&value); err != nil {
 			return nil, err
 		}
 		if key == "cwd" {
 			count++
-			colon := bytes.IndexByte(line[offset:], ':')
-			start = offset + colon + 1
-			for start < len(line) && (line[start] == ' ' || line[start] == '\t' || line[start] == '\r') {
-				start++
-			}
 			end = int(decoder.InputOffset())
+			start = end - len(value)
 		}
 	}
 	if count != 1 {
@@ -208,44 +167,27 @@ func relocatePiHeader(data []byte, id, basename, cwd string) ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
-	result := make([]byte, 0, len(data)+len(encoded)-(end-start))
-	result = append(result, data[:start]...)
-	result = append(result, encoded...)
-	result = append(result, data[end:]...)
-	return result, nil
+	return slices.Concat(data[:start], encoded, data[end:]), nil
 }
 
 func piDestination(cwd, basename string) (string, error) {
-	if basename == "." || basename == "" || filepath.Base(basename) != basename {
-		return "", errors.New("invalid Pi source filename")
-	}
 	dir := os.Getenv("PI_CODING_AGENT_SESSION_DIR")
-	if dir != "" {
-		expanded, err := pathutil.ExpandHome(dir)
-		if err != nil {
-			return "", err
-		}
-		dir, err = filepath.Abs(expanded)
-		if err != nil {
-			return "", err
-		}
-	} else {
+	flat := dir != ""
+	if !flat {
 		dir = os.Getenv("PI_CODING_AGENT_DIR")
 		if dir == "" {
-			home, err := os.UserHomeDir()
-			if err != nil {
-				return "", err
-			}
-			dir = filepath.Join(home, ".pi", "agent")
+			dir = "~/.pi/agent"
 		}
-		expanded, err := pathutil.ExpandHome(dir)
-		if err != nil {
-			return "", err
-		}
-		dir, err = filepath.Abs(expanded)
-		if err != nil {
-			return "", err
-		}
+	}
+	expanded, err := pathutil.ExpandHome(dir)
+	if err != nil {
+		return "", err
+	}
+	dir, err = filepath.Abs(expanded)
+	if err != nil {
+		return "", err
+	}
+	if !flat {
 		encoded := cwd
 		if strings.HasPrefix(encoded, "/") || strings.HasPrefix(encoded, `\`) {
 			encoded = encoded[1:]
