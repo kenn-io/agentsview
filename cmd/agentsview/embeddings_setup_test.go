@@ -119,6 +119,8 @@ func TestSetupRejectsChangedProvider(t *testing.T) {
 	ln, port := listenLoopback(t)
 	cfg.Host, cfg.Port = "127.0.0.1", port
 	ts := startTestServer(t, ln, server.New(cfg, database, nil, owner.ServerOptions()...).Handler())
+	embeddingRequest(t, ts.Client(), ts.URL, "POST", "/api/v1/embeddings/setup", "application/json", strings.NewReader(`{"approved_bytes":0}`), http.StatusBadRequest)
+	embeddingRequest(t, ts.Client(), ts.URL, "POST", "/api/v1/embeddings/setup", "application/json", strings.NewReader(`{"expected_provider":""}`), http.StatusBadRequest)
 	embeddingRequest(t, ts.Client(), ts.URL, "POST", "/api/v1/embeddings/setup", "application/json", strings.NewReader(`{"approved_bytes":0,"expected_provider":"ollama"}`), http.StatusConflict)
 	chosen, err := embedlocal.ChoiceRecorded()
 	require.NoError(t, err)
@@ -493,7 +495,7 @@ func TestLiveEmbeddingsSetup(t *testing.T) {
 				shown = initial.Setup.MissingBytes
 			}
 
-			request("POST", "/api/v1/embeddings/setup", fmt.Sprintf(`{"approved_bytes":%d}`, shown), 202)
+			request("POST", "/api/v1/embeddings/setup", fmt.Sprintf(`{"approved_bytes":%d,"expected_provider":%q}`, shown, initial.Setup.Provider), 202)
 			if recipe == "fresh" {
 				<-building
 				<-owner.done
@@ -576,7 +578,7 @@ func TestLiveEmbeddingsSetupStatusAndExportDuringWriteLockRetry(t *testing.T) {
 	ln, port := listenLoopback(t)
 	cfg.Host, cfg.Port = "127.0.0.1", port
 	ts := startTestServer(t, ln, server.New(cfg, database, nil, owner.ServerOptions()...).Handler())
-	embeddingRequest(t, ts.Client(), ts.URL, "POST", "/api/v1/embeddings/setup", "application/json", strings.NewReader(`{}`), 202)
+	embeddingRequest(t, ts.Client(), ts.URL, "POST", "/api/v1/embeddings/setup", "application/json", strings.NewReader(`{"expected_provider":"ollama"}`), 202)
 	<-reloaded
 	before := inspections.Load()
 	status, err := owner.SetupStatus(t.Context())
@@ -714,7 +716,7 @@ func TestLiveEmbeddingsSetupFailures(t *testing.T) {
 				ln, port := listenLoopback(t)
 				cfg.Host, cfg.Port = "127.0.0.1", port
 				ts := startTestServer(t, ln, server.New(cfg, database, nil, owner.ServerOptions()...).Handler())
-				embeddingRequest(t, ts.Client(), ts.URL, "POST", "/api/v1/embeddings/setup", "application/json", strings.NewReader(`{}`), http.StatusBadRequest)
+				embeddingRequest(t, ts.Client(), ts.URL, "POST", "/api/v1/embeddings/setup", "application/json", strings.NewReader(`{"expected_provider":"built-in"}`), http.StatusBadRequest)
 				return
 			}
 			if failure == "model inspection" {

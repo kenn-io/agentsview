@@ -30,7 +30,7 @@ func WithEmbeddingsRuntime(runtime EmbeddingsRuntime) Option {
 type embeddingsSetupInput struct {
 	Body struct {
 		ApprovedBytes    int64  `json:"approved_bytes,omitempty" minimum:"0" doc:"Download size the user saw; a larger download is declined"`
-		ExpectedProvider string `json:"expected_provider,omitempty" enum:"built-in,ollama,configured" doc:"Provider shown before setup"`
+		ExpectedProvider string `json:"expected_provider" enum:"built-in,ollama,configured" doc:"Provider shown before setup"`
 	}
 }
 

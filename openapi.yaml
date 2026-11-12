@@ -5072,6 +5072,8 @@ components:
             - ollama
             - configured
           type: string
+      required:
+        - expected_provider
       type: object
     EmptyTrashResponse:
       additionalProperties: false

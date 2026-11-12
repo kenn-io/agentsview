@@ -10,5 +10,5 @@ export interface EmbeddingsSetupInputBody {
    */
   approved_bytes?: number;
   /** Provider shown before setup */
-  expected_provider?: EmbeddingsSetupInputBodyExpectedProvider;
+  expected_provider: EmbeddingsSetupInputBodyExpectedProvider;
 }

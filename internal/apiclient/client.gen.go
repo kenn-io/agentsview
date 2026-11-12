@@ -29547,7 +29547,7 @@ type EmbeddingsSetupInputBody struct {
 	ApprovedBytes *int64 `json:"approved_bytes,omitempty" validate:"omitempty,gte=0"`
 
 	// ExpectedProvider Provider shown before setup
-	ExpectedProvider *EmbeddingsSetupInputBodyExpectedProvider `json:"expected_provider,omitempty"`
+	ExpectedProvider EmbeddingsSetupInputBodyExpectedProvider `json:"expected_provider" validate:"required"`
 }
 
 func (e EmbeddingsSetupInputBody) Validate() error {
@@ -29557,11 +29557,9 @@ func (e EmbeddingsSetupInputBody) Validate() error {
 			errors = errors.Append("ApprovedBytes", err)
 		}
 	}
-	if e.ExpectedProvider != nil {
-		if v, ok := any(e.ExpectedProvider).(runtime.Validator); ok {
-			if err := v.Validate(); err != nil {
-				errors = errors.Append("ExpectedProvider", err)
-			}
+	if v, ok := any(e.ExpectedProvider).(runtime.Validator); ok {
+		if err := v.Validate(); err != nil {
+			errors = errors.Append("ExpectedProvider", err)
 		}
 	}
 	if len(errors) == 0 {

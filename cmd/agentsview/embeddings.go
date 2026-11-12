@@ -1141,7 +1141,7 @@ func (c embeddingsDaemonClient) startSetup(ctx context.Context, approved int64, 
 		return err
 	}
 	expected := apiclient.EmbeddingsSetupInputBodyExpectedProvider(provider)
-	response, err := api.PostAPIV1EmbeddingsSetupWithResponse(ctx, &apiclient.PostAPIV1EmbeddingsSetupRequestOptions{Body: &apiclient.EmbeddingsSetupInputBody{ApprovedBytes: &approved, ExpectedProvider: &expected}})
+	response, err := api.PostAPIV1EmbeddingsSetupWithResponse(ctx, &apiclient.PostAPIV1EmbeddingsSetupRequestOptions{Body: &apiclient.EmbeddingsSetupInputBody{ApprovedBytes: &approved, ExpectedProvider: expected}})
 	if response == nil {
 		return err
 	}
