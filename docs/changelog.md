@@ -17,6 +17,10 @@ The latest release is
   and catalog updates, and changing the mapping reprices cached usage. See
   [Custom Model Pricing](/docs/token-usage/#custom-model-pricing).
 
+- Resume a Claude session in a local checkout by installing its original files
+  from configured sources or attached snapshots with
+  `agentsview session materialize`.
+
 - Follow archive changes live from the local daemon with
   `GET /api/v1/changes/stream`. A sync client or dashboard receives every
   session and message change as it is published, with token and cost totals

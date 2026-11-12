@@ -130,24 +130,40 @@ func (m Materializer) Materialize(
 	ctx context.Context,
 	manifest rawsync.CanonicalManifest,
 ) (_ *Materialization, resultErr error) {
-	if m.Store == nil {
-		return nil, fmt.Errorf("%w: object store is required", rawsync.ErrInvalid)
-	}
-	if strings.TrimSpace(m.BaseDir) == "" {
-		return nil, fmt.Errorf("%w: materialization base directory is required", rawsync.ErrInvalid)
-	}
-	if m.MaxTotalBytes <= 0 {
-		return nil, fmt.Errorf("%w: materialization byte limit must be positive", rawsync.ErrInvalid)
-	}
 	if err := rawsync.ValidateCanonicalManifest(manifest); err != nil {
 		return nil, err
 	}
+	return m.materializeValidated(ctx, manifest.Identity, manifest.Manifest.CapturedAt, manifest.Manifest.Entries)
+}
+
+// MaterializeEntries reconstructs a validated batch from one authenticated tenant.
+func (m Materializer) MaterializeEntries(ctx context.Context, identity rawsync.AuthIdentity, capturedAt time.Time, entries []rawsync.Entry) (_ *Materialization, resultErr error) {
+	if _, err := rawsync.NewAuthIdentity(identity.TenantID, identity.DeviceID); err != nil {
+		return nil, err
+	}
+	if capturedAt.IsZero() {
+		return nil, fmt.Errorf("%w: capture time is required", rawsync.ErrInvalid)
+	}
+	// A selection can combine many individually valid manifests. Give it a
+	// separate bound rather than applying one manifest's cardinality limit.
+	limits := rawsync.DefaultManifestLimits()
+	limits.MaxEntries = 1 << 20
+	limits.MaxObjects = 4 << 20
+	if _, err := rawsync.ValidateEntryBatch(entries, limits); err != nil {
+		return nil, fmt.Errorf("invalid saved files: %w", err)
+	}
+	return m.materializeValidated(ctx, identity, capturedAt, entries)
+}
+
+// materializeValidated is shared only by entry points that validated their input.
+func (m Materializer) materializeValidated(ctx context.Context, identity rawsync.AuthIdentity, capturedAt time.Time, entries []rawsync.Entry) (_ *Materialization, resultErr error) {
+	if m.Store == nil || strings.TrimSpace(m.BaseDir) == "" || m.MaxTotalBytes <= 0 {
+		return nil, fmt.Errorf("%w: materializer requires a store, base directory and positive limit", rawsync.ErrInvalid)
+	}
 	var total int64
-	for _, entry := range manifest.Manifest.Entries {
+	for _, entry := range entries {
 		if entry.Length > m.MaxTotalBytes-total {
-			return nil, fmt.Errorf(
-				"%w: %w: materialization exceeds %d bytes", rawsync.ErrInvalid, ErrSizeLimit, m.MaxTotalBytes,
-			)
+			return nil, fmt.Errorf("%w: %w: materialization exceeds %d bytes", rawsync.ErrInvalid, ErrSizeLimit, m.MaxTotalBytes)
 		}
 		total += entry.Length
 	}
@@ -167,7 +183,7 @@ func (m Materializer) Materialize(
 		}
 	}()
 
-	for _, entry := range manifest.Manifest.Entries {
+	for _, entry := range entries {
 		if err := ctx.Err(); err != nil {
 			return nil, err
 		}
@@ -178,9 +194,7 @@ func (m Materializer) Materialize(
 		if err := os.MkdirAll(filepath.Dir(target), 0o700); err != nil {
 			return nil, fmt.Errorf("creating raw materialization directory: %w", err)
 		}
-		if err := m.materializeEntry(
-			ctx, manifest.Identity.TenantID, entry, manifest.Manifest.CapturedAt, target,
-		); err != nil {
+		if err := m.materializeEntry(ctx, identity.TenantID, entry, capturedAt, target); err != nil {
 			return nil, err
 		}
 		result.entries[entry.Path] = target

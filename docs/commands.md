@@ -2151,6 +2151,7 @@ agentsview session messages <id>         # paginated messages
 agentsview session commits <id>          # commits and their prompts
 agentsview session tool-calls <id>       # flat tool-call list
 agentsview session export <id>           # stream raw source file
+agentsview session materialize <id> --cwd <path> # install files for native resume
 agentsview session sync <path-or-id>     # parse + insert
 agentsview session watch <id>            # NDJSON event stream
 agentsview session search <pattern>      # content search across sessions
@@ -2161,6 +2162,43 @@ agentsview session usage-batch <id>...   # ordered usage results for several ses
 agentsview session label <id> k=v ...    # add or remove labels
 agentsview session parent <id> <parent>  # record the launching session
 ```
+
+`session materialize <id> --cwd <path>` installs the original Claude Code
+transcript and its native companions for an existing local checkout, then
+prints a resume command. It reads the local archive without starting a daemon
+and finds originals in configured local roots, remote mirrors, or configured
+S3 roots, or from a configured snapshot attachment that owns the session.
+Local retained and directory captures, Pi, and Codex are not yet supported.
+Archive-only fork sessions cannot be installed; select a session with a native
+Claude UUID. The transcript and companions together are limited to 512 MiB
+and are buffered in memory. Snapshot recovery also needs scratch space for a
+saved archive database of up to 16 GiB. It holds a snapshot repository lease;
+if the repository is busy, retry after the other operation finishes. `--server`,
+`--server-token-file`, and `--pg` are unavailable. Use `--json` for the source,
+installed paths, checkout, command, and installed or unchanged status. For
+snapshot recovery, the source is `snapshot:<id>`. Claude's native home and
+supported environment overrides determine the destination, independently of
+discovery roots. Local companions must resolve inside the configured root when the
+transcript is inside it; an externally linked project is confined to that
+project. Remote mirror files must remain inside the mirror root.
+An explicitly set `CLAUDE_CONFIG_DIR` must be an absolute path; the printed
+command preserves its spelling so Claude uses the same credentials.
+
+Existing identical files are reused; a different or non-regular file causes
+an error. Dependencies are installed before the transcript. If publication
+stops partway through, retry to reuse the files already installed. The command
+does not rewrite existing transcript records. If its last worktree binding is
+non-null, it appends Claude's native null worktree-state record to prevent
+restoring the original checkout, as observed in Claude Code 2.1.322.
+
+An already-running Claude session can attach in that process's existing
+directory. Claude's in-app resume picker can also fall back to a recorded
+project path for an unbound session. Start the printed command in a new process
+when the selected checkout matters: end the existing running session first.
+Materialize after Claude and any S3 uploader finish; S3 files can otherwise
+reflect different upload moments.
+If the destination is a configured Claude source root, a later sync may also
+discover the installed copy as a separate local session.
 
 `agentsview session commits <id>` lists transcript and Git trailer commits
 linked to a session. The `SOURCE` column distinguishes `transcript` from

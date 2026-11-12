@@ -391,14 +391,19 @@ func validateSourceKey(value string) error {
 }
 
 func validateEntries(manifest Manifest, limits ManifestLimits) ([]ObjectRef, error) {
-	if len(manifest.Entries) > limits.MaxEntries {
+	return ValidateEntryBatch(manifest.Entries, limits)
+}
+
+// ValidateEntryBatch checks the structural and object constraints for a set of entries.
+func ValidateEntryBatch(entries []Entry, limits ManifestLimits) ([]ObjectRef, error) {
+	if len(entries) > limits.MaxEntries {
 		return nil, fmt.Errorf("%w: manifest entry limit exceeded", ErrInvalid)
 	}
 	byDigest := make(map[string]ObjectRef)
-	filePaths := make(map[string]string, len(manifest.Entries))
+	filePaths := make(map[string]string, len(entries))
 	directoryPaths := make(map[string]string)
 	objectCount := 0
-	for _, entry := range manifest.Entries {
+	for _, entry := range entries {
 		if err := validateEntryPath(entry.Path, limits.MaxPathBytes); err != nil {
 			return nil, err
 		}

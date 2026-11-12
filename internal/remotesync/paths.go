@@ -50,14 +50,15 @@ func hasDotDotPathComponent(p string) bool {
 }
 
 func remappedRemotePath(tempDir, remotePath string) string {
-	local, err := safeRemappedRemotePath(tempDir, remotePath)
+	local, err := SafeRemappedRemotePath(tempDir, remotePath)
 	if err != nil {
 		return tempDir
 	}
 	return local
 }
 
-func safeRemappedRemotePath(tempDir, remotePath string) (string, error) {
+// SafeRemappedRemotePath resolves a remote path within a mirror root.
+func SafeRemappedRemotePath(tempDir, remotePath string) (string, error) {
 	name, err := safeRemotePathArchiveName(remotePath)
 	if err != nil {
 		return "", err

@@ -123,7 +123,7 @@ func locateCodexRoot(
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
-	if !validUUID(id) {
+	if !ValidUUID(id) {
 		return nil, nil
 	}
 	days := make(map[string]struct{})

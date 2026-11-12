@@ -130,7 +130,7 @@ func TestHermesManifestMatchesStandaloneDatabaseSnapshot(t *testing.T) {
 	extracted := t.TempDir()
 	_, err = ExtractTarStream(t.Context(), &archive, extracted)
 	require.NoError(t, err)
-	extractedDB, err := safeRemappedRemotePath(extracted, stateDB)
+	extractedDB, err := SafeRemappedRemotePath(extracted, stateDB)
 	require.NoError(t, err)
 	info, err := os.Stat(extractedDB)
 	require.NoError(t, err)
