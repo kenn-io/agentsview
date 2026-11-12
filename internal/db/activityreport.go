@@ -213,6 +213,10 @@ func (db *DB) BuildActivityReportArtifacts(
 					return activity.CandidateArtifacts{}, err
 				}
 				if valid {
+					if revision > entry.revision {
+						entry.revision = revision
+						db.activityKept.Put(selection, version, []activityKept{entry})
+					}
 					cachedUsage = entry.usage
 				}
 			}

@@ -60,13 +60,18 @@ func BenchmarkSQLiteActivityReportUsage(b *testing.B) {
 		_, err := d.prepareActivityUsageWindow(b.Context(), lower, upper)
 		require.NoError(b, err)
 		b.ReportAllocs()
+		var rows []activity.UsageRow
 		for b.Loop() {
 			window, err := d.prepareActivityUsageWindow(b.Context(), lower, upper)
 			require.NoError(b, err)
-			rows, _, _, _, err := d.activityReportCachedUsage(b.Context(), window, ids, lower, upper, q, true)
+			rows, _, _, _, err = d.activityReportCachedUsage(b.Context(), window, ids, lower, upper, q, true)
 			require.NoError(b, err)
-			require.Len(b, rows, survivors)
 		}
+		var outputTokens int
+		for _, row := range rows {
+			outputTokens += row.OutputTokens
+		}
+		require.Equal(b, survivors*20, outputTokens)
 	})
 	b.Run("raw", func(b *testing.B) {
 		b.ReportAllocs()

@@ -156,6 +156,38 @@ func TestActivityReportKeptReinsertsOnlyWhenWatermarkAdvances(t *testing.T) {
 	assert.Equal(t, 1, sizeCalls, "a second hit at the same watermark must not reinsert the report")
 }
 
+func TestActivityOngoingUsageAdvancesWatermark(t *testing.T) {
+	d := testDB(t)
+	keptActivitySession(t, d, "past", "project-a", "2026-06-14")
+	keptActivitySession(t, d, "today", "project-a", "2026-06-15")
+	q, f := dayQuery(t, "2026-06-14", "UTC"), AnalyticsFilter{Timezone: "UTC", IncludeSubagents: true, IncludeForks: true}
+	q.Partial = true
+	q.EffectiveEnd = time.Date(2026, 6, 14, 12, 0, 0, 0, time.UTC)
+	first := keptActivityBuild(t, d, f, q, true)
+
+	measure := d.activityKept.Size
+	sizeCalls := 0
+	d.activityKept.Size = func(entry activityKept) int64 {
+		sizeCalls++
+		return measure(entry)
+	}
+	require.Equal(t, first, keptActivityBuild(t, d, f, q, true))
+	assert.Zero(t, sizeCalls)
+
+	require.NoError(t, d.RenameSession(t.Context(), "today", new("Today changed")))
+	require.Equal(t, first, keptActivityBuild(t, d, f, q, true))
+	version, revision, err := d.activityKeptVersion(t.Context())
+	require.NoError(t, err)
+	entries, ok := d.activityKept.Get(activityUsageSelection(f, q), version)
+	require.True(t, ok)
+	require.Len(t, entries, 1)
+	assert.Equal(t, revision, entries[0].revision)
+	assert.Equal(t, 1, sizeCalls)
+
+	require.Equal(t, first, keptActivityBuild(t, d, f, q, true))
+	assert.Equal(t, 1, sizeCalls)
+}
+
 func TestActivityReportKeptResumedSessionPeerChanges(t *testing.T) {
 	for _, tc := range []struct {
 		name      string

@@ -19,6 +19,26 @@ import (
 // path that predates reading Activity usage from the usage cache.
 type rawUsageActivityBackend struct{ activityReportBackend }
 
+func TestSumActivityUsageRowsPreservesSessionTotals(t *testing.T) {
+	q := dayQuery(t, "2026-06-16", "UTC")
+	reported := money.Money{Microdollars: 100}
+	rows := []activity.UsageRow{
+		{SessionID: "ordinary", Model: "model", Timestamp: "2026-06-16T10:00:00Z", InputTokens: 10, OutputTokens: 3, Cost: money.Money{Microdollars: 2}},
+		{SessionID: "reported", Model: "model", Timestamp: "2026-06-16T10:00:00Z", InputTokens: 5},
+		{SessionID: "ordinary", Model: "model", Timestamp: "2026-06-16T10:01:00Z", InputTokens: 20, OutputTokens: 7, Cost: money.Money{Microdollars: 4}},
+		{SessionID: "reported", Model: "model", Timestamp: "2026-06-16T10:01:00Z", InputTokens: 6, SessionCost: &reported},
+		{SessionID: "ordinary", Model: "model", Timestamp: "2026-06-16T11:00:00Z", InputTokens: 2},
+	}
+	got, err := sumActivityUsageRows(t.Context(), rows, q)
+	require.NoError(t, err)
+	assert.Equal(t, []activity.UsageRow{
+		{SessionID: "ordinary", Model: "model", Timestamp: "2026-06-16T10:00:00Z", InputTokens: 30, OutputTokens: 10, Cost: money.Money{Microdollars: 6}},
+		{SessionID: "reported", Model: "model", Timestamp: "2026-06-16T10:00:00Z", InputTokens: 5},
+		{SessionID: "reported", Model: "model", Timestamp: "2026-06-16T10:01:00Z", InputTokens: 6, SessionCost: &reported},
+		{SessionID: "ordinary", Model: "model", Timestamp: "2026-06-16T11:00:00Z", InputTokens: 2},
+	}, got)
+}
+
 func (b rawUsageActivityBackend) ActivityReportUsage(
 	ctx context.Context, ids []string, q activity.Query,
 ) ([]activity.UsageRow, *export.PricingBlock, error) {
