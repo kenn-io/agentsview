@@ -54,9 +54,6 @@ func prepareServeRuntimeConfig(ctx context.Context,
 	opts serveRuntimeOptions,
 ) (config.Config, error) {
 	requestedPort := opts.RequestedPort
-	if requestedPort == 0 {
-		requestedPort = cfg.Port
-	}
 
 	port, err := server.FindAvailablePort(ctx, cfg.Host, cfg.Port)
 	if err != nil {

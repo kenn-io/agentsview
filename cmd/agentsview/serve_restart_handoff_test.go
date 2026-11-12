@@ -480,6 +480,43 @@ func TestServeRestartPortChoiceWhenOccupied(t *testing.T) {
 	require.NoError(t, response.Body.Close())
 }
 
+func TestServeRestartPreservesAutoPortForUpdate(t *testing.T) {
+	for _, mode := range []string{"foreground", "background"} {
+		t.Run(mode, func(t *testing.T) {
+			_, dataDir := isolateServeTestHome(t)
+			startRestartFixture(t, dataDir, mode, "--no-sync", "--require-auth=false")
+			rt := waitForRestartRuntime(t, dataDir)
+			require.NotNil(t, rt.ExplicitPort)
+			require.Zero(t, *rt.ExplicitPort)
+			base := fmt.Sprintf("http://127.0.0.1:%d", rt.Port)
+			replacement := restartAndWait(t, dataDir, base, "")
+			require.Equal(t, rt.Port, replacement.Port)
+			if mode == "background" {
+				waitForBackgroundLaunchLock(t, dataDir)
+			}
+			stopped, err := stopWritableDaemonsForUpdate(t.Context(), config.Config{DataDir: dataDir})
+			require.NoError(t, err)
+			require.True(t, stopped.Stopped)
+			listener, err := (&net.ListenConfig{}).Listen(t.Context(), "tcp", net.JoinHostPort("127.0.0.1", strconv.Itoa(rt.Port)))
+			require.NoError(t, err)
+			t.Cleanup(func() { assert.NoError(t, listener.Close()) })
+			args := serveBackgroundChildArgs(restartDaemonAfterUpdateArgs(config.Config{}, stopped))
+			cmd := newServeCommand()
+			require.NoError(t, cmd.Flags().Parse(args[1:]))
+			cfg, err := config.LoadPFlags(cmd.Flags())
+			require.NoError(t, err)
+			port, err := cmd.Flags().GetInt("restart-port")
+			require.NoError(t, err)
+			next, _, err := prepareRunServeRuntimeConfig(t.Context(), cfg, port, nil)
+			require.NoError(t, err)
+			assert.Positive(t, next.Port)
+			assert.NotEqual(t, rt.Port, next.Port)
+			require.NotNil(t, replacement.ExplicitPort)
+			assert.Zero(t, *replacement.ExplicitPort)
+		})
+	}
+}
+
 func startRestartAuthFixture(t *testing.T, mode string, args ...string) (config.Config, string, string) {
 	t.Helper()
 	_, dataDir := isolateServeTestHome(t)

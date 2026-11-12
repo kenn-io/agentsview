@@ -619,7 +619,7 @@ func runServe(ctx context.Context, cfg config.Config, opts serveOptions, restart
 	}()
 
 	var restartExplicitPort *int
-	if cfg.PortExplicit && cfg.Port > 0 {
+	if cfg.PortExplicit {
 		restartExplicitPort = new(cfg.Port)
 	}
 	preparedCfg, rtOpts, prepErr := prepareRunServeRuntimeConfig(ctx,
@@ -674,7 +674,7 @@ func runServe(ctx context.Context, cfg config.Config, opts serveOptions, restart
 				}
 			}()
 			args := serveBackgroundArgsWithNoSync(serveReplacementArgs(opts.RestartArgs, current), cfg.NoSync)
-			args = append(args, serveHandoffPortArgs(cfg.Port, restartExplicitPort)...)
+			args = append(args, serveHandoffPortArgs(0, restartExplicitPort)...)
 			flags := newServeCommand().Flags()
 			if err := flags.Parse(args); err != nil {
 				return fmt.Errorf("parsing replacement flags: %w", err)
@@ -691,9 +691,9 @@ func runServe(ctx context.Context, cfg config.Config, opts serveOptions, restart
 			nextOpts.NoSyncExplicit = flags.Changed("no-sync")
 			nextOpts.RestartArgs = serveRestartArgs(flags)
 			nextOpts.ReloadConfig = func() (config.Config, error) { return config.LoadPFlags(flags) }
-			nextPort, err := flags.GetInt("restart-port")
-			if err != nil {
-				return err
+			nextPort := cfg.Port
+			if restartExplicitPort != nil && *restartExplicitPort > 0 {
+				nextPort = 0
 			}
 			args = append([]string{"serve"}, args...)
 			// Let the HTTP response finish before draining its server.
@@ -803,14 +803,10 @@ func runServe(ctx context.Context, cfg config.Config, opts serveOptions, restart
 	// write fails, keep the start lock as a fallback "server
 	// is active" marker so token-use doesn't start a competing
 	// on-demand sync against our live DB.
-	var explicitPort *int
-	if rt.Cfg.PortExplicit {
-		explicitPort = new(rtOpts.RequestedPort)
-	}
 	if _, sfErr := writeDaemonRuntimeWithAuthAndNoSync(
 		&daemonLifetime{Persistent: rt.Cfg.PersistentDaemon, IdleTimeout: effectiveDaemonIdleTimeout(rt.Cfg)},
 		rt.Cfg.DataDir, rt.Cfg.Host, rt.Cfg.Port, version, rt.PublicURL, false,
-		rt.Cfg.RequireAuth, rt.Cfg.NoSync, explicitPort,
+		rt.Cfg.RequireAuth, rt.Cfg.NoSync, restartExplicitPort,
 		rt.Caddy.Pid(),
 	); sfErr != nil {
 		reportRuntimeRecordWrite(
