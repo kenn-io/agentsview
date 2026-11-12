@@ -5,7 +5,6 @@ package postgres
 import (
 	"context"
 	"database/sql"
-	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -22,11 +21,9 @@ type analyticsReadCounter struct {
 }
 
 func (c *analyticsReadCounter) QueryContext(ctx context.Context, query string, args ...any) (*sql.Rows, error) {
-	if !strings.Contains(query, "usage_change_revision") {
-		c.mu.Lock()
-		c.reads++
-		c.mu.Unlock()
-	}
+	c.mu.Lock()
+	c.reads++
+	c.mu.Unlock()
 	return c.storeExecutor.QueryContext(ctx, query, args...)
 }
 
@@ -66,6 +63,12 @@ func TestAnalyticsKeptPushAndSelection(t *testing.T) {
 	assert.Equal(t, tools, toolsAgain)
 	assert.Equal(t, velocity, velocityAgain)
 	assert.Equal(t, reads, counter.count())
+	freshTools, err := store.loadAnalyticsTools(ctx, f)
+	require.NoError(t, err)
+	freshVelocity, err := store.loadAnalyticsVelocity(ctx, f)
+	require.NoError(t, err)
+	assert.Equal(t, freshTools, toolsAgain)
+	assert.Equal(t, freshVelocity, velocityAgain)
 	toolsAgain.ByTool[0].ToolName = "changed"
 	toolsAgain.Trend[0].ByCat["Read"] = 99
 	velocityAgain.ByAgent[0].Label = "changed"
@@ -172,8 +175,7 @@ func TestAnalyticsKeptLocalTimezoneChange(t *testing.T) {
 	require.Len(t, first.Trend, 1)
 	assert.Equal(t, "2026-06-15", first.Trend[0].Date)
 	t.Setenv("TZ", "America/New_York")
-	fresh := &Store{pg: store.pg}
-	want, err := fresh.GetAnalyticsTools(ctx, f)
+	want, err := store.loadAnalyticsTools(ctx, f)
 	require.NoError(t, err)
 	require.Len(t, want.Trend, 1)
 	require.Equal(t, "2026-06-08", want.Trend[0].Date)
