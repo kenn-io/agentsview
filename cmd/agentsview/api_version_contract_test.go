@@ -91,6 +91,11 @@ func baseAPIVersionRecords(ctx context.Context) ([]string, error) {
 }
 
 func checkAPIVersionContract(apiVersion int, digest string, records []apiVersionRecord, base []string) error {
+	path := func(version int) string { return apiVersionRecord{version, digest, "<summary digest>"}.name() }
+	nextVersion := func() string {
+		next := apiVersion + 1
+		return fmt.Sprintf("generated OpenAPI contract changed under API version %d; in %s add %s with a one-line summary and its SHA-256 digest in the filename, set server.APIVersion to %d, and move any feature minimum this PR introduced to %d (see docs/agents/storage.md)", apiVersion, apiVersionRecordDir, path(next), next, next)
+	}
 	byVersion := map[int]apiVersionRecord{}
 	paths := map[string]bool{}
 	for _, r := range records {
@@ -102,15 +107,18 @@ func checkAPIVersionContract(apiVersion int, digest string, records []apiVersion
 	}
 	used := false
 	for _, name := range base {
+		version, rest, _ := strings.Cut(name, "-")
+		baseDigest, _, _ := strings.Cut(rest, "-")
 		if !paths[name] {
+			if version == strconv.Itoa(apiVersion) && "sha256:"+baseDigest != digest {
+				return fmt.Errorf("API version record %s from the target base is missing; restore it; %s", name, nextVersion())
+			}
 			return fmt.Errorf("API version record %s from the target base is missing; restore it", name)
 		}
-		version, _, _ := strings.Cut(name, "-")
 		if version == strconv.Itoa(apiVersion) {
 			used = true
 		}
 	}
-	path := func(version int) string { return apiVersionRecord{version, digest, "<summary digest>"}.name() }
 	record, ok := byVersion[apiVersion]
 	if !ok {
 		return fmt.Errorf("API version %d has no contract record; in %s add %s with a one-line summary and its SHA-256 digest in the filename", apiVersion, apiVersionRecordDir, path(apiVersion))
@@ -121,8 +129,7 @@ func checkAPIVersionContract(apiVersion int, digest string, records []apiVersion
 	if !used {
 		return fmt.Errorf("generated OpenAPI contract changed under API version %d; replace this branch's record with %s in %s, with a one-line summary and its SHA-256 digest in the filename", apiVersion, path(apiVersion), apiVersionRecordDir)
 	}
-	next := apiVersion + 1
-	return fmt.Errorf("generated OpenAPI contract changed under API version %d; in %s add %s with a one-line summary and its SHA-256 digest in the filename, set server.APIVersion to %d, and move any feature minimum this PR introduced to %d (see docs/agents/storage.md)", apiVersion, apiVersionRecordDir, path(next), next, next)
+	return fmt.Errorf("%s", nextVersion())
 }
 
 func TestAPIVersionContract(t *testing.T) {
@@ -193,11 +200,17 @@ func TestCheckAPIVersionContract(t *testing.T) {
 		require.ErrorContains(t, err, "set server.APIVersion to 16")
 		require.ErrorContains(t, err, "feature minimum")
 	})
-	t.Run("base record cannot be replaced or deleted", func(t *testing.T) {
-		err := checkAPIVersionContract(15, left.digest, []apiVersionRecord{{15, left.digest, "summary-b"}}, []string{base.name()})
+	t.Run("replacing a base record requires the next version", func(t *testing.T) {
+		old := apiVersionRecord{16, "sha256:aaaa", "summary-a"}
+		err := checkAPIVersionContract(16, left.digest, []apiVersionRecord{left}, []string{old.name()})
+		require.ErrorContains(t, err, old.name()+" from the target base is missing; restore it")
+		require.ErrorContains(t, err, "17-bbbb-<summary digest>")
+		require.ErrorContains(t, err, "set server.APIVersion to 17")
+		require.ErrorContains(t, err, "feature minimum")
+	})
+	t.Run("deleting a base record asks to restore it", func(t *testing.T) {
+		err := checkAPIVersionContract(15, base.digest, nil, []string{base.name()})
 		require.ErrorContains(t, err, base.name()+" from the target base is missing; restore it")
-		err = checkAPIVersionContract(15, base.digest, nil, []string{base.name()})
-		require.ErrorContains(t, err, "restore it")
 	})
 	t.Run("branch record can be replaced at the same version", func(t *testing.T) {
 		err := checkAPIVersionContract(16, merged, []apiVersionRecord{base, left}, []string{base.name()})
