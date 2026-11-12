@@ -106,7 +106,7 @@ func TestMaterializeSnapshotCaptureLayouts(t *testing.T) {
 			if layout == "projects" {
 				selectedRoot = projects
 			}
-			source := backupSourceRootsWithNative(t, inputs, []rawarchive.RootSpec{{Provider: "claude", Path: selectedRoot}}, id)
+			source := backupSourceRoots(t, inputs, []rawarchive.RootSpec{{Provider: "claude", Path: selectedRoot}})
 			index, err := OpenIndex(t.Context(), source, t.TempDir(), nil)
 			require.NoError(t, err)
 			defer index.Close()
@@ -161,7 +161,7 @@ func TestMaterializeSnapshotEquivalentCandidates(t *testing.T) {
 	inputs := t.TempDir()
 	projects := filepath.Join(inputs, "claude", "projects")
 	dbtest.WriteTestFile(t, filepath.Join(projects, "project-a", id+".jsonl"), []byte(testjsonl.NewSessionBuilder().AddClaudeUserWithSessionID("2026-01-01T00:00:00Z", "saved Claude question", id).String()))
-	source := backupSourceRootsWithNative(t, inputs, []rawarchive.RootSpec{{Provider: "claude", Path: projects}}, id)
+	source := backupSourceRoots(t, inputs, []rawarchive.RootSpec{{Provider: "claude", Path: projects}})
 	index, err := OpenIndex(t.Context(), source, t.TempDir(), nil)
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, index.Close()) })
@@ -298,7 +298,7 @@ func TestMaterializeSnapshotUsesAcceptedPrimaryAfterSiblingCapture(t *testing.T)
 	original := testjsonl.NewSessionBuilder().AddClaudeUserWithSessionID("2026-01-01T00:00:00Z", "original", id).String()
 	dbtest.WriteTestFile(t, primary, []byte(original))
 	dbtest.WriteTestFile(t, filepath.Join(root, "project", id, "tool-results", "tool.txt"), []byte("original tool"))
-	source := backupSourceRootsWithNative(t, inputs, []rawarchive.RootSpec{{Provider: "claude", Path: root}}, id)
+	source := backupSourceRoots(t, inputs, []rawarchive.RootSpec{{Provider: "claude", Path: root}})
 	changed := testjsonl.NewSessionBuilder().AddClaudeUserWithSessionID("2026-01-01T00:00:00Z", "changed", id).String()
 	require.NoError(t, os.WriteFile(primary, []byte(changed), 0o600))
 	dbtest.WriteTestFile(t, filepath.Join(root, "project", siblingID+".jsonl"), []byte(testjsonl.NewSessionBuilder().AddClaudeUserWithSessionID("2026-01-01T00:01:00Z", "sibling", siblingID).String()))

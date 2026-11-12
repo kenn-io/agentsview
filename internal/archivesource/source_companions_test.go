@@ -45,19 +45,6 @@ func backupSourceRoots(t *testing.T, inputs string, roots []rawarchive.RootSpec)
 	return config.ArchiveSource{Name: "history", Repository: repo, Snapshot: report.SnapshotID}
 }
 
-func backupSourceRootsWithNative(t *testing.T, inputs string, roots []rawarchive.RootSpec, native string) config.ArchiveSource {
-	t.Helper()
-	source := backupSourceRoots(t, inputs, roots)
-	database, err := db.OpenIsolatedContext(t.Context(), filepath.Join(inputs, "seed", "sessions.db"))
-	require.NoError(t, err)
-	defer func() { require.NoError(t, database.Close()) }()
-	var count int
-	err = database.Reader().QueryRow(t.Context(), `SELECT count(*) FROM raw_archive_sessions WHERE device_id=? AND provider='claude' AND parser_id=?`, sourceDevice, native).Scan(&count)
-	require.NoError(t, err)
-	require.Equal(t, 1, count)
-	return source
-}
-
 func TestAttachedSourceRetainsContinuationsAndForks(t *testing.T) {
 	inputs := t.TempDir()
 	claude := filepath.Join(inputs, "claude")
