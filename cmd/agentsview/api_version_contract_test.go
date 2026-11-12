@@ -1,7 +1,7 @@
 package main
 
 import (
-	"encoding/json/jsontext"
+	"encoding/json"
 	"fmt"
 	"os"
 	"strconv"
@@ -91,9 +91,36 @@ func checkAPIVersionContract(apiVersion int, digest string, records []apiVersion
 func TestAPIVersionContract(t *testing.T) {
 	data, err := server.OpenAPIJSON(server.VersionInfo{}, pushBackendOptions()...)
 	require.NoError(t, err)
-	digest, err := export.DigestCanonical(jsontext.Value(data))
+	var document any
+	decoder := json.NewDecoder(strings.NewReader(string(data)))
+	decoder.UseNumber()
+	require.NoError(t, decoder.Decode(&document))
+	stripOpenAPIProse(document, false)
+	digest, err := export.DigestCanonical(document)
 	require.NoError(t, err)
 	require.NoError(t, checkAPIVersionContract(server.APIVersion, digest, loadAPIVersionRecords(t)))
+}
+
+// Named maps contain contract names, including names that match prose fields.
+func stripOpenAPIProse(value any, namedMap bool) {
+	switch value := value.(type) {
+	case []any:
+		for _, item := range value {
+			stripOpenAPIProse(item, false)
+		}
+	case map[string]any:
+		for key, item := range value {
+			if !namedMap && (key == "title" || key == "description" || key == "summary" || key == "example" || key == "examples") {
+				delete(value, key)
+				continue
+			}
+			if !namedMap && (key == "default" || key == "const" || key == "enum") {
+				continue
+			}
+			childNamedMap := !namedMap && (key == "paths" || key == "schemas" || key == "properties" || key == "patternProperties" || key == "$defs" || key == "parameters" || key == "responses" || key == "headers" || key == "content" || key == "securitySchemes" || key == "requestBodies" || key == "links" || key == "callbacks" || key == "encoding")
+			stripOpenAPIProse(item, childNamedMap)
+		}
+	}
 }
 
 func TestCheckAPIVersionContract(t *testing.T) {
