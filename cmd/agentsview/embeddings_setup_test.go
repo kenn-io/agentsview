@@ -77,7 +77,7 @@ func TestSharedChoiceRespectsSettings(t *testing.T) {
 	for _, raw := range []string{
 		"[vector]\nenabled = false\n",
 		"[vector.embeddings]\nmodel = 'custom'\n",
-		"[vector.embeddings.servers.remote]\nendpoint = 'https://example.com/v1'\n",
+		"[vector.embeddings]\nmodel = 'custom'\ndimension = 768\n[vector.embeddings.servers.remote]\nendpoint = 'https://example.com/v1'\n",
 		"[pg]\nurl = 'postgres://example.com/db'\n",
 		"[clickhouse]\nurl = 'clickhouse://example.com/db'\n",
 	} {
@@ -98,6 +98,18 @@ func TestSharedChoiceRespectsSettings(t *testing.T) {
 			assert.Nil(t, owner.Manager(""))
 		})
 	}
+}
+
+func TestSharedChoiceExpandsIndexPath(t *testing.T) {
+	setTestHome(t, t.TempDir())
+	dir := testDataDir(t)
+	writeTestConfig(t, dir, "[vector]\ndb_path = '~/vectors.db'\n")
+	cfg, err := config.LoadReadOnly()
+	require.NoError(t, err)
+	candidate, eligible, err := cfg.SharedVectorSetup()
+	require.NoError(t, err)
+	require.True(t, eligible)
+	assert.Equal(t, filepath.Join(os.Getenv("HOME"), "vectors.db"), candidate.Vector.DBPath)
 }
 
 func TestLiveEmbeddingsSetup(t *testing.T) {

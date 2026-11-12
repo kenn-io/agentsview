@@ -4294,6 +4294,7 @@ func (c *Config) SharedVectorSetup() (Config, bool, error) {
 		if err != nil {
 			return err
 		}
+		candidate.Vector.DBPath = c.Vector.DBPath
 		name, server, err := candidate.Vector.Embeddings.Server("")
 		if err != nil {
 			return err
