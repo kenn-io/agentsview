@@ -3,9 +3,7 @@ package main
 import (
 	"encoding/json/jsontext"
 	"fmt"
-	"maps"
 	"os"
-	"slices"
 	"strconv"
 	"strings"
 	"testing"
@@ -52,31 +50,33 @@ func loadAPIVersionRecords(t *testing.T) []apiVersionRecord {
 // when the generated contract differs from the record for apiVersion. Every
 // failure that needs a new version names the next free one.
 func checkAPIVersionContract(apiVersion int, digest string, records []apiVersionRecord) error {
-	byVersion := map[int][]string{}
+	byVersion := map[int]apiVersionRecord{}
+	var conflict, first apiVersionRecord
 	highest := 0
 	for _, r := range records {
-		if !slices.Contains(byVersion[r.version], r.name()) {
-			byVersion[r.version] = append(byVersion[r.version], r.name())
+		if previous, ok := byVersion[r.version]; ok && previous.digest != r.digest {
+			if conflict.digest == "" {
+				first, conflict = previous, r
+			}
+		} else {
+			byVersion[r.version] = r
 		}
 		highest = max(highest, r.version)
 	}
 	next := max(apiVersion, highest) + 1
+	if conflict.digest != "" {
+		return fmt.Errorf("API version %d has different contract digests (%s, %s); "+
+			"delete the file this PR added, rebase onto main after the earlier PR merges, "+
+			"and rerun make test-api-version. The next free version is %d",
+			conflict.version, first.name(), conflict.name(), next)
+	}
 	move := fmt.Sprintf("this PR's contract (%s) needs API version %d: in %s add an empty "+
 		"file %s, set server.APIVersion to %d, and move any feature minimum this PR "+
 		"introduced to %d (see docs/agents/storage.md)",
 		digest, next, apiVersionRecordDir, apiVersionRecord{next, digest}.name(), next, next)
 
-	for _, v := range slices.Sorted(maps.Keys(byVersion)) {
-		if names := byVersion[v]; len(names) > 1 {
-			slices.Sort(names)
-			return fmt.Errorf("API version %d has %d different contract digests (%s); "+
-				"delete the one of these in %s that appears in this PR's changed files, then %s",
-				v, len(names), strings.Join(names, ", "), apiVersionRecordDir, move)
-		}
-	}
-
 	matches := func(v int) bool {
-		return slices.Contains(byVersion[v], apiVersionRecord{v, digest}.name())
+		return byVersion[v].digest == digest
 	}
 	if apiVersion < highest {
 		if matches(highest) {
@@ -127,23 +127,20 @@ func TestCheckAPIVersionContract(t *testing.T) {
 		assert.ErrorContains(t, err, "feature minimum")
 	})
 
-	t.Run("identical version 16 contracts pass", func(t *testing.T) {
-		records := []apiVersionRecord{rec(15, base), rec(16, left), rec(16, left)}
-		assert.NoError(t, checkAPIVersionContract(16, left, records))
-	})
-
 	t.Run("divergent version 16 contracts name both records and 17, then repair passes", func(t *testing.T) {
 		// The queue merges both PRs, so the generated contract carries both
 		// changes and matches neither version 16 record.
 		records := []apiVersionRecord{rec(15, base), rec(16, left), rec(16, right)}
 		for _, apiVersion := range []int{16, 15} {
 			err := checkAPIVersionContract(apiVersion, merged, records)
-			require.ErrorContains(t, err, "API version 16 has 2 different contract digests (16-bbbb, 16-cccc)")
-			assert.ErrorContains(t, err, "delete the one of these in "+apiVersionRecordDir+" that appears in this PR's changed files")
-			assert.NotContains(t, err.Error(), "origin/main")
-			assert.ErrorContains(t, err, "add an empty file 17-dddd, set server.APIVersion to 17")
+			require.ErrorContains(t, err, "API version 16 has different contract digests (16-bbbb, 16-cccc)")
+			assert.ErrorContains(t, err, "delete the file this PR added, rebase onto main after the earlier PR merges")
+			assert.ErrorContains(t, err, "rerun make test-api-version. The next free version is 17")
 		}
 
+		err := checkAPIVersionContract(16, merged, []apiVersionRecord{rec(15, base), rec(16, left)})
+		require.ErrorContains(t, err, "add an empty file 17-dddd, set server.APIVersion to 17")
+		assert.ErrorContains(t, err, "feature minimum")
 		repaired := []apiVersionRecord{rec(15, base), rec(16, left), rec(17, merged)}
 		assert.NoError(t, checkAPIVersionContract(17, merged, repaired))
 	})
