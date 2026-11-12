@@ -106,7 +106,7 @@ func (v *liveVectorServing) startSharedChoice() {
 	deployment.Local = true
 	v.mu.Lock()
 	defer v.mu.Unlock()
-	if err := v.startSetup(deployment, approvedBytes, true); err != nil {
+	if err := v.startSetup(deployment, approvedBytes, true, false); err != nil {
 		log.Printf("search by meaning: start setup: %v", err)
 	}
 }
@@ -292,11 +292,11 @@ func (v *liveVectorServing) Setup(approvedBytes int64, expectedProvider string) 
 	if status.Provider == "built-in" {
 		deployment.Local = true
 	}
-	return v.startSetup(deployment, approvedBytes, false)
+	return v.startSetup(deployment, approvedBytes, false, status.Provider == "ollama" && deployment.Endpoint == "")
 }
 
 // startSetup starts the leased worker with v.mu held.
-func (v *liveVectorServing) startSetup(deployment config.VectorEmbeddingsServerConfig, approvedBytes int64, automatic bool) error {
+func (v *liveVectorServing) startSetup(deployment config.VectorEmbeddingsServerConfig, approvedBytes int64, automatic, approvedOllama bool) error {
 	release, ok := v.idle.BeginWork()
 	if !ok {
 		return errors.New("server is shutting down")
@@ -305,7 +305,7 @@ func (v *liveVectorServing) startSetup(deployment config.VectorEmbeddingsServerC
 	v.done = make(chan struct{})
 	go func() {
 		defer release()
-		err := v.activate(deployment, approvedBytes, automatic)
+		err := v.activate(deployment, approvedBytes, automatic, approvedOllama)
 		v.mu.Lock()
 		v.setup.Busy = false
 		if err != nil {
@@ -323,9 +323,8 @@ func (v *liveVectorServing) startSetup(deployment config.VectorEmbeddingsServerC
 	return nil
 }
 
-func (v *liveVectorServing) activate(deployment config.VectorEmbeddingsServerConfig, approvedBytes int64, automatic bool) error {
-	cfg := v.cfg
-	_, err := resolveLocalEmbeddings(v.ctx, deployment,
+func (v *liveVectorServing) resolveSetup(deployment config.VectorEmbeddingsServerConfig, approvedBytes int64, approvedOllama bool) (string, error) {
+	endpoint, err := resolveLocalEmbeddings(v.ctx, deployment,
 		func(_ context.Context, size int64) (bool, error) {
 			if size > approvedBytes {
 				v.mu.Lock()
@@ -341,6 +340,15 @@ func (v *liveVectorServing) activate(deployment config.VectorEmbeddingsServerCon
 			v.mu.Unlock()
 		},
 	)
+	if err == nil && approvedOllama && endpoint != "http://127.0.0.1:11434/v1" {
+		return "", server.ErrEmbeddingsProviderChanged
+	}
+	return endpoint, err
+}
+
+func (v *liveVectorServing) activate(deployment config.VectorEmbeddingsServerConfig, approvedBytes int64, automatic, approvedOllama bool) error {
+	cfg := v.cfg
+	endpoint, err := v.resolveSetup(deployment, approvedBytes, approvedOllama)
 	if err != nil {
 		return err
 	}
@@ -370,7 +378,13 @@ func (v *liveVectorServing) activate(deployment config.VectorEmbeddingsServerCon
 			return err
 		}
 		// Opening can wait on another process's write lock; status stays available.
-		serving, err := setupVectorServing(v.ctx, cfg, v.database, v.idle)
+		servingCfg := cfg
+		if approvedOllama {
+			name, selected, _ := cfg.Vector.Embeddings.Server("")
+			selected.Endpoint = endpoint
+			servingCfg.Vector.Embeddings.Servers = map[string]config.VectorEmbeddingsServerConfig{name: selected}
+		}
+		serving, err := setupVectorServing(v.ctx, servingCfg, v.database, v.idle)
 		if err != nil {
 			return err
 		}

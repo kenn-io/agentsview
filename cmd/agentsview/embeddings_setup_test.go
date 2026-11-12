@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -117,6 +118,41 @@ func TestSetupRejectsChangedProvider(t *testing.T) {
 	require.Equal(t, "ollama", status.Provider)
 	ollama = false
 	require.ErrorIs(t, owner.Setup(0, status.Provider), server.ErrEmbeddingsProviderChanged)
+}
+
+func TestSetupRejectsOllamaDisappearingDuringEndpointResolution(t *testing.T) {
+	setTestHome(t, t.TempDir())
+	dir := testDataDir(t)
+	cfg, err := config.LoadReadOnly()
+	require.NoError(t, err)
+	database := dbtest.OpenTestDBAt(t, filepath.Join(dir, "sessions.db"))
+	oldInspect, oldEndpoint := inspectLocalEmbeddings, localEmbeddingEndpoint
+	t.Cleanup(func() { inspectLocalEmbeddings, localEmbeddingEndpoint = oldInspect, oldEndpoint })
+	inspectLocalEmbeddings = func(context.Context, embedlocal.Options) (embedlocal.Status, error) {
+		return embedlocal.Status{OllamaAvailable: true}, nil
+	}
+	localEmbeddingEndpoint = func(context.Context, embedlocal.Options) (string, error) {
+		return "http://127.0.0.1:1/v1", nil
+	}
+	owner, err := newLiveVectorServing(t.Context(), cfg, database, nil, config.LoadReadOnly)
+	require.NoError(t, err)
+	defer func() { require.NoError(t, owner.Close()) }()
+	status, err := owner.SetupStatus(t.Context())
+	require.NoError(t, err)
+	require.Equal(t, "ollama", status.Provider)
+	require.NoError(t, owner.Setup(0, status.Provider))
+	<-owner.done
+	status, err = owner.SetupStatus(t.Context())
+	require.NoError(t, err)
+	assert.Equal(t, "turn-on", status.Action)
+	assert.Equal(t, server.ErrEmbeddingsProviderChanged.Error(), status.Error)
+	assert.Nil(t, owner.Manager(""))
+	saved, err := config.LoadReadOnly()
+	require.NoError(t, err)
+	assert.False(t, saved.Vector.Enabled)
+	chosen, err := embedlocal.ChoiceRecorded()
+	require.NoError(t, err)
+	assert.False(t, chosen)
 }
 
 func TestSetupLeavesChangedProviderDisabled(t *testing.T) {
@@ -484,6 +520,24 @@ func TestSharedChoiceStartsLocalIndexing(t *testing.T) {
 	}
 }
 
+func routeTestOllama(t *testing.T, stub *httptest.Server, recipe string) func() {
+	t.Helper()
+	if recipe != "automatic" {
+		return stub.Close
+	}
+	old := http.DefaultTransport
+	transport := old.(*http.Transport).Clone()
+	dial := transport.DialContext
+	transport.DialContext = func(ctx context.Context, network, address string) (net.Conn, error) {
+		if address == "127.0.0.1:11434" {
+			address = strings.TrimPrefix(stub.URL, "http://")
+		}
+		return dial(ctx, network, address)
+	}
+	http.DefaultTransport = transport
+	return func() { stub.Close(); transport.CloseIdleConnections(); http.DefaultTransport = old }
+}
+
 func TestLiveEmbeddingsSetup(t *testing.T) {
 	oldInspect, oldEndpoint, oldInstall := inspectLocalEmbeddings, localEmbeddingEndpoint, installLocalEmbeddings
 	oldOnBattery := onBattery
@@ -523,7 +577,7 @@ func TestLiveEmbeddingsSetup(t *testing.T) {
 				encoded.Add(int64(len(request.Input)))
 				writeEmbeddingsResponse(t, w, len(request.Input), dimension)
 			}))
-			defer stub.Close()
+			defer routeTestOllama(t, stub, recipe)()
 			cfg, err := config.Default()
 			require.NoError(t, err)
 			cfg.DataDir, cfg.DBPath = dir, filepath.Join(dir, "sessions.db")
@@ -551,7 +605,7 @@ func TestLiveEmbeddingsSetup(t *testing.T) {
 			}
 			localEmbeddingEndpoint = func(ctx context.Context, opts embedlocal.Options) (string, error) {
 				if recipe == "automatic" && !opts.SkipOllama {
-					return stub.URL + "/v1", nil
+					return "http://127.0.0.1:11434/v1", nil
 				}
 				if !installed.Load() {
 					return "", embedlocal.ErrNotFound
@@ -709,7 +763,7 @@ func TestLiveEmbeddingsSetupStatusAndExportDuringWriteLockRetry(t *testing.T) {
 		inspections.Add(1)
 		return embedlocal.Status{OllamaAvailable: true}, nil
 	}
-	localEmbeddingEndpoint = func(context.Context, embedlocal.Options) (string, error) { return "http://127.0.0.1:1/v1", nil }
+	localEmbeddingEndpoint = func(context.Context, embedlocal.Options) (string, error) { return "http://127.0.0.1:11434/v1", nil }
 	reloaded := make(chan struct{})
 	notifyReload := sync.OnceFunc(func() { close(reloaded) })
 	owner, err := newLiveVectorServing(t.Context(), cfg, database, nil, func() (config.Config, error) {
