@@ -135,9 +135,12 @@ func installUsageAccountRevisionPG(ctx context.Context, tx *sql.Tx) error {
 	if version != "1" && version != strconv.Itoa(usageChangeJournalVersionPG) {
 		return nil
 	}
-	var installed bool
-	if err := tx.QueryRowContext(ctx, `SELECT EXISTS (SELECT 1 FROM sync_metadata WHERE key = 'usage_account_revision')`).Scan(&installed); err != nil {
+	var installed, historyInstalled bool
+	if err := tx.QueryRowContext(ctx, `SELECT EXISTS (SELECT 1 FROM sync_metadata WHERE key = 'usage_account_revision'), EXISTS (SELECT 1 FROM sync_metadata WHERE key = 'usage_history_token')`).Scan(&installed, &historyInstalled); err != nil {
 		return err
+	}
+	if version == strconv.Itoa(usageChangeJournalVersionPG) && installed && historyInstalled {
+		return nil
 	}
 	if !installed {
 		// Drain account transactions using the old trigger before seeding the

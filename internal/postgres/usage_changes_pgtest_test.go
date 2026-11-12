@@ -104,6 +104,19 @@ func newUsageJournalRole(t *testing.T, syncer *Sync, grants string) string {
 	return roleDSN
 }
 
+func TestUsageCurrentJournalNeedsNoFunctionOwnership(t *testing.T) {
+	_, syncer, _ := newUsageJournalFixture(t)
+	ctx := t.Context()
+	reader, err := NewStore(ctx, newUsageJournalRole(t, syncer, `GRANT SELECT ON sync_metadata TO ROLE`), syncer.schema, true)
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, reader.Close()) })
+	tx, err := reader.DB().BeginTx(ctx, nil)
+	require.NoError(t, err)
+	defer tx.Rollback()
+	require.NoError(t, installUsageAccountRevisionPG(ctx, tx))
+	require.NoError(t, installUsageHistoryTokenPG(ctx, tx))
+}
+
 func TestUsageChangeJournalWatchedTables(t *testing.T) {
 	_, syncer, store := newUsageJournalFixture(t)
 	ctx := t.Context()
