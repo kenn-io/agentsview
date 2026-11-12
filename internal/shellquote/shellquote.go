@@ -27,8 +27,8 @@ func POSIXLiteral(s string) string {
 	return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'"
 }
 
-// PowerShell returns s as a PowerShell single-quoted string, in which
-// only a doubled quote is special.
+// PowerShell returns s as a PowerShell single-quoted string. PowerShell
+// recognizes ASCII and curly single quotes as delimiters; doubling preserves each.
 func PowerShell(s string) string {
-	return "'" + strings.ReplaceAll(s, "'", "''") + "'"
+	return "'" + strings.NewReplacer("'", "''", "‘", "‘‘", "’", "’’", "‚", "‚‚", "‛", "‛‛").Replace(s) + "'"
 }

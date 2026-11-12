@@ -22,4 +22,5 @@ func TestPowerShell(t *testing.T) {
 	assert.Equal(t, `'C:\homes\codex two'`, PowerShell(`C:\homes\codex two`))
 	assert.Equal(t, `'C:\it''s'`, PowerShell(`C:\it's`))
 	assert.Equal(t, "'$env:HOME'", PowerShell("$env:HOME"), "single quotes keep $ literal")
+	assert.Equal(t, "'‘‘ ’’.‚‚‛‛'''", PowerShell("‘ ’.‚‛'"))
 }
