@@ -99,13 +99,13 @@ func TestOpenCodeFamilyReasoningTokensArePricedOnce(t *testing.T) {
 	}
 }
 
-// Archives parsed before version 173 stored the current writers' output
+// Archives parsed before version 179 stored the current writers' output
 // without reasoning. The scoped upgrade reparses unchanged OpenCode-family
 // sources in place so output counts reasoning once.
 func TestOpenCodeReasoningUpgradeReparsesUnchangedSource(t *testing.T) {
 	const (
 		sessionID       = "opencode:ses_up"
-		previousVersion = 172
+		previousVersion = 178
 	)
 	ctx := t.Context()
 	root := t.TempDir()
@@ -145,7 +145,7 @@ func TestOpenCodeReasoningUpgradeReparsesUnchangedSource(t *testing.T) {
 	engine.Close()
 	require.NoError(t, database.Close())
 
-	// Model the archive version 172 wrote, without touching the source.
+	// Model the archive version 178 wrote, without touching the source.
 	conn, err := sql.Open("sqlite3", archivePath)
 	require.NoError(t, err)
 	_, err = conn.ExecContext(ctx, `UPDATE messages
@@ -155,7 +155,7 @@ func TestOpenCodeReasoningUpgradeReparsesUnchangedSource(t *testing.T) {
 	require.NoError(t, err)
 	_, err = conn.ExecContext(ctx, "UPDATE sessions SET data_version = ? WHERE id = ?", previousVersion, sessionID)
 	require.NoError(t, err)
-	_, err = conn.ExecContext(ctx, "PRAGMA user_version = 172")
+	_, err = conn.ExecContext(ctx, "PRAGMA user_version = 178")
 	require.NoError(t, err)
 	require.NoError(t, conn.Close())
 

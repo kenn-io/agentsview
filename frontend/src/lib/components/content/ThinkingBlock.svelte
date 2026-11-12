@@ -30,7 +30,7 @@
     }}
   >
     <span class="thinking-chevron" class:open={!collapsed}>
-      <ChevronRightIcon size="10" strokeWidth="2.4" aria-hidden="true" />
+      <ChevronRightIcon size="12" aria-hidden="true" />
     </span>
     <span class="thinking-label">{m.thinking_block_label()}</span>
     <SearchMatchCount {searchKey} />
@@ -44,6 +44,14 @@
 </div>
 
 <style>
+  /* Inside a tool group the group rail already marks the run, so a nested
+     thinking row drops its own rail but keeps the faint thinking band, so
+     it reads as a quiet step between tool rows rather than a link. */
+  :global(.tool-group-body) .thinking-block {
+    border-left: none;
+    background: var(--thinking-bg);
+  }
+
   .thinking-block {
     border-left: var(--role-thinking-bar-width) var(--role-thinking-bar-style) var(--role-thinking-accent);
     background: var(--thinking-bg);
@@ -59,8 +67,10 @@
     width: 100%;
     text-align: left;
     font-size: 12px;
-    font-weight: 600;
-    color: var(--role-thinking-ink);
+    font-weight: 500;
+    font-style: italic;
+    /* Muted ink with a hint of the thinking hue: a quiet label, not a link. */
+    color: color-mix(in srgb, var(--role-thinking-ink) 40%, var(--text-muted));
     letter-spacing: 0.01em;
     border-radius: 0 var(--radius-sm) var(--radius-sm) 0;
     transition: background 0.1s;

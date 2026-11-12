@@ -54,16 +54,21 @@
   "nav_trash": "ゴミ箱",
   "nav_search_sessions": "セッションを検索...",
   "nav_search_sessions_shortcut": "セッションの検索 ({shortcut})",
-  "header_transcript_normal_title": "通常のトランスクリプト - すべてのメッセージを表示",
-  "header_transcript_normal_label": "通常のトランスクリプトモード",
-  "header_transcript_normal": "標準",
-  "header_transcript_focused_title": "要点表示 - ユーザーのプロンプトと最終回答のみを表示",
-  "header_transcript_focused_label": "要点表示モード",
-  "header_transcript_focused": "要点表示",
-  "header_transcript_filter_title": "フィルターブロックタイプ",
-  "header_transcript_filter_label": "フィルターブロックタイプ",
   "header_transcript_visibility": "ブロックの可視性",
   "header_transcript_show_all": "すべて表示",
+  "header_view_trigger": "表示: {layout}",
+  "header_view_trigger_focused": "表示: {layout} · プロンプトと回答",
+  "header_view_trigger_label": "トランスクリプト表示: {layout}",
+  "header_view_trigger_label_focused": "トランスクリプト表示: {layout}、プロンプトと回答",
+  "header_view_menu_label": "トランスクリプト表示",
+  "header_view_layout_heading": "レイアウト",
+  "header_view_layout_default_description": "展開したメッセージ",
+  "header_view_layout_compact_description": "同じ内容を詰めた間隔で表示",
+  "header_view_layout_stream_description": "話者ラベルなしのチャット",
+  "header_view_layout_skim_description": "メッセージとツール呼び出しを1行ずつ表示",
+  "header_view_mode_heading": "内容",
+  "header_view_mode_normal": "すべてのメッセージとツール呼び出し",
+  "header_view_mode_focused": "自分のプロンプトと最終回答のみ",
   "header_transcript_blocks_user": "ユーザーメッセージ",
   "header_transcript_blocks_assistant": "アシスタントテキスト",
   "header_transcript_blocks_thinking": "思考ブロック",
@@ -73,20 +78,12 @@
   "header_transcript_blocks_hook": "フック",
   "header_actions_follow_latest": "最新のメッセージをフォローする",
   "header_actions_toggle_sort": "並べ替え順序を切り換える (o)",
-  "header_actions_cycle_layout": "サイクルレイアウト: {layout} (l)",
-  "header_actions_cycle_layout_label": "サイクルメッセージのレイアウト",
-  "header_actions_export_options": "エクスポートセッションのオプション",
-  "header_actions_export_session": "エクスポートセッション",
   "header_actions_download_html": "HTML エクスポートをダウンロード",
-  "header_actions_copied_markdown_link": "コピーされたマークダウンリンク",
   "header_actions_copy_markdown_link": "マークダウン エクスポート リンクをコピーする",
   "header_actions_copy_source_path": "ソースファイルのパスをコピーする",
-  "header_actions_publish_title": "Gist に公開 (p)",
-  "header_actions_publish_label": "Gist に公開する",
   "header_actions_publish_public": "公開 Gist を公開する",
   "header_actions_publish_secret": "シークレット Gist を公開する",
   "header_actions_more_actions": "さらなるアクション",
-  "header_actions_layout": "レイアウト: {layout}",
   "header_actions_refresh_data": "データを更新する",
   "header_actions_refresh_data_shortcut": "リフレッシュデータ(r)",
   "header_actions_sync_sessions": "セッションを同期する",
@@ -241,21 +238,21 @@
   "session_breadcrumb_summary_mode_tooltip": "このトランスクリプトには、ツールの結果、考え方、差分が含まれていません。完全な忠実度を実現するには、agy-reader サイドカーが必要です。インストールするか、インストールされている場合は追いつきます。クリックして方法を確認してください。",
   "session_breadcrumb_malformed_lines": [
     {
-      "declarations": ["input count", "local countPlural = count: plural"],
+      "declarations": ["input count", "input countLabel", "local countPlural = count: plural"],
       "selectors": ["countPlural"],
       "match": {
-        "countPlural=one": "{count} 行が不正です",
-        "countPlural=other": "{count} 行の不正な行"
+        "countPlural=one": "{countLabel} 行が不正です",
+        "countPlural=other": "{countLabel} 行の不正な行"
       }
     }
   ],
   "session_breadcrumb_malformed_lines_tooltip": [
     {
-      "declarations": ["input count", "local countPlural = count: plural"],
+      "declarations": ["input count", "input countLabel", "local countPlural = count: plural"],
       "selectors": ["countPlural"],
       "match": {
-        "countPlural=one": "ソースファイルの {count} 行を解析できませんでした",
-        "countPlural=other": "ソース ファイル内の {count} 行を解析できませんでした"
+        "countPlural=one": "ソースファイルの {countLabel} 行を解析できませんでした",
+        "countPlural=other": "ソース ファイル内の {countLabel} 行を解析できませんでした"
       }
     }
   ],
@@ -477,6 +474,13 @@
   "sidebar_row_star_session": "スターセッション",
   "sidebar_row_unstar_session": "セッションのスターを外す",
   "sidebar_row_rename": "名前の変更",
+  "sidebar_row_user_message_count": [
+    {
+      "declarations": ["input count", "input countLabel", "local countPlural = count: plural"],
+      "selectors": ["countPlural"],
+      "match": { "countPlural=other": "ユーザーメッセージ {countLabel} 件" }
+    }
+  ],
   "sidebar_row_open_in_new_tab": "新しいタブで開く",
   "sidebar_row_delete": "消去",
   "sidebar_row_change_project": "プロジェクトを変更…",
@@ -789,9 +793,13 @@
       }
     }
   ],
-  "analytics_top_skills_agent_breakdown": "エージェントの内訳",
   "analytics_top_skills_agents": "エージェント",
-  "analytics_top_skills_projects": "プロジェクト: {projects}",
+  "analytics_top_skills_col_skill": "スキル",
+  "analytics_top_skills_col_share": "割合",
+  "analytics_top_skills_col_calls": "呼び出し",
+  "analytics_top_skills_col_sessions": "セッション",
+  "analytics_top_skills_col_last_used": "最終使用",
+  "analytics_top_skills_projects_label": "プロジェクト",
   "analytics_top_skills_empty": "スキル使用データがありません",
   "analytics_skill_trend_title": "時間の経過に伴うスキルの使用状況",
   "analytics_skill_trend_other": "他の",
@@ -883,12 +891,11 @@
   "settings_search_empty": "一致する設定がありません",
   "settings_search_clear": "検索をクリア",
   "settings_search_result": "{category}を表示中",
-  "settings_search_keywords_appearance": "テーマのコントラスト レイアウト テキスト フォント ブロック ズーム zoom 色 色覚 color",
+  "settings_search_keywords_appearance": "テーマのコントラスト レイアウト テキスト フォント ブロック ズーム zoom 色 色覚 color 幅 width",
   "settings_search_keywords_language": "言語ロケールの翻訳",
   "settings_search_keywords_date_ranges": "リンクされたページの日付範囲",
   "settings_search_keywords_terminal": "ターミナル再開バイナリ引数クリップボードの起動",
   "settings_search_keywords_agent_directories": "エージェント ディレクトリ パス スキャン セッション",
-  "settings_search_keywords_worktree_mappings": "ワークツリー マッピング プロジェクト パス レイアウト",
   "settings_search_keywords_embeddings": "埋め込み セマンティック検索ベクトル インデックス生成",
   "settings_search_keywords_github": "GitHub Gist トークン公開統合",
   "settings_search_keywords_remote_access": "リモートサーバー接続認証トークンネットワーク",
@@ -1249,9 +1256,14 @@
   "recent_edits_count": "{count} 件の編集",
   "recent_edits_truncated": "{total} 件中最新の {shown} 件を表示しています",
   "recent_edits_load_more": "さらにロードする",
-  "recent_edits_refresh": "リフレッシュ",
+  "recent_edits_refresh": "一覧を再読み込み",
   "recent_edits_search_placeholder": "ファイルパスでフィルタリングする",
   "recent_edits_clear_search": "ファイルパス検索のクリア",
+  "recent_edits_col_project": "プロジェクト",
+  "recent_edits_col_file": "ファイル",
+  "recent_edits_col_edits": "編集",
+  "recent_edits_col_last_edit": "最終編集",
+  "recent_edits_resize_column": "{column}列の幅を変更",
   "activity_insight_waiting_server": "サーバーのバージョンを待っています",
   "activity_insight_generate_insight": "分析を生成",
   "activity_insight_generation_failed": "生成に失敗しました",
@@ -1535,7 +1547,9 @@
   "recall_generated_export": "エクスポート",
   "recall_generated_publish": "公開",
   "recall_generated_publish_secret": "秘密",
-  "recall_page_subtitle": "抽出されたエントリと抽出範囲を参照します。",
+  "recall_generated_group_sessions": "セッション",
+  "recall_generated_group_report": "レポート",
+  "recall_generated_read_only_reason": "このアーカイブは読み取り専用のため、ここでは新しいレポートを生成できません。",
   "recall_page_search_placeholder": "リコールエントリを検索…",
   "recall_page_clear_search": "リコール検索をクリアする",
   "recall_page_type_filter": "エントリータイプ",
@@ -1756,6 +1770,10 @@
   "insights_page_calibration_no_affected": "影響を受けるセッションはありません",
   "insights_page_calibration_incomplete_rate": "{rate}% が不完全",
   "insights_page_calibration_incomplete_lift": "{lift}x が不完全",
+  "insights_page_column_signal": "シグナル",
+  "insights_page_column_count": "件数",
+  "insights_page_column_sessions": "セッション",
+  "insights_page_column_outcome": "結果",
   "insights_page_signal_examples": "信号例",
   "insights_page_grade_badge": "グレード {grade}",
   "insights_page_unscored": "得点なし",
@@ -1799,11 +1817,16 @@
   "insights_page_pct_affected": "{pct}% が影響を受けました",
   "insights_pattern_recommendation_rationale": [
     {
-      "declarations": ["input affected", "input total", "local totalPlural = total: plural"],
+      "declarations": [
+        "input affectedLabel",
+        "input total",
+        "input totalLabel",
+        "local totalPlural = total: plural"
+      ],
       "selectors": ["totalPlural"],
       "match": {
-        "totalPlural=one": "{total} セッションの {affected} には、この決定的なパターンがあります。",
-        "totalPlural=other": "{total} セッション中 {affected} にこの決定的なパターンがあります。"
+        "totalPlural=one": "{totalLabel} セッションの {affectedLabel} には、この決定的なパターンがあります。",
+        "totalPlural=other": "{totalLabel} セッション中 {affectedLabel} にこの決定的なパターンがあります。"
       }
     }
   ],
@@ -1855,14 +1878,15 @@
     {
       "declarations": [
         "input count",
+        "input countLabel",
         "input completedRate",
         "input failureSignals",
         "local countPlural = count: plural"
       ],
       "selectors": ["countPlural"],
       "match": {
-        "countPlural=one": "{count} セッション、{completedRate}% 完了、平均失敗数 {failureSignals}",
-        "countPlural=other": "{count} セッション、{completedRate}% 完了、平均失敗数 {failureSignals}"
+        "countPlural=one": "{countLabel} セッション、{completedRate}% 完了、平均失敗数 {failureSignals}",
+        "countPlural=other": "{countLabel} セッション、{completedRate}% 完了、平均失敗数 {failureSignals}"
       }
     }
   ],
@@ -1991,6 +2015,10 @@
   "resync_retry": "リトライ",
   "resync_error_read_only": "完全再同期は読み取り専用バックエンドでは使用できません。",
   "resync_error_in_progress": "同期はすでに進行中です。",
+  "shortcuts_group_navigation": "ナビゲーション",
+  "shortcuts_group_messages": "メッセージ",
+  "shortcuts_group_sessions": "セッション",
+  "shortcuts_group_actions": "アクション",
   "shortcuts_open_command_palette": "コマンドパレットを開く",
   "shortcuts_find_in_session": "セッション中に検索",
   "shortcuts_close_palette": "パレットを閉じる/モーダル/検索",
@@ -2044,7 +2072,7 @@
   "settings_session_providers_save_failed": "セッションプロバイダーを更新できませんでした。以前の選択はまだ有効です。",
   "settings_session_providers_homes_title": "代替ホームディレクトリ",
   "settings_session_providers_homes_hint": "カスタムの {envVar} などのエージェントホームディレクトリを追加します。AgentsView がセッションディレクトリを自動的に導出します。",
-  "settings_session_providers_homes_placeholder": "~/.{agent}-work",
+  "settings_session_providers_homes_placeholder": "例: ~/.{agent}-work",
   "settings_session_providers_homes_add": "ホームを追加",
   "settings_session_providers_homes_input_aria": "新しい {provider} ホームディレクトリ",
   "settings_session_providers_homes_remove_aria": "{provider} のホーム {home} を削除",
@@ -2067,6 +2095,10 @@
   "appearance_chart_palette_matplotlib": "Matplotlib",
   "appearance_chart_palette_colorblind": "色覚サポート",
   "appearance_message_layout": "メッセージのレイアウト",
+  "appearance_reading_width": "本文の幅",
+  "appearance_reading_width_default": "デフォルト",
+  "appearance_reading_width_wider": "広め",
+  "appearance_reading_width_full": "全幅",
   "appearance_block_visibility": "ブロックの表示",
   "settings_github_token_saved": "GitHub トークンが保存されました。",
   "settings_github_save_failed": "トークンの保存に失敗しました",
@@ -2147,8 +2179,6 @@
   "settings_terminal_args_hint": "(プレースホルダーとして \\{cmd\\} を使用します)",
   "settings_terminal_saving": "保存中...",
   "settings_terminal_save": "保存",
-  "settings_worktree_moved": "プロジェクト分類ルールはデータに移動しました。",
-  "settings_worktree_moved_link": "オープンデータ › ルール",
   "worktree_failed_load": "マッピングのロードに失敗しました",
   "worktree_failed_save": "マッピングの保存に失敗しました",
   "worktree_failed_delete": "マッピングの削除に失敗しました",
@@ -2176,6 +2206,8 @@
   "worktree_saving": "保存中...",
   "worktree_add_mapping": "マッピングの追加",
   "worktree_save_mapping": "マッピングの保存",
+  "worktree_form_new_title": "新しいマッピング",
+  "worktree_form_edit_title": "マッピングの編集",
   "worktree_cancel": "キャンセル",
   "worktree_applying": "適用中...",
   "worktree_apply_mappings": "マッピングを適用する",
@@ -2231,8 +2263,8 @@
   "trends_title": "トレンド",
   "trends_date_range": "{from} から {to}",
   "trends_reset": "リセット",
-  "trends_refreshing": "更新中…",
-  "trends_refresh": "リフレッシュ",
+  "trends_refreshing": "再計算中…",
+  "trends_refresh": "再計算",
   "trends_terms": "用語",
   "trends_one_per_line": "1 行に 1 つ",
   "trends_group_by": "グループ化",
@@ -2319,9 +2351,6 @@
   "appearance_on": "オン",
   "appearance_off": "オフ",
   "appearance_zoom": "ズーム",
-  "settings_archive_content_title": "アーカイブの内容",
-  "settings_archive_content_description": "取り込み時にツール結果から保存する内容。",
-  "settings_search_keywords_archive_content": "アーカイブ 内容 画像 保持 ツール結果 プレースホルダー ストレージ archive content images retention tool results placeholders storage",
   "settings_tool_result_images": "ツール結果の画像",
   "settings_tool_result_images_keep": "保持",
   "settings_tool_result_images_drop": "破棄",
@@ -2330,7 +2359,7 @@
   "settings_tool_result_images_restart_notice": "この変更を新しく取り込むセッションに適用するには、AgentsView デーモンを再起動してください。",
   "settings_tool_images_title": "ツール結果の画像",
   "settings_tool_images_description": "ツール結果内に保存されたインライン画像。",
-  "settings_search_keywords_tool_images": "画像 ツール結果 削除 クリーンアップ ペイロード バイト ストレージ",
+  "settings_search_keywords_tool_images": "画像 ツール結果 削除 クリーンアップ ペイロード バイト ストレージ アーカイブ 内容 保持 プレースホルダー archive content images retention tool results placeholders storage",
   "settings_image_cleanup_intro": "インライン画像ペイロードを保持している保存済みツール結果をプレビューし、それらのペイロードを読み取り可能なプレースホルダーに置き換えます。",
   "settings_image_cleanup_project_label": "プロジェクトに含まれる",
   "settings_image_cleanup_project_placeholder": "すべてのプロジェクト",
@@ -3153,5 +3182,6 @@
   ],
   "empty_archive_title": "まだセッションがありません",
   "empty_archive_desc": "AgentsView はこれらのフォルダーからセッションを読み取ります。エージェントがいずれかに書き込むと、ここに表示されます。",
-  "empty_archive_choose_folders": "フォルダーを選択"
+  "empty_archive_choose_folders": "フォルダーを選択",
+  "usage_tooltip_no_usage": "使用なし"
 }

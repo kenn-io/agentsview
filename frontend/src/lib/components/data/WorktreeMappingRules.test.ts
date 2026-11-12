@@ -366,9 +366,9 @@ describe("WorktreeMappingRules", () => {
 
     await flush();
 
-    const layoutButton = screen.getByRole("button", { name: /repo\.worktrees/ });
-    expect(layoutButton).toBeTruthy();
-    layoutButton?.click();
+    const layoutRadio = screen.getByRole("radio", { name: /repo\.worktrees/ });
+    expect(layoutRadio.getAttribute("aria-checked")).toBe("false");
+    layoutRadio.click();
     await new Promise((resolve) => setTimeout(resolve, 0));
 
     const pathPrefixInput = screen.getByRole("textbox", { name: "Parent directory" });
@@ -433,6 +433,25 @@ describe("WorktreeMappingRules", () => {
       "remote-draft",
     );
     expect(document.body.textContent).not.toContain("local-project");
+  });
+
+  it("shows an apply failure beside Apply, above the list and the form", async () => {
+    dataService.getApiV1DataProjectRules.mockResolvedValue(response("remote-host", [rule()]));
+    settingsService.postApiV1SettingsWorktreeMappingsApply.mockRejectedValue(
+      new Error("apply failed"),
+    );
+    component = mountRules();
+    await flush();
+
+    await fireEvent.click(screen.getByRole("button", { name: "Apply mappings" }));
+    await flush();
+
+    const message = screen.getByText("apply failed");
+    const table = document.querySelector("table")!;
+    const form = screen.getByRole("region", { name: "New mapping" });
+    expect(message.compareDocumentPosition(table) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(message.compareDocumentPosition(form) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(screen.getAllByText("apply failed")).toHaveLength(1);
   });
 
   it("does not show a stale apply error after the selected machine changes", async () => {
@@ -581,7 +600,7 @@ describe("WorktreeMappingRules", () => {
     await fireEvent.click(screen.getByRole("button", { name: "Delete" }));
     expect(settingsService.deleteApiV1SettingsWorktreeMappingsById).not.toHaveBeenCalled();
     expect(screen.getByRole("dialog").textContent).toContain("source files still exist");
-    expect(screen.getByRole("dialog").textContent).toContain("Orphaned sessions");
+    expect(screen.getByRole("dialog").textContent).toContain("Sessions without source files");
 
     await fireEvent.click(screen.getByRole("button", { name: "Delete mapping" }));
     expect(settingsService.deleteApiV1SettingsWorktreeMappingsById).toHaveBeenCalledWith({
@@ -598,7 +617,7 @@ describe("WorktreeMappingRules", () => {
     await flush();
 
     await fireEvent.click(screen.getByRole("button", { name: "Edit" }));
-    await fireEvent.click(screen.getByRole("checkbox", { name: "Enabled" }));
+    await fireEvent.click(screen.getByRole("switch", { name: "Enabled" }));
     await fireEvent.click(screen.getByRole("button", { name: "Save mapping" }));
 
     expect(settingsService.putApiV1SettingsWorktreeMappingsById).not.toHaveBeenCalled();

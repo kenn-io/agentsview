@@ -15,7 +15,7 @@
   import ParallelGroup from "./ParallelGroup.svelte";
   import { CopyButton } from "@kenn-io/kit-ui";
   import { displayToolName } from "../../utils/toolDisplay.js";
-  import { SettingsIcon } from "../../icons.js";
+  import { WrenchIcon } from "../../icons.js";
   import { m } from "../../i18n/index.js";
 
   interface Props {
@@ -76,7 +76,7 @@
 
 <div class="tool-group">
   <div class="tool-group-header">
-    <span class="gear-icon"><SettingsIcon size="12" strokeWidth="2" aria-hidden="true" /></span>
+    <span class="tool-icon"><WrenchIcon size="12" strokeWidth="2" aria-hidden="true" /></span>
     <span class="group-label">{label}</span>
     <CopyButton
       revealOnHover
@@ -140,17 +140,27 @@
 
 <style>
   .tool-group {
-    border-left: calc(var(--role-tool-bar-width) + 1px) var(--role-tool-bar-style) var(--role-tool-accent);
+    border-left: var(--role-tool-bar-width) var(--role-tool-bar-style) var(--role-tool-accent);
     background: var(--tool-bg);
     border-radius: 0 var(--radius-md) var(--radius-md) 0;
-    padding: 8px 12px;
+    /* Same inline padding as a message card, so the header icon, tool rows,
+       and timestamp line up with the role header and prose above. Layouts
+       with other card padding override it in MessageList. */
+    padding: 6px 16px;
   }
-  .tool-group-header { display: flex; align-items: center; gap: 8px; margin-bottom: 6px; }
-  .gear-icon { display: flex; align-items: center; flex-shrink: 0; color: var(--role-tool-accent); }
-  .group-label { font-size: 12px; font-weight: 600; color: var(--role-tool-ink); }
-  .group-timestamp { font-size: 12px; color: var(--text-muted); margin-left: auto; }
+  :global(:root:not(.dark)) .tool-icon { color: color-mix(in srgb, var(--role-tool-accent) 65%, var(--text-primary)); }
+  .tool-group-header { display: flex; align-items: center; gap: 8px; margin-bottom: 2px; }
+  .tool-icon { display: flex; align-items: center; flex-shrink: 0; color: var(--role-tool-ink); }
+  .group-label { font-size: 12px; font-weight: 600; color: var(--text-secondary); }
+  .group-timestamp { font-size: 12px; color: var(--text-muted); margin-left: auto; font-variant-numeric: tabular-nums; }
   .tool-group:hover :global(.kit-copy-btn) { opacity: 1; }
-  .tool-group-body { display: flex; flex-direction: column; gap: 2px; }
+  /* Consecutive tool rows touch and use the tighter row padding from
+     ToolBlock, so a run of calls reads as one unit beside the prose. */
+  .tool-group-body {
+    display: flex; flex-direction: column; gap: 0;
+    --tool-row-pad-block: 3px;
+    --tool-row-copy-trim: -1px;
+  }
   .read-progress-divider {
     display: flex;
     align-items: center;

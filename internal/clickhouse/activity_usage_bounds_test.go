@@ -4,13 +4,23 @@ package clickhouse
 
 import (
 	"fmt"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/stretchr/testify/require"
 
 	"go.kenn.io/agentsview/internal/activity"
+	"go.kenn.io/agentsview/internal/db"
 )
+
+// chSessionSetFromIDs embeds an explicit ID list, so a test can pin exact
+// sessions; the list grows the statement, so the store derives its sets in
+// SQL instead.
+func chSessionSetFromIDs(ids []string) chSessionSet {
+	ph, args := db.InPlaceholders(ids)
+	return chSessionSet{body: "SELECT arrayJoin([" + strings.Trim(ph, "()") + "]) AS id", args: args}
+}
 
 // Out-of-range duplicates must not suppress in-range usage at timezone or DST boundaries.
 func TestClickHouseActivityUsageBounds(t *testing.T) {

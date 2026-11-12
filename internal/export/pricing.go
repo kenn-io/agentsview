@@ -5,6 +5,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"hash"
 	"math/big"
@@ -384,6 +385,7 @@ func (r *PricingResolver) ResolveAt(
 	if r == nil {
 		return reportedModel, PricingLookup{}
 	}
+	reportedModel, canonicalModel = r.aliasPricingInputs(reportedModel, canonicalModel, timestamp)
 	pricedModel, lookup := r.resolveAt(reportedModel, canonicalModel, timestamp)
 	if lookup.OK && !isPlaceholderOllamaCloudRate(lookup) {
 		return pricedModel, lookup
@@ -401,6 +403,21 @@ func (r *PricingResolver) ResolveAt(
 		return pricedModel, baseLookup
 	}
 	return pricedModel, lookup
+}
+
+// aliasPricingInputs selects the target before applying its built-in aliases.
+func (r *PricingResolver) aliasPricingInputs(reported, canonical string, at time.Time) (string, string) {
+	if rates, ok := r.byModel[reported]; ok && rates.Source == PricingRowSourceCustom {
+		return reported, canonical
+	}
+	if target := pricingpkg.ConfiguredAliasTarget(reported); target != "" {
+		canonical = pricingpkg.CanonicalModelForDate(target, at)
+		if canonical == "" {
+			canonical = target
+		}
+		return target, canonical
+	}
+	return reported, canonical
 }
 
 // DependencyFingerprint hashes what ResolveAt/ResolveBilledAt can return at any timestamp, minus UpdatedAt.
@@ -453,6 +470,11 @@ func (r *PricingResolver) DependencyFingerprint(
 			writeField(fingerprint)
 		}
 		return flat, custom, matched
+	}
+	selectedReported, earlierCanonical := r.aliasPricingInputs(reportedModel, canonicalModel, pricingpkg.KimiModelEraCutoff.Add(-time.Nanosecond))
+	reportedModel, canonicalModel = r.aliasPricingInputs(reportedModel, canonicalModel, time.Time{})
+	if earlierCanonical != canonicalModel {
+		writeLadder(selectedReported, earlierCanonical)
 	}
 	mainFlat, mainCustom, mainGenAI := writeLadder(reportedModel, canonicalModel)
 	// ResolveAt tries Ollama bases only when the main ladder can come back unusable.
@@ -1222,4 +1244,58 @@ func latestPricingRowUpdate(rows []EffectivePricingRow) *time.Time {
 		}
 	}
 	return latest
+}
+
+// UsageRate is how usage reported under one model and provider prices at
+// one instant: the catalog resolution that decides whether a recorded cost
+// is a price, and the billed resolution that prices tokens.
+type UsageRate struct {
+	CatalogModel string
+	Catalog      PricingLookup
+	BilledModel  string
+	Billed       PricingLookup
+	BilledErr    error
+}
+
+// UsageRateAt resolves the rates of usage reported under model through
+// providerID at timestamp, canonicalizing date-aliased models at that
+// instant. A zero timestamp resolves as usage without one.
+func (r *PricingResolver) UsageRateAt(providerID, model string, timestamp time.Time) UsageRate {
+	canonical := pricingpkg.CanonicalModelForDate(model, timestamp)
+	if canonical == "" {
+		canonical = model
+	}
+	var rate UsageRate
+	rate.CatalogModel, rate.Catalog = r.ResolveAt(model, canonical, timestamp)
+	rate.BilledModel, rate.Billed, rate.BilledErr = r.ResolveBilledAt(providerID, model, canonical, timestamp)
+	return rate
+}
+
+// Equal reports whether two rates price every usage row alike and record
+// the same resolutions.
+func (u UsageRate) Equal(o UsageRate) bool {
+	// Two failures that are not the same error do not merge, which costs
+	// only one more segment.
+	if !errors.Is(u.BilledErr, o.BilledErr) {
+		return false
+	}
+	return u.CatalogModel == o.CatalogModel && u.BilledModel == o.BilledModel &&
+		pricingLookupEqual(u.Catalog, o.Catalog) && pricingLookupEqual(u.Billed, o.Billed)
+}
+
+// PriceChanges returns, in order, every instant strictly between from and to
+// at which UsageRateAt can return a different rate for some model. The
+// resolver returns the same rate for every timestamp between two adjacent
+// instants.
+func (r *PricingResolver) PriceChanges(from, to time.Time) []time.Time {
+	var out []time.Time
+	if r != nil {
+		out = r.genAI.PriceChanges(from, to)
+	}
+	if cutoff := pricingpkg.KimiModelEraCutoff; cutoff.After(from) && cutoff.Before(to) {
+		out = append(out, cutoff)
+		slices.SortFunc(out, time.Time.Compare)
+		out = slices.CompactFunc(out, time.Time.Equal)
+	}
+	return out
 }

@@ -1,0 +1,1 @@
+{"schema_version":1,"id":"rec-ew-1-001","stream":{"kind":"approval.review.runtime","id":"review-1"},"sequence":1,"recorded_at":1789000000000000,"record_type":"event","durability":"durable","causation_id":null,"payload_type":"runtime.session","payload_schema_version":1,"payload":{"kind":"run","run_id":"run-1","event":{"kind":"started","prompt":"review"}}}

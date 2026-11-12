@@ -36,6 +36,10 @@ A deleted session remains visible as a missing record. Project filters use the
 project saved with its links in SQLite, including after a rebuild or a deletion
 before the first push.
 
+Search matches text extracted from tool-result images when
+[`[image_text]`](configuration.md#image-text) is enabled locally. The first
+push after upgrading rebuilds the mirror to copy existing image text.
+
 ## Quick Start
 
 ```bash
@@ -92,6 +96,12 @@ Local `duckdb serve` keeps finished Activity ranges in memory and past days a
 client opens on disk, so reopening them is quick, including after a restart.
 Finished Usage results stay in memory for the same mirror file and custom
 pricing, with up to 64 selections and 64 MiB per read kind.
+Dashboard reports share a separate in-memory cache with up to 64 entries and
+64 MiB. Each entry holds one panel, filter, and metric or time-bucket selection.
+Reports are reused until the mirror or pricing changes. Time-dependent
+termination filters and recently active selections read fresh; the recently
+active control generates a new cutoff on each refresh. Quack remote reads do
+not use this cache.
 Disk reports are reused with the same mirror file, binary, and custom pricing.
 They live under `$CACHE_DIRECTORY/duckdb-activity-reports`, or under
 `agentsview/duckdb-activity-reports` in the user cache directory. Reports no one

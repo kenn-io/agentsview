@@ -14,7 +14,7 @@ COPY frontend/ ./
 COPY internal/importer/claude_ai_requests.txt /src/internal/importer/claude_ai_requests.txt
 RUN npm run build
 
-FROM golang:1.27.3-bookworm AS build
+FROM golang:1.27.4-bookworm AS build
 
 ENV GOPROXY="https://proxy.golang.org|direct"
 

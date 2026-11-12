@@ -17,6 +17,7 @@ import (
 	pricingpkg "go.kenn.io/agentsview/internal/pricing"
 	"go.kenn.io/agentsview/internal/readbase"
 	"go.kenn.io/agentsview/internal/signals"
+	"go.kenn.io/agentsview/internal/usagefacts"
 )
 
 // loadAnalyticsSessions leaves paired model/time filtering to the shared base.
@@ -358,6 +359,9 @@ func (s *Store) loadPricing(ctx context.Context) (map[string]export.ModelRates, 
 		}
 	}
 	for model, custom := range s.customPricing {
+		if custom.PriceAs != "" {
+			continue
+		}
 		rates := export.ModelRates{
 			InputPerMTok:  money.Money{Microdollars: custom.InputMicrodollarsPerMTok},
 			OutputPerMTok: money.Money{Microdollars: custom.OutputMicrodollarsPerMTok},
@@ -483,6 +487,7 @@ SELECT
 	0 AS reasoning_tokens,
 	cu.charged_microdollars AS cost_microdollars,
 	cu.agent || '-reported' AS cost_source,
+	NULL AS recorded_cost_microdollars,
 	'' AS project,
 	cu.agent AS agent,
 	'' AS machine,
@@ -567,6 +572,8 @@ func duckUsageRawSQL(f db.UsageFilter, sessionID string) (string, []any) {
 				0 AS cache_create, 0 AS cache_read,
 				COALESCE(TRY_CAST(json_extract_string(m.token_usage, '$.reasoning_tokens') AS BIGINT), 0) AS reasoning_tokens,
 				NULL AS cost_microdollars, '' AS cost_source,
+				-- A message's harness-recorded cost (usagefacts.RecordedCostKey).
+				CASE WHEN TRY_CAST(json_extract_string(m.token_usage, '$.recorded_cost_microdollars') AS BIGINT) >= 0 THEN TRY_CAST(json_extract_string(m.token_usage, '$.recorded_cost_microdollars') AS BIGINT) END AS recorded_cost_microdollars,
 			s.project AS project, s.agent AS agent, s.machine AS machine,
 			s.user_message_count AS user_message_count, s.is_automated AS is_automated,
 			COALESCE(s.display_name, s.session_name, s.first_message, s.project) AS display_name,
@@ -591,8 +598,14 @@ func duckUsageRawSQL(f db.UsageFilter, sessionID string) (string, []any) {
 				ue.cache_creation_input_tokens AS cache_create,
 				ue.cache_read_input_tokens AS cache_read,
 				ue.reasoning_tokens AS reasoning_tokens,
-				ue.cost_microdollars AS cost_microdollars,
+				-- A harness-recorded cost is evidence, not a price: SQL treats
+				-- the row as unpriced and Go applies it only when the catalog
+				-- cannot price the model (db.ReportedCostForPricing).
+				CASE WHEN ue.cost_status = 'recorded' THEN NULL
+					ELSE ue.cost_microdollars END AS cost_microdollars,
 				ue.cost_source AS cost_source,
+				CASE WHEN ue.cost_status = 'recorded' THEN ue.cost_microdollars
+					END AS recorded_cost_microdollars,
 			s.project AS project, s.agent AS agent, s.machine AS machine,
 			s.user_message_count AS user_message_count, s.is_automated AS is_automated,
 			COALESCE(s.display_name, s.session_name, s.first_message, s.project) AS display_name,
@@ -773,10 +786,6 @@ func duckUsageCTEFromRaw(
 ) (string, []any) {
 	localDateSQL, localDateArg := duckUsageLocalDateSQL(f)
 	priceModelSQL := duckPriceModelCaseSQL()
-	// Apply the local-date window BEFORE deduping so an out-of-range
-	// duplicate (pulled in by the padded UTC bounds) cannot win
-	// dedup_rank = 1 and suppress the in-range row. Mirrors the
-	// dedup-after-date-filter order in internal/db/usage.go.
 	datePred := "TRUE"
 	var dateArgs []any
 	if f.From != "" {
@@ -787,99 +796,7 @@ func duckUsageCTEFromRaw(
 		datePred += " AND local_date <= ?"
 		dateArgs = append(dateArgs, f.To)
 	}
-	snapshotCTE := ""
-	rankedSource := "usage_windowed"
-	var snapshotFilterArgs []any
-	if preferCompleteClaudeSnapshots {
-		snapshotFilter := "TRUE"
-		snapshotFilter, snapshotFilterArgs = appendDuckUsageSourceFilterClauses(
-			snapshotFilter, snapshotFilterArgs, "survivor.model", f)
-		snapshotFilter, snapshotFilterArgs = appendDuckUsageSessionFilterClauses(
-			snapshotFilter, snapshotFilterArgs, f, "")
-		snapshotCTE = `,
-		usage_snapshot_ranked AS (
-			SELECT *,
-				CASE
-					WHEN claude_message_id != ''
-						THEN FIRST_VALUE(session_id) OVER (
-							PARTITION BY claude_message_id, claude_request_id
-							ORDER BY ts ASC, session_id ASC,
-								COALESCE(message_ordinal, -1) ASC
-						)
-					ELSE session_id
-				END AS snapshot_attribution_session_id,
-				CASE
-					WHEN claude_message_id != ''
-						THEN ROW_NUMBER() OVER (
-							PARTITION BY claude_message_id, claude_request_id
-							ORDER BY output_tokens_norm DESC, ts DESC,
-								session_id DESC,
-								COALESCE(message_ordinal, -1) DESC
-						)
-					ELSE 1
-				END AS snapshot_rank,
-				CASE
-					WHEN claude_message_id != ''
-						THEN SUM(output_tokens_norm) OVER (
-							PARTITION BY claude_message_id, claude_request_id
-						) - MAX(output_tokens_norm) OVER (
-							PARTITION BY claude_message_id, claude_request_id
-						)
-					ELSE 0
-				END AS snapshot_deduplicated_output_tokens,
-				CASE
-					WHEN claude_message_id != ''
-						THEN MAX(web_search_requests_norm) OVER (
-							PARTITION BY claude_message_id, claude_request_id
-						)
-					ELSE web_search_requests_norm
-				END AS snapshot_web_search_requests
-			FROM usage_windowed
-		),
-		usage_snapshot_survivors AS (
-			SELECT ranked.* EXCLUDE (
-				snapshot_rank, session_id, snapshot_attribution_session_id,
-				web_search_requests_norm, snapshot_web_search_requests,
-				project, agent, machine, user_message_count, is_automated,
-				display_name, started_at, activity_at, group_key, session_name
-			),
-				ranked.snapshot_attribution_session_id AS session_id,
-				ranked.snapshot_web_search_requests AS web_search_requests_norm,
-				CASE WHEN attributed.id IS NULL THEN ranked.project
-					ELSE attributed.project END AS project,
-				CASE WHEN attributed.id IS NULL THEN ranked.agent
-					ELSE attributed.agent END AS agent,
-				CASE WHEN attributed.id IS NULL THEN ranked.machine
-					ELSE attributed.machine END AS machine,
-				CASE WHEN attributed.id IS NULL THEN ranked.user_message_count
-					ELSE attributed.user_message_count END AS user_message_count,
-				CASE WHEN attributed.id IS NULL THEN ranked.is_automated
-					ELSE attributed.is_automated END AS is_automated,
-				CASE WHEN attributed.id IS NULL THEN ranked.display_name ELSE COALESCE(
-					attributed.display_name, attributed.session_name,
-					attributed.first_message, attributed.project
-				) END AS display_name,
-				CASE WHEN attributed.id IS NULL THEN ranked.group_key ELSE attributed.group_key END AS group_key,
-				CASE WHEN attributed.id IS NULL THEN ranked.session_name ELSE COALESCE(attributed.session_name, '') END AS session_name,
-				CASE WHEN attributed.id IS NULL THEN ranked.started_at
-					ELSE attributed.started_at END AS started_at,
-				CASE WHEN attributed.id IS NULL THEN ranked.activity_at ELSE COALESCE(
-					attributed.ended_at, attributed.started_at,
-					attributed.created_at
-				) END AS activity_at
-			FROM usage_snapshot_ranked ranked
-			LEFT JOIN sessions attributed
-				ON attributed.id = ranked.snapshot_attribution_session_id
-			WHERE ranked.snapshot_rank = 1
-		),
-		usage_snapshot_filtered AS (
-			SELECT survivor.*
-			FROM usage_snapshot_survivors survivor
-			LEFT JOIN sessions s ON s.id = survivor.session_id
-			WHERE survivor.session_id = '' OR (` + snapshotFilter + `)
-		)`
-		rankedSource = "usage_snapshot_filtered"
-	}
+	dedupCTE, dedupArgs := duckUsageDedupCTE(f, datePred, preferCompleteClaudeSnapshots)
 	query := fmt.Sprintf(`
 		WITH usage_raw AS (
 			%[1]s
@@ -887,35 +804,35 @@ func duckUsageCTEFromRaw(
 		usage_normalized AS (
 			SELECT *,
 				CASE
-					WHEN source = 'message' THEN LEAST(GREATEST(COALESCE(TRY_CAST(json_extract_string(token_json, '$.input_tokens') AS BIGINT), 0), 0), %[4]d)
+					WHEN source = 'message' THEN LEAST(GREATEST(COALESCE(TRY_CAST(json_extract_string(token_json, '$.input_tokens') AS BIGINT), 0), 0), %[3]d)
 					WHEN (source = 'session' OR session_id = '') THEN GREATEST(input_tokens, 0)
-					ELSE LEAST(GREATEST(input_tokens, 0), %[4]d)
+					ELSE LEAST(GREATEST(input_tokens, 0), %[3]d)
 				END AS input_tokens_norm,
 				CASE
-					WHEN source = 'message' THEN LEAST(GREATEST(COALESCE(TRY_CAST(json_extract_string(token_json, '$.output_tokens') AS BIGINT), 0), 0), %[4]d)
+					WHEN source = 'message' THEN LEAST(GREATEST(COALESCE(TRY_CAST(json_extract_string(token_json, '$.output_tokens') AS BIGINT), 0), 0), %[3]d)
 					WHEN (source = 'session' OR session_id = '') THEN GREATEST(output_tokens, 0)
-					ELSE LEAST(GREATEST(output_tokens, 0), %[4]d)
+					ELSE LEAST(GREATEST(output_tokens, 0), %[3]d)
 				END AS output_tokens_norm,
 				CASE
-					WHEN source = 'message' THEN LEAST(GREATEST(COALESCE(TRY_CAST(json_extract_string(token_json, '$.cache_creation_input_tokens') AS BIGINT), 0), 0), %[4]d)
+					WHEN source = 'message' THEN LEAST(GREATEST(COALESCE(TRY_CAST(json_extract_string(token_json, '$.cache_creation_input_tokens') AS BIGINT), 0), 0), %[3]d)
 					WHEN (source = 'session' OR session_id = '') THEN GREATEST(cache_create, 0)
-					ELSE LEAST(GREATEST(cache_create, 0), %[4]d)
+					ELSE LEAST(GREATEST(cache_create, 0), %[3]d)
 				END AS cache_create_norm,
 					-- 1h-TTL subset of cache_create_norm from the nested
 					-- Anthropic breakdown; only message rows carry it.
 					CASE
-						WHEN source = 'message' THEN LEAST(GREATEST(COALESCE(TRY_CAST(json_extract_string(token_json, '$.cache_creation.ephemeral_1h_input_tokens') AS BIGINT), 0), 0), %[4]d)
+						WHEN source = 'message' THEN LEAST(GREATEST(COALESCE(TRY_CAST(json_extract_string(token_json, '$.cache_creation.ephemeral_1h_input_tokens') AS BIGINT), 0), 0), %[3]d)
 						ELSE 0
 					END AS cache_create_1h_norm,
 					CASE
-						WHEN source = 'message' THEN LEAST(GREATEST(COALESCE(TRY_CAST(json_extract_string(token_json, '$.cache_read_input_tokens') AS BIGINT), 0), 0), %[4]d)
+						WHEN source = 'message' THEN LEAST(GREATEST(COALESCE(TRY_CAST(json_extract_string(token_json, '$.cache_read_input_tokens') AS BIGINT), 0), 0), %[3]d)
 						WHEN (source = 'session' OR session_id = '') THEN GREATEST(cache_read, 0)
-						ELSE LEAST(GREATEST(cache_read, 0), %[4]d)
+						ELSE LEAST(GREATEST(cache_read, 0), %[3]d)
 					END AS cache_read_norm,
 					CASE
-						WHEN source = 'message' THEN LEAST(GREATEST(COALESCE(TRY_CAST(json_extract_string(token_json, '$.reasoning_tokens') AS BIGINT), 0), 0), %[4]d)
+						WHEN source = 'message' THEN LEAST(GREATEST(COALESCE(TRY_CAST(json_extract_string(token_json, '$.reasoning_tokens') AS BIGINT), 0), 0), %[3]d)
 						WHEN (source = 'session' OR session_id = '') THEN GREATEST(reasoning_tokens, 0)
-						ELSE LEAST(GREATEST(reasoning_tokens, 0), %[4]d)
+						ELSE LEAST(GREATEST(reasoning_tokens, 0), %[3]d)
 					END AS reasoning_tokens_norm,
 					-- Anthropic bills server-side web search per request on
 					-- top of tokens. Only per-message rows carry a usage
@@ -936,33 +853,170 @@ func duckUsageCTEFromRaw(
 						COALESCE(CAST(ts AS VARCHAR), '') || ':' || model
 				END AS dedup_group,
 				%[2]s AS local_date,
-				%[5]s AS price_model
+				%[4]s AS price_model
 			FROM usage_raw
-		),
+		),%[5]s`, rawSQL, localDateSQL, db.MaxPlausibleTokens,
+		priceModelSQL, dedupCTE)
+	args = append(args, localDateArg)
+	args = append(args, dateArgs...)
+	args = append(args, dedupArgs...)
+	return query, args
+}
+
+// duckUsageSessionFilterSQL renders the session and model filters of f over
+// a row whose session id is sessionColumn and whose model is modelColumn, or
+// "TRUE" when f has neither. Session predicates read the session through an
+// IN subquery, so the filter reads sessions once however many rows it checks.
+func duckUsageSessionFilterSQL(f db.UsageFilter, sessionColumn, modelColumn string) (string, []any) {
+	where, args := appendDuckUsageSourceFilterClauses("TRUE", nil, modelColumn, f)
+	sessionWhere, sessionArgs := appendDuckUsageSessionFilterClauses("TRUE", nil, f, "")
+	if sessionWhere != "TRUE" {
+		where += "\n\t\t\t\tAND " + sessionColumn + " IN (SELECT s.id FROM sessions s WHERE " + sessionWhere + ")"
+		args = append(args, sessionArgs...)
+	}
+	return where, args
+}
+
+// duckUsageDedupCTE renders usage_localized from the usage_normalized rows
+// inside the local-date window datePred: the rows that survive Claude
+// snapshot ranking, the session and model filters, and deduplication.
+//
+// The local-date window applies BEFORE deduping so an out-of-range duplicate
+// (pulled in by the padded UTC bounds) cannot win the ranking and suppress
+// the in-range row. Mirrors the dedup-after-date-filter order in
+// internal/db/usage.go.
+//
+// Without snapshot preference, rows deduplicate by dedup_group alone.
+//
+// With it, each Claude request keeps the row with the most output, credited
+// to the session that saw the request first; every other row keeps the first
+// row of its dedup_group. Both rankings run as one window pass, partitioned
+// by the Claude request for Claude rows and by dedup_group for the rest. A
+// Claude request's dedup_group holds just its survivor, so ranking it again
+// would change nothing. The survivors take their session columns from one
+// read of sessions. Filters apply before deduplication for other rows, and
+// to the credited session after ranking for Claude rows.
+//
+// The window reads whole rows. Ranking only the key columns and joining the
+// survivors back by row number, as the ClickHouse form does, doubled the
+// query's time here.
+func duckUsageDedupCTE(
+	f db.UsageFilter, datePred string, preferCompleteClaudeSnapshots bool,
+) (string, []any) {
+	if !preferCompleteClaudeSnapshots {
+		return `
 		usage_windowed AS (
 			SELECT *
 			FROM usage_normalized
-			WHERE %[3]s
-		)%[6]s,
-		usage_ranked AS (
+			WHERE ` + datePred + `
+		),
+		usage_localized AS (
 			SELECT *,
 				ROW_NUMBER() OVER (
 					PARTITION BY dedup_group
 					ORDER BY ts ASC, session_id ASC,
 						COALESCE(message_ordinal, -1) ASC
 				) AS dedup_rank
-			FROM %[7]s
+			FROM usage_windowed
+			QUALIFY dedup_rank = 1
+		)`, nil
+	}
+	var args []any
+	inputAnd := ""
+	rowFilter, rowFilterArgs := duckUsageSessionFilterSQL(f, "session_id", "model")
+	if rowFilter != "TRUE" {
+		// Cursor rows carry no session and were filtered when read.
+		inputAnd = `
+				AND (claude_message_id != '' OR session_id = '' OR (` + rowFilter + `))`
+		args = append(args, rowFilterArgs...)
+	}
+	keptWhere := ""
+	keptFilter, keptFilterArgs := duckUsageSessionFilterSQL(
+		f, "snapshot_attribution_session_id", "model")
+	if keptFilter != "TRUE" {
+		keptWhere = `
+				AND (NOT is_claude OR (` + keptFilter + `))`
+		args = append(args, keptFilterArgs...)
+	}
+	return `
+		usage_rank_input AS (
+			SELECT *,
+				claude_message_id != '' AS is_claude,
+				CASE WHEN claude_message_id != '' THEN claude_request_id ELSE '' END AS rank_request_id,
+				CASE WHEN claude_message_id != '' THEN '' ELSE dedup_group END AS rank_group
+			FROM usage_normalized
+			WHERE ` + datePred + inputAnd + `
+		),
+		usage_kept AS (
+			-- Claude rows rank by most output, then latest; other rows by
+			-- earliest. One ORDER BY serves both: each row's sort keys for
+			-- the other kind are constant within its partition.
+			SELECT *,
+				FIRST_VALUE(session_id) OVER (
+					PARTITION BY claude_message_id, rank_request_id, rank_group
+					ORDER BY ts ASC, session_id ASC,
+						COALESCE(message_ordinal, -1) ASC
+				) AS snapshot_attribution_session_id,
+				SUM(output_tokens_norm) OVER usage_partition
+					- MAX(output_tokens_norm) OVER usage_partition
+					AS snapshot_deduplicated_output_tokens,
+				MAX(web_search_requests_norm) OVER usage_partition
+					AS snapshot_web_search_requests,
+				ROW_NUMBER() OVER (
+					PARTITION BY claude_message_id, rank_request_id, rank_group
+					ORDER BY CASE WHEN is_claude THEN output_tokens_norm ELSE 0 END DESC,
+						CASE WHEN is_claude THEN ts END DESC,
+						CASE WHEN is_claude THEN session_id ELSE '' END DESC,
+						CASE WHEN is_claude THEN COALESCE(message_ordinal, -1) ELSE 0 END DESC,
+						CASE WHEN is_claude THEN NULL ELSE ts END ASC,
+						CASE WHEN is_claude THEN '' ELSE session_id END ASC,
+						CASE WHEN is_claude THEN 0 ELSE COALESCE(message_ordinal, -1) END ASC
+				) AS dedup_rank
+			FROM usage_rank_input
+			WINDOW usage_partition AS (
+				PARTITION BY claude_message_id, rank_request_id, rank_group
+			)
+			QUALIFY dedup_rank = 1` + keptWhere + `
 		),
 		usage_localized AS (
-			SELECT *
-			FROM usage_ranked
-			WHERE dedup_rank = 1
-		)`, rawSQL, localDateSQL, datePred, db.MaxPlausibleTokens,
-		priceModelSQL, snapshotCTE, rankedSource)
-	args = append(args, localDateArg)
-	args = append(args, dateArgs...)
-	args = append(args, snapshotFilterArgs...)
-	return query, args
+			-- Cursor rows have no session and keep the columns they were read with.
+			SELECT u.* EXCLUDE (
+					is_claude, rank_request_id, rank_group,
+					snapshot_attribution_session_id, snapshot_web_search_requests,
+					session_id, web_search_requests_norm, snapshot_deduplicated_output_tokens,
+					project, agent, machine, user_message_count, is_automated,
+					display_name, started_at, activity_at, group_key, session_name
+				),
+				u.attributed_session_id AS session_id,
+				u.kept_web_search_requests AS web_search_requests_norm,
+				u.kept_deduplicated_output_tokens AS snapshot_deduplicated_output_tokens,
+				CASE WHEN a.id IS NULL THEN u.project ELSE a.project END AS project,
+				CASE WHEN a.id IS NULL THEN u.agent ELSE a.agent END AS agent,
+				CASE WHEN a.id IS NULL THEN u.machine ELSE a.machine END AS machine,
+				CASE WHEN a.id IS NULL THEN u.user_message_count
+					ELSE a.user_message_count END AS user_message_count,
+				CASE WHEN a.id IS NULL THEN u.is_automated ELSE a.is_automated END AS is_automated,
+				CASE WHEN a.id IS NULL THEN u.display_name ELSE COALESCE(
+					a.display_name, a.session_name, a.first_message, a.project
+				) END AS display_name,
+				CASE WHEN a.id IS NULL THEN u.group_key ELSE a.group_key END AS group_key,
+				CASE WHEN a.id IS NULL THEN u.session_name ELSE COALESCE(a.session_name, '') END AS session_name,
+				CASE WHEN a.id IS NULL THEN u.started_at ELSE a.started_at END AS started_at,
+				CASE WHEN a.id IS NULL THEN u.activity_at ELSE COALESCE(
+					a.ended_at, a.started_at, a.created_at
+				) END AS activity_at
+			FROM (
+				SELECT *,
+					CASE WHEN is_claude THEN snapshot_attribution_session_id
+						ELSE session_id END AS attributed_session_id,
+					CASE WHEN is_claude THEN snapshot_deduplicated_output_tokens
+						ELSE 0 END AS kept_deduplicated_output_tokens,
+					CASE WHEN is_claude THEN snapshot_web_search_requests
+						ELSE web_search_requests_norm END AS kept_web_search_requests
+				FROM usage_kept
+			) u
+			LEFT JOIN sessions a ON a.id = u.attributed_session_id
+		)`, args
 }
 
 type duckUsageBucket struct {
@@ -1006,8 +1060,30 @@ type duckUsageAggregateRow struct {
 	reportedCostRows      int
 	authoritativeCost     int64
 	authoritativeCostRows int
+	// recordedCost is a harness-recorded cost the SQL left out of the price;
+	// applyRecordedCost decides whether it prices the row.
+	recordedCost          sql.NullInt64
 	snapshotDedupOutput   int
 	groupKey, sessionName string
+}
+
+// applyRecordedCost makes a harness-recorded cost the row's price when
+// db.ReportedCostForPricing keeps it, clearing the tokens SQL left billable.
+func (r *duckUsageAggregateRow) applyRecordedCost(pricing *export.PricingResolver) {
+	kept := db.ReportedCostForPricing(r.recordedCost, usagefacts.CostStatusRecorded,
+		func() bool {
+			_, lookup := pricing.ResolveAt(
+				r.model, r.priceModel, duckUsagePricingTimestamp(r.pricingTS))
+			return lookup.OK
+		})
+	if !kept.Valid {
+		return
+	}
+	r.explicitCost += kept.Int64
+	r.reportedCostRows++
+	r.billableInput, r.billableOutput, r.billableReason = 0, 0, 0
+	r.billableCacheCr, r.billableCacheCr1h, r.billableCacheRd = 0, 0, 0
+	r.billableWebSearch = 0
 }
 
 type duckSessionUsageRow struct {
@@ -1027,6 +1103,7 @@ type duckSessionUsageRow struct {
 	webSearchRequests int
 	cost              sql.NullInt64
 	costSource        string
+	recordedCost      sql.NullInt64
 }
 
 func duckUsageLookupModel(model, ts string) string {
@@ -1188,6 +1265,15 @@ func duckUsageAggregateResolvedCost(
 func duckSessionUsageRowCost(
 	r duckSessionUsageRow, pricing *export.PricingResolver,
 ) (money.Money, bool, bool, error) {
+	if !r.cost.Valid {
+		r.cost = db.ReportedCostForPricing(r.recordedCost, usagefacts.CostStatusRecorded,
+			func() bool {
+				_, lookup := pricing.ResolveAt(
+					r.model, duckSessionUsageLookupModel(r),
+					duckUsagePricingTimestamp(r.pricingTS))
+				return lookup.OK
+			})
+	}
 	if r.cost.Valid && r.costSource != db.CopilotReportedCostSource {
 		return money.Money{Microdollars: r.cost.Int64}, true, true, nil
 	}
@@ -1303,7 +1389,8 @@ func (s *Store) forEachDailyUsageAggregateRow(
 			CASE WHEN cost_microdollars IS NOT NULL AND cost_source != 'copilot-reported' THEN cost_microdollars ELSE 0 END AS explicit_cost,
 			CASE WHEN cost_microdollars IS NOT NULL AND cost_source != 'copilot-reported' THEN 1 ELSE 0 END AS reported_cost_rows,
 			CASE WHEN cost_microdollars IS NOT NULL AND cost_source = 'copilot-reported' THEN cost_microdollars ELSE 0 END AS authoritative_cost,
-			CASE WHEN cost_microdollars IS NOT NULL AND cost_source = 'copilot-reported' THEN 1 ELSE 0 END AS authoritative_cost_rows
+			CASE WHEN cost_microdollars IS NOT NULL AND cost_source = 'copilot-reported' THEN 1 ELSE 0 END AS authoritative_cost_rows,
+			recorded_cost_microdollars
 		FROM usage_localized
 		-- Visit rows in time order so the last Copilot-reported total is the session cost.
 		ORDER BY session_id ASC, local_date ASC, project ASC, agent ASC` + machineOrder + `, ts ASC, COALESCE(message_ordinal, -1) ASC, source ASC, usage_dedup_key ASC, model ASC, price_model ASC`
@@ -1326,6 +1413,7 @@ func (s *Store) forEachDailyUsageAggregateRow(
 			&r.billableWebSearch,
 			&r.explicitCost, &r.reportedCostRows,
 			&r.authoritativeCost, &r.authoritativeCostRows,
+			&r.recordedCost,
 		); err != nil {
 			return fmt.Errorf("scanning duckdb daily usage aggregate: %w", err)
 		}
@@ -1400,6 +1488,7 @@ func (s *Store) readDailyUsage(
 			b = &duckUsageBucket{}
 			accum[key] = b
 		}
+		r.applyRecordedCost(rateResolver)
 		cost, savings, _, _, priceErr := duckUsageAggregateResolvedCost(
 			r.model, r.priceModel, r.providerID, duckUsagePricingTimestamp(r.pricingTS),
 			r.inputTok, r.outputTok, r.cacheCr, r.cacheCr1h, r.cacheRd,
@@ -1717,7 +1806,8 @@ func (s *Store) forEachSessionUsageAggregateRow(
 			CASE WHEN cost_microdollars IS NOT NULL AND cost_source != 'copilot-reported' THEN cost_microdollars ELSE 0 END AS explicit_cost,
 			CASE WHEN cost_microdollars IS NOT NULL AND cost_source != 'copilot-reported' THEN 1 ELSE 0 END AS reported_cost_rows,
 			CASE WHEN cost_microdollars IS NOT NULL AND cost_source = 'copilot-reported' THEN cost_microdollars ELSE 0 END AS authoritative_cost,
-			CASE WHEN cost_microdollars IS NOT NULL AND cost_source = 'copilot-reported' THEN 1 ELSE 0 END AS authoritative_cost_rows
+			CASE WHEN cost_microdollars IS NOT NULL AND cost_source = 'copilot-reported' THEN 1 ELSE 0 END AS authoritative_cost_rows,
+			recorded_cost_microdollars
 		FROM usage_localized
 		-- Visit rows in time order so the last Copilot-reported total is the session cost.
 		ORDER BY session_id ASC, ts ASC, COALESCE(message_ordinal, -1) ASC,
@@ -1742,6 +1832,7 @@ func (s *Store) forEachSessionUsageAggregateRow(
 			&r.billableWebSearch,
 			&r.explicitCost, &r.reportedCostRows,
 			&r.authoritativeCost, &r.authoritativeCostRows,
+			&r.recordedCost,
 		); err != nil {
 			return fmt.Errorf("scanning duckdb session usage aggregate: %w", err)
 		}
@@ -1761,26 +1852,54 @@ func (s *Store) forEachSessionUsageAggregateRow(
 // sessionUsageRowCount counts the deduped usage rows that would
 // contribute breakdown entries, mirroring duckSessionUsageRowCost's
 // contributes rule (a non-copilot-reported explicit cost or any
-// nonzero token counter) without shipping the rows.
+// nonzero token counter) without shipping the rows. A cost-only row with a
+// harness-recorded cost contributes only when the catalog cannot price its
+// model, so those few rows are read and decided in Go.
 func (s *Store) sessionUsageRowCount(
-	ctx context.Context, sessionID string,
+	ctx context.Context, sessionID string, pricing *export.PricingResolver,
 ) (int, error) {
 	cte, args := duckUsageCTE(db.UsageFilter{}, sessionID)
 	query := cte + `
-		SELECT COUNT(*)
-		FROM usage_localized
-		WHERE (cost_microdollars IS NOT NULL AND cost_source != 'copilot-reported')
-			OR input_tokens_norm != 0
-			OR output_tokens_norm != 0
-			OR cache_create_norm != 0
-			OR cache_read_norm != 0
-			OR reasoning_tokens_norm != 0
-			OR web_search_requests_norm != 0`
+		SELECT
+			COUNT(*) FILTER (WHERE
+				(cost_microdollars IS NOT NULL AND cost_source != 'copilot-reported')
+				OR input_tokens_norm != 0
+				OR output_tokens_norm != 0
+				OR cache_create_norm != 0
+				OR cache_read_norm != 0
+				OR reasoning_tokens_norm != 0
+				OR web_search_requests_norm != 0),
+			COALESCE(LIST(STRUCT_PACK(m := model, p := price_model, t := pricing_ts, c := recorded_cost_microdollars))
+				FILTER (WHERE recorded_cost_microdollars IS NOT NULL
+					AND cost_microdollars IS NULL
+					AND input_tokens_norm = 0 AND output_tokens_norm = 0
+					AND cache_create_norm = 0 AND cache_read_norm = 0
+					AND reasoning_tokens_norm = 0 AND web_search_requests_norm = 0), [])
+		FROM usage_localized`
 	var count int
+	var evidence []any
 	if err := s.queryRowContext(ctx, query, args...).
-		Scan(&count); err != nil {
+		Scan(&count, &evidence); err != nil {
 		return 0, fmt.Errorf(
 			"counting duckdb session usage rows: %w", err)
+	}
+	for _, item := range evidence {
+		fields, ok := item.(map[string]any)
+		if !ok {
+			return 0, fmt.Errorf("counting duckdb session usage rows: unexpected evidence row %T", item)
+		}
+		row := duckUsageAggregateRow{
+			model:      fmt.Sprint(fields["m"]),
+			priceModel: fmt.Sprint(fields["p"]),
+			pricingTS:  formatDBTime(fields["t"]),
+		}
+		if cost, ok := fields["c"].(int64); ok {
+			row.recordedCost = sql.NullInt64{Int64: cost, Valid: true}
+		}
+		row.applyRecordedCost(pricing)
+		if row.reportedCostRows > 0 {
+			count++
+		}
 	}
 	return count, nil
 }
@@ -1794,7 +1913,7 @@ func (s *Store) sessionUsageRows(
 			input_tokens_norm, output_tokens_norm,
 			cache_create_norm, cache_create_1h_norm, cache_read_norm,
 			reasoning_tokens_norm, web_search_requests_norm,
-			cost_microdollars, cost_source
+			cost_microdollars, cost_source, recorded_cost_microdollars
 		FROM usage_localized
 		ORDER BY ts ASC, session_id ASC,
 			COALESCE(message_ordinal, -1) ASC,
@@ -1813,6 +1932,7 @@ func (s *Store) sessionUsageRows(
 			&r.sessionID, &r.messageOrdinal, &r.source, &ts, &pricingTS, &r.model, &r.providerID,
 			&r.inputTok, &r.outputTok, &r.cacheCr, &r.cacheCr1h, &r.cacheRd,
 			&r.reasoningTok, &r.webSearchRequests, &r.cost, &r.costSource,
+			&r.recordedCost,
 		); err != nil {
 			return nil, fmt.Errorf("scanning duckdb session usage row: %w", err)
 		}
@@ -1863,6 +1983,7 @@ func (s *Store) readTopSessionTotals(
 				}}
 				bySession[r.sessionID] = a
 			}
+			r.applyRecordedCost(rateResolver)
 			cost, _, _, _, priceErr := duckUsageAggregateResolvedCost(
 				r.model, r.priceModel, r.providerID, duckUsagePricingTimestamp(r.pricingTS),
 				r.inputTok, r.outputTok, r.cacheCr, r.cacheCr1h, r.cacheRd,
@@ -2100,7 +2221,7 @@ func (s *Store) GetSessionUsage(
 		if includeBreakdown {
 			breakdownRows, err = s.sessionUsageRows(ctx, sessionID)
 		} else {
-			breakdownCount, err = s.sessionUsageRowCount(ctx, sessionID)
+			breakdownCount, err = s.sessionUsageRowCount(ctx, sessionID, rateResolver)
 		}
 		if err != nil {
 			return nil, err
@@ -2128,6 +2249,7 @@ func (s *Store) GetSessionUsage(
 					v := money.Money{Microdollars: r.authoritativeCost}
 					authoritativeCost = &v
 				}
+				r.applyRecordedCost(rateResolver)
 				cost, _, priced, contributes, priceErr := duckUsageAggregateResolvedCost(
 					r.model, r.priceModel, r.providerID, duckUsagePricingTimestamp(r.pricingTS),
 					r.inputTok, r.outputTok, r.cacheCr, r.cacheCr1h, r.cacheRd,
@@ -2180,8 +2302,18 @@ func (s *Store) GetSessionUsage(
 		if !contributes {
 			continue
 		}
-		breakdown = append(breakdown, duckSessionUsageBreakdownEntry(
-			r, len(breakdown)+1, cost, priced))
+		entry := duckSessionUsageBreakdownEntry(r, len(breakdown)+1, cost, priced)
+		if r.recordedCost.Valid {
+			entry.RecordedCost = &money.Money{Microdollars: r.recordedCost.Int64}
+			entry.RecordedCostPriced = db.ReportedCostForPricing(
+				r.recordedCost, usagefacts.CostStatusRecorded, func() bool {
+					_, lookup := rateResolver.ResolveAt(
+						r.model, duckSessionUsageLookupModel(r),
+						duckUsagePricingTimestamp(r.pricingTS))
+					return lookup.OK
+				}).Valid
+		}
+		breakdown = append(breakdown, entry)
 	}
 	if authoritativeCost != nil && len(breakdown) > 0 {
 		weights := make([]money.Money, len(breakdown))
@@ -2226,5 +2358,31 @@ func (s *Store) GetSessionUsage(
 	if out.PlanUsage, err = s.GetSessionPlanUsage(ctx, sess.ID); err != nil {
 		return nil, err
 	}
+	if out.SessionTotal, err = s.getSessionUsageTotal(ctx, sess.ID); err != nil {
+		return nil, err
+	}
 	return out, nil
+}
+
+// getSessionUsageTotal returns the session's recorded total, or nil when it
+// has none.
+func (s *Store) getSessionUsageTotal(
+	ctx context.Context, sessionID string,
+) (*db.SessionUsageTotal, error) {
+	rows, err := s.queryContext(ctx,
+		`SELECT `+db.SessionUsageTotalColumns+` FROM session_usage_totals WHERE session_id = ?`,
+		sessionID,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("querying duckdb session total for %s: %w", sessionID, err)
+	}
+	defer rows.Close()
+	if !rows.Next() {
+		return nil, rows.Err()
+	}
+	t, err := db.ScanSessionUsageTotal(rows.Scan)
+	if err != nil {
+		return nil, fmt.Errorf("scanning duckdb session total for %s: %w", sessionID, err)
+	}
+	return t, rows.Err()
 }

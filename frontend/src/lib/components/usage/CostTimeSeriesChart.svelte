@@ -8,15 +8,13 @@
   import { seriesSwatchBackground, type SeriesStyle } from "@kenn-io/kit-ui/utils/palette";
   import { scaleLinear } from "d3-scale";
   import { curveLinear, curveMonotoneX } from "d3-shape";
-  import {
-    usage,
-    type GroupBy,
-    type TimeSeriesView,
-  } from "../../stores/usage.svelte.js";
+  import { usage } from "../../stores/usage.svelte.js";
+  import type { GroupBy, TimeSeriesView } from "../../stores/usagePreferences.js";
   import { formatDateTime, m } from "../../i18n/index.js";
   import { formatMoney, moneyFromMicrodollars } from "../../money.js";
   import { sumSelectedTokens } from "../../stores/usageTokenTypes.js";
   import { addDays } from "../../utils/dates.js";
+  import { formatCount } from "../../utils/format.js";
   import { seriesPaint } from "../../utils/seriesPaint.js";
   import SeriesPatternDefs from "../shared/SeriesPatternDefs.svelte";
   import type {
@@ -364,8 +362,12 @@
     marker: "circle",
   };
 
+  // The folded tail recedes as a quiet grey in both themes; the named
+  // series carry the chart.
+  const OTHER_STYLE: SeriesStyle = { ...MUTED_STYLE, color: "var(--usage-series-other)" };
+
   function seriesStyle(key: string): SeriesStyle {
-    return key === "__other__" ? MUTED_STYLE : styleMap.get(key) ?? MUTED_STYLE;
+    return key === "__other__" ? OTHER_STYLE : styleMap.get(key) ?? MUTED_STYLE;
   }
 
   function seriesFill(key: string): string {
@@ -466,17 +468,12 @@
     return formatMoney(moneyFromMicrodollars(v));
   }
 
-  function fmtTokenYLabel(v: number): string {
-    if (v >= 1_000_000_000) return `${(v / 1_000_000_000).toFixed(1)}B`;
-    if (v >= 1_000_000) return `${(v / 1_000_000).toFixed(1)}M`;
-    if (v >= 1_000) return `${(v / 1_000).toFixed(1)}K`;
-    return String(Math.round(v));
-  }
-
   function fmtYLabel(v: number): string {
-    return isTokenMode ? fmtTokenYLabel(v) : fmtCostYLabel(v);
+    return isTokenMode ? formatCount(v) : fmtCostYLabel(v);
   }
 
+  // Series with nothing on this day are left out: a column of $0.00 rows
+  // says nothing. Tiny non-zero values still show (as "<$0.01").
   function tooltipRows(point: Point) {
     return seriesData.keys
       .map((key) => ({
@@ -778,6 +775,7 @@
                 y1="y1"
                 fill={layer.fill}
                 curve={areaCurve}
+                class="cost-area"
               />
             {/each}
           {/if}
@@ -851,10 +849,12 @@
                 </dt>
                 <dd>
                   {isTokenMode
-                    ? fmtTokenYLabel(row.value)
+                    ? formatCount(row.value)
                     : formatMoney(moneyFromMicrodollars(row.value))}
                 </dd>
               </div>
+            {:else}
+              <div class="tooltip-empty">{m.usage_tooltip_no_usage()}</div>
             {/each}
           </dl>
         </div>
@@ -896,7 +896,7 @@
     height: 22px;
     min-height: 22px;
     padding: 0 8px;
-    font-size: 10px;
+    font-size: 11px;
   }
 
   .legend {
@@ -910,9 +910,9 @@
   .legend-item {
     display: inline-flex;
     align-items: center;
-    gap: 4px;
-    font-size: 10px;
-    color: var(--text-muted);
+    gap: var(--space-3);
+    font-size: 12px;
+    color: var(--text-secondary);
   }
 
   .legend-item.dimmed {
@@ -952,7 +952,7 @@
 
   .chart-container :global(.y-label),
   .chart-container :global(.x-label) {
-    font-size: 9px;
+    font-size: 11px;
     fill: var(--text-muted);
     font-family: var(--font-mono);
   }
@@ -962,6 +962,12 @@
     /* Surface-colored seam so stacked segments read as separate parts. */
     stroke: var(--bg-surface);
     stroke-width: 1;
+  }
+
+  /* Near-solid fills in both themes, so each layer matches its legend
+     swatch; the surface seam keeps the layers apart. */
+  .chart-container :global(.cost-area) {
+    fill-opacity: 1;
   }
 
   .chart-container :global(.cost-seg.selected) {
@@ -1016,6 +1022,13 @@
     display: grid;
     gap: 4px;
     margin: 6px 0 0;
+  }
+
+  /* The tooltip inverts the theme, so page tokens like --text-muted lose
+     contrast here; quiet the inherited ink the way series names do. */
+  .tooltip-empty {
+    font-size: 12px;
+    opacity: 0.7;
   }
 
   .tooltip-row {

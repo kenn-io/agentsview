@@ -1220,6 +1220,28 @@ func TestDuckGetActivityReportZeroCostKeepsPrimaryModel(t *testing.T) {
 		"zero-cost usage must still report its known model as primary")
 }
 
+// Usage rows need a model, so a mirror whose messages carry none has no rate
+// to send and binds an empty rate schedule. The report must still build, with
+// the session's activity and no usage.
+func TestDuckGetActivityReportUsageWithoutModelNames(t *testing.T) {
+	ctx := t.Context()
+	sess := syncSession("n", "proj1", "first", "2026-06-14T10:30:00Z", 1)
+	msg := syncMessage("n", 0, "assistant", "x", "2026-06-14T10:30:00Z")
+	msg.Model = ""
+	writes := []db.SessionBatchWrite{{
+		Session: sess, Messages: []db.Message{msg},
+		DataVersion: 1, ReplaceMessages: true,
+	}}
+	store := activityReportStore(t, writes, nil)
+
+	r, err := store.GetActivityReport(
+		ctx, db.AnalyticsFilter{Timezone: "UTC"},
+		duckDayQuery(t, "2026-06-14", "UTC"))
+	require.NoError(t, err)
+	assert.Equal(t, 1, r.Totals.Sessions)
+	assert.Zero(t, r.Totals.OutputTokens)
+}
+
 // TestDuckGetActivityReportAutomationFilterAndSessionSplit confirms the shared
 // AnalyticsFilter automation class is honored through the DuckDB analytics
 // WHERE builder and that the Totals session-count split survives the sync into

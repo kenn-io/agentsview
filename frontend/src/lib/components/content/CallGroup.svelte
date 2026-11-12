@@ -3,7 +3,7 @@
   import { m } from "../../i18n/index.js";
   import type { DbCallTiming as CallTiming } from "../../api/generated/index.js";
   import { formatDuration } from "../../utils/duration.js";
-  import { formatNumber } from "../../utils/format.js";
+  import { formatCount } from "../../utils/format.js";
   import CallRow from "./CallRow.svelte";
 
   interface Props {
@@ -21,6 +21,8 @@
     isSlow?: (call: CallTiming) => boolean;
     expandable?: boolean;
     dimmed?: boolean;
+    /** False when no call in the list has timing; see CallRow. */
+    showTiming?: boolean;
   }
 
   let {
@@ -34,6 +36,7 @@
     isSlow,
     expandable = true,
     dimmed = false,
+    showTiming = true,
   }: Props = $props();
 </script>
 
@@ -44,7 +47,7 @@
       <span class="cg-h-label">
         {m.call_group_parallel_label()} · {m.call_group_parallel_call_count({
           count: calls.length,
-          countLabel: formatNumber(calls.length),
+          countLabel: formatCount(calls.length),
         })}
       </span>
     </div>
@@ -57,6 +60,7 @@
         liveDurationMs={isLastLive ? liveDurationMs : undefined}
         isSlow={isSlow ? isSlow(call) : false}
         {expandable}
+        {showTiming}
         isSubagentExpanded={call.subagent_session_id != null &&
           expandedSubagentIds.has(call.subagent_session_id)}
         onClick={() => onCallClick(call)}

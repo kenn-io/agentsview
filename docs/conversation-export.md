@@ -71,8 +71,9 @@ GET /api/v1/changes/stream?after=CURSOR
 Omit `after` on the first connection. Afterwards, pass the `to` value of the
 last `changes` event you finished processing. Treat cursors as opaque. The
 stream uses the same authentication as `/api/v1/events`, including the `?token=`
-fallback for browser `EventSource` clients. A server without a local SQLite
-archive answers HTTP 501.
+fallback for native browser `EventSource` clients described in
+[SSE Endpoints](/docs/remote-access/#sse-endpoints). A server without a local
+SQLite archive answers HTTP 501.
 
 The stream reads the archive and never writes your sessions or messages. On an
 archive that has never had a conversation export, the daemon first builds the

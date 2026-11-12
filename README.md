@@ -367,7 +367,7 @@ agentsview report stats --include-git-outcomes
   adds folder suggestions, session previews, and bulk corrections
 - **Recall corpus browser** -- approve or archive experimental extracted
   knowledge and jump from entries to their supporting transcript evidence
-- **Conversation memory** -- native Claude Code and Codex plugins let agents
+- **Conversation memory** -- Claude Code and Codex setup lets agents
   search past decisions and cite source messages; see
   [MCP memory setup](https://agentsview.io/docs/mcp/#focused-memory-profile)
 - **Eight interface languages** -- Azerbaijani, English, French, Japanese,
@@ -462,8 +462,10 @@ local Amp thread JSON files.
 Grok sessions are read from `summary.json` (title, timestamps, project),
 optional `signals.json` (token counters), and `chat_history.jsonl` when present
 for the full transcript (user turns, assistant replies, thinking, and tool
-calls). If `chat_history.jsonl` is missing, AgentsView falls back to
-summary-only mode. Set `GROK_DIR` or `agents.grok.dirs` to override the default
+calls). Grok trims `chat_history.jsonl` each time it compacts a session, so
+AgentsView rebuilds the turns before each compaction from `updates.jsonl` and
+marks each compaction in the transcript. If `chat_history.jsonl` is missing,
+AgentsView falls back to summary-only mode. Set `GROK_DIR` or `agents.grok.dirs` to override the default
 directory.
 
 Goose sessions are read from its shared SQLite `sessions.db`, including
@@ -870,7 +872,7 @@ ______________________________________________________________________
 
 ## Development
 
-Requires Go 1.27.3+ (CGO), Node.js 24.22.1+.
+Requires Go 1.27.4+ (CGO), Node.js 24.22.1+.
 
 ```bash
 make dev            # Go server (dev mode)

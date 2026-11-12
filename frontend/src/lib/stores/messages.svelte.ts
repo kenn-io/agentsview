@@ -1,6 +1,6 @@
 import { SessionsService } from "../api/generated/index";
 import type { DbMessage as Message } from "../api/generated/index.js";
-import { ApiError, isAbortError } from "../api/runtime.js";
+import { ApiError, isAbortError, isTransient } from "../api/runtime.js";
 import { clearContentCaches } from "../utils/content-parser.js";
 import { computeMainModelInfo, type ModelEffort } from "../utils/model.js";
 import { buildReadProgressToken, readProgress } from "./read-progress.svelte.js";
@@ -39,17 +39,6 @@ interface MessagePage {
 // A bound read answers 409 once the transcript has moved past the revision it named.
 function isRevisionChange(err: unknown): boolean {
   return err instanceof ApiError && err.status === 409;
-}
-
-// A network failure or 5xx answer may succeed on a later try.
-function isTransient(err: unknown): boolean {
-  return (
-    (err instanceof TypeError &&
-      /^(Failed to fetch|NetworkError when attempting to fetch resource\.?|Load failed)$/.test(
-        err.message,
-      )) ||
-    (err instanceof ApiError && err.status >= 500 && err.status < 600)
-  );
 }
 
 export class MessagesStore {

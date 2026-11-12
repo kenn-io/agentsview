@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { formatCount } from "../../utils/format.js";
   import {
     Button,
     Card,
@@ -25,7 +26,7 @@
   } from "../../api/types/recall.js";
   import { ApiError, isAbortError, responseTimingOf, type ResponseTiming } from "../../api/runtime.js";
   import { formatDateTime, m } from "../../i18n/index.js";
-  import { ChevronDownIcon, ChevronRightIcon } from "../../icons.js";
+  import { ChevronDownIcon, ChevronRightIcon, SearchIcon } from "../../icons.js";
   import { router } from "../../stores/router.svelte.js";
   import { sessions } from "../../stores/sessions.svelte.js";
   import { ui } from "../../stores/ui.svelte.js";
@@ -525,8 +526,8 @@
       />
       <Button
         label={generationAction.kind === "activate"
-          ? m.recall_page_generation_activate_title()
-          : m.recall_page_generation_retire_title()}
+          ? m.recall_page_generation_activate()
+          : m.recall_page_generation_retire()}
         tone={generationAction.kind === "activate" ? "info" : "danger"}
         surface="solid"
         disabled={generationActionLoading}
@@ -562,14 +563,13 @@
   <div class="recall-corpus-heading">
     <PageHeader
       title={m.recall_page_title()}
-      description={m.recall_page_subtitle()}
       level={2}
     >
       {#snippet actions()}
         {#if !entriesLoading && !entriesFailed}
           <span class="entry-count">
             {m.recall_page_entries_shown({
-              countLabel: entries.length.toLocaleString(),
+              countLabel: formatCount(entries.length),
             })}
           </span>
         {/if}
@@ -624,26 +624,26 @@
       {:else if status.stats}
         <div class="status-metrics">
           <span>{m.recall_page_status_done({
-            countLabel: status.stats.done.toLocaleString(),
+            countLabel: formatCount(status.stats.done),
           })}</span>
           <span>{m.recall_page_status_failed({
-            countLabel: status.stats.failed.toLocaleString(),
+            countLabel: formatCount(status.stats.failed),
           })}</span>
           <span>{m.recall_page_status_eligible({
-            countLabel: (status.eligible_backlog ?? 0).toLocaleString(),
+            countLabel: formatCount(status.eligible_backlog ?? 0),
           })}</span>
           <span>{m.recall_page_status_pending({
-            countLabel: status.stats.pending.toLocaleString(),
+            countLabel: formatCount(status.stats.pending),
           })}</span>
           <span>{m.recall_page_status_partial({
-            countLabel: status.stats.partial.toLocaleString(),
+            countLabel: formatCount(status.stats.partial),
           })}</span>
           <span>{m.recall_page_status_units({
-            doneLabel: status.stats.units_done.toLocaleString(),
-            totalLabel: status.stats.units_total.toLocaleString(),
+            doneLabel: formatCount(status.stats.units_done),
+            totalLabel: formatCount(status.stats.units_total),
           })}</span>
           <span>{m.recall_page_status_entries({
-            countLabel: status.stats.entries.toLocaleString(),
+            countLabel: formatCount(status.stats.entries),
           })}</span>
         </div>
       {/if}
@@ -770,8 +770,8 @@
                         {/if}
                       </td>
                       <td class="progress-units">
-                        {item.unit_cursor.toLocaleString()} /
-                        {item.units_total.toLocaleString()}
+                        {formatCount(item.unit_cursor)} /
+                        {formatCount(item.units_total)}
                       </td>
                       <td class="progress-updated">
                         {progressTimestamp(item.updated_at)}
@@ -905,7 +905,7 @@
   {#if resultCap > 0}
     <p class="result-cap">
       {m.recall_page_ranked_result_cap({
-        countLabel: resultCap.toLocaleString(),
+        countLabel: formatCount(resultCap),
       })}
     </p>
   {/if}
@@ -915,7 +915,11 @@
   {:else if entriesFailed}
     <p class="entries-state status-error">{m.recall_page_error()}</p>
   {:else if entries.length === 0}
-    <EmptyState title={m.recall_page_empty()} />
+    <EmptyState align="top" title={m.recall_page_empty()}>
+      {#snippet icon()}
+        <SearchIcon size="24" strokeWidth="1.75" />
+      {/snippet}
+    </EmptyState>
   {:else}
     <div class="recall-table-shell">
       <Table unsorted

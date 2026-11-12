@@ -54,16 +54,21 @@
   "nav_trash": "Corbeille",
   "nav_search_sessions": "Rechercher des sessions...",
   "nav_search_sessions_shortcut": "Rechercher des sessions ({shortcut})",
-  "header_transcript_normal_title": "Transcription normale — afficher tous les messages",
-  "header_transcript_normal_label": "Mode transcription normale",
-  "header_transcript_normal": "Normale",
-  "header_transcript_focused_title": "Transcription ciblée — uniquement les prompts et les réponses finales",
-  "header_transcript_focused_label": "Mode transcription ciblée",
-  "header_transcript_focused": "Ciblée",
-  "header_transcript_filter_title": "Filtrer les types de blocs",
-  "header_transcript_filter_label": "Filtrer les types de blocs",
   "header_transcript_visibility": "Visibilité des blocs",
   "header_transcript_show_all": "Tout afficher",
+  "header_view_trigger": "Vue : {layout}",
+  "header_view_trigger_focused": "Vue : {layout} · Requêtes et réponses",
+  "header_view_trigger_label": "Vue de la transcription : {layout}",
+  "header_view_trigger_label_focused": "Vue de la transcription : {layout}, requêtes et réponses",
+  "header_view_menu_label": "Vue de la transcription",
+  "header_view_layout_heading": "Mise en page",
+  "header_view_layout_default_description": "Messages développés",
+  "header_view_layout_compact_description": "Le même contenu, plus resserré",
+  "header_view_layout_stream_description": "Conversation sans libellés d'interlocuteur",
+  "header_view_layout_skim_description": "Une ligne par message et par appel d'outil",
+  "header_view_mode_heading": "Contenu",
+  "header_view_mode_normal": "Tous les messages et appels d'outils",
+  "header_view_mode_focused": "Seulement vos requêtes et les réponses finales",
   "header_transcript_blocks_user": "Messages utilisateur",
   "header_transcript_blocks_assistant": "Texte de l'assistant",
   "header_transcript_blocks_thinking": "Blocs de réflexion",
@@ -73,20 +78,12 @@
   "header_transcript_blocks_hook": "Hooks",
   "header_actions_follow_latest": "Suivre les derniers messages",
   "header_actions_toggle_sort": "Inverser l'ordre de tri (o)",
-  "header_actions_cycle_layout": "Changer de disposition\u202f: {layout} (l)",
-  "header_actions_cycle_layout_label": "Changer la disposition des messages",
-  "header_actions_export_options": "Options d'export de la session",
-  "header_actions_export_session": "Exporter la session",
   "header_actions_download_html": "Télécharger l'export HTML",
-  "header_actions_copied_markdown_link": "Lien markdown copié",
   "header_actions_copy_markdown_link": "Copier le lien d'export markdown",
   "header_actions_copy_source_path": "Copier le chemin du fichier source",
-  "header_actions_publish_title": "Publier sur Gist (p)",
-  "header_actions_publish_label": "Publier sur Gist",
   "header_actions_publish_public": "Publier un Gist public",
   "header_actions_publish_secret": "Publier un Gist secret",
   "header_actions_more_actions": "Plus d'actions",
-  "header_actions_layout": "Disposition\u202f: {layout}",
   "header_actions_refresh_data": "Actualiser les données",
   "header_actions_refresh_data_shortcut": "Actualiser les données (r)",
   "header_actions_sync_sessions": "Synchroniser les sessions",
@@ -241,21 +238,21 @@
   "session_breadcrumb_summary_mode_tooltip": "Les résultats d'outil, la réflexion et les diffs sont absents de cette transcription. La fidélité complète nécessite le sidecar agy-reader — installez-le, ou s'il est déjà installé, laissez-le rattraper son retard. Cliquez pour savoir comment.",
   "session_breadcrumb_malformed_lines": [
     {
-      "declarations": ["input count", "local countPlural = count: plural"],
+      "declarations": ["input count", "input countLabel", "local countPlural = count: plural"],
       "selectors": ["countPlural"],
       "match": {
-        "countPlural=one": "{count} ligne mal formée",
-        "countPlural=other": "{count} lignes mal formées"
+        "countPlural=one": "{countLabel} ligne mal formée",
+        "countPlural=other": "{countLabel} lignes mal formées"
       }
     }
   ],
   "session_breadcrumb_malformed_lines_tooltip": [
     {
-      "declarations": ["input count", "local countPlural = count: plural"],
+      "declarations": ["input count", "input countLabel", "local countPlural = count: plural"],
       "selectors": ["countPlural"],
       "match": {
-        "countPlural=one": "{count} ligne du fichier source n'a pas pu être analysée",
-        "countPlural=other": "{count} lignes du fichier source n'ont pas pu être analysées"
+        "countPlural=one": "{countLabel} ligne du fichier source n'a pas pu être analysée",
+        "countPlural=other": "{countLabel} lignes du fichier source n'ont pas pu être analysées"
       }
     }
   ],
@@ -478,6 +475,17 @@
   "sidebar_row_star_session": "Ajouter la session aux favoris",
   "sidebar_row_unstar_session": "Retirer la session des favoris",
   "sidebar_row_rename": "Renommer",
+  "sidebar_row_user_message_count": [
+    {
+      "declarations": ["input count", "input countLabel", "local countPlural = count: plural"],
+      "selectors": ["countPlural"],
+      "match": {
+        "countPlural=one": "{countLabel} message de l'utilisateur",
+        "countPlural=other": "{countLabel} messages de l'utilisateur",
+        "countPlural=many": "{countLabel} messages de l'utilisateur"
+      }
+    }
+  ],
   "sidebar_row_open_in_new_tab": "Ouvrir dans un nouvel onglet",
   "sidebar_row_delete": "Supprimer",
   "sidebar_row_change_project": "Changer de projet…",
@@ -790,9 +798,13 @@
       }
     }
   ],
-  "analytics_top_skills_agent_breakdown": "Répartition par agent",
   "analytics_top_skills_agents": "Agents",
-  "analytics_top_skills_projects": "Projets\u202f: {projects}",
+  "analytics_top_skills_col_skill": "Skill",
+  "analytics_top_skills_col_share": "Part",
+  "analytics_top_skills_col_calls": "Appels",
+  "analytics_top_skills_col_sessions": "Sessions",
+  "analytics_top_skills_col_last_used": "Dernière utilisation",
+  "analytics_top_skills_projects_label": "Projets",
   "analytics_top_skills_empty": "Aucune donnée d'utilisation des skills",
   "analytics_skill_trend_title": "Utilisation des skills dans le temps",
   "analytics_skill_trend_other": "Autre",
@@ -884,12 +896,11 @@
   "settings_search_empty": "Aucun paramètre correspondant",
   "settings_search_clear": "Effacer la recherche",
   "settings_search_result": "Affichage de {category}",
-  "settings_search_keywords_appearance": "thème contraste disposition texte police blocs theme contrast layout text font blocks zoom couleur daltonisme color",
+  "settings_search_keywords_appearance": "thème contraste disposition texte police blocs theme contrast layout text font blocks zoom couleur daltonisme color largeur width",
   "settings_search_keywords_language": "langue paramètres régionaux traduction language locale translation",
   "settings_search_keywords_date_ranges": "date plage pages liées date range linked pages",
   "settings_search_keywords_terminal": "terminal reprise lancement exécutable arguments presse-papiers terminal resume launch binary clipboard",
   "settings_search_keywords_agent_directories": "agent dossiers chemins analyse sessions agent directories paths scan",
-  "settings_search_keywords_worktree_mappings": "arbres de travail associations projets chemins dispositions worktree mappings projects paths layouts",
   "settings_search_keywords_embeddings": "plongements recherche sémantique vecteurs index générations embeddings semantic search vectors generations",
   "settings_search_keywords_github": "GitHub Gist jeton publication intégration token publish",
   "settings_search_keywords_remote_access": "distant serveur connexion authentification jeton réseau remote server connection auth token network",
@@ -1259,12 +1270,31 @@
   "recent_edits_title": "Modifications récentes",
   "recent_edits_empty": "Aucune modification de fichier pour l'instant.",
   "recent_edits_loading": "Chargement des modifications récentes...",
-  "recent_edits_count": "{count} modifications",
+  "recent_edits_count": [
+    {
+      "declarations": [
+        "input count",
+        "local countPlural = count: plural",
+        "local countNumber = count: number"
+      ],
+      "selectors": ["countPlural"],
+      "match": {
+        "countPlural=one": "{countNumber} modification",
+        "countPlural=other": "{countNumber} modifications",
+        "countPlural=many": "{countNumber} modifications"
+      }
+    }
+  ],
   "recent_edits_truncated": "affichage des {shown} plus récentes sur {total}",
   "recent_edits_load_more": "Charger plus",
-  "recent_edits_refresh": "Actualiser",
+  "recent_edits_refresh": "Recharger la liste",
   "recent_edits_search_placeholder": "Filtrer par chemin de fichier",
   "recent_edits_clear_search": "Effacer la recherche par chemin de fichier",
+  "recent_edits_col_project": "Projet",
+  "recent_edits_col_file": "Fichier",
+  "recent_edits_col_edits": "Modifications",
+  "recent_edits_col_last_edit": "Dernière modification",
+  "recent_edits_resize_column": "Redimensionner la colonne {column}",
   "activity_insight_waiting_server": "En attente de la version du serveur",
   "activity_insight_generate_insight": "Générer une analyse",
   "activity_insight_generation_failed": "Échec de la génération",
@@ -1548,7 +1578,9 @@
   "recall_generated_export": "Exporter",
   "recall_generated_publish": "Publier",
   "recall_generated_publish_secret": "Secret",
-  "recall_page_subtitle": "Parcourir les entrées distillées et la couverture d’extraction.",
+  "recall_generated_group_sessions": "Sessions",
+  "recall_generated_group_report": "Rapport",
+  "recall_generated_read_only_reason": "Cette archive est en lecture seule : impossible d’y générer de nouveaux rapports.",
   "recall_page_search_placeholder": "Rechercher dans le rappel…",
   "recall_page_clear_search": "Effacer la recherche de rappel",
   "recall_page_type_filter": "Type d’entrée",
@@ -1768,6 +1800,10 @@
   "insights_page_calibration_no_affected": "Aucune session affectée",
   "insights_page_calibration_incomplete_rate": "{rate} % incomplètes",
   "insights_page_calibration_incomplete_lift": "{lift}× incomplètes",
+  "insights_page_column_signal": "Signal",
+  "insights_page_column_count": "Nombre",
+  "insights_page_column_sessions": "Sessions",
+  "insights_page_column_outcome": "Résultat",
   "insights_page_signal_examples": "Exemples de signaux",
   "insights_page_grade_badge": "Note {grade}",
   "insights_page_unscored": "Non notée",
@@ -1811,11 +1847,16 @@
   "insights_page_pct_affected": "{pct} % affectées",
   "insights_pattern_recommendation_rationale": [
     {
-      "declarations": ["input affected", "input total", "local totalPlural = total: plural"],
+      "declarations": [
+        "input affectedLabel",
+        "input total",
+        "input totalLabel",
+        "local totalPlural = total: plural"
+      ],
       "selectors": ["totalPlural"],
       "match": {
-        "totalPlural=one": "{affected} session sur {total} présente ce motif déterministe.",
-        "totalPlural=other": "{affected} sessions sur {total} présentent ce motif déterministe."
+        "totalPlural=one": "{affectedLabel} session sur {totalLabel} présente ce motif déterministe.",
+        "totalPlural=other": "{affectedLabel} sessions sur {totalLabel} présentent ce motif déterministe."
       }
     }
   ],
@@ -1867,14 +1908,15 @@
     {
       "declarations": [
         "input count",
+        "input countLabel",
         "input completedRate",
         "input failureSignals",
         "local countPlural = count: plural"
       ],
       "selectors": ["countPlural"],
       "match": {
-        "countPlural=one": "{count} session, {completedRate} % terminées, {failureSignals} échecs en moyenne",
-        "countPlural=other": "{count} sessions, {completedRate} % terminées, {failureSignals} échecs en moyenne"
+        "countPlural=one": "{countLabel} session, {completedRate} % terminées, {failureSignals} échecs en moyenne",
+        "countPlural=other": "{countLabel} sessions, {completedRate} % terminées, {failureSignals} échecs en moyenne"
       }
     }
   ],
@@ -2003,6 +2045,10 @@
   "resync_retry": "Réessayer",
   "resync_error_read_only": "La resynchronisation complète est indisponible sur un backend en lecture seule.",
   "resync_error_in_progress": "Une synchronisation est déjà en cours.",
+  "shortcuts_group_navigation": "Navigation",
+  "shortcuts_group_messages": "Messages",
+  "shortcuts_group_sessions": "Sessions",
+  "shortcuts_group_actions": "Actions",
   "shortcuts_open_command_palette": "Ouvrir la palette de commandes",
   "shortcuts_find_in_session": "Rechercher dans la session",
   "shortcuts_close_palette": "Fermer la palette / la fenêtre / la recherche",
@@ -2056,7 +2102,7 @@
   "settings_session_providers_save_failed": "Impossible de mettre à jour les fournisseurs de sessions. La sélection précédente reste active.",
   "settings_session_providers_homes_title": "Répertoires personnels alternatifs",
   "settings_session_providers_homes_hint": "Ajoutez un répertoire personnel d'agent, par exemple un {envVar} personnalisé. AgentsView en déduit automatiquement les répertoires de sessions.",
-  "settings_session_providers_homes_placeholder": "~/.{agent}-work",
+  "settings_session_providers_homes_placeholder": "ex. ~/.{agent}-work",
   "settings_session_providers_homes_add": "Ajouter un répertoire",
   "settings_session_providers_homes_input_aria": "Nouveau répertoire personnel {provider}",
   "settings_session_providers_homes_remove_aria": "Supprimer le répertoire {provider} {home}",
@@ -2079,6 +2125,10 @@
   "appearance_chart_palette_matplotlib": "Matplotlib",
   "appearance_chart_palette_colorblind": "Adapté au daltonisme",
   "appearance_message_layout": "Disposition des messages",
+  "appearance_reading_width": "Largeur de lecture",
+  "appearance_reading_width_default": "Par défaut",
+  "appearance_reading_width_wider": "Plus large",
+  "appearance_reading_width_full": "Pleine largeur",
   "appearance_block_visibility": "Visibilité des blocs",
   "settings_github_token_saved": "Token GitHub enregistré.",
   "settings_github_save_failed": "Échec de l'enregistrement du token",
@@ -2159,8 +2209,6 @@
   "settings_terminal_args_hint": "(utilisez \\{cmd\\} comme espace réservé)",
   "settings_terminal_saving": "Enregistrement...",
   "settings_terminal_save": "Enregistrer",
-  "settings_worktree_moved": "Les règles de classement des projets ont été déplacées vers Données.",
-  "settings_worktree_moved_link": "Ouvrir Données › Règles",
   "worktree_failed_load": "Échec du chargement des mappages",
   "worktree_failed_save": "Échec de l'enregistrement du mappage",
   "worktree_failed_delete": "Échec de la suppression du mappage",
@@ -2188,6 +2236,8 @@
   "worktree_saving": "Enregistrement...",
   "worktree_add_mapping": "Ajouter un mappage",
   "worktree_save_mapping": "Enregistrer le mappage",
+  "worktree_form_new_title": "Nouveau mappage",
+  "worktree_form_edit_title": "Modifier le mappage",
   "worktree_cancel": "Annuler",
   "worktree_applying": "Application...",
   "worktree_apply_mappings": "Appliquer les mappages",
@@ -2243,8 +2293,8 @@
   "trends_title": "Tendances",
   "trends_date_range": "du {from} au {to}",
   "trends_reset": "Réinitialiser",
-  "trends_refreshing": "Actualisation",
-  "trends_refresh": "Actualiser",
+  "trends_refreshing": "Recalcul en cours",
+  "trends_refresh": "Recalculer",
   "trends_terms": "Termes",
   "trends_one_per_line": "un par ligne",
   "trends_group_by": "Grouper par",
@@ -2331,9 +2381,6 @@
   "appearance_on": "Activé",
   "appearance_off": "Désactivé",
   "appearance_zoom": "Zoom",
-  "settings_archive_content_title": "Contenu de l'archive",
-  "settings_archive_content_description": "Ce que l'ingestion conserve des résultats d'outils.",
-  "settings_search_keywords_archive_content": "archive contenu images rétention résultats outils substituts stockage retention tool results placeholders storage",
   "settings_tool_result_images": "Images des résultats d'outils",
   "settings_tool_result_images_keep": "Conserver",
   "settings_tool_result_images_drop": "Supprimer",
@@ -2342,7 +2389,7 @@
   "settings_tool_result_images_restart_notice": "Redémarrez le démon AgentsView pour appliquer ce changement aux nouvelles sessions ingérées.",
   "settings_tool_images_title": "Images des résultats d'outils",
   "settings_tool_images_description": "Images intégrées stockées dans les résultats d'outils.",
-  "settings_search_keywords_tool_images": "images résultats outils suppression nettoyage charges octets stockage",
+  "settings_search_keywords_tool_images": "images résultats outils suppression nettoyage charges octets stockage archive contenu rétention substituts retention tool results placeholders storage",
   "settings_image_cleanup_intro": "Prévisualisez les résultats d'outils stockés qui contiennent encore des charges d'images intégrées, puis remplacez ces charges par des espaces réservés lisibles.",
   "settings_image_cleanup_project_label": "Le projet contient",
   "settings_image_cleanup_project_placeholder": "Tous les projets",
@@ -3212,5 +3259,6 @@
   ],
   "empty_archive_title": "Aucune session pour l'instant",
   "empty_archive_desc": "AgentsView lit les sessions dans ces dossiers. Elles apparaîtront ici dès qu'un agent écrira dans l'un d'eux.",
-  "empty_archive_choose_folders": "Choisir les dossiers"
+  "empty_archive_choose_folders": "Choisir les dossiers",
+  "usage_tooltip_no_usage": "Aucune utilisation"
 }

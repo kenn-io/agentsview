@@ -794,7 +794,9 @@ func (b *httpBackend) Search(
 	if req.Limit > 0 {
 		q.Limit = new(int64(req.Limit))
 	}
-	api, err := b.apiClient(b.client)
+	// Broad searches on large archives can exceed 30 seconds; the caller can
+	// cancel the request through its context.
+	api, err := b.apiClient(b.longRunningClient)
 	if err != nil {
 		return nil, err
 	}
@@ -1180,6 +1182,19 @@ func (b *httpBackend) SessionUsage(
 	}
 	if wire.SubagentCount != nil {
 		out.SubagentCount = int(*wire.SubagentCount)
+	}
+	if out.RecordedCost, err = db.SummarizeRecordedCost(out.Breakdown); err != nil {
+		return nil, err
+	}
+	if wire.SessionTotal != nil {
+		// The wire and storage shapes share one JSON encoding.
+		encoded, err := json.Marshal(wire.SessionTotal)
+		if err != nil {
+			return nil, fmt.Errorf("session usage: encoding session total: %w", err)
+		}
+		if err := json.Unmarshal(encoded, &out.SessionTotal); err != nil {
+			return nil, fmt.Errorf("session usage: decoding session total: %w", err)
+		}
 	}
 	return out, nil
 }

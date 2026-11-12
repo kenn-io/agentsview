@@ -89,14 +89,6 @@ func (m *activityRunsMemo) store(entries []activityRunsEntry) {
 	}
 }
 
-// duckActivityAllTime bounds a pairing that leaves out no candidate. The
-// candidates a report range leaves out of its pairing are ones the
-// aggregator rejects for that range anyway.
-var duckActivityAllTime = activity.Query{
-	RangeStart:   time.Date(2, time.January, 1, 0, 0, 0, 0, time.UTC),
-	EffectiveEnd: time.Date(9999, time.December, 31, 0, 0, 0, 0, time.UTC),
-}
-
 // activityReportRuns returns the sessions' runs clipped to q, in start
 // order, and the kept entries that hold their counted messages. Sessions
 // the memo holds at their current push fingerprint are not paired again;
@@ -116,9 +108,7 @@ func (s *Store) activityReportRuns(
 	}
 	sessions, misses := s.activityRuns.lookup(ids, versions, q.GapCapSeconds)
 	if len(misses) > 0 {
-		all := duckActivityAllTime
-		all.GapCapSeconds = q.GapCapSeconds
-		derived, err := activity.DeriveSessionRuns(ctx, misses, q.GapCapSeconds, s.activityReportCandidateSource(misses, all))
+		derived, err := s.activitySessionRuns(ctx, misses, q.GapCapSeconds)
 		if err != nil {
 			return nil, nil, err
 		}
@@ -130,7 +120,7 @@ func (s *Store) activityReportRuns(
 				key: activityRunsKey{id, q.GapCapSeconds}, version: versions[id], runs: derived[id],
 			}
 		}
-		err = s.scanActivityCountedMessages(ctx, misses, all, func(id, role string, at time.Time) {
+		err = s.scanActivityCountedMessages(ctx, misses, func(id, role string, at time.Time) {
 			if i, ok := index[id]; ok {
 				if role == "user" {
 					entries[i].users = append(entries[i].users, at.UnixMicro())
@@ -162,16 +152,13 @@ func (s *Store) activityReportRuns(
 	if err := ctx.Err(); err != nil {
 		return nil, nil, err
 	}
-	// The candidate stream leaves out candidates that start at or after the
-	// effective end cast to DuckDB's microsecond TIMESTAMP, which truncates.
-	before := time.UnixMicro(q.EffectiveEnd.UnixMicro()).UTC()
 	n := 0
 	for _, e := range sessions {
 		n += e.runs.Runs()
 	}
 	runs := make([]activity.Run, 0, n)
 	for _, id := range ids {
-		runs = sessions[id].runs.AppendClippedBefore(runs, id, q.RangeStart, q.EffectiveEnd, before)
+		runs = sessions[id].runs.AppendClipped(runs, id, q.RangeStart, q.EffectiveEnd)
 	}
 	activity.SortRuns(runs)
 	return runs, sessions, nil
@@ -198,4 +185,30 @@ func (s *Store) activityRunVersions(ctx context.Context, ids []string) (map[stri
 		return nil, fmt.Errorf("iterating duckdb activity session fingerprints: %w", err)
 	}
 	return versions, nil
+}
+
+// scanActivityCountedMessages passes add the sessions' counted messages: user
+// and assistant messages with a timestamp that are neither system entries
+// nor tool results.
+func (s *Store) scanActivityCountedMessages(
+	ctx context.Context, ids []string, add func(sessionID, role string, at time.Time),
+) error {
+	rows, err := s.queryContext(ctx, `
+		SELECT session_id, role, timestamp FROM messages
+		WHERE session_id IN (SELECT unnest(?))
+			AND role IN ('user', 'assistant') AND is_system = false
+			AND source_subtype <> 'tool_result' AND timestamp IS NOT NULL`, ids)
+	if err != nil {
+		return fmt.Errorf("querying duckdb activity counted messages: %w", err)
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var sessionID, role string
+		var timestamp time.Time
+		if err := rows.Scan(&sessionID, &role, &timestamp); err != nil {
+			return fmt.Errorf("scanning duckdb activity counted messages: %w", err)
+		}
+		add(sessionID, role, timestamp)
+	}
+	return rows.Err()
 }

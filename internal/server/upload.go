@@ -9,6 +9,7 @@ import (
 	"strings"
 
 	"go.kenn.io/agentsview/internal/db"
+	"go.kenn.io/agentsview/internal/ingest"
 	"go.kenn.io/agentsview/internal/parser"
 	"go.kenn.io/agentsview/internal/timeutil"
 	"go.kenn.io/kit/atomicfile"
@@ -235,10 +236,14 @@ func sessionBatchWriteFromParsed(
 	// the upload path does not run the sync engine's derived-data
 	// pipeline, so zero-valued signal columns and no findings rows are
 	// the expected state for freshly uploaded sessions.
+	// An upload is a full parse of the transcript, so its session total
+	// replaces the stored one, removing it when the upload has none.
 	return db.SessionBatchWrite{
-		Session:         dbSess,
-		Messages:        dbMsgs,
-		ReplaceMessages: true,
+		Session:             dbSess,
+		Messages:            dbMsgs,
+		ReplaceMessages:     true,
+		SessionTotal:        ingest.ConvertSessionTotal(sess.SessionTotal),
+		ReplaceSessionTotal: true,
 	}
 }
 

@@ -186,7 +186,7 @@ shrinking the SQLite file are separate operations.
 | Keep transcripts or reporting metadata only  | Set `archive_content`, restart the daemon, then run `sync --full`. The rebuild also applies the policy to copied sessions whose sources are gone. |
 | Reclaim SQLite free space after cleanup      | Run `db compact`. It preserves stored rows and does not change retention settings.                                                                |
 
-Change these settings in `config.toml`. **Settings > Archive content** also lets
+Change these settings in `config.toml`. **Settings > Tool-result images** also lets
 you choose the image policy. Restart the daemon to apply a changed policy to new
 imports. Existing rows stay as they are until you resync or run the matching
 maintenance command. See [Archive content](/docs/configuration/#archive-content)

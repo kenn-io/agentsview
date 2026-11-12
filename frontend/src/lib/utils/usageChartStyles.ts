@@ -1,6 +1,7 @@
 import type { UsageSummaryResponse } from "../api/generated/index";
 import type { SeriesStyle } from "@kenn-io/kit-ui/utils/palette";
 import { orderedChartSeriesStyleMap, type ChartPalette } from "./chartPalette.js";
+import { calmSeriesColor } from "./calmSeriesColor.js";
 
 export interface UsageChartStyleMaps {
   project: ReadonlyMap<string, SeriesStyle>;
@@ -17,6 +18,72 @@ function rankedIds(costs: ReadonlyMap<string, number>): string[] {
     .map(([id]) => id);
 }
 
+export interface UsageChartColorOptions {
+  /** Turns a palette color such as `var(--accent-blue)` into the current
+   * theme's hex so it can be calmed. Without it only hex colors are calmed. */
+  resolveColor?: (color: string) => string;
+  /** False keeps the palette's exact colors, as high contrast mode needs. */
+  calm?: boolean;
+  /** Dark theme: see DARK_LIGHTNESS. */
+  dark?: boolean;
+}
+
+const MUTED = "var(--text-muted)";
+
+// Calmed light teal and green land at the same lightness only about 20
+// degrees of hue apart, so Usage paints teal from its own token
+// (--usage-series-teal in app.css), set apart in hue and lightness. Light
+// amber and orange sit only a few degrees apart and both turn brown once
+// the treemap deepens them for white labels, so Usage paints amber as a
+// yellower gold (--usage-series-amber). A resolver that does not know a
+// token keeps the shared color.
+const USAGE_SERIES_TOKENS: Readonly<Record<string, string>> = {
+  "var(--accent-teal)": "var(--usage-series-teal)",
+  "var(--accent-amber)": "var(--usage-series-amber)",
+};
+
+function resolveUsageColor(color: string, resolveColor?: (color: string) => string): string {
+  const token = USAGE_SERIES_TOKENS[color];
+  if (token && resolveColor) {
+    const resolved = resolveColor(token);
+    if (resolved && resolved !== token) return resolved;
+  }
+  return resolveColor?.(color) || color;
+}
+
+// Dark accents are light pastels, and calming their chroma made neighbouring
+// blues and violets blur together. Dark keeps their full chroma, steps them
+// down to mid-tone fills, and alternates two lightness steps by rank, so
+// adjacent stacked series always differ in lightness as well as hue.
+const DARK_LIGHTNESS = [0.94, 0.82] as const;
+
+function calmColor(color: string, rank: number, options: UsageChartColorOptions): string {
+  if (color === MUTED) return color;
+  const resolved = resolveUsageColor(color, options.resolveColor);
+  const calmed = options.dark
+    ? calmSeriesColor(resolved, 1, DARK_LIGHTNESS[rank % 2])
+    : calmSeriesColor(resolved);
+  return calmed === resolved ? color : calmed;
+}
+
+// Usage charts fill large areas, so their series colors are calmed one step.
+// The color-blind palette keeps its exact colors, which were chosen as a set
+// for color-vision separation.
+function usageStyleMap(
+  ids: readonly string[],
+  palette: ChartPalette,
+  options: UsageChartColorOptions,
+): ReadonlyMap<string, SeriesStyle> {
+  const styles = orderedChartSeriesStyleMap(ids, palette);
+  if (palette === "colorblind" || options.calm === false) return styles;
+  return new Map(
+    [...styles].map(([id, style], rank) => [
+      id,
+      { ...style, color: calmColor(style.color, rank, options) },
+    ]),
+  );
+}
+
 function addCost(costs: Map<string, number>, id: string, microdollars: number) {
   costs.set(id, (costs.get(id) ?? 0) + microdollars);
 }
@@ -24,6 +91,7 @@ function addCost(costs: Map<string, number>, id: string, microdollars: number) {
 export function usageChartStyleMaps(
   summary: UsageSummaryResponse | null,
   palette: ChartPalette,
+  options: UsageChartColorOptions = {},
 ): UsageChartStyleMaps {
   const projects = new Map<string, number>();
   const models = new Map<string, number>();
@@ -59,8 +127,8 @@ export function usageChartStyleMaps(
   for (const [id, cost] of dailyAgents) agents.set(id, cost);
 
   return {
-    project: orderedChartSeriesStyleMap(rankedIds(projects), palette),
-    model: orderedChartSeriesStyleMap(rankedIds(models), palette),
-    agent: orderedChartSeriesStyleMap(rankedIds(agents), palette),
+    project: usageStyleMap(rankedIds(projects), palette, options),
+    model: usageStyleMap(rankedIds(models), palette, options),
+    agent: usageStyleMap(rankedIds(agents), palette, options),
   };
 }

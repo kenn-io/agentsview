@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { formatCount } from "../../utils/format.js";
   import { Chip, type ChipTone } from "@kenn-io/kit-ui";
   import { onMount } from "svelte";
   import { getLocale, m } from "../../i18n/index.js";
@@ -9,6 +10,7 @@
     isAbortError,
   } from "../../api/runtime.js";
   import { LatestRead } from "../../utils/latest-read.js";
+  import { InfoIcon } from "../../icons.js";
 
   import SearchByMeaningControl from "../shared/SearchByMeaningControl.svelte";
 
@@ -183,7 +185,10 @@
   {#if !loaded}
     <p class="muted">{m.settings_embeddings_loading()}</p>
   {:else if unavailableReason !== null}
-    <p class="muted">{m.settings_embeddings_unavailable()}</p>
+    <p class="state">
+      <InfoIcon class="status-mark" size="14" aria-hidden="true" />
+      {m.settings_embeddings_unavailable()}
+    </p>
     <p class="muted detail">{unavailableReason}</p>
   {:else if loadError !== null}
     <p class="msg error" role="alert">{loadError}</p>
@@ -245,12 +250,12 @@
           >{m.settings_embeddings_last_build_documents()}</span
         >
         <span class="row-value"
-          >{numberFormat.format(status.last_result.Fill.Documents)}</span
+          >{formatCount(status.last_result.Fill.Documents)}</span
         >
         <span class="row-label">{m.settings_embeddings_last_build_chunks()}</span
         >
         <span class="row-value"
-          >{numberFormat.format(status.last_result.Fill.Chunks)}</span
+          >{formatCount(status.last_result.Fill.Chunks)}</span
         >
       </div>
     {/if}
@@ -271,8 +276,8 @@
               <span class="gen-model mono">{gen.model} · {numberFormat.format(gen.dimension)}d</span>
               <span class="gen-coverage">
                 {m.settings_embeddings_coverage({
-                  embeddedLabel: numberFormat.format(gen.embedded),
-                  missingLabel: numberFormat.format(gen.missing),
+                  embeddedLabel: formatCount(gen.embedded),
+                  missingLabel: formatCount(gen.missing),
                 })}
               </span>
             </li>
@@ -296,9 +301,33 @@
     margin: 0;
   }
 
+  /* The readable unavailable state leads as regular body text, marked by
+     the status ring rather than weight, so it never reads as a heading;
+     the raw diagnostic below it stays muted monospace. */
+  .state {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin: 0;
+    font-size: 13px;
+    font-weight: 400;
+    color: var(--text-secondary);
+  }
+
+  /* The hollow status ring GitHub uses for "Not configured": the
+     feature is off here, not failing. */
+  /* Unavailable uses the same neutral info glyph as the other
+     unavailable notices (Recall, Friction). */
+  .state :global(.status-mark) {
+    color: var(--text-muted);
+  }
+
+  /* The diagnostic hangs under the sentence, past the glyph (14px icon
+     plus the 8px gap). */
   .muted.detail {
     font-family: var(--font-mono, monospace);
     font-size: 11px;
+    padding-left: 22px;
   }
 
   .msg {
@@ -312,8 +341,9 @@
 
   .status-grid {
     display: grid;
-    grid-template-columns: auto 1fr;
-    column-gap: 16px;
+    /* Same label column as the other settings rows. */
+    grid-template-columns: var(--setting-label-width, 222px) minmax(0, 1fr);
+    column-gap: 12px;
     row-gap: 6px;
     align-items: center;
   }
@@ -325,8 +355,23 @@
   }
 
   .row-value {
+    min-width: 0;
     font-size: 12px;
     color: var(--text-primary);
+    overflow-wrap: anywhere;
+  }
+
+  /* Phones: like the other settings rows, each label sits above its
+     value, so long model ids keep the full width. */
+  @media (max-width: 640px) {
+    .status-grid {
+      grid-template-columns: minmax(0, 1fr);
+      row-gap: 2px;
+    }
+
+    .status-grid .row-value + .row-label {
+      margin-top: 6px;
+    }
   }
 
   .mono {

@@ -6,6 +6,7 @@ import (
 	"encoding/json/jsontext"
 	"encoding/json/v2"
 	"errors"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -15,6 +16,41 @@ import (
 // MaxPlausibleTokens bounds one request-level token counter. Aggregate session
 // totals may legitimately exceed it.
 const MaxPlausibleTokens = 2_000_000
+
+// CostStatusRecorded marks a cost that the harness computed from its own price
+// table and wrote into its session store, such as OpenCode's per-message cost
+// or Pi's usage.cost.total. It is evidence, not a price: harnesses write $0 for
+// models they cannot price and use rates AgentsView does not control. See
+// ReportedCostIsPrice for when it prices a row.
+const CostStatusRecorded = "recorded"
+
+// RecordedCostKey is the token-usage JSON key under which a parser stores a
+// message's harness-recorded cost, as whole microdollars. It rides in the
+// message's normalized usage object so every backend reads it with the token
+// counters; FromMessage reports it with CostStatusRecorded.
+const RecordedCostKey = "recorded_cost_microdollars"
+
+// UnknownModel labels usage events that carry a cost but name no model, so
+// their tokens and cost stay in totals instead of being dropped. It matches
+// the label Cursor account imports already use for a missing model. The
+// catalog has no rate for it, so such rows are priced only by their own cost.
+const UnknownModel = "<unknown>"
+
+// ReportedCostIsPrice reports whether a usage row's reported cost replaces the
+// catalog price. catalogPriced is whether the pricing catalog resolved a rate
+// for the row's model. Every status except CostStatusRecorded keeps the
+// historical rule that a reported cost wins. A recorded cost prices the row
+// only when the catalog cannot and the harness figure is above zero, because a
+// recorded $0 usually means the harness had no rate either. Callers handle
+// Copilot's authoritative session cost before asking.
+func ReportedCostIsPrice(
+	status string, reportedMicrodollars int64, catalogPriced bool,
+) bool {
+	if status != CostStatusRecorded {
+		return true
+	}
+	return !catalogPriced && reportedMicrodollars > 0
+}
 
 // MessageInput is the session-independent message shape used for extraction.
 type MessageInput struct {
@@ -30,7 +66,7 @@ type EventInput struct {
 	AccountBilling                       bool
 	MessageOrdinal                       *int
 	Source, Timestamp, Model, ProviderID string
-	CostSource, DedupKey                 string
+	CostStatus, CostSource, DedupKey     string
 	InputTokens, OutputTokens            int64
 	ReasoningTokens                      int64
 	CacheCreationTokens                  int64
@@ -44,13 +80,16 @@ type EventInput struct {
 // cache_creation_input_tokens counter stays authoritative, so the subset
 // never exceeds it.
 type ParsedTokenUsage struct {
-	InputTokens           int64
-	OutputTokens          int64
-	ReasoningTokens       int64
-	CacheCreationTokens   int64
-	CacheCreation1hTokens int64
-	CacheReadTokens       int64
-	WebSearchRequests     int64
+	// RecordedCostMicrodollars is the message's harness-recorded cost from
+	// RecordedCostKey, or nil when the payload has none.
+	RecordedCostMicrodollars *int64
+	InputTokens              int64
+	OutputTokens             int64
+	ReasoningTokens          int64
+	CacheCreationTokens      int64
+	CacheCreation1hTokens    int64
+	CacheReadTokens          int64
+	WebSearchRequests        int64
 }
 
 // Fact is one normalized, unpriced usage or activity row.
@@ -71,6 +110,7 @@ type Fact struct {
 	CacheReadTokens          int64
 	WebSearchRequests        int64
 	ReportedCostMicrodollars *int64
+	CostStatus               string
 	CostSource               string
 	RequestScoped            bool
 	ClaudeMessageID          string
@@ -97,17 +137,26 @@ func FromMessage(in MessageInput) (Fact, bool) {
 		TimestampMillis: millis, TimestampNanos: nanos, RawTimestamp: raw,
 		UsesSessionStart: fallback, Model: in.Model, ProviderID: in.ProviderID,
 		InputTokens: parsed.InputTokens, OutputTokens: parsed.OutputTokens,
-		ReasoningTokens:       parsed.ReasoningTokens,
-		CacheCreationTokens:   parsed.CacheCreationTokens,
-		CacheCreation1hTokens: parsed.CacheCreation1hTokens,
-		CacheReadTokens:       parsed.CacheReadTokens,
-		WebSearchRequests:     parsed.WebSearchRequests,
-		RequestScoped:         true,
-		ClaudeMessageID:       in.ClaudeMessageID,
-		ClaudeRequestID:       in.ClaudeRequestID,
-		SourceUUID:            in.SourceUUID,
-		TokenEligible:         tokenEligible, ActivityEligible: activityEligible,
+		ReasoningTokens:          parsed.ReasoningTokens,
+		CacheCreationTokens:      parsed.CacheCreationTokens,
+		CacheCreation1hTokens:    parsed.CacheCreation1hTokens,
+		CacheReadTokens:          parsed.CacheReadTokens,
+		WebSearchRequests:        parsed.WebSearchRequests,
+		RequestScoped:            true,
+		ReportedCostMicrodollars: parsed.RecordedCostMicrodollars,
+		CostStatus:               recordedCostStatus(parsed.RecordedCostMicrodollars),
+		ClaudeMessageID:          in.ClaudeMessageID,
+		ClaudeRequestID:          in.ClaudeRequestID,
+		SourceUUID:               in.SourceUUID,
+		TokenEligible:            tokenEligible, ActivityEligible: activityEligible,
 	}, true
+}
+
+func recordedCostStatus(cost *int64) string {
+	if cost == nil {
+		return ""
+	}
+	return CostStatusRecorded
 }
 
 // FromEvent returns a normalized fact for an eligible usage event.
@@ -133,6 +182,7 @@ func FromEvent(in EventInput) (Fact, bool) {
 		CacheCreationTokens:      clamp(in.CacheCreationTokens),
 		CacheReadTokens:          clamp(in.CacheReadTokens),
 		ReportedCostMicrodollars: in.ReportedCostMicrodollars,
+		CostStatus:               in.CostStatus,
 		CostSource:               in.CostSource,
 		RequestScoped:            in.MessageOrdinal != nil || SourceIsRequestScoped(in.Source),
 		UsageDedupKey:            in.DedupKey,
@@ -229,6 +279,18 @@ func ParseTokenUsage(tokenJSON string) ParsedTokenUsage {
 			i = valueNext
 			continue
 		}
+		if key == RecordedCostKey {
+			value, valueNext, valid := parseTokenInt(tokenJSON, i)
+			if valid && value >= 0 {
+				result.RecordedCostMicrodollars = &value
+			}
+			if valueNext <= i {
+				i++
+			} else {
+				i = valueNext
+			}
+			continue
+		}
 		if isTokenCounterKey(key) {
 			value, valueNext, valid := parseTokenInt(tokenJSON, i)
 			if valid {
@@ -299,10 +361,20 @@ const CodexCloudRequestSource = "codex-cloud-request"
 // posit-assistant-keepalive, posit-assistant-classifier) each record one
 // provider request, so the whole prefix is request-scoped.
 func SourceIsRequestScoped(source string) bool {
-	return source == "message" || source == "goose-request" || source == "session-store" ||
-		source == "usage-record" || source == "deepseek-harness" || source == CodexCloudRequestSource ||
-		strings.HasPrefix(source, "posit-assistant-")
+	return slices.Contains(RequestScopedSources, source) ||
+		strings.HasPrefix(source, RequestScopedSourcePrefix)
 }
+
+// RequestScopedSources are the usage sources SourceIsRequestScoped accepts
+// by name; it also accepts every source starting with
+// RequestScopedSourcePrefix. SQL that classifies rows reads both.
+var RequestScopedSources = []string{
+	"message", "goose-request", "session-store", "usage-record",
+	"deepseek-harness", CodexCloudRequestSource,
+}
+
+// RequestScopedSourcePrefix names the Posit Assistant sidecar sources.
+const RequestScopedSourcePrefix = "posit-assistant-"
 
 func isTokenCounterKey(key string) bool {
 	switch key {

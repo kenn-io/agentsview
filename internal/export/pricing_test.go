@@ -14,6 +14,61 @@ import (
 	pricingpkg "go.kenn.io/agentsview/internal/pricing"
 )
 
+func TestPricingResolverConfiguredAliasUsesTargetLadder(t *testing.T) {
+	pricingpkg.SetConfiguredAliases(map[string]string{"gpt-5.6-luna": "ai21.j2-mid-v1"})
+	t.Cleanup(func() { pricingpkg.SetConfiguredAliases(nil) })
+	embedded := pricingpkg.EmbeddedGenAIDocument()
+	resolver := NewPricingResolver([]EffectivePricingRow{
+		{ModelPattern: "ai21.j2-mid-v1", Rates: ModelRates{InputPerMTok: money.MustParseDollars("12.50"), Source: PricingRowSourceFetched}},
+		{GenAI: embedded.Prices, GenAIVersion: embedded.Version, GenAISource: PricingRowSourceEmbedded},
+	})
+	model, lookup := resolver.ResolveAt("gpt-5.6-luna", "gpt-5.6-luna", time.Date(2026, 8, 1, 0, 0, 0, 0, time.UTC))
+	require.True(t, lookup.OK)
+	assert.Equal(t, "ai21.j2-mid-v1", model)
+	assert.Equal(t, money.MustParseDollars("12.50"), lookup.Rates.InputPerMTok)
+
+	pricingpkg.SetConfiguredAliases(map[string]string{"gpt-5.6-luna": "missing-model"})
+	_, lookup = resolver.ResolveAt("gpt-5.6-luna", "gpt-5.6-luna", time.Date(2026, 8, 1, 0, 0, 0, 0, time.UTC))
+	assert.False(t, lookup.OK)
+
+	pricingpkg.SetConfiguredAliases(map[string]string{"gateway-kimi": "kimi-for-coding"})
+	resolver = NewPricingResolver([]EffectivePricingRow{
+		{ModelPattern: pricingpkg.KimiK26Canonical, Rates: ModelRates{InputPerMTok: money.MustParseDollars("2"), Source: PricingRowSourceFetched}},
+		{ModelPattern: pricingpkg.KimiK3Canonical, Rates: ModelRates{InputPerMTok: money.MustParseDollars("3"), Source: PricingRowSourceFetched}},
+	})
+	for _, at := range []time.Time{{}, pricingpkg.KimiModelEraCutoff.Add(-time.Second), pricingpkg.KimiModelEraCutoff} {
+		canonical := pricingpkg.CanonicalModelForDate("kimi-for-coding", at)
+		wantModel, want := resolver.ResolveAt("kimi-for-coding", canonical, at)
+		gotModel, got := resolver.ResolveAt("gateway-kimi", "gateway-kimi", at)
+		require.True(t, want.OK)
+		assert.Equal(t, wantModel, gotModel)
+		assert.Equal(t, want, got)
+	}
+	pricingpkg.SetConfiguredAliases(map[string]string{"gateway-fixed": "k2d6-agent", "gateway-custom": "internal-model"})
+	resolver = NewPricingResolver([]EffectivePricingRow{
+		{ModelPattern: pricingpkg.KimiK26Canonical, Rates: ModelRates{InputPerMTok: money.MustParseDollars("2"), Source: PricingRowSourceFetched}},
+		{ModelPattern: "internal-model", Rates: ModelRates{InputPerMTok: money.MustParseDollars("7"), Source: PricingRowSourceCustom}},
+	})
+	_, fixed := resolver.ResolveAt("gateway-fixed", "gateway-fixed", time.Time{})
+	require.True(t, fixed.OK)
+	assert.Equal(t, money.MustParseDollars("2"), fixed.Rates.InputPerMTok)
+	_, custom := resolver.ResolveAt("gateway-custom", "gateway-custom", time.Time{})
+	require.True(t, custom.OK)
+	assert.Equal(t, money.MustParseDollars("7"), custom.Rates.InputPerMTok)
+}
+
+func TestPricingResolverExactCustomRateBeatsConfiguredAlias(t *testing.T) {
+	pricingpkg.SetConfiguredAliases(map[string]string{"foo": "gpt-6-sol"})
+	t.Cleanup(func() { pricingpkg.SetConfiguredAliases(nil) })
+	resolver := NewPricingResolver([]EffectivePricingRow{
+		{ModelPattern: "gateway/foo", Rates: ModelRates{Source: PricingRowSourceCustom}},
+		{ModelPattern: "gpt-6-sol", Rates: ModelRates{InputPerMTok: money.MustParseDollars("9"), Source: PricingRowSourceFetched}},
+	})
+	_, lookup := resolver.ResolveAt("gateway/foo", "gateway/foo", time.Time{})
+	require.True(t, lookup.OK)
+	assert.Zero(t, lookup.Rates.InputPerMTok.Microdollars)
+}
+
 func TestPricingResolverUsesHistoricalGenAIPricesBeforeFlatFallback(t *testing.T) {
 	embedded := pricingpkg.EmbeddedGenAIDocument()
 	genAI := EffectivePricingRow{
@@ -1520,6 +1575,25 @@ func TestPricingResolverDependencyFingerprint(t *testing.T) {
 			return rows[:len(rows)-1]
 		}, []string{"genai-gamma"}},
 	}
+	t.Run("configured target eras and mappings", func(t *testing.T) {
+		t.Cleanup(func() { pricingpkg.SetConfiguredAliases(nil) })
+		in := input{reported: "gateway-kimi", canonical: "gateway-kimi"}
+		rows := append(baseRows(), fetched(pricingpkg.KimiK26Canonical, "2"), fetched(pricingpkg.KimiK3Canonical, "3"))
+		before := fingerprint(rows, in)
+		pricingpkg.SetConfiguredAliases(map[string]string{"gateway-kimi": "kimi-for-coding"})
+		mapped := fingerprint(rows, in)
+		assert.NotEqual(t, before, mapped)
+		repriced := slices.Clone(rows)
+		repriced[len(repriced)-2] = fetched(pricingpkg.KimiK26Canonical, "4")
+		assert.NotEqual(t, mapped, fingerprint(repriced, in))
+
+		pricingpkg.SetConfiguredAliases(map[string]string{"gateway-kimi": "kimi-for-coding", "other": "model-a"})
+		assert.Equal(t, mapped, fingerprint(rows, in))
+		pricingpkg.SetConfiguredAliases(map[string]string{"gateway-kimi": "model-a"})
+		assert.NotEqual(t, mapped, fingerprint(rows, in))
+		pricingpkg.SetConfiguredAliases(nil)
+		assert.Equal(t, before, fingerprint(rows, in))
+	})
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			for name, in := range inputs {

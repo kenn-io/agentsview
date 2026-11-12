@@ -15,7 +15,7 @@
     UsersRoundIcon,
   } from "../../icons.js";
   import { TrashIcon, CheckIcon } from "../../icons.js";
-  import { formatNumber } from "../../utils/format.js";
+  import { formatCount } from "../../utils/format.js";
   import { agentColor } from "../../utils/agents.js";
   import { registerSessionList } from "../../utils/arrow-target.js";
   import {
@@ -423,7 +423,7 @@
   <span class="session-count">
     {m.sidebar_session_count({
       count: totalCount,
-      countLabel: formatNumber(totalCount),
+      countLabel: formatCount(totalCount),
     })}
   </span>
   <div class="header-actions">
@@ -500,7 +500,7 @@
     </button>
     <span class="batch-count">
       {m.sidebar_selected_count({
-        countLabel: formatNumber(visibleSelectedSessionIds.length),
+        countLabel: formatCount(visibleSelectedSessionIds.length),
       })}
     </span>
     <button
@@ -555,7 +555,7 @@
               <FolderIcon class="project-icon" size="11" strokeWidth="1.8" aria-hidden="true" />
             {/if}
             <span class="group-name">{item.label}</span>
-            <span class="group-count">{item.count}</span>
+            <span class="group-count">{formatCount(item.count)}</span>
           </button>
         {:else if item.type === "subagent-group" && item.group}
           {@const subKey = `subagent:${item.group.key}`}
@@ -574,7 +574,7 @@
             {/if}
             <UserRoundIcon class="sub-group-icon" size="10" strokeWidth="2" aria-hidden="true" />
             <span class="sub-group-label">{m.sidebar_subagents()}</span>
-            <span class="sub-group-count">({item.count})</span>
+            <span class="sub-group-count">({formatCount(item.count)})</span>
           </button>
         {:else if item.type === "team-group" && item.group}
           {@const teamKey = `team:${item.group.key}`}
@@ -593,7 +593,7 @@
             {/if}
             <UsersRoundIcon class="sub-group-icon" size="12" strokeWidth="2" aria-hidden="true" />
             <span class="sub-group-label">{m.sidebar_team()}</span>
-            <span class="sub-group-count">({item.count})</span>
+            <span class="sub-group-count">({formatCount(item.count)})</span>
           </button>
         {:else if item.isChild && item.session}
           <SessionItem
@@ -655,6 +655,31 @@
     flex-shrink: 0;
     letter-spacing: 0.02em;
     text-transform: uppercase;
+    position: relative;
+  }
+
+  /* The filter popover spans the sidebar at any width, inset 8px from
+     both edges, so no clipped row text shows beside it. */
+  .session-list-header :global(.filter-dropdown) {
+    top: 100%;
+    left: 8px;
+    right: 8px;
+    width: auto;
+  }
+
+  /* While the popover is open, the rows under it fade back, so the row its
+     bottom edge lands on reads as background instead of a sliced row. The
+     veil ignores the pointer and the sidebar clips it. */
+  .session-list-header:has(:global(.filter-dropdown))::after {
+    content: "";
+    position: absolute;
+    top: 100%;
+    left: 0;
+    right: 0;
+    height: 100vh;
+    background: color-mix(in srgb, var(--bg-primary) 62%, transparent);
+    pointer-events: none;
+    z-index: calc(var(--z-popover) - 1);
   }
 
   .session-count {
@@ -665,7 +690,6 @@
     display: flex;
     align-items: center;
     gap: 8px;
-    position: relative;
   }
 
   .loading-indicator {

@@ -79,21 +79,26 @@ const (
 // (e.g. "m.content" or "m2.content"). Uses case-sensitive substr and
 // position checks instead of LIKE, which is case-insensitive on SQLite.
 func SystemPrefixSQL(contentCol, roleCol string) string {
-	return systemPrefixSQL(contentCol, roleCol, systemPrefixSQLite)
+	return systemPrefixSQL(contentCol, roleCol, systemPrefixSQLite, true)
 }
 
 // PostgresSystemPrefixSQL is the PostgreSQL form of SystemPrefixSQL.
 func PostgresSystemPrefixSQL(contentCol, roleCol string) string {
-	return systemPrefixSQL(contentCol, roleCol, systemPrefixPostgres)
+	return systemPrefixSQL(contentCol, roleCol, systemPrefixPostgres, true)
+}
+
+// PostgresSystemPrefixSQLWithoutGuard avoids guard overhead on small candidate sets.
+func PostgresSystemPrefixSQLWithoutGuard(contentCol, roleCol string) string {
+	return systemPrefixSQL(contentCol, roleCol, systemPrefixPostgres, false)
 }
 
 // DuckDBSystemPrefixSQL is the DuckDB form of SystemPrefixSQL.
 func DuckDBSystemPrefixSQL(contentCol, roleCol string) string {
-	return systemPrefixSQL(contentCol, roleCol, systemPrefixDuckDB)
+	return systemPrefixSQL(contentCol, roleCol, systemPrefixDuckDB, false)
 }
 
 func systemPrefixSQL(
-	contentCol, roleCol string, dialect systemPrefixSQLDialect,
+	contentCol, roleCol string, dialect systemPrefixSQLDialect, firstCharGuard bool,
 ) string {
 	// LTRIM strips the same whitespace as Go's strings.TrimSpace,
 	// JS .trim(), and the parser's isSystem helpers: ASCII whitespace,
@@ -111,8 +116,8 @@ func systemPrefixSQL(
 	parts = append(parts, systemReminderTerminalSQL(trimmed, dialect))
 	parts = append(parts, goalContextPrefixSQL(trimmed, dialect))
 	guard := ""
-	if dialect == systemPrefixSQLite {
-		guard = systemPrefixFirstCPGuardSQL(contentCol) + " AND "
+	if firstCharGuard {
+		guard = systemPrefixFirstCPGuardSQL(contentCol, dialect) + " AND "
 	}
 	return "NOT (" + roleCol + " = 'user' AND " + guard + "(" +
 		strings.Join(parts, " OR ") + "))"
@@ -126,9 +131,9 @@ func systemPrefixSQL(
 // never in the set), so rows with ordinary content skip the repeated
 // LTRIM/prefix chain after one integer IN test. The guard is AND'ed inside
 // the NOT(...), so a false guard reproduces exactly the all-branches-false
-// result. SQLite-only for now: PG (ascii) and DuckDB (unicode) analogues
-// need their own empty-string audits before the other dialects adopt it.
-func systemPrefixFirstCPGuardSQL(contentCol string) string {
+// result. PostgreSQL in SQL_ASCII treats the trim set as bytes, so its guard
+// also includes every byte of the UTF-8 trim set.
+func systemPrefixFirstCPGuardSQL(contentCol string, dialect systemPrefixSQLDialect) string {
 	seen := make(map[rune]bool)
 	var cps []int
 	add := func(r rune) {
@@ -145,12 +150,21 @@ func systemPrefixFirstCPGuardSQL(contentCol string) string {
 	for _, r := range systemPrefixTrimCutset {
 		add(r)
 	}
+	if dialect == systemPrefixPostgres {
+		for _, b := range []byte(systemPrefixTrimCutset) {
+			add(rune(b))
+		}
+	}
 	sort.Ints(cps)
 	items := make([]string, len(cps))
 	for i, cp := range cps {
 		items[i] = strconv.Itoa(cp)
 	}
-	return "COALESCE(unicode(" + contentCol + "), 0) IN (" +
+	first := "unicode(" + contentCol + ")"
+	if dialect == systemPrefixPostgres {
+		first = "ascii(NULLIF(substr(" + contentCol + ", 1, 1), ''))"
+	}
+	return "COALESCE(" + first + ", 0) IN (" +
 		strings.Join(items, ", ") + ")"
 }
 
@@ -177,7 +191,13 @@ func systemReminderTerminalSQL(
 		"substr(%s, 1, %d) = '%s'",
 		trimmed, len(systemReminderOpenTag), systemReminderOpenTag,
 	)
-	return fmt.Sprintf(`(%s AND EXISTS (WITH RECURSIVE reminder_remainder(rest) AS (
+	prefix := "(" + seedReminder + " AND "
+	suffix := ")"
+	if dialect == systemPrefixPostgres {
+		prefix = "(CASE WHEN " + seedReminder + " THEN "
+		suffix = " ELSE FALSE END)"
+	}
+	return fmt.Sprintf(`%sEXISTS (WITH RECURSIVE reminder_remainder(rest) AS (
 SELECT %s
 UNION ALL
 SELECT %s FROM reminder_remainder
@@ -185,9 +205,9 @@ WHERE substr(rest, 1, %d) = '%s' AND %s > 0
 )
 SELECT 1 FROM reminder_remainder
 WHERE %s AND (rest = '' OR %s)
-LIMIT 1))`, seedReminder, trimmed, next,
+LIMIT 1)%s`, prefix, trimmed, next,
 		len(systemReminderOpenTag), systemReminderOpenTag, closePos,
-		terminal, classification)
+		terminal, classification, suffix)
 }
 
 func terminalRemainderSQL(content string, dialect systemPrefixSQLDialect) string {
@@ -365,9 +385,12 @@ func hasFTSColumnFilter(query string) bool {
 //     After pagination, a rowid lookup with MATCH builds each snippet without
 //     segment duplicates. Ordinal is the matched message's ordinal (≥ 0).
 //
-//  2. Name branch — display_name / first_message LIKE matches that are NOT
-//     already covered by the FTS branch. Ordinal is -1 (no specific message
-//     to navigate to).
+//  2. Image branch — OCR text matches; a session keeps whichever of its best
+//     message and best image ranks better (message wins ties).
+//
+//  3. Name branch — display_name / first_message LIKE matches that are NOT
+//     already covered by the FTS or image branches. Ordinal is -1 (no
+//     specific message to navigate to).
 func (db *DB) Search(
 	ctx context.Context, f SearchFilter,
 ) (SearchPage, error) {
@@ -493,12 +516,29 @@ func (db *DB) Search(
 		bestArgs = []any{plainQuery}
 		ftsSessionsSQL = "SELECT session_id FROM best_rows"
 		ftsSessionsArgs = nil
-		// Name-only rows rank 0.0, after every message match, so they reach
-		// the page only when the walk read every match.
+		// Name rows rank after every message and image match.
 		includeNames = walk.complete
 	}
 	args = append(args, bestArgs...)
 
+	imageOccurrenceSQL := ` JOIN image_text_occurrences o ON o.image_hash=c.image_hash
+		 LEFT JOIN tool_result_events e ON e.id=o.event_id
+		 LEFT JOIN tool_calls tc ON tc.id=o.call_id
+		 LEFT JOIN messages cm ON cm.id=tc.message_id
+		 JOIN messages im ON im.session_id=o.session_id AND im.ordinal=COALESCE(e.tool_call_message_ordinal,cm.ordinal)`
+	imageVisibilitySQL := `im.is_system = 0 AND ` + SystemPrefixSQL("im.content", "im.role")
+	args = append(args, f.Query)
+	args = append(args, nameProjectArgs...)
+	imageBranchSQL := fmt.Sprintf(`
+			UNION ALL
+			SELECT s.id,s.project,s.agent,s.machine,
+			 COALESCE(s.display_name,s.session_name,s.first_message,'') AS name,
+			 COALESCE(s.ended_at,s.started_at,'') AS session_ended_at,
+			 im.ordinal,NULL,c.rowid,NULL,messages_fts.rank,0
+			 FROM messages_fts JOIN image_text_cache c ON c.rowid=messages_fts.rowid AND c.succeeded=1
+			 %s
+			 JOIN sessions s ON s.id=o.session_id
+			 WHERE messages_fts MATCH ? AND s.deleted_at IS NULL AND %s %s`, imageOccurrenceSQL, imageVisibilitySQL, nameProjectClause)
 	nameBranchSQL := ""
 	if includeNames {
 		args = append(args, likePattern)        // CASE COALESCE(display_name,session_name) LIKE
@@ -514,7 +554,7 @@ func (db *DB) Search(
 			SELECT s.id, s.project, s.agent, s.machine,
 				COALESCE(s.display_name, s.session_name, s.first_message, '') AS name,
 				COALESCE(s.ended_at, s.started_at, '') AS session_ended_at,
-				-1 AS ordinal, NULL AS best_rowid,
+				-1 AS ordinal, NULL AS best_rowid, NULL AS image_rowid,
 				CASE
 					WHEN COALESCE(s.display_name, s.session_name) LIKE ? ESCAPE '\'
 						THEN COALESCE(s.display_name, s.session_name, '')
@@ -540,7 +580,7 @@ func (db *DB) Search(
 				)`, nameProjectClause, ftsSessionsSQL)
 	}
 	args = append(args, f.Limit+1, f.Cursor) // LIMIT / OFFSET
-	args = append(args, f.Query)             // paged snippet MATCH
+	args = append(args, f.Query, f.Query)    // paged image and message snippet MATCH
 
 	// Relevance ordering needs match_pos before pagination. Recency ordering
 	// does not, so it avoids scanning every matching message for the position.
@@ -548,13 +588,13 @@ func (db *DB) Search(
 	query := fmt.Sprintf(`
 		%spage AS MATERIALIZED (
 		SELECT session_id, project, agent, machine, name,
-			session_ended_at, ordinal, best_rowid, snippet, rank, match_pos
-		FROM (
+			session_ended_at, ordinal, best_rowid, image_rowid, snippet, rank, match_pos
+		FROM (SELECT *, ROW_NUMBER() OVER (PARTITION BY session_id ORDER BY rank, image_rowid IS NOT NULL, ordinal, image_rowid) AS rn FROM (
 			-- FTS branch: message content matches
 			SELECT m.session_id, s.project, s.agent, s.machine,
 				COALESCE(s.display_name, s.session_name, s.first_message, '') AS name,
 				COALESCE(s.ended_at, s.started_at, '') AS session_ended_at,
-				best.best_ordinal AS ordinal, best.best_rowid,
+				best.best_ordinal AS ordinal, best.best_rowid, NULL AS image_rowid,
 				NULL AS snippet,
 				best.best_rank AS rank,
 				%s AS match_pos
@@ -564,13 +604,14 @@ func (db *DB) Search(
 			JOIN messages m ON m.id = best.best_rowid
 			JOIN sessions s ON m.session_id = s.id
 			%s
-		)
+			%s
+		)) WHERE rn = 1
 		ORDER BY %s
 		LIMIT ? OFFSET ?
 		)
 		SELECT session_id, project, agent, machine, name,
 			session_ended_at, ordinal,
-			CASE WHEN best_rowid IS NULL THEN snippet ELSE (
+			CASE WHEN image_rowid IS NOT NULL THEN (SELECT snippet(messages_fts, 1, '<mark>', '</mark>', '...', %d) FROM messages_fts WHERE messages_fts.rowid=page.image_rowid AND messages_fts MATCH ?) WHEN best_rowid IS NULL THEN snippet ELSE (
 				SELECT snippet(messages_fts, -1, '<mark>', '</mark>', '...', %d)
 				FROM messages_fts
 				WHERE messages_fts.rowid = page.best_rowid AND %s
@@ -581,8 +622,10 @@ func (db *DB) Search(
 		withSQL,
 		matchPosSQL,
 		bestSQL,
+		imageBranchSQL,
 		nameBranchSQL,
 		orderBy, // ORDER BY (%s)
+		snippetTokenLength,
 		snippetTokenLength,
 		matchSQL,
 		orderBy,

@@ -3,76 +3,42 @@
   import {
     ChartColumnIcon,
     CheckIcon,
-    ChevronDownIcon,
-    CirclePlayIcon,
-    CodeIcon,
-    CopyIcon,
-    EllipsisVerticalIcon,
-    FileTextIcon,
-    FolderIcon,
+    EllipsisIcon,
     LightbulbIcon,
     LinkIcon,
     SearchIcon,
-    SquareTerminalIcon,
-    TriangleAlertIcon,
   } from "../../icons.js";
-  import { onDestroy, onMount, untrack } from "svelte";
+  import { MediaQuery } from "svelte/reactivity";
   import type { Session } from "../../api/types.js";
-  import type {
-    DbCaptureCoverageView,
-    DbPlanUsageView,
-    SessionToolSequencesResponse,
-  } from "../../api/generated/index.js";
-  import {
-    OpenersService,
-    SessionsService,
-    type Opener,
-    type ResumeRequest,
-    type ResumeResponse,
-  } from "../../api/generated/index";
-  import {
-    ApiError,
-    isAbortError,
-  } from "../../api/runtime.js";
   import { copyToClipboard } from "../../utils/clipboard.js";
   import {
-    agentColor,
-    agentForeground,
+    agentInk,
     agentLabel,
     entrypointBadge,
   } from "../../utils/agents.js";
-  import { formatCost, formatTokenUsage } from "../../utils/format.js";
-  import type { Money } from "../../money.js";
+  import { formatCount } from "../../utils/format.js";
   import { normalizeMessagePreview } from "../../utils/messages.js";
   import { getGradeStyle, getGradeLabel } from "../../utils/grade.js";
-  import SignalPanel from "../content/SignalPanel.svelte";
-  import ToolSequencesPanel from "../content/ToolSequencesPanel.svelte";
   import SessionFilterControl from "../filters/SessionFilterControl.svelte";
   import SidebarToggleButton from "./SidebarToggleButton.svelte";
   import { sessions } from "../../stores/sessions.svelte.js";
   import { router } from "../../stores/router.svelte.js";
   import { insights } from "../../stores/insights.svelte.js";
   import { sync } from "../../stores/sync.svelte.js";
-  import {
-    supportsResume,
-    buildResumeCommand,
-    formatResumeResponseCommand,
-  } from "../../utils/resume.js";
-  import { codexDesktopLink } from "../../utils/codex.js";
-  import { claudeCodeLink } from "../../utils/claude.js";
-  import { LatestRead } from "../../utils/latest-read.js";
-  import {
-    describeCaptureCoverage,
-    describePlanUsage,
-  } from "../../utils/planUsage.js";
+  import { sessionDisplayId } from "../../utils/sessionDisplayId.js";
+  import { markWrappedGroups } from "./breadcrumbLayout.js";
+  import { SessionUsage } from "./sessionUsage.svelte.js";
+  import { SessionOpeners } from "./sessionOpeners.svelte.js";
+  import SessionOpenMenu from "./SessionOpenMenu.svelte";
+  import SessionSignalPanels from "./SessionSignalPanels.svelte";
+  import SessionUsageStats from "./SessionUsageStats.svelte";
 
   import { inSessionSearch } from "../../stores/inSessionSearch.svelte.js";
   import { messages as messagesStore } from "../../stores/messages.svelte.js";
-  import { sessionTiming } from "../../stores/sessionTiming.svelte.js";
   import { formatModelEffort } from "../../utils/model.js";
   import { ui } from "../../stores/ui.svelte.js";
+  import TranscriptControls from "./TranscriptControls.svelte";
   import { m } from "../../i18n/index.js";
-  import { Table, TableHeaderCell } from "@kenn-io/kit-ui";
 
   interface Props {
     session: Session | undefined;
@@ -87,377 +53,9 @@
   let renameInput = $state<HTMLInputElement | null>(null);
   let menuBtnEl = $state<HTMLButtonElement | null>(null);
   let menuEl = $state<HTMLDivElement | null>(null);
-  let showOpenMenu = $state(false);
-  let openers: Opener[] = $state([]);
-  let openFeedback = $state("");
-  let openFeedbackKind = $state<"success" | "error">("success");
-  let feedbackTimer: ReturnType<typeof setTimeout> | undefined;
-  let sessionDir = $state<string | null>(null);
-  let toolSequencesData = $state<SessionToolSequencesResponse | null>(null);
-  let toolSequencesLoading = $state(false);
-  let toolSequencesFailed = $state(false);
-  let toolSequencesUnavailable = $state(false);
-  let toolSequencesRetry = $state(0);
-  // The session, loaded message revision, end state and retry count the current or last read was for.
-  let toolSequencesIdentity = "";
-  let toolSequencesTimer: ReturnType<typeof setTimeout> | undefined;
-  // The session the read clock and conflict count below belong to.
-  let toolSequencesSessionId = "";
-  // When the last read for that session began; 0 before the first read.
-  let toolSequencesStartedAt = 0;
-  // Reads in a row that a sync interrupted with a 409.
-  let toolSequencesConflicts = 0;
-  const openersRead = new LatestRead();
-  const directoryRead = new LatestRead();
-  const costRead = new LatestRead();
-  const breakdownRead = new LatestRead();
-  const usageRootRead = new LatestRead();
-  const toolSequencesRead = new LatestRead();
 
-  interface SessionDirectoryResponse {
-    path: string;
-  }
-
-  interface SessionUsageBreakdownEntry {
-    ordinal: number;
-    message_ordinal?: number;
-    source: string;
-    label: string;
-    timestamp: string;
-    model: string;
-    input_tokens: number;
-    output_tokens: number;
-    cache_creation_input_tokens: number;
-    cache_read_input_tokens: number;
-    cost: Money;
-    has_cost: boolean;
-  }
-
-  onMount(() => {
-    const signal = openersRead.begin();
-    OpenersService.getApiV1Openers({ signal })
-      .then((res) => {
-        if (!openersRead.isCurrent(signal)) return;
-        openers = res.openers;
-      })
-      .catch((e) => {
-        if (!isAbortError(e)) openers = [];
-      })
-      .finally(() => openersRead.finish(signal));
-    return () => openersRead.cancel();
-  });
-
-  let resolvedSessionDirId: string | null = null;
-  let pendingSessionDirId: string | null = null;
-  $effect(() => {
-    if (!session) {
-      directoryRead.cancel();
-      sessionDir = null;
-      resolvedSessionDirId = null;
-      pendingSessionDirId = null;
-      return;
-    }
-    const id = session.id;
-    if (id === resolvedSessionDirId || id === pendingSessionDirId) return;
-    const signal = directoryRead.begin();
-    pendingSessionDirId = id;
-    sessionDir = null;
-    SessionsService.getApiV1SessionsByIdDirectory({ id }, { signal })
-      .then(({ path }) => {
-        if (session?.id === id && directoryRead.isCurrent(signal)) {
-          sessionDir = (path as SessionDirectoryResponse["path"]) || null;
-          resolvedSessionDirId = id;
-        }
-      })
-      .catch((e) => {
-        if (isAbortError(e)) return;
-        // Don't cache the ID on failure so the next
-        // session refresh retries the lookup.
-      })
-      .finally(() => {
-        if (
-          directoryRead.finish(signal) &&
-          pendingSessionDirId === id
-        ) {
-          pendingSessionDirId = null;
-        }
-      });
-  });
-
-  let sessionCost = $state<Money | null>(null);
-  let sessionCostIsRollup = $state(false);
-  let sessionRollupSubagentCount = $state(0);
-  let sessionUsageBreakdownCount = $state(0);
-  let sessionUsageBreakdown = $state<SessionUsageBreakdownEntry[]>([]);
-  // Plan usage and live capture coverage from the same usage read as the
-  // cost; null until it answers or when the session has none.
-  let sessionPlanUsage = $state<DbPlanUsageView | null>(null);
-  let sessionCaptureCoverage = $state<DbCaptureCoverageView | null>(null);
-  let sessionUsageLoaded = $state(false);
-  // Title of the thread this one is counted under, once read.
-  let usageRootTitle = $state<string | null>(null);
-  // Key of the last successful usage fetch. Cost depends on more
-  // than output tokens (input/cache tokens and explicit usage-event
-  // costs), so the key includes every cost-affecting field present
-  // in API session responses. A resync that changes none of these
-  // (e.g. a cost-only usage event) keeps a stale cost until the
-  // next keyed field moves; closing that would need a freshness
-  // marker in the session API.
-  let costFetchKey: string | null = null;
-  let costSessionId: string | null = null;
-  let breakdownFetchKey: string | null = null;
-
-  function childUsageFetchKey(parentId: string): string {
-    return Array.from(sessions.childSessions.values())
-      .filter((child) => child.parent_session_id === parentId)
-      .map((child) =>
-        [
-          child.id,
-          child.relationship_type ?? "",
-          child.transcript_revision ?? "",
-          child.message_count ?? 0,
-          child.total_output_tokens ?? 0,
-          child.peak_context_tokens ?? 0,
-          child.ended_at ?? "",
-        ].join("\t")
-      )
-      .sort()
-      .join("\n");
-  }
-
-  function usageFetchKey(s: Session): string {
-    return [
-      s.id,
-      s.transcript_revision ?? "",
-      s.total_output_tokens ?? 0,
-      s.peak_context_tokens ?? 0,
-      s.has_total_output_tokens ?? "",
-      s.has_peak_context_tokens ?? "",
-      s.message_count ?? 0,
-      s.ended_at ?? "",
-      sessions.activeSessionUsageVersion,
-      childUsageFetchKey(s.id),
-    ].join("\n");
-  }
-
-  function resetPlanUsage() {
-    sessionPlanUsage = null;
-    sessionCaptureCoverage = null;
-    sessionUsageLoaded = false;
-    planUsageOpen = false;
-  }
-
-  function resetUsageBreakdown() {
-    breakdownRead.cancel();
-    sessionUsageBreakdownCount = 0;
-    sessionUsageBreakdown = [];
-    usageBreakdownOpen = false;
-    usageBreakdownLoading = false;
-    breakdownFetchKey = null;
-  }
-
-  $effect(() => {
-    if (!session) {
-      costRead.cancel();
-      sessionCost = null;
-      sessionCostIsRollup = false;
-      sessionRollupSubagentCount = 0;
-      resetPlanUsage();
-      resetUsageBreakdown();
-      costFetchKey = null;
-      costSessionId = null;
-      return;
-    }
-    const id = session.id;
-    const key = usageFetchKey(session);
-    if (id !== costSessionId) {
-      // Entering a different session invalidates both the displayed
-      // cost and the fetch cache; the cached key must never satisfy
-      // the early return below while another session's request is
-      // still in flight.
-      sessionCost = null;
-      sessionCostIsRollup = false;
-      sessionRollupSubagentCount = 0;
-      resetPlanUsage();
-      resetUsageBreakdown();
-      costFetchKey = null;
-    }
-    if (key === costFetchKey) return;
-    const signal = costRead.begin();
-    costSessionId = id;
-    SessionsService.getApiV1SessionsByIdUsage({ id }, { rollup: true }, { signal })
-      .then((res) => {
-        if (!costRead.isCurrent(signal)) return;
-        costFetchKey = key;
-        sessionRollupSubagentCount = res.rollup_subagent_count ?? 0;
-        sessionCostIsRollup =
-          sessionRollupSubagentCount > 0 && res.has_rollup_cost === true;
-        sessionCost = sessionCostIsRollup
-          ? (res.rollup_cost ?? null)
-          : res.has_cost
-            ? res.cost
-            : null;
-        sessionUsageBreakdownCount = res.breakdown_count ?? 0;
-        sessionPlanUsage = res.plan_usage ?? null;
-        sessionCaptureCoverage = res.capture_coverage ?? null;
-        sessionUsageLoaded = true;
-      })
-      .catch((e) => {
-        if (isAbortError(e) || !costRead.isCurrent(signal)) return;
-        sessionUsageBreakdownCount = 0;
-        // Leave the fetch key unset so the next
-        // session refresh retries the lookup.
-      })
-      .finally(() => costRead.finish(signal));
-  });
-
-  // Breakdown rows are fetched only when the menu opens; large
-  // sessions can have thousands of entries and the count-only
-  // /usage fetch above happens automatically on every session.
-  $effect(() => {
-    if (!usageBreakdownOpen || !session) {
-      breakdownRead.cancel();
-      usageBreakdownLoading = false;
-      return;
-    }
-    const id = session.id;
-    const key = usageFetchKey(session);
-    if (key === breakdownFetchKey) return;
-    const signal = breakdownRead.begin();
-    usageBreakdownLoading = true;
-    SessionsService.getApiV1SessionsByIdUsage({ id }, { breakdown: true }, { signal })
-      .then((res) => {
-        if (!breakdownRead.isCurrent(signal)) return;
-        breakdownFetchKey = key;
-        usageBreakdownLoading = false;
-        sessionUsageBreakdown = Array.isArray(res.breakdown) ? res.breakdown : [];
-      })
-      .catch((e) => {
-        if (isAbortError(e) || !breakdownRead.isCurrent(signal)) return;
-        usageBreakdownLoading = false;
-        sessionUsageBreakdown = [];
-        // Leave the fetch key unset so reopening retries.
-      })
-      .finally(() => breakdownRead.finish(signal));
-  });
-
-  // The usage root's title names the link; the link itself needs only the ID.
-  let usageRootId = $derived(
-    sessionPlanUsage?.outcome_kind === "counted_under"
-      ? (sessionPlanUsage.counted_under ?? null)
-      : null,
-  );
-  $effect(() => {
-    const id = usageRootId;
-    usageRootTitle = null;
-    if (!id) {
-      usageRootRead.cancel();
-      return;
-    }
-    const signal = usageRootRead.begin();
-    SessionsService.getApiV1SessionsById({ id }, { signal })
-      .then((root) => {
-        if (!usageRootRead.isCurrent(signal)) return;
-        usageRootTitle =
-          root.display_name || normalizeMessagePreview(root.first_message) || null;
-      })
-      .catch((e) => {
-        // A root missing from this archive keeps its thread ID as the label.
-        if (!isAbortError(e)) console.warn("Failed to read usage root session:", e);
-      })
-      .finally(() => usageRootRead.finish(signal));
-  });
-
-  let planUsageOpen = $state(false);
-  // Waits for the usage read, so a slow read never shows "not checked yet"
-  // for a thread that has plan usage.
-  let planUsageDisplay = $derived(
-    session && sessionUsageLoaded
-      ? describePlanUsage(session.agent, sessionPlanUsage)
-      : null,
-  );
-  let captureCoverageLines = $derived(
-    describeCaptureCoverage(sessionCaptureCoverage, sessionPlanUsage),
-  );
-  let uncapturedTurns = $derived(sessionCaptureCoverage?.uncaptured_turns ?? 0);
-  // The missed-turn line comes last in the coverage lines; the closed
-  // trigger repeats it so its warning icon is explained without opening.
-  let missedTurnsLine = $derived(
-    uncapturedTurns > 0 ? (captureCoverageLines.at(-1) ?? null) : null,
-  );
-  // Shared by the closed trigger and the opened menu so both name the
-  // same root session.
-  let countedUnderLabel = $derived.by(() => {
-    const rootId = planUsageDisplay?.countedUnder;
-    return rootId
-      ? m.plan_usage_counted_under({
-          title: usageRootTitle ?? sessionDisplayId(rootId),
-        })
-      : null;
-  });
-  // Warnings the closed trigger explains with its icon: figures a later
-  // check made stale, and turns live capture missed.
-  let planUsageWarnings = $derived(
-    [planUsageDisplay?.staleNote, missedTurnsLine].filter((line): line is string => !!line),
-  );
-  let planUsageTitle = $derived.by(() => {
-    if (!planUsageDisplay) return undefined;
-    const state = countedUnderLabel ?? planUsageDisplay.headline;
-    return [state, ...planUsageWarnings].filter(Boolean).join("\n") || undefined;
-  });
-  // Screen readers hear the closed trigger's state and warnings as part of
-  // its name; the title alone may not be read.
-  let planUsageSrText = $derived(
-    [countedUnderLabel ?? planUsageDisplay?.headline, ...planUsageWarnings].filter(Boolean).join(", "),
-  );
-
-  onDestroy(() => {
-    openersRead.cancel();
-    usageRootRead.cancel();
-    directoryRead.cancel();
-    costRead.cancel();
-    breakdownRead.cancel();
-    stopToolSequences();
-  });
-
-  let sessionCostLabel = $derived(
-    sessionCost !== null ? formatCost(sessionCost) : null,
-  );
-  let sessionCostTitle = $derived(
-        sessionCostIsRollup
-      ? m.session_breadcrumb_total_cost_title({
-          count: sessionRollupSubagentCount,
-          countLabel: sessionRollupSubagentCount.toLocaleString(),
-        })
-      : m.session_breadcrumb_estimated_session_cost(),
-  );
-  // Menu rows render only while open, so the collapsed dropdown
-  // stays DOM-free.
-  let usageBreakdownOpen = $state(false);
-  let usageBreakdownLoading = $state(false);
-
-  let sessionContextTokens = $derived(session?.peak_context_tokens ?? 0);
-  let sessionOutputTokens = $derived(session?.total_output_tokens ?? 0);
-  let sessionHasContextTokens = $derived(
-    session
-      ? (session.has_peak_context_tokens ?? session.peak_context_tokens > 0)
-      : false,
-  );
-  let sessionHasOutputTokens = $derived(
-    session
-      ? (session.has_total_output_tokens ?? session.total_output_tokens > 0)
-      : false,
-  );
-  let sessionTokenSummary = $derived(
-    session
-      ? formatTokenUsage(
-          sessionContextTokens,
-          sessionHasContextTokens,
-          sessionOutputTokens,
-          sessionHasOutputTokens,
-        )
-      : null,
-  );
+  const openers = new SessionOpeners(() => session);
+  const usageStats = new SessionUsage(() => session);
 
   let mainModelInfo = $derived(
     messagesStore.sessionId === session?.id
@@ -466,142 +64,18 @@
   );
   let mainModel = $derived(formatModelEffort(mainModelInfo));
 
-  let resumeModel = $derived(
-    session ? messagesStore.resumeModelFor(session.id) : "",
-  );
+  // The entrypoint (for example sdk-ts) is detail, so it lives in the
+  // agent's hover text, as on the sidebar row.
+  let agentTitle = $derived.by(() => {
+    if (!session) return undefined;
+    const label = agentLabel(session.agent, session.agent_label);
+    const entrypoint = entrypointBadge(session.entrypoint);
+    return entrypoint ? `${label} · ${entrypoint}` : label;
+  });
 
   const gradeStyle = $derived(
     getGradeStyle(session?.health_grade),
   );
-
-  $effect(() => {
-    if (ui.signalPanelOpen && session?.id) {
-      sessions.fetchSignalDetail(session.id);
-    }
-  });
-
-  // Every new message changes the transcript revision, and each read loads the whole session, so a busy session reads at most this often.
-  const TOOL_SEQUENCES_MIN_INTERVAL_MS = 5_000;
-  const TOOL_SEQUENCES_MAX_CONFLICTS = 3;
-
-  function stopToolSequences() {
-    toolSequencesRead.cancel();
-    clearTimeout(toolSequencesTimer);
-    toolSequencesTimer = undefined;
-  }
-
-  $effect(() => {
-    const id = session?.id;
-    const termination = session?.termination_status ?? "";
-    const visible = ui.signalPanelOpen;
-    const retry = toolSequencesRetry;
-    if (!visible || !id) {
-      stopToolSequences();
-      toolSequencesData = null;
-      toolSequencesLoading = false;
-      toolSequencesFailed = false;
-      toolSequencesUnavailable = false;
-      toolSequencesIdentity = "";
-      toolSequencesSessionId = "";
-      return;
-    }
-
-    if (untrack(() => toolSequencesData?.session_id !== id)) toolSequencesData = null;
-    if (toolSequencesSessionId !== id) {
-      toolSequencesSessionId = id;
-      toolSequencesStartedAt = 0;
-      toolSequencesConflicts = 0;
-    }
-    const loadedRevision = messagesStore.sessionId === id ? messagesStore.loadedRevision : null;
-    if (loadedRevision === null && messagesStore.loading) {
-      // The message list is replacing its rows; read once they land so the sequences match them.
-      stopToolSequences();
-      toolSequencesIdentity = "";
-      toolSequencesLoading = true;
-      toolSequencesFailed = false;
-      toolSequencesUnavailable = false;
-      return;
-    }
-    // A failed read keeps its identity, so only a new revision, end state or retry reads again.
-    const identity = [id, loadedRevision ?? "", termination, retry].join("\n");
-    if (identity === toolSequencesIdentity) return;
-    toolSequencesIdentity = identity;
-    stopToolSequences();
-    toolSequencesLoading = true;
-    toolSequencesFailed = false;
-    toolSequencesUnavailable = false;
-    const wait = toolSequencesStartedAt + TOOL_SEQUENCES_MIN_INTERVAL_MS - Date.now();
-    if (toolSequencesStartedAt > 0 && wait > 0) {
-      toolSequencesTimer = setTimeout(() => readToolSequences(id), wait);
-    } else {
-      readToolSequences(id);
-    }
-  });
-
-  // Someone asked for the retry, so it skips the interval that paces automatic reads.
-  function retryToolSequences() {
-    toolSequencesStartedAt = 0;
-    toolSequencesRetry++;
-  }
-
-  function readToolSequences(id: string) {
-    toolSequencesTimer = undefined;
-    toolSequencesStartedAt = Date.now();
-    const signal = toolSequencesRead.begin();
-    SessionsService.getApiV1SessionsByIdToolSequences({ id }, { signal })
-      .then((response) => {
-        if (!toolSequencesRead.finish(signal)) return;
-        toolSequencesConflicts = 0;
-        toolSequencesLoading = false;
-        toolSequencesData = response;
-      })
-      .catch((error) => {
-        if (isAbortError(error) || !toolSequencesRead.finish(signal)) return;
-        const conflict = error instanceof ApiError && error.status === 409;
-        if (conflict && ++toolSequencesConflicts < TOOL_SEQUENCES_MAX_CONFLICTS) {
-          // A sync landed during the read; keep what is shown and read again after the interval.
-          toolSequencesRetry++;
-          return;
-        }
-        toolSequencesConflicts = 0;
-        toolSequencesLoading = false;
-        toolSequencesData = null;
-        if (error instanceof ApiError && error.status === 501) {
-          toolSequencesUnavailable = true;
-        } else {
-          toolSequencesFailed = true;
-        }
-      });
-  }
-
-  function sessionDisplayId(id: string): string {
-    const idx = id.indexOf(":");
-    return idx >= 0 ? id.slice(idx + 1) : id;
-  }
-
-  function formatTokenCount(value: number): string {
-    return Math.max(0, value).toLocaleString();
-  }
-
-  function formatBreakdownContext(entry: SessionUsageBreakdownEntry): string {
-    const context =
-      entry.input_tokens +
-      entry.cache_creation_input_tokens +
-      entry.cache_read_input_tokens;
-    return formatTokenCount(context);
-  }
-
-  function formatBreakdownTitle(entry: SessionUsageBreakdownEntry): string {
-    const parts = [
-      entry.model || entry.source,
-      `${formatBreakdownContext(entry)} ctx`,
-      `${formatTokenCount(entry.output_tokens)} out`,
-    ];
-    if (entry.has_cost) {
-      parts.push(formatCost(entry.cost));
-    }
-    return parts.filter(Boolean).join(" · ");
-  }
 
   async function copySessionId(
     rawId: string,
@@ -694,244 +168,41 @@
     }
   }
 
-  function showFeedback(msg: string, kind: "success" | "error" = "success") {
-    openFeedback = msg;
-    openFeedbackKind = kind;
-    clearTimeout(feedbackTimer);
-    feedbackTimer = setTimeout(() => { openFeedback = ""; }, 2000);
-  }
-
-  async function handleResumeIn(opener: Opener) {
-    if (!session) return;
-    showOpenMenu = false;
-    try {
-      const resp = await SessionsService.postApiV1SessionsByIdResume(
-        { id: session.id },
-        { opener_id: opener.id } satisfies ResumeRequest,
-      );
-      if (resp.launched) {
-        showFeedback(m.session_breadcrumb_resumed_in({
-          target: resp.terminal ?? opener.name,
-        }));
-        return;
-      }
-      // Launch failed — fall back to clipboard copy.
-      if (resp.command) {
-        const cmd = formatResumeResponseCommand(session.agent, resp);
-        const ok = cmd ? await copyToClipboard(cmd) : false;
-        showFeedback(
-          ok
-            ? m.session_breadcrumb_command_copied()
-            : m.session_breadcrumb_failed(),
-          ok ? "success" : "error",
-        );
-        return;
-      }
-    } catch {
-      // Fall back to local command build.
-    }
-    const cmd = buildResumeCommand(session.agent, session.id, {
-      model: resumeModel,
-    });
-    if (cmd) {
-      const ok = await copyToClipboard(cmd);
-      showFeedback(
-        ok
-          ? m.session_breadcrumb_command_copied()
-          : m.session_breadcrumb_failed(),
-        ok ? "success" : "error",
-      );
-    } else {
-      showFeedback(m.session_breadcrumb_not_supported(), "error");
-    }
-  }
-
-  async function handleCopyResumeCommand() {
-    if (!session) return;
-    showOpenMenu = false;
-    try {
-      const resp = await SessionsService.postApiV1SessionsByIdResume(
-        { id: session.id },
-        { command_only: true } satisfies ResumeRequest,
-      );
-      if (resp.command) {
-        const cmd = formatResumeResponseCommand(session.agent, resp);
-        const ok = cmd ? await copyToClipboard(cmd) : false;
-        showFeedback(
-          ok
-            ? m.session_breadcrumb_command_copied()
-            : m.session_breadcrumb_failed(),
-          ok ? "success" : "error",
-        );
-        return;
-      }
-    } catch {
-      // Fall back to local build.
-    }
-    const cmd = buildResumeCommand(session.agent, session.id, {
-      model: resumeModel,
-    });
-    if (cmd) {
-      const ok = await copyToClipboard(cmd);
-      showFeedback(
-        ok
-          ? m.session_breadcrumb_command_copied()
-          : m.session_breadcrumb_failed(),
-        ok ? "success" : "error",
-      );
-    } else {
-      showFeedback(m.session_breadcrumb_not_supported(), "error");
-    }
-  }
-
-  async function handleCopyFilePath() {
-    showOpenMenu = false;
-    if (!sessionDir) {
-      showFeedback(m.session_breadcrumb_no_path_available(), "error");
-      return;
-    }
-    const ok = await copyToClipboard(sessionDir);
-    showFeedback(
-      ok
-        ? m.session_breadcrumb_path_copied()
-        : m.session_breadcrumb_failed(),
-      ok ? "success" : "error",
-    );
-  }
-
-  async function handleOpenIn(opener: Opener) {
-    if (!session) return;
-    showOpenMenu = false;
-    try {
-      await SessionsService.postApiV1SessionsByIdOpen(
-        { id: session.id },
-        { opener_id: opener.id },
-      );
-      showFeedback(m.session_breadcrumb_opened_in({
-        target: opener.name,
-      }));
-    } catch {
-      showFeedback(m.session_breadcrumb_failed_to_open(), "error");
-    }
-  }
-
-  async function handleResumeDefault() {
-    if (!session) return;
-    showOpenMenu = false;
-    try {
-      const resp = await SessionsService.postApiV1SessionsByIdResume({ id: session.id }, {});
-      if (resp.launched) {
-        showFeedback(
-          m.session_breadcrumb_resumed_in({
-            target: resp.terminal ?? "terminal",
-          }),
-        );
-        return;
-      }
-      if (resp.command) {
-        const cmd = formatResumeResponseCommand(session.agent, resp);
-        const ok = cmd ? await copyToClipboard(cmd) : false;
-        showFeedback(
-          ok
-            ? m.session_breadcrumb_command_copied()
-            : m.session_breadcrumb_failed(),
-          ok ? "success" : "error",
-        );
-        return;
-      }
-    } catch {
-      // Fall back to local command build.
-    }
-    const cmd = buildResumeCommand(session.agent, session.id, {
-      model: resumeModel,
-    });
-    if (cmd) {
-      const ok = await copyToClipboard(cmd);
-      showFeedback(
-        ok
-          ? m.session_breadcrumb_command_copied()
-          : m.session_breadcrumb_failed(),
-        ok ? "success" : "error",
-      );
-    } else {
-      showFeedback(m.session_breadcrumb_not_supported(), "error");
-    }
-  }
-
-  // Remote sessions have host-prefixed IDs (host~rawID).
-  const isLocal = $derived(
-    !session?.id.includes("~"),
-  );
-
-  const canLaunch = $derived(
-    session
-      ? supportsResume(session.agent) && isLocal
-      : false,
-  );
-
-  const codexLink = $derived(
-    session ? codexDesktopLink(session.agent, session.id) : null,
-  );
-
-  const claudeLink = $derived(
-    session?.agent === "claude" && isLocal
-      ? claudeCodeLink(sessionDir)
-      : null,
-  );
-  const canCopyCommand = $derived(session ? supportsResume(session.agent) : false);
-
-  const terminalOpeners = $derived(
-    openers.filter((o) => o.kind === "terminal"),
-  );
-
-  const claudeDesktopOpener = $derived(
-    session?.agent === "claude"
-      ? openers.find((o) => o.id === "claude-desktop") ?? null
-      : null,
-  );
-
-  const editorOpeners = $derived(
-    openers.filter((o) => o.kind === "editor"),
-  );
-
-  const fileOpeners = $derived(
-    openers.filter((o) => o.kind === "files"),
-  );
-
-  const showDropdown = $derived(
-    canCopyCommand ||
-    codexLink !== null ||
-    (isLocal && (
-      editorOpeners.length > 0 ||
-      fileOpeners.length > 0 ||
-      (sessionDir !== null && !!session?.file_path)
-    )),
-  );
-
   function handleKeydown(e: KeyboardEvent) {
     if (e.key === "Escape") {
       if (renaming) {
         cancelRename();
       } else if (menuOpen) {
         closeMenu();
-      } else if (showOpenMenu) {
-        showOpenMenu = false;
+      } else if (openers.menuOpen) {
+        openers.menuOpen = false;
         e.preventDefault();
       }
       return;
     }
-    if (showOpenMenu && isLocal) {
+    if (openers.menuOpen && openers.isLocal) {
       // Number key shortcuts (1-9) for quick selection.
       const num = parseInt(e.key);
       if (num >= 1 && num <= 9) {
         const idx = num - 1;
-        if (idx < terminalOpeners.length) {
+        if (idx < openers.terminalOpeners.length) {
           e.preventDefault();
-          handleResumeIn(terminalOpeners[idx]!);
+          openers.resumeIn(openers.terminalOpeners[idx]!);
         }
       }
     }
   }
+
+  // Above phone width the header is two rows: the title with its actions,
+  // then the session metadata. From 1100px the transcript controls join
+  // the title row; below that they start the metadata row. The markup
+  // follows these rows directly (instead of CSS order) so keyboard focus
+  // moves through the header in the order it reads. Keep the widths in
+  // step with the media queries in the style block.
+  const twoRowQuery = new MediaQuery("min-width: 641px");
+  const wideQuery = new MediaQuery("min-width: 1100px");
+  const twoRowHeader = $derived(twoRowQuery.current);
+  const wideHeader = $derived(wideQuery.current);
 
   function handleClickOutside(e: MouseEvent) {
     const target = e.target as Node;
@@ -946,7 +217,7 @@
     }
     // Close open menu
     if (!(target as HTMLElement).closest?.(".open-group")) {
-      showOpenMenu = false;
+      openers.menuOpen = false;
     }
   }
 </script>
@@ -956,7 +227,107 @@
   onclick={handleClickOutside}
 />
 
-<div class="session-breadcrumb">
+<!-- The session's action groups render in one of two places so the
+     document (and Tab) order always follows the visual rows; see
+     twoRowHeader. -->
+{#snippet sessionActions()}
+    <div class="actions-wrapper">
+      <button
+        class="link-btn"
+        class:link-btn--copied={copiedLinkId === session?.id}
+        title={m.session_breadcrumb_copy_link_to_session()}
+        onclick={copySessionLink}
+        aria-label={m.session_breadcrumb_copy_link_to_session()}
+      >
+        {#if copiedLinkId === session?.id}
+          <CheckIcon size="14" aria-hidden="true" />
+        {:else}
+          <LinkIcon size="14" aria-hidden="true" />
+        {/if}
+      </button>
+      <button
+        class="minimap-btn"
+        class:minimap-btn--active={ui.vitalsOpen}
+        title={ui.vitalsOpen
+          ? m.session_breadcrumb_hide_session_analysis()
+          : m.session_breadcrumb_show_session_analysis()}
+        onclick={() => ui.toggleVitals()}
+        aria-label={ui.vitalsOpen
+          ? m.session_breadcrumb_hide_session_analysis()
+          : m.session_breadcrumb_show_session_analysis()}
+      >
+        <ChartColumnIcon size="14" aria-hidden="true" />
+      </button>
+      <button
+        class="insight-btn"
+        title={m.insights_page_agent_analysis()}
+        aria-label={m.insights_page_agent_analysis()}
+        onclick={handleAgentAnalysis}
+      >
+        <LightbulbIcon size="14" aria-hidden="true" />
+      </button>
+      <button
+        class="find-btn"
+        class:find-btn--active={inSessionSearch.isOpen}
+        title={m.session_breadcrumb_find_in_session_shortcut()}
+        onclick={() => inSessionSearch.toggle()}
+        aria-label={m.session_breadcrumb_find_in_session()}
+      >
+        <SearchIcon size="14" aria-hidden="true" />
+      </button>
+      <button
+        class="actions-btn"
+        title={m.session_breadcrumb_session_actions()}
+        aria-label={m.session_breadcrumb_session_actions()}
+        bind:this={menuBtnEl}
+        onclick={toggleMenu}
+      >
+        <!-- The same horizontal dots as the top bar menu, so the two overflow
+             menus share one glyph. -->
+        <EllipsisIcon size="14" aria-hidden="true" />
+      </button>
+      {#if menuOpen}
+        <div class="actions-menu" bind:this={menuEl}>
+          {#if insightGenerationAvailable}
+            <button
+              class="actions-menu-item"
+              onclick={handleToolEffectiveness}
+            >
+              {m.session_breadcrumb_tool_effectiveness()}
+            </button>
+          {/if}
+          {#if session && !session.health_grade}
+            <!-- Graded sessions open this panel from the grade chip; an
+                 ungraded session has no chip, so the panel lives here. -->
+            <button
+              class="actions-menu-item"
+              aria-pressed={ui.signalPanelOpen}
+              onclick={() => {
+                menuOpen = false;
+                ui.toggleSignalPanel();
+              }}
+            >
+              {m.session_breadcrumb_session_health_and_tool_sequences()}
+            </button>
+          {/if}
+          <button
+            class="actions-menu-item"
+            onclick={startRename}
+          >
+            {m.session_breadcrumb_rename()}
+          </button>
+          <button
+            class="actions-menu-item danger"
+            onclick={handleDelete}
+          >
+            {m.session_breadcrumb_delete()}
+          </button>
+        </div>
+      {/if}
+    </div>
+{/snippet}
+
+<div class="session-breadcrumb" {@attach markWrappedGroups}>
   {#if !ui.isMobileViewport && !ui.sidebarOpen}
     <div
       class="sidebar-controls"
@@ -995,466 +366,128 @@
       {session?.display_name ?? session?.project ?? ""}
     </span>
   {/if}
+  {#if twoRowHeader && wideHeader && !ui.isMobileViewport}
+    <TranscriptControls />
+  {/if}
+  {#if session && twoRowHeader}
+    <SessionOpenMenu {openers} />
+    {@render sessionActions()}
+  {/if}
+  {#if twoRowHeader}
+    <span class="row-break" aria-hidden="true"></span>
+  {/if}
+  <!-- Outside the session check: the transcript controls must stay usable
+       when the session details fail to load but its messages do not. -->
+  {#if !ui.isMobileViewport && !(twoRowHeader && wideHeader)}
+    <TranscriptControls />
+  {/if}
   {#if session}
+    <!-- The metadata reads in groups: who ran it (agent and model), when it
+         started, what it used, then the grade and ID chips. A middot
+         separates groups; items inside a group are spaced only. Groups with
+         nothing to show are left out, so no placeholder renders. -->
     <span class="breadcrumb-meta">
-      <span
-        class="agent-badge"
-        style:background={agentColor(session.agent)}
-        style:color={agentForeground(session.agent)}
-      >{agentLabel(session.agent, session.agent_label)}</span>
-      {#if entrypointBadge(session.entrypoint)}
-        <span class="agent-badge entrypoint-badge">{entrypointBadge(session.entrypoint)}</span>
-      {/if}
-      {#if session.agent === "antigravity-cli" && session.transcript_fidelity === "summary"}
-        <a
-          class="summary-badge"
-          href="https://github.com/kenn-io/agentsview#antigravity-cli-high-resolution-transcripts"
-          target="_blank"
-          rel="noopener noreferrer"
-          title={m.session_breadcrumb_summary_mode_tooltip()}
-        >{m.session_breadcrumb_summary_mode()}</a>
-      {/if}
-      {#if session.parser_malformed_lines}
+      <span class="meta-group meta-identity">
         <span
-          class="malformed-badge"
-          title={m.session_breadcrumb_malformed_lines_tooltip({
-            count: session.parser_malformed_lines,
-          })}
-        >{m.session_breadcrumb_malformed_lines({
-          count: session.parser_malformed_lines,
-        })}</span>
-      {/if}
-      {#if (session.agent === "antigravity" || session.agent === "antigravity-cli") && session.decode_confidence === "low"}
-        <span
-          class="decode-badge"
-          title={m.session_breadcrumb_antigravity_decode_confidence_low_tooltip()}
-        >{m.session_breadcrumb_antigravity_decode_confidence_low()}</span>
-      {/if}
-      {#if session.started_at}
-        <span class="session-time">
-          {new Date(session.started_at).toLocaleDateString(
-            undefined,
-            { month: "short", day: "numeric" },
-          )}
-          {new Date(session.started_at).toLocaleTimeString(
-            undefined,
-            { hour: "2-digit", minute: "2-digit" },
-          )}
-        </span>
-      {/if}
-      <button
-        class="grade-badge"
-        style:background={gradeStyle.bg}
-        style:color={gradeStyle.text}
-        style:border-color={gradeStyle.border}
-        onclick={() => ui.toggleSignalPanel()}
-        title={m.session_breadcrumb_session_health_and_tool_sequences()}
-        aria-expanded={ui.signalPanelOpen}
-      >
-        {getGradeLabel(session.health_grade)}
-      </button>
-      {#if showDropdown}
-        <span class="open-group">
-          <button
-            class="resume-btn"
-            class:has-feedback-success={openFeedback !== "" && openFeedbackKind === "success"}
-            class:has-feedback-error={openFeedback !== "" && openFeedbackKind === "error"}
-            onclick={(e) => { e.stopPropagation(); showOpenMenu = !showOpenMenu; }}
-            title={canLaunch
-              ? m.session_breadcrumb_resume_session_in_terminal()
-              : m.session_breadcrumb_session_actions()}
-            aria-label={canLaunch
-              ? m.session_breadcrumb_resume_session()
-              : m.session_breadcrumb_session_actions()}
-          >
-            {#if openFeedback}
-              {#if openFeedbackKind === "error"}
-                <TriangleAlertIcon size="11" strokeWidth="2.2" aria-hidden="true" />
-              {:else}
-                <CheckIcon size="11" strokeWidth="2.4" aria-hidden="true" />
-              {/if}
-              {openFeedback}
-            {:else}
-              {canLaunch
-                ? m.session_breadcrumb_resume()
-                : m.session_breadcrumb_open()}
-              <ChevronDownIcon size="8" strokeWidth="2.6" aria-hidden="true" />
-            {/if}
-          </button>
-          {#if showOpenMenu}
-            <div class="open-menu">
-              {#if canLaunch}
-                {#each terminalOpeners as opener, i (opener.id)}
-                  <button
-                    class="open-menu-item"
-                    onclick={() => handleResumeIn(opener)}
-                  >
-                    <span class="open-menu-num">{i + 1}</span>
-                    <span class="open-menu-name">{opener.name}</span>
-                  </button>
-                {/each}
-                <button class="open-menu-item" onclick={handleResumeDefault}>
-                  <span class="open-menu-num">
-                    <SquareTerminalIcon size="10" strokeWidth="2" aria-hidden="true" />
-                  </span>
-                  <span class="open-menu-name">{m.session_breadcrumb_default_terminal()}</span>
-                </button>
-                {#if codexLink}
-                  <div class="open-menu-divider"></div>
-                  <a
-                    class="open-menu-item"
-                    data-testid="codex-desktop-link"
-                    href={codexLink}
-                    title={m.session_breadcrumb_open_in_codex_desktop()}
-                  >
-                    <span class="open-menu-num">
-                      <CirclePlayIcon size="10" strokeWidth="2" aria-hidden="true" />
-                    </span>
-                    <span class="open-menu-name">{m.session_breadcrumb_open_in_codex_desktop()}</span>
-                  </a>
-                {/if}
-                {#if claudeLink}
-                  <div class="open-menu-divider"></div>
-                  <a
-                    class="open-menu-item"
-                    data-testid="claude-code-link"
-                    href={claudeLink}
-                    title={m.session_breadcrumb_open_in_claude_code()}
-                  >
-                    <span class="open-menu-num">
-                      <CirclePlayIcon size="10" strokeWidth="2" aria-hidden="true" />
-                    </span>
-                    <span class="open-menu-name">{m.session_breadcrumb_open_in_claude_code()}</span>
-                  </a>
-                {/if}
-              {/if}
-              {#if canCopyCommand}
-                {#if canLaunch}<div class="open-menu-divider"></div>{/if}
-                <button class="open-menu-item" onclick={handleCopyResumeCommand}>
-                  <span class="open-menu-num">
-                    <CopyIcon size="10" strokeWidth="2" aria-hidden="true" />
-                  </span>
-                  <span class="open-menu-name">{m.session_breadcrumb_copy_command()}</span>
-                </button>
-              {/if}
-              {#if isLocal}
-              <button class="open-menu-item" onclick={handleCopyFilePath}>
-                <span class="open-menu-num">
-                  <FileTextIcon size="10" strokeWidth="2" aria-hidden="true" />
-                </span>
-                <span class="open-menu-name">{m.session_breadcrumb_copy_directory_path()}</span>
-              </button>
-              {#if editorOpeners.length > 0 || fileOpeners.length > 0}
-                <div class="open-menu-divider"></div>
-                <div class="open-menu-section">{m.session_breadcrumb_open_in()}</div>
-                {#each editorOpeners as opener (opener.id)}
-                  <button
-                    class="open-menu-item"
-                    onclick={() => handleOpenIn(opener)}
-                  >
-                    <span class="open-menu-num">
-                      <CodeIcon size="10" strokeWidth="2" aria-hidden="true" />
-                    </span>
-                    <span class="open-menu-name">{opener.name}</span>
-                  </button>
-                {/each}
-                {#each fileOpeners as opener (opener.id)}
-                  <button
-                    class="open-menu-item"
-                    onclick={() => handleOpenIn(opener)}
-                  >
-                    <span class="open-menu-num">
-                      <FolderIcon size="10" strokeWidth="2" aria-hidden="true" />
-                    </span>
-                    <span class="open-menu-name">{opener.name}</span>
-                  </button>
-                {/each}
-              {/if}
-              {/if}
-              {#if canLaunch && claudeDesktopOpener}
-                <div class="open-menu-divider"></div>
-                <button
-                  class="open-menu-item"
-                  onclick={() => handleResumeIn(claudeDesktopOpener)}
-                >
-                  <span class="open-menu-num">
-                    <CirclePlayIcon size="10" strokeWidth="2" aria-hidden="true" />
-                  </span>
-                  <span class="open-menu-name">Claude Desktop</span>
-                </button>
-              {/if}
-            </div>
-          {/if}
-        </span>
-      {/if}
-      {#if session.id}
-        {@const rawId = sessionDisplayId(session.id)}
-        <button
-          class="session-id"
-          title={m.session_breadcrumb_copy_session_id_value({ id: rawId })}
-          onclick={() => copySessionId(rawId, session.id)}
-          aria-label={m.session_breadcrumb_copy_session_id()}
-        >
-          {copiedSessionId === session.id
-            ? m.session_breadcrumb_copied()
-            : rawId.slice(0, 8)}
-        </button>
-      {/if}
-      {#if sessionTokenSummary}
-        <span class="token-badge token-badge--desktop">
-          {sessionTokenSummary}
-        </span>
-        <span
-          class="token-badge token-badge--mobile"
-          title={sessionTokenSummary}
-        >
-          {sessionTokenSummary}
-        </span>
-      {/if}
-      {#if sessionUsageBreakdownCount > 0}
-        <!-- kit-ui-check-ignore: usage statistics open in a floating panel; kit-ui Disclosure expands inline and has no click popover equivalent. -->
-        <details class="usage-breakdown" bind:open={usageBreakdownOpen}>
-          <summary
-            class="usage-breakdown-trigger"
-            title={m.session_breadcrumb_usage_breakdown_title()}
-          >
-            {m.session_breadcrumb_usage_breakdown_steps({
-              count: sessionUsageBreakdownCount,
-              countLabel: sessionUsageBreakdownCount.toLocaleString(),
-            })}
-          </summary>
-          {#if usageBreakdownOpen}
-            <div class="usage-breakdown-menu">
-              {#if usageBreakdownLoading}
-                <div class="usage-breakdown-status">
-                  {m.session_breadcrumb_usage_breakdown_loading()}
-                </div>
-              {:else if sessionUsageBreakdown.length === 0}
-                <div class="usage-breakdown-status">
-                  {m.session_breadcrumb_failed()}
-                </div>
-              {:else}
-              {#each sessionUsageBreakdown as row (row.ordinal)}
-                <div class="usage-breakdown-row" title={formatBreakdownTitle(row)}>
-                  <span class="usage-breakdown-label">
-                    {row.label}
-                  </span>
-                  <span class="usage-breakdown-model">
-                    {row.model || row.source}
-                  </span>
-                  <span class="usage-breakdown-tokens">
-                    {formatBreakdownContext(row)} ctx
-                    <span aria-hidden="true">/</span>
-                    {formatTokenCount(row.output_tokens)} out
-                  </span>
-                  {#if row.has_cost}
-                    <span class="usage-breakdown-cost">
-                      {formatCost(row.cost)}
-                    </span>
-                  {/if}
-                </div>
-              {/each}
-              {/if}
-            </div>
-          {/if}
-        </details>
-      {/if}
-      {#if sessionCostLabel}
-        <span class="cost-badge" title={sessionCostTitle}>
-          {#if sessionCostIsRollup}
-            {m.session_breadcrumb_total_cost()}: {sessionCostLabel}
-          {:else}
-            {sessionCostLabel}
-          {/if}
-        </span>
-      {/if}
-      {#if planUsageDisplay}
-        <!-- kit-ui-check-ignore: plan statistics open in a floating panel with a table and session link; kit-ui Disclosure expands inline and has no click popover equivalent. -->
-        <details class="plan-usage" bind:open={planUsageOpen}>
-          <summary
-            class="usage-breakdown-trigger plan-usage-trigger"
-            class:plan-usage-trigger--empty={!planUsageDisplay.hasFigures}
-            title={planUsageTitle}
-          >
-            {#if planUsageWarnings.length > 0}
-              <TriangleAlertIcon size="10" strokeWidth="2.2" aria-hidden="true" />
-            {/if}
-            {planUsageDisplay.trigger}
-            {#if planUsageSrText}
-              <span class="kit-sr-only">, {planUsageSrText}</span>
-            {/if}
-          </summary>
-          {#if planUsageOpen}
-            {@const rootId = planUsageDisplay.countedUnder}
-            {@const showFiveHour = planUsageDisplay.groups.some((g) => g.fiveHour)}
-            <div class="usage-breakdown-menu plan-usage-menu">
-              {#if rootId}
-                <a
-                  class="plan-usage-headline plan-usage-root"
-                  href={router.buildSessionHref(rootId)}
-                  onclick={(event) => {
-                    event.preventDefault();
-                    planUsageOpen = false;
-                    router.navigateToSession(rootId);
-                  }}
-                >
-                  {countedUnderLabel}
-                </a>
-              {:else}
-                <div class="plan-usage-headline">{planUsageDisplay.headline}</div>
-              {/if}
-              {#if planUsageDisplay.staleNote}
-                <div class="plan-usage-stale">{planUsageDisplay.staleNote}</div>
-              {/if}
-              {#if planUsageDisplay.totals.length > 0}
-                <ul class="plan-usage-totals">
-                  {#each planUsageDisplay.totals as line (line)}
-                    <li>{line}</li>
-                  {/each}
-                </ul>
-              {/if}
-              {#if planUsageDisplay.groups.length > 0}
-                <Table unsorted
-                  class="plan-usage-groups"
-                  stickyHeader={false}
-                  ariaLabel={m.plan_usage_title()}
-                >
-                  {#snippet header()}
-                    <TableHeaderCell label={m.plan_usage_col_split()} />
-                    <TableHeaderCell label={m.plan_usage_col_weekly()} numeric />
-                    {#if showFiveHour}
-                      <TableHeaderCell label={m.plan_usage_col_five_hour()} numeric />
-                    {/if}
-                    <TableHeaderCell label={m.plan_usage_col_credits()} numeric />
-                  {/snippet}
-                  {#each planUsageDisplay.groups as group (group.key)}
-                    <tr>
-                      <td>{group.label}</td>
-                      <td class="plan-usage-num">{group.weekly}</td>
-                      {#if showFiveHour}
-                        <td class="plan-usage-num">{group.fiveHour}</td>
-                      {/if}
-                      <td class="plan-usage-num">{group.credits}</td>
-                    </tr>
-                  {/each}
-                </Table>
-              {/if}
-              {#if planUsageDisplay.hasFigures}
-                <p class="plan-usage-note">{m.plan_usage_credits_note()}</p>
-              {/if}
-              {#if captureCoverageLines.length > 0}
-                <div class="plan-usage-capture">
-                  {#each captureCoverageLines as line (line)}
-                    <div>{line}</div>
-                  {/each}
-                </div>
-              {/if}
-            </div>
-          {/if}
-        </details>
-      {/if}
-      {#if mainModelInfo.model}
-        <span
-          class="model-badge"
-          class:model-badge--with-effort={mainModelInfo.reasoningEffort}
-          title={mainModel}
-        ><span class="model-badge__model">{mainModelInfo.model}</span>{#if mainModelInfo.reasoningEffort}{" "}<span class="model-badge__effort">{mainModelInfo.reasoningEffort}</span>{/if}</span>
-      {/if}
-      <div class="actions-wrapper">
-        <button
-          class="link-btn"
-          class:link-btn--copied={copiedLinkId === session?.id}
-          title={m.session_breadcrumb_copy_link_to_session()}
-          onclick={copySessionLink}
-          aria-label={m.session_breadcrumb_copy_link_to_session()}
-        >
-          {#if copiedLinkId === session?.id}
-            <CheckIcon size="13" strokeWidth="2.4" aria-hidden="true" />
-          {:else}
-            <LinkIcon size="13" strokeWidth="2" aria-hidden="true" />
-          {/if}
-        </button>
-        <button
-          class="minimap-btn"
-          class:minimap-btn--active={ui.vitalsOpen}
-          title={ui.vitalsOpen
-            ? m.session_breadcrumb_hide_session_analysis()
-            : m.session_breadcrumb_show_session_analysis()}
-          onclick={() => ui.toggleVitals()}
-          aria-label={ui.vitalsOpen
-            ? m.session_breadcrumb_hide_session_analysis()
-            : m.session_breadcrumb_show_session_analysis()}
-        >
-          <ChartColumnIcon size="13" strokeWidth="2" aria-hidden="true" />
-        </button>
-        <button
-          class="insight-btn"
-          title={m.insights_page_agent_analysis()}
-          aria-label={m.insights_page_agent_analysis()}
-          onclick={handleAgentAnalysis}
-        >
-          <LightbulbIcon size="13" strokeWidth="2" aria-hidden="true" />
-        </button>
-        <button
-          class="find-btn"
-          class:find-btn--active={inSessionSearch.isOpen}
-          title={m.session_breadcrumb_find_in_session_shortcut()}
-          onclick={() => inSessionSearch.toggle()}
-          aria-label={m.session_breadcrumb_find_in_session()}
-        >
-          <SearchIcon size="13" strokeWidth="2" aria-hidden="true" />
-        </button>
-        <button
-          class="actions-btn"
-          title={m.session_breadcrumb_session_actions()}
-          aria-label={m.session_breadcrumb_session_actions()}
-          bind:this={menuBtnEl}
-          onclick={toggleMenu}
-        >
-          <EllipsisVerticalIcon size="14" strokeWidth="2.4" aria-hidden="true" />
-        </button>
-        {#if menuOpen}
-          <div class="actions-menu" bind:this={menuEl}>
-            {#if insightGenerationAvailable}
-              <button
-                class="actions-menu-item"
-                onclick={handleToolEffectiveness}
-              >
-                {m.session_breadcrumb_tool_effectiveness()}
-              </button>
-            {/if}
-            <button
-              class="actions-menu-item"
-              onclick={startRename}
-            >
-              {m.session_breadcrumb_rename()}
-            </button>
-            <button
-              class="actions-menu-item danger"
-              onclick={handleDelete}
-            >
-              {m.session_breadcrumb_delete()}
-            </button>
-          </div>
+          class="agent-badge"
+          style:--agent-ink={agentInk(session.agent)}
+          title={agentTitle}
+        >{agentLabel(session.agent, session.agent_label)}</span>
+        {#if mainModelInfo.model}
+          <span
+            class="model-badge"
+            class:model-badge--with-effort={mainModelInfo.reasoningEffort}
+            title={mainModel}
+          ><span class="model-badge__model">{mainModelInfo.model}</span>{#if mainModelInfo.reasoningEffort}{" "}<span class="model-badge__effort">{mainModelInfo.reasoningEffort}</span>{/if}</span>
         {/if}
-      </div>
+        {#if session.agent === "antigravity-cli" && session.transcript_fidelity === "summary"}
+          <a
+            class="summary-badge"
+            href="https://github.com/kenn-io/agentsview#antigravity-cli-high-resolution-transcripts"
+            target="_blank"
+            rel="noopener noreferrer"
+            title={m.session_breadcrumb_summary_mode_tooltip()}
+          >{m.session_breadcrumb_summary_mode()}</a>
+        {/if}
+        {#if session.parser_malformed_lines}
+          <span
+            class="malformed-badge"
+            title={m.session_breadcrumb_malformed_lines_tooltip({
+              count: session.parser_malformed_lines,
+              countLabel: formatCount(session.parser_malformed_lines),
+            })}
+          >{m.session_breadcrumb_malformed_lines({
+            count: session.parser_malformed_lines,
+            countLabel: formatCount(session.parser_malformed_lines),
+          })}</span>
+        {/if}
+        {#if (session.agent === "antigravity" || session.agent === "antigravity-cli") && session.decode_confidence === "low"}
+          <span
+            class="decode-badge"
+            title={m.session_breadcrumb_antigravity_decode_confidence_low_tooltip()}
+          >{m.session_breadcrumb_antigravity_decode_confidence_low()}</span>
+        {/if}
+      </span>
+      {#if session.started_at}
+        <span class="meta-group meta-time">
+          <span class="session-time">
+            {new Date(session.started_at).toLocaleDateString(
+              undefined,
+              { month: "short", day: "numeric" },
+            )}
+            {new Date(session.started_at).toLocaleTimeString(
+              undefined,
+              { hour: "2-digit", minute: "2-digit" },
+            )}
+          </span>
+        </span>
+      {/if}
+      {#if usageStats.hasStats}
+        <span class="meta-group meta-stats">
+          <SessionUsageStats usage={usageStats} />
+        </span>
+      {/if}
+      {#if session.health_grade || session.id}
+        <span class="meta-group meta-ref">
+          {#if session.health_grade}
+            <button
+              class="grade-badge"
+              style:--grade-ink={gradeStyle.text}
+              onclick={() => ui.toggleSignalPanel()}
+              title={m.session_breadcrumb_session_health_and_tool_sequences()}
+              aria-expanded={ui.signalPanelOpen}
+            >
+              {getGradeLabel(session.health_grade)}
+            </button>
+          {/if}
+          {#if session.id}
+            {@const rawId = sessionDisplayId(session.id)}
+            <button
+              class="session-id"
+              title={m.session_breadcrumb_copy_session_id_value({ id: rawId })}
+              onclick={() => copySessionId(rawId, session.id)}
+              aria-label={m.session_breadcrumb_copy_session_id()}
+            >
+              {copiedSessionId === session.id
+                ? m.session_breadcrumb_copied()
+                : rawId.slice(0, 8)}
+            </button>
+          {/if}
+        </span>
+      {/if}
+      {#if !twoRowHeader}
+        <SessionOpenMenu {openers} />
+      {/if}
+      {#if !twoRowHeader}
+        {@render sessionActions()}
+      {/if}
     </span>
   {/if}
 </div>
 <DocbankStatus />
 
 {#if ui.signalPanelOpen && session}
-  <SignalPanel {session} />
-  <ToolSequencesPanel
-    errorTelemetryKind="session"
-    data={toolSequencesData?.session_id === session.id ? toolSequencesData : null}
-    timing={sessionTiming.timing?.session_id === session.id ? sessionTiming.timing : null}
-    sessionId={session.id}
-    loading={toolSequencesLoading}
-    failed={toolSequencesFailed}
-    unavailable={toolSequencesUnavailable}
-    onretry={retryToolSequences}
-  />
+  <SessionSignalPanels {session} />
 {/if}
 
 <style>
@@ -1520,26 +553,98 @@
   .breadcrumb-meta {
     display: flex;
     align-items: center;
-    gap: 6px;
+    gap: var(--space-4);
     margin-left: auto;
     min-width: 0;
     flex-shrink: 1;
   }
 
+  /* The agent name is set in its agent color, the same mix the sidebar
+     uses, so it is the one colored word in the strip. */
   .agent-badge {
-    font-size: 9px;
+    display: inline-flex;
+    align-items: center;
+    font-size: 12px;
     font-weight: 600;
-    padding: 1px 6px;
-    border-radius: 8px;
-    text-transform: uppercase;
-    letter-spacing: 0.03em;
-    color: white;
+    line-height: 16px;
+    color: color-mix(in srgb, var(--agent-ink, var(--text-muted)) 82%, var(--text-primary));
+    white-space: nowrap;
     flex-shrink: 0;
-    background: var(--text-muted);
   }
 
-  .entrypoint-badge {
-    opacity: 0.8;
+  /* The metadata reads in groups: identity (agent and model), start time,
+     usage figures, then the grade and ID chips. Items in a group are only
+     spaced; a muted middot separates groups. */
+  /* A group too wide for the pane wraps its own items; each figure and
+     chip keeps nowrap itself, so the menus inside keep normal wrapping. */
+  .meta-group {
+    display: inline-flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 4px;
+    min-width: 0;
+    max-width: 100%;
+    flex-shrink: 0;
+  }
+
+  .meta-identity {
+    flex-shrink: 1;
+  }
+
+  .meta-identity .agent-badge {
+    margin-right: 2px;
+  }
+
+  .meta-ref {
+    gap: 6px;
+  }
+
+  .meta-group + .meta-group::before {
+    content: "\00b7";
+    width: 6px;
+    text-align: center;
+    font-size: 12px;
+    font-weight: 700;
+    line-height: 16px;
+    color: var(--text-muted);
+    opacity: 0.7;
+  }
+
+  /* A group that starts a wrapped line keeps its separator's space (so the
+     row does not reflow) but hides it and shifts back to the line start by
+     the separator and the group gap. Relative offsets leave layout and
+     fixed-position menus alone. */
+  .meta-group:global([data-wraps])::before {
+    visibility: hidden;
+  }
+
+  .meta-group + .meta-group:global([data-wraps]) {
+    position: relative;
+    left: -10px;
+  }
+
+  /* The strip has one chip style, shared by the health grade and the
+     session ID: an 11px outlined label on no fill. Figures (date, usage,
+     cost, model) are plain muted text, so the title stays the strongest
+     element in the header. */
+  .grade-badge,
+  .session-id {
+    display: inline-flex;
+    align-items: center;
+    padding: 0 5px;
+    font-size: 11px;
+    font-weight: 500;
+    line-height: 16px;
+    background: transparent;
+    border: 1px solid var(--border-default);
+    border-radius: var(--radius-sm);
+    white-space: nowrap;
+    flex-shrink: 0;
+  }
+
+  .grade-badge:hover,
+  .session-id:hover {
+    background: var(--bg-surface-hover);
   }
 
   .summary-badge {
@@ -1592,335 +697,51 @@
     cursor: help;
   }
 
-  .session-time {
-    font-size: 10px;
+  /* Figures: one 12px muted size with tabular numerals and no fill. The
+     side padding only keeps their spacing. SessionUsageStats gives the
+     usage figures the same look. */
+  .session-time,
+  .model-badge {
+    font-size: 12px;
+    font-weight: 400;
     color: var(--text-muted);
     font-variant-numeric: tabular-nums;
+    background: transparent;
+    padding: 0 4px;
     white-space: nowrap;
+  }
+
+  /* A model name is an identifier, not a figure. */
+  .model-badge {
+    font-variant-numeric: normal;
+  }
+
+  .session-time {
     flex-shrink: 0;
   }
 
+  /* The grade keeps its ink so the chip still signals health. */
   .grade-badge {
-    display: inline-flex;
-    align-items: center;
-    padding: 1px 6px;
-    border-radius: 4px;
-    font-size: 11px;
-    font-weight: 700;
-    border: 1px solid;
-    cursor: pointer;
-    line-height: 1.4;
-  }
-
-  .grade-badge:hover {
-    opacity: 0.85;
-  }
-
-  .open-group {
-    position: relative;
-    display: flex;
-    align-items: center;
-    flex-shrink: 0;
-  }
-
-  .resume-btn {
-    display: flex;
-    align-items: center;
-    gap: 4px;
-    font-size: 10px;
-    font-weight: 500;
-    color: var(--text-muted);
-    padding: 1px 8px;
-    border-radius: 4px;
-    background: var(--bg-tertiary);
-    cursor: pointer;
-    white-space: nowrap;
-    flex-shrink: 0;
-    transition: color 0.15s, background 0.15s;
-  }
-
-  .resume-btn:hover {
-    color: var(--text-secondary);
-    background: var(--bg-surface-hover);
-  }
-
-  .resume-btn.has-feedback-success {
-    color: var(--accent-green, #2ea043);
-  }
-
-  .resume-btn.has-feedback-error {
-    color: var(--accent-red, #e55);
-  }
-
-  .open-menu {
-    position: absolute;
-    top: 100%;
-    right: 0;
-    margin-top: 4px;
-    background: var(--bg-primary);
-    border: 1px solid var(--border-default);
-    border-radius: 8px;
-    padding: 4px;
-    min-width: 200px;
-    z-index: var(--z-popover);
-    box-shadow: var(--shadow-lg);
-  }
-
-  .open-menu-item {
-    display: flex;
-    align-items: center;
-    gap: var(--space-4);
-    width: 100%;
-    padding: 6px 10px;
-    font-size: 13px;
-    color: var(--text-primary);
-    text-decoration: none;
-    border-radius: 5px;
-    cursor: pointer;
-    transition: background 0.1s;
-  }
-
-  .open-menu-item:hover {
-    background: var(--bg-surface-hover);
-  }
-
-  .open-menu-num {
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    width: 18px;
-    font-size: 11px;
-    font-weight: 500;
-    color: var(--text-muted);
-    flex-shrink: 0;
-  }
-
-  .open-menu-name {
-    flex: 1;
-    font-weight: 500;
-  }
-
-  .open-menu-divider {
-    height: 1px;
-    background: var(--border-muted);
-    margin: 4px 0;
-  }
-
-  .open-menu-section {
-    padding: 4px 10px 2px;
-    font-size: 10px;
     font-weight: 600;
-    color: var(--text-muted);
-    text-transform: uppercase;
-    letter-spacing: 0.04em;
+    color: color-mix(in srgb, var(--grade-ink) 62%, var(--text-primary));
+    cursor: pointer;
+  }
+
+  /* The grade inks are dark, so dark mode needs a larger primary share
+     for the 11px label to stay above 4.5:1 on the hover fill. */
+  :global(:root.dark) .grade-badge {
+    color: color-mix(in srgb, var(--grade-ink) 50%, var(--text-primary));
   }
 
   .session-id {
-    font-size: 10px;
-    font-family: "SF Mono", "Menlo", "Consolas", monospace;
+    font-family: var(--font-mono);
     color: var(--text-muted);
     cursor: pointer;
-    padding: 1px 5px;
-    border-radius: 4px;
-    background: var(--bg-tertiary);
     transition: color 0.15s, background 0.15s;
-    white-space: nowrap;
-    flex-shrink: 0;
   }
 
   .session-id:hover {
     color: var(--text-secondary);
-    background: var(--bg-surface-hover);
-  }
-
-  .token-badge {
-    font-size: 10px;
-    font-variant-numeric: tabular-nums;
-    color: var(--text-muted);
-    padding: 1px 5px;
-    border-radius: 4px;
-    background: var(--bg-tertiary);
-    white-space: nowrap;
-    flex-shrink: 0;
-  }
-
-  .token-badge--mobile {
-    display: none;
-    white-space: nowrap;
-  }
-
-  .cost-badge {
-    font-size: 10px;
-    font-variant-numeric: tabular-nums;
-    color: var(--text-muted);
-    padding: 1px 5px;
-    border-radius: 4px;
-    background: var(--bg-tertiary);
-    white-space: nowrap;
-    flex-shrink: 0;
-  }
-
-  .usage-breakdown,
-  .plan-usage {
-    position: relative;
-    flex-shrink: 0;
-  }
-
-  .plan-usage-trigger {
-    display: inline-flex;
-    align-items: center;
-    gap: 4px;
-  }
-
-  .plan-usage-trigger--empty {
-    font-style: italic;
-  }
-
-  .plan-usage-menu {
-    width: min(420px, calc(100vw - 24px));
-    max-height: 360px;
-    padding: 8px 10px;
-    display: flex;
-    flex-direction: column;
-    gap: 6px;
-    font-size: 11px;
-    color: var(--text-secondary);
-  }
-
-  .plan-usage-headline {
-    font-weight: 600;
-    color: var(--text-primary);
-  }
-
-  .plan-usage-root {
-    color: var(--accent-blue);
-    text-decoration: none;
-  }
-
-  .plan-usage-root:hover {
-    text-decoration: underline;
-  }
-
-  .plan-usage-stale {
-    color: var(--accent-amber);
-  }
-
-  .plan-usage-totals {
-    margin: 0;
-    padding: 0;
-    list-style: none;
-    font-variant-numeric: tabular-nums;
-  }
-
-  .plan-usage-menu :global(.plan-usage-groups) {
-    flex: none;
-    border: 1px solid var(--border-muted);
-    border-radius: 4px;
-  }
-
-  .plan-usage-num {
-    text-align: right;
-    font-variant-numeric: tabular-nums;
-    white-space: nowrap;
-  }
-
-  .plan-usage-note,
-  .plan-usage-capture {
-    margin: 0;
-    color: var(--text-muted);
-    line-height: 1.4;
-  }
-
-  .plan-usage-capture {
-    padding-top: 6px;
-    border-top: 1px solid var(--border-muted);
-  }
-
-  .usage-breakdown-trigger {
-    list-style: none;
-    font-size: 10px;
-    font-variant-numeric: tabular-nums;
-    color: var(--text-muted);
-    padding: 1px 5px;
-    border-radius: 4px;
-    background: var(--bg-tertiary);
-    white-space: nowrap;
-    cursor: pointer;
-  }
-
-  .usage-breakdown-trigger::-webkit-details-marker {
-    display: none;
-  }
-
-  .usage-breakdown[open] .usage-breakdown-trigger,
-  .usage-breakdown-trigger:hover {
-    color: var(--text-secondary);
-    background: var(--bg-surface-hover);
-  }
-
-  .usage-breakdown-menu {
-    position: absolute;
-    top: 100%;
-    right: 0;
-    margin-top: 4px;
-    width: min(460px, calc(100vw - 24px));
-    max-height: 260px;
-    overflow: auto;
-    padding: 6px;
-    border: 1px solid var(--border-default);
-    border-radius: 6px;
-    background: var(--bg-primary);
-    box-shadow: var(--shadow-lg);
-    z-index: var(--z-popover);
-  }
-
-  .usage-breakdown-status {
-    padding: 5px 6px;
-    font-size: 11px;
-    color: var(--text-muted);
-  }
-
-  .usage-breakdown-row {
-    display: grid;
-    grid-template-columns: minmax(62px, 0.85fr) minmax(90px, 1fr) max-content max-content;
-    gap: 8px;
-    align-items: center;
-    padding: 5px 6px;
-    border-radius: 4px;
-    font-size: 11px;
-    line-height: 1.25;
-    color: var(--text-secondary);
-  }
-
-  .usage-breakdown-row:hover {
-    background: var(--bg-surface-hover);
-  }
-
-  .usage-breakdown-label,
-  .usage-breakdown-model {
-    min-width: 0;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-  }
-
-  .usage-breakdown-label {
-    color: var(--text-primary);
-    font-weight: 500;
-  }
-
-  .usage-breakdown-model {
-    color: var(--text-muted);
-  }
-
-  .usage-breakdown-tokens,
-  .usage-breakdown-cost {
-    font-variant-numeric: tabular-nums;
-    white-space: nowrap;
-  }
-
-  .usage-breakdown-cost {
-    color: var(--text-muted);
   }
 
   .model-badge {
@@ -1928,12 +749,6 @@
     align-items: center;
     min-width: 0;
     max-width: min(280px, 28vw);
-    font-size: 10px;
-    color: var(--text-muted);
-    padding: 1px 5px;
-    border-radius: 4px;
-    background: var(--bg-tertiary);
-    white-space: nowrap;
     overflow: hidden;
     flex-shrink: 1;
   }
@@ -1960,122 +775,47 @@
     gap: 2px;
   }
 
-  .link-btn {
+  /* The session action buttons share one spec with the transcript
+     controls beside them (TranscriptControls .control-btn): a 28px ghost
+     square, a 14px icon in secondary ink, primary ink on hover, and the
+     shared neutral selected fill when their panel is open. */
+  .link-btn,
+  .minimap-btn,
+  .insight-btn,
+  .find-btn,
+  .actions-btn {
     display: flex;
     align-items: center;
     justify-content: center;
-    width: 22px;
-    height: 22px;
+    width: 28px;
+    height: 28px;
     border: none;
     border-radius: var(--radius-sm, 4px);
     background: transparent;
-    color: var(--text-muted);
+    color: var(--text-secondary);
     cursor: pointer;
-    transition: background 0.15s, color 0.15s;
+    transition: background 0.12s, color 0.12s;
     flex-shrink: 0;
   }
 
-  .link-btn:hover {
+  .link-btn:hover,
+  .minimap-btn:hover,
+  .insight-btn:hover,
+  .find-btn:hover,
+  .actions-btn:hover {
     background: var(--bg-surface-hover);
-    color: var(--accent-blue);
+    color: var(--text-primary);
   }
 
   .link-btn--copied {
     color: var(--accent-green, #2ea043);
   }
 
-  .minimap-btn {
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    width: 22px;
-    height: 22px;
-    border: none;
-    border-radius: var(--radius-sm, 4px);
-    background: transparent;
-    color: var(--text-muted);
-    cursor: pointer;
-    transition: background 0.15s, color 0.15s;
-    flex-shrink: 0;
-  }
-
-  .minimap-btn:hover {
-    background: var(--bg-surface-hover);
-    color: var(--accent-blue);
-  }
-
-  .minimap-btn--active {
-    color: var(--accent-blue);
-    background: color-mix(
-      in srgb,
-      var(--accent-blue) 12%,
-      transparent
-    );
-  }
-
-  .find-btn {
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    width: 22px;
-    height: 22px;
-    border: none;
-    border-radius: var(--radius-sm, 4px);
-    background: transparent;
-    color: var(--text-muted);
-    cursor: pointer;
-    transition: background 0.15s, color 0.15s;
-    flex-shrink: 0;
-  }
-
-  .find-btn:hover {
-    background: var(--bg-surface-hover);
-    color: var(--accent-blue);
-  }
-
-  .insight-btn {
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    width: 22px;
-    height: 22px;
-    border: none;
-    border-radius: var(--radius-sm, 4px);
-    background: transparent;
-    color: var(--text-muted);
-    cursor: pointer;
-    transition: background 0.15s, color 0.15s;
-    flex-shrink: 0;
-  }
-
-  .insight-btn:hover {
-    background: var(--bg-surface-hover);
-    color: var(--accent-blue);
-  }
-
+  .minimap-btn--active,
   .find-btn--active {
-    color: var(--accent-blue);
-    background: color-mix(in srgb, var(--accent-blue) 12%, transparent);
-  }
-
-  .actions-btn {
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    width: 22px;
-    height: 22px;
-    border: none;
-    border-radius: var(--radius-sm, 4px);
-    background: transparent;
-    color: var(--text-muted);
-    cursor: pointer;
-    transition: background 0.15s, color 0.15s;
-    flex-shrink: 0;
-  }
-
-  .actions-btn:hover {
-    background: var(--bg-surface-hover);
-    color: var(--text-secondary);
+    background: var(--selected-bg);
+    box-shadow: var(--selected-edge);
+    color: var(--text-primary);
   }
 
   .actions-menu {
@@ -2121,64 +861,129 @@
     );
   }
 
+  /* Above phone width the strip becomes two lines: the session title with
+     its actions, then the session metadata. The markup already lists the
+     items row by row (see twoRowHeader); the meta wrapper dissolves so its
+     children wrap as header items, and .row-break ends the first row.
+     Phones keep the single scrolling strip. */
+  /* With a mouse, header controls stay 26px tall so the two-line header
+     stays close to a single toolbar's height. Touch keeps 44px targets. */
+  @media (min-width: 641px) and (pointer: fine) {
+    .session-breadcrumb > :global(.transcript-controls) {
+      --kit-control-height: 26px;
+    }
+
+    .session-breadcrumb > :global(.transcript-controls .control-btn) {
+      height: 26px;
+    }
+  }
+
+  @media (min-width: 641px) {
+    .session-breadcrumb {
+      flex-wrap: wrap;
+      height: auto;
+      min-height: 0;
+      padding-top: 3px;
+      padding-bottom: 3px;
+      row-gap: 0;
+      align-content: center;
+    }
+
+    /* The metadata row's figures share the chips' 16px line, so the
+       second row costs 18px instead of 20px. */
+    .model-badge,
+    .session-time {
+      line-height: 16px;
+    }
+
+    .row-break {
+      flex-basis: 100%;
+      height: 0;
+    }
+
+    /* In a very narrow pane the buttons wrap below the View trigger rather
+       than run past the pane's clipped edge. */
+    .session-breadcrumb > :global(.transcript-controls) {
+      flex-wrap: wrap;
+      flex-shrink: 1;
+      min-width: 0;
+      max-width: 100%;
+    }
+
+    .breadcrumb-meta {
+      display: contents;
+    }
+
+    .breadcrumb-link,
+    .breadcrumb-sep {
+      font-size: 12px;
+    }
+
+    .breadcrumb-current {
+      font-size: 15px;
+      font-weight: 600;
+      letter-spacing: -0.01em;
+      line-height: 22px;
+    }
+
+    .session-breadcrumb > :global(.transcript-controls) {
+      margin-left: auto;
+      margin-right: 6px;
+    }
+
+    /* The metadata reads as one packed line: the ID follows the date
+       cluster after the usual divider instead of jumping to the far edge
+       across an empty gap. */
+  }
+
+  /* At desktop widths both header rows sit on the transcript's centered
+     reading column (MessageList .virtual-row), so the title shares the
+     first card's left edge and the stats end at its right edge. The bottom
+     rule still spans the pane. A pane narrower than the column keeps the
+     usual 14px inset. The transcript's scrollbar (MessageList publishes
+     its width) narrows the area the column centers in, so it is left out
+     of the centering and added back on the right. */
+  /* kit-ui-check-ignore: content breakpoint where the title, transcript controls, and actions stop fitting one row; the script's wideQuery uses the same width */
+  @media (min-width: 1100px) {
+    .session-breadcrumb {
+      --column-inset: calc(
+        (100% - var(--transcript-scrollbar, 0px) - var(--reading-column)) / 2
+      );
+      padding-left: max(14px, var(--column-inset));
+      padding-right: max(14px, calc(var(--column-inset) + var(--transcript-scrollbar, 0px)));
+    }
+  }
+
+  /* Below 1100px the title, transcript controls, and actions do not fit on
+     one row. The title and actions keep the first row, and the transcript
+     controls start the second, ahead of the metadata. */
+  /* kit-ui-check-ignore: content breakpoint where the title, transcript controls, and actions stop fitting one row; the script's wideQuery uses the same width */
+  @media (min-width: 641px) and (max-width: 1099px) {
+    .session-breadcrumb > :global(.open-group) {
+      margin-left: auto;
+    }
+
+    .session-breadcrumb > :global(.transcript-controls) {
+      margin-left: 0;
+      margin-right: 8px;
+    }
+  }
+
   @media (max-width: 900px) {
     .breadcrumb-meta {
       gap: 2px;
     }
 
-    .session-time {
-      display: none;
-    }
-
-    .token-badge--desktop {
-      display: none;
-    }
-
-    .token-badge--mobile {
-      display: inline-flex;
-      font-size: 9px;
-      padding: 1px 4px;
-      max-width: 110px;
-      overflow: hidden;
-      text-overflow: ellipsis;
-    }
-
-    .usage-breakdown-trigger {
-      font-size: 9px;
-      padding: 1px 4px;
-    }
-
-    .usage-breakdown-menu {
-      right: -54px;
-      width: min(360px, calc(100vw - 16px));
-    }
-
-    .usage-breakdown-row {
-      grid-template-columns: minmax(56px, 0.8fr) minmax(68px, 1fr) max-content;
-      gap: 6px;
-      font-size: 10px;
-    }
-
-    .usage-breakdown-cost {
+    /* Hide whole groups whose items are all hidden at this width, so no
+       separator is left without a group. */
+    .meta-time,
+    .meta-ref:not(:has(.grade-badge)),
+    .meta-stats:not(:has(:global(.token-badge), :global(.cost-badge), :global(.plan-usage))) {
       display: none;
     }
 
     .session-id {
       display: none;
-    }
-
-    .usage-breakdown {
-      display: none;
-    }
-
-    /* The meta row scrolls sideways here, so a menu anchored to its
-       trigger can open past the screen edge; span the viewport instead. */
-    .plan-usage-menu {
-      position: fixed;
-      top: auto;
-      left: 8px;
-      right: 8px;
-      width: auto;
     }
   }
 
@@ -2192,7 +997,20 @@
       gap: 1px;
     }
 
-    .breadcrumb-meta > .agent-badge {
+    .meta-identity > .agent-badge {
+      display: none;
+    }
+
+    /* The phone header is one fixed-height strip that scrolls sideways,
+       so its groups stay on one line. */
+    .meta-group {
+      flex-wrap: nowrap;
+      max-width: none;
+    }
+
+    /* The phone strip scrolls sideways and may start with an empty
+       identity group, so it drops the separators. */
+    .meta-group + .meta-group::before {
       display: none;
     }
 

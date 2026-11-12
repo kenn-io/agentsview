@@ -17,6 +17,7 @@ import (
 	"sort"
 	"strings"
 	stdsync "sync"
+	"sync/atomic"
 	"syscall"
 	"testing"
 	"time"
@@ -375,6 +376,11 @@ func runServe(ctx context.Context, cfg config.Config, opts serveOptions, restart
 		emitter = extractTeeEmitter{primary: emitter, scheduler: extractSched}
 	}
 
+	imageTextManager, err := setupImageText(ctx, cfg, database)
+	if err != nil {
+		fatal("setting up image text: %v", err)
+	}
+
 	var ingestion *daemonIngestion
 	var frictionReviews *frictionReviewer
 	if cfg.Friction.Enabled {
@@ -551,6 +557,7 @@ func runServe(ctx context.Context, cfg config.Config, opts serveOptions, restart
 		defer engine.Close()
 	}
 
+	var identityBackfillFailure atomic.Pointer[string]
 	if !archiveOnly {
 		identityBackfillEngine := engine
 		if identityBackfillEngine == nil {
@@ -565,6 +572,8 @@ func runServe(ctx context.Context, cfg config.Config, opts serveOptions, restart
 				return identityBackfillEngine.BackfillProjectIdentitySnapshots(ctx)
 			})
 			if err != nil && ctx.Err() == nil {
+				message := err.Error()
+				identityBackfillFailure.Store(&message)
 				log.Printf("project identity backfill: %v", err)
 			}
 		})
@@ -587,11 +596,11 @@ func runServe(ctx context.Context, cfg config.Config, opts serveOptions, restart
 	codexCloudSync := newCodexCloudSyncer(cfg, config.LoadReadOnly, codexCloudStatus)
 	codexCloudTrigger := &codexCloudTrigger{}
 	codexCloudMonitor := newCodexCloudMonitor(codexCloudSync, codexCloudTrigger, idleTracker)
-	scheduler := poller.Start(ctx,
-		pricingRefreshJob(database, pricingRefreshRunner),
-		codexCloudSyncJob(codexCloudSync, idleTracker),
-		codexCloudLiveJob(codexCloudMonitor, idleTracker),
-	)
+	jobs := []poller.Job{pricingRefreshJob(database, pricingRefreshRunner), codexCloudSyncJob(codexCloudSync, idleTracker), codexCloudLiveJob(codexCloudMonitor, idleTracker)}
+	if imageTextManager != nil {
+		jobs = append(jobs, imageTextJob(imageTextManager, idleTracker))
+	}
+	scheduler := poller.Start(ctx, jobs...)
 	codexCloudTrigger.scheduler.Store(scheduler)
 	defer func() {
 		stop()
@@ -622,6 +631,12 @@ func runServe(ctx context.Context, cfg config.Config, opts serveOptions, restart
 		server.WithBaseContext(ctx),
 		server.WithBroadcaster(broadcaster),
 		server.WithIdleTracker(idleTracker),
+		server.WithProjectIdentityBackfillFailure(func() string {
+			if message := identityBackfillFailure.Load(); message != nil {
+				return *message
+			}
+			return ""
+		}),
 		server.WithDaemonPersistence(func() error { return publishPersistentDaemon(cfg.DataDir) }),
 		server.WithHTTPRemoteCleanupRegistry(httpRemoteCleanupRegistry),
 		server.WithPprof(opts.Pprof),
@@ -2430,6 +2445,9 @@ func startFileWatcher(
 ) {
 	t := time.Now()
 	roots, unwatchedDirs, symlinkGatedDirs, persistentDirAgents := collectWatchRoots(cfg)
+	if engine != nil && options.OnNativeEventsLost == nil {
+		options.OnNativeEventsLost = engine.InvalidateEventDependentTrust
+	}
 	watcher, err := sync.NewWatcherWithCallback(
 		watcherBatchDelay,
 		cfg.SyncInterval,

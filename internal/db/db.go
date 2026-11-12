@@ -668,11 +668,28 @@ CREATE INDEX IF NOT EXISTS idx_provider_freshness_updated_at
 // the response's web-search total. Re-parse Claude-format sources in place;
 // source and session identities are unchanged.)
 // (172: import Cursor IDE chunked conversation headers.)
-// (173: count OpenCode-family reasoning tokens in output when the writer
+// (173: prevent older binaries from writing archives with an image-text index.)
+// (174: keep Codex reasoning summaries as thinking rows and compaction records
+// as compact boundaries, dedupe token_count by its whole info object, and stop
+// Codex Cloud compaction rows from repeating the divider label. Re-parse
+// Codex, TraeX, Augure Code, Open Interpreter, and Codex Cloud sources in
+// place; source and session identities are unchanged.)
+// (175: keep the token usage of assistant records that have no text or tool
+// call as hidden usage-only rows. Re-parse OpenCode-format, OpenClaw, QClaw,
+// Forge, Cline, Codex-format, and Gemini sources in place; source and session
+// identities are unchanged.)
+// (176: keep the cost Pi, OpenClaw, Shelley, fx, and OpenCode-format agents
+// record for their requests, as a recorded cost.)
+// (177: keep Claude Code's cost-state session total.)
+// (178: rebuild Grok history before each compaction from updates.jsonl, mark
+// compactions as compact boundaries, and render Grok tool calls in assistant
+// rows. Re-parse Grok sources in place; source and session identities are
+// unchanged.)
+// (179: count OpenCode-family reasoning tokens in output when the writer
 // stored output without them, and record reasoning_tokens. Re-parse OpenCode,
 // Kilo, MiMo Code and ICodeMate sources in place; source and session
 // identities are unchanged.)
-const dataVersion = 173
+const dataVersion = 179
 
 const archiveOnlyVersionBase = 1 << 20
 
@@ -773,7 +790,8 @@ END;
 const schemaFTS = `
 CREATE VIEW IF NOT EXISTS message_search_content AS
 SELECT id, session_id, content AS rendered,
-    COALESCE(dialogue_text, content) AS content FROM messages;
+    COALESCE(dialogue_text, content) AS content FROM messages
+UNION ALL SELECT id, NULL, text, '' FROM image_text_cache;
 CREATE VIRTUAL TABLE IF NOT EXISTS messages_fts USING fts5(
     content, rendered,
     content='message_search_content',
@@ -784,7 +802,18 @@ CREATE VIRTUAL TABLE IF NOT EXISTS messages_fts USING fts5(
 CREATE TRIGGER IF NOT EXISTS messages_ai AFTER INSERT ON messages BEGIN
     INSERT INTO messages_fts(rowid, rendered, content) VALUES (new.id, new.content, COALESCE(new.dialogue_text, new.content));
 END;
-` + messagesADTriggerDDL + messagesAUTriggerDDL
+` + messagesADTriggerDDL + messagesAUTriggerDDL + `
+CREATE TRIGGER IF NOT EXISTS image_text_ai AFTER INSERT ON image_text_cache BEGIN
+    INSERT INTO messages_fts(rowid, rendered, content) VALUES(new.id, new.text, '');
+END;
+CREATE TRIGGER IF NOT EXISTS image_text_ad AFTER DELETE ON image_text_cache BEGIN
+    INSERT INTO messages_fts(messages_fts, rowid, rendered, content) VALUES('delete', old.id, old.text, '');
+END;
+CREATE TRIGGER IF NOT EXISTS image_text_au AFTER UPDATE ON image_text_cache BEGIN
+    INSERT INTO messages_fts(messages_fts, rowid, rendered, content) VALUES('delete', old.id, old.text, '');
+    INSERT INTO messages_fts(rowid, rendered, content) VALUES(new.id, new.text, '');
+END;
+`
 
 const schemaCJKFTS = `
 CREATE VIRTUAL TABLE IF NOT EXISTS messages_cjk_fts USING fts5(
@@ -796,6 +825,19 @@ CREATE VIRTUAL TABLE IF NOT EXISTS messages_cjk_fts USING fts5(
 `
 
 const schemaCJKFTSTriggers = `
+CREATE TEMP TRIGGER IF NOT EXISTS image_text_cjk_ai AFTER INSERT ON main.image_text_cache
+WHEN ` + cjkFTSRuntimeMatchesSQL + ` BEGIN
+    INSERT INTO messages_cjk_fts(rowid, rendered, content) VALUES(new.id, new.text, '');
+END;
+CREATE TEMP TRIGGER IF NOT EXISTS image_text_cjk_ad AFTER DELETE ON main.image_text_cache
+WHEN ` + cjkFTSRuntimeMatchesSQL + ` BEGIN
+    INSERT INTO messages_cjk_fts(messages_cjk_fts, rowid, rendered, content) VALUES('delete', old.id, old.text, '');
+END;
+CREATE TEMP TRIGGER IF NOT EXISTS image_text_cjk_au AFTER UPDATE ON main.image_text_cache
+WHEN ` + cjkFTSRuntimeMatchesSQL + ` BEGIN
+    INSERT INTO messages_cjk_fts(messages_cjk_fts, rowid, rendered, content) VALUES('delete', old.id, old.text, '');
+    INSERT INTO messages_cjk_fts(rowid, rendered, content) VALUES(new.id, new.text, '');
+END;
 CREATE TEMP TRIGGER IF NOT EXISTS messages_cjk_ai
 AFTER INSERT ON main.messages
 WHEN ` + cjkFTSRuntimeMatchesSQL + ` BEGIN
@@ -900,6 +942,8 @@ type DB struct {
 	usageCache           *usageCacheManager
 	activityMemo         activityCandidateMemo
 	activityKept         kept.Memo[activityKept]
+	analyticsKept        kept.Reads[any]
+	usageKept            kept.Memo[DailyUsageResult]
 	sessionStatsFacts    *sessionStatsFactsMemo
 	frustrationMemo      FrustrationMarkerMemo
 	usageBackfillMu      sync.Mutex
@@ -1233,6 +1277,7 @@ func (db *DB) SetCustomPricing(p map[string]config.CustomModelRate) {
 	db.customPricing = p
 	db.effectivePricing = nil
 	db.invalidateSessionStatsFacts()
+	db.usageKept.DeleteSlots(func(string) bool { return true })
 }
 
 // SetEffectivePricing installs in-memory pricing rows with explicit provenance
@@ -1247,6 +1292,7 @@ func (db *DB) SetEffectivePricing(
 		db.effectivePricing[model] = rates
 	}
 	db.invalidateSessionStatsFacts()
+	db.usageKept.DeleteSlots(func(string) bool { return true })
 }
 
 // SetEmptyCatalogPricing installs in-memory rates that are used only when the
@@ -1260,6 +1306,7 @@ func (db *DB) SetEmptyCatalogPricing(
 		db.emptyCatalogPricing[model] = rates
 	}
 	db.invalidateSessionStatsFacts()
+	db.usageKept.DeleteSlots(func(string) bool { return true })
 }
 
 // SetCursorSecret updates the secret key used for cursor signing.
@@ -2014,6 +2061,7 @@ func OpenReadOnly(ctx context.Context, path string) (*DB, error) {
 	db := &DB{
 		path: path, readOnly: true,
 		usageCache: newUsageCacheManager(path),
+		usageKept:  newDailyUsageMemo(),
 	}
 	db.dataStale.Store(dataStale)
 	db.usageCache.attachArchive(db)
@@ -2036,8 +2084,11 @@ var readOnlyRequiredTables = []string{
 	"stats",
 	"usage_events",
 	"session_plan_usage",
+	"session_usage_totals",
 	"tool_calls",
 	"tool_result_events",
+	"image_text_cache",
+	"image_text_occurrences",
 	"insights",
 	"pinned_messages",
 	"starred_sessions",
@@ -2306,7 +2357,7 @@ func probeDatabaseConn(ctx context.Context,
 	if schema {
 		return true, false, false, nil
 	}
-	fullRebuild = archiveOnly || version < dataVersion && len(ScopedDataVersionProviders(version, dataVersion)) == 0
+	fullRebuild = archiveOnly || version < fullRebuildDataVersion()
 	// Archive-only archives cannot reparse sources, so any stale version
 	// needs their preservation rebuild.
 	countScoped := includeScoped || archiveOnly
@@ -4956,6 +5007,7 @@ func openAndInit(
 
 	db := &DB{
 		path: path, usageCache: newUsageCacheManager(path),
+		usageKept:         newDailyUsageMemo(),
 		activityKept:      newActivityKeptMemo(),
 		sessionStatsFacts: newSessionStatsFactsMemo(),
 	}
@@ -5138,6 +5190,8 @@ func (db *DB) DropFTS(ctx context.Context) error {
 	db.mu.Lock()
 	defer db.mu.Unlock()
 	stmts := []string{
+		"DROP TRIGGER IF EXISTS image_text_cjk_ai", "DROP TRIGGER IF EXISTS image_text_cjk_ad", "DROP TRIGGER IF EXISTS image_text_cjk_au",
+		"DROP TRIGGER IF EXISTS image_text_ai", "DROP TRIGGER IF EXISTS image_text_ad", "DROP TRIGGER IF EXISTS image_text_au",
 		"DROP TRIGGER IF EXISTS messages_cjk_ai",
 		"DROP TRIGGER IF EXISTS messages_cjk_ad",
 		"DROP TRIGGER IF EXISTS messages_cjk_au",
@@ -5787,6 +5841,8 @@ func (db *DB) reopenLockedWithBarrier(keepWriterBarrier bool) error {
 	oldWriter := db.writer.Swap(writer)
 	var oldReader *sql.DB
 	db.activityKept.DeleteSlots(func(string) bool { return true })
+	db.analyticsKept.Clear()
+	db.usageKept.DeleteSlots(func(string) bool { return true })
 	db.activityMemo.swap(func() {
 		db.frustrationMemo.Swap(func() { db.sessionStatsFacts.Swap(func() { oldReader = db.reader.Swap(reader) }) })
 	})

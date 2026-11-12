@@ -11,6 +11,23 @@ test.describe("Spanish from the browser language", () => {
     await expectActiveNavTab(page, "Sesiones");
     await expect(page.locator(".session-item").first()).toBeVisible();
   });
+
+  test("keeps the active destination during navigation reflow", async ({ page }) => {
+    await page.setViewportSize({ width: 2800, height: 900 });
+    await page.goto("/");
+    await expect(page.locator(".kit-top-bar__tabs")).toBeVisible();
+
+    for (const width of [900, 2800, 900, 2800, 900, 2800]) {
+      await Promise.all([
+        expectActiveNavTab(page, "Sesiones"),
+        page.setViewportSize({ width, height: 900 }),
+      ]);
+      await expect(
+        page.locator(width === 900 ? ".kit-top-bar__nav-select" : ".kit-top-bar__tabs"),
+      ).toBeVisible();
+      await expectActiveNavTab(page, "Sesiones");
+    }
+  });
 });
 
 test.describe("Spanish from Settings", () => {

@@ -153,6 +153,7 @@ func claudeParseFile(
 		gitBranch        string
 		displayName      string
 		renameSeen       bool
+		costState        *ParsedSessionTotal
 		compatibleName   string
 		compatibleAI     string
 		compatibleCustom string
@@ -360,6 +361,16 @@ func claudeParseFile(
 			continue
 		}
 
+		if entryType == "cost-state" {
+			// Keep the last snapshot with usage: Claude Code can follow a
+			// total with an empty snapshot, which the incremental parser
+			// ignores too.
+			if total, ok := parseClaudeCostState(lineBytes); ok &&
+				claudeCostStateHasUsage(total) {
+				costState = total
+			}
+			continue
+		}
 		if entryType != "user" && entryType != "assistant" {
 			continue
 		}
@@ -494,7 +505,7 @@ func claudeParseFile(
 		entrypoint:      entrypoint,
 		sessionKind:     sessionKind,
 		prLinks:         prLinks.result(),
-		malformedLines:  malformedLines,
+		malformedLines:  malformedLines + lr.SkippedLines(),
 		isTruncated:     isTruncated,
 	}
 
@@ -587,6 +598,11 @@ func claudeParseFile(
 			lastLineFailed,
 		)
 		results[i].Session.claudeRenameSeen = renameSeen
+		// The last cost-state record totals the process that wrote this
+		// file, so it belongs to the file's own session, not its forks.
+		if results[i].Session.ID == sessionID && costState != nil {
+			results[i].Session.SessionTotal = costState
+		}
 	}
 
 	// Drop content-free /usage probe sessions (e.g. CodexBar's
@@ -913,6 +929,7 @@ func claudeParseSessionFrom(
 		sawSessionIdentityEdit bool
 		appendedCustomTitle    string
 		sawNewPRLink           bool
+		sawCostState           bool
 	)
 
 	consumed, err := readJSONLFrom(
@@ -932,6 +949,12 @@ func claudeParseSessionFrom(
 			entryType := gjson.Get(line, "type").Str
 			if claudeSessionIdentityUpdate(line, stored) {
 				sawSessionIdentityEdit = true
+			}
+			if entryType == "cost-state" {
+				if total, ok := parseClaudeCostState([]byte(line)); ok &&
+					claudeCostStateHasUsage(total) {
+					sawCostState = true
+				}
 			}
 			if entryType == "ai-title" &&
 				strings.TrimSpace(gjson.Get(line, "aiTitle").Str) != "" {
@@ -1074,6 +1097,11 @@ func claudeParseSessionFrom(
 		return nil, nil, time.Time{}, 0, ErrClaudeIncrementalNeedsFullParse
 	}
 	if sawNewPRLink {
+		return nil, nil, time.Time{}, 0, ErrClaudeIncrementalNeedsFullParse
+	}
+	// A new cost-state total replaces the stored session total, which only
+	// the full parse writes.
+	if sawCostState {
 		return nil, nil, time.Time{}, 0, ErrClaudeIncrementalNeedsFullParse
 	}
 	// Queue/progress events can repair subagent linkage on an already-stored

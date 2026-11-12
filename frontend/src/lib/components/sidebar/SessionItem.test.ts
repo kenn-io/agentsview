@@ -68,7 +68,7 @@ describe("SessionItem identity", () => {
     expect(document.querySelector(".session-name")?.textContent).toBe("Loaded title");
   });
 
-  it("renders the session label and entrypoint badge", () => {
+  it("renders the session label and puts the entrypoint in the agent tooltip", () => {
     sessions.machineLabels = { "installation-a": "Workstation A" };
     mountSession({
       id: "custom-label",
@@ -80,14 +80,46 @@ describe("SessionItem identity", () => {
 
     const agentTag = document.querySelector<HTMLElement>(".agent-tag");
     expect(agentTag?.textContent).toBe("Claude Triage");
-    expect(agentTag?.title).toBe("Claude Triage");
-    expect(document.querySelector(".entrypoint-tag")?.textContent).toBe("sdk-cli");
+    expect(agentTag?.title).toBe("Claude Triage · sdk-cli");
+    // The entrypoint is detail: it no longer takes room on the row.
+    expect(document.querySelector(".entrypoint-tag")).toBeNull();
     expect(document.querySelector<HTMLElement>(".session-name")?.title).toBe(
       "A session with a long title",
     );
     expect(document.querySelector<HTMLElement>(".session-project")?.title).toBe("project");
-    expect(document.querySelector<HTMLElement>(".entrypoint-tag")?.title).toBe("sdk-cli");
     expect(document.querySelector(".machine-tag")?.textContent).toBe("Workstation A");
+  });
+
+  it("explains the message count on hover", () => {
+    mountSession({ id: "count", user_message_count: 1200 });
+    const count = document.querySelector<HTMLElement>(".session-count");
+    expect(count?.textContent).toBe("1.2K");
+    expect(count?.title).toBe("1.2K user messages");
+  });
+
+  it("removes the star while the title is being renamed", () => {
+    mountSession({ id: "rename-star" });
+    expect(document.querySelector(".star-btn")).not.toBeNull();
+
+    document
+      .querySelector<HTMLElement>(".session-name")!
+      .dispatchEvent(new MouseEvent("dblclick", { bubbles: true, cancelable: true }));
+    flushSync();
+
+    const input = document.querySelector<HTMLInputElement>(".rename-input");
+    expect(input).not.toBeNull();
+    expect(document.querySelector(".star-btn")).toBeNull();
+
+    input!.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
+    flushSync();
+
+    expect(document.querySelector(".rename-input")).toBeNull();
+    expect(document.querySelector(".star-btn")).not.toBeNull();
+  });
+
+  it("uses the singular for one message", () => {
+    mountSession({ id: "count-one", user_message_count: 1 });
+    expect(document.querySelector<HTMLElement>(".session-count")?.title).toBe("1 user message");
   });
 
   it("uses the registry label when no override exists", () => {

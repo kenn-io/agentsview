@@ -85,6 +85,25 @@ runner noise and fail loudly:
   (`internal/sync/watcher_test.go`) — watcher callbacks remain throttled and
   serialized, sustained writes make progress, event intake continues during a
   sync, and an event storm becomes a bounded full rescan.
+- `TestDarwinWatcherNativeDropReconcilesOnlyThatRoot`
+  (`internal/sync/watcher_darwin_test.go`, macOS only) — a dropped FSEvents
+  batch, or a storm of them, on one root reconciles only that root. It
+  registers no polling obligation, closes or recreates no stream, and every
+  root keeps delivering native events. Event-dependent trust is revoked before
+  the root is reconciled. `TestDarwinWatcherNativeDropRecoversHiddenRootLoss`
+  covers a drop that hid the root's removal or replacement: only that root
+  moves to polling.
+  `TestNativeDropTrustRevocationReverifiesSameStatOpenCodeStorage` shows the
+  per-root reconciliation re-reads a same-stat rewrite after that revocation.
+- `TestReconcileProviderRootsGroupedYieldsToWaitingSyncBetweenGroups`
+  (`internal/sync/grouped_reconcile_yield_test.go`) and the
+  `TestEngineSyncLock*` tests — every sync waiting on the engine lock when a
+  poll group ends runs before the next group starts, so a long poll pass
+  cannot starve watcher syncs.
+- `TestUnwatchedPollWaitsAfterAPassLongerThanTheInterval`
+  (`cmd/agentsview/poll_coordinator_scope_test.go`) — the unwatched-poll
+  cooldown is at least as long as the previous pass, so polling uses at most
+  about half of wall-clock time.
 - `TestCodexCursorCache`, `TestCodexCursorWarmColdParity`, and the cursor
   boundary tests in `internal/parser` — continuation state stays bounded and
   warm/cold parsing remains equivalent at safe offsets.
@@ -195,6 +214,17 @@ package list, sample count, and per-tier iteration counts for these benchmarks:
 - `BenchmarkVectorMirrorUpsert` — publish document metadata to the vector
   mirror, without embedding generation. Run it in `./internal/vector`, outside
   the default benchmark package set.
+- `BenchmarkCheckpointSourceHead`, `BenchmarkCheckpointAdvanceHead`, and
+  `BenchmarkCheckpointCapture` — read acknowledged raw-source heads, advance
+  them, and reserve/persist capture metadata with staged objects. The capture
+  cases contain one or 100 file entries sharing one object. Their fixtures
+  grow by one generation per iteration, so comparisons use fixed iteration
+  counts. They run in `./internal/rawcheckpoint`.
+- `BenchmarkReplayAdmission` and `BenchmarkSignedRequestDispatch` — durable
+  nonce admission and signed HTTP request verification through handler
+  dispatch. Request creation and signing stay outside the timer; retained
+  nonce counts grow during each sample, so comparisons use fixed iteration
+  counts.
 - `BenchmarkGetStats` — the repeatedly polled sidebar totals over 10k sessions.
   Computes all totals together so a refresh scans filtered sessions once.
 - `BenchmarkArchiveSessionReads` — session metadata, full session details, and
@@ -322,8 +352,7 @@ The detailed architecture and oracle requirements are in
 
 `BenchmarkCodexIncrementalCursor` lives in `internal/parser` and compares cold
 prefix reconstruction with an exact warm cursor. It is outside the local
-comparison target: `BENCH_GATE_PACKAGES` currently contains `./internal/sync`,
-`./internal/db`, `./internal/secrets`, and `./internal/signals`.
+comparison target; the [Makefile](../../Makefile) owns `BENCH_GATE_PACKAGES`.
 
 ### 3. Macro ratio gate (run manually, build tag `macrobench`)
 

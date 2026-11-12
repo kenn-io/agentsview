@@ -2,23 +2,8 @@
   import { usage } from "../../stores/usage.svelte.js";
   import { savingsState } from "../../utils/usageSavings.js";
   import { m } from "../../i18n/index.js";
+  import { formatCount } from "../../utils/format.js";
   import { formatMoney, moneyFromMicrodollars, ZERO_MONEY } from "../../money.js";
-
-  function fmtTokens(v: number): string {
-    if (v >= 1_000_000_000) {
-      const g = Math.floor(v / 100_000_000) / 10;
-      return `${g}B`;
-    }
-    if (v >= 1_000_000) {
-      const m = Math.floor(v / 100_000) / 10;
-      return `${m}M`;
-    }
-    if (v >= 1_000) {
-      const k = Math.floor(v / 100) / 10;
-      return `${k}K`;
-    }
-    return String(v);
-  }
 
   interface Bar {
     label: string;
@@ -88,7 +73,7 @@
             ></div>
           </div>
           <span class="bar-value">
-            {fmtTokens(bar.value)}
+            {formatCount(bar.value)}
           </span>
         </div>
       {/each}
@@ -157,7 +142,7 @@
     flex-shrink: 0;
     min-width: 48px;
     text-align: right;
-    font-size: 10px;
+    font-size: 11px;
     font-family: var(--font-mono);
     color: var(--text-muted);
   }

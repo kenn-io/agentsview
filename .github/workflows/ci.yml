@@ -1,6 +1,7 @@
 name: CI
 
 env:
+  API_VERSION_BASE: HEAD^1
   GOTRACEBACK: all
   # "|" falls back to direct on any proxy error (e.g. HTTP/2 INTERNAL_ERROR), not just 404/410.
   GOPROXY: "https://proxy.golang.org|direct"
@@ -270,14 +271,6 @@ jobs:
         uses: astral-sh/setup-uv@v10.3.3
 
       - uses: kenn-io/kit/.github/actions/kit-retry@v0.48.3
-
-      - name: Install docs check tools
-        run: |
-          sudo find /etc/apt -type f \( -name '*.list' -o -name '*.sources' \) -exec sed -i -E \
-            -e 's|https?://(azure\.)?archive\.ubuntu\.com/ubuntu|https://archive.ubuntu.com/ubuntu|g' \
-            -e 's|http://security\.ubuntu\.com/ubuntu|https://security.ubuntu.com/ubuntu|g' {} +
-          kit-retry 3 5 sudo apt-get -o APT::Update::Error-Mode=any update
-          kit-retry 3 5 sudo apt-get install -y ripgrep
 
       - name: Install documentation dependencies
         run: kit-retry 3 5 uv sync --project docs --frozen
@@ -1041,6 +1034,7 @@ jobs:
         include:
           - name: PostgreSQL core
             postgres-target: test-postgres-core-fast-ci
+            cockroach: true
           - name: PostgreSQL raw-sync and ClickHouse
             postgres-target: test-postgres-raw-sync-ci test-postgres-core-heavy-ci
             clickhouse: true
@@ -1102,6 +1096,18 @@ jobs:
           CGO_ENABLED: "1"
           TEST_PG_URL: postgres://agentsview_test:agentsview_test_password@localhost:5433/agentsview_test?sslmode=disable
 
+      - name: Run CockroachDB schema setup test
+        if: matrix.cockroach
+        run: |
+          docker run -d --name cockroach-schema -p 127.0.0.1:26257:26257 --entrypoint /cockroach/cockroach cockroachdb/cockroach:v25.4.6 start-single-node --insecure --listen-addr=0.0.0.0:26257
+          for i in {1..60}; do
+            if docker exec cockroach-schema /cockroach/cockroach sql --insecure --host=127.0.0.1:26257 -e 'SELECT 1'; then break; fi
+            sleep 1
+          done
+          make test-postgres-core-heavy-ci POSTGRES_CORE_HEAVY_TEST=TestCockroachSchemaAndCodexScope
+        env:
+          TEST_PG_URL: postgres://root@127.0.0.1:26257/defaultdb?sslmode=disable
+
       - name: Run ClickHouse integration tests
         if: matrix.clickhouse
         run: make test-clickhouse-ci
@@ -1144,7 +1150,7 @@ jobs:
         if: failure() || github.run_attempt > 1 || hashFiles('gotestsum/postgres-core-heavy-reruns.txt') != ''
         uses: actions/upload-artifact@v7.0.2
         with:
-          name: gotestsum-postgres-core-heavy-attempt-${{ github.run_attempt }}
+          name: gotestsum-postgres-core-heavy-${{ matrix.name }}-attempt-${{ github.run_attempt }}
           path: gotestsum/postgres-core-heavy.json
           retention-days: 14
           if-no-files-found: ignore

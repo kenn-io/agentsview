@@ -35,6 +35,7 @@ import (
 	"go.kenn.io/agentsview/internal/pathutil"
 	"go.kenn.io/kit/atomicfile"
 	"go.kenn.io/kit/embedconfig"
+	"go.kenn.io/kit/embedlocal"
 )
 
 // TerminalConfig holds terminal launch preferences.
@@ -383,9 +384,9 @@ const (
 // where one full-context input can take seconds, so a request carries fewer
 // inputs, builds send one request at a time, and each request may run longer.
 const (
-	defaultBuiltinEmbeddingsBatchSize   = 8
+	defaultBuiltinEmbeddingsBatchSize   = embedlocal.BatchItems
 	defaultBuiltinEmbeddingsConcurrency = 1
-	defaultBuiltinEmbeddingsTimeout     = "5m"
+	defaultBuiltinEmbeddingsTimeout     = embedlocal.RequestTimeout
 )
 
 // normalizedEmbeddingsServers fills each named server's unset transport
@@ -407,7 +408,7 @@ func normalizedEmbeddingsServers(
 		if s.Endpoint == "" {
 			batchSize = defaultBuiltinEmbeddingsBatchSize
 			concurrency = defaultBuiltinEmbeddingsConcurrency
-			timeout = defaultBuiltinEmbeddingsTimeout
+			timeout = defaultBuiltinEmbeddingsTimeout.String()
 		}
 		if !meta.IsDefined("vector", "embeddings", "servers", name, "batch_size") {
 			s.BatchSize = batchSize
@@ -896,6 +897,29 @@ type CustomModelRate struct {
 	// cache_creation_microdollars_per_mtok.
 	CacheCreation1hMicrodollarsPerMTok int64 `json:"cache_creation_1h_microdollars_per_mtok,omitempty" toml:"cache_creation_1h_microdollars_per_mtok"`
 	CacheReadMicrodollarsPerMTok       int64 `json:"cache_read_microdollars_per_mtok,omitempty" toml:"cache_read_microdollars_per_mtok"`
+	// PriceAs prices the model exactly like this catalog model, including
+	// its long-context tiers and later catalog updates. It excludes the
+	// rate fields.
+	PriceAs string `json:"price_as,omitempty" toml:"price_as,omitempty"`
+}
+
+var customModelRateFields = []string{
+	"input_microdollars_per_mtok", "output_microdollars_per_mtok",
+	"cache_creation_microdollars_per_mtok",
+	"cache_creation_1h_microdollars_per_mtok",
+	"cache_read_microdollars_per_mtok",
+}
+
+// PricingAliases returns the price_as mappings in custom, keyed by the
+// reported model name.
+func PricingAliases(custom map[string]CustomModelRate) map[string]string {
+	out := make(map[string]string)
+	for model, rate := range custom {
+		if rate.PriceAs != "" {
+			out[model] = rate.PriceAs
+		}
+	}
+	return out
 }
 
 func decodeCustomModelPricing(data string) (map[string]CustomModelRate, error) {
@@ -911,18 +935,32 @@ func decodeCustomModelPricing(data string) (map[string]CustomModelRate, error) {
 			continue
 		}
 		return nil, fmt.Errorf(
-			"%s: unsupported pricing field; use input_microdollars_per_mtok, output_microdollars_per_mtok, cache_creation_microdollars_per_mtok, cache_creation_1h_microdollars_per_mtok, or cache_read_microdollars_per_mtok",
+			"%s: unsupported pricing field; use price_as, input_microdollars_per_mtok, output_microdollars_per_mtok, cache_creation_microdollars_per_mtok, cache_creation_1h_microdollars_per_mtok, or cache_read_microdollars_per_mtok",
 			key.String(),
 		)
 	}
 	for model, rate := range decoded.CustomModelPricing {
-		if rate.InputMicrodollarsPerMTok < 0 ||
-			rate.OutputMicrodollarsPerMTok < 0 ||
-			rate.CacheCreationMicrodollarsPerMTok < 0 ||
-			rate.CacheCreation1hMicrodollarsPerMTok < 0 ||
-			rate.CacheReadMicrodollarsPerMTok < 0 {
+		hasRates := slices.ContainsFunc(customModelRateFields, func(field string) bool {
+			return metadata.IsDefined("custom_model_pricing", model, field)
+		})
+		if !metadata.IsDefined("custom_model_pricing", model, "price_as") {
+			if rate.InputMicrodollarsPerMTok < 0 ||
+				rate.OutputMicrodollarsPerMTok < 0 ||
+				rate.CacheCreationMicrodollarsPerMTok < 0 ||
+				rate.CacheCreation1hMicrodollarsPerMTok < 0 ||
+				rate.CacheReadMicrodollarsPerMTok < 0 {
+				return nil, fmt.Errorf(
+					"custom_model_pricing.%s: rates must not be negative", model)
+			}
+			continue
+		}
+		target := rate.PriceAs
+		switch {
+		case hasRates:
 			return nil, fmt.Errorf(
-				"custom_model_pricing.%s: rates must not be negative", model)
+				"custom_model_pricing.%q: price_as cannot be combined with rate fields", model)
+		case target == "":
+			return nil, fmt.Errorf("custom_model_pricing.%q: price_as must not be empty", model)
 		}
 	}
 	return decoded.CustomModelPricing, nil
@@ -1099,6 +1137,7 @@ type Config struct {
 	DuckDB               DuckDBConfig                `json:"duckdb,omitempty" toml:"duckdb"`
 	Vector               VectorConfig                `json:"vector,omitempty" toml:"vector"`
 	Recall               RecallConfig                `json:"recall,omitempty" toml:"recall"`
+	ImageText            ImageTextConfig             `json:"image_text,omitempty" toml:"image_text"`
 	Integrations         IntegrationsConfig          `json:"integrations,omitempty" toml:"integrations"`
 	Insights             InsightsConfig              `json:"insights,omitempty" toml:"insights"`
 	Kata                 KataConfig                  `json:"-" toml:"kata"`
@@ -1940,6 +1979,7 @@ func (c *Config) applyConfigTOML(data string) error {
 		DuckDB                         DuckDBConfig           `toml:"duckdb"`
 		Vector                         VectorConfig           `toml:"vector"`
 		Recall                         RecallConfig           `toml:"recall"`
+		ImageText                      ImageTextConfig        `toml:"image_text"`
 		Integrations                   IntegrationsConfig     `toml:"integrations"`
 		Insights                       InsightsConfig         `toml:"insights"`
 		Kata                           KataConfig             `toml:"kata"`
@@ -2264,6 +2304,9 @@ func (c *Config) applyConfigTOML(data string) error {
 		c.Vector.Embed.BackstopInterval = file.Vector.Embed.BackstopInterval
 	}
 	c.mergeRecallExtractTOML(file.Recall, meta)
+	if meta.IsDefined("image_text") {
+		c.ImageText = file.ImageText
+	}
 	if meta.IsDefined("integrations") {
 		c.Integrations = file.Integrations
 	}
@@ -2709,7 +2752,7 @@ func RegisterServeFlags(fs *flag.FlagSet) {
 	)
 	fs.Duration(
 		"write-timeout", 30*time.Second,
-		"Max time to write an API response before a 503 request-timed-out; raise for slow aggregates over large datasets (0 disables)",
+		"Max API response time before a 503 (0 disables); some long-running routes are exempt",
 	)
 }
 
@@ -2777,7 +2820,7 @@ func RegisterServePFlags(fs *pflag.FlagSet) {
 	)
 	fs.Duration(
 		"write-timeout", 30*time.Second,
-		"Max time to write an API response before a 503 request-timed-out; raise for slow aggregates over large datasets (0 disables)",
+		"Max API response time before a 503 (0 disables); some long-running routes are exempt",
 	)
 }
 

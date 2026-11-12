@@ -824,6 +824,7 @@ func TestSearchGroupsMessagesAndIncludesNameMatches(t *testing.T) {
 	require.Len(t, got.Results, 2)
 	assert.Equal(t, "duck-search-content", got.Results[0].SessionID)
 	assert.Equal(t, 1, got.Results[0].Ordinal)
+	assert.Equal(t, "needle second hit", got.Results[0].Snippet)
 	assert.Equal(t, "duck-search-name", got.Results[1].SessionID)
 	assert.Equal(t, -1, got.Results[1].Ordinal)
 	assert.Equal(t, "needle session name", got.Results[1].Snippet)

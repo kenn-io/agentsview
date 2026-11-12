@@ -1732,6 +1732,7 @@ func (d *DB) CopySessionMetadataFrom(
 				'project_identity_publication_revision',
 				'session_deletion_publication_revision',
 				'usage_change_revision',
+				'analytics_change_revision',
 				'usage_pricing_revision',
 				'conversation_publication_revision',
 				'conversation_usage_revision',
@@ -2559,6 +2560,18 @@ func copySessionDataForIDs(
 			)`,
 		); err != nil {
 			return fmt.Errorf("copying session_plan_usage: %w", err)
+		}
+	}
+	if oldDBHasTable(ctx, tx, "session_usage_totals") {
+		if _, err := tx.ExecContext(ctx, `
+			INSERT INTO session_usage_totals (session_id, `+SessionUsageTotalColumns+`)
+			SELECT session_id, `+SessionUsageTotalColumns+`
+			FROM old_db.session_usage_totals
+			WHERE session_id IN (
+				SELECT id FROM `+tempIDsTable+`
+			)`,
+		); err != nil {
+			return fmt.Errorf("copying session_usage_totals: %w", err)
 		}
 	}
 

@@ -128,6 +128,10 @@ func TestQuackStoreAnalyticsDashboardReads(t *testing.T) {
 	// handed to quack_serve for read access.
 	local := newLocalDB(t)
 	seedDuckDBSyncFixture(t, local)
+	require.NoError(t, local.UpdateSessionSignals(ctx, "duck-sync-alpha", db.SessionSignalUpdate{
+		QualitySignals:   db.QualitySignals{Version: db.CurrentQualitySignalVersion},
+		ToolObservations: []db.ToolObservation{{MessageOrdinal: 1, Outcome: "empty"}},
+	}))
 	seedDuckEdit(
 		t, local, "alpha", "duck-sync-edit",
 		0, 0, "src/main.go", "2026-01-10T02:00:00Z",
@@ -228,6 +232,15 @@ func TestQuackStoreAnalyticsDashboardReads(t *testing.T) {
 	tools, err := store.GetAnalyticsTools(ctx, filter)
 	require.NoError(t, err, "read tool analytics through Quack")
 	assert.Equal(t, 2, tools.TotalCalls)
+	zoneFilter := db.AnalyticsFilter{From: "2026-01-09", To: "2026-01-10", Timezone: "America/New_York", ToolName: "search", ToolCategory: "search"}
+	zoneTools, err := store.GetAnalyticsTools(ctx, zoneFilter)
+	require.NoError(t, err)
+	assert.Equal(t, 1, zoneTools.TotalCalls)
+	evidence, err := store.GetAnalyticsSignalSessions(ctx, zoneFilter, "tool_empty_rate", 10)
+	require.NoError(t, err)
+	require.Len(t, evidence.Sessions, 1)
+	assert.Equal(t, 1, evidence.Sessions[0].SignalTotal)
+	assert.Equal(t, new(1), evidence.Sessions[0].MessageOrdinal)
 
 	edits, err := store.RecentEdits(ctx, db.RecentEditsParams{})
 	require.NoError(t, err, "read recent edits through Quack")

@@ -62,6 +62,7 @@ type storeRuntime struct {
 	customPricing     map[string]config.CustomModelRate
 	pricingGeneration uint64
 	dailyUsage        kept.Reads[db.DailyUsageResult]
+	analytics         kept.Reads[[]byte]
 	planUsage         kept.Reads[*db.PlanUsageCountSummary]
 	topUsage          kept.Reads[[]db.TopSessionEntry]
 

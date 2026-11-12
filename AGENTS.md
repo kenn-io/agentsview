@@ -158,8 +158,7 @@ from a breaking change to `feat` to `fix`.
 When adding a provider, changing its format or usage/cost accounting, or
 investigating a provider release, new artifact generation, parser bug, or usage
 discrepancy, consult `docs/internal/session-format-sources.md` and reverify or
-update its evidence entry in the same change. Grok remains temporarily excluded
-only until its separately owned format-alignment work lands.
+update its evidence entry in the same change.
 
 ## Project Map
 
@@ -237,3 +236,35 @@ and can mirror data to PostgreSQL, DuckDB, or ClickHouse.
   Verification, or Test plan.
 - Explain what the code does now, why it changed, tradeoffs, limits, and where
   reviewers should look.
+
+## Before opening a pull request
+
+- Build for a use you have. Run the change on your own real data, such as an
+  export, archive, or photo library, and say in the body what it did there. If
+  nothing you use needs it yet, don't open it.
+- Make it useful if nothing after it merges. Don't add code that works only once
+  a later PR lands, or a guard for something `main` can't do yet.
+- Start from what the repo already does. Find the closest command, importer,
+  query, or library it already uses, extend it, and name it in the body. If it
+  can't be extended, say why.
+- Add only what the change uses now. Leave out options, states, paging, flags,
+  and API surface until something calls them.
+- Review your diff as a maintainer would: cut what `main` already does and
+  anything without a caller.
+- When review findings keep landing in the same code, rethink the design there
+  instead of patching each one.
+- Before each push, check that your schema, API, and protocol version numbers
+  are still the next ones free on `main`.
+
+## Pull requests from a fork
+
+This section applies only to PRs opened from a fork. PRs from branches in this
+repository are not limited by it.
+
+- Keep one unreviewed PR per stack. Open the next only after a maintainer has
+  reviewed the one below, even if you were asked to open the whole plan.
+  Review usually reshapes a PR, and everything built on it then has to be
+  rebuilt.
+- Keep at most 10 PRs open. Each one waits for a maintainer, and the ones
+  nobody gets to go stale. At 10, hold the next PR and tell the user. Leave
+  open PRs as they are.

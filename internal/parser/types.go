@@ -1613,6 +1613,12 @@ type ParsedSession struct {
 	// token records.
 	PlanUsage *ParsedPlanUsage
 
+	// SessionTotal is a usage total the agent recorded for the whole
+	// session, such as Claude Code's cost-state. It overlaps the session's
+	// usage rows, so it is stored apart from them and never summed with
+	// them; see ParsedSessionTotal.
+	SessionTotal *ParsedSessionTotal
+
 	// CountsAuthoritative marks parsers that own MessageCount and
 	// UserMessageCount even when they intentionally emit no transcript rows.
 	CountsAuthoritative bool
@@ -1708,6 +1714,13 @@ type ParsedToolResultEvent struct {
 }
 
 // ParsedMessage holds a single extracted message.
+//
+// Usage contract: a native record that carries token usage always yields a
+// message with that usage or a ParsedUsageEvent, never nothing. A record with
+// no text, tool call, or tool result to show still keeps its usage as a hidden
+// usage-only row: an assistant message with no content and IsSystem set, so
+// the transcript hides it while usage and cost count its tokens. Build that row
+// with usageOnlyMessage.
 type ParsedMessage struct {
 	CodexOrigin   CodexMessageOrigin `json:"-"`
 	Ordinal       int
@@ -1779,6 +1792,44 @@ type ParsedCaptureCoverage struct {
 	UncapturedTurns int
 }
 
+// Subagent scopes of a ParsedSessionTotal: whether its figures include
+// the usage of the session's subagent sessions.
+const (
+	SubagentScopeUnknown  = ""
+	SubagentScopeIncluded = "included"
+	SubagentScopeExcluded = "excluded"
+)
+
+// ParsedSessionTotal is a total the agent recorded for a whole session.
+// It is a reconciliation value, not usage: it covers calls that also have
+// their own usage rows, and with SubagentScope included it also covers the
+// subagent sessions' rows. AgentsView stores it apart from usage rows and
+// only shows it next to its own totals. A parser must set SubagentScope
+// from producer evidence; leave it unknown otherwise.
+type ParsedSessionTotal struct {
+	Source        string
+	SubagentScope string
+	// Cost is the agent's own estimate for the session, nil when absent.
+	Cost *money.Money
+	// Incomplete reports that the agent could not price every model, so
+	// Cost leaves some usage out.
+	Incomplete bool
+	Models     []ParsedSessionTotalModel
+}
+
+// ParsedSessionTotalModel is one model's share of a ParsedSessionTotal.
+// OutputTokens includes ReasoningTokens; input counters are disjoint.
+type ParsedSessionTotalModel struct {
+	Model                    string
+	InputTokens              int64
+	OutputTokens             int64
+	ReasoningTokens          int64
+	CacheCreationInputTokens int64
+	CacheReadInputTokens     int64
+	WebSearchRequests        int64
+	Cost                     *money.Money
+}
+
 // ParsedPlanUsage is a session's plan usage: OpenAI's latest report of
 // the thread's share of the plan's limits and its credits, and the newest
 // outcome record written after that report. The report fields are empty
@@ -1815,6 +1866,18 @@ type ParsedPlanUsageGroup struct {
 // ParsedUsageEvent records session-level usage emitted by parsers
 // when an agent exposes aggregate accounting instead of per-message
 // token_usage rows.
+//
+// Every event is additive: usage reads sum it with the session's message
+// rows and its other events. A total that already covers those rows must
+// not be emitted as an event.
+//
+// Cost carries a cost the harness wrote itself; CostStatus says how much to
+// trust it. usagefacts.CostStatusRecorded marks a harness estimate kept as
+// evidence: it prices the row only when the catalog has no rate for Model,
+// and a recorded $0 never does. Any other status makes Cost the row's price.
+// A recorded cost for one message belongs on that message instead, through
+// ParsedMessage.SetRecordedCost. An event with a Cost and no Model is stored
+// under usagefacts.UnknownModel.
 type ParsedUsageEvent struct {
 	SessionID                string
 	MessageOrdinal           *int
@@ -1831,6 +1894,30 @@ type ParsedUsageEvent struct {
 	CostSource               string
 	OccurredAt               string
 	DedupKey                 string
+}
+
+// usageOnlyMessage returns msg as the hidden usage-only row the
+// ParsedMessage usage contract describes. Call it for a record that has
+// nothing to show in the transcript. It reports false when msg carries no
+// positive token count, so a record without usage is still dropped. The row
+// keeps msg's identity, timestamp, model, and token fields and drops any
+// thinking text, which a hidden row cannot show.
+func usageOnlyMessage(msg ParsedMessage) (ParsedMessage, bool) {
+	if len(msg.TokenUsage) == 0 ||
+		(msg.ContextTokens <= 0 && msg.OutputTokens <= 0) {
+		return ParsedMessage{}, false
+	}
+	msg.Role = RoleAssistant
+	msg.IsSystem = true
+	msg.Content = ""
+	msg.DialogueText = nil
+	msg.ContentLength = 0
+	msg.ThinkingText = ""
+	msg.HasThinking = false
+	msg.HasToolUse = false
+	msg.ToolCalls = nil
+	msg.ToolResults = nil
+	return msg, true
 }
 
 // accumulateMessageTokenUsage rolls up explicit per-message token
@@ -2049,6 +2136,9 @@ type ParseResult struct {
 	// checkpoint so it never re-reads the source after a full parse.
 	CheckpointHashState    []byte
 	CheckpointAnchorDigest string
+	// replacesStored marks a single-file parse whose messages replace the
+	// stored transcript instead of appending to it (ParseOutcome.ForceReplace).
+	replacesStored bool
 }
 
 // PromoteParentlessWorker classifies workers without an existing parent or relationship.

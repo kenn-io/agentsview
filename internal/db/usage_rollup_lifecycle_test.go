@@ -965,7 +965,7 @@ func TestUsageRollupCursorAppendsOnlyNewEvents(t *testing.T) {
 	require.Len(t, appendedRows, 2)
 	_, err = cache.db.ExecContext(t.Context(), `DELETE FROM usage_rollup_installs WHERE id = ?`, installID)
 	require.NoError(t, err)
-	rebuilt, err := database.GetDailyUsage(t.Context(), filter)
+	rebuilt, err := database.getDailyUsageUncached(t.Context(), filter)
 	require.NoError(t, err)
 	assert.Equal(t, []int{1, 2}, builtRows)
 	assert.Equal(t, appendedRows, readRows())

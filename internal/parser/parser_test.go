@@ -1161,6 +1161,7 @@ func TestParseCodexSessionOversizedLineSkipped(t *testing.T) {
 	require.NoError(t, err, "unexpected error")
 	require.NotNil(t, sess, "session")
 	require.Len(t, msgs, 2, "messages (oversized skipped)")
+	assert.Equal(t, 1, sess.MalformedLines, "oversized line counted as lost")
 }
 
 func TestExtractCwdFromSession(t *testing.T) {

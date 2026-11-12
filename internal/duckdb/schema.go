@@ -29,7 +29,11 @@ import (
 // v23 adds the agent identity and 64-bit counters to imported account usage rows.
 // v24 stores dialogue that repeats content as NULL (see db.StoredDialogue);
 // the rebuild drops the copies older pushes wrote.
-const SchemaVersion = 24
+// v25 adds text extracted from tool result images (image_text); the rebuild
+// copies it for resident sessions.
+// v26 adds session_usage_totals, the usage totals agents record for whole
+// sessions.
+const SchemaVersion = 26
 
 const schemaVersionMetadataKey = "agentsview_schema_version"
 
@@ -119,6 +123,29 @@ var mirrorTables = []tableSpec{
 			{name: "retained", def: "BOOLEAN NOT NULL"},
 		},
 		indexes: []string{"CREATE INDEX IF NOT EXISTS idx_commit_links_sha ON commit_links(sha)"},
+	},
+	{
+		name: "image_text",
+		create: `CREATE TABLE IF NOT EXISTS image_text (
+ session_id TEXT NOT NULL, source_kind TEXT NOT NULL, message_ordinal INTEGER NOT NULL,
+ call_index INTEGER NOT NULL, event_index INTEGER NOT NULL, image_index INTEGER NOT NULL,
+ image_hash TEXT NOT NULL, processor TEXT NOT NULL, provider TEXT NOT NULL,
+ model TEXT NOT NULL, revision TEXT NOT NULL, text TEXT NOT NULL,
+ PRIMARY KEY(session_id,source_kind,message_ordinal,call_index,event_index,image_index,processor))`,
+		columns: []columnSpec{
+			{name: "session_id", def: "TEXT NOT NULL"},
+			{name: "source_kind", def: "TEXT NOT NULL"},
+			{name: "message_ordinal", def: "INTEGER NOT NULL"},
+			{name: "call_index", def: "INTEGER NOT NULL"},
+			{name: "event_index", def: "INTEGER NOT NULL"},
+			{name: "image_index", def: "INTEGER NOT NULL"},
+			{name: "image_hash", def: "TEXT NOT NULL"},
+			{name: "processor", def: "TEXT NOT NULL"},
+			{name: "provider", def: "TEXT NOT NULL"},
+			{name: "model", def: "TEXT NOT NULL"},
+			{name: "revision", def: "TEXT NOT NULL"},
+			{name: "text", def: "TEXT NOT NULL"},
+		},
 	},
 	{
 		name: "sync_metadata",
@@ -462,6 +489,31 @@ var mirrorTables = []tableSpec{
 		},
 		indexes: []string{
 			"CREATE INDEX IF NOT EXISTS idx_session_plan_usage_session ON session_plan_usage(session_id)",
+		},
+	},
+	{
+		// One row per session, the agent's own total for it. Never read by
+		// usage queries. No primary key: a push deletes and reinserts the row
+		// in one transaction, as for session_plan_usage.
+		name: "session_usage_totals",
+		create: `CREATE TABLE IF NOT EXISTS session_usage_totals (
+			session_id TEXT NOT NULL,
+			source TEXT NOT NULL DEFAULT '',
+			subagent_scope TEXT NOT NULL DEFAULT '',
+			cost_microdollars BIGINT,
+			incomplete BOOLEAN NOT NULL DEFAULT FALSE,
+			models_json TEXT NOT NULL DEFAULT '[]'
+		)`,
+		columns: []columnSpec{
+			{"session_id", "session_id TEXT NOT NULL DEFAULT ''"},
+			{"source", "source TEXT NOT NULL DEFAULT ''"},
+			{"subagent_scope", "subagent_scope TEXT NOT NULL DEFAULT ''"},
+			{"cost_microdollars", "cost_microdollars BIGINT"},
+			{"incomplete", "incomplete BOOLEAN NOT NULL DEFAULT FALSE"},
+			{"models_json", "models_json TEXT NOT NULL DEFAULT '[]'"},
+		},
+		indexes: []string{
+			"CREATE INDEX IF NOT EXISTS idx_session_usage_totals_session ON session_usage_totals(session_id)",
 		},
 	},
 	{

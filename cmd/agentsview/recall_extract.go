@@ -371,7 +371,7 @@ type extractRunResult struct {
 func newRecallExtractStatusCommand() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:          "status",
-		Short:        "Show extraction coverage for the configured generation",
+		Short:        "Show Recall processing progress for the current settings",
 		Args:         cobra.NoArgs,
 		SilenceUsage: true,
 		RunE: func(cmd *cobra.Command, args []string) error {
