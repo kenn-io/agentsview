@@ -402,6 +402,8 @@ func (e *Engine) processS3Session(
 		applyIDPrefixToParsedResult(idPrefix, &res.results[i])
 		session := res.results[i].Session
 		if err := e.recordRateLimits(ctx, session.Agent, session.ID, session.RateLimits); err != nil {
+			// The parse handed its staging sink to res; nothing else frees it.
+			res.releaseStaged()
 			return processResult{err: err, noCacheSkip: true, retentionLease: lease}
 		}
 		res.results[i].Session.File.Size = sourceInfo.Size()

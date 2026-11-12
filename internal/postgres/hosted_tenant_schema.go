@@ -91,6 +91,7 @@ var hostedCoreUpgradeTables = []struct{ name, ddl string }{
 	{"commit_links", commitLinksDDL},
 	{"image_text", imageTextDDL},
 	{"retained_commit_links", retainedCommitLinksDDL},
+	{"rate_limit_snapshots", rateLimitSnapshotsDDL},
 }
 
 // installHostedCoreUpgrade adds only missing upgrade tables to an already

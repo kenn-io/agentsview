@@ -12,6 +12,33 @@ import (
 	"go.kenn.io/agentsview/internal/db"
 )
 
+// rateLimitSnapshotsDDL mirrors SQLite's rate_limit_snapshots: the
+// subscription rate-limit reports agents record, which describe accounts and
+// carry no foreign key to sessions.
+const rateLimitSnapshotsDDL = `
+CREATE TABLE IF NOT EXISTS rate_limit_snapshots (
+    id BIGSERIAL PRIMARY KEY,
+    agent TEXT NOT NULL,
+    account_key TEXT NOT NULL DEFAULT '',
+    limit_id TEXT NOT NULL DEFAULT '',
+    plan_type TEXT NOT NULL DEFAULT '',
+    session_id TEXT NOT NULL,
+    observed_at TIMESTAMPTZ NOT NULL,
+    primary_used_percent DOUBLE PRECISION,
+    primary_window_minutes BIGINT,
+    primary_resets_at TIMESTAMPTZ,
+    secondary_used_percent DOUBLE PRECISION,
+    secondary_window_minutes BIGINT,
+    secondary_resets_at TIMESTAMPTZ
+);
+
+CREATE UNIQUE INDEX IF NOT EXISTS idx_rate_limit_snapshots_identity
+    ON rate_limit_snapshots (session_id, limit_id, observed_at);
+
+CREATE INDEX IF NOT EXISTS idx_rate_limit_snapshots_latest
+    ON rate_limit_snapshots (agent, account_key, limit_id, observed_at);
+`
+
 // rateLimitHighWaterKeyPrefix, followed by the source archive id, names the
 // sync_metadata row recording the largest local rate_limit_snapshots id this
 // target holds, as "<id>:<database generation>".
