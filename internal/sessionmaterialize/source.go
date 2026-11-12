@@ -170,15 +170,21 @@ func readConfiguredLocal(ctx context.Context, cfg config.Config, session *db.Ses
 	if !ok || !streaming {
 		return nil, "", errors.New("native source provider unavailable")
 	}
-	name, err := uniqueLocalSource(ctx, provider, stored, discoverer.DiscoverEach, func(name string) (bool, error) {
-		return filepath.Base(name) == id+".jsonl", nil
-	})
+	name, boundRoot, err := recordedLocalSource(ctx, cfg, parser.AgentClaude, stored)
+	if err == nil && name == "" {
+		name, err = uniqueLocalSource(ctx, provider, stored, discoverer.DiscoverEach, func(name string) (bool, error) {
+			return filepath.Base(name) == id+".jsonl", nil
+		})
+	}
 	if err != nil {
 		return nil, "", err
 	}
 	// Preserve the configured-root boundary for sources inside it. External
 	// linked projects are confined to the provider-selected project instead.
 	boundary := filepath.Dir(name)
+	if boundRoot != "" {
+		boundary = boundRoot
+	}
 	for _, root := range roots {
 		if within(root, name) {
 			boundary = root
@@ -187,6 +193,32 @@ func readConfiguredLocal(ctx context.Context, cfg config.Config, session *db.Ses
 	}
 	files, err := readLocalSource(ctx, boundary, name, id, maxSourceBytes)
 	return files, name, err
+}
+
+// recordedLocalSource accepts only a provider-recognized recorded path physically
+// inside an explicitly configured local root, even if its machine was relabeled.
+// Callers still validate the transcript identity before publishing.
+func recordedLocalSource(ctx context.Context, cfg config.Config, agent parser.AgentType, stored string) (string, string, error) {
+	if stored == "" {
+		return "", "", nil
+	}
+	for _, root := range cfg.ResolveDirs(agent) {
+		if strings.HasPrefix(root, "s3://") || !within(root, stored) {
+			continue
+		}
+		provider, ok := parser.NewProvider(agent, parser.ProviderConfig{Roots: []string{root}, Machine: cfg.InstallationID, SourceMachines: cfg.SourceMachines[agent]})
+		if !ok {
+			return "", "", errors.New("native source provider unavailable")
+		}
+		ref, found, err := provider.FindSource(ctx, parser.FindSourceRequest{StoredFilePath: stored})
+		if err != nil {
+			return "", "", err
+		}
+		if found {
+			return ref.DisplayPath, root, nil
+		}
+	}
+	return "", "", nil
 }
 
 // configuredRoots selects roots belonging to the archived session's machine.

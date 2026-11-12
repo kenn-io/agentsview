@@ -5,7 +5,8 @@ import (
 	"bytes"
 	"cmp"
 	"context"
-	"encoding/json"
+	"encoding/json/jsontext"
+	"encoding/json/v2"
 	"errors"
 	"fmt"
 	"io"
@@ -108,17 +109,23 @@ func findPiSource(ctx context.Context, cfg config.Config, session *db.Session, s
 		return ""
 	}
 	candidates := parser.NewPiSourceSet(parser.AgentPi, roots)
-	name, err := uniqueLocalSource(ctx, provider, stored, candidates.DiscoverEach, func(name string) (bool, error) {
-		err := checkPiHeaderFile(ctx, name, id)
-		if errors.Is(err, errPiIdentity) || errors.Is(err, errPiNotSession) {
-			return false, nil
-		}
-		return err == nil, err
-	})
+	name, boundRoot, err := recordedLocalSource(ctx, cfg, parser.AgentPi, stored)
+	if err == nil && name == "" {
+		name, err = uniqueLocalSource(ctx, provider, stored, candidates.DiscoverEach, func(name string) (bool, error) {
+			err := checkPiHeaderFile(ctx, name, id)
+			if errors.Is(err, errPiIdentity) || errors.Is(err, errPiNotSession) {
+				return false, nil
+			}
+			return err == nil, err
+		})
+	}
 	if err != nil {
 		return "", nil, err
 	}
-	boundary := rootFor(name)
+	boundary := boundRoot
+	if boundary == "" {
+		boundary = rootFor(name)
+	}
 	if boundary == "" {
 		// The provider selected a path under a configured root that follows an
 		// external link. Confine this single-file read to its resolved directory.
@@ -167,26 +174,26 @@ func piHeader(ctx context.Context, r io.Reader, id string) ([]byte, int, error) 
 		if offset > 1<<20 {
 			return nil, 0, errors.New("native Pi session header exceeds 1 MiB lookup limit")
 		}
-		if json.Valid(line) {
+		if jsontext.Value(line).IsValid(jsontext.AllowDuplicateNames(true), jsontext.AllowInvalidUTF8(true)) {
 			trimmed := bytes.TrimSpace(line)
 			var value any
-			decodeErr := json.Unmarshal(trimmed, &value)
+			decodeErr := json.Unmarshal(trimmed, &value, jsontext.AllowDuplicateNames(true), jsontext.AllowInvalidUTF8(true))
 			falsy := decodeErr == nil && (value == nil || value == false || value == "" || value == float64(0))
 			if falsy {
 				if err == nil {
 					continue
 				}
 			} else {
-				var header map[string]json.RawMessage
-				if json.Unmarshal(line, &header) != nil || header == nil {
+				var header map[string]jsontext.Value
+				if json.Unmarshal(line, &header, jsontext.AllowDuplicateNames(true), jsontext.AllowInvalidUTF8(true)) != nil || header == nil {
 					return nil, 0, errPiNotSession
 				}
 				var kind, headerID string
 				var version *int
-				if json.Unmarshal(header["type"], &kind) != nil || kind != "session" {
+				if json.Unmarshal(header["type"], &kind, jsontext.AllowInvalidUTF8(true)) != nil || kind != "session" {
 					return nil, 0, errPiNotSession
 				}
-				if value, ok := header["id"]; ok && json.Unmarshal(value, &headerID) != nil {
+				if value, ok := header["id"]; ok && json.Unmarshal(value, &headerID, jsontext.AllowInvalidUTF8(true)) != nil {
 					return nil, 0, errPiNotSession
 				}
 				if headerID != id {
@@ -234,21 +241,21 @@ func relocatePiHeader(ctx context.Context, data []byte, id, cwd string) ([]byte,
 	if err != nil {
 		return nil, err
 	}
-	decoder := json.NewDecoder(bytes.NewReader(line))
-	if _, err := decoder.Token(); err != nil {
+	decoder := jsontext.NewDecoder(bytes.NewReader(line), jsontext.AllowDuplicateNames(true), jsontext.AllowInvalidUTF8(true))
+	if _, err := decoder.ReadToken(); err != nil {
 		return nil, err
 	}
 	start, end, count := -1, -1, 0
-	for decoder.More() {
-		key, err := decoder.Token()
+	for decoder.PeekKind() != jsontext.KindEndObject {
+		key, err := decoder.ReadToken()
 		if err != nil {
 			return nil, err
 		}
-		var value json.RawMessage
-		if err := decoder.Decode(&value); err != nil {
+		value, err := decoder.ReadValue()
+		if err != nil {
 			return nil, err
 		}
-		if key == "cwd" {
+		if key.String() == "cwd" {
 			count++
 			end = int(decoder.InputOffset())
 			start = end - len(value)
@@ -257,10 +264,13 @@ func relocatePiHeader(ctx context.Context, data []byte, id, cwd string) ([]byte,
 	if count != 1 {
 		return nil, errors.New("native Pi session header requires one cwd")
 	}
+	if data == nil || offset < 0 || start < 0 || end < start || offset > len(data) || end > len(data)-offset {
+		return nil, errors.New("invalid native Pi header offsets")
+	}
 	if !utf8.ValidString(cwd) {
 		return nil, errors.New("native Pi checkout path is not valid UTF-8")
 	}
-	encoded, err := json.Marshal(cwd)
+	encoded, err := json.Marshal(cwd, jsontext.EscapeForHTML(true), jsontext.EscapeForJS(true))
 	if err != nil {
 		return nil, err
 	}
@@ -302,13 +312,13 @@ func piSettingsSessionDir(ctx context.Context, agentDir, cwd, projectConfig stri
 		if err != nil {
 			return "", fmt.Errorf("read Pi settings: %w", err)
 		}
-		var settings map[string]json.RawMessage
-		if err := json.Unmarshal(bytes.TrimPrefix(data, []byte("\xef\xbb\xbf")), &settings); err != nil {
+		var settings map[string]jsontext.Value
+		if err := json.Unmarshal(bytes.TrimPrefix(data, []byte("\xef\xbb\xbf")), &settings, jsontext.AllowDuplicateNames(true), jsontext.AllowInvalidUTF8(true)); err != nil {
 			return "", fmt.Errorf("invalid Pi settings: %w", err)
 		}
 		if value, ok := settings["sessionDir"]; ok {
 			dir = ""
-			if err := json.Unmarshal(value, &dir); err != nil {
+			if err := json.Unmarshal(value, &dir, jsontext.AllowInvalidUTF8(true)); err != nil {
 				return "", errors.New("native Pi settings sessionDir must be a string")
 			}
 		}

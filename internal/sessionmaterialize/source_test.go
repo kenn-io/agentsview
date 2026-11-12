@@ -186,6 +186,44 @@ func TestMaterializeConfiguredSources(t *testing.T) {
 	}
 }
 
+func TestMaterializeRecordedSourceAfterMachineRelabel(t *testing.T) {
+	const id = "12345678-1234-1234-1234-123456789abc"
+	for _, agent := range []parser.AgentType{parser.AgentClaude, parser.AgentPi} {
+		t.Run(string(agent), func(t *testing.T) {
+			root, destination := t.TempDir(), t.TempDir()
+			t.Setenv("CLAUDE_CONFIG_DIR", destination)
+			t.Setenv("CLAUDE_CODE_PROJECT_DIR_NAME", "fixture")
+			t.Setenv("PI_CODING_AGENT_DIR", "")
+			t.Setenv("PI_CODING_AGENT_SESSION_DIR", destination)
+			name := filepath.Join(root, "project", id+".jsonl")
+			require.NoError(t, os.MkdirAll(filepath.Dir(name), 0o700))
+			content := `{"type":"user","sessionId":"` + id + `","message":{"content":"fixture"}}` + "\n"
+			sessionID := id
+			if agent == parser.AgentPi {
+				sessionID = "pi:" + id
+				content = `{"type":"session","id":"` + id + `","cwd":"/old"}` + "\n"
+			}
+			require.NoError(t, os.WriteFile(name, []byte(content), 0o600))
+			cfg := config.Config{InstallationID: "local", AgentDirs: map[parser.AgentType][]string{agent: {root}}, SourceMachines: map[parser.AgentType]map[string]string{agent: {root: "renamed"}}}
+			session := &db.Session{ID: sessionID, Agent: string(agent), Machine: "old-name", FilePath: &name}
+			result, err := Materialize(t.Context(), cfg, dbtest.OpenTestDB(t), session, t.TempDir())
+			require.NoError(t, err)
+			assert.Equal(t, name, result.Source)
+			// A stale path must not search a root assigned to another machine.
+			stale := filepath.Join(root, "project", "missing.jsonl")
+			session.FilePath = &stale
+			_, err = Materialize(t.Context(), cfg, dbtest.OpenTestDB(t), session, t.TempDir())
+			require.ErrorContains(t, err, "unavailable")
+			// A recorded path alone cannot authorize a different session's bytes.
+			session.FilePath = &name
+			wrong := strings.ReplaceAll(content, id, "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa")
+			require.NoError(t, os.WriteFile(name, []byte(wrong), 0o600))
+			_, err = Materialize(t.Context(), cfg, dbtest.OpenTestDB(t), session, t.TempDir())
+			require.Error(t, err)
+		})
+	}
+}
+
 func TestS3ConfiguredSource(t *testing.T) {
 	const id = "12345678-1234-1234-1234-123456789abc"
 	const root = "s3://test/host/raw/claude"
