@@ -2021,6 +2021,7 @@ agentsview export sessions [flags]
 | `--limit`             | `500`   | Maximum sessions to return; max `db.MaxSessionLimit`      |
 | `--cursor`            |         | Opaque cursor from a previous response                    |
 | `--all`               | `false` | Export every eligible page as one output stream           |
+| `--wait`              | `false` | Wait for project identification                           |
 | `--project`           |         | Filter by exact project name                              |
 | `--exclude-project`   |         | Exclude sessions from the given project                   |
 | `--machine`           |         | ID, alias, ID/alias list, or unique display name          |
@@ -2040,6 +2041,12 @@ agentsview export sessions [flags]
 | `--health-grade`      |         | Comma-separated health grade filter                       |
 | `--min-tool-failures` |         | Minimum tool-failure signal count                         |
 | `--has-secret`        | `false` | Only sessions with detected secret leaks                  |
+
+With `--wait`, export starts or discovers the local daemon and waits for project
+identity evidence to finish. Progress goes to standard error. Cancel the command
+to stop waiting. A failed backfill or unavailable daemon reports recovery
+commands. Archive-only databases cannot run the backfill; finish it on the
+writable source and restore an archive containing the evidence.
 
 By default, one-shot and automated sessions are excluded, so token and cost
 totals can be lower than the full archive unless the corresponding include flags
@@ -2065,8 +2072,9 @@ For performance diagnosis, `export sessions`, `export hour`, `export day`, and
 `--trace <file>`. These write profiling data to files and keep the export on
 stdout.
 
-When `--cursor` is present, only `--format`, `--json`, `--limit`, and the
-profiling flags may be combined with it. Cursor reset errors write structured
+When `--cursor` is present, only `--format`, `--json`, `--limit`, `--wait`, and
+the profiling flags may be combined with it. With a cursor, `--wait` suppresses
+progress to keep stderr machine-readable. Cursor reset errors write structured
 JSON to stderr, leave stdout empty, and exit with code 4:
 
 ```json

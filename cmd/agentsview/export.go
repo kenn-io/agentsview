@@ -6,8 +6,10 @@ import (
 	"encoding/json/v2"
 	"errors"
 	"fmt"
+	"io"
 	"sort"
 	"strings"
+	"time"
 
 	"github.com/spf13/cobra"
 	"github.com/spf13/pflag"
@@ -57,6 +59,7 @@ type exportSessionsConfig struct {
 	Format             exportSessionsFormat
 	JSON               bool
 	All                bool
+	Wait               bool
 	MinToolFailuresSet bool
 }
 
@@ -135,19 +138,22 @@ func newExportStatusCommand() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			defer database.Close()
 			status, err := database.ProjectIdentityBackfillStatus(cmd.Context())
+			_ = database.Close()
 			if err != nil {
 				return err
 			}
-			if _, err = fmt.Fprintf(cmd.OutOrStdout(),
-				"project identity evidence: %s (%d/%d)\n",
-				status.State, status.CompletedItems, status.TotalItems); err != nil {
+			status = exportStatusWithLiveFailure(cmd.Context(), &appCfg, status)
+			if _, err = fmt.Fprintf(cmd.OutOrStdout(), "project identity evidence: %s\n", exportStatusText(status)); err != nil {
 				return err
 			}
-			if status.State == "failed" && status.LastError != "" {
-				_, err = fmt.Fprintf(cmd.OutOrStdout(),
-					"last error: %s\n", status.LastError)
+			if status.State == "failed" {
+				if status.LastError != "" {
+					if _, err = fmt.Fprintf(cmd.OutOrStdout(), "last error: %s\n", status.LastError); err != nil {
+						return err
+					}
+				}
+				_, err = fmt.Fprintln(cmd.OutOrStdout(), "run `agentsview daemon restart`")
 			}
 			return err
 		},
@@ -249,9 +255,38 @@ func newExportSessionsCommand() *cobra.Command {
 	flags.Var(&cfg.Format, "format", "Output format: json or ndjson")
 	flags.BoolVar(&cfg.JSON, "json", false,
 		"Emit JSON output (alias for --format json)")
+	flags.BoolVar(&cfg.Wait, "wait", false, "Wait for project identification")
 	flags.BoolVar(&cfg.All, "all", false,
 		"Export every page as one output stream")
 	return cmd
+}
+
+func exportDaemonCompatibilityError(cfg *config.Config, cause error) error {
+	rt, _ := findIncompatibleWritableDaemonRuntime(cfg.DataDir, cfg.AuthToken)
+	if rt == nil || daemonRuntimeAhead(rt) {
+		return errors.New(staleClientUpgradeHint())
+	}
+	return fmt.Errorf("%w; run `agentsview daemon restart`, then check `agentsview export status` and rerun `agentsview export sessions --wait`", cause)
+}
+
+func startExportDaemon(ctx context.Context, cfg *config.Config) (*DaemonRuntime, error) {
+	tr, err := ensureTransportContext(ctx, cfg, transportIntentLongLived, startupWaitTimeout)
+	if err != nil {
+		if incompatible, ok := errors.AsType[*longLivedCompatibilityError](err); ok {
+			return nil, exportDaemonCompatibilityError(cfg, incompatible.cause)
+		}
+		return nil, err
+	}
+	if tr.Mode == transportHTTP && !tr.ReadOnly {
+		return tr.Runtime, nil
+	}
+	if tr.ReadOnly && !daemonAutostartDisabled() && !cfg.NoDaemonAutostart && !cfg.RequireDaemon {
+		if err := guardDaemonAutoStartConfig(*cfg); err != nil {
+			return nil, err
+		}
+		return startBackgroundServeForTransport(ctx, cfg, startupWaitTimeout, false)
+	}
+	return nil, errors.New("start a writable daemon with `agentsview daemon start`, then retry")
 }
 
 func runExportSessions(cmd *cobra.Command, cfg exportSessionsConfig) error {
@@ -273,7 +308,7 @@ func runExportSessions(cmd *cobra.Command, cfg exportSessionsConfig) error {
 	if err != nil {
 		return err
 	}
-	defer database.Close()
+	defer func() { _ = database.Close() }()
 
 	ctx := cmd.Context()
 	backfill, err := database.ProjectIdentityBackfillStatus(ctx)
@@ -281,10 +316,36 @@ func runExportSessions(cmd *cobra.Command, cfg exportSessionsConfig) error {
 		return fmt.Errorf("checking project identity evidence: %w", err)
 	}
 	if backfill.State != "not_needed" && backfill.State != "completed" {
-		return fmt.Errorf(
-			"project identity evidence backfill is %s (%d/%d); start or restart the writable daemon, then check `agentsview export status`",
-			backfill.State, backfill.CompletedItems, backfill.TotalItems,
-		)
+		archiveOnly, err := database.IsArchiveOnly(ctx)
+		if err != nil {
+			return fmt.Errorf("checking archive mode: %w", err)
+		}
+		if archiveOnly {
+			return errors.New("projects cannot be identified in an archive-only database; run `agentsview export sessions --wait` on the writable source, then restore an updated archive")
+		}
+		if !cfg.Wait {
+			return exportPendingError(ctx, database, &appCfg, backfill)
+		}
+		if backfill = exportStatusWithLiveFailure(ctx, &appCfg, backfill); backfill.State == "failed" {
+			return exportBackfillFailure(backfill)
+		}
+		if err := database.Close(); err != nil {
+			return err
+		}
+		progress := cmd.ErrOrStderr()
+		if cfg.Cursor != "" {
+			// A cursor reset must be the only object on stderr.
+			progress = io.Discard
+			ctx = context.WithValue(ctx, daemonProgressContextKey{}, progress)
+		}
+		if err := waitForExportBackfill(ctx, progress, &appCfg); err != nil {
+			return err
+		}
+		reopened, err := openExportReadOnlyDB(ctx, appCfg)
+		if err != nil {
+			return err
+		}
+		database = reopened
 	}
 	if err := ensureExportSessionsPricing(ctx, database, appCfg); err != nil {
 		return err
@@ -329,6 +390,117 @@ func runExportSessions(cmd *cobra.Command, cfg exportSessionsConfig) error {
 		return nil
 	}
 	return json.MarshalEncode(enc, output)
+}
+
+func unknownExportBackfillState(state string) error {
+	return fmt.Errorf("unknown project identification status %q; run `agentsview export status`", state)
+}
+
+func exportBackfillFailure(status db.BackgroundMigrationStatus) error {
+	reason := ""
+	if status.LastError != "" {
+		reason = ": " + status.LastError
+	}
+	return fmt.Errorf("project identification failed%s; run `agentsview daemon restart`, then check `agentsview export status`", reason)
+}
+
+func exportStatusWithLiveFailure(ctx context.Context, cfg *config.Config, status db.BackgroundMigrationStatus) db.BackgroundMigrationStatus {
+	if status.State != "completed" && status.State != "not_needed" && cfg.ApplyDeploymentAuth() == nil {
+		if rt := FindWritableDaemonRuntime(cfg.DataDir, cfg.AuthToken); rt != nil {
+			status = exportStatusWithDaemon(status, rt)
+		}
+	}
+	return status
+}
+
+// A failure recorded before the live daemon started is pending: that daemon retries it, and a retry that fails again is recorded later.
+func exportStatusWithDaemon(status db.BackgroundMigrationStatus, rt *DaemonRuntime) db.BackgroundMigrationStatus {
+	if rt.BackfillError != "" && (status.State == "pending" || status.State == "running" || status.State == "failed") {
+		status.State, status.LastError = "failed", rt.BackfillError
+	} else if status.State == "failed" && rt.BackfillError == "" && status.UpdatedAt != nil {
+		if at, err := time.Parse(time.RFC3339Nano, *status.UpdatedAt); err == nil && rt.Record.StartedAt.After(at) {
+			status.State, status.LastError = "pending", ""
+		}
+	}
+	return status
+}
+
+func exportPendingError(ctx context.Context, database *db.DB, cfg *config.Config, status db.BackgroundMigrationStatus) error {
+	if err := database.Close(); err != nil {
+		return err
+	}
+	status = exportStatusWithLiveFailure(ctx, cfg, status)
+	if status.State == "failed" {
+		return exportBackfillFailure(status)
+	}
+	return fmt.Errorf("project identification is %s; run `agentsview export sessions --wait` or check `agentsview export status`", exportStatusText(status))
+}
+
+func exportStatusText(status db.BackgroundMigrationStatus) string {
+	if status.State == "pending" && status.TotalItems == 0 {
+		return status.State
+	}
+	return fmt.Sprintf("%s (%d/%d)", status.State, status.CompletedItems, status.TotalItems)
+}
+
+// A failure the stopped daemon never retried keeps its recorded error.
+func exportDaemonUnavailable(status db.BackgroundMigrationStatus) error {
+	if status.State == "failed" {
+		return exportBackfillFailure(status)
+	}
+	return fmt.Errorf("project identification is %s, but the writable daemon is unavailable; run `agentsview daemon restart`, then check `agentsview export status`", exportStatusText(status))
+}
+
+// Allow transient runtime discovery or ping failures before reporting daemon loss.
+const exportDaemonUnavailableGrace = 5 * time.Second
+
+func waitForExportBackfill(ctx context.Context, progress io.Writer, cfg *config.Config) error {
+	if _, err := startExportDaemon(ctx, cfg); err != nil {
+		return err
+	}
+	unavailableSince := time.Time{}
+	for {
+		database, err := openExportReadOnlyDB(ctx, *cfg)
+		if err != nil {
+			return err
+		}
+		status, err := database.ProjectIdentityBackfillProgress(ctx)
+		_ = database.Close()
+		if err != nil {
+			return fmt.Errorf("checking project identity evidence: %w", err)
+		}
+		switch status.State {
+		case "completed", "not_needed":
+			return nil
+		case "pending", "running", "failed":
+		default:
+			return unknownExportBackfillState(status.State)
+		}
+		rt := FindWritableDaemonRuntime(cfg.DataDir, cfg.AuthToken)
+		if rt == nil {
+			if unavailableSince.IsZero() {
+				unavailableSince = time.Now()
+			} else if time.Since(unavailableSince) >= exportDaemonUnavailableGrace {
+				return exportDaemonUnavailable(status)
+			}
+		} else {
+			unavailableSince = time.Time{}
+			status = exportStatusWithDaemon(status, rt)
+			if status.State == "failed" {
+				return exportBackfillFailure(status)
+			}
+		}
+		if _, err := fmt.Fprintf(progress, "Identifying projects: %s\n", exportStatusText(status)); err != nil {
+			return err
+		}
+		timer := time.NewTimer(time.Second)
+		select {
+		case <-ctx.Done():
+			timer.Stop()
+			return ctx.Err()
+		case <-timer.C:
+		}
+	}
 }
 
 // ensureExportSessionsPricing installs embedded fallback plus custom pricing

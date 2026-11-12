@@ -10222,14 +10222,22 @@ func (e *Engine) BackfillSignalComputer() func(context.Context, string) error {
 // BackfillProjectIdentitySnapshots reconstructs immutable export evidence from
 // stored session metadata. Candidate selection and progress are durable, while
 // filesystem and Git discovery happen here so database startup remains cheap.
-func (e *Engine) BackfillProjectIdentitySnapshots(ctx context.Context) error {
-	if e.sourceSyncErr != nil {
+func (e *Engine) BackfillProjectIdentitySnapshots(ctx context.Context) (resultErr error) {
+	if errors.Is(e.sourceSyncErr, db.ErrArchiveOnly) {
 		return e.sourceSyncErr
 	}
 	if e.refuseWriteInForceParse("BackfillProjectIdentitySnapshots") {
 		return errors.New(
 			"BackfillProjectIdentitySnapshots refused on report-only parse-diff engine",
 		)
+	}
+	defer func() {
+		if resultErr != nil && ctx.Err() == nil {
+			resultErr = e.failProjectIdentityBackfill(ctx, resultErr)
+		}
+	}()
+	if e.sourceSyncErr != nil {
+		return e.sourceSyncErr
 	}
 	if err := e.db.EnsureProjectIdentityBackfillQueued(ctx); err != nil {
 		return err
@@ -10253,7 +10261,7 @@ func (e *Engine) BackfillProjectIdentitySnapshots(ctx context.Context) error {
 		}
 		candidates, err := e.db.ProjectIdentityBackfillCandidatesAfter(ctx, afterID)
 		if err != nil {
-			return e.failProjectIdentityBackfill(ctx, err)
+			return err
 		}
 		if len(candidates) == 0 {
 			if err := e.db.CompleteProjectIdentityBackfill(ctx); err != nil {
@@ -10272,7 +10280,7 @@ func (e *Engine) BackfillProjectIdentitySnapshots(ctx context.Context) error {
 				e.projectIdentityObservationForBackfill(session))
 		}
 		if err := e.db.ApplyProjectIdentityBackfillBatch(ctx, observations); err != nil {
-			return e.failProjectIdentityBackfill(ctx, err)
+			return err
 		}
 		afterID = candidates[len(candidates)-1].ID
 	}

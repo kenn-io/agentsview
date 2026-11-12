@@ -17,6 +17,7 @@ import (
 	"sort"
 	"strings"
 	stdsync "sync"
+	"sync/atomic"
 	"syscall"
 	"testing"
 	"time"
@@ -556,6 +557,7 @@ func runServe(ctx context.Context, cfg config.Config, opts serveOptions, restart
 		defer engine.Close()
 	}
 
+	var identityBackfillFailure atomic.Pointer[string]
 	if !archiveOnly {
 		identityBackfillEngine := engine
 		if identityBackfillEngine == nil {
@@ -570,6 +572,8 @@ func runServe(ctx context.Context, cfg config.Config, opts serveOptions, restart
 				return identityBackfillEngine.BackfillProjectIdentitySnapshots(ctx)
 			})
 			if err != nil && ctx.Err() == nil {
+				message := err.Error()
+				identityBackfillFailure.Store(&message)
 				log.Printf("project identity backfill: %v", err)
 			}
 		})
@@ -627,6 +631,12 @@ func runServe(ctx context.Context, cfg config.Config, opts serveOptions, restart
 		server.WithBaseContext(ctx),
 		server.WithBroadcaster(broadcaster),
 		server.WithIdleTracker(idleTracker),
+		server.WithProjectIdentityBackfillFailure(func() string {
+			if message := identityBackfillFailure.Load(); message != nil {
+				return *message
+			}
+			return ""
+		}),
 		server.WithDaemonPersistence(func() error { return publishPersistentDaemon(cfg.DataDir) }),
 		server.WithHTTPRemoteCleanupRegistry(httpRemoteCleanupRegistry),
 		server.WithPprof(opts.Pprof),
