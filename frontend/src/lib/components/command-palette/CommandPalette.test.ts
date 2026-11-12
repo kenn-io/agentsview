@@ -651,7 +651,8 @@ describe("CommandPalette", () => {
   });
 
   it.each(["generic", "timeout"] as const)("retries a %s search error", async (kind) => {
-    mockSearchStore.error = { detail: null, kind };
+    mockSearchStore.mode = kind === "timeout" ? "semantic" : "fulltext";
+    mockSearchStore.error = { detail: kind === "timeout" ? "request timed out" : null, kind };
     const component = mount(CommandPalette, { target: document.body });
     await enterSearchQuery();
     const retry = Array.from(

@@ -274,19 +274,7 @@ describe("SearchStore", () => {
   });
 
   it("does not send a retry to a server selected in another tab", async () => {
-    const actual = await vi.importActual<typeof import("../api/generated/index.js")>(
-      "../api/generated/index.js",
-    );
-    searchService.getApiV1Search.mockImplementation(actual.SearchService.getApiV1Search);
-    const fetchMock = vi
-      .fn()
-      .mockResolvedValueOnce(new Response("unavailable", { status: 503 }))
-      .mockResolvedValueOnce(
-        new Response(JSON.stringify(fullTextResponse("needle")), {
-          headers: { "Content-Type": "application/json" },
-        }),
-      );
-    vi.stubGlobal("fetch", fetchMock);
+    searchService.getApiV1Search.mockRejectedValueOnce(new ApiError(503, "unavailable"));
     setServerUrl("https://first.example");
     try {
       const store = createSearchStore(memoryStorage());
@@ -294,12 +282,11 @@ describe("SearchStore", () => {
       await runDebounce();
       localStorage.setItem("agentsview-server-url", "https://second.example");
       await vi.advanceTimersByTimeAsync(300);
-      expect(fetchMock).toHaveBeenCalledOnce();
+      expect(searchService.getApiV1Search).toHaveBeenCalledOnce();
       expect(store.results).toEqual([]);
       expect(store.error).toEqual({ detail: "unavailable", kind: "generic" });
     } finally {
       setServerUrl("");
-      vi.unstubAllGlobals();
     }
   });
 
