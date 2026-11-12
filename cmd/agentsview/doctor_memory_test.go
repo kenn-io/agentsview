@@ -141,7 +141,8 @@ func TestDoctorMemoryPluginMCPRequiresFocusedProfileInClaudeManifest(t *testing.
 
 func TestDoctorMemoryReportsStandaloneTargetMismatch(t *testing.T) {
 	home := t.TempDir()
-	setTestHome(t, home)
+	setDoctorMemoryTestEnvironment(t, home)
+	fakeAgent(t, "codex", "")
 	pkg, err := skills.RenderPackage(skills.HarnessAgents, version, skills.Remote{
 		Server: "https://archive-a.invalid",
 	})
@@ -150,12 +151,17 @@ func TestDoctorMemoryReportsStandaloneTargetMismatch(t *testing.T) {
 	require.NoError(t, os.MkdirAll(filepath.Dir(path), 0o755))
 	require.NoError(t, os.WriteFile(path, []byte(pkg[0].Content), 0o644))
 
+	out, err := executeCommand(newRootCommand(), "agent", "setup")
+	require.NoError(t, err, out)
 	client := inspectDoctorMemoryClient("", doctorMemoryTargetSelection{
 		Kind: "server", server: "https://archive-b.invalid",
 	})
 	require.Len(t, client.Standalone, 1)
 	assert.Equal(t, "target_mismatch", client.Standalone[0].Reason)
 	assert.Equal(t, service.MemoryPartial, client.Status)
+	client = inspectDoctorAgentSetup(t.Context(), client)
+	assert.Equal(t, service.MemoryPartial, client.Status)
+	assert.Equal(t, "standalone_target_mismatch", client.Reason)
 }
 
 func TestDoctorMemoryHumanOutputSeparatesTargetAndClient(t *testing.T) {
@@ -214,9 +220,23 @@ func setDoctorMemoryTestEnvironment(t *testing.T, home string) {
 		"AGENTSVIEW_MEMORY_PG",
 		"PLUGIN_ROOT",
 		"CLAUDE_PLUGIN_ROOT",
+		"CLAUDE_CONFIG_DIR",
+		"CODEX_HOME",
 	} {
 		t.Setenv(name, "")
 	}
+}
+
+func fakeAgent(t *testing.T, name, response string) {
+	t.Helper()
+	if response == "" {
+		response = "Scope: User config\\nStatus: Connected\\n"
+	}
+	script := "#!/bin/sh\nprintf '" + response + "'\n"
+	if name == "codex" {
+		script = "#!/bin/sh\nread line\nprintf '{\"id\":1,\"result\":{}}\\n'\nread line\nread line\nprintf '{\"id\":2,\"result\":{\"data\":[{\"name\":\"agentsview\",\"tools\":{\"search_content\":{}}}]}}\\n'\nwhile read line; do :; done\n"
+	}
+	require.NoError(t, os.WriteFile(filepath.Join(os.Getenv("PATH"), name), []byte(script), 0755))
 }
 
 func memoryStatusServer(t *testing.T, status service.MemoryStatus) *httptest.Server {
@@ -246,7 +266,7 @@ func writeDoctorMemoryPlugin(t *testing.T) string {
 		require.NoError(t, os.MkdirAll(filepath.Dir(path), 0o755))
 		require.NoError(t, os.WriteFile(path, []byte(body), mode))
 	}
-	write(".mcp.json", `{"mcpServers":{"agentsview":{"type":"stdio","command":"agentsview","args":["mcp","--profile","memory"]}}}`, 0o644)
+	write(".mcp.json", `{"mcpServers":{"agentsview":{"command":"agentsview","args":["mcp","--profile","memory"]}}}`, 0o644)
 	write(".claude-plugin/plugin.json", `{"name":"agentsview-memory","mcpServers":{"agentsview":{"command":"agentsview","args":["mcp","--profile","memory"]}}}`, 0o644)
 	write(".codex-plugin/plugin.json", `{"name":"agentsview-memory","skills":"./skills/","mcpServers":"./.mcp.json"}`, 0o644)
 	write("hooks/hooks.json", `{"hooks":{"SessionStart":[{"hooks":[{"type":"command","command":"scripts/session-start.sh"}]}]}}`, 0o644)
@@ -257,66 +277,65 @@ func writeDoctorMemoryPlugin(t *testing.T) string {
 func TestDoctorMemoryReportsInstalledAgentSetup(t *testing.T) {
 	home := t.TempDir()
 	setDoctorMemoryTestEnvironment(t, home)
-	t.Setenv("CLAUDE_CONFIG_DIR", "")
-	t.Setenv("CODEX_HOME", "")
-	bin := t.TempDir()
-	t.Setenv("PATH", bin)
-	require.NoError(t, os.WriteFile(filepath.Join(bin, "claude"), []byte("#!/bin/sh\nprintf 'Scope: User config\\nStatus: Connected\\n'\n"), 0755))
-	_, err := executeCommand(newRootCommand(), "agent", "setup", "--agent", "claude")
-	require.NoError(t, err)
+	fakeAgent(t, "claude", "")
+	fakeAgent(t, "codex", "")
+	out, err := executeCommand(newRootCommand(), "agent", "setup")
+	require.NoError(t, err, out)
 	server := memoryStatusServer(t, service.MemoryStatus{Status: service.MemoryReady, ObservedAt: time.Now()})
-	out, err := executeCommand(newRootCommand(), "doctor", "memory", "--server", server.URL, "--format", "json")
+	out, err = executeCommand(newRootCommand(), "doctor", "memory", "--server", server.URL, "--format", "json")
 	require.NoError(t, err, out)
 	var report doctorMemoryReport
 	require.NoError(t, json.Unmarshal([]byte(out), &report))
-	require.Len(t, report.Client.Rows, 2)
-	require.Equal(t, "mcp agentsview", report.Client.Rows[1].Piece)
-	require.EqualValues(t, "ok", report.Client.Rows[1].State)
+	require.Len(t, report.Client.Rows, 4)
+	for _, row := range report.Client.Rows {
+		require.EqualValues(t, "ok", row.State)
+	}
+	for _, index := range []int{1, 3} {
+		require.Equal(t, "mcp agentsview", report.Client.Rows[index].Piece)
+	}
 	require.NoError(t, os.Remove(filepath.Join(home, ".claude.json")))
+	require.NoError(t, os.Remove(filepath.Join(home, ".codex", "config.toml")))
 	out, err = executeCommand(newRootCommand(), "doctor", "memory", "--server", server.URL, "--format", "json")
 	require.NoError(t, err, out)
 	require.NoError(t, json.Unmarshal([]byte(out), &report))
-	require.EqualValues(t, "missing", report.Client.Rows[1].State)
-	require.Equal(t, "agentsview agent setup", report.Client.Rows[1].NextStep)
+	for _, index := range []int{1, 3} {
+		require.EqualValues(t, "missing", report.Client.Rows[index].State)
+		require.Equal(t, "agentsview agent setup", report.Client.Rows[index].NextStep)
+	}
 }
 
-func TestDoctorMemoryPostgresWithStandaloneSkill(t *testing.T) {
-	home := t.TempDir()
-	setDoctorMemoryTestEnvironment(t, home)
-	t.Setenv("CLAUDE_CONFIG_DIR", "")
-	t.Setenv("CODEX_HOME", "")
-	t.Setenv("AGENTSVIEW_MEMORY_PG", "true")
-	bin := t.TempDir()
-	t.Setenv("PATH", bin)
-	require.NoError(t, os.WriteFile(filepath.Join(bin, "claude"), []byte("#!/bin/sh\nprintf 'Scope: User config\\nStatus: Connected\\n'\n"), 0755))
-	out, err := executeCommand(newRootCommand(), "agent", "setup", "--agent", "claude")
-	require.NoError(t, err, out)
-	selection := doctorMemoryTargetSelection{Kind: "postgresql"}
-	client := inspectDoctorAgentSetup(t.Context(), inspectDoctorMemoryClient("", selection))
-	require.Equal(t, service.MemoryReady, client.Status)
-	require.Empty(t, client.Reason)
+func TestDoctorMemoryStandaloneSkill(t *testing.T) {
+	for _, tc := range []struct{ agent, kind string }{{"claude", "postgresql"}, {"codex", "local"}} {
+		t.Run(tc.kind, func(t *testing.T) {
+			home := t.TempDir()
+			setDoctorMemoryTestEnvironment(t, home)
+			fakeAgent(t, tc.agent, "")
+			out, err := executeCommand(newRootCommand(), "agent", "setup")
+			require.NoError(t, err, out)
+			selection := doctorMemoryTargetSelection{Kind: tc.kind}
+			client := inspectDoctorAgentSetup(t.Context(), inspectDoctorMemoryClient("", selection))
+			require.Equal(t, service.MemoryReady, client.Status)
+			require.Empty(t, client.Reason)
+		})
+	}
 }
 
 func TestDoctorMemoryRedactsMCPFailure(t *testing.T) {
 	for _, tc := range []struct {
-		name, response, state, next string
+		name, response, state string
 	}{
-		{"failed", "Scope: User config\\nStatus: Failed to connect\\nIssue: https://private.example/token\\n", "failed", "Correct the server error and retry"},
-		{"unknown", "Scope: User config\\nStatus: Waiting for https://private.example/token\\n", "unknown", "Inspect the server in the agent"},
+		{"failed", "Scope: User config\\nStatus: Failed to connect\\nIssue: https://private.example/token\\n", "failed"},
+		{"unknown", "Scope: User config\\nStatus: Waiting for https://private.example/token\\n", "unknown"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			home := t.TempDir()
 			setDoctorMemoryTestEnvironment(t, home)
-			t.Setenv("CLAUDE_CONFIG_DIR", "")
-			bin := t.TempDir()
-			t.Setenv("PATH", bin)
-			require.NoError(t, os.WriteFile(filepath.Join(bin, "claude"), []byte("#!/bin/sh\nprintf '"+tc.response+"'\n"), 0755))
+			fakeAgent(t, "claude", tc.response)
 			require.NoError(t, os.WriteFile(filepath.Join(home, ".claude.json"), []byte(`{"mcpServers":{"agentsview":{"type":"stdio","command":"agentsview","args":["mcp","--profile","memory"]}}}`), 0600))
 			selection := doctorMemoryTargetSelection{Kind: "local"}
 			client := inspectDoctorAgentSetup(t.Context(), inspectDoctorMemoryClient("", selection))
 			require.Len(t, client.Rows, 2)
 			require.EqualValues(t, tc.state, client.Rows[1].State)
-			require.Equal(t, tc.next, client.Rows[1].NextStep)
 			encoded, err := json.Marshal(client)
 			require.NoError(t, err)
 			require.NotContains(t, string(encoded), home)

@@ -221,6 +221,7 @@ func inspectDoctorAgentSetup(ctx context.Context, client doctorMemoryClientStatu
 		}
 	}
 	client.Rows = report.Rows
+	mismatch := client.Reason == "standalone_target_mismatch"
 	client.Status = service.MemoryReady
 	client.Reason = ""
 	for _, row := range report.Rows {
@@ -230,12 +231,9 @@ func inspectDoctorAgentSetup(ctx context.Context, client doctorMemoryClientStatu
 			break
 		}
 	}
-	for _, standalone := range client.Standalone {
-		if standalone.Reason == "target_mismatch" {
-			client.Status = service.MemoryPartial
-			client.Reason = "standalone_target_mismatch"
-			break
-		}
+	if mismatch {
+		client.Status = service.MemoryPartial
+		client.Reason = "standalone_target_mismatch"
 	}
 	return client
 }

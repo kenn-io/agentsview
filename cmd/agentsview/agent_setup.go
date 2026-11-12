@@ -5,7 +5,6 @@ import (
 	"errors"
 	"io"
 	"os"
-	"path/filepath"
 
 	"github.com/spf13/cobra"
 	"go.kenn.io/kit/agentmcp"
@@ -39,44 +38,31 @@ func setupItems(agent string, force bool) ([]agentsetup.Item, error) {
 	if err != nil {
 		return nil, errors.New("resolve home directory")
 	}
-	body, err := readSkillFile(filepath.Join(skills.TargetDir(harness, home), skillFileName))
-	if err != nil {
-		return nil, errors.New("read installed skill")
-	}
-	remote := (skillRemoteSource{}).resolve(body)
-	pkg, err := skills.RenderPackage(harness, version, remote)
-	if err != nil {
-		return nil, errors.New("render skill")
-	}
 	checkSkills := func(context.Context) (agentsetup.Status, error) {
+		rows, err := listSkillRows(home, false, skillRemoteSource{})
+		if err != nil {
+			return agentsetup.Status{State: agentsetup.StateFailed, Reason: "Unable to read skill files"}, nil
+		}
 		state := agentsetup.StateOK
-		for _, rendered := range pkg {
-			existing, err := readSkillFile(filepath.Join(home, rendered.RelativePath))
-			if err != nil {
-				return agentsetup.Status{State: agentsetup.StateFailed, Reason: "Unable to read skill files"}, nil
+		for _, row := range rows {
+			if row.Harness != string(harness) {
+				continue
 			}
-			switch skills.Classify(existing, rendered) {
-			case skills.StateMissing:
+			switch row.State {
+			case "missing":
 				state = agentsetup.StateMissing
-			case skills.StateStale:
+			case "stale":
 				if state == agentsetup.StateOK {
 					state = agentsetup.StateOutdated
 				}
-			case skills.StateModified, skills.StateForeign:
+			case "modified", "foreign":
 				return agentsetup.Status{State: agentsetup.StateModified, Reason: "Skill files were edited", NextStep: "agentsview agent setup --force"}, nil
 			}
 		}
 		return agentsetup.Status{State: state}, nil
 	}
 	skill := agentsetup.Item{Name: "skill", Check: checkSkills, Install: func(ctx context.Context) error {
-		status, err := checkSkills(ctx)
-		if err != nil {
-			return err
-		}
-		if status.State == agentsetup.StateFailed {
-			return errors.New(status.Reason)
-		}
-		if status.State == agentsetup.StateOK && !force {
+		if status, _ := checkSkills(ctx); status.State == agentsetup.StateOK && !force {
 			return nil
 		}
 		return runSkillsInstall(io.Discard, []skills.Harness{harness}, home, force, skillRemoteSource{})
