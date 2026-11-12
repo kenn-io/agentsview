@@ -320,6 +320,21 @@ func (v *liveVectorServing) startSetup(deployment config.VectorEmbeddingsServerC
 	return nil
 }
 
+func (v *liveVectorServing) reloadSetup(local bool) (config.Config, error) {
+	cfg, err := v.reload()
+	if err != nil {
+		return config.Config{}, err
+	}
+	_, selected, err := cfg.Vector.Embeddings.Server("")
+	if err != nil {
+		return config.Config{}, err
+	}
+	if selected.Local != local {
+		return config.Config{}, server.ErrEmbeddingsProviderChanged
+	}
+	return cfg, nil
+}
+
 func (v *liveVectorServing) activate(deployment config.VectorEmbeddingsServerConfig, approvedBytes int64, automatic bool) error {
 	cfg := v.cfg
 	_, err := resolveLocalEmbeddings(v.ctx, deployment,
@@ -347,7 +362,7 @@ func (v *liveVectorServing) activate(deployment config.VectorEmbeddingsServerCon
 		} else if err != nil {
 			return err
 		}
-		cfg, err = v.reload()
+		cfg, err = v.reloadSetup(deployment.Local)
 		if err != nil {
 			return err
 		}

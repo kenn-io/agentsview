@@ -507,6 +507,20 @@ func TestLiveEmbeddingsSetup(t *testing.T) {
 			}
 
 			request("POST", "/api/v1/embeddings/setup", fmt.Sprintf(`{"approved_bytes":%d,"expected_provider":%q}`, shown, initial.Setup.Provider), 202)
+			if recipe == "changed" {
+				<-owner.done
+				result := status()
+				require.NotNil(t, result.Setup)
+				assert.Equal(t, server.ErrEmbeddingsProviderChanged.Error(), result.Setup.Error)
+				assert.Zero(t, encoded.Load())
+				assert.Nil(t, owner.Manager(""))
+				saved, err := config.LoadReadOnly()
+				require.NoError(t, err)
+				_, selected, err := saved.Vector.Embeddings.Server("")
+				require.NoError(t, err)
+				assert.Equal(t, stub.URL+"/v1", selected.Endpoint)
+				return
+			}
 			if recipe == "fresh" {
 				<-building
 				<-owner.done
@@ -537,7 +551,7 @@ func TestLiveEmbeddingsSetup(t *testing.T) {
 			assert.Equal(t, recipe == "fresh", chosen)
 			assert.EqualValues(t, 1, reloads.Load())
 			assert.Empty(t, status().Setup.Action)
-			assert.Equal(t, recipe == "fresh" || recipe == "changed", installs.Load() > 0)
+			assert.Equal(t, recipe == "fresh", installs.Load() > 0)
 			if recipe == "fresh" {
 				var result db.ContentSearchPage
 				require.NoError(t, json.Unmarshal(request("GET", "/api/v1/search/content?pattern=connections&mode=semantic&include_one_shot=true", "", 200), &result))
