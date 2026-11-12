@@ -76,6 +76,7 @@ func init() {
 	registerProviderFuzzTarget(providerFuzzTarget{
 		agent: AgentCodexCloud,
 		place: func(t *testing.T, root string, data []byte) {
+			t.Helper()
 			frame, err := zstdframe.EncodeFrame(data)
 			require.NoError(t, err)
 			writeProviderFuzzFile(t,

@@ -188,6 +188,7 @@ func init() {
 // the assistant step that follows it. step_payload is the protobuf the
 // parser walks; the rest of the row is schema bookkeeping.
 func placeAntigravityIDEFuzzInput(t *testing.T, root string, data []byte) {
+	t.Helper()
 	dir := filepath.Join(root, "conversations")
 	require.NoError(t, os.MkdirAll(dir, 0o755))
 	db := openProviderFuzzSQLite(t, filepath.Join(dir, providerFuzzEditorsSessionID+".db"))
@@ -204,6 +205,7 @@ func placeAntigravityIDEFuzzInput(t *testing.T, root string, data []byte) {
 // step_payload. With no history or brain transcript the CLI parser selects
 // the SQLite steps, so the payload is what it decodes.
 func placeAntigravityCLIFuzzInput(t *testing.T, root string, data []byte) {
+	t.Helper()
 	dir := filepath.Join(root, "conversations")
 	require.NoError(t, os.MkdirAll(dir, 0o755))
 	db := openProviderFuzzSQLite(t, filepath.Join(dir, providerFuzzEditorsSessionID+".db"))
@@ -217,6 +219,7 @@ func placeAntigravityCLIFuzzInput(t *testing.T, root string, data []byte) {
 // composer whose single bubble row is the fuzz input. Bubbles carry the
 // transcript text and tool calls; the composer document only lists them.
 func placeCursorIDEFuzzInput(t *testing.T, root string, data []byte) {
+	t.Helper()
 	if data == nil {
 		data = []byte{}
 	}
@@ -235,6 +238,7 @@ func placeCursorIDEFuzzInput(t *testing.T, root string, data []byte) {
 // chat-data ItemTable value is the fuzz input. That value is the JSON
 // document holding every chat in the workspace.
 func placeWindsurfFuzzInput(t *testing.T, root string, data []byte) {
+	t.Helper()
 	writeWindsurfStateDB(t,
 		filepath.Join(root, "workspaceStorage", "workspace-hash", windsurfStateDBName),
 		string(data))
@@ -244,6 +248,7 @@ func placeWindsurfFuzzInput(t *testing.T, root string, data []byte) {
 // storage ItemTable value is the fuzz input, beside an unrelated key the
 // parser must ignore.
 func placeTraeFuzzInput(t *testing.T, root string, data []byte) {
+	t.Helper()
 	writeTraeDB(t,
 		filepath.Join(root, "workspaceStorage", "hash", traeStateDBName),
 		string(data), "memento/unrelated-chat-storage")

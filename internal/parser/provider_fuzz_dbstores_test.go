@@ -153,6 +153,7 @@ func openProviderFuzzDB(t *testing.T, path, schema string) *sql.DB {
 // row and an assistant row, since Goose reads tool requests and responses
 // differently by role.
 func placeGooseFuzzInput(t *testing.T, root string, data []byte) {
+	t.Helper()
 	db := openProviderFuzzDB(t, filepath.Join(root, GooseDBName), gooseTestSchema)
 	fixture := &gooseTestFixture{database: db}
 	fixture.insertSession(t, "fuzz-session", "Fuzz session", "user", "")
@@ -164,6 +165,7 @@ func placeGooseFuzzInput(t *testing.T, root string, data []byte) {
 // placeForgeFuzzInput stores the input as conversations.context, the JSON
 // document holding the whole Forge transcript.
 func placeForgeFuzzInput(t *testing.T, root string, data []byte) {
+	t.Helper()
 	db := openProviderFuzzDB(t, filepath.Join(root, ForgeDBFilename), forgeSchema)
 	seeder := &ForgeSeeder{db: db, t: t}
 	seeder.AddConversation(t.Context(), "conv-fuzz", "Fuzz conversation", 1,
@@ -175,6 +177,7 @@ func placeForgeFuzzInput(t *testing.T, root string, data []byte) {
 // the input as its transcript file, which Devin prefers over the database's
 // message_nodes rows.
 func placeDevinFuzzInput(t *testing.T, root string, data []byte) {
+	t.Helper()
 	const sessionID = "session-fuzz"
 	cliDir := filepath.Join(root, "cli")
 	dbPath := filepath.Join(cliDir, devinDBFilename)
@@ -196,6 +199,7 @@ func placeDevinFuzzInput(t *testing.T, root string, data []byte) {
 // assistant tool call's input and result. Piebald stores parts in
 // normalized tables, so these are the columns that carry agent output.
 func placePiebaldFuzzInput(t *testing.T, root string, data []byte) {
+	t.Helper()
 	dbPath := filepath.Join(root, PiebaldDBFilename)
 	require.NoError(t, os.Rename(newPiebaldTestDB(t), dbPath))
 	execPiebaldTestSQL(t, dbPath,
@@ -228,6 +232,7 @@ func placePiebaldFuzzInput(t *testing.T, root string, data []byte) {
 // assistant's tool calls and token totals. One fixed exchange carries the
 // query so the conversation yields a session.
 func placeWarpFuzzInput(t *testing.T, root string, data []byte) {
+	t.Helper()
 	db := openProviderFuzzDB(t, filepath.Join(root, WarpDBFilename), warpSchema)
 	seeder := &WarpSeeder{db: db, t: t}
 	seeder.AddConversation(t.Context(), "conv-fuzz", string(data), "2026-04-07 10:00:00")
@@ -240,6 +245,7 @@ func placeWarpFuzzInput(t *testing.T, root string, data []byte) {
 // placeZCodeFuzzInput stores the input as part.data under a user message
 // and an assistant message.
 func placeZCodeFuzzInput(t *testing.T, root string, data []byte) {
+	t.Helper()
 	db := openProviderFuzzDB(t, filepath.Join(root, "db", zcodeDBName), zcodeTestSchema)
 	fixture := &zcodeTestFixture{database: db}
 	fixture.insertSession(t, "session-fuzz", "/home/user/code/app", "Fuzz session",
@@ -255,6 +261,7 @@ func placeZCodeFuzzInput(t *testing.T, root string, data []byte) {
 // placeCrushFuzzInput stores the input as messages.parts for a user, an
 // assistant, and a tool row; Crush interprets parts by role.
 func placeCrushFuzzInput(t *testing.T, root string, data []byte) {
+	t.Helper()
 	const created = int64(1_789_093_626)
 	db := openProviderFuzzDB(t, filepath.Join(root, CrushDBName), crushTestSchema)
 	fixture := &crushTestFixture{database: db}
@@ -270,6 +277,7 @@ func placeCrushFuzzInput(t *testing.T, root string, data []byte) {
 // Zed also writes zstd-compressed rows; mutated bytes would almost never
 // decompress, so the target fuzzes the decoded JSON document.
 func placeZedFuzzInput(t *testing.T, root string, data []byte) {
+	t.Helper()
 	dbPath := filepath.Join(root, filepath.FromSlash(zedThreadsDBRelPath))
 	require.NoError(t, os.MkdirAll(filepath.Dir(dbPath), 0o755))
 	createZedThreadsDBAt(t, dbPath, []zedTestThread{{
@@ -286,6 +294,7 @@ func placeZedFuzzInput(t *testing.T, root string, data []byte) {
 // placeShelleyFuzzInput stores the input as messages.llm_data for a user,
 // an agent, and a tool row.
 func placeShelleyFuzzInput(t *testing.T, root string, data []byte) {
+	t.Helper()
 	db := openProviderFuzzDB(t, filepath.Join(root, shelleyDBName), shelleySchema)
 	seedShelleyConversation(t, db, "cFUZZ1", "Fuzz conversation",
 		"/home/user/code/app", "claude-sonnet-4-6", "", true,
@@ -300,6 +309,7 @@ func placeShelleyFuzzInput(t *testing.T, root string, data []byte) {
 // CLI's data.sqlite3. The JSONL session layouts Kiro also reads are not
 // covered by this target.
 func placeKiroFuzzInput(t *testing.T, root string, data []byte) {
+	t.Helper()
 	db := openProviderFuzzDB(t, filepath.Join(root, kiroSQLiteDBName), kiroSQLiteSchema)
 	seedKiroSQLiteSession(t, db, "/home/user/code/kiro-app", "fuzz-session",
 		string(data), 1_779_012_000_000, 1_779_012_030_000)
@@ -311,6 +321,7 @@ func placeKiroFuzzInput(t *testing.T, root string, data []byte) {
 // workspace-sessions/<workspace>/<session>.json file. The provider picks the
 // parser by extension, so one input exercises both.
 func placeKiroIDEFuzzInput(t *testing.T, root string, data []byte) {
+	t.Helper()
 	writeProviderFuzzFile(t, filepath.Join(root,
 		"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb.chat"), data)
 	writeProviderFuzzFile(t, filepath.Join(root,
