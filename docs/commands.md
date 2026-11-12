@@ -2215,7 +2215,8 @@ searches add no hint.
 and `--hybrid` modes. On SQLite, a default search of several words lists matches
 of the exact text first, from every selected source. Messages holding every
 word follow, then messages holding fewer of the words; `matched_words` in JSON
-counts them. Regular word forms match, so `invoice` also finds `invoices`.
+counts them, excluding unquoted stop words. Regular word forms match, so
+`invoice` also finds `invoices`.
 A single word, a fully quoted query such as `'"rounding of invoices"'`, and a
 search whose `--in` leaves out `messages` match the exact text only. A quoted
 phrase inside a longer query must appear as typed. `--fts` and hybrid's keyword

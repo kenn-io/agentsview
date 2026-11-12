@@ -28336,7 +28336,7 @@ type DBContentMatch struct {
 	Location string `json:"location" validate:"required"`
 	Machine  string `json:"machine" validate:"required"`
 
-	// MatchedWords Number of query words the match holds in ranked word search; zero for other searches.
+	// MatchedWords Number of retained query words the match holds in ranked word search; unquoted stop words are dropped. Zero for other searches.
 	MatchedWords    int64    `json:"matched_words"`
 	Ordinal         int64    `json:"ordinal"`
 	OrdinalRange    []int64  `json:"ordinal_range" validate:"required"`

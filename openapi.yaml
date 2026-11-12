@@ -1376,7 +1376,7 @@ components:
         machine:
           type: string
         matched_words:
-          description: Number of query words the match holds in ranked word search; zero for other searches.
+          description: Number of retained query words the match holds in ranked word search; unquoted stop words are dropped. Zero for other searches.
           format: int64
           type: integer
         ordinal:

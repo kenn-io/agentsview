@@ -15,7 +15,7 @@ export interface DbContentMatch {
   /** Where the match occurred: message, thinking, tool_input, or tool_result. */
   location: string;
   machine: string;
-  /** Number of query words the match holds in ranked word search; zero for other searches. */
+  /** Number of retained query words the match holds in ranked word search; unquoted stop words are dropped. Zero for other searches. */
   matched_words: number;
   ordinal: number;
   /**

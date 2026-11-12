@@ -784,7 +784,7 @@ type contentMatch struct {
 	Ordinal         int      `json:"ordinal"`
 	Timestamp       string   `json:"timestamp"`
 	Snippet         string   `json:"snippet"`
-	MatchedWords    int      `json:"matched_words" jsonschema:"Number of query words the match holds in ranked word search; zero for other searches."`
+	MatchedWords    int      `json:"matched_words" jsonschema:"Number of retained query words the match holds in ranked word search; unquoted stop words are dropped. Zero for other searches."`
 	Score           *float64 `json:"score,omitempty" jsonschema:"Relevance score for semantic/hybrid modes; omitted for substring/regex/fts."`
 	OrdinalRange    [2]int   `json:"ordinal_range" jsonschema:"[start, end] ordinals of the conversation unit containing this match; equal to the match ordinal for single-message units."`
 	Subordinate     bool     `json:"subordinate,omitzero" jsonschema:"True when this match belongs to a subordinate unit: a sidechain run, or a subagent/fork session."`
