@@ -36,7 +36,12 @@ import {
   statusTiers,
   type SessionGroupInput,
 } from "./sessionGroups.js";
-import { indexFields, sameField, sameSessionFields, sidebarIndexRowToSession } from "./sessionRows.js";
+import {
+  indexFields,
+  sameField,
+  sameSessionFields,
+  sidebarIndexRowToSession,
+} from "./sessionRows.js";
 import { router } from "./router.svelte.js";
 import { UUID_PATTERN, resolveSessionId, sessionLookupPartial } from "../utils/go-to-session.js";
 import { LatestRead } from "../utils/latest-read.js";
