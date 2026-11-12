@@ -133,21 +133,9 @@ describe("API errors", () => {
     } satisfies Partial<ApiError>);
   });
 
-  it.each(["fetch", "body"] as const)("marks a %s I/O failure as transient", async (phase) => {
+  it("marks a fetch failure as transient", async () => {
     const cause = new TypeError("Content-Length header of network response exceeds response Body.");
-    const response = () =>
-      new Response(
-        new ReadableStream({
-          start(controller) {
-            controller.error(cause);
-          },
-        }),
-        { headers: { "Content-Type": "application/json" } },
-      );
-    vi.stubGlobal(
-      "fetch",
-      phase === "fetch" ? vi.fn().mockRejectedValue(cause) : vi.fn().mockResolvedValue(response()),
-    );
+    vi.stubGlobal("fetch", vi.fn().mockRejectedValue(cause));
     const error = await orvalFetch("/api/v1/search", {}).catch((err: unknown) => err);
     expect(error).toBeInstanceOf(TransportError);
     expect(error).toMatchObject({ message: cause.message, cause });

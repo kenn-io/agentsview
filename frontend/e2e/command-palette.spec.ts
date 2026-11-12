@@ -71,21 +71,36 @@ test("search shows placeholder rows at a result-list size while it runs", async 
 });
 
 test("Retry keeps focus while the search loads", async ({ page }) => {
+  const results = [
+    { session_id: "first", project: "project", agent: "codex", ordinal: 0, snippet: "first" },
+    { session_id: "second", project: "project", agent: "codex", ordinal: 0, snippet: "second" },
+  ];
   let retrying = false;
+  let releaseFailure: () => void = () => {};
+  const heldFailure = new Promise<void>((resolve) => (releaseFailure = resolve));
   let release: () => void = () => {};
   const held = new Promise<void>((resolve) => (release = resolve));
   await page.route("**/api/v1/search?**", async (route) => {
-    if (!retrying) {
+    const query = new URL(route.request().url()).searchParams.get("q");
+    if (query === "initial search") {
+      await route.fulfill({ json: { results } });
+    } else if (!retrying) {
+      await heldFailure;
       await route.fulfill({ status: 503 });
     } else {
       await held;
-      await route.continue();
+      await route.fulfill({ json: { results } });
     }
   });
   await page.goto("/usage");
-  await openSearch(page, "synchronous DB read");
+  await openSearch(page, "initial search");
   const retry = page.getByRole("button", { name: "Retry" });
   const input = page.locator(".palette-input");
+  await expect(page.locator(".palette-item")).toHaveCount(2);
+  await input.fill("synchronous DB read");
+  await expect(page.locator(".palette-loading")).toBeVisible();
+  await input.press("ArrowDown");
+  releaseFailure();
   await expect(retry).toBeVisible();
   await retry.focus();
   retrying = true;
@@ -94,4 +109,7 @@ test("Retry keeps focus while the search loads", async ({ page }) => {
   release();
   await expect(page.locator(".palette-item").first()).toBeVisible();
   await expect(input).toBeFocused();
+  await expect(page.locator(".palette-item").first()).toHaveClass(/selected/);
+  await input.press("Enter");
+  await expect(page).toHaveURL(/\/sessions\/first/);
 });
