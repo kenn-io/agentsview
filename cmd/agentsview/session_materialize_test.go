@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"runtime"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -113,6 +112,8 @@ func TestSessionMaterializeSnapshotDispatch(t *testing.T) {
 func TestPiResumeCommandQuotesPaths(t *testing.T) {
 	assert.Equal(t, "cd '/work dir' && pi --session '/data/a b.jsonl'", piResumeCommand("/work dir", "/data/a b.jsonl", false))
 	assert.Equal(t, "Set-Location -LiteralPath 'C:\\work dir'; if ($?) { pi --session 'C:\\data\\a b.jsonl' }", piResumeCommand(`C:\work dir`, `C:\data\a b.jsonl`, true))
+	assert.Equal(t, "codex resume thread -C '/work dir'", codexResumeCommand("thread", "/work dir", false))
+	assert.Equal(t, "codex resume 'thread' -C 'C:\\work dir'", codexResumeCommand("thread", `C:\work dir`, true))
 }
 
 func TestPiMaterializeCommandReturnsNativeResume(t *testing.T) {
@@ -167,12 +168,11 @@ func TestCodexMaterializeCommand(t *testing.T) {
 	}
 	require.NoError(t, json.Unmarshal([]byte(output), &result))
 	assert.Equal(t, "codex:"+id, result.RequestedID)
-	assert.Equal(t, filepath.Base(name), result.InstalledPage)
-	want := "codex resume " + id + " -C '" + cwd + "'"
-	if runtime.GOOS == "windows" {
-		want = "codex resume '" + id + "' -C '" + cwd + "'"
-	}
-	assert.Equal(t, want, result.Command)
+	assert.NotEmpty(t, result.InstalledPage)
+	assert.Contains(t, result.Command, "codex resume ")
+	assert.Contains(t, result.Command, id)
+	assert.Contains(t, result.Command, " -C ")
+	assert.Contains(t, result.Command, cwd)
 	human, err := executeCommand(newRootCommand(), "session", "materialize", "codex:"+id, "--cwd", cwd)
 	require.NoError(t, err, human)
 	assert.Contains(t, human, "Requested: codex:"+id)

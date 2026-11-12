@@ -38,9 +38,13 @@ func materializeCodex(ctx context.Context, cfg config.Config, database *db.DB, s
 				return Result{}, errors.New("archive session identity differs")
 			}
 			var pages []codexPage
-			snapshot, err := archivesource.ReadCodexSnapshot(ctx, cfg.ArchiveSources, owners, maxSourceBytes, func(names []string, read func(context.Context, string, int64) ([]byte, error)) error {
+			snapshot, err := archivesource.ReadCodexSnapshot(ctx, cfg.ArchiveSources, owners, maxSourceBytes, func(root string, names []string, read func(context.Context, string, int64) ([]byte, error)) error {
 				var err error
-				pages, err = codexLineage(ctx, thread, names, read)
+				archived := make(map[string]bool)
+				for _, name := range names {
+					archived[name] = codexArchived(root, name)
+				}
+				pages, err = codexLineage(ctx, thread, names, archived, read)
 				return err
 			})
 			if err != nil {
@@ -54,6 +58,7 @@ func materializeCodex(ctx context.Context, cfg config.Config, database *db.DB, s
 		return Result{}, err
 	}
 	var names []string
+	archived := make(map[string]bool)
 	var read func(context.Context, string, int64) ([]byte, error)
 	var closeSource func() error
 	if host != "" && host != session.Machine && strings.HasPrefix(source, "s3://") {
@@ -108,6 +113,7 @@ func materializeCodex(ctx context.Context, cfg config.Config, database *db.DB, s
 				if _, exists := sizes[obj.URI]; !exists {
 					names = append(names, obj.URI)
 				}
+				archived[obj.URI] = codexArchived(candidate, rel)
 				sizes[obj.URI] = obj.Size
 			}
 		}
@@ -209,7 +215,16 @@ func materializeCodex(ctx context.Context, cfg config.Config, database *db.DB, s
 			return Result{}, errors.New("native Codex source identity differs")
 		}
 		if err := discovery.DiscoverEach(ctx, func(ref parser.SourceRef) error {
-			names = append(names, filepath.ToSlash(ref.DisplayPath))
+			name := filepath.ToSlash(ref.DisplayPath)
+			names = append(names, name)
+			var matched string
+			for _, candidate := range roots {
+				rel, err := filepath.Rel(candidate, ref.DisplayPath)
+				if err == nil && filepath.IsLocal(rel) && len(candidate) > len(matched) {
+					matched = candidate
+					archived[name] = codexArchived(candidate, filepath.ToSlash(rel))
+				}
+			}
 			return nil
 		}); err != nil {
 			return Result{}, err
@@ -224,7 +239,7 @@ func materializeCodex(ctx context.Context, cfg config.Config, database *db.DB, s
 			return nil, errors.New("native Codex source outside configured roots")
 		}
 	}
-	pages, err := codexLineage(ctx, thread, names, read)
+	pages, err := codexLineage(ctx, thread, names, archived, read)
 	if closeSource != nil {
 		err = errors.Join(err, closeSource())
 		closeSource = nil
@@ -235,6 +250,12 @@ func materializeCodex(ctx context.Context, cfg config.Config, database *db.DB, s
 	return installCodex(ctx, cwd, source, session.ID, pages)
 }
 
+// codexArchived uses only the selected root and its relative coordinates.
+func codexArchived(root, relative string) bool {
+	root = strings.ReplaceAll(root, `\`, "/")
+	return path.Base(root) == "archived_sessions" || strings.HasPrefix(relative, "archived_sessions/")
+}
+
 func installCodex(ctx context.Context, cwd, source, requestedID string, pages []codexPage) (Result, error) {
 	root, err := capture.ProducerRoot(capture.ProviderCodex, "")
 	if err != nil {
@@ -243,7 +264,7 @@ func installCodex(ctx context.Context, cwd, source, requestedID string, pages []
 	files := make([]installFile, 0, len(pages))
 	paths := make([]string, 0, len(pages))
 	for _, page := range pages {
-		date, err := codexDate(page.name)
+		date, _, err := codexDate(page.name)
 		if err != nil {
 			return Result{}, err
 		}
@@ -254,14 +275,23 @@ func installCodex(ctx context.Context, cwd, source, requestedID string, pages []
 	// Native lookup can find the same rollout in either tree, under another
 	// date or compression spelling. Refuse different raw bytes before writing.
 	for _, nativeRoot := range []string{root, filepath.Join(filepath.Dir(root), "archived_sessions")} {
-		if info, err := os.Lstat(nativeRoot); errors.Is(err, os.ErrNotExist) {
+		if _, err := os.Lstat(nativeRoot); errors.Is(err, os.ErrNotExist) {
 			continue
 		} else if err != nil {
 			return Result{}, err
-		} else if !info.IsDir() {
+		}
+		resolvedRoot, err := filepath.EvalSymlinks(nativeRoot)
+		if err != nil {
+			return Result{}, err
+		}
+		info, err := os.Stat(resolvedRoot)
+		if err != nil {
+			return Result{}, err
+		}
+		if !info.IsDir() {
 			return Result{}, fmt.Errorf("invalid native Codex root: %s", nativeRoot)
 		}
-		err := filepath.WalkDir(nativeRoot, func(name string, entry fs.DirEntry, walkErr error) error {
+		err = filepath.WalkDir(resolvedRoot, func(name string, entry fs.DirEntry, walkErr error) error {
 			if walkErr != nil {
 				return walkErr
 			}
@@ -278,7 +308,7 @@ func installCodex(ctx context.Context, cwd, source, requestedID string, pages []
 				if !entry.Type().IsRegular() {
 					return fmt.Errorf("invalid native Codex destination: %s", name)
 				}
-				data, err := readStableFile(ctx, nativeRoot, name, maxSourceBytes)
+				data, err := readStableFile(ctx, resolvedRoot, name, maxSourceBytes)
 				if err != nil {
 					return err
 				}

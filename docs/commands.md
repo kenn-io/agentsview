@@ -2215,14 +2215,17 @@ originals are installed under the live sessions directory. Human output reports
 the requested ID and installed page; JSON uses `requested_id` and
 `installed_page`. The printed command resumes the native thread in the requested
 checkout. Codex may choose an already-running thread or an existing indexed
-path before these installed files; materialization does not update its index.
+path before these installed files. Its filesystem fallback may select a newer,
+different rollout. Materialization does not update its index; `installed_page`
+identifies the page installed here. Different bytes for the same rollout are
+refused before publication.
 
 An already-running Claude session can attach in that process's existing
 directory. Claude's in-app resume picker can also fall back to a recorded
 project path for an unbound session. Start the printed command in a new process
 when the selected checkout matters: end the existing running session first.
-Materialize after the native session and any S3 uploader finish; S3 files can otherwise
-reflect different upload moments.
+Materialize after the native session and any S3 uploader finish; S3 files can
+otherwise reflect different upload moments.
 If the destination is a configured Claude, Pi, or Codex source root, a later sync may
 discover the installed copy and deduplicate it by native session ID. The stored
 file path or checkout directory may then update.

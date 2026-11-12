@@ -27,12 +27,12 @@ func MaterializeSnapshot(ctx context.Context, sources []config.ArchiveSource, ow
 }
 
 // ReadCodexSnapshot retains the snapshot lease while rollout pages are read.
-func ReadCodexSnapshot(ctx context.Context, sources []config.ArchiveSource, owners []db.ArchiveSessionProvenance, limit int64, use func([]string, func(context.Context, string, int64) ([]byte, error)) error) (string, error) {
+func ReadCodexSnapshot(ctx context.Context, sources []config.ArchiveSource, owners []db.ArchiveSessionProvenance, limit int64, use func(string, []string, func(context.Context, string, int64) ([]byte, error)) error) (string, error) {
 	_, _, snapshot, err := materializeSnapshot(ctx, sources, owners, "codex", limit, use)
 	return snapshot, err
 }
 
-func materializeSnapshot(ctx context.Context, sources []config.ArchiveSource, owners []db.ArchiveSessionProvenance, provider string, limit int64, use func([]string, func(context.Context, string, int64) ([]byte, error)) error) (tree *rawderive.Materialization, primary string, snapshot string, retErr error) {
+func materializeSnapshot(ctx context.Context, sources []config.ArchiveSource, owners []db.ArchiveSessionProvenance, provider string, limit int64, use func(string, []string, func(context.Context, string, int64) ([]byte, error)) error) (tree *rawderive.Materialization, primary string, snapshot string, retErr error) {
 	defer func() {
 		if retErr != nil && tree != nil {
 			retErr = errors.Join(retErr, tree.Cleanup())
@@ -163,8 +163,6 @@ func materializeSnapshot(ctx context.Context, sources []config.ArchiveSource, ow
 	}
 	base := strings.TrimSuffix(primary, ".jsonl") + "/"
 	bound.Path = primary
-	var entries []rawsync.Entry
-	var conflicts map[string]bool
 	if use != nil {
 		var duplicate bool
 		err = conn.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM raw_archive_roots WHERE device_id=? AND provider='codex' AND original_path=? AND id<>?)`, s.DeviceID, originalRoot, s.RootID).Scan(&duplicate)
@@ -178,31 +176,14 @@ func materializeSnapshot(ctx context.Context, sources []config.ArchiveSource, ow
 		if err != nil {
 			return nil, "", "", err
 		}
-		conflicts = make(map[string]bool)
+		conflicts := make(map[string]bool)
 		items, err := inventoryEntries(rows, bound, conflicts)
 		if err != nil {
 			return nil, "", "", err
 		}
+		byPath := make(map[string]rawsync.Entry, len(items))
+		names := make([]string, 0, len(items))
 		for _, entry := range items {
-			name := entry.Path
-			if path.IsAbs(name) || path.Clean(name) != name || name == ".." || strings.HasPrefix(name, "../") || strings.Contains(name, `\`) {
-				return nil, "", "", errors.New("invalid saved rollout path")
-			}
-			if strings.HasPrefix(name, "sessions/") || strings.HasPrefix(name, "archived_sessions/") {
-				entries = append(entries, entry)
-			}
-		}
-
-	} else {
-		entries, err = selectedInventory(ctx, conn, s.RootID, bound, base)
-	}
-	if err != nil {
-		return nil, "", "", err
-	}
-	if use != nil {
-		byPath := make(map[string]rawsync.Entry, len(entries))
-		names := make([]string, 0, len(entries))
-		for _, entry := range entries {
 			byPath[entry.Path] = entry
 			names = append(names, entry.Path)
 		}
@@ -231,7 +212,11 @@ func materializeSnapshot(ctx context.Context, sources []config.ArchiveSource, ow
 			defer func() { readErr = errors.Join(readErr, file.Close()) }()
 			return io.ReadAll(io.LimitReader(file, entry.Length+1))
 		}
-		return nil, "", owner.Attachment.SnapshotID, use(names, read)
+		return nil, "", owner.Attachment.SnapshotID, use(originalRoot, names, read)
+	}
+	entries, err := selectedInventory(ctx, conn, s.RootID, bound, base)
+	if err != nil {
+		return nil, "", "", err
 	}
 	if err := conn.Close(); err != nil {
 		conn = nil

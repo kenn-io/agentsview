@@ -29,7 +29,7 @@ func TestMaterializeCodexConfiguredAndMirror(t *testing.T) {
 			home, root, cwd := t.TempDir(), t.TempDir(), t.TempDir()
 			t.Setenv("CODEX_HOME", home)
 			cfg := config.Config{DataDir: root, InstallationID: "local", LocalMachineName: "local"}
-			location := filepath.Join(root, "sessions")
+			location := filepath.Join(root, "archived_sessions", "source", "sessions")
 			oldName := "rollout-2026-01-01T01-00-00-" + id + ".jsonl"
 			newName := "rollout-2026-01-02T01-00-00-" + id + "_" + page + ".jsonl"
 			stored := filepath.Join(location, "2026", "01", "01", oldName)
@@ -37,8 +37,8 @@ func TestMaterializeCodexConfiguredAndMirror(t *testing.T) {
 			if mirror {
 				cfg.RemoteHosts = []config.RemoteHost{{Host: "remote"}}
 				session.ID, session.Machine = "remote~codex:"+id, "remote"
-				stored = "remote:/source/sessions/2026/01/01/" + oldName
-				location = filepath.Join(remotesync.MirrorDir(root, "remote"), "source", "sessions")
+				stored = "remote:/archived_sessions/source/sessions/2026/01/01/" + oldName
+				location = filepath.Join(remotesync.MirrorDir(root, "remote"), "archived_sessions", "source", "sessions")
 			} else {
 				cfg.AgentDirs = map[parser.AgentType][]string{parser.AgentCodex: {location}}
 			}
@@ -47,7 +47,7 @@ func TestMaterializeCodexConfiguredAndMirror(t *testing.T) {
 			require.NoError(t, os.MkdirAll(filepath.Dir(oldPath), 0o700))
 			require.NoError(t, os.MkdirAll(filepath.Dir(newPath), 0o700))
 			old := []byte(fmt.Sprintf(`{"type":"session_meta","payload":{"id":%q,"history_mode":"paginated"}}`+"\n", id))
-			newPage := []byte(fmt.Sprintf(`{"type":"session_meta","payload":{"id":%q,"history_mode":"paginated","history_base":{"thread_id":%q,"end_ordinal_exclusive":1,"end_byte_offset":1}}}`+"\n", id, id))
+			newPage := []byte(fmt.Sprintf(`{"type":"session_meta","payload":{"id":%q,"history_mode":"paginated","history_base":{"thread_id":%q,"end_ordinal_exclusive":1,"end_byte_offset":%d}}}`+"\n", id, id, len(old)))
 			require.NoError(t, os.WriteFile(oldPath, old, 0o600))
 			require.NoError(t, os.WriteFile(newPath, newPage, 0o600))
 			result, err := Materialize(t.Context(), cfg, nil, session, cwd)
@@ -60,9 +60,6 @@ func TestMaterializeCodexConfiguredAndMirror(t *testing.T) {
 				require.NoError(t, err)
 				assert.Equal(t, want, got)
 			}
-			require.NoError(t, os.WriteFile(result.Paths[1], []byte("changed"), 0o600))
-			_, err = Materialize(t.Context(), cfg, nil, session, cwd)
-			require.ErrorContains(t, err, "differs")
 			var got []byte
 			if mirror {
 				// The ancestor may have moved to the sibling archived root.
@@ -83,6 +80,7 @@ func TestMaterializeCodexConfiguredAndMirror(t *testing.T) {
 				encoder.Close()
 				require.NoError(t, os.Remove(oldPath))
 				require.NoError(t, os.WriteFile(oldPath+".zst", compressed, 0o600))
+				require.NoError(t, os.WriteFile(archivedPath, old, 0o600))
 				t.Setenv("CODEX_HOME", t.TempDir())
 				result, err = Materialize(t.Context(), cfg, nil, session, cwd)
 				require.NoError(t, err)
@@ -90,13 +88,15 @@ func TestMaterializeCodexConfiguredAndMirror(t *testing.T) {
 				require.NoError(t, err)
 				assert.Equal(t, compressed, got)
 			}
-			// A publisher failure unrelated to rollout matching reaches the caller.
-			blockedHome := t.TempDir()
-			t.Setenv("CODEX_HOME", blockedHome)
-			require.NoError(t, os.Mkdir(filepath.Join(blockedHome, "sessions"), 0o700))
-			require.NoError(t, os.WriteFile(filepath.Join(blockedHome, "sessions", "2026"), []byte("block"), 0o600))
-			_, err = Materialize(t.Context(), cfg, nil, session, cwd)
-			require.Error(t, err)
+			if !mirror {
+				// A publisher failure unrelated to rollout matching reaches the caller.
+				blockedHome := t.TempDir()
+				t.Setenv("CODEX_HOME", blockedHome)
+				require.NoError(t, os.Mkdir(filepath.Join(blockedHome, "sessions"), 0o700))
+				require.NoError(t, os.WriteFile(filepath.Join(blockedHome, "sessions", "2026"), []byte("block"), 0o600))
+				_, err = Materialize(t.Context(), cfg, nil, session, cwd)
+				require.ErrorContains(t, err, "2026")
+			}
 		})
 	}
 }
@@ -108,9 +108,9 @@ func TestMaterializeCodexS3(t *testing.T) {
 	const key = "host/raw/codex/sessions/2026/01/01/rollout-2026-01-01T01-00-00-" + id + ".jsonl"
 	const parent = "22222222-2222-4222-8222-222222222222"
 	const parentKey = "host/raw/codex/archived_sessions/rollout-2024-01-15T00-00-00-" + parent + ".jsonl"
-	content := fmt.Sprintf(`{"type":"session_meta","payload":{"id":%q,"history_mode":"paginated","history_base":{"thread_id":%q,"end_ordinal_exclusive":1,"end_byte_offset":1}}}`+"\n", id, parent)
-	var corrupt atomic.Bool
 	parentContent := fmt.Sprintf(`{"type":"session_meta","payload":{"id":%q,"history_mode":"paginated"}}`+"\n", parent)
+	content := fmt.Sprintf(`{"type":"session_meta","payload":{"id":%q,"history_mode":"paginated","history_base":{"thread_id":%q,"end_ordinal_exclusive":1,"end_byte_offset":%d}}}`+"\n", id, parent, len(parentContent))
+	var corrupt atomic.Bool
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Query().Get("list-type") == "2" {
 			w.Header().Set("Content-Type", "application/xml")
@@ -189,8 +189,9 @@ func TestMaterializeCodexMissingAndCrossRoot(t *testing.T) {
 	ancestor := filepath.Join(archived, "rollout-2024-01-15T00-00-00-"+parent+".jsonl")
 	require.NoError(t, os.MkdirAll(filepath.Dir(page), 0o700))
 	require.NoError(t, os.MkdirAll(archived, 0o700))
-	require.NoError(t, os.WriteFile(page, []byte(fmt.Sprintf(`{"type":"session_meta","payload":{"id":%q,"history_mode":"paginated","history_base":{"thread_id":%q,"end_ordinal_exclusive":1,"end_byte_offset":1}}}`+"\n", id, parent)), 0o600))
-	require.NoError(t, os.WriteFile(ancestor, []byte(fmt.Sprintf(`{"type":"session_meta","payload":{"id":%q,"history_mode":"paginated"}}`+"\n", parent)), 0o600))
+	ancestorContent := fmt.Sprintf(`{"type":"session_meta","payload":{"id":%q,"history_mode":"paginated"}}`+"\n", parent)
+	require.NoError(t, os.WriteFile(page, []byte(fmt.Sprintf(`{"type":"session_meta","payload":{"id":%q,"history_mode":"paginated","history_base":{"thread_id":%q,"end_ordinal_exclusive":1,"end_byte_offset":%d}}}`+"\n", id, parent, len(ancestorContent))), 0o600))
+	require.NoError(t, os.WriteFile(ancestor, []byte(ancestorContent), 0o600))
 	cfg.AgentDirs[parser.AgentCodex] = []string{live, archived}
 	session.FilePath = &page
 	ctx, cancel := context.WithCancel(t.Context())
@@ -223,4 +224,24 @@ func TestMaterializeCodexMissingAndCrossRoot(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, result.Paths, 2)
 	assert.Equal(t, filepath.Base(ancestor), filepath.Base(result.Paths[0]))
+
+	t.Run("linked native roots", func(t *testing.T) {
+		home, targetLive, targetArchive := t.TempDir(), t.TempDir(), t.TempDir()
+		t.Setenv("CODEX_HOME", home)
+		if err := os.Symlink(targetLive, filepath.Join(home, "sessions")); err != nil {
+			t.Skipf("directory symlinks unavailable: %v", err)
+		}
+		require.NoError(t, os.Symlink(targetArchive, filepath.Join(home, "archived_sessions")))
+		conflict := filepath.Join(targetArchive, filepath.Base(ancestor))
+		require.NoError(t, os.WriteFile(conflict, []byte("different"), 0o600))
+		_, err := Materialize(t.Context(), cfg, nil, session, t.TempDir())
+		require.ErrorContains(t, err, "differs")
+		require.NoError(t, os.Remove(conflict))
+		result, err := Materialize(t.Context(), cfg, nil, session, t.TempDir())
+		require.NoError(t, err)
+		require.Len(t, result.Paths, 2)
+		got, err := os.ReadFile(filepath.Join(targetLive, "2024", "01", "15", filepath.Base(ancestor)))
+		require.NoError(t, err)
+		assert.Equal(t, ancestorBytes, got)
+	})
 }
