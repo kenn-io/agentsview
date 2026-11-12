@@ -1947,45 +1947,9 @@ func (s *UsagePairwiseSides) Side(dimension string, values []string) (DailyUsage
 func (r DailyUsageResult) Clone() DailyUsageResult {
 	r.Daily = slices.Clone(r.Daily)
 	for i := range r.Daily {
-		r.Daily[i].ModelsUsed = slices.Clone(r.Daily[i].ModelsUsed)
-		r.Daily[i].ModelBreakdowns = slices.Clone(r.Daily[i].ModelBreakdowns)
 		r.Daily[i].ProjectBreakdowns = slices.Clone(r.Daily[i].ProjectBreakdowns)
-		r.Daily[i].AgentBreakdowns = slices.Clone(r.Daily[i].AgentBreakdowns)
-		r.Daily[i].MachineBreakdowns = slices.Clone(r.Daily[i].MachineBreakdowns)
 	}
 	r.Projects = maps.Clone(r.Projects)
-	for key, project := range r.Projects {
-		if project.Identity != nil {
-			project.Identity = new(*project.Identity)
-			r.Projects[key] = project
-		}
-	}
-	if r.Pricing != nil {
-		pricing := *r.Pricing
-		if pricing.LatestRowUpdatedAt != nil {
-			pricing.LatestRowUpdatedAt = new(*pricing.LatestRowUpdatedAt)
-		}
-		pricing.Fallback.Models = slices.Clone(pricing.Fallback.Models)
-		pricing.Models = maps.Clone(pricing.Models)
-		for model, provenance := range pricing.Models {
-			provenance.Resolutions = slices.Clone(provenance.Resolutions)
-			for i := range provenance.Resolutions {
-				rate := &provenance.Resolutions[i]
-				if rate.MatchedPattern != nil {
-					rate.MatchedPattern = new(*rate.MatchedPattern)
-				}
-				rate.Bands = slices.Clone(rate.Bands)
-				for j := range rate.Bands {
-					if rate.Bands[j].UpdatedAt != nil {
-						rate.Bands[j].UpdatedAt = new(*rate.Bands[j].UpdatedAt)
-					}
-				}
-				rate.Application.Bands = slices.Clone(rate.Application.Bands)
-			}
-			pricing.Models[model] = provenance
-		}
-		r.Pricing = &pricing
-	}
 	r.SessionCounts.ByProject = maps.Clone(r.SessionCounts.ByProject)
 	r.SessionCounts.ByAgent = maps.Clone(r.SessionCounts.ByAgent)
 	return r

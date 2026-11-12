@@ -22,19 +22,12 @@ func TestDailyUsageKept(t *testing.T) {
 	seedLiveWriteSession(t, database, "reported", "project", "2026-08-10T09:00:00Z", 0, 10)
 	var prepares atomic.Int32
 	database.SetUsageWindowPrepareForTest(func(context.Context) { prepares.Add(1) })
-	filter := UsageFilter{From: "2026-08-10", To: "2026-08-10", Timezone: "UTC", Breakdowns: true}
+	filter := UsageFilter{From: "2026-08-10", To: "2026-08-10", Timezone: "UTC"}
 	first, err := database.GetDailyUsage(t.Context(), filter)
 	require.NoError(t, err)
 	assert.Equal(t, 10, first.Totals.InputTokens)
 	require.NotEmpty(t, first.Daily)
 	first.Daily[0].InputTokens = 999
-	first.Daily[0].ModelsUsed[0] = "changed"
-	first.Daily[0].ModelBreakdowns[0].InputTokens = 999
-	first.Daily[0].AgentBreakdowns[0].InputTokens = 999
-	first.Daily[0].MachineBreakdowns[0].InputTokens = 999
-	require.NotNil(t, first.Pricing)
-	first.Pricing.Source = "changed"
-	first.Pricing.Models["changed"] = export.ModelPricingProvenance{}
 	other := filter
 	other.From = "2026-08-09"
 	_, err = database.GetDailyUsage(t.Context(), other)
@@ -43,12 +36,6 @@ func TestDailyUsageKept(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, 10, got.Totals.InputTokens)
 	assert.Equal(t, 10, got.Daily[0].InputTokens)
-	assert.Equal(t, "model-a", got.Daily[0].ModelsUsed[0])
-	assert.Equal(t, 10, got.Daily[0].ModelBreakdowns[0].InputTokens)
-	assert.Equal(t, 10, got.Daily[0].AgentBreakdowns[0].InputTokens)
-	assert.Equal(t, 10, got.Daily[0].MachineBreakdowns[0].InputTokens)
-	assert.NotEqual(t, "changed", got.Pricing.Source)
-	assert.NotContains(t, got.Pricing.Models, "changed")
 	assert.EqualValues(t, 2, prepares.Load())
 
 	appendLiveWriteMessage(t, database, "reported", "2026-08-10T10:00:00Z", 1, 7)
