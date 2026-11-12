@@ -467,11 +467,19 @@ func shouldReplaceDaemonRuntime(rt *DaemonRuntime, currentVersion string) bool {
 	return update.IsNewer(currentVersion, rt.Record.Version)
 }
 
-func longLivedDaemonCompatibilityError(err error) error {
-	return fmt.Errorf("%w\n\nThis long-running client cannot use the running daemon and will not replace it. "+
+type longLivedCompatibilityError struct{ cause error }
+
+func (e *longLivedCompatibilityError) Unwrap() error { return e.cause }
+
+func (e *longLivedCompatibilityError) Error() string {
+	return fmt.Sprintf("%v\n\nThis long-running client cannot use the running daemon and will not replace it. "+
 		"Restart this command with the current agentsview binary (`mcp`, `pg push --watch`, "+
 		"`duckdb push --watch`, or the installed push service). If the daemon still needs "+
-		"replacement, run `agentsview daemon restart` from that install", err)
+		"replacement, run `agentsview daemon restart` from that install", e.cause)
+}
+
+func longLivedDaemonCompatibilityError(err error) error {
+	return &longLivedCompatibilityError{cause: err}
 }
 
 func shouldReplaceIncompatibleDaemonRuntime(

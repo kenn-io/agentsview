@@ -13,7 +13,6 @@ import (
 
 	"github.com/spf13/cobra"
 	"github.com/spf13/pflag"
-	"go.kenn.io/agentsview/internal/apiclient"
 	"go.kenn.io/agentsview/internal/config"
 	"go.kenn.io/agentsview/internal/db"
 	"go.kenn.io/agentsview/internal/export"
@@ -140,19 +139,23 @@ func newExportStatusCommand() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			defer database.Close()
 			status, err := database.ProjectIdentityBackfillStatus(cmd.Context())
+			_ = database.Close()
 			if err != nil {
 				return err
 			}
-			if _, err = fmt.Fprintf(cmd.OutOrStdout(),
-				"project identity evidence: %s (%d/%d)\n",
-				status.State, status.CompletedItems, status.TotalItems); err != nil {
+			if status.State != "completed" && status.State != "not_needed" {
+				if appCfg.ApplyDeploymentAuth() == nil {
+					rt := FindWritableDaemonRuntime(appCfg.DataDir, appCfg.AuthToken)
+					failure, _ := exportDaemonPing(cmd.Context(), rt, appCfg.AuthToken)
+					status = exportStatusWithFailure(status, failure)
+				}
+			}
+			if _, err = fmt.Fprintf(cmd.OutOrStdout(), "project identity evidence: %s\n", exportStatusText(status)); err != nil {
 				return err
 			}
-			if status.State == "failed" && status.LastError != "" {
-				_, err = fmt.Fprintf(cmd.OutOrStdout(),
-					"last error: %s\n", status.LastError)
+			if status.State == "failed" {
+				_, err = fmt.Fprintln(cmd.OutOrStdout(), exportBackfillFailure(status))
 			}
 			return err
 		},
@@ -263,6 +266,10 @@ func newExportSessionsCommand() *cobra.Command {
 func startExportDaemon(ctx context.Context, cfg *config.Config) (*DaemonRuntime, error) {
 	tr, err := ensureTransportContext(ctx, cfg, transportIntentLongLived, startupWaitTimeout)
 	if err != nil {
+		var incompatible *longLivedCompatibilityError
+		if errors.As(err, &incompatible) {
+			return nil, fmt.Errorf("%w; run `agentsview daemon restart`, then check `agentsview export status` and rerun `agentsview export sessions --wait`", incompatible.cause)
+		}
 		return nil, err
 	}
 	if tr.Mode == transportHTTP && !tr.ReadOnly {
@@ -320,7 +327,7 @@ func runExportSessions(cmd *cobra.Command, cfg exportSessionsConfig) error {
 			return exportBackfillFailure(backfill)
 		}
 		if !cfg.Wait {
-			return fmt.Errorf("project identification is %s (%d/%d); run `agentsview export sessions --wait` or check `agentsview export status`", backfill.State, backfill.CompletedItems, backfill.TotalItems)
+			return fmt.Errorf("project identification is %s; run `agentsview export sessions --wait` or check `agentsview export status`", exportStatusText(backfill))
 		}
 		if err := database.Close(); err != nil {
 			return err
@@ -397,32 +404,35 @@ func exportBackfillFailure(status db.BackgroundMigrationStatus) error {
 	return fmt.Errorf("project identification failed%s; run `agentsview daemon restart`, then check `agentsview export status`", reason)
 }
 
-func exportDaemonPing(ctx context.Context, rt *DaemonRuntime, token string) (failed, ok bool) {
+func exportDaemonPing(ctx context.Context, rt *DaemonRuntime, token string) (failure string, ok bool) {
 	if rt == nil {
-		return false, false
+		return "", false
 	}
-	ctx, cancel := context.WithTimeout(ctx, time.Second)
-	defer cancel()
-	ep := rt.Record.Endpoint()
-	client, err := apiclient.NewHTTPClient(ep.BaseURL()+rt.BasePath, token,
-		ep.HTTPClient(daemon.HTTPClientOptions{Timeout: time.Second, DisableKeepAlives: true}))
-	if err != nil {
-		return false, false
-	}
-	resp, err := client.GetAPIPingWithResponse(ctx)
-	if err != nil || resp == nil || resp.JSON200 == nil || resp.JSON200.Pid == nil || *resp.JSON200.Pid != int64(rt.Record.PID) {
-		return false, false
-	}
-	return resp.JSON200.ProjectIdentityBackfillFailed != nil && *resp.JSON200.ProjectIdentityBackfillFailed, true
+	info, err := probeRuntime(ctx, rt.Record, token, daemon.ProbeOptions{ExpectedService: daemonService, Timeout: time.Second})
+	return info.BackfillError, err == nil
 }
 
-func exportWritableDaemonPing(ctx context.Context, cfg *config.Config, rt **DaemonRuntime) (failed, ok bool) {
-	failed, ok = exportDaemonPing(ctx, *rt, cfg.AuthToken)
+func exportWritableDaemonPing(ctx context.Context, cfg *config.Config, rt **DaemonRuntime) (failure string, ok bool) {
+	failure, ok = exportDaemonPing(ctx, *rt, cfg.AuthToken)
 	if !ok {
 		*rt = FindWritableDaemonRuntime(cfg.DataDir, cfg.AuthToken)
-		failed, ok = exportDaemonPing(ctx, *rt, cfg.AuthToken)
+		failure, ok = exportDaemonPing(ctx, *rt, cfg.AuthToken)
 	}
-	return failed, ok
+	return failure, ok
+}
+
+func exportStatusWithFailure(status db.BackgroundMigrationStatus, failure string) db.BackgroundMigrationStatus {
+	if failure != "" && (status.State == "pending" || status.State == "running" || status.State == "failed") {
+		status.State, status.LastError = "failed", failure
+	}
+	return status
+}
+
+func exportStatusText(status db.BackgroundMigrationStatus) string {
+	if status.State == "pending" && status.TotalItems == 0 {
+		return status.State
+	}
+	return fmt.Sprintf("%s (%d/%d)", status.State, status.CompletedItems, status.TotalItems)
 }
 
 // Allow transient runtime discovery or ping failures before reporting daemon loss.
@@ -453,20 +463,21 @@ func waitForExportBackfill(ctx context.Context, progress io.Writer, cfg *config.
 		default:
 			return unknownExportBackfillState(status.State)
 		}
-		failed, ok := exportWritableDaemonPing(ctx, cfg, &rt)
+		failure, ok := exportWritableDaemonPing(ctx, cfg, &rt)
 		if !ok {
 			if unavailableSince.IsZero() {
 				unavailableSince = time.Now()
 			} else if time.Since(unavailableSince) >= exportDaemonUnavailableGrace {
-				return fmt.Errorf("project identification is %s (%d/%d), but the writable daemon is unavailable; run `agentsview daemon restart`, then check `agentsview export status`", status.State, status.CompletedItems, status.TotalItems)
+				return fmt.Errorf("project identification is %s, but the writable daemon is unavailable; run `agentsview daemon restart`, then check `agentsview export status`", exportStatusText(status))
 			}
 		} else {
 			unavailableSince = time.Time{}
-			if failed {
-				return exportBackfillFailure(db.BackgroundMigrationStatus{})
+			status = exportStatusWithFailure(status, failure)
+			if status.State == "failed" {
+				return exportBackfillFailure(status)
 			}
 		}
-		if _, err := fmt.Fprintf(progress, "Identifying projects: %s (%d/%d)\n", status.State, status.CompletedItems, status.TotalItems); err != nil {
+		if _, err := fmt.Fprintf(progress, "Identifying projects: %s\n", exportStatusText(status)); err != nil {
 			return err
 		}
 		timer := time.NewTimer(time.Second)

@@ -678,7 +678,7 @@ func TestExportSessionsUpgradeRequiresBackgroundEvidenceBackfill(t *testing.T) {
 	)
 	require.NoError(t, err)
 	assert.Empty(t, stderr)
-	assert.Equal(t, "project identity evidence: pending (0/1)\n", stdout)
+	assert.Equal(t, "project identity evidence: pending\n", stdout)
 
 	stdout, stderr, err = executeExportSessionsCommand(
 		newRootCommand(), "export", "sessions", "--format", "json",
@@ -844,14 +844,16 @@ func TestExportWaitDuringDaemonChanges(t *testing.T) {
 
 func TestExportDaemonPing(t *testing.T) {
 	for _, tc := range []struct {
-		name       string
-		body       string
-		wantFailed bool
-		wantOK     bool
+		name        string
+		body        string
+		wantFailure string
+		wantOK      bool
 	}{
-		{name: "failed backfill", body: `{"ok":true,"healthy":true,"pid":42,"project_identity_backfill_failed":true}`, wantFailed: true, wantOK: true},
-		{name: "no failure", body: `{"ok":true,"healthy":true,"pid":42}`, wantOK: true},
-		{name: "different process", body: `{"ok":true,"healthy":true,"pid":43,"project_identity_backfill_failed":true}`},
+		{name: "failed backfill", body: `{"ok":true,"healthy":true,"service":"agentsview","pid":42,"project_identity_backfill_error":"blocked"}`, wantFailure: "blocked", wantOK: true},
+		{name: "no failure", body: `{"ok":true,"healthy":true,"service":"agentsview","pid":42}`, wantOK: true},
+		{name: "different process", body: `{"ok":true,"healthy":true,"service":"agentsview","pid":43}`},
+		{name: "not ok", body: `{"ok":false,"service":"agentsview","pid":42}`},
+		{name: "wrong service", body: `{"ok":true,"service":"other","pid":42}`},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -862,9 +864,9 @@ func TestExportDaemonPing(t *testing.T) {
 			}))
 			t.Cleanup(ts.Close)
 			ep := serverEndpoint(t, ts)
-			rt := &DaemonRuntime{Record: daemon.RuntimeRecord{PID: 42, Address: ep.Addr}, BasePath: "/nested"}
+			rt := &DaemonRuntime{Record: daemon.RuntimeRecord{PID: 42, Address: ep.Addr, Metadata: map[string]string{runtimeBrowserURL: "http://example.com/nested"}}}
 			failed, ok := exportDaemonPing(t.Context(), rt, "example-token")
-			assert.Equal(t, tc.wantFailed, failed)
+			assert.Equal(t, tc.wantFailure, failed)
 			assert.Equal(t, tc.wantOK, ok)
 		})
 	}
@@ -995,6 +997,13 @@ func TestExportWaitAfterDaemonRestart(t *testing.T) {
 				require.Equal(t, "failed", state)
 			} else {
 				require.Equal(t, "pending", state)
+				assert.Contains(t, err.Error(), "backfill writes blocked")
+				status, _, err := executeExportSessionsCommand(newRootCommand(), "export", "status")
+				require.NoError(t, err)
+				assert.Contains(t, status, "failed")
+				assert.Contains(t, status, "backfill writes blocked")
+				assert.Contains(t, status, "agentsview daemon restart")
+				assert.Contains(t, status, "agentsview export status")
 			}
 			stop()
 			_, err = raw.ExecContext(t.Context(), `DROP TRIGGER fail_backfill`)
@@ -1004,6 +1013,9 @@ func TestExportWaitAfterDaemonRestart(t *testing.T) {
 			out, done = exportWaitCommand(t, ctx, io.Discard)
 			require.NoError(t, <-done)
 			assert.Len(t, decodeExportSessionsDocument(t, out.String()).Sessions, 2)
+			status, _, err := executeExportSessionsCommand(newRootCommand(), "export", "status")
+			require.NoError(t, err)
+			assert.Contains(t, status, "completed")
 		})
 	}
 }
@@ -1027,6 +1039,10 @@ func TestExportDaemonStartupCases(t *testing.T) {
 			cfg := config.Config{DataDir: dir}
 			_, err := startExportDaemon(t.Context(), &cfg)
 			require.ErrorContains(t, err, "agentsview daemon restart")
+			assert.Contains(t, err.Error(), fmt.Sprintf("daemon API version %d", version))
+			assert.Contains(t, err.Error(), "agentsview export status")
+			assert.Contains(t, err.Error(), "agentsview export sessions --wait")
+			assert.NotContains(t, err.Error(), "pg push --watch")
 		})
 	}
 	t.Run("startup error", func(t *testing.T) {
@@ -1063,6 +1079,19 @@ func TestExportDaemonStartupCases(t *testing.T) {
 		_, err := startExportDaemon(t.Context(), &cfg)
 		assert.ErrorContains(t, err, "agentsview daemon start")
 	})
+}
+
+func TestExportWaitRejectsOlderDaemon(t *testing.T) {
+	path := pendingExportArchive(t, false)
+	dir := filepath.Dir(path)
+	writeLiveRuntime(t, dir, false, withRuntimeVersion("old"), withRuntimeAPIVersion(15))
+	forbidStartBackgroundServeForTransport(t, "incompatible daemon")
+	stdout, _, err := executeExportSessionsCommand(newRootCommand(), "export", "sessions", "--wait")
+	require.ErrorContains(t, err, "daemon API version 15")
+	assert.Contains(t, err.Error(), "agentsview daemon restart")
+	assert.Contains(t, err.Error(), "agentsview export status")
+	assert.Contains(t, err.Error(), "agentsview export sessions --wait")
+	assert.Empty(t, stdout)
 }
 
 func TestExportWaitRejectsNewerBackfillState(t *testing.T) {
@@ -1204,7 +1233,7 @@ func TestExportStatusReportsBackfillFailure(t *testing.T) {
 	require.NoError(t, err)
 	assert.Empty(t, stderr)
 	assert.Equal(t, "project identity evidence: failed (1/3)\n"+
-		"last error: git metadata unavailable\n",
+		"project identification failed: git metadata unavailable; run `agentsview daemon restart`, then check `agentsview export status`\n",
 		stdout)
 }
 

@@ -30535,13 +30535,13 @@ func (p ParserPRLink) Validate() error {
 }
 
 type PingInfo struct {
-	Healthy                       bool          `json:"healthy"`
-	Ok                            bool          `json:"ok"`
-	Pid                           *int64        `json:"pid,omitempty"`
-	ProjectIdentityBackfillFailed *bool         `json:"project_identity_backfill_failed,omitempty"`
-	Service                       *string       `json:"service,omitempty"`
-	Sync                          *SyncProgress `json:"sync,omitempty"`
-	Version                       *string       `json:"version,omitempty"`
+	Healthy                      bool          `json:"healthy"`
+	Ok                           bool          `json:"ok"`
+	Pid                          *int64        `json:"pid,omitempty"`
+	ProjectIdentityBackfillError *string       `json:"project_identity_backfill_error,omitempty"`
+	Service                      *string       `json:"service,omitempty"`
+	Sync                         *SyncProgress `json:"sync,omitempty"`
+	Version                      *string       `json:"version,omitempty"`
 }
 
 func (p PingInfo) Validate() error {

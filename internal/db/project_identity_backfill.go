@@ -169,13 +169,6 @@ func (db *DB) ProjectIdentityBackfillStatus(
 			}
 			return status, nil
 		}
-		if status.State == "pending" && status.TotalItems == 0 {
-			missing, countErr := db.countMissingProjectIdentitySnapshots(ctx)
-			if countErr != nil {
-				return status, countErr
-			}
-			status.TotalItems = missing
-		}
 		return status, nil
 	}
 	if !errors.Is(err, sql.ErrNoRows) {
@@ -196,16 +189,17 @@ func (db *DB) ProjectIdentityBackfillStatus(
 
 // RetryFailedProjectIdentityBackfill resumes a recorded failure at daemon startup.
 func (db *DB) RetryFailedProjectIdentityBackfill(ctx context.Context) error {
-	var failed bool
-	err := db.getReader().QueryRowContext(ctx, `
-		SELECT EXISTS(SELECT 1 FROM background_migrations WHERE name = ? AND state = 'failed')`,
-		ProjectIdentityBackfillName,
-	).Scan(&failed)
-	if err != nil {
-		return fmt.Errorf("checking project identity backfill failure: %w", err)
+	if err := db.requireWritable(); err != nil {
+		return err
 	}
-	if failed {
-		return db.StartProjectIdentityBackfill(ctx)
+	db.mu.Lock()
+	defer db.mu.Unlock()
+	_, err := db.getWriter().ExecContext(ctx, `
+		UPDATE background_migrations SET state = 'pending', last_error = '',
+			updated_at = strftime('%Y-%m-%dT%H:%M:%fZ','now')
+		WHERE name = ? AND state = 'failed'`, ProjectIdentityBackfillName)
+	if err != nil {
+		return fmt.Errorf("retrying project identity backfill: %w", err)
 	}
 	return nil
 }

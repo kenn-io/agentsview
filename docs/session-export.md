@@ -364,9 +364,10 @@ best-effort: it combines stored session metadata with the repository and Git
 configuration visible when the migration runs, so a repository that moved or
 changed remotes may not reproduce its original checkout context. Existing stored
 snapshots remain authoritative. `agentsview export status` reports pending,
-running, failed, and completed state; failed status includes the last recorded
-error. Run `agentsview export sessions --wait` to start the local daemon if
-needed and wait for this work before exporting.
+running, failed, and completed state; a failure includes its cause and recovery
+commands, including when the daemon could not save the failure. Run
+`agentsview export sessions --wait` to start the local daemon if needed and wait
+for this work before exporting.
 
 ## Versioning
 

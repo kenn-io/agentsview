@@ -3,10 +3,12 @@ package db
 import (
 	"database/sql"
 	"errors"
+	"fmt"
 	"path/filepath"
 	"testing"
 	"time"
 
+	"github.com/mattn/go-sqlite3"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
@@ -72,7 +74,7 @@ func TestRetryFailedProjectIdentityBackfill(t *testing.T) {
 			d := testDB(t)
 			ctx := t.Context()
 			if state != "absent" {
-				_, err := d.getWriter().ExecContext(ctx, `INSERT INTO background_migrations (name, state, last_error) VALUES (?, ?, 'previous error')`, ProjectIdentityBackfillName, state)
+				_, err := d.getWriter().ExecContext(ctx, `INSERT INTO background_migrations (name, state, last_error, total_items, completed_items) VALUES (?, ?, 'previous error', 7, 3)`, ProjectIdentityBackfillName, state)
 				require.NoError(t, err)
 			}
 			require.NoError(t, d.RetryFailedProjectIdentityBackfill(ctx))
@@ -84,12 +86,54 @@ func TestRetryFailedProjectIdentityBackfill(t *testing.T) {
 			}
 			require.NoError(t, err)
 			if state == "failed" {
-				assert.Equal(t, "running", got)
+				assert.Equal(t, "pending", got)
 				assert.Empty(t, lastError)
+				status, err := d.ProjectIdentityBackfillStatus(ctx)
+				require.NoError(t, err)
+				assert.Equal(t, 7, status.TotalItems)
+				assert.Equal(t, 3, status.CompletedItems)
 			} else {
 				assert.Equal(t, state, got)
 				assert.Equal(t, "previous error", lastError)
 			}
+		})
+	}
+}
+
+func TestPendingProjectIdentityStatusDoesNotScanSessions(t *testing.T) {
+	for _, size := range []int{1, 2000} {
+		t.Run(fmt.Sprint(size), func(t *testing.T) {
+			d := testDB(t)
+			ctx := t.Context()
+			_, err := d.getWriter().ExecContext(ctx, `WITH RECURSIVE n(x) AS (SELECT 1 UNION ALL SELECT x+1 FROM n WHERE x < ?) INSERT INTO sessions (id, project) SELECT printf('session-%d', x), 'app' FROM n`, size)
+			require.NoError(t, err)
+			_, err = d.getWriter().ExecContext(ctx, `INSERT INTO background_migrations (name, state) VALUES (?, 'pending')`, ProjectIdentityBackfillName)
+			require.NoError(t, err)
+			d.rawReader().SetMaxOpenConns(1)
+			conn, err := d.getReader().Conn(ctx)
+			require.NoError(t, err)
+			require.NoError(t, conn.Raw(func(raw any) error {
+				raw.(interface {
+					RegisterAuthorizer(func(int, string, string, string) int)
+				}).RegisterAuthorizer(func(op int, table, _, _ string) int {
+					if op == sqlite3.SQLITE_READ && table == "sessions" {
+						return sqlite3.SQLITE_DENY
+					}
+					return sqlite3.SQLITE_OK
+				})
+				return nil
+			}))
+			require.NoError(t, conn.Close())
+			for range 3 {
+				status, err := d.ProjectIdentityBackfillStatus(ctx)
+				require.NoError(t, err)
+				assert.Equal(t, "pending", status.State)
+				assert.Zero(t, status.TotalItems)
+			}
+			_, err = d.getWriter().ExecContext(ctx, `DELETE FROM background_migrations WHERE name = ?`, ProjectIdentityBackfillName)
+			require.NoError(t, err)
+			_, err = d.ProjectIdentityBackfillStatus(ctx)
+			require.Error(t, err)
 		})
 	}
 }
