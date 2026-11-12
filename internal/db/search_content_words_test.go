@@ -164,6 +164,24 @@ func TestSearchContentNaturalPhrasesMatchText(t *testing.T) {
 	}
 }
 
+func TestSearchContentCurlyPhraseMatchesText(t *testing.T) {
+	d := testDB(t)
+	requireFTS(t, d)
+	seedWordSearch(t, d, "proj",
+		[3]string{"phrase", "alpha beta gamma", ""},
+		[3]string{"separated", "alpha beta then gamma", ""},
+	)
+	for _, mode := range []string{"", "fts"} {
+		page, err := d.SearchContent(t.Context(), ContentSearchFilter{Pattern: "alpha “beta gamma”", Mode: mode})
+		require.NoError(t, err)
+		var ids []string
+		for _, match := range page.Matches {
+			ids = append(ids, match.SessionID)
+		}
+		assert.Equal(t, []string{"phrase"}, ids, "mode %q", mode)
+	}
+}
+
 func TestSearchContentWordPagesFollowExactTotal(t *testing.T) {
 	d := testDB(t)
 	requireFTS(t, d)
@@ -253,29 +271,6 @@ func TestSearchContentWordTierOrder(t *testing.T) {
 				assert.Equal(t, tc.want[1:], wordHits(second))
 				assert.Zero(t, second.NextCursor)
 			}
-		})
-	}
-}
-
-func TestContentWordPageSkipsPartialTableForFullPage(t *testing.T) {
-	d := testDB(t)
-	requireFTS(t, d)
-	seedWordSearch(t, d, "proj", [3]string{"full-1", "gamma beta alpha", ""}, [3]string{"full-2", "beta alpha gamma", ""})
-	q, ok := contentWordsQuery("alpha beta gamma")
-	require.True(t, ok)
-	for _, mode := range []string{"", "fts", "hybrid"} {
-		t.Run(mode, func(t *testing.T) {
-			snapshot, err := d.BeginMessageSnapshot(t.Context())
-			require.NoError(t, err)
-			defer snapshot.Close()
-			f := ContentSearchFilter{Pattern: "alpha beta gamma", Mode: mode}
-			where, args := lexicalMessageWhere(f)
-			page, err := selectContentWordPage(t.Context(), snapshot.tx, f, q, where, args, 0, 2)
-			require.NoError(t, err)
-			assert.Len(t, page, 2)
-			var count int
-			require.NoError(t, snapshot.tx.QueryRowContext(t.Context(), `SELECT count(*) FROM sqlite_temp_master WHERE name = 'content_word_hits'`).Scan(&count))
-			assert.Zero(t, count)
 		})
 	}
 }

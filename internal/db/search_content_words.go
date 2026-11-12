@@ -42,6 +42,19 @@ func contentWordsQuery(pattern string) (contentWords, bool) {
 	if err != nil || len(natural.CountTerms) == 0 {
 		return contentWords{}, false
 	}
+	matched := make([]bool, len(q.phrases))
+	for _, phrase := range natural.Phrases {
+		found := false
+		for i, raw := range q.phrases[:len(matched)] {
+			if !matched[i] && strings.Join(strings.Fields(raw), " ") == phrase {
+				matched[i], found = true, true
+				break
+			}
+		}
+		if !found {
+			q.phrases = append(q.phrases, phrase)
+		}
+	}
 	for _, term := range natural.CountTerms {
 		q.terms = append(q.terms, term.Match)
 	}
