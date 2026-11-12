@@ -53,7 +53,7 @@ func newActivityKeptMemo() kept.Memo[activityKept] {
 }
 
 func activityKeptSize(e activityKept) int64 {
-	size := int64(unsafe.Sizeof(e)) + int64(cap(e.read))*16 + int64(cap(e.labels))*16
+	size := int64(cap(e.read)) * 16
 	if e.usage == nil {
 		size += activity.EstimatedArtifactBytes(e.report.Artifacts)
 	} else {
@@ -64,7 +64,7 @@ func activityKeptSize(e activityKept) int64 {
 				size += int64(unsafe.Sizeof(*row.SessionCost))
 			}
 		}
-		size += kept.JSONBytes(e.usage.pricing)*2 + 256
+		size += kept.JSONBytes(e.usage.pricing)
 	}
 	for _, id := range e.read {
 		size += int64(len(id))

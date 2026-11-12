@@ -29,7 +29,7 @@ func TestSumActivityUsageRowsPreservesSessionTotals(t *testing.T) {
 		{SessionID: "reported", Model: "model", Timestamp: "2026-06-16T10:01:00Z", InputTokens: 6, SessionCost: &reported},
 		{SessionID: "ordinary", Model: "model", Timestamp: "2026-06-16T11:00:00Z", InputTokens: 2},
 	}
-	got, err := sumActivityUsageRows(t.Context(), rows, q)
+	got, err := sumActivityUsageRows(rows, q)
 	require.NoError(t, err)
 	assert.Equal(t, []activity.UsageRow{
 		{SessionID: "ordinary", Model: "model", Timestamp: "2026-06-16T10:00:00Z", InputTokens: 30, OutputTokens: 10, Cost: money.Money{Microdollars: 6}},

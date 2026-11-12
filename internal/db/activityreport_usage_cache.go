@@ -191,7 +191,7 @@ func (db *DB) activityReportCachedUsage(
 	if err != nil {
 		return nil, nil, nil, time.Time{}, fmt.Errorf("building pricing block: %w", err)
 	}
-	out, err = sumActivityUsageRows(ctx, out, q)
+	out, err = sumActivityUsageRows(out, q)
 	if err != nil {
 		return nil, nil, nil, time.Time{}, err
 	}
@@ -200,16 +200,9 @@ func (db *DB) activityReportCachedUsage(
 
 // sumActivityUsageRows retains individual rows for sessions with a reported
 // session total, whose cost is allocated across those rows.
-func sumActivityUsageRows(ctx context.Context, rows []activity.UsageRow, q activity.Query) ([]activity.UsageRow, error) {
+func sumActivityUsageRows(rows []activity.UsageRow, q activity.Query) ([]activity.UsageRow, error) {
 	withTotal := make(map[string]bool)
 	for _, row := range rows {
-		if err := ctx.Err(); err != nil {
-			return nil, err
-		}
-		// Signed costs can overflow at different points if rows are reordered.
-		if row.Cost.Microdollars < 0 || (row.SessionCost != nil && row.SessionCost.Microdollars < 0) {
-			return slices.Clone(rows), nil
-		}
 		if row.SessionCost != nil {
 			withTotal[row.SessionID] = true
 		}
@@ -222,9 +215,6 @@ func sumActivityUsageRows(ctx context.Context, rows []activity.UsageRow, q activ
 	windows := activity.QueryWindows(q)
 	out := make([]activity.UsageRow, 0, len(rows))
 	for _, row := range rows {
-		if err := ctx.Err(); err != nil {
-			return nil, err
-		}
 		if withTotal[row.SessionID] {
 			out = append(out, row)
 			continue
