@@ -141,6 +141,8 @@ func TestFrustrationMarkerScanCountsEdgeCases(t *testing.T) {
 		{name: "all caps", prompt: markerPrompt{content: "WHY IS THIS FAILING NOW"}, want: 1},
 		{name: "caps ratio at threshold", prompt: markerPrompt{content: "THE api IS down ok"}, want: 1},
 		{name: "caps ratio below threshold", prompt: markerPrompt{content: "THE api is down ok"}, want: 0},
+		{name: "one capital run with the minimum long words", prompt: markerPrompt{content: "THE api fails"}, want: 0},
+		{name: "two capital runs reach the exact count", prompt: markerPrompt{content: "THE API fails"}, want: 1},
 		{name: "caps with exactly the minimum of long words", prompt: markerPrompt{content: "THE API FAILS"}, want: 1},
 		{name: "caps with too few long words", prompt: markerPrompt{content: "AB CD e f g h"}, want: 0},
 		{name: "mixed case is not caps", prompt: markerPrompt{content: "JSONParser HTTPServer APIClient"}, want: 0},

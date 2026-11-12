@@ -1276,7 +1276,9 @@ The SQL follows `IsFrustrationMarker` step by step. Port it with these rules:
   The caps rule is therefore ruled out with a bound: all-capital words are at
   most the `[A-Z]{2,}` runs, and words of two or more letters are at least 32
   per match of 32 such words in a row and at least `FrustrationCapsMinWords`.
-  When that ratio is below the threshold, so is the exact one. SQL counts
+  The caps-run count divided by `FrustrationCapsMinWords` is tested first,
+  avoiding the 32-word split when that ratio is below the threshold. When
+  either bound is below the threshold, so is the exact ratio. SQL counts
   every word only for stripped prompts of at most 16 KiB, which covers typed
   prompts and short prompts after a fenced paste. `translate()` is slower
   still (42 s), so the SQL never uses it.
@@ -1285,6 +1287,8 @@ On a fixture of 2,500 sessions with 41,162 prompts (484 MiB of prompt text, 1.9%
 of it outside the plain alphabet), one Signals load with an empty memo took 4.1
 s instead of 6.6 s. It sent 15.8 MiB to Go instead of 485.5 MiB, and Go
 allocated 139 MiB instead of 1.62 GiB, with the same per-session counts.
+On a fixture with about 500,000 mostly short prompts, the 32-word split alone
+accounted for about 153 s of a 175 s cold read before the first test was added.
 
 `frustration_sql_pgtest_test.go` compares the counts with `IsFrustrationMarker`
 on hand-labeled edge cases and on a seeded random corpus, and checks which
