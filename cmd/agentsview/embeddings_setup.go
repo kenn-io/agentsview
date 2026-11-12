@@ -323,7 +323,7 @@ func (v *liveVectorServing) startSetup(deployment config.VectorEmbeddingsServerC
 	return nil
 }
 
-func (v *liveVectorServing) resolveSetup(deployment config.VectorEmbeddingsServerConfig, approvedBytes int64, approvedOllama bool) (string, error) {
+func (v *liveVectorServing) resolveSetup(deployment config.VectorEmbeddingsServerConfig, approvedBytes int64, approvedOllama bool) error {
 	endpoint, err := resolveLocalEmbeddings(v.ctx, deployment,
 		func(_ context.Context, size int64) (bool, error) {
 			if size > approvedBytes {
@@ -341,14 +341,14 @@ func (v *liveVectorServing) resolveSetup(deployment config.VectorEmbeddingsServe
 		},
 	)
 	if err == nil && approvedOllama && endpoint != "http://127.0.0.1:11434/v1" {
-		return "", server.ErrEmbeddingsProviderChanged
+		return server.ErrEmbeddingsProviderChanged
 	}
-	return endpoint, err
+	return err
 }
 
 func (v *liveVectorServing) activate(deployment config.VectorEmbeddingsServerConfig, approvedBytes int64, automatic, approvedOllama bool) error {
 	cfg := v.cfg
-	endpoint, err := v.resolveSetup(deployment, approvedBytes, approvedOllama)
+	err := v.resolveSetup(deployment, approvedBytes, approvedOllama)
 	if err != nil {
 		return err
 	}
@@ -364,27 +364,13 @@ func (v *liveVectorServing) activate(deployment config.VectorEmbeddingsServerCon
 			return nil
 		}
 		if errors.Is(err, config.ErrVectorSetupProviderChanged) {
-			if current, reloadErr := v.reload(); reloadErr != nil {
-				log.Printf("search by meaning: reload changed provider: %v", reloadErr)
-			} else {
-				v.mu.Lock()
-				v.cfg = current
-				v.push.reconfigure(current)
-				v.mu.Unlock()
-			}
 			return server.ErrEmbeddingsProviderChanged
 		}
 		if err != nil {
 			return err
 		}
 		// Opening can wait on another process's write lock; status stays available.
-		servingCfg := cfg
-		if approvedOllama {
-			name, selected, _ := cfg.Vector.Embeddings.Server("")
-			selected.Endpoint = endpoint
-			servingCfg.Vector.Embeddings.Servers = map[string]config.VectorEmbeddingsServerConfig{name: selected}
-		}
-		serving, err := setupVectorServing(v.ctx, servingCfg, v.database, v.idle)
+		serving, err := setupVectorServing(v.ctx, cfg, v.database, v.idle)
 		if err != nil {
 			return err
 		}

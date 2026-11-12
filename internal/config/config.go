@@ -4306,9 +4306,6 @@ func (c *Config) SaveVectorSetup(approved VectorEmbeddingsServerConfig, automati
 				candidate.Vector.Embeddings.Servers = make(map[string]VectorEmbeddingsServerConfig)
 			}
 			candidate.Vector.Embeddings.Servers[name] = server
-			if err := candidate.Vector.Validate(); err != nil {
-				return invalidVectorSetupError{err}
-			}
 		}
 		if err := c.writeConfigMap(existing); err != nil {
 			return err
