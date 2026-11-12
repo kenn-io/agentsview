@@ -303,6 +303,8 @@ func TestChangeStreamResumesAfterCursorWithoutRepeats(t *testing.T) {
 	caughtUp.ready(t)
 	seedChangeStreamSession(t, te, "stream-c")
 	te.broadcaster.Emit("messages")
+	// The seed writes the session before its messages, so the stream's first
+	// catch-up can send the session alone before the messages arrive.
 	live := caughtUp.changesWithMessages(t, 2)
 	assert.Equal(t, changes.To, live[0].From)
 	ids := messageIDs(live)
