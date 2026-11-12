@@ -37,6 +37,9 @@ use tauri_plugin_shell::process::{CommandChild, CommandEvent};
 use tauri_plugin_shell::ShellExt;
 use tauri_plugin_updater::UpdaterExt;
 
+#[cfg(all(test, windows))]
+mod update_archive_tests;
+
 const HOST: &str = "127.0.0.1";
 const LOCALHOST: &str = "localhost";
 const IPV6_HOST: &str = "[::1]";

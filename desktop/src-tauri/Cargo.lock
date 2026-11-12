@@ -12,6 +12,7 @@ checksum = "320119579fcad9c21884f5c4861d16174d0e06250625266f50fe6898340abefa"
 name = "agentsview-desktop"
 version = "0.1.0"
 dependencies = [
+ "flate2",
  "serde",
  "serde_json",
  "tauri",
@@ -25,6 +26,7 @@ dependencies = [
  "tempfile",
  "tokio",
  "uuid",
+ "zip",
 ]
 
 [[package]]
@@ -6326,6 +6328,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "00fb4744e923442ecadfd3f85f51a5d24e03bf43d53813b81ebb4c91d02baa62"
 dependencies = [
  "crc32fast",
+ "flate2",
  "getrandom 0.4.1",
  "indexmap 2.13.0",
  "libc",
