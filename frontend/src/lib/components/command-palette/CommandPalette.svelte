@@ -192,6 +192,7 @@
   }
 
   function selectCurrent() {
+    if (showSearchResults && searchStore.isSearching) return;
     if (showSearchResults) {
       const result = searchStore.results[selectedIndex];
       if (result) {

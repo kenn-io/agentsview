@@ -673,6 +673,8 @@ describe("CommandPalette", () => {
     const component = mount(CommandPalette, { target: document.body });
     await enterSearchQuery();
     const input = document.querySelector<HTMLInputElement>(".palette-input")!;
+    input.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
+    expect(mockRouter.navigateToSession).not.toHaveBeenCalled();
     input.dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowDown", bubbles: true }));
     mockSearchStore.isSearching = false;
     mockSearchStore.results = [makeSearchResult()];

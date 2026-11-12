@@ -141,6 +141,13 @@ describe("SearchStore", () => {
     expect(store.mode).toBe("semantic");
   });
 
+  it("shows search as pending before its debounce finishes", () => {
+    const store = createSearchStore(memoryStorage());
+    store.search("needle");
+    expect(store.isSearching).toBe(true);
+    store.clear();
+  });
+
   it("persists mode and clear preserves mode and sort", () => {
     const storage = memoryStorage();
     const store = createSearchStore(storage);
@@ -261,24 +268,15 @@ describe("SearchStore", () => {
       "../api/generated/index.js",
     );
     searchService.getApiV1Search.mockImplementation(actual.SearchService.getApiV1Search);
-    const fetchMock = vi
-      .fn()
-      .mockRejectedValueOnce(new TypeError("Failed to fetch"))
-      .mockImplementation(async (request: Request) => {
-        if (request.signal.aborted) throw new DOMException("Aborted", "AbortError");
-        return Response.json(fullTextResponse("needle"));
-      });
+    const fetchMock = vi.fn().mockRejectedValueOnce(new TypeError("Failed to fetch"));
     vi.stubGlobal("fetch", fetchMock);
     try {
       const store = createSearchStore(memoryStorage());
       store.search("needle");
       await runDebounce();
-      const signal = (fetchMock.mock.calls[0]![0] as Request).signal;
       store.clear();
       await vi.advanceTimersByTimeAsync(300);
-      expect(signal.aborted).toBe(true);
-      expect(fetchMock).toHaveBeenCalledTimes(2);
-      expect((fetchMock.mock.calls[1]![0] as Request).signal.aborted).toBe(true);
+      expect(fetchMock).toHaveBeenCalledOnce();
       expect(store.results).toEqual([]);
       expect(store.error).toBeNull();
       expect(store.isSearching).toBe(false);

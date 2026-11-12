@@ -136,13 +136,35 @@ test("automatic recovery selects the first result after a populated search", asy
   await openSearch(page, "initial search");
   await expect(page.locator(".palette-item")).toHaveCount(2);
   const input = page.locator(".palette-input");
-  await input.fill("recovering search");
+  await input.evaluate((el: HTMLInputElement) => {
+    el.value = "recovering search";
+    el.dispatchEvent(new Event("input", { bubbles: true }));
+    el.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
+  });
   await expect(page.locator(".palette-loading")).toBeVisible();
+  await input.press("Enter");
+  await expect(input).toBeVisible();
   await input.press("ArrowDown");
   release();
   await expect(page.locator(".palette-item")).toHaveCount(1);
   await expect(page.locator(".palette-item").first()).toHaveClass(/selected/);
   await input.press("Enter");
   await expect(page).toHaveURL(/\/sessions\/first/);
+  expect(attempts).toBe(2);
+});
+
+test("client errors stay visible after another manual attempt", async ({ page }) => {
+  let attempts = 0;
+  await page.route("**/api/v1/search?**", async (route) => {
+    attempts++;
+    await route.fulfill({ status: 400, body: "invalid search" });
+  });
+  await page.goto("/usage");
+  await openSearch(page, "invalid search");
+  const retry = page.getByRole("button", { name: "Retry" });
+  await expect(retry).toBeVisible();
+  expect(attempts).toBe(1);
+  await retry.click();
+  await expect(retry).toBeVisible();
   expect(attempts).toBe(2);
 });
