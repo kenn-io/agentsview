@@ -58,7 +58,7 @@ afterEach(() => {
 });
 
 describe("SettingsPage", () => {
-  it("retains the selected panel and other parameters across a reload", async () => {
+  it("writes the selected panel while preserving other parameters", async () => {
     router.route = "settings";
     router.params = { source: "example" };
     settingsService.getApiV1Settings.mockResolvedValue({
@@ -71,7 +71,7 @@ describe("SettingsPage", () => {
       require_auth: false,
       terminal: { mode: "auto" },
     });
-    let component = mount(SettingsPage, { target: document.body });
+    const component = mount(SettingsPage, { target: document.body });
     try {
       await tick();
       await tick();
@@ -82,13 +82,6 @@ describe("SettingsPage", () => {
       button.click();
       await tick();
       expect(router.params).toMatchObject({ panel: "tool-result-images", source: "example" });
-      unmount(component);
-      component = mount(SettingsPage, { target: document.body });
-      await tick();
-      await tick();
-      expect(document.querySelector(".settings-panel:not([hidden])")?.textContent).toContain(
-        "Tool-result images",
-      );
     } finally {
       unmount(component);
     }

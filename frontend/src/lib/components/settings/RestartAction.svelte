@@ -39,8 +39,8 @@
   {/if}
   {#if settings.restartFailed}
     <div class="restart-action restart-recovery" role="alert">
-      {#if settings.restartError}<p class="restart-text restart-error">{m.settings_restart_refused()}</p>{/if}
       {#if settings.restartError}
+        <p class="restart-text restart-error">{m.settings_restart_refused()}</p>
         <p class="restart-text">
           {m.settings_restart_reason({ error: settings.restartError.replace(/[.\s]+$/, "") })}
         </p>
@@ -94,5 +94,4 @@
   .restart-error {
     color: var(--accent-red, #ef4444);
   }
-
 </style>

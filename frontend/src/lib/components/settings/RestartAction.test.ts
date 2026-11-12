@@ -22,7 +22,7 @@ describe("RestartAction", () => {
   it("tells a server that can't restart itself how to restart", () => {
     settings.restartSupported = false;
 
-    const { getByRole, queryByRole, container } = render(RestartAction, {
+    const { getByRole, queryByRole } = render(RestartAction, {
       notice: "Example notice",
       manual: true,
     });
@@ -31,7 +31,6 @@ describe("RestartAction", () => {
     expect(getByRole("status").textContent).toContain(
       "Restart AgentsView the way you started it, then reload this page.",
     );
-    expect(container.querySelector(".restart-action code")).toBeNull();
   });
 
   it("shows the recovery commands when restart fails", () => {

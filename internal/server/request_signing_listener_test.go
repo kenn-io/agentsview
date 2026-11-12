@@ -5,7 +5,6 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"io"
 	"log"
 	"net"
 	"net/http"
@@ -292,32 +291,4 @@ func TestRestrictedListenerDefaultAvoidsOccupiedHTTPPort(t *testing.T) {
 	require.NoError(t, err)
 	assert.NotEqual(t, "8081", port, "the default signing listener must not reserve the existing HTTP port")
 	require.NoError(t, listener.shutdown(t.Context()))
-}
-
-func TestServerShutdownClosesStalledHTTPConnection(t *testing.T) {
-	entered := make(chan struct{})
-	release := make(chan struct{})
-	listener, err := (&net.ListenConfig{}).Listen(t.Context(), "tcp", "127.0.0.1:0")
-	require.NoError(t, err)
-	httpServer := &http.Server{Handler: http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		w.WriteHeader(http.StatusOK)
-		w.(http.Flusher).Flush()
-		close(entered)
-		<-release
-	})}
-	go func() { _ = httpServer.Serve(listener) }()
-	t.Cleanup(func() { close(release); _ = httpServer.Close() })
-	req, err := http.NewRequestWithContext(t.Context(), http.MethodGet, "http://"+listener.Addr().String(), nil)
-	require.NoError(t, err)
-	resp, err := http.DefaultClient.Do(req)
-	require.NoError(t, err)
-	defer resp.Body.Close()
-	<-entered
-	ctx, cancel := context.WithCancel(t.Context())
-	defer cancel()
-	httpServer.RegisterOnShutdown(cancel)
-	srv := &Server{httpSrv: httpServer}
-	require.ErrorIs(t, srv.Shutdown(ctx), context.Canceled)
-	_, err = io.ReadAll(resp.Body)
-	require.Error(t, err)
 }

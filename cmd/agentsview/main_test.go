@@ -4135,19 +4135,7 @@ func TestNewDaemonIdleTrackerExplicitLifetime(t *testing.T) {
 }
 
 func TestServeLifetimesReleaseDebugLog(t *testing.T) {
-	dir := testDataDir(t)
-	t.Setenv("HOME", dir)
-	t.Setenv("XDG_CONFIG_HOME", filepath.Join(dir, "config"))
-	t.Setenv("XDG_CACHE_HOME", filepath.Join(dir, "cache"))
-	t.Setenv("XDG_STATE_HOME", filepath.Join(dir, "state"))
-	for _, agent := range parser.Registry {
-		if agent.EnvVar != "" {
-			t.Setenv(agent.EnvVar, filepath.Join(dir, "empty", string(agent.Type)))
-		}
-		if agent.DefaultRootEnvVar != "" {
-			t.Setenv(agent.DefaultRootEnvVar, filepath.Join(dir, "empty-root", string(agent.Type)))
-		}
-	}
+	_, dir := isolateServeTestHome(t)
 	cfg, err := config.Load(nil)
 	require.NoError(t, err)
 	cfg.Host = "127.0.0.1"

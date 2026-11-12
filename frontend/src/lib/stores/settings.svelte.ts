@@ -193,51 +193,33 @@ class SettingsStore {
     this.restarting = true;
     this.restartFailed = false;
     this.restartError = null;
-    return this.runMutation(() => this.performRestart());
+    return this.runMutation(() => this.performRestart(true));
   }
 
   /** Check again for the same replacement without sending another restart. */
   checkConnection(): Promise<void> {
     if (this.restarting) return Promise.resolve();
     this.restarting = true;
-    return this.runMutation(async () => {
-      const deadline = new AbortController();
-      const timer = setTimeout(() => deadline.abort(), RESTART_TIMEOUT_MS);
-      let navigating = false;
-      try {
-        if (await this.waitForReplacement(deadline.signal)) {
-          navigating = true;
-          window.location.reload();
-        }
-      } catch (e) {
-        if (e instanceof ApiError && e.status === 401) this.needsAuth = true;
-      } finally {
-        clearTimeout(timer);
-        if (!navigating) this.restarting = false;
-      }
-    });
+    return this.runMutation(() => this.performRestart(false));
   }
 
   private async waitForReplacement(signal: AbortSignal): Promise<boolean> {
     while (await delay(RESTART_POLL_MS, signal)) {
       try {
-        if (await this.replaced(signal)) return true;
+        const { instance_id: id } = await HealthService.getApiPing({ signal });
+        if (
+          typeof id === "string" &&
+          id &&
+          typeof this.originalInstance === "string" &&
+          this.originalInstance &&
+          id !== this.originalInstance
+        )
+          return true;
       } catch (e) {
         if (e instanceof ApiError && e.status === 401) throw e;
       }
     }
     return false;
-  }
-
-  private async replaced(signal?: AbortSignal): Promise<boolean> {
-    const { instance_id: id } = await HealthService.getApiPing({ signal });
-    return (
-      typeof id === "string" &&
-      !!id &&
-      typeof this.originalInstance === "string" &&
-      !!this.originalInstance &&
-      id !== this.originalInstance
-    );
   }
 
   /** Record the running server's identity for this attempt, clearing any earlier one. */
@@ -264,17 +246,20 @@ class SettingsStore {
     });
   }
 
-  private async performRestart(): Promise<void> {
+  /** Restart, or with `send` off only wait again for the replacement. */
+  private async performRestart(send: boolean): Promise<void> {
     const deadline = new AbortController();
     const timer = setTimeout(() => deadline.abort(), RESTART_TIMEOUT_MS);
     let navigating = false;
     try {
-      await this.identify(deadline.signal);
-      try {
-        await DaemonService.postApiV1DaemonRestart({ signal: deadline.signal });
-      } catch (e) {
-        // A lost response may still mean the server accepted the request.
-        if (e instanceof ApiError) throw e;
+      if (send) {
+        await this.identify(deadline.signal);
+        try {
+          await DaemonService.postApiV1DaemonRestart({ signal: deadline.signal });
+        } catch (e) {
+          // A lost response may still mean the server accepted the request.
+          if (e instanceof ApiError) throw e;
+        }
       }
       if (await this.waitForReplacement(deadline.signal)) {
         navigating = true;

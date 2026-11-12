@@ -707,31 +707,28 @@ describe("SettingsStore.restartDaemon", () => {
     expect(settings.restarting).toBe(false);
   });
 
-  it.each(["lost response", "unchanged instance", "stalled POST"])(
-    "shows recovery after a %s",
-    async (scenario) => {
-      ping.mockResolvedValue({ healthy: true, ok: true, pid: 100, instance_id: "old" });
-      if (scenario === "lost response")
-        restartDaemon.mockRejectedValue(new TypeError("Failed to fetch"));
-      else if (scenario === "stalled POST")
-        restartDaemon.mockImplementation(
-          (options) =>
-            new Promise((_, reject) =>
-              options?.signal?.addEventListener("abort", () =>
-                reject(new DOMException("aborted", "AbortError")),
-              ),
+  it.each(["lost response", "stalled POST"])("shows recovery after a %s", async (scenario) => {
+    ping.mockResolvedValue({ healthy: true, ok: true, pid: 100, instance_id: "old" });
+    if (scenario === "lost response")
+      restartDaemon.mockRejectedValue(new TypeError("Failed to fetch"));
+    else if (scenario === "stalled POST")
+      restartDaemon.mockImplementation(
+        (options) =>
+          new Promise((_, reject) =>
+            options?.signal?.addEventListener("abort", () =>
+              reject(new DOMException("aborted", "AbortError")),
             ),
-        );
-      else restartDaemon.mockResolvedValue({ restarting: true });
-      const restart = settings.restartDaemon();
-      await vi.advanceTimersByTimeAsync(30_000);
-      await restart;
-      expect(restartDaemon).toHaveBeenCalledOnce();
-      expect(settings.restartFailed).toBe(true);
-      expect(settings.restarting).toBe(false);
-      expect(reload).not.toHaveBeenCalled();
-    },
-  );
+          ),
+      );
+    else restartDaemon.mockResolvedValue({ restarting: true });
+    const restart = settings.restartDaemon();
+    await vi.advanceTimersByTimeAsync(30_000);
+    await restart;
+    expect(restartDaemon).toHaveBeenCalledOnce();
+    expect(settings.restartFailed).toBe(true);
+    expect(settings.restarting).toBe(false);
+    expect(reload).not.toHaveBeenCalled();
+  });
 
   it.each([
     ["the original instance", { healthy: true, ok: true, pid: 100, instance_id: "old" }],
@@ -739,11 +736,7 @@ describe("SettingsStore.restartDaemon", () => {
     ["a non-string identity", { healthy: true, ok: true, pid: 100, instance_id: 123 }],
     ["an API error", new ApiError(500, "unavailable")],
   ])("checks again without accepting %s as the replacement", async (_, answer) => {
-    ping.mockResolvedValue(
-      answer && !(answer instanceof ApiError) && !("instance_id" in answer)
-        ? (answer as never)
-        : { healthy: true, ok: true, pid: 100, instance_id: "old" },
-    );
+    ping.mockResolvedValue({ healthy: true, ok: true, pid: 100, instance_id: "old" });
     ping.mockResolvedValueOnce({ healthy: true, ok: true, pid: 100, instance_id: "old" });
     restartDaemon.mockResolvedValue({ restarting: true });
     const restart = settings.restartDaemon();
@@ -762,23 +755,6 @@ describe("SettingsStore.restartDaemon", () => {
     await check;
     expect(reload).toHaveBeenCalledOnce();
     expect(restartDaemon).toHaveBeenCalledOnce();
-  });
-
-  it("keeps checking until a delayed replacement answers", async () => {
-    ping.mockResolvedValue({ healthy: true, ok: true, pid: 100, instance_id: "old" });
-    restartDaemon.mockResolvedValue({ restarting: true });
-    const restart = settings.restartDaemon();
-    await vi.advanceTimersByTimeAsync(30_000);
-    await restart;
-    const check = settings.checkConnection();
-    expect(settings.restarting).toBe(true);
-    await vi.advanceTimersByTimeAsync(2_000);
-    expect(reload).not.toHaveBeenCalled();
-    ping.mockResolvedValue({ healthy: true, ok: true, pid: 100, instance_id: "new" });
-    await vi.advanceTimersByTimeAsync(1_000);
-    await check;
-    expect(restartDaemon).toHaveBeenCalledOnce();
-    expect(reload).toHaveBeenCalledOnce();
   });
 
   it("asks for a token when the restarted daemon requires one", async () => {

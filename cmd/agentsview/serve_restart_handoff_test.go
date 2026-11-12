@@ -37,6 +37,323 @@ func TestServeRestartArgsPreserveLaunchOptions(t *testing.T) {
 	assert.True(t, skip)
 }
 
+// isolateServeTestHome points every config, data, and agent directory into a
+// fresh temp dir and returns it with the data dir inside it.
+func isolateServeTestHome(t *testing.T) (string, string) {
+	t.Helper()
+	dir := t.TempDir()
+	dataDir := filepath.Join(dir, "data")
+	t.Setenv("HOME", dir)
+	t.Setenv("XDG_CONFIG_HOME", filepath.Join(dir, "config"))
+	t.Setenv("XDG_CACHE_HOME", filepath.Join(dir, "cache"))
+	t.Setenv("XDG_STATE_HOME", filepath.Join(dir, "state"))
+	t.Setenv("AGENTSVIEW_DATA_DIR", dataDir)
+	t.Setenv("AGENTSVIEW_TEST_REAL_CLI", "1")
+	for _, agent := range parser.Registry {
+		if agent.EnvVar != "" {
+			t.Setenv(agent.EnvVar, filepath.Join(dir, "empty", string(agent.Type)))
+		}
+		if agent.DefaultRootEnvVar != "" {
+			t.Setenv(agent.DefaultRootEnvVar, filepath.Join(dir, "empty-root", string(agent.Type)))
+		}
+	}
+	return dir, dataDir
+}
+
+// startRestartFixture starts an isolated server and stops it at cleanup. The
+// returned channel yields the foreground process's exit, then stays closed.
+func startRestartFixture(t *testing.T, dataDir, mode string, args ...string) (*os.Process, <-chan error) {
+	t.Helper()
+	args = append([]string{"serve", "--host=127.0.0.1", "--port=0", "--no-browser", "--no-update-check"}, args...)
+	processCtx, cancel := context.WithCancel(context.WithoutCancel(t.Context()))
+	t.Cleanup(cancel)
+	var done chan error
+	var process *os.Process
+	if mode == "background" {
+		out, err := exec.CommandContext(processCtx, os.Args[0], append(args, "--background")...).CombinedOutput()
+		require.NoError(t, err, "%s", out)
+	} else {
+		cmd := exec.CommandContext(processCtx, os.Args[0], args...)
+		configureRestartTestProcess(cmd)
+		require.NoError(t, cmd.Start())
+		process = cmd.Process
+		done = make(chan error, 1)
+		go func() { done <- cmd.Wait(); close(done) }()
+	}
+	t.Cleanup(func() {
+		if mode == "background" {
+			waitForBackgroundLaunchLock(t, dataDir)
+		}
+		ctx, stop := context.WithTimeout(context.WithoutCancel(t.Context()), 30*time.Second)
+		defer stop()
+		cfg, err := config.Load(nil)
+		assert.NoError(t, err)
+		_, err = stopWritableDaemonsForUpdate(ctx, config.Config{DataDir: dataDir, AuthToken: cfg.AuthToken})
+		assert.NoError(t, err)
+		if done != nil {
+			select {
+			case <-done:
+			case <-ctx.Done():
+				assert.Fail(t, "foreground server did not stop")
+			}
+		}
+	})
+	return process, done
+}
+
+// waitForBackgroundLaunchLock waits until a restarted background server has
+// released the launch lock it holds while starting.
+func waitForBackgroundLaunchLock(t *testing.T, dataDir string) {
+	t.Helper()
+	assert.Eventually(t, func() bool {
+		lock, acquired := acquireBackgroundLaunchLock(dataDir)
+		if acquired {
+			assert.NoError(t, lock.Unlock())
+		}
+		return acquired
+	}, 30*time.Second, 100*time.Millisecond)
+}
+
+func waitForRestartRuntime(t *testing.T, dataDir string, token ...string) *DaemonRuntime {
+	t.Helper()
+	var rt *DaemonRuntime
+	require.Eventually(t, func() bool { rt = FindDaemonRuntime(dataDir, token...); return rt != nil }, 30*time.Second, 100*time.Millisecond)
+	return rt
+}
+
+func restartTestRequest(t *testing.T, method, url, body, token string) (*http.Response, error) {
+	t.Helper()
+	req, err := http.NewRequestWithContext(t.Context(), method, url, strings.NewReader(body))
+	require.NoError(t, err)
+	req.Header.Set("Origin", strings.Join(strings.SplitN(url, "/", 4)[:3], "/"))
+	req.Header.Set("Content-Type", "application/json")
+	if token != "" {
+		req.Header.Set("Authorization", "Bearer "+token)
+	}
+	// Never reuse a connection to a server that may have just shut down.
+	return (&http.Client{Timeout: 10 * time.Second, Transport: &http.Transport{DisableKeepAlives: true}}).Do(req)
+}
+
+// restartTestSend sends a request that must succeed with the given status.
+func restartTestSend(t *testing.T, method, url, body, token string, status int) {
+	t.Helper()
+	resp, err := restartTestRequest(t, method, url, body, token)
+	require.NoError(t, err)
+	defer resp.Body.Close()
+	data, err := io.ReadAll(resp.Body)
+	require.NoError(t, err)
+	require.Equal(t, status, resp.StatusCode, "%s", data)
+}
+
+// restartTestInstance returns the answering server's instance, or "" when no
+// server answers with the given token.
+func restartTestInstance(t *testing.T, base, token string) string {
+	t.Helper()
+	resp, err := restartTestRequest(t, http.MethodGet, base+"/api/ping", "", token)
+	if err != nil {
+		return ""
+	}
+	defer resp.Body.Close()
+	var ping struct {
+		InstanceID string `json:"instance_id"`
+	}
+	if resp.StatusCode != http.StatusOK || json.UnmarshalRead(resp.Body, &ping) != nil {
+		return ""
+	}
+	return ping.InstanceID
+}
+
+// restartAndWait requests a restart and returns the replacement once it
+// answers and has published its runtime.
+func restartAndWait(t *testing.T, dataDir, base, token string) *DaemonRuntime {
+	t.Helper()
+	previous := restartTestInstance(t, base, token)
+	require.NotEmpty(t, previous)
+	oldRuntime := waitForRestartRuntime(t, dataDir, token)
+	restartTestSend(t, http.MethodPost, base+"/api/v1/daemon/restart", "", token, http.StatusOK)
+	var runtime *DaemonRuntime
+	require.Eventually(t, func() bool {
+		replacement := restartTestInstance(t, base, token)
+		runtime = FindDaemonRuntime(dataDir, token)
+		return replacement != "" && replacement != previous && runtime != nil && runtime.Record.StartedAt.After(oldRuntime.Record.StartedAt)
+	}, 30*time.Second, 100*time.Millisecond)
+	return runtime
+}
+
+func TestServeRestartHandoffAppliesImagePolicy(t *testing.T) {
+	for _, mode := range []string{"foreground", "background"} {
+		t.Run(mode, func(t *testing.T) {
+			dir, dataDir := isolateServeTestHome(t)
+			codexDir := filepath.Join(dir, "empty", string(parser.AgentCodex))
+			require.NoError(t, os.MkdirAll(filepath.Join(codexDir, "2024", "01", "01"), 0o755))
+			process, done := startRestartFixture(t, dataDir, mode, "--base-path=/example", "--skip-initial-sync", "--require-auth=false")
+			rt := waitForRestartRuntime(t, dataDir)
+			if mode == "background" {
+				output, err := exec.CommandContext(t.Context(), os.Args[0], "daemon", "start").CombinedOutput()
+				require.NoError(t, err, "%s", output)
+				rt = waitForRestartRuntime(t, dataDir)
+				require.True(t, rt.Persistent)
+			}
+			base := fmt.Sprintf("http://127.0.0.1:%d/example", rt.Port)
+			restartTestSend(t, http.MethodPut, base+"/api/v1/settings", `{"tool_result_images":"drop"}`, "", http.StatusOK)
+			resp, err := restartTestRequest(t, http.MethodGet, base+"/api/v1/settings", "", "")
+			require.NoError(t, err)
+			var settings struct {
+				AuthToken        string `json:"auth_token"`
+				RestartSupported bool   `json:"restart_supported"`
+			}
+			require.NoError(t, json.UnmarshalRead(resp.Body, &settings))
+			require.NoError(t, resp.Body.Close())
+			assert.True(t, settings.RestartSupported)
+			// Auth applies live; the replacement keeps it over the launch flag.
+			restartTestSend(t, http.MethodPut, base+"/api/v1/settings", `{"require_auth":true}`, "", http.StatusOK)
+			token := settings.AuthToken
+			replacement := restartAndWait(t, dataDir, base, token)
+			assert.Equal(t, rt.Record.PID, replacement.Record.PID)
+			assert.Equal(t, rt.Port, replacement.Port)
+			assert.Equal(t, "/example", replacement.BasePath)
+			assert.True(t, replacement.RequireAuth)
+			assert.Equal(t, rt.Persistent, replacement.Persistent)
+
+			// A later file edit wins after Settings retired the original flag.
+			disk, err := config.Load(nil)
+			require.NoError(t, err)
+			require.NoError(t, disk.SaveSettings(map[string]any{"require_auth": false}))
+			if mode == "background" {
+				waitForBackgroundLaunchLock(t, dataDir)
+			}
+			restartAndWait(t, dataDir, base, token)
+			assert.NotEmpty(t, restartTestInstance(t, base, ""))
+
+			const uuid = "019eb791-cf7d-75c1-8439-9ed74c122b07"
+			png := testjsonl.SolidPNGBase64(4, 3, color.RGBA{R: 30, G: 120, B: 200, A: 255})
+			content := testjsonl.JoinJSONL(
+				testjsonl.CodexSessionMetaJSON(uuid, "/workspace/project", "user", "2024-01-01T10:00:00Z"),
+				testjsonl.CodexMsgJSON("user", "draw a blue square", "2024-01-01T10:00:01Z"),
+				testjsonl.CodexImageGenerationCallJSON("ig_1", "A blue square", png, "2024-01-01T10:00:02Z"),
+			)
+			path := filepath.Join(codexDir, "2024", "01", "01", "rollout-2024-01-01T10-00-00-"+uuid+".jsonl")
+			require.NoError(t, os.WriteFile(path, []byte(content), 0o644))
+			body, err := json.Marshal(map[string]string{"path": path})
+			require.NoError(t, err)
+			restartTestSend(t, http.MethodPost, base+"/api/v1/sessions/sync", string(body), "", http.StatusOK)
+			database, err := db.OpenReadOnly(t.Context(), filepath.Join(dataDir, "sessions.db"))
+			require.NoError(t, err)
+			defer func() { _ = database.Close() }()
+			page, err := database.ListSessions(t.Context(), db.SessionFilter{})
+			require.NoError(t, err)
+			var found bool
+			for _, session := range page.Sessions {
+				messages, err := database.GetAllMessages(t.Context(), session.ID)
+				require.NoError(t, err)
+				for _, message := range messages {
+					for _, call := range message.ToolCalls {
+						if call.ToolUseID == "ig_1" {
+							found = true
+							assert.NotContains(t, call.ResultContent, "input_image")
+							assert.NotContains(t, call.ResultContent, "data:image")
+							require.NotEmpty(t, call.ResultEvents)
+							for _, event := range call.ResultEvents {
+								assert.NotContains(t, event.Content, "input_image")
+							}
+						}
+					}
+				}
+			}
+			assert.True(t, found, "fixture must reach the tool-result tables")
+			if mode == "foreground" {
+				require.NoError(t, database.Close())
+				require.NoError(t, interruptRestartTestProcess(process))
+				select {
+				case err := <-done:
+					require.NoError(t, err)
+				case <-time.After(30 * time.Second):
+					require.FailNow(t, "foreground did not exit after interrupt")
+				}
+			}
+		})
+	}
+}
+
+func TestServeRestartRefusesInvalidConfig(t *testing.T) {
+	_, dataDir := isolateServeTestHome(t)
+	startRestartFixture(t, dataDir, "foreground", "--no-sync")
+	rt := waitForRestartRuntime(t, dataDir)
+	path := filepath.Join(dataDir, "config.toml")
+	saved, err := os.ReadFile(path)
+	require.NoError(t, err)
+	require.NoError(t, os.WriteFile(path, []byte("[invalid TOML"), 0o600))
+	resp, err := restartTestRequest(t, http.MethodPost, fmt.Sprintf("http://127.0.0.1:%d/api/v1/daemon/restart", rt.Port), "", "")
+	require.NoError(t, err)
+	body, err := io.ReadAll(resp.Body)
+	require.NoError(t, err)
+	require.NoError(t, resp.Body.Close())
+	require.Equal(t, http.StatusInternalServerError, resp.StatusCode)
+	assert.Contains(t, string(body), "parsing config")
+	require.NoError(t, os.WriteFile(path, saved, 0o600))
+	current := FindDaemonRuntime(dataDir)
+	require.NotNil(t, current)
+	assert.Equal(t, rt.Record.PID, current.Record.PID)
+}
+
+func TestRestartKeepsAdoptedNoSync(t *testing.T) {
+	_, dataDir := isolateServeTestHome(t)
+	startRestartFixture(t, dataDir, "background", "--no-sync")
+	old := waitForRestartRuntime(t, dataDir)
+	ctx, cancel := context.WithCancel(context.WithoutCancel(t.Context()))
+	t.Cleanup(cancel)
+	cmd := exec.CommandContext(ctx, os.Args[0], "serve", "--replace", "--host=127.0.0.1", "--port=0", "--no-browser", "--no-update-check")
+	require.NoError(t, cmd.Start())
+	done := make(chan error, 1)
+	go func() { done <- cmd.Wait() }()
+	t.Cleanup(func() {
+		stopCtx, stop := context.WithTimeout(context.WithoutCancel(t.Context()), 30*time.Second)
+		defer stop()
+		_, _ = stopWritableDaemonsForUpdate(stopCtx, config.Config{DataDir: dataDir})
+		select {
+		case <-done:
+		case <-stopCtx.Done():
+			assert.Fail(t, "replacement did not exit")
+		}
+	})
+	var current *DaemonRuntime
+	require.Eventually(t, func() bool {
+		current = FindDaemonRuntime(dataDir)
+		return current != nil && current.Record.PID != old.Record.PID
+	}, 30*time.Second, 100*time.Millisecond)
+	require.True(t, current.NoSync)
+	current = restartAndWait(t, dataDir, fmt.Sprintf("http://127.0.0.1:%d", current.Port), "")
+	assert.True(t, current.NoSync)
+}
+
+func TestRestartClosesStalledRequest(t *testing.T) {
+	_, dataDir := isolateServeTestHome(t)
+	startRestartFixture(t, dataDir, "foreground", "--no-sync")
+	rt := waitForRestartRuntime(t, dataDir)
+	base := fmt.Sprintf("http://127.0.0.1:%d", rt.Port)
+	conn, err := (&net.Dialer{}).DialContext(t.Context(), "tcp", fmt.Sprintf("127.0.0.1:%d", rt.Port))
+	require.NoError(t, err)
+	defer conn.Close()
+	_, err = fmt.Fprintf(conn, "PUT /api/v1/settings HTTP/1.1\r\nHost: 127.0.0.1:%d\r\nOrigin: %s\r\nContent-Type: application/json\r\nContent-Length: 1000\r\nExpect: 100-continue\r\n\r\n", rt.Port, base)
+	require.NoError(t, err)
+	require.NoError(t, conn.SetReadDeadline(time.Now().Add(5*time.Second)))
+	reader := bufio.NewReader(conn)
+	line, err := reader.ReadString('\n')
+	require.NoError(t, err)
+	require.Contains(t, line, "100 Continue")
+	line, err = reader.ReadString('\n')
+	require.NoError(t, err)
+	require.Equal(t, "\r\n", line)
+	_, err = io.WriteString(conn, "{")
+	require.NoError(t, err)
+	require.NoError(t, conn.SetReadDeadline(time.Time{}))
+	restartAndWait(t, dataDir, base, "")
+	require.NoError(t, conn.SetReadDeadline(time.Now().Add(time.Second)))
+	body, err := io.ReadAll(reader)
+	require.NoError(t, err)
+	assert.Empty(t, body)
+}
+
 func TestServeRestartPortChoiceWhenOccupied(t *testing.T) {
 	dataDir := testDataDir(t)
 	t.Setenv("AGENTSVIEW_TEST_REAL_CLI", "1")
@@ -153,239 +470,6 @@ func TestServeRestartHandoffPreservesLaunchOptions(t *testing.T) {
 	require.NoError(t, resp.Body.Close())
 }
 
-func TestServeRestartHandoffAppliesImagePolicy(t *testing.T) {
-	for _, mode := range []string{"foreground", "background"} {
-		t.Run(mode, func(t *testing.T) {
-			dir := t.TempDir()
-			dataDir := filepath.Join(dir, "data")
-			codexDir := filepath.Join(dir, "codex")
-			t.Setenv("HOME", dir)
-			t.Setenv("XDG_CONFIG_HOME", filepath.Join(dir, "config"))
-			t.Setenv("XDG_CACHE_HOME", filepath.Join(dir, "cache"))
-			t.Setenv("XDG_STATE_HOME", filepath.Join(dir, "state"))
-			t.Setenv("AGENTSVIEW_DATA_DIR", dataDir)
-			t.Setenv("AGENTSVIEW_TEST_REAL_CLI", "1")
-			for _, agent := range parser.Registry {
-				if agent.EnvVar != "" {
-					t.Setenv(agent.EnvVar, filepath.Join(dir, "empty", string(agent.Type)))
-				}
-				if agent.DefaultRootEnvVar != "" {
-					t.Setenv(agent.DefaultRootEnvVar, filepath.Join(dir, "empty-root", string(agent.Type)))
-				}
-			}
-			t.Setenv("CODEX_SESSIONS_DIR", codexDir)
-			require.NoError(t, os.MkdirAll(filepath.Join(codexDir, "2024", "01", "01"), 0o755))
-			var foregroundDone <-chan error
-			var foregroundProcess *os.Process
-			var foregroundCancel context.CancelFunc
-			token := ""
-			t.Cleanup(func() {
-				if foregroundCancel != nil {
-					defer foregroundCancel()
-				}
-				ctx, cancel := context.WithTimeout(context.WithoutCancel(t.Context()), 30*time.Second)
-				defer cancel()
-				_, err := stopWritableDaemonsForUpdate(ctx, config.Config{DataDir: dataDir, AuthToken: token})
-				assert.NoError(t, err)
-				if foregroundDone != nil {
-					select {
-					case err := <-foregroundDone:
-						assert.NoError(t, err)
-					case <-ctx.Done():
-						assert.Fail(t, "foreground server did not exit")
-					}
-				}
-			})
-			args := []string{"serve", "--host=127.0.0.1", "--port=0", "--base-path=/example", "--skip-initial-sync", "--no-browser", "--no-update-check", "--require-auth=false"}
-			if mode == "background" {
-				args = append(args, "--background")
-				out, err := exec.CommandContext(t.Context(), os.Args[0], args...).CombinedOutput()
-				require.NoError(t, err, "%s", out)
-			} else {
-				processCtx, cancel := context.WithCancel(context.WithoutCancel(t.Context()))
-				foregroundCancel = cancel
-				cmd := exec.CommandContext(processCtx, os.Args[0], args...)
-				configureRestartTestProcess(cmd)
-				require.NoError(t, cmd.Start())
-				foregroundProcess = cmd.Process
-				done := make(chan error, 1)
-				foregroundDone = done
-				go func() { done <- cmd.Wait() }()
-			}
-			var rt *DaemonRuntime
-			require.Eventually(t, func() bool {
-				rt = FindDaemonRuntime(dataDir)
-				return rt != nil
-			}, 30*time.Second, 100*time.Millisecond)
-			base := fmt.Sprintf("http://127.0.0.1:%d/example", rt.Port)
-			client := &http.Client{Timeout: 10 * time.Second}
-			request := func(method, path, body string) *http.Response {
-				t.Helper()
-				req, err := http.NewRequestWithContext(t.Context(), method, base+path, strings.NewReader(body))
-				require.NoError(t, err)
-				req.Header.Set("Origin", fmt.Sprintf("http://127.0.0.1:%d", rt.Port))
-				req.Header.Set("Content-Type", "application/json")
-				if token != "" {
-					req.Header.Set("Authorization", "Bearer "+token)
-				}
-				resp, err := client.Do(req)
-				require.NoError(t, err)
-				return resp
-			}
-			resp := request(http.MethodPut, "/api/v1/settings", `{"tool_result_images":"drop"}`)
-			require.Equal(t, http.StatusOK, resp.StatusCode)
-			require.NoError(t, resp.Body.Close())
-			resp = request(http.MethodGet, "/api/v1/settings", "")
-			require.Equal(t, http.StatusOK, resp.StatusCode)
-			var settings struct {
-				AuthToken        string `json:"auth_token"`
-				RestartSupported bool   `json:"restart_supported"`
-			}
-			require.NoError(t, json.UnmarshalRead(resp.Body, &settings))
-			require.NoError(t, resp.Body.Close())
-			assert.True(t, settings.RestartSupported)
-			resp = request(http.MethodGet, "/api/ping", "")
-			var oldPing struct {
-				InstanceID string `json:"instance_id"`
-			}
-			require.NoError(t, json.UnmarshalRead(resp.Body, &oldPing))
-			require.NoError(t, resp.Body.Close())
-			require.NotEmpty(t, oldPing.InstanceID)
-			// Auth applies live; the replacement keeps it over the launch flag.
-			resp = request(http.MethodPut, "/api/v1/settings", `{"require_auth":true}`)
-			require.Equal(t, http.StatusOK, resp.StatusCode)
-			require.NoError(t, resp.Body.Close())
-			token = settings.AuthToken
-			resp = request(http.MethodPost, "/api/v1/daemon/restart", "")
-			require.Equal(t, http.StatusOK, resp.StatusCode)
-			require.NoError(t, resp.Body.Close())
-			var replacement *DaemonRuntime
-			var replacementInstance string
-			require.Eventually(t, func() bool {
-				replacement = FindDaemonRuntime(dataDir, token)
-				if replacement == nil {
-					return false
-				}
-				req, err := http.NewRequestWithContext(t.Context(), http.MethodGet, base+"/api/ping", nil)
-				if err != nil {
-					return false
-				}
-				req.Header.Set("Authorization", "Bearer "+token)
-				response, err := client.Do(req)
-				if err != nil {
-					return false
-				}
-				defer response.Body.Close()
-				var ping struct {
-					InstanceID string `json:"instance_id"`
-				}
-				if response.StatusCode != http.StatusOK || json.UnmarshalRead(response.Body, &ping) != nil || ping.InstanceID == "" || ping.InstanceID == oldPing.InstanceID {
-					return false
-				}
-				replacementInstance = ping.InstanceID
-				return true
-			}, 30*time.Second, 100*time.Millisecond)
-			assert.Equal(t, rt.Record.PID, replacement.Record.PID)
-			assert.Equal(t, rt.Port, replacement.Port)
-			assert.Equal(t, "/example", replacement.BasePath)
-			assert.True(t, replacement.RequireAuth)
-
-			// A later file edit wins after Settings retired the original flag.
-			disk, err := config.Load(nil)
-			require.NoError(t, err)
-			require.NoError(t, disk.SaveSettings(map[string]any{"require_auth": false}))
-			if mode == "background" {
-				require.Eventually(t, func() bool {
-					lock, acquired := acquireBackgroundLaunchLock(dataDir)
-					if !acquired {
-						return false
-					}
-					require.NoError(t, lock.Unlock())
-					return true
-				}, 30*time.Second, 100*time.Millisecond)
-			}
-			// Do not reuse an idle connection to the server that just shut down.
-			client.CloseIdleConnections()
-			resp = request(http.MethodPost, "/api/v1/daemon/restart", "")
-			if resp.StatusCode != http.StatusOK {
-				body, readErr := io.ReadAll(resp.Body)
-				t.Logf("restart response status=%s headers=%v body=%q readErr=%v", resp.Status, resp.Header, body, readErr)
-			}
-			require.Equal(t, http.StatusOK, resp.StatusCode)
-			require.NoError(t, resp.Body.Close())
-			require.Eventually(t, func() bool {
-				req, err := http.NewRequestWithContext(t.Context(), http.MethodGet, base+"/api/ping", nil)
-				if err != nil {
-					return false
-				}
-				response, err := client.Do(req)
-				if err != nil {
-					return false
-				}
-				defer response.Body.Close()
-				var ping struct {
-					InstanceID string `json:"instance_id"`
-				}
-				if response.StatusCode != http.StatusOK || json.UnmarshalRead(response.Body, &ping) != nil || ping.InstanceID == "" || ping.InstanceID == replacementInstance {
-					return false
-				}
-				replacementInstance = ping.InstanceID
-				return true
-			}, 30*time.Second, 100*time.Millisecond)
-
-			const uuid = "019eb791-cf7d-75c1-8439-9ed74c122b07"
-			png := testjsonl.SolidPNGBase64(4, 3, color.RGBA{R: 30, G: 120, B: 200, A: 255})
-			content := testjsonl.JoinJSONL(
-				testjsonl.CodexSessionMetaJSON(uuid, "/workspace/project", "user", "2024-01-01T10:00:00Z"),
-				testjsonl.CodexMsgJSON("user", "draw a blue square", "2024-01-01T10:00:01Z"),
-				testjsonl.CodexImageGenerationCallJSON("ig_1", "A blue square", png, "2024-01-01T10:00:02Z"),
-			)
-			path := filepath.Join(codexDir, "2024", "01", "01", "rollout-2024-01-01T10-00-00-"+uuid+".jsonl")
-			require.NoError(t, os.WriteFile(path, []byte(content), 0o644))
-			body, err := json.Marshal(map[string]string{"path": path})
-			require.NoError(t, err)
-			resp = request(http.MethodPost, "/api/v1/sessions/sync", string(body))
-			require.Equal(t, http.StatusOK, resp.StatusCode)
-			require.NoError(t, resp.Body.Close())
-			database, err := db.OpenReadOnly(t.Context(), filepath.Join(dataDir, "sessions.db"))
-			require.NoError(t, err)
-			defer func() { _ = database.Close() }()
-			page, err := database.ListSessions(t.Context(), db.SessionFilter{})
-			require.NoError(t, err)
-			var found bool
-			for _, session := range page.Sessions {
-				messages, err := database.GetAllMessages(t.Context(), session.ID)
-				require.NoError(t, err)
-				for _, message := range messages {
-					for _, call := range message.ToolCalls {
-						if call.ToolUseID == "ig_1" {
-							found = true
-							assert.NotContains(t, call.ResultContent, "input_image")
-							assert.NotContains(t, call.ResultContent, "data:image")
-							require.NotEmpty(t, call.ResultEvents)
-							for _, event := range call.ResultEvents {
-								assert.NotContains(t, event.Content, "input_image")
-							}
-						}
-					}
-				}
-			}
-			assert.True(t, found, "fixture must reach the tool-result tables")
-			if mode == "foreground" {
-				require.NoError(t, database.Close())
-				require.NoError(t, interruptRestartTestProcess(foregroundProcess))
-				select {
-				case err := <-foregroundDone:
-					require.NoError(t, err)
-					foregroundDone = nil
-				case <-time.After(30 * time.Second):
-					require.FailNow(t, "foreground did not exit after interrupt")
-				}
-			}
-		})
-	}
-}
-
 func startRestartAuthFixture(t *testing.T, mode string, args ...string) (config.Config, string, string) {
 	t.Helper()
 	dir := t.TempDir()
@@ -429,8 +513,10 @@ func startRestartAuthFixture(t *testing.T, mode string, args ...string) (config.
 		}
 		ctx, stop := context.WithTimeout(context.WithoutCancel(t.Context()), 30*time.Second)
 		defer stop()
-		_, err := stopWritableDaemonsForUpdate(ctx, config.Config{DataDir: dataDir, AuthToken: token})
-		assert.NoError(t, err)
+		assert.Eventually(t, func() bool {
+			_, err := stopWritableDaemonsForUpdate(ctx, config.Config{DataDir: dataDir, AuthToken: token})
+			return err == nil
+		}, 30*time.Second, 100*time.Millisecond)
 		if done != nil {
 			select {
 			case <-done:
@@ -440,40 +526,6 @@ func startRestartAuthFixture(t *testing.T, mode string, args ...string) (config.
 		}
 	})
 	return cfg, dataDir, token
-}
-
-func TestServeRestartRefusesInvalidConfig(t *testing.T) {
-	for _, mode := range []string{"foreground", "background"} {
-		t.Run(mode, func(t *testing.T) {
-			_, dataDir, _ := startRestartAuthFixture(t, mode)
-			var rt *DaemonRuntime
-			require.Eventually(t, func() bool { rt = FindDaemonRuntime(dataDir); return rt != nil }, 30*time.Second, 100*time.Millisecond)
-			base := fmt.Sprintf("http://127.0.0.1:%d", rt.Port)
-			request := func() (int, string) {
-				t.Helper()
-				req, err := http.NewRequestWithContext(t.Context(), http.MethodPost, base+"/api/v1/daemon/restart", nil)
-				require.NoError(t, err)
-				req.Header.Set("Origin", base)
-				resp, err := http.DefaultClient.Do(req)
-				require.NoError(t, err)
-				defer resp.Body.Close()
-				body, err := io.ReadAll(resp.Body)
-				require.NoError(t, err)
-				return resp.StatusCode, string(body)
-			}
-			path := filepath.Join(dataDir, "config.toml")
-			saved, err := os.ReadFile(path)
-			require.NoError(t, err)
-			require.NoError(t, os.WriteFile(path, []byte("[invalid TOML"), 0o600))
-			status, body := request()
-			require.Equal(t, http.StatusInternalServerError, status)
-			assert.Contains(t, body, "parsing config")
-			require.NoError(t, os.WriteFile(path, saved, 0o600))
-			current := FindDaemonRuntime(dataDir)
-			require.NotNil(t, current)
-			assert.Equal(t, rt.Record.PID, current.Record.PID)
-		})
-	}
 }
 
 func checkServeRestartUsesEditedAuthConfig(t *testing.T) {
@@ -659,6 +711,10 @@ func TestServeRestartUsesEditedAuthAfterSettingsSave(t *testing.T) {
 				defer resp.Body.Close()
 				return resp.StatusCode == http.StatusUnauthorized
 			}, 30*time.Second, 100*time.Millisecond)
+			require.Eventually(t, func() bool {
+				rt := FindDaemonRuntime(dataDir, token)
+				return rt != nil && rt.RequireAuth
+			}, 30*time.Second, 100*time.Millisecond)
 		})
 	}
 }
@@ -666,7 +722,7 @@ func TestServeRestartUsesEditedAuthAfterSettingsSave(t *testing.T) {
 func TestRestartPreservesDeploymentAuthOverride(t *testing.T) {
 	t.Setenv("AGENTSVIEW_MODE", "serve")
 	t.Setenv("AGENTSVIEW_REQUIRE_AUTH", "false")
-	_, dataDir, _ := startRestartAuthFixture(t, "foreground")
+	cfg, dataDir, _ := startRestartAuthFixture(t, "foreground")
 	var rt *DaemonRuntime
 	require.Eventually(t, func() bool { rt = FindDaemonRuntime(dataDir); return rt != nil }, 30*time.Second, 100*time.Millisecond)
 	base := fmt.Sprintf("http://127.0.0.1:%d", rt.Port)
@@ -703,6 +759,7 @@ func TestRestartPreservesDeploymentAuthOverride(t *testing.T) {
 	after, err := os.ReadFile(configPath)
 	require.NoError(t, err)
 	assert.Equal(t, before, after)
+	require.NoError(t, cfg.SaveSettings(map[string]any{"require_auth": true}))
 	req, err := http.NewRequestWithContext(t.Context(), http.MethodPost, base+"/api/v1/daemon/restart", nil)
 	require.NoError(t, err)
 	req.Header.Set("Origin", base)
@@ -736,160 +793,6 @@ func restartTestPing(t *testing.T, client *http.Client, base string) (*http.Resp
 	req, err := http.NewRequestWithContext(t.Context(), http.MethodGet, base+"/api/ping", nil)
 	require.NoError(t, err)
 	return client.Do(req)
-}
-
-func TestRestartKeepsAdoptedNoSync(t *testing.T) {
-	_, dataDir, _ := startRestartAuthFixture(t, "background")
-	old := FindDaemonRuntime(dataDir)
-	require.NotNil(t, old)
-	ctx, cancel := context.WithCancel(context.WithoutCancel(t.Context()))
-	t.Cleanup(cancel)
-	cmd := exec.CommandContext(ctx, os.Args[0], "serve", "--replace", "--host=127.0.0.1", "--port=0", "--no-browser", "--no-update-check")
-	require.NoError(t, cmd.Start())
-	done := make(chan error, 1)
-	go func() { done <- cmd.Wait() }()
-	t.Cleanup(func() {
-		stopCtx, stop := context.WithTimeout(context.WithoutCancel(t.Context()), 30*time.Second)
-		defer stop()
-		_, _ = stopWritableDaemonsForUpdate(stopCtx, config.Config{DataDir: dataDir})
-		select {
-		case <-done:
-		case <-stopCtx.Done():
-			assert.Fail(t, "replacement did not exit")
-		}
-	})
-	var current *DaemonRuntime
-	require.Eventually(t, func() bool {
-		current = FindDaemonRuntime(dataDir)
-		return current != nil && current.Record.PID != old.Record.PID
-	}, 30*time.Second, 100*time.Millisecond)
-	require.True(t, current.NoSync)
-	base := fmt.Sprintf("http://127.0.0.1:%d", current.Port)
-	client := &http.Client{Timeout: time.Second}
-	resp, err := restartTestPing(t, client, base)
-	require.NoError(t, err)
-	var first struct {
-		InstanceID string `json:"instance_id"`
-	}
-	require.NoError(t, json.UnmarshalRead(resp.Body, &first))
-	require.NoError(t, resp.Body.Close())
-	req, err := http.NewRequestWithContext(t.Context(), http.MethodPost, base+"/api/v1/daemon/restart", nil)
-	require.NoError(t, err)
-	req.Header.Set("Origin", base)
-	resp, err = client.Do(req)
-	require.NoError(t, err)
-	require.Equal(t, http.StatusOK, resp.StatusCode)
-	require.NoError(t, resp.Body.Close())
-	require.Eventually(t, func() bool {
-		resp, err := restartTestPing(t, client, base)
-		if err != nil {
-			return false
-		}
-		defer resp.Body.Close()
-		var ping struct {
-			InstanceID string `json:"instance_id"`
-		}
-		return json.UnmarshalRead(resp.Body, &ping) == nil && ping.InstanceID != "" && ping.InstanceID != first.InstanceID
-	}, 30*time.Second, 100*time.Millisecond)
-	current = FindDaemonRuntime(dataDir)
-	require.NotNil(t, current)
-	assert.True(t, current.NoSync)
-}
-
-func TestRestartClosesStalledRequest(t *testing.T) {
-	_, dataDir, _ := startRestartAuthFixture(t, "foreground")
-	var rt *DaemonRuntime
-	require.Eventually(t, func() bool { rt = FindDaemonRuntime(dataDir); return rt != nil }, 30*time.Second, 100*time.Millisecond)
-	base := fmt.Sprintf("http://127.0.0.1:%d", rt.Port)
-	client := &http.Client{Timeout: time.Second}
-	resp, err := restartTestPing(t, client, base)
-	require.NoError(t, err)
-	var first struct {
-		InstanceID string `json:"instance_id"`
-	}
-	require.NoError(t, json.UnmarshalRead(resp.Body, &first))
-	require.NoError(t, resp.Body.Close())
-	conn, err := (&net.Dialer{}).DialContext(t.Context(), "tcp", fmt.Sprintf("127.0.0.1:%d", rt.Port))
-	require.NoError(t, err)
-	defer conn.Close()
-	_, err = fmt.Fprintf(conn, "PUT /api/v1/settings HTTP/1.1\r\nHost: 127.0.0.1:%d\r\nOrigin: %s\r\nContent-Type: application/json\r\nContent-Length: 1000\r\nExpect: 100-continue\r\n\r\n", rt.Port, base)
-	require.NoError(t, err)
-	require.NoError(t, conn.SetReadDeadline(time.Now().Add(5*time.Second)))
-	reader := bufio.NewReader(conn)
-	line, err := reader.ReadString('\n')
-	require.NoError(t, err)
-	require.Contains(t, line, "100 Continue")
-	line, err = reader.ReadString('\n')
-	require.NoError(t, err)
-	require.Equal(t, "\r\n", line)
-	_, err = io.WriteString(conn, "{")
-	require.NoError(t, err)
-	require.NoError(t, conn.SetReadDeadline(time.Time{}))
-	req, err := http.NewRequestWithContext(t.Context(), http.MethodPost, base+"/api/v1/daemon/restart", nil)
-	require.NoError(t, err)
-	req.Header.Set("Origin", base)
-	resp, err = client.Do(req)
-	require.NoError(t, err)
-	require.Equal(t, http.StatusOK, resp.StatusCode)
-	require.NoError(t, resp.Body.Close())
-	require.Eventually(t, func() bool {
-		resp, err := restartTestPing(t, client, base)
-		if err != nil {
-			return false
-		}
-		defer resp.Body.Close()
-		var ping struct {
-			InstanceID string `json:"instance_id"`
-		}
-		return json.UnmarshalRead(resp.Body, &ping) == nil && ping.InstanceID != "" && ping.InstanceID != first.InstanceID
-	}, 20*time.Second, 100*time.Millisecond)
-	require.NoError(t, conn.SetReadDeadline(time.Now().Add(time.Second)))
-	body, err := io.ReadAll(reader)
-	require.NoError(t, err)
-	assert.Empty(t, body)
-}
-
-func TestRestartKeepsPromotedDaemonLifetime(t *testing.T) {
-	_, dataDir, _ := startRestartAuthFixture(t, "background")
-	rt := FindDaemonRuntime(dataDir)
-	require.NotNil(t, rt)
-	require.False(t, rt.Persistent)
-	output, err := exec.CommandContext(t.Context(), os.Args[0], "daemon", "start").CombinedOutput()
-	require.NoError(t, err, "%s", output)
-	rt = FindDaemonRuntime(dataDir)
-	require.NotNil(t, rt)
-	require.True(t, rt.Persistent)
-	base := fmt.Sprintf("http://127.0.0.1:%d", rt.Port)
-	client := &http.Client{Timeout: time.Second}
-	resp, err := restartTestPing(t, client, base)
-	require.NoError(t, err)
-	var first struct {
-		InstanceID string `json:"instance_id"`
-	}
-	require.NoError(t, json.UnmarshalRead(resp.Body, &first))
-	require.NoError(t, resp.Body.Close())
-	req, err := http.NewRequestWithContext(t.Context(), http.MethodPost, base+"/api/v1/daemon/restart", nil)
-	require.NoError(t, err)
-	req.Header.Set("Origin", base)
-	resp, err = client.Do(req)
-	require.NoError(t, err)
-	require.Equal(t, http.StatusOK, resp.StatusCode)
-	require.NoError(t, resp.Body.Close())
-	require.Eventually(t, func() bool {
-		resp, err := restartTestPing(t, client, base)
-		if err != nil {
-			return false
-		}
-		defer resp.Body.Close()
-		var ping struct {
-			InstanceID string `json:"instance_id"`
-		}
-		return json.UnmarshalRead(resp.Body, &ping) == nil && ping.InstanceID != "" && ping.InstanceID != first.InstanceID
-	}, 30*time.Second, 100*time.Millisecond)
-	var replacement *DaemonRuntime
-	require.Eventually(t, func() bool { replacement = FindDaemonRuntime(dataDir); return replacement != nil }, 30*time.Second, 100*time.Millisecond)
-	assert.Equal(t, rt.Record.PID, replacement.Record.PID)
-	assert.True(t, replacement.Persistent)
 }
 
 func TestServeHandoffPortArgs(t *testing.T) {
