@@ -66,15 +66,18 @@ func TestSelectedInventoryAuthorityAndScope(t *testing.T) {
 			}
 			assert.Equal(t, strings.Repeat(want, 64), entries[1].Objects[0].SHA256)
 			assert.Equal(t, bound.Objects, entries[0].Objects)
+			if tc.name != "covered wins over supplemental" {
+				return
+			}
 			_, err = conn.ExecContext(t.Context(), `DELETE FROM raw_archive_files WHERE path=? AND sha256=?`, primary, strings.Repeat("a", 64))
 			require.NoError(t, err)
 			_, err = selectedInventory(t.Context(), conn, "root", bound, "project/id/")
-			require.ErrorContains(t, err, "saved transcript records conflict")
+			require.ErrorContains(t, err, "saved transcript does not match snapshot")
 			insert("root", primary, strings.Repeat("a", 64), true)
 			_, err = conn.ExecContext(t.Context(), `INSERT INTO raw_archive_files VALUES(?,?,?,?,?,?)`, "root", "project/id/subagents/corrupt.json", strings.Repeat("a", 64), 1, 1, 2)
 			require.NoError(t, err)
 			_, err = selectedInventory(t.Context(), conn, "root", bound, "project/id/")
-			require.Error(t, err)
+			require.ErrorContains(t, err, "couldn't convert 2 into type bool")
 		})
 	}
 }

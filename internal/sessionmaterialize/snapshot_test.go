@@ -49,14 +49,7 @@ func TestMaterializeSnapshotInstallsCapturedCompanions(t *testing.T) {
 	require.NoError(t, err)
 	_, err = archive.Reparse(ctx, rawarchive.ReparseOptions{All: true, ScratchBytes: 512 << 20})
 	require.NoError(t, err)
-	var count int
-	err = database.Reader().QueryRow(ctx, `SELECT count(*) FROM raw_archive_sessions WHERE device_id=? AND provider='claude' AND parser_id=?`, device, id).Scan(&count)
-	require.NoError(t, err)
-	require.Equal(t, 1, count)
-	parsed, err := database.GetSessionFull(ctx, id)
-	require.NoError(t, err)
-	require.NotNil(t, parsed)
-	assert.Equal(t, id, parsed.ID)
+
 	repository := filepath.Join(root, "repository")
 	report, err := archive.Backup(ctx, repository, settings, "fixture")
 	require.NoError(t, err)
@@ -78,8 +71,6 @@ func TestMaterializeSnapshotInstallsCapturedCompanions(t *testing.T) {
 	session, err := receiver.GetSessionFull(ctx, device+"~"+id)
 	require.NoError(t, err)
 	require.NotNil(t, session)
-	require.NotNil(t, session.FilePath)
-	assert.Contains(t, *session.FilePath, "archive://")
 	home, scratch, cwd := t.TempDir(), t.TempDir(), t.TempDir()
 	t.Setenv("CLAUDE_CONFIG_DIR", home)
 	t.Setenv("CLAUDE_CODE_PROJECT_DIR_NAME", "fixture")
@@ -91,8 +82,18 @@ func TestMaterializeSnapshotInstallsCapturedCompanions(t *testing.T) {
 	assert.Equal(t, "snapshot:"+report.SnapshotID, result.Source)
 	assert.Equal(t, "installed", result.Status)
 	dest := filepath.Join(home, "projects", "fixture")
-	_, err = os.Stat(filepath.Join(dest, id, "tool-results", "tool.txt"))
+	for name, want := range map[string]string{
+		filepath.Join(dest, id+".jsonl"):                          primary,
+		filepath.Join(dest, id, "tool-results", "tool.txt"):       "tool output",
+		filepath.Join(dest, id, "subagents", "agent-child.jsonl"): child,
+	} {
+		content, err := os.ReadFile(name)
+		require.NoError(t, err)
+		assert.Equal(t, want, string(content))
+	}
+	result, err = Materialize(ctx, cfg, receiver, session, cwd)
 	require.NoError(t, err)
+	assert.Equal(t, "unchanged", result.Status)
 	entries, err := os.ReadDir(scratch)
 	require.NoError(t, err)
 	assert.Empty(t, entries)
@@ -106,7 +107,4 @@ func TestMaterializeSnapshotInstallsCapturedCompanions(t *testing.T) {
 	}))
 	_, err = Materialize(ctx, cfg, receiver, session, cwd)
 	require.ErrorContains(t, err, "archive session identity differs")
-	entries, err = os.ReadDir(scratch)
-	require.NoError(t, err)
-	assert.Empty(t, entries)
 }

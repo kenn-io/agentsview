@@ -231,7 +231,7 @@ func selectedInventory(ctx context.Context, conn *sql.DB, rootID string, bound r
 		return nil, err
 	}
 	if len(choices[bound.Path].covered) != 1 {
-		return nil, errors.New("saved transcript records conflict")
+		return nil, errors.New("saved transcript does not match snapshot")
 	}
 	var entries []rawsync.Entry
 	for _, c := range choices {
