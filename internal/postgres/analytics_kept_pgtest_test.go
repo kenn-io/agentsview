@@ -74,8 +74,8 @@ func TestAnalyticsKeptPushAndSelection(t *testing.T) {
 	require.NoError(t, err)
 	velocityAgain, err = store.GetAnalyticsVelocity(ctx, f)
 	require.NoError(t, err)
-	assert.Equal(t, tools, toolsAgain)
-	assert.Equal(t, velocity, velocityAgain)
+	assert.Equal(t, freshTools, toolsAgain)
+	assert.Equal(t, freshVelocity, velocityAgain)
 
 	for _, selection := range []struct {
 		filter    db.AnalyticsFilter
