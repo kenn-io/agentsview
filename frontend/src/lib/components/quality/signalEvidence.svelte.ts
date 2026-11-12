@@ -8,9 +8,7 @@ import { m } from "../../i18n/index.js";
 import { analytics } from "../../stores/analytics.svelte.js";
 import { LatestRead } from "../../utils/latest-read.js";
 
-type AnalyticsParams = NonNullable<
-  Parameters<typeof AnalyticsService.getApiV1AnalyticsSignals>[0]
->;
+type AnalyticsParams = NonNullable<Parameters<typeof AnalyticsService.getApiV1AnalyticsSignals>[0]>;
 
 function signalEvidenceKey(signal: string, params: AnalyticsParams): string {
   const entries = Object.entries(params)
@@ -68,9 +66,7 @@ export class SignalEvidence {
     this.loading = true;
     this.error = null;
     const current = () =>
-      this.selectedSignalId === signal &&
-      this.filterKey === requestKey &&
-      this.request === request;
+      this.selectedSignalId === signal && this.filterKey === requestKey && this.request === request;
     try {
       const response = await AnalyticsService.getApiV1AnalyticsSignalSessions(
         {
