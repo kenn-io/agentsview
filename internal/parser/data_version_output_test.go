@@ -8,6 +8,7 @@ import (
 	"encoding/json/jsontext"
 	"fmt"
 	"io/fs"
+	"maps"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -44,12 +45,12 @@ func storedFields(v reflect.Value, root string) any {
 		}
 		return fields
 	case reflect.Slice, reflect.Array:
-		if v.Type() == reflect.TypeOf(jsontext.Value{}) && json.Valid(v.Bytes()) {
+		if v.Type() == reflect.TypeFor[jsontext.Value]() && json.Valid(v.Bytes()) {
 			decoder := json.NewDecoder(bytes.NewReader(v.Bytes()))
 			decoder.UseNumber()
 			var value any
 			if err := decoder.Decode(&value); err == nil {
-				return value
+				return storedFields(reflect.ValueOf(value), root)
 			}
 		}
 		if v.Kind() == reflect.Slice && v.Type().Elem().Kind() == reflect.Uint8 {
@@ -68,10 +69,20 @@ func storedFields(v reflect.Value, root string) any {
 		}
 		return values
 	case reflect.String:
+		if v.Type() == reflect.TypeFor[json.Number]() {
+			return v.Interface()
+		}
 		if v.String() == filepath.Base(root) {
 			return "$ROOT"
 		}
-		return strings.ReplaceAll(filepath.ToSlash(v.String()), filepath.ToSlash(root), "$ROOT")
+		value := v.String()
+		for _, prefix := range []string{root, strings.ReplaceAll(root, `\`, "/")} {
+			if strings.HasPrefix(value, prefix+"/") || strings.HasPrefix(value, prefix+`\`) {
+				return "$ROOT" + strings.ReplaceAll(value[len(prefix):], `\`, "/")
+			}
+			value = strings.ReplaceAll(value, prefix, "$ROOT")
+		}
+		return value
 	default:
 		return v.Interface()
 	}
@@ -115,7 +126,11 @@ func parsedOutputRows(t *testing.T, agent parser.AgentType) map[string]string {
 		outcome, err := provider.Parse(parser.WithoutFilesystemProjectDiscovery(t.Context()), parser.ParseRequest{Source: source, Machine: "digest"})
 		require.NoError(t, err)
 		require.Empty(t, outcome.SourceErrors)
-		require.NotEmpty(t, outcome.Results, "%s: %s returned no sessions", agent, input)
+		require.True(t, len(outcome.Results) > 0 || len(outcome.ExcludedSessionIDs) > 0, "%s: %s returned no sessions or exclusions", agent, input)
+		slices.Sort(outcome.ExcludedSessionIDs)
+		excluded, err := json.Marshal(outcome.ExcludedSessionIDs)
+		require.NoError(t, err)
+		rows[input] = append(rows[input], string(excluded))
 		for _, result := range outcome.Results {
 			messages += len(result.Result.Messages)
 			candidate, err := ingest.PrepareCandidate(t.Context(), result.Result, ingest.ContentOptions{})
@@ -140,17 +155,24 @@ func parsedOutputRows(t *testing.T, agent parser.AgentType) map[string]string {
 
 type outputRecord struct {
 	Version   int                          `json:"version"`
+	Bump      bool                         `json:"bump,omitempty"`
 	Digest    string                       `json:"digest"`
 	Providers map[string]map[string]string `json:"providers"`
 }
 
-func outputDigest(providers map[string]map[string]string) string {
-	data, _ := json.Marshal(providers)
+func outputDigest(providers map[string]map[string]string) (string, string, error) {
+	data, err := json.Marshal(providers)
+	if err != nil {
+		return "", "", err
+	}
 	sum := sha256.Sum256(data)
-	return hex.EncodeToString(sum[:])
+	return hex.EncodeToString(sum[:]), string(data), nil
 }
 
 func TestParsedOutputMatchesDataVersion(t *testing.T) {
+	local := time.Local                      //nolint:forbidigo // Pin local parser timestamps for a stable digest.
+	time.Local = time.UTC                    //nolint:forbidigo // Pin local parser timestamps for a stable digest.
+	t.Cleanup(func() { time.Local = local }) //nolint:forbidigo // Restore the test process timezone.
 	providers := make(map[string]map[string]string)
 	for _, factory := range parser.ProviderFactories() {
 		agent := factory.Definition().Type
@@ -190,7 +212,11 @@ func readOutputRecords(dir string) ([]outputRecord, error) {
 		if err := json.Unmarshal(data, &record); err != nil {
 			return nil, err
 		}
-		if record.Digest != outputDigest(record.Providers) || entry.Name() != fmt.Sprintf("%d-%s.json", record.Version, record.Digest) {
+		digest, _, err := outputDigest(record.Providers)
+		if err != nil {
+			return nil, err
+		}
+		if record.Digest != digest || entry.Name() != fmt.Sprintf("%d-%s.json", record.Version, record.Digest) {
 			return nil, fmt.Errorf("invalid data version output record %s", entry.Name())
 		}
 		records = append(records, record)
@@ -200,18 +226,27 @@ func readOutputRecords(dir string) ([]outputRecord, error) {
 
 func checkDataVersionDigest(version int, providers map[string]map[string]string, records []outputRecord) error {
 	byVersion := make(map[int]map[string]map[string]string)
+	bumps := 0
 	for _, record := range records {
 		if record.Version > version {
 			return fmt.Errorf("data version %d has a newer record for version %d", version, record.Version)
 		}
+		if record.Version == version && record.Bump {
+			bumps++
+			if bumps > 1 {
+				return fmt.Errorf("data version %d has multiple bump records; keep the record from main, remove yours, and take version %d", version, version+1)
+			}
+		}
 		if byVersion[record.Version] == nil {
 			byVersion[record.Version] = make(map[string]map[string]string)
 		}
-		for provider, inputs := range record.Providers {
+		for _, provider := range slices.Sorted(maps.Keys(record.Providers)) {
+			inputs := record.Providers[provider]
 			if byVersion[record.Version][provider] == nil {
 				byVersion[record.Version][provider] = make(map[string]string)
 			}
-			for input, digest := range inputs {
+			for _, input := range slices.Sorted(maps.Keys(inputs)) {
+				digest := inputs[input]
 				if previous, ok := byVersion[record.Version][provider][input]; ok && previous != digest {
 					return fmt.Errorf("data version %d has conflicting output records for %s: %s; keep the record from main, remove your unmerged conflicting record, and take version %d", record.Version, provider, input, version+1)
 				}
@@ -219,18 +254,24 @@ func checkDataVersionDigest(version int, providers map[string]map[string]string,
 			}
 		}
 	}
+	digest, providerJSON, err := outputDigest(providers)
+	if err != nil {
+		return err
+	}
 	current, ok := byVersion[version]
 	if !ok {
-		return fmt.Errorf("record data version %d with digest %s and provider digests %s", version, outputDigest(providers), providerJSON(providers))
+		return fmt.Errorf("record data version %d with digest %s and provider digests %s", version, digest, providerJSON)
 	}
-	for provider, inputs := range current {
-		for input, digest := range inputs {
+	for _, provider := range slices.Sorted(maps.Keys(current)) {
+		inputs := current[provider]
+		for _, input := range slices.Sorted(maps.Keys(inputs)) {
+			recorded := inputs[input]
 			got, exists := providers[provider][input]
 			if !exists {
 				return fmt.Errorf("recorded input missing for %s: %s under data version %d", provider, input, version)
 			}
-			if got != digest {
-				return fmt.Errorf("parsed output changed for %s: %s under data version %d; take version %d, declare its scope, and record digest %s with provider digests %s", provider, input, version, version+1, outputDigest(providers), providerJSON(providers))
+			if got != recorded {
+				return fmt.Errorf("parsed output changed for %s: %s under data version %d; take version %d, declare its scope, and record digest %s with provider digests %s", provider, input, version, version+1, digest, providerJSON)
 			}
 		}
 	}
@@ -246,30 +287,71 @@ func checkDataVersionDigest(version int, providers map[string]map[string]string,
 		}
 	}
 	if len(missing) > 0 {
-		return fmt.Errorf("record new inputs at data version %d with digest %s and provider digests %s", version, outputDigest(missing), providerJSON(missing))
+		digest, data, err := outputDigest(missing)
+		if err != nil {
+			return err
+		}
+		return fmt.Errorf("record new inputs at data version %d with digest %s and provider digests %s", version, digest, data)
 	}
 	return nil
 }
 
-func providerJSON(providers map[string]map[string]string) string {
-	data, _ := json.Marshal(providers)
-	return string(data)
-}
-
 func TestDataVersionDigestGuidance(t *testing.T) {
-	old := outputRecord{Version: 177, Providers: map[string]map[string]string{"claude": {"old.jsonl": "old"}}}
+	old := outputRecord{Version: 177, Bump: true, Providers: map[string]map[string]string{"claude": {"old.jsonl": "old"}}}
 	added := outputRecord{Version: 177, Providers: map[string]map[string]string{"claude": {"new.jsonl": "first"}, "example": {"session.jsonl": "first"}}}
+	otherBump := outputRecord{Version: 177, Bump: true, Providers: added.Providers}
+	err := checkDataVersionDigest(177, nil, []outputRecord{old, otherBump})
+	require.ErrorContains(t, err, "multiple bump records")
+	require.ErrorContains(t, err, "take version 178")
 	both := map[string]map[string]string{"claude": {"old.jsonl": "old", "new.jsonl": "first"}, "example": {"session.jsonl": "first"}}
 	require.NoError(t, checkDataVersionDigest(177, both, []outputRecord{old, added}))
 	require.ErrorContains(t, checkDataVersionDigest(177, both, []outputRecord{old}), "record new inputs")
 	changed := map[string]map[string]string{"claude": {"old.jsonl": "old", "new.jsonl": "changed"}, "example": {"session.jsonl": "first"}}
-	err := checkDataVersionDigest(177, changed, []outputRecord{old, added})
+	err = checkDataVersionDigest(177, changed, []outputRecord{old, added})
 	require.ErrorContains(t, err, "claude: new.jsonl")
 	require.ErrorContains(t, err, "take version 178")
+	changed["claude"]["old.jsonl"] = "changed"
+	err = checkDataVersionDigest(177, changed, []outputRecord{old, added})
+	require.ErrorContains(t, err, "claude: new.jsonl")
 	conflict := outputRecord{Version: 177, Providers: map[string]map[string]string{"claude": {"old.jsonl": "changed"}}}
 	err = checkDataVersionDigest(177, both, []outputRecord{old, added, conflict})
 	require.ErrorContains(t, err, "conflicting output records for claude: old.jsonl")
 	require.ErrorContains(t, err, "take version 178")
 	require.ErrorContains(t, checkDataVersionDigest(177, map[string]map[string]string{}, []outputRecord{old}), "recorded input missing for claude: old.jsonl")
 	require.ErrorContains(t, checkDataVersionDigest(176, both, []outputRecord{old}), "newer record for version 177")
+}
+
+func TestStoredFieldsNormalizesPaths(t *testing.T) {
+	root := `C:\tmp\r`
+	value := map[string]any{"path": `C:\tmp\r\a\b.jsonl`, "text": `keep C:\other\file`, "json": jsontext.Value(`{"path":"C:\\tmp\\r\\a\\b.jsonl","text":"C:\\other\\file","count":1}`)} //nolint:misspell // This is a Windows path.
+	got := storedFields(reflect.ValueOf(value), root).(map[string]any)
+	require.Equal(t, "$ROOT/a/b.jsonl", got["path"])
+	require.Equal(t, `keep C:\other\file`, got["text"])                                                                          //nolint:misspell // This is a Windows path.
+	require.Equal(t, map[string]any{"path": "$ROOT/a/b.jsonl", "text": `C:\other\file`, "count": json.Number("1")}, got["json"]) //nolint:misspell // This is a Windows path.
+}
+
+func TestParsedOutputIncludesExclusions(t *testing.T) {
+	root := parsedOutputFixture(t, parser.AgentClaude)
+	provider, ok := parser.NewProvider(parser.AgentClaude, parser.ProviderConfig{Roots: []string{root}, Machine: "digest"})
+	require.True(t, ok)
+	sources, err := provider.Discover(t.Context())
+	require.NoError(t, err)
+	for _, source := range sources {
+		if filepath.Base(source.DisplayPath) != "usage_probe.jsonl" {
+			continue
+		}
+		outcome, err := provider.Parse(parser.WithoutFilesystemProjectDiscovery(t.Context()), parser.ParseRequest{Source: source, Machine: "digest"})
+		require.NoError(t, err)
+		require.Empty(t, outcome.Results)
+		require.Len(t, outcome.ExcludedSessionIDs, 1)
+		data, err := json.Marshal(outcome.ExcludedSessionIDs)
+		require.NoError(t, err)
+		sum := sha256.Sum256(data)
+		empty := sha256.Sum256([]byte("null"))
+		got := parsedOutputRows(t, parser.AgentClaude)["project/usage_probe.jsonl"]
+		require.Equal(t, hex.EncodeToString(sum[:]), got)
+		require.NotEqual(t, hex.EncodeToString(empty[:]), got)
+		return
+	}
+	require.FailNow(t, "usage probe was not discovered")
 }

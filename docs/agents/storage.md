@@ -52,10 +52,10 @@ in-process fallback.
 
 The parsed-output digest records each provider and corpus input under
 `internal/parser/testdata/data-version-output-digests`. If output changes for a
-recorded input, take a new data version and record its digest. Keep records
-already on main. For a new input, append its first digest at the current version
-using output from the current main parser. This also applies when the input
-accompanies a parser change. A new provider can append its first digest at the
+recorded input, take a new data version and record its digest with `bump` set
+to true. Keep records already on main. For a new input, append its first digest
+at the current version using output from the current main parser, and leave
+`bump` unset. This also applies when the input accompanies a parser change. A new provider can append its first digest at the
 current version. If records conflict, keep the record from main, remove your
 unmerged conflicting record, and take the next version.
 
