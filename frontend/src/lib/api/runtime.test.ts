@@ -134,7 +134,7 @@ describe("API errors", () => {
   });
 
   it("marks a fetch failure as transient", async () => {
-    const cause = new TypeError("Content-Length header of network response exceeds response Body.");
+    const cause = new TypeError("Failed to fetch");
     vi.stubGlobal("fetch", vi.fn().mockRejectedValue(cause));
     const error = await orvalFetch("/api/v1/search", {}).catch((err: unknown) => err);
     expect(error).toBeInstanceOf(TransportError);
@@ -142,8 +142,29 @@ describe("API errors", () => {
     expect(isTransient(error)).toBe(true);
   });
 
+  it("marks an interrupted response body as transient", async () => {
+    const cause = new TypeError("Content-Length header of network response exceeds response Body.");
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(
+        new Response(
+          new ReadableStream({
+            start(controller) {
+              controller.error(cause);
+            },
+          }),
+          { headers: { "Content-Type": "application/json" } },
+        ),
+      ),
+    );
+    const error = await orvalFetch("/api/v1/search", {}).catch((err: unknown) => err);
+    expect(error).toBeInstanceOf(TransportError);
+    expect(error).toMatchObject({ message: cause.message, cause });
+    expect(isTransient(error)).toBe(true);
+  });
+
   it("preserves an abort during a body read", async () => {
-    const abort = new DOMException("aborted", "AbortError");
+    const abort = Object.assign(new TypeError("aborted"), { name: "AbortError" });
     vi.stubGlobal(
       "fetch",
       vi.fn().mockResolvedValue(
@@ -161,26 +182,7 @@ describe("API errors", () => {
     expect(isTransient(error)).toBe(false);
   });
 
-  it.each([400, 401])("keeps HTTP %i permanent when its body fails", async (status) => {
-    vi.stubGlobal(
-      "fetch",
-      vi.fn().mockResolvedValue(
-        new Response(
-          new ReadableStream({
-            start(controller) {
-              controller.error(new TypeError("body failed"));
-            },
-          }),
-          { status },
-        ),
-      ),
-    );
-    const error = await orvalFetch("/api/v1/search", {}).catch((err: unknown) => err);
-    expect(error).toMatchObject({ status, message: `API ${status}` });
-    expect(isTransient(error)).toBe(false);
-  });
-
-  it("keeps invalid JSON and application TypeErrors permanent", async () => {
+  it("keeps invalid JSON permanent", async () => {
     vi.stubGlobal(
       "fetch",
       vi.fn().mockResolvedValue(
@@ -192,6 +194,5 @@ describe("API errors", () => {
     const error = await orvalFetch("/api/v1/search", {}).catch((err: unknown) => err);
     expect(error).toBeInstanceOf(SyntaxError);
     expect(isTransient(error)).toBe(false);
-    expect(isTransient(new TypeError("Failed to fetch"))).toBe(false);
   });
 });

@@ -666,12 +666,12 @@ describe("CommandPalette", () => {
   });
 
   it("keeps the first result selected after ArrowDown on an empty list", async () => {
-    mockSearchStore.error = { detail: null, kind: "generic" };
+    mockSearchStore.isSearching = true;
     const component = mount(CommandPalette, { target: document.body });
     await enterSearchQuery();
     const input = document.querySelector<HTMLInputElement>(".palette-input")!;
     input.dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowDown", bubbles: true }));
-    mockSearchStore.error = null;
+    mockSearchStore.isSearching = false;
     mockSearchStore.results = [makeSearchResult()];
     input.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
     expect(mockRouter.navigateToSession).toHaveBeenCalledWith("codex:search123");

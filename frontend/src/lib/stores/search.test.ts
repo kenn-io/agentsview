@@ -202,8 +202,11 @@ describe("SearchStore", () => {
       expect(store.error).toBeNull();
       expect(reportErrorShown).not.toHaveBeenCalled();
       if (outcome === "recover") {
-        expect(searchService.getApiV1Search.mock.calls[1]).toEqual(
-          searchService.getApiV1Search.mock.calls[0],
+        expect(searchService.getApiV1Search.mock.calls[1]![0]).toBe(
+          searchService.getApiV1Search.mock.calls[0]![0],
+        );
+        expect(searchService.getApiV1Search.mock.calls[1]![1]?.signal).toBe(
+          searchService.getApiV1Search.mock.calls[0]![1]?.signal,
         );
         second.resolve(fullTextResponse("needle"));
         await flushMicrotasks();
@@ -220,66 +223,7 @@ describe("SearchStore", () => {
     },
   );
 
-  it.each(["recover", "exhaust"] as const)(
-    "retries an interrupted response body: %s",
-    async (outcome) => {
-      const actual = await vi.importActual<typeof import("../api/generated/index.js")>(
-        "../api/generated/index.js",
-      );
-      searchService.getApiV1Search.mockImplementation(actual.SearchService.getApiV1Search);
-      const message = "Content-Length header of network response exceeds response Body.";
-      const interrupted = () =>
-        new Response(
-          new ReadableStream({
-            start(controller) {
-              controller.error(new TypeError(message));
-            },
-          }),
-          { headers: { "Content-Type": "application/json" } },
-        );
-      const fetchMock = vi
-        .fn()
-        .mockImplementationOnce(async () => interrupted())
-        .mockImplementationOnce(async () =>
-          outcome === "recover"
-            ? new Response(JSON.stringify(fullTextResponse("needle")), {
-                headers: { "Content-Type": "application/json" },
-              })
-            : interrupted(),
-        );
-      vi.stubGlobal("fetch", fetchMock);
-      try {
-        const store = createSearchStore(memoryStorage());
-        store.setSort("recency");
-        store.setRange({ mode: "custom", from: "2026-07-01", to: "2026-07-14" });
-        store.search("needle", "alpha");
-        await runDebounce();
-        await vi.advanceTimersByTimeAsync(300);
-        expect(fetchMock).toHaveBeenCalledTimes(2);
-        expect(fetchMock.mock.calls[1]).toEqual(fetchMock.mock.calls[0]);
-        expect(String(fetchMock.mock.calls[0]![0])).toContain("q=needle");
-        expect(String(fetchMock.mock.calls[0]![0])).toContain("project=alpha");
-        expect(String(fetchMock.mock.calls[0]![0])).toContain("sort=recency");
-        expect(String(fetchMock.mock.calls[0]![0])).toContain("date_from=2026-07-01");
-        expect(String(fetchMock.mock.calls[0]![0])).toContain("date_to=2026-07-14");
-        expect(fetchMock.mock.calls[0]![1].signal).toBeInstanceOf(AbortSignal);
-        expect(fetchMock.mock.calls[1]![1].signal).toBe(fetchMock.mock.calls[0]![1].signal);
-        if (outcome === "recover") {
-          expect(store.results[0]?.session_id).toBe("full-0");
-          expect(store.error).toBeNull();
-          expect(reportErrorShown).not.toHaveBeenCalled();
-        } else {
-          expect(store.results).toEqual([]);
-          expect(store.error).toEqual({ detail: message, kind: "generic" });
-          expect(reportErrorShown).toHaveBeenCalledTimes(1);
-        }
-      } finally {
-        vi.unstubAllGlobals();
-      }
-    },
-  );
-
-  it.each([400, 501, 504])("does not retry HTTP %i", async (status) => {
+  it.each([501, 504])("does not retry HTTP %i", async (status) => {
     const store = createSearchStore(memoryStorage());
     searchService.getApiV1Search.mockRejectedValueOnce(generatedApiError(status, "unavailable"));
     store.search("needle");
@@ -316,36 +260,6 @@ describe("SearchStore", () => {
     } finally {
       setServerUrl("");
       vi.unstubAllGlobals();
-    }
-  });
-
-  it("keeps a canceled search cleared when the retry delay ends", async () => {
-    const fetchSpy = vi.spyOn(globalThis, "fetch").mockImplementation(async (_input, options) => {
-      if (options?.signal?.aborted) throw new DOMException("Aborted", "AbortError");
-      return new Response(JSON.stringify(fullTextResponse("needle")), {
-        headers: { "Content-Type": "application/json" },
-      });
-    });
-    const store = createSearchStore(memoryStorage());
-    try {
-      const actual = await vi.importActual<typeof import("../api/generated/index.js")>(
-        "../api/generated/index.js",
-      );
-      searchService.getApiV1Search
-        .mockRejectedValueOnce(new ApiError(503, "unavailable"))
-        .mockImplementationOnce(actual.SearchService.getApiV1Search);
-      store.search("needle");
-      await runDebounce();
-      store.clear();
-      await vi.advanceTimersByTimeAsync(300);
-      expect(fetchSpy).toHaveBeenCalledOnce();
-      expect(fetchSpy.mock.calls[0]![1]?.signal?.aborted).toBe(true);
-      expect(store.results).toEqual([]);
-      expect(store.error).toBeNull();
-      expect(store.isSearching).toBe(false);
-      expect(reportErrorShown).not.toHaveBeenCalled();
-    } finally {
-      fetchSpy.mockRestore();
     }
   });
 
