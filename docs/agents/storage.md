@@ -33,6 +33,11 @@ raw-sync checkpoints use the same limit with the cgo driver; the modernc driver
 keeps its existing configuration. Checkpoint caching applies to writable opens.
 These caches close with their connections and do not change the stored data.
 
+The signature replay store caches up to 64 prepared statements on its single
+writable connection. Its read-only identity probe uses an uncached connection.
+Replay admission keeps its immediate transactions, rollback journal, and EXTRA
+synchronous setting.
+
 The startup worker snapshots freshness for digest-capable providers while it
 holds the archive write lock, before the daemon opens the archive; later passes
 query live state.
@@ -199,8 +204,11 @@ as complete for draining attached archive sources.
 The `raw_archive_*` tables record retained captures, root identities, accepted
 sources and deletion evidence. Seed import and restore permanently enable
 archive-only mode, which disables source sync and publication. These archives
-store `1 << 20` plus their parser version in `PRAGMA user_version`, so older builds refuse them. This build decodes that range and preserves pending rebuilds; ordinary archives keep their parser version unchanged.
-Data version 173 requires no source reparse; it keeps older binaries from writing archives whose image-text index they cannot maintain.
+store `1 << 20` plus their parser version in `PRAGMA user_version`, so older
+builds refuse them. This build decodes that range and preserves pending
+rebuilds; ordinary archives keep their parser version unchanged. Data version
+173 requires no source reparse; it keeps older binaries from writing archives
+whose image-text index they cannot maintain.
 
 ### Artifact checkpoint landings
 
@@ -748,8 +756,8 @@ Keep identity-only corrections in the reporting digest. The wire contract is in
 
 ### Harness-recorded costs
 
-A harness-recorded cost is a figure the agent computed from its own rates. It
-is stored as a usage event with `cost_status = 'recorded'`
+A harness-recorded cost is a figure the agent computed from its own rates. It is
+stored as a usage event with `cost_status = 'recorded'`
 (`usagefacts.CostStatusRecorded`), or for one message under the
 `recorded_cost_microdollars` key of that message's `token_usage` JSON
 (`usagefacts.RecordedCostKey`). It prices a row only when
@@ -759,32 +767,34 @@ reported cost wins.
 
 - Decide in Go, after the catalog lookup, through `db.ReportedCostForPricing`.
   SQL cannot see the catalog, so SQL that zeroes billable tokens or sums
-  explicit costs must treat recorded rows as unpriced and carry the figure in a
-  separate `recorded_cost_microdollars` column (DuckDB and ClickHouse do this).
+  explicit costs must treat recorded rows as unpriced and carry the figure in
+  a separate `recorded_cost_microdollars` column (DuckDB and ClickHouse do
+  this).
 - Message rows select no cost in SQL. SQLite and PostgreSQL scanners fill it
   from the token JSON with `db.MessageRecordedCost`; DuckDB and ClickHouse
-  extract it in SQL. ClickHouse stores it in `usage_messages.usage_recorded_cost`
-  and the snapshot `usage_recorded_costs` array.
+  extract it in SQL. ClickHouse stores it in
+  `usage_messages.usage_recorded_cost` and the snapshot `usage_recorded_costs`
+  array.
 - A cost-only row whose recorded figure loses contributes nothing: no breakdown
   entry, no computed request count.
-- `dbtest.SeedRecordedCostSessions` and `dbtest.AssertRecordedCostUsage` are
-  the cross-backend acceptance check; every backend runs them.
+- `dbtest.SeedRecordedCostSessions` and `dbtest.AssertRecordedCostUsage` are the
+  cross-backend acceptance check; every backend runs them.
 - Validation writes a costed usage event with no model under
   `usagefacts.UnknownModel` (`<unknown>`), so usage reads keep it.
 
 ### Session usage totals
 
-`session_usage_totals` holds one row per session with a total the agent
-recorded for the whole session, such as Claude Code's `cost-state`. It
-overlaps the session's usage rows, and with `subagent_scope = 'included'` its
-subagents' rows, so no usage, cost, or rollup query reads it. Session usage
-loads it as `SessionTotal` beside the computed totals.
+`session_usage_totals` holds one row per session with a total the agent recorded
+for the whole session, such as Claude Code's `cost-state`. It overlaps the
+session's usage rows, and with `subagent_scope = 'included'` its subagents'
+rows, so no usage, cost, or rollup query reads it. Session usage loads it as
+`SessionTotal` beside the computed totals.
 
-- Only full-parse writes replace it: `SessionBatchWrite.ReplaceSessionTotal`
-  and the staged paths that call `ReplaceSessionUsageTotal`. Other batch
-  writes (repairs, replacements, artifact imports) leave it unchanged.
-- Rebuilds copy it for retained orphan sessions. Artifact exports do not
-  carry it yet, so a session imported from artifacts has none.
+- Only full-parse writes replace it: `SessionBatchWrite.ReplaceSessionTotal` and
+  the staged paths that call `ReplaceSessionUsageTotal`. Other batch writes
+  (repairs, replacements, artifact imports) leave it unchanged.
+- Rebuilds copy it for retained orphan sessions. Artifact exports do not carry
+  it yet, so a session imported from artifacts has none.
 - Every backend stores `db.SessionUsageTotalColumns` and pushes on
   `SessionUsageTotalFingerprints` changes, like `session_plan_usage`.
   `dbtest.SeedSessionUsageTotal` and `AssertSessionUsageTotal` check each.
@@ -1010,8 +1020,8 @@ The terminal candidates query and the message read need no result of each other.
 When a bulk-read slot is free, SQLite runs the terminal query on it beside the
 message read; otherwise it runs the two in turn. PostgreSQL runs them together
 on its pool, with the message read split into one slice per 4,096 sessions, up
-to two; a read snapshot shares one transaction, so there they run in turn.
-Both then derive each session's runs on every available core through
+to two; a read snapshot shares one transaction, so there they run in turn. Both
+then derive each session's runs on every available core through
 `activity.DeriveSessionRunsInParallel`, which gives the runs the merged
 candidate stream gives. DuckDB keeps its reads in turn on its single connection.
 
@@ -1445,20 +1455,22 @@ TEST_PG_URL="postgres://user:pass@host:5432/dbname?sslmode=disable" \
 When `[image_text]` is enabled, the daemon extracts text from retained inline
 and offloaded tool-result images using the configured local GLM-OCR service. It
 caches normalized text by decoded image hash and processor identity, and tracks
-current occurrences in the same transaction as tool results. The first enabled pass builds occurrences for existing archives. Extraction
-passes start requests for two minutes; each request stops after Docbank's timeout. Each image is read from a copy whose bytes match its hash, and
-its type is detected from those bytes. Failed requests and missing or corrupt
-copies retry with backoff; oversized images, verified bytes that are not PNG,
-JPEG, or WebP, and invalid input are terminal. A full archive rebuild preserves
-cache entries for retained images and rebuilds their occurrences. Removing the last occurrence removes its cached text during the next pass.
-Disabling image text and restarting removes cached text and mirror matches;
-re-enabling extracts it again. Usage-only archives do not store image
-text.
+current occurrences in the same transaction as tool results. The first enabled
+pass builds occurrences for existing archives. Extraction passes start requests
+for two minutes; each request stops after Docbank's timeout. Each image is read
+from a copy whose bytes match its hash, and its type is detected from those
+bytes. Failed requests and missing or corrupt copies retry with backoff;
+oversized images, verified bytes that are not PNG, JPEG, or WebP, and invalid
+input are terminal. A full archive rebuild preserves cache entries for retained
+images and rebuilds their occurrences. Removing the last occurrence removes its
+cached text during the next pass. Disabling image text and restarting removes
+cached text and mirror matches; re-enabling extracts it again. Usage-only
+archives do not store image text.
 
 Successful text is published to PostgreSQL, DuckDB, and ClickHouse as
-session-owned `image_text` rows keyed by the tool call or result event,
-image index, and processor, with the image hash, provider, model, and revision.
-A new extraction advances the session's `sync_marker`, so the next incremental
-push sends it without changing the transcript revision. Global keyword search
-and substring and regex `tool_result` searches match this text in every
-backend, anchored to the message holding the tool call.
+session-owned `image_text` rows keyed by the tool call or result event, image
+index, and processor, with the image hash, provider, model, and revision. A new
+extraction advances the session's `sync_marker`, so the next incremental push
+sends it without changing the transcript revision. Global keyword search and
+substring and regex `tool_result` searches match this text in every backend,
+anchored to the message holding the tool call.
