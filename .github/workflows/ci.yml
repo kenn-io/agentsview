@@ -1094,6 +1094,30 @@ jobs:
           CGO_ENABLED: "1"
           TEST_PG_URL: postgres://agentsview_test:agentsview_test_password@localhost:5433/agentsview_test?sslmode=disable
 
+      - name: Start PostgreSQL standby
+        if: matrix.name == 'PostgreSQL core'
+        run: |
+          docker run -d --rm --network host --name usage-test-standby --user postgres \
+            -e PGPASSWORD=agentsview_test_password --entrypoint bash pgvector/pgvector:pg18 \
+            -ec 'pg_basebackup -h 127.0.0.1 -p 5433 -U agentsview_test -D /tmp/standby -R -X stream; exec postgres -D /tmp/standby -p 5434'
+          for attempt in {1..60}; do
+            if docker exec usage-test-standby pg_isready -h 127.0.0.1 -p 5434 -U agentsview_test; then exit 0; fi
+            sleep 1
+          done
+          docker logs usage-test-standby
+          exit 1
+
+      - name: Run PostgreSQL standby test
+        if: matrix.name == 'PostgreSQL core'
+        run: make test-postgres-standby-ci
+        env:
+          TEST_PG_URL: postgres://agentsview_test:agentsview_test_password@localhost:5433/agentsview_test?sslmode=disable
+          TEST_PG_STANDBY_URL: postgres://agentsview_test:agentsview_test_password@localhost:5434/agentsview_test?sslmode=disable
+
+      - name: Stop PostgreSQL standby
+        if: always() && matrix.name == 'PostgreSQL core'
+        run: docker stop usage-test-standby || true
+
       - name: Run ClickHouse integration tests
         if: matrix.clickhouse
         run: make test-clickhouse-ci

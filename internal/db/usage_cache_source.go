@@ -82,8 +82,7 @@ type UsageCacheReader struct {
 
 // UsageChangeSummary describes journal changes after a claimed revision.
 type UsageChangeSummary struct {
-	Sessions int  // sessions with changed usage or metadata
-	Global   bool // pricing, project identity, or account usage changed
+	Sessions int // sessions with changed usage or metadata
 }
 
 // UsageChangeSummarizer is an optional UsageCacheSource capability. It lets

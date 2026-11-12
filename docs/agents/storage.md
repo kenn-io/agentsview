@@ -1222,9 +1222,9 @@ content clears them for a fresh scan.
 ### PostgreSQL usage change journal
 
 PostgreSQL's usage change journal tracks session, usage, pricing, Cursor usage,
-and project identity writes, including changes to source archives. Version 1
-uses one global marker for pricing, Cursor usage, and project identity, so any
-of those changes can trigger a background account refresh. Installation
+and project identity writes, including changes to source archives. Version 2
+tracks account changes separately and records a history token for safe standby
+reuse. Installation
 requires `CREATE` on the schema and `TRIGGER` on the watched tables in addition
 to normal table access. See [PostgreSQL Sync](../pg-sync.md) for installation
 locks. CockroachDB has no journal.

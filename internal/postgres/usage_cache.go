@@ -61,11 +61,8 @@ type pgUsageCacheSource struct {
 // Revision 0 marks entries a writer has not committed yet.
 func (source *pgUsageCacheSource) SummarizeUsageChanges(ctx context.Context, afterRevision int64) (db.UsageChangeSummary, error) {
 	var summary db.UsageChangeSummary
-	err := source.pg.QueryRowContext(ctx, `SELECT
- COUNT(*) FILTER (WHERE session_id <> ''),
- COALESCE(bool_or(session_id = ''), false)
- FROM usage_session_changes WHERE revision > $1`, afterRevision).Scan(
-		&summary.Sessions, &summary.Global)
+	err := source.pg.QueryRowContext(ctx, `SELECT COUNT(*) FROM usage_session_changes
+ WHERE revision > $1 AND session_id <> ''`, afterRevision).Scan(&summary.Sessions)
 	if isUndefinedTable(err) || isInsufficientPrivilege(err) {
 		return summary, db.ErrUsageSourceUnavailable
 	}
