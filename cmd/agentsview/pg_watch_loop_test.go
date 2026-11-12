@@ -228,10 +228,10 @@ func TestPushLoopOverflowBatchSurvivesRetry(t *testing.T) {
 	}})
 	fire <- time.Now()
 	first := receivePushLoopValue(t, attempts)
-	assert.Equal(t, &syncpkg.WatchBatch{FullSync: true, LostEvents: true}, first)
+	assert.Equal(t, &syncpkg.WatchBatch{FullSync: true, LostEvents: true, Reasons: 2}, first)
 	fire <- time.Now()
 	second := receivePushLoopValue(t, attempts)
-	assert.Equal(t, &syncpkg.WatchBatch{FullSync: true, LostEvents: true}, second)
+	assert.Equal(t, &syncpkg.WatchBatch{FullSync: true, LostEvents: true, Reasons: 2}, second)
 }
 
 func TestPushLoopShutdownFlushClaimsPendingBatch(t *testing.T) {

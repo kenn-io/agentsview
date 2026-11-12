@@ -548,7 +548,7 @@ func TestFSNotifyBackendOverflowRequestsLostEventRecovery(t *testing.T) {
 	batch, ok := pending.Take()
 
 	require.True(t, ok)
-	assert.Equal(t, WatchBatch{FullSync: true, LostEvents: true}, batch)
+	assert.Equal(t, WatchBatch{FullSync: true, LostEvents: true, Reasons: watchReasonBackendEventLoss}, batch)
 }
 
 func TestFSNotifyBackendOrdinaryErrorRemainsAnError(t *testing.T) {
