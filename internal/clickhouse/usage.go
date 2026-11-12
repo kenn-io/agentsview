@@ -3050,6 +3050,29 @@ func (s *Store) GetSessionPlanUsage(
 	return p, rows.Err()
 }
 
+// GetSessionUsageTotal returns the usage total the agent recorded for one
+// session, or nil when it recorded none.
+func (s *Store) GetSessionUsageTotal(
+	ctx context.Context, sessionID string,
+) (*db.SessionUsageTotal, error) {
+	rows, err := s.conn.QueryContext(ctx,
+		`SELECT `+db.SessionUsageTotalColumns+` FROM session_usage_totals WHERE session_id = ?`,
+		sessionID,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("querying clickhouse session total for %s: %w", sessionID, err)
+	}
+	defer rows.Close()
+	if !rows.Next() {
+		return nil, rows.Err()
+	}
+	t, err := db.ScanSessionUsageTotal(rows.Scan)
+	if err != nil {
+		return nil, fmt.Errorf("scanning clickhouse session total for %s: %w", sessionID, err)
+	}
+	return t, rows.Err()
+}
+
 // sessionMayHaveUsageRows reports whether the session's usage read can
 // return rows. A session with token totals is assumed to have them. For one
 // without, a probe looks for a message or usage event the read would
@@ -3220,6 +3243,9 @@ func (s *Store) GetSessionUsage(
 	}
 	out.CostUSD = db.CostUSDFromCost(out.HasCost, out.Cost)
 	if out.PlanUsage, err = s.GetSessionPlanUsage(ctx, sess.ID); err != nil {
+		return nil, err
+	}
+	if out.SessionTotal, err = s.GetSessionUsageTotal(ctx, sess.ID); err != nil {
 		return nil, err
 	}
 	return out, nil

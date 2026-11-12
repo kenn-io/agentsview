@@ -1426,18 +1426,20 @@ WHERE id IN (` + strings.Join(placeholders, ",") + `)`
 func (s *Store) GetSessionUsage(
 	ctx context.Context, sessionID string, includeBreakdown bool,
 ) (*db.SessionUsage, error) {
-	// All three reads need only sessionID. A missing or failed session still
+	// All four reads need only sessionID. A missing or failed session still
 	// wins over the other results.
 	var (
-		sess                      *db.Session
-		usageRows                 []pgUsageScanRow
-		planUsage                 *db.SessionPlanUsage
-		sessErr, rowsErr, planErr error
+		sess                                *db.Session
+		usageRows                           []pgUsageScanRow
+		planUsage                           *db.SessionPlanUsage
+		sessionTotal                        *db.SessionUsageTotal
+		sessErr, rowsErr, planErr, totalErr error
 	)
 	s.runIndependentReads(
 		func() { sess, sessErr = s.GetSession(ctx, sessionID) },
 		func() { usageRows, rowsErr = s.querySessionUsageRows(ctx, sessionID) },
 		func() { planUsage, planErr = s.GetSessionPlanUsage(ctx, sessionID) },
+		func() { sessionTotal, totalErr = s.GetSessionUsageTotal(ctx, sessionID) },
 	)
 	if sessErr != nil {
 		return nil, sessErr
@@ -1597,6 +1599,10 @@ func (s *Store) GetSessionUsage(
 		return nil, planErr
 	}
 	out.PlanUsage = planUsage
+	if totalErr != nil {
+		return nil, totalErr
+	}
+	out.SessionTotal = sessionTotal
 	return out, nil
 }
 

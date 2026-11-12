@@ -535,6 +535,15 @@ AgentsView charged for the same rows. A large gap usually means the agent
 used different rates, or that the transcript is missing calls the agent
 billed.
 
+Claude Code also writes a running total for each session: its own cost
+estimate and token counts per model, including subagents and side calls such
+as title generation that never reach the transcript. AgentsView keeps the last
+one and shows it as an `Agent total:` line and a `session_total` object. It is
+never added to usage totals, because it overlaps the per-call rows. Compare
+it with a report that includes subagents, which is the default. Expect it to
+run slightly above AgentsView's figure in short sessions, where the title call
+is a larger share of the work.
+
 Costs that an agent or provider reports as billed keep their existing
 treatment: the reported cost is the price.
 

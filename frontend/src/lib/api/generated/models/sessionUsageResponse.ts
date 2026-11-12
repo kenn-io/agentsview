@@ -4,6 +4,7 @@
 import type { DbCaptureCoverageView } from "./dbCaptureCoverageView.ts";
 import type { DbPlanUsageView } from "./dbPlanUsageView.ts";
 import type { DbSessionRecordedCost } from "./dbSessionRecordedCost.ts";
+import type { DbSessionUsageTotal } from "./dbSessionUsageTotal.ts";
 import type { MoneyMoney } from "./moneyMoney.ts";
 import type { SessionUsageBreakdownResponse } from "./sessionUsageBreakdownResponse.ts";
 
@@ -29,6 +30,7 @@ export interface SessionUsageResponse {
   rollup_subagent_count?: number;
   server_running: boolean;
   session_id: string;
+  session_total?: DbSessionUsageTotal;
   subagent_count?: number;
   total_output_tokens: number;
   unpriced_models: string[];

@@ -15,6 +15,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"go.kenn.io/agentsview/internal/db"
+	"go.kenn.io/agentsview/internal/dbtest"
 	"go.kenn.io/agentsview/internal/money"
 	"go.kenn.io/agentsview/internal/testjsonl"
 )
@@ -639,4 +640,54 @@ func TestHandleSessionUsage_ReportsAgentRecordedCost(t *testing.T) {
 	var plain map[string]any
 	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &plain))
 	assert.NotContains(t, plain, "recorded_cost")
+}
+
+func TestHandleSessionUsage_ReportsAgentSessionTotal(t *testing.T) {
+	te := setup(t)
+	dbtest.SeedSessionUsageTotal(t, te.db)
+	w := te.get(t, "/api/v1/sessions/"+dbtest.SessionTotalSessionID+"/usage")
+	assertStatus(t, w, http.StatusOK)
+	var got map[string]any
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &got))
+	assert.Equal(t, map[string]any{"microdollars": float64(2000)}, got["cost"],
+		"the session total is not added to cost")
+	total, ok := got["session_total"].(map[string]any)
+	require.True(t, ok, "session_total present: %v", got["session_total"])
+	assert.Equal(t, "claude-cost-state", total["source"])
+	assert.Equal(t, "included", total["subagent_scope"])
+	assert.Equal(t, map[string]any{"microdollars": float64(750000)}, total["cost"])
+	assert.Equal(t, true, total["incomplete"])
+	models, ok := total["models"].([]any)
+	require.True(t, ok)
+	assert.Len(t, models, 2)
+}
+
+func TestUploadReplacesAgentSessionTotal(t *testing.T) {
+	te := setup(t)
+	costState := func(usd string) string {
+		return `{"type":"cost-state","sessionId":"upload-total","totalCostUSD":` + usd +
+			`,"modelUsage":{"claude-sonnet-4-20250514":{"inputTokens":10,"outputTokens":5,` +
+			`"thinkingTokens":0,"cacheReadInputTokens":0,"cacheCreationInputTokens":0,` +
+			`"webSearchRequests":0,"costUSD":` + usd + `}},"hasUnknownModelCost":false}`
+	}
+	transcript := testjsonl.NewSessionBuilder().
+		AddClaudeUser(tsEarly, "Hello upload").
+		AddClaudeAssistant(tsEarlyS5, "Hi!").
+		String()
+	total := func() *db.SessionUsageTotal {
+		t.Helper()
+		got, err := te.db.GetSessionUsageTotal(t.Context(), "upload-total")
+		require.NoError(t, err)
+		return got
+	}
+
+	assertStatus(t, te.upload(t, "upload-total.jsonl", transcript+costState("0.5")+"\n",
+		"project=myproj&machine=remote"), http.StatusOK)
+	require.NotNil(t, total())
+	assert.Equal(t, int64(500_000), total().Cost.Microdollars)
+
+	assertStatus(t, te.upload(t, "upload-total.jsonl", transcript+costState("0.75")+"\n",
+		"project=myproj&machine=remote"), http.StatusOK)
+	require.NotNil(t, total())
+	assert.Equal(t, int64(750_000), total().Cost.Microdollars, "a newer upload replaces the total")
 }

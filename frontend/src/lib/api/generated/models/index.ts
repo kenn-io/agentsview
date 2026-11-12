@@ -119,6 +119,8 @@ export * from "./dbSessionRecordedCost.ts";
 export * from "./dbSessionShapeResponse.ts";
 export * from "./dbSessionStats.ts";
 export * from "./dbSessionTiming.ts";
+export * from "./dbSessionUsageTotal.ts";
+export * from "./dbSessionUsageTotalModel.ts";
 export * from "./dbSidebarSessionIndex.ts";
 export * from "./dbSidebarSessionIndexRow.ts";
 export * from "./dbSignalCalibration.ts";

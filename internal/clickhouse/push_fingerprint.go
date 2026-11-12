@@ -40,7 +40,9 @@ func (s *Sync) sessionFingerprints(
 	return out, nil
 }
 
-func (s *Sync) snapshotFingerprint(snapshot *db.SessionMirrorSnapshot) (string, error) {
+func (s *Sync) snapshotFingerprint(
+	snapshot *db.SessionMirrorSnapshot, total *db.SessionUsageTotal,
+) (string, error) {
 	sess := snapshot.Session
 	payload := struct {
 		SessionFields  []any
@@ -55,6 +57,8 @@ func (s *Sync) snapshotFingerprint(snapshot *db.SessionMirrorSnapshot) (string, 
 		// Omitted when nil so sessions without plan usage keep the
 		// fingerprints they had before the table existed.
 		PlanUsage *db.SessionPlanUsage `json:",omitzero"`
+		// Omitted when nil for the same reason as PlanUsage.
+		SessionTotal *db.SessionUsageTotal `json:",omitzero"`
 	}{
 		SessionFields:  sessionFingerprintFields(sess, db.MirroredSessionMachine(sess, s.machine)),
 		Messages:       snapshot.Messages,
@@ -66,6 +70,7 @@ func (s *Sync) snapshotFingerprint(snapshot *db.SessionMirrorSnapshot) (string, 
 		CommitLinks:    snapshot.CommitLinks,
 		ImageText:      snapshot.ImageText,
 		PlanUsage:      snapshot.PlanUsage,
+		SessionTotal:   total,
 	}
 	data, err := json.Marshal(payload)
 	if err != nil {

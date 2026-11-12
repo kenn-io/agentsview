@@ -328,3 +328,19 @@ func TestRenderSessionUsageHuman_AgentRecordedCost(t *testing.T) {
 		"Agent cost:    the agent recorded $0.50; AgentsView charged $0.42 for the same usage "+
 			"(1 priced from the agent's figure because no catalog rate exists; 1 with no price from either)")
 }
+
+func TestRenderSessionUsageHuman_AgentSessionTotal(t *testing.T) {
+	cost := money.MustParseDollars("1.25")
+	out := &sessionUsageOutput{
+		SessionID: "claude:s1", Agent: "claude",
+		HasTokenData: true, Cost: money.MustParseDollars("1.10"), HasCost: true,
+		Models: []string{"claude-opus-5-5"},
+	}
+	out.SessionTotal = &db.SessionUsageTotal{
+		Source: "claude-cost-state", SubagentScope: "included", Cost: &cost, Incomplete: true,
+	}
+	var b strings.Builder
+	require.NoError(t, renderSessionUsageHuman(&b, out))
+	assert.Contains(t, b.String(),
+		"Agent total:   $1.25 for the session, including subagents; the agent could not price every model")
+}

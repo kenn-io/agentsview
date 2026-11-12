@@ -31,7 +31,9 @@ import (
 // the rebuild drops the copies older pushes wrote.
 // v25 adds text extracted from tool result images (image_text); the rebuild
 // copies it for resident sessions.
-const SchemaVersion = 25
+// v26 adds session_usage_totals, the usage totals agents record for whole
+// sessions.
+const SchemaVersion = 26
 
 const schemaVersionMetadataKey = "agentsview_schema_version"
 
@@ -487,6 +489,31 @@ var mirrorTables = []tableSpec{
 		},
 		indexes: []string{
 			"CREATE INDEX IF NOT EXISTS idx_session_plan_usage_session ON session_plan_usage(session_id)",
+		},
+	},
+	{
+		// One row per session, the agent's own total for it. Never read by
+		// usage queries. No primary key: a push deletes and reinserts the row
+		// in one transaction, as for session_plan_usage.
+		name: "session_usage_totals",
+		create: `CREATE TABLE IF NOT EXISTS session_usage_totals (
+			session_id TEXT NOT NULL,
+			source TEXT NOT NULL DEFAULT '',
+			subagent_scope TEXT NOT NULL DEFAULT '',
+			cost_microdollars BIGINT,
+			incomplete BOOLEAN NOT NULL DEFAULT FALSE,
+			models_json TEXT NOT NULL DEFAULT '[]'
+		)`,
+		columns: []columnSpec{
+			{"session_id", "session_id TEXT NOT NULL DEFAULT ''"},
+			{"source", "source TEXT NOT NULL DEFAULT ''"},
+			{"subagent_scope", "subagent_scope TEXT NOT NULL DEFAULT ''"},
+			{"cost_microdollars", "cost_microdollars BIGINT"},
+			{"incomplete", "incomplete BOOLEAN NOT NULL DEFAULT FALSE"},
+			{"models_json", "models_json TEXT NOT NULL DEFAULT '[]'"},
+		},
+		indexes: []string{
+			"CREATE INDEX IF NOT EXISTS idx_session_usage_totals_session ON session_usage_totals(session_id)",
 		},
 	},
 	{

@@ -3162,6 +3162,12 @@ type SessionUsage struct {
 	// breakdown rows that carry one. Nil without a breakdown or when no row
 	// has a recorded cost; see SummarizeRecordedCost.
 	RecordedCost *SessionRecordedCost `json:"recorded_cost,omitempty"`
+	// SessionTotal is the usage total the agent recorded for the queried
+	// session as a whole, such as Claude Code's cost-state. Its
+	// subagent_scope says whether it covers subagents, so compare it with
+	// a result that includes them only when the scope is "included". It is
+	// never part of Cost or the token totals.
+	SessionTotal *SessionUsageTotal `json:"session_total,omitempty"`
 	// PlanUsage is the session's plan usage and live-capture coverage
 	// row, nil when it has none. Responses carry it as the separate
 	// plan_usage and capture_coverage objects (see
@@ -3608,6 +3614,10 @@ func (db *DB) getSessionUsageLegacy(
 	}
 	out.CostUSD = CostUSDFromCost(out.HasCost, out.Cost)
 	out.PlanUsage, err = sessionPlanUsageWithQuerier(ctx, db.getReader(), sess.ID)
+	if err != nil {
+		return nil, err
+	}
+	out.SessionTotal, err = sessionUsageTotalWithQuerier(ctx, db.getReader(), sess.ID)
 	if err != nil {
 		return nil, err
 	}

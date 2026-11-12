@@ -669,12 +669,15 @@ type sessionUsageResponse struct {
 	Breakdown      []sessionUsageBreakdownResponse `json:"breakdown"`
 	// RecordedCost compares cost with the cost the agent recorded; present
 	// only with breakdown=true and when a row carries a recorded cost.
-	RecordedCost        *db.SessionRecordedCost `json:"recorded_cost,omitempty"`
-	ServerRunning       bool                    `json:"server_running"`
-	RollupCost          *money.Money            `json:"rollup_cost,omitempty"`
-	RollupCostSource    export.CostSource       `json:"rollup_cost_source,omitempty"`
-	HasRollupCost       *bool                   `json:"has_rollup_cost,omitempty"`
-	RollupSubagentCount *int                    `json:"rollup_subagent_count,omitempty"`
+	RecordedCost *db.SessionRecordedCost `json:"recorded_cost,omitempty"`
+	// SessionTotal is the usage total the agent recorded for the session
+	// as a whole; see db.SessionUsage.SessionTotal.
+	SessionTotal        *db.SessionUsageTotal `json:"session_total,omitempty"`
+	ServerRunning       bool                  `json:"server_running"`
+	RollupCost          *money.Money          `json:"rollup_cost,omitempty"`
+	RollupCostSource    export.CostSource     `json:"rollup_cost_source,omitempty"`
+	HasRollupCost       *bool                 `json:"has_rollup_cost,omitempty"`
+	RollupSubagentCount *int                  `json:"rollup_subagent_count,omitempty"`
 	// PlanUsage carries codex-cloud plan figures. A session with only plan
 	// usage keeps has_token_data and has_cost false.
 	PlanUsage       *db.PlanUsageView       `json:"plan_usage,omitempty"`
@@ -773,6 +776,7 @@ func newSessionUsageHumaResponse(usage *db.SessionUsage) sessionUsageResponse {
 		SubagentCount:     usage.SubagentCount,
 		Breakdown:         breakdown,
 		RecordedCost:      usage.RecordedCost,
+		SessionTotal:      usage.SessionTotal,
 		ServerRunning:     true,
 		PlanUsage:         usage.PlanUsage.PlanUsageView(),
 		CaptureCoverage:   usage.PlanUsage.CaptureCoverageView(),

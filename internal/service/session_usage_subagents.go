@@ -767,6 +767,9 @@ func newCombinedSessionUsage(
 		// usage, so the root's figures describe the combined result.
 		// withDescendantCoverage adds the descendants' capture coverage.
 		PlanUsage: root.PlanUsage,
+		// The agent's own session total keeps its subagent scope, so it
+		// stays the root's figure in the combined result.
+		SessionTotal: root.SessionTotal,
 	}
 	for _, descendant := range descendants {
 		if err := ctx.Err(); err != nil {

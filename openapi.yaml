@@ -3244,6 +3244,57 @@ components:
         - activity
         - activity_totals
       type: object
+    DbSessionUsageTotal:
+      additionalProperties: false
+      properties:
+        cost:
+          $ref: "#/components/schemas/MoneyMoney"
+        incomplete:
+          type: boolean
+        models:
+          items:
+            $ref: "#/components/schemas/DbSessionUsageTotalModel"
+          type: array
+        source:
+          type: string
+        subagent_scope:
+          type: string
+      required:
+        - source
+        - models
+      type: object
+    DbSessionUsageTotalModel:
+      additionalProperties: false
+      properties:
+        cache_creation_input_tokens:
+          format: int64
+          type: integer
+        cache_read_input_tokens:
+          format: int64
+          type: integer
+        cost:
+          $ref: "#/components/schemas/MoneyMoney"
+        input_tokens:
+          format: int64
+          type: integer
+        model:
+          type: string
+        output_tokens:
+          format: int64
+          type: integer
+        reasoning_tokens:
+          format: int64
+          type: integer
+        web_search_requests:
+          format: int64
+          type: integer
+      required:
+        - model
+        - input_tokens
+        - output_tokens
+        - cache_creation_input_tokens
+        - cache_read_input_tokens
+      type: object
     DbSidebarSessionIndex:
       additionalProperties: false
       properties:
@@ -8333,6 +8384,8 @@ components:
           type: boolean
         session_id:
           type: string
+        session_total:
+          $ref: "#/components/schemas/DbSessionUsageTotal"
         subagent_count:
           format: int64
           type: integer
