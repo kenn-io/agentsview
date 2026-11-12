@@ -64,6 +64,7 @@ VALUES ('batch-1','provider','paid-a',20,'2026-01-01','shared'),
 	require.NoError(t, cached.QueryRowContext(ctx, `SELECT count(*) FROM usage_rollup_installs WHERE session_id <> ''`).Scan(&count))
 	assert.Positive(t, count, "finished batches must retain their daily rollups")
 	probe = attachUsageCacheProbe(t, store, directory)
+	require.NoError(t, store.usageCache.LoadReadiness(ctx))
 	store.usageCache.DeferWork()
 	t.Cleanup(func() { require.NoError(t, store.usageCache.Close()) })
 	release := make(chan struct{})
@@ -77,11 +78,17 @@ VALUES ('batch-1','provider','paid-a',20,'2026-01-01','shared'),
 			return ctx.Err()
 		}
 	}
+	var captures atomic.Int64
+	probe.afterCapture = func(context.Context) error { captures.Add(1); return nil }
+	hold := store.usageCache.HoldWarm()
+	t.Cleanup(hold)
 	got, err := store.GetDailyUsage(ctx, db.UsageFilter{Timezone: "UTC"})
 	require.NoError(t, err, "restart should serve the direct read while the fill is blocked")
 	want, err := (&Store{pg: store.pg}).GetDailyUsage(ctx, db.UsageFilter{Timezone: "UTC"})
 	require.NoError(t, err)
 	assert.Equal(t, want, got)
+	assert.Zero(t, captures.Load(), "an incomplete cache must bypass request preparation")
+	hold()
 	unblock()
 	require.NoError(t, store.usageCache.WaitWarm(ctx))
 	for _, id := range probe.takeExtracted() {
@@ -945,7 +952,7 @@ func TestPGUsageCacheDirectFallbackAndRecovery(t *testing.T) {
 				require.ErrorIs(t, err, db.ErrUsageSourceUnavailable)
 			} else {
 				_, err := reader.usageCache.GetDailyUsage(ctx, filter)
-				require.ErrorIs(t, err, db.ErrUsageSourceUnavailable)
+				require.ErrorIs(t, err, db.ErrUsageCacheWarming)
 			}
 			for _, grouped := range []bool{false, true} {
 				filter.TopSessionsByGroup = grouped
@@ -1121,6 +1128,8 @@ func TestPGUsageCacheRecoversRewoundJournal(t *testing.T) {
 	require.Empty(t, probe.takeExtracted(), "rebuilt cache must be reused")
 	require.NoError(t, store.usageCache.Close())
 	probe = attachUsageCacheProbe(t, store, directory)
+	require.NoError(t, store.usageCache.LoadReadiness(ctx))
+	store.usageCache.DeferWork()
 	got, err = store.usageCache.GetDailyUsage(ctx, filter)
 	require.NoError(t, err)
 	require.Equal(t, want, got)

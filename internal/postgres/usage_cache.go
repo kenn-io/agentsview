@@ -34,6 +34,9 @@ func (s *Store) ConfigureUsageCache(ctx context.Context, directory, targetURL, s
 	}
 	// A read that would fill or rebuild much of the cache serves its direct
 	// read instead, so a cold or stale cache never makes a report slower.
+	if err := reader.LoadReadiness(ctx); err != nil {
+		log.Printf("loading usage cache readiness: %v", err)
+	}
 	reader.DeferWork()
 	s.usageCache = reader
 	return nil
