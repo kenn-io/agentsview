@@ -5801,7 +5801,6 @@ func NewDefaultClient(baseURL string, opts ...runtime.APIClientOption) (*Client,
 // envelope-only generation it lists the WithResponse methods.
 type ClientInterface interface {
 	GetStartupProbeWithResponse(ctx context.Context, options *GetStartupProbeRequestOptions, reqEditors ...runtime.RequestEditorFn) (*GetStartupProbeResp, error)
-	GetAPIPingWithResponse(ctx context.Context, reqEditors ...runtime.RequestEditorFn) (*GetAPIPingResp, error)
 	GetAPIV1ActivityReportWithResponse(ctx context.Context, options *GetAPIV1ActivityReportRequestOptions, reqEditors ...runtime.RequestEditorFn) (*GetAPIV1ActivityReportResp, error)
 	GetAPIV1ActivityReportStreamWithResponse(ctx context.Context, options *GetAPIV1ActivityReportRequestOptions, reqEditors ...runtime.RequestEditorFn) (*GetAPIV1ActivityReportResp, error)
 	GetAPIV1ActivityReportReportIDSessionsWithResponse(ctx context.Context, options *GetAPIV1ActivityReportReportIDSessionsRequestOptions, reqEditors ...runtime.RequestEditorFn) (*GetAPIV1ActivityReportReportIDSessionsResp, error)
@@ -5923,212 +5922,6 @@ func (c *Client) GetStartupProbeWithResponse(ctx context.Context, options *GetSt
 			XAgentsViewStartupProof: resp.Headers.Get("X-AgentsView-Startup-Proof"),
 		}
 		return out, nil
-	default:
-		return out, runtime.NewClientAPIError(fmt.Errorf("unexpected status code: %d", resp.StatusCode), runtime.WithStatusCode(resp.StatusCode))
-	}
-}
-
-// GetAPIPing Ping daemon
-func (c *Client) GetAPIPingWithResponse(ctx context.Context, reqEditors ...runtime.RequestEditorFn) (*GetAPIPingResp, error) {
-	var err error
-	reqParams := runtime.RequestOptionsParameters{
-		RequestURL: c.apiClient.GetBaseURL() + "/api/ping",
-		Method:     "GET",
-	}
-
-	req, err := c.apiClient.CreateRequest(ctx, reqParams, reqEditors...)
-	if err != nil {
-		return nil, fmt.Errorf("error creating request: %w", err)
-	}
-
-	resp, err := c.apiClient.ExecuteRequest(ctx, req, "/api/ping")
-	if err != nil {
-		return nil, fmt.Errorf("error executing request: %w", err)
-	}
-
-	out := &GetAPIPingResp{
-		HTTPResponse: resp.Raw,
-		Body:         resp.Content,
-		StatusCode:   resp.StatusCode,
-	}
-
-	switch resp.StatusCode {
-	case 200:
-		out.JSON200 = new(GetAPIPingResponse)
-		bodyBytes := resp.Content
-		if len(bodyBytes) > 0 {
-			if err := json.Unmarshal(bodyBytes, out.JSON200); err != nil {
-				return out, &runtime.ResponseDecodeError{
-					StatusCode:    resp.StatusCode,
-					ContentType:   resp.Headers.Get("Content-Type"),
-					ContentLength: len(bodyBytes),
-					TargetType:    "GetAPIPingResponse",
-					Body:          bodyBytes,
-					Err:           err,
-				}
-			}
-		}
-		return out, nil
-	case 400:
-		out.JSON400 = new(GetAPIPingErrorResponse)
-		bodyBytes := resp.Content
-		if len(bodyBytes) > 0 {
-			if err := json.Unmarshal(bodyBytes, out.JSON400); err != nil {
-				return out, &runtime.ResponseDecodeError{
-					StatusCode:    resp.StatusCode,
-					ContentType:   resp.Headers.Get("Content-Type"),
-					ContentLength: len(bodyBytes),
-					TargetType:    "GetAPIPingErrorResponse",
-					Body:          bodyBytes,
-					Err:           err,
-				}
-			}
-		}
-		return out, runtime.NewClientAPIError(fmt.Errorf("API error (status %d)", resp.StatusCode), runtime.WithStatusCode(resp.StatusCode))
-	case 401:
-		out.JSON401 = new(GetAPIPingErrorResponseJSON)
-		bodyBytes := resp.Content
-		if len(bodyBytes) > 0 {
-			if err := json.Unmarshal(bodyBytes, out.JSON401); err != nil {
-				return out, &runtime.ResponseDecodeError{
-					StatusCode:    resp.StatusCode,
-					ContentType:   resp.Headers.Get("Content-Type"),
-					ContentLength: len(bodyBytes),
-					TargetType:    "GetAPIPingErrorResponseJSON",
-					Body:          bodyBytes,
-					Err:           err,
-				}
-			}
-		}
-		return out, runtime.NewClientAPIError(fmt.Errorf("API error (status %d)", resp.StatusCode), runtime.WithStatusCode(resp.StatusCode))
-	case 403:
-		out.JSON403 = new(GetAPIPingErrorResponseJSON403)
-		bodyBytes := resp.Content
-		if len(bodyBytes) > 0 {
-			if err := json.Unmarshal(bodyBytes, out.JSON403); err != nil {
-				return out, &runtime.ResponseDecodeError{
-					StatusCode:    resp.StatusCode,
-					ContentType:   resp.Headers.Get("Content-Type"),
-					ContentLength: len(bodyBytes),
-					TargetType:    "GetAPIPingErrorResponseJSON403",
-					Body:          bodyBytes,
-					Err:           err,
-				}
-			}
-		}
-		return out, runtime.NewClientAPIError(fmt.Errorf("API error (status %d)", resp.StatusCode), runtime.WithStatusCode(resp.StatusCode))
-	case 404:
-		out.JSON404 = new(GetAPIPingErrorResponseJSON404)
-		bodyBytes := resp.Content
-		if len(bodyBytes) > 0 {
-			if err := json.Unmarshal(bodyBytes, out.JSON404); err != nil {
-				return out, &runtime.ResponseDecodeError{
-					StatusCode:    resp.StatusCode,
-					ContentType:   resp.Headers.Get("Content-Type"),
-					ContentLength: len(bodyBytes),
-					TargetType:    "GetAPIPingErrorResponseJSON404",
-					Body:          bodyBytes,
-					Err:           err,
-				}
-			}
-		}
-		return out, runtime.NewClientAPIError(fmt.Errorf("API error (status %d)", resp.StatusCode), runtime.WithStatusCode(resp.StatusCode))
-	case 409:
-		out.JSON409 = new(GetAPIPingErrorResponseJSON409)
-		bodyBytes := resp.Content
-		if len(bodyBytes) > 0 {
-			if err := json.Unmarshal(bodyBytes, out.JSON409); err != nil {
-				return out, &runtime.ResponseDecodeError{
-					StatusCode:    resp.StatusCode,
-					ContentType:   resp.Headers.Get("Content-Type"),
-					ContentLength: len(bodyBytes),
-					TargetType:    "GetAPIPingErrorResponseJSON409",
-					Body:          bodyBytes,
-					Err:           err,
-				}
-			}
-		}
-		return out, runtime.NewClientAPIError(fmt.Errorf("API error (status %d)", resp.StatusCode), runtime.WithStatusCode(resp.StatusCode))
-	case 500:
-		out.JSON500 = new(GetAPIPingErrorResponseJSON500)
-		bodyBytes := resp.Content
-		if len(bodyBytes) > 0 {
-			if err := json.Unmarshal(bodyBytes, out.JSON500); err != nil {
-				return out, &runtime.ResponseDecodeError{
-					StatusCode:    resp.StatusCode,
-					ContentType:   resp.Headers.Get("Content-Type"),
-					ContentLength: len(bodyBytes),
-					TargetType:    "GetAPIPingErrorResponseJSON500",
-					Body:          bodyBytes,
-					Err:           err,
-				}
-			}
-		}
-		return out, runtime.NewClientAPIError(fmt.Errorf("API error (status %d)", resp.StatusCode), runtime.WithStatusCode(resp.StatusCode))
-	case 501:
-		out.JSON501 = new(GetAPIPingErrorResponseJSON501)
-		bodyBytes := resp.Content
-		if len(bodyBytes) > 0 {
-			if err := json.Unmarshal(bodyBytes, out.JSON501); err != nil {
-				return out, &runtime.ResponseDecodeError{
-					StatusCode:    resp.StatusCode,
-					ContentType:   resp.Headers.Get("Content-Type"),
-					ContentLength: len(bodyBytes),
-					TargetType:    "GetAPIPingErrorResponseJSON501",
-					Body:          bodyBytes,
-					Err:           err,
-				}
-			}
-		}
-		return out, runtime.NewClientAPIError(fmt.Errorf("API error (status %d)", resp.StatusCode), runtime.WithStatusCode(resp.StatusCode))
-	case 502:
-		out.JSON502 = new(GetAPIPingErrorResponseJSON502)
-		bodyBytes := resp.Content
-		if len(bodyBytes) > 0 {
-			if err := json.Unmarshal(bodyBytes, out.JSON502); err != nil {
-				return out, &runtime.ResponseDecodeError{
-					StatusCode:    resp.StatusCode,
-					ContentType:   resp.Headers.Get("Content-Type"),
-					ContentLength: len(bodyBytes),
-					TargetType:    "GetAPIPingErrorResponseJSON502",
-					Body:          bodyBytes,
-					Err:           err,
-				}
-			}
-		}
-		return out, runtime.NewClientAPIError(fmt.Errorf("API error (status %d)", resp.StatusCode), runtime.WithStatusCode(resp.StatusCode))
-	case 503:
-		out.JSON503 = new(GetAPIPingErrorResponseJSON503)
-		bodyBytes := resp.Content
-		if len(bodyBytes) > 0 {
-			if err := json.Unmarshal(bodyBytes, out.JSON503); err != nil {
-				return out, &runtime.ResponseDecodeError{
-					StatusCode:    resp.StatusCode,
-					ContentType:   resp.Headers.Get("Content-Type"),
-					ContentLength: len(bodyBytes),
-					TargetType:    "GetAPIPingErrorResponseJSON503",
-					Body:          bodyBytes,
-					Err:           err,
-				}
-			}
-		}
-		return out, runtime.NewClientAPIError(fmt.Errorf("API error (status %d)", resp.StatusCode), runtime.WithStatusCode(resp.StatusCode))
-	case 504:
-		out.JSON504 = new(GetAPIPingErrorResponseJSON504)
-		bodyBytes := resp.Content
-		if len(bodyBytes) > 0 {
-			if err := json.Unmarshal(bodyBytes, out.JSON504); err != nil {
-				return out, &runtime.ResponseDecodeError{
-					StatusCode:    resp.StatusCode,
-					ContentType:   resp.Headers.Get("Content-Type"),
-					ContentLength: len(bodyBytes),
-					TargetType:    "GetAPIPingErrorResponseJSON504",
-					Body:          bodyBytes,
-					Err:           err,
-				}
-			}
-		}
-		return out, runtime.NewClientAPIError(fmt.Errorf("API error (status %d)", resp.StatusCode), runtime.WithStatusCode(resp.StatusCode))
 	default:
 		return out, runtime.NewClientAPIError(fmt.Errorf("unexpected status code: %d", resp.StatusCode), runtime.WithStatusCode(resp.StatusCode))
 	}
@@ -24727,28 +24520,6 @@ func (g GetAPIV1UsageSummaryStreamQuery) Validate() error {
 	return errors
 }
 
-type GetAPIPingResponse = PingInfo
-
-type GetAPIPingErrorResponse = APIErrorResponse
-
-type GetAPIPingErrorResponseJSON = APIErrorResponse
-
-type GetAPIPingErrorResponseJSON403 = APIErrorResponse
-
-type GetAPIPingErrorResponseJSON404 = APIErrorResponse
-
-type GetAPIPingErrorResponseJSON409 = APIErrorResponse
-
-type GetAPIPingErrorResponseJSON500 = APIErrorResponse
-
-type GetAPIPingErrorResponseJSON501 = APIErrorResponse
-
-type GetAPIPingErrorResponseJSON502 = APIErrorResponse
-
-type GetAPIPingErrorResponseJSON503 = APIErrorResponse
-
-type GetAPIPingErrorResponseJSON504 = APIErrorResponse
-
 type GetAPIV1ActivityReportResponse = activity.Report
 
 type GetAPIV1ActivityReportErrorResponse = APIErrorResponse
@@ -26579,23 +26350,6 @@ type GetStartupProbeResp struct {
 	Body         []byte
 	StatusCode   int
 	Headers204   *GetStartupProbeResp204Headers
-}
-
-type GetAPIPingResp struct {
-	HTTPResponse *http.Response
-	Body         []byte
-	StatusCode   int
-	JSON200      *GetAPIPingResponse
-	JSON400      *GetAPIPingErrorResponse
-	JSON401      *GetAPIPingErrorResponseJSON
-	JSON403      *GetAPIPingErrorResponseJSON403
-	JSON404      *GetAPIPingErrorResponseJSON404
-	JSON409      *GetAPIPingErrorResponseJSON409
-	JSON500      *GetAPIPingErrorResponseJSON500
-	JSON501      *GetAPIPingErrorResponseJSON501
-	JSON502      *GetAPIPingErrorResponseJSON502
-	JSON503      *GetAPIPingErrorResponseJSON503
-	JSON504      *GetAPIPingErrorResponseJSON504
 }
 
 type GetAPIV1ActivityReportResp struct {
@@ -30532,31 +30286,6 @@ type ParserPRLink struct {
 
 func (p ParserPRLink) Validate() error {
 	return runtime.ConvertValidatorError(typesValidator.Struct(p))
-}
-
-type PingInfo struct {
-	Healthy                      bool          `json:"healthy"`
-	Ok                           bool          `json:"ok"`
-	Pid                          *int64        `json:"pid,omitempty"`
-	ProjectIdentityBackfillError *string       `json:"project_identity_backfill_error,omitempty"`
-	Service                      *string       `json:"service,omitempty"`
-	Sync                         *SyncProgress `json:"sync,omitempty"`
-	Version                      *string       `json:"version,omitempty"`
-}
-
-func (p PingInfo) Validate() error {
-	var errors runtime.ValidationErrors
-	if p.Sync != nil {
-		if v, ok := any(p.Sync).(runtime.Validator); ok {
-			if err := v.Validate(); err != nil {
-				errors = errors.Append("Sync", err)
-			}
-		}
-	}
-	if len(errors) == 0 {
-		return nil
-	}
-	return errors
 }
 
 type ProjectTotal = service.ProjectTotal

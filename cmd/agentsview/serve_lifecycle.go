@@ -490,7 +490,7 @@ func probeDaemonRecord(
 			Timeout:         500 * time.Millisecond,
 		},
 	)
-	return info.PingInfo, err == nil && info.PID == rec.PID
+	return info, err == nil && info.PID == rec.PID
 }
 
 // processIdentityConfirmed reports whether the process now holding rec.PID is

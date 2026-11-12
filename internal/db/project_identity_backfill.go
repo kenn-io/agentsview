@@ -173,6 +173,13 @@ func (db *DB) ProjectIdentityBackfillStatus(
 			}
 			return status, nil
 		}
+		if status.State == "pending" && status.TotalItems == 0 {
+			missing, countErr := db.countMissingProjectIdentitySnapshots(ctx)
+			if countErr != nil {
+				return status, countErr
+			}
+			status.TotalItems = missing
+		}
 		return status, nil
 	}
 	if !errors.Is(err, sql.ErrNoRows) {

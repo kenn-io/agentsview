@@ -678,7 +678,7 @@ func TestExportSessionsUpgradeRequiresBackgroundEvidenceBackfill(t *testing.T) {
 	)
 	require.NoError(t, err)
 	assert.Empty(t, stderr)
-	assert.Equal(t, "project identity evidence: pending\n", stdout)
+	assert.Equal(t, "project identity evidence: pending (0/1)\n", stdout)
 
 	stdout, stderr, err = executeExportSessionsCommand(
 		newRootCommand(), "export", "sessions", "--format", "json",
@@ -784,8 +784,13 @@ func waitExportProgress(t *testing.T, progress <-chan struct{}, done <-chan erro
 }
 
 func TestExportWaitDuringDaemonChanges(t *testing.T) {
-	for _, mode := range []string{"daemon stops", "temporary ping failures", "cancel", "single ping"} {
+	for _, mode := range []string{"daemon stops", "temporary ping failures", "cancel", "single ping", "signed loopback"} {
 		t.Run(mode, func(t *testing.T) {
+			if mode == "signed loopback" {
+				t.Setenv("AGENTSVIEW_SIGNING_URL", "https://127.0.0.1:4443")
+				t.Setenv("AGENTSVIEW_SIGNING_KEY_ID", "example")
+				t.Setenv("AGENTSVIEW_SIGNING_KEY_FILE", filepath.Join(t.TempDir(), "key"))
+			}
 			path := pendingExportArchive(t, false)
 			dir := filepath.Dir(path)
 			var fail, observed, calls atomic.Int32
@@ -828,6 +833,10 @@ func TestExportWaitDuringDaemonChanges(t *testing.T) {
 				cancel()
 				require.ErrorIs(t, <-done, context.Canceled)
 				assert.Empty(t, out.String())
+			case "signed loopback":
+				require.NoError(t, backfillExportArchive(t.Context(), path))
+				require.NoError(t, <-done)
+				assert.Len(t, decodeExportSessionsDocument(t, out.String()).Sessions, 2)
 			case "temporary ping failures":
 				fail.Store(4)
 				for observed.Load() < 4 {
@@ -872,7 +881,7 @@ func TestExportDaemonPing(t *testing.T) {
 			}))
 			t.Cleanup(ts.Close)
 			ep := serverEndpoint(t, ts)
-			rt := &DaemonRuntime{Record: daemon.RuntimeRecord{PID: 42, Address: ep.Addr, Metadata: map[string]string{runtimeBrowserURL: "http://example.com/nested"}}}
+			rt := &DaemonRuntime{Record: daemon.RuntimeRecord{PID: 42, Address: ep.Addr}, BasePath: "/nested"}
 			failed, ok := exportDaemonPing(t.Context(), rt, "example-token")
 			assert.Equal(t, tc.wantFailure, failed)
 			assert.Equal(t, tc.wantOK, ok)
@@ -944,6 +953,7 @@ func TestExportWaitAfterDaemonRestart(t *testing.T) {
 
 func TestExportLiveFailureReporting(t *testing.T) {
 	testExportFailureRecovery(t, "unrecordable failure", func(t *testing.T) {
+		t.Helper()
 		status, _, err := executeExportSessionsCommand(newRootCommand(), "export", "status")
 		require.NoError(t, err)
 		assert.Contains(t, status, "failed")

@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"net"
+	"net/http"
 	"net/url"
 	"os"
 	"path/filepath"
@@ -21,7 +22,6 @@ import (
 
 	"github.com/gofrs/flock"
 	"github.com/shirou/gopsutil/v4/process"
-	"go.kenn.io/agentsview/internal/apiclient"
 	"go.kenn.io/agentsview/internal/config"
 	"go.kenn.io/agentsview/internal/db"
 	"go.kenn.io/agentsview/internal/server"
@@ -557,18 +557,20 @@ func firstAuthToken(tokens []string) string {
 	return tokens[0]
 }
 
-type runtimePing struct {
-	daemon.PingInfo
-	BackfillError string
-}
-
 func probeRuntime(
 	ctx context.Context,
 	rec daemon.RuntimeRecord,
 	authToken string,
 	opts daemon.ProbeOptions,
-) (runtimePing, error) {
+) (daemon.PingInfo, error) {
 	ep := rec.Endpoint()
+	if opts.Path == "" {
+		opts.Path = daemon.DefaultPingPath
+	}
+	opts.Path = daemonRuntimeFromRecord(rec).BasePath + opts.Path
+	if authToken == "" {
+		return daemon.Probe(ctx, ep, opts)
+	}
 	timeout := opts.Timeout
 	if timeout == 0 {
 		timeout = time.Second
@@ -576,45 +578,32 @@ func probeRuntime(
 	ctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 
-	httpClient := ep.HTTPClient(daemon.HTTPClientOptions{
+	client := ep.HTTPClient(daemon.HTTPClientOptions{
 		Timeout:           timeout,
 		DisableKeepAlives: true,
 	})
-	client, err := apiclient.NewHTTPClient(ep.BaseURL()+daemonRuntimeFromRecord(rec).BasePath, authToken, httpClient)
-	if err != nil {
-		return runtimePing{}, err
+	client.Transport = bearerAuthTransport{
+		token: authToken,
+		base:  client.Transport,
 	}
-	resp, err := client.GetAPIPingWithResponse(ctx)
-	if err != nil {
-		return runtimePing{}, err
+	return daemon.ProbeHTTP(ctx, client, ep.BaseURL(), opts)
+}
+
+type bearerAuthTransport struct {
+	token string
+	base  http.RoundTripper
+}
+
+func (t bearerAuthTransport) RoundTrip(
+	req *http.Request,
+) (*http.Response, error) {
+	clone := req.Clone(req.Context())
+	clone.Header.Set("Authorization", "Bearer "+t.token)
+	base := t.base
+	if base == nil {
+		base = http.DefaultTransport
 	}
-	if resp == nil || resp.JSON200 == nil {
-		return runtimePing{}, errors.New("invalid daemon ping response")
-	}
-	p := resp.JSON200
-	if !p.Ok {
-		return runtimePing{}, errors.New("daemon ping returned ok=false")
-	}
-	if opts.ExpectedService != "" && (p.Service == nil || *p.Service != opts.ExpectedService) {
-		return runtimePing{}, errors.New("unexpected daemon service")
-	}
-	info := runtimePing{PingInfo: daemon.PingInfo{OK: p.Ok}}
-	if p.Service != nil {
-		info.Service = *p.Service
-	}
-	if p.Version != nil {
-		info.Version = *p.Version
-	}
-	if p.Pid != nil {
-		info.PID = int(*p.Pid)
-	}
-	if p.ProjectIdentityBackfillError != nil {
-		info.BackfillError = *p.ProjectIdentityBackfillError
-	}
-	if info.PID != rec.PID {
-		return runtimePing{}, errors.New("unexpected daemon PID")
-	}
-	return info, nil
+	return base.RoundTrip(clone)
 }
 
 func daemonRuntimeFromRecord(rec daemon.RuntimeRecord) *DaemonRuntime {

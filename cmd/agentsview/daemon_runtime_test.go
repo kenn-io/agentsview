@@ -54,8 +54,8 @@ func TestProbeRuntimeRejectsInvalidIdentity(t *testing.T) {
 			}))
 			t.Cleanup(ts.Close)
 			ep := serverEndpoint(t, ts)
-			_, err := probeRuntime(t.Context(), daemon.RuntimeRecord{PID: 42, Address: ep.Addr}, "", daemon.ProbeOptions{ExpectedService: daemonService})
-			require.Error(t, err)
+			_, ok := probeDaemonRecord(daemon.RuntimeRecord{PID: 42, Address: ep.Addr}, "")
+			assert.False(t, ok)
 		})
 	}
 }
@@ -1297,6 +1297,19 @@ func TestFindDaemonRuntime_UsesAuthToken(t *testing.T) {
 	require.NotNil(t, result, "expected discovery with bearer token")
 	assert.Equal(t, port, result.Port)
 	assert.False(t, result.ReadOnly)
+}
+
+func TestFindDaemonRuntimeWithSignedLoopbackService(t *testing.T) {
+	t.Setenv("AGENTSVIEW_SIGNING_URL", "https://127.0.0.1:4443")
+	t.Setenv("AGENTSVIEW_SIGNING_KEY_ID", "example")
+	t.Setenv("AGENTSVIEW_SIGNING_KEY_FILE", filepath.Join(t.TempDir(), "key"))
+	dir := runtimeTestDir(t)
+	host, port := testPingServer(t)
+	writeDaemonRuntimeForTest(t, dir, host, port, "test", false)
+	rt := FindWritableDaemonRuntime(dir, "")
+	require.NotNil(t, rt)
+	_, ok := exportDaemonPing(t.Context(), rt, "")
+	assert.True(t, ok)
 }
 
 func TestIsDaemonActive_LivePIDNoPingClaimsOwnership(t *testing.T) {

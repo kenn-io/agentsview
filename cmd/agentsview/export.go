@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net/http"
 	"sort"
 	"strings"
 	"time"
@@ -16,6 +17,7 @@ import (
 	"go.kenn.io/agentsview/internal/config"
 	"go.kenn.io/agentsview/internal/db"
 	"go.kenn.io/agentsview/internal/export"
+	"go.kenn.io/agentsview/internal/server"
 	"go.kenn.io/kit/daemon"
 )
 
@@ -260,8 +262,7 @@ func newExportSessionsCommand() *cobra.Command {
 func startExportDaemon(ctx context.Context, cfg *config.Config) (*DaemonRuntime, error) {
 	tr, err := ensureTransportContext(ctx, cfg, transportIntentLongLived, startupWaitTimeout)
 	if err != nil {
-		var incompatible *longLivedCompatibilityError
-		if errors.As(err, &incompatible) {
+		if incompatible, ok := errors.AsType[*longLivedCompatibilityError](err); ok {
 			return nil, fmt.Errorf("%w; run `agentsview daemon restart`, then check `agentsview export status` and rerun `agentsview export sessions --wait`", incompatible.cause)
 		}
 		return nil, err
@@ -402,8 +403,27 @@ func exportDaemonPing(ctx context.Context, rt *DaemonRuntime, token string) (fai
 	if rt == nil {
 		return "", false
 	}
-	info, err := probeRuntime(ctx, rt.Record, token, daemon.ProbeOptions{ExpectedService: daemonService, Timeout: time.Second})
-	return info.BackfillError, err == nil
+	ctx, cancel := context.WithTimeout(ctx, time.Second)
+	defer cancel()
+	ep := rt.Record.Endpoint()
+	client := ep.HTTPClient(daemon.HTTPClientOptions{Timeout: time.Second, DisableKeepAlives: true})
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, ep.BaseURL()+rt.BasePath+daemon.DefaultPingPath, nil)
+	if err != nil {
+		return "", false
+	}
+	if token != "" {
+		req.Header.Set("Authorization", "Bearer "+token)
+	}
+	resp, err := client.Do(req)
+	if err != nil {
+		return "", false
+	}
+	defer func() { _ = resp.Body.Close() }()
+	var info server.PingInfo
+	if resp.StatusCode != http.StatusOK || json.UnmarshalRead(resp.Body, &info) != nil || !info.OK || info.Service != daemonService || info.PID != rt.Record.PID {
+		return "", false
+	}
+	return info.ProjectIdentityBackfillError, true
 }
 
 func exportWritableDaemonPing(ctx context.Context, cfg *config.Config, rt **DaemonRuntime) (failure string, ok bool) {
@@ -443,9 +463,6 @@ func exportPendingError(ctx context.Context, database *db.DB, cfg *config.Config
 }
 
 func exportStatusText(status db.BackgroundMigrationStatus) string {
-	if status.State == "pending" && status.TotalItems == 0 {
-		return status.State
-	}
 	return fmt.Sprintf("%s (%d/%d)", status.State, status.CompletedItems, status.TotalItems)
 }
 
