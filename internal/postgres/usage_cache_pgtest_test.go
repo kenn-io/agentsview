@@ -99,12 +99,21 @@ VALUES ('batch-1','provider','paid-a',20,'2026-01-01','shared'),
 func TestPGUsageCacheDeferredReadsReuseDirectResults(t *testing.T) {
 	for _, state := range []string{"version 1", "fill in progress"} {
 		t.Run(state, func(t *testing.T) {
-			_, _, store, counter := keptUsageFixture(t)
+			_, syncer, writer, _ := keptUsageFixture(t)
 			ctx := t.Context()
 			if state == "version 1" {
-				_, err := store.pg.ExecContext(ctx, `UPDATE sync_metadata SET value='1' WHERE key='usage_change_journal_version'; DELETE FROM sync_metadata WHERE key IN ('usage_account_revision', 'usage_history_token')`)
+				_, err := writer.pg.ExecContext(ctx, `UPDATE sync_metadata SET value='1' WHERE key='usage_change_journal_version'; DELETE FROM sync_metadata WHERE key IN ('usage_account_revision', 'usage_history_token')`)
 				require.NoError(t, err)
 			}
+			config, err := pgx.ParseConfig(testPGURL(t))
+			require.NoError(t, err)
+			config.RuntimeParams["search_path"] = syncer.schema
+			config.RuntimeParams["TimeZone"] = "UTC"
+			trace := &usageQueryTracer{queries: map[string]int{}}
+			config.Tracer = trace
+			pool := stdlib.OpenDB(*config)
+			store := &Store{pg: pool, ownedDB: pool}
+			t.Cleanup(func() { require.NoError(t, store.Close()) })
 			probe := attachUsageCacheProbe(t, store, t.TempDir())
 			store.usageCache.DeferWork()
 			t.Cleanup(func() { require.NoError(t, store.usageCache.Close()) })
@@ -142,9 +151,10 @@ func TestPGUsageCacheDeferredReadsReuseDirectResults(t *testing.T) {
 			require.Equal(t, 1250, daily.Totals.OutputTokens)
 			require.Len(t, top, 2)
 			require.Equal(t, 1, plan.PlanOnly)
-			counter.mu.Lock()
-			queries := maps.Clone(counter.queries)
-			counter.mu.Unlock()
+			trace.mu.Lock()
+			queries := maps.Clone(trace.queries)
+			trace.mu.Unlock()
+			require.GreaterOrEqual(t, len(queries), 3, "daily, top, and plan reads must scan their source")
 			again, err := store.GetDailyUsage(ctx, filter)
 			require.NoError(t, err)
 			assert.Equal(t, daily, again)
@@ -154,9 +164,9 @@ func TestPGUsageCacheDeferredReadsReuseDirectResults(t *testing.T) {
 			planAgain, err := store.GetPlanUsageSessionCounts(ctx, filter)
 			require.NoError(t, err)
 			assert.Equal(t, plan, planAgain)
-			counter.mu.Lock()
-			assert.Equal(t, queries, counter.queries)
-			counter.mu.Unlock()
+			trace.mu.Lock()
+			assert.Equal(t, queries, trace.queries)
+			trace.mu.Unlock()
 		})
 	}
 }
