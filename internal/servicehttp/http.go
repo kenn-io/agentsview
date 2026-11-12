@@ -794,7 +794,8 @@ func (b *httpBackend) Search(
 	if req.Limit > 0 {
 		q.Limit = new(int64(req.Limit))
 	}
-	api, err := b.apiClient(b.client)
+	// Broad searches on large archives can exceed 30 seconds; the caller's context bounds the wait.
+	api, err := b.apiClient(b.longRunningClient)
 	if err != nil {
 		return nil, err
 	}
