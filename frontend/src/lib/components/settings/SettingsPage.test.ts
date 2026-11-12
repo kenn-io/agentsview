@@ -94,6 +94,35 @@ describe("SettingsPage", () => {
     }
   });
 
+  it("follows browser navigation between settings panels", async () => {
+    window.history.replaceState(null, "", "/settings?panel=appearance");
+    window.dispatchEvent(new PopStateEvent("popstate"));
+    settingsService.getApiV1Settings.mockResolvedValue({
+      agent_dirs: {},
+      chart_palette: "agentsview",
+      github_configured: false,
+      host: "127.0.0.1",
+      port: 8080,
+      read_only: false,
+      require_auth: false,
+      terminal: { mode: "auto" },
+    });
+    const component = mount(SettingsPage, { target: document.body });
+    try {
+      await tick();
+      await tick();
+      window.history.pushState(null, "", "/settings?panel=tool-result-images");
+      window.dispatchEvent(new PopStateEvent("popstate"));
+      await tick();
+      expect(window.location.search).toBe("?panel=tool-result-images");
+      expect(document.querySelector(".settings-panel:not([hidden])")?.textContent).toContain(
+        "Tool-result images",
+      );
+    } finally {
+      unmount(component);
+    }
+  });
+
   it("opens Session Providers from the requested panel", async () => {
     router.params = { panel: "agent-directories" };
     settingsService.getApiV1Settings.mockResolvedValue({

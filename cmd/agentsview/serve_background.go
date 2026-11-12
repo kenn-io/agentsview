@@ -173,10 +173,13 @@ func runServeBackgroundCommand(
 
 	launchLock, ok := acquireBackgroundLaunchLock(dataDir)
 	if !ok {
+		// Another launch holds the lock and owns the config writes. Report
+		// without loading config so this process never touches config.toml.
 		reportBackgroundLaunchInProgress(cmd.Context(), dataDir, "")
 		return
 	}
 	defer func() { _ = launchLock.Unlock() }()
+
 	runServeBackground(cmd.Context(), mustLoadConfig(cmd), os.Args[1:], opts)
 }
 
