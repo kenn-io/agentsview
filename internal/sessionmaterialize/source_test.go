@@ -378,11 +378,12 @@ func TestMaterializeLinkedClaudeSources(t *testing.T) {
 				require.NoError(t, err)
 				assert.Equal(t, content, string(got))
 			}
-			if layout == "external saved" {
+			if layout == "external saved" || layout == "in-root session directory" {
 				cfg.SourceMachines = map[parser.AgentType]map[string]string{parser.AgentClaude: {root: "renamed"}}
 				result, err = Materialize(t.Context(), cfg, dbtest.OpenTestDB(t), session, cwd)
 				require.NoError(t, err)
 				assert.Equal(t, name, result.Source)
+				assert.Equal(t, "unchanged", result.Status)
 			}
 		})
 	}
