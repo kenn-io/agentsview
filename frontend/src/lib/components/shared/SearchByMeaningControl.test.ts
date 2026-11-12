@@ -59,3 +59,36 @@ it.each([
   flushSync();
   unmount(component);
 });
+
+it.each(["", "unknown"])("reports an unavailable provider on retry: %s", async (provider) => {
+  const component = mount(SearchByMeaningControl, {
+    target: document.body,
+    props: {
+      status: {
+        running: false,
+        done: 0,
+        eta_milliseconds: 0,
+        total: 0,
+        setup: {
+          enabled: false,
+          action: "turn-on",
+          provider,
+          error: "Previous setup failed",
+          busy: false,
+          installing: false,
+          missing_bytes: 0,
+          downloaded_bytes: 0,
+          total_bytes: 0,
+        },
+      },
+      hint: false,
+      onchange: vi.fn(),
+    },
+  });
+  const retry = [...document.querySelectorAll("button")].find((button) => button.textContent?.includes("Retry"));
+  expect(retry).toBeDefined();
+  retry!.click();
+  await vi.waitFor(() => expect(document.querySelector('[role="alert"]')?.textContent).toBe("Failed to load embeddings status"));
+  expect(EmbeddingsService.postApiV1EmbeddingsSetup).not.toHaveBeenCalled();
+  unmount(component);
+});
