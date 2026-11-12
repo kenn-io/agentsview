@@ -122,7 +122,7 @@ export async function orvalRequest<T extends Response = Response>(
 ): Promise<T> {
   const { baseUrl, ...init } = options;
   const requestUrl = `${baseUrl ?? getGeneratedBase()}${url}`;
-  new URL(requestUrl, document.baseURI);
+  new Request(new URL(requestUrl, document.baseURI));
   const response = await fetch(requestUrl, {
     ...init,
     headers: baseUrl === undefined ? generatedHeaders(init.headers) : init.headers,

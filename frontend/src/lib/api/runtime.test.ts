@@ -165,6 +165,20 @@ describe("API errors", () => {
     }
   });
 
+  it("rejects a remote URL containing credentials before fetch", async () => {
+    setServerUrl("https://user:pass@example.test");
+    const fetchSpy = vi.spyOn(globalThis, "fetch");
+    try {
+      const error = await orvalFetch("/api/v1/search", {}).catch((err: unknown) => err);
+      expect(error).toBeInstanceOf(TypeError);
+      expect(error).not.toBeInstanceOf(TransportError);
+      expect(isTransient(error)).toBe(false);
+      expect(fetchSpy).not.toHaveBeenCalled();
+    } finally {
+      fetchSpy.mockRestore();
+    }
+  });
+
   it("marks an interrupted response body as transient", async () => {
     const cause = new TypeError("Content-Length header of network response exceeds response Body.");
     vi.stubGlobal(
