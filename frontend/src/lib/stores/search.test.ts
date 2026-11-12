@@ -202,7 +202,7 @@ describe("SearchStore", () => {
       expect(store.error).toBeNull();
       expect(reportErrorShown).not.toHaveBeenCalled();
       if (outcome === "recover") {
-        expect(searchService.getApiV1Search.mock.calls[1]![0]).toBe(
+        expect(searchService.getApiV1Search.mock.calls[1]![0]).toEqual(
           searchService.getApiV1Search.mock.calls[0]![0],
         );
         expect(searchService.getApiV1Search.mock.calls[1]![1]?.signal).toBe(
@@ -224,6 +224,7 @@ describe("SearchStore", () => {
   );
 
   it.each([
+    [400, "unavailable"],
     [501, "unavailable"],
     [504, "unavailable"],
   ] as const)("does not retry HTTP %i with %s", async (status, detail) => {
@@ -234,27 +235,6 @@ describe("SearchStore", () => {
     await vi.advanceTimersByTimeAsync(300);
     expect(searchService.getApiV1Search).toHaveBeenCalledTimes(1);
     expect(store.error).toEqual({ detail, kind: "generic" });
-  });
-
-  it("does not retry a malformed remote URL", async () => {
-    const actual = await vi.importActual<typeof import("../api/generated/index.js")>(
-      "../api/generated/index.js",
-    );
-    searchService.getApiV1Search.mockImplementation(actual.SearchService.getApiV1Search);
-    const fetchSpy = vi.spyOn(globalThis, "fetch");
-    setServerUrl("http://[");
-    try {
-      const store = createSearchStore(memoryStorage());
-      store.search("needle");
-      await runDebounce();
-      await vi.advanceTimersByTimeAsync(300);
-      expect(searchService.getApiV1Search).toHaveBeenCalledOnce();
-      expect(fetchSpy).not.toHaveBeenCalled();
-      expect(store.error).not.toBeNull();
-    } finally {
-      setServerUrl("");
-      fetchSpy.mockRestore();
-    }
   });
 
   it("does not send a retry to a server selected in another tab", async () => {

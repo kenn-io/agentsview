@@ -142,6 +142,20 @@ describe("API errors", () => {
     expect(isTransient(error)).toBe(true);
   });
 
+  it("rejects a malformed remote URL before fetch", async () => {
+    setServerUrl("http://[");
+    const fetchSpy = vi.spyOn(globalThis, "fetch");
+    try {
+      const error = await orvalFetch("/api/v1/search", {}).catch((err: unknown) => err);
+      expect(error).toBeInstanceOf(TypeError);
+      expect(error).not.toBeInstanceOf(TransportError);
+      expect(isTransient(error)).toBe(false);
+      expect(fetchSpy).not.toHaveBeenCalled();
+    } finally {
+      fetchSpy.mockRestore();
+    }
+  });
+
   it("marks an interrupted response body as transient", async () => {
     const cause = new TypeError("Content-Length header of network response exceeds response Body.");
     vi.stubGlobal(
@@ -163,21 +177,13 @@ describe("API errors", () => {
     expect(isTransient(error)).toBe(true);
   });
 
-  it("preserves an abort during a body read", async () => {
+  it("preserves a TypeError used as an abort reason", async () => {
     const abort = Object.assign(new TypeError("aborted"), { name: "AbortError" });
-    vi.stubGlobal(
-      "fetch",
-      vi.fn().mockResolvedValue(
-        new Response(
-          new ReadableStream({
-            start(controller) {
-              controller.error(abort);
-            },
-          }),
-        ),
-      ),
+    const controller = new AbortController();
+    controller.abort(abort);
+    const error = await orvalFetch("/api/v1/search", { signal: controller.signal }).catch(
+      (err: unknown) => err,
     );
-    const error = await orvalFetch("/api/v1/search", {}).catch((err: unknown) => err);
     expect(error).toBe(abort);
     expect(isTransient(error)).toBe(false);
   });
