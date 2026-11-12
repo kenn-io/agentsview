@@ -6058,6 +6058,49 @@ func TestProjectIdentitySnapshotsDoNotCacheCheckoutHead(t *testing.T) {
 	assert.Equal(t, "branch-b", branches["app-b"])
 }
 
+func TestProjectIdentityBackfillFailureRecovers(t *testing.T) {
+	for _, tc := range []struct{ name, trigger string }{
+		{"queue", `CREATE TRIGGER block_backfill BEFORE INSERT ON background_migrations WHEN NEW.state = 'pending' BEGIN SELECT RAISE(FAIL, 'backfill blocked'); END`},
+		{"start", `CREATE TRIGGER block_backfill BEFORE UPDATE ON background_migrations WHEN NEW.state = 'running' BEGIN SELECT RAISE(FAIL, 'backfill blocked'); END`},
+		{"completion", `CREATE TRIGGER block_backfill BEFORE UPDATE ON background_migrations WHEN NEW.state = 'completed' BEGIN SELECT RAISE(FAIL, 'backfill blocked'); END`},
+		{"source", ""},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), "sessions.db")
+			database := dbtest.OpenTestDBAt(t, path)
+			require.NoError(t, database.UpsertSession(t.Context(), db.Session{ID: "legacy", Project: "project", Machine: "local", Agent: "codex"}))
+			raw, err := sql.Open("sqlite3", path)
+			require.NoError(t, err)
+			defer raw.Close()
+			_, err = raw.ExecContext(t.Context(), `DELETE FROM session_project_identity_snapshots`)
+			require.NoError(t, err)
+			if tc.trigger != "" {
+				_, err = raw.ExecContext(t.Context(), tc.trigger)
+				require.NoError(t, err)
+			}
+			engine := NewEngine(t.Context(), database, EngineConfig{Machine: "local"})
+			defer engine.Close()
+			if tc.name == "source" {
+				engine.sourceSyncErr = errors.New("backfill blocked")
+			}
+			require.ErrorContains(t, engine.BackfillProjectIdentitySnapshots(t.Context()), "backfill blocked")
+			status, err := database.ProjectIdentityBackfillStatus(t.Context())
+			require.NoError(t, err)
+			assert.Equal(t, "failed", status.State)
+			assert.Contains(t, status.LastError, "backfill blocked")
+			if tc.trigger != "" {
+				_, err = raw.ExecContext(t.Context(), `DROP TRIGGER block_backfill`)
+				require.NoError(t, err)
+			}
+			engine.sourceSyncErr = nil
+			require.NoError(t, engine.BackfillProjectIdentitySnapshots(t.Context()))
+			status, err = database.ProjectIdentityBackfillStatus(t.Context())
+			require.NoError(t, err)
+			assert.Equal(t, "completed", status.State)
+		})
+	}
+}
+
 func TestProjectIdentityBackfillPreservesEvidenceAcrossSchemaUpgrade(
 	t *testing.T,
 ) {

@@ -2457,7 +2457,7 @@ func deleteSessionMessageRowsTx(
 
 func deleteSessionMessagesTx(tx transactionQueries, sessionID string) error {
 	if _, err := tx.Exec(
-		"DELETE FROM tool_calls WHERE session_id = ?",
+		"DELETE FROM tool_calls WHERE session_id = ?;"+strings.ReplaceAll(counterTemplate, "{{counter}}", archiveMetadataAnalyticsChangeRevisionKey),
 		sessionID,
 	); err != nil {
 		return fmt.Errorf("deleting old tool_calls: %w", err)

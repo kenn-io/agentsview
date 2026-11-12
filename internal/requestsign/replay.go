@@ -135,6 +135,7 @@ func replayDSNForPath(absPath, volume, mode string) string {
 		"_busy_timeout": {"1000"},
 	}
 	if mode == "rw" {
+		query.Set("_stmt_cache_size", "64")
 		query.Set("_txlock", "immediate")
 		query.Set("_synchronous", "EXTRA")
 		query.Set("_journal_mode", "DELETE")

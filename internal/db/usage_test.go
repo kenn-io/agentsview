@@ -4171,7 +4171,7 @@ func BenchmarkUsageRollup(b *testing.B) {
 				ctx, conn, timezoneID, snapshot, window.filter)
 			require.NoError(b, readErr)
 			groups, aggregateErr := aggregateUsageRollupExceptions(
-				exceptions, nil, snapshot, window.filter, resolver)
+				exceptions, nil, snapshot, window.filter, resolver, &usageFactsResult{})
 			require.NoError(b, aggregateErr)
 			exceptionRows := len(exceptions)
 			exceptionGroups := len(groups)
@@ -4187,7 +4187,7 @@ func BenchmarkUsageRollup(b *testing.B) {
 					require.NoError(b, readErr)
 				}
 				groups, aggregateErr = aggregateUsageRollupExceptions(
-					exceptions, nil, snapshot, window.filter, resolver)
+					exceptions, nil, snapshot, window.filter, resolver, &usageFactsResult{})
 				if aggregateErr != nil {
 					require.NoError(b, aggregateErr)
 				}

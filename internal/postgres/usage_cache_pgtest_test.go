@@ -555,6 +555,8 @@ func TestPGUsageCacheWindowRestartAndSmallPush(t *testing.T) {
 
 func TestPGUsageCacheRestartDefaultPairwiseParity(t *testing.T) {
 	_, _, store, _ := keptUsageFixture(t)
+	_, err := store.pg.ExecContext(t.Context(), `INSERT INTO cursor_usage_events(id,agent,occurred_at,model,output_tokens,charged_microdollars,dedup_key) VALUES(1,'cursor','2026-01-01','cursor-model',30,300,'account')`)
+	require.NoError(t, err)
 	directory := t.TempDir()
 	attachUsageCacheProbe(t, store, directory)
 	req := service.UsagePairwiseComparisonRequest{
@@ -583,6 +585,14 @@ func TestPGUsageCacheRestartDefaultPairwiseParity(t *testing.T) {
 	require.NoError(t, err)
 	got, err = backend.UsagePairwiseComparison(t.Context(), req)
 	require.NoError(t, err)
+	require.Equal(t, want, got)
+	req.LeftDimension, req.LeftValue = "model", "cursor-model"
+	req.RightDimension, req.RightValue = "model", "paid-a"
+	want, err = service.NewReadOnlyBackend(direct).UsagePairwiseComparison(t.Context(), req)
+	require.NoError(t, err)
+	got, err = backend.UsagePairwiseComparison(t.Context(), req)
+	require.NoError(t, err)
+	require.Equal(t, 30, got.Left.OutputTokens)
 	require.Equal(t, want, got)
 }
 

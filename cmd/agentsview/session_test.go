@@ -2492,19 +2492,19 @@ func TestSessionUsageResolvesMissingIDsBySyncStatus(t *testing.T) {
 		{
 			name: "startup ingestion pending", id: "absent",
 			statusBody: `{"archive_stale":false,"startup_pending":true,"stats":{}}`,
-			wantErr:    "not yet available", wantCode: tokenUseExitErr,
+			wantErr:    "session usage is not ready", wantCode: tokenUseExitErr,
 			detailLookups: 1, wantStatusChecks: 1,
 		},
 		{
 			name: "idle catch-up pending", id: "absent",
 			statusBody: `{"sync_pending":true,"archive_stale":false,"startup_pending":false,"stats":{}}`,
-			wantErr:    "not yet available", wantCode: tokenUseExitErr,
+			wantErr:    "session usage is not ready", wantCode: tokenUseExitErr,
 			detailLookups: 1, wantStatusChecks: 1,
 		},
 		{
 			name: "archive rebuild pending", id: "absent",
 			statusBody: `{"archive_stale":true,"startup_pending":false,"stats":{}}`,
-			wantErr:    "not yet available", wantCode: tokenUseExitErr,
+			wantErr:    "session usage is not ready", wantCode: tokenUseExitErr,
 			detailLookups: 1, wantStatusChecks: 1,
 		},
 		{
@@ -2629,6 +2629,6 @@ func TestSessionUsageIncompleteRefreshReturnsAvailableUsage(t *testing.T) {
 	assert.Equal(t, 42, out.TotalOutputTokens)
 	assert.True(t, out.RefreshIncomplete)
 	assert.Equal(t, tokenUseExitOK, code)
-	assert.Contains(t, stderr, "warning: usage refresh incomplete; showing usage currently stored in the archive")
+	assert.Contains(t, stderr, "warning: couldn't refresh usage; saved totals may be out of date")
 	assert.Contains(t, stderr, reason)
 }

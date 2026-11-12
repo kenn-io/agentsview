@@ -681,7 +681,11 @@ CREATE INDEX IF NOT EXISTS idx_provider_freshness_updated_at
 // (176: keep the cost Pi, OpenClaw, Shelley, fx, and OpenCode-format agents
 // record for their requests, as a recorded cost.)
 // (177: keep Claude Code's cost-state session total.)
-const dataVersion = 177
+// (178: rebuild Grok history before each compaction from updates.jsonl, mark
+// compactions as compact boundaries, and render Grok tool calls in assistant
+// rows. Re-parse Grok sources in place; source and session identities are
+// unchanged.)
+const dataVersion = 178
 
 const archiveOnlyVersionBase = 1 << 20
 
@@ -934,6 +938,7 @@ type DB struct {
 	usageCache           *usageCacheManager
 	activityMemo         activityCandidateMemo
 	activityKept         kept.Memo[activityKept]
+	analyticsKept        kept.Reads[any]
 	usageKept            kept.Memo[DailyUsageResult]
 	sessionStatsFacts    *sessionStatsFactsMemo
 	frustrationMemo      FrustrationMarkerMemo
@@ -5837,6 +5842,7 @@ func (db *DB) reopenLockedWithBarrier(keepWriterBarrier bool) error {
 	oldWriter := db.writer.Swap(writer)
 	var oldReader *sql.DB
 	db.activityKept.DeleteSlots(func(string) bool { return true })
+	db.analyticsKept.Clear()
 	db.usageKept.DeleteSlots(func(string) bool { return true })
 	db.activityMemo.swap(func() {
 		db.frustrationMemo.Swap(func() { db.sessionStatsFacts.Swap(func() { oldReader = db.reader.Swap(reader) }) })

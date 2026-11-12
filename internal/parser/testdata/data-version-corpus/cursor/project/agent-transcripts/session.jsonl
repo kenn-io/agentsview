@@ -1,0 +1,2 @@
+{"role":"user","message":{"content":"Do something"}}
+{"role":"assistant","message":{"content":[{"type":"thinking","thinking":"hmm"},{"type":"tool_use","id":"tu_2","name":"Bash","input":{"command":"ls"}},{"type":"text","text":"Done."}]}}

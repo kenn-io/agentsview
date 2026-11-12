@@ -464,15 +464,24 @@ network and protect its `auth_token` as described above.
 
 ## SSE Endpoints
 
-The SSE endpoints also accept `?token=<token>` because browser `EventSource`
-cannot set custom headers:
+The live-update streams accept the same `Authorization: Bearer <token>` header
+as every other API call. The bundled web UI always sends the header, including
+for these streams.
+
+For clients built on the browser's native `EventSource`, which cannot set
+headers, the streams also accept the token as a `?token=` query parameter:
 
 ```text
 http://<host>:8080/api/v1/events?token=<token>
 http://<host>:8080/api/v1/sessions/<id>/watch?token=<token>
+http://<host>:8080/api/v1/changes/stream?token=<token>
 ```
 
-Use header-based auth for normal API calls whenever possible.
+A token in the URL can end up in proxy access logs and browser history, so
+send the header whenever your client can. Managed Caddy mode removes the
+`token` parameter from the request URLs it logs. If you run your own reverse
+proxy, filter the parameter out of its access logs. Other API endpoints never
+accept the query parameter.
 
 ## Public URL And Trusted Origins
 

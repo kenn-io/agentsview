@@ -58,6 +58,7 @@ func (db *DB) keptDailyUsage(ctx context.Context, filter UsageFilter) (DailyUsag
 	if !ok {
 		full := filter
 		full.SkipSessionCounts = false
+		full.PairwiseSides = filter.PairwiseSides || filter.Breakdowns
 		loadCtx := context.WithValue(ctx, usageWindowVersionKey{}, version)
 		result, err := db.getDailyUsageUncached(loadCtx, full)
 		if err != nil {

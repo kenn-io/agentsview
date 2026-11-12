@@ -181,12 +181,13 @@ window exception owners and matching authoritative sessions. Other warm window
 reads load filter and attribution metadata, including the display fields shared
 with Top sessions.
 
-Within one Pairwise request, concurrent and sequential reads share one capture,
-fill check, and rollup check when their window, session predicate, and Cursor
-need match. Project sides prepare separately because their session predicates
-differ. Each side reads rollups from the request's captured snapshot with its own
-filter. Cache retirement or a changed install triggers a fresh capture that
-bypasses the shared result. Separate requests never share a preparation.
+Pairwise can use side totals and session memberships from its ranking. If a
+side is absent or a duplicate winner depends on its filter, Pairwise reads that
+side with its own filter. Within one request, those reads share a capture, fill
+check, and rollup check when their window, session predicate, and Cursor need
+match. Project sides with different session predicates prepare separately. Cache
+retirement or a changed install triggers a fresh capture. Separate requests can
+reuse a retained report, but do not share a preparation.
 
 The pricing generation uses the canonical, order-independent effective-pricing
 digest. Daily rows also retain the resolved per-model rate hash. Pricing changes

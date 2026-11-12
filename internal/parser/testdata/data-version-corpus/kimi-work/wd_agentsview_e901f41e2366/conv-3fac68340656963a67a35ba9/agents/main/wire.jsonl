@@ -1,0 +1,4 @@
+{"type":"metadata","protocol_version":"1.4","created_at":1704067200000}
+{"timestamp":1704067200.0,"type":"turn.prompt","input":[{"type":"text","text":"Hello"}]}
+{"timestamp":1704067201.0,"type":"context.append_loop_event","event":{"type":"content.part","part":{"type":"text","text":"Done."}}}
+{"timestamp":1704067202.0,"type":"context.append_loop_event","event":{"type":"step.end","finishReason":"stop","usage":{"output":42}}}

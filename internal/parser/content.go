@@ -718,7 +718,9 @@ func grokToolUseRendering(name, inputJSON string) string {
 		}
 		payload = gjson.Parse(input)
 	default:
-		return ""
+		// Native Grok Build tools render from their own arguments.
+		rendering, _ := grokNativeToolRendering(name, input)
+		return rendering
 	}
 	return grokBackendToolSummary(name, payload)
 }

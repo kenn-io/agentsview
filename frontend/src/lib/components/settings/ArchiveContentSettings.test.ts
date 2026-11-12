@@ -110,9 +110,9 @@ describe("ArchiveContentSettings", () => {
     expect(command.tagName).toBe("CODE");
     const hint = command.closest("p");
     expect(hint?.textContent?.replace(/\s+/g, " ").trim()).toBe(
-      "Stored results keep the policy they were written under, and switching " +
-        "back to Keep cannot restore payloads already removed. Run agentsview " +
-        "db migrate --images to project existing rows.",
+      "Saved results keep the image setting they had when saved. Switching back to " +
+        "Keep won't restore images already removed. Run agentsview db migrate " +
+        "--images to move stored images to separate files.",
     );
   });
 

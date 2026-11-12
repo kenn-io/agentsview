@@ -68,6 +68,16 @@ func configureSQLiteConnection(conn *sqlite3.SQLiteConn) error {
 	}, true); err != nil {
 		return err
 	}
+	if err := conn.RegisterFunc("agentsview_trend_timestamp", func(message, started, created string) string {
+		for _, value := range []string{message, started, created} {
+			if _, err := time.Parse(time.RFC3339Nano, value); err == nil {
+				return value
+			}
+		}
+		return ""
+	}, true); err != nil {
+		return err
+	}
 	if err := conn.RegisterFunc(
 		"agentsview_timestamp_unix_micro",
 		sqliteTimestampUnixMicro,

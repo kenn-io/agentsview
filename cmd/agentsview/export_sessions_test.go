@@ -2,27 +2,35 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"database/sql"
 	"encoding/json/jsontext"
 	"encoding/json/v2"
+	"errors"
 	"fmt"
 	"io"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/spf13/cobra"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"go.kenn.io/agentsview/internal/config"
 	"go.kenn.io/agentsview/internal/db"
 	"go.kenn.io/agentsview/internal/dbtest"
 	"go.kenn.io/agentsview/internal/export"
 	"go.kenn.io/agentsview/internal/money"
 	"go.kenn.io/agentsview/internal/pricing"
+	agentsync "go.kenn.io/agentsview/internal/sync"
+	"go.kenn.io/kit/daemon"
 )
 
 type exportSessionsDocument struct {
@@ -678,8 +686,8 @@ func TestExportSessionsUpgradeRequiresBackgroundEvidenceBackfill(t *testing.T) {
 	require.Error(t, err)
 	assert.Empty(t, stderr)
 	assert.Empty(t, stdout)
-	assert.Contains(t, err.Error(), "project identity evidence backfill is pending")
-	assert.Contains(t, err.Error(), "agentsview export status")
+	assert.Contains(t, err.Error(), "project identification is pending")
+	assert.Contains(t, err.Error(), "agentsview export sessions --wait")
 
 	raw, err = sql.Open("sqlite3", dbPath)
 	require.NoError(t, err)
@@ -698,13 +706,525 @@ func TestExportSessionsUpgradeRequiresBackgroundEvidenceBackfill(t *testing.T) {
 	assert.Equal(t, "pending", state)
 }
 
-func TestExportStatusReportsBackfillFailure(t *testing.T) {
-	dataDir := testDataDir(t)
-	dbPath := filepath.Join(dataDir, "sessions.db")
-	database := dbtest.OpenTestDBAt(t, dbPath)
-	raw, err := sql.Open("sqlite3", dbPath)
+func pendingExportArchive(t *testing.T, archiveOnly bool) string {
+	t.Helper()
+	database := seedExportSessionsArchive(t)
+	if archiveOnly {
+		require.NoError(t, database.EnableArchiveOnly(t.Context()))
+	}
+	require.NoError(t, database.Close())
+	path := filepath.Join(os.Getenv("AGENTSVIEW_DATA_DIR"), "sessions.db")
+	raw, err := sql.Open("sqlite3", path)
 	require.NoError(t, err)
-	_, err = raw.ExecContext(t.Context(), `
+	_, err = raw.ExecContext(t.Context(), `DELETE FROM session_project_identity_snapshots; DELETE FROM background_migrations WHERE name = 'session_project_identity_snapshots_v1'; DELETE FROM stats WHERE key = 'session_project_identity_snapshots_v1_verified'`)
+	require.NoError(t, err)
+	require.NoError(t, raw.Close())
+	return path
+}
+
+func TestExportSessionsArchiveOnlyPending(t *testing.T) {
+	for _, state := range []string{"pending", "failed"} {
+		t.Run(state, func(t *testing.T) {
+			if state == "pending" {
+				pendingExportArchive(t, true)
+			} else {
+				database := seedExportSessionsArchive(t)
+				require.NoError(t, database.EnableArchiveOnly(t.Context()))
+				require.NoError(t, database.Close())
+				path := filepath.Join(os.Getenv("AGENTSVIEW_DATA_DIR"), "sessions.db")
+				raw, err := sql.Open("sqlite3", path)
+				require.NoError(t, err)
+				_, err = raw.ExecContext(t.Context(), `INSERT INTO background_migrations (name, state, total_items, completed_items, last_error) VALUES ('session_project_identity_snapshots_v1', 'failed', 2, 2, 'completion blocked')`)
+				require.NoError(t, err)
+				require.NoError(t, raw.Close())
+			}
+			forbidStartBackgroundServeForTransport(t, "archive-only export must not start a daemon")
+			for _, args := range [][]string{{"export", "sessions"}, {"export", "sessions", "--wait"}} {
+				stdout, _, err := executeExportSessionsCommand(newRootCommand(), args...)
+				require.ErrorContains(t, err, "archive-only")
+				assert.Contains(t, err.Error(), "writable source")
+				assert.Empty(t, stdout)
+			}
+		})
+	}
+}
+
+type exportProgressSignal chan struct{}
+
+func (s exportProgressSignal) Write(p []byte) (int, error) {
+	select {
+	case s <- struct{}{}:
+	default:
+	}
+	return len(p), nil
+}
+
+func exportWaitCommand(t *testing.T, ctx context.Context, progress io.Writer) (*bytes.Buffer, <-chan error) {
+	t.Helper()
+	cmd, _, err := newRootCommand().Find([]string{"export", "sessions"})
+	require.NoError(t, err)
+	cmd.SetContext(ctx)
+	out := new(bytes.Buffer)
+	cmd.SetOut(out)
+	cmd.SetErr(progress)
+	done := make(chan error, 1)
+	go func() { done <- runExportSessions(cmd, exportSessionsConfig{Limit: 500, Wait: true}) }()
+	return out, done
+}
+
+func waitExportProgress(t *testing.T, progress <-chan struct{}, done <-chan error) {
+	t.Helper()
+	select {
+	case <-progress:
+	case err := <-done:
+		require.FailNow(t, "export stopped before progress", "%v", err)
+	case <-time.After(10 * time.Second):
+		require.FailNow(t, "export did not report progress")
+	}
+}
+
+func TestExportWaitDuringDaemonChanges(t *testing.T) {
+	for _, mode := range []string{"daemon stops", "daemon stops during retry", "temporary ping failures", "single ping"} {
+		t.Run(mode, func(t *testing.T) {
+			path := pendingExportArchive(t, false)
+			if mode == "daemon stops during retry" {
+				raw, err := sql.Open("sqlite3", path)
+				require.NoError(t, err)
+				_, err = raw.ExecContext(t.Context(), `INSERT INTO background_migrations (name, state, last_error, updated_at) VALUES (?, 'failed', 'disk error', strftime('%Y-%m-%dT%H:%M:%fZ', 'now', '-1 hour'))`, db.ProjectIdentityBackfillName)
+				require.NoError(t, err)
+				require.NoError(t, raw.Close())
+			}
+			dir := filepath.Dir(path)
+			var fail, observed, calls atomic.Int32
+			ping := daemon.NewPingHandler(daemon.PingHandlerOptions{Service: daemonService, Version: "test"})
+			ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				calls.Add(1)
+				if fail.Load() > 0 {
+					fail.Add(-1)
+					observed.Add(1)
+					http.Error(w, "temporary ping error", http.StatusServiceUnavailable)
+					return
+				}
+				ping.ServeHTTP(w, r)
+			}))
+			t.Cleanup(ts.Close)
+			ep := serverEndpoint(t, ts)
+			writeDaemonRuntimeForTest(t, dir, ep.Host, ep.Port, "test", false)
+			ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
+			defer cancel()
+			progress := make(chan struct{}, 1)
+			out, done := exportWaitCommand(t, ctx, exportProgressSignal(progress))
+			waitExportProgress(t, progress, done)
+			assert.Empty(t, out.String())
+			switch mode {
+			case "daemon stops", "daemon stops during retry":
+				ts.Close()
+				RemoveDaemonRuntime(dir)
+				err := <-done
+				require.ErrorContains(t, err, "agentsview daemon restart")
+				require.ErrorContains(t, err, "agentsview export status")
+				if mode == "daemon stops during retry" {
+					assert.Contains(t, err.Error(), "disk error")
+				}
+				assert.Empty(t, out.String())
+			case "single ping":
+				before := calls.Load()
+				waitExportProgress(t, progress, done)
+				assert.EqualValues(t, 1, calls.Load()-before)
+				cancel()
+				require.ErrorIs(t, <-done, context.Canceled)
+				assert.Empty(t, out.String())
+			case "temporary ping failures":
+				fail.Store(2)
+				for observed.Load() < 2 {
+					waitExportProgress(t, progress, done)
+				}
+				require.EqualValues(t, 2, observed.Load())
+				require.NoError(t, backfillExportArchive(t.Context(), path))
+				require.NoError(t, <-done)
+				assert.Len(t, decodeExportSessionsDocument(t, out.String()).Sessions, 2)
+			}
+		})
+	}
+}
+
+func backfillExportArchive(ctx context.Context, path string) error {
+	database, err := db.Open(ctx, path)
+	if err != nil {
+		return err
+	}
+	defer database.Close()
+	engine := agentsync.NewEngine(ctx, database, agentsync.EngineConfig{Machine: "local"})
+	defer engine.Close()
+	return engine.BackfillProjectIdentitySnapshots(ctx)
+}
+
+func TestExportStatusReportsLiveFailureWithOnePing(t *testing.T) {
+	path := pendingExportArchive(t, false)
+	var calls atomic.Int32
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		calls.Add(1)
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = fmt.Fprintf(w, `{"ok":true,"service":"agentsview","pid":%d,"project_identity_backfill_error":"blocked"}`, os.Getpid())
+	}))
+	t.Cleanup(ts.Close)
+	ep := serverEndpoint(t, ts)
+	writeDaemonRuntimeForTest(t, filepath.Dir(path), ep.Host, ep.Port, "test", false)
+	stdout, _, err := executeExportSessionsCommand(newRootCommand(), "export", "status")
+	require.NoError(t, err)
+	assert.Contains(t, stdout, "blocked")
+	assert.Contains(t, stdout, "agentsview daemon restart")
+	assert.EqualValues(t, 1, calls.Load())
+}
+
+func stubExportDaemon(t *testing.T, dir string) func() {
+	t.Helper()
+	home := t.TempDir()
+	var child *exec.Cmd
+	stop := func() {
+		if child != nil && child.Process != nil {
+			_ = child.Process.Kill()
+			_ = child.Wait()
+			child = nil
+		}
+	}
+	stubStartBackgroundServeForTransport(t, func(ctx context.Context, cfg *config.Config, _ time.Duration, replace bool) (*DaemonRuntime, error) {
+		if replace {
+			return nil, errors.New("unexpected daemon replacement")
+		}
+		child = exec.CommandContext(ctx, os.Args[0], "-test.run=^TestExportDaemonHelper$")
+		child.Env = append(os.Environ(), "AGENTSVIEW_EXPORT_HELPER=1", "AGENTSVIEW_DATA_DIR="+dir, "HOME="+home, "XDG_CONFIG_HOME="+filepath.Join(home, "config"), "XDG_CACHE_HOME="+filepath.Join(home, "cache"))
+		if err := child.Start(); err != nil {
+			return nil, err
+		}
+		ticker := time.NewTicker(50 * time.Millisecond)
+		defer ticker.Stop()
+		for {
+			if rt := FindWritableDaemonRuntime(cfg.DataDir, cfg.AuthToken); rt != nil {
+				return rt, nil
+			}
+			select {
+			case <-ctx.Done():
+				return nil, ctx.Err()
+			case <-ticker.C:
+			}
+		}
+	})
+	t.Cleanup(stop)
+	return stop
+}
+
+func TestExportSessionsStartsRealWorker(t *testing.T) {
+	path := pendingExportArchive(t, false)
+	stubExportDaemon(t, filepath.Dir(path))
+	ctx, cancel := context.WithTimeout(t.Context(), 25*time.Second)
+	defer cancel()
+	out, done := exportWaitCommand(t, ctx, io.Discard)
+	require.NoError(t, <-done)
+	doc := decodeExportSessionsDocument(t, out.String())
+	require.Len(t, doc.Sessions, 2)
+	assert.Equal(t, "alpha", doc.Sessions[0].ProjectReference.DisplayLabel)
+	assert.NotEmpty(t, doc.Sessions[0].ProjectReference.ProjectKey)
+	database, err := db.OpenReadOnly(t.Context(), path)
+	require.NoError(t, err)
+	defer database.Close()
+	snapshots, err := database.ListSessionProjectIdentitySnapshots(t.Context())
+	require.NoError(t, err)
+	assert.Len(t, snapshots, 2)
+}
+
+func TestExportWaitAfterDaemonRestart(t *testing.T) {
+	for _, mode := range []string{"missing evidence", "completed evidence"} {
+		t.Run(mode, func(t *testing.T) { testExportFailureRecovery(t, mode, nil) })
+	}
+}
+
+func TestExportFailureSurvivesInterruptedDaemonStartup(t *testing.T) {
+	path := pendingExportArchive(t, false)
+	raw, err := sql.Open("sqlite3", path)
+	require.NoError(t, err)
+	_, err = raw.ExecContext(t.Context(), `INSERT INTO background_migrations (name, state, last_error) VALUES (?, 'failed', 'disk error')`, db.ProjectIdentityBackfillName)
+	require.NoError(t, err)
+	require.NoError(t, raw.Close())
+	database, err := openDBWithProgress(t.Context(), config.Config{DBPath: path, DataDir: filepath.Dir(path)}, nil)
+	require.NoError(t, err)
+	require.NoError(t, database.Close())
+	status, _, err := executeExportSessionsCommand(newRootCommand(), "export", "status")
+	require.NoError(t, err)
+	assert.Contains(t, status, "failed")
+	assert.Contains(t, status, "disk error")
+}
+
+func TestExportWaitDuringRestartBeforeWorkerStarts(t *testing.T) {
+	path := pendingExportArchive(t, false)
+	raw, err := sql.Open("sqlite3", path)
+	require.NoError(t, err)
+	_, err = raw.ExecContext(t.Context(), `INSERT INTO background_migrations (name, state, last_error, updated_at) VALUES (?, 'failed', 'disk error', strftime('%Y-%m-%dT%H:%M:%fZ', 'now', '-1 hour'))`, db.ProjectIdentityBackfillName)
+	require.NoError(t, err)
+	require.NoError(t, raw.Close())
+	dir := filepath.Dir(path)
+	writeLiveRuntime(t, dir, false)
+	ctx, cancel := context.WithTimeout(t.Context(), 15*time.Second)
+	defer cancel()
+	progress := make(chan struct{}, 1)
+	out, done := exportWaitCommand(t, ctx, exportProgressSignal(progress))
+	waitExportProgress(t, progress, done)
+	assert.Empty(t, out.String())
+	cancel()
+	require.ErrorIs(t, <-done, context.Canceled)
+}
+
+func TestExportLiveFailureReporting(t *testing.T) {
+	testExportFailureRecovery(t, "unrecordable failure", func(t *testing.T) {
+		t.Helper()
+		status, _, err := executeExportSessionsCommand(newRootCommand(), "export", "status")
+		require.NoError(t, err)
+		assert.Contains(t, status, "failed")
+		assert.Contains(t, status, "backfill writes blocked")
+		assert.Contains(t, status, "agentsview daemon restart")
+		assert.NotContains(t, status, "agentsview export status")
+		stdout, _, err := executeExportSessionsCommand(newRootCommand(), "export", "sessions")
+		require.ErrorContains(t, err, "backfill writes blocked")
+		assert.Contains(t, err.Error(), "agentsview daemon restart")
+		assert.Contains(t, err.Error(), "agentsview export status")
+		assert.Empty(t, stdout)
+	})
+}
+
+func testExportFailureRecovery(t *testing.T, mode string, verify func(*testing.T)) {
+	t.Helper()
+	path := pendingExportArchive(t, false)
+	dir := filepath.Dir(path)
+	if mode == "completed evidence" {
+		database, err := db.Open(t.Context(), path)
+		require.NoError(t, err)
+		engine := agentsync.NewEngine(t.Context(), database, agentsync.EngineConfig{Machine: "local"})
+		require.NoError(t, engine.BackfillProjectIdentitySnapshots(t.Context()))
+		engine.Close()
+		require.NoError(t, database.Close())
+	}
+	raw, err := sql.Open("sqlite3", path)
+	require.NoError(t, err)
+	defer raw.Close()
+	_, err = raw.ExecContext(t.Context(), `INSERT INTO background_migrations (name, state) VALUES ('session_project_identity_snapshots_v1', 'pending') ON CONFLICT(name) DO UPDATE SET state = 'pending'`)
+	require.NoError(t, err)
+	trigger := `CREATE TRIGGER fail_backfill BEFORE INSERT ON session_project_identity_snapshots BEGIN SELECT RAISE(FAIL, 'backfill blocked'); END`
+	switch mode {
+	case "completed evidence":
+		trigger = `CREATE TRIGGER fail_backfill BEFORE UPDATE ON background_migrations WHEN NEW.state = 'completed' BEGIN SELECT RAISE(FAIL, 'backfill blocked'); END`
+	case "unrecordable failure":
+		trigger = `CREATE TRIGGER fail_backfill BEFORE UPDATE ON background_migrations WHEN NEW.state IN ('running', 'failed') BEGIN SELECT RAISE(FAIL, 'backfill writes blocked'); END`
+	}
+	_, err = raw.ExecContext(t.Context(), trigger)
+	require.NoError(t, err)
+	stop := stubExportDaemon(t, dir)
+	cfg := config.Config{DataDir: dir}
+	_, err = startExportDaemon(t.Context(), &cfg)
+	require.NoError(t, err)
+	ctx, cancel := context.WithTimeout(t.Context(), 15*time.Second)
+	defer cancel()
+	out, done := exportWaitCommand(t, ctx, io.Discard)
+	err = <-done
+	require.ErrorContains(t, err, "agentsview daemon restart")
+	assert.Contains(t, err.Error(), "agentsview export status")
+	assert.Empty(t, out.String())
+	var state string
+	require.NoError(t, raw.QueryRowContext(t.Context(), `SELECT state FROM background_migrations WHERE name = 'session_project_identity_snapshots_v1'`).Scan(&state))
+	if mode != "unrecordable failure" {
+		require.Equal(t, "failed", state)
+	} else {
+		require.Equal(t, "pending", state)
+		assert.Contains(t, err.Error(), "backfill writes blocked")
+		verify(t)
+	}
+	stop()
+	_, err = raw.ExecContext(t.Context(), `DROP TRIGGER fail_backfill`)
+	require.NoError(t, err)
+	_, err = startExportDaemon(t.Context(), &cfg)
+	require.NoError(t, err)
+	out, done = exportWaitCommand(t, ctx, io.Discard)
+	require.NoError(t, <-done)
+	assert.Len(t, decodeExportSessionsDocument(t, out.String()).Sessions, 2)
+	status, _, err := executeExportSessionsCommand(newRootCommand(), "export", "status")
+	require.NoError(t, err)
+	assert.Contains(t, status, "completed")
+}
+
+func TestExportDaemonStartupCases(t *testing.T) {
+	t.Run("startup error", func(t *testing.T) {
+		dir := testDataDir(t)
+		failure := errors.New("launch failed")
+		stubStartBackgroundServeForTransport(t, func(context.Context, *config.Config, time.Duration, bool) (*DaemonRuntime, error) {
+			return nil, failure
+		})
+		cfg := config.Config{DataDir: dir}
+		_, err := startExportDaemon(t.Context(), &cfg)
+		assert.ErrorIs(t, err, failure)
+	})
+	t.Run("read-only mirror", func(t *testing.T) {
+		dir := testDataDir(t)
+		host, port := testPingServer(t)
+		writeDaemonRuntimeForTest(t, dir, host, port, "test", true)
+		started := false
+		stubStartBackgroundServeForTransport(t, func(_ context.Context, _ *config.Config, _ time.Duration, replace bool) (*DaemonRuntime, error) {
+			started = true
+			assert.False(t, replace)
+			return &DaemonRuntime{}, nil
+		})
+		cfg := config.Config{DataDir: dir}
+		rt, err := startExportDaemon(t.Context(), &cfg)
+		require.NoError(t, err)
+		require.NotNil(t, rt)
+		assert.True(t, started)
+	})
+	t.Run("autostart disabled", func(t *testing.T) {
+		dir := testDataDir(t)
+		host, port := testPingServer(t)
+		writeDaemonRuntimeForTest(t, dir, host, port, "test", true)
+		t.Setenv("AGENTSVIEW_NO_DAEMON", "1")
+		forbidStartBackgroundServeForTransport(t, "autostart disabled")
+		cfg := config.Config{DataDir: dir}
+		_, err := startExportDaemon(t.Context(), &cfg)
+		assert.ErrorContains(t, err, "agentsview daemon start")
+	})
+}
+
+func TestExportWaitRejectsIncompatibleDaemon(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		api  int
+	}{
+		{"older", daemonAPIVersion - 1},
+		{"newer", daemonAPIVersion + 1},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			path := pendingExportArchive(t, false)
+			writeLiveRuntime(t, filepath.Dir(path), false, withRuntimeVersion(tc.name), withRuntimeAPIVersion(tc.api))
+			forbidStartBackgroundServeForTransport(t, "incompatible daemon")
+			stdout, _, err := executeExportSessionsCommand(newRootCommand(), "export", "sessions", "--wait")
+			require.Error(t, err)
+			if tc.name == "older" {
+				assert.Contains(t, err.Error(), fmt.Sprintf("daemon API version %d", tc.api))
+				assert.Contains(t, err.Error(), "agentsview daemon restart")
+				assert.Contains(t, err.Error(), "agentsview export status")
+				assert.Contains(t, err.Error(), "agentsview export sessions --wait")
+				assert.NotContains(t, err.Error(), "pg push --watch")
+			} else {
+				assert.Contains(t, err.Error(), "Upgrade this agentsview install")
+				assert.NotContains(t, err.Error(), "daemon restart")
+			}
+			assert.Empty(t, stdout)
+		})
+	}
+}
+
+func TestExportWaitRejectsNewerBackfillState(t *testing.T) {
+	path := pendingExportArchive(t, false)
+	raw, err := sql.Open("sqlite3", path)
+	require.NoError(t, err)
+	defer raw.Close()
+	_, err = raw.ExecContext(t.Context(), `INSERT INTO background_migrations (name, state) VALUES ('session_project_identity_snapshots_v1', 'future_state')`)
+	require.NoError(t, err)
+	host, port := testPingServer(t)
+	writeDaemonRuntimeForTest(t, filepath.Dir(path), host, port, "test", false)
+	stdout, _, err := executeExportSessionsCommand(newRootCommand(), "export", "sessions", "--wait")
+	require.ErrorContains(t, err, "future_state")
+	require.ErrorContains(t, err, "agentsview export status")
+	assert.Empty(t, stdout)
+}
+
+func TestExportWaitCursorResetSuppressesStubStartupProgress(t *testing.T) {
+	path := pendingExportArchive(t, false)
+	dir := filepath.Dir(path)
+	host, port := testPingServer(t)
+	started := false
+	polled := make(chan struct{})
+	stubStartBackgroundServeForTransport(t, func(ctx context.Context, cfg *config.Config, _ time.Duration, replace bool) (*DaemonRuntime, error) {
+		started = true
+		if replace {
+			return nil, errors.New("unexpected replacement")
+		}
+		fmt.Fprintln(daemonProgressWriter(ctx), "starting test daemon")
+		writeDaemonRuntimeForTest(t, dir, host, port, "test", false)
+		close(polled)
+		return FindWritableDaemonRuntime(cfg.DataDir, cfg.AuthToken), nil
+	})
+	ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
+	defer cancel()
+	workerDone := make(chan error, 1)
+	go func() {
+		select {
+		case <-ctx.Done():
+			workerDone <- ctx.Err()
+			return
+		case <-polled:
+		}
+		workerDone <- backfillExportArchive(ctx, path)
+	}()
+	root := newRootCommand()
+	root.SetContext(ctx)
+	var stdout, stderr string
+	var err error
+	startupOutput := captureStderr(t, func() {
+		stdout, stderr, err = executeExportSessionsCommand(root, "export", "sessions", "--wait", "--cursor", "invalid")
+	})
+	assert.True(t, started)
+	assert.Empty(t, startupOutput)
+	require.NoError(t, <-workerDone)
+	require.Error(t, err)
+	assert.Equal(t, sessionExportCursorResetExitCode, exitCodeFromError(err))
+	assert.Empty(t, stdout)
+	var doc exportSessionsDocument
+	require.NoError(t, json.Unmarshal([]byte(stderr), &doc))
+	assert.Equal(t, "cursor_reset", doc.Error)
+}
+
+func TestExportSessionsWaitReadyDoesNotStartDaemon(t *testing.T) {
+	seedExportSessionsArchive(t)
+	forbidStartBackgroundServeForTransport(t, "ready export must not start a daemon")
+	stdout, stderr, err := executeExportSessionsCommand(newRootCommand(), "export", "sessions", "--wait")
+	require.NoError(t, err)
+	assert.Empty(t, stderr)
+	assert.Len(t, decodeExportSessionsDocument(t, stdout).Sessions, 2)
+	cursor := firstExportSessionsCursor(t)
+	stdout, stderr, err = executeExportSessionsCommand(newRootCommand(), "export", "sessions", "--cursor", cursor, "--wait")
+	require.NoError(t, err)
+	assert.Empty(t, stderr)
+	doc := decodeExportSessionsDocument(t, stdout)
+	require.Len(t, doc.Sessions, 1)
+	assert.Equal(t, "alpha-old", doc.Sessions[0].ID)
+}
+
+func TestExportDaemonHelper(t *testing.T) {
+	if os.Getenv("AGENTSVIEW_EXPORT_HELPER") != "1" {
+		return
+	}
+	dir := os.Getenv("AGENTSVIEW_DATA_DIR")
+	cfg := config.Config{Host: "127.0.0.1", Port: 0, DataDir: dir, DBPath: filepath.Join(dir, "sessions.db"), NoSync: true}
+	runServe(t.Context(), cfg, serveOptions{}, 0)
+}
+
+func TestExportSessionsFailedBackfillDoesNotStartDaemon(t *testing.T) {
+	path := pendingExportArchive(t, false)
+	raw, err := sql.Open("sqlite3", path)
+	require.NoError(t, err)
+	_, err = raw.ExecContext(t.Context(), `INSERT INTO background_migrations (name, state, total_items, completed_items, last_error) VALUES ('session_project_identity_snapshots_v1', 'failed', 1, 0, 'metadata unavailable')`)
+	require.NoError(t, err)
+	require.NoError(t, raw.Close())
+	forbidStartBackgroundServeForTransport(t, "failed backfill must not start a daemon")
+	stdout, _, err := executeExportSessionsCommand(newRootCommand(), "export", "sessions", "--wait")
+	require.ErrorContains(t, err, "project identification failed: metadata unavailable; run `agentsview daemon restart`, then check `agentsview export status`")
+	assert.Empty(t, stdout)
+}
+
+func TestExportStatusReportsBackfillFailure(t *testing.T) {
+	t.Run("recorded failure", func(t *testing.T) {
+		dataDir := testDataDir(t)
+		dbPath := filepath.Join(dataDir, "sessions.db")
+		database := dbtest.OpenTestDBAt(t, dbPath)
+		raw, err := sql.Open("sqlite3", dbPath)
+		require.NoError(t, err)
+		_, err = raw.ExecContext(t.Context(), `
 		INSERT INTO background_migrations (
 			name, state, total_items, completed_items, last_error
 		) VALUES (
@@ -712,18 +1232,32 @@ func TestExportStatusReportsBackfillFailure(t *testing.T) {
 			'git metadata unavailable'
 		)
 	`)
-	require.NoError(t, err)
-	require.NoError(t, raw.Close())
-	require.NoError(t, database.Close())
+		require.NoError(t, err)
+		require.NoError(t, raw.Close())
+		require.NoError(t, database.Close())
 
-	stdout, stderr, err := executeExportSessionsCommand(
-		newRootCommand(), "export", "status",
-	)
-	require.NoError(t, err)
-	assert.Empty(t, stderr)
-	assert.Equal(t, "project identity evidence: failed (1/3)\n"+
-		"last error: git metadata unavailable\n",
-		stdout)
+		stdout, stderr, err := executeExportSessionsCommand(
+			newRootCommand(), "export", "status",
+		)
+		require.NoError(t, err)
+		assert.Empty(t, stderr)
+		assert.Equal(t, "project identity evidence: failed (1/3)\n"+
+			"last error: git metadata unavailable\nrun `agentsview daemon restart`\n",
+			stdout)
+	})
+	t.Run("restart before worker starts", func(t *testing.T) {
+		path := pendingExportArchive(t, false)
+		raw, err := sql.Open("sqlite3", path)
+		require.NoError(t, err)
+		_, err = raw.ExecContext(t.Context(), `INSERT INTO background_migrations (name, state, last_error, updated_at) VALUES (?, 'failed', 'disk error', strftime('%Y-%m-%dT%H:%M:%fZ', 'now', '-1 hour'))`, db.ProjectIdentityBackfillName)
+		require.NoError(t, err)
+		require.NoError(t, raw.Close())
+		writeLiveRuntime(t, filepath.Dir(path), false)
+		status, _, err := executeExportSessionsCommand(newRootCommand(), "export", "status")
+		require.NoError(t, err)
+		assert.Contains(t, status, "pending")
+		assert.NotContains(t, status, "disk error")
+	})
 }
 
 func TestExportSessionsDoesNotUpgradeUnrelatedReadOnlyOpenFailure(t *testing.T) {

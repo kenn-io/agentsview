@@ -1,0 +1,4 @@
+{"payload":{"cwd":"/workspace/code/app","id":"22222222-2222-4222-8222-222222222222","originator":"user"},"timestamp":"2024-01-01T10:00:00Z","type":"session_meta"}
+{"payload":{"content":[{"text":"Run the tests","type":"input_text"}],"role":"user"},"timestamp":"2024-01-01T10:00:01Z","type":"response_item"}
+{"payload":{"call_id":"call_test","name":"shell_command","summary":"Running tests","type":"function_call"},"timestamp":"2024-01-01T10:00:05Z","type":"response_item"}
+{"payload":{"call_id":"call_test","name":"apply_patch","summary":"Fixing typo","type":"function_call"},"timestamp":"2024-01-01T10:05:00Z","type":"response_item"}

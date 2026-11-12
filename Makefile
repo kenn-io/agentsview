@@ -404,6 +404,7 @@ bench-backends: pricing-snapshot ensure-embed-dir
 # run this target before and after a change, then compare the outputs with
 # `go run ./cmd/benchgate -old old.txt -new new.txt`.
 BENCH_GATE_PACKAGES ?= ./internal/sync ./internal/db ./internal/secrets \
+	./internal/requestsign \
 	./internal/signals ./internal/rawcheckpoint
 # Count must stay >= 5: benchgate's time gate needs at least 5
 # candidate samples for its significance test. Every -count run

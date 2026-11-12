@@ -485,3 +485,12 @@ function gradeRank(grade: string): number {
   const idx = order.indexOf(grade);
   return idx === -1 ? order.length : idx;
 }
+
+/** A day on the Quality page, such as "Mar 4", in the browser's locale. */
+export function formatQualityDate(date: string): string {
+  const d = new Date(date + "T00:00:00");
+  return d.toLocaleDateString(undefined, {
+    month: "short",
+    day: "numeric",
+  });
+}
