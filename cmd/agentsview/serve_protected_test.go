@@ -30,7 +30,7 @@ func TestServeLifetimesApplyProtectedPathSetting(t *testing.T) {
 	for _, tc := range []struct {
 		allow bool
 		want  string
-	}{{true, "discovered-name"}, {false, "example-skill"}} {
+	}{{true, "discovered-name"}, {false, "example-skill"}, {true, "discovered-name"}} {
 		cfg.ScanProtectedPaths = tc.allow
 		ctx, cancel := context.WithCancel(t.Context())
 		done := make(chan error, 1)

@@ -441,7 +441,7 @@ func TestTerminationDuringRestartStopsServer(t *testing.T) {
 	stallRestartSettingsRequest(t, rt.Port, "")
 	restartTestSend(t, http.MethodPost, base+"/api/v1/daemon/restart", "", "", http.StatusOK)
 	require.Eventually(t, func() bool {
-		probe, err := net.DialTimeout("tcp", fmt.Sprintf("127.0.0.1:%d", rt.Port), 50*time.Millisecond)
+		probe, err := (&net.Dialer{Timeout: time.Second}).DialContext(t.Context(), "tcp", fmt.Sprintf("127.0.0.1:%d", rt.Port))
 		if err != nil {
 			return true
 		}
@@ -453,7 +453,7 @@ func TestTerminationDuringRestartStopsServer(t *testing.T) {
 	case err := <-done:
 		require.NoError(t, err)
 	case <-time.After(20 * time.Second):
-		t.Fatal("server started again after termination during restart")
+		require.FailNow(t, "server started again after termination during restart")
 	}
 	assert.Empty(t, restartTestInstance(t, base, ""))
 	lock, acquired := acquireBackgroundLaunchLock(dataDir)

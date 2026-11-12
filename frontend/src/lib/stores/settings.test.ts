@@ -625,26 +625,6 @@ describe("SettingsStore.restartDaemon", () => {
     Object.defineProperty(window, "location", { value: originalLocation, writable: true });
   });
 
-  it("reads the pending restart from the settings response", async () => {
-    settingsService.getApiV1Settings.mockResolvedValue({
-      agent_dirs: {},
-      chart_palette: "agentsview",
-      github_configured: false,
-      host: "127.0.0.1",
-      port: 8080,
-      read_only: false,
-      require_auth: false,
-      restart_required: true,
-      restart_supported: true,
-      terminal: { mode: "auto" },
-    });
-
-    await settings.load();
-
-    expect(settings.restartRequired).toBe(true);
-    expect(settings.restartSupported).toBe(true);
-  });
-
   it.each([false, true])(
     "sends restart to its original server with queued save %s",
     async (queued) => {

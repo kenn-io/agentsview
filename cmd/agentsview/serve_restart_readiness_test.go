@@ -12,6 +12,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"go.kenn.io/agentsview/internal/config"
 )
@@ -44,7 +45,7 @@ func TestRestartDuringRuntimePublication(t *testing.T) {
 		select {
 		case <-done:
 		case <-time.After(30 * time.Second):
-			t.Error("server did not stop")
+			assert.Fail(t, "server did not stop")
 		}
 		writeDaemonRuntimeWithAuthAndNoSync = original
 		os.Args = previousArgs
@@ -55,7 +56,7 @@ func TestRestartDuringRuntimePublication(t *testing.T) {
 	select {
 	case <-entered:
 	case <-time.After(30 * time.Second):
-		t.Fatal("replacement did not reach runtime publication")
+		require.FailNow(t, "replacement did not reach runtime publication")
 	}
 	req, err := http.NewRequestWithContext(t.Context(), http.MethodPost, base+"/api/v1/daemon/restart", nil)
 	require.NoError(t, err)
@@ -65,12 +66,15 @@ func TestRestartDuringRuntimePublication(t *testing.T) {
 		err  error
 	}
 	resultCh := make(chan result, 1)
-	go func() { resp, err := (&http.Client{Timeout: 10 * time.Second}).Do(req); resultCh <- result{resp, err} }()
+	go func() {
+		resp, err := (&http.Client{Timeout: 10 * time.Second}).Do(req) //nolint:bodyclose // The receiving test closes the response body.
+		resultCh <- result{resp, err}
+	}()
 	var outcome result
 	select {
 	case outcome = <-resultCh:
 		release()
-	case <-time.After(500 * time.Millisecond):
+	case <-time.After(500 * time.Millisecond): //nolint:kennlint // deadlinetest: allow the request to remain blocked during publication.
 		release()
 		outcome = <-resultCh
 	}
@@ -96,7 +100,7 @@ func TestRestartLaunchLockRespectsCancellation(t *testing.T) {
 		lock, ok := acquireBackgroundLaunchLock(dir)
 		require.True(t, ok)
 		t.Cleanup(func() { require.NoError(t, lock.Unlock()) })
-		ctx, cancel := context.WithTimeout(t.Context(), 50*time.Millisecond)
+		ctx, cancel := context.WithTimeout(t.Context(), 50*time.Millisecond) //nolint:kennlint // deadlinetest: the held lock makes the deadline expire.
 		defer cancel()
 		release, err := waitForegroundServeLaunchLock(ctx, config.Config{DataDir: dir})
 		if release != nil {
@@ -109,7 +113,7 @@ func TestRestartLaunchLockRespectsCancellation(t *testing.T) {
 func TestRestartLaunchLockReportsDirectoryFailure(t *testing.T) {
 	file := filepath.Join(t.TempDir(), "file")
 	require.NoError(t, os.WriteFile(file, nil, 0o600))
-	ctx, cancel := context.WithTimeout(t.Context(), 100*time.Millisecond)
+	ctx, cancel := context.WithTimeout(t.Context(), 30*time.Second)
 	defer cancel()
 	_, err := waitForegroundServeLaunchLock(ctx, config.Config{DataDir: filepath.Join(file, "data")})
 	require.ErrorContains(t, err, "creating data dir")

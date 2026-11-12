@@ -399,12 +399,19 @@ func skillNameFromPath(ctx context.Context, path, baseDir string) string {
 	}
 	resolved, readable := resolveSkillPath(path, baseDir)
 	clean := filepath.Clean(resolved)
+	// A cached frontmatter name must not outlive permission to probe the path.
+	if readable && !defaultProbeMetadataPath(clean) {
+		if skillPathIsBare(path) {
+			return ""
+		}
+		return skillNameFromParentDir(clean)
+	}
 	if cached, ok := skillNameByPath.Load(clean); ok {
 		return cached.(string)
 	}
 
 	var name string
-	if readable && defaultProbeMetadataPath(clean) {
+	if readable {
 		name = skillNameFromFrontmatter(clean)
 	}
 	if name == "" && !skillPathIsBare(path) {
