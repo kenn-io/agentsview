@@ -109,7 +109,7 @@
 
   let totalItems = $derived(
     showSearchResults
-      ? searchStore.results.length
+      ? (searchStore.isSearching ? 0 : searchStore.results.length)
       : recentSessions.length,
   );
 

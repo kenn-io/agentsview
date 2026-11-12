@@ -667,8 +667,9 @@ describe("CommandPalette", () => {
     unmount(component);
   });
 
-  it("keeps the first result selected after ArrowDown on an empty list", async () => {
+  it("keeps the first result selected after ArrowDown while stale results are hidden", async () => {
     mockSearchStore.isSearching = true;
+    mockSearchStore.results = [makeSearchResult(), makeSearchResult({ session_id: "second" })];
     const component = mount(CommandPalette, { target: document.body });
     await enterSearchQuery();
     const input = document.querySelector<HTMLInputElement>(".palette-input")!;

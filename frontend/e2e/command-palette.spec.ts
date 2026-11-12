@@ -113,3 +113,36 @@ test("Retry keeps focus while the search loads", async ({ page }) => {
   await input.press("Enter");
   await expect(page).toHaveURL(/\/sessions\/first/);
 });
+
+test("automatic recovery selects the first result after a populated search", async ({ page }) => {
+  const results = [
+    { session_id: "first", project: "project", agent: "codex", ordinal: 0, snippet: "first" },
+    { session_id: "second", project: "project", agent: "codex", ordinal: 0, snippet: "second" },
+  ];
+  let attempts = 0;
+  let release: () => void = () => {};
+  const held = new Promise<void>((resolve) => (release = resolve));
+  await page.route("**/api/v1/search?**", async (route) => {
+    if (new URL(route.request().url()).searchParams.get("q") === "initial search") {
+      await route.fulfill({ json: { results } });
+    } else if (++attempts === 1) {
+      await held;
+      await route.fulfill({ status: 503 });
+    } else {
+      await route.fulfill({ json: { results: [results[0]] } });
+    }
+  });
+  await page.goto("/usage");
+  await openSearch(page, "initial search");
+  await expect(page.locator(".palette-item")).toHaveCount(2);
+  const input = page.locator(".palette-input");
+  await input.fill("recovering search");
+  await expect(page.locator(".palette-loading")).toBeVisible();
+  await input.press("ArrowDown");
+  release();
+  await expect(page.locator(".palette-item")).toHaveCount(1);
+  await expect(page.locator(".palette-item").first()).toHaveClass(/selected/);
+  await input.press("Enter");
+  await expect(page).toHaveURL(/\/sessions\/first/);
+  expect(attempts).toBe(2);
+});
