@@ -96,7 +96,7 @@ func materializePi(ctx context.Context, cfg config.Config, session *db.Session, 
 
 func findPiSource(ctx context.Context, cfg config.Config, session *db.Session, stored, id string) (string, []byte, error) {
 	roots := configuredRoots(cfg, session, parser.AgentPi)
-	provider, ok := parser.NewProvider(parser.AgentPi, parser.ProviderConfig{Roots: roots, Machine: cfg.InstallationID, SourceMachines: cfg.SourceMachines[parser.AgentPi]})
+	provider, ok := parser.NewProvider(parser.AgentPi, parser.ProviderConfig{Roots: localRoots(cfg, parser.AgentPi)})
 	if !ok {
 		return "", nil, errors.New("native Pi source provider unavailable")
 	}
@@ -109,23 +109,17 @@ func findPiSource(ctx context.Context, cfg config.Config, session *db.Session, s
 		return ""
 	}
 	candidates := parser.NewPiSourceSet(parser.AgentPi, roots)
-	name, boundRoot, err := recordedLocalSource(ctx, cfg, parser.AgentPi, stored)
-	if err == nil && name == "" {
-		name, err = uniqueLocalSource(ctx, provider, stored, candidates.DiscoverEach, func(name string) (bool, error) {
-			err := checkPiHeaderFile(ctx, name, id)
-			if errors.Is(err, errPiIdentity) || errors.Is(err, errPiNotSession) {
-				return false, nil
-			}
-			return err == nil, err
-		})
-	}
+	name, err := uniqueLocalSource(ctx, provider, stored, candidates.DiscoverEach, func(name string) (bool, error) {
+		err := checkPiHeaderFile(ctx, name, id)
+		if errors.Is(err, errPiIdentity) || errors.Is(err, errPiNotSession) {
+			return false, nil
+		}
+		return err == nil, err
+	})
 	if err != nil {
 		return "", nil, err
 	}
-	boundary := boundRoot
-	if boundary == "" {
-		boundary = rootFor(name)
-	}
+	boundary := rootFor(name)
 	if boundary == "" {
 		// The provider selected a path under a configured root that follows an
 		// external link. Confine this single-file read to its resolved directory.
@@ -251,11 +245,12 @@ func relocatePiHeader(ctx context.Context, data []byte, id, cwd string) ([]byte,
 		if err != nil {
 			return nil, err
 		}
+		name := key.String()
 		value, err := decoder.ReadValue()
 		if err != nil {
 			return nil, err
 		}
-		if key.String() == "cwd" {
+		if name == "cwd" {
 			count++
 			end = int(decoder.InputOffset())
 			start = end - len(value)

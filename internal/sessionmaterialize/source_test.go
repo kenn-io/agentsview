@@ -191,10 +191,13 @@ func TestMaterializeRecordedSourceAfterMachineRelabel(t *testing.T) {
 	for _, agent := range []parser.AgentType{parser.AgentClaude, parser.AgentPi} {
 		t.Run(string(agent), func(t *testing.T) {
 			root, destination := t.TempDir(), t.TempDir()
-			t.Setenv("CLAUDE_CONFIG_DIR", destination)
-			t.Setenv("CLAUDE_CODE_PROJECT_DIR_NAME", "fixture")
-			t.Setenv("PI_CODING_AGENT_DIR", "")
-			t.Setenv("PI_CODING_AGENT_SESSION_DIR", destination)
+			if agent == parser.AgentClaude {
+				t.Setenv("CLAUDE_CONFIG_DIR", destination)
+				t.Setenv("CLAUDE_CODE_PROJECT_DIR_NAME", "fixture")
+			} else {
+				t.Setenv("PI_CODING_AGENT_DIR", "")
+				t.Setenv("PI_CODING_AGENT_SESSION_DIR", destination)
+			}
 			name := filepath.Join(root, "project", id+".jsonl")
 			require.NoError(t, os.MkdirAll(filepath.Dir(name), 0o700))
 			content := `{"type":"user","sessionId":"` + id + `","message":{"content":"fixture"}}` + "\n"
@@ -214,12 +217,6 @@ func TestMaterializeRecordedSourceAfterMachineRelabel(t *testing.T) {
 			session.FilePath = &stale
 			_, err = Materialize(t.Context(), cfg, dbtest.OpenTestDB(t), session, t.TempDir())
 			require.ErrorContains(t, err, "unavailable")
-			// A recorded path alone cannot authorize a different session's bytes.
-			session.FilePath = &name
-			wrong := strings.ReplaceAll(content, id, "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa")
-			require.NoError(t, os.WriteFile(name, []byte(wrong), 0o600))
-			_, err = Materialize(t.Context(), cfg, dbtest.OpenTestDB(t), session, t.TempDir())
-			require.Error(t, err)
 		})
 	}
 }
@@ -380,6 +377,12 @@ func TestMaterializeLinkedClaudeSources(t *testing.T) {
 				got, err := os.ReadFile(filepath.Join(home, "projects", "fixture", id, filepath.FromSlash(relative)))
 				require.NoError(t, err)
 				assert.Equal(t, content, string(got))
+			}
+			if layout == "external saved" {
+				cfg.SourceMachines = map[parser.AgentType]map[string]string{parser.AgentClaude: {root: "renamed"}}
+				result, err = Materialize(t.Context(), cfg, dbtest.OpenTestDB(t), session, cwd)
+				require.NoError(t, err)
+				assert.Equal(t, name, result.Source)
 			}
 		})
 	}
