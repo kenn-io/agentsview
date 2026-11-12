@@ -43,6 +43,12 @@ The latest release is
   a goroutine dump, when its reads only overlap. The warning now appears only
   when three checkpoints in a row stop at the same point, which means one read
   stayed open across all of them.
+- AgentsView Desktop on Windows can install in-app updates again. Since 0.43.0
+  the update download is Deflate-compressed, which the app could not unpack, so
+  it restarted on the old version and left an empty
+  `%TEMP%\AgentsView-<version>-updater-*` folder. Copies on an earlier version
+  can still fail this way. If an update does not install, quit AgentsView and
+  run the release's `AgentsView_<version>_x64-setup.exe`.
 - Semantic search builds on Kit's built-in local embeddings server no longer
   fail on every attempt with `embed request failed`. The built-in server runs
   the model on the CPU, so it now defaults to 8 inputs per request, one request
