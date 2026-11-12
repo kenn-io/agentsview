@@ -103,6 +103,47 @@ func TestDailyUsageKeptWriteDuringRead(t *testing.T) {
 	assert.EqualValues(t, 2, prepares.Load())
 }
 
+func TestDailyUsageKeptSharedWindowAfterWrite(t *testing.T) {
+	database := testDB(t)
+	seedLiveWriteSession(t, database, "reported", "project", "2026-08-10T09:00:00Z", 0, 10)
+	var prepares atomic.Int32
+	database.SetUsageWindowPrepareForTest(func(context.Context) { prepares.Add(1) })
+	ctx := WithUsageWindowMemo(t.Context())
+	filter := UsageFilter{From: "2026-08-10", To: "2026-08-10", Timezone: "UTC", Breakdowns: true, PairwiseSides: true}
+	_, err := database.GetDailyUsage(ctx, filter)
+	require.NoError(t, err)
+	filter.Breakdowns, filter.PairwiseSides, filter.Model = false, false, "model-a"
+	_, err = database.GetDailyUsage(ctx, filter)
+	require.NoError(t, err)
+	assert.EqualValues(t, 1, prepares.Load())
+	appendLiveWriteMessage(t, database, "reported", "2026-08-10T10:00:00Z", 1, 7)
+	shared, err := database.GetDailyUsage(ctx, filter)
+	require.NoError(t, err)
+	assert.Equal(t, 17, shared.Totals.InputTokens)
+	got, err := database.GetDailyUsage(t.Context(), filter)
+	require.NoError(t, err)
+	assert.Equal(t, 17, got.Totals.InputTokens)
+	assert.EqualValues(t, 2, prepares.Load())
+}
+
+func TestDailyUsageKeptSharedWindowAfterPricingChange(t *testing.T) {
+	database := testDB(t)
+	seedLiveWriteSession(t, database, "reported", "project", "2026-08-10T09:00:00Z", 0, 1000000)
+	database.SetCustomPricing(map[string]config.CustomModelRate{"model-a": {InputMicrodollarsPerMTok: 1000000}})
+	ctx := WithUsageWindowMemo(t.Context())
+	filter := UsageFilter{From: "2026-08-10", To: "2026-08-10", Timezone: "UTC", Breakdowns: true, PairwiseSides: true}
+	_, err := database.GetDailyUsage(ctx, filter)
+	require.NoError(t, err)
+	database.SetCustomPricing(map[string]config.CustomModelRate{"model-a": {InputMicrodollarsPerMTok: 2000000}})
+	filter.Breakdowns, filter.PairwiseSides, filter.Model = false, false, "model-a"
+	shared, err := database.GetDailyUsage(ctx, filter)
+	require.NoError(t, err)
+	assert.EqualValues(t, 2000000, shared.Totals.TotalCost.Microdollars)
+	got, err := database.GetDailyUsage(t.Context(), filter)
+	require.NoError(t, err)
+	assert.EqualValues(t, 2000000, got.Totals.TotalCost.Microdollars)
+}
+
 func TestDailyUsageKeptMovingClockBypass(t *testing.T) {
 	database := testDB(t)
 	var prepares atomic.Int32
