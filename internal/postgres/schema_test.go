@@ -660,6 +660,7 @@ func TestEnsureSchemaScrubsProjectIdentityGitRemoteCredentials(t *testing.T) {
 		"source_worktree_project_mappings":                true,
 		"source_worktree_project_mapping_scopes":          true,
 		"cursor_usage_events":                             true,
+		"rate_limit_snapshots":                            true,
 		"friction_findings":                               true,
 		"friction_digests":                                true,
 		"friction_digest_sessions":                        true,
@@ -669,8 +670,9 @@ func TestEnsureSchemaScrubsProjectIdentityGitRemoteCredentials(t *testing.T) {
 		"diagnostic_events":                               true,
 	}
 	state.existingIndexes = map[string]bool{
-		"idx_cursor_usage_events_dedup":   true,
-		"idx_tool_result_events_terminal": true,
+		"idx_cursor_usage_events_dedup":     true,
+		"idx_rate_limit_snapshots_identity": true,
+		"idx_tool_result_events_terminal":   true,
 	}
 	state.syncMetadataKeys = map[string]bool{
 		sourceCurationBackfillMetadataKey: true,
