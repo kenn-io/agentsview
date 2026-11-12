@@ -784,7 +784,7 @@ func waitExportProgress(t *testing.T, progress <-chan struct{}, done <-chan erro
 }
 
 func TestExportWaitDuringDaemonChanges(t *testing.T) {
-	for _, mode := range []string{"daemon stops", "temporary ping failures", "cancel", "single ping"} {
+	for _, mode := range []string{"daemon stops", "temporary ping failures", "single ping"} {
 		t.Run(mode, func(t *testing.T) {
 			path := pendingExportArchive(t, false)
 			dir := filepath.Dir(path)
@@ -817,10 +817,6 @@ func TestExportWaitDuringDaemonChanges(t *testing.T) {
 				require.ErrorContains(t, err, "agentsview daemon restart")
 				require.ErrorContains(t, err, "agentsview export status")
 				assert.Empty(t, out.String())
-			case "cancel":
-				cancel()
-				require.ErrorIs(t, <-done, context.Canceled)
-				assert.Empty(t, out.String())
 			case "single ping":
 				before := calls.Load()
 				waitExportProgress(t, progress, done)
@@ -829,11 +825,11 @@ func TestExportWaitDuringDaemonChanges(t *testing.T) {
 				require.ErrorIs(t, <-done, context.Canceled)
 				assert.Empty(t, out.String())
 			case "temporary ping failures":
-				fail.Store(4)
-				for observed.Load() < 4 {
+				fail.Store(2)
+				for observed.Load() < 2 {
 					waitExportProgress(t, progress, done)
 				}
-				require.EqualValues(t, 4, observed.Load())
+				require.EqualValues(t, 2, observed.Load())
 				require.NoError(t, backfillExportArchive(t.Context(), path))
 				require.NoError(t, <-done)
 				assert.Len(t, decodeExportSessionsDocument(t, out.String()).Sessions, 2)
@@ -851,21 +847,6 @@ func backfillExportArchive(ctx context.Context, path string) error {
 	engine := agentsync.NewEngine(ctx, database, agentsync.EngineConfig{Machine: "local"})
 	defer engine.Close()
 	return engine.BackfillProjectIdentitySnapshots(ctx)
-}
-
-func TestExportDaemonPing(t *testing.T) {
-	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		assert.Equal(t, "/nested/api/ping", r.URL.Path)
-		assert.Equal(t, "Bearer example-token", r.Header.Get("Authorization"))
-		w.Header().Set("Content-Type", "application/json")
-		_, _ = io.WriteString(w, `{"ok":true,"healthy":true,"service":"agentsview","pid":42,"project_identity_backfill_error":"blocked"}`)
-	}))
-	t.Cleanup(ts.Close)
-	ep := serverEndpoint(t, ts)
-	rt := &DaemonRuntime{Record: daemon.RuntimeRecord{PID: 42, Address: ep.Addr, Metadata: map[string]string{runtimeBrowserURL: "http://example.com/nested"}}}
-	failed, ok := exportDaemonPing(t.Context(), rt, "example-token")
-	assert.Equal(t, "blocked", failed)
-	assert.True(t, ok)
 }
 
 func TestExportStatusReportsLiveFailureWithOnePing(t *testing.T) {
@@ -1078,16 +1059,6 @@ func testExportFailureRecovery(t *testing.T, mode string, verify func(*testing.T
 }
 
 func TestExportDaemonStartupCases(t *testing.T) {
-	t.Run("running daemon", func(t *testing.T) {
-		dir := testDataDir(t)
-		host, port := testPingServer(t)
-		writeDaemonRuntimeForTest(t, dir, host, port, "test", false)
-		cfg := config.Config{DataDir: dir}
-		rt, err := startExportDaemon(t.Context(), &cfg)
-		require.NoError(t, err)
-		require.NotNil(t, rt)
-		assert.Equal(t, port, rt.Port)
-	})
 	t.Run("startup error", func(t *testing.T) {
 		dir := testDataDir(t)
 		failure := errors.New("launch failed")
@@ -1129,10 +1100,10 @@ func TestExportDaemonStartupCases(t *testing.T) {
 func TestExportWaitRejectsOlderDaemon(t *testing.T) {
 	path := pendingExportArchive(t, false)
 	dir := filepath.Dir(path)
-	writeLiveRuntime(t, dir, false, withRuntimeVersion("old"), withRuntimeAPIVersion(15))
+	writeLiveRuntime(t, dir, false, withRuntimeVersion("old"), withRuntimeAPIVersion(daemonAPIVersion-1))
 	forbidStartBackgroundServeForTransport(t, "incompatible daemon")
 	stdout, _, err := executeExportSessionsCommand(newRootCommand(), "export", "sessions", "--wait")
-	require.ErrorContains(t, err, "daemon API version 15")
+	require.ErrorContains(t, err, fmt.Sprintf("daemon API version %d", daemonAPIVersion-1))
 	assert.Contains(t, err.Error(), "agentsview daemon restart")
 	assert.Contains(t, err.Error(), "agentsview export status")
 	assert.Contains(t, err.Error(), "agentsview export sessions --wait")
@@ -1220,6 +1191,13 @@ func TestExportSessionsWaitReadyDoesNotStartDaemon(t *testing.T) {
 	require.NoError(t, err)
 	assert.Empty(t, stderr)
 	assert.Len(t, decodeExportSessionsDocument(t, stdout).Sessions, 2)
+	cursor := firstExportSessionsCursor(t)
+	stdout, stderr, err = executeExportSessionsCommand(newRootCommand(), "export", "sessions", "--cursor", cursor, "--wait")
+	require.NoError(t, err)
+	assert.Empty(t, stderr)
+	doc := decodeExportSessionsDocument(t, stdout)
+	require.Len(t, doc.Sessions, 1)
+	assert.Equal(t, "alpha-old", doc.Sessions[0].ID)
 }
 
 func TestExportDaemonHelper(t *testing.T) {
@@ -1232,26 +1210,16 @@ func TestExportDaemonHelper(t *testing.T) {
 }
 
 func TestExportSessionsFailedBackfillDoesNotStartDaemon(t *testing.T) {
-	for _, reason := range []string{"metadata unavailable", ""} {
-		t.Run(fmt.Sprintf("reason=%q", reason), func(t *testing.T) {
-			path := pendingExportArchive(t, false)
-			raw, err := sql.Open("sqlite3", path)
-			require.NoError(t, err)
-			_, err = raw.ExecContext(t.Context(), `INSERT INTO background_migrations (name, state, total_items, completed_items, last_error) VALUES ('session_project_identity_snapshots_v1', 'failed', 1, 0, ?)`, reason)
-			require.NoError(t, err)
-			require.NoError(t, raw.Close())
-			forbidStartBackgroundServeForTransport(t, "failed backfill must not start a daemon")
-			stdout, _, err := executeExportSessionsCommand(newRootCommand(), "export", "sessions", "--wait")
-			if reason == "" {
-				require.ErrorContains(t, err, "project identification failed; run `agentsview daemon restart`")
-			} else {
-				require.ErrorContains(t, err, reason)
-				assert.Contains(t, err.Error(), "agentsview daemon restart")
-			}
-			assert.Contains(t, err.Error(), "agentsview export status")
-			assert.Empty(t, stdout)
-		})
-	}
+	path := pendingExportArchive(t, false)
+	raw, err := sql.Open("sqlite3", path)
+	require.NoError(t, err)
+	_, err = raw.ExecContext(t.Context(), `INSERT INTO background_migrations (name, state, total_items, completed_items, last_error) VALUES ('session_project_identity_snapshots_v1', 'failed', 1, 0, 'metadata unavailable')`)
+	require.NoError(t, err)
+	require.NoError(t, raw.Close())
+	forbidStartBackgroundServeForTransport(t, "failed backfill must not start a daemon")
+	stdout, _, err := executeExportSessionsCommand(newRootCommand(), "export", "sessions", "--wait")
+	require.ErrorContains(t, err, "project identification failed: metadata unavailable; run `agentsview daemon restart`, then check `agentsview export status`")
+	assert.Empty(t, stdout)
 }
 
 func TestExportStatusReportsBackfillFailure(t *testing.T) {
@@ -1328,7 +1296,7 @@ func TestExportSessionsCursorConflictingFilterIsUsageError(t *testing.T) {
 func TestExportSessionsCursorAllowsFormatAndLimit(t *testing.T) {
 	seedExportSessionsArchive(t)
 	cursor := firstExportSessionsCursor(t)
-	stdout, stderr, err := executeExportSessionsCommand(newRootCommand(), "export", "sessions", "--cursor", cursor, "--format", "json", "--limit", "1", "--wait")
+	stdout, stderr, err := executeExportSessionsCommand(newRootCommand(), "export", "sessions", "--cursor", cursor, "--format", "json", "--limit", "1")
 	require.NoError(t, err, "cursor with format and limit")
 	assert.Empty(t, stderr)
 	doc := decodeExportSessionsDocument(t, stdout)

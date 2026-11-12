@@ -16,7 +16,6 @@ import (
 	"go.kenn.io/agentsview/internal/config"
 	"go.kenn.io/agentsview/internal/db"
 	"go.kenn.io/agentsview/internal/export"
-	"go.kenn.io/kit/daemon"
 )
 
 type exportSessionsFormat string
@@ -400,47 +399,25 @@ func exportBackfillFailure(status db.BackgroundMigrationStatus) error {
 	return fmt.Errorf("project identification failed%s; run `agentsview daemon restart`, then check `agentsview export status`", reason)
 }
 
-func exportDaemonPing(ctx context.Context, rt *DaemonRuntime, token string) (failure string, ok bool) {
-	if rt == nil {
-		return "", false
-	}
-	info, err := probeRuntime(ctx, rt.Record, token, daemon.ProbeOptions{ExpectedService: daemonService, Timeout: time.Second})
-	return info.BackfillError, err == nil && info.PID == rt.Record.PID
-}
-
-func exportWritableDaemonPing(cfg *config.Config, rt **DaemonRuntime) (failure string, ok bool) {
-	if next := FindWritableDaemonRuntime(cfg.DataDir, cfg.AuthToken); next != nil {
-		*rt = next
-		return next.BackfillError, true
-	}
-	return "", false
-}
-
-func exportStatusWithFailure(status db.BackgroundMigrationStatus, failure string) db.BackgroundMigrationStatus {
-	if failure != "" && (status.State == "pending" || status.State == "running" || status.State == "failed") {
-		status.State, status.LastError = "failed", failure
-	}
-	return status
-}
-
 func exportStatusWithLiveFailure(ctx context.Context, cfg *config.Config, status db.BackgroundMigrationStatus) db.BackgroundMigrationStatus {
 	if status.State != "completed" && status.State != "not_needed" && cfg.ApplyDeploymentAuth() == nil {
-		rt := FindWritableDaemonRuntime(cfg.DataDir, cfg.AuthToken)
-		if rt != nil {
-			status = exportStatusWithDaemon(status, rt, rt.BackfillError)
+		if rt := FindWritableDaemonRuntime(cfg.DataDir, cfg.AuthToken); rt != nil {
+			status = exportStatusWithDaemon(status, rt)
 		}
 	}
 	return status
 }
 
 // A failure recorded before the live daemon started is pending: that daemon retries it, and a retry that fails again is recorded later.
-func exportStatusWithDaemon(status db.BackgroundMigrationStatus, rt *DaemonRuntime, failure string) db.BackgroundMigrationStatus {
-	if status.State == "failed" && failure == "" && status.UpdatedAt != nil {
+func exportStatusWithDaemon(status db.BackgroundMigrationStatus, rt *DaemonRuntime) db.BackgroundMigrationStatus {
+	if rt.BackfillError != "" && (status.State == "pending" || status.State == "running" || status.State == "failed") {
+		status.State, status.LastError = "failed", rt.BackfillError
+	} else if status.State == "failed" && rt.BackfillError == "" && status.UpdatedAt != nil {
 		if at, err := time.Parse(time.RFC3339Nano, *status.UpdatedAt); err == nil && rt.Record.StartedAt.After(at) {
 			status.State, status.LastError = "pending", ""
 		}
 	}
-	return exportStatusWithFailure(status, failure)
+	return status
 }
 
 func exportPendingError(ctx context.Context, database *db.DB, cfg *config.Config, status db.BackgroundMigrationStatus) error {
@@ -473,8 +450,7 @@ func exportDaemonUnavailable(status db.BackgroundMigrationStatus) error {
 const exportDaemonUnavailableGrace = 5 * time.Second
 
 func waitForExportBackfill(ctx context.Context, progress io.Writer, cfg *config.Config) error {
-	rt, err := startExportDaemon(ctx, cfg)
-	if err != nil {
+	if _, err := startExportDaemon(ctx, cfg); err != nil {
 		return err
 	}
 	unavailableSince := time.Time{}
@@ -495,8 +471,8 @@ func waitForExportBackfill(ctx context.Context, progress io.Writer, cfg *config.
 		default:
 			return unknownExportBackfillState(status.State)
 		}
-		failure, ok := exportWritableDaemonPing(cfg, &rt)
-		if !ok {
+		rt := FindWritableDaemonRuntime(cfg.DataDir, cfg.AuthToken)
+		if rt == nil {
 			if unavailableSince.IsZero() {
 				unavailableSince = time.Now()
 			} else if time.Since(unavailableSince) >= exportDaemonUnavailableGrace {
@@ -504,7 +480,7 @@ func waitForExportBackfill(ctx context.Context, progress io.Writer, cfg *config.
 			}
 		} else {
 			unavailableSince = time.Time{}
-			status = exportStatusWithDaemon(status, rt, failure)
+			status = exportStatusWithDaemon(status, rt)
 			if status.State == "failed" {
 				return exportBackfillFailure(status)
 			}

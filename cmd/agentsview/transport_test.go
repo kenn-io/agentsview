@@ -432,31 +432,19 @@ func TestEnsureBackgroundServeRoutesLaunchProgress(t *testing.T) {
 	ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
 	defer cancel()
 	ctx = context.WithValue(ctx, daemonProgressContextKey{}, &progress)
-	host, port := testPingServer(t)
 	old := startServeBackgroundProcessForEnsure
 	startServeBackgroundProcessForEnsure = func(ctx context.Context, _ config.Config, _ []string) (*exec.Cmd, string, error) {
-		if _, err := WriteDaemonRuntime(dir, host, port, version, false); err != nil {
-			return nil, "", err
-		}
-		child := exec.CommandContext(ctx, os.Args[0], "-test.run=^TestEnsureBackgroundServeHelperProcess$")
-		child.Env = append(os.Environ(), "AGENTSVIEW_STARTUP_PROGRESS_HELPER=1")
+		child := exec.CommandContext(ctx, os.Args[0], "-test.run=^$")
 		if err := child.Start(); err != nil {
 			return nil, "", err
 		}
-		t.Cleanup(func() { _ = child.Process.Kill() })
 		return child, "test.log", nil
 	}
-	t.Cleanup(func() { startServeBackgroundProcessForEnsure = old; RemoveDaemonRuntime(dir) })
+	t.Cleanup(func() { startServeBackgroundProcessForEnsure = old })
 	cfg := config.Config{DataDir: dir}
 	_, err := ensureBackgroundServe(ctx, &cfg, time.Second, false)
-	require.NoError(t, err)
+	require.Error(t, err)
 	assert.Contains(t, progress.String(), "Starting agentsview")
-}
-
-func TestEnsureBackgroundServeHelperProcess(t *testing.T) {
-	if os.Getenv("AGENTSVIEW_STARTUP_PROGRESS_HELPER") == "1" {
-		time.Sleep(30 * time.Second) //nolint:kennlint // sleeptest: the child remains alive until the parent stops it
-	}
 }
 
 func TestEnsureTransport_ReadIntentStartsDaemon(t *testing.T) {

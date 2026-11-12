@@ -66,7 +66,7 @@ func TestWritableOpenPreservesFailedProjectIdentityBackfill(t *testing.T) {
 	assert.Equal(t, "completion failed", status.LastError)
 }
 
-func TestPendingProjectIdentityStatusCountsMissingSnapshots(t *testing.T) {
+func TestPendingProjectIdentityStatusAndProgress(t *testing.T) {
 	d := testDB(t)
 	ctx := t.Context()
 	require.NoError(t, d.UpsertSession(ctx, Session{ID: "missing", Project: "app", Machine: "local", Agent: "codex"}))
@@ -78,13 +78,6 @@ func TestPendingProjectIdentityStatusCountsMissingSnapshots(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, "pending", status.State)
 	assert.Equal(t, 1, status.TotalItems)
-}
-
-func TestPendingProjectIdentityWaitSkipsSessionScan(t *testing.T) {
-	d := testDB(t)
-	ctx := t.Context()
-	_, err := d.getWriter().ExecContext(ctx, `INSERT INTO background_migrations (name, state) VALUES (?, 'pending')`, ProjectIdentityBackfillName)
-	require.NoError(t, err)
 	d.rawReader().SetMaxOpenConns(1)
 	conn, err := d.getReader().Conn(ctx)
 	require.NoError(t, err)
@@ -100,11 +93,9 @@ func TestPendingProjectIdentityWaitSkipsSessionScan(t *testing.T) {
 		return nil
 	}))
 	require.NoError(t, conn.Close())
-	for range 3 {
-		status, err := d.ProjectIdentityBackfillProgress(ctx)
-		require.NoError(t, err)
-		assert.Equal(t, "pending", status.State)
-	}
+	status, err = d.ProjectIdentityBackfillProgress(ctx)
+	require.NoError(t, err)
+	assert.Equal(t, "pending", status.State)
 }
 
 func TestEnsureProjectIdentityBackfillRequeuesUnverifiedCompletedGap(

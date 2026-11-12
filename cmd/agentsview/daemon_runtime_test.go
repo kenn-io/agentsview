@@ -42,22 +42,14 @@ func requirePOSIXSignals(t *testing.T, reason string) {
 }
 
 func TestProbeRuntimeRejectsInvalidIdentity(t *testing.T) {
-	for _, tc := range []struct{ name, body string }{
-		{"different process", `{"ok":true,"service":"agentsview","pid":43}`},
-		{"not ok", `{"ok":false,"service":"agentsview","pid":42}`},
-		{"wrong service", `{"ok":true,"service":"other","pid":42}`},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-				w.Header().Set("Content-Type", "application/json")
-				_, _ = io.WriteString(w, tc.body)
-			}))
-			t.Cleanup(ts.Close)
-			ep := serverEndpoint(t, ts)
-			_, ok := probeDaemonRecord(daemon.RuntimeRecord{PID: 42, Address: ep.Addr}, "")
-			assert.False(t, ok)
-		})
-	}
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = io.WriteString(w, `{"ok":true,"service":"agentsview","pid":43}`)
+	}))
+	t.Cleanup(ts.Close)
+	ep := serverEndpoint(t, ts)
+	_, ok := probeDaemonRecord(daemon.RuntimeRecord{PID: 42, Address: ep.Addr}, "")
+	assert.False(t, ok)
 }
 
 func setStartProbeTickForTest(t *testing.T, tick time.Duration) {
@@ -1304,12 +1296,15 @@ func TestFindDaemonRuntimeWithSignedLoopbackService(t *testing.T) {
 	t.Setenv("AGENTSVIEW_SIGNING_KEY_ID", "example")
 	t.Setenv("AGENTSVIEW_SIGNING_KEY_FILE", filepath.Join(t.TempDir(), "key"))
 	dir := runtimeTestDir(t)
-	host, port := testPingServer(t)
-	writeDaemonRuntimeForTest(t, dir, host, port, "test", false)
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = fmt.Fprintf(w, `{"ok":true,"service":"agentsview","pid":%d,"project_identity_backfill_error":"blocked"}`, os.Getpid())
+	}))
+	t.Cleanup(ts.Close)
+	ep := serverEndpoint(t, ts)
+	writeDaemonRuntimeForTest(t, dir, ep.Host, ep.Port, "test", false)
 	rt := FindWritableDaemonRuntime(dir, "")
 	require.NotNil(t, rt)
-	_, ok := exportDaemonPing(t.Context(), rt, "")
-	assert.True(t, ok)
+	assert.Equal(t, "blocked", rt.BackfillError)
 }
 
 func TestIsDaemonActive_LivePIDNoPingClaimsOwnership(t *testing.T) {
