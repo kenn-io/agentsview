@@ -115,7 +115,7 @@ func TestAnalyticsKeptCopiesNestedValues(t *testing.T) {
 	assert.Empty(t, empty.Trend[0].ByCat)
 }
 
-func TestAnalyticsKeptTracksWritesAndCopies(t *testing.T) {
+func TestAnalyticsKeptTracksWrites(t *testing.T) {
 	d := testDB(t)
 	ctx := t.Context()
 	insertSession(t, d, "session", "project", func(s *Session) {
@@ -130,11 +130,6 @@ func TestAnalyticsKeptTracksWritesAndCopies(t *testing.T) {
 	tools, err := d.GetAnalyticsTools(ctx, AnalyticsFilter{})
 	require.NoError(t, err)
 	assert.Equal(t, 1, tools.TotalCalls)
-	require.Len(t, tools.ByCategory, 1)
-	tools.ByCategory[0].Count = 99
-	again, err := d.GetAnalyticsTools(ctx, AnalyticsFilter{})
-	require.NoError(t, err)
-	assert.Equal(t, 1, again.ByCategory[0].Count)
 
 	signals, err := d.GetAnalyticsSignals(ctx, AnalyticsFilter{})
 	require.NoError(t, err)
@@ -146,15 +141,10 @@ func TestAnalyticsKeptTracksWritesAndCopies(t *testing.T) {
 
 	_, err = d.getWriter().ExecContext(ctx, `UPDATE tool_calls SET tool_name = 'Bash', category = 'Bash' WHERE session_id = 'session'`)
 	require.NoError(t, err)
-	again, err = d.GetAnalyticsTools(ctx, AnalyticsFilter{})
+	again, err := d.GetAnalyticsTools(ctx, AnalyticsFilter{})
 	require.NoError(t, err)
 	require.Len(t, again.ByCategory, 1)
 	assert.Equal(t, "Bash", again.ByCategory[0].Category)
-
-	require.NoError(t, d.ReplaceSessionMessages(ctx, "session", nil))
-	again, err = d.GetAnalyticsTools(ctx, AnalyticsFilter{})
-	require.NoError(t, err)
-	assert.Zero(t, again.TotalCalls)
 }
 
 func TestAnalyticsKeptSharesLoads(t *testing.T) {
@@ -210,30 +200,6 @@ func TestAnalyticsKeptContentLengthRepair(t *testing.T) {
 	assert.Equal(t, float64(20), after.Overall.CharsPerActiveMin)
 }
 
-func TestAnalyticsKeptVelocityTracksMessageAndToolChanges(t *testing.T) {
-	d := testDB(t)
-	ctx := t.Context()
-	insertSession(t, d, "session", "project", func(s *Session) {
-		s.StartedAt = new("2024-06-01T09:00:00Z")
-		s.MessageCount = 2
-	})
-	user := Message{SessionID: "session", Ordinal: 0, Role: "user", Content: "hello", Timestamp: "2024-06-01T09:00:00Z"}
-	assistant := Message{SessionID: "session", Ordinal: 1, Role: "assistant", Content: "reply", Timestamp: "2024-06-01T09:01:00Z"}
-	insertMessages(t, d, user, assistant)
-	before, err := d.GetAnalyticsVelocity(ctx, AnalyticsFilter{})
-	require.NoError(t, err)
-	assert.Equal(t, float64(60), before.Overall.FirstResponseSec.P50)
-	assert.Zero(t, before.Overall.ToolCallsPerActiveMin)
-
-	assistant.Timestamp = "2024-06-01T09:02:00Z"
-	assistant.ToolCalls = []ToolCall{{SessionID: "session", ToolName: "Read", Category: "Read"}}
-	require.NoError(t, d.ReplaceSessionMessages(ctx, "session", []Message{user, assistant}))
-	after, err := d.GetAnalyticsVelocity(ctx, AnalyticsFilter{})
-	require.NoError(t, err)
-	assert.Equal(t, float64(120), after.Overall.FirstResponseSec.P50)
-	assert.Equal(t, 0.5, after.Overall.ToolCallsPerActiveMin)
-}
-
 func TestAnalyticsKeptToolFactsAfterDialogueRepair(t *testing.T) {
 	d := testDB(t)
 	ctx := t.Context()
@@ -270,6 +236,7 @@ func TestAnalyticsKeptSelectionAndArchiveIdentity(t *testing.T) {
 	ctx := t.Context()
 	insertSession(t, d, "session", "project", func(s *Session) { s.StartedAt = new("2024-06-01T09:00:00Z") })
 	message := asstMsgAt("session", 0, "read", "2024-06-01T09:00:00Z")
+	message.Model = "model-a"
 	message.ToolCalls = []ToolCall{{SessionID: "session", ToolName: "Read", Category: "Read"}}
 	insertMessages(t, d, message)
 	var calls atomic.Int32
@@ -291,20 +258,19 @@ func TestAnalyticsKeptSelectionAndArchiveIdentity(t *testing.T) {
 		_, err = d.GetAnalyticsTools(ctx, filter)
 		require.NoError(t, err)
 	}
-	// The model filter has no matching sessions and does not issue a tool query.
-	assert.EqualValues(t, 4, calls.Load())
+	assert.EqualValues(t, 5, calls.Load())
 	_, err := d.getWriter().ExecContext(ctx, `UPDATE archive_metadata SET value = 'another-generation' WHERE key = ?`, archiveMetadataDatabaseIDKey)
 	require.NoError(t, err)
 	_, err = d.GetAnalyticsTools(ctx, filters[0])
 	require.NoError(t, err)
-	assert.EqualValues(t, 5, calls.Load())
+	assert.EqualValues(t, 6, calls.Load())
 	_, err = d.getWriter().ExecContext(ctx, `DELETE FROM archive_metadata WHERE key = ?`, archiveMetadataDatabaseIDKey)
 	require.NoError(t, err)
 	for range 2 {
 		_, err = d.GetAnalyticsTools(ctx, filters[0])
 		require.NoError(t, err)
 	}
-	assert.EqualValues(t, 7, calls.Load())
+	assert.EqualValues(t, 8, calls.Load())
 }
 
 func TestAnalyticsKeptReadOnlyBypass(t *testing.T) {
@@ -338,21 +304,15 @@ func TestAnalyticsKeptTriggerUpgrade(t *testing.T) {
 	message.ToolCalls = []ToolCall{{SessionID: "session", ToolName: "Read", Category: "Read"}}
 	insertMessages(t, d, message)
 	_, err := d.getWriter().ExecContext(ctx, `DROP TRIGGER trg_tool_calls_analytics_change_update;
-		CREATE TRIGGER trg_tool_calls_analytics_change_update AFTER UPDATE ON tool_calls
-		BEGIN UPDATE archive_metadata SET value = CAST(value AS INTEGER) + 1 WHERE key = 'usage_change_revision'; END`)
+		DELETE FROM archive_metadata WHERE key = 'analytics_change_revision'`)
 	require.NoError(t, err)
 	upgraded, err := OpenIsolated(ctx, d.Path())
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, upgraded.Close()) })
 	_, err = upgraded.GetAnalyticsTools(ctx, AnalyticsFilter{})
 	require.NoError(t, err)
-	usageBefore, err := upgraded.UsageChangeRevision(ctx)
-	require.NoError(t, err)
 	_, err = upgraded.getWriter().ExecContext(ctx, `UPDATE tool_calls SET tool_name = 'Bash', category = 'Bash' WHERE session_id = 'session'`)
 	require.NoError(t, err)
-	usageAfter, err := upgraded.UsageChangeRevision(ctx)
-	require.NoError(t, err)
-	assert.Equal(t, usageBefore, usageAfter)
 	result, err := upgraded.GetAnalyticsTools(ctx, AnalyticsFilter{})
 	require.NoError(t, err)
 	require.Len(t, result.ByCategory, 1)

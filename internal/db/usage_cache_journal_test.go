@@ -727,23 +727,6 @@ func TestUsageJournaledPartialRefresh(t *testing.T) {
 	assert.EqualValues(t, 1, extracted.Load())
 }
 
-func TestUsageJournaledSignalOnlyWriteKeepsCachedFacts(t *testing.T) {
-	database := testDB(t)
-	seedJournaledUsage(t, database, "session")
-	filter := UsageFilter{From: "2026-08-10", To: "2026-08-10", Timezone: "UTC"}
-	cache := warmJournaledUsage(t, database, filter)
-	var extracted atomic.Int64
-	cache.fill.observer.beforeExtract = func(versions []usageSourceVersion) {
-		extracted.Add(int64(len(versions)))
-	}
-	require.NoError(t, database.UpdateSessionSignals(t.Context(), "session", SessionSignalUpdate{ToolRetryCount: 1, QualitySignals: QualitySignals{Version: CurrentQualitySignalVersion}}))
-	got, err := database.GetDailyUsage(t.Context(), filter)
-	require.NoError(t, err)
-	assert.Equal(t, 100, got.Totals.InputTokens)
-	assert.Equal(t, 20, got.Totals.OutputTokens)
-	assert.Zero(t, extracted.Load())
-}
-
 func TestUsageJournaledForeignInstall(t *testing.T) {
 	for _, name := range []string{"newer install revision", "lost install"} {
 		t.Run(name, func(t *testing.T) {

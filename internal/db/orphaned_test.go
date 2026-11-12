@@ -822,7 +822,7 @@ func TestCopySkipsSanitizeForSanitizedSource(t *testing.T) {
 	}
 }
 
-func TestCopySessionMetadataDoesNotCarryUsagePricingRevision(t *testing.T) {
+func TestCopySessionMetadataDoesNotCarryRevisionCounters(t *testing.T) {
 	dir := t.TempDir()
 	sourcePath := filepath.Join(dir, "source.db")
 	source := testDBAtPath(t, sourcePath, "source")
