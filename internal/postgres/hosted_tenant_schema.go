@@ -39,6 +39,7 @@ var hostedTables = append([]HostedTable{
 	{Name: "messages", Key: []string{"session_id", "ordinal"}, ForeignKeys: sessionHostedFK()},
 	{Name: "usage_events", Key: []string{"id"}, ForeignKeys: sessionHostedFK()},
 	{Name: "session_plan_usage", Key: []string{"session_id"}, ForeignKeys: sessionHostedFK()},
+	{Name: "session_usage_totals", Key: []string{"session_id"}, ForeignKeys: sessionHostedFK()},
 	{Name: "cursor_usage_events", Key: []string{"id"}},
 	{Name: "starred_sessions", Key: []string{"session_id"}, ForeignKeys: sessionHostedFK()},
 	{Name: "excluded_sessions", Key: []string{"id"}},
@@ -85,6 +86,7 @@ var hostedTables = append([]HostedTable{
 // schemas were first provisioned, with the DDL that creates each one.
 var hostedCoreUpgradeTables = []struct{ name, ddl string }{
 	{"session_plan_usage", sessionPlanUsageDDL},
+	{"session_usage_totals", sessionUsageTotalsDDL},
 	{"commit_links", commitLinksDDL},
 	{"image_text", imageTextDDL},
 	{"retained_commit_links", retainedCommitLinksDDL},

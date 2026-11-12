@@ -1,6 +1,8 @@
 package db
 
 import (
+	"context"
+	"strings"
 	"testing"
 	"time"
 
@@ -186,6 +188,57 @@ func TestGetTrendsTermsSQLite(t *testing.T) {
 		"load bearing points")
 	assert.Equal(t, []int{1, 2}, trendPointCounts(byTerm["seam"].Points),
 		"seam points")
+}
+
+func TestTrendWorkersCancellationReturnsError(t *testing.T) {
+	ctx, cancel := context.WithCancel(t.Context())
+	terms, err := ParseTrendTerms([]string{"seam"})
+	require.NoError(t, err)
+	workers := NewTrendWorkers(ctx, "2024-06-01", "2024-06-01", "day", terms)
+	workers.Add("seam", time.Date(2024, 6, 1, 9, 0, 0, 0, time.UTC))
+	cancel()
+	_, err = workers.Finish()
+	assert.ErrorIs(t, err, context.Canceled)
+}
+
+func TestTrendWorkersStopCountingAfterCancellation(t *testing.T) {
+	ctx, cancel := context.WithCancel(t.Context())
+	cancel()
+	terms, err := ParseTrendTerms([]string{"seam"})
+	require.NoError(t, err)
+	workers := NewTrendWorkers(ctx, "2024-06-01", "2024-06-01", "day", terms)
+	for range 6400 {
+		workers.Add("seam", time.Date(2024, 6, 1, 9, 0, 0, 0, time.UTC))
+	}
+	_, err = workers.Finish()
+	require.ErrorIs(t, err, context.Canceled)
+	processed := 0
+	for _, worker := range workers.workers {
+		processed += worker.messageCounts[0]
+	}
+	assert.Zero(t, processed, "canceled work must not consume CPU counting messages")
+}
+
+func TestGetTrendsTermsSQLiteAcrossWorkerBatches(t *testing.T) {
+	d := testDB(t)
+	start := "2024-06-01T09:00:00Z"
+	insertSession(t, d, "s1", "proj-a", func(s *Session) {
+		s.StartedAt = &start
+		s.CreatedAt = start
+		s.MessageCount = 257
+		s.UserMessageCount = 257
+	})
+	messages := make([]Message, 257)
+	for i := range messages {
+		messages[i] = Message{SessionID: "s1", Ordinal: i, Role: "user", Content: "seam seam", Timestamp: start, ContentLength: 9}
+	}
+	insertMessages(t, d, messages...)
+	terms, err := ParseTrendTerms([]string{"seam"})
+	require.NoError(t, err)
+	got, err := d.GetTrendsTerms(t.Context(), AnalyticsFilter{From: "2024-06-01", To: "2024-06-01", Timezone: "UTC"}, terms, "day")
+	require.NoError(t, err)
+	assert.Equal(t, 257, got.MessageCount)
+	assert.Equal(t, 514, got.Series[0].Total)
 }
 
 func TestGetTrendsTermsSQLiteProjectFilter(t *testing.T) {
@@ -486,5 +539,35 @@ func TestGetTrendsTermsSQLiteSessionWindowMatchesMessageDates(t *testing.T) {
 				assert.Equal(t, tc.Want, got.Series[0].Total)
 			}
 		})
+	}
+}
+
+func TestTrendAccumulatorUnicodeCounts(t *testing.T) {
+	terms := []TrendTermInput{
+		{Term: "accent", Matchers: []string{"É", "ÉÉ", "éclair"}},
+		{Term: "mixed", Matchers: []string{"İ", "Σ", "K", "aa"}},
+	}
+	messages := []string{"ÉÉ Éclair İ Σ K aaa", "éÉ éclair i σ k AAA", "unchanged", "\xffÉ"}
+	date := time.Date(2024, 6, 5, 12, 0, 0, 0, time.UTC)
+	acc := NewTrendAccumulator("2024-06-05", "2024-06-05", "day", terms)
+	want := make([]int, len(terms))
+	for _, message := range messages {
+		for i, term := range terms {
+			want[i] += CountTrendOccurrences(message, term)
+		}
+		acc.Add(message, date)
+	}
+	assert.Equal(t, []int{5, 8}, want)
+	result := acc.Response()
+	for i := range terms {
+		assert.Equal(t, want[i], result.Series[i].Total, terms[i].Term)
+	}
+}
+
+func TestAppendTrendLower(t *testing.T) {
+	var buffer []byte
+	for _, text := range []string{"ÉÉ İ Σ K Ⱥ", "ASCII TEXT", "lowercase", "\xffÉ", "", "ȺK"} {
+		buffer = appendTrendLower(buffer, text)
+		assert.Equal(t, strings.ToLower(text), string(buffer))
 	}
 }

@@ -1,0 +1,7 @@
+{
+  "id": "msg_t1",
+  "role": "tool",
+  "createdAt": "2026-09-17T02:00:06.000Z",
+  "message": "{\"role\":\"tool\",\"content\":[{\"type\":\"tool-result\",\"toolCallId\":\"call_999\",\"result\":{\"result\":{\"stdout\":\"file1.txt\\nfile2.txt\"}}}]}",
+  "extra": "{}"
+}

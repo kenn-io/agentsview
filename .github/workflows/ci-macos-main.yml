@@ -1,6 +1,7 @@
 name: CI (macOS)
 
 env:
+  API_VERSION_BASE: HEAD^1
   GOTRACEBACK: all
   # "|" falls back to direct on any proxy error (e.g. HTTP/2 INTERNAL_ERROR), not just 404/410.
   GOPROXY: "https://proxy.golang.org|direct"

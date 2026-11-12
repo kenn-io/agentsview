@@ -1,0 +1,19 @@
+{"kind":"UserPromptEvent","requestId":"req-1","prompt":"hidden context","presentablePrompt":"Implement it","askMode":false,"thinkMore":false,"timestampMs":1704067201000}
+{"kind":"UserPromptEvent","requestId":"req-dropped","prompt":"Drop me","askMode":false,"thinkMore":false,"timestampMs":1704067202000}
+{"kind":"UserMessagesDroppedFromHistory","userMessageIds":["req-dropped"],"timestampMs":1704067202500}
+{"kind":"UserPromptEvent","requestId":"req-restored","prompt":"Restore me","timestampMs":1704067202600}
+{"kind":"UserMessagesDroppedFromHistory","userMessageIds":["req-restored"],"timestampMs":1704067202700}
+{"kind":"UserMessagesCommittedToHistory","userMessageIds":["req-restored"],"timestampMs":1704067202800}
+{"kind":"UserPromptEvent","requestId":"req-failed","prompt":"Fail me","timestampMs":1704067202850}
+{"kind":"UserMessagesFailedInHistory","userMessageIds":["req-failed"],"timestampMs":1704067202900}
+{"kind":"SessionA2uxEvent","event":{"state":"IN_PROGRESS","agentEvent":{"kind":"MarkdownBlockUpdatedEvent","stepId":"step-1","text":"thinking aloud"}},"timestampMs":1704067203000}
+{"kind":"SessionA2uxEvent","event":{"state":"IN_PROGRESS","agentEvent":{"kind":"ResultBlockUpdatedEvent","stepId":"step-1","cancelled":false,"result":"draft","changes":[]}},"timestampMs":1704067204000}
+{"kind":"SessionA2uxEvent","event":{"state":"COMPLETED","agentEvent":{"kind":"ResultBlockUpdatedEvent","stepId":"step-1","cancelled":false,"result":"<!-- ANSWER -->Done","changes":[]}},"timestampMs":1704067205000}
+{"kind":"SessionA2uxEvent","taskId":"task-1","event":{"agentEvent":{"kind":"LlmResponseMetadataEvent","agent":"JUNIE","modelUsage":[{"model":"claude-sonnet-4-6","cost":0.00125,"inputTokens":100,"cacheInputTokens":20,"cacheCreateTokens":30,"outputTokens":40,"time":1}]}},"timestampMs":1704067205100}
+{"kind":"SessionCostTrajectorySnapshotEvent","snapshot":{"attributedGroups":[{"costPurpose":"SUMMARIZATION","callPurpose":"SUMMARIZATION"}]},"timestampMs":1704067205200}
+{"kind":"SystemMessageEvent","text":"Notice","details":"Details","level":"ERROR","symbol":"!","timestampMs":1704067205500}
+{"kind":"AgentTaskFailedEvent","timestampMs":1704067205600}
+{"kind":"UserAsyncResponseEvent","entries":[{"question":"Continue?","answer":"Yes"}],"timestampMs":1704067206000}
+{"kind":"SessionA2uxEvent","event":{"state":"COMPLETED","agentEvent":{"kind":"ResultBlockUpdatedEvent","stepId":"step-2","cancelled":false,"result":"Finished","changes":[]}},"timestampMs":1704067207000}
+{
+{}

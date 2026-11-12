@@ -39,6 +39,10 @@ The latest release is
 
 **Bug fixes**
 
+- A busy daemon no longer logs `a long-running reader is holding the WAL`, or
+  a goroutine dump, when its reads only overlap. The warning now appears only
+  when three checkpoints in a row stop at the same point, which means one read
+  stayed open across all of them.
 - Semantic search builds on Kit's built-in local embeddings server no longer
   fail on every attempt with `embed request failed`. The built-in server runs
   the model on the CPU, so it now defaults to 8 inputs per request, one request

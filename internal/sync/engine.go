@@ -19069,6 +19069,20 @@ func (e *Engine) writeBatchWithOutcomeContext(
 			outcome.failedSessions++
 			continue
 		}
+		if err := e.db.ReplaceSessionUsageTotal(ctx,
+			s.ID, prepared.SessionTotal,
+		); err != nil {
+			if ctx.Err() != nil {
+				return outcome
+			}
+			log.Printf(
+				"write session total for %s: %v",
+				s.ID, err,
+			)
+			e.markStaleFailedMemberWrite(ctx, pw)
+			outcome.failedSessions++
+			continue
+		}
 		if ctx.Err() != nil {
 			return outcome
 		}
@@ -19799,6 +19813,16 @@ func (e *Engine) writeBatchBulkWithOutcomeContext(
 				outcome.failedSessions++
 				continue
 			}
+			if err := e.db.ReplaceSessionUsageTotal(ctx,
+				s.ID, prepared.SessionTotal,
+			); err != nil {
+				log.Printf(
+					"write session total for %s: %v", s.ID, err,
+				)
+				e.markStaleFailedMemberWrite(ctx, pw)
+				outcome.failedSessions++
+				continue
+			}
 			if err := e.db.SetSessionDataVersion(ctx,
 				s.ID, dataVersionForWrite(pw),
 			); err != nil {
@@ -19862,14 +19886,16 @@ func (e *Engine) writeBatchBulkWithOutcomeContext(
 			return outcome
 		}
 		writes = append(writes, db.SessionBatchWrite{
-			CodexForkState:    prepared.codexForkState,
-			StagedToolKeys:    prepared.stagedToolKeys,
-			ArchiveProvenance: provenance,
-			Session:           s,
-			Messages:          msgs,
-			UsageEvents:       prepared.UsageEvents,
-			PlanUsage:         prepared.PlanUsage,
-			ToolResultImages:  &e.toolResultImages,
+			CodexForkState:      prepared.codexForkState,
+			StagedToolKeys:      prepared.stagedToolKeys,
+			ArchiveProvenance:   provenance,
+			Session:             s,
+			Messages:            msgs,
+			UsageEvents:         prepared.UsageEvents,
+			PlanUsage:           prepared.PlanUsage,
+			SessionTotal:        prepared.SessionTotal,
+			ReplaceSessionTotal: true,
+			ToolResultImages:    &e.toolResultImages,
 			IdentityObservation: identityObservationOrZero(
 				identityObservation, hasIdentityObservation,
 			),
@@ -20931,6 +20957,15 @@ func (e *Engine) writeSessionFullWithResolver(
 	); err != nil {
 		log.Printf(
 			"replace plan usage for %s: %v",
+			s.ID, err,
+		)
+		return err
+	}
+	if err := e.db.ReplaceSessionUsageTotal(ctx,
+		s.ID, prepared.SessionTotal,
+	); err != nil {
+		log.Printf(
+			"replace session total for %s: %v",
 			s.ID, err,
 		)
 		return err

@@ -325,6 +325,19 @@ CREATE TABLE IF NOT EXISTS session_plan_usage (
     uncaptured_turns INTEGER NOT NULL DEFAULT 0
 );
 
+-- A usage total the agent recorded for a whole session, such as Claude
+-- Code's cost-state. It overlaps the session's usage rows, and with
+-- subagent_scope 'included' its subagents' rows, so usage queries never read
+-- it; session usage shows it next to AgentsView's totals.
+CREATE TABLE IF NOT EXISTS session_usage_totals (
+    session_id TEXT PRIMARY KEY REFERENCES sessions(id) ON DELETE CASCADE,
+    source TEXT NOT NULL,
+    subagent_scope TEXT NOT NULL DEFAULT '',
+    cost_microdollars INTEGER,
+    incomplete INTEGER NOT NULL DEFAULT 0,
+    models_json TEXT NOT NULL DEFAULT '[]'
+);
+
 CREATE TABLE IF NOT EXISTS cursor_usage_events (
     id INTEGER PRIMARY KEY,
     agent TEXT NOT NULL DEFAULT 'cursor',

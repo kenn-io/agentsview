@@ -1,0 +1,1 @@
+{"id":"test-task-tools","number":1,"ts":1688836851000,"task":"Tool call test","tokensIn":100,"tokensOut":200,"cacheWrites":0,"cacheReads":0,"totalCost":null,"size":0,"workspace":"/workspace/project","apiConfigName":"anthropic/claude-sonnet-4"}

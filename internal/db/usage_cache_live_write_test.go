@@ -46,7 +46,7 @@ func appendLiveWriteMessage(
 
 func liveWriteDailyInput(t *testing.T, database *DB, project string) int {
 	t.Helper()
-	daily, err := database.GetDailyUsage(t.Context(), UsageFilter{
+	daily, err := database.getDailyUsageUncached(t.Context(), UsageFilter{
 		From: "2026-08-10", To: "2026-08-10", Timezone: "UTC",
 		Project: project, SkipSessionCounts: true,
 	})

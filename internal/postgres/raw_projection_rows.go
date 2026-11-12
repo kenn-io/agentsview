@@ -292,6 +292,11 @@ func (s *RawProjectionStore) writePayload(ctx context.Context, tx *sql.Tx, id, g
 			return err
 		}
 	}
+	if p.SessionTotal != nil {
+		if err := insertSessionUsageTotal(ctx, tx, id, p.SessionTotal); err != nil {
+			return err
+		}
+	}
 	if err := bulkInsertSecretFindings(ctx, tx, id, p.Findings); err != nil {
 		return err
 	}

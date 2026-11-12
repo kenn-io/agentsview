@@ -1,0 +1,4 @@
+{"type":"agent-setting","agentSetting":"triage","entrypoint":"sdk-cli","sessionId":"11111111-1111-4111-8111-111111111111"}
+{"type":"user","uuid":"u1","timestamp":"2026-06-04T09:47:27.966Z","message":{"role":"user","content":"help me"},"cwd":"/workspace/project","sessionId":"11111111-1111-4111-8111-111111111111","version":"1.0.8"}
+{"type":"assistant","uuid":"a1","parentUuid":"u1","timestamp":"2026-06-04T09:47:32.116Z","message":{"id":"msg_1","type":"message","role":"assistant","model":"auto","stop_reason":"end_turn","usage":{"input_tokens":100,"cache_creation_input_tokens":7,"cache_read_input_tokens":50,"output_tokens":30},"content":[{"type":"text","text":"done"}]},"sessionId":"11111111-1111-4111-8111-111111111111"}
+{"type":"user","uuid":"u2","parentUuid":"a1","timestamp":"2026-06-04T09:47:39.020Z","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"toolu_1","content":"ok"}]},"sessionId":"11111111-1111-4111-8111-111111111111"}
