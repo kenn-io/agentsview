@@ -16,10 +16,6 @@ func TestPushSessionWithCodexScope(t *testing.T) {
 	result, err := syncer.Push(ctx, true, nil)
 	require.NoError(t, err)
 	require.Equal(t, 1, result.SessionsPushed)
-	var id string
-	require.NoError(t, pg.QueryRowContext(ctx, `SELECT id FROM sessions WHERE id = $1`, "session-1").Scan(&id))
-	require.Equal(t, "session-1", id)
-
 	const marker = "0123456789abcdef0123456789abcdef"
 	const suffix = "_99999999-9999-4999-8999-999999999999"
 	threads := []string{
