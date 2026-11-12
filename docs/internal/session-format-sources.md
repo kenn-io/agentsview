@@ -2086,10 +2086,14 @@ fixtures retain this field; missing identities remain source-local.
   marked `syntheticPrompt` are dropped. Each checkpoint becomes a compact
   boundary carrying its summary. The replayed prefix before the summary row in
   `chat_history.jsonl` is dropped when the stream supplied those turns. Local
-  Grok Build 1.0.77 sessions match this shape: 11 compacted sessions with up
-  to 8 checkpoints each, every checkpoint file present, and only the latest
-  compaction's rows in `chat_history.jsonl`. The `syntheticPrompt` marker was
-  observed there and is absent from the pinned source.
+  sessions written from 2026-09-20 to 2026-11-12 match this shape: 11
+  compacted sessions with up to 8 checkpoints each, every checkpoint file
+  present, and only the latest compaction's rows in `chat_history.jsonl`.
+  Sessions do not record the Grok Build version that wrote them. A fresh
+  session from Grok Build 1.0.77, the latest stable release on 2026-11-12,
+  compacted twice with `/compact`, matches the same shape and parses to 23
+  rows with 2 boundaries. The `syntheticPrompt` marker was observed in the
+  older sessions and is absent from the pinned source.
 
 - **Rebuilt models and web searches (observed 2026-11-12):** Agent output in
   `updates.jsonl` carries no model. Each turn's `turn_completed` record names
@@ -2193,7 +2197,7 @@ fixtures retain this field; missing identities remain source-local.
   `internal/parser/grok_compaction.go`, `internal/parser/grok_provider.go`,
   colocated tests, and the sanitized fixtures in
   `internal/parser/testdata/grok-build`. The `compacted` fixture follows the
-  record shapes of a Grok Build 1.0.77 session with invented content.
+  record shapes of local Grok Build sessions with invented content.
 
 - **Watcher evidence (2026-09-20):** Rechecked the pinned session guide above:
   `summary.json` indexes the session, while transcript and signal files are
