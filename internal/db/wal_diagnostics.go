@@ -60,19 +60,35 @@ type walStall struct {
 	unmovedPages int
 }
 
-// walStallTracker counts consecutive checkpoints that left pages unmoved.
+// walStallTracker counts consecutive checkpoints that stopped at the same
+// frame while pages were left unmoved.
 type walStallTracker struct {
 	attempts int
+	previous walCheckpointProgress
 }
 
 // observe records one checkpoint result and reports a stall once
-// walStallLogAttempts consecutive checkpoints have left pages unmoved.
+// walStallLogAttempts consecutive checkpoints have stopped at the same frame.
+//
+// Unmoved pages alone do not mean a reader is holding the WAL: while reads
+// overlap writes, every checkpoint leaves behind the frames written after the
+// oldest open read began. A checkpoint can only stop at the same frame again
+// when one read has stayed open across both checkpoints, so the count restarts
+// whenever a checkpoint moves further or the WAL starts over.
 func (t *walStallTracker) observe(
 	progress walCheckpointProgress,
 ) (walStall, bool) {
+	previous := t.previous
+	t.previous = progress
 	unmoved := progress.unmovedPages()
 	if unmoved == 0 {
 		t.attempts = 0
+		return walStall{}, false
+	}
+	if t.attempts == 0 ||
+		progress.checkpointedPages != previous.checkpointedPages ||
+		progress.logPages < previous.logPages {
+		t.attempts = 1
 		return walStall{}, false
 	}
 	t.attempts++

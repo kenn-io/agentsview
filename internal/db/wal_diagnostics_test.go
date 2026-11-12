@@ -122,6 +122,64 @@ func TestWALStallReportedWhileReaderHoldsSnapshot(t *testing.T) {
 	assert.False(t, ok)
 }
 
+// A busy daemon always has a read in flight while writes land, so every
+// checkpoint leaves the newest frames behind. When each read ends before the
+// next checkpoint, the checkpoint keeps moving forward and no reader is
+// holding the WAL.
+func TestWALStallNotReportedWhileOverlappingReadsFinish(t *testing.T) {
+	d := testDB(t)
+	ctx := t.Context()
+	output := captureLog(t)
+
+	var tracker walStallTracker
+	var diag walDiagnostics
+	previous := holdDiagnosticTransaction(t, d)
+	var checkpointed []int
+	for attempt := range walStallLogAttempts + 2 {
+		insertSession(t, d, fmt.Sprintf("overlap-before-%d", attempt), "proj")
+		next := holdDiagnosticTransaction(t, d)
+		insertSession(t, d, fmt.Sprintf("overlap-after-%d", attempt), "proj")
+		require.NoError(t, previous.Rollback())
+		previous = next
+
+		progress, err := d.checkpointWALPassive(ctx)
+		require.NoError(t, err)
+		require.Positive(t, progress.unmovedPages(),
+			"the read that is still open must leave the newest frames behind")
+		checkpointed = append(checkpointed, progress.checkpointedPages)
+		_, ok := tracker.observe(progress)
+		assert.False(t, ok, "attempt %d", attempt)
+
+		d.walMaintenanceTick(ctx, &diag)
+	}
+	assert.IsIncreasing(t, checkpointed)
+	assert.NotContains(t, output.String(), "pages unmoved")
+	assert.NotContains(t, output.String(), "sqlite wal goroutine dump")
+}
+
+func TestWALStallTrackerRestartsCountWhenCheckpointMoves(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		next walCheckpointProgress
+	}{
+		{"checkpoint moved further", walCheckpointProgress{logPages: 60, checkpointedPages: 30}},
+		{"WAL started over", walCheckpointProgress{logPages: 25, checkpointedPages: 10}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			pinned := walCheckpointProgress{logPages: 40, checkpointedPages: 10}
+			var tracker walStallTracker
+			var reported []bool
+			for _, progress := range []walCheckpointProgress{
+				pinned, pinned, tc.next, tc.next, tc.next,
+			} {
+				_, ok := tracker.observe(progress)
+				reported = append(reported, ok)
+			}
+			assert.Equal(t, []bool{false, false, false, false, true}, reported)
+		})
+	}
+}
+
 func TestWALStallTrackerRestartsCountAfterDrain(t *testing.T) {
 	pinned := walCheckpointProgress{logPages: 40, checkpointedPages: 10}
 	drained := walCheckpointProgress{logPages: 40, checkpointedPages: 40}
