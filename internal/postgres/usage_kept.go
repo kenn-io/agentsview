@@ -16,14 +16,14 @@ func (s *Store) directUsageVersion(ctx context.Context, slot string) string {
 	if slot == "" || s.readTx != nil || s.hostedRelations {
 		return ""
 	}
-	revision, history, err := s.directUsageChangeRevision(ctx)
+	revision, err := s.directUsageChangeRevision(ctx)
 	if err != nil || revision == 0 {
 		return ""
 	}
 	runtime := s.runtimeState()
 	runtime.pricingMu.Lock()
 	defer runtime.pricingMu.Unlock()
-	return fmt.Sprintf("%d|%d|%s", revision, runtime.pricingGeneration, history)
+	return fmt.Sprintf("%d|%d", revision, runtime.pricingGeneration)
 }
 
 func (s *Store) deferUsage(ctx context.Context, f db.UsageFilter) bool {

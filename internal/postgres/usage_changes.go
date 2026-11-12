@@ -314,16 +314,14 @@ func (s *Store) UsageChangeRevision(ctx context.Context) (int64, error) {
 	return revision, err
 }
 
-// directUsageChangeRevision accepts the journal versions supported by direct reads.
-func (s *Store) directUsageChangeRevision(ctx context.Context) (int64, string, error) {
+// directUsageChangeRevision supports reuse when a version 1 journal has no history token.
+func (s *Store) directUsageChangeRevision(ctx context.Context) (int64, error) {
 	var revision int64
-	var history string
-	err := s.pg.QueryRowContext(ctx, `SELECT coalesce((SELECT value::bigint FROM sync_metadata WHERE key = 'usage_change_revision' AND EXISTS (SELECT 1 FROM sync_metadata WHERE key = 'usage_change_journal_version' AND value IN ('1', '2'))), 0),
-CASE WHEN EXISTS (SELECT 1 FROM sync_metadata WHERE key='usage_change_journal_version' AND value='2') THEN coalesce((SELECT value FROM sync_metadata WHERE key='usage_history_token'), '') ELSE '' END`).Scan(&revision, &history)
+	err := s.pg.QueryRowContext(ctx, `SELECT coalesce((SELECT value::bigint FROM sync_metadata WHERE key = 'usage_change_revision' AND EXISTS (SELECT 1 FROM sync_metadata WHERE key = 'usage_change_journal_version' AND value = '1')), 0)`).Scan(&revision)
 	if isInsufficientPrivilege(err) || isUndefinedTable(err) {
-		return 0, "", nil
+		return 0, nil
 	}
-	return revision, history, err
+	return revision, err
 }
 
 // LoadUsageChanges returns the current revision and sessions changed after

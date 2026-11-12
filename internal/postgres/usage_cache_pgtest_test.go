@@ -18,6 +18,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/stdlib"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"go.kenn.io/agentsview/internal/config"
@@ -181,6 +183,50 @@ func TestPGUsageCacheDeferredReadChangesHistory(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, tx.Commit())
 	after, err := store.GetDailyUsage(ctx, filter)
+	require.NoError(t, err)
+	require.Equal(t, 1350, after.Totals.OutputTokens)
+}
+
+func TestPGUsageCacheDeferredReadUsesSnapshot(t *testing.T) {
+	_, syncer, writer, _ := keptUsageFixture(t)
+	ctx := t.Context()
+	config, err := pgx.ParseConfig(testPGURL(t))
+	require.NoError(t, err)
+	config.RuntimeParams["search_path"] = syncer.schema
+	trace := &usageQueryTracer{queries: map[string]int{}, started: make(chan struct{}), release: make(chan struct{})}
+	config.Tracer = trace
+	pool := stdlib.OpenDB(*config)
+	reader := &Store{pg: pool, ownedDB: pool}
+	t.Cleanup(func() { require.NoError(t, reader.Close()) })
+	attachUsageCacheProbe(t, reader, t.TempDir())
+	reader.usageCache.DeferWork()
+	t.Cleanup(func() { require.NoError(t, reader.usageCache.Close()) })
+	release := reader.usageCache.HoldWarm()
+	t.Cleanup(release)
+	unblock := sync.OnceFunc(func() { close(trace.release) })
+	t.Cleanup(unblock)
+	filter := db.UsageFilter{From: "2026-01-01", To: "2026-01-01", Timezone: "UTC"}
+	type result struct {
+		usage db.DailyUsageResult
+		err   error
+	}
+	done := make(chan result, 1)
+	go func() {
+		usage, err := reader.GetDailyUsage(ctx, filter)
+		done <- result{usage, err}
+	}()
+	select {
+	case <-trace.started:
+	case <-time.After(10 * time.Second):
+		t.Fatal("usage read did not start")
+	}
+	_, err = writer.pg.ExecContext(ctx, `UPDATE usage_events SET output_tokens=output_tokens+100 WHERE session_id='paid-a'`)
+	require.NoError(t, err)
+	unblock()
+	first := <-done
+	require.NoError(t, first.err)
+	require.Equal(t, 1250, first.usage.Totals.OutputTokens)
+	after, err := reader.GetDailyUsage(ctx, filter)
 	require.NoError(t, err)
 	require.Equal(t, 1350, after.Totals.OutputTokens)
 }
