@@ -99,6 +99,12 @@ test("retries a lost restart request against the real daemon", async ({
       timeout: 35_000,
     });
     await expect(page.getByRole("button", { name: "Restart now" })).toBeVisible();
+    const retry = await page.getByRole("button", { name: "Restart now" }).boundingBox();
+    const check = await page.getByRole("button", { name: "Check connection" }).boundingBox();
+    expect(retry).not.toBeNull();
+    expect(check).not.toBeNull();
+    expect(check!.y).toBe(retry!.y);
+    expect(check!.x).toBeGreaterThan(retry!.x + retry!.width);
     await page.screenshot({ path: testInfo.outputPath("restart-retry.png") });
     await page.unroute("**/api/v1/daemon/restart", abort);
     const reloaded = page.waitForEvent("load", { timeout: 35_000 });

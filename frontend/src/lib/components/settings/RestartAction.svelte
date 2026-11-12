@@ -28,14 +28,16 @@
         {m.settings_restart_reconnect_failed()}
       {/if}
     </p>
-    {#if settings.restartCanRetry}
-      <Button disabled={settings.saving || settings.restarting} onclick={() => settings.restartDaemon()}>
-        {m.settings_restart_now()}
+    <div class="restart-buttons">
+      {#if settings.restartCanRetry}
+        <Button disabled={settings.saving || settings.restarting} onclick={() => settings.restartDaemon()}>
+          {m.settings_restart_now()}
+        </Button>
+      {/if}
+      <Button disabled={settings.restarting} onclick={() => settings.checkConnection()}>
+        {settings.restarting ? m.settings_restart_restarting() : m.settings_restart_check_connection()}
       </Button>
-    {/if}
-    <Button disabled={settings.restarting} onclick={() => settings.checkConnection()}>
-      {settings.restarting ? m.settings_restart_restarting() : m.settings_restart_check_connection()}
-    </Button>
+    </div>
   {:else}
     <p class="restart-text" role="status" aria-live="polite">
       {notice}
@@ -84,6 +86,12 @@
     color: var(--text-muted);
     font-size: 11px;
     line-height: 1.4;
+  }
+
+  .restart-buttons {
+    display: flex;
+    flex-wrap: wrap;
+    gap: var(--space-2);
   }
 
   /* The recovery steps are a separate block from the notice and button. */
