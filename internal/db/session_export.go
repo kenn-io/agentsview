@@ -1434,7 +1434,7 @@ func sessionExportFilters(f SessionFilter) sessionExportCursorFilters {
 		IncludeOrphans:       f.IncludeOrphans,
 		Outcome:              append([]string(nil), f.Outcome...),
 		HealthGrade:          append([]string(nil), f.HealthGrade...),
-		MinToolFailures:      clonePtr(f.MinToolFailures),
+		MinToolFailures:      cloneIntPtr(f.MinToolFailures),
 		HasSecret:            f.HasSecret,
 		Starred:              f.Starred,
 		SecretsRulesVersions: append([]string(nil), f.SecretsRulesVersions...),
@@ -1463,7 +1463,7 @@ func sessionExportFilterFromCursor(f sessionExportCursorFilters) SessionFilter {
 		IncludeOrphans:       f.IncludeOrphans,
 		Outcome:              append([]string(nil), f.Outcome...),
 		HealthGrade:          append([]string(nil), f.HealthGrade...),
-		MinToolFailures:      clonePtr(f.MinToolFailures),
+		MinToolFailures:      cloneIntPtr(f.MinToolFailures),
 		HasSecret:            f.HasSecret,
 		Starred:              f.Starred,
 		SecretsRulesVersions: append([]string(nil), f.SecretsRulesVersions...),
@@ -1621,7 +1621,7 @@ func optionalStringPtr(v string) *string {
 	return &v
 }
 
-func clonePtr[T any](v *T) *T {
+func cloneIntPtr(v *int) *int {
 	if v == nil {
 		return nil
 	}

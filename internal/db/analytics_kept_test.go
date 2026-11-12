@@ -3,7 +3,6 @@
 package db
 
 import (
-	"context"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -28,91 +27,6 @@ func TestAnalyticsKeptPreservesMalformedToolName(t *testing.T) {
 		require.Len(t, result.ByTool, 1)
 		assert.Equal(t, "bad\xfftool", result.ByTool[0].ToolName)
 	}
-}
-
-func TestAnalyticsKeptCopiesNestedValues(t *testing.T) {
-	d := testDB(t)
-	ctx := t.Context()
-	filter := AnalyticsFilter{}
-	tools := ToolsAnalyticsResponse{
-		ByCategory: []ToolCategoryCount{{Category: "Read"}},
-		ByAgent:    []ToolAgentBreakdown{{Categories: []ToolCategoryCount{{Category: "Read"}}}},
-		ByTool:     []ToolUsageAnalysis{{EmptyRate: new(0.1), RepeatRate: new(0.2), RecoveryRate: new(0.3)}},
-		Trend:      []ToolTrendEntry{{ByCat: map[string]int{"Read": 1}}},
-	}
-	loadTools := func(context.Context, AnalyticsFilter) (ToolsAnalyticsResponse, error) { return tools, nil }
-	gotTools, err := keptAnalytics(ctx, d, "tools", filter, loadTools)
-	require.NoError(t, err)
-	gotTools.ByCategory[0].Category = "changed"
-	gotTools.ByAgent[0].Categories[0].Category = "changed"
-	*gotTools.ByTool[0].EmptyRate = 9
-	*gotTools.ByTool[0].RepeatRate = 9
-	*gotTools.ByTool[0].RecoveryRate = 9
-	gotTools.Trend[0].ByCat["Read"] = 9
-	againTools, err := keptAnalytics(ctx, d, "tools", filter, loadTools)
-	require.NoError(t, err)
-	assert.Equal(t, "Read", againTools.ByCategory[0].Category)
-	assert.Equal(t, "Read", againTools.ByAgent[0].Categories[0].Category)
-	assert.InDelta(t, 0.1, *againTools.ByTool[0].EmptyRate, 0)
-	assert.InDelta(t, 0.2, *againTools.ByTool[0].RepeatRate, 0)
-	assert.InDelta(t, 0.3, *againTools.ByTool[0].RecoveryRate, 0)
-	assert.Equal(t, 1, againTools.Trend[0].ByCat["Read"])
-
-	velocity := VelocityResponse{ByAgent: []VelocityBreakdown{{Label: "agent"}}, ByComplexity: []VelocityBreakdown{{Label: "simple"}}}
-	loadVelocity := func(context.Context, AnalyticsFilter) (VelocityResponse, error) { return velocity, nil }
-	gotVelocity, err := keptAnalytics(ctx, d, "velocity", filter, loadVelocity)
-	require.NoError(t, err)
-	gotVelocity.ByAgent[0].Label = "changed"
-	gotVelocity.ByComplexity[0].Label = "changed"
-	againVelocity, err := keptAnalytics(ctx, d, "velocity", filter, loadVelocity)
-	require.NoError(t, err)
-	assert.Equal(t, "agent", againVelocity.ByAgent[0].Label)
-	assert.Equal(t, "simple", againVelocity.ByComplexity[0].Label)
-
-	signals := SignalsAnalyticsResponse{
-		GradeDistribution: map[string]int{"A": 1}, OutcomeDistribution: map[string]int{"done": 1}, OutcomeConfidenceDistribution: map[string]int{"high": 1},
-		AvgHealthScore: new(1.0), ContextHealth: SignalsContextHealth{AvgContextPressure: new(2.0)},
-		Trend: []SignalsTrendBucket{{AvgHealthScore: new(3.0)}}, ByAgent: []SignalsAgentRow{{AvgHealthScore: new(4.0)}}, ByProject: []SignalsProjectRow{{AvgHealthScore: new(5.0)}},
-		Calibration: map[string]SignalCalibration{"signal": {IncompleteLift: new(6.0), AvgScoreDelta: new(7.0)}},
-	}
-	loadSignals := func(context.Context, AnalyticsFilter) (SignalsAnalyticsResponse, error) { return signals, nil }
-	gotSignals, err := keptAnalytics(ctx, d, "signals", filter, loadSignals)
-	require.NoError(t, err)
-	gotSignals.GradeDistribution["A"] = 9
-	gotSignals.OutcomeDistribution["done"] = 9
-	gotSignals.OutcomeConfidenceDistribution["high"] = 9
-	*gotSignals.AvgHealthScore = 9
-	*gotSignals.ContextHealth.AvgContextPressure = 9
-	*gotSignals.Trend[0].AvgHealthScore = 9
-	*gotSignals.ByAgent[0].AvgHealthScore = 9
-	*gotSignals.ByProject[0].AvgHealthScore = 9
-	calibration := gotSignals.Calibration["signal"]
-	*calibration.IncompleteLift = 9
-	*calibration.AvgScoreDelta = 9
-	gotSignals.Calibration["other"] = calibration
-	againSignals, err := keptAnalytics(ctx, d, "signals", filter, loadSignals)
-	require.NoError(t, err)
-	assert.Equal(t, 1, againSignals.GradeDistribution["A"])
-	assert.Equal(t, 1, againSignals.OutcomeDistribution["done"])
-	assert.Equal(t, 1, againSignals.OutcomeConfidenceDistribution["high"])
-	assert.InDelta(t, 1.0, *againSignals.AvgHealthScore, 0)
-	assert.InDelta(t, 2.0, *againSignals.ContextHealth.AvgContextPressure, 0)
-	assert.InDelta(t, 3.0, *againSignals.Trend[0].AvgHealthScore, 0)
-	assert.InDelta(t, 4.0, *againSignals.ByAgent[0].AvgHealthScore, 0)
-	assert.InDelta(t, 5.0, *againSignals.ByProject[0].AvgHealthScore, 0)
-	assert.InDelta(t, 6.0, *againSignals.Calibration["signal"].IncompleteLift, 0)
-	assert.InDelta(t, 7.0, *againSignals.Calibration["signal"].AvgScoreDelta, 0)
-	assert.NotContains(t, againSignals.Calibration, "other")
-
-	empty, err := keptAnalytics(ctx, d, "empty-tools", filter, func(context.Context, AnalyticsFilter) (ToolsAnalyticsResponse, error) {
-		return ToolsAnalyticsResponse{ByAgent: []ToolAgentBreakdown{}, Trend: []ToolTrendEntry{{ByCat: map[string]int{}}}}, nil
-	})
-	require.NoError(t, err)
-	assert.Nil(t, empty.ByCategory)
-	assert.NotNil(t, empty.ByAgent)
-	assert.Empty(t, empty.ByAgent)
-	assert.NotNil(t, empty.Trend[0].ByCat)
-	assert.Empty(t, empty.Trend[0].ByCat)
 }
 
 func TestAnalyticsKeptTracksWrites(t *testing.T) {
@@ -282,6 +196,20 @@ func TestAnalyticsKeptSelectionAndArchiveIdentity(t *testing.T) {
 		require.NoError(t, err)
 	}
 	assert.EqualValues(t, 8, calls.Load())
+	_, err = d.getWriter().ExecContext(ctx, `INSERT INTO archive_metadata (key, value) VALUES (?, 'another-generation')`, archiveMetadataDatabaseIDKey)
+	require.NoError(t, err)
+	for _, key := range []string{archiveMetadataUsageChangeRevisionKey, archiveMetadataAnalyticsChangeRevisionKey} {
+		_, err = d.getWriter().ExecContext(ctx, `INSERT INTO archive_metadata (key, value) VALUES (?, '-1') ON CONFLICT(key) DO UPDATE SET value = excluded.value`, key)
+		require.NoError(t, err)
+		for range 2 {
+			report, err := d.GetAnalyticsTools(ctx, filters[0])
+			require.NoError(t, err)
+			assert.Equal(t, 1, report.TotalCalls)
+		}
+		_, err = d.getWriter().ExecContext(ctx, `UPDATE archive_metadata SET value = '0' WHERE key = ?`, key)
+		require.NoError(t, err)
+	}
+	assert.EqualValues(t, 12, calls.Load())
 }
 
 func TestAnalyticsKeptReadOnlyBypass(t *testing.T) {

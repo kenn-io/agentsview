@@ -26,7 +26,7 @@ func TestSignalsFrustrationMemoReuse(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, 1, resp.QualityHealth.Totals.FrustrationMarkerCount)
 	require.Len(t, d.frustrationMemo.counts, 1)
-	// A distinctive cached count proves the repeated read uses the memo.
+	// A distinctive cached count proves the next request uses the memo.
 	entry := d.frustrationMemo.counts["session"]
 	d.frustrationMemo.Store(d.frustrationMemo.generation, "session", entry.version, 7)
 	resp, err = d.analyticsSignals(ctx, AnalyticsFilter{})
