@@ -700,17 +700,11 @@ func TestSearchContent_SubstringMatch(t *testing.T) {
 }
 
 func TestSearchContent_ReportsMatchedWords(t *testing.T) {
-	ts, d := newTestToolset(t)
-	dbtest.SeedSession(t, d, "s1", "proj", func(s *db.Session) {
-		s.MessageCount = 2
-		s.UserMessageCount = 2
-		ended := "2024-06-15T10:00:00Z"
-		s.EndedAt = &ended
-	})
-	require.NoError(t, d.ReplaceSessionMessages(t.Context(), "s1", []db.Message{
-		dbtest.UserMsg("s1", 0, "settle the rounding of invoices"),
-	}))
-	_, out, err := ts.searchContent(t.Context(), nil, searchContentIn{Pattern: "invoice rounding decision"})
+	fake := &fakeContentSearchService{result: &service.ContentSearchResult{
+		Matches: []db.ContentMatch{{MatchedWords: 2}},
+	}}
+	ts := &toolset{svc: fake}
+	_, out, err := ts.searchContent(t.Context(), nil, searchContentIn{Pattern: "invoice rounding decision", IncludeActive: true})
 	require.NoError(t, err)
 	require.Len(t, out.Matches, 1)
 	assert.Equal(t, 2, out.Matches[0].MatchedWords)

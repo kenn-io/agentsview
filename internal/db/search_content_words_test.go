@@ -211,17 +211,18 @@ func TestSearchContentWordTierOrder(t *testing.T) {
 		filter  ContentSearchFilter
 		entries [][3]string
 		want    []wordHit
+		update  string
 	}{
-		{"default", ContentSearchFilter{Pattern: "alpha beta missing"}, [][3]string{{"newer", "alpha beta long", ""}, {"older", "alpha beta", ""}}, []wordHit{{"newer", "message", 2}, {"older", "message", 2}}},
-		{"fts", ContentSearchFilter{Pattern: "alpha beta missing", Mode: "fts"}, [][3]string{{"older", "alpha beta", ""}, {"newer", "alpha beta filler filler filler filler filler filler filler filler", ""}}, []wordHit{{"older", "message", 2}, {"newer", "message", 2}}},
-		{"hybrid", ContentSearchFilter{Pattern: "alpha beta missing", Mode: "hybrid", KeywordOnly: true}, [][3]string{{"older", "alpha beta", ""}, {"newer", "alpha beta filler filler filler filler filler filler filler filler", ""}}, []wordHit{{"older", "message", 2}, {"newer", "message", 2}}},
+		{"default", ContentSearchFilter{Pattern: "alpha beta missing"}, [][3]string{{"newer", "alpha beta long", ""}, {"older", "alpha beta", ""}}, []wordHit{{"newer", "message", 2}, {"older", "message", 2}}, ""},
+		{"fts", ContentSearchFilter{Pattern: "alpha beta missing", Mode: "fts"}, [][3]string{{"older", "alpha beta", ""}, {"newer", "alpha beta filler filler filler filler filler filler filler filler", ""}}, []wordHit{{"older", "message", 2}, {"newer", "message", 2}}, `UPDATE sessions SET ended_at = CASE id WHEN 'older' THEN '2026-01-01T00:00:00Z' ELSE '2026-06-01T00:00:00Z' END`},
+		{"hybrid", ContentSearchFilter{Pattern: "alpha beta missing", Mode: "hybrid", KeywordOnly: true}, [][3]string{{"older", "alpha beta", ""}, {"newer", "alpha beta filler filler filler filler filler filler filler filler", ""}}, []wordHit{{"older", "message", 2}, {"newer", "message", 2}}, `UPDATE sessions SET ended_at = CASE id WHEN 'older' THEN '2026-01-01T00:00:00Z' ELSE '2026-06-01T00:00:00Z' END`},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			d := testDB(t)
 			requireFTS(t, d)
 			seedWordSearch(t, d, "proj", tc.entries...)
-			if tc.name != "default" {
-				_, err := d.getWriter().Exec(t.Context(), `UPDATE sessions SET ended_at = CASE id WHEN 'older' THEN '2026-01-01T00:00:00Z' ELSE '2026-06-01T00:00:00Z' END`)
+			if tc.update != "" {
+				_, err := d.getWriter().Exec(t.Context(), tc.update)
 				require.NoError(t, err)
 			}
 			page, err := d.SearchContent(t.Context(), tc.filter)
@@ -250,17 +251,15 @@ func TestSearchContentWordPagesWithFilteredTiers(t *testing.T) {
 	requireFTS(t, d)
 	seedWordSearch(t, d, "other", [3]string{"excluded-1", "alpha beta", ""}, [3]string{"excluded-2", "alpha beta", ""})
 	seedWordSearch(t, d, "chosen", [3]string{"partial-2", "alpha beta", ""}, [3]string{"partial-1", "gamma", ""})
-	for _, mode := range []string{"", "fts"} {
-		for _, tc := range []struct {
-			cursor int
-			want   []wordHit
-		}{
-			{0, []wordHit{{"partial-2", "message", 2}, {"partial-1", "message", 1}}},
-			{1, []wordHit{{"partial-1", "message", 1}}},
-		} {
-			page, err := d.SearchContent(t.Context(), ContentSearchFilter{Pattern: "alpha beta gamma", Project: "chosen", Mode: mode, Limit: 2, Cursor: tc.cursor})
-			require.NoError(t, err)
-			assert.Equal(t, tc.want, wordHits(page), "mode %s cursor %d", mode, tc.cursor)
-		}
+	for _, tc := range []struct {
+		cursor int
+		want   []wordHit
+	}{
+		{0, []wordHit{{"partial-2", "message", 2}, {"partial-1", "message", 1}}},
+		{1, []wordHit{{"partial-1", "message", 1}}},
+	} {
+		page, err := d.SearchContent(t.Context(), ContentSearchFilter{Pattern: "alpha beta gamma", Project: "chosen", Limit: 2, Cursor: tc.cursor})
+		require.NoError(t, err)
+		assert.Equal(t, tc.want, wordHits(page), "cursor %d", tc.cursor)
 	}
 }

@@ -879,13 +879,18 @@ func TestSessionSearchSQLiteQuotedPatternOmitsFTSHint(t *testing.T) {
 	require.Len(t, decodeCLIJSON[service.ContentSearchResult](t, fts).Matches, 1)
 }
 
-func TestSessionSearchHintPreservesServer(t *testing.T) {
+func TestSessionSearchRemoteFTSHints(t *testing.T) {
 	newAgentDataDir(t)
 	tokenFile := filepath.Join(t.TempDir(), "token")
 	require.NoError(t, os.WriteFile(tokenFile, []byte("search-token"), 0o600))
 	ftsCalls := 0
 	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		assert.Equal(t, "Bearer search-token", r.Header.Get("Authorization"))
+		if r.URL.Path == "/api/v1/memory/status" {
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{"status":"ready","observed_at":"2026-01-01T00:00:00Z","archive":{"backend":"postgres","read_only":true},"lexical":{"status":"ready"},"semantic":{"status":"ready"},"sources":{"status":"ready"}}`))
+			return
+		}
 		if r.URL.Query().Get("mode") == "fts" {
 			ftsCalls++
 			w.Header().Set("Content-Type", "application/json")
