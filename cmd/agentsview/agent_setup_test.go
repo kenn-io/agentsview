@@ -24,7 +24,8 @@ func TestAgentSetupReplacesExistingMCP(t *testing.T) {
 			path := filepath.Join(home, tc.config)
 			require.NoError(t, os.MkdirAll(filepath.Dir(path), 0700))
 			require.NoError(t, os.WriteFile(path, []byte(tc.content), 0600))
-			out, err := executeCommand(newRootCommand(), "agent", "setup", "--agent", tc.agent)
+			out, err := executeCommand(
+				newRootCommand(), "agent", "setup", "--agent", tc.agent, "--force")
 			require.NoError(t, err, out)
 			got, err := os.ReadFile(path)
 			require.NoError(t, err)
@@ -56,6 +57,37 @@ func TestAgentSetupReplacesExistingMCP(t *testing.T) {
 			require.Equal(t, "other", entries["other"].Command)
 		})
 	}
+}
+
+func TestAgentSetupPreservesDifferentMCPWithoutForce(t *testing.T) {
+	home := t.TempDir()
+	setDoctorMemoryTestEnvironment(t, home)
+	fakeAgent(t, "claude", "")
+	path := filepath.Join(home, ".claude.json")
+	original := `{"mcpServers":{"agentsview":{"type":"stdio","command":"agentsview","args":["mcp","--profile","custom"]},"other":{"command":"other"}}}`
+	require.NoError(t, os.WriteFile(path, []byte(original), 0600))
+
+	out, err := executeCommand(newRootCommand(), "agent", "setup", "--agent", "claude")
+	require.Error(t, err, out)
+	got, err := os.ReadFile(path)
+	require.NoError(t, err)
+	require.Equal(t, original, string(got))
+
+	out, err = executeCommand(
+		newRootCommand(), "agent", "setup", "--agent", "claude", "--force")
+	require.NoError(t, err, out)
+	got, err = os.ReadFile(path)
+	require.NoError(t, err)
+	var config struct {
+		Servers map[string]struct {
+			Command string   `json:"command"`
+			Args    []string `json:"args"`
+		} `json:"mcpServers"`
+	}
+	require.NoError(t, json.Unmarshal(got, &config))
+	require.Equal(t, "agentsview", config.Servers["agentsview"].Command)
+	require.Equal(t, []string{"mcp", "--profile", "memory"}, config.Servers["agentsview"].Args)
+	require.Equal(t, "other", config.Servers["other"].Command)
 }
 
 func TestAgentSetupDoesNotRewriteCurrentSkills(t *testing.T) {
@@ -118,6 +150,44 @@ func TestAgentSetupPreservesRemoteAndProtectsEdits(t *testing.T) {
 	require.Equal(t, original, got)
 }
 
+func TestAgentSetupUsesSkillRemoteEnvironment(t *testing.T) {
+	home := t.TempDir()
+	setDoctorMemoryTestEnvironment(t, home)
+	t.Setenv("AGENTSVIEW_SKILLS_SERVER", "https://hosted.example")
+	fakeAgent(t, "claude", "")
+
+	out, err := executeCommand(newRootCommand(), "agent", "setup", "--agent", "claude")
+	require.NoError(t, err, out)
+	path := filepath.Join(skills.TargetDir(skills.HarnessClaude, home), skillFileName)
+	got, err := os.ReadFile(path)
+	require.NoError(t, err)
+	require.Contains(t, string(got), "--server https://hosted.example")
+}
+
+func TestAgentSetupRequiresServerForSkillTokenFile(t *testing.T) {
+	setDoctorMemoryTestEnvironment(t, t.TempDir())
+	t.Setenv("AGENTSVIEW_SKILLS_SERVER_TOKEN_FILE", "token")
+
+	out, err := executeCommand(newRootCommand(), "agent", "setup", "--agent", "claude")
+	require.Error(t, err, out)
+	require.Contains(t, err.Error(),
+		"AGENTSVIEW_SKILLS_SERVER_TOKEN_FILE requires AGENTSVIEW_SKILLS_SERVER")
+}
+
+func TestClaudeAgentSetupIgnoresUnreadableCodexSkill(t *testing.T) {
+	home := t.TempDir()
+	setDoctorMemoryTestEnvironment(t, home)
+	fakeAgent(t, "claude", "")
+	codexSkill := filepath.Join(skills.TargetDir(skills.HarnessAgents, home), skillFileName)
+	require.NoError(t, os.MkdirAll(filepath.Dir(codexSkill), 0700))
+	require.NoError(t, os.Mkdir(codexSkill, 0700))
+
+	out, err := executeCommand(newRootCommand(), "agent", "setup", "--agent", "claude")
+	require.NoError(t, err, out)
+	_, err = os.Stat(filepath.Join(skills.TargetDir(skills.HarnessClaude, home), skillFileName))
+	require.NoError(t, err)
+}
+
 func TestAgentSetupUpdatesStaleSkill(t *testing.T) {
 	home := t.TempDir()
 	setDoctorMemoryTestEnvironment(t, home)
@@ -135,16 +205,20 @@ func TestAgentSetupUpdatesStaleSkill(t *testing.T) {
 
 func TestSkillsInstallMCPPointer(t *testing.T) {
 	for _, tc := range []struct {
-		name, config  string
-		project, hint bool
+		name, config          string
+		project, client, hint bool
 	}{
-		{"missing", "", true, true},
-		{"outdated", `{"mcpServers":{"agentsview":{"command":"agentsview","args":["mcp"]}}}`, false, true},
-		{"malformed", "invalid", false, false},
+		{"missing client entry", "", true, true, true},
+		{"outdated client entry", `{"mcpServers":{"agentsview":{"command":"agentsview","args":["mcp"]}}}`, false, true, true},
+		{"malformed config", "invalid", false, true, false},
+		{"undetected client", `{"mcpServers":{"agentsview":{"command":"agentsview","args":["mcp"]}}}`, false, false, false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			home := t.TempDir()
 			setDoctorMemoryTestEnvironment(t, home)
+			if tc.client {
+				fakeAgent(t, "claude", "")
+			}
 			if tc.config != "" {
 				require.NoError(t, os.WriteFile(filepath.Join(home, ".claude.json"), []byte(tc.config), 0600))
 			}

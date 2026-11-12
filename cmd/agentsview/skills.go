@@ -10,11 +10,13 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"time"
 
 	"github.com/spf13/cobra"
+	"go.kenn.io/kit/agentmcp"
 	gitrepo "go.kenn.io/kit/git/repo"
 
 	"go.kenn.io/agentsview/internal/config"
@@ -82,8 +84,15 @@ func newSkillsInstallCommand() *cobra.Command {
 				if h == skills.HarnessClaude {
 					agent = "claude"
 				}
-				status, err := setupMCP(agent).Check(cmd.Context())
-				if err == nil && (status.State == "missing" || status.State == "outdated") {
+				if _, err := exec.LookPath(agent); err != nil {
+					continue
+				}
+				planned, err := agentmcp.PlanInstall(agentmcp.Agent(agent),
+					agentmcp.InstallOptions{
+						Name:   "agentsview",
+						Server: memoryMCPServer(),
+					})
+				if err == nil && planned.Changed {
 					fmt.Fprintln(cmd.OutOrStdout(), "Set up MCP with agentsview agent setup")
 					break
 				}
@@ -189,7 +198,8 @@ func newSkillsListCommand() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			rows, err := listSkillRows(base, project, remote)
+			rows, err := listSkillRows(
+				base, project, skills.AllHarnesses(), remote)
 			if err != nil {
 				return err
 			}
@@ -216,17 +226,17 @@ type skillListRow struct {
 	Path     string `json:"path"`
 }
 
-// listSkillRows classifies every artifact in every harness package under base
-// against a fresh render.
+// listSkillRows classifies every artifact in the selected harness packages
+// under base against a fresh render.
 func listSkillRows(
-	base string, project bool, remote skillRemoteSource,
+	base string, project bool, harnesses []skills.Harness,
+	remote skillRemoteSource,
 ) ([]skillListRow, error) {
 	level := "user"
 	if project {
 		level = "project"
 	}
 
-	harnesses := skills.AllHarnesses()
 	rows := make([]skillListRow, 0, len(harnesses)+1)
 	for _, h := range harnesses {
 		skillPath := filepath.Join(skills.TargetDir(h, base), skillFileName)
@@ -350,6 +360,7 @@ func skillRemoteFromFlags(cmd *cobra.Command) (skillRemoteSource, error) {
 	if err != nil {
 		return skillRemoteSource{}, err
 	}
+	env, envErr := skillRemoteFromEnv()
 	src := skillRemoteSource{
 		flag: skills.Remote{
 			Server:    strings.TrimSpace(server),
@@ -357,10 +368,7 @@ func skillRemoteFromFlags(cmd *cobra.Command) (skillRemoteSource, error) {
 		},
 		explicit: cmd.Flags().Changed("server") ||
 			cmd.Flags().Changed("server-token-file"),
-		env: skills.Remote{
-			Server:    strings.TrimSpace(os.Getenv("AGENTSVIEW_SKILLS_SERVER")),
-			TokenFile: strings.TrimSpace(os.Getenv("AGENTSVIEW_SKILLS_SERVER_TOKEN_FILE")),
-		},
+		env: env,
 	}
 	if src.explicit {
 		if src.flag.TokenFile != "" && src.flag.Server == "" {
@@ -369,11 +377,24 @@ func skillRemoteFromFlags(cmd *cobra.Command) (skillRemoteSource, error) {
 		}
 		return src, src.flag.Validate()
 	}
-	if src.env.TokenFile != "" && src.env.Server == "" {
-		return skillRemoteSource{}, errors.New(
+	if envErr != nil {
+		return skillRemoteSource{}, envErr
+	}
+	return src, nil
+}
+
+// skillRemoteFromEnv reads and validates the hosted target for generated skill
+// examples without requiring CLI flags.
+func skillRemoteFromEnv() (skills.Remote, error) {
+	remote := skills.Remote{
+		Server:    strings.TrimSpace(os.Getenv("AGENTSVIEW_SKILLS_SERVER")),
+		TokenFile: strings.TrimSpace(os.Getenv("AGENTSVIEW_SKILLS_SERVER_TOKEN_FILE")),
+	}
+	if remote.TokenFile != "" && remote.Server == "" {
+		return skills.Remote{}, errors.New(
 			"skills: AGENTSVIEW_SKILLS_SERVER_TOKEN_FILE requires AGENTSVIEW_SKILLS_SERVER")
 	}
-	return src, src.env.Validate()
+	return remote, remote.Validate()
 }
 
 // resolveSkillHarnesses maps --harness flag values to skills.Harness,

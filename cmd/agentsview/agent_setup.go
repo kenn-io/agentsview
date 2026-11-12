@@ -16,10 +16,14 @@ import (
 func newAgentCommand() *cobra.Command {
 	group := &cobra.Command{Use: "agent", Short: "Set up coding agents", GroupID: groupMeta}
 	var force bool
-	cmd := agentsetup.NewCommand(agentsetup.Options{SetupCommand: "agentsview agent setup", Items: func(agent string) ([]agentsetup.Item, error) {
-		return setupItems(agent, force)
-	}})
-	cmd.Flags().BoolVar(&force, "force", false, "Overwrite modified skills")
+	cmd := agentsetup.NewCommand(agentsetup.Options{
+		SetupCommand: "agentsview agent setup",
+		Items: func(agent string) ([]agentsetup.Item, error) {
+			return setupItems(agent, force)
+		},
+	})
+	cmd.Flags().BoolVar(&force, "force", false,
+		"Overwrite edited skills and a different MCP entry")
 	group.AddCommand(cmd)
 	return group
 }
@@ -38,16 +42,22 @@ func setupItems(agent string, force bool) ([]agentsetup.Item, error) {
 	if err != nil {
 		return nil, errors.New("resolve home directory")
 	}
+	remote, err := skillRemoteFromEnv()
+	if err != nil {
+		return nil, err
+	}
+	skillRemote := skillRemoteSource{env: remote}
 	checkSkills := func(context.Context) (agentsetup.Status, error) {
-		rows, err := listSkillRows(home, false, skillRemoteSource{})
+		rows, err := listSkillRows(
+			home, false, []skills.Harness{harness}, skillRemote)
 		if err != nil {
-			return agentsetup.Status{State: agentsetup.StateFailed, Reason: "Unable to read skill files"}, nil
+			return agentsetup.Status{
+				State:  agentsetup.StateFailed,
+				Reason: "Unable to read skill files",
+			}, nil
 		}
 		state := agentsetup.StateOK
 		for _, row := range rows {
-			if row.Harness != string(harness) {
-				continue
-			}
 			switch row.State {
 			case "missing":
 				state = agentsetup.StateMissing
@@ -56,20 +66,51 @@ func setupItems(agent string, force bool) ([]agentsetup.Item, error) {
 					state = agentsetup.StateOutdated
 				}
 			case "modified", "foreign":
-				return agentsetup.Status{State: agentsetup.StateModified, Reason: "Skill files were edited", NextStep: "agentsview agent setup --force"}, nil
+				return agentsetup.Status{
+					State:    agentsetup.StateModified,
+					Reason:   "Skill files were edited",
+					NextStep: "agentsview agent setup --force",
+				}, nil
 			}
 		}
 		return agentsetup.Status{State: state}, nil
 	}
-	skill := agentsetup.Item{Name: "skill", Check: checkSkills, Install: func(ctx context.Context) error {
-		if status, _ := checkSkills(ctx); status.State == agentsetup.StateOK && !force {
-			return nil
+	skill := agentsetup.Item{
+		Name:  "skill",
+		Check: checkSkills,
+		Install: func(ctx context.Context) error {
+			if status, _ := checkSkills(ctx); status.State == agentsetup.StateOK && !force {
+				return nil
+			}
+			return runSkillsInstall(
+				io.Discard, []skills.Harness{harness}, home, force, skillRemote)
+		},
+	}
+	mcp := setupMCP(agent)
+	installMCP := mcp.Install
+	mcp.Install = func(ctx context.Context) error {
+		if !force {
+			status, err := mcp.Check(ctx)
+			if err != nil {
+				return err
+			}
+			if status.State == agentsetup.StateOutdated {
+				return errors.New(
+					"existing agentsview MCP entry differs; rerun with --force")
+			}
 		}
-		return runSkillsInstall(io.Discard, []skills.Harness{harness}, home, force, skillRemoteSource{})
-	}}
-	return []agentsetup.Item{skill, setupMCP(agent)}, nil
+		return installMCP(ctx)
+	}
+	return []agentsetup.Item{skill, mcp}, nil
 }
 
 func setupMCP(agent string) agentsetup.Item {
-	return agentsetup.MCP(agent, "agentsview", agentmcp.Server{Command: "agentsview", Args: []string{"mcp", "--profile", "memory"}})
+	return agentsetup.MCP(agent, "agentsview", memoryMCPServer())
+}
+
+func memoryMCPServer() agentmcp.Server {
+	return agentmcp.Server{
+		Command: "agentsview",
+		Args:    []string{"mcp", "--profile", "memory"},
+	}
 }

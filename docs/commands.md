@@ -2371,7 +2371,7 @@ Install the conversation search skill and focused MCP profile for installed Clau
 agentsview agent setup [--agent claude|codex] [--check] [--force]
 ```
 
-Setup updates an existing `agentsview` MCP entry to the memory profile and preserves other entries. Pass `--force` to overwrite edited skill files. The memory profile supports `AGENTSVIEW_MEMORY_SERVER`, `AGENTSVIEW_MEMORY_SERVER_TOKEN_FILE`, and `AGENTSVIEW_MEMORY_PG`.
+Setup refuses to replace a different `agentsview` MCP entry without `--force` and preserves other entries. Pass `--force` to replace the entry and overwrite edited skill files. The memory profile supports `AGENTSVIEW_MEMORY_SERVER`, `AGENTSVIEW_MEMORY_SERVER_TOKEN_FILE`, and `AGENTSVIEW_MEMORY_PG`.
 
 ______________________________________________________________________
 

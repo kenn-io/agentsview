@@ -148,7 +148,7 @@ complete tool list above.
 
 This profile's tool list is about 21 KB, and the same test holds it under 24 KB.
 
-Run `agentsview agent setup` to install the recall skill and focused MCP profile for installed Claude Code and Codex clients. Use `--agent claude` or `--agent codex` to select a client, and `--check` to inspect setup. Setup updates an existing `agentsview` MCP entry to the memory profile and preserves other entries. Use `--force` to overwrite edited skills.
+Run `agentsview agent setup` to install the recall skill and focused MCP profile for installed Claude Code and Codex clients. Use `--agent claude` or `--agent codex` to select a client, and `--check` to inspect setup. Setup refuses to replace a different `agentsview` MCP entry without `--force` and preserves other entries. Use `--force` to replace the entry and overwrite edited skills.
 
 For a remote archive, set the hosted environment variables below for the focused profile. For skill-only or project-level installation, use `agentsview skills install`; see [the CLI reference](/docs/commands/#agentsview-skills).
 
