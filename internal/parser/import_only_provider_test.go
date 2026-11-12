@@ -68,9 +68,8 @@ func TestImportOnlyProviderContentCapabilitiesMatchParsedExports(t *testing.T) {
 		]
 	}]`
 	geminiPath := filepath.Join(t.TempDir(), "activity.html")
-	require.NoError(t, os.WriteFile(geminiPath, []byte(geminiAppsSingleCellHTML(
-		"", "My Activity History", "Prompted<br>",
-		"Jan 2, 2025, 3:04:05 PM EDT", "<p>first prompt</p><p>answer</p>",
+	require.NoError(t, os.WriteFile(geminiPath, []byte(geminiAppsPromptedDocument(
+		geminiAppsPromptedCellHTML("Jan 2, 2025, 3:04:05 PM GMT", "first prompt", "<p>answer</p>"),
 	)), 0o644))
 
 	parse := map[AgentType]func(Provider, func(ParseResult) error) error{

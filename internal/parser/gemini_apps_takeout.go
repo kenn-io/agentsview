@@ -15,6 +15,8 @@ import (
 	"unicode"
 
 	"golang.org/x/net/html"
+
+	"go.kenn.io/agentsview/internal/timeutil"
 )
 
 type GeminiAppsParseSummary struct{ Skipped, Errors int }
@@ -23,9 +25,15 @@ type GeminiAppsExportParser interface {
 	ParseGeminiAppsExport(string, func(ParseResult) error) (GeminiAppsParseSummary, error)
 }
 
+const geminiAppsTimestampPattern = `(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)\s+\d{1,2},\s+\d{4},\s+\d{1,2}:\d{2}:\d{2}[\x{00a0}\x{202f} ]*(?:AM|PM)[\x{00a0}\x{202f} ]+(\S+)`
+
 var (
-	geminiAppsTimestampRE     = regexp.MustCompile(`(?i)\b(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)\s+\d{1,2},\s+\d{4},\s+\d{1,2}:\d{2}:\d{2}[\x{00a0}\x{202f} ]*(?:AM|PM)[\x{00a0}\x{202f} ]+(\S+)`)
-	geminiAppsTimestampLikeRE = regexp.MustCompile(`(?i)(?:\b\d{1,2}\D+\d{4}\b|\b\d{4}\D+\d{1,2}\D+\d{1,2}\b)`)
+	// geminiAppsTimestampLineRE matches the line Takeout writes between the
+	// prompt and the response.
+	geminiAppsTimestampLineRE = regexp.MustCompile(`(?i)^` + geminiAppsTimestampPattern + `$`)
+	// geminiAppsTimestampLikeRE recognizes a date-and-clock line in a
+	// rendering this parser does not support, such as another locale.
+	geminiAppsTimestampLikeRE = regexp.MustCompile(`(?i)^.{0,40}(?:\b\d{1,2}\D+\d{4}\b|\b\d{4}\D+\d{1,2}\D+\d{1,2}\b).{0,10}\b\d{1,2}[:.]\d{2}[:.]\d{2}\b.{0,20}$`)
 )
 
 type geminiAppsFilePlan struct {
@@ -37,7 +45,13 @@ type geminiAppsUnsupportedError struct{ err error }
 
 func (e geminiAppsUnsupportedError) Error() string { return e.err.Error() }
 
-func (p *geminiAppsImportOnlyProvider) ParseGeminiAppsExport(root string, callback func(ParseResult) error) (summary GeminiAppsParseSummary, retErr error) {
+func (p *geminiAppsImportOnlyProvider) ParseGeminiAppsExport(root string, callback func(ParseResult) error) (GeminiAppsParseSummary, error) {
+	return parseGeminiAppsExport(root, timeutil.LocalLocation(), callback)
+}
+
+// parseGeminiAppsExport parses every Gemini Apps HTML file under root. host
+// resolves zone abbreviations; see parseGeminiAppsTimestamp.
+func parseGeminiAppsExport(root string, host *time.Location, callback func(ParseResult) error) (summary GeminiAppsParseSummary, retErr error) {
 	paths, err := geminiAppsHTMLPaths(root)
 	if err != nil {
 		return summary, err
@@ -49,7 +63,7 @@ func (p *geminiAppsImportOnlyProvider) ParseGeminiAppsExport(root string, callba
 	plans := make([]geminiAppsFilePlan, 0, len(paths))
 	admitted := false
 	for _, path := range paths {
-		plan, ok, err := planGeminiAppsFile(path)
+		plan, ok, err := planGeminiAppsFile(path, host)
 		if err != nil {
 			return summary, err
 		}
@@ -99,7 +113,10 @@ func countPlannedResults(plans []geminiAppsFilePlan) int {
 	return n
 }
 
-func planGeminiAppsFile(path string) (geminiAppsFilePlan, bool, error) {
+// planGeminiAppsFile reads one Takeout HTML file. host names the importing
+// machine's time zone, which resolves zone abbreviations the fixed table does
+// not know.
+func planGeminiAppsFile(path string, host *time.Location) (geminiAppsFilePlan, bool, error) {
 	file, err := os.Open(path)
 	if err != nil {
 		return geminiAppsFilePlan{}, false, fmt.Errorf("reading Takeout HTML: %w", err)
@@ -133,10 +150,7 @@ func planGeminiAppsFile(path string) (geminiAppsFilePlan, bool, error) {
 		return geminiAppsFilePlan{}, false, errors.New("unsupported localized or changed Gemini Apps Takeout format")
 	}
 	for _, cell := range geminiCells {
-		admittedCell, result, err := planGeminiAppsCell(cell)
-		if !admittedCell {
-			continue
-		}
+		prompted, result, err := planGeminiAppsCell(cell, host)
 		if err != nil {
 			if _, ok := errors.AsType[geminiAppsUnsupportedError](err); ok {
 				return geminiAppsFilePlan{}, false, err
@@ -144,7 +158,7 @@ func planGeminiAppsFile(path string) (geminiAppsFilePlan, bool, error) {
 			plan.errors++
 			continue
 		}
-		if result.Session.FirstMessage == "" {
+		if !prompted {
 			plan.skipped++
 			continue
 		}
@@ -189,81 +203,168 @@ func geminiAppsOuterCells(doc *html.Node) []*html.Node {
 	return cells
 }
 
-func planGeminiAppsCell(cell *html.Node) (bool, ParseResult, error) {
-	header := firstDescendantClass(cell, "header-cell")
-	if header == nil {
+// planGeminiAppsCell reads one Gemini Apps activity cell. Takeout writes the
+// activity line, such as "Prompted <prompt>", then the timestamp line, then
+// the response HTML, all as direct children of the body content cell with
+// <br> between lines. It returns false with no error for activity that is not
+// a prompt.
+func planGeminiAppsCell(cell *html.Node, host *time.Location) (bool, ParseResult, error) {
+	content := geminiAppsBodyCell(cell)
+	if content == nil {
+		return false, ParseResult{}, errors.New("activity record has no content cell")
+	}
+	var children []*html.Node
+	for child := content.FirstChild; child != nil; child = child.NextSibling {
+		children = append(children, child)
+	}
+	lines := geminiAppsLines(children)
+	if len(lines) == 0 || !geminiAppsIsPrompted(geminiAppsRender(children[lines[0][0]:lines[0][1]])) {
 		return false, ParseResult{}, nil
 	}
-	if geminiAppsActivityLabel(header) != "prompted" {
-		return true, ParseResult{}, nil
-	}
-	content := firstDescendantClass(cell, "content-cell")
-	headerText := normalizeMetadata(geminiAppsText(header, false))
-	match := geminiAppsTimestampRE.FindStringSubmatch(headerText)
-	if match == nil {
-		if geminiAppsTimestampLikeRE.MatchString(headerText) {
-			return true, ParseResult{}, geminiAppsUnsupportedError{errors.New("activity record has no supported header timestamp")}
+
+	// A prompt can contain a line that looks exactly like the timestamp.
+	// Nothing in the markup tells the two apart, so a record with more than
+	// one candidate is counted as an error instead of guessing.
+	stampLine := -1
+	var match []string
+	texts := make([]string, len(lines))
+	for i, line := range lines {
+		texts[i] = normalizeMetadata(geminiAppsRender(children[line[0]:line[1]]))
+		if i == 0 {
+			continue
 		}
-		return true, ParseResult{}, errors.New("activity record has no supported header timestamp")
+		if m := geminiAppsTimestampLineRE.FindStringSubmatch(texts[i]); m != nil {
+			if stampLine >= 0 {
+				return false, ParseResult{}, errors.New("prompted activity record has more than one timestamp line")
+			}
+			stampLine, match = i, m
+		}
 	}
-	ts, err := parseGeminiAppsTimestamp(match[0], match[1])
+	if stampLine < 0 {
+		// Look for another rendering only when no supported timestamp exists,
+		// so dates the user typed in a prompt cannot abort the import.
+		for _, text := range texts[1:] {
+			if geminiAppsTimestampLikeRE.MatchString(text) {
+				return false, ParseResult{}, geminiAppsUnsupportedError{fmt.Errorf("unsupported Gemini Apps timestamp %q", text)}
+			}
+		}
+		return false, ParseResult{}, errors.New("prompted activity record has no timestamp line")
+	}
+	ts, err := parseGeminiAppsTimestamp(match[0], match[1], host)
 	if err != nil {
-		return true, ParseResult{}, geminiAppsUnsupportedError{err}
+		return false, ParseResult{}, geminiAppsUnsupportedError{err}
 	}
-	if content == nil {
-		return true, ParseResult{}, errors.New("prompted activity record has no content cell")
+
+	prompt := geminiAppsPromptText(children[:lines[stampLine][0]])
+	if prompt == "" {
+		return false, ParseResult{}, errors.New("prompted activity record has no prompt")
 	}
-	payload := geminiAppsContentText(content, match[0])
-	if payload == "" {
-		return true, ParseResult{}, errors.New("prompted activity record has no prompt")
+	response := normalizeGeminiAppsContentText(geminiAppsRender(children[lines[stampLine][1]:]))
+
+	messages := []ParsedMessage{{Ordinal: 0, Role: RoleUser, Content: prompt, Timestamp: ts, ContentLength: len(prompt)}}
+	if response != "" {
+		messages = append(messages, ParsedMessage{Ordinal: 1, Role: RoleAssistant, Content: response, Timestamp: ts, ContentLength: len(response)})
 	}
-	result := ParseResult{Session: ParsedSession{Project: "gemini.google.com", Machine: "local", Agent: AgentGeminiApps, FirstMessage: payload, SessionName: payload, StartedAt: ts, EndedAt: ts, MessageCount: 1, UserMessageCount: 1}}
-	result.Messages = []ParsedMessage{{Ordinal: 0, Role: RoleUser, Content: payload, Timestamp: ts, ContentLength: len(payload)}}
+	result := ParseResult{
+		Session: ParsedSession{
+			Project: "gemini.google.com", Machine: "local", Agent: AgentGeminiApps,
+			FirstMessage: prompt, SessionName: prompt, StartedAt: ts, EndedAt: ts,
+			MessageCount: len(messages), UserMessageCount: 1,
+		},
+		Messages: messages,
+	}
 	return true, result, nil
 }
 
-func geminiAppsContentText(content *html.Node, headerTimestamp string) string {
-	var b strings.Builder
-	for child := content.FirstChild; child != nil; child = child.NextSibling {
-		text := geminiAppsVisibleText(child)
-		if normalizeMetadata(text) == normalizeMetadata(headerTimestamp) {
-			continue
-		}
-		b.WriteString(geminiAppsVisibleTextInContext(child, false))
-	}
-	return normalizeGeminiAppsContentText(b.String())
-}
-
-func geminiAppsActivityLabel(header *html.Node) string {
-	var label string
+// geminiAppsBodyCell returns the content cell that holds the activity text.
+// Takeout also writes an empty right-aligned cell and a caption cell that
+// lists products and details.
+func geminiAppsBodyCell(cell *html.Node) *html.Node {
+	var found *html.Node
 	var walk func(*html.Node)
 	walk = func(n *html.Node) {
-		if label != "" {
+		if found != nil {
 			return
 		}
-		if n.Type == html.ElementNode && isGeminiAppsIgnored(strings.ToLower(n.Data)) {
-			return
-		}
-		if n.Type == html.ElementNode && strings.EqualFold(n.Data, "p") {
-			label = strings.ToLower(normalizeMetadata(geminiAppsText(n, false)))
+		if n.Type == html.ElementNode && hasClass(n, "content-cell") &&
+			!hasClass(n, "mdl-typography--text-right") && !hasClass(n, "mdl-typography--caption") {
+			found = n
 			return
 		}
 		for child := n.FirstChild; child != nil; child = child.NextSibling {
 			walk(child)
 		}
 	}
-	walk(header)
-	return label
+	walk(cell)
+	return found
 }
 
-func geminiAppsVisibleText(n *html.Node) string {
-	return normalizeGeminiAppsVisibleText(geminiAppsVisibleTextInContext(n, false))
+// geminiAppsLines splits direct children at <br> elements into [start, end)
+// index ranges, dropping lines with no visible text.
+func geminiAppsLines(children []*html.Node) [][2]int {
+	var lines [][2]int
+	start := 0
+	flush := func(end int) {
+		if strings.TrimSpace(normalizeMetadata(geminiAppsRender(children[start:end]))) != "" {
+			lines = append(lines, [2]int{start, end})
+		}
+	}
+	for i, child := range children {
+		if child.Type == html.ElementNode && strings.EqualFold(child.Data, "br") {
+			flush(i)
+			start = i + 1
+		}
+	}
+	flush(len(children))
+	return lines
 }
 
-func normalizeGeminiAppsVisibleText(value string) string {
-	const start, end = "\ue000", "\ue001"
-	value = normalizeGeminiAppsVisibleTextWithMarkers(value)
-	return strings.NewReplacer(start, "", end, "").Replace(value)
+func geminiAppsRender(nodes []*html.Node) string {
+	var b strings.Builder
+	for _, n := range nodes {
+		b.WriteString(geminiAppsVisibleTextInContext(n, false))
+	}
+	return b.String()
+}
+
+const geminiAppsPromptedLabel = "prompted"
+
+// geminiAppsIsPrompted reports whether an activity line starts with the
+// Prompted label as a whole word.
+func geminiAppsIsPrompted(line string) bool {
+	fields := strings.Fields(normalizeMetadata(line))
+	return len(fields) > 0 && strings.EqualFold(fields[0], geminiAppsPromptedLabel)
+}
+
+// geminiAppsPromptText renders the lines before the timestamp without the
+// leading Prompted label. The label is removed before rendering so authored
+// whitespace in preformatted prompt text survives.
+func geminiAppsPromptText(nodes []*html.Node) string {
+	var b strings.Builder
+	labelled := false
+	for _, n := range nodes {
+		if !labelled {
+			if n.Type == html.CommentNode || (n.Type == html.TextNode && strings.TrimSpace(n.Data) == "") {
+				continue
+			}
+			if n.Type != html.TextNode {
+				return ""
+			}
+			text := strings.TrimLeftFunc(sanitizeGeminiAppsText(n.Data), unicode.IsSpace)
+			if len(text) < len(geminiAppsPromptedLabel) || !strings.EqualFold(text[:len(geminiAppsPromptedLabel)], geminiAppsPromptedLabel) {
+				return ""
+			}
+			labelled = true
+			b.WriteString(geminiAppsTextValue(text[len(geminiAppsPromptedLabel):], false))
+			continue
+		}
+		b.WriteString(geminiAppsVisibleTextInContext(n, false))
+	}
+	prompt := normalizeGeminiAppsContentText(b.String())
+	if strings.TrimSpace(prompt) == "" {
+		return ""
+	}
+	return prompt
 }
 
 func normalizeGeminiAppsContentText(value string) string {
@@ -323,7 +424,9 @@ func normalizeGeminiAppsVisibleTextWithMarkers(value string) string {
 			b.WriteString(value)
 			break
 		}
-		b.WriteString(value[:endIndex])
+		// Keep the markers so callers trim only generated block newlines,
+		// not newlines authored at the edges of preformatted text.
+		b.WriteString(start + value[:endIndex] + end)
 		value = value[endIndex+len(end):]
 	}
 	return b.String()
@@ -446,19 +549,14 @@ func firstDescendantClass(n *html.Node, class string) *html.Node {
 	return nil
 }
 
-func geminiAppsProductHeading(n *html.Node) string {
-	for child := n.FirstChild; child != nil; child = child.NextSibling {
-		if child.Type == html.ElementNode && strings.HasPrefix(strings.ToLower(child.Data), "h") {
-			text := normalizeMetadata(geminiAppsText(child, false))
-			if text != "" {
-				return strings.ToLower(text)
-			}
-		}
-		if found := geminiAppsProductHeading(child); found != "" {
-			return found
-		}
+// geminiAppsProductHeading returns the lowercased product name Takeout writes
+// in each cell's header, such as "gemini apps".
+func geminiAppsProductHeading(cell *html.Node) string {
+	header := firstDescendantClass(cell, "header-cell")
+	if header == nil {
+		return ""
 	}
-	return ""
+	return strings.ToLower(normalizeMetadata(geminiAppsText(header, false)))
 }
 
 func normalizeMetadata(value string) string {
@@ -499,23 +597,52 @@ func geminiAppsHTMLPaths(root string) ([]string, error) {
 	return paths, nil
 }
 
-func parseGeminiAppsTimestamp(value, zone string) (time.Time, error) {
+// parseGeminiAppsTimestamp resolves a Takeout timestamp such as
+// "Nov 10, 2026, 3:33:10 AM IST". Takeout writes the account's local time with
+// a zone abbreviation. When the importing machine's zone uses the same
+// abbreviation, its offset wins, because abbreviations like IST and CST name
+// different zones in different countries. Otherwise the fixed table and
+// GMT offsets apply.
+func parseGeminiAppsTimestamp(value, zone string, host *time.Location) (time.Time, error) {
 	value = normalizeMetadata(value)
 	zone = strings.ToUpper(zone)
-	offset, ok := geminiAppsZoneOffset(zone)
-	if !ok {
-		return time.Time{}, fmt.Errorf("unsupported Gemini Apps timestamp zone %q", zone)
-	}
 	index := strings.LastIndex(value, " ")
 	if index < 0 {
 		return time.Time{}, fmt.Errorf("invalid Gemini Apps timestamp %q", value)
 	}
-	loc := time.FixedZone(zone, offset)
-	parsed, err := time.ParseInLocation("Jan 2, 2006, 3:04:05 PM", strings.TrimSpace(value[:index]), loc)
+	wall, err := time.Parse("Jan 2, 2006, 3:04:05 PM", strings.TrimSpace(value[:index]))
 	if err != nil {
 		return time.Time{}, fmt.Errorf("parsing Gemini Apps timestamp: %w", err)
 	}
-	return parsed, nil
+	offset, ok := geminiAppsHostZoneOffset(zone, wall, host)
+	if !ok {
+		offset, ok = geminiAppsZoneOffset(zone)
+	}
+	if !ok {
+		return time.Time{}, fmt.Errorf("unsupported Gemini Apps timestamp zone %q; rerun the import with TZ set to the Google account's time zone", zone)
+	}
+	return wall.Add(-time.Duration(offset) * time.Second).In(time.FixedZone(zone, offset)), nil
+}
+
+// geminiAppsHostZoneOffset returns the offset host uses with the abbreviation
+// zone. Takeout labels every record with the zone in effect when the export
+// ran, so a summer abbreviation can appear on a winter record. The check
+// therefore looks at the record's date and at both halves of its year.
+func geminiAppsHostZoneOffset(zone string, wall time.Time, host *time.Location) (int, bool) {
+	if host == nil {
+		return 0, false
+	}
+	year := wall.Year()
+	for _, probe := range []time.Time{
+		time.Date(year, wall.Month(), wall.Day(), wall.Hour(), wall.Minute(), wall.Second(), 0, host),
+		time.Date(year, time.January, 1, 12, 0, 0, 0, host),
+		time.Date(year, time.July, 1, 12, 0, 0, 0, host),
+	} {
+		if name, offset := probe.Zone(); strings.EqualFold(name, zone) {
+			return offset, true
+		}
+	}
+	return 0, false
 }
 
 func geminiAppsZoneOffset(zone string) (int, bool) {

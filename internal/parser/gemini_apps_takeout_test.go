@@ -11,128 +11,174 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-const sanitizedGeminiAppsHTML = `<!doctype html>
-<html><head><title>My Activity History</title></head><body>
-<div class="outer-cell mdl-cell">
-  <div class="header-cell mdl-cell"><h3>Gemini Apps</h3><p>Prompted<br></p><p>Jan 2, 2025, 3:04:05 PM EDT</p></div>
-  <div class="content-cell mdl-cell"><p>first prompt<br></p><p><strong>first</strong> answer &amp; detail</p><script>secret script</script><style>secret style</style><template>secret template</template><noscript>secret noscript</noscript></div>
-</div>
-<div class="outer-cell mdl-cell">
-  <div class="header-cell mdl-cell"><h3>Gemini Apps</h3><p>Canvas</p><p>Jan 3, 2025, 3:04:05 PM PST</p></div>
-  <div class="content-cell mdl-cell"><p>canvas content</p></div>
-</div>
-<div class="outer-cell mdl-cell">
-  <div class="header-cell mdl-cell"><h3>Gemini Apps</h3><p>Feedback</p><p>Jan 4, 2025, 3:04:05 PM GMT+05:30</p></div>
-  <div class="content-cell mdl-cell"><p>feedback content</p></div>
-</div>
-<div class="outer-cell mdl-cell">
-  <div class="header-cell mdl-cell"><h3>Gemini Apps</h3><p>Prompted<br></p><p>Jan 5, 2025, 3:04:05 PM PST</p></div>
-  <div class="content-cell mdl-cell"><p>second prompt</p><p>second answer</p></div>
-</div>
-<div class="outer-cell mdl-cell">
-  <div class="header-cell mdl-cell"><h3>Gemini Apps</h3><p>Unknown activity</p><p>Jan 6, 2025, 3:04:05 PM EDT</p></div>
-  <div class="content-cell mdl-cell"><p>not a prompt</p></div>
-</div>
-</body></html>`
-
-func geminiAppsSingleCellHTML(
-	lang, title, label, timestamp, content string,
-) string {
-	return `<!doctype html><html` + lang + `><head><title>` + title + `</title></head><body>` +
-		geminiAppsProductCellHTML("Gemini Apps", label, timestamp, content) +
-		`</body></html>`
-}
-
-func geminiAppsProductCellHTML(
-	product, label, timestamp, content string,
-) string {
-	return `<div class="outer-cell"><div class="header-cell"><h3>` + product +
-		`</h3><p>` + label + `</p><p>` + timestamp +
-		`</p></div><div class="content-cell">` + content +
+// geminiAppsCellHTML renders one My Activity cell in the layout Google Takeout
+// writes: the product name in the header, then a body cell holding the
+// activity line, the timestamp line, and the response, then an empty
+// right-aligned cell and a caption cell.
+func geminiAppsCellHTML(product, line, timestamp, response string) string {
+	return `<div class="outer-cell mdl-cell mdl-cell--12-col mdl-shadow--2dp"><div class="mdl-grid">` +
+		`<div class="header-cell mdl-cell mdl-cell--12-col"><p class="mdl-typography--title">` + product + `<br></p></div>` +
+		`<div class="content-cell mdl-cell mdl-cell--6-col mdl-typography--body-1">` + line + `<br>` + timestamp + `<br>` + response + `</div>` +
+		`<div class="content-cell mdl-cell mdl-cell--6-col mdl-typography--body-1 mdl-typography--text-right"></div>` +
+		`<div class="content-cell mdl-cell mdl-cell--12-col mdl-typography--caption"><b>Products:</b><br>&emsp;` + product + `<br></div>` +
 		`</div></div>`
 }
 
-func parseGeminiAppsIDs(t *testing.T, fixture string) map[string]string {
-	t.Helper()
+func geminiAppsPromptedCellHTML(timestamp, prompt, response string) string {
+	return geminiAppsCellHTML("Gemini Apps", "Prompted&nbsp;"+prompt, timestamp, response)
+}
 
-	path := filepath.Join(t.TempDir(), "activity.html")
-	require.NoError(t, os.WriteFile(path, []byte(fixture), 0o644))
-
-	provider, ok := NewProvider(AgentGeminiApps, ProviderConfig{})
-	require.True(t, ok)
-	exporter := provider.(GeminiAppsExportParser)
-	ids := make(map[string]string)
-	_, err := exporter.ParseGeminiAppsExport(path, func(result ParseResult) error {
-		ids[result.Messages[0].Content] = result.Session.ID
-		return nil
-	})
-	require.NoError(t, err)
-	return ids
+func geminiAppsDocumentHTML(htmlAttrs, title string, cells ...string) string {
+	return `<html` + htmlAttrs + `><head><title>` + title + `</title></head><body><div class="mdl-grid">` +
+		strings.Join(cells, "\n") + `</div></body></html>`
 }
 
 func geminiAppsPromptedDocument(cells ...string) string {
-	return `<!doctype html><html><head><title>My Activity History</title></head><body>` +
-		strings.Join(cells, "") + `</body></html>`
+	return geminiAppsDocumentHTML("", "My Activity History", cells...)
 }
 
-func TestParseGeminiAppsExportRealOuterCellHeaderShape(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "activity.html")
-	require.NoError(t, os.WriteFile(path, []byte(sanitizedGeminiAppsHTML), 0o644))
+type geminiAppsParse struct {
+	results []ParseResult
+	summary GeminiAppsParseSummary
+	err     error
+}
 
+// parseGeminiAppsRoot parses root with host as the importing machine's zone,
+// so results do not depend on the zone of the machine running the tests.
+func parseGeminiAppsRoot(t *testing.T, root string, host *time.Location) geminiAppsParse {
+	t.Helper()
+	var got geminiAppsParse
+	got.summary, got.err = parseGeminiAppsExport(root, host, func(result ParseResult) error {
+		got.results = append(got.results, result)
+		return nil
+	})
+	return got
+}
+
+func parseGeminiAppsHTML(t *testing.T, fixture string) geminiAppsParse {
+	t.Helper()
+	path := filepath.Join(t.TempDir(), "MyActivity.html")
+	require.NoError(t, os.WriteFile(path, []byte(fixture), 0o644))
+	return parseGeminiAppsRoot(t, path, time.UTC)
+}
+
+func geminiAppsIDsByPrompt(t *testing.T, fixture string) map[string]string {
+	t.Helper()
+	got := parseGeminiAppsHTML(t, fixture)
+	require.NoError(t, got.err)
+	ids := make(map[string]string)
+	for _, result := range got.results {
+		ids[result.Messages[0].Content] = result.Session.ID
+	}
+	return ids
+}
+
+func geminiAppsMessageContents(result ParseResult) []string {
+	contents := make([]string, 0, len(result.Messages))
+	for _, message := range result.Messages {
+		contents = append(contents, message.Content)
+	}
+	return contents
+}
+
+func TestParseGeminiAppsExportTakeoutFixture(t *testing.T) {
 	provider, ok := NewProvider(AgentGeminiApps, ProviderConfig{})
 	require.True(t, ok)
 	exporter, ok := provider.(GeminiAppsExportParser)
 	require.True(t, ok)
 
+	path := filepath.Join("testdata", "gemini-apps", "MyActivity.html")
 	var results []ParseResult
 	summary, err := exporter.ParseGeminiAppsExport(path, func(result ParseResult) error {
 		results = append(results, result)
 		return nil
 	})
 	require.NoError(t, err)
-	assert.Len(t, results, 2)
-	assert.Equal(t, 3, summary.Skipped)
+	assert.Equal(t, 1, summary.Skipped)
 	assert.Zero(t, summary.Errors)
+	require.Len(t, results, 3)
 
-	assert.Equal(t, "gemini.google.com", results[0].Session.Project)
-	assert.Equal(t, AgentGeminiApps, results[0].Session.Agent)
-	assert.Equal(t, "first prompt\n\nfirst answer & detail", results[0].Messages[0].Content)
-	assert.Equal(t, RoleUser, results[0].Messages[0].Role)
-	assert.Len(t, results[0].Messages, 1)
-	assert.NotContains(t, results[0].Messages[0].Content, "secret")
-	assert.Equal(t, "2025-01-02T19:04:05Z", results[0].Session.StartedAt.UTC().Format("2006-01-02T15:04:05Z"))
+	first := results[0]
+	assert.Equal(t, AgentGeminiApps, first.Session.Agent)
+	assert.Equal(t, "gemini.google.com", first.Session.Project)
+	assert.Equal(t, "How do I list files sorted by size?", first.Session.FirstMessage)
+	assert.Equal(t, "How do I list files sorted by size?", first.Session.SessionName)
+	assert.Equal(t, 2, first.Session.MessageCount)
+	assert.Equal(t, 1, first.Session.UserMessageCount)
+	require.Len(t, first.Messages, 2)
+	assert.Equal(t, RoleUser, first.Messages[0].Role)
+	assert.Equal(t, "How do I list files sorted by size?", first.Messages[0].Content)
+	assert.Equal(t, RoleAssistant, first.Messages[1].Role)
+	assert.Equal(t, 1, first.Messages[1].Ordinal)
+	assert.Equal(t,
+		"Use ls with the size flag:\n\nls -lS\n\n\nAdd -r to reverse the order.\n\nAdd -h for readable sizes.",
+		first.Messages[1].Content,
+	)
+	assert.Equal(t, first.Session.StartedAt, first.Messages[1].Timestamp)
+	assert.True(t, strings.HasPrefix(first.Session.ID, "gemini-apps:"))
 
-	firstID := results[0].Session.ID
-	var repeated []ParseResult
+	second := results[1]
+	assert.Equal(t,
+		[]string{"Write a haiku about rain.\nKeep it short.", "Soft rain on the roof\nthe gutters hum their one song\nmorning smells of earth"},
+		geminiAppsMessageContents(second),
+	)
+
+	third := results[2]
+	assert.Equal(t, []string{"Thanks!"}, geminiAppsMessageContents(third))
+	assert.Equal(t, 1, third.Session.MessageCount)
+
+	var repeated []string
 	_, err = exporter.ParseGeminiAppsExport(path, func(result ParseResult) error {
-		repeated = append(repeated, result)
+		repeated = append(repeated, result.Session.ID)
 		return nil
 	})
 	require.NoError(t, err)
-	assert.Equal(t, firstID, repeated[0].Session.ID)
+	assert.Equal(t, []string{first.Session.ID, second.Session.ID, third.Session.ID}, repeated)
+}
+
+func TestParseGeminiAppsFixtureTimestampsUseExportedZone(t *testing.T) {
+	path := filepath.Join("testdata", "gemini-apps", "MyActivity.html")
+	got := parseGeminiAppsRoot(t, path, time.UTC)
+	require.NoError(t, got.err)
+	require.Len(t, got.results, 3)
+	assert.Equal(t, "2026-11-10T05:15:42Z", got.results[0].Session.StartedAt.UTC().Format(time.RFC3339))
+	assert.Equal(t, "2026-11-09T00:03:17Z", got.results[1].Session.StartedAt.UTC().Format(time.RFC3339))
+	assert.Equal(t, "2026-11-09T00:05:00Z", got.results[2].Session.StartedAt.UTC().Format(time.RFC3339))
+}
+
+func TestParseGeminiAppsTakeoutDirectoryLayout(t *testing.T) {
+	root := t.TempDir()
+	fixture, err := os.ReadFile(filepath.Join("testdata", "gemini-apps", "MyActivity.html"))
+	require.NoError(t, err)
+	activityDir := filepath.Join(root, "Takeout", "My Activity", "Gemini Apps")
+	require.NoError(t, os.MkdirAll(activityDir, 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(activityDir, "MyActivity.html"), fixture, 0o644))
+	require.NoError(t, os.WriteFile(
+		filepath.Join(root, "Takeout", "archive_browser.html"),
+		[]byte(`<html><head><title>Archive</title></head><body><h1>Your account, your data.</h1></body></html>`),
+		0o644,
+	))
+
+	got := parseGeminiAppsRoot(t, root, time.UTC)
+	require.NoError(t, got.err)
+	assert.Len(t, got.results, 3)
+	assert.Equal(t, 1, got.summary.Skipped)
 }
 
 func TestParseGeminiAppsIDsIgnoreUnrelatedRecordOrder(t *testing.T) {
-	cell := func(label, timestamp, content string) string {
-		return geminiAppsProductCellHTML("Gemini Apps", label, timestamp, "<p>"+content+"</p>")
-	}
-	a := cell("Prompted", "Jan 2, 2025, 3:04:05 PM EDT", "first")
-	b := cell("Prompted", "Jan 3, 2025, 3:04:05 PM EDT", "second")
-	c := cell("Prompted", "Jan 4, 2025, 3:04:05 PM EDT", "prepended")
+	a := geminiAppsPromptedCellHTML("Jan 2, 2025, 3:04:05 PM EDT", "first", "")
+	b := geminiAppsPromptedCellHTML("Jan 3, 2025, 3:04:05 PM EDT", "second", "")
+	c := geminiAppsPromptedCellHTML("Jan 4, 2025, 3:04:05 PM EDT", "prepended", "")
 
-	initial := parseGeminiAppsIDs(t, geminiAppsPromptedDocument(a, b))
-	prepended := parseGeminiAppsIDs(t, geminiAppsPromptedDocument(c, a, b))
-	reordered := parseGeminiAppsIDs(t, geminiAppsPromptedDocument(b, a))
+	initial := geminiAppsIDsByPrompt(t, geminiAppsPromptedDocument(a, b))
+	prepended := geminiAppsIDsByPrompt(t, geminiAppsPromptedDocument(c, a, b))
+	reordered := geminiAppsIDsByPrompt(t, geminiAppsPromptedDocument(b, a))
 
 	require.Len(t, initial, 2)
 	require.Len(t, prepended, 3)
 	require.Len(t, reordered, 2)
-	require.Contains(t, initial, "first")
-	require.Contains(t, initial, "second")
-	require.Contains(t, prepended, "first")
-	require.Contains(t, prepended, "second")
-	require.Contains(t, reordered, "first")
-	require.Contains(t, reordered, "second")
+	require.NotEmpty(t, initial["first"])
+	require.NotEmpty(t, initial["second"])
 	assert.Equal(t, initial["first"], prepended["first"])
 	assert.Equal(t, initial["second"], prepended["second"])
 	assert.Equal(t, initial["first"], reordered["first"])
@@ -140,13 +186,13 @@ func TestParseGeminiAppsIDsIgnoreUnrelatedRecordOrder(t *testing.T) {
 }
 
 func TestParseGeminiAppsIDsDisambiguateSameTimestampOccurrences(t *testing.T) {
-	timestamp := "Jan 2, 2025, 3:04:05 PM EDT"
+	timestamp := "Jan 2, 2025, 3:04:05 PM EDT"
 	fixture := geminiAppsPromptedDocument(
-		geminiAppsProductCellHTML("Gemini Apps", "Prompted", timestamp, "<p>first</p>"),
-		geminiAppsProductCellHTML("Gemini Apps", "Prompted", timestamp, "<p>second</p>"),
+		geminiAppsPromptedCellHTML(timestamp, "first", ""),
+		geminiAppsPromptedCellHTML(timestamp, "second", ""),
 	)
-	ids := parseGeminiAppsIDs(t, fixture)
-	repeated := parseGeminiAppsIDs(t, fixture)
+	ids := geminiAppsIDsByPrompt(t, fixture)
+	repeated := geminiAppsIDsByPrompt(t, fixture)
 
 	require.Len(t, ids, 2)
 	assert.NotEqual(t, ids["first"], ids["second"])
@@ -155,1034 +201,308 @@ func TestParseGeminiAppsIDsDisambiguateSameTimestampOccurrences(t *testing.T) {
 
 func TestParseGeminiAppsEquivalentNumericZonesKeepStableIdentity(t *testing.T) {
 	cell := func(zone string) string {
-		return geminiAppsProductCellHTML(
-			"Gemini Apps", "Prompted",
-			"Jan 2, 2025, 3:04:05 PM "+zone, "<p>prompt</p>",
-		)
+		return geminiAppsPromptedCellHTML("Jan 2, 2025, 3:04:05 PM "+zone, "prompt", "")
 	}
-	ids := parseGeminiAppsIDs(t, geminiAppsPromptedDocument(cell("GMT+8")))
-	padded := parseGeminiAppsIDs(t, geminiAppsPromptedDocument(cell("GMT+08:00")))
+	ids := geminiAppsIDsByPrompt(t, geminiAppsPromptedDocument(cell("GMT+8")))
+	padded := geminiAppsIDsByPrompt(t, geminiAppsPromptedDocument(cell("GMT+08:00")))
+	require.NotEmpty(t, ids["prompt"])
 	assert.Equal(t, ids["prompt"], padded["prompt"])
 }
 
-func TestRESPEC2HeadGMT8Reproduction(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "activity.html")
-	fixture := geminiAppsSingleCellHTML(
-		"", "My Activity History", "Prompted",
-		"Jan 2, 2025, 3:04:05 PM GMT+8", "<p>prompt</p>",
-	)
-	require.NoError(t, os.WriteFile(path, []byte(fixture), 0o644))
-
-	provider, ok := NewProvider(AgentGeminiApps, ProviderConfig{})
-	require.True(t, ok)
-	exporter := provider.(GeminiAppsExportParser)
-	var result ParseResult
-	_, err := exporter.ParseGeminiAppsExport(path, func(got ParseResult) error {
-		result = got
-		return nil
-	})
-	require.NoError(t, err)
-	require.Len(t, result.Messages, 1)
-
-	sessionTimestamp := result.Session.StartedAt.UTC().Format(time.RFC3339)
-	messageTimestamp := result.Messages[0].Timestamp.UTC().Format(time.RFC3339)
-	t.Logf("session=%s message=%s messages=%d id=%s", sessionTimestamp, messageTimestamp, len(result.Messages), result.Session.ID)
-	assert.Equal(t, "2025-01-02T07:04:05Z", sessionTimestamp)
-	assert.Equal(t, sessionTimestamp, messageTimestamp)
+func TestParseGeminiAppsSplitsPromptAndResponse(t *testing.T) {
+	tests := []struct {
+		name     string
+		prompt   string
+		response string
+		want     []string
+	}{
+		{
+			name: "plain", prompt: "hello", response: "<p>hi there</p>",
+			want: []string{"hello", "hi there"},
+		},
+		{
+			name: "multi-line prompt", prompt: "line one<br>line two", response: "<p>answer</p>",
+			want: []string{"line one\nline two", "answer"},
+		},
+		{
+			name: "prompt whitespace", prompt: "  prompt   with  gaps ", response: "<p> answer </p>",
+			want: []string{"prompt with gaps", "answer"},
+		},
+		{
+			name: "prompt keeps timestamp text", prompt: "Meeting at Jan 2, 2025, 3:04:05 PM EDT is confirmed.", response: "",
+			want: []string{"Meeting at Jan 2, 2025, 3:04:05 PM EDT is confirmed."},
+		},
+		{
+			name: "response keeps timestamp text", prompt: "prompt", response: "<p>The old log says Jan 2, 2025, 3:04:05 PM EDT.</p>",
+			want: []string{"prompt", "The old log says Jan 2, 2025, 3:04:05 PM EDT."},
+		},
+		{
+			name: "preformatted prompt keeps authored whitespace", prompt: "<pre>  x\n  </pre>", response: "",
+			want: []string{"  x\n  "},
+		},
+		{
+			name: "prompt line with a date and clock", prompt: "Summarize this log<br>12/03/2025 10:00:00 server restarted", response: "<p>It restarted.</p>",
+			want: []string{"Summarize this log\n12/03/2025 10:00:00 server restarted", "It restarted."},
+		},
+		{
+			name: "preformatted prompt keeps boundary newlines", prompt: "<pre><code>\n  x\n</code></pre>", response: "",
+			want: []string{"\n  x\n"},
+		},
+		{
+			name: "label word inside prompt", prompt: "Prompted by what?", response: "",
+			want: []string{"Prompted by what?"},
+		},
+		{
+			name: "no response", prompt: "prompt", response: "",
+			want: []string{"prompt"},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := parseGeminiAppsHTML(t, geminiAppsPromptedDocument(
+				geminiAppsPromptedCellHTML("Jan 2, 2025, 3:04:05 PM EDT", tt.prompt, tt.response),
+			))
+			require.NoError(t, got.err)
+			require.Len(t, got.results, 1)
+			assert.Equal(t, tt.want, geminiAppsMessageContents(got.results[0]))
+			assert.Equal(t, len(tt.want), got.results[0].Session.MessageCount)
+		})
+	}
 }
 
-func TestParseGeminiAppsRejectsNotPromptedActivityLabel(t *testing.T) {
-	fixture := strings.ReplaceAll(
-		sanitizedGeminiAppsHTML,
-		"<p>Prompted<br></p>",
-		"<p>Not Prompted</p>",
-	)
-	path := filepath.Join(t.TempDir(), "not-prompted.html")
-	require.NoError(t, os.WriteFile(path, []byte(fixture), 0o644))
-
-	provider, ok := NewProvider(AgentGeminiApps, ProviderConfig{})
-	require.True(t, ok)
-	exporter := provider.(GeminiAppsExportParser)
-	var results []ParseResult
-	summary, err := exporter.ParseGeminiAppsExport(path, func(result ParseResult) error {
-		results = append(results, result)
-		return nil
-	})
-	assert.Empty(t, results)
-	assert.Equal(t, 5, summary.Skipped)
-	assert.ErrorContains(t, err, "no admissible Prompted records")
+func TestParseGeminiAppsResponseRenderingIsPlainText(t *testing.T) {
+	tests := []struct {
+		name     string
+		response string
+		want     string
+	}{
+		{name: "inline separator", response: `<span>left</span> <strong>right</strong>`, want: "left right"},
+		{name: "duplicate boundary space", response: `<span>left </span> <strong>right</strong>`, want: "left right"},
+		{name: "link", response: `<p>See <a href="https://example.invalid">source</a> for details</p>`, want: "See source for details"},
+		{name: "nested inline", response: `<p>Read <span><strong>this</strong></span> now</p>`, want: "Read this now"},
+		{name: "list", response: `<ul><li>first <a href="https://example.invalid">link</a></li><li><span>second</span> item</li></ul>`, want: "first link\n\nsecond item"},
+		{name: "heading quote table", response: `<h2>Heading</h2><blockquote>quote</blockquote><table><tr><th>key</th><td>value</td></tr></table>`, want: "Heading\n\nquote\n\nkey\n\nvalue"},
+		{name: "br inside paragraph", response: `<p>line one<br>line two</p><p>next</p>`, want: "line one\nline two\n\nnext"},
+		{name: "inline code", response: `<p>Use <code>go test</code> now</p>`, want: "Use go test now"},
+		{name: "nested code collapses spaces", response: `<span><code>  x  y  </code></span>`, want: "x y"},
+		{
+			name:     "preformatted code keeps authored whitespace",
+			response: "<p>intro</p><pre><code>  line one\n\tline  two  \n`one` and ```three```  \n</code></pre><p>inline <code>  x  </code></p>",
+			want:     "intro\n\n  line one\n\tline  two  \n`one` and ```three```  \n\n\ninline x",
+		},
+		{name: "boundary preformatted whitespace", response: "<pre><code>  leading\n\tbody\n  </code></pre>", want: "  leading\n\tbody\n  "},
+		{name: "boundary preformatted newlines", response: "<pre><code>\nbody\n</code></pre>", want: "\nbody\n"},
+		{
+			name:     "hidden elements and comments",
+			response: "\n<!-- generated marker -->\n<script>secret script</script><style>secret style</style><template><p>secret template</p></template><noscript>secret noscript</noscript>\n<p>answer</p>\n",
+			want:     "answer",
+		},
+		{name: "empty formatting nodes", response: `<p>one</p><strong></strong><span></span><p></p><code></code><p>two</p>`, want: "one\n\ntwo"},
+		{name: "entities", response: `<p><strong>first</strong> answer &amp; detail</p>`, want: "first answer & detail"},
+		{name: "control characters", response: "<p>first\x7f\u0085\u009b answer</p>", want: "first answer"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := parseGeminiAppsHTML(t, geminiAppsPromptedDocument(
+				geminiAppsPromptedCellHTML("Jan 2, 2025, 3:04:05 PM EDT", "prompt", tt.response),
+			))
+			require.NoError(t, got.err)
+			require.Len(t, got.results, 1)
+			require.Len(t, got.results[0].Messages, 2)
+			assert.Equal(t, tt.want, got.results[0].Messages[1].Content)
+			assert.NotContains(t, got.results[0].Messages[1].Content, "secret")
+		})
+	}
 }
 
-func TestParseGeminiAppsPreservesOrdinaryResponseAndAnswerText(t *testing.T) {
-	fixture := strings.Replace(
-		sanitizedGeminiAppsHTML,
-		`<div class="content-cell mdl-cell"><p>first prompt<br></p><p><strong>first</strong> answer &amp; detail</p><script>secret script</script><style>secret style</style><template>secret template</template><noscript>secret noscript</noscript></div>`,
-		`<div class="content-cell mdl-cell"><p>ordinary Response: and Answer: text</p></div>`,
-		1,
+func TestParseGeminiAppsSkipsActivityThatIsNotAPrompt(t *testing.T) {
+	valid := geminiAppsPromptedCellHTML("Jan 2, 2025, 3:04:05 PM EDT", "prompt", "<p>answer</p>")
+	fixture := geminiAppsPromptedDocument(
+		valid,
+		geminiAppsCellHTML("Gemini Apps", "Gave feedback: Good response", "Jan 3, 2025, 3:04:05 PM PST", ""),
+		geminiAppsCellHTML("Gemini Apps", "Not Prompted&nbsp;thing", "Jan 3, 2025, 3:04:05 PM PST", ""),
+		geminiAppsCellHTML("Gemini Apps", "Prompted:&nbsp;thing", "Jan 3, 2025, 3:04:05 PM PST", ""),
+		// Skipped records are not validated, so a malformed timestamp is fine.
+		geminiAppsCellHTML("Gemini Apps", "Created a Gem", "not a timestamp", ""),
 	)
-	path := filepath.Join(t.TempDir(), "ordinary-markers.html")
-	require.NoError(t, os.WriteFile(path, []byte(fixture), 0o644))
+	got := parseGeminiAppsHTML(t, fixture)
+	require.NoError(t, got.err)
+	require.Len(t, got.results, 1)
+	assert.Equal(t, "prompt", got.results[0].Messages[0].Content)
+	assert.Equal(t, 4, got.summary.Skipped)
+	assert.Zero(t, got.summary.Errors)
+}
 
-	provider, ok := NewProvider(AgentGeminiApps, ProviderConfig{})
-	require.True(t, ok)
-	exporter := provider.(GeminiAppsExportParser)
-	var results []ParseResult
-	_, err := exporter.ParseGeminiAppsExport(path, func(result ParseResult) error {
-		results = append(results, result)
-		return nil
-	})
-	require.NoError(t, err)
-	require.Len(t, results, 2)
-	require.Len(t, results[0].Messages, 1)
-	assert.Equal(t, "ordinary Response: and Answer: text", results[0].Messages[0].Content)
+func TestParseGeminiAppsNoPromptsIsError(t *testing.T) {
+	for _, label := range []string{"Angefragt&nbsp;prompt", "Gave feedback"} {
+		t.Run(label, func(t *testing.T) {
+			got := parseGeminiAppsHTML(t, geminiAppsPromptedDocument(
+				geminiAppsCellHTML("Gemini Apps", label, "Jan 2, 2025, 3:04:05 PM EDT", ""),
+			))
+			require.ErrorContains(t, got.err, "no admissible Prompted records")
+			assert.Empty(t, got.results)
+			assert.Equal(t, 1, got.summary.Skipped)
+		})
+	}
+}
+
+func TestParseGeminiAppsMalformedPromptRecordsAreCountedErrors(t *testing.T) {
+	valid := geminiAppsPromptedCellHTML("Jan 2, 2025, 3:04:05 PM EDT", "prompt", "")
+	tests := []struct {
+		name string
+		cell string
+	}{
+		{
+			name: "no timestamp line",
+			cell: geminiAppsCellHTML("Gemini Apps", "Prompted&nbsp;lost", "no time here", ""),
+		},
+		{
+			name: "empty prompt",
+			cell: geminiAppsCellHTML("Gemini Apps", "Prompted&nbsp;", "Jan 3, 2025, 3:04:05 PM EDT", "<p>answer</p>"),
+		},
+		{
+			name: "prompt line that matches the timestamp",
+			cell: geminiAppsPromptedCellHTML("Jan 3, 2025, 3:04:05 PM EDT", "Summarize this log<br>Jan 2, 2025, 3:04:05 PM EDT<br>Explain it", ""),
+		},
+		{
+			name: "response line that matches the timestamp",
+			cell: geminiAppsPromptedCellHTML("Jan 3, 2025, 3:04:05 PM EDT", "prompt", "Jan 2, 2025, 3:04:05 PM EDT<br><p>answer</p>"),
+		},
+		{
+			name: "no content cell",
+			cell: `<div class="outer-cell mdl-cell"><div class="mdl-grid"><div class="header-cell mdl-cell"><p class="mdl-typography--title">Gemini Apps<br></p></div></div></div>`,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := parseGeminiAppsHTML(t, geminiAppsPromptedDocument(valid, tt.cell))
+			require.NoError(t, got.err)
+			require.Len(t, got.results, 1)
+			assert.Equal(t, "prompt", got.results[0].Messages[0].Content)
+			assert.Equal(t, 1, got.summary.Errors)
+		})
+	}
 }
 
 func TestParseGeminiAppsIgnoresOtherProductCells(t *testing.T) {
-	gemini := geminiAppsProductCellHTML(
-		"Gemini Apps", "Prompted", "Jan 2, 2025, 3:04:05 PM EDT",
-		"<p>prompt</p>",
-	)
-	youtube := geminiAppsProductCellHTML(
-		"YouTube", "Watched", "Jan 2, 2025, 3:04:05 PM XYZ",
-		"<p>video title</p>",
-	)
+	gemini := geminiAppsPromptedCellHTML("Jan 2, 2025, 3:04:05 PM EDT", "prompt", "")
+	search := geminiAppsCellHTML("Search", `Visited&nbsp;<a href="https://example.invalid/">https://example.invalid/</a>`, "Jan 2, 2025, 3:04:05 PM XYZ", "")
+
+	t.Run("mixed file", func(t *testing.T) {
+		got := parseGeminiAppsHTML(t, geminiAppsPromptedDocument(gemini, search))
+		require.NoError(t, got.err)
+		require.Len(t, got.results, 1)
+		assert.Equal(t, "prompt", got.results[0].Messages[0].Content)
+		assert.Zero(t, got.summary.Skipped)
+		assert.Zero(t, got.summary.Errors)
+	})
+
+	t.Run("mixed directory", func(t *testing.T) {
+		root := t.TempDir()
+		require.NoError(t, os.WriteFile(filepath.Join(root, "01-gemini.html"), []byte(geminiAppsPromptedDocument(gemini)), 0o644))
+		require.NoError(t, os.WriteFile(filepath.Join(root, "02-search.html"), []byte(geminiAppsPromptedDocument(search)), 0o644))
+		got := parseGeminiAppsRoot(t, root, time.UTC)
+		require.NoError(t, got.err)
+		require.Len(t, got.results, 1)
+		assert.Zero(t, got.summary.Skipped)
+	})
+
+	t.Run("only other products", func(t *testing.T) {
+		got := parseGeminiAppsHTML(t, geminiAppsPromptedDocument(search))
+		require.ErrorContains(t, got.err, "does not contain a Gemini Apps")
+		assert.Empty(t, got.results)
+	})
+}
+
+func TestParseGeminiAppsNonActivityHTML(t *testing.T) {
+	valid := geminiAppsPromptedDocument(geminiAppsPromptedCellHTML("Jan 2, 2025, 3:04:05 PM EDT", "prompt", ""))
+	other := `<html lang="de"><head><title>Meine Aktivität</title></head><body><p>unrelated</p></body></html>`
+
+	t.Run("ignored beside a Gemini file", func(t *testing.T) {
+		root := t.TempDir()
+		require.NoError(t, os.WriteFile(filepath.Join(root, "01-gemini.html"), []byte(valid), 0o644))
+		require.NoError(t, os.WriteFile(filepath.Join(root, "02-other.html"), []byte(other), 0o644))
+		got := parseGeminiAppsRoot(t, root, time.UTC)
+		require.NoError(t, got.err)
+		require.Len(t, got.results, 1)
+	})
+
+	t.Run("alone is rejected", func(t *testing.T) {
+		got := parseGeminiAppsHTML(t, other)
+		require.ErrorContains(t, got.err, "does not contain a Gemini Apps")
+	})
+
+	t.Run("empty activity page is rejected", func(t *testing.T) {
+		got := parseGeminiAppsHTML(t, geminiAppsPromptedDocument())
+		require.ErrorContains(t, got.err, "does not contain a Gemini Apps")
+	})
+
+	t.Run("no HTML files", func(t *testing.T) {
+		got := parseGeminiAppsRoot(t, t.TempDir(), time.UTC)
+		require.ErrorContains(t, got.err, "no HTML files")
+	})
+}
+
+func TestParseGeminiAppsRejectsUnsupportedRenderingsBeforeCallbacks(t *testing.T) {
+	supported := geminiAppsPromptedCellHTML("Jan 2, 2025, 3:04:05 PM EDT", "prompt", "")
 	tests := []struct {
-		name  string
-		input string
+		name    string
+		files   []string
+		wantErr string
 	}{
 		{
-			name:  "mixed file",
-			input: `<!doctype html><html><head><title>My Activity History</title></head><body>` + gemini + youtube + `</body></html>`,
+			name:    "declared non-English locale",
+			files:   []string{geminiAppsPromptedDocument(supported), geminiAppsDocumentHTML(` lang="de"`, "My Activity History", supported)},
+			wantErr: "unsupported Gemini Apps Takeout locale",
 		},
 		{
-			name:  "mixed directory",
-			input: "directory",
+			name:    "localized title",
+			files:   []string{geminiAppsDocumentHTML("", "Meine Aktivität", supported)},
+			wantErr: "unsupported localized or changed Gemini Apps Takeout format",
 		},
+		{
+			name: "localized timestamp",
+			files: []string{geminiAppsPromptedDocument(supported,
+				geminiAppsPromptedCellHTML("2. Januar 2025, 15:04:05 MEZ", "prompt", ""))},
+			wantErr: "unsupported Gemini Apps timestamp",
+		},
+		{
+			name: "unknown zone",
+			files: []string{geminiAppsPromptedDocument(supported,
+				geminiAppsPromptedCellHTML("Jan 3, 2025, 3:04:05 PM XYZ", "prompt", ""))},
+			wantErr: `unsupported Gemini Apps timestamp zone "XYZ"`,
+		},
+		{
+			name: "unknown zone in a later file",
+			files: []string{geminiAppsPromptedDocument(supported), geminiAppsPromptedDocument(
+				geminiAppsPromptedCellHTML("Jan 3, 2025, 3:04:05 PM XYZ", "prompt", ""))},
+			wantErr: "unsupported Gemini Apps timestamp zone",
+		},
+	}
+	for _, zone := range []string{"GMT+8:3", "GMT+8junk", "GMT+8:30junk", "GMT+24", "GMT+8:60"} {
+		tests = append(tests, struct {
+			name    string
+			files   []string
+			wantErr string
+		}{
+			name: "malformed zone " + zone,
+			files: []string{geminiAppsPromptedDocument(supported,
+				geminiAppsPromptedCellHTML("Jan 3, 2025, 3:04:05 PM "+zone, "prompt", ""))},
+			wantErr: strings.ToUpper(zone),
+		})
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			root := t.TempDir()
-			if tt.input == "directory" {
-				require.NoError(t, os.WriteFile(
-					filepath.Join(root, "01-gemini.html"),
-					[]byte(`<!doctype html><html><head><title>My Activity History</title></head><body>`+gemini+`</body></html>`),
-					0o644,
-				))
-				require.NoError(t, os.WriteFile(
-					filepath.Join(root, "02-youtube.html"),
-					[]byte(`<!doctype html><html><head><title>My Activity History</title></head><body>`+youtube+`</body></html>`),
-					0o644,
-				))
-			} else {
-				root = filepath.Join(root, "mixed.html")
-				require.NoError(t, os.WriteFile(root, []byte(tt.input), 0o644))
+			for i, file := range tt.files {
+				name := filepath.Join(root, string(rune('a'+i))+".html")
+				require.NoError(t, os.WriteFile(name, []byte(file), 0o644))
 			}
-
-			provider, ok := NewProvider(AgentGeminiApps, ProviderConfig{})
-			require.True(t, ok)
-			exporter := provider.(GeminiAppsExportParser)
-			var results []ParseResult
-			summary, err := exporter.ParseGeminiAppsExport(root, func(result ParseResult) error {
-				results = append(results, result)
-				return nil
-			})
-			require.NoError(t, err)
-			require.Len(t, results, 1)
-			assert.Equal(t, "prompt", results[0].Messages[0].Content)
-			assert.Zero(t, summary.Skipped)
-			assert.Zero(t, summary.Errors)
+			got := parseGeminiAppsRoot(t, root, time.UTC)
+			require.ErrorContains(t, got.err, tt.wantErr)
+			assert.Empty(t, got.results)
 		})
 	}
-}
-
-func TestParseGeminiAppsOnlyOtherProductIsNotGeminiDocument(t *testing.T) {
-	fixture := `<!doctype html><html><head><title>My Activity History</title></head><body>` +
-		geminiAppsProductCellHTML(
-			"YouTube", "Watched", "Jan 2, 2025, 3:04:05 PM XYZ", "<p>video</p>",
-		) + `</body></html>`
-	path := filepath.Join(t.TempDir(), "youtube.html")
-	require.NoError(t, os.WriteFile(path, []byte(fixture), 0o644))
-
-	provider, ok := NewProvider(AgentGeminiApps, ProviderConfig{})
-	require.True(t, ok)
-	exporter := provider.(GeminiAppsExportParser)
-	callbacks := 0
-	_, err := exporter.ParseGeminiAppsExport(path, func(ParseResult) error {
-		callbacks++
-		return nil
-	})
-	require.ErrorContains(t, err, "does not contain a Gemini Apps")
-	assert.Zero(t, callbacks)
-}
-
-func TestParseGeminiAppsIgnoresUnrelatedLocalizedHTML(t *testing.T) {
-	root := t.TempDir()
-	valid := geminiAppsSingleCellHTML(
-		"", "My Activity History", "Prompted",
-		"Jan 2, 2025, 3:04:05 PM EDT", "<p>prompt</p>",
-	)
-	unrelated := `<!doctype html><html lang="de"><head><title>Meine Aktivität</title></head><body><p>unrelated</p></body></html>`
-	require.NoError(t, os.WriteFile(filepath.Join(root, "01-gemini.html"), []byte(valid), 0o644))
-	require.NoError(t, os.WriteFile(filepath.Join(root, "02-unrelated.html"), []byte(unrelated), 0o644))
-
-	provider, ok := NewProvider(AgentGeminiApps, ProviderConfig{})
-	require.True(t, ok)
-	exporter := provider.(GeminiAppsExportParser)
-	var results []ParseResult
-	_, err := exporter.ParseGeminiAppsExport(root, func(result ParseResult) error {
-		results = append(results, result)
-		return nil
-	})
-	require.NoError(t, err)
-	require.Len(t, results, 1)
-	assert.Equal(t, "prompt", results[0].Messages[0].Content)
-}
-
-func TestParseGeminiAppsSkipsNonPromptedRecordsBeforeValidation(t *testing.T) {
-	valid := geminiAppsProductCellHTML(
-		"Gemini Apps", "Prompted", "Jan 2, 2025, 3:04:05 PM EDT", "<p>prompt</p>",
-	)
-	malformedCanvas := `<div class="outer-cell"><div class="header-cell"><h3>Gemini Apps</h3><p>Canvas</p><p>not a timestamp</p></div></div>`
-	malformedFeedback := `<div class="outer-cell"><div class="header-cell"><h3>Gemini Apps</h3><p>Feedback</p></div></div>`
-	malformedUnknown := `<div class="outer-cell"><div class="header-cell"><h3>Gemini Apps</h3><p>Unknown activity</p><p>not a timestamp</p></div></div>`
-	fixture := `<!doctype html><html><head><title>My Activity History</title></head><body>` + valid + malformedCanvas + malformedFeedback + malformedUnknown + `</body></html>`
-	path := filepath.Join(t.TempDir(), "non-prompted-validation.html")
-	require.NoError(t, os.WriteFile(path, []byte(fixture), 0o644))
-
-	provider, ok := NewProvider(AgentGeminiApps, ProviderConfig{})
-	require.True(t, ok)
-	exporter := provider.(GeminiAppsExportParser)
-	var results []ParseResult
-	summary, err := exporter.ParseGeminiAppsExport(path, func(result ParseResult) error {
-		results = append(results, result)
-		return nil
-	})
-	require.NoError(t, err)
-	require.Len(t, results, 1)
-	assert.Equal(t, "prompt", results[0].Messages[0].Content)
-	assert.Equal(t, 3, summary.Skipped)
-	assert.Zero(t, summary.Errors)
-}
-
-func TestParseGeminiAppsIgnoresLeadingContentWhitespaceAndComments(t *testing.T) {
-	content := "\n<!-- generated marker -->\n<script>ignored</script><style>ignored</style>\n<p>prompt</p><p>answer</p>\n"
-	fixture := geminiAppsSingleCellHTML(
-		"", "My Activity History", "Prompted",
-		"Jan 2, 2025, 3:04:05 PM EDT", content,
-	)
-	path := filepath.Join(t.TempDir(), "content-prefix.html")
-	require.NoError(t, os.WriteFile(path, []byte(fixture), 0o644))
-
-	provider, ok := NewProvider(AgentGeminiApps, ProviderConfig{})
-	require.True(t, ok)
-	exporter := provider.(GeminiAppsExportParser)
-	var results []ParseResult
-	_, err := exporter.ParseGeminiAppsExport(path, func(result ParseResult) error {
-		results = append(results, result)
-		return nil
-	})
-	require.NoError(t, err)
-	require.Len(t, results, 1)
-	require.Len(t, results[0].Messages, 1)
-	assert.Equal(t, "prompt\n\nanswer", results[0].Messages[0].Content)
-}
-
-func TestParseGeminiAppsEquivalentPresentationHasOneOwner(t *testing.T) {
-	tests := []struct {
-		name    string
-		content string
-		want    string
-	}{
-		{name: "separator", content: `<span>left</span> <strong>right</strong>`, want: "left right"},
-		{name: "duplicate boundary", content: `<span>left </span> <strong>right</strong>`, want: "left right"},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			fixture := geminiAppsSingleCellHTML(
-				"", "My Activity History", "Prompted",
-				"Jan 2, 2025, 3:04:05 PM EDT", tt.content,
-			)
-			path := filepath.Join(t.TempDir(), "inline-whitespace.html")
-			require.NoError(t, os.WriteFile(path, []byte(fixture), 0o644))
-
-			provider, ok := NewProvider(AgentGeminiApps, ProviderConfig{})
-			require.True(t, ok)
-			exporter := provider.(GeminiAppsExportParser)
-			var results []ParseResult
-			_, err := exporter.ParseGeminiAppsExport(path, func(result ParseResult) error {
-				results = append(results, result)
-				return nil
-			})
-			require.NoError(t, err)
-			require.Len(t, results, 1)
-			require.Len(t, results[0].Messages, 1)
-			assert.Equal(t, tt.want, results[0].Messages[0].Content)
-		})
-	}
-}
-
-func TestParseGeminiAppsPreservesNestedPreformattedWhitespace(t *testing.T) {
-	fixture := geminiAppsSingleCellHTML(
-		"", "My Activity History", "Prompted",
-		"Jan 2, 2025, 3:04:05 PM EDT", "<span><code>  x  y  </code></span>",
-	)
-	path := filepath.Join(t.TempDir(), "nested-code-whitespace.html")
-	require.NoError(t, os.WriteFile(path, []byte(fixture), 0o644))
-
-	provider, ok := NewProvider(AgentGeminiApps, ProviderConfig{})
-	require.True(t, ok)
-	exporter := provider.(GeminiAppsExportParser)
-	var results []ParseResult
-	_, err := exporter.ParseGeminiAppsExport(path, func(result ParseResult) error {
-		results = append(results, result)
-		return nil
-	})
-	require.NoError(t, err)
-	require.Len(t, results, 1)
-	require.Len(t, results[0].Messages, 1)
-	assert.Equal(t, "x y", results[0].Messages[0].Content)
-}
-
-func TestParseGeminiAppsEmptyFormattingNodeAlongsideTextIsError(t *testing.T) {
-	fixture := geminiAppsSingleCellHTML(
-		"", "My Activity History", "Prompted",
-		"Jan 2, 2025, 3:04:05 PM EDT", "<p>prompt</p><strong></strong>tail",
-	)
-	path := filepath.Join(t.TempDir(), "empty-formatting-node.html")
-	require.NoError(t, os.WriteFile(path, []byte(fixture), 0o644))
-
-	provider, ok := NewProvider(AgentGeminiApps, ProviderConfig{})
-	require.True(t, ok)
-	exporter := provider.(GeminiAppsExportParser)
-	callbacks := 0
-	_, err := exporter.ParseGeminiAppsExport(path, func(ParseResult) error {
-		callbacks++
-		return nil
-	})
-	require.NoError(t, err)
-	assert.Equal(t, 1, callbacks)
-}
-
-func TestParseGeminiAppsEmptyFormattingRunBetweenBlocksIsError(t *testing.T) {
-	fixture := geminiAppsSingleCellHTML(
-		"", "My Activity History", "Prompted",
-		"Jan 2, 2025, 3:04:05 PM EDT", "<p>prompt</p><span></span><p>answer</p>",
-	)
-	path := filepath.Join(t.TempDir(), "empty-formatting-run.html")
-	require.NoError(t, os.WriteFile(path, []byte(fixture), 0o644))
-
-	provider, ok := NewProvider(AgentGeminiApps, ProviderConfig{})
-	require.True(t, ok)
-	exporter := provider.(GeminiAppsExportParser)
-	callbacks := 0
-	_, err := exporter.ParseGeminiAppsExport(path, func(ParseResult) error {
-		callbacks++
-		return nil
-	})
-	require.NoError(t, err)
-	assert.Equal(t, 1, callbacks)
-}
-
-func TestParseGeminiAppsIgnoresHiddenActivityLabels(t *testing.T) {
-	cell := `<div class="outer-cell"><div class="header-cell"><h3>Gemini Apps</h3><template><p>Prompted</p></template><p>Canvas</p><p>not a timestamp</p></div></div>`
-	fixture := `<!doctype html><html><head><title>My Activity History</title></head><body>` + cell + `</body></html>`
-	path := filepath.Join(t.TempDir(), "hidden-label.html")
-	require.NoError(t, os.WriteFile(path, []byte(fixture), 0o644))
-
-	provider, ok := NewProvider(AgentGeminiApps, ProviderConfig{})
-	require.True(t, ok)
-	exporter := provider.(GeminiAppsExportParser)
-	callbacks := 0
-	summary, err := exporter.ParseGeminiAppsExport(path, func(ParseResult) error {
-		callbacks++
-		return nil
-	})
-	require.ErrorContains(t, err, "no admissible Prompted records")
-	assert.Zero(t, callbacks)
-	assert.Equal(t, 1, summary.Skipped)
-	assert.Zero(t, summary.Errors)
-}
-
-func TestParseGeminiAppsIgnoresHiddenEmptySemanticBlocks(t *testing.T) {
-	fixture := geminiAppsSingleCellHTML(
-		"", "My Activity History", "Prompted",
-		"Jan 2, 2025, 3:04:05 PM EDT", "<p>prompt</p><template><p></p></template><p>answer</p>",
-	)
-	path := filepath.Join(t.TempDir(), "hidden-empty-block.html")
-	require.NoError(t, os.WriteFile(path, []byte(fixture), 0o644))
-
-	provider, ok := NewProvider(AgentGeminiApps, ProviderConfig{})
-	require.True(t, ok)
-	exporter := provider.(GeminiAppsExportParser)
-	var results []ParseResult
-	_, err := exporter.ParseGeminiAppsExport(path, func(result ParseResult) error {
-		results = append(results, result)
-		return nil
-	})
-	require.NoError(t, err)
-	require.Len(t, results, 1)
-	require.Len(t, results[0].Messages, 1)
-	assert.Equal(t, "prompt\n\nanswer", results[0].Messages[0].Content)
-	assert.Contains(t, results[0].Messages[0].Content, "answer")
-}
-
-func TestParseGeminiAppsIgnoresHiddenPreformattedAncestry(t *testing.T) {
-	fixture := geminiAppsSingleCellHTML(
-		"", "My Activity History", "Prompted",
-		"Jan 2, 2025, 3:04:05 PM EDT", `<template><code>hidden</code></template><span>left </span> <strong>right</strong>`,
-	)
-	path := filepath.Join(t.TempDir(), "hidden-preformatted.html")
-	require.NoError(t, os.WriteFile(path, []byte(fixture), 0o644))
-
-	provider, ok := NewProvider(AgentGeminiApps, ProviderConfig{})
-	require.True(t, ok)
-	exporter := provider.(GeminiAppsExportParser)
-	var results []ParseResult
-	_, err := exporter.ParseGeminiAppsExport(path, func(result ParseResult) error {
-		results = append(results, result)
-		return nil
-	})
-	require.NoError(t, err)
-	require.Len(t, results, 1)
-	require.Len(t, results[0].Messages, 1)
-	assert.Equal(t, "left right", results[0].Messages[0].Content)
-}
-
-func TestParseGeminiAppsPresentationDoesNotInferTurns(t *testing.T) {
-	tests := []struct {
-		name    string
-		content string
-		want    string
-	}{
-		{
-			name:    "link",
-			content: `<p>See <a href="https://example.invalid">source</a> for details</p>`,
-			want:    "See source for details",
-		},
-		{
-			name:    "span",
-			content: `<p>Before <span>middle</span> after</p>`,
-			want:    "Before middle after",
-		},
-		{
-			name:    "nested marker",
-			content: `<p>Read <span><strong>this</strong></span> now</p>`,
-			want:    "Read this now",
-		},
-		{
-			name:    "list markers",
-			content: `<div><ul><li>first <a href="https://example.invalid">link</a></li><li><span>second</span> item</li></ul></div>`,
-			want:    "first link\n\nsecond item",
-		},
-		{
-			name:    "heading quote table",
-			content: `<h2>Heading</h2><blockquote>quote</blockquote><table><tr><th>key</th><td>value</td></tr></table>`,
-			want:    "Heading\n\nquote\n\nkey\n\nvalue",
-		},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			fixture := geminiAppsSingleCellHTML(
-				"", "My Activity History", "Prompted",
-				"Jan 2, 2025, 3:04:05 PM EDT", tt.content,
-			)
-			path := filepath.Join(t.TempDir(), "inline-spacing.html")
-			require.NoError(t, os.WriteFile(path, []byte(fixture), 0o644))
-
-			provider, ok := NewProvider(AgentGeminiApps, ProviderConfig{})
-			require.True(t, ok)
-			exporter := provider.(GeminiAppsExportParser)
-			var results []ParseResult
-			_, err := exporter.ParseGeminiAppsExport(path, func(result ParseResult) error {
-				results = append(results, result)
-				return nil
-			})
-			require.NoError(t, err)
-			require.Len(t, results, 1)
-			require.Len(t, results[0].Messages, 1)
-			assert.Equal(t, tt.want, results[0].Messages[0].Content)
-		})
-	}
-}
-
-func TestParseGeminiAppsBrStaysInsidePromptBlock(t *testing.T) {
-	fixture := strings.Replace(
-		sanitizedGeminiAppsHTML,
-		`<div class="content-cell mdl-cell"><p>first prompt<br></p><p><strong>first</strong> answer &amp; detail</p><script>secret script</script><style>secret style</style><template>secret template</template><noscript>secret noscript</noscript></div>`,
-		`<div class="content-cell mdl-cell"><p>line one<br>line two</p><p>answer</p></div>`,
-		1,
-	)
-	path := filepath.Join(t.TempDir(), "br-inline.html")
-	require.NoError(t, os.WriteFile(path, []byte(fixture), 0o644))
-
-	provider, ok := NewProvider(AgentGeminiApps, ProviderConfig{})
-	require.True(t, ok)
-	exporter := provider.(GeminiAppsExportParser)
-	var results []ParseResult
-	_, err := exporter.ParseGeminiAppsExport(path, func(result ParseResult) error {
-		results = append(results, result)
-		return nil
-	})
-	require.NoError(t, err)
-	require.Len(t, results, 2)
-	require.Len(t, results[0].Messages, 1)
-	assert.Equal(t, "line one\nline two\n\nanswer", results[0].Messages[0].Content)
-	assert.Contains(t, results[0].Messages[0].Content, "answer")
-}
-
-func TestParseGeminiAppsEmptyFirstContentBlockIsError(t *testing.T) {
-	fixture := geminiAppsSingleCellHTML(
-		"", "My Activity History", "Prompted",
-		"Jan 2, 2025, 3:04:05 PM EDT", "<p></p><p>answer</p>",
-	)
-	path := filepath.Join(t.TempDir(), "empty-first-block.html")
-	require.NoError(t, os.WriteFile(path, []byte(fixture), 0o644))
-
-	provider, ok := NewProvider(AgentGeminiApps, ProviderConfig{})
-	require.True(t, ok)
-	exporter := provider.(GeminiAppsExportParser)
-	var results []ParseResult
-	summary, err := exporter.ParseGeminiAppsExport(path, func(result ParseResult) error {
-		results = append(results, result)
-		return nil
-	})
-	require.NoError(t, err)
-	assert.Len(t, results, 1)
-	assert.Equal(t, 0, summary.Errors)
-}
-
-func TestParseGeminiAppsEmptySemanticBlockAfterPromptIsError(t *testing.T) {
-	fixture := geminiAppsSingleCellHTML(
-		"", "My Activity History", "Prompted",
-		"Jan 2, 2025, 3:04:05 PM EDT", "<p>prompt</p><p></p>",
-	)
-	path := filepath.Join(t.TempDir(), "empty-response-block.html")
-	require.NoError(t, os.WriteFile(path, []byte(fixture), 0o644))
-
-	provider, ok := NewProvider(AgentGeminiApps, ProviderConfig{})
-	require.True(t, ok)
-	exporter := provider.(GeminiAppsExportParser)
-	callbacks := 0
-	_, err := exporter.ParseGeminiAppsExport(path, func(ParseResult) error {
-		callbacks++
-		return nil
-	})
-	require.NoError(t, err)
-	assert.Equal(t, 1, callbacks)
-}
-
-func TestParseGeminiAppsEmptyCodeBlockAfterPromptIsError(t *testing.T) {
-	fixture := geminiAppsSingleCellHTML(
-		"", "My Activity History", "Prompted",
-		"Jan 2, 2025, 3:04:05 PM EDT", "<p>prompt</p><code></code>",
-	)
-	path := filepath.Join(t.TempDir(), "empty-code-block.html")
-	require.NoError(t, os.WriteFile(path, []byte(fixture), 0o644))
-
-	provider, ok := NewProvider(AgentGeminiApps, ProviderConfig{})
-	require.True(t, ok)
-	exporter := provider.(GeminiAppsExportParser)
-	callbacks := 0
-	_, err := exporter.ParseGeminiAppsExport(path, func(ParseResult) error {
-		callbacks++
-		return nil
-	})
-	require.NoError(t, err)
-	assert.Equal(t, 1, callbacks)
-}
-
-func TestParseGeminiAppsPreservesTimestampTextInContentBlocks(t *testing.T) {
-	tests := []struct {
-		name    string
-		content string
-		want    string
-	}{
-		{
-			name:    "prompt",
-			content: "<p>Meeting at Jan 2, 2025, 3:04:05 PM EDT is confirmed.</p><p>answer</p>",
-			want:    "Meeting at Jan 2, 2025, 3:04:05 PM EDT is confirmed.\n\nanswer",
-		},
-		{
-			name:    "response",
-			content: "<p>prompt</p><p>The old log says Jan 2, 2025, 3:04:05 PM EDT.</p>",
-			want:    "prompt\n\nThe old log says Jan 2, 2025, 3:04:05 PM EDT.",
-		},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			path := filepath.Join(t.TempDir(), "timestamp-text.html")
-			fixture := geminiAppsSingleCellHTML(
-				"", "My Activity History", "Prompted",
-				"Jan 2, 2025, 3:04:05 PM EDT", tt.content,
-			)
-			require.NoError(t, os.WriteFile(path, []byte(fixture), 0o644))
-
-			provider, ok := NewProvider(AgentGeminiApps, ProviderConfig{})
-			require.True(t, ok)
-			exporter := provider.(GeminiAppsExportParser)
-			var results []ParseResult
-			_, err := exporter.ParseGeminiAppsExport(path, func(result ParseResult) error {
-				results = append(results, result)
-				return nil
-			})
-			require.NoError(t, err)
-			require.Len(t, results, 1)
-			require.Len(t, results[0].Messages, 1)
-			assert.Equal(t, tt.want, results[0].Messages[0].Content)
-		})
-	}
-}
-
-func TestParseGeminiAppsExcludesExactContentTimestampMetadata(t *testing.T) {
-	fixture := geminiAppsSingleCellHTML(
-		"", "My Activity History", "Prompted",
-		"Jan 2, 2025, 3:04:05 PM EDT",
-		"<p>prompt</p><p>Jan 2, 2025, 3:04:05 PM EDT</p><p>answer</p>",
-	)
-	path := filepath.Join(t.TempDir(), "timestamp-metadata.html")
-	require.NoError(t, os.WriteFile(path, []byte(fixture), 0o644))
-
-	provider, ok := NewProvider(AgentGeminiApps, ProviderConfig{})
-	require.True(t, ok)
-	exporter := provider.(GeminiAppsExportParser)
-	var results []ParseResult
-	_, err := exporter.ParseGeminiAppsExport(path, func(result ParseResult) error {
-		results = append(results, result)
-		return nil
-	})
-	require.NoError(t, err)
-	require.Len(t, results, 1)
-	require.Len(t, results[0].Messages, 1)
-	assert.Equal(t, "prompt\n\nanswer", results[0].Messages[0].Content)
-}
-
-func TestParseGeminiAppsEmptyRecordPayloadIsError(t *testing.T) {
-	fixture := geminiAppsSingleCellHTML(
-		"", "My Activity History", "Prompted",
-		"Jan 2, 2025, 3:04:05 PM EDT",
-		"<p>Jan 2, 2025, 3:04:05 PM EDT</p>",
-	)
-	path := filepath.Join(t.TempDir(), "sole-timestamp-metadata.html")
-	require.NoError(t, os.WriteFile(path, []byte(fixture), 0o644))
-
-	provider, ok := NewProvider(AgentGeminiApps, ProviderConfig{})
-	require.True(t, ok)
-	exporter := provider.(GeminiAppsExportParser)
-	var results []ParseResult
-	summary, err := exporter.ParseGeminiAppsExport(path, func(result ParseResult) error {
-		results = append(results, result)
-		return nil
-	})
-	require.ErrorContains(t, err, "no admissible Prompted records")
-	assert.Empty(t, results)
-	assert.Equal(t, 1, summary.Errors)
-}
-
-func TestParseGeminiAppsExcludesStandaloneTimestampMetadataAcrossDirectNodes(t *testing.T) {
-	timestamp := "Jan 2, 2025, 3:04:05 PM EDT"
-	for _, content := range []string{
-		timestamp + "<p>prompt</p>",
-		"<span>" + timestamp + "</span><p>prompt</p>",
-		"<code>" + timestamp + "</code><p>prompt</p>",
-	} {
-		t.Run(content, func(t *testing.T) {
-			fixture := geminiAppsSingleCellHTML("", "My Activity History", "Prompted", timestamp, content)
-			path := filepath.Join(t.TempDir(), "direct-timestamp-metadata.html")
-			require.NoError(t, os.WriteFile(path, []byte(fixture), 0o644))
-
-			provider, ok := NewProvider(AgentGeminiApps, ProviderConfig{})
-			require.True(t, ok)
-			exporter := provider.(GeminiAppsExportParser)
-			var results []ParseResult
-			_, err := exporter.ParseGeminiAppsExport(path, func(result ParseResult) error {
-				results = append(results, result)
-				return nil
-			})
-			require.NoError(t, err)
-			require.Len(t, results, 1)
-			assert.Equal(t, "prompt", results[0].Messages[0].Content)
-		})
-	}
-}
-
-func TestParseGeminiAppsInlineCodeRemainsOneRecordMessage(t *testing.T) {
-	tests := []struct {
-		name    string
-		content string
-		want    string
-	}{
-		{
-			name: "code prompt", content: "<code>prompt</code><p>answer</p>",
-			want: "prompt\nanswer",
-		},
-		{
-			name: "code response", content: "<p>prompt</p><code>answer</code>",
-			want: "prompt\nanswer",
-		},
-		{
-			name: "inline code", content: "<p>Use <code>go test</code> now</p>",
-			want: "Use go test now",
-		},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			fixture := geminiAppsSingleCellHTML(
-				"", "My Activity History", "Prompted",
-				"Jan 2, 2025, 3:04:05 PM EDT", tt.content,
-			)
-			path := filepath.Join(t.TempDir(), "direct-code.html")
-			require.NoError(t, os.WriteFile(path, []byte(fixture), 0o644))
-
-			provider, ok := NewProvider(AgentGeminiApps, ProviderConfig{})
-			require.True(t, ok)
-			exporter := provider.(GeminiAppsExportParser)
-			var results []ParseResult
-			_, err := exporter.ParseGeminiAppsExport(path, func(result ParseResult) error {
-				results = append(results, result)
-				return nil
-			})
-			require.NoError(t, err)
-			require.Len(t, results, 1)
-			require.Len(t, results[0].Messages, 1)
-			assert.Equal(t, tt.want, results[0].Messages[0].Content)
-		})
-	}
-}
-
-func TestParseGeminiAppsPreformattedCodeIsPlainText(t *testing.T) {
-	content := "<p>prompt</p><pre><code>  line one\n\tline  two  \n`one` and ```three```  \n</code></pre><p>inline <code>  x  </code></p>"
-	fixture := geminiAppsSingleCellHTML(
-		"", "My Activity History", "Prompted",
-		"Jan 2, 2025, 3:04:05 PM EDT", content,
-	)
-	path := filepath.Join(t.TempDir(), "preformatted.html")
-	require.NoError(t, os.WriteFile(path, []byte(fixture), 0o644))
-
-	provider, ok := NewProvider(AgentGeminiApps, ProviderConfig{})
-	require.True(t, ok)
-	exporter := provider.(GeminiAppsExportParser)
-	var results []ParseResult
-	_, err := exporter.ParseGeminiAppsExport(path, func(result ParseResult) error {
-		results = append(results, result)
-		return nil
-	})
-	require.NoError(t, err)
-	require.Len(t, results, 1)
-	require.Len(t, results[0].Messages, 1)
-	assert.Equal(t, "prompt\n\n  line one\n\tline  two  \n`one` and ```three```  \n\n\ninline x", results[0].Messages[0].Content)
-}
-
-func TestParseGeminiAppsPreservesBoundaryPreformattedWhitespace(t *testing.T) {
-	content := "<pre><code>  leading\n\tbody\n  </code></pre>"
-	fixture := geminiAppsSingleCellHTML("", "My Activity History", "Prompted", "Jan 2, 2025, 3:04:05 PM EDT", content)
-	path := filepath.Join(t.TempDir(), "boundary-preformatted.html")
-	require.NoError(t, os.WriteFile(path, []byte(fixture), 0o644))
-
-	provider, ok := NewProvider(AgentGeminiApps, ProviderConfig{})
-	require.True(t, ok)
-	exporter := provider.(GeminiAppsExportParser)
-	var results []ParseResult
-	_, err := exporter.ParseGeminiAppsExport(path, func(result ParseResult) error {
-		results = append(results, result)
-		return nil
-	})
-	require.NoError(t, err)
-	require.Len(t, results, 1)
-	assert.Equal(t, "  leading\n\tbody\n  ", results[0].Messages[0].Content)
-}
-
-func TestParseGeminiAppsNormalizesOrdinaryWhitespace(t *testing.T) {
-	fixture := geminiAppsSingleCellHTML(
-		"", "My Activity History", "Prompted",
-		"Jan 2, 2025, 3:04:05 PM EDT", "<p>  prompt   with  gaps </p><p> answer </p>",
-	)
-	path := filepath.Join(t.TempDir(), "ordinary-whitespace.html")
-	require.NoError(t, os.WriteFile(path, []byte(fixture), 0o644))
-
-	provider, ok := NewProvider(AgentGeminiApps, ProviderConfig{})
-	require.True(t, ok)
-	exporter := provider.(GeminiAppsExportParser)
-	var results []ParseResult
-	_, err := exporter.ParseGeminiAppsExport(path, func(result ParseResult) error {
-		results = append(results, result)
-		return nil
-	})
-	require.NoError(t, err)
-	require.Len(t, results, 1)
-	require.Len(t, results[0].Messages, 1)
-	assert.Equal(t, "prompt with gaps\n\nanswer", results[0].Messages[0].Content)
-}
-
-func TestParseGeminiAppsRejectsDeclaredNonEnglishLocale(t *testing.T) {
-	fixture := geminiAppsSingleCellHTML(
-		` lang="de"`, "My Activity History", "Prompted",
-		"Jan 2, 2025, 3:04:05 PM EDT", "<p>prompt</p>",
-	)
-	path := filepath.Join(t.TempDir(), "localized.html")
-	require.NoError(t, os.WriteFile(path, []byte(fixture), 0o644))
-
-	provider, ok := NewProvider(AgentGeminiApps, ProviderConfig{})
-	require.True(t, ok)
-	exporter := provider.(GeminiAppsExportParser)
-	callbacks := 0
-	_, err := exporter.ParseGeminiAppsExport(path, func(ParseResult) error {
-		callbacks++
-		return nil
-	})
-	require.ErrorContains(t, err, "unsupported Gemini Apps Takeout locale")
-	assert.Zero(t, callbacks)
-}
-
-func TestParseGeminiAppsRejectsUnsupportedVocabularyWithoutLang(t *testing.T) {
-	fixture := geminiAppsSingleCellHTML(
-		"", "Meine Aktivität", "Prompted",
-		"Jan 2, 2025, 3:04:05 PM EDT", "<p>prompt</p>",
-	)
-	path := filepath.Join(t.TempDir(), "unsupported-vocabulary.html")
-	require.NoError(t, os.WriteFile(path, []byte(fixture), 0o644))
-
-	provider, ok := NewProvider(AgentGeminiApps, ProviderConfig{})
-	require.True(t, ok)
-	exporter := provider.(GeminiAppsExportParser)
-	callbacks := 0
-	_, err := exporter.ParseGeminiAppsExport(path, func(ParseResult) error {
-		callbacks++
-		return nil
-	})
-	require.ErrorContains(t, err, "unsupported localized or changed Gemini Apps Takeout format")
-	assert.Zero(t, callbacks)
-}
-
-func TestParseGeminiAppsSkipsUnknownCompatibleActivityWithoutLang(t *testing.T) {
-	fixture := geminiAppsSingleCellHTML(
-		"", "My Activity History", "Angefragt",
-		"Jan 2, 2025, 3:04:05 PM EDT", "<p>prompt</p>",
-	)
-	path := filepath.Join(t.TempDir(), "unsupported-label.html")
-	require.NoError(t, os.WriteFile(path, []byte(fixture), 0o644))
-
-	provider, ok := NewProvider(AgentGeminiApps, ProviderConfig{})
-	require.True(t, ok)
-	exporter := provider.(GeminiAppsExportParser)
-	callbacks := 0
-	_, err := exporter.ParseGeminiAppsExport(path, func(ParseResult) error {
-		callbacks++
-		return nil
-	})
-	require.ErrorContains(t, err, "no admissible Prompted records")
-	assert.Zero(t, callbacks)
-}
-
-func TestParseGeminiAppsPreflightsUnsupportedCandidateBeforeCallback(t *testing.T) {
-	root := t.TempDir()
-	supported := geminiAppsSingleCellHTML(
-		"", "My Activity History", "Prompted",
-		"Jan 2, 2025, 3:04:05 PM EDT", "<p>prompt</p>",
-	)
-	unsupported := geminiAppsSingleCellHTML(
-		` lang="de"`, "My Activity History", "Prompted",
-		"Jan 2, 2025, 3:04:05 PM EDT", "<p>prompt</p>",
-	)
-	require.NoError(t, os.WriteFile(filepath.Join(root, "01-supported.html"), []byte(supported), 0o644))
-	require.NoError(t, os.WriteFile(filepath.Join(root, "02-unsupported.html"), []byte(unsupported), 0o644))
-
-	provider, ok := NewProvider(AgentGeminiApps, ProviderConfig{})
-	require.True(t, ok)
-	exporter := provider.(GeminiAppsExportParser)
-	callbacks := 0
-	_, err := exporter.ParseGeminiAppsExport(root, func(ParseResult) error {
-		callbacks++
-		return nil
-	})
-	require.ErrorContains(t, err, "unsupported Gemini Apps Takeout locale")
-	assert.Zero(t, callbacks)
-}
-
-func TestParseGeminiAppsPreflightsUnsupportedCellBeforeCallback(t *testing.T) {
-	supported := geminiAppsSingleCellHTML(
-		"", "My Activity History", "Prompted",
-		"Jan 2, 2025, 3:04:05 PM EDT", "<p>prompt</p>",
-	)
-	unsupportedCell := `<div class="outer-cell"><div class="header-cell"><h3>Gemini Apps</h3><p>Prompted</p><p>2. Januar 2025, 3:04:05 PM MEZ</p></div><div class="content-cell"><p>prompt</p></div></div>`
-	fixture := strings.Replace(supported, "</body>", unsupportedCell+"</body>", 1)
-	path := filepath.Join(t.TempDir(), "mixed.html")
-	require.NoError(t, os.WriteFile(path, []byte(fixture), 0o644))
-
-	provider, ok := NewProvider(AgentGeminiApps, ProviderConfig{})
-	require.True(t, ok)
-	exporter := provider.(GeminiAppsExportParser)
-	callbacks := 0
-	_, err := exporter.ParseGeminiAppsExport(path, func(ParseResult) error {
-		callbacks++
-		return nil
-	})
-	require.Error(t, err)
-	assert.Zero(t, callbacks)
-}
-
-func TestParseGeminiAppsPreflightsUnknownZoneBeforeCallback(t *testing.T) {
-	supported := geminiAppsSingleCellHTML(
-		"", "My Activity History", "Prompted",
-		"Jan 2, 2025, 3:04:05 PM EDT", "<p>prompt</p>",
-	)
-	unsupportedCell := `<div class="outer-cell"><div class="header-cell"><h3>Gemini Apps</h3><p>Prompted</p><p>Jan 3, 2025, 3:04:05 PM XYZ</p></div><div class="content-cell"><p>prompt</p></div></div>`
-	fixture := strings.Replace(supported, "</body>", unsupportedCell+"</body>", 1)
-	path := filepath.Join(t.TempDir(), "unknown-zone.html")
-	require.NoError(t, os.WriteFile(path, []byte(fixture), 0o644))
-
-	provider, ok := NewProvider(AgentGeminiApps, ProviderConfig{})
-	require.True(t, ok)
-	exporter := provider.(GeminiAppsExportParser)
-	callbacks := 0
-	_, err := exporter.ParseGeminiAppsExport(path, func(ParseResult) error {
-		callbacks++
-		return nil
-	})
-	require.Error(t, err)
-	assert.Zero(t, callbacks)
-}
-
-func TestParseGeminiAppsPreflightsUnknownZoneFileBeforeCallback(t *testing.T) {
-	root := t.TempDir()
-	supported := geminiAppsSingleCellHTML(
-		"", "My Activity History", "Prompted",
-		"Jan 2, 2025, 3:04:05 PM EDT", "<p>prompt</p>",
-	)
-	unsupported := geminiAppsSingleCellHTML(
-		"", "My Activity History", "Prompted",
-		"Jan 3, 2025, 3:04:05 PM XYZ", "<p>prompt</p>",
-	)
-	require.NoError(t, os.WriteFile(filepath.Join(root, "01-supported.html"), []byte(supported), 0o644))
-	require.NoError(t, os.WriteFile(filepath.Join(root, "02-unsupported.html"), []byte(unsupported), 0o644))
-
-	provider, ok := NewProvider(AgentGeminiApps, ProviderConfig{})
-	require.True(t, ok)
-	exporter := provider.(GeminiAppsExportParser)
-	callbacks := 0
-	_, err := exporter.ParseGeminiAppsExport(root, func(ParseResult) error {
-		callbacks++
-		return nil
-	})
-	require.Error(t, err)
-	assert.Zero(t, callbacks)
-}
-
-func TestParseGeminiAppsPreflightsMalformedZoneBeforeCallback(t *testing.T) {
-	supported := geminiAppsSingleCellHTML(
-		"", "My Activity History", "Prompted",
-		"Jan 2, 2025, 3:04:05 PM EDT", "<p>prompt</p>",
-	)
-	for _, zone := range []string{"GMT+8:3", "GMT+8junk", "GMT+8:30junk", "GMT+24", "GMT+8:60"} {
-		t.Run(zone, func(t *testing.T) {
-			unsupported := geminiAppsSingleCellHTML(
-				"", "My Activity History", "Prompted",
-				"Jan 3, 2025, 3:04:05 PM "+zone, "<p>prompt</p>",
-			)
-			path := filepath.Join(t.TempDir(), "malformed-zone.html")
-			require.NoError(t, os.WriteFile(path, []byte(strings.Replace(
-				supported, "</body>", unsupported+"</body>", 1),
-			), 0o644))
-
-			provider, ok := NewProvider(AgentGeminiApps, ProviderConfig{})
-			require.True(t, ok)
-			exporter := provider.(GeminiAppsExportParser)
-			callbacks := 0
-			_, err := exporter.ParseGeminiAppsExport(path, func(ParseResult) error {
-				callbacks++
-				return nil
-			})
-			require.Error(t, err)
-			assert.Zero(t, callbacks)
-		})
-	}
-}
-
-func TestParseGeminiAppsSkipsUnknownCompatibleActivityLabels(t *testing.T) {
-	for _, label := range []string{"Nicht Prompted", "Unknown Ereignis", "Prompted extra"} {
-		t.Run(label, func(t *testing.T) {
-			fixture := geminiAppsSingleCellHTML(
-				"", "My Activity History", label,
-				"Jan 2, 2025, 3:04:05 PM EDT", "<p>prompt</p>",
-			)
-			path := filepath.Join(t.TempDir(), "unsupported-label.html")
-			require.NoError(t, os.WriteFile(path, []byte(fixture), 0o644))
-
-			provider, ok := NewProvider(AgentGeminiApps, ProviderConfig{})
-			require.True(t, ok)
-			exporter := provider.(GeminiAppsExportParser)
-			callbacks := 0
-			_, err := exporter.ParseGeminiAppsExport(path, func(ParseResult) error {
-				callbacks++
-				return nil
-			})
-			require.ErrorContains(t, err, "no admissible Prompted records")
-			assert.Zero(t, callbacks)
-		})
-	}
-}
-
-func TestParseGeminiAppsTimestampMustBeInHeader(t *testing.T) {
-	fixture := strings.Replace(
-		sanitizedGeminiAppsHTML,
-		"<p>Jan 2, 2025, 3:04:05 PM EDT</p>",
-		"<p>header timestamp missing</p>",
-		1,
-	)
-	fixture = strings.Replace(
-		fixture,
-		"<p>first prompt<br></p>",
-		"<p>Jan 2, 2025, 3:04:05 PM EDT</p><p>first prompt</p>",
-		1,
-	)
-	path := filepath.Join(t.TempDir(), "content-date.html")
-	require.NoError(t, os.WriteFile(path, []byte(fixture), 0o644))
-
-	provider, ok := NewProvider(AgentGeminiApps, ProviderConfig{})
-	require.True(t, ok)
-	exporter := provider.(GeminiAppsExportParser)
-	var results []ParseResult
-	summary, err := exporter.ParseGeminiAppsExport(path, func(result ParseResult) error {
-		results = append(results, result)
-		return nil
-	})
-	require.NoError(t, err)
-	assert.Len(t, results, 1)
-	assert.Equal(t, 1, summary.Errors)
-	assert.Equal(t, "second prompt\n\nsecond answer", results[0].Messages[0].Content)
-}
-
-func TestParseGeminiAppsExportAdmitsDirectoryAndRejectsOtherHTML(t *testing.T) {
-	root := t.TempDir()
-	require.NoError(t, os.WriteFile(
-		filepath.Join(root, "other.html"),
-		[]byte("<html><head><title>Other activity</title></head></html>"),
-		0o644,
-	))
-	require.NoError(t, os.WriteFile(
-		filepath.Join(root, "activity.html"),
-		[]byte(sanitizedGeminiAppsHTML),
-		0o644,
-	))
-
-	provider, ok := NewProvider(AgentGeminiApps, ProviderConfig{})
-	require.True(t, ok)
-	exporter := provider.(GeminiAppsExportParser)
-	var count int
-	_, err := exporter.ParseGeminiAppsExport(root, func(ParseResult) error {
-		count++
-		return nil
-	})
-	require.NoError(t, err)
-	assert.Equal(t, 2, count)
-
-	other := filepath.Join(t.TempDir(), "other.html")
-	require.NoError(t, os.WriteFile(
-		other,
-		[]byte("<html><head><title>Other activity</title></head></html>"),
-		0o644,
-	))
-	_, err = exporter.ParseGeminiAppsExport(other, func(ParseResult) error { return nil })
-	assert.ErrorContains(t, err, "does not contain a Gemini Apps")
 }
 
 func TestParseGeminiAppsTimestampUsesExplicitZones(t *testing.T) {
@@ -1191,33 +511,34 @@ func TestParseGeminiAppsTimestampUsesExplicitZones(t *testing.T) {
 		text string
 		want string
 	}{
-		{"edt", "Jan 2, 2025, 3:04:05 PM EDT", "2025-01-02T19:04:05Z"},
-		{"pst", "Jan 2, 2025, 3:04:05 PM PST", "2025-01-02T23:04:05Z"},
-		{"utc", "Jan 2, 2025, 3:04:05 PM UTC", "2025-01-02T15:04:05Z"},
-		{"gmt", "Jan 2, 2025, 3:04:05 PM GMT", "2025-01-02T15:04:05Z"},
-		{"est", "Jan 2, 2025, 3:04:05 PM EST", "2025-01-02T20:04:05Z"},
-		{"cst", "Jan 2, 2025, 3:04:05 PM CST", "2025-01-02T21:04:05Z"},
-		{"cdt", "Jan 2, 2025, 3:04:05 PM CDT", "2025-01-02T20:04:05Z"},
-		{"mst", "Jan 2, 2025, 3:04:05 PM MST", "2025-01-02T22:04:05Z"},
-		{"mdt", "Jan 2, 2025, 3:04:05 PM MDT", "2025-01-02T21:04:05Z"},
-		{"pdt", "Jan 2, 2025, 3:04:05 PM PDT", "2025-01-02T22:04:05Z"},
-		{"whole-hour", "Jan 2, 2025, 3:04:05 PM GMT+8", "2025-01-02T07:04:05Z"},
-		{"whole-hour-padded", "Jan 2, 2025, 3:04:05 PM GMT+08:00", "2025-01-02T07:04:05Z"},
-		{"whole-hour-two-digit", "Jan 2, 2025, 3:04:05 PM GMT+08", "2025-01-02T07:04:05Z"},
-		{"whole-hour-lowercase", "Jan 2, 2025, 3:04:05 PM gmt+8", "2025-01-02T07:04:05Z"},
-		{"whole-hour-mixed-case", "Jan 2, 2025, 3:04:05 PM GmT+8", "2025-01-02T07:04:05Z"},
-		{"whole-hour-negative", "Jan 2, 2025, 3:04:05 PM GMT-8", "2025-01-02T23:04:05Z"},
-		{"numeric", "Jan 2, 2025, 3:04:05 PM GMT+05:30", "2025-01-02T09:34:05Z"},
-		{"numeric-max", "Jan 2, 2025, 3:04:05 PM GMT+23:59", "2025-01-01T15:05:05Z"},
-		{"negative-zero", "Jan 2, 2025, 3:04:05 PM GMT-00:30", "2025-01-02T15:34:05Z"},
+		{"edt", "Jan 2, 2025, 3:04:05 PM EDT", "2025-01-02T19:04:05Z"},
+		{"pst", "Jan 2, 2025, 3:04:05 PM PST", "2025-01-02T23:04:05Z"},
+		{"utc", "Jan 2, 2025, 3:04:05 PM UTC", "2025-01-02T15:04:05Z"},
+		{"gmt", "Jan 2, 2025, 3:04:05 PM GMT", "2025-01-02T15:04:05Z"},
+		{"est", "Jan 2, 2025, 3:04:05 PM EST", "2025-01-02T20:04:05Z"},
+		{"cst", "Jan 2, 2025, 3:04:05 PM CST", "2025-01-02T21:04:05Z"},
+		{"cdt", "Jan 2, 2025, 3:04:05 PM CDT", "2025-01-02T20:04:05Z"},
+		{"mst", "Jan 2, 2025, 3:04:05 PM MST", "2025-01-02T22:04:05Z"},
+		{"mdt", "Jan 2, 2025, 3:04:05 PM MDT", "2025-01-02T21:04:05Z"},
+		{"pdt", "Jan 2, 2025, 3:04:05 PM PDT", "2025-01-02T22:04:05Z"},
+		{"narrow no-break space", "Jan 2, 2025, 3:04:05\u202fPM PST", "2025-01-02T23:04:05Z"},
+		{"whole-hour", "Jan 2, 2025, 3:04:05 PM GMT+8", "2025-01-02T07:04:05Z"},
+		{"whole-hour-padded", "Jan 2, 2025, 3:04:05 PM GMT+08:00", "2025-01-02T07:04:05Z"},
+		{"whole-hour-two-digit", "Jan 2, 2025, 3:04:05 PM GMT+08", "2025-01-02T07:04:05Z"},
+		{"whole-hour-lowercase", "Jan 2, 2025, 3:04:05 PM gmt+8", "2025-01-02T07:04:05Z"},
+		{"whole-hour-mixed-case", "Jan 2, 2025, 3:04:05 PM GmT+8", "2025-01-02T07:04:05Z"},
+		{"whole-hour-negative", "Jan 2, 2025, 3:04:05 PM GMT-8", "2025-01-02T23:04:05Z"},
+		{"numeric", "Jan 2, 2025, 3:04:05 PM GMT+05:30", "2025-01-02T09:34:05Z"},
+		{"numeric-max", "Jan 2, 2025, 3:04:05 PM GMT+23:59", "2025-01-01T15:05:05Z"},
+		{"negative-zero", "Jan 2, 2025, 3:04:05 PM GMT-00:30", "2025-01-02T15:34:05Z"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			match := geminiAppsTimestampRE.FindStringSubmatch(tt.text)
+			match := geminiAppsTimestampLineRE.FindStringSubmatch(normalizeMetadata(tt.text))
 			require.Len(t, match, 2)
-			parsed, err := parseGeminiAppsTimestamp(match[0], match[1])
+			parsed, err := parseGeminiAppsTimestamp(match[0], match[1], time.UTC)
 			require.NoError(t, err)
-			assert.Equal(t, tt.want, parsed.UTC().Format("2006-01-02T15:04:05Z"))
+			assert.Equal(t, tt.want, parsed.UTC().Format(time.RFC3339))
 		})
 	}
 
@@ -1225,88 +546,67 @@ func TestParseGeminiAppsTimestampUsesExplicitZones(t *testing.T) {
 		"GMT+8:3", "GMT+8junk", "GMT+8:30junk", "GMT+24", "GMT+8:60", "GMT+8,", "XYZ",
 	} {
 		t.Run("reject-"+zone, func(t *testing.T) {
-			match := geminiAppsTimestampRE.FindStringSubmatch(
-				"Jan 2, 2025, 3:04:05 PM " + zone,
-			)
+			match := geminiAppsTimestampLineRE.FindStringSubmatch("Jan 2, 2025, 3:04:05 PM " + zone)
 			require.Len(t, match, 2)
-			_, err := parseGeminiAppsTimestamp(match[0], match[1])
+			_, err := parseGeminiAppsTimestamp(match[0], match[1], time.UTC)
 			require.ErrorContains(t, err, "unsupported")
 			assert.ErrorContains(t, err, strings.ToUpper(zone))
+			assert.ErrorContains(t, err, "TZ")
 		})
 	}
 }
 
-func TestParseGeminiAppsMissingContentCellIsCountedError(t *testing.T) {
-	provider, ok := NewProvider(AgentGeminiApps, ProviderConfig{})
-	require.True(t, ok)
-	exporter := provider.(GeminiAppsExportParser)
-	withoutContent := strings.Replace(
-		sanitizedGeminiAppsHTML,
-		`  <div class="content-cell mdl-cell"><p>first prompt<br></p><p><strong>first</strong> answer &amp; detail</p><script>secret script</script><style>secret style</style><template>secret template</template><noscript>secret noscript</noscript></div>
-`,
-		"",
-		1,
-	)
-	path := filepath.Join(t.TempDir(), "missing-content.html")
-	require.NoError(t, os.WriteFile(path, []byte(withoutContent), 0o644))
-	var results []ParseResult
-	summary, err := exporter.ParseGeminiAppsExport(path, func(result ParseResult) error {
-		results = append(results, result)
-		return nil
+func TestParseGeminiAppsTimestampResolvesHostZoneAbbreviations(t *testing.T) {
+	load := func(name string) *time.Location {
+		loc, err := time.LoadLocation(name)
+		require.NoError(t, err)
+		return loc
+	}
+	tests := []struct {
+		name string
+		host *time.Location
+		text string
+		want string
+	}{
+		{"india", load("Asia/Kolkata"), "Nov 10, 2026, 3:33:10 AM IST", "2026-11-09T22:03:10Z"},
+		{"ireland summer abbreviation", load("Europe/Dublin"), "Jul 10, 2026, 3:33:10 AM IST", "2026-07-10T02:33:10Z"},
+		{"china overrides the table", load("Asia/Shanghai"), "Jan 2, 2025, 3:04:05 PM CST", "2025-01-02T07:04:05Z"},
+		{"export-time summer zone on a winter record", load("Europe/London"), "Jan 15, 2021, 6:54:12 PM BST", "2021-01-15T17:54:12Z"},
+		{"winter zone on a summer record", load("Europe/London"), "Jul 15, 2021, 6:54:12 PM GMT", "2021-07-15T18:54:12Z"},
+		{"table still applies when the host differs", load("Asia/Kolkata"), "Jan 2, 2025, 3:04:05 PM EDT", "2025-01-02T19:04:05Z"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			match := geminiAppsTimestampLineRE.FindStringSubmatch(tt.text)
+			require.Len(t, match, 2)
+			parsed, err := parseGeminiAppsTimestamp(match[0], match[1], tt.host)
+			require.NoError(t, err)
+			assert.Equal(t, tt.want, parsed.UTC().Format(time.RFC3339))
+		})
+	}
+
+	t.Run("abbreviation the host does not use", func(t *testing.T) {
+		match := geminiAppsTimestampLineRE.FindStringSubmatch("Nov 10, 2026, 3:33:10 AM IST")
+		require.Len(t, match, 2)
+		_, err := parseGeminiAppsTimestamp(match[0], match[1], load("America/New_York"))
+		require.ErrorContains(t, err, `unsupported Gemini Apps timestamp zone "IST"`)
 	})
-	require.NoError(t, err)
-	assert.Len(t, results, 1)
-	assert.Equal(t, 3, summary.Skipped)
-	assert.Equal(t, 1, summary.Errors)
 }
 
-func TestParseGeminiAppsTextDropsC0DELAndC1Controls(t *testing.T) {
-	provider, ok := NewProvider(AgentGeminiApps, ProviderConfig{})
-	require.True(t, ok)
-	exporter := provider.(GeminiAppsExportParser)
-	fixture := strings.Replace(
-		sanitizedGeminiAppsHTML,
-		"first answer",
-		"first\x7f\u0085\u009b answer",
-		1,
-	)
-	path := filepath.Join(t.TempDir(), "controls.html")
-	require.NoError(t, os.WriteFile(path, []byte(fixture), 0o644))
-	var results []ParseResult
-	_, err := exporter.ParseGeminiAppsExport(path, func(result ParseResult) error {
-		results = append(results, result)
-		return nil
-	})
+func TestParseGeminiAppsExportResolvesHostZoneEndToEnd(t *testing.T) {
+	kolkata, err := time.LoadLocation("Asia/Kolkata")
 	require.NoError(t, err)
-	require.Len(t, results, 2)
-	assert.Equal(t, "first prompt\n\nfirst answer & detail", results[0].Messages[0].Content)
-}
+	path := filepath.Join(t.TempDir(), "MyActivity.html")
+	require.NoError(t, os.WriteFile(path, []byte(geminiAppsPromptedDocument(
+		geminiAppsPromptedCellHTML("Nov 10, 2026, 3:33:10 AM IST", "prompt", "<p>answer</p>"),
+	)), 0o644))
 
-func TestParseGeminiAppsZeroRecordsAndUnknownLabel(t *testing.T) {
-	provider, ok := NewProvider(AgentGeminiApps, ProviderConfig{})
-	require.True(t, ok)
-	exporter := provider.(GeminiAppsExportParser)
+	got := parseGeminiAppsRoot(t, path, kolkata)
+	require.NoError(t, got.err)
+	require.Len(t, got.results, 1)
+	assert.Equal(t, "2026-11-09T22:03:10Z", got.results[0].Session.StartedAt.UTC().Format(time.RFC3339))
 
-	path := filepath.Join(t.TempDir(), "empty.html")
-	require.NoError(t, os.WriteFile(path, []byte(
-		`<html><head><title>My Activity History</title></head><body></body></html>`,
-	), 0o644))
-	_, err := exporter.ParseGeminiAppsExport(path, func(ParseResult) error { return nil })
-	require.ErrorContains(t, err, "does not contain a Gemini Apps")
-
-	unknown := strings.ReplaceAll(
-		sanitizedGeminiAppsHTML,
-		"<p>Unknown activity</p>",
-		"<p>Unrecognized activity</p>",
-	)
-	path = filepath.Join(t.TempDir(), "unknown.html")
-	require.NoError(t, os.WriteFile(path, []byte(unknown), 0o644))
-	var count int
-	summary, err := exporter.ParseGeminiAppsExport(path, func(ParseResult) error {
-		count++
-		return nil
-	})
-	require.NoError(t, err)
-	assert.Equal(t, 2, count)
-	assert.Equal(t, 3, summary.Skipped)
+	got = parseGeminiAppsRoot(t, path, time.UTC)
+	require.ErrorContains(t, got.err, `unsupported Gemini Apps timestamp zone "IST"`)
+	assert.Empty(t, got.results)
 }

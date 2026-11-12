@@ -1,5 +1,5 @@
 ---
-last_edited: 2026-11-11
+last_edited: 2026-11-12
 title: Changelog
 description: Release history for AgentsView
 ---
@@ -39,6 +39,12 @@ The latest release is
 
 **Bug fixes**
 
+- `agentsview source import --type gemini-apps` now imports real Google
+  Takeout exports. It used to reject every export with `input does not contain
+  a Gemini Apps My Activity HTML document`, because it expected a layout that
+  Takeout does not write. Each prompt now becomes a session with your prompt
+  and Gemini's response as separate messages. Time zone abbreviations that your
+  computer's time zone uses, such as `IST`, are now recognized.
 - Semantic search builds on Kit's built-in local embeddings server no longer
   fail on every attempt with `embed request failed`. The built-in server runs
   the model on the CPU, so it now defaults to 8 inputs per request, one request
