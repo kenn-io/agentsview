@@ -179,6 +179,86 @@ type usageQueryTracer struct {
 	once    sync.Once
 }
 
+func TestUsageRestrictedPrimaryRetainsDirectResults(t *testing.T) {
+	_, syncer, primary, _ := keptUsageFixture(t)
+	ctx := t.Context()
+	roleURL := newUsageJournalRole(t, syncer, `GRANT SELECT ON ALL TABLES IN SCHEMA `+syncer.schema+` TO ROLE`)
+	_, err := primary.pg.ExecContext(ctx, `REVOKE EXECUTE ON FUNCTION pg_catalog.pg_control_system() FROM PUBLIC`)
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		_, err := primary.pg.ExecContext(context.WithoutCancel(t.Context()), `GRANT EXECUTE ON FUNCTION pg_catalog.pg_control_system() TO PUBLIC`)
+		require.NoError(t, err)
+	})
+	config, err := pgx.ParseConfig(roleURL)
+	require.NoError(t, err)
+	config.RuntimeParams["search_path"] = syncer.schema
+	config.RuntimeParams["TimeZone"] = "UTC"
+	trace := &usageQueryTracer{queries: map[string]int{}}
+	config.Tracer = trace
+	pool := stdlib.OpenDB(*config)
+	reader := &Store{pg: pool, ownedDB: pool}
+	t.Cleanup(func() { require.NoError(t, reader.Close()) })
+	require.NoError(t, reader.ConfigureUsageCache(ctx, t.TempDir(), roleURL, syncer.schema))
+	filter := db.UsageFilter{From: "2026-01-01", To: "2026-01-01", Timezone: "UTC"}
+	want, err := primary.GetDailyUsage(ctx, filter)
+	require.NoError(t, err)
+	got, err := reader.GetDailyUsage(ctx, filter)
+	require.NoError(t, err)
+	require.Equal(t, want, got)
+	wantTop, err := primary.GetTopSessionsByCost(ctx, filter, 10)
+	require.NoError(t, err)
+	gotTop, err := reader.GetTopSessionsByCost(ctx, filter, 10)
+	require.NoError(t, err)
+	require.Equal(t, wantTop, gotTop)
+	wantPlan, err := primary.GetPlanUsageSessionCounts(ctx, filter)
+	require.NoError(t, err)
+	gotPlan, err := reader.GetPlanUsageSessionCounts(ctx, filter)
+	require.NoError(t, err)
+	require.Equal(t, wantPlan, gotPlan)
+	trace.mu.Lock()
+	reads := maps.Clone(trace.queries)
+	trace.mu.Unlock()
+	require.GreaterOrEqual(t, len(reads), 3)
+	got, err = reader.GetDailyUsage(ctx, filter)
+	require.NoError(t, err)
+	require.Equal(t, want, got)
+	gotTop, err = reader.GetTopSessionsByCost(ctx, filter, 10)
+	require.NoError(t, err)
+	require.Equal(t, wantTop, gotTop)
+	gotPlan, err = reader.GetPlanUsageSessionCounts(ctx, filter)
+	require.NoError(t, err)
+	require.Equal(t, wantPlan, gotPlan)
+	trace.mu.Lock()
+	again := maps.Clone(trace.queries)
+	trace.mu.Unlock()
+	require.Equal(t, reads, again, "repeats must reuse the direct reports")
+	var revision int64
+	require.NoError(t, primary.pg.QueryRowContext(ctx, `SELECT value::bigint FROM sync_metadata WHERE key='usage_change_revision'`).Scan(&revision))
+	tx, err := primary.beginTx(ctx, nil)
+	require.NoError(t, err)
+	_, err = tx.ExecContext(ctx, `UPDATE usage_events SET output_tokens=output_tokens+100 WHERE session_id='paid-a'`)
+	require.NoError(t, err)
+	_, err = tx.ExecContext(ctx, `UPDATE sync_metadata SET value=$1::bigint::text WHERE key='usage_change_revision'`, revision-1)
+	require.NoError(t, err)
+	require.NoError(t, tx.Commit())
+	want, err = (&Store{pg: primary.pg}).readDailyUsage(ctx, filter)
+	require.NoError(t, err)
+	got, err = reader.GetDailyUsage(ctx, filter)
+	require.NoError(t, err)
+	require.Equal(t, want, got)
+	require.NotEqual(t, 1250, got.Totals.OutputTokens)
+	_, err = primary.pg.ExecContext(ctx, `GRANT EXECUTE ON FUNCTION pg_catalog.pg_control_system() TO PUBLIC`)
+	require.NoError(t, err)
+	_, err = reader.GetDailyUsage(ctx, filter)
+	require.NoError(t, err)
+	warmCtx, cancel := context.WithTimeout(ctx, 15*time.Second)
+	defer cancel()
+	require.NoError(t, reader.WaitUsageCacheWarm(warmCtx))
+	require.False(t, reader.runtimeState().usageIdentityDenied.Load())
+	_, err = reader.usageCache.ResetEpoch(ctx)
+	require.NoError(t, err)
+}
+
 func (trace *usageQueryTracer) TraceQueryStart(ctx context.Context, _ *pgx.Conn, data pgx.TraceQueryStartData) context.Context {
 	if strings.Contains(data.SQL, "usage_history_token") {
 		trace.probes.Add(1)

@@ -1364,6 +1364,6 @@ func TestPGUsageCacheIdentityPermissionUnavailable(t *testing.T) {
 	require.NoError(t, err)
 	_, err = tx.ExecContext(ctx, `SET LOCAL ROLE `+role)
 	require.NoError(t, err)
-	_, err = (&pgUsageCacheSource{}).snapshot(ctx, owner.readView(tx))
+	_, err = (&pgUsageCacheSource{Store: owner}).snapshot(ctx, owner.readView(tx))
 	require.ErrorIs(t, err, db.ErrUsageSourceUnavailable)
 }

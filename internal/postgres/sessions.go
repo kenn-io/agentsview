@@ -57,17 +57,18 @@ type storeRuntime struct {
 	// frictionFilingStatePresent is the same for friction_filing_state.
 	frictionFilingStatePresent atomic.Bool
 
-	pricingMu         sync.Mutex
-	pricingLoadMu     sync.Mutex
-	pricingLoad       *pricingLoad
-	customPricing     map[string]config.CustomModelRate
-	pricingGeneration uint64
-	dailyUsage        kept.Reads[db.DailyUsageResult]
-	planUsage         kept.Reads[*db.PlanUsageCountSummary]
-	topUsage          kept.Reads[[]db.TopSessionEntry]
-	standbyDaily      kept.Flights[standbyResult[db.DailyUsageResult]]
-	standbyPlan       kept.Flights[standbyResult[*db.PlanUsageCountSummary]]
-	standbyTop        kept.Flights[standbyResult[[]db.TopSessionEntry]]
+	pricingMu           sync.Mutex
+	pricingLoadMu       sync.Mutex
+	pricingLoad         *pricingLoad
+	customPricing       map[string]config.CustomModelRate
+	pricingGeneration   uint64
+	usageIdentityDenied atomic.Bool
+	dailyUsage          kept.Reads[db.DailyUsageResult]
+	planUsage           kept.Reads[*db.PlanUsageCountSummary]
+	topUsage            kept.Reads[[]db.TopSessionEntry]
+	standbyDaily        kept.Flights[snapshotResult[db.DailyUsageResult]]
+	standbyPlan         kept.Flights[snapshotResult[*db.PlanUsageCountSummary]]
+	standbyTop          kept.Flights[snapshotResult[[]db.TopSessionEntry]]
 
 	// vectorMu guards the semantic-search seam. vectorSearcher is the PG
 	// vector searcher wired at pg serve startup when a generation matches

@@ -11,31 +11,32 @@ import (
 	"go.kenn.io/agentsview/internal/kept"
 )
 
-// A standby cannot identify its timeline through pg_walfile_name. The journal
-// token changes at every committed write, including across restored histories.
-func standbyUsageVersion(ctx context.Context, q storeExecutor, generation uint64) string {
+// The journal token changes at every committed write, including across
+// restored histories. It identifies direct reads on standbys and primaries
+// whose roles cannot read the persistent cache's source identity.
+func snapshotUsageVersion(ctx context.Context, q storeExecutor, generation uint64) string {
 	var token string
 	var revision int64
 	var oid sql.NullInt64
-	err := q.QueryRowContext(ctx, `SELECT COALESCE((SELECT value FROM sync_metadata WHERE key='usage_history_token'), ''), `+usageChangeRevisionSQL+`, to_regclass('usage_session_changes')::oid WHERE pg_is_in_recovery()`, strconv.Itoa(usageChangeJournalVersionPG)).Scan(&token, &revision, &oid)
+	err := q.QueryRowContext(ctx, `SELECT COALESCE((SELECT value FROM sync_metadata WHERE key='usage_history_token'), ''), `+usageChangeRevisionSQL+`, to_regclass('usage_session_changes')::oid`, strconv.Itoa(usageChangeJournalVersionPG)).Scan(&token, &revision, &oid)
 	if err != nil || revision == 0 || !oid.Valid {
 		return ""
 	}
 	if _, err := uuid.Parse(token); err != nil {
 		return ""
 	}
-	return fmt.Sprintf("standby|%s|%d|%d|%d", token, revision, oid.Int64, generation)
+	return fmt.Sprintf("snapshot|%s|%d|%d|%d", token, revision, oid.Int64, generation)
 }
 
-type standbyResult[T any] struct {
+type snapshotResult[T any] struct {
 	value   T
 	handled bool
 	version string
 }
 
-// A retained standby result is built entirely within the snapshot whose token
+// A retained result is built entirely within the snapshot whose token
 // identifies it. Failed or unavailable journal probes use the direct path.
-func standbyRetained[T any](ctx context.Context, s *Store, slot string, reads *kept.Reads[T], flights *kept.Flights[standbyResult[T]], load func(context.Context, *Store) (T, error)) (T, bool, error) {
+func snapshotRetained[T any](ctx context.Context, s *Store, slot string, reads *kept.Reads[T], flights *kept.Flights[snapshotResult[T]], load func(context.Context, *Store) (T, error)) (T, bool, error) {
 	var zero T
 	if slot == "" || s.readTx != nil || s.hostedRelations {
 		return zero, false, nil
@@ -44,15 +45,15 @@ func standbyRetained[T any](ctx context.Context, s *Store, slot string, reads *k
 	runtime.pricingMu.Lock()
 	generation := runtime.pricingGeneration
 	runtime.pricingMu.Unlock()
-	version := standbyUsageVersion(ctx, s.pg, generation)
+	version := snapshotUsageVersion(ctx, s.pg, generation)
 	if version == "" {
 		return zero, false, nil
 	}
 	if value, ok := reads.Get(slot, version); ok {
 		return value, true, nil
 	}
-	result, err := flights.Do(ctx, version+"|"+slot, func(ctx context.Context) (standbyResult[T], error) {
-		return standbyLoad(ctx, s, slot, reads, load)
+	result, err := flights.Do(ctx, version+"|"+slot, func(ctx context.Context) (snapshotResult[T], error) {
+		return snapshotLoad(ctx, s, slot, reads, load)
 	})
 	if err != nil {
 		return zero, true, err
@@ -61,13 +62,13 @@ func standbyRetained[T any](ctx context.Context, s *Store, slot string, reads *k
 	// that observed the old token may have returned to that history while
 	// the flight ran, so it must capture its own snapshot.
 	if result.handled && result.version != version {
-		result, err = standbyLoad(ctx, s, slot, reads, load)
+		result, err = snapshotLoad(ctx, s, slot, reads, load)
 	}
 	return result.value, result.handled, err
 }
 
-func standbyLoad[T any](ctx context.Context, s *Store, slot string, reads *kept.Reads[T], load func(context.Context, *Store) (T, error)) (standbyResult[T], error) {
-	result := standbyResult[T]{handled: true}
+func snapshotLoad[T any](ctx context.Context, s *Store, slot string, reads *kept.Reads[T], load func(context.Context, *Store) (T, error)) (snapshotResult[T], error) {
+	result := snapshotResult[T]{handled: true}
 	tx, err := s.beginTx(ctx, &sql.TxOptions{ReadOnly: true, Isolation: sql.LevelRepeatableRead})
 	if err != nil {
 		return result, err
@@ -80,7 +81,7 @@ func standbyLoad[T any](ctx context.Context, s *Store, slot string, reads *kept.
 	view.pricingSnapshot.custom = maps.Clone(runtime.customPricing)
 	view.pricingSnapshot.frozen = true
 	runtime.pricingMu.Unlock()
-	result.version = standbyUsageVersion(ctx, view.pg, generation)
+	result.version = snapshotUsageVersion(ctx, view.pg, generation)
 	if result.version == "" {
 		result.handled = false
 		return result, nil

@@ -43,6 +43,9 @@ these permissions use direct reads. Hosted and borrowed transaction readers,
 CockroachDB, and unavailable journals also use direct reads. PostgreSQL
 standbys retain complete results in memory when a current writer has installed
 the journal history token; otherwise they read directly.
+Readers without a version 2 journal repeat direct reads until a current writer
+upgrades it. Readers without the identity functions can retain direct results
+when the journal has a history token.
 Recovery onto a different PostgreSQL timeline starts a new cache generation.
 If a cache attempt fails while the request is active, the existing direct
 PostgreSQL read supplies its result or error. A journal installed later enables

@@ -37,8 +37,12 @@ func (s *Store) keptUsageVersion(ctx context.Context, slot string) string {
 		if errors.Is(err, sql.ErrNoRows) {
 			return standbyUsageMarker
 		}
+		if isInsufficientPrivilege(err) {
+			s.runtimeState().usageIdentityDenied.Store(true)
+		}
 		return ""
 	}
+	s.runtimeState().usageIdentityDenied.Store(false)
 	if revision == 0 || !journalOID.Valid {
 		return ""
 	}
