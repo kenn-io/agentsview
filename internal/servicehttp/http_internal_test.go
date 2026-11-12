@@ -75,10 +75,12 @@ func TestLongRunningClient(t *testing.T) {
 		{
 			name: "search", path: "/api/v1/search", body: `{"results":[{"session_id":"session-a"}],"next":84}`,
 			checkRequest: func(t *testing.T, r *http.Request) {
+				t.Helper()
 				assert.Equal(t, "needle", r.URL.Query().Get("q"))
 				assert.Equal(t, "42", r.URL.Query().Get("cursor"))
 			},
 			call: func(t *testing.T, backend *httpBackend) {
+				t.Helper()
 				result, err := backend.Search(t.Context(), service.SearchRequest{Query: "needle", Cursor: 42})
 				require.NoError(t, err)
 				require.Len(t, result.Results, 1)
@@ -89,6 +91,7 @@ func TestLongRunningClient(t *testing.T) {
 		{
 			name: "content search", path: "/api/v1/search/content", body: `{"matches":[]}`,
 			call: func(t *testing.T, backend *httpBackend) {
+				t.Helper()
 				result, err := backend.SearchContent(t.Context(), service.ContentSearchRequest{Pattern: "slow first query", Mode: "semantic"})
 				require.NoError(t, err)
 				assert.Empty(t, result.Matches)
@@ -97,6 +100,7 @@ func TestLongRunningClient(t *testing.T) {
 		{
 			name: "usage summary", path: "/api/v1/usage/summary", body: `{"daily":[{"date":"2026-09-01"}]}`,
 			call: func(t *testing.T, backend *httpBackend) {
+				t.Helper()
 				result, err := backend.UsageSummary(t.Context(), service.UsageRequest{})
 				require.NoError(t, err)
 				require.Len(t, result.Daily, 1)
@@ -106,9 +110,11 @@ func TestLongRunningClient(t *testing.T) {
 		{
 			name: "stats", path: "/api/v1/session-stats", body: `{"generated_at":"2026-09-01T00:00:00Z","outcome_stats":{"repos_active":2,"commits":7}}`,
 			checkRequest: func(t *testing.T, r *http.Request) {
+				t.Helper()
 				assert.Equal(t, "true", r.URL.Query().Get("include_github_outcomes"))
 			},
 			call: func(t *testing.T, backend *httpBackend) {
+				t.Helper()
 				result, err := backend.Stats(t.Context(), service.StatsFilter{Since: "30d", IncludeGitOutcomes: true, IncludeGitHubOutcomes: true})
 				require.NoError(t, err)
 				require.NotNil(t, result)
