@@ -42,6 +42,27 @@ func (s *Server) registerUsageRoutes() {
 	}
 	costPerSessionSchema.Ref = ""
 	s.getLong(group, "/top-sessions", "Get top usage sessions", s.humaUsageTopSessions)
+	s.get(group, "/limits", "Get subscription rate limits", s.humaUsageLimits)
+}
+
+// usageLimitsResponse is the latest subscription rate-limit report for each
+// agent, account, and limit, newest first. The reports describe accounts, so
+// the usage filters do not apply to them.
+type usageLimitsResponse struct {
+	Limits []db.RateLimitSnapshot `json:"limits" doc:"Latest rate-limit report per agent, account, and limit, newest first"`
+}
+
+func (s *Server) humaUsageLimits(
+	ctx context.Context, _ *emptyInput,
+) (*jsonOutput[usageLimitsResponse], error) {
+	limits, err := s.db.GetLatestRateLimits(ctx)
+	if err != nil {
+		if handled := handleHumaContextError(err); handled != nil {
+			return nil, handled
+		}
+		return nil, internalError("usage limits error", err)
+	}
+	return &jsonOutput[usageLimitsResponse]{Body: usageLimitsResponse{Limits: limits}}, nil
 }
 
 type UsageFilterInput struct {

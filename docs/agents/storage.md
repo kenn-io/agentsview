@@ -758,6 +758,31 @@ reported cost wins.
 - Validation writes a costed usage event with no model under
   `usagefacts.UnknownModel` (`<unknown>`), so usage reads keep it.
 
+### Rate-limit snapshots
+
+`rate_limit_snapshots` holds the subscription rate-limit reports agents record,
+one row per change in the reported values within a session. Only Codex writes
+them today; the evidence is in
+[session-format-sources.md](../internal/session-format-sources.md#codex-codex).
+A row describes an account, so it has no foreign key to `sessions` and outlives
+the session that carried it.
+
+- The sync engine writes reports as soon as a parse yields them, outside the
+  session write: in `providerResultAdmission.admit` for full parses and in the
+  provider incremental append callback. `(session_id, limit_id, observed_at)`
+  is the identity, and the insert ignores rows already stored, so retries and
+  reparses add nothing. Report-only parse-diff runs write nothing.
+- The table is append-only. PostgreSQL, DuckDB, and ClickHouse push it by an id
+  high-water mark, like `cursor_usage_events`, and skip it on project-filtered
+  pushes. A full resync rebuild copies old rows with `INSERT OR IGNORE`, so
+  reports from deleted rollouts survive.
+- `db.LatestRateLimitSnapshotsSQL` is the one read query: the latest report
+  per agent, account, and limit. Every backend runs it and formats times with
+  `db.FormatRateLimitTime`. `dbtest.SeedRateLimitSnapshots` and
+  `dbtest.AssertLatestRateLimits` are the cross-backend acceptance check.
+- Hosted tenants return no reports, because raw derivation does not produce
+  them.
+
 ### Session usage totals
 
 `session_usage_totals` holds one row per session with a total the agent

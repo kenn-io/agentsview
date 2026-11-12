@@ -371,6 +371,28 @@ CREATE INDEX IF NOT EXISTS idx_cursor_usage_events_occurred
 CREATE INDEX IF NOT EXISTS idx_cursor_usage_events_model
     ON cursor_usage_events (model);
 
+CREATE TABLE IF NOT EXISTS rate_limit_snapshots (
+    id BIGSERIAL PRIMARY KEY,
+    agent TEXT NOT NULL,
+    account_key TEXT NOT NULL DEFAULT '',
+    limit_id TEXT NOT NULL DEFAULT '',
+    plan_type TEXT NOT NULL DEFAULT '',
+    session_id TEXT NOT NULL,
+    observed_at TIMESTAMPTZ NOT NULL,
+    primary_used_percent DOUBLE PRECISION,
+    primary_window_minutes BIGINT,
+    primary_resets_at TIMESTAMPTZ,
+    secondary_used_percent DOUBLE PRECISION,
+    secondary_window_minutes BIGINT,
+    secondary_resets_at TIMESTAMPTZ
+);
+
+CREATE UNIQUE INDEX IF NOT EXISTS idx_rate_limit_snapshots_identity
+    ON rate_limit_snapshots (session_id, limit_id, observed_at);
+
+CREATE INDEX IF NOT EXISTS idx_rate_limit_snapshots_latest
+    ON rate_limit_snapshots (agent, account_key, limit_id, observed_at);
+
 CREATE TABLE IF NOT EXISTS starred_sessions (
     session_id TEXT PRIMARY KEY,
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
@@ -2651,6 +2673,7 @@ func pushSchemaCurrent(ctx context.Context, db *sql.DB) bool {
 		!pgHasTable(ctx, db, "friction_issue_links") ||
 		!pgHasTable(ctx, db, "friction_filing_state") ||
 		!pgHasTable(ctx, db, "cursor_usage_events") ||
+		!pgHasTable(ctx, db, "rate_limit_snapshots") ||
 		!pgHasTable(ctx, db, "friction_findings") {
 		return false
 	}
@@ -2662,6 +2685,7 @@ func pushSchemaCurrent(ctx context.Context, db *sql.DB) bool {
 	// the Activity index so that upgrading through push installs it too.
 	return accountUsageTokensWidePG(ctx, db) &&
 		pgHasIndex(ctx, db, "idx_cursor_usage_events_dedup") &&
+		pgHasIndex(ctx, db, "idx_rate_limit_snapshots_identity") &&
 		pgHasIndex(ctx, db, "idx_tool_result_events_terminal")
 }
 

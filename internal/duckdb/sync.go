@@ -364,6 +364,9 @@ func (s *Sync) runIncrementalPush(
 	if err := s.syncCursorUsageEvents(ctx); err != nil {
 		return result, err
 	}
+	if err := s.syncRateLimitSnapshots(ctx); err != nil {
+		return result, err
+	}
 
 	through, err := s.local.SessionDeletionPublicationRevision(ctx)
 	if err != nil {

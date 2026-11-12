@@ -10,6 +10,7 @@ import type {
   GetApiV1UsageSummaryStreamParams,
   GetApiV1UsageTopSessionsParams,
   ServiceUsagePairwiseComparisonResponse,
+  UsageLimitsResponse,
   UsageSummaryResponse,
 } from "../models";
 
@@ -40,6 +41,22 @@ export const getApiV1UsageComparison = async (
   options?: Parameters<typeof orvalFetch>[1],
 ): Promise<Comparison> => {
   return orvalFetch<Comparison>(getGetApiV1UsageComparisonUrl(params), {
+    ...options,
+    method: "GET",
+  });
+};
+
+export const getGetApiV1UsageLimitsUrl = () => {
+  return `/api/v1/usage/limits`;
+};
+
+/**
+ * @summary Get subscription rate limits
+ */
+export const getApiV1UsageLimits = async (
+  options?: Parameters<typeof orvalFetch>[1],
+): Promise<UsageLimitsResponse> => {
+  return orvalFetch<UsageLimitsResponse>(getGetApiV1UsageLimitsUrl(), {
     ...options,
     method: "GET",
   });

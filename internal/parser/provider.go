@@ -1168,6 +1168,9 @@ type IncrementalOutcome struct {
 	SubagentLinks            []ClaudeSubagentLink
 	ToolCallUpdates          []ParsedToolCallUpdate
 	MessageTokenUsageUpdates []ParsedMessageTokenUsageUpdate
+	// RateLimits are the rate-limit reports found in the appended tail; see
+	// ParsedSession.RateLimits.
+	RateLimits []ParsedRateLimitSnapshot
 	// NextCursor is the provider's continuation state after consuming the
 	// appended tail, for persistence alongside the committed offset.
 	NextCursor           []byte

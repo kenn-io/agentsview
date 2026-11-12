@@ -898,6 +898,7 @@ func (p *codexProvider) ParseIncremental(
 		Messages:                 result.messages,
 		ToolCallUpdates:          result.toolCallUpdates,
 		MessageTokenUsageUpdates: result.messageUsageUpdates,
+		RateLimits:               result.rateLimits,
 		NextCursor:               nextCursor,
 		EndedAt:                  result.endedAt,
 		ConsumedBytes:            result.consumedBytes,

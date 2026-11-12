@@ -106,6 +106,9 @@ type Store interface {
 	GetPlanUsageSessionCounts(ctx context.Context, f UsageFilter) (PlanUsageSessionCounts, error)
 	GetSessionUsage(ctx context.Context, sessionID string, includeBreakdown bool) (*SessionUsage, error)
 	GetSessionPlanUsage(ctx context.Context, sessionID string) (*SessionPlanUsage, error)
+	// GetLatestRateLimits returns the most recent subscription rate-limit
+	// report for each agent, account, and limit.
+	GetLatestRateLimits(ctx context.Context) ([]RateLimitSnapshot, error)
 
 	// Stars.
 	StarSession(ctx context.Context, sessionID string) (bool, error)

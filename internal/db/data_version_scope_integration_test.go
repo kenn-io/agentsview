@@ -1665,3 +1665,72 @@ func TestClaudeCostStateUpgradeKeepsSessionTotalApart(t *testing.T) {
 	requireTotal(database)
 	assert.Equal(t, source, database.GetSessionFilePath(ctx, id))
 }
+
+func TestCodexRateLimitUpgradeReparsesInPlace(t *testing.T) {
+	scope := db.ScopedDataVersionProviders(177, 178)
+	assert.ElementsMatch(t, []parser.AgentType{parser.AgentCodex}, scope)
+	version := db.CurrentDataVersion()
+	t.Cleanup(db.InstallDataVersionScopesForTest(map[int][]parser.AgentType{version: scope}))
+	ctx := t.Context()
+	database := dbtest.OpenTestDB(t)
+	root := t.TempDir()
+	const id = "019eb791-cf7d-75c1-8439-9ed74c1229e7"
+	sessionID := "codex:" + id
+	rateLimits := func(ts string, used float64) string {
+		return fmt.Sprintf(`{"type":"event_msg","timestamp":%q,"payload":{"type":"token_count","info":null,"rate_limits":{"limit_id":"codex","limit_name":null,"primary":{"used_percent":%v,"window_minutes":10080,"resets_at":1794890601},"secondary":null,"credits":null,"plan_type":"pro","rate_limit_reached_type":null}}}`, ts, used)
+	}
+	body := testjsonl.JoinJSONL(
+		testjsonl.CodexSessionMetaWithFieldsJSON(id, root, "codex_cli_rs", "2026-11-01T12:00:00Z", map[string]any{"creator_account_id": "account-x"}),
+		testjsonl.CodexTurnContextJSON("gpt-5.4", "2026-11-01T12:00:01Z"),
+		testjsonl.CodexMsgJSON("user", "keep going", "2026-11-01T12:00:01Z"),
+		rateLimits("2026-11-01T12:00:02Z", 12),
+		testjsonl.CodexMsgJSON("assistant", "done", "2026-11-01T12:00:03Z"),
+		rateLimits("2026-11-01T12:00:04Z", 13),
+	)
+	dbtest.WriteTestFile(t, filepath.Join(root, "rollout-"+id+".jsonl"), []byte(body))
+	cfg := sync.EngineConfig{Machine: "local", AgentDirs: map[parser.AgentType][]string{parser.AgentCodex: {root}}}
+	engine := sync.NewEngine(ctx, database, cfg)
+	require.Equal(t, 1, engine.SyncAll(ctx, nil).Synced)
+	engine.Close()
+	first, err := database.GetRateLimitSnapshots(ctx, 0)
+	require.NoError(t, err)
+	require.Len(t, first, 2, "a sync records each change in the reported values")
+
+	// Simulate an archive written before rate limits were recorded.
+	require.NoError(t, database.Update(ctx, func(tx *sql.Tx) error {
+		_, err := tx.ExecContext(ctx, fmt.Sprintf(
+			"DELETE FROM rate_limit_snapshots; UPDATE sessions SET data_version=%d; PRAGMA user_version=%d",
+			version-1, version-1,
+		))
+		return err
+	}))
+	path := database.Path()
+	require.NoError(t, database.Close())
+	_, full, err := db.ArchiveResyncState(ctx, path)
+	require.NoError(t, err)
+	require.False(t, full, "the upgrade reparses Codex in place")
+	database, err = db.OpenIsolated(ctx, path)
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, database.Close()) })
+	engine = sync.NewEngine(ctx, database, cfg)
+	t.Cleanup(engine.Close)
+	require.Equal(t, 1, engine.SyncAll(ctx, nil).Synced)
+
+	sessions, err := database.ListSessions(ctx, db.SessionFilter{Limit: 10})
+	require.NoError(t, err)
+	require.Len(t, sessions.Sessions, 1)
+	assert.Equal(t, sessionID, sessions.Sessions[0].ID)
+	assert.Equal(t, version, database.GetSessionDataVersion(ctx, sessionID))
+	latest, err := database.GetLatestRateLimits(ctx)
+	require.NoError(t, err)
+	require.Len(t, latest, 1)
+	assert.Equal(t, "codex", latest[0].Agent)
+	assert.Equal(t, sessionID, latest[0].SessionID)
+	assert.Equal(t, "pro", latest[0].PlanType)
+	assert.Equal(t, "2026-11-01T12:00:04.000Z", latest[0].ObservedAt)
+	require.NotNil(t, latest[0].Primary)
+	assert.InDelta(t, 13.0, latest[0].Primary.UsedPercent, 0)
+	assert.Equal(t, "2026-11-17T04:43:21.000Z", latest[0].Primary.ResetsAt)
+	assert.NotEmpty(t, latest[0].AccountKey)
+	assert.NotEqual(t, "account-x", latest[0].AccountKey)
+}

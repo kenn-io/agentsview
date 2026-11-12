@@ -692,6 +692,9 @@ func (s *Sync) pushEverything(
 	if err := s.syncCursorUsageEvents(ctx); err != nil {
 		return result, err
 	}
+	if err := s.syncRateLimitSnapshots(ctx); err != nil {
+		return result, err
+	}
 
 	sessions, err := s.local.ListSessionsForMirrorWindow(
 		ctx, "", s.projects, s.excludeProjects,

@@ -1,5 +1,5 @@
 ---
-last_edited: 2026-11-11
+last_edited: 2026-11-12
 ---
 
 # Session Format Source Inventory
@@ -154,6 +154,24 @@ non-text results remain unknown. These classifications describe retained
 evidence; they do not establish whether a tool helped the task.
 
 ## Claude Code (`claude`)
+
+- **Subscription rate limits (checked 2026-11-12 against the installed Claude
+  Code 2.1.322 bundle):** Claude Code transcripts record no limit-window
+  usage. `system` records with subtype `api_error` carry `error.rateLimits`,
+  which the bundle's `KWn` fills only from a failed response's
+  `anthropic-ratelimit-unified-representative-claim` and
+  `anthropic-ratelimit-unified-reset` headers, as `rateLimitType` and
+  `resetsAt`, with no share used; otherwise it is null. A read-only scan of
+  1,696 local transcripts found 9 such records, all with `rateLimits: null`,
+  and 35 synthetic `rate_limit` error messages whose text carries no window
+  figures. Claude Code also caches its usage response in the user config file
+  (`~/.claude.json`) under `cachedUsageUtilization`: `fetchedAtMs`,
+  `accountUuid`, and `utilization`, which includes `five_hour` and `seven_day`
+  objects with `utilization` and `resets_at`, and a `limits` array with
+  `kind`, `percent`, and `resets_at`. The bundle overwrites that cache when it
+  fetches usage and ignores it once stale; the local copy was weeks old. It is
+  a single overwritten snapshot outside the session files, and Agentsview
+  does not read it. Evidence class: `no-public-source`.
 
 - **Hook output (checked 2026-11-04):** The parser reads the `hook_success`
   attachment shape reported in
@@ -761,6 +779,38 @@ fixtures retain this field; missing identities remain source-local.
   `internal/parser/cowork_paths.go`, and `internal/parser/cowork_provider.go`.
 
 ## Codex (`codex`)
+
+- **Subscription rate limits (checked 2026-11-12 at
+  `5c3ff1dabf644169f4bd74b215719f381e4fdb3f`):** The pinned
+  [protocol](https://github.com/openai/codex/blob/5c3ff1dabf644169f4bd74b215719f381e4fdb3f/codex-rs/protocol/src/protocol.rs)
+  gives `TokenCountEvent` an optional `rate_limits` `RateLimitSnapshot` with
+  `limit_id`, `limit_name`, `primary` and `secondary` `RateLimitWindow`s,
+  `credits`, `individual_limit`, `spend_control_reached`, `plan_type`, and
+  `rate_limit_reached_type`. A window carries `used_percent` (0 to 100),
+  `window_minutes`, and `resets_at` in Unix seconds; the last two are
+  optional. `SessionMeta.creator_account_id` is the ChatGPT account selected
+  when the thread was created. The
+  [rollout policy](https://github.com/openai/codex/blob/5c3ff1dabf644169f4bd74b215719f381e4fdb3f/codex-rs/rollout/src/policy.rs)
+  persists every `TokenCount` event. A read-only scan of 18,471 local rollouts
+  found 302,344 `token_count` events with a `rate_limits` key: 280,121 with a
+  primary window, 10,840 with only credits, 3,993 with every field null, and
+  7,390 with `rate_limits: null`. Every primary window recorded 10,080 minutes
+  except five recorded as 0; no secondary window was recorded, so the
+  five-hour window was not observed locally. Seven reports used `limit_id`
+  `premium`, all without windows. 18,395 of 18,483 `session_meta` lines carried
+  `creator_account_id`. Agentsview reads `rate_limits` from Codex
+  `token_count` events only (not from forks that share the parser, whose
+  producers were not checked), skips reports with no window, and stores one
+  row per change in the reported values in `rate_limit_snapshots`, with a
+  digest of the account ID instead of the ID. Window lengths are shown as
+  recorded; no plan limit is inferred. Parsing the 3,958 rollouts from the last
+  seven days stored 5,786 rows for one account. Data version 178 reparses
+  Codex in place, and the parser checkpoint moves to version 7 to carry the
+  account key and the last report digest. Covered by
+  `TestCodexRateLimitsRecordChangesOnly`,
+  `TestCodexRateLimitsIncrementalMatchesFullParse`,
+  `TestCodexRateLimitsRecordedOnAppend`, and
+  `TestCodexRateLimitUpgradeReparsesInPlace`.
 
 - **Reasoning, compaction, and usage repeats (checked 2026-11-11 at
   `87b7bdbf2efb9cb6fb15d821ef535061012c0138`):** The pinned

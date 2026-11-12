@@ -395,6 +395,32 @@ The dashboard reads from the same `model_pricing` table that backs the CLI
 commands below, so the numbers line up exactly with what
 `agentsview report usage daily` prints.
 
+### Plan Limits
+
+The Plan limits panel shows how much of each Codex subscription limit window
+you have used, as Codex last reported it. Each window shows the share used,
+when it resets, and how long ago Codex reported it. A window that has reset
+since that report says so, because its share is out of date. The panel appears
+only after AgentsView has read at least one report.
+
+Codex writes these reports into its session files on its token count events.
+Each report names the window length, such as five hours or a week, and the
+reset time. AgentsView keeps every change in the reported values, so the
+history survives after old session files are deleted. Reports from different
+Codex accounts stay separate; the panel numbers the accounts when there is more
+than one. The usage filters do not apply, because a limit belongs to the
+account, not to a project or session. `GET /api/v1/usage/limits` returns the
+same latest report for each account and limit.
+
+Limits:
+
+- Only Codex is covered. Claude Code does not write its limit windows into its
+  session files.
+- A window's share is only as fresh as the latest Codex session. AgentsView
+  does not ask OpenAI for current usage.
+- Project-filtered PostgreSQL, DuckDB, and ClickHouse pushes skip these
+  reports, because they belong to accounts rather than projects.
+
 ### PostgreSQL-Backed Usage
 
 As of 0.23.0, the Usage page and usage API also work when the UI is served from

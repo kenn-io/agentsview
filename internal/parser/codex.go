@@ -101,6 +101,7 @@ type codexSessionBuilder struct {
 	committedUsageTarget        *int
 	committedUsageBlockedByUser bool
 	messageUsageUpdates         []ParsedMessageTokenUsageUpdate
+	rateLimits                  []ParsedRateLimitSnapshot
 	checkpointUnsafe            bool
 	// Calls beyond the persisted cursor's capacity remain parse-local until
 	// enough results arrive to fit the bounded checkpoint again.
@@ -491,6 +492,9 @@ func (b *codexSessionBuilder) handleSessionMeta(
 		return false
 	}
 	b.metaSessionID = payload.Get("session_id").Str
+	if account := payload.Get("creator_account_id").Str; account != "" {
+		b.accountKey = rateLimitAccountKey(account)
+	}
 	b.historyBase = strings.TrimSpace(payload.Get("history_base.thread_id").Str)
 	b.forkedFromID = strings.TrimSpace(payload.Get("forked_from_id").Str)
 	b.forkBaseInherited = codexForkBaseInherited(payload, b.historyBase, b.forkedFromID)
@@ -762,6 +766,7 @@ func (b *codexSessionBuilder) markFirstUserReplayPossible() {
 func (b *codexSessionBuilder) handleTokenCountEvent(
 	payload gjson.Result,
 ) {
+	b.observeRateLimits(payload.Get("rate_limits"))
 	info := payload.Get("info")
 	raw := info.Get("last_token_usage").Raw
 	if raw == "" {
@@ -2327,6 +2332,7 @@ func (p *codexProvider) parseCodexSessionSnapshotStreaming(
 		MessageCount:       len(msgs),
 		UserMessageCount:   userCount,
 		TerminationStatus:  classifyCodexTermination(b.lastTaskEvent),
+		RateLimits:         b.rateLimits,
 		File: FileInfo{
 			Path:       path,
 			Size:       snapshot.Source.Size(),
@@ -2807,6 +2813,7 @@ type codexIncrementalParseResult struct {
 	messages            []ParsedMessage
 	toolCallUpdates     []ParsedToolCallUpdate
 	messageUsageUpdates []ParsedMessageTokenUsageUpdate
+	rateLimits          []ParsedRateLimitSnapshot
 	endedAt             time.Time
 	consumedBytes       int64
 	initialCursor       codexCursorState
@@ -3042,6 +3049,7 @@ func (p *codexProvider) parseSessionFromWithSources(ctx context.Context,
 		messageUsageUpdates: append(
 			[]ParsedMessageTokenUsageUpdate(nil), b.messageUsageUpdates...,
 		),
+		rateLimits:    b.rateLimits,
 		endedAt:       b.endedAt,
 		consumedBytes: consumed,
 		initialCursor: seed.codexCursorState,

@@ -49,6 +49,7 @@ const api = vi.hoisted(() => {
       },
     }),
     getApiV1UsageTopSessions: vi.fn().mockResolvedValue([]),
+    getApiV1UsageLimits: vi.fn().mockResolvedValue({ limits: [] }),
   };
 });
 vi.mock("../../api/generated/index", () => ({ UsageService: api }));

@@ -3,8 +3,10 @@ package sync
 import (
 	"context"
 	"fmt"
+	"log"
 	"strings"
 
+	"go.kenn.io/agentsview/internal/db"
 	"go.kenn.io/agentsview/internal/parser"
 )
 
@@ -96,6 +98,7 @@ func (a *providerResultAdmission) admit(r parser.ParseResultOutcome) error {
 		a.validationErr = err
 		return err
 	}
+	a.engine.recordRateLimits(a.ctx, r.Result.Session.Agent, r.Result.Session.ID, r.Result.Session.RateLimits)
 	if a.codexIdentities {
 		prepareCodexResultIdentities(r.Result.Messages, nil)
 	}
@@ -262,4 +265,24 @@ func plannedSkipKey(
 		return source.FingerprintKey
 	}
 	return plannedSourceKey(source, fingerprint)
+}
+
+// recordRateLimits stores the subscription rate-limit reports a parse found.
+// They describe the account rather than the session, so they are written as
+// soon as the parse yields them, outside the session write: the insert
+// ignores reports already stored, which makes a retried or repeated parse
+// harmless. A report-only parse-diff run writes nothing. A failed write is
+// logged and leaves the transcript sync alone; the next parse of the source
+// records the reports again.
+func (e *Engine) recordRateLimits(
+	ctx context.Context, agent parser.AgentType, sessionID string,
+	reports []parser.ParsedRateLimitSnapshot,
+) {
+	if len(reports) == 0 || e.forceParse || e.db == nil {
+		return
+	}
+	id := applyIDPrefixToID(e.idPrefix, sessionID)
+	if err := e.db.InsertRateLimitSnapshots(ctx, db.RateLimitSnapshotsFromParsed(string(agent), id, reports)); err != nil {
+		log.Printf("sync %s: recording rate limits for %s: %v", agent, id, err)
+	}
 }

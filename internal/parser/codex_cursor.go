@@ -20,6 +20,9 @@ const (
 	// codexCursorCheckpointVersion is the wire version for the persisted
 	// cursor encoding. Bump when the encoding changes; decode failures fall
 	// back to a full parse.
+	// Version 7 stores the rollout's account key and the digest of the last
+	// recorded rate-limit snapshot, so a tail parse labels and deduplicates
+	// rate-limit reports the way a full parse does.
 	// Version 6 digests the whole token_count info object, including the
 	// cumulative total, instead of last_token_usage alone; a version 5 digest
 	// cannot recognize a repeat that straddles the resume offset.
@@ -29,7 +32,7 @@ const (
 	// full parsing; version 2 retained the oldest unresolved occurrence.
 	// The fork replay gate is process-only state: it is re-armed from the
 	// transcript on every parse and is not part of the persisted cursor.
-	codexCursorCheckpointVersion   = 6
+	codexCursorCheckpointVersion   = 7
 	codexCursorCheckpointMaxString = 1 << 20
 
 	// Account for the map bucket, list element, pointers, string headers, and
@@ -65,6 +68,9 @@ type codexCursorState struct {
 	mayReplayFirstUserPrompt bool
 	lastTokenUsageDigest     [sha256.Size]byte
 	lastTokenUsageSeen       bool
+	accountKey               string
+	lastRateLimitDigest      [sha256.Size]byte
+	lastRateLimitSeen        bool
 	forkGate                 codexForkGate
 	lastTaskEvent            string
 	pendingCalls             [codexCursorMaxPendingCalls]codexPendingToolCall
@@ -97,7 +103,7 @@ func (s *codexCursorState) MarshalBinary() ([]byte, error) {
 	if err := write(uint8(codexCursorCheckpointVersion)); err != nil {
 		return nil, err
 	}
-	for _, str := range []string{s.model, s.reasoningEffort, s.serviceTierProviderID, s.cwd, s.agentPath} {
+	for _, str := range []string{s.model, s.reasoningEffort, s.serviceTierProviderID, s.cwd, s.agentPath, s.accountKey} {
 		if err := writeStr(str); err != nil {
 			return nil, err
 		}
@@ -118,10 +124,16 @@ func (s *codexCursorState) MarshalBinary() ([]byte, error) {
 	if s.lastTokenUsageSeen {
 		flags |= 1 << 3
 	}
+	if s.lastRateLimitSeen {
+		flags |= 1 << 4
+	}
 	if err := write(flags); err != nil {
 		return nil, err
 	}
 	if err := write(s.lastTokenUsageDigest); err != nil {
+		return nil, err
+	}
+	if err := write(s.lastRateLimitDigest); err != nil {
 		return nil, err
 	}
 	if err := writeStr(s.lastTaskEvent); err != nil {
@@ -207,6 +219,9 @@ func (s *codexCursorState) UnmarshalBinary(data []byte) error {
 	if s.agentPath, err = readStr(); err != nil {
 		return err
 	}
+	if s.accountKey, err = readStr(); err != nil {
+		return err
+	}
 	if err := read(&s.firstUserDigest); err != nil {
 		return err
 	}
@@ -218,7 +233,11 @@ func (s *codexCursorState) UnmarshalBinary(data []byte) error {
 	s.sawUserTurnAfterFirst = flags&(1<<1) != 0
 	s.mayReplayFirstUserPrompt = flags&(1<<2) != 0
 	s.lastTokenUsageSeen = flags&(1<<3) != 0
+	s.lastRateLimitSeen = flags&(1<<4) != 0
 	if err := read(&s.lastTokenUsageDigest); err != nil {
+		return err
+	}
+	if err := read(&s.lastRateLimitDigest); err != nil {
 		return err
 	}
 	if s.lastTaskEvent, err = readStr(); err != nil {
@@ -569,6 +588,7 @@ func estimateCodexCursorEntryBytes(
 			len(state.serviceTierProviderID)+
 			len(state.cwd)+
 			len(state.agentPath)+
+			len(state.accountKey)+
 			len(state.lastTaskEvent)+
 			codexPendingCallStringBytes(state)+
 			len(state.forkGate.parentSessionID),

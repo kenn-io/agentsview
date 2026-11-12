@@ -2292,6 +2292,47 @@ components:
         - no_code_context_count
         - runaway_tool_loop_count
       type: object
+    DbRateLimitSnapshot:
+      additionalProperties: false
+      properties:
+        account_key:
+          type: string
+        agent:
+          type: string
+        limit_id:
+          type: string
+        observed_at:
+          type: string
+        plan_type:
+          type: string
+        primary:
+          $ref: "#/components/schemas/DbRateLimitWindow"
+        secondary:
+          $ref: "#/components/schemas/DbRateLimitWindow"
+        session_id:
+          type: string
+      required:
+        - agent
+        - account_key
+        - limit_id
+        - plan_type
+        - session_id
+        - observed_at
+      type: object
+    DbRateLimitWindow:
+      additionalProperties: false
+      properties:
+        resets_at:
+          type: string
+        used_percent:
+          format: double
+          type: number
+        window_minutes:
+          format: int64
+          type: integer
+      required:
+        - used_percent
+      type: object
     DbRecallEntry:
       additionalProperties: false
       properties:
@@ -8937,6 +8978,17 @@ components:
         - machine
         - messages
         - sessions
+      type: object
+    UsageLimitsResponse:
+      additionalProperties: false
+      properties:
+        limits:
+          description: Latest rate-limit report per agent, account, and limit, newest first
+          items:
+            $ref: "#/components/schemas/DbRateLimitSnapshot"
+          type: array
+      required:
+        - limits
       type: object
     UsageSummaryResponse:
       additionalProperties: false
@@ -26346,6 +26398,79 @@ paths:
                 $ref: "#/components/schemas/ApiErrorResponse"
           description: Gateway Timeout
       summary: Get usage comparison
+      tags:
+        - Usage
+  /api/v1/usage/limits:
+    get:
+      operationId: get-api-v1-usage-limits
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/UsageLimitsResponse"
+          description: OK
+        "400":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+          description: Bad Request
+        "401":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+          description: Unauthorized
+        "403":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+          description: Forbidden
+        "404":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+          description: Not Found
+        "409":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+          description: Conflict
+        "500":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+          description: Internal Server Error
+        "501":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+          description: Not Implemented
+        "502":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+          description: Bad Gateway
+        "503":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+          description: Service Unavailable
+        "504":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+          description: Gateway Timeout
+      summary: Get subscription rate limits
       tags:
         - Usage
   /api/v1/usage/pairwise-comparison:

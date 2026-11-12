@@ -209,6 +209,9 @@ func (s *Sync) pushWithOptions(
 	if err := s.syncCursorUsageEvents(ctx); err != nil {
 		return result, err
 	}
+	if err := s.syncRateLimitSnapshots(ctx); err != nil {
+		return result, err
+	}
 	// The run that wrote the record already priced the whole mirror.
 	if s.pricer, err = s.syncUsagePrices(ctx, full && !resumed); err != nil {
 		return result, err

@@ -11,6 +11,13 @@ The latest release is
 
 **New features**
 
+- The Usage page shows how much of each Codex subscription limit window, such
+  as the five-hour and weekly windows, you have used and when it resets, as
+  Codex last reported it in its session files. Upgrading reads the reports
+  already in your Codex sessions. `GET /api/v1/usage/limits` returns the same
+  data, and PostgreSQL, DuckDB, and ClickHouse pushes carry it. See
+  [Plan Limits](/docs/token-usage/#plan-limits).
+
 - A `[custom_model_pricing."<model>"]` entry can set `price_as` to price a model
   name exactly like a catalog model, such as a private gateway deployment name
   that serves `gpt-6-sol`. The name inherits that model's long-context tiers

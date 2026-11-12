@@ -681,7 +681,10 @@ CREATE INDEX IF NOT EXISTS idx_provider_freshness_updated_at
 // (176: keep the cost Pi, OpenClaw, Shelley, fx, and OpenCode-format agents
 // record for their requests, as a recorded cost.)
 // (177: keep Claude Code's cost-state session total.)
-const dataVersion = 177
+// (178: record the subscription rate-limit reports Codex writes on its
+// token_count events. Re-parse Codex sources in place; source and session
+// identities are unchanged.)
+const dataVersion = 178
 
 const archiveOnlyVersionBase = 1 << 20
 

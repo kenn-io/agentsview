@@ -1607,6 +1607,11 @@ type ParsedSession struct {
 	// usage was seen. Only Codex cloud sessions with token records set it.
 	CaptureCoverage *ParsedCaptureCoverage
 
+	// RateLimits are the subscription rate-limit reports the session
+	// recorded, oldest first, one per change. Only Codex sets them. They
+	// describe the account, not the session, and are stored apart from it.
+	RateLimits []ParsedRateLimitSnapshot
+
 	// PlanUsage is the session's latest plan usage report and outcome.
 	// Only Codex cloud sessions set it. It is empty, meaning plan usage is
 	// not checked yet, for a session with neither plan usage records nor

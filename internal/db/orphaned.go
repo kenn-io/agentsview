@@ -1712,6 +1712,25 @@ func (d *DB) CopySessionMetadataFrom(
 		}
 	}
 
+	// Rate-limit reports describe accounts and outlive the rollouts that
+	// carried them. The fresh sync re-reads the rollouts still on disk; keep
+	// every older report it could not see.
+	if oldDBHasTable(ctx, tx, "rate_limit_snapshots") {
+		if _, err := tx.ExecContext(ctx, `
+			INSERT OR IGNORE INTO main.rate_limit_snapshots (
+				agent, account_key, limit_id, plan_type, session_id, observed_at,
+				primary_used_percent, primary_window_minutes, primary_resets_at,
+				secondary_used_percent, secondary_window_minutes, secondary_resets_at
+			)
+			SELECT agent, account_key, limit_id, plan_type, session_id, observed_at,
+				primary_used_percent, primary_window_minutes, primary_resets_at,
+				secondary_used_percent, secondary_window_minutes, secondary_resets_at
+			FROM old_db.rate_limit_snapshots
+			ORDER BY id`); err != nil {
+			return fmt.Errorf("copying rate limit snapshots: %w", err)
+		}
+	}
+
 	// database_id identifies the new physical generation and is never
 	// copied: every mirror push keys its incremental cursors to it, so the
 	// first push after a resync (DuckDB, PostgreSQL and ClickHouse alike)

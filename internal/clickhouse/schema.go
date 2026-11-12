@@ -36,6 +36,7 @@ const (
 	mappingRevisionKeyBase      = "agentsview_mapping_revision"
 	curationFingerprintKeyBase  = "agentsview_curation_fingerprint"
 	cursorUsageMaxIDKeyBase     = "agentsview_cursor_usage_max_id"
+	rateLimitMaxIDKeyBase       = "agentsview_rate_limit_max_id"
 	usageSnapshotReadyKeyBase   = "agentsview_usage_snapshot_ready"
 	commitLinksReadyKeyBase     = "agentsview_commit_links_ready_v2"
 	messageDialogueReadyKeyBase = "agentsview_message_dialogue_ready"
@@ -411,6 +412,27 @@ var mirrorTables = []tableSpec{
 			col("dedup_key", tString),
 		},
 		orderBy: []string{"dedup_key", "id"},
+	},
+	{
+		// Rate-limit reports, one row per change within a session. The
+		// sorting key is the report's identity, so a re-pushed row replaces
+		// itself.
+		name: "rate_limit_snapshots",
+		columns: []columnSpec{
+			col("agent", tString),
+			col("account_key", tString),
+			col("limit_id", tString),
+			col("plan_type", tString),
+			col("session_id", tString),
+			col("observed_at", tTime),
+			col("primary_used_percent", tNullFloat),
+			col("primary_window_minutes", tNullInt),
+			col("primary_resets_at", tNullTime),
+			col("secondary_used_percent", tNullFloat),
+			col("secondary_window_minutes", tNullInt),
+			col("secondary_resets_at", tNullTime),
+		},
+		orderBy: []string{"session_id", "limit_id", "observed_at"},
 	},
 	{
 		name:    "model_pricing",

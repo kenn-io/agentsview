@@ -35,6 +35,7 @@
   import AttributionPanel from "./AttributionPanel.svelte";
   import TopSessionsTable from "./TopSessionsTable.svelte";
   import CacheEfficiencyPanel from "./CacheEfficiencyPanel.svelte";
+  import UsageLimitsPanel from "./UsageLimitsPanel.svelte";
   import SessionFilterControl from "../filters/SessionFilterControl.svelte";
   import SessionActiveFilters from "../filters/SessionActiveFilters.svelte";
   import FilterDropdown from "./FilterDropdown.svelte";
@@ -622,6 +623,8 @@
     {/if}
 
     <UsageSummaryCards />
+
+    <UsageLimitsPanel />
 
     <Card level="default" padding="none" class="chart-panel wide">
       <CostTimeSeriesChart

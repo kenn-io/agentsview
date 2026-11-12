@@ -536,6 +536,10 @@ func (s *Sync) pushWithOptions(
 		func() error { return s.syncCursorUsageEvents(ctx, full) }); err != nil {
 		return result, err
 	}
+	if err := timedPushSetupStep("rate limit snapshot sync",
+		func() error { return s.syncRateLimitSnapshots(ctx, full) }); err != nil {
+		return result, err
+	}
 	diagnosticErr := s.syncDiagnosticEvents(ctx, full, markerID)
 	if diagnosticErr != nil {
 		log.Printf("pgsync: diagnostic events: %v", diagnosticErr)

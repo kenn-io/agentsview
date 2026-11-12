@@ -338,6 +338,31 @@ CREATE TABLE IF NOT EXISTS session_usage_totals (
     models_json TEXT NOT NULL DEFAULT '[]'
 );
 
+-- Subscription rate-limit reports agents recorded, one row per change in
+-- the reported values within a session. The rows describe an account, not
+-- the session that carried them, so they have no foreign key and survive the
+-- session. Append-only: mirrors push them by id high-water mark.
+CREATE TABLE IF NOT EXISTS rate_limit_snapshots (
+    id INTEGER PRIMARY KEY,
+    agent TEXT NOT NULL,
+    account_key TEXT NOT NULL DEFAULT '',
+    limit_id TEXT NOT NULL DEFAULT '',
+    plan_type TEXT NOT NULL DEFAULT '',
+    session_id TEXT NOT NULL,
+    observed_at TEXT NOT NULL,
+    primary_used_percent REAL,
+    primary_window_minutes INTEGER,
+    primary_resets_at TEXT,
+    secondary_used_percent REAL,
+    secondary_window_minutes INTEGER,
+    secondary_resets_at TEXT
+);
+
+CREATE UNIQUE INDEX IF NOT EXISTS idx_rate_limit_snapshots_identity
+    ON rate_limit_snapshots(session_id, limit_id, observed_at);
+CREATE INDEX IF NOT EXISTS idx_rate_limit_snapshots_latest
+    ON rate_limit_snapshots(agent, account_key, limit_id, observed_at);
+
 CREATE TABLE IF NOT EXISTS cursor_usage_events (
     id INTEGER PRIMARY KEY,
     agent TEXT NOT NULL DEFAULT 'cursor',

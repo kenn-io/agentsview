@@ -33,7 +33,9 @@ import (
 // copies it for resident sessions.
 // v26 adds session_usage_totals, the usage totals agents record for whole
 // sessions.
-const SchemaVersion = 26
+// v27 adds rate_limit_snapshots, the subscription rate-limit reports agents
+// record.
+const SchemaVersion = 27
 
 const schemaVersionMetadataKey = "agentsview_schema_version"
 
@@ -71,6 +73,11 @@ const curationFingerprintMetadataKey = "agentsview_curation_fingerprint"
 // decision; a fresh rebuild file has no metadata, so its first sync loads
 // the full history.
 const cursorUsageMaxIDMetadataKey = "agentsview_cursor_usage_max_id"
+
+// rateLimitMaxIDMetadataKey stores the largest local rate_limit_snapshots id
+// the mirror has consumed, the same way cursorUsageMaxIDMetadataKey does for
+// account usage rows (see syncRateLimitSnapshots in rate_limits.go).
+const rateLimitMaxIDMetadataKey = "agentsview_rate_limit_max_id"
 
 // DuckDB schema notes:
 //
@@ -556,6 +563,42 @@ var mirrorTables = []tableSpec{
 			"CREATE UNIQUE INDEX IF NOT EXISTS idx_cursor_usage_events_dedup ON cursor_usage_events(dedup_key)",
 			"CREATE INDEX IF NOT EXISTS idx_cursor_usage_events_occurred ON cursor_usage_events(occurred_at)",
 			"CREATE INDEX IF NOT EXISTS idx_cursor_usage_events_model ON cursor_usage_events(model)",
+		},
+	},
+	{
+		name: "rate_limit_snapshots",
+		create: `CREATE TABLE IF NOT EXISTS rate_limit_snapshots (
+			id BIGINT,
+			agent TEXT NOT NULL,
+			account_key TEXT NOT NULL DEFAULT '',
+			limit_id TEXT NOT NULL DEFAULT '',
+			plan_type TEXT NOT NULL DEFAULT '',
+			session_id TEXT NOT NULL,
+			observed_at TIMESTAMP NOT NULL,
+			primary_used_percent DOUBLE,
+			primary_window_minutes BIGINT,
+			primary_resets_at TIMESTAMP,
+			secondary_used_percent DOUBLE,
+			secondary_window_minutes BIGINT,
+			secondary_resets_at TIMESTAMP
+		)`,
+		columns: []columnSpec{
+			{"id", "id BIGINT"},
+			{"agent", "agent TEXT NOT NULL DEFAULT ''"},
+			{"account_key", "account_key TEXT NOT NULL DEFAULT ''"},
+			{"limit_id", "limit_id TEXT NOT NULL DEFAULT ''"},
+			{"plan_type", "plan_type TEXT NOT NULL DEFAULT ''"},
+			{"session_id", "session_id TEXT NOT NULL DEFAULT ''"},
+			{"observed_at", "observed_at TIMESTAMP"},
+			{"primary_used_percent", "primary_used_percent DOUBLE"},
+			{"primary_window_minutes", "primary_window_minutes BIGINT"},
+			{"primary_resets_at", "primary_resets_at TIMESTAMP"},
+			{"secondary_used_percent", "secondary_used_percent DOUBLE"},
+			{"secondary_window_minutes", "secondary_window_minutes BIGINT"},
+			{"secondary_resets_at", "secondary_resets_at TIMESTAMP"},
+		},
+		indexes: []string{
+			"CREATE UNIQUE INDEX IF NOT EXISTS idx_rate_limit_snapshots_identity ON rate_limit_snapshots(session_id, limit_id, observed_at)",
 		},
 	},
 	{
