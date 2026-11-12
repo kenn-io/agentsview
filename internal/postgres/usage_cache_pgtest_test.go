@@ -1233,6 +1233,7 @@ func TestPGUsageCacheDefersAccountChange(t *testing.T) {
 	attachUsageCacheProbe(t, store, t.TempDir())
 	filter := db.UsageFilter{Timezone: "UTC"}
 	requireCachedUsageMatchesDirect(t, store, filter)
+	require.NoError(t, store.usageCache.LoadReadiness(ctx))
 	store.usageCache.DeferWork()
 	before, err := store.usageCache.GetDailyUsage(ctx, filter)
 	require.NoError(t, err)
@@ -1263,6 +1264,7 @@ func TestPGUsageCacheKeepsAccountFactsAfterIdentityWrite(t *testing.T) {
 	t.Cleanup(func() { require.NoError(t, store.usageCache.Close()) })
 	filter := db.UsageFilter{Timezone: "UTC"}
 	requireCachedUsageMatchesDirect(t, store, filter)
+	require.NoError(t, store.usageCache.LoadReadiness(ctx))
 	store.usageCache.DeferWork()
 	_, err = store.pg.ExecContext(ctx, `INSERT INTO source_project_identity_observations(source_archive_id,project,machine,observed_at) VALUES('identity-test','project-a','test-machine',now())`)
 	require.NoError(t, err)
