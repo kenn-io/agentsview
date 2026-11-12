@@ -62,6 +62,12 @@ func (db *DB) openReader(path string) *sql.DB {
 }
 
 func configureSQLiteConnection(conn *sqlite3.SQLiteConn) error {
+	if err := conn.RegisterFunc("agentsview_local_date", func(message, session, zone string) string {
+		_, date, _ := (AnalyticsFilter{Timezone: zone}).ResolveSkillRowTime(message, session)
+		return date
+	}, true); err != nil {
+		return err
+	}
 	if err := conn.RegisterFunc(
 		"agentsview_timestamp_unix_micro",
 		sqliteTimestampUnixMicro,

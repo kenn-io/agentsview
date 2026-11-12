@@ -2982,6 +2982,7 @@ func analyticsToolsQuery(
 	modelPred string,
 	windowPred string,
 	includeMessageMeta bool,
+	groupExpr string,
 ) string {
 	query := `SELECT tc.session_id, tc.category,
 			TRIM(tc.tool_name), COUNT(*)`
@@ -3008,9 +3009,77 @@ func analyticsToolsQuery(
 		GROUP BY tc.session_id, tc.category,
 			TRIM(tc.tool_name)`
 	if includeMessageMeta {
-		query += `, ` + sqliteAnalyticsMinuteKey()
+		query += `, ` + groupExpr
 	}
 	return query
+}
+
+// sqliteToolsDateKey uses SQLite for canonical UTC timestamps and keeps Go's
+// timestamp parsing for other inputs. The bounded offset periods cover the
+// padded message window; timestamps outside it, and ranges with no bounded
+// periods, use the same Go fallback.
+func sqliteToolsDateKey(f AnalyticsFilter) string {
+	sessionTS := `COALESCE(NULLIF(s.started_at, ''), s.created_at)`
+	ts := `(CASE WHEN COALESCE(m.timestamp, '') = '' THEN ` + sessionTS + ` ELSE m.timestamp END)`
+	fallback := `agentsview_local_date(COALESCE(m.timestamp, ''), ` + sessionTS + `, ?)`
+	loc := f.location()
+	if loc == time.UTC {
+		// SQLite counts characters; Go's invalid-date fallback takes ten bytes.
+		return `(CASE WHEN substr(` + ts + `, -1) = 'Z' AND length(CAST(substr(` + ts + `, 1, 10) AS BLOB)) = 10 THEN substr(` + ts + `, 1, 10) ELSE ` + fallback + ` END)`
+	}
+	periods := ToolsDatePeriods(f)
+	if len(periods) == 0 {
+		return fallback
+	}
+	seconds := `substr(` + ts + `, 1, 19)`
+	var localDate strings.Builder
+	localDate.WriteString(`(CASE WHEN ` + seconds + ` < '` + periods[0].Start.Format("2006-01-02T15:04:05") + `' THEN NULL`)
+	for _, period := range periods {
+		localDate.WriteString(` WHEN ` + seconds + ` < '` + period.End.Format("2006-01-02T15:04:05") + `' THEN strftime('%Y-%m-%d', ` + seconds + `, '` + fmt.Sprintf("%+d seconds", period.Offset) + `')`)
+	}
+	localDate.WriteString(` END)`)
+	// Invalid timestamps use their first ten bytes. When SQLite's date agrees
+	// with those bytes, both parsers produce the same date. Strip fractions
+	// before SQLite rounds; resolve the remaining cases with Go.
+	return `(CASE WHEN substr(` + ts + `, -1) = 'Z' AND ` + localDate.String() + ` = substr(` + ts + `, 1, 10) THEN substr(` + ts + `, 1, 10) ELSE ` + fallback + ` END)`
+}
+
+// ToolsDatePeriod describes one UTC interval with a constant local offset.
+type ToolsDatePeriod struct {
+	Start, End time.Time
+	Offset     int
+}
+
+// ToolsDatePeriods bounds the timezone transitions used for tool date grouping;
+// ranges needing more than 128 periods return nil.
+func ToolsDatePeriods(f AnalyticsFilter) []ToolsDatePeriod {
+	if f.From == "" || f.To == "" {
+		return nil
+	}
+	start, err := time.Parse("2006-01-02", f.From)
+	if err != nil {
+		return nil
+	}
+	end, err := time.Parse("2006-01-02", f.To)
+	if err != nil || end.Before(start) {
+		return nil
+	}
+	start, end = start.Add(-48*time.Hour), end.Add(72*time.Hour)
+	loc := LoadLocationOr(f.Timezone, time.UTC)
+	var periods []ToolsDatePeriod
+	for cursor := start; cursor.Before(end); {
+		_, offset := cursor.In(loc).Zone()
+		_, until := cursor.In(loc).ZoneBounds()
+		if until.IsZero() || until.After(end) {
+			until = end
+		}
+		if !until.After(cursor) || len(periods) == 128 {
+			return nil
+		}
+		periods = append(periods, ToolsDatePeriod{Start: cursor.UTC(), End: until.UTC(), Offset: offset})
+		cursor = until
+	}
+	return periods
 }
 
 func analyticsSkillsQuery(
@@ -3117,7 +3186,12 @@ func (db *DB) analyticsToolRows(
 			from, to := f.messageWindowBoundsUTC()
 			windowPred, windowArgs := analyticsMessageWindowPred("m.timestamp", from, to)
 			chunkArgs = append(chunkArgs, windowArgs...)
-			q := analyticsToolsQuery(ph, modelPred, windowPred, true)
+			groupExpr := sqliteAnalyticsMinuteKey()
+			if !f.HasTimeFilter() {
+				groupExpr = sqliteToolsDateKey(f)
+				chunkArgs = append(chunkArgs, f.Timezone)
+			}
+			q := analyticsToolsQuery(ph, modelPred, windowPred, true, groupExpr)
 			observeAnalyticsQuery(q)
 			rows, qErr := db.getReader().QueryContext(
 				ctx, q, chunkArgs...,
