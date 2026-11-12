@@ -54,18 +54,22 @@ risk via documented flags and config.
 
 ## Trust boundaries
 
-| Boundary                          | Posture                                                             | Notes                                                                |
-| --------------------------------- | ------------------------------------------------------------------- | -------------------------------------------------------------------- |
-| Session files → parser            | Treated as untrusted data                                           | Parsers should not exec/eval; bugs are security-relevant.            |
-| Imports and new readers           | Treated as untrusted structured data                                | Same posture as parsers; imported archives may be remote-origin.     |
-| HTTP remote sync                  | User-configured endpoints authenticated with per-host bearer tokens | Pulled archives are parsed locally as untrusted data.                |
-| SSH remote sync                   | System `ssh` client; release binary checked against `SHA256SUMS`    | `SHA256SUMS.sig` is not checked. Pulled archives are untrusted data. |
-| Parser → SQLite / FTS5            | Trusted                                                             | Indexed content is preserved verbatim.                               |
-| HTTP server → caller              | Loopback-trusted; bearer-gated for `/api/` when `--require-auth`    | Static assets are not gated.                                         |
-| Browser → HTTP server             | Host-header allowlist + CORS + CSP + X-Frame-Options enforced       | DNS-rebinding, framing, and cross-origin defenses.                   |
-| agentsview → PostgreSQL (pg push) | TLS required for non-loopback hosts                                 | Plaintext rejected unless `allow_insecure = true` is set explicitly. |
-| agentsview → update endpoint      | One-way outbound, opt-out                                           | Disable with `--no-update-check`.                                    |
-| agentsview → LiteLLM pricing      | One-way outbound, on-demand                                         | Public JSON fetched from GitHub raw; no session data sent.           |
+| Boundary                       | Posture                                                             | Notes                                                                  |
+| ------------------------------ | ------------------------------------------------------------------- | ---------------------------------------------------------------------- |
+| Session files → parser         | Treated as untrusted data                                           | Parsers should not exec/eval; bugs are security-relevant.              |
+| Imports and new readers        | Treated as untrusted structured data                                | Same posture as parsers; imported archives may be remote-origin.       |
+| HTTP remote sync               | User-configured endpoints authenticated with per-host bearer tokens | Pulled archives are parsed locally as untrusted data.                  |
+| SSH remote sync                | System `ssh` client; release binary checked against `SHA256SUMS`    | `SHA256SUMS.sig` is not checked. Pulled archives are untrusted data.   |
+| Parser → SQLite / FTS5         | Trusted                                                             | Indexed content is preserved verbatim.                                 |
+| HTTP server → caller           | Loopback-trusted; bearer-gated for `/api/` when `--require-auth`    | Static assets are not gated.                                           |
+| Browser → HTTP server          | Host-header allowlist + CORS + CSP + X-Frame-Options enforced       | DNS-rebinding, framing, and cross-origin defenses.                     |
+| agentsview → PostgreSQL (push) | TLS required for non-loopback hosts                                 | Plaintext rejected unless `allow_insecure = true` is set explicitly.   |
+| agentsview → ClickHouse (push) | TLS required for non-loopback hosts                                 | Plaintext or unverified TLS rejected unless `allow_insecure = true`.   |
+| agentsview → PostHog telemetry | One-way outbound, opt-out                                           | Anonymous usage events. Disable with `AGENTSVIEW_TELEMETRY_ENABLED=0`. |
+| agentsview → update endpoint   | One-way outbound, opt-out                                           | Disable with `--no-update-check`.                                      |
+| agentsview → pricing catalogs  | One-way outbound, automatic                                         | Public JSON from GitHub and OpenRouter; no session data sent.          |
+| agentsview → model endpoints   | Opt-in; sends transcript content                                    | Generated insights, recall extraction, and embeddings.                 |
+| agentsview → hosted services   | Opt-in; user-supplied credentials                                   | Codex Cloud, Cursor Admin API, Kata, Docbank, GitHub Gist, raw sync.   |
 
 ## Data at rest
 
@@ -85,22 +89,87 @@ risk via documented flags and config.
 
 ## Data in transit
 
-agentsview makes several distinct outbound connections. Each is listed
-explicitly because "data stays on your machine" is the default but is not a
-complete description of the system once optional features are in use.
+Session data stays on your machine unless you turn on a feature that sends it. A
+few requests run automatically, and none of them carries session data. This
+section lists every outbound channel: what it sends, when, and how to turn it
+off.
+
+### Local server
 
 - **Local UI / API.** The HTTP server binds to `127.0.0.1` by default. When
   exposed beyond loopback, `--require-auth` should be enabled. Authentication
   is a bearer token applied to `/api/` routes only; static assets remain
   ungated. Browser-facing defenses (Host-header allowlist, CORS restrictions,
   CSP, `X-Frame-Options: DENY`) are always on. See the CLI reference for token
-  configuration.
-- **PostgreSQL sync.** `agentsview pg push` exports the local archive to a
-  user-supplied PostgreSQL instance. Non-loopback DSNs are rejected unless TLS
-  is enabled (`sslmode=require` or stronger), or the user has explicitly set
-  `allow_insecure = true` under `[pg]`. The destination database itself is
+  configuration. The web UI talks only to the agentsview server it is pointed
+  at. It links to outside sites but never fetches from them.
+
+### Automatic requests
+
+These run without any configuration. None of them sends session content,
+prompts, project names, file paths, or hostnames. Each one reveals your IP
+address to the host it contacts.
+
+- **Anonymous telemetry.** Release builds send usage events to PostHog's US
+  endpoint, `us.i.posthog.com`. The server sends `daemon_active` at most once
+  per installation per UTC day while it runs, and `setup_finished` once per
+  installation when the archive first shows a session. The web UI reports a
+  fixed set of events through the server: app opens, visit-length buckets,
+  screen and analytics page views, the agent type of a viewed session, and
+  which kind of search, export, insight, error, or sync failure occurred. The
+  browser never contacts PostHog, and the server drops any property value
+  outside each event's fixed list. Every event carries the random installation
+  ID stored in `telemetry-install-id` in the data directory, the app version,
+  git commit, distribution channel, operating system, CPU architecture, and
+  whole hours since installation. Person profiles and GeoIP lookup are turned
+  off. Builds without a release version or the PostHog project key send
+  nothing, and so does any process with `CI` set. To turn telemetry off, set
+  `AGENTSVIEW_TELEMETRY_ENABLED=0`, `TELEMETRY_ENABLED=0`, or
+  `DO_NOT_TRACK=1`, then restart the server. See
+  [Anonymous Daemon Telemetry](docs/configuration.md#anonymous-daemon-telemetry)
+  for each event and its allowed values.
+- **Update check.** When the web UI loads in a browser, the server requests
+  `github.com/kenn-io/agentsview/releases/latest` and reads the release tag
+  from the redirect. It caches the answer for one hour, or 15 minutes for
+  development builds. When a newer release exists, it also requests the size
+  of that release's archive for your platform and the release's `SHA256SUMS`.
+  `agentsview update` makes the same requests and then downloads the release.
+  To turn the check off, use `--no-update-check`,
+  `AGENTSVIEW_DISABLE_UPDATE_CHECK=1`, or `disable_update_check = true`. See
+  [Disabling Update Checks](docs/configuration.md#disabling-update-checks).
+- **Desktop updater.** The Tauri desktop build skips the server's update check.
+  Instead, its own updater checks the GitHub release feed shortly after
+  launch. Set `AGENTSVIEW_DESKTOP_AUTOUPDATE=0` to turn it off.
+- **Pricing catalogs.** The server downloads public model-pricing data at
+  startup and once a day after that. It fetches the LiteLLM catalog and the
+  Pydantic GenAI Prices document from `raw.githubusercontent.com`, and the
+  OpenRouter model list from `openrouter.ai`. Usage reports and replica pushes
+  also refresh stale prices, at most once an hour. These are plain `GET`
+  requests. Pass `--offline` to `usage` commands to use the embedded prices
+  instead. The server has no setting that turns its refresh off. See
+  [Pricing Source](docs/token-usage.md#pricing-source).
+
+### Features you turn on
+
+Each of these is off until you configure or run it.
+
+- **PostgreSQL sync.** `agentsview replica pg push` exports the local archive to
+  a user-supplied PostgreSQL instance. Non-loopback DSNs are rejected unless
+  TLS is enabled (`sslmode=require` or stronger), or the user has explicitly
+  set `allow_insecure = true` under `[pg]`. The destination database itself is
   treated as user-provisioned infrastructure; agentsview asserts nothing about
   its access controls.
+- **ClickHouse sync.** `agentsview replica clickhouse push` exports the local
+  archive to a ClickHouse database you configure. Non-loopback URLs must use
+  TLS (`secure=true` for the native protocol, `https://` for HTTP) unless
+  `allow_insecure = true`. `skip_verify=true` is also rejected on a
+  non-loopback host without `allow_insecure`. See
+  [ClickHouse sync](docs/clickhouse-sync.md).
+- **DuckDB Quack server.** The DuckDB mirror is a local file.
+  `agentsview replica duckdb quack serve` exposes it to DuckDB clients that
+  hold its token. It binds to loopback by default; binding beyond loopback
+  requires `--allow-insecure`, because Quack speaks plain HTTP. See
+  [Quack Remote Access](docs/duckdb.md#quack-remote-access).
 - **HTTP remote sync.** agentsview pulls session archives from configured remote
   daemons using a per-host bearer token. Archive endpoints require that token
   even when the remote daemon's other API routes do not require
@@ -120,15 +189,69 @@ complete description of the system once optional features are in use.
   exits, and it creates no AgentsView state. Pulled files are parsed locally
   as untrusted data. See
   [SSH Remote Sync](docs/remote-access.md#ssh-remote-sync).
+- **S3 session sources.** An `s3://` entry in an agent's `dirs` makes agentsview
+  list and download session objects from that bucket, using standard AWS-style
+  credentials from the environment. Downloaded files are parsed as untrusted
+  data. See
+  [S3-Compatible Session Sources](docs/configuration.md#s3-compatible-session-sources).
+- **Hosted raw sync.** `agentsview source raw backfill` and
+  `agentsview source raw watch` upload original agent session files to an
+  operator-managed server, authenticated with a device credential the operator
+  supplies. Nothing uploads unless you run one of these commands. See
+  [Hosted Raw Sync](docs/hosted-raw-sync.md).
+- **Codex Cloud.** With `[agents.codex-cloud] enabled = true`, agentsview reads
+  the ChatGPT access token from each Codex home's `auth.json` and uses it to
+  fetch your chats and plan usage from OpenAI (`chatgpt.com`). Endpoint
+  overrides must stay on `chatgpt.com`, `openai.com`, or loopback, and neither
+  client follows redirects, so the token goes to no other host.
+  `live_tokens = true` also listens in on running chats, which can change a
+  chat on OpenAI's side. Listing `codex-cloud` in `disabled_agents` stops it.
+  See [Codex Cloud](docs/configuration.md#codex-cloud).
+- **Cursor Admin usage.** `agentsview source cursor sync-usage` sends your
+  `cursor_admin_api_key`, optional user filters, and a date range to
+  `api.cursor.com`. It runs only when you invoke it. See
+  [Cursor Admin Usage Events](docs/token-usage.md#cursor-admin-usage-events).
+- **Claude.ai sync.** The Chrome extension you install with
+  `agentsview source chrome setup` fetches your Claude.ai chats with your
+  browser's session when you click **Sync**. It passes them to agentsview over
+  a local socket; agentsview itself does not contact Claude.ai. See
+  [Sync Claude.ai chats](docs/chat-import.md#sync-claudeai-chats).
+- **Generated insights.** When `[insights]` sets `endpoint` and `model`,
+  agentsview sends transcript-derived content to that OpenAI-compatible
+  endpoint. Remote endpoints must use HTTPS unless `allow_http = true`. With
+  neither set, it runs the selected agent CLI, which sends the same content to
+  that agent's provider. Tool effectiveness reports include each tool call's
+  input and output, secrets included. See [Recall](docs/recall.md).
+- **Recall extraction.** When `[recall.extract]` is enabled, agentsview sends
+  transcript content to the configured endpoint. Non-loopback endpoints must
+  use HTTPS unless a server entry sets `allow_http = true`. Redirects are not
+  followed. See [Automatic extraction](docs/recall.md#automatic-extraction).
+- **Embeddings.** When `[vector]` is enabled, agentsview sends user and
+  assistant message text to the embedding server: a local Ollama or Kit
+  server, or an OpenAI-compatible endpoint you configure. Plain HTTP is
+  accepted for loopback, private-network addresses, and host names; only a
+  public IP address requires HTTPS. Setting up a local server can download
+  model files, and agentsview asks first. See
+  [Semantic Search](docs/semantic-search.md).
+- **Kata.** With `[kata] enabled = true`, the instance that holds the aggregated
+  archive files Friction Log patterns as Kata issues, by hand or hourly when
+  `[friction.kata] auto_file = true`. The issue title and body describe the
+  finding and how often it recurred. Secrets are masked and home directories
+  shortened to `~` first. Plain HTTP works only for loopback hosts unless
+  `allow_insecure = true`. See [Kata](docs/kata.md).
+- **Docbank.** With `[integrations.docbank]` configured, agentsview sends the
+  SHA-256 digests of transcript images to your Docbank server to find where it
+  stores them. Only digests leave the machine. The URL must use HTTPS, or HTTP
+  on loopback. See
+  [Find transcript images in Docbank](docs/configuration.md#find-transcript-images-in-docbank).
+- **Publish to Gist.** Publishing a session or insight uploads its HTML export
+  to GitHub as a public or secret gist, using a saved token,
+  `AGENTSVIEW_GITHUB_TOKEN`, or `gh auth token`. A secret gist is unlisted,
+  but anyone with its link can read it. See
+  [Publish to Gist](docs/usage.md#publish-to-gist).
 - **Imports.** Imported archives from other agentsview instances or third-party
   exports are treated as untrusted structured data, no different from session
   files written by local agents.
-- **LiteLLM pricing.** Pricing metadata is fetched on demand from
-  `raw.githubusercontent.com/BerriAI/litellm/...` to compute token costs. No
-  session data is sent.
-- **Update check.** On startup agentsview makes one outbound HTTPS request to
-  check for new releases. No session data is sent; the request is opt-out via
-  `--no-update-check`.
 
 ## Browser-facing hardening
 
@@ -177,13 +300,17 @@ design call and out of scope for this document.
 
 ## Reporting
 
-Security issues should be reported privately, not via public GitHub issues.
+Report security issues privately, not in public GitHub issues.
 
-\[TODO: maintainer to enable GitHub private vulnerability reporting on the
-repository and/or provide a private contact (email, PGP key). Until that contact
-is published, please open a non-detailed GitHub issue requesting a private
-channel and a maintainer will follow up out-of-band; do not include exploit
-details in the public issue.\]
+1. Open the repository's
+   [Security tab](https://github.com/kenn-io/agentsview/security) and choose
+   **Report a vulnerability**, or go straight to the
+   [private report form](https://github.com/kenn-io/agentsview/security/advisories/new).
+   You need to be signed in to GitHub.
+1. Describe the issue, the affected version, and the steps to reproduce it.
+
+Only you and the maintainers can see the report. Maintainers reply in the report
+thread.
 
 ## Open questions
 
