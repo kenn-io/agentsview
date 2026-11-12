@@ -19,6 +19,8 @@ import (
 
 // apiResponse is one canned reply from the fake Admin API.
 type apiResponse struct {
+	// err, when set, fails the request in transport instead of answering.
+	err        error
 	status     int
 	retryAfter string
 	// events is the number of usage events on a 200 page.
@@ -55,6 +57,9 @@ func (f *fakeAPI) RoundTrip(r *http.Request) (*http.Response, error) {
 	f.mu.Unlock()
 
 	reply := f.respond(call)
+	if reply.err != nil {
+		return nil, reply.err
+	}
 	header := http.Header{}
 	if reply.retryAfter != "" {
 		header.Set("Retry-After", reply.retryAfter)
@@ -89,8 +94,18 @@ func (f *fakeAPI) recorded() []apiRequest {
 	return append([]apiRequest(nil), f.requests...)
 }
 
+// gaps returns the time between the starts of consecutive requests.
+func gaps(requests []apiRequest) []time.Duration {
+	out := make([]time.Duration, 0, len(requests))
+	for i := 1; i < len(requests); i++ {
+		out = append(out, requests[i].at.Sub(requests[i-1].at))
+	}
+	return out
+}
+
 // retryNotice is one OnRetry call.
 type retryNotice struct {
+	page int
 	err  error
 	wait time.Duration
 }
@@ -103,8 +118,8 @@ func newFakeAPIClient(
 	client := NewClientWithBaseURL("https://cursor.test", "cursor-key")
 	client.HTTPClient = &http.Client{Transport: api}
 	var notices []retryNotice
-	client.OnRetry = func(err error, wait time.Duration) {
-		notices = append(notices, retryNotice{err: err, wait: wait})
+	client.OnRetry = func(page int, err error, wait time.Duration) {
+		notices = append(notices, retryNotice{page: page, err: err, wait: wait})
 	}
 	return client, api, &notices
 }
@@ -117,14 +132,17 @@ func onePageQuery() Query {
 	}
 }
 
+// waitRange bounds one wait between a failed attempt and its retry.
+type waitRange struct{ min, max time.Duration }
+
 func TestFetchAllUsageEventsRetriesTransientFailures(t *testing.T) {
 	tests := []struct {
 		name       string
 		failure    apiResponse
 		wantStatus int
-		// The wait before the retry falls in [minWait, maxWait].
-		minWait time.Duration
-		maxWait time.Duration
+		// waits bounds each wait before a retry; the page fails once per
+		// entry and then succeeds.
+		waits []waitRange
 	}{
 		{
 			name: "rate limit honors Retry-After",
@@ -132,8 +150,7 @@ func TestFetchAllUsageEventsRetriesTransientFailures(t *testing.T) {
 				status: http.StatusTooManyRequests, retryAfter: "60",
 			},
 			wantStatus: http.StatusTooManyRequests,
-			minWait:    60 * time.Second,
-			maxWait:    60 * time.Second,
+			waits:      []waitRange{{60 * time.Second, 60 * time.Second}},
 		},
 		{
 			name: "excessive Retry-After is capped",
@@ -141,29 +158,43 @@ func TestFetchAllUsageEventsRetriesTransientFailures(t *testing.T) {
 				status: http.StatusTooManyRequests, retryAfter: "3600",
 			},
 			wantStatus: http.StatusTooManyRequests,
-			minWait:    maxRetryDelay,
-			maxWait:    maxRetryDelay,
+			waits:      []waitRange{{maxRetryDelay, maxRetryDelay}},
 		},
 		{
+			name: "server error honors Retry-After",
+			failure: apiResponse{
+				status: http.StatusServiceUnavailable, retryAfter: "5",
+			},
+			wantStatus: http.StatusServiceUnavailable,
+			waits:      []waitRange{{5 * time.Second, 5 * time.Second}},
+		},
+		{
+			// Without Retry-After the waits grow from about 2s to about
+			// 4s, each randomized by half, so the second wait is longer
+			// than the one-second request interval alone would give.
 			name:       "rate limit without Retry-After backs off",
 			failure:    apiResponse{status: http.StatusTooManyRequests},
 			wantStatus: http.StatusTooManyRequests,
-			minWait:    time.Second,
-			maxWait:    3 * time.Second,
+			waits: []waitRange{
+				{time.Second, 3 * time.Second},
+				{2 * time.Second, 6 * time.Second},
+			},
 		},
 		{
-			name:       "server error backs off",
+			name:       "server error without Retry-After backs off",
 			failure:    apiResponse{status: http.StatusServiceUnavailable},
 			wantStatus: http.StatusServiceUnavailable,
-			minWait:    time.Second,
-			maxWait:    3 * time.Second,
+			waits: []waitRange{
+				{time.Second, 3 * time.Second},
+				{2 * time.Second, 6 * time.Second},
+			},
 		},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			synctest.Test(t, func(t *testing.T) {
 				client, api, notices := newFakeAPIClient(t, func(call int) apiResponse {
-					if call == 0 {
+					if call < len(tc.waits) {
 						return tc.failure
 					}
 					return apiResponse{status: http.StatusOK, events: 2, total: 2}
@@ -174,19 +205,22 @@ func TestFetchAllUsageEventsRetriesTransientFailures(t *testing.T) {
 				assert.Len(t, events, 2)
 
 				requests := api.recorded()
-				require.Len(t, requests, 2)
-				assert.Equal(t, 1, requests[0].page)
-				assert.Equal(t, 1, requests[1].page, "the failed page is requested again")
-				gap := requests[1].at.Sub(requests[0].at)
-				assert.GreaterOrEqual(t, gap, tc.minWait)
-				assert.LessOrEqual(t, gap, tc.maxWait)
+				require.Len(t, requests, len(tc.waits)+1)
+				for _, req := range requests {
+					assert.Equal(t, 1, req.page, "the failed page is requested again")
+				}
+				require.Len(t, *notices, len(tc.waits))
+				for i, gap := range gaps(requests) {
+					assert.GreaterOrEqual(t, gap, tc.waits[i].min, "wait %d", i)
+					assert.LessOrEqual(t, gap, tc.waits[i].max, "wait %d", i)
 
-				require.Len(t, *notices, 1)
-				notice := (*notices)[0]
-				assert.Equal(t, gap, notice.wait)
-				statusErr, ok := errors.AsType[*StatusError](notice.err)
-				require.True(t, ok, "OnRetry receives the API status error")
-				assert.Equal(t, tc.wantStatus, statusErr.StatusCode)
+					notice := (*notices)[i]
+					assert.Equal(t, 1, notice.page)
+					assert.Equal(t, gap, notice.wait)
+					statusErr, ok := errors.AsType[*StatusError](notice.err)
+					require.True(t, ok, "OnRetry receives the API status error")
+					assert.Equal(t, tc.wantStatus, statusErr.StatusCode)
+				}
 			})
 		})
 	}
@@ -212,6 +246,20 @@ func TestFetchAllUsageEventsFailsFastOnPermanentStatus(t *testing.T) {
 			})
 		})
 	}
+}
+
+func TestFetchAllUsageEventsDoesNotRetryTransportErrors(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		errConnection := errors.New("connection reset by peer")
+		client, api, notices := newFakeAPIClient(t, func(int) apiResponse {
+			return apiResponse{err: errConnection}
+		})
+
+		_, err := client.FetchAllUsageEvents(t.Context(), onePageQuery())
+		require.ErrorIs(t, err, errConnection)
+		assert.Len(t, api.recorded(), 1)
+		assert.Empty(t, *notices)
+	})
 }
 
 func TestFetchAllUsageEventsGivesUpAfterMaxAttempts(t *testing.T) {
@@ -240,25 +288,55 @@ func TestFetchAllUsageEventsGivesUpAfterMaxAttempts(t *testing.T) {
 }
 
 func TestFetchAllUsageEventsStopsWaitingWhenCanceled(t *testing.T) {
-	synctest.Test(t, func(t *testing.T) {
-		client, api, _ := newFakeAPIClient(t, func(int) apiResponse {
-			return apiResponse{
-				status: http.StatusTooManyRequests, retryAfter: "60",
-			}
-		})
-		ctx, cancel := context.WithCancel(t.Context())
-		defer cancel()
-		go func() {
-			time.Sleep(10 * time.Second)
-			cancel()
-		}()
-		start := time.Now()
+	tests := []struct {
+		name string
+		// respond keeps the fetch waiting after its first request.
+		respond  func(call int) apiResponse
+		query    func() Query
+		cancelAt time.Duration
+	}{
+		{
+			name: "during a Retry-After wait",
+			respond: func(int) apiResponse {
+				return apiResponse{
+					status: http.StatusTooManyRequests, retryAfter: "60",
+				}
+			},
+			query:    onePageQuery,
+			cancelAt: 10 * time.Second,
+		},
+		{
+			name: "during the wait between pages",
+			respond: func(int) apiResponse {
+				return apiResponse{status: http.StatusOK, events: 1, total: 3}
+			},
+			query: func() Query {
+				q := onePageQuery()
+				q.PageSize = 1
+				return q
+			},
+			cancelAt: defaultRequestInterval / 2,
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			synctest.Test(t, func(t *testing.T) {
+				client, api, _ := newFakeAPIClient(t, tc.respond)
+				ctx, cancel := context.WithCancel(t.Context())
+				defer cancel()
+				go func() {
+					time.Sleep(tc.cancelAt)
+					cancel()
+				}()
+				start := time.Now()
 
-		_, err := client.FetchAllUsageEvents(ctx, onePageQuery())
-		require.ErrorIs(t, err, context.Canceled)
-		assert.Equal(t, 10*time.Second, time.Since(start))
-		assert.Len(t, api.recorded(), 1)
-	})
+				_, err := client.FetchAllUsageEvents(ctx, tc.query())
+				require.ErrorIs(t, err, context.Canceled)
+				assert.Equal(t, tc.cancelAt, time.Since(start))
+				assert.Len(t, api.recorded(), 1)
+			})
+		})
+	}
 }
 
 func TestFetchAllUsageEventsPacesPageRequests(t *testing.T) {
@@ -286,11 +364,40 @@ func TestFetchAllUsageEventsPacesPageRequests(t *testing.T) {
 
 				requests := api.recorded()
 				require.Len(t, requests, 3)
-				for i := 1; i < len(requests); i++ {
-					assert.Equal(t, i+1, requests[i].page)
-					assert.Equal(t, tc.wantGap, requests[i].at.Sub(requests[i-1].at))
+				for i, gap := range gaps(requests) {
+					assert.Equal(t, i+2, requests[i+1].page)
+					assert.Equal(t, tc.wantGap, gap)
 				}
 			})
 		})
 	}
+}
+
+func TestFetchAllUsageEventsPacesThePageAfterARetry(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		client, api, _ := newFakeAPIClient(t, func(call int) apiResponse {
+			if call == 0 {
+				return apiResponse{
+					status: http.StatusTooManyRequests, retryAfter: "60",
+				}
+			}
+			return apiResponse{status: http.StatusOK, events: 1, total: 2}
+		})
+		q := onePageQuery()
+		q.PageSize = 1
+
+		events, err := client.FetchAllUsageEvents(t.Context(), q)
+		require.NoError(t, err)
+		assert.Len(t, events, 2)
+
+		requests := api.recorded()
+		require.Len(t, requests, 3)
+		assert.Equal(t, []int{1, 1, 2},
+			[]int{requests[0].page, requests[1].page, requests[2].page})
+		assert.Equal(t,
+			[]time.Duration{60 * time.Second, defaultRequestInterval},
+			gaps(requests),
+			"page 2 waits a full interval after page 1's retry",
+		)
+	})
 }
