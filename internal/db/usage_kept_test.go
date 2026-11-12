@@ -175,7 +175,7 @@ func TestDailyUsageKeptCountsAfterOmission(t *testing.T) {
 	assert.EqualValues(t, 1, prepares.Load())
 }
 
-func TestDailyUsageKeptArchiveIDChange(t *testing.T) {
+func TestDailyUsageKeptReopen(t *testing.T) {
 	database := testDB(t)
 	seedLiveWriteSession(t, database, "reported", "project", "2026-08-10T09:00:00Z", 0, 10)
 	filter := UsageFilter{From: "2026-08-10", To: "2026-08-10", Timezone: "UTC"}

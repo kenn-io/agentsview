@@ -126,7 +126,7 @@ func assertJournaledDailyUsageLegacy(t *testing.T, database *DB, filter UsageFil
 	t.Helper()
 	want, err := database.getDailyUsageLegacy(t.Context(), filter)
 	require.NoError(t, err)
-	got, err := database.GetDailyUsage(t.Context(), filter)
+	got, err := database.getDailyUsageUncached(t.Context(), filter)
 	require.NoError(t, err)
 	assert.Equal(t, want, got)
 }
@@ -192,7 +192,7 @@ func TestUsageJournaledFreshness(t *testing.T) {
 				database.usageCache.usageWindowObserver.afterRead = func(journaled bool) {
 					reads = append(reads, journaled)
 				}
-				got, err := database.GetDailyUsage(t.Context(), filter)
+				got, err := database.getDailyUsageUncached(t.Context(), filter)
 				require.NoError(t, err)
 				assert.Equal(t, 150, got.Totals.InputTokens)
 				assert.Equal(t, []bool{true}, reads, "the first read after an append must use the journaled path")
@@ -1146,7 +1146,7 @@ func TestUsageJournaledConcurrentWriter(t *testing.T) {
 	t.Cleanup(func() { close(writes); <-done })
 	for ordinal := 1; ordinal <= 10; ordinal++ {
 		writes <- ordinal
-		got, err := database.GetDailyUsage(t.Context(), filter)
+		got, err := database.getDailyUsageUncached(t.Context(), filter)
 		writeErr := <-results
 		require.NoError(t, err)
 		require.NoError(t, writeErr)
@@ -1158,7 +1158,7 @@ func TestUsageJournaledConcurrentWriter(t *testing.T) {
 		assert.Equal(t, 100+ordinal, warm.Totals.InputTokens)
 		assert.Equal(t, before+1, journaled.Load(), "a completed notification must leave a journaled warm read")
 	}
-	got, err := database.GetDailyUsage(t.Context(), filter)
+	got, err := database.getDailyUsageUncached(t.Context(), filter)
 	require.NoError(t, err)
 	assert.Equal(t, 110, got.Totals.InputTokens)
 }
