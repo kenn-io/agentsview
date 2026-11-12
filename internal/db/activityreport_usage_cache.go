@@ -120,7 +120,7 @@ const activityUsagePeerFactsSQL = `SELECT DISTINCT ` + activityUsageFactColumns 
 // re-parsing raw message usage.
 func (db *DB) activityReportCachedUsage(
 	ctx context.Context, window activityUsageWindow, ids []string,
-	lowerBound, upperBound string, q activity.Query, collectRead bool,
+	lowerBound, upperBound string, q activity.Query, collectRead, compact bool,
 ) ([]activity.UsageRow, *export.PricingBlock, []string, time.Time, error) {
 	pricing, err := db.loadPricingMap(ctx)
 	if err != nil {
@@ -134,17 +134,28 @@ func (db *DB) activityReportCachedUsage(
 	slices.SortFunc(facts, compareActivityUsageFacts)
 	selection := make([]activity.UsageSelectionRow, len(facts))
 	var read []string
-	next := q.RangeEnd
+	var seen map[string]struct{}
+	if collectRead {
+		seen = make(map[string]struct{}, len(ids))
+		for _, id := range ids {
+			seen[id] = struct{}{}
+		}
+	}
+	var next time.Time
+	if compact {
+		next = q.RangeEnd
+	}
 	for i, fact := range facts {
 		row := fact.row
-		if fact.validTS {
+		if compact && fact.validTS {
 			timestamp := time.UnixMilli(fact.millis).Add(time.Duration(fact.nanos))
 			if !timestamp.Before(q.EffectiveEnd) && timestamp.Before(next) {
 				next = timestamp
 			}
 		}
-		if collectRead {
+		if _, ok := seen[row.SessionID]; collectRead && !ok {
 			read = append(read, row.SessionID)
+			seen[row.SessionID] = struct{}{}
 		}
 		selection[i] = activity.UsageSelectionRow{Agent: row.Agent, ClaudeMessageID: row.ClaudeMessageID, ClaudeRequestID: row.ClaudeRequestID, SourceUUID: row.SourceUUID, UsageDedupKey: row.UsageDedupKey, SessionID: row.SessionID, MessageOrdinal: row.MessageOrdinal, Timestamp: time.UnixMilli(fact.millis).Add(time.Duration(fact.nanos)), TimestampValid: fact.validTS, OutputTokens: fact.tokens.output, WebSearchRequests: row.WebSearchRequests}
 	}
@@ -191,9 +202,11 @@ func (db *DB) activityReportCachedUsage(
 	if err != nil {
 		return nil, nil, nil, time.Time{}, fmt.Errorf("building pricing block: %w", err)
 	}
-	out, err = sumActivityUsageRows(out, q)
-	if err != nil {
-		return nil, nil, nil, time.Time{}, err
+	if compact {
+		out, err = sumActivityUsageRows(out, q)
+		if err != nil {
+			return nil, nil, nil, time.Time{}, err
+		}
 	}
 	return out, &block, read, next, nil
 }
@@ -205,7 +218,7 @@ func sumActivityUsageRows(rows []activity.UsageRow, q activity.Query) ([]activit
 	for _, row := range rows {
 		// Reordering signed costs can make an otherwise valid report overflow.
 		if row.Cost.Microdollars < 0 || (row.SessionCost != nil && row.SessionCost.Microdollars < 0) {
-			return slices.Clone(rows), nil
+			return rows, nil
 		}
 		if row.SessionCost != nil {
 			withTotal[row.SessionID] = true
@@ -217,7 +230,7 @@ func sumActivityUsageRows(rows []activity.UsageRow, q activity.Query) ([]activit
 	}
 	indexes := make(map[key]int)
 	windows := activity.QueryWindows(q)
-	out := make([]activity.UsageRow, 0, len(rows))
+	out := rows[:0]
 	for _, row := range rows {
 		if withTotal[row.SessionID] {
 			out = append(out, row)
@@ -244,7 +257,10 @@ func sumActivityUsageRows(rows []activity.UsageRow, q activity.Query) ([]activit
 			out = append(out, row)
 		}
 	}
-	return slices.Clone(out), nil
+	if len(out) < len(rows) {
+		out = slices.Clone(out)
+	}
+	return out, nil
 }
 
 // activityUsageFactBlock bounds each allocation of scanned facts: facts are

@@ -64,7 +64,7 @@ func BenchmarkSQLiteActivityReportUsage(b *testing.B) {
 		for b.Loop() {
 			window, err := d.prepareActivityUsageWindow(b.Context(), lower, upper)
 			require.NoError(b, err)
-			rows, _, _, _, err = d.activityReportCachedUsage(b.Context(), window, ids, lower, upper, q, true)
+			rows, _, _, _, err = d.activityReportCachedUsage(b.Context(), window, ids, lower, upper, q, true, true)
 			require.NoError(b, err)
 		}
 		var outputTokens int
@@ -72,6 +72,20 @@ func BenchmarkSQLiteActivityReportUsage(b *testing.B) {
 			outputTokens += row.OutputTokens
 		}
 		require.Equal(b, survivors*20, outputTokens)
+	})
+	b.Run("retained-hit", func(b *testing.B) {
+		ongoing := q
+		ongoing.Partial = true
+		ongoing.EffectiveEnd = q.RangeEnd.Add(-time.Second)
+		filter := AnalyticsFilter{Timezone: "UTC", IncludeSubagents: true, IncludeForks: true}
+		_, err := d.GetActivityReport(b.Context(), filter, ongoing)
+		require.NoError(b, err)
+		b.ReportAllocs()
+		for b.Loop() {
+			report, err := d.GetActivityReport(b.Context(), filter, ongoing)
+			require.NoError(b, err)
+			require.Equal(b, survivors*20, report.Totals.OutputTokens)
+		}
 	})
 	b.Run("raw", func(b *testing.B) {
 		b.ReportAllocs()

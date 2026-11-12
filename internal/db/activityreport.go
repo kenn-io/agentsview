@@ -114,7 +114,7 @@ func (b activityReportBackend) ActivityReportUsage(
 		return b.keptUsage.rows, b.keptUsage.pricing, nil
 	}
 	rows, pricing, read, next, err := b.activityReportCachedUsage(
-		ctx, b.usage, ids, b.lowerBound, b.upperBound, q, b.read != nil)
+		ctx, b.usage, ids, b.lowerBound, b.upperBound, q, b.read != nil, b.usageResult != nil)
 	if err == nil && b.usageResult != nil {
 		b.usageResult.rows, b.usageResult.pricing, b.usageResult.from, b.usageResult.next = rows, pricing, q.EffectiveEnd, next
 	}

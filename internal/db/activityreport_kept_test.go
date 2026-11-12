@@ -103,11 +103,15 @@ func TestActivityReportKeptBoundsReadSetMemory(t *testing.T) {
 	}
 	insertMessages(t, d, messages...)
 	q, f := dayQuery(t, "2026-06-14", "UTC"), AnalyticsFilter{Timezone: "UTC"}
+	q.Partial = true
+	q.EffectiveEnd = time.Date(2026, 6, 14, 12, 0, 0, 0, time.UTC)
 	f.IncludeSubagents = true
 	f.IncludeForks = true
-	keptActivityBuild(t, d, f, q, true)
+	first := keptActivityBuild(t, d, f, q, true)
+	assert.Equal(t, 756, first.Report.Totals.OutputTokens)
+	assert.Equal(t, first, keptActivityBuild(t, d, f, q, true))
 
-	selection := kept.Selection(f, q)
+	selection := activityUsageSelection(f, q)
 	version, _, err := d.activityKeptVersion(t.Context())
 	require.NoError(t, err)
 	entries, ok := d.activityKept.Get(selection, version)
@@ -116,6 +120,20 @@ func TestActivityReportKeptBoundsReadSetMemory(t *testing.T) {
 	entry := entries[0]
 	require.Len(t, entry.read, 1)
 	assert.Equal(t, len(entry.read), cap(entry.read), "the kept read set must not retain its pre-compaction backing array")
+
+	insertMessages(t, d, Message{SessionID: "past", Ordinal: 258, Role: "assistant", Content: "more", Timestamp: "2026-06-14T10:02:00Z", Model: "kept-model", TokenUsage: []byte(`{"output_tokens":17}`)})
+	after := keptActivityBuild(t, d, f, q, true)
+	assert.Equal(t, 773, after.Report.Totals.OutputTokens)
+	start, end := activityReportRangeBoundsUTC(q)
+	sessions, ids, err := d.activityReportSessions(t.Context(), f, start, end)
+	require.NoError(t, err)
+	raw := rawUsageActivityBackend{activityReportBackend{
+		DB: d, lowerBound: PaddedUTCBound(q.RangeStart.UTC().Format(time.RFC3339), -14),
+		upperBound: PaddedUTCBound(q.RangeEnd.UTC().Format(time.RFC3339), 14), counted: &activityReportCounted{},
+	}}
+	want, _, err := activity.BuildReportArtifacts(t.Context(), raw, sessions, ids, q, nil, "raw activity report")
+	require.NoError(t, err)
+	assert.Equal(t, activity.ReportWithSessions(want), activity.ReportWithSessions(after))
 }
 
 func TestActivityReportKeptReinsertsOnlyWhenWatermarkAdvances(t *testing.T) {

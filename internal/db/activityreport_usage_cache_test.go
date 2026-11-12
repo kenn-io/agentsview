@@ -227,14 +227,20 @@ func TestActivityReportCachedUsageMatchesRawUsage(t *testing.T) {
 		require.NoError(t, err)
 		window, err := d.prepareActivityUsageWindow(ctx, lower, upper)
 		require.NoError(t, err)
-		_, gotPricing, gotRead, _, err := d.activityReportCachedUsage(
-			ctx, window, ids, lower, upper, q, true)
-		require.NoError(t, err)
-		assert.Equal(t, wantPricing, gotPricing)
+		wantRead = append(wantRead, ids...)
 		slices.Sort(wantRead)
-		slices.Sort(gotRead)
-		gotRead = slices.Compact(gotRead)
-		assert.Equal(t, slices.Compact(wantRead), gotRead)
+		wantRead = slices.Compact(wantRead)
+		var gotRead []string
+		for _, compact := range []bool{false, true} {
+			_, gotPricing, read, _, err := d.activityReportCachedUsage(
+				ctx, window, ids, lower, upper, q, true, compact)
+			require.NoError(t, err)
+			assert.Equal(t, wantPricing, gotPricing)
+			gotRead = append(slices.Clone(ids), read...)
+			slices.Sort(gotRead)
+			gotRead = slices.Compact(gotRead)
+			assert.Equal(t, wantRead, gotRead)
+		}
 
 		raw := rawUsageActivityBackend{activityReportBackend{
 			DB: d, lowerBound: lower, upperBound: upper,
@@ -260,7 +266,7 @@ func TestActivityReportCachedUsageMatchesRawUsage(t *testing.T) {
 	// completed in project b's session, and the in-padding peer before the
 	// range, but neither the deleted copy nor the out-of-bounds pairs.
 	read := compare(t, AnalyticsFilter{Project: "proj-a"}, queries["utc day"])
-	assert.Equal(t, []string{"a", "b", "c", "copilot:s"}, read)
+	assert.Equal(t, []string{"a", "b", "c", "copilot:s", "early"}, read)
 
 	// A session written after the cache filled is refilled before reading.
 	insertMessages(t, d, Message{
