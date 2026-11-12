@@ -96,6 +96,10 @@ Local `duckdb serve` keeps finished Activity ranges in memory and past days a
 client opens on disk, so reopening them is quick, including after a restart.
 Finished Usage results stay in memory for the same mirror file and custom
 pricing, with up to 64 selections and 64 MiB per read kind.
+Dashboard reports share a separate in-memory cache with up to 64 selections and
+64 MiB. Reports are reused until the mirror or pricing changes. Time-dependent
+termination filters and recently active selections read fresh; the recently
+active control generates a new cutoff on each refresh.
 Disk reports are reused with the same mirror file, binary, and custom pricing.
 They live under `$CACHE_DIRECTORY/duckdb-activity-reports`, or under
 `agentsview/duckdb-activity-reports` in the user cache directory. Reports no one
