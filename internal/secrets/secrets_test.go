@@ -100,6 +100,30 @@ func TestRedactJSONNestedAndPlainText(t *testing.T) {
 	assert.Equal(t, clean, RedactJSON(clean))
 }
 
+// TestRedactJSONKeepsMaskingOnImperfectJSON covers JSON the strict decoder
+// rejects: duplicate keys, which agent tool arguments can carry, and a record
+// cut off mid-write. Masking already decided for complete strings must
+// survive, and the escaped key must not fall back to a serialized scan.
+func TestRedactJSONKeepsMaskingOnImperfectJSON(t *testing.T) {
+	escaped := `creds:\nAKIA7QHWN2DKR4FYPLJM`
+	for name, tc := range map[string]struct{ in, want string }{
+		"duplicate keys": {
+			in:   `{"content":"` + escaped + `","content":"done"}`,
+			want: `{"content":"creds:\nAKIA…PLJM","content":"done"}`,
+		},
+		"truncated record": {
+			in:   `{"content":"` + escaped + `","more":"unfinish`,
+			want: `{"content":"creds:\nAKIA…PLJM","more":"unfinish`,
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			require.Equal(t, tc.in, Redact(tc.in), "precondition: a serialized scan misses the key")
+			assert.Equal(t, tc.want, RedactJSON(tc.in))
+			assert.Equal(t, tc.want+"\n", RedactJSONLines(tc.in+"\n"))
+		})
+	}
+}
+
 func TestRedactJSONLines(t *testing.T) {
 	pem := "-----BEGIN RSA PRIVATE KEY-----\n" +
 		strings.Repeat("MIIBSECRETKEYMATERIAL0123456789ABCDEF\n", 5) +
