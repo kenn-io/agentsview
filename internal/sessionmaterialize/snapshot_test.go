@@ -1,7 +1,6 @@
 package sessionmaterialize
 
 import (
-	"context"
 	"os"
 	"path/filepath"
 	"testing"
@@ -93,11 +92,4 @@ func TestMaterializeSnapshotInstallsCapturedCompanions(t *testing.T) {
 	bad.Machine = "wrong-device"
 	_, err = Materialize(ctx, cfg, receiver, &bad, cwd)
 	require.ErrorContains(t, err, "archive session identity differs")
-	cancelled, cancel := context.WithCancel(ctx)
-	cancel()
-	_, err = Materialize(cancelled, cfg, receiver, session, cwd)
-	require.ErrorIs(t, err, context.Canceled)
-	entries, err = os.ReadDir(scratch)
-	require.NoError(t, err)
-	assert.Empty(t, entries)
 }

@@ -525,3 +525,21 @@ func TestMaterializerSelectedEntriesExcludeLargeSiblingFromBudget(t *testing.T) 
 	assert.Equal(t, primary, got)
 	assert.Equal(t, []rawsync.ObjectRef{ref}, store.opened)
 }
+
+func TestMaterializerManyDeduplicatesOnlyMatchingObjects(t *testing.T) {
+	data := []byte("continuation")
+	ref := objectRefForBytes(t, data)
+	entry := rawsync.Entry{Path: "session/subagents/agent.jsonl", Type: "file", Length: int64(len(data)), Objects: []rawsync.ObjectRef{ref}}
+	_, first := materializerTestManifest(t, []rawsync.Entry{entry})
+	_, second := materializerTestManifest(t, []rawsync.Entry{entry, {Path: "other.jsonl", Type: "file", Length: int64(len(data)), Objects: []rawsync.ObjectRef{ref}}})
+	store := &materializerStore{objects: map[rawsync.ObjectRef][]byte{ref: data}}
+	m := Materializer{Store: store, BaseDir: t.TempDir(), MaxTotalBytes: int64(len(data)), SelectEntry: func(_ rawsync.CanonicalManifest, e rawsync.Entry) bool { return e.Path == entry.Path }}
+	tree, err := m.MaterializeMany(t.Context(), []rawsync.CanonicalManifest{first, second})
+	require.NoError(t, err)
+	require.NoError(t, tree.Cleanup())
+	assert.Equal(t, []rawsync.ObjectRef{ref}, store.opened)
+	changed := objectRefForBytes(t, []byte("different!!!"))
+	_, conflict := materializerTestManifest(t, []rawsync.Entry{{Path: entry.Path, Type: "file", Length: changed.Length, Objects: []rawsync.ObjectRef{changed}}})
+	_, err = m.MaterializeMany(t.Context(), []rawsync.CanonicalManifest{first, conflict})
+	require.ErrorContains(t, err, "conflicting materialized entry")
+}

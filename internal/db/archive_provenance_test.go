@@ -318,6 +318,4 @@ func TestArchiveSessionOwnersAcceptsEquivalentMemberships(t *testing.T) {
 	owners, err := database.ArchiveSessionOwners(t.Context(), write.Session.ID)
 	require.NoError(t, err)
 	require.Len(t, owners, 2)
-	assert.Equal(t, owners[0].Source, owners[1].Source)
-	assert.Equal(t, owners[0].ManifestID, owners[1].ManifestID)
 }

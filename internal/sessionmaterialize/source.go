@@ -7,7 +7,6 @@ import (
 	"io"
 	"io/fs"
 	"os"
-	"path"
 	"path/filepath"
 	"slices"
 	"strings"
@@ -63,7 +62,10 @@ func Materialize(ctx context.Context, cfg config.Config, database *db.DB, sessio
 			return Result{}, err
 		}
 	}
-	var source string
+	source, err := storedSource(session, host)
+	if err != nil {
+		return Result{}, err
+	}
 	var files []sourceFile
 	if len(owners) != 0 {
 		if owners[0].NativeSessionID != id || owners[0].Source.DeviceID != session.Machine {
@@ -72,43 +74,37 @@ func Materialize(ctx context.Context, cfg config.Config, database *db.DB, sessio
 		var snapshot string
 		files, snapshot, err = readSnapshotSource(ctx, cfg, owners, id)
 		source = "snapshot:" + snapshot
-	} else {
-		source, err = storedSource(session, host)
+	} else if strings.HasPrefix(source, "s3://") {
+		if host != "" && host != session.Machine {
+			return Result{}, errors.New("S3 source host does not match session identity")
+		}
+		files, err = readS3Source(ctx, cfg, session.Machine, source, id, maxSourceBytes)
+	} else if host != "" {
+		if !slices.ContainsFunc(cfg.RemoteHosts, func(remote config.RemoteHost) bool { return remote.Host == host }) {
+			return Result{}, errors.New("session host is not configured")
+		}
+		root := remotesync.MirrorDir(cfg.DataDir, host)
+		remotePath, ok := strings.CutPrefix(source, host+":")
+		if !ok || remotePath == "" {
+			return Result{}, errors.New("mirror source host does not match session identity")
+		}
+		name, err := remotesync.SafeRemappedRemotePath(root, remotePath)
+		if err != nil {
+			return Result{}, fmt.Errorf("reading native transcript: %w", err)
+		}
+		lock, err := remotesync.AcquireMirrorLock(ctx, root)
 		if err != nil {
 			return Result{}, err
 		}
-		if strings.HasPrefix(source, "s3://") {
-			if host != "" && host != session.Machine {
-				return Result{}, errors.New("S3 source host does not match session identity")
-			}
-			files, err = readS3Source(ctx, cfg, session.Machine, source, id, maxSourceBytes)
-		} else if host != "" {
-			if !slices.ContainsFunc(cfg.RemoteHosts, func(remote config.RemoteHost) bool { return remote.Host == host }) {
-				return Result{}, errors.New("session host is not configured")
-			}
-			root := remotesync.MirrorDir(cfg.DataDir, host)
-			remotePath, ok := strings.CutPrefix(source, host+":")
-			if !ok || remotePath == "" {
-				return Result{}, errors.New("mirror source host does not match session identity")
-			}
-			name, err := remotesync.SafeRemappedRemotePath(root, remotePath)
-			if err != nil {
-				return Result{}, fmt.Errorf("reading native transcript: %w", err)
-			}
-			lock, err := remotesync.AcquireMirrorLock(ctx, root)
-			if err != nil {
-				return Result{}, err
-			}
-			files, err = readLocalSource(ctx, root, name, id, maxSourceBytes)
-			if err != nil {
-				return Result{}, fmt.Errorf("reading native transcript: %w", errors.Join(err, lock.Close()))
-			}
-			if err := lock.Close(); err != nil {
-				return Result{}, fmt.Errorf("reading native transcript: %w", err)
-			}
-		} else {
-			files, source, err = readConfiguredLocal(ctx, cfg, session, source, id)
+		files, err = readLocalSource(ctx, root, name, id, maxSourceBytes)
+		if err != nil {
+			return Result{}, fmt.Errorf("reading native transcript: %w", errors.Join(err, lock.Close()))
 		}
+		if err := lock.Close(); err != nil {
+			return Result{}, fmt.Errorf("reading native transcript: %w", err)
+		}
+	} else {
+		files, source, err = readConfiguredLocal(ctx, cfg, session, source, id)
 	}
 	if err != nil {
 		return Result{}, fmt.Errorf("reading native transcript: %w", err)
@@ -409,23 +405,11 @@ func readS3Source(ctx context.Context, cfg config.Config, machine, uri, id strin
 
 // readSnapshotSource extracts only the selected transcript and its native companions.
 func readSnapshotSource(ctx context.Context, cfg config.Config, owners []db.ArchiveSessionProvenance, id string) (_ []sourceFile, snapshot string, retErr error) {
-	tree, manifest, attachment, err := archivesource.MaterializeSnapshot(ctx, cfg.ArchiveSources, owners, "claude", maxSourceBytes)
+	tree, primary, attachment, err := archivesource.MaterializeSnapshot(ctx, cfg.ArchiveSources, owners, "claude", maxSourceBytes)
 	if err != nil {
 		return nil, "", err
 	}
 	defer func() { retErr = errors.Join(retErr, tree.Cleanup()) }()
-	var primary string
-	for _, entry := range manifest.Manifest.Entries {
-		if path.Base(entry.Path) == id+".jsonl" {
-			if primary != "" {
-				return nil, "", errors.New("ambiguous snapshot transcript")
-			}
-			primary = entry.Path
-		}
-	}
-	if primary == "" {
-		return nil, "", errors.New("snapshot transcript is unavailable")
-	}
 	name, err := tree.EntryPath(primary)
 	if err != nil {
 		return nil, "", err

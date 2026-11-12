@@ -350,9 +350,6 @@ func (d *DB) ArchiveSessionOwners(ctx context.Context, sessionID string) ([]Arch
 			return nil, fmt.Errorf("%w: missing snapshot ownership", ErrArchiveSourceConflict)
 		}
 		p.Attachment = ArchiveAttachmentKey{RepositoryID: repository.String, SnapshotID: snapshot.String}
-		if len(owners) > 0 && (owners[0].Source != p.Source || owners[0].ManifestID != p.ManifestID || owners[0].NativeSessionID != p.NativeSessionID) {
-			return nil, fmt.Errorf("%w: differing snapshot source identities", ErrArchiveSourceConflict)
-		}
 		owners = append(owners, p)
 	}
 	return owners, rows.Err()

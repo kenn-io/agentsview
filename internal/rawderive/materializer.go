@@ -150,7 +150,13 @@ func (m Materializer) MaterializeMany(
 	if m.MaxTotalBytes <= 0 {
 		return nil, fmt.Errorf("%w: materialization byte limit must be positive", rawsync.ErrInvalid)
 	}
+	type selectedEntry struct {
+		manifest rawsync.CanonicalManifest
+		entry    rawsync.Entry
+	}
 	var total int64
+	var selected []selectedEntry
+	seen := make(map[string]selectedEntry)
 	for _, manifest := range manifests {
 		if err := rawsync.ValidateCanonicalManifest(manifest); err != nil {
 			return nil, err
@@ -159,12 +165,18 @@ func (m Materializer) MaterializeMany(
 			if m.SelectEntry != nil && !m.SelectEntry(manifest, entry) {
 				continue
 			}
-			if entry.Length > m.MaxTotalBytes-total {
-				return nil, fmt.Errorf(
-					"%w: %w: materialization exceeds %d bytes", rawsync.ErrInvalid, ErrSizeLimit, m.MaxTotalBytes,
-				)
+			if previous, ok := seen[entry.Path]; ok {
+				if previous.manifest.Identity != manifest.Identity || previous.entry.Length != entry.Length || !slices.Equal(previous.entry.Objects, entry.Objects) {
+					return nil, fmt.Errorf("%w: conflicting materialized entry %q", rawsync.ErrInvalid, entry.Path)
+				}
+				continue
 			}
+			if entry.Length > m.MaxTotalBytes-total {
+				return nil, fmt.Errorf("%w: %w: materialization exceeds %d bytes", rawsync.ErrInvalid, ErrSizeLimit, m.MaxTotalBytes)
+			}
+			seen[entry.Path] = selectedEntry{manifest, entry}
 			total += entry.Length
+			selected = append(selected, selectedEntry{manifest, entry})
 		}
 	}
 
@@ -183,28 +195,22 @@ func (m Materializer) MaterializeMany(
 		}
 	}()
 
-	for _, manifest := range manifests {
-		for _, entry := range manifest.Manifest.Entries {
-			if m.SelectEntry != nil && !m.SelectEntry(manifest, entry) {
-				continue
-			}
-			if err := ctx.Err(); err != nil {
-				return nil, err
-			}
-			target := filepath.Join(root, filepath.FromSlash(entry.Path))
-			if err := ensureMaterializedPath(root, target); err != nil {
-				return nil, err
-			}
-			if err := os.MkdirAll(filepath.Dir(target), 0o700); err != nil {
-				return nil, fmt.Errorf("creating raw materialization directory: %w", err)
-			}
-			if err := m.materializeEntry(
-				ctx, manifest.Identity.TenantID, entry, manifest.Manifest.CapturedAt, target,
-			); err != nil {
-				return nil, err
-			}
-			result.entries[entry.Path] = target
+	for _, item := range selected {
+		if err := ctx.Err(); err != nil {
+			return nil, err
 		}
+		entry := item.entry
+		target := filepath.Join(root, filepath.FromSlash(entry.Path))
+		if err := ensureMaterializedPath(root, target); err != nil {
+			return nil, err
+		}
+		if err := os.MkdirAll(filepath.Dir(target), 0o700); err != nil {
+			return nil, fmt.Errorf("creating raw materialization directory: %w", err)
+		}
+		if err := m.materializeEntry(ctx, item.manifest.Identity.TenantID, entry, item.manifest.Manifest.CapturedAt, target); err != nil {
+			return nil, err
+		}
+		result.entries[entry.Path] = target
 	}
 	if err := makeMaterializationReadOnly(root); err != nil {
 		return nil, err
