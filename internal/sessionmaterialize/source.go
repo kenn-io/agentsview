@@ -165,7 +165,9 @@ func readConfiguredLocal(ctx context.Context, cfg config.Config, session *db.Ses
 	if !ok {
 		return nil, "", errors.New("native source provider unavailable")
 	}
-	name, err := uniqueLocalSource(ctx, provider, stored, id)
+	name, err := uniqueLocalSource(ctx, provider, stored, func(name string) (bool, error) {
+		return filepath.Base(name) == id+".jsonl", nil
+	})
 	if err != nil {
 		return nil, "", err
 	}
@@ -201,10 +203,10 @@ func configuredRoots(cfg config.Config, session *db.Session, agent parser.AgentT
 }
 
 // uniqueLocalSource keeps an archived path that still resolves exactly.
-// Otherwise it discovers id's transcript under the provider's roots;
+// Otherwise it discovers a matching transcript under the provider's roots;
 // incomplete discovery or a second physical file fails instead of guessing,
 // and aliases of one file, such as overlapping roots or symlinks, count once.
-func uniqueLocalSource(ctx context.Context, provider parser.Provider, stored, id string) (string, error) {
+func uniqueLocalSource(ctx context.Context, provider parser.Provider, stored string, matches func(string) (bool, error)) (string, error) {
 	if ref, found, err := provider.FindSource(ctx, parser.FindSourceRequest{StoredFilePath: stored}); err != nil || found {
 		return ref.DisplayPath, err
 	}
@@ -216,7 +218,11 @@ func uniqueLocalSource(ctx context.Context, provider parser.Provider, stored, id
 	var matchInfo os.FileInfo
 	err := discoverer.DiscoverEach(ctx, func(ref parser.SourceRef) error {
 		name := filepath.Clean(ref.DisplayPath)
-		if filepath.Base(name) != id+".jsonl" {
+		matched, err := matches(name)
+		if err != nil {
+			return err
+		}
+		if !matched {
 			return nil
 		}
 		info, err := os.Stat(name)

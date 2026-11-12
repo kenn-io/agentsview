@@ -1,6 +1,7 @@
 package sessionmaterialize
 
 import (
+	"context"
 	"encoding/json"
 	"os"
 	"path/filepath"
@@ -72,6 +73,16 @@ func TestPiSourceFallbackAndIdentity(t *testing.T) {
 	result, err := Materialize(t.Context(), cfg, nil, s, t.TempDir())
 	require.NoError(t, err)
 	assert.Equal(t, a, result.Source)
+	cancelled, cancel := context.WithCancel(t.Context())
+	cancel()
+	_, err = Materialize(cancelled, cfg, nil, s, t.TempDir())
+	require.ErrorIs(t, err, context.Canceled)
+	invalid := filepath.Join(root, "invalid.jsonl")
+	require.NoError(t, os.WriteFile(invalid, []byte(`{"type":"session","id":"other","cwd":"/old"}`+"\n"), 0o600))
+	s.FilePath = &invalid
+	_, err = Materialize(t.Context(), cfg, nil, s, t.TempDir())
+	require.ErrorContains(t, err, "identity differs")
+	s.FilePath = &stale
 	b := filepath.Join(root, "b", "timestamp_target.jsonl")
 	require.NoError(t, os.MkdirAll(filepath.Dir(b), 0o700))
 	require.NoError(t, os.WriteFile(b, data, 0o600))
