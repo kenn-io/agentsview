@@ -145,9 +145,9 @@ func TestCheckAPIVersionContract(t *testing.T) {
 	}
 
 	t.Run("changed contract under same version names next", func(t *testing.T) {
-		err := checkAPIVersionContract(15, left, []apiVersionRecord{rec(15, base)})
-		require.ErrorContains(t, err, "changed under API version 15")
-		require.ErrorContains(t, err, "add an empty file 16-bbbb, set server.APIVersion to 16")
+		err := checkAPIVersionContract(16, left, []apiVersionRecord{rec(16, base)})
+		require.ErrorContains(t, err, "changed under API version 16")
+		require.ErrorContains(t, err, "add an empty file 17-bbbb, set server.APIVersion to 17")
 		require.ErrorContains(t, err, "feature minimum")
 	})
 
@@ -165,7 +165,7 @@ func TestCheckAPIVersionContract(t *testing.T) {
 	})
 
 	t.Run("current version without record asks for one", func(t *testing.T) {
-		err := checkAPIVersionContract(16, left, []apiVersionRecord{rec(15, base)})
-		require.ErrorContains(t, err, "API version 16 has no contract record; in "+apiVersionRecordDir+" add an empty file 16-bbbb")
+		err := checkAPIVersionContract(17, left, []apiVersionRecord{rec(16, base)})
+		require.ErrorContains(t, err, "API version 17 has no contract record; in "+apiVersionRecordDir+" add an empty file 17-bbbb")
 	})
 }
