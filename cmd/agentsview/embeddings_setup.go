@@ -62,15 +62,6 @@ func (v *liveVectorServing) startSharedChoice() {
 	var approvedBytes int64
 	embeddings := v.cfg.Vector.Embeddings
 	if !v.cfg.Vector.Enabled {
-		blocked, err := v.cfg.HasImplicitVectorPush()
-		if err != nil {
-			log.Printf("search by meaning: resolve push targets: %v", err)
-			return
-		}
-		if blocked {
-			log.Print("search by meaning: shared choice skipped for implicit vector push")
-			return
-		}
 		chosen, err := embedlocal.ChoiceRecorded()
 		if err != nil {
 			log.Printf("search by meaning: read shared choice: %v", err)

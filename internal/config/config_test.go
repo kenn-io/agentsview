@@ -3272,6 +3272,32 @@ func TestSaveVectorSetupPreservesSettings(t *testing.T) {
 	}
 }
 
+func TestSaveVectorSetupRetainsEnvironmentPushTarget(t *testing.T) {
+	setupTestEnv(t)
+	for _, key := range []string{
+		"AGENTSVIEW_PG_URL", "AGENTSVIEW_PG_SCHEMA", "AGENTSVIEW_PG_MACHINE",
+		"AGENTSVIEW_CLICKHOUSE_URL", "AGENTSVIEW_CLICKHOUSE_DATABASE", "AGENTSVIEW_CLICKHOUSE_MACHINE",
+	} {
+		t.Setenv(key, "")
+	}
+	pgURL := "postgres://env.example/agentsview"
+	t.Setenv("AGENTSVIEW_PG_URL", pgURL)
+	cfg, err := LoadReadOnly()
+	require.NoError(t, err)
+	_, err = cfg.SaveVectorSetup(VectorEmbeddingsServerConfig{Local: true}, true)
+	require.ErrorIs(t, err, ErrVectorSetupIneligible)
+	saved, err := cfg.SaveVectorSetup(VectorEmbeddingsServerConfig{Local: true}, false)
+	require.NoError(t, err)
+	targets, err := saved.ResolvePGTargets()
+	require.NoError(t, err)
+	require.Len(t, targets, 1)
+	assert.Equal(t, pgURL, targets[0].Config.URL)
+	assert.Nil(t, targets[0].Config.PushVectors)
+	blocked, err := saved.HasImplicitVectorPush()
+	require.NoError(t, err)
+	assert.True(t, blocked)
+}
+
 func TestSaveVectorSetupPersistsSelectedServer(t *testing.T) {
 	for _, tc := range []struct {
 		raw, endpoint string

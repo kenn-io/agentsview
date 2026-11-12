@@ -4354,6 +4354,7 @@ func (c *Config) vectorSetupCandidate(automatic bool) (map[string]any, Config, e
 	if err != nil {
 		return nil, Config{}, err
 	}
+	candidate.loadEnv()
 	candidate.DataDir = c.DataDir
 	if err := candidate.applyConfigTOML(string(encoded)); err != nil {
 		return nil, Config{}, invalidVectorSetupError{err}
