@@ -122,14 +122,11 @@ func MaterializeSnapshot(ctx context.Context, sources []config.ArchiveSource, ow
 		return nil, "", db.ArchiveAttachmentKey{}, errors.New("snapshot archive identity differs")
 	}
 	var canonical []byte
-	var rootProvider, configuredRoot, originalRoot string
+	var configuredRoot, originalRoot string
 	var count int
-	err = conn.QueryRowContext(ctx, `SELECT r.provider,r.configured_root_id,r.original_path,s.canonical_json FROM raw_archive_sources s JOIN raw_archive_roots r ON r.id=s.root_id WHERE s.manifest_id=? AND s.root_id=? AND s.source_key=? AND r.device_id=?`, owner.ManifestID, s.RootID, s.SourceKey, s.DeviceID).Scan(&rootProvider, &configuredRoot, &originalRoot, &canonical)
+	err = conn.QueryRowContext(ctx, `SELECT r.configured_root_id,r.original_path,s.canonical_json FROM raw_archive_sources s JOIN raw_archive_roots r ON r.id=s.root_id WHERE s.manifest_id=? AND s.root_id=? AND s.source_key=? AND r.device_id=? AND r.provider=?`, owner.ManifestID, s.RootID, s.SourceKey, s.DeviceID, provider).Scan(&configuredRoot, &originalRoot, &canonical)
 	if err != nil {
 		return nil, "", db.ArchiveAttachmentKey{}, fmt.Errorf("snapshot source ownership: %w", err)
-	}
-	if rootProvider != provider {
-		return nil, "", db.ArchiveAttachmentKey{}, errors.New("snapshot provider differs")
 	}
 	err = conn.QueryRowContext(ctx, `SELECT count(*) FROM raw_archive_sessions WHERE device_id=? AND provider=? AND parser_id=? AND root_id=? AND source_key=?`, s.DeviceID, provider, owner.NativeSessionID, s.RootID, s.SourceKey).Scan(&count)
 	if err != nil {
@@ -142,19 +139,12 @@ func MaterializeSnapshot(ctx context.Context, sources []config.ArchiveSource, ow
 	if err != nil {
 		return nil, "", db.ArchiveAttachmentKey{}, err
 	}
-	parseManifest := func(key, id string, data []byte) (rawsync.CanonicalManifest, error) {
-		manifest, err := rawsync.ParseCanonicalManifest(identity, id, data, rawsync.DefaultManifestLimits())
-		if err != nil {
-			return manifest, err
-		}
-		if manifest.Manifest.ConfiguredRootID != configuredRoot || manifest.Manifest.SourceKey != key || string(manifest.Manifest.Provider) != provider {
-			return manifest, errors.New("snapshot manifest identity differs")
-		}
-		return manifest, nil
-	}
-	manifest, err := parseManifest(s.SourceKey, owner.ManifestID, canonical)
+	manifest, err := rawsync.ParseCanonicalManifest(identity, owner.ManifestID, canonical, rawsync.DefaultManifestLimits())
 	if err != nil {
 		return nil, "", db.ArchiveAttachmentKey{}, err
+	}
+	if manifest.Manifest.ConfiguredRootID != configuredRoot || manifest.Manifest.SourceKey != s.SourceKey || string(manifest.Manifest.Provider) != provider {
+		return nil, "", db.ArchiveAttachmentKey{}, errors.New("snapshot manifest identity differs")
 	}
 	portable := func(name string) string { return path.Clean(strings.ReplaceAll(name, `\`, "/")) }
 	key, root := portable(s.SourceKey), strings.TrimSuffix(portable(originalRoot), "/")

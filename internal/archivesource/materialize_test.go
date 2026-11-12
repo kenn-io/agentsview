@@ -17,59 +17,6 @@ import (
 	"go.kenn.io/agentsview/internal/testjsonl"
 )
 
-func TestMaterializeAttachedSnapshotOwnership(t *testing.T) {
-	ctx := t.Context()
-	source, inputs := archiveFixture(t)
-	require.NoError(t, os.RemoveAll(inputs))
-	index, err := OpenIndex(ctx, source, t.TempDir(), nil)
-	require.NoError(t, err)
-	t.Cleanup(func() { require.NoError(t, index.Close()) })
-	sources, err := index.Sources(ctx, "", 10)
-	require.NoError(t, err)
-	var claude Source
-	for _, item := range sources {
-		if item.Root.Provider == "claude" {
-			claude = item
-		}
-	}
-	require.NotEmpty(t, claude.ManifestID)
-	owner := db.ArchiveSessionProvenance{ArchiveSourceProvenance: index.provenance(claude), NativeSessionID: "019eb791-cf7d-75c1-8439-9ed74c122e02"}
-	// Duplicate configuration and an unavailable equivalent membership do not
-	// make the configured, verified snapshot ambiguous.
-	other := owner
-	other.Attachment.SnapshotID = "unconfigured"
-	second := source
-	second.Name = "second"
-	duplicate := []config.ArchiveSource{source, second}
-	tree, primary, chosen, err := MaterializeSnapshot(ctx, duplicate, []db.ArchiveSessionProvenance{other, owner}, "claude", 512<<20)
-	require.NoError(t, err)
-	assert.Equal(t, owner.Attachment, chosen)
-	name, err := tree.EntryPath(primary)
-	require.NoError(t, err)
-	data, err := os.ReadFile(name)
-	require.NoError(t, err)
-	assert.Contains(t, string(data), "saved Claude question")
-	require.NoError(t, tree.Cleanup())
-	for _, tc := range []struct {
-		name   string
-		change func(*db.ArchiveSessionProvenance)
-		want   string
-	}{
-		{"archive", func(p *db.ArchiveSessionProvenance) { p.Source.ArchiveID = "wrong" }, "snapshot archive identity differs"},
-		{"root", func(p *db.ArchiveSessionProvenance) { p.Source.RootID = "wrong" }, "snapshot source ownership"},
-		{"manifest", func(p *db.ArchiveSessionProvenance) { p.ManifestID = "wrong" }, "snapshot source ownership"},
-		{"session", func(p *db.ArchiveSessionProvenance) { p.NativeSessionID = "wrong" }, "snapshot session ownership differs"},
-		{"repository", func(p *db.ArchiveSessionProvenance) { p.Attachment.RepositoryID = "wrong" }, "owning snapshot is not configured"},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			modified := owner
-			tc.change(&modified)
-			_, _, _, err := MaterializeSnapshot(t.Context(), []config.ArchiveSource{source}, []db.ArchiveSessionProvenance{modified}, "claude", 512<<20)
-			require.ErrorContains(t, err, tc.want)
-		})
-	}
-}
-
 func TestMaterializeSnapshotRejectsNewerInventory(t *testing.T) {
 	source, inputs := archiveFixture(t)
 	broken := invalidIndexSnapshot(t, source, inputs, "inventory version")
@@ -128,6 +75,10 @@ func TestSelectedInventoryAuthorityAndScope(t *testing.T) {
 				want = "b"
 			}
 			assert.Equal(t, strings.Repeat(want, 64), entries[1].Objects[0].SHA256)
+			_, err = conn.Exec(`INSERT INTO raw_archive_files VALUES(?,?,?,?,?,?)`, "root", "project/id/subagents/corrupt.json", strings.Repeat("a", 64), 1, 1, 2)
+			require.NoError(t, err)
+			_, err = selectedInventory(t.Context(), conn, "root", primary, "project/id/")
+			require.Error(t, err)
 		})
 	}
 }
@@ -147,7 +98,7 @@ func TestMaterializeSnapshotCaptureLayouts(t *testing.T) {
 			dbtest.WriteTestFile(t, primary, []byte(content))
 			dbtest.WriteTestFile(t, filepath.Join(projects, "project", id, "tool-results", "tool.txt"), []byte("tool"))
 			dbtest.WriteTestFile(t, filepath.Join(projects, "project", id, "subagents", "meta.json"), []byte("metadata"))
-			child := testjsonl.NewSessionBuilder().AddClaudeUserWithSessionID("2026-01-01T00:00:00Z", "selected child", "agent-reviewer").String()
+			child := testjsonl.NewSessionBuilder().AddClaudeUserWithSessionID("2026-01-01T00:01:00Z", "selected child", "agent-reviewer").String()
 			dbtest.WriteTestFile(t, filepath.Join(projects, "project", id, "subagents", "agent-reviewer.jsonl"), []byte(child))
 			otherChild := testjsonl.NewSessionBuilder().AddClaudeUserWithSessionID("2026-01-01T00:00:00Z", "sibling child", "agent-reviewer").String()
 			dbtest.WriteTestFile(t, filepath.Join(projects, "project", "00000000-0000-4000-8000-000000000000", "subagents", "agent-reviewer.jsonl"), []byte(otherChild))
@@ -163,12 +114,19 @@ func TestMaterializeSnapshotCaptureLayouts(t *testing.T) {
 			sources, err := index.Sources(t.Context(), "", 100)
 			require.NoError(t, err)
 			var owner db.ArchiveSessionProvenance
+			grouped := false
 			for _, item := range sources {
+				// Capture groups same-agent continuations into one child manifest.
+				if strings.Contains(string(item.CanonicalJSON), id+"/subagents/agent-reviewer.jsonl") && strings.Contains(string(item.CanonicalJSON), "00000000-0000-4000-8000-000000000000/subagents/agent-reviewer.jsonl") {
+					grouped = true
+					assert.NotContains(t, item.SourceKey, id+"/subagents/")
+				}
 				if item.Root.Provider == "claude" && strings.HasSuffix(item.SourceKey, id+".jsonl") {
 					owner = db.ArchiveSessionProvenance{ArchiveSourceProvenance: index.provenance(item), NativeSessionID: id}
 				}
 			}
 			require.NotEmpty(t, owner.ManifestID)
+			require.True(t, grouped, "capture must group both parent directories")
 			scratch := t.TempDir()
 			t.Setenv("TMPDIR", scratch)
 			t.Setenv("TMP", scratch)
@@ -184,6 +142,8 @@ func TestMaterializeSnapshotCaptureLayouts(t *testing.T) {
 			}
 			_, err = tree.EntryPath(strings.TrimSuffix(selected, id+".jsonl") + "sibling/subagents/meta.json")
 			require.Error(t, err)
+			_, err = tree.EntryPath(strings.TrimSuffix(selected, id+".jsonl") + "00000000-0000-4000-8000-000000000000/subagents/agent-reviewer.jsonl")
+			require.Error(t, err)
 			require.NoError(t, tree.Cleanup())
 			_, _, _, err = MaterializeSnapshot(t.Context(), []config.ArchiveSource{source}, []db.ArchiveSessionProvenance{owner}, "claude", 1)
 			require.Error(t, err)
@@ -195,10 +155,11 @@ func TestMaterializeSnapshotCaptureLayouts(t *testing.T) {
 }
 
 func TestMaterializeSnapshotEquivalentCandidates(t *testing.T) {
-	source, _ := archiveFixture(t)
+	source, inputs := archiveFixture(t)
+	require.NoError(t, os.RemoveAll(inputs))
 	index, err := OpenIndex(t.Context(), source, t.TempDir(), nil)
 	require.NoError(t, err)
-	defer index.Close()
+	t.Cleanup(func() { require.NoError(t, index.Close()) })
 	sources, err := index.Sources(t.Context(), "", 10)
 	require.NoError(t, err)
 	var owner db.ArchiveSessionProvenance
@@ -208,13 +169,48 @@ func TestMaterializeSnapshotEquivalentCandidates(t *testing.T) {
 		}
 	}
 	require.NotEmpty(t, owner.ManifestID)
+	ctx := t.Context()
+	// Duplicate configuration and an unavailable equivalent membership do not
+	// make the configured, verified snapshot ambiguous.
+	other := owner
+	other.Attachment.SnapshotID = "unconfigured"
+	second := source
+	second.Name = "second"
+	duplicate := []config.ArchiveSource{source, second}
+	tree, primary, chosen, err := MaterializeSnapshot(ctx, duplicate, []db.ArchiveSessionProvenance{other, owner}, "claude", 512<<20)
+	require.NoError(t, err)
+	assert.Equal(t, owner.Attachment, chosen)
+	name, err := tree.EntryPath(primary)
+	require.NoError(t, err)
+	data, err := os.ReadFile(name)
+	require.NoError(t, err)
+	assert.Contains(t, string(data), "saved Claude question")
+	require.NoError(t, tree.Cleanup())
+	for _, tc := range []struct {
+		name   string
+		change func(*db.ArchiveSessionProvenance)
+		want   string
+	}{
+		{"archive", func(p *db.ArchiveSessionProvenance) { p.Source.ArchiveID = "wrong" }, "snapshot archive identity differs"},
+		{"root", func(p *db.ArchiveSessionProvenance) { p.Source.RootID = "wrong" }, "snapshot source ownership"},
+		{"manifest", func(p *db.ArchiveSessionProvenance) { p.ManifestID = "wrong" }, "snapshot source ownership"},
+		{"session", func(p *db.ArchiveSessionProvenance) { p.NativeSessionID = "wrong" }, "snapshot session ownership differs"},
+		{"repository", func(p *db.ArchiveSessionProvenance) { p.Attachment.RepositoryID = "wrong" }, "owning snapshot is not configured"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			modified := owner
+			tc.change(&modified)
+			_, _, _, err := MaterializeSnapshot(t.Context(), []config.ArchiveSource{source}, []db.ArchiveSessionProvenance{modified}, "claude", 512<<20)
+			require.ErrorContains(t, err, tc.want)
+		})
+	}
 	wrongRepo := owner
 	wrongRepo.Attachment.RepositoryID = "different-repository"
 	missing := owner
 	missing.Attachment.SnapshotID = "20000101T000000Z-00000000000000000000000000000000"
 	missingSource := source
 	missingSource.Name, missingSource.Snapshot = "missing", missing.Attachment.SnapshotID
-	tree, _, chosen, err := MaterializeSnapshot(t.Context(), []config.ArchiveSource{missingSource, source}, []db.ArchiveSessionProvenance{wrongRepo, missing, owner}, "claude", 512<<20)
+	tree, _, chosen, err = MaterializeSnapshot(t.Context(), []config.ArchiveSource{missingSource, source}, []db.ArchiveSessionProvenance{wrongRepo, missing, owner}, "claude", 512<<20)
 	require.NoError(t, err)
 	assert.Equal(t, owner.Attachment, chosen)
 	require.NoError(t, tree.Cleanup())
