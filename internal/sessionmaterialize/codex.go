@@ -30,30 +30,52 @@ func materializeCodex(ctx context.Context, cfg config.Config, database *db.DB, s
 	if !ok || !capture.ValidUUID(thread) {
 		return Result{}, errors.New("invalid native Codex session identity")
 	}
+	var owners []db.ArchiveSessionProvenance
+	var err error
 	if database != nil {
-		owners, err := database.ArchiveSessionOwners(ctx, session.ID)
+		owners, err = database.ArchiveSessionOwners(ctx, session.ID)
 		if err != nil {
 			return Result{}, err
 		}
-		if len(owners) > 0 {
-			if owners[0].NativeSessionID != raw || owners[0].Source.DeviceID != session.Machine {
-				return Result{}, errors.New("archive session identity differs")
-			}
-			var pages []codexPage
-			snapshot, err := archivesource.ReadCodexSnapshot(ctx, cfg.ArchiveSources, owners, maxSourceBytes, func(root string, names []string, read func(context.Context, string, int64) ([]byte, error)) error {
-				var err error
-				archived := make(map[string]bool)
-				for _, name := range names {
-					archived[name] = codexArchived(root, name)
-				}
-				pages, err = codexLineage(ctx, thread, names, archived, read)
-				return err
-			})
-			if err != nil {
-				return Result{}, fmt.Errorf("reading native Codex transcript: %w", err)
-			}
-			return installCodex(ctx, cwd, "snapshot:"+snapshot, session.ID, pages)
+	}
+	owners, err = matchingArchiveOwners(session, owners)
+	if err != nil {
+		return Result{}, err
+	}
+	retained, err := useRetained(ctx, cfg, database, session, owners)
+	if err != nil {
+		return Result{}, err
+	}
+	if retained || len(owners) > 0 {
+		if len(owners) > 0 && (owners[0].NativeSessionID != raw || owners[0].Source.DeviceID != session.Machine) {
+			return Result{}, errors.New("archive session identity differs")
 		}
+		var pages []codexPage
+		use := func(root string, names []string, read func(context.Context, string, int64) ([]byte, error)) error {
+			archived := make(map[string]bool)
+			for _, name := range names {
+				archived[name] = codexArchived(root, name)
+			}
+			var err error
+			pages, err = codexLineage(ctx, thread, names, archived, read)
+			return err
+		}
+		var source string
+		if retained {
+			stored := ""
+			if session.FilePath != nil {
+				stored = *session.FilePath
+			}
+			_, _, source, err = archivesource.Retained(ctx, cfg, database, session.ID, session.Machine, raw, "codex", stored, owners, maxSourceBytes, use)
+		} else {
+			var snapshot string
+			snapshot, err = archivesource.ReadCodexSnapshot(ctx, cfg.ArchiveSources, owners, maxSourceBytes, use)
+			source = "snapshot:" + snapshot
+		}
+		if err != nil {
+			return Result{}, fmt.Errorf("reading native Codex transcript: %w", err)
+		}
+		return installCodex(ctx, cwd, source, session.ID, pages)
 	}
 	source, err := storedSource(session, host)
 	if err != nil {

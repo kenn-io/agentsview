@@ -2167,17 +2167,21 @@ agentsview session parent <id> <parent>  # record the launching session
 or Codex transcript for an existing local checkout, with native companions for
 Claude and the required history pages for Codex, then prints a resume command.
 It reads the local archive without starting a daemon and finds originals in
-configured local roots or remote mirrors. Claude and
-Codex also support configured S3 roots and snapshot attachments that own the
-session. Local retained and directory captures are not yet supported. Pi has
-no retained captures. Claude archive-only fork sessions cannot be installed;
-select a session with a native Claude UUID. The transcript and companions
+configured local roots or remote mirrors. Claude and Codex also support
+configured S3 roots, snapshot attachments, local retained archives, and
+configured directory attachments that own the session. Pi has no retained
+captures. Retained and directory recovery needs an idle, prepared raw vault.
+Stop the owner and retry if the vault is busy; an unprepared vault or an
+uncheckpointed directory database requires its owner to prepare it first.
+Claude archive-only fork sessions cannot be installed; select a session with a
+native Claude UUID. The transcript and companions
 together are limited to 512 MiB and are buffered in memory. Snapshot recovery
 also needs scratch space for a saved archive database of up to 16 GiB. It holds
 a snapshot repository lease; if the repository is busy, retry after the other
 operation finishes. `--server`, `--server-token-file`, and `--pg` are unavailable.
 Use `--json` for the source, installed paths, checkout, command, and installed
-or unchanged status. For snapshot recovery, the source is `snapshot:<id>`.
+or unchanged status. Archive recovery reports `snapshot:<id>`,
+`directory:<archive-id>`, or `retained:<archive-id>` as its source.
 Claude's native home and supported environment overrides determine its
 destination. Pi uses its native agent directory, or its session directory from
 settings or `PI_CODING_AGENT_SESSION_DIR` (which takes priority). For Pi

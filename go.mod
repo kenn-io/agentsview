@@ -190,3 +190,6 @@ require (
 )
 
 tool gotest.tools/gotestsum
+
+// Temporary draft dependency: replace after the upstream Docbank release.
+replace go.kenn.io/docbank => github.com/salmonumbrella/docbank v0.0.0-20261112190712-b46aaa365cd2
