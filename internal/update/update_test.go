@@ -10,11 +10,15 @@ import (
 	"path/filepath"
 	"runtime"
 	"strconv"
+	"strings"
 	"sync/atomic"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"go.kenn.io/agentsview/internal/releasesig"
+	"go.kenn.io/agentsview/internal/releasesig/releasesigtest"
 )
 
 func TestIsDevBuildVersion(t *testing.T) {
@@ -473,4 +477,108 @@ func createTestTarGz(
 	require.NoError(t, tw.WriteHeader(header))
 	_, err = tw.Write(data)
 	require.NoError(t, err)
+}
+
+func TestFetchVerifiedChecksum(t *testing.T) {
+	const asset = "agentsview_9.9.9_linux_amd64.tar.gz"
+	const sum = "a49876edf9fe8d0641978afe69d776540175852a446a5d42a6d439215eb0dc45"
+	sums := []byte(sum + "  " + asset + "\n" +
+		strings.Repeat("0", 64) + "  agentsview_9.9.9_darwin_arm64.tar.gz\n")
+
+	releaseKey := releasesigtest.NewKey(t)
+	keys, err := releasesig.ParseKeys(releaseKey.PEM)
+	require.NoError(t, err)
+	goodSig := releaseKey.Sign(t, sums)
+
+	tampered := []byte(strings.Repeat("f", 64) + "  " + asset + "\n")
+	otherKeySig := releasesigtest.NewKey(t).Sign(t, sums)
+
+	tests := []struct {
+		name       string
+		sums       []byte
+		sig        []byte // nil serves a 404
+		asset      string
+		wantErrIs  error
+		wantErrSub string
+	}{
+		{name: "signed by a release key", sums: sums, sig: goodSig, asset: asset},
+		{name: "signature missing", sums: sums, asset: asset, wantErrSub: "SHA256SUMS.sig"},
+		{name: "SHA256SUMS altered after signing", sums: tampered, sig: goodSig, asset: asset, wantErrIs: releasesig.ErrBadSignature},
+		{name: "signed by another key", sums: sums, sig: otherKeySig, asset: asset, wantErrIs: releasesig.ErrBadSignature},
+		{name: "no entry for this platform", sums: sums, sig: goodSig, asset: "agentsview_9.9.9_windows_arm64.zip", wantErrSub: "no entry"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			srv := httptest.NewServer(http.HandlerFunc(
+				func(w http.ResponseWriter, r *http.Request) {
+					switch r.URL.Path {
+					case "/v9.9.9/SHA256SUMS":
+						_, _ = w.Write(tt.sums)
+					case "/v9.9.9/SHA256SUMS.sig":
+						if tt.sig == nil {
+							http.NotFound(w, r)
+							return
+						}
+						_, _ = w.Write(tt.sig)
+					default:
+						http.NotFound(w, r)
+					}
+				},
+			))
+			defer srv.Close()
+
+			got, err := fetchVerifiedChecksum(
+				t.Context(), keys, srv.URL+"/v9.9.9/SHA256SUMS", tt.asset,
+			)
+			switch {
+			case tt.wantErrIs != nil:
+				require.ErrorIs(t, err, tt.wantErrIs)
+				assert.Empty(t, got)
+			case tt.wantErrSub != "":
+				require.Error(t, err)
+				assert.Contains(t, err.Error(), tt.wantErrSub)
+				assert.Empty(t, got)
+			default:
+				require.NoError(t, err)
+				assert.Equal(t, sum, got)
+			}
+		})
+	}
+}
+
+func TestFetchVerifiedChecksumRejectsOversizedSHA256SUMS(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(
+		func(w http.ResponseWriter, _ *http.Request) {
+			_, _ = w.Write(make([]byte, maxChecksumsBytes+1))
+		},
+	))
+	defer srv.Close()
+
+	keys, err := releasesig.ParseKeys(releasesigtest.NewKey(t).PEM)
+	require.NoError(t, err)
+	_, err = fetchVerifiedChecksum(
+		t.Context(), keys, srv.URL+"/SHA256SUMS", "agentsview.tar.gz",
+	)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "larger than")
+}
+
+func TestPerformUpdateRefusesUnverifiedChecksum(t *testing.T) {
+	var downloads atomic.Int32
+	srv := httptest.NewServer(http.HandlerFunc(
+		func(w http.ResponseWriter, _ *http.Request) {
+			downloads.Add(1)
+			_, _ = w.Write([]byte("binary"))
+		},
+	))
+	defer srv.Close()
+
+	err := PerformUpdate(t.Context(), &UpdateInfo{
+		AssetName:   "agentsview_9.9.9_linux_amd64.tar.gz",
+		DownloadURL: srv.URL + "/agentsview_9.9.9_linux_amd64.tar.gz",
+		checksumErr: releasesig.ErrBadSignature,
+	}, nil)
+	require.ErrorIs(t, err, releasesig.ErrBadSignature)
+	assert.Contains(t, err.Error(), "refusing unverified binary")
+	assert.Zero(t, downloads.Load(), "nothing is downloaded without a verified checksum")
 }

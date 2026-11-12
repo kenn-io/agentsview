@@ -34,6 +34,14 @@ The latest release is
 
 **Improvements**
 
+- `agentsview update` now checks the release's `SHA256SUMS.sig` against the
+  AgentsView release key built into the binary and refuses to install a
+  release whose signature is missing or does not match. Before, it checked
+  only the unsigned `SHA256SUMS`, which caught damaged downloads but not a
+  tampered release. To check release files yourself with OpenSSL, the GitHub
+  CLI, or cosign, see
+  [Verify a download](/docs/quickstart/#verify-a-download).
+
 - `agentsview sync` no longer prints a deprecation warning. It stays a supported
   shortcut for `agentsview source sync` and is listed in root help again.
 

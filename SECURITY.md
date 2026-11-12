@@ -65,6 +65,7 @@ risk via documented flags and config.
 | Browser → HTTP server             | Host-header allowlist + CORS + CSP + X-Frame-Options enforced       | DNS-rebinding, framing, and cross-origin defenses.                   |
 | agentsview → PostgreSQL (pg push) | TLS required for non-loopback hosts                                 | Plaintext rejected unless `allow_insecure = true` is set explicitly. |
 | agentsview → update endpoint      | One-way outbound, opt-out                                           | Disable with `--no-update-check`.                                    |
+| Self-update download              | `SHA256SUMS.sig` checked against a compiled-in release key          | The archive must match the signed `SHA256SUMS`.                      |
 | agentsview → LiteLLM pricing      | One-way outbound, on-demand                                         | Public JSON fetched from GitHub raw; no session data sent.           |
 
 ## Data at rest
@@ -129,6 +130,13 @@ complete description of the system once optional features are in use.
 - **Update check.** On startup agentsview makes one outbound HTTPS request to
   check for new releases. No session data is sent; the request is opt-out via
   `--no-update-check`.
+- **Self-update.** `agentsview update` downloads the release archive from
+  GitHub over HTTPS. It installs the archive only when its checksum matches
+  the release's `SHA256SUMS` and `SHA256SUMS.sig` is a valid signature over
+  that file by a release public key compiled into the running binary. A
+  missing or invalid signature stops the install. See
+  [Verify a download](docs/quickstart.md#verify-a-download) to check release
+  files by hand.
 
 ## Browser-facing hardening
 
