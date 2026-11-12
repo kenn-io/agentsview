@@ -19,6 +19,9 @@ writes. In addition to normal table access, installation requires `CREATE` on
 the schema and `TRIGGER` on the watched tables. Installation takes a
 `SHARE ROW EXCLUSIVE` lock on those tables until it commits: reads continue, and
 writes wait. CockroachDB skips this journal.
+Usage cache invalidation relies on `pg push` updating each parent session when
+it changes that session's messages. Direct SQL message edits must also change
+the parent session's `updated_at` to invalidate cached usage.
 Activity reuse needs `SELECT` on `usage_session_changes` for `pg serve`
 roles given access later.
 
