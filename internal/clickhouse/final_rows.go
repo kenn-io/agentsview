@@ -55,6 +55,8 @@ type partInfo struct {
 	// for none.
 	mutation int64
 	rows     uint64
+	// files is the part's hash_of_all_files.
+	files string
 }
 
 // dataVersion is the block number the part's rows are current as of: its
@@ -193,6 +195,46 @@ type finalRowsChange struct {
 	rows   map[string]finalFields
 	set    map[string]finalFields
 	del    []string
+	// rowParts names the parts that gave a full read of kept rows at
+	// least one returned row; see settle.
+	rowParts map[string]bool
+}
+
+// settle checks the change against fresh, the table's parts after the
+// reads, and reports whether the change still describes the rows of its
+// parts. The reads named their parts, so a part that went inactive
+// before a read started gave it no rows. A part still active in fresh
+// was active through every read. A full read of kept rows lists the parts
+// its returned rows came from. A vanished part that returned a row was
+// read, so it stays. A vanished part that returned none changed no
+// returned row whether or not the read saw it, so the change drops it
+// from its parts and still holds; a later check reads the keys of the
+// part its rows moved to. Any other change with a vanished part may miss
+// rows, and settle reports false.
+func (c *finalRowsChange) settle(fresh tableParts) bool {
+	active := make(map[string]partInfo, len(fresh.parts))
+	for _, p := range fresh.parts {
+		active[p.name] = p
+	}
+	var dropped []string
+	for name, p := range c.parts {
+		if active[name] == p {
+			continue
+		}
+		switch {
+		case !c.full || c.rowParts == nil:
+			return false
+		case !c.rowParts[name]:
+			dropped = append(dropped, name)
+		}
+	}
+	if len(dropped) > 0 {
+		c.parts = maps.Clone(c.parts)
+		for _, name := range dropped {
+			delete(c.parts, name)
+		}
+	}
+	return true
 }
 
 func (f *finalRows) apply(c *finalRowsChange) {
@@ -603,10 +645,14 @@ func (f *finalRows) finalColumns() string {
 func (s *Store) readFinalKeys(ctx context.Context, f *finalRows, keys, names []string) (map[string]finalKeyRow, error) {
 	return s.scanFinalKeys(f.queryContext(ctx, keys), finalRowsQueryMark+`SELECT `+f.finalColumns()+` FROM `+
 		f.spec.table+` WHERE `+f.filter()+` AND has({final_keys:Array(String)}, `+f.spec.key+`) AND `+
-		partsClause(names), f.spec.fields != "")
+		partsClause(names), f.spec.fields != "", nil)
 }
 
-func (s *Store) scanFinalKeys(ctx context.Context, query string, withFields bool) (map[string]finalKeyRow, error) {
+// scanFinalKeys scans the rows of query. With rowParts set, the query
+// selects _part last and rowParts records each part a row came from.
+func (s *Store) scanFinalKeys(
+	ctx context.Context, query string, withFields bool, rowParts map[string]bool,
+) (map[string]finalKeyRow, error) {
 	rows, err := s.queryContext(ctx, query)
 	if err != nil {
 		return nil, fmt.Errorf("reading %s: %w", query, err)
@@ -614,14 +660,20 @@ func (s *Store) scanFinalKeys(ctx context.Context, query string, withFields bool
 	defer rows.Close()
 	out := map[string]finalKeyRow{}
 	for rows.Next() {
-		var key, hash string
+		var key, hash, part string
 		var r finalKeyRow
 		targets := []any{&key, &hash}
 		if withFields {
 			targets = append(targets, &r.fields.pushVersion, &r.fields.text, &r.fields.flag)
 		}
+		if rowParts != nil {
+			targets = append(targets, &part)
+		}
 		if err := rows.Scan(targets...); err != nil {
 			return nil, fmt.Errorf("scanning tracked key: %w", err)
+		}
+		if rowParts != nil {
+			rowParts[part] = true
 		}
 		if r.hash, err = parseRowHash(hash); err != nil {
 			return nil, fmt.Errorf("reading tracked key hash: %w", err)
@@ -651,8 +703,15 @@ func (s *Store) readFinalRows(ctx context.Context, f *finalRows, cur map[string]
 		where += " AND " + partsClause(slices.Collect(maps.Keys(cur)))
 	}
 	if f.spec.fields != "" {
-		rows, err := s.scanFinalKeys(f.queryContext(ctx, nil), finalRowsQueryMark+`SELECT `+f.finalColumns()+
-			` FROM `+f.spec.table+` WHERE `+where, true)
+		columns := f.finalColumns()
+		if restrict {
+			// The parts the rows came from let settle keep the read when
+			// one of cur's parts vanished as it ran.
+			change.rowParts = map[string]bool{}
+			columns += ", _part"
+		}
+		rows, err := s.scanFinalKeys(f.queryContext(ctx, nil), finalRowsQueryMark+`SELECT `+columns+
+			` FROM `+f.spec.table+` WHERE `+where, true, change.rowParts)
 		if err != nil {
 			return nil, err
 		}
