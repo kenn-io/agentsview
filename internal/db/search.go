@@ -110,7 +110,11 @@ func systemPrefixSQL(
 	}
 	parts = append(parts, systemReminderTerminalSQL(trimmed, dialect))
 	parts = append(parts, goalContextPrefixSQL(trimmed, dialect))
-	guard := systemPrefixFirstCPGuardSQL(contentCol, dialect) + " AND "
+	guard := ""
+	// The DuckDB guard showed no reliable gain and a possible slowdown.
+	if dialect != systemPrefixDuckDB {
+		guard = systemPrefixFirstCPGuardSQL(contentCol, dialect) + " AND "
+	}
 	return "NOT (" + roleCol + " = 'user' AND " + guard + "(" +
 		strings.Join(parts, " OR ") + "))"
 }
