@@ -155,6 +155,7 @@ func TestS3ConfiguredSource(t *testing.T) {
 	const base = "host/raw/claude/project/" + id
 	var extraKey atomic.Value
 	extraKey.Store("")
+	var companionGets atomic.Int32
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Query().Get("list-type") == "2" {
 			assert.True(t, strings.HasSuffix(r.URL.Query().Get("prefix"), "/"))
@@ -171,6 +172,7 @@ func TestS3ConfiguredSource(t *testing.T) {
 			return
 		}
 		if r.URL.Path == "/test/"+base+"/tool-results/result.txt" || r.URL.Path == "/test/"+base+"/tool-results/result2.txt" || r.URL.Path == "/test/"+extraKey.Load().(string) {
+			companionGets.Add(1)
 			_, _ = io.WriteString(w, "tool")
 			return
 		}
@@ -197,8 +199,10 @@ func TestS3ConfiguredSource(t *testing.T) {
 	assert.Equal(t, "tool", string(files[1].data))
 	assert.Equal(t, "tool-results/result2.txt", files[2].rel)
 	assert.Equal(t, "tool", string(files[2].data))
+	companionGets.Store(0)
 	_, err = readS3Source(t.Context(), cfg, "host", root+"/project/"+id+".jsonl", id, int64(len(contents)+len("tool")+3))
 	require.ErrorContains(t, err, "exceeds size limit")
+	assert.EqualValues(t, 1, companionGets.Load())
 	home := t.TempDir()
 	t.Setenv("CLAUDE_CONFIG_DIR", home)
 	t.Setenv("CLAUDE_CODE_PROJECT_DIR_NAME", "project")
@@ -327,4 +331,28 @@ func TestMaterializeMirrorRejectsLinkedProjectOutsideMirror(t *testing.T) {
 	session := &db.Session{ID: "remote~" + id, Agent: "claude", Machine: "remote", FilePath: &stored}
 	_, err = Materialize(t.Context(), cfg, session, t.TempDir())
 	require.ErrorContains(t, err, "source identity or root mismatch")
+}
+
+func TestReadFileBudgetAndInvalidCompanionPath(t *testing.T) {
+	name := filepath.Join(t.TempDir(), "file")
+	require.NoError(t, os.WriteFile(name, []byte("data"), 0o600))
+	got, _, err := readFile(t.Context(), name, 4)
+	require.NoError(t, err)
+	assert.Equal(t, "data", string(got))
+	_, _, err = readFile(t.Context(), name, 3)
+	require.ErrorIs(t, err, errSourceSize)
+	_, _, err = readFile(t.Context(), name, 0)
+	require.ErrorIs(t, err, errSourceSize)
+	const id = "12345678-1234-1234-1234-123456789abc"
+	root := t.TempDir()
+	primary := filepath.Join(root, id+".jsonl")
+	require.NoError(t, os.WriteFile(primary, []byte("x"), 0o600))
+	companion := filepath.Join(root, id, "tool-results")
+	require.NoError(t, os.MkdirAll(filepath.Dir(companion), 0o700))
+	if err := os.Symlink(t.TempDir(), companion); err != nil {
+		t.Skipf("symlink unavailable: %v", err)
+	}
+	_, err = readLocalSource(t.Context(), root, primary, id, 32)
+	require.ErrorContains(t, err, "invalid session file")
+	require.ErrorContains(t, err, companion)
 }

@@ -45,3 +45,19 @@ func TestPublishPreflightsAllDestinations(t *testing.T) {
 	_, err = os.Stat(dependency)
 	assert.ErrorIs(t, err, os.ErrNotExist)
 }
+
+func TestPublishRejectsOversizedAndEqualLengthConflicts(t *testing.T) {
+	name := filepath.Join(t.TempDir(), "destination")
+	f, err := os.Create(name)
+	require.NoError(t, err)
+	require.NoError(t, f.Truncate(1<<20))
+	require.NoError(t, f.Close())
+	_, err = publishFiles(t.Context(), []installFile{{name, []byte("tiny")}})
+	require.ErrorContains(t, err, "destination differs")
+	info, err := os.Stat(name)
+	require.NoError(t, err)
+	assert.EqualValues(t, 1<<20, info.Size())
+	require.NoError(t, os.WriteFile(name, []byte("else"), 0o600))
+	_, err = publishFiles(t.Context(), []installFile{{name, []byte("tiny")}})
+	require.ErrorContains(t, err, "destination differs")
+}

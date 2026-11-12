@@ -2174,7 +2174,9 @@ limited to 512 MiB. `--server`, `--server-token-file`, and `--pg` are
 unavailable. Use `--json` for the source, installed paths, checkout, command,
 and installed or unchanged status. Claude's native home and supported
 environment overrides determine the destination, independently of discovery
-roots.
+roots. Local companions must resolve inside the configured root when the
+transcript is inside it; an externally linked project is confined to that
+project. Remote mirror files must remain inside the mirror root.
 An explicitly set `CLAUDE_CONFIG_DIR` must be an absolute path; the printed
 command preserves its spelling so Claude uses the same credentials.
 

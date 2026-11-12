@@ -34,7 +34,7 @@ func publishFiles(ctx context.Context, files []installFile) (changed bool, err e
 		if err := ctx.Err(); err != nil {
 			return false, err
 		}
-		if same, err := identicalDestination(file); err != nil {
+		if same, err := identicalDestination(ctx, file); err != nil {
 			return false, err
 		} else if same {
 			continue
@@ -64,7 +64,7 @@ func publishFiles(ctx context.Context, files []installFile) (changed bool, err e
 			return changed, err
 		}
 		if err := atomicfile.RenameNoReplace(temps[i], file.path); err != nil {
-			if same, cmp := identicalDestination(file); cmp != nil {
+			if same, cmp := identicalDestination(ctx, file); cmp != nil {
 				return changed, cmp
 			} else if !same {
 				return changed, err
@@ -76,7 +76,7 @@ func publishFiles(ctx context.Context, files []installFile) (changed bool, err e
 	return changed, nil
 }
 
-func identicalDestination(file installFile) (bool, error) {
+func identicalDestination(ctx context.Context, file installFile) (bool, error) {
 	info, err := os.Lstat(file.path)
 	if errors.Is(err, os.ErrNotExist) {
 		return false, nil
@@ -87,7 +87,13 @@ func identicalDestination(file installFile) (bool, error) {
 	if !info.Mode().IsRegular() {
 		return false, fmt.Errorf("destination is not a regular file: %s", file.path)
 	}
-	old, err := os.ReadFile(file.path)
+	if info.Size() != int64(len(file.data)) {
+		return false, fmt.Errorf("destination differs: %s", file.path)
+	}
+	old, _, err := readFile(ctx, file.path, int64(len(file.data)))
+	if errors.Is(err, errSourceSize) {
+		return false, fmt.Errorf("destination differs: %s", file.path)
+	}
 	if err != nil {
 		return false, err
 	}

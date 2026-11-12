@@ -22,6 +22,8 @@ import (
 
 const maxSourceBytes = 512 << 20
 
+var errSourceSize = errors.New("native source exceeds size limit")
+
 type sourceFile struct {
 	rel  string
 	data []byte
@@ -255,7 +257,7 @@ func readLocalSource(ctx context.Context, root, name, id string, limit int64) ([
 				return nil
 			}
 			if !entry.Type().IsRegular() || !within(root, name) {
-				return errors.New("invalid session file")
+				return fmt.Errorf("invalid session file: %s", name)
 			}
 			rel, err := filepath.Rel(base, name)
 			if err != nil {
@@ -267,9 +269,6 @@ func readLocalSource(ctx context.Context, root, name, id string, limit int64) ([
 			}
 			snapshots[name] = info
 			total += int64(len(data))
-			if total > limit {
-				return errors.New("native source exceeds size limit")
-			}
 			out = append(out, sourceFile{rel: filepath.ToSlash(rel), data: data})
 			return nil
 		})
@@ -299,6 +298,9 @@ func readFile(ctx context.Context, name string, limit int64) ([]byte, os.FileInf
 	if err != nil {
 		return nil, nil, err
 	}
+	if before.Size() > limit {
+		return nil, nil, errSourceSize
+	}
 	data, err := readBounded(ctxio.Reader{Context: ctx, Reader: f}, limit)
 	if err != nil {
 		return nil, nil, err
@@ -312,7 +314,7 @@ func readBounded(r io.Reader, limit int64) ([]byte, error) {
 		return nil, err
 	}
 	if int64(len(data)) > limit {
-		return nil, errors.New("native source exceeds size limit")
+		return nil, errSourceSize
 	}
 	return data, nil
 }
@@ -373,6 +375,9 @@ func readS3Source(ctx context.Context, cfg config.Config, machine, uri, id strin
 			rel, ok := strings.CutPrefix(obj.URI, base+"/")
 			if _, err := filepath.Localize(rel); !ok || err != nil || !strings.HasPrefix(rel, sub+"/") || strings.Contains(rel, `\`) {
 				return nil, errors.New("unsafe S3 file path")
+			}
+			if obj.Size > limit-total {
+				return nil, fmt.Errorf("cannot read %s: %w", rel, errSourceSize)
 			}
 			data, err := fetch(obj.URI)
 			if err != nil {
