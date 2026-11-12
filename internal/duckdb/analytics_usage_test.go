@@ -2044,21 +2044,12 @@ func TestDuckToolsBoundedRangeGroupsByLocalDay(t *testing.T) {
 			duckModelMessage(id, 1, "assistant", "read", "2005-06-10T12:05:00Z", "model", db.ToolCall{ToolName: "Read", Category: "Read"}),
 		}, DataVersion: 1, ReplaceMessages: true,
 	}})
-	var queries []string
-	previousObserver := analyticsQueryObserver
-	analyticsQueryObserver = func(query string) { queries = append(queries, query) }
-	t.Cleanup(func() { analyticsQueryObserver = previousObserver })
-	response, err := store.GetAnalyticsTools(t.Context(), db.AnalyticsFilter{From: "1990-01-01", To: "2007-12-31", Timezone: "America/New_York"})
+	var visits []readbase.AnalyticsToolVisit
+	filter := db.AnalyticsFilter{From: "1990-01-01", To: "2007-12-31", Timezone: "America/New_York"}
+	err := (analyticsSQL{store}).VisitTools(t.Context(), filter, []string{id}, func(visit readbase.AnalyticsToolVisit) {
+		visits = append(visits, visit)
+	})
 	require.NoError(t, err)
-	assert.Equal(t, 2, response.TotalCalls)
-	require.Len(t, response.Trend, 1)
-	assert.Equal(t, 2, response.Trend[0].ByCat["Read"])
-	var toolQueries int
-	for _, query := range queries {
-		if strings.Contains(query, "FROM tool_calls tc") {
-			toolQueries++
-			assert.NotContains(t, query, "date_trunc('minute'", "the bounded range must group by day")
-		}
-	}
-	assert.Positive(t, toolQueries)
+	require.Len(t, visits, 1)
+	assert.Equal(t, 2, visits[0].Count)
 }
