@@ -67,8 +67,8 @@ func usageChangeJournalSQL() (string, string) {
 	// only the triggers they name, so this one survives their opens.
 	add("trg_sessions_usage_change_group_label", "UPDATE OF session_name", "sessions", "OLD.session_name IS NOT NEW.session_name AND (OLD.group_key!='' OR NEW.group_key!='')", "NEW.id", false)
 	add("trg_sessions_usage_change_delete", "DELETE", "sessions", "", "OLD.id", false)
-	// Transcript writers advance the usage revision when message timestamps,
-	// roles, or models change. Content-length repairs need their own trigger.
+	// Session or transcript revisions cover tool inserts and message metadata.
+	// Tool replacements without a transcript bump delete old calls first.
 	columns = []string{"first_message", "health_score", "health_grade", "outcome", "outcome_confidence", "tool_failure_signal_count", "tool_retry_count", "edit_churn_count", "compaction_count", "mid_task_compaction_count", "context_pressure_max", "quality_signal_version", "short_prompt_count", "unstructured_start", "missing_success_criteria_count", "missing_verification_count", "duplicate_prompt_count", "no_code_context_count", "runaway_tool_loop_count"}
 	changes = make([]string, len(columns))
 	for i, column := range columns {

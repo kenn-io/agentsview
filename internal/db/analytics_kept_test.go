@@ -141,6 +141,30 @@ func TestAnalyticsKeptContentLengthRepair(t *testing.T) {
 	assert.InDelta(t, 20, after.Overall.CharsPerActiveMin, 0)
 }
 
+func TestAnalyticsKeptContentLengthReplacement(t *testing.T) {
+	d := testDB(t)
+	ctx := t.Context()
+	insertSession(t, d, "session", "project", func(s *Session) {
+		s.StartedAt = new("2024-06-01T09:00:00Z")
+		s.MessageCount = 2
+	})
+	messages := []Message{
+		{SessionID: "session", Ordinal: 0, Role: "user", Content: "hello", ContentLength: 5, Timestamp: "2024-06-01T09:00:00Z"},
+		{SessionID: "session", Ordinal: 1, Role: "assistant", Content: "1234567890", ContentLength: 10, Timestamp: "2024-06-01T09:01:00Z"},
+	}
+	insertMessages(t, d, messages...)
+	updateSignals(t, d, "session", SessionSignalUpdate{})
+	before, err := d.GetAnalyticsVelocity(ctx, AnalyticsFilter{})
+	require.NoError(t, err)
+	assert.InDelta(t, 10, before.Overall.CharsPerActiveMin, 0)
+	messages[0].ContentLength = 6
+	messages[1].ContentLength = 20
+	require.NoError(t, d.ReplaceSessionContent(ctx, "session", messages, SessionSignalUpdate{}, nil))
+	after, err := d.GetAnalyticsVelocity(ctx, AnalyticsFilter{})
+	require.NoError(t, err)
+	assert.InDelta(t, 20, after.Overall.CharsPerActiveMin, 0)
+}
+
 func TestAnalyticsKeptToolFactsAfterDialogueRepair(t *testing.T) {
 	d := testDB(t)
 	ctx := t.Context()
