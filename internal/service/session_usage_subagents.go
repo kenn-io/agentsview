@@ -818,6 +818,10 @@ func usageRowBreakdownEntry(
 		WebSearchRequests:        row.WebSearchRequests,
 		Cost:                     cost,
 		HasCost:                  priced,
+		RecordedCost:             row.RecordedCost,
+		// A recorded cost prices a row only as its reported cost.
+		RecordedCostPriced: row.RecordedCost != nil &&
+			row.CostSource == export.CostSourceReported,
 	}
 	sourceSessionID := usageRowSourceSessionID(row)
 	if sourceSessionID != rootID {

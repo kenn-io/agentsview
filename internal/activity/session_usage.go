@@ -12,8 +12,11 @@ type UsagePrice struct {
 	Cost        money.Money
 	CostSource  export.CostSource
 	SessionCost *money.Money
-	Priced      bool
-	Contributes bool
+	// RecordedCost is the cost the agent recorded for the row itself, kept
+	// for comparison whether or not it priced the row.
+	RecordedCost *money.Money
+	Priced       bool
+	Contributes  bool
 }
 
 // SelectSessionUsageRows selects and prices survivors from sorted usage rows.
@@ -79,6 +82,7 @@ func SelectSessionUsageRows(
 			Cost:                pricing.Cost,
 			CostSource:          pricing.CostSource,
 			SessionCost:         pricing.SessionCost,
+			RecordedCost:        pricing.RecordedCost,
 			Priced:              pricing.Priced,
 			Contributes:         pricing.Contributes,
 			Agent:               row.Agent,

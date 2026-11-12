@@ -695,9 +695,13 @@ func (s *Store) GetSessionUsageRows(
 		if priceErr != nil {
 			return activity.UsagePrice{}, priceErr
 		}
+		var recorded *money.Money
+		if r.recordedCost.Valid {
+			recorded = &money.Money{Microdollars: r.recordedCost.Int64}
+		}
 		return activity.UsagePrice{
 			Cost: cost, CostSource: costSource, SessionCost: sessionCost,
-			Priced: priced, Contributes: contributes,
+			RecordedCost: recorded, Priced: priced, Contributes: contributes,
 		}, nil
 	})
 }

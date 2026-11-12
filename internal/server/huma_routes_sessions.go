@@ -659,19 +659,22 @@ type sessionUsageResponse struct {
 	HasCost           bool        `json:"has_cost"`
 	// CostUSD is a deprecated compatibility alias for
 	// Cost.Microdollars/1e6; see db.SessionUsage.CostUSD.
-	CostUSD             *float64                        `json:"cost_usd,omitempty"`
-	CostSource          export.CostSource               `json:"cost_source,omitempty"`
-	AICredits           float64                         `json:"ai_credits,omitzero"`
-	Models              []string                        `json:"models"`
-	UnpricedModels      []string                        `json:"unpriced_models"`
-	BreakdownCount      int                             `json:"breakdown_count"`
-	SubagentCount       int                             `json:"subagent_count,omitzero"`
-	Breakdown           []sessionUsageBreakdownResponse `json:"breakdown"`
-	ServerRunning       bool                            `json:"server_running"`
-	RollupCost          *money.Money                    `json:"rollup_cost,omitempty"`
-	RollupCostSource    export.CostSource               `json:"rollup_cost_source,omitempty"`
-	HasRollupCost       *bool                           `json:"has_rollup_cost,omitempty"`
-	RollupSubagentCount *int                            `json:"rollup_subagent_count,omitempty"`
+	CostUSD        *float64                        `json:"cost_usd,omitempty"`
+	CostSource     export.CostSource               `json:"cost_source,omitempty"`
+	AICredits      float64                         `json:"ai_credits,omitzero"`
+	Models         []string                        `json:"models"`
+	UnpricedModels []string                        `json:"unpriced_models"`
+	BreakdownCount int                             `json:"breakdown_count"`
+	SubagentCount  int                             `json:"subagent_count,omitzero"`
+	Breakdown      []sessionUsageBreakdownResponse `json:"breakdown"`
+	// RecordedCost compares cost with the cost the agent recorded; present
+	// only with breakdown=true and when a row carries a recorded cost.
+	RecordedCost        *db.SessionRecordedCost `json:"recorded_cost,omitempty"`
+	ServerRunning       bool                    `json:"server_running"`
+	RollupCost          *money.Money            `json:"rollup_cost,omitempty"`
+	RollupCostSource    export.CostSource       `json:"rollup_cost_source,omitempty"`
+	HasRollupCost       *bool                   `json:"has_rollup_cost,omitempty"`
+	RollupSubagentCount *int                    `json:"rollup_subagent_count,omitempty"`
 	// PlanUsage carries codex-cloud plan figures. A session with only plan
 	// usage keeps has_token_data and has_cost false.
 	PlanUsage       *db.PlanUsageView       `json:"plan_usage,omitempty"`
@@ -700,6 +703,11 @@ type sessionUsageBreakdownResponse struct {
 	WebSearchRequests        int         `json:"web_search_requests,omitzero"`
 	Cost                     money.Money `json:"cost"`
 	HasCost                  bool        `json:"has_cost"`
+	// RecordedCost is the cost the agent recorded for this row, when it
+	// recorded one; RecordedCostPriced reports that it priced the row
+	// because the catalog has no rate for the model.
+	RecordedCost       *money.Money `json:"recorded_cost,omitempty"`
+	RecordedCostPriced bool         `json:"recorded_cost_priced,omitzero"`
 }
 
 type sessionUsageErrorBody struct {
@@ -743,6 +751,8 @@ func newSessionUsageHumaResponse(usage *db.SessionUsage) sessionUsageResponse {
 			WebSearchRequests:        entry.WebSearchRequests,
 			Cost:                     entry.Cost,
 			HasCost:                  entry.HasCost,
+			RecordedCost:             entry.RecordedCost,
+			RecordedCostPriced:       entry.RecordedCostPriced,
 		})
 	}
 	return sessionUsageResponse{
@@ -762,6 +772,7 @@ func newSessionUsageHumaResponse(usage *db.SessionUsage) sessionUsageResponse {
 		BreakdownCount:    usage.BreakdownCount,
 		SubagentCount:     usage.SubagentCount,
 		Breakdown:         breakdown,
+		RecordedCost:      usage.RecordedCost,
 		ServerRunning:     true,
 		PlanUsage:         usage.PlanUsage.PlanUsageView(),
 		CaptureCoverage:   usage.PlanUsage.CaptureCoverageView(),
@@ -830,6 +841,11 @@ func (s *Server) exactSessionUsage(
 		if rollup == nil {
 			return nil, &sessionUsageError{Status: http.StatusNotFound, Body: sessionUsageErrorBody{Code: "session_not_found", Message: "session not found"}}
 		}
+		// The comparison covers the rows of this response's breakdown, which
+		// is the session's own usage; rollup_* fields carry the subagents.
+		if rollup.Usage.RecordedCost, err = db.SummarizeRecordedCost(rollup.Usage.Breakdown); err != nil {
+			return nil, sessionUsageQueryError(err)
+		}
 		body := newSessionUsageHumaResponse(rollup.Usage)
 		if rollup.HasCost {
 			body.RollupCost = &rollup.Cost
@@ -853,6 +869,11 @@ func (s *Server) exactSessionUsage(
 	}
 	if err != nil {
 		return nil, sessionUsageQueryError(err)
+	}
+	if usage != nil {
+		if usage.RecordedCost, err = db.SummarizeRecordedCost(usage.Breakdown); err != nil {
+			return nil, sessionUsageQueryError(err)
+		}
 	}
 	if usage == nil {
 		return nil, &sessionUsageError{

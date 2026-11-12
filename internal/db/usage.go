@@ -58,6 +58,18 @@ func MessageRecordedCost(tokenJSON string) (sql.NullInt64, string) {
 	return sql.NullInt64{Int64: *cost, Valid: true}, usagefacts.CostStatusRecorded
 }
 
+// RecordedRowCost returns a usage row's harness-recorded cost for display,
+// and whether it priced the row. original is the row's cost before
+// ReportedCostForPricing; priced is the cost that function kept.
+func RecordedRowCost(
+	original sql.NullInt64, status string, priced sql.NullInt64,
+) (*money.Money, bool) {
+	if !original.Valid || status != usagefacts.CostStatusRecorded {
+		return nil, false
+	}
+	return &money.Money{Microdollars: original.Int64}, priced.Valid
+}
+
 // catalogPricesAt returns a ReportedCostForPricing probe for an archive row
 // with a raw pricing timestamp.
 func catalogPricesAt(
@@ -3146,6 +3158,10 @@ type SessionUsage struct {
 	// presentation-time combining in internal/service sets it.
 	SubagentCount int                          `json:"subagent_count,omitzero"`
 	Breakdown     []SessionUsageBreakdownEntry `json:"breakdown"`
+	// RecordedCost compares Cost with the cost the agent recorded, over the
+	// breakdown rows that carry one. Nil without a breakdown or when no row
+	// has a recorded cost; see SummarizeRecordedCost.
+	RecordedCost *SessionRecordedCost `json:"recorded_cost,omitempty"`
 	// PlanUsage is the session's plan usage and live-capture coverage
 	// row, nil when it has none. Responses carry it as the separate
 	// plan_usage and capture_coverage objects (see
@@ -3176,6 +3192,70 @@ type SessionUsageBreakdownEntry struct {
 	WebSearchRequests int         `json:"web_search_requests,omitzero"`
 	Cost              money.Money `json:"cost"`
 	HasCost           bool        `json:"has_cost"`
+	// RecordedCost is the cost the agent recorded for this row, when it
+	// recorded one. Cost prices the row from the catalog unless the catalog
+	// has no rate for the model and RecordedCost is above zero.
+	RecordedCost *money.Money `json:"recorded_cost,omitempty"`
+	// RecordedCostPriced reports that RecordedCost is the row's Cost
+	// because the catalog has no rate for its model.
+	RecordedCostPriced bool `json:"recorded_cost_priced,omitzero"`
+}
+
+// SessionRecordedCost compares AgentsView's cost with the cost the agent
+// recorded, over the breakdown rows that carry a recorded cost.
+type SessionRecordedCost struct {
+	// Recorded is the sum of the agent's own figures.
+	Recorded money.Money `json:"recorded"`
+	// Computed is AgentsView's cost for the same rows: the catalog price,
+	// or the recorded cost for rows the catalog cannot price.
+	Computed money.Money `json:"computed"`
+	// Difference is Computed minus Recorded.
+	Difference money.Money `json:"difference"`
+	Rows       int         `json:"rows"`
+	// FallbackRows is how many rows the recorded cost priced because the
+	// catalog has no rate for their model.
+	FallbackRows int `json:"fallback_rows"`
+	// UnpricedRows is how many rows neither the catalog nor a recorded cost
+	// above zero could price. Computed still includes their known fees.
+	UnpricedRows int `json:"unpriced_rows"`
+}
+
+// SummarizeRecordedCost compares computed and recorded cost over the
+// breakdown rows that carry a recorded cost. It returns nil when no row
+// does.
+func SummarizeRecordedCost(entries []SessionUsageBreakdownEntry) (*SessionRecordedCost, error) {
+	var out *SessionRecordedCost
+	for _, entry := range entries {
+		if entry.RecordedCost == nil {
+			continue
+		}
+		if out == nil {
+			out = &SessionRecordedCost{}
+		}
+		out.Rows++
+		var err error
+		if out.Recorded, err = money.Add(out.Recorded, *entry.RecordedCost); err != nil {
+			return nil, fmt.Errorf("summing recorded cost: %w", err)
+		}
+		// An unpriced row can still carry a known fee, such as web searches.
+		if out.Computed, err = money.Add(out.Computed, entry.Cost); err != nil {
+			return nil, fmt.Errorf("summing computed cost: %w", err)
+		}
+		if !entry.HasCost {
+			out.UnpricedRows++
+		}
+		if entry.RecordedCostPriced {
+			out.FallbackRows++
+		}
+	}
+	if out != nil {
+		difference, err := money.Sub(out.Computed, out.Recorded)
+		if err != nil {
+			return nil, fmt.Errorf("comparing recorded cost: %w", err)
+		}
+		out.Difference = difference
+	}
+	return out, nil
 }
 
 // SessionUsageBreakdownLabel renders a breakdown row's human label. It is
@@ -3470,10 +3550,11 @@ func (db *DB) getSessionUsageLegacy(
 		}
 		breakdownCount++
 		if includeBreakdown {
-			breakdown = append(breakdown,
-				sessionUsageBreakdownEntryWithWebSearchRequests(
-					r, breakdownCount, c, priced,
-					snapshotWebSearchRequests[i]))
+			entry := sessionUsageBreakdownEntryWithWebSearchRequests(
+				r, breakdownCount, c, priced, snapshotWebSearchRequests[i])
+			entry.RecordedCost, entry.RecordedCostPriced = RecordedRowCost(
+				r.cost, r.costStatus, costRow.cost)
+			breakdown = append(breakdown, entry)
 		}
 	}
 	if authoritativeCost != nil && len(breakdown) > 0 {

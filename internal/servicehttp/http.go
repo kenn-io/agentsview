@@ -1181,6 +1181,9 @@ func (b *httpBackend) SessionUsage(
 	if wire.SubagentCount != nil {
 		out.SubagentCount = int(*wire.SubagentCount)
 	}
+	if out.RecordedCost, err = db.SummarizeRecordedCost(out.Breakdown); err != nil {
+		return nil, err
+	}
 	return out, nil
 }
 

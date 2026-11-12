@@ -260,11 +260,11 @@ func (b *openClawRecordBuilder) finish(
 // cache_creation_input_tokens/cache_read_input_tokens keys that
 // internal/db/usage.go reads.
 //
-// Cost (message.usage.cost.total) is intentionally not propagated:
-// agentsview re-prices via the model_pricing table (loaded from
-// LiteLLM), so trusting the gateway's at-request cost would skew
-// totals against the canonical pricing source. The model name is
-// the load-bearing field for accurate pricing lookup.
+// The recorded cost (message.usage.cost.total) is kept as a recorded
+// cost: it prices the row only when the catalog has no rate for the
+// model, so catalog pricing stays the source for known models. OpenClaw
+// estimates it from its model rates, or stores the provider's charge and
+// marks it with cost.totalOrigin "provider-billed".
 //
 // Defensive about missing fields — older sessions may carry a model
 // without a usage block, or a usage block without cost; either is
@@ -328,6 +328,9 @@ func applyOpenClawAssistantUsage(
 	pm.HasOutputTokens = hasOutput
 	pm.ContextTokens = input + cacheRead + cacheWrite
 	pm.HasContextTokens = hasInput || hasCacheRead || hasCacheWrite
+	if cost, ok := recordedCostDollars(usage.Get("cost.total")); ok {
+		pm.SetRecordedCost(cost)
+	}
 }
 
 // extractToolResultText extracts plain text from an OpenClaw

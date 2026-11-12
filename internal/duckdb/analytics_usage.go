@@ -2302,8 +2302,18 @@ func (s *Store) GetSessionUsage(
 		if !contributes {
 			continue
 		}
-		breakdown = append(breakdown, duckSessionUsageBreakdownEntry(
-			r, len(breakdown)+1, cost, priced))
+		entry := duckSessionUsageBreakdownEntry(r, len(breakdown)+1, cost, priced)
+		if r.recordedCost.Valid {
+			entry.RecordedCost = &money.Money{Microdollars: r.recordedCost.Int64}
+			entry.RecordedCostPriced = db.ReportedCostForPricing(
+				r.recordedCost, usagefacts.CostStatusRecorded, func() bool {
+					_, lookup := rateResolver.ResolveAt(
+						r.model, duckSessionUsageLookupModel(r),
+						duckUsagePricingTimestamp(r.pricingTS))
+					return lookup.OK
+				}).Valid
+		}
+		breakdown = append(breakdown, entry)
 	}
 	if authoritativeCost != nil && len(breakdown) > 0 {
 		weights := make([]money.Money, len(breakdown))

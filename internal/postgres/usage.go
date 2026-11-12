@@ -1544,10 +1544,11 @@ func (s *Store) GetSessionUsage(
 		}
 		breakdownCount++
 		if includeBreakdown {
-			breakdown = append(breakdown,
-				pgSessionUsageBreakdownEntryWithWebSearchRequests(
-					r, breakdownCount, c, priced,
-					snapshotWebSearchRequests[i]))
+			entry := pgSessionUsageBreakdownEntryWithWebSearchRequests(
+				r, breakdownCount, c, priced, snapshotWebSearchRequests[i])
+			entry.RecordedCost, entry.RecordedCostPriced = db.RecordedRowCost(
+				r.cost, r.costStatus, costRow.cost)
+			breakdown = append(breakdown, entry)
 		}
 	}
 	if authoritativeCost != nil && len(breakdown) > 0 {

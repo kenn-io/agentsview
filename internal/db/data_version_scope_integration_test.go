@@ -1530,3 +1530,64 @@ func TestClaudePeerRewindUpgradePreservesBranchOwnership(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, body, afterBody)
 }
+
+func TestRecordedCostUpgradeReparsesInPlace(t *testing.T) {
+	scope := db.ScopedDataVersionProviders(175, 176)
+	assert.ElementsMatch(t, []parser.AgentType{
+		parser.AgentPi, parser.AgentOMP, parser.AgentOMO, parser.AgentPrimeAgent,
+		parser.AgentStepCode, parser.AgentOpenClaw, parser.AgentQClaw,
+		parser.AgentShelley, parser.AgentFx, parser.AgentOpenCode, parser.AgentKilo,
+		parser.AgentMiMoCode, parser.AgentIcodemate,
+	}, scope)
+	version := db.CurrentDataVersion()
+	t.Cleanup(db.InstallDataVersionScopesForTest(map[int][]parser.AgentType{version: scope}))
+	ctx := t.Context()
+	database := dbtest.OpenTestDB(t)
+	root := t.TempDir()
+	sourcePath := filepath.Join(root, "encoded-cwd", "2026-10-09T10-00-00-000Z_cost-uuid.jsonl")
+	// A custom model the catalog cannot price, with Pi's recorded cost.
+	dbtest.WriteTestFile(t, sourcePath, []byte(
+		`{"type":"session","version":3,"id":"cost-uuid","timestamp":"2026-10-09T10:00:00Z","cwd":"/work/project"}`+"\n"+
+			`{"type":"message","id":"u1","timestamp":"2026-10-09T10:00:01Z","message":{"role":"user","content":"hello"}}`+"\n"+
+			`{"type":"message","id":"a1","timestamp":"2026-10-09T10:00:02Z","message":{"role":"assistant","content":"hi","model":"rc-custom-model","usage":{"input":100,"output":20,"cost":{"total":0.0125}}}}`+"\n"))
+	cfg := sync.EngineConfig{Machine: "local", AgentDirs: map[parser.AgentType][]string{parser.AgentPi: {root}}}
+	engine := sync.NewEngine(ctx, database, cfg)
+	require.Equal(t, 1, engine.SyncAll(ctx, nil).Synced)
+	engine.Close()
+	const id = "pi:cost-uuid"
+	usage, err := database.GetSessionUsage(ctx, id, true)
+	require.NoError(t, err)
+	assert.True(t, usage.HasCost, "the recorded cost prices the unpriceable model")
+	assert.Equal(t, int64(12_500), usage.Cost.Microdollars)
+
+	// Reproduce the previous parser, which dropped the recorded cost.
+	require.NoError(t, database.Update(ctx, func(tx *sql.Tx) error {
+		_, err := tx.ExecContext(ctx, fmt.Sprintf(
+			`UPDATE messages SET token_usage='{"input_tokens":100,"output_tokens":20}' WHERE session_id=? AND role='assistant';
+			UPDATE sessions SET data_version=%d; PRAGMA user_version=%d`, version-1, version-1), id)
+		return err
+	}))
+	usage, err = database.GetSessionUsage(ctx, id, true)
+	require.NoError(t, err)
+	assert.False(t, usage.HasCost, "without the recorded cost the model is unpriced")
+	path := database.Path()
+	require.NoError(t, database.Close())
+	database, err = db.OpenIsolated(ctx, path)
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, database.Close()) })
+	_, fullRebuild, err := db.ArchiveResyncState(ctx, path)
+	require.NoError(t, err)
+	assert.False(t, fullRebuild, "the recorded-cost upgrade must reparse in place")
+
+	engine = sync.NewEngine(ctx, database, cfg)
+	t.Cleanup(engine.Close)
+	require.Equal(t, 1, engine.SyncAll(ctx, nil).Synced)
+	usage, err = database.GetSessionUsage(ctx, id, true)
+	require.NoError(t, err)
+	assert.True(t, usage.HasCost)
+	assert.Equal(t, int64(12_500), usage.Cost.Microdollars)
+	assert.Equal(t, sourcePath, database.GetSessionFilePath(ctx, id), "source path is unchanged")
+	var sessions int
+	require.NoError(t, database.Reader().QueryRow(ctx, "SELECT count(*) FROM sessions").Scan(&sessions))
+	assert.Equal(t, 1, sessions)
+}

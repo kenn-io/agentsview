@@ -3088,6 +3088,32 @@ components:
         - created_at
         - updated_at
       type: object
+    DbSessionRecordedCost:
+      additionalProperties: false
+      properties:
+        computed:
+          $ref: "#/components/schemas/MoneyMoney"
+        difference:
+          $ref: "#/components/schemas/MoneyMoney"
+        fallback_rows:
+          format: int64
+          type: integer
+        recorded:
+          $ref: "#/components/schemas/MoneyMoney"
+        rows:
+          format: int64
+          type: integer
+        unpriced_rows:
+          format: int64
+          type: integer
+      required:
+        - recorded
+        - computed
+        - difference
+        - rows
+        - fallback_rows
+        - unpriced_rows
+      type: object
     DbSessionShapeResponse:
       additionalProperties: false
       properties:
@@ -8227,6 +8253,10 @@ components:
         output_tokens:
           format: int64
           type: integer
+        recorded_cost:
+          $ref: "#/components/schemas/MoneyMoney"
+        recorded_cost_priced:
+          type: boolean
         source:
           type: string
         subagent_session_id:
@@ -8290,6 +8320,8 @@ components:
           $ref: "#/components/schemas/DbPlanUsageView"
         project:
           type: string
+        recorded_cost:
+          $ref: "#/components/schemas/DbSessionRecordedCost"
         rollup_cost:
           $ref: "#/components/schemas/MoneyMoney"
         rollup_cost_source:

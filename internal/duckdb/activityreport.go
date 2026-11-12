@@ -14,6 +14,7 @@ import (
 	"go.kenn.io/agentsview/internal/export"
 	"go.kenn.io/agentsview/internal/kept"
 	"go.kenn.io/agentsview/internal/money"
+	"go.kenn.io/agentsview/internal/usagefacts"
 )
 
 // GetActivityReport assembles a concurrency- and usage-oriented report
@@ -348,9 +349,13 @@ func (s *Store) GetSessionUsageRows(
 		if priceErr != nil {
 			return activity.UsagePrice{}, priceErr
 		}
+		var recorded *money.Money
+		if r.cost != nil && r.costStatus == usagefacts.CostStatusRecorded {
+			recorded = &money.Money{Microdollars: *r.cost}
+		}
 		return activity.UsagePrice{
 			Cost: cost, CostSource: costSource, SessionCost: sessionCost,
-			Priced: priced, Contributes: contributes,
+			RecordedCost: recorded, Priced: priced, Contributes: contributes,
 		}, nil
 	})
 }

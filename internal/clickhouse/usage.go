@@ -3170,8 +3170,14 @@ func (s *Store) GetSessionUsage(
 		if !contributes {
 			continue
 		}
-		breakdown = append(breakdown, chSessionUsageBreakdownEntry(
-			r, len(breakdown)+1, cost, priced))
+		entry := chSessionUsageBreakdownEntry(r, len(breakdown)+1, cost, priced)
+		if r.recordedCost.Valid {
+			entry.RecordedCost = &money.Money{Microdollars: r.recordedCost.Int64}
+			entry.RecordedCostPriced = db.ReportedCostForPricing(
+				r.recordedCost, usagefacts.CostStatusRecorded,
+				chCatalogPricesAt(rateResolver, r.model, r.pricingTS)).Valid
+		}
+		breakdown = append(breakdown, entry)
 	}
 	if authoritativeCost != nil && len(breakdown) > 0 {
 		weights := make([]money.Money, len(breakdown))
