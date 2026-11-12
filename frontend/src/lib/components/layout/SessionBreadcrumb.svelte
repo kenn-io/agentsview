@@ -2137,7 +2137,8 @@
     position: absolute;
     top: 100%;
     right: 0;
-    margin-top: 4px;
+    /* Clears the trigger's hit box, which reaches 6px below its line. */
+    margin-top: 6px;
     width: min(460px, calc(100vw - 24px));
     max-height: 260px;
     overflow: auto;

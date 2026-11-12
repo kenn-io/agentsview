@@ -24,6 +24,7 @@ const LOADING = [
   ".loading-state",
   ".workspace-loading",
   ".archive-state",
+  ".outcome-loading",
   ".kit-refresh-control__btn.querying",
 ].join(", ");
 

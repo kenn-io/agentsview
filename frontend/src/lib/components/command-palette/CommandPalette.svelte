@@ -136,6 +136,13 @@
       : 0,
   );
 
+  // A shorter result list can leave the selection past its end; keep it on
+  // a row that exists so the input's active cell and Enter still work.
+  $effect.pre(() => {
+    const last = Math.max(totalItems - 1, 0);
+    if (selectedIndex > last) selectedIndex = last;
+  });
+
   function cellId(row: number, column: 0 | 1): string {
     return `${uid}-cell-${row}-${column}`;
   }
@@ -157,9 +164,12 @@
   // focus stays in the input, and arrows move the active cell. Column 0
   // opens the result; column 1, on search results, copies its session ID.
   function handleKeydown(e: KeyboardEvent) {
-    if (e.key === "ArrowDown") {
+    // While a search runs, the store still holds the previous results, which
+    // are not shown; arrows must not select rows the next response may lack.
+    if ((e.key === "ArrowDown" || e.key === "ArrowUp") && !resultsListed) {
       e.preventDefault();
-      // Clamp at 0 too: with no results yet, totalItems - 1 is -1.
+    } else if (e.key === "ArrowDown") {
+      e.preventDefault();
       selectedIndex = Math.max(0, Math.min(selectedIndex + 1, totalItems - 1));
     } else if (e.key === "ArrowUp") {
       e.preventDefault();
