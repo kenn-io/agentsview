@@ -94,10 +94,6 @@ export class SessionOpeners {
           (this.sessionDir !== null && !!this.session?.file_path))),
   );
 
-  private readonly resumeModel = $derived(
-    this.session ? messagesStore.resumeModelFor(this.session.id) : "",
-  );
-
   private readOpeners() {
     const signal = this.openersRead.begin();
     OpenersService.getApiV1Openers({ signal })
@@ -154,10 +150,11 @@ export class SessionOpeners {
   }
 
   // Copies the resume command built in the browser, for when the server
-  // could neither launch nor return one.
+  // could neither launch nor return one. The model comes from the session
+  // the request was for, even if another session opened while it ran.
   private async copyLocalResumeCommand(session: Session) {
     const cmd = buildResumeCommand(session.agent, session.id, {
-      model: this.resumeModel,
+      model: messagesStore.resumeModelFor(session.id),
     });
     if (cmd) {
       const ok = await copyToClipboard(cmd);

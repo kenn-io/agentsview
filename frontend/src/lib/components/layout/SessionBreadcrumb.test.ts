@@ -683,6 +683,40 @@ describe("SessionBreadcrumb", () => {
     messages.clear();
   });
 
+  it("builds the fallback from the session it resumed after another session opens", async () => {
+    vi.mocked(copyToClipboard).mockClear();
+    const resume = deferred<never>();
+    sessionsService.postApiV1SessionsByIdResume.mockReturnValue(resume.promise);
+    const component = createClassComponent({
+      component: SessionBreadcrumb,
+      target: document.body,
+      props: { session: makeSession("claude"), onBack: () => {} },
+    });
+
+    await tick();
+    document.querySelector<HTMLButtonElement>(".resume-btn")?.click();
+    await tick();
+    Array.from(document.querySelectorAll<HTMLButtonElement>(".open-menu-item"))
+      .find((button) => button.textContent?.includes("Default terminal"))
+      ?.click();
+    await flushPromises();
+
+    // Another session opens with a model before the first request fails.
+    messages.sessionId = "run:other";
+    messages.messages = [makeAssistantMessage("claude sonnet")];
+    messages.historyComplete = true;
+    component.$set({ session: makeSession("claude", { id: "run:other" }) });
+    await flushPromises();
+    resume.reject(new Error("backend unavailable"));
+
+    await vi.waitFor(() => {
+      expect(copyToClipboard).toHaveBeenCalledWith("claude --resume 'run:123456789abcdef'");
+    });
+
+    component.$destroy();
+    messages.clear();
+  });
+
   it("does not pin a partial-history model when older messages remain unloaded", async () => {
     vi.mocked(copyToClipboard).mockClear();
     messages.sessionId = "run:123456789abcdef";
