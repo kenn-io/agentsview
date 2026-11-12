@@ -69,7 +69,7 @@ risk via documented flags and config.
 | agentsview → update endpoint   | One-way outbound, opt-out                                           | Disable with `--no-update-check`.                                      |
 | agentsview → pricing catalogs  | One-way outbound, automatic                                         | Public JSON from GitHub and OpenRouter; no session data sent.          |
 | agentsview → model endpoints   | Opt-in; sends transcript content                                    | Generated insights, recall extraction, and embeddings.                 |
-| agentsview → hosted services   | Opt-in; user-supplied credentials                                   | Codex Cloud, Cursor Admin API, Kata, Docbank, GitHub Gist, raw sync.   |
+| agentsview → hosted services   | Opt-in; user-supplied credentials                                   | Codex Cloud, Cursor Admin API, Kata, Docbank, GitHub, raw sync.        |
 
 ## Data at rest
 
@@ -165,10 +165,14 @@ Each of these is off until you configure or run it.
   `allow_insecure = true`. `skip_verify=true` is also rejected on a
   non-loopback host without `allow_insecure`. See
   [ClickHouse sync](docs/clickhouse-sync.md).
-- **DuckDB Quack server.** The DuckDB mirror is a local file.
+- **DuckDB Quack.** The DuckDB mirror is a local file.
   `agentsview replica duckdb quack serve` exposes it to DuckDB clients that
   hold its token. It binds to loopback by default; binding beyond loopback
-  requires `--allow-insecure`, because Quack speaks plain HTTP. See
+  requires `--allow-insecure`, because Quack speaks plain HTTP. On the client
+  side, setting `[duckdb].url` or `AGENTSVIEW_DUCKDB_URL` makes
+  `duckdb status` and `duckdb serve` send the token and SQL queries to that
+  Quack endpoint. A non-loopback client host also requires `allow_insecure`.
+  Remove the URL to stop these requests. See
   [Quack Remote Access](docs/duckdb.md#quack-remote-access).
 - **HTTP remote sync.** agentsview pulls session archives from configured remote
   daemons using a per-host bearer token. Archive endpoints require that token
@@ -211,10 +215,13 @@ Each of these is off until you configure or run it.
   `cursor_admin_api_key`, optional user filters, and a date range to
   `api.cursor.com`. It runs only when you invoke it. See
   [Cursor Admin Usage Events](docs/token-usage.md#cursor-admin-usage-events).
-- **Claude.ai sync.** The Chrome extension you install with
-  `agentsview source chrome setup` fetches your Claude.ai chats with your
-  browser's session when you click **Sync**. It passes them to agentsview over
-  a local socket; agentsview itself does not contact Claude.ai. See
+- **Claude.ai sync.** When you click **Sync**, your Claude.ai chats are fetched
+  with a signed-in Claude.ai session. With Chrome, the extension you install
+  with `agentsview source chrome setup` makes the requests using Chrome's
+  session and passes the chats to agentsview over a local socket. The desktop
+  build instead makes the requests from its own sign-in window, which keeps a
+  separate Claude.ai session. The agentsview server never contacts Claude.ai,
+  and credentials stay in Chrome or the sign-in window. See
   [Sync Claude.ai chats](docs/chat-import.md#sync-claudeai-chats).
 - **Generated insights.** When `[insights]` sets `endpoint` and `model`,
   agentsview sends transcript-derived content to that OpenAI-compatible
@@ -227,12 +234,14 @@ Each of these is off until you configure or run it.
   use HTTPS unless a server entry sets `allow_http = true`. Redirects are not
   followed. See [Automatic extraction](docs/recall.md#automatic-extraction).
 - **Embeddings.** When `[vector]` is enabled, agentsview sends user and
-  assistant message text to the embedding server: a local Ollama or Kit
-  server, or an OpenAI-compatible endpoint you configure. Plain HTTP is
-  accepted for loopback, private-network addresses, and host names; only a
-  public IP address requires HTTPS. Setting up a local server can download
-  model files, and agentsview asks first. See
-  [Semantic Search](docs/semantic-search.md).
+  assistant message text to the embedding server while it indexes, and each
+  semantic or hybrid search query when you search. The server is a local
+  Ollama or Kit server, or an OpenAI-compatible endpoint you configure.
+  Setting `[vector.embed] recall = true` also sends accepted Recall entry
+  titles, bodies, and triggers automatically. Plain HTTP is accepted for
+  loopback, private-network addresses, and host names; only a public IP
+  address requires HTTPS. Setting up a local server can download model files,
+  and agentsview asks first. See [Semantic Search](docs/semantic-search.md).
 - **Kata.** With `[kata] enabled = true`, the instance that holds the aggregated
   archive files Friction Log patterns as Kata issues, by hand or hourly when
   `[friction.kata] auto_file = true`. The issue title and body describe the
@@ -249,6 +258,13 @@ Each of these is off until you configure or run it.
   `AGENTSVIEW_GITHUB_TOKEN`, or `gh auth token`. A secret gist is unlisted,
   but anyone with its link can read it. See
   [Publish to Gist](docs/usage.md#publish-to-gist).
+- **GitHub pull-request counts.** When you ask for pull-request outcomes, with
+  `agentsview report stats --include-github-outcomes` or from the web UI,
+  agentsview runs `gh pr list` in each repository found in the selected
+  sessions' working directories. Each run asks GitHub for your pull requests
+  opened and merged in the date range, using `AGENTSVIEW_GITHUB_TOKEN` or the
+  token from `gh auth token`. Without a token, it skips the lookup. See
+  [Git And PR Aggregation](docs/stats.md#git-and-pr-aggregation).
 - **Imports.** Imported archives from other agentsview instances or third-party
   exports are treated as untrusted structured data, no different from session
   files written by local agents.
