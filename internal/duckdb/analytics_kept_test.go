@@ -8,84 +8,11 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
-	"time"
 
 	"github.com/stretchr/testify/require"
 	"go.kenn.io/agentsview/internal/db"
 	"go.kenn.io/agentsview/internal/storage"
 )
-
-func TestAnalyticsKeptReports(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "mirror.duckdb")
-	local := newLocalDB(t)
-	id := "session-a"
-	_, err := local.WriteSessionBatchAtomic(t.Context(), []db.SessionBatchWrite{{
-		Session:     syncSession(id, "alpha", "prompt", "2026-01-01T00:00:00Z", 1),
-		Messages:    []db.Message{duckModelMessage(id, 0, "assistant", "read", "2026-01-01T00:00:00Z", "model-a", db.ToolCall{ToolName: "Read", Category: "Read", SkillName: "review"})},
-		DataVersion: 1, ReplaceMessages: true,
-	}})
-	require.NoError(t, err)
-	_, err = rebuildMirror(t.Context(), path, local, "test-machine", storage.MirrorPushOptions{}, "test", nil)
-	require.NoError(t, err)
-	conn, err := Open(t.Context(), path)
-	require.NoError(t, err)
-	_, err = conn.ExecContext(t.Context(), `UPDATE sessions SET quality_signal_version = ?`, db.CurrentQualitySignalVersion)
-	require.NoError(t, err)
-	_, err = conn.ExecContext(t.Context(), `UPDATE tool_calls SET observed_outcome = 'empty'`)
-	require.NoError(t, err)
-	require.NoError(t, conn.Close())
-	store, err := NewStore(t.Context(), path)
-	require.NoError(t, err)
-	t.Cleanup(func() { store.Close() })
-	f := db.AnalyticsFilter{Timezone: "UTC"}
-	summary, err := store.GetAnalyticsSummary(t.Context(), f)
-	require.NoError(t, err)
-	require.Equal(t, 1, summary.TotalSessions)
-	tools, err := store.GetAnalyticsTools(t.Context(), f)
-	require.NoError(t, err)
-	require.Equal(t, 1, tools.TotalCalls)
-	skills, err := store.GetAnalyticsSkills(t.Context(), f, "day")
-	require.NoError(t, err)
-	require.Equal(t, 1, skills.TotalSkillCalls)
-	require.NotEmpty(t, summary.Agents)
-	require.NotEmpty(t, tools.Trend)
-	require.Len(t, tools.ByTool, 1)
-	require.NotNil(t, tools.ByTool[0].EmptyRate)
-	require.Equal(t, 1.0, *tools.ByTool[0].EmptyRate)
-	require.NotEmpty(t, skills.Trend)
-	// A closed handle makes an unexpected SQL read fail.
-	require.NoError(t, store.DB().Close())
-	againSummary, err := store.GetAnalyticsSummary(t.Context(), f)
-	require.NoError(t, err)
-	require.Equal(t, summary, againSummary)
-	againTools, err := store.GetAnalyticsTools(t.Context(), f)
-	require.NoError(t, err)
-	require.Equal(t, tools, againTools)
-	againSkills, err := store.GetAnalyticsSkills(t.Context(), f, "day")
-	require.NoError(t, err)
-	require.Equal(t, skills, againSkills)
-	for _, agent := range againSummary.Agents {
-		agent.Sessions = 999
-	}
-	againTools.Trend[0].ByCat["Read"] = 999
-	*againTools.ByTool[0].EmptyRate = 999
-	againSkills.Trend[0].BySkill["review"] = 999
-	gotSummary, err := store.GetAnalyticsSummary(t.Context(), f)
-	require.NoError(t, err)
-	require.Equal(t, summary, gotSummary)
-	gotTools, err := store.GetAnalyticsTools(t.Context(), f)
-	require.NoError(t, err)
-	require.Equal(t, tools, gotTools)
-	gotSkills, err := store.GetAnalyticsSkills(t.Context(), f, "day")
-	require.NoError(t, err)
-	require.Equal(t, skills, gotSkills)
-	_, err = store.GetAnalyticsSummary(t.Context(), db.AnalyticsFilter{Project: "other"})
-	require.Error(t, err)
-	_, err = store.GetAnalyticsSkills(t.Context(), f, "week")
-	require.Error(t, err)
-	_, err = store.GetAnalyticsSummary(t.Context(), db.AnalyticsFilter{Timezone: "UTC", Termination: "active"})
-	require.Error(t, err)
-}
 
 func TestAnalyticsKeptMirrorReplacement(t *testing.T) {
 	skipReopenTestOnWindows(t)
@@ -207,6 +134,13 @@ func TestAnalyticsKeptAllPanelsAndVariants(t *testing.T) {
 	require.NoError(t, err)
 	_, err = rebuildMirror(t.Context(), path, local, "test-machine", storage.MirrorPushOptions{}, "test", nil)
 	require.NoError(t, err)
+	conn, err := Open(t.Context(), path)
+	require.NoError(t, err)
+	_, err = conn.ExecContext(t.Context(), `UPDATE sessions SET quality_signal_version = ?`, db.CurrentQualitySignalVersion)
+	require.NoError(t, err)
+	_, err = conn.ExecContext(t.Context(), `UPDATE tool_calls SET observed_outcome = 'empty'`)
+	require.NoError(t, err)
+	require.NoError(t, conn.Close())
 	store, err := NewStore(t.Context(), path)
 	require.NoError(t, err)
 	t.Cleanup(func() { store.Close() })
@@ -251,6 +185,17 @@ func TestAnalyticsKeptAllPanelsAndVariants(t *testing.T) {
 	require.Equal(t, "output_tokens", values["top-tokens"].(db.TopSessionsResponse).Metric)
 	require.Equal(t, "sessions", values["heatmap-sessions"].(db.HeatmapResponse).Metric)
 	require.Equal(t, "output_tokens", values["heatmap-tokens"].(db.HeatmapResponse).Metric)
+	tools := values["tools"].(db.ToolsAnalyticsResponse)
+	require.Equal(t, 1, tools.TotalCalls)
+	require.Len(t, tools.ByTool, 1)
+	require.NotNil(t, tools.ByTool[0].EmptyRate)
+	require.Equal(t, 1.0, *tools.ByTool[0].EmptyRate)
+	canceled, cancel := context.WithCancel(t.Context())
+	cancel()
+	for _, tc := range keptPanelCases(canceled, f) {
+		_, err := tc.read(store)
+		require.ErrorIs(t, err, context.Canceled, tc.name)
+	}
 	require.NoError(t, store.DB().Close())
 	for _, tc := range cases {
 		got, err := tc.read(store)
@@ -291,6 +236,24 @@ func TestAnalyticsKeptAllPanelsAndVariants(t *testing.T) {
 		require.Error(t, err, change.name)
 	}
 
+	summary := values["summary"].(db.AnalyticsSummary)
+	for _, agent := range summary.Agents {
+		agent.Sessions = 999
+	}
+	tools.Trend[0].ByCat["Read"] = 999
+	*tools.ByTool[0].EmptyRate = 999
+	skills := values["skills-day"].(db.SkillsAnalyticsResponse)
+	skills.Trend[0].BySkill["review"] = 999
+	gotSummary, err := store.GetAnalyticsSummary(t.Context(), f)
+	require.NoError(t, err)
+	require.Equal(t, 1, gotSummary.Agents["claude"].Sessions)
+	gotTools, err := store.GetAnalyticsTools(t.Context(), f)
+	require.NoError(t, err)
+	require.Equal(t, 1, gotTools.Trend[0].ByCat["Read"])
+	require.Equal(t, 1.0, *gotTools.ByTool[0].EmptyRate)
+	gotSkills, err := store.GetAnalyticsSkills(t.Context(), f, "day")
+	require.NoError(t, err)
+	require.Equal(t, 1, gotSkills.Trend[0].BySkill["review"])
 	activity.Series[0].ByAgent["test"] = 999
 	hours := values["hours"].(db.HourOfWeekResponse)
 	hours.Cells[0].Messages = 999
@@ -306,30 +269,25 @@ func TestAnalyticsKeptAllPanelsAndVariants(t *testing.T) {
 	require.Equal(t, 2, gotHeat.Entries[0].Value)
 }
 
-func TestAnalyticsKeptTerminationClockBoundary(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "mirror.duckdb")
-	buildMirrorFixture(t, path, "session-a")
-	conn, err := Open(t.Context(), path)
-	require.NoError(t, err)
-	cutoff := time.Now().UTC().Add(-10*time.Minute + 8*time.Second)
-	_, err = conn.ExecContext(t.Context(), `UPDATE sessions SET ended_at = ?`, cutoff)
-	require.NoError(t, err)
-	require.NoError(t, conn.Close())
-	store, err := NewStore(t.Context(), path)
-	require.NoError(t, err)
-	t.Cleanup(func() { store.Close() })
-	f := db.AnalyticsFilter{Termination: "active"}
-	before, err := store.GetAnalyticsSummary(t.Context(), f)
-	require.NoError(t, err)
-	require.Equal(t, 1, before.TotalSessions)
-	timer := time.NewTimer(time.Until(cutoff.Add(10*time.Minute + 1500*time.Millisecond)))
-	defer timer.Stop()
-	select {
-	case <-timer.C:
-	case <-t.Context().Done():
-		t.Fatal(t.Context().Err())
+func TestAnalyticsKeptMovingSelectionsReadFresh(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		filter db.AnalyticsFilter
+	}{
+		{"termination", db.AnalyticsFilter{Termination: "active"}},
+		{"active since", db.AnalyticsFilter{ActiveSince: "2026-01-01T00:00:00Z"}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), "mirror.duckdb")
+			buildMirrorFixture(t, path, "session-a")
+			store, err := NewStore(t.Context(), path)
+			require.NoError(t, err)
+			t.Cleanup(func() { store.Close() })
+			_, err = store.GetAnalyticsSummary(t.Context(), tc.filter)
+			require.NoError(t, err)
+			require.NoError(t, store.DB().Close())
+			_, err = store.GetAnalyticsSummary(t.Context(), tc.filter)
+			require.Error(t, err)
+		})
 	}
-	after, err := store.GetAnalyticsSummary(t.Context(), f)
-	require.NoError(t, err)
-	require.Equal(t, 0, after.TotalSessions)
 }

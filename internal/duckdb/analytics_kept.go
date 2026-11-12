@@ -10,7 +10,7 @@ import (
 
 func keptAnalytics[T any](ctx context.Context, s *Store, panel string, f db.AnalyticsFilter, variant string, load func(context.Context) (T, error)) (T, error) {
 	version := s.keptVersion()
-	if version == "" || db.TerminationUsesTime(f.Termination) {
+	if version == "" || f.ActiveSince != "" || db.TerminationUsesTime(f.Termination) {
 		return load(ctx)
 	}
 	key, err := json.Marshal(struct {
