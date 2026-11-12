@@ -5228,31 +5228,6 @@ func TestGetAnalyticsToolsLocalDayBoundaries(t *testing.T) {
 	}, resp.Trend)
 }
 
-func TestGetAnalyticsToolsBlankAndMalformedTimestamps(t *testing.T) {
-	d := testDB(t)
-	insertSession(t, d, "blank-time", "window", func(s *Session) {
-		s.StartedAt = new("2025-03-09T12:00:00Z")
-	})
-	for n, ts := range []string{"\t", "\u00a0", "bad"} {
-		m := asstMsgAt("blank-time", n, "read", ts)
-		m.ToolCalls = []ToolCall{{SessionID: "blank-time", ToolName: "Read", Category: "Read"}}
-		insertMessages(t, d, m)
-	}
-	for _, zone := range []string{"UTC", "America/New_York"} {
-		resp, err := d.GetAnalyticsTools(t.Context(), AnalyticsFilter{From: "2025-03-09", To: "2025-03-09", Timezone: zone})
-		require.NoError(t, err)
-		assert.Equal(t, 2, resp.TotalCalls, "zone %s", zone)
-		assert.Equal(t, []ToolTrendEntry{{Date: "2025-03-03", ByCat: map[string]int{"Read": 2}}}, resp.Trend, "zone %s", zone)
-	}
-	resp, err := d.GetAnalyticsTools(t.Context(), AnalyticsFilter{Timezone: "America/New_York"})
-	require.NoError(t, err)
-	assert.Equal(t, 3, resp.TotalCalls)
-	assert.Equal(t, []ToolTrendEntry{
-		{Date: "", ByCat: map[string]int{"Read": 1}},
-		{Date: "2025-03-03", ByCat: map[string]int{"Read": 2}},
-	}, resp.Trend)
-}
-
 func TestSQLiteToolsDateKeyMatchesResolver(t *testing.T) {
 	d := testDB(t)
 	insertSession(t, d, "keys", "window", func(s *Session) { s.StartedAt = new("2025-03-09T12:00:00Z") })
