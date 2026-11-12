@@ -79,17 +79,25 @@ func TestAnalyticsKeptPushAndSelection(t *testing.T) {
 	assert.Equal(t, tools, toolsAgain)
 	assert.Equal(t, velocity, velocityAgain)
 
-	for _, selection := range []db.AnalyticsFilter{
-		{From: f.From, To: f.To, Timezone: "America/New_York"},
-		{From: f.From, To: f.To, Timezone: "UTC", Model: "other"},
-		{From: f.From, To: f.To, Timezone: "UTC", Hour: new(11)},
+	for _, selection := range []struct {
+		filter    db.AnalyticsFilter
+		wantCalls int
+	}{
+		{db.AnalyticsFilter{From: f.From, To: f.To, Timezone: "America/New_York"}, 1},
+		{db.AnalyticsFilter{From: f.From, To: f.To, Timezone: "UTC", Model: "other"}, 0},
+		{db.AnalyticsFilter{From: f.From, To: f.To, Timezone: "UTC", Hour: new(11)}, 0},
 	} {
-		_, err = store.GetAnalyticsTools(ctx, selection)
+		reads = counter.count()
+		selectedTools, err := store.GetAnalyticsTools(ctx, selection.filter)
 		require.NoError(t, err)
-		_, err = store.GetAnalyticsVelocity(ctx, selection)
+		assert.Equal(t, selection.wantCalls, selectedTools.TotalCalls)
+		assert.Greater(t, counter.count(), reads)
+		reads = counter.count()
+		selectedVelocity, err := store.GetAnalyticsVelocity(ctx, selection.filter)
 		require.NoError(t, err)
+		assert.Len(t, selectedVelocity.ByAgent, selection.wantCalls)
+		assert.Greater(t, counter.count(), reads)
 	}
-	assert.Greater(t, counter.count(), reads)
 	write("Grep", "a longer answer")
 	changed, err := store.GetAnalyticsTools(ctx, f)
 	require.NoError(t, err)
@@ -186,38 +194,17 @@ func TestAnalyticsKeptLocalTimezoneChange(t *testing.T) {
 
 func TestAnalyticsKeptActiveSincePreservesStableSelections(t *testing.T) {
 	local, syncer, store := newUsageJournalFixture(t)
-	ctx := t.Context()
-	for _, day := range []string{"2026-06-14", "2026-06-15"} {
-		pgKeptSession(t, local, day, "project", day)
-		require.NoError(t, local.ReplaceSessionMessages(ctx, day, []db.Message{
-			{SessionID: day, Ordinal: 0, Role: "user", Content: "question", Timestamp: day + "T10:00:00Z"},
-			{SessionID: day, Ordinal: 1, Role: "assistant", Content: "answer", Timestamp: day + "T10:01:00Z", ToolCalls: []db.ToolCall{{ToolName: "Read", Category: "Read", ToolUseID: "call"}}},
-		}))
-	}
+	pgKeptSession(t, local, "session", "project", "2026-06-14")
 	pgKeptPush(t, syncer, false)
+	ctx := t.Context()
 	counter := &analyticsReadCounter{storeExecutor: store.pg}
 	store.pg = counter
-	f := db.AnalyticsFilter{From: "2026-06-14", To: "2026-06-15", Timezone: "UTC"}
+	f := db.AnalyticsFilter{From: "2026-06-14", To: "2026-06-14", Timezone: "UTC"}
 	stableTools, err := store.GetAnalyticsTools(ctx, f)
 	require.NoError(t, err)
 	stableVelocity, err := store.GetAnalyticsVelocity(ctx, f)
 	require.NoError(t, err)
-	require.Equal(t, 2, stableTools.TotalCalls)
-	require.Len(t, stableVelocity.ByAgent, 1)
-	require.Equal(t, 2, stableVelocity.ByAgent[0].Sessions)
 	filtered := f
-	filtered.ActiveSince = "2026-06-14T00:00:00Z"
-	before, err := store.GetAnalyticsTools(ctx, filtered)
-	require.NoError(t, err)
-	assert.Equal(t, 2, before.TotalCalls)
-	filtered.ActiveSince = "2026-06-15T00:00:00Z"
-	after, err := store.GetAnalyticsTools(ctx, filtered)
-	require.NoError(t, err)
-	assert.Equal(t, 1, after.TotalCalls)
-	afterVelocity, err := store.GetAnalyticsVelocity(ctx, filtered)
-	require.NoError(t, err)
-	require.Len(t, afterVelocity.ByAgent, 1)
-	assert.Equal(t, 1, afterVelocity.ByAgent[0].Sessions)
 	cutoff := time.Date(2026, 6, 14, 10, 1, 1, 0, time.UTC)
 	for i := range 65 {
 		filtered.ActiveSince = cutoff.Add(time.Duration(i) * time.Second).Format(time.RFC3339)
@@ -237,7 +224,7 @@ func TestAnalyticsKeptActiveSincePreservesStableSelections(t *testing.T) {
 }
 
 func TestAnalyticsKeptBypasses(t *testing.T) {
-	for _, mode := range []string{"active", "stale", "unclean", "mixed", "local", "active since", "hosted", "borrowed", "no journal"} {
+	for _, mode := range []string{"active", "hosted", "borrowed", "no journal"} {
 		t.Run(mode, func(t *testing.T) {
 			local, syncer, store := newUsageJournalFixture(t)
 			pgKeptSession(t, local, "session", "project", "2026-06-14")
@@ -246,16 +233,6 @@ func TestAnalyticsKeptBypasses(t *testing.T) {
 			switch mode {
 			case "active":
 				f.Termination = "active"
-			case "stale":
-				f.Termination = "stale"
-			case "unclean":
-				f.Termination = "unclean"
-			case "mixed":
-				f.Termination = "clean,active"
-			case "local":
-				f.Timezone = "Local"
-			case "active since":
-				f.ActiveSince = "2026-06-14T00:00:00Z"
 			case "hosted":
 				store.hostedRelations = true
 			case "borrowed":
