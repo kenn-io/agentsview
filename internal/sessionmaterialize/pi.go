@@ -16,7 +16,6 @@ import (
 	"runtime"
 	"slices"
 	"strings"
-	"unicode/utf8"
 
 	"go.kenn.io/agentsview/internal/config"
 	"go.kenn.io/agentsview/internal/ctxio"
@@ -100,14 +99,6 @@ func findPiSource(ctx context.Context, cfg config.Config, session *db.Session, s
 	if !ok {
 		return "", nil, errors.New("native Pi source provider unavailable")
 	}
-	rootFor := func(name string) string {
-		for _, root := range roots {
-			if within(root, name) {
-				return root
-			}
-		}
-		return ""
-	}
 	candidates := parser.NewPiSourceSet(parser.AgentPi, roots)
 	name, err := uniqueLocalSource(ctx, provider, stored, candidates.DiscoverEach, func(name string) (bool, error) {
 		err := checkPiHeaderFile(ctx, name, id)
@@ -119,7 +110,13 @@ func findPiSource(ctx context.Context, cfg config.Config, session *db.Session, s
 	if err != nil {
 		return "", nil, err
 	}
-	boundary := rootFor(name)
+	var boundary string
+	for _, root := range roots {
+		if within(root, name) {
+			boundary = root
+			break
+		}
+	}
 	if boundary == "" {
 		// A recorded path after relabeling or an external link may be outside
 		// the machine's roots. Confine the read to its resolved directory.
@@ -169,9 +166,8 @@ func piHeader(ctx context.Context, r io.Reader, id string) ([]byte, int, error) 
 			return nil, 0, errors.New("native Pi session header exceeds 1 MiB lookup limit")
 		}
 		if jsontext.Value(line).IsValid(jsontext.AllowDuplicateNames(true), jsontext.AllowInvalidUTF8(true)) {
-			trimmed := bytes.TrimSpace(line)
 			var value any
-			decodeErr := json.Unmarshal(trimmed, &value, jsontext.AllowDuplicateNames(true), jsontext.AllowInvalidUTF8(true))
+			decodeErr := json.Unmarshal(line, &value, jsontext.AllowDuplicateNames(true), jsontext.AllowInvalidUTF8(true))
 			falsy := decodeErr == nil && (value == nil || value == false || value == "" || value == float64(0))
 			if falsy {
 				if err == nil {
@@ -262,12 +258,9 @@ func relocatePiHeader(ctx context.Context, data []byte, id, cwd string) ([]byte,
 	if data == nil {
 		return nil, errors.New("invalid native Pi header offsets")
 	}
-	if !utf8.ValidString(cwd) {
-		return nil, errors.New("native Pi checkout path is not valid UTF-8")
-	}
 	encoded, err := json.Marshal(cwd, jsontext.EscapeForHTML(true), jsontext.EscapeForJS(true))
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("native Pi checkout path is not valid UTF-8: %w", err)
 	}
 	return slices.Concat(data[:offset+start], encoded, data[offset+end:]), nil
 }
