@@ -18,10 +18,10 @@ func newSessionMaterializeCommand() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "materialize <id>",
 		Short: "Install original session files for native resume",
-		Long: "Install a Claude session and its companions from configured local, mirror, or S3 sources for a local checkout, then print a resume command. " +
+		Long: "Install a Claude or Pi session from configured local or mirror sources, or a Claude session from S3, for a local checkout, then print a resume command. " +
 			"Requires a local archive with conversation content; the original files must total at most 512 MiB. " +
 			"End the running Claude session and wait for any S3 uploader to finish before materializing. " +
-			"Retained and attached captures, Pi, and Codex are not yet supported.",
+			"Retained and attached captures and Codex are not yet supported.",
 		Example: "  agentsview session materialize <id> --cwd <path>",
 		Args:    cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
@@ -59,7 +59,11 @@ func newSessionMaterializeCommand() *cobra.Command {
 				return err
 			}
 			_, nativeID := parser.StripHostPrefix(id)
-			result.Command = claudeResumeCommand(result.Cwd, nativeID, result.ConfigDir, result.ProjectOverride, runtime.GOOS == "windows")
+			if session.Agent == "pi" {
+				result.Command = piResumeCommand(result.Cwd, result.Paths[0], runtime.GOOS == "windows")
+			} else {
+				result.Command = claudeResumeCommand(result.Cwd, nativeID, result.ConfigDir, result.ProjectOverride, runtime.GOOS == "windows")
+			}
 			if outputFormat(cmd) == "json" {
 				if err := json.MarshalWrite(cmd.OutOrStdout(), result); err != nil {
 					return err
@@ -86,4 +90,11 @@ func claudeResumeCommand(cwd, id, home, project string, windows bool) string {
 		return "Set-Location -LiteralPath " + shellquote.PowerShell(cwd) + "; if ($?) { & { $oldHome = $env:CLAUDE_CONFIG_DIR; $oldProject = $env:CLAUDE_CODE_PROJECT_DIR_NAME; try { $env:CLAUDE_CONFIG_DIR = " + shellquote.PowerShell(home) + "; $env:CLAUDE_CODE_PROJECT_DIR_NAME = " + shellquote.PowerShell(project) + "; claude --resume " + shellquote.PowerShell(id) + " } finally { $env:CLAUDE_CONFIG_DIR = $oldHome; $env:CLAUDE_CODE_PROJECT_DIR_NAME = $oldProject } } }"
 	}
 	return "cd " + shellquote.POSIX(cwd) + " && CLAUDE_CONFIG_DIR=" + shellquote.POSIX(home) + " CLAUDE_CODE_PROJECT_DIR_NAME=" + shellquote.POSIX(project) + " claude --resume " + shellquote.POSIX(id)
+}
+
+func piResumeCommand(cwd, path string, windows bool) string {
+	if windows {
+		return "Set-Location -LiteralPath " + shellquote.PowerShell(cwd) + "; if ($?) { pi --session " + shellquote.PowerShell(path) + " }"
+	}
+	return "cd " + shellquote.POSIX(cwd) + " && pi --session " + shellquote.POSIX(path)
 }
