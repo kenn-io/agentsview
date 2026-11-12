@@ -87,7 +87,7 @@ func (s *Store) GetPlanUsageSessionCounts(
 	if version == standbyUsageMarker {
 		raw := f
 		raw.ModelAliases = nil
-		tally, handled, err := standbyRetained(ctx, s, slot, &s.runtimeState().planUsage, func(ctx context.Context, view *Store) (*db.PlanUsageCountSummary, error) {
+		tally, handled, err := standbyRetained(ctx, s, slot, &s.runtimeState().planUsage, &s.runtimeState().standbyPlan, func(ctx context.Context, view *Store) (*db.PlanUsageCountSummary, error) {
 			return view.readPlanUsageSessionCounts(ctx, raw)
 		})
 		if handled {

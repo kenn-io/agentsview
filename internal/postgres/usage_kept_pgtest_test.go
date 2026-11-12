@@ -173,13 +173,29 @@ func keptUsageFixture(t *testing.T) (*db.DB, *Sync, *Store, *usageReadCounter) {
 type usageQueryTracer struct {
 	mu      sync.Mutex
 	queries map[string]int
+	probes  atomic.Int64
+	started chan struct{}
+	release chan struct{}
+	once    sync.Once
 }
 
 func (trace *usageQueryTracer) TraceQueryStart(ctx context.Context, _ *pgx.Conn, data pgx.TraceQueryStartData) context.Context {
+	if strings.Contains(data.SQL, "usage_history_token") {
+		trace.probes.Add(1)
+	}
 	if strings.Contains(data.SQL, "usage_event_timestamp_rows AS MATERIALIZED") || strings.Contains(data.SQL, "FROM session_plan_usage p") {
 		trace.mu.Lock()
 		trace.queries[data.SQL]++
 		trace.mu.Unlock()
+		if trace.started != nil {
+			trace.once.Do(func() {
+				close(trace.started)
+				select {
+				case <-trace.release:
+				case <-ctx.Done():
+				}
+			})
+		}
 	}
 	return ctx
 }
@@ -276,6 +292,49 @@ func TestUsageStandbyRetainsResults(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, want, got)
 	require.NotEqual(t, 1250, got.Totals.OutputTokens)
+
+	// Two callers of the same cold selection should share its source scan.
+	filter.From = "2025-12-31"
+	trace.mu.Lock()
+	before := maps.Clone(trace.queries)
+	trace.mu.Unlock()
+	probes := trace.probes.Load()
+	trace.started, trace.release = make(chan struct{}), make(chan struct{})
+	releaseScan := sync.OnceFunc(func() { close(trace.release) })
+	t.Cleanup(releaseScan)
+	var values [2]db.DailyUsageResult
+	var readErrors [2]error
+	var group sync.WaitGroup
+	group.Add(2)
+	go func() {
+		defer group.Done()
+		values[0], readErrors[0] = standby.GetDailyUsage(ctx, filter)
+	}()
+	select {
+	case <-trace.started:
+	case <-time.After(10 * time.Second):
+		t.Fatal("first standby scan did not start")
+	}
+	go func() {
+		defer group.Done()
+		values[1], readErrors[1] = standby.GetDailyUsage(ctx, filter)
+	}()
+	require.Eventually(t, func() bool { return trace.probes.Load() >= probes+3 }, 10*time.Second, 10*time.Millisecond)
+	// Let the second validated caller join the first scan before releasing it.
+	time.Sleep(200 * time.Millisecond)
+	releaseScan()
+	group.Wait()
+	require.NoError(t, readErrors[0])
+	require.NoError(t, readErrors[1])
+	require.Equal(t, values[0], values[1])
+	trace.mu.Lock()
+	after := maps.Clone(trace.queries)
+	trace.mu.Unlock()
+	scans := 0
+	for query, count := range after {
+		scans += count - before[query]
+	}
+	require.Equal(t, 1, scans, "concurrent callers should share the daily source scan")
 }
 
 func TestUsageKeptJournalReplacementAtSameRevision(t *testing.T) {

@@ -1597,7 +1597,7 @@ func (s *Store) GetDailyUsage(
 	if version == standbyUsageMarker {
 		full := f
 		full.SkipSessionCounts = false
-		result, handled, err := standbyRetained(ctx, s, slot, &s.runtimeState().dailyUsage, func(ctx context.Context, view *Store) (db.DailyUsageResult, error) {
+		result, handled, err := standbyRetained(ctx, s, slot, &s.runtimeState().dailyUsage, &s.runtimeState().standbyDaily, func(ctx context.Context, view *Store) (db.DailyUsageResult, error) {
 			return view.readDailyUsage(ctx, full)
 		})
 		if handled {
@@ -2251,7 +2251,7 @@ func (s *Store) GetTopSessionsByCost(
 		if slot != "" {
 			standbySlot = fmt.Sprintf("standby|%s|%s|%d|%d", slot, f.TopSessionsSort, f.TopSessionsTokenTypes, limit)
 		}
-		result, handled, err := standbyRetained(ctx, s, standbySlot, &s.runtimeState().topUsage, func(ctx context.Context, view *Store) ([]db.TopSessionEntry, error) {
+		result, handled, err := standbyRetained(ctx, s, standbySlot, &s.runtimeState().topUsage, &s.runtimeState().standbyTop, func(ctx context.Context, view *Store) ([]db.TopSessionEntry, error) {
 			out, err := view.readTopSessions(ctx, f)
 			if err != nil {
 				return nil, err

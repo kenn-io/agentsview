@@ -65,6 +65,9 @@ type storeRuntime struct {
 	dailyUsage        kept.Reads[db.DailyUsageResult]
 	planUsage         kept.Reads[*db.PlanUsageCountSummary]
 	topUsage          kept.Reads[[]db.TopSessionEntry]
+	standbyDaily      kept.Flights[standbyResult[db.DailyUsageResult]]
+	standbyPlan       kept.Flights[standbyResult[*db.PlanUsageCountSummary]]
+	standbyTop        kept.Flights[standbyResult[[]db.TopSessionEntry]]
 
 	// vectorMu guards the semantic-search seam. vectorSearcher is the PG
 	// vector searcher wired at pg serve startup when a generation matches

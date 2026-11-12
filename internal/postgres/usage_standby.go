@@ -27,9 +27,15 @@ func standbyUsageVersion(ctx context.Context, q storeExecutor, generation uint64
 	return fmt.Sprintf("standby|%s|%d|%d|%d", token, revision, oid.Int64, generation)
 }
 
+type standbyResult[T any] struct {
+	value   T
+	handled bool
+	version string
+}
+
 // A retained standby result is built entirely within the snapshot whose token
 // identifies it. Failed or unavailable journal probes use the direct path.
-func standbyRetained[T any](ctx context.Context, s *Store, slot string, reads *kept.Reads[T], load func(context.Context, *Store) (T, error)) (T, bool, error) {
+func standbyRetained[T any](ctx context.Context, s *Store, slot string, reads *kept.Reads[T], flights *kept.Flights[standbyResult[T]], load func(context.Context, *Store) (T, error)) (T, bool, error) {
 	var zero T
 	if slot == "" || s.readTx != nil || s.hostedRelations {
 		return zero, false, nil
@@ -45,31 +51,51 @@ func standbyRetained[T any](ctx context.Context, s *Store, slot string, reads *k
 	if value, ok := reads.Get(slot, version); ok {
 		return value, true, nil
 	}
-	tx, err := s.beginTx(ctx, &sql.TxOptions{ReadOnly: true, Isolation: sql.LevelRepeatableRead})
+	result, err := flights.Do(ctx, version+"|"+slot, func(ctx context.Context) (standbyResult[T], error) {
+		return standbyLoad(ctx, s, slot, reads, load)
+	})
 	if err != nil {
 		return zero, true, err
+	}
+	// A flight keyed by an old token can capture a newer snapshot. A caller
+	// that observed the old token may have returned to that history while
+	// the flight ran, so it must capture its own snapshot.
+	if result.handled && result.version != version {
+		result, err = standbyLoad(ctx, s, slot, reads, load)
+	}
+	return result.value, result.handled, err
+}
+
+func standbyLoad[T any](ctx context.Context, s *Store, slot string, reads *kept.Reads[T], load func(context.Context, *Store) (T, error)) (standbyResult[T], error) {
+	result := standbyResult[T]{handled: true}
+	tx, err := s.beginTx(ctx, &sql.TxOptions{ReadOnly: true, Isolation: sql.LevelRepeatableRead})
+	if err != nil {
+		return result, err
 	}
 	defer func() { _ = tx.Rollback() }()
 	view := s.readView(tx)
+	runtime := s.runtimeState()
 	runtime.pricingMu.Lock()
-	generation = runtime.pricingGeneration
+	generation := runtime.pricingGeneration
 	view.pricingSnapshot.custom = maps.Clone(runtime.customPricing)
 	view.pricingSnapshot.frozen = true
 	runtime.pricingMu.Unlock()
-	version = standbyUsageVersion(ctx, view.pg, generation)
-	if version == "" {
-		return zero, false, nil
+	result.version = standbyUsageVersion(ctx, view.pg, generation)
+	if result.version == "" {
+		result.handled = false
+		return result, nil
 	}
-	if value, ok := reads.Get(slot, version); ok {
-		return value, true, tx.Commit()
+	if value, ok := reads.Get(slot, result.version); ok {
+		result.value = value
+		return result, tx.Commit()
 	}
-	value, err := load(ctx, view)
+	result.value, err = load(ctx, view)
 	if err != nil {
-		return zero, true, err
+		return result, err
 	}
 	if err := tx.Commit(); err != nil {
-		return zero, true, err
+		return result, err
 	}
-	reads.Put(slot, version, value)
-	return value, true, nil
+	reads.Put(slot, result.version, result.value)
+	return result, nil
 }
