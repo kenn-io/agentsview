@@ -1186,7 +1186,7 @@ The `Subagents` line appears only when the figures cover subagent transcripts,
 so a session without them (or a `--own-only` run) prints the same five lines it
 always has.
 
-When refresh is incomplete, human output adds `Usage refresh: incomplete; showing archived totals`.
+When refresh is incomplete, human output adds `Usage refresh is incomplete. Saved totals may be out of date.`.
 
 The leading `~` on the cost line marks a computed or mixed figure. A reported
 cost omits it. The parenthesized model list is shown only when contributing

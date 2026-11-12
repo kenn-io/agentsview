@@ -126,7 +126,7 @@ func newExportCommandWithDeps(deps exportReportingDeps) *cobra.Command {
 func newExportStatusCommand() *cobra.Command {
 	return &cobra.Command{
 		Use:          "status",
-		Short:        "Show export evidence backfill status",
+		Short:        "Show export project details progress",
 		Args:         cobra.NoArgs,
 		SilenceUsage: true,
 		RunE: func(cmd *cobra.Command, _ []string) error {
