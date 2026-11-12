@@ -3026,41 +3026,60 @@ func sqliteToolsDateKey(f AnalyticsFilter) string {
 	if loc == time.UTC {
 		return `(CASE WHEN substr(` + ts + `, -1) = 'Z' AND length(` + ts + `) >= 10 THEN substr(` + ts + `, 1, 10) ELSE ` + fallback + ` END)`
 	}
-	// Unbounded non-UTC ranges would call Go for every row.
 	if f.From == "" || f.To == "" {
 		return ""
 	}
-	start, err := time.Parse("2006-01-02", f.From)
-	if err != nil {
+	periods := ToolsDatePeriods(f)
+	if len(periods) == 0 {
 		return fallback
 	}
-	end, err := time.Parse("2006-01-02", f.To)
-	if err != nil || end.Before(start) {
-		return fallback
-	}
-	start = start.Add(-48 * time.Hour)
-	end = end.Add(72 * time.Hour)
 	seconds := `substr(` + ts + `, 1, 19)`
-	localDate := `(CASE WHEN ` + seconds + ` < '` + start.Format("2006-01-02T15:04:05") + `' THEN NULL`
-	periods := 0
-	for cursor := start; cursor.Before(end); {
-		_, offset := cursor.In(loc).Zone()
-		_, until := cursor.In(loc).ZoneBounds()
-		if until.IsZero() || until.After(end) {
-			until = end
-		}
-		if !until.After(cursor) || periods == 32 {
-			return fallback
-		}
-		localDate += ` WHEN ` + seconds + ` < '` + until.UTC().Format("2006-01-02T15:04:05") + `' THEN strftime('%Y-%m-%d', ` + seconds + `, '` + fmt.Sprintf("%+d seconds", offset) + `')`
-		cursor = until
-		periods++
+	localDate := `(CASE WHEN ` + seconds + ` < '` + periods[0].Start.Format("2006-01-02T15:04:05") + `' THEN NULL`
+	for _, period := range periods {
+		localDate += ` WHEN ` + seconds + ` < '` + period.End.Format("2006-01-02T15:04:05") + `' THEN strftime('%Y-%m-%d', ` + seconds + `, '` + fmt.Sprintf("%+d seconds", period.Offset) + `')`
 	}
 	localDate += ` END)`
 	// Invalid timestamps use their first ten bytes. When SQLite's date agrees
 	// with those bytes, both parsers produce the same date. Strip fractions
 	// before SQLite rounds; resolve the remaining cases with Go.
 	return `(CASE WHEN substr(` + ts + `, -1) = 'Z' AND ` + localDate + ` = substr(` + ts + `, 1, 10) THEN substr(` + ts + `, 1, 10) ELSE ` + fallback + ` END)`
+}
+
+// ToolsDatePeriod describes one UTC interval with a constant local offset.
+type ToolsDatePeriod struct {
+	Start, End time.Time
+	Offset     int
+}
+
+// ToolsDatePeriods bounds the timezone transitions used for tool date grouping.
+func ToolsDatePeriods(f AnalyticsFilter) []ToolsDatePeriod {
+	if f.From == "" || f.To == "" {
+		return nil
+	}
+	start, err := time.Parse("2006-01-02", f.From)
+	if err != nil {
+		return nil
+	}
+	end, err := time.Parse("2006-01-02", f.To)
+	if err != nil || end.Before(start) {
+		return nil
+	}
+	start, end = start.Add(-48*time.Hour), end.Add(72*time.Hour)
+	loc := LoadLocationOr(f.Timezone, time.UTC)
+	var periods []ToolsDatePeriod
+	for cursor := start; cursor.Before(end); {
+		_, offset := cursor.In(loc).Zone()
+		_, until := cursor.In(loc).ZoneBounds()
+		if until.IsZero() || until.After(end) {
+			until = end
+		}
+		if !until.After(cursor) || len(periods) == 32 {
+			return nil
+		}
+		periods = append(periods, ToolsDatePeriod{Start: cursor.UTC(), End: until.UTC(), Offset: offset})
+		cursor = until
+	}
+	return periods
 }
 
 func analyticsSkillsQuery(

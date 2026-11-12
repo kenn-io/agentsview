@@ -5,6 +5,9 @@ package duckdb
 import (
 	"context"
 	"fmt"
+	"os"
+	"os/exec"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -1031,6 +1034,7 @@ func TestDuckAnalyticsToolEvidenceDatesAndLinks(t *testing.T) {
 			t.Skip("host timezone database has no localtime entry")
 		}
 		localFilter := filter
+		localFilter.From, localFilter.To = "2025-06-01", "2025-06-02"
 		localFilter.Timezone = "localtime"
 		evidence, err := store.GetAnalyticsSignalSessions(t.Context(), localFilter, "tool_empty_rate", 10)
 		require.NoError(t, err)
@@ -1045,6 +1049,49 @@ func TestDuckAnalyticsToolEvidenceDatesAndLinks(t *testing.T) {
 	require.Len(t, response.Sessions, 1)
 	assert.Equal(t, 2, response.Sessions[0].SignalTotal)
 	assert.Equal(t, new(4), response.Sessions[0].MessageOrdinal)
+}
+
+func TestDuckToolsTimezoneDatabaseDisagreement(t *testing.T) {
+	if os.Getenv("DUCK_TZ_SKEW_TEST") == "1" {
+		id := "duck-tz-skew"
+		store := newDuckAnalyticsStore(t, []db.SessionBatchWrite{{
+			Session: syncSession(id, "alpha", "skew", "2025-03-09T21:59:00Z", 2),
+			Messages: []db.Message{
+				duckModelMessage(id, 0, "assistant", "read", "2025-03-09T21:59:00Z", "model", db.ToolCall{ToolName: "Read", Category: "Read"}),
+				duckModelMessage(id, 1, "assistant", "read", "2025-03-09T22:01:00Z", "model", db.ToolCall{ToolName: "Read", Category: "Read"}),
+			},
+			Signals:     db.SessionSignalUpdate{QualitySignals: db.QualitySignals{Version: db.CurrentQualitySignalVersion}, ToolObservations: []db.ToolObservation{{MessageOrdinal: 0, Outcome: "empty"}, {MessageOrdinal: 1, Outcome: "empty"}}},
+			DataVersion: 1, ReplaceMessages: true,
+		}})
+		filter := db.AnalyticsFilter{From: "2025-03-09", To: "2025-03-10", Timezone: "America/New_York", ToolName: "Read", ToolCategory: "Read"}
+		response, err := store.GetAnalyticsTools(t.Context(), filter)
+		require.NoError(t, err)
+		assert.Equal(t, []db.ToolTrendEntry{{Date: "2025-03-03", ByCat: map[string]int{"Read": 1}}, {Date: "2025-03-10", ByCat: map[string]int{"Read": 1}}}, response.Trend)
+		for i, day := range []string{"2025-03-09", "2025-03-10"} {
+			filter.From, filter.To = day, day
+			response, err := store.GetAnalyticsTools(t.Context(), filter)
+			require.NoError(t, err)
+			assert.Equal(t, 1, response.TotalCalls)
+			evidence, err := store.GetAnalyticsSignalSessions(t.Context(), filter, "tool_empty_rate", 10)
+			require.NoError(t, err)
+			require.Len(t, evidence.Sessions, 1)
+			assert.Equal(t, 1, evidence.Sessions[0].SignalTotal)
+			assert.Equal(t, new(i), evidence.Sessions[0].MessageOrdinal)
+		}
+		return
+	}
+	zone, err := os.ReadFile("/usr/share/zoneinfo/Etc/GMT-2")
+	if os.IsNotExist(err) {
+		t.Skip("timezone fixture unavailable")
+	}
+	require.NoError(t, err)
+	dir := t.TempDir()
+	require.NoError(t, os.Mkdir(filepath.Join(dir, "America"), 0700))
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "America", "New_York"), zone, 0600))
+	cmd := exec.Command(os.Args[0], "-test.run=^TestDuckToolsTimezoneDatabaseDisagreement$")
+	cmd.Env = append(os.Environ(), "DUCK_TZ_SKEW_TEST=1", "ZONEINFO="+dir)
+	out, err := cmd.CombinedOutput()
+	require.NoError(t, err, "%s", out)
 }
 
 func TestDuckAnalyticsToolsLocalDayBoundaries(t *testing.T) {
@@ -1084,6 +1131,25 @@ func TestDuckAnalyticsToolsLocalDayBoundaries(t *testing.T) {
 	}
 }
 
+func TestDuckToolsSessionFallbackOutsidePeriods(t *testing.T) {
+	id := "duck-outside-period"
+	store := newDuckAnalyticsStore(t, []db.SessionBatchWrite{{
+		Session: syncSession(id, "alpha", "fallback", "2024-01-01T00:00:00Z", 2),
+		Messages: []db.Message{
+			duckModelMessage(id, 0, "assistant", "read", "", "model", db.ToolCall{ToolName: "Read", Category: "Read"}),
+			duckModelMessage(id, 1, "assistant", "read", "2025-03-10T12:00:00Z", "model", db.ToolCall{ToolName: "Read", Category: "Read"}),
+		}, DataVersion: 1, ReplaceMessages: true,
+	}})
+	filter := db.AnalyticsFilter{From: "2025-03-10", To: "2025-03-10", Timezone: "America/New_York"}
+	response, err := store.GetAnalyticsTools(t.Context(), filter)
+	require.NoError(t, err)
+	assert.Equal(t, 1, response.TotalCalls)
+	filter.From, filter.To = "1970-01-01", "2025-12-31"
+	response, err = store.GetAnalyticsTools(t.Context(), filter)
+	require.NoError(t, err)
+	assert.Equal(t, 2, response.TotalCalls)
+}
+
 func TestDuckAnalyticsToolsLocalWeeks(t *testing.T) {
 	for _, tc := range []struct {
 		name, zone, before, after, firstWeek, secondWeek string
@@ -1102,7 +1168,7 @@ func TestDuckAnalyticsToolsLocalWeeks(t *testing.T) {
 				},
 				DataVersion: 1, ReplaceMessages: true,
 			}})
-			resp, err := store.GetAnalyticsTools(t.Context(), db.AnalyticsFilter{Timezone: tc.zone})
+			resp, err := store.GetAnalyticsTools(t.Context(), db.AnalyticsFilter{From: "2025-03-01", To: "2025-11-10", Timezone: tc.zone})
 			require.NoError(t, err)
 			require.Len(t, resp.Trend, 2)
 			assert.Equal(t, tc.firstWeek, resp.Trend[0].Date)

@@ -213,18 +213,18 @@ func (s analyticsSQL) VisitTools(ctx context.Context, f db.AnalyticsFilter, ids 
 	}
 	timestamp := "m.timestamp"
 	group := "date_trunc('minute', m.timestamp)"
-	var groupArgs []any
-	// Local may come from a timezone file without an IANA name.
-	if !f.HasTimeFilter() && f.Timezone != "Local" {
-		zoneFilter := f
-		zoneFilter.Timezone = db.LoadLocationOr(f.Timezone, time.UTC).String()
-		var supported bool
-		if err := s.store.queryRowContext(ctx, "SELECT EXISTS (SELECT 1 FROM pg_timezone_names() WHERE name = ?)", zoneFilter.Timezone).Scan(&supported); err != nil {
-			return fmt.Errorf("checking DuckDB timezone: %w", err)
-		}
-		if supported {
-			timestamp = "COALESCE(m.timestamp, s.started_at, s.created_at)"
-			group, groupArgs = duckAnalyticsLocalDateExpr(timestamp, zoneFilter)
+	if !f.HasTimeFilter() {
+		effective := "COALESCE(m.timestamp, s.started_at, s.created_at)"
+		if db.LoadLocationOr(f.Timezone, time.UTC) == time.UTC {
+			timestamp = effective
+			group = "strftime(" + effective + ", '%Y-%m-%d')"
+		} else if periods := db.ToolsDatePeriods(f); len(periods) > 0 {
+			timestamp = effective
+			group = "CASE"
+			for _, period := range periods {
+				group += fmt.Sprintf(" WHEN %[1]s >= TIMESTAMP '%[2]s' AND %[1]s < TIMESTAMP '%[3]s' THEN strftime(%[1]s + INTERVAL (%[4]d) SECOND, '%%Y-%%m-%%d')", effective, period.Start.Format("2006-01-02 15:04:05"), period.End.Format("2006-01-02 15:04:05"), period.Offset)
+			}
+			group += " ELSE strftime(" + effective + ", '%Y-%m-%dT%H:%M') END"
 		}
 	}
 	err := db.QueryChunkedSize(ids, readbase.MaxSQLVars, func(chunk []string) error {
@@ -240,7 +240,6 @@ func (s analyticsSQL) VisitTools(ctx context.Context, f db.AnalyticsFilter, ids 
 		from, to := readbase.AnalyticsWindowBounds(f)
 		windowPred, windowArgs := duckAnalyticsMessageWindowPred("m.timestamp", from, to)
 		args = append(args, windowArgs...)
-		args = append(args, groupArgs...)
 		query := `SELECT tc.session_id, tc.category,
 				TRIM(tc.tool_name), COUNT(*),
 				MAX(` + timestamp + `), MIN(m.ordinal)` + db.ToolEffectivenessSQL("tc", "s.quality_signal_version") + `
