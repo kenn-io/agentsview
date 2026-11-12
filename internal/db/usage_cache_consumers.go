@@ -63,8 +63,10 @@ func (db *DB) SetUsageWindowPrepareForTest(beforePrepare func(context.Context)) 
 	db.usageCache.usageWindowObserver.beforePrepare = beforePrepare
 }
 
-type usageWindowMemoKey struct{}
-type usageWindowVersionKey struct{}
+type (
+	usageWindowMemoKey    struct{}
+	usageWindowVersionKey struct{}
+)
 
 type usageWindowMemo struct {
 	mu      sync.Mutex
