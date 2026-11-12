@@ -3,11 +3,13 @@ package parser
 import (
 	"os"
 	"path/filepath"
+	"strconv"
 	"testing"
 	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"github.com/tidwall/gjson"
 )
 
 // grokCompactedBase is the first updates.jsonl timestamp in the compacted
@@ -261,4 +263,94 @@ func TestGrokChatHistoryToolCallsRender(t *testing.T) {
 	require.Len(t, row.ToolCalls, 2)
 	assert.Equal(t, "[List: /workspace/fetchkit]", row.ToolCalls[0].Rendering)
 	assert.Equal(t, "[Tool: use_tool]", row.ToolCalls[1].Rendering)
+}
+
+// grokUpdateLine wraps a session update in the updates.jsonl envelope.
+func grokUpdateLine(ts int64, update string) string {
+	return `{"timestamp":` + strconv.FormatInt(ts, 10) +
+		`,"method":"session/update","params":{"sessionId":"s","update":` + update + `}}` + "\n"
+}
+
+func TestGrokCompactedPrefixKeepsResultTheStreamNeverFinished(t *testing.T) {
+	root := t.TempDir()
+	sessionDir := filepath.Join(root, "cwd-key", "019f6000-0000-7000-8000-000000000024")
+	writeGrokFixtureFile(t, filepath.Join(sessionDir, "summary.json"),
+		`{"info":{"id":"019f6000-0000-7000-8000-000000000024","cwd":"/workspace/fetchkit"},"created_at":"2026-07-23T09:46:40Z"}`)
+	// The stream saw the call start, then the session compacted.
+	writeGrokFixtureFile(t, filepath.Join(sessionDir, "updates.jsonl"), ""+
+		grokUpdateLine(1784800001, `{"sessionUpdate":"user_message_chunk","content":{"type":"text","text":"Run the tests"}}`)+
+		grokUpdateLine(1784800002, `{"sessionUpdate":"tool_call","toolCallId":"call-7","title":"run_terminal_command","rawInput":{"command":"go test ./..."}}`)+
+		grokUpdateLine(1784800009, `{"sessionUpdate":"compaction_checkpoint","checkpoint_file":"compaction_checkpoints/c.json"}`))
+	// The compacted history carries the call's only result before the summary.
+	writeGrokFixtureFile(t, filepath.Join(sessionDir, "chat_history.jsonl"), ""+
+		`{"type":"user","content":[{"type":"text","text":"<user_query>\nRun the tests\n</user_query>"}]}`+"\n"+
+		`{"type":"assistant","content":"","tool_calls":[{"id":"call-7","name":"run_terminal_command","arguments":"{\"command\":\"go test ./...\"}"}]}`+"\n"+
+		`{"type":"tool_result","tool_call_id":"call-7","content":"Command interrupted by the user."}`+"\n"+
+		`{"type":"user","content":[{"type":"text","text":"`+grokCompactionSummaryPreamble+` Tests were interrupted."}],"synthetic_reason":"compaction_meta"}`+"\n"+
+		`{"type":"assistant","content":"Rerunning them."}`+"\n")
+
+	result, err := ParseGrokSummary(t.Context(), filepath.Join(sessionDir, "summary.json"), "", "m")
+	require.NoError(t, err)
+	var calls, results []string
+	for _, msg := range result.Messages {
+		for _, call := range msg.ToolCalls {
+			calls = append(calls, call.ToolUseID)
+			assert.Empty(t, call.ResultEvents, "a lone start must not replace the result")
+		}
+		for _, r := range msg.ToolResults {
+			results = append(results, DecodeContent(r.ContentRaw))
+		}
+	}
+	assert.Equal(t, []string{"call-7"}, calls, "the replayed call is not repeated")
+	assert.Equal(t, []string{"Command interrupted by the user."}, results)
+}
+
+func TestGrokCompactedSessionWithoutChatHistoryStaysSummaryOnly(t *testing.T) {
+	root := t.TempDir()
+	require.NoError(t, os.CopyFS(root, os.DirFS(filepath.Join("testdata", "grok-build", "compacted"))))
+	sessionDir := filepath.Join(root, filepath.FromSlash(grokCompactedDir))
+	require.NoError(t, os.Remove(filepath.Join(sessionDir, "chat_history.jsonl")))
+
+	result, err := ParseGrokSummary(t.Context(), filepath.Join(sessionDir, "summary.json"), "", "m")
+	require.NoError(t, err)
+	// The turns after the last compaction live only in chat_history.jsonl,
+	// so a rebuilt prefix alone would claim a full transcript it lacks.
+	assert.Equal(t, TranscriptFidelitySummary, result.Session.TranscriptFidelity)
+	assert.Equal(t, 16, result.Session.MessageCount)
+}
+
+func TestGrokLateToolInputRefreshesRendering(t *testing.T) {
+	r := newGrokSegmentReducer(t.Context())
+	for _, line := range []string{
+		`{"sessionUpdate":"tool_call","toolCallId":"a","title":"read_file"}`,
+		`{"sessionUpdate":"tool_call","toolCallId":"b","title":"read_file"}`,
+		`{"sessionUpdate":"tool_call_update","toolCallId":"a","status":"completed","content":[{"type":"content","content":{"type":"text","text":"one"}}]}`,
+		`{"sessionUpdate":"tool_call_update","toolCallId":"b","rawInput":{"target_file":"/workspace/fetchkit/b.go"}}`,
+	} {
+		r.process(gjson.Parse(line), time.Unix(grokCompactedBase, 0))
+	}
+	msgs := r.finish()
+	require.NotEmpty(t, msgs)
+	require.Len(t, msgs[0].ToolCalls, 2)
+	assert.Equal(t, "[Read: /workspace/fetchkit/b.go]", msgs[0].ToolCalls[1].Rendering)
+	assert.Equal(t, "[Read]\n[Read: /workspace/fetchkit/b.go]", msgs[0].Content)
+}
+
+func TestGrokNativeToolRenderingsAreRedactionCandidates(t *testing.T) {
+	tests := []struct{ name, input string }{
+		{"read_file", `{"target_file":"/workspace/fetchkit/fetch.go"}`},
+		{"run_terminal_command", `{"command":"echo \"for now\"","description":"Print a note"}`},
+		{"search_replace", `{"file_path":"/workspace/fetchkit/fetch.go","old_string":"a","new_string":"b"}`},
+		{"list_dir", `{"target_directory":"/workspace/fetchkit"}`},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			rendering := grokToolRendering(tt.name, tt.input)
+			var fulls []string
+			for _, pair := range ToolUseRenderingCandidates(AgentGrok, NormalizeToolCategory(tt.name), tt.name, tt.input) {
+				fulls = append(fulls, pair.Full)
+			}
+			assert.Contains(t, fulls, rendering)
+		})
+	}
 }

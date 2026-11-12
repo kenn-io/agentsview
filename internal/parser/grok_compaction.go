@@ -3,12 +3,15 @@ package parser
 import (
 	"context"
 	"encoding/json/v2"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
 	"time"
 
 	"github.com/tidwall/gjson"
+
+	"go.kenn.io/agentsview/internal/ctxio"
 )
 
 // grokCompactionSummaryPreamble opens the user_meta row that carries a
@@ -82,19 +85,26 @@ func grokTextParts(content gjson.Result) string {
 // grokCheckpointSummary reads the compaction summary from a checkpoint file's
 // compacted_history. It returns "" when the file is missing, unreadable, or
 // carries no summary; the boundary still marks the compaction.
-func grokCheckpointSummary(sessionDir, rel string) string {
+func grokCheckpointSummary(ctx context.Context, sessionDir, rel string) (string, error) {
 	rel = filepath.FromSlash(strings.TrimSpace(rel))
 	if rel == "" || !filepath.IsLocal(rel) {
-		return ""
+		return "", ctx.Err()
 	}
-	path := filepath.Join(sessionDir, rel)
-	info, err := os.Stat(path)
+	f, err := os.Open(filepath.Join(sessionDir, rel))
+	if err != nil {
+		return "", ctx.Err()
+	}
+	defer f.Close()
+	info, err := f.Stat()
 	if err != nil || info.Size() > grokMaxCheckpointFileSize {
-		return ""
+		return "", ctx.Err()
 	}
-	data, err := os.ReadFile(path)
+	data, err := io.ReadAll(ctxio.Reader{Context: ctx, Reader: f})
+	if ctxErr := ctx.Err(); ctxErr != nil {
+		return "", ctxErr
+	}
 	if err != nil || !gjson.ValidBytes(data) {
-		return ""
+		return "", nil
 	}
 	summary := ""
 	gjson.GetBytes(data, "compacted_history").ForEach(func(_, item gjson.Result) bool {
@@ -108,7 +118,7 @@ func grokCheckpointSummary(sessionDir, rel string) string {
 		}
 		return true
 	})
-	return summary
+	return summary, nil
 }
 
 // parseGrokCompactedSegments rebuilds the transcript before each compaction
@@ -298,6 +308,9 @@ func (r *grokSegmentReducer) onToolCallUpdate(update gjson.Result, timestamp tim
 		if input := grokRawInputJSON(update.Get("rawInput")); input != "" {
 			call.InputJSON = input
 			call.SkillName = inferToolSkillName(r.ctx, call.ToolName, input)
+			if pos := r.callAt[id]; pos.message >= 0 {
+				r.rerender(pos.message)
+			}
 		}
 	}
 	status := update.Get("status").Str
@@ -400,6 +413,19 @@ func (r *grokSegmentReducer) flushAgent() {
 	r.messages = append(r.messages, msg)
 }
 
+// rerender rebuilds an emitted assistant row after one of its calls
+// received its input late, so the rendered blocks match the arguments.
+func (r *grokSegmentReducer) rerender(index int) {
+	old := r.messages[index]
+	text := ""
+	if old.DialogueText != nil {
+		text = *old.DialogueText
+	}
+	msg := grokAssistantMessage(text, old.ThinkingText, old.Model, old.ToolCalls)
+	msg.Timestamp = old.Timestamp
+	r.messages[index] = msg
+}
+
 // finish closes the open items and returns the segment's rows.
 func (r *grokSegmentReducer) finish() []ParsedMessage {
 	r.flushUser()
@@ -448,13 +474,16 @@ func grokToolUpdateResultText(update gjson.Result) string {
 // the system prompt, injected metadata, the carried user query and recent
 // messages, then the summary row. That prefix replays rows the rebuilt
 // segment already holds, so it is dropped up to the summary, which becomes
-// the last checkpoint's boundary. When chat_history.jsonl has no summary
-// row, the last boundary comes from the checkpoint file and every row stays.
+// the last checkpoint's boundary. A result the prefix holds for a rebuilt
+// call the stream never finished is kept, since it is that call's only
+// output. When chat_history.jsonl has no summary row, the last boundary
+// comes from the checkpoint file and every row stays.
 func grokAssembleTranscript(
-	sessionDir string, segments []grokCompactedSegment, chat []ParsedMessage,
-) []ParsedMessage {
+	ctx context.Context, sessionDir string,
+	segments []grokCompactedSegment, chat []ParsedMessage,
+) ([]ParsedMessage, error) {
 	if len(segments) == 0 {
-		return chat
+		return chat, nil
 	}
 	summaryAt := -1
 	for i := range chat {
@@ -463,6 +492,11 @@ func grokAssembleTranscript(
 			break
 		}
 	}
+	if summaryAt >= 0 {
+		last := &segments[len(segments)-1]
+		last.messages = append(last.messages,
+			grokUnansweredResults(segments, chat[:summaryAt])...)
+	}
 	total := len(chat) + len(segments)
 	for _, segment := range segments {
 		total += len(segment.messages)
@@ -470,14 +504,14 @@ func grokAssembleTranscript(
 	out := make([]ParsedMessage, 0, total)
 	for i, segment := range segments {
 		out = append(out, segment.messages...)
-		last := i == len(segments)-1
-		if last && summaryAt >= 0 {
+		if i == len(segments)-1 && summaryAt >= 0 {
 			break
 		}
-		out = append(out, grokCompactBoundary(
-			grokCheckpointSummary(sessionDir, segment.checkpoint.file),
-			segment.checkpoint.timestamp,
-		))
+		summary, err := grokCheckpointSummary(ctx, sessionDir, segment.checkpoint.file)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, grokCompactBoundary(summary, segment.checkpoint.timestamp))
 	}
 	if summaryAt >= 0 {
 		chat = chat[summaryAt:]
@@ -489,5 +523,72 @@ func grokAssembleTranscript(
 	for i := range out {
 		out[i].Ordinal = i
 	}
-	return out
+	return out, nil
+}
+
+// grokUnansweredResults returns the result rows in a dropped prefix that
+// answer a rebuilt call the stream recorded no result for.
+func grokUnansweredResults(
+	segments []grokCompactedSegment, prefix []ParsedMessage,
+) []ParsedMessage {
+	open := map[string]bool{}
+	for _, segment := range segments {
+		for _, msg := range segment.messages {
+			for _, call := range msg.ToolCalls {
+				if call.ToolUseID != "" {
+					open[call.ToolUseID] = true
+				}
+			}
+		}
+	}
+	for _, segment := range segments {
+		for _, msg := range segment.messages {
+			for _, result := range msg.ToolResults {
+				delete(open, result.ToolUseID)
+			}
+		}
+	}
+	var kept []ParsedMessage
+	for _, msg := range prefix {
+		for _, result := range msg.ToolResults {
+			if open[result.ToolUseID] {
+				kept = append(kept, msg)
+				break
+			}
+		}
+	}
+	return kept
+}
+
+// grokDropLoneStartEvents clears a call's events when they hold only its
+// start but a result row answers it. An interrupted call can have its start
+// in updates.jsonl and its result only in chat_history.jsonl; the call
+// summary built from events would otherwise replace that result with the
+// start event's empty text.
+func grokDropLoneStartEvents(messages []ParsedMessage) {
+	answered := map[string]bool{}
+	for _, msg := range messages {
+		for _, result := range msg.ToolResults {
+			if strings.TrimSpace(DecodeContent(result.ContentRaw)) != "" {
+				answered[result.ToolUseID] = true
+			}
+		}
+	}
+	for i := range messages {
+		for j := range messages[i].ToolCalls {
+			call := &messages[i].ToolCalls[j]
+			if answered[call.ToolUseID] && !grokHasFinishedEvent(call.ResultEvents) {
+				call.ResultEvents = nil
+			}
+		}
+	}
+}
+
+func grokHasFinishedEvent(events []ParsedToolResultEvent) bool {
+	for _, event := range events {
+		if event.Status != "started" {
+			return true
+		}
+	}
+	return false
 }

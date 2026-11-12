@@ -117,11 +117,19 @@ func ParseGrokSummary(
 	malformed += updates.skipped
 	enrichGrokMessageTimestamps(messages, updates.anchors)
 	enrichGrokToolResultEvents(messages, updates.anchors)
-	segments, err := parseGrokCompactedSegments(ctx, updatesPath, updates.checkpoints)
-	if err != nil {
-		return ParseResult{}, err
+	// Without chat_history.jsonl the turns after the last compaction are
+	// missing, so the session keeps its summary-only fallback.
+	if len(messages) > 0 {
+		segments, err := parseGrokCompactedSegments(ctx, updatesPath, updates.checkpoints)
+		if err != nil {
+			return ParseResult{}, err
+		}
+		messages, err = grokAssembleTranscript(ctx, sessionDir, segments, messages)
+		if err != nil {
+			return ParseResult{}, err
+		}
 	}
-	messages = grokAssembleTranscript(sessionDir, segments, messages)
+	grokDropLoneStartEvents(messages)
 	grokAttachSpawnedSubagents(messages)
 
 	firstPrompt := ""
@@ -757,23 +765,6 @@ func enrichGrokToolResultEvents(
 			Timestamp: anchor.timestamp,
 		})
 	}
-	// An interrupted call can have its start in updates.jsonl and its result
-	// only in chat_history.jsonl. A lone start event carries no text, and the
-	// call summary built from events would replace the paired result with it.
-	for id, call := range calls {
-		if strings.TrimSpace(results[id]) != "" && !grokHasFinishedEvent(call.ResultEvents) {
-			call.ResultEvents = nil
-		}
-	}
-}
-
-func grokHasFinishedEvent(events []ParsedToolResultEvent) bool {
-	for _, event := range events {
-		if event.Status != "started" {
-			return true
-		}
-	}
-	return false
 }
 
 func grokTimestampAnchorMatches(
@@ -1155,26 +1146,35 @@ func grokAssistantMessage(
 // grokToolRendering renders a Grok Build tool call with the shared tool
 // formats, mapping Grok's argument names onto them.
 func grokToolRendering(name, inputJSON string) string {
+	if rendering, ok := grokNativeToolRendering(name, inputJSON); ok {
+		return rendering
+	}
+	return formatToolUseInput(name, gjson.Parse(inputJSON))
+}
+
+// grokNativeToolRendering renders the Grok Build tools whose arguments the
+// shared formats do not read directly.
+func grokNativeToolRendering(name, inputJSON string) (string, bool) {
 	input := gjson.Parse(inputJSON)
 	switch name {
 	case "read_file":
 		return formatToolHeader("Read", firstNonEmptyJSONLString(
 			input.Get("target_file").Str, resolveFilePath(input),
-		))
+		)), true
 	case "run_terminal_command":
-		return formatToolUseInput("bash", input)
+		return formatToolUseInput("bash", input), true
 	case "search_replace":
-		return formatToolUseInput("str_replace", input)
+		return formatToolUseInput("str_replace", input), true
 	case "grep":
-		return formatToolUseInput("Grep", input)
+		return formatToolUseInput("Grep", input), true
 	case "list_dir":
-		return formatToolHeader("List", input.Get("target_directory").Str)
+		return formatToolHeader("List", input.Get("target_directory").Str), true
 	case "web_fetch":
-		return formatToolUseInput("read_web_page", input)
+		return formatToolUseInput("read_web_page", input), true
 	case "todo_write":
-		return formatToolUseInput("TodoWrite", input)
+		return formatToolUseInput("TodoWrite", input), true
 	}
-	return formatToolUseInput(name, input)
+	return "", false
 }
 
 // grokSummaryMessageCount prefers the chat-transcript count over the broader
