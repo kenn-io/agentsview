@@ -305,6 +305,8 @@ func (v *liveVectorServing) activate(deployment config.VectorEmbeddingsServerCon
 		if err != nil {
 			return err
 		}
+		status, err := embeddingsSetupStatus(v.ctx, server.EmbeddingsSetupStatus{}, cfg)
+		builtin = builtin && err == nil && status.Provider == "built-in"
 		// Opening can wait on another process's write lock; status stays available.
 		serving, err := setupVectorServing(v.ctx, cfg, v.database, v.idle)
 		if err != nil {

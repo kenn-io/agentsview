@@ -71,6 +71,14 @@ func TestSharedChoiceStartsIndexing(t *testing.T) {
 	saved, err := config.LoadReadOnly()
 	require.NoError(t, err)
 	assert.False(t, saved.Vector.Enabled)
+	owner.Manager("").Wait()
+	ln, port := listenLoopback(t)
+	cfg.Host, cfg.Port = "127.0.0.1", port
+	startTestServer(t, ln, server.New(cfg, database, nil, owner.ServerOptions()...).Handler())
+	writeDaemonRuntimeForTest(t, dir, "127.0.0.1", port, "test", false)
+	out, err := executeCommand(newRootCommand(), "index", "embeddings", "build", "--repair-invalid")
+	require.NoError(t, err, out)
+	assert.Contains(t, out, "Repair")
 }
 
 func TestSharedChoiceRespectsSettings(t *testing.T) {

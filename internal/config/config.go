@@ -4246,6 +4246,17 @@ func (c *Config) VectorSetupEmbeddings() (VectorEmbeddingsConfig, error) {
 	return embeddings, err
 }
 
+// VectorExplicitlyDisabled reports a saved opt-out.
+func (c *Config) VectorExplicitlyDisabled() (bool, error) {
+	existing, err := c.readConfigMap()
+	if err != nil {
+		return false, err
+	}
+	section, _ := existing["vector"].(map[string]any)
+	enabled, ok := section["enabled"].(bool)
+	return ok && !enabled, nil
+}
+
 // SharedVectorSetup returns an in-memory setup when the current settings permit it.
 func (c *Config) SharedVectorSetup() (Config, bool, error) {
 	var candidate Config
