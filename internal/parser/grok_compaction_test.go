@@ -49,27 +49,37 @@ func TestGrokProviderGoldenCompactedTranscript(t *testing.T) {
 	}
 	want := []row{
 		{role: RoleUser, dialogue: "Add a retry with backoff to the fetch helper and run the tests.", at: 1},
-		{role: RoleAssistant, dialogue: "I'll read the fetch helper first.",
+		{
+			role: RoleAssistant, dialogue: "I'll read the fetch helper first.",
 			thinking: "The helper lives in fetch.go. Read it before editing.",
-			calls:    []string{"call-0001-a-0"}, at: 4},
+			calls:    []string{"call-0001-a-0"}, at: 4,
+		},
 		{role: RoleUser, resultFor: "call-0001-a-0", at: 7},
-		{role: RoleAssistant, thinking: "Wrap the request in a retry loop, then run the tests.",
-			calls: []string{"call-0002-b-0", "call-0002-b-1"}, at: 9},
+		{
+			role: RoleAssistant, thinking: "Wrap the request in a retry loop, then run the tests.",
+			calls: []string{"call-0002-b-0", "call-0002-b-1"}, at: 9,
+		},
 		{role: RoleUser, resultFor: "call-0002-b-0", at: 11},
 		{role: RoleUser, resultFor: "call-0002-b-1", at: 14},
 		{role: RoleAssistant, dialogue: "The tests fail because doWithRetry does not exist yet.", at: 16},
 		{role: RoleAssistant, boundary: grokSummaryOne, at: 40},
-		{role: RoleAssistant, thinking: "Find where doWithRetry should live.",
-			calls: []string{"call-0003-c-0"}, at: 43},
+		{
+			role: RoleAssistant, thinking: "Find where doWithRetry should live.",
+			calls: []string{"call-0003-c-0"}, at: 43,
+		},
 		{role: RoleUser, resultFor: "call-0003-c-0", at: 45},
 		{role: RoleAssistant, dialogue: "There is no doWithRetry yet, so I'll add it in retry.go.", at: 46},
 		{role: RoleAssistant, boundary: grokSummaryTwo, at: 50},
-		{role: RoleAssistant, thinking: "Check the new retry helper.",
-			calls: []string{"call-0004-d-0"}, at: 53},
+		{
+			role: RoleAssistant, thinking: "Check the new retry helper.",
+			calls: []string{"call-0004-d-0"}, at: 53,
+		},
 		// chat_history.jsonl result carriers carry no time; pairing drops them.
 		{role: RoleUser, resultFor: "call-0004-d-0", at: -1},
-		{role: RoleAssistant, dialogue: "Done: Get now retries three times with backoff.",
-			thinking: "The helper is in place.", at: 57},
+		{
+			role: RoleAssistant, dialogue: "Done: Get now retries three times with backoff.",
+			thinking: "The helper is in place.", at: 57,
+		},
 	}
 	require.Len(t, msgs, len(want))
 	callOrdinal := map[string]int{}
