@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -245,7 +246,7 @@ func writeDoctorMemoryPlugin(t *testing.T) string {
 		require.NoError(t, os.MkdirAll(filepath.Dir(path), 0o755))
 		require.NoError(t, os.WriteFile(path, []byte(body), mode))
 	}
-	write(".mcp.json", `{"mcpServers":{"agentsview":{"command":"agentsview","args":["mcp","--profile","memory"]}}}`, 0o644)
+	write(".mcp.json", `{"mcpServers":{"agentsview":{"type":"stdio","command":"agentsview","args":["mcp","--profile","memory"]}}}`, 0o644)
 	write(".claude-plugin/plugin.json", `{"name":"agentsview-memory","mcpServers":{"agentsview":{"command":"agentsview","args":["mcp","--profile","memory"]}}}`, 0o644)
 	write(".codex-plugin/plugin.json", `{"name":"agentsview-memory","skills":"./skills/","mcpServers":"./.mcp.json"}`, 0o644)
 	write("hooks/hooks.json", `{"hooks":{"SessionStart":[{"hooks":[{"type":"command","command":"scripts/session-start.sh"}]}]}}`, 0o644)
@@ -291,7 +292,39 @@ func TestDoctorMemoryPostgresWithStandaloneSkill(t *testing.T) {
 	out, err := executeCommand(newRootCommand(), "agent", "setup", "--agent", "claude")
 	require.NoError(t, err, out)
 	selection := doctorMemoryTargetSelection{Kind: "postgresql"}
-	client := inspectDoctorAgentSetup(t.Context(), inspectDoctorMemoryClient("", selection), selection)
+	client := inspectDoctorAgentSetup(t.Context(), inspectDoctorMemoryClient("", selection))
 	require.Equal(t, service.MemoryReady, client.Status)
 	require.Empty(t, client.Reason)
+}
+
+func TestDoctorMemoryRedactsMCPFailure(t *testing.T) {
+	for _, tc := range []struct {
+		name, response, state, next string
+	}{
+		{"failed", "Scope: User config\\nStatus: Failed to connect\\nIssue: https://private.example/token\\n", "failed", "Correct the server error and retry"},
+		{"unknown", "Scope: User config\\nStatus: Waiting for https://private.example/token\\n", "unknown", "Inspect the server in the agent"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			home := t.TempDir()
+			setDoctorMemoryTestEnvironment(t, home)
+			t.Setenv("CLAUDE_CONFIG_DIR", "")
+			bin := t.TempDir()
+			t.Setenv("PATH", bin)
+			require.NoError(t, os.WriteFile(filepath.Join(bin, "claude"), []byte("#!/bin/sh\nprintf '"+tc.response+"'\n"), 0755))
+			require.NoError(t, os.WriteFile(filepath.Join(home, ".claude.json"), []byte(`{"mcpServers":{"agentsview":{"type":"stdio","command":"agentsview","args":["mcp","--profile","memory"]}}}`), 0600))
+			selection := doctorMemoryTargetSelection{Kind: "local"}
+			client := inspectDoctorAgentSetup(t.Context(), inspectDoctorMemoryClient("", selection))
+			require.Len(t, client.Rows, 2)
+			require.EqualValues(t, tc.state, client.Rows[1].State)
+			require.Equal(t, tc.next, client.Rows[1].NextStep)
+			encoded, err := json.Marshal(client)
+			require.NoError(t, err)
+			require.NotContains(t, string(encoded), home)
+			require.NotContains(t, string(encoded), "private.example")
+			var text bytes.Buffer
+			require.NoError(t, writeDoctorMemoryReport(&text, doctorMemoryReport{Client: client}))
+			require.NotContains(t, text.String(), home)
+			require.NotContains(t, text.String(), "private.example")
+		})
+	}
 }

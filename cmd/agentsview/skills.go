@@ -82,12 +82,8 @@ func newSkillsInstallCommand() *cobra.Command {
 				if h == skills.HarnessClaude {
 					agent = "claude"
 				}
-				items, err := setupItems(agent, remote, false)
-				if err != nil {
-					continue
-				}
-				status, err := items[1].Check(cmd.Context())
-				if err == nil && status.State == "missing" {
+				status, err := setupMCP(agent).Check(cmd.Context())
+				if err == nil && (status.State == "missing" || status.State == "outdated") {
 					fmt.Fprintln(cmd.OutOrStdout(), "Set up MCP with agentsview agent setup")
 					break
 				}

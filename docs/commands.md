@@ -2369,10 +2369,9 @@ Install the conversation search skill and focused MCP profile for installed Clau
 
 ```bash
 agentsview agent setup [--agent claude|codex] [--check] [--force]
-    [--server URL] [--server-token-file PATH]
 ```
 
-A different existing MCP entry is preserved. Remove it in the client or pass `--force` to replace it; `--force` also overwrites edited skill files. The memory profile supports `AGENTSVIEW_MEMORY_SERVER`, `AGENTSVIEW_MEMORY_SERVER_TOKEN_FILE`, and `AGENTSVIEW_MEMORY_PG`.
+Setup updates an existing `agentsview` MCP entry to the memory profile and preserves other entries. Pass `--force` to overwrite edited skill files. The memory profile supports `AGENTSVIEW_MEMORY_SERVER`, `AGENTSVIEW_MEMORY_SERVER_TOKEN_FILE`, and `AGENTSVIEW_MEMORY_PG`.
 
 ______________________________________________________________________
 
@@ -2401,9 +2400,7 @@ configuration, and SessionStart hook when `--plugin-root`, `PLUGIN_ROOT`, or
 AgentsView skills and reports when their baked target differs from the selected
 archive. Human and JSON output omit plugin paths, server URLs, and token values.
 
-Local diagnostics open the archive read-only and do not start a daemon. Every
-mode is metadata-only: the command does not sync transcripts, rebuild vectors,
-probe an embedding provider, or modify client files. `--server`, `--pg`, and
+Local diagnostics open the archive read-only. The client check may start the configured client and MCP process; it calls no data tools and does not start the local archive daemon, sync transcripts, or rebuild vectors. Codex may create its own runtime state. The diagnostic does not probe an embedding provider or modify client configuration. `--server`, `--pg`, and
 the `AGENTSVIEW_MEMORY_SERVER`, `AGENTSVIEW_MEMORY_SERVER_TOKEN_FILE`, and
 `AGENTSVIEW_MEMORY_PG` environment variables select the same read target used
 by `agentsview mcp --profile memory`.

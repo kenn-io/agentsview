@@ -83,7 +83,7 @@ func newDoctorMemoryCommand() *cobra.Command {
 			root := resolveDoctorMemoryPluginRoot(pluginRoot)
 			client := inspectDoctorMemoryClient(root, selection)
 			if root == "" {
-				client = inspectDoctorAgentSetup(cmd.Context(), client, selection)
+				client = inspectDoctorAgentSetup(cmd.Context(), client)
 			}
 			report := doctorMemoryReport{
 				Status:          aggregateDoctorMemoryStatus(target.Status, client.Status),
@@ -203,19 +203,23 @@ func inspectDoctorMemoryClient(
 	return client
 }
 
-func inspectDoctorAgentSetup(ctx context.Context, client doctorMemoryClientStatus, selection doctorMemoryTargetSelection) doctorMemoryClientStatus {
-	source := skillRemoteSource{}
-	if selection.Kind == "server" {
-		source.env.Server = selection.server
-		source.env.TokenFile = strings.TrimSpace(os.Getenv("AGENTSVIEW_MEMORY_SERVER_TOKEN_FILE"))
-	}
-	report, err := agentsetup.Run(ctx, agentsetup.Options{SetupCommand: "agentsview agent setup", CheckOnly: true, Items: func(agent string) ([]agentsetup.Item, error) { return setupItems(agent, source, false) }})
+func inspectDoctorAgentSetup(ctx context.Context, client doctorMemoryClientStatus) doctorMemoryClientStatus {
+	report, err := agentsetup.Run(ctx, agentsetup.Options{SetupCommand: "agentsview agent setup", CheckOnly: true, Items: func(agent string) ([]agentsetup.Item, error) { return setupItems(agent, false) }})
 	if err != nil {
 		return client
 	}
 	client.Skill = doctorMemoryComponentStatus{}
 	client.MCP = doctorMemoryComponentStatus{}
 	client.Hook = doctorMemoryComponentStatus{}
+	for i := range report.Rows {
+		row := &report.Rows[i]
+		if row.Piece == "mcp agentsview" {
+			row.ConfigPath = ""
+			if row.State == agentsetup.StateFailed || row.State == agentsetup.StateUnknown {
+				row.Reason = "MCP client check could not verify the server"
+			}
+		}
+	}
 	client.Rows = report.Rows
 	client.Status = service.MemoryReady
 	client.Reason = ""

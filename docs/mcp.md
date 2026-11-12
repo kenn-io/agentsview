@@ -148,9 +148,9 @@ complete tool list above.
 
 This profile's tool list is about 21 KB, and the same test holds it under 24 KB.
 
-Run `agentsview agent setup` to install the recall skill and focused MCP profile for installed Claude Code and Codex clients. Use `--agent claude` or `--agent codex` to select a client, and `--check` to inspect setup. Existing MCP entries that differ from the requested configuration are preserved; remove the entry in the client or use `--force` to replace it. The same flag overwrites edited skills.
+Run `agentsview agent setup` to install the recall skill and focused MCP profile for installed Claude Code and Codex clients. Use `--agent claude` or `--agent codex` to select a client, and `--check` to inspect setup. Setup updates an existing `agentsview` MCP entry to the memory profile and preserves other entries. Use `--force` to overwrite edited skills.
 
-For a remote archive, run `agentsview agent setup --server URL --server-token-file PATH`. The focused profile also honors the hosted environment variables below. For skill-only or project-level installation, use `agentsview skills install`; see [the CLI reference](/docs/commands/#agentsview-skills).
+For a remote archive, set the hosted environment variables below for the focused profile. For skill-only or project-level installation, use `agentsview skills install`; see [the CLI reference](/docs/commands/#agentsview-skills).
 
 The memory profile reads `AGENTSVIEW_MEMORY_SERVER`,
 `AGENTSVIEW_MEMORY_SERVER_TOKEN_FILE`, or `AGENTSVIEW_MEMORY_PG`; explicit
@@ -160,9 +160,7 @@ falling back to the local archive. PostgreSQL reads use the configured
 
 Run `agentsview doctor memory` to inspect this server status together with the
 installed client integrations. Pass the native package root with `--plugin-root` to
-check its skill, MCP profile, and SessionStart hook. The diagnostic uses
-read-only metadata and does not start a daemon, sync transcripts, or rebuild
-vectors.
+check its skill, MCP profile, and SessionStart hook. The client check may start the configured client and MCP process. It calls no data tools and does not start the local archive daemon, sync transcripts, or rebuild vectors. Codex may create its own runtime state.
 
 `search_sessions` accepts optional `date_from` and `date_to` bounds in
 `YYYY-MM-DD` format, just like `list_sessions` and `search_content`. Dates
