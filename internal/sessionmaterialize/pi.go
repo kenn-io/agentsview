@@ -3,6 +3,7 @@ package sessionmaterialize
 import (
 	"bufio"
 	"bytes"
+	"cmp"
 	"context"
 	"encoding/json"
 	"errors"
@@ -36,9 +37,6 @@ func materializePi(ctx context.Context, cfg config.Config, session *db.Session, 
 	source, err := storedSource(session, host)
 	if err != nil {
 		return Result{}, err
-	}
-	if strings.HasPrefix(source, "archive://") || (host != "" && strings.HasPrefix(source, host+":archive://")) {
-		return Result{}, errors.New("Pi keeps no retained or attached captures")
 	}
 	var name string
 	var data []byte
@@ -109,7 +107,7 @@ func findPiSource(ctx context.Context, cfg config.Config, session *db.Session, s
 		return ""
 	}
 	candidates := parser.NewJSONLSourceSet(parser.AgentPi, roots, parser.WithRecursive(), parser.WithSymlinkFollowing())
-	name, err := uniqueLocalSourceWithDiscovery(ctx, provider, stored, candidates.DiscoverEach, func(name string) (bool, error) {
+	name, err := uniqueLocalSource(ctx, provider, stored, candidates.DiscoverEach, func(name string) (bool, error) {
 		root := rootFor(name)
 		if root == "" {
 			return false, errors.New("Pi source outside configured root")
@@ -177,19 +175,16 @@ func piHeader(ctx context.Context, r io.Reader, id string) ([]byte, int, error) 
 		}
 		if json.Valid(line) {
 			if err := json.Unmarshal(line, &header); err != nil {
-				return nil, 0, errors.New("invalid Pi session header fields")
+				return nil, 0, errPiNotSession
 			}
 			if header.Type != "session" {
 				return nil, 0, errPiNotSession
-			}
-			if header.ID == "" {
-				return nil, 0, errors.New("Pi session header has no id; current Pi cannot resume this file")
 			}
 			if header.ID != id {
 				return nil, 0, errPiIdentity
 			}
 			if header.Version != nil && (*header.Version < 1 || *header.Version > 3) {
-				return nil, 0, errors.New("unsupported Pi session version; current Pi format is version 3")
+				return nil, 0, errors.New("unsupported Pi session version; Agentsview supports versions 1 through 3")
 			}
 			return line, start, nil
 		}
@@ -202,16 +197,12 @@ func piHeader(ctx context.Context, r io.Reader, id string) ([]byte, int, error) 
 	}
 }
 
-func checkPiHeaderFile(ctx context.Context, name, id string) (retErr error) {
+func checkPiHeaderFile(ctx context.Context, name, id string) error {
 	file, err := os.Open(name)
 	if err != nil {
 		return err
 	}
-	defer func() {
-		if err := file.Close(); err != nil {
-			retErr = fmt.Errorf("close Pi source: %w", err)
-		}
-	}()
+	defer file.Close()
 	before, err := file.Stat()
 	if err != nil {
 		return err
@@ -259,37 +250,24 @@ func relocatePiHeader(ctx context.Context, data []byte, id, cwd string) ([]byte,
 
 func piDestination(ctx context.Context, cwd, basename string) (string, error) {
 	def, _ := parser.AgentByType(parser.AgentPi)
+	agentDir, err := piResolveDir(cwd, cmp.Or(os.Getenv(def.DefaultRootEnvVar), "~/"+def.DefaultRootDir))
+	if err != nil {
+		return "", err
+	}
 	dir := os.Getenv(def.NativeEnvVar)
-	flat := dir != ""
-	if !flat {
-		agentDir := os.Getenv(def.DefaultRootEnvVar)
-		if agentDir == "" {
-			agentDir = "~/" + def.DefaultRootDir
-		}
-		agentDir, err := piResolveDir(cwd, agentDir)
-		if err != nil {
-			return "", err
-		}
+	if dir == "" {
 		dir, err = piSettingsSessionDir(ctx, agentDir, cwd, filepath.Dir(def.DefaultRootDir))
 		if err != nil {
 			return "", err
 		}
-		flat = dir != ""
-		if !flat {
-			dir = agentDir
-		}
 	}
-	dir, err := piResolveDir(cwd, dir)
+	if dir == "" {
+		encoded := strings.TrimPrefix(strings.NewReplacer("/", "-", `\`, "-", ":", "-").Replace(cwd), "-")
+		return filepath.Join(agentDir, "sessions", "--"+encoded+"--", basename), nil
+	}
+	dir, err = piResolveDir(cwd, dir)
 	if err != nil {
 		return "", err
-	}
-	if !flat {
-		encoded := cwd
-		if strings.HasPrefix(encoded, "/") || strings.HasPrefix(encoded, `\`) {
-			encoded = encoded[1:]
-		}
-		encoded = strings.NewReplacer("/", "-", `\`, "-", ":", "-").Replace(encoded)
-		dir = filepath.Join(dir, "sessions", "--"+encoded+"--")
 	}
 	return filepath.Join(dir, basename), nil
 }
@@ -298,16 +276,12 @@ func piDestination(ctx context.Context, cwd, basename string) (string, error) {
 func piSettingsSessionDir(ctx context.Context, agentDir, cwd, projectConfig string) (string, error) {
 	var dir string
 	for _, name := range []string{filepath.Join(agentDir, "settings.json"), filepath.Join(cwd, projectConfig, "settings.json")} {
-		data, before, err := readFile(ctx, name, 8<<20)
+		data, _, err := readFile(ctx, name, 8<<20)
 		if errors.Is(err, os.ErrNotExist) {
 			continue
 		}
 		if err != nil {
 			return "", fmt.Errorf("read Pi settings: %w", err)
-		}
-		after, err := os.Stat(name)
-		if err != nil || !os.SameFile(before, after) || before.Size() != after.Size() || before.ModTime() != after.ModTime() {
-			return "", errors.New("Pi settings changed while reading; retry when idle")
 		}
 		var settings map[string]json.RawMessage
 		if err := json.Unmarshal(data, &settings); err != nil {
@@ -324,6 +298,9 @@ func piSettingsSessionDir(ctx context.Context, agentDir, cwd, projectConfig stri
 }
 
 func piResolveDir(cwd, dir string) (string, error) {
+	if runtime.GOOS == "windows" {
+		dir = piWindowsShellPath(dir)
+	}
 	if strings.HasPrefix(dir, "file://") {
 		u, err := url.Parse(dir)
 		if err != nil || u.Path == "" || u.RawQuery != "" || u.Fragment != "" || u.User != nil {
@@ -354,4 +331,21 @@ func piResolveDir(cwd, dir string) (string, error) {
 		expanded = filepath.Join(cwd, expanded)
 	}
 	return filepath.Clean(expanded), nil
+}
+
+// piWindowsShellPath matches Pi's MSYS, Cygwin and WSL drive spellings.
+func piWindowsShellPath(dir string) string {
+	if !strings.HasPrefix(dir, "/") || strings.HasPrefix(dir, "//") || strings.Contains(dir, `\`) {
+		return dir
+	}
+	part := strings.TrimPrefix(dir, "/")
+	if len(part) >= 4 && strings.EqualFold(part[:4], "mnt/") {
+		part = part[4:]
+	} else if len(part) >= 9 && strings.EqualFold(part[:9], "cygdrive/") {
+		part = part[9:]
+	}
+	if len(part) == 0 || (part[0] < 'a' || part[0] > 'z') && (part[0] < 'A' || part[0] > 'Z') || len(part) > 1 && part[1] != '/' {
+		return dir
+	}
+	return strings.ToUpper(part[:1]) + `:\` + strings.ReplaceAll(strings.TrimPrefix(part[1:], "/"), "/", `\`)
 }

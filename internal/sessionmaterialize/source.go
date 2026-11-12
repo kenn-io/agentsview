@@ -162,10 +162,11 @@ func storedSource(session *db.Session, host string) (string, error) {
 func readConfiguredLocal(ctx context.Context, cfg config.Config, session *db.Session, stored, id string) ([]sourceFile, string, error) {
 	roots := configuredRoots(cfg, session, parser.AgentClaude)
 	provider, ok := parser.NewProvider(parser.AgentClaude, parser.ProviderConfig{Roots: roots, Machine: cfg.InstallationID, SourceMachines: cfg.SourceMachines[parser.AgentClaude]})
-	if !ok {
+	discoverer, streaming := provider.(parser.StreamingDiscoverer)
+	if !ok || !streaming {
 		return nil, "", errors.New("native source provider unavailable")
 	}
-	name, err := uniqueLocalSource(ctx, provider, stored, func(name string) (bool, error) {
+	name, err := uniqueLocalSource(ctx, provider, stored, discoverer.DiscoverEach, func(name string) (bool, error) {
 		return filepath.Base(name) == id+".jsonl", nil
 	})
 	if err != nil {
@@ -206,17 +207,7 @@ func configuredRoots(cfg config.Config, session *db.Session, agent parser.AgentT
 // Otherwise it discovers a matching transcript under the provider's roots;
 // incomplete discovery or a second physical file fails instead of guessing,
 // and aliases of one file, such as overlapping roots or symlinks, count once.
-func uniqueLocalSource(ctx context.Context, provider parser.Provider, stored string, matches func(string) (bool, error)) (string, error) {
-	return uniqueLocalSourceWithDiscovery(ctx, provider, stored, func(ctx context.Context, yield func(parser.SourceRef) error) error {
-		discoverer, ok := provider.(parser.StreamingDiscoverer)
-		if !ok {
-			return errors.New("native source provider unavailable")
-		}
-		return discoverer.DiscoverEach(ctx, yield)
-	}, matches)
-}
-
-func uniqueLocalSourceWithDiscovery(ctx context.Context, provider parser.Provider, stored string, discover func(context.Context, func(parser.SourceRef) error) error, matches func(string) (bool, error)) (string, error) {
+func uniqueLocalSource(ctx context.Context, provider parser.Provider, stored string, discover func(context.Context, func(parser.SourceRef) error) error, matches func(string) (bool, error)) (string, error) {
 	if ref, found, err := provider.FindSource(ctx, parser.FindSourceRequest{StoredFilePath: stored}); err != nil || found {
 		return ref.DisplayPath, err
 	}

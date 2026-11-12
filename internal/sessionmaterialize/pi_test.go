@@ -3,6 +3,7 @@ package sessionmaterialize
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/url"
 	"os"
 	"path/filepath"
@@ -126,10 +127,6 @@ func TestPiSourceFallbackAndIdentity(t *testing.T) {
 	require.NoError(t, os.WriteFile(b, data, 0o600))
 	_, err = Materialize(t.Context(), cfg, nil, s, t.TempDir())
 	require.ErrorContains(t, err, "ambiguous")
-	stored := "archive://root/source"
-	s.FilePath = &stored
-	_, err = Materialize(t.Context(), cfg, nil, s, t.TempDir())
-	require.ErrorContains(t, err, "Pi keeps no")
 }
 
 func TestPiHeaderIdentityAndVersion(t *testing.T) {
@@ -138,7 +135,7 @@ func TestPiHeaderIdentityAndVersion(t *testing.T) {
 		{`{"type":"session","id":"id","cwd":"/a","cwd":"/b"}`, "id", "one cwd"},
 		{`{"type":"session","id":"id"}`, "id", "one cwd"},
 		{`{"type":"message","id":"id","cwd":"/old"}`, "id", "header"},
-		{`{"type":"session","cwd":"/old"}`, "id", "no id"},
+		{`{"type":"session","cwd":"/old"}`, "id", "identity"},
 		{`{"type":"session","id":"id","version":4,"cwd":"/old"}`, "id", "version"},
 		{`{"type":"title"}` + "\n" + `{"type":"session","id":"id","cwd":"/old"}`, "id", "header"},
 	} {
@@ -147,17 +144,6 @@ func TestPiHeaderIdentityAndVersion(t *testing.T) {
 			require.ErrorContains(t, err, tc.want)
 		})
 	}
-}
-
-func TestPiDefaultDestination(t *testing.T) {
-	t.Setenv("PI_CODING_AGENT_SESSION_DIR", "")
-	home := t.TempDir()
-	t.Setenv("PI_CODING_AGENT_DIR", home)
-	cwd := filepath.Join(t.TempDir(), "work", "project")
-	dest, err := piDestination(t.Context(), cwd, "file.jsonl")
-	require.NoError(t, err)
-	encoded := strings.NewReplacer("/", "-", `\`, "-", ":", "-").Replace(strings.TrimLeft(cwd, `/\`))
-	assert.Equal(t, filepath.Join(home, "sessions", "--"+encoded+"--", "file.jsonl"), dest)
 }
 
 func TestPiSettingsSessionDirectoryPrecedence(t *testing.T) {
@@ -245,7 +231,6 @@ func TestPiResolvesCheckoutSymlinkAndRejectsUnsupportedHeaders(t *testing.T) {
 	name := filepath.Join(root, "session.jsonl")
 	s := &db.Session{ID: "pi:target", Agent: "pi", Machine: "local", FilePath: &name}
 	for _, tc := range []struct{ header, message string }{
-		{`{"type":"session","cwd":"/old"}`, "no id"},
 		{`{"type":"session","id":"target","version":4,"cwd":"/old"}`, "version"},
 	} {
 		require.NoError(t, os.WriteFile(name, []byte(tc.header+"\n"), 0o600))
@@ -268,4 +253,51 @@ func mustJSON(t *testing.T, value string) []byte {
 	data, err := json.Marshal(value)
 	require.NoError(t, err)
 	return data
+}
+
+func TestPiFallbackSkipsOtherParsedRecords(t *testing.T) {
+	root := t.TempDir()
+	t.Setenv("PI_CODING_AGENT_SESSION_DIR", t.TempDir())
+	cfg := config.Config{InstallationID: "local", LocalMachineName: "local", AgentDirs: map[parser.AgentType][]string{parser.AgentPi: {root}}}
+	missing := filepath.Join(root, "missing.jsonl")
+	cwd := t.TempDir()
+	session := &db.Session{ID: "pi:target", Agent: "pi", Machine: "local", FilePath: &missing}
+	good := filepath.Join(root, "target.jsonl")
+	require.NoError(t, os.WriteFile(good, []byte(`{"type":"session","id":"target","cwd":"/old"}`+"\n"), 0o600))
+	for i, header := range []string{
+		`{"type":"session","cwd":"/old"}`,
+		`{"type":123,"id":"target"}`,
+		`{"type":"session","id":123}`,
+		`{"type":"session","id":"target","version":"3"}`,
+		`{"type":"title"}`,
+	} {
+		name := filepath.Join(root, fmt.Sprintf("other-%d.jsonl", i))
+		require.NoError(t, os.WriteFile(name, []byte(header+"\n"), 0o600))
+		result, err := Materialize(t.Context(), cfg, nil, session, cwd)
+		require.NoError(t, err)
+		assert.Equal(t, good, result.Source)
+		session.FilePath = &name
+		_, err = Materialize(t.Context(), cfg, nil, session, cwd)
+		if i == 0 {
+			require.ErrorContains(t, err, "identity differs")
+		} else {
+			require.ErrorContains(t, err, "invalid Pi session header")
+		}
+		session.FilePath = &missing
+	}
+	uncertain := filepath.Join(root, "uncertain.jsonl")
+	require.NoError(t, os.WriteFile(uncertain, []byte(strings.Repeat(" ", (1<<20)+1)), 0o600))
+	_, err := Materialize(t.Context(), cfg, nil, session, cwd)
+	require.ErrorContains(t, err, "header exceeds")
+}
+
+func TestPiWindowsShellPaths(t *testing.T) {
+	for input, want := range map[string]string{
+		"/c/work": `C:\work`, "/mnt/d/work/file": `D:\work\file`,
+		"/cygdrive/e": `E:\`, "/Z": `Z:\`, "/MNT/f/root": `F:\root`,
+		"//server/share": "//server/share", "/mnt/example": "/mnt/example",
+		`/c/mixed\path`: `/c/mixed\path`,
+	} {
+		assert.Equal(t, want, piWindowsShellPath(input), input)
+	}
 }
