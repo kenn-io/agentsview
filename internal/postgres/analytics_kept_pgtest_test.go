@@ -156,6 +156,32 @@ func TestAnalyticsKeptAdvancingCutoff(t *testing.T) {
 	assert.Empty(t, after.ByAgent)
 }
 
+func TestAnalyticsKeptLocalTimezoneChange(t *testing.T) {
+	local, syncer, store := newUsageJournalFixture(t)
+	ctx := t.Context()
+	require.NoError(t, local.UpsertSession(ctx, db.Session{ID: "session", Project: "project", Machine: "test-machine", Agent: "claude", StartedAt: new("2026-06-15T00:30:00Z"), EndedAt: new("2026-06-15T00:31:00Z"), MessageCount: 2}))
+	require.NoError(t, local.ReplaceSessionMessages(ctx, "session", []db.Message{
+		{SessionID: "session", Ordinal: 0, Role: "user", Content: "question", Timestamp: "2026-06-15T00:30:00Z"},
+		{SessionID: "session", Ordinal: 1, Role: "assistant", Content: "answer", Timestamp: "2026-06-15T00:31:00Z", ToolCalls: []db.ToolCall{{ToolName: "Read", Category: "Read", ToolUseID: "call"}}},
+	}))
+	pgKeptPush(t, syncer, false)
+	f := db.AnalyticsFilter{From: "2026-06-14", To: "2026-06-15", Timezone: "Local"}
+	t.Setenv("TZ", "UTC")
+	first, err := store.GetAnalyticsTools(ctx, f)
+	require.NoError(t, err)
+	require.Len(t, first.Trend, 1)
+	assert.Equal(t, "2026-06-15", first.Trend[0].Date)
+	t.Setenv("TZ", "America/New_York")
+	fresh := &Store{pg: store.pg}
+	want, err := fresh.GetAnalyticsTools(ctx, f)
+	require.NoError(t, err)
+	require.Len(t, want.Trend, 1)
+	require.Equal(t, "2026-06-08", want.Trend[0].Date)
+	second, err := store.GetAnalyticsTools(ctx, f)
+	require.NoError(t, err)
+	assert.Equal(t, want, second)
+}
+
 func TestAnalyticsKeptBypasses(t *testing.T) {
 	for _, mode := range []string{"active", "hosted", "borrowed", "no journal"} {
 		t.Run(mode, func(t *testing.T) {
