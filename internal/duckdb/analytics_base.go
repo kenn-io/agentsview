@@ -208,6 +208,25 @@ func (s analyticsSQL) HourOfWeekSQL(f db.AnalyticsFilter) (string, []any) {
 }
 
 func (s analyticsSQL) VisitTools(ctx context.Context, f db.AnalyticsFilter, ids []string, emit func(readbase.AnalyticsToolVisit)) error {
+	if len(ids) == 0 {
+		return nil
+	}
+	timestamp := "m.timestamp"
+	group := "date_trunc('minute', m.timestamp)"
+	var groupArgs []any
+	// Local may come from a timezone file without an IANA name.
+	if !f.HasTimeFilter() && f.Timezone != "Local" {
+		zoneFilter := f
+		zoneFilter.Timezone = db.LoadLocationOr(f.Timezone, time.UTC).String()
+		var supported bool
+		if err := s.store.queryRowContext(ctx, "SELECT EXISTS (SELECT 1 FROM pg_timezone_names() WHERE name = ?)", zoneFilter.Timezone).Scan(&supported); err != nil {
+			return fmt.Errorf("checking DuckDB timezone: %w", err)
+		}
+		if supported {
+			timestamp = "COALESCE(m.timestamp, s.started_at, s.created_at)"
+			group, groupArgs = duckAnalyticsLocalDateExpr(timestamp, zoneFilter)
+		}
+	}
 	err := db.QueryChunkedSize(ids, readbase.MaxSQLVars, func(chunk []string) error {
 		ph, args := db.InPlaceholders(chunk)
 		modelPred, modelArgs := readbase.AnalyticsCSVPredicate("m.model", f.Model, db.DuckDBQueryDialect())
@@ -221,17 +240,7 @@ func (s analyticsSQL) VisitTools(ctx context.Context, f db.AnalyticsFilter, ids 
 		from, to := readbase.AnalyticsWindowBounds(f)
 		windowPred, windowArgs := duckAnalyticsMessageWindowPred("m.timestamp", from, to)
 		args = append(args, windowArgs...)
-		timestamp := "m.timestamp"
-		group := "date_trunc('minute', m.timestamp)"
-		// Local may come from a timezone file without an IANA name.
-		if f.ToolsUseDayGroups() && f.Timezone != "Local" {
-			timestamp = "COALESCE(m.timestamp, s.started_at, s.created_at)"
-			zoneFilter := f
-			zoneFilter.Timezone = db.LoadLocationOr(f.Timezone, time.UTC).String()
-			var groupArgs []any
-			group, groupArgs = duckAnalyticsLocalDateExpr(timestamp, zoneFilter)
-			args = append(args, groupArgs...)
-		}
+		args = append(args, groupArgs...)
 		query := `SELECT tc.session_id, tc.category,
 				TRIM(tc.tool_name), COUNT(*),
 				MAX(` + timestamp + `), MIN(m.ordinal)` + db.ToolEffectivenessSQL("tc", "s.quality_signal_version") + `

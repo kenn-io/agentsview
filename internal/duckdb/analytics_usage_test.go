@@ -1026,6 +1026,18 @@ func TestDuckAnalyticsToolEvidenceDatesAndLinks(t *testing.T) {
 	assert.Equal(t, 4, response.Sessions[0].SignalTotal)
 	assert.Equal(t, "2025-06-02", response.Sessions[0].Date)
 	assert.Equal(t, new(2), response.Sessions[0].MessageOrdinal)
+	t.Run("localtime", func(t *testing.T) {
+		if _, err := time.LoadLocation("localtime"); err != nil {
+			t.Skip("host timezone database has no localtime entry")
+		}
+		localFilter := filter
+		localFilter.Timezone = "localtime"
+		evidence, err := store.GetAnalyticsSignalSessions(t.Context(), localFilter, "tool_empty_rate", 10)
+		require.NoError(t, err)
+		require.Len(t, evidence.Sessions, 1)
+		assert.Equal(t, 4, evidence.Sessions[0].SignalTotal)
+		assert.Equal(t, new(2), evidence.Sessions[0].MessageOrdinal)
+	})
 	hour := 0
 	filter.Hour = &hour
 	response, err = store.GetAnalyticsSignalSessions(t.Context(), filter, "tool_empty_rate", 10)
@@ -1056,6 +1068,14 @@ func TestDuckAnalyticsToolsLocalDayBoundaries(t *testing.T) {
 		{Date: "2025-03-03", ByCat: map[string]int{"Read": 2}},
 		{Date: "2025-03-10", ByCat: map[string]int{"Read": 2}},
 	}, resp.Trend)
+	t.Run("localtime", func(t *testing.T) {
+		if _, err := time.LoadLocation("localtime"); err != nil {
+			t.Skip("host timezone database has no localtime entry")
+		}
+		local, err := store.GetAnalyticsTools(t.Context(), db.AnalyticsFilter{Timezone: "localtime"})
+		require.NoError(t, err)
+		assert.Equal(t, 4, local.TotalCalls)
+	})
 	for _, zone := range []string{"", "Local"} {
 		resp, err := store.GetAnalyticsTools(t.Context(), db.AnalyticsFilter{Timezone: zone})
 		require.NoError(t, err)

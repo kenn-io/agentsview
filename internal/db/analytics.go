@@ -581,11 +581,6 @@ func (f AnalyticsFilter) HasTimeFilter() bool {
 	return f.DayOfWeek != nil || f.Hour != nil
 }
 
-// ToolsUseDayGroups reports whether tool calls can be grouped by local date.
-func (f AnalyticsFilter) ToolsUseDayGroups() bool {
-	return !f.HasTimeFilter()
-}
-
 // matchesTimeFilter checks whether a local time matches the
 // active hour and/or day-of-week filter.
 func (f AnalyticsFilter) matchesTimeFilter(
@@ -3124,7 +3119,7 @@ func (db *DB) analyticsToolRows(
 			windowPred, windowArgs := analyticsMessageWindowPred("m.timestamp", from, to)
 			chunkArgs = append(chunkArgs, windowArgs...)
 			groupExpr := sqliteAnalyticsMinuteKey()
-			if f.ToolsUseDayGroups() {
+			if !f.HasTimeFilter() {
 				groupExpr = "agentsview_local_date(COALESCE(m.timestamp, ''), COALESCE(NULLIF(s.started_at, ''), s.created_at), ?)"
 				chunkArgs = append(chunkArgs, f.Timezone)
 			}
