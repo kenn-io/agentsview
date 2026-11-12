@@ -1046,21 +1046,22 @@ describe("SessionBreadcrumb", () => {
 
     it("keeps the open menu open when the header moves it to the other row", async () => {
       let width = 1280;
-      const lists: Array<{ query: string; listeners: Array<() => void> }> = [];
+      const lists: Array<{ query: string; listeners: Array<(event: Event) => void> }> = [];
       const matchesWidth = (query: string) => {
         const min = /min-width:\s*(\d+)px/.exec(query);
         const max = /max-width:\s*(\d+)px/.exec(query);
         return (!min || width >= Number(min[1])) && (!max || width <= Number(max[1]));
       };
       window.matchMedia = ((query: string) => {
-        const entry = { query, listeners: [] as Array<() => void> };
+        const entry = { query, listeners: [] as Array<(event: Event) => void> };
         lists.push(entry);
         return {
           get matches() {
             return matchesWidth(query);
           },
           media: query,
-          addEventListener: (_type: string, listener: () => void) => entry.listeners.push(listener),
+          addEventListener: (_type: string, listener: (event: Event) => void) =>
+            entry.listeners.push(listener),
           removeEventListener: () => {},
         } as unknown as MediaQueryList;
       }) as typeof window.matchMedia;
@@ -1084,7 +1085,9 @@ describe("SessionBreadcrumb", () => {
       expect(document.querySelector('[data-testid="claude-code-link"]')).toBeTruthy();
 
       width = 600;
-      for (const entry of lists) for (const listener of entry.listeners) listener();
+      for (const entry of lists) {
+        for (const listener of entry.listeners) listener(new Event("change"));
+      }
       await tick();
 
       // Below 641px the actions move into the metadata strip.
