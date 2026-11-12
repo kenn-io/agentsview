@@ -409,6 +409,8 @@ func (s *pairwiseCountingStore) GetDailyUsage(ctx context.Context, f db.UsageFil
 func TestDirectBackend_UsagePairwiseComparison_UsesRankingSides(t *testing.T) {
 	d := dbtest.OpenTestDB(t)
 	seedPairwiseUsageFixture(t, d)
+	var prepares atomic.Int32
+	d.SetUsageWindowPrepareForTest(func(context.Context) { prepares.Add(1) })
 	store := &pairwiseCountingStore{Store: d}
 	backend := service.NewReadOnlyBackend(store)
 	_, err := backend.UsagePairwiseComparison(t.Context(), service.UsagePairwiseComparisonRequest{
@@ -416,6 +418,7 @@ func TestDirectBackend_UsagePairwiseComparison_UsesRankingSides(t *testing.T) {
 	})
 	require.NoError(t, err)
 	assert.EqualValues(t, 1, store.reads.Load())
+	assert.EqualValues(t, 1, prepares.Load())
 }
 
 func TestDirectBackend_UsagePairwiseComparison_ReadsInexactSide(t *testing.T) {
