@@ -30,7 +30,8 @@ const idBatchSize = 500
 // that is gone. Image text goes first for the same reason.
 var dependentTables = []string{
 	"image_text", "tool_result_events", "tool_calls", "messages", "usage_events",
-	"session_plan_usage", "secret_findings", "commit_links", "pinned_messages",
+	"session_plan_usage", "session_usage_totals", "secret_findings", "commit_links",
+	"pinned_messages",
 }
 
 // newPushVersion returns the version stamped on every row a push writes.
@@ -788,6 +789,7 @@ type sessionPayload struct {
 	messages    []db.Message
 	usage       []db.UsageEvent
 	planUsage   *db.SessionPlanUsage
+	total       *db.SessionUsageTotal
 	commitLinks []db.CommitLinkRow
 	imageText   []db.ImageTextRow
 	findings    []db.SecretFinding
@@ -806,15 +808,22 @@ func (s *Sync) loadPayload(ctx context.Context, sess db.Session) (sessionPayload
 	if !db.ProjectMatchesPushScope(snapshot.Session.Project, s.projects, s.excludeProjects) {
 		return sessionPayload{}, fmt.Errorf("session %s moved outside the push scope before its snapshot was loaded", sess.ID)
 	}
+	// The mirror snapshot predates session totals, so read the total
+	// beside it. A total written after the snapshot bumps the session's
+	// local_modified_at, so the next push re-selects it.
+	total, err := s.local.GetSessionUsageTotal(ctx, sess.ID)
+	if err != nil {
+		return sessionPayload{}, fmt.Errorf("reading local session total %s: %w", sess.ID, err)
+	}
 	snapshot.Session.DataVersion = db.MirrorDataVersion(snapshot.Session.DataVersion, len(snapshot.ImageText) > 0)
-	fingerprint, err := s.snapshotFingerprint(snapshot)
+	fingerprint, err := s.snapshotFingerprint(snapshot, total)
 	if err != nil {
 		return sessionPayload{}, err
 	}
 	return sessionPayload{
 		session: snapshot.Session, messages: snapshot.Messages, usage: snapshot.Usage,
-		planUsage: snapshot.PlanUsage,
-		findings:  snapshot.Findings, commitLinks: snapshot.CommitLinks, imageText: snapshot.ImageText,
+		planUsage: snapshot.PlanUsage, total: total,
+		findings: snapshot.Findings, commitLinks: snapshot.CommitLinks, imageText: snapshot.ImageText,
 		pins: snapshot.Pins, fingerprint: fingerprint,
 	}, nil
 }
@@ -919,7 +928,7 @@ func vanishedRowsDeleteSQL(table, placeholders string) (string, error) {
 }
 
 func (s *Sync) insertDependents(ctx context.Context, payloads []sessionPayload, version uint64) error {
-	var messages, toolCalls, toolResults, images, usage, planUsage, findings, pins, links [][]any
+	var messages, toolCalls, toolResults, images, usage, planUsage, totals, findings, pins, links [][]any
 	for _, p := range payloads {
 		if p.planUsage != nil {
 			row, err := planUsageRow(p.session.ID, p.planUsage, version)
@@ -927,6 +936,13 @@ func (s *Sync) insertDependents(ctx context.Context, payloads []sessionPayload, 
 				return err
 			}
 			planUsage = append(planUsage, row)
+		}
+		if p.total != nil {
+			row, err := sessionUsageTotalRow(p.session.ID, p.total, version)
+			if err != nil {
+				return err
+			}
+			totals = append(totals, row)
 		}
 		for _, m := range p.messages {
 			messages = append(messages, messageRow(m, version))
@@ -963,6 +979,7 @@ func (s *Sync) insertDependents(ctx context.Context, payloads []sessionPayload, 
 		{"image_text", images},
 		{"usage_events", usage},
 		{"session_plan_usage", planUsage},
+		{"session_usage_totals", totals},
 		{"secret_findings", findings},
 		{"commit_links", links},
 		{"pinned_messages", pins},
@@ -1144,6 +1161,14 @@ func planUsageRow(sessionID string, p *db.SessionPlanUsage, version uint64) ([]a
 	values, err := db.SessionPlanUsageValues(p)
 	if err != nil {
 		return nil, fmt.Errorf("encoding plan usage for %s: %w", sessionID, err)
+	}
+	return slices.Concat([]any{sessionID}, values, []any{version}), nil
+}
+
+func sessionUsageTotalRow(sessionID string, t *db.SessionUsageTotal, version uint64) ([]any, error) {
+	values, err := db.SessionUsageTotalValues(t)
+	if err != nil {
+		return nil, fmt.Errorf("encoding session total for %s: %w", sessionID, err)
 	}
 	return slices.Concat([]any{sessionID}, values, []any{version}), nil
 }

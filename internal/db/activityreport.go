@@ -15,6 +15,7 @@ import (
 	"go.kenn.io/agentsview/internal/export"
 	"go.kenn.io/agentsview/internal/kept"
 	"go.kenn.io/agentsview/internal/money"
+	"golang.org/x/sync/errgroup"
 )
 
 // activityReportRangeBoundsUTC returns the exact [start, end) UTC bounds
@@ -367,6 +368,8 @@ func (db *DB) GetSessionUsageRows(
 			costRow.cost = sql.NullInt64{}
 			rateResolver.RecordUnattributedReported()
 		}
+		costRow.cost = ReportedCostForPricing(costRow.cost, costRow.costStatus,
+			catalogPricesAt(rateResolver, costRow.model, costRow.pricingTS))
 		cost, priced, contributes, priceErr := sessionRowCostWithWebSearchRequests(
 			costRow, webSearches, rateResolver)
 		if priceErr != nil {
@@ -376,9 +379,10 @@ func (db *DB) GetSessionUsageRows(
 		if costRow.cost.Valid {
 			costSource = export.CostSourceReported
 		}
+		recorded, _ := RecordedRowCost(r.cost, r.costStatus, costRow.cost)
 		return activity.UsagePrice{
 			Cost: cost, CostSource: costSource, SessionCost: sessionCost,
-			Priced: priced, Contributes: contributes,
+			RecordedCost: recorded, Priced: priced, Contributes: contributes,
 		}, nil
 	})
 }
@@ -855,127 +859,14 @@ func (db *DB) activityReportCandidateSQL(
 	ids []string, q activity.Query, counted func(string, activityCountedMessage),
 ) activity.CandidateSource {
 	return func(ctx context.Context, yield func(activity.IntervalCandidate) error) error {
-		encoded, err := json.Marshal(ids)
+		terminal, pairs, err := db.readActivityCandidates(ctx, ids, q, counted)
 		if err != nil {
-			return fmt.Errorf("encoding activity report session IDs: %w", err)
-		}
-		encodedIDs := string(encoded)
-		gapCap := time.Duration(q.GapCapSeconds) * time.Second
-		lowerTime := q.RangeStart.Add(-gapCap).UTC()
-		upperTime := q.EffectiveEnd.UTC()
-		lower := lowerTime.UnixMicro()
-		upper := upperTime.UnixMicro()
-		paddedLower := PaddedUTCBound(lowerTime.Format(time.RFC3339), -14)
-		paddedUpper := PaddedUTCBound(upperTime.Format(time.RFC3339), 14)
-		scanCandidate := func(
-			row interface{ Scan(dest ...any) error },
-		) (activity.IntervalCandidate, error) {
-			var candidate activity.IntervalCandidate
-			var start, end string
-			if err := row.Scan(
-				&candidate.SessionID, &candidate.StartOrdinal,
-				&candidate.EndOrdinal, &start, &end,
-				&candidate.ClosingRole, &candidate.ClosingModel,
-				&candidate.PriorModel,
-			); err != nil {
-				return candidate, fmt.Errorf(
-					"scanning activity report candidate: %w", err)
-			}
-			candidate.Start, err = time.Parse(time.RFC3339Nano, start)
-			if err != nil {
-				return candidate, fmt.Errorf(
-					"parsing activity candidate start: %w", err)
-			}
-			candidate.End, err = time.Parse(time.RFC3339Nano, end)
-			if err != nil {
-				return candidate, fmt.Errorf(
-					"parsing activity candidate end: %w", err)
-			}
-			candidate.Start = candidate.Start.UTC()
-			candidate.End = candidate.End.UTC()
-			return candidate, nil
-		}
-
-		terminalRows, err := db.getReader().QueryContext(
-			ctx, activityReportTerminalCandidatesSQL,
-			encodedIDs, lower, upper,
-		)
-		if err != nil {
-			return fmt.Errorf("querying activity report terminal candidates: %w", err)
-		}
-		defer terminalRows.Close()
-		var terminal []activity.IntervalCandidate
-		for terminalRows.Next() {
-			candidate, scanErr := scanCandidate(terminalRows)
-			if scanErr != nil {
-				terminalRows.Close()
-				return scanErr
-			}
-			terminal = append(terminal, candidate)
-		}
-		if err := terminalRows.Err(); err != nil {
-			terminalRows.Close()
 			return err
 		}
-		if err := terminalRows.Close(); err != nil {
-			return err
-		}
-
-		messageSource := func(
-			ctx context.Context,
-			yield func(activity.IntervalCandidate) error,
-		) error {
-			rows, queryErr := db.getReader().QueryContext(
-				ctx, activityReportMessagesSQL, encodedIDs)
-			if queryErr != nil {
-				return fmt.Errorf(
-					"querying activity report messages: %w", queryErr)
-			}
-			defer rows.Close()
-			var pairs []activity.IntervalCandidate
-			var sessionID string
-			var session []activity.TranscriptMessage
-			// Scan targets live outside the loop: Scan takes their addresses,
-			// so per-row variables would each escape to the heap.
-			var id, timestamp string
-			var m activity.TranscriptMessage
-			var countable bool
-			for rows.Next() {
-				if err := ctx.Err(); err != nil {
-					return err
-				}
-				if err := rows.Scan(
-					&id, &m.Ordinal, &m.Role, &timestamp, &m.Model, &countable,
-				); err != nil {
-					return fmt.Errorf(
-						"scanning activity report message: %w", err)
-				}
-				if id != sessionID {
-					pairs = activity.AppendTranscriptPairs(pairs, sessionID, session)
-					sessionID, session = id, session[:0]
-				}
-				at, ok := ParseStoredTimestamp(timestamp)
-				if !ok {
-					continue
-				}
-				m.At = at.UTC()
-				if counted != nil && countable &&
-					(m.Role == "user" || m.Role == "assistant") &&
-					!m.At.Before(lowerTime) && m.At.Before(upperTime) {
-					counted(id, activityCountedMessage{timestamp, m.Role == "user"})
-				}
-				us := m.At.UnixMicro()
-				m.Starts = us >= lower && us < upper &&
-					timestamp >= paddedLower && timestamp < paddedUpper
-				session = append(session, m)
-			}
-			if err := rows.Err(); err != nil {
-				return err
-			}
-			pairs = activity.AppendTranscriptPairs(pairs, sessionID, session)
-			sort.Slice(pairs, func(i, j int) bool {
-				return activity.CandidateLess(pairs[i], pairs[j])
-			})
+		sort.Slice(pairs, func(i, j int) bool {
+			return activity.CandidateLess(pairs[i], pairs[j])
+		})
+		messageSource := func(ctx context.Context, yield func(activity.IntervalCandidate) error) error {
 			for _, candidate := range pairs {
 				if err := ctx.Err(); err != nil {
 					return err
@@ -988,6 +879,151 @@ func (db *DB) activityReportCandidateSQL(
 		}
 		return activity.MergeCandidateSlice(terminal, messageSource)(ctx, yield)
 	}
+}
+
+// readActivityCandidates reads the sessions' terminal tool candidates, in
+// candidate stream order, and pairs their messages, appending each
+// session's pairs together. The two reads need no result of each other, so
+// when a bulk-read slot is free the terminal read takes it and runs beside
+// the message read. When counted is set, it receives each counted message
+// whose time lies in the pairing window, from the message read only.
+func (db *DB) readActivityCandidates(
+	ctx context.Context, ids []string, q activity.Query, counted func(string, activityCountedMessage),
+) (terminal, pairs []activity.IntervalCandidate, err error) {
+	encoded, err := json.Marshal(ids)
+	if err != nil {
+		return nil, nil, fmt.Errorf("encoding activity report session IDs: %w", err)
+	}
+	encodedIDs := string(encoded)
+	gapCap := time.Duration(q.GapCapSeconds) * time.Second
+	lowerTime := q.RangeStart.Add(-gapCap).UTC()
+	upperTime := q.EffectiveEnd.UTC()
+	lower := lowerTime.UnixMicro()
+	upper := upperTime.UnixMicro()
+	readTerminal := func(ctx context.Context) (err error) {
+		terminal, err = db.readActivityTerminalCandidates(ctx, encodedIDs, lower, upper)
+		return err
+	}
+	readMessages := func(ctx context.Context) (err error) {
+		pairs, err = db.readActivityMessagePairs(ctx, encodedIDs, lowerTime, upperTime, counted)
+		return err
+	}
+	release, ok := db.tryAcquireBulkRead()
+	if !ok {
+		if err := readTerminal(ctx); err != nil {
+			return nil, nil, err
+		}
+		if err := readMessages(ctx); err != nil {
+			return nil, nil, err
+		}
+		return terminal, pairs, nil
+	}
+	g, readCtx := errgroup.WithContext(ctx)
+	g.Go(func() error {
+		defer release()
+		return readTerminal(readCtx)
+	})
+	g.Go(func() error { return readMessages(readCtx) })
+	if err := g.Wait(); err != nil {
+		return nil, nil, err
+	}
+	return terminal, pairs, nil
+}
+
+// readActivityTerminalCandidates reads the sessions' terminal tool
+// candidates in candidate stream order.
+func (db *DB) readActivityTerminalCandidates(
+	ctx context.Context, encodedIDs string, lower, upper int64,
+) ([]activity.IntervalCandidate, error) {
+	rows, err := db.getReader().QueryContext(ctx, activityReportTerminalCandidatesSQL, encodedIDs, lower, upper)
+	if err != nil {
+		return nil, fmt.Errorf("querying activity report terminal candidates: %w", err)
+	}
+	defer rows.Close()
+	var terminal []activity.IntervalCandidate
+	for rows.Next() {
+		var candidate activity.IntervalCandidate
+		var start, end string
+		if err := rows.Scan(
+			&candidate.SessionID, &candidate.StartOrdinal,
+			&candidate.EndOrdinal, &start, &end,
+			&candidate.ClosingRole, &candidate.ClosingModel,
+			&candidate.PriorModel,
+		); err != nil {
+			return nil, fmt.Errorf("scanning activity report candidate: %w", err)
+		}
+		candidate.Start, err = time.Parse(time.RFC3339Nano, start)
+		if err != nil {
+			return nil, fmt.Errorf("parsing activity candidate start: %w", err)
+		}
+		candidate.End, err = time.Parse(time.RFC3339Nano, end)
+		if err != nil {
+			return nil, fmt.Errorf("parsing activity candidate end: %w", err)
+		}
+		candidate.Start = candidate.Start.UTC()
+		candidate.End = candidate.End.UTC()
+		terminal = append(terminal, candidate)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return terminal, rows.Close()
+}
+
+// readActivityMessagePairs pairs the sessions' messages, one session at a
+// time, so each session's pairs sit together in the result.
+func (db *DB) readActivityMessagePairs(
+	ctx context.Context, encodedIDs string, lowerTime, upperTime time.Time,
+	counted func(string, activityCountedMessage),
+) ([]activity.IntervalCandidate, error) {
+	lower, upper := lowerTime.UnixMicro(), upperTime.UnixMicro()
+	paddedLower := PaddedUTCBound(lowerTime.Format(time.RFC3339), -14)
+	paddedUpper := PaddedUTCBound(upperTime.Format(time.RFC3339), 14)
+	rows, err := db.getReader().QueryContext(ctx, activityReportMessagesSQL, encodedIDs)
+	if err != nil {
+		return nil, fmt.Errorf("querying activity report messages: %w", err)
+	}
+	defer rows.Close()
+	var pairs []activity.IntervalCandidate
+	var sessionID string
+	var session []activity.TranscriptMessage
+	// Scan targets live outside the loop: Scan takes their addresses,
+	// so per-row variables would each escape to the heap.
+	var id, timestamp string
+	var m activity.TranscriptMessage
+	var countable bool
+	for rows.Next() {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
+		if err := rows.Scan(
+			&id, &m.Ordinal, &m.Role, &timestamp, &m.Model, &countable,
+		); err != nil {
+			return nil, fmt.Errorf("scanning activity report message: %w", err)
+		}
+		if id != sessionID {
+			pairs = activity.AppendTranscriptPairs(pairs, sessionID, session)
+			sessionID, session = id, session[:0]
+		}
+		at, ok := ParseStoredTimestamp(timestamp)
+		if !ok {
+			continue
+		}
+		m.At = at.UTC()
+		if counted != nil && countable &&
+			(m.Role == "user" || m.Role == "assistant") &&
+			!m.At.Before(lowerTime) && m.At.Before(upperTime) {
+			counted(id, activityCountedMessage{timestamp, m.Role == "user"})
+		}
+		us := m.At.UnixMicro()
+		m.Starts = us >= lower && us < upper &&
+			timestamp >= paddedLower && timestamp < paddedUpper
+		session = append(session, m)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return activity.AppendTranscriptPairs(pairs, sessionID, session), rows.Close()
 }
 
 // ActivityReportCandidateSource exposes the backend's mechanical pairing
@@ -1274,6 +1310,8 @@ func materializeActivityReportUsageCandidates(
 			costRow.cost = sql.NullInt64{}
 			rateResolver.RecordUnattributedReported()
 		}
+		costRow.cost = ReportedCostForPricing(costRow.cost, costRow.costStatus,
+			catalogPricesAt(rateResolver, costRow.model, costRow.pricingTS))
 		webSearches := usageRowWebSearchRequests(
 			candidate.scan.usageSource, candidate.scan.tokenJSON)
 		if webSearchRequests != nil {

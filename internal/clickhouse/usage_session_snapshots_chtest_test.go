@@ -103,6 +103,7 @@ func TestUsageSessionSnapshotReadParity(t *testing.T) {
 	for _, column := range usageColumns {
 		messageFields = append(messageFields, column.expression+" AS "+column.name)
 	}
+	messageFields = append(messageFields, chRecordedCostSQL("token_usage")+" AS "+usageRecordedCostColumn)
 	messageSource := "(SELECT " + strings.Join(messageFields, ",") + " FROM usage_session_snapshots ARRAY JOIN usage_messages AS record)"
 	events, ok := tableByName("usage_events")
 	require.True(t, ok)

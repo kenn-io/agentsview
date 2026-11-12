@@ -15,6 +15,7 @@ import (
 	"strings"
 
 	_ "github.com/mattn/go-sqlite3"
+	"github.com/tidwall/gjson"
 )
 
 const (
@@ -94,6 +95,7 @@ type shelleyUsage struct {
 	CacheCreationInputTokens jsontext.Value `json:"cache_creation_input_tokens"`
 	CacheReadInputTokens     jsontext.Value `json:"cache_read_input_tokens"`
 	OutputTokens             jsontext.Value `json:"output_tokens"`
+	CostUSD                  jsontext.Value `json:"cost_usd"`
 	Model                    string         `json:"model"`
 }
 
@@ -631,7 +633,8 @@ func decodeShelleyMessage(
 	}
 	if content == "" && thinking == "" &&
 		len(toolCalls) == 0 && len(toolResults) == 0 {
-		if !msg.HasContextTokens && !msg.HasOutputTokens {
+		if _, charged := msg.RecordedCost(); !msg.HasContextTokens &&
+			!msg.HasOutputTokens && !charged {
 			return ParsedMessage{}, false, malformed
 		}
 		msg.IsSystem = true
@@ -713,22 +716,25 @@ func applyShelleyUsage(msg *ParsedMessage, usageData, convModel string) error {
 		shelleyTokenCount(u.CacheReadInputTokens)
 	output := shelleyTokenCount(u.OutputTokens)
 
+	// cost_usd is the exe.dev gateway's Exedev-Gateway-Cost header, or 0
+	// when the header was missing. It is kept as a recorded cost, which
+	// prices the message only when the catalog has no rate for its model.
+	cost, hasCost := recordedCostDollars(gjson.ParseBytes(u.CostUSD))
+
 	// Shelley writes an all-zero usage blob on user/tool rows; skip those
 	// so they do not produce spurious token-presence flags or empty
-	// token_usage rows in the cost UNION.
-	if context == 0 && output == 0 {
+	// token_usage rows in the cost UNION. A charged row without token
+	// counts still keeps its cost.
+	if context == 0 && output == 0 && (!hasCost || cost.Microdollars == 0) {
 		return nil
 	}
 
 	// The usage_data keys are already the AgentsView canonical names, so
 	// the raw blob is stored verbatim for catalog cost pricing.
-	//
-	// usage_data also carries an exact gateway cost_usd. It is not yet
-	// surfaced: capturing it cleanly (without double-counting cost
-	// against the catalog-priced per-message tokens) needs a dedicated
-	// usage-event path and is left as a follow-up. Standard gateway
-	// models are priced correctly by the catalog today.
 	msg.TokenUsage = jsontext.Value(usageData)
+	if hasCost {
+		msg.SetRecordedCost(cost)
+	}
 	msg.ContextTokens = context
 	msg.OutputTokens = output
 	msg.HasContextTokens = context > 0

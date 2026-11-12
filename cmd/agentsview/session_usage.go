@@ -470,6 +470,12 @@ func renderSessionUsageHuman(w io.Writer, out *sessionUsageOutput) error {
 	default:
 		fmt.Fprintf(w, "%s n/a\n", label("Cost"))
 	}
+	if line := recordedCostLine(out.RecordedCost); line != "" {
+		fmt.Fprintf(w, "%s %s\n", label("Agent cost"), line)
+	}
+	if line := sessionTotalLine(out.SessionTotal); line != "" {
+		fmt.Fprintf(w, "%s %s\n", label("Agent total"), sanitizeTerminal(line))
+	}
 	if out.AICredits > 0 {
 		fmt.Fprintf(w, "%s %.0f\n", label("AI Credits"), out.AICredits)
 	}
@@ -483,6 +489,49 @@ func renderSessionUsageHuman(w io.Writer, out *sessionUsageOutput) error {
 		fmt.Fprintf(w, "%s %s\n", label("Captured"), sanitizeTerminal(line))
 	}
 	return nil
+}
+
+// recordedCostLine compares the cost the agent recorded with AgentsView's
+// cost for the same rows, "" when no row carries a recorded cost.
+func recordedCostLine(rc *db.SessionRecordedCost) string {
+	if rc == nil {
+		return ""
+	}
+	line := fmt.Sprintf("the agent recorded %s; AgentsView charged %s for the same usage",
+		money.FormatUSD(rc.Recorded, money.DisplayCents),
+		money.FormatUSD(rc.Computed, money.DisplayCents))
+	var notes []string
+	if rc.FallbackRows > 0 {
+		notes = append(notes, fmt.Sprintf("%d priced from the agent's figure because no catalog rate exists", rc.FallbackRows))
+	}
+	if rc.UnpricedRows > 0 {
+		notes = append(notes, fmt.Sprintf("%d with no price from either", rc.UnpricedRows))
+	}
+	if len(notes) > 0 {
+		line += " (" + strings.Join(notes, "; ") + ")"
+	}
+	return line
+}
+
+// sessionTotalLine describes the total the agent recorded for the whole
+// session, "" when it recorded none. The scope note says which AgentsView
+// figure it compares with: one that includes subagents, or the session's
+// own usage.
+func sessionTotalLine(total *db.SessionUsageTotal) string {
+	if total == nil || total.Cost == nil {
+		return ""
+	}
+	line := money.FormatUSD(*total.Cost, money.DisplayCents) + " for the session"
+	switch total.SubagentScope {
+	case parser.SubagentScopeIncluded:
+		line += ", including subagents"
+	case parser.SubagentScopeExcluded:
+		line += ", excluding subagents"
+	}
+	if total.Incomplete {
+		line += "; the agent could not price every model"
+	}
+	return line
 }
 
 // planUsageLine describes a session's plan usage in one line, "" for a

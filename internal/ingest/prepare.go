@@ -32,11 +32,14 @@ type PreparedSession struct {
 	UsageEvents []db.UsageEvent
 	// PlanUsage is the session's plan usage and live-capture coverage
 	// row; nil when the parser reported neither.
-	PlanUsage  *db.SessionPlanUsage
-	Signals    db.SessionSignalUpdate
-	Findings   []db.SecretFinding
-	Friction   db.SessionFrictionUpdate
-	Validation db.ValidationStats
+	PlanUsage *db.SessionPlanUsage
+	// SessionTotal is the usage total the agent recorded for the whole
+	// session; nil when the parser reported none.
+	SessionTotal *db.SessionUsageTotal
+	Signals      db.SessionSignalUpdate
+	Findings     []db.SecretFinding
+	Friction     db.SessionFrictionUpdate
+	Validation   db.ValidationStats
 }
 
 // PrepareCandidate converts and pairs parser output before caller-owned
@@ -170,7 +173,8 @@ func finalize(
 			candidate.Parsed.Session.PlanUsage,
 			candidate.Parsed.Session.CaptureCoverage,
 		),
-		Signals: signalUpdate, Findings: findings, Validation: validation,
+		SessionTotal: ConvertSessionTotal(candidate.Parsed.Session.SessionTotal),
+		Signals:      signalUpdate, Findings: findings, Validation: validation,
 	}, ctx.Err()
 }
 

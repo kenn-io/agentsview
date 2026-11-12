@@ -118,11 +118,23 @@ func priceUsageFact(
 	canonicalModel := usageLookupModel(model, input.Timestamp)
 	timestamp := usagePricingTimestamp(input.Timestamp)
 	reported := input.Fact.ReportedCostMicrodollars
+	copilot := input.Fact.CostSource == CopilotReportedCostSource
+	// useReported is whether the row's own cost is its price. A
+	// harness-recorded cost the catalog can beat is kept out of the charge.
+	useReported := reported != nil && !copilot
+	if useReported {
+		useReported = ReportedCostForPricing(
+			sql.NullInt64{Int64: *reported, Valid: true}, input.Fact.CostStatus,
+			func() bool {
+				_, plain := resolver.ResolveAt(model, canonicalModel, timestamp)
+				return plain.OK
+			}).Valid
+	}
 	// Reported rows keep the unadjusted lookup; computed rows are charged at
 	// billed rates. Resolve only the one each row uses.
 	var pricedModel string
 	var lookup export.PricingLookup
-	if reported != nil && input.Fact.CostSource != CopilotReportedCostSource {
+	if useReported {
 		pricedModel, lookup = resolver.ResolveAt(model, canonicalModel, timestamp)
 	} else {
 		var err error
@@ -146,7 +158,7 @@ func priceUsageFact(
 			lookup.Rates, input.Fact)
 	}
 	savingsRates := selectedRates
-	if reported != nil && input.Fact.CostSource != CopilotReportedCostSource &&
+	if useReported &&
 		(input.Fact.CacheReadTokens != 0 || input.Fact.CacheCreationTokens != 0) {
 		_, savingsLookup, err := resolver.ResolveBilledAt(
 			input.ProviderID, model, canonicalModel, timestamp)
@@ -165,7 +177,7 @@ func priceUsageFact(
 		}
 	}
 	var err error
-	if reported != nil && input.Fact.CostSource != CopilotReportedCostSource {
+	if useReported {
 		result.Cost = money.Money{Microdollars: *reported}
 		result.Reported = 1
 	} else {
@@ -181,15 +193,19 @@ func priceUsageFact(
 		if err != nil {
 			return usagePriceResult{}, fmt.Errorf("pricing usage row for model %q: %w", model, err)
 		}
-		if input.Fact.RequestScoped {
+		switch {
+		case reported != nil && !copilot && usageFactHasNoBillableUsage(input.Fact):
+			// A cost-only evidence row the catalog price beat charges nothing
+			// and is not a priced request.
+		case input.Fact.RequestScoped:
 			result.ComputedRequest = 1
 			if result.BandThreshold == nil {
 				result.BaseRequest = 1
 			}
-		} else {
+		default:
 			result.ComputedAggregate = 1
 		}
-		if reported != nil {
+		if reported != nil && copilot {
 			value := money.Money{Microdollars: *reported}
 			result.AuthoritativeCost = &value
 		}
@@ -218,6 +234,14 @@ func priceUsageFact(
 		return usagePriceResult{}, fmt.Errorf("pricing cache savings for model %q: %w", model, err)
 	}
 	return result, nil
+}
+
+// usageFactHasNoBillableUsage reports whether a fact carries no token or
+// web-search usage the catalog could charge.
+func usageFactHasNoBillableUsage(fact usagefacts.Fact) bool {
+	return fact.InputTokens == 0 && fact.OutputTokens == 0 &&
+		fact.ReasoningTokens == 0 && fact.CacheCreationTokens == 0 &&
+		fact.CacheReadTokens == 0 && fact.WebSearchRequests == 0
 }
 
 func usageRatesAndBandForFact(
@@ -377,7 +401,7 @@ func loadUsageRollupFacts(
 		f.output_tokens, f.reasoning_tokens, f.cache_creation_tokens,
 		f.cache_creation_1h_tokens,
 		f.cache_read_tokens, f.web_search_requests, f.reported_cost_microdollars,
-		f.cost_source, f.request_scoped, f.claude_message_id, f.claude_request_id,
+		f.cost_source, f.cost_status, f.request_scoped, f.claude_message_id, f.claude_request_id,
 		f.source_uuid, f.usage_dedup_key, f.token_eligible, f.activity_eligible
 		FROM usage_rollup_build_sessions selected
 		CROSS JOIN usage_cached_sessions cs ON cs.session_id = selected.session_id
@@ -400,6 +424,7 @@ func loadUsageRollupFacts(
 			&item.Fact.CacheCreationTokens, &item.Fact.CacheCreation1hTokens,
 			&item.Fact.CacheReadTokens,
 			&item.Fact.WebSearchRequests, &reported, &item.Fact.CostSource,
+			&item.Fact.CostStatus,
 			&requestScoped, &item.Fact.ClaudeMessageID, &item.Fact.ClaudeRequestID,
 			&item.Fact.SourceUUID, &item.Fact.UsageDedupKey,
 			&tokenEligible, &activityEligible); err != nil {

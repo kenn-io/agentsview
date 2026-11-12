@@ -21,6 +21,7 @@ import (
 	"time"
 
 	"github.com/tidwall/gjson"
+	"go.kenn.io/agentsview/internal/money"
 )
 
 const openCodeStorageFingerprintPrefix = "opencode-storage:v1:"
@@ -1402,6 +1403,7 @@ func decodeOpenCodeMessageRowsContext(
 			ctx, ordinal, m.id, role, m.timeCreated, msgParts, cwd,
 		)
 		applyOpenCodeTokenUsage(&pm, md, m.data, msgParts)
+		applyOpenCodeRecordedCost(&pm, msgParts)
 		if strings.TrimSpace(pm.Content) == "" &&
 			!pm.HasToolUse {
 			var ok bool
@@ -1536,6 +1538,35 @@ func applyOpenCodeTokenUsage(
 		fields.cacheRead + fields.cacheCreate
 	pm.HasContextTokens = fields.hasInput ||
 		fields.hasCacheRead || fields.hasCacheCreate
+}
+
+// applyOpenCodeRecordedCost keeps the cost OpenCode, Kilo, and MiMo Code
+// record for each model request on its step-finish part, summed over the
+// message. The message's own cost is not used: Kilo adds child subagent
+// costs into the parent message, and MiMo Code adds max-mode candidate costs,
+// so it covers more than this message's requests. The step cost is usually
+// the harness's estimate from models.dev rates, 0 for a model it cannot
+// price; for some providers it is the provider's reported charge.
+func applyOpenCodeRecordedCost(pm *ParsedMessage, parts []openCodePartRow) {
+	var total money.Money
+	found := false
+	for _, part := range parts {
+		if extractOpenCodePartType(part.data) != "step-finish" {
+			continue
+		}
+		cost, ok := recordedCostDollars(gjson.Get(part.data, "cost"))
+		if !ok {
+			continue
+		}
+		sum, err := money.Add(total, cost)
+		if err != nil {
+			return
+		}
+		total, found = sum, true
+	}
+	if found {
+		pm.SetRecordedCost(total)
+	}
 }
 
 type openCodeTokenFields struct {
