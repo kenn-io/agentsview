@@ -1737,10 +1737,7 @@ func openDaemonDBWithProgress(ctx context.Context, cfg config.Config, archiveOnl
 	if err != nil || archiveOnly {
 		return database, err
 	}
-	status, err := database.ProjectIdentityBackfillStatus(ctx)
-	if err == nil && status.State == "failed" {
-		err = database.StartProjectIdentityBackfill(ctx)
-	}
+	err = database.RetryFailedProjectIdentityBackfill(ctx)
 	if err != nil {
 		_ = database.Close()
 		return nil, fmt.Errorf("retrying project identity backfill: %w", err)

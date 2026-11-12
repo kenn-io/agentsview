@@ -980,7 +980,8 @@ func TestExportWaitAfterDaemonRestart(t *testing.T) {
 			require.NoError(t, err)
 			stop := stubExportDaemon(t, dir)
 			cfg := config.Config{DataDir: dir}
-			require.NoError(t, startExportDaemon(t.Context(), &cfg))
+			_, err = startExportDaemon(t.Context(), &cfg)
+			require.NoError(t, err)
 			ctx, cancel := context.WithTimeout(t.Context(), 15*time.Second)
 			defer cancel()
 			out, done := exportWaitCommand(t, ctx, io.Discard)
@@ -998,7 +999,8 @@ func TestExportWaitAfterDaemonRestart(t *testing.T) {
 			stop()
 			_, err = raw.ExecContext(t.Context(), `DROP TRIGGER fail_backfill`)
 			require.NoError(t, err)
-			require.NoError(t, startExportDaemon(t.Context(), &cfg))
+			_, err = startExportDaemon(t.Context(), &cfg)
+			require.NoError(t, err)
 			out, done = exportWaitCommand(t, ctx, io.Discard)
 			require.NoError(t, <-done)
 			assert.Len(t, decodeExportSessionsDocument(t, out.String()).Sessions, 2)
@@ -1007,13 +1009,24 @@ func TestExportWaitAfterDaemonRestart(t *testing.T) {
 }
 
 func TestExportDaemonStartupCases(t *testing.T) {
+	t.Run("running daemon", func(t *testing.T) {
+		dir := testDataDir(t)
+		host, port := testPingServer(t)
+		writeDaemonRuntimeForTest(t, dir, host, port, "test", false)
+		cfg := config.Config{DataDir: dir}
+		rt, err := startExportDaemon(t.Context(), &cfg)
+		require.NoError(t, err)
+		require.NotNil(t, rt)
+		assert.Equal(t, port, rt.Port)
+	})
 	for _, version := range []int{15, 16} {
 		t.Run(fmt.Sprintf("older daemon API %d", version), func(t *testing.T) {
 			dir := testDataDir(t)
 			writeLiveRuntime(t, dir, false, withRuntimeVersion("old"), withRuntimeAPIVersion(version))
 			forbidStartBackgroundServeForTransport(t, "incompatible daemon")
 			cfg := config.Config{DataDir: dir}
-			require.ErrorContains(t, startExportDaemon(t.Context(), &cfg), "agentsview daemon restart")
+			_, err := startExportDaemon(t.Context(), &cfg)
+			require.ErrorContains(t, err, "agentsview daemon restart")
 		})
 	}
 	t.Run("startup error", func(t *testing.T) {
@@ -1023,7 +1036,8 @@ func TestExportDaemonStartupCases(t *testing.T) {
 			return nil, failure
 		})
 		cfg := config.Config{DataDir: dir}
-		assert.ErrorIs(t, startExportDaemon(t.Context(), &cfg), failure)
+		_, err := startExportDaemon(t.Context(), &cfg)
+		assert.ErrorIs(t, err, failure)
 	})
 	t.Run("read-only mirror", func(t *testing.T) {
 		dir := testDataDir(t)
@@ -1036,7 +1050,9 @@ func TestExportDaemonStartupCases(t *testing.T) {
 			return &DaemonRuntime{}, nil
 		})
 		cfg := config.Config{DataDir: dir}
-		require.NoError(t, startExportDaemon(t.Context(), &cfg))
+		rt, err := startExportDaemon(t.Context(), &cfg)
+		require.NoError(t, err)
+		require.NotNil(t, rt)
 		assert.True(t, started)
 	})
 	t.Run("autostart disabled", func(t *testing.T) {
@@ -1044,7 +1060,8 @@ func TestExportDaemonStartupCases(t *testing.T) {
 		t.Setenv("AGENTSVIEW_NO_DAEMON", "1")
 		forbidStartBackgroundServeForTransport(t, "autostart disabled")
 		cfg := config.Config{DataDir: dir}
-		assert.ErrorContains(t, startExportDaemon(t.Context(), &cfg), "agentsview daemon start")
+		_, err := startExportDaemon(t.Context(), &cfg)
+		assert.ErrorContains(t, err, "agentsview daemon start")
 	})
 }
 

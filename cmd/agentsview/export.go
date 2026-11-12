@@ -260,22 +260,21 @@ func newExportSessionsCommand() *cobra.Command {
 	return cmd
 }
 
-func startExportDaemon(ctx context.Context, cfg *config.Config) error {
+func startExportDaemon(ctx context.Context, cfg *config.Config) (*DaemonRuntime, error) {
 	tr, err := ensureTransportContext(ctx, cfg, transportIntentLongLived, startupWaitTimeout)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	if tr.Mode == transportHTTP && !tr.ReadOnly {
-		return nil
+		return tr.Runtime, nil
 	}
 	if tr.ReadOnly && !daemonAutostartDisabled() && !cfg.NoDaemonAutostart && !cfg.RequireDaemon {
 		if err := guardDaemonAutoStartConfig(*cfg); err != nil {
-			return err
+			return nil, err
 		}
-		_, err = startBackgroundServeForTransport(ctx, cfg, startupWaitTimeout, false)
-		return err
+		return startBackgroundServeForTransport(ctx, cfg, startupWaitTimeout, false)
 	}
-	return errors.New("start a writable daemon with `agentsview daemon start`, then retry")
+	return nil, errors.New("start a writable daemon with `agentsview daemon start`, then retry")
 }
 
 func runExportSessions(cmd *cobra.Command, cfg exportSessionsConfig) error {
@@ -430,10 +429,11 @@ func exportWritableDaemonPing(ctx context.Context, cfg *config.Config, rt **Daem
 const exportDaemonUnavailableGrace = 5 * time.Second
 
 func waitForExportBackfill(ctx context.Context, progress io.Writer, cfg *config.Config) error {
-	if err := startExportDaemon(ctx, cfg); err != nil {
+	rt, err := startExportDaemon(ctx, cfg)
+	if err != nil {
 		return err
 	}
-	rt, unavailableSince := (*DaemonRuntime)(nil), time.Time{}
+	unavailableSince := time.Time{}
 	for {
 		database, err := openExportReadOnlyDB(ctx, *cfg)
 		if err != nil {

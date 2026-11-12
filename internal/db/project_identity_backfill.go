@@ -194,6 +194,22 @@ func (db *DB) ProjectIdentityBackfillStatus(
 	return status, nil
 }
 
+// RetryFailedProjectIdentityBackfill resumes a recorded failure at daemon startup.
+func (db *DB) RetryFailedProjectIdentityBackfill(ctx context.Context) error {
+	var failed bool
+	err := db.getReader().QueryRowContext(ctx, `
+		SELECT EXISTS(SELECT 1 FROM background_migrations WHERE name = ? AND state = 'failed')`,
+		ProjectIdentityBackfillName,
+	).Scan(&failed)
+	if err != nil {
+		return fmt.Errorf("checking project identity backfill failure: %w", err)
+	}
+	if failed {
+		return db.StartProjectIdentityBackfill(ctx)
+	}
+	return nil
+}
+
 func (db *DB) countMissingProjectIdentitySnapshots(ctx context.Context) (int, error) {
 	var missing int
 	if err := db.getReader().QueryRowContext(ctx, `
