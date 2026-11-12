@@ -1,0 +1,7 @@
+[
+  {"type":"reasoning","data":{"thinking":"Inspect auth.go first.","started_at":1789093629,"finished_at":1789093629}},
+  {"type":"text","data":{"text":"Reading the handler now."}},
+  {"type":"tool_call","data":{"id":"chatcmpl-tool-1","name":"view","input":"{\"file_path\":\"auth.go\"}","finished":true,"provider_executed":false}},
+  {"type":"tool_result","data":{"tool_call_id":"chatcmpl-tool-1","name":"view","content":"package auth\n"}},
+  {"type":"finish","data":{"reason":"tool_use","time":1789093630}}
+]
