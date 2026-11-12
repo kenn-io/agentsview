@@ -35,7 +35,7 @@ to enable search and download missing built-in server files when it has no
 enabled setup. Set `vector.enabled = false` in `config.toml` to opt out of the
 shared choice; removing the `[vector]` section does not. Separately configured
 search keeps its settings. Automatic setup also waits for an explicit
-`push_vectors` setting on each configured PostgreSQL target.
+`push_vectors` setting on each configured PostgreSQL or ClickHouse target.
 
 An enabled configuration with `local = true` starts indexing at startup using
 installed server files. It does not record a shared choice. If files are missing,

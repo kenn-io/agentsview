@@ -196,18 +196,23 @@ func (v *liveVectorServing) IncludeAutomated() bool {
 }
 
 func (v *liveVectorServing) SetupStatus(ctx context.Context) (server.EmbeddingsSetupStatus, error) {
+	status, _, err := v.setupStatus(ctx)
+	return status, err
+}
+
+func (v *liveVectorServing) setupStatus(ctx context.Context) (server.EmbeddingsSetupStatus, config.VectorEmbeddingsConfig, error) {
 	v.mu.Lock()
 	status, cfg, missingManager := v.setup, v.cfg, v.serving.manager == nil
 	v.mu.Unlock()
 	if status.Busy {
 		status.Enabled = cfg.Vector.Enabled
-		return status, nil
+		return status, cfg.Vector.Embeddings, nil
 	}
 	if missingManager && cfg.DeploymentEmbeddings == nil {
 		var err error
 		cfg.Vector.Embeddings, err = cfg.VectorSetupEmbeddings(false)
 		if err != nil {
-			return status, setupRequestError(err)
+			return status, cfg.Vector.Embeddings, setupRequestError(err)
 		}
 	}
 	status.Action = ""
@@ -218,7 +223,7 @@ func (v *liveVectorServing) SetupStatus(ctx context.Context) (server.EmbeddingsS
 	if status.Action == "" {
 		status.Error = ""
 	}
-	return status, err
+	return status, cfg.Vector.Embeddings, err
 }
 
 func embeddingsSetupStatus(ctx context.Context, status server.EmbeddingsSetupStatus, cfg config.Config) (server.EmbeddingsSetupStatus, error) {
@@ -265,7 +270,7 @@ func setupRequestError(err error) error {
 }
 
 func (v *liveVectorServing) Setup(approvedBytes int64, expectedProvider string) error {
-	status, err := v.SetupStatus(v.ctx)
+	status, embeddings, err := v.setupStatus(v.ctx)
 	if err != nil {
 		return err
 	}
@@ -274,22 +279,15 @@ func (v *liveVectorServing) Setup(approvedBytes int64, expectedProvider string) 
 	if v.setup.Busy {
 		return vector.ErrBuildRunning
 	}
-	embeddings := v.cfg.Vector.Embeddings
-	if v.serving.manager == nil {
-		embeddings, err = v.cfg.VectorSetupEmbeddings(false)
-		if err != nil {
-			return setupRequestError(err)
-		}
-	}
-	_, deployment, err := embeddings.Server("")
-	if err != nil {
-		return setupRequestError(err)
-	}
 	if status.Action != "turn-on" {
 		return fmt.Errorf("%w: setup action is unavailable for the current embeddings provider", vector.ErrInvalidBuildRequest)
 	}
 	if status.Provider != expectedProvider {
 		return server.ErrEmbeddingsProviderChanged
+	}
+	_, deployment, err := embeddings.Server("")
+	if err != nil {
+		return setupRequestError(err)
 	}
 	if status.Provider == "built-in" {
 		deployment.Local = true

@@ -155,6 +155,48 @@ func TestSetupLeavesChangedProviderDisabled(t *testing.T) {
 	assert.False(t, chosen)
 }
 
+func TestSetupLeavesProviderChangedDuringInspectionDisabled(t *testing.T) {
+	setTestHome(t, t.TempDir())
+	dir := testDataDir(t)
+	cfg, err := config.LoadReadOnly()
+	require.NoError(t, err)
+	database := dbtest.OpenTestDBAt(t, filepath.Join(dir, "sessions.db"))
+	dbtest.SeedSessionWithMessages(t, database, "session-one", "sample", []db.Message{dbtest.UserMsg("session-one", 0, "startup indexing")})
+	var requests atomic.Int32
+	replacement := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requests.Add(1)
+		writeEmbeddingsResponse(t, w, 1, 768)
+	}))
+	defer replacement.Close()
+	oldInspect, oldEndpoint := inspectLocalEmbeddings, localEmbeddingEndpoint
+	t.Cleanup(func() { inspectLocalEmbeddings, localEmbeddingEndpoint = oldInspect, oldEndpoint })
+	inspections := 0
+	inspectLocalEmbeddings = func(context.Context, embedlocal.Options) (embedlocal.Status, error) {
+		inspections++
+		if inspections == 2 {
+			writeTestConfig(t, dir, fmt.Sprintf("[vector]\nenabled = false\n[vector.embeddings]\nmodel = 'nomic-embed-text:v1.5'\ndimension = 768\n[vector.embeddings.servers.remote]\nendpoint = '%s/v1'\n", replacement.URL))
+		}
+		return embedlocal.Status{OllamaAvailable: true}, nil
+	}
+	localEmbeddingEndpoint = func(context.Context, embedlocal.Options) (string, error) { return "http://127.0.0.1:11434/v1", nil }
+	owner, err := newLiveVectorServing(t.Context(), cfg, database, nil, config.LoadReadOnly)
+	require.NoError(t, err)
+	defer func() { require.NoError(t, owner.Close()) }()
+	status, err := owner.SetupStatus(t.Context())
+	require.NoError(t, err)
+	require.Equal(t, "ollama", status.Provider)
+	require.NoError(t, owner.Setup(0, status.Provider))
+	<-owner.done
+	assert.Equal(t, server.ErrEmbeddingsProviderChanged.Error(), owner.setup.Error)
+	saved, err := config.LoadReadOnly()
+	require.NoError(t, err)
+	assert.False(t, saved.Vector.Enabled)
+	assert.Zero(t, requests.Load())
+	chosen, err := embedlocal.ChoiceRecorded()
+	require.NoError(t, err)
+	assert.False(t, chosen)
+}
+
 func TestSharedChoiceRechecksPushAddedDuringSetup(t *testing.T) {
 	setTestHome(t, t.TempDir())
 	dir := testDataDir(t)
