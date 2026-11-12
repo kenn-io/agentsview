@@ -95,20 +95,24 @@ describe("ArchiveContentSettings", () => {
     await vi.waitFor(() => expect(queryByRole("status")).toBeNull());
   });
 
-  it("shows no restart notice when the save fails", async () => {
-    settingsService.putApiV1Settings.mockRejectedValue(new Error("write refused"));
+  it("keeps the pending restart notice when the save fails", async () => {
+    settingsService.putApiV1Settings
+      .mockResolvedValueOnce(makeSettingsResponse("drop"))
+      .mockRejectedValueOnce(new Error("write refused"));
     const { getByRole, queryByRole } = render(ArchiveContentSettings);
 
     await fireEvent.click(getByRole("radio", { name: "Drop" }));
+    await fireEvent.click(getByRole("radio", { name: "Offload" }));
     await vi.waitFor(() => {
-      expect(settingsService.putApiV1Settings).toHaveBeenCalled();
+      expect(settingsService.putApiV1Settings).toHaveBeenCalledTimes(2);
     });
     await tick();
 
     // The rejected write leaves the stored policy alone, so the control stays
     // on the value the daemon still holds.
-    expect(getByRole("radio", { name: "Keep" }).getAttribute("aria-checked")).toBe("true");
-    expect(queryByRole("status")).toBeNull();
+    expect(getByRole("radio", { name: "Drop" }).getAttribute("aria-checked")).toBe("true");
+    expect(queryByRole("status")).toBeTruthy();
+    expect(settings.saveError).toBe("write refused");
   });
 
   it("sets the migrate command in the hint as code without losing any of the sentence", () => {

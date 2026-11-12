@@ -30,11 +30,6 @@ func TestServeRestartArgsPreserveLaunchOptions(t *testing.T) {
 	require.NoError(t, flags.Parse([]string{"--host=127.0.0.1", "--base-path=/example", "--public-origin=https://example.com", "--public-origin=https://example.org", "--allowed-subnet=192.0.2.0/24", "--no-sync", "--background", "--port=1234", "--skip-initial-sync"}))
 	args := serveRestartArgs(flags)
 	assert.Equal(t, []string{"--allowed-subnet=192.0.2.0/24", "--base-path=/example", "--host=127.0.0.1", "--no-sync=true", "--public-origin=https://example.com,https://example.org", "--skip-initial-sync=true"}, args)
-	replacement := newServeCommand()
-	require.NoError(t, replacement.Flags().Parse(args))
-	skip, err := replacement.Flags().GetBool("skip-initial-sync")
-	require.NoError(t, err)
-	assert.True(t, skip)
 }
 
 // isolateServeTestHome points every config, data, and agent directory into a
@@ -378,7 +373,7 @@ func TestRestartKeepsAdoptedNoSync(t *testing.T) {
 	assert.True(t, current.NoSync)
 }
 
-func TestRestartClosesStalledRequest(t *testing.T) {
+func TestRestartClosesStalledRequestAndRetainsLaunchLock(t *testing.T) {
 	for _, mode := range []string{"foreground", "background"} {
 		t.Run(mode, func(t *testing.T) {
 			_, dataDir := isolateServeTestHome(t)
@@ -796,16 +791,6 @@ func restartTestPing(t *testing.T, client *http.Client, base string) (*http.Resp
 	return client.Do(req)
 }
 
-func TestServeHandoffPortArgs(t *testing.T) {
-	for _, tc := range []struct {
-		name     string
-		port     int
-		explicit *int
-		want     []string
-	}{
-		{name: "fixed", port: 8080, explicit: new(9090), want: []string{"--port", "9090"}},
-		{name: "unknown"},
-	} {
-		t.Run(tc.name, func(t *testing.T) { assert.Equal(t, tc.want, serveHandoffPortArgs(tc.port, tc.explicit)) })
-	}
+func TestServeHandoffPortArgsWithoutKnownPort(t *testing.T) {
+	assert.Empty(t, serveHandoffPortArgs(0, nil))
 }

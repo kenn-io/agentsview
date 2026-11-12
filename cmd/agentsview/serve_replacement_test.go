@@ -235,7 +235,7 @@ func TestPrepareForegroundServeDaemonRefusesFreshStartWhenBackgroundLaunchHeld(
 	assert.False(t, IsDaemonStarting(dir))
 }
 
-func TestPrepareForegroundServeDaemonKeepsLaunchLockForFreshStart(
+func TestPrepareForegroundServeDaemonKeepsLaunchLockForStartAndRestart(
 	t *testing.T,
 ) {
 	dir := runtimeTestDir(t)
