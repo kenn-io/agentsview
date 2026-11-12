@@ -204,7 +204,7 @@ func TestCheckAPIVersionContract(t *testing.T) {
 		require.ErrorContains(t, err, "16-"+strings.Repeat("b", 64)+"-<summary digest>")
 		require.ErrorContains(t, err, "set server.APIVersion to 16")
 		require.ErrorContains(t, err, "feature minimum")
-		err = checkAPIVersionContract(15, merged, []apiVersionRecord{base, left}, []string{base.name(), left.name()})
+		err = checkAPIVersionContract(15, merged, []apiVersionRecord{base, left}, []string{base.name()})
 		require.ErrorContains(t, err, "17-"+strings.Repeat("d", 64)+"-<summary digest>")
 		require.ErrorContains(t, err, "set server.APIVersion to 17")
 	})
@@ -213,12 +213,11 @@ func TestCheckAPIVersionContract(t *testing.T) {
 		err := checkAPIVersionContract(16, left.digest, []apiVersionRecord{left}, []string{old.name()})
 		require.ErrorContains(t, err, old.name()+" from the target base is missing; restore it")
 		require.ErrorContains(t, err, "17-"+strings.Repeat("b", 64)+"-<summary digest>")
-		require.ErrorContains(t, err, "set server.APIVersion to 17")
-		require.ErrorContains(t, err, "feature minimum")
 	})
 	t.Run("deleting a base record asks to restore it", func(t *testing.T) {
 		err := checkAPIVersionContract(15, base.digest, nil, []string{base.name()})
 		require.ErrorContains(t, err, base.name()+" from the target base is missing; restore it")
+		require.NotContains(t, err.Error(), "set server.APIVersion")
 	})
 	t.Run("branch record can be replaced at the same version", func(t *testing.T) {
 		err := checkAPIVersionContract(16, merged, []apiVersionRecord{base, left}, []string{base.name()})
@@ -228,8 +227,6 @@ func TestCheckAPIVersionContract(t *testing.T) {
 		err := checkAPIVersionContract(16, merged, []apiVersionRecord{base, left, right}, []string{base.name()})
 		require.ErrorContains(t, err, left.name()+", "+right.name())
 		require.ErrorContains(t, err, "remove the conflicting record")
-		require.ErrorContains(t, err, "set server.APIVersion to 17")
-		require.ErrorContains(t, err, "feature minimum")
 		require.ErrorContains(t, err, "rebase")
 	})
 	t.Run("same contract with different summaries", func(t *testing.T) {
@@ -237,6 +234,7 @@ func TestCheckAPIVersionContract(t *testing.T) {
 	})
 	t.Run("missing current record", func(t *testing.T) {
 		err := checkAPIVersionContract(16, left.digest, []apiVersionRecord{base}, nil)
+		require.ErrorContains(t, err, "has no contract record")
 		require.ErrorContains(t, err, "16-"+strings.Repeat("b", 64)+"-<summary digest>")
 		require.ErrorContains(t, err, "one-line summary")
 	})
