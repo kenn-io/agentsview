@@ -283,7 +283,7 @@ func (source *pgUsageCacheSource) StreamUsage(ctx context.Context, ids []string,
 				fact := pgDailyUsageRowFact(row)
 				fact.Source, fact.Model, fact.ProviderID = row.usageSource, row.model, row.providerID
 				fact.RawTimestamp, fact.UsesSessionStart = pgUsageCacheTime(row.pricingTS), !row.pricingTS.Valid
-				fact.RankingOutputTokens, fact.CostSource = &rankingOutput, row.costSource
+				fact.RankingOutputTokens, fact.CostSource, fact.CostStatus = &rankingOutput, row.costSource, row.costStatus
 				fact.ClaudeMessageID, fact.ClaudeRequestID, fact.SourceUUID, fact.UsageDedupKey = row.claudeMessageID, row.claudeRequestID, row.sourceUUID, row.usageDedupKey
 				fact.TokenEligible, fact.ActivityEligible = true, activityEligible
 				fact.TimestampMillis, _, _ = usagefacts.ParseTimestamp(fact.RawTimestamp)

@@ -437,6 +437,7 @@ func newUsageFactSpool(ctx context.Context) (*usageFactSpool, error) {
 			cache_read_tokens INTEGER NOT NULL,
 			web_search_requests INTEGER NOT NULL,
 			reported_cost_microdollars INTEGER, cost_source TEXT NOT NULL,
+			cost_status TEXT NOT NULL,
 			request_scoped INTEGER NOT NULL,
 			claude_message_id TEXT NOT NULL, claude_request_id TEXT NOT NULL,
 			source_uuid TEXT NOT NULL, usage_dedup_key TEXT NOT NULL,
@@ -772,7 +773,7 @@ func extractUsageEventFacts(
 			&input.ProviderID,
 			&input.InputTokens, &input.OutputTokens, &input.CacheCreationTokens,
 			&input.CacheReadTokens, &input.ReasoningTokens, &cost,
-			&input.CostSource, &input.Timestamp, &rawDedupKey,
+			&input.CostSource, &input.CostStatus, &input.Timestamp, &rawDedupKey,
 		); err != nil {
 			return err
 		}
@@ -836,18 +837,18 @@ func (w *usageFactSpoolWriter) Flush() error {
 		raw_timestamp, uses_session_start, model, input_tokens, output_tokens,
 		reasoning_tokens, provider_id, cache_creation_tokens, cache_creation_1h_tokens,
 		cache_read_tokens, web_search_requests, reported_cost_microdollars,
-		cost_source, request_scoped, claude_message_id, claude_request_id,
+		cost_source, cost_status, request_scoped, claude_message_id, claude_request_id,
 		source_uuid, usage_dedup_key, token_eligible, activity_eligible, ranking_output_tokens
 	`
 	prefix := `INSERT INTO facts(` + columns + `) VALUES `
 	if w.compare {
 		prefix = `WITH incoming(` + columns + `) AS (VALUES `
 	}
-	const placeholders = `(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+	const placeholders = `(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
 	var query strings.Builder
 	query.Grow(len(prefix) + len(w.rows)*(len(placeholders)+1))
 	query.WriteString(prefix)
-	args := make([]any, 0, len(w.rows)*27)
+	args := make([]any, 0, len(w.rows)*28)
 	for rowIndex, row := range w.rows {
 		if rowIndex > 0 {
 			query.WriteByte(',')
@@ -861,7 +862,7 @@ func (w *usageFactSpoolWriter) Flush() error {
 			fact.Model, fact.InputTokens, fact.OutputTokens, fact.ReasoningTokens, fact.ProviderID,
 			fact.CacheCreationTokens, fact.CacheCreation1hTokens,
 			fact.CacheReadTokens, fact.WebSearchRequests,
-			fact.ReportedCostMicrodollars, fact.CostSource,
+			fact.ReportedCostMicrodollars, fact.CostSource, fact.CostStatus,
 			boolInt(fact.RequestScoped), fact.ClaudeMessageID,
 			fact.ClaudeRequestID, fact.SourceUUID, fact.UsageDedupKey,
 			boolInt(fact.TokenEligible), boolInt(fact.ActivityEligible), fact.RankingOutputTokens,
@@ -883,7 +884,7 @@ func (w *usageFactSpoolWriter) Flush() error {
 					prior.model, prior.input_tokens, prior.output_tokens, prior.reasoning_tokens,
 					prior.provider_id, prior.cache_creation_tokens, prior.cache_creation_1h_tokens,
 					prior.cache_read_tokens, prior.web_search_requests, prior.reported_cost_microdollars,
-					prior.cost_source, prior.request_scoped, prior.claude_message_id,
+					prior.cost_source, prior.cost_status, prior.request_scoped, prior.claude_message_id,
 					prior.claude_request_id, prior.source_uuid, prior.usage_dedup_key,
 					prior.token_eligible, prior.activity_eligible, prior.ranking_output_tokens) IS
 					(incoming.source, incoming.message_ordinal, incoming.timestamp_ms,
@@ -891,7 +892,7 @@ func (w *usageFactSpoolWriter) Flush() error {
 					incoming.model, incoming.input_tokens, incoming.output_tokens, incoming.reasoning_tokens,
 					incoming.provider_id, incoming.cache_creation_tokens, incoming.cache_creation_1h_tokens,
 					incoming.cache_read_tokens, incoming.web_search_requests, incoming.reported_cost_microdollars,
-					incoming.cost_source, incoming.request_scoped, incoming.claude_message_id,
+					incoming.cost_source, incoming.cost_status, incoming.request_scoped, incoming.claude_message_id,
 					incoming.claude_request_id, incoming.source_uuid, incoming.usage_dedup_key,
 					incoming.token_eligible, incoming.activity_eligible, incoming.ranking_output_tokens)
 			)`)
@@ -953,7 +954,7 @@ const usageFillEventFactsSQL = `
 	SELECT e.id, e.session_id, e.message_ordinal, e.source, e.model, e.provider_id,
 	       e.input_tokens, e.output_tokens, e.cache_creation_input_tokens,
 	       e.cache_read_input_tokens, e.reasoning_tokens,
-	       e.cost_microdollars, e.cost_source, COALESCE(e.occurred_at, ''),
+	       e.cost_microdollars, e.cost_source, e.cost_status, COALESCE(e.occurred_at, ''),
 	       e.dedup_key
 	FROM usage_fill_sessions f
 	CROSS JOIN usage_events e INDEXED BY idx_usage_events_session
@@ -1357,7 +1358,7 @@ func installSpoolSessions(
 		timestamp_ns, raw_timestamp, uses_session_start, model, input_tokens, output_tokens,
 		reasoning_tokens, provider_id, cache_creation_tokens, cache_creation_1h_tokens,
 		cache_read_tokens, web_search_requests, reported_cost_microdollars,
-		cost_source, request_scoped, claude_message_id, claude_request_id,
+		cost_source, cost_status, request_scoped, claude_message_id, claude_request_id,
 		source_uuid, usage_dedup_key, token_eligible, activity_eligible, ranking_output_tokens
 	)
 	SELECT cached.id, facts.fact_index, facts.source, facts.message_ordinal,
@@ -1365,7 +1366,7 @@ func installSpoolSessions(
 	       raw_timestamp, uses_session_start, model, input_tokens, output_tokens,
 	       reasoning_tokens, provider_id, cache_creation_tokens, cache_creation_1h_tokens,
 	       cache_read_tokens, web_search_requests, reported_cost_microdollars,
-	       cost_source, request_scoped, claude_message_id, claude_request_id,
+	       cost_source, cost_status, request_scoped, claude_message_id, claude_request_id,
 	       source_uuid, usage_dedup_key, token_eligible, activity_eligible, ranking_output_tokens
 	FROM usage_fill_spool.facts facts
 	JOIN usage_install_sessions install
@@ -1378,7 +1379,7 @@ func installSpoolSessions(
 		 uses_session_start, model, input_tokens, output_tokens, reasoning_tokens,
 		 provider_id, cache_creation_tokens, cache_creation_1h_tokens,
 		 cache_read_tokens, web_search_requests, reported_cost_microdollars,
-		 cost_source, request_scoped, claude_message_id, claude_request_id,
+		 cost_source, cost_status, request_scoped, claude_message_id, claude_request_id,
 		 source_uuid, usage_dedup_key, token_eligible, activity_eligible, ranking_output_tokens) =
 		(excluded.source, excluded.message_ordinal, excluded.timestamp_ms,
 		 excluded.timestamp_ns, excluded.raw_timestamp, excluded.uses_session_start,
@@ -1386,7 +1387,7 @@ func installSpoolSessions(
 		 excluded.reasoning_tokens, excluded.provider_id, excluded.cache_creation_tokens,
 		 excluded.cache_creation_1h_tokens, excluded.cache_read_tokens,
 		 excluded.web_search_requests, excluded.reported_cost_microdollars,
-		 excluded.cost_source, excluded.request_scoped, excluded.claude_message_id,
+		 excluded.cost_source, excluded.cost_status, excluded.request_scoped, excluded.claude_message_id,
 		 excluded.claude_request_id, excluded.source_uuid, excluded.usage_dedup_key,
 		 excluded.token_eligible, excluded.activity_eligible, excluded.ranking_output_tokens)
 	WHERE (usage_facts.source, usage_facts.message_ordinal, usage_facts.timestamp_ms,
@@ -1395,7 +1396,7 @@ func installSpoolSessions(
 		 usage_facts.reasoning_tokens, usage_facts.provider_id, usage_facts.cache_creation_tokens,
 		 usage_facts.cache_creation_1h_tokens, usage_facts.cache_read_tokens,
 		 usage_facts.web_search_requests, usage_facts.reported_cost_microdollars,
-		 usage_facts.cost_source, usage_facts.request_scoped, usage_facts.claude_message_id,
+		 usage_facts.cost_source, usage_facts.cost_status, usage_facts.request_scoped, usage_facts.claude_message_id,
 		 usage_facts.claude_request_id, usage_facts.source_uuid, usage_facts.usage_dedup_key,
 		 usage_facts.token_eligible, usage_facts.activity_eligible, usage_facts.ranking_output_tokens) IS NOT
 		(excluded.source, excluded.message_ordinal, excluded.timestamp_ms,
@@ -1404,7 +1405,7 @@ func installSpoolSessions(
 		 excluded.reasoning_tokens, excluded.provider_id, excluded.cache_creation_tokens,
 		 excluded.cache_creation_1h_tokens, excluded.cache_read_tokens,
 		 excluded.web_search_requests, excluded.reported_cost_microdollars,
-		 excluded.cost_source, excluded.request_scoped, excluded.claude_message_id,
+		 excluded.cost_source, excluded.cost_status, excluded.request_scoped, excluded.claude_message_id,
 		 excluded.claude_request_id, excluded.source_uuid, excluded.usage_dedup_key,
 		 excluded.token_eligible, excluded.activity_eligible, excluded.ranking_output_tokens)`,
 	); err != nil {

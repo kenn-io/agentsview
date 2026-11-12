@@ -66,6 +66,7 @@ type activityUsageFact struct {
 	row           activity.UsageRow
 	tokens        activityReportRowTokens
 	reported      sql.NullInt64
+	costStatus    string
 	costSource    string
 	pricingTS     string
 	requestScoped bool
@@ -77,7 +78,7 @@ const activityUsageFactColumns = `cs.session_id, f.source, f.message_ordinal,
 	f.raw_timestamp, f.timestamp_ms, f.timestamp_ns,
 	f.model, f.provider_id, f.input_tokens, f.output_tokens, f.reasoning_tokens,
 	f.cache_creation_tokens, f.cache_creation_1h_tokens, f.cache_read_tokens,
-	f.web_search_requests, f.reported_cost_microdollars, f.cost_source,
+	f.web_search_requests, f.reported_cost_microdollars, f.cost_status, f.cost_source,
 	f.request_scoped, f.claude_message_id, f.claude_request_id, f.source_uuid,
 	f.usage_dedup_key`
 
@@ -149,6 +150,8 @@ func (db *DB) activityReportCachedUsage(
 			reported = sql.NullInt64{}
 			rateResolver.RecordUnattributedReported()
 		}
+		reported = ReportedCostForPricing(reported, fact.costStatus,
+			catalogPricesAt(rateResolver, row.Model, fact.pricingTS))
 		row.Cost, row.Priced, row.Contributes, err = activityReportRowCost(
 			row.Model, fact.pricingTS, row.ProviderID, reported,
 			fact.requestScoped, fact.tokens, webSearchRequests[k], rateResolver)
@@ -294,7 +297,7 @@ func (scan *activityUsageScan) fact(
 		&row.SessionID, &row.UsageSource, &scan.ordinal, &fact.pricingTS,
 		&scan.millis, &scan.nanos, &row.Model, &row.ProviderID,
 		&counts[0], &counts[1], &counts[2], &counts[3], &counts[4], &counts[5],
-		&counts[6], &fact.reported, &fact.costSource,
+		&counts[6], &fact.reported, &fact.costStatus, &fact.costSource,
 		&fact.requestScoped, &row.ClaudeMessageID, &row.ClaudeRequestID,
 		&row.SourceUUID, &row.UsageDedupKey,
 	); err != nil {

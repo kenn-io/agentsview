@@ -732,6 +732,32 @@ Keep identity-only corrections in the reporting digest. The wire contract is in
   stay in each backend. Daily usage query strategies and aggregation loops
   remain per backend.
 
+### Harness-recorded costs
+
+A harness-recorded cost is a figure the agent computed from its own rates. It
+is stored as a usage event with `cost_status = 'recorded'`
+(`usagefacts.CostStatusRecorded`), or for one message under the
+`recorded_cost_microdollars` key of that message's `token_usage` JSON
+(`usagefacts.RecordedCostKey`). It prices a row only when
+`usagefacts.ReportedCostIsPrice` allows it: the catalog has no rate for the
+model and the figure is above zero. Every other status keeps the rule that a
+reported cost wins.
+
+- Decide in Go, after the catalog lookup, through `db.ReportedCostForPricing`.
+  SQL cannot see the catalog, so SQL that zeroes billable tokens or sums
+  explicit costs must treat recorded rows as unpriced and carry the figure in a
+  separate `recorded_cost_microdollars` column (DuckDB and ClickHouse do this).
+- Message rows select no cost in SQL. SQLite and PostgreSQL scanners fill it
+  from the token JSON with `db.MessageRecordedCost`; DuckDB and ClickHouse
+  extract it in SQL. ClickHouse stores it in `usage_messages.usage_recorded_cost`
+  and the snapshot `usage_recorded_costs` array.
+- A cost-only row whose recorded figure loses contributes nothing: no breakdown
+  entry, no computed request count.
+- `dbtest.SeedRecordedCostSessions` and `dbtest.AssertRecordedCostUsage` are
+  the cross-backend acceptance check; every backend runs them.
+- Validation writes a costed usage event with no model under
+  `usagefacts.UnknownModel` (`<unknown>`), so usage reads keep it.
+
 ### Usage cache divergence
 
 SQLite and native PostgreSQL aggregate usage APIs read persisted,

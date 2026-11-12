@@ -585,13 +585,13 @@ func TestUsageFactInstallPreservesUnchangedRows(t *testing.T) {
 					raw_timestamp, uses_session_start, model, provider_id,
 					input_tokens, output_tokens, reasoning_tokens, cache_creation_tokens,
 					cache_creation_1h_tokens, cache_read_tokens, web_search_requests,
-					cost_source, request_scoped, claude_message_id, claude_request_id,
+					cost_source, cost_status, request_scoped, claude_message_id, claude_request_id,
 					source_uuid, usage_dedup_key, token_eligible, activity_eligible)
 					SELECT session_id, fact_index+1, source,
 						raw_timestamp, uses_session_start, model, provider_id,
 						input_tokens, output_tokens, reasoning_tokens, cache_creation_tokens,
 						cache_creation_1h_tokens, cache_read_tokens, web_search_requests,
-						cost_source, request_scoped, claude_message_id, claude_request_id,
+						cost_source, cost_status, request_scoped, claude_message_id, claude_request_id,
 						'new-message', usage_dedup_key, token_eligible, activity_eligible
 					FROM facts ORDER BY fact_index DESC LIMIT 1`, 1, 0, 0, count + 1},
 				{"replace nullable and identity fields", `UPDATE facts SET

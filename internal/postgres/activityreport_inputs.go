@@ -15,6 +15,7 @@ import (
 	"go.kenn.io/agentsview/internal/activity"
 	"go.kenn.io/agentsview/internal/db"
 	"go.kenn.io/agentsview/internal/stringutil"
+	"go.kenn.io/agentsview/internal/usagefacts"
 )
 
 // A report owns its maps and slices. Published inputs are immutable; builders
@@ -45,6 +46,9 @@ type pgActivityUsageRow struct {
 	input, output, cacheCreate, cacheRead, reasoning            int64
 	ordinal, cacheCreate1h                                      int32
 	ordinalValid, costValid, copilotReported, pricingTimeAbsent bool
+	// costRecorded marks a harness-recorded cost, which prices the row only
+	// when the catalog cannot (see db.ReportedCostForPricing).
+	costRecorded bool
 }
 
 func pgCompactActivityUsage(r pgDailyUsageScanRow, handle func(string) unique.Handle[string]) pgActivityUsageRow {
@@ -58,6 +62,7 @@ func pgCompactActivityUsage(r pgDailyUsageScanRow, handle func(string) unique.Ha
 		input: int64(input), output: int64(output), cacheCreate: int64(create), cacheRead: int64(read), reasoning: int64(reasoning),
 		ordinal: int32(r.messageOrdinal.Int64), cacheCreate1h: int32(pgUsageRowCacheCreation1hTokens(r.usageSource, r.tokenJSON, create)), webSearches: int64(pgUsageRowWebSearchRequests(r.usageSource, r.tokenJSON)),
 		ordinalValid: r.messageOrdinal.Valid, costValid: r.cost.Valid, copilotReported: r.costSource == db.CopilotReportedCostSource, pricingTimeAbsent: !r.pricingTS.Valid,
+		costRecorded: r.costStatus == usagefacts.CostStatusRecorded,
 	}
 }
 

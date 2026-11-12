@@ -3,6 +3,7 @@
 package clickhouse
 
 import (
+	"database/sql"
 	"strings"
 	"testing"
 
@@ -129,4 +130,54 @@ func TestClickHouseUsageTimeIndexRetired(t *testing.T) {
 		WHERE database = currentDatabase() AND table = 'usage_messages'
 		  AND command LIKE '%DROP INDEX%'`).Scan(&drops))
 	assert.Equal(t, 1, drops)
+}
+
+// TestClickHouseUsageMessagesBackfillAfterRecordedCostColumn covers a mirror
+// whose usage_messages predates the recorded cost column and whose first
+// fill never finished. The upgrade appends the column after revision, so the
+// fill must write by column name.
+func TestClickHouseUsageMessagesBackfillAfterRecordedCostColumn(t *testing.T) {
+	t.Parallel()
+	ctx := t.Context()
+	dsn, database := chtest.FreshDatabase(t)
+	conn := chtest.Open(t, dsn, database)
+	for _, table := range mirrorTables {
+		_, err := conn.ExecContext(ctx, table.createSQL())
+		require.NoError(t, err)
+	}
+	columns := []string{
+		"session_id String", "ordinal Int64", "timestamp Nullable(DateTime64(6, 'UTC'))",
+		"model String", "provider_id String", "claude_message_id String",
+		"claude_request_id String", "source_uuid String", "push_version UInt64",
+	}
+	for _, column := range usageColumns {
+		columns = append(columns, column.name+" "+column.typ)
+	}
+	columns = append(columns, "revision UInt128")
+	_, err := conn.ExecContext(ctx, "CREATE TABLE usage_messages ("+strings.Join(columns, ", ")+
+		") ENGINE = ReplacingMergeTree(revision) ORDER BY (session_id, ordinal)")
+	require.NoError(t, err)
+	_, err = conn.ExecContext(ctx,
+		"INSERT INTO messages (session_id, ordinal, token_usage, push_version) VALUES (?, ?, ?, ?), (?, ?, ?, ?)",
+		"costed", int64(0), `{"input_tokens":5,"recorded_cost_microdollars":1234}`, uint64(3),
+		"plain", int64(0), `{"input_tokens":6}`, uint64(4))
+	require.NoError(t, err)
+
+	require.NoError(t, EnsureSchemaOn(ctx, conn))
+
+	read := func(session string) (uint64, sql.NullInt64) {
+		t.Helper()
+		var revision uint64
+		var cost sql.NullInt64
+		require.NoError(t, conn.QueryRowContext(ctx,
+			"SELECT toUInt64(revision), usage_recorded_cost FROM usage_messages FINAL WHERE session_id = ?",
+			session).Scan(&revision, &cost))
+		return revision, cost
+	}
+	revision, cost := read("costed")
+	require.Equal(t, uint64(6), revision, "the fill writes push_version * 2 into revision")
+	require.Equal(t, sql.NullInt64{Int64: 1234, Valid: true}, cost)
+	revision, cost = read("plain")
+	require.Equal(t, uint64(8), revision)
+	require.False(t, cost.Valid, "a message without a recorded cost stores NULL")
 }

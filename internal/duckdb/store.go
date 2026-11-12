@@ -782,7 +782,6 @@ func (s *Store) Search(ctx context.Context, f db.SearchFilter) (db.SearchPage, e
 	project += projectSb988.String()
 	args = append(args, dateBuilder.Args()...)
 	// Image text matches every term like messages do and ranks with names.
-	args = append(args, firstTerm)
 	imageTermClauses := make([]string, len(terms))
 	for i, t := range terms {
 		imageTermClauses[i] = "it.text ILIKE ? ESCAPE '\\'"
@@ -792,7 +791,7 @@ func (s *Store) Search(ctx context.Context, f db.SearchFilter) (db.SearchPage, e
 		args = append(args, f.Project)
 	}
 	args = append(args, dateBuilder.Args()...)
-	args = append(args, namePattern, namePattern, namePattern, namePattern)
+	args = append(args, namePattern, namePattern)
 	if f.Project != "" {
 		args = append(args, f.Project)
 	}
@@ -801,18 +800,20 @@ func (s *Store) Search(ctx context.Context, f db.SearchFilter) (db.SearchPage, e
 	if f.Sort == "recency" {
 		orderBy = "session_ended_at DESC, session_id ASC"
 	}
-	args = append(args, f.Limit+1, f.Cursor)
+	pageOrderBy := strings.NewReplacer("match_priority", "p.match_priority", "match_pos", "p.match_pos", "session_ended_at", "p.session_ended_at", "session_id", "p.session_id").Replace(orderBy)
+	args = append(args, f.Limit+1, f.Cursor, firstTerm, namePattern, namePattern)
 	// name_matches checks for an embeddable message only in name_candidates.
 	// A correlated EXISTS makes DuckDB evaluate the system-prefix predicate
 	// over every message before the semi join narrows it.
 	rows, err := s.queryContext(ctx, `
 		WITH msg_ranked AS (
-			SELECT m.session_id, s.project, s.agent, s.machine,
-				COALESCE(s.display_name, s.session_name, s.first_message, '') AS name,
+			SELECT m.session_id,
 				COALESCE(s.ended_at, s.started_at, s.created_at) AS session_ended_at,
-				m.ordinal, SUBSTRING(m.content, 1, 200) AS snippet,
+				m.ordinal,
 				1.0 AS rank, 1 AS match_priority,
 				INSTR(LOWER(m.content), LOWER(?)) AS match_pos,
+				'message' AS kind, NULL::TEXT AS source_kind, NULL::INTEGER AS call_index,
+				NULL::INTEGER AS event_index, NULL::INTEGER AS image_index, NULL::TEXT AS processor,
 				ROW_NUMBER() OVER (
 					PARTITION BY m.session_id
 					ORDER BY INSTR(LOWER(m.content), LOWER(?)) ASC,
@@ -827,17 +828,17 @@ func (s *Store) Search(ctx context.Context, f db.SearchFilter) (db.SearchPage, e
 				`+project+`
 		),
 		msg_matches AS (
-			SELECT session_id, project, agent, machine, name, session_ended_at,
-				ordinal, snippet, rank, match_priority, match_pos
+			SELECT session_id, session_ended_at, ordinal, rank, match_priority, match_pos,
+				kind, source_kind, call_index, event_index, image_index, processor
 			FROM msg_ranked
 			WHERE rn = 1
 		),
 		image_ranked AS (
-			SELECT it.session_id, s.project, s.agent, s.machine,
-				COALESCE(s.display_name, s.session_name, s.first_message, '') AS name,
+			SELECT it.session_id,
 				COALESCE(s.ended_at, s.started_at, s.created_at) AS session_ended_at,
-				it.message_ordinal AS ordinal, SUBSTRING(it.text, GREATEST(1, INSTR(LOWER(it.text), LOWER(?)) - 100), 200) AS snippet,
+				it.message_ordinal AS ordinal,
 				1.0 AS rank, 2 AS match_priority, 0 AS match_pos,
+				'image' AS kind, it.source_kind, it.call_index, it.event_index, it.image_index, it.processor,
 				ROW_NUMBER() OVER (
 					PARTITION BY it.session_id
 					ORDER BY it.message_ordinal ASC, it.call_index ASC,
@@ -856,24 +857,18 @@ func (s *Store) Search(ctx context.Context, f db.SearchFilter) (db.SearchPage, e
 				`+nameProject+`
 		),
 		image_matches AS (
-			SELECT session_id, project, agent, machine, name, session_ended_at,
-				ordinal, snippet, rank, match_priority, match_pos
+			SELECT session_id, session_ended_at, ordinal, rank, match_priority, match_pos,
+				kind, source_kind, call_index, event_index, image_index, processor
 			FROM image_ranked
 			WHERE rn = 1
 		),
 		name_candidates AS (
-			SELECT s.id AS session_id, s.project, s.agent, s.machine,
-				COALESCE(s.display_name, s.session_name, s.first_message, '') AS name,
+			SELECT s.id AS session_id,
 				COALESCE(s.ended_at, s.started_at, s.created_at) AS session_ended_at,
 				-1 AS ordinal,
-				CASE
-					WHEN COALESCE(s.display_name, s.session_name) ILIKE ? ESCAPE '\'
-						THEN COALESCE(s.display_name, s.session_name)
-					WHEN s.first_message ILIKE ? ESCAPE '\'
-						THEN s.first_message
-					ELSE COALESCE(s.display_name, s.session_name, s.first_message, '')
-				END AS snippet,
-				1.0 AS rank, 2 AS match_priority, 0 AS match_pos
+				1.0 AS rank, 2 AS match_priority, 0 AS match_pos,
+				'name' AS kind, NULL::TEXT AS source_kind, NULL::INTEGER AS call_index,
+				NULL::INTEGER AS event_index, NULL::INTEGER AS image_index, NULL::TEXT AS processor
 			FROM sessions s
 			WHERE (COALESCE(s.display_name, s.session_name) ILIKE ? ESCAPE '\'
 				OR s.first_message ILIKE ? ESCAPE '\')
@@ -890,10 +885,9 @@ func (s *Store) Search(ctx context.Context, f db.SearchFilter) (db.SearchPage, e
 					AND mx.is_system = FALSE
 					AND `+db.DuckDBSystemPrefixSQL("mx.content", "mx.role")+`
 			)
-		)
-		SELECT session_id, project, agent, machine, name,
-			session_ended_at, ordinal, snippet, rank
-		FROM (
+		),
+		page AS MATERIALIZED (
+		SELECT * FROM (
 			SELECT * FROM msg_matches
 			UNION ALL
 			SELECT * FROM image_matches
@@ -901,7 +895,24 @@ func (s *Store) Search(ctx context.Context, f db.SearchFilter) (db.SearchPage, e
 			SELECT * FROM name_matches
 		) combined
 		ORDER BY `+orderBy+`
-		LIMIT ? OFFSET ?`,
+		LIMIT ? OFFSET ?
+		)
+		SELECT p.session_id, s.project, s.agent, s.machine,
+			COALESCE(s.display_name, s.session_name, s.first_message, '') AS name,
+			p.session_ended_at, p.ordinal,
+			CASE WHEN p.kind = 'message' THEN SUBSTRING(m.content, 1, 200)
+				WHEN p.kind = 'image' THEN SUBSTRING(it.text, GREATEST(1, INSTR(LOWER(it.text), LOWER(?)) - 100), 200)
+				WHEN COALESCE(s.display_name, s.session_name) ILIKE ? ESCAPE '\' THEN COALESCE(s.display_name, s.session_name)
+				WHEN s.first_message ILIKE ? ESCAPE '\' THEN s.first_message
+				ELSE COALESCE(s.display_name, s.session_name, s.first_message, '') END AS snippet, p.rank
+		FROM page p
+		JOIN sessions s ON s.id = p.session_id
+		LEFT JOIN messages m ON p.kind = 'message' AND m.session_id = p.session_id AND m.ordinal = p.ordinal
+		LEFT JOIN image_text it ON p.kind = 'image' AND it.session_id = p.session_id
+			AND it.message_ordinal = p.ordinal AND it.source_kind = p.source_kind
+			AND it.call_index = p.call_index AND it.event_index = p.event_index
+			AND it.image_index = p.image_index AND it.processor = p.processor
+		ORDER BY `+pageOrderBy,
 		args...,
 	)
 	if err != nil {

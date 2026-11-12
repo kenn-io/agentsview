@@ -309,6 +309,11 @@ for (const [mode, highContrast] of THEMES) {
         await sp.selectFirstSession();
         const badge = page.locator(".session-breadcrumb .grade-badge");
         await expect(badge).toHaveText(grade);
+        // Usage adds controls before the grade and moves it horizontally.
+        // Wait for that render so the pointer stays on the badge after hover.
+        await expect(
+          page.locator(".session-breadcrumb .usage-breakdown-trigger").first(),
+        ).toBeVisible();
         const resting = await renderedContrast(badge);
         expect(resting.ratio, JSON.stringify(resting)).toBeGreaterThanOrEqual(4.5);
         await badge.hover();

@@ -1005,7 +1005,8 @@ func installUsageRollupRows(
 			fact.Fact.CacheCreationTokens, fact.Fact.CacheCreation1hTokens,
 			fact.Fact.CacheReadTokens,
 			fact.Fact.WebSearchRequests, fact.Fact.ReportedCostMicrodollars,
-			fact.Fact.CostSource, boolInt(fact.Fact.RequestScoped), boolInt(fact.IsHeadless),
+			fact.Fact.CostSource, fact.Fact.CostStatus,
+			boolInt(fact.Fact.RequestScoped), boolInt(fact.IsHeadless),
 			fact.Fact.ClaudeMessageID, fact.Fact.ClaudeRequestID,
 			fact.Fact.SourceUUID, fact.Fact.UsageDedupKey, fact.Fact.RankingOutputTokens)
 		if err != nil {

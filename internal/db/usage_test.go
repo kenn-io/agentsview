@@ -465,7 +465,8 @@ func TestUsageRowQueryPushesDateBoundsIntoUnion(t *testing.T) {
 	assert.NotContains(t, normalized, " or ")
 	assert.NotContains(t, normalized, "display_name")
 	assert.NotContains(t, normalized, "first_message")
-	assert.NotContains(t, normalized, "cost_status")
+	// Cost status decides whether a harness-recorded cost prices the row.
+	assert.Contains(t, normalized, "u.cost_status")
 	assert.Contains(t, normalized, "u.cost_source")
 	assert.NotContains(t, normalized, "user_message_count")
 	assert.NotContains(t, normalized, "session_activity_at")
@@ -507,7 +508,8 @@ func TestTopSessionsUsageRowQueryUsesNarrowScan(t *testing.T) {
 	normalized := strings.ToLower(query)
 	assert.NotContains(t, normalized, "display_name")
 	assert.NotContains(t, normalized, "first_message")
-	assert.NotContains(t, normalized, "cost_status")
+	// Cost status decides whether a harness-recorded cost prices the row.
+	assert.Contains(t, normalized, "u.cost_status")
 	assert.Contains(t, normalized, "u.cost_source")
 	assert.NotContains(t, normalized, "user_message_count")
 	assert.NotContains(t, normalized, "session_activity_at")

@@ -51,6 +51,35 @@ func TestPGSearchDeduplication(t *testing.T) {
 	assert.Len(t, page.Results, 1, "deduplicated to session")
 }
 
+func TestPGSearchSnippetUsesWinningMessage(t *testing.T) {
+	pgURL := testPGURL(t)
+	ensureStoreSchema(t, pgURL)
+	pg, err := Open(t.Context(), pgURL, testSchema, false)
+	require.NoError(t, err)
+	defer pg.Close()
+	_, err = pg.ExecContext(t.Context(), `
+		INSERT INTO sessions (id, machine, project, agent, first_message)
+		VALUES ('snippet-winner', 'test-machine', 'test-project', 'claude', 'unrelated')
+		ON CONFLICT (id) DO NOTHING
+	`)
+	require.NoError(t, err)
+	_, err = pg.ExecContext(t.Context(), `
+		INSERT INTO messages (session_id, ordinal, role, content, content_length)
+		VALUES ('snippet-winner', 0, 'assistant', 'prefix uniquepreview losing', 27),
+		       ('snippet-winner', 1, 'assistant', 'uniquepreview winning', 21)
+		ON CONFLICT (session_id, ordinal) DO NOTHING
+	`)
+	require.NoError(t, err)
+	store, err := NewStore(t.Context(), pgURL, testSchema, true)
+	require.NoError(t, err)
+	defer store.Close()
+	page, err := store.Search(t.Context(), db.SearchFilter{Query: "uniquepreview", Limit: 1})
+	require.NoError(t, err)
+	require.Len(t, page.Results, 1)
+	assert.Equal(t, 1, page.Results[0].Ordinal)
+	assert.Equal(t, "uniquepreview winning", page.Results[0].Snippet)
+}
+
 func TestPGSearchRecencySort(t *testing.T) {
 	pgURL := testPGURL(t)
 	ensureStoreSchema(t, pgURL)
