@@ -85,10 +85,16 @@ it.each([""])("reports an unavailable provider on retry: %s", async (provider) =
       onchange: vi.fn(),
     },
   });
-  const retry = [...document.querySelectorAll("button")].find((button) => button.textContent?.includes("Retry"));
+  const retry = [...document.querySelectorAll("button")].find((button) =>
+    button.textContent?.includes("Retry"),
+  );
   expect(retry).toBeDefined();
   retry!.click();
-  await vi.waitFor(() => expect(document.querySelector('[role="alert"]')?.textContent).toBe("Failed to load embeddings status"));
+  await vi.waitFor(() =>
+    expect(document.querySelector('[role="alert"]')?.textContent).toBe(
+      "Failed to load embeddings status",
+    ),
+  );
   expect(EmbeddingsService.postApiV1EmbeddingsSetup).not.toHaveBeenCalled();
   unmount(component);
 });
