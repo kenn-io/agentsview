@@ -1,6 +1,6 @@
 {
   "version": 177,
-  "digest": "84f79b4b016c911f64d9845bc8a85502b7dc818e1850c19e5abf6050e50a1b3c",
+  "digest": "0dbbeb5d0da329568b49ceb93aaf67440666eb151c43f0e3b494db985991a46c",
   "providers": {
     "aider": {
       "myrepo/.aider.chat.history.md": "1b647e0b07e1f7898ec861ca68b69b0ed84aa5205ad94c37060875110aca9e06"
@@ -47,8 +47,9 @@
       "project/chats/2026-07-15T20-01-32.065Z/chat-messages.json": "14fbcdfc439eb66d7696a83d53cb30aca959e84cc86aac563d82e151b58a0a3e"
     },
     "codex": {
-      "2025/01/01/rollout-2025-01-01T00-00-00-11111111-1111-4111-8111-111111111111.jsonl": "2397adbbe75db20f4abd5263f222fa0313bdfc0c2afefb09f4faf84545fea6fe",
+      "2025/01/01/rollout-2025-01-01T00-00-00-22222222-2222-4222-8222-222222222222.jsonl": "38f189df0a99dc261d07b8ef411b5e9c480b0a008ceb887f81ab311159c4da40",
       "2026/06/11/rollout-2026-06-11T12-44-06-3f2b1c9a-7d51-4e0a-9b2f-1c8a4d5e6f70.jsonl": "039ae50bd57ca192f716dbe172ad417c0caf5b599414eca063ce76768cfbd8e4",
+      "2026/09/01/rollout-2026-09-01T10-00-00-11111111-1111-4111-8111-111111111111.jsonl": "63aa6ba8582623ce469a4e9044179899a6c517c1ac79f146ccbca870ea4f9845",
       "2026/09/01/rollout-2026-09-01T10-00-00-44444444-4444-4444-8444-444444444444.jsonl": "10dc08dda3550e8e132a53b1e5ed069acb4639a824b4093ce32ce15f4f61c93d"
     },
     "codex-cloud": {
@@ -192,7 +193,8 @@
     },
     "piebald": {
       "app.db#42": "64db3324d0a32e911519f3d1573902b267e66ec03400adcc5c96a2315eb3e79b",
-      "app.db#7": "0f7afaf23f1464b9a746e235e1d64b647e4893d42d3e21f6bf95120012d3ee73"
+      "app.db#7": "0f7afaf23f1464b9a746e235e1d64b647e4893d42d3e21f6bf95120012d3ee73",
+      "app.db#99": "fe5b33f866431476b729855bda2151ebc5b3d9138e97ebaae2820f44fc3b514f"
     },
     "poolside": {
       "trajectories/trajectory-standalone_tools.ndjson": "9b20ba9e5a9660a8d5629c4b89d57daa3e06ed7a7eb98ac1d08d5ad4dabf606e",

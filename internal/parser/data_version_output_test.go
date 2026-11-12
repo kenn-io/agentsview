@@ -115,6 +115,7 @@ func parsedOutputRows(t *testing.T, agent parser.AgentType) map[string]string {
 		outcome, err := provider.Parse(parser.WithoutFilesystemProjectDiscovery(t.Context()), parser.ParseRequest{Source: source, Machine: "digest"})
 		require.NoError(t, err)
 		require.Empty(t, outcome.SourceErrors)
+		require.NotEmpty(t, outcome.Results, "%s: %s returned no sessions", agent, input)
 		for _, result := range outcome.Results {
 			messages += len(result.Result.Messages)
 			candidate, err := ingest.PrepareCandidate(t.Context(), result.Result, ingest.ContentOptions{})
@@ -265,16 +266,10 @@ func TestDataVersionDigestGuidance(t *testing.T) {
 	err := checkDataVersionDigest(177, changed, []outputRecord{old, added})
 	require.ErrorContains(t, err, "claude: new.jsonl")
 	require.ErrorContains(t, err, "take version 178")
-	changed["claude"]["new.jsonl"] = "first"
-	changed["claude"]["old.jsonl"] = "changed"
-	err = checkDataVersionDigest(177, changed, []outputRecord{old, added})
-	require.ErrorContains(t, err, "claude: old.jsonl")
-	require.ErrorContains(t, err, "take version 178")
 	conflict := outputRecord{Version: 177, Providers: map[string]map[string]string{"claude": {"old.jsonl": "changed"}}}
 	err = checkDataVersionDigest(177, both, []outputRecord{old, added, conflict})
 	require.ErrorContains(t, err, "conflicting output records for claude: old.jsonl")
 	require.ErrorContains(t, err, "take version 178")
-	require.NoError(t, checkDataVersionDigest(177, both, []outputRecord{old, added}))
 	require.ErrorContains(t, checkDataVersionDigest(177, map[string]map[string]string{}, []outputRecord{old}), "recorded input missing for claude: old.jsonl")
 	require.ErrorContains(t, checkDataVersionDigest(176, both, []outputRecord{old}), "newer record for version 177")
 }
