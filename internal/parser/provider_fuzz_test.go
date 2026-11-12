@@ -26,8 +26,12 @@ package parser
 // from there; .github/workflows/fuzz.yml does that weekly for every target.
 
 import (
+	"bufio"
+	"bytes"
 	"context"
+	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"reflect"
 	"runtime/debug"
@@ -102,8 +106,17 @@ func lookupProviderFuzzTarget(tb testing.TB, agent AgentType) providerFuzzTarget
 	return target
 }
 
+// providerFuzzListEnv makes every FuzzProvider target print its name and
+// agent and skip, so TestProviderFuzzTargetsCoverRegistry can see which
+// targets Go itself discovers.
+const providerFuzzListEnv = "AGENTSVIEW_LIST_PROVIDER_FUZZ_TARGETS"
+
 // fuzzProvider is the body of every FuzzProvider<Name> target.
 func fuzzProvider(f *testing.F, agent AgentType) {
+	if os.Getenv(providerFuzzListEnv) != "" {
+		fmt.Printf("provider-fuzz-target %s %s\n", f.Name(), agent)
+		f.SkipNow()
+	}
 	target := lookupProviderFuzzTarget(f, agent)
 	isolateProviderFuzzHome(f)
 	for _, seed := range target.seeds {
@@ -380,20 +393,39 @@ var providerFuzzExempt = map[AgentType]string{
 	AgentGeminiApps: "import-only: archives are parsed by internal/importer",
 }
 
-// TestProviderFuzzTargetsCoverRegistry fails when a provider is added
-// without a FuzzProvider target.
+// TestProviderFuzzTargetsCoverRegistry fails when a provider has no
+// FuzzProvider function. It reruns this test binary so Go's own target
+// discovery, the same the fuzz workflow relies on, decides what exists.
 func TestProviderFuzzTargetsCoverRegistry(t *testing.T) {
+	exe, err := os.Executable()
+	require.NoError(t, err)
+	cmd := exec.CommandContext(t.Context(), exe, "-test.run", "^FuzzProvider")
+	cmd.Env = append(os.Environ(), providerFuzzListEnv+"=1")
+	out, err := cmd.CombinedOutput()
+	require.NoError(t, err, "list provider fuzz targets:\n%s", out)
+
+	targets := map[AgentType][]string{}
+	scanner := bufio.NewScanner(bytes.NewReader(out))
+	for scanner.Scan() {
+		fields := strings.Fields(scanner.Text())
+		if len(fields) == 3 && fields[0] == "provider-fuzz-target" {
+			agent := AgentType(fields[2])
+			targets[agent] = append(targets[agent], fields[1])
+		}
+	}
+	require.NoError(t, scanner.Err())
+
 	var missing []string
 	for _, def := range Registry {
 		if _, exempt := providerFuzzExempt[def.Type]; exempt {
 			continue
 		}
-		providerFuzzRegistry.Lock()
-		_, ok := providerFuzzRegistry.targets[def.Type]
-		providerFuzzRegistry.Unlock()
-		if !ok {
+		names := targets[def.Type]
+		if len(names) == 0 {
 			missing = append(missing, string(def.Type))
+			continue
 		}
+		assert.Len(t, names, 1, "%s has more than one fuzz target", def.Type)
 	}
 	slices.Sort(missing)
 	assert.Empty(t, missing, "providers without a FuzzProvider target")
