@@ -699,7 +699,7 @@ func TestSearchContent_SubstringMatch(t *testing.T) {
 	assert.Equal(t, "s1", out.Matches[0].SessionID)
 }
 
-func TestSearchContent_RanksExactTextThenWords(t *testing.T) {
+func TestSearchContent_ReportsMatchedWords(t *testing.T) {
 	ts, d := newTestToolset(t)
 	dbtest.SeedSession(t, d, "s1", "proj", func(s *db.Session) {
 		s.MessageCount = 2
@@ -2132,9 +2132,9 @@ func TestSearchContent_LexicalChildScope(t *testing.T) {
 	defer func() { require.NoError(t, ct.Close()); require.NoError(t, st.Wait()) }()
 	// Quotes keep the default search to the exact text instead of every
 	// message holding its words.
-	for mode, pattern := range map[string]string{"": `"a-child first prompt"`, "regex": "a-child first prompt"} {
+	for _, tc := range []struct{ mode, pattern string }{{"", `"a-child first prompt"`}, {"regex", "a-child first prompt"}} {
 		result, err := ct.CallTool(t.Context(), callParams(ToolSearchContent, map[string]any{
-			"pattern": pattern, "mode": mode, "include_active": true,
+			"pattern": tc.pattern, "mode": tc.mode, "include_active": true,
 		}))
 		require.NoError(t, err)
 		require.False(t, result.IsError)

@@ -195,7 +195,7 @@ func TestSearchContentWordPagesFollowExactTotal(t *testing.T) {
 		sessions[i] = h.session
 	}
 	assert.Equal(t, []string{"exact-1", "exact-2", "exact-3"}, sessions[:3])
-	assert.ElementsMatch(t, []string{"all-1", "all-2"}, sessions[3:5])
+	assert.Equal(t, []string{"all-1", "all-2"}, sessions[3:5])
 	assert.Equal(t, []string{"some-2", "some-1"}, sessions[5:])
 	assert.Equal(t, []int{3, 3, 2, 1}, []int{paged[3].words, paged[4].words, paged[5].words, paged[6].words})
 
@@ -229,21 +229,20 @@ func TestSearchContentWordTierOrder(t *testing.T) {
 			assert.Equal(t, tc.want, wordHits(page))
 		})
 	}
-}
-
-func TestSearchContentFTSTiesUseOrdinal(t *testing.T) {
-	d := testDB(t)
-	requireFTS(t, d)
-	for _, tc := range []struct {
-		id      string
-		ordinal int
-	}{{"later", 5}, {"earlier", 1}} {
-		insertSession(t, d, tc.id, "proj", func(s *Session) { s.UserMessageCount = 2 })
-		require.NoError(t, d.InsertMessages(t.Context(), []Message{{SessionID: tc.id, Ordinal: tc.ordinal, Role: "user", Content: "alpha beta"}}))
-	}
-	page, err := d.SearchContent(t.Context(), ContentSearchFilter{Pattern: "alpha beta", Mode: "fts"})
-	require.NoError(t, err)
-	assert.Equal(t, []wordHit{{"earlier", "message", 2}, {"later", "message", 2}}, wordHits(page))
+	t.Run("fts-ordinal", func(t *testing.T) {
+		d := testDB(t)
+		requireFTS(t, d)
+		for _, tc := range []struct {
+			id      string
+			ordinal int
+		}{{"later", 5}, {"earlier", 1}} {
+			insertSession(t, d, tc.id, "proj", func(s *Session) { s.UserMessageCount = 2 })
+			require.NoError(t, d.InsertMessages(t.Context(), []Message{{SessionID: tc.id, Ordinal: tc.ordinal, Role: "user", Content: "alpha beta"}}))
+		}
+		page, err := d.SearchContent(t.Context(), ContentSearchFilter{Pattern: "alpha beta", Mode: "fts"})
+		require.NoError(t, err)
+		assert.Equal(t, []wordHit{{"earlier", "message", 2}, {"later", "message", 2}}, wordHits(page))
+	})
 }
 
 func TestSearchContentWordPagesWithFilteredTiers(t *testing.T) {

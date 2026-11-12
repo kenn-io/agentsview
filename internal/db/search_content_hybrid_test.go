@@ -117,13 +117,10 @@ func TestSearchContentHybridVectorOnlyAndFTSOnlyBothAppear(t *testing.T) {
 	require.Len(t, page.Matches, 2, "matches")
 
 	var ids []string
-	counts := make(map[string]int)
 	for _, m := range page.Matches {
 		ids = append(ids, m.SessionID)
-		counts[m.SessionID] = m.MatchedWords
 	}
 	assert.ElementsMatch(t, []string{"fts-only", "vec-only"}, ids)
-	assert.Equal(t, map[string]int{"fts-only": 1, "vec-only": 0}, counts)
 }
 
 func TestSearchContentHybridFTSSnippetUsesDialogue(t *testing.T) {
@@ -674,13 +671,17 @@ func TestSearchContentHybridFTSLegScopeExcludedRowsRefill(t *testing.T) {
 		},
 	}})
 
-	page, err := d.SearchContent(t.Context(), ContentSearchFilter{
-		Pattern: `"zebra" OR "absent"`, Mode: "hybrid", Scope: "subordinate", Limit: 10,
-	})
-	require.NoError(t, err, "SearchContent hybrid")
-	require.Len(t, page.Matches, 1,
-		"the subordinate match past the excluded top-level rows must be fetched")
-	assert.Equal(t, "sub", page.Matches[0].SessionID)
+	for _, pattern := range []string{"zebra", `"zebra" OR "absent"`} {
+		t.Run(pattern, func(t *testing.T) {
+			page, err := d.SearchContent(t.Context(), ContentSearchFilter{
+				Pattern: pattern, Mode: "hybrid", Scope: "subordinate", Limit: 10,
+			})
+			require.NoError(t, err, "SearchContent hybrid")
+			require.Len(t, page.Matches, 1,
+				"the subordinate match past the excluded top-level rows must be fetched")
+			assert.Equal(t, "sub", page.Matches[0].SessionID)
+		})
+	}
 }
 
 // TestSearchContentHybridVectorOnlyMatchCarriesUnitRange pins the

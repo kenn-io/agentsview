@@ -862,7 +862,7 @@ func TestSessionSearchHiddenHints(t *testing.T) {
 	}
 }
 
-func TestSessionSearchFTSHints(t *testing.T) {
+func TestSessionSearchSQLiteQuotedPatternOmitsFTSHint(t *testing.T) {
 	dataDir := newAgentDataDir(t)
 	seedSessionWithOpts(t, dataDir, "visible", "p", nil)
 	seedSearchMessage(t, dataDir, "visible", "decode failure error notes")
