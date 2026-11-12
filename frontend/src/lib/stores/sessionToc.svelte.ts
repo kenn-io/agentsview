@@ -56,6 +56,11 @@ class SessionTocStore {
     // tells that apart from an append. Read them again on each opening,
     // keeping the old list on screen until the new one lands.
     if (open && !this.open) {
+      // A read still running started before the reopening, so it may hold
+      // the old prompts; drop it and let the outline start a fresh one.
+      this.read.cancel();
+      this.loadingSignal = null;
+      this.olderLoading = false;
       this.olderBefore = 0;
       this.olderFailed = false;
     }

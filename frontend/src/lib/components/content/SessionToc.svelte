@@ -44,7 +44,9 @@
   );
   let promptNumbers = $derived(new Map(allEntries.map((entry, index) => [entry.ordinal, index + 1])));
   let tabOrdinal = $derived.by(() => {
-    if (focusedOrdinal !== null && promptNumbers.has(focusedOrdinal)) return focusedOrdinal;
+    if (focusedOrdinal !== null && entries.some((entry) => entry.ordinal === focusedOrdinal)) {
+      return focusedOrdinal;
+    }
     return currentOrdinal ?? ordered[0]?.ordinal ?? null;
   });
   let olderLoading = $derived(needsOlder && sessionToc.olderLoading);
@@ -186,6 +188,8 @@
 
     {#if allEntries.length > 0 && entries.length === 0}
       <p class="toc-note">{m.session_toc_hidden_by_filter()}</p>
+      <!-- Earlier prompts may still be ones the filter shows. -->
+      {@render olderStatus()}
     {:else if entries.length === 0 && !olderLoading && !olderFailed}
       <p class="toc-note">{m.session_toc_empty()}</p>
     {:else}

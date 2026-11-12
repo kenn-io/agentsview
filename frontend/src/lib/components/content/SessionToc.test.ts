@@ -229,6 +229,63 @@ describe("SessionToc", () => {
     expect(document.querySelector(".toc-note")).toBeNull();
   });
 
+  it("keeps a tab stop on a shown entry after the filter hides the focused one", () => {
+    load([
+      msg(0, { content: "plain words" }),
+      msg(2, { content: "Why does this fail?\n```go\nfunc main() {}\n```" }),
+    ]);
+    render();
+    (document.querySelector('button[data-ordinal="0"]') as HTMLButtonElement).focus();
+    flushSync();
+
+    ui.setBlockVisible("user", false);
+    flushSync();
+
+    const shown = document.querySelector<HTMLButtonElement>('button[data-ordinal="2"]')!;
+    expect(shown.tabIndex).toBe(0);
+  });
+
+  it("offers Retry for earlier prompts while the filter hides every known one", async () => {
+    vi.spyOn(console, "warn").mockImplementation(() => {});
+    const read = vi
+      .spyOn(SessionsService, "getApiV1SessionsByIdMessages")
+      .mockRejectedValueOnce(new Error("boom"))
+      .mockResolvedValueOnce({ messages: [msg(3, { content: "Look\n```sh\nls\n```" })] } as never);
+    ui.setBlockVisible("user", false);
+    load([msg(50, { content: "plain words" })], true);
+    render();
+    await settle();
+
+    expect(document.querySelector(".toc-note")?.textContent).toBe("Prompts are hidden by the message filter");
+    (document.querySelector('[role="alert"] button') as HTMLButtonElement).click();
+    await settle();
+
+    expect(read).toHaveBeenCalledTimes(2);
+    expect(labels()).toEqual(["1 Look"]);
+  });
+
+  it("drops a read that was still running when the outline reopened", async () => {
+    let answerStale!: (value: unknown) => void;
+    const read = vi
+      .spyOn(SessionsService, "getApiV1SessionsByIdMessages")
+      .mockReturnValueOnce(new Promise((resolve) => (answerStale = resolve)) as never)
+      .mockResolvedValueOnce({ messages: [msg(10, { content: "after resync" })] } as never);
+    load([msg(100)], true);
+    render();
+    await settle();
+
+    sessionToc.setOpen(false);
+    flushSync();
+    sessionToc.setOpen(true);
+    await settle();
+    expect(read).toHaveBeenCalledTimes(2);
+    expect(labels()).toEqual(["1 after resync", "2 prompt 100"]);
+
+    answerStale({ messages: [msg(10, { content: "before resync" })] });
+    await settle();
+    expect(labels()).toEqual(["1 after resync", "2 prompt 100"]);
+  });
+
   it("moves focus in once a keyboard-opened outline has an entry", async () => {
     let answer!: (value: unknown) => void;
     vi.spyOn(SessionsService, "getApiV1SessionsByIdMessages").mockReturnValue(

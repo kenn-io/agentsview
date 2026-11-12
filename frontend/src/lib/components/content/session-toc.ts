@@ -32,9 +32,29 @@ export interface TocView {
 const LABEL_MAX_CHARS = 160;
 
 // Claude Code records a shell shortcut's output as its own user row. Only
-// the row holding the typed command is a prompt.
-const SHELL_OUTPUT_ONLY_RE =
-  /^(?:\s*<bash-(stdout|stderr)>[\s\S]*?<\/bash-\1>)+\s*$/;
+// the row holding the typed command is a prompt. The envelopes are walked
+// one after another rather than matched with a repeated regex, which can
+// backtrack exponentially over many envelopes.
+function isShellOutputOnly(text: string): boolean {
+  const opener = /<bash-(stdout|stderr)>/y;
+  const skipSpace = (from: number) => {
+    let i = from;
+    while (i < text.length && /\s/.test(text[i]!)) i++;
+    return i;
+  };
+  let pos = skipSpace(0);
+  if (pos === text.length) return false;
+  while (pos < text.length) {
+    opener.lastIndex = pos;
+    const open = opener.exec(text);
+    if (!open) return false;
+    const close = `</bash-${open[1]}>`;
+    const end = text.indexOf(close, opener.lastIndex);
+    if (end < 0) return false;
+    pos = skipSpace(end + close.length);
+  }
+  return true;
+}
 
 /**
  * Reports whether a message is a prompt someone typed: a user row the
@@ -44,7 +64,7 @@ const SHELL_OUTPUT_ONLY_RE =
 export function isPromptMessage(m: Message): boolean {
   if (m.role !== "user" || m.is_compact_boundary || m.is_system) return false;
   if (m.source_subtype === "tool_result") return false;
-  if (SHELL_OUTPUT_ONLY_RE.test(previewSource(m.content))) return false;
+  if (isShellOutputOnly(previewSource(m.content))) return false;
   return !isSystemMessage(m) && !isSystemBoundaryMessage(m);
 }
 

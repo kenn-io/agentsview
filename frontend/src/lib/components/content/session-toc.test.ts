@@ -64,6 +64,16 @@ describe("isPromptMessage", () => {
   });
 });
 
+describe("isPromptMessage on long shell output", () => {
+  it("classifies many output envelopes followed by typed text without stalling", () => {
+    const envelopes = "<bash-stdout>x</bash-stdout>".repeat(60);
+    const started = performance.now();
+    expect(isPromptMessage(msg(1, { content: `${envelopes}then a question` }))).toBe(true);
+    expect(isPromptMessage(msg(2, { content: envelopes }))).toBe(false);
+    expect(performance.now() - started).toBeLessThan(1000);
+  });
+});
+
 describe("tocEntry", () => {
   it("labels a prompt with its first line, whitespace collapsed", () => {
     const e = tocEntry(msg(3, { content: "<system-reminder>ctx</system-reminder>\n  Fix   the\tbug\nand more" }));
