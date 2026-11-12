@@ -12,7 +12,7 @@ func keptAnalytics[T any](ctx context.Context, s *Store, panel string, f db.Anal
 	if db.TerminationUsesTime(f.Termination) {
 		return load(ctx, f)
 	}
-	key, err := json.Marshal(f, json.Deterministic(true), json.FormatNilSliceAsNull(true), json.FormatNilMapAsNull(true))
+	key, err := json.Marshal(f)
 	if err != nil {
 		return load(ctx, f)
 	}

@@ -94,16 +94,34 @@ func TestAnalyticsKeptPushAndSelection(t *testing.T) {
 	changedVelocity, err := store.GetAnalyticsVelocity(ctx, f)
 	require.NoError(t, err)
 	assert.NotEqual(t, velocity.Overall.CharsPerActiveMin, changedVelocity.Overall.CharsPerActiveMin)
+	assert.Zero(t, changed.ByTool[0].EmptyCalls)
+	require.NoError(t, local.UpdateSessionSignals(ctx, "session", db.SessionSignalUpdate{
+		QualitySignals:   db.QualitySignals{Version: db.CurrentQualitySignalVersion},
+		ToolObservations: []db.ToolObservation{{MessageOrdinal: 1, Outcome: "empty", Repeat: "none"}},
+	}))
+	pgKeptPush(t, syncer, true)
+	observed, err := store.GetAnalyticsTools(ctx, f)
+	require.NoError(t, err)
+	assert.Equal(t, 1, observed.ByTool[0].EmptyCalls)
+	projectFilter := f
+	projectFilter.Project = "project"
+	projectTools, err := store.GetAnalyticsTools(ctx, projectFilter)
+	require.NoError(t, err)
+	require.Equal(t, 1, projectTools.TotalCalls)
+	projectVelocity, err := store.GetAnalyticsVelocity(ctx, projectFilter)
+	require.NoError(t, err)
+	require.Len(t, projectVelocity.ByAgent, 1)
 	session, err := local.GetSession(ctx, "session")
 	require.NoError(t, err)
 	session.Project = "other-project"
 	require.NoError(t, local.UpsertSession(ctx, *session))
 	pgKeptPush(t, syncer, true)
-	projectFilter := f
-	projectFilter.Project = "project"
-	projectTools, err := store.GetAnalyticsTools(ctx, projectFilter)
+	projectTools, err = store.GetAnalyticsTools(ctx, projectFilter)
 	require.NoError(t, err)
 	assert.Zero(t, projectTools.TotalCalls)
+	projectVelocity, err = store.GetAnalyticsVelocity(ctx, projectFilter)
+	require.NoError(t, err)
+	assert.Empty(t, projectVelocity.ByAgent)
 	require.NoError(t, local.DeleteSession(ctx, "session"))
 	pgKeptPush(t, syncer, true)
 	deleted, err := store.GetAnalyticsTools(ctx, f)
