@@ -43,16 +43,6 @@ func contentWordsQuery(pattern string) (contentWords, bool) {
 // snippetTerm is an FTS expression whose operands locate any query word.
 func (q contentWords) snippetTerm() string { return strings.Join(q.terms, " OR ") }
 
-// snippet windows body on a query word as spelled, or else on the FTS
-// fragment, which holds a stemmed match such as "connecting" for "connection".
-func (q contentWords) snippet(f ContentSearchFilter, body, fragment string) string {
-	start, end := FTSSnippetRange(q.snippetTerm(), body)
-	if start == end {
-		start, end, _ = approxSnippetSpan(body, fragment)
-	}
-	return f.BuildSnippet(body, start, end)
-}
-
 // phraseMatch reports whether body holds the words of phrase adjacent and in
 // order, ignoring case, with only punctuation or space between them.
 func phraseMatch(body, phrase string) bool {
@@ -180,7 +170,7 @@ func contentWordRows(
 		ORDER BY p.n DESC, ` + order
 	args = append(args, need, offset, q.snippetTerm())
 	return scanContentRows(ctx, tx, query, args, func(body, fragment string) string {
-		return q.snippet(f, body, fragment)
+		return f.SemanticSnippet(body, fragment)
 	})
 }
 
