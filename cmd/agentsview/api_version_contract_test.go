@@ -10,6 +10,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"testing"
@@ -50,7 +51,7 @@ func loadAPIVersionRecords(dir string) ([]apiVersionRecord, error) {
 			return nil, fmt.Errorf("API version record %s must be named <version>-<contract digest>-<summary digest>", e.Name())
 		}
 		version, err := strconv.Atoi(parts[0])
-		if err != nil || version < 1 || len(parts[1]) != 64 || len(parts[2]) != 64 {
+		if err != nil || version < 1 || strconv.Itoa(version) != parts[0] || len(parts[1]) != 64 || len(parts[2]) != 64 {
 			return nil, fmt.Errorf("invalid API version record path %s", e.Name())
 		}
 		if _, err := hex.DecodeString(parts[1]); err != nil {
@@ -81,7 +82,7 @@ func baseAPIVersionRecords(ctx context.Context) ([]string, error) {
 	if err != nil {
 		return nil, fmt.Errorf("read API version records from base %q: %w", base, err)
 	}
-	var names []string
+	names := []string{}
 	for _, path := range strings.Split(strings.TrimSpace(string(output)), "\n") {
 		if path != "" {
 			names = append(names, filepath.Base(path))
@@ -98,12 +99,21 @@ func checkAPIVersionContract(apiVersion int, digest string, records []apiVersion
 	}
 	byVersion := map[int]apiVersionRecord{}
 	paths := map[string]bool{}
+	highest := apiVersion
+	for _, r := range records {
+		highest = max(highest, r.version)
+	}
 	for _, r := range records {
 		paths[r.name()] = true
 		if previous, ok := byVersion[r.version]; ok && previous.digest != r.digest {
-			return fmt.Errorf("API version %d has different contract digests (%s, %s); delete the file this PR added, rebase onto main after the earlier PR merges, and rerun make test-api-version. The next free version is %d", r.version, previous.name(), r.name(), apiVersion+1)
+			return fmt.Errorf("API version %d has different contract digests (%s, %s); remove the conflicting record this PR added and rerun make test-api-version. The next free version is %d", r.version, previous.name(), r.name(), highest+1)
 		}
 		byVersion[r.version] = r
+	}
+	for _, r := range records {
+		if r.version > apiVersion && !slices.Contains(base, r.name()) {
+			return fmt.Errorf("API version record %d is ahead of server.APIVersion %d; remove it or update the constant", r.version, apiVersion)
+		}
 	}
 	used := false
 	for _, name := range base {
@@ -125,6 +135,9 @@ func checkAPIVersionContract(apiVersion int, digest string, records []apiVersion
 	}
 	if record.digest == digest {
 		return nil
+	}
+	if base == nil {
+		return fmt.Errorf("generated OpenAPI contract changed under API version %d; history was not checked; set API_VERSION_BASE or run make test-api-version before replacing a record", apiVersion)
 	}
 	if !used {
 		return fmt.Errorf("generated OpenAPI contract changed under API version %d; replace this branch's record with %s in %s, with a one-line summary and its SHA-256 digest in the filename", apiVersion, path(apiVersion), apiVersionRecordDir)
@@ -168,6 +181,19 @@ func stripOpenAPIProse(value jsontext.Value, namedMap bool) (jsontext.Value, err
 			return nil, err
 		}
 		for key, item := range fields {
+			if !namedMap && key == "required" && item.Kind() == '[' {
+				var required []string
+				if err := json.Unmarshal(item, &required); err != nil {
+					return nil, err
+				}
+				slices.Sort(required)
+				normalized, err := json.Marshal(required)
+				if err != nil {
+					return nil, err
+				}
+				fields[key] = normalized
+				continue
+			}
 			if !namedMap && (key == "title" || key == "description" || key == "summary" || key == "example" || key == "examples") {
 				delete(fields, key)
 				continue
@@ -219,7 +245,7 @@ func TestCheckAPIVersionContract(t *testing.T) {
 	t.Run("collision and repair", func(t *testing.T) {
 		err := checkAPIVersionContract(16, merged, []apiVersionRecord{base, left, right}, []string{base.name()})
 		require.ErrorContains(t, err, left.name()+", "+right.name())
-		require.ErrorContains(t, err, "rebase onto main")
+		require.ErrorContains(t, err, "remove the conflicting record")
 		require.ErrorContains(t, err, "next free version is 17")
 		err = checkAPIVersionContract(16, merged, []apiVersionRecord{base, left}, []string{base.name(), left.name()})
 		require.ErrorContains(t, err, "17-dddd-<summary digest>")
@@ -233,6 +259,35 @@ func TestCheckAPIVersionContract(t *testing.T) {
 		require.ErrorContains(t, err, "16-bbbb-<summary digest>")
 		require.ErrorContains(t, err, "one-line summary")
 	})
+	t.Run("future record", func(t *testing.T) {
+		err := checkAPIVersionContract(15, base.digest, []apiVersionRecord{base, left}, []string{base.name()})
+		require.ErrorContains(t, err, "16")
+		require.NoError(t, checkAPIVersionContract(15, base.digest, []apiVersionRecord{base, left}, []string{base.name(), left.name()}))
+	})
+	t.Run("unknown history", func(t *testing.T) {
+		err := checkAPIVersionContract(15, left.digest, []apiVersionRecord{base}, nil)
+		require.ErrorContains(t, err, "history")
+	})
+}
+
+func TestOpenAPIRequiredOrder(t *testing.T) {
+	left, err := stripOpenAPIProse(jsontext.Value(`{"required":["a","b"],"properties":{"required":{"type":"string"}}}`), false)
+	require.NoError(t, err)
+	right, err := stripOpenAPIProse(jsontext.Value(`{"required":["b","a"],"properties":{"required":{"type":"string"}}}`), false)
+	require.NoError(t, err)
+	leftDigest, err := export.DigestCanonical(left)
+	require.NoError(t, err)
+	rightDigest, err := export.DigestCanonical(right)
+	require.NoError(t, err)
+	require.Equal(t, leftDigest, rightDigest)
+}
+
+func TestLoadAPIVersionRecordLeadingZero(t *testing.T) {
+	dir := t.TempDir()
+	name := "016-" + strings.Repeat("a", 64) + "-" + summaryDigest("summary")
+	require.NoError(t, os.WriteFile(filepath.Join(dir, name), []byte("summary\n"), 0600))
+	_, err := loadAPIVersionRecords(dir)
+	require.ErrorContains(t, err, name)
 }
 
 func TestLoadAPIVersionRecords(t *testing.T) {
