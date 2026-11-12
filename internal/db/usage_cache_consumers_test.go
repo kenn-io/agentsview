@@ -186,7 +186,7 @@ func TestUsageWindowMemoPreparesOncePerPredicate(t *testing.T) {
 	}
 	for _, filter := range filters {
 		want := getDailyUsageLegacyForRollupTest(t, database, filter)
-		got, err := database.GetDailyUsage(ctx, filter)
+		got, err := database.getDailyUsageUncached(ctx, filter)
 		require.NoError(t, err)
 		assert.Equal(t, want, got)
 	}
@@ -195,7 +195,7 @@ func TestUsageWindowMemoPreparesOncePerPredicate(t *testing.T) {
 	for _, minimum := range []int{55296, 55297} {
 		filter := UsageFilter{From: "2024-06-01", To: "2024-07-31", Timezone: "America/Chicago", MinUserMessages: minimum}
 		want := getDailyUsageLegacyForRollupTest(t, database, filter)
-		got, err := database.GetDailyUsage(ctx, filter)
+		got, err := database.getDailyUsageUncached(ctx, filter)
 		require.NoError(t, err)
 		assert.Equal(t, want, got)
 	}
@@ -213,7 +213,7 @@ func TestUsageWindowMemoSeparatesCursorPreparation(t *testing.T) {
 	// Exercise the memo boundary directly; Pairwise only reads daily usage.
 	_, err := database.sharedUsageWindow(ctx, usageWindowKey(filter, usageQueryKindToken, false), filter, usageQueryKindToken, false)
 	require.NoError(t, err)
-	daily, err := database.GetDailyUsage(ctx, filter)
+	daily, err := database.getDailyUsageUncached(ctx, filter)
 	require.NoError(t, err)
 	assert.Equal(t, 17, daily.Totals.InputTokens)
 	assert.Equal(t, int32(2), prepares.Load(), "daily usage needs its own preparation to include Cursor")
@@ -279,7 +279,7 @@ func TestUsageWindowMemoSharesConcurrentSides(t *testing.T) {
 		readers.Go(func() {
 			side := filter
 			side.Model = model
-			daily, err := database.GetDailyUsage(ctx, side)
+			daily, err := database.getDailyUsageUncached(ctx, side)
 			done <- result{model, daily, err}
 		})
 	}

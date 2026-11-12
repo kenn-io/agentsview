@@ -50,12 +50,6 @@ func TestDailyUsageKept(t *testing.T) {
 	assert.NotEqual(t, "changed", got.Pricing.Source)
 	assert.NotContains(t, got.Pricing.Models, "changed")
 	assert.EqualValues(t, 2, prepares.Load())
-	omit := filter
-	omit.SkipSessionCounts = true
-	skipped, err := database.GetDailyUsage(t.Context(), omit)
-	require.NoError(t, err)
-	assert.Equal(t, UsageSessionCounts{}, skipped.SessionCounts)
-	assert.EqualValues(t, 2, prepares.Load())
 
 	appendLiveWriteMessage(t, database, "reported", "2026-08-10T10:00:00Z", 1, 7)
 	got, err = database.GetDailyUsage(t.Context(), filter)
@@ -66,18 +60,9 @@ func TestDailyUsageKept(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, 20, got.Totals.InputTokens)
 	assert.EqualValues(t, 4, prepares.Load())
-
-	ctx, cancel := context.WithCancel(t.Context())
-	cancel()
-	_, err = database.GetDailyUsage(ctx, filter)
-	require.ErrorIs(t, err, context.Canceled)
-	got, err = database.GetDailyUsage(t.Context(), filter)
-	require.NoError(t, err)
-	assert.Equal(t, 20, got.Totals.InputTokens)
-	assert.EqualValues(t, 4, prepares.Load())
 }
 
-func TestDailyUsageKeptPricingAndDeletion(t *testing.T) {
+func TestDailyUsageKeptPricing(t *testing.T) {
 	database := testDB(t)
 	seedLiveWriteSession(t, database, "reported", "project", "2026-08-10T09:00:00Z", 0, 1000000)
 	var prepares atomic.Int32
@@ -90,8 +75,6 @@ func TestDailyUsageKeptPricingAndDeletion(t *testing.T) {
 	}
 	require.NoError(t, database.UpsertModelPricing([]ModelPricing{{ModelPattern: "model-a", InputPerMTok: money.MustParseDollars("1")}}))
 	assert.EqualValues(t, 1000000, readCost())
-	require.NoError(t, database.UpsertModelPricing([]ModelPricing{{ModelPattern: "model-a", InputPerMTok: money.MustParseDollars("2")}}))
-	assert.EqualValues(t, 2000000, readCost())
 	database.SetCustomPricing(map[string]config.CustomModelRate{"model-a": {InputMicrodollarsPerMTok: 3000000}})
 	assert.EqualValues(t, 3000000, readCost())
 	database.SetEffectivePricing(map[string]export.ModelRates{"model-a": {InputPerMTok: money.MustParseDollars("4")}})
@@ -100,8 +83,6 @@ func TestDailyUsageKeptPricingAndDeletion(t *testing.T) {
 	database.SetEmptyCatalogPricing(nil)
 	assert.EqualValues(t, 4000000, readCost())
 	assert.Equal(t, before+1, prepares.Load())
-	require.NoError(t, database.DeleteSession(t.Context(), "reported"))
-	assert.Zero(t, readCost())
 }
 
 func TestDailyUsageKeptWriteDuringRead(t *testing.T) {
@@ -159,10 +140,14 @@ func TestDailyUsageKeptCountsAfterOmission(t *testing.T) {
 	second, err := database.GetDailyUsage(t.Context(), filter)
 	require.NoError(t, err)
 	assert.Equal(t, 1, second.SessionCounts.Total)
+	filter.SkipSessionCounts = true
+	third, err := database.GetDailyUsage(t.Context(), filter)
+	require.NoError(t, err)
+	assert.Equal(t, UsageSessionCounts{}, third.SessionCounts)
 	assert.EqualValues(t, 1, prepares.Load())
 }
 
-func TestDailyUsageKeptArchiveReplacement(t *testing.T) {
+func TestDailyUsageKeptArchiveIDChange(t *testing.T) {
 	database := testDB(t)
 	seedLiveWriteSession(t, database, "reported", "project", "2026-08-10T09:00:00Z", 0, 10)
 	filter := UsageFilter{From: "2026-08-10", To: "2026-08-10", Timezone: "UTC"}

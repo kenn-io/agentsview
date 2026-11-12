@@ -46,7 +46,7 @@ func appendLiveWriteMessage(
 
 func liveWriteDailyInput(t *testing.T, database *DB, project string) int {
 	t.Helper()
-	daily, err := database.GetDailyUsage(t.Context(), UsageFilter{
+	daily, err := database.getDailyUsageUncached(t.Context(), UsageFilter{
 		From: "2026-08-10", To: "2026-08-10", Timezone: "UTC",
 		Project: project, SkipSessionCounts: true,
 	})
@@ -80,19 +80,11 @@ func TestUsageSummarySurvivesArchiveWriteDuringRollupBuild(t *testing.T) {
 	} {
 		t.Run(testCase.name, func(t *testing.T) {
 			database := testDB(t)
-			dailyInput := func() int {
-				daily, err := database.getDailyUsageUncached(t.Context(), UsageFilter{
-					From: "2026-08-10", To: "2026-08-10", Timezone: "UTC",
-					Project: "keep", SkipSessionCounts: true,
-				})
-				require.NoError(t, err)
-				return daily.Totals.InputTokens
-			}
 			seedLiveWriteSession(t, database, "reported", "keep",
 				"2026-08-10T09:00:00Z", 0, 10)
 			seedLiveWriteSession(t, database, "other-project", "drop",
 				"2026-08-10T09:30:00Z", 0, 4)
-			require.Equal(t, 10, dailyInput())
+			require.Equal(t, 10, liveWriteDailyInput(t, database, "keep"))
 
 			snapshot, err := database.captureUsageQuery(
 				t.Context(), UsageFilter{}, usageQueryKindToken)
@@ -113,12 +105,12 @@ func TestUsageSummarySurvivesArchiveWriteDuringRollupBuild(t *testing.T) {
 					"2026-08-10T09:45:00Z", 1, 7)
 			}
 			assert.Contains(t, testCase.wantDuring,
-				dailyInput())
+				liveWriteDailyInput(t, database, "keep"))
 			assert.True(t, written.Load(), "the build seam never ran")
 
 			cache.rollup.observer.beforeEnsure = nil
 			assert.Equal(t, testCase.wantAfterFill,
-				dailyInput())
+				liveWriteDailyInput(t, database, "keep"))
 		})
 	}
 }
