@@ -45,7 +45,9 @@ describe("isPromptMessage", () => {
     expect(isPromptMessage(msg(1, { content: "" }))).toBe(true);
     expect(isPromptMessage(msg(2, { content: "<bash-input>ls</bash-input>" }))).toBe(true);
     expect(
-      isPromptMessage(msg(3, { content: "<bash-input>ls</bash-input><bash-stdout>a</bash-stdout>" })),
+      isPromptMessage(
+        msg(3, { content: "<bash-input>ls</bash-input><bash-stdout>a</bash-stdout>" }),
+      ),
     ).toBe(true);
   });
 
@@ -58,13 +60,25 @@ describe("isPromptMessage", () => {
     ["injected command output", { content: "<local-command-stdout>ok</local-command-stdout>" }],
     ["a reminder-only row", { content: "<system-reminder>ctx</system-reminder>" }],
     ["shell output", { content: "<bash-stdout>hello</bash-stdout>" }],
-    ["shell output and errors", { content: "<bash-stdout>a</bash-stdout><bash-stderr>oops</bash-stderr>" }],
-    ["shell output that prints a closing tag", { content: "<bash-stdout>before </bash-stdout> after</bash-stdout>" }],
+    [
+      "shell output and errors",
+      { content: "<bash-stdout>a</bash-stdout><bash-stderr>oops</bash-stderr>" },
+    ],
+    [
+      "shell output that prints a closing tag",
+      { content: "<bash-stdout>before </bash-stdout> after</bash-stdout>" },
+    ],
     [
       "shell output that prints other shell tags",
-      { content: "<bash-stdout>before </bash-stdout><bash-stderr>after</bash-stdout><bash-stderr></bash-stderr>" },
+      {
+        content:
+          "<bash-stdout>before </bash-stdout><bash-stderr>after</bash-stdout><bash-stderr></bash-stderr>",
+      },
     ],
-    ["shell output after a reminder", { content: "<system-reminder>ctx</system-reminder>\n<bash-stdout>ok</bash-stdout>" }],
+    [
+      "shell output after a reminder",
+      { content: "<system-reminder>ctx</system-reminder>\n<bash-stdout>ok</bash-stdout>" },
+    ],
   ] satisfies [string, Partial<Message>][])("drops %s", (_name, extra) => {
     expect(isPromptMessage(msg(0, extra))).toBe(false);
   });
@@ -72,7 +86,9 @@ describe("isPromptMessage", () => {
 
 describe("tocEntry", () => {
   it("labels a prompt with its first line, whitespace collapsed", () => {
-    const e = tocEntry(msg(3, { content: "<system-reminder>ctx</system-reminder>\n  Fix   the\tbug\nand more" }));
+    const e = tocEntry(
+      msg(3, { content: "<system-reminder>ctx</system-reminder>\n  Fix   the\tbug\nand more" }),
+    );
     expect(e).toMatchObject({ ordinal: 3, label: "Fix the bug", isShell: false });
   });
 
@@ -88,7 +104,10 @@ describe("tocEntry", () => {
 });
 
 describe("entryVisible", () => {
-  const hiding = (...hidden: string[]) => (type: string) => !hidden.includes(type);
+  const hiding =
+    (...hidden: string[]) =>
+    (type: string) =>
+      !hidden.includes(type);
 
   it("hides a text-only prompt with the user filter", () => {
     const e = tocEntry(msg(1, { content: "just words" }));
@@ -113,8 +132,14 @@ describe("mergeTocEntries", () => {
   });
 
   it("takes the loaded copy where an earlier read overlaps the window", () => {
-    const merged = mergeTocEntries([entry(2), { ...entry(10), label: "stale" }], [msg(10, { content: "fresh" })]);
-    expect(merged).toEqual([entry(2), { ordinal: 10, label: "fresh", isShell: false, blocks: ["user"] }]);
+    const merged = mergeTocEntries(
+      [entry(2), { ...entry(10), label: "stale" }],
+      [msg(10, { content: "fresh" })],
+    );
+    expect(merged).toEqual([
+      entry(2),
+      { ordinal: 10, label: "fresh", isShell: false, blocks: ["user"] },
+    ]);
   });
 
   it("keeps every earlier prompt when nothing is loaded", () => {

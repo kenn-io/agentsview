@@ -48,7 +48,9 @@ async function settle() {
 }
 
 function labels(): string[] {
-  return [...document.querySelectorAll(".toc-entry")].map((el) => el.textContent!.replace(/\s+/g, " ").trim());
+  return [...document.querySelectorAll(".toc-entry")].map((el) =>
+    el.textContent!.replace(/\s+/g, " ").trim(),
+  );
 }
 
 let component: ReturnType<typeof mount> | null = null;
@@ -111,7 +113,9 @@ describe("SessionToc", () => {
     expect(document.querySelector('[aria-current="location"]')).toBeNull();
     sessionToc.view = { topOrdinal: 2, minOrdinal: 2, maxOrdinal: 2, atEnd: false };
     flushSync();
-    expect(document.querySelector('[aria-current="location"]')?.getAttribute("data-ordinal")).toBe("2");
+    expect(document.querySelector('[aria-current="location"]')?.getAttribute("data-ordinal")).toBe(
+      "2",
+    );
   });
 
   it("moves between entries with the arrow keys and closes on Escape or t", () => {
@@ -161,7 +165,11 @@ describe("SessionToc", () => {
 
   it("reads prompts older than the loaded window and numbers them first", async () => {
     const read = vi.spyOn(SessionsService, "getApiV1SessionsByIdMessages").mockResolvedValue({
-      messages: [msg(40, { content: "older two" }), msg(30, { is_system: true }), msg(10, { content: "older one" })],
+      messages: [
+        msg(40, { content: "older two" }),
+        msg(30, { is_system: true }),
+        msg(10, { content: "older one" }),
+      ],
     } as never);
     load([msg(100, { content: "loaded" })], true);
     render();
@@ -172,7 +180,12 @@ describe("SessionToc", () => {
 
     expect(read).toHaveBeenCalledTimes(1);
     expect(read.mock.calls[0]![0]).toEqual({ id: sessionId });
-    expect(read.mock.calls[0]![1]).toEqual({ roles: "user", direction: "desc", from: 99, limit: 1000 });
+    expect(read.mock.calls[0]![1]).toEqual({
+      roles: "user",
+      direction: "desc",
+      from: 99,
+      limit: 1000,
+    });
     expect(labels()).toEqual(["1 older one", "2 older two", "3 loaded"]);
     expect(document.querySelector(".toc-count")!.textContent!.trim()).toBe("3 prompts");
 
@@ -193,7 +206,9 @@ describe("SessionToc", () => {
     render();
     await settle();
 
-    expect(document.querySelector('[role="alert"]')?.textContent).toContain("Could not load earlier prompts");
+    expect(document.querySelector('[role="alert"]')?.textContent).toContain(
+      "Could not load earlier prompts",
+    );
     expect(labels()).toEqual(["prompt 50"]);
 
     (document.querySelector('[role="alert"] button') as HTMLButtonElement).click();
@@ -211,7 +226,9 @@ describe("SessionToc", () => {
     load([msg(0)]);
     ui.setBlockVisible("user", false);
     flushSync();
-    expect(document.querySelector(".toc-note")?.textContent).toBe("Prompts are hidden by the message filter");
+    expect(document.querySelector(".toc-note")?.textContent).toBe(
+      "Prompts are hidden by the message filter",
+    );
     expect(document.querySelector(".toc-entry")).toBeNull();
   });
 
@@ -256,7 +273,9 @@ describe("SessionToc", () => {
     render();
     await settle();
 
-    expect(document.querySelector(".toc-note")?.textContent).toBe("Prompts are hidden by the message filter");
+    expect(document.querySelector(".toc-note")?.textContent).toBe(
+      "Prompts are hidden by the message filter",
+    );
     (document.querySelector('[role="alert"] button') as HTMLButtonElement).click();
     await settle();
 

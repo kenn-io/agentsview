@@ -98,7 +98,10 @@ export function promptEntries(messages: readonly Message[]): TocEntry[] {
  * Joins prompts fetched from before the loaded window with the prompts in
  * it. The loaded window is current, so it wins wherever the two overlap.
  */
-export function mergeTocEntries(older: readonly TocEntry[], loaded: readonly Message[]): TocEntry[] {
+export function mergeTocEntries(
+  older: readonly TocEntry[],
+  loaded: readonly Message[],
+): TocEntry[] {
   const loadedEntries = promptEntries(loaded);
   const oldestLoaded = loaded.reduce(
     (min, m) => Math.min(min, m.ordinal),
