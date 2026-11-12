@@ -257,11 +257,19 @@ func newExportSessionsCommand() *cobra.Command {
 	return cmd
 }
 
+func exportDaemonCompatibilityError(cfg *config.Config, cause error) error {
+	rt, _ := findIncompatibleWritableDaemonRuntime(cfg.DataDir, cfg.AuthToken)
+	if rt == nil || daemonRuntimeAhead(rt) {
+		return errors.New(staleClientUpgradeHint())
+	}
+	return fmt.Errorf("%w; run `agentsview daemon restart`, then check `agentsview export status` and rerun `agentsview export sessions --wait`", cause)
+}
+
 func startExportDaemon(ctx context.Context, cfg *config.Config) (*DaemonRuntime, error) {
 	tr, err := ensureTransportContext(ctx, cfg, transportIntentLongLived, startupWaitTimeout)
 	if err != nil {
 		if incompatible, ok := errors.AsType[*longLivedCompatibilityError](err); ok {
-			return nil, fmt.Errorf("%w; run `agentsview daemon restart`, then check `agentsview export status` and rerun `agentsview export sessions --wait`", incompatible.cause)
+			return nil, exportDaemonCompatibilityError(cfg, incompatible.cause)
 		}
 		return nil, err
 	}

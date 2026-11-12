@@ -1115,6 +1115,18 @@ func TestExportWaitRejectsOlderDaemon(t *testing.T) {
 	assert.Empty(t, stdout)
 }
 
+func TestExportWaitRejectsNewerDaemon(t *testing.T) {
+	path := pendingExportArchive(t, false)
+	dir := filepath.Dir(path)
+	writeLiveRuntime(t, dir, false, withRuntimeVersion("future"), withRuntimeAPIVersion(daemonAPIVersion+1))
+	forbidStartBackgroundServeForTransport(t, "newer daemon")
+	stdout, _, err := executeExportSessionsCommand(newRootCommand(), "export", "sessions", "--wait")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "Upgrade this agentsview install")
+	assert.NotContains(t, err.Error(), "daemon restart")
+	assert.Empty(t, stdout)
+}
+
 func TestExportWaitRejectsNewerBackfillState(t *testing.T) {
 	path := pendingExportArchive(t, false)
 	raw, err := sql.Open("sqlite3", path)
