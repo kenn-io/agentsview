@@ -60,7 +60,6 @@ docker run --rm -p 127.0.0.1:8080:8080 \
 ## Quick Start
 
 ```bash
-agentsview agent setup     # connect Claude Code and Codex to conversation memory
 agentsview serve           # start the server in the foreground
 agentsview daemon start    # alternatively, start the same server in the background
 agentsview daemon status   # show daemon status

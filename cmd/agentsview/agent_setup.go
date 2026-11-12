@@ -14,7 +14,7 @@ import (
 )
 
 func newAgentCommand() *cobra.Command {
-	group := &cobra.Command{Use: "agent", Short: "Set up coding agents", GroupID: groupMeta}
+	group := &cobra.Command{Use: "agent", Short: "Set up coding agents", Long: "Connect Claude Code and Codex to conversation memory by installing skills and registering the agentsview MCP server.", GroupID: groupMeta}
 	var force bool
 	cmd := agentsetup.NewCommand(agentsetup.Options{
 		SetupCommand: "agentsview agent setup",
@@ -22,6 +22,14 @@ func newAgentCommand() *cobra.Command {
 			return setupItems(agent, force)
 		},
 	})
+	format := formatFlag("human")
+	cmd.Flags().Var(&format, "format", "Output format: human or json")
+	cmd.PreRunE = func(cmd *cobra.Command, _ []string) error {
+		if format == "json" {
+			return cmd.Flags().Set("json", "true")
+		}
+		return nil
+	}
 	cmd.Flags().BoolVar(&force, "force", false,
 		"Overwrite edited skills and a different MCP entry")
 	group.AddCommand(cmd)
@@ -51,6 +59,7 @@ func setupItems(agent string, force bool) ([]agentsetup.Item, error) {
 		rows, err := listSkillRows(
 			home, false, []skills.Harness{harness}, skillRemote)
 		if err != nil {
+			//nolint:nilerr // The failed status is included in the setup report.
 			return agentsetup.Status{
 				State:  agentsetup.StateFailed,
 				Reason: "Unable to read skill files",

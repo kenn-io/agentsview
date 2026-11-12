@@ -1,12 +1,17 @@
 package main
 
 import (
+	"bufio"
 	"bytes"
 	"encoding/json"
+	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"runtime"
+	"strings"
 	"testing"
 	"time"
 
@@ -17,6 +22,25 @@ import (
 	"go.kenn.io/agentsview/internal/service"
 	"go.kenn.io/agentsview/internal/skills"
 )
+
+func init() {
+	if runtime.GOOS != "windows" || os.Getenv("AGENTSVIEW_FAKE_AGENT") != "1" {
+		return
+	}
+	if strings.EqualFold(filepath.Base(os.Args[0]), "codex.exe") {
+		scanner := bufio.NewScanner(os.Stdin)
+		scanner.Scan()
+		fmt.Println(`{"id":1,"result":{}}`)
+		scanner.Scan()
+		scanner.Scan()
+		fmt.Println(`{"id":2,"result":{"data":[{"name":"agentsview","tools":{"search_content":{}}}]}}`)
+		for scanner.Scan() {
+		}
+	} else {
+		fmt.Print(strings.ReplaceAll(os.Getenv("AGENTSVIEW_FAKE_RESPONSE"), `\n`, "\n"))
+	}
+	os.Exit(0)
+}
 
 func TestDoctorMemoryReadsLocalArchiveWithoutCreatingConfig(t *testing.T) {
 	home := t.TempDir()
@@ -236,11 +260,26 @@ func fakeAgent(t *testing.T, name, response string) {
 	if response == "" {
 		response = "Scope: User config\\nStatus: Connected\\n"
 	}
+	if runtime.GOOS == "windows" {
+		t.Setenv("AGENTSVIEW_FAKE_AGENT", "1")
+		t.Setenv("AGENTSVIEW_FAKE_RESPONSE", response)
+		executable, err := os.Executable()
+		require.NoError(t, err)
+		source, err := os.Open(executable)
+		require.NoError(t, err)
+		defer source.Close()
+		target, err := os.Create(filepath.Join(os.Getenv("PATH"), name+".exe"))
+		require.NoError(t, err)
+		_, err = io.Copy(target, source)
+		require.NoError(t, err)
+		require.NoError(t, target.Close())
+		return
+	}
 	script := "#!/bin/sh\nprintf '" + response + "'\n"
 	if name == "codex" {
 		script = "#!/bin/sh\nread line\nprintf '{\"id\":1,\"result\":{}}\\n'\nread line\nread line\nprintf '{\"id\":2,\"result\":{\"data\":[{\"name\":\"agentsview\",\"tools\":{\"search_content\":{}}}]}}\\n'\nwhile read line; do :; done\n"
 	}
-	require.NoError(t, os.WriteFile(filepath.Join(os.Getenv("PATH"), name), []byte(script), 0755))
+	require.NoError(t, os.WriteFile(filepath.Join(os.Getenv("PATH"), name), []byte(script), 0o755))
 }
 
 func memoryStatusServer(t *testing.T, status service.MemoryStatus) *httptest.Server {
@@ -319,7 +358,7 @@ func TestDoctorMemoryRedactsMCPFailure(t *testing.T) {
 			home := t.TempDir()
 			setDoctorMemoryTestEnvironment(t, home)
 			fakeAgent(t, "claude", tc.response)
-			require.NoError(t, os.WriteFile(filepath.Join(home, ".claude.json"), []byte(`{"mcpServers":{"agentsview":{"type":"stdio","command":"agentsview","args":["mcp","--profile","memory"]}}}`), 0600))
+			require.NoError(t, os.WriteFile(filepath.Join(home, ".claude.json"), []byte(`{"mcpServers":{"agentsview":{"type":"stdio","command":"agentsview","args":["mcp","--profile","memory"]}}}`), 0o600))
 			selection := doctorMemoryTargetSelection{Kind: "local"}
 			client := inspectDoctorAgentSetup(t.Context(), inspectDoctorMemoryClient("", selection))
 			require.Len(t, client.Rows, 2)

@@ -63,6 +63,17 @@ func TestAgentSetupReplacesExistingMCP(t *testing.T) {
 	}
 }
 
+func TestAgentSetupFormatJSON(t *testing.T) {
+	setDoctorMemoryTestEnvironment(t, t.TempDir())
+	fakeAgent(t, "claude", "")
+	out, _ := executeCommand(newRootCommand(), "agent", "setup", "--agent", "claude", "--check", "--format", "json")
+	var report struct {
+		Rows []json.RawMessage `json:"rows"`
+	}
+	require.NoError(t, json.Unmarshal([]byte(out), &report), out)
+	require.NotEmpty(t, report.Rows)
+}
+
 func TestAgentSetupUpdatesOrProtectsSkillChanges(t *testing.T) {
 	for _, tc := range []struct {
 		name            string
@@ -167,7 +178,7 @@ func TestSkillsInstallMCPPointer(t *testing.T) {
 				fakeAgent(t, "claude", "")
 			}
 			if tc.config != "" {
-				require.NoError(t, os.WriteFile(filepath.Join(home, ".claude.json"), []byte(tc.config), 0600))
+				require.NoError(t, os.WriteFile(filepath.Join(home, ".claude.json"), []byte(tc.config), 0o600))
 			}
 			args := []string{"skills", "install", "--harness", "claude"}
 			if tc.project {
