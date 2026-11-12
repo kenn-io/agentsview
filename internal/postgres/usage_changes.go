@@ -86,7 +86,7 @@ var dropUsageChangeJournalSQL = func() string {
  DROP FUNCTION IF EXISTS stamp_usage_change();
  DO $cleanup$ BEGIN
  IF to_regclass('sync_metadata') IS NOT NULL THEN
-     DELETE FROM sync_metadata WHERE key IN ('usage_change_revision', 'usage_change_journal_lock', 'usage_change_journal_version');
+     DELETE FROM sync_metadata WHERE key IN ('usage_change_revision', 'usage_change_journal_lock', 'usage_change_journal_version', 'usage_account_revision', 'usage_history_token');
  END IF;
  END $cleanup$;`)
 	for _, table := range usageChangeTablesPG {

@@ -78,6 +78,9 @@ type UsageCacheReader struct {
 	// for both to settle, so it does not compete with those direct reads.
 	directReads  int
 	lastDeferred time.Time
+	// warmRetryAt is when an unavailable source may be probed again. Until
+	// then unready reads stay on the direct path without queueing a pass.
+	warmRetryAt time.Time
 }
 
 // UsageChangeSummary describes journal changes after a claimed revision.
@@ -256,22 +259,37 @@ func (reader *UsageCacheReader) warming(filter UsageFilter) bool {
 	key := usageTimezoneIdentityFor(filter.Location(), nil).Key
 	id := reader.engine.usageSourceDatabaseID.Load()
 	reader.warmMu.Lock()
-	queued := reader.warmPending[filter.Timezone] ||
+	defer reader.warmMu.Unlock()
+	queued := time.Now().Before(reader.warmRetryAt) || reader.warmPending[filter.Timezone] ||
 		(reader.warmBusy && reader.warmRunning == filter.Timezone)
 	unready := id == nil || *id != reader.readyID || !reader.readyZones[key]
 	if queued || unready {
 		reader.lastDeferred = time.Now()
 	}
-	reader.warmMu.Unlock()
 	if unready && !queued {
-		reader.queueWarm(filter.Timezone)
+		reader.queueWarmLocked(filter.Timezone)
 	}
 	return queued || unready
 }
 
+// markUnavailable reports whether err says the source cannot support caching.
+// It holds off probes for usageWarmRetryDelay and drops readiness, so every
+// zone, including one that was ready, reads directly until the delay ends and
+// the next request then queues a probe that restores readiness.
+func (reader *UsageCacheReader) markUnavailable(err error) bool {
+	if !errors.Is(err, ErrUsageSourceUnavailable) {
+		return false
+	}
+	reader.warmMu.Lock()
+	reader.warmRetryAt = time.Now().Add(usageWarmRetryDelay)
+	reader.readyZones = nil
+	reader.warmMu.Unlock()
+	return true
+}
+
 // deferred queues a warm pass for a read that declined to build the cache.
 func (reader *UsageCacheReader) deferred(filter UsageFilter, err error) error {
-	if errors.Is(err, ErrUsageCacheWarming) {
+	if !reader.markUnavailable(err) && errors.Is(err, ErrUsageCacheWarming) {
 		reader.queueWarm(filter.Timezone)
 	}
 	return err
@@ -316,6 +334,11 @@ func (reader *UsageCacheReader) waitForDirectReads() {
 func (reader *UsageCacheReader) queueWarm(timezone string) {
 	reader.warmMu.Lock()
 	defer reader.warmMu.Unlock()
+	reader.queueWarmLocked(timezone)
+}
+
+// queueWarmLocked queues a pass for timezone. The caller holds warmMu.
+func (reader *UsageCacheReader) queueWarmLocked(timezone string) {
 	if reader.warmCtx.Err() != nil {
 		return
 	}
@@ -362,7 +385,7 @@ func (reader *UsageCacheReader) runWarm(idle chan struct{}) {
 		if err == nil {
 			err = reader.LoadReadiness(ctx)
 		}
-		if errors.Is(err, ErrUsageSourceUnavailable) {
+		if reader.markUnavailable(err) {
 			continue
 		}
 		if err != nil && reader.warmCtx.Err() == nil {

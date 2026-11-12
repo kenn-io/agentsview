@@ -321,6 +321,9 @@ func measurePage(t *testing.T, s *Server, from string, concurrent int) (usagePer
 	for _, err := range errs {
 		require.NoError(t, err)
 	}
+	for _, result := range results[1:] {
+		requireSamePage(t, "concurrent page", results[0], result)
+	}
 	return usagePerfSample{elapsed: elapsed, heap: peak}, results[0]
 }
 

@@ -10,6 +10,16 @@ import (
 
 const standbyUsageMarker = "standby"
 
+// standbyMarker returns standbyUsageMarker when the connected server is a
+// standby, and "" otherwise.
+func (s *Store) standbyMarker(ctx context.Context) string {
+	var standby bool
+	if s.pg.QueryRowContext(ctx, `SELECT pg_is_in_recovery()`).Scan(&standby) == nil && standby {
+		return standbyUsageMarker
+	}
+	return ""
+}
+
 func (s *Store) keptUsageVersion(ctx context.Context, slot string) string {
 	if slot == "" || s.readTx != nil || s.hostedRelations {
 		return ""
@@ -19,12 +29,11 @@ func (s *Store) keptUsageVersion(ctx context.Context, slot string) string {
 		var err error
 		epoch, err = s.usageCache.ResetEpoch(ctx)
 		if err != nil {
-			var standby bool
-			if s.pg.QueryRowContext(ctx, `SELECT pg_is_in_recovery()`).Scan(&standby) == nil && standby {
-				return standbyUsageMarker
-			}
-			return ""
+			return s.standbyMarker(ctx)
 		}
+	}
+	if s.runtimeState().usageIdentityDenied.Load() {
+		return ""
 	}
 	var revision int64
 	var journalOID sql.NullInt64

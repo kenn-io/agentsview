@@ -171,12 +171,13 @@ func keptUsageFixture(t *testing.T) (*db.DB, *Sync, *Store, *usageReadCounter) {
 // usageQueryTracer observes real queries on both pooled connections and
 // transactions opened from them.
 type usageQueryTracer struct {
-	mu      sync.Mutex
-	queries map[string]int
-	probes  atomic.Int64
-	started chan struct{}
-	release chan struct{}
-	once    sync.Once
+	mu             sync.Mutex
+	queries        map[string]int
+	probes         atomic.Int64
+	identityProbes atomic.Int64
+	started        chan struct{}
+	release        chan struct{}
+	once           sync.Once
 }
 
 func TestUsageRestrictedPrimaryRetainsDirectResults(t *testing.T) {
@@ -232,6 +233,16 @@ func TestUsageRestrictedPrimaryRetainsDirectResults(t *testing.T) {
 	again := maps.Clone(trace.queries)
 	trace.mu.Unlock()
 	require.Equal(t, reads, again, "repeats must reuse the direct reports")
+	waitCtx, stopWait := context.WithTimeout(ctx, 15*time.Second)
+	require.NoError(t, reader.WaitUsageCacheWarm(waitCtx))
+	stopWait()
+	identityProbes := trace.identityProbes.Load()
+	_, err = reader.GetDailyUsage(ctx, filter)
+	require.NoError(t, err)
+	waitCtx, stopWait = context.WithTimeout(ctx, 15*time.Second)
+	require.NoError(t, reader.WaitUsageCacheWarm(waitCtx))
+	stopWait()
+	require.Equal(t, identityProbes, trace.identityProbes.Load(), "an unavailable source must not be retried on every visit")
 	var revision int64
 	require.NoError(t, primary.pg.QueryRowContext(ctx, `SELECT value::bigint FROM sync_metadata WHERE key='usage_change_revision'`).Scan(&revision))
 	tx, err := primary.beginTx(ctx, nil)
@@ -249,6 +260,7 @@ func TestUsageRestrictedPrimaryRetainsDirectResults(t *testing.T) {
 	require.NotEqual(t, 1250, got.Totals.OutputTokens)
 	_, err = primary.pg.ExecContext(ctx, `GRANT EXECUTE ON FUNCTION pg_catalog.pg_control_system() TO PUBLIC`)
 	require.NoError(t, err)
+	time.Sleep(6 * time.Second)
 	_, err = reader.GetDailyUsage(ctx, filter)
 	require.NoError(t, err)
 	warmCtx, cancel := context.WithTimeout(ctx, 15*time.Second)
@@ -257,9 +269,26 @@ func TestUsageRestrictedPrimaryRetainsDirectResults(t *testing.T) {
 	require.False(t, reader.runtimeState().usageIdentityDenied.Load())
 	_, err = reader.usageCache.ResetEpoch(ctx)
 	require.NoError(t, err)
+	_, err = primary.pg.ExecContext(ctx, `REVOKE EXECUTE ON FUNCTION pg_catalog.pg_control_system() FROM PUBLIC`)
+	require.NoError(t, err)
+	_, err = reader.GetDailyUsage(ctx, filter)
+	require.NoError(t, err)
+	waitCtx, stopWait = context.WithTimeout(ctx, 15*time.Second)
+	require.NoError(t, reader.WaitUsageCacheWarm(waitCtx))
+	stopWait()
+	identityProbes = trace.identityProbes.Load()
+	_, err = reader.GetDailyUsage(ctx, filter)
+	require.NoError(t, err)
+	waitCtx, stopWait = context.WithTimeout(ctx, 15*time.Second)
+	require.NoError(t, reader.WaitUsageCacheWarm(waitCtx))
+	stopWait()
+	require.Equal(t, identityProbes, trace.identityProbes.Load(), "a formerly ready cache must stop probing an unavailable identity")
 }
 
 func (trace *usageQueryTracer) TraceQueryStart(ctx context.Context, _ *pgx.Conn, data pgx.TraceQueryStartData) context.Context {
+	if strings.Contains(data.SQL, "pg_control_system()") {
+		trace.identityProbes.Add(1)
+	}
 	if strings.Contains(data.SQL, "usage_history_token") {
 		trace.probes.Add(1)
 	}

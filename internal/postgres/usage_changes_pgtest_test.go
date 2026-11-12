@@ -340,6 +340,25 @@ func TestUsageChangeJournalInstallIdempotent(t *testing.T) {
 	assert.Greater(t, after, before)
 }
 
+func TestUsageChangeJournalDropClearsHistory(t *testing.T) {
+	_, syncer, _ := newUsageJournalFixture(t)
+	ctx := t.Context()
+	var token string
+	require.NoError(t, syncer.pg.QueryRowContext(ctx, `SELECT value FROM sync_metadata WHERE key='usage_history_token'`).Scan(&token))
+	_, err := syncer.pg.ExecContext(ctx, dropUsageChangeJournalSQL)
+	require.NoError(t, err)
+	var count int
+	require.NoError(t, syncer.pg.QueryRowContext(ctx, `SELECT count(*) FROM sync_metadata WHERE key IN ('usage_history_token', 'usage_account_revision')`).Scan(&count))
+	require.Zero(t, count)
+	ensureUsageChangeJournalPG(ctx, syncer.pg)
+	var newToken string
+	require.NoError(t, syncer.pg.QueryRowContext(ctx, `SELECT value FROM sync_metadata WHERE key='usage_history_token'`).Scan(&newToken))
+	require.NotEqual(t, token, newToken)
+	var accountRevision int64
+	require.NoError(t, syncer.pg.QueryRowContext(ctx, `SELECT value::bigint FROM sync_metadata WHERE key='usage_account_revision'`).Scan(&accountRevision))
+	require.Positive(t, accountRevision)
+}
+
 func TestUsageChangeJournalNewerVersion(t *testing.T) {
 	_, syncer, store := newUsageJournalFixture(t)
 	ctx := t.Context()
