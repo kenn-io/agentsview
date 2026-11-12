@@ -128,6 +128,9 @@ func findPiSource(ctx context.Context, cfg config.Config, session *db.Session, s
 }
 
 func readPiFile(ctx context.Context, root, name string) ([]byte, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	if !within(root, name) || !strings.HasSuffix(name, ".jsonl") {
 		return nil, errors.New("Pi source outside configured root")
 	}
