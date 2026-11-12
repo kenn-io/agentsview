@@ -13,8 +13,8 @@ import (
 )
 
 const (
-	usageDiskVersion    = "usage-2|"
-	topUsageDiskVersion = "usage-top-1|"
+	usageDiskVersion    = "usage-3|"
+	topUsageDiskVersion = "usage-top-2|"
 )
 
 func encodeUsageRows[T any](rows []T, limit int64, size func(T) int64) ([]byte, error) {

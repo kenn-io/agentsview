@@ -174,6 +174,7 @@ SELECT
 	0 AS cache_read_input_tokens,
 	0 AS reasoning_tokens,
 	NULL AS cost_microdollars,
+	'' AS cost_status,
 	'' AS cost_source,
 	m.claude_message_id,
 	m.claude_request_id,
@@ -203,6 +204,7 @@ SELECT
 	ue.cache_read_input_tokens,
 	ue.reasoning_tokens,
 	ue.cost_microdollars,
+	ue.cost_status,
 	ue.cost_source,
 	'' AS claude_message_id,
 	'' AS claude_request_id,
@@ -234,6 +236,7 @@ SELECT
 	0 AS cache_read_input_tokens,
 	0 AS reasoning_tokens,
 	NULL AS cost_microdollars,
+	'' AS cost_status,
 	'' AS cost_source,
 	m.claude_message_id,
 	m.claude_request_id,
@@ -262,6 +265,7 @@ SELECT
 	ue.cache_read_input_tokens,
 	ue.reasoning_tokens,
 	ue.cost_microdollars,
+	ue.cost_status,
 	ue.cost_source,
 	'' AS claude_message_id,
 	'' AS claude_request_id,
@@ -323,6 +327,7 @@ usage_event_timestamp_rows AS MATERIALIZED (
 		ue.cache_read_input_tokens,
 		ue.reasoning_tokens,
 		ue.cost_microdollars,
+		ue.cost_status,
 		ue.cost_source,
 		ue.dedup_key
 	FROM usage_events ue
@@ -415,6 +420,7 @@ type pgDailyUsageScanRow struct {
 	cacheReadInputTokens     int
 	reasoningTokens          int
 	cost                     sql.NullInt64
+	costStatus               string
 	costSource               string
 	claudeMessageID          string
 	claudeRequestID          string
@@ -559,6 +565,7 @@ SELECT
 	u.cache_read_input_tokens,
 	u.reasoning_tokens,
 	u.cost_microdollars,
+	u.cost_status,
 	u.cost_source,
 	u.claude_message_id,
 	u.claude_request_id,
@@ -715,6 +722,7 @@ SELECT
 	cu.cache_read_tokens AS cache_read_input_tokens,
 	0 AS reasoning_tokens,
 	cu.charged_microdollars AS cost_microdollars,
+	'' AS cost_status,
 	cu.agent || '-reported' AS cost_source,
 	'' AS claude_message_id,
 	'' AS claude_request_id,
@@ -947,6 +955,9 @@ func scanPGUsageRow(rows *sql.Rows) (pgUsageScanRow, error) {
 		&r.displayName,
 		&r.startedAt,
 	)
+	if err == nil && r.usageSource == "message" {
+		r.cost, r.costStatus = db.MessageRecordedCost(r.tokenJSON)
+	}
 	return r, err
 }
 
@@ -974,6 +985,7 @@ func scanPGDailyUsageRowWithMachine(
 		&r.cacheReadInputTokens,
 		&r.reasoningTokens,
 		&r.cost,
+		&r.costStatus,
 		&r.costSource,
 		&r.claudeMessageID,
 		&r.claudeRequestID,
@@ -986,6 +998,9 @@ func scanPGDailyUsageRowWithMachine(
 		dest = append(dest, &r.machine)
 	}
 	err := rows.Scan(append(dest, extra...)...)
+	if err == nil && r.usageSource == "message" {
+		r.cost, r.costStatus = db.MessageRecordedCost(r.tokenJSON)
+	}
 	return r, err
 }
 
@@ -1029,6 +1044,19 @@ func pgUsageLookupModel(model string, ts sql.NullTime) string {
 	return model
 }
 
+// pgCatalogPricesAt returns a db.ReportedCostForPricing probe for a
+// PostgreSQL usage row.
+func pgCatalogPricesAt(
+	pricing *export.PricingResolver, model string, pricingTS sql.NullTime,
+) func() bool {
+	return func() bool {
+		_, lookup := pricing.ResolveAt(
+			model, pgUsageLookupModel(model, pricingTS),
+			pgUsagePricingTimestamp(pricingTS))
+		return lookup.OK
+	}
+}
+
 func pgUsagePricingTimestamp(ts sql.NullTime) time.Time {
 	if !ts.Valid {
 		return time.Time{}
@@ -1053,7 +1081,13 @@ func pgDailyUsageAmounts(
 	)
 	rates := lookup.Rates
 	requestScoped := db.UsageRowIsRequestScoped(r.usageSource, r.messageOrdinal)
-	if r.cost.Valid && r.costSource != db.CopilotReportedCostSource {
+	reported := r.cost
+	if r.costSource == db.CopilotReportedCostSource {
+		reported = sql.NullInt64{}
+	}
+	reported = db.ReportedCostForPricing(reported, r.costStatus,
+		func() bool { return lookup.OK })
+	if reported.Valid {
 		cost = money.Money{Microdollars: r.cost.Int64}
 		pricing.RecordResolvedReported(r.model, pricedModel, lookup)
 	} else {
@@ -1080,18 +1114,25 @@ func pgDailyUsageAmounts(
 			return 0, 0, 0, 0, money.Money{}, money.Money{},
 				fmt.Errorf("pricing pg usage row for model %q: %w", r.model, err)
 		}
-		db.RecordComputedUsagePricing(
-			pricing, r.model, pricedModel, lookup, requestScoped,
-			inputTok, cacheCrTok, cacheRdTok,
-		)
+		if r.cost.Valid && r.costSource != db.CopilotReportedCostSource &&
+			inputTok == 0 && outputTok == 0 && reasoningTok == 0 &&
+			cacheCrTok == 0 && cacheRdTok == 0 && pgDailyUsageRowWebSearchRequests(r) == 0 {
+			// A cost-only row whose recorded cost lost to the catalog is not
+			// a priced request.
+			pricing.RecordResolvedComputed(r.model, pricedModel, lookup)
+		} else {
+			db.RecordComputedUsagePricing(
+				pricing, r.model, pricedModel, lookup, requestScoped,
+				inputTok, cacheCrTok, cacheRdTok,
+			)
+		}
 	}
 	selectedRates := rates
 	if requestScoped {
 		selectedRates = rates.RatesForTokens(inputTok, cacheCrTok, cacheRdTok)
 	}
 	savingsRates := selectedRates
-	if r.cost.Valid && r.costSource != db.CopilotReportedCostSource &&
-		(cacheCrTok != 0 || cacheRdTok != 0) {
+	if reported.Valid && (cacheCrTok != 0 || cacheRdTok != 0) {
 		_, savingsLookup, err := pricing.ResolveBilledAt(
 			r.providerID, r.model, pgUsageLookupModel(r.model, r.pricingTS),
 			pgUsagePricingTimestamp(r.pricingTS))
@@ -1385,18 +1426,20 @@ WHERE id IN (` + strings.Join(placeholders, ",") + `)`
 func (s *Store) GetSessionUsage(
 	ctx context.Context, sessionID string, includeBreakdown bool,
 ) (*db.SessionUsage, error) {
-	// All three reads need only sessionID. A missing or failed session still
+	// All four reads need only sessionID. A missing or failed session still
 	// wins over the other results.
 	var (
-		sess                      *db.Session
-		usageRows                 []pgUsageScanRow
-		planUsage                 *db.SessionPlanUsage
-		sessErr, rowsErr, planErr error
+		sess                                *db.Session
+		usageRows                           []pgUsageScanRow
+		planUsage                           *db.SessionPlanUsage
+		sessionTotal                        *db.SessionUsageTotal
+		sessErr, rowsErr, planErr, totalErr error
 	)
 	s.runIndependentReads(
 		func() { sess, sessErr = s.GetSession(ctx, sessionID) },
 		func() { usageRows, rowsErr = s.querySessionUsageRows(ctx, sessionID) },
 		func() { planUsage, planErr = s.GetSessionPlanUsage(ctx, sessionID) },
+		func() { sessionTotal, totalErr = s.GetSessionUsageTotal(ctx, sessionID) },
 	)
 	if sessErr != nil {
 		return nil, sessErr
@@ -1473,6 +1516,8 @@ func (s *Store) GetSessionUsage(
 			authoritativeCost = &v
 			costRow.cost = sql.NullInt64{}
 		}
+		costRow.cost = db.ReportedCostForPricing(costRow.cost, costRow.costStatus,
+			pgCatalogPricesAt(rateResolver, costRow.model, costRow.pricingTS))
 		c, priced, contributes, priceErr := pgSessionRowCostWithWebSearchRequests(
 			costRow, snapshotWebSearchRequests[i], rateResolver)
 		if priceErr != nil {
@@ -1484,7 +1529,7 @@ func (s *Store) GetSessionUsage(
 		contributing = true
 		modelsSet[r.model] = struct{}{}
 		if !authoritative {
-			if r.cost.Valid {
+			if costRow.cost.Valid {
 				hasReportedCost = true
 			} else {
 				hasComputedCost = true
@@ -1501,10 +1546,11 @@ func (s *Store) GetSessionUsage(
 		}
 		breakdownCount++
 		if includeBreakdown {
-			breakdown = append(breakdown,
-				pgSessionUsageBreakdownEntryWithWebSearchRequests(
-					r, breakdownCount, c, priced,
-					snapshotWebSearchRequests[i]))
+			entry := pgSessionUsageBreakdownEntryWithWebSearchRequests(
+				r, breakdownCount, c, priced, snapshotWebSearchRequests[i])
+			entry.RecordedCost, entry.RecordedCostPriced = db.RecordedRowCost(
+				r.cost, r.costStatus, costRow.cost)
+			breakdown = append(breakdown, entry)
 		}
 	}
 	if authoritativeCost != nil && len(breakdown) > 0 {
@@ -1553,6 +1599,10 @@ func (s *Store) GetSessionUsage(
 		return nil, planErr
 	}
 	out.PlanUsage = planUsage
+	if totalErr != nil {
+		return nil, totalErr
+	}
+	out.SessionTotal = sessionTotal
 	return out, nil
 }
 

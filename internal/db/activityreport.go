@@ -368,6 +368,8 @@ func (db *DB) GetSessionUsageRows(
 			costRow.cost = sql.NullInt64{}
 			rateResolver.RecordUnattributedReported()
 		}
+		costRow.cost = ReportedCostForPricing(costRow.cost, costRow.costStatus,
+			catalogPricesAt(rateResolver, costRow.model, costRow.pricingTS))
 		cost, priced, contributes, priceErr := sessionRowCostWithWebSearchRequests(
 			costRow, webSearches, rateResolver)
 		if priceErr != nil {
@@ -377,9 +379,10 @@ func (db *DB) GetSessionUsageRows(
 		if costRow.cost.Valid {
 			costSource = export.CostSourceReported
 		}
+		recorded, _ := RecordedRowCost(r.cost, r.costStatus, costRow.cost)
 		return activity.UsagePrice{
 			Cost: cost, CostSource: costSource, SessionCost: sessionCost,
-			Priced: priced, Contributes: contributes,
+			RecordedCost: recorded, Priced: priced, Contributes: contributes,
 		}, nil
 	})
 }
@@ -1307,6 +1310,8 @@ func materializeActivityReportUsageCandidates(
 			costRow.cost = sql.NullInt64{}
 			rateResolver.RecordUnattributedReported()
 		}
+		costRow.cost = ReportedCostForPricing(costRow.cost, costRow.costStatus,
+			catalogPricesAt(rateResolver, costRow.model, costRow.pricingTS))
 		webSearches := usageRowWebSearchRequests(
 			candidate.scan.usageSource, candidate.scan.tokenJSON)
 		if webSearchRequests != nil {

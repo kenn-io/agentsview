@@ -78,14 +78,17 @@ type UsageRow struct {
 	Cost              money.Money
 	CostSource        export.CostSource
 	SessionCost       *money.Money
-	CostAllocated     bool // an authoritative session total was apportioned
-	Priced            bool
-	Contributes       bool
-	Agent             string
-	ClaudeMessageID   string
-	ClaudeRequestID   string
-	SourceUUID        string
-	UsageDedupKey     string
+	// RecordedCost is the cost the agent recorded for this row, when it
+	// recorded one; see UsagePrice.RecordedCost.
+	RecordedCost    *money.Money
+	CostAllocated   bool // an authoritative session total was apportioned
+	Priced          bool
+	Contributes     bool
+	Agent           string
+	ClaudeMessageID string
+	ClaudeRequestID string
+	SourceUUID      string
+	UsageDedupKey   string
 }
 
 // SessionTokenCoverage records the canonical token categories represented for
