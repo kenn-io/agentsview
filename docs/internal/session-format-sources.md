@@ -3499,8 +3499,10 @@ schemas keep their existing ordering behavior.
   title cannot. An idless legacy file can be indexed by Agentsview but cannot
   be opened by this Pi version. `SessionManager.open` uses the header cwd;
   materialization changes only that value, resolves the checkout through
-  symlinks, and preserves the native ID. The installer bounds header lookup to
-  1 MiB and refuses newer formats or unsafe identity-derived filenames.
+  symlinks, and preserves the native ID. Startup chooses the session directory
+  from the environment, then merged project/global settings, then the default
+  encoded checkout directory. The installer bounds header lookup to 1 MiB and
+  refuses newer formats or unsafe identity-derived filenames.
 
 ## Prime Agent (`prime-agent`)
 

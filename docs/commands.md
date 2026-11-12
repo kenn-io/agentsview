@@ -2184,8 +2184,8 @@ limited to 512 MiB. `--server`, `--server-token-file`, and `--pg` are
 unsupported. JSON output includes the source, destination paths, checkout, command,
 and installed or unchanged status. Claude's native home and supported
 environment overrides determine the destination, independently of discovery
-roots. Pi uses its native agent directory, or its explicit session directory
-when `PI_CODING_AGENT_SESSION_DIR` is set. Local companions must resolve inside
+roots. Pi uses its native agent directory, or its configured session directory
+from settings or `PI_CODING_AGENT_SESSION_DIR` (which takes priority). Local companions must resolve inside
 the configured root when the transcript is inside it; an externally linked
 project is confined to that project. Remote mirror files must remain inside the
 mirror root.
