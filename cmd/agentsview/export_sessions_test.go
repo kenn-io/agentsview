@@ -784,9 +784,16 @@ func waitExportProgress(t *testing.T, progress <-chan struct{}, done <-chan erro
 }
 
 func TestExportWaitDuringDaemonChanges(t *testing.T) {
-	for _, mode := range []string{"daemon stops", "temporary ping failures", "single ping"} {
+	for _, mode := range []string{"daemon stops", "daemon stops during retry", "temporary ping failures", "single ping"} {
 		t.Run(mode, func(t *testing.T) {
 			path := pendingExportArchive(t, false)
+			if mode == "daemon stops during retry" {
+				raw, err := sql.Open("sqlite3", path)
+				require.NoError(t, err)
+				_, err = raw.ExecContext(t.Context(), `INSERT INTO background_migrations (name, state, last_error, updated_at) VALUES (?, 'failed', 'disk error', strftime('%Y-%m-%dT%H:%M:%fZ', 'now', '-1 hour'))`, db.ProjectIdentityBackfillName)
+				require.NoError(t, err)
+				require.NoError(t, raw.Close())
+			}
 			dir := filepath.Dir(path)
 			var fail, observed, calls atomic.Int32
 			ping := daemon.NewPingHandler(daemon.PingHandlerOptions{Service: daemonService, Version: "test"})
@@ -810,12 +817,15 @@ func TestExportWaitDuringDaemonChanges(t *testing.T) {
 			waitExportProgress(t, progress, done)
 			assert.Empty(t, out.String())
 			switch mode {
-			case "daemon stops":
+			case "daemon stops", "daemon stops during retry":
 				ts.Close()
 				RemoveDaemonRuntime(dir)
 				err := <-done
 				require.ErrorContains(t, err, "agentsview daemon restart")
 				require.ErrorContains(t, err, "agentsview export status")
+				if mode == "daemon stops during retry" {
+					assert.Contains(t, err.Error(), "disk error")
+				}
 				assert.Empty(t, out.String())
 			case "single ping":
 				before := calls.Load()
@@ -946,40 +956,22 @@ func TestExportFailureSurvivesInterruptedDaemonStartup(t *testing.T) {
 }
 
 func TestExportWaitDuringRestartBeforeWorkerStarts(t *testing.T) {
-	for _, mode := range []string{"status", "wait", "daemon stops"} {
-		t.Run(mode, func(t *testing.T) {
-			path := pendingExportArchive(t, false)
-			raw, err := sql.Open("sqlite3", path)
-			require.NoError(t, err)
-			_, err = raw.ExecContext(t.Context(), `INSERT INTO background_migrations (name, state, last_error, updated_at) VALUES (?, 'failed', 'disk error', strftime('%Y-%m-%dT%H:%M:%fZ', 'now', '-1 hour'))`, db.ProjectIdentityBackfillName)
-			require.NoError(t, err)
-			require.NoError(t, raw.Close())
-			dir := filepath.Dir(path)
-			writeLiveRuntime(t, dir, false)
-			if mode == "status" {
-				status, _, err := executeExportSessionsCommand(newRootCommand(), "export", "status")
-				require.NoError(t, err)
-				assert.Contains(t, status, "pending")
-				assert.NotContains(t, status, "disk error")
-				return
-			}
-			ctx, cancel := context.WithTimeout(t.Context(), 15*time.Second)
-			defer cancel()
-			progress := make(chan struct{}, 1)
-			out, done := exportWaitCommand(t, ctx, exportProgressSignal(progress))
-			waitExportProgress(t, progress, done)
-			assert.Empty(t, out.String())
-			if mode == "daemon stops" {
-				RemoveDaemonRuntime(dir)
-				err = <-done
-				require.ErrorContains(t, err, "disk error")
-				assert.Contains(t, err.Error(), "agentsview daemon restart")
-				return
-			}
-			cancel()
-			require.ErrorIs(t, <-done, context.Canceled)
-		})
-	}
+	path := pendingExportArchive(t, false)
+	raw, err := sql.Open("sqlite3", path)
+	require.NoError(t, err)
+	_, err = raw.ExecContext(t.Context(), `INSERT INTO background_migrations (name, state, last_error, updated_at) VALUES (?, 'failed', 'disk error', strftime('%Y-%m-%dT%H:%M:%fZ', 'now', '-1 hour'))`, db.ProjectIdentityBackfillName)
+	require.NoError(t, err)
+	require.NoError(t, raw.Close())
+	dir := filepath.Dir(path)
+	writeLiveRuntime(t, dir, false)
+	ctx, cancel := context.WithTimeout(t.Context(), 15*time.Second)
+	defer cancel()
+	progress := make(chan struct{}, 1)
+	out, done := exportWaitCommand(t, ctx, exportProgressSignal(progress))
+	waitExportProgress(t, progress, done)
+	assert.Empty(t, out.String())
+	cancel()
+	require.ErrorIs(t, <-done, context.Canceled)
 }
 
 func TestExportLiveFailureReporting(t *testing.T) {
@@ -1097,30 +1089,33 @@ func TestExportDaemonStartupCases(t *testing.T) {
 	})
 }
 
-func TestExportWaitRejectsOlderDaemon(t *testing.T) {
-	path := pendingExportArchive(t, false)
-	dir := filepath.Dir(path)
-	writeLiveRuntime(t, dir, false, withRuntimeVersion("old"), withRuntimeAPIVersion(daemonAPIVersion-1))
-	forbidStartBackgroundServeForTransport(t, "incompatible daemon")
-	stdout, _, err := executeExportSessionsCommand(newRootCommand(), "export", "sessions", "--wait")
-	require.ErrorContains(t, err, fmt.Sprintf("daemon API version %d", daemonAPIVersion-1))
-	assert.Contains(t, err.Error(), "agentsview daemon restart")
-	assert.Contains(t, err.Error(), "agentsview export status")
-	assert.Contains(t, err.Error(), "agentsview export sessions --wait")
-	assert.NotContains(t, err.Error(), "pg push --watch")
-	assert.Empty(t, stdout)
-}
-
-func TestExportWaitRejectsNewerDaemon(t *testing.T) {
-	path := pendingExportArchive(t, false)
-	dir := filepath.Dir(path)
-	writeLiveRuntime(t, dir, false, withRuntimeVersion("future"), withRuntimeAPIVersion(daemonAPIVersion+1))
-	forbidStartBackgroundServeForTransport(t, "newer daemon")
-	stdout, _, err := executeExportSessionsCommand(newRootCommand(), "export", "sessions", "--wait")
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "Upgrade this agentsview install")
-	assert.NotContains(t, err.Error(), "daemon restart")
-	assert.Empty(t, stdout)
+func TestExportWaitRejectsIncompatibleDaemon(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		api  int
+	}{
+		{"older", daemonAPIVersion - 1},
+		{"newer", daemonAPIVersion + 1},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			path := pendingExportArchive(t, false)
+			writeLiveRuntime(t, filepath.Dir(path), false, withRuntimeVersion(tc.name), withRuntimeAPIVersion(tc.api))
+			forbidStartBackgroundServeForTransport(t, "incompatible daemon")
+			stdout, _, err := executeExportSessionsCommand(newRootCommand(), "export", "sessions", "--wait")
+			require.Error(t, err)
+			if tc.name == "older" {
+				assert.Contains(t, err.Error(), fmt.Sprintf("daemon API version %d", tc.api))
+				assert.Contains(t, err.Error(), "agentsview daemon restart")
+				assert.Contains(t, err.Error(), "agentsview export status")
+				assert.Contains(t, err.Error(), "agentsview export sessions --wait")
+				assert.NotContains(t, err.Error(), "pg push --watch")
+			} else {
+				assert.Contains(t, err.Error(), "Upgrade this agentsview install")
+				assert.NotContains(t, err.Error(), "daemon restart")
+			}
+			assert.Empty(t, stdout)
+		})
+	}
 }
 
 func TestExportWaitRejectsNewerBackfillState(t *testing.T) {
@@ -1138,7 +1133,7 @@ func TestExportWaitRejectsNewerBackfillState(t *testing.T) {
 	assert.Empty(t, stdout)
 }
 
-func TestExportWaitCursorResetStderrIsOnlyJSON(t *testing.T) {
+func TestExportWaitCursorResetSuppressesStubStartupProgress(t *testing.T) {
 	path := pendingExportArchive(t, false)
 	dir := filepath.Dir(path)
 	host, port := testPingServer(t)
@@ -1223,12 +1218,13 @@ func TestExportSessionsFailedBackfillDoesNotStartDaemon(t *testing.T) {
 }
 
 func TestExportStatusReportsBackfillFailure(t *testing.T) {
-	dataDir := testDataDir(t)
-	dbPath := filepath.Join(dataDir, "sessions.db")
-	database := dbtest.OpenTestDBAt(t, dbPath)
-	raw, err := sql.Open("sqlite3", dbPath)
-	require.NoError(t, err)
-	_, err = raw.ExecContext(t.Context(), `
+	t.Run("recorded failure", func(t *testing.T) {
+		dataDir := testDataDir(t)
+		dbPath := filepath.Join(dataDir, "sessions.db")
+		database := dbtest.OpenTestDBAt(t, dbPath)
+		raw, err := sql.Open("sqlite3", dbPath)
+		require.NoError(t, err)
+		_, err = raw.ExecContext(t.Context(), `
 		INSERT INTO background_migrations (
 			name, state, total_items, completed_items, last_error
 		) VALUES (
@@ -1236,18 +1232,32 @@ func TestExportStatusReportsBackfillFailure(t *testing.T) {
 			'git metadata unavailable'
 		)
 	`)
-	require.NoError(t, err)
-	require.NoError(t, raw.Close())
-	require.NoError(t, database.Close())
+		require.NoError(t, err)
+		require.NoError(t, raw.Close())
+		require.NoError(t, database.Close())
 
-	stdout, stderr, err := executeExportSessionsCommand(
-		newRootCommand(), "export", "status",
-	)
-	require.NoError(t, err)
-	assert.Empty(t, stderr)
-	assert.Equal(t, "project identity evidence: failed (1/3)\n"+
-		"last error: git metadata unavailable\nrun `agentsview daemon restart`\n",
-		stdout)
+		stdout, stderr, err := executeExportSessionsCommand(
+			newRootCommand(), "export", "status",
+		)
+		require.NoError(t, err)
+		assert.Empty(t, stderr)
+		assert.Equal(t, "project identity evidence: failed (1/3)\n"+
+			"last error: git metadata unavailable\nrun `agentsview daemon restart`\n",
+			stdout)
+	})
+	t.Run("restart before worker starts", func(t *testing.T) {
+		path := pendingExportArchive(t, false)
+		raw, err := sql.Open("sqlite3", path)
+		require.NoError(t, err)
+		_, err = raw.ExecContext(t.Context(), `INSERT INTO background_migrations (name, state, last_error, updated_at) VALUES (?, 'failed', 'disk error', strftime('%Y-%m-%dT%H:%M:%fZ', 'now', '-1 hour'))`, db.ProjectIdentityBackfillName)
+		require.NoError(t, err)
+		require.NoError(t, raw.Close())
+		writeLiveRuntime(t, filepath.Dir(path), false)
+		status, _, err := executeExportSessionsCommand(newRootCommand(), "export", "status")
+		require.NoError(t, err)
+		assert.Contains(t, status, "pending")
+		assert.NotContains(t, status, "disk error")
+	})
 }
 
 func TestExportSessionsDoesNotUpgradeUnrelatedReadOnlyOpenFailure(t *testing.T) {
@@ -1296,9 +1306,16 @@ func TestExportSessionsCursorConflictingFilterIsUsageError(t *testing.T) {
 func TestExportSessionsCursorAllowsFormatAndLimit(t *testing.T) {
 	seedExportSessionsArchive(t)
 	cursor := firstExportSessionsCursor(t)
-	stdout, stderr, err := executeExportSessionsCommand(newRootCommand(), "export", "sessions", "--cursor", cursor, "--format", "json", "--limit", "1")
+
+	stdout, stderr, err := executeExportSessionsCommand(
+		newRootCommand(), "export", "sessions",
+		"--cursor", cursor,
+		"--format", "json",
+		"--limit", "1",
+	)
 	require.NoError(t, err, "cursor with format and limit")
 	assert.Empty(t, stderr)
+
 	doc := decodeExportSessionsDocument(t, stdout)
 	require.Len(t, doc.Sessions, 1)
 	assert.Equal(t, "alpha-old", doc.Sessions[0].ID)

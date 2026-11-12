@@ -41,7 +41,7 @@ func requirePOSIXSignals(t *testing.T, reason string) {
 	}
 }
 
-func TestProbeRuntimeRejectsInvalidIdentity(t *testing.T) {
+func TestProbeDaemonRecordRejectsPIDMismatch(t *testing.T) {
 	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		_, _ = io.WriteString(w, `{"ok":true,"service":"agentsview","pid":43}`)
