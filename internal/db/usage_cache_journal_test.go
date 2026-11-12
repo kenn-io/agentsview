@@ -1354,7 +1354,7 @@ func TestUsageJournaledWarmSevenDaysReuseInstalledTotals(t *testing.T) {
 	ctx, cancel := context.WithTimeout(t.Context(), 2*time.Second)
 	defer cancel()
 	for range 5 {
-		got, err := database.GetDailyUsage(ctx, filter)
+		got, err := database.getDailyUsageUncached(ctx, filter)
 		require.NoError(t, err)
 		require.Equal(t, want, got)
 	}
