@@ -13,12 +13,12 @@ const pgCodexScopeOwnerMatchSQL = `(
    OR EXISTS (
      SELECT 1 FROM sync_metadata m
      WHERE (m.key = 'push_marker:' || candidate.owner_marker
-       OR starts_with(m.key, 'push_marker:' || candidate.owner_marker || ':scope:'))
+       OR strpos(m.key, 'push_marker:' || candidate.owner_marker || ':scope:') = 1)
        AND m.value = scope.machine)
    OR EXISTS (
      SELECT 1 FROM sync_metadata m
      WHERE CASE WHEN m.key = 'push_marker_machine_aliases:' || candidate.owner_marker
-       OR starts_with(m.key, 'push_marker_machine_aliases:' || candidate.owner_marker || ':scope:')
+       OR strpos(m.key, 'push_marker_machine_aliases:' || candidate.owner_marker || ':scope:') = 1
        THEN m.value::jsonb ? scope.machine ELSE FALSE END)
  )))`
 
