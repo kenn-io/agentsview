@@ -42,16 +42,6 @@ func (s *Store) ConfigureUsageCache(ctx context.Context, directory, targetURL, s
 	return nil
 }
 
-// WaitUsageCacheWarm waits for background usage cache preparation queued by
-// earlier reads. Tests can use it to observe a warm pass.
-// Without a cache it returns at once.
-func (s *Store) WaitUsageCacheWarm(ctx context.Context) error {
-	if s.usageCache == nil {
-		return nil
-	}
-	return s.usageCache.WaitWarm(ctx)
-}
-
 type pgUsageCacheSource struct {
 	*Store
 	target string
