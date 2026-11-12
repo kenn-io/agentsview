@@ -2168,9 +2168,7 @@ describe("SessionsStore", () => {
         next_cursor: "page-2",
       });
       await sessions.load();
-      api.getSidebarSessionIndex.mockRejectedValueOnce(
-        new ApiError(503, "archive is rebuilding"),
-      );
+      api.getSidebarSessionIndex.mockRejectedValueOnce(new ApiError(503, "archive is rebuilding"));
 
       await sessions.loadMore();
 
