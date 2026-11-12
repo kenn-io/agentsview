@@ -143,9 +143,8 @@ func FuzzProviderPoolside(f *testing.F) { fuzzProvider(f, AgentPoolside) }
 func openProviderFuzzDB(t *testing.T, path, schema string) *sql.DB {
 	t.Helper()
 	require.NoError(t, os.MkdirAll(filepath.Dir(path), 0o755))
-	db, err := sql.Open("sqlite3", path)
-	require.NoError(t, err)
-	_, err = db.ExecContext(t.Context(), schema)
+	db := openProviderFuzzSQLite(t, path)
+	_, err := db.ExecContext(t.Context(), schema)
 	require.NoError(t, err)
 	return db
 }
