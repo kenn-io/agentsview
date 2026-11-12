@@ -355,9 +355,7 @@ GO_TEST_P_FLAG := $(if $(GO_TEST_P),-p $(GO_TEST_P),)
 # Run the cacheable unit/integration suite. The external-service lanes below
 # intentionally retain `-count=1` because they require fresh state.
 test: pricing-snapshot ensure-embed-dir
-	@base="$${API_VERSION_BASE:-}"; if [ -z "$$base" ]; then base=$$(git merge-base HEAD origin/main) || exit 1; fi; \
-	export API_VERSION_BASE="$$base"; \
-	go test $(GO_TEST_P_FLAG) -tags "fts5" ./... -skip '^TestActiveAppendGrowth$$' -v && \
+	go test $(GO_TEST_P_FLAG) -tags "fts5" ./... -skip '^TestActiveAppendGrowth$$' -v
 	go test -tags "fts5" ./cmd/perfsim -run '^TestActiveAppendGrowth$$' -v
 
 # Reproducible synthetic ingest, steady-state sync, and analytics measurements.
@@ -369,7 +367,7 @@ perf-sim: pricing-snapshot ensure-embed-dir
 # Check that the generated OpenAPI contract matches its API version record
 test-api-version: pricing-snapshot ensure-embed-dir
 	@base="$${API_VERSION_BASE:-}"; if [ -z "$$base" ]; then base=$$(git merge-base HEAD origin/main) || exit 1; fi; \
-	API_VERSION_BASE="$$base" go test -tags "fts5" ./cmd/agentsview -run '^(TestAPIVersionContract|TestCheckAPIVersionContract|TestLoadAPIVersionRecords|TestOpenAPIRequiredOrder|TestBaseAPIVersionRecords)$$' -v
+	API_VERSION_BASE="$$base" go test -tags "fts5" ./cmd/agentsview -run '^(TestAPIVersionContract|TestCheckAPIVersionContract|TestLoadAPIVersionRecords|TestOpenAPIRequiredOrder|TestOpenAPIProsePreservesSchemaValues|TestBaseAPIVersionRecords)$$' -v
 
 # Run fast tests only
 test-short: pricing-snapshot ensure-embed-dir

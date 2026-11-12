@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"encoding/json/jsontext"
 	"encoding/json/v2"
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -71,7 +72,7 @@ func baseAPIVersionRecords(ctx context.Context) ([]string, error) {
 	base := os.Getenv("API_VERSION_BASE")
 	if base == "" {
 		if os.Getenv("CI") != "" {
-			return nil, fmt.Errorf("API_VERSION_BASE is required in CI")
+			return nil, errors.New("API_VERSION_BASE is required in CI")
 		}
 		return nil, nil
 	}
@@ -80,7 +81,7 @@ func baseAPIVersionRecords(ctx context.Context) ([]string, error) {
 		return nil, fmt.Errorf("read API version records from base %q: %w", base, err)
 	}
 	names := []string{}
-	for _, path := range strings.Split(strings.TrimSpace(string(output)), "\n") {
+	for path := range strings.SplitSeq(strings.TrimSpace(string(output)), "\n") {
 		if path != "" {
 			names = append(names, filepath.Base(path))
 		}
@@ -103,7 +104,7 @@ func checkAPIVersionContract(apiVersion int, digest string, records []apiVersion
 	for _, r := range records {
 		paths[r.name()] = true
 		if previous, ok := byVersion[r.version]; ok && previous.digest != r.digest {
-			return fmt.Errorf("API version %d has different contract digests (%s, %s); remove the conflicting record this PR added and rerun make test-api-version. The next free version is %d", r.version, previous.name(), r.name(), highest+1)
+			return fmt.Errorf("API version %d has different contract digests (%s, %s); remove the conflicting record this PR added, rebase after the earlier PR merges, and rerun make test-api-version; %s", r.version, previous.name(), r.name(), nextVersion())
 		}
 		byVersion[r.version] = r
 	}
@@ -178,6 +179,9 @@ func stripOpenAPIProse(value jsontext.Value, namedMap bool) (jsontext.Value, err
 			return nil, err
 		}
 		for key, item := range fields {
+			if !namedMap && (key == "default" || key == "const" || key == "enum") {
+				continue
+			}
 			if !namedMap && key == "required" && item.Kind() == '[' {
 				var required []string
 				if err := json.Unmarshal(item, &required); err != nil {
@@ -243,7 +247,9 @@ func TestCheckAPIVersionContract(t *testing.T) {
 		err := checkAPIVersionContract(16, merged, []apiVersionRecord{base, left, right}, []string{base.name()})
 		require.ErrorContains(t, err, left.name()+", "+right.name())
 		require.ErrorContains(t, err, "remove the conflicting record")
-		require.ErrorContains(t, err, "next free version is 17")
+		require.ErrorContains(t, err, "set server.APIVersion to 17")
+		require.ErrorContains(t, err, "feature minimum")
+		require.ErrorContains(t, err, "rebase")
 	})
 	t.Run("same contract with different summaries", func(t *testing.T) {
 		require.NoError(t, checkAPIVersionContract(16, left.digest, []apiVersionRecord{left, {16, left.digest, strings.Repeat("d", 64)}}, nil))
@@ -262,6 +268,22 @@ func TestCheckAPIVersionContract(t *testing.T) {
 		err := checkAPIVersionContract(15, left.digest, []apiVersionRecord{base}, nil)
 		require.ErrorContains(t, err, "history")
 	})
+}
+
+func TestOpenAPIProsePreservesSchemaValues(t *testing.T) {
+	for _, key := range []string{"default", "const", "enum"} {
+		t.Run(key, func(t *testing.T) {
+			left, err := stripOpenAPIProse(jsontext.Value(`{"`+key+`":{"description":"first"}}`), false)
+			require.NoError(t, err)
+			right, err := stripOpenAPIProse(jsontext.Value(`{"`+key+`":{"description":"second"}}`), false)
+			require.NoError(t, err)
+			leftDigest, err := export.DigestCanonical(left)
+			require.NoError(t, err)
+			rightDigest, err := export.DigestCanonical(right)
+			require.NoError(t, err)
+			require.NotEqual(t, leftDigest, rightDigest)
+		})
+	}
 }
 
 func TestOpenAPIRequiredOrder(t *testing.T) {
@@ -290,7 +312,7 @@ func TestLoadAPIVersionRecords(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			dir := t.TempDir()
 			name := tc.version + "-" + strings.Repeat("a", 64) + "-" + tc.hash
-			require.NoError(t, os.WriteFile(filepath.Join(dir, name), []byte(tc.content), 0600))
+			require.NoError(t, os.WriteFile(filepath.Join(dir, name), []byte(tc.content), 0o600))
 			_, err := loadAPIVersionRecords(dir)
 			if tc.valid {
 				require.NoError(t, err)

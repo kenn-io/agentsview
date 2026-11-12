@@ -39,7 +39,8 @@ same schema without opening an archive or starting a server.
 
 Every change to the generated OpenAPI contract needs a record in
 `cmd/agentsview/testdata/api_versions`. Run `make test-api-version` to find the
-version and contract digest. The check also runs with `make test`.
+version and contract digest. Run it before replacing a record so it can check
+the target base's history.
 Name the record `<version>-<contract digest>-<summary digest>`
 and put a trimmed one-line summary in it. The summary digest is the SHA-256 of
 the summary without its trailing newline: `printf %s "summary" | sha256sum`.
