@@ -179,9 +179,13 @@ func contentWordRows(
 // already fill the requested page. Counts are unfiltered, so a short filtered
 // page retries with all tiers and the original offset.
 func selectContentWordPage(ctx context.Context, tx *sql.Tx, f ContentSearchFilter, q contentWords, where string, args []any, offset, need int) ([]ContentMatch, error) {
-	full, err := contentWordRows(ctx, tx, f, q, where, args, offset, need, 0, true)
-	if err != nil || len(full) == need {
-		return full, err
+	// Phrase and full-word expressions have different FTS ranks. Use one
+	// expression across pages so a later partial page keeps the same order.
+	if q.match == "" || (f.Mode != "fts" && f.Mode != "hybrid") {
+		full, err := contentWordRows(ctx, tx, f, q, where, args, offset, need, 0, true)
+		if err != nil || len(full) == need {
+			return full, err
+		}
 	}
 	if err := buildContentWordHits(ctx, tx, q); err != nil {
 		return nil, err

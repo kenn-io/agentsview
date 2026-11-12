@@ -163,6 +163,37 @@ func TestSearchContentNaturalPhrasesMatchText(t *testing.T) {
 	}
 }
 
+func TestSearchContentPhraseWordPages(t *testing.T) {
+	d := testDB(t)
+	requireFTS(t, d)
+	seedWordSearch(t, d, "proj",
+		[3]string{"phrase-heavy", "alpha beta alpha beta alpha beta gamma", ""},
+		[3]string{"word-heavy", "alpha beta gamma gamma gamma gamma", ""},
+		[3]string{"balanced", "alpha beta gamma", ""},
+		[3]string{"partial", "alpha beta", ""},
+		[3]string{"partial2", "alpha beta", ""},
+		[3]string{"partial3", "alpha beta", ""},
+		[3]string{"partial4", "alpha beta", ""},
+		[3]string{"partial5", "alpha beta", ""},
+	)
+	filter := ContentSearchFilter{Pattern: `"alpha beta" gamma`, Mode: "fts", Limit: 20}
+	whole, err := d.SearchContent(t.Context(), filter)
+	require.NoError(t, err)
+	require.Len(t, whole.Matches, 8)
+	filter.Limit = 2
+	var paged []wordHit
+	for range 10 {
+		page, err := d.SearchContent(t.Context(), filter)
+		require.NoError(t, err)
+		paged = append(paged, wordHits(page)...)
+		if page.NextCursor == 0 {
+			break
+		}
+		filter.Cursor = page.NextCursor
+	}
+	assert.Equal(t, wordHits(whole), paged)
+}
+
 func TestSearchContentWordPagesFollowExactTotal(t *testing.T) {
 	d := testDB(t)
 	requireFTS(t, d)
