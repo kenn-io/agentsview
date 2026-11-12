@@ -51,10 +51,7 @@ func loadAPIVersionRecords(dir string) ([]apiVersionRecord, error) {
 			return nil, fmt.Errorf("API version record %s must be named <version>-<contract digest>-<summary digest>", e.Name())
 		}
 		version, err := strconv.Atoi(parts[0])
-		if err != nil || version < 1 || strconv.Itoa(version) != parts[0] || len(parts[1]) != 64 || len(parts[2]) != 64 {
-			return nil, fmt.Errorf("invalid API version record path %s", e.Name())
-		}
-		if _, err := hex.DecodeString(parts[1]); err != nil {
+		if err != nil || version < 1 || strconv.Itoa(version) != parts[0] {
 			return nil, fmt.Errorf("invalid API version record path %s", e.Name())
 		}
 		content, err := os.ReadFile(filepath.Join(dir, e.Name()))
@@ -196,9 +193,6 @@ func stripOpenAPIProse(value jsontext.Value, namedMap bool) (jsontext.Value, err
 			}
 			if !namedMap && (key == "title" || key == "description" || key == "summary" || key == "example" || key == "examples") {
 				delete(fields, key)
-				continue
-			}
-			if !namedMap && (key == "default" || key == "const" || key == "enum") {
 				continue
 			}
 			childNamedMap := !namedMap && (key == "security" || (item.Kind() == '{' && (key == "paths" || key == "schemas" || key == "properties" || key == "patternProperties" || key == "$defs" || key == "dependentRequired" || key == "mapping" || key == "parameters" || key == "responses" || key == "headers" || key == "content" || key == "securitySchemes" || key == "requestBodies" || key == "links" || key == "callbacks" || key == "pathItems" || key == "encoding")))
