@@ -64,6 +64,9 @@ func LoadSessionUsage(
 	if err != nil || u == nil {
 		return nil, err
 	}
+	if u.RecordedCost, err = db.SummarizeRecordedCost(u.Breakdown); err != nil {
+		return nil, err
+	}
 	return NewSessionUsageReport(u), nil
 }
 

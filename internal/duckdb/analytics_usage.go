@@ -2302,8 +2302,18 @@ func (s *Store) GetSessionUsage(
 		if !contributes {
 			continue
 		}
-		breakdown = append(breakdown, duckSessionUsageBreakdownEntry(
-			r, len(breakdown)+1, cost, priced))
+		entry := duckSessionUsageBreakdownEntry(r, len(breakdown)+1, cost, priced)
+		if r.recordedCost.Valid {
+			entry.RecordedCost = &money.Money{Microdollars: r.recordedCost.Int64}
+			entry.RecordedCostPriced = db.ReportedCostForPricing(
+				r.recordedCost, usagefacts.CostStatusRecorded, func() bool {
+					_, lookup := rateResolver.ResolveAt(
+						r.model, duckSessionUsageLookupModel(r),
+						duckUsagePricingTimestamp(r.pricingTS))
+					return lookup.OK
+				}).Valid
+		}
+		breakdown = append(breakdown, entry)
 	}
 	if authoritativeCost != nil && len(breakdown) > 0 {
 		weights := make([]money.Money, len(breakdown))
@@ -2348,5 +2358,31 @@ func (s *Store) GetSessionUsage(
 	if out.PlanUsage, err = s.GetSessionPlanUsage(ctx, sess.ID); err != nil {
 		return nil, err
 	}
+	if out.SessionTotal, err = s.getSessionUsageTotal(ctx, sess.ID); err != nil {
+		return nil, err
+	}
 	return out, nil
+}
+
+// getSessionUsageTotal returns the session's recorded total, or nil when it
+// has none.
+func (s *Store) getSessionUsageTotal(
+	ctx context.Context, sessionID string,
+) (*db.SessionUsageTotal, error) {
+	rows, err := s.queryContext(ctx,
+		`SELECT `+db.SessionUsageTotalColumns+` FROM session_usage_totals WHERE session_id = ?`,
+		sessionID,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("querying duckdb session total for %s: %w", sessionID, err)
+	}
+	defer rows.Close()
+	if !rows.Next() {
+		return nil, rows.Err()
+	}
+	t, err := db.ScanSessionUsageTotal(rows.Scan)
+	if err != nil {
+		return nil, fmt.Errorf("scanning duckdb session total for %s: %w", sessionID, err)
+	}
+	return t, rows.Err()
 }

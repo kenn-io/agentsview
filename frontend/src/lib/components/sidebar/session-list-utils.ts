@@ -1,4 +1,4 @@
-import type { SessionGroup, SessionGroupInput } from "../../stores/sessions.svelte.js";
+import type { SessionGroup, SessionGroupInput } from "../../stores/sessionGroups.js";
 import { sessionAncestryMatcher } from "../../utils/session-ancestry.js";
 
 export const ITEM_HEIGHT = 42;

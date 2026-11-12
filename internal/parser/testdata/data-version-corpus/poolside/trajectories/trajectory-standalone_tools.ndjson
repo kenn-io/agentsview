@@ -1,0 +1,6 @@
+{"id":"event-1","timestamp":"2026-07-08T07:20:51.089334-04:00","type":"session.start","session_start":{"workspace":"","working_directories":["/test"],"prompt":""}}
+{"id":"event-2","timestamp":"2026-07-08T07:20:51.092132-04:00","type":"session.input","session_input":{"id":"","prompt":"Read the file","mode":"build"}}
+{"id":"event-3","timestamp":"2026-07-08T07:20:55.000000-04:00","type":"assistant_message.start","assistant_message_start":{}}
+{"id":"parsed-1","step_id":"step-1","timestamp":"2026-07-08T07:20:56.000000-04:00","type":"tool_call.parsed","tool_call_parsed":{"id":"chatcmpl-tool-1","name":"read","args":{"path":"/test/file.txt"}}}
+{"id":"result-1","step_id":"step-1","timestamp":"2026-07-08T07:20:57.000000-04:00","type":"tool_call.result","tool_call_result":{"id":"chatcmpl-tool-1","tool_name":"read","observation":"file contents here"}}
+{"id":"event-6","timestamp":"2026-07-08T07:21:00.000000-04:00","type":"assistant_message.end","assistant_message_end":{"assistant_message":"Here is the file content."}}

@@ -377,6 +377,21 @@ var mirrorTables = []tableSpec{
 		orderBy: []string{"session_id"},
 	},
 	{
+		// One row per session, the latest push winning: the usage total
+		// the agent recorded for the whole session. Usage reads never
+		// include it; models stay the archive's JSON text.
+		name: "session_usage_totals",
+		columns: []columnSpec{
+			col("session_id", tString),
+			col("source", tString),
+			col("subagent_scope", tString),
+			col("cost_microdollars", tNullInt),
+			col("incomplete", tBool),
+			colDefault("models_json", tString, "'[]'"),
+		},
+		orderBy: []string{"session_id"},
+	},
+	{
 		name: "cursor_usage_events",
 		columns: []columnSpec{
 			col("id", tInt),

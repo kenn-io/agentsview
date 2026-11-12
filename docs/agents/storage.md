@@ -50,6 +50,20 @@ block startup. A failed or unlaunchable startup rebuild keeps serving with
 writes allowed and retries on the archive audit cadence. Startup uses no
 in-process fallback.
 
+The parsed-output digest records each provider and corpus input under
+`internal/parser/testdata/data-version-output-digests`. If output changes for a
+recorded input, take a new data version and record its digest with `bump` set
+to true. Keep records already on main. For a new input, append its first digest
+at the current version using output from the current main parser, and leave
+`bump` unset. This also applies when the input accompanies a parser change.
+A new provider can append its first digest at the current version. If records
+conflict, keep the record from main, remove your unmerged conflicting record,
+and take the next version.
+
+The digest covers only inputs in `internal/parser/testdata/data-version-corpus`.
+Parser behavior outside that corpus is unguarded. Add a representative input
+for each new stored-output behavior.
+
 A parser upgrade can instead reparse only the affected providers in place.
 Declare it in `dataVersionScopes` in `internal/db/data_version_scope.go`:
 
@@ -758,6 +772,23 @@ reported cost wins.
 - Validation writes a costed usage event with no model under
   `usagefacts.UnknownModel` (`<unknown>`), so usage reads keep it.
 
+### Session usage totals
+
+`session_usage_totals` holds one row per session with a total the agent
+recorded for the whole session, such as Claude Code's `cost-state`. It
+overlaps the session's usage rows, and with `subagent_scope = 'included'` its
+subagents' rows, so no usage, cost, or rollup query reads it. Session usage
+loads it as `SessionTotal` beside the computed totals.
+
+- Only full-parse writes replace it: `SessionBatchWrite.ReplaceSessionTotal`
+  and the staged paths that call `ReplaceSessionUsageTotal`. Other batch
+  writes (repairs, replacements, artifact imports) leave it unchanged.
+- Rebuilds copy it for retained orphan sessions. Artifact exports do not
+  carry it yet, so a session imported from artifacts has none.
+- Every backend stores `db.SessionUsageTotalColumns` and pushes on
+  `SessionUsageTotalFingerprints` changes, like `session_plan_usage`.
+  `dbtest.SeedSessionUsageTotal` and `AssertSessionUsageTotal` check each.
+
 ### Usage cache divergence
 
 SQLite's aggregate usage APIs read timezone-specific daily rollups from a
@@ -792,7 +823,12 @@ Do not widen or narrow this live/baked boundary implicitly.
 The cache format version is also the extractor compatibility version. Bump
 `usageCacheFormatVersion` whenever fact extraction, `priceUsageFact`, web-search
 fees, deduplication, rollup semantics, or query-time model canonicalization
-change. Each rollup install records the distinct
+change. Add a record in `internal/db/testdata/usage-cache-format-digests`
+for each format bump. If this PR added the record, replace it when its output
+changes; otherwise bump the format and record the new digest. The digest covers
+stored facts and daily rollups for the fixture; add a case when new usage
+behavior needs another input.
+Each rollup install records the distinct
 `(provider, reported model, canonical model)` lookups its daily rows used, and a
 full-path read re-resolves only those against the current catalog. A catalog
 digest change sends reads through that path until a coverage pass claims the

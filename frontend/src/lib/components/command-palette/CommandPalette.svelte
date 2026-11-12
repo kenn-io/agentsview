@@ -109,7 +109,7 @@
 
   let totalItems = $derived(
     showSearchResults
-      ? searchStore.results.length
+      ? (searchStore.isSearching ? 0 : searchStore.results.length)
       : recentSessions.length,
   );
 
@@ -139,7 +139,7 @@
 
     if (e.key === "ArrowDown") {
       e.preventDefault();
-      selectedIndex = Math.min(selectedIndex + 1, totalItems - 1);
+      selectedIndex = Math.max(0, Math.min(selectedIndex + 1, totalItems - 1));
     } else if (e.key === "ArrowUp") {
       e.preventDefault();
       selectedIndex = Math.max(selectedIndex - 1, 0);
@@ -192,6 +192,7 @@
   }
 
   function selectCurrent() {
+    if (showSearchResults && searchStore.isSearching) return;
     if (showSearchResults) {
       const result = searchStore.results[selectedIndex];
       if (result) {
@@ -384,19 +385,23 @@
             {#if searchStore.error.kind === "timeout"}
               <strong>{m.command_palette_search_timeout_title()}</strong>
               <span>{m.command_palette_search_timeout_detail()}</span>
-              <div class="palette-error-action">
-                <Button
-                  size="sm"
-                  tone="info"
-                  surface="soft"
-                  label={m.shared_retry()}
-                  onclick={() => searchStore.retry()}
-                />
-              </div>
             {:else}
               <strong>{m.command_palette_search_error()}</strong>
               <span>{searchStore.error.detail ?? m.command_palette_search_failed()}</span>
             {/if}
+            <div class="palette-error-action">
+              <Button
+                size="sm"
+                tone="info"
+                surface="soft"
+                label={m.shared_retry()}
+                onclick={() => {
+                  inputRef?.focus();
+                  selectedIndex = 0;
+                  searchStore.retry();
+                }}
+              />
+            </div>
           </div>
         {:else if searchStore.results.length === 0}
           <div class="palette-empty">{m.command_palette_no_results()}</div>

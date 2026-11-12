@@ -39,6 +39,10 @@ The latest release is
 
 **Bug fixes**
 
+- A busy daemon no longer logs `a long-running reader is holding the WAL`, or
+  a goroutine dump, when its reads only overlap. The warning now appears only
+  when three checkpoints in a row stop at the same point, which means one read
+  stayed open across all of them.
 - In managed Caddy mode, the proxy no longer writes the auth token into the
   daemon log when a client passes it as `?token=` on a live-update stream and
   the request fails. The server also compares bearer tokens in constant time,

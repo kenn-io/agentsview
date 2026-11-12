@@ -2,6 +2,8 @@ import { afterEach, describe, expect, it, vi } from "vite-plus/test";
 import { getApiV1Version } from "./generated/metadata/metadata.js";
 import {
   ApiError,
+  TransportError,
+  isTransient,
   orvalFetch,
   getServerUrl,
   responseTimingOf,
@@ -129,5 +131,21 @@ describe("API errors", () => {
       code: "unknown_project_key",
       message: "unknown project key",
     } satisfies Partial<ApiError>);
+  });
+
+  it("marks a fetch failure as transient", async () => {
+    const cause = new TypeError("Failed to fetch");
+    vi.stubGlobal("fetch", vi.fn().mockRejectedValue(cause));
+    const error = await orvalFetch("/api/v1/search", {}).catch((err: unknown) => err);
+    expect(error).toBeInstanceOf(TransportError);
+    expect(error).toMatchObject({ message: cause.message, cause });
+    expect(isTransient(error)).toBe(true);
+  });
+
+  it("classifies an invalid server address rejected by fetch as transient", async () => {
+    setServerUrl("http://[");
+    const error = await orvalFetch("/api/v1/search", {}).catch((err: unknown) => err);
+    expect(error).toBeInstanceOf(TransportError);
+    expect(isTransient(error)).toBe(true);
   });
 });

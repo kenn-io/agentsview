@@ -26,6 +26,12 @@ type usageDailyFactsSessionCost struct {
 func (db *DB) GetDailyUsage(
 	ctx context.Context, filter UsageFilter,
 ) (DailyUsageResult, error) {
+	return db.keptDailyUsage(ctx, filter)
+}
+
+func (db *DB) getDailyUsageUncached(
+	ctx context.Context, filter UsageFilter,
+) (DailyUsageResult, error) {
 	kind := usageQueryKindToken
 	if filter.ActiveSince == "" && filter.Termination == "" {
 		kind = usageQueryKindDayTotals

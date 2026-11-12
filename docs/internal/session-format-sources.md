@@ -493,6 +493,28 @@ fixtures retain this field; missing identities remain source-local.
   it, and an absent or malformed breakdown falls back to the 5m rate for the
   whole write total (issue #1452).
 
+- **Session cost total (`cost-state`, checked 2026-11-11):** Claude Code
+  appends `cost-state` records with `totalCostUSD`, `hasUnknownModelCost`,
+  and per-model `modelUsage` (`inputTokens`, `outputTokens`,
+  `thinkingTokens`, `cacheReadInputTokens`, `cacheCreationInputTokens`,
+  `webSearchRequests`, `costUSD`). No public producer source exists; this is
+  observed evidence from 1,480 records in 917 local Claude Code 2.1
+  transcripts. The records are cumulative snapshots: every record in a file
+  shares one `startTime`, and no total decreases, so the last record is the
+  file's total. Subagent transcripts never carry one. The total includes
+  subagent calls: across 81 sessions with subagents, transcript output was
+  49% of `outputTokens` for the parent file alone and 103.5% with its
+  subagent files, while 817 sessions without subagents matched within 1-3%.
+  It also includes side calls that are never written to the transcript: 130
+  of the 131 sessions whose transcript output is more than 10% below the
+  total have an `ai-title` record, and titled sessions run a median of 31
+  output and 1,520 input tokens above their transcripts while untitled ones
+  match. Agentsview keeps the last record with usage as the session total,
+  with subagent scope `included`, in `session_usage_totals` (data version
+  177). It is never added to usage or cost; `session usage` shows it as
+  `session_total` and an `Agent total:` line. An appended record with usage
+  makes the incremental parser fall back to a full parse.
+
 - **Server tool use (web search):** Anthropic bills server-side web search at
   $10 per 1,000 requests on top of tokens and reports the count in
   `message.usage.server_tool_use.web_search_requests`, which Claude Code
@@ -2140,8 +2162,13 @@ fixtures retain this field; missing identities remain source-local.
   [usage normalization and cost calculation](https://github.com/XiaomiMiMo/MiMo-Code/blob/f24ce4eb7341bfba6bb608436c1d27a843508adf/packages/opencode/src/session/session.ts).
 - **Usage and cost:** Assistant message data persists input, output, reasoning,
   cache-read, cache-write, model, and a calculated currency cost. Agentsview
-  reads the token/model fields but deliberately ignores the stored cost and
-  catalog-prices the normalized usage.
+  catalog-prices the normalized usage. Reverified 2026-11-11: `getUsage`
+  estimates each step's cost from models.dev rates (0 when unpriced) and
+  writes it on the `step-finish` part; in max mode the message `cost` also
+  includes losing candidates and the judge
+  ([processor](https://github.com/XiaomiMiMo/MiMo-Code/blob/f24ce4eb7341bfba6bb608436c1d27a843508adf/packages/opencode/src/session/processor.ts#L982)).
+  Agentsview keeps the sum of the `step-finish` costs as a recorded cost, as
+  for OpenCode.
 - **Agentsview:** `internal/parser/mimocode.go` delegates to
   `internal/parser/opencode.go`; compare MiMo's pinned schema with OpenCode
   whenever their shared parser changes.
@@ -2423,7 +2450,20 @@ preservation of archived messages for OpenCode, Kilo, MiMoCode, and Icodemate.
 
 - **Usage and cost:** Assistant messages persist input, output, cache-read, and
   cache-write tokens, plus model/provider identity. Agentsview computes price
-  from those tokens rather than consuming a persisted USD total. Reverified
+  from those tokens. Reverified 2026-11-11 at the pinned commit: each
+  `step-finish` part stores the `cost` of one model request, which
+  [`Session.getUsage`](https://github.com/anomalyco/opencode/blob/dff8fbc149fb7492e4f07b713ac31ea70d9a541c/packages/opencode/src/session/session.ts#L338)
+  estimates in USD from models.dev or configured rates (0 when a model has no
+  rate; GitHub Copilot responses use the provider's nano-AIU charge). The
+  [processor](https://github.com/anomalyco/opencode/blob/dff8fbc149fb7492e4f07b713ac31ea70d9a541c/packages/opencode/src/session/processor.ts#L458)
+  adds each step's cost to the message `cost` but overwrites the message
+  `tokens` with the last step's, so a multi-step message's tokens cover only
+  its last request. Agentsview keeps the sum of the message's `step-finish`
+  costs as a recorded cost (data version 176), which prices the message only
+  when the catalog has no rate for its model. The message `cost` is not used,
+  because Kilo and MiMo Code add costs that belong to other requests to it.
+  The experimental `session_message` table always stores `cost: 0`, so the v2
+  path records none. Reverified
   2026-09-07: the pinned `message-v2.ts` hydrates message data independently
   of its part rows. Agentsview retains model identity even when no recognized
   token fields are available; usage-only resync guards check model loss before
@@ -2577,8 +2617,8 @@ preservation of archived messages for OpenCode, Kilo, MiMoCode, and Icodemate.
   at a local Ollama server therefore yields Ollama tags such as
   `kimi-k2.7-code:cloud`, and `data.providerID` is that config's own key
   rather than a catalog provider, so the parser does not retain it. OpenCode
-  writes `cost: 0` for such models because it has no rate for them, and the
-  parser never imports OpenCode cost, so every such turn is priced by
+  writes `cost: 0` for such models because it has no rate for them. A
+  recorded $0 never prices a row, so every such turn is priced by
   agentsview. Ollama's [pricing page](https://ollama.com/pricing) bills cloud
   models per million tokens; on the check date it listed `kimi-k2.7-code` at
   $0.95 input, $0.19 cached input, and $4.00 output, equal to the `moonshotai`
@@ -2612,8 +2652,14 @@ preservation of archived messages for OpenCode, Kilo, MiMoCode, and Icodemate.
   and
   [message.ts](https://github.com/Kilo-Org/kilocode/blob/938919ab72e3977d1512e0363417270e3337c7b1/packages/core/src/session/message.ts).
 - **Usage and cost:** Compatible message data includes input, output,
-  cache-read, and cache-write tokens with model identity. The parser does not
-  consume a Kilo-reported currency total; Agentsview catalog-prices tokens.
+  cache-read, and cache-write tokens with model identity. Agentsview
+  catalog-prices tokens. Reverified 2026-11-11: Kilo's `getUsage` prefers the
+  provider's reported charge (OpenRouter, the Kilo gateway, Vercel AI Gateway)
+  and otherwise estimates from rates, and the stored value does not say which.
+  [`KiloCostPropagation`](https://github.com/Kilo-Org/kilocode/blob/938919ab72e3977d1512e0363417270e3337c7b1/packages/opencode/src/kilocode/session/cost-propagation.ts#L63)
+  adds child subagent session costs into the parent message `cost`, so
+  Agentsview keeps only the sum of the message's `step-finish` costs as a
+  recorded cost, as for OpenCode.
 - **Agentsview:** `internal/parser/kilo.go` uses the OpenCode family parser.
   Kilo migrations mean the pinned current source must be compared with legacy
   fixtures when changing compatibility.
@@ -3225,7 +3271,13 @@ schemas keep their existing ordering behavior.
   cache-read and cache-write/creation values in nested or historical flat
   shapes. Model IDs are present. Agentsview catalog-prices the tokens. Data
   version 81 reparses existing Pi-family archives after adding the flat
-  `cacheWrite` spelling.
+  `cacheWrite` spelling. Each assistant message also stores
+  `usage.cost.total` in USD, which
+  [`calculateCost`](https://github.com/earendil-works/pi/blob/f1c587dde39025c75d7397bc14532d8fa5c001d9/packages/ai/src/models.ts#L639)
+  estimates from the model registry; custom models have zero rates and record
+  $0. Agentsview keeps it as a recorded cost (data version 176), which prices
+  the message only when the catalog has no rate for its model. Reverified
+  2026-11-11.
 - **Reasoning effort:** Assistant messages store the Pi thinking level as
   `message.thinkingLevel`, written since Pi v0.99.0 (2026-09-29, upstream
   commit `540e174c72`, "Virtual models"). Older logs carry only
@@ -3758,9 +3810,15 @@ schemas keep their existing ordering behavior.
   and
   [usage-accumulator.ts](https://github.com/openclaw/openclaw/blob/40d31f34813c2a01284b097c0d0d785fbb173400/src/agents/embedded-agent-runner/usage-accumulator.ts).
 - **Usage and cost:** Messages persist input, output, cache-read, cache-write,
-  model identity, and sometimes `usage.cost.total`. Agentsview intentionally
-  ignores the reported cost and catalog-prices normalized token fields to keep
-  pricing attribution consistent.
+  model identity, and sometimes `usage.cost.total`. Agentsview catalog-prices
+  normalized token fields and keeps `usage.cost.total` as a recorded cost
+  (data version 176), which prices the message only when the catalog has no
+  rate for its model. Reverified 2026-11-11:
+  [`calculateCost`](https://github.com/openclaw/openclaw/blob/40d31f34813c2a01284b097c0d0d785fbb173400/packages/ai/src/model-utils.ts#L9)
+  estimates it from catalog or configured rates (0 when unpriced), and
+  [`applyProviderReportedUsageCost`](https://github.com/openclaw/openclaw/blob/40d31f34813c2a01284b097c0d0d785fbb173400/packages/ai/src/model-utils.ts#L23)
+  replaces only `total` with the provider's charge and sets
+  `cost.totalOrigin` to `provider-billed`.
 - **Usage-only records (checked 2026-11-11 at the pinned commit):** The agent
   loop emits the provider's final message, usage included, as `message_end`
   without checking its content
@@ -3840,7 +3898,7 @@ schemas keep their existing ordering behavior.
   the compatible format family, not the exact QClaw build.
 - **Usage and cost:** Compatible records can contain input, output, cache-read,
   cache-write, model, and reported total cost. As for OpenClaw, Agentsview
-  ignores the reported monetary field and catalog-prices tokens.
+  catalog-prices tokens and keeps `usage.cost.total` as a recorded cost.
 - **Agentsview:** `internal/parser/qclaw.go` has its own decoder for the
   OpenClaw record shape. Like OpenClaw, it keeps an assistant message with
   usage and no text or tool call as a hidden usage-only row (rechecked
@@ -4973,8 +5031,10 @@ schemas keep their existing ordering behavior.
   message.usage token fields) is compatible-family evidence from the `claude`
   entry.
 - **Usage and cost:** Compatible messages can persist input, output, cache-read,
-  cache-write, and model identity. Agentsview catalog-prices these values and
-  consumes no product-reported USD total.
+  cache-write, and model identity. Agentsview catalog-prices these values. On
+  the VSCode OpenCode path, a `step-finish` part `cost` is kept as a recorded
+  cost through the shared OpenCode parser, which prices a message only when
+  the catalog has no rate. No iCodeMate store with step costs was inspected.
 - **Agentsview:** `internal/parser/icodemate.go` delegates to
   `internal/parser/opencode.go` for the VSCode OpenCode path;
   `internal/parser/icodemate_cli.go` parses the Claude-format CLI projects
@@ -5212,19 +5272,22 @@ schemas keep their existing ordering behavior.
 
 - **Format:** A `shelley.db` SQLite database containing conversations, messages,
   and JSON usage data.
-- **Evidence:** `documentation`.
-- **Upstream:** The first-party
-  [Shelley launch and storage documentation](https://blog.exe.dev/shelley) was
-  checked 2026-07-19 and identifies the SQLite store at
-  `~/.config/shelley/shelley.db`. No public migration, table schema, or
-  producer source was found, so column-level details remain observed evidence.
-- **Usage and cost:** `usage_data` can persist input, cache-creation,
-  cache-read, output, model, and exact `cost_usd`. Agentsview intentionally
-  ignores `cost_usd` while emitting token usage, avoiding mixed/double cost
-  attribution and using catalog pricing instead.
+- **Evidence:** `source`.
+- **Upstream:** Clone `https://github.com/boldsoftware/shelley.git` at
+  `4c77f06f2b5596a01acca12eeee82e81a83481c1` (found 2026-11-11); see the
+  [messages schema](https://github.com/boldsoftware/shelley/blob/4c77f06f2b5596a01acca12eeee82e81a83481c1/db/schema/002-messages.sql)
+  and the [`Usage` type](https://github.com/boldsoftware/shelley/blob/4c77f06f2b5596a01acca12eeee82e81a83481c1/llm/llm.go#L786).
+  The first-party [launch and storage documentation](https://blog.exe.dev/shelley)
+  identifies the SQLite store at `~/.config/shelley/shelley.db`.
+- **Usage and cost:** `usage_data` persists input, cache-creation, cache-read,
+  output, model, and `cost_usd`. `cost_usd` is the exe.dev gateway's
+  `Exedev-Gateway-Cost` response header, or 0 when the header is missing
+  ([`CostUSDFromResponse`](https://github.com/boldsoftware/shelley/blob/4c77f06f2b5596a01acca12eeee82e81a83481c1/llm/llm.go#L769)).
+  Agentsview catalog-prices the tokens and keeps `cost_usd` as a recorded
+  cost (data version 176), which prices the message only when the catalog has
+  no rate for its model. Indirect calls in `other_usage_data` are not read.
 - **Agentsview:** `internal/parser/shelley.go` and
-  `internal/parser/shelley_provider.go`; schema and cost-field behavior are
-  observed implementation evidence.
+  `internal/parser/shelley_provider.go`.
 
 ## Mistral Vibe (`vibe`)
 
@@ -5823,8 +5886,12 @@ schemas keep their existing ordering behavior.
   [vercel-labs/fx#1226](https://github.com/vercel-labs/fx/pull/1226), so only
   older sessions have it. Input includes cache reads and writes. AgentsView
   subtracts those tokens from fresh input and prices the separate token counts
-  from its catalog. It omits fx's reported cost, which can be zero for
-  subscription runs. Cumulative totals leave peak context unknown. Usage dates
+  from its catalog. Each model entry's `total_cost` is the Vercel AI Gateway
+  charge ([gateway client](https://github.com/vercel-labs/fx/blob/b9ca60d0102cf84cea061456c41206f66149b311/src/gateway/client.zig#L3359)),
+  and 0 for Codex and Grok subscription runs. Agentsview keeps it as a
+  recorded cost (data version 176) only when `snapshot.billing` is
+  `complete`, the same condition fx uses before it reports a cost; it prices
+  the model's usage only when the catalog has no rate. Reverified 2026-11-11. Cumulative totals leave peak context unknown. Usage dates
   use the earlier of the latest transcript event and the usage file's
   modification time, falling back to the latest event or session start when
   the modification time is unavailable. Optional counts can be null, which

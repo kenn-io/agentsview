@@ -14,6 +14,8 @@ export interface SessionUsageBreakdownResponse {
   model: string;
   ordinal: number;
   output_tokens: number;
+  recorded_cost?: MoneyMoney;
+  recorded_cost_priced?: boolean;
   source: string;
   subagent_session_id?: string;
   timestamp: string;

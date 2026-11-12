@@ -1,0 +1,22 @@
+{
+		"title":"Transcript title loses",
+		"cwd":"/workspace/code/transcript-cwd",
+		"created_at":"2024-01-01T10:00:00Z",
+		"updated_at":"2024-01-01T10:01:05Z",
+		"agent":{"model_name":"devin-1"},
+		"final_metrics":{
+			"output_tokens":222,
+			"input_tokens":100,
+			"cache_read_input_tokens":300,
+			"cost_usd":99,
+			"mystery_tokens":444
+		},
+		"steps":[
+			{"step_id":100,"source":"system","timestamp":"2024-01-01T10:00:00Z","message":"Session booted"},
+			{"step_id":"step-1","source":"user","timestamp":"2024-01-01T10:00:01Z","message":"Fix the login bug"},
+			{"step_id":"step-skip","source":"user","timestamp":"2024-01-01T10:00:02Z","message":[{"type":"text","text":""},{"type":"unknown","value":"ignored"}]},
+			{"step_id":"step-3","source":"agent","timestamp":"2024-01-01T10:00:05Z","message":[{"type":"thinking","thinking":"Check auth flow"},{"type":"text","text":"Inspecting files."},{"type":"tool_use","id":"tool-msg","name":"read_file","input":{"file_path":"README.md"}}],"tool_use":[{"id":"tool-top-1","name":"shell_command","input":{"command":"ls -la"}},{"id":"tool-top-2","name":"edit_file","input":{"path":"main.go"}}]},
+			{"step_id":"step-4","source":"user","timestamp":"2024-01-01T10:01:00Z","tool_result":[{"tool_use_id":"tool-top-1","content":"file1\nfile2"}]},
+			{"step_id":"step-5","source":"agent","timestamp":"2024-01-01T10:01:05Z","message":[{"type":"unknown","value":"ignored"}],"tool_result":[{"tool_use_id":"tool-top-2","content":[{"type":"text","text":"patch applied"}]}]}
+		]
+	}
