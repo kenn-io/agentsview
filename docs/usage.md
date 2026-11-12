@@ -1075,7 +1075,8 @@ The palette remembers the last mode you selected across openings and browser
 sessions. Results update after a 300ms typing pause.
 
 The palette automatically retries a transient Full text search failure once. If
-the search still fails, select **Retry** to try again.
+the search still fails, select **Retry** to try again. A timed-out search may
+take as long as two attempts before the error appears.
 
 !!! tip
 

@@ -186,47 +186,48 @@ describe("SearchStore", () => {
     ]);
   });
 
-  it.each(["recover", "exhaust"] as const)(
-    "recovers or exhausts automatic retry: %s",
-    async (outcome) => {
-      const store = createSearchStore(memoryStorage());
-      const second = deferred<SearchResponse>();
-      searchService.getApiV1Search
-        .mockRejectedValueOnce(new ApiError(503, "request timed out"))
-        .mockReturnValueOnce(second.promise);
-      store.search("needle", "alpha");
-      await runDebounce();
+  it.each([
+    ["recover", 503],
+    ["exhaust", 503],
+    ["recover", 504],
+    ["exhaust", 504],
+  ] as const)("recovers or exhausts automatic retry: %s after HTTP %i", async (outcome, status) => {
+    const store = createSearchStore(memoryStorage());
+    const second = deferred<SearchResponse>();
+    searchService.getApiV1Search
+      .mockRejectedValueOnce(new ApiError(status, "request timed out"))
+      .mockReturnValueOnce(second.promise);
+    store.search("needle", "alpha");
+    await runDebounce();
+    await vi.advanceTimersByTimeAsync(300);
+    expect(searchService.getApiV1Search).toHaveBeenCalledTimes(2);
+    expect(store.isSearching).toBe(true);
+    expect(store.error).toBeNull();
+    expect(reportErrorShown).not.toHaveBeenCalled();
+    if (outcome === "recover") {
+      expect(searchService.getApiV1Search.mock.calls[1]![0]).toEqual(
+        searchService.getApiV1Search.mock.calls[0]![0],
+      );
+      expect(searchService.getApiV1Search.mock.calls[1]![1]?.signal).toBe(
+        searchService.getApiV1Search.mock.calls[0]![1]?.signal,
+      );
+      second.resolve(fullTextResponse("needle"));
+      await flushMicrotasks();
+      expect(store.results[0]?.session_id).toBe("full-0");
+    } else {
+      second.reject(new ApiError(500, "second"));
+      await flushMicrotasks();
       await vi.advanceTimersByTimeAsync(300);
       expect(searchService.getApiV1Search).toHaveBeenCalledTimes(2);
-      expect(store.isSearching).toBe(true);
-      expect(store.error).toBeNull();
-      expect(reportErrorShown).not.toHaveBeenCalled();
-      if (outcome === "recover") {
-        expect(searchService.getApiV1Search.mock.calls[1]![0]).toEqual(
-          searchService.getApiV1Search.mock.calls[0]![0],
-        );
-        expect(searchService.getApiV1Search.mock.calls[1]![1]?.signal).toBe(
-          searchService.getApiV1Search.mock.calls[0]![1]?.signal,
-        );
-        second.resolve(fullTextResponse("needle"));
-        await flushMicrotasks();
-        expect(store.results[0]?.session_id).toBe("full-0");
-      } else {
-        second.reject(new ApiError(500, "second"));
-        await flushMicrotasks();
-        await vi.advanceTimersByTimeAsync(300);
-        expect(searchService.getApiV1Search).toHaveBeenCalledTimes(2);
-        expect(store.error).toEqual({ detail: "second", kind: "generic" });
-        expect(reportErrorShown).toHaveBeenCalledTimes(1);
-      }
-      expect(store.isSearching).toBe(false);
-    },
-  );
+      expect(store.error).toEqual({ detail: "second", kind: "generic" });
+      expect(reportErrorShown).toHaveBeenCalledTimes(1);
+    }
+    expect(store.isSearching).toBe(false);
+  });
 
   it.each([
     [400, "unavailable"],
     [501, "unavailable"],
-    [504, "unavailable"],
   ] as const)("does not retry HTTP %i with %s", async (status, detail) => {
     const store = createSearchStore(memoryStorage());
     searchService.getApiV1Search.mockRejectedValueOnce(generatedApiError(status, detail));
