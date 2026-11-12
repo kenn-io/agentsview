@@ -47,8 +47,6 @@ func TestMaterializeSnapshotInstallsCapturedCompanions(t *testing.T) {
 	require.NoError(t, err)
 	archive, err := rawarchive.Open(ctx, database, seed, nil)
 	require.NoError(t, err)
-	_, err = archive.Reparse(ctx, rawarchive.ReparseOptions{All: true, ScratchBytes: 512 << 20})
-	require.NoError(t, err)
 
 	repository := filepath.Join(root, "repository")
 	report, err := archive.Backup(ctx, repository, settings, "fixture")

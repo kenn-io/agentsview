@@ -214,7 +214,7 @@ func TestMaterializeSnapshotEquivalentCandidates(t *testing.T) {
 		{"archive", func(p *db.ArchiveSessionProvenance) { p.Source.ArchiveID = "wrong" }, "snapshot archive identity differs"},
 		{"root", func(p *db.ArchiveSessionProvenance) { p.Source.RootID = "wrong" }, "snapshot source ownership"},
 		{"manifest", func(p *db.ArchiveSessionProvenance) { p.ManifestID = "wrong" }, "snapshot source ownership"},
-		{"session", func(p *db.ArchiveSessionProvenance) { p.NativeSessionID = "wrong" }, "snapshot session ownership differs"},
+		{"session", func(p *db.ArchiveSessionProvenance) { p.NativeSessionID = "wrong" }, "snapshot transcript source differs"},
 		{"repository", func(p *db.ArchiveSessionProvenance) { p.Attachment.RepositoryID = "wrong" }, "owning snapshot is not configured"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -311,23 +311,25 @@ func TestMaterializeSnapshotUsesAcceptedPrimaryAfterSiblingCapture(t *testing.T)
 	seed := filepath.Join(inputs, "seed")
 	database, err := db.OpenIsolatedContext(ctx, filepath.Join(seed, "sessions.db"))
 	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, database.Close()) })
 	archive, err := rawarchive.Open(ctx, database, seed, nil)
 	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, archive.Close()) })
 	_, err = archive.Import(ctx, spec)
 	require.NoError(t, err)
 	files, err := database.ListRawArchiveFiles(ctx, 0, 100)
 	require.NoError(t, err)
+	rel, err := filepath.Rel(filepath.Dir(root), primary)
+	require.NoError(t, err)
 	covered := 0
 	for _, file := range files {
-		if file.Path == "project/"+id+".jsonl" && file.Covered {
+		if file.Path == filepath.ToSlash(rel) && file.Covered {
 			covered++
 		}
 	}
 	require.Equal(t, 2, covered, "the later accepted sibling must cover the changed primary")
 	report, err := archive.Backup(ctx, source.Repository, settings, "test")
 	require.NoError(t, err)
-	require.NoError(t, archive.Close())
-	require.NoError(t, database.Close())
 	source.Snapshot = report.SnapshotID
 	index, err := OpenIndex(ctx, source, t.TempDir(), nil)
 	require.NoError(t, err)
@@ -354,4 +356,95 @@ func TestMaterializeSnapshotUsesAcceptedPrimaryAfterSiblingCapture(t *testing.T)
 	data, err = os.ReadFile(tool)
 	require.NoError(t, err)
 	assert.Equal(t, "original tool", string(data))
+}
+
+func TestMaterializeSnapshotSavedSessionBinding(t *testing.T) {
+	const id = "019eb791-cf7d-75c1-8439-9ed74c122e02"
+	const otherID = "019eb791-cf7d-75c1-8439-9ed74c122e03"
+	for _, conflict := range []bool{false, true} {
+		name := "matching"
+		if conflict {
+			name = "conflicting"
+		}
+		t.Run(name, func(t *testing.T) {
+			ctx := t.Context()
+			inputs := t.TempDir()
+			projects := filepath.Join(inputs, "claude", "projects")
+			primary := testjsonl.NewSessionBuilder().AddClaudeUserWithSessionID("2026-01-01T00:00:00Z", "selected", id).String()
+			dbtest.WriteTestFile(t, filepath.Join(projects, "project", id+".jsonl"), []byte(primary))
+			dbtest.WriteTestFile(t, filepath.Join(projects, "project", otherID+".jsonl"), []byte(testjsonl.NewSessionBuilder().AddClaudeUserWithSessionID("2026-01-01T00:00:00Z", "other", otherID).String()))
+			source := backupSourceRoots(t, inputs, []rawarchive.RootSpec{{Provider: "claude", Path: projects}})
+			seed := filepath.Join(inputs, "seed")
+			database, err := db.OpenIsolatedContext(ctx, filepath.Join(seed, "sessions.db"))
+			require.NoError(t, err)
+			t.Cleanup(func() { require.NoError(t, database.Close()) })
+			roots, err := database.ListRawArchiveRoots(ctx)
+			require.NoError(t, err)
+			sources, err := database.ListRawArchiveSources(ctx, "", 100)
+			require.NoError(t, err)
+			var root db.RawArchiveRoot
+			var selected, alternate db.RawArchiveSource
+			for _, item := range sources {
+				if strings.HasSuffix(item.SourceKey, id+".jsonl") {
+					selected = item
+				}
+				if strings.HasSuffix(item.SourceKey, otherID+".jsonl") {
+					alternate = item
+				}
+			}
+			require.NotEmpty(t, selected.ManifestID)
+			require.NotEmpty(t, alternate.ManifestID)
+			for _, item := range roots {
+				if item.ID == selected.RootID {
+					root = item
+				}
+			}
+			require.NotEmpty(t, root.ID)
+			key := selected.SourceKey
+			if conflict {
+				key = alternate.SourceKey
+			}
+			_, err = database.BindRawArchiveSession(ctx, root, key, id, root.DeviceID+"~"+id)
+			require.NoError(t, err)
+			archive, err := rawarchive.Open(ctx, database, seed, nil)
+			require.NoError(t, err)
+			t.Cleanup(func() { require.NoError(t, archive.Close()) })
+			report, err := archive.Backup(ctx, source.Repository, rawarchive.RecoverySettings{LocalMachineName: "retired-desktop"}, "binding")
+			require.NoError(t, err)
+			source.Snapshot = report.SnapshotID
+			index, err := OpenIndex(ctx, source, t.TempDir(), nil)
+			require.NoError(t, err)
+			t.Cleanup(func() { require.NoError(t, index.Close()) })
+			items, err := index.Sources(ctx, "", 100)
+			require.NoError(t, err)
+			var owner db.ArchiveSessionProvenance
+			for _, item := range items {
+				if item.ManifestID == selected.ManifestID {
+					owner = db.ArchiveSessionProvenance{ArchiveSourceProvenance: index.provenance(item), NativeSessionID: id}
+				}
+			}
+			require.NotEmpty(t, owner.ManifestID)
+			scratch := t.TempDir()
+			t.Setenv("TMPDIR", scratch)
+			t.Setenv("TMP", scratch)
+			t.Setenv("TEMP", scratch)
+			tree, path, _, err := MaterializeSnapshot(ctx, []config.ArchiveSource{source}, []db.ArchiveSessionProvenance{owner}, "claude", 512<<20)
+			if conflict {
+				require.ErrorContains(t, err, "snapshot session ownership differs")
+				assert.Nil(t, tree)
+				assert.Empty(t, path)
+			} else {
+				require.NoError(t, err)
+				file, err := tree.EntryPath(path)
+				require.NoError(t, err)
+				data, err := os.ReadFile(file)
+				require.NoError(t, err)
+				assert.Equal(t, primary, string(data))
+				require.NoError(t, tree.Cleanup())
+			}
+			remaining, err := os.ReadDir(scratch)
+			require.NoError(t, err)
+			assert.Empty(t, remaining)
+		})
+	}
 }

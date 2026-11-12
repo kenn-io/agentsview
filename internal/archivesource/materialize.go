@@ -122,16 +122,16 @@ func MaterializeSnapshot(ctx context.Context, sources []config.ArchiveSource, ow
 	}
 	var canonical []byte
 	var configuredRoot, originalRoot string
-	var count int
 	err = conn.QueryRowContext(ctx, `SELECT r.configured_root_id,r.original_path,s.canonical_json FROM raw_archive_sources s JOIN raw_archive_roots r ON r.id=s.root_id WHERE s.manifest_id=? AND s.root_id=? AND s.source_key=? AND r.device_id=? AND r.provider=?`, owner.ManifestID, s.RootID, s.SourceKey, s.DeviceID, provider).Scan(&configuredRoot, &originalRoot, &canonical)
 	if err != nil {
 		return nil, "", "", fmt.Errorf("snapshot source ownership: %w", err)
 	}
-	err = conn.QueryRowContext(ctx, `SELECT count(*) FROM raw_archive_sessions WHERE device_id=? AND provider=? AND parser_id=? AND root_id=? AND source_key=?`, s.DeviceID, provider, owner.NativeSessionID, s.RootID, s.SourceKey).Scan(&count)
-	if err != nil {
+	var boundRoot, boundSource string
+	err = conn.QueryRowContext(ctx, `SELECT root_id,source_key FROM raw_archive_sessions WHERE device_id=? AND provider=? AND parser_id=?`, s.DeviceID, provider, owner.NativeSessionID).Scan(&boundRoot, &boundSource)
+	if err != nil && !errors.Is(err, sql.ErrNoRows) {
 		return nil, "", "", err
 	}
-	if count != 1 {
+	if err == nil && (boundRoot != s.RootID || boundSource != s.SourceKey) {
 		return nil, "", "", errors.New("snapshot session ownership differs")
 	}
 	identity, err := rawsync.NewAuthIdentity(archiveID, s.DeviceID)
