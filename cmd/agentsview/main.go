@@ -676,6 +676,9 @@ func runServe(ctx context.Context, cfg config.Config, opts serveOptions, restart
 			if err := prepareBackgroundReplacement(ctx, &replacement, nil, false); err != nil {
 				return err
 			}
+			if err := checkRestartAddress(ctx, cfg, replacement); err != nil {
+				return err
+			}
 			nextOpts := opts
 			nextOpts.ReplaceDaemon = false
 			nextOpts.NoSyncExplicit = flags.Changed("no-sync")

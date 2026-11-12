@@ -48,11 +48,19 @@ func isolateServeTestHome(t *testing.T) (string, string) {
 	return dir, dataDir
 }
 
-// startRestartFixture starts an isolated server and stops it at cleanup. The
-// returned channel yields the foreground process's exit, then stays closed.
+// startRestartFixture starts an isolated server on an automatic loopback port
+// and stops it at cleanup. The returned channel yields the foreground
+// process's exit, then stays closed.
 func startRestartFixture(t *testing.T, dataDir, mode string, args ...string) (*os.Process, <-chan error) {
 	t.Helper()
-	args = append([]string{"serve", "--host=127.0.0.1", "--port=0", "--no-browser", "--no-update-check"}, args...)
+	return startRestartFixtureAt(t, dataDir, mode, append([]string{"--host=127.0.0.1", "--port=0"}, args...)...)
+}
+
+// startRestartFixtureAt starts an isolated server with the caller's address
+// flags, so the host can come from config.toml instead.
+func startRestartFixtureAt(t *testing.T, dataDir, mode string, args ...string) (*os.Process, <-chan error) {
+	t.Helper()
+	args = append([]string{"serve", "--no-browser", "--no-update-check"}, args...)
 	processCtx, cancel := context.WithCancel(context.WithoutCancel(t.Context()))
 	t.Cleanup(cancel)
 	var done chan error
@@ -334,6 +342,53 @@ func TestServeRestartRefusesInvalidConfig(t *testing.T) {
 	current := FindDaemonRuntime(dataDir)
 	require.NotNil(t, current)
 	assert.Equal(t, rt.Record.PID, current.Record.PID)
+}
+
+// A restart that moves an explicit port to a busy address must keep the
+// current server: it stops before the replacement binds, so nothing would
+// answer afterward.
+func TestServeRestartRefusesBusyExplicitPortOnNewHost(t *testing.T) {
+	blocker, err := (&net.ListenConfig{}).Listen(t.Context(), "tcp", "[::1]:0")
+	if err != nil {
+		t.Skipf("IPv6 loopback unavailable: %v", err)
+	}
+	t.Cleanup(func() { assert.NoError(t, blocker.Close()) })
+	port := blocker.Addr().(*net.TCPAddr).Port
+	probe, err := (&net.ListenConfig{}).Listen(t.Context(), "tcp", net.JoinHostPort("127.0.0.1", strconv.Itoa(port)))
+	if err != nil {
+		t.Skipf("port %d is taken on IPv4 loopback: %v", port, err)
+	}
+	require.NoError(t, probe.Close())
+
+	_, dataDir := isolateServeTestHome(t)
+	startRestartFixtureAt(t, dataDir, "foreground", "--port="+strconv.Itoa(port), "--no-sync")
+	rt := waitForRestartRuntime(t, dataDir)
+	require.Equal(t, port, rt.Port)
+	base := fmt.Sprintf("http://127.0.0.1:%d", port)
+	path := filepath.Join(dataDir, "config.toml")
+	saved, err := os.ReadFile(path)
+	require.NoError(t, err)
+	require.NoError(t, os.WriteFile(path, append([]byte("host = \"::1\"\n"), saved...), 0o600))
+
+	resp, err := restartTestRequest(t, http.MethodPost, base+"/api/v1/daemon/restart", "", "")
+	require.NoError(t, err)
+	body, err := io.ReadAll(resp.Body)
+	require.NoError(t, err)
+	require.NoError(t, resp.Body.Close())
+	require.Equal(t, http.StatusInternalServerError, resp.StatusCode)
+	assert.Contains(t, string(body), fmt.Sprintf("port %d on ::1 is unavailable", port))
+	lock, acquired := acquireBackgroundLaunchLock(dataDir)
+	require.True(t, acquired, "refused restart must release launch ownership")
+	require.NoError(t, lock.Unlock())
+	current := FindDaemonRuntime(dataDir)
+	require.NotNil(t, current)
+	assert.Equal(t, rt.Record.PID, current.Record.PID)
+
+	// The current server holds its own address, so restarting on that
+	// address must not count it as busy.
+	require.NoError(t, os.WriteFile(path, saved, 0o600))
+	replacement := restartAndWait(t, dataDir, base, "")
+	assert.Equal(t, port, replacement.Port)
 }
 
 func TestRestartKeepsAdoptedNoSync(t *testing.T) {
