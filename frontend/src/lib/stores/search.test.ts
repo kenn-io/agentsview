@@ -1,7 +1,4 @@
-/// <reference types="node" />
-
 import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test";
-import { createServer } from "node:http";
 import { SearchService } from "../api/generated/index.js";
 import { ApiError, setServerUrl } from "../api/runtime.js";
 import type { SearchResponse } from "../api/generated/index.js";
@@ -282,7 +279,7 @@ describe("SearchStore", () => {
     },
   );
 
-  it.each([400, 501])("does not retry HTTP %i", async (status) => {
+  it.each([400, 501, 504])("does not retry HTTP %i", async (status) => {
     const store = createSearchStore(memoryStorage());
     searchService.getApiV1Search.mockRejectedValueOnce(generatedApiError(status, "unavailable"));
     store.search("needle");
@@ -292,26 +289,42 @@ describe("SearchStore", () => {
     expect(store.error).toEqual({ detail: "unavailable", kind: "generic" });
   });
 
-  it("keeps a canceled search cleared when the retry delay ends", async () => {
-    let received = 0;
-    const server = createServer((_req, res) => {
-      received++;
-      res.setHeader("Content-Type", "application/json");
-      res.end(JSON.stringify(fullTextResponse("needle")));
-    });
-    await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
-    const address = server.address();
-    if (!address || typeof address === "string") throw new Error("missing server address");
-    setServerUrl(`http://127.0.0.1:${address.port}`);
-    const originalFetch = globalThis.fetch;
-    const finished = deferred<void>();
-    const fetchSpy = vi.spyOn(globalThis, "fetch").mockImplementation((input, options) => {
-      const response = originalFetch(input, options);
-      void response.then(
-        () => finished.resolve(),
-        () => finished.resolve(),
+  it("does not send a retry to a server selected in another tab", async () => {
+    const actual = await vi.importActual<typeof import("../api/generated/index.js")>(
+      "../api/generated/index.js",
+    );
+    searchService.getApiV1Search.mockImplementation(actual.SearchService.getApiV1Search);
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(new Response("unavailable", { status: 503 }))
+      .mockResolvedValueOnce(
+        new Response(JSON.stringify(fullTextResponse("needle")), {
+          headers: { "Content-Type": "application/json" },
+        }),
       );
-      return response;
+    vi.stubGlobal("fetch", fetchMock);
+    setServerUrl("https://first.example");
+    try {
+      const store = createSearchStore(memoryStorage());
+      store.search("needle");
+      await runDebounce();
+      localStorage.setItem("agentsview-server-url", "https://second.example");
+      await vi.advanceTimersByTimeAsync(300);
+      expect(fetchMock).toHaveBeenCalledOnce();
+      expect(store.results).toEqual([]);
+      expect(store.error).toEqual({ detail: "unavailable", kind: "generic" });
+    } finally {
+      setServerUrl("");
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it("keeps a canceled search cleared when the retry delay ends", async () => {
+    const fetchSpy = vi.spyOn(globalThis, "fetch").mockImplementation(async (_input, options) => {
+      if (options?.signal?.aborted) throw new DOMException("Aborted", "AbortError");
+      return new Response(JSON.stringify(fullTextResponse("needle")), {
+        headers: { "Content-Type": "application/json" },
+      });
     });
     const store = createSearchStore(memoryStorage());
     try {
@@ -325,19 +338,14 @@ describe("SearchStore", () => {
       await runDebounce();
       store.clear();
       await vi.advanceTimersByTimeAsync(300);
-      vi.useRealTimers();
-      if (fetchSpy.mock.calls.length > 0) await finished.promise;
-      expect(received).toBe(0);
+      expect(fetchSpy).toHaveBeenCalledOnce();
+      expect(fetchSpy.mock.calls[0]![1]?.signal?.aborted).toBe(true);
       expect(store.results).toEqual([]);
       expect(store.error).toBeNull();
       expect(store.isSearching).toBe(false);
       expect(reportErrorShown).not.toHaveBeenCalled();
     } finally {
       fetchSpy.mockRestore();
-      setServerUrl("");
-      await new Promise<void>((resolve, reject) => {
-        server.close((err) => (err ? reject(err) : resolve()));
-      });
     }
   });
 

@@ -1,7 +1,8 @@
 import { debounce } from "@kenn-io/kit-ui";
 import { SearchService } from "../api/generated/index.js";
-import { ApiError, isAbortError, isTransient } from "../api/runtime.js";
+import { ApiError, getServerUrl, isAbortError, isTransient } from "../api/runtime.js";
 import type { DbSearchResult as SearchResult } from "../api/generated/index.js";
+import type { GetApiV1SearchParams } from "../api/generated/models/getApiV1SearchParams.js";
 import { resolveRange, type RangeSelection } from "../components/shared/rangeSelection.js";
 import { reportErrorShown, reportTelemetry } from "../utils/telemetry.js";
 
@@ -123,6 +124,20 @@ function failureKind(
     return "semantic-unavailable";
   }
   return isTimeoutDetail(detail) ? "timeout" : "generic";
+}
+
+/** Retries one transient failure, unless another tab selected a different server meanwhile. */
+async function searchFullText(params: GetApiV1SearchParams, signal: AbortSignal) {
+  const server = getServerUrl();
+  try {
+    return await SearchService.getApiV1Search(params, { signal });
+  } catch (error: unknown) {
+    if ((error instanceof ApiError && [501, 504].includes(error.status)) || !isTransient(error))
+      throw error;
+    await new Promise((resolve) => setTimeout(resolve, 300));
+    if (getServerUrl() !== server) throw error;
+    return SearchService.getApiV1Search(params, { signal });
+  }
 }
 
 export class SearchStore {
@@ -269,15 +284,7 @@ export class SearchStore {
           sort: this.sort,
           ...dates,
         };
-        let response;
-        try {
-          response = await SearchService.getApiV1Search(params, { signal });
-        } catch (error: unknown) {
-          if ((error instanceof ApiError && error.status === 501) || !isTransient(error))
-            throw error;
-          await new Promise((resolve) => setTimeout(resolve, 300));
-          response = await SearchService.getApiV1Search(params, { signal });
-        }
+        const response = await searchFullText(params, signal);
         results = normalizeFullText(response.results ?? []);
       } else {
         const response = await SearchService.getApiV1SearchContent(
