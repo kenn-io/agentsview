@@ -153,10 +153,35 @@ func TestPiDefaultDestination(t *testing.T) {
 	t.Setenv("PI_CODING_AGENT_SESSION_DIR", "")
 	home := t.TempDir()
 	t.Setenv("PI_CODING_AGENT_DIR", home)
-	cwd := filepath.Join(string(filepath.Separator), "work", "project")
-	dest, err := piDestination(cwd, "file.jsonl")
+	cwd := filepath.Join(t.TempDir(), "work", "project")
+	dest, err := piDestination(t.Context(), cwd, "file.jsonl")
 	require.NoError(t, err)
-	assert.Equal(t, filepath.Join(home, "sessions", "--work-project--", "file.jsonl"), dest)
+	encoded := strings.NewReplacer("/", "-", `\`, "-", ":", "-").Replace(strings.TrimLeft(cwd, `/\`))
+	assert.Equal(t, filepath.Join(home, "sessions", "--"+encoded+"--", "file.jsonl"), dest)
+}
+
+func TestPiSettingsSessionDirectoryPrecedence(t *testing.T) {
+	cwd, agent := t.TempDir(), t.TempDir()
+	t.Setenv("PI_CODING_AGENT_DIR", agent)
+	t.Setenv("PI_CODING_AGENT_SESSION_DIR", "")
+	require.NoError(t, os.WriteFile(filepath.Join(agent, "settings.json"), []byte(`{"sessionDir":"global-sessions"}`), 0o600))
+	got, err := piDestination(t.Context(), cwd, "id.jsonl")
+	require.NoError(t, err)
+	assert.Equal(t, filepath.Join(cwd, "global-sessions", "id.jsonl"), got)
+	require.NoError(t, os.Mkdir(filepath.Join(cwd, ".pi"), 0o700))
+	require.NoError(t, os.WriteFile(filepath.Join(cwd, ".pi", "settings.json"), []byte(`{"sessionDir":"project-sessions"}`), 0o600))
+	got, err = piDestination(t.Context(), cwd, "id.jsonl")
+	require.NoError(t, err)
+	assert.Equal(t, filepath.Join(cwd, "project-sessions", "id.jsonl"), got)
+	require.NoError(t, os.WriteFile(filepath.Join(cwd, ".pi", "settings.json"), []byte(`{"sessionDir":null}`), 0o600))
+	got, err = piDestination(t.Context(), cwd, "id.jsonl")
+	require.NoError(t, err)
+	encoded := strings.NewReplacer("/", "-", `\`, "-", ":", "-").Replace(strings.TrimLeft(cwd, `/\`))
+	assert.Equal(t, filepath.Join(agent, "sessions", "--"+encoded+"--", "id.jsonl"), got)
+	t.Setenv("PI_CODING_AGENT_SESSION_DIR", "environment-sessions")
+	got, err = piDestination(t.Context(), cwd, "id.jsonl")
+	require.NoError(t, err)
+	assert.Equal(t, filepath.Join(cwd, "environment-sessions", "id.jsonl"), got)
 }
 
 func TestPiPreservesPrefixAndUsesIdentityForNonuniqueNames(t *testing.T) {
@@ -185,12 +210,12 @@ func TestPiRelativeDestinationUsesCheckout(t *testing.T) {
 	cwd := t.TempDir()
 	t.Setenv("PI_CODING_AGENT_SESSION_DIR", "relative-sessions")
 	t.Setenv("PI_CODING_AGENT_DIR", "")
-	got, err := piDestination(cwd, "id.jsonl")
+	got, err := piDestination(t.Context(), cwd, "id.jsonl")
 	require.NoError(t, err)
 	assert.Equal(t, filepath.Join(cwd, "relative-sessions", "id.jsonl"), got)
 	t.Setenv("PI_CODING_AGENT_SESSION_DIR", "")
 	t.Setenv("PI_CODING_AGENT_DIR", "relative-agent")
-	got, err = piDestination(cwd, "id.jsonl")
+	got, err = piDestination(t.Context(), cwd, "id.jsonl")
 	require.NoError(t, err)
 	encoded := strings.NewReplacer("/", "-", `\`, "-", ":", "-").Replace(strings.TrimLeft(cwd, `/\`))
 	assert.Equal(t, filepath.Join(cwd, "relative-agent", "sessions", "--"+encoded+"--", "id.jsonl"), got)
@@ -200,7 +225,7 @@ func TestPiRelativeDestinationUsesCheckout(t *testing.T) {
 		urlPath = "/" + urlPath
 	}
 	t.Setenv("PI_CODING_AGENT_SESSION_DIR", (&url.URL{Scheme: "file", Path: urlPath}).String())
-	got, err = piDestination(cwd, "id.jsonl")
+	got, err = piDestination(t.Context(), cwd, "id.jsonl")
 	require.NoError(t, err)
 	assert.Equal(t, filepath.Join(urlDir, "id.jsonl"), got)
 }

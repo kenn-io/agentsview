@@ -2179,11 +2179,11 @@ Use `--json` for the source, installed paths, checkout, command, and installed
 or unchanged status. For snapshot recovery, the source is `snapshot:<id>`.
 Claude's native home and supported
 environment overrides determine its destination, independently of discovery
-roots. Pi uses its native agent directory, or its explicit session directory
-when `PI_CODING_AGENT_SESSION_DIR` is set. Local companions must resolve inside
-the configured root when the transcript is inside it; an externally linked
-project is confined to that project. Remote mirror files must remain inside the
-mirror root.
+roots. Pi uses its native agent directory, or its configured session
+directory from settings or `PI_CODING_AGENT_SESSION_DIR` (which takes priority).
+Local companions must resolve inside the configured root when the transcript is
+inside it; an externally linked project is confined to that project. Remote
+mirror files must remain inside the mirror root.
 An explicitly set `CLAUDE_CONFIG_DIR` must be an absolute path; the printed
 command preserves its spelling so Claude uses the same credentials.
 

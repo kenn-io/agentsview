@@ -79,7 +79,7 @@ func materializePi(ctx context.Context, cfg config.Config, session *db.Session, 
 		}
 		basename = id + ".jsonl"
 	}
-	dest, err := piDestination(cwd, basename)
+	dest, err := piDestination(ctx, cwd, basename)
 	if err != nil {
 		return Result{}, err
 	}
@@ -257,16 +257,73 @@ func relocatePiHeader(ctx context.Context, data []byte, id, cwd string) ([]byte,
 	return slices.Concat(data[:offset+start], encoded, data[offset+end:]), nil
 }
 
-func piDestination(cwd, basename string) (string, error) {
+func piDestination(ctx context.Context, cwd, basename string) (string, error) {
 	def, _ := parser.AgentByType(parser.AgentPi)
 	dir := os.Getenv(def.NativeEnvVar)
 	flat := dir != ""
 	if !flat {
-		dir = os.Getenv(def.DefaultRootEnvVar)
-		if dir == "" {
-			dir = "~/" + def.DefaultRootDir
+		agentDir := os.Getenv(def.DefaultRootEnvVar)
+		if agentDir == "" {
+			agentDir = "~/" + def.DefaultRootDir
+		}
+		agentDir, err := piResolveDir(cwd, agentDir)
+		if err != nil {
+			return "", err
+		}
+		dir, err = piSettingsSessionDir(ctx, agentDir, cwd, filepath.Dir(def.DefaultRootDir))
+		if err != nil {
+			return "", err
+		}
+		flat = dir != ""
+		if !flat {
+			dir = agentDir
 		}
 	}
+	dir, err := piResolveDir(cwd, dir)
+	if err != nil {
+		return "", err
+	}
+	if !flat {
+		encoded := cwd
+		if strings.HasPrefix(encoded, "/") || strings.HasPrefix(encoded, `\`) {
+			encoded = encoded[1:]
+		}
+		encoded = strings.NewReplacer("/", "-", `\`, "-", ":", "-").Replace(encoded)
+		dir = filepath.Join(dir, "sessions", "--"+encoded+"--")
+	}
+	return filepath.Join(dir, basename), nil
+}
+
+// Pi merges global and project settings, with the project value taking precedence.
+func piSettingsSessionDir(ctx context.Context, agentDir, cwd, projectConfig string) (string, error) {
+	var dir string
+	for _, name := range []string{filepath.Join(agentDir, "settings.json"), filepath.Join(cwd, projectConfig, "settings.json")} {
+		data, before, err := readFile(ctx, name, 8<<20)
+		if errors.Is(err, os.ErrNotExist) {
+			continue
+		}
+		if err != nil {
+			return "", fmt.Errorf("read Pi settings: %w", err)
+		}
+		after, err := os.Stat(name)
+		if err != nil || !os.SameFile(before, after) || before.Size() != after.Size() || before.ModTime() != after.ModTime() {
+			return "", errors.New("Pi settings changed while reading; retry when idle")
+		}
+		var settings map[string]json.RawMessage
+		if err := json.Unmarshal(data, &settings); err != nil {
+			return "", fmt.Errorf("invalid Pi settings: %w", err)
+		}
+		if value, ok := settings["sessionDir"]; ok {
+			dir = ""
+			if err := json.Unmarshal(value, &dir); err != nil {
+				return "", errors.New("Pi settings sessionDir must be a string")
+			}
+		}
+	}
+	return dir, nil
+}
+
+func piResolveDir(cwd, dir string) (string, error) {
 	if strings.HasPrefix(dir, "file://") {
 		u, err := url.Parse(dir)
 		if err != nil || u.Path == "" || u.RawQuery != "" || u.Fragment != "" || u.User != nil {
@@ -296,14 +353,5 @@ func piDestination(cwd, basename string) (string, error) {
 	if !filepath.IsAbs(expanded) {
 		expanded = filepath.Join(cwd, expanded)
 	}
-	dir = filepath.Clean(expanded)
-	if !flat {
-		encoded := cwd
-		if strings.HasPrefix(encoded, "/") || strings.HasPrefix(encoded, `\`) {
-			encoded = encoded[1:]
-		}
-		encoded = strings.NewReplacer("/", "-", `\`, "-", ":", "-").Replace(encoded)
-		dir = filepath.Join(dir, "sessions", "--"+encoded+"--")
-	}
-	return filepath.Join(dir, basename), nil
+	return filepath.Clean(expanded), nil
 }
