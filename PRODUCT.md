@@ -45,14 +45,19 @@ agentsview targets [WCAG 2.2](https://www.w3.org/TR/WCAG22/) level AA in light,
 dark, and high-contrast themes, at every interface zoom level the app offers.
 
 `frontend/e2e/axe-routes.spec.ts` runs axe-core against every main route with
-the WCAG 2.2 A and AA rules and fails on any serious or critical violation.
+the WCAG 2.2 A and AA rules and fails on any serious or critical violation,
+except one known kit-ui gap on `StatusDot` that
+[DESIGN.md](DESIGN.md#known-kit-ui-gaps-tracked-upstream) tracks with its
+removal condition.
 `frontend/e2e/appearance-a11y.spec.ts` and `frontend/e2e/text-contrast.spec.ts`
 cover zoom and contrast cases that axe cannot see. Automated checks catch only
 part of WCAG, so review new controls with a keyboard and a screen reader too.
 
 ### Everywhere
 
-- Every control is reachable with Tab and works with Enter or Space. Focus is
+- Every control works from the keyboard. Tab moves between controls and
+  composite widgets; inside a composite widget such as the command palette's
+  results, arrow keys move between items. Enter or Space activates. Focus is
   always visible, and its order follows the reading order.
 - A control's accessible name contains its visible text, so speech input can
   find it. Icon-only controls carry a localized `aria-label`.

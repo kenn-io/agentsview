@@ -15,10 +15,31 @@ interface Finding {
   targets: string[];
 }
 
+// Every loading marker a main route shows before its data arrives.
+const LOADING = [
+  '[aria-busy="true"]',
+  '[class*="skeleton"]',
+  ".settings-loading",
+  ".re-loading",
+  ".loading-state",
+  ".workspace-loading",
+  ".archive-state",
+  ".kit-refresh-control__btn.querying",
+].join(", ");
+
 /** Waits until nothing reports loading and the DOM has stopped changing for
- * half a second, so axe sees the loaded page rather than a skeleton. */
+ * half a second, so axe sees the loaded page rather than a placeholder. A
+ * loading marker can appear during the quiet wait, so check again after it. */
 async function waitForSettledPage(page: Page): Promise<void> {
-  await expect(page.locator('[aria-busy="true"], [class*="skeleton"]')).toHaveCount(0);
+  const loading = page.locator(LOADING);
+  await expect(async () => {
+    await expect(loading).toHaveCount(0);
+    await waitForQuietDom(page);
+    await expect(loading).toHaveCount(0, { timeout: 0 });
+  }).toPass();
+}
+
+async function waitForQuietDom(page: Page): Promise<void> {
   await page.evaluate(
     () =>
       new Promise<void>((resolve) => {

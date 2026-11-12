@@ -394,7 +394,7 @@
       type="button"
       class="tree-toggle"
       onclick={handleToggle}
-      tabindex="-1"
+      aria-expanded={expanded}
       aria-label={expanded ? m.sidebar_row_collapse() : m.sidebar_row_expand()}
     >
       {#if expanded}

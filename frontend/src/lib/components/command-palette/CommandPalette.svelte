@@ -4,6 +4,7 @@
     Button,
     KbdBadge,
     SegmentedControl,
+    trapFocus,
     type SegmentedControlOption,
   } from "@kenn-io/kit-ui";
   import { SearchIcon } from "../../icons.js";
@@ -129,6 +130,7 @@
     selectedColumn === 1 &&
       showSearchResults &&
       resultsListed &&
+      selectedIndex >= 0 &&
       selectedIndex < searchStore.results.length
       ? 1
       : 0,
@@ -157,7 +159,8 @@
   function handleKeydown(e: KeyboardEvent) {
     if (e.key === "ArrowDown") {
       e.preventDefault();
-      selectedIndex = Math.min(selectedIndex + 1, totalItems - 1);
+      // Clamp at 0 too: with no results yet, totalItems - 1 is -1.
+      selectedIndex = Math.max(0, Math.min(selectedIndex + 1, totalItems - 1));
     } else if (e.key === "ArrowUp") {
       e.preventDefault();
       selectedIndex = Math.max(selectedIndex - 1, 0);
@@ -175,7 +178,8 @@
     } else if (e.key === "Enter") {
       e.preventDefault();
       if (activeColumn === 1) {
-        copySessionId(searchStore.results[selectedIndex]!);
+        const result = searchStore.results[selectedIndex];
+        if (result) copySessionId(result);
       } else {
         selectCurrent();
       }
@@ -288,7 +292,15 @@
   onmousedown={handleOverlayMousedown}
   onmouseup={handleOverlayMouseup}
 >
-  <div class="palette" role="dialog" aria-modal="true" aria-label={m.command_palette_dialog_label()}>
+  <!-- trapFocus keeps Tab inside the modal and restores focus on close. -->
+  <div
+    class="palette"
+    role="dialog"
+    aria-modal="true"
+    aria-label={m.command_palette_dialog_label()}
+    tabindex="-1"
+    {@attach trapFocus}
+  >
     <div class="palette-input-wrap">
       <SearchIcon class="search-icon" size="14" strokeWidth="2" aria-hidden="true" />
       <input

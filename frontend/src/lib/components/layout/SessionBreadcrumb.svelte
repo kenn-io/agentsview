@@ -1890,8 +1890,8 @@
 
   /* The grade keeps its ink so the chip still signals health. */
   .grade-badge {
-    /* A one-letter grade still gets a 24px-wide hit box. */
-    min-width: 10px;
+    /* A one-letter grade still gets a 24px-wide hit box (border-box). */
+    min-width: 24px;
     justify-content: center;
     font-weight: 600;
     color: color-mix(in srgb, var(--grade-ink) 62%, var(--text-primary));

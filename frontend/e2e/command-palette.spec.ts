@@ -69,3 +69,24 @@ test("search shows placeholder rows at a result-list size while it runs", async 
   await expect(status).toHaveCount(0);
   await expect(page.locator(".palette-results")).toHaveAttribute("aria-busy", "false");
 });
+
+test("keeps keyboard focus inside the open palette and returns it on close", async ({ page }) => {
+  await page.goto("/usage");
+  const opener = page.locator(".kit-top-bar__tab, .kit-top-bar__nav-select button").first();
+  await opener.focus();
+  await openSearch(page, "synchronous DB read");
+  await expect(page.locator(".palette-item").first()).toBeVisible();
+
+  const insidePalette = () =>
+    page.evaluate(() => document.querySelector(".palette")?.contains(document.activeElement));
+  await page.keyboard.press("Shift+Tab");
+  expect(await insidePalette()).toBe(true);
+  for (let i = 0; i < 12; i += 1) {
+    await page.keyboard.press("Tab");
+    expect(await insidePalette()).toBe(true);
+  }
+
+  await page.keyboard.press("Escape");
+  await expect(page.locator(".palette")).toHaveCount(0);
+  await expect(opener).toBeFocused();
+});

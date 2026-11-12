@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { afterEach, describe, expect, it } from "vite-plus/test";
+import { afterEach, describe, expect, it, vi } from "vite-plus/test";
 import { flushSync, mount, unmount } from "svelte";
 import { createClassComponent } from "svelte/legacy";
 import SessionItem from "./SessionItem.svelte";
@@ -158,6 +158,18 @@ describe("SessionItem identity", () => {
     const input = document.querySelector<HTMLInputElement>(".rename-input")!;
     expect(document.activeElement).toBe(input);
     expect(document.querySelector(".context-menu")).toBeNull();
+  });
+
+  it("lets keyboard users expand a continuation chain and reports its state", () => {
+    const onToggleExpand = vi.fn();
+    mountSession({}, { continuationCount: 3, onToggleExpand, expanded: false });
+    const toggle = document.querySelector<HTMLButtonElement>(".tree-toggle")!;
+
+    expect(toggle.tabIndex).toBe(0);
+    expect(toggle.getAttribute("aria-expanded")).toBe("false");
+    toggle.focus();
+    toggle.click();
+    expect(onToggleExpand).toHaveBeenCalledOnce();
   });
 
   it("uses the singular for one message", () => {
