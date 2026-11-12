@@ -15,12 +15,15 @@ func TestAnalyticsChangesKeepUsageRevision(t *testing.T) {
 	d := testDB(t)
 	ctx := t.Context()
 	insertSession(t, d, "session", "project")
+	analyticsBefore, err := d.archiveJournalRevision(ctx, archiveMetadataAnalyticsChangeRevisionKey, "analytics change")
+	require.NoError(t, err)
 	message := asstMsgAt("session", 0, "read", "2024-06-01T09:00:00Z")
 	message.ToolCalls = []ToolCall{{SessionID: "session", ToolName: "Read", Category: "Read"}}
 	insertMessages(t, d, message)
-	before, err := d.UsageChangeRevision(ctx)
+	analyticsAfter, err := d.archiveJournalRevision(ctx, archiveMetadataAnalyticsChangeRevisionKey, "analytics change")
 	require.NoError(t, err)
-	analyticsBefore, err := d.archiveJournalRevision(ctx, archiveMetadataAnalyticsChangeRevisionKey, "analytics change")
+	require.Equal(t, analyticsBefore, analyticsAfter)
+	before, err := d.UsageChangeRevision(ctx)
 	require.NoError(t, err)
 	for _, query := range []string{
 		`UPDATE messages SET content_length = 123 WHERE session_id = 'session'`,

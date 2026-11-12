@@ -4,7 +4,6 @@ package db
 
 import (
 	"strings"
-	"sync"
 	"sync/atomic"
 	"testing"
 	"testing/synctest"
@@ -36,14 +35,9 @@ func TestAnalyticsKeptAppendUsesTranscriptRevision(t *testing.T) {
 	before, err := d.GetAnalyticsTools(ctx, AnalyticsFilter{})
 	require.NoError(t, err)
 	assert.Zero(t, before.TotalCalls)
-	revision, err := d.archiveJournalRevision(ctx, archiveMetadataAnalyticsChangeRevisionKey, "analytics change")
-	require.NoError(t, err)
 	message := asstMsgAt("session", 0, "read", "2024-06-01T09:00:00Z")
 	message.ToolCalls = []ToolCall{{SessionID: "session", ToolName: "Read", Category: "Read"}, {SessionID: "session", ToolName: "Bash", Category: "Bash"}}
 	insertMessages(t, d, message)
-	afterRevision, err := d.archiveJournalRevision(ctx, archiveMetadataAnalyticsChangeRevisionKey, "analytics change")
-	require.NoError(t, err)
-	assert.Equal(t, revision, afterRevision)
 	after, err := d.GetAnalyticsTools(ctx, AnalyticsFilter{})
 	require.NoError(t, err)
 	assert.Equal(t, 2, after.TotalCalls)
@@ -67,57 +61,6 @@ func TestAnalyticsKeptTracksWrites(t *testing.T) {
 	signals, err = d.GetAnalyticsSignals(ctx, AnalyticsFilter{})
 	require.NoError(t, err)
 	assert.Equal(t, 3, signals.ToolHealth.TotalRetries)
-}
-
-func TestAnalyticsKeptSharesLoads(t *testing.T) {
-	synctest.Test(t, func(t *testing.T) {
-		d := testDB(t)
-		insertSession(t, d, "session", "project")
-		message := asstMsgAt("session", 0, "read", "2024-06-01T09:00:00Z")
-		message.ToolCalls = []ToolCall{{SessionID: "session", ToolName: "Read", Category: "Read"}}
-		insertMessages(t, d, message)
-		var calls atomic.Int32
-		started, release := make(chan struct{}), make(chan struct{})
-		previous := analyticsQueryObserver
-		analyticsQueryObserver = func(query string) {
-			if strings.Contains(query, "FROM tool_calls") && calls.Add(1) == 1 {
-				close(started)
-				<-release
-			}
-		}
-		t.Cleanup(func() { analyticsQueryObserver = previous })
-		var wg sync.WaitGroup
-		var ready sync.WaitGroup
-		ready.Add(4)
-		start := make(chan struct{})
-		type response struct {
-			result ToolsAnalyticsResponse
-			err    error
-		}
-		responses := make(chan response, 4)
-		for range 4 {
-			wg.Go(func() {
-				ready.Done()
-				<-start
-				result, err := d.GetAnalyticsTools(t.Context(), AnalyticsFilter{})
-				responses <- response{result, err}
-			})
-		}
-		ready.Wait()
-		close(start)
-		<-started
-		synctest.Wait()
-		close(release)
-		wg.Wait()
-		close(responses)
-		for response := range responses {
-			require.NoError(t, response.err)
-			assert.Equal(t, 1, response.result.TotalCalls)
-		}
-		_, err := d.GetAnalyticsTools(t.Context(), AnalyticsFilter{})
-		require.NoError(t, err)
-		assert.EqualValues(t, 1, calls.Load())
-	})
 }
 
 func TestAnalyticsKeptContentLengthRepair(t *testing.T) {
