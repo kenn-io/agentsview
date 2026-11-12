@@ -32,7 +32,7 @@ func (f piProviderFactory) NewProvider(cfg ProviderConfig) Provider {
 		Def:     cloneAgentDef(f.def),
 		Caps:    piProviderCapabilities(f.def.Type),
 		Config:  cfg,
-		sources: newPiSourceSet(f.def.Type, cfg.Roots),
+		sources: NewPiSourceSet(f.def.Type, cfg.Roots),
 	}
 }
 
@@ -320,7 +320,8 @@ func (p *piProvider) filterDiscoveredSources(sources []SourceRef) []SourceRef {
 	return filtered
 }
 
-func newPiSourceSet(agent AgentType, roots []string) JSONLSourceSet {
+// NewPiSourceSet returns the Pi-family provider traversal without content filtering.
+func NewPiSourceSet(agent AgentType, roots []string) JSONLSourceSet {
 	// Prime Agent writes current sessions directly under its flat sessions
 	// root. Its producer migrates the older per-project layout before normal
 	// session listing, so discovery mirrors the current persisted boundary.

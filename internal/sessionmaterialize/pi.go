@@ -15,6 +15,7 @@ import (
 	"runtime"
 	"slices"
 	"strings"
+	"unicode/utf8"
 
 	"go.kenn.io/agentsview/internal/config"
 	"go.kenn.io/agentsview/internal/ctxio"
@@ -106,12 +107,8 @@ func findPiSource(ctx context.Context, cfg config.Config, session *db.Session, s
 		}
 		return ""
 	}
-	candidates := parser.NewJSONLSourceSet(parser.AgentPi, roots, parser.WithRecursive(), parser.WithSymlinkFollowing())
+	candidates := parser.NewPiSourceSet(parser.AgentPi, roots)
 	name, err := uniqueLocalSource(ctx, provider, stored, candidates.DiscoverEach, func(name string) (bool, error) {
-		root := rootFor(name)
-		if root == "" {
-			return false, errors.New("Pi source outside configured root")
-		}
 		err := checkPiHeaderFile(ctx, name, id)
 		if errors.Is(err, errPiIdentity) || errors.Is(err, errPiNotSession) {
 			return false, nil
@@ -121,7 +118,17 @@ func findPiSource(ctx context.Context, cfg config.Config, session *db.Session, s
 	if err != nil {
 		return "", nil, err
 	}
-	data, err := readPiFile(ctx, rootFor(name), name)
+	boundary := rootFor(name)
+	if boundary == "" {
+		// The provider selected a path under a configured root that follows an
+		// external link. Confine this single-file read to its resolved directory.
+		resolved, resolveErr := filepath.EvalSymlinks(name)
+		if resolveErr != nil {
+			return "", nil, resolveErr
+		}
+		boundary = filepath.Dir(resolved)
+	}
+	data, err := readPiFile(ctx, boundary, name)
 	return name, data, err
 }
 
@@ -168,31 +175,45 @@ func piHeader(ctx context.Context, r io.Reader, id string) ([]byte, int, error) 
 		if offset > 1<<20 {
 			return nil, 0, errors.New("Pi session header exceeds 1 MiB lookup limit")
 		}
-		var header struct {
-			Type    string `json:"type"`
-			ID      string `json:"id"`
-			Version *int   `json:"version"`
-		}
 		if json.Valid(line) {
-			if err := json.Unmarshal(line, &header); err != nil {
-				return nil, 0, errPiNotSession
+			trimmed := bytes.TrimSpace(line)
+			var value any
+			decodeErr := json.Unmarshal(trimmed, &value)
+			falsy := decodeErr == nil && (value == nil || value == false || value == "" || value == float64(0))
+			if falsy {
+				if err == nil {
+					continue
+				}
+			} else {
+				var header map[string]json.RawMessage
+				if json.Unmarshal(line, &header) != nil || header == nil {
+					return nil, 0, errPiNotSession
+				}
+				var kind, headerID string
+				var version *int
+				if json.Unmarshal(header["type"], &kind) != nil || kind != "session" {
+					return nil, 0, errPiNotSession
+				}
+				if value, ok := header["id"]; ok && json.Unmarshal(value, &headerID) != nil {
+					return nil, 0, errPiNotSession
+				}
+				if headerID != id {
+					return nil, 0, errPiIdentity
+				}
+				if value, ok := header["version"]; ok && json.Unmarshal(value, &version) != nil {
+					return nil, 0, errPiNotSession
+				}
+				if version != nil && (*version < 1 || *version > 3) {
+					return nil, 0, errors.New("unsupported Pi session version; Agentsview supports versions 1 through 3")
+				}
+				return line, start, nil
 			}
-			if header.Type != "session" {
-				return nil, 0, errPiNotSession
-			}
-			if header.ID != id {
-				return nil, 0, errPiIdentity
-			}
-			if header.Version != nil && (*header.Version < 1 || *header.Version > 3) {
-				return nil, 0, errors.New("unsupported Pi session version; Agentsview supports versions 1 through 3")
-			}
-			return line, start, nil
 		}
 		if err != nil {
 			if !errors.Is(err, io.EOF) {
 				return nil, 0, err
 			}
-			return nil, 0, errors.New("invalid Pi session header")
+			return nil, 0, errPiNotSession
 		}
 	}
 }
@@ -244,6 +265,9 @@ func relocatePiHeader(ctx context.Context, data []byte, id, cwd string) ([]byte,
 	if count != 1 {
 		return nil, errors.New("Pi session header requires one cwd")
 	}
+	if !utf8.ValidString(cwd) {
+		return nil, errors.New("Pi checkout path is not valid UTF-8")
+	}
 	encoded, _ := json.Marshal(cwd)
 	return slices.Concat(data[:offset+start], encoded, data[offset+end:]), nil
 }
@@ -284,7 +308,7 @@ func piSettingsSessionDir(ctx context.Context, agentDir, cwd, projectConfig stri
 			return "", fmt.Errorf("read Pi settings: %w", err)
 		}
 		var settings map[string]json.RawMessage
-		if err := json.Unmarshal(data, &settings); err != nil {
+		if err := json.Unmarshal(bytes.TrimPrefix(data, []byte("\xef\xbb\xbf")), &settings); err != nil {
 			return "", fmt.Errorf("invalid Pi settings: %w", err)
 		}
 		if value, ok := settings["sessionDir"]; ok {

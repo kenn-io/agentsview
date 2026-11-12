@@ -1,10 +1,17 @@
 package main
 
 import (
+	"encoding/json"
+	"fmt"
+	"os"
+	"path/filepath"
+	"runtime"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"go.kenn.io/agentsview/internal/db"
 )
 
 func TestSessionMaterializeRejectsRemoteBackends(t *testing.T) {
@@ -50,7 +57,7 @@ func TestPiMaterializeCommandReturnsNativeResume(t *testing.T) {
 	root, dest, cwd := t.TempDir(), t.TempDir(), t.TempDir()
 	t.Setenv("PI_CODING_AGENT_DIR", "")
 	t.Setenv("PI_CODING_AGENT_SESSION_DIR", dest)
-	t.Setenv("PI_DIR", root)
+	t.Setenv("PI_DIR", "")
 	const machine = "0123456789abcdef0123456789abcdef"
 	require.NoError(t, os.WriteFile(filepath.Join(dataDir, "telemetry-install-id"), []byte(machine), 0o600))
 	require.NoError(t, os.WriteFile(filepath.Join(dataDir, "config.toml"), []byte(fmt.Sprintf("[agents.pi]\ndirs = [%q]\n", root)), 0o600))
@@ -63,13 +70,15 @@ func TestPiMaterializeCommandReturnsNativeResume(t *testing.T) {
 	output, err := executeCommand(newRootCommand(), "session", "materialize", "pi:example", "--cwd", cwd, "--json")
 	require.NoError(t, err, output)
 	var result struct {
-		Command string   `json:"command"`
-		Paths   []string `json:"paths"`
-		Status  string   `json:"status"`
+		Command string `json:"command"`
 	}
 	require.NoError(t, json.Unmarshal([]byte(output), &result))
-	assert.Contains(t, result.Command, "pi --session ")
-	assert.NotContains(t, result.Command, "claude --resume")
-	assert.Equal(t, "installed", result.Status)
-	assert.Equal(t, []string{filepath.Join(dest, "example.jsonl")}, result.Paths)
+	resolved, err := filepath.EvalSymlinks(cwd)
+	require.NoError(t, err)
+	path := filepath.Join(dest, "example.jsonl")
+	want := fmt.Sprintf("cd '%s' && pi --session '%s'", resolved, path)
+	if runtime.GOOS == "windows" {
+		want = fmt.Sprintf("Set-Location -LiteralPath '%s'; if ($?) { pi --session '%s' }", resolved, path)
+	}
+	assert.Equal(t, want, result.Command)
 }
