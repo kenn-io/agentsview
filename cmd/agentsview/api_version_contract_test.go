@@ -1,10 +1,15 @@
 package main
 
 import (
+	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json/jsontext"
 	"encoding/json/v2"
 	"fmt"
 	"os"
+	"os/exec"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"testing"
@@ -14,71 +19,110 @@ import (
 	"go.kenn.io/agentsview/internal/server"
 )
 
-// apiVersionRecordDir holds one empty <version>-<digest hex> file per API
-// version and generated OpenAPI contract; the name is the whole record.
-// Identical contracts produce the same file, so two branches recording them
-// merge cleanly; different contracts under one version add separate files
-// that this test rejects.
+// Each record names its contract and summary digests, allowing identical
+// contracts with different summaries to merge without a file conflict.
 const apiVersionRecordDir = "cmd/agentsview/testdata/api_versions"
 
 type apiVersionRecord struct {
-	version int
-	digest  string
+	version       int
+	digest        string
+	summaryDigest string
 }
 
 func (r apiVersionRecord) name() string {
-	return fmt.Sprintf("%d-%s", r.version, strings.TrimPrefix(r.digest, "sha256:"))
+	return fmt.Sprintf("%d-%s-%s", r.version, strings.TrimPrefix(r.digest, "sha256:"), r.summaryDigest)
 }
 
-func loadAPIVersionRecords(t *testing.T) []apiVersionRecord {
-	t.Helper()
-	entries, err := os.ReadDir(strings.TrimPrefix(apiVersionRecordDir, "cmd/agentsview/"))
-	require.NoError(t, err)
-	records := make([]apiVersionRecord, 0, len(entries))
-	for _, e := range entries {
-		versionText, hex, ok := strings.Cut(e.Name(), "-")
-		version, err := strconv.Atoi(versionText)
-		require.True(t, ok && err == nil && hex != "",
-			"API version record %s must be named <version>-<digest hex>", e.Name())
-		records = append(records, apiVersionRecord{version: version, digest: "sha256:" + hex})
+func summaryDigest(summary string) string {
+	digest := sha256.Sum256([]byte(summary))
+	return hex.EncodeToString(digest[:])
+}
+
+func loadAPIVersionRecords(dir string) ([]apiVersionRecord, error) {
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return nil, err
 	}
-	return records
+	var records []apiVersionRecord
+	for _, e := range entries {
+		parts := strings.Split(e.Name(), "-")
+		if len(parts) != 3 {
+			return nil, fmt.Errorf("API version record %s must be named <version>-<contract digest>-<summary digest>", e.Name())
+		}
+		version, err := strconv.Atoi(parts[0])
+		if err != nil || version < 1 || len(parts[1]) != 64 || len(parts[2]) != 64 {
+			return nil, fmt.Errorf("invalid API version record path %s", e.Name())
+		}
+		if _, err := hex.DecodeString(parts[1]); err != nil {
+			return nil, fmt.Errorf("invalid API version record path %s", e.Name())
+		}
+		content, err := os.ReadFile(filepath.Join(dir, e.Name()))
+		if err != nil {
+			return nil, err
+		}
+		summary := strings.TrimSpace(string(content))
+		if summary == "" || strings.ContainsAny(summary, "\r\n") || (string(content) != summary && string(content) != summary+"\n") || summaryDigest(summary) != parts[2] {
+			return nil, fmt.Errorf("API version record %s must contain a trimmed one-line summary matching its summary digest", e.Name())
+		}
+		records = append(records, apiVersionRecord{version, "sha256:" + parts[1], parts[2]})
+	}
+	return records, nil
 }
 
-// checkAPIVersionContract fails when a version has multiple contract digests
-// or the generated contract differs from its record.
-func checkAPIVersionContract(apiVersion int, digest string, records []apiVersionRecord) error {
-	byVersion := map[int]apiVersionRecord{}
-	var conflict, first apiVersionRecord
-	for _, r := range records {
-		if previous, ok := byVersion[r.version]; ok && previous.digest != r.digest {
-			first, conflict = previous, r
-		} else {
-			byVersion[r.version] = r
+func baseAPIVersionRecords(ctx context.Context) ([]string, error) {
+	base := os.Getenv("API_VERSION_BASE")
+	if base == "" {
+		if os.Getenv("CI") != "" {
+			return nil, fmt.Errorf("API_VERSION_BASE is required in CI")
+		}
+		return nil, nil
+	}
+	output, err := exec.CommandContext(ctx, "git", "-C", "../..", "ls-tree", "-r", "--name-only", base, "--", apiVersionRecordDir).Output()
+	if err != nil {
+		return nil, fmt.Errorf("read API version records from base %q: %w", base, err)
+	}
+	var names []string
+	for _, path := range strings.Split(strings.TrimSpace(string(output)), "\n") {
+		if path != "" {
+			names = append(names, filepath.Base(path))
 		}
 	}
-	next := apiVersion + 1
-	if conflict.digest != "" {
-		return fmt.Errorf("API version %d has different contract digests (%s, %s); "+
-			"delete the file this PR added, rebase onto main after the earlier PR merges, "+
-			"and rerun make test-api-version. The next free version is %d",
-			conflict.version, first.name(), conflict.name(), next)
-	}
-	move := fmt.Sprintf("this PR's contract (%s) needs API version %d: in %s add an empty "+
-		"file %s, set server.APIVersion to %d, and move any feature minimum this PR "+
-		"introduced to %d (see docs/agents/storage.md)",
-		digest, next, apiVersionRecordDir, apiVersionRecord{next, digest}.name(), next, next)
+	return names, nil
+}
 
+func checkAPIVersionContract(apiVersion int, digest string, records []apiVersionRecord, base []string) error {
+	byVersion := map[int]apiVersionRecord{}
+	paths := map[string]bool{}
+	for _, r := range records {
+		paths[r.name()] = true
+		if previous, ok := byVersion[r.version]; ok && previous.digest != r.digest {
+			return fmt.Errorf("API version %d has different contract digests (%s, %s); delete the file this PR added, rebase onto main after the earlier PR merges, and rerun make test-api-version. The next free version is %d", r.version, previous.name(), r.name(), apiVersion+1)
+		}
+		byVersion[r.version] = r
+	}
+	used := false
+	for _, name := range base {
+		if !paths[name] {
+			return fmt.Errorf("API version record %s from the target base is missing; restore it", name)
+		}
+		version, _, _ := strings.Cut(name, "-")
+		if version == strconv.Itoa(apiVersion) {
+			used = true
+		}
+	}
+	path := func(version int) string { return apiVersionRecord{version, digest, "<summary digest>"}.name() }
 	record, ok := byVersion[apiVersion]
 	if !ok {
-		return fmt.Errorf("API version %d has no contract record; in %s add an empty file %s",
-			apiVersion, apiVersionRecordDir, apiVersionRecord{apiVersion, digest}.name())
+		return fmt.Errorf("API version %d has no contract record; in %s add %s with a one-line summary and its SHA-256 digest in the filename", apiVersion, apiVersionRecordDir, path(apiVersion))
 	}
 	if record.digest == digest {
 		return nil
 	}
-	return fmt.Errorf("generated OpenAPI contract changed under API version %d; %s",
-		apiVersion, move)
+	if !used {
+		return fmt.Errorf("generated OpenAPI contract changed under API version %d; replace this branch's record with %s in %s, with a one-line summary and its SHA-256 digest in the filename", apiVersion, path(apiVersion), apiVersionRecordDir)
+	}
+	next := apiVersion + 1
+	return fmt.Errorf("generated OpenAPI contract changed under API version %d; in %s add %s with a one-line summary and its SHA-256 digest in the filename, set server.APIVersion to %d, and move any feature minimum this PR introduced to %d (see docs/agents/storage.md)", apiVersion, apiVersionRecordDir, path(next), next, next)
 }
 
 func TestAPIVersionContract(t *testing.T) {
@@ -88,7 +132,11 @@ func TestAPIVersionContract(t *testing.T) {
 	require.NoError(t, err)
 	digest, err := export.DigestCanonical(document)
 	require.NoError(t, err)
-	require.NoError(t, checkAPIVersionContract(server.APIVersion, digest, loadAPIVersionRecords(t)))
+	records, err := loadAPIVersionRecords(strings.TrimPrefix(apiVersionRecordDir, "cmd/agentsview/"))
+	require.NoError(t, err)
+	base, err := baseAPIVersionRecords(t.Context())
+	require.NoError(t, err)
+	require.NoError(t, checkAPIVersionContract(server.APIVersion, digest, records, base))
 }
 
 // Named maps contain contract names, including names that match prose fields.
@@ -134,38 +182,77 @@ func stripOpenAPIProse(value jsontext.Value, namedMap bool) (jsontext.Value, err
 }
 
 func TestCheckAPIVersionContract(t *testing.T) {
-	const (
-		base   = "sha256:aaaa"
-		left   = "sha256:bbbb"
-		right  = "sha256:cccc"
-		merged = "sha256:dddd"
-	)
-	rec := func(version int, digest string) apiVersionRecord {
-		return apiVersionRecord{version: version, digest: digest}
-	}
+	base := apiVersionRecord{15, "sha256:aaaa", "summary-a"}
+	left := apiVersionRecord{16, "sha256:bbbb", "summary-b"}
+	right := apiVersionRecord{16, "sha256:cccc", "summary-c"}
+	merged := "sha256:dddd"
 
-	t.Run("changed contract under same version names next", func(t *testing.T) {
-		err := checkAPIVersionContract(16, left, []apiVersionRecord{rec(16, base)})
-		require.ErrorContains(t, err, "changed under API version 16")
-		require.ErrorContains(t, err, "add an empty file 17-bbbb, set server.APIVersion to 17")
+	t.Run("used version requires next version", func(t *testing.T) {
+		err := checkAPIVersionContract(15, left.digest, []apiVersionRecord{base}, []string{base.name()})
+		require.ErrorContains(t, err, "16-bbbb-<summary digest>")
+		require.ErrorContains(t, err, "set server.APIVersion to 16")
 		require.ErrorContains(t, err, "feature minimum")
 	})
-
-	t.Run("divergent version 16 contracts name both records and 17, then repair passes", func(t *testing.T) {
-		// The queue merges both PRs, so the generated contract carries both
-		// changes and matches neither version 16 record.
-		records := []apiVersionRecord{rec(15, base), rec(16, left), rec(16, right)}
-		err := checkAPIVersionContract(16, merged, records)
-		require.ErrorContains(t, err, "API version 16 has different contract digests (16-bbbb, 16-cccc)")
-		require.ErrorContains(t, err, "delete the file this PR added, rebase onto main after the earlier PR merges")
-		require.ErrorContains(t, err, "rerun make test-api-version. The next free version is 17")
-
-		repaired := []apiVersionRecord{rec(15, base), rec(16, left), rec(17, merged)}
-		require.NoError(t, checkAPIVersionContract(17, merged, repaired))
+	t.Run("base record cannot be replaced or deleted", func(t *testing.T) {
+		err := checkAPIVersionContract(15, left.digest, []apiVersionRecord{{15, left.digest, "summary-b"}}, []string{base.name()})
+		require.ErrorContains(t, err, base.name()+" from the target base is missing; restore it")
+		err = checkAPIVersionContract(15, base.digest, nil, []string{base.name()})
+		require.ErrorContains(t, err, "restore it")
 	})
-
-	t.Run("current version without record asks for one", func(t *testing.T) {
-		err := checkAPIVersionContract(17, left, []apiVersionRecord{rec(16, base)})
-		require.ErrorContains(t, err, "API version 17 has no contract record; in "+apiVersionRecordDir+" add an empty file 17-bbbb")
+	t.Run("branch record can be replaced at the same version", func(t *testing.T) {
+		err := checkAPIVersionContract(16, merged, []apiVersionRecord{base, left}, []string{base.name()})
+		require.ErrorContains(t, err, "replace this branch's record with 16-dddd-<summary digest>")
 	})
+	t.Run("collision and repair", func(t *testing.T) {
+		err := checkAPIVersionContract(16, merged, []apiVersionRecord{base, left, right}, []string{base.name()})
+		require.ErrorContains(t, err, left.name()+", "+right.name())
+		require.ErrorContains(t, err, "rebase onto main")
+		require.ErrorContains(t, err, "next free version is 17")
+		err = checkAPIVersionContract(16, merged, []apiVersionRecord{base, left}, []string{base.name(), left.name()})
+		require.ErrorContains(t, err, "17-dddd-<summary digest>")
+		require.NoError(t, checkAPIVersionContract(17, merged, []apiVersionRecord{base, left, {17, merged, "summary-d"}}, []string{base.name(), left.name()}))
+	})
+	t.Run("same contract with different summaries", func(t *testing.T) {
+		require.NoError(t, checkAPIVersionContract(16, left.digest, []apiVersionRecord{left, {16, left.digest, "other"}}, nil))
+	})
+	t.Run("missing current record", func(t *testing.T) {
+		err := checkAPIVersionContract(16, left.digest, []apiVersionRecord{base}, nil)
+		require.ErrorContains(t, err, "16-bbbb-<summary digest>")
+		require.ErrorContains(t, err, "one-line summary")
+	})
+}
+
+func TestLoadAPIVersionRecords(t *testing.T) {
+	for _, tc := range []struct {
+		name, content, hash string
+		valid               bool
+	}{
+		{"valid", "Initial contract\n", summaryDigest("Initial contract"), true},
+		{"empty", "", summaryDigest(""), false},
+		{"multiline", "first\nsecond\n", summaryDigest("first\nsecond"), false},
+		{"wrong digest", "Initial contract\n", summaryDigest("other"), false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			dir := t.TempDir()
+			name := "15-" + strings.Repeat("a", 64) + "-" + tc.hash
+			require.NoError(t, os.WriteFile(filepath.Join(dir, name), []byte(tc.content), 0600))
+			_, err := loadAPIVersionRecords(dir)
+			if tc.valid {
+				require.NoError(t, err)
+			} else {
+				require.ErrorContains(t, err, name)
+			}
+		})
+	}
+}
+
+func TestBaseAPIVersionRecords(t *testing.T) {
+	t.Setenv("CI", "true")
+	t.Setenv("API_VERSION_BASE", "")
+	_, err := baseAPIVersionRecords(t.Context())
+	require.ErrorContains(t, err, "API_VERSION_BASE is required in CI")
+
+	t.Setenv("API_VERSION_BASE", "missing-api-version-base")
+	_, err = baseAPIVersionRecords(t.Context())
+	require.ErrorContains(t, err, "read API version records from base")
 }
