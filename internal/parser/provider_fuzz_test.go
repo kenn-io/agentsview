@@ -117,6 +117,7 @@ const providerFuzzListEnv = "AGENTSVIEW_LIST_PROVIDER_FUZZ_TARGETS"
 
 // fuzzProvider is the body of every FuzzProvider<Name> target.
 func fuzzProvider(f *testing.F, agent AgentType) {
+	f.Helper()
 	if os.Getenv(providerFuzzListEnv) != "" {
 		fmt.Printf("provider-fuzz-target %s %s\n", f.Name(), agent)
 		f.SkipNow()
@@ -146,12 +147,16 @@ func fuzzProvider(f *testing.F, agent AgentType) {
 	})
 }
 
-// isolateProviderFuzzHome points home-relative lookups at an empty
-// directory so a provider never reads the developer's real sessions.
-func isolateProviderFuzzHome(tb interface {
+// providerFuzzEnv is the part of *testing.T and *testing.F that home
+// isolation needs.
+type providerFuzzEnv interface {
 	TempDir() string
 	Setenv(key, value string)
-}) {
+}
+
+// isolateProviderFuzzHome points home-relative lookups at an empty
+// directory so a provider never reads the developer's real sessions.
+func isolateProviderFuzzHome(tb providerFuzzEnv) {
 	home := tb.TempDir()
 	tb.Setenv("HOME", home)
 	tb.Setenv("USERPROFILE", home)
@@ -226,7 +231,8 @@ func parseProviderFuzzInput(t *testing.T, target providerFuzzTarget, data []byte
 		require.Nil(t, out.panic, "%s provider panicked:\n%s", target.agent, out.stack)
 		return out.results
 	case <-timer.C:
-		t.Fatalf("%s provider did not finish within %s", target.agent, providerFuzzDeadline)
+		require.FailNow(t, "provider did not finish",
+			"%s provider did not finish within %s", target.agent, providerFuzzDeadline)
 		return nil
 	}
 }
@@ -300,8 +306,8 @@ func parsedOutputBytes(v reflect.Value, depth int) int {
 		return parsedOutputBytes(v.Elem(), depth+1)
 	case reflect.Struct:
 		n := 0
-		for i := range v.NumField() {
-			n += parsedOutputBytes(v.Field(i), depth+1)
+		for _, field := range v.Fields() {
+			n += parsedOutputBytes(field, depth+1)
 		}
 		return n
 	default:
@@ -368,7 +374,7 @@ func TestParsedOutputBytesCountsEveryField(t *testing.T) {
 		Session: ParsedSession{
 			ID:           "abc",
 			FirstMessage: "hello",
-			StartedAt:    time.Date(2026, 1, 2, 3, 4, 5, 0, time.Local),
+			StartedAt:    time.Date(2026, 1, 2, 3, 4, 5, 0, time.FixedZone("zone", 3600)),
 		},
 		Messages: []ParsedMessage{{
 			Content:         "hi",
