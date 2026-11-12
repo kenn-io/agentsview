@@ -1008,9 +1008,9 @@ or an in-window Claude peer changes; a changed project identity map also
 invalidates it. Partial reports, read-only archives, and reports filtered by
 active, stale, or unclean termination status bypass this cache.
 
-SQLite uses `usage_change_revision` to invalidate kept Tools, Velocity, and
-Signals reports. Tool-call writes, message content-length repairs, and signal
-updates advance the counter without adding a Usage session-change entry.
+SQLite uses `usage_change_revision` and `analytics_change_revision` to invalidate
+kept Tools, Velocity, and Signals reports. Tool-call writes, message
+content-length repairs, and signal updates advance the analytics counter.
 
 PostgreSQL keeps ongoing Activity reports' per-session activity and raw usage
 inputs in memory with a 128 MiB estimated-size budget. Each session keeps its

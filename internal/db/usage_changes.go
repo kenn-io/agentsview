@@ -7,8 +7,9 @@ import (
 )
 
 const (
-	archiveMetadataUsageChangeRevisionKey  = "usage_change_revision"
-	archiveMetadataUsagePricingRevisionKey = "usage_pricing_revision"
+	archiveMetadataUsageChangeRevisionKey     = "usage_change_revision"
+	archiveMetadataUsagePricingRevisionKey    = "usage_pricing_revision"
+	archiveMetadataAnalyticsChangeRevisionKey = "analytics_change_revision"
 )
 
 // Replace triggers atomically with column migrations.
@@ -18,6 +19,12 @@ func usageChangeJournalSQL() (string, string) {
 	const counterBody = `
  INSERT INTO archive_metadata (key, value)
   VALUES ('usage_change_revision', '1')
+ ON CONFLICT(key) DO UPDATE SET
+  value = CAST(value AS INTEGER) + 1,
+  updated_at = strftime('%Y-%m-%dT%H:%M:%fZ','now');`
+	const analyticsCounterBody = `
+ INSERT INTO archive_metadata (key, value)
+  VALUES ('analytics_change_revision', '1')
  ON CONFLICT(key) DO UPDATE SET
   value = CAST(value AS INTEGER) + 1,
   updated_at = strftime('%Y-%m-%dT%H:%M:%fZ','now');`
@@ -37,6 +44,9 @@ func usageChangeJournalSQL() (string, string) {
 	add := func(name, event, table, condition, sessionID string) {
 		fmt.Fprintf(&drops, "DROP TRIGGER IF EXISTS %s;\n", name)
 		body := counterBody
+		if strings.Contains(name, "_analytics_change_") {
+			body = analyticsCounterBody
+		}
 		if sessionID != "" {
 			body = strings.ReplaceAll(sessionBody, "{{session_id}}", sessionID)
 		}
@@ -121,9 +131,8 @@ func usageChangeJournalSQL() (string, string) {
 }
 
 // UsageChangeRevision returns the trigger-maintained revision for usage facts,
-// session filter dimensions, Activity and Signals session columns, tool calls,
-// message content lengths, and pricing catalog writes. Some changes advance the
-// counter without recording a session in usage_session_changes. Revision 0
+// session filter dimensions, and pricing catalog writes. Pricing changes advance
+// the counter without recording a session in usage_session_changes. Revision 0
 // means no history. Readers must pair it with database_id because rebuilt
 // archives restart the counter.
 func (db *DB) UsageChangeRevision(ctx context.Context) (int64, error) {

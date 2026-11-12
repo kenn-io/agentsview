@@ -236,15 +236,22 @@ func TestAnalyticsKeptTriggerUpgrade(t *testing.T) {
 	message := asstMsgAt("session", 0, "read", "2024-06-01T09:00:00Z")
 	message.ToolCalls = []ToolCall{{SessionID: "session", ToolName: "Read", Category: "Read"}}
 	insertMessages(t, d, message)
-	_, err := d.getWriter().ExecContext(ctx, `DROP TRIGGER trg_tool_calls_analytics_change_update`)
+	_, err := d.getWriter().ExecContext(ctx, `DROP TRIGGER trg_tool_calls_analytics_change_update;
+		CREATE TRIGGER trg_tool_calls_analytics_change_update AFTER UPDATE ON tool_calls
+		BEGIN UPDATE archive_metadata SET value = CAST(value AS INTEGER) + 1 WHERE key = 'usage_change_revision'; END`)
 	require.NoError(t, err)
 	upgraded, err := OpenIsolated(ctx, d.Path())
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, upgraded.Close()) })
 	_, err = upgraded.GetAnalyticsTools(ctx, AnalyticsFilter{})
 	require.NoError(t, err)
+	usageBefore, err := upgraded.UsageChangeRevision(ctx)
+	require.NoError(t, err)
 	_, err = upgraded.getWriter().ExecContext(ctx, `UPDATE tool_calls SET tool_name = 'Bash', category = 'Bash' WHERE session_id = 'session'`)
 	require.NoError(t, err)
+	usageAfter, err := upgraded.UsageChangeRevision(ctx)
+	require.NoError(t, err)
+	assert.Equal(t, usageBefore, usageAfter)
 	result, err := upgraded.GetAnalyticsTools(ctx, AnalyticsFilter{})
 	require.NoError(t, err)
 	require.Len(t, result.ByCategory, 1)

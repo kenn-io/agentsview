@@ -11,7 +11,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestAnalyticsChangesAdvanceCounterWithoutUsageSessionChanges(t *testing.T) {
+func TestAnalyticsChangesKeepUsageRevision(t *testing.T) {
 	d := testDB(t)
 	ctx := t.Context()
 	insertSession(t, d, "session", "project")
@@ -20,14 +20,16 @@ func TestAnalyticsChangesAdvanceCounterWithoutUsageSessionChanges(t *testing.T) 
 	insertMessages(t, d, message)
 	before, err := d.UsageChangeRevision(ctx)
 	require.NoError(t, err)
+	analyticsBefore, err := d.archiveJournalRevision(ctx, archiveMetadataAnalyticsChangeRevisionKey, "analytics change")
+	require.NoError(t, err)
 	_, err = d.getWriter().ExecContext(ctx, `UPDATE messages SET content_length = 123 WHERE session_id = 'session'; UPDATE tool_calls SET observed_outcome = 'empty' WHERE session_id = 'session'; UPDATE sessions SET tool_retry_count = 3 WHERE id = 'session'`)
 	require.NoError(t, err)
 	after, err := d.UsageChangeRevision(ctx)
 	require.NoError(t, err)
-	assert.Equal(t, before+3, after)
-	changed, err := d.LoadUsageChanges(ctx, before, after)
+	assert.Equal(t, before, after)
+	analyticsAfter, err := d.archiveJournalRevision(ctx, archiveMetadataAnalyticsChangeRevisionKey, "analytics change")
 	require.NoError(t, err)
-	assert.Empty(t, changed)
+	assert.Equal(t, analyticsBefore+3, analyticsAfter)
 }
 
 func TestUsageChangeJournal(t *testing.T) {

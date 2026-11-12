@@ -24,22 +24,24 @@ func keptAnalytics[T any](ctx context.Context, db *DB, panel string, f Analytics
 		return load(ctx, f)
 	}
 	var id string
-	var rawRevision string
+	var rawRevision, rawAnalyticsRevision string
 	err = db.getReader().QueryRowContext(ctx, `SELECT
 		COALESCE((SELECT value FROM archive_metadata WHERE key = ?), ''),
+		COALESCE((SELECT value FROM archive_metadata WHERE key = ?), '0'),
 		COALESCE((SELECT value FROM archive_metadata WHERE key = ?), '0')`,
-		archiveMetadataDatabaseIDKey, archiveMetadataUsageChangeRevisionKey).Scan(&id, &rawRevision)
+		archiveMetadataDatabaseIDKey, archiveMetadataUsageChangeRevisionKey, archiveMetadataAnalyticsChangeRevisionKey).Scan(&id, &rawRevision, &rawAnalyticsRevision)
 	if err != nil || strings.TrimSpace(id) == "" {
 		return load(ctx, f)
 	}
 	revision, err := strconv.ParseInt(strings.TrimSpace(rawRevision), 10, 64)
-	if err != nil || revision < 0 {
+	if err != nil {
 		return load(ctx, f)
 	}
-	db.analyticsKeptOnce.Do(func() {
-		db.analyticsKept.Size = func(value []byte) int64 { return int64(len(value)) }
-	})
-	encoded, err := db.analyticsKept.Do(ctx, panel+"|"+string(key), fmt.Sprintf("%s|%d", id, revision), func(ctx context.Context) ([]byte, error) {
+	analyticsRevision, err := strconv.ParseInt(strings.TrimSpace(rawAnalyticsRevision), 10, 64)
+	if err != nil {
+		return load(ctx, f)
+	}
+	encoded, err := db.analyticsKept.Do(ctx, panel+"|"+string(key), fmt.Sprintf("%s|%d|%d", id, revision, analyticsRevision), func(ctx context.Context) ([]byte, error) {
 		value, err := load(ctx, f)
 		if err != nil {
 			return nil, err

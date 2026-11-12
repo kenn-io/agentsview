@@ -935,7 +935,6 @@ type DB struct {
 	activityMemo         activityCandidateMemo
 	activityKept         kept.Memo[activityKept]
 	analyticsKept        kept.Reads[[]byte]
-	analyticsKeptOnce    sync.Once
 	sessionStatsFacts    *sessionStatsFactsMemo
 	frustrationMemo      FrustrationMarkerMemo
 	usageBackfillMu      sync.Mutex

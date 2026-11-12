@@ -28,12 +28,21 @@ func TestChangeStreamUsageCacheServesLongSessionAcrossPages(t *testing.T) {
 	require.NoError(t, d.InsertMessages(t.Context(), msgs))
 
 	var cache ChangeStreamUsageCache
+	var cachedUsage *changeStreamSessionUsage
 	pages, sent := 0, 0
 	cursor := ""
 	for {
 		batch, err := d.ReadChangeStream(t.Context(), cursor, &cache)
 		require.NoError(t, err)
 		pages++
+		if pages == 1 {
+			cachedUsage = cache.sessions["long"]
+			require.NotNil(t, cachedUsage)
+			score := 70
+			require.NoError(t, d.UpdateSessionSignals(t.Context(), "long", SessionSignalUpdate{HealthScore: &score, QualitySignals: QualitySignals{Version: CurrentQualitySignalVersion}}))
+		} else {
+			assert.True(t, cachedUsage == cache.sessions["long"], "page %d should reuse cached usage", pages)
+		}
 		require.Len(t, batch.Sessions, 1)
 		require.NotNil(t, batch.Sessions[0].Usage)
 		assert.Equal(t, 1001, batch.Sessions[0].Usage.InputTokens, "page %d", pages)
