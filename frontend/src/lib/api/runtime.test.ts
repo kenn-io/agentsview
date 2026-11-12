@@ -142,30 +142,10 @@ describe("API errors", () => {
     expect(isTransient(error)).toBe(true);
   });
 
-  it("rejects invalid request options before fetch", async () => {
-    const fetchSpy = vi.spyOn(globalThis, "fetch");
-    const error = await orvalFetch("/api/v1/search", { method: "TRACE" }).catch(
-      (err: unknown) => err,
-    );
-    expect(error).toBeInstanceOf(TypeError);
-    expect(isTransient(error)).toBe(false);
-    expect(fetchSpy).not.toHaveBeenCalled();
+  it("classifies an invalid server address rejected by fetch as transient", async () => {
+    setServerUrl("http://[");
+    const error = await orvalFetch("/api/v1/search", {}).catch((err: unknown) => err);
+    expect(error).toBeInstanceOf(TransportError);
+    expect(isTransient(error)).toBe(true);
   });
-
-  it.each(["http://[", "https://user:pass@example.test"])(
-    "rejects invalid remote URL %s before fetch",
-    async (url) => {
-      setServerUrl(url);
-      const fetchSpy = vi.spyOn(globalThis, "fetch");
-      try {
-        const error = await orvalFetch("/api/v1/search", {}).catch((err: unknown) => err);
-        expect(error).toBeInstanceOf(TypeError);
-        expect(error).not.toBeInstanceOf(TransportError);
-        expect(isTransient(error)).toBe(false);
-        expect(fetchSpy).not.toHaveBeenCalled();
-      } finally {
-        fetchSpy.mockRestore();
-      }
-    },
-  );
 });

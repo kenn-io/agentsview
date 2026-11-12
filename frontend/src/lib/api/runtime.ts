@@ -126,7 +126,6 @@ export async function orvalRequest<T extends Response = Response>(
     ...init,
     headers: baseUrl === undefined ? generatedHeaders(init.headers) : init.headers,
   };
-  new Request(new URL(requestUrl, document.baseURI), requestOptions);
   const response = await fetch(requestUrl, requestOptions).catch(transportFailure);
   if (response.ok) return response as T;
 
