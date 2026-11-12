@@ -303,6 +303,11 @@ const usageChangeRevisionSQL = `coalesce((
  AND EXISTS (SELECT 1 FROM sync_metadata WHERE key = 'usage_change_journal_version' AND value = $1)
 ), 0)`
 
+const supportedUsageChangeRevisionSQL = `coalesce((
+ SELECT value::bigint FROM sync_metadata WHERE key = 'usage_change_revision'
+ AND EXISTS (SELECT 1 FROM sync_metadata WHERE key = 'usage_change_journal_version' AND value IN ('1', $1))
+), 0)`
+
 // UsageChangeRevision returns the current revision, or 0 when the journal is
 // unavailable. See LoadUsageChanges.
 func (s *Store) UsageChangeRevision(ctx context.Context) (int64, error) {
@@ -341,7 +346,7 @@ func (s *Store) LoadUsageChanges(ctx context.Context, afterRevision int64) (int6
 
 func (s *Store) loadUsageChanges(ctx context.Context, afterRevision int64) (int64, []string, error) {
 	rows, err := s.pg.QueryContext(ctx, `SELECT r.revision, c.session_id
- FROM (SELECT `+usageChangeRevisionSQL+` AS revision) r
+ FROM (SELECT `+supportedUsageChangeRevisionSQL+` AS revision) r
  LEFT JOIN usage_session_changes c ON r.revision > 0 AND c.revision > $2 AND c.revision <= r.revision AND c.session_id <> ''
  ORDER BY c.revision, c.session_id`, strconv.Itoa(usageChangeJournalVersionPG), afterRevision)
 	if err != nil {
