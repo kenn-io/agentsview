@@ -167,11 +167,11 @@ func readConfiguredLocal(ctx context.Context, cfg config.Config, session *db.Ses
 	roots := configuredRoots(cfg, session, parser.AgentClaude)
 	provider, ok := parser.NewProvider(parser.AgentClaude, parser.ProviderConfig{Roots: roots, Machine: cfg.InstallationID, SourceMachines: cfg.SourceMachines[parser.AgentClaude]})
 	discoverer, streaming := provider.(parser.StreamingDiscoverer)
-	if !ok || !streaming {
+	allRoots := localRoots(cfg, parser.AgentClaude)
+	recorded, recordedOK := parser.NewProvider(parser.AgentClaude, parser.ProviderConfig{Roots: allRoots})
+	if !ok || !streaming || !recordedOK {
 		return nil, "", errors.New("native source provider unavailable")
 	}
-	allRoots := localRoots(cfg, parser.AgentClaude)
-	recorded, _ := parser.NewProvider(parser.AgentClaude, parser.ProviderConfig{Roots: allRoots})
 	name, err := uniqueLocalSource(ctx, recorded, stored, discoverer.DiscoverEach, func(name string) (bool, error) {
 		return filepath.Base(name) == id+".jsonl", nil
 	})
