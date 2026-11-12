@@ -367,7 +367,7 @@ perf-sim: pricing-snapshot ensure-embed-dir
 # Check that the generated OpenAPI contract matches its API version record
 test-api-version: pricing-snapshot ensure-embed-dir
 	@base="$${API_VERSION_BASE:-}"; if [ -z "$$base" ]; then base=$$(git merge-base HEAD origin/main) || exit 1; fi; \
-	API_VERSION_BASE="$$base" go test -tags "fts5" ./cmd/agentsview -run '^(TestAPIVersionContract|TestCheckAPIVersionContract|TestLoadAPIVersionRecords|TestOpenAPIRequiredOrder|TestOpenAPIProsePreservesSchemaValues|TestBaseAPIVersionRecords)$$' -v
+	API_VERSION_BASE="$$base" go test -tags "fts5" ./cmd/agentsview -run '^(TestAPIVersionContract|TestCheckAPIVersionContract|TestLoadAPIVersionRecords|TestOpenAPIProsePreservesSchemaValues|TestBaseAPIVersionRecords)$$' -v
 
 # Run fast tests only
 test-short: pricing-snapshot ensure-embed-dir

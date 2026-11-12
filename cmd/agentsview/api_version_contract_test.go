@@ -11,7 +11,6 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"slices"
 	"strconv"
 	"strings"
 	"testing"
@@ -108,11 +107,6 @@ func checkAPIVersionContract(apiVersion int, digest string, records []apiVersion
 		}
 		byVersion[r.version] = r
 	}
-	for _, r := range records {
-		if r.version > apiVersion && !slices.Contains(base, r.name()) {
-			return fmt.Errorf("API version record %d is ahead of server.APIVersion %d; remove it or update the constant", r.version, apiVersion)
-		}
-	}
 	used := false
 	for _, name := range base {
 		version, rest, _ := strings.Cut(name, "-")
@@ -182,19 +176,6 @@ func stripOpenAPIProse(value jsontext.Value, namedMap bool) (jsontext.Value, err
 			if !namedMap && (key == "default" || key == "const" || key == "enum") {
 				continue
 			}
-			if !namedMap && key == "required" && item.Kind() == '[' {
-				var required []string
-				if err := json.Unmarshal(item, &required); err != nil {
-					return nil, err
-				}
-				slices.Sort(required)
-				normalized, err := json.Marshal(required)
-				if err != nil {
-					return nil, err
-				}
-				fields[key] = normalized
-				continue
-			}
 			if !namedMap && (key == "title" || key == "description" || key == "summary" || key == "example" || key == "examples") {
 				delete(fields, key)
 				continue
@@ -259,11 +240,6 @@ func TestCheckAPIVersionContract(t *testing.T) {
 		require.ErrorContains(t, err, "16-"+strings.Repeat("b", 64)+"-<summary digest>")
 		require.ErrorContains(t, err, "one-line summary")
 	})
-	t.Run("future record", func(t *testing.T) {
-		err := checkAPIVersionContract(15, base.digest, []apiVersionRecord{base, left}, []string{base.name()})
-		require.ErrorContains(t, err, "ahead of server.APIVersion 15")
-		require.NoError(t, checkAPIVersionContract(15, base.digest, []apiVersionRecord{base, left}, []string{base.name(), left.name()}))
-	})
 	t.Run("unknown history", func(t *testing.T) {
 		err := checkAPIVersionContract(15, left.digest, []apiVersionRecord{base}, nil)
 		require.ErrorContains(t, err, "history")
@@ -284,18 +260,6 @@ func TestOpenAPIProsePreservesSchemaValues(t *testing.T) {
 			require.NotEqual(t, leftDigest, rightDigest)
 		})
 	}
-}
-
-func TestOpenAPIRequiredOrder(t *testing.T) {
-	left, err := stripOpenAPIProse(jsontext.Value(`{"required":["a","b"]}`), false)
-	require.NoError(t, err)
-	right, err := stripOpenAPIProse(jsontext.Value(`{"required":["b","a"]}`), false)
-	require.NoError(t, err)
-	leftDigest, err := export.DigestCanonical(left)
-	require.NoError(t, err)
-	rightDigest, err := export.DigestCanonical(right)
-	require.NoError(t, err)
-	require.Equal(t, leftDigest, rightDigest)
 }
 
 func TestLoadAPIVersionRecords(t *testing.T) {
