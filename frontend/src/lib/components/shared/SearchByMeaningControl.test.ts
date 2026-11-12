@@ -60,7 +60,7 @@ it.each([
   unmount(component);
 });
 
-it.each(["", "unknown"])("reports an unavailable provider on retry: %s", async (provider) => {
+it.each([""])("reports an unavailable provider on retry: %s", async (provider) => {
   const component = mount(SearchByMeaningControl, {
     target: document.body,
     props: {

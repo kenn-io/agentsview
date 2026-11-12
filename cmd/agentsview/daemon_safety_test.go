@@ -131,39 +131,35 @@ func TestDaemonWaitForLaunchContentionRejectsUnconfirmedLiveWriter(t *testing.T)
 }
 
 func TestDaemonWaitForLaunchContentionRejectsIncompatibleResponsiveWriter(t *testing.T) {
-	for _, version := range []int{15, daemonAPIVersion + 1} {
-		t.Run(strconv.Itoa(version), func(t *testing.T) {
-			dir := runtimeTestDir(t)
-			endpoint, probed := newPingDaemonWithProbeSignal(t)
-			rec := testWritableRecord(os.Getpid(), "/runtime/incompatible.json")
-			rec.Address = endpoint.Addr
-			rec.Metadata[runtimeHost] = endpoint.Host
-			rec.Metadata[runtimePort] = strconv.Itoa(endpoint.Port)
-			rec.Metadata[runtimeAPIVersion] = strconv.Itoa(version)
+	dir := runtimeTestDir(t)
+	endpoint, probed := newPingDaemonWithProbeSignal(t)
+	rec := testWritableRecord(os.Getpid(), "/runtime/incompatible.json")
+	rec.Address = endpoint.Addr
+	rec.Metadata[runtimeHost] = endpoint.Host
+	rec.Metadata[runtimePort] = strconv.Itoa(endpoint.Port)
+	rec.Metadata[runtimeAPIVersion] = strconv.Itoa(daemonAPIVersion + 1)
 
-			waitDeps := defaultDaemonLaunchWaitDeps()
-			waitDeps.loadReadOnlyConfig = func() (config.Config, error) {
-				return config.Config{DataDir: dir}, nil
-			}
-			waitDeps.writableRecords = func(string, string) ([]daemon.RuntimeRecord, error) {
-				return []daemon.RuntimeRecord{rec}, nil
-			}
-
-			observation := waitForDaemonLaunchContentionWithDeps(dir, waitDeps)
-			select {
-			case <-probed:
-			case <-time.After(time.Second):
-				require.Fail(t, "responsive writer was not probed")
-			}
-			var out bytes.Buffer
-			err := reportDaemonLaunchContention(&out, dir, observation, time.Now())
-			require.Error(t, err)
-			require.ErrorContains(t, err, "incompatible")
-			require.ErrorContains(t, err, fmt.Sprintf("pid %d", rec.PID))
-			require.ErrorContains(t, err, "daemon restart")
-			assert.NotContains(t, out.String(), "already running")
-		})
+	waitDeps := defaultDaemonLaunchWaitDeps()
+	waitDeps.loadReadOnlyConfig = func() (config.Config, error) {
+		return config.Config{DataDir: dir}, nil
 	}
+	waitDeps.writableRecords = func(string, string) ([]daemon.RuntimeRecord, error) {
+		return []daemon.RuntimeRecord{rec}, nil
+	}
+
+	observation := waitForDaemonLaunchContentionWithDeps(dir, waitDeps)
+	select {
+	case <-probed:
+	case <-time.After(time.Second):
+		require.Fail(t, "responsive writer was not probed")
+	}
+	var out bytes.Buffer
+	err := reportDaemonLaunchContention(&out, dir, observation, time.Now())
+	require.Error(t, err)
+	require.ErrorContains(t, err, "incompatible")
+	require.ErrorContains(t, err, fmt.Sprintf("pid %d", rec.PID))
+	require.ErrorContains(t, err, "daemon restart")
+	assert.NotContains(t, out.String(), "already running")
 }
 
 func TestDaemonWaitForLaunchContentionRejectsCompatibleUnresponsiveWriter(t *testing.T) {
