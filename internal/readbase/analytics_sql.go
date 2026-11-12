@@ -183,10 +183,13 @@ func AnalyticsTrendsSQL(
 		tail = `
 		ORDER BY m.session_id, m.ordinal`
 	}
+	columns := `m.content, COALESCE(m.timestamp, s.started_at, s.created_at)`
+	if len(f.MessageScopeFilter().Models) > 0 {
+		columns = `m.session_id, m.ordinal, m.role, m.is_system,
+			m.model, ` + content + `, m.timestamp, s.started_at, s.created_at`
+	}
 	return `
-		SELECT m.session_id, m.ordinal, m.role, m.is_system,
-			m.model, ` + content + `, m.timestamp,
-			s.started_at, s.created_at
+		SELECT ` + columns + `
 		FROM messages m
 		JOIN sessions s ON s.id = m.session_id
 		WHERE ` + where + `

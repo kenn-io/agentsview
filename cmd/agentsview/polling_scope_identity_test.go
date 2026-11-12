@@ -395,7 +395,7 @@ func TestSharedSyncDirBothProvidersReconciled(t *testing.T) {
 }
 
 // TestUnwatchedPollCooldownIsExactlyOneInterval strengthens the
-// existing cooldown invariant test:
+// existing cooldown invariant test for a pass shorter than the interval:
 //  1. The duration passed to after() must equal unwatchedPollInterval (not just
 //     be positive — a 1ns wait would satisfy the weaker assertion).
 //  2. No second reconcile call must start before the captured timer fires.
@@ -475,10 +475,10 @@ func TestUnwatchedPollCooldownIsExactlyOneInterval(t *testing.T) {
 	// Second tick arrives while the first pass is running.
 	ticks <- t0.Add(unwatchedPollInterval)
 
-	// Advance "now" so that at completion the full interval has elapsed since
-	// the tick deadline, making the cooldown remainder = unwatchedPollInterval.
+	// The pass takes 30 seconds, less than the interval, so the cooldown
+	// measured from its completion is exactly unwatchedPollInterval.
 	nowMu.Lock()
-	now = t0.Add(unwatchedPollInterval + 500*time.Millisecond)
+	now = t0.Add(30 * time.Second)
 	nowMu.Unlock()
 
 	// Release the first pass.

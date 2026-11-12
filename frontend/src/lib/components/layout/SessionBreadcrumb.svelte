@@ -3,77 +3,42 @@
   import {
     ChartColumnIcon,
     CheckIcon,
-    ChevronDownIcon,
-    CirclePlayIcon,
-    CodeIcon,
-    CopyIcon,
     EllipsisIcon,
-    FileTextIcon,
-    FolderIcon,
     LightbulbIcon,
     LinkIcon,
     SearchIcon,
-    SquareTerminalIcon,
-    TriangleAlertIcon,
   } from "../../icons.js";
-  import { onDestroy, onMount, untrack } from "svelte";
   import { MediaQuery } from "svelte/reactivity";
   import type { Session } from "../../api/types.js";
-  import type {
-    DbCaptureCoverageView,
-    DbPlanUsageView,
-    SessionToolSequencesResponse,
-  } from "../../api/generated/index.js";
-  import {
-    OpenersService,
-    SessionsService,
-    type Opener,
-    type ResumeRequest,
-    type ResumeResponse,
-  } from "../../api/generated/index";
-  import {
-    ApiError,
-    isAbortError,
-  } from "../../api/runtime.js";
   import { copyToClipboard } from "../../utils/clipboard.js";
   import {
     agentInk,
     agentLabel,
     entrypointBadge,
   } from "../../utils/agents.js";
-  import { formatCost, formatTokenUsage, formatCount } from "../../utils/format.js";
-  import type { Money } from "../../money.js";
+  import { formatCount } from "../../utils/format.js";
   import { normalizeMessagePreview } from "../../utils/messages.js";
   import { getGradeStyle, getGradeLabel } from "../../utils/grade.js";
-  import SignalPanel from "../content/SignalPanel.svelte";
-  import ToolSequencesPanel from "../content/ToolSequencesPanel.svelte";
   import SessionFilterControl from "../filters/SessionFilterControl.svelte";
   import SidebarToggleButton from "./SidebarToggleButton.svelte";
   import { sessions } from "../../stores/sessions.svelte.js";
   import { router } from "../../stores/router.svelte.js";
   import { insights } from "../../stores/insights.svelte.js";
   import { sync } from "../../stores/sync.svelte.js";
-  import {
-    supportsResume,
-    buildResumeCommand,
-    formatResumeResponseCommand,
-  } from "../../utils/resume.js";
-  import { codexDesktopLink } from "../../utils/codex.js";
-  import { claudeCodeLink } from "../../utils/claude.js";
-  import { LatestRead } from "../../utils/latest-read.js";
-  import {
-    describeCaptureCoverage,
-    describePlanUsage,
-  } from "../../utils/planUsage.js";
+  import { sessionDisplayId } from "../../utils/sessionDisplayId.js";
+  import { markWrappedGroups } from "./breadcrumbLayout.js";
+  import { SessionUsage } from "./sessionUsage.svelte.js";
+  import { SessionOpeners } from "./sessionOpeners.svelte.js";
+  import SessionOpenMenu from "./SessionOpenMenu.svelte";
+  import SessionSignalPanels from "./SessionSignalPanels.svelte";
+  import SessionUsageStats from "./SessionUsageStats.svelte";
 
   import { inSessionSearch } from "../../stores/inSessionSearch.svelte.js";
   import { messages as messagesStore } from "../../stores/messages.svelte.js";
-  import { sessionTiming } from "../../stores/sessionTiming.svelte.js";
   import { formatModelEffort } from "../../utils/model.js";
   import { ui } from "../../stores/ui.svelte.js";
   import TranscriptControls from "./TranscriptControls.svelte";
   import { m } from "../../i18n/index.js";
-  import { Table, TableHeaderCell } from "@kenn-io/kit-ui";
 
   interface Props {
     session: Session | undefined;
@@ -88,377 +53,9 @@
   let renameInput = $state<HTMLInputElement | null>(null);
   let menuBtnEl = $state<HTMLButtonElement | null>(null);
   let menuEl = $state<HTMLDivElement | null>(null);
-  let showOpenMenu = $state(false);
-  let openers: Opener[] = $state([]);
-  let openFeedback = $state("");
-  let openFeedbackKind = $state<"success" | "error">("success");
-  let feedbackTimer: ReturnType<typeof setTimeout> | undefined;
-  let sessionDir = $state<string | null>(null);
-  let toolSequencesData = $state<SessionToolSequencesResponse | null>(null);
-  let toolSequencesLoading = $state(false);
-  let toolSequencesFailed = $state(false);
-  let toolSequencesUnavailable = $state(false);
-  let toolSequencesRetry = $state(0);
-  // The session, loaded message revision, end state and retry count the current or last read was for.
-  let toolSequencesIdentity = "";
-  let toolSequencesTimer: ReturnType<typeof setTimeout> | undefined;
-  // The session the read clock and conflict count below belong to.
-  let toolSequencesSessionId = "";
-  // When the last read for that session began; 0 before the first read.
-  let toolSequencesStartedAt = 0;
-  // Reads in a row that a sync interrupted with a 409.
-  let toolSequencesConflicts = 0;
-  const openersRead = new LatestRead();
-  const directoryRead = new LatestRead();
-  const costRead = new LatestRead();
-  const breakdownRead = new LatestRead();
-  const usageRootRead = new LatestRead();
-  const toolSequencesRead = new LatestRead();
 
-  interface SessionDirectoryResponse {
-    path: string;
-  }
-
-  interface SessionUsageBreakdownEntry {
-    ordinal: number;
-    message_ordinal?: number;
-    source: string;
-    label: string;
-    timestamp: string;
-    model: string;
-    input_tokens: number;
-    output_tokens: number;
-    cache_creation_input_tokens: number;
-    cache_read_input_tokens: number;
-    cost: Money;
-    has_cost: boolean;
-  }
-
-  onMount(() => {
-    const signal = openersRead.begin();
-    OpenersService.getApiV1Openers({ signal })
-      .then((res) => {
-        if (!openersRead.isCurrent(signal)) return;
-        openers = res.openers;
-      })
-      .catch((e) => {
-        if (!isAbortError(e)) openers = [];
-      })
-      .finally(() => openersRead.finish(signal));
-    return () => openersRead.cancel();
-  });
-
-  let resolvedSessionDirId: string | null = null;
-  let pendingSessionDirId: string | null = null;
-  $effect(() => {
-    if (!session) {
-      directoryRead.cancel();
-      sessionDir = null;
-      resolvedSessionDirId = null;
-      pendingSessionDirId = null;
-      return;
-    }
-    const id = session.id;
-    if (id === resolvedSessionDirId || id === pendingSessionDirId) return;
-    const signal = directoryRead.begin();
-    pendingSessionDirId = id;
-    sessionDir = null;
-    SessionsService.getApiV1SessionsByIdDirectory({ id }, { signal })
-      .then(({ path }) => {
-        if (session?.id === id && directoryRead.isCurrent(signal)) {
-          sessionDir = (path as SessionDirectoryResponse["path"]) || null;
-          resolvedSessionDirId = id;
-        }
-      })
-      .catch((e) => {
-        if (isAbortError(e)) return;
-        // Don't cache the ID on failure so the next
-        // session refresh retries the lookup.
-      })
-      .finally(() => {
-        if (
-          directoryRead.finish(signal) &&
-          pendingSessionDirId === id
-        ) {
-          pendingSessionDirId = null;
-        }
-      });
-  });
-
-  let sessionCost = $state<Money | null>(null);
-  let sessionCostIsRollup = $state(false);
-  let sessionRollupSubagentCount = $state(0);
-  let sessionUsageBreakdownCount = $state(0);
-  let sessionUsageBreakdown = $state<SessionUsageBreakdownEntry[]>([]);
-  // Plan usage and live capture coverage from the same usage read as the
-  // cost; null until it answers or when the session has none.
-  let sessionPlanUsage = $state<DbPlanUsageView | null>(null);
-  let sessionCaptureCoverage = $state<DbCaptureCoverageView | null>(null);
-  let sessionUsageLoaded = $state(false);
-  // Title of the thread this one is counted under, once read.
-  let usageRootTitle = $state<string | null>(null);
-  // Key of the last successful usage fetch. Cost depends on more
-  // than output tokens (input/cache tokens and explicit usage-event
-  // costs), so the key includes every cost-affecting field present
-  // in API session responses. A resync that changes none of these
-  // (e.g. a cost-only usage event) keeps a stale cost until the
-  // next keyed field moves; closing that would need a freshness
-  // marker in the session API.
-  let costFetchKey: string | null = null;
-  let costSessionId: string | null = null;
-  let breakdownFetchKey: string | null = null;
-
-  function childUsageFetchKey(parentId: string): string {
-    return Array.from(sessions.childSessions.values())
-      .filter((child) => child.parent_session_id === parentId)
-      .map((child) =>
-        [
-          child.id,
-          child.relationship_type ?? "",
-          child.transcript_revision ?? "",
-          child.message_count ?? 0,
-          child.total_output_tokens ?? 0,
-          child.peak_context_tokens ?? 0,
-          child.ended_at ?? "",
-        ].join("\t")
-      )
-      .sort()
-      .join("\n");
-  }
-
-  function usageFetchKey(s: Session): string {
-    return [
-      s.id,
-      s.transcript_revision ?? "",
-      s.total_output_tokens ?? 0,
-      s.peak_context_tokens ?? 0,
-      s.has_total_output_tokens ?? "",
-      s.has_peak_context_tokens ?? "",
-      s.message_count ?? 0,
-      s.ended_at ?? "",
-      sessions.activeSessionUsageVersion,
-      childUsageFetchKey(s.id),
-    ].join("\n");
-  }
-
-  function resetPlanUsage() {
-    sessionPlanUsage = null;
-    sessionCaptureCoverage = null;
-    sessionUsageLoaded = false;
-    planUsageOpen = false;
-  }
-
-  function resetUsageBreakdown() {
-    breakdownRead.cancel();
-    sessionUsageBreakdownCount = 0;
-    sessionUsageBreakdown = [];
-    usageBreakdownOpen = false;
-    usageBreakdownLoading = false;
-    breakdownFetchKey = null;
-  }
-
-  $effect(() => {
-    if (!session) {
-      costRead.cancel();
-      sessionCost = null;
-      sessionCostIsRollup = false;
-      sessionRollupSubagentCount = 0;
-      resetPlanUsage();
-      resetUsageBreakdown();
-      costFetchKey = null;
-      costSessionId = null;
-      return;
-    }
-    const id = session.id;
-    const key = usageFetchKey(session);
-    if (id !== costSessionId) {
-      // Entering a different session invalidates both the displayed
-      // cost and the fetch cache; the cached key must never satisfy
-      // the early return below while another session's request is
-      // still in flight.
-      sessionCost = null;
-      sessionCostIsRollup = false;
-      sessionRollupSubagentCount = 0;
-      resetPlanUsage();
-      resetUsageBreakdown();
-      costFetchKey = null;
-    }
-    if (key === costFetchKey) return;
-    const signal = costRead.begin();
-    costSessionId = id;
-    SessionsService.getApiV1SessionsByIdUsage({ id }, { rollup: true }, { signal })
-      .then((res) => {
-        if (!costRead.isCurrent(signal)) return;
-        costFetchKey = key;
-        sessionRollupSubagentCount = res.rollup_subagent_count ?? 0;
-        sessionCostIsRollup =
-          sessionRollupSubagentCount > 0 && res.has_rollup_cost === true;
-        sessionCost = sessionCostIsRollup
-          ? (res.rollup_cost ?? null)
-          : res.has_cost
-            ? res.cost
-            : null;
-        sessionUsageBreakdownCount = res.breakdown_count ?? 0;
-        sessionPlanUsage = res.plan_usage ?? null;
-        sessionCaptureCoverage = res.capture_coverage ?? null;
-        sessionUsageLoaded = true;
-      })
-      .catch((e) => {
-        if (isAbortError(e) || !costRead.isCurrent(signal)) return;
-        sessionUsageBreakdownCount = 0;
-        // Leave the fetch key unset so the next
-        // session refresh retries the lookup.
-      })
-      .finally(() => costRead.finish(signal));
-  });
-
-  // Breakdown rows are fetched only when the menu opens; large
-  // sessions can have thousands of entries and the count-only
-  // /usage fetch above happens automatically on every session.
-  $effect(() => {
-    if (!usageBreakdownOpen || !session) {
-      breakdownRead.cancel();
-      usageBreakdownLoading = false;
-      return;
-    }
-    const id = session.id;
-    const key = usageFetchKey(session);
-    if (key === breakdownFetchKey) return;
-    const signal = breakdownRead.begin();
-    usageBreakdownLoading = true;
-    SessionsService.getApiV1SessionsByIdUsage({ id }, { breakdown: true }, { signal })
-      .then((res) => {
-        if (!breakdownRead.isCurrent(signal)) return;
-        breakdownFetchKey = key;
-        usageBreakdownLoading = false;
-        sessionUsageBreakdown = Array.isArray(res.breakdown) ? res.breakdown : [];
-      })
-      .catch((e) => {
-        if (isAbortError(e) || !breakdownRead.isCurrent(signal)) return;
-        usageBreakdownLoading = false;
-        sessionUsageBreakdown = [];
-        // Leave the fetch key unset so reopening retries.
-      })
-      .finally(() => breakdownRead.finish(signal));
-  });
-
-  // The usage root's title names the link; the link itself needs only the ID.
-  let usageRootId = $derived(
-    sessionPlanUsage?.outcome_kind === "counted_under"
-      ? (sessionPlanUsage.counted_under ?? null)
-      : null,
-  );
-  $effect(() => {
-    const id = usageRootId;
-    usageRootTitle = null;
-    if (!id) {
-      usageRootRead.cancel();
-      return;
-    }
-    const signal = usageRootRead.begin();
-    SessionsService.getApiV1SessionsById({ id }, { signal })
-      .then((root) => {
-        if (!usageRootRead.isCurrent(signal)) return;
-        usageRootTitle =
-          root.display_name || normalizeMessagePreview(root.first_message) || null;
-      })
-      .catch((e) => {
-        // A root missing from this archive keeps its thread ID as the label.
-        if (!isAbortError(e)) console.warn("Failed to read usage root session:", e);
-      })
-      .finally(() => usageRootRead.finish(signal));
-  });
-
-  let planUsageOpen = $state(false);
-  // Waits for the usage read, so a slow read never shows "not checked yet"
-  // for a thread that has plan usage.
-  let planUsageDisplay = $derived(
-    session && sessionUsageLoaded
-      ? describePlanUsage(session.agent, sessionPlanUsage)
-      : null,
-  );
-  let captureCoverageLines = $derived(
-    describeCaptureCoverage(sessionCaptureCoverage, sessionPlanUsage),
-  );
-  let uncapturedTurns = $derived(sessionCaptureCoverage?.uncaptured_turns ?? 0);
-  // The missed-turn line comes last in the coverage lines; the closed
-  // trigger repeats it so its warning icon is explained without opening.
-  let missedTurnsLine = $derived(
-    uncapturedTurns > 0 ? (captureCoverageLines.at(-1) ?? null) : null,
-  );
-  // Shared by the closed trigger and the opened menu so both name the
-  // same root session.
-  let countedUnderLabel = $derived.by(() => {
-    const rootId = planUsageDisplay?.countedUnder;
-    return rootId
-      ? m.plan_usage_counted_under({
-          title: usageRootTitle ?? sessionDisplayId(rootId),
-        })
-      : null;
-  });
-  // Warnings the closed trigger explains with its icon: figures a later
-  // check made stale, and turns live capture missed.
-  let planUsageWarnings = $derived(
-    [planUsageDisplay?.staleNote, missedTurnsLine].filter((line): line is string => !!line),
-  );
-  let planUsageTitle = $derived.by(() => {
-    if (!planUsageDisplay) return undefined;
-    const state = countedUnderLabel ?? planUsageDisplay.headline;
-    return [state, ...planUsageWarnings].filter(Boolean).join("\n") || undefined;
-  });
-  // Screen readers hear the closed trigger's state and warnings as part of
-  // its name; the title alone may not be read.
-  let planUsageSrText = $derived(
-    [countedUnderLabel ?? planUsageDisplay?.headline, ...planUsageWarnings].filter(Boolean).join(", "),
-  );
-
-  onDestroy(() => {
-    openersRead.cancel();
-    usageRootRead.cancel();
-    directoryRead.cancel();
-    costRead.cancel();
-    breakdownRead.cancel();
-    stopToolSequences();
-  });
-
-  let sessionCostLabel = $derived(
-    sessionCost !== null ? formatCost(sessionCost) : null,
-  );
-  let sessionCostTitle = $derived(
-        sessionCostIsRollup
-      ? m.session_breadcrumb_total_cost_title({
-          count: sessionRollupSubagentCount,
-          countLabel: formatCount(sessionRollupSubagentCount),
-        })
-      : m.session_breadcrumb_estimated_session_cost(),
-  );
-  // Menu rows render only while open, so the collapsed dropdown
-  // stays DOM-free.
-  let usageBreakdownOpen = $state(false);
-  let usageBreakdownLoading = $state(false);
-
-  let sessionContextTokens = $derived(session?.peak_context_tokens ?? 0);
-  let sessionOutputTokens = $derived(session?.total_output_tokens ?? 0);
-  let sessionHasContextTokens = $derived(
-    session
-      ? (session.has_peak_context_tokens ?? session.peak_context_tokens > 0)
-      : false,
-  );
-  let sessionHasOutputTokens = $derived(
-    session
-      ? (session.has_total_output_tokens ?? session.total_output_tokens > 0)
-      : false,
-  );
-  let sessionTokenSummary = $derived(
-    session
-      ? formatTokenUsage(
-          sessionContextTokens,
-          sessionHasContextTokens,
-          sessionOutputTokens,
-          sessionHasOutputTokens,
-        )
-      : null,
-  );
+  const openers = new SessionOpeners(() => session);
+  const usageStats = new SessionUsage(() => session);
 
   let mainModelInfo = $derived(
     messagesStore.sessionId === session?.id
@@ -466,15 +63,6 @@
       : { model: "", reasoningEffort: "" },
   );
   let mainModel = $derived(formatModelEffort(mainModelInfo));
-
-  // The stats group renders only when it has a figure, so no empty group
-  // leaves a stray separator.
-  let hasStats = $derived(
-    sessionUsageBreakdownCount > 0 ||
-      !!sessionTokenSummary ||
-      !!sessionCostLabel ||
-      !!planUsageDisplay,
-  );
 
   // The entrypoint (for example sdk-ts) is detail, so it lives in the
   // agent's hover text, as on the sidebar row.
@@ -485,138 +73,9 @@
     return entrypoint ? `${label} · ${entrypoint}` : label;
   });
 
-  let resumeModel = $derived(
-    session ? messagesStore.resumeModelFor(session.id) : "",
-  );
-
   const gradeStyle = $derived(
     getGradeStyle(session?.health_grade),
   );
-
-  $effect(() => {
-    if (ui.signalPanelOpen && session?.id) {
-      sessions.fetchSignalDetail(session.id);
-    }
-  });
-
-  // Every new message changes the transcript revision, and each read loads the whole session, so a busy session reads at most this often.
-  const TOOL_SEQUENCES_MIN_INTERVAL_MS = 5_000;
-  const TOOL_SEQUENCES_MAX_CONFLICTS = 3;
-
-  function stopToolSequences() {
-    toolSequencesRead.cancel();
-    clearTimeout(toolSequencesTimer);
-    toolSequencesTimer = undefined;
-  }
-
-  $effect(() => {
-    const id = session?.id;
-    const termination = session?.termination_status ?? "";
-    const visible = ui.signalPanelOpen;
-    const retry = toolSequencesRetry;
-    if (!visible || !id) {
-      stopToolSequences();
-      toolSequencesData = null;
-      toolSequencesLoading = false;
-      toolSequencesFailed = false;
-      toolSequencesUnavailable = false;
-      toolSequencesIdentity = "";
-      toolSequencesSessionId = "";
-      return;
-    }
-
-    if (untrack(() => toolSequencesData?.session_id !== id)) toolSequencesData = null;
-    if (toolSequencesSessionId !== id) {
-      toolSequencesSessionId = id;
-      toolSequencesStartedAt = 0;
-      toolSequencesConflicts = 0;
-    }
-    const loadedRevision = messagesStore.sessionId === id ? messagesStore.loadedRevision : null;
-    if (loadedRevision === null && messagesStore.loading) {
-      // The message list is replacing its rows; read once they land so the sequences match them.
-      stopToolSequences();
-      toolSequencesIdentity = "";
-      toolSequencesLoading = true;
-      toolSequencesFailed = false;
-      toolSequencesUnavailable = false;
-      return;
-    }
-    // A failed read keeps its identity, so only a new revision, end state or retry reads again.
-    const identity = [id, loadedRevision ?? "", termination, retry].join("\n");
-    if (identity === toolSequencesIdentity) return;
-    toolSequencesIdentity = identity;
-    stopToolSequences();
-    toolSequencesLoading = true;
-    toolSequencesFailed = false;
-    toolSequencesUnavailable = false;
-    const wait = toolSequencesStartedAt + TOOL_SEQUENCES_MIN_INTERVAL_MS - Date.now();
-    if (toolSequencesStartedAt > 0 && wait > 0) {
-      toolSequencesTimer = setTimeout(() => readToolSequences(id), wait);
-    } else {
-      readToolSequences(id);
-    }
-  });
-
-  // Someone asked for the retry, so it skips the interval that paces automatic reads.
-  function retryToolSequences() {
-    toolSequencesStartedAt = 0;
-    toolSequencesRetry++;
-  }
-
-  function readToolSequences(id: string) {
-    toolSequencesTimer = undefined;
-    toolSequencesStartedAt = Date.now();
-    const signal = toolSequencesRead.begin();
-    SessionsService.getApiV1SessionsByIdToolSequences({ id }, { signal })
-      .then((response) => {
-        if (!toolSequencesRead.finish(signal)) return;
-        toolSequencesConflicts = 0;
-        toolSequencesLoading = false;
-        toolSequencesData = response;
-      })
-      .catch((error) => {
-        if (isAbortError(error) || !toolSequencesRead.finish(signal)) return;
-        const conflict = error instanceof ApiError && error.status === 409;
-        if (conflict && ++toolSequencesConflicts < TOOL_SEQUENCES_MAX_CONFLICTS) {
-          // A sync landed during the read; keep what is shown and read again after the interval.
-          toolSequencesRetry++;
-          return;
-        }
-        toolSequencesConflicts = 0;
-        toolSequencesLoading = false;
-        toolSequencesData = null;
-        if (error instanceof ApiError && error.status === 501) {
-          toolSequencesUnavailable = true;
-        } else {
-          toolSequencesFailed = true;
-        }
-      });
-  }
-
-  function sessionDisplayId(id: string): string {
-    const idx = id.indexOf(":");
-    return idx >= 0 ? id.slice(idx + 1) : id;
-  }
-
-  function formatBreakdownContext(entry: SessionUsageBreakdownEntry): string {
-    const context =
-      entry.input_tokens +
-      entry.cache_creation_input_tokens +
-      entry.cache_read_input_tokens;
-    return formatCount(Math.max(0, context));
-  }
-
-  function formatBreakdownTitle(entry: SessionUsageBreakdownEntry): string {
-    const parts = [
-      entry.model || entry.source,
-      `${formatBreakdownContext(entry)} ctx`,
-      `${formatCount(Math.max(0, entry.output_tokens))} out`,
-    ];
-    if (entry.has_cost) {
-      parts.push(formatCost(entry.cost));
-    }
-    return parts.filter(Boolean).join(" · ");
-  }
 
   async function copySessionId(
     rawId: string,
@@ -709,240 +168,26 @@
     }
   }
 
-  function showFeedback(msg: string, kind: "success" | "error" = "success") {
-    openFeedback = msg;
-    openFeedbackKind = kind;
-    clearTimeout(feedbackTimer);
-    feedbackTimer = setTimeout(() => { openFeedback = ""; }, 2000);
-  }
-
-  async function handleResumeIn(opener: Opener) {
-    if (!session) return;
-    showOpenMenu = false;
-    try {
-      const resp = await SessionsService.postApiV1SessionsByIdResume(
-        { id: session.id },
-        { opener_id: opener.id } satisfies ResumeRequest,
-      );
-      if (resp.launched) {
-        showFeedback(m.session_breadcrumb_resumed_in({
-          target: resp.terminal ?? opener.name,
-        }));
-        return;
-      }
-      // Launch failed — fall back to clipboard copy.
-      if (resp.command) {
-        const cmd = formatResumeResponseCommand(session.agent, resp);
-        const ok = cmd ? await copyToClipboard(cmd) : false;
-        showFeedback(
-          ok
-            ? m.session_breadcrumb_command_copied()
-            : m.session_breadcrumb_failed(),
-          ok ? "success" : "error",
-        );
-        return;
-      }
-    } catch {
-      // Fall back to local command build.
-    }
-    const cmd = buildResumeCommand(session.agent, session.id, {
-      model: resumeModel,
-    });
-    if (cmd) {
-      const ok = await copyToClipboard(cmd);
-      showFeedback(
-        ok
-          ? m.session_breadcrumb_command_copied()
-          : m.session_breadcrumb_failed(),
-        ok ? "success" : "error",
-      );
-    } else {
-      showFeedback(m.session_breadcrumb_not_supported(), "error");
-    }
-  }
-
-  async function handleCopyResumeCommand() {
-    if (!session) return;
-    showOpenMenu = false;
-    try {
-      const resp = await SessionsService.postApiV1SessionsByIdResume(
-        { id: session.id },
-        { command_only: true } satisfies ResumeRequest,
-      );
-      if (resp.command) {
-        const cmd = formatResumeResponseCommand(session.agent, resp);
-        const ok = cmd ? await copyToClipboard(cmd) : false;
-        showFeedback(
-          ok
-            ? m.session_breadcrumb_command_copied()
-            : m.session_breadcrumb_failed(),
-          ok ? "success" : "error",
-        );
-        return;
-      }
-    } catch {
-      // Fall back to local build.
-    }
-    const cmd = buildResumeCommand(session.agent, session.id, {
-      model: resumeModel,
-    });
-    if (cmd) {
-      const ok = await copyToClipboard(cmd);
-      showFeedback(
-        ok
-          ? m.session_breadcrumb_command_copied()
-          : m.session_breadcrumb_failed(),
-        ok ? "success" : "error",
-      );
-    } else {
-      showFeedback(m.session_breadcrumb_not_supported(), "error");
-    }
-  }
-
-  async function handleCopyFilePath() {
-    showOpenMenu = false;
-    if (!sessionDir) {
-      showFeedback(m.session_breadcrumb_no_path_available(), "error");
-      return;
-    }
-    const ok = await copyToClipboard(sessionDir);
-    showFeedback(
-      ok
-        ? m.session_breadcrumb_path_copied()
-        : m.session_breadcrumb_failed(),
-      ok ? "success" : "error",
-    );
-  }
-
-  async function handleOpenIn(opener: Opener) {
-    if (!session) return;
-    showOpenMenu = false;
-    try {
-      await SessionsService.postApiV1SessionsByIdOpen(
-        { id: session.id },
-        { opener_id: opener.id },
-      );
-      showFeedback(m.session_breadcrumb_opened_in({
-        target: opener.name,
-      }));
-    } catch {
-      showFeedback(m.session_breadcrumb_failed_to_open(), "error");
-    }
-  }
-
-  async function handleResumeDefault() {
-    if (!session) return;
-    showOpenMenu = false;
-    try {
-      const resp = await SessionsService.postApiV1SessionsByIdResume({ id: session.id }, {});
-      if (resp.launched) {
-        showFeedback(
-          m.session_breadcrumb_resumed_in({
-            target: resp.terminal ?? "terminal",
-          }),
-        );
-        return;
-      }
-      if (resp.command) {
-        const cmd = formatResumeResponseCommand(session.agent, resp);
-        const ok = cmd ? await copyToClipboard(cmd) : false;
-        showFeedback(
-          ok
-            ? m.session_breadcrumb_command_copied()
-            : m.session_breadcrumb_failed(),
-          ok ? "success" : "error",
-        );
-        return;
-      }
-    } catch {
-      // Fall back to local command build.
-    }
-    const cmd = buildResumeCommand(session.agent, session.id, {
-      model: resumeModel,
-    });
-    if (cmd) {
-      const ok = await copyToClipboard(cmd);
-      showFeedback(
-        ok
-          ? m.session_breadcrumb_command_copied()
-          : m.session_breadcrumb_failed(),
-        ok ? "success" : "error",
-      );
-    } else {
-      showFeedback(m.session_breadcrumb_not_supported(), "error");
-    }
-  }
-
-  // Remote sessions have host-prefixed IDs (host~rawID).
-  const isLocal = $derived(
-    !session?.id.includes("~"),
-  );
-
-  const canLaunch = $derived(
-    session
-      ? supportsResume(session.agent) && isLocal
-      : false,
-  );
-
-  const codexLink = $derived(
-    session ? codexDesktopLink(session.agent, session.id) : null,
-  );
-
-  const claudeLink = $derived(
-    session?.agent === "claude" && isLocal
-      ? claudeCodeLink(sessionDir)
-      : null,
-  );
-  const canCopyCommand = $derived(session ? supportsResume(session.agent) : false);
-
-  const terminalOpeners = $derived(
-    openers.filter((o) => o.kind === "terminal"),
-  );
-
-  const claudeDesktopOpener = $derived(
-    session?.agent === "claude"
-      ? openers.find((o) => o.id === "claude-desktop") ?? null
-      : null,
-  );
-
-  const editorOpeners = $derived(
-    openers.filter((o) => o.kind === "editor"),
-  );
-
-  const fileOpeners = $derived(
-    openers.filter((o) => o.kind === "files"),
-  );
-
-  const showDropdown = $derived(
-    canCopyCommand ||
-    codexLink !== null ||
-    (isLocal && (
-      editorOpeners.length > 0 ||
-      fileOpeners.length > 0 ||
-      (sessionDir !== null && !!session?.file_path)
-    )),
-  );
-
   function handleKeydown(e: KeyboardEvent) {
     if (e.key === "Escape") {
       if (renaming) {
         cancelRename();
       } else if (menuOpen) {
         closeMenu();
-      } else if (showOpenMenu) {
-        showOpenMenu = false;
+      } else if (openers.menuOpen) {
+        openers.menuOpen = false;
         e.preventDefault();
       }
       return;
     }
-    if (showOpenMenu && isLocal) {
+    if (openers.menuOpen && openers.isLocal) {
       // Number key shortcuts (1-9) for quick selection.
       const num = parseInt(e.key);
       if (num >= 1 && num <= 9) {
         const idx = num - 1;
-        if (idx < terminalOpeners.length) {
+        if (idx < openers.terminalOpeners.length) {
           e.preventDefault();
-          handleResumeIn(terminalOpeners[idx]!);
+          openers.resumeIn(openers.terminalOpeners[idx]!);
         }
       }
     }
@@ -959,107 +204,6 @@
   const twoRowHeader = $derived(twoRowQuery.current);
   const wideHeader = $derived(wideQuery.current);
 
-  const PANE_GAP = 8;
-
-  // The element's effective CSS zoom. WebKit has no currentCSSZoom, so
-  // multiply the computed zoom of the element and its ancestors instead.
-  function cssZoom(element: HTMLElement): number {
-    if (typeof element.currentCSSZoom === "number") return element.currentCSSZoom;
-    let zoom = 1;
-    for (let node: Element | null = element; node; node = node.parentElement) {
-      const value = Number.parseFloat(getComputedStyle(node).zoom);
-      if (Number.isFinite(value) && value > 0) zoom *= value;
-    }
-    return zoom;
-  }
-
-  // The transcript pane clips overflow, and side panels can make it
-  // narrower than a usage menu. Keep each menu inside the pane: as wide as
-  // it fits, right-aligned to its trigger when there is room, otherwise
-  // shifted left until it fits.
-  function keepInsidePane(menu: HTMLElement) {
-    const anchor = menu.parentElement;
-    const pane = menu.closest(".session-breadcrumb");
-    if (!anchor || !pane) return;
-    const place = () => {
-      menu.style.removeProperty("left");
-      menu.style.removeProperty("right");
-      menu.style.removeProperty("max-width");
-      // Phones pin the menu to the viewport instead.
-      if (getComputedStyle(menu).position !== "absolute") return;
-      // Rects are in viewport pixels; interface zoom scales the menu's own
-      // CSS lengths, so measure in viewport pixels and convert back.
-      const zoom = cssZoom(menu);
-      const gap = PANE_GAP * zoom;
-      const bounds = pane.getBoundingClientRect();
-      const trigger = anchor.getBoundingClientRect();
-      menu.style.maxWidth = `${Math.max(0, bounds.width - gap * 2) / zoom}px`;
-      const width = menu.getBoundingClientRect().width;
-      const left = Math.max(
-        bounds.left + gap,
-        Math.min(trigger.right - width, bounds.right - gap - width),
-      );
-      menu.style.left = `${(left - trigger.left) / zoom}px`;
-      menu.style.right = "auto";
-    };
-    place();
-    // Side panels resize the pane without resizing the window. Watch the
-    // pane's border box: once the reading column caps its content, a
-    // resize only changes the pane's centring padding.
-    const observer = new ResizeObserver(place);
-    observer.observe(pane, { box: "border-box" });
-    observer.observe(anchor);
-    window.addEventListener("resize", place);
-    // A wrapped metadata group shifts its trigger without resizing it.
-    pane.addEventListener(META_WRAP_EVENT, place);
-    return () => {
-      observer.disconnect();
-      window.removeEventListener("resize", place);
-      pane.removeEventListener(META_WRAP_EVENT, place);
-    };
-  }
-
-  // A metadata group that wraps to start a new line would lead with its
-  // separator. CSS cannot tell where a line starts, so mark those groups
-  // after layout; the style block hides their separator without changing
-  // their size, so marking cannot reflow the row.
-  const META_WRAP_EVENT = "metawrap";
-
-  function markWrappedGroups(header: HTMLElement) {
-    if (typeof ResizeObserver === "undefined") return;
-    let frame = 0;
-    const mark = () => {
-      frame = 0;
-      let previous: DOMRect | null = null;
-      let changed = false;
-      for (const group of header.querySelectorAll<HTMLElement>(".meta-group")) {
-        const rect = group.getBoundingClientRect();
-        if (rect.width === 0 && rect.height === 0) continue;
-        const wraps = previous !== null && rect.top >= previous.bottom - 1;
-        if (group.hasAttribute("data-wraps") !== wraps) {
-          group.toggleAttribute("data-wraps", wraps);
-          changed = true;
-        }
-        previous = rect;
-      }
-      // Open usage menus re-place themselves against the moved trigger.
-      if (changed) header.dispatchEvent(new Event(META_WRAP_EVENT));
-    };
-    const schedule = () => {
-      if (!frame) frame = requestAnimationFrame(mark);
-    };
-    const resize = new ResizeObserver(schedule);
-    resize.observe(header);
-    const mutations = new MutationObserver(schedule);
-    mutations.observe(header, { childList: true, subtree: true, characterData: true });
-    schedule();
-    return () => {
-      cancelAnimationFrame(frame);
-      resize.disconnect();
-      mutations.disconnect();
-    };
-  }
-
   function handleClickOutside(e: MouseEvent) {
     const target = e.target as Node;
     // Close actions menu
@@ -1073,7 +217,7 @@
     }
     // Close open menu
     if (!(target as HTMLElement).closest?.(".open-group")) {
-      showOpenMenu = false;
+      openers.menuOpen = false;
     }
   }
 </script>
@@ -1086,143 +230,6 @@
 <!-- The session's action groups render in one of two places so the
      document (and Tab) order always follows the visual rows; see
      twoRowHeader. -->
-{#snippet openGroup()}
-    {#if showDropdown}
-      <span class="open-group">
-        <button
-          class="resume-btn"
-          class:has-feedback-success={openFeedback !== "" && openFeedbackKind === "success"}
-          class:has-feedback-error={openFeedback !== "" && openFeedbackKind === "error"}
-          onclick={(e) => { e.stopPropagation(); showOpenMenu = !showOpenMenu; }}
-          title={canLaunch
-            ? m.session_breadcrumb_resume_session_in_terminal()
-            : m.session_breadcrumb_session_actions()}
-          aria-label={canLaunch
-            ? m.session_breadcrumb_resume_session()
-            : m.session_breadcrumb_session_actions()}
-        >
-          {#if openFeedback}
-            {#if openFeedbackKind === "error"}
-              <TriangleAlertIcon size="12" aria-hidden="true" />
-            {:else}
-              <CheckIcon size="12" aria-hidden="true" />
-            {/if}
-            {openFeedback}
-          {:else}
-            {canLaunch
-              ? m.session_breadcrumb_resume()
-              : m.session_breadcrumb_open()}
-            <ChevronDownIcon size="10" aria-hidden="true" />
-          {/if}
-        </button>
-        {#if showOpenMenu}
-          <div class="open-menu">
-            {#if canLaunch}
-              {#each terminalOpeners as opener, i (opener.id)}
-                <button
-                  class="open-menu-item"
-                  onclick={() => handleResumeIn(opener)}
-                >
-                  <span class="open-menu-num">{i + 1}</span>
-                  <span class="open-menu-name">{opener.name}</span>
-                </button>
-              {/each}
-              <button class="open-menu-item" onclick={handleResumeDefault}>
-                <span class="open-menu-num">
-                  <SquareTerminalIcon size="14" aria-hidden="true" />
-                </span>
-                <span class="open-menu-name">{m.session_breadcrumb_default_terminal()}</span>
-              </button>
-              {#if codexLink}
-                <div class="open-menu-divider"></div>
-                <a
-                  class="open-menu-item"
-                  data-testid="codex-desktop-link"
-                  href={codexLink}
-                  title={m.session_breadcrumb_open_in_codex_desktop()}
-                >
-                  <span class="open-menu-num">
-                    <CirclePlayIcon size="14" aria-hidden="true" />
-                  </span>
-                  <span class="open-menu-name">{m.session_breadcrumb_open_in_codex_desktop()}</span>
-                </a>
-              {/if}
-              {#if claudeLink}
-                <div class="open-menu-divider"></div>
-                <a
-                  class="open-menu-item"
-                  data-testid="claude-code-link"
-                  href={claudeLink}
-                  title={m.session_breadcrumb_open_in_claude_code()}
-                >
-                  <span class="open-menu-num">
-                    <CirclePlayIcon size="14" aria-hidden="true" />
-                  </span>
-                  <span class="open-menu-name">{m.session_breadcrumb_open_in_claude_code()}</span>
-                </a>
-              {/if}
-            {/if}
-            {#if canCopyCommand}
-              {#if canLaunch}<div class="open-menu-divider"></div>{/if}
-              <button class="open-menu-item" onclick={handleCopyResumeCommand}>
-                <span class="open-menu-num">
-                  <CopyIcon size="14" aria-hidden="true" />
-                </span>
-                <span class="open-menu-name">{m.session_breadcrumb_copy_command()}</span>
-              </button>
-            {/if}
-            {#if isLocal}
-            <button class="open-menu-item" onclick={handleCopyFilePath}>
-              <span class="open-menu-num">
-                <FileTextIcon size="14" aria-hidden="true" />
-              </span>
-              <span class="open-menu-name">{m.session_breadcrumb_copy_directory_path()}</span>
-            </button>
-            {#if editorOpeners.length > 0 || fileOpeners.length > 0}
-              <div class="open-menu-divider"></div>
-              <div class="open-menu-section">{m.session_breadcrumb_open_in()}</div>
-              {#each editorOpeners as opener (opener.id)}
-                <button
-                  class="open-menu-item"
-                  onclick={() => handleOpenIn(opener)}
-                >
-                  <span class="open-menu-num">
-                    <CodeIcon size="14" aria-hidden="true" />
-                  </span>
-                  <span class="open-menu-name">{opener.name}</span>
-                </button>
-              {/each}
-              {#each fileOpeners as opener (opener.id)}
-                <button
-                  class="open-menu-item"
-                  onclick={() => handleOpenIn(opener)}
-                >
-                  <span class="open-menu-num">
-                    <FolderIcon size="14" aria-hidden="true" />
-                  </span>
-                  <span class="open-menu-name">{opener.name}</span>
-                </button>
-              {/each}
-            {/if}
-            {/if}
-            {#if canLaunch && claudeDesktopOpener}
-              <div class="open-menu-divider"></div>
-              <button
-                class="open-menu-item"
-                onclick={() => handleResumeIn(claudeDesktopOpener)}
-              >
-                <span class="open-menu-num">
-                  <CirclePlayIcon size="14" aria-hidden="true" />
-                </span>
-                <span class="open-menu-name">Claude Desktop</span>
-              </button>
-            {/if}
-          </div>
-        {/if}
-      </span>
-    {/if}
-{/snippet}
-
 {#snippet sessionActions()}
     <div class="actions-wrapper">
       <button
@@ -1363,7 +370,7 @@
     <TranscriptControls />
   {/if}
   {#if session && twoRowHeader}
-    {@render openGroup()}
+    <SessionOpenMenu {openers} />
     {@render sessionActions()}
   {/if}
   {#if twoRowHeader}
@@ -1435,161 +442,9 @@
           </span>
         </span>
       {/if}
-      {#if hasStats}
+      {#if usageStats.hasStats}
         <span class="meta-group meta-stats">
-          {#if sessionUsageBreakdownCount > 0}
-            <!-- kit-ui-check-ignore: usage statistics open in a floating panel; kit-ui Disclosure expands inline and has no click popover equivalent. -->
-            <details class="usage-breakdown" bind:open={usageBreakdownOpen}>
-              <summary
-                class="usage-breakdown-trigger"
-                title={m.session_breadcrumb_usage_breakdown_title()}
-              >
-                {m.session_breadcrumb_usage_breakdown_steps({
-                  count: sessionUsageBreakdownCount,
-                  countLabel: formatCount(sessionUsageBreakdownCount),
-                })}
-              </summary>
-              {#if usageBreakdownOpen}
-                <div class="usage-breakdown-menu" {@attach keepInsidePane}>
-                  {#if usageBreakdownLoading}
-                    <div class="usage-breakdown-status">
-                      {m.session_breadcrumb_usage_breakdown_loading()}
-                    </div>
-                  {:else if sessionUsageBreakdown.length === 0}
-                    <div class="usage-breakdown-status">
-                      {m.session_breadcrumb_failed()}
-                    </div>
-                  {:else}
-                  {#each sessionUsageBreakdown as row (row.ordinal)}
-                    <div class="usage-breakdown-row" title={formatBreakdownTitle(row)}>
-                      <span class="usage-breakdown-label">
-                        {row.label}
-                      </span>
-                      <span class="usage-breakdown-model">
-                        {row.model || row.source}
-                      </span>
-                      <span class="usage-breakdown-tokens">
-                        {formatBreakdownContext(row)} ctx
-                        <span aria-hidden="true">/</span>
-                        {formatCount(Math.max(0, row.output_tokens))} out
-                      </span>
-                      {#if row.has_cost}
-                        <span class="usage-breakdown-cost">
-                          {formatCost(row.cost)}
-                        </span>
-                      {/if}
-                    </div>
-                  {/each}
-                  {/if}
-                </div>
-              {/if}
-            </details>
-          {/if}
-          {#if sessionTokenSummary}
-            <span class="token-badge token-badge--desktop">
-              {sessionTokenSummary}
-            </span>
-            <span
-              class="token-badge token-badge--mobile"
-              title={sessionTokenSummary}
-            >
-              {sessionTokenSummary}
-            </span>
-          {/if}
-          {#if sessionCostLabel}
-            <span class="cost-badge" title={sessionCostTitle}>
-              {#if sessionCostIsRollup}
-                {m.session_breadcrumb_total_cost()}: {sessionCostLabel}
-              {:else}
-                {sessionCostLabel}
-              {/if}
-            </span>
-          {/if}
-          {#if planUsageDisplay}
-            <!-- kit-ui-check-ignore: plan statistics open in a floating panel with a table and session link; kit-ui Disclosure expands inline and has no click popover equivalent. -->
-            <details class="plan-usage" bind:open={planUsageOpen}>
-              <summary
-                class="usage-breakdown-trigger plan-usage-trigger"
-                class:plan-usage-trigger--empty={!planUsageDisplay.hasFigures}
-                title={planUsageTitle}
-              >
-                {#if planUsageWarnings.length > 0}
-                  <TriangleAlertIcon size="10" strokeWidth="2.2" aria-hidden="true" />
-                {/if}
-                {planUsageDisplay.trigger}
-                {#if planUsageSrText}
-                  <span class="kit-sr-only">, {planUsageSrText}</span>
-                {/if}
-              </summary>
-              {#if planUsageOpen}
-                {@const rootId = planUsageDisplay.countedUnder}
-                {@const showFiveHour = planUsageDisplay.groups.some((g) => g.fiveHour)}
-                <div class="usage-breakdown-menu plan-usage-menu" {@attach keepInsidePane}>
-                  {#if rootId}
-                    <a
-                      class="plan-usage-headline plan-usage-root"
-                      href={router.buildSessionHref(rootId)}
-                      onclick={(event) => {
-                        event.preventDefault();
-                        planUsageOpen = false;
-                        router.navigateToSession(rootId);
-                      }}
-                    >
-                      {countedUnderLabel}
-                    </a>
-                  {:else}
-                    <div class="plan-usage-headline">{planUsageDisplay.headline}</div>
-                  {/if}
-                  {#if planUsageDisplay.staleNote}
-                    <div class="plan-usage-stale">{planUsageDisplay.staleNote}</div>
-                  {/if}
-                  {#if planUsageDisplay.totals.length > 0}
-                    <ul class="plan-usage-totals">
-                      {#each planUsageDisplay.totals as line (line)}
-                        <li>{line}</li>
-                      {/each}
-                    </ul>
-                  {/if}
-                  {#if planUsageDisplay.groups.length > 0}
-                    <Table unsorted
-                      class="plan-usage-groups"
-                      stickyHeader={false}
-                      ariaLabel={m.plan_usage_title()}
-                    >
-                      {#snippet header()}
-                        <TableHeaderCell label={m.plan_usage_col_split()} />
-                        <TableHeaderCell label={m.plan_usage_col_weekly()} numeric />
-                        {#if showFiveHour}
-                          <TableHeaderCell label={m.plan_usage_col_five_hour()} numeric />
-                        {/if}
-                        <TableHeaderCell label={m.plan_usage_col_credits()} numeric />
-                      {/snippet}
-                      {#each planUsageDisplay.groups as group (group.key)}
-                        <tr>
-                          <td>{group.label}</td>
-                          <td class="plan-usage-num">{group.weekly}</td>
-                          {#if showFiveHour}
-                            <td class="plan-usage-num">{group.fiveHour}</td>
-                          {/if}
-                          <td class="plan-usage-num">{group.credits}</td>
-                        </tr>
-                      {/each}
-                    </Table>
-                  {/if}
-                  {#if planUsageDisplay.hasFigures}
-                    <p class="plan-usage-note">{m.plan_usage_credits_note()}</p>
-                  {/if}
-                  {#if captureCoverageLines.length > 0}
-                    <div class="plan-usage-capture">
-                      {#each captureCoverageLines as line (line)}
-                        <div>{line}</div>
-                      {/each}
-                    </div>
-                  {/if}
-                </div>
-              {/if}
-            </details>
-          {/if}
+          <SessionUsageStats usage={usageStats} />
         </span>
       {/if}
       {#if session.health_grade || session.id}
@@ -1621,7 +476,7 @@
         </span>
       {/if}
       {#if !twoRowHeader}
-        {@render openGroup()}
+        <SessionOpenMenu {openers} />
       {/if}
       {#if !twoRowHeader}
         {@render sessionActions()}
@@ -1632,17 +487,7 @@
 <DocbankStatus />
 
 {#if ui.signalPanelOpen && session}
-  <SignalPanel {session} />
-  <ToolSequencesPanel
-    errorTelemetryKind="session"
-    data={toolSequencesData?.session_id === session.id ? toolSequencesData : null}
-    timing={sessionTiming.timing?.session_id === session.id ? sessionTiming.timing : null}
-    sessionId={session.id}
-    loading={toolSequencesLoading}
-    failed={toolSequencesFailed}
-    unavailable={toolSequencesUnavailable}
-    onretry={retryToolSequences}
-  />
+  <SessionSignalPanels {session} />
 {/if}
 
 <style>
@@ -1853,11 +698,9 @@
   }
 
   /* Figures: one 12px muted size with tabular numerals and no fill. The
-     side padding only keeps their spacing. */
+     side padding only keeps their spacing. SessionUsageStats gives the
+     usage figures the same look. */
   .session-time,
-  .token-badge,
-  .cost-badge,
-  .usage-breakdown-trigger,
   .model-badge {
     font-size: 12px;
     font-weight: 400;
@@ -1890,108 +733,6 @@
     color: color-mix(in srgb, var(--grade-ink) 50%, var(--text-primary));
   }
 
-  .open-group {
-    position: relative;
-    display: flex;
-    align-items: center;
-    flex-shrink: 0;
-  }
-
-  .resume-btn {
-    display: flex;
-    align-items: center;
-    gap: 4px;
-    font-size: 11px;
-    font-weight: 500;
-    color: var(--text-muted);
-    padding: 1px 8px;
-    border-radius: 4px;
-    background: var(--bg-tertiary);
-    cursor: pointer;
-    white-space: nowrap;
-    flex-shrink: 0;
-    transition: color 0.15s, background 0.15s;
-  }
-
-  .resume-btn:hover {
-    color: var(--text-secondary);
-    background: var(--bg-surface-hover);
-  }
-
-  .resume-btn.has-feedback-success {
-    color: var(--accent-green, #2ea043);
-  }
-
-  .resume-btn.has-feedback-error {
-    color: var(--accent-red, #e55);
-  }
-
-  .open-menu {
-    position: absolute;
-    top: 100%;
-    right: 0;
-    margin-top: 4px;
-    /* Same fill, edge, radius and shadow as the View and More actions
-       popovers. */
-    background: var(--bg-popover);
-    border: 1px solid var(--border-popover);
-    border-radius: var(--radius-md);
-    padding: 4px;
-    min-width: 200px;
-    z-index: var(--z-popover);
-    box-shadow: var(--shadow-lg);
-  }
-
-  .open-menu-item {
-    display: flex;
-    align-items: center;
-    gap: var(--space-4);
-    width: 100%;
-    padding: 6px 10px;
-    font-size: 12.5px;
-    text-align: left;
-    color: var(--text-primary);
-    text-decoration: none;
-    border-radius: 5px;
-    cursor: pointer;
-    transition: background 0.1s;
-  }
-
-  .open-menu-item:hover {
-    background: var(--bg-surface-hover);
-  }
-
-  .open-menu-num {
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    width: 18px;
-    font-size: 11px;
-    font-weight: 500;
-    color: var(--text-secondary);
-    flex-shrink: 0;
-  }
-
-  .open-menu-name {
-    flex: 1;
-    font-weight: 400;
-  }
-
-  .open-menu-divider {
-    height: 1px;
-    background: var(--border-muted);
-    margin: 4px 0;
-  }
-
-  .open-menu-section {
-    padding: 4px 10px 2px;
-    font-size: 10px;
-    font-weight: 600;
-    color: var(--text-muted);
-    text-transform: uppercase;
-    letter-spacing: 0.04em;
-  }
-
   .session-id {
     font-family: var(--font-mono);
     color: var(--text-muted);
@@ -2001,181 +742,6 @@
 
   .session-id:hover {
     color: var(--text-secondary);
-  }
-
-  .token-badge {
-    flex-shrink: 0;
-  }
-
-  .token-badge--mobile {
-    display: none;
-    white-space: nowrap;
-  }
-
-  .cost-badge {
-    flex-shrink: 0;
-  }
-
-  .usage-breakdown,
-  .plan-usage {
-    position: relative;
-    flex-shrink: 0;
-  }
-
-  .plan-usage-trigger {
-    display: inline-flex;
-    align-items: center;
-    gap: 4px;
-  }
-
-  .plan-usage-trigger--empty {
-    font-style: italic;
-  }
-
-  .plan-usage-menu {
-    width: min(420px, calc(100vw - 24px));
-    max-height: 360px;
-    padding: 8px 10px;
-    display: flex;
-    flex-direction: column;
-    gap: 6px;
-    font-size: 11px;
-    color: var(--text-secondary);
-  }
-
-  .plan-usage-headline {
-    font-weight: 600;
-    color: var(--text-primary);
-  }
-
-  .plan-usage-root {
-    color: var(--accent-blue);
-    text-decoration: none;
-  }
-
-  .plan-usage-root:hover {
-    text-decoration: underline;
-  }
-
-  .plan-usage-stale {
-    color: var(--accent-amber);
-  }
-
-  .plan-usage-totals {
-    margin: 0;
-    padding: 0;
-    list-style: none;
-    font-variant-numeric: tabular-nums;
-  }
-
-  .plan-usage-menu :global(.plan-usage-groups) {
-    flex: none;
-    border: 1px solid var(--border-muted);
-    border-radius: 4px;
-  }
-
-  .plan-usage-num {
-    text-align: right;
-    font-variant-numeric: tabular-nums;
-    white-space: nowrap;
-  }
-
-  .plan-usage-note,
-  .plan-usage-capture {
-    margin: 0;
-    color: var(--text-muted);
-    line-height: 1.4;
-  }
-
-  .plan-usage-capture {
-    padding-top: 6px;
-    border-top: 1px solid var(--border-muted);
-  }
-
-  /* Usage menus open from plain figures; a dotted underline marks them as
-     triggers without adding a chip. */
-  .usage-breakdown-trigger {
-    list-style: none;
-    cursor: pointer;
-    text-decoration: underline dotted;
-    text-decoration-color: color-mix(in srgb, currentColor 45%, transparent);
-    text-underline-offset: 3px;
-  }
-
-  .usage-breakdown-trigger::-webkit-details-marker {
-    display: none;
-  }
-
-  .usage-breakdown[open] .usage-breakdown-trigger,
-  .plan-usage[open] .usage-breakdown-trigger,
-  .usage-breakdown-trigger:hover {
-    color: var(--text-secondary);
-    text-decoration-color: currentColor;
-  }
-
-  .usage-breakdown-menu {
-    position: absolute;
-    top: 100%;
-    right: 0;
-    margin-top: 4px;
-    width: min(460px, calc(100vw - 24px));
-    max-height: 260px;
-    overflow: auto;
-    padding: 6px;
-    border: 1px solid var(--border-default);
-    border-radius: 6px;
-    background: var(--bg-primary);
-    box-shadow: var(--shadow-lg);
-    z-index: var(--z-popover);
-  }
-
-  .usage-breakdown-status {
-    padding: 5px 6px;
-    font-size: 11px;
-    color: var(--text-muted);
-  }
-
-  .usage-breakdown-row {
-    display: grid;
-    grid-template-columns: minmax(62px, 0.85fr) minmax(90px, 1fr) max-content max-content;
-    gap: 8px;
-    align-items: center;
-    padding: 5px 6px;
-    border-radius: 4px;
-    font-size: 11px;
-    line-height: 1.25;
-    color: var(--text-secondary);
-  }
-
-  .usage-breakdown-row:hover {
-    background: var(--bg-surface-hover);
-  }
-
-  .usage-breakdown-label,
-  .usage-breakdown-model {
-    min-width: 0;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-  }
-
-  .usage-breakdown-label {
-    color: var(--text-primary);
-    font-weight: 500;
-  }
-
-  .usage-breakdown-model {
-    color: var(--text-muted);
-  }
-
-  .usage-breakdown-tokens,
-  .usage-breakdown-cost {
-    font-variant-numeric: tabular-nums;
-    white-space: nowrap;
-  }
-
-  .usage-breakdown-cost {
-    color: var(--text-muted);
   }
 
   .model-badge {
@@ -2325,9 +891,6 @@
 
     /* The metadata row's figures share the chips' 16px line, so the
        second row costs 18px instead of 20px. */
-    .token-badge,
-    .cost-badge,
-    .usage-breakdown-trigger,
     .model-badge,
     .session-time {
       line-height: 16px;
@@ -2396,7 +959,7 @@
      controls start the second, ahead of the metadata. */
   /* kit-ui-check-ignore: content breakpoint where the title, transcript controls, and actions stop fitting one row; the script's wideQuery uses the same width */
   @media (min-width: 641px) and (max-width: 1099px) {
-    .session-breadcrumb > .open-group {
+    .session-breadcrumb > :global(.open-group) {
       margin-left: auto;
     }
 
@@ -2415,59 +978,12 @@
        separator is left without a group. */
     .meta-time,
     .meta-ref:not(:has(.grade-badge)),
-    .meta-stats:not(:has(.token-badge, .cost-badge, .plan-usage)) {
-      display: none;
-    }
-
-    .token-badge--desktop {
-      display: none;
-    }
-
-    .token-badge--mobile {
-      display: inline-flex;
-      font-size: 9px;
-      padding: 1px 4px;
-      max-width: 110px;
-      overflow: hidden;
-      text-overflow: ellipsis;
-    }
-
-    .usage-breakdown-trigger {
-      font-size: 9px;
-      padding: 1px 4px;
-    }
-
-    .usage-breakdown-menu {
-      right: -54px;
-      width: min(360px, calc(100vw - 16px));
-    }
-
-    .usage-breakdown-row {
-      grid-template-columns: minmax(56px, 0.8fr) minmax(68px, 1fr) max-content;
-      gap: 6px;
-      font-size: 10px;
-    }
-
-    .usage-breakdown-cost {
+    .meta-stats:not(:has(:global(.token-badge), :global(.cost-badge), :global(.plan-usage))) {
       display: none;
     }
 
     .session-id {
       display: none;
-    }
-
-    .usage-breakdown {
-      display: none;
-    }
-
-    /* The meta row scrolls sideways here, so a menu anchored to its
-       trigger can open past the screen edge; span the viewport instead. */
-    .plan-usage-menu {
-      position: fixed;
-      top: auto;
-      left: 8px;
-      right: 8px;
-      width: auto;
     }
   }
 

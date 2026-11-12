@@ -361,7 +361,9 @@ func (s singleFileSourceSet) Parse(
 		}, nil
 	}
 	out := make([]ParseResultOutcome, 0, len(results))
+	replace := len(results) > 0
 	for i := range results {
+		replace = replace && results[i].replacesStored
 		out = append(out, ParseResultOutcome{
 			Result:      results[i],
 			DataVersion: DataVersionCurrent,
@@ -371,6 +373,7 @@ func (s singleFileSourceSet) Parse(
 		Results:            out,
 		ExcludedSessionIDs: excluded,
 		ResultSetComplete:  true,
+		ForceReplace:       replace,
 	}, nil
 }
 

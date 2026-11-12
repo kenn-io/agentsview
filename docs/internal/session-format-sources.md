@@ -1,5 +1,5 @@
 ---
-last_edited: 2026-11-11
+last_edited: 2026-11-12
 ---
 
 # Session Format Source Inventory
@@ -493,6 +493,28 @@ fixtures retain this field; missing identities remain source-local.
   it, and an absent or malformed breakdown falls back to the 5m rate for the
   whole write total (issue #1452).
 
+- **Session cost total (`cost-state`, checked 2026-11-11):** Claude Code appends
+  `cost-state` records with `totalCostUSD`, `hasUnknownModelCost`, and
+  per-model `modelUsage` (`inputTokens`, `outputTokens`, `thinkingTokens`,
+  `cacheReadInputTokens`, `cacheCreationInputTokens`, `webSearchRequests`,
+  `costUSD`). No public producer source exists; this is observed evidence from
+  1,480 records in 917 local Claude Code 2.1 transcripts. The records are
+  cumulative snapshots: every record in a file shares one `startTime`, and no
+  total decreases, so the last record is the file's total. Subagent
+  transcripts never carry one. The total includes subagent calls: across 81
+  sessions with subagents, transcript output was 49% of `outputTokens` for the
+  parent file alone and 103.5% with its subagent files, while 817 sessions
+  without subagents matched within 1-3%. It also includes side calls that are
+  never written to the transcript: 130 of the 131 sessions whose transcript
+  output is more than 10% below the total have an `ai-title` record, and
+  titled sessions run a median of 31 output and 1,520 input tokens above their
+  transcripts while untitled ones match. Agentsview keeps the last record with
+  usage as the session total, with subagent scope `included`, in
+  `session_usage_totals` (data version 177). It is never added to usage or cost;
+  `session usage` shows it as `session_total` and an `Agent total:` line. An
+  appended record with usage makes the incremental parser fall back to a full
+  parse.
+
 - **Server tool use (web search):** Anthropic bills server-side web search at
   $10 per 1,000 requests on top of tokens and reports the count in
   `message.usage.server_tool_use.web_search_requests`, which Claude Code
@@ -755,20 +777,20 @@ fixtures retain this field; missing identities remain source-local.
   and remote compaction leaves it empty. A read-only scan of 17,779 local
   rollouts found 230,292 reasoning items: 27,822 had summary text, none had
   raw `content`, and the rest were encrypted only. It also found 177
-  `compacted` records, 160 with a summary. Local compaction writes the
-  summary model's reply as an ordinary assistant message, followed by its
+  `compacted` records, 160 with a summary. Local compaction writes the summary
+  model's reply as an ordinary assistant message, followed by its
   `token_count`, before the `compacted` record. Agentsview stores readable
-  reasoning as an assistant thinking row: summary text first, raw content
-  only when there is no summary, and no row for encrypted-only reasoning.
-  Each `compacted` record becomes a system compact-boundary row whose content
-  is `message`. When remote compaction leaves it empty, the row has no
-  content, because the transcript divider already labels every compaction.
-  `replacement_history` is not replayed. Usage attachment skips boundary
-  rows. A reasoning row takes usage only while it is the newest assistant row
-  of the turn, so the message or call that follows it in the same response
-  keeps that response's usage. In the scan, 9 `token_count` events from
-  responses that produced only reasoning used to be dropped and now count,
-  and 57 move from an older assistant message to their own response. Native
+  reasoning as an assistant thinking row: summary text first, raw content only
+  when there is no summary, and no row for encrypted-only reasoning. Each
+  `compacted` record becomes a system compact-boundary row whose content is
+  `message`. When remote compaction leaves it empty, the row has no content,
+  because the transcript divider already labels every compaction.
+  `replacement_history` is not replayed. Usage attachment skips boundary rows.
+  A reasoning row takes usage only while it is the newest assistant row of the
+  turn, so the message or call that follows it in the same response keeps that
+  response's usage. In the scan, 9 `token_count` events from responses that
+  produced only reasoning used to be dropped and now count, and 57 move from
+  an older assistant message to their own response. Native
   `token_usage_record` rows carry `response_id`, per-response `usage`, and
   running turn and thread totals
   ([protocol.rs](https://github.com/openai/codex/blob/87b7bdbf2efb9cb6fb15d821ef535061012c0138/codex-rs/protocol/src/protocol.rs)).
@@ -777,12 +799,11 @@ fixtures retain this field; missing identities remain source-local.
   the parser still reads only `token_count` and adds no session totals.
   Repeated `token_count` events are now recognized by their whole `info`
   object, including the cumulative `total_token_usage`, so two calls with
-  equal per-call counts both count. The scan suppressed the same
-  753 repeats under both keys. Usage that still finds no row stays
-  unattached. Data version 174 reparses Codex, TraeX, Augure Code, Open
-  Interpreter, and Codex Cloud sources in place, and the parser checkpoint
-  moves to version 6, so a stored cursor makes the next append a full parse.
-  Covered by
+  equal per-call counts both count. The scan suppressed the same 753 repeats
+  under both keys. Usage that still finds no row stays unattached. Data
+  version 174 reparses Codex, TraeX, Augure Code, Open Interpreter, and Codex
+  Cloud sources in place, and the parser checkpoint moves to version 6, so a
+  stored cursor makes the next append a full parse. Covered by
   `TestCodexReasoningKeptAsThinking`, `TestCodexReasoningUsageAttachment`,
   `TestCodexCompactedRecordBecomesBoundary`,
   `TestCodexTokenCountDedupUsesCumulativeTotal`,
@@ -1443,6 +1464,7 @@ fixtures retain this field; missing identities remain source-local.
   The prefix seed applies the same attach rule as the full parse, so later
   ordinals do not shift. TraeX, Augure Code, and Open Interpreter share this
   decoder.
+
 - **Agentsview:** `internal/parser/codex.go` and
   `internal/parser/codex_provider.go`; usage is taken from the last-turn
   counters rather than repeatedly counting cumulative totals. Reverified
@@ -1601,10 +1623,10 @@ fixtures retain this field; missing identities remain source-local.
   Scripts with several tool calls cannot start new commit links. Their polls
   need output process IDs matching earlier commit calls. The reused-process-ID
   case checks that a new native commit execution owns its repository and
-  prompt after a batch poll.
-  An archived `shell` call records `command` as an array. Scripts passed to
-  `sh`, `bash`, or `zsh` with `-c` or `-lc` are read as-is; direct Git
-  arguments are quoted word by word. Other executables are not classified.
+  prompt after a batch poll. An archived `shell` call records `command` as an
+  array. Scripts passed to `sh`, `bash`, or `zsh` with `-c` or `-lc` are read
+  as-is; direct Git arguments are quoted word by word. Other executables are
+  not classified.
 
 - **Pending calls reverified 2026-09-07:** the pinned upstream
   [task abort path](https://github.com/openai/codex/blob/406dc9239492aff6d295cca5eebe2a548548d42f/codex-rs/core/src/tasks/mod.rs#L846-L915)
@@ -2042,6 +2064,62 @@ fixtures retain this field; missing identities remain source-local.
   derived `chat_history.jsonl` model-message cache, and an authoritative
   `updates.jsonl` stream of timestamped ACP and xAI session notifications.
 
+- **Compaction (reverified 2026-11-12):** A compaction appends a
+  `compaction_checkpoint` record to `updates.jsonl`, writes
+  `compaction_checkpoints/<id>.json`, and replaces `chat_history.jsonl` with
+  the compacted history. The pinned
+  [chat rebuild reducer](https://github.com/xai-org/grok-build/blob/2bdd1d6a6369de0e8c68132ea4539e9abd9e14a8/crates/codegen/xai-grok-shell/src/session/storage/mod.rs#L256-L620)
+  truncates the cache at each checkpoint, so only `updates.jsonl` keeps the
+  turns before it. The
+  [compacted history](https://github.com/xai-org/grok-build/blob/2bdd1d6a6369de0e8c68132ea4539e9abd9e14a8/crates/codegen/xai-chat-state/src/compaction_utils.rs#L920-L1000)
+  opens with the system prompt, a user-info `compaction_meta` row, the
+  carried user query, and recent messages, then the summary row. That row is
+  the `compaction_meta` row whose text starts with the
+  [continuation preamble](https://github.com/xai-org/grok-build/blob/2bdd1d6a6369de0e8c68132ea4539e9abd9e14a8/crates/codegen/xai-chat-state/src/compaction_utils.rs#L811-L819);
+  the checkpoint file's `compacted_history` holds the same rows. Agentsview
+  rebuilds each pre-checkpoint segment from `updates.jsonl` with the reducer's
+  turn rules: a switch between user and agent output closes the open item, and
+  a finished tool call closes the agent item before its result. Unlike the
+  reducer, it keeps `agent_thought_chunk` text as thinking. It names calls
+  from `_meta["x.ai/tool"].name`, because later updates replace `title` with
+  display text. Chunks marked `hostTurn` close the open items, and user chunks
+  marked `syntheticPrompt` are dropped. Each checkpoint becomes a compact
+  boundary carrying its summary. The replayed prefix before the summary row in
+  `chat_history.jsonl` is dropped when the stream supplied those turns. Local
+  sessions written from 2026-09-20 to 2026-11-12 match this shape: 11
+  compacted sessions with up to 8 checkpoints each, every checkpoint file
+  present, and only the latest compaction's rows in `chat_history.jsonl`.
+  Sessions do not record the Grok Build version that wrote them. A fresh
+  session from Grok Build 1.0.77, the latest stable release on 2026-11-12,
+  compacted twice with `/compact`, matches the same shape and parses to 23
+  rows with 2 boundaries. The `syntheticPrompt` marker was observed in the
+  older sessions and is absent from the pinned source.
+
+- **Rebuilt models and web searches (observed 2026-11-12):** Agent output in
+  `updates.jsonl` carries no model. Each turn's `turn_completed` record names
+  its model as the one key of `usage.modelUsage`, such as `grok-4.7-build`,
+  the name `chat_history.jsonl` writes as `model_id`. Agentsview stamps that
+  model on the turn's rebuilt assistant rows, including rows before a
+  checkpoint the turn ran across. User chunks carry `_meta.modelId` without
+  the `-build` suffix, so it is not used. In local sessions, 310 of 311 turns
+  name one model; a turn naming several leaves its rows without one. A backend
+  web search starts with title `Web search:` and `rawInput`
+  `{"variant":"WebSearch","backend":true}`; its query arrives in the finished
+  update's `rawOutput.action`. Agentsview rebuilds it as `web_search` with
+  that action as input, as `chat_history.jsonl` records it.
+
+- **Archive writes:** Later records change rows an earlier sync stored: a result
+  pairs onto a stored call, and a compaction renumbers rebuilt rows. A Grok
+  parse with every source file present therefore replaces the stored
+  transcript. A parse missing `chat_history.jsonl`, `updates.jsonl` after a
+  compaction, or a needed checkpoint file appends instead and keeps the
+  archived rows.
+
+- **Tool rows:** Assistant rows keep their calls in `tool_calls` and add a
+  rendered block per call to the row text, as Claude rows do. Results pair
+  onto their calls by `tool_call_id`. This matches the Claude and Codex
+  layout, so Grok emits no standalone tool-role rows.
+
 - **Evidence:** `source`.
 
 - **Upstream:** Clone `https://github.com/xai-org/grok-build.git` at
@@ -2056,7 +2134,9 @@ fixtures retain this field; missing identities remain source-local.
   confirm that the derived chat rows themselves carry no message timestamps.
   Agentsview maps timestamped `tool_call` and terminal `tool_call_update`
   records to the existing tool-result event model, so Activity can use tool
-  completion time without adding derived transcript messages.
+  completion time. Transcript rows after the last compaction come from
+  `chat_history.jsonl`; earlier rows are rebuilt from the stream, as the
+  compaction entry below describes.
 
 - **Usage and cost:** Durable `turn_completed` updates may carry per-model
   input, output, cache-read, cache-creation, and reasoning tokens plus
@@ -2113,9 +2193,11 @@ fixtures retain this field; missing identities remain source-local.
   [copied-fork](https://github.com/xai-org/grok-build/blob/d71f6e0c1f5acc5469e503e192fe14824e6f8c90/crates/codegen/xai-grok-shell/src/agent/subagent/mod.rs#L1291-L1306)
   summary writes in `subagent/mod.rs` at the commit above.
 
-- **Agentsview:** `internal/parser/grok.go`, `internal/parser/grok_provider.go`,
-  colocated tests, and the sanitized upstream-generated fixtures in
-  `internal/parser/testdata/grok-build`.
+- **Agentsview:** `internal/parser/grok.go`,
+  `internal/parser/grok_compaction.go`, `internal/parser/grok_provider.go`,
+  colocated tests, and the sanitized fixtures in
+  `internal/parser/testdata/grok-build`. The `compacted` fixture follows the
+  record shapes of local Grok Build sessions with invented content.
 
 - **Watcher evidence (2026-09-20):** Rechecked the pinned session guide above:
   `summary.json` indexes the session, while transcript and signal files are
@@ -2140,8 +2222,13 @@ fixtures retain this field; missing identities remain source-local.
   [usage normalization and cost calculation](https://github.com/XiaomiMiMo/MiMo-Code/blob/f24ce4eb7341bfba6bb608436c1d27a843508adf/packages/opencode/src/session/session.ts).
 - **Usage and cost:** Assistant message data persists input, output, reasoning,
   cache-read, cache-write, model, and a calculated currency cost. Agentsview
-  reads the token/model fields but deliberately ignores the stored cost and
-  catalog-prices the normalized usage.
+  catalog-prices the normalized usage. Reverified 2026-11-11: `getUsage`
+  estimates each step's cost from models.dev rates (0 when unpriced) and
+  writes it on the `step-finish` part; in max mode the message `cost` also
+  includes losing candidates and the judge
+  ([processor](https://github.com/XiaomiMiMo/MiMo-Code/blob/f24ce4eb7341bfba6bb608436c1d27a843508adf/packages/opencode/src/session/processor.ts#L982)).
+  Agentsview keeps the sum of the `step-finish` costs as a recorded cost, as
+  for OpenCode.
 - **Agentsview:** `internal/parser/mimocode.go` delegates to
   `internal/parser/opencode.go`; compare MiMo's pinned schema with OpenCode
   whenever their shared parser changes.
@@ -2423,20 +2510,33 @@ preservation of archived messages for OpenCode, Kilo, MiMoCode, and Icodemate.
 
 - **Usage and cost:** Assistant messages persist input, output, cache-read, and
   cache-write tokens, plus model/provider identity. Agentsview computes price
-  from those tokens rather than consuming a persisted USD total. Reverified
-  2026-09-07: the pinned `message-v2.ts` hydrates message data independently
-  of its part rows. Agentsview retains model identity even when no recognized
-  token fields are available; usage-only resync guards check model loss before
-  checking token counts.
+  from those tokens. Reverified 2026-11-11 at the pinned commit: each
+  `step-finish` part stores the `cost` of one model request, which
+  [`Session.getUsage`](https://github.com/anomalyco/opencode/blob/dff8fbc149fb7492e4f07b713ac31ea70d9a541c/packages/opencode/src/session/session.ts#L338)
+  estimates in USD from models.dev or configured rates (0 when a model has
+  no rate; GitHub Copilot responses use the provider's nano-AIU charge). The
+  [processor](https://github.com/anomalyco/opencode/blob/dff8fbc149fb7492e4f07b713ac31ea70d9a541c/packages/opencode/src/session/processor.ts#L458)
+  adds each step's cost to the message `cost` but overwrites the message
+  `tokens` with the last step's, so a multi-step message's tokens cover only
+  its last request. Agentsview keeps the sum of the message's `step-finish`
+  costs as a recorded cost (data version 176), which prices the message only
+  when the catalog has no rate for its model. The message `cost` is not used,
+  because Kilo and MiMo Code add costs that belong to other requests to it.
+  The experimental `session_message` table always stores `cost: 0`, so the v2
+  path records none. Reverified 2026-09-07: the pinned `message-v2.ts`
+  hydrates message data independently of its part rows. Agentsview retains
+  model identity even when no recognized token fields are available;
+  usage-only resync guards check model loss before checking token counts.
 
-- **Usage-only records (checked 2026-11-11 at `v1.19.5`, the last release
-  that writes the v1 tables):** On every `step-finish`,
+- **Usage-only records (checked 2026-11-11 at `v1.19.5`, the last release that
+  writes the v1 tables):** On every `step-finish`,
   [processor.ts](https://github.com/anomalyco/opencode/blob/810c0eba1a7348036f8bdf61e6632d0c36c6876c/packages/opencode/src/session/processor.ts#L435-L470)
   saves the step's tokens on the assistant message, whatever parts the step
   produced. A v1 message can therefore carry usage with no text, reasoning
   text, or tool part. Agentsview stores it as a hidden usage-only row, as the
   v2 projection already did. Kilo, MiMo Code, and ICodeMate share this
   decoder.
+
 - **Working directory:** SQLite sessions store a per-session `directory` and a
   `project_id`. The synthetic `global` project uses `worktree=/`. Agentsview
   prefers a concrete `session.directory` over `project.worktree` when
@@ -2577,17 +2677,17 @@ preservation of archived messages for OpenCode, Kilo, MiMoCode, and Icodemate.
   at a local Ollama server therefore yields Ollama tags such as
   `kimi-k2.7-code:cloud`, and `data.providerID` is that config's own key
   rather than a catalog provider, so the parser does not retain it. OpenCode
-  writes `cost: 0` for such models because it has no rate for them, and the
-  parser never imports OpenCode cost, so every such turn is priced by
+  writes `cost: 0` for such models because it has no rate for them. A recorded
+  $0 never prices a row, so every such turn is priced by
   agentsview. Ollama's [pricing page](https://ollama.com/pricing) bills cloud
   models per million tokens; on the check date it listed `kimi-k2.7-code` at
-  $0.95 input, $0.19 cached input, and $4.00 output, equal to the `moonshotai`
-  row in the embedded GenAI Prices document. `PricingResolver.ResolveAt`
-  therefore retries the untagged name (`pricing.OllamaCloudBaseModel`) only
-  after every exact, custom, historical, and canonical attempt on the tagged
-  name fails. The pinned LiteLLM snapshot lists `ollama/*-cloud` rows at $0;
-  those exact rows still win, and local tags such as `:27b-mlx` or `:latest`
-  stay unpriced.
+  $0.95 input, $0.19 cached input, and $4.00 output, equal to the
+  `moonshotai` row in the embedded GenAI Prices document.
+  `PricingResolver.ResolveAt` therefore retries the untagged name
+  (`pricing.OllamaCloudBaseModel`) only after every exact, custom, historical,
+  and canonical attempt on the tagged name fails. The pinned LiteLLM snapshot
+  lists `ollama/*-cloud` rows at $0; those exact rows still win, and local tags
+  such as `:27b-mlx` or `:latest` stay unpriced.
 
 - **Agentsview:** `internal/parser/opencode.go`,
   `internal/parser/opencode_provider.go`, and
@@ -2612,8 +2712,14 @@ preservation of archived messages for OpenCode, Kilo, MiMoCode, and Icodemate.
   and
   [message.ts](https://github.com/Kilo-Org/kilocode/blob/938919ab72e3977d1512e0363417270e3337c7b1/packages/core/src/session/message.ts).
 - **Usage and cost:** Compatible message data includes input, output,
-  cache-read, and cache-write tokens with model identity. The parser does not
-  consume a Kilo-reported currency total; Agentsview catalog-prices tokens.
+  cache-read, and cache-write tokens with model identity. Agentsview
+  catalog-prices tokens. Reverified 2026-11-11: Kilo's `getUsage` prefers the
+  provider's reported charge (OpenRouter, the Kilo gateway, Vercel AI Gateway)
+  and otherwise estimates from rates, and the stored value does not say which.
+  [`KiloCostPropagation`](https://github.com/Kilo-Org/kilocode/blob/938919ab72e3977d1512e0363417270e3337c7b1/packages/opencode/src/kilocode/session/cost-propagation.ts#L63)
+  adds child subagent session costs into the parent message `cost`, so
+  Agentsview keeps only the sum of the message's `step-finish` costs as a
+  recorded cost, as for OpenCode.
 - **Agentsview:** `internal/parser/kilo.go` uses the OpenCode family parser.
   Kilo migrations mean the pinned current source must be compared with legacy
   fixtures when changing compatibility.
@@ -2716,8 +2822,8 @@ schemas keep their existing ordering behavior.
   provider-executed tool activity, which lives in
   `metadata.modelToolActivities`. Every assistant message carries `metrics`.
   Agentsview stores such a message as a hidden usage-only row. When any
-  message carries metrics, the session aggregate event keeps only the
-  reported cost, so the row does not double count.
+  message carries metrics, the session aggregate event keeps only the reported
+  cost, so the row does not double count.
 - **Agentsview:** `internal/parser/cline.go` and
   `internal/parser/cline_provider.go`. User input in `<id>.messages.json` is
   wrapped in `<user_input mode="...">` envelopes and can contain internal
@@ -2943,9 +3049,10 @@ schemas keep their existing ordering behavior.
   update (3.16.29) has shrunk or wiped some users' `cursorDiskKV` rows, so the
   parser tolerates a `fullConversationHeadersOnly` entry whose `bubbleId` row
   is missing rather than failing the whole session.
-- **Chunked headers:** [Issue #2863](https://github.com/kenn-io/agentsview/issues/2863)
-  reports a `_v: 18` composer with an empty inline header list and a
-  `headerLog` containing `count` and `chunkCount`. Its ordered headers live in
+- **Chunked headers:**
+  [Issue #2863](https://github.com/kenn-io/agentsview/issues/2863) reports a
+  `_v: 18` composer with an empty inline header list and a `headerLog`
+  containing `count` and `chunkCount`. Its ordered headers live in
   `composerConvHeaders:<composerId>:<six-digit index>` rows. The synthetic
   parser and sync tests reproduce this reported shape. Agentsview reads only
   the declared chunks and marks missing, empty, or short sets truncated.
@@ -3000,18 +3107,19 @@ schemas keep their existing ordering behavior.
   rewrite that leaves size and mtime unchanged still misses the skip cache; a
   member-level fingerprint digests every parse input of that one composer (the
   raw `composerData` document plus its bubble and header rows' keys and
-  values), so an equal-length bubble rewrite, a header reorder, or a rename that
-  leaves `lastUpdatedAt` untouched still reads as changed. A chat deleted inside
-  Cursor IDE is retired through stored-source-hint tombstones on `state.vscdb`
-  change events and through complete-container ownership reconciliation. A
-  `state.vscdb` watcher event hashes each composer's `composerData` document
-  and parses only composers whose hash differs from the archived one; chats
-  trashed or permanently deleted in agentsview are skipped. Edits confined to
-  bubble or header rows, composers whose value became NULL or headerless, and a
-  replacement database whose composer documents are byte-identical wait for
-  the 15-minute scheduled reconciliation, which reparses the whole database
-  whenever its container fingerprint moved. A malformed `composerData` value
-  fails that scheduled pass until it is fixed.
+  values), so an equal-length bubble rewrite, a header reorder, or a rename
+  that leaves `lastUpdatedAt` untouched still reads as changed. A chat deleted
+  inside Cursor IDE is retired through stored-source-hint tombstones on
+  `state.vscdb` change events and through complete-container ownership
+  reconciliation. A `state.vscdb` watcher event hashes each composer's
+  `composerData` document and parses only composers whose hash differs from
+  the archived one; chats trashed or permanently deleted in agentsview are
+  skipped. Edits confined to bubble or header rows, composers whose value
+  became NULL or headerless, and a replacement database whose composer
+  documents are byte-identical wait for the 15-minute scheduled reconciliation,
+  which reparses the whole database whenever its container fingerprint
+  moved. A malformed `composerData` value fails that scheduled pass until it
+  is fixed.
 
 ## Amp (`amp`)
 
@@ -3225,7 +3333,13 @@ schemas keep their existing ordering behavior.
   cache-read and cache-write/creation values in nested or historical flat
   shapes. Model IDs are present. Agentsview catalog-prices the tokens. Data
   version 81 reparses existing Pi-family archives after adding the flat
-  `cacheWrite` spelling.
+  `cacheWrite` spelling. Each assistant message also stores `usage.cost.total`
+  in USD, which
+  [`calculateCost`](https://github.com/earendil-works/pi/blob/f1c587dde39025c75d7397bc14532d8fa5c001d9/packages/ai/src/models.ts#L639)
+  estimates from the model registry; custom models have zero rates and
+  record $0. Agentsview keeps it as a recorded cost (data version 176), which
+  prices the message only when the catalog has no rate for its model.
+  Reverified 2026-11-11.
 - **Reasoning effort:** Assistant messages store the Pi thinking level as
   `message.thinkingLevel`, written since Pi v0.99.0 (2026-09-29, upstream
   commit `540e174c72`, "Virtual models"). Older logs carry only
@@ -3493,10 +3607,10 @@ schemas keep their existing ordering behavior.
   catalog-derived.
 - **Usage-only records (checked 2026-11-11 at the pinned commit):**
   [geminiChat.ts](https://github.com/QwenLM/qwen-code/blob/076427650d363ce9e9a0962f389361b474c170dc/packages/core/src/core/geminiChat.ts#L3906-L3931)
-  throws before recording a reply with no text, thought, or function call, so
-  no usage-only assistant record reaches the file. Thought-only replies with
-  `usageMetadata` are recorded, and Agentsview already keeps them. No change
-  was needed.
+  throws before recording a reply with no text, thought, or function call,
+  so no usage-only assistant record reaches the file. Thought-only replies
+  with `usageMetadata` are recorded, and Agentsview already keeps them. No
+  change was needed.
 - **Session names (2026-09-30):** `/rename` and the title generator append
   `{"type":"system","subtype":"custom_title","systemPayload":{"customTitle":"<name>","titleSource":"manual"|"auto"}}`
   to the same chat JSONL, and the last record wins. Records written before
@@ -3758,9 +3872,15 @@ schemas keep their existing ordering behavior.
   and
   [usage-accumulator.ts](https://github.com/openclaw/openclaw/blob/40d31f34813c2a01284b097c0d0d785fbb173400/src/agents/embedded-agent-runner/usage-accumulator.ts).
 - **Usage and cost:** Messages persist input, output, cache-read, cache-write,
-  model identity, and sometimes `usage.cost.total`. Agentsview intentionally
-  ignores the reported cost and catalog-prices normalized token fields to keep
-  pricing attribution consistent.
+  model identity, and sometimes `usage.cost.total`. Agentsview catalog-prices
+  normalized token fields and keeps `usage.cost.total` as a recorded cost
+  (data version 176), which prices the message only when the catalog has no
+  rate for its model. Reverified 2026-11-11:
+  [`calculateCost`](https://github.com/openclaw/openclaw/blob/40d31f34813c2a01284b097c0d0d785fbb173400/packages/ai/src/model-utils.ts#L9)
+  estimates it from catalog or configured rates (0 when unpriced), and
+  [`applyProviderReportedUsageCost`](https://github.com/openclaw/openclaw/blob/40d31f34813c2a01284b097c0d0d785fbb173400/packages/ai/src/model-utils.ts#L23)
+  replaces only `total` with the provider's charge and sets
+  `cost.totalOrigin` to `provider-billed`.
 - **Usage-only records (checked 2026-11-11 at the pinned commit):** The agent
   loop emits the provider's final message, usage included, as `message_end`
   without checking its content
@@ -3840,7 +3960,7 @@ schemas keep their existing ordering behavior.
   the compatible format family, not the exact QClaw build.
 - **Usage and cost:** Compatible records can contain input, output, cache-read,
   cache-write, model, and reported total cost. As for OpenClaw, Agentsview
-  ignores the reported monetary field and catalog-prices tokens.
+  catalog-prices tokens and keeps `usage.cost.total` as a recorded cost.
 - **Agentsview:** `internal/parser/qclaw.go` has its own decoder for the
   OpenClaw record shape. Like OpenClaw, it keeps an assistant message with
   usage and no text or tool call as a hidden usage-only row (rechecked
@@ -4973,8 +5093,10 @@ schemas keep their existing ordering behavior.
   message.usage token fields) is compatible-family evidence from the `claude`
   entry.
 - **Usage and cost:** Compatible messages can persist input, output, cache-read,
-  cache-write, and model identity. Agentsview catalog-prices these values and
-  consumes no product-reported USD total.
+  cache-write, and model identity. Agentsview catalog-prices these values. On
+  the VSCode OpenCode path, a `step-finish` part `cost` is kept as a recorded
+  cost through the shared OpenCode parser, which prices a message only when
+  the catalog has no rate. No iCodeMate store with step costs was inspected.
 - **Agentsview:** `internal/parser/icodemate.go` delegates to
   `internal/parser/opencode.go` for the VSCode OpenCode path;
   `internal/parser/icodemate_cli.go` parses the Claude-format CLI projects
@@ -5212,19 +5334,24 @@ schemas keep their existing ordering behavior.
 
 - **Format:** A `shelley.db` SQLite database containing conversations, messages,
   and JSON usage data.
-- **Evidence:** `documentation`.
-- **Upstream:** The first-party
-  [Shelley launch and storage documentation](https://blog.exe.dev/shelley) was
-  checked 2026-07-19 and identifies the SQLite store at
-  `~/.config/shelley/shelley.db`. No public migration, table schema, or
-  producer source was found, so column-level details remain observed evidence.
-- **Usage and cost:** `usage_data` can persist input, cache-creation,
-  cache-read, output, model, and exact `cost_usd`. Agentsview intentionally
-  ignores `cost_usd` while emitting token usage, avoiding mixed/double cost
-  attribution and using catalog pricing instead.
+- **Evidence:** `source`.
+- **Upstream:** Clone `https://github.com/boldsoftware/shelley.git` at
+  `4c77f06f2b5596a01acca12eeee82e81a83481c1` (found 2026-11-11); see the
+  [messages schema](https://github.com/boldsoftware/shelley/blob/4c77f06f2b5596a01acca12eeee82e81a83481c1/db/schema/002-messages.sql)
+  and the
+  [`Usage` type](https://github.com/boldsoftware/shelley/blob/4c77f06f2b5596a01acca12eeee82e81a83481c1/llm/llm.go#L786).
+  The first-party
+  [launch and storage documentation](https://blog.exe.dev/shelley) identifies
+  the SQLite store at `~/.config/shelley/shelley.db`.
+- **Usage and cost:** `usage_data` persists input, cache-creation, cache-read,
+  output, model, and `cost_usd`. `cost_usd` is the exe.dev gateway's
+  `Exedev-Gateway-Cost` response header, or 0 when the header is missing
+  ([`CostUSDFromResponse`](https://github.com/boldsoftware/shelley/blob/4c77f06f2b5596a01acca12eeee82e81a83481c1/llm/llm.go#L769)).
+  Agentsview catalog-prices the tokens and keeps `cost_usd` as a recorded
+  cost (data version 176), which prices the message only when the catalog has
+  no rate for its model. Indirect calls in `other_usage_data` are not read.
 - **Agentsview:** `internal/parser/shelley.go` and
-  `internal/parser/shelley_provider.go`; schema and cost-field behavior are
-  observed implementation evidence.
+  `internal/parser/shelley_provider.go`.
 
 ## Mistral Vibe (`vibe`)
 
@@ -5823,12 +5950,18 @@ schemas keep their existing ordering behavior.
   [vercel-labs/fx#1226](https://github.com/vercel-labs/fx/pull/1226), so only
   older sessions have it. Input includes cache reads and writes. AgentsView
   subtracts those tokens from fresh input and prices the separate token counts
-  from its catalog. It omits fx's reported cost, which can be zero for
-  subscription runs. Cumulative totals leave peak context unknown. Usage dates
-  use the earlier of the latest transcript event and the usage file's
-  modification time, falling back to the latest event or session start when
-  the modification time is unavailable. Optional counts can be null, which
-  AgentsView treats as unknown with zero tokens.
+  from its catalog. Each model entry's `total_cost` is the Vercel AI Gateway
+  charge
+  ([gateway client](https://github.com/vercel-labs/fx/blob/b9ca60d0102cf84cea061456c41206f66149b311/src/gateway/client.zig#L3359)),
+  and 0 for Codex and Grok subscription runs. Agentsview keeps it as a
+  recorded cost (data version 176) only when `snapshot.billing` is `complete`,
+  the same condition fx uses before it reports a cost; it prices the model's
+  usage only when the catalog has no rate. Reverified 2026-11-11. Cumulative
+  totals leave peak context unknown. Usage dates use the earlier of the latest
+  transcript event and the usage file's modification time, falling back to the
+  latest event or session start when the modification time is unavailable.
+  Optional counts can be null, which AgentsView treats as unknown with zero
+  tokens.
 - **Agentsview:** Sessions require schema 4. Event frames support schemas 1 to
   3, usage envelopes and owner markers schema 1, and usage snapshots schema 3.
   Unsupported session, event, or owner versions skip the source. Encrypted

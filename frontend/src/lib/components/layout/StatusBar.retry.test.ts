@@ -8,7 +8,7 @@ import { sync } from "../../stores/sync.svelte.js";
 describe("StatusBar degraded backend retry", () => {
   beforeEach(() => {
     sync.backendDegraded = true;
-    sync.backendDegradedMessage = "sync not ready";
+    sync.backendDegradedMessage = "Session data unavailable. Click to retry.";
     sync.lastSync = "2026-04-08T05:00:00Z";
     sync.remoteUnreachable = false;
   });

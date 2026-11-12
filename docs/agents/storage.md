@@ -33,6 +33,11 @@ raw-sync checkpoints use the same limit with the cgo driver; the modernc driver
 keeps its existing configuration. Checkpoint caching applies to writable opens.
 These caches close with their connections and do not change the stored data.
 
+The signature replay store caches up to 64 prepared statements on its single
+writable connection. Its read-only identity probe uses an uncached connection.
+Replay admission keeps its immediate transactions, rollback journal, and EXTRA
+synchronous setting.
+
 The startup worker snapshots freshness for digest-capable providers while it
 holds the archive write lock, before the daemon opens the archive; later passes
 query live state.
@@ -49,6 +54,20 @@ writes receive a retryable HTTP 503. Scoped upgrades and schema repairs still
 block startup. A failed or unlaunchable startup rebuild keeps serving with
 writes allowed and retries on the archive audit cadence. Startup uses no
 in-process fallback.
+
+The parsed-output digest records each provider and corpus input under
+`internal/parser/testdata/data-version-output-digests`. If output changes for a
+recorded input, take a new data version and record its digest with `bump` set
+to true. Keep records already on main. For a new input, append its first digest
+at the current version using output from the current main parser, and leave
+`bump` unset. This also applies when the input accompanies a parser change.
+A new provider can append its first digest at the current version. If records
+conflict, keep the record from main, remove your unmerged conflicting record,
+and take the next version.
+
+The digest covers only inputs in `internal/parser/testdata/data-version-corpus`.
+Parser behavior outside that corpus is unguarded. Add a representative input
+for each new stored-output behavior.
 
 A parser upgrade can instead reparse only the affected providers in place.
 Declare it in `dataVersionScopes` in `internal/db/data_version_scope.go`:
@@ -185,8 +204,11 @@ as complete for draining attached archive sources.
 The `raw_archive_*` tables record retained captures, root identities, accepted
 sources and deletion evidence. Seed import and restore permanently enable
 archive-only mode, which disables source sync and publication. These archives
-store `1 << 20` plus their parser version in `PRAGMA user_version`, so older builds refuse them. This build decodes that range and preserves pending rebuilds; ordinary archives keep their parser version unchanged.
-Data version 173 requires no source reparse; it keeps older binaries from writing archives whose image-text index they cannot maintain.
+store `1 << 20` plus their parser version in `PRAGMA user_version`, so older
+builds refuse them. This build decodes that range and preserves pending
+rebuilds; ordinary archives keep their parser version unchanged. Data version
+173 requires no source reparse; it keeps older binaries from writing archives
+whose image-text index they cannot maintain.
 
 ### Artifact checkpoint landings
 
@@ -734,8 +756,8 @@ Keep identity-only corrections in the reporting digest. The wire contract is in
 
 ### Harness-recorded costs
 
-A harness-recorded cost is a figure the agent computed from its own rates. It
-is stored as a usage event with `cost_status = 'recorded'`
+A harness-recorded cost is a figure the agent computed from its own rates. It is
+stored as a usage event with `cost_status = 'recorded'`
 (`usagefacts.CostStatusRecorded`), or for one message under the
 `recorded_cost_microdollars` key of that message's `token_usage` JSON
 (`usagefacts.RecordedCostKey`). It prices a row only when
@@ -745,18 +767,37 @@ reported cost wins.
 
 - Decide in Go, after the catalog lookup, through `db.ReportedCostForPricing`.
   SQL cannot see the catalog, so SQL that zeroes billable tokens or sums
-  explicit costs must treat recorded rows as unpriced and carry the figure in a
-  separate `recorded_cost_microdollars` column (DuckDB and ClickHouse do this).
+  explicit costs must treat recorded rows as unpriced and carry the figure in
+  a separate `recorded_cost_microdollars` column (DuckDB and ClickHouse do
+  this).
 - Message rows select no cost in SQL. SQLite and PostgreSQL scanners fill it
   from the token JSON with `db.MessageRecordedCost`; DuckDB and ClickHouse
-  extract it in SQL. ClickHouse stores it in `usage_messages.usage_recorded_cost`
-  and the snapshot `usage_recorded_costs` array.
+  extract it in SQL. ClickHouse stores it in
+  `usage_messages.usage_recorded_cost` and the snapshot `usage_recorded_costs`
+  array.
 - A cost-only row whose recorded figure loses contributes nothing: no breakdown
   entry, no computed request count.
-- `dbtest.SeedRecordedCostSessions` and `dbtest.AssertRecordedCostUsage` are
-  the cross-backend acceptance check; every backend runs them.
+- `dbtest.SeedRecordedCostSessions` and `dbtest.AssertRecordedCostUsage` are the
+  cross-backend acceptance check; every backend runs them.
 - Validation writes a costed usage event with no model under
   `usagefacts.UnknownModel` (`<unknown>`), so usage reads keep it.
+
+### Session usage totals
+
+`session_usage_totals` holds one row per session with a total the agent recorded
+for the whole session, such as Claude Code's `cost-state`. It overlaps the
+session's usage rows, and with `subagent_scope = 'included'` its subagents'
+rows, so no usage, cost, or rollup query reads it. Session usage loads it as
+`SessionTotal` beside the computed totals.
+
+- Only full-parse writes replace it: `SessionBatchWrite.ReplaceSessionTotal` and
+  the staged paths that call `ReplaceSessionUsageTotal`. Other batch writes
+  (repairs, replacements, artifact imports) leave it unchanged.
+- Rebuilds copy it for retained orphan sessions. Artifact exports do not carry
+  it yet, so a session imported from artifacts has none.
+- Every backend stores `db.SessionUsageTotalColumns` and pushes on
+  `SessionUsageTotalFingerprints` changes, like `session_plan_usage`.
+  `dbtest.SeedSessionUsageTotal` and `AssertSessionUsageTotal` check each.
 
 ### Usage cache divergence
 
@@ -792,7 +833,12 @@ Do not widen or narrow this live/baked boundary implicitly.
 The cache format version is also the extractor compatibility version. Bump
 `usageCacheFormatVersion` whenever fact extraction, `priceUsageFact`, web-search
 fees, deduplication, rollup semantics, or query-time model canonicalization
-change. Each rollup install records the distinct
+change. Add a record in `internal/db/testdata/usage-cache-format-digests`
+for each format bump. If this PR added the record, replace it when its output
+changes; otherwise bump the format and record the new digest. The digest covers
+stored facts and daily rollups for the fixture; add a case when new usage
+behavior needs another input.
+Each rollup install records the distinct
 `(provider, reported model, canonical model)` lookups its daily rows used, and a
 full-path read re-resolves only those against the current catalog. A catalog
 digest change sends reads through that path until a coverage pass claims the
@@ -974,8 +1020,8 @@ The terminal candidates query and the message read need no result of each other.
 When a bulk-read slot is free, SQLite runs the terminal query on it beside the
 message read; otherwise it runs the two in turn. PostgreSQL runs them together
 on its pool, with the message read split into one slice per 4,096 sessions, up
-to two; a read snapshot shares one transaction, so there they run in turn.
-Both then derive each session's runs on every available core through
+to two; a read snapshot shares one transaction, so there they run in turn. Both
+then derive each session's runs on every available core through
 `activity.DeriveSessionRunsInParallel`, which gives the runs the merged
 candidate stream gives. DuckDB keeps its reads in turn on its single connection.
 
@@ -1259,9 +1305,11 @@ The SQL follows `IsFrustrationMarker` step by step. Port it with these rules:
   The caps rule is therefore ruled out with a bound: all-capital words are at
   most the `[A-Z]{2,}` runs, and words of two or more letters are at least 32
   per match of 32 such words in a row and at least `FrustrationCapsMinWords`.
-  When that ratio is below the threshold, so is the exact one. SQL counts
-  every word only for stripped prompts of at most 16 KiB, which covers typed
-  prompts and short prompts after a fenced paste. `translate()` is slower
+  The caps-run count divided by `FrustrationCapsMinWords` is tested first.
+  When that bound is below the threshold, so is the exact ratio. SQL counts
+  every word for unresolved prompts of at most 16 KiB, which covers typed
+  prompts and short prompts after a fenced paste. Longer prompts use the
+  32-word bound before falling back to Go. `translate()` is slower
   still (42 s), so the SQL never uses it.
 
 On a fixture of 2,500 sessions with 41,162 prompts (484 MiB of prompt text, 1.9%
@@ -1407,20 +1455,22 @@ TEST_PG_URL="postgres://user:pass@host:5432/dbname?sslmode=disable" \
 When `[image_text]` is enabled, the daemon extracts text from retained inline
 and offloaded tool-result images using the configured local GLM-OCR service. It
 caches normalized text by decoded image hash and processor identity, and tracks
-current occurrences in the same transaction as tool results. The first enabled pass builds occurrences for existing archives. Extraction
-passes start requests for two minutes; each request stops after Docbank's timeout. Each image is read from a copy whose bytes match its hash, and
-its type is detected from those bytes. Failed requests and missing or corrupt
-copies retry with backoff; oversized images, verified bytes that are not PNG,
-JPEG, or WebP, and invalid input are terminal. A full archive rebuild preserves
-cache entries for retained images and rebuilds their occurrences. Removing the last occurrence removes its cached text during the next pass.
-Disabling image text and restarting removes cached text and mirror matches;
-re-enabling extracts it again. Usage-only archives do not store image
-text.
+current occurrences in the same transaction as tool results. The first enabled
+pass builds occurrences for existing archives. Extraction passes start requests
+for two minutes; each request stops after Docbank's timeout. Each image is read
+from a copy whose bytes match its hash, and its type is detected from those
+bytes. Failed requests and missing or corrupt copies retry with backoff;
+oversized images, verified bytes that are not PNG, JPEG, or WebP, and invalid
+input are terminal. A full archive rebuild preserves cache entries for retained
+images and rebuilds their occurrences. Removing the last occurrence removes its
+cached text during the next pass. Disabling image text and restarting removes
+cached text and mirror matches; re-enabling extracts it again. Usage-only
+archives do not store image text.
 
 Successful text is published to PostgreSQL, DuckDB, and ClickHouse as
-session-owned `image_text` rows keyed by the tool call or result event,
-image index, and processor, with the image hash, provider, model, and revision.
-A new extraction advances the session's `sync_marker`, so the next incremental
-push sends it without changing the transcript revision. Global keyword search
-and substring and regex `tool_result` searches match this text in every
-backend, anchored to the message holding the tool call.
+session-owned `image_text` rows keyed by the tool call or result event, image
+index, and processor, with the image hash, provider, model, and revision. A new
+extraction advances the session's `sync_marker`, so the next incremental push
+sends it without changing the transcript revision. Global keyword search and
+substring and regex `tool_result` searches match this text in every backend,
+anchored to the message holding the tool call.

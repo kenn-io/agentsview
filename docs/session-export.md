@@ -335,7 +335,7 @@ artifacts.
 The cursor embeds the archive `database_id`, filter parameters, ordering,
 watermark, last keyset position, snapshot digest, prefix digest, and limit.
 Passing `--cursor` with any query-affecting flag is an error. Only `--format`,
-`--json`, and `--limit` may be used with `--cursor`; filters such as
+`--json`, `--limit`, and `--wait` may be used with `--cursor`; filters such as
 `--project`, `--exclude-project`, `--machine`, `--git-branch`, `--agent`, date
 filters, `--active-since`, message-count filters, `--include-one-shot`,
 `--include-automated`, `--include-children`, `--outcome`, `--health-grade`,
@@ -368,8 +368,10 @@ best-effort: it combines stored session metadata with the repository and Git
 configuration visible when the migration runs, so a repository that moved or
 changed remotes may not reproduce its original checkout context. Existing stored
 snapshots remain authoritative. `agentsview export status` reports pending,
-running, failed, and completed state; failed status includes the last recorded
-error.
+running, failed, and completed state; a failure includes its cause and recovery
+commands, including when the daemon could not save the failure. Run
+`agentsview export sessions --wait` to start the local daemon if needed and wait
+for this work before exporting.
 
 ## Versioning
 

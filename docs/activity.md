@@ -15,7 +15,8 @@ result with the page controls.
 
 On a local archive, reopening an ended range reuses its finished report while
 later sessions sync; changes to report sessions, matching Claude usage, pricing,
-or project identity make the next open rebuild.
+or project identity make the next open rebuild. For a range that includes today,
+reopening also reuses unchanged usage while the report follows the current time.
 
 ## Range And Filters
 

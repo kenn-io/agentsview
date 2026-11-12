@@ -3088,6 +3088,32 @@ components:
         - created_at
         - updated_at
       type: object
+    DbSessionRecordedCost:
+      additionalProperties: false
+      properties:
+        computed:
+          $ref: "#/components/schemas/MoneyMoney"
+        difference:
+          $ref: "#/components/schemas/MoneyMoney"
+        fallback_rows:
+          format: int64
+          type: integer
+        recorded:
+          $ref: "#/components/schemas/MoneyMoney"
+        rows:
+          format: int64
+          type: integer
+        unpriced_rows:
+          format: int64
+          type: integer
+      required:
+        - recorded
+        - computed
+        - difference
+        - rows
+        - fallback_rows
+        - unpriced_rows
+      type: object
     DbSessionShapeResponse:
       additionalProperties: false
       properties:
@@ -3217,6 +3243,57 @@ components:
         - running
         - activity
         - activity_totals
+      type: object
+    DbSessionUsageTotal:
+      additionalProperties: false
+      properties:
+        cost:
+          $ref: "#/components/schemas/MoneyMoney"
+        incomplete:
+          type: boolean
+        models:
+          items:
+            $ref: "#/components/schemas/DbSessionUsageTotalModel"
+          type: array
+        source:
+          type: string
+        subagent_scope:
+          type: string
+      required:
+        - source
+        - models
+      type: object
+    DbSessionUsageTotalModel:
+      additionalProperties: false
+      properties:
+        cache_creation_input_tokens:
+          format: int64
+          type: integer
+        cache_read_input_tokens:
+          format: int64
+          type: integer
+        cost:
+          $ref: "#/components/schemas/MoneyMoney"
+        input_tokens:
+          format: int64
+          type: integer
+        model:
+          type: string
+        output_tokens:
+          format: int64
+          type: integer
+        reasoning_tokens:
+          format: int64
+          type: integer
+        web_search_requests:
+          format: int64
+          type: integer
+      required:
+        - model
+        - input_tokens
+        - output_tokens
+        - cache_creation_input_tokens
+        - cache_read_input_tokens
       type: object
     DbSidebarSessionIndex:
       additionalProperties: false
@@ -6038,6 +6115,8 @@ components:
         pid:
           format: int64
           type: integer
+        project_identity_backfill_error:
+          type: string
         service:
           type: string
         sync:
@@ -8227,6 +8306,10 @@ components:
         output_tokens:
           format: int64
           type: integer
+        recorded_cost:
+          $ref: "#/components/schemas/MoneyMoney"
+        recorded_cost_priced:
+          type: boolean
         source:
           type: string
         subagent_session_id:
@@ -8290,6 +8373,8 @@ components:
           $ref: "#/components/schemas/DbPlanUsageView"
         project:
           type: string
+        recorded_cost:
+          $ref: "#/components/schemas/DbSessionRecordedCost"
         rollup_cost:
           $ref: "#/components/schemas/MoneyMoney"
         rollup_cost_source:
@@ -8301,6 +8386,8 @@ components:
           type: boolean
         session_id:
           type: string
+        session_total:
+          $ref: "#/components/schemas/DbSessionUsageTotal"
         subagent_count:
           format: int64
           type: integer

@@ -678,7 +678,14 @@ CREATE INDEX IF NOT EXISTS idx_provider_freshness_updated_at
 // call as hidden usage-only rows. Re-parse OpenCode-format, OpenClaw, QClaw,
 // Forge, Cline, Codex-format, and Gemini sources in place; source and session
 // identities are unchanged.)
-const dataVersion = 175
+// (176: keep the cost Pi, OpenClaw, Shelley, fx, and OpenCode-format agents
+// record for their requests, as a recorded cost.)
+// (177: keep Claude Code's cost-state session total.)
+// (178: rebuild Grok history before each compaction from updates.jsonl, mark
+// compactions as compact boundaries, and render Grok tool calls in assistant
+// rows. Re-parse Grok sources in place; source and session identities are
+// unchanged.)
+const dataVersion = 178
 
 const archiveOnlyVersionBase = 1 << 20
 
@@ -931,6 +938,7 @@ type DB struct {
 	usageCache           *usageCacheManager
 	activityMemo         activityCandidateMemo
 	activityKept         kept.Memo[activityKept]
+	usageKept            kept.Memo[DailyUsageResult]
 	sessionStatsFacts    *sessionStatsFactsMemo
 	frustrationMemo      FrustrationMarkerMemo
 	usageBackfillMu      sync.Mutex
@@ -1264,6 +1272,7 @@ func (db *DB) SetCustomPricing(p map[string]config.CustomModelRate) {
 	db.customPricing = p
 	db.effectivePricing = nil
 	db.invalidateSessionStatsFacts()
+	db.usageKept.DeleteSlots(func(string) bool { return true })
 }
 
 // SetEffectivePricing installs in-memory pricing rows with explicit provenance
@@ -1278,6 +1287,7 @@ func (db *DB) SetEffectivePricing(
 		db.effectivePricing[model] = rates
 	}
 	db.invalidateSessionStatsFacts()
+	db.usageKept.DeleteSlots(func(string) bool { return true })
 }
 
 // SetEmptyCatalogPricing installs in-memory rates that are used only when the
@@ -1291,6 +1301,7 @@ func (db *DB) SetEmptyCatalogPricing(
 		db.emptyCatalogPricing[model] = rates
 	}
 	db.invalidateSessionStatsFacts()
+	db.usageKept.DeleteSlots(func(string) bool { return true })
 }
 
 // SetCursorSecret updates the secret key used for cursor signing.
@@ -2045,6 +2056,7 @@ func OpenReadOnly(ctx context.Context, path string) (*DB, error) {
 	db := &DB{
 		path: path, readOnly: true,
 		usageCache: newUsageCacheManager(path),
+		usageKept:  newDailyUsageMemo(),
 	}
 	db.dataStale.Store(dataStale)
 	db.usageCache.attachArchive(db)
@@ -2067,6 +2079,7 @@ var readOnlyRequiredTables = []string{
 	"stats",
 	"usage_events",
 	"session_plan_usage",
+	"session_usage_totals",
 	"tool_calls",
 	"tool_result_events",
 	"image_text_cache",
@@ -4989,6 +5002,7 @@ func openAndInit(
 
 	db := &DB{
 		path: path, usageCache: newUsageCacheManager(path),
+		usageKept:         newDailyUsageMemo(),
 		activityKept:      newActivityKeptMemo(),
 		sessionStatsFacts: newSessionStatsFactsMemo(),
 	}
@@ -5822,6 +5836,7 @@ func (db *DB) reopenLockedWithBarrier(keepWriterBarrier bool) error {
 	oldWriter := db.writer.Swap(writer)
 	var oldReader *sql.DB
 	db.activityKept.DeleteSlots(func(string) bool { return true })
+	db.usageKept.DeleteSlots(func(string) bool { return true })
 	db.activityMemo.swap(func() {
 		db.frustrationMemo.Swap(func() { db.sessionStatsFacts.Swap(func() { oldReader = db.reader.Swap(reader) }) })
 	})

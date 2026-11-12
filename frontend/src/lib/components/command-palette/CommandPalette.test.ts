@@ -650,6 +650,40 @@ describe("CommandPalette", () => {
     unmount(component);
   });
 
+  it.each(["generic", "timeout"] as const)("retries a %s search error", async (kind) => {
+    mockSearchStore.mode = kind === "timeout" ? "semantic" : "fulltext";
+    mockSearchStore.error = { detail: kind === "timeout" ? "request timed out" : null, kind };
+    const component = mount(CommandPalette, { target: document.body });
+    await enterSearchQuery();
+    const retry = Array.from(
+      document.querySelectorAll<HTMLButtonElement>(".palette-error button"),
+    ).find((button) => button.textContent?.trim() === "Retry");
+    expect(retry).toBeDefined();
+    retry!.focus();
+    retry!.click();
+    expect(document.activeElement).toBe(document.querySelector(".palette-input"));
+    expect(mockSearchStore.retry).toHaveBeenCalledOnce();
+    expect(mockRouter.navigateToSession).not.toHaveBeenCalled();
+
+    unmount(component);
+  });
+
+  it("keeps the first result selected after ArrowDown while stale results are hidden", async () => {
+    mockSearchStore.isSearching = true;
+    mockSearchStore.results = [makeSearchResult(), makeSearchResult({ session_id: "second" })];
+    const component = mount(CommandPalette, { target: document.body });
+    await enterSearchQuery();
+    const input = document.querySelector<HTMLInputElement>(".palette-input")!;
+    input.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
+    expect(mockRouter.navigateToSession).not.toHaveBeenCalled();
+    input.dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowDown", bubbles: true }));
+    mockSearchStore.isSearching = false;
+    mockSearchStore.results = [makeSearchResult()];
+    input.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
+    expect(mockRouter.navigateToSession).toHaveBeenCalledWith("codex:search123");
+    unmount(component);
+  });
+
   it("shows the inherited project and can search all projects without changing the sidebar", async () => {
     mockSessions.filters.project = "proj-a";
     const component = mount(CommandPalette, { target: document.body });
@@ -720,7 +754,7 @@ describe("CommandPalette", () => {
     expect(mockSearchStore.resetRange).toHaveBeenCalledOnce();
   });
 
-  it("explains a semantic timeout and offers an explicit retry", async () => {
+  it("explains a semantic timeout", async () => {
     mockSearchStore.mode = "semantic";
     mockSearchStore.error = {
       detail: "request timed out",
@@ -735,14 +769,6 @@ describe("CommandPalette", () => {
       "Try again. The first Semantic or Hybrid search can be slower while the embedding model warms up.",
     );
     expect(error?.textContent).not.toContain("request timed out");
-
-    const retry = Array.from(error?.querySelectorAll<HTMLButtonElement>("button") ?? []).find(
-      (button) => button.textContent?.trim() === "Retry",
-    );
-    expect(retry).toBeDefined();
-    retry?.click();
-    expect(mockSearchStore.retry).toHaveBeenCalledOnce();
-    expect(mockRouter.navigateToSession).not.toHaveBeenCalled();
 
     unmount(component);
   });

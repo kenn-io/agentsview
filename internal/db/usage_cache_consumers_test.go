@@ -186,7 +186,7 @@ func TestUsageWindowMemoPreparesOncePerPredicate(t *testing.T) {
 	}
 	for _, filter := range filters {
 		want := getDailyUsageLegacyForRollupTest(t, database, filter)
-		got, err := database.GetDailyUsage(ctx, filter)
+		got, err := database.getDailyUsageUncached(ctx, filter)
 		require.NoError(t, err)
 		assert.Equal(t, want, got)
 	}
@@ -195,7 +195,7 @@ func TestUsageWindowMemoPreparesOncePerPredicate(t *testing.T) {
 	for _, minimum := range []int{55296, 55297} {
 		filter := UsageFilter{From: "2024-06-01", To: "2024-07-31", Timezone: "America/Chicago", MinUserMessages: minimum}
 		want := getDailyUsageLegacyForRollupTest(t, database, filter)
-		got, err := database.GetDailyUsage(ctx, filter)
+		got, err := database.getDailyUsageUncached(ctx, filter)
 		require.NoError(t, err)
 		assert.Equal(t, want, got)
 	}
@@ -213,7 +213,7 @@ func TestUsageWindowMemoSeparatesCursorPreparation(t *testing.T) {
 	// Exercise the memo boundary directly; Pairwise only reads daily usage.
 	_, err := database.sharedUsageWindow(ctx, usageWindowKey(filter, usageQueryKindToken, false), filter, usageQueryKindToken, false)
 	require.NoError(t, err)
-	daily, err := database.GetDailyUsage(ctx, filter)
+	daily, err := database.getDailyUsageUncached(ctx, filter)
 	require.NoError(t, err)
 	assert.Equal(t, 17, daily.Totals.InputTokens)
 	assert.Equal(t, int32(2), prepares.Load(), "daily usage needs its own preparation to include Cursor")
@@ -226,7 +226,7 @@ func TestUsageWindowMemoRecapturesAfterInstallChange(t *testing.T) {
 	var prepares atomic.Int32
 	database.SetUsageWindowPrepareForTest(func(context.Context) { prepares.Add(1) })
 	ctx := WithUsageWindowMemo(t.Context())
-	first, err := database.GetDailyUsage(ctx, filter)
+	first, err := database.getDailyUsageUncached(ctx, filter)
 	require.NoError(t, err)
 	assert.Equal(t, want, first)
 	snapshot, err := database.captureUsageQuery(t.Context(), filter, usageQueryKindToken)
@@ -235,12 +235,12 @@ func TestUsageWindowMemoRecapturesAfterInstallChange(t *testing.T) {
 	require.NoError(t, err)
 	_, err = cache.db.ExecContext(t.Context(), `UPDATE usage_rollup_installs SET install_revision = install_revision + 1 WHERE id = (SELECT MIN(id) FROM usage_rollup_installs)`)
 	require.NoError(t, err)
-	second, err := database.GetDailyUsage(ctx, filter)
+	second, err := database.getDailyUsageUncached(ctx, filter)
 	require.NoError(t, err)
 	assert.Equal(t, want, second)
 	assert.Equal(t, int32(2), prepares.Load())
 	// The recapture bypassed the memo, so this read prepares a new shared window.
-	third, err := database.GetDailyUsage(ctx, filter)
+	third, err := database.getDailyUsageUncached(ctx, filter)
 	require.NoError(t, err)
 	assert.Equal(t, want, third)
 	assert.Equal(t, int32(3), prepares.Load())
@@ -279,7 +279,7 @@ func TestUsageWindowMemoSharesConcurrentSides(t *testing.T) {
 		readers.Go(func() {
 			side := filter
 			side.Model = model
-			daily, err := database.GetDailyUsage(ctx, side)
+			daily, err := database.getDailyUsageUncached(ctx, side)
 			done <- result{model, daily, err}
 		})
 	}
@@ -303,14 +303,14 @@ func TestUsageWindowMemoRecapturesAfterGenerationRetirement(t *testing.T) {
 	var prepares atomic.Int32
 	database.SetUsageWindowPrepareForTest(func(context.Context) { prepares.Add(1) })
 	ctx := WithUsageWindowMemo(t.Context())
-	first, err := database.GetDailyUsage(ctx, filter)
+	first, err := database.getDailyUsageUncached(ctx, filter)
 	require.NoError(t, err)
 	assert.Equal(t, want, first)
 	assert.Equal(t, int32(1), prepares.Load())
 
 	require.NoError(t, database.SetDatabaseIDForTest(t.Context(), "replacement-database-id"))
 	require.NoError(t, database.usageCache.RetireExcept("replacement-database-id"))
-	second, err := database.GetDailyUsage(ctx, filter)
+	second, err := database.getDailyUsageUncached(ctx, filter)
 	require.NoError(t, err)
 	assert.Equal(t, want, second)
 	assert.Equal(t, int32(2), prepares.Load())

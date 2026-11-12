@@ -1,0 +1,13 @@
+{"type":"user","timestamp":"2024-01-01T00:00:00Z","message":{"content":"Hello"}}
+{"type":"user","timestamp":"2024-01-01T00:00:01Z","message":{"content":"This session is being continued from a previous conversation."}}
+{"type":"user","timestamp":"2024-01-01T00:00:02Z","message":{"content":"<local-command-caveat>Caveat</local-command-caveat>"}}
+{"type":"user","timestamp":"2024-01-01T00:00:03Z","message":{"content":"[Request interrupted by user]"}}
+{"type":"user","timestamp":"2024-01-01T00:00:04Z","message":{"content":"<task-notification>done</task-notification>"}}
+{"type":"user","timestamp":"2024-01-01T00:00:05Z","message":{"content":"<cross-session-message sender=\"peer\">hello</cross-session-message>"}}
+{"type":"user","timestamp":"2024-01-01T00:00:06Z","message":{"content":"Stop hook feedback: blocked"}}
+{"type":"user","timestamp":"2024-01-01T00:00:07Z","message":{"content":"<system-reminder>remember</system-reminder>"}}
+{"type":"user","timestamp":"2024-01-01T00:00:08Z","message":{"content":"<ide_opened_file>README.md</ide_opened_file>"}}
+{"type":"user","timestamp":"2024-01-01T00:00:09Z","message":{"content":"<ide_selection>package main</ide_selection>"}}
+{"type":"user","timestamp":"2024-01-01T00:00:10Z","message":{"content":"<ide_selection>package main</ide_selection>\n\nExplain this"}}
+{"type":"attachment","timestamp":"2024-01-01T00:00:11Z","promptSource":"queued","attachment":{"type":"queued_command","prompt":"next task","commandMode":"prompt"}}
+{"type":"user","isCompactSummary":true,"message":{"role":"user","content":[{"type":"text","text":"Summary of conversation so far."}]},"timestamp":"2024-01-01T00:00:12Z"}

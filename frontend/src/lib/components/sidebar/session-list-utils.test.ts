@@ -1,6 +1,6 @@
 import { describe, it, expect } from "vite-plus/test";
 import type { Session } from "../../api/types.js";
-import { buildSessionGroups, type SessionGroup } from "../../stores/sessions.svelte.js";
+import { buildSessionGroups, type SessionGroup } from "../../stores/sessionGroups.js";
 import {
   ITEM_HEIGHT,
   HEADER_HEIGHT,

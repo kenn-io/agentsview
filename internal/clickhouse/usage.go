@@ -1872,7 +1872,7 @@ func (s *Store) dailyUsageForCatalog(
 	}
 	var sides *db.UsagePairwiseSides
 	if f.PairwiseSides {
-		sides = &db.UsagePairwiseSides{Models: make(map[string]db.UsagePairwiseValue), Projects: make(map[string]db.UsagePairwiseValue)}
+		sides = db.NewUsagePairwiseSides()
 	}
 	var totalSavings money.Money
 	err = s.forEachDailyUsageGroupRow(ctx, f, catalog.digest, customModels, false, func(r chDailyUsageGroupRow) error {
@@ -1948,11 +1948,8 @@ func (s *Store) dailyUsageForCatalog(
 		// A model filter uses estimates even when Copilot reports a session total.
 		if sides != nil {
 			for key, estimated := range sc.estimated {
-				sides.Models.AddTotals(key.model, db.UsageTotals{TotalCost: estimated})
-				sides.Models.AddSession(key.model, sessionID)
-				if key.project != "" {
-					sides.Projects.AddSession(key.project, sessionID)
-				}
+				sides.AddEstimate(key.model, estimated)
+				sides.AddMembership(key.model, key.project, sessionID)
 			}
 		}
 		if sc.authoritative != nil {
@@ -2023,11 +2020,8 @@ func (s *Store) dailyUsageForCatalog(
 	for key, b := range accum {
 		if sides != nil {
 			totals := db.UsageTotals{InputTokens: b.inputTok, OutputTokens: b.outputTok, CacheCreationTokens: b.cacheCr, CacheReadTokens: b.cacheRd}
-			sides.Models.AddTotals(key.model, totals)
-			if key.project != "" {
-				totals.TotalCost = b.cost
-				sides.Projects.AddTotals(key.project, totals)
-			}
+			totals.TotalCost = b.cost
+			sides.AddBucket(key.model, key.project, totals)
 		}
 		day := days[key.date]
 		if day == nil {
@@ -3050,6 +3044,29 @@ func (s *Store) GetSessionPlanUsage(
 	return p, rows.Err()
 }
 
+// GetSessionUsageTotal returns the usage total the agent recorded for one
+// session, or nil when it recorded none.
+func (s *Store) GetSessionUsageTotal(
+	ctx context.Context, sessionID string,
+) (*db.SessionUsageTotal, error) {
+	rows, err := s.conn.QueryContext(ctx,
+		`SELECT `+db.SessionUsageTotalColumns+` FROM session_usage_totals WHERE session_id = ?`,
+		sessionID,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("querying clickhouse session total for %s: %w", sessionID, err)
+	}
+	defer rows.Close()
+	if !rows.Next() {
+		return nil, rows.Err()
+	}
+	t, err := db.ScanSessionUsageTotal(rows.Scan)
+	if err != nil {
+		return nil, fmt.Errorf("scanning clickhouse session total for %s: %w", sessionID, err)
+	}
+	return t, rows.Err()
+}
+
 // sessionMayHaveUsageRows reports whether the session's usage read can
 // return rows. A session with token totals is assumed to have them. For one
 // without, a probe looks for a message or usage event the read would
@@ -3170,8 +3187,14 @@ func (s *Store) GetSessionUsage(
 		if !contributes {
 			continue
 		}
-		breakdown = append(breakdown, chSessionUsageBreakdownEntry(
-			r, len(breakdown)+1, cost, priced))
+		entry := chSessionUsageBreakdownEntry(r, len(breakdown)+1, cost, priced)
+		if r.recordedCost.Valid {
+			entry.RecordedCost = &money.Money{Microdollars: r.recordedCost.Int64}
+			entry.RecordedCostPriced = db.ReportedCostForPricing(
+				r.recordedCost, usagefacts.CostStatusRecorded,
+				chCatalogPricesAt(rateResolver, r.model, r.pricingTS)).Valid
+		}
+		breakdown = append(breakdown, entry)
 	}
 	if authoritativeCost != nil && len(breakdown) > 0 {
 		weights := make([]money.Money, len(breakdown))
@@ -3214,6 +3237,9 @@ func (s *Store) GetSessionUsage(
 	}
 	out.CostUSD = db.CostUSDFromCost(out.HasCost, out.Cost)
 	if out.PlanUsage, err = s.GetSessionPlanUsage(ctx, sess.ID); err != nil {
+		return nil, err
+	}
+	if out.SessionTotal, err = s.GetSessionUsageTotal(ctx, sess.ID); err != nil {
 		return nil, err
 	}
 	return out, nil

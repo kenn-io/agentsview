@@ -1074,6 +1074,9 @@ Search in one of three modes:
 The palette remembers the last mode you selected across openings and browser
 sessions. Results update after a 300ms typing pause.
 
+The palette automatically retries a transient Full text search failure once. If
+the search still fails, select **Retry** to try again.
+
 !!! tip
 
     For deeper searches across full transcripts — including thinking, tool inputs, tool result

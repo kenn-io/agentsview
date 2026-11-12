@@ -2,9 +2,79 @@ package db
 
 import (
 	"context"
+	"fmt"
+	"strconv"
+	"strings"
 
 	"go.kenn.io/agentsview/internal/kept"
 )
+
+func newDailyUsageMemo() kept.Memo[DailyUsageResult] {
+	return kept.Memo[DailyUsageResult]{Size: DailyUsageResult.Bytes}
+}
+
+// dailyUsageVersion reads the archive change tokens from one SQLite snapshot
+// after the generation that pricing changes and reopens advance.
+func (db *DB) dailyUsageVersion(ctx context.Context) string {
+	var generation uint64
+	if db.sessionStatsFacts != nil {
+		generation = db.sessionStatsFacts.Generation()
+	}
+	var id, usage, project string
+	var cursor int64
+	err := db.getReader().QueryRowContext(ctx, `SELECT
+		COALESCE((SELECT value FROM archive_metadata WHERE key = ?), ''),
+		COALESCE((SELECT value FROM archive_metadata WHERE key = ?), '0'),
+		COALESCE((SELECT value FROM archive_metadata WHERE key = ?), '0'),
+		COALESCE((SELECT MAX(id) FROM cursor_usage_events), 0)`,
+		archiveMetadataDatabaseIDKey, archiveMetadataUsageChangeRevisionKey,
+		archiveMetadataProjectIdentityRevisionKey,
+	).Scan(&id, &usage, &project, &cursor)
+	if err != nil || strings.TrimSpace(id) == "" || cursor < 0 {
+		return ""
+	}
+	for _, raw := range []string{usage, project} {
+		n, err := strconv.ParseInt(strings.TrimSpace(raw), 10, 64)
+		if err != nil || n < 0 {
+			return ""
+		}
+	}
+	return fmt.Sprintf("%q:%s:%s:%d:%d", id, usage, project, cursor, generation)
+}
+
+func (db *DB) keptDailyUsage(ctx context.Context, filter UsageFilter) (DailyUsageResult, error) {
+	slot := UsageSlot(filter, true)
+	version := ""
+	if slot != "" {
+		version = db.dailyUsageVersion(ctx)
+	}
+	if err := ctx.Err(); err != nil {
+		return DailyUsageResult{}, err
+	}
+	if version == "" {
+		return db.getDailyUsageUncached(ctx, filter)
+	}
+	rows, ok := db.usageKept.Get(slot, version)
+	if !ok {
+		full := filter
+		full.SkipSessionCounts = false
+		full.PairwiseSides = filter.PairwiseSides || filter.Breakdowns
+		loadCtx := context.WithValue(ctx, usageWindowVersionKey{}, version)
+		result, err := db.getDailyUsageUncached(loadCtx, full)
+		if err != nil {
+			return result, err
+		}
+		rows = []DailyUsageResult{result}
+		if db.dailyUsageVersion(ctx) == version {
+			db.usageKept.Put(slot, version, rows)
+		}
+	}
+	result := rows[0].Clone()
+	if filter.SkipSessionCounts {
+		result.SessionCounts = UsageSessionCounts{}
+	}
+	return result, nil
+}
 
 // DailyUsage keeps full counts and returns an independent result for each caller.
 func DailyUsage(ctx context.Context, reads *kept.Reads[DailyUsageResult], slot, version string, f UsageFilter, load func(context.Context, UsageFilter) (DailyUsageResult, error)) (DailyUsageResult, error) {

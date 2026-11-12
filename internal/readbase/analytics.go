@@ -954,7 +954,12 @@ func (s *Analytics) GetTrendsTerms(
 	if granularity == "" {
 		granularity = "week"
 	}
-	acc := db.NewTrendAccumulator(f.From, f.To, granularity, terms)
+	acc := db.NewTrendWorkers(ctx, f.From, f.To, granularity, terms)
+	defer func() {
+		if acc != nil {
+			_, _ = acc.Finish()
+		}
+	}()
 	sessionFilter := f
 	sessionFilter.From = ""
 	sessionFilter.To = ""
@@ -993,17 +998,34 @@ func (s *Analytics) GetTrendsTerms(
 	for rows.Next() {
 		var row trendRow
 		var ordinal int
-		if err := rows.Scan(&row.sessionID, &ordinal, &row.role, &row.isSystem, &row.model, &row.content, &row.msgTS, &row.startedAt, &row.createdAt); err != nil {
-			return db.TrendsTermsResponse{}, err
-		}
-		ts := cmp.Or(s.backend.FormatTime(row.msgTS), s.backend.FormatTime(row.startedAt), s.backend.FormatTime(row.createdAt))
-		local, has := analyticsLocalTime(ts, loc)
 		if !modelFiltering {
+			var timestamp any
+			if err := rows.Scan(&row.content, &timestamp); err != nil {
+				return db.TrendsTermsResponse{}, err
+			}
+			var local time.Time
+			var has bool
+			switch value := timestamp.(type) {
+			case time.Time:
+				local, has = value.In(loc), true
+			case *time.Time:
+				if value != nil {
+					local, has = value.In(loc), true
+				}
+			default:
+				local, has = analyticsLocalTime(s.backend.FormatTime(timestamp), loc)
+			}
 			if has && flt.MatchesDayHour(local, true) {
 				acc.Add(row.content, local)
 			}
 			continue
 		}
+		if err := rows.Scan(&row.sessionID, &ordinal, &row.role, &row.isSystem, &row.model, &row.content, &row.msgTS, &row.startedAt, &row.createdAt); err != nil {
+			return db.TrendsTermsResponse{}, err
+		}
+		ts := cmp.Or(s.backend.FormatTime(row.msgTS), s.backend.FormatTime(row.startedAt), s.backend.FormatTime(row.createdAt))
+		local, has := analyticsLocalTime(ts, loc)
+
 		if err := reducer.Push(db.MessageInput{
 			SessionID:    row.sessionID,
 			Ordinal:      ordinal,
@@ -1020,7 +1042,9 @@ func (s *Analytics) GetTrendsTerms(
 	if err := rows.Err(); err != nil {
 		return db.TrendsTermsResponse{}, err
 	}
-	return acc.Response(), nil
+	response, err := acc.Finish()
+	acc = nil
+	return response, err
 }
 
 func analyticsDateTime(r AnalyticsSession) string {

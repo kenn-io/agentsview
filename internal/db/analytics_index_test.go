@@ -114,8 +114,11 @@ func TestAnalyticsMetadataIndexLifecycle(t *testing.T) {
 				"COALESCE(NULLIF(started_at, ''), created_at)", "s.id", true)
 			modelsPlan := queryPlanOf(t, d, analyticsModelsQuery(where), args...)
 			assert.Contains(t, modelsPlan, "USING COVERING INDEX idx_messages_analytics_metadata")
-			toolsPlan := queryPlanOf(t, d, analyticsToolsQuery("(?)", "", "", true), "a")
+			toolsPlan := queryPlanOf(t, d, analyticsToolsQuery("(?)", "", "", true, sqliteAnalyticsMinuteKey()), "a")
 			assert.Contains(t, toolsPlan, "USING COVERING INDEX idx_messages_analytics_metadata")
+			fastKey := sqliteToolsDateKey(AnalyticsFilter{From: "2025-03-01", To: "2025-03-31", Timezone: "America/New_York"})
+			fastPlan := queryPlanOf(t, d, analyticsToolsQuery("(?)", "", "", true, fastKey), "a", "America/New_York")
+			assert.Contains(t, fastPlan, "USING COVERING INDEX idx_messages_analytics_metadata")
 		})
 	}
 }
