@@ -355,19 +355,19 @@ func hasSource(f ContentSearchFilter, name string) bool {
 func (db *DB) searchContentSubstring(
 	ctx context.Context, f ContentSearchFilter,
 ) (ContentSearchPage, error) {
-	if inner, quoted := unquoteContentSearch(f.Pattern); quoted {
-		f.Pattern = inner
-	} else if hasSource(f, "messages") && len(strings.Fields(f.Pattern)) > 1 && db.HasFTS(ctx) {
-		if q, ok := contentWordsQuery(f.Pattern); ok {
-			return db.searchContentWords(ctx, f, q, true)
-		}
-	}
+	var quoted bool
+	f.Pattern, quoted = unquoteContentSearch(f.Pattern)
 	if f.SessionID == "" {
 		release, err := db.acquireBulkRead(ctx)
 		if err != nil {
 			return ContentSearchPage{}, err
 		}
 		defer release()
+	}
+	if !quoted && hasSource(f, "messages") && len(strings.Fields(f.Pattern)) > 1 && db.HasFTS(ctx) {
+		if q, ok := contentWordsQuery(f.Pattern); ok {
+			return db.searchContentWords(ctx, f, q, true)
+		}
 	}
 	return searchWithSubstringCandidates(ctx, db, f, f.Pattern,
 		func(candidates substringCandidateFilters) (ContentSearchPage, error) {

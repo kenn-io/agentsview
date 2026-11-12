@@ -181,15 +181,6 @@ func lexicalMessageWhere(f ContentSearchFilter) (string, []any) {
 func (db *DB) searchContentWords(
 	ctx context.Context, f ContentSearchFilter, q contentWords, exact bool,
 ) (ContentSearchPage, error) {
-	// Only the exact scan reads bodies across the archive; word matching
-	// reads the index, as FTS search always has.
-	if exact && f.SessionID == "" {
-		release, err := db.acquireBulkRead(ctx)
-		if err != nil {
-			return ContentSearchPage{}, err
-		}
-		defer release()
-	}
 	search := func(candidates substringCandidateFilters) ([]ContentMatch, error) {
 		// One snapshot keeps exact and word matches consistent with the
 		// exact total that offsets the word matches.
