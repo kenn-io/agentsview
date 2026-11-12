@@ -566,21 +566,28 @@ archive, never from any daemon. Both `--server` and `--format`/`--json` are
 rejected with an error — the command also rejects `--pg`. It streams raw bytes,
 so structured-output and remote-store flags don't apply.
 
+Detected secrets, such as API keys, tokens and private keys, are masked by
+default, with the same detector and masked form as search results. The command
+reads the whole source before writing, so a secret that spans lines is still
+masked. Pass `--reveal` to stream the source unchanged.
+
 ```bash
 agentsview session export <id>
+agentsview session export <id> --reveal
 ```
 
 Exit states:
 
 | State                                  | Behavior                                         |
 | -------------------------------------- | ------------------------------------------------ |
-| Session in local archive, file on disk | Streams bytes verbatim                           |
+| Session in local archive, file on disk | Streams bytes, secrets masked unless `--reveal`  |
 | Session in local archive, file missing | Exit 1: error prefixed `source file not found`   |
 | Session in local archive, path empty   | Exit 1: `source file not found for session <id>` |
 | Session not in local archive           | Exit 1: `session not in local archive: <id>`     |
 
 For a DB-derived export (HTML or markdown) use the HTTP endpoints
-`/api/v1/sessions/{id}/export` or `/api/v1/sessions/{id}/md`.
+`/api/v1/sessions/{id}/export` or `/api/v1/sessions/{id}/md`. They mask
+secrets too; see [secrets in exports](/docs/usage/#secrets-in-exports).
 
 Markdown export accepts an optional `depth` query parameter:
 

@@ -153,10 +153,12 @@ content (API keys, tokens, credentials). Detected secrets are:
 
 - recorded as findings in the database;
 - redacted by default in CLI and UI views;
-- masked by default in conversation export message bodies, the only export that
-  returns message text; `agentsview export conversations message --reveal`
-  returns the stored text. Session summary and reporting exports carry no
-  message text;
+- masked by default in every export that returns message text: the HTML and
+  Markdown session exports, Gist publishing, the raw `agentsview session export`
+  source stream, and `agentsview export conversations message`. Each has one
+  opt-out: a `reveal=true` query parameter that only localhost callers may use,
+  or a `--reveal` flag on the local CLI. Session summary and reporting exports
+  carry no message text;
 - revealable only via localhost-gated paths or an explicit local CLI flag.
 
 This is a defense-in-depth feature, not data-loss prevention. It does not catch

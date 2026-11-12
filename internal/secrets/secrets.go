@@ -31,7 +31,8 @@ type Match struct {
 // (e.g. KEY=sk-ant-... yields only the anthropic-key finding) or is fully
 // contained in a longer candidate (e.g. a JWT's header segment is not
 // reported separately from the JWT). Redact, by contrast, masks every raw
-// span regardless of suppression.
+// span regardless of suppression, except agentsview asset reference hashes
+// (see maskableSpans).
 //
 // Matches whose span hashes to agentsview's own test fixture deny-list are
 // dropped (see agentsviewTestFixtureHashes); the filter
@@ -177,7 +178,42 @@ func containedInLongerCandidate(m Match, raw []Match) bool {
 // token) are merged so no full secret survives; a merged interval is
 // masked generically, a lone span uses its rule's mask.
 func Redact(text string) string {
-	return redactSpans(text, scanRaw(text))
+	return redactSpans(text, maskableSpans(text))
+}
+
+// maskableSpans returns scanRaw(text) without spans that are only the hash
+// path of an agentsview asset reference ("asset://<sha256 hex>.png"). The
+// high-entropy-assignment candidate reads "asset:" as a key and the digest as
+// its value, but the reference names a local image by the hash of its bytes
+// and carries no secret. Masking it would break every exported image. Scan
+// still reports the candidate, so findings and RulesVersion are unchanged.
+func maskableSpans(text string) []Match {
+	raw := scanRaw(text)
+	kept := raw[:0]
+	for _, m := range raw {
+		if !isAssetReferencePath(text, m) {
+			kept = append(kept, m)
+		}
+	}
+	return kept
+}
+
+func isAssetReferencePath(text string, m Match) bool {
+	const scheme = "asset:"
+	if m.Start < len(scheme) || text[m.Start-len(scheme):m.Start] != scheme {
+		return false
+	}
+	digest, ok := strings.CutPrefix(text[m.Start:m.End], "//")
+	if !ok || len(digest) != 64 {
+		return false
+	}
+	for i := range len(digest) {
+		c := digest[i]
+		if (c < '0' || c > '9') && (c < 'a' || c > 'f') {
+			return false
+		}
+	}
+	return true
 }
 
 // redactSpans masks the secret spans raw within text and returns the result.
@@ -244,7 +280,7 @@ func RedactWindow(full string, lo, hi int) string {
 	if lo >= hi {
 		return ""
 	}
-	raw := scanRaw(full)
+	raw := maskableSpans(full)
 	lo, hi = expandToCoverSecrets(raw, lo, hi)
 	// expandToCoverSecrets guarantees every span overlapping the window is now
 	// fully inside it; translate those spans to slice-relative offsets and mask

@@ -33,6 +33,24 @@ func TestRedactMasksSecretButKeepsContext(t *testing.T) {
 	assert.Contains(t, got, "AKIA…PLJM", "Redact did not use the masked form")
 }
 
+// TestRedactKeepsAssetReferences pins that agentsview's own content-addressed
+// image references survive masking. "asset:" reads like a key and the SHA-256
+// path clears the high-entropy gate, but the reference names a local file by
+// its hash and carries no secret; masking it breaks every exported image.
+func TestRedactKeepsAssetReferences(t *testing.T) {
+	ref := "asset://ae4b3280e56e2faf83f414a6e3dabe9d5fbe18976544c05fed121accb85b53fc.png"
+	for _, text := range []string{
+		`{"image_ref":"` + ref + `"}`,
+		"![Image: image/png, 3 bytes](" + ref + ")",
+	} {
+		assert.Equal(t, text, Redact(text))
+		assert.Equal(t, text, RedactWindow(text, 0, len(text)))
+	}
+	// A value that is not a hex digest after "asset:" is still masked.
+	notRef := "asset:dGhpc0lzQVJlYWxTZWNyZXRWYWx1ZTEyMzQ1Njc4OQ end"
+	assert.NotEqual(t, notRef, Redact(notRef))
+}
+
 func TestRedactNoMatchReturnsInput(t *testing.T) {
 	in := "nothing to see here"
 	assert.Equal(t, in, Redact(in))

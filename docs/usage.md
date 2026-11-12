@@ -1269,6 +1269,26 @@ Then attach `session-context.md` to another agent run or paste its contents into
 a prompt so the next agent can inspect the full session tree without opening the
 AgentsView UI.
 
+### Secrets in exports
+
+The HTML and Markdown exports mask detected secrets, such as API keys, tokens
+and private keys. They use the same detector and masked form as search results,
+for example `AKIA…PLJM` for an AWS access key. Message text, thinking text, and
+tool input and output are all masked. Detection is best-effort; see
+[SECURITY.md](https://github.com/kenn-io/agentsview/blob/main/SECURITY.md#secrets-subsystem)
+for its limits.
+
+To export the stored text unchanged, add `reveal=true`:
+
+```bash
+curl "http://127.0.0.1:8080/api/v1/sessions/<session-id>/md?depth=all&reveal=true" \
+  -o session-context.md
+```
+
+Only a request made directly from localhost may use `reveal`. A remote or
+proxied request that asks for it gets HTTP 403, the same rule as revealing
+secrets in search and the secrets list.
+
 ______________________________________________________________________
 
 ## Publish to Gist
@@ -1304,6 +1324,11 @@ After publishing, the modal shows two URLs:
 - **Gist URL** — direct GitHub link
 
 Both have copy buttons and an "Open in Browser" action.
+
+The published gist masks detected secrets in the transcript and in the gist
+description, the same way as [session export](#secrets-in-exports). The publish
+endpoint, `POST /api/v1/sessions/{id}/publish`, accepts the same
+localhost-only `reveal=true` parameter; the UI does not use it.
 
 ______________________________________________________________________
 
