@@ -171,7 +171,8 @@ func TestActivityReportKeptReinsertsOnlyWhenWatermarkAdvances(t *testing.T) {
 				var count int
 				require.Error(t, conn.QueryRowContext(t.Context(), "SELECT COUNT(*) FROM usage_facts").Scan(&count))
 				require.NoError(t, conn.Close())
-				require.Equal(t, first, keptActivityBuild(t, d, f, q, partial))
+				q.EffectiveEnd = q.EffectiveEnd.Add(time.Second)
+				hit := keptActivityBuild(t, d, f, q, partial)
 				conn, err = cache.db.Conn(t.Context())
 				require.NoError(t, err)
 				require.NoError(t, conn.Raw(func(raw any) error {
@@ -179,6 +180,11 @@ func TestActivityReportKeptReinsertsOnlyWhenWatermarkAdvances(t *testing.T) {
 					return nil
 				}))
 				require.NoError(t, conn.Close())
+				assert.Zero(t, sizeCalls, "advancing the clock within the usage window must reuse the entry")
+				clearKeptActivity(d)
+				first = keptActivityBuild(t, d, f, q, true)
+				require.Equal(t, first, hit)
+				sizeCalls = 0
 			} else {
 				require.Equal(t, first, keptActivityBuild(t, d, f, q, partial))
 			}
