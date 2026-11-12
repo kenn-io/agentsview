@@ -758,6 +758,23 @@ reported cost wins.
 - Validation writes a costed usage event with no model under
   `usagefacts.UnknownModel` (`<unknown>`), so usage reads keep it.
 
+### Session usage totals
+
+`session_usage_totals` holds one row per session with a total the agent
+recorded for the whole session, such as Claude Code's `cost-state`. It
+overlaps the session's usage rows, and with `subagent_scope = 'included'` its
+subagents' rows, so no usage, cost, or rollup query reads it. Session usage
+loads it as `SessionTotal` beside the computed totals.
+
+- Only full-parse writes replace it: `SessionBatchWrite.ReplaceSessionTotal`
+  and the staged paths that call `ReplaceSessionUsageTotal`. Other batch
+  writes (repairs, replacements, artifact imports) leave it unchanged.
+- Rebuilds copy it for retained orphan sessions. Artifact exports do not
+  carry it yet, so a session imported from artifacts has none.
+- Every backend stores `db.SessionUsageTotalColumns` and pushes on
+  `SessionUsageTotalFingerprints` changes, like `session_plan_usage`.
+  `dbtest.SeedSessionUsageTotal` and `AssertSessionUsageTotal` check each.
+
 ### Usage cache divergence
 
 SQLite and native PostgreSQL aggregate usage APIs read persisted,

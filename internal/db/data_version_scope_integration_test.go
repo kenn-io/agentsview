@@ -19,6 +19,7 @@ import (
 	"go.kenn.io/agentsview/internal/db"
 	"go.kenn.io/agentsview/internal/dbtest"
 	"go.kenn.io/agentsview/internal/export"
+	"go.kenn.io/agentsview/internal/money"
 	"go.kenn.io/agentsview/internal/parser"
 	"go.kenn.io/agentsview/internal/pricing"
 	"go.kenn.io/agentsview/internal/sync"
@@ -1529,4 +1530,138 @@ func TestClaudePeerRewindUpgradePreservesBranchOwnership(t *testing.T) {
 	afterBody, err := os.ReadFile(source)
 	require.NoError(t, err)
 	assert.Equal(t, body, afterBody)
+}
+
+func TestRecordedCostUpgradeReparsesInPlace(t *testing.T) {
+	scope := db.ScopedDataVersionProviders(175, 176)
+	assert.ElementsMatch(t, []parser.AgentType{
+		parser.AgentPi, parser.AgentOMP, parser.AgentOMO, parser.AgentPrimeAgent,
+		parser.AgentStepCode, parser.AgentOpenClaw, parser.AgentQClaw,
+		parser.AgentShelley, parser.AgentFx, parser.AgentOpenCode, parser.AgentKilo,
+		parser.AgentMiMoCode, parser.AgentIcodemate,
+	}, scope)
+	version := db.CurrentDataVersion()
+	t.Cleanup(db.InstallDataVersionScopesForTest(map[int][]parser.AgentType{version: scope}))
+	ctx := t.Context()
+	database := dbtest.OpenTestDB(t)
+	root := t.TempDir()
+	sourcePath := filepath.Join(root, "encoded-cwd", "2026-10-09T10-00-00-000Z_cost-uuid.jsonl")
+	// A custom model the catalog cannot price, with Pi's recorded cost.
+	dbtest.WriteTestFile(t, sourcePath, []byte(
+		`{"type":"session","version":3,"id":"cost-uuid","timestamp":"2026-10-09T10:00:00Z","cwd":"/work/project"}`+"\n"+
+			`{"type":"message","id":"u1","timestamp":"2026-10-09T10:00:01Z","message":{"role":"user","content":"hello"}}`+"\n"+
+			`{"type":"message","id":"a1","timestamp":"2026-10-09T10:00:02Z","message":{"role":"assistant","content":"hi","model":"rc-custom-model","usage":{"input":100,"output":20,"cost":{"total":0.0125}}}}`+"\n"))
+	cfg := sync.EngineConfig{Machine: "local", AgentDirs: map[parser.AgentType][]string{parser.AgentPi: {root}}}
+	engine := sync.NewEngine(ctx, database, cfg)
+	require.Equal(t, 1, engine.SyncAll(ctx, nil).Synced)
+	engine.Close()
+	const id = "pi:cost-uuid"
+	usage, err := database.GetSessionUsage(ctx, id, true)
+	require.NoError(t, err)
+	assert.True(t, usage.HasCost, "the recorded cost prices the unpriceable model")
+	assert.Equal(t, int64(12_500), usage.Cost.Microdollars)
+
+	// Reproduce the previous parser, which dropped the recorded cost.
+	require.NoError(t, database.Update(ctx, func(tx *sql.Tx) error {
+		_, err := tx.ExecContext(ctx, fmt.Sprintf(
+			`UPDATE messages SET token_usage='{"input_tokens":100,"output_tokens":20}' WHERE session_id=? AND role='assistant';
+			UPDATE sessions SET data_version=%d; PRAGMA user_version=%d`, version-1, version-1), id)
+		return err
+	}))
+	usage, err = database.GetSessionUsage(ctx, id, true)
+	require.NoError(t, err)
+	assert.False(t, usage.HasCost, "without the recorded cost the model is unpriced")
+	path := database.Path()
+	require.NoError(t, database.Close())
+	database, err = db.OpenIsolated(ctx, path)
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, database.Close()) })
+	_, fullRebuild, err := db.ArchiveResyncState(ctx, path)
+	require.NoError(t, err)
+	assert.False(t, fullRebuild, "the recorded-cost upgrade must reparse in place")
+
+	engine = sync.NewEngine(ctx, database, cfg)
+	t.Cleanup(engine.Close)
+	require.Equal(t, 1, engine.SyncAll(ctx, nil).Synced)
+	usage, err = database.GetSessionUsage(ctx, id, true)
+	require.NoError(t, err)
+	assert.True(t, usage.HasCost)
+	assert.Equal(t, int64(12_500), usage.Cost.Microdollars)
+	assert.Equal(t, sourcePath, database.GetSessionFilePath(ctx, id), "source path is unchanged")
+	var sessions int
+	require.NoError(t, database.Reader().QueryRow(ctx, "SELECT count(*) FROM sessions").Scan(&sessions))
+	assert.Equal(t, 1, sessions)
+}
+
+func TestClaudeCostStateUpgradeKeepsSessionTotalApart(t *testing.T) {
+	providers := []parser.AgentType{parser.AgentClaude, parser.AgentCowork, parser.AgentQoder, parser.AgentIcodemate}
+	scope := db.ScopedDataVersionProviders(176, 177)
+	assert.ElementsMatch(t, providers, scope)
+	version := db.CurrentDataVersion()
+	t.Cleanup(db.InstallDataVersionScopesForTest(map[int][]parser.AgentType{version: scope}))
+	ctx := t.Context()
+	database := dbtest.OpenTestDB(t)
+	require.NoError(t, database.UpsertModelPricing([]db.ModelPricing{{
+		ModelPattern:  "rc-claude-model",
+		InputPerMTok:  money.Money{Microdollars: 1_000_000},
+		OutputPerMTok: money.Money{Microdollars: 2_000_000},
+	}}))
+	root := t.TempDir()
+	sessionID := "c0000000-0000-4000-8000-000000000174"
+	source := filepath.Join(root, "project", sessionID+".jsonl")
+	body := testjsonl.NewSessionBuilder().AddClaudeUserWithSessionID("2026-10-08T12:00:00Z", "hello", sessionID).String() + "\n" +
+		`{"type":"assistant","timestamp":"2026-10-08T12:00:01Z","sessionId":"` + sessionID + `","uuid":"a1","requestId":"req_1",` +
+		`"message":{"id":"msg_1","role":"assistant","model":"rc-claude-model","content":[{"type":"text","text":"hi"}],` +
+		`"usage":{"input_tokens":1000,"output_tokens":500}}}` + "\n" +
+		`{"type":"cost-state","sessionId":"` + sessionID + `","totalCostUSD":0.75,"startTime":1,` +
+		`"modelUsage":{"rc-claude-model":{"inputTokens":1500,"outputTokens":530,"thinkingTokens":0,` +
+		`"cacheReadInputTokens":0,"cacheCreationInputTokens":0,"webSearchRequests":0,"costUSD":0.75}},"hasUnknownModelCost":false}` + "\n"
+	dbtest.WriteTestFile(t, source, []byte(body))
+	cfg := sync.EngineConfig{Machine: "local", AgentDirs: map[parser.AgentType][]string{parser.AgentClaude: {root}}}
+	engine := sync.NewEngine(ctx, database, cfg)
+	require.Equal(t, 1, engine.SyncAll(ctx, nil).Synced)
+	engine.Close()
+	var id string
+	require.NoError(t, database.Reader().QueryRow(ctx, "SELECT id FROM sessions").Scan(&id))
+
+	requireTotal := func(database *db.DB) {
+		t.Helper()
+		usage, err := database.GetSessionUsage(ctx, id, true)
+		require.NoError(t, err)
+		require.NotNil(t, usage)
+		// The catalog prices the transcript's own call; the agent's total
+		// sits beside it and is never added.
+		assert.Equal(t, int64(2_000), usage.Cost.Microdollars)
+		require.NotNil(t, usage.SessionTotal)
+		assert.Equal(t, parser.ClaudeCostStateSource, usage.SessionTotal.Source)
+		assert.Equal(t, parser.SubagentScopeIncluded, usage.SessionTotal.SubagentScope)
+		require.NotNil(t, usage.SessionTotal.Cost)
+		assert.Equal(t, int64(750_000), usage.SessionTotal.Cost.Microdollars)
+		require.Len(t, usage.SessionTotal.Models, 1)
+		assert.Equal(t, int64(530), usage.SessionTotal.Models[0].OutputTokens)
+		daily, err := database.GetDailyUsage(ctx, db.UsageFilter{From: "2026-10-08", To: "2026-10-08", Timezone: "UTC"})
+		require.NoError(t, err)
+		assert.Equal(t, int64(2_000), daily.Totals.TotalCost.Microdollars, "usage totals exclude the session total")
+		assert.Equal(t, 500, daily.Totals.OutputTokens)
+	}
+	requireTotal(database)
+
+	// Reproduce the previous parser, which dropped cost-state.
+	require.NoError(t, database.Update(ctx, func(tx *sql.Tx) error {
+		_, err := tx.ExecContext(ctx, fmt.Sprintf(
+			"DELETE FROM session_usage_totals; UPDATE sessions SET data_version=%d; PRAGMA user_version=%d",
+			version-1, version-1))
+		return err
+	}))
+	path := database.Path()
+	require.NoError(t, database.Close())
+	database, err := db.OpenIsolated(ctx, path)
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, database.Close()) })
+	assert.False(t, database.NeedsResync(), "the cost-state upgrade must reparse in place")
+	engine = sync.NewEngine(ctx, database, cfg)
+	t.Cleanup(engine.Close)
+	require.Equal(t, 1, engine.SyncAll(ctx, nil).Synced)
+	requireTotal(database)
+	assert.Equal(t, source, database.GetSessionFilePath(ctx, id))
 }

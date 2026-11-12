@@ -13,6 +13,8 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"go.kenn.io/agentsview/internal/money"
+	"go.kenn.io/agentsview/internal/usagefacts"
 )
 
 func TestFxFixture(t *testing.T) {
@@ -68,9 +70,12 @@ func TestFxFixture(t *testing.T) {
 	require.Len(t, session.UsageEvents, 1)
 	usage := session.UsageEvents[0]
 	usage.OccurredAt = ""
+	// fx records $0 for a Codex subscription run; a recorded $0 never
+	// prices a row, so the tokens are still catalog-priced.
 	assert.Equal(t, ParsedUsageEvent{
 		SessionID: "fx:parent-session", Source: "session", Model: "codex/gpt-6.1-sol",
 		InputTokens: 29248, OutputTokens: 647, CacheReadInputTokens: 72320,
+		Cost: &money.Money{}, CostStatus: usagefacts.CostStatusRecorded, CostSource: "fx-gateway",
 		DedupKey: "session:fx:parent-session|codex/gpt-6.1-sol",
 	}, usage)
 	assert.Equal(t, 647, session.TotalOutputTokens)

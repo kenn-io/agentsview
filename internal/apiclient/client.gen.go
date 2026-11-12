@@ -28875,7 +28875,104 @@ func (d DBSessionPlanUsageGroup) Validate() error {
 	return runtime.ConvertValidatorError(typesValidator.Struct(d))
 }
 
+type DBSessionRecordedCost struct {
+	Computed     MoneyMoney `json:"computed"`
+	Difference   MoneyMoney `json:"difference"`
+	FallbackRows int64      `json:"fallback_rows"`
+	Recorded     MoneyMoney `json:"recorded"`
+	Rows         int64      `json:"rows"`
+	UnpricedRows int64      `json:"unpriced_rows"`
+}
+
+func (d DBSessionRecordedCost) Validate() error {
+	var errors runtime.ValidationErrors
+	if v, ok := any(d.Computed).(runtime.Validator); ok {
+		if err := v.Validate(); err != nil {
+			errors = errors.Append("Computed", err)
+		}
+	}
+	if v, ok := any(d.Difference).(runtime.Validator); ok {
+		if err := v.Validate(); err != nil {
+			errors = errors.Append("Difference", err)
+		}
+	}
+	if v, ok := any(d.Recorded).(runtime.Validator); ok {
+		if err := v.Validate(); err != nil {
+			errors = errors.Append("Recorded", err)
+		}
+	}
+	if len(errors) == 0 {
+		return nil
+	}
+	return errors
+}
+
 type DBSessionStats = db.SessionStats
+
+type DBSessionUsageTotal struct {
+	Cost          *MoneyMoney                `json:"cost,omitempty"`
+	Incomplete    *bool                      `json:"incomplete,omitempty"`
+	Models        []DBSessionUsageTotalModel `json:"models" validate:"required"`
+	Source        string                     `json:"source" validate:"required"`
+	SubagentScope *string                    `json:"subagent_scope,omitempty"`
+}
+
+func (d DBSessionUsageTotal) Validate() error {
+	var errors runtime.ValidationErrors
+	if d.Cost != nil {
+		if v, ok := any(d.Cost).(runtime.Validator); ok {
+			if err := v.Validate(); err != nil {
+				errors = errors.Append("Cost", err)
+			}
+		}
+	}
+	if err := typesValidator.Var(d.Models, "required"); err != nil {
+		errors = errors.Append("Models", err)
+	}
+	for i, item := range d.Models {
+		if v, ok := any(item).(runtime.Validator); ok {
+			if err := v.Validate(); err != nil {
+				errors = errors.Append(fmt.Sprintf("Models[%d]", i), err)
+			}
+		}
+	}
+	if err := typesValidator.Var(d.Source, "required"); err != nil {
+		errors = errors.Append("Source", err)
+	}
+	if len(errors) == 0 {
+		return nil
+	}
+	return errors
+}
+
+type DBSessionUsageTotalModel struct {
+	CacheCreationInputTokens int64       `json:"cache_creation_input_tokens"`
+	CacheReadInputTokens     int64       `json:"cache_read_input_tokens"`
+	Cost                     *MoneyMoney `json:"cost,omitempty"`
+	InputTokens              int64       `json:"input_tokens"`
+	Model                    string      `json:"model" validate:"required"`
+	OutputTokens             int64       `json:"output_tokens"`
+	ReasoningTokens          *int64      `json:"reasoning_tokens,omitempty"`
+	WebSearchRequests        *int64      `json:"web_search_requests,omitempty"`
+}
+
+func (d DBSessionUsageTotalModel) Validate() error {
+	var errors runtime.ValidationErrors
+	if d.Cost != nil {
+		if v, ok := any(d.Cost).(runtime.Validator); ok {
+			if err := v.Validate(); err != nil {
+				errors = errors.Append("Cost", err)
+			}
+		}
+	}
+	if err := typesValidator.Var(d.Model, "required"); err != nil {
+		errors = errors.Append("Model", err)
+	}
+	if len(errors) == 0 {
+		return nil
+	}
+	return errors
+}
 
 type DBSignalCalibration struct {
 	AffectedIncompleteRate float64  `json:"affected_incomplete_rate"`
@@ -31160,11 +31257,13 @@ type SessionUsageResponse struct {
 	PeakContextTokens   int64                           `json:"peak_context_tokens"`
 	PlanUsage           *DBPlanUsageView                `json:"plan_usage,omitempty"`
 	Project             string                          `json:"project" validate:"required"`
+	RecordedCost        *DBSessionRecordedCost          `json:"recorded_cost,omitempty"`
 	RollupCost          *MoneyMoney                     `json:"rollup_cost,omitempty"`
 	RollupCostSource    *string                         `json:"rollup_cost_source,omitempty"`
 	RollupSubagentCount *int64                          `json:"rollup_subagent_count,omitempty"`
 	ServerRunning       bool                            `json:"server_running"`
 	SessionID           string                          `json:"session_id" validate:"required"`
+	SessionTotal        *DBSessionUsageTotal            `json:"session_total,omitempty"`
 	SubagentCount       *int64                          `json:"subagent_count,omitempty"`
 	TotalOutputTokens   int64                           `json:"total_output_tokens"`
 	UnpricedModels      []string                        `json:"unpriced_models" validate:"required"`
@@ -31210,6 +31309,13 @@ func (s SessionUsageResponse) Validate() error {
 	if err := typesValidator.Var(s.Project, "required"); err != nil {
 		errors = errors.Append("Project", err)
 	}
+	if s.RecordedCost != nil {
+		if v, ok := any(s.RecordedCost).(runtime.Validator); ok {
+			if err := v.Validate(); err != nil {
+				errors = errors.Append("RecordedCost", err)
+			}
+		}
+	}
 	if s.RollupCost != nil {
 		if v, ok := any(s.RollupCost).(runtime.Validator); ok {
 			if err := v.Validate(); err != nil {
@@ -31219,6 +31325,13 @@ func (s SessionUsageResponse) Validate() error {
 	}
 	if err := typesValidator.Var(s.SessionID, "required"); err != nil {
 		errors = errors.Append("SessionID", err)
+	}
+	if s.SessionTotal != nil {
+		if v, ok := any(s.SessionTotal).(runtime.Validator); ok {
+			if err := v.Validate(); err != nil {
+				errors = errors.Append("SessionTotal", err)
+			}
+		}
 	}
 	if err := typesValidator.Var(s.UnpricedModels, "required"); err != nil {
 		errors = errors.Append("UnpricedModels", err)

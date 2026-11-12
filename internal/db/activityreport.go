@@ -379,9 +379,10 @@ func (db *DB) GetSessionUsageRows(
 		if costRow.cost.Valid {
 			costSource = export.CostSourceReported
 		}
+		recorded, _ := RecordedRowCost(r.cost, r.costStatus, costRow.cost)
 		return activity.UsagePrice{
 			Cost: cost, CostSource: costSource, SessionCost: sessionCost,
-			Priced: priced, Contributes: contributes,
+			RecordedCost: recorded, Priced: priced, Contributes: contributes,
 		}, nil
 	})
 }
