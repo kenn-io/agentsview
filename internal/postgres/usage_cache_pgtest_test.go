@@ -159,6 +159,32 @@ func TestPGUsageCacheDeferredReadsReuseDirectResults(t *testing.T) {
 	}
 }
 
+func TestPGUsageCacheDeferredReadChangesHistory(t *testing.T) {
+	_, _, store, _ := keptUsageFixture(t)
+	ctx := t.Context()
+	attachUsageCacheProbe(t, store, t.TempDir())
+	store.usageCache.DeferWork()
+	t.Cleanup(func() { require.NoError(t, store.usageCache.Close()) })
+	release := store.usageCache.HoldWarm()
+	t.Cleanup(release)
+	filter := db.UsageFilter{From: "2026-01-01", To: "2026-01-01", Timezone: "UTC"}
+	before, err := store.GetDailyUsage(ctx, filter)
+	require.NoError(t, err)
+	require.Equal(t, 1250, before.Totals.OutputTokens)
+	var revision int64
+	require.NoError(t, store.pg.QueryRowContext(ctx, `SELECT value::bigint FROM sync_metadata WHERE key='usage_change_revision'`).Scan(&revision))
+	tx, err := store.beginTx(ctx, nil)
+	require.NoError(t, err)
+	_, err = tx.ExecContext(ctx, `UPDATE usage_events SET output_tokens=output_tokens+100 WHERE session_id='paid-a'`)
+	require.NoError(t, err)
+	_, err = tx.ExecContext(ctx, `UPDATE sync_metadata SET value=$1::bigint::text WHERE key='usage_change_revision'`, revision-1)
+	require.NoError(t, err)
+	require.NoError(t, tx.Commit())
+	after, err := store.GetDailyUsage(ctx, filter)
+	require.NoError(t, err)
+	require.Equal(t, 1350, after.Totals.OutputTokens)
+}
+
 func TestPGUsageCacheWaitsForDirectReadBeforeWarm(t *testing.T) {
 	_, _, store, _ := keptUsageFixture(t)
 	ctx := t.Context()

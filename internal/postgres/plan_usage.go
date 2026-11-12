@@ -86,6 +86,7 @@ func (s *Store) GetPlanUsageSessionCounts(
 	var version string
 	deferred := s.deferUsage(ctx, f)
 	if deferred {
+		defer s.usageCache.HoldWarm()()
 		version = s.directUsageVersion(ctx, slot)
 	} else {
 		version = s.keptUsageVersion(ctx, slot)
