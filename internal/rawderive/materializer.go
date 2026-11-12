@@ -150,7 +150,7 @@ func (m Materializer) MaterializeEntries(ctx context.Context, identity rawsync.A
 	limits.MaxEntries = 1 << 20
 	limits.MaxObjects = 4 << 20
 	if _, err := rawsync.ValidateEntryBatch(entries, limits); err != nil {
-		return nil, fmt.Errorf("validating selected raw entries: %w", err)
+		return nil, fmt.Errorf("invalid saved files: %w", err)
 	}
 	return m.materializeValidated(ctx, identity, capturedAt, entries)
 }

@@ -54,7 +54,7 @@ func TestSelectedInventoryAuthorityAndScope(t *testing.T) {
 			insert("other", "project/id/subagents/other.json", strings.Repeat("f", 64), true)
 			entries, err := selectedInventory(t.Context(), conn, "root", bound, "project/id/")
 			if tc.wantError {
-				require.ErrorContains(t, err, "ambiguous")
+				require.ErrorContains(t, err, "conflicting saved file versions")
 				return
 			}
 			require.NoError(t, err)
@@ -69,7 +69,7 @@ func TestSelectedInventoryAuthorityAndScope(t *testing.T) {
 			_, err = conn.ExecContext(t.Context(), `DELETE FROM raw_archive_files WHERE path=? AND sha256=?`, primary, strings.Repeat("a", 64))
 			require.NoError(t, err)
 			_, err = selectedInventory(t.Context(), conn, "root", bound, "project/id/")
-			require.ErrorContains(t, err, "differs from manifest")
+			require.ErrorContains(t, err, "saved transcript records conflict")
 			insert("root", primary, strings.Repeat("a", 64), true)
 			_, err = conn.ExecContext(t.Context(), `INSERT INTO raw_archive_files VALUES(?,?,?,?,?,?)`, "root", "project/id/subagents/corrupt.json", strings.Repeat("a", 64), 1, 1, 2)
 			require.NoError(t, err)

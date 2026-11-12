@@ -143,7 +143,7 @@ func MaterializeSnapshot(ctx context.Context, sources []config.ArchiveSource, ow
 		return nil, "", "", err
 	}
 	if manifest.Manifest.ConfiguredRootID != configuredRoot || manifest.Manifest.SourceKey != s.SourceKey || string(manifest.Manifest.Provider) != provider {
-		return nil, "", "", errors.New("snapshot manifest identity differs")
+		return nil, "", "", errors.New("snapshot source mismatch")
 	}
 	bound, primary, err := snapshotPrimaryPath(s.SourceKey, originalRoot, owner.NativeSessionID, manifest.Manifest.Entries)
 	if err != nil {
@@ -154,11 +154,6 @@ func MaterializeSnapshot(ctx context.Context, sources []config.ArchiveSource, ow
 	entries, err := selectedInventory(ctx, conn, s.RootID, bound, base)
 	if err != nil {
 		return nil, "", "", err
-	}
-	if !slices.ContainsFunc(entries, func(e rawsync.Entry) bool {
-		return e.Path == primary && e.Length == bound.Length && slices.Equal(e.Objects, bound.Objects)
-	}) {
-		return nil, "", "", errors.New("snapshot transcript inventory differs from manifest")
 	}
 	if err := conn.Close(); err != nil {
 		conn = nil
@@ -236,7 +231,7 @@ func selectedInventory(ctx context.Context, conn *sql.DB, rootID string, bound r
 		return nil, err
 	}
 	if len(choices[bound.Path].covered) != 1 {
-		return nil, errors.New("snapshot transcript inventory differs from manifest")
+		return nil, errors.New("saved transcript records conflict")
 	}
 	var entries []rawsync.Entry
 	for _, c := range choices {
@@ -245,7 +240,7 @@ func selectedInventory(ctx context.Context, conn *sql.DB, rootID string, bound r
 			versions = c.supplemental
 		}
 		if len(versions) != 1 {
-			return nil, errors.New("ambiguous snapshot inventory versions")
+			return nil, errors.New("conflicting saved file versions")
 		}
 		entries = append(entries, versions[0])
 	}

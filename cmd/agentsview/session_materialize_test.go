@@ -62,7 +62,7 @@ func TestSessionMaterializeSnapshotDispatch(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, initial.Close())
 	dbtest.WriteTestFile(t, filepath.Join(originalData, "telemetry-install-id"), []byte(device))
-	projects := filepath.Join(root, "projects")
+	projects := filepath.Join(root, "claude", "projects")
 	dbtest.WriteTestFile(t, filepath.Join(projects, "project", id+".jsonl"), []byte(testjsonl.NewSessionBuilder().AddClaudeUserWithSessionID("2026-01-01T00:00:00Z", "fixture", id).String()))
 	capture, seed := filepath.Join(root, "capture"), filepath.Join(root, "seed")
 	settings := rawarchive.RecoverySettings{LocalMachineName: "fixture"}
