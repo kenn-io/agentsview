@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"runtime"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -171,4 +172,8 @@ func TestCodexMaterializeCommand(t *testing.T) {
 		want = "codex resume '" + id + "' -C '" + cwd + "'"
 	}
 	assert.Equal(t, want, result.Command)
+	human, err := executeCommand(newRootCommand(), "session", "materialize", "codex:"+id, "--cwd", cwd)
+	require.NoError(t, err, human)
+	assert.Contains(t, human, "Requested: codex:"+id)
+	assert.Contains(t, human, "Installed page: "+filepath.Base(name))
 }

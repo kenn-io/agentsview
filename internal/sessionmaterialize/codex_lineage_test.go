@@ -40,6 +40,15 @@ func TestCodexLineageIncludesParentThreadAndCompressedPage(t *testing.T) {
 	require.Len(t, pages, 3)
 	assert.Equal(t, []string{parentName, firstName, newName}, []string{pages[0].name, pages[1].name, pages[2].name})
 	assert.Equal(t, compressed, pages[2].data)
+	plainName := strings.TrimSuffix(newName, ".zst")
+	files[plainName] = last
+	selected, err := codexLineage(t.Context(), thread, append(names, plainName), read)
+	require.NoError(t, err)
+	assert.Equal(t, plainName, selected[len(selected)-1].name)
+	files[firstName] = []byte(fmt.Sprintf(`{"type":"session_meta","payload":{"id":%q,"history_mode":"paginated","history_base":{"thread_id":%q,"end_ordinal_exclusive":1,"end_byte_offset":9999}}}`+"\n", thread, parent))
+	_, err = codexLineage(t.Context(), thread, names, read)
+	require.ErrorContains(t, err, "cutoff")
+	files[firstName] = firstBytes
 	_, err = codexLineage(t.Context(), thread, names[1:], read)
 	require.ErrorContains(t, err, "missing Codex ancestor")
 	files[parentName] = []byte(fmt.Sprintf(`{"type":"session_meta","payload":{"id":%q,"history_mode":"paginated","history_base":{"thread_id":%q,"end_ordinal_exclusive":1,"end_byte_offset":1}}}`+"\n", parent, page))
@@ -69,6 +78,11 @@ func TestCodexLegacyFilenameAndInvalidLineage(t *testing.T) {
 	page, err := inspectCodexPage(t.Context(), name, data)
 	require.NoError(t, err)
 	assert.Equal(t, data, page.data)
+	revert := "22222222-2222-4222-8222-222222222222"
+	revertName := "rollout-20240115-" + id + "_" + revert + ".jsonl"
+	legacy := []byte(fmt.Sprintf(`{"type":"session_meta","payload":{"id":%q,"session_id":%q}}`, revert, id))
+	_, err = inspectCodexPage(t.Context(), revertName, legacy)
+	require.NoError(t, err)
 	_, err = codexLineage(t.Context(), id, []string{name, "elsewhere/" + name}, func(context.Context, string, int64) ([]byte, error) { return data, nil })
 	require.ErrorContains(t, err, "ambiguous")
 }

@@ -164,12 +164,14 @@ func materializeSnapshot(ctx context.Context, sources []config.ArchiveSource, ow
 	base := strings.TrimSuffix(primary, ".jsonl") + "/"
 	bound.Path = primary
 	var entries []rawsync.Entry
+	var conflicts map[string]bool
 	if use != nil {
+		conflicts = make(map[string]bool)
 		rows, queryErr := conn.QueryContext(ctx, `SELECT path,sha256,size,mod_time_ns,covered FROM raw_archive_files WHERE root_id=? AND (path LIKE '%.jsonl' OR path LIKE '%.jsonl.zst') ORDER BY path`, s.RootID)
 		if queryErr != nil {
 			return nil, "", "", queryErr
 		}
-		entries, err = inventoryEntries(rows, bound, func(name string) bool { return parser.CodexSessionUUIDFromFilename(path.Base(name)) != "" })
+		entries, err = inventoryEntries(rows, bound, func(name string) bool { return parser.CodexSessionUUIDFromFilename(path.Base(name)) != "" }, conflicts)
 	} else {
 		entries, err = selectedInventory(ctx, conn, s.RootID, bound, base)
 	}
@@ -186,6 +188,9 @@ func materializeSnapshot(ctx context.Context, sources []config.ArchiveSource, ow
 		remaining := limit
 		read := func(ctx context.Context, name string, requested int64) (_ []byte, readErr error) {
 			entry, ok := byPath[name]
+			if conflicts[name] {
+				return nil, errors.New("conflicting saved file versions")
+			}
 			if !ok || requested <= 0 || entry.Length > remaining || entry.Length > requested {
 				return nil, errors.New("snapshot rollout unavailable or exceeds size limit")
 			}
@@ -262,10 +267,10 @@ func selectedInventory(ctx context.Context, conn *sql.DB, rootID string, bound r
 	if err != nil {
 		return nil, err
 	}
-	return inventoryEntries(rows, bound, nil)
+	return inventoryEntries(rows, bound, nil, nil)
 }
 
-func inventoryEntries(rows *sql.Rows, bound rawsync.Entry, keep func(string) bool) (_ []rawsync.Entry, retErr error) {
+func inventoryEntries(rows *sql.Rows, bound rawsync.Entry, keep func(string) bool, conflicts map[string]bool) (_ []rawsync.Entry, retErr error) {
 	defer func() { retErr = errors.Join(retErr, rows.Close()) }()
 	type choice struct{ covered, supplemental []rawsync.Entry }
 	choices := map[string]choice{}
@@ -306,7 +311,10 @@ func inventoryEntries(rows *sql.Rows, bound rawsync.Entry, keep func(string) boo
 			versions = c.supplemental
 		}
 		if len(versions) != 1 {
-			return nil, errors.New("conflicting saved file versions")
+			if conflicts == nil {
+				return nil, errors.New("conflicting saved file versions")
+			}
+			conflicts[versions[0].Path] = true
 		}
 		entries = append(entries, versions[0])
 	}

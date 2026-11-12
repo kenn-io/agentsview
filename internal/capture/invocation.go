@@ -426,7 +426,8 @@ func defaultStreams(streams Streams) Streams {
 	return streams
 }
 
-func producerRoot(provider Provider, explicit string) (string, error) {
+// ProducerRoot resolves the native session directory for capture.
+func ProducerRoot(provider Provider, explicit string) (string, error) {
 	if explicit != "" {
 		return absoluteExpandedPath(explicit)
 	}

@@ -76,6 +76,17 @@ func TestSelectedInventoryAuthorityAndScope(t *testing.T) {
 			_, err = selectedInventory(t.Context(), conn, "root", bound, "project/id/")
 			require.ErrorContains(t, err, "saved transcript does not match snapshot")
 			insert("root", primary, strings.Repeat("a", 64), true)
+			// Codex enumeration must defer an unrelated path's conflict until read.
+			other := "project/id/subagents/meta.json"
+			insert("root", other, strings.Repeat("c", 64), true)
+			rows, err := conn.QueryContext(t.Context(), `SELECT path,sha256,size,mod_time_ns,covered FROM raw_archive_files WHERE root_id=? AND (path=? OR path=?) ORDER BY path`, "root", primary, other)
+			require.NoError(t, err)
+			conflicts := map[string]bool{}
+			entries, err = inventoryEntries(rows, bound, nil, conflicts)
+			require.NoError(t, err)
+			require.Len(t, entries, 2)
+			assert.False(t, conflicts[primary])
+			assert.True(t, conflicts[other])
 			_, err = conn.ExecContext(t.Context(), `INSERT INTO raw_archive_files VALUES(?,?,?,?,?,?)`, "root", "project/id/subagents/corrupt.json", strings.Repeat("a", 64), 1, 1, 2)
 			require.NoError(t, err)
 			_, err = selectedInventory(t.Context(), conn, "root", bound, "project/id/")
@@ -160,7 +171,32 @@ func TestMaterializeSnapshotCaptureLayouts(t *testing.T) {
 
 func TestReadCodexSnapshotUsesAcceptedOriginal(t *testing.T) {
 	const id = "019eb791-cf7d-75c1-8439-9ed74c122e02"
-	source, inputs := archiveFixture(t)
+	inputs := t.TempDir()
+	root := filepath.Join(inputs, "sessions")
+	name := "rollout-2026-01-01T00-00-00-" + id + ".jsonl"
+	original := testjsonl.NewSessionBuilder().AddCodexMeta("2026-01-01T00:00:00Z", id, "/workspace/project-a", "codex_cli_rs").AddCodexMessage("2026-01-01T00:00:01Z", "user", "saved Codex question").String()
+	dbtest.WriteTestFile(t, filepath.Join(root, name), []byte(original))
+	source := backupSourceRoots(t, inputs, []rawarchive.RootSpec{{Provider: "codex", Path: root}})
+	changed := testjsonl.NewSessionBuilder().AddCodexMeta("2026-01-01T00:00:00Z", id, "/workspace/project-a", "codex_cli_rs").AddCodexMessage("2026-01-01T00:00:01Z", "user", "later question").String()
+	dbtest.WriteTestFile(t, filepath.Join(root, name), []byte(changed))
+	ctx := t.Context()
+	capture := filepath.Join(inputs, "capture-next")
+	settings := rawarchive.RecoverySettings{LocalMachineName: "retired-desktop"}
+	_, err := rawarchive.Capture(ctx, rawarchive.CaptureOptions{DataDir: filepath.Join(inputs, "application"), Destination: capture, IdentityFrom: filepath.Join(inputs, "capture", "capture.json"), Roots: []rawarchive.RootSpec{{Provider: "codex", Path: root}}, Settings: settings})
+	require.NoError(t, err)
+	spec, err := rawarchive.LoadImportSpec(ctx, filepath.Join(capture, "capture.json"))
+	require.NoError(t, err)
+	database, err := db.OpenIsolatedContext(ctx, filepath.Join(inputs, "seed", "sessions.db"))
+	require.NoError(t, err)
+	archive, err := rawarchive.Open(ctx, database, filepath.Join(inputs, "seed"), nil)
+	require.NoError(t, err)
+	_, err = archive.Import(ctx, spec)
+	require.NoError(t, err)
+	report, err := archive.Backup(ctx, source.Repository, settings, "test")
+	require.NoError(t, err)
+	source.Snapshot = report.SnapshotID
+	require.NoError(t, archive.Close())
+	require.NoError(t, database.Close())
 	require.NoError(t, os.RemoveAll(inputs))
 	index, err := OpenIndex(t.Context(), source, t.TempDir(), nil)
 	require.NoError(t, err)

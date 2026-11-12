@@ -43,7 +43,7 @@ func inspectCodexPage(ctx context.Context, name string, data []byte) (codexPage,
 	}
 	var reader io.Reader = bytes.NewReader(data)
 	if strings.HasSuffix(basename, ".jsonl.zst") {
-		decoder, err := zstd.NewReader(reader, zstd.WithDecoderConcurrency(1), zstd.WithDecoderLowmem(true), zstd.WithDecoderMaxMemory(128<<20), zstd.WithDecoderMaxWindow(32<<20))
+		decoder, err := zstd.NewReader(reader, zstd.WithDecoderConcurrency(1), zstd.WithDecoderLowmem(true), zstd.WithDecoderMaxMemory(128<<20), zstd.WithDecoderMaxWindow(64<<20))
 		if err != nil {
 			return codexPage{}, err
 		}
@@ -56,7 +56,7 @@ func inspectCodexPage(ctx context.Context, name string, data []byte) (codexPage,
 		part, err := buffered.ReadSlice('\n')
 		line = append(line, part...)
 		if len(line) > 16<<20 {
-			return codexPage{}, errors.New("Codex metadata exceeds size limit")
+			return codexPage{}, errors.New("native Codex metadata exceeds size limit")
 		}
 		if err == nil || errors.Is(err, io.EOF) {
 			break
@@ -87,10 +87,10 @@ func inspectCodexPage(ctx context.Context, name string, data []byte) (codexPage,
 	// Early revert pages recorded the rollout ID as id and the thread as
 	// session_id; newer producers record the thread in id.
 	if record.Payload.ID != thread && !(record.Payload.ID == rollout && record.Payload.SessionID == thread) {
-		return codexPage{}, errors.New("Codex rollout identity differs")
+		return codexPage{}, errors.New("native Codex rollout identity differs")
 	}
 	if record.Payload.Base != nil && record.Payload.Mode != "paginated" {
-		return codexPage{}, errors.New("Codex lineage requires paginated history")
+		return codexPage{}, errors.New("native Codex lineage requires paginated history")
 	}
 	if record.Payload.Base != nil && (!capture.ValidUUID(record.Payload.Base.Rollout) || record.Payload.Base.Ordinal == 0 || record.Payload.Base.Ordinal == ^uint64(0)) {
 		return codexPage{}, errors.New("invalid Codex history base")
@@ -101,28 +101,40 @@ func inspectCodexPage(ctx context.Context, name string, data []byte) (codexPage,
 // codexLineage validates every ancestor before returning files in publication
 // order, with the requested thread's newest page last.
 func codexLineage(ctx context.Context, thread string, names []string, read func(context.Context, string, int64) ([]byte, error)) ([]codexPage, error) {
-	var newest string
+	type choice struct {
+		name      string
+		ambiguous bool
+	}
+	byRollout := make(map[string]choice)
+	var newest, newestDate, newestRollout string
 	for _, name := range names {
-		if _, err := codexDate(name); err != nil {
+		date, err := codexDate(name)
+		if err != nil {
 			continue
 		}
 		key := parser.CodexSessionUUIDFromFilename(path.Base(name))
-		if parser.CodexThreadIDFromSessionKey(key) != thread {
-			continue
+		threadID := parser.CodexThreadIDFromSessionKey(key)
+		rollout := strings.TrimPrefix(key, threadID+"_")
+		current := byRollout[rollout]
+		if current.name != "" && strings.TrimSuffix(current.name, ".zst") != strings.TrimSuffix(name, ".zst") {
+			current.ambiguous = true
+		} else if current.name == "" || !strings.HasSuffix(name, ".zst") {
+			current.name = name
 		}
+		byRollout[rollout] = current
 		base := strings.TrimSuffix(path.Base(name), ".zst")
-		if newest != "" && base == strings.TrimSuffix(path.Base(newest), ".zst") && strings.TrimSuffix(name, ".zst") != strings.TrimSuffix(newest, ".zst") {
-			return nil, errors.New("ambiguous Codex rollout location")
-		}
-		date, _ := codexDate(name)
-		newestDate, _ := codexDate(newest)
-		if newest == "" || date > newestDate || (date == newestDate && (base > strings.TrimSuffix(path.Base(newest), ".zst") || (base == strings.TrimSuffix(path.Base(newest), ".zst") && !strings.HasSuffix(name, ".zst")))) {
-			newest = name
+		if threadID == thread && (newest == "" || date > newestDate || (date == newestDate && base > strings.TrimSuffix(path.Base(newest), ".zst"))) {
+			newest, newestDate, newestRollout = name, date, rollout
 		}
 	}
 	if newest == "" {
 		return nil, errors.New("native Codex transcript is unavailable")
 	}
+	selected := byRollout[newestRollout]
+	if selected.ambiguous {
+		return nil, errors.New("ambiguous Codex rollout location")
+	}
+	newest = selected.name
 	seen := make(map[string]bool)
 	var pages []codexPage
 	var cutoff *codexPosition
@@ -142,38 +154,25 @@ func codexLineage(ctx context.Context, thread string, names []string, read func(
 			return nil, err
 		}
 		if seen[page.rollout] {
-			return nil, errors.New("Codex lineage cycle")
+			return nil, errors.New("native Codex lineage cycle")
 		}
 		seen[page.rollout] = true
 		if cutoff != nil && (page.rollout != cutoff.Rollout || page.mode != "paginated" || cutoff.Offset > page.decodedSize) {
-			return nil, errors.New("Codex lineage cutoff or source differs")
+			return nil, errors.New("native Codex lineage cutoff or source differs")
 		}
 		pages = append(pages, page)
 		if page.base == nil {
 			break
 		}
 		cutoff = page.base
-		name = ""
-		for _, candidate := range names {
-			if _, err := codexDate(candidate); err != nil {
-				continue
-			}
-			key := parser.CodexSessionUUIDFromFilename(path.Base(candidate))
-			threadID := parser.CodexThreadIDFromSessionKey(key)
-			rollout := strings.TrimPrefix(key, threadID+"_")
-			if rollout != cutoff.Rollout {
-				continue
-			}
-			if name != "" && strings.TrimSuffix(name, ".zst") != strings.TrimSuffix(candidate, ".zst") {
-				return nil, fmt.Errorf("ambiguous Codex rollout %s", rollout)
-			}
-			if name == "" || !strings.HasSuffix(candidate, ".zst") {
-				name = candidate
-			}
+		selected := byRollout[cutoff.Rollout]
+		if selected.ambiguous {
+			return nil, fmt.Errorf("ambiguous Codex rollout %s", cutoff.Rollout)
 		}
-		if name == "" {
+		if selected.name == "" {
 			return nil, fmt.Errorf("missing Codex ancestor %s", cutoff.Rollout)
 		}
+		name = selected.name
 	}
 	for i, j := 0, len(pages)-1; i < j; i, j = i+1, j-1 {
 		pages[i], pages[j] = pages[j], pages[i]
@@ -185,15 +184,12 @@ func codexLineage(ctx context.Context, thread string, names []string, read func(
 func codexDate(name string) (string, error) {
 	base := path.Base(name)
 	key := parser.CodexSessionUUIDFromFilename(base)
-	if key == "" || !strings.HasPrefix(base, "rollout-") {
+	if key == "" {
 		return "", errors.New("invalid Codex rollout date")
 	}
 	ext := ".jsonl"
 	if strings.HasSuffix(base, ".jsonl.zst") {
 		ext += ".zst"
-	}
-	if !strings.HasSuffix(base, "-"+key+ext) {
-		return "", errors.New("invalid Codex rollout date")
 	}
 	stamp := strings.TrimSuffix(strings.TrimPrefix(base, "rollout-"), "-"+key+ext)
 	for _, layout := range []string{"2006-01-02T15-04-05", "20060102"} {

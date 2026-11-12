@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"testing"
 
+	"github.com/klauspost/compress/zstd"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"go.kenn.io/agentsview/internal/config"
@@ -66,6 +67,20 @@ func TestMaterializeCodexConfiguredAndMirror(t *testing.T) {
 			got, err := os.ReadFile(newPath)
 			require.NoError(t, err)
 			assert.Equal(t, newPage, got)
+			if mirror {
+				encoder, err := zstd.NewWriter(nil)
+				require.NoError(t, err)
+				compressed := encoder.EncodeAll(old, nil)
+				encoder.Close()
+				require.NoError(t, os.Remove(oldPath))
+				require.NoError(t, os.WriteFile(oldPath+".zst", compressed, 0o600))
+				t.Setenv("CODEX_HOME", t.TempDir())
+				result, err = Materialize(t.Context(), cfg, nil, session, cwd)
+				require.NoError(t, err)
+				got, err = os.ReadFile(result.Paths[0])
+				require.NoError(t, err)
+				assert.Equal(t, compressed, got)
+			}
 		})
 	}
 }
@@ -74,11 +89,12 @@ func TestMaterializeCodexS3(t *testing.T) {
 	const id = "11111111-1111-4111-8111-111111111111"
 	const root = "s3://test/host/raw/codex"
 	const key = "host/raw/codex/sessions/2026/01/01/rollout-2026-01-01T01-00-00-" + id + ".jsonl"
+	const archivedKey = "host/raw/codex/archived_sessions/rollout-2026-01-01T01-00-00-" + id + ".jsonl"
 	content := fmt.Sprintf(`{"type":"session_meta","payload":{"id":%q}}`+"\n", id)
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Query().Get("list-type") == "2" {
 			w.Header().Set("Content-Type", "application/xml")
-			_, _ = fmt.Fprintf(w, `<ListBucketResult><IsTruncated>false</IsTruncated><Contents><Key>%s</Key><Size>%d</Size></Contents></ListBucketResult>`, key, len(content))
+			_, _ = fmt.Fprintf(w, `<ListBucketResult><IsTruncated>false</IsTruncated><Contents><Key>%s</Key><Size>%d</Size></Contents><Contents><Key>%s</Key><Size>%d</Size></Contents></ListBucketResult>`, key, len(content), archivedKey, len(content))
 			return
 		}
 		if r.URL.Path != "/test/"+key {
@@ -97,6 +113,14 @@ func TestMaterializeCodexS3(t *testing.T) {
 	uri := "s3://test/" + key
 	cfg := config.Config{AgentDirs: map[parser.AgentType][]string{parser.AgentCodex: {root}}}
 	session := &db.Session{ID: "codex:" + id, Agent: "codex", Machine: "host", FilePath: &uri}
+	bad := *session
+	bad.Machine = "other"
+	_, err := Materialize(t.Context(), cfg, nil, &bad, t.TempDir())
+	require.ErrorContains(t, err, "source identity differs")
+	bad = *session
+	bad.ID = "remote~codex:" + id
+	_, err = Materialize(t.Context(), cfg, nil, &bad, t.TempDir())
+	require.ErrorContains(t, err, "source host differs")
 	result, err := Materialize(t.Context(), cfg, nil, session, t.TempDir())
 	require.NoError(t, err)
 	require.Len(t, result.Paths, 1)
@@ -117,4 +141,22 @@ func TestMaterializeCodexMissingAndCanceled(t *testing.T) {
 	cancel()
 	_, err = Materialize(ctx, cfg, nil, session, t.TempDir())
 	require.ErrorIs(t, err, context.Canceled)
+
+	// The requested page can refer to a parent in a configured sibling archive.
+	const parent = "22222222-2222-4222-8222-222222222222"
+	base, home := t.TempDir(), t.TempDir()
+	t.Setenv("CODEX_HOME", home)
+	live, archived := filepath.Join(base, "sessions"), filepath.Join(base, "archived_sessions")
+	page := filepath.Join(live, "2026", "01", "01", "rollout-2026-01-01T00-00-00-"+id+".jsonl")
+	ancestor := filepath.Join(archived, "rollout-20240115-"+parent+".jsonl")
+	require.NoError(t, os.MkdirAll(filepath.Dir(page), 0o700))
+	require.NoError(t, os.MkdirAll(archived, 0o700))
+	require.NoError(t, os.WriteFile(page, []byte(fmt.Sprintf(`{"type":"session_meta","payload":{"id":%q,"history_mode":"paginated","history_base":{"thread_id":%q,"end_ordinal_exclusive":1,"end_byte_offset":1}}}`+"\n", id, parent)), 0o600))
+	require.NoError(t, os.WriteFile(ancestor, []byte(fmt.Sprintf(`{"type":"session_meta","payload":{"id":%q,"history_mode":"paginated"}}`+"\n", parent)), 0o600))
+	cfg.AgentDirs[parser.AgentCodex] = []string{live, archived}
+	session.FilePath = &page
+	result, err := Materialize(t.Context(), cfg, nil, session, t.TempDir())
+	require.NoError(t, err)
+	require.Len(t, result.Paths, 2)
+	assert.Equal(t, filepath.Base(ancestor), filepath.Base(result.Paths[0]))
 }

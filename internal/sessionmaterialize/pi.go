@@ -131,16 +131,23 @@ func findPiSource(ctx context.Context, cfg config.Config, session *db.Session, s
 }
 
 func readPiFile(ctx context.Context, root, name string) ([]byte, error) {
-	if !within(root, name) || !strings.HasSuffix(name, ".jsonl") {
-		return nil, errors.New("native Pi source outside configured root")
+	if !strings.HasSuffix(name, ".jsonl") {
+		return nil, errors.New("invalid native Pi source filename")
 	}
-	data, before, err := readFile(ctx, name, maxSourceBytes)
+	return readStableFile(ctx, root, name, maxSourceBytes)
+}
+
+func readStableFile(ctx context.Context, root, name string, limit int64) ([]byte, error) {
+	if !within(root, name) {
+		return nil, errors.New("native source outside configured root")
+	}
+	data, before, err := readFile(ctx, name, limit)
 	if err != nil {
 		return nil, err
 	}
 	after, err := os.Stat(name)
 	if err != nil || !os.SameFile(before, after) || before.Size() != after.Size() || before.ModTime() != after.ModTime() {
-		return nil, errors.New("native Pi source changed while reading; retry when idle")
+		return nil, errors.New("native source changed while reading; retry when idle")
 	}
 	return data, nil
 }
