@@ -1820,6 +1820,10 @@ func pgScanLocalDate(t *time.Time) string {
 // category, tool name, and local date; BuildToolsAnalytics forms the
 // weekly trend from those dates.
 func (s *Store) GetAnalyticsTools(ctx context.Context, f db.AnalyticsFilter) (db.ToolsAnalyticsResponse, error) {
+	return keptAnalytics(ctx, s, "tools", f, s.loadAnalyticsTools)
+}
+
+func (s *Store) loadAnalyticsTools(ctx context.Context, f db.AnalyticsFilter) (db.ToolsAnalyticsResponse, error) {
 	rows, err := s.analyticsToolRows(ctx, f)
 	return db.BuildToolsAnalytics(rows), err
 }
@@ -2075,6 +2079,12 @@ func (a *velocityAccumulator) computeOverview() db.VelocityOverview {
 // GetAnalyticsVelocity computes turn cycle, first response,
 // and throughput metrics.
 func (s *Store) GetAnalyticsVelocity(
+	ctx context.Context, f db.AnalyticsFilter,
+) (db.VelocityResponse, error) {
+	return keptAnalytics(ctx, s, "velocity", f, s.loadAnalyticsVelocity)
+}
+
+func (s *Store) loadAnalyticsVelocity(
 	ctx context.Context, f db.AnalyticsFilter,
 ) (db.VelocityResponse, error) {
 	loc := analyticsLocation(f)
