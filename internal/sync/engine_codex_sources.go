@@ -438,3 +438,111 @@ func pickPreferredCodexDiscoveredFile(ctx context.Context,
 	}
 	return chosen
 }
+
+func dedupeDiscoveredFilesPreferNewestCodex(
+	files []parser.DiscoveredFile,
+) []parser.DiscoveredFile {
+	return dedupeDiscoveredFilesByPreference(files, preferNewestCodexDiscoveredFile)
+}
+
+func preferNewestCodexDiscoveredFile(
+	candidate, current parser.DiscoveredFile,
+) bool {
+	if candidate.Agent == current.Agent && isCodexFormatAgent(candidate.Agent) {
+		candMTime, candOK := discoveredFileMTime(candidate.Path)
+		currMTime, currOK := discoveredFileMTime(current.Path)
+		if candOK && currOK && candMTime != currMTime {
+			return candMTime > currMTime
+		}
+	}
+	return preferDiscoveredFile(candidate, current)
+}
+
+// expandCodexProviderDuplicates re-adds the on-disk duplicate paths of each
+// discovered Codex-format source. The provider deduplicates a UUID's live and
+// archived copies to the preferred layout at discovery time; this restores the
+// dropped duplicates (scoped to the configured roots) so an mtime cutoff filter
+// can judge each copy on its own mtime, matching the legacy discover-then-filter
+// order. Files of other agents, and Codex-format files without a UUID-shaped
+// name, pass through unchanged. Duplicates are keyed by path so nothing is added
+// twice. Each agent is expanded against its own roots and re-added under its own
+// identity: a fork's UUID must not be resolved through the Codex provider.
+func (e *Engine) expandCodexProviderDuplicates(
+	files []parser.DiscoveredFile, scope *rootSyncScope,
+) []parser.DiscoveredFile {
+	pathers := make(map[parser.AgentType]func(string) []string)
+	seen := make(map[string]struct{}, len(files))
+	for _, f := range files {
+		seen[string(f.Agent)+"\x00"+filepath.Clean(f.Path)] = struct{}{}
+	}
+	out := files
+	for _, f := range files {
+		if !isCodexFormatAgent(f.Agent) {
+			continue
+		}
+		pather, resolved := pathers[f.Agent]
+		if !resolved {
+			pather = e.codexUUIDPathLister(f.Agent, scope)
+			pathers[f.Agent] = pather
+		}
+		if pather == nil {
+			continue
+		}
+		uuid := parser.CodexSessionUUIDFromFilename(filepath.Base(f.Path))
+		if uuid == "" {
+			continue
+		}
+		for _, dup := range pather(uuid) {
+			key := string(f.Agent) + "\x00" + filepath.Clean(dup)
+			if _, ok := seen[key]; ok {
+				continue
+			}
+			seen[key] = struct{}{}
+			out = append(out, parser.DiscoveredFile{
+				Path:            dup,
+				Agent:           f.Agent,
+				Machine:         e.machineForPath(f.Agent, dup),
+				ProviderProcess: true,
+				ProviderSource:  e.codexPinnedProviderSource(f.Agent, dup),
+			})
+		}
+	}
+	return out
+}
+
+// codexUUIDPathLister returns a function that lists every on-disk transcript
+// path of the given Codex-format agent for a UUID under the in-scope roots, or
+// nil when that provider is unavailable. It scopes a single provider to the
+// in-scope roots so the returned paths cover both the live dated and flat
+// archived copies of a duplicated UUID, including duplicates that share one
+// root.
+func (e *Engine) codexUUIDPathLister(
+	agent parser.AgentType, scope *rootSyncScope,
+) func(string) []string {
+	factory, ok := e.sources().providerFactories[agent]
+	if !ok || factory == nil {
+		return nil
+	}
+	roots := make([]string, 0, len(e.sources().agentDirs[agent]))
+	for _, root := range e.sources().agentDirs[agent] {
+		if root == "" || !scope.includes(root) {
+			continue
+		}
+		roots = append(roots, root)
+	}
+	if len(roots) == 0 {
+		return nil
+	}
+	provider := factory.NewProvider(parser.ProviderConfig{
+		Roots:          roots,
+		Machine:        e.machine,
+		SourceMachines: e.sources().sourceMachines[agent],
+	})
+	lister, ok := provider.(interface {
+		AllSourcePathsForUUID(string) []string
+	})
+	if !ok {
+		return nil
+	}
+	return lister.AllSourcePathsForUUID
+}
