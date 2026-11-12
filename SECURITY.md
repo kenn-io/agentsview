@@ -254,16 +254,19 @@ Each of these is off until you configure or run it.
   on loopback. See
   [Find transcript images in Docbank](docs/configuration.md#find-transcript-images-in-docbank).
 - **Publish to Gist.** Publishing a session or insight uploads its HTML export
-  to GitHub as a public or secret gist, using a saved token,
-  `AGENTSVIEW_GITHUB_TOKEN`, or `gh auth token`. A secret gist is unlisted,
-  but anyone with its link can read it. See
+  to GitHub as a public or secret gist. The server uses the token saved in
+  settings (`github_token`). For requests from localhost only, it falls back
+  to `AGENTSVIEW_GITHUB_TOKEN`, then `gh auth token`. A secret gist is
+  unlisted, but anyone with its link can read it. See
   [Publish to Gist](docs/usage.md#publish-to-gist).
 - **GitHub pull-request counts.** When you ask for pull-request outcomes, with
   `agentsview report stats --include-github-outcomes` or from the web UI,
   agentsview runs `gh pr list` in each repository found in the selected
   sessions' working directories. Each run asks GitHub for your pull requests
-  opened and merged in the date range, using `AGENTSVIEW_GITHUB_TOKEN` or the
-  token from `gh auth token`. Without a token, it skips the lookup. See
+  opened and merged in the date range. The CLI uses `AGENTSVIEW_GITHUB_TOKEN`,
+  then `gh auth token`. Web UI requests use the token resolution described for
+  Publish to Gist. Without a token, it skips the lookup. Leave pull-request
+  outcomes off to avoid these requests. See
   [Git And PR Aggregation](docs/stats.md#git-and-pr-aggregation).
 - **Imports.** Imported archives from other agentsview instances or third-party
   exports are treated as untrusted structured data, no different from session
