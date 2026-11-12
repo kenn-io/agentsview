@@ -121,8 +121,8 @@ func findPiSource(ctx context.Context, cfg config.Config, session *db.Session, s
 	}
 	boundary := rootFor(name)
 	if boundary == "" {
-		// The provider selected a path under a configured root that follows an
-		// external link. Confine this single-file read to its resolved directory.
+		// A recorded path after relabeling or an external link may be outside
+		// the machine's roots. Confine the read to its resolved directory.
 		resolved, resolveErr := filepath.EvalSymlinks(name)
 		if resolveErr != nil {
 			return "", nil, resolveErr

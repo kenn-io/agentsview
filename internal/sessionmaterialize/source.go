@@ -166,7 +166,8 @@ func readConfiguredLocal(ctx context.Context, cfg config.Config, session *db.Ses
 	if !ok || !streaming {
 		return nil, "", errors.New("native source provider unavailable")
 	}
-	recorded, _ := parser.NewProvider(parser.AgentClaude, parser.ProviderConfig{Roots: localRoots(cfg, parser.AgentClaude)})
+	allRoots := localRoots(cfg, parser.AgentClaude)
+	recorded, _ := parser.NewProvider(parser.AgentClaude, parser.ProviderConfig{Roots: allRoots})
 	name, err := uniqueLocalSource(ctx, recorded, stored, discoverer.DiscoverEach, func(name string) (bool, error) {
 		return filepath.Base(name) == id+".jsonl", nil
 	})
@@ -176,7 +177,7 @@ func readConfiguredLocal(ctx context.Context, cfg config.Config, session *db.Ses
 	// Preserve the configured-root boundary for sources inside it. External
 	// linked projects are confined to the provider-selected project instead.
 	boundary := filepath.Dir(name)
-	for _, root := range roots {
+	for _, root := range allRoots {
 		if within(root, name) {
 			boundary = root
 			break
@@ -188,7 +189,7 @@ func readConfiguredLocal(ctx context.Context, cfg config.Config, session *db.Ses
 
 // localRoots excludes remote object stores from recorded filesystem lookup.
 func localRoots(cfg config.Config, agent parser.AgentType) []string {
-	return slices.DeleteFunc(slices.Clone(cfg.ResolveDirs(agent)), func(root string) bool {
+	return slices.DeleteFunc(cfg.ResolveDirs(agent), func(root string) bool {
 		return strings.HasPrefix(root, "s3://")
 	})
 }
@@ -196,10 +197,7 @@ func localRoots(cfg config.Config, agent parser.AgentType) []string {
 // configuredRoots selects roots belonging to the archived session's machine.
 func configuredRoots(cfg config.Config, session *db.Session, agent parser.AgentType) []string {
 	var roots []string
-	for _, root := range cfg.ResolveDirs(agent) {
-		if strings.HasPrefix(root, "s3://") {
-			continue
-		}
+	for _, root := range localRoots(cfg, agent) {
 		machine := cfg.SourceMachines[agent][root]
 		if machine == "" {
 			machine = cfg.InstallationID
