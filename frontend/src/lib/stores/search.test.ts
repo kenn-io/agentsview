@@ -223,14 +223,73 @@ describe("SearchStore", () => {
     },
   );
 
-  it("does not retry HTTP 501", async () => {
+  it.each(["recover", "exhaust"] as const)(
+    "retries an interrupted response body: %s",
+    async (outcome) => {
+      const actual = await vi.importActual<typeof import("../api/generated/index.js")>(
+        "../api/generated/index.js",
+      );
+      searchService.getApiV1Search.mockImplementation(actual.SearchService.getApiV1Search);
+      const message = "Content-Length header of network response exceeds response Body.";
+      const interrupted = () =>
+        new Response(
+          new ReadableStream({
+            start(controller) {
+              controller.error(new TypeError(message));
+            },
+          }),
+          { headers: { "Content-Type": "application/json" } },
+        );
+      const fetchMock = vi
+        .fn()
+        .mockImplementationOnce(async () => interrupted())
+        .mockImplementationOnce(async () =>
+          outcome === "recover"
+            ? new Response(JSON.stringify(fullTextResponse("needle")), {
+                headers: { "Content-Type": "application/json" },
+              })
+            : interrupted(),
+        );
+      vi.stubGlobal("fetch", fetchMock);
+      try {
+        const store = createSearchStore(memoryStorage());
+        store.setSort("recency");
+        store.setRange({ mode: "custom", from: "2026-07-01", to: "2026-07-14" });
+        store.search("needle", "alpha");
+        await runDebounce();
+        await vi.advanceTimersByTimeAsync(300);
+        expect(fetchMock).toHaveBeenCalledTimes(2);
+        expect(fetchMock.mock.calls[1]).toEqual(fetchMock.mock.calls[0]);
+        expect(String(fetchMock.mock.calls[0]![0])).toContain("q=needle");
+        expect(String(fetchMock.mock.calls[0]![0])).toContain("project=alpha");
+        expect(String(fetchMock.mock.calls[0]![0])).toContain("sort=recency");
+        expect(String(fetchMock.mock.calls[0]![0])).toContain("date_from=2026-07-01");
+        expect(String(fetchMock.mock.calls[0]![0])).toContain("date_to=2026-07-14");
+        expect(fetchMock.mock.calls[0]![1].signal).toBeInstanceOf(AbortSignal);
+        expect(fetchMock.mock.calls[1]![1].signal).toBe(fetchMock.mock.calls[0]![1].signal);
+        if (outcome === "recover") {
+          expect(store.results[0]?.session_id).toBe("full-0");
+          expect(store.error).toBeNull();
+          expect(reportErrorShown).not.toHaveBeenCalled();
+        } else {
+          expect(store.results).toEqual([]);
+          expect(store.error).toEqual({ detail: message, kind: "generic" });
+          expect(reportErrorShown).toHaveBeenCalledTimes(1);
+        }
+      } finally {
+        vi.unstubAllGlobals();
+      }
+    },
+  );
+
+  it.each([400, 501])("does not retry HTTP %i", async (status) => {
     const store = createSearchStore(memoryStorage());
-    searchService.getApiV1Search.mockRejectedValueOnce(generatedApiError(501, "not implemented"));
+    searchService.getApiV1Search.mockRejectedValueOnce(generatedApiError(status, "unavailable"));
     store.search("needle");
     await runDebounce();
     await vi.advanceTimersByTimeAsync(300);
     expect(searchService.getApiV1Search).toHaveBeenCalledTimes(1);
-    expect(store.error).toEqual({ detail: "not implemented", kind: "generic" });
+    expect(store.error).toEqual({ detail: "unavailable", kind: "generic" });
   });
 
   it("keeps a canceled search cleared when the retry delay ends", async () => {

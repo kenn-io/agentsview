@@ -2,6 +2,8 @@ import { afterEach, describe, expect, it, vi } from "vite-plus/test";
 import { getApiV1Version } from "./generated/metadata/metadata.js";
 import {
   ApiError,
+  TransportError,
+  isTransient,
   orvalFetch,
   getServerUrl,
   responseTimingOf,
@@ -129,5 +131,79 @@ describe("API errors", () => {
       code: "unknown_project_key",
       message: "unknown project key",
     } satisfies Partial<ApiError>);
+  });
+
+  it.each(["fetch", "body"] as const)("marks a %s I/O failure as transient", async (phase) => {
+    const cause = new TypeError("Content-Length header of network response exceeds response Body.");
+    const response = () =>
+      new Response(
+        new ReadableStream({
+          start(controller) {
+            controller.error(cause);
+          },
+        }),
+        { headers: { "Content-Type": "application/json" } },
+      );
+    vi.stubGlobal(
+      "fetch",
+      phase === "fetch" ? vi.fn().mockRejectedValue(cause) : vi.fn().mockResolvedValue(response()),
+    );
+    const error = await orvalFetch("/api/v1/search", {}).catch((err: unknown) => err);
+    expect(error).toBeInstanceOf(TransportError);
+    expect(error).toMatchObject({ message: cause.message, cause });
+    expect(isTransient(error)).toBe(true);
+  });
+
+  it("preserves an abort during a body read", async () => {
+    const abort = new DOMException("aborted", "AbortError");
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(
+        new Response(
+          new ReadableStream({
+            start(controller) {
+              controller.error(abort);
+            },
+          }),
+        ),
+      ),
+    );
+    const error = await orvalFetch("/api/v1/search", {}).catch((err: unknown) => err);
+    expect(error).toBe(abort);
+    expect(isTransient(error)).toBe(false);
+  });
+
+  it.each([400, 401])("keeps HTTP %i permanent when its body fails", async (status) => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(
+        new Response(
+          new ReadableStream({
+            start(controller) {
+              controller.error(new TypeError("body failed"));
+            },
+          }),
+          { status },
+        ),
+      ),
+    );
+    const error = await orvalFetch("/api/v1/search", {}).catch((err: unknown) => err);
+    expect(error).toMatchObject({ status, message: `API ${status}` });
+    expect(isTransient(error)).toBe(false);
+  });
+
+  it("keeps invalid JSON and application TypeErrors permanent", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(
+        new Response("{", {
+          headers: { "Content-Type": "application/json" },
+        }),
+      ),
+    );
+    const error = await orvalFetch("/api/v1/search", {}).catch((err: unknown) => err);
+    expect(error).toBeInstanceOf(SyntaxError);
+    expect(isTransient(error)).toBe(false);
+    expect(isTransient(new TypeError("Failed to fetch"))).toBe(false);
   });
 });

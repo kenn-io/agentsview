@@ -5,7 +5,7 @@ import { parseContent } from "../utils/content-parser.js";
 import type { Session } from "../api/types.js";
 import type { DbMessage as Message } from "../api/generated/index.js";
 import type { ServiceMessageList as MessagesResponse } from "../api/generated/index.js";
-import { ApiError } from "../api/runtime.js";
+import { ApiError, orvalFetch } from "../api/runtime.js";
 
 const api = vi.hoisted(() => ({
   getMessages: vi.fn(),
@@ -304,11 +304,18 @@ describe("MessagesStore", () => {
             : new ApiError(outcome === "permanent" ? 404 : 503, "unavailable"),
         );
         if (outcome === "recover") {
+          const fetchSpy = vi
+            .spyOn(globalThis, "fetch")
+            .mockRejectedValueOnce(new TypeError("Failed to fetch"));
+          const transportError = await orvalFetch("/api/v1/search", {}).catch(
+            (error: unknown) => error,
+          );
+          fetchSpy.mockRestore();
           vi.mocked(api.getSession)
             .mockRejectedValueOnce(new ApiError(503, "unavailable"))
             .mockResolvedValue(makeSession("s1", 2));
           vi.mocked(api.getMessages)
-            .mockRejectedValueOnce(new TypeError("Failed to fetch"))
+            .mockRejectedValueOnce(transportError)
             .mockResolvedValue(makeMessagesResponse([makeMessage(0), makeMessage(1)]));
         }
         const reload = messages.reload();
