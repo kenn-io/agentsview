@@ -1,5 +1,5 @@
 ---
-last_edited: 2026-11-11
+last_edited: 2026-11-12
 title: Changelog
 description: Release history for AgentsView
 ---
@@ -39,6 +39,11 @@ The latest release is
 
 **Bug fixes**
 
+- In managed Caddy mode, the proxy no longer writes the auth token into the
+  daemon log when a client passes it as `?token=` on a live-update stream and
+  the request fails. The server also compares bearer tokens in constant time,
+  as the MCP endpoint already did. See
+  [SSE Endpoints](/docs/remote-access/#sse-endpoints).
 - Semantic search builds on Kit's built-in local embeddings server no longer
   fail on every attempt with `embed request failed`. The built-in server runs
   the model on the CPU, so it now defaults to 8 inputs per request, one request

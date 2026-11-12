@@ -1,10 +1,15 @@
 package main
 
 import (
+	"bufio"
 	"context"
 	"errors"
+	"net"
+	"net/http"
 	"os"
+	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -367,4 +372,81 @@ func TestManagedCaddyStopNilSafe(t *testing.T) {
 	var m *managedCaddy
 	assert.NotPanics(t, func() { m.Stop() })
 	assert.NotPanics(t, func() { (&managedCaddy{}).Stop() })
+}
+
+// TestManagedCaddyLogsOmitQueryToken runs the generated config under a real
+// Caddy, so it skips where no caddy binary works.
+func TestManagedCaddyLogsOmitQueryToken(t *testing.T) {
+	bin, err := exec.LookPath("caddy")
+	if err != nil || exec.CommandContext(t.Context(), bin, "version").Run() != nil {
+		t.Skip("caddy is not installed")
+	}
+	proxyPort := unusedLoopbackPort(t)
+	// Nothing listens on the backend, so Caddy logs a proxy error with the URI.
+	backendPort := unusedLoopbackPort(t)
+	path := filepath.Join(t.TempDir(), "Caddyfile")
+	content := buildManagedCaddyfile(
+		"http://127.0.0.1:"+strconv.Itoa(proxyPort),
+		"127.0.0.1",
+		net.JoinHostPort("127.0.0.1", strconv.Itoa(backendPort)),
+		"", "", nil,
+	)
+	require.NoError(t, os.WriteFile(path, []byte(content), 0o600))
+
+	logs, logWriter, err := os.Pipe()
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = logs.Close() })
+	cmd := exec.CommandContext(t.Context(), bin,
+		"run", "--config", path, "--adapter", "caddyfile")
+	cmd.Stderr = logWriter
+	require.NoError(t, cmd.Start())
+	_ = logWriter.Close()
+	exited := make(chan error, 1)
+	go func() { exited <- cmd.Wait() }()
+	t.Cleanup(func() {
+		_ = cmd.Process.Kill()
+		<-exited
+	})
+
+	eventLog := make(chan string, 1)
+	go func() {
+		scanner := bufio.NewScanner(logs)
+		scanner.Buffer(make([]byte, 64*1024), 1024*1024)
+		for scanner.Scan() {
+			if strings.Contains(scanner.Text(), "/api/v1/events") {
+				select {
+				case eventLog <- scanner.Text():
+				default:
+				}
+			}
+		}
+	}()
+
+	require.NoError(t, waitForLocalPort(
+		t.Context(), "127.0.0.1", proxyPort, 30*time.Second, exited))
+	req, err := http.NewRequestWithContext(t.Context(), http.MethodGet,
+		"http://127.0.0.1:"+strconv.Itoa(proxyPort)+
+			"/api/v1/events?token=secret-probe-token&after=5", nil)
+	require.NoError(t, err)
+	resp, err := http.DefaultClient.Do(req)
+	require.NoError(t, err)
+	_ = resp.Body.Close()
+	require.Equal(t, http.StatusBadGateway, resp.StatusCode)
+
+	select {
+	case line := <-eventLog:
+		assert.Contains(t, line, `"uri":"/api/v1/events?after=5"`)
+		assert.NotContains(t, line, "secret-probe-token")
+	case <-time.After(30 * time.Second):
+		require.FailNow(t, "caddy never logged the failed proxy request")
+	}
+}
+
+func unusedLoopbackPort(t *testing.T) int {
+	t.Helper()
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	require.NoError(t, err)
+	port := ln.Addr().(*net.TCPAddr).Port
+	require.NoError(t, ln.Close())
+	return port
 }
