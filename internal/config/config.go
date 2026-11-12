@@ -4291,21 +4291,6 @@ func (c *Config) SaveVectorSetup(local, automatic bool) error {
 			}
 			selected["local"] = true
 		}
-		encoded, err := toml.Marshal(existing)
-		if err != nil {
-			return err
-		}
-		validated, err := Default()
-		if err != nil {
-			return err
-		}
-		validated.DataDir = c.DataDir
-		if err := validated.applyConfigTOML(string(encoded)); err != nil {
-			return invalidVectorSetupError{err}
-		}
-		if err := validated.Vector.Validate(); err != nil {
-			return invalidVectorSetupError{err}
-		}
 		return c.writeConfigMap(existing)
 	})
 }

@@ -205,10 +205,6 @@ func (v *liveVectorServing) SetupStatus(ctx context.Context) (server.EmbeddingsS
 			return status, setupRequestError(err)
 		}
 	}
-	return setupStatusForConfig(ctx, status, cfg, missingManager)
-}
-
-func setupStatusForConfig(ctx context.Context, status server.EmbeddingsSetupStatus, cfg config.Config, missingManager bool) (server.EmbeddingsSetupStatus, error) {
 	status.Action = ""
 	if (missingManager || status.Error != "") && cfg.DeploymentEmbeddings == nil {
 		status.Action = "turn-on"
@@ -326,7 +322,6 @@ func (v *liveVectorServing) startSetup(deployment config.VectorEmbeddingsServerC
 
 func (v *liveVectorServing) activate(deployment config.VectorEmbeddingsServerConfig, approvedBytes int64, automatic bool) error {
 	cfg := v.cfg
-	builtin := deployment.Local && deployment.Endpoint == ""
 	_, err := resolveLocalEmbeddings(v.ctx, deployment,
 		func(_ context.Context, size int64) (bool, error) {
 			if size > approvedBytes {
@@ -347,7 +342,7 @@ func (v *liveVectorServing) activate(deployment config.VectorEmbeddingsServerCon
 		return err
 	}
 	if v.serving.manager == nil {
-		if err := cfg.SaveVectorSetup(builtin, automatic); errors.Is(err, config.ErrVectorSetupIneligible) {
+		if err := cfg.SaveVectorSetup(deployment.Local, automatic); errors.Is(err, config.ErrVectorSetupIneligible) {
 			return nil
 		} else if err != nil {
 			return err
@@ -371,20 +366,19 @@ func (v *liveVectorServing) activate(deployment config.VectorEmbeddingsServerCon
 		v.startSchedulers()
 		v.mu.Unlock()
 	}
-	_, selected, err := cfg.Vector.Embeddings.Server("")
-	if err != nil {
-		return err
-	}
-	builtin = selected.Local && selected.Endpoint == ""
 	if automatic {
 		v.serving.Scheduler.Notify()
 		return nil
+	}
+	_, selected, err := cfg.Vector.Embeddings.Server("")
+	if err != nil {
+		return err
 	}
 	err = v.serving.manager.StartBuild(vector.BuildRequest{IncludeAutomated: cfg.Vector.IncludeAutomated})
 	if errors.Is(err, vector.ErrBuildRunning) {
 		err = nil
 	}
-	if err == nil && builtin {
+	if err == nil && selected.Local {
 		if err := embedlocal.RecordChoice(); err != nil {
 			return fmt.Errorf("Can't save across apps: %w", err) //nolint:staticcheck // ST1005: This message appears directly in the UI.
 		}
