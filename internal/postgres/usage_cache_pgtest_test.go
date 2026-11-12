@@ -1308,6 +1308,11 @@ func TestPGUsageAccountRevisionTracksCommittedChanges(t *testing.T) {
 	require.Greater(t, after, before)
 	require.Len(t, rows, 1)
 	assert.Equal(t, int64(200), rows[0].ChargedMicrodollars)
+	_, err = syncer.pg.ExecContext(ctx, `UPDATE cursor_usage_events SET charged_microdollars=charged_microdollars WHERE id=1`)
+	require.NoError(t, err)
+	_, unchanged, err := source.StreamUsageAccounts(ctx, func(db.UsageSourceAccount) error { return nil })
+	require.NoError(t, err)
+	assert.Equal(t, after, unchanged)
 	tx, err = syncer.pg.BeginTx(ctx, nil)
 	require.NoError(t, err)
 	_, err = tx.ExecContext(ctx, `DELETE FROM cursor_usage_events WHERE id=1`)
@@ -1318,6 +1323,11 @@ func TestPGUsageAccountRevisionTracksCommittedChanges(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, after, rolledBack)
 	require.Len(t, rows, 1)
+	_, err = syncer.pg.ExecContext(ctx, `DELETE FROM cursor_usage_events WHERE id=1`)
+	require.NoError(t, err)
+	_, deleted, err := source.StreamUsageAccounts(ctx, func(db.UsageSourceAccount) error { return nil })
+	require.NoError(t, err)
+	assert.Greater(t, deleted, after)
 }
 
 func TestPGUsageAccountRevisionLeavesNewerJournalUntouched(t *testing.T) {

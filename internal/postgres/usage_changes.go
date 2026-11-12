@@ -157,8 +157,7 @@ func installUsageAccountRevisionPG(ctx context.Context, tx *sql.Tx) error {
         UPDATE sync_metadata SET value = stamped::text WHERE key = 'usage_account_revision';
         PERFORM set_config('agentsview.uc_accounts_' || TG_RELID, '', true);
     END IF;`, 1)
-	mark := fmt.Sprintf(markUsageChangeFunctionBodyPG, "''", "true", "*")
-	mark = strings.Replace(mark, "BEGIN\n", `DECLARE
+	mark := `DECLARE
     changed boolean;
 BEGIN
     IF TG_OP = 'INSERT' THEN
@@ -170,9 +169,14 @@ BEGIN
             UNION ALL (SELECT * FROM new_rows EXCEPT SELECT * FROM old_rows)) INTO changed;
     END IF;
     IF changed THEN
+        PERFORM set_config('agentsview.uc_stamped_' || 'usage_session_changes'::regclass::oid, '', true);
         PERFORM set_config('agentsview.uc_accounts_' || 'usage_session_changes'::regclass::oid, 'on', true);
+        INSERT INTO usage_session_changes(session_id, revision) VALUES ('', 0)
+        ON CONFLICT(session_id) DO UPDATE SET revision = 0;
     END IF;
-`, 1)
+    RETURN NULL;
+END;
+`
 	_, err = tx.ExecContext(ctx, fmt.Sprintf(`
  INSERT INTO sync_metadata(key,value)
  SELECT 'usage_account_revision', value FROM sync_metadata WHERE key='usage_change_revision'
