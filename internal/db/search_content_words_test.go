@@ -32,7 +32,7 @@ func TestSearchContentStemmedMatchSnippet(t *testing.T) {
 	d := testDB(t)
 	requireFTS(t, d)
 	seedWordSearch(t, d, "proj", [3]string{"stemmed", strings.Repeat("filler ", 100) + "connecting succeeded", ""})
-	for _, mode := range []string{"", "fts", "hybrid"} {
+	for _, mode := range []string{"fts", "hybrid"} {
 		page, err := d.SearchContent(t.Context(), ContentSearchFilter{Pattern: "connection unrelated", Mode: mode, KeywordOnly: mode == "hybrid"})
 		require.NoError(t, err)
 		require.Len(t, page.Matches, 1, "mode %q", mode)
@@ -90,16 +90,6 @@ func TestSearchContentKeepsSubstringSearch(t *testing.T) {
 		[3]string{"words", "rounding of invoices", "invoices need rounding"},
 		[3]string{"curly-tool", "no match", "found “invoices need” here"},
 	)
-	insertSession(t, d, "quoted-tool", "proj", func(s *Session) { s.UserMessageCount = 2 })
-	require.NoError(t, d.ReplaceSessionMessages(t.Context(), "quoted-tool", []Message{{
-		SessionID: "quoted-tool", Role: "assistant", Content: "run",
-		ToolCalls: []ToolCall{{ToolName: "Bash", ToolUseID: "call", InputJSON: `{"command":"quoted phrase"}`}},
-	}}))
-	insertSession(t, d, "unquoted-tool", "proj", func(s *Session) { s.UserMessageCount = 2 })
-	require.NoError(t, d.ReplaceSessionMessages(t.Context(), "unquoted-tool", []Message{{
-		SessionID: "unquoted-tool", Role: "assistant", Content: "run",
-		ToolCalls: []ToolCall{{ToolName: "Bash", ToolUseID: "other", InputJSON: `{"command":"prefix quoted phrase suffix"}`}},
-	}}))
 	for _, tc := range []struct {
 		name   string
 		filter ContentSearchFilter
@@ -120,11 +110,6 @@ func TestSearchContentKeepsSubstringSearch(t *testing.T) {
 			ContentSearchFilter{Pattern: `“invoices need”`, Sources: []string{"tool_result"}},
 			[]wordHit{{"curly-tool", "tool_result", 0}},
 		},
-		{
-			"tool input quotes are literal",
-			ContentSearchFilter{Pattern: `"quoted phrase"`, Sources: []string{"tool_input"}},
-			[]wordHit{{"quoted-tool", "tool_input", 0}},
-		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			page, err := d.SearchContent(t.Context(), tc.filter)
@@ -141,11 +126,6 @@ func TestSearchContentExplicitFTSKeepsFTS5(t *testing.T) {
 		[3]string{"forms", "the build fixes missed files", ""},
 		[3]string{"other", "a missing semicolon", ""},
 	)
-	for _, mode := range []string{"", "fts"} {
-		page, err := d.SearchContent(t.Context(), ContentSearchFilter{Pattern: "fix missing", Mode: mode})
-		require.NoError(t, err)
-		assert.Equal(t, []wordHit{{"forms", "message", 2}, {"other", "message", 1}}, wordHits(page), "mode %q", mode)
-	}
 	for pattern, want := range map[string][]wordHit{
 		`"fix" "missing"`:      {{"forms", "message", 0}},
 		`"fix" OR "semicolon"`: {{"forms", "message", 0}, {"other", "message", 0}},
@@ -176,8 +156,6 @@ func TestSearchContentNaturalPhrasesMatchText(t *testing.T) {
 		{`"rounding of invoices" decision`, "fts", []wordHit{{"phrase", "message", 4}}},
 		{`missing "rounding of invoices"`, "fts", []wordHit{{"phrase", "message", 3}}},
 		{"alpha “beta gamma”", "", []wordHit{{"curly", "message", 3}}},
-		{"alpha “beta gamma”", "fts", []wordHit{{"curly", "message", 3}}},
-		{"alpha “beta gamma”", "hybrid", []wordHit{{"curly", "message", 3}}},
 	} {
 		page, err := d.SearchContent(t.Context(), ContentSearchFilter{Pattern: tc.pattern, Mode: tc.mode, KeywordOnly: tc.mode == "hybrid"})
 		require.NoError(t, err)

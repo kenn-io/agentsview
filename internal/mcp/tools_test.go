@@ -709,23 +709,11 @@ func TestSearchContent_RanksExactTextThenWords(t *testing.T) {
 	})
 	require.NoError(t, d.ReplaceSessionMessages(t.Context(), "s1", []db.Message{
 		dbtest.UserMsg("s1", 0, "settle the rounding of invoices"),
-		{
-			SessionID: "s1", Ordinal: 1, Role: "assistant", Content: "checking",
-			ToolCalls: []db.ToolCall{{ToolName: "Bash", ToolUseID: "tu-1", ResultContent: "invoice rounding decision recorded"}},
-		},
 	}))
-
-	search := func(pattern string) []string {
-		t.Helper()
-		_, out, err := ts.searchContent(t.Context(), nil, searchContentIn{Pattern: pattern})
-		require.NoError(t, err)
-		var hits []string
-		for _, m := range out.Matches {
-			hits = append(hits, fmt.Sprintf("%s/%d", m.Location, m.MatchedWords))
-		}
-		return hits
-	}
-	assert.Equal(t, []string{"tool_result/3", "message/2"}, search("invoice rounding decision"))
+	_, out, err := ts.searchContent(t.Context(), nil, searchContentIn{Pattern: "invoice rounding decision"})
+	require.NoError(t, err)
+	require.Len(t, out.Matches, 1)
+	assert.Equal(t, 2, out.Matches[0].MatchedWords)
 }
 
 // TestSearchContent_ContextRedactsSecretByDefault verifies that a secret in

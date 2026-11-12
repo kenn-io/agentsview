@@ -675,7 +675,7 @@ func TestSearchContentHybridFTSLegScopeExcludedRowsRefill(t *testing.T) {
 	}})
 
 	page, err := d.SearchContent(t.Context(), ContentSearchFilter{
-		Pattern: "zebra", Mode: "hybrid", Scope: "subordinate", Limit: 10,
+		Pattern: `"zebra" OR "absent"`, Mode: "hybrid", Scope: "subordinate", Limit: 10,
 	})
 	require.NoError(t, err, "SearchContent hybrid")
 	require.Len(t, page.Matches, 1,

@@ -8,6 +8,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -865,24 +866,14 @@ func TestSessionSearchFTSHints(t *testing.T) {
 	dataDir := newAgentDataDir(t)
 	seedSessionWithOpts(t, dataDir, "visible", "p", nil)
 	seedSearchMessage(t, dataDir, "visible", "decode failure error notes")
-	for _, tc := range []struct {
-		pattern, source string
-		matches         int
-	}{
-		{`"decoding failure"`, "messages", 0},
-		{"decode error notes", "tool_result", 0},
-	} {
-		out, err := executeCommand(newRootCommand(), "session", "search", tc.pattern, "--in", tc.source, "--json")
-		require.NoError(t, err)
-		got := decodeCLIJSON[struct {
-			Matches []db.ContentMatch      `json:"matches"`
-			Hints   []contentSearchCLIHint `json:"hints"`
-		}](t, out)
-		assert.Len(t, got.Matches, tc.matches, tc.pattern)
-		// SQLite's default search already matches the words, so it never
-		// suggests --fts.
-		assert.Empty(t, got.Hints, tc.pattern)
-	}
+	out, err := executeCommand(newRootCommand(), "session", "search", `"decoding failure"`, "--in", "messages", "--json")
+	require.NoError(t, err)
+	got := decodeCLIJSON[struct {
+		Matches []db.ContentMatch      `json:"matches"`
+		Hints   []contentSearchCLIHint `json:"hints"`
+	}](t, out)
+	assert.Empty(t, got.Matches)
+	assert.Empty(t, got.Hints)
 	fts, err := executeCommand(newRootCommand(), "session", "search", `"decoding failure"`, "--fts", "--json")
 	require.NoError(t, err)
 	require.Len(t, decodeCLIJSON[service.ContentSearchResult](t, fts).Matches, 1)
@@ -897,7 +888,8 @@ func TestSessionSearchHintPreservesServer(t *testing.T) {
 		assert.Equal(t, "Bearer search-token", r.Header.Get("Authorization"))
 		if r.URL.Query().Get("mode") == "fts" {
 			ftsCalls++
-			http.Error(w, "FTS unavailable", http.StatusBadRequest)
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{"matches":[{"session_id":"visible"}]}`))
 			return
 		}
 		w.Header().Set("Content-Type", "application/json")
@@ -908,15 +900,38 @@ func TestSessionSearchHintPreservesServer(t *testing.T) {
 		}
 	}))
 	defer ts.Close()
-	out, err := executeCommand(newRootCommand(), "session", "--server", ts.URL, "--server-token-file", tokenFile, "search", "decode error", "--json")
-	require.NoError(t, err)
-	assert.Equal(t, 1, ftsCalls)
-	got := decodeCLIJSON[struct {
-		Hints []contentSearchCLIHint `json:"hints"`
-	}](t, out)
-	require.Len(t, got.Hints, 1)
-	assert.Contains(t, got.Hints[0].Next, "--server="+ts.URL)
-	assert.Contains(t, got.Hints[0].Next, "--server-token-file="+tokenFile)
+	for _, tc := range []struct {
+		pattern, source string
+		regex, hint     bool
+	}{
+		{"decode error notes", "", false, true},
+		{"decode error notes", "messages", false, true},
+		{"decode error notes", "tool_result", false, false},
+		{"decoding", "messages", false, false},
+		{"decode error notes", "messages", true, false},
+	} {
+		before := ftsCalls
+		out, err := executeCommand(newRootCommand(), "session", "--server", ts.URL, "--server-token-file", tokenFile, "search", tc.pattern, "--in", tc.source, "--json", "--regex="+strconv.FormatBool(tc.regex))
+		require.NoError(t, err)
+		got := decodeCLIJSON[struct {
+			Hints []contentSearchCLIHint `json:"hints"`
+		}](t, out)
+		var ftsHints []contentSearchCLIHint
+		for _, hint := range got.Hints {
+			if hint.Code == "try_fts" {
+				ftsHints = append(ftsHints, hint)
+			}
+		}
+		if tc.hint {
+			require.Len(t, ftsHints, 1)
+			assert.Equal(t, before+1, ftsCalls)
+			assert.Contains(t, ftsHints[0].Next, "--server="+ts.URL)
+			assert.Contains(t, ftsHints[0].Next, "--server-token-file="+tokenFile)
+		} else {
+			assert.Empty(t, ftsHints)
+			assert.Equal(t, before, ftsCalls)
+		}
+	}
 }
 
 func TestSessionSearchRetryQuotesForPlatform(t *testing.T) {
