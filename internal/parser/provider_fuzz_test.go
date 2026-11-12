@@ -12,8 +12,9 @@ package parser
 //
 //   - no panic;
 //   - each input finishes within providerFuzzDeadline;
-//   - parsed output stays within providerFuzzMaxAmplification times the
-//     input size, plus providerFuzzOutputSlack;
+//   - the output of all sessions parsed from one input stays within
+//     providerFuzzMaxAmplification times the input size, plus
+//     providerFuzzOutputSlack;
 //   - every parsed session has an ID and belongs to the provider's agent.
 //
 // TestProviderFuzzSeedsReachParser checks each seed fixture against a
@@ -28,6 +29,8 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"reflect"
+	"runtime/debug"
 	"slices"
 	"strings"
 	"sync"
@@ -40,9 +43,10 @@ import (
 
 const (
 	// providerFuzzDeadline bounds one input's Discover, Fingerprint, and
-	// Parse. Fuzz inputs are at most a few hundred kilobytes; a provider
-	// that needs this long on them is looping, not working.
-	providerFuzzDeadline = 20 * time.Second
+	// Parse. Inputs parse in milliseconds on an idle machine, but SQLite
+	// targets have taken ten seconds on a saturated one; a provider that
+	// needs a minute is looping, not working.
+	providerFuzzDeadline = 60 * time.Second
 	// providerFuzzMaxAmplification bounds parsed output bytes per input
 	// byte. Parsers copy text out of the transcript and add short labels,
 	// so honest output stays well under this.
@@ -109,15 +113,19 @@ func fuzzProvider(f *testing.F, agent AgentType) {
 	}
 	f.Fuzz(func(t *testing.T, data []byte) {
 		results := parseProviderFuzzInput(t, target, data)
-		limit := providerFuzzMaxAmplification*len(data) + providerFuzzOutputSlack
+		total := 0
 		for _, result := range results {
 			assert.NotEmpty(t, result.Session.ID, "parsed session has no ID")
 			assert.Equal(t, agent, result.Session.Agent,
 				"session %q has the wrong agent", result.Session.ID)
-			assert.LessOrEqual(t, parsedResultBytes(result), limit,
-				"session %q output exceeds %dx the %d-byte input",
-				result.Session.ID, providerFuzzMaxAmplification, len(data))
+			total += parsedOutputBytes(reflect.ValueOf(result), 0)
 		}
+		// Sum across sessions: a parser that copies one large field into
+		// many sessions amplifies the input as much as one huge session.
+		limit := providerFuzzMaxAmplification*len(data) + providerFuzzOutputSlack
+		assert.LessOrEqual(t, total, limit,
+			"%d sessions hold %d bytes, over %dx the %d-byte input",
+			len(results), total, providerFuzzMaxAmplification, len(data))
 	})
 }
 
@@ -173,17 +181,23 @@ func parseProviderFuzzInput(t *testing.T, target providerFuzzTarget, data []byte
 	})
 	require.True(t, ok, "no provider for %s", target.agent)
 
-	ctx, cancel := context.WithCancel(t.Context())
+	// Fuzzed cwd values are absolute paths on the host. Project discovery
+	// would probe them for Git metadata and sibling repos, which reads
+	// outside the fixture and makes timing depend on the machine.
+	ctx, cancel := context.WithCancel(WithoutFilesystemProjectDiscovery(t.Context()))
 	defer cancel()
 	type parsed struct {
 		results []ParseResult
 		panic   any
+		stack   []byte
 	}
 	done := make(chan parsed, 1)
 	go func() {
 		var out parsed
 		defer func() {
-			out.panic = recover()
+			if out.panic = recover(); out.panic != nil {
+				out.stack = debug.Stack()
+			}
 			done <- out
 		}()
 		out.results = discoverAndParse(ctx, provider)
@@ -192,7 +206,7 @@ func parseProviderFuzzInput(t *testing.T, target providerFuzzTarget, data []byte
 	defer timer.Stop()
 	select {
 	case out := <-done:
-		require.Nil(t, out.panic, "%s provider panicked", target.agent)
+		require.Nil(t, out.panic, "%s provider panicked:\n%s", target.agent, out.stack)
 		return out.results
 	case <-timer.C:
 		t.Fatalf("%s provider did not finish within %s", target.agent, providerFuzzDeadline)
@@ -227,25 +241,55 @@ func discoverAndParse(ctx context.Context, provider Provider) []ParseResult {
 	return results
 }
 
-// parsedResultBytes totals the text a parse produced.
-func parsedResultBytes(result ParseResult) int {
-	n := len(result.Session.FirstMessage) + len(result.Session.SessionName)
-	for _, msg := range result.Messages {
-		n += len(msg.Content) + len(msg.ThinkingText) + len(msg.TokenUsage)
-		if msg.DialogueText != nil {
-			n += len(*msg.DialogueText)
-		}
-		for _, call := range msg.ToolCalls {
-			n += len(call.InputJSON) + len(call.Rendering)
-			for _, event := range call.ResultEvents {
-				n += len(event.Content)
-			}
-		}
-		for _, res := range msg.ToolResults {
-			n += len(res.ContentRaw)
-		}
+// parsedOutputBytes totals the variable-length data in a parse result:
+// every string and byte slice, wherever it sits. Walking the value keeps
+// new fields counted without updating a list.
+func parsedOutputBytes(v reflect.Value, depth int) int {
+	if depth > 32 || v.Type() == reflect.TypeFor[time.Time]() {
+		// A time.Time points at its shared *Location, whose zone names
+		// are not parser output.
+		return 0
 	}
-	return n
+	switch v.Kind() {
+	case reflect.String:
+		return v.Len()
+	case reflect.Slice:
+		if v.Type().Elem().Kind() == reflect.Uint8 {
+			return v.Len()
+		}
+		n := 0
+		for i := range v.Len() {
+			n += parsedOutputBytes(v.Index(i), depth+1)
+		}
+		return n
+	case reflect.Array:
+		n := 0
+		for i := range v.Len() {
+			n += parsedOutputBytes(v.Index(i), depth+1)
+		}
+		return n
+	case reflect.Map:
+		n := 0
+		iter := v.MapRange()
+		for iter.Next() {
+			n += parsedOutputBytes(iter.Key(), depth+1)
+			n += parsedOutputBytes(iter.Value(), depth+1)
+		}
+		return n
+	case reflect.Pointer, reflect.Interface:
+		if v.IsNil() {
+			return 0
+		}
+		return parsedOutputBytes(v.Elem(), depth+1)
+	case reflect.Struct:
+		n := 0
+		for i := range v.NumField() {
+			n += parsedOutputBytes(v.Field(i), depth+1)
+		}
+		return n
+	default:
+		return 0
+	}
 }
 
 // parsedResultText joins the text a reviewer would look for in a seed.
@@ -299,4 +343,31 @@ func TestProviderFuzzSeedsReachParser(t *testing.T) {
 			})
 		}
 	}
+}
+
+func TestParsedOutputBytesCountsEveryField(t *testing.T) {
+	usage := []byte(`{"in":1}`)
+	result := ParseResult{
+		Session: ParsedSession{
+			ID:           "abc",
+			FirstMessage: "hello",
+			StartedAt:    time.Date(2026, 1, 2, 3, 4, 5, 0, time.Local),
+		},
+		Messages: []ParsedMessage{{
+			Content:         "hi",
+			Model:           "model-x",
+			ReasoningEffort: "high",
+			TokenUsage:      usage,
+			DialogueText:    new(string),
+			ToolCalls: []ParsedToolCall{{
+				InputJSON:    "{}",
+				ResultEvents: []ParsedToolResultEvent{{Content: "out"}},
+			}},
+		}},
+		Checkpoint: []byte("cp"),
+	}
+	*result.Messages[0].DialogueText = "dlg"
+
+	// abc + hello + hi + model-x + high + {"in":1} + dlg + {} + out + cp
+	assert.Equal(t, 3+5+2+7+4+8+3+2+3+2, parsedOutputBytes(reflect.ValueOf(result), 0))
 }
