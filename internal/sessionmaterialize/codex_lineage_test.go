@@ -108,6 +108,9 @@ func TestCodexLegacyFilenameAndInvalidLineage(t *testing.T) {
 	legacy := []byte(fmt.Sprintf(`{"type":"session_meta","payload":{"id":%q,"session_id":%q}}`, revert, id))
 	_, err = inspectCodexPage(t.Context(), revertName, legacy)
 	require.NoError(t, err)
+	wrongSession := []byte(fmt.Sprintf(`{"type":"session_meta","payload":{"id":%q,"session_id":%q}}`, revert, "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"))
+	_, err = inspectCodexPage(t.Context(), revertName, wrongSession)
+	require.ErrorContains(t, err, "identity")
 	for _, mode := range []string{`null`, `""`, `"future"`, `1`} {
 		_, err := inspectCodexPage(t.Context(), name, []byte(fmt.Sprintf(`{"type":"session_meta","payload":{"id":%q,"history_mode":%s}}`, id, mode)))
 		require.ErrorContains(t, err, "history mode")
