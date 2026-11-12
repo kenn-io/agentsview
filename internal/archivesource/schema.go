@@ -37,7 +37,7 @@ var requiredColumns = map[string]map[string]string{
 	},
 }
 
-func checkSavedSchema(ctx context.Context, source *sql.DB) (string, error) {
+func checkSavedSchema(ctx context.Context, source catalogQuery) (string, error) {
 	for table, required := range requiredColumns {
 		if err := checkColumns(ctx, source, table, required); err != nil {
 			return "", err
@@ -64,7 +64,7 @@ func checkSavedSchema(ctx context.Context, source *sql.DB) (string, error) {
 	return archiveID, nil
 }
 
-func checkColumns(ctx context.Context, source *sql.DB, table string, required map[string]string) error {
+func checkColumns(ctx context.Context, source catalogQuery, table string, required map[string]string) error {
 	rows, err := source.QueryContext(ctx, `SELECT name,type FROM pragma_table_info(?)`, table)
 	if err != nil {
 		return err

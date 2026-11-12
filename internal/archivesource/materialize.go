@@ -124,7 +124,16 @@ func materializeSnapshot(ctx context.Context, sources []config.ArchiveSource, ow
 			retErr = errors.Join(retErr, conn.Close())
 		}
 	}()
-	archiveID, err := checkSavedSchema(ctx, conn)
+	return materializeCatalog(ctx, conn, owner, provider, limit, use, snapshotObjects{selected}, false, owner.Attachment.SnapshotID)
+}
+
+type catalogQuery interface {
+	QueryContext(context.Context, string, ...any) (*sql.Rows, error)
+	QueryRowContext(context.Context, string, ...any) *sql.Row
+}
+
+func materializeCatalog(ctx context.Context, catalog catalogQuery, owner db.ArchiveSessionProvenance, provider string, limit int64, use func(string, []string, func(context.Context, string, int64) ([]byte, error)) error, objects rawderive.ObjectStore, strict bool, sourceID string) (tree *rawderive.Materialization, primary, source string, retErr error) {
+	archiveID, err := checkSavedSchema(ctx, catalog)
 	if err != nil {
 		return nil, "", "", err
 	}
@@ -134,13 +143,13 @@ func materializeSnapshot(ctx context.Context, sources []config.ArchiveSource, ow
 	}
 	var canonical []byte
 	var configuredRoot, originalRoot string
-	err = conn.QueryRowContext(ctx, `SELECT r.configured_root_id,r.original_path,s.canonical_json FROM raw_archive_sources s JOIN raw_archive_roots r ON r.id=s.root_id WHERE s.manifest_id=? AND s.root_id=? AND s.source_key=? AND r.device_id=? AND r.provider=?`, owner.ManifestID, s.RootID, s.SourceKey, s.DeviceID, provider).Scan(&configuredRoot, &originalRoot, &canonical)
+	err = catalog.QueryRowContext(ctx, `SELECT r.configured_root_id,r.original_path,s.canonical_json FROM raw_archive_sources s JOIN raw_archive_roots r ON r.id=s.root_id WHERE s.manifest_id=? AND s.root_id=? AND s.source_key=? AND r.device_id=? AND r.provider=?`, owner.ManifestID, s.RootID, s.SourceKey, s.DeviceID, provider).Scan(&configuredRoot, &originalRoot, &canonical)
 	if err != nil {
 		return nil, "", "", fmt.Errorf("snapshot source ownership: %w", err)
 	}
 	var boundRoot, boundSource string
-	err = conn.QueryRowContext(ctx, `SELECT root_id,source_key FROM raw_archive_sessions WHERE device_id=? AND provider=? AND parser_id=?`, s.DeviceID, provider, owner.NativeSessionID).Scan(&boundRoot, &boundSource)
-	if err != nil && !errors.Is(err, sql.ErrNoRows) {
+	err = catalog.QueryRowContext(ctx, `SELECT root_id,source_key FROM raw_archive_sessions WHERE device_id=? AND provider=? AND parser_id=?`, s.DeviceID, provider, owner.NativeSessionID).Scan(&boundRoot, &boundSource)
+	if err != nil && (strict || !errors.Is(err, sql.ErrNoRows)) {
 		return nil, "", "", err
 	}
 	if err == nil && (boundRoot != s.RootID || boundSource != s.SourceKey) {
@@ -164,7 +173,7 @@ func materializeSnapshot(ctx context.Context, sources []config.ArchiveSource, ow
 	base := strings.TrimSuffix(primary, ".jsonl") + "/"
 	bound.Path = primary
 	if use != nil {
-		rows, err := conn.QueryContext(ctx, `SELECT path,sha256,size,mod_time_ns,covered FROM raw_archive_files WHERE root_id=? AND (path LIKE '%.jsonl' OR path LIKE '%.jsonl.zst') ORDER BY path`, s.RootID)
+		rows, err := catalog.QueryContext(ctx, `SELECT path,sha256,size,mod_time_ns,covered FROM raw_archive_files WHERE root_id=? AND (path LIKE '%.jsonl' OR path LIKE '%.jsonl.zst') ORDER BY path`, s.RootID)
 		if err != nil {
 			return nil, "", "", err
 		}
@@ -187,7 +196,7 @@ func materializeSnapshot(ctx context.Context, sources []config.ArchiveSource, ow
 			if !ok || requested <= 0 || entry.Length > requested {
 				return nil, errors.New("snapshot rollout unavailable or exceeds size limit")
 			}
-			m := rawderive.Materializer{Store: snapshotObjects{selected}, BaseDir: os.TempDir(), MaxTotalBytes: min(limit, requested)}
+			m := rawderive.Materializer{Store: objects, BaseDir: os.TempDir(), MaxTotalBytes: min(limit, requested)}
 			materialized, err := m.MaterializeEntries(ctx, identity, manifest.Manifest.CapturedAt, []rawsync.Entry{entry})
 			if err != nil {
 				return nil, err
@@ -204,23 +213,15 @@ func materializeSnapshot(ctx context.Context, sources []config.ArchiveSource, ow
 			defer func() { readErr = errors.Join(readErr, file.Close()) }()
 			return io.ReadAll(io.LimitReader(file, entry.Length+1))
 		}
-		return nil, "", owner.Attachment.SnapshotID, use(originalRoot, names, read)
+		return nil, "", sourceID, use(originalRoot, names, read)
 	}
-	entries, err := selectedInventory(ctx, conn, s.RootID, bound, base)
+	entries, err := selectedInventory(ctx, catalog, s.RootID, bound, base)
 	if err != nil {
 		return nil, "", "", err
 	}
-	if err := conn.Close(); err != nil {
-		conn = nil
-		return nil, "", "", err
-	}
-	conn = nil
-	if err := os.RemoveAll(scratch); err != nil {
-		return nil, "", "", err
-	}
-	scratch = ""
-	tree, err = (rawderive.Materializer{Store: snapshotObjects{selected}, BaseDir: os.TempDir(), MaxTotalBytes: limit}).MaterializeEntries(ctx, identity, manifest.Manifest.CapturedAt, entries)
-	return tree, primary, owner.Attachment.SnapshotID, err
+
+	tree, err = (rawderive.Materializer{Store: objects, BaseDir: os.TempDir(), MaxTotalBytes: limit}).MaterializeEntries(ctx, identity, manifest.Manifest.CapturedAt, entries)
+	return tree, primary, sourceID, err
 }
 
 // snapshotPrimaryPath binds a canonical entry to its capture-root coordinate.
@@ -256,7 +257,7 @@ func snapshotPrimaryPath(sourceKey, originalRoot, nativeID string, entries []raw
 }
 
 // selectedInventory chooses immutable accepted bytes, or one unambiguous supplemental version.
-func selectedInventory(ctx context.Context, conn *sql.DB, rootID string, bound rawsync.Entry, base string) (_ []rawsync.Entry, retErr error) {
+func selectedInventory(ctx context.Context, conn catalogQuery, rootID string, bound rawsync.Entry, base string) (_ []rawsync.Entry, retErr error) {
 	tools, agents := base+"tool-results/", base+"subagents/"
 	rows, err := conn.QueryContext(ctx, `SELECT path,sha256,size,mod_time_ns,covered FROM raw_archive_files WHERE root_id=? AND (path=? OR substr(path,1,length(?))=? OR substr(path,1,length(?))=?) ORDER BY path`, rootID, bound.Path, tools, tools, agents, agents)
 	if err != nil {
