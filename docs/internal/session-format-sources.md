@@ -3360,14 +3360,6 @@ schemas keep their existing ordering behavior.
 
 ## Pi (`pi`)
 
-- **Native resume:** Rechecked 2026-11-12 against the pinned
-  [session manager](https://github.com/earendil-works/pi/blob/acaa253cc8e3f159e6100b6f3874861b1f0bfc99/packages/coding-agent/src/core/session-manager.ts)
-  and [CLI](https://github.com/earendil-works/pi/blob/acaa253cc8e3f159e6100b6f3874861b1f0bfc99/packages/coding-agent/src/main.ts).
-  `--session` opens the supplied file and uses its header `cwd`. Materialize
-  changes that value to the requested checkout and preserves the remaining
-  bytes. It places the original filename under the native encoded checkout
-  directory, or directly in `PI_CODING_AGENT_SESSION_DIR` when set.
-
 - **Dialogue projection:** Reverified 2026-10-17 against Pi block-order and
   ingest fixtures. Text blocks retain quoted markers, thinking blocks populate
   `thinking_text`, and tool calls retain their separate inputs and results.
@@ -3493,16 +3485,21 @@ schemas keep their existing ordering behavior.
   stored path or fingerprint hint scans discovered session headers after the
   filename and directory lookups miss. Data version 109 reparses stored native
   Pi sessions to repair lineage edges and fork classification.
-- **Native resume, reverified 2026-11-12:** At the pinned session manager,
-  current format version is 3; the first parsed entry must be a session with a
-  string ID. Blank and malformed lines can precede that entry, while a parsed
+- **Native resume, reverified 2026-11-12:** The
+  [session manager](https://github.com/earendil-works/pi/blob/acaa253cc8e3f159e6100b6f3874861b1f0bfc99/packages/coding-agent/src/core/session-manager.ts),
+  [CLI](https://github.com/earendil-works/pi/blob/acaa253cc8e3f159e6100b6f3874861b1f0bfc99/packages/coding-agent/src/main.ts),
+  and [path normalization](https://github.com/earendil-works/pi/blob/acaa253cc8e3f159e6100b6f3874861b1f0bfc99/packages/coding-agent/src/utils/paths.ts)
+  at `acaa253cc8e3f159e6100b6f3874861b1f0bfc99` support Windows shell drive
+  paths, unlike the older format pin above. Current format version is 3; the
+  first parsed entry must be a session with a string ID. Blank and malformed lines can precede that entry, while a parsed
   title cannot. An idless legacy file can be indexed by Agentsview but cannot
   be opened by this Pi version. `SessionManager.open` uses the header cwd;
   materialization changes only that value, resolves the checkout through
   symlinks, and preserves the native ID. Startup chooses the session directory
   from the environment, then merged project/global settings, then the default
   encoded checkout directory. The installer bounds header lookup to 1 MiB and
-  refuses newer formats or unsafe identity-derived filenames.
+  refuses versions outside 1–3 as an Agentsview policy, and unsafe
+  identity-derived filenames. Malformed or oversized settings fail closed.
 
 ## Prime Agent (`prime-agent`)
 

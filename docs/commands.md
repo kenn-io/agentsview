@@ -2203,11 +2203,12 @@ the command changes only the session header `cwd` to the selected checkout;
 all other transcript bytes, including branch and parent records, stay intact.
 The Pi checkout is resolved through symlinks, and relative Pi directory
 overrides are resolved from that checkout. Pi files must have a session header
-with an ID and a supported version (at most version 3). Some older indexed
+with an ID; Agentsview refuses versions outside 1–3. Some older indexed
 sessions without IDs and Pi-family files with a leading title cannot be opened
 by the verified Pi consumer and are not installed. Header lookup is bounded to
-1 MiB. A nonunique source name such as `session.jsonl` is installed using its
-session ID as the filename.
+1 MiB. Malformed or oversized Pi settings cause materialization to fail. A
+nonunique source name such as `session.jsonl` is installed using its session ID
+as the filename.
 
 An already-running Claude session can attach in that process's existing
 directory. Claude's in-app resume picker can also fall back to a recorded
