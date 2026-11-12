@@ -1,6 +1,7 @@
 name: CI
 
 env:
+  API_VERSION_BASE: HEAD^1
   GOTRACEBACK: all
   # "|" falls back to direct on any proxy error (e.g. HTTP/2 INTERNAL_ERROR), not just 404/410.
   GOPROXY: "https://proxy.golang.org|direct"
@@ -270,14 +271,6 @@ jobs:
         uses: astral-sh/setup-uv@v10.3.3
 
       - uses: kenn-io/kit/.github/actions/kit-retry@v0.48.3
-
-      - name: Install docs check tools
-        run: |
-          sudo find /etc/apt -type f \( -name '*.list' -o -name '*.sources' \) -exec sed -i -E \
-            -e 's|https?://(azure\.)?archive\.ubuntu\.com/ubuntu|https://archive.ubuntu.com/ubuntu|g' \
-            -e 's|http://security\.ubuntu\.com/ubuntu|https://security.ubuntu.com/ubuntu|g' {} +
-          kit-retry 3 5 sudo apt-get -o APT::Update::Error-Mode=any update
-          kit-retry 3 5 sudo apt-get install -y ripgrep
 
       - name: Install documentation dependencies
         run: kit-retry 3 5 uv sync --project docs --frozen

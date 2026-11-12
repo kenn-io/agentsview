@@ -36,7 +36,7 @@
   <div class="pg-members">
     {#each toolCalls as toolCall, i (toolCall.tool_use_id || `idx:${i}`)}
       {@const ct = callTimingByID?.get(toolCall.tool_use_id ?? "")}
-      {@const dur = ct === undefined ? undefined : ct.duration_ms != null ? formatDuration(ct.duration_ms) : m.shared_unknown()}
+      {@const dur = ct?.duration_ms != null ? formatDuration(ct.duration_ms) : undefined}
       <ToolBlock {sessionId} {ordinal}
         {toolCall}
         content=""
@@ -51,36 +51,41 @@
 
 <style>
   .parallel-group {
-    /* The members drop their own bars, so the rail carries the tool marker. */
+    /* The members drop their own bars, so one calm grey rule encloses the
+       group; pattern mode dashes it and takes the tool accent. */
     border-left: var(--role-tool-bar-width) var(--role-tool-bar-style) var(--role-tool-group-rail);
-    background: color-mix(in srgb, var(--text-primary) 3%, transparent);
+    background: transparent;
     border-radius: 0 var(--radius-sm) var(--radius-sm) 0;
-    margin: 6px 0;
-    padding: 4px 0;
+    margin: 4px 0;
+    padding: 0;
     overflow: hidden;
   }
+  /* Same header voice as ToolCallGroup's "3 tool calls": a 12px semibold
+     sans label with the count in muted ink beside it. */
   .pg-header {
     display: flex;
-    align-items: center;
-    gap: var(--space-4);
-    padding: 5px 12px 7px;
-    font-family: var(--font-mono);
-    font-size: 10px;
+    align-items: baseline;
+    gap: 6px;
+    padding: 3px 10px 3px;
+    font-family: var(--font-sans);
+    font-size: 12px;
     color: var(--text-muted);
   }
-  .pg-label { color: var(--text-secondary); font-weight: 500; }
+  .pg-label { color: var(--text-secondary); font-weight: 600; }
   .pg-count {
-    background: color-mix(in srgb, var(--text-primary) 6%, transparent);
-    padding: 1px 7px;
-    border-radius: 999px;
-    font-size: 9px;
-    color: var(--text-primary);
+    color: var(--text-muted);
+    font-variant-numeric: tabular-nums;
   }
   .pg-spacer { flex: 1; }
   .pg-running {
     color: var(--running-fg);
-    font-size: 10px;
+    font-size: 11px;
     animation: duration-pulse 1.6s ease-in-out infinite;
+  }
+  /* Members pack as tightly as tool-group rows (see ToolBlock). */
+  .pg-members {
+    --tool-row-pad-block: 3px;
+    --tool-row-copy-trim: -1px;
   }
   .pg-members :global(.tool-block) { margin: 0; border-radius: 0; }
   .pg-members :global(.tool-block + .tool-block) {

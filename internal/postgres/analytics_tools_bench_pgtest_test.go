@@ -92,7 +92,7 @@ func seedPGToolsBenchArchive(
 	return store
 }
 
-// BenchmarkPGAnalyticsToolsSkills measures the tools and skills panels
+// BenchmarkPGAnalyticsToolsSkills measures fresh tools and skills reads
 // over a year-long New York window, the same window narrowed to one of
 // fifty projects, and the full archive history.
 func BenchmarkPGAnalyticsToolsSkills(b *testing.B) {
@@ -120,7 +120,7 @@ func BenchmarkPGAnalyticsToolsSkills(b *testing.B) {
 				b.Run("panel=tools/filter="+fc.name, func(b *testing.B) {
 					b.ReportAllocs()
 					for b.Loop() {
-						resp, err := store.GetAnalyticsTools(b.Context(), fc.filter)
+						resp, err := store.loadAnalyticsTools(b.Context(), fc.filter)
 						require.NoError(b, err)
 						require.Positive(b, resp.TotalCalls)
 					}

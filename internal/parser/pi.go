@@ -360,6 +360,7 @@ func parsePiLikeSession(
 	}
 
 	sess := &ParsedSession{
+		MalformedLines:   lr.SkippedLines(),
 		ID:               idPrefix + sessionID,
 		Project:          project,
 		Machine:          machine,
@@ -696,6 +697,11 @@ func applyPiUsage(pm *ParsedMessage, usage gjson.Result) {
 	pm.ContextTokens = input + cacheRead + cacheCreate
 	pm.HasContextTokens = inputField.Exists() ||
 		cacheReadField.Exists() || cacheWriteField.Exists()
+	// Pi computes usage.cost.total from its model registry; custom models
+	// have zero rates and record $0.
+	if cost, ok := recordedCostDollars(usage.Get("cost.total")); ok {
+		pm.SetRecordedCost(cost)
+	}
 }
 
 // parsePiToolResultMessage parses a message entry with role="toolResult".

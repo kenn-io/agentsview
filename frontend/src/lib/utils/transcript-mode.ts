@@ -1,6 +1,7 @@
 import type { DisplayItem, MessageItem } from "./display-items.js";
 import type { DbMessage as Message } from "../api/generated/index.js";
 import { HOOK_SUBTYPES } from "./messages.js";
+import { parseContent } from "./content-parser.js";
 
 // System rows that arrive while the assistant is still working on the
 // current prompt. The Claude parser keeps them on role "user" so analytics
@@ -14,6 +15,15 @@ const MID_TURN_SYSTEM_SUBTYPES = new Set(["task_notification", "stop_hook", ...H
 function isMidTurnSystemMessage(m: Message): boolean {
   return (
     m.is_system === true && !!m.source_subtype && MID_TURN_SYSTEM_SUBTYPES.has(m.source_subtype)
+  );
+}
+
+// A thinking row holds reasoning and nothing else: no tool call and no text
+// outside its thinking blocks.
+function isThinkingOnly(m: Message): boolean {
+  if (!m.has_thinking || m.has_tool_use) return false;
+  return parseContent(m.content, m.has_tool_use, m.id, m.content_length).every(
+    (segment) => segment.type === "thinking" || segment.content.trim() === "",
   );
 }
 
@@ -91,6 +101,18 @@ export function filterDisplayItemsByTranscriptMode(
     }
 
     if (options?.isMessageVisible && !options.isMessageVisible(item.message)) {
+      continue;
+    }
+
+    // Codex can end a turn with a response that produced only reasoning.
+    // Its thinking row must not replace an answer that would still be shown;
+    // it stands in only when the turn has no such answer.
+    if (
+      pendingAssistant &&
+      !toolAfterPendingAssistant &&
+      !isThinkingOnly(pendingAssistant.message) &&
+      isThinkingOnly(item.message)
+    ) {
       continue;
     }
 

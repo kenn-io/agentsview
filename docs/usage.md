@@ -664,9 +664,10 @@ when that value is the most common effort for the displayed model. Effort is a
 model setting, not a measured token count. Upgrading resyncs existing sessions
 to populate it when the source files remain available.
 
-If a parser skipped malformed source lines while still recovering the session,
-the header shows a malformed-lines badge with the persisted count (for example
-"3 malformed lines"). For Antigravity IDE and CLI sessions decoded from an
+If a parser skipped malformed source lines, records larger than 64 MiB, or
+database rows it could not decode while still recovering the session, the
+header shows a malformed-lines badge with the persisted count (for example "3
+malformed lines"). For Antigravity IDE and CLI sessions decoded from an
 unrecognized SQLite schema fingerprint, the header also shows **Unverified
 schema**. That badge means the session was decoded heuristically from a newer
 schema and may be incomplete.
@@ -1073,6 +1074,9 @@ Search in one of three modes:
 The palette remembers the last mode you selected across openings and browser
 sessions. Results update after a 300ms typing pause.
 
+The palette automatically retries a transient Full text search failure once. If
+the search still fails, select **Retry** to try again.
+
 !!! tip
 
     For deeper searches across full transcripts — including thinking, tool inputs, tool result
@@ -1367,8 +1371,7 @@ organized into sections:
 | Appearance         | Theme (light/dark), high-contrast mode, chart colors, message colors, message layout, zoom, block visibility |
 | Date ranges        | Browser-local checkbox for linking date selections across Sessions, Usage, Activity, Trends, and Quality |
 | Session Providers  | Enable session providers, inspect their session directories, and add alternate agent homes               |
-| Archive content    | Choose whether future imports keep, drop, or offload tool-result images                                  |
-| Tool-result images | Preview and remove images from stored tool results                                                       |
+| Tool-result images | Choose whether future imports keep, drop, or offload tool-result images; preview and remove images already stored |
 | Terminal           | Default terminal emulator for session resume                                                             |
 | Embeddings         | Current semantic-index build phase, progress, throughput, ETA, last result, and local generations        |
 | GitHub             | Personal access token for Gist publishing                                                                |

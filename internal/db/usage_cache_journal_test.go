@@ -21,6 +21,7 @@ import (
 	"go.kenn.io/agentsview/internal/config"
 	"go.kenn.io/agentsview/internal/export"
 	"go.kenn.io/agentsview/internal/money"
+	pricingpkg "go.kenn.io/agentsview/internal/pricing"
 )
 
 func TestUsageJournaledWindowDiscoverySeeksDates(t *testing.T) {
@@ -125,7 +126,7 @@ func assertJournaledDailyUsageLegacy(t *testing.T, database *DB, filter UsageFil
 	t.Helper()
 	want, err := database.getDailyUsageLegacy(t.Context(), filter)
 	require.NoError(t, err)
-	got, err := database.GetDailyUsage(t.Context(), filter)
+	got, err := database.getDailyUsageUncached(t.Context(), filter)
 	require.NoError(t, err)
 	assert.Equal(t, want, got)
 }
@@ -191,7 +192,7 @@ func TestUsageJournaledFreshness(t *testing.T) {
 				database.usageCache.usageWindowObserver.afterRead = func(journaled bool) {
 					reads = append(reads, journaled)
 				}
-				got, err := database.GetDailyUsage(t.Context(), filter)
+				got, err := database.getDailyUsageUncached(t.Context(), filter)
 				require.NoError(t, err)
 				assert.Equal(t, 150, got.Totals.InputTokens)
 				assert.Equal(t, []bool{true}, reads, "the first read after an append must use the journaled path")
@@ -237,6 +238,65 @@ func TestUsageJournaledFreshness(t *testing.T) {
 				assert.EqualValues(t, 200, got.Totals.TotalCost.Microdollars)
 			}
 		})
+	}
+}
+
+func TestUsageJournaledConfiguredAliasChanges(t *testing.T) {
+	t.Cleanup(func() { pricingpkg.SetConfiguredAliases(nil) })
+	pricingpkg.SetConfiguredAliases(nil)
+	assert.Equal(t, "catalog\x00"+pricingpkg.BillingPolicyVersion()+"\x00"+usageSessionPricingIdentityVersion, usagePricingIdentityWithDigest("catalog"))
+	database := testDB(t)
+	seedJournaledUsage(t, database, "mapped")
+	seedJournaledUsage(t, database, "unrelated")
+	_, err := database.getWriter().ExecContext(t.Context(), `UPDATE messages SET model='deployment' WHERE session_id='mapped'`)
+	require.NoError(t, err)
+	require.NoError(t, database.UpsertModelPricing([]ModelPricing{
+		{ModelPattern: "journal-model", InputPerMTok: money.Money{Microdollars: 1_000_000}},
+		{ModelPattern: "target-a", InputPerMTok: money.Money{Microdollars: 2_000_000}},
+		{ModelPattern: "target-b", InputPerMTok: money.Money{Microdollars: 3_000_000}},
+	}))
+	filter := UsageFilter{From: "2026-08-10", To: "2026-08-11", Timezone: "UTC"}
+	cache := warmJournaledUsage(t, database, filter)
+	require.NoError(t, database.WaitUsageCacheBackfill(t.Context()))
+	database.usageBackfillMu.Lock()
+	database.usageBackfillEnabled = false
+	database.usageBackfillMu.Unlock()
+	var original int64
+	require.NoError(t, cache.db.QueryRowContext(t.Context(), `SELECT install_revision FROM usage_rollup_installs WHERE session_id='unrelated'`).Scan(&original))
+	var mappedOriginal int64
+	require.NoError(t, cache.db.QueryRowContext(t.Context(), `SELECT install_revision FROM usage_rollup_installs WHERE session_id='mapped'`).Scan(&mappedOriginal))
+	for i, step := range []struct {
+		aliases map[string]string
+		cost    int64
+	}{
+		{map[string]string{"deployment": "target-a"}, 300},
+		{map[string]string{"deployment": "target-b"}, 400},
+		{map[string]string{"deployment": "target-b", "other": "target-a"}, 400},
+		{nil, 100},
+	} {
+		pricingpkg.SetConfiguredAliases(step.aliases)
+		custom := make(map[string]config.CustomModelRate, len(step.aliases))
+		for name, target := range step.aliases {
+			custom[name] = config.CustomModelRate{PriceAs: target}
+		}
+		database.SetCustomPricing(custom)
+		database.usageBackfillMu.Lock()
+		database.usageBackfillEnabled = true
+		database.usageBackfillMu.Unlock()
+		got, err := database.GetDailyUsage(t.Context(), filter)
+		require.NoError(t, err)
+		assert.Equal(t, step.cost, got.Totals.TotalCost.Microdollars)
+		require.NoError(t, database.WaitUsageCacheBackfill(t.Context()))
+		database.usageBackfillMu.Lock()
+		database.usageBackfillEnabled = false
+		database.usageBackfillMu.Unlock()
+		var revision int64
+		require.NoError(t, cache.db.QueryRowContext(t.Context(), `SELECT install_revision FROM usage_rollup_installs WHERE session_id='unrelated'`).Scan(&revision))
+		assert.Equal(t, original, revision)
+		if i == 0 {
+			require.NoError(t, cache.db.QueryRowContext(t.Context(), `SELECT install_revision FROM usage_rollup_installs WHERE session_id='mapped'`).Scan(&revision))
+			assert.NotEqual(t, mappedOriginal, revision)
+		}
 	}
 }
 
@@ -965,7 +1025,7 @@ func TestUsageJournaledMemoSeparatesTotalsFromTop(t *testing.T) {
 		readTop()
 		want, err := database.getDailyUsageLegacy(t.Context(), filter)
 		require.NoError(t, err)
-		got, err := database.GetDailyUsage(ctx, filter)
+		got, err := database.getDailyUsageUncached(ctx, filter)
 		require.NoError(t, err)
 		assert.Equal(t, want, got)
 		readTop()
@@ -1086,19 +1146,19 @@ func TestUsageJournaledConcurrentWriter(t *testing.T) {
 	t.Cleanup(func() { close(writes); <-done })
 	for ordinal := 1; ordinal <= 10; ordinal++ {
 		writes <- ordinal
-		got, err := database.GetDailyUsage(t.Context(), filter)
+		got, err := database.getDailyUsageUncached(t.Context(), filter)
 		writeErr := <-results
 		require.NoError(t, err)
 		require.NoError(t, writeErr)
 		assert.GreaterOrEqual(t, got.Totals.InputTokens, 99+ordinal)
 		assert.LessOrEqual(t, got.Totals.InputTokens, 100+ordinal)
 		before := journaled.Load()
-		warm, err := database.GetDailyUsage(t.Context(), filter)
+		warm, err := database.getDailyUsageUncached(t.Context(), filter)
 		require.NoError(t, err)
 		assert.Equal(t, 100+ordinal, warm.Totals.InputTokens)
 		assert.Equal(t, before+1, journaled.Load(), "a completed notification must leave a journaled warm read")
 	}
-	got, err := database.GetDailyUsage(t.Context(), filter)
+	got, err := database.getDailyUsageUncached(t.Context(), filter)
 	require.NoError(t, err)
 	assert.Equal(t, 110, got.Totals.InputTokens)
 }
@@ -1120,7 +1180,7 @@ func TestUsageJournaledConcurrentWriterInstallConflicts(t *testing.T) {
 		for ordinal := range writes {
 			err := other.InsertMessages(t.Context(), []Message{{SessionID: "session", Ordinal: ordinal, Role: "assistant", Timestamp: "2026-08-10T23:31:00Z", Model: "journal-model", TokenUsage: []byte(`{"input_tokens":1}`)}})
 			if err == nil {
-				_, err = other.GetDailyUsage(t.Context(), UsageFilter{Timezone: "UTC", SkipSessionCounts: true})
+				_, err = other.getDailyUsageUncached(t.Context(), UsageFilter{Timezone: "UTC", SkipSessionCounts: true})
 			}
 			results <- err
 		}
@@ -1146,7 +1206,7 @@ func TestUsageJournaledConcurrentWriterInstallConflicts(t *testing.T) {
 		}
 		readers.Go(func() {
 			for range 10 {
-				got, err := database.GetDailyUsage(t.Context(), filter)
+				got, err := database.getDailyUsageUncached(t.Context(), filter)
 				if err != nil {
 					readerErrors <- err
 					return
@@ -1163,7 +1223,7 @@ func TestUsageJournaledConcurrentWriterInstallConflicts(t *testing.T) {
 	}
 	assert.GreaterOrEqual(t, prepares.Load(), int64(7*10+3), "each displaced journaled reader must recapture")
 	filter.Progress = nil
-	got, err := database.GetDailyUsage(t.Context(), filter)
+	got, err := database.getDailyUsageUncached(t.Context(), filter)
 	require.NoError(t, err)
 	assert.Equal(t, 3003, got.Totals.InputTokens)
 }
@@ -1293,7 +1353,7 @@ func TestUsageJournaledWarmSevenDaysReuseInstalledTotals(t *testing.T) {
 	ctx, cancel := context.WithTimeout(t.Context(), 2*time.Second)
 	defer cancel()
 	for range 5 {
-		got, err := database.GetDailyUsage(ctx, filter)
+		got, err := database.getDailyUsageUncached(ctx, filter)
 		require.NoError(t, err)
 		require.Equal(t, want, got)
 	}

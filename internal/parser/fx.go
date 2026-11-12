@@ -17,6 +17,8 @@ import (
 	"unicode/utf8"
 
 	"github.com/tidwall/gjson"
+	"go.kenn.io/agentsview/internal/money"
+	"go.kenn.io/agentsview/internal/usagefacts"
 )
 
 type fxMetadata struct {
@@ -163,12 +165,16 @@ type fxUsageModel struct {
 	CacheRead  fxCount `json:"cache_read_tokens"`
 	CacheWrite fxCount `json:"cache_write_tokens"`
 	Reasoning  fxCount `json:"reasoning_tokens"`
+	// TotalCost is the Vercel AI Gateway charge for the model's requests,
+	// summed by fx; 0 for Codex and Grok subscription runs.
+	TotalCost *float64 `json:"total_cost"`
 }
 type fxUsage struct {
 	Version   int     `json:"schema_version"`
 	SessionID *string `json:"session_id"`
 	Snapshot  *struct {
 		Version int             `json:"schema_version"`
+		Billing string          `json:"billing"`
 		Models  []*fxUsageModel `json:"models"`
 	} `json:"snapshot"`
 }
@@ -304,7 +310,7 @@ func parseFxSession(ctx context.Context, filePath, machine string) (*ParsedSessi
 	if err := reader.Err(); err != nil {
 		return nil, nil, fmt.Errorf("read fx events: %w", err)
 	}
-	if reader.skippedOversized {
+	if reader.SkippedLines() > 0 {
 		return nil, nil, errors.New("fx event exceeds maximum line size")
 	}
 	if err := ctx.Err(); err != nil {
@@ -368,12 +374,22 @@ func fxUsageEvents(dir, rawID, sessionID string, latest, started time.Time) []Pa
 			return skip("duplicate model entry")
 		}
 		seen[model.Model] = true
-		events = append(events, ParsedUsageEvent{
+		event := ParsedUsageEvent{
 			SessionID: sessionID, Source: "session", Model: model.Model,
 			DedupKey: "session:" + sessionID + "|" + model.Model, OccurredAt: occurredAt,
 			InputTokens: max(0, int(model.Input)-int(model.CacheRead)-int(model.CacheWrite)), OutputTokens: int(model.Output),
 			CacheReadInputTokens: int(model.CacheRead), CacheCreationInputTokens: int(model.CacheWrite), ReasoningTokens: int(model.Reasoning),
-		})
+		}
+		// fx reports a cost only once every billable request has its gateway
+		// record ("complete"); earlier totals can be missing charges.
+		if usage.Snapshot.Billing == "complete" && model.TotalCost != nil && *model.TotalCost >= 0 {
+			if cost, err := money.FromFloatDollars(*model.TotalCost); err == nil {
+				event.Cost = &cost
+				event.CostStatus = usagefacts.CostStatusRecorded
+				event.CostSource = "fx-gateway"
+			}
+		}
+		events = append(events, event)
 	}
 	return events
 }

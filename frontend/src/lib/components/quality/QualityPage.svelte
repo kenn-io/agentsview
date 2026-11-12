@@ -1,10 +1,10 @@
 <script lang="ts">
+  import { formatCount } from "../../utils/format.js";
   import { errorTelemetry } from "../../utils/error-telemetry.js";
   import { m } from "../../i18n/index.js";
   import { onMount, onDestroy, untrack } from "svelte";
   import { analytics } from "../../stores/analytics.svelte.js";
   import { analyticsPageDates } from "../../stores/analyticsPageDates.js";
-  import { ui } from "../../stores/ui.svelte.js";
   import { router } from "../../stores/router.svelte.js";
   import { sessions } from "../../stores/sessions.svelte.js";
   import { sync } from "../../stores/sync.svelte.js";
@@ -20,13 +20,11 @@
   import { rollingRange } from "../../utils/dates.js";
   import { scoreToGrade } from "../../utils/grade.js";
   import { agentLabel } from "../../utils/agents.js";
-  import { AnalyticsService } from "../../api/generated/index.js";
-  import { isAbortError } from "../../api/runtime.js";
-  import { LatestRead } from "../../utils/latest-read.js";
   import type { AutomatedScope } from "../../api/types.js";
-import type { DbSignalCalibration as SignalCalibration, DbSignalSessionExample as SignalSessionExample } from "../../api/generated/index.js";
   import { Card, Typeahead } from "@kenn-io/kit-ui";
+  import StatCard from "../analytics/StatCard.svelte";
   import ProjectTypeahead from "../layout/ProjectTypeahead.svelte";
+  import FilterChip from "../shared/FilterChip.svelte";
   import RangePicker from "../shared/RangePicker.svelte";
   import RefreshControl from "../shared/RefreshControl.svelte";
   import {
@@ -38,9 +36,11 @@ import type { DbSignalCalibration as SignalCalibration, DbSignalSessionExample a
     buildQualityPatterns,
     buildQualitySummary,
     buildRuleBasedRecommendations,
-    type QualityPatternSeverity,
-    type QualityPatternView,
+    formatQualityDate,
   } from "./qualityPatterns.js";
+  import QualityEvidencePanel from "./QualityEvidencePanel.svelte";
+  import QualityPatternCard from "./QualityPatternCard.svelte";
+  import { SignalEvidence } from "./signalEvidence.svelte.js";
 
   const QUALITY_WINDOW_PARAM = "window_days";
   const QUALITY_DATE_PARAM_KEYS = [
@@ -48,19 +48,10 @@ import type { DbSignalCalibration as SignalCalibration, DbSignalSessionExample a
     "date_from",
     "date_to",
   ] as const;
-  type AnalyticsParams = NonNullable<Parameters<
-    typeof AnalyticsService.getApiV1AnalyticsSignals
-  >[0]>;
 
   let unsubEvents: (() => void) | undefined;
   let initialFetchPending = $state(false);
-  let selectedSignalId: string | null = $state(null);
-  let signalExamples: SignalSessionExample[] = $state([]);
-  let signalExamplesLoading = $state(false);
-  let signalExamplesError: string | null = $state(null);
-  let signalExamplesFilterKey: string | null = $state(null);
-  let signalExamplesRequest = 0;
-  const signalEvidenceRead = new LatestRead();
+  const evidence = new SignalEvidence();
   // A materialized page default is not date intent. Only picker input, a
   // dated URL, or a shared seed may serialize dates back into the URL.
   let qualityDateIntentEstablished = false;
@@ -98,7 +89,7 @@ import type { DbSignalCalibration as SignalCalibration, DbSignalSessionExample a
       .sort((a, b) => b.session_count - a.session_count)
       .map((agent) => ({
         name: agent.name,
-        label: `${agentLabel(agent.name)} (${agent.session_count})`,
+        label: `${agentLabel(agent.name)} (${formatCount(agent.session_count)})`,
         displayLabel: agentLabel(agent.name),
         count: agent.session_count,
       }));
@@ -106,7 +97,7 @@ import type { DbSignalCalibration as SignalCalibration, DbSignalSessionExample a
       {
         name: "",
         label: m.insights_page_all_agents(),
-        displayLabel: m.insights_page_all_agents(),
+        displayLabel: m.filter_dropdown_all(),
         count: 0,
       },
       ...opts,
@@ -294,79 +285,6 @@ import type { DbSignalCalibration as SignalCalibration, DbSignalSessionExample a
     fetchQualitySignals();
   }
 
-  function signalEvidenceKey(
-    signal: string,
-    params: AnalyticsParams,
-  ): string {
-    const entries = Object.entries(params)
-      .filter(([, value]) => value !== undefined && value !== "")
-      .sort(([a], [b]) => a.localeCompare(b));
-    return JSON.stringify({ signal, params: Object.fromEntries(entries) });
-  }
-
-  async function openSignalEvidence(signal: string) {
-    const params = analytics.signalEvidenceParams();
-    const requestKey = signalEvidenceKey(signal, params);
-    const request = ++signalExamplesRequest;
-    const requestSignal = signalEvidenceRead.begin();
-    selectedSignalId = signal;
-    signalExamplesFilterKey = requestKey;
-    signalExamplesLoading = true;
-    signalExamplesError = null;
-    try {
-      const response = await AnalyticsService.getApiV1AnalyticsSignalSessions({
-          ...params,
-          signal,
-          limit: 8,
-        }, { signal: requestSignal });
-      if (
-        signalEvidenceRead.isCurrent(requestSignal) &&
-        selectedSignalId === signal &&
-        signalExamplesFilterKey === requestKey &&
-        signalExamplesRequest === request
-      ) {
-        signalExamples = response.sessions ?? [];
-      }
-    } catch (err) {
-      if (
-        isAbortError(err) ||
-        !signalEvidenceRead.isCurrent(requestSignal)
-      ) return;
-      if (
-        selectedSignalId === signal &&
-        signalExamplesFilterKey === requestKey &&
-        signalExamplesRequest === request
-      ) {
-        signalExamples = [];
-        signalExamplesError =
-          err instanceof Error ? err.message : m.insights_page_could_not_load_examples();
-      }
-    } finally {
-      if (
-        signalEvidenceRead.finish(requestSignal) &&
-        selectedSignalId === signal &&
-        signalExamplesFilterKey === requestKey &&
-        signalExamplesRequest === request
-      ) {
-        signalExamplesLoading = false;
-      }
-    }
-  }
-
-  function openEvidenceSession(
-    example: SignalSessionExample,
-    event: MouseEvent,
-  ) {
-    event.preventDefault();
-    const params = evidenceSessionParams(example);
-    // Route-first: App's deep-link effect owns selection and
-    // hydration once the URL commits (#1190).
-    router.navigateToSession(example.session_id, params);
-    if (example.message_ordinal != null) {
-      ui.scrollToOrdinal(example.message_ordinal, example.session_id);
-    }
-  }
-
   function openFrictionLog(event: MouseEvent) {
     if (event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) {
       return;
@@ -375,121 +293,21 @@ import type { DbSignalCalibration as SignalCalibration, DbSignalSessionExample a
     router.navigate("friction");
   }
 
-  function openEvidenceListSession(event: MouseEvent) {
-    if (
-      !(event.target instanceof Element) ||
-      !(event.currentTarget instanceof HTMLElement)
-    ) return;
-    const link = event.target.closest<HTMLAnchorElement>("a.evidence-row");
-    if (!link) return;
-    const links = Array.from(
-      event.currentTarget.querySelectorAll<HTMLAnchorElement>(
-        "a.evidence-row",
-      ),
-    );
-    const example = signalExamples[links.indexOf(link)];
-    if (!example) return;
-    openEvidenceSession(example, event);
-  }
-
-  function delegateEvidenceClicks(node: HTMLElement) {
-    const handleClick = (event: MouseEvent) => {
-      openEvidenceListSession(event);
-    };
-    node.addEventListener("click", handleClick);
-    return {
-      destroy() {
-        node.removeEventListener("click", handleClick);
-      },
-    };
-  }
-
-  function evidenceSessionParams(
-    example: SignalSessionExample,
-  ): Record<string, string> {
-    return example.message_ordinal == null
-      ? {}
-      : { msg: String(example.message_ordinal) };
-  }
-
   function formatDateRange(from: string, to: string): string {
-    if (from === to) return formatDate(from);
-    return m.insights_page_date_range({ from: formatDate(from), to: formatDate(to) });
-  }
-
-  function formatDate(date: string): string {
-    const d = new Date(date + "T00:00:00");
-    return d.toLocaleDateString(undefined, {
-      month: "short",
-      day: "numeric",
-    });
-  }
-
-  function severityLabel(severity: QualityPatternSeverity): string {
-    switch (severity) {
-      case "critical":
-        return m.insights_page_severity_critical();
-      case "warning":
-        return m.insights_page_severity_warning();
-      case "watch":
-        return m.insights_page_severity_watch();
-      case "clear":
-        return m.insights_page_severity_clear();
-      case "unavailable":
-        return m.insights_page_severity_unavailable();
-    }
-  }
-
-  function affectedLabel(pattern: QualityPatternView): string {
-    if (pattern.totalSessions === 0) return m.insights_page_no_computed_sessions();
-    return m.insights_page_affected_sessions({ affected: pattern.affectedSessions, total: pattern.totalSessions });
-  }
-
-  function pct(count: number, total: number): number {
-    if (total <= 0) return 0;
-    return Math.round((count / total) * 100);
-  }
-
-  function maxTrend(pattern: QualityPatternView): number {
-    return Math.max(1, ...pattern.trend.map((p) => p.value));
-  }
-
-  function calibrationFor(signal: string): SignalCalibration | null {
-    return signals?.calibration?.[signal] ?? null;
-  }
-
-  function calibrationLabel(signal: string): string {
-    if (signal.startsWith("outcome_")) {
-      return m.insights_page_calibration_outcome_cohort();
-    }
-    const calibration = calibrationFor(signal);
-    if (!calibration) {
-      return m.insights_page_calibration_examples_only();
-    }
-    if (calibration.affected_sessions === 0) {
-      return m.insights_page_calibration_no_affected();
-    }
-    if (calibration.incomplete_lift == null) {
-      return m.insights_page_calibration_incomplete_rate({ rate: calibration.affected_incomplete_rate });
-    }
-    return m.insights_page_calibration_incomplete_lift({ lift: calibration.incomplete_lift.toFixed(1) });
+    if (from === to) return formatQualityDate(from);
+    return m.insights_page_date_range({ from: formatQualityDate(from), to: formatQualityDate(to) });
   }
 
   function selectedSignalLabel(): string {
-    if (!selectedSignalId) return m.insights_page_signal_examples();
+    const selected = evidence.selectedSignalId;
+    if (!selected) return m.insights_page_signal_examples();
     for (const pattern of patterns) {
       const found = pattern.drivers.find(
-        (driver) => driver.id === selectedSignalId,
+        (driver) => driver.id === selected,
       );
       if (found) return found.label;
     }
-    return selectedSignalId;
-  }
-
-  function qualityBadge(example: SignalSessionExample): string {
-    if (example.health_grade) return m.insights_page_grade_badge({ grade: example.health_grade });
-    if (example.health_score != null) return String(example.health_score);
-    return m.insights_page_unscored();
+    return selected;
   }
 
   onMount(() => {
@@ -553,7 +371,6 @@ import type { DbSignalCalibration as SignalCalibration, DbSignalSessionExample a
 
   onDestroy(() => {
     analytics.cancelInFlightReads();
-    signalEvidenceRead.cancel();
     const state = currentQualityPanelDate();
     if (state) {
       analyticsPageDates.retain(
@@ -565,16 +382,6 @@ import type { DbSignalCalibration as SignalCalibration, DbSignalSessionExample a
     unsubEvents?.();
   });
 
-  $effect(() => {
-    const signal = selectedSignalId;
-    if (!signal) return;
-    const params = analytics.signalEvidenceParams();
-    const nextKey = signalEvidenceKey(signal, params);
-    if (signalExamplesFilterKey === nextKey) return;
-    signalExamples = [];
-    signalExamplesError = null;
-    untrack(() => void openSignalEvidence(signal));
-  });
 
 </script>
 
@@ -588,24 +395,30 @@ import type { DbSignalCalibration as SignalCalibration, DbSignalSessionExample a
     />
 
     <div class="filter-group">
-      <ProjectTypeahead
-        projects={sessions.projects}
-        value={analytics.project}
-        onselect={handleProjectChange}
-      />
-      <Typeahead
-        options={agentOptions}
-        value={analytics.agent}
-        fallbackLabel={analytics.agent
-          ? agentLabel(analytics.agent)
-          : m.insights_page_all_agents()}
-        placeholder={m.insights_page_filter_agents()}
-        title={m.insights_page_filter_by_agent()}
-        emptyLabel={m.insights_page_no_matching_agents()}
-        onselect={handleAgentChange}
-      />
-      <label class="toolbar-scope">
-        <span>{m.insights_page_session_scope()}</span>
+      <FilterChip active={analytics.project !== ""}>
+        <ProjectTypeahead
+          projects={sessions.projects}
+          value={analytics.project}
+          onselect={handleProjectChange}
+          triggerPrefix={`${m.analytics_col_project()}:`}
+          allLabel={m.filter_dropdown_all()}
+        />
+      </FilterChip>
+      <FilterChip active={analytics.agent !== ""}>
+        <Typeahead
+          options={agentOptions}
+          value={analytics.agent}
+          fallbackLabel={analytics.agent
+            ? agentLabel(analytics.agent)
+            : m.filter_dropdown_all()}
+          placeholder={m.insights_page_filter_agents()}
+          title={m.insights_page_filter_by_agent()}
+          emptyLabel={m.insights_page_no_matching_agents()}
+          triggerPrefix={`${m.analytics_col_agent()}:`}
+          onselect={handleAgentChange}
+        />
+      </FilterChip>
+      <FilterChip>
         <Typeahead
           options={scopeOptions}
           value={analytics.automatedScope}
@@ -613,9 +426,10 @@ import type { DbSignalCalibration as SignalCalibration, DbSignalSessionExample a
           placeholder={m.insights_page_filter_scopes()}
           title={m.insights_page_filter_by_scope()}
           emptyLabel={m.insights_page_no_matching_scopes()}
+          triggerPrefix={`${m.insights_page_session_scope()}:`}
           onselect={handleAutomatedScopeChange}
         />
-      </label>
+      </FilterChip>
     </div>
 
     <RefreshControl
@@ -668,8 +482,9 @@ import type { DbSignalCalibration as SignalCalibration, DbSignalSessionExample a
         <div class="recommendation-list">
           {#each recommendations as rec}
             <Card level="default" padding="none" class="recommendation">
+              <!-- The section header carries the rule-based badge once for
+                   every card below it. -->
               <article class="recommendation-content">
-                <span class="badge rule">{m.insights_page_rule_based()}</span>
                 <strong>{rec.label}</strong>
                 <p>{rec.rationale}</p>
               </article>
@@ -680,7 +495,6 @@ import type { DbSignalCalibration as SignalCalibration, DbSignalSessionExample a
       {#if sync.serverVersion?.friction_readable === true}
         <Card level="default" padding="none" class="friction-link-card">
           <article class="friction-link-content">
-            <span class="badge rule">{m.insights_page_rule_based()}</span>
             <strong>{m.friction_quality_card_title()}</strong>
             <p>{m.friction_quality_card_body()}</p>
             <a class="friction-link" href={router.buildHref("friction")} onclick={openFrictionLog}>
@@ -743,42 +557,31 @@ import type { DbSignalCalibration as SignalCalibration, DbSignalSessionExample a
         {/if}
 
         <div class="summary-grid">
-          <Card level="default" padding="none" class="summary-card">
-            <article class="summary-card-content">
-              <span class="label">{m.insights_page_average_score()}</span>
-              <strong>
-                {summary.avgHealthScore == null
-                  ? "--"
-                  : Math.round(summary.avgHealthScore)}
-              </strong>
-              <span>
-                {summary.avgHealthScore == null
-                  ? m.insights_page_no_scored_sessions()
-                  : m.insights_page_grade_badge({ grade: scoreToGrade(summary.avgHealthScore) })}
-              </span>
-            </article>
-          </Card>
-          <Card level="default" padding="none" class="summary-card">
-            <article class="summary-card-content">
-              <span class="label">{m.insights_page_scored_sessions()}</span>
-              <strong>{summary.scoredSessions}</strong>
-              <span>{m.insights_page_unscored_count({ count: summary.unscoredSessions })}</span>
-            </article>
-          </Card>
-          <Card level="default" padding="none" class="summary-card">
-            <article class="summary-card-content">
-              <span class="label">{m.insights_page_low_quality()}</span>
-              <strong>{summary.lowQualitySessions}</strong>
-              <span>{m.insights_page_df_graded()}</span>
-            </article>
-          </Card>
-          <Card level="default" padding="none" class="summary-card">
-            <article class="summary-card-content">
-              <span class="label">{m.insights_page_prompt_signals()}</span>
-              <strong>{summary.computedQualitySessions}</strong>
-              <span>{m.insights_page_sessions_computed()}</span>
-            </article>
-          </Card>
+          <StatCard
+            tier="lead"
+            label={m.insights_page_average_score()}
+            value={summary.avgHealthScore == null
+              ? "--"
+              : String(Math.round(summary.avgHealthScore))}
+            sub={summary.avgHealthScore == null
+              ? m.insights_page_no_scored_sessions()
+              : m.insights_page_grade_badge({ grade: scoreToGrade(summary.avgHealthScore) })}
+          />
+          <StatCard
+            label={m.insights_page_scored_sessions()}
+            value={formatCount(summary.scoredSessions)}
+            sub={m.insights_page_unscored_count({ count: formatCount(summary.unscoredSessions) })}
+          />
+          <StatCard
+            label={m.insights_page_low_quality()}
+            value={formatCount(summary.lowQualitySessions)}
+            sub={m.insights_page_df_graded()}
+          />
+          <StatCard
+            label={m.insights_page_prompt_signals()}
+            value={formatCount(summary.computedQualitySessions)}
+            sub={m.insights_page_sessions_computed()}
+          />
         </div>
 
         <Card
@@ -790,157 +593,30 @@ import type { DbSignalCalibration as SignalCalibration, DbSignalSessionExample a
           {#each summary.scoreDistribution as bucket}
             <div class="grade-bar">
               <span>{bucket.grade}</span>
+              <strong>{formatCount(bucket.count)}</strong>
               <div class="bar-track">
                 <div
                   class="bar-fill"
                   style:width={`${(bucket.count / maxGradeCount) * 100}%`}
                 ></div>
               </div>
-              <strong>{bucket.count}</strong>
             </div>
           {/each}
         </Card>
 
         <div class="pattern-grid">
           {#each patterns as pattern}
-            <Card
-              level="default"
-              padding="none"
-              class={`pattern-card severity-${pattern.severity}`}
-            >
-              <article
-                class="pattern-card-content"
-                aria-labelledby={`${pattern.id}-title`}
-              >
-              <div class="pattern-head">
-                <div>
-                  <h3 id={`${pattern.id}-title`}>
-                    {pattern.title}
-                  </h3>
-                  <p>{pattern.summary}</p>
-                </div>
-                <span class="severity">
-                  {severityLabel(pattern.severity)}
-                </span>
-              </div>
-
-              <div class="affected">
-                <strong>{affectedLabel(pattern)}</strong>
-                <span>
-                  {m.insights_page_pct_affected({ pct: pct(pattern.affectedSessions, pattern.totalSessions) })}
-                </span>
-              </div>
-
-              <div class="driver-list">
-                {#each pattern.drivers as driver}
-                  <button
-                    class="driver-row"
-                    class:active={selectedSignalId === driver.id}
-                    type="button"
-                    onclick={() => openSignalEvidence(String(driver.id))}
-                  >
-                    <span>{driver.label}</span>
-                    <strong>
-                      {driver.total}{driver.unit ?? ""}
-                    </strong>
-                    <em>{m.insights_page_driver_sessions({
-                      count: driver.sessions,
-                      countLabel: driver.sessions.toLocaleString(),
-                    })}</em>
-                    <small>{calibrationLabel(String(driver.id))}</small>
-                  </button>
-                {/each}
-              </div>
-
-              <div
-                class="sparkline"
-                aria-label={`${pattern.title}: ${pattern.trendLabel}`}
-              >
-                <span class="trend-caption">{pattern.trendLabel}</span>
-                {#each pattern.trend.slice(-16) as point}
-                  <span
-                    title={`${formatDate(point.date)}: ${point.value} ${point.label}`}
-                    style:height={`${Math.max(8, (point.value / maxTrend(pattern)) * 32)}px`}
-                  ></span>
-                {/each}
-              </div>
-              <p class="severity-note">{pattern.severityDescription}</p>
-
-              {#if pattern.examples.length > 0}
-                <div class="examples">
-                  <span class="examples-label">{pattern.examplesLabel}</span>
-                  {#each pattern.examples as example}
-                    <div class="example-row">
-                      <span>{example.label}</span>
-                      <em>{example.detail}</em>
-                    </div>
-                  {/each}
-                </div>
-              {/if}
-              </article>
-            </Card>
+            <QualityPatternCard
+              {pattern}
+              calibration={signals?.calibration}
+              selectedSignalId={evidence.selectedSignalId}
+              onselectsignal={(signal) => void evidence.open(signal)}
+            />
           {/each}
         </div>
 
-        {#if selectedSignalId}
-          <Card level="default" padding="none" class="evidence-panel">
-            <section class="evidence-panel-live" aria-live="polite">
-              <div class="evidence-head">
-              <div>
-                <span class="examples-label">{m.insights_page_session_evidence()}</span>
-                <h3>{selectedSignalLabel()}</h3>
-              </div>
-              <button
-                class="text-btn"
-                type="button"
-                onclick={() => {
-                  signalEvidenceRead.cancel();
-                  selectedSignalId = null;
-                  signalExamples = [];
-                  signalExamplesLoading = false;
-                  signalExamplesError = null;
-                  signalExamplesFilterKey = null;
-                }}
-              >
-                {m.insights_page_close()}
-              </button>
-              </div>
-              {#if signalExamplesLoading}
-                <p class="evidence-state">{m.insights_page_loading_examples()}</p>
-              {:else if signalExamplesError}
-                <p class="evidence-state error" {@attach errorTelemetry("analytics")}>{signalExamplesError}</p>
-              {:else if signalExamples.length === 0}
-                <p class="evidence-state">
-                  {m.insights_page_no_triggering_sessions()}
-                </p>
-              {:else}
-                <div class="evidence-list" use:delegateEvidenceClicks>
-                  {#each signalExamples as example}
-                    <Card
-                      level="inset"
-                      padding="none"
-                      class="evidence-row"
-                      href={router.buildSessionHref(
-                      example.session_id,
-                      evidenceSessionParams(example),
-                    )}
-                    >
-                      <span class="evidence-main">
-                        <strong>{example.project || m.insights_page_unassigned_project()}</strong>
-                        <em>{example.excerpt || m.insights_page_no_excerpt()}</em>
-                      </span>
-                      <span class="evidence-meta">
-                        <span>{agentLabel(example.agent)}</span>
-                        <span>{example.outcome || m.insights_page_unknown()}</span>
-                        <span>{qualityBadge(example)}</span>
-                        {#if example.failure_signals != null}<span>{m.insights_page_failures({ count: example.failure_signals })}</span>{/if}
-                      </span>
-                    </Card>
-                  {/each}
-                </div>
-              {/if}
-            </section>
-          </Card>
+        {#if evidence.selectedSignalId}
+          <QualityEvidencePanel {evidence} label={selectedSignalLabel()} />
         {/if}
       {/if}
     </section>
@@ -974,50 +650,8 @@ import type { DbSignalCalibration as SignalCalibration, DbSignalSessionExample a
     align-items: center;
     flex-wrap: wrap;
     gap: 8px;
-    flex: 1 1 560px;
+    flex: 1 1 auto;
     min-width: 0;
-    max-width: 720px;
-  }
-
-  .toolbar-scope {
-    display: flex;
-    align-items: center;
-    gap: 6px;
-    flex: 0 0 220px;
-    min-width: 220px;
-  }
-
-  .toolbar-scope span {
-    color: var(--text-muted);
-    font-size: 10px;
-    font-weight: 700;
-    letter-spacing: 0.04em;
-    text-transform: uppercase;
-    white-space: nowrap;
-  }
-
-  .filter-group :global(.kit-typeahead),
-  .toolbar-scope :global(.kit-typeahead) {
-    min-width: 0;
-    max-width: none;
-    width: 100%;
-  }
-
-  /* The kit-ui Typeahead list pins to the trigger width, so size the
-     trigger itself (the old --typeahead-list-min-width knob is retired). */
-  .filter-group > :global(.kit-typeahead:first-child) {
-    flex: 0 1 220px;
-    min-width: 180px;
-    max-width: 260px;
-  }
-
-  .filter-group > :global(.kit-typeahead:nth-child(2)) {
-    flex: 0 0 120px;
-  }
-
-  .toolbar-scope :global(.kit-typeahead) {
-    flex: 0 0 128px;
-    width: 128px;
   }
 
   .content {
@@ -1102,10 +736,14 @@ import type { DbSignalCalibration as SignalCalibration, DbSignalSessionExample a
     text-underline-offset: 2px;
   }
 
+  /* Same size and weight as the analytics section titles on the other
+     analytics pages (Session health): a clear step above the 14px
+     semibold pattern card titles and 13px body. */
   .section-heading h2 {
     margin-top: 2px;
-    font-size: 18px;
-    line-height: 1.2;
+    font-size: 16px;
+    font-weight: 700;
+    line-height: 1.3;
     color: var(--text-primary);
   }
 
@@ -1128,14 +766,18 @@ import type { DbSignalCalibration as SignalCalibration, DbSignalSessionExample a
     letter-spacing: 0.04em;
   }
 
+  /* Badges fit their text, even inside column layouts that stretch. */
   .badge {
     display: inline-flex;
+    align-self: flex-start;
+    justify-self: start;
+    width: fit-content;
     align-items: center;
     height: 18px;
     padding: 0 6px;
     border-radius: 3px;
     border: 1px solid var(--border-muted);
-    font-size: 10px;
+    font-size: 11px;
     font-weight: 700;
     letter-spacing: 0.03em;
     text-transform: uppercase;
@@ -1161,46 +803,32 @@ import type { DbSignalCalibration as SignalCalibration, DbSignalSessionExample a
     gap: var(--space-5);
   }
 
-  .summary-grid :global(.summary-card) {
-    min-height: 92px;
-    padding: 12px;
-    display: flex;
-    flex-direction: column;
-    gap: 0;
-    justify-content: space-between;
+  /* Quality has only four headline figures, so they lead the section at
+     24px instead of the denser analytics rows' 18-20px. */
+  .summary-grid :global(.kit-card.stat-card .card-value) {
+    font-size: 24px;
+    line-height: 30px;
   }
 
-  .summary-grid :global(.summary-card > .kit-card__body) {
-    display: contents;
-  }
-
-  .summary-card-content {
-    display: flex;
-    flex: 1;
-    flex-direction: column;
-    gap: 0;
-    justify-content: space-between;
+  /* The grid owns the column count; a card's 120px minimum would make
+     tracks overlap when zoom narrows the page above the 900px query. */
+  .summary-grid :global(.kit-card.stat-card) {
     min-width: 0;
+    padding-block: 8px;
   }
 
-  .summary-grid :global(.summary-card .label) {
-    color: var(--text-muted);
-    font-size: 11px;
-    font-weight: 600;
-    text-transform: uppercase;
-    letter-spacing: 0.04em;
-  }
-
-  .summary-grid :global(.summary-card strong) {
-    font-size: 28px;
-    line-height: 1;
+  /* With only four cards and two of them able to show the same compact
+     value, the label names the card: a full step larger and in primary
+     ink, with the sublabel kept below it. */
+  .summary-grid :global(.kit-card.stat-card .card-label) {
+    font-size: 12.5px;
+    line-height: 17px;
     color: var(--text-primary);
-    font-variant-numeric: tabular-nums;
   }
 
-  .summary-grid :global(.summary-card span:last-child) {
-    color: var(--text-secondary);
-    font-size: 12px;
+  .summary-grid :global(.kit-card.stat-card .card-sub) {
+    font-size: 11.5px;
+    line-height: 15px;
   }
 
   .content :global(.distribution-row) {
@@ -1216,7 +844,7 @@ import type { DbSignalCalibration as SignalCalibration, DbSignalSessionExample a
 
   .grade-bar {
     display: grid;
-    grid-template-columns: 18px 1fr minmax(22px, auto);
+    grid-template-columns: 12px minmax(36px, auto) 1fr;
     gap: 8px;
     align-items: center;
     color: var(--text-secondary);
@@ -1224,7 +852,7 @@ import type { DbSignalCalibration as SignalCalibration, DbSignalSessionExample a
   }
 
   .grade-bar strong {
-    text-align: right;
+    text-align: left;
     color: var(--text-primary);
     font-variant-numeric: tabular-nums;
   }
@@ -1260,41 +888,8 @@ import type { DbSignalCalibration as SignalCalibration, DbSignalSessionExample a
     display: contents;
   }
 
-  .pattern-card-content {
-    display: flex;
-    flex: 1;
-    flex-direction: column;
-    gap: 12px;
-    min-width: 0;
-  }
-
-  .pattern-head {
-    display: flex;
-    gap: 12px;
-    justify-content: space-between;
-    align-items: flex-start;
-  }
-
-  .pattern-head h3 {
-    font-size: 14px;
-    margin-bottom: 3px;
-  }
-
-  .pattern-head p {
-    color: var(--text-muted);
-    font-size: 12px;
-    line-height: 1.4;
-  }
-
-  .severity {
-    flex-shrink: 0;
-    border-radius: 999px;
-    padding: 2px 8px;
-    font-size: 11px;
-    font-weight: 700;
-    border: 1px solid var(--border-muted);
-  }
-
+  /* QualityPatternCard's severity chip takes its color from the card's
+     severity class. */
   .pattern-grid :global(.severity-critical .severity) {
     color: var(--accent-red);
     background: color-mix(
@@ -1328,157 +923,6 @@ import type { DbSignalCalibration as SignalCalibration, DbSignalSessionExample a
     background: var(--bg-inset);
   }
 
-  .affected {
-    display: flex;
-    align-items: baseline;
-    justify-content: space-between;
-    gap: var(--space-4);
-    padding: 10px;
-    border-radius: var(--radius-sm);
-    background: var(--bg-inset);
-  }
-
-  .affected strong {
-    color: var(--text-primary);
-    font-size: 13px;
-  }
-
-  .affected span {
-    color: var(--text-muted);
-    font-size: 12px;
-  }
-
-  .driver-list {
-    display: flex;
-    flex-direction: column;
-    gap: 6px;
-  }
-
-  .driver-row {
-    display: grid;
-    grid-template-columns: minmax(0, 1fr) auto auto auto;
-    gap: var(--space-4);
-    align-items: baseline;
-    width: 100%;
-    min-height: 24px;
-    padding: 2px 4px;
-    border-radius: var(--radius-sm);
-    font-size: 12px;
-    text-align: left;
-  }
-
-  .driver-row:hover,
-  .driver-row.active {
-    background: var(--bg-surface-hover);
-  }
-
-  .driver-row span {
-    color: var(--text-secondary);
-    min-width: 0;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-  }
-
-  .driver-row strong {
-    color: var(--text-primary);
-    font-variant-numeric: tabular-nums;
-  }
-
-  .driver-row em {
-    color: var(--text-muted);
-    font-style: normal;
-    font-variant-numeric: tabular-nums;
-  }
-
-  .driver-row small {
-    color: var(--text-muted);
-    font-size: 10px;
-    font-variant-numeric: tabular-nums;
-    white-space: nowrap;
-  }
-
-  .sparkline {
-    height: 42px;
-    display: flex;
-    align-items: end;
-    gap: var(--space-1);
-    padding: 6px 0 2px;
-    border-top: 1px solid var(--border-muted);
-    position: relative;
-  }
-
-  .sparkline span:not(.trend-caption) {
-    width: 100%;
-    min-width: 3px;
-    max-width: 16px;
-    background: color-mix(
-      in srgb,
-      var(--accent-blue) 48%,
-      var(--border-muted)
-    );
-    border-radius: 2px 2px 0 0;
-  }
-
-  .trend-caption {
-    align-self: start;
-    width: auto;
-    min-width: 118px;
-    max-width: none;
-    height: auto !important;
-    margin-right: 8px;
-    color: var(--text-muted);
-    font-size: 10px;
-    font-weight: 700;
-    text-transform: uppercase;
-    letter-spacing: 0.04em;
-    background: transparent;
-  }
-
-  .severity-note {
-    margin-top: -4px;
-    color: var(--text-muted);
-    font-size: 11px;
-    line-height: 1.35;
-  }
-
-  .examples {
-    display: flex;
-    flex-direction: column;
-    gap: 6px;
-    margin-top: auto;
-  }
-
-  .examples-label {
-    color: var(--text-muted);
-    font-size: 10px;
-    font-weight: 700;
-    text-transform: uppercase;
-    letter-spacing: 0.04em;
-  }
-
-  .example-row {
-    display: grid;
-    grid-template-columns: minmax(90px, 0.35fr) 1fr;
-    gap: var(--space-4);
-    font-size: 12px;
-  }
-
-  .example-row span {
-    color: var(--text-primary);
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-  }
-
-  .example-row em {
-    color: var(--text-muted);
-    font-style: normal;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-  }
-
   .content :global(.evidence-panel) {
     display: grid;
     gap: var(--space-5);
@@ -1487,87 +931,6 @@ import type { DbSignalCalibration as SignalCalibration, DbSignalSessionExample a
 
   .content :global(.evidence-panel > .kit-card__body) {
     display: contents;
-  }
-
-  .evidence-panel-live {
-    display: grid;
-    gap: var(--space-5);
-    min-width: 0;
-  }
-
-  .evidence-head {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    gap: 12px;
-  }
-
-  .evidence-head h3 {
-    margin-top: 2px;
-    color: var(--text-primary);
-    font-size: 14px;
-  }
-
-  .evidence-state {
-    color: var(--text-secondary);
-    font-size: 12px;
-  }
-
-  .evidence-state.error {
-    color: var(--accent-red);
-  }
-
-  .evidence-list {
-    display: grid;
-    gap: 6px;
-  }
-
-  .evidence-list :global(.evidence-row) {
-    display: grid;
-    grid-template-columns: minmax(0, 1fr) auto;
-    gap: 12px;
-    align-items: center;
-    padding: 9px 10px;
-    text-decoration: none;
-  }
-
-  .evidence-list :global(.evidence-row > .kit-card__body) {
-    display: contents;
-  }
-
-  .evidence-list :global(.evidence-row:hover) {
-    border-color: var(--border-default);
-    background: var(--bg-surface-hover);
-  }
-
-  .evidence-main {
-    display: grid;
-    gap: 2px;
-    min-width: 0;
-  }
-
-  .evidence-main strong {
-    color: var(--text-primary);
-    font-size: 12px;
-  }
-
-  .evidence-main em {
-    color: var(--text-muted);
-    font-size: 12px;
-    font-style: normal;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-  }
-
-  .evidence-meta {
-    display: flex;
-    flex-wrap: wrap;
-    justify-content: flex-end;
-    gap: 6px;
-    color: var(--text-muted);
-    font-size: 11px;
-    font-variant-numeric: tabular-nums;
   }
 
   .recommendation-list {
@@ -1612,21 +975,14 @@ import type { DbSignalCalibration as SignalCalibration, DbSignalSessionExample a
   .recommendation-list :global(.recommendation strong) {
     color: var(--text-primary);
     font-size: 13px;
+    font-weight: var(--font-weight-medium, 500);
   }
 
   .recommendation-list :global(.recommendation p) {
-    color: var(--text-secondary);
-    font-size: 12px;
-    line-height: 1.45;
-  }
-
-  .text-btn {
     color: var(--text-muted);
     font-size: 12px;
-  }
-
-  .text-btn:hover {
-    color: var(--text-primary);
+    font-weight: 400;
+    line-height: 1.45;
   }
 
   .content :global(.state-panel) {
@@ -1702,10 +1058,11 @@ import type { DbSignalCalibration as SignalCalibration, DbSignalSessionExample a
     animation: shimmer 1.4s ease-in-out infinite;
   }
 
+  /* Matches the loaded summary card so the page does not shift. */
   .skeleton-card {
     border-radius: var(--radius-md);
     border: 1px solid var(--border-muted);
-    height: 92px;
+    height: 84px;
   }
 
   .pattern-grid :global(.skeleton-pattern) {
@@ -1764,15 +1121,6 @@ import type { DbSignalCalibration as SignalCalibration, DbSignalSessionExample a
 
     .content :global(.distribution-row) {
       grid-template-columns: 1fr;
-    }
-
-    .driver-row,
-    .evidence-list :global(.evidence-row) {
-      grid-template-columns: 1fr;
-    }
-
-    .evidence-meta {
-      justify-content: flex-start;
     }
   }
 </style>

@@ -104,7 +104,9 @@ below.
 
 Related actions now share a noun. Existing command names continue to work for
 at least one release. They are hidden from root help and completion, and an
-invoked legacy action prints its replacement on stderr. Flags, arguments,
+invoked legacy action prints its replacement on stderr. `agentsview sync` is
+the exception: it stays a supported shortcut for `source sync`, appears in root
+help, and prints no deprecation notice. Flags, arguments,
 stdout documents, exit codes, HTTP routes, and MCP tools keep their behavior.
 Daemon, SSH sync, browser host, and parser child protocols keep their existing
 launch paths.
@@ -112,7 +114,6 @@ launch paths.
 | Legacy command                             | Preferred command                                                  |
 | ------------------------------------------ | ------------------------------------------------------------------ |
 | `agents [agent...]`                        | `source list [agent...]`                                           |
-| `sync`                                     | `source sync`                                                      |
 | `import`                                   | `source import`                                                    |
 | `chrome setup`                             | `source chrome setup`                                              |
 | `raw-sync ...`                             | `source raw ...`                                                   |
@@ -2020,6 +2021,7 @@ agentsview export sessions [flags]
 | `--limit`             | `500`   | Maximum sessions to return; max `db.MaxSessionLimit`      |
 | `--cursor`            |         | Opaque cursor from a previous response                    |
 | `--all`               | `false` | Export every eligible page as one output stream           |
+| `--wait`              | `false` | Wait for project identification                           |
 | `--project`           |         | Filter by exact project name                              |
 | `--exclude-project`   |         | Exclude sessions from the given project                   |
 | `--machine`           |         | ID, alias, ID/alias list, or unique display name          |
@@ -2039,6 +2041,12 @@ agentsview export sessions [flags]
 | `--health-grade`      |         | Comma-separated health grade filter                       |
 | `--min-tool-failures` |         | Minimum tool-failure signal count                         |
 | `--has-secret`        | `false` | Only sessions with detected secret leaks                  |
+
+With `--wait`, export starts or discovers the local daemon and waits for project
+identity evidence to finish. Progress goes to standard error. Cancel the command
+to stop waiting. A failed backfill or unavailable daemon reports recovery
+commands. Archive-only databases cannot run the backfill; finish it on the
+writable source and restore an archive containing the evidence.
 
 By default, one-shot and automated sessions are excluded, so token and cost
 totals can be lower than the full archive unless the corresponding include flags
@@ -2064,8 +2072,9 @@ For performance diagnosis, `export sessions`, `export hour`, `export day`, and
 `--trace <file>`. These write profiling data to files and keep the export on
 stdout.
 
-When `--cursor` is present, only `--format`, `--json`, `--limit`, and the
-profiling flags may be combined with it. Cursor reset errors write structured
+When `--cursor` is present, only `--format`, `--json`, `--limit`, `--wait`, and
+the profiling flags may be combined with it. With a cursor, `--wait` suppresses
+progress to keep stderr machine-readable. Cursor reset errors write structured
 JSON to stderr, leave stdout empty, and exit with code 4:
 
 ```json
@@ -2362,6 +2371,18 @@ sent to an explicitly supplied server.
 
 ______________________________________________________________________
 
+### `agentsview agent setup`
+
+Install the conversation search skill and focused MCP profile for installed Claude Code and Codex clients:
+
+```bash
+agentsview agent setup [--agent claude|codex] [--check] [--force]
+```
+
+Setup refuses to replace a different `agentsview` MCP entry without `--force` and preserves other entries. Pass `--force` to replace the entry and overwrite edited skill files. The memory profile supports `AGENTSVIEW_MEMORY_SERVER`, `AGENTSVIEW_MEMORY_SERVER_TOKEN_FILE`, and `AGENTSVIEW_MEMORY_PG`.
+
+______________________________________________________________________
+
 ### `agentsview doctor memory`
 
 Inspect the selected conversation-memory target and the local client package:
@@ -2381,15 +2402,13 @@ older remote server reports `unknown` with reason `unsupported`; authentication
 and transport failures remain command errors instead of looking like an empty
 archive.
 
-The client section checks the native package's recall skill, focused MCP
+By default the client section checks installed Claude Code and Codex integrations. It checks the native package's recall skill, focused MCP
 configuration, and SessionStart hook when `--plugin-root`, `PLUGIN_ROOT`, or
 `CLAUDE_PLUGIN_ROOT` identifies the package. It also detects standalone
 AgentsView skills and reports when their baked target differs from the selected
 archive. Human and JSON output omit plugin paths, server URLs, and token values.
 
-Local diagnostics open the archive read-only and do not start a daemon. Every
-mode is metadata-only: the command does not sync transcripts, rebuild vectors,
-probe an embedding provider, or modify client files. `--server`, `--pg`, and
+Local diagnostics open the archive read-only. The client check may start the configured client and MCP process; it calls no data tools and does not start the local archive daemon, sync transcripts, or rebuild vectors. Codex may create its own runtime state. The diagnostic does not probe an embedding provider or modify client configuration. `--server`, `--pg`, and
 the `AGENTSVIEW_MEMORY_SERVER`, `AGENTSVIEW_MEMORY_SERVER_TOKEN_FILE`, and
 `AGENTSVIEW_MEMORY_PG` environment variables select the same read target used
 by `agentsview mcp --profile memory`.
@@ -2827,3 +2846,28 @@ profile or pass them inline:
 ```bash
 AGENTSVIEW_DATA_DIR=/tmp/av-test agentsview serve
 ```
+
+### Search text in images
+
+AgentsView can index text in retained tool-result images with a local GLM-OCR
+service. Enable it in the [configuration](configuration.md#image-text) and
+restart the daemon.
+
+The endpoint must be loopback. It defaults to
+`http://127.0.0.1:30004/glmocr/parse` and must serve the
+[Docbank v0.17.0 deployment](https://github.com/kenn-io/docbank/tree/v0.17.0/deploy/glmocr),
+which requires an NVIDIA GB10 host. AgentsView reads PNG, JPEG, and WebP images
+up to 64 MiB stored inline or in the asset directory. Larger images are skipped
+and logged. Indexing starts with the daemon and
+continues in the background, so searches can initially return partial results.
+AgentsView checks for new images every minute. Missing or damaged assets and
+failed extractions retry with backoff. Images in other formats are skipped. Search in
+the web palette or with, for example,
+`agentsview session search 'invoice 42' --in tool_result`. Substring and regex
+`tool_result` searches include image text; other `--in` sources and in-session
+find search only text shown in the transcript. Each new extraction is sent on
+the next incremental push to PostgreSQL, DuckDB, and ClickHouse, so `pg serve`
+and the other mirrors return the same matches. Removing the last retained copy of an image removes its extracted text.
+Disabling image text and restarting clears extracted text and removes mirror
+matches on the next push. Session and artifact exports carry image references or
+placeholders rather than extracted text.

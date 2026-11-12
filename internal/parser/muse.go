@@ -102,9 +102,7 @@ func readMuseLog(ctx context.Context, path string, limit int) (museLog, error) {
 	if err := lr.Err(); err != nil {
 		return museLog{}, fmt.Errorf("read %s: %w", path, err)
 	}
-	if lr.skippedOversized {
-		log.malformedLines++
-	}
+	log.malformedLines += lr.SkippedLines()
 	return log, ctx.Err()
 }
 

@@ -75,7 +75,7 @@ type VersionInfo struct {
 // Bump it when a client-visible contract cannot be decoded safely by an older
 // CLI or daemon.
 const (
-	APIVersion = 15
+	APIVersion = 16
 	// KataAPIVersion is the first daemon API that serves /api/v1/kata/status.
 	KataAPIVersion = 14
 	// FrictionAPIVersion is the first daemon API that serves
@@ -165,9 +165,10 @@ type Server struct {
 	// (e.g. "/agentsview"). When set, all routes are served
 	// under this prefix and a <base href> tag is injected
 	// into the SPA's index.html.
-	basePath      string
-	idle          *IdleTracker
-	persistDaemon func() error
+	basePath                       string
+	idle                           *IdleTracker
+	persistDaemon                  func() error
+	projectIdentityBackfillFailure func() string
 
 	ingestionFreshness IngestionFreshness
 
@@ -658,6 +659,11 @@ type IngestionFreshness interface {
 // WithIngestionFreshness waits for local ingestion before archive operations.
 func WithIngestionFreshness(f IngestionFreshness) Option {
 	return func(s *Server) { s.ingestionFreshness = f }
+}
+
+// WithProjectIdentityBackfillFailure reports worker failures independently of the archive.
+func WithProjectIdentityBackfillFailure(f func() string) Option {
+	return func(s *Server) { s.projectIdentityBackfillFailure = f }
 }
 
 func WithIdleTracker(t *IdleTracker) Option {

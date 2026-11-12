@@ -156,6 +156,7 @@ func (p *gptmeProvider) parseSession(
 	}
 
 	sess := &ParsedSession{
+		MalformedLines:   lr.SkippedLines(),
 		ID:               sessionID,
 		Project:          project,
 		Machine:          machine,

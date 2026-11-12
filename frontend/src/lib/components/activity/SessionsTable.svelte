@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { formatCount } from "../../utils/format.js";
   import { errorTelemetry } from "../../utils/error-telemetry.js";
   import { formatDateTime, m } from "../../i18n/index.js";
   import type { Report } from "../../api/types.js";
@@ -86,7 +87,7 @@
 
   function fmtMinutes(v: number | null): string {
     if (v === null) return "—";
-    return Math.round(v).toLocaleString();
+    return formatCount(Math.round(v));
   }
 
   function rowModel(row: ActivitySessionRow): string {
@@ -276,7 +277,7 @@
   }
 
   .count {
-    font-size: 10px;
+    font-size: 11px;
     color: var(--text-muted);
   }
 
@@ -296,7 +297,7 @@
     border-radius: 999px;
     background: color-mix(in srgb, var(--accent-blue) 12%, transparent);
     color: var(--accent-blue);
-    font-size: 10px;
+    font-size: 11px;
     font-weight: 600;
     cursor: pointer;
     white-space: nowrap;
@@ -393,9 +394,15 @@
     z-index: 1;
   }
 
+  /* Counts, costs, and times share one tabular sans, so neighboring
+     numeric columns do not switch typefaces. */
   .col-num {
     text-align: right;
-    font-family: var(--font-mono);
+    font-variant-numeric: tabular-nums;
+  }
+
+  .col-window {
+    font-variant-numeric: tabular-nums;
   }
 
   tbody td {
@@ -419,7 +426,7 @@
     display: flex;
     align-items: center;
     gap: 6px;
-    max-width: 240px;
+    min-width: 0;
   }
 
   .session-link {
@@ -428,7 +435,11 @@
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
+    /* Titles open the session, so they carry the link ink at rest, as
+       other in-table session links do, at normal weight; underline on
+       hover or focus. */
     color: var(--accent-blue);
+    font-weight: 400;
     text-decoration: none;
   }
 
@@ -437,7 +448,7 @@
     flex-shrink: 0;
     padding: 1px 5px;
     border-radius: 999px;
-    font-size: 9px;
+    font-size: 11px;
     font-weight: 600;
     --badge-color: var(--accent-orange);
     color: var(--badge-color);
@@ -449,7 +460,8 @@
     --badge-color: var(--accent-violet);
   }
 
-  .session-link:hover {
+  .session-link:hover,
+  .session-link:focus-visible {
     text-decoration: underline;
   }
 

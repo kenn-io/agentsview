@@ -50,11 +50,15 @@ func (p *openClawProvider) parseSession(
 		return nil, nil, fmt.Errorf("reading %s: %w", path, err)
 	}
 
-	return builder.finish(
+	sess, messages, err := builder.finish(
 		ctx, path, project, machine, info,
 		openClawAgentIDFromPath(path),
 		OpenClawSessionID(filepath.Base(path)),
 	)
+	if sess != nil {
+		sess.MalformedLines += lr.SkippedLines()
+	}
+	return sess, messages, err
 }
 
 // openClawRecordBuilder contains the format decoder shared by JSONL files and
@@ -153,9 +157,6 @@ func (b *openClawRecordBuilder) consume(ctx context.Context, line string, reject
 		content := msg.Get("content")
 		text, thinkingText, dialogueText, hasThinking, hasToolUse, tcs, trs := ExtractTextContent(ctx, content)
 		text = strings.TrimSpace(text)
-		if text == "" && len(tcs) == 0 && len(trs) == 0 {
-			return nil
-		}
 		pm := ParsedMessage{
 			Ordinal:            b.ordinal,
 			Role:               RoleAssistant,
@@ -171,6 +172,12 @@ func (b *openClawRecordBuilder) consume(ctx context.Context, line string, reject
 			tokenPresenceKnown: true,
 		}
 		applyOpenClawAssistantUsage(&pm, msg)
+		if text == "" && len(tcs) == 0 && len(trs) == 0 {
+			var ok bool
+			if pm, ok = usageOnlyMessage(pm); !ok {
+				return nil
+			}
+		}
 		b.messages = append(b.messages, pm)
 		b.ordinal++
 
@@ -253,11 +260,11 @@ func (b *openClawRecordBuilder) finish(
 // cache_creation_input_tokens/cache_read_input_tokens keys that
 // internal/db/usage.go reads.
 //
-// Cost (message.usage.cost.total) is intentionally not propagated:
-// agentsview re-prices via the model_pricing table (loaded from
-// LiteLLM), so trusting the gateway's at-request cost would skew
-// totals against the canonical pricing source. The model name is
-// the load-bearing field for accurate pricing lookup.
+// The recorded cost (message.usage.cost.total) is kept as a recorded
+// cost: it prices the row only when the catalog has no rate for the
+// model, so catalog pricing stays the source for known models. OpenClaw
+// estimates it from its model rates, or stores the provider's charge and
+// marks it with cost.totalOrigin "provider-billed".
 //
 // Defensive about missing fields — older sessions may carry a model
 // without a usage block, or a usage block without cost; either is
@@ -321,6 +328,9 @@ func applyOpenClawAssistantUsage(
 	pm.HasOutputTokens = hasOutput
 	pm.ContextTokens = input + cacheRead + cacheWrite
 	pm.HasContextTokens = hasInput || hasCacheRead || hasCacheWrite
+	if cost, ok := recordedCostDollars(usage.Get("cost.total")); ok {
+		pm.SetRecordedCost(cost)
+	}
 }
 
 // extractToolResultText extracts plain text from an OpenClaw

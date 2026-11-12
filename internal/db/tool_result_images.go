@@ -7,10 +7,12 @@ import (
 	"encoding/hex"
 	"encoding/json/jsontext"
 	"encoding/json/v2"
+	"errors"
 	"fmt"
 	"io"
 	"log"
 	"mime"
+	"os"
 	"strings"
 
 	"go.kenn.io/agentsview/internal/assets"
@@ -465,6 +467,17 @@ func (w *countingWriter) Write(p []byte) (int, error) {
 	return len(p), nil
 }
 
+type limitedImageWriter struct {
+	buf   *bytes.Buffer
+	limit int64
+}
+
+func (w *limitedImageWriter) Write(p []byte) (int, error) {
+	n := min(int64(len(p)), max(0, w.limit-int64(w.buf.Len())))
+	_, _ = w.buf.Write(p[:n])
+	return len(p), nil
+}
+
 func projectToolResultImages(
 	messages []Message, policy config.ToolResultImages, assetsDir string,
 ) ([]Message, ToolImageStats) {
@@ -654,7 +667,7 @@ func RetainedToolResultImages(content string) []RetainedImage {
 			return
 		}
 		for _, raw := range blocks {
-			if image, ok := retainedImageBlock(raw, len(images)); ok {
+			if image, ok := retainedImageBlock(raw, len(images), nil); ok {
 				images = append(images, image)
 			}
 		}
@@ -664,7 +677,7 @@ func RetainedToolResultImages(content string) []RetainedImage {
 
 // retainedImageBlock reads one tool-result block as retained image evidence. A
 // placeholder left by the drop policy has no image_ref, so it has no digest.
-func retainedImageBlock(raw jsontext.Value, index int) (RetainedImage, bool) {
+func retainedImageBlock(raw jsontext.Value, index int, body io.Writer) (RetainedImage, bool) {
 	if p, ok := parseOffloadedImagePlaceholder(raw); ok {
 		digest, _, ok := assetImageDigest(p.ImageRef)
 		return RetainedImage{Index: index, MediaType: p.MediaType, Size: new(p.ByteSize), SHA256: digest}, ok && (p.Version == nil || *p.Version == 1)
@@ -673,10 +686,10 @@ func retainedImageBlock(raw jsontext.Value, index int) (RetainedImage, bool) {
 	if json.Unmarshal(raw, &p, json.MatchCaseInsensitiveNames(true)) == nil && p.Type == "agentsview_image" && p.ImageRef == "" {
 		return RetainedImage{Index: index, MediaType: p.MediaType, Size: new(p.ByteSize)}, p.MediaType != "" && p.ByteSize >= 0 && (p.Version == nil || *p.Version == 1)
 	}
-	return retainedInlineFile(raw, index)
+	return retainedInlineFile(raw, index, body)
 }
 
-func retainedInlineFile(raw jsontext.Value, index int) (RetainedImage, bool) {
+func retainedInlineFile(raw jsontext.Value, index int, body io.Writer) (RetainedImage, bool) {
 	var block struct {
 		Type     string         `json:"type"`
 		ImageURL jsontext.Value `json:"image_url"`
@@ -692,6 +705,82 @@ func retainedInlineFile(raw jsontext.Value, index int) (RetainedImage, bool) {
 		return RetainedImage{}, false
 	}
 	hash := sha256.New()
-	mediaType, size, _, ok := streamInlineData(uri, hash, block.Type == "input_image")
-	return RetainedImage{Index: index, MediaType: mediaType, Size: new(size), SHA256: hex.EncodeToString(hash.Sum(nil))}, ok
+	out := body
+	if out == nil {
+		out = hash
+	}
+	mediaType, size, _, ok := streamInlineData(uri, out, block.Type == "input_image")
+	image := RetainedImage{Index: index, MediaType: mediaType, Size: new(size)}
+	if body == nil {
+		image.SHA256 = hex.EncodeToString(hash.Sum(nil))
+	}
+	return image, ok
+}
+
+// ErrImageTooLarge identifies an image whose retained size exceeds the limit.
+var ErrImageTooLarge = errors.New("image exceeds size limit")
+
+// ReadRetainedImage reads the indexed retained image with a bounded byte limit.
+func ReadRetainedImage(content string, index int, assetsDir string, limit int64) ([]byte, error) {
+	var found jsontext.Value
+	var buf bytes.Buffer
+	count := 0
+	scanSummarySections(content, func(_, _ int, raw jsontext.Value) {
+		if found != nil {
+			return
+		}
+		var blocks []jsontext.Value
+		if json.Unmarshal(raw, &blocks) != nil {
+			return
+		}
+		for _, block := range blocks {
+			if found != nil {
+				break
+			}
+			body := io.Discard
+			if count == index {
+				buf.Reset()
+				body = &limitedImageWriter{buf: &buf, limit: limit + 1}
+			}
+			_, recognized := retainedImageBlock(block, count, body)
+			if recognized {
+				if count == index {
+					found = block
+				}
+				count++
+			}
+		}
+	})
+	if found == nil {
+		return nil, fmt.Errorf("retained image %d missing", index)
+	}
+	body := buf.Bytes()
+	if p, ok := parseOffloadedImagePlaceholder(found); ok {
+		if p.ByteSize > limit {
+			return nil, fmt.Errorf("retained image %d exceeds %d bytes: %w", index, limit, ErrImageTooLarge)
+		}
+		hash, ext, ok := assetImageDigest(p.ImageRef)
+		if !ok {
+			return nil, errors.New("invalid image reference")
+		}
+		root, err := os.OpenRoot(assetsDir)
+		if err != nil {
+			return nil, err
+		}
+		defer root.Close()
+		file, err := root.Open(hash + ext)
+		if err != nil {
+			return nil, err
+		}
+		defer file.Close()
+		if body, err = io.ReadAll(io.LimitReader(file, limit+1)); err != nil {
+			return nil, err
+		}
+	} else if int64(len(body)) > limit {
+		return nil, fmt.Errorf("retained image %d exceeds %d bytes: %w", index, limit, ErrImageTooLarge)
+	}
+	if int64(len(body)) > limit {
+		return nil, fmt.Errorf("retained image %d exceeds %d bytes", index, limit)
+	}
+	return body, nil
 }

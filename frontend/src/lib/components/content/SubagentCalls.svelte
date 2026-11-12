@@ -8,8 +8,8 @@
     DbTurnTiming as TurnTiming,
   } from "../../api/generated/index.js";
   import { formatDuration } from "../../utils/duration.js";
-  import { formatNumber } from "../../utils/format.js";
-  import { turnHasCategory } from "../../utils/timing.js";
+  import { formatCount } from "../../utils/format.js";
+  import { callsHaveTiming, turnHasCategory } from "../../utils/timing.js";
   import CallRow from "./CallRow.svelte";
   import CallGroup from "./CallGroup.svelte";
 
@@ -35,6 +35,8 @@
     /* no-op for nested rows */
   }
 
+  let showTiming = $derived(callsHaveTiming(timing));
+
   function isLastTurn(idx: number): boolean {
     return idx === timing.turns.length - 1;
   }
@@ -52,7 +54,7 @@
     <span class="sa-eh-meta">
       {m.subagent_calls_summary({
         count: timing.tool_call_count,
-        countLabel: formatNumber(timing.tool_call_count),
+        countLabel: formatCount(timing.tool_call_count),
         duration: formatDuration(timing.total_duration_ms),
         running: timing.running ? "true" : "false",
       })}
@@ -71,6 +73,7 @@
           isLive={isLive}
           liveDurationMs={liveElapsed}
           expandable={false}
+          {showTiming}
           dimmed={categoryFilter !== null &&
             call.category !== categoryFilter}
         />
@@ -81,6 +84,7 @@
           isLive={isLive}
           liveDurationMs={liveElapsed}
           expandable={false}
+          {showTiming}
           dimmed={categoryFilter !== null && !turnHasCategory(turn, categoryFilter)}
           onCallClick={() => {}}
           onSubagentExpand={noopExpand}

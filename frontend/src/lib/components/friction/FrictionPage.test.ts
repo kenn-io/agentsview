@@ -643,7 +643,7 @@ describe("FrictionPage", () => {
     friction.digest = null;
     await render();
     const text = document.body.textContent ?? "";
-    expect(text).toContain("built automatically");
+    expect(text).toContain("fills in missed days automatically");
     expect(text).toContain("require_auth");
     expect(text).not.toContain("Build now");
   });
@@ -678,6 +678,24 @@ describe("FrictionPage", () => {
     )!;
     // The date kept from an earlier visit must not replace the latest digest.
     expect(router.params["date"]).toBeUndefined();
+    retry.click();
+    expect(loadCalls).toEqual([null, null]);
+  });
+
+  it("shows a neutral notice when the backend cannot read the Friction Log", async () => {
+    sync.serverVersion = version({ friction_available: false, friction_readable: false });
+    friction.dates = [];
+    friction.selectedDate = null;
+    friction.digest = null;
+    friction.errors.dates = "the Friction Log is not available from this backend";
+    await render();
+    expect(document.querySelector('[role="alert"]')).toBeNull();
+    const notice = document.querySelector('[role="status"]')!;
+    expect(notice.textContent).toContain("Could not load the Friction Log");
+    expect(notice.textContent).toContain("not available from this backend");
+    const retry = Array.from(notice.querySelectorAll("button")).find(
+      (b) => b.textContent?.trim() === "Retry",
+    )!;
     retry.click();
     expect(loadCalls).toEqual([null, null]);
   });

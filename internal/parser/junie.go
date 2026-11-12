@@ -152,7 +152,7 @@ func parseJunieSessionWithSummary(
 	if err := lr.Err(); err != nil {
 		return nil, nil, fmt.Errorf("reading Junie session %s: %w", path, err)
 	}
-	if lr.skippedOversized {
+	if lr.SkippedLines() > 0 {
 		return nil, nil, fmt.Errorf("reading Junie session %s: record exceeds %d bytes", path, maxLineSize)
 	}
 	return state.session(

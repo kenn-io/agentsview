@@ -1,0 +1,2 @@
+{"id":0,"message":{"role":"user","content":"Explore the data folder and report its layout","providerOptions":{"providerMetadata":{"positai":{"timestamp":1735689615000}}}}}
+{"id":1,"message":{"role":"assistant","content":[{"type":"text","text":"The data folder contains one CSV file: sales.csv."}],"providerOptions":{"providerMetadata":{"positai":{"timestamp":1735689616000,"modelId":"claude-haiku-4-5","usage":{"inputTokens":40,"outputTokens":15,"totalTokens":55,"cacheReadTokens":0,"cacheWriteTokens":0}}}}}}

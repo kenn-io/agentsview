@@ -154,7 +154,11 @@ func usagePricingIdentity(rows []export.EffectivePricingRow) (string, error) {
 }
 
 func usagePricingIdentityWithDigest(digest string) string {
-	return digest + "\x00" + pricingpkg.BillingPolicyVersion() + "\x00" + usageSessionPricingIdentityVersion
+	identity := digest + "\x00" + pricingpkg.BillingPolicyVersion() + "\x00" + usageSessionPricingIdentityVersion
+	if aliases := pricingpkg.ConfiguredAliasesDigest(); aliases != "" {
+		identity += "\x00" + aliases
+	}
+	return identity
 }
 
 func writeUsageRatesHash(digest hash.Hash, rates export.ModelRates) {
@@ -925,7 +929,7 @@ func installUsageRollupRows(
 	for _, row := range build.Exceptions {
 		fact := row.Fact
 		_, err := conn.ExecContext(ctx, `INSERT INTO usage_rollup_exceptions VALUES(
-			?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+			?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 			installID, row.GroupKind, row.GroupKey, fact.CachedSessionID,
 			fact.FactIndex, fact.SourceSessionID, fact.LocalDate, fact.Fact.Source,
 			fact.Fact.MessageOrdinal, fact.Fact.TimestampMillis, fact.Fact.TimestampNanos,
@@ -935,7 +939,8 @@ func installUsageRollupRows(
 			fact.Fact.CacheCreationTokens, fact.Fact.CacheCreation1hTokens,
 			fact.Fact.CacheReadTokens,
 			fact.Fact.WebSearchRequests, fact.Fact.ReportedCostMicrodollars,
-			fact.Fact.CostSource, boolInt(fact.Fact.RequestScoped), boolInt(fact.IsHeadless),
+			fact.Fact.CostSource, fact.Fact.CostStatus,
+			boolInt(fact.Fact.RequestScoped), boolInt(fact.IsHeadless),
 			fact.Fact.ClaudeMessageID, fact.Fact.ClaudeRequestID,
 			fact.Fact.SourceUUID, fact.Fact.UsageDedupKey)
 		if err != nil {

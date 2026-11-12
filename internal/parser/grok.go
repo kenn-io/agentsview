@@ -8,6 +8,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"time"
 
@@ -109,14 +110,33 @@ func ParseGrokSummary(
 	if transcriptErr != nil && !os.IsNotExist(transcriptErr) {
 		return ParseResult{}, transcriptErr
 	}
-	timestampAnchors, timestampErr := parseGrokUpdateTimestampAnchors(
-		ctx, filepath.Join(sessionDir, "updates.jsonl"),
-	)
+	updatesPath := filepath.Join(sessionDir, "updates.jsonl")
+	updates, timestampErr := parseGrokUpdateTimestampAnchors(ctx, updatesPath)
 	if timestampErr != nil && !errors.Is(timestampErr, os.ErrNotExist) {
 		return ParseResult{}, timestampErr
 	}
-	enrichGrokMessageTimestamps(messages, timestampAnchors)
-	enrichGrokToolResultEvents(messages, timestampAnchors)
+	malformed += updates.skipped
+	enrichGrokMessageTimestamps(messages, updates.anchors)
+	enrichGrokToolResultEvents(messages, updates.anchors)
+	// Without chat_history.jsonl the turns after the last compaction are
+	// missing, so the session keeps its summary-only fallback.
+	complete := false
+	if len(messages) > 0 {
+		segments, err := parseGrokCompactedSegments(ctx, updatesPath, updates.checkpoints)
+		if err != nil {
+			return ParseResult{}, err
+		}
+		// A compacted chat_history.jsonl without updates.jsonl has lost the
+		// turns before the compaction.
+		lostHistory := timestampErr != nil && slices.ContainsFunc(messages,
+			func(msg ParsedMessage) bool { return msg.IsCompactBoundary })
+		messages, complete, err = grokAssembleTranscript(ctx, sessionDir, segments, messages)
+		if err != nil {
+			return ParseResult{}, err
+		}
+		complete = complete && !lostHistory
+	}
+	grokDropLoneStartEvents(messages)
 	grokAttachSpawnedSubagents(messages)
 
 	firstPrompt := ""
@@ -204,6 +224,11 @@ func ParseGrokSummary(
 			},
 		},
 		Messages: messages,
+		// Later records change stored rows: a result pairs onto a stored
+		// call, and a compaction renumbers rebuilt rows. A complete
+		// transcript therefore replaces the stored one. A parse missing a
+		// source file appends instead and keeps what an earlier sync stored.
+		replacesStored: complete,
 	}
 	if signals.TotalOutputTokens > 0 {
 		result.Session.TotalOutputTokens = signals.TotalOutputTokens
@@ -422,6 +447,17 @@ func parseGrokChatHistory(ctx context.Context, path string) ([]ParsedMessage, in
 			pendingThink = ""
 			hasPending = false
 			reason := strings.TrimSpace(root.Get("synthetic_reason").Str)
+			if reason == "compaction_meta" {
+				// Only the summary row marks the compaction; the injected
+				// user-info prefix and image notes are not transcript.
+				if summary, ok := grokCompactionSummary(root.Get("content")); ok {
+					boundary := grokCompactBoundary(summary, time.Time{})
+					boundary.Ordinal = ordinal
+					messages = append(messages, boundary)
+					ordinal++
+				}
+				continue
+			}
 			if reason != "" && reason != "interjection" {
 				continue
 			}
@@ -484,51 +520,23 @@ func parseGrokChatHistory(ctx context.Context, path string) ([]ParsedMessage, in
 			if content == "" && len(toolCalls) == 0 && thinking == "" {
 				continue
 			}
-			msg := ParsedMessage{
-				Ordinal:       ordinal,
-				Role:          RoleAssistant,
-				Content:       content,
-				ContentLength: len(content),
-				Model:         strings.TrimSpace(root.Get("model_id").Str),
-				ToolCalls:     toolCalls,
-				HasToolUse:    len(toolCalls) > 0,
-			}
-			if thinking != "" {
-				msg.HasThinking = true
-				msg.ThinkingText = thinking
-				msg.Content = "[Thinking]\n" + thinking + "\n[/Thinking]\n" + content
-				msg.ContentLength = len(thinking) + len(content)
-			}
+			msg := grokAssistantMessage(
+				content, thinking,
+				strings.TrimSpace(root.Get("model_id").Str), toolCalls,
+			)
+			msg.Ordinal = ordinal
 			messages = append(messages, msg)
 			ordinal++
 
 		case "tool_result":
 			pendingThink = ""
 			hasPending = false
-			toolCallID := strings.TrimSpace(root.Get("tool_call_id").Str)
-			if toolCallID == "" {
+			msg, ok := grokToolResultMessage(root)
+			if !ok {
 				continue
 			}
-			content := root.Get("content")
-			contentRaw := content.Raw
-			contentLen := toolResultContentLength(content)
-			if content.Type == gjson.String {
-				// Preserve tool output as JSON-quoted string so
-				// pairToolResults / DecodeContent can surface it.
-				quoted, _ := json.Marshal(content.Str)
-				contentRaw = string(quoted)
-				contentLen = len(content.Str)
-			}
-			messages = append(messages, ParsedMessage{
-				Ordinal:       ordinal,
-				Role:          RoleUser,
-				ContentLength: contentLen,
-				ToolResults: []ParsedToolResult{{
-					ToolUseID:     toolCallID,
-					ContentRaw:    contentRaw,
-					ContentLength: contentLen,
-				}},
-			})
+			msg.Ordinal = ordinal
+			messages = append(messages, msg)
 			ordinal++
 
 		default:
@@ -539,7 +547,35 @@ func parseGrokChatHistory(ctx context.Context, path string) ([]ParsedMessage, in
 	if err := lr.Err(); err != nil {
 		return nil, malformed, fmt.Errorf("reading %s: %w", path, err)
 	}
-	return messages, malformed, nil
+	return messages, malformed + lr.SkippedLines(), nil
+}
+
+// grokToolResultMessage turns a tool_result row into the result carrier
+// that pairing attaches to its call.
+func grokToolResultMessage(root gjson.Result) (ParsedMessage, bool) {
+	toolCallID := strings.TrimSpace(root.Get("tool_call_id").Str)
+	if toolCallID == "" {
+		return ParsedMessage{}, false
+	}
+	content := root.Get("content")
+	contentRaw := content.Raw
+	contentLen := toolResultContentLength(content)
+	if content.Type == gjson.String {
+		// Preserve tool output as JSON-quoted string so
+		// pairToolResults / DecodeContent can surface it.
+		quoted, _ := json.Marshal(content.Str)
+		contentRaw = string(quoted)
+		contentLen = len(content.Str)
+	}
+	return ParsedMessage{
+		Role:          RoleUser,
+		ContentLength: contentLen,
+		ToolResults: []ParsedToolResult{{
+			ToolUseID:     toolCallID,
+			ContentRaw:    contentRaw,
+			ContentLength: contentLen,
+		}},
+	}, true
 }
 
 type grokTimestampAnchor struct {
@@ -595,19 +631,29 @@ func (b *grokTimestampAnchorBuilder) addUserText(text string) {
 	b.content.WriteString(text)
 }
 
+// grokUpdateScan is what one pass over updates.jsonl yields: the timestamp
+// anchors for the rows chat_history.jsonl still holds, the compaction
+// checkpoints, and how many oversized records it skipped. The usage pass
+// reads the same file, so the session counts those records once, from here.
+type grokUpdateScan struct {
+	anchors     []grokTimestampAnchor
+	checkpoints []grokCheckpoint
+	skipped     int
+}
+
 func parseGrokUpdateTimestampAnchors(
 	ctx context.Context, path string,
-) ([]grokTimestampAnchor, error) {
-	var builder grokTimestampAnchorBuilder
-	_, err := readJSONLFrom(ctx, path, 0, func(line string) {
+) (grokUpdateScan, error) {
+	var (
+		builder     grokTimestampAnchorBuilder
+		checkpoints []grokCheckpoint
+	)
+	_, skipped, err := readJSONLFromCounting(ctx, path, 0, func(line string) {
 		if !gjson.Valid(line) {
 			return
 		}
 		root := gjson.Parse(line)
-		update := root.Get("params.update")
-		if !update.Exists() {
-			update = root.Get("update")
-		}
+		update := grokUpdatePayload(root)
 		if !update.Exists() {
 			return
 		}
@@ -662,11 +708,21 @@ func parseGrokUpdateTimestampAnchors(
 			}
 
 		case "compaction_checkpoint":
+			// chat_history.jsonl restarts here, so its rows match only the
+			// anchors that follow.
 			builder = grokTimestampAnchorBuilder{}
+			checkpoints = append(checkpoints, grokCheckpoint{
+				file:      update.Get("checkpoint_file").Str,
+				timestamp: timestamp,
+			})
 		}
 	})
 	builder.flush()
-	return builder.anchors, err
+	return grokUpdateScan{
+		anchors:     builder.anchors,
+		checkpoints: checkpoints,
+		skipped:     skipped,
+	}, err
 }
 
 func enrichGrokMessageTimestamps(
@@ -768,14 +824,10 @@ func grokTimestampAnchorMatches(
 	case RoleUser:
 		return message.Content == grokNormalizeUserText(anchor.content)
 	case RoleAssistant:
-		content := message.Content
-		if message.HasThinking {
-			content = strings.TrimPrefix(
-				content,
-				"[Thinking]\n"+message.ThinkingText+"\n[/Thinking]\n",
-			)
+		if message.IsCompactBoundary || message.DialogueText == nil {
+			return false
 		}
-		return content == strings.TrimSpace(anchor.content)
+		return *message.DialogueText == strings.TrimSpace(anchor.content)
 	default:
 		return false
 	}
@@ -1077,6 +1129,77 @@ func grokToolCallInputJSON(tc gjson.Result) string {
 		}
 	}
 	return ""
+}
+
+// grokAssistantMessage builds an assistant row the way the Claude parser
+// does: the visible text, then one rendered block per tool call, with the
+// streamed thinking ahead of both. DialogueText keeps only what the model
+// said, so tool blocks never read as dialogue.
+func grokAssistantMessage(
+	text, thinking, model string, calls []ParsedToolCall,
+) ParsedMessage {
+	parts := make([]string, 0, len(calls)+1)
+	if text != "" {
+		parts = append(parts, text)
+	}
+	for i := range calls {
+		calls[i].Rendering = grokToolRendering(calls[i].ToolName, calls[i].InputJSON)
+		parts = append(parts, calls[i].Rendering)
+	}
+	content := strings.Join(parts, "\n")
+	msg := ParsedMessage{
+		Role:          RoleAssistant,
+		Content:       content,
+		DialogueText:  new(text),
+		ContentLength: len(content),
+		Model:         model,
+		ToolCalls:     calls,
+		HasToolUse:    len(calls) > 0,
+	}
+	if thinking != "" {
+		msg.HasThinking = true
+		msg.ThinkingText = thinking
+		msg.Content = "[Thinking]\n" + thinking + "\n[/Thinking]\n" + content
+		msg.ContentLength = len(thinking) + len(content)
+	}
+	return msg
+}
+
+// grokToolRendering renders a Grok Build tool call with the shared tool
+// formats, mapping Grok's argument names onto them.
+func grokToolRendering(name, inputJSON string) string {
+	if name == grokStreamWebSearch && inputJSON != "" {
+		return grokToolUseRendering(name, inputJSON)
+	}
+	if rendering, ok := grokNativeToolRendering(name, inputJSON); ok {
+		return rendering
+	}
+	return formatToolUseInput(name, gjson.Parse(inputJSON))
+}
+
+// grokNativeToolRendering renders the Grok Build tools whose arguments the
+// shared formats do not read directly.
+func grokNativeToolRendering(name, inputJSON string) (string, bool) {
+	input := gjson.Parse(inputJSON)
+	switch name {
+	case "read_file":
+		return formatToolHeader("Read", firstNonEmptyJSONLString(
+			input.Get("target_file").Str, resolveFilePath(input),
+		)), true
+	case "run_terminal_command":
+		return formatToolUseInput("bash", input), true
+	case "search_replace":
+		return formatToolUseInput("str_replace", input), true
+	case "grep":
+		return formatToolUseInput("Grep", input), true
+	case "list_dir":
+		return formatToolHeader("List", input.Get("target_directory").Str), true
+	case "web_fetch":
+		return formatToolUseInput("read_web_page", input), true
+	case "todo_write":
+		return formatToolUseInput("TodoWrite", input), true
+	}
+	return "", false
 }
 
 // grokSummaryMessageCount prefers the chat-transcript count over the broader

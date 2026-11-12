@@ -11,9 +11,11 @@ import (
 	"unsafe"
 
 	"github.com/jackc/pgx/v5"
+
 	"go.kenn.io/agentsview/internal/activity"
 	"go.kenn.io/agentsview/internal/db"
 	"go.kenn.io/agentsview/internal/stringutil"
+	"go.kenn.io/agentsview/internal/usagefacts"
 )
 
 // A report owns its maps and slices. Published inputs are immutable; builders
@@ -44,6 +46,9 @@ type pgActivityUsageRow struct {
 	input, output, cacheCreate, cacheRead, reasoning            int64
 	ordinal, cacheCreate1h                                      int32
 	ordinalValid, costValid, copilotReported, pricingTimeAbsent bool
+	// costRecorded marks a harness-recorded cost, which prices the row only
+	// when the catalog cannot (see db.ReportedCostForPricing).
+	costRecorded bool
 }
 
 func pgCompactActivityUsage(r pgDailyUsageScanRow, handle func(string) unique.Handle[string]) pgActivityUsageRow {
@@ -57,6 +62,7 @@ func pgCompactActivityUsage(r pgDailyUsageScanRow, handle func(string) unique.Ha
 		input: int64(input), output: int64(output), cacheCreate: int64(create), cacheRead: int64(read), reasoning: int64(reasoning),
 		ordinal: int32(r.messageOrdinal.Int64), cacheCreate1h: int32(pgUsageRowCacheCreation1hTokens(r.usageSource, r.tokenJSON, create)), webSearches: int64(pgUsageRowWebSearchRequests(r.usageSource, r.tokenJSON)),
 		ordinalValid: r.messageOrdinal.Valid, costValid: r.cost.Valid, copilotReported: r.costSource == db.CopilotReportedCostSource, pricingTimeAbsent: !r.pricingTS.Valid,
+		costRecorded: r.costStatus == usagefacts.CostStatusRecorded,
 	}
 }
 
@@ -186,11 +192,14 @@ func (s *Store) activityReportRuns(
 		}
 	}
 	if len(missing) > 0 {
-		var counted []pgActivityCountedMessage
 		all := pgActivityAllTime
 		all.GapCapSeconds = q.GapCapSeconds
-		derived, err := activity.DeriveSessionRuns(ctx, missing, q.GapCapSeconds,
-			s.activityReportCandidateSourceWithCounts(missing, all, &counted))
+		terminal, pairs, counted, err := s.readActivityCandidates(ctx, missing, all, true)
+		if err != nil {
+			return nil, err
+		}
+		derived, err := activity.DeriveSessionRunsInParallel(ctx, missing, q.GapCapSeconds,
+			activity.GroupSessionCandidates(missing, pairs, terminal))
 		if err != nil {
 			return nil, err
 		}
@@ -334,4 +343,42 @@ func (s *Store) activityUsageInputs(ctx context.Context, ids []string, lower, up
 	inputs.candidates = selected
 	inputs.changed = nil
 	return merged, nil
+}
+
+// activityMessageSliceSessions is the fewest sessions worth a message read
+// of their own; see readActivityCandidates.
+const activityMessageSliceSessions = 4096
+
+// activityMessageSlices caps the message reads one pairing runs at once.
+// The terminal read and the report's usage read run beside them on the
+// pool of 5 connections, which leaves one for other requests.
+const activityMessageSlices = 2
+
+// readActivityMessagePairs pairs the messages of the sessions in ids, one
+// session at a time, so each session's pairs sit together in the result.
+// With withCounts, it also returns each counted message from the range
+// start to the effective end.
+func (s *Store) readActivityMessagePairs(
+	ctx context.Context, ids []string, q activity.Query, withCounts bool,
+) ([]activity.IntervalCandidate, []pgActivityCountedMessage, error) {
+	lower := q.RangeStart.Add(-time.Duration(q.GapCapSeconds) * time.Second)
+	// pgx truncates SQL timestamp bounds to microseconds.
+	lowerMicro, upperMicro := lower.UnixMicro(), q.EffectiveEnd.UnixMicro()
+	countLowerMicro := q.RangeStart.UnixMicro()
+	var pairs []activity.IntervalCandidate
+	var counted []pgActivityCountedMessage
+	err := s.activityTranscriptSource(ctx, ids, func(id string, session []activity.TranscriptMessage) {
+		for i := range session {
+			us := session[i].At.UnixMicro()
+			if withCounts && session[i].Counted && us >= countLowerMicro && us < upperMicro {
+				counted = append(counted, pgActivityCountedMessage{id, us, session[i].Role == "user"})
+			}
+			session[i].Starts = us >= lowerMicro && us < upperMicro
+		}
+		pairs = activity.AppendTranscriptPairs(pairs, id, session)
+	})
+	if err != nil {
+		return nil, nil, err
+	}
+	return pairs, counted, nil
 }

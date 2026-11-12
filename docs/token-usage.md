@@ -513,6 +513,44 @@ fetched and embedded catalogs. Processing variants such as Batch, Flex,
 regional, Ultrafast, and one-hour cache pricing are not inferred when the stored
 usage does not identify that service tier. Codex Fast is the exception; see below.
 
+### Costs the Agent Records Itself
+
+Some agents compute a cost from their own price table and write it into the
+session. AgentsView keeps that figure as a recorded cost, but uses it as the
+price only when its own catalog has no rate for the model. When the catalog can
+price the model, the catalog price is used and the recorded cost is kept for
+comparison. A recorded cost of $0 never prices a row, because agents write $0
+for models they have no rate for; those rows stay unpriced.
+
+AgentsView keeps recorded costs from Pi and the agents built on it, OpenClaw,
+QClaw, Shelley, fx, and OpenCode, Kilo, and MiMo Code. For the OpenCode family
+it sums the cost of each model request in a message. Some of these figures are
+what a provider or gateway billed rather than an estimate; they follow the same
+rule. fx costs are kept only when fx has a billing record for every request.
+Existing sessions from these agents are re-read once after upgrading.
+
+`agentsview session usage <id>` compares the two: an `Agent cost:` line, and a
+`recorded_cost` object in JSON, show what the agent recorded next to what
+AgentsView charged for the same rows. A large gap usually means the agent
+used different rates, or that the transcript is missing calls the agent
+billed.
+
+Claude Code also writes a running total for each session: its own cost
+estimate and token counts per model, including subagents and side calls such
+as title generation that never reach the transcript. AgentsView keeps the last
+one and shows it as an `Agent total:` line and a `session_total` object. It is
+never added to usage totals, because it overlaps the per-call rows. Compare
+it with a report that includes subagents, which is the default. Expect it to
+run slightly above AgentsView's figure in short sessions, where the title call
+is a larger share of the work.
+
+Costs that an agent or provider reports as billed keep their existing
+treatment: the reported cost is the price.
+
+A usage record that carries a cost but names no model is counted under the
+`<unknown>` model, the same label Cursor account imports use. Its cost and
+tokens appear in totals and breakdowns instead of being dropped.
+
 ### Anthropic Web Search Fee
 
 Anthropic charges a flat
@@ -563,16 +601,31 @@ output_microdollars_per_mtok = 800_000
 | `cache_creation_microdollars_per_mtok`    | Integer microdollars per million cache-creation tokens (optional)                                                                                           |
 | `cache_creation_1h_microdollars_per_mtok` | Integer microdollars per million 1-hour-TTL cache-creation tokens (optional; when omitted or `0`, 1h writes bill at `cache_creation_microdollars_per_mtok`) |
 | `cache_read_microdollars_per_mtok`        | Integer microdollars per million cache-read tokens (optional)                                                                                               |
+| `price_as`                                | Target model whose rates and tiers this name uses; excludes rate fields                                                                                    |
 
 The table key is the model name as it appears in your session data (match the
 string the agent itself writes, dots and all — quote the key if it contains
 special characters). Custom rates take precedence over LiteLLM, OpenRouter, and
 the embedded fallback, and apply to the Usage dashboard, the `agentsview report usage`
-CLI, and `pg serve` alike. A custom entry replaces the full rate row for that
-model, so omitted fields are treated as zero rather than falling through to
-another catalog. A custom row is flat and suppresses any fetched request bands
-for that model. Models without a custom entry continue to resolve through the
-stored catalog.
+CLI, and `pg serve` alike. An entry with explicit rates replaces the full rate
+row for that model, so omitted fields are treated as zero rather than falling
+through to another catalog. Explicit rates are flat and suppress fetched
+request bands for that model. Models without a custom entry continue to resolve
+through the stored catalog.
+
+To use a catalog model's rates and later updates for a deployment name:
+
+```toml
+[custom_model_pricing."gateway-deployment"]
+price_as = "gpt-6-sol"
+```
+
+A bare key also matches a provider-prefixed name; a key containing `/` matches
+only that exact name. An exact custom rate takes precedence. Each entry selects
+its target once, then uses the target's pricing ladder, including any custom rate.
+Unknown targets remain unpriced. Empty rate tables set all rates to zero.
+Restart after changing mappings, and use the same configuration on machines
+that share a mirror.
 
 ### Model aliases
 

@@ -15,6 +15,7 @@ import (
 	"strings"
 
 	_ "github.com/mattn/go-sqlite3"
+	"github.com/tidwall/gjson"
 )
 
 const (
@@ -94,6 +95,7 @@ type shelleyUsage struct {
 	CacheCreationInputTokens jsontext.Value `json:"cache_creation_input_tokens"`
 	CacheReadInputTokens     jsontext.Value `json:"cache_read_input_tokens"`
 	OutputTokens             jsontext.Value `json:"output_tokens"`
+	CostUSD                  jsontext.Value `json:"cost_usd"`
 	Model                    string         `json:"model"`
 }
 
@@ -411,7 +413,7 @@ func parseShelleyConversationFromDB(ctx context.Context,
 	if err != nil {
 		return nil, err
 	}
-	messages, fingerprint, err := loadShelleyMessages(ctx, conn, conv)
+	messages, fingerprint, malformed, err := loadShelleyMessages(ctx, conn, conv)
 	if err != nil {
 		return nil, err
 	}
@@ -421,6 +423,7 @@ func parseShelleyConversationFromDB(ctx context.Context,
 	if !ok {
 		return nil, nil
 	}
+	result.Session.MalformedLines = malformed
 	return &result, nil
 }
 
@@ -468,9 +471,11 @@ type shelleyMessageRow struct {
 	createdAt  string
 }
 
+// loadShelleyMessages also returns how many rows carried data that did not
+// decode, so the session reports the content or usage it could not read.
 func loadShelleyMessages(ctx context.Context,
 	conn *sql.DB, conv shelleyConversationRow,
-) ([]ParsedMessage, string, error) {
+) ([]ParsedMessage, string, int, error) {
 	// All generations are included, ordered by sequence_id. A generation
 	// bump is a context-reset/compaction boundary within the conversation
 	// (e.g. distillation); older-generation rows remain as real history
@@ -486,13 +491,14 @@ func loadShelleyMessages(ctx context.Context,
 		conv.conversationID,
 	)
 	if err != nil {
-		return nil, "", fmt.Errorf(
+		return nil, "", 0, fmt.Errorf(
 			"listing shelley messages for %s: %w", conv.conversationID, err,
 		)
 	}
 	defer rows.Close()
 
 	var messages []ParsedMessage
+	malformed := 0
 	h := fnv.New64a()
 	shelleyDigestConversation(h, conv)
 	for rows.Next() {
@@ -501,26 +507,33 @@ func loadShelleyMessages(ctx context.Context,
 			&r.sequenceID, &r.msgType, &r.llmData,
 			&r.userData, &r.usageData, &r.createdAt,
 		); err != nil {
-			return nil, "", fmt.Errorf("scanning shelley message: %w", err)
+			return nil, "", 0, fmt.Errorf("scanning shelley message: %w", err)
 		}
 		// Digest every parser-observed row field (even for rows
 		// decodeShelleyMessage drops) in sequence_id order, exactly as
 		// ListShelleyConversationMetas does, so the stored fingerprint
 		// matches the meta skip query; a mismatch would re-parse forever.
 		shelleyDigestMessage(h, r)
-		if msg, ok := decodeShelleyMessage(r, conv.model); ok {
+		msg, ok, rowMalformed := decodeShelleyMessage(r, conv.model)
+		if rowMalformed {
+			malformed++
+		}
+		if ok {
 			messages = append(messages, msg)
 		}
 	}
 	if err := rows.Err(); err != nil {
-		return nil, "", err
+		return nil, "", 0, err
 	}
-	return messages, shelleyFingerprint(h), nil
+	return messages, shelleyFingerprint(h), malformed, nil
 }
 
+// decodeShelleyMessage reports malformed when the row's llm_data or
+// usage_data, or the user_data it falls back to, does not decode. The row may
+// still yield a message from its other fields.
 func decodeShelleyMessage(
 	r shelleyMessageRow, convModel string,
-) (ParsedMessage, bool) {
+) (msg ParsedMessage, ok bool, malformed bool) {
 	var role RoleType
 	isSystem := false
 	switch r.msgType {
@@ -542,9 +555,11 @@ func decodeShelleyMessage(
 	)
 
 	if r.llmData != "" {
-		var msg shelleyLLMMessage
-		if err := json.Unmarshal([]byte(r.llmData), &msg); err == nil {
-			for _, c := range msg.Content {
+		var llm shelleyLLMMessage
+		if err := json.Unmarshal([]byte(r.llmData), &llm); err != nil {
+			malformed = true
+		} else {
+			for _, c := range llm.Content {
 				switch c.Type {
 				case shelleyContentText:
 					if c.Text != "" {
@@ -588,9 +603,12 @@ func decodeShelleyMessage(
 	// User-typed text may live only in user_data for some message types.
 	if content == "" && len(toolCalls) == 0 && len(toolResults) == 0 {
 		content = shelleyUserDataText(r.userData)
+		if r.userData != "" && !jsontext.Value(r.userData).IsValid() {
+			malformed = true
+		}
 	}
 
-	msg := ParsedMessage{
+	msg = ParsedMessage{
 		Ordinal:       int(r.sequenceID),
 		Role:          role,
 		Content:       content,
@@ -609,16 +627,19 @@ func decodeShelleyMessage(
 	// as type="error"), and applyShelleyUsage no-ops on the all-zero
 	// usage blobs Shelley writes for user/tool messages.
 	if r.usageData != "" {
-		applyShelleyUsage(&msg, r.usageData, convModel)
+		if applyShelleyUsage(&msg, r.usageData, convModel) != nil {
+			malformed = true
+		}
 	}
 	if content == "" && thinking == "" &&
 		len(toolCalls) == 0 && len(toolResults) == 0 {
-		if !msg.HasContextTokens && !msg.HasOutputTokens {
-			return ParsedMessage{}, false
+		if _, charged := msg.RecordedCost(); !msg.HasContextTokens &&
+			!msg.HasOutputTokens && !charged {
+			return ParsedMessage{}, false, malformed
 		}
 		msg.IsSystem = true
 	}
-	return msg, true
+	return msg, true, malformed
 }
 
 // shelleyToolInput returns the raw tool input JSON, normalizing the
@@ -683,32 +704,37 @@ func shelleyUserDataText(userData string) string {
 	return ""
 }
 
-func applyShelleyUsage(msg *ParsedMessage, usageData, convModel string) {
+// applyShelleyUsage returns the decode error when usageData does not fit the
+// usage shape, so the caller can count the row as malformed.
+func applyShelleyUsage(msg *ParsedMessage, usageData, convModel string) error {
 	var u shelleyUsage
 	if err := json.Unmarshal([]byte(usageData), &u); err != nil {
-		return
+		return err
 	}
 	context := shelleyTokenCount(u.InputTokens) +
 		shelleyTokenCount(u.CacheCreationInputTokens) +
 		shelleyTokenCount(u.CacheReadInputTokens)
 	output := shelleyTokenCount(u.OutputTokens)
 
+	// cost_usd is the exe.dev gateway's Exedev-Gateway-Cost header, or 0
+	// when the header was missing. It is kept as a recorded cost, which
+	// prices the message only when the catalog has no rate for its model.
+	cost, hasCost := recordedCostDollars(gjson.ParseBytes(u.CostUSD))
+
 	// Shelley writes an all-zero usage blob on user/tool rows; skip those
 	// so they do not produce spurious token-presence flags or empty
-	// token_usage rows in the cost UNION.
-	if context == 0 && output == 0 {
-		return
+	// token_usage rows in the cost UNION. A charged row without token
+	// counts still keeps its cost.
+	if context == 0 && output == 0 && (!hasCost || cost.Microdollars == 0) {
+		return nil
 	}
 
 	// The usage_data keys are already the AgentsView canonical names, so
 	// the raw blob is stored verbatim for catalog cost pricing.
-	//
-	// usage_data also carries an exact gateway cost_usd. It is not yet
-	// surfaced: capturing it cleanly (without double-counting cost
-	// against the catalog-priced per-message tokens) needs a dedicated
-	// usage-event path and is left as a follow-up. Standard gateway
-	// models are priced correctly by the catalog today.
 	msg.TokenUsage = jsontext.Value(usageData)
+	if hasCost {
+		msg.SetRecordedCost(cost)
+	}
 	msg.ContextTokens = context
 	msg.OutputTokens = output
 	msg.HasContextTokens = context > 0
@@ -722,6 +748,7 @@ func applyShelleyUsage(msg *ParsedMessage, usageData, convModel string) {
 	if model != "" {
 		msg.Model = model
 	}
+	return nil
 }
 
 // shelleyTokenCount tolerantly decodes a token count, mapping

@@ -23,11 +23,14 @@ func TestCodexDialogueExcludesStructuredPayloads(t *testing.T) {
 	session, messages := runCodexParserTest(t, "dialogue.jsonl", transcript, false)
 	require.NotNil(t, session)
 	assert.Equal(t, "codex:dialogue", session.ID)
-	require.Len(t, messages, 4)
-	for i, want := range []string{"Explain literal [Tool: Read] and <thinking> markers", "I am checking the parser.", "", "The markers are ordinary text."} {
+	require.Len(t, messages, 5)
+	for i, want := range []string{"Explain literal [Tool: Read] and <thinking> markers", "", "I am checking the parser.", "", "The markers are ordinary text."} {
 		require.NotNil(t, messages[i].DialogueText, "message %d must carry its classification", i)
 		assert.Equal(t, want, *messages[i].DialogueText)
 	}
+	// Reasoning is kept as thinking, outside the dialogue projection.
+	assert.True(t, messages[1].HasThinking)
+	assert.Equal(t, "EXCLUDED reasoning", messages[1].ThinkingText)
 }
 
 func TestStructuredParsersRetainDialogueProjection(t *testing.T) {

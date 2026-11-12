@@ -396,7 +396,7 @@ describe("ToolSequencesPanel", () => {
     await openCall(0);
 
     const text = document.body.textContent ?? "";
-    expect(text).toContain("The retained 4,096 bytes of result text are unavailable here.");
+    expect(text).toContain("The retained 4.1K bytes of result text are unavailable here.");
     expect(text).not.toContain("Full result is in message");
     expect(text).not.toContain("Preview shows");
     unmount(component);

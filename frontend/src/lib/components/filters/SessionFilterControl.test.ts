@@ -4,7 +4,8 @@ import { flushSync, mount, unmount } from "svelte";
 import { fireEvent, screen } from "@testing-library/svelte";
 import SessionFilterControl from "./SessionFilterControl.svelte";
 import SessionActiveFilters from "./SessionActiveFilters.svelte";
-import { sessions, filtersToParams } from "../../stores/sessions.svelte.js";
+import { sessions } from "../../stores/sessions.svelte.js";
+import { filtersToParams } from "../../stores/sessionFilters.js";
 import { ApiError } from "../../api/runtime.js";
 import { MetadataService } from "../../api/generated/index.js";
 

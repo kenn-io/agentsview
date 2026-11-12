@@ -36,8 +36,9 @@
 </script>
 
 {#if inSessionSearch.isOpen}
-  <div class="session-find" bind:this={root} use:ownAnnouncements use:protectFindInput={inSessionSearch}>
+  <div class="session-find" class:has-find={inSessionSearch.isActive} bind:this={root} use:ownAnnouncements use:protectFindInput={inSessionSearch}>
     <div class="find-controls">
+      <div class="find-field">
       <div class="find-input">
         <FindBar bind:query={inSessionSearch.query} matchCount={inSessionSearch.total}
           currentIndex={inSessionSearch.currentIndex}
@@ -49,6 +50,7 @@
           ariaLabel={m.session_find_find_in_session()} inputAriaLabel={m.session_find_search_query()}
           previousLabel={m.session_find_previous_match()} nextLabel={m.session_find_next_match()} closeLabel={m.session_find_close()} />
       </div>
+      <span class="find-divider" aria-hidden="true"></span>
       <IconButton ariaLabel={m.session_find_whole_word()}
         ariaPressed={inSessionSearch.wholeWord} onclick={() => inSessionSearch.toggleWholeWord()}>
         <WholeWordIcon size={16} aria-hidden="true" />
@@ -60,6 +62,7 @@
           <path d="M5 3h9M5 8h9M5 13h9M1 3h1M1 8h1M1 13h1" />
         </svg>
       </IconButton>
+      </div>
     </div>
     {#if inSessionSearch.historyError && !inSessionSearch.loadingHistory}
       <div class="history-status">
@@ -78,8 +81,70 @@
 {/if}
 
 <style>
-  .session-find { flex: 0 0 auto; min-width: 0; }
-  .find-controls { display: flex; align-items: center; gap: 4px; padding-inline-end: 8px; }
+  /* The band spans the pane, but the field and its buttons sit on the
+     transcript's shared reading column (MessageList .virtual-row). On a
+     narrow pane an active find reserves up to 12px for the overview rail,
+     which shifts that column; wide panes keep it centered
+     (SessionFindView .has-find uses the same clamp). */
+  .session-find {
+    --find-rail: 0px;
+    --find-side: max(12px, calc((100% - var(--reading-column) - var(--find-rail)) / 2));
+    flex: 0 0 auto;
+    min-width: 0;
+  }
+  .session-find.has-find { --find-rail: clamp(0px, calc(var(--reading-column) + 44px - 100%), 12px); }
+  .find-controls {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    padding-inline-start: var(--find-side);
+    padding-inline-end: calc(var(--find-side) + var(--find-rail));
+  }
+  .find-controls { padding-block: 6px 4px; }
   .find-input { flex: 1; min-width: 0; }
-  .history-status { display: flex; align-items: center; gap: 8px; padding: 2px 12px 6px; font-size: 11px; color: var(--text-muted); }
+  /* One contained field on the reading column: the query, counter, close,
+     and the whole-word and results toggles share a single border, so the
+     bar reads as one control. kit-ui's pinned strip drops its own
+     underline and surface inside it. */
+  .find-field {
+    display: flex;
+    align-items: center;
+    gap: 2px;
+    flex: 1;
+    min-width: 0;
+    padding-inline-end: 4px;
+    border: 1px solid var(--border-default);
+    border-radius: var(--radius-md, 6px);
+    background: var(--bg-surface);
+  }
+  .find-field:focus-within { border-color: var(--accent-blue); }
+  .find-field:has(:global(.kit-find-bar--no-results)):focus-within { border-color: var(--accent-red); }
+  .find-input :global(.kit-find-bar--pinned),
+  .find-input :global(.kit-find-bar--pinned:focus-within) {
+    border: none;
+    border-radius: var(--radius-md, 6px);
+    background: transparent;
+  }
+  .find-divider {
+    flex: none;
+    width: 1px;
+    height: 16px;
+    margin-inline: 2px;
+    background: var(--border-muted);
+  }
+  .find-input :global(.kit-find-bar__counter) { color: var(--text-secondary); }
+  /* Narrow panes: kit-ui's pinned bar reserves a 72px counter and roomy
+     gaps, which left no room for the query and pushed close over the
+     toggles. Drop the leading icon, size the counter to its text, and
+     tighten gaps and gutters so the query keeps usable width. */
+  .session-find { container-type: inline-size; }
+  @container (max-width: 340px) {
+    .find-controls { padding-inline: 8px calc(8px + var(--find-rail)); }
+    .find-input :global(.kit-find-bar.kit-find-bar--pinned) { gap: 2px; padding-inline: 6px 2px; }
+    .find-input :global(.kit-find-bar .kit-find-bar__icon) { display: none; }
+    .find-input :global(.kit-find-bar .kit-find-bar__counter) { min-width: 0; }
+    .find-input :global(.kit-find-bar .kit-find-bar__nav) { gap: 0; }
+    .find-divider { margin-inline: 1px; }
+  }
+  .history-status { display: flex; align-items: center; gap: 8px; padding: 2px calc(var(--find-side) + var(--find-rail)) 6px var(--find-side); font-size: 11px; color: var(--text-muted); }
 </style>

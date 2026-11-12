@@ -140,6 +140,7 @@ func parseOpenCodeReviewFile(
 		state.truncated = true
 		state.malformed--
 	}
+	state.malformed += reader.SkippedLines()
 	if !state.started {
 		return nil, nil
 	}

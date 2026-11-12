@@ -104,6 +104,13 @@ type WatcherOptions struct {
 	OnCoverageDegraded func([]string) error
 	OnPollingRequired  func(PollingObligation) error
 	OnPollingReleased  func(string) error
+	// OnNativeEventsLost runs when a native stream lost events for one root
+	// and that root is about to be reconciled on its own. A dropped
+	// notification can hide a change that stat freshness cannot see, so the
+	// consumer revokes freshness trust that only watcher events can revoke.
+	// It runs on the backend's control worker, never on a native callback,
+	// before the reconciliation is queued, and must return promptly.
+	OnNativeEventsLost func()
 	// MinIntervalOverride, when set, can shorten the minimum interval
 	// between callbacks while the watcher runs.
 	MinIntervalOverride *IntervalOverride
@@ -887,6 +894,9 @@ func newWatcherWithBackendOptions(
 		ownership.bindPollingOwnership(
 			options.OnPollingRequired, options.OnPollingReleased,
 		)
+	}
+	if loss, ok := backend.(nativeEventLossBackend); ok {
+		loss.bindNativeEventsLost(options.OnNativeEventsLost)
 	}
 	return w, nil
 }

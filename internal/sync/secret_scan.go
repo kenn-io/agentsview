@@ -1,6 +1,9 @@
 package sync
 
 import (
+	"context"
+	"errors"
+	"log"
 	"sync/atomic"
 
 	"go.kenn.io/agentsview/internal/db"
@@ -149,4 +152,128 @@ func (e *Engine) computeFullSignalsAndSecretsForStorage(
 		)
 	}
 	return computeFullSignalsAndSecrets(s, msgs, failures)
+}
+
+const scanProgressInterval = 50
+
+// SecretScanInput parameterises ScanSecrets.
+type SecretScanInput struct {
+	Backfill bool
+	Project  string
+	Agent    string
+	DateFrom string
+	DateTo   string
+}
+
+// SecretScanProgress is one progress tick.
+type SecretScanProgress struct {
+	Scanned int `json:"scanned"`
+	Total   int `json:"total"`
+}
+
+// SecretScanSummary is the final result of a scan.
+type SecretScanSummary struct {
+	Scanned int `json:"scanned"`
+	// WithSecrets counts sessions with ≥1 definite finding. It does NOT
+	// include sessions whose findings are all candidate-tier; the
+	// presence of those is implied by CandidateFindings > 0 when
+	// DefiniteFindings is 0.
+	WithSecrets       int `json:"with_secrets"`
+	TotalFindings     int `json:"total_findings"`
+	DefiniteFindings  int `json:"definite_findings"`
+	CandidateFindings int `json:"candidate_findings"`
+}
+
+// ScanSecrets scans candidate sessions and persists their findings, invoking
+// progress periodically. Resumable: each scanned session records the current
+// rules version, so an interrupted backfill resumes by skipping sessions
+// already at that version.
+func (e *Engine) ScanSecrets(
+	ctx context.Context, in SecretScanInput,
+	progress func(SecretScanProgress),
+) (SecretScanSummary, error) {
+	if e.refuseWriteInForceParse("ScanSecrets") {
+		return SecretScanSummary{}, errors.New(
+			"ScanSecrets refused on report-only parse-diff engine",
+		)
+	}
+	ver := secrets.RulesVersion()
+	ids, err := e.db.SecretScanCandidates(ctx, db.SecretScanCandidateFilter{
+		CurrentVersion: ver, OnlyStale: in.Backfill,
+		Project: in.Project, Agent: in.Agent,
+		DateFrom: in.DateFrom, DateTo: in.DateTo,
+	})
+	if err != nil {
+		return SecretScanSummary{}, err
+	}
+	var sum SecretScanSummary
+	total := len(ids)
+	for i, id := range ids {
+		if ctx.Err() != nil {
+			return sum, ctx.Err()
+		}
+		nf, leak, ok := e.scanOneSession(ctx, id, ver)
+		if ok {
+			sum.Scanned++
+			sum.TotalFindings += nf
+			sum.DefiniteFindings += leak
+			sum.CandidateFindings += nf - leak
+			if leak > 0 {
+				sum.WithSecrets++
+			}
+		}
+		// A cancellation during the scan must end the run with an error,
+		// not a partial success. This covers both a failed scan and a
+		// successful final session whose context was canceled mid-scan,
+		// since scanOneSession does CPU work and a non-context-aware
+		// persist after its context-aware reads. That session is already
+		// counted above: its findings are committed, and callers use the
+		// summary to decide whether session eligibility changed.
+		if ctx.Err() != nil {
+			return sum, ctx.Err()
+		}
+		if !ok {
+			continue
+		}
+		if progress != nil && scanShouldReport(i, total) {
+			progress(SecretScanProgress{Scanned: sum.Scanned, Total: total})
+		}
+	}
+	return sum, nil
+}
+
+// scanOneSession scans one session and persists its findings at ver. Returns
+// the finding count, the definite-leak count, and ok=false when the session
+// could not be loaded or persisted (skipped, not fatal to the whole run).
+//
+// Holds syncMu so the read/compute/write path is atomic against a concurrent
+// sync replacing this session's messages: otherwise a sync could write fresh
+// findings for new messages and then have this scan overwrite them with
+// results from a stale snapshot while marking the session current. The lock is
+// taken per session, not for the whole scan, so a long backfill does not stall
+// the file watcher and periodic sync.
+func (e *Engine) scanOneSession(
+	ctx context.Context, id, ver string,
+) (int, int, bool) {
+	e.syncMu.Lock()
+	defer e.syncMu.Unlock()
+	sess, err := e.db.GetSessionFull(ctx, id)
+	if err != nil || sess == nil {
+		return 0, 0, false
+	}
+	msgs, err := e.db.GetAllMessages(ctx, id)
+	if err != nil {
+		return 0, 0, false
+	}
+	projectedSession, msgs := e.db.ProjectSessionForStorage(*sess, msgs)
+	findings, leak := scanSecretsFromMessages(projectedSession, msgs, secrets.Scan)
+	if err := e.db.ReplaceSessionSecretFindings(ctx, id, findings, leak, ver); err != nil {
+		log.Printf("secrets scan: persist %s: %v", id, err)
+		return 0, 0, false
+	}
+	return len(findings), leak, true
+}
+
+func scanShouldReport(i, total int) bool {
+	return (i+1)%scanProgressInterval == 0 || i+1 == total
 }

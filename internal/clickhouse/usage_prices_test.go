@@ -138,6 +138,20 @@ func TestUsagePricingDigestCoversOnlyRegisteredModels(t *testing.T) {
 	}
 }
 
+func TestUsagePricingDigestConfiguredAliases(t *testing.T) {
+	t.Cleanup(func() { pricingpkg.SetConfiguredAliases(nil) })
+	rows := usagePriceTestRows("1", time.Time{})
+	model := chUsagePriceModel{model: "deployment", priceModel: "deployment"}
+	before := usagePriceTestDigest(t, rows, model)
+	pricingpkg.SetConfiguredAliases(map[string]string{"deployment": "tier-test"})
+	mapped := usagePriceTestDigest(t, rows, model)
+	assert.NotEqual(t, before, mapped)
+	pricingpkg.SetConfiguredAliases(map[string]string{"deployment": "tier-test", "unrelated": "other"})
+	assert.Equal(t, mapped, usagePriceTestDigest(t, rows, model))
+	pricingpkg.SetConfiguredAliases(nil)
+	assert.Equal(t, before, usagePriceTestDigest(t, rows, model))
+}
+
 // A new row can take over a registered model's resolution without touching
 // the row it resolved to before.
 func TestUsagePricingDigestFollowsResolutionToNewRow(t *testing.T) {

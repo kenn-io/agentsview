@@ -2628,6 +2628,54 @@ output = 15.0
 	assert.Contains(t, err.Error(), "input_microdollars_per_mtok")
 }
 
+func TestLoadFile_CustomModelPricingPriceAs(t *testing.T) {
+	f := newConfigFixture(t)
+	f.WriteConfigText(t, `[custom_model_pricing.empty]
+
+[custom_model_pricing.fetched-alias]
+price_as = "new-catalog-model"
+
+[custom_model_pricing.qualified-deployment]
+price_as = "provider/gpt-6-sol"
+[custom_model_pricing."gpt-6-sol"]
+price_as = "gpt-5.6-luna"
+
+[custom_model_pricing.self]
+price_as = "self"
+`)
+
+	cfg := f.LoadMinimal(t)
+	assert.Equal(t, map[string]string{
+		"fetched-alias":        "new-catalog-model",
+		"qualified-deployment": "provider/gpt-6-sol",
+		"gpt-6-sol":            "gpt-5.6-luna",
+		"self":                 "self",
+	}, PricingAliases(cfg.CustomModelPricing))
+}
+
+func TestLoadFileRejectsInvalidCustomModelPricingPriceAs(t *testing.T) {
+	tests := []struct {
+		name, config, want string
+	}{
+		{"both", `[custom_model_pricing.alias]
+price_as = "gpt-6-sol"
+input_microdollars_per_mtok = 0
+`, `custom_model_pricing."alias": price_as cannot be combined with rate fields`},
+		{"empty target", `[custom_model_pricing.alias]
+price_as = ""
+`, `price_as must not be empty`},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			f := newConfigFixture(t)
+			f.WriteConfigText(t, tt.config)
+			err := f.LoadMinimalErr(t)
+			require.Error(t, err)
+			assert.Contains(t, err.Error(), tt.want)
+		})
+	}
+}
+
 func TestLoadFile_RemoteHosts(t *testing.T) {
 	f := newConfigFixture(t)
 	f.WriteConfigText(t, `[[remote_hosts]]

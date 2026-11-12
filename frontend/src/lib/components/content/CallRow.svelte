@@ -15,6 +15,9 @@
     isSubagentExpanded?: boolean;
     expandable?: boolean;
     dimmed?: boolean;
+    /** False when no call in the list has timing: the row drops its bar
+     *  and duration columns. */
+    showTiming?: boolean;
     onClick?: () => void;
     onChevronClick?: () => void;
   }
@@ -28,6 +31,7 @@
     isSubagentExpanded = false,
     expandable = true,
     dimmed = false,
+    showTiming = true,
     onClick,
     onChevronClick,
   }: Props = $props();
@@ -41,7 +45,8 @@
         duration: formatDuration(liveDurationMs ?? call.duration_ms ?? 0),
       });
     }
-    return call.duration_ms != null ? formatDuration(call.duration_ms) : m.shared_unknown();
+    // A missing duration shows nothing rather than a placeholder.
+    return call.duration_ms != null ? formatDuration(call.duration_ms) : "";
   });
 
   function handleChevronClick(e: MouseEvent) {
@@ -57,6 +62,7 @@
   class:slow={isSlow}
   class:expanded={isSubagentExpanded}
   class:dimmed
+  class:untimed={!showTiming}
   class:interactive={!!onClick}
   role={onClick ? "button" : undefined}
   tabindex={onClick ? 0 : undefined}
@@ -84,20 +90,22 @@
   {/if}
   <span class="cn" style="color: {categoryToken(call.category)}">{displayToolName(call)}</span>
   <span class="ca">{call.input_preview}</span>
-  <span class="cbar-wrap">
+  {#if showTiming}
+    <span class="cbar-wrap">
+      <span
+        class="cbar"
+        style="width: {call.duration_ms == null || call.duration_ms <= 0 ? 0 : barWidthPct}%; background: {categoryToken(call.category)}"
+      ></span>
+    </span>
     <span
-      class="cbar"
-      style="width: {call.duration_ms == null || call.duration_ms <= 0 ? 0 : barWidthPct}%; background: {categoryToken(call.category)}"
-    ></span>
-  </span>
-  <span
-    class="cd"
-    class:slow={isSlow}
-    class:live={isLiveRow}
-    class:muted={!isSlow && !isLiveRow}
-  >
-    {durationLabel}
-  </span>
+      class="cd"
+      class:slow={isSlow}
+      class:live={isLiveRow}
+      class:muted={!isSlow && !isLiveRow}
+    >
+      {durationLabel}
+    </span>
+  {/if}
 </div>
 
 <style>
@@ -113,6 +121,9 @@
     padding: 4px 5px;
     font-size: 10px;
     border-radius: 2px;
+  }
+  .call.untimed {
+    grid-template-columns: 14px 38px 1fr;
   }
   .call.interactive {
     cursor: pointer;

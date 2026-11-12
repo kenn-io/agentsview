@@ -2561,6 +2561,18 @@ func copySessionDataForIDs(
 			return fmt.Errorf("copying session_plan_usage: %w", err)
 		}
 	}
+	if oldDBHasTable(ctx, tx, "session_usage_totals") {
+		if _, err := tx.ExecContext(ctx, `
+			INSERT INTO session_usage_totals (session_id, `+SessionUsageTotalColumns+`)
+			SELECT session_id, `+SessionUsageTotalColumns+`
+			FROM old_db.session_usage_totals
+			WHERE session_id IN (
+				SELECT id FROM `+tempIDsTable+`
+			)`,
+		); err != nil {
+			return fmt.Errorf("copying session_usage_totals: %w", err)
+		}
+	}
 
 	// Copy tool_calls. Map old message_id to new
 	// message_id via the (session_id, ordinal) natural key.

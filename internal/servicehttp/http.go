@@ -1181,6 +1181,19 @@ func (b *httpBackend) SessionUsage(
 	if wire.SubagentCount != nil {
 		out.SubagentCount = int(*wire.SubagentCount)
 	}
+	if out.RecordedCost, err = db.SummarizeRecordedCost(out.Breakdown); err != nil {
+		return nil, err
+	}
+	if wire.SessionTotal != nil {
+		// The wire and storage shapes share one JSON encoding.
+		encoded, err := json.Marshal(wire.SessionTotal)
+		if err != nil {
+			return nil, fmt.Errorf("session usage: encoding session total: %w", err)
+		}
+		if err := json.Unmarshal(encoded, &out.SessionTotal); err != nil {
+			return nil, fmt.Errorf("session usage: decoding session total: %w", err)
+		}
+	}
 	return out, nil
 }
 

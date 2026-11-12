@@ -1001,6 +1001,7 @@ func (s *Sync) deleteMirrorSession(
 	ctx context.Context, tx *sql.Tx, sessionID string,
 ) error {
 	for _, stmt := range []string{
+		`DELETE FROM image_text WHERE session_id = ?`,
 		`DELETE FROM pinned_messages WHERE session_id = ?`,
 		`DELETE FROM starred_sessions WHERE session_id = ?`,
 		`DELETE FROM secret_findings WHERE session_id = ?`,
@@ -1008,6 +1009,7 @@ func (s *Sync) deleteMirrorSession(
 		`DELETE FROM tool_calls WHERE session_id = ?`,
 		`DELETE FROM usage_events WHERE session_id = ?`,
 		`DELETE FROM session_plan_usage WHERE session_id = ?`,
+		`DELETE FROM session_usage_totals WHERE session_id = ?`,
 		`DELETE FROM messages WHERE session_id = ?`,
 		`DELETE FROM sessions WHERE id = ?`,
 	} {
@@ -1162,6 +1164,32 @@ func (s *Sync) replacePlanUsage(
 		append([]any{sessionID}, values...)...,
 	); err != nil {
 		return fmt.Errorf("writing duckdb plan usage for %s: %w", sessionID, err)
+	}
+	return nil
+}
+
+// replaceSessionUsageTotal copies the session's recorded total. The batch
+// already deleted the mirror's row, so a session without one stays empty.
+func (s *Sync) replaceSessionUsageTotal(
+	ctx context.Context, exec duckMutationExecutor, sessionID string,
+) error {
+	t, err := s.local.GetSessionUsageTotal(ctx, sessionID)
+	if err != nil {
+		return fmt.Errorf("reading local session total for %s: %w", sessionID, err)
+	}
+	if t == nil {
+		return nil
+	}
+	values, err := db.SessionUsageTotalValues(t)
+	if err != nil {
+		return fmt.Errorf("writing duckdb session total for %s: %w", sessionID, err)
+	}
+	if _, err := exec.ExecContext(ctx, `
+		INSERT INTO session_usage_totals (session_id, `+db.SessionUsageTotalColumns+`)
+		VALUES (?, ?, ?, ?, ?, ?)`,
+		append([]any{sessionID}, values...)...,
+	); err != nil {
+		return fmt.Errorf("writing duckdb session total for %s: %w", sessionID, err)
 	}
 	return nil
 }

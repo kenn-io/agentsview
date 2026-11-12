@@ -30,6 +30,7 @@ import (
 	"go.kenn.io/agentsview/internal/parser"
 	"go.kenn.io/agentsview/internal/sync"
 	"go.kenn.io/agentsview/internal/testjsonl"
+	"go.kenn.io/docbank/document/ocr"
 
 	_ "github.com/mattn/go-sqlite3"
 	"github.com/stretchr/testify/assert"
@@ -1439,6 +1440,57 @@ func TestWatcherOverflowReverifiesSameStatOpenCodeStorage(t *testing.T) {
 	assert.True(t, result.Complete)
 	assert.Equal(t, 1, result.Metrics.MaxRehydratedSources,
 		"overflow recovery must reparse event-sensitive storage sessions")
+	assertMessageContent(t, env.db, sessionID, "modified prompt")
+}
+
+// TestNativeDropTrustRevocationReverifiesSameStatOpenCodeStorage covers the
+// per-root reconciliation that follows a native FSEvents drop. It does not
+// clear archive-wide caches the way lost-events recovery does, so on its own
+// it trusts a storage session whose child was rewritten with the same size and
+// mtime. Revoking event-dependent trust first, as the watcher does after a
+// drop, must make that same scoped reconciliation re-read the session.
+func TestNativeDropTrustRevocationReverifiesSameStatOpenCodeStorage(t *testing.T) {
+	env := setupSingleAgentTestEnv(t, parser.AgentOpenCode)
+	storage := createOpenCodeStorageFixture(t, env.opencodeDir)
+	storage.addSession(
+		t, "proj", "drop-same-stat",
+		"/home/user/code/opencode-app", "Drop Guard",
+		1779012000000, 1779012030000,
+	)
+	storage.addMessage(
+		t, "drop-same-stat", "msg-user", "user",
+		1779012000000, nil,
+	)
+	partPath := storage.addTextPart(
+		t, "drop-same-stat", "msg-user", "part-user",
+		"original prompt", 1779012000000,
+	)
+
+	stats := env.engine.SyncAll(t.Context(), nil)
+	require.False(t, stats.Aborted)
+	require.Equal(t, 1, stats.Synced)
+	const sessionID = "opencode:drop-same-stat"
+	assertMessageContent(t, env.db, sessionID, "original prompt")
+	partInfo, err := os.Stat(partPath)
+	require.NoError(t, err)
+
+	storage.addTextPart(
+		t, "drop-same-stat", "msg-user", "part-user",
+		"modified prompt", 1779012000000,
+	)
+	require.NoError(t, os.Chtimes(partPath, partInfo.ModTime(), partInfo.ModTime()))
+	rewrittenInfo, err := os.Stat(partPath)
+	require.NoError(t, err)
+	require.Equal(t, partInfo.Size(), rewrittenInfo.Size())
+	require.Equal(t, partInfo.ModTime(), rewrittenInfo.ModTime())
+
+	roots := []string{env.opencodeDir}
+	require.NoError(t, env.engine.ReconcileWatchRoots(t.Context(), roots, false))
+	assertMessageContent(t, env.db, sessionID, "original prompt")
+
+	env.engine.InvalidateEventDependentTrust()
+	require.NoError(t, env.engine.ReconcileWatchRoots(t.Context(), roots, false))
+	assert.True(t, env.engine.LastReconciliationResult().Complete)
 	assertMessageContent(t, env.db, sessionID, "modified prompt")
 }
 
@@ -18159,4 +18211,43 @@ func TestResyncAllUsageOnlyDropsFrictionDigestText(t *testing.T) {
 	got, err := env.db.GetFrictionDigest(t.Context(), "2024-01-01")
 	require.NoError(t, err)
 	assert.Nil(t, got, "usage-only archive must not retain digest text")
+}
+
+func TestImageTextSurvivesFullResync(t *testing.T) {
+	for _, mode := range []string{"full", "transcripts"} {
+		t.Run(mode, func(t *testing.T) {
+			env := setupSingleAgentTestEnv(t, parser.AgentClaude)
+			ctx := t.Context()
+			env.writeClaudeSession(t, "test-proj", "present.jsonl", testjsonl.NewSessionBuilder().AddClaudeUser(tsEarly, "hello").AddClaudeAssistant(tsEarlyS5, "answer").String())
+			require.Equal(t, 1, env.engine.SyncAll(ctx, nil).Synced)
+			if mode == "full" {
+				content := `[{"type":"input_image","image_url":"data:image/png;base64,AAEC"}]`
+				require.NoError(t, env.db.UpsertSession(ctx, db.Session{ID: "orphan-image", Project: "demo", Agent: "claude", MessageCount: 1}))
+				require.NoError(t, env.db.InsertMessages(ctx, []db.Message{{SessionID: "orphan-image", Role: "assistant", Content: "answer", ToolCalls: []db.ToolCall{{ToolName: "Read", ResultContent: content}}}}))
+				identity, err := ocr.NewIdentity("test", "model", "revision")
+				require.NoError(t, err)
+				require.NoError(t, env.db.BackfillImageTextOccurrences(ctx))
+				require.NoError(t, env.db.SaveImageText(ctx, db.RetainedToolResultImages(content)[0].SHA256, identity, "invoice 42", false))
+			}
+			engine := env.engine
+			if mode == "transcripts" {
+				env.engine.Close()
+				env.db.SetArchiveContent(config.ArchiveContentTranscripts)
+				engine = sync.NewEngine(ctx, env.db, sync.EngineConfig{AgentDirs: map[parser.AgentType][]string{parser.AgentClaude: {env.claudeDir}}, Machine: "local", ArchiveContent: config.ArchiveContentTranscripts})
+				t.Cleanup(engine.Close)
+			}
+			stats := engine.ResyncAll(ctx, nil)
+			require.False(t, stats.Aborted, "%v", stats.Warnings)
+			require.Empty(t, stats.Warnings)
+			if mode == "full" {
+				var count int
+				require.NoError(t, env.db.Reader().QueryRow(ctx, `SELECT count(*) FROM image_text_cache WHERE text='invoice 42'`).Scan(&count))
+				require.Equal(t, 1, count)
+				after, err := env.db.Search(ctx, db.SearchFilter{Query: "invoice"})
+				require.NoError(t, err)
+				require.Len(t, after.Results, 1)
+				require.Equal(t, "orphan-image", after.Results[0].SessionID)
+			}
+		})
+	}
 }

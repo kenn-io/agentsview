@@ -391,7 +391,7 @@ describe("ThreeColumnLayout", () => {
   });
 
   it("dragging clamps to the computed minimum/max using mocked layout width", async () => {
-    const layoutWidth = 760;
+    const layoutWidth = 800;
 
     setViewportWidth(1280);
     ui.setSidebarWidth(SIDEBAR_WIDTH_DEFAULT);

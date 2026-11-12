@@ -56,16 +56,21 @@
   "nav_trash": "Papelera",
   "nav_search_sessions": "Buscar sesiones...",
   "nav_search_sessions_shortcut": "Buscar sesiones ({shortcut})",
-  "header_transcript_normal_title": "Transcripción normal - mostrar todos los mensajes",
-  "header_transcript_normal_label": "Modo de transcripción normal",
-  "header_transcript_normal": "Normal",
-  "header_transcript_focused_title": "Transcripción enfocada - solo prompts del usuario y respuestas finales",
-  "header_transcript_focused_label": "Modo de transcripción enfocada",
-  "header_transcript_focused": "Enfocada",
-  "header_transcript_filter_title": "Filtrar tipos de bloque",
-  "header_transcript_filter_label": "Filtrar tipos de bloque",
   "header_transcript_visibility": "Visibilidad de bloques",
   "header_transcript_show_all": "Mostrar todo",
+  "header_view_trigger": "Vista: {layout}",
+  "header_view_trigger_focused": "Vista: {layout} · Solicitudes y respuestas",
+  "header_view_trigger_label": "Vista de la transcripción: {layout}",
+  "header_view_trigger_label_focused": "Vista de la transcripción: {layout}, solicitudes y respuestas",
+  "header_view_menu_label": "Vista de la transcripción",
+  "header_view_layout_heading": "Diseño",
+  "header_view_layout_default_description": "Mensajes expandidos",
+  "header_view_layout_compact_description": "El mismo contenido con menos espacio",
+  "header_view_layout_stream_description": "Chat sin etiquetas de interlocutor",
+  "header_view_layout_skim_description": "Una línea por mensaje y por llamada a herramienta",
+  "header_view_mode_heading": "Contenido",
+  "header_view_mode_normal": "Todos los mensajes y llamadas a herramientas",
+  "header_view_mode_focused": "Solo tus solicitudes y respuestas finales",
   "header_transcript_blocks_user": "Mensajes del usuario",
   "header_transcript_blocks_assistant": "Texto del asistente",
   "header_transcript_blocks_thinking": "Bloques de razonamiento",
@@ -75,20 +80,12 @@
   "header_transcript_blocks_hook": "Hooks",
   "header_actions_follow_latest": "Seguir los últimos mensajes",
   "header_actions_toggle_sort": "Invertir el orden (o)",
-  "header_actions_cycle_layout": "Cambiar la disposición: {layout} (l)",
-  "header_actions_cycle_layout_label": "Cambiar la disposición de los mensajes",
-  "header_actions_export_options": "Opciones de exportación de la sesión",
-  "header_actions_export_session": "Exportar la sesión",
   "header_actions_download_html": "Descargar la exportación HTML",
-  "header_actions_copied_markdown_link": "Enlace markdown copiado",
   "header_actions_copy_markdown_link": "Copiar el enlace de exportación markdown",
   "header_actions_copy_source_path": "Copiar la ruta del archivo de origen",
-  "header_actions_publish_title": "Publicar en Gist (p)",
-  "header_actions_publish_label": "Publicar en Gist",
   "header_actions_publish_public": "Publicar un Gist público",
   "header_actions_publish_secret": "Publicar un Gist secreto",
   "header_actions_more_actions": "Más acciones",
-  "header_actions_layout": "Disposición: {layout}",
   "header_actions_refresh_data": "Actualizar los datos",
   "header_actions_refresh_data_shortcut": "Actualizar los datos (r)",
   "header_actions_sync_sessions": "Sincronizar las sesiones",
@@ -244,21 +241,21 @@
   "session_breadcrumb_summary_mode_tooltip": "En esta transcripción faltan los resultados de herramienta, el razonamiento y los diffs. La fidelidad completa requiere el sidecar agy-reader: instálalo o, si ya está instalado, deja que se ponga al día. Haz clic para saber cómo.",
   "session_breadcrumb_malformed_lines": [
     {
-      "declarations": ["input count", "local countPlural = count: plural"],
+      "declarations": ["input count", "input countLabel", "local countPlural = count: plural"],
       "selectors": ["countPlural"],
       "match": {
-        "countPlural=one": "{count} línea mal formada",
-        "countPlural=other": "{count} líneas mal formadas"
+        "countPlural=one": "{countLabel} línea mal formada",
+        "countPlural=other": "{countLabel} líneas mal formadas"
       }
     }
   ],
   "session_breadcrumb_malformed_lines_tooltip": [
     {
-      "declarations": ["input count", "local countPlural = count: plural"],
+      "declarations": ["input count", "input countLabel", "local countPlural = count: plural"],
       "selectors": ["countPlural"],
       "match": {
-        "countPlural=one": "No se pudo analizar {count} línea del archivo de origen",
-        "countPlural=other": "No se pudieron analizar {count} líneas del archivo de origen"
+        "countPlural=one": "No se pudo analizar {countLabel} línea del archivo de origen",
+        "countPlural=other": "No se pudieron analizar {countLabel} líneas del archivo de origen"
       }
     }
   ],
@@ -481,6 +478,17 @@
   "sidebar_row_star_session": "Destacar sesión",
   "sidebar_row_unstar_session": "Quitar sesión de destacadas",
   "sidebar_row_rename": "Renombrar",
+  "sidebar_row_user_message_count": [
+    {
+      "declarations": ["input count", "input countLabel", "local countPlural = count: plural"],
+      "selectors": ["countPlural"],
+      "match": {
+        "countPlural=one": "{countLabel} mensaje del usuario",
+        "countPlural=other": "{countLabel} mensajes del usuario",
+        "countPlural=many": "{countLabel} mensajes del usuario"
+      }
+    }
+  ],
   "sidebar_row_open_in_new_tab": "Abrir en una pestaña nueva",
   "sidebar_row_delete": "Eliminar",
   "sidebar_row_change_project": "Cambiar de proyecto…",
@@ -793,9 +801,13 @@
       }
     }
   ],
-  "analytics_top_skills_agent_breakdown": "Desglose por agente",
   "analytics_top_skills_agents": "Agentes",
-  "analytics_top_skills_projects": "Proyectos: {projects}",
+  "analytics_top_skills_col_skill": "Skill",
+  "analytics_top_skills_col_share": "Proporción",
+  "analytics_top_skills_col_calls": "Llamadas",
+  "analytics_top_skills_col_sessions": "Sesiones",
+  "analytics_top_skills_col_last_used": "Último uso",
+  "analytics_top_skills_projects_label": "Proyectos",
   "analytics_top_skills_empty": "Sin datos de uso de skills",
   "analytics_skill_trend_title": "Uso de skills a lo largo del tiempo",
   "analytics_skill_trend_other": "Otros",
@@ -887,12 +899,11 @@
   "settings_search_empty": "Ninguna configuración coincide",
   "settings_search_clear": "Borrar búsqueda",
   "settings_search_result": "Mostrando {category}",
-  "settings_search_keywords_appearance": "tema contraste diseño texto fuente bloques zoom theme contrast layout text font blocks color daltonismo",
+  "settings_search_keywords_appearance": "tema contraste diseño texto fuente bloques zoom theme contrast layout text font blocks color daltonismo ancho width",
   "settings_search_keywords_language": "idioma región traducción language locale translation",
   "settings_search_keywords_date_ranges": "fecha rango páginas vinculadas date range linked pages",
   "settings_search_keywords_terminal": "terminal reanudar lanzar binario argumentos portapapeles resume launch binary arguments clipboard",
   "settings_search_keywords_agent_directories": "agente directorios rutas escanear sesiones agent directories paths scan sessions",
-  "settings_search_keywords_worktree_mappings": "worktree asignaciones proyectos rutas diseños mappings projects paths layouts",
   "settings_search_keywords_embeddings": "embeddings búsqueda semántica vectores índice generaciones semantic search vectors index generations",
   "settings_search_keywords_github": "GitHub Gist token publicar integración publish integration",
   "settings_search_keywords_remote_access": "remoto servidor conexión autenticación token red remote server connection auth network",
@@ -1262,12 +1273,31 @@
   "recent_edits_title": "Ediciones recientes",
   "recent_edits_empty": "Aún no se encontraron ediciones de archivos.",
   "recent_edits_loading": "Cargando ediciones recientes...",
-  "recent_edits_count": "{count} ediciones",
+  "recent_edits_count": [
+    {
+      "declarations": [
+        "input count",
+        "local countPlural = count: plural",
+        "local countNumber = count: number"
+      ],
+      "selectors": ["countPlural"],
+      "match": {
+        "countPlural=one": "{countNumber} edición",
+        "countPlural=other": "{countNumber} ediciones",
+        "countPlural=many": "{countNumber} ediciones"
+      }
+    }
+  ],
   "recent_edits_truncated": "mostrando las {shown} más recientes de {total}",
   "recent_edits_load_more": "Cargar más",
-  "recent_edits_refresh": "Actualizar",
+  "recent_edits_refresh": "Recargar lista",
   "recent_edits_search_placeholder": "Filtrar por ruta de archivo",
   "recent_edits_clear_search": "Limpiar la búsqueda por ruta de archivo",
+  "recent_edits_col_project": "Proyecto",
+  "recent_edits_col_file": "Archivo",
+  "recent_edits_col_edits": "Ediciones",
+  "recent_edits_col_last_edit": "Última edición",
+  "recent_edits_resize_column": "Cambiar el ancho de la columna {column}",
   "activity_insight_waiting_server": "Esperando la versión del servidor",
   "activity_insight_generate_insight": "Generar análisis",
   "activity_insight_generation_failed": "Error en la generación",
@@ -1551,7 +1581,9 @@
   "recall_generated_export": "Exportar",
   "recall_generated_publish": "Publicar",
   "recall_generated_publish_secret": "Secreto",
-  "recall_page_subtitle": "Explora las entradas destiladas y la cobertura de extracción.",
+  "recall_generated_group_sessions": "Sesiones",
+  "recall_generated_group_report": "Informe",
+  "recall_generated_read_only_reason": "Este archivo es de solo lectura, así que aquí no se pueden generar informes nuevos.",
   "recall_page_search_placeholder": "Buscar entradas de Recordar…",
   "recall_page_clear_search": "Borrar la búsqueda de Recordar",
   "recall_page_type_filter": "Tipo de entrada",
@@ -1772,6 +1804,10 @@
   "insights_page_calibration_no_affected": "No hay sesiones afectadas",
   "insights_page_calibration_incomplete_rate": "{rate}% incompletas",
   "insights_page_calibration_incomplete_lift": "{lift}x incompletas",
+  "insights_page_column_signal": "Señal",
+  "insights_page_column_count": "Recuento",
+  "insights_page_column_sessions": "Sesiones",
+  "insights_page_column_outcome": "Resultado",
   "insights_page_signal_examples": "Ejemplos de señales",
   "insights_page_grade_badge": "Calificación {grade}",
   "insights_page_unscored": "Sin puntuar",
@@ -1815,11 +1851,16 @@
   "insights_page_pct_affected": "{pct}% afectadas",
   "insights_pattern_recommendation_rationale": [
     {
-      "declarations": ["input affected", "input total", "local totalPlural = total: plural"],
+      "declarations": [
+        "input affectedLabel",
+        "input total",
+        "input totalLabel",
+        "local totalPlural = total: plural"
+      ],
       "selectors": ["totalPlural"],
       "match": {
-        "totalPlural=one": "{affected} de {total} sesión presenta este patrón determinista.",
-        "totalPlural=other": "{affected} de {total} sesiones presentan este patrón determinista."
+        "totalPlural=one": "{affectedLabel} de {totalLabel} sesión presenta este patrón determinista.",
+        "totalPlural=other": "{affectedLabel} de {totalLabel} sesiones presentan este patrón determinista."
       }
     }
   ],
@@ -1871,14 +1912,15 @@
     {
       "declarations": [
         "input count",
+        "input countLabel",
         "input completedRate",
         "input failureSignals",
         "local countPlural = count: plural"
       ],
       "selectors": ["countPlural"],
       "match": {
-        "countPlural=one": "{count} sesión, {completedRate}% completadas, {failureSignals} fallos en promedio",
-        "countPlural=other": "{count} sesiones, {completedRate}% completadas, {failureSignals} fallos en promedio"
+        "countPlural=one": "{countLabel} sesión, {completedRate}% completadas, {failureSignals} fallos en promedio",
+        "countPlural=other": "{countLabel} sesiones, {completedRate}% completadas, {failureSignals} fallos en promedio"
       }
     }
   ],
@@ -2007,6 +2049,10 @@
   "resync_retry": "Reintentar",
   "resync_error_read_only": "La resincronización completa no está disponible para backends de solo lectura.",
   "resync_error_in_progress": "Ya hay una sincronización en curso.",
+  "shortcuts_group_navigation": "Navegación",
+  "shortcuts_group_messages": "Mensajes",
+  "shortcuts_group_sessions": "Sesiones",
+  "shortcuts_group_actions": "Acciones",
   "shortcuts_open_command_palette": "Abrir la paleta de comandos",
   "shortcuts_find_in_session": "Buscar en la sesión",
   "shortcuts_close_palette": "Cerrar paleta / modal / búsqueda",
@@ -2060,7 +2106,7 @@
   "settings_session_providers_save_failed": "No se pudieron actualizar los proveedores de sesiones. Tu selección anterior sigue activa.",
   "settings_session_providers_homes_title": "Directorios de inicio alternativos",
   "settings_session_providers_homes_hint": "Añade un directorio de inicio de agente, por ejemplo un {envVar} personalizado. AgentsView deriva automáticamente sus directorios de sesiones.",
-  "settings_session_providers_homes_placeholder": "~/.{agent}-work",
+  "settings_session_providers_homes_placeholder": "p. ej. ~/.{agent}-work",
   "settings_session_providers_homes_add": "Añadir directorio de inicio",
   "settings_session_providers_homes_input_aria": "Nuevo directorio de inicio de {provider}",
   "settings_session_providers_homes_remove_aria": "Quitar el directorio de inicio {home} de {provider}",
@@ -2083,6 +2129,10 @@
   "appearance_chart_palette_matplotlib": "Matplotlib",
   "appearance_chart_palette_colorblind": "Apto para daltonismo",
   "appearance_message_layout": "Diseño de mensajes",
+  "appearance_reading_width": "Ancho de lectura",
+  "appearance_reading_width_default": "Predeterminado",
+  "appearance_reading_width_wider": "Más ancho",
+  "appearance_reading_width_full": "Completo",
   "appearance_block_visibility": "Visibilidad de bloques",
   "settings_github_token_saved": "Token de GitHub guardado.",
   "settings_github_save_failed": "No se pudo guardar el token",
@@ -2163,8 +2213,6 @@
   "settings_terminal_args_hint": "(usa \\{cmd\\} como marcador de posición)",
   "settings_terminal_saving": "Guardando...",
   "settings_terminal_save": "Guardar",
-  "settings_worktree_moved": "Las reglas de clasificación de proyectos se han movido a Datos.",
-  "settings_worktree_moved_link": "Abrir Datos › Reglas",
   "worktree_failed_load": "No se pudieron cargar las asignaciones",
   "worktree_failed_save": "No se pudo guardar la asignación",
   "worktree_failed_delete": "No se pudo eliminar la asignación",
@@ -2192,6 +2240,8 @@
   "worktree_saving": "Guardando...",
   "worktree_add_mapping": "Añadir asignación",
   "worktree_save_mapping": "Guardar asignación",
+  "worktree_form_new_title": "Nueva asignación",
+  "worktree_form_edit_title": "Editar asignación",
   "worktree_cancel": "Cancelar",
   "worktree_applying": "Aplicando...",
   "worktree_apply_mappings": "Aplicar asignaciones",
@@ -2247,8 +2297,8 @@
   "trends_title": "Tendencias",
   "trends_date_range": "{from} a {to}",
   "trends_reset": "Restablecer",
-  "trends_refreshing": "Actualizando",
-  "trends_refresh": "Actualizar",
+  "trends_refreshing": "Recalculando",
+  "trends_refresh": "Recalcular",
   "trends_terms": "Términos",
   "trends_one_per_line": "uno por línea",
   "trends_group_by": "Agrupar por",
@@ -2335,9 +2385,6 @@
   "appearance_on": "Activado",
   "appearance_off": "Desactivado",
   "appearance_zoom": "Zoom",
-  "settings_archive_content_title": "Contenido del archivo",
-  "settings_archive_content_description": "Lo que la ingesta almacena de los resultados de herramienta.",
-  "settings_search_keywords_archive_content": "archivo contenido imágenes retención resultados herramientas marcadores almacenamiento tamaño archive content images retention tool results placeholders storage size",
   "settings_tool_result_images": "Imágenes de resultados de herramienta",
   "settings_tool_result_images_keep": "Conservar",
   "settings_tool_result_images_drop": "Descartar",
@@ -2346,7 +2393,7 @@
   "settings_tool_result_images_restart_notice": "Reinicia el daemon de AgentsView para aplicar este cambio a las sesiones recién ingeridas.",
   "settings_tool_images_title": "Imágenes de resultados de herramienta",
   "settings_tool_images_description": "Imágenes incrustadas almacenadas dentro de los resultados de herramienta.",
-  "settings_search_keywords_tool_images": "imágenes resultados herramientas quitar limpieza cargas bytes almacenamiento images tool results strip cleanup payloads bytes storage",
+  "settings_search_keywords_tool_images": "imágenes resultados herramientas quitar limpieza cargas bytes almacenamiento images tool results strip cleanup payloads bytes storage archivo contenido retención marcadores tamaño archive content retention placeholders size",
   "settings_image_cleanup_intro": "Previsualiza qué resultados de herramienta almacenados aún contienen cargas útiles de imagen incrustadas y luego reemplaza esas cargas con marcadores de posición legibles.",
   "settings_image_cleanup_project_label": "El proyecto contiene",
   "settings_image_cleanup_project_placeholder": "Todos los proyectos",
@@ -3213,5 +3260,6 @@
   ],
   "empty_archive_title": "Aún no hay sesiones",
   "empty_archive_desc": "AgentsView lee las sesiones de estas carpetas. Aparecerán aquí cuando un agente escriba en alguna de ellas.",
-  "empty_archive_choose_folders": "Elegir carpetas"
+  "empty_archive_choose_folders": "Elegir carpetas",
+  "usage_tooltip_no_usage": "Sin uso"
 }

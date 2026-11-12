@@ -36,7 +36,9 @@ import (
 //     per match of a run of 32 such words, and at least
 //     FrustrationCapsMinWords when the rule can fire. When that bound on
 //     the ratio is under FrustrationCapsRatio, the exact ratio is too.
-//  4. Caps, exactly, for a stripped prompt of at most pgExactCapsMaxBytes,
+//     Try the caps-run count alone first. For long prompts, try the
+//     32-word bound next.
+//  4. Caps, exactly, for an unresolved prompt of at most pgExactCapsMaxBytes,
 //     where counting every word costs little. A longer prompt goes to Go.
 //
 // Every pattern names its characters explicitly, so neither the server
@@ -58,8 +60,12 @@ const pgFrustrationPromptsSQL = `
 			WHEN NOT (stripped ~ $5
 				OR octet_length(btrim(regexp_replace(stripped, $3, ' ', 'g'), ' ')) >= $6::int8) THEN 0
 			WHEN stripped ~ $7 THEN 1
-			WHEN (cardinality(regexp_split_to_array(stripped, '[A-Z]{2,}')) - 1)::float8
-				/ greatest($9::int8 * (cardinality(regexp_split_to_array(stripped, $8)) - 1), $10::int8)::float8 < $11::float8 THEN 0
+			WHEN (
+				SELECT CASE WHEN caps_runs::float8 / $10::float8 < $11::float8 THEN true
+					WHEN octet_length(stripped) > $12::int8 THEN caps_runs::float8 / greatest($9::int8 * (cardinality(regexp_split_to_array(stripped, $8)) - 1), $10::int8)::float8 < $11::float8
+					ELSE false END
+				FROM (SELECT cardinality(regexp_split_to_array(stripped, '[A-Z]{2,}')) - 1 AS caps_runs OFFSET 0) c
+			) THEN 0
 			WHEN octet_length(stripped) > $12::int8 THEN 2
 			WHEN (
 				SELECT CASE WHEN long_words >= $10::int8 THEN caps_words::float8 / long_words::float8 >= $11::float8 ELSE false END

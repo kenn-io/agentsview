@@ -1,7 +1,8 @@
 import { debounce } from "@kenn-io/kit-ui";
 import { SearchService } from "../api/generated/index.js";
-import { ApiError, isAbortError } from "../api/runtime.js";
+import { ApiError, getServerUrl, isAbortError, isTransient } from "../api/runtime.js";
 import type { DbSearchResult as SearchResult } from "../api/generated/index.js";
+import type { GetApiV1SearchParams } from "../api/generated/models/getApiV1SearchParams.js";
 import { resolveRange, type RangeSelection } from "../components/shared/rangeSelection.js";
 import { reportErrorShown, reportTelemetry } from "../utils/telemetry.js";
 
@@ -132,6 +133,19 @@ function failureKind(
   return isTimeoutDetail(detail) ? "timeout" : "generic";
 }
 
+/** Retries one transient failure, unless another tab selected a different server meanwhile. */
+async function searchFullText(params: GetApiV1SearchParams, signal: AbortSignal) {
+  const server = getServerUrl();
+  try {
+    return await SearchService.getApiV1Search(params, { signal });
+  } catch (error: unknown) {
+    if ((error instanceof ApiError && error.status === 501) || !isTransient(error)) throw error;
+    await new Promise((resolve) => setTimeout(resolve, 300));
+    if (getServerUrl() !== server) throw error;
+    return SearchService.getApiV1Search(params, { signal });
+  }
+}
+
 export class SearchStore {
   query: string = $state("");
   project: string = $state("");
@@ -180,6 +194,7 @@ export class SearchStore {
     }
 
     this.queued = true;
+    this.isSearching = true;
     this.debouncedSearch(query, this.project);
   }
 
@@ -318,16 +333,14 @@ export class SearchStore {
     try {
       let results: PaletteSearchResult[];
       if (mode === "fulltext") {
-        const response = await SearchService.getApiV1Search(
-          {
-            q: query,
-            project: project || undefined,
-            limit: PALETTE_RESULT_LIMIT,
-            sort: this.sort,
-            ...dates,
-          },
-          { signal },
-        );
+        const params = {
+          q: query,
+          project: project || undefined,
+          limit: PALETTE_RESULT_LIMIT,
+          sort: this.sort,
+          ...dates,
+        };
+        const response = await searchFullText(params, signal);
         results = normalizeFullText(response.results ?? []);
       } else {
         const response = await SearchService.getApiV1SearchContent(

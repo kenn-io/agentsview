@@ -218,7 +218,7 @@ func TestHostedRawDerivationRejectsImageOffloadBeforeOpeningDatabase(t *testing.
 		t.Context(),
 		config.Config{RequireAuth: true, ToolResultImages: config.ToolResultImagesOffload},
 		config.PGConfig{RawTenant: "tenant", Schema: "hosted", RawDerivation: true, URL: "://invalid"},
-		"",
+		"", false,
 	)
 	require.ErrorContains(t, err, "tool_result_images = offload is not supported for hosted raw derivation")
 }

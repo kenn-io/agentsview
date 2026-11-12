@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { formatCount } from "../../utils/format.js";
   import { m } from "../../i18n/index.js";
   import { router } from "../../stores/router.svelte.js";
   import type { Report } from "../../api/types.js";
@@ -102,7 +103,7 @@
   }
 
   function fmtMinutes(v: number): string {
-    return Math.round(v).toLocaleString();
+    return formatCount(Math.round(v));
   }
 
   function fmtValue(row: ActivityKeyMinutes): string {
@@ -284,7 +285,7 @@
     display: inline-flex;
     align-items: center;
     gap: 4px;
-    font-size: 10px;
+    font-size: 11px;
     color: var(--text-muted);
   }
 
@@ -307,19 +308,23 @@
     background: var(--accent-orange);
   }
 
+  /* Same choice-group idiom as every other chart toggle: inset track,
+     raised selected pill (app.css tokens). */
   .metric-toggle {
     display: inline-flex;
-    border: 1px solid var(--border-muted);
-    border-radius: var(--radius-sm);
-    overflow: hidden;
+    gap: 2px;
+    padding: 2px;
+    border-radius: var(--radius-md);
+    background: var(--bg-inset);
   }
 
   .metric-btn {
-    padding: 3px 10px;
-    font-size: 10px;
-    font-weight: 600;
+    padding: 2px 8px;
+    font-size: 11px;
+    font-weight: 500;
     color: var(--text-muted);
-    background: var(--bg-inset);
+    background: transparent;
+    border-radius: var(--radius-sm);
     cursor: pointer;
     border: none;
   }
@@ -329,12 +334,10 @@
   }
 
   .metric-btn.active {
-    background: var(--accent-blue);
-    color: var(--accent-blue-foreground);
-  }
-
-  .metric-btn + .metric-btn {
-    border-left: 1px solid var(--border-muted);
+    background: var(--selected-strong-bg);
+    box-shadow: var(--selected-strong-edge);
+    color: var(--text-primary);
+    font-weight: var(--selected-strong-weight);
   }
 
   .breakdown-grid {
@@ -414,7 +417,7 @@
     flex-shrink: 0;
     width: 56px;
     text-align: right;
-    font-size: 10px;
+    font-size: 11px;
     font-family: var(--font-mono);
     color: var(--text-muted);
   }
@@ -431,7 +434,7 @@
     padding: 4px 8px;
     background: var(--text-primary);
     color: var(--bg-primary);
-    font-size: 10px;
+    font-size: 11px;
     border-radius: var(--radius-sm);
     white-space: nowrap;
     pointer-events: none;

@@ -54,16 +54,21 @@
   "nav_trash": "回收站",
   "nav_search_sessions": "搜索会话...",
   "nav_search_sessions_shortcut": "搜索会话 ({shortcut})",
-  "header_transcript_normal_title": "普通 transcript - 显示所有消息",
-  "header_transcript_normal_label": "普通 transcript 模式",
-  "header_transcript_normal": "普通",
-  "header_transcript_focused_title": "聚焦 transcript - 仅显示用户提示和最终回答",
-  "header_transcript_focused_label": "聚焦 transcript 模式",
-  "header_transcript_focused": "聚焦",
-  "header_transcript_filter_title": "筛选 block 类型",
-  "header_transcript_filter_label": "筛选 block 类型",
   "header_transcript_visibility": "Block 可见性",
   "header_transcript_show_all": "全部显示",
+  "header_view_trigger": "视图：{layout}",
+  "header_view_trigger_focused": "视图：{layout} · 提示和回答",
+  "header_view_trigger_label": "对话视图：{layout}",
+  "header_view_trigger_label_focused": "对话视图：{layout}，提示和回答",
+  "header_view_menu_label": "对话视图",
+  "header_view_layout_heading": "布局",
+  "header_view_layout_default_description": "展开的消息",
+  "header_view_layout_compact_description": "内容相同，间距更紧凑",
+  "header_view_layout_stream_description": "不显示说话者标签的聊天",
+  "header_view_layout_skim_description": "每条消息和工具调用各占一行",
+  "header_view_mode_heading": "内容",
+  "header_view_mode_normal": "所有消息和工具调用",
+  "header_view_mode_focused": "仅显示你的提示和最终回答",
   "header_transcript_blocks_user": "用户消息",
   "header_transcript_blocks_assistant": "助手文本",
   "header_transcript_blocks_thinking": "思考块",
@@ -73,20 +78,12 @@
   "header_transcript_blocks_hook": "钩子",
   "header_actions_follow_latest": "跟随最新消息",
   "header_actions_toggle_sort": "切换排序 (o)",
-  "header_actions_cycle_layout": "切换布局：{layout} (l)",
-  "header_actions_cycle_layout_label": "切换消息布局",
-  "header_actions_export_options": "导出会话选项",
-  "header_actions_export_session": "导出会话",
   "header_actions_download_html": "下载 HTML 导出",
-  "header_actions_copied_markdown_link": "已复制 Markdown 链接",
   "header_actions_copy_markdown_link": "复制 Markdown 导出链接",
   "header_actions_copy_source_path": "复制源文件路径",
-  "header_actions_publish_title": "发布到 Gist (p)",
-  "header_actions_publish_label": "发布到 Gist",
   "header_actions_publish_public": "发布公开 Gist",
   "header_actions_publish_secret": "发布私密 Gist",
   "header_actions_more_actions": "更多操作",
-  "header_actions_layout": "布局：{layout}",
   "header_actions_refresh_data": "刷新数据",
   "header_actions_refresh_data_shortcut": "刷新数据 (r)",
   "header_actions_sync_sessions": "同步会话",
@@ -238,19 +235,19 @@
   "session_breadcrumb_summary_mode_tooltip": "此 transcript 缺少工具结果、思考内容和代码差异。需要 agy-reader sidecar 才能获得完整保真度 — 请安装它，若已安装，请等待其同步完成。点击了解如何操作。",
   "session_breadcrumb_malformed_lines": [
     {
-      "declarations": ["input count", "local countPlural = count: plural"],
+      "declarations": ["input count", "input countLabel", "local countPlural = count: plural"],
       "selectors": ["countPlural"],
       "match": {
-        "countPlural=other": "{count} 行格式错误"
+        "countPlural=other": "{countLabel} 行格式错误"
       }
     }
   ],
   "session_breadcrumb_malformed_lines_tooltip": [
     {
-      "declarations": ["input count", "local countPlural = count: plural"],
+      "declarations": ["input count", "input countLabel", "local countPlural = count: plural"],
       "selectors": ["countPlural"],
       "match": {
-        "countPlural=other": "源文件中有 {count} 行无法解析"
+        "countPlural=other": "源文件中有 {countLabel} 行无法解析"
       }
     }
   ],
@@ -465,6 +462,13 @@
   "sidebar_row_star_session": "固定会话",
   "sidebar_row_unstar_session": "取消固定会话",
   "sidebar_row_rename": "重命名",
+  "sidebar_row_user_message_count": [
+    {
+      "declarations": ["input count", "input countLabel", "local countPlural = count: plural"],
+      "selectors": ["countPlural"],
+      "match": { "countPlural=other": "{countLabel} 条用户消息" }
+    }
+  ],
   "sidebar_row_open_in_new_tab": "在新标签页打开",
   "sidebar_row_delete": "删除",
   "sidebar_row_change_project": "更改项目…",
@@ -766,9 +770,13 @@
       }
     }
   ],
-  "analytics_top_skills_agent_breakdown": "Agent 分解",
   "analytics_top_skills_agents": "Agents",
-  "analytics_top_skills_projects": "项目：{projects}",
+  "analytics_top_skills_col_skill": "Skill",
+  "analytics_top_skills_col_share": "占比",
+  "analytics_top_skills_col_calls": "调用",
+  "analytics_top_skills_col_sessions": "会话",
+  "analytics_top_skills_col_last_used": "最近使用",
+  "analytics_top_skills_projects_label": "项目",
   "analytics_top_skills_empty": "无 skill 使用数据",
   "analytics_skill_trend_title": "Skill 使用趋势",
   "analytics_skill_trend_other": "其他",
@@ -857,12 +865,11 @@
   "settings_search_empty": "没有匹配的设置",
   "settings_search_clear": "清除搜索",
   "settings_search_result": "显示：{category}",
-  "settings_search_keywords_appearance": "主题 对比度 布局 文本 字体 区块 theme contrast layout text font blocks 缩放 zoom 颜色 色盲 color",
+  "settings_search_keywords_appearance": "主题 对比度 布局 文本 字体 区块 theme contrast layout text font blocks 缩放 zoom 颜色 色盲 color 宽度 width",
   "settings_search_keywords_language": "语言 区域设置 翻译 language locale translation",
   "settings_search_keywords_date_ranges": "日期 范围 关联 页面 date range linked pages",
   "settings_search_keywords_terminal": "终端 恢复 启动 可执行文件 参数 剪贴板 terminal resume launch binary arguments clipboard",
   "settings_search_keywords_agent_directories": "代理 目录 路径 扫描 会话 agent directories paths scan sessions",
-  "settings_search_keywords_worktree_mappings": "工作树 映射 项目 路径 布局 worktree mappings projects paths layouts",
   "settings_search_keywords_embeddings": "嵌入 语义 搜索 向量 索引 代 embeddings semantic search vectors index generations",
   "settings_search_keywords_github": "GitHub Gist 令牌 发布 集成 token publish integration",
   "settings_search_keywords_remote_access": "远程 服务器 连接 鉴权 令牌 网络 remote server connection auth token network",
@@ -1190,9 +1197,14 @@
   "recent_edits_count": "{count} 次编辑",
   "recent_edits_truncated": "显示最新 {shown}（共 {total} 条）",
   "recent_edits_load_more": "加载更多",
-  "recent_edits_refresh": "刷新",
+  "recent_edits_refresh": "重新加载列表",
   "recent_edits_search_placeholder": "按文件路径筛选",
   "recent_edits_clear_search": "清除文件路径搜索",
+  "recent_edits_col_project": "项目",
+  "recent_edits_col_file": "文件",
+  "recent_edits_col_edits": "编辑",
+  "recent_edits_col_last_edit": "最后编辑",
+  "recent_edits_resize_column": "调整“{column}”列宽",
   "activity_insight_waiting_server": "正在等待服务器版本",
   "activity_insight_generate_insight": "生成洞察",
   "activity_insight_generation_failed": "生成失败",
@@ -1471,7 +1483,9 @@
   "recall_generated_export": "导出",
   "recall_generated_publish": "发布",
   "recall_generated_publish_secret": "私密",
-  "recall_page_subtitle": "浏览提炼条目和提取覆盖情况。",
+  "recall_generated_group_sessions": "会话",
+  "recall_generated_group_report": "报告",
+  "recall_generated_read_only_reason": "此归档为只读，无法在此生成新报告。",
   "recall_page_search_placeholder": "搜索召回条目…",
   "recall_page_clear_search": "清除召回搜索",
   "recall_page_type_filter": "条目类型",
@@ -1690,6 +1704,10 @@
   "insights_page_calibration_no_affected": "无受影响会话",
   "insights_page_calibration_incomplete_rate": "{rate}% 未完成",
   "insights_page_calibration_incomplete_lift": "{lift}x 未完成",
+  "insights_page_column_signal": "信号",
+  "insights_page_column_count": "次数",
+  "insights_page_column_sessions": "会话",
+  "insights_page_column_outcome": "结果",
   "insights_page_signal_examples": "信号示例",
   "insights_page_grade_badge": "评级 {grade}",
   "insights_page_unscored": "未评分",
@@ -1733,10 +1751,15 @@
   "insights_page_pct_affected": "{pct}% 受影响",
   "insights_pattern_recommendation_rationale": [
     {
-      "declarations": ["input affected", "input total", "local totalPlural = total: plural"],
+      "declarations": [
+        "input affectedLabel",
+        "input total",
+        "input totalLabel",
+        "local totalPlural = total: plural"
+      ],
       "selectors": ["totalPlural"],
       "match": {
-        "totalPlural=other": "{total} 个会话中有 {affected} 个触发此确定性模式。"
+        "totalPlural=other": "{totalLabel} 个会话中有 {affectedLabel} 个触发此确定性模式。"
       }
     }
   ],
@@ -1788,13 +1811,14 @@
     {
       "declarations": [
         "input count",
+        "input countLabel",
         "input completedRate",
         "input failureSignals",
         "local countPlural = count: plural"
       ],
       "selectors": ["countPlural"],
       "match": {
-        "countPlural=other": "{count} 个会话，{completedRate}% 已完成，平均 {failureSignals} 个失败信号"
+        "countPlural=other": "{countLabel} 个会话，{completedRate}% 已完成，平均 {failureSignals} 个失败信号"
       }
     }
   ],
@@ -1922,6 +1946,10 @@
   "resync_retry": "重试",
   "resync_error_read_only": "只读后端不支持完整重新同步。",
   "resync_error_in_progress": "同步已在进行中。",
+  "shortcuts_group_navigation": "导航",
+  "shortcuts_group_messages": "消息",
+  "shortcuts_group_sessions": "会话",
+  "shortcuts_group_actions": "操作",
   "shortcuts_open_command_palette": "打开命令面板",
   "shortcuts_find_in_session": "在会话中查找",
   "shortcuts_close_palette": "关闭面板 / 弹窗 / 查找",
@@ -1975,7 +2003,7 @@
   "settings_session_providers_save_failed": "无法更新会话提供商。之前的选择仍然有效。",
   "settings_session_providers_homes_title": "备用主目录",
   "settings_session_providers_homes_hint": "添加代理主目录，例如自定义的 {envVar}。AgentsView 会自动推导其会话目录。",
-  "settings_session_providers_homes_placeholder": "~/.{agent}-work",
+  "settings_session_providers_homes_placeholder": "例如 ~/.{agent}-work",
   "settings_session_providers_homes_add": "添加主目录",
   "settings_session_providers_homes_input_aria": "新的 {provider} 主目录",
   "settings_session_providers_homes_remove_aria": "移除 {provider} 主目录 {home}",
@@ -1998,6 +2026,10 @@
   "appearance_chart_palette_matplotlib": "Matplotlib",
   "appearance_chart_palette_colorblind": "色盲友好",
   "appearance_message_layout": "消息布局",
+  "appearance_reading_width": "阅读宽度",
+  "appearance_reading_width_default": "默认",
+  "appearance_reading_width_wider": "更宽",
+  "appearance_reading_width_full": "全宽",
   "appearance_block_visibility": "块可见性",
   "settings_github_token_saved": "GitHub 令牌已保存。",
   "settings_github_save_failed": "保存令牌失败",
@@ -2077,8 +2109,6 @@
   "settings_terminal_args_hint": "（使用 \\{cmd\\} 作为占位符）",
   "settings_terminal_saving": "正在保存...",
   "settings_terminal_save": "保存",
-  "settings_worktree_moved": "项目分类规则已移至数据。",
-  "settings_worktree_moved_link": "打开数据 › 规则",
   "worktree_failed_load": "加载映射失败",
   "worktree_failed_save": "保存映射失败",
   "worktree_failed_delete": "删除映射失败",
@@ -2106,6 +2136,8 @@
   "worktree_saving": "正在保存...",
   "worktree_add_mapping": "添加映射",
   "worktree_save_mapping": "保存映射",
+  "worktree_form_new_title": "新建映射",
+  "worktree_form_edit_title": "编辑映射",
   "worktree_cancel": "取消",
   "worktree_applying": "正在应用...",
   "worktree_apply_mappings": "应用映射",
@@ -2160,8 +2192,8 @@
   "trends_title": "趋势",
   "trends_date_range": "{from} 至 {to}",
   "trends_reset": "重置",
-  "trends_refreshing": "刷新中",
-  "trends_refresh": "刷新",
+  "trends_refreshing": "重新计算中",
+  "trends_refresh": "重新计算",
   "trends_terms": "词项",
   "trends_one_per_line": "每行一个",
   "trends_group_by": "分组方式",
@@ -2250,9 +2282,6 @@
   "appearance_on": "开",
   "appearance_off": "关",
   "appearance_zoom": "缩放",
-  "settings_archive_content_title": "归档内容",
-  "settings_archive_content_description": "采集时从工具结果中保存的内容。",
-  "settings_search_keywords_archive_content": "归档 内容 图片 图像 保留 工具结果 占位符 存储 archive content images retention tool results placeholders storage",
   "settings_tool_result_images": "工具结果图片",
   "settings_tool_result_images_keep": "保留",
   "settings_tool_result_images_drop": "丢弃",
@@ -2261,7 +2290,7 @@
   "settings_tool_result_images_restart_notice": "重启 AgentsView 守护进程后，此更改才会应用到新采集的会话。",
   "settings_tool_images_title": "工具结果图像",
   "settings_tool_images_description": "存储在工具结果中的内联图像。",
-  "settings_search_keywords_tool_images": "图像 工具结果 删除 清理 载荷 字节 存储",
+  "settings_search_keywords_tool_images": "图像 工具结果 删除 清理 载荷 字节 存储 归档 内容 图片 保留 占位符 archive content images retention tool results placeholders storage",
   "settings_image_cleanup_intro": "预览仍包含内联图像载荷的已存储工具结果，然后用可读占位符替换这些载荷。",
   "settings_image_cleanup_project_label": "项目包含",
   "settings_image_cleanup_project_placeholder": "所有项目",
@@ -3080,5 +3109,6 @@
   ],
   "empty_archive_title": "暂无会话",
   "empty_archive_desc": "AgentsView 从这些文件夹读取会话。代理写入其中任一文件夹后，会话就会显示在这里。",
-  "empty_archive_choose_folders": "选择文件夹"
+  "empty_archive_choose_folders": "选择文件夹",
+  "usage_tooltip_no_usage": "无使用"
 }

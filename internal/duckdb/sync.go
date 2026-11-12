@@ -894,7 +894,7 @@ func (s *Sync) tryPushSessionBatch(
 		args[i] = sess.ID
 	}
 	placeholders := strings.TrimSuffix(strings.Repeat("?,", len(args)), ",")
-	for _, table := range []string{"commit_links", "pinned_messages", "secret_findings", "tool_result_events", "tool_calls", "usage_events", "session_plan_usage", "messages", "sessions"} {
+	for _, table := range []string{"commit_links", "image_text", "pinned_messages", "secret_findings", "tool_result_events", "tool_calls", "usage_events", "session_plan_usage", "session_usage_totals", "messages", "sessions"} {
 		key := "session_id"
 		if table == "sessions" {
 			key = "id"
@@ -925,7 +925,17 @@ func (s *Sync) tryPushSessionBatch(
 		if err := s.replacePlanUsage(ctx, tx, sess.ID); err != nil {
 			return nil, err
 		}
+		if err := s.replaceSessionUsageTotal(ctx, tx, sess.ID); err != nil {
+			return nil, err
+		}
 		if err := s.replaceCommitLinks(ctx, tx, sess.ID); err != nil {
+			return nil, err
+		}
+		rows, err := s.local.SessionImageTextRows(ctx, sess.ID)
+		if err != nil {
+			return nil, err
+		}
+		if err := insertImageText(ctx, tx, rows); err != nil {
 			return nil, err
 		}
 		if err := s.replaceSecretFindings(ctx, tx, sess.ID); err != nil {
@@ -986,9 +996,17 @@ func (s *Sync) sessionFingerprints(
 	if err != nil {
 		return nil, fmt.Errorf("computing plan usage fingerprints: %w", err)
 	}
+	sessionTotals, err := s.local.SessionUsageTotalFingerprints(ctx, ids)
+	if err != nil {
+		return nil, fmt.Errorf("computing session total fingerprints: %w", err)
+	}
 	commitLinks, err := s.local.SessionCommitLinkRowsBySession(ctx, ids)
 	if err != nil {
 		return nil, err
+	}
+	imageText, err := s.local.SessionImageTextRowsBySession(ctx, ids)
+	if err != nil {
+		return nil, fmt.Errorf("reading image text: %w", err)
 	}
 	out := make(map[string]string, len(sessions))
 	for _, sess := range sessions {
@@ -1021,6 +1039,8 @@ func (s *Sync) sessionFingerprints(
 			Pins           []db.PinnedMessage
 			PlanUsage      string
 			CommitLinks    []db.CommitLinkRow `json:",omitzero"`
+			ImageText      []db.ImageTextRow  `json:",omitzero"`
+			SessionTotal   string             `json:",omitzero"`
 		}{
 			SessionFields: duckSessionFingerprintFields(
 				sess, db.MirroredSessionMachine(sess, s.machine),
@@ -1033,6 +1053,8 @@ func (s *Sync) sessionFingerprints(
 			Pins:           pins,
 			PlanUsage:      planUsage[sess.ID],
 			CommitLinks:    commitLinks[sess.ID],
+			ImageText:      imageText[sess.ID],
+			SessionTotal:   sessionTotals[sess.ID],
 		}
 		data, err := json.Marshal(payload)
 		if err != nil {

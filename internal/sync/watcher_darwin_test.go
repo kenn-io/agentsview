@@ -1665,9 +1665,8 @@ func TestDarwinWatcherFallbackRecoversNativeStreamsAndReleasesPolling(t *testing
 
 	sinksMu.Lock()
 	require.Len(t, sinks, 1)
-	initialSink := sinks[0]
 	sinksMu.Unlock()
-	initialSink([]fsevents.Event{{Flags: fseventFlagKernelDropped}})
+	backend.requestFallback(darwinFallbackNativeDrop)
 
 	assert.Equal(t, PollingObligation{
 		Key:    darwinFallbackPollingObligationKey(root),
@@ -2184,7 +2183,7 @@ func TestDarwinWatcherRuntimeFallbackOrdersCoverageAndRetainsReconciliation(t *t
 				return slices.Contains(batch.Paths, before)
 			})
 
-			nativeSink([]fsevents.Event{{Flags: fseventFlagKernelDropped}})
+			backend.requestFallback(darwinFallbackNativeDrop)
 			requireReceiveWithin(t, firstReconcile, time.Second)
 			requireReceiveWithin(t, closed, time.Second)
 			assert.False(t, requireReceiveWithin(t, invalidationDispatch, time.Second))
@@ -2210,7 +2209,6 @@ func TestDarwinWatcherRuntimeFallbackOrdersCoverageAndRetainsReconciliation(t *t
 			}, retained.Paths)
 			assert.Equal(t, int32(2), attempts.Load(), "one retained marker retries until success")
 			assert.Equal(t, uint32(1), backend.fallbackActivations.Load())
-			assert.Equal(t, uint32(1), backend.nativeDrops.Load())
 
 			gotOrder := make([]string, 0, 4)
 			for len(gotOrder) < 4 {
@@ -2256,10 +2254,8 @@ func TestDarwinWatcherRuntimeFallbackWaitsForPollingRegistration(t *testing.T) {
 	require.NoError(t, os.Mkdir(root, 0o700))
 	backend, err := newDarwinWatchBackend(nil, 20*time.Millisecond)
 	require.NoError(t, err)
-	var nativeSink func([]fsevents.Event)
 	invalidated := make(chan struct{}, 1)
-	backend.newStream = func(_ string, sink func([]fsevents.Event)) (darwinStream, error) {
-		nativeSink = sink
+	backend.newStream = func(string, func([]fsevents.Event)) (darwinStream, error) {
 		return &handoffRecordingStream{close: func() { invalidated <- struct{}{} }}, nil
 	}
 	allowPolling := make(chan struct{})
@@ -2290,7 +2286,7 @@ func TestDarwinWatcherRuntimeFallbackWaitsForPollingRegistration(t *testing.T) {
 	backend.retryMax = 2 * time.Millisecond
 	watcher.Start()
 
-	nativeSink([]fsevents.Event{{Flags: fseventFlagUserDropped}})
+	backend.requestFallback(darwinFallbackNativeDrop)
 	assert.Equal(t, []string{root}, requireReceiveWithin(t, coverageCalls, time.Second))
 	assert.Equal(t, []string{root}, requireReceiveWithin(t, coverageCalls, time.Second))
 	select {
@@ -2303,46 +2299,279 @@ func TestDarwinWatcherRuntimeFallbackWaitsForPollingRegistration(t *testing.T) {
 	assert.Equal(t, int32(2), attempts.Load())
 }
 
-func TestDarwinWatcherFallbackNativeCallbackDoesNotRunPolling(t *testing.T) {
-	root := t.TempDir()
+// TestDarwinWatcherNativeDropReconcilesOnlyThatRoot is the work-count gate for
+// issue 2567. A dropped FSEvents batch on one recursive root must cost one
+// bounded reconciliation of that root's scopes. It must not register any
+// unwatched-poll obligation, start the backend-wide fallback, or close any
+// stream, and every root, including the one that dropped events, must keep
+// delivering native events. A drop storm on the same root stays scoped to that
+// root. The polling callbacks block forever, so a native callback that reached
+// them would also fail the prompt-return check.
+func TestDarwinWatcherNativeDropReconcilesOnlyThatRoot(t *testing.T) {
+	base := t.TempDir()
+	roots := []string{
+		filepath.Join(base, "agent-a"),
+		filepath.Join(base, "agent-b"),
+		filepath.Join(base, "agent-c"),
+	}
+	for _, root := range roots {
+		require.NoError(t, os.Mkdir(root, 0o700))
+	}
+	dropped := roots[1]
+
 	backend, err := newDarwinWatchBackend(nil, 20*time.Millisecond)
 	require.NoError(t, err)
-	var nativeSink func([]fsevents.Event)
-	backend.newStream = func(_ string, sink func([]fsevents.Event)) (darwinStream, error) {
-		nativeSink = sink
-		return &handoffRecordingStream{}, nil
+	var sinksMu sync.Mutex
+	sinks := make(map[string]func([]fsevents.Event))
+	var streamsCreated, streamsClosed atomic.Int32
+	backend.newStream = func(root string, sink func([]fsevents.Event)) (darwinStream, error) {
+		sinksMu.Lock()
+		sinks[root] = sink
+		sinksMu.Unlock()
+		streamsCreated.Add(1)
+		return &handoffRecordingStream{close: func() { streamsClosed.Add(1) }}, nil
 	}
-	pollingEntered := make(chan struct{})
+	sinkFor := func(root string) func([]fsevents.Event) {
+		sinksMu.Lock()
+		defer sinksMu.Unlock()
+		sink := sinks[root]
+		require.NotNil(t, sink, "no native stream for %s", root)
+		return sink
+	}
+
+	var pollingCalls atomic.Int32
 	releasePolling := make(chan struct{})
 	unblockPolling := sync.OnceFunc(func() { close(releasePolling) })
+	batches := make(chan WatchBatch, 64)
+	// order records trust revocation and reconciliation delivery so the test
+	// can require the first to precede the second.
+	order := make(chan string, 256)
+	var trustRevocations atomic.Int32
 	watcher, err := newWatcherWithBackendOptions(
-		0, 0, func(context.Context, WatchBatch) error { return nil }, backend,
-		defaultWatchBatchMaxEntries, defaultWatchBatchMaxPathBytes,
-		WatcherOptions{OnCoverageDegraded: func([]string) error {
-			close(pollingEntered)
-			<-releasePolling
+		0, 0, func(_ context.Context, batch WatchBatch) error {
+			if len(batch.ReconcileRoots) > 0 {
+				select {
+				case order <- "reconcile":
+				default:
+				}
+			}
+			batches <- batch
 			return nil
-		}},
+		}, backend, defaultWatchBatchMaxEntries, defaultWatchBatchMaxPathBytes,
+		WatcherOptions{
+			OnNativeEventsLost: func() {
+				trustRevocations.Add(1)
+				select {
+				case order <- "trust":
+				default:
+				}
+			},
+			OnPollingRequired: func(PollingObligation) error {
+				pollingCalls.Add(1)
+				<-releasePolling
+				return nil
+			},
+			OnPollingReleased: func(string) error { return nil },
+			OnCoverageDegraded: func([]string) error {
+				pollingCalls.Add(1)
+				<-releasePolling
+				return nil
+			},
+		},
 	)
 	require.NoError(t, err)
 	t.Cleanup(watcher.Stop)
-	// Release the parked polling callback before Stop waits for the backend.
+	// Release any parked polling callback before Stop waits for the backend.
 	t.Cleanup(unblockPolling)
-	watcher.RegisterRoots([]WatchRoot{{
-		Path: root, Recursive: true, Exists: true,
-		Scopes: []WatchScope{{SyncDir: root}},
-	}}, 10)
-	watcher.Start()
+	plan := make([]WatchRoot, len(roots))
+	for i, root := range roots {
+		plan[i] = WatchRoot{
+			Path: root, Recursive: true, Exists: true,
+			Scopes: []WatchScope{{Agent: filepath.Base(root), SyncDir: root}},
+		}
+	}
+	require.Equal(t, []RecursiveWatchResult{{Watched: 1}, {Watched: 1}, {Watched: 1}},
+		watcher.RegisterRoots(plan, 10))
+	require.NoError(t, watcher.Start())
+	require.Equal(t, int32(len(roots)), streamsCreated.Load())
+
+	var seen []WatchBatch
+	collect := func(match func(WatchBatch) bool) WatchBatch {
+		t.Helper()
+		batch := waitForDarwinBatch(t, batches, func(batch WatchBatch) bool {
+			seen = append(seen, batch)
+			return match(batch)
+		})
+		return batch
+	}
 
 	returned := make(chan struct{})
 	go func() {
-		nativeSink([]fsevents.Event{{Flags: fseventFlagKernelDropped}})
+		sinkFor(dropped)([]fsevents.Event{{Flags: fseventFlagMustScanSubDirs}})
 		close(returned)
 	}()
-	// Polling stays blocked until the native callback returns.
-	requireReceiveWithin(t, returned, time.Second)
-	requireReceiveWithin(t, pollingEntered, time.Second)
-	unblockPolling()
+	requireReceiveWithin(t, returned, 5*time.Second)
+	reconcile := collect(func(batch WatchBatch) bool { return len(batch.ReconcileRoots) > 0 })
+	assert.Equal(t, []string{dropped}, reconcile.ReconcileRoots,
+		"a drop reconciles only the root whose stream lost events")
+	assert.False(t, reconcile.FullSync, "a single-root drop must not become a full rescan")
+	assert.False(t, reconcile.LostEvents,
+		"a single-root drop must not clear archive-wide freshness caches")
+	assert.Equal(t, "trust", requireReceiveWithin(t, order, 5*time.Second),
+		"event-dependent trust must be revoked before the root is reconciled")
+
+	// A storm of drops on the same root.
+	for range 100 {
+		sinkFor(dropped)([]fsevents.Event{{Flags: fseventFlagMustScanSubDirs}})
+	}
+
+	// Native watching continues on every root, including the one that dropped.
+	for _, root := range roots {
+		path := filepath.Join(root, "after-drop.jsonl")
+		sinkFor(root)([]fsevents.Event{{
+			Path: path, Flags: fseventFlagItemModified | fseventFlagItemIsFile,
+		}})
+		collect(func(batch WatchBatch) bool { return slices.Contains(batch.Paths, path) })
+	}
+
+	for _, batch := range seen {
+		assert.False(t, batch.FullSync, "no batch may escalate to a full rescan")
+		for _, root := range batch.ReconcileRoots {
+			assert.Equal(t, dropped, root, "only the dropping root may be reconciled")
+		}
+	}
+	assert.Zero(t, pollingCalls.Load(), "a native drop must not register unwatched polling")
+	assert.Zero(t, streamsClosed.Load(), "a native drop must not close any stream")
+	assert.Equal(t, int32(len(roots)), streamsCreated.Load(),
+		"a native drop must not recreate streams")
+	assert.Equal(t, darwinFallbackInactive, backend.fallbackPhaseValue())
+	assert.Equal(t, darwinFallbackReasonNone,
+		darwinFallbackReason(backend.fallbackReason.Load()))
+	assert.Zero(t, backend.fallbackActivations.Load())
+	assert.Equal(t, uint32(101), backend.nativeDrops.Load())
+	assert.Positive(t, trustRevocations.Load())
+}
+
+// TestDarwinWatcherNativeDropRecoversHiddenRootLoss covers a drop that hides
+// the root's own removal or replacement. The FSEvents bridge collapses a batch
+// with a drop flag into one pathless must-rescan event, so a RootChanged flag
+// in that batch is lost. The lifecycle worker must notice that the root no
+// longer names the directory its stream opened on and run root-local loss
+// recovery: close only that stream and hand only that root to polling. A
+// replaced root then gets a new stream and releases its polling.
+func TestDarwinWatcherNativeDropRecoversHiddenRootLoss(t *testing.T) {
+	replace := func(t *testing.T, root string) {
+		require.NoError(t, os.Rename(root, root+".old"))
+		require.NoError(t, os.Mkdir(root, 0o700))
+	}
+	for _, tc := range []struct {
+		name     string
+		mutate   func(t *testing.T, root string)
+		recovers bool
+		// duringActivation replaces the root while its first stream is being
+		// created, so the identity recorded at activation must be the
+		// directory that existed before the stream, not its replacement.
+		duringActivation bool
+	}{
+		{name: "removed", mutate: func(t *testing.T, root string) {
+			require.NoError(t, os.RemoveAll(root))
+		}},
+		{name: "replaced", recovers: true, mutate: replace},
+		{name: "replaced during activation", recovers: true, mutate: replace,
+			duringActivation: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			base := t.TempDir()
+			healthy := filepath.Join(base, "agent-a")
+			dropped := filepath.Join(base, "agent-b")
+			for _, root := range []string{healthy, dropped} {
+				require.NoError(t, os.Mkdir(root, 0o700))
+			}
+			backend, err := newDarwinWatchBackend(nil, 20*time.Millisecond)
+			require.NoError(t, err)
+			backend.retryInitial = 5 * time.Millisecond
+			backend.retryMax = 10 * time.Millisecond
+			var sinksMu sync.Mutex
+			sinks := make(map[string]func([]fsevents.Event))
+			created := make(map[string]int)
+			closed := make(map[string]int)
+			backend.newStream = func(root string, sink func([]fsevents.Event)) (darwinStream, error) {
+				sinksMu.Lock()
+				defer sinksMu.Unlock()
+				if tc.duringActivation && root == dropped && created[root] == 0 {
+					tc.mutate(t, root)
+				}
+				sinks[root] = sink
+				created[root]++
+				return &handoffRecordingStream{close: func() {
+					sinksMu.Lock()
+					closed[root]++
+					sinksMu.Unlock()
+				}}, nil
+			}
+			counts := func(root string) (int, int) {
+				sinksMu.Lock()
+				defer sinksMu.Unlock()
+				return created[root], closed[root]
+			}
+			polling := make(chan PollingObligation, 8)
+			released := make(chan string, 8)
+			watcher, err := newWatcherWithBackendOptions(
+				0, 0, func(context.Context, WatchBatch) error { return nil },
+				backend, defaultWatchBatchMaxEntries, defaultWatchBatchMaxPathBytes,
+				WatcherOptions{
+					OnPollingRequired: func(obligation PollingObligation) error {
+						polling <- obligation
+						return nil
+					},
+					OnPollingReleased: func(key string) error {
+						released <- key
+						return nil
+					},
+				},
+			)
+			require.NoError(t, err)
+			t.Cleanup(watcher.Stop)
+			watcher.RegisterRoots([]WatchRoot{
+				{
+					Path: healthy, Recursive: true, Exists: true,
+					Scopes: []WatchScope{{Agent: "agent-a", SyncDir: healthy}},
+				},
+				{
+					Path: dropped, Recursive: true, Exists: true,
+					Scopes: []WatchScope{{Agent: "agent-b", SyncDir: dropped}},
+				},
+			}, 10)
+			require.NoError(t, watcher.Start())
+
+			if !tc.duringActivation {
+				tc.mutate(t, dropped)
+			}
+			sinksMu.Lock()
+			sink := sinks[dropped]
+			sinksMu.Unlock()
+			sink([]fsevents.Event{{Flags: fseventFlagMustScanSubDirs}})
+
+			obligation := requireReceiveWithin(t, polling, 5*time.Second)
+			assert.Equal(t, dropped, obligation.Key,
+				"only the root whose loss the drop hid may move to polling")
+			require.Eventually(t, func() bool {
+				_, closedDropped := counts(dropped)
+				return closedDropped == 1
+			}, 5*time.Second, time.Millisecond)
+			if tc.recovers {
+				assert.Equal(t, dropped, requireReceiveWithin(t, released, 5*time.Second))
+				createdDropped, _ := counts(dropped)
+				assert.Equal(t, 2, createdDropped,
+					"the replaced root must get a stream on its new directory")
+			}
+			createdHealthy, closedHealthy := counts(healthy)
+			assert.Equal(t, 1, createdHealthy)
+			assert.Zero(t, closedHealthy, "other roots keep their streams")
+			assert.Equal(t, darwinFallbackInactive, backend.fallbackPhaseValue())
+			assert.Zero(t, backend.fallbackActivations.Load())
+		})
+	}
 }
 
 func TestDarwinWatcherShallowStartFailureFallbackPollsBeforeInvalidation(t *testing.T) {

@@ -601,6 +601,46 @@ describe("ToolBlock input source and copy", () => {
     await click('button[aria-label="Copy input"]');
     expect(copyToClipboardMock).toHaveBeenCalledExactlyOnceWith("make build");
   });
+  it("shows the file field and the leading hunk header as one strip", async () => {
+    await render({
+      toolCall: call(
+        "Edit",
+        { file_path: "src/app.go", old_string: "before", new_string: "after" },
+        { category: "Edit" },
+      ),
+    });
+    await click(".tool-header");
+    const strip = document.querySelector(".tool-meta.diff-strip");
+    expect(strip?.textContent).toContain("src/app.go");
+    const hunk = strip?.querySelector(".diff-strip-hunk")?.textContent ?? "";
+    expect(hunk.startsWith("@@")).toBe(true);
+    // The header moves into the strip rather than repeating above the code.
+    expect(text(".diff-view")).not.toContain("@@");
+    expect(text(".diff-view")).toContain("-before");
+    expect(text(".diff-view")).toContain("+after");
+  });
+  it("keeps the leading hunk header in the diff while in-session search runs", async () => {
+    // Search offsets index the diff's source text, so the header must stay
+    // in the code block instead of moving into the strip.
+    searchState.active = true;
+    searchState.current = "3:tool-input:0";
+    searchState.query = "after";
+    await render({
+      toolCall: call(
+        "Edit",
+        { file_path: "src/app.go", old_string: "before", new_string: "after" },
+        { category: "Edit" },
+      ),
+      searchScope: { ordinal: 3, callIdx: 0 },
+    });
+    expect(document.querySelector(".tool-header")?.getAttribute("aria-expanded")).toBe("true");
+    expect(document.querySelector(".tool-meta.diff-strip")).not.toBeNull();
+    expect(document.querySelector(".diff-strip-hunk")).toBeNull();
+    const diff = text(".diff-view");
+    expect(diff.startsWith("@@")).toBe(true);
+    expect(diff).toContain("-before");
+    expect(diff).toContain("+after");
+  });
   it("names the file in the header and copies the diff of a per-file change", async () => {
     const diff = "@@ -1 +1 @@\n-old\n+new\n";
     await render({

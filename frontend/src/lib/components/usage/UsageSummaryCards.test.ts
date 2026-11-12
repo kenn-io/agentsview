@@ -222,7 +222,7 @@ describe("UsageSummaryCards", () => {
     ]);
     expect(cardValue("Total Input")).toBe("7.9B");
     expect(cardValue("Uncached Input")).toBe("248.6M");
-    expect(cardSub("Uncached Input")).toBe("+7.6B cached");
+    expect(cardSub("Uncached Input")).toBe("+7.7B cached");
 
     unmount(component);
     component = undefined;
@@ -270,7 +270,7 @@ describe("UsageSummaryCards", () => {
 
     usage.setSelectedTokenTypes(["output"]);
     await tick();
-    expect(document.querySelector(".featured .card-value")?.textContent?.trim()).toBe("20M");
+    expect(document.querySelector(".featured .card-value")?.textContent?.trim()).toBe("20.0M");
     expect(cardValue("Total Input")).toBe("7.9B");
   });
 

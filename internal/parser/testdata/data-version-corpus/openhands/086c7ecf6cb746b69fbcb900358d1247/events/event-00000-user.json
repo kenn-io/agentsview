@@ -1,0 +1,7 @@
+{
+			"id":"e0",
+			"timestamp":"2026-04-02T15:25:40.706887",
+			"source":"user",
+			"llm_message":{"role":"user","content":[{"type":"text","text":"Help me debug the server"}]},
+			"kind":"MessageEvent"
+		}

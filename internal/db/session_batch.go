@@ -23,7 +23,12 @@ type SessionBatchWrite struct {
 	Messages          []Message
 	UsageEvents       []UsageEvent
 	// PlanUsage replaces the session's plan usage row; nil removes it.
-	PlanUsage           *SessionPlanUsage
+	PlanUsage *SessionPlanUsage
+	// SessionTotal replaces the session's recorded total when
+	// ReplaceSessionTotal is set; nil then removes it. Writes that are not
+	// a full parse leave the stored total alone.
+	SessionTotal        *SessionUsageTotal
+	ReplaceSessionTotal bool
 	IdentityObservation export.ProjectIdentityObservation
 	// IdentitySnapshotProject distinguishes legacy omission (nil, use the
 	// aggregate project) from an explicit empty parser source (omit snapshot).
@@ -522,6 +527,7 @@ func (db *DB) writeOneSessionBatchTx(
 	msgs := write.Messages
 	var pins []savedPin
 	filled, extended := 0, 0
+	var imageDiff *messageDiffPlan
 	if replaceMessages && sessionExists {
 		if err := reconcileConversationMessagesTx(queries, write.Session.ID, msgs, true, usageOnly); err != nil {
 			return 0, err
@@ -563,6 +569,7 @@ func (db *DB) writeOneSessionBatchTx(
 			if err := applySessionMessageDiffTx(ctx, tx, write.Session.ID, plan); err != nil {
 				return 0, err
 			}
+			imageDiff = &plan
 			msgs = nil
 		}
 	} else {
@@ -637,6 +644,16 @@ func (db *DB) writeOneSessionBatchTx(
 		if err := bump(queries, write.Session.ID); err != nil {
 			return 0, err
 		}
+	}
+	if imageDiff != nil {
+		err = refreshMessageDiffImageTextTx(queries, write.Session.ID, *imageDiff, true)
+	} else if !sessionExists || replaceMessages || filled > 0 {
+		err = refreshImageTextOccurrencesTx(queries, write.Session.ID)
+	} else {
+		err = refreshIncrementalImageTextOccurrencesTx(queries, write.Session.ID, msgs, nil)
+	}
+	if err != nil {
+		return 0, err
 	}
 	if replaceMessages && sessionExists || filled > 0 || extended > 0 {
 		if err := reconcileRecallEvidenceForSessionTx(
@@ -951,6 +968,13 @@ func writeSessionBatchMetadataTx(ctx context.Context, tx *sql.Tx, queries transa
 		queries, write.Session.ID, write.PlanUsage, false,
 	); err != nil {
 		return err
+	}
+	if write.ReplaceSessionTotal {
+		if err := replaceSessionUsageTotalTx(
+			queries, write.Session.ID, write.SessionTotal, false,
+		); err != nil {
+			return err
+		}
 	}
 
 	return nil

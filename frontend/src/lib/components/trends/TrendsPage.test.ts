@@ -119,21 +119,16 @@ describe("TrendsPage", () => {
     expect(window.location.search).toContain("from=2024-01-10");
   });
 
-  it("changes bucketing via the chart Group by menu", async () => {
+  it("changes bucketing via the chart Group by control", async () => {
     component = mount(TrendsPage, { target: document.body });
     await flushPromises();
 
-    const trigger = Array.from(document.querySelectorAll<HTMLButtonElement>("button")).find((b) =>
-      b.textContent?.includes("Group by"),
+    const group = document.querySelector<HTMLElement>('[aria-label="Group by"]');
+    expect(group).not.toBeNull();
+    const monthItem = Array.from(group!.querySelectorAll<HTMLButtonElement>("button")).find(
+      (b) => b.textContent?.trim() === "Month",
     );
-    expect(trigger).not.toBeNull();
-    trigger!.click();
-    await tick();
-
-    const monthItem = Array.from(
-      document.querySelectorAll<HTMLButtonElement>('[role="menuitemradio"]'),
-    ).find((b) => b.textContent?.trim() === "month");
-    expect(monthItem).not.toBeNull();
+    expect(monthItem).toBeDefined();
     monthItem!.click();
     await flushPromises();
 
@@ -274,9 +269,9 @@ describe("TrendsPage", () => {
 
     vi.setSystemTime(new Date("2026-06-20T12:00:00"));
     const refresh = Array.from(document.querySelectorAll<HTMLButtonElement>("button")).find(
-      (b) => b.textContent?.trim() === "Refresh",
+      (b) => b.textContent?.trim() === "Recompute",
     );
-    expect(refresh).not.toBeNull();
+    expect(refresh).toBeDefined();
     refresh!.click();
     await flushPromises();
 
@@ -358,9 +353,9 @@ describe("TrendsPage", () => {
     textarea!.dispatchEvent(new Event("input", { bubbles: true }));
 
     const refreshButton = Array.from(document.querySelectorAll<HTMLButtonElement>("button")).find(
-      (button) => button.textContent?.trim() === "Refresh",
+      (button) => button.textContent?.trim() === "Recompute",
     );
-    expect(refreshButton).not.toBeNull();
+    expect(refreshButton).toBeDefined();
     refreshButton!.click();
     await flushPromises();
     expect(document.body.textContent).toContain("at least one trend term is required");
@@ -372,7 +367,7 @@ describe("TrendsPage", () => {
     component = mount(TrendsPage, { target: document.body });
     await flushPromises();
     const refreshButton = Array.from(document.querySelectorAll<HTMLButtonElement>("button")).find(
-      (button) => button.textContent?.trim() === "Refresh",
+      (button) => button.textContent?.trim() === "Recompute",
     );
     const request = Promise.withResolvers<never>();
     mocks.getApiV1TrendsTerms.mockReturnValueOnce(request.promise);

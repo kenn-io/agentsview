@@ -79,7 +79,7 @@ func TestSnapshotFingerprintTracksLabelsAndPRLinks(t *testing.T) {
 	s := &Sync{machine: "m"}
 	fingerprint := func(sess db.Session) string {
 		t.Helper()
-		fp, err := s.snapshotFingerprint(&db.SessionMirrorSnapshot{Session: sess})
+		fp, err := s.snapshotFingerprint(&db.SessionMirrorSnapshot{Session: sess}, nil)
 		require.NoError(t, err)
 		return fp
 	}
@@ -120,15 +120,19 @@ func TestRowBuildersMatchInsertColumns(t *testing.T) {
 	s := &Sync{machine: "m", archiveID: "a"}
 	planUsage, err := planUsageRow("s", &db.SessionPlanUsage{}, 1)
 	require.NoError(t, err)
+	total, err := sessionUsageTotalRow("s", &db.SessionUsageTotal{Source: "x"}, 1)
+	require.NoError(t, err)
 	rows := map[string][]any{
-		"sessions":           s.sessionRow(sessionPayload{session: sess, messages: []db.Message{msg}}, "fp", 1),
-		"messages":           messageRow(msg, 1),
-		"tool_calls":         toolCallRow(msg, tc, 0, 1),
-		"tool_result_events": toolResultEventRow(msg, 0, tc.ResultEvents[0], 1),
-		"usage_events":       usageEventRow(db.UsageEvent{SessionID: "s"}, 1),
-		"secret_findings":    secretFindingRow(db.SecretFinding{SessionID: "s"}, 0, 1),
-		"pinned_messages":    pinnedMessageRow(db.PinnedMessage{SessionID: "s"}, 1),
-		"session_plan_usage": planUsage,
+		"sessions":             s.sessionRow(sessionPayload{session: sess, messages: []db.Message{msg}}, "fp", 1),
+		"messages":             messageRow(msg, 1),
+		"tool_calls":           toolCallRow(msg, tc, 0, 1),
+		"tool_result_events":   toolResultEventRow(msg, 0, tc.ResultEvents[0], 1),
+		"usage_events":         usageEventRow(db.UsageEvent{SessionID: "s"}, 1),
+		"secret_findings":      secretFindingRow(db.SecretFinding{SessionID: "s"}, 0, 1),
+		"pinned_messages":      pinnedMessageRow(db.PinnedMessage{SessionID: "s"}, 1),
+		"image_text":           imageTextRow(db.ImageTextRow{SessionID: "s"}, 1),
+		"session_plan_usage":   planUsage,
+		"session_usage_totals": total,
 	}
 	for table, row := range rows {
 		spec, ok := tableByName(table)

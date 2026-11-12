@@ -35,6 +35,28 @@ var usageColumns = []struct{ name, typ, expression string }{
 	{"usage_web", "Int64", "JSONExtractInt(token_usage, 'server_tool_use', 'web_search_requests')"},
 }
 
+// chRecordedCostSQL extracts a message's harness-recorded cost, in
+// microdollars, from its token usage JSON: the integer key
+// recorded_cost_microdollars that parsers write beside the token counters.
+// An absent key or a negative value is NULL. A recorded cost is evidence,
+// not a price; Go decides per row whether it prices the row
+// (db.ReportedCostForPricing).
+func chRecordedCostSQL(tokenUsage string) string {
+	value := "JSONExtract(" + tokenUsage + ", 'recorded_cost_microdollars', 'Nullable(Int64)')"
+	return "if(" + value + " >= 0, " + value + ", CAST(NULL AS Nullable(Int64)))"
+}
+
+// usageRecordedCostColumn is the usage_messages column holding a message's
+// recorded cost. It stays out of usageColumns: those are token counters that
+// the snapshot usage_facts tuple also stores, and that tuple keeps the type
+// its table was created with.
+const usageRecordedCostColumn = "usage_recorded_cost"
+
+// usageRecordedCostsColumn is the usage_session_snapshots column holding
+// each snapshot message's recorded cost, in usage_messages order, so an
+// ARRAY JOIN beside usage_facts pairs each fact with its cost.
+const usageRecordedCostsColumn = "usage_recorded_costs"
+
 // Keep the source key, not the timestamp, as the replacement key: a retry may
 // correct a timestamp or remove usage without changing the message ordinal.
 const usageMessageFields = `session_id, ordinal, timestamp, model, provider_id,
@@ -51,10 +73,15 @@ func ensureUsageMessages(ctx context.Context, conn *sql.DB) error {
 		"claude_request_id String", "source_uuid String", "push_version UInt64",
 	}
 	fields := []string{usageMessageFields}
+	targets := []string{usageMessageFields}
 	for _, column := range usageColumns {
 		columns = append(columns, column.name+" "+column.typ)
 		fields = append(fields, column.expression+" AS "+column.name)
+		targets = append(targets, column.name)
 	}
+	columns = append(columns, usageRecordedCostColumn+" Nullable(Int64)")
+	fields = append(fields, chRecordedCostSQL("token_usage")+" AS "+usageRecordedCostColumn)
+	targets = append(targets, usageRecordedCostColumn, "revision")
 	selection := strings.Join(fields, ", ")
 	// The low bit makes a live insert beat a concurrent, older backfill of
 	// the same push version. UInt128 preserves every possible UInt64 version.
@@ -63,6 +90,15 @@ func ensureUsageMessages(ctx context.Context, conn *sql.DB) error {
 		 ENGINE = ReplacingMergeTree(revision) ORDER BY (`+strings.Join(usageMessagesOrderBy, ", ")+`)
 		 SETTINGS index_granularity = 64`); err != nil {
 		return fmt.Errorf("creating stored usage messages: %w", err)
+	}
+	// Mirrors created before the recorded cost column gain it before the view
+	// writes it. Existing rows keep NULL with no backfill: only parsers
+	// changed together with this column write the JSON key, and a binary
+	// that pushes their messages has run this step first, so every message
+	// carrying the key reaches the table through the updated view.
+	if _, err := conn.ExecContext(ctx, "ALTER TABLE usage_messages ADD COLUMN IF NOT EXISTS "+
+		usageRecordedCostColumn+" Nullable(Int64)"); err != nil {
+		return fmt.Errorf("adding usage_messages.%s: %w", usageRecordedCostColumn, err)
 	}
 	// Mirrors from before the view computed the counters read them from
 	// stored columns of messages that the code no longer creates.
@@ -82,8 +118,10 @@ func ensureUsageMessages(ctx context.Context, conn *sql.DB) error {
 		return nil
 	}
 	log.Print("ClickHouse: filling usage messages before serving; source messages remain unchanged")
-	if _, err := conn.ExecContext(ctx, "INSERT INTO usage_messages SELECT "+selection+
-		", toUInt128(push_version) * 2 AS revision FROM messages"); err != nil {
+	// Name the target columns: an upgraded table has the recorded cost after
+	// revision, a new one before it.
+	if _, err := conn.ExecContext(ctx, "INSERT INTO usage_messages ("+strings.Join(targets, ", ")+
+		") SELECT "+selection+", toUInt128(push_version) * 2 AS revision FROM messages"); err != nil {
 		return fmt.Errorf("backfilling usage messages (startup can retry): %w", err)
 	}
 	return writeMetadata(ctx, conn, map[string]string{marker: "1"})
@@ -173,6 +211,11 @@ func ensureUsageSessionSnapshots(ctx context.Context, conn *sql.DB) error {
 			return err
 		}
 	}
+	if _, has := existing[spec.name][usageRecordedCostsColumn]; !has {
+		if err := addSnapshotRecordedCosts(ctx, conn); err != nil {
+			return err
+		}
+	}
 	return ensurePreparedUsage(ctx, conn)
 }
 
@@ -209,6 +252,29 @@ func addSnapshotPreparesUsage(ctx context.Context, conn *sql.DB) error {
 	} {
 		if _, err := conn.ExecContext(ctx, stmt); err != nil {
 			return fmt.Errorf("adding %s.%s: %w", usageSessionSnapshotTable, chSnapshotPreparesUsage, err)
+		}
+	}
+	return nil
+}
+
+// chSnapshotRecordedCostsColumn defines usageRecordedCostsColumn from the
+// snapshot's raw messages. It is a separate column rather than a usage_facts
+// element because a table keeps the usage_facts expression it was created
+// with.
+var chSnapshotRecordedCostsColumn = usageRecordedCostsColumn +
+	" Array(Nullable(Int64)) MATERIALIZED arrayMap(m -> " +
+	chRecordedCostSQL("tupleElement(m,'token_usage')") + ", usage_messages)"
+
+// addSnapshotRecordedCosts adds usageRecordedCostsColumn to a snapshot
+// table, as addSnapshotPreparesUsage adds its column: parts written earlier
+// compute it from usage_messages on read until the mutation stores it.
+func addSnapshotRecordedCosts(ctx context.Context, conn *sql.DB) error {
+	for _, stmt := range []string{
+		"ALTER TABLE " + usageSessionSnapshotTable + " ADD COLUMN IF NOT EXISTS " + chSnapshotRecordedCostsColumn,
+		"ALTER TABLE " + usageSessionSnapshotTable + " MATERIALIZE COLUMN " + usageRecordedCostsColumn,
+	} {
+		if _, err := conn.ExecContext(ctx, stmt); err != nil {
+			return fmt.Errorf("adding %s.%s: %w", usageSessionSnapshotTable, usageRecordedCostsColumn, err)
 		}
 	}
 	return nil
@@ -385,7 +451,8 @@ const chSnapshotStampSQL = `(SELECT count() FROM usage_session_snapshots) AS sna
 const chPreparedUsageColumns = `session_id, message_ordinal, ts, pricing_ts, source, model,
 	provider_id, agent, claude_message_id, claude_request_id, source_uuid, usage_dedup_key,
 	input_tokens_norm, output_tokens_norm, cache_create_norm, cache_create_1h_norm,
-	cache_read_norm, reasoning_tokens_norm, web_search_requests_norm, cost_microdollars, cost_source`
+	cache_read_norm, reasoning_tokens_norm, web_search_requests_norm, cost_microdollars, cost_source,
+	recorded_cost_microdollars`
 
 // chPreparedUsagePricingDigestSQL reads the digest the mirror was last priced
 // under. A push writes every price record for a digest before this key, so a
@@ -446,7 +513,7 @@ func chPreparedUsageKeyedSQL(sessionWhere string) string {
 		eventWhere += " AND " + sessionWhere
 	}
 	selection := clickUsageNormalizedQueryFrom("", messageWhere, eventWhere,
-		"usage_session_snapshots s ARRAY JOIN s.usage_facts AS m",
+		chSnapshotMessageFrom, chSnapshotMessageRecordedCost,
 		"usage_session_snapshots s ARRAY JOIN s.usage_events AS ue", "1", "s.revision")
 	return `SELECT *, ` + chPriceModelCaseSQL() + ` AS price_model, ` + chUsagePriceKeySQL + ` AS price_key
 		FROM (` + selection + `)`
@@ -462,7 +529,7 @@ func chRawHostUsageRowsSQL() string {
 	const sessions = " AND s.id IN (SELECT id FROM usage_raw_host_sessions)"
 	selection := clickUsageNormalizedQueryFrom("",
 		chUsageStoredMessageEligibility+sessions, chUsageEventEligibility+sessions,
-		"usage_messages m JOIN sessions s ON s.id = m.session_id",
+		"usage_messages m JOIN sessions s ON s.id = m.session_id", chStoredMessageRecordedCost,
 		"usage_events ue JOIN sessions s ON s.id = ue.session_id", chUsageMessageCurrent, "toUInt128(0)")
 	keyed := `SELECT *, ` + chPriceModelCaseSQL() + ` AS price_model, ` + chUsagePriceKeySQL + ` AS price_key
 		FROM (` + selection + `)`
@@ -545,6 +612,7 @@ var chPreparedUsageDeltaColumns = []struct{ name, typ string }{
 	{"web_search_requests_norm", "Int64"},
 	{"cost_microdollars", "Nullable(Int64)"},
 	{"cost_source", "String"},
+	{"recorded_cost_microdollars", "Nullable(Int64)"},
 	{"price_model", "String"},
 	{"price_key", "String"},
 	{"snapshot_revision", "UInt128"},
