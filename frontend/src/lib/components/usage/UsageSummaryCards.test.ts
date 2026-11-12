@@ -314,6 +314,7 @@ describe("UsageSummaryCards", () => {
   it("keeps the last summary under a failed refresh and retries the full refresh", async () => {
     const refresh = vi.spyOn(usage, "fetchAll").mockResolvedValue();
     usage.summary = issueSummary();
+    usage.summaryOutOfScope = false;
     usage.errors.summary = "boom";
 
     component = mount(UsageSummaryCards, {
@@ -329,5 +330,20 @@ describe("UsageSummaryCards", () => {
     alert.querySelector<HTMLButtonElement>("button")!.click();
     expect(refresh).toHaveBeenCalledExactlyOnceWith({ preserveTimeRange: true });
     refresh.mockRestore();
+  });
+
+  it("hides totals that answered other filters after a failed read", async () => {
+    usage.summary = issueSummary();
+    usage.summaryOutOfScope = true;
+    usage.errors.summary = "boom";
+    try {
+      component = mount(UsageSummaryCards, { target: document.body });
+      await tick();
+
+      expect(cardValue("Total Input")).toBe("--");
+      expect(document.querySelector('[role="alert"]')?.textContent).toContain("boom");
+    } finally {
+      usage.summaryOutOfScope = false;
+    }
   });
 });

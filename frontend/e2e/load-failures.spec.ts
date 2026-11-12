@@ -73,8 +73,13 @@ test.describe("Failed page loads", () => {
       await page.screenshot({ path: testInfo.outputPath(`${name}.png`) });
 
       recover();
+      const retried = page.waitForResponse(
+        (response) =>
+          read(new URL(response.url())) && response.request().method() === "GET" && response.ok(),
+      );
       await alert.getByRole("button", { name: "Retry" }).click();
-      await expect(page.getByRole("alert").filter({ hasText: FAILURE })).toHaveCount(0);
+      await retried;
+      await expect(page.getByRole("alert").filter({ hasText: "Failed to load" })).toHaveCount(0);
     });
   }
 });

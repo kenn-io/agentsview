@@ -411,8 +411,11 @@
     </div>
   </Card>
 
-  {#if insights.error && insights.items.length === 0 && insights.tasks.length === 0}
+  {#if insights.error}
     <LoadError message={insights.error} onRetry={() => void insights.load()} telemetry="insight" />
+  {/if}
+  {#if insights.error && insights.items.length === 0 && insights.tasks.length === 0}
+    <!-- Nothing loaded to show under the error. -->
   {:else if insights.loading}
     <LoadingState label={m.insights_page_loading_archive()} />
   {:else if insights.items.length === 0 && insights.tasks.length === 0}

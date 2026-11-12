@@ -192,6 +192,24 @@ describe("MessagesStore", () => {
     expect(messages.messages[0]!.ordinal).toBe(2_801);
   });
 
+  it("clears an older-page failure once a later older page loads", async () => {
+    vi.mocked(api.getSession).mockResolvedValue(makeSession("s1", 3_001));
+    vi.mocked(api.getMessages).mockResolvedValueOnce(
+      makeMessagesResponse(Array.from({ length: 100 }, (_, i) => makeMessage(3_000 - i))),
+    );
+    await messages.loadSession("s1");
+    vi.mocked(api.getMessages).mockRejectedValueOnce(new Error("older page failed"));
+    await messages.loadOlder();
+    expect(messages.loadError).toBe("older page failed");
+
+    vi.mocked(api.getMessages).mockResolvedValueOnce(
+      makeMessagesResponse(Array.from({ length: 100 }, (_, i) => makeMessage(2_900 - i))),
+    );
+    await messages.loadOlder();
+
+    expect(messages.loadError).toBeNull();
+  });
+
   it("fetches metadata immediately, then gates multi-page reads and folds ready reloads", async () => {
     for (const [count, metadataPending] of [
       [1001, false],

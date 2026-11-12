@@ -54,8 +54,9 @@ export class MessagesStore {
   historyComplete: boolean = $state(false);
   /** Why the last transcript or history read failed; null once a read lands. */
   loadError: string | null = $state(null);
-  /** Which read failed, so retryLoad repeats it. */
-  private loadErrorKind: "load" | "older" = "load";
+  /** Which read failed, so retryLoad repeats it: the transcript, an older
+   * page, or the rest of the history (a forward tail or an ordinal jump). */
+  private loadErrorKind: "load" | "older" | "history" = "load";
   /**
    * The transcript revision every row in messages came from, taken from the
    * message responses that delivered them. Null until the first page lands.
@@ -238,18 +239,25 @@ export class MessagesStore {
     return promise;
   }
 
-  private failLoad(err: unknown, kind: "load" | "older") {
+  private failLoad(err: unknown, kind: "load" | "older" | "history") {
     this.loadError = failureMessage(err);
     this.loadErrorKind = kind;
   }
 
-  /** Repeat the read behind loadError: the transcript, or its next older page. */
+  /** A history read landed, so an earlier history failure no longer applies;
+   * a transcript failure still does. */
+  private historyRecovered() {
+    if (this.loadError !== null && this.loadErrorKind !== "load") this.loadError = null;
+  }
+
+  /** Repeat the read behind loadError. */
   retryLoad(): Promise<void> {
     const id = this.sessionId;
     if (!id || this.loadError === null) return Promise.resolve();
     const kind = this.loadErrorKind;
     this.loadError = null;
     if (kind === "older") return this.loadOlder();
+    if (kind === "history") return this.ensureHistoryLoaded();
     return this.messages.length === 0 ? this.loadSession(id) : this.reload();
   }
 
@@ -570,6 +578,7 @@ export class MessagesStore {
       this.messages = [...chunk, ...this.messages];
       this.hasOlder = chunk[0]!.ordinal > 0;
       this.historyComplete = !this.hasOlder;
+      this.historyRecovered();
       this.publishPendingSessionToken(id);
     } catch (err) {
       if (isAbortError(err)) return;
@@ -712,13 +721,14 @@ export class MessagesStore {
         }
         from = nextFrom;
       }
+      this.historyRecovered();
       this.publishPendingSessionToken(id);
       return "done";
     } catch (error) {
       if (isAbortError(error) || !current()) return "done";
       if (isRevisionChange(error)) return "reload";
       this.historyComplete = false;
-      this.failLoad(error, "older");
+      this.failLoad(error, "history");
       return "done";
     } finally {
       if (current()) this.loadingOlder = false;
@@ -793,6 +803,7 @@ export class MessagesStore {
       const oldestNow = this.messages[0]?.ordinal;
       this.hasOlder = oldestNow !== undefined && oldestNow > 0;
       this.historyComplete = !this.hasOlder;
+      this.historyRecovered();
       this.publishPendingSessionToken(id);
       return "done";
     } catch (err) {
@@ -800,7 +811,7 @@ export class MessagesStore {
       if (this.sessionId === id && isRevisionChange(err)) return "reload";
       if (this.sessionId === id) {
         this.historyComplete = false;
-        this.failLoad(err, "older");
+        this.failLoad(err, "history");
       }
       return "done";
     } finally {

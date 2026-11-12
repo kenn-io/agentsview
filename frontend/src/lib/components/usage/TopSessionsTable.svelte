@@ -91,7 +91,7 @@
         </div>
       {/each}
     </div>
-  {:else if !usage.errors.topSessions}
+  {:else if !usage.errors.topSessions && usage.topSessions !== null}
     <div class="empty">{m.shared_no_sessions_in_range()}</div>
   {/if}
 </div>

@@ -532,8 +532,12 @@
   .settings-error {
     display: flex;
     flex-direction: column;
-    align-items: flex-start;
+    align-items: stretch;
     gap: 8px;
+  }
+
+  .settings-error .auth-disconnect {
+    align-self: flex-start;
   }
 
   .settings-actions-hint {

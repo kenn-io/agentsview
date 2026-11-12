@@ -94,6 +94,20 @@ describe("complete search history", () => {
     expect(store.messages[1200]!.content).toBe("needle");
     expect(api.getMessages.mock.calls.map(([, params]) => params.from)).toEqual([0, 1000, 1000]);
   });
+  it("retries a failed forward page through Retry when the transcript starts at zero", async () => {
+    const { store, control } = setup();
+    await store.loadSession("history");
+    await store.ensureHistoryLoaded();
+    expect(store.hasOlder).toBe(false);
+    expect(store.loadError).not.toBeNull();
+
+    control.failFrom = null;
+    await store.retryLoad();
+
+    expect(store.messages).toHaveLength(1500);
+    expect(store.historyComplete).toBe(true);
+    expect(store.loadError).toBeNull();
+  });
   it("keeps incomplete status after another failed retry", async () => {
     const { store } = setup();
     await store.loadSession("history");

@@ -323,7 +323,10 @@
   {:else if zoomedProject && usage.loading.zoom && usage.zoomRows === null}
     <div class="empty">{m.usage_loading()}</div>
   {:else if rows.length === 0}
-    <div class="empty">{m.shared_no_data_for_period()}</div>
+    <!-- With no summary loaded, the summary error or refresh status says why. -->
+    {#if zoomedProject || usage.attributionSummary !== null || usage.summary !== null}
+      <div class="empty">{m.shared_no_data_for_period()}</div>
+    {/if}
   {:else}
     {#if !zoomedProject}<div class="hint">{groupBy === "project" ? m.usage_click_project_hint() : m.usage_click_to_focus_hint()}</div>{/if}
     {#if view === "treemap"}

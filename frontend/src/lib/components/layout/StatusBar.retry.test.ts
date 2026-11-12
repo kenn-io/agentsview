@@ -41,7 +41,6 @@ describe("StatusBar failed status reads", () => {
   afterEach(() => {
     document.body.innerHTML = "";
     vi.restoreAllMocks();
-    sync.statusError = null;
     sync.lastSync = null;
   });
 
@@ -74,5 +73,27 @@ describe("StatusBar failed status reads", () => {
     expect(sync.statusError).toBeNull();
 
     unmount(component);
+  });
+
+  it("keeps reporting a failed stats read after a status read succeeds", async () => {
+    const { MetadataService, SyncService } = await import("../../api/generated/index");
+    vi.spyOn(SyncService, "getApiV1SyncStatus").mockResolvedValue({
+      last_sync: "2026-04-08T05:00:00Z",
+    } as Awaited<ReturnType<typeof SyncService.getApiV1SyncStatus>>);
+    vi.spyOn(MetadataService, "getApiV1Version").mockResolvedValue({
+      version: "test",
+      commit: "test",
+    } as Awaited<ReturnType<typeof MetadataService.getApiV1Version>>);
+    const stats = vi
+      .spyOn(MetadataService, "getApiV1Stats")
+      .mockRejectedValue(new TypeError("stats unavailable"));
+
+    await sync.loadStats();
+    await sync.loadStatus();
+    expect(sync.statusError).toBe("stats unavailable");
+
+    stats.mockResolvedValue({} as Awaited<ReturnType<typeof MetadataService.getApiV1Stats>>);
+    await sync.retryStatus();
+    expect(sync.statusError).toBeNull();
   });
 });

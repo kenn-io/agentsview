@@ -49,6 +49,8 @@ export function commitsDisagree(a: string | undefined, b: string | undefined): b
   return a.slice(0, minLen) !== b.slice(0, minLen);
 }
 
+type SyncRead = "status" | "stats" | "version";
+
 class SyncStore {
   archiveStale: boolean = $state(false);
   syncPending: boolean = $state(false);
@@ -72,10 +74,20 @@ class SyncStore {
   // becomes reachable.
   backendDegraded: boolean = $state(false);
   backendDegradedMessage: string | null = $state(null);
-  // Why the last status or stats read from a local server failed, when
-  // neither flag above covers it; null after a read succeeds. Surfaced in
-  // the status bar so stale sync times and counts are not silent.
-  statusError: string | null = $state(null);
+  // Why the status, stats, or version read from a local server last failed,
+  // when neither flag above covers it. Each read clears only its own entry
+  // when it succeeds, so one read recovering does not hide another that is
+  // still failing. Surfaced in the status bar so stale sync times and counts
+  // are not silent.
+  private failedReads = $state<Record<SyncRead, string | null>>({
+    status: null,
+    stats: null,
+    version: null,
+  });
+
+  get statusError(): string | null {
+    return this.failedReads.status ?? this.failedReads.stats ?? this.failedReads.version;
+  }
   updateAvailable: boolean = $state(false);
   latestVersion: string | null = $state(null);
   readonly buildCommit: string = import.meta.env.VITE_BUILD_COMMIT;
@@ -123,7 +135,6 @@ class SyncStore {
   private markRemoteReachable(reachable: boolean) {
     if (reachable) {
       this.remoteUnreachable = false;
-      this.statusError = null;
       return;
     }
     this.clearBackendDegraded();
@@ -143,24 +154,27 @@ class SyncStore {
     this.backendDegradedMessage = null;
   }
 
-  private markBackendFailure(error: unknown) {
+  private markBackendFailure(error: unknown, read: SyncRead) {
     if (error instanceof ApiError && error.status >= 500) {
       this.markBackendDegraded();
       return;
     }
     this.markRemoteReachable(false);
-    if (!isRemoteConnection()) this.statusError = failureMessage(error);
+    if (!isRemoteConnection()) this.failedReads[read] = failureMessage(error);
   }
 
-  /** Re-read sync status and stats after a failure the status bar reported. */
-  retryStatus(): Promise<void> {
-    return this.loadStatus().then(() => this.loadStats());
+  /** Re-read every source of the status bar after a failure it reported. */
+  async retryStatus(): Promise<void> {
+    if (this.failedReads.version !== null) await this.loadVersion();
+    await this.loadStatus();
+    await this.loadStats();
   }
 
   async loadStatus() {
     try {
       const status = await SyncService.getApiV1SyncStatus();
       this.markRemoteReachable(true);
+      this.failedReads.status = null;
       if (this.serverVersion === null) {
         await this.loadVersion({ updateBackendHealth: false });
       }
@@ -201,7 +215,7 @@ class SyncStore {
         await this.loadStats();
       }
     } catch (error) {
-      this.markBackendFailure(error);
+      this.markBackendFailure(error, "status");
       this.pendingHydration = false;
     }
   }
@@ -239,11 +253,11 @@ class SyncStore {
       if (this.statsVersion === version) {
         this.stats = result;
         this.clearBackendDegraded();
-        this.statusError = null;
+        this.failedReads.stats = null;
       }
     } catch (error) {
       if (this.statsVersion === version) {
-        this.markBackendFailure(error);
+        this.markBackendFailure(error, "stats");
       }
     }
   }
@@ -255,11 +269,12 @@ class SyncStore {
       fileReferences.enabled = this.serverVersion.docbank_enabled === true;
       events.setAvailable(this.serverVersion.read_only !== true);
       this.markRemoteReachable(true);
+      this.failedReads.version = null;
       this.versionMismatch = commitsDisagree(this.buildCommit, this.serverVersion.commit);
     } catch (error) {
       events.settleStartup();
       if (updateBackendHealth) {
-        this.markBackendFailure(error);
+        this.markBackendFailure(error, "version");
       }
       console.warn("Failed to load version info:", error);
     }

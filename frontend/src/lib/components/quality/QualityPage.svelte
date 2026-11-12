@@ -471,7 +471,10 @@
         </p>
       </div>
 
-      {#if recommendations.length === 0}
+      {#if !signals}
+        <!-- Recommendations come from the quality signals; until they load,
+             the Quality patterns section below shows loading or the error. -->
+      {:else if recommendations.length === 0}
         <Card level="default" padding="none" class="state-panel compact-state">
           <strong>{m.insights_page_no_rule_actions()}</strong>
           <span>
@@ -531,6 +534,10 @@
           {/each}
         </div>
       {:else if error && !signals}
+        <LoadError message={error} onRetry={fetchQualitySignals} telemetry="analytics" />
+      {:else if !hasData && error}
+        <!-- The last good read was empty; say the refresh failed rather
+             than repeat that empty result. -->
         <LoadError message={error} onRetry={fetchQualitySignals} telemetry="analytics" />
       {:else if !hasData}
         <EmptyState

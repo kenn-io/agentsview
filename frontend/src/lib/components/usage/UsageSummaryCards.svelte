@@ -303,7 +303,7 @@
       sub={card.sub?.() ?? ""}
       tier={card.featured ? "lead" : card.context ? "context" : "standard"}
       featured={card.featured}
-      error={!!usage.errors.summary && usage.summary === null}
+      error={!!usage.errors.summary && (usage.summary === null || usage.summaryOutOfScope)}
     />
   {/each}
 </div>

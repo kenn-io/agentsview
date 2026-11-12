@@ -239,7 +239,9 @@ describe("RecallCorpusPanel", () => {
   });
 
   it("shows a failed entries load with Retry instead of an empty corpus", async () => {
-    const respond = fetchMock.getMockImplementation()!;
+    const respond = fetchMock.getMockImplementation() as (
+      input: RequestInfo | URL,
+    ) => Promise<Response>;
     let failed = false;
     fetchMock.mockImplementation(async (input: RequestInfo | URL) => {
       if (!failed && requestUrl(input).includes("/recall/entries?")) {

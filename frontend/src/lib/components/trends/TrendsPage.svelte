@@ -300,14 +300,6 @@
             rows="6"
             spellcheck="false"
           ></textarea>
-          {#if trends.errors.terms}
-            <LoadError
-              class="terms-error"
-              message={trends.errors.terms}
-              onRetry={() => void trends.fetchTerms()}
-              telemetry="analytics"
-            />
-          {/if}
         </div>
         {#if (trends.response?.series.length ?? 0) > 0}
           <div class="table-panel">
@@ -346,15 +338,36 @@
             />
           </div>
         </div>
-        <div class="chart-body">
-          <TrendsLineChart
-            buckets={trends.response?.buckets ?? []}
-            series={trends.response?.series ?? []}
-            {styleFor}
-            {activeTerm}
-            normalized={trends.normalized}
-            onHover={(term) => (activeTerm = term)}
+        {#if trends.errors.terms && trends.response !== null}
+          <!-- A failed refresh keeps the last counts under the error. -->
+          <LoadError
+            class="trends-error"
+            message={trends.errors.terms}
+            onRetry={() => void refresh()}
+            telemetry="analytics"
           />
+        {/if}
+        <div class="chart-body">
+          {#if trends.errors.terms && trends.response === null}
+            <!-- With no counts loaded, the error takes the chart's place, so
+                 the chart's own "No trend data" does not claim an empty
+                 result. The body keeps its height so the row does not shrink. -->
+            <LoadError
+              class="trends-error"
+              message={trends.errors.terms}
+              onRetry={() => void refresh()}
+              telemetry="analytics"
+            />
+          {:else}
+            <TrendsLineChart
+              buckets={trends.response?.buckets ?? []}
+              series={trends.response?.series ?? []}
+              {styleFor}
+              {activeTerm}
+              normalized={trends.normalized}
+              onHover={(term) => (activeTerm = term)}
+            />
+          {/if}
           {#if trends.loading.terms}
             <div class="loading-overlay" role="status" aria-live="polite">
               <span aria-hidden="true"><Spinner size={18} /></span>
@@ -524,8 +537,8 @@
     border-color: var(--accent-blue);
   }
 
-  .terms-input :global(.terms-error) {
-    margin-top: 8px;
+  .chart-panel :global(.trends-error) {
+    margin: 12px 16px 0;
   }
 
   /* Takes only the rows it needs, and scrolls once they outgrow the

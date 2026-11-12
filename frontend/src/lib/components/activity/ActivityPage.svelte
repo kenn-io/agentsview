@@ -503,7 +503,12 @@
          refresh shows its error above the report it kept. -->
     {#if activity.report}
       {#if activity.error}
-        <LoadError message={activity.error} onRetry={() => activity.load()} telemetry="analytics" />
+        <!-- A background retry keeps the report if it fails again. -->
+        <LoadError
+          message={activity.error}
+          onRetry={() => activity.load({ background: true })}
+          telemetry="analytics"
+        />
       {/if}
       <SummaryCards report={activity.report} />
       <Card level="default" padding="none" class="chart-panel">

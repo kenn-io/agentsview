@@ -59,7 +59,10 @@
   <h3 class="chart-title">{m.usage_cache_efficiency_title()}</h3>
 
   {#if bars.length === 0}
-    <div class="empty">{m.usage_no_token_data()}</div>
+    <!-- With no summary loaded, the summary error or refresh status says why. -->
+    {#if usage.summary !== null}
+      <div class="empty">{m.usage_no_token_data()}</div>
+    {/if}
   {:else}
     <div class="bar-list">
       {#each bars as bar}
