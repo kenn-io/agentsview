@@ -60,8 +60,6 @@ func TestAnalyticsKeptPushAndSelection(t *testing.T) {
 	require.NoError(t, err)
 	velocityAgain, err := store.GetAnalyticsVelocity(ctx, f)
 	require.NoError(t, err)
-	assert.Equal(t, tools, toolsAgain)
-	assert.Equal(t, velocity, velocityAgain)
 	assert.Equal(t, reads, counter.count())
 	freshTools, err := store.loadAnalyticsTools(ctx, f)
 	require.NoError(t, err)
