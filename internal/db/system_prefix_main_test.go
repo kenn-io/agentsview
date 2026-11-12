@@ -1,6 +1,10 @@
 package db
 
-import "testing"
+import (
+	"testing"
+
+	"github.com/stretchr/testify/assert"
+)
 
 // The PostgreSQL and ClickHouse filter changes must preserve these dialects.
 // Expected SQL was generated from origin/main at 74ac5b1af.
@@ -15,9 +19,7 @@ func TestSystemPrefixSQLMatchesMain(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			if tt.got != tt.want {
-				t.Errorf("SQL changed from main:\n got: %q\nwant: %q", tt.got, tt.want)
-			}
+			assert.Equal(t, tt.want, tt.got)
 		})
 	}
 }
