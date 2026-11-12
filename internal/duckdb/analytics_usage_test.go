@@ -2045,8 +2045,9 @@ func TestDuckToolsBoundedRangeGroupsByLocalDay(t *testing.T) {
 		}, DataVersion: 1, ReplaceMessages: true,
 	}})
 	var queries []string
+	previousObserver := analyticsQueryObserver
 	analyticsQueryObserver = func(query string) { queries = append(queries, query) }
-	t.Cleanup(func() { analyticsQueryObserver = nil })
+	t.Cleanup(func() { analyticsQueryObserver = previousObserver })
 	response, err := store.GetAnalyticsTools(t.Context(), db.AnalyticsFilter{From: "1990-01-01", To: "2007-12-31", Timezone: "America/New_York"})
 	require.NoError(t, err)
 	assert.Equal(t, 2, response.TotalCalls)
