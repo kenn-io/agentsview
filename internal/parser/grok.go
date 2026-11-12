@@ -519,30 +519,12 @@ func parseGrokChatHistory(ctx context.Context, path string) ([]ParsedMessage, in
 		case "tool_result":
 			pendingThink = ""
 			hasPending = false
-			toolCallID := strings.TrimSpace(root.Get("tool_call_id").Str)
-			if toolCallID == "" {
+			msg, ok := grokToolResultMessage(root)
+			if !ok {
 				continue
 			}
-			content := root.Get("content")
-			contentRaw := content.Raw
-			contentLen := toolResultContentLength(content)
-			if content.Type == gjson.String {
-				// Preserve tool output as JSON-quoted string so
-				// pairToolResults / DecodeContent can surface it.
-				quoted, _ := json.Marshal(content.Str)
-				contentRaw = string(quoted)
-				contentLen = len(content.Str)
-			}
-			messages = append(messages, ParsedMessage{
-				Ordinal:       ordinal,
-				Role:          RoleUser,
-				ContentLength: contentLen,
-				ToolResults: []ParsedToolResult{{
-					ToolUseID:     toolCallID,
-					ContentRaw:    contentRaw,
-					ContentLength: contentLen,
-				}},
-			})
+			msg.Ordinal = ordinal
+			messages = append(messages, msg)
 			ordinal++
 
 		default:
@@ -554,6 +536,34 @@ func parseGrokChatHistory(ctx context.Context, path string) ([]ParsedMessage, in
 		return nil, malformed, fmt.Errorf("reading %s: %w", path, err)
 	}
 	return messages, malformed + lr.SkippedLines(), nil
+}
+
+// grokToolResultMessage turns a tool_result row into the result carrier
+// that pairing attaches to its call.
+func grokToolResultMessage(root gjson.Result) (ParsedMessage, bool) {
+	toolCallID := strings.TrimSpace(root.Get("tool_call_id").Str)
+	if toolCallID == "" {
+		return ParsedMessage{}, false
+	}
+	content := root.Get("content")
+	contentRaw := content.Raw
+	contentLen := toolResultContentLength(content)
+	if content.Type == gjson.String {
+		// Preserve tool output as JSON-quoted string so
+		// pairToolResults / DecodeContent can surface it.
+		quoted, _ := json.Marshal(content.Str)
+		contentRaw = string(quoted)
+		contentLen = len(content.Str)
+	}
+	return ParsedMessage{
+		Role:          RoleUser,
+		ContentLength: contentLen,
+		ToolResults: []ParsedToolResult{{
+			ToolUseID:     toolCallID,
+			ContentRaw:    contentRaw,
+			ContentLength: contentLen,
+		}},
+	}, true
 }
 
 type grokTimestampAnchor struct {

@@ -4,6 +4,7 @@ import (
 	"os"
 	"path/filepath"
 	"strconv"
+	"strings"
 	"testing"
 	"time"
 
@@ -353,4 +354,46 @@ func TestGrokNativeToolRenderingsAreRedactionCandidates(t *testing.T) {
 			assert.Contains(t, fulls, rendering)
 		})
 	}
+}
+
+func TestGrokEarlierCheckpointKeepsResultLaterCompactionDropped(t *testing.T) {
+	root := t.TempDir()
+	sessionDir := filepath.Join(root, "cwd-key", "019f6000-0000-7000-8000-000000000025")
+	writeGrokFixtureFile(t, filepath.Join(sessionDir, "summary.json"),
+		`{"info":{"id":"019f6000-0000-7000-8000-000000000025","cwd":"/workspace/fetchkit"},"created_at":"2026-07-23T09:46:40Z"}`)
+	writeGrokFixtureFile(t, filepath.Join(sessionDir, "updates.jsonl"), ""+
+		grokUpdateLine(1784800001, `{"sessionUpdate":"user_message_chunk","content":{"type":"text","text":"Run the tests"}}`)+
+		grokUpdateLine(1784800002, `{"sessionUpdate":"tool_call","toolCallId":"call-7","title":"run_terminal_command","rawInput":{"command":"go test ./..."}}`)+
+		grokUpdateLine(1784800009, `{"sessionUpdate":"compaction_checkpoint","checkpoint_file":"compaction_checkpoints/c1.json"}`)+
+		grokUpdateLine(1784800010, `{"sessionUpdate":"agent_message_chunk","content":{"type":"text","text":"Rerunning them."}}`)+
+		grokUpdateLine(1784800019, `{"sessionUpdate":"compaction_checkpoint","checkpoint_file":"compaction_checkpoints/c2.json"}`))
+	summary := func(text string) string {
+		return `{"type":"user","content":[{"type":"text","text":"` + grokCompactionSummaryPreamble + ` ` + text + `"}],"synthetic_reason":"compaction_meta"}`
+	}
+	// Only the first compacted context still carries the interrupted result.
+	writeGrokFixtureFile(t, filepath.Join(sessionDir, "compaction_checkpoints", "c1.json"),
+		`{"compacted_history":[`+
+			`{"type":"assistant","content":"","tool_calls":[{"id":"call-7","name":"run_terminal_command","arguments":"{}"}]},`+
+			`{"type":"tool_result","tool_call_id":"call-7","content":"Command interrupted by the user."},`+
+			summary("First.")+`]}`)
+	writeGrokFixtureFile(t, filepath.Join(sessionDir, "chat_history.jsonl"), ""+
+		summary("Second.")+"\n"+
+		`{"type":"assistant","content":"Done."}`+"\n")
+
+	result, err := ParseGrokSummary(t.Context(), filepath.Join(sessionDir, "summary.json"), "", "m")
+	require.NoError(t, err)
+	var results, boundaries []string
+	for _, msg := range result.Messages {
+		for _, call := range msg.ToolCalls {
+			assert.Empty(t, call.ResultEvents, "a lone start must not replace the result")
+		}
+		for _, r := range msg.ToolResults {
+			results = append(results, DecodeContent(r.ContentRaw))
+		}
+		if msg.IsCompactBoundary {
+			boundaries = append(boundaries, strings.TrimPrefix(msg.Content, grokCompactionSummaryPreamble+" "))
+		}
+	}
+	assert.Equal(t, []string{"Command interrupted by the user."}, results)
+	assert.Equal(t, []string{"First.", "Second."}, boundaries)
 }

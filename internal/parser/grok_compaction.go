@@ -82,43 +82,58 @@ func grokTextParts(content gjson.Result) string {
 	return strings.Join(parts, "\n")
 }
 
-// grokCheckpointSummary reads the compaction summary from a checkpoint file's
-// compacted_history. It returns "" when the file is missing, unreadable, or
-// carries no summary; the boundary still marks the compaction.
-func grokCheckpointSummary(ctx context.Context, sessionDir, rel string) (string, error) {
+// grokCheckpointContent is what a checkpoint file's compacted_history
+// holds that the transcript needs: the compaction summary and the tool
+// results carried into the compacted context.
+type grokCheckpointContent struct {
+	summary string
+	results []ParsedMessage
+}
+
+// grokReadCheckpoint reads a checkpoint file's compacted_history. A missing,
+// unreadable, or unrecognized file yields no content; the boundary still
+// marks the compaction.
+func grokReadCheckpoint(
+	ctx context.Context, sessionDir, rel string,
+) (grokCheckpointContent, error) {
+	var out grokCheckpointContent
 	rel = filepath.FromSlash(strings.TrimSpace(rel))
 	if rel == "" || !filepath.IsLocal(rel) {
-		return "", ctx.Err()
+		return out, ctx.Err()
 	}
 	f, err := os.Open(filepath.Join(sessionDir, rel))
 	if err != nil {
-		return "", ctx.Err()
+		return out, ctx.Err()
 	}
 	defer f.Close()
 	info, err := f.Stat()
 	if err != nil || info.Size() > grokMaxCheckpointFileSize {
-		return "", ctx.Err()
+		return out, ctx.Err()
 	}
 	data, err := io.ReadAll(ctxio.Reader{Context: ctx, Reader: f})
 	if ctxErr := ctx.Err(); ctxErr != nil {
-		return "", ctxErr
+		return out, ctxErr
 	}
 	if err != nil || !gjson.ValidBytes(data) {
-		return "", nil
+		return out, nil
 	}
-	summary := ""
 	gjson.GetBytes(data, "compacted_history").ForEach(func(_, item gjson.Result) bool {
-		if item.Get("type").Str != "user" ||
-			item.Get("synthetic_reason").Str != "compaction_meta" {
-			return true
-		}
-		if text, ok := grokCompactionSummary(item.Get("content")); ok {
-			summary = text
-			return false
+		switch item.Get("type").Str {
+		case "tool_result":
+			if msg, ok := grokToolResultMessage(item); ok {
+				out.results = append(out.results, msg)
+			}
+		case "user":
+			if out.summary != "" || item.Get("synthetic_reason").Str != "compaction_meta" {
+				return true
+			}
+			if text, ok := grokCompactionSummary(item.Get("content")); ok {
+				out.summary = text
+			}
 		}
 		return true
 	})
-	return summary, nil
+	return out, nil
 }
 
 // parseGrokCompactedSegments rebuilds the transcript before each compaction
@@ -474,10 +489,12 @@ func grokToolUpdateResultText(update gjson.Result) string {
 // the system prompt, injected metadata, the carried user query and recent
 // messages, then the summary row. That prefix replays rows the rebuilt
 // segment already holds, so it is dropped up to the summary, which becomes
-// the last checkpoint's boundary. A result the prefix holds for a rebuilt
-// call the stream never finished is kept, since it is that call's only
-// output. When chat_history.jsonl has no summary row, the last boundary
-// comes from the checkpoint file and every row stays.
+// the last checkpoint's boundary. When chat_history.jsonl has no summary
+// row, the last boundary comes from the checkpoint file and every row stays.
+//
+// A call the stream never finished can have its only result in a compacted
+// context: an earlier checkpoint file or the dropped prefix. Such results
+// are kept after the segment that holds the call.
 func grokAssembleTranscript(
 	ctx context.Context, sessionDir string,
 	segments []grokCompactedSegment, chat []ParsedMessage,
@@ -492,26 +509,25 @@ func grokAssembleTranscript(
 			break
 		}
 	}
-	if summaryAt >= 0 {
-		last := &segments[len(segments)-1]
-		last.messages = append(last.messages,
-			grokUnansweredResults(segments, chat[:summaryAt])...)
-	}
 	total := len(chat) + len(segments)
 	for _, segment := range segments {
 		total += len(segment.messages)
 	}
 	out := make([]ParsedMessage, 0, total)
+	open := grokOpenCalls{}
 	for i, segment := range segments {
+		open.add(segment.messages)
 		out = append(out, segment.messages...)
 		if i == len(segments)-1 && summaryAt >= 0 {
+			out = append(out, open.answer(chat[:summaryAt])...)
 			break
 		}
-		summary, err := grokCheckpointSummary(ctx, sessionDir, segment.checkpoint.file)
+		checkpoint, err := grokReadCheckpoint(ctx, sessionDir, segment.checkpoint.file)
 		if err != nil {
 			return nil, err
 		}
-		out = append(out, grokCompactBoundary(summary, segment.checkpoint.timestamp))
+		out = append(out, open.answer(checkpoint.results)...)
+		out = append(out, grokCompactBoundary(checkpoint.summary, segment.checkpoint.timestamp))
 	}
 	if summaryAt >= 0 {
 		chat = chat[summaryAt:]
@@ -526,36 +542,40 @@ func grokAssembleTranscript(
 	return out, nil
 }
 
-// grokUnansweredResults returns the result rows in a dropped prefix that
-// answer a rebuilt call the stream recorded no result for.
-func grokUnansweredResults(
-	segments []grokCompactedSegment, prefix []ParsedMessage,
-) []ParsedMessage {
-	open := map[string]bool{}
-	for _, segment := range segments {
-		for _, msg := range segment.messages {
-			for _, call := range msg.ToolCalls {
-				if call.ToolUseID != "" {
-					open[call.ToolUseID] = true
-				}
+// grokOpenCalls tracks rebuilt calls that no result row answers yet.
+type grokOpenCalls map[string]bool
+
+func (o grokOpenCalls) add(messages []ParsedMessage) {
+	for _, msg := range messages {
+		for _, call := range msg.ToolCalls {
+			if call.ToolUseID != "" {
+				o[call.ToolUseID] = true
 			}
 		}
-	}
-	for _, segment := range segments {
-		for _, msg := range segment.messages {
-			for _, result := range msg.ToolResults {
-				delete(open, result.ToolUseID)
-			}
-		}
-	}
-	var kept []ParsedMessage
-	for _, msg := range prefix {
 		for _, result := range msg.ToolResults {
-			if open[result.ToolUseID] {
-				kept = append(kept, msg)
-				break
+			delete(o, result.ToolUseID)
+		}
+	}
+}
+
+// answer returns the result rows among carried that answer an open call,
+// and closes those calls.
+func (o grokOpenCalls) answer(carried []ParsedMessage) []ParsedMessage {
+	var kept []ParsedMessage
+	for _, msg := range carried {
+		answers := false
+		for _, result := range msg.ToolResults {
+			if o[result.ToolUseID] {
+				answers = true
 			}
 		}
+		if !answers {
+			continue
+		}
+		for _, result := range msg.ToolResults {
+			delete(o, result.ToolUseID)
+		}
+		kept = append(kept, msg)
 	}
 	return kept
 }
