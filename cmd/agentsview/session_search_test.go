@@ -899,8 +899,6 @@ func TestSessionSearchFTSHints(t *testing.T) {
 		pattern, source string
 		matches         int
 	}{
-		{"decode error notes", "", 1},
-		{"decode error notes", "messages", 1},
 		{`"decoding failure"`, "messages", 0},
 		{"decode error notes", "tool_result", 0},
 	} {

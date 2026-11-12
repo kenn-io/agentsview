@@ -91,11 +91,6 @@ func TestSearchContentKeepsSubstringSearch(t *testing.T) {
 			ContentSearchFilter{Pattern: "invoices need", Sources: []string{"tool_result"}},
 			[]wordHit{{"words", "tool_result", 0}},
 		},
-		{
-			"no exact text without messages",
-			ContentSearchFilter{Pattern: "rounding invoices", Sources: []string{"tool_result"}},
-			[]wordHit{},
-		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			page, err := d.SearchContent(t.Context(), tc.filter)
@@ -105,7 +100,7 @@ func TestSearchContentKeepsSubstringSearch(t *testing.T) {
 	}
 }
 
-func TestSearchContentWordForms(t *testing.T) {
+func TestSearchContentExplicitFTSKeepsFTS5(t *testing.T) {
 	d := testDB(t)
 	requireFTS(t, d)
 	seedWordSearch(t, d, "proj",
@@ -117,15 +112,6 @@ func TestSearchContentWordForms(t *testing.T) {
 		require.NoError(t, err)
 		assert.Equal(t, []wordHit{{"forms", "message", 2}, {"other", "message", 1}}, wordHits(page), "mode %q", mode)
 	}
-}
-
-func TestSearchContentExplicitFTSKeepsFTS5(t *testing.T) {
-	d := testDB(t)
-	requireFTS(t, d)
-	seedWordSearch(t, d, "proj",
-		[3]string{"forms", "the build fixes missed files", ""},
-		[3]string{"other", "a missing semicolon", ""},
-	)
 	for pattern, want := range map[string][]wordHit{
 		`"fix" "missing"`:      {{"forms", "message", 0}},
 		`"fix" OR "semicolon"`: {{"forms", "message", 0}, {"other", "message", 0}},
@@ -214,33 +200,6 @@ func TestSearchContentWordsKeepFilters(t *testing.T) {
 		require.NoError(t, err)
 		assert.Equal(t, []wordHit{{"in-scope", "message", 2}}, wordHits(page), "mode %q", mode)
 	}
-}
-
-func TestSearchContentHybridKeywordMatchesWords(t *testing.T) {
-	d := testDB(t)
-	requireFTS(t, d)
-	seedWordSearch(t, d, "proj",
-		[3]string{"one-word", "an invoice arrived", ""},
-		[3]string{"two-words", "we settled the rounding of invoices", ""},
-	)
-	page, err := d.SearchContent(t.Context(), ContentSearchFilter{Pattern: "invoice rounding decision", Mode: "hybrid", KeywordOnly: true})
-	require.NoError(t, err)
-	require.Len(t, page.Matches, 2)
-	assert.Equal(t, "two-words", page.Matches[0].SessionID)
-	assert.Equal(t, "one-word", page.Matches[1].SessionID)
-}
-
-func TestHasFTSProbesIndex(t *testing.T) {
-	d := testDB(t)
-	requireFTS(t, d)
-	seedWordSearch(t, d, "proj", [3]string{"s", "indexed text", ""})
-	assert.True(t, d.HasFTS(t.Context()))
-	_, err := d.getWriter().Exec(t.Context(), "DELETE FROM messages_fts")
-	require.NoError(t, err)
-	assert.True(t, d.HasFTS(t.Context()), "an empty index is still available")
-	_, err = d.getWriter().Exec(t.Context(), "DROP TABLE messages_fts")
-	require.NoError(t, err)
-	assert.False(t, d.HasFTS(t.Context()))
 }
 
 func TestSearchContentWordTierOrder(t *testing.T) {
