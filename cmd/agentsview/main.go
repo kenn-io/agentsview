@@ -10,7 +10,6 @@ import (
 	"maps"
 	"net/http"
 	"os"
-	"os/signal"
 	"path/filepath"
 	"runtime/debug"
 	"slices"
@@ -18,7 +17,6 @@ import (
 	"strings"
 	stdsync "sync"
 	"sync/atomic"
-	"syscall"
 	"testing"
 	"time"
 	_ "time/tzdata"
@@ -231,14 +229,6 @@ func runServe(ctx context.Context, cfg config.Config, opts serveOptions, restart
 	startupProgress.state.Persistent = cfg.PersistentDaemon
 	startupProgress.state.IdleTimeout = effectiveDaemonIdleTimeout(cfg).String()
 
-	// The signal context is created before the startup worker so SIGTERM can
-	// interrupt the worker pass. The server is fully drained by
-	// waitForServerRuntime before defers unwind, so registering stop here
-	// (rather than after the DB defer) does not affect shutdown ordering.
-	ctx, stop := signal.NotifyContext(
-		ctx, os.Interrupt, syscall.SIGTERM,
-	)
-	defer stop()
 	ctx, requestRestart := context.WithCancelCause(ctx)
 	defer requestRestart(nil)
 
@@ -348,7 +338,7 @@ func runServe(ctx context.Context, cfg config.Config, opts serveOptions, restart
 	// Remove stale temp DB from a prior crashed resync.
 	cleanResyncTemp(cfg.DBPath)
 
-	idleTracker := newDaemonIdleTracker(cfg, stop)
+	idleTracker := newDaemonIdleTracker(cfg, func() { requestRestart(nil) })
 
 	telemetryReporter := telemetry.NewReporterOrDisabled(telemetryOptions(cfg))
 	defer func() {
@@ -611,7 +601,7 @@ func runServe(ctx context.Context, cfg config.Config, opts serveOptions, restart
 	scheduler := poller.Start(ctx, jobs...)
 	codexCloudTrigger.scheduler.Store(scheduler)
 	defer func() {
-		stop()
+		requestRestart(nil)
 		scheduler.Wait()
 		// After the jobs stop, so no discovery run adds a join; each
 		// joined thread flushes its buffered token records.
@@ -759,7 +749,7 @@ func runServe(ctx context.Context, cfg config.Config, opts serveOptions, restart
 	srv := server.New(cfg, database, engine, srvOpts...)
 	waitFriction := startLocalFrictionReview(ctx, cfg, database, srv, idleTracker)
 	defer func() {
-		stop()
+		requestRestart(nil)
 		waitFriction()
 	}()
 

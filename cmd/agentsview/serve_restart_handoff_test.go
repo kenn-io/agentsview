@@ -435,6 +435,47 @@ func TestRestartClosesStalledRequestAndRetainsLaunchLock(t *testing.T) {
 	}
 }
 
+func TestTerminationDuringRestartStopsServer(t *testing.T) {
+	_, dataDir := isolateServeTestHome(t)
+	process, done := startRestartFixture(t, dataDir, "foreground", "--no-sync")
+	rt := waitForRestartRuntime(t, dataDir)
+	base := fmt.Sprintf("http://127.0.0.1:%d", rt.Port)
+	conn, err := (&net.Dialer{}).DialContext(t.Context(), "tcp", fmt.Sprintf("127.0.0.1:%d", rt.Port))
+	require.NoError(t, err)
+	defer conn.Close()
+	_, err = fmt.Fprintf(conn, "PUT /api/v1/settings HTTP/1.1\r\nHost: 127.0.0.1:%d\r\nOrigin: %s\r\nContent-Type: application/json\r\nContent-Length: 1000\r\nExpect: 100-continue\r\n\r\n", rt.Port, base)
+	require.NoError(t, err)
+	require.NoError(t, conn.SetReadDeadline(time.Now().Add(5*time.Second)))
+	reader := bufio.NewReader(conn)
+	line, err := reader.ReadString('\n')
+	require.NoError(t, err)
+	require.Contains(t, line, "100 Continue")
+	_, err = reader.ReadString('\n')
+	require.NoError(t, err)
+	_, err = io.WriteString(conn, "{")
+	require.NoError(t, err)
+	restartTestSend(t, http.MethodPost, base+"/api/v1/daemon/restart", "", "", http.StatusOK)
+	require.Eventually(t, func() bool {
+		probe, err := net.DialTimeout("tcp", fmt.Sprintf("127.0.0.1:%d", rt.Port), 50*time.Millisecond)
+		if err != nil {
+			return true
+		}
+		_ = probe.Close()
+		return false
+	}, 3*time.Second, 20*time.Millisecond)
+	require.NoError(t, interruptRestartTestProcess(process))
+	select {
+	case err := <-done:
+		require.NoError(t, err)
+	case <-time.After(20 * time.Second):
+		t.Fatal("server started again after termination during restart")
+	}
+	assert.Empty(t, restartTestInstance(t, base, ""))
+	lock, acquired := acquireBackgroundLaunchLock(dataDir)
+	require.True(t, acquired, "termination must release restart ownership")
+	require.NoError(t, lock.Unlock())
+}
+
 func TestServeRestartPortChoiceWhenOccupied(t *testing.T) {
 	dataDir := testDataDir(t)
 	t.Setenv("AGENTSVIEW_TEST_REAL_CLI", "1")
@@ -486,26 +527,30 @@ func TestServeRestartPreservesAutoPortForUpdate(t *testing.T) {
 			base := fmt.Sprintf("http://127.0.0.1:%d", rt.Port)
 			replacement := restartAndWait(t, dataDir, base, "")
 			require.Equal(t, rt.Port, replacement.Port)
+			listener, occupiedPort := heldLoopbackPort(t)
+			t.Cleanup(func() { assert.NoError(t, listener.Close()) })
 			if mode == "background" {
 				waitForBackgroundLaunchLock(t, dataDir)
 			}
 			stopped, err := stopWritableDaemonsForUpdate(t.Context(), config.Config{DataDir: dataDir})
 			require.NoError(t, err)
 			require.True(t, stopped.Stopped)
-			listener, err := (&net.ListenConfig{}).Listen(t.Context(), "tcp", net.JoinHostPort("127.0.0.1", strconv.Itoa(rt.Port)))
-			require.NoError(t, err)
-			t.Cleanup(func() { assert.NoError(t, listener.Close()) })
+			require.Equal(t, rt.Port, stopped.Port)
+			// Simulate another process claiming the previous port before update.
+			stopped.Port = occupiedPort
 			args := serveBackgroundChildArgs(restartDaemonAfterUpdateArgs(config.Config{}, stopped))
 			cmd := newServeCommand()
 			require.NoError(t, cmd.Flags().Parse(args[1:]))
 			cfg, err := config.LoadPFlags(cmd.Flags())
 			require.NoError(t, err)
+			require.True(t, cfg.PortExplicit)
+			require.Zero(t, cfg.Port)
 			port, err := cmd.Flags().GetInt("restart-port")
 			require.NoError(t, err)
 			next, _, err := prepareRunServeRuntimeConfig(t.Context(), cfg, port, nil)
 			require.NoError(t, err)
 			assert.Positive(t, next.Port)
-			assert.NotEqual(t, rt.Port, next.Port)
+			assert.NotEqual(t, occupiedPort, next.Port)
 			require.NotNil(t, replacement.ExplicitPort)
 			assert.Zero(t, *replacement.ExplicitPort)
 		})

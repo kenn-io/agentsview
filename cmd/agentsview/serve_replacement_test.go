@@ -287,6 +287,29 @@ func TestRestartReleasesLaunchLockWhenNextCommandFails(t *testing.T) {
 	require.NoError(t, lock.Unlock())
 }
 
+func TestRestartReleasesLaunchLockWhenCallerStops(t *testing.T) {
+	dir := runtimeTestDir(t)
+	release, err := acquireForegroundServeLaunchLock(config.Config{DataDir: dir})
+	require.NoError(t, err)
+	t.Cleanup(release)
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+	calls := 0
+	err = runServeLoop(ctx, config.Config{}, serveOptions{}, 0, func(context.Context, config.Config, serveOptions, int) error {
+		calls++
+		if calls > 1 {
+			return errors.New("replacement started after termination")
+		}
+		cancel()
+		return &foregroundRestartError{args: []string{"serve"}, release: release}
+	})
+	require.NoError(t, err)
+	assert.Equal(t, 1, calls)
+	lock, ok := acquireBackgroundLaunchLock(dir)
+	require.True(t, ok, "termination must release restart ownership")
+	require.NoError(t, lock.Unlock())
+}
+
 func TestPrepareForegroundServeDaemonBackgroundChildUsesParentLaunchLock(
 	t *testing.T,
 ) {
