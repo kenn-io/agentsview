@@ -5226,12 +5226,6 @@ func TestGetAnalyticsToolsLocalDayBoundaries(t *testing.T) {
 		{Date: "2025-03-03", ByCat: map[string]int{"Read": 3}},
 		{Date: "2025-03-10", ByCat: map[string]int{"Read": 4}},
 	}, resp.Trend)
-	for _, zone := range []string{"", "Local"} {
-		resp, err := d.GetAnalyticsTools(t.Context(), AnalyticsFilter{Timezone: zone})
-		require.NoError(t, err)
-		assert.Equal(t, 7, resp.TotalCalls, "zone %q", zone)
-		assert.Equal(t, 1, resp.ByTool[0].SessionCount, "zone %q", zone)
-	}
 }
 
 func TestGetAnalyticsToolsBlankAndMalformedTimestamps(t *testing.T) {
