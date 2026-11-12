@@ -1,17 +1,22 @@
 package sessionmaterialize
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
+	"net/url"
 	"os"
 	"path/filepath"
+	"runtime"
 	"slices"
 	"strings"
 
 	"go.kenn.io/agentsview/internal/config"
+	"go.kenn.io/agentsview/internal/ctxio"
 	"go.kenn.io/agentsview/internal/db"
 	"go.kenn.io/agentsview/internal/parser"
 	"go.kenn.io/agentsview/internal/pathutil"
@@ -23,6 +28,10 @@ func materializePi(ctx context.Context, cfg config.Config, session *db.Session, 
 	id, ok := strings.CutPrefix(raw, "pi:")
 	if !ok || (id == "" || strings.ContainsAny(id, "~\x00")) {
 		return Result{}, errors.New("invalid native Pi session identity")
+	}
+	cwd, err := filepath.EvalSymlinks(cwd)
+	if err != nil {
+		return Result{}, fmt.Errorf("resolve Pi checkout: %w", err)
 	}
 	source, err := storedSource(session, host)
 	if err != nil {
@@ -50,7 +59,7 @@ func materializePi(ctx context.Context, cfg config.Config, session *db.Session, 
 		if err != nil {
 			return Result{}, err
 		}
-		data, err = readPiFile(ctx, root, name, id)
+		data, err = readPiFile(ctx, root, name)
 		err = errors.Join(err, lock.Close())
 	} else {
 		name, data, err = findPiSource(ctx, cfg, session, source, id)
@@ -59,11 +68,18 @@ func materializePi(ctx context.Context, cfg config.Config, session *db.Session, 
 	if err != nil {
 		return Result{}, fmt.Errorf("reading native Pi transcript: %w", err)
 	}
-	data, err = relocatePiHeader(data, id, filepath.Base(name), cwd)
+	data, err = relocatePiHeader(ctx, data, id, cwd)
 	if err != nil {
 		return Result{}, err
 	}
-	dest, err := piDestination(cwd, filepath.Base(name))
+	basename := filepath.Base(name)
+	if !strings.HasSuffix(basename, "_"+id+".jsonl") {
+		if !parser.IsValidSessionID(id) || !filepath.IsLocal(id+".jsonl") {
+			return Result{}, errors.New("Pi session identity cannot be used as a filename")
+		}
+		basename = id + ".jsonl"
+	}
+	dest, err := piDestination(cwd, basename)
 	if err != nil {
 		return Result{}, err
 	}
@@ -84,34 +100,46 @@ func findPiSource(ctx context.Context, cfg config.Config, session *db.Session, s
 	if !ok {
 		return "", nil, errors.New("Pi source provider unavailable")
 	}
-	read := func(name string) ([]byte, error) {
+	rootFor := func(name string) string {
 		for _, root := range roots {
 			if within(root, name) {
-				return readPiFile(ctx, root, name, id)
+				return root
 			}
 		}
-		return nil, errors.New("Pi source outside configured root")
+		return ""
 	}
-	name, err := uniqueLocalSource(ctx, provider, stored, func(name string) (bool, error) {
-		_, err := read(name)
-		return err == nil, ctx.Err()
+	candidates := parser.NewJSONLSourceSet(parser.AgentPi, roots, parser.WithRecursive(), parser.WithSymlinkFollowing())
+	name, err := uniqueLocalSourceWithDiscovery(ctx, provider, stored, candidates.DiscoverEach, func(name string) (bool, error) {
+		root := rootFor(name)
+		if root == "" {
+			return false, errors.New("Pi source outside configured root")
+		}
+		err := checkPiHeaderFile(ctx, name, id)
+		if errors.Is(err, errPiIdentity) || errors.Is(err, errPiNotSession) {
+			return false, nil
+		}
+		return err == nil, err
 	})
 	if err != nil {
 		return "", nil, err
 	}
-	data, err := read(name)
+	data, err := readPiFile(ctx, rootFor(name), name)
 	return name, data, err
 }
 
-func readPiFile(ctx context.Context, root, name, id string) ([]byte, error) {
+func readPiFile(ctx context.Context, root, name string) ([]byte, error) {
 	if !within(root, name) || !strings.HasSuffix(name, ".jsonl") {
 		return nil, errors.New("Pi source outside configured root")
 	}
-	data, before, err := readFile(ctx, name, maxSourceBytes)
+	info, err := os.Stat(name)
 	if err != nil {
 		return nil, err
 	}
-	if _, err := relocatePiHeader(data, id, filepath.Base(name), ""); err != nil {
+	if info.Size() > maxSourceBytes {
+		return nil, errors.New("native source exceeds size limit")
+	}
+	data, before, err := readFile(ctx, name, maxSourceBytes)
+	if err != nil {
 		return nil, err
 	}
 	after, err := os.Stat(name)
@@ -121,21 +149,83 @@ func readPiFile(ctx context.Context, root, name, id string) ([]byte, error) {
 	return data, nil
 }
 
+var errPiIdentity = errors.New("Pi session identity differs")
+var errPiNotSession = errors.New("invalid Pi session header; first parsed record is not a session")
+
+// Pi scans at most 1 MiB to identify a session before its full-load fallback.
+// The bounded lookup fails closed when a candidate cannot be identified.
+func piHeader(ctx context.Context, r io.Reader, id string) ([]byte, int, error) {
+	reader := bufio.NewReader(io.LimitReader(ctxio.Reader{Context: ctx, Reader: r}, 1<<20+1))
+	offset := 0
+	for {
+		line, err := reader.ReadBytes('\n')
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			return nil, 0, ctxErr
+		}
+		start := offset
+		offset += len(line)
+		if offset > 1<<20 {
+			return nil, 0, errors.New("Pi session header exceeds 1 MiB lookup limit")
+		}
+		var header struct {
+			Type    string `json:"type"`
+			ID      string `json:"id"`
+			Version *int   `json:"version"`
+		}
+		if json.Valid(line) {
+			if err := json.Unmarshal(line, &header); err != nil {
+				return nil, 0, errors.New("invalid Pi session header fields")
+			}
+			if header.Type != "session" {
+				return nil, 0, errPiNotSession
+			}
+			if header.ID == "" {
+				return nil, 0, errors.New("Pi session header has no id; current Pi cannot resume this file")
+			}
+			if header.ID != id {
+				return nil, 0, errPiIdentity
+			}
+			if header.Version != nil && (*header.Version < 1 || *header.Version > 3) {
+				return nil, 0, errors.New("unsupported Pi session version; current Pi format is version 3")
+			}
+			return line, start, nil
+		}
+		if err != nil {
+			if !errors.Is(err, io.EOF) {
+				return nil, 0, err
+			}
+			return nil, 0, errors.New("invalid Pi session header")
+		}
+	}
+}
+
+func checkPiHeaderFile(ctx context.Context, name, id string) (retErr error) {
+	file, err := os.Open(name)
+	if err != nil {
+		return err
+	}
+	defer func() {
+		if err := file.Close(); err != nil {
+			retErr = fmt.Errorf("close Pi source: %w", err)
+		}
+	}()
+	before, err := file.Stat()
+	if err != nil {
+		return err
+	}
+	_, _, err = piHeader(ctx, file, id)
+	after, statErr := os.Stat(name)
+	if statErr != nil || !os.SameFile(before, after) || before.Size() != after.Size() || before.ModTime() != after.ModTime() {
+		return errors.New("Pi source changed while reading; retry when idle")
+	}
+	return err
+}
+
 // relocatePiHeader changes only the cwd value, keeping the rest of the JSONL byte-for-byte.
-func relocatePiHeader(data []byte, id, basename, cwd string) ([]byte, error) {
-	line, _, _ := bytes.Cut(data, []byte{'\n'})
-	var header struct {
-		Type string `json:"type"`
-		ID   string `json:"id"`
-	}
-	if err := json.Unmarshal(line, &header); err != nil || header.Type != "session" {
-		return nil, errors.New("invalid Pi session header")
-	}
-	if (header.ID != "" && header.ID != id) || (header.ID == "" && strings.TrimSuffix(basename, ".jsonl") != id) {
-		return nil, errors.New("Pi session identity differs")
-	}
-	if cwd == "" {
-		return data, nil
+func relocatePiHeader(ctx context.Context, data []byte, id, cwd string) ([]byte, error) {
+	line, offset, err := piHeader(ctx, bytes.NewReader(data), id)
+	if err != nil {
+		return nil, err
 	}
 	decoder := json.NewDecoder(bytes.NewReader(line))
 	if _, err := decoder.Token(); err != nil {
@@ -161,26 +251,49 @@ func relocatePiHeader(data []byte, id, basename, cwd string) ([]byte, error) {
 		return nil, errors.New("Pi session header requires one cwd")
 	}
 	encoded, _ := json.Marshal(cwd)
-	return slices.Concat(data[:start], encoded, data[end:]), nil
+	return slices.Concat(data[:offset+start], encoded, data[offset+end:]), nil
 }
 
 func piDestination(cwd, basename string) (string, error) {
-	dir := os.Getenv("PI_CODING_AGENT_SESSION_DIR")
+	def, _ := parser.AgentByType(parser.AgentPi)
+	dir := os.Getenv(def.NativeEnvVar)
 	flat := dir != ""
 	if !flat {
-		dir = os.Getenv("PI_CODING_AGENT_DIR")
+		dir = os.Getenv(def.DefaultRootEnvVar)
 		if dir == "" {
-			dir = "~/.pi/agent"
+			dir = "~/" + def.DefaultRootDir
 		}
+	}
+	if strings.HasPrefix(dir, "file://") {
+		u, err := url.Parse(dir)
+		if err != nil || u.Path == "" || u.RawQuery != "" || u.Fragment != "" || u.User != nil {
+			return "", errors.New("invalid Pi directory file URL")
+		}
+		escaped := strings.ToLower(u.EscapedPath())
+		if strings.Contains(escaped, "%2f") || (runtime.GOOS == "windows" && strings.Contains(escaped, "%5c")) {
+			return "", errors.New("invalid Pi directory file URL")
+		}
+		if u.Host != "" && u.Host != "localhost" {
+			if runtime.GOOS != "windows" {
+				return "", errors.New("Pi directory file URL must be local")
+			}
+			dir = "//" + u.Host + u.Path
+		} else {
+			dir = u.Path
+			if runtime.GOOS == "windows" && len(dir) >= 3 && dir[0] == '/' && dir[2] == ':' {
+				dir = dir[1:]
+			}
+		}
+		dir = filepath.FromSlash(dir)
 	}
 	expanded, err := pathutil.ExpandHome(dir)
 	if err != nil {
 		return "", err
 	}
-	dir, err = filepath.Abs(expanded)
-	if err != nil {
-		return "", err
+	if !filepath.IsAbs(expanded) {
+		expanded = filepath.Join(cwd, expanded)
 	}
+	dir = filepath.Clean(expanded)
 	if !flat {
 		encoded := cwd
 		if strings.HasPrefix(encoded, "/") || strings.HasPrefix(encoded, `\`) {

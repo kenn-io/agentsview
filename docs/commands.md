@@ -2193,13 +2193,21 @@ An explicitly set `CLAUDE_CONFIG_DIR` must be an absolute path; the printed
 command preserves its spelling so Claude uses the same credentials.
 
 Existing identical files are reused; a different or non-regular file causes
-an error. Dependencies are installed before the transcript. If publication
-stops partway through, retry to reuse the files already installed. The command
+an error, including a previously installed file that has since been extended.
+Dependencies are installed before the transcript. If publication stops
+partway through, retry to reuse files that are still identical. The command
 does not rewrite existing transcript records. If its last worktree binding is
 non-null, it appends Claude's native null worktree-state record to prevent
 restoring the original checkout, as observed in Claude Code 2.1.322. For Pi,
 the command changes only the session header `cwd` to the selected checkout;
 all other transcript bytes, including branch and parent records, stay intact.
+The Pi checkout is resolved through symlinks, and relative Pi directory
+overrides are resolved from that checkout. Pi files must have a session header
+with an ID and a supported version (at most version 3). Some older indexed
+sessions without IDs and Pi-family files with a leading title cannot be opened
+by the verified Pi consumer and are not installed. Header lookup is bounded to
+1 MiB. A nonunique source name such as `session.jsonl` is installed using its
+session ID as the filename.
 
 An already-running Claude session can attach in that process's existing
 directory. Claude's in-app resume picker can also fall back to a recorded
