@@ -69,7 +69,7 @@ type providerFuzzTarget struct {
 	companions map[string]string
 	// place overrides path for formats that embed the input in another
 	// container, such as a SQLite row. It writes everything under root.
-	place func(t testing.TB, root string, data []byte)
+	place func(t *testing.T, root string, data []byte)
 	seeds []providerFuzzSeed
 }
 
