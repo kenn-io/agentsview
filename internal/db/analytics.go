@@ -3016,8 +3016,8 @@ func analyticsToolsQuery(
 
 // sqliteToolsDateKey uses SQLite for canonical UTC timestamps and keeps Go's
 // timestamp parsing for other inputs. The bounded offset periods cover the
-// padded message window; timestamps outside it use the same Go fallback. An
-// empty result means minute groups, which avoid calling Go for every row.
+// padded message window; timestamps outside it, and ranges with no bounded
+// periods, use the same Go fallback.
 func sqliteToolsDateKey(f AnalyticsFilter) string {
 	sessionTS := `COALESCE(NULLIF(s.started_at, ''), s.created_at)`
 	ts := `(CASE WHEN COALESCE(m.timestamp, '') = '' THEN ` + sessionTS + ` ELSE m.timestamp END)`
@@ -3026,9 +3026,6 @@ func sqliteToolsDateKey(f AnalyticsFilter) string {
 	if loc == time.UTC {
 		// SQLite counts characters; Go's invalid-date fallback takes ten bytes.
 		return `(CASE WHEN substr(` + ts + `, -1) = 'Z' AND length(CAST(substr(` + ts + `, 1, 10) AS BLOB)) = 10 THEN substr(` + ts + `, 1, 10) ELSE ` + fallback + ` END)`
-	}
-	if f.From == "" || f.To == "" {
-		return ""
 	}
 	periods := ToolsDatePeriods(f)
 	if len(periods) == 0 {
@@ -3191,10 +3188,8 @@ func (db *DB) analyticsToolRows(
 			chunkArgs = append(chunkArgs, windowArgs...)
 			groupExpr := sqliteAnalyticsMinuteKey()
 			if !f.HasTimeFilter() {
-				if dateKey := sqliteToolsDateKey(f); dateKey != "" {
-					groupExpr = dateKey
-					chunkArgs = append(chunkArgs, f.Timezone)
-				}
+				groupExpr = sqliteToolsDateKey(f)
+				chunkArgs = append(chunkArgs, f.Timezone)
 			}
 			q := analyticsToolsQuery(ph, modelPred, windowPred, true, groupExpr)
 			observeAnalyticsQuery(q)

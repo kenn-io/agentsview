@@ -5281,6 +5281,7 @@ func TestSQLiteToolsDateKeyMatchesResolver(t *testing.T) {
 		{From: "2025-03-01", To: "2025-03-12", Timezone: "Asia/Kathmandu"},
 		{From: "2025-10-30", To: "2025-11-04", Timezone: "America/New_York"},
 		{From: "bad", To: "2025-12-31", Timezone: "America/New_York"},
+		{Timezone: "America/New_York"},
 	} {
 		key := sqliteToolsDateKey(f)
 		require.NotEmpty(t, key)
@@ -5300,7 +5301,6 @@ func TestSQLiteToolsDateKeyMatchesResolver(t *testing.T) {
 		require.NoError(t, rows.Close())
 		assert.Equal(t, len(stamps), seen)
 	}
-	assert.Empty(t, sqliteToolsDateKey(AnalyticsFilter{Timezone: "America/New_York"}))
 }
 
 func TestGetAnalyticsToolsLocalWeeks(t *testing.T) {
