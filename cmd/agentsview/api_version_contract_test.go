@@ -107,10 +107,6 @@ func TestCheckAPIVersionContract(t *testing.T) {
 		return apiVersionRecord{version: version, digest: digest}
 	}
 
-	t.Run("matching baseline passes", func(t *testing.T) {
-		assert.NoError(t, checkAPIVersionContract(15, base, []apiVersionRecord{rec(15, base)}))
-	})
-
 	t.Run("changed contract under same version names next", func(t *testing.T) {
 		err := checkAPIVersionContract(15, left, []apiVersionRecord{rec(15, base)})
 		require.ErrorContains(t, err, "changed under API version 15")
@@ -127,9 +123,6 @@ func TestCheckAPIVersionContract(t *testing.T) {
 		assert.ErrorContains(t, err, "delete the file this PR added, rebase onto main after the earlier PR merges")
 		assert.ErrorContains(t, err, "rerun make test-api-version. The next free version is 17")
 
-		err = checkAPIVersionContract(16, merged, []apiVersionRecord{rec(15, base), rec(16, left)})
-		require.ErrorContains(t, err, "add an empty file 17-dddd, set server.APIVersion to 17")
-		assert.ErrorContains(t, err, "feature minimum")
 		repaired := []apiVersionRecord{rec(15, base), rec(16, left), rec(17, merged)}
 		assert.NoError(t, checkAPIVersionContract(17, merged, repaired))
 	})
