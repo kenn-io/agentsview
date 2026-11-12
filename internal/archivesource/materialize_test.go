@@ -9,6 +9,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/klauspost/compress/zstd"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"go.kenn.io/agentsview/internal/config"
@@ -155,6 +156,64 @@ func TestMaterializeSnapshotCaptureLayouts(t *testing.T) {
 			assert.Empty(t, files)
 		})
 	}
+}
+
+func TestReadCodexSnapshotUsesAcceptedOriginal(t *testing.T) {
+	const id = "019eb791-cf7d-75c1-8439-9ed74c122e02"
+	source, inputs := archiveFixture(t)
+	require.NoError(t, os.RemoveAll(inputs))
+	index, err := OpenIndex(t.Context(), source, t.TempDir(), nil)
+	require.NoError(t, err)
+	defer index.Close()
+	sources, err := index.Sources(t.Context(), "", 10)
+	require.NoError(t, err)
+	var owner db.ArchiveSessionProvenance
+	for _, item := range sources {
+		if item.Root.Provider == "codex" {
+			owner = db.ArchiveSessionProvenance{ArchiveSourceProvenance: index.provenance(item), NativeSessionID: "codex:" + id}
+		}
+	}
+	require.NotEmpty(t, owner.ManifestID)
+	selected, err := ReadCodexSnapshot(t.Context(), []config.ArchiveSource{source}, []db.ArchiveSessionProvenance{owner}, 512<<20, func(names []string, read func(context.Context, string, int64) ([]byte, error)) error {
+		require.Len(t, names, 1)
+		data, err := read(t.Context(), names[0], 512<<20)
+		require.NoError(t, err)
+		assert.Contains(t, string(data), "saved Codex question")
+		assert.NotContains(t, string(data), "later question")
+		return nil
+	})
+	require.NoError(t, err)
+	assert.Equal(t, source.Snapshot, selected)
+}
+
+func TestReadCodexSnapshotPreservesCompressedLegacyBytes(t *testing.T) {
+	const id = "019eb791-cf7d-75c1-8439-9ed74c122e02"
+	inputs := t.TempDir()
+	root := filepath.Join(inputs, "sessions")
+	name := "rollout-20240115-" + id + ".jsonl.zst"
+	data := []byte(testjsonl.NewSessionBuilder().AddCodexMeta("2024-01-15T00:00:00Z", id, "/workspace/project-a", "codex_cli_rs").AddCodexMessage("2024-01-15T00:00:01Z", "user", "saved question").String())
+	encoder, err := zstd.NewWriter(nil)
+	require.NoError(t, err)
+	compressed := encoder.EncodeAll(data, nil)
+	encoder.Close()
+	dbtest.WriteTestFile(t, filepath.Join(root, "2024", "01", "15", name), compressed)
+	source := backupSourceRoots(t, inputs, []rawarchive.RootSpec{{Provider: "codex", Path: root}})
+	index, err := OpenIndex(t.Context(), source, t.TempDir(), nil)
+	require.NoError(t, err)
+	defer index.Close()
+	sources, err := index.Sources(t.Context(), "", 10)
+	require.NoError(t, err)
+	require.Len(t, sources, 1)
+	owner := db.ArchiveSessionProvenance{ArchiveSourceProvenance: index.provenance(sources[0]), NativeSessionID: "codex:" + id}
+	_, err = ReadCodexSnapshot(t.Context(), []config.ArchiveSource{source}, []db.ArchiveSessionProvenance{owner}, 512<<20, func(names []string, read func(context.Context, string, int64) ([]byte, error)) error {
+		require.Len(t, names, 1)
+		assert.Equal(t, name, filepath.Base(names[0]))
+		got, err := read(t.Context(), names[0], 512<<20)
+		require.NoError(t, err)
+		assert.Equal(t, compressed, got)
+		return nil
+	})
+	require.NoError(t, err)
 }
 
 func TestMaterializeSnapshotEquivalentCandidates(t *testing.T) {

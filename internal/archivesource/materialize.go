@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"path"
 	"path/filepath"
@@ -13,6 +14,7 @@ import (
 
 	"go.kenn.io/agentsview/internal/config"
 	"go.kenn.io/agentsview/internal/db"
+	"go.kenn.io/agentsview/internal/parser"
 	"go.kenn.io/agentsview/internal/rawderive"
 	"go.kenn.io/agentsview/internal/rawsync"
 	"go.kenn.io/docbank/docbank"
@@ -21,6 +23,16 @@ import (
 // MaterializeSnapshot reconstructs an attached source under private scratch.
 // The caller owns the returned materialization and must clean it up.
 func MaterializeSnapshot(ctx context.Context, sources []config.ArchiveSource, owners []db.ArchiveSessionProvenance, provider string, limit int64) (tree *rawderive.Materialization, primary string, snapshot string, retErr error) {
+	return materializeSnapshot(ctx, sources, owners, provider, limit, nil)
+}
+
+// ReadCodexSnapshot retains the snapshot lease while rollout pages are read.
+func ReadCodexSnapshot(ctx context.Context, sources []config.ArchiveSource, owners []db.ArchiveSessionProvenance, limit int64, use func([]string, func(context.Context, string, int64) ([]byte, error)) error) (string, error) {
+	_, _, snapshot, err := materializeSnapshot(ctx, sources, owners, "codex", limit, use)
+	return snapshot, err
+}
+
+func materializeSnapshot(ctx context.Context, sources []config.ArchiveSource, owners []db.ArchiveSessionProvenance, provider string, limit int64, use func([]string, func(context.Context, string, int64) ([]byte, error)) error) (tree *rawderive.Materialization, primary string, snapshot string, retErr error) {
 	defer func() {
 		if retErr != nil && tree != nil {
 			retErr = errors.Join(retErr, tree.Cleanup())
@@ -151,9 +163,52 @@ func MaterializeSnapshot(ctx context.Context, sources []config.ArchiveSource, ow
 	}
 	base := strings.TrimSuffix(primary, ".jsonl") + "/"
 	bound.Path = primary
-	entries, err := selectedInventory(ctx, conn, s.RootID, bound, base)
+	var entries []rawsync.Entry
+	if use != nil {
+		rows, queryErr := conn.QueryContext(ctx, `SELECT path,sha256,size,mod_time_ns,covered FROM raw_archive_files WHERE root_id=? AND (path LIKE '%.jsonl' OR path LIKE '%.jsonl.zst') ORDER BY path`, s.RootID)
+		if queryErr != nil {
+			return nil, "", "", queryErr
+		}
+		entries, err = inventoryEntries(rows, bound, func(name string) bool { return parser.CodexSessionUUIDFromFilename(path.Base(name)) != "" })
+	} else {
+		entries, err = selectedInventory(ctx, conn, s.RootID, bound, base)
+	}
 	if err != nil {
 		return nil, "", "", err
+	}
+	if use != nil {
+		byPath := make(map[string]rawsync.Entry, len(entries))
+		names := make([]string, 0, len(entries))
+		for _, entry := range entries {
+			byPath[entry.Path] = entry
+			names = append(names, entry.Path)
+		}
+		remaining := limit
+		read := func(ctx context.Context, name string, requested int64) (_ []byte, readErr error) {
+			entry, ok := byPath[name]
+			if !ok || requested <= 0 || entry.Length > remaining || entry.Length > requested {
+				return nil, errors.New("snapshot rollout unavailable or exceeds size limit")
+			}
+			delete(byPath, name)
+			remaining -= entry.Length
+			m := rawderive.Materializer{Store: snapshotObjects{selected}, BaseDir: os.TempDir(), MaxTotalBytes: min(limit, requested)}
+			materialized, err := m.MaterializeEntries(ctx, identity, manifest.Manifest.CapturedAt, []rawsync.Entry{entry})
+			if err != nil {
+				return nil, err
+			}
+			defer func() { readErr = errors.Join(readErr, materialized.Cleanup()) }()
+			filename, err := materialized.EntryPath(name)
+			if err != nil {
+				return nil, err
+			}
+			file, err := os.Open(filename)
+			if err != nil {
+				return nil, err
+			}
+			defer func() { readErr = errors.Join(readErr, file.Close()) }()
+			return io.ReadAll(io.LimitReader(file, entry.Length+1))
+		}
+		return nil, "", owner.Attachment.SnapshotID, use(names, read)
 	}
 	if err := conn.Close(); err != nil {
 		conn = nil
@@ -174,7 +229,11 @@ func snapshotPrimaryPath(sourceKey, originalRoot, nativeID string, entries []raw
 	key, root := portable(sourceKey), strings.TrimSuffix(portable(originalRoot), "/")
 	var bound rawsync.Entry
 	for _, entry := range entries {
-		if path.Base(entry.Path) == nativeID+".jsonl" && rawderive.SourceKeyEndsWithEntry(key, entry.Path) {
+		matches := path.Base(entry.Path) == nativeID+".jsonl"
+		if native, ok := strings.CutPrefix(nativeID, "codex:"); ok {
+			matches = parser.CodexSessionUUIDFromFilename(path.Base(entry.Path)) == native
+		}
+		if matches && rawderive.SourceKeyEndsWithEntry(key, entry.Path) {
 			if bound.Path != "" {
 				return rawsync.Entry{}, "", errors.New("ambiguous snapshot transcript source")
 			}
@@ -203,6 +262,10 @@ func selectedInventory(ctx context.Context, conn *sql.DB, rootID string, bound r
 	if err != nil {
 		return nil, err
 	}
+	return inventoryEntries(rows, bound, nil)
+}
+
+func inventoryEntries(rows *sql.Rows, bound rawsync.Entry, keep func(string) bool) (_ []rawsync.Entry, retErr error) {
 	defer func() { retErr = errors.Join(retErr, rows.Close()) }()
 	type choice struct{ covered, supplemental []rawsync.Entry }
 	choices := map[string]choice{}
@@ -212,6 +275,9 @@ func selectedInventory(ctx context.Context, conn *sql.DB, rootID string, bound r
 		var covered bool
 		if err := rows.Scan(&e.Path, &digest, &e.Length, &e.ModTimeNS, &covered); err != nil {
 			return nil, err
+		}
+		if keep != nil && !keep(e.Path) {
+			continue
 		}
 		e.Type = "file"
 		e.Objects = []rawsync.ObjectRef{{SHA256: digest, Length: e.Length}}

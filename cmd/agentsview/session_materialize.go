@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/signal"
 	"runtime"
+	"strings"
 	"syscall"
 
 	"github.com/spf13/cobra"
@@ -21,10 +22,10 @@ func newSessionMaterializeCommand() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "materialize <id>",
 		Short: "Install original session files for native resume",
-		Long: "Install a Claude session with its companions or a Pi transcript from configured local or mirror sources; Claude also supports S3 roots and snapshots. Print a resume command for a local checkout. " +
+		Long: "Install a Claude session with its companions or a Pi or Codex transcript from configured local or mirror sources; Claude and Codex also support S3 roots and snapshots. Print a resume command for a local checkout. " +
 			"Requires a local archive with conversation content; the original files must total at most 512 MiB. " +
 			"End the running session and wait for any S3 uploader to finish before materializing. " +
-			"Local retained and directory captures and Codex are not yet supported.",
+			"Local retained and directory captures are not yet supported. Pi has no retained captures.",
 		Example: "  agentsview session materialize <id> --cwd <path>",
 		Args:    cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
@@ -64,7 +65,10 @@ func newSessionMaterializeCommand() *cobra.Command {
 				return err
 			}
 			_, nativeID := parser.StripHostPrefix(id)
-			if session.Agent == "pi" {
+			if session.Agent == "codex" {
+				key, _ := strings.CutPrefix(nativeID, "codex:")
+				result.Command = codexResumeCommand(parser.CodexThreadIDFromSessionKey(key), result.Cwd, runtime.GOOS == "windows")
+			} else if session.Agent == "pi" {
 				result.Command = piResumeCommand(result.Cwd, result.Paths[0], runtime.GOOS == "windows")
 			} else {
 				result.Command = claudeResumeCommand(result.Cwd, nativeID, result.ConfigDir, result.ProjectOverride, runtime.GOOS == "windows")
@@ -76,12 +80,24 @@ func newSessionMaterializeCommand() *cobra.Command {
 				_, err := fmt.Fprintln(cmd.OutOrStdout())
 				return err
 			}
+			if session.Agent == "codex" {
+				if _, err := fmt.Fprintf(cmd.OutOrStdout(), "Requested: %s\nInstalled page: %s\n", result.RequestedID, result.InstalledPage); err != nil {
+					return err
+				}
+			}
 			_, err = fmt.Fprintln(cmd.OutOrStdout(), result.Command)
 			return err
 		},
 	}
 	cmd.Flags().StringVar(&cwd, "cwd", "", "Existing local checkout for the resumed session")
 	return cmd
+}
+
+func codexResumeCommand(thread, cwd string, windows bool) string {
+	if windows {
+		return "codex resume " + shellquote.PowerShell(thread) + " -C " + shellquote.PowerShell(cwd)
+	}
+	return "codex resume " + shellquote.POSIX(thread) + " -C " + shellquote.POSIX(cwd)
 }
 
 func claudeResumeCommand(cwd, id, home, project string, windows bool) string {

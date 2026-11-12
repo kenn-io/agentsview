@@ -777,6 +777,18 @@ fixtures retain this field; missing identities remain source-local.
 
 ## Codex (`codex`)
 
+- **Native resume materialization (checked 2026-11-12 at
+  `6b9826e3aa83b1a5947db50f4332cb9c65f1b340`):** The
+  [resolver](https://github.com/openai/codex/blob/6b9826e3aa83b1a5947db50f4332cb9c65f1b340/codex-rs/thread-store/src/local/thread_rollout_resolver.rs)
+  selects native rollout paths, including paths already known to a running
+  writer or the state database. The
+  [lineage reader](https://github.com/openai/codex/blob/6b9826e3aa83b1a5947db50f4332cb9c65f1b340/codex-rs/thread-store/src/local/rollout_lineage.rs)
+  follows `history_base` across rollout IDs and checks cutoff bounds. The
+  [rollout list](https://github.com/openai/codex/blob/6b9826e3aa83b1a5947db50f4332cb9c65f1b340/codex-rs/rollout/src/list.rs)
+  supplies the dated filename layout. Materialization preserves the original
+  bytes and installs the newest available page and its ancestors without
+  modifying Codex state or launching Codex.
+
 - **Reasoning, compaction, and usage repeats (checked 2026-11-11 at
   `87b7bdbf2efb9cb6fb15d821ef535061012c0138`):** The pinned
   [response schema](https://github.com/openai/codex/blob/87b7bdbf2efb9cb6fb15d821ef535061012c0138/codex-rs/protocol/src/models.rs)

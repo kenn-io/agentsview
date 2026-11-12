@@ -39,12 +39,14 @@ type Result struct {
 	Status          string   `json:"status"`
 	ConfigDir       string   `json:"-"`
 	ProjectOverride string   `json:"-"`
+	RequestedID     string   `json:"requested_id,omitempty"`
+	InstalledPage   string   `json:"installed_page,omitempty"`
 }
 
 // Materialize installs a native transcript and its dependencies.
 func Materialize(ctx context.Context, cfg config.Config, database *db.DB, session *db.Session, cwd string) (Result, error) {
-	if session == nil || (session.Agent != "claude" && session.Agent != "pi") {
-		return Result{}, errors.New("only Claude and Pi sessions can currently be installed")
+	if session == nil || (session.Agent != "claude" && session.Agent != "pi" && session.Agent != "codex") {
+		return Result{}, errors.New("only Claude, Pi and Codex sessions can currently be installed")
 	}
 	cwd, err := filepath.Abs(cwd)
 	if err != nil {
@@ -55,6 +57,9 @@ func Materialize(ctx context.Context, cfg config.Config, database *db.DB, sessio
 	}
 	if session.Agent == "pi" {
 		return materializePi(ctx, cfg, session, cwd)
+	}
+	if session.Agent == "codex" {
+		return materializeCodex(ctx, cfg, database, session, cwd)
 	}
 	host, id := parser.StripHostPrefix(session.ID)
 	if !capture.ValidUUID(id) {

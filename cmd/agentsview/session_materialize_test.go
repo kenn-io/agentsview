@@ -139,3 +139,36 @@ func TestPiMaterializeCommandReturnsNativeResume(t *testing.T) {
 	assert.Contains(t, result.Command, resolved)
 	assert.Contains(t, result.Command, filepath.Join(dest, "example.jsonl"))
 }
+
+func TestCodexMaterializeCommand(t *testing.T) {
+	dataDir := newAgentDataDir(t)
+	root, home, cwd := t.TempDir(), t.TempDir(), t.TempDir()
+	t.Setenv("CODEX_HOME", home)
+	t.Setenv("CODEX_DIR", "")
+	const machine = "0123456789abcdef0123456789abcdef"
+	const id = "11111111-1111-4111-8111-111111111111"
+	require.NoError(t, os.WriteFile(filepath.Join(dataDir, "telemetry-install-id"), []byte(machine), 0o600))
+	require.NoError(t, os.WriteFile(filepath.Join(dataDir, "config.toml"), []byte(fmt.Sprintf("[agents.codex]\ndirs = [%q]\n", root)), 0o600))
+	name := filepath.Join(root, "2026", "01", "01", "rollout-2026-01-01T01-00-00-"+id+".jsonl")
+	require.NoError(t, os.MkdirAll(filepath.Dir(name), 0o700))
+	require.NoError(t, os.WriteFile(name, []byte(fmt.Sprintf(`{"type":"session_meta","payload":{"id":%q}}`+"\n", id)), 0o600))
+	database, err := db.OpenIsolatedContext(t.Context(), filepath.Join(dataDir, "sessions.db"))
+	require.NoError(t, err)
+	require.NoError(t, database.UpsertSession(t.Context(), db.Session{ID: "codex:" + id, Agent: "codex", Machine: machine, Project: "fixture", FilePath: &name}))
+	require.NoError(t, database.Close())
+	output, err := executeCommand(newRootCommand(), "session", "materialize", "codex:"+id, "--cwd", cwd, "--json")
+	require.NoError(t, err, output)
+	var result struct {
+		Command       string `json:"command"`
+		RequestedID   string `json:"requested_id"`
+		InstalledPage string `json:"installed_page"`
+	}
+	require.NoError(t, json.Unmarshal([]byte(output), &result))
+	assert.Equal(t, "codex:"+id, result.RequestedID)
+	assert.Equal(t, filepath.Base(name), result.InstalledPage)
+	want := "codex resume " + id + " -C " + cwd
+	if runtime.GOOS == "windows" {
+		want = "codex resume '" + id + "' -C '" + cwd + "'"
+	}
+	assert.Equal(t, want, result.Command)
+}

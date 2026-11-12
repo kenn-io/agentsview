@@ -2163,12 +2163,12 @@ agentsview session label <id> k=v ...    # add or remove labels
 agentsview session parent <id> <parent>  # record the launching session
 ```
 
-`session materialize <id> --cwd <path>` installs the original Claude Code or Pi
+`session materialize <id> --cwd <path>` installs the original Claude Code, Pi, or Codex
 transcript and its native companions for an existing local checkout, then
 prints a resume command. It reads the local archive without starting a daemon
-and finds originals in configured local roots or remote mirrors. Claude also
-supports configured S3 roots and snapshot attachments that own the session.
-Local retained and directory captures and Codex are not yet supported. Pi has
+and finds originals in configured local roots or remote mirrors. Claude and
+Codex also support configured S3 roots and snapshot attachments that own the
+session. Local retained and directory captures are not yet supported. Pi has
 no retained captures. Claude archive-only fork sessions cannot be installed;
 select a session with a native Claude UUID. The transcript and companions
 together are limited to 512 MiB and are buffered in memory. Snapshot recovery
@@ -2207,11 +2207,18 @@ by the verified Pi consumer and are not installed. Header lookup is bounded to
 nonunique source name such as `session.jsonl` is installed using its session ID
 as the filename.
 
+For Codex, the command installs the newest available page and its complete
+`history_base` chain with their original names and bytes, including compressed
+files. JSON reports `requested_id` and `installed_page`. The printed command
+resumes the native thread in the requested checkout. Codex may choose an
+already-running thread or an existing indexed path before these installed files;
+materialization does not update its index.
+
 An already-running Claude session can attach in that process's existing
 directory. Claude's in-app resume picker can also fall back to a recorded
 project path for an unbound session. Start the printed command in a new process
 when the selected checkout matters: end the existing running session first.
-Materialize after Claude and any S3 uploader finish; S3 files can otherwise
+Materialize after the native session and any S3 uploader finish; S3 files can otherwise
 reflect different upload moments.
 If the destination is a configured Claude or Pi source root, a later sync may
 discover the installed copy and deduplicate it by native session ID. The stored

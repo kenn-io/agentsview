@@ -17,9 +17,9 @@ The latest release is
   and catalog updates, and changing the mapping reprices cached usage. See
   [Custom Model Pricing](/docs/token-usage/#custom-model-pricing).
 
-- Resume a Claude or Pi session in a local checkout by installing its original
-  files from configured sources with `agentsview session materialize`. Claude
-  sessions can also be recovered from attached snapshots.
+- Resume a Claude, Pi, or Codex session in a local checkout by installing its
+  original files from configured sources with `agentsview session materialize`.
+  Claude and Codex sessions can also be recovered from attached snapshots.
 
 - Follow archive changes live from the local daemon with
   `GET /api/v1/changes/stream`. A sync client or dashboard receives every
