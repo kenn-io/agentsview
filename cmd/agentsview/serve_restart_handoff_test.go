@@ -184,6 +184,8 @@ func TestServeRestartHandoffAppliesImagePolicy(t *testing.T) {
 	for _, mode := range []string{"foreground", "background"} {
 		t.Run(mode, func(t *testing.T) {
 			dir, dataDir := isolateServeTestHome(t)
+			dir, err := filepath.EvalSymlinks(dir)
+			require.NoError(t, err)
 			codexDir := filepath.Join(dir, "empty", string(parser.AgentCodex))
 			require.NoError(t, os.MkdirAll(filepath.Join(codexDir, "2024", "01", "01"), 0o755))
 			process, done := startRestartFixture(t, dataDir, mode, "--base-path=/example", "--skip-initial-sync", "--require-auth=false")
