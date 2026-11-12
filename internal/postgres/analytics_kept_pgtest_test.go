@@ -182,8 +182,60 @@ func TestAnalyticsKeptLocalTimezoneChange(t *testing.T) {
 	assert.Equal(t, want, second)
 }
 
+func TestAnalyticsKeptActiveSincePreservesStableSelections(t *testing.T) {
+	local, syncer, store := newUsageJournalFixture(t)
+	ctx := t.Context()
+	for _, day := range []string{"2026-06-14", "2026-06-15"} {
+		pgKeptSession(t, local, day, "project", day)
+		require.NoError(t, local.ReplaceSessionMessages(ctx, day, []db.Message{
+			{SessionID: day, Ordinal: 0, Role: "user", Content: "question", Timestamp: day + "T10:00:00Z"},
+			{SessionID: day, Ordinal: 1, Role: "assistant", Content: "answer", Timestamp: day + "T10:01:00Z", ToolCalls: []db.ToolCall{{ToolName: "Read", Category: "Read", ToolUseID: "call"}}},
+		}))
+	}
+	pgKeptPush(t, syncer, false)
+	counter := &analyticsReadCounter{storeExecutor: store.pg}
+	store.pg = counter
+	f := db.AnalyticsFilter{From: "2026-06-14", To: "2026-06-15", Timezone: "UTC"}
+	stableTools, err := store.GetAnalyticsTools(ctx, f)
+	require.NoError(t, err)
+	stableVelocity, err := store.GetAnalyticsVelocity(ctx, f)
+	require.NoError(t, err)
+	require.Equal(t, 2, stableTools.TotalCalls)
+	require.Len(t, stableVelocity.ByAgent, 1)
+	require.Equal(t, 2, stableVelocity.ByAgent[0].Sessions)
+	filtered := f
+	filtered.ActiveSince = "2026-06-14T00:00:00Z"
+	before, err := store.GetAnalyticsTools(ctx, filtered)
+	require.NoError(t, err)
+	assert.Equal(t, 2, before.TotalCalls)
+	filtered.ActiveSince = "2026-06-15T00:00:00Z"
+	after, err := store.GetAnalyticsTools(ctx, filtered)
+	require.NoError(t, err)
+	assert.Equal(t, 1, after.TotalCalls)
+	afterVelocity, err := store.GetAnalyticsVelocity(ctx, filtered)
+	require.NoError(t, err)
+	require.Len(t, afterVelocity.ByAgent, 1)
+	assert.Equal(t, 1, afterVelocity.ByAgent[0].Sessions)
+	cutoff := time.Date(2026, 6, 14, 10, 1, 1, 0, time.UTC)
+	for i := range 65 {
+		filtered.ActiveSince = cutoff.Add(time.Duration(i) * time.Second).Format(time.RFC3339)
+		_, err = store.GetAnalyticsTools(ctx, filtered)
+		require.NoError(t, err)
+		_, err = store.GetAnalyticsVelocity(ctx, filtered)
+		require.NoError(t, err)
+	}
+	reads := counter.count()
+	tools, err := store.GetAnalyticsTools(ctx, f)
+	require.NoError(t, err)
+	velocity, err := store.GetAnalyticsVelocity(ctx, f)
+	require.NoError(t, err)
+	assert.Equal(t, stableTools, tools)
+	assert.Equal(t, stableVelocity, velocity)
+	assert.Equal(t, reads, counter.count())
+}
+
 func TestAnalyticsKeptBypasses(t *testing.T) {
-	for _, mode := range []string{"active", "hosted", "borrowed", "no journal"} {
+	for _, mode := range []string{"active", "stale", "unclean", "mixed", "local", "active since", "hosted", "borrowed", "no journal"} {
 		t.Run(mode, func(t *testing.T) {
 			local, syncer, store := newUsageJournalFixture(t)
 			pgKeptSession(t, local, "session", "project", "2026-06-14")
@@ -192,6 +244,16 @@ func TestAnalyticsKeptBypasses(t *testing.T) {
 			switch mode {
 			case "active":
 				f.Termination = "active"
+			case "stale":
+				f.Termination = "stale"
+			case "unclean":
+				f.Termination = "unclean"
+			case "mixed":
+				f.Termination = "clean,active"
+			case "local":
+				f.Timezone = "Local"
+			case "active since":
+				f.ActiveSince = "2026-06-14T00:00:00Z"
 			case "hosted":
 				store.hostedRelations = true
 			case "borrowed":

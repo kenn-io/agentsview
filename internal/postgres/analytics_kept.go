@@ -9,7 +9,7 @@ import (
 )
 
 func keptAnalytics[T any](ctx context.Context, s *Store, panel string, f db.AnalyticsFilter, load func(context.Context, db.AnalyticsFilter) (T, error)) (T, error) {
-	if db.TerminationUsesTime(f.Termination) {
+	if f.ActiveSince != "" || f.Timezone == "Local" || db.TerminationUsesTime(f.Termination) {
 		return load(ctx, f)
 	}
 	key, err := json.Marshal(f)
