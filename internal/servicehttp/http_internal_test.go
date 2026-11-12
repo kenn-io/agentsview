@@ -132,6 +132,7 @@ func TestLongRunningClient(t *testing.T) {
 			},
 		},
 		{
+			// Git and GitHub stats can take minutes: they run git log and gh pr list per repository.
 			name: "stats", path: "/api/v1/session-stats", body: `{"generated_at":"2026-09-01T00:00:00Z"}`,
 			call: func(t *testing.T, backend *httpBackend) {
 				t.Helper()

@@ -14,14 +14,14 @@ import (
 	"go.kenn.io/agentsview/internal/service"
 )
 
-type statsSpyService struct {
+type longRouteSpyService struct {
 	service.SessionService
 	got  service.StatsFilter
 	ctx  context.Context
 	wait <-chan struct{}
 }
 
-func (s *statsSpyService) Stats(
+func (s *longRouteSpyService) Stats(
 	ctx context.Context, f service.StatsFilter,
 ) (*service.SessionStats, error) {
 	s.got = f
@@ -31,7 +31,7 @@ func (s *statsSpyService) Stats(
 	return &service.SessionStats{}, nil
 }
 
-func (s *statsSpyService) block(ctx context.Context) error {
+func (s *longRouteSpyService) block(ctx context.Context) error {
 	s.ctx = ctx
 	if s.wait != nil {
 		select {
@@ -43,7 +43,7 @@ func (s *statsSpyService) block(ctx context.Context) error {
 	return nil
 }
 
-func (s *statsSpyService) Search(ctx context.Context, _ service.SearchRequest) (*service.SessionSearchResult, error) {
+func (s *longRouteSpyService) Search(ctx context.Context, _ service.SearchRequest) (*service.SessionSearchResult, error) {
 	if err := s.block(ctx); err != nil {
 		return nil, err
 	}
@@ -67,7 +67,7 @@ func TestLongRoutesOutliveWriteTimeout(t *testing.T) {
 				}
 				synctest.Test(t, func(t *testing.T) {
 					release := make(chan struct{})
-					spy := &statsSpyService{wait: release}
+					spy := &longRouteSpyService{wait: release}
 					srv.sessions = spy
 					ctx, cancel := context.WithCancel(t.Context())
 					req := httptest.NewRequestWithContext(ctx, http.MethodGet, route.path, nil)
@@ -99,7 +99,7 @@ func TestLongRoutesOutliveWriteTimeout(t *testing.T) {
 }
 
 func TestHumaGetSessionStatsUsesServerGitHubToken(t *testing.T) {
-	spy := &statsSpyService{}
+	spy := &longRouteSpyService{}
 	srv := &Server{
 		cfg:      config.Config{GithubToken: "server-token"},
 		sessions: spy,
@@ -115,7 +115,7 @@ func TestHumaGetSessionStatsUsesServerGitHubToken(t *testing.T) {
 
 func TestHumaGetSessionStatsOutcomesOnly(t *testing.T) {
 	srv := testServer(t, 30*time.Second)
-	spy := &statsSpyService{}
+	spy := &longRouteSpyService{}
 	srv.sessions = spy
 	response := httptest.NewRecorder()
 	srv.mux.ServeHTTP(response, httptest.NewRequestWithContext(t.Context(), http.MethodGet,
