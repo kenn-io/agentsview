@@ -287,7 +287,7 @@ func (v *liveVectorServing) Setup(approvedBytes int64, expectedProvider string) 
 	if status.Action != "turn-on" {
 		return fmt.Errorf("%w: setup action is unavailable for the current embeddings provider", vector.ErrInvalidBuildRequest)
 	}
-	if expectedProvider != "" && status.Provider != expectedProvider {
+	if status.Provider != expectedProvider {
 		return server.ErrEmbeddingsProviderChanged
 	}
 	if status.Provider == "built-in" {

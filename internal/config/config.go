@@ -4249,7 +4249,7 @@ func (c *Config) VectorSetupEmbeddings(automatic bool) (VectorEmbeddingsConfig, 
 	return embeddings, err
 }
 
-// SaveVectorSetup records the selected action while keeping omitted defaults omitted.
+// SaveVectorSetup records the selected action and, for local setup, the built-in recipe.
 func (c *Config) SaveVectorSetup(local, automatic bool) error {
 	return c.withConfigLock(func() error {
 		existing, candidate, err := c.vectorSetupCandidate(automatic)

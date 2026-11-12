@@ -68,7 +68,7 @@ func TestSetupReportsSharedChoiceWriteFailure(t *testing.T) {
 	require.NoError(t, err)
 	defer func() { release(); require.NoError(t, owner.Close()) }()
 	require.NoError(t, os.WriteFile(filepath.Join(home, ".kenn"), []byte("block directory"), 0o600))
-	require.NoError(t, owner.Setup(0, ""))
+	require.NoError(t, owner.Setup(0, "built-in"))
 	<-owner.done
 	select {
 	case <-started:
@@ -116,6 +116,7 @@ func TestSetupRejectsChangedProvider(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, "ollama", status.Provider)
 	ollama = false
+	require.ErrorIs(t, owner.Setup(0, ""), server.ErrEmbeddingsProviderChanged)
 	ln, port := listenLoopback(t)
 	cfg.Host, cfg.Port = "127.0.0.1", port
 	ts := startTestServer(t, ln, server.New(cfg, database, nil, owner.ServerOptions()...).Handler())
@@ -648,9 +649,9 @@ func TestLiveEmbeddingsSetupProgress(t *testing.T) {
 	owner, err := newLiveVectorServing(t.Context(), cfg, database, nil, config.LoadReadOnly)
 	require.NoError(t, err)
 	defer func() { require.NoError(t, owner.Close()) }()
-	require.NoError(t, owner.Setup(0, ""))
+	require.NoError(t, owner.Setup(0, "built-in"))
 	<-started
-	require.ErrorIs(t, owner.Setup(0, ""), vector.ErrBuildRunning)
+	require.ErrorIs(t, owner.Setup(0, "built-in"), vector.ErrBuildRunning)
 	status, err := owner.SetupStatus(t.Context())
 	require.NoError(t, err)
 	assert.True(t, status.Busy)
@@ -720,7 +721,7 @@ func TestLiveEmbeddingsSetupFailures(t *testing.T) {
 				return
 			}
 			if failure == "model inspection" {
-				err := owner.Setup(0, "")
+				err := owner.Setup(0, "built-in")
 				require.ErrorIs(t, err, inspectionError)
 				assert.NotErrorIs(t, err, vector.ErrInvalidBuildRequest)
 				return
@@ -728,7 +729,7 @@ func TestLiveEmbeddingsSetupFailures(t *testing.T) {
 			if failure == "config read" {
 				require.NoError(t, os.Mkdir(filepath.Join(dir, "config.toml"), 0o700))
 				var pathError *os.PathError
-				err := owner.Setup(0, "")
+				err := owner.Setup(0, "built-in")
 				require.ErrorAs(t, err, &pathError)
 				assert.NotErrorIs(t, err, vector.ErrInvalidBuildRequest)
 				return
@@ -738,7 +739,7 @@ func TestLiveEmbeddingsSetupFailures(t *testing.T) {
 				require.NoError(t, err)
 				assert.Empty(t, status.Action)
 			}
-			err = owner.Setup(0, "")
+			err = owner.Setup(0, "built-in")
 			require.ErrorIs(t, err, vector.ErrInvalidBuildRequest)
 		})
 	}
@@ -823,7 +824,7 @@ func TestLiveEmbeddingsSetupDisclosesVerifiedRepairSize(t *testing.T) {
 	initial, err := owner.SetupStatus(t.Context())
 	require.NoError(t, err)
 	require.Positive(t, initial.MissingBytes)
-	require.NoError(t, owner.Setup(initial.MissingBytes, ""))
+	require.NoError(t, owner.Setup(initial.MissingBytes, initial.Provider))
 	<-owner.done
 	assert.False(t, approved.Load())
 	retry, err := owner.SetupStatus(t.Context())
@@ -833,7 +834,7 @@ func TestLiveEmbeddingsSetupDisclosesVerifiedRepairSize(t *testing.T) {
 	assert.Contains(t, retry.Error, "declined")
 	assert.Greater(t, retry.MissingBytes, initial.MissingBytes)
 	assert.Equal(t, requiredBytes.Load(), retry.MissingBytes)
-	require.NoError(t, owner.Setup(retry.MissingBytes, ""))
+	require.NoError(t, owner.Setup(retry.MissingBytes, retry.Provider))
 	<-owner.done
 	assert.Equal(t, retry.MissingBytes, requiredBytes.Load())
 	assert.True(t, approved.Load(), "Retry must approve the verified size disclosed after repair was refused")

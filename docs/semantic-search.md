@@ -1013,9 +1013,18 @@ indexing. Replica and DuckDB servers have no local setup control.
 
 `GET /api/v1/embeddings/status` includes `setup` when browser setup is
 available. `POST /api/v1/embeddings/setup` accepts `approved_bytes`, the
-download size disclosed to the user, and optional `expected_provider` from the
+download size disclosed to the user, and required `expected_provider` from the
 status shown to the user. It returns `202` with `{"started":true}` when setup is
 accepted. A concurrent setup or a changed provider returns `409`.
+
+The setup contract requires daemon API version 16. The CLI checks the daemon's
+API version and asks for a restart when they differ. After upgrading, restart
+the daemon before using the new CLI.
+
+Saving built-in setup persists the resolved model recipe and local provider
+choice, so future defaults do not silently replace that setup. If installed
+model files are missing, use **Turn on** to download them again. Setup can show
+**On** while indexing is queued and has yet to start.
 
 Approval covers at most `approved_bytes`. If installation verifies that a larger
 download is required, it declines the download and reports the verified size in
