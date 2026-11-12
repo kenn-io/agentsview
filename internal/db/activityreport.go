@@ -708,8 +708,6 @@ type activityCountedMessage struct {
 	user      bool
 }
 
-// Materialize terminal events once and drive their lookup from the requested
-// sessions, even when SQLite has stale statistics for the terminal index.
 const activityReportTerminalCandidatesSQL = `WITH
 	session_ids AS (
 		SELECT value AS session_id FROM json_each(?)
