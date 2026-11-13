@@ -828,6 +828,32 @@ func TestExtractProjectFromCwdWithBranch(t *testing.T) {
 			want:   "project_main",
 		},
 		{
+			// worktrunk's default layout: "<repo>.<sanitized branch>" next
+			// to the main checkout.
+			name:   "DotSeparatedSiblingWorktree",
+			cwd:    filepath.FromSlash("/Users/user-a/code/sample-app.feat-https-proxy"),
+			branch: "feat/https-proxy",
+			want:   "sample_app",
+		},
+		{
+			name:   "DotSeparatedSiblingWorktreeFlatBranch",
+			cwd:    filepath.FromSlash("/Users/user-a/code/sample-app.rc-12-install-dir"),
+			branch: "rc-12-install-dir",
+			want:   "sample_app",
+		},
+		{
+			name:   "DotInRepoNameDefaultBranchNoTrim",
+			cwd:    filepath.FromSlash("/Users/user-a/code/example.site"),
+			branch: "main",
+			want:   "example.site",
+		},
+		{
+			name:   "DotInRepoNameMismatchNoTrim",
+			cwd:    filepath.FromSlash("/Users/user-a/code/example.site"),
+			branch: "feature/other",
+			want:   "example.site",
+		},
+		{
 			name:   "SupersetWorktreeFlat",
 			cwd:    filepath.FromSlash("/Users/user-a/.superset/worktrees/agentsview/tauri-packaging"),
 			branch: "tauri-packaging",
