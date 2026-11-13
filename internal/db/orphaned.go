@@ -290,19 +290,6 @@ func copyResyncFrustrationMarkers(ctx context.Context, tx *sql.Tx, usageOnly boo
 	}
 	// Reparsed sessions were reconciled above. For copied orphans, compare
 	// prompts after sanitization and projection before reusing their counts.
-	orphanMatch := `orphan.id IS NULL`
-	if oldDBHasColumn(ctx, tx, "messages", "source_subtype") && oldDBHasColumn(ctx, tx, "messages", "is_system") {
-		orphanMatch += ` OR (
-			NOT EXISTS (SELECT ordinal, content FROM old_db.messages
-				WHERE session_id = old.id AND role = 'user' AND source_subtype <> 'tool_result' AND is_system = 0
-				EXCEPT SELECT ordinal, content FROM main.messages
-				WHERE session_id = current.id AND role = 'user' AND source_subtype <> 'tool_result' AND is_system = 0)
-			AND NOT EXISTS (SELECT ordinal, content FROM main.messages
-				WHERE session_id = current.id AND role = 'user' AND source_subtype <> 'tool_result' AND is_system = 0
-				EXCEPT SELECT ordinal, content FROM old_db.messages
-				WHERE session_id = old.id AND role = 'user' AND source_subtype <> 'tool_result' AND is_system = 0)
-		)`
-	}
 	_, err := tx.ExecContext(ctx, `INSERT OR IGNORE INTO main.session_frustration_markers
 		(session_id, transcript_key, marker_version, count)
 		SELECT current.id, current.transcript_revision || '|' || current.created_at,
@@ -314,7 +301,16 @@ func copyResyncFrustrationMarkers(ctx context.Context, tx *sql.Tx, usageOnly boo
 		WHERE current.transcript_revision = old.transcript_revision
 			AND markers.transcript_key = old.transcript_revision || '|' || old.created_at
 			AND current.deleted_at IS NULL
-			AND (`+orphanMatch+`)`)
+			AND (orphan.id IS NULL OR (
+				NOT EXISTS (SELECT ordinal, content FROM old_db.messages
+					WHERE session_id = old.id AND role = 'user' AND source_subtype <> 'tool_result' AND is_system = 0
+					EXCEPT SELECT ordinal, content FROM main.messages
+					WHERE session_id = current.id AND role = 'user' AND source_subtype <> 'tool_result' AND is_system = 0)
+				AND NOT EXISTS (SELECT ordinal, content FROM main.messages
+					WHERE session_id = current.id AND role = 'user' AND source_subtype <> 'tool_result' AND is_system = 0
+					EXCEPT SELECT ordinal, content FROM old_db.messages
+					WHERE session_id = old.id AND role = 'user' AND source_subtype <> 'tool_result' AND is_system = 0)
+			))`)
 	return err
 }
 

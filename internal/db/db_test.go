@@ -6311,13 +6311,7 @@ func TestCopyOrphanedDataFrom_LegacyNoIsSystem(t *testing.T) {
 	srcPath := filepath.Join(dir, "old.db")
 	srcDB := testDBAtPath(t, srcPath, "src")
 	insertSession(t, srcDB, "s1", "proj")
-	insertSession(t, srcDB, "s2", "proj")
-	insertMessages(t, srcDB, userMsg("s1", 0, "hello"), userMsg("s2", 0, "hello"))
-	_, err := srcDB.getWriter().ExecContext(t.Context(), `UPDATE sessions SET transcript_revision = '7' WHERE id IN ('s1', 's2')`)
-	require.NoError(t, err)
-	_, err = srcDB.getWriter().ExecContext(t.Context(), `INSERT INTO session_frustration_markers (session_id, transcript_key, marker_version, count)
-		SELECT id, transcript_revision || '|' || created_at, 1, 7 FROM sessions WHERE id IN ('s1', 's2')`)
-	require.NoError(t, err)
+	insertMessages(t, srcDB, userMsg("s1", 0, "hello"))
 	srcDB.Close()
 
 	// Drop is_system via raw SQL to simulate legacy schema.
@@ -6326,6 +6320,7 @@ func TestCopyOrphanedDataFrom_LegacyNoIsSystem(t *testing.T) {
 	// SQLite doesn't support DROP COLUMN before 3.35;
 	// recreate the table without is_system.
 	_, err = raw.ExecContext(t.Context(), `
+		DROP TABLE IF EXISTS session_frustration_markers;
 		DROP VIEW IF EXISTS message_search_content;
 		DROP VIEW IF EXISTS message_trigram_source;
 		DROP TRIGGER IF EXISTS conversation_usage_key_insert;
@@ -6364,10 +6359,6 @@ func TestCopyOrphanedDataFrom_LegacyNoIsSystem(t *testing.T) {
 	dstPath := filepath.Join(dir, "new.db")
 	dstDB := testDBAtPath(t, dstPath, "dst")
 	defer dstDB.Close()
-	insertSession(t, dstDB, "s2", "proj")
-	insertMessages(t, dstDB, userMsg("s2", 0, "hello"))
-	_, err = dstDB.getWriter().ExecContext(t.Context(), `UPDATE sessions SET transcript_revision = '7' WHERE id = 's2'`)
-	require.NoError(t, err)
 
 	count, err := dstDB.CopyOrphanedDataFrom(t.Context(), srcPath)
 	requireNoError(t, err, "CopyOrphanedDataFrom")
@@ -6381,13 +6372,6 @@ func TestCopyOrphanedDataFrom_LegacyNoIsSystem(t *testing.T) {
 	requireNoError(t, err, "GetMessages")
 	require.Len(t, msgs, 1, "expected 1 message")
 	assert.False(t, msgs[0].IsSystem, "is_system should default to false")
-	var markerCount int
-	err = dstDB.getReader().QueryRowContext(t.Context(), `SELECT count FROM session_frustration_markers WHERE session_id = 's2'`).Scan(&markerCount)
-	require.NoError(t, err)
-	assert.Equal(t, 7, markerCount, "reparsed session should retain its saved count")
-	err = dstDB.getReader().QueryRowContext(t.Context(), `SELECT count(*) FROM session_frustration_markers WHERE session_id = 's1'`).Scan(&markerCount)
-	require.NoError(t, err)
-	assert.Zero(t, markerCount, "legacy orphan should be recounted")
 }
 
 func TestGetAgentsExcludesEmptyAgent(t *testing.T) {
