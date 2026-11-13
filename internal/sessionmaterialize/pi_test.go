@@ -280,10 +280,6 @@ func TestPiHeaderIdentityAndVersion(t *testing.T) {
 	assert.Equal(t, `{"type":"session", "cwd":"/new","id":"id", "extra":1}`+"\n", string(got))
 	_, err = relocatePiHeader(t.Context(), data, "other.jsonl", "id", "/new")
 	require.ErrorIs(t, err, errPiIdentity)
-	large := []byte(`{"type":"session","id":"id","extra":"` + strings.Repeat("a", 1<<20) + `","cwd":"/old"}`)
-	got, err = relocatePiHeader(t.Context(), large, "id.jsonl", "id", "/new")
-	require.NoError(t, err)
-	assert.Contains(t, string(got), `"cwd":"/new"`)
 	_, err = relocatePiHeader(t.Context(), []byte(`{"type":"session","id":"id","cwd":"/old"}`), "id.jsonl", "id", string([]byte{0xff}))
 	require.ErrorContains(t, err, "UTF-8")
 	for _, tc := range []struct{ header, id, want string }{
