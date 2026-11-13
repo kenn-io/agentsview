@@ -4,13 +4,13 @@ package duckdb
 
 import (
 	"path/filepath"
+	"strconv"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
 	"go.kenn.io/agentsview/internal/db"
-	"go.kenn.io/agentsview/internal/storage"
 )
 
 // Through Quack, parameters are rendered into the SQL text, so the marker
@@ -39,33 +39,47 @@ func TestQuackFrustrationMarkerScanCounts(t *testing.T) {
 	assert.Equal(t, map[string]bool{ids[4]: true, ids[5]: true}, shippedContent(t, store, ids))
 }
 
-func TestQuackStoredAndStaleFrustrationCounts(t *testing.T) {
-	ctx := t.Context()
-	local, path := newPushFixture(t, 2)
-	appendFrustrationPrompt(t, local, "sess-1")
-	appendFrustrationPrompt(t, local, "sess-2")
-	_, err := Push(ctx, path, local, "m", storage.MirrorPushOptions{}, false, nil)
-	require.NoError(t, err)
-	conn, err := Open(ctx, path)
-	require.NoError(t, err)
-	_, err = conn.ExecContext(ctx, `UPDATE messages SET content = 'fine' WHERE role = 'user'`)
-	require.NoError(t, err)
-	_, err = conn.ExecContext(ctx, `UPDATE sessions SET project = id, frustration_markers_version = CASE WHEN id = 'sess-2' THEN 0 ELSE frustration_markers_version END`)
-	require.NoError(t, err)
-	require.NoError(t, conn.Close())
-
-	uri := "quack:127.0.0.1:" + freeTCPPort(t)
-	const token = "agentsview-duckdbtest-token-stored-frustration"
-	openQuackMirrorServer(t, ctx, path, uri, token)
-	store, err := NewQuackStore(ctx, uri, token, false, 0)
-	require.NoError(t, err)
-	t.Cleanup(func() { require.NoError(t, store.Close()) })
+func TestQuackFrustrationMirrorVersion(t *testing.T) {
 	for _, tc := range []struct {
-		project string
+		name    string
+		version int
 		want    int
-	}{{"sess-1", 1}, {"sess-2", 0}} {
-		resp, err := store.GetAnalyticsSignals(ctx, db.AnalyticsFilter{Project: tc.project})
-		require.NoError(t, err)
-		assert.Equal(t, tc.want, resp.QualityHealth.Totals.FrustrationMarkerCount)
+		future  bool
+	}{
+		{"current", frustrationMarkersVersion, 1, false},
+		{"stale", frustrationMarkersVersion - 1, 0, false},
+		{"future", frustrationMarkersVersion + 1, 0, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ctx := t.Context()
+			path := filepath.Join(t.TempDir(), "mirror.duckdb")
+			buildMirrorFixture(t, path, "session", "this is broken")
+			conn, err := Open(ctx, path)
+			require.NoError(t, err)
+			_, err = conn.ExecContext(ctx, `UPDATE messages SET content = 'fine' WHERE session_id = 'session'`)
+			require.NoError(t, err)
+			require.NoError(t, recordMetadataKey(ctx, conn, frustrationMarkersVersionMetadataKey, strconv.Itoa(tc.version)))
+			require.NoError(t, conn.Close())
+			uri := "quack:127.0.0.1:" + freeTCPPort(t)
+			const token = "agentsview-duckdbtest-token-frustration-version"
+			openQuackMirrorServer(t, ctx, path, uri, token)
+			store, err := NewQuackStore(ctx, uri, token, false, 0)
+			require.NoError(t, err)
+			t.Cleanup(func() { require.NoError(t, store.Close()) })
+			resp, err := store.GetAnalyticsSignals(ctx, db.AnalyticsFilter{})
+			if tc.future {
+				require.ErrorContains(t, err, "newer than supported")
+				_, err = store.GetAnalyticsSignals(ctx, db.AnalyticsFilter{Project: "no-sessions"})
+				require.ErrorContains(t, err, "newer than supported")
+				_, err = store.GetAnalyticsSignalSessions(ctx, db.AnalyticsFilter{}, "frustration_marker_count", 10)
+				require.ErrorContains(t, err, "newer than supported")
+				return
+			}
+			require.NoError(t, err)
+			assert.Equal(t, tc.want, resp.QualityHealth.Totals.FrustrationMarkerCount)
+			evidence, err := store.GetAnalyticsSignalSessions(ctx, db.AnalyticsFilter{}, "frustration_marker_count", 10)
+			require.NoError(t, err)
+			assert.Len(t, evidence.Sessions, tc.want)
+		})
 	}
 }

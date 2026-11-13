@@ -247,7 +247,6 @@ var mirrorTables = []tableSpec{
 			labels VARCHAR[],
 			agentsview_push_fingerprint TEXT,
 			source_archive_id TEXT NOT NULL DEFAULT '',
-			frustration_markers_version INTEGER NOT NULL DEFAULT 0,
 			frustration_marker_count INTEGER NOT NULL DEFAULT 0
 		)`,
 		columns: []columnSpec{
@@ -324,7 +323,6 @@ var mirrorTables = []tableSpec{
 			{"labels", "labels VARCHAR[]"},
 			{"agentsview_push_fingerprint", "agentsview_push_fingerprint TEXT"},
 			{"source_archive_id", "source_archive_id TEXT NOT NULL DEFAULT ''"},
-			{"frustration_markers_version", "frustration_markers_version INTEGER NOT NULL DEFAULT 0"},
 			{"frustration_marker_count", "frustration_marker_count INTEGER NOT NULL DEFAULT 0"},
 		},
 		indexes: []string{

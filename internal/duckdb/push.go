@@ -1034,7 +1034,8 @@ type duckMutationExecutor interface {
 }
 
 // frustrationMarkersVersion is independent of db.CurrentQualitySignalVersion.
-// Bump it when IsFrustrationMarker changes.
+// Bump it when CountFrustrationMarkers or ExtractHeuristicMessages changes,
+// including which messages are eligible for counting.
 const frustrationMarkersVersion = 1
 
 const duckInsertBatchBytes = 1 << 20
@@ -1081,7 +1082,7 @@ func sessionInsertArgs(
 		timeValue(sess.CreatedAt), nilString(sess.TerminationStatus),
 		sess.SecretLeakCount, sess.SecretsRulesVersion,
 		db.EncodePRLinks(sess.PRLinks), db.LabelsArg(sess.Labels),
-		nilEmpty(fingerprint), archiveID, frustrationMarkersVersion, frustrationCount,
+		nilEmpty(fingerprint), archiveID, frustrationCount,
 	}
 }
 

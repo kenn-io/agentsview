@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"slices"
 	"sort"
-	"strconv"
 	"strings"
 	"time"
 
@@ -35,8 +34,7 @@ func (s *Store) loadAnalyticsSessions(
 		args = append(args, extraArgs...)
 	}
 	rows, err := s.queryContext(ctx, `
-		SELECT `+readbase.AnalyticsSessionColumns+`, COALESCE(s.agentsview_push_fingerprint, ''),
-			CASE WHEN s.frustration_markers_version = `+strconv.Itoa(frustrationMarkersVersion)+` THEN s.frustration_marker_count END
+		SELECT `+readbase.AnalyticsSessionColumns+`, COALESCE(s.agentsview_push_fingerprint, ''), s.frustration_marker_count
 		FROM sessions s
 		WHERE `+where, args...)
 	if err != nil {
@@ -221,6 +219,13 @@ func (s *Store) duckPopulateFrustrationMarkers(
 	rows []db.SignalRow,
 	sessions []readbase.AnalyticsSession,
 ) error {
+	var markerVersion int
+	if err := s.queryRowContext(ctx, `SELECT COALESCE((SELECT CAST(value AS INTEGER) FROM sync_metadata WHERE key = ?), 0)`, frustrationMarkersVersionMetadataKey).Scan(&markerVersion); err != nil {
+		return fmt.Errorf("reading duckdb frustration marker version: %w", err)
+	}
+	if markerVersion > frustrationMarkersVersion {
+		return fmt.Errorf("duckdb frustration marker version %d is newer than supported version %d", markerVersion, frustrationMarkersVersion)
+	}
 	if len(rows) == 0 {
 		return nil
 	}
@@ -229,7 +234,7 @@ func (s *Store) duckPopulateFrustrationMarkers(
 	stored := make(map[string]int, len(sessions))
 	for _, session := range sessions {
 		versions[session.ID] = session.PushFingerprint
-		if session.FrustrationMarkers != nil {
+		if markerVersion == frustrationMarkersVersion && session.FrustrationMarkers != nil {
 			stored[session.ID] = *session.FrustrationMarkers
 		}
 	}
