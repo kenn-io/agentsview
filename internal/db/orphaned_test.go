@@ -52,6 +52,7 @@ func TestCopyReparsedFrustrationCounts(t *testing.T) {
 	require.NoError(t, err)
 	saved, err := destination.getReader().QueryContext(ctx, `SELECT session_id, transcript_key, count FROM session_frustration_markers`)
 	require.NoError(t, err)
+	defer saved.Close()
 	got := make(map[string]string)
 	for saved.Next() {
 		var id, key string
