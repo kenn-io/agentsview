@@ -2,6 +2,7 @@ package duckdb
 
 import (
 	"context"
+	"database/sql"
 	"fmt"
 	"math"
 	"slices"
@@ -49,11 +50,16 @@ const activityUsageModels = `SELECT DISTINCT model, provider_id FROM messages WH
 // report order, for activity.AllocateUsageCosts to apportion.
 func (s *Store) sumActivityUsage(
 	ctx context.Context, candidateWhere string, candidateArgs []any, lowerBound, upperBound string,
-	q activity.Query, pricing *export.PricingResolver,
+	q activity.Query, pricing *export.PricingResolver, slot, version string,
 ) ([]activity.UsageRow, error) {
 	startUS, endUS := readbase.ActivityUsageSpan(q)
 	if startUS >= endUS {
 		return []activity.UsageRow{}, nil
+	}
+	if version != "" {
+		if saved, ok := s.activityUsageSums.Get(slot, version); ok && saved[0].Covers(endUS) {
+			return readbase.AssembleActivityUsage(pricing, saved[0].Schedule, saved[0].Groups)
+		}
 	}
 	with := duckActivityUsageWith(candidateWhere)
 	withArgs := append([]any{lowerBound, upperBound}, candidateArgs...)
@@ -69,6 +75,21 @@ func (s *Store) sumActivityUsage(
 	if err != nil {
 		return nil, err
 	}
+	if version != "" {
+		nextUS := int64(math.MaxInt64)
+		if q.Partial {
+			var next sql.NullInt64
+			args := append(slices.Clone(withArgs), endUS)
+			err := s.queryRowContext(ctx, "WITH "+with+" SELECT min(ts_us) FROM activity_usage_rows WHERE ts_us >= ?", args...).Scan(&next)
+			if err != nil {
+				return nil, fmt.Errorf("querying next activity usage row: %w", err)
+			}
+			if next.Valid {
+				nextUS = next.Int64
+			}
+		}
+		s.activityUsageSums.Put(slot, version, []*readbase.ActivityUsageSums{{Schedule: schedule, Groups: groups, EndUS: endUS, NextUS: nextUS}})
+	}
 	return readbase.AssembleActivityUsage(pricing, schedule, groups)
 }
 
@@ -78,6 +99,7 @@ func (s *Store) readActivityUsageGroups(
 	q activity.Query, startUS, endUS int64,
 ) ([]readbase.ActivityUsageGroup, error) {
 	sqlText, args := activityUsageSQL(with, withArgs, schedule, readbase.ActivityUsageBucketStarts(q), startUS, endUS)
+	observeAnalyticsQuery(sqlText)
 	rows, err := s.queryContext(ctx, sqlText, args...)
 	if err != nil {
 		return nil, fmt.Errorf("querying activity usage: %w", err)

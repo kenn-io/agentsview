@@ -92,7 +92,9 @@ and `duckdb serve`.
 proxy and TLS flags) and is read-only in the same way — no uploads, file
 watching, or local sync.
 
-Local `duckdb serve` keeps finished Activity ranges in memory and past days a
+Local `duckdb serve` keeps usage totals for Activity ranges in progress in
+memory until a push or pricing change. It keeps finished Activity ranges in
+memory and past days a
 client opens on disk, so reopening them is quick, including after a restart.
 Finished Usage results stay in memory for the same mirror file and custom
 pricing, with up to 64 selections and 64 MiB per read kind.

@@ -5,6 +5,7 @@ package duckdb
 import (
 	"path/filepath"
 	"strconv"
+	"strings"
 	"testing"
 	"time"
 
@@ -140,17 +141,44 @@ func TestActivityReportKeptExcludesPartialAndBorrowedHandles(t *testing.T) {
 	for range 2 {
 		keptActivityBuild(t, store, q, true)
 	}
+	reads := 0
+	previous := analyticsQueryObserver
+	analyticsQueryObserver = func(query string) {
+		if strings.Contains(query, "activity_usage_keyed") {
+			reads++
+		}
+	}
+	t.Cleanup(func() { analyticsQueryObserver = previous })
+	for range 2 {
+		keptActivityBuild(t, borrowed, q, true)
+	}
+	require.Equal(t, 2, reads)
 }
 
 func TestActivityReportKeptExcludesTimeDependentTermination(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "mirror.duckdb")
 	keptActivityMirror(t, path, "session-a", 500)
+	conn, err := Open(t.Context(), path)
+	require.NoError(t, err)
+	_, err = conn.ExecContext(t.Context(), `UPDATE sessions SET termination_status = 'tool_call_pending'`)
+	require.NoError(t, err)
+	require.NoError(t, conn.Close())
 	store, err := NewStore(t.Context(), path)
 	require.NoError(t, err)
 	defer store.Close()
-	q := duckDayQuery(t, "2026-01-01", "UTC")
+	q, err := activity.ResolveQuery(activity.QueryInput{Preset: "day", Date: "2026-01-01", Timezone: "UTC"}, time.Date(2026, 1, 1, 12, 0, 0, 0, time.UTC))
+	require.NoError(t, err)
+	reads := 0
+	previous := analyticsQueryObserver
+	analyticsQueryObserver = func(query string) {
+		if strings.Contains(query, "activity_usage_keyed") {
+			reads++
+		}
+	}
+	t.Cleanup(func() { analyticsQueryObserver = previous })
 	for _, termination := range []string{"active", "stale", "unclean", "clean, active"} {
 		t.Run(termination, func(t *testing.T) {
+			before := reads
 			for range 2 {
 				var phases []activity.ProgressPhase
 				_, err := store.BuildActivityReportArtifacts(t.Context(), db.AnalyticsFilter{
@@ -160,6 +188,88 @@ func TestActivityReportKeptExcludesTimeDependentTermination(t *testing.T) {
 				require.Contains(t, phases, activity.ProgressLoadingUsage,
 					"time-dependent session membership must be rebuilt on every read")
 			}
+			if reads > before {
+				require.Equal(t, 2, reads-before)
+			}
 		})
 	}
+	require.Positive(t, reads, "at least one termination filter must include a session")
+}
+
+func TestPartialActivityUsageKeptUntilPush(t *testing.T) {
+	skipReopenTestOnWindows(t)
+	dir := t.TempDir()
+	path := filepath.Join(dir, "mirror.duckdb")
+	keptActivityMirror(t, path, "session-a", 500)
+	store, err := NewStore(t.Context(), path)
+	require.NoError(t, err)
+	defer store.Close()
+	store.SetCustomPricing(map[string]config.CustomModelRate{"kept-model": {OutputMicrodollarsPerMTok: 10_000_000}})
+	q, err := activity.ResolveQuery(activity.QueryInput{Preset: "day", Date: "2026-01-01", Timezone: "UTC"}, time.Date(2026, 1, 1, 12, 0, 0, 0, time.UTC))
+	require.NoError(t, err)
+	reads := 0
+	previous := analyticsQueryObserver
+	analyticsQueryObserver = func(query string) {
+		if strings.Contains(query, "activity_usage_keyed") {
+			reads++
+		}
+	}
+	t.Cleanup(func() { analyticsQueryObserver = previous })
+	first := keptActivityBuild(t, store, q, true)
+	require.Equal(t, 1, reads)
+	q.EffectiveEnd = q.EffectiveEnd.Add(time.Minute)
+	repeat := keptActivityBuild(t, store, q, true)
+	require.Equal(t, 1, reads)
+	freshStore := NewStoreFromDB(store.DB())
+	freshStore.SetCustomPricing(map[string]config.CustomModelRate{"kept-model": {OutputMicrodollarsPerMTok: 10_000_000}})
+	fresh := keptActivityBuild(t, freshStore, q, true)
+	requireKeptActivityEqual(t, fresh, repeat)
+	require.Equal(t, activity.ReportWithSessions(first).Totals.OutputTokens, activity.ReportWithSessions(repeat).Totals.OutputTokens)
+	require.Equal(t, activity.ReportWithSessions(first).Totals.Cost, activity.ReportWithSessions(repeat).Totals.Cost)
+	store.SetCustomPricing(map[string]config.CustomModelRate{"kept-model": {OutputMicrodollarsPerMTok: 20_000_000}})
+	reads = 0
+	repriced := keptActivityBuild(t, store, q, true)
+	require.Equal(t, 1, reads)
+	require.Equal(t, money.MustParseDollars("0.01"), activity.ReportWithSessions(repriced).Totals.Cost)
+	next := filepath.Join(dir, "next.duckdb")
+	keptActivityMirror(t, next, "session-b", 900)
+	require.NoError(t, swapMirrorFile(next, path))
+	store.checkMirrorReplacement(t.Context(), func(err error) { require.NoError(t, err) })
+	reads = 0
+	changed := keptActivityBuild(t, store, q, true)
+	require.Equal(t, 1, reads)
+	require.Equal(t, 900, activity.ReportWithSessions(changed).Totals.OutputTokens)
+}
+
+func TestPartialActivityUsageRereadsPastNextRow(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "mirror.duckdb")
+	keptActivityMirror(t, path, "session-a", 500)
+	conn, err := Open(t.Context(), path)
+	require.NoError(t, err)
+	_, err = conn.ExecContext(t.Context(), `UPDATE messages SET timestamp = TIMESTAMP '2026-01-01 12:30:00' WHERE id = 2`)
+	require.NoError(t, err)
+	require.NoError(t, conn.Close())
+	store, err := NewStore(t.Context(), path)
+	require.NoError(t, err)
+	defer store.Close()
+	q, err := activity.ResolveQuery(activity.QueryInput{Preset: "day", Date: "2026-01-01", Timezone: "UTC"}, time.Date(2026, 1, 1, 12, 0, 0, 0, time.UTC))
+	require.NoError(t, err)
+	reads := 0
+	previous := analyticsQueryObserver
+	analyticsQueryObserver = func(query string) {
+		if strings.Contains(query, "activity_usage_keyed") {
+			reads++
+		}
+	}
+	t.Cleanup(func() { analyticsQueryObserver = previous })
+	first := keptActivityBuild(t, store, q, true)
+	require.Equal(t, 0, activity.ReportWithSessions(first).Totals.OutputTokens)
+	q.EffectiveEnd = q.EffectiveEnd.Add(time.Hour)
+	second := keptActivityBuild(t, store, q, true)
+	require.Equal(t, 500, activity.ReportWithSessions(second).Totals.OutputTokens)
+	require.Equal(t, 2, reads)
+	q.EffectiveEnd = q.EffectiveEnd.Add(-time.Hour)
+	third := keptActivityBuild(t, store, q, true)
+	require.Equal(t, 0, activity.ReportWithSessions(third).Totals.OutputTokens)
+	require.Equal(t, 3, reads)
 }
