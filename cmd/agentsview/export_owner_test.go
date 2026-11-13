@@ -46,12 +46,12 @@ func TestExportSchemaUpgradeRefusesWhileOwnerHeld(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, before, after)
 	_, err = os.Stat(cfg.DBPath + "-journal")
-	assert.ErrorIs(t, err, os.ErrNotExist)
+	require.ErrorIs(t, err, os.ErrNotExist)
 	wal, err := os.Stat(cfg.DBPath + "-wal")
 	if err == nil {
 		assert.Zero(t, wal.Size())
 	} else {
-		assert.ErrorIs(t, err, os.ErrNotExist)
+		require.ErrorIs(t, err, os.ErrNotExist)
 	}
 
 	require.NoError(t, owner.Release())
