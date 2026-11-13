@@ -232,6 +232,19 @@ func TestUsageNotificationLeavesCursorRollupForRequest(t *testing.T) {
 	assert.Equal(t, 1011, daily.Totals.InputTokens)
 }
 
+func TestUsageNotificationDeletesSessionAfterReset(t *testing.T) {
+	database, cache := usageSpoolExtractionFixture(t, 2)
+	require.NoError(t, cache.resetRewoundUsage(t.Context(), 0))
+	snapshot, err := database.captureUsageQuery(t.Context(), UsageFilter{}, usageQueryKindToken)
+	require.NoError(t, err)
+	_, err = cache.fill.Ensure(t.Context(), snapshot.Versions, 0)
+	require.NoError(t, err)
+	require.Equal(t, 1, usageCacheCount(t, cache, "usage_cached_sessions"))
+	require.NoError(t, database.SoftDeleteSession(t.Context(), "session"))
+	cache.fill.processNotificationBatch(map[string]bool{"session": true}, false)
+	require.Zero(t, usageCacheCount(t, cache, "usage_cached_sessions"))
+}
+
 func TestUsageNotificationRequeuesPeersWhenChannelFull(t *testing.T) {
 	database := testDB(t)
 	for _, id := range []string{"peer-a", "peer-b"} {

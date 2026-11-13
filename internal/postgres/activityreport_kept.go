@@ -22,8 +22,7 @@ type pgActivityKept struct {
 func (s *Store) activityKeptVersion(ctx context.Context, pricingDigest string) (string, error) {
 	// Include the table identity so recreating the journal
 	// cannot validate a report built against the previous schema.
-	var oid uint32
-	err := s.pg.QueryRowContext(ctx, `SELECT 'usage_session_changes'::regclass::oid`).Scan(&oid)
+	oid, err := usageJournalOID(ctx, s.pg)
 	if isUndefinedTable(err) || isInsufficientPrivilege(err) {
 		return "", nil
 	}

@@ -730,8 +730,8 @@ func (db *DB) SearchSession(
 // (including an explicit "exact phrase") and is passed through untouched, so
 // exact-phrase matching remains opt-in via a leading quote.
 //
-// This is the single source of truth shared by the SQLite, PostgreSQL, and HTTP
-// search paths so the same user query behaves identically across backends.
+// SQLite session search, PostgreSQL search, and HTTP query preparation use this
+// helper. SQLite natural-content search prepares its word queries separately.
 func PrepareFTSQuery(raw string) string {
 	raw = strings.TrimSpace(raw)
 	if raw == "" || strings.HasPrefix(raw, `"`) {

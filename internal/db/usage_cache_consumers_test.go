@@ -8,10 +8,145 @@ import (
 	"sync"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"go.kenn.io/agentsview/internal/usagefacts"
 )
+
+type changingUsageSource struct {
+	*rollupAccountSource
+	streams atomic.Int64
+}
+
+type delayedInitialUsageSource struct {
+	*rollupAccountSource
+	started chan struct{}
+	release chan struct{}
+}
+
+func (s *delayedInitialUsageSource) CaptureUsage(ctx context.Context, request UsageSourceRequest) (UsageSourceSnapshot, error) {
+	snapshot, err := s.rollupAccountSource.CaptureUsage(ctx, request)
+	close(s.started)
+	select {
+	case <-s.release:
+		return snapshot, err
+	case <-ctx.Done():
+		return UsageSourceSnapshot{}, ctx.Err()
+	}
+}
+
+func TestUsageCacheInitialProbeDoesNotOverwriteNewIdentity(t *testing.T) {
+	database := testDB(t)
+	source := &delayedInitialUsageSource{rollupAccountSource: &rollupAccountSource{database: database, databaseID: "old"}, started: make(chan struct{}), release: make(chan struct{})}
+	reader, err := NewUsageCacheReader(t.TempDir(), source)
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, reader.Close()) })
+	release := sync.OnceFunc(func() { close(source.release) })
+	t.Cleanup(release)
+	done := make(chan string, 1)
+	go func() {
+		id, _ := reader.engine.GetDatabaseID(t.Context())
+		done <- id
+	}()
+	select {
+	case <-source.started:
+	case <-time.After(10 * time.Second):
+		require.FailNow(t, "initial capture did not start")
+	}
+	newID := "new"
+	reader.engine.usageSourceDatabaseID.Store(&newID)
+	reader.engine.usageCache.retireExceptAsync(newID)
+	release()
+	select {
+	case got := <-done:
+		require.Equal(t, newID, got)
+	case <-time.After(10 * time.Second):
+		require.FailNow(t, "initial capture did not finish")
+	}
+}
+
+func (s *changingUsageSource) CaptureUsage(ctx context.Context, request UsageSourceRequest) (UsageSourceSnapshot, error) {
+	snapshot, err := s.rollupAccountSource.CaptureUsage(ctx, request)
+	snapshot.DatabaseID = s.databaseID
+	snapshot.ChangeRevision = s.revision
+	return snapshot, err
+}
+
+func (s *changingUsageSource) StreamUsage(ctx context.Context, ids []string, emit func(string, usagefacts.Fact) error) (UsageSourceSnapshot, error) {
+	s.streams.Add(1)
+	snapshot, err := s.rollupAccountSource.StreamUsage(ctx, ids, emit)
+	snapshot.DatabaseID = s.databaseID
+	snapshot.ChangeRevision = s.revision
+	return snapshot, err
+}
+
+func TestUsageCacheReaderChangesSourceGeneration(t *testing.T) {
+	database := testDB(t)
+	seedUsageSnapshotSession(t, database, "rollup-race", "project-a", "2026-08-10T09:00:00Z", 0, 10, "model-a")
+	id, err := database.GetDatabaseID(t.Context())
+	require.NoError(t, err)
+	source := &changingUsageSource{rollupAccountSource: &rollupAccountSource{database: database, databaseID: id + "|timeline-a", revision: 10, output: 10}}
+	reader, err := NewUsageCacheReader(t.TempDir(), source)
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, reader.Close()) })
+	filter := UsageFilter{Timezone: "UTC"}
+	want, err := database.GetDailyUsage(t.Context(), filter)
+	require.NoError(t, err)
+	got, err := reader.GetDailyUsage(t.Context(), filter)
+	require.NoError(t, err)
+	require.Equal(t, want, got)
+	_, err = database.getWriter().Exec(t.Context(), `UPDATE messages SET token_usage='{"output_tokens":20}' WHERE session_id='rollup-race'`)
+	require.NoError(t, err)
+	source.output = 20
+	source.databaseID = id + "|timeline-b"
+	want = getDailyUsageLegacyForRollupTest(t, database, filter)
+	got, err = reader.GetDailyUsage(t.Context(), filter)
+	require.NoError(t, err)
+	require.Equal(t, want, got)
+	streams := source.streams.Load()
+	got, err = reader.GetDailyUsage(t.Context(), filter)
+	require.NoError(t, err)
+	require.Equal(t, want, got)
+	require.Equal(t, streams, source.streams.Load())
+	reader.engine.usageCache.mu.Lock()
+	count := len(reader.engine.usageCache.generations)
+	_, retained := reader.engine.usageCache.generations[id+"|timeline-b"]
+	reader.engine.usageCache.mu.Unlock()
+	require.Equal(t, 1, count)
+	require.True(t, retained)
+}
+
+func TestUsageCacheRewindAfterInterruptedDeletion(t *testing.T) {
+	database := testDB(t)
+	seedUsageSnapshotSession(t, database, "rollup-race", "project-a", "2026-08-10T09:00:00Z", 0, 10, "model-a")
+	id, err := database.GetDatabaseID(t.Context())
+	require.NoError(t, err)
+	source := &changingUsageSource{rollupAccountSource: &rollupAccountSource{database: database, databaseID: id, revision: 10, output: 10}}
+	directory := t.TempDir()
+	reader, err := NewUsageCacheReader(directory, source)
+	require.NoError(t, err)
+	filter := UsageFilter{Timezone: "UTC"}
+	want, err := database.GetDailyUsage(t.Context(), filter)
+	require.NoError(t, err)
+	got, err := reader.GetDailyUsage(t.Context(), filter)
+	require.NoError(t, err)
+	require.Equal(t, want, got)
+	cache, err := reader.engine.usageCache.Generation(t.Context(), id)
+	require.NoError(t, err)
+	require.NoError(t, cache.fill.deleteNotificationSessions([]string{"rollup-race"}, 20, 0))
+	require.NoError(t, reader.Close())
+	source.revision = 15
+	reader, err = NewUsageCacheReader(directory, source)
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, reader.Close()) })
+	_, err = reader.GetDailyUsage(t.Context(), filter)
+	require.ErrorIs(t, err, ErrUsageCacheWarming)
+	got, err = reader.GetDailyUsage(t.Context(), filter)
+	require.NoError(t, err)
+	require.Equal(t, want, got)
+}
 
 func TestTopSessionsRollupMatchesLegacy(t *testing.T) {
 	database := openDailyUsageFixtureDB(t)

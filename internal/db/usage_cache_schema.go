@@ -66,7 +66,9 @@ const (
 	// absent.
 	// Version 23 stores each fact's cost status so harness-recorded costs
 	// price a row only when the catalog cannot.
-	usageCacheFormatVersion             = 23
+	// Version 24 separates snapshot ranking from billed output and stores priced
+	// totals for external account rows that cannot deduplicate against other usage.
+	usageCacheFormatVersion             = 24
 	usageCacheApplicationID             = 0x41565543
 	usageCacheKind                      = "agentsview-usage-facts"
 	usageCacheRetirementProtocolVersion = 1
@@ -79,6 +81,8 @@ const (
 	usageCacheMetadataNextRollupRevision  = "next_rollup_install_revision"
 	usageCacheMetadataDeletionRevision    = "deletion_revision"
 	usageCacheMetadataCursorHighWaterMark = "cursor_high_water_mark"
+	usageCacheMetadataResetEpoch          = "reset_epoch"
+	usageCacheMetadataSourceMutation      = "source_mutation_revision"
 	usageCacheMetadataBackfillCompletedAt = "backfill_completed_at"
 	usageCacheMetadataRetirementProtocol  = "retirement_protocol_version"
 )
@@ -213,6 +217,7 @@ CREATE TABLE usage_facts (
     usage_dedup_key TEXT NOT NULL DEFAULT '',
     token_eligible INTEGER NOT NULL,
     activity_eligible INTEGER NOT NULL,
+    ranking_output_tokens INTEGER,
     PRIMARY KEY (cached_session_id, fact_index)
 ) WITHOUT ROWID;
 CREATE INDEX usage_facts_claude_identity
@@ -378,6 +383,7 @@ CREATE TABLE usage_rollup_exceptions (
     claude_request_id TEXT NOT NULL,
     source_uuid TEXT NOT NULL,
     usage_dedup_key TEXT NOT NULL,
+    ranking_output_tokens INTEGER,
     PRIMARY KEY (
         rollup_install_id, group_kind, group_key, cached_session_id, fact_index
     )
@@ -385,7 +391,38 @@ CREATE TABLE usage_rollup_exceptions (
 CREATE INDEX usage_rollup_exceptions_window
     ON usage_rollup_exceptions (
         local_date, rollup_install_id, group_kind, group_key
-    );`
+    );
+CREATE TABLE usage_rollup_account_totals (
+    rollup_install_id INTEGER NOT NULL REFERENCES usage_rollup_installs(id)
+        ON DELETE CASCADE,
+    local_date TEXT NOT NULL,
+    agent TEXT NOT NULL,
+    is_headless INTEGER NOT NULL,
+    reported_model TEXT NOT NULL,
+    provider_id TEXT NOT NULL,
+    priced_model TEXT NOT NULL,
+    matched_pattern TEXT NOT NULL,
+    rate_ok INTEGER NOT NULL,
+    rate_hash TEXT NOT NULL,
+    band_threshold INTEGER NOT NULL,
+    pricing_key TEXT NOT NULL,
+    pricing_timestamp TEXT NOT NULL,
+    input_tokens INTEGER NOT NULL,
+    output_tokens INTEGER NOT NULL,
+    reasoning_tokens INTEGER NOT NULL,
+    cache_creation_tokens INTEGER NOT NULL,
+    cache_read_tokens INTEGER NOT NULL,
+    estimated_cost_microdollars INTEGER NOT NULL,
+    savings_microdollars INTEGER NOT NULL,
+    computed_request_count INTEGER NOT NULL,
+    computed_aggregate_count INTEGER NOT NULL,
+    reported_count INTEGER NOT NULL,
+    base_request_count INTEGER NOT NULL,
+    PRIMARY KEY (
+        rollup_install_id, local_date, agent, is_headless, reported_model,
+        provider_id, rate_hash, band_threshold
+    )
+) WITHOUT ROWID;`
 
 type usageCache struct {
 	db         *sql.DB
@@ -422,6 +459,8 @@ type usageCacheManager struct {
 	cancel      context.CancelFunc
 
 	mu          sync.Mutex
+	retireMu    sync.Mutex
+	retireWait  sync.WaitGroup
 	generations map[string]*usageCache
 	currentID   string
 	closed      bool
@@ -743,6 +782,8 @@ func initializeUsageCache(
 		{usageCacheMetadataNextRollupRevision, "1"},
 		{usageCacheMetadataDeletionRevision, "0"},
 		{usageCacheMetadataCursorHighWaterMark, "0"},
+		{usageCacheMetadataResetEpoch, "0"},
+		{usageCacheMetadataSourceMutation, "0"},
 		{usageCacheMetadataBackfillCompletedAt, ""},
 		{
 			usageCacheMetadataRetirementProtocol,
@@ -909,8 +950,8 @@ func usageCacheSchemaComplete(ctx context.Context, database *sql.DB) bool {
 			'source_database_id', 'next_install_revision',
 			'next_rollup_install_revision',
 			'deletion_revision', 'cursor_high_water_mark',
-			'backfill_completed_at', 'retirement_protocol_version'
-		)`).Scan(&metadataCount); err != nil || metadataCount != 9 {
+			'backfill_completed_at', 'retirement_protocol_version', 'reset_epoch'
+		)`).Scan(&metadataCount); err != nil || metadataCount != 10 {
 		return false
 	}
 	queries := []string{
@@ -926,7 +967,7 @@ func usageCacheSchemaComplete(ctx context.Context, database *sql.DB) bool {
 		        cache_read_tokens, web_search_requests,
 		        reported_cost_microdollars, cost_source, cost_status, request_scoped,
 		        claude_message_id, claude_request_id, source_uuid,
-		        usage_dedup_key, token_eligible, activity_eligible
+		        usage_dedup_key, token_eligible, activity_eligible, ranking_output_tokens
 		 FROM usage_facts LIMIT 0`,
 		`SELECT source_id, agent, timestamp_ms, raw_timestamp, model,
 		        input_tokens, output_tokens, cache_creation_tokens,
@@ -959,13 +1000,22 @@ func usageCacheSchemaComplete(ctx context.Context, database *sql.DB) bool {
 		`SELECT rollup_install_id, group_kind, group_key, cached_session_id,
 		        fact_index, source_session_id, local_date, source,
 		        message_ordinal, timestamp_ms, timestamp_ns, raw_timestamp,
-		        uses_session_start, model, input_tokens, output_tokens,
+		        uses_session_start, model, input_tokens, output_tokens, ranking_output_tokens,
 		        reasoning_tokens, cache_creation_tokens,
 		        cache_creation_1h_tokens, cache_read_tokens,
 		        web_search_requests, reported_cost_microdollars, cost_source,
 		        cost_status, request_scoped, is_headless, claude_message_id, claude_request_id,
 		        source_uuid, usage_dedup_key
 		 FROM usage_rollup_exceptions LIMIT 0`,
+		`SELECT rollup_install_id, local_date, agent, is_headless,
+		        reported_model, provider_id, priced_model, matched_pattern,
+		        rate_ok, rate_hash, band_threshold, pricing_key,
+		        pricing_timestamp, input_tokens, output_tokens,
+		        reasoning_tokens, cache_creation_tokens, cache_read_tokens,
+		        estimated_cost_microdollars, savings_microdollars,
+		        computed_request_count, computed_aggregate_count,
+		        reported_count, base_request_count
+		 FROM usage_rollup_account_totals LIMIT 0`,
 	}
 	for _, query := range queries {
 		if _, err := database.ExecContext(ctx, query); err != nil {
@@ -1133,6 +1183,8 @@ func (m *usageCacheManager) detachAllLocked() []*usageCache {
 }
 
 func (m *usageCacheManager) RetireExcept(databaseID string) error {
+	m.retireMu.Lock()
+	defer m.retireMu.Unlock()
 	m.mu.Lock()
 	if m.closed {
 		m.mu.Unlock()
@@ -1151,7 +1203,40 @@ func (m *usageCacheManager) RetireExcept(databaseID string) error {
 	return retireUsageCaches(caches, m.archivePath, true)
 }
 
+// retireExceptAsync detaches the old generation immediately; callers can hold
+// a lease on it until their request unwinds, so closing it must happen later.
+func (m *usageCacheManager) retireExceptAsync(databaseID string) {
+	m.mu.Lock()
+	if m.closed {
+		m.mu.Unlock()
+		return
+	}
+	m.currentID = databaseID
+	var caches []*usageCache
+	for id, cache := range m.generations {
+		if id != databaseID {
+			caches = append(caches, cache)
+			delete(m.generations, id)
+			cache.beginRetirement()
+		}
+	}
+	if len(caches) == 0 {
+		m.mu.Unlock()
+		return
+	}
+	m.retireWait.Add(1)
+	m.mu.Unlock()
+	go func() {
+		defer m.retireWait.Done()
+		if err := retireUsageCaches(caches, m.archivePath, true); err != nil {
+			log.Printf("warning: retiring usage cache generations: %v", err)
+		}
+	}()
+}
+
 func (m *usageCacheManager) Close() error {
+	m.retireMu.Lock()
+	defer m.retireMu.Unlock()
 	m.mu.Lock()
 	if m.closed {
 		m.mu.Unlock()
@@ -1161,5 +1246,7 @@ func (m *usageCacheManager) Close() error {
 	m.cancel()
 	caches := m.detachAllLocked()
 	m.mu.Unlock()
-	return retireUsageCaches(caches, m.archivePath, false)
+	err := retireUsageCaches(caches, m.archivePath, false)
+	m.retireWait.Wait()
+	return err
 }

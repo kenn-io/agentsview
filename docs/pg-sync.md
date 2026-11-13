@@ -19,6 +19,9 @@ writes. In addition to normal table access, installation requires `CREATE` on
 the schema and `TRIGGER` on the watched tables. Installation takes a
 `SHARE ROW EXCLUSIVE` lock on those tables until it commits: reads continue, and
 writes wait. CockroachDB skips this journal.
+Usage cache invalidation relies on `pg push` updating each parent session when
+it changes that session's messages. Direct SQL message edits must also change
+the parent session's `updated_at` to invalidate cached usage.
 Activity reuse needs `SELECT` on `usage_session_changes` for `pg serve`
 roles given access later.
 
@@ -30,6 +33,29 @@ Hosted PostgreSQL and archives without the journal rebuild every time.
 64 MiB per read kind, until the journal revision or custom pricing changes.
 Hosted PostgreSQL, archives without the journal, and filters that compare against
 the current time read every time.
+
+Native PostgreSQL also keeps priced Usage rows in `<data-dir>/usage-postgres/`,
+so restarts reuse work and reads refresh sessions and prices changed by a push.
+When a read would first have to rebuild much of that cache, such as on first
+use, after a price or project identity change, or after new account usage, it
+returns the direct PostgreSQL result and the cache rebuilds in the background.
+Journals upgraded by a current writer need `SELECT` access. Persistent caching
+also needs `EXECUTE` access to PostgreSQL's `pg_control_system()`,
+`pg_current_wal_lsn()`, and `pg_walfile_name(pg_lsn)` functions. Readers without
+these permissions use direct reads. Hosted and borrowed transaction readers,
+CockroachDB, and unavailable journals also use direct reads. PostgreSQL
+standbys retain complete results in memory when a current writer has installed
+the journal history token; otherwise they read directly.
+Readers without a version 2 journal repeat direct reads until a current writer
+upgrades it. Readers without the identity functions can retain direct results
+when the journal has a history token.
+Recovery onto a different PostgreSQL timeline starts a new cache generation.
+If a cache attempt fails while the request is active, the existing direct
+PostgreSQL read supplies its result or error. A journal installed later enables
+persistent reuse without a server restart. If the cache directory can't be
+created, the reader uses temporary storage. The cache is disposable and contains
+no source sessions. Plan usage, per-session details, and Activity retain their
+existing read paths.
 
 The sync direction is one-way: SQLite to PostgreSQL. Each machine pushes its own
 sessions; `pg serve` reads from the shared database. The resulting UI includes
@@ -152,8 +178,9 @@ agentsview replica pg serve
 ```
 
 Opens the read-only web UI at `http://127.0.0.1:8080`, backed entirely by
-PostgreSQL. It does not use local SQLite or file watching, and its session UI
-and APIs do not accept session uploads. A writable deployment can also expose
+PostgreSQL. Source sessions stay there; Usage keeps a disposable local cache.
+It does no file watching, and its session UI and APIs do not accept session
+uploads. A writable deployment can also expose
 the separate
 [hosted raw-sync control plane](/docs/hosted-raw-sync/#http-control-plane).
 

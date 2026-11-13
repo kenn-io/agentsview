@@ -19,6 +19,7 @@ AgentsView stores all persistent data under a single directory, defaulting to
 ├── assets/          # Images stored outside SQLite
 ├── vectors.db       # Semantic-search vector index (when [vector] is enabled)
 ├── usage-cache-v6-<id>.db # Disposable usage-aggregate cache
+├── usage-postgres/  # Disposable PostgreSQL usage caches
 ├── telemetry-install-id # Application installation ID
 ├── telemetry-daemon-active.lock  # Serializes daily daemon reports
 ├── telemetry-setup-finished.lock # Serializes the one-time setup report
@@ -43,9 +44,9 @@ has stopped before rotating. Debug log writes share `debug.log.rotate.lock`
 and wait while rotation holds it exclusively. If the lock is busy or the
 backup fails, AgentsView keeps the active log intact.
 
-`usage-cache-v6-<id>.db` is a derived cache of usage aggregates, not user data.
-It is safe to delete when no AgentsView process is running; the next usage query
-rebuilds it automatically. Back up `sessions.db` for session history, `assets/`
+`usage-cache-v6-<id>.db` and `usage-postgres/` contain derived usage aggregates.
+They are safe to delete when no AgentsView process is running; the next usage
+query rebuilds them automatically. Back up `sessions.db` for session history, `assets/`
 for images stored outside SQLite, `config.toml` for settings, and
 `telemetry-install-id` for installation identity. Keep the database and assets
 together when restoring or moving the archive.

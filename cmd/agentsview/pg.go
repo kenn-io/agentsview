@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"fmt"
+	"log"
 
 	"go.kenn.io/agentsview/internal/config"
 	"go.kenn.io/agentsview/internal/db"
@@ -34,6 +35,9 @@ func (pgReplica) serveOptions(
 		return nil, nil, fmt.Errorf(
 			"pg serve store is %T, not *postgres.Store", store,
 		)
+	}
+	if err := pgStore.ConfigureUsageCache(ctx, appCfg.DataDir, target.URL, target.Schema); err != nil {
+		log.Printf("pg serve: Usage cache unavailable, using direct reads: %v", err)
 	}
 	pool := pgStore.DB()
 	if pool == nil {

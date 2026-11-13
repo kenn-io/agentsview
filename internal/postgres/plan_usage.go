@@ -83,7 +83,31 @@ func (s *Store) GetPlanUsageSessionCounts(
 	ctx context.Context, f db.UsageFilter,
 ) (db.PlanUsageSessionCounts, error) {
 	slot := db.UsageSlot(f, false)
-	return db.PlanUsageCounts(ctx, &s.runtimeState().planUsage, slot, s.keptUsageVersion(ctx, slot), f, s.readPlanUsageSessionCounts)
+	var version string
+	deferred := s.deferUsage(ctx, f)
+	if deferred {
+		defer s.usageCache.HoldWarm()()
+	} else {
+		version = s.keptUsageVersion(ctx, slot)
+	}
+	if deferred || version == standbyUsageMarker || (version == "" && s.runtimeState().usageIdentityDenied.Load()) {
+		raw := f
+		raw.ModelAliases = nil
+		tally, handled, err := snapshotRetained(ctx, s, slot, &s.runtimeState().planUsage, &s.runtimeState().standbyPlan, func(ctx context.Context, view *Store) (*db.PlanUsageCountSummary, error) {
+			return view.readPlanUsageSessionCounts(ctx, raw)
+		})
+		if handled {
+			if err != nil {
+				return db.PlanUsageSessionCounts{}, err
+			}
+			return tally.CountsFor(f.ModelAliases), nil
+		}
+		version = ""
+	}
+	if deferred {
+		version = s.directUsageVersion(ctx, slot)
+	}
+	return db.PlanUsageCounts(ctx, &s.runtimeState().planUsage, slot, version, f, s.readPlanUsageSessionCounts)
 }
 
 func (s *Store) readPlanUsageSessionCounts(ctx context.Context, f db.UsageFilter) (*db.PlanUsageCountSummary, error) {
