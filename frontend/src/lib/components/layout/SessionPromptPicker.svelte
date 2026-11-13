@@ -32,8 +32,11 @@
   let loading = $state(false);
   let failed = $state(false);
   let read: AbortController | null = null;
-  // The session `prompts` belong to; another session's must not be picked.
+  // The session and transcript revision `prompts` were read from. A list
+  // from another session, or from before a resync renumbered messages,
+  // must not be picked while the next read runs.
   let promptsFor: string | null = null;
+  let promptsRevision: string | null = null;
 
   // Every prompt, newest first, read again on each opening so a live
   // session's new prompts show up.
@@ -43,12 +46,13 @@
     read?.abort();
     const controller = new AbortController();
     read = controller;
-    if (promptsFor !== id) prompts = [];
+    if (promptsFor !== id || promptsRevision !== messages.loadedRevision) prompts = [];
     loading = true;
     failed = false;
     try {
-      const rows = await readPrompts(id, controller.signal);
+      const { rows, revision } = await readPrompts(id, controller.signal);
       promptsFor = id;
+      promptsRevision = revision;
       prompts = rows
         .map((row, index) => {
           const text = previewMessage(row.content).text.trim();
@@ -75,7 +79,10 @@
 
   // Every page names the first page's revision, so a sync between pages
   // answers 409 and the read starts over rather than mixing two transcripts.
-  async function readPrompts(id: string, signal: AbortSignal): Promise<Message[]> {
+  async function readPrompts(
+    id: string,
+    signal: AbortSignal,
+  ): Promise<{ rows: Message[]; revision: string }> {
     for (let attempt = 1; ; attempt++) {
       const rows: Message[] = [];
       let revision: string | undefined;
@@ -92,10 +99,11 @@
             },
             { signal },
           );
-          revision ??= page.transcript_revision || undefined;
+          // The same value MessagesStore records as its loadedRevision.
+          revision ??= page.transcript_revision ?? "";
           rows.push(...page.messages.filter(isPromptMessage));
           const last = page.messages.at(-1);
-          if (page.messages.length < PAGE_SIZE || !last) return rows;
+          if (page.messages.length < PAGE_SIZE || !last) return { rows, revision };
           from = last.ordinal + 1;
         }
       } catch (err) {
@@ -106,13 +114,18 @@
 
   // The transcript's own rule, so a prompt it hides is never offered as a
   // place to jump. A filtered code fence keeps a placeholder, so it counts.
-  let shown = $derived(
-    ui.hasBlockFilters
-      ? prompts.filter((p) =>
-          hasVisibleSegments(p.message, (type) => type === "code" || ui.isBlockVisible(type)),
-        )
-      : prompts,
-  );
+  // A prompt newer than the transcript's newest row has no card to scroll
+  // to, and loading a missing message only reaches back for older ones.
+  // It shows up here once the transcript's own refresh brings it in.
+  let shown = $derived.by(() => {
+    const newest = messages.messages.at(-1)?.ordinal ?? -1;
+    return prompts.filter(
+      (p) =>
+        p.message.ordinal <= newest &&
+        (!ui.hasBlockFilters ||
+          hasVisibleSegments(p.message, (type) => type === "code" || ui.isBlockVisible(type))),
+    );
+  });
 
   let matches = $derived.by(() => {
     const words = query.toLowerCase().split(/\s+/).filter(Boolean);

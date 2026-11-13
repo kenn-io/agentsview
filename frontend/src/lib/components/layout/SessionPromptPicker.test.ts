@@ -14,10 +14,27 @@ import { openPromptPicker } from "./prompt-picker.js";
 const prompt = (ordinal: number, content = `prompt ${ordinal}`) =>
   msg({ id: ordinal + 1, ordinal, content, content_length: content.length });
 
+// Serves the pages and puts the same rows in the transcript, as when the
+// transcript has caught up with the archive.
 function serve(...pages: Message[][]) {
   const read = vi.spyOn(SessionsService, "getApiV1SessionsByIdMessages");
-  for (const page of pages) read.mockResolvedValueOnce({ messages: page } as never);
+  for (const page of pages) {
+    read.mockResolvedValueOnce({ messages: page, transcript_revision: "r1" } as never);
+  }
+  messages.messages = pages.flat();
+  messages.loadedRevision = "r1";
   return read;
+}
+
+function hang() {
+  vi.spyOn(SessionsService, "getApiV1SessionsByIdMessages").mockReturnValue(
+    new Promise(() => {}) as never,
+  );
+}
+
+async function close() {
+  await fireEvent.keyDown(screen.getByRole("combobox"), { key: "Escape" });
+  await settle();
 }
 
 async function settle() {
@@ -57,6 +74,8 @@ afterEach(() => {
   vi.restoreAllMocks();
   ui.showAllBlocks();
   messages.sessionId = null;
+  messages.messages = [];
+  messages.loadedRevision = null;
   document.body.innerHTML = "";
 });
 
@@ -68,7 +87,7 @@ describe("SessionPromptPicker", () => {
 
     expect(read.mock.calls.map((call) => call[1])).toEqual([
       { roles: "user", direction: "asc", from: 0, limit: 1000 },
-      { roles: "user", direction: "asc", from: 1999, limit: 1000 },
+      { roles: "user", direction: "asc", from: 1999, limit: 1000, expected_revision: "r1" },
     ]);
     const newest = screen.getAllByRole("option")[0]!;
     expect(newest.textContent).toContain("Latest prompt");
@@ -85,6 +104,7 @@ describe("SessionPromptPicker", () => {
     );
     read.mockRejectedValueOnce(new ApiError(409, "transcript changed"));
     page("r2", [prompt(0, "Rewritten prompt")]);
+    messages.messages = [prompt(0, "Rewritten prompt")];
     await open();
 
     expect(read.mock.calls.map((call) => call[1])).toEqual([
@@ -107,6 +127,34 @@ describe("SessionPromptPicker", () => {
     ui.setBlockVisible("user", true);
     await settle();
     expect(labels()).toEqual(["Run this", "Plain prompt"]);
+  });
+
+  it("keeps the last list on reopening only while the transcript is unchanged", async () => {
+    serve([prompt(0, "Before the resync")]);
+    await open();
+    await close();
+
+    hang();
+    await open();
+    expect(labels()).toEqual(["Before the resync"]);
+    await close();
+
+    // A resync moved the transcript on, so the old ordinals may be wrong.
+    messages.loadedRevision = "r2";
+    await open();
+    expect(labels()).toEqual([]);
+    expect(document.body.textContent).toContain("Loading prompts…");
+  });
+
+  it("holds back prompts the transcript has not loaded yet", async () => {
+    serve([prompt(0, "Loaded"), prompt(2, "Just typed")]);
+    messages.messages = [prompt(0, "Loaded"), msg({ id: 99, ordinal: 1, role: "assistant" })];
+    await open();
+    expect(labels()).toEqual(["Loaded"]);
+
+    messages.messages = [...messages.messages, prompt(2, "Just typed")];
+    await settle();
+    expect(labels()).toEqual(["Just typed", "Loaded"]);
   });
 
   it("lists only typed prompts, by their first line", async () => {
@@ -163,13 +211,10 @@ describe("SessionPromptPicker", () => {
   it("drops the previous session's prompts while the next one loads", async () => {
     serve([prompt(0, "From session one")]);
     await open();
-    await fireEvent.keyDown(screen.getByRole("combobox"), { key: "Escape" });
-    await settle();
+    await close();
 
     messages.sessionId = "s2";
-    vi.spyOn(SessionsService, "getApiV1SessionsByIdMessages").mockReturnValue(
-      new Promise(() => {}) as never,
-    );
+    hang();
     await open();
 
     expect(labels()).toEqual([]);
