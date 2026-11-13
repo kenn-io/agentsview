@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"slices"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -35,7 +36,7 @@ func (s *Store) loadAnalyticsSessions(
 	}
 	rows, err := s.queryContext(ctx, `
 		SELECT `+readbase.AnalyticsSessionColumns+`, COALESCE(s.agentsview_push_fingerprint, ''),
-			CASE WHEN s.frustration_markers_version = `+fmt.Sprint(frustrationMarkersVersion)+` THEN s.frustration_marker_count END
+			CASE WHEN s.frustration_markers_version = `+strconv.Itoa(frustrationMarkersVersion)+` THEN s.frustration_marker_count END
 		FROM sessions s
 		WHERE `+where, args...)
 	if err != nil {
