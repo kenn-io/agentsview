@@ -196,7 +196,7 @@ func checkDirectoryRouting(t *testing.T, cfg config.Config, receiver *db.DB, ses
 	t.Cleanup(func() { _ = busyVault.Close() })
 	_, err = Materialize(t.Context(), directoryOnly, receiver, session, cwd)
 	require.ErrorIs(t, err, docbank.ErrVaultLocked)
-	assert.ErrorContains(t, err, "archive is busy")
+	require.ErrorContains(t, err, "archive is busy")
 	require.NoError(t, vault.Close())
 	unavailable := cfg
 	unavailable.ArchiveSources = append([]config.ArchiveSource(nil), cfg.ArchiveSources...)

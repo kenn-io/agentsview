@@ -105,7 +105,7 @@ func TestRetainedClaudeOriginalAndDirectory(t *testing.T) {
 	require.NoError(t, tree.Cleanup())
 	assert.Equal(t, before, retainedTree(t, alternate))
 	_, err = os.Stat(filepath.Join(alternate, "application", "db.write.lock"))
-	assert.ErrorIs(t, err, os.ErrNotExist)
+	require.ErrorIs(t, err, os.ErrNotExist)
 	wal := filepath.Join(alternate, "application", "sessions.db-wal")
 	require.NoError(t, os.WriteFile(wal, []byte("pending"), 0o600))
 	_, _, _, err = Retained(ctx, alternateCfg, nil, id, sourceDevice, id, "claude", "", []db.ArchiveSessionProvenance{owner}, 1<<20, nil)
@@ -166,7 +166,7 @@ func TestRetainedCodexCompressedAndAncestor(t *testing.T) {
 		return cancelCtx.Err()
 	})
 	require.ErrorIs(t, err, context.Canceled)
-	assert.NotErrorIs(t, err, sql.ErrTxDone)
+	require.NotErrorIs(t, err, sql.ErrTxDone)
 	var seen []string
 	_, _, source, err := Retained(ctx, config.Config{DataDir: seed}, database, "codex:"+thread, sourceDevice, "codex:"+thread, "codex", "", nil, 1<<20, func(_ string, names []string, read func(context.Context, string, int64) ([]byte, error)) error {
 		for _, name := range names {
