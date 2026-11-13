@@ -5,7 +5,9 @@ package duckdb
 import (
 	"os"
 	"path/filepath"
+	"sync"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/require"
 
@@ -22,6 +24,8 @@ func TestUsagePartsAcrossRestart(t *testing.T) {
 	require.NoError(t, err)
 	_, err = conn.ExecContext(t.Context(), `UPDATE sessions SET agentsview_push_fingerprint = 'first'`)
 	require.NoError(t, err)
+	_, err = conn.ExecContext(t.Context(), `UPDATE messages SET token_usage = '{"output_tokens":500,"recorded_cost_microdollars":2000}' WHERE id = 2`)
+	require.NoError(t, err)
 	require.NoError(t, conn.Close())
 	store, err := NewStore(t.Context(), path)
 	require.NoError(t, err)
@@ -32,6 +36,7 @@ func TestUsagePartsAcrossRestart(t *testing.T) {
 	top, err := store.GetTopSessionsByCost(t.Context(), f, 10)
 	require.NoError(t, err)
 	require.Equal(t, 500, first.Totals.OutputTokens)
+	require.Equal(t, money.MustParseDollars("0.002"), first.Totals.TotalCost)
 	require.NoError(t, store.Close())
 
 	restarted, err := NewStore(t.Context(), path)
@@ -66,10 +71,16 @@ func TestUsagePartsAcrossRestart(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, 900, got.Totals.OutputTokens)
 	require.Equal(t, 1, reads)
+	gotTop, err = changed.GetTopSessionsByCost(t.Context(), f, 10)
+	require.NoError(t, err)
+	require.Equal(t, 2, reads)
 	fresh := NewStoreFromDB(changed.DB())
 	want, err := fresh.GetDailyUsage(t.Context(), f)
 	require.NoError(t, err)
 	require.Equal(t, want, got)
+	wantTop, err := fresh.GetTopSessionsByCost(t.Context(), f, 10)
+	require.NoError(t, err)
+	require.Equal(t, wantTop, gotTop)
 	reads = 0
 	changed.SetCustomPricing(map[string]config.CustomModelRate{"kept-model": {OutputMicrodollarsPerMTok: 10_000_000}})
 	repriced, err := changed.GetDailyUsage(t.Context(), f)
@@ -309,4 +320,76 @@ func TestUsagePartsRefreshesAuthoritativeCost(t *testing.T) {
 	want, err := fresh.GetDailyUsage(t.Context(), f)
 	require.NoError(t, err)
 	require.Equal(t, want, got)
+}
+
+func TestUsagePartsReplacementDuringPublish(t *testing.T) {
+	skipReopenTestOnWindows(t)
+	t.Setenv("CACHE_DIRECTORY", t.TempDir())
+	dir := t.TempDir()
+	path, next := filepath.Join(dir, "mirror.duckdb"), filepath.Join(dir, "next.duckdb")
+	keptActivityMirror(t, path, "session-a", 500)
+	keptActivityMirror(t, next, "session-a", 900)
+	for _, file := range []string{path, next} {
+		conn, err := Open(t.Context(), file)
+		require.NoError(t, err)
+		_, err = conn.ExecContext(t.Context(), `UPDATE sessions SET agentsview_push_fingerprint = 'same'`)
+		require.NoError(t, err)
+		require.NoError(t, conn.Close())
+	}
+	info, err := os.Stat(path)
+	require.NoError(t, err)
+	nextInfo, err := os.Stat(next)
+	require.NoError(t, err)
+	require.Equal(t, info.Size(), nextInfo.Size())
+	require.NoError(t, os.Chtimes(next, info.ModTime(), info.ModTime()))
+	store, err := NewStore(t.Context(), path)
+	require.NoError(t, err)
+	require.NoError(t, store.OpenActivityReportDisk(t.Context()))
+	initial := store
+	t.Cleanup(func() { _ = initial.Close() })
+	paused, resume := make(chan struct{}), make(chan struct{})
+	previous := usagePartPublishObserver
+	usagePartPublishObserver = func() { close(paused); <-resume }
+	t.Cleanup(func() { usagePartPublishObserver = previous })
+	done := make(chan struct{})
+	var readErr error
+	var resumeOnce sync.Once
+	unpause := func() { resumeOnce.Do(func() { close(resume) }) }
+	go func() { defer close(done); _, readErr = store.GetDailyUsage(t.Context(), db.UsageFilter{}) }()
+	t.Cleanup(func() {
+		unpause()
+		select {
+		case <-done:
+		case <-time.After(10 * time.Second):
+			t.Error("usage read did not finish")
+		}
+	})
+	select {
+	case <-paused:
+	case <-time.After(10 * time.Second):
+		require.FailNow(t, "usage read did not reach publication")
+	}
+	require.NoError(t, swapMirrorFile(next, path))
+	store.checkMirrorReplacement(t.Context(), func(err error) { require.NoError(t, err) })
+	unpause()
+	select {
+	case <-done:
+		require.NoError(t, readErr)
+	case <-time.After(10 * time.Second):
+		require.FailNow(t, "usage read did not finish")
+	}
+	usagePartPublishObserver = nil
+	require.NoError(t, store.Close())
+	store, err = NewStore(t.Context(), path)
+	require.NoError(t, err)
+	defer store.Close()
+	require.NoError(t, store.OpenActivityReportDisk(t.Context()))
+	reads := 0
+	prevQuery := analyticsQueryObserver
+	analyticsQueryObserver = func(string) { reads++ }
+	t.Cleanup(func() { analyticsQueryObserver = prevQuery })
+	got, err := store.GetDailyUsage(t.Context(), db.UsageFilter{})
+	require.NoError(t, err)
+	require.Equal(t, 900, got.Totals.OutputTokens)
+	require.Equal(t, 1, reads)
 }

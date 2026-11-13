@@ -18,6 +18,7 @@ type usagePart[T any] struct {
 }
 
 var usagePartReadObserver func([]string)
+var usagePartPublishObserver func()
 
 // refreshUsageParts retains only parts whose source sessions are unchanged.
 func refreshUsageParts[T any](ctx context.Context, s *Store, slot, priceDigest string, size func(T) int64, read func(context.Context, []string) (map[string]T, error)) (map[string]T, error) {
@@ -104,6 +105,9 @@ func refreshUsageParts[T any](ctx context.Context, s *Store, slot, priceDigest s
 				values[id] = value
 			}
 		}
+	}
+	if usagePartPublishObserver != nil {
+		usagePartPublishObserver()
 	}
 	if ctx.Err() == nil && stamp != "" && stamp == s.keptVersion() {
 		rows := make([]usagePart[T], 0, len(versions))

@@ -25,12 +25,14 @@ import (
 
 func TestUsageKeptMirrorReplacementAndPricing(t *testing.T) {
 	skipReopenTestOnWindows(t)
+	t.Setenv("CACHE_DIRECTORY", t.TempDir())
 	dir := t.TempDir()
 	path := filepath.Join(dir, "mirror.duckdb")
 	keptActivityMirror(t, path, "session-a", 500)
 	store, err := NewStore(t.Context(), path)
 	require.NoError(t, err)
 	defer store.Close()
+	require.NoError(t, store.OpenActivityReportDisk(t.Context()))
 	reads := 0
 	previous := analyticsQueryObserver
 	analyticsQueryObserver = func(string) { reads++ }
