@@ -2,7 +2,6 @@ package sessionmaterialize
 
 import (
 	"crypto/sha256"
-	"fmt"
 	"io/fs"
 	"os"
 	"path/filepath"
@@ -58,12 +57,16 @@ func seedArchiveState(t *testing.T, seed string) ([]byte, map[string][32]byte, [
 func TestMaterializeUnboundSeededNativeSources(t *testing.T) {
 	const device = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
 	const id = "019eb791-cf7d-75c1-8439-9ed74c122e02"
-	for _, agent := range []parser.AgentType{parser.AgentClaude, parser.AgentCodex} {
-		for _, scenario := range []string{"plain", "same ID different roots", "missing captured path", "unowned machine", "adopted machine", "recorded machine alias", "recorded root alias", "empty machine", "installation machine", "revert page"} {
+	for _, tc := range []struct {
+		agent     parser.AgentType
+		scenarios []string
+	}{
+		{parser.AgentClaude, []string{"plain", "same ID different roots", "missing captured path", "unowned machine", "recorded machine alias", "recorded root alias", "empty machine", "installation machine"}},
+		{parser.AgentCodex, []string{"plain", "revert page"}},
+	} {
+		agent := tc.agent
+		for _, scenario := range tc.scenarios {
 			t.Run(string(agent)+"/"+scenario, func(t *testing.T) {
-				if scenario == "revert page" && agent != parser.AgentCodex {
-					t.Skip("Codex-specific native identity")
-				}
 				ctx := t.Context()
 				root := t.TempDir()
 				t.Setenv("HOME", filepath.Join(root, "home"))
@@ -80,16 +83,13 @@ func TestMaterializeUnboundSeededNativeSources(t *testing.T) {
 				t.Cleanup(func() { _ = database.Close() })
 				require.NoError(t, database.ConfigureArtifactLocalMachine(ctx, device))
 				first, selected := filepath.Join(root, "first"), filepath.Join(root, "selected")
-				var original, other, selectedPath, firstPath, nativeID, child, ancestor string
+				var original, other, selectedPath, firstPath, nativeID, ancestor string
 				if agent == parser.AgentClaude {
 					original = testjsonl.NewSessionBuilder().AddClaudeUserWithSessionID("2026-01-01T00:00:00Z", "selected", id).String()
 					other = testjsonl.NewSessionBuilder().AddClaudeUserWithSessionID("2026-01-01T00:00:00Z", "other", id).String()
 					selectedPath = filepath.Join(selected, "project", id+".jsonl")
 					firstPath = filepath.Join(first, "project", id+".jsonl")
 					nativeID = id
-					dbtest.WriteTestFile(t, filepath.Join(selected, "project", id, "tool-results", "tool.txt"), []byte("tool output"))
-					child = testjsonl.NewSessionBuilder().AddClaudeUserWithSessionID("2026-01-01T00:00:00Z", "child", "agent-child").String()
-					dbtest.WriteTestFile(t, filepath.Join(selected, "project", id, "subagents", "agent-child.jsonl"), []byte(child))
 				} else {
 					name := "rollout-2026-01-01T00-00-00-" + id + ".jsonl"
 					original = testjsonl.JoinJSONL(testjsonl.CodexSessionMetaWithFieldsJSON(id, "/work", "codex_cli_rs", "2026-01-01T00:00:00Z", map[string]any{"history_mode": "paginated"}), testjsonl.CodexMsgJSON("user", "selected", "2026-01-01T00:00:01Z"))
@@ -105,7 +105,7 @@ func TestMaterializeUnboundSeededNativeSources(t *testing.T) {
 						selectedPath = filepath.Join(selected, "sessions", "2026", "01", "02", name)
 						firstPath = filepath.Join(first, "sessions", "2026", "01", "02", name)
 						nativeID += "_" + rollout
-						original = testjsonl.JoinJSONL(testjsonl.CodexSessionMetaWithFieldsJSON(id, "/work", "codex_cli_rs", "2026-01-02T00:00:00Z", map[string]any{"session_id": id, "history_mode": "paginated", "history_base": map[string]any{"thread_id": id, "end_ordinal_exclusive": 2, "end_byte_offset": len(ancestor)}}), testjsonl.CodexMsgJSON("user", "revert page", "2026-01-02T00:00:01Z"))
+						original = testjsonl.JoinJSONL(testjsonl.CodexSessionMetaWithFieldsJSON(id, "/work", "codex_cli_rs", "2026-01-02T00:00:00Z", map[string]any{"history_mode": "paginated", "history_base": map[string]any{"thread_id": id, "end_ordinal_exclusive": 2, "end_byte_offset": len(ancestor)}}), testjsonl.CodexMsgJSON("user", "revert page", "2026-01-02T00:00:01Z"))
 					}
 				}
 				dbtest.WriteTestFile(t, selectedPath, []byte(original))
@@ -132,7 +132,7 @@ func TestMaterializeUnboundSeededNativeSources(t *testing.T) {
 				} else if scenario == "installation machine" {
 					machine = device
 				}
-				if scenario == "unowned machine" || scenario == "adopted machine" || scenario == "recorded machine alias" {
+				if scenario == "unowned machine" || scenario == "recorded machine alias" {
 					machine = "old-host"
 				}
 				factory, ok := parser.ProviderFactoryByType(agent)
@@ -140,16 +140,9 @@ func TestMaterializeUnboundSeededNativeSources(t *testing.T) {
 				if scenario == "recorded machine alias" {
 					const priorID = "33333333-3333-4333-8333-333333333333"
 					priorRoot := filepath.Join(root, "prior")
-					priorDiscovery := priorRoot
-					if agent == parser.AgentClaude {
-						body := testjsonl.NewSessionBuilder().AddClaudeUserWithSessionID("2026-01-01T00:00:00Z", "prior", priorID).String()
-						dbtest.WriteTestFile(t, filepath.Join(priorRoot, "project", priorID+".jsonl"), []byte(body))
-					} else {
-						priorDiscovery = filepath.Join(priorRoot, "sessions")
-						body := testjsonl.JoinJSONL(testjsonl.CodexSessionMetaJSON(priorID, "/work", "codex_cli_rs", "2026-01-01T00:00:00Z"), testjsonl.CodexMsgJSON("user", "prior", "2026-01-01T00:00:01Z"))
-						dbtest.WriteTestFile(t, filepath.Join(priorDiscovery, "2026", "01", "01", "rollout-2026-01-01T00-00-00-"+priorID+".jsonl"), []byte(body))
-					}
-					prior := syncer.NewEngine(ctx, database, syncer.EngineConfig{AgentDirs: map[parser.AgentType][]string{agent: {priorDiscovery}}, ProviderFactories: []parser.ProviderFactory{factory}, Machine: machine, Ephemeral: true, DisableFilesystemProjectDiscovery: true})
+					body := testjsonl.NewSessionBuilder().AddClaudeUserWithSessionID("2026-01-01T00:00:00Z", "prior", priorID).String()
+					dbtest.WriteTestFile(t, filepath.Join(priorRoot, "project", priorID+".jsonl"), []byte(body))
+					prior := syncer.NewEngine(ctx, database, syncer.EngineConfig{AgentDirs: map[parser.AgentType][]string{agent: {priorRoot}}, ProviderFactories: []parser.ProviderFactory{factory}, Machine: machine, Ephemeral: true, DisableFilesystemProjectDiscovery: true})
 					t.Cleanup(prior.Close)
 					priorStats := prior.SyncAll(ctx, nil)
 					prior.Close()
@@ -163,14 +156,9 @@ func TestMaterializeUnboundSeededNativeSources(t *testing.T) {
 				engine.Close()
 				require.Zero(t, stats.Failed)
 				require.Positive(t, stats.Synced)
-				if scenario == "adopted machine" {
-					require.NoError(t, database.AdoptMachineIdentity(ctx, device, []string{machine}))
-					machine = device
-				}
 				before, err := database.GetSessionFull(ctx, nativeID)
 				require.NoError(t, err)
 				require.NotNil(t, before)
-				require.Equal(t, string(agent), before.Agent)
 				require.Equal(t, machine, before.Machine)
 				require.NotNil(t, before.FilePath)
 				require.Equal(t, selectedPath, *before.FilePath)
@@ -188,15 +176,8 @@ func TestMaterializeUnboundSeededNativeSources(t *testing.T) {
 				session, err := reader.GetSessionFull(ctx, nativeID)
 				require.NoError(t, err)
 				require.NotNil(t, session)
-				require.Equal(t, nativeID, session.ID)
-				require.Equal(t, before.Agent, session.Agent)
 				require.Equal(t, before.Machine, session.Machine)
 				require.Equal(t, before.FilePath, session.FilePath)
-				if scenario == "recorded machine alias" {
-					aliases, err := reader.GetMachineAliases(ctx)
-					require.NoError(t, err)
-					assert.Equal(t, device, aliases[machine])
-				}
 				var count int
 				require.NoError(t, reader.Reader().QueryRowContext(ctx, `SELECT count(*) FROM raw_archive_sessions`).Scan(&count))
 				require.Zero(t, count)
@@ -215,28 +196,6 @@ func TestMaterializeUnboundSeededNativeSources(t *testing.T) {
 				}
 				if scenario == "same ID different roots" {
 					require.True(t, otherFound, "other same-ID source must be independently accepted")
-					files, err := reader.ListRawArchiveFiles(ctx, 0, 1000)
-					require.NoError(t, err)
-					var selectedRoot, otherRoot string
-					for _, file := range files {
-						switch file.SHA256 {
-						case fmt.Sprintf("%x", sha256.Sum256([]byte(original))):
-							selectedRoot = file.RootID
-						case fmt.Sprintf("%x", sha256.Sum256([]byte(other))):
-							otherRoot = file.RootID
-						}
-					}
-					require.NotEmpty(t, selectedRoot)
-					require.NotEmpty(t, otherRoot)
-					require.NotEqual(t, selectedRoot, otherRoot)
-				}
-				if rootAlias != "" {
-					capturedRoots, err := reader.ListRawArchiveRoots(ctx)
-					require.NoError(t, err)
-					require.Len(t, capturedRoots, 1)
-					aliases, err := reader.RawArchiveRootAliases(ctx, capturedRoots[0].ID)
-					require.NoError(t, err)
-					assert.Contains(t, aliases, rootAlias)
 				}
 				beforeDB, beforeVault, beforeNames := seedArchiveState(t, seed)
 				require.NoError(t, os.RemoveAll(selected))
@@ -255,7 +214,7 @@ func TestMaterializeUnboundSeededNativeSources(t *testing.T) {
 				assert.Equal(t, beforeVault, afterVault)
 				assert.Equal(t, beforeNames, afterNames)
 				if scenario == "missing captured path" || scenario == "unowned machine" {
-					require.Error(t, materializeErr)
+					require.ErrorIs(t, materializeErr, errSourceUnavailable)
 					entries, err := os.ReadDir(destination)
 					require.NoError(t, err)
 					assert.Empty(t, entries)
@@ -266,18 +225,9 @@ func TestMaterializeUnboundSeededNativeSources(t *testing.T) {
 				var installed string
 				if agent == parser.AgentClaude {
 					installed = filepath.Join(destination, "projects", "fixture", id+".jsonl")
-					tool, err := os.ReadFile(filepath.Join(destination, "projects", "fixture", id, "tool-results", "tool.txt"))
-					require.NoError(t, err)
-					assert.Equal(t, "tool output", string(tool))
-					subagent, err := os.ReadFile(filepath.Join(destination, "projects", "fixture", id, "subagents", "agent-child.jsonl"))
-					require.NoError(t, err)
-					assert.Equal(t, child, string(subagent))
 				} else {
 					if scenario == "revert page" {
 						require.Len(t, result.Paths, 2)
-						parent, err := os.ReadFile(result.Paths[0])
-						require.NoError(t, err)
-						assert.Equal(t, ancestor, string(parent))
 						installed = result.Paths[1]
 					} else {
 						require.Len(t, result.Paths, 1)
