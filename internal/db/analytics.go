@@ -4356,6 +4356,8 @@ func (db *DB) populateFrustrationMarkers(
 		idx[rows[i].ID] = i
 		ids = append(ids, rows[i].ID)
 	}
+	// Read-only archives may predate this table. Remove this fallback if
+	// read-only open starts requiring the table.
 	if !db.readOnly {
 		err := queryChunked(ids, func(chunk []string) error {
 			ph, args := InPlaceholders(chunk)
@@ -4432,14 +4434,15 @@ func (db *DB) populateFrustrationMarkers(
 	if err := ctx.Err(); err != nil {
 		return err
 	}
-	for _, id := range ids {
-		r := rows[idx[id]]
-		m.Store(generation, id, r.transcriptVersion, r.FrustrationMarkerCount)
-	}
 	if len(ids) > 0 && !db.readOnly {
 		if err := db.storeFrustrationMarkers(ctx, generation, ids, idx, rows); err != nil {
 			log.Printf("storing frustration markers: %v", err)
+			return nil
 		}
+	}
+	for _, id := range ids {
+		r := rows[idx[id]]
+		m.Store(generation, id, r.transcriptVersion, r.FrustrationMarkerCount)
 	}
 	return nil
 }

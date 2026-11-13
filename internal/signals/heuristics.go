@@ -113,8 +113,7 @@ func AnalyzeHeuristics(in HeuristicInput) HeuristicSignals {
 	return s
 }
 
-// FrustrationMarkerVersion identifies the rules used for persisted counts.
-// Increment it when IsFrustrationMarker changes its results.
+// FrustrationMarkerVersion must change when IsFrustrationMarker results change.
 const FrustrationMarkerVersion = 1
 
 // IsFrustrationMarker reports whether a user prompt matches the

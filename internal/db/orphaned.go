@@ -232,6 +232,9 @@ func (d *DB) CopyOrphanedDataFromExcluding(
 	}
 	defer func() { _ = tx.Rollback() }()
 
+	if err := reconcileTranscriptRevisionsTx(ctx, tx); err != nil {
+		return nil, fmt.Errorf("reconciling transcript revisions: %w", err)
+	}
 	if err := reconcileConversationResyncTx(ctx, tx, d.usageOnlyStorage()); err != nil {
 		return nil, fmt.Errorf("reconciling conversation identities: %w", err)
 	}
@@ -258,27 +261,8 @@ func (d *DB) CopyOrphanedDataFromExcluding(
 			return nil, err
 		}
 	}
-	// Compare final copied content so changed text advances its revision.
-	if err := reconcileTranscriptRevisionsTx(ctx, tx); err != nil {
-		return nil, fmt.Errorf("reconciling transcript revisions: %w", err)
-	}
 	if err := retainConversationTombstonesTx(ctx, tx); err != nil {
 		return nil, fmt.Errorf("retaining conversation tombstones: %w", err)
-	}
-
-	if !d.usageOnlyStorage() && oldDBHasTable(ctx, tx, "session_frustration_markers") {
-		_, err := tx.ExecContext(ctx, `INSERT OR IGNORE INTO main.session_frustration_markers
-			(session_id, transcript_key, marker_version, count)
-			SELECT current.id, current.transcript_revision || '|' || current.created_at,
-				stored.marker_version, stored.count
-			FROM old_db.session_frustration_markers stored
-			JOIN old_db.sessions old ON old.id = stored.session_id
-			JOIN main.sessions current ON current.id = old.id
-			WHERE stored.transcript_key = old.transcript_revision || '|' || old.created_at
-				AND current.transcript_revision = old.transcript_revision`)
-		if err != nil {
-			return nil, fmt.Errorf("copying frustration markers: %w", err)
-		}
 	}
 
 	if err := tx.Commit(); err != nil {

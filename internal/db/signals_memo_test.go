@@ -385,7 +385,7 @@ func TestSignalsFrustrationVersionKeepsToolEffectiveness(t *testing.T) {
 	t.Fatal("Grep tool missing")
 }
 
-func TestSignalsFrustrationFailedStoreRetriesAfterRestart(t *testing.T) {
+func TestSignalsFrustrationFailedStoreRetriesOnEvidence(t *testing.T) {
 	d := testDB(t)
 	ctx := t.Context()
 	insertSession(t, d, "session", "test")
@@ -401,17 +401,10 @@ func TestSignalsFrustrationFailedStoreRetriesAfterRestart(t *testing.T) {
 	assert.Zero(t, count)
 	_, err = d.getWriter().ExecContext(ctx, `DROP TRIGGER reject_frustration_store`)
 	require.NoError(t, err)
-	// A rescan through the drill-down would now save a row.
 	evidence, err := d.GetAnalyticsSignalSessions(ctx, AnalyticsFilter{}, "frustration_marker_count", 10)
 	require.NoError(t, err)
 	require.Len(t, evidence.Sessions, 1)
 	assert.Equal(t, 1, evidence.Sessions[0].SignalTotal)
-	require.NoError(t, d.getReader().QueryRowContext(ctx, `SELECT count(*) FROM session_frustration_markers`).Scan(&count))
-	assert.Zero(t, count)
-	require.NoError(t, d.Reopen())
-	resp, err = d.GetAnalyticsSignals(ctx, AnalyticsFilter{})
-	require.NoError(t, err)
-	assert.Equal(t, 1, resp.QualityHealth.Totals.FrustrationMarkerCount)
 	require.NoError(t, d.getReader().QueryRowContext(ctx, `SELECT count FROM session_frustration_markers WHERE session_id = 'session'`).Scan(&count))
 	assert.Equal(t, 1, count)
 }
