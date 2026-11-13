@@ -689,7 +689,9 @@ CREATE INDEX IF NOT EXISTS idx_provider_freshness_updated_at
 // stored output without them, and record reasoning_tokens. Re-parse OpenCode,
 // Kilo, MiMo Code and ICodeMate sources in place; source and session
 // identities are unchanged.)
-const dataVersion = 179
+// (180: prevent older binaries from writing usage events without
+// occurred_at_us or querying the index it replaced.)
+const dataVersion = 180
 
 const archiveOnlyVersionBase = 1 << 20
 
@@ -2286,6 +2288,8 @@ func checkReadOnlySchemaCompatibility(ctx context.Context, conn *sql.DB) error {
 		"idx_messages_usage_timestamp",
 		"idx_messages_usage_session_covering",
 		"idx_messages_activity_timestamp",
+		"idx_usage_events_occurred_us",
+		"idx_usage_events_occurred_unparsed",
 	} {
 		var present bool
 		if err := conn.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM sqlite_master
