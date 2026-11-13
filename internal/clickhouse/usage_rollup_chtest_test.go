@@ -184,3 +184,29 @@ func TestUsageRollupSkippedForMisalignedZone(t *testing.T) {
 	require.Nil(t, usageRollupPlan(t, syncer, monrovia))
 	require.NotNil(t, usageRollupPlan(t, syncer, db.UsageFilter{Timezone: "UTC"}))
 }
+
+// A refresh between a read taking the prepared rows' stamp and reading their
+// coverage leaves the old rows' rollup in place while the coverage already
+// counts a republished session as prepared. The read must not sum that
+// session's old usage from the rollup.
+func TestUsageRollupReadSurvivesRefreshDuringStateRead(t *testing.T) {
+	// Not parallel: preparedUsageStampReadObserver is package state.
+	local, syncer := newUsageRollupSync(t)
+	f := db.UsageFilter{Timezone: "UTC", Breakdowns: true}
+	before := readPreparedUsage(t, newTestStore(t, syncer.conn, syncer.target), f)
+	republishRoundSession(t, local, 9)
+	previous := preparedUsageStampReadObserver
+	t.Cleanup(func() { preparedUsageStampReadObserver = previous })
+	refreshed := false
+	preparedUsageStampReadObserver = func() {
+		preparedUsageStampReadObserver = nil
+		pushPreparedUsage(t, syncer)
+		runPreparedUsageRefresh(t, newTestStore(t, syncer.conn, syncer.target))
+		refreshed = true
+	}
+	got := readPreparedUsage(t, newTestStore(t, syncer.conn, syncer.target), f)
+	require.True(t, refreshed, "the read never took the prepared rows' stamp")
+	want := readPreparedUsage(t, newTestStore(t, syncer.conn, syncer.target), f)
+	require.NotEqual(t, before.daily, want.daily, "republishing must change the usage")
+	require.Equal(t, want, got)
+}

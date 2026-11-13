@@ -292,8 +292,9 @@ func readPreparedUsageStamp(ctx context.Context, conn *sql.DB) (string, error) {
 		return "", nil
 	}
 	var stored usageStamp
+	// Every row of one refresh carries the same stamp, so any row will do.
 	err = conn.QueryRowContext(ctx, `SELECT snapshot_count, snapshot_hash, pricing_digest, price_count
-		FROM prepared_usage LIMIT 1`).Scan(
+		FROM prepared_usage LIMIT 1 SETTINGS final=0`).Scan(
 		&stored.snapshotCount, &stored.snapshotHash, &stored.pricingDigest, &stored.priceCount)
 	if errors.Is(err, sql.ErrNoRows) {
 		return "", nil
