@@ -376,7 +376,8 @@ func (db *DB) searchContentSubstring(
 
 func (db *DB) searchContentWordsOrSubstring(ctx context.Context, f ContentSearchFilter, q contentWords) (ContentSearchPage, error) {
 	page, err := db.searchContentWords(ctx, f, q, true)
-	if err == nil || !strings.Contains(err.Error(), "no such table: messages_fts") {
+	sqliteErr, ok := errors.AsType[sqlite3.Error](err)
+	if !ok || sqliteErr.Code != sqlite3.ErrError || db.HasFTS(ctx) {
 		return page, err
 	}
 	return db.searchContentLiteral(ctx, f)
