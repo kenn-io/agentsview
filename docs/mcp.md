@@ -204,11 +204,22 @@ especially when the exact wording is unknown. Hybrid combines semantic
 similarity with keyword matching. Use `context` to include surrounding messages.
 Hybrid returns its keyword matches when search by meaning is unavailable. The
 response includes `effective_mode: "hybrid_keyword"` and a `note` beside
-`coverage` explaining why. Keyword matches need the query words to appear. If
-there are no matches or only a few, try one or two short substring queries with
-key terms or synonyms. Preserve `scope`, inclusion, and current-session filters.
-Disclose keyword-only results once. Use substring/regex for exact errors,
+`coverage` explaining why. On SQLite, keyword matches rank messages holding
+every query word first, then those holding fewer of them. On other archives,
+keyword matches need the query words to appear; if there are no matches or only
+a few, try one or two short substring queries with key terms or synonyms.
+Preserve `scope`, inclusion, and current-session filters. Disclose keyword-only
+results once. Use fully quoted substring text or regex for exact errors,
 identifiers, and code fragments. The default remains substring.
+
+On SQLite, a substring search of several words lists matches of the exact text
+first, from every selected source, then messages holding every word, then those
+holding fewer of the words. Each match reports `matched_words`, the number of
+query words it holds, excluding unquoted stop words; other searches report `0`.
+A single word, a fully quoted pattern, and searches without the `messages`
+source match the exact text only. A quoted phrase inside a longer query requires
+its words together and in order. Hybrid keyword matches also report their word
+count.
 
 `search_content` accepts a `mode` of `substring` (default), `regex`, `terms`,
 `semantic`, or `hybrid`. `terms` splits `pattern` on whitespace and requires

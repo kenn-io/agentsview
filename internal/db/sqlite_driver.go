@@ -99,6 +99,9 @@ func configureSQLiteConnection(conn *sqlite3.SQLiteConn) error {
 	); err != nil {
 		return err
 	}
+	if err := conn.RegisterFunc("agentsview_phrase_match", phraseMatch, true); err != nil {
+		return err
+	}
 	if err := conn.RegisterFunc("agentsview_top_session_started_order", func(raw string) string {
 		// Match GroupTopSessions, including nanoseconds, offsets, and invalid dates.
 		started, _ := time.Parse(time.RFC3339Nano, raw)

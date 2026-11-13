@@ -11,7 +11,7 @@ import (
 )
 
 // Statement triggers mark each changed session pending with revision 0 in one
-// set-based write. The empty session ID marks pricing and identity changes.
+// set-based write. The empty session ID marks pricing, account, and identity changes.
 const markUsageChangeFunctionBodyPG = `
 BEGIN
     PERFORM set_config('agentsview.uc_stamped_' || 'usage_session_changes'::regclass::oid, '', true);
@@ -60,7 +60,7 @@ BEGIN
 END;
 `
 
-const usageChangeJournalVersionPG = 1
+const usageChangeJournalVersionPG = 2
 
 // Messages and plan usage reach the journal through the sessions.updated_at
 // bump every released publisher writes with them.
@@ -86,7 +86,7 @@ var dropUsageChangeJournalSQL = func() string {
  DROP FUNCTION IF EXISTS stamp_usage_change();
  DO $cleanup$ BEGIN
  IF to_regclass('sync_metadata') IS NOT NULL THEN
-     DELETE FROM sync_metadata WHERE key IN ('usage_change_revision', 'usage_change_journal_lock', 'usage_change_journal_version');
+     DELETE FROM sync_metadata WHERE key IN ('usage_change_revision', 'usage_change_journal_lock', 'usage_change_journal_version', 'usage_account_revision', 'usage_history_token');
  END IF;
  END $cleanup$;`)
 	for _, table := range usageChangeTablesPG {
@@ -116,7 +116,109 @@ func ensureUsageChangeJournalPG(ctx context.Context, pg *sql.DB) {
 	if err != nil {
 		return
 	}
+	err = installUsageAccountRevisionPG(ctx, tx)
+	if err != nil {
+		return
+	}
+	err = installUsageHistoryTokenPG(ctx, tx)
+	if err != nil {
+		return
+	}
 	err = tx.Commit()
+}
+
+func installUsageAccountRevisionPG(ctx context.Context, tx *sql.Tx) error {
+	var version string
+	if err := tx.QueryRowContext(ctx, `SELECT value FROM sync_metadata WHERE key = 'usage_change_journal_version'`).Scan(&version); err != nil {
+		return err
+	}
+	if version != "1" && version != strconv.Itoa(usageChangeJournalVersionPG) {
+		return nil
+	}
+	var installed, historyInstalled bool
+	if err := tx.QueryRowContext(ctx, `SELECT EXISTS (SELECT 1 FROM sync_metadata WHERE key = 'usage_account_revision'), EXISTS (SELECT 1 FROM sync_metadata WHERE key = 'usage_history_token')`).Scan(&installed, &historyInstalled); err != nil {
+		return err
+	}
+	if version == strconv.Itoa(usageChangeJournalVersionPG) && installed && historyInstalled {
+		return nil
+	}
+	if !installed {
+		// Drain account transactions using the old trigger before seeding the
+		// marker; otherwise their commits would miss the account revision.
+		if _, err := tx.ExecContext(ctx, `LOCK TABLE cursor_usage_events IN SHARE ROW EXCLUSIVE MODE`); err != nil {
+			return err
+		}
+	}
+	var schema string
+	if err := tx.QueryRowContext(ctx, `SELECT current_schema()`).Scan(&schema); err != nil {
+		return err
+	}
+	quoted, err := quoteIdentifier(schema)
+	if err != nil {
+		return err
+	}
+	stamp := strings.Replace(stampUsageChangeFunctionBodyPG,
+		`UPDATE usage_session_changes SET revision = stamped WHERE revision = 0;`,
+		`UPDATE usage_session_changes SET revision = stamped WHERE revision = 0;
+    UPDATE sync_metadata SET value = pg_catalog.gen_random_uuid()::text WHERE key = 'usage_history_token';
+    IF current_setting('agentsview.uc_accounts_' || TG_RELID, true) = 'on' THEN
+        UPDATE sync_metadata SET value = stamped::text WHERE key = 'usage_account_revision';
+        PERFORM set_config('agentsview.uc_accounts_' || TG_RELID, '', true);
+    END IF;`, 1)
+	mark := fmt.Sprintf(`DECLARE
+    changed boolean;
+BEGIN
+    IF TG_OP = 'INSERT' THEN
+        SELECT EXISTS (SELECT 1 FROM new_rows) INTO changed;
+    ELSIF TG_OP = 'DELETE' THEN
+        SELECT EXISTS (SELECT 1 FROM old_rows) INTO changed;
+    ELSE
+        SELECT EXISTS ((SELECT %[1]s FROM old_rows EXCEPT SELECT %[1]s FROM new_rows)
+            UNION ALL (SELECT %[1]s FROM new_rows EXCEPT SELECT %[1]s FROM old_rows)) INTO changed;
+    END IF;
+    IF changed THEN
+        PERFORM set_config('agentsview.uc_stamped_' || 'usage_session_changes'::regclass::oid, '', true);
+        PERFORM set_config('agentsview.uc_accounts_' || 'usage_session_changes'::regclass::oid, 'on', true);
+        INSERT INTO usage_session_changes(session_id, revision) VALUES ('', 0)
+        ON CONFLICT(session_id) DO UPDATE SET revision = 0;
+    END IF;
+    RETURN NULL;
+END;
+`, pgCursorUsageCacheColumns)
+	_, err = tx.ExecContext(ctx, fmt.Sprintf(`
+ INSERT INTO sync_metadata(key,value)
+ SELECT 'usage_account_revision', value FROM sync_metadata WHERE key='usage_change_revision'
+ ON CONFLICT(key) DO NOTHING;
+ CREATE OR REPLACE FUNCTION stamp_usage_change() RETURNS trigger LANGUAGE plpgsql SECURITY DEFINER
+ SET search_path = pg_catalog, %[1]s, pg_temp AS $journal$%[2]s$journal$;
+ CREATE OR REPLACE FUNCTION mark_usage_cursor_usage_events() RETURNS trigger LANGUAGE plpgsql SECURITY DEFINER
+ SET search_path = pg_catalog, %[1]s, pg_temp AS $journal$%[3]s$journal$;`, quoted, stamp, mark))
+	return err
+}
+
+// Version 2 binds every journaled state to a fresh token. The journal table
+// lock drains older stamp triggers before the token and new function appear.
+func installUsageHistoryTokenPG(ctx context.Context, tx *sql.Tx) error {
+	var version string
+	if err := tx.QueryRowContext(ctx, `SELECT value FROM sync_metadata WHERE key='usage_change_journal_version'`).Scan(&version); err != nil {
+		return err
+	}
+	if version != "1" && version != strconv.Itoa(usageChangeJournalVersionPG) {
+		return nil
+	}
+	var installed bool
+	if err := tx.QueryRowContext(ctx, `SELECT EXISTS (SELECT 1 FROM sync_metadata WHERE key='usage_history_token')`).Scan(&installed); err != nil {
+		return err
+	}
+	if version == strconv.Itoa(usageChangeJournalVersionPG) && installed {
+		return nil
+	}
+	if _, err := tx.ExecContext(ctx, `LOCK TABLE usage_session_changes IN SHARE ROW EXCLUSIVE MODE`); err != nil {
+		return err
+	}
+	_, err := tx.ExecContext(ctx, fmt.Sprintf(`INSERT INTO sync_metadata(key,value) VALUES('usage_history_token',pg_catalog.gen_random_uuid()::text) ON CONFLICT(key) DO UPDATE SET value=EXCLUDED.value;
+ UPDATE sync_metadata SET value='%d' WHERE key='usage_change_journal_version'`, usageChangeJournalVersionPG))
+	return err
 }
 
 func installUsageChangeJournalPG(ctx context.Context, tx *sql.Tx) error {
@@ -201,11 +303,26 @@ const usageChangeRevisionSQL = `coalesce((
  AND EXISTS (SELECT 1 FROM sync_metadata WHERE key = 'usage_change_journal_version' AND value = $1)
 ), 0)`
 
+const supportedUsageChangeRevisionSQL = `coalesce((
+ SELECT value::bigint FROM sync_metadata WHERE key = 'usage_change_revision'
+ AND EXISTS (SELECT 1 FROM sync_metadata WHERE key = 'usage_change_journal_version' AND value IN ('1', $1))
+), 0)`
+
 // UsageChangeRevision returns the current revision, or 0 when the journal is
 // unavailable. See LoadUsageChanges.
 func (s *Store) UsageChangeRevision(ctx context.Context) (int64, error) {
 	var revision int64
 	err := s.pg.QueryRowContext(ctx, `SELECT `+usageChangeRevisionSQL, strconv.Itoa(usageChangeJournalVersionPG)).Scan(&revision)
+	if isInsufficientPrivilege(err) || isUndefinedTable(err) {
+		return 0, nil
+	}
+	return revision, err
+}
+
+// directUsageChangeRevision supports reuse when a version 1 journal has no history token.
+func (s *Store) directUsageChangeRevision(ctx context.Context) (int64, error) {
+	var revision int64
+	err := s.pg.QueryRowContext(ctx, `SELECT coalesce((SELECT value::bigint FROM sync_metadata WHERE key = 'usage_change_revision' AND EXISTS (SELECT 1 FROM sync_metadata WHERE key = 'usage_change_journal_version' AND value = '1')), 0)`).Scan(&revision)
 	if isInsufficientPrivilege(err) || isUndefinedTable(err) {
 		return 0, nil
 	}
@@ -229,7 +346,7 @@ func (s *Store) LoadUsageChanges(ctx context.Context, afterRevision int64) (int6
 
 func (s *Store) loadUsageChanges(ctx context.Context, afterRevision int64) (int64, []string, error) {
 	rows, err := s.pg.QueryContext(ctx, `SELECT r.revision, c.session_id
- FROM (SELECT `+usageChangeRevisionSQL+` AS revision) r
+ FROM (SELECT `+supportedUsageChangeRevisionSQL+` AS revision) r
  LEFT JOIN usage_session_changes c ON r.revision > 0 AND c.revision > $2 AND c.revision <= r.revision AND c.session_id <> ''
  ORDER BY c.revision, c.session_id`, strconv.Itoa(usageChangeJournalVersionPG), afterRevision)
 	if err != nil {

@@ -134,7 +134,7 @@ func (db *DB) finishUsageTopSessions(ctx context.Context, facts usageFactsResult
 			ids = append(ids, entries[i].SessionID)
 		}
 	}
-	metadata, err := db.loadTopSessionMetadata(ctx, ids)
+	metadata, err := db.usageTopSessionMetadata(ctx, ids)
 	if err != nil {
 		return nil, err
 	}

@@ -57,7 +57,9 @@ func TestDirectBackendHybridKeywordFallback(t *testing.T) {
 			}
 			require.NoError(t, err)
 			assert.Equal(t, "hybrid_keyword", result.EffectiveMode)
-			wantNote := "Search by meaning is unavailable: " + tc.reason + ". Returned hybrid keyword matches only. Query words must appear. If matches are empty or few, try short substring queries with key terms or synonyms."
+			// SQLite keyword matches already include messages holding some of
+			// the words, so the note suggests no shorter retry.
+			wantNote := "Search by meaning is unavailable: " + tc.reason + ". Returned hybrid keyword matches only."
 			if tc.wantSetup {
 				wantNote += " To enable search by meaning, run `agentsview index embeddings build` or turn it on in Settings → Embeddings → Turn on."
 			}

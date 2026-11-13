@@ -365,9 +365,9 @@ func TestUsageRollupCrossIdentityQueriesUseIndexes(t *testing.T) {
 		usage_rollup_build_sessions(session_id TEXT PRIMARY KEY) WITHOUT ROWID`)
 	require.NoError(t, err)
 
-	plan := func(query string) string {
+	plan := func(query string, args ...any) string {
 		t.Helper()
-		rows, err := conn.QueryContext(t.Context(), `EXPLAIN QUERY PLAN `+query)
+		rows, err := conn.QueryContext(t.Context(), `EXPLAIN QUERY PLAN `+query, args...)
 		require.NoError(t, err)
 		defer rows.Close()
 		var details []string
@@ -387,6 +387,22 @@ func TestUsageRollupCrossIdentityQueriesUseIndexes(t *testing.T) {
 	usageKeyPlan := plan(usageRollupCrossUsageKeySQL)
 	assert.Contains(t, usageKeyPlan, "usage_facts_usage_dedup_key")
 	assert.Contains(t, usageKeyPlan, "cursor_usage_facts_dedup_key")
+	// Each account probes a dedup key, so scanning facts here grows with both tables.
+	_, err = conn.ExecContext(t.Context(), `CREATE TEMP TABLE IF NOT EXISTS
+		usage_changed_identities(kind INTEGER NOT NULL, first TEXT NOT NULL, second TEXT NOT NULL,
+		PRIMARY KEY (kind, first, second)) WITHOUT ROWID`)
+	require.NoError(t, err)
+	for _, tc := range []struct {
+		name, query string
+		args        []any
+	}{
+		{"collisions", usageAccountCollisionSQL, nil},
+		{"invalidation", usageAccountInvalidationSQL, []any{usageRollupCursorSessionID}},
+	} {
+		detail := plan(tc.query, tc.args...)
+		assert.Contains(t, detail, "INDEX usage_facts_usage_dedup_key", tc.name)
+		assert.NotContains(t, detail, "SCAN f", tc.name)
+	}
 
 	// A partial identity index can still scan the entire archive. The
 	// selected batch must drive the query, even as unrelated facts grow.

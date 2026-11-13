@@ -104,6 +104,7 @@ type Fact struct {
 	ProviderID               string
 	InputTokens              int64
 	OutputTokens             int64
+	RankingOutputTokens      *int64
 	ReasoningTokens          int64
 	CacheCreationTokens      int64
 	CacheCreation1hTokens    int64
