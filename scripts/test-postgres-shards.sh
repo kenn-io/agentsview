@@ -6,7 +6,7 @@ suite=$1 package=$2 shards=$3 excluded=$4 timeout=$5
 [[ "$shards" =~ ^[1-9][0-9]*$ ]] || { echo 'shard count must be positive' >&2; exit 1; }
 work=$(mktemp -d)
 root=$PWD
-pending=() databases=() pids=() statuses=()
+pending=() pids=() statuses=()
 # shellcheck disable=SC2329 # Invoked by the EXIT trap.
 cleanup() {
     if ((${#pending[@]})); then
@@ -24,9 +24,6 @@ cleanup() {
         ran=$(awk '/"Action":"run"/ && match($0, /"Test":"[^"/]*"/) {seen[substr($0, RSTART, RLENGTH)]=1} END {for (test in seen) n++; print n+0}' "$work/$i.json" 2>/dev/null || echo 0)
         printf 'shard %s: %s listed, %s ran, exit %s\n' "$i" "$listed" "$ran" "${statuses[i]:-interrupted}"
     done
-    for database in "${databases[@]}"; do
-        psql -X -v ON_ERROR_STOP=1 "$TEST_PG_URL" -c "DROP DATABASE IF EXISTS \"${database//\"/\"\"}\" WITH (FORCE)" || true
-    done
     rm -rf "$work"
 }
 trap 'cleanup' EXIT
@@ -38,24 +35,15 @@ mapfile -t tests < <(awk -v excluded="$excluded" '/^(Test|Example|Fuzz)/ && $0 !
 ((${#tests[@]} >= shards)) || { echo 'empty test list or shard' >&2; exit 1; }
 printf '%s tests in %s processes\n' "${#tests[@]}" "$shards"
 
-# Tests in a shard run in parallel, each in its own database. The test helper
-# limits how many run at once across all shards (see docs/agents/storage.md).
-base=${TEST_PG_URL%%\?*}
-query=${TEST_PG_URL#"$base"}
-database=$(psql -X -v ON_ERROR_STOP=1 "$TEST_PG_URL" -Atc 'SELECT current_database()')
+# Every test creates its own database on the TEST_PG_URL server, so the shards
+# share that URL. The test helper limits how many tests run at once across all
+# shards (see docs/agents/storage.md).
 for ((i=0; i<shards; i++)); do
-    url=$TEST_PG_URL
-    if ((i > 0)); then
-        shard_db=${database}_shard$i
-        databases+=("$shard_db")
-        psql -X -v ON_ERROR_STOP=1 "$TEST_PG_URL" -c "DROP DATABASE IF EXISTS \"${shard_db//\"/\"\"}\" WITH (FORCE)" -c "CREATE DATABASE \"${shard_db//\"/\"\"}\""
-        url=${base%/*}/$shard_db$query
-    fi
     names=()
     for ((j=i; j<${#tests[@]}; j+=shards)); do names+=("${tests[j]}"); done
     printf '%s\n' "${names[@]}" > "$work/$i.list"
     pattern=$(IFS='|'; echo "${names[*]}")
-    TEST_PG_URL=$url go tool gotestsum --format pkgname-and-test-fails --format-icons text \
+    go tool gotestsum --format pkgname-and-test-fails --format-icons text \
         --jsonfile "$work/$i.json" --rerun-fails=2 --rerun-fails-report "$work/$i-reruns.txt" \
         --packages "$package" -- -tags "fts5,pgtest" -run "^($pattern)$" -count=1 -timeout="$timeout" > "$work/$i.out" 2>&1 &
     pids[i]=$!

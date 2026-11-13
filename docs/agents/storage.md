@@ -1571,8 +1571,26 @@ own metadata, which is why the docs below call the database a mirror.
 Run PostgreSQL integration tests only against a dedicated test server. Each
 top-level test in `internal/postgres` creates its own database on the
 `TEST_PG_URL` server, named `agentsview_test_<hex>`, and drops it when the test
-ends. The role in `TEST_PG_URL` needs `CREATEDB`. A test binary that is killed
-leaves its databases behind; drop them by that prefix.
+ends.
+
+The role in `TEST_PG_URL` needs `CREATEDB`. Without it, every test fails with
+`creating test database`. Grant it as a superuser, using the role from
+`TEST_PG_URL`:
+
+```sql
+ALTER ROLE agentsview_test CREATEDB;
+```
+
+A test binary that is killed leaves its databases behind, along with the store
+template described below (`agentsview_test_template_<hex>`). List them with:
+
+```sql
+SELECT datname FROM pg_database WHERE datname LIKE 'agentsview\_test\_%';
+```
+
+Drop each one with `DROP DATABASE <name> WITH (FORCE)` on PostgreSQL. On
+CockroachDB, list them with `SHOW DATABASES` and drop each one with
+`DROP DATABASE <name> CASCADE`.
 
 Because each test owns a database, the tests run in parallel:
 
