@@ -161,7 +161,7 @@ func rankCodexRollouts(thread string, names []string, archived map[string]bool) 
 
 // codexLineage validates every ancestor before returning files in publication
 // order, with the requested thread's newest page last.
-func codexLineage(ctx context.Context, thread string, names, ancestors []string, archived map[string]bool, read func(context.Context, string, int64) ([]byte, error)) ([]codexPage, error) {
+func codexLineage(ctx context.Context, thread string, names, ancestors []string, archived map[string]bool, read func(context.Context, string, int64) ([]byte, error), resolve func(context.Context, string, string) ([]string, error)) ([]codexPage, error) {
 	byRollout, newest, newestRollout, invalidRequested := rankCodexRollouts(thread, names, archived)
 	ancestry, _, _, _ := rankCodexRollouts("", ancestors, nil)
 	if newest == "" {
@@ -176,15 +176,9 @@ func codexLineage(ctx context.Context, thread string, names, ancestors []string,
 	var total int64
 	rollout := newestRollout
 	for {
-		selected := cmp.Or(byRollout[rollout], ancestry[rollout])
-		if selected.ambiguous {
-			return nil, fmt.Errorf("ambiguous Codex rollout %s", rollout)
-		}
-		if selected.name == "" {
-			return nil, fmt.Errorf("missing Codex ancestor %s", rollout)
-		}
-		if selected.invalidDate {
-			return nil, errors.New("invalid Codex rollout date")
+		selected, err := codexChoose(ctx, rollout, pages, byRollout, ancestry, resolve)
+		if err != nil {
+			return nil, err
 		}
 		name := selected.name
 		data, err := read(ctx, name, maxSourceBytes-total)
@@ -219,6 +213,28 @@ func codexLineage(ctx context.Context, thread string, names, ancestors []string,
 	}
 	slices.Reverse(pages)
 	return pages, nil
+}
+
+func codexChoose(ctx context.Context, rollout string, pages []codexPage, roots, ancestry map[string]codexChoice, resolve func(context.Context, string, string) ([]string, error)) (codexChoice, error) {
+	selected := cmp.Or(roots[rollout], ancestry[rollout])
+	if selected.name == "" && resolve != nil && len(pages) > 0 {
+		names, err := resolve(ctx, pages[len(pages)-1].name, rollout)
+		if err != nil {
+			return codexChoice{}, err
+		}
+		found, _, _, _ := rankCodexRollouts("", names, nil)
+		selected = found[rollout]
+	}
+	if selected.ambiguous {
+		return codexChoice{}, fmt.Errorf("ambiguous Codex rollout %s", rollout)
+	}
+	if selected.name == "" {
+		return codexChoice{}, fmt.Errorf("missing Codex ancestor %s", rollout)
+	}
+	if selected.invalidDate {
+		return codexChoice{}, errors.New("invalid Codex rollout date")
+	}
+	return selected, nil
 }
 
 // codexDate extracts the producer's date and canonical timestamp.

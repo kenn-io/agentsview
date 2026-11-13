@@ -27,12 +27,12 @@ func MaterializeSnapshot(ctx context.Context, sources []config.ArchiveSource, ow
 }
 
 // ReadCodexSnapshot retains the snapshot lease while rollout pages are read.
-func ReadCodexSnapshot(ctx context.Context, sources []config.ArchiveSource, owners []db.ArchiveSessionProvenance, limit int64, use func(string, []string, []string, func(context.Context, string, int64) ([]byte, error)) error) (string, error) {
+func ReadCodexSnapshot(ctx context.Context, sources []config.ArchiveSource, owners []db.ArchiveSessionProvenance, limit int64, use func(string, []string, []string, func(context.Context, string, int64) ([]byte, error), CodexAncestry) error) (string, error) {
 	_, _, snapshot, err := materializeSnapshot(ctx, sources, owners, "codex", limit, use)
 	return snapshot, err
 }
 
-func materializeSnapshot(ctx context.Context, sources []config.ArchiveSource, owners []db.ArchiveSessionProvenance, provider string, limit int64, use func(string, []string, []string, func(context.Context, string, int64) ([]byte, error)) error) (tree *rawderive.Materialization, primary string, snapshot string, retErr error) {
+func materializeSnapshot(ctx context.Context, sources []config.ArchiveSource, owners []db.ArchiveSessionProvenance, provider string, limit int64, use func(string, []string, []string, func(context.Context, string, int64) ([]byte, error), CodexAncestry) error) (tree *rawderive.Materialization, primary string, snapshot string, retErr error) {
 	defer func() {
 		if retErr != nil && tree != nil {
 			retErr = errors.Join(retErr, tree.Cleanup())
@@ -150,14 +150,7 @@ func materializeSnapshot(ctx context.Context, sources []config.ArchiveSource, ow
 	if err != nil {
 		return nil, "", "", err
 	}
-	manifest, err := rawsync.ParseCanonicalManifest(identity, owner.ManifestID, canonical, rawsync.DefaultManifestLimits())
-	if err != nil {
-		return nil, "", "", err
-	}
-	if manifest.Manifest.ConfiguredRootID != configuredRoot || manifest.Manifest.SourceKey != s.SourceKey || string(manifest.Manifest.Provider) != provider {
-		return nil, "", "", errors.New("snapshot source mismatch")
-	}
-	bound, primary, err := snapshotPrimaryPath(s.SourceKey, originalPath, originalRoot, owner.NativeSessionID, manifest.Manifest.Entries)
+	manifest, bound, primary, err := acceptedSource(identity, acceptedRow{manifestID: owner.ManifestID, configuredRoot: configuredRoot, originalRoot: originalRoot, originalPath: originalPath, sourceKey: s.SourceKey, canonical: canonical}, provider, owner.NativeSessionID)
 	if err != nil {
 		return nil, "", "", err
 	}
@@ -184,7 +177,7 @@ func materializeSnapshot(ctx context.Context, sources []config.ArchiveSource, ow
 }
 
 // readCodexCatalog keeps its backing reader open through the synchronous callback.
-func readCodexCatalog(ctx context.Context, conn *sql.DB, rootID, originalRoot string, bound rawsync.Entry, identity rawsync.AuthIdentity, manifest rawsync.CanonicalManifest, objects rawderive.ObjectStore, limit int64, use func(string, []string, []string, func(context.Context, string, int64) ([]byte, error)) error) error {
+func readCodexCatalog(ctx context.Context, conn *sql.DB, rootID, originalRoot string, bound rawsync.Entry, identity rawsync.AuthIdentity, manifest rawsync.CanonicalManifest, objects rawderive.ObjectStore, limit int64, use func(string, []string, []string, func(context.Context, string, int64) ([]byte, error), CodexAncestry) error) error {
 	rows, err := conn.QueryContext(ctx, `SELECT path,sha256,size,mod_time_ns,covered FROM raw_archive_files WHERE root_id=? AND (path LIKE '%.jsonl' OR path LIKE '%.jsonl.zst') ORDER BY path`, rootID)
 	if err != nil {
 		return err
@@ -201,7 +194,12 @@ func readCodexCatalog(ctx context.Context, conn *sql.DB, rootID, originalRoot st
 		names = append(names, entry.Path)
 	}
 	ancestors := codexCompanions(manifest.Manifest.Entries, names, byPath)
-	read := func(ctx context.Context, name string, requested int64) (_ []byte, readErr error) {
+	read := codexCatalogReader(byPath, conflicts, identity, manifest, objects, limit)
+	return use(originalRoot, names, ancestors, read, codexAncestry(conn, identity, manifest, byPath))
+}
+
+func codexCatalogReader(byPath map[string]rawsync.Entry, conflicts map[string]bool, identity rawsync.AuthIdentity, manifest rawsync.CanonicalManifest, objects rawderive.ObjectStore, limit int64) func(context.Context, string, int64) ([]byte, error) {
+	return func(ctx context.Context, name string, requested int64) (_ []byte, readErr error) {
 		entry, ok := byPath[name]
 		if conflicts[name] {
 			return nil, errors.New("conflicting saved file versions")
@@ -215,7 +213,7 @@ func readCodexCatalog(ctx context.Context, conn *sql.DB, rootID, originalRoot st
 			return nil, err
 		}
 		defer func() { readErr = errors.Join(readErr, materialized.Cleanup()) }()
-		filename, err := materialized.EntryPath(name)
+		filename, err := materialized.EntryPath(entry.Path)
 		if err != nil {
 			return nil, err
 		}
@@ -226,7 +224,6 @@ func readCodexCatalog(ctx context.Context, conn *sql.DB, rootID, originalRoot st
 		defer func() { readErr = errors.Join(readErr, file.Close()) }()
 		return io.ReadAll(io.LimitReader(file, entry.Length+1))
 	}
-	return use(originalRoot, names, ancestors, read)
 }
 
 // codexCompanions adds only manifest-authenticated rollouts outside the root inventory.

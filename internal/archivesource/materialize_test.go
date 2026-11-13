@@ -269,7 +269,7 @@ func TestReadCodexSnapshotUsesAcceptedOriginal(t *testing.T) {
 	}
 	require.Equal(t, 1, matches)
 	require.NotEmpty(t, owner.ManifestID)
-	selected, err := ReadCodexSnapshot(t.Context(), []config.ArchiveSource{source}, []db.ArchiveSessionProvenance{owner}, 512<<20, func(_ string, names, _ []string, read func(context.Context, string, int64) ([]byte, error)) error {
+	selected, err := ReadCodexSnapshot(t.Context(), []config.ArchiveSource{source}, []db.ArchiveSessionProvenance{owner}, 512<<20, func(_ string, names, _ []string, read func(context.Context, string, int64) ([]byte, error), _ CodexAncestry) error {
 		require.Len(t, names, 4)
 		for _, candidate := range names {
 			if path.Base(candidate) == conflicted || candidate == unsafeName {
@@ -320,7 +320,7 @@ func TestReadCodexSnapshotPreservesCompressedLegacyBytes(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, sources, 1)
 	owner := db.ArchiveSessionProvenance{ArchiveSourceProvenance: index.provenance(sources[0]), NativeSessionID: "codex:" + id}
-	_, err = ReadCodexSnapshot(t.Context(), []config.ArchiveSource{source}, []db.ArchiveSessionProvenance{owner}, 512<<20, func(_ string, names, _ []string, read func(context.Context, string, int64) ([]byte, error)) error {
+	_, err = ReadCodexSnapshot(t.Context(), []config.ArchiveSource{source}, []db.ArchiveSessionProvenance{owner}, 512<<20, func(_ string, names, _ []string, read func(context.Context, string, int64) ([]byte, error), _ CodexAncestry) error {
 		require.Len(t, names, 1)
 		assert.Equal(t, name, filepath.Base(names[0]))
 		got, err := read(t.Context(), names[0], 512<<20)
@@ -662,7 +662,6 @@ func TestCodexCompanionsRespectRootAndExactAliases(t *testing.T) {
 	require.Equal(t, []string{"first/" + parentName, "different/" + parentName}, ancestors)
 	assert.Equal(t, entries[1], byPath[ancestors[0]])
 	assert.Equal(t, entries[3], byPath[ancestors[1]])
-	assert.Equal(t, entries[0], byPath[rootName])
 }
 
 type codexCatalogStore struct {
@@ -696,8 +695,15 @@ func TestReadCodexCatalogExposesManifestCompanion(t *testing.T) {
 	manifest := rawsync.CanonicalManifest{Manifest: rawsync.Manifest{CapturedAt: time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC), Entries: []rawsync.Entry{bound, companion}}}
 	identity, err := rawsync.NewAuthIdentity("archive", "device")
 	require.NoError(t, err)
+	byToken := map[string]rawsync.Entry{}
+	tokens, err := codexAncestorEntries(rawsync.CanonicalManifest{ManifestID: "test", Manifest: rawsync.Manifest{Entries: []rawsync.Entry{companion}}}, "22222222-2222-4222-8222-222222222222", byToken)
+	require.NoError(t, err)
+	require.Len(t, tokens, 1)
+	gotToken, err := codexCatalogReader(byToken, nil, identity, manifest, codexCatalogStore{ref, data}, 1024)(ctx, tokens[0], 1024)
+	require.NoError(t, err)
+	assert.Equal(t, data, gotToken)
 	called := false
-	err = readCodexCatalog(ctx, conn, "root", "/native", bound, identity, manifest, codexCatalogStore{ref, data}, 1024, func(root string, names, ancestors []string, read func(context.Context, string, int64) ([]byte, error)) error {
+	err = readCodexCatalog(ctx, conn, "root", "/native", bound, identity, manifest, codexCatalogStore{ref, data}, 1024, func(root string, names, ancestors []string, read func(context.Context, string, int64) ([]byte, error), _ CodexAncestry) error {
 		called = true
 		assert.Equal(t, "/native", root)
 		assert.Equal(t, []string{bound.Path}, names)

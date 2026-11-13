@@ -40,13 +40,13 @@ func materializeCodex(ctx context.Context, cfg config.Config, database *db.DB, s
 				return Result{}, errors.New("archive session identity differs")
 			}
 			var pages []codexPage
-			snapshot, err := archivesource.ReadCodexSnapshot(ctx, cfg.ArchiveSources, owners, maxSourceBytes, func(root string, names, ancestors []string, read func(context.Context, string, int64) ([]byte, error)) error {
+			snapshot, err := archivesource.ReadCodexSnapshot(ctx, cfg.ArchiveSources, owners, maxSourceBytes, func(root string, names, ancestors []string, read func(context.Context, string, int64) ([]byte, error), resolve archivesource.CodexAncestry) error {
 				var err error
 				archived := make(map[string]bool)
 				for _, name := range names {
 					archived[name] = codexArchived(root, name)
 				}
-				pages, err = codexLineage(ctx, thread, names, ancestors, archived, read)
+				pages, err = codexLineage(ctx, thread, names, ancestors, archived, read, resolve)
 				return err
 			})
 			if err != nil {
@@ -288,7 +288,7 @@ func materializeCodex(ctx context.Context, cfg config.Config, database *db.DB, s
 			return nil, errors.New("native Codex source outside configured roots")
 		}
 	}
-	pages, err := codexLineage(ctx, thread, names, nil, archived, read)
+	pages, err := codexLineage(ctx, thread, names, nil, archived, read, nil)
 	if closeSource != nil {
 		err = errors.Join(err, closeSource())
 		closeSource = nil
