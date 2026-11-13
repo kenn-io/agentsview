@@ -15,7 +15,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/ClickHouse/clickhouse-go/v2/ext"
 	"github.com/stretchr/testify/require"
 
 	"go.kenn.io/agentsview/internal/activity"
@@ -261,10 +260,7 @@ func (u *sqlUsageTestTable) ties(t *testing.T) map[int]int64 {
 }
 
 func (u *sqlUsageTestTable) source() activityUsageSource {
-	return activityUsageSource{
-		sql:    "SELECT " + chPreparedUsageColumns + " FROM usage_rows",
-		tables: func() ([]*ext.Table, error) { return nil, nil },
-	}
+	return activityUsageSource{sql: "SELECT " + chPreparedUsageColumns + " FROM usage_rows"}
 }
 
 // sumAndSelect returns the usage of the SQL path and of selectActivityUsage

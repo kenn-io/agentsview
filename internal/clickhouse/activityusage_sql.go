@@ -22,13 +22,13 @@ import (
 
 // activityUsageSource is the SQL of the usage rows an Activity report reads,
 // in the columns of chPreparedUsageColumns, with its arguments, the
-// settings it needs, and the external tables it names. tables builds a
-// fresh set for each query, since a query consumes the tables it sends.
+// settings it needs, and the prepared usage state whose external tables it
+// names.
 type activityUsageSource struct {
 	sql      string
 	args     []any
 	settings string
-	tables   func() ([]*ext.Table, error)
+	state    preparedUsageState
 }
 
 // activityUsageSourceFor returns the usage rows in the inclusive range
@@ -42,7 +42,7 @@ func activityUsageSourceFor(state preparedUsageState, lowerBound, upperBound str
 		sourceSQL, sourceArgs := chPreparedUsageSourceSQL(state, rangeSQL, rangeArgs)
 		return activityUsageSource{
 			sql: sourceSQL, args: sourceArgs,
-			tables: func() ([]*ext.Table, error) { return usageDeltaTables(state) },
+			state: state,
 		}
 	}
 	messageBound := " AND COALESCE(m.timestamp, s.started_at) >= " + chTimestampSQL +
@@ -66,7 +66,6 @@ func activityUsageSourceFor(state preparedUsageState, lowerBound, upperBound str
 		// FINAL. A timestamp correction must not resurrect an older
 		// matching version.
 		settings: "optimize_move_to_prewhere_if_final = 0, use_skip_indexes_if_final_exact_mode = 1",
-		tables:   func() ([]*ext.Table, error) { return nil, nil },
 	}
 }
 
@@ -229,7 +228,8 @@ func (s *Store) activityUsageRateKeys(
 // activityUsageReadContext attaches the source's external tables and extra
 // to the context a read runs under.
 func activityUsageReadContext(ctx context.Context, source activityUsageSource, extra []*ext.Table) (context.Context, error) {
-	tables, err := source.tables()
+	// A query consumes the tables it sends, so each read builds its own.
+	tables, err := usageDeltaTables(source.state)
 	if err != nil {
 		return nil, err
 	}
