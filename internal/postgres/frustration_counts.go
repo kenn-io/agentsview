@@ -5,7 +5,7 @@ import (
 	"fmt"
 )
 
-// Bump when IsFrustrationMarker changes a verdict.
+// Bump when the Go or PostgreSQL frustration classifier changes a verdict.
 const frustrationMarkerRulesVersion = 1
 
 func frustrationSessionVersion(column string) string {
@@ -49,7 +49,8 @@ func (s *Store) storeFrustrationCounts(ctx context.Context, versions map[string]
 	}
 	_, err := s.DB().ExecContext(ctx, `INSERT INTO session_frustration_counts (session_id, session_version, rules_version, marker_count)
         SELECT id, version, $4, count FROM unnest($1::text[], $2::text[], $3::integer[]) AS t(id, version, count)
-        ON CONFLICT (session_id) DO UPDATE SET session_version = EXCLUDED.session_version, rules_version = EXCLUDED.rules_version, marker_count = EXCLUDED.marker_count`, ids, tokens, values, frustrationMarkerRulesVersion)
+        ON CONFLICT (session_id) DO UPDATE SET session_version = EXCLUDED.session_version, rules_version = EXCLUDED.rules_version, marker_count = EXCLUDED.marker_count
+        WHERE session_frustration_counts.rules_version <= EXCLUDED.rules_version`, ids, tokens, values, frustrationMarkerRulesVersion)
 	if err != nil {
 		return fmt.Errorf("writing frustration counts: %w", err)
 	}

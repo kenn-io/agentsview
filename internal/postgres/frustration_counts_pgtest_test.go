@@ -3,6 +3,8 @@
 package postgres
 
 import (
+	"bytes"
+	"log"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -36,6 +38,18 @@ func TestFrustrationCountsRestartAndRefresh(t *testing.T) {
 	var n int
 	require.NoError(t, pg.QueryRowContext(ctx, `SELECT count(*) FROM session_frustration_counts`).Scan(&n))
 	require.Equal(t, 2, n)
+	// An older reader scans a future rules version without replacing it.
+	_, err = pg.ExecContext(ctx, `UPDATE session_frustration_counts SET rules_version = $1, marker_count = 7 WHERE session_id = 'one'`, frustrationMarkerRulesVersion+1)
+	require.NoError(t, err)
+	future, err := open().GetAnalyticsSignals(ctx, db.AnalyticsFilter{})
+	require.NoError(t, err)
+	require.Equal(t, 2, future.QualityHealth.Totals.FrustrationMarkerCount)
+	var futureVersion, futureCount int
+	require.NoError(t, pg.QueryRowContext(ctx, `SELECT rules_version, marker_count FROM session_frustration_counts WHERE session_id = 'one'`).Scan(&futureVersion, &futureCount))
+	require.Equal(t, frustrationMarkerRulesVersion+1, futureVersion)
+	require.Equal(t, 7, futureCount)
+	_, err = pg.ExecContext(ctx, `UPDATE session_frustration_counts SET rules_version = $1, marker_count = 1 WHERE session_id = 'one'`, frustrationMarkerRulesVersion)
+	require.NoError(t, err)
 	// A distinct stored count proves the fresh store uses the saved row.
 	_, err = pg.ExecContext(ctx, `UPDATE session_frustration_counts SET marker_count = 7 WHERE session_id = 'one'`)
 	require.NoError(t, err)
@@ -125,7 +139,24 @@ func TestFrustrationCountsRestartAndRefresh(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, 2, borrowed.QualityHealth.Totals.FrustrationMarkerCount)
 	require.NoError(t, tx.Rollback())
+	missing := open()
+	func() {
+		var output bytes.Buffer
+		previous := log.Writer()
+		log.SetOutput(&output)
+		defer log.SetOutput(previous)
+		result, err := missing.GetAnalyticsSignals(ctx, db.AnalyticsFilter{})
+		require.NoError(t, err)
+		require.Equal(t, 2, result.QualityHealth.Totals.FrustrationMarkerCount)
+		require.NotContains(t, output.String(), "storing frustration counts")
+	}()
 	require.NoError(t, EnsureSchema(ctx, pg, schema))
+	_, err = pg.ExecContext(ctx, `UPDATE sessions SET updated_at = updated_at + interval '1 second' WHERE id = 'one'`)
+	require.NoError(t, err)
+	_, err = missing.GetAnalyticsSignals(ctx, db.AnalyticsFilter{})
+	require.NoError(t, err)
+	require.NoError(t, pg.QueryRowContext(ctx, `SELECT count(*) FROM session_frustration_counts WHERE session_id = 'one'`).Scan(&n))
+	require.Equal(t, 1, n)
 	_, err = open().GetAnalyticsSignals(ctx, db.AnalyticsFilter{})
 	require.NoError(t, err)
 	_, err = pg.ExecContext(ctx, `DELETE FROM sessions WHERE id = 'one'`)
