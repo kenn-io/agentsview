@@ -410,6 +410,26 @@ func TestSignalsFrustrationFailedStoreRetriesOnEvidence(t *testing.T) {
 	assert.Equal(t, 1, count)
 }
 
+func TestSignalsFrustrationUsageOnly(t *testing.T) {
+	d := testDB(t)
+	d.SetArchiveContent(config.ArchiveContentUsage)
+	ctx := t.Context()
+	for _, id := range []string{"first", "second"} {
+		insertSession(t, d, id, "test")
+		require.NoError(t, d.InsertMessages(ctx, []Message{{SessionID: id, Role: "user", Content: "this is broken"}}))
+	}
+	_, err := d.getWriter().ExecContext(ctx, `INSERT INTO session_frustration_markers (session_id, transcript_key, marker_version, count)
+		SELECT id, transcript_revision || '|' || created_at, ?, 7 FROM sessions WHERE id = 'first'`, signals.FrustrationMarkerVersion)
+	require.NoError(t, err)
+	resp, err := d.GetAnalyticsSignals(ctx, AnalyticsFilter{})
+	require.NoError(t, err)
+	assert.Zero(t, resp.QualityHealth.Totals.FrustrationMarkerCount)
+	var rows, count int
+	require.NoError(t, d.getReader().QueryRowContext(ctx, `SELECT count(*), sum(count) FROM session_frustration_markers`).Scan(&rows, &count))
+	assert.Equal(t, 1, rows)
+	assert.Equal(t, 7, count)
+}
+
 func TestSignalsFrustrationCanceledWhileSaving(t *testing.T) {
 	d := testDB(t)
 	insertSession(t, d, "session", "test")

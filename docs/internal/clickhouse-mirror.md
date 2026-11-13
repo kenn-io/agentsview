@@ -687,9 +687,9 @@ when it is a marker, without its text. Over such text ClickHouse's RE2 and Go's
 `internal/signals` exports. Any other prompt, including invalid UTF-8, comes
 back with its text and Go judges it. The set is `signals.PlainPromptSymbols`,
 which DuckDB shares (see `internal/duckdb/README.md`), and a unit test checks
-every symbol in it against Go's Unicode tables. ClickHouse tests compare the counts with
-`IsFrustrationMarker` on edge cases and on a random corpus, and require that
-only prompts outside the set come back with text.
+every symbol in it against Go's Unicode tables. ClickHouse tests compare the
+counts with `IsFrustrationMarker` on edge cases and on a random corpus, and
+require that only prompts outside the set come back with text.
 
 The query reads without FINAL, because FINAL would merge the text of every
 message in the sessions, assistant replies included. A subquery with
@@ -706,9 +706,9 @@ peaks near 290 MiB, with the same per-session counts.
   `do_not_merge_across_partitions_select_final`. ClickHouse cannot add a
   partition key in place, so every large table would be copied, and every
   version of a row must stay in one partition.
-- Storing the frustration count in SQLite as quality signal version 8. That
-  recomputes every session's signals and republishes every replica, for one
-  count only ClickHouse needs to precompute.
+- Computing frustration counts eagerly on message writes as quality signal
+  version 8. That recomputes every session's signals and republishes every
+  replica for a count ClickHouse can compute on demand.
 - Porting all of `IsFrustrationMarker` to ClickHouse SQL. Unicode letters,
   spaces, and case folding differ between Go and ClickHouse, so only prompts in
   the shared alphabet above are judged in SQL.
@@ -725,13 +725,13 @@ PostgreSQL judge plain prompts in SQL as well; see
 without a current stored count to `IsFrustrationMarker`. PostgreSQL, DuckDB,
 and ClickHouse send the prompts they cannot judge in SQL. SQLite stores each
 count with its transcript key, so later visits after a restart reuse unchanged
-counts. The first visit after upgrading counts each session once; later visits
-recount only changed sessions. The function strips code fences once. One pass
-then builds the normalized prompt and counts the capitalized words, and another
-finds the first phrase literal. The
-regular expression starts one byte before that literal, because no match can
-begin earlier. Tests compare the function with its original step-by-step form on
-edge cases, a random corpus, and a fuzz target.
+counts. The first visit after upgrading or a full resync counts each session
+once; later visits recount only changed sessions. The function strips code
+fences once. One pass then builds the normalized prompt and counts the
+capitalized words, and another finds the first phrase literal. The regular
+expression starts one byte before that literal, because no match can begin
+earlier. Tests compare the function with its original step-by-step form on edge
+cases, a random corpus, and a fuzz target.
 
 Before SQLite stored these counts, a scratch archive of 7,000 sessions with
 140,000 prompts (594 MiB of prompt text) saw its first Signals load after a
