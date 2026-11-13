@@ -1509,9 +1509,18 @@ func OpenFreshIsolatedContext(ctx context.Context, path string) (*DB, error) {
 	if err == nil {
 		err = ensureConversationSchemaLocked(ctx, d.getWriter())
 	}
+	if err == nil {
+		// Date-bounded usage reads name these indexes, and a read-only open
+		// requires them. schema.sql cannot create them, because it runs
+		// before older archives gain the columns they cover.
+		err = ensureUsageIndexesLocked(ctx, d.getWriter())
+	}
+	if err == nil {
+		err = d.ensureUsageEventsSchemaLocked(ctx, d.getWriter())
+	}
 	d.mu.Unlock()
 	if err != nil {
-		return closeOnError(fmt.Errorf("initializing fresh archive triggers and export state: %w", err))
+		return closeOnError(fmt.Errorf("initializing fresh archive triggers, indexes, and export state: %w", err))
 	}
 	if _, err := d.GetOrCreateDatabaseID(ctx); err != nil {
 		return closeOnError(fmt.Errorf("initializing database id: %w", err))
