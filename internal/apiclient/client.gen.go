@@ -30697,17 +30697,25 @@ func (r RemoteSyncResponse) Validate() error {
 }
 
 type RemotesyncArchiveRequest struct {
-	CodexIndexFiles    map[string][]string `json:"codex_index_files,omitempty"`
-	DeltaFiles         *[]string           `json:"delta_files,omitempty"`
-	Dirs               map[string][]string `json:"dirs"`
-	ExtraFiles         []string            `json:"extra_files,omitempty"`
-	Files              map[string][]string `json:"files,omitempty"`
-	ForbiddenRoots     []string            `json:"forbidden_roots,omitempty"`
-	ProviderExtraFiles map[string][]string `json:"provider_extra_files,omitempty"`
+	CodexHomeRoots     map[string]RemotesyncCodexHomeRoots `json:"codex_home_roots,omitempty"`
+	CodexIndexFiles    map[string][]string                 `json:"codex_index_files,omitempty"`
+	DeltaFiles         *[]string                           `json:"delta_files,omitempty"`
+	Dirs               map[string][]string                 `json:"dirs"`
+	ExtraFiles         []string                            `json:"extra_files,omitempty"`
+	Files              map[string][]string                 `json:"files,omitempty"`
+	ForbiddenRoots     []string                            `json:"forbidden_roots,omitempty"`
+	ProviderExtraFiles map[string][]string                 `json:"provider_extra_files,omitempty"`
 }
 
 func (r RemotesyncArchiveRequest) Validate() error {
 	var errors runtime.ValidationErrors
+	for k, v := range r.CodexHomeRoots {
+		if validator, ok := any(v).(runtime.Validator); ok {
+			if err := validator.Validate(); err != nil {
+				errors = errors.Append(fmt.Sprintf("CodexHomeRoots[%s]", k), err)
+			}
+		}
+	}
 	if v, ok := any(r.DeltaFiles).(runtime.Validator); ok && v != nil {
 		if err := v.Validate(); err != nil {
 			errors = errors.Append("DeltaFiles", err)
@@ -30717,6 +30725,11 @@ func (r RemotesyncArchiveRequest) Validate() error {
 		return nil
 	}
 	return errors
+}
+
+type RemotesyncCodexHomeRoots struct {
+	ArchivedSessions *string `json:"archived_sessions,omitempty"`
+	Sessions         *string `json:"sessions,omitempty"`
 }
 
 type RemotesyncManifest struct {
@@ -30752,12 +30765,28 @@ func (r RemotesyncManifestEntry) Validate() error {
 }
 
 type RemotesyncTargetSet struct {
-	CodexIndexFiles    map[string][]string `json:"codex_index_files,omitempty"`
-	Dirs               map[string][]string `json:"dirs"`
-	ExtraFiles         []string            `json:"extra_files,omitempty"`
-	Files              map[string][]string `json:"files,omitempty"`
-	ForbiddenRoots     []string            `json:"forbidden_roots,omitempty"`
-	ProviderExtraFiles map[string][]string `json:"provider_extra_files,omitempty"`
+	CodexHomeRoots     map[string]RemotesyncCodexHomeRoots `json:"codex_home_roots,omitempty"`
+	CodexIndexFiles    map[string][]string                 `json:"codex_index_files,omitempty"`
+	Dirs               map[string][]string                 `json:"dirs"`
+	ExtraFiles         []string                            `json:"extra_files,omitempty"`
+	Files              map[string][]string                 `json:"files,omitempty"`
+	ForbiddenRoots     []string                            `json:"forbidden_roots,omitempty"`
+	ProviderExtraFiles map[string][]string                 `json:"provider_extra_files,omitempty"`
+}
+
+func (r RemotesyncTargetSet) Validate() error {
+	var errors runtime.ValidationErrors
+	for k, v := range r.CodexHomeRoots {
+		if validator, ok := any(v).(runtime.Validator); ok {
+			if err := validator.Validate(); err != nil {
+				errors = errors.Append(fmt.Sprintf("CodexHomeRoots[%s]", k), err)
+			}
+		}
+	}
+	if len(errors) == 0 {
+		return nil
+	}
+	return errors
 }
 
 type ResolveSessionIDsResponse struct {
