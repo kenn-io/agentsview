@@ -497,6 +497,13 @@ func (s *Store) GetTrendsTerms(
 	if granularity == "" {
 		granularity = "week"
 	}
+	if s.path != "" {
+		var replacementErr error
+		s.checkMirrorReplacement(ctx, func(err error) { replacementErr = err })
+		if replacementErr != nil {
+			return db.TrendsTermsResponse{}, replacementErr
+		}
+	}
 	if f.Timezone == "Local" {
 		return s.analytics().GetTrendsTerms(ctx, f, terms, granularity)
 	}
