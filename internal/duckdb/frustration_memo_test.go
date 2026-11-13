@@ -250,17 +250,24 @@ func TestDuckDBTrustsStoredZeroFrustrationCount(t *testing.T) {
 	skipReopenTestOnWindows(t)
 	ctx := t.Context()
 	local, path := newPushFixture(t, 1)
-	require.NoError(t, local.UpdateSessionSignals(ctx, "sess-1", db.SessionSignalUpdate{QualitySignals: db.QualitySignals{Version: db.CurrentQualitySignalVersion}}))
+	require.NoError(t, local.UpdateSessionSignals(ctx, "sess-1", db.SessionSignalUpdate{
+		QualitySignals: db.QualitySignals{Version: db.CurrentQualitySignalVersion},
+	}))
 	_, err := Push(ctx, path, local, "m", storage.MirrorPushOptions{}, false, nil)
 	require.NoError(t, err)
 
 	conn, err := Open(ctx, path)
 	require.NoError(t, err)
 	var version, count int
-	require.NoError(t, conn.QueryRowContext(ctx, `SELECT frustration_markers_version, frustration_marker_count FROM sessions WHERE id = 'sess-1'`).Scan(&version, &count))
+	require.NoError(t, conn.QueryRowContext(ctx, `
+		SELECT frustration_markers_version, frustration_marker_count
+		FROM sessions WHERE id = 'sess-1'`).Scan(&version, &count))
 	assert.Equal(t, frustrationMarkersVersion, version)
 	assert.Zero(t, count)
-	updated, err := conn.ExecContext(ctx, `UPDATE messages SET content = 'this is broken' WHERE session_id = 'sess-1' AND role = 'user'`)
+	// A rescan would count this marker instead of trusting the stored zero.
+	updated, err := conn.ExecContext(ctx, `
+		UPDATE messages SET content = 'this is broken'
+		WHERE session_id = 'sess-1' AND role = 'user'`)
 	require.NoError(t, err)
 	changed, err := updated.RowsAffected()
 	require.NoError(t, err)
