@@ -122,9 +122,13 @@ func TestPreparedHTTPSyncRebuildContributor(t *testing.T) {
 		"AfterSync runs before swap and must retain the journal")
 	require.NotNil(t, prepared.mirrorImport)
 	assert.Equal(t, JournalPendingSwap, prepared.mirrorImport.outcome)
-	require.NoError(t, prepared.Commit())
+	prepared.targets.Dirs[parser.AgentCodex] = []string{"/remote-codex"}
+	require.NoError(t, prepared.Commit(t.Context()))
+	roots, err := LoadMirrorCodexRoots(t.Context(), prepared.Root())
+	require.NoError(t, err)
+	assert.Equal(t, []string{"/remote-codex"}, roots)
 	assert.NoFileExists(t, journalPath)
-	require.NoError(t, prepared.Commit(), "post-swap commit is idempotent")
+	require.NoError(t, prepared.Commit(t.Context()), "post-swap commit is idempotent")
 
 	full, err := database.GetSessionFull(t.Context(), "devbox~"+sessionID)
 	require.NoError(t, err)
@@ -160,6 +164,9 @@ func TestPreparedHTTPSyncRebuildContributor(t *testing.T) {
 	}}
 	activeStats, err := prepared.ImportActive(t.Context())
 	require.NoError(t, err)
+	roots, err = LoadMirrorCodexRoots(t.Context(), prepared.Root())
+	require.NoError(t, err)
+	assert.Empty(t, roots)
 	assert.Equal(t, 0, activeStats.Failed)
 	assert.Equal(t, 0, activeStats.Skipped,
 		"reusing a prepared bootstrap import must preserve its full-parse scope")
@@ -218,7 +225,7 @@ func TestPreparedHTTPSyncDeferredRebuildIsNotCommitReady(t *testing.T) {
 	contributor.Finished(syncpkg.SyncStats{Deferred: 1}, nil)
 	assert.False(t, prepared.commitReady)
 	assert.Equal(t, JournalProcessingFailures, prepared.mirrorImport.outcome)
-	require.ErrorContains(t, prepared.Commit(), "not ready to commit")
+	require.ErrorContains(t, prepared.Commit(t.Context()), "not ready to commit")
 	assert.FileExists(t, mirrorJournalPath(MirrorDir(hs.DataDir, hs.Host)))
 }
 
@@ -237,7 +244,7 @@ func TestPreparedHTTPSyncRebuildRetirementFailureRecordsDuration(t *testing.T) {
 			return errors.New("retirement sentinel")
 		}
 
-		require.ErrorContains(t, prepared.Commit(), "retirement sentinel")
+		require.ErrorContains(t, prepared.Commit(t.Context()), "retirement sentinel")
 		assert.Equal(t, JournalRetirementFailed, prepared.mirrorImport.outcome)
 		assert.Equal(t, time.Second, prepared.mirrorImport.pending.Stats.RetirementDuration)
 	})

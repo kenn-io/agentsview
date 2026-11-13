@@ -1971,7 +1971,7 @@ func TestHTTPSyncFailedRebuildDoesNotCacheDiscardedParserExclusion(t *testing.T)
 	require.NoError(t, err)
 	assert.False(t, secondStats.Aborted)
 	assert.Zero(t, secondStats.Failed)
-	require.NoError(t, second.Commit())
+	require.NoError(t, second.Commit(t.Context()))
 	require.NoError(t, second.Close())
 
 	stored, err := database.GetSessionFull(t.Context(), "devbox~stale")

@@ -106,7 +106,7 @@ func TestHTTPSourceCollisionOwnership(t *testing.T) {
 				require.NoError(t, err)
 				require.False(t, stats.Aborted, "%v", stats.Warnings)
 				require.Zero(t, stats.Failed)
-				require.NoError(t, prepared.Commit())
+				require.NoError(t, prepared.Commit(t.Context()))
 			} else {
 				stats, err := hs.Run(t.Context())
 				require.NoError(t, err)

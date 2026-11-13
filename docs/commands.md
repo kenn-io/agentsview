@@ -2184,7 +2184,9 @@ discovery, `PI_DIR` takes precedence over `PI_CODING_AGENT_SESSION_DIR`; either
 overrides configured discovery roots.
 Local companions must resolve inside the configured root when the transcript is
 inside it; an externally linked project is confined to that project. Remote
-mirror files must remain inside the mirror root. A recorded local source path
+mirror files must remain inside the mirror root. Codex mirror recovery uses
+the roots advertised by the last successful sync; older mirrors need a
+successful sync before materialization. A recorded local source path
 can still be used after its configured machine label changes.
 An explicitly set `CLAUDE_CONFIG_DIR` must be an absolute path; the printed
 command preserves its spelling so Claude uses the same credentials.

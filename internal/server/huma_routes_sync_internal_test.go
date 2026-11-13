@@ -368,7 +368,7 @@ func (p *fakePreparedHTTPRebuild) Close() error {
 	return nil
 }
 
-func (p *fakePreparedHTTPRebuild) Commit() error {
+func (p *fakePreparedHTTPRebuild) Commit(ctx context.Context) error {
 	p.committed++
 	return nil
 }
@@ -376,8 +376,8 @@ func (p *fakePreparedHTTPRebuild) Commit() error {
 func TestPreparedHTTPRebuildLeaseForwardsCommitOnce(t *testing.T) {
 	prepared := &fakePreparedHTTPRebuild{}
 	lease := &preparedHTTPRebuildLease{prepared: prepared, release: func() {}}
-	require.NoError(t, lease.Commit())
-	require.NoError(t, lease.Commit())
+	require.NoError(t, lease.Commit(t.Context()))
+	require.NoError(t, lease.Commit(t.Context()))
 	assert.Equal(t, 1, prepared.committed)
 	assert.Zero(t, prepared.closed, "commit must not infer cleanup")
 }

@@ -40,6 +40,9 @@ func TestMaterializeCodexConfiguredAndMirror(t *testing.T) {
 				session.ID, session.Machine = "remote~codex:"+id, "remote"
 				stored = "remote:/archived_sessions/source/sessions/2026/01/01/" + oldName
 				location = filepath.Join(remotesync.MirrorDir(root, "remote"), "archived_sessions", "source", "sessions")
+				sidecar := remotesync.MirrorDir(root, "remote") + ".codex-roots.json"
+				require.NoError(t, os.MkdirAll(filepath.Dir(sidecar), 0o700))
+				require.NoError(t, os.WriteFile(sidecar, []byte(`{"version":1,"dirs":["/archived_sessions/source/sessions","/archived_sessions/source/archived_sessions"]}`), 0o600))
 			} else {
 				cfg.AgentDirs = map[parser.AgentType][]string{parser.AgentCodex: {location}}
 			}
@@ -94,11 +97,43 @@ func TestMaterializeCodexConfiguredAndMirror(t *testing.T) {
 			}
 			var got []byte
 			if mirror {
+				sidecar := remotesync.MirrorDir(root, "remote") + ".codex-roots.json"
+				originalSidecar, err := os.ReadFile(sidecar)
+				require.NoError(t, err)
+				for _, tc := range []struct {
+					name, metadata, page, failure string
+				}{
+					{"separate day roots", `{"version":1,"dirs":["/archived_sessions/source/sessions/2026/01/01","/archived_sessions/source/sessions/2026/01/02"]}`, oldName, ""},
+					{"containing root wins", `{"version":1,"dirs":["/archived_sessions/source/sessions/2026/01/01","/archived_sessions/source/sessions"]}`, newName, ""},
+					{"unadvertised", `{"version":1,"dirs":["/elsewhere"]}`, "", "outside Codex roots"},
+					{"newer version", `{"version":2,"dirs":[]}`, "", "metadata"},
+					{"invalid metadata", `{`, "", "metadata"},
+				} {
+					t.Run(tc.name, func(t *testing.T) {
+						t.Setenv("CODEX_HOME", t.TempDir())
+						require.NoError(t, os.WriteFile(sidecar, []byte(tc.metadata), 0o600))
+						got, err := Materialize(t.Context(), cfg, nil, session, cwd)
+						if tc.failure != "" {
+							require.ErrorContains(t, err, tc.failure)
+						} else {
+							require.NoError(t, err)
+							assert.Equal(t, tc.page, got.InstalledPage)
+						}
+					})
+				}
+				require.NoError(t, os.Remove(sidecar))
+				_, err = Materialize(t.Context(), cfg, nil, session, cwd)
+				require.ErrorContains(t, err, "metadata")
+				require.NoError(t, os.WriteFile(sidecar, originalSidecar, 0o600))
 				// The ancestor may have moved to the sibling archived root.
 				archive := filepath.Join(filepath.Dir(location), "archived_sessions")
 				require.NoError(t, os.MkdirAll(archive, 0o700))
 				archivedPath := filepath.Join(archive, oldName)
 				require.NoError(t, os.Rename(oldPath, archivedPath))
+				require.NoError(t, os.WriteFile(sidecar, []byte(`{"version":1,"dirs":["/archived_sessions/source/sessions"]}`), 0o600))
+				_, err = Materialize(t.Context(), cfg, nil, session, cwd)
+				require.ErrorContains(t, err, "missing Codex ancestor")
+				require.NoError(t, os.WriteFile(sidecar, originalSidecar, 0o600))
 				t.Setenv("CODEX_HOME", t.TempDir())
 				result, err = Materialize(t.Context(), cfg, nil, session, cwd)
 				require.NoError(t, err)
@@ -223,6 +258,37 @@ func TestMaterializeCodexS3(t *testing.T) {
 	require.ErrorContains(t, err, "metadata")
 	_, err = os.Stat(filepath.Join(home, "sessions"))
 	require.ErrorIs(t, err, os.ErrNotExist)
+}
+
+func TestMaterializeCodexCustomMirrorScope(t *testing.T) {
+	const id = "11111111-1111-4111-8111-111111111111"
+	const pageID = "22222222-2222-4222-8222-222222222222"
+	data := t.TempDir()
+	mirror := remotesync.MirrorDir(data, "remote")
+	oldName := "rollout-2026-01-01T00-00-00-" + id + ".jsonl"
+	newName := "rollout-2026-01-02T00-00-00-" + id + "_" + pageID + ".jsonl"
+	old := []byte(fmt.Sprintf(`{"type":"session_meta","payload":{"id":%q,"history_mode":"paginated"}}`+"\n", id))
+	newPage := []byte(fmt.Sprintf(`{"type":"session_meta","payload":{"id":%q,"history_mode":"paginated","history_base":{"thread_id":%q,"end_ordinal_exclusive":1,"end_byte_offset":%d}}}`+"\n", id, id, len(old)))
+	for name, body := range map[string][]byte{
+		filepath.Join(mirror, "x", "custom", "2026", "01", "01", oldName): old,
+		filepath.Join(mirror, "x", "custom", "2026", "01", "02", newName): newPage,
+		filepath.Join(mirror, "x", "other", "2026", "01", "02", newName):  []byte("unrelated conflict"),
+	} {
+		require.NoError(t, os.MkdirAll(filepath.Dir(name), 0o700))
+		require.NoError(t, os.WriteFile(name, body, 0o600))
+	}
+	require.NoError(t, os.WriteFile(mirror+".codex-roots.json", []byte(`{"version":1,"dirs":["/x/custom","/x/other"]}`), 0o600))
+	t.Setenv("CODEX_HOME", t.TempDir())
+	stored := "remote:/x/custom/2026/01/01/" + oldName
+	session := &db.Session{ID: "remote~codex:" + id, Agent: "codex", Machine: "remote", FilePath: &stored}
+	cfg := config.Config{DataDir: data, RemoteHosts: []config.RemoteHost{{Host: "remote"}}}
+	result, err := Materialize(t.Context(), cfg, nil, session, t.TempDir())
+	require.NoError(t, err)
+	assert.Equal(t, newName, result.InstalledPage)
+	require.Len(t, result.Paths, 2)
+	got, err := os.ReadFile(result.Paths[1])
+	require.NoError(t, err)
+	assert.Equal(t, newPage, got)
 }
 
 func TestMaterializeCodexLoadedLinkedHome(t *testing.T) {

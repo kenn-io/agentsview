@@ -396,7 +396,7 @@ func (p *PreparedRemoteSyncs) Close() error {
 
 // Commit finalizes each successfully rebuilt persistent source. It is
 // idempotent; a failure leaves every uncommitted source owned for retry.
-func (p *PreparedRemoteSyncs) Commit() error {
+func (p *PreparedRemoteSyncs) Commit(ctx context.Context) error {
 	if p == nil {
 		return nil
 	}
@@ -406,7 +406,7 @@ func (p *PreparedRemoteSyncs) Commit() error {
 		if source == nil {
 			continue
 		}
-		if err := source.Commit(); err != nil {
+		if err := source.Commit(ctx); err != nil {
 			return &HostError{Host: source.sync.Host, Operation: "commit rebuild", Err: err}
 		}
 	}
@@ -602,6 +602,12 @@ func (p *PreparedRemote) ImportActive(ctx context.Context) (SyncStats, error) {
 		return stats, ctxErr
 	}
 	retireStart := time.Now()
+	if err := p.persistCodexRoots(ctx); err != nil {
+		stats.JournalOutcome = JournalRetirementFailed
+		p.mirrorImport.outcome = stats.JournalOutcome
+		p.reportDeltaImport(stats)
+		return stats, fmt.Errorf("persist Codex mirror roots: %w", err)
+	}
 	if err := p.persistAntigravityTitleStates(); err != nil {
 		log.Printf("Antigravity title verification: %v", err)
 	}
@@ -764,7 +770,7 @@ func (p *PreparedRemote) RebuildContributor(
 }
 
 // Commit retires a processed persistent journal after an atomic rebuild swap.
-func (p *PreparedRemote) Commit() error {
+func (p *PreparedRemote) Commit(ctx context.Context) error {
 	if p == nil || p.mirrorImport == nil || p.committed {
 		return nil
 	}
@@ -772,6 +778,9 @@ func (p *PreparedRemote) Commit() error {
 		return errors.New("prepared remote journal is not ready to commit")
 	}
 	start := time.Now()
+	if err := p.persistCodexRoots(ctx); err != nil {
+		return fmt.Errorf("persist Codex mirror roots after rebuild: %w", err)
+	}
 	if err := p.persistAntigravityTitleStates(); err != nil {
 		log.Printf("Antigravity title verification: %v", err)
 	}
