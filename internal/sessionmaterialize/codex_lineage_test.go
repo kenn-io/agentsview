@@ -111,7 +111,7 @@ func TestCodexLineageIncludesParentThreadAndCompressedPage(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, []string{"live", "archive"}, roots)
 	assert.Equal(t, map[string]bool{"live": false, "archive": true}, roles)
-	associated.Homes["/other"] = remotesync.CodexHomeRoots{Sessions: "/live", ArchivedSessions: "/unrelated"}
+	associated.Homes["/other"] = remotesync.CodexHomeRoots{Sessions: "/archive", ArchivedSessions: "/live"}
 	_, _, err = codexMirrorHomeGroup("live", associated, mapped)
 	require.ErrorContains(t, err, "contradictory")
 }

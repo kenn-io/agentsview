@@ -465,14 +465,16 @@ func TestMaterializeCodexLoadedLinkedHome(t *testing.T) {
 	assert.Equal(t, parentBytes, got)
 
 	for _, tc := range []struct {
-		name                                string
-		linked, index, missing, missingRoot bool
+		name                                                    string
+		linked, index, missing, missingRoot, shared, standalone bool
 	}{
 		{name: "linked without index", linked: true},
 		{name: "linked missing mirrored active root", linked: true, missingRoot: true},
 		{name: "linked with rename index", linked: true, index: true},
 		{name: "unlinked control"},
 		{name: "parent in unrelated home", linked: true, missing: true},
+		{name: "shared live without ancestor", linked: true, shared: true, standalone: true},
+		{name: "shared live with archived ancestor", linked: true, shared: true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			root, err := filepath.EvalSymlinks(t.TempDir())
@@ -490,12 +492,23 @@ func TestMaterializeCodexLoadedLinkedHome(t *testing.T) {
 					t.Skipf("directory symlinks unavailable: %v", err)
 				}
 			}
+			if tc.shared {
+				if err := os.Symlink(live, filepath.Join(other, "sessions")); err != nil {
+					t.Skipf("directory symlinks unavailable: %v", err)
+				}
+			}
 			parentData := []byte(lineagePage(parent, "2024-01-15T00:00:00Z", "parent", 0, map[string]any{}))
 			childData := []byte(lineagePage(id, "2026-01-01T00:00:00Z", "child", 2, map[string]any{
 				"forked_from_id": parent, "forked_from_ordinal_exclusive": 2,
 				"history_base": lineageBase(parent, 2, len(parentData)),
 			}))
+			if tc.standalone {
+				childData = []byte(lineagePage(id, "2026-01-01T00:00:00Z", "child", 0, map[string]any{}))
+			}
 			parentDir := archived
+			if tc.shared {
+				parentDir = filepath.Join(other, "archived_sessions")
+			}
 			if tc.missing {
 				parentDir = filepath.Join(other, "archived_sessions")
 				const replacement = "33333333-3333-4333-8333-333333333333"
@@ -524,6 +537,18 @@ func TestMaterializeCodexLoadedLinkedHome(t *testing.T) {
 			data := filepath.Join(root, "remote-config")
 			require.NoError(t, os.MkdirAll(data, 0o700))
 			configText := fmt.Sprintf("[agents.codex]\nhomes = [%q, %q]\n", home, other)
+			var unrelatedParent string
+			var unrelatedData []byte
+			if tc.shared {
+				unrelated := filepath.Join(root, "unrelated")
+				unrelatedArchive := filepath.Join(unrelated, "archived_sessions")
+				require.NoError(t, os.MkdirAll(filepath.Join(unrelated, "sessions"), 0o700))
+				require.NoError(t, os.MkdirAll(unrelatedArchive, 0o700))
+				unrelatedParent = filepath.Join(unrelatedArchive, "rollout-2025-01-15T00-00-00-"+parent+".jsonl")
+				unrelatedData = []byte(lineagePage(parent, "2025-01-15T00:00:00Z", "unrelated", 0, map[string]any{}))
+				require.NoError(t, os.WriteFile(unrelatedParent, unrelatedData, 0o600))
+				configText = fmt.Sprintf("[agents.codex]\nhomes = [%q, %q, %q]\n", home, other, unrelated)
+			}
 			require.NoError(t, os.WriteFile(filepath.Join(data, "config.toml"), []byte(configText), 0o600))
 			t.Setenv("AGENTSVIEW_DATA_DIR", data)
 			t.Setenv("CODEX_HOME", home)
@@ -597,8 +622,18 @@ func TestMaterializeCodexLoadedLinkedHome(t *testing.T) {
 			require.NotNil(t, imported.FilePath)
 			require.Equal(t, "remote:"+childFile, *imported.FilePath)
 			mirror := remotesync.MirrorDir(localData, "remote")
+			if tc.shared {
+				metadata, err := remotesync.LoadMirrorCodexMetadata(t.Context(), mirror)
+				require.NoError(t, err)
+				require.Equal(t, remotesync.CodexHomeRoots{Sessions: live, ArchivedSessions: archived}, metadata.Homes[home])
+				require.Equal(t, remotesync.CodexHomeRoots{Sessions: live, ArchivedSessions: filepath.Join(other, "archived_sessions")}, metadata.Homes[other])
+			}
 			checkSources := func() {
-				for path, want := range map[string][]byte{parentFile: parentData, childFile: childData} {
+				sources := map[string][]byte{parentFile: parentData, childFile: childData}
+				if tc.shared {
+					sources[unrelatedParent] = unrelatedData
+				}
+				for path, want := range sources {
 					mirrored, err := remotesync.SafeRemappedRemotePath(mirror, path)
 					require.NoError(t, err)
 					for _, file := range []string{path, mirrored} {
@@ -692,6 +727,13 @@ func TestMaterializeCodexLoadedLinkedHome(t *testing.T) {
 			require.NoError(t, err)
 			require.Equal(t, imported.ID, result.RequestedID)
 			require.Equal(t, filepath.Base(childFile), result.InstalledPage)
+			if tc.standalone {
+				require.Len(t, result.Paths, 1)
+				got, err := os.ReadFile(result.Paths[0])
+				require.NoError(t, err)
+				require.Equal(t, childData, got)
+				return
+			}
 			require.Len(t, result.Paths, 2)
 			for i, want := range [][]byte{parentData, childData} {
 				got, err := os.ReadFile(result.Paths[i])
