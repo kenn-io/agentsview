@@ -197,7 +197,7 @@ func TestMaterializeCodexSnapshotForkParentAcrossRoots(t *testing.T) {
 			if tc.reverted {
 				base, ordinal = lineageBase(lineageG, 2, len(g)), 2
 			}
-			c := lineagePage(lineageC, "2026-01-01T00:00:00Z", "child", ordinal, map[string]any{"forked_from_id": lineageP, "forked_from_ordinal_exclusive": 4, "history_base": base})
+			c := lineagePage(lineageC, "2026-01-01T00:00:00Z", "child", ordinal, map[string]any{"forked_from_id": lineageP, "forked_from_ordinal_exclusive": ordinal, "history_base": base})
 			dbtest.WriteTestFile(t, gPath, []byte(g))
 			dbtest.WriteTestFile(t, pPath, []byte(p))
 			dbtest.WriteTestFile(t, cPath, []byte(c))

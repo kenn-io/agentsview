@@ -11,7 +11,6 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
-	"time"
 
 	"github.com/klauspost/compress/zstd"
 	"github.com/stretchr/testify/assert"
@@ -665,12 +664,13 @@ func TestCodexCompanionsRespectRootAndExactAliases(t *testing.T) {
 }
 
 type codexCatalogStore struct {
-	ref  rawsync.ObjectRef
-	data []byte
+	tenant string
+	ref    rawsync.ObjectRef
+	data   []byte
 }
 
 func (s codexCatalogStore) CopyObject(_ context.Context, tenant string, ref rawsync.ObjectRef, dst io.Writer) (rawsync.ObjectInfo, error) {
-	if tenant != "archive" || ref != s.ref {
+	if tenant != s.tenant || ref != s.ref {
 		return rawsync.ObjectInfo{}, rawsync.ErrNotFound
 	}
 	_, err := dst.Write(s.data)
@@ -678,41 +678,160 @@ func (s codexCatalogStore) CopyObject(_ context.Context, tenant string, ref raws
 }
 
 func TestReadCodexCatalogExposesManifestCompanion(t *testing.T) {
-	ctx := t.Context()
-	conn, err := sql.Open("sqlite3", ":memory:")
-	require.NoError(t, err)
-	t.Cleanup(func() { _ = conn.Close() })
-	_, err = conn.ExecContext(ctx, `CREATE TABLE raw_archive_files(root_id TEXT,path TEXT,sha256 TEXT,size INTEGER,mod_time_ns INTEGER,covered INTEGER)`)
-	require.NoError(t, err)
-	root := "rollout-2026-01-01T00-00-00-11111111-1111-4111-8111-111111111111.jsonl"
-	parent := "replay-parent-0/rollout-2024-01-01T00-00-00-22222222-2222-4222-8222-222222222222.jsonl"
-	data := []byte("authenticated parent")
-	ref := rawsync.ObjectRef{SHA256: fmt.Sprintf("%x", sha256.Sum256(data)), Length: int64(len(data))}
-	bound := rawsync.Entry{Path: root, Type: "file", Length: ref.Length, Objects: []rawsync.ObjectRef{ref}}
-	_, err = conn.ExecContext(ctx, `INSERT INTO raw_archive_files VALUES(?,?,?,?,?,?)`, "root", root, ref.SHA256, ref.Length, 0, true)
-	require.NoError(t, err)
-	companion := rawsync.Entry{Path: parent, Type: "file", Length: ref.Length, Objects: []rawsync.ObjectRef{ref}}
-	manifest := rawsync.CanonicalManifest{Manifest: rawsync.Manifest{CapturedAt: time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC), Entries: []rawsync.Entry{bound, companion}}}
-	identity, err := rawsync.NewAuthIdentity("archive", "device")
-	require.NoError(t, err)
-	byToken := map[string]rawsync.Entry{}
-	tokens, err := codexAncestorEntries(rawsync.CanonicalManifest{ManifestID: "test", Manifest: rawsync.Manifest{Entries: []rawsync.Entry{companion}}}, "22222222-2222-4222-8222-222222222222", byToken)
-	require.NoError(t, err)
-	require.Len(t, tokens, 1)
-	gotToken, err := codexCatalogReader(byToken, nil, identity, manifest, codexCatalogStore{ref, data}, 1024)(ctx, tokens[0], 1024)
-	require.NoError(t, err)
-	assert.Equal(t, data, gotToken)
-	called := false
-	err = readCodexCatalog(ctx, conn, "root", "/native", bound, identity, manifest, codexCatalogStore{ref, data}, 1024, func(root string, names, ancestors []string, read func(context.Context, string, int64) ([]byte, error), _ CodexAncestry) error {
-		called = true
-		assert.Equal(t, "/native", root)
-		assert.Equal(t, []string{bound.Path}, names)
-		require.Equal(t, []string{parent}, ancestors)
-		got, err := read(ctx, ancestors[0], 1024)
-		require.NoError(t, err)
-		assert.Equal(t, data, got)
-		return nil
-	})
-	require.NoError(t, err)
-	assert.True(t, called)
+	const (
+		gID = "33333333-3333-4333-8333-333333333333"
+		pID = "11111111-1111-4111-8111-111111111111"
+		cID = "22222222-2222-4222-8222-222222222222"
+		rID = "44444444-4444-4444-8444-444444444444"
+	)
+	for _, scenario := range []string{"newer inventory", "revert skips parent", "ordinary"} {
+		t.Run(scenario, func(t *testing.T) {
+			ctx := t.Context()
+			inputs := t.TempDir()
+			child, parent, grandparent := filepath.Join(inputs, "child"), filepath.Join(inputs, "parent"), filepath.Join(inputs, "grandparent")
+			gName := "rollout-2023-01-15T00-00-00-" + gID + ".jsonl"
+			pName := "rollout-2024-01-15T00-00-00-" + pID + ".jsonl"
+			oldName := "rollout-2025-01-01T00-00-00-" + cID + ".jsonl"
+			key := cID
+			if scenario != "ordinary" {
+				key += "_" + rID
+			}
+			cName := "rollout-2026-01-01T00-00-00-" + key + ".jsonl"
+			gPath := filepath.Join(grandparent, "sessions", "2023", "01", "15", gName)
+			pPath := filepath.Join(parent, "sessions", "2024", "01", "15", pName)
+			oldPath := filepath.Join(child, "sessions", "2025", "01", "01", oldName)
+			cPath := filepath.Join(child, "sessions", "2026", "01", "01", cName)
+			page := func(id, stamp, message string, ordinal int, fields map[string]any) string {
+				fields["history_mode"] = "paginated"
+				withOrdinal := func(line string, n int) string {
+					return strings.TrimSuffix(line, "}") + fmt.Sprintf(`,"ordinal":%d}`, n)
+				}
+				return testjsonl.JoinJSONL(withOrdinal(testjsonl.CodexSessionMetaWithFieldsJSON(id, "/work", "codex_cli_rs", stamp, fields), ordinal), withOrdinal(testjsonl.CodexMsgJSON("user", message, stamp), ordinal+1))
+			}
+			base := func(id string, ordinal, size int) map[string]any {
+				return map[string]any{"thread_id": id, "end_ordinal_exclusive": ordinal, "end_byte_offset": size}
+			}
+			g := page(gID, "2023-01-15T00:00:00Z", "grandparent", 0, map[string]any{})
+			p := page(pID, "2024-01-15T00:00:00Z", "parent", 2, map[string]any{"forked_from_id": gID, "forked_from_ordinal_exclusive": 2, "history_base": base(gID, 2, len(g))})
+			if scenario == "newer inventory" {
+				p = page(pID, "2024-01-15T00:00:00Z", "parent", 0, map[string]any{})
+			}
+			cutoff, history := 4, base(pID, 4, len(p))
+			if scenario != "ordinary" {
+				cutoff, history = 2, base(gID, 2, len(g))
+			}
+			if scenario == "newer inventory" {
+				history = base(pID, 2, len(p))
+			}
+			message := "child"
+			if scenario == "newer inventory" {
+				message = "new child"
+			}
+			c := page(cID, "2026-01-01T00:00:00Z", message, cutoff, map[string]any{"forked_from_id": pID, "forked_from_ordinal_exclusive": cutoff, "history_base": history})
+			old := page(cID, "2025-01-01T00:00:00Z", "old child", 2, map[string]any{"forked_from_id": pID, "forked_from_ordinal_exclusive": 2, "history_base": base(pID, 2, len(p))})
+			roots := []rawarchive.RootSpec{{Provider: "codex", Path: child}, {Provider: "codex", Path: parent}, {Provider: "codex", Path: grandparent}}
+			if scenario == "newer inventory" {
+				dbtest.WriteTestFile(t, oldPath, []byte(old))
+				backupSourceRoots(t, inputs, roots[:1])
+			} else {
+				dbtest.WriteTestFile(t, gPath, []byte(g))
+				dbtest.WriteTestFile(t, pPath, []byte(p))
+				dbtest.WriteTestFile(t, cPath, []byte(c))
+				backupSourceRoots(t, inputs, roots)
+			}
+			seed := filepath.Join(inputs, "seed")
+			database, err := db.OpenIsolatedContext(ctx, filepath.Join(seed, "sessions.db"))
+			require.NoError(t, err)
+			t.Cleanup(func() { require.NoError(t, database.Close()) })
+			if scenario == "newer inventory" {
+				dbtest.WriteTestFile(t, pPath, []byte(p))
+				dbtest.WriteTestFile(t, cPath, []byte(c))
+				capture := filepath.Join(inputs, "second")
+				settings := rawarchive.RecoverySettings{LocalMachineName: "retired-desktop"}
+				_, err = rawarchive.Capture(ctx, rawarchive.CaptureOptions{DataDir: filepath.Join(inputs, "application"), Destination: capture, IdentityFrom: filepath.Join(inputs, "capture", "capture.json"), Roots: roots[:2], Settings: settings})
+				require.NoError(t, err)
+				spec, err := rawarchive.LoadImportSpec(ctx, filepath.Join(capture, "capture.json"))
+				require.NoError(t, err)
+				archive, err := rawarchive.Open(ctx, database, seed, nil)
+				require.NoError(t, err)
+				_, err = archive.Import(ctx, spec)
+				require.NoError(t, err)
+				require.NoError(t, archive.Close())
+			}
+			archiveID, err := database.GetArchiveID(ctx)
+			require.NoError(t, err)
+			identity, err := rawsync.NewAuthIdentity(archiveID, sourceDevice)
+			require.NoError(t, err)
+			savedRoots, err := database.ListRawArchiveRoots(ctx)
+			require.NoError(t, err)
+			var childRoot db.RawArchiveRoot
+			for _, root := range savedRoots {
+				if root.OriginalPath == child {
+					childRoot = root
+				}
+			}
+			require.NotEmpty(t, childRoot.ID)
+			selectedKey := key
+			if scenario == "newer inventory" {
+				selectedKey = cID
+			}
+			source, err := database.RawArchiveSourceByKey(ctx, childRoot.ID, "codex:"+selectedKey)
+			require.NoError(t, err)
+			require.NotNil(t, source)
+			manifest, err := rawsync.ParseCanonicalManifest(identity, source.ManifestID, source.CanonicalJSON, rawsync.DefaultManifestLimits())
+			require.NoError(t, err)
+			if scenario == "newer inventory" {
+				require.Equal(t, oldPath, source.OriginalPath)
+				require.Len(t, manifest.Manifest.Entries, 1)
+				require.Equal(t, oldName, filepath.Base(manifest.Manifest.Entries[0].Path))
+			} else {
+				require.Equal(t, cPath, source.OriginalPath)
+				require.Len(t, manifest.Manifest.Entries, 2)
+			}
+			bound, primary, err := snapshotPrimaryPath(source.SourceKey, source.OriginalPath, childRoot.OriginalPath, "codex:"+selectedKey, manifest.Manifest.Entries)
+			require.NoError(t, err)
+			bound.Path = primary
+			conn, err := sql.Open("sqlite3", filepath.Join(seed, "sessions.db"))
+			require.NoError(t, err)
+			t.Cleanup(func() { require.NoError(t, conn.Close()) })
+			wantID, want := gID, g
+			if scenario == "newer inventory" {
+				wantID, want = pID, p
+			}
+			ref := rawsync.ObjectRef{SHA256: fmt.Sprintf("%x", sha256.Sum256([]byte(want))), Length: int64(len(want))}
+			called := false
+			err = readCodexCatalog(ctx, conn, childRoot.ID, child, bound, identity, manifest, codexCatalogStore{archiveID, ref, []byte(want)}, 1<<20, func(root string, names, ancestors []string, read func(context.Context, string, int64) ([]byte, error), ancestry CodexAncestry) error {
+				called = true
+				assert.Equal(t, child, root)
+				require.NotNil(t, ancestry)
+				from := ""
+				for _, name := range append(names, ancestors...) {
+					if filepath.Base(name) == cName {
+						from = name
+					}
+				}
+				require.NotEmpty(t, from)
+				if scenario == "newer inventory" {
+					require.Contains(t, names, from)
+				}
+				if scenario == "ordinary" {
+					for _, name := range ancestors {
+						if filepath.Base(name) == pName {
+							from = name
+						}
+					}
+					require.Equal(t, pName, filepath.Base(from))
+				}
+				tokens, err := ancestry(ctx, from, wantID)
+				require.NoError(t, err)
+				require.Len(t, tokens, 1)
+				got, err := read(ctx, tokens[0], 1<<20)
+				require.NoError(t, err)
+				assert.Equal(t, want, string(got))
+				return nil
+			})
+			require.NoError(t, err)
+			require.True(t, called)
+		})
+	}
 }
