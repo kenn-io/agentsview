@@ -99,7 +99,7 @@ func NewStore(ctx context.Context, path string) (*Store, error) {
 	if err != nil {
 		return nil, err
 	}
-	conn, err := OpenReadOnly(ctx, path)
+	conn, err := openServingReadOnly(ctx, path)
 	if err != nil {
 		return nil, err
 	}

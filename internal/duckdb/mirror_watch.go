@@ -162,7 +162,7 @@ func openMirrorAlias(ctx context.Context, path string) (conn *sql.DB, alias stri
 	if err := os.Link(path, alias); err != nil {
 		return nil, "", fmt.Errorf("hardlinking duckdb mirror for reopen: %w", err)
 	}
-	conn, err = OpenReadOnly(ctx, alias)
+	conn, err = openServingReadOnly(ctx, alias)
 	if err != nil {
 		_ = os.Remove(alias)
 		return nil, "", err

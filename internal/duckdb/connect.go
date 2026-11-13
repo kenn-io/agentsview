@@ -17,6 +17,7 @@ import (
 )
 
 const quackAttachmentName = "agentsview_remote"
+const servingReaderMaxOpenConns = 4
 
 // DefaultAttachTimeout bounds a remote Quack ATTACH (and its TCP preflight)
 // when the caller does not configure an explicit timeout. Native non-loopback
@@ -66,6 +67,16 @@ func OpenReadOnly(ctx context.Context, path string) (*sql.DB, error) {
 		return nil, fmt.Errorf("opening duckdb file %s read-only: %w", path, err)
 	}
 	return configureOpenedDuckDB(ctx, db)
+}
+
+func openServingReadOnly(ctx context.Context, path string) (*sql.DB, error) {
+	db, err := OpenReadOnly(ctx, path)
+	if err != nil {
+		return nil, err
+	}
+	db.SetMaxOpenConns(servingReaderMaxOpenConns)
+	db.SetMaxIdleConns(servingReaderMaxOpenConns)
+	return db, nil
 }
 
 // configureOpenedDuckDB applies the shared connection settings: a single
