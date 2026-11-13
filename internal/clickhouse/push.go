@@ -267,11 +267,11 @@ func (s *Sync) pushWithOptions(
 		return result, err
 	}
 
-	fingerprints, err := s.sessionFingerprints(ctx, inScope, onProgress)
+	fingerprints, messageRows, err := s.sessionFingerprints(ctx, inScope, onProgress)
 	if err != nil {
 		return result, err
 	}
-	writes, err := s.planSessionWrites(ctx, inScope, fingerprints, writePlan{
+	writes, resumedMessages, err := s.planSessionWrites(ctx, inScope, fingerprints, messageRows, writePlan{
 		full: full, rewriteAll: rewriteAll, resumed: resumed, runVersion: run.Version,
 		// Commit links written before the current format need rewriting even
 		// where nothing else changed.
@@ -414,7 +414,7 @@ func (s *Sync) pushWithOptions(
 			return result, err
 		}
 	}
-	if err := s.compactAfterRewrite(ctx, result.MessagesPushed); err != nil {
+	if err := s.compactAfterRewrite(ctx, result.MessagesPushed+resumedMessages); err != nil {
 		return result, err
 	}
 	result.Duration = time.Since(start)
@@ -535,18 +535,20 @@ type writePlan struct {
 }
 
 // planSessionWrites decides what the push writes for each candidate and
-// counts the sessions it skips.
+// counts the sessions it skips. When the push resumes a full push run, it
+// also returns the message rows the run's earlier attempts wrote for the
+// sessions this push keeps, so a resumed run compacts like one that ran
+// straight through.
 func (s *Sync) planSessionWrites(
 	ctx context.Context, sessions []db.Session, fingerprints map[string]sessionFingerprint,
-	plan writePlan, result *storage.PushResult,
-) (map[string]sessionWrite, error) {
-	writes := make(map[string]sessionWrite, len(sessions))
+	messageRows map[string]int, plan writePlan, result *storage.PushResult,
+) (writes map[string]sessionWrite, resumedMessages int, err error) {
+	writes = make(map[string]sessionWrite, len(sessions))
 	if plan.rewriteAll {
 		var stored map[string]string
 		if plan.resumed {
-			var err error
 			if stored, err = s.readRunFingerprints(ctx, plan.runVersion); err != nil {
-				return nil, err
+				return nil, 0, err
 			}
 		}
 		for _, sess := range sessions {
@@ -554,15 +556,16 @@ func (s *Sync) planSessionWrites(
 			// as it is now. A session missing from stored reads back as "".
 			if plan.resumed && fingerprints[sess.ID].full == stored[sess.ID] {
 				result.SkippedResumed++
+				resumedMessages += messageRows[sess.ID]
 				continue
 			}
 			writes[sess.ID] = rewriteSession
 		}
-		return writes, nil
+		return writes, resumedMessages, nil
 	}
 	stored, err := s.readMirrorSessions(ctx, sessionIDs(sessions))
 	if err != nil {
-		return nil, err
+		return nil, 0, err
 	}
 	for _, sess := range sessions {
 		mirror, found := stored[sess.ID]
@@ -573,9 +576,14 @@ func (s *Sync) planSessionWrites(
 		if !w.any() {
 			result.SkippedUnchanged++
 		}
+		// The run's earlier attempts wrote this session's content when the
+		// kept content is at least as new as the run.
+		if plan.resumed && found && !w.content && mirror.contentVersion >= plan.runVersion {
+			resumedMessages += messageRows[sess.ID]
+		}
 		writes[sess.ID] = w
 	}
-	return writes, nil
+	return writes, resumedMessages, nil
 }
 
 // readMirrorSessions reads what the mirror's session rows record about the

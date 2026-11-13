@@ -162,3 +162,47 @@ func TestResumedUsageOnlyPushCountsStoredRows(t *testing.T) {
 	require.Equal(t, 1, res.SkippedResumed)
 	assert.NotContains(t, compactions(t, conn), "messages")
 }
+
+// A full push that rewrites only changed sessions resumes by comparing each
+// session with the mirror, so it keeps the sessions its interrupted attempt
+// wrote. It still counts their message rows toward compaction.
+func TestResumedChangedOnlyFullPushCountsEarlierWrites(t *testing.T) {
+	t.Parallel()
+	ctx := t.Context()
+	local, target := seedFixture(t)
+	_, err := newTestSync(t, local, target, storage.PusherOptions{}).Push(ctx, false, nil)
+	require.NoError(t, err)
+	// Alpha, the newest session, grows to 14 messages; beta to 2.
+	for i := range 12 {
+		appendMessage(t, local, fixtureAlphaID, fmt.Sprintf("alpha reply %d", i),
+			fmt.Sprintf("2026-03-01T00:%02d:00.000Z", i))
+	}
+	appendMessage(t, local, fixtureBetaID, "beta reply", "2026-02-01T00:00:00.000Z")
+
+	// The interrupted attempt writes alpha and stops before beta.
+	interrupted := newTestSync(t, local, target, storage.PusherOptions{})
+	interrupted.sessionBatchSize = 1
+	killCtx, kill := context.WithCancel(ctx)
+	defer kill()
+	batches := 0
+	interrupted.hooks = &pushHooks{beforeSessionRows: func([]db.Session) error {
+		batches++
+		if batches == 2 {
+			kill()
+			return killCtx.Err()
+		}
+		return nil
+	}}
+	_, err = interrupted.PushWithOptions(killCtx, storage.PushOptions{Full: true}, nil)
+	require.ErrorIs(t, err, context.Canceled)
+	conn := chtest.Open(t, target.URL, target.Database)
+	before := len(compactions(t, conn))
+
+	res, err := newTestSync(t, local, target, storage.PusherOptions{}).Push(ctx, false, nil)
+	require.NoError(t, err)
+	require.Contains(t, res.FullReason, "resuming an unfinished full push")
+	// The resumed push writes beta's 2 messages, under a quarter of the 17
+	// live ones; with alpha's 14 the run rewrote nearly all of them.
+	require.Equal(t, 2, res.MessagesPushed)
+	assert.Contains(t, compactions(t, conn)[before:], "messages")
+}

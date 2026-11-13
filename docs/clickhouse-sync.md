@@ -166,7 +166,7 @@ to fan out across every configured target. `--all --watch` is rejected.
 1. Advances this archive's cursor in the mirror's `sync_metadata` only when
    every session succeeded.
 1. Compacts the rewritten tables when the push rewrote at least a quarter of
-   the mirror's live messages, as a full push does: see
+   the mirror's live messages, as a `--full` push does: see
    [Compaction after a large push](#compaction-after-a-large-push).
 
 Use `--full` to bypass fingerprints and re-push everything — for example after a
