@@ -14,6 +14,7 @@ import (
 	"go.kenn.io/agentsview/internal/config"
 	"go.kenn.io/agentsview/internal/db"
 	"go.kenn.io/agentsview/internal/money"
+	pricingpkg "go.kenn.io/agentsview/internal/pricing"
 )
 
 func TestUsagePartsAcrossRestart(t *testing.T) {
@@ -198,13 +199,15 @@ func testUsagePartsPeers(t *testing.T, update string, firstOutput int) {
 
 func TestUsagePartsMirrorPricingChange(t *testing.T) {
 	t.Setenv("CACHE_DIRECTORY", t.TempDir())
+	pricingpkg.SetConfiguredAliases(map[string]string{"kept-model": "price-a"})
+	t.Cleanup(func() { pricingpkg.SetConfiguredAliases(nil) })
 	path := filepath.Join(t.TempDir(), "mirror.duckdb")
 	keptActivityMirror(t, path, "session-a", 500)
 	conn, err := Open(t.Context(), path)
 	require.NoError(t, err)
 	_, err = conn.ExecContext(t.Context(), `UPDATE sessions SET agentsview_push_fingerprint = 'a1'`)
 	require.NoError(t, err)
-	_, err = conn.ExecContext(t.Context(), `INSERT INTO model_pricing (model_pattern, input_microdollars_per_mtok, output_microdollars_per_mtok, cache_creation_microdollars_per_mtok, cache_read_microdollars_per_mtok, updated_at) VALUES ('kept-model', 0, 10000000, 0, 0, '')`)
+	_, err = conn.ExecContext(t.Context(), `INSERT INTO model_pricing (model_pattern, input_microdollars_per_mtok, output_microdollars_per_mtok, cache_creation_microdollars_per_mtok, cache_read_microdollars_per_mtok, updated_at) VALUES ('price-a', 0, 10000000, 0, 0, ''), ('price-b', 0, 20000000, 0, 0, '')`)
 	require.NoError(t, err)
 	require.NoError(t, conn.Close())
 	f := db.UsageFilter{From: "2026-01-01", To: "2026-01-01", Timezone: "UTC"}
@@ -214,10 +217,30 @@ func TestUsagePartsMirrorPricingChange(t *testing.T) {
 	first, err := store.GetDailyUsage(t.Context(), f)
 	require.NoError(t, err)
 	require.Equal(t, money.MustParseDollars("0.005"), first.Totals.TotalCost)
+	_, err = store.GetTopSessionsByCost(t.Context(), f, 10)
+	require.NoError(t, err)
+	pricingpkg.SetConfiguredAliases(map[string]string{"kept-model": "price-b"})
+	inMemory, err := store.GetDailyUsage(t.Context(), f)
+	require.NoError(t, err)
+	require.Equal(t, money.MustParseDollars("0.01"), inMemory.Totals.TotalCost)
+	pricingpkg.SetConfiguredAliases(map[string]string{"kept-model": "price-a"})
+	_, err = store.GetDailyUsage(t.Context(), f)
+	require.NoError(t, err)
+	require.NoError(t, store.Close())
+	pricingpkg.SetConfiguredAliases(map[string]string{"kept-model": "price-b"})
+	store, err = NewStore(t.Context(), path)
+	require.NoError(t, err)
+	require.NoError(t, store.OpenActivityReportDisk(t.Context()))
+	aliased, err := store.GetDailyUsage(t.Context(), f)
+	require.NoError(t, err)
+	require.Equal(t, money.MustParseDollars("0.01"), aliased.Totals.TotalCost)
+	top, err := store.GetTopSessionsByCost(t.Context(), f, 10)
+	require.NoError(t, err)
+	require.Equal(t, money.MustParseDollars("0.01"), top[0].Cost)
 	require.NoError(t, store.Close())
 	conn, err = Open(t.Context(), path)
 	require.NoError(t, err)
-	_, err = conn.ExecContext(t.Context(), `UPDATE model_pricing SET output_microdollars_per_mtok = 20000000 WHERE model_pattern = 'kept-model'`)
+	_, err = conn.ExecContext(t.Context(), `UPDATE model_pricing SET output_microdollars_per_mtok = 30000000 WHERE model_pattern = 'price-b'`)
 	require.NoError(t, err)
 	require.NoError(t, conn.Close())
 	store, err = NewStore(t.Context(), path)
@@ -230,7 +253,7 @@ func TestUsagePartsMirrorPricingChange(t *testing.T) {
 	t.Cleanup(func() { analyticsQueryObserver = previous })
 	got, err := store.GetDailyUsage(t.Context(), f)
 	require.NoError(t, err)
-	require.Equal(t, money.MustParseDollars("0.01"), got.Totals.TotalCost)
+	require.Equal(t, money.MustParseDollars("0.015"), got.Totals.TotalCost)
 	require.Equal(t, 1, reads)
 }
 

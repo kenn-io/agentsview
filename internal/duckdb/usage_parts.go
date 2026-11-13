@@ -8,6 +8,7 @@ import (
 	"slices"
 
 	"go.kenn.io/agentsview/internal/kept"
+	pricingpkg "go.kenn.io/agentsview/internal/pricing"
 )
 
 type usagePart[T any] struct {
@@ -30,7 +31,7 @@ func refreshUsageParts[T any](ctx context.Context, s *Store, slot, priceDigest s
 	if err != nil {
 		return nil, err
 	}
-	version := "usage-parts-1|" + priceDigest
+	version := "usage-parts-1|" + priceDigest + "|" + pricingpkg.ConfiguredAliasesDigest()
 	old := map[string]usagePart[T]{}
 	if data, ok := s.usageDisk.Get(slot, version); ok {
 		if rows, ok := kept.DecodeRows[usagePart[T]](data); ok {
