@@ -334,6 +334,12 @@ func (db *DB) Compact(ctx context.Context, options CompactOptions) (result Compa
 	if err != nil {
 		return result, err
 	}
+	// Deleted conversation rows otherwise stay in the export index for good,
+	// and nothing frees their pages for the VACUUM below to reclaim.
+	if _, err := db.PruneConversationTombstones(ctx); err != nil {
+		_ = os.Remove(op.opDir)
+		return result, fmt.Errorf("prune conversation tombstones: %w", err)
+	}
 
 	// The backfill pass holds long read snapshots that would stall the final
 	// swap's drain; it is restarted by restoreCompactServices on every exit.

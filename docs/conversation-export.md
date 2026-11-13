@@ -110,10 +110,11 @@ How `changes` events fit together:
   message and session changes, then stays open and sends new changes as the
   daemon publishes them. Changes that arrive together are sent as one event.
 - `reset` is `true`, with an empty `from`, when `after` is empty, belongs to
-  another database generation, or is not a cursor this archive issued. The
-  replay then starts at the beginning of the archive. Replace your copy with
-  what follows instead of merging into it. A full resync during a connection
-  produces the same reset.
+  another database generation, predates deleted-message records that
+  `db compact` removed, or is not a cursor this archive issued. The replay
+  then starts at the beginning of the archive. Replace your copy with what
+  follows instead of merging into it. A full resync or a compaction during a
+  connection produces the same reset.
 - Like the changes listing, this is compact current state. A record changed
   twice before you read it arrives once, in its newest state.
 
@@ -196,11 +197,11 @@ includes the current project reference from the same read snapshot as the text.
 Check it again before disclosing the body to another system.
 
 `text` contains a UTF-8-safe chunk. `offset` and `next_offset` are byte offsets;
-`text_bytes` in the body response describes the complete message as this
-command returns it. Continue until `next_offset` reaches that `text_bytes`,
-preserving the same generation and revision on every request. `--max-bytes`
-defaults to 65,536 and must allow at least four bytes, the maximum length of one
-UTF-8 character. A stale revision fails instead of returning a different message
+`text_bytes` in the body response describes the complete message as this command
+returns it. Continue until `next_offset` reaches that `text_bytes`, preserving
+the same generation and revision on every request. `--max-bytes` defaults to
+65,536 and must allow at least four bytes, the maximum length of one UTF-8
+character. A stale revision fails instead of returning a different message
 version. No text is silently truncated.
 
 A superseded revision leaves stdout empty, emits `revision_changed` JSON on
@@ -229,8 +230,8 @@ crosses a chunk boundary is still caught. When a body contains a masked secret:
 - `text_bytes`, `offset` and `next_offset` count bytes of the masked text. They
   can differ from the `text_bytes` in the changes listing, which describes the
   stored message.
-- `digest` still identifies the stored message, so the masked text does not
-  hash to it. Keep using it to tell whether a message changed.
+- `digest` still identifies the stored message, so the masked text does not hash
+  to it. Keep using it to tell whether a message changed.
 
 To export the stored text unchanged, pass `--reveal` on every body read of that
 message:
@@ -328,6 +329,9 @@ writer's lineage. The physical `database_id` changes on full resync. A changed
 generation invalidates a saved checkpoint: the command leaves stdout empty,
 writes a `reconciliation_required` JSON error to stderr, and exits with code 4.
 Reconcile the new generation rather than treating it as an empty update.
+[`db compact`](/docs/commands/#agentsview-db-compact) removes deleted-message
+records, so a checkpoint saved before the newest removed record fails the same
+way.
 
 Native identities stored in `source_uuid` support edits, insertion and deletion
 without turning every change into another utterance. Some source formats lack

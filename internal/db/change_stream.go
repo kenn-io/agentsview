@@ -141,6 +141,8 @@ type changeStreamRevisions struct {
 	conversation int64
 	usage        int64
 	messageUsage int64
+	// pruned is the newest conversation revision whose tombstones are gone.
+	pruned int64
 }
 
 func changeStreamRevisionsTx(ctx context.Context, tx *sql.Tx) (changeStreamRevisions, error) {
@@ -163,6 +165,10 @@ func changeStreamRevisionsTx(ctx context.Context, tx *sql.Tx) (changeStreamRevis
 		return heads, err
 	}
 	heads.messageUsage, err = archiveJournalRevision(ctx, tx, conversationUsageRevisionKey, "conversation usage")
+	if err != nil {
+		return heads, err
+	}
+	heads.pruned, err = archiveJournalRevision(ctx, tx, conversationPrunedRevisionKey, "conversation pruned")
 	return heads, err
 }
 
@@ -235,7 +241,9 @@ func (db *DB) ReadChangeStream(
 	position, ok := decodeChangeStreamPosition(cursor)
 	if !ok || position.DatabaseID != heads.databaseID ||
 		position.Conversation > heads.conversation || position.Usage > heads.usage ||
-		position.MessageUsage > heads.messageUsage {
+		position.MessageUsage > heads.messageUsage ||
+		// Pruning removed deletions this cursor has not read.
+		position.Conversation < heads.pruned {
 		batch.Reset = true
 		// The replay sends every message with its current usage, so no
 		// earlier usage change needs its own re-send.

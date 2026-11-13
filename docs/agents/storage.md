@@ -237,6 +237,14 @@ ordinal the diff writes, so the rows below it keep their IDs. Changed no-ID
 replacements must report identity ambiguity. Rebuilds retain these IDs and
 tombstones but use the new database generation for revisions and cursors.
 
+`db compact` prunes conversation tombstones before it vacuums. It first raises
+`conversation_pruned_revision` in `archive_metadata` to the newest tombstone's
+revision, then deletes tombstones at or below it in rowid batches, so the WAL
+stays small and tombstones written meanwhile survive. Change-stream cursors and
+export positions below the floor restart (`reset` or
+`ErrConversationReconciliationRequired`); positions at or above it continue. The
+floor belongs to the database generation, so rebuilds do not copy it.
+
 An archive is cold until its first conversation export: sync writes no message
 projection rows, and the first `export conversations changes` builds the index
 from stored messages in one writer transaction, through the daemon when one owns

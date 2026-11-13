@@ -179,7 +179,13 @@ func (db *DB) ExportConversationChanges(ctx context.Context, opts ConversationEx
 	if err := tx.QueryRowContext(ctx, `SELECT COALESCE((SELECT CAST(value AS INTEGER) FROM archive_metadata WHERE key = ?), 0)`, conversationRevisionKey).Scan(&current); err != nil {
 		return result, err
 	}
-	if position.DatabaseID != "" && (position.DatabaseID != result.DatabaseID || position.Through > current) {
+	pruned, err := archiveJournalRevision(ctx, tx, conversationPrunedRevisionKey, "conversation pruned")
+	if err != nil {
+		return result, err
+	}
+	// A position below the pruned floor may have missed deletions whose
+	// tombstones are gone.
+	if position.DatabaseID != "" && (position.DatabaseID != result.DatabaseID || position.Through > current || position.After < pruned) {
 		return result, ErrConversationReconciliationRequired
 	}
 	if opts.Cursor == "" {

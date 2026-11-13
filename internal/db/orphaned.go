@@ -1768,6 +1768,7 @@ func (d *DB) CopySessionMetadataFrom(
 				'analytics_change_revision',
 				'usage_pricing_revision',
 				'conversation_publication_revision',
+				'conversation_pruned_revision',
 				'conversation_usage_revision',
 				'worktree_mapping_publication_revision'
 			)
