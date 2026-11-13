@@ -18,7 +18,6 @@ import (
 	"go.kenn.io/agentsview/internal/ctxio"
 	"go.kenn.io/agentsview/internal/db"
 	"go.kenn.io/agentsview/internal/parser"
-	"go.kenn.io/agentsview/internal/pathutil"
 	"go.kenn.io/agentsview/internal/remotesync"
 )
 
@@ -218,30 +217,11 @@ func machineOwns(cfg config.Config, session *db.Session, machine string) bool {
 	return machine == session.Machine || (session.Machine == cfg.LocalMachineName && machine == cfg.InstallationID)
 }
 
-// pathMachine follows ingest's most-specific configured root attribution.
-func pathMachine(cfg config.Config, agent parser.AgentType, name string) (string, bool) {
-	key, err := pathutil.LocalComparisonKey(name)
-	if err != nil {
-		return "", false
-	}
-	var best, machine string
-	for root, label := range cfg.SourceMachines[agent] {
-		rootKey, err := pathutil.LocalComparisonKey(root)
-		if err != nil || len(rootKey) <= len(best) {
-			continue
-		}
-		if rel, err := filepath.Rel(rootKey, key); err == nil && rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
-			best, machine = rootKey, label
-		}
-	}
-	return machine, best != ""
-}
-
 // scopedDiscover filters fallback candidates by ingest's machine attribution.
 func scopedDiscover(cfg config.Config, session *db.Session, agent parser.AgentType, discover func(context.Context, func(parser.SourceRef) error) error) func(context.Context, func(parser.SourceRef) error) error {
 	return func(ctx context.Context, yield func(parser.SourceRef) error) error {
 		return discover(ctx, func(ref parser.SourceRef) error {
-			if machine, ok := pathMachine(cfg, agent, ref.DisplayPath); ok && !machineOwns(cfg, session, machine) {
+			if machine, ok := config.MachineForSourcePath(cfg.SourceMachines[agent], ref.DisplayPath); ok && !machineOwns(cfg, session, machine) {
 				return nil
 			}
 			return yield(ref)

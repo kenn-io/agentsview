@@ -263,13 +263,13 @@ func TestMaterializeRecordedSourceAfterMachineRelabel(t *testing.T) {
 			require.NoError(t, os.WriteFile(name, []byte(content), 0o600))
 			cfg := config.Config{InstallationID: "local", AgentDirs: map[parser.AgentType][]string{agent: {root}}, SourceMachines: map[parser.AgentType]map[string]string{agent: {root: "renamed"}}}
 			session := &db.Session{ID: sessionID, Agent: string(agent), Machine: "old-name", FilePath: &name}
-			result, err := Materialize(t.Context(), cfg, dbtest.OpenTestDB(t), session, t.TempDir())
+			result, err := Materialize(t.Context(), cfg, session, t.TempDir())
 			require.NoError(t, err)
 			assert.Equal(t, name, result.Source)
 			// A stale path must not search a root assigned to another machine.
 			stale := filepath.Join(root, "project", "missing.jsonl")
 			session.FilePath = &stale
-			_, err = Materialize(t.Context(), cfg, dbtest.OpenTestDB(t), session, t.TempDir())
+			_, err = Materialize(t.Context(), cfg, session, t.TempDir())
 			require.ErrorContains(t, err, "unavailable")
 		})
 	}
@@ -434,7 +434,7 @@ func TestMaterializeLinkedClaudeSources(t *testing.T) {
 			}
 			if layout == "external saved" || layout == "in-root session directory" {
 				cfg.SourceMachines = map[parser.AgentType]map[string]string{parser.AgentClaude: {root: "renamed"}}
-				result, err = Materialize(t.Context(), cfg, dbtest.OpenTestDB(t), session, cwd)
+				result, err = Materialize(t.Context(), cfg, session, cwd)
 				require.NoError(t, err)
 				assert.Equal(t, name, result.Source)
 				assert.Equal(t, "unchanged", result.Status)

@@ -38,6 +38,27 @@ import (
 	"go.kenn.io/kit/embedlocal"
 )
 
+// MachineForSourcePath returns the label of the most specific configured root.
+func MachineForSourcePath(roots map[string]string, path string) (string, bool) {
+	path, err := pathutil.LocalComparisonKey(path)
+	if err != nil {
+		return "", false
+	}
+	bestRoot, machine := "", ""
+	for root, candidate := range roots {
+		cleanRoot, err := pathutil.LocalComparisonKey(root)
+		if err != nil || len(cleanRoot) <= len(bestRoot) {
+			continue
+		}
+		rel, err := filepath.Rel(cleanRoot, path)
+		if err != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+			continue
+		}
+		bestRoot, machine = cleanRoot, candidate
+	}
+	return machine, bestRoot != ""
+}
+
 // TerminalConfig holds terminal launch preferences.
 type TerminalConfig struct {
 	// Mode: "auto" (detect terminal), "custom" (use CustomBin),

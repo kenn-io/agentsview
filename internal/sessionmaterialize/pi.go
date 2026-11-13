@@ -5,6 +5,7 @@ import (
 	"bytes"
 	"cmp"
 	"context"
+	"crypto/sha256"
 	"encoding/json/jsontext"
 	"encoding/json/v2"
 	"errors"
@@ -67,7 +68,7 @@ func materializePi(ctx context.Context, cfg config.Config, session *db.Session, 
 	if err != nil {
 		return Result{}, fmt.Errorf("reading native Pi transcript: %w", err)
 	}
-	data, err = relocatePiHeader(ctx, data, id, cwd)
+	data, err = relocatePiHeader(ctx, data, name, id, cwd)
 	if err != nil {
 		return Result{}, err
 	}
@@ -102,7 +103,8 @@ func findPiSource(ctx context.Context, cfg config.Config, session *db.Session, s
 	candidates := parser.NewPiSourceSet(parser.AgentPi, roots)
 	name, err := uniqueLocalSource(ctx, provider, stored, scopedDiscover(cfg, session, parser.AgentPi, candidates.DiscoverEach), func(name string) (bool, error) {
 		err := checkPiHeaderFile(ctx, name, id)
-		if errors.Is(err, errPiIdentity) || errors.Is(err, errPiNotSession) {
+		var pathErr *os.PathError
+		if errors.Is(err, errPiIdentity) || errors.Is(err, errPiNotSession) || errors.Is(err, errPiHeaderSize) || errors.As(err, &pathErr) {
 			return false, nil
 		}
 		return err == nil, err
@@ -148,12 +150,11 @@ func readPiFile(ctx context.Context, root, name string) ([]byte, error) {
 var (
 	errPiIdentity   = errors.New("native Pi session identity differs")
 	errPiNotSession = errors.New("invalid Pi session header; first parsed record is not a session")
+	errPiHeaderSize = errors.New("native Pi session header exceeds lookup limit")
 )
 
-// Pi scans at most 1 MiB to identify a session before its full-load fallback.
-// The bounded lookup fails closed when a candidate cannot be identified.
-func piHeader(ctx context.Context, r io.Reader, id string) ([]byte, int, error) {
-	reader := bufio.NewReader(io.LimitReader(ctxio.Reader{Context: ctx, Reader: r}, 1<<20+1))
+func piHeader(ctx context.Context, r io.Reader, name, id string, limit int64) ([]byte, int, error) {
+	reader := bufio.NewReader(io.LimitReader(ctxio.Reader{Context: ctx, Reader: r}, limit+1))
 	offset := 0
 	for {
 		line, err := reader.ReadBytes('\n')
@@ -162,8 +163,8 @@ func piHeader(ctx context.Context, r io.Reader, id string) ([]byte, int, error) 
 		}
 		start := offset
 		offset += len(line)
-		if offset > 1<<20 {
-			return nil, 0, errors.New("native Pi session header exceeds 1 MiB lookup limit")
+		if int64(offset) > limit {
+			return nil, 0, errPiHeaderSize
 		}
 		if jsontext.Value(line).IsValid(jsontext.AllowDuplicateNames(true), jsontext.AllowInvalidUTF8(true)) {
 			var value any
@@ -186,7 +187,8 @@ func piHeader(ctx context.Context, r io.Reader, id string) ([]byte, int, error) 
 				if value, ok := header["id"]; ok && json.Unmarshal(value, &headerID, jsontext.AllowInvalidUTF8(true)) != nil {
 					return nil, 0, errPiNotSession
 				}
-				if headerID != id {
+				_, hasID := header["id"]
+				if headerID != id && !(!hasID && strings.TrimSuffix(filepath.Base(name), ".jsonl") == id) {
 					return nil, 0, errPiIdentity
 				}
 				if value, ok := header["version"]; ok && json.Unmarshal(value, &version) != nil {
@@ -213,13 +215,13 @@ func checkPiHeaderFile(ctx context.Context, name, id string) error {
 		return err
 	}
 	defer file.Close()
-	_, _, err = piHeader(ctx, file, id)
+	_, _, err = piHeader(ctx, file, name, id, 1<<20)
 	return err
 }
 
-// relocatePiHeader changes only the cwd value, keeping the rest of the JSONL byte-for-byte.
-func relocatePiHeader(ctx context.Context, data []byte, id, cwd string) ([]byte, error) {
-	line, offset, err := piHeader(ctx, bytes.NewReader(data), id)
+// relocatePiHeader updates native resume metadata while preserving the remaining bytes.
+func relocatePiHeader(ctx context.Context, data []byte, name, id, cwd string) ([]byte, error) {
+	line, offset, err := piHeader(ctx, bytes.NewReader(data), name, id, maxSourceBytes)
 	if err != nil {
 		return nil, err
 	}
@@ -228,6 +230,7 @@ func relocatePiHeader(ctx context.Context, data []byte, id, cwd string) ([]byte,
 		return nil, err
 	}
 	start, end, count := -1, -1, 0
+	hasID := false
 	for decoder.PeekKind() != jsontext.KindEndObject {
 		key, err := decoder.ReadToken()
 		if err != nil {
@@ -238,6 +241,9 @@ func relocatePiHeader(ctx context.Context, data []byte, id, cwd string) ([]byte,
 		if err != nil {
 			return nil, err
 		}
+		if name == "id" {
+			hasID = true
+		}
 		if name == "cwd" {
 			count++
 			end = int(decoder.InputOffset())
@@ -247,12 +253,16 @@ func relocatePiHeader(ctx context.Context, data []byte, id, cwd string) ([]byte,
 	if count != 1 {
 		return nil, errors.New("native Pi session header requires one cwd")
 	}
-	if data == nil {
-		return nil, errors.New("invalid native Pi header offsets")
-	}
 	encoded, err := json.Marshal(cwd)
 	if err != nil {
 		return nil, fmt.Errorf("native Pi checkout path is not valid UTF-8: %w", err)
+	}
+	if !hasID {
+		encodedID, err := json.Marshal(id)
+		if err != nil {
+			return nil, err
+		}
+		encoded = slices.Concat(encoded, []byte(`,"id":`), encodedID)
 	}
 	return slices.Concat(data[:offset+start], encoded, data[offset+end:]), nil
 }
@@ -272,7 +282,12 @@ func piDestination(ctx context.Context, cwd, basename string) (string, error) {
 	}
 	if dir == "" {
 		encoded := strings.TrimPrefix(strings.NewReplacer("/", "-", `\`, "-", ":", "-").Replace(cwd), "-")
-		return filepath.Join(agentDir, "sessions", "--"+encoded+"--", basename), nil
+		component := "--" + encoded + "--"
+		if len(component) > 200 {
+			hash := sha256.Sum256([]byte(cwd))
+			component = fmt.Sprintf("--%x--", hash[:16])
+		}
+		return filepath.Join(agentDir, "sessions", component, basename), nil
 	}
 	dir, err = piResolveDir(cwd, dir)
 	if err != nil {

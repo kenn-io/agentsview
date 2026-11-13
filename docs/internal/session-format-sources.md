@@ -3411,7 +3411,11 @@ schemas keep their existing ordering behavior.
   [session manager](https://github.com/earendil-works/pi/blob/acaa253cc8e3f159e6100b6f3874861b1f0bfc99/packages/coding-agent/src/core/session-manager.ts)
   writes files directly into an explicit session directory; default sessions
   live one encoded project directory below the session root. Agentsview
-  discovers both layouts. Reverified 2026-09-22 against
+  discovers both layouts. Materialization changes the header `cwd` and adds an
+  `id` from the filename for older headers without one, which Pi needs to load
+  the session. A long checkout uses a hash-named directory under `sessions/`;
+  Pi lists it among all sessions but not in the checkout-filtered list.
+  Reverified 2026-09-22 against
   [pi-subagents](https://github.com/nicobailon/pi-subagents) v0.70.1 at
   `9b8356d4351747a7108695344e0c26a7c85e84de`: the extension's
   `getSubagentSessionRoot` puts a child session under the parent transcript's
@@ -3491,16 +3495,17 @@ schemas keep their existing ordering behavior.
   and [path normalization](https://github.com/earendil-works/pi/blob/acaa253cc8e3f159e6100b6f3874861b1f0bfc99/packages/coding-agent/src/utils/paths.ts)
   at `acaa253cc8e3f159e6100b6f3874861b1f0bfc99` support Windows shell drive
   paths, unlike the older format pin above. Current format version is 3; the
-  first parsed entry must be a session with a string ID. Blank and malformed lines can precede that entry, while a parsed
-  title cannot. An idless legacy file can be indexed by Agentsview but cannot
-  be opened by this Pi version. `SessionManager.open` uses the header cwd;
-  materialization changes only that value, resolves the checkout through
-  symlinks, and preserves the native ID. Custom IDs may contain interior dots;
+  first parsed entry must be a session with a string ID. Blank and malformed
+  lines can precede that entry, while a parsed title cannot. Pi cannot open an
+  idless legacy file until materialization inserts the filename-derived ID.
+  `SessionManager.open` uses the header cwd; materialization changes that value
+  and resolves the checkout through symlinks. Custom IDs may contain interior dots;
   the CLI also opens renamed `.jsonl` paths using the identity in their session
   header. Startup chooses the session directory from the environment, then
   merged project/global settings, then the default
-  encoded checkout directory. The installer bounds header lookup to 1 MiB and
-  refuses versions outside 1–3 as an Agentsview policy, and unsafe
+  encoded checkout directory. The installer bounds fallback header lookup to
+  1 MiB and stored source reads to 512 MiB. It refuses versions outside 1–3 as
+  an Agentsview policy, and unsafe
   identity-derived filenames. Malformed or oversized settings fail closed.
 
 ## Prime Agent (`prime-agent`)

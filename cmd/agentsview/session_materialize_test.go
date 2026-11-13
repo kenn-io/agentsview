@@ -2,9 +2,9 @@ package main
 
 import (
 	"encoding/json"
-	"fmt"
 	"os"
 	"path/filepath"
+	"runtime"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -64,6 +64,8 @@ func TestPiMaterializeCommandReturnsNativeResume(t *testing.T) {
 	database, err := db.OpenIsolatedContext(t.Context(), filepath.Join(dataDir, "sessions.db"))
 	require.NoError(t, err)
 	require.NoError(t, database.UpsertSession(t.Context(), db.Session{ID: "pi:example", Agent: "pi", Machine: machine, Project: "fixture", FilePath: &name}))
+	before, err := database.GetSessionFull(t.Context(), "pi:example")
+	require.NoError(t, err)
 	require.NoError(t, database.Close())
 	output, err := executeCommand(newRootCommand(), "session", "materialize", "pi:example", "--cwd", cwd, "--json")
 	require.NoError(t, err, output)
@@ -75,4 +77,19 @@ func TestPiMaterializeCommandReturnsNativeResume(t *testing.T) {
 	require.NoError(t, err)
 	assert.Contains(t, result.Command, resolved)
 	assert.Contains(t, result.Command, filepath.Join(dest, "example.jsonl"))
+	path := filepath.Join(dest, "example.jsonl")
+	file, err := os.OpenFile(path, os.O_APPEND|os.O_WRONLY, 0)
+	require.NoError(t, err)
+	_, err = file.WriteString("{\"type\":\"message\"}\n")
+	require.NoError(t, err)
+	require.NoError(t, file.Close())
+	_, err = executeCommand(newRootCommand(), "session", "materialize", "pi:example", "--cwd", cwd)
+	require.ErrorContains(t, err, "if this is the same session, resume it with:")
+	assert.Contains(t, err.Error(), piResumeCommand(cwd, path, runtime.GOOS == "windows"))
+	database, err = db.OpenIsolatedContext(t.Context(), filepath.Join(dataDir, "sessions.db"))
+	require.NoError(t, err)
+	after, err := database.GetSessionFull(t.Context(), "pi:example")
+	require.NoError(t, err)
+	assert.Equal(t, before, after)
+	require.NoError(t, database.Close())
 }

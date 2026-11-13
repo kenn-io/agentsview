@@ -917,24 +917,7 @@ func (e *Engine) machineForPath(agent parser.AgentType, path string) string {
 func (e *Engine) configuredMachineForPath(
 	agent parser.AgentType, path string,
 ) (string, bool) {
-	path, err := pathutil.LocalComparisonKey(path)
-	if err != nil {
-		return "", false
-	}
-	bestRoot := ""
-	machine := ""
-	for root, candidate := range e.sources().sourceMachines[agent] {
-		cleanRoot, err := pathutil.LocalComparisonKey(root)
-		if err != nil {
-			continue
-		}
-		if !pathWithinRoot(path, cleanRoot) || len(cleanRoot) <= len(bestRoot) {
-			continue
-		}
-		bestRoot = cleanRoot
-		machine = candidate
-	}
-	return machine, bestRoot != ""
+	return config.MachineForSourcePath(e.sources().sourceMachines[agent], path)
 }
 
 func (e *Engine) machineForFile(file parser.DiscoveredFile) string {
