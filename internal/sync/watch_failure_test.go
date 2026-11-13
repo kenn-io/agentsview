@@ -3,7 +3,9 @@ package sync
 import (
 	"context"
 	"database/sql"
+	"encoding/json/v2"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"testing"
@@ -18,6 +20,83 @@ import (
 type reconciliationRetryRootError interface {
 	error
 	ReconciliationRetryRoots() []string
+}
+
+func newFilesystemDiscoveryEngine(t *testing.T, root string) (*Engine, *db.DB) {
+	t.Helper()
+	const agent parser.AgentType = "filesystem-discovery"
+	factory := parser.NewSourceSetFactory(
+		parser.AgentDef{Type: agent, FileBased: true},
+		parser.Capabilities{Source: parser.SourceCapabilities{
+			DiscoverSources: parser.CapabilitySupported,
+			WatchSources:    parser.CapabilitySupported,
+			FindSource:      parser.CapabilitySupported,
+		}},
+		func(cfg parser.ProviderConfig) parser.SourceSet {
+			return parser.NewJSONLSourceSet(agent, cfg.Roots,
+				parser.WithRecursive(), parser.WithSymlinkFollowing(), parser.WithContentHashing(),
+				parser.WithForceReplace(),
+				parser.WithParseFile(func(ctx context.Context, path string, req parser.ParseRequest) ([]parser.ParseResult, []string, error) {
+					if err := ctx.Err(); err != nil {
+						return nil, nil, err
+					}
+					data, err := os.ReadFile(path)
+					if err != nil {
+						return nil, nil, err
+					}
+					var fixture struct {
+						ID   string `json:"id"`
+						Text string `json:"text"`
+					}
+					if err := json.Unmarshal(data, &fixture); err != nil {
+						return nil, nil, err
+					}
+					started := time.Unix(1704067200, 0)
+					return []parser.ParseResult{{
+						Session: parser.ParsedSession{
+							ID: fixture.ID, Agent: agent, Project: "fixture", Machine: req.Machine,
+							StartedAt: started, EndedAt: started, FirstMessage: fixture.Text,
+							MessageCount: 1, UserMessageCount: 1,
+							File: parser.FileInfo{
+								Path: path, Size: req.Fingerprint.Size,
+								Mtime: req.Fingerprint.MTimeNS, Hash: req.Fingerprint.Hash,
+							},
+						},
+						Messages: []parser.ParsedMessage{{Role: "user", Content: fixture.Text, Timestamp: started}},
+					}}, nil, nil
+				}),
+			)
+		},
+	)
+	database := openTestDB(t)
+	engine := NewEngine(t.Context(), database, EngineConfig{
+		AgentDirs: map[parser.AgentType][]string{agent: {root}}, Machine: "local",
+		ProviderFactories: []parser.ProviderFactory{factory},
+		ProviderMigrationModes: map[parser.AgentType]parser.ProviderMigrationMode{
+			agent: parser.ProviderMigrationProviderAuthoritative,
+		},
+	})
+	t.Cleanup(engine.Close)
+	return engine, database
+}
+
+func partialDiscoveryRetry(t *testing.T, err error) WatchBatch {
+	t.Helper()
+	require.ErrorIs(t, err, os.ErrNotExist)
+	retry, ok := callbackRetryBatch(err)
+	require.True(t, ok, "inaccessible discovery must retain retry coverage")
+	return retry
+}
+
+func partialDiscoverySessionContents(t *testing.T, database *db.DB, id string) []string {
+	t.Helper()
+	messages, err := database.GetAllMessages(t.Context(), id)
+	require.NoError(t, err)
+	var contents []string
+	for _, message := range messages {
+		contents = append(contents, message.Content)
+	}
+	return contents
 }
 
 type partialFailureStreamingProvider struct {
@@ -640,6 +719,244 @@ func TestReconcileWatchRootsRetainsPartialFailedProviderWithoutDeletionProof(t *
 	require.Len(t, healthyOwnership, 1)
 	assert.Equal(t, healthyPath, healthyOwnership[0].FilePath,
 		"an independent completed scope must baseline its admitted source")
+}
+
+func TestWatchDiscoveryFailurePreservesSessionsAndNarrowsRetry(t *testing.T) {
+	root := filepath.Join(t.TempDir(), "sessions#branch")
+	require.NoError(t, os.Mkdir(root, 0o755))
+	target := filepath.Join(t.TempDir(), "target")
+	require.NoError(t, os.Mkdir(target, 0o755))
+	link := filepath.Join(root, "linked#branch")
+	if err := os.Symlink(target, link); err != nil {
+		t.Skipf("symlink not supported: %v", err)
+	}
+	linkedPath := filepath.Join(target, "linked.jsonl")
+	healthyPath := filepath.Join(root, "healthy.jsonl")
+	require.NoError(t, os.WriteFile(linkedPath, []byte(
+		`{"id":"linked","text":"linked before"}`,
+	), 0o600))
+	require.NoError(t, os.WriteFile(healthyPath, []byte(
+		`{"id":"healthy","text":"healthy before"}`,
+	), 0o600))
+	removedPath := link + "#removed.jsonl"
+	require.NoError(t, os.WriteFile(removedPath, []byte(`{"id":"removed","text":"removed source"}`), 0o600))
+	engine, database := newFilesystemDiscoveryEngine(t, root)
+	require.NoError(t, ApplyWatchBatch(t.Context(), engine, WatchBatch{ReconcileRoots: []string{root}}, nil))
+	before, err := database.GetSessionFull(t.Context(), "linked")
+	require.NoError(t, err)
+	require.NotNil(t, before)
+	assert.Equal(t, []string{"linked before"}, partialDiscoverySessionContents(t, database, "linked"))
+
+	parked := target + "-unavailable"
+	require.NoError(t, os.Remove(removedPath))
+	require.NoError(t, os.Rename(target, parked))
+	recovery := &WatchRecoveryScope{AvailableRoots: []string{root}}
+	err = ApplyWatchBatch(t.Context(), engine, WatchBatch{FullSync: true, LostEvents: true}, recovery)
+	retry := partialDiscoveryRetry(t, err)
+	assert.EqualExportedValues(t, WatchBatch{ReconcileRoots: []string{link}, LostEvents: true}, retry,
+		"a failed subtree must not retain the healthy sibling in its retry scope")
+	removed, err := database.GetSessionFull(t.Context(), "removed")
+	require.NoError(t, err)
+	assertSourceMissingState(t, removed)
+
+	require.NoError(t, os.WriteFile(healthyPath, []byte(
+		`{"id":"healthy","text":"healthy after"}`,
+	), 0o600))
+	require.NoError(t, ApplyWatchBatch(t.Context(), engine, WatchBatch{Paths: []string{healthyPath}}, nil))
+	assert.Equal(t, []string{"healthy after"}, partialDiscoverySessionContents(t, database, "healthy"))
+	err = ApplyWatchBatch(t.Context(), engine, retry, recovery)
+	retry = partialDiscoveryRetry(t, err)
+	preserved, err := database.GetSessionFull(t.Context(), "linked")
+	require.NoError(t, err)
+	assert.Equal(t, before, preserved, "failed access must preserve the complete archived session")
+	assert.Equal(t, []string{"linked before"}, partialDiscoverySessionContents(t, database, "linked"))
+
+	require.NoError(t, os.WriteFile(filepath.Join(parked, "linked.jsonl"), []byte(
+		`{"id":"linked","text":"linked after"}`,
+	), 0o600))
+	require.NoError(t, os.Rename(parked, target))
+	require.NoError(t, ApplyWatchBatch(t.Context(), engine, retry, recovery))
+	assert.Equal(t, []string{"linked after"}, partialDiscoverySessionContents(t, database, "linked"))
+	restored, err := database.GetSessionFull(t.Context(), "linked")
+	require.NoError(t, err)
+	require.NotNil(t, restored)
+	assert.Equal(t, new(filepath.Join(link, "linked.jsonl")), restored.FilePath)
+
+	require.NoError(t, os.Remove(linkedPath))
+	require.NoError(t, ApplyWatchBatch(t.Context(), engine, WatchBatch{ReconcileRoots: []string{link}}, nil))
+	missing, err := database.GetSessionFull(t.Context(), "linked")
+	require.NoError(t, err)
+	assertSourceMissingState(t, missing)
+}
+
+func TestWatchDiscoveryFailurePreservesSessionsWithRelativeRoot(t *testing.T) {
+	t.Chdir(t.TempDir())
+	root := filepath.Join("sources", "sessions")
+	require.NoError(t, os.MkdirAll(root, 0o755))
+	target := t.TempDir()
+	link := filepath.Join(root, "linked")
+	if err := os.Symlink(target, link); err != nil {
+		t.Skipf("symlink not supported: %v", err)
+	}
+	linkedFile := filepath.Join(target, "linked.jsonl")
+	require.NoError(t, os.WriteFile(linkedFile, []byte(
+		`{"id":"linked","text":"retained transcript"}`,
+	), 0o600))
+	removed := filepath.Join(root, "removed.jsonl")
+	require.NoError(t, os.WriteFile(removed, []byte(
+		`{"id":"removed","text":"removed source"}`,
+	), 0o600))
+	engine, database := newFilesystemDiscoveryEngine(t, root)
+	require.NoError(t, ApplyWatchBatch(t.Context(), engine, WatchBatch{ReconcileRoots: []string{root}}, nil))
+	before, err := database.GetSessionFull(t.Context(), "linked")
+	require.NoError(t, err)
+	require.NotNil(t, before)
+	assert.Equal(t, new(filepath.Join(link, "linked.jsonl")), before.FilePath)
+
+	parked := target + "-unavailable"
+	require.NoError(t, os.Rename(target, parked))
+	require.NoError(t, os.Remove(removed))
+	recovery := &WatchRecoveryScope{AvailableRoots: []string{root}}
+	err = ApplyWatchBatch(t.Context(), engine, WatchBatch{FullSync: true, LostEvents: true}, recovery)
+	retry := partialDiscoveryRetry(t, err)
+	preserved, err := database.GetSessionFull(t.Context(), "linked")
+	require.NoError(t, err)
+	assert.Equal(t, before, preserved, "a dangling relative-root symlink must not mark archived descendants source-missing")
+	assert.Equal(t, []string{"retained transcript"}, partialDiscoverySessionContents(t, database, "linked"))
+	missing, err := database.GetSessionFull(t.Context(), "removed")
+	require.NoError(t, err)
+	assertSourceMissingState(t, missing)
+
+	require.NoError(t, os.Rename(parked, target))
+	require.NoError(t, ApplyWatchBatch(t.Context(), engine, retry, recovery))
+	restored, err := database.GetSessionFull(t.Context(), "linked")
+	require.NoError(t, err)
+	require.NotNil(t, restored)
+	assert.Equal(t, new(filepath.Join(link, "linked.jsonl")), restored.FilePath)
+	assert.Equal(t, []string{"retained transcript"}, partialDiscoverySessionContents(t, database, "linked"))
+}
+
+func TestWatchDiscoveryFailureRetryDoesNotTraverseHealthySiblings(t *testing.T) {
+	for _, healthySources := range []int{1, 64} {
+		for _, previouslyImported := range []bool{false, true} {
+			t.Run(fmt.Sprintf("healthy=%d/imported=%t", healthySources, previouslyImported), func(t *testing.T) {
+				root := t.TempDir()
+				target := filepath.Join(t.TempDir(), "target")
+				require.NoError(t, os.Mkdir(target, 0o755))
+				link := filepath.Join(root, "linked")
+				if err := os.Symlink(target, link); err != nil {
+					t.Skipf("symlink not supported: %v", err)
+				}
+				if previouslyImported {
+					require.NoError(t, os.WriteFile(filepath.Join(target, "linked.jsonl"), []byte(
+						`{"id":"linked","text":"preserved"}`,
+					), 0o600))
+				}
+				healthy := filepath.Join(root, "healthy")
+				require.NoError(t, os.Mkdir(healthy, 0o755))
+				for i := range healthySources {
+					path := filepath.Join(healthy, fmt.Sprintf("healthy-%02d.jsonl", i))
+					body := fmt.Sprintf(`{"id":"healthy-%02d","text":"healthy"}`, i)
+					require.NoError(t, os.WriteFile(path, []byte(body), 0o600))
+				}
+				engine, database := newFilesystemDiscoveryEngine(t, root)
+				require.NoError(t, ApplyWatchBatch(t.Context(), engine, WatchBatch{ReconcileRoots: []string{root}}, nil))
+				require.NoError(t, os.Rename(target, target+"-unavailable"))
+				recovery := &WatchRecoveryScope{AvailableRoots: []string{root}}
+				err := ApplyWatchBatch(t.Context(), engine, WatchBatch{FullSync: true, LostEvents: true}, recovery)
+				retry := partialDiscoveryRetry(t, err)
+
+				siblingTarget := filepath.Join(t.TempDir(), "target")
+				require.NoError(t, os.Mkdir(siblingTarget, 0o755))
+				siblingLink := filepath.Join(healthy, "unavailable")
+				require.NoError(t, os.Symlink(siblingTarget, siblingLink))
+				require.NoError(t, os.Rename(siblingTarget, siblingTarget+"-unavailable"))
+				require.NoError(t, os.WriteFile(filepath.Join(healthy, "new.jsonl"), []byte(
+					`{"id":"new","text":"fresh sibling"}`,
+				), 0o600))
+				for range 3 {
+					err = ApplyWatchBatch(t.Context(), engine, retry, recovery)
+					retry = partialDiscoveryRetry(t, err)
+					assert.EqualExportedValues(t, WatchBatch{ReconcileRoots: []string{link}, LostEvents: true}, retry)
+					unrequested, getErr := database.GetSession(t.Context(), "new")
+					require.NoError(t, getErr)
+					assert.Nil(t, unrequested, "a retry must not import newly created sessions outside its scope")
+				}
+				require.NoError(t, os.Rename(target+"-unavailable", target))
+				require.NoError(t, ApplyWatchBatch(t.Context(), engine, retry, recovery),
+					"the original retry must complete despite an unrelated inaccessible sibling")
+				unrequested, err := database.GetSession(t.Context(), "new")
+				require.NoError(t, err)
+				assert.Nil(t, unrequested)
+
+				err = ApplyWatchBatch(t.Context(), engine, WatchBatch{ReconcileRoots: []string{healthy}}, nil)
+				siblingRetry := partialDiscoveryRetry(t, err)
+				assert.Equal(t, WatchBatch{ReconcileRoots: []string{siblingLink}}, siblingRetry)
+				assert.Equal(t, []string{"fresh sibling"}, partialDiscoverySessionContents(t, database, "new"))
+				require.NoError(t, os.Rename(siblingTarget+"-unavailable", siblingTarget))
+				require.NoError(t, ApplyWatchBatch(t.Context(), engine, siblingRetry, nil))
+			})
+		}
+	}
+}
+
+func TestWatchDiscoveryRetryPreservesCompletedFreshness(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		preserve bool
+	}{
+		{"watcher retry", true},
+		{"accumulated retry", true},
+		{"fresh loss", false},
+		{"transport", false},
+		{"replacement engine", false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			root := t.TempDir()
+			if err := os.Symlink(filepath.Join(t.TempDir(), "missing"), filepath.Join(root, "broken")); err != nil {
+				t.Skipf("symlink not supported: %v", err)
+			}
+			engine, _ := newFilesystemDiscoveryEngine(t, root)
+			recovery := &WatchRecoveryScope{AvailableRoots: []string{root}}
+			err := ApplyWatchBatch(t.Context(), engine, WatchBatch{FullSync: true, LostEvents: true}, recovery)
+			retry := partialDiscoveryRetry(t, err)
+			if tc.name == "replacement engine" {
+				engine, _ = newFilesystemDiscoveryEngine(t, root)
+			}
+			key := filepath.Join(t.TempDir(), "previously-verified.jsonl")
+			engine.InjectSkipCache(map[string]int64{key: 1})
+			before := engine.SnapshotSkipCache()
+			switch tc.name {
+			case "watcher retry":
+				sink := newWatchEventSink(defaultWatchBatchMaxEntries, defaultWatchBatchMaxPathBytes)
+				sink.RetainRetry(retry)
+				var ok bool
+				retry, ok = sink.Take(nil)
+				require.True(t, ok)
+			case "accumulated retry", "fresh loss":
+				accumulator := NewWatchBatchAccumulator(nil)
+				accumulator.Add(retry)
+				if tc.name == "fresh loss" {
+					accumulator.Add(WatchBatch{FullSync: true, LostEvents: true})
+				}
+				var ok bool
+				retry, ok = accumulator.Take()
+				require.True(t, ok)
+			case "transport":
+				encoded, err := json.Marshal(retry)
+				require.NoError(t, err)
+				retry = WatchBatch{}
+				require.NoError(t, json.Unmarshal(encoded, &retry))
+			}
+			err = ApplyWatchBatch(t.Context(), engine, retry, recovery)
+			partialDiscoveryRetry(t, err)
+			want := map[string]int64{}
+			if tc.preserve {
+				want = before
+			}
+			assert.Equal(t, want, engine.SnapshotSkipCache())
+		})
+	}
 }
 
 func TestReconcileWatchRootsJoinsProviderAndLaterProcessingFailures(t *testing.T) {

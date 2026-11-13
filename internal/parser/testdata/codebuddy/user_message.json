@@ -1,0 +1,1 @@
+{"role":"user","createdAt":"2026-08-03T09:00:00.000Z","message":{"content":[{"type":"text","text":"<user_info>Workspace Folder: /home/user/code/app</user_info>\n<user_query>Add a health check endpoint</user_query>"}]},"extra":{"modelId":"hunyuan-code"}}

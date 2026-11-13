@@ -4437,7 +4437,13 @@ func (e *Engine) reconcileWatchRootsStreamedLocked(
 	}
 	ctx = e.parsePolicyContext(ctx)
 	if force {
-		e.clearWatcherOverflowCaches(ctx)
+		preparation, _ := ctx.Value(recoveryCachePreparationKey{}).(*recoveryCachePreparation)
+		if preparation == nil || !preparation.prepared {
+			e.clearWatcherOverflowCaches(ctx)
+		}
+		if preparation != nil {
+			preparation.prepared = true
+		}
 	}
 	e.phaseStats.Reset()
 	e.anomalies.reset()
@@ -4516,13 +4522,9 @@ func (e *Engine) reconcileWatchRootsStreamedLocked(
 	authoritativeProviders := make(map[parser.AgentType]struct{}, len(completedScopes))
 	for _, completed := range completedScopes {
 		authoritativeProviders[completed.agent] = struct{}{}
-		// Freebuff shares the Codebuff provider. When Codebuff
-		// completes, also mark Freebuff as authoritative so
-		// baseline admission (eligibleReconciliationBaselines) and
-		// cache-write promotion (the write.agent lookup below)
-		// see Freebuff rows even though no Freebuff provider exists
-		// in parser.Registry: a single Codebuff scan covers both
-		// codebuff and freebuff files at the same on-disk roots.
+		// Freebuff shares Codebuff's provider and on-disk roots. Mark both
+		// agents authoritative after one scan so baseline admission and
+		// cache-write promotion include Freebuff rows.
 		if completed.agent == parser.AgentCodebuff {
 			authoritativeProviders[parser.AgentFreebuff] = struct{}{}
 		}
@@ -4591,9 +4593,13 @@ func (e *Engine) reconcileWatchRootsStreamedLocked(
 			)
 			break
 		}
-		if err := spool.AddNonAuthoritativeScopes(
-			ctx, baselineTracker.listNonAuthoritativeScopes(),
-		); err != nil {
+		authority := newReconciliationAuthority(authoritativeProviders, providers, completedScopes, spool)
+		nonAuthoritativeScopes := baselineTracker.listNonAuthoritativeScopes()
+		for i := range nonAuthoritativeScopes {
+			scope := &nonAuthoritativeScopes[i]
+			scope.Path = authority.physicalPath(scope.Provider, scope.Path)
+		}
+		if err := spool.AddNonAuthoritativeScopes(ctx, nonAuthoritativeScopes); err != nil {
 			cleanupErr := e.revokeRejectedReconciliationBaselines(
 				ctx, baselineTracker.listRejected(),
 				baselineTracker.listRejectedExactOwnerships(),
@@ -4608,10 +4614,8 @@ func (e *Engine) reconcileWatchRootsStreamedLocked(
 			)
 			break
 		}
-		baselineCandidates, baselineAdmitted, err := eligibleReconciliationBaselines(
-			ctx,
-			page, baselineTracker.list(), authoritativeProviders,
-			spool,
+		baselineCandidates, baselineAdmitted, err := authority.eligibleBaselines(
+			ctx, page, baselineTracker.list(),
 		)
 		cacheWrites := baselineTracker.listCacheWrites()
 		if err != nil {
@@ -4630,28 +4634,18 @@ func (e *Engine) reconcileWatchRootsStreamedLocked(
 			)
 			break
 		}
-		exactOwnerships := baselineTracker.listExactOwnerships()
-		exactOwnerships = slices.DeleteFunc(
-			exactOwnerships,
-			func(ownership db.SessionSourceOwnership) bool {
-				agent := parser.AgentType(ownership.Agent)
-				_, eligible := authoritativeProviders[agent]
-				return !eligible
-			},
-		)
-		rejectedExactOwnerships := baselineTracker.listRejectedExactOwnerships()
-		rejectedExactOwnerships = slices.DeleteFunc(
-			rejectedExactOwnerships,
-			func(ownership db.SessionSourceOwnership) bool {
-				agent := parser.AgentType(ownership.Agent)
-				_, eligible := authoritativeProviders[agent]
-				return !eligible
-			},
-		)
-		if err := e.baselineReconciliationCandidates(
-			ctx, baselineCandidates, baselineAdmitted,
-			exactOwnerships, rejectedExactOwnerships,
-		); err != nil {
+		exactOwnerships, err := authority.ownerships(ctx, baselineTracker.listExactOwnerships())
+		var rejectedExactOwnerships []db.SessionSourceOwnership
+		if err == nil {
+			rejectedExactOwnerships, err = authority.ownerships(ctx, baselineTracker.listRejectedExactOwnerships())
+		}
+		if err == nil {
+			err = e.baselineReconciliationCandidates(
+				ctx, baselineCandidates, baselineAdmitted,
+				exactOwnerships, rejectedExactOwnerships,
+			)
+		}
+		if err != nil {
 			e.rejectSkipCacheWrites(pageCtx, cacheWrites)
 			cleanupErr := e.revokeRejectedReconciliationBaselines(
 				ctx, baselineTracker.listRejected(), rejectedExactOwnerships,
@@ -4865,48 +4859,28 @@ func (e *Engine) baselineReconciliationCandidates(
 	return nil
 }
 
-func eligibleReconciliationBaselines(
+func (authority *reconciliationAuthority) eligibleBaselines(
 	ctx context.Context,
 	candidates []reconciliationCandidate,
 	admitted []machineSessionSource,
-	eligibleProviders map[parser.AgentType]struct{},
-	spool reconciliationSpoolStore,
 ) ([]reconciliationCandidate, []machineSessionSource, error) {
-	eligibleCandidates := make([]reconciliationCandidate, 0, len(candidates))
-	providersWithScopes := make(map[parser.AgentType]bool)
-	queriedProviders := make(map[parser.AgentType]struct{})
+	var eligibleCandidates []reconciliationCandidate
 	for _, candidate := range candidates {
-		if _, eligible := eligibleProviders[candidate.Provider]; !eligible {
-			continue
+		eligible, err := authority.allows(ctx, candidate.Provider, candidate.Path)
+		if err != nil {
+			return nil, nil, err
 		}
-		if spool != nil {
-			if _, queried := queriedProviders[candidate.Provider]; !queried {
-				hasScopes, err := spool.HasNonAuthoritativeScopes(ctx, candidate.Provider)
-				if err != nil {
-					return nil, nil, err
-				}
-				providersWithScopes[candidate.Provider] = hasScopes
-				queriedProviders[candidate.Provider] = struct{}{}
-			}
-			if providersWithScopes[candidate.Provider] {
-				physicalPath := validatedProviderSourceStatPath(candidate.Path)
-				canonicalPath := canonicalReconciliationSourceIdentity(physicalPath)
-				withheld, err := spool.ContainsNonAuthoritativeScope(
-					ctx, candidate.Provider, canonicalPath,
-				)
-				if err != nil {
-					return nil, nil, err
-				}
-				if withheld {
-					continue
-				}
-			}
+		if eligible {
+			eligibleCandidates = append(eligibleCandidates, candidate)
 		}
-		eligibleCandidates = append(eligibleCandidates, candidate)
 	}
-	eligibleAdmitted := make([]machineSessionSource, 0, len(admitted))
+	var eligibleAdmitted []machineSessionSource
 	for _, source := range admitted {
-		if _, eligible := eligibleProviders[parser.AgentType(source.Source.Agent)]; eligible {
+		eligible, err := authority.allows(ctx, parser.AgentType(source.Source.Agent), source.Source.FilePath)
+		if err != nil {
+			return nil, nil, err
+		}
+		if eligible {
 			eligibleAdmitted = append(eligibleAdmitted, source)
 		}
 	}
@@ -5078,6 +5052,7 @@ func (e *Engine) streamReconciliationCandidates(
 	var failedRoots []string
 	var failures int
 	var discoveryErr error
+	var incompleteScopes []reconciliationSourceScope
 	// Trusted containers stream the bounded watermark listing here for the
 	// same reason full discovery lists them that way: every candidate they
 	// spool will gate-skip, so the child digest would be archive-sized work
@@ -5180,13 +5155,22 @@ func (e *Engine) streamReconciliationCandidates(
 				kiroWinners = make(map[string]reconciliationCandidate)
 			}
 			var spoolErr error
+			var scopedDiscovery, emitted bool
 			discover := discoverer.DiscoverEach
 			if scoped, ok := scopeProvider.(parser.ScopedStreamingDiscoverer); ok {
 				discover = func(ctx context.Context, yield func(parser.SourceRef) error) error {
-					return scoped.DiscoverScopesEach(ctx, group.scopes, yield)
+					scopedDiscovery = true
+					err := scoped.DiscoverScopesEach(ctx, group.scopes, yield)
+					unsupported, missing := errors.AsType[parser.UnsupportedProviderFeatureError](err)
+					if !emitted && missing && unsupported.Feature == parser.ProviderFeatureScopedDiscovery {
+						scopedDiscovery = false
+						return discoverer.DiscoverEach(ctx, yield)
+					}
+					return err
 				}
 			}
 			err = discover(ctx, func(source parser.SourceRef) error {
+				emitted = true
 				candidate, ok := e.reconciliationCandidate(ctx,
 					provider, source, rankingRoots, watchRoots,
 				)
@@ -5278,14 +5262,30 @@ func (e *Engine) streamReconciliationCandidates(
 						failedRoots, failures, discoveryErr, ctx.Err()
 				}
 				log.Printf("%s provider streaming discovery: %v", agent, err)
-				failures++
-				failedRoots = append(failedRoots, groupRetryRoots...)
-				discoveryErr = errors.Join(discoveryErr, fmt.Errorf(
-					"%s provider streaming discovery: %w", agent, err,
-				))
-				continue
+				var excluded []reconciliationSourceScope
+				var retryRoots []string
+				var localised bool
+				if scopedDiscovery {
+					excluded, retryRoots, localised = localisedReconciliationFailures(agent, group, err)
+				}
+				if !localised || len(retryRoots) > 0 {
+					failures++
+					discoveryErr = errors.Join(discoveryErr, fmt.Errorf(
+						"%s provider streaming discovery: %w", agent, err,
+					))
+				}
+				if !localised {
+					failedRoots = append(failedRoots, groupRetryRoots...)
+					continue
+				}
+				failedRoots = append(failedRoots, retryRoots...)
+				incompleteScopes = append(incompleteScopes, excluded...)
 			}
 			for _, scope := range group.scopes {
+				coverage := scope.CoverageIdentities
+				if err != nil {
+					coverage = nil
+				}
 				completedScopes = append(completedScopes, reconciliationProviderScope{
 					agent: agent,
 					roots: append([]string(nil), scope.RetryRoots...),
@@ -5293,13 +5293,18 @@ func (e *Engine) streamReconciliationCandidates(
 						[]parser.StoredSourceHintScope(nil), scope.PhysicalProofScopes...,
 					),
 					coverageIdentities: append(
-						[]string(nil), scope.CoverageIdentities...,
+						[]string(nil), coverage...,
 					),
 					requiredCoverageIdentities: append(
 						[]string(nil), plan.plan.RequiredCoverageIdentities...,
 					),
 				})
 			}
+		}
+	}
+	if len(incompleteScopes) > 0 {
+		if err := spool.AddNonAuthoritativeScopes(ctx, incompleteScopes); err != nil {
+			return providers, completedScopes, failedRoots, failures, discoveryErr, err
 		}
 	}
 	slices.Sort(failedRoots)
@@ -5919,6 +5924,36 @@ func (e *Engine) reconciliationMemberRelocated(
 	return found, nil
 }
 
+func isProviderVirtualMemberPath(
+	provider parser.Provider, path string, proofs []parser.StoredSourceHintScope,
+) bool {
+	container, _, virtual := parser.ParseVirtualSourcePath(path)
+	if !virtual {
+		return false
+	}
+	if reconciliationProofCoversContainerMembership(proofs, container) {
+		return true
+	}
+	resolver, ok := provider.(parser.StoredSourceHintScopeProvider)
+	if !ok {
+		return false
+	}
+	return reconciliationProofCoversContainerMembership(
+		resolver.StoredSourceHintScopes(parser.ChangedPathRequest{Path: container}),
+		container,
+	)
+}
+
+func reconciliationPhysicalSourcePath(
+	provider parser.Provider, path string, proofs []parser.StoredSourceHintScope,
+) string {
+	if isProviderVirtualMemberPath(provider, path, proofs) {
+		container, _, _ := parser.ParseVirtualSourcePath(path)
+		return container
+	}
+	return path
+}
+
 // reconciliationProofCoversContainerMembership reports whether one completed
 // scope's proof claims the whole virtual membership of the container at
 // physicalPath. Such a scope streamed and admitted exactly that container's
@@ -5937,17 +5972,15 @@ func reconciliationProofCoversContainerMembership(
 }
 
 func reconciliationOwnershipWithinNonAuthoritativeContainer(
-	ctx context.Context,
-	spool reconciliationSpoolStore,
-	agent parser.AgentType,
+	ctx context.Context, spool reconciliationSpoolStore,
+	provider parser.Provider, scope reconciliationProviderScope,
 	ownership db.SessionSourceOwnership,
 ) (bool, error) {
 	if spool == nil {
 		return false, nil
 	}
-	physicalPath := validatedProviderSourceStatPath(ownership.FilePath)
-	canonicalPath := canonicalReconciliationSourceIdentity(physicalPath)
-	return spool.ContainsNonAuthoritativeScope(ctx, agent, canonicalPath)
+	path := reconciliationPhysicalSourcePath(provider, ownership.FilePath, scope.proofScopes)
+	return spool.ContainsNonAuthoritativeScope(ctx, scope.agent, path)
 }
 
 // aggregateOwnedMemberGone reports whether an ownership row whose stored

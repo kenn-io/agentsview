@@ -263,6 +263,75 @@ func TestJunieFingerprintKeepsExistingSummaryEncoding(t *testing.T) {
 	assert.Equal(t, "a2af8ce583c1bbf7889a325be37031e072dc2186b045f2f9eb913b2f1a4c8d6c", fingerprint.Hash)
 }
 
+func TestJunieScopedDiscoveryPreparesOnlyRequestedRoots(t *testing.T) {
+	for _, warm := range []bool{false, true} {
+		t.Run(fmt.Sprintf("warm=%t", warm), func(t *testing.T) {
+			root := t.TempDir()
+			unrelated := t.TempDir()
+			for _, sessionRoot := range []string{root, unrelated} {
+				path := filepath.Join(sessionRoot, "session-one", "events.jsonl")
+				require.NoError(t, os.Mkdir(filepath.Dir(path), 0o755))
+				require.NoError(t, os.WriteFile(path, []byte(
+					`{"kind":"UserPromptEvent","requestId":"request","prompt":"Hello","timestampMs":1704067200500}`+"\n",
+				), 0o600))
+			}
+			index := filepath.Join(root, "index.jsonl")
+			require.NoError(t, os.WriteFile(index, []byte(
+				`{"sessionId":"session-one","projectDir":"/work/old","taskName":"Before"}`+"\n",
+			), 0o600))
+			require.NoError(t, os.Mkdir(filepath.Join(unrelated, "index.jsonl"), 0o755))
+			def, ok := AgentByType(AgentJunie)
+			require.True(t, ok)
+			provider := newJunieProviderFactory(def).NewProvider(ProviderConfig{Roots: []string{root, unrelated}, Machine: "local"})
+			discoverer, ok := provider.(ScopedStreamingDiscoverer)
+			require.True(t, ok)
+			discover := func(root string) ([]SourceRef, error) {
+				scopes, err := provider.ResolveReconciliationScopes(t.Context(), ReconciliationScopeRequest{Roots: []string{root}})
+				require.NoError(t, err)
+				var sources []SourceRef
+				err = discoverer.DiscoverScopesEach(t.Context(), scopes.Scopes, func(source SourceRef) error {
+					sources = append(sources, source)
+					return nil
+				})
+				return sources, err
+			}
+			var before SourceFingerprint
+			if warm {
+				sources, err := discover(root)
+				require.NoError(t, err, "an unrelated root's unusable index must not affect scoped preparation")
+				require.Len(t, sources, 1)
+				before, err = provider.Fingerprint(t.Context(), sources[0])
+				require.NoError(t, err)
+			}
+			require.NoError(t, os.WriteFile(index, []byte(
+				`{"sessionId":"session-one","projectDir":"/work/new","taskName":"After!"}`+"\n",
+			), 0o600))
+			sources, err := discover(filepath.Join(root, "session-one"))
+			require.NoError(t, err)
+			require.Len(t, sources, 1)
+			after, err := provider.Fingerprint(t.Context(), sources[0])
+			require.NoError(t, err)
+			outcome, err := provider.Parse(t.Context(), ParseRequest{Source: sources[0], Fingerprint: after})
+			require.NoError(t, err)
+			require.Len(t, outcome.Results, 1)
+			type metadata struct{ Title, Cwd string }
+			session := outcome.Results[0].Result.Session
+			assert.Equal(t, metadata{"After!", "/work/new"}, metadata{session.SessionName, session.Cwd})
+			if warm {
+				assert.NotEqual(t, before.Hash, after.Hash)
+			}
+			changed, err := provider.SourcesForChangedPath(t.Context(), ChangedPathRequest{Path: index, WatchRoot: root})
+			require.NoError(t, err)
+			assert.Equal(t, []string{filepath.Join(root, "session-one", "events.jsonl")}, sourceKeys(changed),
+				"preparing one session must not consume the root index event")
+
+			sources, err = discover(unrelated)
+			require.ErrorContains(t, err, "not a regular file")
+			assert.Empty(t, sources, "failed preparation must not emit sources from that root")
+		})
+	}
+}
+
 func TestJunieSourceSetReusesIndexSnapshotWhileParsing(t *testing.T) {
 	root := t.TempDir()
 	sessionDir := filepath.Join(root, "session-one")
@@ -627,6 +696,85 @@ func TestJunieFindSourceRefreshesIndexSummary(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, outcome.Results, 1)
 	assert.Equal(t, "After", outcome.Results[0].Result.Session.SessionName)
+}
+
+func TestJunieFindSourcePreservesPendingIndexChanges(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		request FindSourceRequest
+		found   bool
+	}{
+		{name: "stored path", request: FindSourceRequest{StoredFilePath: "session-a/events.jsonl"}, found: true},
+		{name: "fingerprint key", request: FindSourceRequest{FingerprintKey: "session-a/events.jsonl"}, found: true},
+		{name: "session ID", request: FindSourceRequest{RawSessionID: "session-a"}, found: true},
+		{name: "missing session ID", request: FindSourceRequest{RawSessionID: "missing-session"}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			root := t.TempDir()
+			for _, id := range []string{"session-a", "session-b"} {
+				path := filepath.Join(root, id, "events.jsonl")
+				require.NoError(t, os.Mkdir(filepath.Dir(path), 0o755))
+				require.NoError(t, os.WriteFile(path, []byte(
+					`{"kind":"UserPromptEvent","requestId":"request","prompt":"Hello"}`+"\n",
+				), 0o600))
+			}
+			index := filepath.Join(root, "index.jsonl")
+			require.NoError(t, os.WriteFile(index, []byte(
+				`{"sessionId":"session-a","projectDir":"/work/old-a","taskName":"Before A"}`+"\n"+
+					`{"sessionId":"session-b","projectDir":"/work/old-b","taskName":"Before B"}`+"\n",
+			), 0o600))
+			provider, ok := NewProvider(AgentJunie, ProviderConfig{Roots: []string{root}})
+			require.True(t, ok)
+			_, err := provider.Discover(t.Context())
+			require.NoError(t, err)
+			require.NoError(t, os.WriteFile(index, []byte(
+				`{"sessionId":"session-a","projectDir":"/work/new-a","taskName":"After A"}`+"\n"+
+					`{"sessionId":"session-b","projectDir":"/work/new-b","taskName":"After B"}`+"\n",
+			), 0o600))
+
+			request := tc.request
+			if request.StoredFilePath != "" {
+				request.StoredFilePath = filepath.Join(root, request.StoredFilePath)
+			}
+			if request.FingerprintKey != "" {
+				request.FingerprintKey = filepath.Join(root, request.FingerprintKey)
+			}
+			source, found, err := provider.FindSource(t.Context(), request)
+			require.NoError(t, err)
+			require.Equal(t, tc.found, found)
+			type metadata struct{ ID, Title, Project, Cwd string }
+			parseMetadata := func(source SourceRef) metadata {
+				fingerprint, err := provider.Fingerprint(t.Context(), source)
+				require.NoError(t, err)
+				outcome, err := provider.Parse(t.Context(), ParseRequest{Source: source, Fingerprint: fingerprint})
+				require.NoError(t, err)
+				require.Len(t, outcome.Results, 1)
+				session := outcome.Results[0].Result.Session
+				return metadata{session.ID, session.SessionName, session.Project, session.Cwd}
+			}
+			if found {
+				assert.Equal(t, metadata{"junie:session-a", "After A", "new_a", "/work/new-a"}, parseMetadata(source))
+			}
+
+			changed, err := provider.SourcesForChangedPath(t.Context(), ChangedPathRequest{Path: index})
+			require.NoError(t, err)
+			assert.Equal(t, []string{
+				filepath.Join(root, "session-a", "events.jsonl"),
+				filepath.Join(root, "session-b", "events.jsonl"),
+			}, sourceKeys(changed))
+			var summaries []metadata
+			for _, source := range changed {
+				summaries = append(summaries, parseMetadata(source))
+			}
+			assert.Equal(t, []metadata{
+				{"junie:session-a", "After A", "new_a", "/work/new-a"},
+				{"junie:session-b", "After B", "new_b", "/work/new-b"},
+			}, summaries)
+			changed, err = provider.SourcesForChangedPath(t.Context(), ChangedPathRequest{Path: index})
+			require.NoError(t, err)
+			assert.Empty(t, changed)
+		})
+	}
 }
 
 func TestJunieIncompleteIndexDoesNotReplaceCachedSnapshot(t *testing.T) {

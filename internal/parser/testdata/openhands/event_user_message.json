@@ -1,0 +1,7 @@
+{
+  "id": "4c1b2f0e-7d1a-4f6b-9a33-2b8f6e1d0a01",
+  "timestamp": "2026-04-02T15:25:40.706887",
+  "source": "user",
+  "llm_message": {"role": "user", "content": [{"type": "text", "text": "Find why the health check endpoint returns 500"}]},
+  "kind": "MessageEvent"
+}

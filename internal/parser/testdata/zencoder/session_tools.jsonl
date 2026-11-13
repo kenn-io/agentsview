@@ -1,0 +1,4 @@
+{"id":"tc-123","createdAt":"2024-01-01T00:00:00Z","updatedAt":"2024-01-01T00:01:00Z"}
+{"role":"user","content":[{"type":"text","text":"Read the pagination helper."}]}
+{"role":"assistant","content":[{"type":"reasoning","text":"Open the helper first.","provider":"anthropic","subtype":"thinking"},{"type":"text","text":"Reading it now."},{"type":"tool-call","toolCallId":"tc1","toolName":"Read","input":{"file_path":"src/paginate.py"}}]}
+{"role":"tool","content":[{"type":"tool-result","toolCallId":"tc1","toolName":"Read","content":[{"type":"text","text":"def paginate(items, size):\n    pass\n"}],"isError":false}]}

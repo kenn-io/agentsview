@@ -395,6 +395,118 @@ func TestPiProviderDiscoversSymlinkedCWDDirectory(t *testing.T) {
 	assert.Equal(t, sourcePath, found.DisplayPath)
 }
 
+func TestPiProviderSkipsSubagentArtifacts(t *testing.T) {
+	for _, agent := range []AgentType{AgentPi, AgentOMO, AgentStepCode} {
+		t.Run(string(agent), func(t *testing.T) {
+			root := t.TempDir()
+			project := filepath.Join(root, "encoded-cwd")
+			childDir := filepath.Join(project, "parent", "run-abc", "run-0")
+			wantPaths := []string{
+				filepath.Join(root, "root-session.jsonl"),
+				filepath.Join(project, "parent.jsonl"),
+				filepath.Join(childDir, "session.jsonl"),
+				filepath.Join(project, "subagent-artifacts-copy", "session.jsonl"),
+			}
+			for _, path := range wantPaths {
+				writeSourceFile(t, path, piProviderFixture(filepath.Base(path)))
+			}
+
+			artifactDirs := []string{
+				filepath.Join(root, "subagent-artifacts"),
+				filepath.Join(project, "subagent-artifacts"),
+				filepath.Join(childDir, "subagent-artifacts"),
+			}
+			for _, dir := range artifactDirs {
+				writeSourceFile(t, filepath.Join(dir, "copied.jsonl"), piProviderFixture("artifact-copy"))
+			}
+			cacheLink := filepath.Join(artifactDirs[1], "outputs", "pnpm-store", "v11", "projects", "cache-link")
+			require.NoError(t, os.MkdirAll(filepath.Dir(cacheLink), 0o755))
+			if err := os.Symlink(filepath.Join(t.TempDir(), "removed-package"), cacheLink); err != nil {
+				t.Skipf("symlink not supported: %v", err)
+			}
+
+			provider, ok := NewProvider(agent, ProviderConfig{Roots: []string{root}})
+			require.True(t, ok)
+			discovered, err := provider.Discover(t.Context())
+			require.NoError(t, err)
+			var paths []string
+			for _, source := range discovered {
+				paths = append(paths, source.DisplayPath)
+			}
+			assert.ElementsMatch(t, wantPaths, paths)
+
+			streamer, ok := provider.(StreamingDiscoverer)
+			require.True(t, ok)
+			var streamed []string
+			err = streamer.DiscoverEach(t.Context(), func(source SourceRef) error {
+				streamed = append(streamed, source.DisplayPath)
+				return nil
+			})
+			require.NoError(t, err)
+			assert.ElementsMatch(t, wantPaths, streamed)
+
+			for _, dir := range artifactDirs {
+				artifactPath := filepath.Join(dir, "copied.jsonl")
+				for _, req := range []FindSourceRequest{
+					{StoredFilePath: artifactPath},
+					{FingerprintKey: artifactPath},
+					{RawSessionID: "artifact-copy"},
+				} {
+					_, found, err := provider.FindSource(t.Context(), req)
+					require.NoError(t, err)
+					assert.False(t, found)
+				}
+				for _, event := range []string{"write", "remove"} {
+					if event == "remove" {
+						require.NoError(t, os.Remove(artifactPath))
+					}
+					req := ChangedPathRequest{Path: artifactPath, EventKind: event, WatchRoot: root}
+					relevance, err := ResolveChangedPathRelevance(t.Context(), provider, req)
+					require.NoError(t, err)
+					assert.Equal(t, ChangedPathNonData, relevance)
+					changed, err := provider.SourcesForChangedPath(t.Context(), req)
+					require.NoError(t, err)
+					assert.Empty(t, changed)
+				}
+			}
+		})
+	}
+}
+
+func TestPiProviderKeepsExplicitArtifactNamedSessionRoot(t *testing.T) {
+	root := filepath.Join(t.TempDir(), "subagent-artifacts")
+	path := filepath.Join(root, "session.jsonl")
+	writeSourceFile(t, path, piProviderFixture("explicit-session"))
+	provider, ok := NewProvider(AgentPi, ProviderConfig{Roots: []string{root}})
+	require.True(t, ok)
+
+	discovered, err := provider.Discover(t.Context())
+	require.NoError(t, err)
+	var paths []string
+	for _, source := range discovered {
+		paths = append(paths, source.DisplayPath)
+	}
+	assert.Equal(t, []string{path}, paths)
+}
+
+func TestPiProviderKeepsIncompleteSessionDiscovery(t *testing.T) {
+	root := t.TempDir()
+	writeSourceFile(t, filepath.Join(root, "session.jsonl"), piProviderFixture("session"))
+	if err := os.Symlink(filepath.Join(t.TempDir(), "missing-sessions"), filepath.Join(root, "linked-sessions")); err != nil {
+		t.Skipf("symlink not supported: %v", err)
+	}
+	provider, ok := NewProvider(AgentPi, ProviderConfig{Roots: []string{root}})
+	require.True(t, ok)
+
+	_, err := provider.Discover(t.Context())
+	var incomplete DiscoveryIncompleteError
+	require.ErrorAs(t, err, &incomplete)
+	streamer, ok := provider.(StreamingDiscoverer)
+	require.True(t, ok)
+	err = streamer.DiscoverEach(t.Context(), func(SourceRef) error { return nil })
+	require.ErrorAs(t, err, &incomplete)
+}
+
 func TestPiProviderParse(t *testing.T) {
 	root := t.TempDir()
 	sourcePath := filepath.Join(root, "encoded-cwd", "session-123.jsonl")

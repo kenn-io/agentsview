@@ -1,0 +1,25 @@
+{
+  "version": 3,
+  "requesterUsername": "user",
+  "responderUsername": "Positron Assistant",
+  "sessionId": "0e4ba1a2-6f43-4c47-9c35-4d1f2c3b8a10",
+  "creationDate": 1700000000000,
+  "lastMessageDate": 1700001000000,
+  "requests": [
+    {
+      "requestId": "req-1",
+      "message": {"text": "Help me reshape this data frame to long format", "parts": []},
+      "response": [{"value": "Use tidyr::pivot_longer() on the value columns."}],
+      "timestamp": 1700000000000
+    },
+    {
+      "requestId": "req-2",
+      "message": {"text": "How do I load a CSV?", "parts": []},
+      "response": [
+        {"kind": "toolInvocationSerialized", "toolId": "copilot_readFile", "toolCallId": "call-1", "isComplete": true},
+        {"value": "Use read.csv() function."}
+      ],
+      "timestamp": 1700001000000
+    }
+  ]
+}

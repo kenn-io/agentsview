@@ -144,13 +144,12 @@ func (tracker *reconciliationBaselineTracker) listRejected() []machineSessionSou
 func (tracker *reconciliationBaselineTracker) addNonAuthoritativeScope(
 	agent parser.AgentType, path string,
 ) {
-	path = validatedProviderSourceStatPath(path)
 	if agent == "" || path == "" {
 		return
 	}
 	tracker.nonAuthoritativeScopes[reconciliationSourceScope{
 		Provider: agent,
-		Path:     canonicalReconciliationSourceIdentity(path),
+		Path:     path,
 	}] = struct{}{}
 }
 
