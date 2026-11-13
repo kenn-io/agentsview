@@ -349,8 +349,10 @@ func (c chUsagePriceContext) lookup() export.PricingLookup {
 	}
 }
 
-// record replays events priced under this context into the pricing block,
-// one call per event so the application counts match per-event pricing.
+// record replays events priced under this context into the pricing block.
+// The application counts match pricing every event on its own; a group's
+// events are recorded in one call because a one-year read replays hundreds
+// of thousands of them.
 func (c chUsagePriceContext) record(
 	pricing *export.PricingResolver, kind string, bandAbove int64, events int,
 ) error {
@@ -361,10 +363,8 @@ func (c chUsagePriceContext) record(
 	case chUsagePriceKindZero:
 		pricing.RecordResolvedComputed(c.ReportedModel, c.PricedModel, lookup)
 	case chUsagePriceKindAggregate:
-		for range events {
-			pricing.RecordResolvedComputedAggregate(
-				c.ReportedModel, c.PricedModel, lookup)
-		}
+		pricing.RecordResolvedCounts(
+			c.ReportedModel, c.PricedModel, lookup, 0, 0, events, nil)
 	case chUsagePriceKindRequest:
 		// One token above the threshold selects exactly that band; zero
 		// tokens select the base rates.
@@ -372,10 +372,12 @@ func (c chUsagePriceContext) record(
 		if bandAbove >= 0 {
 			bandTokens = int(bandAbove) + 1
 		}
-		for range events {
-			pricing.RecordResolvedComputedRequest(
-				c.ReportedModel, c.PricedModel, lookup, bandTokens, 0, 0)
+		var band *int
+		if threshold, ok := lookup.Rates.RequestBand(bandTokens, 0, 0); ok {
+			band = &threshold
 		}
+		pricing.RecordResolvedCounts(
+			c.ReportedModel, c.PricedModel, lookup, 0, events, 0, band)
 	default:
 		return fmt.Errorf("unknown clickhouse usage price kind %q", kind)
 	}

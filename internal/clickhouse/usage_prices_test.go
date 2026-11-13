@@ -2,6 +2,7 @@ package clickhouse
 
 import (
 	"encoding/json/v2"
+	"fmt"
 	"slices"
 	"testing"
 	"time"
@@ -170,8 +171,16 @@ func TestUsagePricingDigestFollowsResolutionToNewRow(t *testing.T) {
 }
 
 // A stored context must replay into the pricing block exactly what pricing
-// every event would have recorded.
+// every event would have recorded, whether a group holds one event or many.
 func TestUsagePriceContextReplaysPricingBlock(t *testing.T) {
+	for _, groupEvents := range []int{1, 3} {
+		t.Run(fmt.Sprintf("%d events per group", groupEvents), func(t *testing.T) {
+			testUsagePriceContextReplaysPricingBlock(t, groupEvents)
+		})
+	}
+}
+
+func testUsagePriceContextReplaysPricingBlock(t *testing.T, groupEvents int) {
 	rows := usagePriceTestRows("1", time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC))
 	type event struct {
 		input    chUsagePriceInput
@@ -192,14 +201,16 @@ func TestUsagePriceContextReplaysPricingBlock(t *testing.T) {
 	pricer := export.NewPricingResolver(rows)
 	for _, e := range events {
 		in := e.input
-		_, _, _, _, err := chUsageAggregateResolvedCost(
-			in.model, in.priceModel, in.providerID, time.Time{},
-			in.inputTok, in.outputTok, in.cacheCr, in.cacheCr1h, in.cacheRd,
-			chBillable(in, in.inputTok), chBillable(in, in.outputTok), 0,
-			chBillable(in, in.cacheCr), chBillable(in, in.cacheCr1h),
-			chBillable(in, in.cacheRd), 0, 0, in.reported,
-			in.hasOrdinal, direct)
-		require.NoError(t, err)
+		for range groupEvents {
+			_, _, _, _, err := chUsageAggregateResolvedCost(
+				in.model, in.priceModel, in.providerID, time.Time{},
+				in.inputTok, in.outputTok, in.cacheCr, in.cacheCr1h, in.cacheRd,
+				chBillable(in, in.inputTok), chBillable(in, in.outputTok), 0,
+				chBillable(in, in.cacheCr), chBillable(in, in.cacheCr1h),
+				chBillable(in, in.cacheRd), 0, 0, in.reported,
+				in.hasOrdinal, direct)
+			require.NoError(t, err)
+		}
 
 		contexts := map[string]string{}
 		rec, err := chPriceUsageInput(in, pricer, contexts)
@@ -211,7 +222,7 @@ func TestUsagePriceContextReplaysPricingBlock(t *testing.T) {
 		}
 		stored, err := decodeUsagePriceContext(contexts[contextID])
 		require.NoError(t, err)
-		require.NoError(t, stored.record(replayed, e.wantKind, rec.bandAbove, 1))
+		require.NoError(t, stored.record(replayed, e.wantKind, rec.bandAbove, groupEvents))
 	}
 
 	want, err := direct.BuildBlock()
