@@ -1388,6 +1388,16 @@ the SQL.
 - When readers hold the mirror, catch up and swap a reusable standby using its
   own cursors. Bootstrap it from the main file and WAL, retry while it is
   held, and discard it after a full rebuild.
+- Usage summary, Top sessions, and usage session counts read the usage rollup
+  that a push builds; see
+  [Usage rollup](../../internal/duckdb/README.md#usage-rollup). A read must
+  return what it returns without the rollup. A change to how usage rows are
+  deduplicated, dated, or priced must keep both copies of the rules in step.
+  When it changes what a build stores, bump `usageRollupFormat` and record the
+  new digest in `internal/duckdb/testdata/usage-rollup-format-digests`;
+  `TestUsageRollupFormat` fails until both are done. Test fixtures that edit a
+  pushed mirror by hand must drop the rollup, because those edits leave push
+  fingerprints unchanged.
 - Keep Quack read-only. `duckdb push` writes the local mirror; it never writes
   to a remote DuckDB service.
 - Replace a file only after identifying it as an agentsview DuckDB mirror. Fail

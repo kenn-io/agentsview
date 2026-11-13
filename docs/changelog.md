@@ -34,12 +34,15 @@ The latest release is
 
 **Improvements**
 
-- The ClickHouse Usage page opens faster. A one-year summary on a
-  production-size mirror took 0.83 seconds on the first request instead of
-  1.48, and 0.09 seconds on a repeat request instead of 0.23. Push now stores
-  priced daily usage sums next to the prepared usage rows, and Usage reads add
-  them to the few rows it still deduplicates. A push that refreshes prepared
-  usage takes a few seconds longer while it builds them.
+- The Usage page opens faster on ClickHouse and DuckDB mirrors. On a
+  production-size archive, the first one-year summary after a restart took
+  0.83 seconds instead of 1.48 on ClickHouse and 0.49 seconds instead of 3.2 on
+  DuckDB, and a repeat request on ClickHouse took 0.09 seconds instead of 0.23.
+  Push now stores priced usage sums per session and 15 minutes, and Usage reads
+  add them to the few rows they still deduplicate. A ClickHouse push that
+  refreshes prepared usage takes a few seconds longer, a full DuckDB rebuild
+  about 15 seconds longer, and the first DuckDB push after upgrading rebuilds
+  the mirror.
 
 - Usage reuses priced work after restarting native PostgreSQL serving and after
   pushes. When that cache would first need a large rebuild, such as on first
