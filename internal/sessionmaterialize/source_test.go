@@ -50,14 +50,20 @@ func TestMaterializeSourceErrorGuidance(t *testing.T) {
 }
 
 func TestMaterializeMissingMirrorRequiresOriginalTranscript(t *testing.T) {
-	const id = "12345678-1234-1234-1234-123456789abc"
-	data := t.TempDir()
-	require.NoError(t, os.MkdirAll(remotesync.MirrorDir(data, "remote"), 0o700))
-	cfg := config.Config{DataDir: data, RemoteHosts: []config.RemoteHost{{Host: "remote"}}}
-	source := "remote:/project/" + id + ".jsonl"
-	session := &db.Session{ID: "remote~" + id, Agent: "claude", Machine: "remote", FilePath: &source}
-	_, err := Materialize(t.Context(), cfg, session, t.TempDir())
-	require.ErrorContains(t, err, "native resume requires the original transcript")
+	for _, tc := range []struct{ agent, id, source string }{
+		{"claude", "12345678-1234-1234-1234-123456789abc", "/project/12345678-1234-1234-1234-123456789abc.jsonl"},
+		{"pi", "pi:example", "/project/example.jsonl"},
+	} {
+		t.Run(tc.agent, func(t *testing.T) {
+			data := t.TempDir()
+			require.NoError(t, os.MkdirAll(remotesync.MirrorDir(data, "remote"), 0o700))
+			cfg := config.Config{DataDir: data, RemoteHosts: []config.RemoteHost{{Host: "remote"}}}
+			source := "remote:" + tc.source
+			session := &db.Session{ID: "remote~" + tc.id, Agent: tc.agent, Machine: "remote", FilePath: &source}
+			_, err := Materialize(t.Context(), cfg, session, t.TempDir())
+			require.ErrorContains(t, err, "native resume requires the original transcript")
+		})
+	}
 }
 
 func TestMaterializeConfiguredSources(t *testing.T) {

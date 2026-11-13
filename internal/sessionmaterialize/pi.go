@@ -59,14 +59,18 @@ func materializePi(ctx context.Context, cfg config.Config, session *db.Session, 
 		if lockErr != nil {
 			return Result{}, lockErr
 		}
-		data, err = readPiFile(ctx, root, name)
+		if _, statErr := os.Stat(name); errors.Is(statErr, os.ErrNotExist) {
+			err = errSourceUnavailable
+		} else {
+			data, err = readPiFile(ctx, root, name)
+		}
 		err = errors.Join(err, lock.Close())
 	} else {
 		name, data, err = findPiSource(ctx, cfg, session, source, id)
 		source = name
 	}
 	if err != nil {
-		return Result{}, fmt.Errorf("reading native Pi transcript: %w", err)
+		return Result{}, sourceReadError("reading native Pi transcript", err)
 	}
 	data, err = relocatePiHeader(ctx, data, name, id, cwd)
 	if err != nil {
