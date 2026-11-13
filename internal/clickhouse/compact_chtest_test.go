@@ -13,6 +13,8 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"go.kenn.io/agentsview/internal/clickhouse/chtest"
+	"go.kenn.io/agentsview/internal/config"
+	"go.kenn.io/agentsview/internal/db"
 	"go.kenn.io/agentsview/internal/storage"
 )
 
@@ -112,4 +114,51 @@ func TestPushSucceedsWithoutOptimizeGrant(t *testing.T) {
 	status, err := ReadStatus(ctx, pusher, fixtureMachine, s.archiveID, nil, nil)
 	require.NoError(t, err)
 	assert.NotEmpty(t, status.LastPushAt, "the push advanced its cursor")
+}
+
+// A usage-only archive stores fewer message rows than its sessions' message
+// counts. A resumed full push counts the rows the interrupted run stored, so
+// it compacts only when an uninterrupted push of the same rows would.
+func TestResumedUsageOnlyPushCountsStoredRows(t *testing.T) {
+	t.Parallel()
+	ctx := t.Context()
+	local, target := seedFixture(t)
+	local.SetArchiveContent(config.ArchiveContentUsage)
+	const heavyID = "usage-heavy"
+	ts := "2026-02-01T00:00:00.000Z"
+	msgs := []db.Message{fixtureMessage(heavyID, 0, "assistant", "reply", ts)}
+	for i := 1; i <= 40; i++ {
+		// Without token usage a user message carries nothing a usage-only
+		// archive keeps.
+		msg := fixtureMessage(heavyID, i, "user", fmt.Sprintf("prompt %d", i), ts)
+		msg.TokenUsage, msg.Model = nil, ""
+		msgs = append(msgs, msg)
+	}
+	_, err := local.WriteSessionBatchAtomic(ctx, []db.SessionBatchWrite{{
+		Session:         fixtureSession(heavyID, "alpha", "prompt", ts, len(msgs)),
+		Messages:        msgs,
+		DataVersion:     1,
+		ReplaceMessages: true,
+	}})
+	require.NoError(t, err)
+	stored, err := local.GetAllMessages(ctx, heavyID)
+	require.NoError(t, err)
+	require.Len(t, stored, 1, "the usage-only archive keeps only the assistant message")
+
+	// The interrupted run stores only the newest session, the heavy one.
+	killSecondSessionBatch(t, newTestSync(t, local, target, storage.PusherOptions{}), false)
+	conn := chtest.Open(t, target.URL, target.Database)
+	// Another archive's 100 live messages: the resumed push stores 5 rows in
+	// total, under a quarter of the mirror, though its sessions report 45.
+	_, err = conn.ExecContext(ctx, `INSERT INTO sessions SELECT * REPLACE (
+		'other-session' AS id, 'other-archive' AS source_archive_id,
+		CAST(100, 'Nullable(Int64)') AS stored_message_count)
+		FROM (SELECT * FROM sessions FINAL WHERE id = '`+heavyID+`')`)
+	require.NoError(t, err)
+	require.Equal(t, 1, chtest.Count(t, conn, "sessions", "source_archive_id = 'other-archive'"))
+
+	res, err := newTestSync(t, local, target, storage.PusherOptions{}).Push(ctx, false, nil)
+	require.NoError(t, err)
+	require.Equal(t, 1, res.SkippedResumed)
+	assert.NotContains(t, compactions(t, conn), "messages")
 }
