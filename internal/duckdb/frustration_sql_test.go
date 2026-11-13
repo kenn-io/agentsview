@@ -245,6 +245,7 @@ func TestDuckFrustrationMarkerScanMatchesGoOnRandomPrompts(t *testing.T) {
 			messages[i].SourceSubtype = "tool_result"
 		}
 	}
+	messages = append(messages, syncMessage("corpus", len(messages), "assistant", "this is broken", ts))
 	_, err := local.WriteSessionBatchAtomic(t.Context(), []db.SessionBatchWrite{{
 		Session:  syncSession("corpus", "alpha", "corpus", ts, len(messages)),
 		Messages: messages, DataVersion: 1, ReplaceMessages: true,

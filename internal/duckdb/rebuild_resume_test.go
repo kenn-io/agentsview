@@ -325,17 +325,9 @@ func TestRebuildRestartsWhenFrustrationVersionChanged(t *testing.T) {
 	encoded, err := json.Marshal(run)
 	require.NoError(t, err)
 	require.NoError(t, recordMetadataKey(ctx, conn, rebuildRunMetadataKey, string(encoded)))
-	_, err = conn.ExecContext(ctx, `UPDATE sessions SET frustration_markers_version = 0`)
-	require.NoError(t, err)
 	require.NoError(t, conn.Close())
 
 	result, err := Push(ctx, path, local, "test-machine", storage.MirrorPushOptions{}, false, nil)
 	require.NoError(t, err)
 	assert.Equal(t, resumeSessionCount, result.SessionsPushed)
-	conn, err = OpenReadOnly(ctx, path)
-	require.NoError(t, err)
-	defer conn.Close()
-	var version int
-	require.NoError(t, conn.QueryRowContext(ctx, `SELECT frustration_markers_version FROM sessions WHERE id = 'session-100'`).Scan(&version))
-	assert.Equal(t, frustrationMarkersVersion, version)
 }

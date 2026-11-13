@@ -10,6 +10,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"go.kenn.io/agentsview/internal/db"
+	"go.kenn.io/agentsview/internal/storage"
 )
 
 // Through Quack, parameters are rendered into the SQL text, so the marker
@@ -38,45 +39,33 @@ func TestQuackFrustrationMarkerScanCounts(t *testing.T) {
 	assert.Equal(t, map[string]bool{ids[4]: true, ids[5]: true}, shippedContent(t, store, ids))
 }
 
-func TestQuackStoredFrustrationCounts(t *testing.T) {
+func TestQuackStoredAndStaleFrustrationCounts(t *testing.T) {
 	ctx := t.Context()
-	path := filepath.Join(t.TempDir(), "mirror.duckdb")
-	buildMirrorFixture(t, path, "session", "this is broken")
+	local, path := newPushFixture(t, 2)
+	appendFrustrationPrompt(t, local, "sess-1")
+	appendFrustrationPrompt(t, local, "sess-2")
+	_, err := Push(ctx, path, local, "m", storage.MirrorPushOptions{}, false, nil)
+	require.NoError(t, err)
 	conn, err := Open(ctx, path)
 	require.NoError(t, err)
-	_, err = conn.ExecContext(ctx, `UPDATE messages SET content = 'fine'`)
+	_, err = conn.ExecContext(ctx, `UPDATE messages SET content = 'fine' WHERE role = 'user'`)
+	require.NoError(t, err)
+	_, err = conn.ExecContext(ctx, `UPDATE sessions SET project = id, frustration_markers_version = CASE WHEN id = 'sess-2' THEN 0 ELSE frustration_markers_version END`)
 	require.NoError(t, err)
 	require.NoError(t, conn.Close())
+
 	uri := "quack:127.0.0.1:" + freeTCPPort(t)
 	const token = "agentsview-duckdbtest-token-stored-frustration"
 	openQuackMirrorServer(t, ctx, path, uri, token)
 	store, err := NewQuackStore(ctx, uri, token, false, 0)
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, store.Close()) })
-	resp, err := store.GetAnalyticsSignals(ctx, db.AnalyticsFilter{})
-	require.NoError(t, err)
-	assert.Equal(t, 1, resp.QualityHealth.Totals.FrustrationMarkerCount)
-}
-
-func TestQuackScansStaleFrustrationCount(t *testing.T) {
-	ctx := t.Context()
-	path := filepath.Join(t.TempDir(), "mirror.duckdb")
-	buildMirrorFixture(t, path, "session", "this is broken")
-	conn, err := Open(ctx, path)
-	require.NoError(t, err)
-	_, err = conn.ExecContext(ctx, `UPDATE sessions SET frustration_markers_version = 0 WHERE id = 'session'`)
-	require.NoError(t, err)
-	_, err = conn.ExecContext(ctx, `UPDATE messages SET content = 'fine' WHERE session_id = 'session'`)
-	require.NoError(t, err)
-	require.NoError(t, conn.Close())
-
-	uri := "quack:127.0.0.1:" + freeTCPPort(t)
-	const token = "agentsview-duckdbtest-token-stale-frustration"
-	openQuackMirrorServer(t, ctx, path, uri, token)
-	store, err := NewQuackStore(ctx, uri, token, false, 0)
-	require.NoError(t, err)
-	t.Cleanup(func() { require.NoError(t, store.Close()) })
-	resp, err := store.GetAnalyticsSignals(ctx, db.AnalyticsFilter{})
-	require.NoError(t, err)
-	assert.Equal(t, 0, resp.QualityHealth.Totals.FrustrationMarkerCount)
+	for _, tc := range []struct {
+		project string
+		want    int
+	}{{"sess-1", 1}, {"sess-2", 0}} {
+		resp, err := store.GetAnalyticsSignals(ctx, db.AnalyticsFilter{Project: tc.project})
+		require.NoError(t, err)
+		assert.Equal(t, tc.want, resp.QualityHealth.Totals.FrustrationMarkerCount)
+	}
 }

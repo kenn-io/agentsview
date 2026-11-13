@@ -347,6 +347,16 @@ func TestRebuildReasonReportsEachTrigger(t *testing.T) {
 			),
 		},
 		{
+			name: "frustration markers version mismatch",
+			probe: func() MirrorProbe {
+				p := baseProbe()
+				p.FrustrationMarkersVersion = 0
+				return p
+			}(),
+			dataVer: 1,
+			want:    fmt.Sprintf("frustration markers version %d vs %d", 0, frustrationMarkersVersion),
+		},
+		{
 			name: "data version mismatch", probe: baseProbe(), dataVer: 2,
 			want: "data version 1 vs 2",
 		},

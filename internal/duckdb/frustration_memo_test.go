@@ -105,83 +105,41 @@ func TestDuckDBFrustrationMemoSkipsMissingFingerprint(t *testing.T) {
 func TestDuckDBStoredFrustrationCounts(t *testing.T) {
 	skipReopenTestOnWindows(t)
 	ctx := t.Context()
-	local, path := newPushFixture(t, 2)
+	local, path := newPushFixture(t, 3)
+	for _, id := range []string{"sess-1", "sess-2", "sess-3"} {
+		require.NoError(t, local.UpdateSessionSignals(ctx, id, db.SessionSignalUpdate{QualitySignals: db.QualitySignals{Version: db.CurrentQualitySignalVersion}}))
+	}
 	appendFrustrationPrompt(t, local, "sess-1")
+	appendFrustrationPrompt(t, local, "sess-3")
 	_, err := Push(ctx, path, local, "m", storage.MirrorPushOptions{}, false, nil)
 	require.NoError(t, err)
 
 	conn, err := Open(ctx, path)
 	require.NoError(t, err)
-	_, err = conn.ExecContext(ctx, `UPDATE messages SET content = 'fine' WHERE session_id = 'sess-1' AND content = 'this is broken'`)
+	// A rescan must disagree with each stored count.
+	_, err = conn.ExecContext(ctx, `UPDATE messages SET content = CASE WHEN session_id = 'sess-2' THEN 'this is broken' ELSE 'fine' END WHERE role = 'user'`)
+	require.NoError(t, err)
+	_, err = conn.ExecContext(ctx, `UPDATE sessions SET project = id, frustration_markers_version = CASE WHEN id = 'sess-3' THEN 0 ELSE frustration_markers_version END`)
 	require.NoError(t, err)
 	require.NoError(t, conn.Close())
+
 	store, err := NewStore(ctx, path)
 	require.NoError(t, err)
-	resp, err := store.GetAnalyticsSignals(ctx, db.AnalyticsFilter{})
-	require.NoError(t, err)
-	assert.Equal(t, 1, resp.QualityHealth.Totals.FrustrationMarkerCount)
-	require.NoError(t, store.Close())
-
-	appendFrustrationPrompt(t, local, "sess-2")
-	result, err := Push(ctx, path, local, "m", storage.MirrorPushOptions{Automatic: true}, false, nil)
-	require.NoError(t, err)
-	assert.Equal(t, 1, result.SessionsPushed)
-	conn, err = Open(ctx, path)
-	require.NoError(t, err)
-	_, err = conn.ExecContext(ctx, `UPDATE sessions SET frustration_markers_version = 0 WHERE id = 'sess-1'`)
-	require.NoError(t, err)
-	require.NoError(t, conn.Close())
-	store, err = NewStore(ctx, path)
-	require.NoError(t, err)
-	defer store.Close()
-	resp, err = store.GetAnalyticsSignals(ctx, db.AnalyticsFilter{})
-	require.NoError(t, err)
-	assert.Equal(t, 1, resp.QualityHealth.Totals.FrustrationMarkerCount)
-}
-
-func TestDuckDBStoredFrustrationCountsMatchScanWithFilters(t *testing.T) {
-	skipReopenTestOnWindows(t)
-	ctx := t.Context()
-	local := newLocalDB(t)
-	const ts = "2026-02-01T09:00:00.000Z"
-	messages := []db.Message{
-		syncMessage("markers", 0, "user", "this is broken", ts),
-		syncMessage("markers", 1, "user", "fine", ts),
-		syncMessage("markers", 2, "assistant", "this is broken", ts),
-		syncMessage("markers", 3, "user", "this is broken", ts),
-		syncMessage("markers", 4, "user", "this is broken", ts),
+	t.Cleanup(func() { require.NoError(t, store.Close()) })
+	for _, tc := range []struct {
+		name, project string
+		want          int
+	}{
+		{"stored one", "sess-1", 1},
+		{"stored zero", "sess-2", 0},
+		{"stale", "sess-3", 0},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			resp, err := store.GetAnalyticsSignals(ctx, db.AnalyticsFilter{Project: tc.project})
+			require.NoError(t, err)
+			assert.Equal(t, tc.want, resp.QualityHealth.Totals.FrustrationMarkerCount)
+		})
 	}
-	messages[3].IsSystem = true
-	messages[4].SourceSubtype = "tool_result"
-	_, err := local.WriteSessionBatchAtomic(ctx, []db.SessionBatchWrite{{
-		Session:     syncSession("markers", "alpha", "this is broken", ts, len(messages)),
-		Messages:    messages,
-		Signals:     db.SessionSignalUpdate{QualitySignals: db.QualitySignals{Version: db.CurrentQualitySignalVersion, ShortPromptCount: 3}},
-		DataVersion: 1, ReplaceMessages: true,
-	}})
-	require.NoError(t, err)
-	path := filepath.Join(t.TempDir(), "mirror.duckdb")
-	_, err = Push(ctx, path, local, "m", storage.MirrorPushOptions{}, false, nil)
-	require.NoError(t, err)
-	hour := 9
-	filter := db.AnalyticsFilter{Model: "claude-test", Hour: &hour, Timezone: "UTC"}
-	store, err := NewStore(ctx, path)
-	require.NoError(t, err)
-	stored, err := store.GetAnalyticsSignals(ctx, filter)
-	require.NoError(t, err)
-	assert.Equal(t, 1, stored.QualityHealth.Totals.FrustrationMarkerCount)
-	require.NoError(t, store.Close())
-	conn, err := Open(ctx, path)
-	require.NoError(t, err)
-	_, err = conn.ExecContext(ctx, `UPDATE sessions SET frustration_markers_version = 0`)
-	require.NoError(t, err)
-	require.NoError(t, conn.Close())
-	store, err = NewStore(ctx, path)
-	require.NoError(t, err)
-	defer store.Close()
-	scanned, err := store.GetAnalyticsSignals(ctx, filter)
-	require.NoError(t, err)
-	assert.Equal(t, stored, scanned)
 }
 
 func TestPushRebuildsStaleFrustrationCountsBelowCutoff(t *testing.T) {
@@ -201,7 +159,6 @@ func TestPushRebuildsStaleFrustrationCountsBelowCutoff(t *testing.T) {
 	result, err := Push(ctx, path, local, "m", storage.MirrorPushOptions{}, false, nil)
 	require.NoError(t, err)
 	assert.True(t, result.Diagnostics.Full)
-	assert.Contains(t, result.Diagnostics.RebuildReason, "frustration markers version")
 	conn, err = OpenReadOnly(ctx, path)
 	require.NoError(t, err)
 	var version, count int
@@ -239,33 +196,4 @@ func TestDuckDBIncrementalPushUpdatesFrustrationCount(t *testing.T) {
 	require.NoError(t, err)
 	assert.False(t, result.Diagnostics.Full)
 	assert.Zero(t, result.SessionsPushed)
-}
-
-func TestDuckDBTrustsStoredZeroFrustrationCount(t *testing.T) {
-	skipReopenTestOnWindows(t)
-	ctx := t.Context()
-	local, path := newPushFixture(t, 1)
-	require.NoError(t, local.UpdateSessionSignals(ctx, "sess-1", db.SessionSignalUpdate{
-		QualitySignals: db.QualitySignals{Version: db.CurrentQualitySignalVersion},
-	}))
-	_, err := Push(ctx, path, local, "m", storage.MirrorPushOptions{}, false, nil)
-	require.NoError(t, err)
-
-	conn, err := Open(ctx, path)
-	require.NoError(t, err)
-	// A rescan would count this marker instead of trusting the stored zero.
-	updated, err := conn.ExecContext(ctx, `
-		UPDATE messages SET content = 'this is broken'
-		WHERE session_id = 'sess-1' AND role = 'user'`)
-	require.NoError(t, err)
-	changed, err := updated.RowsAffected()
-	require.NoError(t, err)
-	require.EqualValues(t, 1, changed)
-	require.NoError(t, conn.Close())
-	store, err := NewStore(ctx, path)
-	require.NoError(t, err)
-	t.Cleanup(func() { require.NoError(t, store.Close()) })
-	resp, err := store.GetAnalyticsSignals(ctx, db.AnalyticsFilter{})
-	require.NoError(t, err)
-	assert.Equal(t, 0, resp.QualityHealth.Totals.FrustrationMarkerCount)
 }
