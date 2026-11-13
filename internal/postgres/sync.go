@@ -487,8 +487,9 @@ func (s *Sync) ensureSchemaLocked(ctx context.Context) error {
 	if s.schemaDone {
 		// An older binary can push messages without usage counters between
 		// this Sync's pushes, so the fill runs on every check, not only at
-		// schema setup.
-		if _, err := backfillMessageUsageCountersPG(ctx, s.pg); err != nil {
+		// schema setup. A schema dropped since setup has nothing to fill;
+		// push's marker check notices the reset and sets the schema up again.
+		if _, err := backfillMessageUsageCountersPG(ctx, s.pg); err != nil && !isUndefinedTable(err) {
 			return err
 		}
 		return nil
