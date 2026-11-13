@@ -570,13 +570,18 @@ func (s *Sync) pruneUsagePrices(ctx context.Context, current string) error {
 
 // idleUsagePriceDigests lists the digests nothing was written under for
 // usagePriceRetention.
+//
+// Both tables are partitioned by pricing_digest, so the partition value names
+// each row's digest without reading the digest column. Reading that column
+// for every price record took about 120 MB per push on production data;
+// push_version alone is about 13 MB.
 func (s *Sync) idleUsagePriceDigests(ctx context.Context) ([]string, error) {
 	cutoff := newPushVersion() - uint64(usagePriceRetention.Nanoseconds())
 	rows, err := s.conn.QueryContext(ctx, `
 		SELECT pricing_digest FROM (
-			SELECT pricing_digest, push_version FROM usage_event_prices
+			SELECT _partition_value.1 AS pricing_digest, push_version FROM usage_event_prices
 			UNION ALL
-			SELECT pricing_digest, push_version FROM usage_price_contexts
+			SELECT _partition_value.1 AS pricing_digest, push_version FROM usage_price_contexts
 		)
 		GROUP BY pricing_digest
 		HAVING max(push_version) < ?
