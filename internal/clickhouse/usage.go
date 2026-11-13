@@ -149,7 +149,6 @@ SELECT
 	cu.occurred_at AS pricing_ts,
 	if(cu.model = '', '<unknown>', cu.model) AS model,
 	'' AS provider_id,
-	'' AS token_json,
 	'' AS claude_message_id,
 	'' AS claude_request_id,
 	'' AS source_uuid,
@@ -181,12 +180,6 @@ const chUsageMessageSourceEligibility = `
 			m.token_usage != ''
 			AND m.model != ''
 			AND m.model != '<synthetic>'`
-
-// chUsageMessageEligibility is the condition a usage_messages row meets when
-// its usage counts. Like the messages rows it mirrors, it takes no version
-// check: a push deletes the ordinals a session no longer has from both
-// tables in the same step.
-var chUsageMessageEligibility = chUsageStoredMessageEligibility
 
 const chUsageMatchingMessageSourceEligibility = `
 			m.role = 'assistant'
@@ -240,7 +233,7 @@ func chUsageSourceWheres(
 
 func chUsageRawSQL(f db.UsageFilter, sessionID string) (string, []any) {
 	messageWhere, messageArgs, eventWhere, eventArgs := chUsageSourceWheres(
-		f, sessionID, chUsageMessageEligibility, chUsageBoundsForFilter(f))
+		f, sessionID, chUsageStoredMessageEligibility, chUsageBoundsForFilter(f))
 	return chUsageRawSQLFromWheres(
 		false, messageWhere, messageArgs, eventWhere, eventArgs)
 }
@@ -267,8 +260,7 @@ const chUsageUnjoinedSessionColumns = `
 // chUsageStoredMessageUsage selects a usage_messages row's usage. The view
 // extracted the counters from the token JSON at insert time, so message rows
 // carry them in the counter columns, which chUsageStoredNormSource reads.
-const chUsageStoredMessageUsage = `'' AS token_json,
-			m.claude_message_id AS claude_message_id,
+const chUsageStoredMessageUsage = `m.claude_message_id AS claude_message_id,
 			m.claude_request_id AS claude_request_id,
 			m.source_uuid AS source_uuid,
 			'' AS usage_dedup_key,
@@ -317,7 +309,7 @@ func chUsageRawSQLFromWheres(
 		SELECT ue.session_id AS session_id, ue.message_ordinal AS message_ordinal,
 			ue.source AS source, %[2]s AS ts,
 			ue.occurred_at AS pricing_ts,
-			ue.model AS model, ue.provider_id AS provider_id, '' AS token_json,
+			ue.model AS model, ue.provider_id AS provider_id,
 			'' AS claude_message_id, '' AS claude_request_id,
 			'' AS source_uuid,
 			if(ue.dedup_key != '',
@@ -512,7 +504,7 @@ func chPreparedUsageRawSQLWith(
 func chPreparedUsageRawSelect() string {
 	return `p.session_id AS session_id, p.message_ordinal AS message_ordinal,
 			p.source AS source, p.ts AS ts, p.pricing_ts AS pricing_ts,
-			p.model AS model, p.provider_id AS provider_id, '' AS token_json,
+			p.model AS model, p.provider_id AS provider_id,
 			p.claude_message_id AS claude_message_id,
 			p.claude_request_id AS claude_request_id,
 			p.source_uuid AS source_uuid,
@@ -734,7 +726,7 @@ func chUsageCTE(f db.UsageFilter, sessionID string) (string, []any) {
 
 func chDailyUsageCTE(f db.UsageFilter) (string, []any) {
 	rawSQL, args := chDailyUsageRawSQL(f)
-	return chUsageCTEFromRaw(f, rawSQL, args, true)
+	return chUsageCTEFromRawSource(f, rawSQL, args, true, chUsageStoredNormSource(), "")
 }
 
 func chUsageSnapshotInputFilter(f db.UsageFilter) db.UsageFilter {
@@ -818,13 +810,6 @@ func chPreparedUsageNormSource() chUsageNormSource {
 		priceModel: "if(source = 'cursor', " + chPriceModelCaseSQL() + ", stored_price_model)",
 		priceKey:   "if(source = 'cursor', " + chUsagePriceKeySQL + ", stored_price_key)",
 	}
-}
-
-func chUsageCTEFromRaw(
-	f db.UsageFilter, rawSQL string, args []any,
-	preferCompleteClaudeSnapshots bool,
-) (string, []any) {
-	return chUsageCTEFromRawSource(f, rawSQL, args, preferCompleteClaudeSnapshots, chUsageStoredNormSource(), "")
 }
 
 // chUsageCTEFromRawSource renders the usage CTEs over rawSQL. sessionID names

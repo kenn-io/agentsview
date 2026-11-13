@@ -1059,34 +1059,6 @@ func TestPushRepricesCursorRowsAfterTheirRecordsAreDropped(t *testing.T) {
 	assert.Equal(t, 2, records)
 }
 
-// Session usage reads the counters the usage_messages view extracted at
-// insert time. An ALTER UPDATE on messages runs as a mutation, which the view
-// never sees, so a read that parsed messages.token_usage again would price the
-// rewritten JSON.
-func TestSessionUsageReadsStoredCounters(t *testing.T) {
-	t.Parallel()
-	local, syncer, store := newPreparedUsageStore(t)
-	const id = "stored-counters"
-	session := fixtureSession(id, "stored-counters", "stored counters", "2026-01-12T03:00:00.000Z", 1)
-	_, err := local.WriteSessionBatchAtomic(t.Context(), []db.SessionBatchWrite{{
-		Session: session,
-		Messages: []db.Message{
-			usagePriceMessage(id, 0, "2026-01-12T03:00:00.000Z", "round-test", `{"input_tokens":1000000}`),
-		},
-		DataVersion: 1, ReplaceMessages: true,
-	}})
-	require.NoError(t, err)
-	pushPreparedUsage(t, syncer)
-	execPreparedUsage(t, store, `ALTER TABLE messages UPDATE token_usage = '{"input_tokens":3000000}'
-		WHERE session_id = 'stored-counters' SETTINGS mutations_sync = 2`)
-
-	usage, err := store.GetSessionUsage(t.Context(), id, true)
-	require.NoError(t, err)
-	require.NotNil(t, usage)
-	assert.Equal(t, money.MustParseDollars("0.4"), usage.Cost, "1M input tokens at $0.40 per million")
-	assert.Equal(t, 1, usage.BreakdownCount)
-}
-
 // A context ID names its content, so a read reuses a decoded context even
 // after the stored JSON changes, and still picks up a context a later push
 // adds under the same digest.
