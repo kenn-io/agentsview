@@ -66,10 +66,18 @@ const usageMessageFields = `session_id, ordinal, timestamp, model, provider_id,
 // as messages, since the view writes one row per message.
 var usageMessagesOrderBy = []string{"session_id", "ordinal"}
 
-func ensureUsageMessages(ctx context.Context, conn *sql.DB) error {
+// usageMessageLowCardinality are the usage_messages columns that hold few
+// distinct values; see convertToLowCardinality.
+var usageMessageLowCardinality = []columnSpec{
+	col("model", tLowString), col("provider_id", tLowString),
+}
+
+// ensureUsageMessages creates usage_messages and its view. current holds
+// the table's column types before this call, nil when it is new.
+func ensureUsageMessages(ctx context.Context, conn *sql.DB, current map[string]string) error {
 	columns := []string{
 		"session_id String", "ordinal Int64", "timestamp Nullable(DateTime64(6, 'UTC'))",
-		"model String", "provider_id String", "claude_message_id String",
+		"model " + tLowString, "provider_id " + tLowString, "claude_message_id String",
 		"claude_request_id String", "source_uuid String", "push_version UInt64",
 	}
 	fields := []string{usageMessageFields}
@@ -90,6 +98,9 @@ func ensureUsageMessages(ctx context.Context, conn *sql.DB) error {
 		 ENGINE = ReplacingMergeTree(revision) ORDER BY (`+strings.Join(usageMessagesOrderBy, ", ")+`)
 		 SETTINGS index_granularity = 64`); err != nil {
 		return fmt.Errorf("creating stored usage messages: %w", err)
+	}
+	if err := convertToLowCardinality(ctx, conn, "usage_messages", current, usageMessageLowCardinality); err != nil {
+		return err
 	}
 	// Mirrors created before the recorded cost column gain it before the view
 	// writes it. Existing rows keep NULL with no backfill: only parsers
@@ -205,6 +216,9 @@ func ensureUsageSessionSnapshots(ctx context.Context, conn *sql.DB) error {
 		if _, err := conn.ExecContext(ctx, spec.addColumnSQL(c)); err != nil {
 			return fmt.Errorf("adding clickhouse column %s.%s: %w", spec.name, c.name, err)
 		}
+	}
+	if err := convertToLowCardinality(ctx, conn, spec.name, existing[spec.name], spec.columns); err != nil {
+		return err
 	}
 	if _, has := existing[spec.name][chSnapshotPreparesUsage]; !has {
 		if err := addSnapshotPreparesUsage(ctx, conn); err != nil {
