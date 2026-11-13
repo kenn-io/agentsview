@@ -460,13 +460,7 @@ func makeInputPreview(category, toolName, inputJSON string) string {
 	case "Glob":
 		raw = pickStr(args.Pattern, args.Path)
 	case "Bash":
-		cmd := pickStr(args.Command, args.Cmd)
-		if cmd != "" {
-			if i := strings.IndexByte(cmd, '\n'); i >= 0 {
-				cmd = cmd[:i]
-			}
-			raw = cmd
-		}
+		raw, _, _ = strings.Cut(pickStr(args.Command, args.Cmd), "\n")
 	case "Skill", "skill":
 		raw = pickStr(args.Skill, args.Name)
 	default:

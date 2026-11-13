@@ -24,6 +24,7 @@ import (
 	"go.kenn.io/agentsview/internal/parser"
 	"go.kenn.io/agentsview/internal/parsertest"
 	pricingpkg "go.kenn.io/agentsview/internal/pricing"
+	"go.kenn.io/agentsview/internal/usagefacts"
 )
 
 func TestPaddedUTCBoundClampsBeforeYearOne(t *testing.T) {
@@ -1700,11 +1701,11 @@ func TestParseUsageTokenCounters(t *testing.T) {
 	assert.Equal(t, 20, cacheCreate)
 	assert.Equal(t, 300, cacheRead)
 
-	in, out, cacheCreate, cacheRead, reasoning := parseUsageTokenCountersWithReasoning(
-		`{"input_tokens":100,"output_tokens":50,` +
+	in, out, cacheCreate, cacheRead, reasoning := parsedUsageTokenCountersWithReasoning(
+		usagefacts.ParseTokenUsage(`{"input_tokens":100,"output_tokens":50,` +
 			`"cache_creation_input_tokens":20,` +
 			`"cache_read_input_tokens":300,` +
-			`"reasoning_tokens":75}`,
+			`"reasoning_tokens":75}`),
 	)
 	assert.Equal(t, 100, in)
 	assert.Equal(t, 50, out)

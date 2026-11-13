@@ -1487,12 +1487,6 @@ func parseUsageTokenCounters(
 		int(parsed.CacheCreationTokens), int(parsed.CacheReadTokens)
 }
 
-func parseUsageTokenCountersWithReasoning(
-	tokenJSON string,
-) (inputTok, outputTok, cacheCrTok, cacheRdTok, reasoningTok int) {
-	return parsedUsageTokenCountersWithReasoning(usagefacts.ParseTokenUsage(tokenJSON))
-}
-
 func parsedUsageTokenCountersWithReasoning(
 	parsed usagefacts.ParsedTokenUsage,
 ) (inputTok, outputTok, cacheCrTok, cacheRdTok, reasoningTok int) {
