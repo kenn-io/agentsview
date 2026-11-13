@@ -444,7 +444,8 @@ func TestMaterializeSnapshotEquivalentCandidates(t *testing.T) {
 		directory := owner
 		directory.Attachment.SnapshotID = "directory:fixture"
 		refused, path, attachment, err := MaterializeSnapshot(t.Context(), nil, []db.ArchiveSessionProvenance{directory}, "claude", 512<<20)
-		require.ErrorContains(t, err, "owning snapshot is not configured")
+		require.EqualError(t, err, "owning snapshot is not configured")
+		require.ErrorIs(t, err, ErrSnapshotUnavailable)
 		assert.Nil(t, refused)
 		assert.Empty(t, path)
 		assert.Empty(t, attachment)

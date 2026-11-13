@@ -35,6 +35,11 @@ func ReadCodexSnapshot(ctx context.Context, sources []config.ArchiveSource, owne
 // ErrSnapshotUnavailable means no snapshot owner was selected.
 var ErrSnapshotUnavailable = errors.New("owning snapshot unavailable")
 
+type snapshotNotConfiguredError struct{}
+
+func (snapshotNotConfiguredError) Error() string { return "owning snapshot is not configured" }
+func (snapshotNotConfiguredError) Unwrap() error { return ErrSnapshotUnavailable }
+
 func materializeSnapshot(ctx context.Context, sources []config.ArchiveSource, owners []db.ArchiveSessionProvenance, provider string, limit int64, use func(string, []string, []string, func(context.Context, string, int64) ([]byte, error), CodexAncestry) error) (tree *rawderive.Materialization, primary string, snapshot string, retErr error) {
 	defer func() {
 		if retErr != nil && tree != nil {
@@ -87,7 +92,7 @@ func materializeSnapshot(ctx context.Context, sources []config.ArchiveSource, ow
 		if candidateErr != nil {
 			return nil, "", "", errors.Join(ErrSnapshotUnavailable, candidateErr)
 		}
-		return nil, "", "", fmt.Errorf("%w: owning snapshot is not configured", ErrSnapshotUnavailable)
+		return nil, "", "", snapshotNotConfiguredError{}
 	}
 	if err := readRecoveryMetadata(ctx, selected); err != nil {
 		return nil, "", "", err
