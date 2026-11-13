@@ -4,7 +4,6 @@ import { mount, tick, unmount } from "svelte";
 // @ts-ignore
 import StatusBar from "./StatusBar.svelte";
 import { sync } from "../../stores/sync.svelte.js";
-import { ui } from "../../stores/ui.svelte.js";
 import { formatTimestamp } from "../../utils/format.js";
 import { ApiError, setServerUrl } from "../../api/runtime.js";
 
@@ -38,7 +37,6 @@ describe("StatusBar", () => {
   afterEach(() => {
     document.body.innerHTML = "";
     vi.useRealTimers();
-    ui.alwaysShowYear = false;
     sync.lastSync = null;
     sync.stats = null;
     sync.serverVersion = null;
@@ -164,7 +162,6 @@ describe("StatusBar", () => {
   });
 
   it("refreshes the sync label as time passes", async () => {
-    ui.alwaysShowYear = true;
     const component = mount(StatusBar, {
       target: document.body,
     });

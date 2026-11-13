@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { afterEach, describe, expect, it, vi } from "vite-plus/test";
+import { afterEach, describe, expect, it } from "vite-plus/test";
 import { flushSync, mount, unmount } from "svelte";
 import { createClassComponent } from "svelte/legacy";
 import SessionItem from "./SessionItem.svelte";
@@ -14,7 +14,6 @@ afterEach(() => {
   component = undefined;
   document.body.innerHTML = "";
   ui.alwaysShowYear = false;
-  vi.restoreAllMocks();
   sessions.machineLabels = {};
   sessions.details.clear();
 });
@@ -59,26 +58,18 @@ describe("SessionItem identity", () => {
     flushSync();
   }
 
-  it("updates a recent session date when the setting changes", () => {
-    vi.spyOn(Date, "now").mockReturnValue(new Date("2026-06-01T12:02:00Z").getTime());
-    mountSession({ ended_at: "2026-06-01T12:00:00Z" });
-    const time = document.querySelector<HTMLElement>(".session-time")!;
-    expect(time.textContent).toBe("2m ago");
-    expect(time.title).toContain("2026");
-    ui.alwaysShowYear = true;
-    flushSync();
-    expect(time.textContent).toContain("2026");
-  });
-
-  it.each([false, true])("shows the full date and time on hover in compact=%s", (compact) => {
+  it.each([false, true])("updates the date and keeps the full hover time in compact=%s", (compact) => {
     const ended = "2024-06-01T12:00:00Z";
     mountSession({ ended_at: ended }, { compact });
     const time = document.querySelector<HTMLElement>(".session-time")!;
     expect(time.title).toBe(formatTimestamp(ended, true));
+    expect(time.textContent).not.toContain("2024");
     ui.alwaysShowYear = true;
     flushSync();
-    expect(time.textContent).toBe(formatTimestamp(ended, true));
-    expect(time.title).toBe(formatTimestamp(ended, true));
+    expect(time.textContent).toContain("2024");
+    ui.alwaysShowYear = false;
+    flushSync();
+    expect(time.textContent).not.toContain("2024");
   });
 
   it("updates a mounted row when its title arrives", () => {

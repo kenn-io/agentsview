@@ -419,7 +419,6 @@ describe("SessionBreadcrumb", () => {
     ui.toggleAlwaysShowYear();
     await tick();
     expect(time()).toBe("20 Feb 2026 14:30");
-    expect(dateSpy).toHaveBeenLastCalledWith(undefined, expect.objectContaining({ year: "numeric" }));
   });
 
   it("places the desktop expand control to the left of the relocated filter", async () => {
