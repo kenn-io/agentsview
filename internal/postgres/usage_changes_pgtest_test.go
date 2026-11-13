@@ -33,6 +33,7 @@ func newUsageJournalFixture(t *testing.T) (*db.DB, *Sync, *Store) {
 }
 
 func TestUsageChangeJournalEmptyArchivePublication(t *testing.T) {
+	t.Parallel()
 	local, syncer, store := newUsageJournalFixture(t)
 	ctx := t.Context()
 	require.NoError(t, local.UpsertSession(ctx, db.Session{ID: "session-a", Project: "project-a", Machine: "test-machine", Agent: "codex"}))
@@ -65,6 +66,7 @@ func TestUsageChangeJournalEmptyArchivePublication(t *testing.T) {
 }
 
 func TestUsageChangeJournalWriteAfterImmediateStamp(t *testing.T) {
+	t.Parallel()
 	for _, mode := range []string{"IMMEDIATE", "DEFERRED"} {
 		t.Run(mode, func(t *testing.T) {
 			_, syncer, store := newUsageJournalFixture(t)
@@ -105,6 +107,7 @@ func newUsageJournalRole(t *testing.T, syncer *Sync, grants string) string {
 }
 
 func TestUsageCurrentJournalNeedsNoFunctionOwnership(t *testing.T) {
+	t.Parallel()
 	_, syncer, _ := newUsageJournalFixture(t)
 	ctx := t.Context()
 	reader, err := NewStore(ctx, newUsageJournalRole(t, syncer, `GRANT SELECT ON sync_metadata TO ROLE`), syncer.schema, true)
@@ -118,6 +121,7 @@ func TestUsageCurrentJournalNeedsNoFunctionOwnership(t *testing.T) {
 }
 
 func TestUsageChangeJournalWatchedTables(t *testing.T) {
+	t.Parallel()
 	_, syncer, store := newUsageJournalFixture(t)
 	ctx := t.Context()
 	_, err := syncer.pg.ExecContext(ctx, `INSERT INTO sessions(id,machine,project,agent) VALUES('owner','machine','project','codex'),('other','machine','project','codex');
@@ -193,6 +197,7 @@ func TestUsageChangeJournalWatchedTables(t *testing.T) {
 }
 
 func TestUsageChangeJournalPushPaths(t *testing.T) {
+	t.Parallel()
 	local, syncer, store := newUsageJournalFixture(t)
 	ctx := t.Context()
 	push := func(t *testing.T, full bool) {
@@ -293,6 +298,7 @@ func TestUsageChangeJournalPushPaths(t *testing.T) {
 
 // The transaction that commits later gets the later revision, whichever began first.
 func TestUsageChangeJournalCommitOrder(t *testing.T) {
+	t.Parallel()
 	_, syncer, store := newUsageJournalFixture(t)
 	ctx := t.Context()
 	before, err := store.UsageChangeRevision(ctx)
@@ -316,6 +322,7 @@ func TestUsageChangeJournalCommitOrder(t *testing.T) {
 }
 
 func TestUsageChangeJournalInstallIdempotent(t *testing.T) {
+	t.Parallel()
 	_, syncer, store := newUsageJournalFixture(t)
 	ctx := t.Context()
 	before, err := store.UsageChangeRevision(ctx)
@@ -354,6 +361,7 @@ func TestUsageChangeJournalInstallIdempotent(t *testing.T) {
 }
 
 func TestUsageChangeJournalDropClearsHistory(t *testing.T) {
+	t.Parallel()
 	_, syncer, _ := newUsageJournalFixture(t)
 	ctx := t.Context()
 	var token string
@@ -373,6 +381,7 @@ func TestUsageChangeJournalDropClearsHistory(t *testing.T) {
 }
 
 func TestUsageChangeJournalNewerVersion(t *testing.T) {
+	t.Parallel()
 	_, syncer, store := newUsageJournalFixture(t)
 	ctx := t.Context()
 	_, err := syncer.pg.ExecContext(ctx, dropUsageChangeJournalSQL)
@@ -397,6 +406,7 @@ func TestUsageChangeJournalNewerVersion(t *testing.T) {
 }
 
 func TestUsageChangeJournalRestrictedRole(t *testing.T) {
+	t.Parallel()
 	local, syncer, store := newUsageJournalFixture(t)
 	ctx := t.Context()
 	roleURL := newUsageJournalRole(t, syncer, `GRANT SELECT,INSERT,UPDATE,DELETE ON ALL TABLES IN SCHEMA `+syncer.schema+` TO ROLE;
@@ -432,6 +442,7 @@ func TestUsageChangeJournalRestrictedRole(t *testing.T) {
 }
 
 func TestUsageChangeJournalLateGrantedReader(t *testing.T) {
+	t.Parallel()
 	_, syncer, _ := newUsageJournalFixture(t)
 	ctx := t.Context()
 	// Granted after installation, so the journal itself stays unreadable.
@@ -445,6 +456,7 @@ func TestUsageChangeJournalLateGrantedReader(t *testing.T) {
 }
 
 func TestUsageJournalUpgradesHistoryToken(t *testing.T) {
+	t.Parallel()
 	_, syncer, store := newUsageJournalFixture(t)
 	ctx := t.Context()
 	// Version 1 stamped revisions and account changes without a history token.

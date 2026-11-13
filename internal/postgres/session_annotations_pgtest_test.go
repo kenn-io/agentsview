@@ -14,6 +14,7 @@ import (
 )
 
 func TestPGSessionAnnotationParity(t *testing.T) {
+	t.Parallel()
 	syncer, local, _, ctx := newSessionProvenancePushSync(
 		t, "agentsview_session_annotations_test",
 	)
@@ -28,6 +29,7 @@ func TestPGSessionAnnotationParity(t *testing.T) {
 }
 
 func TestPGPushRepushesAnnotationOnlyChanges(t *testing.T) {
+	t.Parallel()
 	syncer, local, pg, ctx := newSessionProvenancePushSync(
 		t, "agentsview_session_annotations_repush_test",
 	)
@@ -84,6 +86,7 @@ func TestPGPushRepushesAnnotationOnlyChanges(t *testing.T) {
 }
 
 func TestPGPushAddsAnnotationColumnsToOlderSchema(t *testing.T) {
+	t.Parallel()
 	syncer, local, pg, ctx := newSessionProvenancePushSync(
 		t, "agentsview_session_annotations_upgrade_test",
 	)
@@ -110,6 +113,7 @@ func TestPGPushAddsAnnotationColumnsToOlderSchema(t *testing.T) {
 }
 
 func TestSessionExclusionCounts(t *testing.T) {
+	t.Parallel()
 	syncer, local, _, ctx := newSessionProvenancePushSync(t, "agentsview_session_exclusions_test")
 	dbtest.SeedSessionExclusions(t, local)
 	_, err := syncer.Push(ctx, true, nil)

@@ -12,6 +12,7 @@ import (
 )
 
 func TestFrustrationMemoCommittedVersionsWithEqualTimestamps(t *testing.T) {
+	t.Parallel()
 	const schema = "agentsview_signals_version_test"
 	const id = "signals-version"
 	syncer, local, pg, ctx := newSessionProvenancePushSync(t, schema)
@@ -55,6 +56,7 @@ func TestFrustrationMemoCommittedVersionsWithEqualTimestamps(t *testing.T) {
 }
 
 func TestFrustrationMemoPublicationBetweenReads(t *testing.T) {
+	t.Parallel()
 	for _, test := range []struct {
 		name    string
 		content string
@@ -133,6 +135,7 @@ func TestFrustrationMemoPublicationBetweenReads(t *testing.T) {
 }
 
 func TestFrustrationMemo(t *testing.T) {
+	t.Parallel()
 	for _, test := range []struct {
 		name string
 		want int

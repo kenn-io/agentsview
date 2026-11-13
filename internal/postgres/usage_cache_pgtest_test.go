@@ -30,6 +30,7 @@ import (
 )
 
 func TestPGUsageCachePersistsRollupsBeforeInterruptedFill(t *testing.T) {
+	t.Parallel()
 	_, _, store, _ := keptUsageFixture(t)
 	ctx := t.Context()
 	_, err := store.pg.ExecContext(ctx, `INSERT INTO sessions(id,project,machine,agent,started_at)
@@ -97,6 +98,7 @@ VALUES ('batch-1','provider','paid-a',20,'2026-01-01','shared'),
 }
 
 func TestPGUsageCacheDeferredReadsReuseDirectResults(t *testing.T) {
+	t.Parallel()
 	for _, state := range []string{"version 1", "fill in progress"} {
 		t.Run(state, func(t *testing.T) {
 			_, syncer, writer, _ := keptUsageFixture(t)
@@ -172,6 +174,7 @@ func TestPGUsageCacheDeferredReadsReuseDirectResults(t *testing.T) {
 }
 
 func TestPGUsageCacheDeferredReadChangesHistory(t *testing.T) {
+	t.Parallel()
 	_, _, store, _ := keptUsageFixture(t)
 	ctx := t.Context()
 	attachUsageCacheProbe(t, store, t.TempDir())
@@ -198,6 +201,7 @@ func TestPGUsageCacheDeferredReadChangesHistory(t *testing.T) {
 }
 
 func TestPGUsageCacheDeferredReadUsesSnapshot(t *testing.T) {
+	t.Parallel()
 	_, syncer, writer, _ := keptUsageFixture(t)
 	ctx := t.Context()
 	config, err := pgx.ParseConfig(testPGURL(t))
@@ -242,6 +246,7 @@ func TestPGUsageCacheDeferredReadUsesSnapshot(t *testing.T) {
 }
 
 func TestPGUsageCacheWaitsForDirectReadBeforeWarm(t *testing.T) {
+	t.Parallel()
 	_, _, store, _ := keptUsageFixture(t)
 	ctx := t.Context()
 	_, err := store.pg.ExecContext(ctx, `INSERT INTO sessions(id,project,machine,agent,started_at)
@@ -287,6 +292,7 @@ FROM generate_series(1, 1100) n`)
 }
 
 func TestPGUsageCacheRetriesFailedWarmWithoutAnotherRequest(t *testing.T) {
+	t.Parallel()
 	_, _, store, _ := keptUsageFixture(t)
 	probe := attachUsageCacheProbe(t, store, t.TempDir())
 	t.Cleanup(func() { require.NoError(t, store.usageCache.Close()) })
@@ -309,6 +315,7 @@ func TestPGUsageCacheRetriesFailedWarmWithoutAnotherRequest(t *testing.T) {
 }
 
 func TestPGUsageCacheInterruptedAccountStreamKeepsLastCompleteResult(t *testing.T) {
+	t.Parallel()
 	_, _, store, _ := keptUsageFixture(t)
 	ctx := t.Context()
 	_, err := store.pg.ExecContext(ctx, `INSERT INTO cursor_usage_events(id,agent,occurred_at,model,charged_microdollars,dedup_key) VALUES
@@ -339,6 +346,7 @@ func TestPGUsageCacheInterruptedAccountStreamKeepsLastCompleteResult(t *testing.
 }
 
 func TestPGUsageCacheRefreshesLargeDeletion(t *testing.T) {
+	t.Parallel()
 	_, _, store, _ := keptUsageFixture(t)
 	ctx := t.Context()
 	_, err := store.pg.ExecContext(ctx, `INSERT INTO sessions(id,project,machine,agent,started_at)
@@ -495,6 +503,7 @@ func readWarmedUsage(t *testing.T, store *Store, filter db.UsageFilter) db.Daily
 }
 
 func TestPGUsageCacheWindowRestartAndSmallPush(t *testing.T) {
+	t.Parallel()
 	local, syncer, store, _ := keptUsageFixture(t)
 	ctx := t.Context()
 	_, err := store.pg.ExecContext(ctx, `INSERT INTO sessions(id,project,machine,agent,started_at) VALUES('older','old-project','test-machine','codex','2025-01-01'); INSERT INTO usage_events(session_id,source,model,input_tokens,output_tokens,occurred_at,dedup_key) VALUES('older','provider','paid-a',2,100,'2025-01-01','old'); INSERT INTO cursor_usage_events(id,agent,occurred_at,model,output_tokens,charged_microdollars,dedup_key) VALUES(1,'cursor','2026-01-01','paid-a',2,200,'persisted-account')`)
@@ -554,6 +563,7 @@ func TestPGUsageCacheWindowRestartAndSmallPush(t *testing.T) {
 }
 
 func TestPGUsageCacheRestartDefaultPairwiseParity(t *testing.T) {
+	t.Parallel()
 	_, _, store, _ := keptUsageFixture(t)
 	_, err := store.pg.ExecContext(t.Context(), `INSERT INTO cursor_usage_events(id,agent,occurred_at,model,output_tokens,charged_microdollars,dedup_key) VALUES(1,'cursor','2026-01-01','cursor-model',30,300,'account')`)
 	require.NoError(t, err)
@@ -597,6 +607,7 @@ func TestPGUsageCacheRestartDefaultPairwiseParity(t *testing.T) {
 }
 
 func TestPGUsageCacheAccountReplacementAndPricing(t *testing.T) {
+	t.Parallel()
 	_, _, store, _ := keptUsageFixture(t)
 	ctx := t.Context()
 	_, err := store.pg.ExecContext(ctx, `INSERT INTO cursor_usage_events(id,agent,occurred_at,model,input_tokens,output_tokens,charged_microdollars,is_headless,dedup_key) VALUES(100,'cursor','2026-01-01','paid-a',10,20,100,false,'one'),(2000000,'cursor','2026-01-01','paid-a',20,30,200,false,'two')`)
@@ -636,6 +647,7 @@ func TestPGUsageCacheAccountReplacementAndPricing(t *testing.T) {
 }
 
 func TestPGUsageAccountUpgradeWaitsForOldWriter(t *testing.T) {
+	t.Parallel()
 	_, _, store, _ := keptUsageFixture(t)
 	ctx := t.Context()
 	var schema string
@@ -673,6 +685,7 @@ CREATE OR REPLACE FUNCTION mark_usage_cursor_usage_events() RETURNS trigger LANG
 }
 
 func TestPGUsageCacheSnapshotPeersAndRanking(t *testing.T) {
+	t.Parallel()
 	_, _, store, _ := keptUsageFixture(t)
 	ctx := t.Context()
 	_, err := store.pg.ExecContext(ctx, `INSERT INTO sessions(id,project,machine,agent,started_at) VALUES('first','first-project','test-machine','claude','2026-01-01'),('second','second-project','test-machine','claude','2026-01-01');
@@ -694,6 +707,7 @@ func TestPGUsageCacheSnapshotPeersAndRanking(t *testing.T) {
 }
 
 func TestPGUsageCacheCloseFill(t *testing.T) {
+	t.Parallel()
 	_, _, store, _ := keptUsageFixture(t)
 	directory := t.TempDir()
 	probe := attachUsageCacheProbe(t, store, directory)
@@ -726,6 +740,7 @@ func TestPGUsageCacheCloseFill(t *testing.T) {
 }
 
 func TestPGUsageCacheConcurrentHandlesFillSameWindow(t *testing.T) {
+	t.Parallel()
 	_, _, store, _ := keptUsageFixture(t)
 	directory := t.TempDir()
 	probe := attachUsageCacheProbe(t, store, directory)
@@ -771,6 +786,7 @@ func TestPGUsageCacheConcurrentHandlesFillSameWindow(t *testing.T) {
 }
 
 func TestPGUsageCacheTopRankingControlsAndGroupedRemainder(t *testing.T) {
+	t.Parallel()
 	_, _, store, _ := keptUsageFixture(t)
 	ctx := t.Context()
 	_, err := store.pg.ExecContext(ctx, `INSERT INTO sessions(id,project,machine,agent,started_at,group_key)
@@ -818,6 +834,7 @@ func TestPGUsageCacheTopRankingControlsAndGroupedRemainder(t *testing.T) {
 }
 
 func TestPGUsageCacheSessionFilters(t *testing.T) {
+	t.Parallel()
 	for _, tc := range []struct {
 		name, mutation string
 		filter         db.UsageFilter
@@ -843,6 +860,7 @@ func TestPGUsageCacheSessionFilters(t *testing.T) {
 }
 
 func TestPGUsageCacheChronologicalTimestamps(t *testing.T) {
+	t.Parallel()
 	for _, tc := range []struct {
 		name, toOnly string
 		warm         bool
@@ -929,6 +947,7 @@ func TestPGUsageCacheChronologicalTimestamps(t *testing.T) {
 }
 
 func TestPGUsageCacheUnreadableJournalStopsWarming(t *testing.T) {
+	t.Parallel()
 	_, syncer, _, _ := keptUsageFixture(t)
 	ctx := t.Context()
 	roleURL := newUsageJournalRole(t, syncer, `GRANT SELECT ON ALL TABLES IN SCHEMA `+syncer.schema+` TO ROLE; REVOKE SELECT ON usage_session_changes FROM ROLE`)
@@ -955,6 +974,7 @@ func TestPGUsageCacheUnreadableJournalStopsWarming(t *testing.T) {
 }
 
 func TestPGUsageCacheDirectFallbackAndRecovery(t *testing.T) {
+	t.Parallel()
 	for _, name := range []string{"granted role", "initial denial", "cancelled caller", "extraction failure", "busy sessions", "busy accounts", "pricing mutation", "late journal installation"} {
 		t.Run(name, func(t *testing.T) {
 			_, syncer, owner, counter := keptUsageFixture(t)
@@ -1041,10 +1061,7 @@ func TestPGUsageCacheDirectFallbackAndRecovery(t *testing.T) {
 				// A fill can stop while its caller remains active. Classify the caller,
 				// rather than the fill error, when deciding whether to read directly.
 				var output bytes.Buffer
-				previous, flags := log.Writer(), log.Flags()
-				log.SetOutput(&output)
-				log.SetFlags(0)
-				t.Cleanup(func() { log.SetOutput(previous); log.SetFlags(flags) })
+				reader.usageCache.SetLogger(log.New(&output, "", 0))
 				for _, failure := range []error{errors.New("injected remote extraction failure"), context.Canceled, context.DeadlineExceeded} {
 					probe.before = func(context.Context, []string) error { return failure }
 					_, err := reader.usageCache.GetDailyUsage(ctx, filter)
@@ -1100,9 +1117,7 @@ func TestPGUsageCacheDirectFallbackAndRecovery(t *testing.T) {
 				require.NoError(t, reader.usageCache.WaitWarm(ctx))
 				requireCachedUsageMatchesDirect(t, reader, filter)
 				var output bytes.Buffer
-				previous := log.Writer()
-				log.SetOutput(&output)
-				t.Cleanup(func() { log.SetOutput(previous) })
+				reader.usageCache.SetLogger(log.New(&output, "", 0))
 				_, err = owner.pg.ExecContext(ctx, dropUsageChangeJournalSQL)
 				require.NoError(t, err)
 				filter.From = "2026-01-01"
@@ -1118,9 +1133,7 @@ func TestPGUsageCacheDirectFallbackAndRecovery(t *testing.T) {
 			require.NotNil(t, reader.usageCache)
 			if name == "late journal installation" {
 				var output bytes.Buffer
-				previous := log.Writer()
-				log.SetOutput(&output)
-				t.Cleanup(func() { log.SetOutput(previous) })
+				reader.usageCache.SetLogger(log.New(&output, "", 0))
 				want, err := (&Store{pg: reader.pg}).GetDailyUsage(ctx, filter)
 				require.NoError(t, err)
 				for range 10 {
@@ -1169,6 +1182,7 @@ func TestPGUsageCacheDirectFallbackAndRecovery(t *testing.T) {
 }
 
 func TestPGUsageCacheAccountTotalsMatchDirect(t *testing.T) {
+	t.Parallel()
 	local, syncer, store := newUsageJournalFixture(t)
 	ctx := t.Context()
 	require.NoError(t, local.UpsertSession(ctx, db.Session{ID: "session-a", Project: "project-a", Machine: "test-machine", Agent: "copilot", StartedAt: new("2026-01-01T09:00:00Z")}))
@@ -1220,6 +1234,7 @@ func TestPGUsageCacheAccountTotalsMatchDirect(t *testing.T) {
 }
 
 func TestPGUsageCacheRecoversRewoundJournal(t *testing.T) {
+	t.Parallel()
 	_, _, store, _ := keptUsageFixture(t)
 	ctx := t.Context()
 	_, err := store.pg.ExecContext(ctx, `INSERT INTO cursor_usage_events(id,agent,occurred_at,model,output_tokens,charged_microdollars,dedup_key) VALUES(1,'cursor','2026-01-01','paid-a',3,100,'restored-account')`)
@@ -1322,6 +1337,7 @@ func TestPGUsageCacheRecoversRewoundJournal(t *testing.T) {
 }
 
 func TestPGUsageCacheRewindWithUnclaimedTimezone(t *testing.T) {
+	t.Parallel()
 	_, _, store, _ := keptUsageFixture(t)
 	ctx := t.Context()
 	_, err := store.pg.ExecContext(ctx, `INSERT INTO cursor_usage_events(id,agent,occurred_at,model,output_tokens,charged_microdollars,dedup_key) VALUES(1,'cursor','2026-01-01','paid-a',3,100,'account')`)
@@ -1353,6 +1369,7 @@ func TestPGUsageCacheRewindWithUnclaimedTimezone(t *testing.T) {
 }
 
 func TestPGUsageCacheNewerClaimDoesNotResetOlderSnapshot(t *testing.T) {
+	t.Parallel()
 	_, _, store, _ := keptUsageFixture(t)
 	ctx := t.Context()
 	directory := t.TempDir()
@@ -1409,13 +1426,12 @@ func TestPGUsageCacheNewerClaimDoesNotResetOlderSnapshot(t *testing.T) {
 }
 
 func TestPGUsageCacheDefersAccountChange(t *testing.T) {
+	t.Parallel()
 	_, _, store, _ := keptUsageFixture(t)
 	ctx := t.Context()
-	var output bytes.Buffer
-	previous := log.Writer()
-	log.SetOutput(&output)
-	t.Cleanup(func() { log.SetOutput(previous) })
 	attachUsageCacheProbe(t, store, t.TempDir())
+	var output bytes.Buffer
+	store.usageCache.SetLogger(log.New(&output, "", 0))
 	filter := db.UsageFilter{Timezone: "UTC"}
 	requireCachedUsageMatchesDirect(t, store, filter)
 	require.NoError(t, store.usageCache.LoadReadiness(ctx))
@@ -1441,6 +1457,7 @@ func TestPGUsageCacheDefersAccountChange(t *testing.T) {
 }
 
 func TestPGUsageCacheKeepsAccountFactsAfterIdentityWrite(t *testing.T) {
+	t.Parallel()
 	_, _, store, _ := keptUsageFixture(t)
 	ctx := t.Context()
 	_, err := store.pg.ExecContext(ctx, `INSERT INTO cursor_usage_events(id,agent,occurred_at,model,output_tokens,charged_microdollars,dedup_key) VALUES(1,'cursor','2026-01-01','paid-a',3,300,'account-one')`)
@@ -1476,6 +1493,7 @@ func TestPGUsageCacheKeepsAccountFactsAfterIdentityWrite(t *testing.T) {
 }
 
 func TestPGUsageAccountRevisionTracksCommittedChanges(t *testing.T) {
+	t.Parallel()
 	_, syncer, store, _ := keptUsageFixture(t)
 	ctx := t.Context()
 	source := &pgUsageCacheSource{Store: store, target: "account-revision-test"}
@@ -1521,6 +1539,7 @@ func TestPGUsageAccountRevisionTracksCommittedChanges(t *testing.T) {
 }
 
 func TestPGUsageAccountRevisionLeavesNewerJournalUntouched(t *testing.T) {
+	t.Parallel()
 	_, syncer, _, _ := keptUsageFixture(t)
 	ctx := t.Context()
 	_, err := syncer.pg.ExecContext(ctx, `UPDATE sync_metadata SET value='999' WHERE key='usage_change_journal_version';
@@ -1534,6 +1553,7 @@ CREATE OR REPLACE FUNCTION stamp_usage_change() RETURNS trigger LANGUAGE plpgsql
 }
 
 func TestPGUsageCacheIdentityPermissionUnavailable(t *testing.T) {
+	t.Parallel()
 	_, syncer, owner, _ := keptUsageFixture(t)
 	ctx := t.Context()
 	roleURL := newUsageJournalRole(t, syncer, `GRANT SELECT ON ALL TABLES IN SCHEMA `+syncer.schema+` TO ROLE`)

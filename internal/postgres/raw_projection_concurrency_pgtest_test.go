@@ -14,6 +14,7 @@ import (
 )
 
 func TestRawProjectionCurationResolvesMembershipAfterConcurrentSplit(t *testing.T) {
+	t.Parallel()
 	f := newProjectionFixture(t)
 	a, ar := f.accept(t, "device-a", "race-a", "")
 	require.NoError(t, f.sink.Project(t.Context(), f.lease(t, a), a, projectionOutcome("equal")))
@@ -152,6 +153,7 @@ func (f projectionFixture) projectSession(t *testing.T, device, session string) 
 }
 
 func TestRawProjectionRowWritesDoNotHoldCorpusRevisionAgainstOtherSources(t *testing.T) {
+	t.Parallel()
 	f := newProjectionFixture(t)
 	slow, _ := f.accept(t, "device-a", "slow-a", "")
 	lease := f.lease(t, slow)
@@ -174,6 +176,7 @@ func TestRawProjectionRowWritesDoNotHoldCorpusRevisionAgainstOtherSources(t *tes
 // Projections of different groups share no rows, so one can publish while
 // another is still writing.
 func TestRawProjectionsOfDifferentGroupsPublishIndependently(t *testing.T) {
+	t.Parallel()
 	f := newProjectionFixture(t)
 	slow, _ := f.accept(t, "device-a", "slow-a", "")
 	slowLease := f.lease(t, slow)
@@ -219,6 +222,7 @@ func TestRawProjectionsOfDifferentGroupsPublishIndependently(t *testing.T) {
 }
 
 func TestRawCurationRowWritesDoNotHoldCorpusRevisionAgainstOtherSources(t *testing.T) {
+	t.Parallel()
 	f := newProjectionFixture(t)
 	f.projectSession(t, "device-a", "starred")
 	other, _ := f.accept(t, "device-b", "other-b", "")
@@ -240,6 +244,7 @@ func TestRawCurationRowWritesDoNotHoldCorpusRevisionAgainstOtherSources(t *testi
 // Excluding trashed sessions removes their physical rows. Emptying the trash
 // removes every selected group's rows before it publishes any of them.
 func TestRawExclusionRowRemovalDoesNotHoldCorpusRevisionAgainstOtherSources(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		name    string
 		exclude func(context.Context, *RawProjectionStore) (int, error)
@@ -319,6 +324,7 @@ func TestRawExclusionRowRemovalDoesNotHoldCorpusRevisionAgainstOtherSources(t *t
 }
 
 func TestRawProjectionCurationSQLFailureRollsBackOverlayAndMaterialization(t *testing.T) {
+	t.Parallel()
 	f := newProjectionFixture(t)
 	m, _ := f.accept(t, "device-a", "curation-failure", "")
 	require.NoError(t, f.sink.Project(t.Context(), f.lease(t, m), m, projectionOutcome("hello")))
@@ -341,6 +347,7 @@ func TestRawProjectionCurationSQLFailureRollsBackOverlayAndMaterialization(t *te
 }
 
 func TestRawProjectionRollsBackWhenLeaseExpiresDuringWrites(t *testing.T) {
+	t.Parallel()
 	f := newProjectionFixture(t)
 	m, _ := f.accept(t, "device-a", "expires-during-write", "")
 	_, err := f.sink.SelectSourceGeneration(t.Context(), m, "parser-1")
@@ -359,6 +366,7 @@ func TestRawProjectionRollsBackWhenLeaseExpiresDuringWrites(t *testing.T) {
 }
 
 func TestRawProjectionRollsBackWhenLeaseExpiresWaitingForCorpusRevision(t *testing.T) {
+	t.Parallel()
 	f := newProjectionFixture(t)
 	m, _ := f.accept(t, "device-a", "expires-waiting", "")
 	_, err := f.sink.SelectSourceGeneration(t.Context(), m, "parser-1")

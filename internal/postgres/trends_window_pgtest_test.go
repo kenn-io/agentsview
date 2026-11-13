@@ -11,6 +11,7 @@ import (
 )
 
 func TestStoreGetTrendsTermsDateWindowEdges(t *testing.T) {
+	t.Parallel()
 	const schema = "agentsview_trends_window_test"
 	pgURL := testPGURL(t)
 	syncer, local, _, ctx := newSessionProvenancePushSync(t, schema)

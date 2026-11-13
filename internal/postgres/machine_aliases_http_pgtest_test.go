@@ -6,7 +6,6 @@ import (
 	"encoding/json/v2"
 	"net/http"
 	"net/http/httptest"
-	"os"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -20,10 +19,8 @@ import (
 )
 
 func TestMachineAliasesOnPostgresHTTP(t *testing.T) {
-	pgURL := os.Getenv("TEST_PG_URL")
-	if pgURL == "" {
-		t.Skip("TEST_PG_URL must point to a dedicated test database")
-	}
+	t.Parallel()
+	pgURL := postgres.PGTestURL(t)
 	_, dataDir := newPGE2ETestDatabase(t)
 	local := dbtest.OpenTestDB(t)
 	dbtest.SeedPricingMeta(t, local)

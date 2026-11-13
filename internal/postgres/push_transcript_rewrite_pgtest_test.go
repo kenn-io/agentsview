@@ -15,6 +15,7 @@ import (
 // while it still copies changed messages and a requested full push, or the
 // resumption of one, rewrites every transcript.
 func TestPGFullPushRewritesTranscriptsOnlyWhenRequested(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		name         string
 		prepare      func(t *testing.T, syncer *Sync)

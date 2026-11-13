@@ -9,6 +9,7 @@ import (
 )
 
 func TestRawProjectionEmptyTrashExcludesOnlyFullyTrashedCohorts(t *testing.T) {
+	t.Parallel()
 	f := newProjectionFixture(t)
 	a, ar := f.accept(t, "device-a", "exclude-a", "")
 	require.NoError(t, f.sink.Project(t.Context(), f.lease(t, a), a, projectionOutcome("equal")))
@@ -47,6 +48,7 @@ func TestRawProjectionEmptyTrashExcludesOnlyFullyTrashedCohorts(t *testing.T) {
 	assert.Empty(t, trash)
 }
 func TestRawProjectionBaseExclusionAlsoCoversFutureBranches(t *testing.T) {
+	t.Parallel()
 	f := newProjectionFixture(t)
 	a, _ := f.accept(t, "device-a", "base-exclude-a", "")
 	require.NoError(t, f.sink.Project(t.Context(), f.lease(t, a), a, projectionOutcome("content")))

@@ -24,7 +24,8 @@ import (
 // The row is written directly rather than through a push so the read path
 // is exercised on its own, independent of what any parser emits.
 func TestPGGetMessagesDropsInvalidStoredTokenUsage(t *testing.T) {
-	pgURL := testPGURL(t)
+	t.Parallel()
+	pgURL := testPGStoreURL(t)
 	ensureStoreSchema(t, pgURL)
 
 	pg, err := Open(t.Context(), pgURL, testSchema, false)
@@ -58,7 +59,8 @@ func TestPGGetMessagesDropsInvalidStoredTokenUsage(t *testing.T) {
 
 // Valid usage must still round-trip through the mirror untouched.
 func TestPGGetMessagesPreservesValidStoredTokenUsage(t *testing.T) {
-	pgURL := testPGURL(t)
+	t.Parallel()
+	pgURL := testPGStoreURL(t)
 	ensureStoreSchema(t, pgURL)
 
 	pg, err := Open(t.Context(), pgURL, testSchema, false)

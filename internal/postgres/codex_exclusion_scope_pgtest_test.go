@@ -11,6 +11,7 @@ import (
 )
 
 func TestCodexLegacyExclusionsSurvivePageSplit(t *testing.T) {
+	t.Parallel()
 	ctx := t.Context()
 	const schema = "agentsview_codex_exclusion_test"
 	pgURL := testPGURL(t)

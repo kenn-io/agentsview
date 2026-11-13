@@ -58,6 +58,7 @@ func seedWebSearchUsage(t *testing.T, store *Store, model string) {
 }
 
 func TestStoreSessionUsageBillsWebSearchRequests(t *testing.T) {
+	t.Parallel()
 	_, store := prepareUsageSchema(t, "agentsview_usage_websearch_test")
 	seedWebSearchUsage(t, store, "claude-websearch-test")
 	ctx := t.Context()
@@ -90,6 +91,7 @@ func TestStoreSessionUsageBillsWebSearchRequests(t *testing.T) {
 }
 
 func TestPGAsymmetricClaudeSnapshotsPreserveWebSearchFee(t *testing.T) {
+	t.Parallel()
 	_, store := prepareUsageSchema(
 		t, "agentsview_usage_websearch_asymmetric_test")
 	seedWebSearchUsage(t, store, "claude-websearch-test")
@@ -137,6 +139,7 @@ func TestPGAsymmetricClaudeSnapshotsPreserveWebSearchFee(t *testing.T) {
 }
 
 func TestPGUsageJSONExtractionUsesExactPathsAndMalformedFallback(t *testing.T) {
+	t.Parallel()
 	_, store := prepareUsageSchema(t, "agentsview_usage_json_paths_test")
 	ctx := t.Context()
 	_, err := store.DB().ExecContext(ctx, `
@@ -198,6 +201,7 @@ func TestPGUsageJSONExtractionUsesExactPathsAndMalformedFallback(t *testing.T) {
 // An unpriced model still owes the flat fee, which does not depend on token
 // rates, while the session stays reported as an incomplete estimate.
 func TestStoreSessionUsageBillsWebSearchOnUnpricedModel(t *testing.T) {
+	t.Parallel()
 	_, store := prepareUsageSchema(
 		t, "agentsview_usage_websearch_unpriced_test")
 	seedWebSearchUsage(t, store, "some-unlisted-model")

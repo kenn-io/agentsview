@@ -16,6 +16,7 @@ import (
 // Serve must still ask for the grant: the rebuild advice would discard the
 // pushed data.
 func TestServeWithoutSchemaUsageAsksForTheGrant(t *testing.T) {
+	t.Parallel()
 	pgURL := testPGURL(t)
 	const schema = "agentsview_serve_usage_test"
 	const role = "agentsview_serve_no_usage"

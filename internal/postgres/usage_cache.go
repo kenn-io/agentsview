@@ -380,8 +380,8 @@ func (source *pgUsageCacheSource) UsageSessionNames(ctx context.Context, ids []s
 	return names, err
 }
 
-func directUsageRequired(ctx context.Context, err error) bool {
-	return err != nil && ctx.Err() == nil && logUsageFallback(err)
+func directUsageRequired(ctx context.Context, cache *db.UsageCacheReader, err error) bool {
+	return err != nil && ctx.Err() == nil && logUsageFallback(cache, err)
 }
 
 func cachedUsage[T any](ctx context.Context, cache *db.UsageCacheReader, read func(*db.UsageCacheReader) (T, error)) (result T, release func(), handled bool, err error) {
@@ -389,15 +389,15 @@ func cachedUsage[T any](ctx context.Context, cache *db.UsageCacheReader, read fu
 		return result, func() {}, false, nil
 	}
 	result, err = read(cache)
-	if !directUsageRequired(ctx, err) {
+	if !directUsageRequired(ctx, cache, err) {
 		return result, func() {}, true, err
 	}
 	return result, cache.HoldWarm(), false, nil
 }
 
-func logUsageFallback(err error) bool {
+func logUsageFallback(cache *db.UsageCacheReader, err error) bool {
 	if !errors.Is(err, db.ErrUsageCacheWarming) && !errors.Is(err, db.ErrUsageSourceUnavailable) {
-		log.Printf("postgres usage cache: falling back to direct read: %v", err)
+		cache.Logger().Printf("postgres usage cache: falling back to direct read: %v", err)
 	}
 	return true
 }

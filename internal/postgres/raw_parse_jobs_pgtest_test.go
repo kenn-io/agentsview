@@ -17,6 +17,7 @@ import (
 )
 
 func TestRawParseJobsLeaseExclusivelyAndFenceExpiredAttempts(t *testing.T) {
+	t.Parallel()
 	pg, store := newRawIngestTestStore(t)
 	identity := rawIngestIdentity(t, "tenant-a")
 	object := rawIngestObject(t, "a", 7)
@@ -65,6 +66,7 @@ func TestRawParseJobsLeaseExclusivelyAndFenceExpiredAttempts(t *testing.T) {
 }
 
 func TestRawParseJobsSupersedeNonHeadManifestsOnShortClaim(t *testing.T) {
+	t.Parallel()
 	pg, store := newRawIngestTestStore(t)
 	identity := rawIngestIdentity(t, "tenant-a")
 	object := rawIngestObject(t, "a", 7)
@@ -101,6 +103,7 @@ func TestRawParseJobsSupersedeNonHeadManifestsOnShortClaim(t *testing.T) {
 }
 
 func TestRawParseJobsRetryOnlyWhenAvailable(t *testing.T) {
+	t.Parallel()
 	pg, store := newRawIngestTestStore(t)
 	identity := rawIngestIdentity(t, "tenant-a")
 	object := rawIngestObject(t, "a", 7)
@@ -131,6 +134,7 @@ func TestRawParseJobsRetryOnlyWhenAvailable(t *testing.T) {
 }
 
 func TestRawParseJobsFenceRetryAfterSourceHeadAdvances(t *testing.T) {
+	t.Parallel()
 	_, store := newRawIngestTestStore(t)
 	identity := rawIngestIdentity(t, "tenant-a")
 	object := rawIngestObject(t, "a", 7)
@@ -159,6 +163,7 @@ func TestRawParseJobsFenceRetryAfterSourceHeadAdvances(t *testing.T) {
 }
 
 func TestRawParseJobsRecordTerminalFailureWithLeaseFence(t *testing.T) {
+	t.Parallel()
 	pg, store := newRawIngestTestStore(t)
 	identity := rawIngestIdentity(t, "tenant-a")
 	object := rawIngestObject(t, "a", 7)
@@ -191,6 +196,7 @@ func TestRawParseJobsRecordTerminalFailureWithLeaseFence(t *testing.T) {
 }
 
 func TestClaimRawParseJobsSupersedeBatchIsBounded(t *testing.T) {
+	t.Parallel()
 	pg, store := newRawIngestTestStore(t)
 	identity := rawIngestIdentity(t, "tenant-a")
 	object := rawIngestObject(t, "a", 7)
@@ -253,6 +259,7 @@ func reOpenSupersededRawParseJobs(t *testing.T, pg *sql.DB) {
 }
 
 func TestClaimRawParseJobsSkipsSupersedeWhenBatchFillsWithCurrentHeads(t *testing.T) {
+	t.Parallel()
 	pg, store := newRawIngestTestStore(t)
 	// Two sources, each with one obsolete ready job behind a current-head
 	// ready job: four claimable-looking rows, two of which may never lease.
@@ -309,6 +316,7 @@ func TestClaimRawParseJobsSkipsSupersedeWhenBatchFillsWithCurrentHeads(t *testin
 }
 
 func TestClaimRawParseJobsRequiresCurrentHeadEvenWhenSupersedeMissed(t *testing.T) {
+	t.Parallel()
 	pg, store := newRawIngestTestStore(t)
 	identity := rawIngestIdentity(t, "tenant-a")
 	object := rawIngestObject(t, "a", 7)
@@ -377,6 +385,7 @@ func TestClaimRawParseJobsRequiresCurrentHeadEvenWhenSupersedeMissed(t *testing.
 // by parse workers nor retired by their cleanup, while obsolete parse jobs
 // keep draining.
 func TestClaimRawParseJobsLeasesAndSupersedesOnlyParseStageJobs(t *testing.T) {
+	t.Parallel()
 	pg, store := newRawIngestTestStore(t)
 	identity := rawIngestIdentity(t, "tenant-a")
 	object := rawIngestObject(t, "a", 7)
@@ -450,6 +459,7 @@ func TestClaimRawParseJobsLeasesAndSupersedesOnlyParseStageJobs(t *testing.T) {
 // would never notice, and the documented clause order (LIMIT before the
 // locking clause) is exercised by both statements end to end.
 func TestClaimRawParseJobsRunsUnderRestrictedParseWorkerPrivileges(t *testing.T) {
+	t.Parallel()
 	pgURL := testPGURL(t)
 	pg, store := newRawIngestTestStore(t)
 	const role = "agentsview_parse_worker"
@@ -541,6 +551,7 @@ func claimOneRawParseJob(t *testing.T, store *RawIngestStore) rawderive.JobLease
 }
 
 func TestRawParseCleanupSkipsFutureRetryBacklog(t *testing.T) {
+	t.Parallel()
 	pg, _ := newRawIngestTestStore(t)
 	var smallBuffers int
 	for _, count := range []int{100, 10000} {

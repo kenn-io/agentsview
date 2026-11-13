@@ -486,8 +486,8 @@ test-postgres-core-ci:
 test-postgres-standby-ci: pricing-snapshot ensure-embed-dir
 	CGO_ENABLED=1 go test -tags "fts5,pgtest" ./internal/postgres -run '^TestUsageStandbyRetainsResults$$' -count=1 -timeout=5m
 
-# Each process gets its own database because tests drop schemas that own
-# database-wide extensions. Activity runs afterward on the original database.
+# Three processes split the internal/postgres tests and run them in parallel,
+# each test in its own database. Activity runs afterward on the original database.
 test-postgres-core-fast-ci: pricing-snapshot ensure-embed-dir
 	CGO_ENABLED=1 bash scripts/test-postgres-shards.sh postgres-core-fast ./internal/postgres 3 '$(POSTGRES_CORE_HEAVY_TEST)' 20m
 	CGO_ENABLED=1 $(call gotestsum,postgres-core-fast-activity,./internal/activity/...) -p 1 -tags "fts5,pgtest" -count=1 -timeout=20m

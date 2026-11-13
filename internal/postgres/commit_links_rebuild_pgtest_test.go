@@ -10,6 +10,7 @@ import (
 )
 
 func TestPGRetainedCommitLinksAfterNarrowRebuild(t *testing.T) {
+	t.Parallel()
 	for _, policy := range []config.ArchiveContent{config.ArchiveContentTranscripts} {
 		for _, full := range []bool{false, true} {
 			t.Run(string(policy)+map[bool]string{false: "/generation", true: "/full"}[full], func(t *testing.T) {

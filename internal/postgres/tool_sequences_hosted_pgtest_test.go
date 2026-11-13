@@ -21,6 +21,7 @@ import (
 )
 
 func TestHostedLiveReadRevisionExhaustion(t *testing.T) {
+	t.Parallel()
 	f := newProjectionFixture(t)
 	m, _ := f.accept(t, "device-a", "capture-a", "")
 	require.NoError(t, f.sink.Project(t.Context(), f.lease(t, m), m, projectionOutcome("transcript")))
@@ -58,6 +59,7 @@ func (s *toolSequenceAliasSwapStore) GetAllMessages(ctx context.Context, id stri
 }
 
 func TestToolSequencesHosted_SourceBinding(t *testing.T) {
+	t.Parallel()
 	f := newProjectionFixture(t)
 	m, accepted := f.accept(t, "device-a", "capture-a", "")
 	require.NoError(t, f.sink.Project(t.Context(), f.lease(t, m), m, projectionOutcome("first transcript")))
@@ -98,6 +100,7 @@ func TestToolSequencesHosted_SourceBinding(t *testing.T) {
 }
 
 func TestToolSequencesHosted_Mapping(t *testing.T) {
+	t.Parallel()
 	f := newProjectionFixture(t)
 	manifest, _ := f.accept(t, "device-a", "capture-a", "")
 	outcome := projectionOutcome("delegate tasks")

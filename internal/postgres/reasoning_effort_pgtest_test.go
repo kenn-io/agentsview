@@ -9,6 +9,7 @@ import (
 )
 
 func TestReasoningEffortPostgresSchemaAndRead(t *testing.T) {
+	t.Parallel()
 	ctx := t.Context()
 	schema := "agentsview_reasoning_effort_test"
 	pg, err := Open(t.Context(), testPGURL(t), schema, true)

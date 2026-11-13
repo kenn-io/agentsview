@@ -46,6 +46,7 @@ func (c *activityInputReadCounter) QueryContext(ctx context.Context, query strin
 }
 
 func TestPGActivityReportInputReads(t *testing.T) {
+	t.Parallel()
 	local, syncer, store := newUsageJournalFixture(t)
 	for _, id := range []string{"a", "b"} {
 		pgKeptSession(t, local, id, "project-a", "2026-06-14")
@@ -83,6 +84,7 @@ func TestPGActivityReportInputReads(t *testing.T) {
 }
 
 func TestPGActivityReportInputClock(t *testing.T) {
+	t.Parallel()
 	local, syncer, store := newUsageJournalFixture(t)
 	require.NoError(t, local.UpsertSession(t.Context(), db.Session{ID: "open", Project: "project-a", Machine: "test-machine", Agent: "claude", StartedAt: new("2026-06-14T10:00:00Z"), MessageCount: 3}))
 	require.NoError(t, local.ReplaceSessionMessages(t.Context(), "open", []db.Message{
@@ -111,6 +113,7 @@ func TestPGActivityReportInputClock(t *testing.T) {
 }
 
 func TestPGActivityReportInputRangeSwitchAfterPush(t *testing.T) {
+	t.Parallel()
 	local, syncer, store := newUsageJournalFixture(t)
 	counter := &activityInputReadCounter{storeExecutor: store.pg}
 	store.pg = counter
@@ -156,6 +159,7 @@ func TestPGActivityReportInputRangeSwitchAfterPush(t *testing.T) {
 }
 
 func TestPGActivityReportInputRetry(t *testing.T) {
+	t.Parallel()
 	for _, mode := range []string{"budget", "cancel", "journal", "regressed", "unavailable"} {
 		t.Run(mode, func(t *testing.T) {
 			local, syncer, store := newUsageJournalFixture(t)
@@ -201,6 +205,7 @@ func TestPGActivityReportInputRetry(t *testing.T) {
 }
 
 func TestPGActivityReportInputEmptySelectionAfterPush(t *testing.T) {
+	t.Parallel()
 	local, syncer, store := newUsageJournalFixture(t)
 	pgKeptSession(t, local, "a", "project-a", "2026-06-14")
 	pgKeptPush(t, syncer, false)
@@ -219,6 +224,7 @@ func TestPGActivityReportInputEmptySelectionAfterPush(t *testing.T) {
 }
 
 func TestPGActivityReportInputTranscriptAndCounts(t *testing.T) {
+	t.Parallel()
 	local, syncer, store := newUsageJournalFixture(t)
 	messages := []db.Message{
 		{SessionID: "a", Ordinal: 0, Role: "user", Content: "range start", Timestamp: "2026-06-14T00:00:00Z"},

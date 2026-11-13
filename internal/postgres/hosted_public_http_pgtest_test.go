@@ -21,6 +21,7 @@ import (
 )
 
 func TestHostedServiceAndHTTPPublicBoundary(t *testing.T) {
+	t.Parallel()
 	store, split, pin := postgres.HostedPublicFixture(t)
 	backend := service.NewReadOnlyBackend(store)
 	session, err := backend.Get(t.Context(), "codex:portable")

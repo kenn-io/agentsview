@@ -1568,8 +1568,39 @@ own metadata, which is why the docs below call the database a mirror.
 
 ## PostgreSQL Integration Tests
 
-Run PostgreSQL integration tests only against a dedicated test database. The
-tests create and drop the `agentsview` schema.
+Run PostgreSQL integration tests only against a dedicated test server. Each
+top-level test in `internal/postgres` creates its own database on the
+`TEST_PG_URL` server, named `agentsview_test_<hex>`, and drops it when the test
+ends. The role in `TEST_PG_URL` needs `CREATEDB`. A test binary that is killed
+leaves its databases behind; drop them by that prefix.
+
+Because each test owns a database, the tests run in parallel:
+
+- Start a new `pgtest` test with `t.Parallel()` and get its database from
+  `testPGURL(t)`, or `PGTestURL(t)` in the external `postgres_test` package.
+  Subtests share their top-level test's database. `isolatedPGDatabase(t)`
+  returns another, separate database.
+- Tests that call `ensureStoreSchema` get their database from
+  `testPGStoreURL(t)`. On PostgreSQL that database is a copy of a template in
+  which `EnsureSchema` already created the store schema, which saves about
+  60 ms per test. The template is built once per test binary and dropped at
+  exit. CockroachDB has no `CREATE DATABASE ... TEMPLATE`, so there the test
+  gets an empty database and creates the schema itself.
+- Leave out `t.Parallel()` when the test changes process-wide state, such as
+  `t.Setenv`, `time.Local`, `log.SetOutput`, `db.SetUserAutomationPrefixes`,
+  or `pricing.SetConfiguredAliases`. Go runs those tests one at a time before
+  the parallel ones start.
+- Roles are server-wide. Give each role a name no other test uses.
+- Concurrent tests share the server's connections and lock table. Against a
+  server with the default 100 connections, 16 concurrent tests ran out of lock
+  memory (SQLSTATE 53200) and 12 did not. So on PostgreSQL a top-level test
+  holds one of `max_connections / 8` slots while its databases exist, and
+  waits when none is free. The slots are lock files in the system temporary
+  directory, keyed by server address, so every test process against one
+  server shares them. CockroachDB has no shared lock table and no slots.
+- Run CockroachDB with an in-memory store
+  (`start-single-node --store=type=mem,size=4GiB`). Schema setup takes about
+  10 s per test there, against 86 s on a disk store.
 
 Use `make test-postgres` to start the test container and run the suite. It
 leaves the container running. If you started that container, use

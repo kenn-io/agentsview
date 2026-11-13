@@ -43,6 +43,7 @@ func recipeSource(fingerprint string, params map[string]string) *fakeVectorSourc
 }
 
 func TestVectorRecipePublishedAndBackfilled(t *testing.T) {
+	t.Parallel()
 	pgURL := testPGURL(t)
 	sync, localDB, pg := newVectorPushTestSync(t, pgURL, "agentsview_vector_recipe_test")
 	ctx := t.Context()
@@ -113,6 +114,7 @@ func TestVectorRecipePublishedAndBackfilled(t *testing.T) {
 }
 
 func TestVectorRecipeWriterWithoutOwnershipKeepsPushingVectors(t *testing.T) {
+	t.Parallel()
 	pgURL := testPGURL(t)
 	const schema = "agentsview_vector_recipe_role_test"
 	const role = "agentsview_vector_recipe_writer"
@@ -249,6 +251,7 @@ func (p *preparingVectorSource) BeginExport(
 }
 
 func TestVectorPushPreparesSourceOnlyWhenVectorsCanBeStored(t *testing.T) {
+	t.Parallel()
 	pgURL := testPGURL(t)
 	const schema = "agentsview_vector_prepare_test"
 	const prepareRole = "agentsview_vector_prepare_writer"

@@ -6,7 +6,6 @@ import (
 	"context"
 	"database/sql"
 	"maps"
-	"os"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -52,6 +51,7 @@ func (h *heldUsagePricing) QueryContext(ctx context.Context, query string, args 
 }
 
 func TestUsageKeptMissAfterPricingPush(t *testing.T) {
+	t.Parallel()
 	for _, tc := range []struct {
 		name string
 		want string
@@ -181,6 +181,7 @@ type usageQueryTracer struct {
 }
 
 func TestUsageRestrictedPrimaryRetainsDirectResults(t *testing.T) {
+	t.Parallel()
 	_, syncer, primary, _ := keptUsageFixture(t)
 	ctx := t.Context()
 	roleURL := newUsageJournalRole(t, syncer, `GRANT SELECT ON ALL TABLES IN SCHEMA `+syncer.schema+` TO ROLE`)
@@ -312,10 +313,8 @@ func (trace *usageQueryTracer) TraceQueryStart(ctx context.Context, _ *pgx.Conn,
 func (*usageQueryTracer) TraceQueryEnd(context.Context, *pgx.Conn, pgx.TraceQueryEndData) {}
 
 func TestUsageStandbyRetainsResults(t *testing.T) {
-	standbyURL := os.Getenv("TEST_PG_STANDBY_URL")
-	if standbyURL == "" {
-		t.Skip("TEST_PG_STANDBY_URL must point to a standby of TEST_PG_URL")
-	}
+	t.Parallel()
+	standbyURL := testPGStandbyURL(t)
 	_, syncer, primary, _ := keptUsageFixture(t)
 	ctx := t.Context()
 	var lsn string
@@ -447,6 +446,7 @@ func TestUsageStandbyRetainsResults(t *testing.T) {
 }
 
 func TestUsageKeptJournalReplacementAtSameRevision(t *testing.T) {
+	t.Parallel()
 	for _, cache := range []bool{false, true} {
 		t.Run(map[bool]string{false: "direct", true: "cache"}[cache], func(t *testing.T) {
 			_, _, store, _ := keptUsageFixture(t)
@@ -490,6 +490,7 @@ INSERT INTO usage_session_changes SELECT * FROM old_usage_session_changes`)
 }
 
 func TestUsageKeptPushBetweenReads(t *testing.T) {
+	t.Parallel()
 	local, syncer, store, counter := keptUsageFixture(t)
 	ctx := t.Context()
 	f := db.UsageFilter{From: "2026-01-01", To: "2026-01-01", Timezone: "UTC", Breakdowns: true}
@@ -579,6 +580,7 @@ func TestUsageKeptPushBetweenReads(t *testing.T) {
 }
 
 func TestUsageKeptServicePairwiseSharesSummary(t *testing.T) {
+	t.Parallel()
 	t.Run("mirror", func(t *testing.T) {
 		_, _, store, counter := keptUsageFixture(t)
 		groups := service.NewModelGroups(map[string]string{"paid-a": "group-a", "paid-b": "group-b", "plan": "plan-group"})
@@ -630,6 +632,7 @@ func TestUsageKeptServicePairwiseSharesSummary(t *testing.T) {
 }
 
 func TestUsageKeptBypasses(t *testing.T) {
+	t.Parallel()
 	t.Run("without journal", func(t *testing.T) {
 		_, syncer, store, counter := keptUsageFixture(t)
 		ctx := t.Context()
@@ -683,6 +686,7 @@ func TestUsageKeptBypasses(t *testing.T) {
 }
 
 func TestUsagePairwiseSidesMatchFilteredReads(t *testing.T) {
+	t.Parallel()
 	local, syncer, store, _ := keptUsageFixture(t)
 	ctx := t.Context()
 	for _, session := range []struct{ id, project, agent string }{
@@ -761,6 +765,7 @@ func TestUsagePairwiseSidesMatchFilteredReads(t *testing.T) {
 }
 
 func TestUsagePairwiseExplicitSkipsRanking(t *testing.T) {
+	t.Parallel()
 	_, _, store, counter := keptUsageFixture(t)
 	_, err := service.NewReadOnlyBackend(store).UsagePairwiseComparison(t.Context(), service.UsagePairwiseComparisonRequest{UsageRequest: service.UsageRequest{From: "2026-01-01", To: "2026-01-01", Timezone: "UTC", IncludeOneShot: true}, LeftDimension: "model", LeftValue: "paid-a", RightDimension: "model", RightValue: "paid-b"})
 	require.NoError(t, err)

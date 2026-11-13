@@ -120,6 +120,7 @@ func (f projectionFixture) lease(t *testing.T, m rawsync.CanonicalManifest) rawd
 // Losing the atomic write/completion boundary or any normalized child write
 // must fail this through actual custody, lease, and normal physical Store reads.
 func TestRawProjectionPublishesNormalizedGraph(t *testing.T) {
+	t.Parallel()
 	f := newProjectionFixture(t)
 	m, _ := f.accept(t, "device-a", "capture-a", "")
 	lease := f.lease(t, m)
@@ -147,6 +148,7 @@ func TestRawProjectionPublishesNormalizedGraph(t *testing.T) {
 }
 
 func TestRawProjectionRematerializesRetainedPayloadOnInsertConflict(t *testing.T) {
+	t.Parallel()
 	for _, corrupt := range []bool{false, true} {
 		t.Run(fmt.Sprint(corrupt), func(t *testing.T) {
 			f := newProjectionFixture(t)
@@ -226,6 +228,7 @@ func TestRawProjectionRematerializesRetainedPayloadOnInsertConflict(t *testing.T
 }
 
 func TestRawProjectionFrictionUsesFinalSessionIdentity(t *testing.T) {
+	t.Parallel()
 	f := newProjectionFixture(t)
 	var firstID, firstFingerprint string
 	for _, tc := range []struct {
@@ -262,6 +265,7 @@ func TestRawProjectionFrictionUsesFinalSessionIdentity(t *testing.T) {
 }
 
 func TestRawProjectionRefreshesFrictionForExistingPhysicalSession(t *testing.T) {
+	t.Parallel()
 	f := newProjectionFixture(t)
 	for _, table := range []string{"friction_findings"} {
 		_, err := f.admin.ExecContext(t.Context(), `REVOKE ALL PRIVILEGES ON "`+table+`" FROM "`+f.role+`"`)
@@ -322,6 +326,7 @@ func TestRawProjectionRefreshesFrictionForExistingPhysicalSession(t *testing.T) 
 }
 
 func TestRawProjectionQueueFencesReselectedGeneration(t *testing.T) {
+	t.Parallel()
 	f := newProjectionFixture(t)
 	m, _ := f.accept(t, "device-a", "capture-a", "")
 	old := f.lease(t, m)
@@ -348,6 +353,7 @@ func TestRawProjectionQueueFencesReselectedGeneration(t *testing.T) {
 }
 
 func TestRawProjectionGenerationAndLeaseFences(t *testing.T) {
+	t.Parallel()
 	f := newProjectionFixture(t)
 	m, _ := f.accept(t, "device-a", "capture-a", "")
 	old := f.lease(t, m)
@@ -373,6 +379,7 @@ func TestRawProjectionGenerationAndLeaseFences(t *testing.T) {
 	assert.Equal(t, "new", messages[0].Content)
 }
 func TestRawProjectionExpiredAndSupersededLeases(t *testing.T) {
+	t.Parallel()
 	for _, mode := range []string{"expired", "superseded"} {
 		t.Run(mode, func(t *testing.T) {
 			f := newProjectionFixture(t)
@@ -392,6 +399,7 @@ func TestRawProjectionExpiredAndSupersededLeases(t *testing.T) {
 	}
 }
 func TestRawProjectionRollsBackPayloadAndProofWhenCompletionFails(t *testing.T) {
+	t.Parallel()
 	f := newProjectionFixture(t)
 	m, _ := f.accept(t, "device-a", "capture-a", "")
 	lease := f.lease(t, m)
@@ -420,6 +428,7 @@ func (f projectionFixture) alias(t *testing.T, m rawsync.CanonicalManifest) stri
 	return alias
 }
 func TestRawProjectionCohortCurationFollowsAliases(t *testing.T) {
+	t.Parallel()
 	for _, reverse := range []bool{false, true} {
 		t.Run(fmt.Sprint(reverse), func(t *testing.T) {
 			f := newProjectionFixture(t)
@@ -489,6 +498,7 @@ func TestRawProjectionCohortCurationFollowsAliases(t *testing.T) {
 }
 
 func TestRawProjectionPinsRemainUnresolvedAfterOrdinalReuse(t *testing.T) {
+	t.Parallel()
 	f := newProjectionFixture(t)
 	m, accepted := f.accept(t, "device-a", "pin-a", "")
 	require.NoError(t, f.sink.Project(t.Context(), f.lease(t, m), m, projectionOutcome("original")))
@@ -527,6 +537,7 @@ func TestRawProjectionPinsRemainUnresolvedAfterOrdinalReuse(t *testing.T) {
 }
 
 func TestRawProjectionClaimsNeverResurrectUnselectedGeneration(t *testing.T) {
+	t.Parallel()
 	f := newProjectionFixture(t)
 	m, _ := f.accept(t, "device-a", "selection-claim", "")
 	old := f.lease(t, m)

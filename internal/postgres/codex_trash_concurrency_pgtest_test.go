@@ -17,6 +17,7 @@ import (
 )
 
 func TestCodexTrashConcurrentRestoreAndPurge(t *testing.T) {
+	t.Parallel()
 	for _, hosted := range []bool{false, true} {
 		for _, empty := range []bool{false, true} {
 			for _, first := range []string{"purge", "restore"} {
@@ -137,6 +138,7 @@ func TestCodexTrashConcurrentRestoreAndPurge(t *testing.T) {
 }
 
 func TestHostedCodexPurgeRetriesBusyPageIdentity(t *testing.T) {
+	t.Parallel()
 	for _, empty := range []bool{false, true} {
 		t.Run(fmt.Sprintf("empty=%v", empty), func(t *testing.T) {
 			f := newHostedFixture(t, "tenant-busy-trash-page")

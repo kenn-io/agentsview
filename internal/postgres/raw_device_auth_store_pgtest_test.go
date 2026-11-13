@@ -15,6 +15,7 @@ import (
 )
 
 func TestRawDeviceAuthStoreLifecycleAndTenantIsolation(t *testing.T) {
+	t.Parallel()
 	pg, store := newRawDeviceAuthTestStore(t)
 	service, err := rawsync.NewDeviceAuthService(store, time.Hour)
 	require.NoError(t, err)

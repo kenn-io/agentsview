@@ -19,6 +19,7 @@ import (
 const contentSearchSchema = "agentsview_content_search_test"
 
 func TestSearchContentExcludeActiveSince(t *testing.T) {
+	t.Parallel()
 	store := setupContentSearch(t)
 	for _, f := range []struct{ id, ended string }{
 		{"active", "2024-06-15T11:59:00Z"},
@@ -170,6 +171,7 @@ func insertCSToolResultEvent(
 
 // TestPGSearchContentSubstringMessages verifies substring match in messages.
 func TestPGSearchContentSubstringMessages(t *testing.T) {
+	t.Parallel()
 	store := setupContentSearch(t)
 	insertCSSession(t, store, "cs-m1", "proj", "claude",
 		"2026-05-01T10:00:00Z", "2026-05-01T10:30:00Z")
@@ -202,6 +204,7 @@ func TestPGSearchContentSubstringMessages(t *testing.T) {
 }
 
 func TestPGSearchContentDateFilterUsesRequestedTimezone(t *testing.T) {
+	t.Parallel()
 	store := setupContentSearch(t)
 	for _, row := range []struct {
 		id, started, ended string
@@ -228,6 +231,7 @@ func TestPGSearchContentDateFilterUsesRequestedTimezone(t *testing.T) {
 // guarantee: a secret adjacent to the match that extends past the snippet
 // window must not leak; reveal opts out and shows raw bytes.
 func TestPGSearchContentRedactsStraddlingSecret(t *testing.T) {
+	t.Parallel()
 	store := setupContentSearch(t)
 	pem := "-----BEGIN RSA PRIVATE KEY-----\n" +
 		strings.Repeat("MIIBSECRETKEYMATERIAL0123456789ABCDEF\n", 5) +
@@ -257,6 +261,7 @@ func TestPGSearchContentRedactsStraddlingSecret(t *testing.T) {
 
 // TestPGSearchContentSubstringToolInput verifies substring match in tool_input.
 func TestPGSearchContentSubstringToolInput(t *testing.T) {
+	t.Parallel()
 	store := setupContentSearch(t)
 	insertCSSession(t, store, "cs-ti1", "proj", "claude",
 		"2026-05-01T10:00:00Z", "2026-05-01T10:30:00Z")
@@ -280,6 +285,7 @@ func TestPGSearchContentSubstringToolInput(t *testing.T) {
 // TestPGSearchContentSubstringToolResult verifies substring match in tool_result
 // result_content (no events -> result_content branch).
 func TestPGSearchContentSubstringToolResult(t *testing.T) {
+	t.Parallel()
 	store := setupContentSearch(t)
 	insertCSSession(t, store, "cs-tr1", "proj", "claude",
 		"2026-05-01T10:00:00Z", "2026-05-01T10:30:00Z")
@@ -301,6 +307,7 @@ func TestPGSearchContentSubstringToolResult(t *testing.T) {
 // TestPGSearchContentToolResultEvents verifies that the tool_result_events
 // branch is searched.
 func TestPGSearchContentToolResultEvents(t *testing.T) {
+	t.Parallel()
 	store := setupContentSearch(t)
 	insertCSSession(t, store, "cs-tre1", "proj", "claude",
 		"2026-05-01T10:00:00Z", "2026-05-01T10:30:00Z")
@@ -325,6 +332,7 @@ func TestPGSearchContentToolResultEvents(t *testing.T) {
 // TestPGSearchContentToolResultDedup verifies dedup: when a tool_use_id has
 // result events, only the events branch matches, not result_content.
 func TestPGSearchContentToolResultDedup(t *testing.T) {
+	t.Parallel()
 	store := setupContentSearch(t)
 	insertCSSession(t, store, "cs-dup1", "proj", "claude",
 		"2026-05-01T10:00:00Z", "2026-05-01T10:30:00Z")
@@ -351,6 +359,7 @@ func TestPGSearchContentToolResultDedup(t *testing.T) {
 // TestPGSearchContentSourcesSelector verifies that searching only "messages"
 // does not return tool_input or tool_result hits.
 func TestPGSearchContentSourcesSelector(t *testing.T) {
+	t.Parallel()
 	store := setupContentSearch(t)
 	insertCSSession(t, store, "cs-src1", "proj", "claude",
 		"2026-05-01T10:00:00Z", "2026-05-01T10:30:00Z")
@@ -382,6 +391,7 @@ func TestPGSearchContentSourcesSelector(t *testing.T) {
 // TestPGSearchContentExcludeSystem verifies that is_system=true messages are
 // excluded when ExcludeSystem=true.
 func TestPGSearchContentExcludeSystem(t *testing.T) {
+	t.Parallel()
 	store := setupContentSearch(t)
 	insertCSSession(t, store, "cs-sys1", "proj", "claude",
 		"2026-05-01T10:00:00Z", "2026-05-01T10:30:00Z")
@@ -413,6 +423,7 @@ func TestPGSearchContentExcludeSystem(t *testing.T) {
 // reminder-only row is excluded, while a reminder followed by user content is
 // retained, across every message search path that uses this predicate.
 func TestPGSearchContentExcludeSystemReminderFalseFlag(t *testing.T) {
+	t.Parallel()
 	store := setupContentSearch(t)
 	insertCSSession(t, store, "cs-sys-reminder", "proj", "claude",
 		"2026-05-01T10:00:00Z", "2026-05-01T10:30:00Z")
@@ -447,6 +458,7 @@ func TestPGSearchContentExcludeSystemReminderFalseFlag(t *testing.T) {
 }
 
 func TestPGSessionThinkingRegexExcludeSystem(t *testing.T) {
+	t.Parallel()
 	store := setupContentSearch(t)
 	insertCSSession(t, store, "cs-thinking-system", "proj", "claude",
 		"2026-05-01T10:00:00Z", "2026-05-01T10:30:00Z")
@@ -480,6 +492,7 @@ func messageOrdinals(page db.ContentSearchPage) []int {
 
 // TestPGSearchContentProjectFilter verifies the Project session filter.
 func TestPGSearchContentProjectFilter(t *testing.T) {
+	t.Parallel()
 	store := setupContentSearch(t)
 	insertCSSession(t, store, "cs-pf-a", "alpha", "claude",
 		"2026-05-01T10:00:00Z", "2026-05-01T10:30:00Z")
@@ -505,6 +518,7 @@ func TestPGSearchContentProjectFilter(t *testing.T) {
 }
 
 func TestPGSearchContentGitBranchFilter(t *testing.T) {
+	t.Parallel()
 	store := setupContentSearch(t)
 	insertCSSession(t, store, "cs-branch-alpha-main", "alpha", "claude",
 		"2026-05-01T10:00:00Z", "2026-05-01T10:30:00Z")
@@ -538,6 +552,7 @@ func TestPGSearchContentGitBranchFilter(t *testing.T) {
 
 // TestPGSearchContentPagination verifies Limit+1 sentinel and NextCursor.
 func TestPGSearchContentPagination(t *testing.T) {
+	t.Parallel()
 	store := setupContentSearch(t)
 	insertCSSession(t, store, "cs-page", "proj", "claude",
 		"2026-05-01T10:00:00Z", "2026-05-01T10:30:00Z")
@@ -569,6 +584,7 @@ func TestPGSearchContentPagination(t *testing.T) {
 // input, and the tool result. The src/row_id tie-break must make page-by-page
 // retrieval reproduce the single-page order with no duplicates or gaps.
 func TestPGSearchContentPaginationStableAcrossTies(t *testing.T) {
+	t.Parallel()
 	store := setupContentSearch(t)
 	insertCSSession(t, store, "cs-tie", "proj", "claude",
 		"2026-05-01T10:00:00Z", "2026-05-01T10:30:00Z")
@@ -615,6 +631,7 @@ func TestPGSearchContentPaginationStableAcrossTies(t *testing.T) {
 // empty-tool_use_id call's result_content must not be suppressed because a
 // different empty-ID call in the session has a result event.
 func TestPGSearchContentEmptyToolUseIDNotSuppressed(t *testing.T) {
+	t.Parallel()
 	store := setupContentSearch(t)
 	insertCSSession(t, store, "cs-empti", "proj", "claude",
 		"2026-05-01T10:00:00Z", "2026-05-01T10:30:00Z")
@@ -646,6 +663,7 @@ func TestPGSearchContentEmptyToolUseIDNotSuppressed(t *testing.T) {
 // search off a sequential scan. Index creation is best-effort, so the check is
 // skipped on an instance where pg_trgm cannot be installed.
 func TestPGContentSearchTrigramIndex(t *testing.T) {
+	t.Parallel()
 	store := setupContentSearch(t)
 	ctx := t.Context()
 
@@ -690,6 +708,7 @@ func TestPGContentSearchTrigramIndex(t *testing.T) {
 // whose trigram index was created by an earlier schema with the default
 // fastupdate=on gets fastupdate=off reapplied on the next EnsureSchema run.
 func TestPGContentSearchTrigramIndexUpgrade(t *testing.T) {
+	t.Parallel()
 	store := setupContentSearch(t)
 	ctx := t.Context()
 
@@ -735,6 +754,7 @@ func TestPGContentSearchTrigramIndexUpgrade(t *testing.T) {
 
 // TestPGSearchContentRegex verifies regex mode.
 func TestPGSearchContentRegex(t *testing.T) {
+	t.Parallel()
 	store := setupContentSearch(t)
 	insertCSSession(t, store, "cs-re1", "proj", "claude",
 		"2026-05-01T10:00:00Z", "2026-05-01T10:30:00Z")
@@ -756,6 +776,7 @@ func TestPGSearchContentRegex(t *testing.T) {
 // TestPGSearchContentRegexInvalid verifies that an invalid pattern returns a
 // SearchInputError.
 func TestPGSearchContentRegexInvalid(t *testing.T) {
+	t.Parallel()
 	store := setupContentSearch(t)
 	ctx := t.Context()
 	_, err := store.SearchContent(ctx, db.ContentSearchFilter{
@@ -771,6 +792,7 @@ func TestPGSearchContentRegexInvalid(t *testing.T) {
 // TestPGSearchContentFTSMatchesNonContiguousTerms verifies that PG's fts
 // fallback preserves SQLite's implicit-AND term semantics.
 func TestPGSearchContentFTSMatchesNonContiguousTerms(t *testing.T) {
+	t.Parallel()
 	store := setupContentSearch(t)
 	insertCSSession(t, store, "cs-fts-both", "proj", "claude",
 		"2026-05-01T10:00:00Z", "2026-05-01T10:30:00Z")
@@ -793,6 +815,7 @@ func TestPGSearchContentFTSMatchesNonContiguousTerms(t *testing.T) {
 }
 
 func TestPGSearchContentTermsAcrossExchangeAndLiterals(t *testing.T) {
+	t.Parallel()
 	store := setupContentSearch(t)
 	insertCSSession(t, store, "cs-terms", "proj", "claude",
 		"2026-05-01T10:00:00Z", "2026-05-01T10:30:00Z")
@@ -831,6 +854,7 @@ func TestPGSearchContentTermsAcrossExchangeAndLiterals(t *testing.T) {
 }
 
 func TestPGSearchContentTermsRequiresOneExchange(t *testing.T) {
+	t.Parallel()
 	store := setupContentSearch(t)
 	insertCSSession(t, store, "cs-terms-split", "proj", "claude",
 		"2026-05-01T10:00:00Z", "2026-05-01T10:30:00Z")
@@ -850,6 +874,7 @@ func TestPGSearchContentTermsRequiresOneExchange(t *testing.T) {
 }
 
 func TestPGSearchContentTermsIgnoresAssistantPrelude(t *testing.T) {
+	t.Parallel()
 	store := setupContentSearch(t)
 	insertCSSession(t, store, "cs-terms-prelude", "proj", "claude",
 		"2026-05-01T10:00:00Z", "2026-05-01T10:30:00Z")
@@ -881,6 +906,7 @@ func TestPGSearchContentTermsIgnoresAssistantPrelude(t *testing.T) {
 }
 
 func TestPGSearchContentTermsSnippetStaysBoundedForDistantTerms(t *testing.T) {
+	t.Parallel()
 	store := setupContentSearch(t)
 	insertCSSession(t, store, "cs-terms-long", "proj", "claude",
 		"2026-05-01T10:00:00Z", "2026-05-01T10:30:00Z")
@@ -903,6 +929,7 @@ func TestPGSearchContentTermsSnippetStaysBoundedForDistantTerms(t *testing.T) {
 }
 
 func TestPGSearchContentTermsScopeExactFiltersAndPaging(t *testing.T) {
+	t.Parallel()
 	store := setupContentSearch(t)
 	for _, session := range []struct {
 		id, project, branch, ended string
@@ -960,6 +987,7 @@ func TestPGSearchContentTermsScopeExactFiltersAndPaging(t *testing.T) {
 // TestPGSearchContentUnknownSource verifies that an unknown source name
 // returns a SearchInputError.
 func TestPGSearchContentUnknownSource(t *testing.T) {
+	t.Parallel()
 	store := setupContentSearch(t)
 	ctx := t.Context()
 	_, err := store.SearchContent(ctx, db.ContentSearchFilter{
@@ -975,6 +1003,7 @@ func TestPGSearchContentUnknownSource(t *testing.T) {
 // TestPGSearchContentSnippetPresent verifies that the snippet field is
 // populated with content surrounding the match.
 func TestPGSearchContentSnippetPresent(t *testing.T) {
+	t.Parallel()
 	store := setupContentSearch(t)
 	insertCSSession(t, store, "cs-snip", "proj", "claude",
 		"2026-05-01T10:00:00Z", "2026-05-01T10:30:00Z")
@@ -1018,6 +1047,7 @@ func insertCSChildSession(
 // while IncludeChildren=false excludes them. The scoped CTE wraps only the
 // sessions table, so id is unambiguous in the tool-table JOINs.
 func TestPGSearchContentIncludeChildren(t *testing.T) {
+	t.Parallel()
 	store := setupContentSearch(t)
 
 	// Parent session (non-child, passes root filter).
@@ -1092,6 +1122,7 @@ func TestPGSearchContentIncludeChildren(t *testing.T) {
 }
 
 func TestPGSearchContentExactSessionIncludesChild(t *testing.T) {
+	t.Parallel()
 	store := setupContentSearch(t)
 	insertCSSession(t, store, "exact-parent", "proj", "claude",
 		"2026-05-01T10:00:00Z", "2026-05-01T10:30:00Z")
@@ -1112,6 +1143,7 @@ func TestPGSearchContentExactSessionIncludesChild(t *testing.T) {
 }
 
 func TestPGSearchContentExcludeSession(t *testing.T) {
+	t.Parallel()
 	store := setupContentSearch(t)
 	insertCSSession(t, store, "keep", "proj", "claude",
 		"2026-05-01T10:00:00Z", "2026-05-01T10:30:00Z")
@@ -1133,6 +1165,7 @@ func TestPGSearchContentExcludeSession(t *testing.T) {
 }
 
 func TestSearch_DateRange(t *testing.T) {
+	t.Parallel()
 	store := setupContentSearch(t)
 	fixtures := []struct{ id, start, end string }{
 		{"early", "2024-06-01T10:00:00Z", "2024-06-01T11:00:00Z"},

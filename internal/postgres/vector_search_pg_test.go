@@ -133,6 +133,7 @@ var (
 )
 
 func TestPGVectorSearcher(t *testing.T) {
+	t.Parallel()
 	pgURL := testPGURL(t)
 	pg := newVectorSearchTestPG(t, pgURL, "agentsview_vector_search_test")
 	ctx := t.Context()
@@ -275,6 +276,7 @@ func TestPGVectorSearcher(t *testing.T) {
 // than k chunks would surface the outside-k doc, so this guards the LIMIT k
 // candidate pool that keeps PG parity with the local sqlite-vec searcher.
 func TestPGVectorSearcherExactK(t *testing.T) {
+	t.Parallel()
 	pgURL := testPGURL(t)
 	pg := newVectorSearchTestPG(t, pgURL, "agentsview_vector_search_exactk_test")
 	ctx := t.Context()
@@ -309,6 +311,7 @@ func TestPGVectorSearcherExactK(t *testing.T) {
 // k inside the query transaction; without that the KNN silently caps the pool
 // below k, diverging from the local backend's exact scan.
 func TestPGVectorSearcherEfSearchRecall(t *testing.T) {
+	t.Parallel()
 	pgURL := testPGURL(t)
 	pg := newVectorSearchTestPG(t, pgURL, "agentsview_vector_search_efsearch_test")
 	ctx := t.Context()
@@ -345,6 +348,7 @@ func TestPGVectorSearcherEfSearchRecall(t *testing.T) {
 // rows remain, so the page must not report the index exhausted. The table is
 // large enough that the planner scans the index instead of sorting rows.
 func TestPGVectorSearcherCappedScanIsNotExhausted(t *testing.T) {
+	t.Parallel()
 	pgURL := testPGURL(t)
 	pg := newVectorSearchTestPG(t, pgURL, "agentsview_vector_search_capped_test")
 	ctx := t.Context()

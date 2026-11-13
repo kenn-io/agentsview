@@ -38,6 +38,8 @@ mapfile -t tests < <(awk -v excluded="$excluded" '/^(Test|Example|Fuzz)/ && $0 !
 ((${#tests[@]} >= shards)) || { echo 'empty test list or shard' >&2; exit 1; }
 printf '%s tests in %s processes\n' "${#tests[@]}" "$shards"
 
+# Tests in a shard run in parallel, each in its own database. The test helper
+# limits how many run at once across all shards (see docs/agents/storage.md).
 base=${TEST_PG_URL%%\?*}
 query=${TEST_PG_URL#"$base"}
 database=$(psql -X -v ON_ERROR_STOP=1 "$TEST_PG_URL" -Atc 'SELECT current_database()')

@@ -20,6 +20,7 @@ import (
 )
 
 func TestEnsureSchemaCreatesRawIngestCustodyTables(t *testing.T) {
+	t.Parallel()
 	pgURL := testPGURL(t)
 	cleanSchemaTestPG(t, pgURL)
 	t.Cleanup(func() { cleanSchemaTestPG(t, pgURL) })
@@ -70,6 +71,7 @@ func TestEnsureSchemaCreatesRawIngestCustodyTables(t *testing.T) {
 }
 
 func TestRawIngestSchemaUsesTenantScopedKeys(t *testing.T) {
+	t.Parallel()
 	pgURL := testPGURL(t)
 	cleanSchemaTestPG(t, pgURL)
 	t.Cleanup(func() { cleanSchemaTestPG(t, pgURL) })
@@ -140,6 +142,7 @@ func TestRawIngestSchemaUsesTenantScopedKeys(t *testing.T) {
 }
 
 func TestRawIngestSchemaEnforcesCaptureAndObjectCustody(t *testing.T) {
+	t.Parallel()
 	pgURL := testPGURL(t)
 	cleanSchemaTestPG(t, pgURL)
 	t.Cleanup(func() { cleanSchemaTestPG(t, pgURL) })
@@ -187,6 +190,7 @@ func TestRawIngestSchemaEnforcesCaptureAndObjectCustody(t *testing.T) {
 }
 
 func TestRawIngestSchemaMakesAcceptedManifestGraphAppendOnly(t *testing.T) {
+	t.Parallel()
 	pg, store := newRawIngestTestStore(t)
 	identity := rawIngestIdentity(t, "tenant-a")
 	object := rawIngestObject(t, "a", 7)
@@ -218,6 +222,7 @@ func TestRawIngestSchemaMakesAcceptedManifestGraphAppendOnly(t *testing.T) {
 }
 
 func TestSyncEnsureSchemaCreatesRawCustodyOnLegacyFastPath(t *testing.T) {
+	t.Parallel()
 	pgURL := testPGURL(t)
 	cleanSchemaTestPG(t, pgURL)
 	t.Cleanup(func() { cleanSchemaTestPG(t, pgURL) })
@@ -256,6 +261,7 @@ func TestSyncEnsureSchemaCreatesRawCustodyOnLegacyFastPath(t *testing.T) {
 }
 
 func TestSyncEnsureSchemaFastPathToleratesRestrictedRole(t *testing.T) {
+	t.Parallel()
 	pgURL := testPGURL(t)
 	const schema = "agentsview_raw_privilege_test"
 	const role = "agentsview_raw_restricted"
@@ -465,6 +471,7 @@ func TestCanWriteRawSyncSchemaRequiresExactRuntimePrivileges(t *testing.T) {
 }
 
 func TestCanWriteRawSyncSchemaAcceptsSequenceFreeJobIDs(t *testing.T) {
+	t.Parallel()
 	pgURL := testPGURL(t)
 	const schema = "agentsview_raw_sequence_free_test"
 
@@ -502,6 +509,7 @@ func TestCanWriteRawSyncSchemaAcceptsSequenceFreeJobIDs(t *testing.T) {
 // custody schema lock, two of them replaced the shared guard function at the
 // same time and one failed with SQLSTATE XX000 ("tuple concurrently updated").
 func TestEnsureRawIngestSchemaPGSerializesConcurrentGuardInstallers(t *testing.T) {
+	t.Parallel()
 	pgURL := testPGURL(t)
 	cleanSchemaTestPG(t, pgURL)
 	t.Cleanup(func() { cleanSchemaTestPG(t, pgURL) })
@@ -583,6 +591,7 @@ func TestEnsureRawIngestSchemaPGSerializesConcurrentGuardInstallers(t *testing.T
 // A pusher against a schema whose guards are already current must not wait
 // for, or contend with, another process installing them.
 func TestEnsureRawIngestSchemaPGSkipsInstallerLockWhenGuardsAreCurrent(t *testing.T) {
+	t.Parallel()
 	pg, _ := newRawIngestTestStore(t)
 
 	installer, err := pg.BeginTx(t.Context(), nil)
@@ -601,6 +610,7 @@ func TestEnsureRawIngestSchemaPGSkipsInstallerLockWhenGuardsAreCurrent(t *testin
 // A guard function whose body no longer matches the shipped source must be
 // replaced, even though the function and every trigger already exist.
 func TestEnsureRawIngestSchemaPGReplacesStaleGuardFunction(t *testing.T) {
+	t.Parallel()
 	pg, store := newRawIngestTestStore(t)
 	identity := rawIngestIdentity(t, "tenant-a")
 	object := rawIngestObject(t, "a", 7)
