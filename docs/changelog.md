@@ -60,6 +60,7 @@ The latest release is
   only the sessions that differ from the mirror and still remove sessions that
   are gone locally. A session whose messages are unchanged rewrites only its
   session row, and the commit links upgrade rewrites only commit links.
+  The first push after upgrading republishes each session row once.
   `clickhouse push --full` still rewrites every session, so use it to repair a
   damaged mirror. Upgrade `clickhouse serve` together with the pushing clients:
   an older serve hides image text and Activity usage for sessions a newer

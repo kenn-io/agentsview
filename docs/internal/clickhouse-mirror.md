@@ -202,16 +202,18 @@ A push plans each session against its mirror row:
 | ---------------------------------------------------- | ------------------------------- |
 | Missing, or content fingerprint differs              | Every table, at the new version |
 | Content matches, session fields differ               | Session row and usage snapshot  |
-| Fingerprint matches, dashboard facts are stale       | Session row and usage snapshot  |
+| Fingerprint matches, row is in an older format       | Session row and usage snapshot  |
 | Fingerprint matches, another archive owns it (full)  | Session row and usage snapshot  |
 | Fingerprint matches                                  | Nothing                         |
 
 A session row that rewrites only itself keeps the `content_version` of the
 rows it kept. If the archive changes between planning and writing, the batch
 compares the content fingerprint it loaded with the one it planned on and
-rewrites the whole session instead. A row written before content fingerprints
-existed has none, so any session-field change on it rewrites the whole session
-once.
+rewrites the whole session instead. A row in an older format lacks a stored
+message count, current dashboard facts, or a content fingerprint. Without a
+content fingerprint, any session-field change would rewrite the whole session,
+so the first push after upgrading republishes every session row of its archive
+once, with its content fingerprint, and keeps the messages.
 
 Each full-push reason gets its own scope:
 
@@ -220,8 +222,8 @@ Each full-push reason gets its own scope:
   sessions missing locally. A data-version resync usually changes only
   `data_version`, so most sessions rewrite only their session row.
 - Missing commit links marker: rewrite only `commit_links` for every session.
-- Stale dashboard facts or missing `stored_message_count`: rewrite only the
-  stale session rows.
+- Session rows in an older format (`republishing session rows from an older
+  format`): rewrite only those session rows.
 - Missing message dialogue or usage snapshot marker: rewrite every session,
   because rows written before those formats lack data their fingerprints
   cannot see.
@@ -732,9 +734,9 @@ published session version and a scan would read the newer messages; both
 settle when the session row lands.
 
 **Backfill is one full push.** A push that finds rows of its archive below the
-current facts version, or without `stored_message_count`, runs one full push
-(`publishing stored session counts`) and repeats it until one finishes without
-errors. The facts come from the local archive, so the push rewrites only the
+current facts version, or without `stored_message_count` or a content
+fingerprint, runs one full push (`republishing session rows from an older
+format`) and repeats it until one finishes without errors. The facts come from the local archive, so the push rewrites only the
 stale session rows and keeps their messages. Bump `dashboardFactsVersion` when
 a fact's definition changes.
 

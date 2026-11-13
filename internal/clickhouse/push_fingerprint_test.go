@@ -130,7 +130,7 @@ func TestPlanSessionWrite(t *testing.T) {
 	local := sessionFingerprint{full: "full-new", content: "content-a"}
 	stored := mirrorSession{
 		fingerprint: "full-new", contentFingerprint: "content-a",
-		archiveID: "archive", contentVersion: 7, factsCurrent: true,
+		archiveID: "archive", contentVersion: 7, rowCurrent: true,
 	}
 	rowOnly := sessionWrite{row: true, keptContent: "content-a", keptVersion: 7}
 	for _, tc := range []struct {
@@ -162,7 +162,7 @@ func TestPlanSessionWrite(t *testing.T) {
 		},
 		{
 			name: "stale dashboard facts", found: true,
-			stored: func(m *mirrorSession) { m.factsCurrent = false },
+			stored: func(m *mirrorSession) { m.rowCurrent = false },
 			want:   rowOnly,
 		},
 		{
@@ -179,7 +179,7 @@ func TestPlanSessionWrite(t *testing.T) {
 			// A row from before the split matches on the full fingerprint and
 			// records no content fingerprint; the kept rows still match.
 			name: "stale facts on a row written before content fingerprints", found: true,
-			stored: func(m *mirrorSession) { m.contentFingerprint, m.factsCurrent = "", false },
+			stored: func(m *mirrorSession) { m.contentFingerprint, m.rowCurrent = "", false },
 			want:   rowOnly,
 		},
 	} {

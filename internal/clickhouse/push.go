@@ -122,17 +122,17 @@ func (s *Sync) pushWithOptions(
 	if !full && meta[s.archiveKey(messageDialogueReadyKeyBase)] == "" {
 		full, reason = true, "preparing message dialogue"
 	}
-	// Rows from before stored_message_count or the current dashboard facts,
-	// or from an older writer, read as unknown until a full push
-	// republishes them.
+	// Rows from before stored_message_count, the current dashboard facts, or
+	// content fingerprints, or from an older writer, stay in the old format
+	// until a full push republishes them.
 	repairing := meta[s.archiveKey(storedCountRepairKeyBase)] != ""
 	if !repairing {
 		var unknown uint64
 		if err := conn.QueryRowContext(ctx,
-			"SELECT count() FROM sessions WHERE source_archive_id = ? AND (stored_message_count IS NULL OR dashboard_facts_version != ?)",
+			"SELECT count() FROM sessions WHERE source_archive_id = ? AND NOT ("+currentSessionRowSQL+")",
 			s.archiveID, dashboardFactsVersion,
 		).Scan(&unknown); err != nil {
-			return result, fmt.Errorf("reading clickhouse sessions without stored counts: %w", err)
+			return result, fmt.Errorf("reading clickhouse session rows in an older format: %w", err)
 		}
 		if unknown > 0 {
 			// Republishing fills the NULLs before every session lands, so keep repairing until a push finishes cleanly.
@@ -143,7 +143,7 @@ func (s *Sync) pushWithOptions(
 		}
 	}
 	if !full && repairing {
-		full, reason = true, "publishing stored session counts"
+		full, reason = true, "republishing session rows from an older format"
 	}
 	localDeletion, err := s.local.SessionDeletionPublicationRevision(ctx)
 	if err != nil {
@@ -479,14 +479,23 @@ func (w sessionWrite) any() bool { return w.row || w.commitLinks }
 
 var rewriteSession = sessionWrite{row: true, content: true}
 
+// currentSessionRowSQL is true for a session row in the current format. Its
+// one parameter is dashboardFactsVersion. A row without a content
+// fingerprint, such as one written before content fingerprints existed,
+// makes any later change to its session fields rewrite every table, so
+// the repair push republishes the row to record it.
+const currentSessionRowSQL = `stored_message_count IS NOT NULL AND dashboard_facts_version = ?
+	AND agentsview_content_fingerprint != ''`
+
 // mirrorSession is what the mirror's session row records about the rows a
 // push wrote for the session.
 type mirrorSession struct {
 	fingerprint, contentFingerprint, archiveID string
 	contentVersion                             uint64
-	// factsCurrent reports a stored message count and dashboard facts at
-	// dashboardFactsVersion.
-	factsCurrent bool
+	// rowCurrent reports a row in the current format: a stored message
+	// count, dashboard facts at dashboardFactsVersion, and a content
+	// fingerprint.
+	rowCurrent bool
 }
 
 // planSessionWrite decides what a push writes for a session from its local
@@ -507,7 +516,7 @@ func planSessionWrite(
 	if !sameContent {
 		return rewriteSession
 	}
-	if local.full == stored.fingerprint && stored.factsCurrent && (!full || stored.archiveID == archiveID) {
+	if local.full == stored.fingerprint && stored.rowCurrent && (!full || stored.archiveID == archiveID) {
 		return sessionWrite{}
 	}
 	return sessionWrite{row: true, keptContent: local.content, keptVersion: stored.contentVersion}
@@ -575,7 +584,7 @@ func (s *Sync) readMirrorSessions(ctx context.Context, ids []string) (map[string
 		if err := func() error {
 			rows, err := s.conn.QueryContext(ctx, `SELECT id, agentsview_push_fingerprint,
 					agentsview_content_fingerprint, source_archive_id, content_version,
-					stored_message_count IS NOT NULL AND dashboard_facts_version = ?
+					`+currentSessionRowSQL+`
 				FROM sessions WHERE id IN (`+placeholders+")",
 				slices.Concat([]any{dashboardFactsVersion}, args)...)
 			if err != nil {
@@ -585,12 +594,12 @@ func (s *Sync) readMirrorSessions(ctx context.Context, ids []string) (map[string
 			for rows.Next() {
 				var id string
 				var m mirrorSession
-				var factsCurrent uint8
+				var rowCurrent uint8
 				if err := rows.Scan(&id, &m.fingerprint, &m.contentFingerprint, &m.archiveID,
-					&m.contentVersion, &factsCurrent); err != nil {
+					&m.contentVersion, &rowCurrent); err != nil {
 					return fmt.Errorf("scanning clickhouse session fingerprint: %w", err)
 				}
-				m.factsCurrent = factsCurrent != 0
+				m.rowCurrent = rowCurrent != 0
 				out[id] = m
 			}
 			return rows.Err()

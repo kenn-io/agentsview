@@ -251,7 +251,7 @@ func TestStoredCountRepairRewritesOnlyStaleSessionRows(t *testing.T) {
 
 	res, err := s.Push(ctx, false, nil)
 	require.NoError(t, err)
-	assert.Equal(t, "publishing stored session counts", res.FullReason)
+	assert.Equal(t, "republishing session rows from an older format", res.FullReason)
 	assert.Equal(t, 1, res.SessionsPushed)
 	assert.Equal(t, 1, res.SessionRowsOnly)
 	assert.Equal(t, 2, res.SkippedUnchanged)
@@ -409,4 +409,33 @@ func TestRewriteAllRunIsNotResumedAsChangedOnly(t *testing.T) {
 	assert.Equal(t, "resuming an unfinished full push, started because: requested", res.FullReason)
 	assert.Equal(t, 2, res.SessionsPushed, "the resumed run rewrites the sessions it had not reached")
 	assert.Equal(t, 1, res.SkippedResumed)
+}
+
+// Rows written before content fingerprints existed get one once, by
+// republishing the session row alone, so a later change to session fields
+// keeps the messages.
+func TestPushRecordsContentFingerprintOfOlderRows(t *testing.T) {
+	t.Parallel()
+	ctx := t.Context()
+	local, s, conn := changedOnlyFixture(t)
+	before := readPushVersions(t, conn, fixtureAlphaID)
+	_, err := conn.ExecContext(ctx, `INSERT INTO sessions SELECT * REPLACE (
+			'' AS agentsview_content_fingerprint, push_version + 1 AS push_version)
+		FROM (SELECT * FROM sessions WHERE id = ?)`, fixtureAlphaID)
+	require.NoError(t, err)
+
+	res, err := s.Push(ctx, false, nil)
+	require.NoError(t, err)
+	assert.Equal(t, "republishing session rows from an older format", res.FullReason)
+	assert.Equal(t, 1, res.SessionRowsOnly)
+	assert.Equal(t, 1, res.SessionsPushed)
+	assert.Equal(t, before.messages, readPushVersions(t, conn, fixtureAlphaID).messages)
+
+	title := "Renamed Alpha"
+	require.NoError(t, local.RenameSession(ctx, fixtureAlphaID, &title))
+	renamed, err := s.Push(ctx, false, nil)
+	require.NoError(t, err)
+	assert.False(t, renamed.Full)
+	assert.Equal(t, 1, renamed.SessionRowsOnly)
+	assert.Equal(t, before.messages, readPushVersions(t, conn, fixtureAlphaID).messages)
 }
