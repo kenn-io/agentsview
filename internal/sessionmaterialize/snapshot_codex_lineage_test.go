@@ -138,9 +138,53 @@ func (f *snapshotLineageFixture) inventory(root db.RawArchiveRoot, name, content
 	require.Equal(f.t, 1, count)
 }
 
-func (f *snapshotLineageFixture) materialize(key string, homes []string, names, contents []string) {
+func requireOldCodexDeferred(t *testing.T, err error, dataDir, oldName string) {
+	t.Helper()
+	require.Error(t, err)
+	_, ok := err.(archivesource.DrainError)
+	require.True(t, ok, "expected an attachment DrainError")
+	for {
+		require.NotNil(t, err)
+		if retry, ok := err.(interface {
+			ReconciliationRetryDeferOnly() bool
+			ReconciliationRetryPaths() []string
+			ReconciliationRetryRoots() []string
+			ReconciliationRetryOverflow() bool
+		}); ok {
+			require.True(t, retry.ReconciliationRetryDeferOnly())
+			require.Empty(t, retry.ReconciliationRetryRoots())
+			require.False(t, retry.ReconciliationRetryOverflow())
+			paths := retry.ReconciliationRetryPaths()
+			require.Len(t, paths, 1)
+			rel, err := filepath.Rel(filepath.Join(dataDir, "archive-sources", "scratch"), paths[0])
+			require.NoError(t, err)
+			require.True(t, filepath.IsLocal(rel))
+			parts := strings.Split(filepath.Clean(rel), string(filepath.Separator))
+			require.Len(t, parts, 6)
+			require.True(t, strings.HasPrefix(parts[0], "agentsview-raw-"))
+			require.NotEqual(t, "agentsview-raw-", parts[0])
+			require.Equal(t, []string{"sessions", "2025", "01", "01", oldName}, parts[1:])
+			return
+		}
+		switch wrapped := err.(type) {
+		case interface{ Unwrap() []error }:
+			children := wrapped.Unwrap()
+			require.Len(t, children, 1)
+			require.NotNil(t, children[0])
+			err = children[0]
+		case interface{ Unwrap() error }:
+			err = wrapped.Unwrap()
+		default:
+			require.FailNow(t, "unexpected deferred-ingest error leaf")
+		}
+	}
+}
+
+func (f *snapshotLineageFixture) materialize(key string, homes []string, names, contents []string, oldSource *db.RawArchiveSource) {
 	f.t.Helper()
 	ctx := f.t.Context()
+	archiveID, err := f.saved.GetArchiveID(ctx)
+	require.NoError(f.t, err)
 	repository := filepath.Join(f.root, "repository")
 	report, err := f.archive.Backup(ctx, repository, f.settings, "fixture")
 	require.NoError(f.t, err)
@@ -158,12 +202,35 @@ func (f *snapshotLineageFixture) materialize(key string, homes []string, names, 
 	manager, err := archivesource.NewManager(ctx, cfg, receiver, engine, nil)
 	require.NoError(f.t, err)
 	f.t.Cleanup(manager.Close)
-	_, err = manager.Drain(ctx, nil)
-	require.NoError(f.t, err)
+	stats, err := manager.Drain(ctx, nil)
+	if oldSource == nil {
+		require.NoError(f.t, err)
+	} else {
+		require.Equal(f.t, "codex:"+lineageC, oldSource.SourceKey)
+		require.Equal(f.t, 1, stats.Deferred)
+		require.Zero(f.t, stats.Failed)
+		require.False(f.t, stats.Aborted)
+		requireOldCodexDeferred(f.t, err, cfg.DataDir, "rollout-2025-01-01T00-00-00-"+lineageC+".jsonl")
+	}
 	id := lineageDevice + "~codex:" + key
 	session, err := receiver.GetSessionFull(ctx, id)
 	require.NoError(f.t, err)
 	require.NotNil(f.t, session)
+	if oldSource != nil {
+		require.Equal(f.t, lineageDevice+"~codex:"+lineageC, session.ID)
+		require.Equal(f.t, lineageDevice, session.Machine)
+		owners, err := receiver.ArchiveSessionOwners(ctx, id)
+		require.NoError(f.t, err)
+		require.Len(f.t, owners, 1)
+		require.Equal(f.t, db.ArchiveSessionProvenance{
+			ArchiveSourceProvenance: db.ArchiveSourceProvenance{
+				Attachment: db.ArchiveAttachmentKey{RepositoryID: report.RepositoryID, SnapshotID: report.SnapshotID},
+				Source:     db.ArchiveSourceIdentity{ArchiveID: archiveID, DeviceID: lineageDevice, RootID: oldSource.RootID, SourceKey: oldSource.SourceKey},
+				ManifestID: oldSource.ManifestID,
+			},
+			NativeSessionID: "codex:" + lineageC,
+		}, owners[0])
+	}
 	home := f.t.TempDir()
 	f.t.Setenv("CODEX_HOME", home)
 	f.t.Setenv("CODEX_SESSIONS_DIR", "")
@@ -230,5 +297,5 @@ func TestMaterializeCodexSnapshotLaterNewestPage(t *testing.T) {
 	require.NotEqual(t, childRoot.ID, parentRoot.ID)
 	f.inventory(childRoot, newName, newPage)
 	f.inventory(parentRoot, pName, p)
-	f.materialize(lineageC, []string{child, parent}, []string{pName, newName}, []string{p, newPage})
+	f.materialize(lineageC, []string{child, parent}, []string{pName, newName}, []string{p, newPage}, oldSource)
 }

@@ -220,7 +220,7 @@ func TestMaterializeCodexSnapshotForkParentAcrossRoots(t *testing.T) {
 			if tc.reverted {
 				names, contents = []string{gName, cName}, []string{g, c}
 			}
-			f.materialize(key, []string{child, parent, grandparent}, names, contents)
+			f.materialize(key, []string{child, parent, grandparent}, names, contents, nil)
 		})
 	}
 }
