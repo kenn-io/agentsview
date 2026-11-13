@@ -360,6 +360,9 @@ func TestHostedTenantRejectsDynamicVectorStorageBeforeMutation(t *testing.T) {
 	var changed bool
 	require.NoError(t, pg.QueryRowContext(t.Context(), `SELECT to_regclass('hosted_tenant_binding') IS NOT NULL OR EXISTS(SELECT 1 FROM pg_attribute WHERE attrelid='sessions'::regclass AND attname='tenant_id')`).Scan(&changed))
 	assert.False(t, changed)
+	var countsExist bool
+	require.NoError(t, pg.QueryRowContext(t.Context(), `SELECT to_regclass('session_frustration_counts') IS NOT NULL`).Scan(&countsExist))
+	assert.True(t, countsExist, "failed adoption restores the derived table")
 }
 
 func TestHostedTenantRuntimeRoleGate(t *testing.T) {
@@ -396,7 +399,7 @@ func TestHostedTenantAdoptsLegacyAndEnforcesRelationships(t *testing.T) {
 	pg := newHostedLegacyFixture(t)
 	var schema string
 	require.NoError(t, pg.QueryRowContext(t.Context(), `SELECT current_schema()`).Scan(&schema))
-	_, err := pg.ExecContext(t.Context(), `INSERT INTO sessions(id,project,machine,agent) VALUES('preserved','project','device','claude'); INSERT INTO starred_sessions(session_id) VALUES('preserved')`)
+	_, err := pg.ExecContext(t.Context(), `INSERT INTO sessions(id,project,machine,agent) VALUES('preserved','project','device','claude'); INSERT INTO starred_sessions(session_id) VALUES('preserved'); INSERT INTO session_frustration_counts(session_id,session_version,rules_version,marker_count) VALUES ('preserved','old',1,1)`)
 	require.NoError(t, err)
 	var journalExists bool
 	require.NoError(t, pg.QueryRowContext(t.Context(), `SELECT to_regclass('usage_session_changes') IS NOT NULL`).Scan(&journalExists))
@@ -404,6 +407,9 @@ func TestHostedTenantAdoptsLegacyAndEnforcesRelationships(t *testing.T) {
 	require.NoError(t, EnsureHostedTenant(t.Context(), pg, schema, "tenant-a"))
 	require.NoError(t, pg.QueryRowContext(t.Context(), `SELECT to_regclass('usage_session_changes') IS NOT NULL`).Scan(&journalExists))
 	assert.False(t, journalExists, "hosted adoption removes the legacy journal")
+	var countsExist bool
+	require.NoError(t, pg.QueryRowContext(t.Context(), `SELECT to_regclass('session_frustration_counts') IS NOT NULL`).Scan(&countsExist))
+	assert.False(t, countsExist, "hosted adoption removes derived frustration counts")
 	var journalTriggers int
 	require.NoError(t, pg.QueryRowContext(t.Context(), `SELECT count(*) FROM pg_trigger WHERE tgrelid IN (SELECT oid FROM pg_class WHERE relnamespace=$1::regnamespace) AND tgname LIKE 'trg_uc_%'`, schema).Scan(&journalTriggers))
 	assert.Zero(t, journalTriggers, "hosted adoption removes legacy journal triggers")

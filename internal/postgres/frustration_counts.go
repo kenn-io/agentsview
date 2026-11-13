@@ -12,9 +12,9 @@ func frustrationSessionVersion(column string) string {
 	return `(` + column + `::text || ':' || COALESCE(to_char(updated_at AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"'), ''))`
 }
 
-func (s *Store) loadStoredFrustrationCounts(ctx context.Context, ids []string, versions map[string]string) (map[string]int, error) {
+func (s *Store) loadStoredFrustrationCounts(ctx context.Context, ids []string, versions map[string]string, versionColumn string) (map[string]int, error) {
 	counts := make(map[string]int)
-	rows, err := s.DB().QueryContext(ctx, `SELECT session_id, session_version, marker_count FROM session_frustration_counts WHERE session_id = ANY($1) AND rules_version = $2`, ids, frustrationMarkerRulesVersion)
+	rows, err := s.DB().QueryContext(ctx, `SELECT c.session_id, c.session_version, c.marker_count FROM session_frustration_counts c JOIN sessions s ON s.id = c.session_id WHERE c.session_id = ANY($1) AND c.rules_version = $2 AND c.session_version = `+frustrationSessionVersion("s."+versionColumn), ids, frustrationMarkerRulesVersion)
 	if isUndefinedTable(err) || isInsufficientPrivilege(err) {
 		return counts, nil
 	}
@@ -36,9 +36,6 @@ func (s *Store) loadStoredFrustrationCounts(ctx context.Context, ids []string, v
 }
 
 func (s *Store) storeFrustrationCounts(ctx context.Context, versions map[string]string, counts map[string]int) error {
-	if len(versions) == 0 {
-		return nil
-	}
 	ids := make([]string, 0, len(versions))
 	tokens := make([]string, 0, len(versions))
 	values := make([]int32, 0, len(versions))

@@ -2873,7 +2873,7 @@ func (s *Store) populateFrustrationMarkers(
 		return nil
 	}
 	if s.DB() != nil && !s.hostedRelations {
-		counts, err := s.loadStoredFrustrationCounts(ctx, ids, versions)
+		counts, err := s.loadStoredFrustrationCounts(ctx, ids, versions, versionColumn)
 		if err != nil {
 			log.Printf("loading frustration counts: %v", err)
 		}
@@ -2927,15 +2927,12 @@ func (s *Store) populateFrustrationMarkers(
 	for id, version := range scannedVersions {
 		memo.Store(generation, id, version, rows[idx[id]].FrustrationMarkerCount)
 	}
-	if s.DB() != nil && !s.hostedRelations && !s.runtimeState().frustrationCountsReadOnly.Load() {
+	if s.DB() != nil && !s.hostedRelations {
 		counts := make(map[string]int, len(scannedVersions))
 		for id := range scannedVersions {
 			counts[id] = rows[idx[id]].FrustrationMarkerCount
 		}
-		if err := s.storeFrustrationCounts(ctx, scannedVersions, counts); err != nil && !isUndefinedTable(err) {
-			if IsReadOnlyError(err) {
-				s.runtimeState().frustrationCountsReadOnly.Store(true)
-			}
+		if err := s.storeFrustrationCounts(ctx, scannedVersions, counts); err != nil && !isUndefinedTable(err) && !IsReadOnlyError(err) {
 			log.Printf("storing frustration counts: %v", err)
 		}
 	}

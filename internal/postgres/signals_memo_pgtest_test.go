@@ -80,6 +80,11 @@ func TestFrustrationMemoPublicationBetweenReads(t *testing.T) {
 			require.NoError(t, err)
 			store, err := NewStore(ctx, url, schema, true)
 			require.NoError(t, err)
+			_, err = store.GetAnalyticsSignals(ctx, db.AnalyticsFilter{})
+			require.NoError(t, err)
+			require.NoError(t, store.Close())
+			store, err = NewStore(ctx, url, schema, true)
+			require.NoError(t, err)
 			t.Cleanup(func() { require.NoError(t, store.Close()) })
 			versionColumn, err := sessionVersionColumnPG(ctx, pg)
 			require.NoError(t, err)
@@ -112,7 +117,7 @@ func TestFrustrationMemoPublicationBetweenReads(t *testing.T) {
 			}
 
 			require.NoError(t, store.populateFrustrationMarkers(ctx, rows, versions, versionColumn))
-			if test.name == "edit" {
+			if test.name != "remove-session" {
 				assert.Equal(t, test.want, rows[0].FrustrationMarkerCount)
 			}
 			memo := &store.runtimeState().frustrationMarkers

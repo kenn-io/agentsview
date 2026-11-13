@@ -122,7 +122,11 @@ func TestFrustrationCountsRestartAndRefresh(t *testing.T) {
 		restricted, err := reader.GetAnalyticsSignals(ctx, db.AnalyticsFilter{})
 		require.NoError(t, err)
 		require.Equal(t, 8, restricted.QualityHealth.Totals.FrustrationMarkerCount)
-		require.True(t, reader.runtimeState().frustrationCountsReadOnly.Load())
+		_, err = pg.ExecContext(ctx, `UPDATE sessions SET updated_at = updated_at + interval '1 second' WHERE id = 'one'`)
+		require.NoError(t, err)
+		restricted, err = reader.GetAnalyticsSignals(ctx, db.AnalyticsFilter{})
+		require.NoError(t, err)
+		require.Equal(t, 8, restricted.QualityHealth.Totals.FrustrationMarkerCount)
 		var version int
 		require.NoError(t, pg.QueryRowContext(ctx, `SELECT rules_version FROM session_frustration_counts WHERE session_id = 'one'`).Scan(&version))
 		require.Zero(t, version)
