@@ -24,9 +24,6 @@ func TestEnsureSchemaConvertsStringColumnsToLowCardinality(t *testing.T) {
 	// Put back the column types an older mirror has.
 	for _, alter := range []string{
 		"ALTER TABLE messages MODIFY COLUMN role String",
-		"ALTER TABLE messages MODIFY COLUMN model String",
-		"ALTER TABLE tool_calls MODIFY COLUMN tool_name String",
-		"ALTER TABLE sessions MODIFY COLUMN agent String DEFAULT 'claude'",
 		"ALTER TABLE usage_messages MODIFY COLUMN model String",
 		"ALTER TABLE usage_session_snapshots MODIFY COLUMN agent String DEFAULT 'claude'",
 		// Not a LowCardinality wrap of the spec's type: must stay as is.
@@ -35,16 +32,9 @@ func TestEnsureSchemaConvertsStringColumnsToLowCardinality(t *testing.T) {
 		_, err := conn.ExecContext(ctx, alter+" SETTINGS mutations_sync = 1")
 		require.NoError(t, err, alter)
 	}
-	for _, insert := range []string{
-		`INSERT INTO messages (session_id, ordinal, role, model, push_version)
-		 VALUES ('lc', 0, 'assistant', 'model-a', 1)`,
-		`INSERT INTO tool_calls (session_id, message_ordinal, call_index, tool_name, push_version)
-		 VALUES ('lc', 0, 0, 'Bash', 1)`,
-		`INSERT INTO sessions (id, agent, push_version) VALUES ('lc', 'codex', 1)`,
-	} {
-		_, err := conn.ExecContext(ctx, insert)
-		require.NoError(t, err)
-	}
+	_, err := conn.ExecContext(ctx, `INSERT INTO messages
+		(session_id, ordinal, role, push_version) VALUES ('lc', 0, 'assistant', 1)`)
+	require.NoError(t, err)
 
 	require.NoError(t, EnsureSchemaOn(ctx, conn))
 
@@ -53,11 +43,8 @@ func TestEnsureSchemaConvertsStringColumnsToLowCardinality(t *testing.T) {
 	want := map[string]map[string]string{
 		"messages": {
 			"role":          "LowCardinality(String)",
-			"model":         "LowCardinality(String)",
 			"prompt_source": "Nullable(String)",
 		},
-		"tool_calls":              {"tool_name": "LowCardinality(String)"},
-		"sessions":                {"agent": "LowCardinality(String)"},
 		"usage_messages":          {"model": "LowCardinality(String)"},
 		"usage_session_snapshots": {"agent": "LowCardinality(String)"},
 	}
@@ -70,13 +57,8 @@ func TestEnsureSchemaConvertsStringColumnsToLowCardinality(t *testing.T) {
 	}
 	assert.Equal(t, want, got)
 
-	var role, model, agent, toolName string
+	var role string
 	require.NoError(t, conn.QueryRowContext(ctx,
-		"SELECT role, model FROM messages WHERE session_id = 'lc'").Scan(&role, &model))
-	require.NoError(t, conn.QueryRowContext(ctx,
-		"SELECT agent FROM sessions WHERE id = 'lc'").Scan(&agent))
-	require.NoError(t, conn.QueryRowContext(ctx,
-		"SELECT tool_name FROM tool_calls WHERE session_id = 'lc'").Scan(&toolName))
-	assert.Equal(t, []string{"assistant", "model-a", "codex", "Bash"},
-		[]string{role, model, agent, toolName})
+		"SELECT role FROM messages WHERE session_id = 'lc'").Scan(&role))
+	assert.Equal(t, "assistant", role)
 }

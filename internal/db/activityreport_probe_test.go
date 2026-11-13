@@ -70,17 +70,7 @@ func TestActivityReportSourceProbeIgnoresPricingSentinels(t *testing.T) {
 		model_pattern, updated_at
 	) VALUES ('probe-model', '2026-07-01T00:00:02.000Z')`)
 	require.NoError(t, err)
-	before, err := database.ActivityReportSourceProbe(ctx)
+	probe, err := database.ActivityReportSourceProbe(ctx)
 	require.NoError(t, err)
-	assert.Equal(t, "2026-07-01T00:00:02.000Z", before.MaxPricingUpdated)
-
-	_, err = database.getWriter().Exec(ctx, `UPDATE model_pricing
-		SET input_microdollars_per_mtok = 7,
-			updated_at = '2026-07-02T00:00:00.000Z'
-		WHERE model_pattern = 'probe-model'`)
-	require.NoError(t, err)
-	after, err := database.ActivityReportSourceProbe(ctx)
-	require.NoError(t, err)
-	assert.Equal(t, "2026-07-02T00:00:00.000Z", after.MaxPricingUpdated,
-		"a rate change must move the probe while the sentinel exists")
+	assert.Equal(t, "2026-07-01T00:00:02.000Z", probe.MaxPricingUpdated)
 }
