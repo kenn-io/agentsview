@@ -51,8 +51,8 @@ func codexMirrorHomeGroup(root string, saved remotesync.MirrorCodexMetadata, map
 		if live == archive || (association != nil && *association != home) {
 			return nil, nil, errors.New("contradictory Codex mirror home roots")
 		}
-		copy := home
-		association = &copy
+		selectedHome := home
+		association = &selectedHome
 		for _, pair := range []struct {
 			dir      string
 			archived bool

@@ -149,7 +149,7 @@ func validateCodexHomeRoots(targets TargetSet) error {
 		}
 		for _, root := range []string{roles.Sessions, roles.ArchivedSessions} {
 			if root != "" && !slices.Contains(targets.Dirs[parser.AgentCodex], root) {
-				return fmt.Errorf("Codex home root %q is not advertised", root)
+				return fmt.Errorf("codex home root %q is not advertised", root)
 			}
 		}
 	}
