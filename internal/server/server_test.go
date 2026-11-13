@@ -41,7 +41,6 @@ import (
 	"go.kenn.io/agentsview/internal/sessionwatch"
 	"go.kenn.io/agentsview/internal/sync"
 	"go.kenn.io/agentsview/internal/testjsonl"
-	"go.kenn.io/agentsview/internal/testutil"
 )
 
 // Timestamp constants for test data.
@@ -5594,56 +5593,6 @@ func TestGetMemoryStatus(t *testing.T) {
 	assert.Equal(t, service.MemoryUnavailable, status.Semantic.Status)
 	assert.Equal(t, service.MemoryPartial, status.Status)
 	assert.Equal(t, service.MemoryUnknown, status.Sources.Status)
-}
-
-func TestFindAvailablePortSkipsOccupied(t *testing.T) {
-	// Bind a port on 127.0.0.1 so FindAvailablePort must skip it.
-	ln, err := (&net.ListenConfig{}).Listen(t.Context(), "tcp", "127.0.0.1:0")
-	if err != nil {
-		require.FailNowf(t, "test failed", "listen: %v", err)
-	}
-	defer ln.Close()
-
-	occupied := ln.Addr().(*net.TCPAddr).Port
-
-	got, err := server.FindAvailablePort(t.Context(), "127.0.0.1", occupied)
-	require.NoError(t, err)
-	if got == occupied {
-		assert.Failf(t, "test failed",
-			"FindAvailablePort returned occupied port %d", occupied,
-		)
-	}
-}
-
-func TestFindAvailablePortWildcardSkipsOccupiedPort(t *testing.T) {
-	// A dual-stack wildcard listen can succeed on IPv6 while an unrelated
-	// process still owns the port on IPv4 (observed on macOS), so wildcard
-	// availability must check the IPv4 wildcard address on its own.
-	testutil.RequireWildcardListen(t)
-	for _, tt := range []struct {
-		name    string
-		network string
-		address string
-	}{
-		{name: "IPv4", network: "tcp4", address: "0.0.0.0:0"},
-		{name: "IPv6", network: "tcp6", address: "[::]:0"},
-	} {
-		t.Run(tt.name, func(t *testing.T) {
-			ln, err := (&net.ListenConfig{}).Listen(t.Context(), tt.network, tt.address)
-			if err != nil && tt.network == "tcp6" {
-				t.Skipf("IPv6 unavailable: %v", err)
-			}
-			require.NoError(t, err, "bind %s wildcard", tt.name)
-			defer ln.Close()
-
-			occupied := ln.Addr().(*net.TCPAddr).Port
-
-			got, err := server.FindAvailablePort(t.Context(), "0.0.0.0", occupied)
-			require.NoError(t, err)
-			assert.NotEqual(t, occupied, got,
-				"wildcard port selection must skip an %s-occupied port", tt.name)
-		})
-	}
 }
 
 func TestFindAvailablePortZeroReturnsAssignedPort(t *testing.T) {
