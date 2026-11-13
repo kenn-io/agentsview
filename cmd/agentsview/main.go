@@ -600,6 +600,9 @@ func runServe(ctx context.Context, cfg config.Config, opts serveOptions, restart
 	if imageTextManager != nil {
 		jobs = append(jobs, imageTextJob(imageTextManager, idleTracker))
 	}
+	if !database.ReadOnly() {
+		jobs = append(jobs, conversationPruneJob(database, idleTracker))
+	}
 	scheduler := poller.Start(ctx, jobs...)
 	codexCloudTrigger.scheduler.Store(scheduler)
 	defer func() {

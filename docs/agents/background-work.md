@@ -11,8 +11,9 @@ added later. The scheduler owns jitter, cooldown recorded before attempts,
 capped failure backoff, `RetryAfterError`, and cancellation. Status is in memory
 only; `TriggerNow` bypasses cooldown.
 
-Pricing refresh uses the scheduler. Periodic session sync, vector embedding, and
-recall extraction still own their timing; migrating them is separate work.
+Pricing refresh and conversation tombstone pruning use the scheduler. Periodic
+session sync, vector embedding, and recall extraction still own their timing;
+migrating them is separate work.
 
 ## Memory and Work Bounds
 
@@ -73,9 +74,9 @@ Codex data-loss bug or a merge blocker.
   pass installs at most 256 sessions per cache transaction and yields between
   batches. The pass fills normalized facts and daily rollups for the
   process-local timezone plus up to eight retained recently requested explicit
-  timezones. On completion, it claims each timezone through its captured archive
-  revision, capped by older installs written during the pass. Installs from
-  another catalog prevent the claim. A changed claim revision or install
+  timezones. On completion, it claims each timezone through its captured
+  archive revision, capped by older installs written during the pass. Installs
+  from another catalog prevent the claim. A changed claim revision or install
   boundary prevents replacement.
 - Served usage requests own timezone recency in
   `usage_rollup_timezones.last_requested_at`, rewriting it at most once a
@@ -83,9 +84,9 @@ Codex data-loss bug or a merge blocker.
   background rebuilds never reorder which eight explicit zones stay warm.
 - Archive writes during a pass do not restart it. Each session's facts and
   source version come from one archive read transaction, so they are always
-  paired correctly, and a session written during the pass is refilled by its own
-  mutation notification. Do not reintroduce a restart loop over a moving source
-  fingerprint.
+  paired correctly, and a session written during the pass is refilled by its
+  own mutation notification. Do not reintroduce a restart loop over a moving
+  source fingerprint.
 - After each notification batch, the daemon rebuilds filled sessions' daily
   rollups and requeues invalidated dedup peers for the same timezones, in
   chunks of 256. A failed rebuild is retried by the next write or usage
@@ -98,13 +99,13 @@ Codex data-loss bug or a merge blocker.
   the pending set, overflow and in-flight batch are empty.
 - A scheduled pricing refresh calls `RewarmUsageCache` once it returns, when the
   stored catalog digest changed, including a partial refresh that also reports
-  an error. It starts the same coverage pass, which rebuilds only rollups whose
-  pricing lookups now resolve differently. A pass resolves prices from the
-  catalog it captured at start. The pass checks the committed pricing revision
-  between batches and before and after its final recheck. A
-  change stops the pass and queues a new pass with the current catalog, even
-  before re-warm is called. The final recheck uses one rollup call across the
-  whole snapshot to repair installs invalidated by later batches.
+  an error. It starts the same coverage pass, which rebuilds only rollups
+  whose pricing lookups now resolve differently. A pass resolves prices from
+  the catalog it captured at start. The pass checks the committed pricing
+  revision between batches and before and after its final recheck. A change
+  stops the pass and queues a new pass with the current catalog, even before
+  re-warm is called. The final recheck uses one rollup call across the whole
+  snapshot to repair installs invalidated by later batches.
 - Sweep the archive deletion journal before and after the pass and between
   install batches. Queries also inner-join current archive sessions before
   ranking, so tombstone processing is hygiene rather than a correctness
@@ -127,9 +128,9 @@ Codex data-loss bug or a merge blocker.
   remaining `fill facts -> build rollups -> read` cold cost.
 - Native PostgreSQL serving runs no coverage pass. A Usage read returns the
   direct PostgreSQL result when its timezone has no current journal claim, its
-  pricing, account usage, or project identity changed, or it would refresh more than 64
-  changed sessions. That read queues its timezone for one background worker,
-  which reads all history in the timezone. The worker's read fills facts,
-  rebuilds rollups, and claims coverage, so later reads in any window refresh
-  only sessions changed since. One worker bounds this work to one pass at a
-  time. Closing the store cancels and joins it.
+  pricing, account usage, or project identity changed, or it would refresh
+  more than 64 changed sessions. That read queues its timezone for one
+  background worker, which reads all history in the timezone. The worker's
+  read fills facts, rebuilds rollups, and claims coverage, so later reads in
+  any window refresh only sessions changed since. One worker bounds this work
+  to one pass at a time. Closing the store cancels and joins it.

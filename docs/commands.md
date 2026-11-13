@@ -1070,13 +1070,15 @@ a compacted database before replacing the original, and truncates the
 write-ahead log (WAL). It preserves stored sessions and does not change what
 future imports retain.
 
-Compaction first removes deleted-message records from the conversation export
-index. Change-stream and conversation-export readers keep these records only so
-they can learn about a deletion. A reader whose position predates a removed
-record restarts: the change stream sends `reset`, and
-`export conversations changes` returns `reconciliation_required`. Readers that
-have already read past every removed record continue unchanged. The `--dry-run`
-estimate does not include the space these records free.
+Compaction first removes all deleted-message records from the conversation
+export index. The daemon also removes them on its own once they are a week or
+two old, but only compaction shrinks the database file. Change-stream and
+conversation-export readers keep these records only so they can learn about a
+deletion. A reader whose position predates a removed record restarts: the change
+stream sends `reset`, and `export conversations changes` returns
+`reconciliation_required`. Readers that have already read past every removed
+record continue unchanged. The `--dry-run` estimate does not include the space
+these records free.
 
 ```bash
 agentsview db compact [flags]

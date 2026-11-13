@@ -110,11 +110,12 @@ How `changes` events fit together:
   message and session changes, then stays open and sends new changes as the
   daemon publishes them. Changes that arrive together are sent as one event.
 - `reset` is `true`, with an empty `from`, when `after` is empty, belongs to
-  another database generation, predates deleted-message records that
-  `db compact` removed, or is not a cursor this archive issued. The replay
-  then starts at the beginning of the archive. Replace your copy with what
-  follows instead of merging into it. A full resync or a compaction during a
-  connection produces the same reset.
+  another database generation, predates deleted-message records that were
+  removed, or is not a cursor this archive issued. The replay then starts at
+  the beginning of the archive. Replace your copy with what follows instead of
+  merging into it. A full resync or a compaction during a connection produces
+  the same reset. The daemon removes deleted-message records after one to two
+  weeks, so a reader that reads at least weekly is not reset by that.
 - Like the changes listing, this is compact current state. A record changed
   twice before you read it arrives once, in its newest state.
 
@@ -328,10 +329,10 @@ The logical key is `(archive_id, session_id, message_id)` within one source
 writer's lineage. The physical `database_id` changes on full resync. A changed
 generation invalidates a saved checkpoint: the command leaves stdout empty,
 writes a `reconciliation_required` JSON error to stderr, and exits with code 4.
-Reconcile the new generation rather than treating it as an empty update.
-[`db compact`](/docs/commands/#agentsview-db-compact) removes deleted-message
-records, so a checkpoint saved before the newest removed record fails the same
-way.
+Reconcile the new generation rather than treating it as an empty update. The
+daemon removes deleted-message records after one to two weeks, and
+[`db compact`](/docs/commands/#agentsview-db-compact) removes them all, so a
+checkpoint saved before the newest removed record fails the same way.
 
 Native identities stored in `source_uuid` support edits, insertion and deletion
 without turning every change into another utterance. Some source formats lack
