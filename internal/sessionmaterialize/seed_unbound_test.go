@@ -83,19 +83,18 @@ func TestMaterializeUnboundSeededNativeSources(t *testing.T) {
 				t.Cleanup(func() { _ = database.Close() })
 				require.NoError(t, database.ConfigureArtifactLocalMachine(ctx, device))
 				first, selected := filepath.Join(root, "first"), filepath.Join(root, "selected")
-				var original, other, selectedPath, firstPath, nativeID, ancestor string
+				var original, selectedPath, firstPath, nativeID, ancestor string
 				if agent == parser.AgentClaude {
 					original = testjsonl.NewSessionBuilder().AddClaudeUserWithSessionID("2026-01-01T00:00:00Z", "selected", id).String()
-					other = testjsonl.NewSessionBuilder().AddClaudeUserWithSessionID("2026-01-01T00:00:00Z", "other", id).String()
+					other := testjsonl.NewSessionBuilder().AddClaudeUserWithSessionID("2026-01-01T00:00:00Z", "other", id).String()
 					selectedPath = filepath.Join(selected, "project", id+".jsonl")
 					firstPath = filepath.Join(first, "project", id+".jsonl")
+					dbtest.WriteTestFile(t, firstPath, []byte(other))
 					nativeID = id
 				} else {
 					name := "rollout-2026-01-01T00-00-00-" + id + ".jsonl"
 					original = testjsonl.JoinJSONL(testjsonl.CodexSessionMetaWithFieldsJSON(id, "/work", "codex_cli_rs", "2026-01-01T00:00:00Z", map[string]any{"history_mode": "paginated"}), testjsonl.CodexMsgJSON("user", "selected", "2026-01-01T00:00:01Z"))
-					other = testjsonl.JoinJSONL(testjsonl.CodexSessionMetaWithFieldsJSON(id, "/work", "codex_cli_rs", "2026-01-01T00:00:00Z", map[string]any{"history_mode": "paginated"}), testjsonl.CodexMsgJSON("user", "other", "2026-01-01T00:00:01Z"))
 					selectedPath = filepath.Join(selected, "sessions", "2026", "01", "01", name)
-					firstPath = filepath.Join(first, "sessions", "2026", "01", "01", name)
 					nativeID = "codex:" + id
 					if scenario == "revert page" {
 						const rollout = "22222222-2222-4222-8222-222222222222"
@@ -103,13 +102,11 @@ func TestMaterializeUnboundSeededNativeSources(t *testing.T) {
 						dbtest.WriteTestFile(t, selectedPath, []byte(ancestor))
 						name = "rollout-2026-01-02T00-00-00-" + id + "_" + rollout + ".jsonl"
 						selectedPath = filepath.Join(selected, "sessions", "2026", "01", "02", name)
-						firstPath = filepath.Join(first, "sessions", "2026", "01", "02", name)
 						nativeID += "_" + rollout
 						original = testjsonl.JoinJSONL(testjsonl.CodexSessionMetaWithFieldsJSON(id, "/work", "codex_cli_rs", "2026-01-02T00:00:00Z", map[string]any{"history_mode": "paginated", "history_base": map[string]any{"thread_id": id, "end_ordinal_exclusive": 2, "end_byte_offset": len(ancestor)}}), testjsonl.CodexMsgJSON("user", "revert page", "2026-01-02T00:00:01Z"))
 					}
 				}
 				dbtest.WriteTestFile(t, selectedPath, []byte(original))
-				dbtest.WriteTestFile(t, firstPath, []byte(other))
 				acceptedPath := selectedPath
 				discovery := selected
 				var rootAlias string
@@ -143,7 +140,6 @@ func TestMaterializeUnboundSeededNativeSources(t *testing.T) {
 					body := testjsonl.NewSessionBuilder().AddClaudeUserWithSessionID("2026-01-01T00:00:00Z", "prior", priorID).String()
 					dbtest.WriteTestFile(t, filepath.Join(priorRoot, "project", priorID+".jsonl"), []byte(body))
 					prior := syncer.NewEngine(ctx, database, syncer.EngineConfig{AgentDirs: map[parser.AgentType][]string{agent: {priorRoot}}, ProviderFactories: []parser.ProviderFactory{factory}, Machine: machine, Ephemeral: true, DisableFilesystemProjectDiscovery: true})
-					t.Cleanup(prior.Close)
 					priorStats := prior.SyncAll(ctx, nil)
 					prior.Close()
 					require.Zero(t, priorStats.Failed)
@@ -151,7 +147,6 @@ func TestMaterializeUnboundSeededNativeSources(t *testing.T) {
 					require.NoError(t, database.AdoptMachineIdentity(ctx, device, []string{machine}))
 				}
 				engine := syncer.NewEngine(ctx, database, syncer.EngineConfig{AgentDirs: map[parser.AgentType][]string{agent: {discovery}}, ProviderFactories: []parser.ProviderFactory{factory}, Machine: machine, Ephemeral: true, DisableFilesystemProjectDiscovery: true})
-				t.Cleanup(engine.Close)
 				stats := engine.SyncAll(ctx, nil)
 				engine.Close()
 				require.Zero(t, stats.Failed)
@@ -202,9 +197,7 @@ func TestMaterializeUnboundSeededNativeSources(t *testing.T) {
 				require.NoError(t, os.RemoveAll(first))
 				destination := t.TempDir()
 				t.Setenv("CLAUDE_CONFIG_DIR", destination)
-				t.Setenv("CLAUDE_CODE_PROJECT_DIR_NAME", "fixture")
 				t.Setenv("CODEX_HOME", destination)
-				t.Setenv("CODEX_SESSIONS_DIR", "")
 				cfg := config.Config{DataDir: seed, InstallationID: device, AgentDirs: map[parser.AgentType][]string{agent: {discovery}}}
 				result, materializeErr := Materialize(ctx, cfg, reader, session, t.TempDir())
 				require.NoError(t, reader.Reader().QueryRowContext(ctx, `SELECT count(*) FROM raw_archive_sessions`).Scan(&count))
@@ -222,21 +215,16 @@ func TestMaterializeUnboundSeededNativeSources(t *testing.T) {
 				}
 				require.NoError(t, materializeErr)
 				assert.Contains(t, result.Source, "retained:")
-				var installed string
-				if agent == parser.AgentClaude {
-					installed = filepath.Join(destination, "projects", "fixture", id+".jsonl")
-				} else {
-					if scenario == "revert page" {
-						require.Len(t, result.Paths, 2)
-						installed = result.Paths[1]
-					} else {
-						require.Len(t, result.Paths, 1)
-						installed = result.Paths[0]
-					}
+				want := []string{original}
+				if ancestor != "" {
+					want = []string{ancestor, original}
 				}
-				got, err := os.ReadFile(installed)
-				require.NoError(t, err)
-				assert.Equal(t, original, string(got))
+				require.Len(t, result.Paths, len(want))
+				for i, expected := range want {
+					got, err := os.ReadFile(result.Paths[i])
+					require.NoError(t, err)
+					assert.Equal(t, expected, string(got))
+				}
 			})
 		}
 	}
