@@ -41,9 +41,6 @@ func materializeCodex(ctx context.Context, cfg config.Config, database *db.DB, s
 	retained := useRetained(cfg, session, owners)
 archiveSource:
 	if retained || len(owners) > 0 {
-		if len(owners) > 0 && (owners[0].NativeSessionID != raw || owners[0].Source.DeviceID != session.Machine) {
-			return Result{}, errors.New("archive session identity differs")
-		}
 		var pages []codexPage
 		use := func(root string, names []string, read func(context.Context, string, int64) ([]byte, error)) error {
 			archived := make(map[string]bool)
@@ -59,6 +56,9 @@ archiveSource:
 		if retained {
 			_, _, source, err = archivesource.Retained(ctx, cfg, database, session.ID, session.Machine, raw, "codex", stored, owners, maxSourceBytes, use)
 		} else {
+			if owners[0].NativeSessionID != raw || owners[0].Source.DeviceID != session.Machine {
+				return Result{}, errors.New("archive session identity differs")
+			}
 			var snapshot string
 			snapshot, err = archivesource.ReadCodexSnapshot(ctx, cfg.ArchiveSources, owners, maxSourceBytes, use)
 			source = "snapshot:" + snapshot

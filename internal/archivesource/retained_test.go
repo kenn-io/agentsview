@@ -3,7 +3,7 @@ package archivesource
 import (
 	"context"
 	"crypto/sha256"
-	"errors"
+	"database/sql"
 	"fmt"
 	"io/fs"
 	"os"
@@ -113,7 +113,8 @@ func TestRetainedClaudeOriginalAndDirectory(t *testing.T) {
 	cancelled, cancel := context.WithCancel(ctx)
 	cancel()
 	_, _, _, err = Retained(cancelled, directoryCfg, nil, id, sourceDevice, id, "claude", "", []db.ArchiveSessionProvenance{owner}, 1<<20, nil)
-	assert.True(t, errors.Is(err, context.Canceled))
+	require.ErrorIs(t, err, context.Canceled)
+	assert.NotContains(t, err.Error(), "owning directory is not configured or unavailable")
 	tree, _, _, err = Retained(ctx, directoryCfg, nil, id, sourceDevice, id, "claude", "", []db.ArchiveSessionProvenance{owner}, 1<<20, nil)
 	require.NoError(t, err)
 	require.NoError(t, tree.Cleanup())
@@ -164,6 +165,7 @@ func TestRetainedCodexCompressedAndAncestor(t *testing.T) {
 		return cancelCtx.Err()
 	})
 	require.ErrorIs(t, err, context.Canceled)
+	assert.NotErrorIs(t, err, sql.ErrTxDone)
 	var seen []string
 	_, _, source, err := Retained(ctx, config.Config{DataDir: seed}, database, "codex:"+thread, sourceDevice, "codex:"+thread, "codex", "", nil, 1<<20, func(_ string, names []string, read func(context.Context, string, int64) ([]byte, error)) error {
 		for _, name := range names {
