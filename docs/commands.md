@@ -2164,9 +2164,10 @@ agentsview session parent <id> <parent>  # record the launching session
 ```
 
 `session materialize <id> --cwd <path>` installs the original Claude Code, Pi,
-or Codex transcript and its native companions for an existing local checkout, then
-prints a resume command. It reads the local archive without starting a daemon
-and finds originals in configured local roots or remote mirrors. Claude and
+or Codex transcript for an existing local checkout, with native companions for
+Claude and the required history pages for Codex, then prints a resume command.
+It reads the local archive without starting a daemon and finds originals in
+configured local roots or remote mirrors. Claude and
 Codex also support configured S3 roots and snapshot attachments that own the
 session. Local retained and directory captures are not yet supported. Pi has
 no retained captures. Claude archive-only fork sessions cannot be installed;

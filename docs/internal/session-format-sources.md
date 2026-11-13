@@ -787,7 +787,8 @@ fixtures retain this field; missing identities remain source-local.
   [rollout list](https://github.com/openai/codex/blob/6b9826e3aa83b1a5947db50f4332cb9c65f1b340/codex-rs/rollout/src/list.rs)
   supplies the dated filename layout, selects the newest thread rollout by
   timestamp and ID, and searches live before archived rollouts. Its filesystem
-  traversal reads the explicit native roots, including linked directories. The
+  traversal follows an explicitly linked native root, but skips linked descendant
+  directories and files. The
   [compression reader](https://github.com/openai/codex/blob/6b9826e3aa83b1a5947db50f4332cb9c65f1b340/codex-rs/rollout/src/compression.rs)
   chooses a plain file before its compressed sibling. The
   [prefix reader](https://github.com/openai/codex/blob/6b9826e3aa83b1a5947db50f4332cb9c65f1b340/codex-rs/rollout/src/seekable_reader.rs)
