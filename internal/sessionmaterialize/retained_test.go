@@ -1,15 +1,19 @@
 package sessionmaterialize
 
 import (
+	"crypto/sha256"
+	"fmt"
 	"os"
 	"path/filepath"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"go.kenn.io/agentsview/internal/artifact"
 	"go.kenn.io/agentsview/internal/config"
 	"go.kenn.io/agentsview/internal/db"
 	"go.kenn.io/agentsview/internal/dbtest"
+	"go.kenn.io/agentsview/internal/parser"
 	"go.kenn.io/agentsview/internal/rawarchive"
 	"go.kenn.io/agentsview/internal/testjsonl"
 )
@@ -46,21 +50,36 @@ func TestMaterializeRetainedCodexLineage(t *testing.T) {
 	require.NoError(t, err)
 	_, err = archive.Reparse(ctx, rawarchive.ReparseOptions{All: true, ScratchBytes: 1 << 20})
 	require.NoError(t, err)
-	require.NoError(t, archive.Close())
 	session, err := database.GetSessionFull(ctx, "codex:"+thread)
 	require.NoError(t, err)
 	require.NotNil(t, session)
 	home := t.TempDir()
 	t.Setenv("CODEX_HOME", home)
 	t.Setenv("CODEX_SESSIONS_DIR", "")
-	bad := *session
-	bad.FilePath = new("archive://wrong/source")
-	_, err = Materialize(ctx, config.Config{DataDir: seed}, database, &bad, t.TempDir())
-	require.ErrorContains(t, err, "binding")
+	cfg := config.Config{DataDir: seed, InstallationID: device, AgentDirs: map[parser.AgentType][]string{parser.AgentCodex: {codexHome}}}
+	cwd := t.TempDir()
+	configured, err := Materialize(ctx, cfg, database, session, cwd)
+	require.NoError(t, err, "configured original must remain usable while the vault is busy")
+	assert.NotContains(t, configured.Source, "retained:")
+	require.NoError(t, archive.Close())
+	require.NoError(t, os.Remove(filepath.Join(codexHome, "sessions", pageName)))
+	home = t.TempDir()
+	t.Setenv("CODEX_HOME", home)
+	hash := fmt.Sprintf("%x", sha256.Sum256([]byte(page)))
+	blob := filepath.Join(seed, rawarchive.Directory, "artifacts", "blobs", hash[:2], hash)
+	original, err := os.ReadFile(blob)
+	require.NoError(t, err)
+	require.NotEmpty(t, original)
+	corrupt := append([]byte(nil), original...)
+	corrupt[0] ^= 1
+	require.NoError(t, os.WriteFile(blob, corrupt, 0o600))
+	_, err = Materialize(ctx, cfg, database, session, cwd)
+	require.ErrorIs(t, err, artifact.ErrArtifactCorrupt)
 	entries, err := os.ReadDir(home)
 	require.NoError(t, err)
 	assert.Empty(t, entries)
-	result, err := Materialize(ctx, config.Config{DataDir: seed}, database, session, t.TempDir())
+	require.NoError(t, os.WriteFile(blob, original, 0o600))
+	result, err := Materialize(ctx, cfg, database, session, cwd)
 	require.NoError(t, err)
 	require.Len(t, result.Paths, 2)
 	assert.Contains(t, result.Source, "retained:")
@@ -69,4 +88,44 @@ func TestMaterializeRetainedCodexLineage(t *testing.T) {
 		require.NoError(t, err)
 		assert.Equal(t, want, string(got))
 	}
+}
+
+func TestMaterializeClaudeConfiguredBeforeRetained(t *testing.T) {
+	const device = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+	const id = "019eb791-cf7d-75c1-8439-9ed74c122e02"
+	ctx := t.Context()
+	root := t.TempDir()
+	data := filepath.Join(root, "data")
+	require.NoError(t, os.MkdirAll(data, 0o700))
+	database, err := db.OpenIsolatedContext(ctx, filepath.Join(data, "sessions.db"))
+	require.NoError(t, err)
+	require.NoError(t, database.Close())
+	dbtest.WriteTestFile(t, filepath.Join(data, "telemetry-install-id"), []byte(device))
+	projects := filepath.Join(root, "claude", "projects")
+	name := filepath.Join(projects, "project", id+".jsonl")
+	original := testjsonl.NewSessionBuilder().AddClaudeUserWithSessionID("2026-01-01T00:00:00Z", "configured original", id).String()
+	dbtest.WriteTestFile(t, name, []byte(original))
+	capture := filepath.Join(root, "capture")
+	_, err = rawarchive.Capture(ctx, rawarchive.CaptureOptions{DataDir: data, Destination: capture, Roots: []rawarchive.RootSpec{{Provider: "claude", Path: projects}}, Settings: rawarchive.RecoverySettings{LocalMachineName: "fixture"}})
+	require.NoError(t, err)
+	seed := filepath.Join(root, "seed")
+	_, err = rawarchive.Seed(ctx, filepath.Join(capture, "capture.json"), seed, nil)
+	require.NoError(t, err)
+	database, err = db.OpenIsolatedContext(ctx, filepath.Join(seed, "sessions.db"))
+	require.NoError(t, err)
+	defer database.Close()
+	archive, err := rawarchive.Open(ctx, database, seed, nil)
+	require.NoError(t, err)
+	_, err = archive.Reparse(ctx, rawarchive.ReparseOptions{All: true, ScratchBytes: 1 << 20})
+	require.NoError(t, err)
+	session, err := database.GetSessionFull(ctx, id)
+	require.NoError(t, err)
+	require.NotNil(t, session)
+	cfg := config.Config{DataDir: seed, InstallationID: device, AgentDirs: map[parser.AgentType][]string{parser.AgentClaude: {projects}}}
+	t.Setenv("CLAUDE_CONFIG_DIR", t.TempDir())
+	t.Setenv("CLAUDE_CODE_PROJECT_DIR_NAME", "fixture")
+	result, err := Materialize(ctx, cfg, database, session, t.TempDir())
+	require.NoError(t, err, "configured original must remain usable while the vault is busy")
+	assert.Equal(t, name, result.Source)
+	require.NoError(t, archive.Close())
 }

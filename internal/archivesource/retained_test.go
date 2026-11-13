@@ -2,8 +2,10 @@ package archivesource
 
 import (
 	"context"
-	"database/sql"
+	"crypto/sha256"
 	"errors"
+	"fmt"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"testing"
@@ -11,10 +13,12 @@ import (
 	"github.com/klauspost/compress/zstd"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"go.kenn.io/agentsview/internal/artifact"
 	"go.kenn.io/agentsview/internal/config"
 	"go.kenn.io/agentsview/internal/db"
 	"go.kenn.io/agentsview/internal/dbtest"
 	"go.kenn.io/agentsview/internal/rawarchive"
+	"go.kenn.io/agentsview/internal/rawderive"
 	"go.kenn.io/agentsview/internal/testjsonl"
 	"go.kenn.io/docbank/docbank"
 )
@@ -29,6 +33,9 @@ func TestRetainedClaudeOriginalAndDirectory(t *testing.T) {
 	dbtest.WriteTestFile(t, filepath.Join(projects, "project", id, "tool-results", "tool.txt"), []byte("tool result"))
 	backupSourceRoots(t, inputs, []rawarchive.RootSpec{{Provider: "claude", Path: projects}})
 	seed := filepath.Join(inputs, "seed")
+	// Seed imports accepted custody before local reparse creates session bindings.
+	saved, err := os.ReadFile(filepath.Join(seed, "sessions.db"))
+	require.NoError(t, err)
 	database, err := db.OpenIsolatedContext(ctx, filepath.Join(seed, "sessions.db"))
 	require.NoError(t, err)
 	archive, err := rawarchive.Open(ctx, database, seed, nil)
@@ -56,10 +63,19 @@ func TestRetainedClaudeOriginalAndDirectory(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, "tool result", string(got))
 	require.NoError(t, tree.Cleanup())
+	scratch := t.TempDir()
+	t.Setenv("TMPDIR", scratch)
+	t.Setenv("TMP", scratch)
+	t.Setenv("TEMP", scratch)
 	_, _, _, err = Retained(ctx, cfg, database, id, "wrong-device", id, "claude", "", nil, 1<<20, nil)
-	require.Error(t, err)
+	require.ErrorContains(t, err, "original transcript or owning source unavailable")
 	_, _, _, err = Retained(ctx, cfg, database, id, sourceDevice, id, "claude", "", nil, 1, nil)
-	require.Error(t, err)
+	require.ErrorIs(t, err, rawderive.ErrSizeLimit)
+	_, _, _, err = Retained(ctx, cfg, database, id, sourceDevice, id, "claude", "archive://wrong/source", nil, 1<<20, nil)
+	require.ErrorContains(t, err, "binding")
+	entries, err := os.ReadDir(scratch)
+	require.NoError(t, err)
+	assert.Empty(t, entries)
 	archiveID, err := database.GetArchiveID(ctx)
 	require.NoError(t, err)
 	var owner db.ArchiveSessionProvenance
@@ -79,32 +95,20 @@ func TestRetainedClaudeOriginalAndDirectory(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, original, string(got))
 	require.NoError(t, tree.Cleanup())
-	conflicting := owner
-	conflicting.ManifestID = "different-manifest"
-	_, _, _, err = Retained(ctx, directoryCfg, nil, id, sourceDevice, id, "claude", "", []db.ArchiveSessionProvenance{owner, conflicting}, 1<<20, nil)
-	require.ErrorContains(t, err, "ambiguous directory source ownership")
+	t.Setenv("TMPDIR", "")
+	t.Setenv("TMP", "")
+	t.Setenv("TEMP", "")
 	alternate := t.TempDir()
 	require.NoError(t, os.CopyFS(alternate, os.DirFS(filepath.Join(seed, rawarchive.Directory, "artifacts"))))
 	require.NoError(t, os.Mkdir(filepath.Join(alternate, "application"), 0o700))
-	saved, err := os.ReadFile(filepath.Join(seed, "sessions.db"))
-	require.NoError(t, err)
 	alternateDB := filepath.Join(alternate, "application", "sessions.db")
 	require.NoError(t, os.WriteFile(alternateDB, saved, 0o600))
-	// A directory attachment can be accepted before the saved archive is reparsed.
-	fixtureDB, err := sql.Open("sqlite3", alternateDB)
-	require.NoError(t, err)
-	_, err = fixtureDB.ExecContext(ctx, `DELETE FROM raw_archive_sessions`)
-	require.NoError(t, err)
-	require.NoError(t, fixtureDB.Close())
-	before, err := os.ReadFile(alternateDB)
-	require.NoError(t, err)
-	alternateCfg := config.Config{ArchiveSources: []config.ArchiveSource{{Directory: alternate}}}
+	before := retainedTree(t, alternate)
+	alternateCfg := config.Config{ArchiveSources: []config.ArchiveSource{{Directory: filepath.Join(t.TempDir(), "unprepared")}, {Directory: alternate}}}
 	tree, _, _, err = Retained(ctx, alternateCfg, nil, id, sourceDevice, id, "claude", "", []db.ArchiveSessionProvenance{owner}, 1<<20, nil)
 	require.NoError(t, err)
 	require.NoError(t, tree.Cleanup())
-	after, err := os.ReadFile(alternateDB)
-	require.NoError(t, err)
-	assert.Equal(t, before, after)
+	assert.Equal(t, before, retainedTree(t, alternate))
 	_, err = os.Stat(filepath.Join(alternate, "application", "db.write.lock"))
 	assert.ErrorIs(t, err, os.ErrNotExist)
 	wal := filepath.Join(alternate, "application", "sessions.db-wal")
@@ -118,6 +122,21 @@ func TestRetainedClaudeOriginalAndDirectory(t *testing.T) {
 	cancel()
 	_, _, _, err = Retained(cancelled, directoryCfg, nil, id, sourceDevice, id, "claude", "", []db.ArchiveSessionProvenance{owner}, 1<<20, nil)
 	assert.True(t, errors.Is(err, context.Canceled))
+	tree, _, _, err = Retained(ctx, directoryCfg, nil, id, sourceDevice, id, "claude", "", []db.ArchiveSessionProvenance{owner}, 1<<20, nil)
+	require.NoError(t, err)
+	require.NoError(t, tree.Cleanup())
+
+	// Damage the selected synthetic raw object, not its catalog binding.
+	hash := fmt.Sprintf("%x", sha256.Sum256([]byte(original)))
+	blob := filepath.Join(seed, rawarchive.Directory, "artifacts", "blobs", hash[:2], hash)
+	damaged, err := os.ReadFile(blob)
+	require.NoError(t, err)
+	require.NotEmpty(t, damaged)
+	damaged[0] ^= 1
+	require.NoError(t, os.WriteFile(blob, damaged, 0o600))
+	tree, _, _, err = Retained(ctx, directoryCfg, nil, id, sourceDevice, id, "claude", "", []db.ArchiveSessionProvenance{owner}, 1<<20, nil)
+	require.ErrorIs(t, err, artifact.ErrArtifactCorrupt)
+	assert.Nil(t, tree)
 }
 
 func TestRetainedCodexCompressedAndAncestor(t *testing.T) {
@@ -147,6 +166,12 @@ func TestRetainedCodexCompressedAndAncestor(t *testing.T) {
 	_, err = archive.Reparse(ctx, rawarchive.ReparseOptions{All: true, ScratchBytes: 1 << 20})
 	require.NoError(t, err)
 	require.NoError(t, archive.Close())
+	cancelCtx, cancel := context.WithCancel(ctx)
+	_, _, _, err = Retained(cancelCtx, config.Config{DataDir: seed}, database, "codex:"+thread, sourceDevice, "codex:"+thread, "codex", "", nil, 1<<20, func(_ string, _ []string, _ func(context.Context, string, int64) ([]byte, error)) error {
+		cancel()
+		return cancelCtx.Err()
+	})
+	require.ErrorIs(t, err, context.Canceled)
 	var seen []string
 	_, _, source, err := Retained(ctx, config.Config{DataDir: seed}, database, "codex:"+thread, sourceDevice, "codex:"+thread, "codex", "", nil, 1<<20, func(_ string, names []string, read func(context.Context, string, int64) ([]byte, error)) error {
 		for _, name := range names {
@@ -170,8 +195,38 @@ func TestRetainedCodexCompressedAndAncestor(t *testing.T) {
 
 func TestRetainedMissingVaultNeedsOwner(t *testing.T) {
 	data := t.TempDir()
-	_, _, _, err := Retained(t.Context(), config.Config{DataDir: data}, nil, "session", "device", "native", "claude", "", nil, 1024, nil)
+	database, err := db.OpenIsolatedContext(t.Context(), filepath.Join(data, "sessions.db"))
+	require.NoError(t, err)
+	defer database.Close()
+	_, _, _, err = Retained(t.Context(), config.Config{DataDir: data}, database, "session", "device", "native", "claude", "", nil, 1024, nil)
 	require.ErrorIs(t, err, docbank.ErrVaultNeedsOwner)
 	_, err = os.Stat(filepath.Join(data, rawarchive.Directory, "artifacts"))
 	assert.ErrorIs(t, err, os.ErrNotExist)
+}
+
+// retainedTree records every entry and regular-file byte digest, including sidecars.
+func retainedTree(t *testing.T, root string) map[string]string {
+	t.Helper()
+	entries := make(map[string]string)
+	err := filepath.WalkDir(root, func(name string, entry fs.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		rel, err := filepath.Rel(root, name)
+		if err != nil {
+			return err
+		}
+		if entry.Type().IsRegular() {
+			data, err := os.ReadFile(name)
+			if err != nil {
+				return err
+			}
+			entries[rel] = fmt.Sprintf("%x", sha256.Sum256(data))
+		} else {
+			entries[rel] = entry.Type().String()
+		}
+		return nil
+	})
+	require.NoError(t, err)
+	return entries
 }

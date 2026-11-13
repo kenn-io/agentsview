@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"io"
 	"io/fs"
-	"net/url"
 	"os"
 	"path"
 	"path/filepath"
@@ -26,6 +25,7 @@ import (
 const maxSourceBytes = 512 << 20
 
 var errSourceSize = errors.New("native source exceeds size limit")
+var errSourceUnavailable = errors.New("native transcript is unavailable from configured sources")
 
 type sourceFile struct {
 	rel  string
@@ -70,16 +70,9 @@ func Materialize(ctx context.Context, cfg config.Config, database *db.DB, sessio
 	if err != nil {
 		return Result{}, err
 	}
-	owners, err = matchingArchiveOwners(session, owners)
-	if err != nil {
-		return Result{}, err
-	}
 	var source string
 	var files []sourceFile
-	retained, err := useRetained(ctx, cfg, database, session, owners)
-	if err != nil {
-		return Result{}, err
-	}
+	retained := useRetained(cfg, session, owners)
 	if retained {
 		files, source, err = readRetainedSource(ctx, cfg, database, session, owners, id)
 	} else if len(owners) != 0 {
@@ -122,6 +115,15 @@ func Materialize(ctx context.Context, cfg config.Config, database *db.DB, sessio
 		}
 	} else {
 		files, source, err = readConfiguredLocal(ctx, cfg, session, source, id)
+		if errors.Is(err, errSourceUnavailable) {
+			var found bool
+			found, err = archivesource.HasRetainedSession(ctx, database, session.ID)
+			if err == nil && found {
+				files, source, err = readRetainedSource(ctx, cfg, database, session, nil, id)
+			} else if err == nil {
+				err = errSourceUnavailable
+			}
+		}
 	}
 	if err != nil {
 		return Result{}, fmt.Errorf("reading native transcript: %w", err)
@@ -173,7 +175,7 @@ func storedSource(session *db.Session, host string) (string, error) {
 	if host == "" {
 		return "", nil
 	}
-	return "", errors.New("native transcript is unavailable from configured sources")
+	return "", errSourceUnavailable
 }
 
 func readConfiguredLocal(ctx context.Context, cfg config.Config, session *db.Session, stored, id string) ([]sourceFile, string, error) {
@@ -292,7 +294,7 @@ func uniqueLocalSource(ctx context.Context, provider parser.Provider, stored str
 		return nil
 	})
 	if err == nil && matchInfo == nil {
-		err = errors.New("native transcript is unavailable from configured sources")
+		err = errSourceUnavailable
 	}
 	return match, err
 }
@@ -490,21 +492,18 @@ func readSnapshotSource(ctx context.Context, cfg config.Config, owners []db.Arch
 }
 
 // useRetained keeps configured snapshots authoritative before considering directories.
-func useRetained(ctx context.Context, cfg config.Config, database *db.DB, session *db.Session, owners []db.ArchiveSessionProvenance) (bool, error) {
+func useRetained(cfg config.Config, session *db.Session, owners []db.ArchiveSessionProvenance) bool {
 	if len(owners) != 0 {
 		for _, source := range cfg.ArchiveSources {
 			if source.Directory == "" && slices.ContainsFunc(owners, func(o db.ArchiveSessionProvenance) bool { return o.Attachment.SnapshotID == source.Snapshot }) {
-				return false, nil
+				return false
 			}
 		}
 		return slices.ContainsFunc(owners, func(o db.ArchiveSessionProvenance) bool {
 			return strings.HasPrefix(o.Attachment.SnapshotID, "directory:")
-		}), nil
+		})
 	}
-	if session.FilePath != nil && strings.HasPrefix(*session.FilePath, "archive://") {
-		return true, nil
-	}
-	return archivesource.HasRetainedSession(ctx, database, session.ID)
+	return session.FilePath != nil && strings.HasPrefix(*session.FilePath, "archive://")
 }
 
 func readRetainedSource(ctx context.Context, cfg config.Config, database *db.DB, session *db.Session, owners []db.ArchiveSessionProvenance, native string) (_ []sourceFile, source string, retErr error) {
@@ -523,26 +522,4 @@ func readRetainedSource(ctx context.Context, cfg config.Config, database *db.DB,
 	}
 	files, err := readLocalSource(ctx, tree.Root(), name, native, maxSourceBytes)
 	return files, source, err
-}
-
-func matchingArchiveOwners(session *db.Session, owners []db.ArchiveSessionProvenance) ([]db.ArchiveSessionProvenance, error) {
-	if session.FilePath == nil || len(owners) == 0 {
-		return owners, nil
-	}
-	rest, ok := strings.CutPrefix(*session.FilePath, "archive://")
-	if !ok {
-		return owners, nil
-	}
-	root, encoded, found := strings.Cut(rest, "/")
-	key, err := url.PathUnescape(encoded)
-	if !found || err != nil {
-		return nil, errors.New("archive source binding differs")
-	}
-	matched := slices.DeleteFunc(slices.Clone(owners), func(owner db.ArchiveSessionProvenance) bool {
-		return owner.Source.RootID != root || owner.Source.SourceKey != key
-	})
-	if len(matched) == 0 {
-		return nil, errors.New("archive source binding differs")
-	}
-	return matched, nil
 }
