@@ -174,6 +174,9 @@ func TestFrustrationCountsDelayedSave(t *testing.T) {
 	require.NoError(t, f.pg.QueryRowContext(f.ctx, `SELECT session_version, marker_count FROM session_frustration_counts WHERE session_id = 'two'`).Scan(&saved, &count))
 	require.Equal(t, versions["two"], saved)
 	require.Equal(t, 1, count)
+	result, err := f.open(t).GetAnalyticsSignals(f.ctx, db.AnalyticsFilter{})
+	require.NoError(t, err)
+	require.Equal(t, 1, result.QualityHealth.Totals.FrustrationMarkerCount)
 	require.NoError(t, f.local.DeleteSession(f.ctx, "one"))
 	_, err = f.syncer.Push(f.ctx, true, nil)
 	require.NoError(t, err)
@@ -182,41 +185,29 @@ func TestFrustrationCountsDelayedSave(t *testing.T) {
 	require.Zero(t, count)
 }
 
-func TestFrustrationCountsWaitingSave(t *testing.T) {
-	f := newFrustrationFixture(t, "agentsview_frustration_waiting_test")
-	if f.versionColumn != "xmin" {
-		t.Skip("PostgreSQL lock inspection required")
+func TestFrustrationCountsRefreshAtScale(t *testing.T) {
+	f := newFrustrationFixture(t, "agentsview_frustration_scale_test")
+	_, err := f.pg.ExecContext(f.ctx, `INSERT INTO sessions (id, machine, project, agent) SELECT 'scale-' || n, 'test', 'sample', 'claude' FROM generate_series(1, 10000) n`)
+	require.NoError(t, err)
+	_, err = f.pg.ExecContext(f.ctx, `INSERT INTO session_frustration_counts (session_id, session_version, rules_version, marker_count) SELECT id, 'old', $1, 0 FROM sessions WHERE id LIKE 'scale-%'`, frustrationMarkerRulesVersion)
+	require.NoError(t, err)
+	rows, err := f.pg.QueryContext(f.ctx, `SELECT id, `+frustrationSessionVersion(f.versionColumn)+` FROM sessions WHERE id LIKE 'scale-%'`)
+	require.NoError(t, err)
+	versions := make(map[string]string, 10000)
+	counts := make(map[string]int, 10000)
+	for rows.Next() {
+		var id, version string
+		require.NoError(t, rows.Scan(&id, &version))
+		versions[id] = version
+		counts[id] = 1
 	}
-	store := f.open(t)
-	_, err := store.GetAnalyticsSignals(f.ctx, db.AnalyticsFilter{})
-	require.NoError(t, err)
-	_, versions, err := store.signalRows(f.ctx, db.AnalyticsFilter{}, f.versionColumn)
-	require.NoError(t, err)
-	tx, err := f.pg.BeginTx(f.ctx, nil)
-	require.NoError(t, err)
-	defer tx.Rollback()
-	_, err = tx.ExecContext(f.ctx, `UPDATE session_frustration_counts SET marker_count = 1 WHERE session_id = 'one'`)
-	require.NoError(t, err)
-	done := make(chan error, 1)
-	go func() {
-		done <- store.storeFrustrationCounts(f.ctx, map[string]string{"one": versions["one"]}, map[string]int{"one": 9}, f.versionColumn)
-	}()
-	require.Eventually(t, func() bool {
-		var waiting bool
-		err := f.pg.QueryRowContext(f.ctx, `SELECT EXISTS (SELECT 1 FROM pg_stat_activity WHERE datname = current_database() AND wait_event_type = 'Lock' AND query LIKE '%WITH candidates AS MATERIALIZED%')`).Scan(&waiting)
-		return err == nil && waiting
-	}, 5*time.Second, 10*time.Millisecond)
-	_, err = tx.ExecContext(f.ctx, `UPDATE sessions SET updated_at = updated_at + interval '1 second' WHERE id = 'one'`)
-	require.NoError(t, err)
-	var newer string
-	require.NoError(t, tx.QueryRowContext(f.ctx, `SELECT `+frustrationSessionVersion(f.versionColumn)+` FROM sessions WHERE id = 'one'`).Scan(&newer))
-	_, err = tx.ExecContext(f.ctx, `UPDATE session_frustration_counts SET session_version = $1, marker_count = 0 WHERE session_id = 'one'`, newer)
-	require.NoError(t, err)
-	require.NoError(t, tx.Commit())
-	require.NoError(t, <-done)
-	var saved string
-	var count int
-	require.NoError(t, f.pg.QueryRowContext(f.ctx, `SELECT session_version, marker_count FROM session_frustration_counts WHERE session_id = 'one'`).Scan(&saved, &count))
-	require.Equal(t, newer, saved)
-	require.Zero(t, count)
+	require.NoError(t, rows.Err())
+	require.NoError(t, rows.Close())
+	require.Len(t, versions, 10000)
+	ctx, cancel := context.WithTimeout(f.ctx, 3*time.Second)
+	defer cancel()
+	require.NoError(t, f.open(t).storeFrustrationCounts(ctx, versions, counts, f.versionColumn))
+	var refreshed int
+	require.NoError(t, f.pg.QueryRowContext(f.ctx, `SELECT count(*) FROM session_frustration_counts WHERE session_id LIKE 'scale-%' AND marker_count = 1 AND session_version <> 'old'`).Scan(&refreshed))
+	require.Equal(t, 10000, refreshed)
 }

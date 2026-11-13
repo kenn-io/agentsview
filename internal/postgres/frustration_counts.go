@@ -21,7 +21,7 @@ func ensureFrustrationCountsPG(ctx context.Context, pg *sql.DB) {
         rules_version INTEGER NOT NULL,
         marker_count INTEGER NOT NULL
     )`)
-	if err != nil && !isInsufficientPrivilege(err) && !IsReadOnlyError(err) {
+	if err != nil && !IsReadOnlyError(err) {
 		log.Printf("pg schema: frustration counts setup failed: %v", err)
 	}
 }
@@ -58,18 +58,11 @@ func (s *Store) storeFrustrationCounts(ctx context.Context, versions map[string]
 		tokens = append(tokens, version)
 		values = append(values, int32(counts[id]))
 	}
-	_, err := s.DB().ExecContext(ctx, `WITH candidates AS MATERIALIZED (
-        SELECT t.id, t.version, t.count, c.session_version AS observed_version
-        FROM unnest($1::text[], $2::text[], $3::integer[]) AS t(id, version, count)
+	_, err := s.DB().ExecContext(ctx, `INSERT INTO session_frustration_counts (session_id, session_version, rules_version, marker_count)
+        SELECT t.id, t.version, $4, t.count FROM unnest($1::text[], $2::text[], $3::integer[]) AS t(id, version, count)
         JOIN sessions s ON s.id = t.id AND `+frustrationSessionVersion("s."+versionColumn)+` = t.version
-        LEFT JOIN session_frustration_counts c ON c.session_id = t.id
-    )
-    INSERT INTO session_frustration_counts (session_id, session_version, rules_version, marker_count)
-        SELECT id, version, $4, count FROM candidates
         ON CONFLICT (session_id) DO UPDATE SET session_version = EXCLUDED.session_version, rules_version = EXCLUDED.rules_version, marker_count = EXCLUDED.marker_count
-        WHERE session_frustration_counts.rules_version <= EXCLUDED.rules_version
-          AND session_frustration_counts.session_version IS NOT DISTINCT FROM
-              (SELECT observed_version FROM candidates WHERE id = EXCLUDED.session_id)`, ids, tokens, values, frustrationMarkerRulesVersion)
+        WHERE session_frustration_counts.rules_version <= EXCLUDED.rules_version`, ids, tokens, values, frustrationMarkerRulesVersion)
 	if err != nil {
 		return fmt.Errorf("writing frustration counts: %w", err)
 	}
