@@ -74,6 +74,16 @@ func (p *SourceSetProvider) DiscoverEach(
 	return discoverer.DiscoverEach(ctx, yield)
 }
 
+// DiscoverScopesEach preserves bounded traversal when the source set supports it.
+func (p *SourceSetProvider) DiscoverScopesEach(
+	ctx context.Context, scopes []ReconciliationScope, yield func(SourceRef) error,
+) error {
+	if scoped, ok := p.sources.(ScopedStreamingDiscoverer); ok {
+		return scoped.DiscoverScopesEach(ctx, scopes, yield)
+	}
+	return UnsupportedProviderFeatureError{Provider: p.Def.Type, Feature: ProviderFeatureScopedDiscovery}
+}
+
 func (p *SourceSetProvider) WatchPlan(ctx context.Context) (WatchPlan, error) {
 	return p.sources.WatchPlan(ctx)
 }

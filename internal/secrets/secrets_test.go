@@ -1,6 +1,7 @@
 package secrets
 
 import (
+	"encoding/json"
 	"fmt"
 	"strings"
 	"testing"
@@ -31,6 +32,156 @@ func TestRedactMasksSecretButKeepsContext(t *testing.T) {
 	assert.True(t, strings.HasPrefix(got, "export AWS_KEY="), "Redact dropped surrounding context: %q", got)
 	assert.True(t, strings.HasSuffix(got, " then continue"), "Redact dropped trailing context: %q", got)
 	assert.Contains(t, got, "AKIA…PLJM", "Redact did not use the masked form")
+}
+
+// TestRedactKeepsAssetReferences pins that agentsview's own content-addressed
+// image references survive masking. "asset:" reads like a key and the SHA-256
+// path clears the high-entropy gate, but the reference names a local file by
+// its hash and carries no secret; masking it breaks every exported image.
+func TestRedactKeepsAssetReferences(t *testing.T) {
+	ref := "asset://ae4b3280e56e2faf83f414a6e3dabe9d5fbe18976544c05fed121accb85b53fc.png"
+	for _, text := range []string{
+		`{"image_ref":"` + ref + `"}`,
+		"![Image: image/png, 3 bytes](" + ref + ")",
+	} {
+		assert.Equal(t, text, Redact(text))
+		assert.Equal(t, text, RedactWindow(text, 0, len(text)))
+	}
+	// A value that is not a hex digest after "asset:" is still masked.
+	notRef := "asset:dGhpc0lzQVJlYWxTZWNyZXRWYWx1ZTEyMzQ1Njc4OQ end"
+	assert.NotEqual(t, notRef, Redact(notRef))
+}
+
+// Text can hold escaped string literals, such as the preview AgentsView
+// stores for input Codex sends to a terminal. The "n" of a "\n" escape removes
+// a key's leading word boundary, and a key block's "\n" escapes fail the PEM
+// body check; masking must catch both and keep the escapes around them.
+func TestRedactMasksSecretsInEscapedText(t *testing.T) {
+	keyBlock := `-----BEGIN RSA PRIVATE KEY-----\n` +
+		strings.Repeat(`MIIBSECRETKEYMATERIAL0123456789ABCDEF\n`, 5) +
+		`-----END RSA PRIVATE KEY-----`
+	for name, tc := range map[string]struct{ in, want string }{
+		"key after an escaped newline": {
+			in:   "$ stdin -> 7\n" + `cat creds\nAKIA7QHWN2DKR4FYPLJM\n`,
+			want: "$ stdin -> 7\n" + `cat creds\nAKIA…PLJM\n`,
+		},
+		"key after an escaped tab": {
+			in:   `key:\tghp_8Hk3Wn7Dz4Rp2Vx9Mb6Tj0Qc5Lm1Yp8Bv4Hg`,
+			want: `key:\tghp_…v4Hg`,
+		},
+		"escaped key block": {
+			in:   `cat id_rsa\n` + keyBlock + `\n`,
+			want: `cat id_rsa\n[redacted private key block]\n`,
+		},
+		"escaped backslash before a letter": {
+			in:   `path C:\\nAKIA7QHWN2DKR4FYPLJM`,
+			want: `path C:\\nAKIA7QHWN2DKR4FYPLJM`,
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			assert.Equal(t, tc.want, Redact(tc.in))
+		})
+	}
+}
+
+// TestRedactJSONMasksSecretsHiddenByEscapes covers secrets that serialized
+// JSON hides from a plain-text scan: the "n" of an escaped newline sits
+// against a key and removes its word boundary, and a key block's "\n"
+// escapes fail the PEM body check. Decoding each string first exposes both.
+func TestRedactJSONMasksSecretsHiddenByEscapes(t *testing.T) {
+	pem := "-----BEGIN RSA PRIVATE KEY-----\n" +
+		strings.Repeat("MIIBSECRETKEYMATERIAL0123456789ABCDEF\n", 5) +
+		"-----END RSA PRIVATE KEY-----"
+	for name, decoded := range map[string]string{
+		"key after newline": "creds:\nAKIA7QHWN2DKR4FYPLJM\n",
+		"key block":         "cat id_rsa\n" + pem + "\n",
+	} {
+		t.Run(name, func(t *testing.T) {
+			encoded, err := json.Marshal(map[string]any{
+				"type": "tool_result", "content": decoded, "n": 1,
+			})
+			require.NoError(t, err)
+
+			got := RedactJSON(string(encoded))
+			var out map[string]any
+			require.NoError(t, json.Unmarshal([]byte(got), &out), "masked JSON must stay valid: %s", got)
+			assert.Equal(t, Redact(decoded), out["content"])
+			assert.NotContains(t, got, "SECRETKEYMATERIAL")
+			assert.NotContains(t, got, "AKIA7QHWN2DKR4FYPLJM")
+			assert.Equal(t, "tool_result", out["type"])
+			assert.EqualValues(t, 1, out["n"])
+		})
+	}
+}
+
+func TestRedactJSONNestedAndPlainText(t *testing.T) {
+	// Tool input often holds a JSON document inside a JSON string.
+	inner, err := json.Marshal(map[string]string{"content": "x\nAKIA7QHWN2DKR4FYPLJM"})
+	require.NoError(t, err)
+	outer, err := json.Marshal(map[string]string{"input": string(inner)})
+	require.NoError(t, err)
+	assert.NotContains(t, RedactJSON(string(outer)), "AKIA7QHWN2DKR4FYPLJM")
+
+	// Text that is not JSON gets the plain-text scan.
+	text := "export AWS_KEY=AKIA7QHWN2DKR4FYPLJM"
+	assert.Equal(t, Redact(text), RedactJSON(text))
+	// JSON with nothing to mask is returned byte for byte.
+	clean := `{"a": "b",  "c": [1, 2]}`
+	assert.Equal(t, clean, RedactJSON(clean))
+}
+
+// TestRedactJSONKeepsMaskingOnImperfectJSON covers JSON the strict decoder
+// rejects: duplicate keys, which agent tool arguments can carry, and a record
+// cut off mid-write, as the last line of a session log being written can be.
+// Masking already decided for complete strings must survive, and an escaped
+// key in the unfinished string is still masked.
+func TestRedactJSONKeepsMaskingOnImperfectJSON(t *testing.T) {
+	escaped := `creds:\nAKIA7QHWN2DKR4FYPLJM`
+	for name, tc := range map[string]struct{ in, want string }{
+		"duplicate keys": {
+			in:   `{"content":"` + escaped + `","content":"done"}`,
+			want: `{"content":"creds:\nAKIA…PLJM","content":"done"}`,
+		},
+		"truncated record": {
+			in:   `{"content":"` + escaped + `","more":"unfinish`,
+			want: `{"content":"creds:\nAKIA…PLJM","more":"unfinish`,
+		},
+		"key in the unfinished string": {
+			in:   `{"content":"done","more":"` + escaped + ` and more`,
+			want: `{"content":"done","more":"creds:\nAKIA…PLJM and more`,
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			assert.Equal(t, tc.want, RedactJSON(tc.in))
+			assert.Equal(t, tc.want+"\n", RedactJSONLines(tc.in+"\n"))
+		})
+	}
+}
+
+func TestRedactJSONLines(t *testing.T) {
+	pem := "-----BEGIN RSA PRIVATE KEY-----\n" +
+		strings.Repeat("MIIBSECRETKEYMATERIAL0123456789ABCDEF\n", 5) +
+		"-----END RSA PRIVATE KEY-----"
+	key, err := json.Marshal(pem)
+	require.NoError(t, err)
+	jsonl := `{"type":"user","content":"hi"}` + "\n" +
+		`{"type":"tool_result","content":"creds:\nAKIA7QHWN2DKR4FYPLJM"}` + "\n" +
+		`{"type":"tool_result","content":` + string(key) + `}` + "\n" +
+		`{"type":"partial` + "\n"
+	got := RedactJSONLines(jsonl)
+	assert.NotContains(t, got, "AKIA7QHWN2DKR4FYPLJM")
+	assert.NotContains(t, got, "SECRETKEYMATERIAL")
+	lines := strings.Split(got, "\n")
+	require.Len(t, lines, 5, "line structure is kept")
+	assert.Equal(t, `{"type":"user","content":"hi"}`, lines[0])
+	for _, line := range lines[1:3] {
+		assert.True(t, json.Valid([]byte(line)), "masked line stays valid JSON: %s", line)
+	}
+	assert.Equal(t, `{"type":"partial`, lines[3], "a truncated line passes through")
+
+	// A Markdown history is masked whole, so a key block across lines is caught.
+	markdown := "# aider chat\n\n> cat id_rsa\n" + pem + "\n"
+	assert.NotContains(t, RedactJSONLines(markdown), "SECRETKEYMATERIAL")
 }
 
 func TestRedactNoMatchReturnsInput(t *testing.T) {

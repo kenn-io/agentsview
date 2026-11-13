@@ -3110,6 +3110,10 @@ func analyticsSkillsQuery(
 // GetAnalyticsTools returns tool usage analytics aggregated
 // from the tool_calls table.
 func (db *DB) GetAnalyticsTools(ctx context.Context, f AnalyticsFilter) (ToolsAnalyticsResponse, error) {
+	return keptAnalytics(ctx, db, "tools", f, db.analyticsTools)
+}
+
+func (db *DB) analyticsTools(ctx context.Context, f AnalyticsFilter) (ToolsAnalyticsResponse, error) {
 	release, err := db.acquireBulkRead(ctx)
 	if err != nil {
 		return ToolsAnalyticsResponse{}, err
@@ -3696,6 +3700,10 @@ func (a *velocityAccumulator) computeOverview() VelocityOverview {
 func (db *DB) GetAnalyticsVelocity(
 	ctx context.Context, f AnalyticsFilter,
 ) (VelocityResponse, error) {
+	return keptAnalytics(ctx, db, "velocity", f, db.analyticsVelocity)
+}
+
+func (db *DB) analyticsVelocity(ctx context.Context, f AnalyticsFilter) (VelocityResponse, error) {
 	release, err := db.acquireBulkRead(ctx)
 	if err != nil {
 		return VelocityResponse{}, err
@@ -4118,6 +4126,10 @@ type SignalRow struct {
 func (db *DB) GetAnalyticsSignals(
 	ctx context.Context, f AnalyticsFilter,
 ) (SignalsAnalyticsResponse, error) {
+	return keptAnalytics(ctx, db, "signals", f, db.analyticsSignals)
+}
+
+func (db *DB) analyticsSignals(ctx context.Context, f AnalyticsFilter) (SignalsAnalyticsResponse, error) {
 	release, err := db.acquireBulkRead(ctx)
 	if err != nil {
 		return SignalsAnalyticsResponse{}, err

@@ -2179,6 +2179,15 @@ Change detection uses file size, mtime, inode, and device tracking to validate
 incremental parses more reliably. A pool of 8 workers processes files in
 parallel during sync.
 
+On `main` (not yet released), shared JSONL discovery can isolate an inaccessible
+file or subtree when the provider supports scoped traversal. A dangling symlink
+remains incomplete, but retries inspect only the unfinished scope. Archived
+sessions beneath that scope remain available, and unrelated session changes
+continue importing. Restoring access lets the retained retry complete without a
+daemon restart. Actual source removal still follows the normal source-missing
+policy. Opaque failures and passes with more than 256 reported failure scopes
+retain the original conservative retry scope.
+
 Codex history hints are available when the producing frontend writes
 `history.jsonl`. In Codex configuration, `[history] persistence = "none"`
 disables those writes; sessions whose stored activity is recent still get
@@ -2538,13 +2547,18 @@ Optional features that send data externally when you enable them:
     `model`, or to the selected agent CLI when neither is set.
 - [Publish to Gist](/docs/usage/#publish-to-gist) uploads a session to GitHub.
 
-The automatic outbound requests are update checks and anonymous telemetry:
+The automatic outbound requests are update checks, pricing refreshes, and
+anonymous telemetry:
 
-- **CLI and web UI** — on startup, the server contacts the GitHub API to check
-    for new releases. No identifying information is sent beyond what a standard
-    GitHub API request includes (IP address, user-agent).
+- **CLI and web UI** — when the web UI loads, the server requests
+    `github.com/kenn-io/agentsview/releases/latest` to find the newest release
+    and caches the answer for an hour. No identifying information is sent
+    beyond what a standard HTTPS request includes (IP address, user-agent).
 - **Desktop app** — uses Tauri's native updater, which checks the GitHub release
     feed independently.
+- **Pricing** — the server downloads public model-pricing catalogs from GitHub
+    and OpenRouter at startup and daily; see
+    [Pricing Source](/docs/token-usage/#pricing-source).
 - **Anonymous daemon telemetry** — see below.
 
 ### Anonymous Daemon Telemetry
@@ -2678,6 +2692,7 @@ Every event contains only:
 - operating system and CPU architecture
 - the application-owned installation ID stored in
   `~/.agentsview/telemetry-install-id`
+- whole hours since that ID was created
 - for the five UI actions, the one listed value above
 - for feature outcomes, the listed kind or reason
 - for screen views, the listed screen name and `surface: web`

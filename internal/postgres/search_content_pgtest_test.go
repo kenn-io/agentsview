@@ -446,6 +446,30 @@ func TestPGSearchContentExcludeSystemReminderFalseFlag(t *testing.T) {
 	}
 }
 
+func TestPGSessionThinkingRegexExcludeSystem(t *testing.T) {
+	store := setupContentSearch(t)
+	insertCSSession(t, store, "cs-thinking-system", "proj", "claude",
+		"2026-05-01T10:00:00Z", "2026-05-01T10:30:00Z")
+	contents := []string{
+		"ordinary content", "\ufeff\u2003This session is being continued",
+		"<system-reminder>context</system-reminder>",
+		"<system-reminder>unfinished", "", "<system-reminder>context</system-reminder> prompt",
+	}
+	for i, content := range contents {
+		insertCSMessage(t, store, "cs-thinking-system", i, "user", content, "2026-05-01T10:00:00Z", false)
+	}
+	_, err := store.DB().ExecContext(t.Context(), `UPDATE messages SET thinking_text = 'needle reasoning' WHERE session_id = $1`, "cs-thinking-system")
+	require.NoError(t, err)
+	f := db.ContentSearchFilter{Pattern: "needle", Mode: "regex", Sources: []string{"thinking"}, SessionID: "cs-thinking-system", Limit: 50}
+	all, err := store.SearchContent(t.Context(), f)
+	require.NoError(t, err)
+	assert.ElementsMatch(t, []int{0, 1, 2, 3, 4, 5}, messageOrdinals(all))
+	f.ExcludeSystem = true
+	filtered, err := store.SearchContent(t.Context(), f)
+	require.NoError(t, err)
+	assert.ElementsMatch(t, []int{0, 3, 4, 5}, messageOrdinals(filtered))
+}
+
 func messageOrdinals(page db.ContentSearchPage) []int {
 	ordinals := make([]int, len(page.Matches))
 	for i, match := range page.Matches {

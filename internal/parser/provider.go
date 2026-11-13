@@ -17,6 +17,7 @@ const (
 	ProviderFeatureWatchRoots           = "watch roots"
 	ProviderFeatureActivityHints        = "activity hints"
 	ProviderFeatureChangedPathRelevance = "changed path relevance"
+	ProviderFeatureScopedDiscovery      = "scoped discovery"
 )
 
 // ErrUnsupportedProviderFeature identifies optional provider behavior that is
