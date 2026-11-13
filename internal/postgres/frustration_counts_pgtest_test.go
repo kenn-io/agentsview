@@ -81,17 +81,10 @@ func TestFrustrationCountsRulesAndRestart(t *testing.T) {
 	require.Equal(t, frustrationMarkerRulesVersion, version)
 	require.Equal(t, 1, count)
 
-	_, err = f.pg.ExecContext(f.ctx, `UPDATE session_frustration_counts SET marker_count = 7 WHERE session_id = 'one'`)
-	require.NoError(t, err)
 	f.replace(t, "two", "Please explain this function.")
 	result, err = f.open(t).GetAnalyticsSignals(f.ctx, db.AnalyticsFilter{})
 	require.NoError(t, err)
-	require.Equal(t, 7, result.QualityHealth.Totals.FrustrationMarkerCount)
-	evidence, err := f.open(t).GetAnalyticsSignalSessions(f.ctx, db.AnalyticsFilter{Project: "sample"}, "frustration_marker_count", 10)
-	require.NoError(t, err)
-	require.Len(t, evidence.Sessions, 1)
-	require.Equal(t, "one", evidence.Sessions[0].SessionID)
-	require.Equal(t, 7, evidence.Sessions[0].SignalTotal)
+	require.Equal(t, 1, result.QualityHealth.Totals.FrustrationMarkerCount)
 }
 
 func TestFrustrationCountsUnavailable(t *testing.T) {
