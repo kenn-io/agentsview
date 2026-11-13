@@ -166,7 +166,7 @@ func (s *Sync) Close() error {
 func (s *Sync) Push(
 	ctx context.Context, full bool, onProgress func(storage.PushProgress),
 ) (storage.PushResult, error) {
-	return s.PushWithOptions(ctx, storage.PushOptions{Full: full}, onProgress)
+	return s.PushWithOptions(ctx, storage.PushOptions{Full: full, RewriteUnchanged: full}, onProgress)
 }
 
 func (s *Sync) isFiltered() bool {

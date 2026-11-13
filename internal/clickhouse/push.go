@@ -168,6 +168,22 @@ func (s *Sync) pushWithOptions(
 		}
 		pending, resumed = false, false
 	}
+	// A full push rewrites only the sessions whose mirror rows differ from
+	// the archive, except when the rows it must fix are ones the
+	// fingerprints cannot see: --full asks for every session as a repair,
+	// and rows written before message dialogue or complete usage snapshots
+	// existed lack them while their fingerprints still match.
+	rewriteAll := full && (opts.RewriteUnchanged ||
+		meta[s.archiveKey(messageDialogueReadyKeyBase)] == "" ||
+		meta[s.archiveKey(usageSnapshotReadyKeyBase)] == "")
+	if resumed && run.RewriteAll {
+		rewriteAll = true
+	} else if resumed && rewriteAll {
+		// The unfinished run skipped sessions this push must rewrite.
+		log.Printf("clickhouse push: starting over instead of resuming the unfinished full push (%s); this push must rewrite every session",
+			run.Reason)
+		resumed = false
+	}
 	// A run that replaces one it cannot resume takes over that run's duty to
 	// finish without errors.
 	mustFinish := pending && (!resumed || run.MustFinish)
@@ -175,8 +191,8 @@ func (s *Sync) pushWithOptions(
 	// but --full discards it either way, so report the discard for both.
 	discardedRun := pending && opts.Full
 	if resumed && opts.Full {
-		// --full asks for every session to be rewritten, including ones the
-		// unfinished run wrote; its fingerprints cannot see in-place edits.
+		// A requested full push starts its own run; with --full it rewrites
+		// every session, including ones the unfinished run wrote.
 		log.Printf("clickhouse push: full push requested; starting over instead of resuming the unfinished full push (%s)", run.Reason)
 		resumed = false
 	}
@@ -209,13 +225,16 @@ func (s *Sync) pushWithOptions(
 	if err := s.syncCursorUsageEvents(ctx); err != nil {
 		return result, err
 	}
-	// The run that wrote the record already priced the whole mirror.
-	if s.pricer, err = s.syncUsagePrices(ctx, full && !resumed); err != nil {
+	// The run that wrote the record already priced the whole mirror. A push
+	// that keeps unchanged sessions keeps their prices too and prices the
+	// rows it writes batch by batch.
+	if s.pricer, err = s.syncUsagePrices(ctx, rewriteAll && !resumed); err != nil {
 		return result, err
 	}
 	if full && !resumed {
 		run = s.newFullPushRun(version, databaseID, reason)
 		run.MustFinish = mustFinish
+		run.RewriteAll = rewriteAll
 		encoded, err := run.encode()
 		if err != nil {
 			return result, err
@@ -252,35 +271,41 @@ func (s *Sync) pushWithOptions(
 	if err != nil {
 		return result, err
 	}
-	changed := inScope
-	if !full || resumed {
-		var stored map[string]string
-		if resumed {
-			stored, err = s.readRunFingerprints(ctx, run.Version)
-		} else {
-			stored, err = s.readMirrorFingerprints(ctx, sessionIDs(inScope))
+	writes, err := s.planSessionWrites(ctx, inScope, fingerprints, writePlan{
+		full: full, rewriteAll: rewriteAll, resumed: resumed, runVersion: run.Version,
+		// Commit links written before the current format need rewriting even
+		// where nothing else changed.
+		commitLinks: full && meta[s.archiveKey(commitLinksReadyKeyBase)] == "",
+	}, &result)
+	if err != nil {
+		return result, err
+	}
+	var toWrite, changed []db.Session
+	for _, sess := range inScope {
+		w := writes[sess.ID]
+		if w.any() {
+			toWrite = append(toWrite, sess)
 		}
-		if err != nil {
-			return result, err
+		if w.row {
+			changed = append(changed, sess)
 		}
-		skipped := &result.SkippedUnchanged
-		if resumed {
-			skipped = &result.SkippedResumed
-		}
-		changed = changedSessions(inScope, fingerprints, stored, skipped)
 	}
 
 	failed := map[string]struct{}{}
 	batchSize := cmp.Or(s.sessionBatchSize, sessionPushBatchSize)
-	for offset := 0; offset < len(changed); offset += batchSize {
-		end := min(offset+batchSize, len(changed))
+	for offset := 0; offset < len(toWrite); offset += batchSize {
+		end := min(offset+batchSize, len(toWrite))
 		if err := s.pushBatchWithRetry(
-			ctx, changed[offset:end], fingerprints, version,
-			offset, len(changed), &result, onProgress,
+			ctx, toWrite[offset:end], writes, fingerprints, version,
+			offset, len(toWrite), &result, onProgress,
 			failed,
 		); err != nil {
 			return result, err
 		}
+	}
+	if result.SessionRowsOnly > 0 || result.CommitLinksOnly > 0 {
+		log.Printf("clickhouse push: rewrote only the session row of %d session(s) and only the commit links of %d whose other rows already matched",
+			result.SessionRowsOnly, result.CommitLinksOnly)
 	}
 
 	if err := s.adoptPendingUsageModels(ctx); err != nil {
@@ -306,7 +331,7 @@ func (s *Sync) pushWithOptions(
 	}
 	var vectorsFullSince uint64
 	switch {
-	case full:
+	case rewriteAll:
 		vectorsFullSince = run.Version
 	case opts.FullVectors:
 		vectorsFullSince = version
@@ -434,47 +459,141 @@ func sessionIDs(sessions []db.Session) []string {
 	return ids
 }
 
-// changedSessions keeps the candidates whose local fingerprint differs from
-// the stored one. A session missing from stored reads back as "" and is
-// therefore always pushed, which repairs rows lost to a failed earlier push
-// without a separate repair pass.
-func changedSessions(
-	candidates []db.Session, fingerprints, stored map[string]string, skipped *int,
-) []db.Session {
-	changed := make([]db.Session, 0, len(candidates))
-	for _, sess := range candidates {
-		if fingerprints[sess.ID] != stored[sess.ID] {
-			changed = append(changed, sess)
-		} else {
-			*skipped++
-		}
-	}
-	return changed
+// sessionWrite says what a push writes for one session.
+type sessionWrite struct {
+	// row rewrites the session row and its usage snapshot.
+	row bool
+	// content rewrites every dependent table under the push's version. It
+	// comes with row.
+	content bool
+	// commitLinks rewrites the session's commit links alone.
+	commitLinks bool
+	// keptContent is the content fingerprint that let the push keep the
+	// dependent rows, and keptVersion their push version, which the
+	// rewritten session row records as content_version.
+	keptContent string
+	keptVersion uint64
 }
 
-func (s *Sync) readMirrorFingerprints(ctx context.Context, ids []string) (map[string]string, error) {
-	out := make(map[string]string, len(ids))
+func (w sessionWrite) any() bool { return w.row || w.commitLinks }
+
+var rewriteSession = sessionWrite{row: true, content: true}
+
+// mirrorSession is what the mirror's session row records about the rows a
+// push wrote for the session.
+type mirrorSession struct {
+	fingerprint, contentFingerprint, archiveID string
+	contentVersion                             uint64
+	// factsCurrent reports a stored message count and dashboard facts at
+	// dashboardFactsVersion.
+	factsCurrent bool
+}
+
+// planSessionWrite decides what a push writes for a session from its local
+// fingerprints and the mirror's row. A session the mirror lacks is written in
+// full, which repairs rows lost to a failed earlier push. Dependent rows stay
+// when the stored fingerprint shows they hold the local content: either the
+// whole fingerprint matches, or the content fingerprint does. The session row
+// stays only when, in addition, its fingerprint and facts are current and,
+// for a full push, it names this archive, which a full push takes over.
+func planSessionWrite(
+	local sessionFingerprint, stored mirrorSession, found bool, archiveID string, full bool,
+) sessionWrite {
+	if !found {
+		return rewriteSession
+	}
+	sameContent := local.full == stored.fingerprint ||
+		(stored.contentFingerprint != "" && local.content == stored.contentFingerprint)
+	if !sameContent {
+		return rewriteSession
+	}
+	if local.full == stored.fingerprint && stored.factsCurrent && (!full || stored.archiveID == archiveID) {
+		return sessionWrite{}
+	}
+	return sessionWrite{row: true, keptContent: local.content, keptVersion: stored.contentVersion}
+}
+
+// writePlan carries the push-wide inputs of planSessionWrites.
+type writePlan struct {
+	full, rewriteAll, resumed bool
+	// runVersion is the version of the full push run being resumed.
+	runVersion uint64
+	// commitLinks asks for every kept session's commit links to be rewritten.
+	commitLinks bool
+}
+
+// planSessionWrites decides what the push writes for each candidate and
+// counts the sessions it skips.
+func (s *Sync) planSessionWrites(
+	ctx context.Context, sessions []db.Session, fingerprints map[string]sessionFingerprint,
+	plan writePlan, result *storage.PushResult,
+) (map[string]sessionWrite, error) {
+	writes := make(map[string]sessionWrite, len(sessions))
+	if plan.rewriteAll {
+		var stored map[string]string
+		if plan.resumed {
+			var err error
+			if stored, err = s.readRunFingerprints(ctx, plan.runVersion); err != nil {
+				return nil, err
+			}
+		}
+		for _, sess := range sessions {
+			// A resumed run counts a session as done when it wrote the session
+			// as it is now. A session missing from stored reads back as "".
+			if plan.resumed && fingerprints[sess.ID].full == stored[sess.ID] {
+				result.SkippedResumed++
+				continue
+			}
+			writes[sess.ID] = rewriteSession
+		}
+		return writes, nil
+	}
+	stored, err := s.readMirrorSessions(ctx, sessionIDs(sessions))
+	if err != nil {
+		return nil, err
+	}
+	for _, sess := range sessions {
+		mirror, found := stored[sess.ID]
+		w := planSessionWrite(fingerprints[sess.ID], mirror, found, s.archiveID, plan.full)
+		if plan.commitLinks && !w.content {
+			w.commitLinks = true
+		}
+		if !w.any() {
+			result.SkippedUnchanged++
+		}
+		writes[sess.ID] = w
+	}
+	return writes, nil
+}
+
+// readMirrorSessions reads what the mirror's session rows record about the
+// given sessions. A session without a row is absent from the result.
+func (s *Sync) readMirrorSessions(ctx context.Context, ids []string) (map[string]mirrorSession, error) {
+	out := make(map[string]mirrorSession, len(ids))
 	for batch := range idBatches(ids) {
 		placeholders, args := inArgs(batch)
 		if err := func() error {
-			rows, err := s.conn.QueryContext(ctx,
-				"SELECT id, agentsview_push_fingerprint FROM sessions WHERE id IN ("+placeholders+")",
-				args...)
+			rows, err := s.conn.QueryContext(ctx, `SELECT id, agentsview_push_fingerprint,
+					agentsview_content_fingerprint, source_archive_id, content_version,
+					stored_message_count IS NOT NULL AND dashboard_facts_version = ?
+				FROM sessions WHERE id IN (`+placeholders+")",
+				slices.Concat([]any{dashboardFactsVersion}, args)...)
 			if err != nil {
-				return fmt.Errorf("reading clickhouse fingerprints: %w", err)
+				return fmt.Errorf("reading clickhouse session fingerprints: %w", err)
 			}
 			defer rows.Close()
 			for rows.Next() {
-				var id, fp string
-				if err := rows.Scan(&id, &fp); err != nil {
-					return fmt.Errorf("scanning clickhouse fingerprint: %w", err)
+				var id string
+				var m mirrorSession
+				var factsCurrent uint8
+				if err := rows.Scan(&id, &m.fingerprint, &m.contentFingerprint, &m.archiveID,
+					&m.contentVersion, &factsCurrent); err != nil {
+					return fmt.Errorf("scanning clickhouse session fingerprint: %w", err)
 				}
-				out[id] = fp
+				m.factsCurrent = factsCurrent != 0
+				out[id] = m
 			}
-			if err := rows.Err(); err != nil {
-				return err
-			}
-			return nil
+			return rows.Err()
 		}(); err != nil {
 			return nil, err
 		}
@@ -719,7 +838,8 @@ func (s *Sync) pruneUnownedSessionsMissingLocally(ctx context.Context, result *s
 // other than cancellation it retries each session alone and counts the
 // ones that still fail.
 func (s *Sync) pushBatchWithRetry(
-	ctx context.Context, batch []db.Session, fingerprints map[string]string,
+	ctx context.Context, batch []db.Session, writes map[string]sessionWrite,
+	fingerprints map[string]sessionFingerprint,
 	version uint64, offset, total int, result *storage.PushResult,
 	onProgress func(storage.PushProgress),
 	failed map[string]struct{},
@@ -727,11 +847,10 @@ func (s *Sync) pushBatchWithRetry(
 	// Keep each session's payload unchanged across retries of this version,
 	// even if the local archive changes after the batch attempt.
 	payloads := make(map[string]sessionPayload, len(batch))
-	counts, err := s.pushSessionBatch(ctx, batch, fingerprints, version, payloads)
+	written, err := s.pushSessionBatch(ctx, batch, writes, fingerprints, version, payloads)
 	if err == nil {
-		for i := range batch {
-			result.SessionsPushed++
-			result.MessagesPushed += counts[i]
+		for i, w := range written {
+			countWrite(result, w)
 			reportProgress(offset+i+1, total, result, onProgress)
 		}
 		return nil
@@ -745,11 +864,10 @@ func (s *Sync) pushBatchWithRetry(
 			result.Errors += len(batch) - i
 			return err
 		}
-		counts, err := s.pushSessionBatch(ctx, batch[i:i+1], fingerprints, version, payloads)
+		written, err := s.pushSessionBatch(ctx, batch[i:i+1], writes, fingerprints, version, payloads)
 		switch {
 		case err == nil:
-			result.SessionsPushed++
-			result.MessagesPushed += counts[0]
+			countWrite(result, written[0])
 		case fatalPushError(ctx, err) != nil:
 			result.Errors += len(batch) - i
 			return err
@@ -761,6 +879,26 @@ func (s *Sync) pushBatchWithRetry(
 		reportProgress(offset+i+1, total, result, onProgress)
 	}
 	return nil
+}
+
+// sessionWritten is what pushSessionBatch wrote for one session.
+type sessionWritten struct {
+	write    sessionWrite
+	messages int
+}
+
+func countWrite(result *storage.PushResult, w sessionWritten) {
+	switch {
+	case w.write.content:
+		result.SessionsPushed++
+		result.MessagesPushed += w.messages
+	case w.write.row:
+		result.SessionsPushed++
+		result.SessionRowsOnly++
+	}
+	if w.write.commitLinks {
+		result.CommitLinksOnly++
+	}
 }
 
 func fatalPushError(ctx context.Context, err error) error {
@@ -794,7 +932,7 @@ type sessionPayload struct {
 	imageText   []db.ImageTextRow
 	findings    []db.SecretFinding
 	pins        []db.PinnedMessage
-	fingerprint string
+	fingerprint sessionFingerprint
 }
 
 func (s *Sync) loadPayload(ctx context.Context, sess db.Session) (sessionPayload, error) {
@@ -830,15 +968,19 @@ func (s *Sync) loadPayload(ctx context.Context, sess db.Session) (sessionPayload
 
 // pushSessionBatch writes one batch in the order the consistency design
 // requires: dependents, version-bounded delete of older dependents, then
-// session rows carrying the fingerprint. Returns the message count per
-// session. Search hides image text older than the winning session row, including
-// when an older writer publishes a newer row after an interrupted push.
+// session rows carrying the fingerprints. A session whose dependent rows the
+// plan keeps gets only its session row and usage snapshot, which record the
+// kept rows' version as content_version, or only its commit links. Search
+// hides image text older than the winning session row's content_version,
+// including when an older writer publishes a newer row after an interrupted
+// push.
 func (s *Sync) pushSessionBatch(
-	ctx context.Context, batch []db.Session, fingerprints map[string]string,
-	version uint64, loaded map[string]sessionPayload,
-) ([]int, error) {
-	payloads := make([]sessionPayload, 0, len(batch))
-	counts := make([]int, 0, len(batch))
+	ctx context.Context, batch []db.Session, writes map[string]sessionWrite,
+	fingerprints map[string]sessionFingerprint, version uint64, loaded map[string]sessionPayload,
+) ([]sessionWritten, error) {
+	var content, links, published []sessionPayload
+	contentVersions := make(map[string]uint64, len(batch))
+	written := make([]sessionWritten, 0, len(batch))
 	for _, sess := range batch {
 		p, ok := loaded[sess.ID]
 		if !ok {
@@ -850,16 +992,40 @@ func (s *Sync) pushSessionBatch(
 			loaded[sess.ID] = p
 		}
 		fingerprints[sess.ID] = p.fingerprint
-		payloads = append(payloads, p)
-		counts = append(counts, len(p.messages))
+		w := writes[sess.ID]
+		if w.row && !w.content && p.fingerprint.content != w.keptContent {
+			// The archive changed since the plan, so the kept rows no longer
+			// hold this content. A commit-links-only write needs no check: the
+			// next push sees the change and rewrites the session.
+			w = rewriteSession
+		}
+		n := 0
+		switch {
+		case w.content:
+			content = append(content, p)
+			contentVersions[sess.ID] = version
+			n = len(p.messages)
+		case w.row:
+			contentVersions[sess.ID] = w.keptVersion
+		}
+		if w.row {
+			published = append(published, p)
+		}
+		if w.commitLinks && !w.content {
+			links = append(links, p)
+		}
+		written = append(written, sessionWritten{write: w, messages: n})
 	}
-	if err := s.insertDependents(ctx, payloads, version); err != nil {
+	if err := s.insertDependents(ctx, content, version); err != nil {
 		return nil, err
 	}
-	ids := sessionIDs(batch)
+	if err := insertCommitLinks(ctx, s.conn, links, version); err != nil {
+		return nil, err
+	}
+	ids := sessionIDs(sessionsOf(content))
 	// Price the new usage rows right after they become readable. Until this
 	// returns, a usage read prices the updated session's events per request.
-	if s.pricer == nil {
+	if len(ids) > 0 && s.pricer == nil {
 		pricer, err := s.newUsagePricer(ctx)
 		if err != nil {
 			return nil, err
@@ -871,33 +1037,53 @@ func (s *Sync) pushSessionBatch(
 			return nil, err
 		}
 	}
-	for batchIDs := range idBatches(ids) {
-		placeholders, args := inArgs(batchIDs)
-		args = slices.Concat(args, []any{version}, args, []any{version})
-		// The usage_messages view never sees deletes, so a shorter republished
-		// session would leave its removed ordinals behind at the old version.
-		for _, table := range slices.Concat(dependentTables, []string{"usage_messages"}) {
-			query, err := vanishedRowsDeleteSQL(table, placeholders)
-			if err != nil {
-				return nil, err
-			}
-			if _, err := s.conn.ExecContext(ctx, query, args...); err != nil {
-				return nil, fmt.Errorf("deleting older clickhouse %s rows: %w", table, err)
-			}
-		}
+	// The usage_messages view never sees deletes, so a shorter republished
+	// session would leave its removed ordinals behind at the old version.
+	if err := s.deleteVanishedRows(ctx, ids, slices.Concat(dependentTables, []string{"usage_messages"}), version); err != nil {
+		return nil, err
+	}
+	if err := s.deleteVanishedRows(ctx, sessionIDs(sessionsOf(links)), []string{"commit_links"}, version); err != nil {
+		return nil, err
 	}
 	if s.hooks != nil && s.hooks.beforeSessionRows != nil {
 		if err := s.hooks.beforeSessionRows(batch); err != nil {
 			return nil, err
 		}
 	}
-	if err := s.insertUsageSessionSnapshots(ctx, payloads, version); err != nil {
+	if err := s.insertUsageSessionSnapshots(ctx, published, contentVersions, version); err != nil {
 		return nil, err
 	}
-	if err := s.insertSessions(ctx, payloads, fingerprints, version); err != nil {
+	if err := s.insertSessions(ctx, published, contentVersions, version); err != nil {
 		return nil, err
 	}
-	return counts, nil
+	return written, nil
+}
+
+func sessionsOf(payloads []sessionPayload) []db.Session {
+	out := make([]db.Session, len(payloads))
+	for i, p := range payloads {
+		out[i] = p.session
+	}
+	return out
+}
+
+// deleteVanishedRows removes, from each table, the rows older pushes wrote for
+// the sessions under keys this push did not write.
+func (s *Sync) deleteVanishedRows(ctx context.Context, ids, tables []string, version uint64) error {
+	for batchIDs := range idBatches(ids) {
+		placeholders, args := inArgs(batchIDs)
+		args = slices.Concat(args, []any{version}, args, []any{version})
+		for _, table := range tables {
+			query, err := vanishedRowsDeleteSQL(table, placeholders)
+			if err != nil {
+				return err
+			}
+			if _, err := s.conn.ExecContext(ctx, query, args...); err != nil {
+				return fmt.Errorf("deleting older clickhouse %s rows: %w", table, err)
+			}
+		}
+	}
+	return nil
 }
 
 // vanishedRowsDeleteSQL returns the DELETE that removes the rows an older push
@@ -992,13 +1178,25 @@ func (s *Sync) insertDependents(ctx context.Context, payloads []sessionPayload, 
 }
 
 func (s *Sync) insertSessions(
-	ctx context.Context, payloads []sessionPayload, fingerprints map[string]string, version uint64,
+	ctx context.Context, payloads []sessionPayload, contentVersions map[string]uint64, version uint64,
 ) error {
 	rows := make([][]any, 0, len(payloads))
 	for _, p := range payloads {
-		rows = append(rows, s.sessionRow(p, fingerprints[p.session.ID], version))
+		rows = append(rows, s.sessionRow(p, contentVersions[p.session.ID], version))
 	}
 	return insertRows(ctx, s.conn, "sessions", rows)
+}
+
+// insertCommitLinks writes the commit links of sessions whose other rows a
+// push keeps.
+func insertCommitLinks(ctx context.Context, conn *sql.DB, payloads []sessionPayload, version uint64) error {
+	var rows [][]any
+	for _, p := range payloads {
+		for _, r := range p.commitLinks {
+			rows = append(rows, commitLinkRow(r, false, version))
+		}
+	}
+	return insertRows(ctx, conn, "commit_links", rows)
 }
 
 // insertRows sends one native block insert per table. The driver's
@@ -1052,7 +1250,9 @@ func insertSQL(spec tableSpec) string {
 	return "INSERT INTO " + spec.name + " (" + strings.Join(names, ", ") + ")"
 }
 
-func (s *Sync) sessionRow(p sessionPayload, fingerprint string, version uint64) []any {
+// sessionRow renders the session row. contentVersion is the push version
+// of the session's dependent rows.
+func (s *Sync) sessionRow(p sessionPayload, contentVersion, version uint64) []any {
 	sess := p.session
 	row := []any{
 		sess.ID, sess.Project, sess.ProjectAssigned,
@@ -1084,10 +1284,11 @@ func (s *Sync) sessionRow(p sessionPayload, fingerprint string, version uint64) 
 		nullString(sess.TerminationStatus),
 		int64(sess.SecretLeakCount), sess.SecretsRulesVersion,
 		db.EncodePRLinks(sess.PRLinks), db.LabelsArg(sess.Labels),
-		lastMessageAt(p.messages), fingerprint, s.archiveID,
+		lastMessageAt(p.messages), p.fingerprint.full, s.archiveID,
 		int64(len(p.messages)),
 	}
-	return append(append(row, computeDashboardFacts(p.messages).row()...), version)
+	row = append(row, computeDashboardFacts(p.messages).row()...)
+	return append(row, p.fingerprint.content, contentVersion, version)
 }
 
 func lastMessageAt(msgs []db.Message) *time.Time {

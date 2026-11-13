@@ -182,11 +182,10 @@ func TestClickHouseImageTextPushAndSearch(t *testing.T) {
 		assertSearch(t, "invoice", `invoice \d+ total`, 1, "Read")
 	})
 
-	t.Run("backfill after archive rebuild", func(t *testing.T) {
+	t.Run("requested full push restores deleted rows", func(t *testing.T) {
 		_, err := store.DB().ExecContext(ctx, `DELETE FROM image_text WHERE 1 SETTINGS mutations_sync=2`)
 		require.NoError(t, err)
-		require.NoError(t, local.SetDatabaseIDForTest(ctx, "rebuilt-archive"))
-		result, err := syncer.Push(ctx, false, nil)
+		result, err := syncer.Push(ctx, true, nil)
 		require.NoError(t, err)
 		assert.True(t, result.Full)
 		assert.Zero(t, result.Errors)
@@ -325,7 +324,7 @@ func TestClickHouseImageTextHiddenAfterNewerSessionRow(t *testing.T) {
 		assert.Len(t, content.Matches, want)
 	}
 	check(1)
-	_, err = syncer.conn.ExecContext(ctx, `INSERT INTO sessions SELECT * REPLACE (push_version + 1 AS push_version, 172 AS data_version, 'older' AS agentsview_push_fingerprint) FROM sessions FINAL WHERE id=?`, imageSessionID)
+	_, err = syncer.conn.ExecContext(ctx, `INSERT INTO sessions SELECT * REPLACE (push_version + 1 AS push_version, push_version + 1 AS content_version, 172 AS data_version, 'older' AS agentsview_push_fingerprint) FROM sessions FINAL WHERE id=?`, imageSessionID)
 	require.NoError(t, err)
 	check(0)
 	result, err = syncer.Push(ctx, true, nil)

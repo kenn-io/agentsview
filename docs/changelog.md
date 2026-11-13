@@ -55,6 +55,16 @@ The latest release is
 - `agentsview sync` no longer prints a deprecation warning. It stays a supported
   shortcut for `agentsview source sync` and is listed in root help again.
 
+- ClickHouse pushes write far less after an archive rebuild, a data-version
+  resync, a scope change, or a format upgrade. Those full pushes now rewrite
+  only the sessions that differ from the mirror and still remove sessions that
+  are gone locally. A session whose messages are unchanged rewrites only its
+  session row, and the commit links upgrade rewrites only commit links.
+  `clickhouse push --full` still rewrites every session, so use it to repair a
+  damaged mirror. Upgrade `clickhouse serve` together with the pushing clients:
+  an older serve hides image text and Activity usage for sessions a newer
+  client rewrote this way.
+
 **Bug fixes**
 
 - Sessions from worktrees named `<repo>.<branch>` next to the main checkout,

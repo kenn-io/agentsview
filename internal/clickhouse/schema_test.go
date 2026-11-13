@@ -81,7 +81,7 @@ func TestSnapshotFingerprintTracksLabelsAndPRLinks(t *testing.T) {
 		t.Helper()
 		fp, err := s.snapshotFingerprint(&db.SessionMirrorSnapshot{Session: sess}, nil)
 		require.NoError(t, err)
-		return fp
+		return fp.full
 	}
 	base := db.Session{ID: "s", CreatedAt: "2026-01-01T00:00:00Z"}
 	labeled := base
@@ -123,7 +123,7 @@ func TestRowBuildersMatchInsertColumns(t *testing.T) {
 	total, err := sessionUsageTotalRow("s", &db.SessionUsageTotal{Source: "x"}, 1)
 	require.NoError(t, err)
 	rows := map[string][]any{
-		"sessions":             s.sessionRow(sessionPayload{session: sess, messages: []db.Message{msg}}, "fp", 1),
+		"sessions":             s.sessionRow(sessionPayload{session: sess, messages: []db.Message{msg}}, 1, 1),
 		"messages":             messageRow(msg, 1),
 		"tool_calls":           toolCallRow(msg, tc, 0, 1),
 		"tool_result_events":   toolResultEventRow(msg, 0, tc.ResultEvents[0], 1),

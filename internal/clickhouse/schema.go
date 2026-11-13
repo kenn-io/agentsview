@@ -17,7 +17,7 @@ import (
 // added later ship as ADD COLUMN IF NOT EXISTS entries in the table specs,
 // so an older mirror upgrades in place; the version tells operators and
 // status output which shape a mirror has.
-const SchemaVersion = 9
+const SchemaVersion = 10
 
 // Metadata keys shared by every archive that pushes into the mirror.
 const (
@@ -291,6 +291,16 @@ var mirrorTables = []tableSpec{
 			col("fact_velocity_first_response", tNullFloat),
 			col("fact_velocity_active_seconds", tFloat),
 			col("fact_velocity_assistant_chars", tInt),
+			// agentsview_content_fingerprint hashes what a push writes for
+			// the session outside the session row (see contentFingerprint).
+			// Rows written before the column existed hold ''.
+			col("agentsview_content_fingerprint", tString),
+			// content_version is the push version of the session's dependent
+			// rows. A push that finds them unchanged rewrites only the
+			// session row and keeps this value, so reads that pair dependent
+			// rows with their session compare against it. Rows written
+			// before the column existed read it from push_version.
+			colDefault("content_version", tVersion, pushVersionCol),
 		},
 		indexes: []indexSpec{sessionIDTailIndex},
 		orderBy: []string{"id"},

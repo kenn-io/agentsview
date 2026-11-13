@@ -93,6 +93,12 @@ type vectorReconcile struct {
 	// it.
 	fullPending    bool
 	repairSessions map[string]struct{}
+	// rewritePending keeps a --full watch's request to rewrite every
+	// session, including ones the replica already holds as they are, until
+	// a full push reaches the replica. A full push the watch starts on its
+	// own, such as after a local rebuild, rewrites only what changed. Only a
+	// local owner sets it; a daemon owner sends --full with its first push.
+	rewritePending bool
 }
 
 // newVectorReconcile starts generation-wide: nothing has been reconciled yet.
@@ -106,6 +112,7 @@ func (v *vectorReconcile) options(reason pushReason, full bool) storage.PushOpti
 	repairPending := v.fullPending || len(v.repairSessions) > 0
 	return storage.PushOptions{
 		Full:                           full,
+		RewriteUnchanged:               full && v.rewritePending,
 		FullVectors:                    v.fullPending,
 		FullVectorSessions:             slices.Sorted(maps.Keys(v.repairSessions)),
 		ScopeVectorsToChangedSessions:  scopedVectorPush(reason, full, v.needed || repairPending),
@@ -117,6 +124,11 @@ func (v *vectorReconcile) options(reason pushReason, full bool) storage.PushOpti
 func (v *vectorReconcile) record(
 	opts storage.PushOptions, res storage.PushResult, err error,
 ) {
+	if _, notStarted := errors.AsType[storage.PushNotStartedError](err); opts.RewriteUnchanged && !notStarted {
+		// The replica recorded the full push and resumes it as one that
+		// rewrites every session.
+		v.rewritePending = false
+	}
 	if err != nil {
 		v.needed = true
 		return

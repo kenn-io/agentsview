@@ -1174,9 +1174,11 @@ func changedSnapshotSessions(before, after map[string]string) []string {
 
 // A push writes a session's messages before it publishes the session row, and
 // an interrupted push may never publish it. Accept stored usage at or above the
-// published version so that window shows the newer rows instead of no usage.
-// Rows a shorter republished session left behind stay below it and are skipped.
-const chUsageMessageCurrent = "m.push_version >= s.push_version"
+// published content version so that window shows the newer rows instead of no
+// usage. Rows a shorter republished session left behind stay below it and are
+// skipped. A push that keeps a session's messages republishes its row with the
+// messages' version as content_version.
+const chUsageMessageCurrent = "m.push_version >= s.content_version"
 
 // chStoredMessageUsable renders the condition a stored message meets when
 // its usage counts, from the expressions of its usage_present and model

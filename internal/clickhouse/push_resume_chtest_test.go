@@ -175,9 +175,10 @@ func TestFullPushResumesVectorPhase(t *testing.T) {
 // pushTimeColumns are columns besides push_version that take their value
 // from the time of the push rather than from the archive.
 var pushTimeColumns = map[string]string{
+	"sessions":                 ", content_version",
 	"usage_messages":           ", revision",
 	"terminal_event_snapshots": ", revision",
-	usageSessionSnapshotTable:  ", revision, usage_events",
+	usageSessionSnapshotTable:  ", revision, usage_events, content_version",
 	"starred_sessions":         ", created_at",
 }
 
@@ -334,6 +335,8 @@ func TestErroredFilteredFullPushKeepsNextScopeFull(t *testing.T) {
 	require.NoError(t, err)
 	require.Zero(t, first.Errors)
 
+	// A full push writes only changed sessions, so change the one it fails.
+	appendMessage(t, local, fixtureAlphaID, "alpha third", "2026-01-10T00:10:00.000Z")
 	filtered := newTestSync(t, local, target, storage.PusherOptions{Projects: []string{"alpha"}})
 	filtered.hooks = &pushHooks{beforeSessionRows: func(batch []db.Session) error {
 		for _, sess := range batch {
@@ -383,6 +386,8 @@ func TestFailedScopeRecoveryKeepsNextPushFull(t *testing.T) {
 			return nil
 		}}
 	}
+	// A full push writes only changed sessions, so change the one it fails.
+	appendMessage(t, local, fixtureAlphaID, "alpha third", "2026-01-10T00:10:00.000Z")
 	filtered := newTestSync(t, local, target, storage.PusherOptions{Projects: []string{"alpha"}})
 	failSession(filtered, fixtureAlphaID)
 	errored, err := filtered.Push(ctx, false, nil)
