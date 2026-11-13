@@ -51,11 +51,7 @@ func (s *Store) sumActivityUsage(
 	ctx context.Context, candidateWhere string, candidateArgs []any, lowerBound, upperBound string,
 	q activity.Query, pricing *export.PricingResolver,
 ) ([]activity.UsageRow, error) {
-	end := q.RangeEnd
-	if q.EffectiveEnd.Before(end) {
-		end = q.EffectiveEnd
-	}
-	startUS, endUS := readbase.CeilMicros(q.RangeStart), readbase.CeilMicros(end)
+	startUS, endUS := readbase.ActivityUsageSpan(q)
 	if startUS >= endUS {
 		return []activity.UsageRow{}, nil
 	}
@@ -66,24 +62,14 @@ func (s *Store) sumActivityUsage(
 	if err != nil {
 		return nil, err
 	}
-	// The catalog may lack a model a push has not registered yet; such a
-	// row comes back unpriced, and the read runs again with its model.
-	for attempt := 0; ; attempt++ {
-		schedule := readbase.BuildUsageRateSchedule(pricing, keys, startUS, endUS)
-		groups, err := s.readActivityUsageGroups(ctx, with, withArgs, schedule, q, startUS, endUS)
-		if err != nil {
-			return nil, err
-		}
-		missing := readbase.MissingUsageRates(groups)
-		if len(missing) == 0 {
-			readbase.SortActivityUsageGroups(groups)
-			return readbase.AssembleActivityUsage(pricing, schedule, groups)
-		}
-		if attempt == 2 {
-			return nil, fmt.Errorf("pricing activity usage for model %q: no rate was resolved for it", missing[0].Model)
-		}
-		keys = append(keys, missing...)
+	schedule, groups, err := readbase.PriceActivityUsageGroups(pricing, keys, startUS, endUS,
+		func(schedule readbase.UsageRateSchedule) ([]readbase.ActivityUsageGroup, error) {
+			return s.readActivityUsageGroups(ctx, with, withArgs, schedule, q, startUS, endUS)
+		})
+	if err != nil {
+		return nil, err
 	}
+	return readbase.AssembleActivityUsage(pricing, schedule, groups)
 }
 
 // readActivityUsageGroups runs the usage query under schedule.

@@ -167,6 +167,17 @@ func ActivityUsageBucketStarts(q activity.Query) []int64 {
 	return out
 }
 
+// ActivityUsageSpan returns the microseconds a report's usage may fall in:
+// from its range start up to the earlier of its range end and effective
+// end, both rounded up to whole microseconds.
+func ActivityUsageSpan(q activity.Query) (startUS, endUS int64) {
+	end := q.RangeEnd
+	if q.EffectiveEnd.Before(end) {
+		end = q.EffectiveEnd
+	}
+	return CeilMicros(q.RangeStart), CeilMicros(end)
+}
+
 // ActivityUsageGroup is a sum of usage survivors the SQL returns: the
 // survivors of one session, model, provider, bucket, rate segment, pricing
 // kind, and band. A survivor of a session that carries a session total is
@@ -185,8 +196,36 @@ type ActivityUsageGroup struct {
 	SessionCost                      *int64
 }
 
-// MissingUsageRates returns the keys of groups the schedule had no rate for.
-func MissingUsageRates(groups []ActivityUsageGroup) []UsageRateKey {
+// PriceActivityUsageGroups reads the usage groups of a report over
+// [startUS, endUS) under a schedule of the rates of keys, and returns the
+// schedule and the groups in a fixed order. A push may add a model after
+// keys were read; its rows come back without a rate, and read runs again
+// with that model added, up to three reads in all.
+func PriceActivityUsageGroups(
+	pricing *export.PricingResolver, keys []UsageRateKey, startUS, endUS int64,
+	read func(UsageRateSchedule) ([]ActivityUsageGroup, error),
+) (UsageRateSchedule, []ActivityUsageGroup, error) {
+	for attempt := 0; ; attempt++ {
+		schedule := BuildUsageRateSchedule(pricing, keys, startUS, endUS)
+		groups, err := read(schedule)
+		if err != nil {
+			return UsageRateSchedule{}, nil, err
+		}
+		missing := missingUsageRates(groups)
+		if len(missing) == 0 {
+			sortActivityUsageGroups(groups)
+			return schedule, groups, nil
+		}
+		if attempt == 2 {
+			return UsageRateSchedule{}, nil, fmt.Errorf(
+				"pricing activity usage for model %q: no rate was resolved for it", missing[0].Model)
+		}
+		keys = append(keys, missing...)
+	}
+}
+
+// missingUsageRates returns the keys of groups the schedule had no rate for.
+func missingUsageRates(groups []ActivityUsageGroup) []UsageRateKey {
 	var missing []UsageRateKey
 	for _, g := range groups {
 		if g.Kind == UsageKindMissingRate {
@@ -230,10 +269,9 @@ func (g ActivityUsageGroup) usageRow() activity.UsageRow {
 	return row
 }
 
-// SortActivityUsageGroups puts groups in a fixed order. A query returns its
-// groups in no set order; sorting them before AssembleActivityUsage keeps
-// the rows of equal reads equal.
-func SortActivityUsageGroups(groups []ActivityUsageGroup) {
+// sortActivityUsageGroups puts groups in a fixed order. A query returns its
+// groups in no set order; sorting them keeps the rows of equal reads equal.
+func sortActivityUsageGroups(groups []ActivityUsageGroup) {
 	slices.SortFunc(groups, func(a, b ActivityUsageGroup) int {
 		return cmp.Or(
 			cmp.Compare(a.Session, b.Session), cmp.Compare(a.Bucket, b.Bucket),

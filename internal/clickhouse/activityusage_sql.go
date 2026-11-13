@@ -78,7 +78,7 @@ func (s *Store) keptActivityUsageSums(
 	ctx context.Context, source activityUsageSource, candidates chSessionSet, ids []string,
 	lowerBound, upperBound string, q activity.Query, pricing *export.PricingResolver, pricingDigest string,
 ) ([]activity.UsageRow, error) {
-	startUS, endUS := activityUsageSpan(q)
+	startUS, endUS := readbase.ActivityUsageSpan(q)
 	if startUS >= endUS {
 		return []activity.UsageRow{}, nil
 	}
@@ -123,17 +123,6 @@ func (u *activityUsageSums) bytes() int64 {
 	return n
 }
 
-// activityUsageSpan returns the microseconds a report's usage may fall in:
-// from its range start up to the earlier of its range end and effective
-// end.
-func activityUsageSpan(q activity.Query) (startUS, endUS int64) {
-	end := q.RangeEnd
-	if q.EffectiveEnd.Before(end) {
-		end = q.EffectiveEnd
-	}
-	return readbase.CeilMicros(q.RangeStart), readbase.CeilMicros(end)
-}
-
 // readActivityUsageSums selects, prices, and sums in SQL the usage
 // survivors of an Activity report over the candidate sessions in [startUS,
 // endUS). It applies the rules of activity.SelectUsageSurvivorsForSessions
@@ -164,24 +153,14 @@ func (s *Store) readActivityUsageSums(
 		return nil, err
 	}
 	bucketStarts := readbase.ActivityUsageBucketStarts(q)
-	// A push may add a model between the two reads; its rows come back
-	// unpriced, and the read runs again with its model.
-	for attempt := 0; ; attempt++ {
-		schedule := readbase.BuildUsageRateSchedule(pricing, keys, startUS, endUS)
-		groups, err := s.readActivityUsageGroups(ctx, source, candidates, schedule, bucketStarts, startUS, endUS)
-		if err != nil {
-			return nil, err
-		}
-		missing := readbase.MissingUsageRates(groups)
-		if len(missing) == 0 {
-			readbase.SortActivityUsageGroups(groups)
-			return &activityUsageSums{schedule: schedule, groups: groups, endUS: endUS, nextUS: nextUS}, nil
-		}
-		if attempt == 2 {
-			return nil, fmt.Errorf("pricing clickhouse activity usage for model %q: no rate was resolved for it", missing[0].Model)
-		}
-		keys = append(keys, missing...)
+	schedule, groups, err := readbase.PriceActivityUsageGroups(pricing, keys, startUS, endUS,
+		func(schedule readbase.UsageRateSchedule) ([]readbase.ActivityUsageGroup, error) {
+			return s.readActivityUsageGroups(ctx, source, candidates, schedule, bucketStarts, startUS, endUS)
+		})
+	if err != nil {
+		return nil, err
 	}
+	return &activityUsageSums{schedule: schedule, groups: groups, endUS: endUS, nextUS: nextUS}, nil
 }
 
 // activityUsageRateKeys reads the models and providers of the source rows

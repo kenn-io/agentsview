@@ -441,7 +441,7 @@ func (s *Store) sumActivityUsage(
 	ctx context.Context, source activityUsageSource, candidates chSessionSet,
 	q activity.Query, pricing *export.PricingResolver,
 ) ([]activity.UsageRow, error) {
-	startUS, endUS := activityUsageSpan(q)
+	startUS, endUS := readbase.ActivityUsageSpan(q)
 	if startUS >= endUS {
 		return []activity.UsageRow{}, nil
 	}
