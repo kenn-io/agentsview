@@ -360,7 +360,6 @@ func TestHostedTenantRejectsDynamicVectorStorageBeforeMutation(t *testing.T) {
 	var changed bool
 	require.NoError(t, pg.QueryRowContext(t.Context(), `SELECT to_regclass('hosted_tenant_binding') IS NOT NULL OR EXISTS(SELECT 1 FROM pg_attribute WHERE attrelid='sessions'::regclass AND attname='tenant_id')`).Scan(&changed))
 	assert.False(t, changed)
-
 }
 
 func TestHostedTenantRuntimeRoleGate(t *testing.T) {

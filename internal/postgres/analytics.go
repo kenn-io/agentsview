@@ -2920,9 +2920,6 @@ func (s *Store) populateFrustrationMarkers(
 	if err := msgRows.Err(); err != nil {
 		return fmt.Errorf("iterating frustration markers: %w", err)
 	}
-	if err := msgRows.Close(); err != nil {
-		return fmt.Errorf("closing frustration markers: %w", err)
-	}
 	// Only complete scans are memoized, using versions read with the prompts.
 	for id, version := range scannedVersions {
 		memo.Store(generation, id, version, rows[idx[id]].FrustrationMarkerCount)

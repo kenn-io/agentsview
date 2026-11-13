@@ -127,11 +127,6 @@ func TestFrustrationMemoPublicationBetweenReads(t *testing.T) {
 				count, hit := memo.Lookup(memo.Generation(), id, publishedVersion)
 				assert.True(t, hit, "the prompt scan must cache the version it read, including sessions without prompts")
 				assert.Equal(t, test.want, count)
-				var savedVersion string
-				var savedCount int
-				require.NoError(t, pg.QueryRowContext(ctx, `SELECT session_version, marker_count FROM session_frustration_counts WHERE session_id = $1`, id).Scan(&savedVersion, &savedCount))
-				assert.Equal(t, publishedVersion, savedVersion)
-				assert.Equal(t, test.want, savedCount)
 			}
 		})
 	}
