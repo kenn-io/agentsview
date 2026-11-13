@@ -60,7 +60,7 @@ func TestExportSchemaUpgradeRefusesWhileOwnerHeld(t *testing.T) {
 		t.Cleanup(func() { _ = upgraded.Close() })
 	}
 	require.NoError(t, err)
-	require.NoError(t, upgraded.Close())
 	next := acquireWriteOwnerLockForTest(t, dir)
 	require.NoError(t, next.Close())
+	require.NoError(t, upgraded.Close())
 }
