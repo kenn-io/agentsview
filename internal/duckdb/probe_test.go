@@ -354,7 +354,7 @@ func TestRebuildReasonReportsEachTrigger(t *testing.T) {
 				return p
 			}(),
 			dataVer: 1,
-			want:    fmt.Sprintf("frustration markers version %d vs %d", 0, frustrationMarkersVersion),
+			want:    "frustration marker rules changed",
 		},
 		{
 			name: "data version mismatch", probe: baseProbe(), dataVer: 2,

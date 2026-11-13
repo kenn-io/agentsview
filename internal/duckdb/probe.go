@@ -134,9 +134,19 @@ func probeOpenMirror(ctx context.Context, conn *sql.DB) MirrorProbe {
 		return probe
 	}
 	probe.RecognizedMirror = recognized
-
 	if shapeIssue := mirrorShapeIssueFromColumns(existing); shapeIssue != "" {
 		probe.ShapeIssue = shapeIssue
+		if recognized {
+			value, err := readMetadataKey(ctx, conn, frustrationMarkersVersionMetadataKey)
+			if err != nil {
+				probe.ShapeIssue, probe.LockConflict = classifyProbeError(err)
+				return probe
+			}
+			probe.FrustrationMarkersVersion, err = parseMirrorMetadataInt(frustrationMarkersVersionMetadataKey, value)
+			if err != nil {
+				probe.ShapeIssue = err.Error()
+			}
+		}
 		return probe
 	}
 
@@ -298,7 +308,7 @@ func rebuildReason(
 			"schema version %d vs %d", probe.SchemaVersion, SchemaVersion,
 		)
 	case probe.FrustrationMarkersVersion != frustrationMarkersVersion:
-		return fmt.Sprintf("frustration markers version %d vs %d", probe.FrustrationMarkersVersion, frustrationMarkersVersion)
+		return "frustration marker rules changed"
 	case probe.DataVersion != sourceDataVersion:
 		return fmt.Sprintf(
 			"data version %d vs %d", probe.DataVersion, sourceDataVersion,

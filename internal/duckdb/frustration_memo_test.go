@@ -240,3 +240,65 @@ func TestDuckDBFrustrationMirrorVersion(t *testing.T) {
 		})
 	}
 }
+
+func TestDuckDBFrustrationVersionFollowsSessionGeneration(t *testing.T) {
+	skipReopenTestOnWindows(t)
+	ctx := t.Context()
+	dir := t.TempDir()
+	path := filepath.Join(dir, "mirror.duckdb")
+	buildMirrorFixture(t, path, "session", "this is broken")
+	conn, err := Open(ctx, path)
+	require.NoError(t, err)
+	_, err = conn.ExecContext(ctx, `UPDATE sessions SET frustration_marker_count = 0`)
+	require.NoError(t, err)
+	require.NoError(t, recordMetadataKey(ctx, conn, frustrationMarkersVersionMetadataKey, "0"))
+	require.NoError(t, conn.Close())
+	store, err := NewStore(ctx, path)
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, store.Close()) })
+	sessions, err := store.loadAnalyticsSessions(ctx, db.AnalyticsFilter{}, false, false, "", nil)
+	require.NoError(t, err)
+	require.Len(t, sessions, 1)
+
+	next := filepath.Join(dir, "next.duckdb")
+	buildMirrorFixture(t, next, "session", "this is broken")
+	require.NoError(t, swapMirrorFile(next, path))
+	store.checkMirrorReplacement(ctx, func(err error) { require.NoError(t, err) })
+	var version int
+	require.NoError(t, store.queryRowContext(ctx, `SELECT CAST(value AS INTEGER) FROM sync_metadata WHERE key = ?`, frustrationMarkersVersionMetadataKey).Scan(&version))
+	require.Equal(t, frustrationMarkersVersion, version)
+	rows := []db.SignalRow{{ID: "session"}}
+	require.NoError(t, store.duckPopulateFrustrationMarkers(ctx, rows, sessions))
+	assert.Equal(t, 1, rows[0].FrustrationMarkerCount)
+}
+
+func TestDuckDBPushRejectsFutureFrustrationVersion(t *testing.T) {
+	ctx := t.Context()
+	local, path := newPushFixture(t, 1)
+	_, err := Push(ctx, path, local, "m", storage.MirrorPushOptions{}, false, nil)
+	require.NoError(t, err)
+	future := strconv.Itoa(frustrationMarkersVersion + 1)
+	setMirrorMetadataValue(t, path, frustrationMarkersVersionMetadataKey, future)
+	before, err := ProbeMirror(ctx, path)
+	require.NoError(t, err)
+	for _, full := range []bool{false, true} {
+		_, err = Push(ctx, path, local, "m", storage.MirrorPushOptions{}, full, nil)
+		require.ErrorContains(t, err, "newer than supported")
+		after, err := ProbeMirror(ctx, path)
+		require.NoError(t, err)
+		assert.Equal(t, before, after)
+	}
+	conn, err := Open(ctx, path)
+	require.NoError(t, err)
+	_, err = conn.ExecContext(ctx, `DROP TABLE image_text`)
+	require.NoError(t, err)
+	require.NoError(t, conn.Close())
+	_, err = Push(ctx, path, local, "m", storage.MirrorPushOptions{}, true, nil)
+	require.ErrorContains(t, err, "newer than supported")
+	conn, err = OpenReadOnly(ctx, path)
+	require.NoError(t, err)
+	version, err := readMetadataKey(ctx, conn, frustrationMarkersVersionMetadataKey)
+	require.NoError(t, err)
+	assert.Equal(t, future, version)
+	require.NoError(t, conn.Close())
+}

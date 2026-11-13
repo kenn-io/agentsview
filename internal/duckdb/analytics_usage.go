@@ -3,6 +3,7 @@ package duckdb
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 	"slices"
 	"sort"
@@ -20,6 +21,8 @@ import (
 	"go.kenn.io/agentsview/internal/usagefacts"
 )
 
+var errFutureFrustrationVersion = errors.New("duckdb mirror has frustration marker rules newer than supported; update AgentsView")
+
 // loadAnalyticsSessions leaves paired model/time filtering to the shared base.
 func (s *Store) loadAnalyticsSessions(
 	ctx context.Context, f db.AnalyticsFilter,
@@ -34,15 +37,16 @@ func (s *Store) loadAnalyticsSessions(
 		args = append(args, extraArgs...)
 	}
 	rows, err := s.queryContext(ctx, `
-		SELECT `+readbase.AnalyticsSessionColumns+`, COALESCE(s.agentsview_push_fingerprint, ''), s.frustration_marker_count
+		SELECT `+readbase.AnalyticsSessionColumns+`, COALESCE(s.agentsview_push_fingerprint, ''), s.frustration_marker_count,
+			COALESCE((SELECT CAST(value AS INTEGER) FROM sync_metadata WHERE key = ?), 0)
 		FROM sessions s
-		WHERE `+where, args...)
+		WHERE `+where, append([]any{frustrationMarkersVersionMetadataKey}, args...)...)
 	if err != nil {
 		return nil, fmt.Errorf("querying duckdb analytics sessions: %w", err)
 	}
 	defer rows.Close()
 
-	return readbase.ScanAnalyticsSessions(rows, "duckdb", formatDBTime, readbase.AnalyticsSessionExtras{PushFingerprint: true, FrustrationMarkers: true})
+	return readbase.ScanAnalyticsSessions(rows, "duckdb", formatDBTime, readbase.AnalyticsSessionExtras{PushFingerprint: true, FrustrationMarkers: true, FrustrationMarkersVersion: true})
 }
 
 func duckBuildAnalyticsWhere(f db.AnalyticsFilter, dateCol, tablePrefix string, includeDate, includeTime bool) (string, []any) {
@@ -220,11 +224,15 @@ func (s *Store) duckPopulateFrustrationMarkers(
 	sessions []readbase.AnalyticsSession,
 ) error {
 	var markerVersion int
-	if err := s.queryRowContext(ctx, `SELECT COALESCE((SELECT CAST(value AS INTEGER) FROM sync_metadata WHERE key = ?), 0)`, frustrationMarkersVersionMetadataKey).Scan(&markerVersion); err != nil {
+	if len(sessions) > 0 {
+		// The watcher can replace the mirror after the session query. Use the
+		// version read with those counts, not one from the replacement.
+		markerVersion = sessions[0].FrustrationMarkersVersion
+	} else if err := s.queryRowContext(ctx, `SELECT COALESCE((SELECT CAST(value AS INTEGER) FROM sync_metadata WHERE key = ?), 0)`, frustrationMarkersVersionMetadataKey).Scan(&markerVersion); err != nil {
 		return fmt.Errorf("reading duckdb frustration marker version: %w", err)
 	}
 	if markerVersion > frustrationMarkersVersion {
-		return fmt.Errorf("duckdb frustration marker version %d is newer than supported version %d", markerVersion, frustrationMarkersVersion)
+		return errFutureFrustrationVersion
 	}
 	if len(rows) == 0 {
 		return nil
@@ -234,7 +242,7 @@ func (s *Store) duckPopulateFrustrationMarkers(
 	stored := make(map[string]int, len(sessions))
 	for _, session := range sessions {
 		versions[session.ID] = session.PushFingerprint
-		if markerVersion == frustrationMarkersVersion && session.FrustrationMarkers != nil {
+		if markerVersion == frustrationMarkersVersion {
 			stored[session.ID] = *session.FrustrationMarkers
 		}
 	}
