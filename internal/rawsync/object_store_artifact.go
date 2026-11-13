@@ -36,7 +36,7 @@ func NewArtifactObjectStore(store artifact.ArtifactStore) (ObjectStore, error) {
 	if store == nil {
 		return nil, fmt.Errorf("%w: artifact store is required", ErrInvalid)
 	}
-	return &artifactObjectStore{ArtifactObjectReader: {opener: store}, store: store}, nil
+	return &artifactObjectStore{opener: store, store: store}, nil
 }
 
 func (s *artifactObjectStore) PutObject(
