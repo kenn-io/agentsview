@@ -1,5 +1,5 @@
 ---
-last_edited: 2026-11-12
+last_edited: 2026-11-13
 title: Changelog
 description: Release history for AgentsView
 ---
@@ -33,6 +33,13 @@ The latest release is
   the daily Friction Log, grouping repeated messages with their count.
 
 **Improvements**
+
+- The ClickHouse Usage page opens faster. A one-year summary on a
+  production-size mirror took 0.83 seconds on the first request instead of
+  1.48, and 0.09 seconds on a repeat request instead of 0.23. Push now stores
+  priced daily usage sums next to the prepared usage rows, and Usage reads add
+  them to the few rows it still deduplicates. A push that refreshes prepared
+  usage takes a few seconds longer while it builds them.
 
 - Usage reuses priced work after restarting native PostgreSQL serving and after
   pushes. When that cache would first need a large rebuild, such as on first

@@ -1443,6 +1443,13 @@ own metadata, which is why the docs below call the database a mirror.
   tables, and must stay safe to repeat. See the
   [Activity report reads](../internal/clickhouse-mirror.md#activity-report-reads)
   design section.
+- Usage reads add priced sums from `usage_rollup`, built from `prepared_usage`
+  under the same stamp, and rank only the rows the rollup does not sum. A read
+  must return what it returns without the rollup; when a condition cannot hold,
+  read without it. Any change to how usage rows are deduplicated, dated, or
+  priced must also change the rollup's build and read SQL, and the
+  `usage_rollup_chtest_test.go` comparisons must keep passing. See
+  [Usage rollup](../internal/clickhouse-mirror.md#usage-rollup).
 - `clickhouse push` stores per-session dashboard facts on `sessions`
   (`dashboard_facts_version` and the `fact_*` columns) and copies each tool
   call's message timestamp and model onto `tool_calls` (`message_facts` marks
