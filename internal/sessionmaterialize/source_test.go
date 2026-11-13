@@ -148,6 +148,60 @@ func TestMaterializeConfiguredSources(t *testing.T) {
 	}
 }
 
+func TestConfiguredSourceFallbackExcludesNestedForeignMachine(t *testing.T) {
+	const id = "12345678-1234-1234-1234-123456789abc"
+	for _, agent := range []parser.AgentType{parser.AgentClaude, parser.AgentPi} {
+		for _, current := range []bool{true, false} {
+			name := "foreign only"
+			if current {
+				name = "current and foreign copies"
+			}
+			t.Run(string(agent)+"/"+name, func(t *testing.T) {
+				root := t.TempDir()
+				foreign := filepath.Join(root, "foreign")
+				basename := id + ".jsonl"
+				content := []byte(`{"type":"user","sessionId":"` + id + `","message":{"content":"fixture"}}` + "\n")
+				sessionID := id
+				foreignName := filepath.Join(foreign, basename)
+				if agent == parser.AgentPi {
+					basename = "timestamp_" + basename
+					foreignName = filepath.Join(foreign, "project", basename)
+					sessionID = "pi:" + id
+					content = []byte(`{"type":"session","version":3,"id":"` + id + `","cwd":"/old"}` + "\n" + `{"type":"message","id":"m1","parentId":null,"message":{"role":"user","content":[{"type":"text","text":"fixture"}],"timestamp":0}}` + "\n")
+				}
+				currentName := filepath.Join(root, "current", basename)
+				for _, path := range []string{foreignName, currentName} {
+					if path == currentName && !current {
+						continue
+					}
+					require.NoError(t, os.MkdirAll(filepath.Dir(path), 0o700))
+					require.NoError(t, os.WriteFile(path, content, 0o600))
+				}
+				stale := filepath.Join(root, "old", basename)
+				cfg := config.Config{
+					InstallationID: "viewer",
+					AgentDirs:      map[parser.AgentType][]string{agent: {root, foreign}},
+					SourceMachines: map[parser.AgentType]map[string]string{agent: {root: "machine-a", foreign: "machine-b"}},
+				}
+				session := &db.Session{ID: sessionID, Agent: string(agent), Machine: "machine-a", FilePath: &stale}
+				var selected string
+				var err error
+				if agent == parser.AgentPi {
+					selected, _, err = findPiSource(t.Context(), cfg, session, stale, id)
+				} else {
+					_, selected, err = readConfiguredLocal(t.Context(), cfg, session, stale, id)
+				}
+				if !current {
+					require.ErrorContains(t, err, "unavailable")
+					return
+				}
+				require.NoError(t, err)
+				assert.Equal(t, currentName, selected)
+			})
+		}
+	}
+}
+
 func TestMaterializeRecordedSourceAfterMachineRelabel(t *testing.T) {
 	const id = "12345678-1234-1234-1234-123456789abc"
 	for _, agent := range []parser.AgentType{parser.AgentClaude, parser.AgentPi} {
