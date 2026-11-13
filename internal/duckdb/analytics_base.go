@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"go.kenn.io/agentsview/internal/db"
+	"go.kenn.io/agentsview/internal/kept"
 	"go.kenn.io/agentsview/internal/readbase"
 )
 
@@ -380,7 +381,34 @@ func (s analyticsSQL) TrendsSQL(f, sessionFilter db.AnalyticsFilter, _ bool) (st
 	return readbase.AnalyticsTrendsSQL(
 		f, duckAnalyticsMessageWindowPred,
 		db.DuckDBSystemPrefixSQL("m.content", "m.role"), db.DuckDBQueryDialect(),
-		"m.session_id IN (SELECT s.id FROM sessions s WHERE "+where+")", args, true)
+		"m.session_id IN (SELECT s.id FROM sessions s WHERE "+where+")", args, true, false)
+}
+
+func (s analyticsSQL) TrendsDisk() (*kept.Disk, string) { return &s.store.usageDisk, s.store.path }
+func (s analyticsSQL) TrendSessionVersions(ctx context.Context, f db.AnalyticsFilter) (map[string]string, error) {
+	sf := f
+	sf.From, sf.To, sf.Model = "", "", ""
+	sf.DayOfWeek, sf.Hour = nil, nil
+	where, args := duckBuildAnalyticsWhere(sf, "COALESCE(s.started_at, s.created_at)", "s.", true, true)
+	window, more := readbase.TrendSessionWindowSQL(f, duckAnalyticsMessageWindowPred)
+	args = append(args, more...)
+	rows, err := s.QueryContext(ctx, `SELECT s.id, COALESCE(s.agentsview_push_fingerprint, '') FROM sessions s WHERE `+where+window, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	result := map[string]string{}
+	for rows.Next() {
+		var id, v string
+		if err := rows.Scan(&id, &v); err != nil {
+			return nil, err
+		}
+		result[id] = v
+	}
+	return result, rows.Err()
+}
+func (s analyticsSQL) TrendMessagesSQL(set string, args []any) (string, []any) {
+	return readbase.AnalyticsTrendsSQL(db.AnalyticsFilter{}, duckAnalyticsMessageWindowPred, db.DuckDBSystemPrefixSQL("m.content", "m.role"), db.DuckDBQueryDialect(), "m.session_id IN "+set, args, true, true)
 }
 
 func (s analyticsSQL) FormatTime(v any) string { return formatDBTime(v) }

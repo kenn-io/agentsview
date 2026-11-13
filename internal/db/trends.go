@@ -88,6 +88,16 @@ func (db *DB) trendsTerms(ctx context.Context, f AnalyticsFilter, terms []TrendT
 		return TrendsTermsResponse{}, err
 	}
 	defer release()
+	db.trendsPartsDisk()
+	if db.trendsDisk.Enabled() {
+		identity, err := db.GetDatabaseID(ctx)
+		if err != nil {
+			return TrendsTermsResponse{}, err
+		}
+		if result, handled, err := TrendsFromParts(ctx, &db.trendsDisk, identity, f, terms, granularity, db); handled {
+			return result, err
+		}
+	}
 	if granularity == "" {
 		granularity = "week"
 	}

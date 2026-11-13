@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"go.kenn.io/agentsview/internal/db"
+	"go.kenn.io/agentsview/internal/kept"
 )
 
 const topSessionsLimit = 10
@@ -35,6 +36,9 @@ type AnalyticsBackend interface {
 	// sessionFilter selects. ordered asks for rows in session and ordinal
 	// order; a backend may sort anyway.
 	TrendsSQL(f, sessionFilter db.AnalyticsFilter, ordered bool) (string, []any)
+	TrendSessionVersions(context.Context, db.AnalyticsFilter) (map[string]string, error)
+	TrendsDisk() (*kept.Disk, string)
+	TrendMessagesSQL(string, []any) (string, []any)
 	FormatTime(any) string
 	// DuckDB binds captured IDs; ClickHouse reselects by filter to stay under its statement size cap.
 	Autonomy(ctx context.Context, ids []string, f db.AnalyticsFilter) (map[string]int, error)
@@ -950,6 +954,10 @@ func (s *Analytics) GetTrendsTerms(
 	ctx context.Context, f db.AnalyticsFilter,
 	terms []db.TrendTermInput, granularity string,
 ) (db.TrendsTermsResponse, error) {
+	disk, identity := s.backend.TrendsDisk()
+	if result, handled, err := db.TrendsFromParts(ctx, disk, identity, f, terms, granularity, trendPartsSource{s.backend}); handled {
+		return result, err
+	}
 	if granularity == "" {
 		granularity = "week"
 	}

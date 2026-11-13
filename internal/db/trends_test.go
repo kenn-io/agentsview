@@ -571,3 +571,30 @@ func TestAppendTrendLower(t *testing.T) {
 		assert.Equal(t, strings.ToLower(text), string(buffer))
 	}
 }
+
+func TestTrendsPartsRecountChangedSessionStart(t *testing.T) {
+	t.Setenv("CACHE_DIRECTORY", t.TempDir())
+	d := testDB(t)
+	start := "2024-06-05T09:00:00Z"
+	insertSession(t, d, "s1", "proj-a", func(s *Session) {
+		s.StartedAt = &start
+		s.CreatedAt = "2024-06-04T08:00:00Z"
+		s.MessageCount, s.UserMessageCount = 1, 1
+	})
+	insertMessages(t, d, Message{SessionID: "s1", Ordinal: 0, Role: "user", Content: "seam", ContentLength: 4})
+	terms, err := ParseTrendTerms([]string{"seam"})
+	require.NoError(t, err)
+	f := AnalyticsFilter{From: "2024-06-05", To: "2024-06-06", Timezone: "UTC"}
+	got, err := d.trendsTerms(t.Context(), f, terms, "day")
+	require.NoError(t, err)
+	assert.Equal(t, []TrendPoint{{Date: "2024-06-05", Count: 1}, {Date: "2024-06-06", Count: 0}}, got.Series[0].Points)
+	_, err = d.getWriter().ExecContext(t.Context(), `UPDATE sessions SET started_at = ? WHERE id = ?`, "2024-06-06T09:00:00Z", "s1")
+	require.NoError(t, err)
+	var reads [][]string
+	reset := SetTrendPartsReadObserver(func(ids []string) { reads = append(reads, append([]string(nil), ids...)) })
+	t.Cleanup(reset)
+	got, err = d.trendsTerms(t.Context(), f, terms, "day")
+	require.NoError(t, err)
+	assert.Equal(t, []TrendPoint{{Date: "2024-06-05", Count: 0}, {Date: "2024-06-06", Count: 1}}, got.Series[0].Points)
+	assert.Equal(t, [][]string{{"s1"}}, reads)
+}

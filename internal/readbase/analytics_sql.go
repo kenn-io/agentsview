@@ -152,7 +152,7 @@ func analyticsCandidateMessagesSQL(ph string, includeContent bool) string {
 func AnalyticsTrendsSQL(
 	f db.AnalyticsFilter, windowPred func(string, string, string) (string, []any),
 	systemPrefix string, dialect db.QueryDialect,
-	sessionPred string, sessionPredArgs []any, ordered bool,
+	sessionPred string, sessionPredArgs []any, ordered, wholeSession bool,
 ) (string, []any) {
 	content := "m.content"
 	where := "s.deleted_at IS NULL AND " + sessionPred
@@ -170,7 +170,7 @@ func AnalyticsTrendsSQL(
 		args = append(args, sessionArgs...)
 		args = append(args, messageArgs...)
 	}
-	if inWindow != "" {
+	if inWindow != "" && !wholeSession {
 		rowWindow := inWindow
 		if len(f.MessageScopeFilter().Models) > 0 {
 			rowWindow = "(" + inWindow + " OR m.role = 'assistant')"
@@ -184,7 +184,9 @@ func AnalyticsTrendsSQL(
 		ORDER BY m.session_id, m.ordinal`
 	}
 	columns := `m.content, COALESCE(m.timestamp, s.started_at, s.created_at)`
-	if len(f.MessageScopeFilter().Models) > 0 {
+	if wholeSession {
+		columns = `m.session_id, m.content, COALESCE(m.timestamp, s.started_at, s.created_at)`
+	} else if len(f.MessageScopeFilter().Models) > 0 {
 		columns = `m.session_id, m.ordinal, m.role, m.is_system,
 			m.model, ` + content + `, m.timestamp, s.started_at, s.created_at`
 	}
@@ -231,4 +233,15 @@ func AnalyticsAndClause(pred string) string {
 		return ""
 	}
 	return " AND " + pred
+}
+
+// TrendSessionWindowSQL selects sessions with a start or message in the padded window.
+func TrendSessionWindowSQL(f db.AnalyticsFilter, windowPred func(string, string, string) (string, []any)) (string, []any) {
+	from, to := AnalyticsWindowBounds(f)
+	window, args := windowPred("COALESCE(s.started_at, s.created_at)", from, to)
+	if window == "" {
+		return "", nil
+	}
+	message, margs := windowPred("wm.timestamp", from, to)
+	return " AND (" + window + " OR s.id IN (SELECT wm.session_id FROM messages wm WHERE wm.timestamp IS NOT NULL AND " + message + "))", append(args, margs...)
 }

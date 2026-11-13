@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
+	"time"
 
 	"go.kenn.io/agentsview/internal/db"
 	"go.kenn.io/agentsview/internal/usagefacts"
@@ -20,12 +21,17 @@ func (s *Store) ConfigureUsageCache(ctx context.Context, directory, targetURL, s
 	if s.readTx != nil || s.hostedRelations {
 		return nil
 	}
-	column, err := sessionVersionColumnPG(ctx, s.pg)
-	if err != nil || column != "xmin" {
-		return err
-	}
 	fingerprint, err := pgTargetFingerprint(targetURL, schema)
 	if err != nil {
+		return err
+	}
+	if err := s.trendsDisk.Open("postgres-trends", strings.ReplaceAll(fingerprint, ":", "-"), 128<<20, 256<<20); err != nil {
+		return err
+	}
+	s.trendsDisk.Sweep(time.Now())
+	s.trendsIdentity = fingerprint
+	column, err := sessionVersionColumnPG(ctx, s.pg)
+	if err != nil || column != "xmin" {
 		return err
 	}
 	reader, err := db.NewUsageCacheReader(filepath.Join(directory, "usage-postgres", strings.ReplaceAll(fingerprint, ":", "-")), &pgUsageCacheSource{Store: s, target: fingerprint})

@@ -947,6 +947,8 @@ type DB struct {
 	activityMemo         activityCandidateMemo
 	activityKept         kept.Memo[activityKept]
 	analyticsKept        kept.Reads[any]
+	trendsDisk           kept.Disk
+	trendsDiskOnce       sync.Once
 	usageKept            kept.Memo[DailyUsageResult]
 	sessionStatsFacts    *sessionStatsFactsMemo
 	frustrationMemo      FrustrationMarkerMemo

@@ -8,6 +8,7 @@ import (
 
 	"github.com/stretchr/testify/require"
 
+	"go.kenn.io/agentsview/internal/db"
 	"go.kenn.io/agentsview/internal/dbtest"
 	"go.kenn.io/agentsview/internal/storage"
 )
@@ -19,6 +20,16 @@ func TestDuckTrendsTermsDateWindowEdges(t *testing.T) {
 	_, err := Push(t.Context(), path, local, "m", storage.MirrorPushOptions{}, false, nil)
 	require.NoError(t, err)
 	store := openPushedStore(t, path)
-	t.Cleanup(func() { require.NoError(t, store.Close()) })
+	require.NoError(t, store.OpenActivityReportDisk(t.Context()))
 	dbtest.AssertTrendsWindow(t, store)
+	require.NoError(t, store.Close())
+	dbtest.AssertTrendsPartsReuse(t, func() db.Store {
+		opened := openPushedStore(t, path)
+		require.NoError(t, opened.OpenActivityReportDisk(t.Context()))
+		return opened
+	}, func() {
+		dbtest.RewriteTrendsWindow(t, local)
+		_, err := Push(t.Context(), path, local, "m", storage.MirrorPushOptions{}, false, nil)
+		require.NoError(t, err)
+	})
 }

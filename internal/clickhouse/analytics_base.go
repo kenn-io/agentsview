@@ -10,6 +10,7 @@ import (
 	"strings"
 
 	"go.kenn.io/agentsview/internal/db"
+	"go.kenn.io/agentsview/internal/kept"
 	"go.kenn.io/agentsview/internal/readbase"
 )
 
@@ -520,7 +521,35 @@ func (s analyticsSQL) TrendsSQL(f, sessionFilter db.AnalyticsFilter, ordered boo
 	query, args := readbase.AnalyticsTrendsSQL(
 		f, chAnalyticsMessageWindowPred,
 		db.ClickHouseSystemPrefixSQL("m.content", "m.role"), db.ClickHouseQueryDialect(),
-		sessionPred, args, ordered)
+		sessionPred, args, ordered, false)
+	return query + systemPrefixSettings, args
+}
+
+func (s analyticsSQL) TrendsDisk() (*kept.Disk, string) { return &s.store.usageDisk, "clickhouse" }
+func (s analyticsSQL) TrendSessionVersions(ctx context.Context, f db.AnalyticsFilter) (map[string]string, error) {
+	sf := f
+	sf.From, sf.To, sf.Model = "", "", ""
+	sf.DayOfWeek, sf.Hour = nil, nil
+	where, args := chBuildAnalyticsWhere(sf, "COALESCE(s.started_at, s.created_at)", "s.", true, true)
+	window, more := readbase.TrendSessionWindowSQL(f, chAnalyticsMessageWindowPred)
+	args = append(args, more...)
+	rows, err := s.QueryContext(ctx, `SELECT s.id, toString(s.push_version) FROM sessions s WHERE `+where+window, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	result := map[string]string{}
+	for rows.Next() {
+		var id, v string
+		if err := rows.Scan(&id, &v); err != nil {
+			return nil, err
+		}
+		result[id] = v
+	}
+	return result, rows.Err()
+}
+func (s analyticsSQL) TrendMessagesSQL(set string, args []any) (string, []any) {
+	query, args := readbase.AnalyticsTrendsSQL(db.AnalyticsFilter{}, chAnalyticsMessageWindowPred, db.ClickHouseSystemPrefixSQL("m.content", "m.role"), db.ClickHouseQueryDialect(), "m.session_id IN "+set, args, false, true)
 	return query + systemPrefixSettings, args
 }
 

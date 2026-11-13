@@ -117,3 +117,57 @@ func AssertTrendsWindow(t *testing.T, store db.Store) {
 		})
 	}
 }
+
+// AssertTrendsPartsReuse checks the persisted result across reopen and rewrite.
+func AssertTrendsPartsReuse(t *testing.T, open func() db.Store, rewrite func()) {
+	t.Helper()
+	terms, err := db.ParseTrendTerms([]string{"fallback"})
+	require.NoError(t, err)
+	f := db.AnalyticsFilter{From: "2025-03-10", To: "2025-03-10", Timezone: "UTC"}
+	var reads [][]string
+	reset := db.SetTrendPartsReadObserver(func(ids []string) {
+		for _, id := range ids {
+			if id == "trends-window-fallback" {
+				reads = append(reads, append([]string(nil), ids...))
+				break
+			}
+		}
+	})
+	t.Cleanup(reset)
+	firstStore := open()
+	first, err := firstStore.GetTrendsTerms(t.Context(), f, terms, "day")
+	require.NoError(t, firstStore.(interface{ Close() error }).Close())
+	require.NoError(t, err)
+	require.Equal(t, 1, first.Series[0].Total)
+	require.NotEmpty(t, reads)
+	reads = nil
+	restartedStore := open()
+	restarted, err := restartedStore.GetTrendsTerms(t.Context(), f, terms, "day")
+	require.NoError(t, restartedStore.(interface{ Close() error }).Close())
+	require.NoError(t, err)
+	assert.Equal(t, first, restarted)
+	assert.Empty(t, reads)
+	rewrite()
+	changedStore := open()
+	changed, err := changedStore.GetTrendsTerms(t.Context(), f, terms, "day")
+	require.NoError(t, err)
+	assert.Equal(t, 2, changed.Series[0].Total)
+	assert.Equal(t, [][]string{{"trends-window-fallback"}}, reads)
+	reads = nil
+	hour := 5
+	f.Hour = &hour
+	filtered, err := changedStore.GetTrendsTerms(t.Context(), f, terms, "day")
+	require.NoError(t, err)
+	assert.Equal(t, 2, filtered.Series[0].Total)
+	assert.Empty(t, reads)
+	require.NoError(t, changedStore.(interface{ Close() error }).Close())
+}
+
+// RewriteTrendsWindow changes one session without changing its timestamp.
+func RewriteTrendsWindow(t *testing.T, d *db.DB) {
+	t.Helper()
+	require.NoError(t, d.ReplaceSessionMessages(t.Context(), "trends-window-fallback", []db.Message{{
+		SessionID: "trends-window-fallback", Ordinal: 0, Role: "user", Content: "fallback fallback", ContentLength: 17,
+	}}))
+	require.NoError(t, d.SetSessionDataVersion(t.Context(), "trends-window-fallback", db.CurrentDataVersion()))
+}
