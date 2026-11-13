@@ -2149,7 +2149,7 @@ func (db *DB) replaceSessionMessages(ctx context.Context,
 	}
 	var pendingRecallRevocations recallEvidenceRevocationEvents
 
-	if err := reconcileConversationMessagesTx(tx, sessionID, msgs, true, db.usageOnlyStorage()); err != nil {
+	if err := reconcileReplacedConversationTx(tx, sessionID, msgs, plan, useDiff, db.usageOnlyStorage()); err != nil {
 		return err
 	}
 	if useDiff {
@@ -2597,7 +2597,7 @@ func (db *DB) replaceSessionContent(ctx context.Context,
 	}
 	var pendingRecallRevocations recallEvidenceRevocationEvents
 
-	if err := reconcileConversationMessagesTx(tx, sessionID, msgs, true, db.usageOnlyStorage()); err != nil {
+	if err := reconcileReplacedConversationTx(tx, sessionID, msgs, plan, useDiff, db.usageOnlyStorage()); err != nil {
 		return err
 	}
 	if useDiff {

@@ -205,7 +205,7 @@ func writeConversationExportError(command *cobra.Command, cause error) error {
 		return fmt.Errorf("%w; run `agentsview export conversations changes` first to build the conversation index", cause)
 	case errors.Is(cause, db.ErrConversationReconciliationRequired):
 		code, result.Error = sessionExportCursorResetExitCode, "reconciliation_required"
-		result.Message = "conversation checkpoint belongs to another archive generation; reconcile from a new changes walk"
+		result.Message = "conversation checkpoint belongs to another archive generation or predates pruned deletions; reconcile from a new changes walk"
 	case errors.Is(cause, db.ErrConversationRevisionChanged):
 		code, result.Error = conversationRevisionChangedExitCode, "revision_changed"
 		result.Message = "this message revision was superseded; read the next changes cycle for its current state"

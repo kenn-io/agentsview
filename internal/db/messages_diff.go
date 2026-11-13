@@ -135,6 +135,58 @@ type messageDiffPlan struct {
 	unsafePinUpdateIDs []int64
 }
 
+// firstWrittenOrdinal returns the lowest ordinal the plan updates or
+// inserts. ok is false when the plan writes nothing.
+func (p messageDiffPlan) firstWrittenOrdinal() (int, bool) {
+	from, ok := 0, false
+	for _, u := range p.updates {
+		if !ok || u.msg.Ordinal < from {
+			from, ok = u.msg.Ordinal, true
+		}
+	}
+	for _, m := range p.inserts {
+		if !ok || m.Ordinal < from {
+			from, ok = m.Ordinal, true
+		}
+	}
+	return from, ok
+}
+
+// reconcileReplacedConversationTx reconciles the conversation index for a
+// whole-session replacement. When the diff plan applies, rows below its first
+// written ordinal persist unchanged, so only the rest of the session is
+// reconciled and the unchanged rows keep their message IDs. Without that
+// floor, a session that grew fails the unchanged-projection check and every
+// row without a native source ID gets a new ID and a tombstone. Full
+// replacements (truncations, reorders, rewrites) reconcile the whole session,
+// as do sessions recovering from usage-only storage: their policy-gap rows can
+// project messages the table no longer holds, or the session may have no
+// projected rows at all, and the gap must be cleared by a complete projection.
+func reconcileReplacedConversationTx(
+	tx transactionQueries, sessionID string, msgs []Message,
+	plan messageDiffPlan, useDiff, usageOnly bool,
+) error {
+	from, ok := plan.firstWrittenOrdinal()
+	if useDiff && ok && !usageOnly {
+		if err := tx.QueryRow(`SELECT NOT EXISTS(SELECT 1 FROM conversation_messages
+		 WHERE session_id=? AND removed=0 AND gap='archive_content_excluded')
+		 AND NOT EXISTS(SELECT 1 FROM conversation_session_changes
+		 WHERE session_id=? AND gap='archive_content_excluded')`, sessionID, sessionID).Scan(&ok); err != nil {
+			return err
+		}
+	}
+	if useDiff && ok {
+		tail := make([]Message, 0, len(msgs))
+		for _, m := range msgs {
+			if m.Ordinal >= from {
+				tail = append(tail, m)
+			}
+		}
+		return reconcileConversationRangeTx(tx, sessionID, tail, true, usageOnly, from)
+	}
+	return reconcileConversationMessagesTx(tx, sessionID, msgs, true, usageOnly)
+}
+
 // planStoredMessageDiff loads the session's stored messages and
 // plans an in-place diff against msgs. ok=false means the caller
 // must use the full replace path; a load failure also degrades to

@@ -80,6 +80,14 @@ The latest release is
 
 **Bug fixes**
 
+- A growing Codex session no longer leaves a removed copy of every earlier
+  message in the conversation export index each time it is fully re-read. A
+  long session could add millions of such rows and many gigabytes to the
+  archive. Messages before the first changed one now keep their export IDs
+  and stay out of the change stream. To recover the space these rows already
+  take, run `agentsview db compact`: it now removes deleted-message records
+  before reclaiming space. Change-stream and conversation-export readers
+  whose position predates a removed record restart with a full replay.
 - Sessions from worktrees named `<repo>.<branch>` next to the main checkout,
   the default worktrunk layout, now group under the repository's project when
   the checkout is not on disk, such as on a central collector. Before, each
