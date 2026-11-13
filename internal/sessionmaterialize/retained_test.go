@@ -78,17 +78,20 @@ func TestMaterializeRetainedCodexLineage(t *testing.T) {
 	require.NoError(t, err)
 	assert.Contains(t, result.Source, "retained:")
 	// A configured lexical path escaping its root through a link remains fatal.
-	escapeRoot := t.TempDir()
-	link := filepath.Join(escapeRoot, "sessions")
-	if err := os.Symlink(filepath.Join(codexHome, "sessions"), link); err == nil {
+	t.Run("configured symlink escape", func(t *testing.T) {
+		escapeRoot := t.TempDir()
+		link := filepath.Join(escapeRoot, "sessions")
+		if err := os.Symlink(filepath.Join(codexHome, "sessions"), link); err != nil {
+			t.Skipf("directory symlinks unavailable: %v", err)
+		}
 		escaped := *session
 		escapePath := filepath.Join(link, pageName)
 		escaped.FilePath = &escapePath
 		escapeCfg := cfg
 		escapeCfg.AgentDirs = map[parser.AgentType][]string{parser.AgentCodex: {escapeRoot}}
-		_, err = Materialize(ctx, escapeCfg, database, &escaped, cwd)
+		_, err := Materialize(t.Context(), escapeCfg, database, &escaped, cwd)
 		require.ErrorContains(t, err, "outside configured root")
-	}
+	})
 	require.NoError(t, os.Remove(filepath.Join(codexHome, "sessions", pageName)))
 	home = t.TempDir()
 	t.Setenv("CODEX_HOME", home)

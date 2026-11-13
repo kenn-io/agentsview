@@ -67,7 +67,9 @@ func Retained(ctx context.Context, cfg config.Config, database *db.DB, sessionID
 		}
 	}
 	defer func() {
-		retErr = errors.Join(retErr, tx.Rollback())
+		if err := tx.Rollback(); !errors.Is(err, sql.ErrTxDone) {
+			retErr = errors.Join(retErr, err)
+		}
 		if connection != nil {
 			retErr = errors.Join(retErr, connection.Close())
 		}
@@ -116,7 +118,7 @@ func openRetainedDirectory(ctx context.Context, sources []config.ArchiveSource, 
 		reader, connection, tx, archiveID, err := openDirectoryCandidate(ctx, candidate.Directory)
 		if err != nil {
 			if ctx.Err() != nil {
-				return nil, nil, nil, db.ArchiveSessionProvenance{}, "", ctx.Err()
+				return nil, nil, nil, db.ArchiveSessionProvenance{}, "", errors.Join(ctx.Err(), err)
 			}
 			candidateErr = errors.Join(candidateErr, fmt.Errorf("directory %s: %w", candidate.Directory, err))
 			continue
@@ -126,9 +128,16 @@ func openRetainedDirectory(ctx context.Context, sources []config.ArchiveSource, 
 				return reader, connection, tx, owner, archiveID, nil
 			}
 		}
-		if err := errors.Join(tx.Rollback(), connection.Close(), reader.Close()); err != nil {
+		rollbackErr := tx.Rollback()
+		if errors.Is(rollbackErr, sql.ErrTxDone) {
+			rollbackErr = nil
+		}
+		if err := errors.Join(ctx.Err(), rollbackErr, connection.Close(), reader.Close()); err != nil {
 			return nil, nil, nil, db.ArchiveSessionProvenance{}, "", err
 		}
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, nil, nil, db.ArchiveSessionProvenance{}, "", err
 	}
 	return nil, nil, nil, db.ArchiveSessionProvenance{}, "", errors.Join(errors.New("owning directory is not configured or unavailable"), candidateErr)
 }
@@ -162,7 +171,11 @@ func openDirectoryCandidate(ctx context.Context, directory string) (*docbank.Con
 	}
 	archiveID, err := checkSavedSchema(ctx, tx)
 	if err != nil {
-		return nil, nil, nil, "", errors.Join(err, tx.Rollback(), connection.Close(), reader.Close())
+		rollbackErr := tx.Rollback()
+		if errors.Is(rollbackErr, sql.ErrTxDone) {
+			rollbackErr = nil
+		}
+		return nil, nil, nil, "", errors.Join(err, rollbackErr, connection.Close(), reader.Close())
 	}
 	return reader, connection, tx, archiveID, nil
 }
