@@ -4341,7 +4341,7 @@ func (db *DB) populateFrustrationMarkers(
 	ctx context.Context,
 	rows []SignalRow,
 ) error {
-	if len(rows) == 0 || db.usageOnlyStorage() {
+	if len(rows) == 0 {
 		return nil
 	}
 	m := &db.frustrationMemo
@@ -4442,7 +4442,7 @@ func (db *DB) populateFrustrationMarkers(
 	if err := ctx.Err(); err != nil {
 		return err
 	}
-	if len(ids) > 0 && !db.readOnly {
+	if len(ids) > 0 && !db.readOnly && !db.usageOnlyStorage() {
 		if err := db.storeFrustrationMarkers(ctx, generation, ids, idx, rows); err != nil {
 			if ctx.Err() != nil {
 				return ctx.Err()
