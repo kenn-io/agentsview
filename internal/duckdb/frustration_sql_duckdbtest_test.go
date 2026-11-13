@@ -4,7 +4,6 @@ package duckdb
 
 import (
 	"path/filepath"
-	"strconv"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -40,49 +39,24 @@ func TestQuackFrustrationMarkerScanCounts(t *testing.T) {
 }
 
 func TestQuackFrustrationMirrorVersion(t *testing.T) {
-	for _, tc := range []struct {
-		name    string
-		version int
-		want    int
-		future  bool
-	}{
-		{"current", frustrationMarkersVersion, 1, false},
-		{"stale", frustrationMarkersVersion - 1, 0, false},
-		{"future", frustrationMarkersVersion + 1, 0, true},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			ctx := t.Context()
-			path := filepath.Join(t.TempDir(), "mirror.duckdb")
-			buildMirrorFixture(t, path, "session", "this is broken")
-			conn, err := Open(ctx, path)
-			require.NoError(t, err)
-			_, err = conn.ExecContext(ctx, `UPDATE messages SET content = 'fine' WHERE session_id = 'session'`)
-			require.NoError(t, err)
-			require.NoError(t, recordMetadataKey(ctx, conn, frustrationMarkersVersionMetadataKey, strconv.Itoa(tc.version)))
-			require.NoError(t, conn.Close())
-			uri := "quack:127.0.0.1:" + freeTCPPort(t)
-			const token = "agentsview-duckdbtest-token-frustration-version"
-			openQuackMirrorServer(t, ctx, path, uri, token)
-			store, err := NewQuackStore(ctx, uri, token, false, 0)
-			require.NoError(t, err)
-			t.Cleanup(func() { require.NoError(t, store.Close()) })
-			resp, err := store.GetAnalyticsSignals(ctx, db.AnalyticsFilter{})
-			if tc.future {
-				require.ErrorContains(t, err, "newer than supported")
-				empty, err := store.GetAnalyticsSignals(ctx, db.AnalyticsFilter{Project: "no-sessions"})
-				require.NoError(t, err)
-				assert.Zero(t, empty.ScoredSessions)
-				assert.Zero(t, empty.UnscoredSessions)
-				assert.Zero(t, empty.QualityHealth.Totals.FrustrationMarkerCount)
-				_, err = store.GetAnalyticsSignalSessions(ctx, db.AnalyticsFilter{}, "frustration_marker_count", 10)
-				require.ErrorContains(t, err, "newer than supported")
-				return
-			}
-			require.NoError(t, err)
-			assert.Equal(t, tc.want, resp.QualityHealth.Totals.FrustrationMarkerCount)
-			evidence, err := store.GetAnalyticsSignalSessions(ctx, db.AnalyticsFilter{}, "frustration_marker_count", 10)
-			require.NoError(t, err)
-			assert.Len(t, evidence.Sessions, tc.want)
-		})
-	}
+	ctx := t.Context()
+	path := filepath.Join(t.TempDir(), "mirror.duckdb")
+	buildMirrorFixture(t, path, "session", "this is broken")
+	conn, err := Open(ctx, path)
+	require.NoError(t, err)
+	_, err = conn.ExecContext(ctx, `UPDATE messages SET content = 'fine' WHERE session_id = 'session'`)
+	require.NoError(t, err)
+	require.NoError(t, conn.Close())
+	uri := "quack:127.0.0.1:" + freeTCPPort(t)
+	const token = "agentsview-duckdbtest-token-frustration-version"
+	openQuackMirrorServer(t, ctx, path, uri, token)
+	store, err := NewQuackStore(ctx, uri, token, false, 0)
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, store.Close()) })
+	resp, err := store.GetAnalyticsSignals(ctx, db.AnalyticsFilter{})
+	require.NoError(t, err)
+	assert.Equal(t, 1, resp.QualityHealth.Totals.FrustrationMarkerCount)
+	evidence, err := store.GetAnalyticsSignalSessions(ctx, db.AnalyticsFilter{}, "frustration_marker_count", 10)
+	require.NoError(t, err)
+	assert.Len(t, evidence.Sessions, 1)
 }

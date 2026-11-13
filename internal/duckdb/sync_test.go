@@ -308,6 +308,14 @@ func TestPushRebuildTriggers(t *testing.T) {
 			wantReasonHas: "data version",
 		},
 		{
+			name: "frustration marker version drift",
+			mangle: func(t *testing.T, path string) {
+				t.Helper()
+				setMirrorMetadataValue(t, path, frustrationMarkersVersionMetadataKey, "0")
+			},
+			wantReasonHas: "frustration",
+		},
+		{
 			name: "scope drift",
 			mangle: func(t *testing.T, path string) {
 				t.Helper()

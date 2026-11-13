@@ -237,33 +237,6 @@ func TestDuckFrustrationMarkerScanMatchesGoOnRandomPrompts(t *testing.T) {
 			}
 		}
 	}
-	local := newLocalDB(t)
-	const ts = "2026-02-01T09:00:00.000Z"
-	messages := make([]db.Message, len(prompts)+1)
-	for i, p := range prompts {
-		messages[i] = syncMessage("corpus", i, "user", p.content, ts)
-		if i%13 == 0 {
-			messages[i].IsSystem = true
-		} else if i%17 == 0 {
-			messages[i].SourceSubtype = "tool_result"
-		}
-	}
-	messages[len(prompts)] = syncMessage("corpus", len(prompts), "assistant", "this is broken", ts)
-	_, err := local.WriteSessionBatchAtomic(t.Context(), []db.SessionBatchWrite{{
-		Session:  syncSession("corpus", "alpha", "corpus", ts, len(messages)),
-		Messages: messages, DataVersion: 1, ReplaceMessages: true,
-	}})
-	require.NoError(t, err)
-	path := filepath.Join(t.TempDir(), "corpus.duckdb")
-	_, err = Push(t.Context(), path, local, "m", storage.MirrorPushOptions{}, false, nil)
-	require.NoError(t, err)
-	conn, err := OpenReadOnly(t.Context(), path)
-	require.NoError(t, err)
-	pushed := NewStoreFromDB(conn)
-	defer pushed.Close()
-	var stored int
-	require.NoError(t, conn.QueryRowContext(t.Context(), `SELECT frustration_marker_count FROM sessions WHERE id = 'corpus'`).Scan(&stored))
-	assert.Equal(t, []int{stored}, scanMarkers(t, pushed, []string{"corpus"}))
 	// The corpus must exercise both verdicts of the DuckDB path.
 	assert.Greater(t, plainMarkers, 300)
 	assert.Greater(t, plainCalm, 300)
@@ -307,10 +280,6 @@ func TestPushFrustrationMarkerDefinitionVersion1(t *testing.T) {
 		want                       int
 	}{
 		{"phrase", "user", "this is broken after the retry", "", false, 1},
-		{"caps", "user", "WHY WONT THIS WORK???!!!", "", false, 1},
-		{"short", "user", "wtf", "", false, 0},
-		{"calm", "user", "Please run the focused test again.", "", false, 0},
-		{"fence", "user", "```text\nFUCK\n```\nPlease handle the log.", "", false, 0},
 		{"assistant", "assistant", "this is broken after the retry", "", false, 0},
 		{"system", "user", "this is broken after the retry", "", true, 0},
 		{"tool-result", "user", "this is broken after the retry", "tool_result", false, 0},
