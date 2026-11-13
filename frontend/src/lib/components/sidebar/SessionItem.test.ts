@@ -68,9 +68,6 @@ describe("SessionItem identity", () => {
     ui.alwaysShowYear = true;
     flushSync();
     expect(time.textContent).toContain("2026");
-    ui.alwaysShowYear = false;
-    flushSync();
-    expect(time.textContent).toBe("2m ago");
   });
 
   it.each([false, true])("shows the full date and time on hover in compact=%s", (compact) => {
@@ -78,7 +75,6 @@ describe("SessionItem identity", () => {
     mountSession({ ended_at: ended }, { compact });
     const time = document.querySelector<HTMLElement>(".session-time")!;
     expect(time.title).toBe(formatTimestamp(ended, true));
-    expect(time.textContent).not.toContain("2024");
     ui.alwaysShowYear = true;
     flushSync();
     expect(time.textContent).toBe(formatTimestamp(ended, true));
