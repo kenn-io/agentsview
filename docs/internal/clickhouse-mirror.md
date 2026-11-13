@@ -66,18 +66,12 @@ repairs on the next push.
 **Driver `github.com/ClickHouse/clickhouse-go/v2` through `database/sql`.**
 Stores stay in the same `Query`/`Scan` shape as DuckDB and PostgreSQL. Every
 connection sets `final=1` so `ReplacingMergeTree` collapses duplicates without
-`FINAL` in SQL. Activity usage rows are the exception: serve reads them on a
-second pool that uses the driver's native API with the same settings. A
-full-history report reads about 1.5 million rows, and `database/sql` boxes each
-of their 32 million values and round-trips integers through text; on one
-production mirror that left ClickHouse waiting 3.8 of 4.2 seconds for serve to
-take the rows. The native read packs each row into the kept form as it arrives
-and sorts small keys, so no slice of wide rows is held or sorted. One goroutine
-still cannot take rows as fast as ClickHouse produces them, so a range read of
-more than 300,000 stored rows is cut at timestamp quantiles into up to eight
-slices that are read, sorted, and packed at once and then joined as bytes. On
-1.5 million rows a cold range read takes about 1.1 seconds, against 3.5 seconds
-for one read and 6 to 10 seconds through `database/sql`.
+`FINAL` in SQL. Activity reads that return many rows are the exception: serve
+reads the pairing inputs and the Activity usage sums on a second pool that uses
+the driver's native API with the same settings. `database/sql` boxes every
+value and round-trips integers through text; on one production mirror, reading
+1.5 million usage rows that way left ClickHouse waiting 3.8 of 4.2 seconds for
+serve to take them.
 
 **Vectors are pushed and searched, keyed by fingerprint and archive.**
 `clickhouse push` runs the vector phase after the session phase when the local
@@ -446,11 +440,11 @@ reversed clocks and the tail pairing after the last message.
 One goroutine scanning millions of message rows kept ClickHouse waiting to send
 them for seconds. So the sessions are dealt into one slice per 4,096 sessions,
 up to two, and each slice's messages are read at once on the native connection
-pool, beside the tool event read. The usage read's eight slices usually finish
-last, and more pairing slices slowed them on the server without making pairing
-ready sooner. Each session's messages arrive together, so a slice appends them
-without a map lookup per row. Pairing a session reads only its own inputs, so
-sessions are paired on every available core.
+pool, beside the tool event read. More pairing slices slowed the usage read that
+runs beside them without making pairing ready sooner. Each session's messages
+arrive together, so a slice appends them without a map lookup per row. Pairing a
+session reads only its own inputs, so sessions are paired on every available
+core.
 
 **Each session keeps its runs.** After pairing a session over all time, serve
 caps each interval at the gap, trims it against the session's earlier activity,
@@ -989,22 +983,24 @@ and single-session Usage reads keep parts versions. A push that changes those
 versions replaces the slot; a push that does not leaves it in place. Usage reads
 filtered by `active`, `stale`, or `unclean` termination compare session times
 with the current time, so their rows are never kept. Kept reads include usage
-rows, analytics session listings, Activity runs per session version,
-candidate listings, project label maps, and the whole report of an ended range.
+rows, analytics session listings, Activity runs per session version, Activity
+usage sums, candidate listings, project label maps, and the whole report of an
+ended range.
 
-**Usage of a range in progress.** An Activity report over a range that has not
-ended keeps every session's prepared usage rows in the range, plus the usage
-survivors derived from them. Survivors are kept per dedup token: a Claude
-message and request pair, a source UUID, or a usage key. Each candidate session
-keeps its survivors summed per model and bucket window. A push re-reads only the
-sessions it changed. The report then re-derives only the tokens those sessions'
-rows carry, and only the sums of the sessions that share those tokens. A session
-entering or leaving the candidate set counts as changed, and so does a session
-with a row that the moving effective end passes. A new pricing digest or bucket
-size re-prices and re-sums every survivor, but keeps the token selection. A
-range of 1.5 million rows keeps about 250 MiB. A refresh after a push of a few
-sessions derives its usage in tens of milliseconds, against more than a second
-for a selection over every kept row.
+**Activity usage sums.** An Activity report's usage survivors are selected,
+priced at billing time, and summed per session, model, and bucket window in one
+ClickHouse query, so serve receives sums instead of every usage row. Go builds
+the rate schedule the query prices with; see [Backend
+Parity](../agents/storage.md#backend-parity). Serve keeps each query's sums in
+memory per candidate set, range, bucket, and pricing digest until a push changes
+the mirror's parts. A range in progress moves its effective end with every
+request; its sums still answer while no source row lies between the end they
+were read to and the new end. On a one-year mirror of about 1.5 million usage
+rows, the cold report of a year in progress took 1.9 s against 4.3 s for the Go
+selection over every row, 2.2x faster, and an ended year 1.9 s against 5.4 s,
+2.9x faster. A cold week took 0.53 s against 0.45 s, 0.86x: ClickHouse runs the
+query's row scan once per reference, which costs more than reading a week's rows
+into Go. Reopening a report without a push costs the same as before.
 
 Ungrouped Top sessions are the exception. Each request reloads display metadata
 for its ranked winners. Grouped Top sessions keep member metadata with their

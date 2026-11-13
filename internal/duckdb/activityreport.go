@@ -13,6 +13,7 @@ import (
 	"go.kenn.io/agentsview/internal/export"
 	"go.kenn.io/agentsview/internal/kept"
 	"go.kenn.io/agentsview/internal/money"
+	"go.kenn.io/agentsview/internal/readbase"
 	"go.kenn.io/agentsview/internal/usagefacts"
 )
 
@@ -711,7 +712,7 @@ func (s *Store) activityReportCandidateSource(
 // duckMicrosBound renders t rounded up to DuckDB's microsecond TIMESTAMP,
 // so a comparison with it matches a comparison with t itself.
 func duckMicrosBound(t time.Time) string {
-	return time.UnixMicro(ceilMicros(t)).UTC().Format(time.RFC3339Nano)
+	return time.UnixMicro(readbase.CeilMicros(t)).UTC().Format(time.RFC3339Nano)
 }
 
 // ActivityReportCandidateSource exposes the backend's mechanical pairing
@@ -801,7 +802,7 @@ func (s *Store) activityReportUsage(
 // message and usage-event eligibility predicates as GetDailyUsage and
 // normalizes rows in SQL. Its placeholders take the lower and upper bounds,
 // the candidate predicate's arguments, then
-// activityUsageNullPricingUS.
+// readbase.ActivityUsageNullPricingUS.
 func duckActivityUsageWith(candidateWhere string) string {
 	return fmt.Sprintf(`
 		report_bounds AS (

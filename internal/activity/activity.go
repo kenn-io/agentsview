@@ -1289,7 +1289,7 @@ func primaryAndMoneyModels(w map[string]money.Money) (string, []string) {
 			continue
 		}
 		keys = append(keys, k)
-		if v.Microdollars > best {
+		if v.Microdollars > best || v.Microdollars == best && best > 0 && k < primary {
 			best, primary = v.Microdollars, k
 		}
 	}

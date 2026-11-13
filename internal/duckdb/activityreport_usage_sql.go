@@ -1,25 +1,19 @@
 package duckdb
 
 import (
-	"cmp"
 	"context"
 	"fmt"
 	"math"
 	"slices"
 	"strconv"
 	"strings"
-	"time"
 
 	"go.kenn.io/agentsview/internal/activity"
 	"go.kenn.io/agentsview/internal/db"
 	"go.kenn.io/agentsview/internal/export"
-	"go.kenn.io/agentsview/internal/money"
+	"go.kenn.io/agentsview/internal/readbase"
 	"go.kenn.io/agentsview/internal/usagefacts"
 )
-
-// activityUsageNullPricingUS is the pricing_us of a usage row without a
-// pricing timestamp. Such a row prices as usage without a timestamp.
-const activityUsageNullPricingUS = math.MinInt64
 
 // activityUsageModels selects the (model, provider_id) pairs usage rows can
 // carry. A pair it misses costs one more read of the rows.
@@ -57,258 +51,69 @@ func (s *Store) sumActivityUsage(
 	ctx context.Context, candidateWhere string, candidateArgs []any, lowerBound, upperBound string,
 	q activity.Query, pricing *export.PricingResolver,
 ) ([]activity.UsageRow, error) {
-	end := q.RangeEnd
-	if q.EffectiveEnd.Before(end) {
-		end = q.EffectiveEnd
-	}
-	startUS, endUS := ceilMicros(q.RangeStart), ceilMicros(end)
+	startUS, endUS := readbase.ActivityUsageSpan(q)
 	if startUS >= endUS {
 		return []activity.UsageRow{}, nil
 	}
 	with := duckActivityUsageWith(candidateWhere)
 	withArgs := append([]any{lowerBound, upperBound}, candidateArgs...)
-	withArgs = append(withArgs, int64(activityUsageNullPricingUS))
+	withArgs = append(withArgs, int64(readbase.ActivityUsageNullPricingUS))
 	keys, err := s.activityUsageRateKeys(ctx)
 	if err != nil {
 		return nil, err
 	}
-	// The catalog may lack a model a push has not registered yet; such a
-	// row comes back unpriced, and the read runs again with its model.
-	var groups []activityUsageGroup
-	var schedule usageRateSchedule
-	for attempt := 0; ; attempt++ {
-		schedule = buildUsageRateSchedule(pricing, keys, startUS, endUS)
-		var missing []usageRateKey
-		groups, missing, err = s.readActivityUsageGroups(ctx, with, withArgs, schedule, q, startUS, endUS)
-		if err != nil {
-			return nil, err
-		}
-		if len(missing) == 0 {
-			break
-		}
-		if attempt == 2 {
-			return nil, fmt.Errorf("pricing activity usage for model %q: no rate was resolved for it", missing[0].model)
-		}
-		keys = append(keys, missing...)
+	schedule, groups, err := readbase.PriceActivityUsageGroups(pricing, keys, startUS, endUS,
+		func(schedule readbase.UsageRateSchedule) ([]readbase.ActivityUsageGroup, error) {
+			return s.readActivityUsageGroups(ctx, with, withArgs, schedule, q, startUS, endUS)
+		})
+	if err != nil {
+		return nil, err
 	}
-	var out []activity.UsageRow
-	var raw []activityUsageGroup
-	type recordKey struct {
-		rate int64
-		kind string
-		band int64
-	}
-	records := map[recordKey]int{}
-	unattributed := false
-	for _, g := range groups {
-		if err := g.check(schedule); err != nil {
-			return nil, err
-		}
-		records[recordKey{g.rate, g.kind, g.band}] += int(g.count)
-		if g.sessionCost != nil {
-			unattributed = true
-		}
-		if g.raw == 1 {
-			raw = append(raw, g)
-			continue
-		}
-		out = append(out, g.usageRow())
-	}
-	if unattributed {
-		pricing.RecordUnattributedReported()
-	}
-	for key, n := range records {
-		replayUsagePricing(pricing, schedule.rates[key.rate], key.kind, key.band, n)
-	}
-	// A session's carrier is its last session cost in report order, and
-	// its remainder goes to its last row, so its rows stay in that order.
-	// A row of such a session is its own group, keyed by its report order.
-	slices.SortFunc(raw, func(a, b activityUsageGroup) int {
-		return cmp.Or(
-			cmp.Compare(a.session, b.session), cmp.Compare(a.rawTS, b.rawTS),
-			cmp.Compare(a.rawSession, b.rawSession), cmp.Compare(a.rawOrd, b.rawOrd),
-			cmp.Compare(a.rawSource, b.rawSource), cmp.Compare(a.rawKey, b.rawKey))
-	})
-	for _, g := range raw {
-		out = append(out, g.usageRow())
-	}
-	return out, nil
+	return readbase.AssembleActivityUsage(pricing, schedule, groups)
 }
 
-// readActivityUsageGroups runs the usage query under schedule. It returns
-// the models of rows the schedule has no rate for instead of their groups.
+// readActivityUsageGroups runs the usage query under schedule.
 func (s *Store) readActivityUsageGroups(
-	ctx context.Context, with string, withArgs []any, schedule usageRateSchedule,
+	ctx context.Context, with string, withArgs []any, schedule readbase.UsageRateSchedule,
 	q activity.Query, startUS, endUS int64,
-) ([]activityUsageGroup, []usageRateKey, error) {
-	sqlText, args := activityUsageSQL(with, withArgs, schedule, activity.QueryWindows(q), startUS, endUS)
+) ([]readbase.ActivityUsageGroup, error) {
+	sqlText, args := activityUsageSQL(with, withArgs, schedule, readbase.ActivityUsageBucketStarts(q), startUS, endUS)
 	rows, err := s.queryContext(ctx, sqlText, args...)
 	if err != nil {
-		return nil, nil, fmt.Errorf("querying activity usage: %w", err)
+		return nil, fmt.Errorf("querying activity usage: %w", err)
 	}
 	defer rows.Close()
-	var groups []activityUsageGroup
-	var missing []usageRateKey
+	var groups []readbase.ActivityUsageGroup
 	for rows.Next() {
-		var g activityUsageGroup
+		var g readbase.ActivityUsageGroup
+		var raw, overflow int64
 		if err := rows.Scan(
-			&g.session, &g.model, &g.providerID, &g.bucket, &g.rate, &g.kind, &g.band,
-			&g.raw, &g.rawTS, &g.rawSession, &g.rawOrd, &g.rawSource, &g.rawKey,
-			&g.count, &g.input, &g.output, &g.cost, &g.overflow, &g.minTS, &g.sessionCost,
+			&g.Session, &g.Model, &g.ProviderID, &g.Bucket, &g.Rate, &g.Kind, &g.Band,
+			&raw, &g.RawTS, &g.RawSession, &g.RawOrd, &g.RawSource, &g.RawKey,
+			&g.Count, &g.Input, &g.Output, &g.Cost, &overflow, &g.MinTS, &g.SessionCost,
 		); err != nil {
-			return nil, nil, fmt.Errorf("scanning activity usage: %w", err)
+			return nil, fmt.Errorf("scanning activity usage: %w", err)
 		}
-		if g.kind == usageKindMissingRate {
-			missing = append(missing, usageRateKey{model: g.model, providerID: g.providerID})
-			continue
-		}
+		g.Raw, g.Overflow = raw == 1, overflow != 0
 		groups = append(groups, g)
 	}
 	if err := rows.Err(); err != nil {
-		return nil, nil, fmt.Errorf("iterating activity usage: %w", err)
+		return nil, fmt.Errorf("iterating activity usage: %w", err)
 	}
-	slices.SortFunc(missing, compareUsageRateKeys)
-	return groups, slices.Compact(missing), nil
-}
-
-// Pricing kinds. Each survivor makes exactly one.
-const (
-	usageKindReported    = "r" // a reported cost prices it
-	usageKindZero        = "z" // no tokens and no web searches
-	usageKindUnresolved  = "u" // no catalog rate
-	usageKindRequest     = "q" // one request, priced with bands
-	usageKindAggregate   = "a" // a sum of requests, priced at base rates
-	usageKindBillingErr  = "e" // the provider adjustment failed
-	usageKindMissingRate = "m" // no rate was sent for its model
-)
-
-type activityUsageGroup struct {
-	session, model, providerID, kind            string
-	bucket, rate, band                          int64
-	raw, rawTS, rawOrd                          int64
-	rawSession, rawSource, rawKey               string
-	count, input, output, cost, overflow, minTS int64
-	sessionCost                                 *int64
-}
-
-func (g activityUsageGroup) check(schedule usageRateSchedule) error {
-	switch {
-	case g.rate < 0 || int(g.rate) >= len(schedule.rates):
-		return fmt.Errorf("pricing activity usage for model %q: unknown rate %d", g.model, g.rate)
-	case g.kind == usageKindBillingErr:
-		return schedule.rates[g.rate].BilledErr
-	case g.overflow != 0:
-		return fmt.Errorf("pricing activity usage for model %q: %w", g.model, money.ErrOverflow)
-	}
-	return nil
-}
-
-func (g activityUsageGroup) usageRow() activity.UsageRow {
-	row := activity.UsageRow{
-		SessionID:    g.session,
-		Model:        g.model,
-		Timestamp:    time.UnixMicro(g.minTS).UTC().Format(time.RFC3339Nano),
-		InputTokens:  int(g.input),
-		OutputTokens: int(g.output),
-		Cost:         money.Money{Microdollars: g.cost},
-		CostSource:   export.CostSourceComputed,
-		Priced:       g.kind != usageKindUnresolved,
-		Contributes:  g.kind != usageKindZero,
-	}
-	if g.kind == usageKindReported {
-		row.CostSource = export.CostSourceReported
-	}
-	if g.sessionCost != nil {
-		row.SessionCost = &money.Money{Microdollars: *g.sessionCost}
-	}
-	return row
-}
-
-// replayUsagePricing records n survivors priced under rate as kind, as
-// pricing each of them one by one would record them.
-func replayUsagePricing(
-	pricing *export.PricingResolver, rate usageRate, kind string, band int64, n int,
-) {
-	switch kind {
-	case usageKindReported:
-		pricing.RecordResolvedReported(rate.model, rate.CatalogModel, rate.Catalog)
-	case usageKindUnresolved:
-		pricing.RecordResolvedComputed(rate.model, rate.BilledModel, rate.Billed)
-	case usageKindRequest:
-		var threshold *int
-		if band >= 0 {
-			b := int(band)
-			threshold = &b
-		}
-		pricing.RecordResolvedCounts(rate.model, rate.BilledModel, rate.Billed, 0, n, 0, threshold)
-	case usageKindAggregate:
-		pricing.RecordResolvedCounts(rate.model, rate.BilledModel, rate.Billed, 0, 0, n, nil)
-	}
-}
-
-type usageRateKey struct{ model, providerID string }
-
-// usageRate is one resolution of a model and provider, valid from fromUS
-// until the next segment of the same key.
-type usageRate struct {
-	export.UsageRate
-	model, providerID string
-	fromUS            int64
-}
-
-type usageRateSchedule struct {
-	rates []usageRate
-}
-
-// buildUsageRateSchedule resolves every key over [startUS, endUS) and for
-// usage without a timestamp. A segment starts at the range start and at
-// every instant the resolver says a price can change; adjacent segments
-// that resolve alike merge.
-func buildUsageRateSchedule(
-	pricing *export.PricingResolver, keys []usageRateKey, startUS, endUS int64,
-) usageRateSchedule {
-	starts := []int64{startUS}
-	for _, change := range pricing.PriceChanges(time.UnixMicro(startUS), time.UnixMicro(endUS)) {
-		starts = append(starts, ceilMicros(change))
-	}
-	starts = slices.Compact(starts)
-	var schedule usageRateSchedule
-	for _, key := range keys {
-		schedule.rates = append(schedule.rates, usageRate{
-			UsageRate: pricing.UsageRateAt(key.providerID, key.model, time.Time{}),
-			model:     key.model, providerID: key.providerID,
-			fromUS: activityUsageNullPricingUS,
-		})
-		var previous *export.UsageRate
-		for i, from := range starts {
-			rate := pricing.UsageRateAt(key.providerID, key.model, time.UnixMicro(from).UTC())
-			if previous != nil && rate.Equal(*previous) {
-				continue
-			}
-			if i == 0 {
-				// Real timestamps sort after every row without one.
-				from = activityUsageNullPricingUS + 1
-			}
-			schedule.rates = append(schedule.rates, usageRate{
-				UsageRate: rate, model: key.model, providerID: key.providerID, fromUS: from,
-			})
-			previous = &schedule.rates[len(schedule.rates)-1].UsageRate
-		}
-	}
-	return schedule
+	return groups, nil
 }
 
 // activityUsageRateKeys reads the pairs activityUsageModels selects.
-func (s *Store) activityUsageRateKeys(ctx context.Context) ([]usageRateKey, error) {
+func (s *Store) activityUsageRateKeys(ctx context.Context) ([]readbase.UsageRateKey, error) {
 	rows, err := s.queryContext(ctx, activityUsageModels)
 	if err != nil {
 		return nil, fmt.Errorf("querying activity usage models: %w", err)
 	}
 	defer rows.Close()
-	var keys []usageRateKey
+	var keys []readbase.UsageRateKey
 	for rows.Next() {
-		var key usageRateKey
-		if err := rows.Scan(&key.model, &key.providerID); err != nil {
+		var key readbase.UsageRateKey
+		if err := rows.Scan(&key.Model, &key.ProviderID); err != nil {
 			return nil, fmt.Errorf("scanning activity usage models: %w", err)
 		}
 		keys = append(keys, key)
@@ -316,23 +121,8 @@ func (s *Store) activityUsageRateKeys(ctx context.Context) ([]usageRateKey, erro
 	if err := rows.Err(); err != nil {
 		return nil, fmt.Errorf("iterating activity usage models: %w", err)
 	}
-	slices.SortFunc(keys, compareUsageRateKeys)
+	slices.SortFunc(keys, readbase.CompareUsageRateKeys)
 	return slices.Compact(keys), nil
-}
-
-func compareUsageRateKeys(a, b usageRateKey) int {
-	return cmp.Or(cmp.Compare(a.model, b.model), cmp.Compare(a.providerID, b.providerID))
-}
-
-// ceilMicros returns the first whole microsecond at or after t, so a
-// microsecond timestamp is at or after t exactly when it is at or after
-// ceilMicros(t).
-func ceilMicros(t time.Time) int64 {
-	us := t.UnixMicro()
-	if time.UnixMicro(us).Before(t) {
-		us++
-	}
-	return us
 }
 
 // activityUsageReportOrder orders rows as the report reads them.
@@ -386,39 +176,26 @@ func boolInt(b bool) int64 {
 }
 
 func activityUsageSQL(
-	with string, withArgs []any, schedule usageRateSchedule,
-	windows []activity.BucketWindow, startUS, endUS int64,
+	with string, withArgs []any, schedule readbase.UsageRateSchedule,
+	bucketStarts []int64, startUS, endUS int64,
 ) (string, []any) {
 	args := slices.Clone(withArgs)
 	args = append(args, startUS, endUS)
 
 	var segmentArgs, bandArgs, bucketArgs []any
-	bands := 0
-	for id, rate := range schedule.rates {
-		r := rate.Billed.Rates
-		segmentArgs = append(segmentArgs, int64(id), rate.model, rate.providerID, rate.fromUS,
-			boolInt(rate.Billed.OK), boolInt(rate.Catalog.OK), boolInt(rate.BilledErr != nil),
-			r.InputPerMTok.Microdollars, r.OutputPerMTok.Microdollars, r.CacheWritePerMTok.Microdollars,
-			r.EffectiveCacheWrite1hPerMTok().Microdollars, r.CacheReadPerMTok.Microdollars)
-		seen := map[int]bool{}
-		for _, band := range r.Bands {
-			// The first band with a threshold prices it.
-			if seen[band.AboveInputTokens] {
-				continue
-			}
-			seen[band.AboveInputTokens] = true
-			bandRates := export.ModelRates{
-				CacheWritePerMTok: band.CacheWritePerMTok, CacheWrite1hPerMTok: band.CacheWrite1hPerMTok,
-			}
-			bandArgs = append(bandArgs, int64(id), int64(band.AboveInputTokens)+1, int64(band.AboveInputTokens),
-				band.InputPerMTok.Microdollars, band.OutputPerMTok.Microdollars, band.CacheWritePerMTok.Microdollars,
-				bandRates.EffectiveCacheWrite1hPerMTok().Microdollars, band.CacheReadPerMTok.Microdollars)
-			bands++
-		}
+	for _, seg := range schedule.Segments() {
+		segmentArgs = append(segmentArgs, seg.ID, seg.Model, seg.ProviderID, seg.FromUS,
+			boolInt(seg.BilledOK), boolInt(seg.CatalogOK), boolInt(seg.BilledErr),
+			seg.Input, seg.Output, seg.CacheWrite, seg.CacheWrite1h, seg.CacheRead)
+	}
+	bands := schedule.Bands()
+	for _, band := range bands {
+		bandArgs = append(bandArgs, band.RateID, band.Floor, band.Above,
+			band.Input, band.Output, band.CacheWrite, band.CacheWrite1h, band.CacheRead)
 	}
 	// A relation needs a row. These match no usage row: a NULL model equals
 	// nothing, and no rate has ID -1.
-	segments := len(schedule.rates)
+	segments := len(schedule.Rates)
 	if segments == 0 {
 		segmentArgs = []any{
 			int64(-1), nil, nil, int64(0), int64(0), int64(0), int64(0),
@@ -426,12 +203,13 @@ func activityUsageSQL(
 		}
 		segments = 1
 	}
-	if bands == 0 {
+	bandRows := len(bands)
+	if bandRows == 0 {
 		bandArgs = []any{int64(-1), int64(math.MaxInt64), int64(0), int64(0), int64(0), int64(0), int64(0), int64(0)}
-		bands = 1
+		bandRows = 1
 	}
-	for i, window := range windows {
-		bucketArgs = append(bucketArgs, ceilMicros(window.Start), int64(i))
+	for i, start := range bucketStarts {
+		bucketArgs = append(bucketArgs, start, int64(i))
 	}
 
 	requestSources := make([]string, len(usagefacts.RequestScopedSources))
@@ -520,34 +298,34 @@ func activityUsageSQL(
 		activity_usage_kinds AS (
 			SELECT *,
 				CASE
-					WHEN rate_id IS NULL THEN '` + usageKindMissingRate + `'
-					WHEN reported_cost IS NOT NULL THEN '` + usageKindReported + `'
+					WHEN rate_id IS NULL THEN '` + readbase.UsageKindMissingRate + `'
+					WHEN reported_cost IS NOT NULL THEN '` + readbase.UsageKindReported + `'
 					WHEN input = 0 AND output = 0 AND reasoning = 0 AND cache_create = 0
-						AND cache_read = 0 AND web_billed = 0 THEN '` + usageKindZero + `'
-					WHEN billed_err = 1 THEN '` + usageKindBillingErr + `'
-					WHEN billed_ok = 0 THEN '` + usageKindUnresolved + `'
-					WHEN ` + requestScoped + ` THEN '` + usageKindRequest + `'
-					ELSE '` + usageKindAggregate + `'
+						AND cache_read = 0 AND web_billed = 0 THEN '` + readbase.UsageKindZero + `'
+					WHEN billed_err = 1 THEN '` + readbase.UsageKindBillingErr + `'
+					WHEN billed_ok = 0 THEN '` + readbase.UsageKindUnresolved + `'
+					WHEN ` + requestScoped + ` THEN '` + readbase.UsageKindRequest + `'
+					ELSE '` + readbase.UsageKindAggregate + `'
 				END AS price_kind
 			FROM activity_usage_classified
 		),
 		activity_usage_banded AS (
 			SELECT k.*, b.band_rate, b.band_above, b.band_in, b.band_out, b.band_cw, b.band_cw1h, b.band_cr
 			FROM (
-				SELECT *, CASE WHEN price_kind = '` + usageKindRequest + `'
+				SELECT *, CASE WHEN price_kind = '` + readbase.UsageKindRequest + `'
 					THEN input + cache_create + cache_read ELSE -1 END AS band_probe
 				FROM activity_usage_kinds
 			) k
-			ASOF LEFT JOIN ` + duckValuesRelation(usageBandColumns, bands) + ` b
+			ASOF LEFT JOIN ` + duckValuesRelation(usageBandColumns, bandRows) + ` b
 				ON k.rate_id = b.band_rate AND k.band_probe >= b.band_floor
 		),
 		activity_usage_priced AS (
 			SELECT *,
 				CASE price_kind
-					WHEN '` + usageKindReported + `' THEN ` + wide("reported_cost") + `
-					WHEN '` + usageKindUnresolved + `' THEN ` + webFee + `
-					WHEN '` + usageKindRequest + `' THEN ` + tokenCost + ` + ` + webFee + `
-					WHEN '` + usageKindAggregate + `' THEN ` + tokenCost + ` + ` + webFee + `
+					WHEN '` + readbase.UsageKindReported + `' THEN ` + wide("reported_cost") + `
+					WHEN '` + readbase.UsageKindUnresolved + `' THEN ` + webFee + `
+					WHEN '` + readbase.UsageKindRequest + `' THEN ` + tokenCost + ` + ` + webFee + `
+					WHEN '` + readbase.UsageKindAggregate + `' THEN ` + tokenCost + ` + ` + webFee + `
 					ELSE ` + wide("0") + `
 				END AS row_cost,
 				CASE WHEN band_rate IS NOT NULL THEN band_above ELSE -1 END AS price_band
@@ -558,7 +336,7 @@ func activityUsageSQL(
 				max(CASE WHEN session_cost IS NULL THEN 0 ELSE 1 END)
 					OVER (PARTITION BY account_session) AS session_has_cost
 			FROM activity_usage_priced p
-			ASOF LEFT JOIN ` + duckValuesRelation(usageBucketColumns, len(windows)) + ` w
+			ASOF LEFT JOIN ` + duckValuesRelation(usageBucketColumns, len(bucketStarts)) + ` w
 				ON p.ts_us >= w.bucket_start
 		),
 		activity_usage_keyed AS (

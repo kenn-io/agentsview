@@ -785,14 +785,15 @@ Keep identity-only corrections in the reporting digest. The wire contract is in
   message counts and project maps; SQL, pricing, caches and read lifetimes
   stay in each backend. Daily usage query strategies and aggregation loops
   remain per backend.
-- DuckDB Activity reports select, price, and sum usage in SQL with
-  `sumActivityUsage`, and derive session runs in SQL with
-  `activitySessionRuns`, both in `internal/duckdb`. Go resolves each model to
-  its rates over the range as a schedule of segments; SQL picks a row's
-  segment and pricing band and does the integer cost math. The SQLite,
-  PostgreSQL, and ClickHouse reports keep the Go rules in `internal/activity`,
-  because the SQL was slower for them on a one-year archive of 30,000
-  sessions:
+- DuckDB and ClickHouse Activity reports select, price, and sum usage in SQL,
+  with `sumActivityUsage` in `internal/duckdb` and `readActivityUsageSums` in
+  `internal/clickhouse`. Go resolves each model to its rates over the range as
+  a schedule of segments; SQL picks a row's segment and pricing band and does
+  the integer cost math. Both backends share the schedule and the assembly of
+  the summed groups in `internal/readbase/activityusage.go`. DuckDB also
+  derives session runs in SQL with `activitySessionRuns`. The SQLite and
+  PostgreSQL reports keep the Go rules in `internal/activity`, because the SQL
+  was slower for them on a one-year archive of 30,000 sessions:
     - SQLite: the usage step took 6.2 s in SQL and 0.99 s in Go, 6.3x slower. One
       sort of the 600,000 usage rows already takes 1.1 s, and the rules need
       several. The runs SQL took 11.1 s against 1.9 s for the Go pairing, 5.8x
@@ -800,9 +801,6 @@ Keep identity-only corrections in the reporting digest. The wire contract is in
       `last_value(... IGNORE NULLS)`, which SQLite lacks.
     - PostgreSQL: the usage selection alone took 1.86 s at best, against about 1 s
       for the whole Go usage step, at least 1.9x slower.
-    - ClickHouse: the SQL was up to 1.7x faster cold, but reopening a range that
-      includes today was 1.2x to 2.8x slower than the kept usage ranges and
-      pairing memo.
 
 ### Harness-recorded costs
 
