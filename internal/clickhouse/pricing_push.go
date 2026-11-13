@@ -261,12 +261,32 @@ func (s *Sync) syncGenAIPricing(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	stored := *document
-	if existing != nil && existing.Matches(document) {
-		stored.UpdatedAt = existing.UpdatedAt
-	} else if err := s.writeGenAIPricing(ctx, document); err != nil {
-		return err
+	if existing == nil || !existing.Matches(document) {
+		if err := s.writeGenAIPricing(ctx, document); err != nil {
+			return err
+		}
+		// Another host whose clock runs ahead may have written a different
+		// document with a higher push_version, which the mirror keeps over
+		// this write. Check what it kept before pricing with it.
+		existing, err = loadGenAIPricingState(ctx, s.conn)
+		if err != nil {
+			return err
+		}
+		if !existing.Matches(document) {
+			retained, err := loadGenAIPricing(ctx, s.conn)
+			if err != nil {
+				return err
+			}
+			if retained == nil {
+				return errors.New(
+					"clickhouse genai_pricing has no document after writing one",
+				)
+			}
+			return s.cacheGenAIPricing(retained)
+		}
 	}
+	stored := *document
+	stored.UpdatedAt = existing.UpdatedAt
 	return s.cacheGenAIPricing(&stored)
 }
 

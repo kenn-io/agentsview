@@ -111,3 +111,31 @@ func TestPushRepricesChangedGenAIPricing(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, reader.digest, syncer.pricer.digest)
 }
+
+// When another host whose clock runs ahead holds a different document in the
+// mirror, this push's write loses to it, and the push prices with the
+// document the mirror kept, as a reader does.
+func TestPushPricesWithRetainedGenAIPricingAfterLostWrite(t *testing.T) {
+	t.Parallel()
+	ctx := t.Context()
+	local, target := seedUsagePriceFixture(t)
+	require.NoError(t, local.UpsertGenAIPricing(ctx, genAIHistoryDocument(t, "1", "1")))
+	syncer := newTestSync(t, local, target, storage.PusherOptions{})
+	pushPreparedUsage(t, syncer)
+
+	ahead := genAIHistoryDocument(t, "3", "1")
+	future := uint64(time.Now().Add(time.Hour).UnixNano())
+	require.NoError(t, insertRows(ctx, syncer.conn, "genai_pricing", [][]any{{
+		int64(1), ahead.Version, ahead.SourceRef, ahead.Source,
+		string(ahead.Data), ahead.UpdatedAt, future,
+	}}))
+	require.NoError(t, local.UpsertGenAIPricing(ctx, genAIHistoryDocument(t, "2", "1")))
+	pushPreparedUsage(t, syncer)
+
+	past := time.Date(2026, 1, 12, 12, 0, 0, 0, time.UTC)
+	_, lookup := syncer.pricer.resolver.ResolveAt("gpt-hist-test", "gpt-hist-test", past)
+	assert.Equal(t, money.MustParseDollars("3"), lookup.Rates.InputPerMTok)
+	reader, err := chLoadPricingCatalog(ctx, syncer.conn, nil)
+	require.NoError(t, err)
+	assert.Equal(t, reader.digest, syncer.pricer.digest)
+}
