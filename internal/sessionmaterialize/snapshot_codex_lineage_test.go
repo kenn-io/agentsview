@@ -1,7 +1,6 @@
 package sessionmaterialize
 
 import (
-	"crypto/sha256"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -14,7 +13,6 @@ import (
 	"go.kenn.io/agentsview/internal/db"
 	"go.kenn.io/agentsview/internal/dbtest"
 	"go.kenn.io/agentsview/internal/rawarchive"
-	"go.kenn.io/agentsview/internal/rawsync"
 	syncer "go.kenn.io/agentsview/internal/sync"
 	"go.kenn.io/agentsview/internal/testjsonl"
 )
@@ -82,60 +80,22 @@ func lineageBase(thread string, ordinal, bytes int) map[string]any {
 	return map[string]any{"thread_id": thread, "end_ordinal_exclusive": ordinal, "end_byte_offset": bytes}
 }
 
-func (f *snapshotLineageFixture) accepted(home, key, original string) (db.RawArchiveRoot, *db.RawArchiveSource, rawsync.CanonicalManifest) {
+func (f *snapshotLineageFixture) accepted(home, key, original string) *db.RawArchiveSource {
 	f.t.Helper()
 	roots, err := f.saved.ListRawArchiveRoots(f.t.Context())
 	require.NoError(f.t, err)
-	var root db.RawArchiveRoot
-	for _, item := range roots {
-		if item.OriginalPath == home && item.Provider == "codex" {
-			root = item
+	for _, root := range roots {
+		if root.OriginalPath == home && root.Provider == "codex" {
+			require.Equal(f.t, lineageDevice, root.DeviceID)
+			source, err := f.saved.RawArchiveSourceByKey(f.t.Context(), root.ID, "codex:"+key)
+			require.NoError(f.t, err)
+			require.NotNil(f.t, source)
+			require.Equal(f.t, original, source.OriginalPath)
+			return source
 		}
 	}
-	require.NotEmpty(f.t, root.ID)
-	require.Equal(f.t, lineageDevice, root.DeviceID)
-	source, err := f.saved.RawArchiveSourceByKey(f.t.Context(), root.ID, "codex:"+key)
-	require.NoError(f.t, err)
-	require.NotNil(f.t, source)
-	require.Equal(f.t, "codex:"+key, source.SourceKey)
-	require.Equal(f.t, original, source.OriginalPath)
-	archiveID, err := f.saved.GetArchiveID(f.t.Context())
-	require.NoError(f.t, err)
-	identity, err := rawsync.NewAuthIdentity(archiveID, lineageDevice)
-	require.NoError(f.t, err)
-	manifest, err := rawsync.ParseCanonicalManifest(identity, source.ManifestID, source.CanonicalJSON, rawsync.DefaultManifestLimits())
-	require.NoError(f.t, err)
-	return root, source, manifest
-}
-
-func requireLineageEntry(t *testing.T, manifest rawsync.CanonicalManifest, name, content string) {
-	t.Helper()
-	var matches []rawsync.Entry
-	for _, entry := range manifest.Manifest.Entries {
-		if filepath.Base(entry.Path) == name {
-			matches = append(matches, entry)
-		}
-	}
-	require.Len(t, matches, 1)
-	require.Equal(t, int64(len(content)), matches[0].Length)
-	require.Equal(t, []rawsync.ObjectRef{{SHA256: fmt.Sprintf("%x", sha256.Sum256([]byte(content))), Length: int64(len(content))}}, matches[0].Objects)
-}
-
-func (f *snapshotLineageFixture) inventory(root db.RawArchiveRoot, name, content string) {
-	f.t.Helper()
-	files, err := f.saved.ListRawArchiveFiles(f.t.Context(), 0, 1000)
-	require.NoError(f.t, err)
-	hash := fmt.Sprintf("%x", sha256.Sum256([]byte(content)))
-	count := 0
-	for _, file := range files {
-		if file.SHA256 == hash {
-			count++
-			require.Equal(f.t, root.ID, file.RootID)
-			require.Equal(f.t, name, filepath.Base(file.Path))
-			require.Equal(f.t, int64(len(content)), file.Size)
-		}
-	}
-	require.Equal(f.t, 1, count)
+	require.FailNow(f.t, "missing accepted root")
+	return nil
 }
 
 func requireOldCodexDeferred(t *testing.T, err error, dataDir, oldName string) {
@@ -272,10 +232,6 @@ func TestMaterializeCodexSnapshotLaterNewestPage(t *testing.T) {
 	dbtest.WriteTestFile(t, oldPath, []byte(old))
 	first := f.capture("first", "", child)
 	f.open(first)
-	firstRoot, firstSource, firstManifest := f.accepted(child, lineageC, oldPath)
-	requireLineageEntry(t, firstManifest, oldName, old)
-	require.Len(t, firstManifest.Manifest.Entries, 1)
-	firstManifestID := firstSource.ManifestID
 	dbtest.WriteTestFile(t, pPath, []byte(p))
 	dbtest.WriteTestFile(t, newPath, []byte(newPage))
 	second := f.capture("second", first, child, parent)
@@ -283,17 +239,6 @@ func TestMaterializeCodexSnapshotLaterNewestPage(t *testing.T) {
 	require.NoError(t, err)
 	_, err = f.archive.Import(t.Context(), spec)
 	require.NoError(t, err)
-	childRoot, oldSource, oldManifest := f.accepted(child, lineageC, oldPath)
-	require.Equal(t, firstRoot.ID, childRoot.ID)
-	require.Equal(t, firstManifestID, oldSource.ManifestID)
-	requireLineageEntry(t, oldManifest, oldName, old)
-	require.Len(t, oldManifest.Manifest.Entries, 1)
-	_, _, newManifest := f.accepted(child, lineageC+"_"+lineageR, newPath)
-	requireLineageEntry(t, newManifest, newName, newPage)
-	requireLineageEntry(t, newManifest, pName, p)
-	parentRoot, _, _ := f.accepted(parent, lineageP, pPath)
-	require.NotEqual(t, childRoot.ID, parentRoot.ID)
-	f.inventory(childRoot, newName, newPage)
-	f.inventory(parentRoot, pName, p)
+	oldSource := f.accepted(child, lineageC, oldPath)
 	f.materialize(lineageC, []string{child, parent}, []string{pName, newName}, []string{p, newPage}, oldSource)
 }

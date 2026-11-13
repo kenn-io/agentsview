@@ -202,20 +202,6 @@ func TestMaterializeCodexSnapshotForkParentAcrossRoots(t *testing.T) {
 			dbtest.WriteTestFile(t, pPath, []byte(p))
 			dbtest.WriteTestFile(t, cPath, []byte(c))
 			f.open(f.capture("capture", "", child, parent, grandparent))
-			cr, _, cm := f.accepted(child, key, cPath)
-			pr, _, pm := f.accepted(parent, lineageP, pPath)
-			gr, _, _ := f.accepted(grandparent, lineageG, gPath)
-			require.NotEqual(t, cr.ID, pr.ID)
-			require.NotEqual(t, pr.ID, gr.ID)
-			require.NotEqual(t, cr.ID, gr.ID)
-			requireLineageEntry(t, cm, cName, c)
-			requireLineageEntry(t, cm, pName, p)
-			require.Len(t, cm.Manifest.Entries, 2)
-			requireLineageEntry(t, pm, pName, p)
-			requireLineageEntry(t, pm, gName, g)
-			f.inventory(cr, cName, c)
-			f.inventory(pr, pName, p)
-			f.inventory(gr, gName, g)
 			names, contents := []string{gName, pName, cName}, []string{g, p, c}
 			if tc.reverted {
 				names, contents = []string{gName, cName}, []string{g, c}

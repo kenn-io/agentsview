@@ -743,7 +743,16 @@ func TestReadCodexCatalogExposesManifestCompanion(t *testing.T) {
 			database, err := db.OpenIsolatedContext(ctx, filepath.Join(seed, "sessions.db"))
 			require.NoError(t, err)
 			t.Cleanup(func() { require.NoError(t, database.Close()) })
+			var firstRootID, firstManifestID string
 			if scenario == "newer inventory" {
+				firstRoots, err := database.ListRawArchiveRoots(ctx)
+				require.NoError(t, err)
+				require.Len(t, firstRoots, 1)
+				firstRootID = firstRoots[0].ID
+				firstSource, err := database.RawArchiveSourceByKey(ctx, firstRootID, "codex:"+cID)
+				require.NoError(t, err)
+				require.NotNil(t, firstSource)
+				firstManifestID = firstSource.ManifestID
 				dbtest.WriteTestFile(t, pPath, []byte(p))
 				dbtest.WriteTestFile(t, cPath, []byte(c))
 				capture := filepath.Join(inputs, "second")
@@ -764,13 +773,23 @@ func TestReadCodexCatalogExposesManifestCompanion(t *testing.T) {
 			require.NoError(t, err)
 			savedRoots, err := database.ListRawArchiveRoots(ctx)
 			require.NoError(t, err)
-			var childRoot db.RawArchiveRoot
+			rootsByPath := make(map[string]db.RawArchiveRoot)
 			for _, root := range savedRoots {
-				if root.OriginalPath == child {
-					childRoot = root
-				}
+				rootsByPath[root.OriginalPath] = root
 			}
+			childRoot, parentRoot := rootsByPath[child], rootsByPath[parent]
 			require.NotEmpty(t, childRoot.ID)
+			require.NotEmpty(t, parentRoot.ID)
+			require.Equal(t, sourceDevice, childRoot.DeviceID)
+			require.Equal(t, sourceDevice, parentRoot.DeviceID)
+			require.NotEqual(t, childRoot.ID, parentRoot.ID)
+			if scenario != "newer inventory" {
+				grandparentRoot := rootsByPath[grandparent]
+				require.NotEmpty(t, grandparentRoot.ID)
+				require.Equal(t, sourceDevice, grandparentRoot.DeviceID)
+				require.NotEqual(t, grandparentRoot.ID, childRoot.ID)
+				require.NotEqual(t, grandparentRoot.ID, parentRoot.ID)
+			}
 			selectedKey := key
 			if scenario == "newer inventory" {
 				selectedKey = cID
@@ -781,12 +800,77 @@ func TestReadCodexCatalogExposesManifestCompanion(t *testing.T) {
 			manifest, err := rawsync.ParseCanonicalManifest(identity, source.ManifestID, source.CanonicalJSON, rawsync.DefaultManifestLimits())
 			require.NoError(t, err)
 			if scenario == "newer inventory" {
+				require.Equal(t, firstRootID, childRoot.ID)
+				require.Equal(t, firstManifestID, source.ManifestID)
 				require.Equal(t, oldPath, source.OriginalPath)
 				require.Len(t, manifest.Manifest.Entries, 1)
 				require.Equal(t, oldName, filepath.Base(manifest.Manifest.Entries[0].Path))
 			} else {
 				require.Equal(t, cPath, source.OriginalPath)
 				require.Len(t, manifest.Manifest.Entries, 2)
+			}
+			checkEntry := func(m rawsync.CanonicalManifest, name, content string) {
+				t.Helper()
+				var matches []rawsync.Entry
+				for _, entry := range m.Manifest.Entries {
+					if filepath.Base(entry.Path) == name {
+						matches = append(matches, entry)
+					}
+				}
+				require.Len(t, matches, 1)
+				require.Equal(t, int64(len(content)), matches[0].Length)
+				require.Equal(t, []rawsync.ObjectRef{{SHA256: fmt.Sprintf("%x", sha256.Sum256([]byte(content))), Length: int64(len(content))}}, matches[0].Objects)
+			}
+			companionManifest := manifest
+			if scenario == "newer inventory" {
+				checkEntry(manifest, oldName, old)
+				newSource, err := database.RawArchiveSourceByKey(ctx, childRoot.ID, "codex:"+key)
+				require.NoError(t, err)
+				require.NotNil(t, newSource)
+				require.Equal(t, cPath, newSource.OriginalPath)
+				companionManifest, err = rawsync.ParseCanonicalManifest(identity, newSource.ManifestID, newSource.CanonicalJSON, rawsync.DefaultManifestLimits())
+				require.NoError(t, err)
+			}
+			checkEntry(companionManifest, cName, c)
+			checkEntry(companionManifest, pName, p)
+			parentSource, err := database.RawArchiveSourceByKey(ctx, parentRoot.ID, "codex:"+pID)
+			require.NoError(t, err)
+			require.NotNil(t, parentSource)
+			require.Equal(t, pPath, parentSource.OriginalPath)
+			if scenario != "newer inventory" {
+				parentManifest, err := rawsync.ParseCanonicalManifest(identity, parentSource.ManifestID, parentSource.CanonicalJSON, rawsync.DefaultManifestLimits())
+				require.NoError(t, err)
+				checkEntry(parentManifest, pName, p)
+				checkEntry(parentManifest, gName, g)
+				grandparentSource, err := database.RawArchiveSourceByKey(ctx, rootsByPath[grandparent].ID, "codex:"+gID)
+				require.NoError(t, err)
+				require.NotNil(t, grandparentSource)
+				require.Equal(t, gPath, grandparentSource.OriginalPath)
+			}
+			files, err := database.ListRawArchiveFiles(ctx, 0, 1000)
+			require.NoError(t, err)
+			inventory := []struct {
+				root          db.RawArchiveRoot
+				name, content string
+			}{{childRoot, cName, c}, {parentRoot, pName, p}}
+			if scenario != "newer inventory" {
+				inventory = append(inventory, struct {
+					root          db.RawArchiveRoot
+					name, content string
+				}{rootsByPath[grandparent], gName, g})
+			}
+			for _, item := range inventory {
+				hash := fmt.Sprintf("%x", sha256.Sum256([]byte(item.content)))
+				count := 0
+				for _, file := range files {
+					if file.SHA256 == hash {
+						count++
+						require.Equal(t, item.root.ID, file.RootID)
+						require.Equal(t, item.name, filepath.Base(file.Path))
+						require.Equal(t, int64(len(item.content)), file.Size)
+					}
+				}
+				require.Equal(t, 1, count)
 			}
 			bound, primary, err := snapshotPrimaryPath(source.SourceKey, source.OriginalPath, childRoot.OriginalPath, "codex:"+selectedKey, manifest.Manifest.Entries)
 			require.NoError(t, err)
