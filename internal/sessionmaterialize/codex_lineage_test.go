@@ -10,6 +10,7 @@ import (
 	"github.com/klauspost/compress/zstd"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"go.kenn.io/agentsview/internal/remotesync"
 )
 
 func TestCodexLineageIncludesParentThreadAndCompressedPage(t *testing.T) {
@@ -99,6 +100,20 @@ func TestCodexLineageIncludesParentThreadAndCompressedPage(t *testing.T) {
 			}
 		})
 	}
+	associated := remotesync.MirrorCodexMetadata{
+		Dirs: []string{"/live", "/archive", "/unrelated"},
+		Homes: map[string]remotesync.CodexHomeRoots{
+			"/home": {Sessions: "/live", ArchivedSessions: "/archive"},
+		},
+	}
+	mapped := map[string]string{"/live": "live", "/archive": "archive", "/unrelated": "unrelated"}
+	roots, roles, err := codexMirrorHomeGroup("live", associated, mapped)
+	require.NoError(t, err)
+	assert.Equal(t, []string{"live", "archive"}, roots)
+	assert.Equal(t, map[string]bool{"live": false, "archive": true}, roles)
+	associated.Homes["/other"] = remotesync.CodexHomeRoots{Sessions: "/live", ArchivedSessions: "/unrelated"}
+	_, _, err = codexMirrorHomeGroup("live", associated, mapped)
+	require.ErrorContains(t, err, "contradictory")
 }
 
 func TestCodexLegacyFilenameAndInvalidLineage(t *testing.T) {

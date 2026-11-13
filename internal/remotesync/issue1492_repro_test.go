@@ -385,8 +385,9 @@ func TestIssue1492CuratedEditorRootsAccumulateFiles(t *testing.T) {
 
 func TestArchiveRequestPreservesEmptyFiles(t *testing.T) {
 	targetSet := TargetSet{
-		Dirs:  map[parser.AgentType][]string{parser.AgentCursor: {"/root"}},
-		Files: map[parser.AgentType][]string{parser.AgentCursor: {}},
+		Dirs:           map[parser.AgentType][]string{parser.AgentCursor: {"/root"}, parser.AgentCodex: {"/live", "/archive"}},
+		Files:          map[parser.AgentType][]string{parser.AgentCursor: {}},
+		CodexHomeRoots: map[string]CodexHomeRoots{"/home": {Sessions: "/live", ArchivedSessions: "/archive"}},
 	}
 	request := ArchiveRequest{
 		TargetSet:  targetSet,
@@ -400,6 +401,12 @@ func TestArchiveRequestPreservesEmptyFiles(t *testing.T) {
 	require.True(t, ok)
 	assert.Empty(t, files)
 	assert.NotNil(t, decoded.DeltaFiles)
+	assert.Equal(t, targetSet.CodexHomeRoots, decoded.CodexHomeRoots)
+	require.NoError(t, validateTargetSetPaths(decoded.TargetSet))
+	decoded.CodexHomeRoots["/home"] = CodexHomeRoots{Sessions: "/live", ArchivedSessions: "/unadvertised"}
+	require.ErrorContains(t, validateTargetSetPaths(decoded.TargetSet), "not advertised")
+	decoded.CodexHomeRoots["/home"] = CodexHomeRoots{Sessions: "/live", ArchivedSessions: "/live"}
+	require.ErrorContains(t, validateTargetSetPaths(decoded.TargetSet), "contradictory")
 }
 
 func TestSelectAllowedTargetsRootOnlyCuratedRequestIsEmptyAndNoFilesystemAccess(t *testing.T) {

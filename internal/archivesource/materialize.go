@@ -211,7 +211,7 @@ func readCodexCatalog(ctx context.Context, conn catalogQuery, rootID, originalRo
 	}
 	ancestors := codexCompanions(manifest.Manifest.Entries, names, byPath)
 	read := codexCatalogReader(byPath, conflicts, identity, manifest, objects, limit)
-	return use(originalRoot, names, ancestors, read, codexAncestry(conn, identity, manifest, byPath))
+	return use(originalRoot, names, ancestors, read, codexAncestry(conn, identity, byPath))
 }
 
 func codexCatalogReader(byPath map[string]rawsync.Entry, conflicts map[string]bool, identity rawsync.AuthIdentity, manifest rawsync.CanonicalManifest, objects rawderive.ObjectStore, limit int64) func(context.Context, string, int64) ([]byte, error) {

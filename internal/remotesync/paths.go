@@ -133,6 +133,26 @@ func validateTargetSetPaths(targets TargetSet) error {
 			return fmt.Errorf("forbidden root %q: %w", root, err)
 		}
 	}
+	return validateCodexHomeRoots(targets)
+}
+
+func validateCodexHomeRoots(targets TargetSet) error {
+	for home, roles := range targets.CodexHomeRoots {
+		if home == "" || (roles.Sessions == "" && roles.ArchivedSessions == "") {
+			return fmt.Errorf("invalid Codex home roots %q", home)
+		}
+		if roles.Sessions != "" && roles.Sessions == roles.ArchivedSessions {
+			return fmt.Errorf("contradictory Codex home roots %q", home)
+		}
+		if _, err := safeRemotePathArchiveName(home); err != nil {
+			return fmt.Errorf("invalid Codex home %q: %w", home, err)
+		}
+		for _, root := range []string{roles.Sessions, roles.ArchivedSessions} {
+			if root != "" && !slices.Contains(targets.Dirs[parser.AgentCodex], root) {
+				return fmt.Errorf("Codex home root %q is not advertised", root)
+			}
+		}
+	}
 	return nil
 }
 

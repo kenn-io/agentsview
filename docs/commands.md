@@ -2200,7 +2200,9 @@ Local companions must resolve inside the configured root when the transcript is
 inside it; an externally linked project is confined to that project. Remote
 mirror files must remain inside the mirror root. Codex mirror recovery uses
 the roots advertised by the last successful sync; older mirrors need a
-successful sync before materialization. A recorded local source path
+successful sync before materialization. For linked Codex home roots, upgrade
+the remote AgentsView and sync again to record their association; older mirror
+metadata only associates sibling roots. A recorded local source path
 can still be used after its configured machine label changes.
 An explicitly set `CLAUDE_CONFIG_DIR` must be an absolute path; the printed
 command preserves its spelling so Claude uses the same credentials.

@@ -1,6 +1,7 @@
 package sessionmaterialize
 
 import (
+	"encoding/json/v2"
 	"flag"
 	"fmt"
 	"io"
@@ -174,7 +175,6 @@ func TestMaterializeCodexMirror(t *testing.T) {
 		{"separate day roots", `{"version":1,"dirs":["/archived_sessions/source/sessions/2026/01/01","/archived_sessions/source/sessions/2026/01/02"]}`, oldName, ""},
 		{"containing root wins", `{"version":1,"dirs":["/archived_sessions/source/sessions/2026/01/01","/archived_sessions/source/sessions"]}`, newName, ""},
 		{"unadvertised", `{"version":1,"dirs":["/elsewhere"]}`, "", "outside Codex roots"},
-		{"newer version", `{"version":2,"dirs":[]}`, "", "compatible or newer AgentsView"},
 		{"invalid metadata", `{`, "", "source locations"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -401,6 +401,22 @@ func TestMaterializeCodexLoadedLinkedHome(t *testing.T) {
 	const id = "11111111-1111-4111-8111-111111111111"
 	const parent = "22222222-2222-4222-8222-222222222222"
 	base := t.TempDir()
+	for _, entry := range os.Environ() {
+		name, _, _ := strings.Cut(entry, "=")
+		if strings.HasPrefix(name, "AGENTSVIEW_") || strings.HasPrefix(name, "AGENT_VIEWER_") {
+			t.Setenv(name, "")
+		}
+	}
+	for _, def := range parser.Registry {
+		for _, name := range []string{def.EnvVar, def.NativeEnvVar, def.DefaultRootEnvVar} {
+			if name != "" {
+				t.Setenv(name, "")
+			}
+		}
+	}
+	for _, name := range []string{"XDG_STATE_HOME", "XDG_DATA_HOME", "XDG_CONFIG_HOME", "LOCALAPPDATA", "CRUSH_GLOBAL_DATA"} {
+		t.Setenv(name, base)
+	}
 	profile, live := filepath.Join(base, "profile"), filepath.Join(base, "storage", "live")
 	archive := filepath.Join(profile, "archived_sessions")
 	require.NoError(t, os.MkdirAll(profile, 0o700))
@@ -433,6 +449,163 @@ func TestMaterializeCodexLoadedLinkedHome(t *testing.T) {
 	got, err := os.ReadFile(result.Paths[0])
 	require.NoError(t, err)
 	assert.Equal(t, parentBytes, got)
+
+	for _, tc := range []struct {
+		name                   string
+		linked, index, missing bool
+	}{
+		{name: "linked without index", linked: true},
+		{name: "linked with rename index", linked: true, index: true},
+		{name: "unlinked control"},
+		{name: "parent in unrelated home", linked: true, missing: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			root, err := filepath.EvalSymlinks(t.TempDir())
+			require.NoError(t, err)
+			home, other := filepath.Join(root, "home"), filepath.Join(root, "other")
+			live, archived := filepath.Join(home, "sessions"), filepath.Join(home, "archived_sessions")
+			if tc.linked {
+				live = filepath.Join(root, "storage", "live")
+			}
+			for _, dir := range []string{home, live, archived, filepath.Join(other, "archived_sessions")} {
+				require.NoError(t, os.MkdirAll(dir, 0o700))
+			}
+			if tc.linked {
+				if err := os.Symlink(live, filepath.Join(home, "sessions")); err != nil {
+					t.Skipf("directory symlinks unavailable: %v", err)
+				}
+			}
+			parentData := []byte(lineagePage(parent, "2024-01-15T00:00:00Z", "parent", 0, map[string]any{}))
+			childData := []byte(lineagePage(id, "2026-01-01T00:00:00Z", "child", 2, map[string]any{
+				"forked_from_id": parent, "forked_from_ordinal_exclusive": 2,
+				"history_base": lineageBase(parent, 2, len(parentData)),
+			}))
+			parentDir := archived
+			if tc.missing {
+				parentDir = filepath.Join(other, "archived_sessions")
+				const replacement = "33333333-3333-4333-8333-333333333333"
+				p := filepath.Join(archived, "rollout-2024-01-16T00-00-00-"+replacement+".jsonl")
+				require.NoError(t, os.WriteFile(p, []byte(lineagePage(replacement, "2024-01-16T00:00:00Z", "other", 0, map[string]any{})), 0o600))
+			}
+			parentFile := filepath.Join(parentDir, "rollout-2024-01-15T00-00-00-"+parent+".jsonl")
+			childFile := filepath.Join(live, "2026", "01", "01", "rollout-2026-01-01T00-00-00-"+id+".jsonl")
+			require.NoError(t, os.MkdirAll(filepath.Dir(childFile), 0o700))
+			require.NoError(t, os.WriteFile(parentFile, parentData, 0o600))
+			require.NoError(t, os.WriteFile(childFile, childData, 0o600))
+			if tc.index {
+				index := fmt.Sprintf("{\"id\":%q,\"thread_name\":\"renamed child\"}\n", id)
+				require.NoError(t, os.WriteFile(filepath.Join(home, parser.CodexSessionIndexFilename), []byte(index), 0o600))
+			}
+			data := filepath.Join(root, "remote-config")
+			require.NoError(t, os.MkdirAll(data, 0o700))
+			configText := fmt.Sprintf("[agents.codex]\nhomes = [%q, %q]\n", home, other)
+			require.NoError(t, os.WriteFile(filepath.Join(data, "config.toml"), []byte(configText), 0o600))
+			t.Setenv("AGENTSVIEW_DATA_DIR", data)
+			t.Setenv("CODEX_HOME", home)
+			fs := flag.NewFlagSet("remote fixture", flag.ContinueOnError)
+			config.RegisterServeFlags(fs)
+			require.NoError(t, fs.Parse(nil))
+			remoteCfg, err := config.Load(fs)
+			require.NoError(t, err)
+			for agent := range remoteCfg.AgentDirs {
+				if agent != parser.AgentCodex {
+					delete(remoteCfg.AgentDirs, agent)
+				}
+			}
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if err := remotesync.ValidateProtocolHeader(r.Header); err != nil {
+					http.Error(w, err.Error(), http.StatusBadRequest)
+					return
+				}
+				remotesync.SetProtocolHeader(w.Header())
+				var response any
+				var err error
+				switch r.URL.Path {
+				case "/api/v1/remote-sync/targets":
+					response, err = remotesync.ResolveTargets(r.Context(), remoteCfg)
+				case "/api/v1/remote-sync/manifest":
+					var request remotesync.TargetSet
+					if err = json.UnmarshalRead(r.Body, &request); err == nil {
+						response, err = remotesync.ServeManifest(r.Context(), remoteCfg, request)
+					}
+				case "/api/v1/remote-sync/archive":
+					var request remotesync.ArchiveRequest
+					if err = json.UnmarshalRead(r.Body, &request); err == nil {
+						var plan remotesync.ArchivePlan
+						plan, err = remotesync.PlanArchive(r.Context(), remoteCfg, request)
+						if err == nil {
+							w.Header().Set("Content-Type", "application/x-tar")
+							err = plan.Write(r.Context(), w)
+							if err == nil {
+								return
+							}
+						}
+					}
+				default:
+					http.NotFound(w, r)
+					return
+				}
+				if err != nil {
+					http.Error(w, err.Error(), http.StatusInternalServerError)
+					return
+				}
+				w.Header().Set("Content-Type", "application/json")
+				_ = json.MarshalWrite(w, response)
+			}))
+			t.Cleanup(server.Close)
+			localData := filepath.Join(root, "collector")
+			database, err := db.Open(t.Context(), filepath.Join(root, "archive.db"))
+			require.NoError(t, err)
+			t.Cleanup(func() { assert.NoError(t, database.Close()) })
+			sync := remotesync.RemoteSync{Host: "remote", Source: remotesync.HTTPSource{URL: server.URL, Client: server.Client()}, DataDir: localData, DB: database}
+			prepared, err := sync.Prepare(t.Context())
+			require.NoError(t, err)
+			t.Cleanup(func() { assert.NoError(t, prepared.Close()) })
+			stats, err := prepared.ImportActive(t.Context())
+			require.NoError(t, err)
+			require.Zero(t, stats.Failed)
+			require.Zero(t, stats.Deferred)
+			require.NoError(t, prepared.Close())
+			imported, err := database.GetSessionFull(t.Context(), "remote~codex:"+id)
+			require.NoError(t, err)
+			require.NotNil(t, imported)
+			require.NotNil(t, imported.FilePath)
+			require.Equal(t, "remote:"+childFile, *imported.FilePath)
+			mirror := remotesync.MirrorDir(localData, "remote")
+			checkSources := func() {
+				for path, want := range map[string][]byte{parentFile: parentData, childFile: childData} {
+					mirrored, err := remotesync.SafeRemappedRemotePath(mirror, path)
+					require.NoError(t, err)
+					for _, file := range []string{path, mirrored} {
+						got, err := os.ReadFile(file)
+						require.NoError(t, err)
+						require.Equal(t, want, got)
+					}
+				}
+			}
+			checkSources()
+			destination := filepath.Join(root, "destination")
+			t.Setenv("CODEX_HOME", destination)
+			localCfg := config.Config{DataDir: localData, RemoteHosts: []config.RemoteHost{{Host: "remote"}}}
+			result, err := Materialize(t.Context(), localCfg, database, imported, t.TempDir())
+			checkSources()
+			if tc.missing {
+				require.ErrorContains(t, err, "missing Codex ancestor")
+				_, err = os.Stat(destination)
+				require.ErrorIs(t, err, os.ErrNotExist)
+				return
+			}
+			require.NoError(t, err)
+			require.Equal(t, imported.ID, result.RequestedID)
+			require.Equal(t, filepath.Base(childFile), result.InstalledPage)
+			require.Len(t, result.Paths, 2)
+			for i, want := range [][]byte{parentData, childData} {
+				got, err := os.ReadFile(result.Paths[i])
+				require.NoError(t, err)
+				require.Equal(t, want, got)
+			}
+		})
+	}
 }
 
 func TestMaterializeCodexMissingAndCrossRoot(t *testing.T) {

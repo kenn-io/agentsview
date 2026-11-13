@@ -258,6 +258,32 @@ func TestResolveTargetsOmitsAllowedTargetsInsideForbiddenRoots(t *testing.T) {
 	require.True(t, ok,
 		"a client echoing the advertised set must not be rejected")
 	assert.Equal(t, []string{outsideClaude}, selected.Dirs[parser.AgentClaude])
+
+	home := filepath.Join(base, "codex-home")
+	live, archive := filepath.Join(base, "storage", "live"), filepath.Join(home, "archived_sessions")
+	require.NoError(t, os.MkdirAll(live, 0o755))
+	require.NoError(t, os.MkdirAll(archive, 0o755))
+	if err := os.Symlink(live, filepath.Join(home, "sessions")); err != nil {
+		t.Skipf("directory symlinks unavailable: %v", err)
+	}
+	actualLive, err := filepath.EvalSymlinks(live)
+	require.NoError(t, err)
+	actualArchive, err := filepath.EvalSymlinks(archive)
+	require.NoError(t, err)
+	actualHome, err := filepath.EvalSymlinks(home)
+	require.NoError(t, err)
+	cfg := config.Config{
+		AgentDirs: map[parser.AgentType][]string{parser.AgentCodex: {actualLive, actualArchive}},
+		ProviderMetadata: map[parser.AgentType]map[string][]string{parser.AgentCodex: {
+			actualLive: {actualHome}, actualArchive: {actualHome},
+		}},
+	}
+	targets = resolveTargetsForTest(t, cfg)
+	roles := remotesync.CodexHomeRoots{Sessions: actualLive, ArchivedSessions: actualArchive}
+	assert.Equal(t, roles, targets.CodexHomeRoots[actualHome])
+	cfg.AgentDirs[parser.AgentTrae] = []string{actualArchive}
+	targets = resolveTargetsForTest(t, cfg)
+	assert.Equal(t, remotesync.CodexHomeRoots{Sessions: actualLive}, targets.CodexHomeRoots[actualHome])
 }
 
 // TestResolveTargetsDropsFileScopedAgentWhenSessionFilesForbidden guards
@@ -446,6 +472,7 @@ func TestSelectAllowedTargetsReturnsResolvedValues(t *testing.T) {
 		Dirs: map[parser.AgentType][]string{
 			parser.AgentClaude:   {"/srv/claude", "/srv/claude-extra"},
 			parser.AgentWindsurf: {"/srv/Windsurf/User"},
+			parser.AgentCodex:    {"/srv/codex/live", "/srv/codex/archive"},
 		},
 		Files: map[parser.AgentType][]string{
 			parser.AgentWindsurf: {
@@ -453,19 +480,22 @@ func TestSelectAllowedTargetsReturnsResolvedValues(t *testing.T) {
 				"/srv/Windsurf/User/workspaceStorage/a/workspace.json",
 			},
 		},
-		ExtraFiles: []string{"/srv/.codex/session_index.jsonl"},
+		ExtraFiles:     []string{"/srv/.codex/session_index.jsonl"},
+		CodexHomeRoots: map[string]remotesync.CodexHomeRoots{"/srv/codex": {Sessions: "/srv/codex/live", ArchivedSessions: "/srv/codex/archive"}},
 	}
 	requested := remotesync.TargetSet{
 		Dirs: map[parser.AgentType][]string{
 			parser.AgentClaude:   {"/srv/claude-extra"},
 			parser.AgentWindsurf: {"/srv/Windsurf/User"},
+			parser.AgentCodex:    {"/srv/codex/live"},
 		},
 		Files: map[parser.AgentType][]string{
 			parser.AgentWindsurf: {
 				"/srv/Windsurf/User/workspaceStorage/a/state.vscdb",
 			},
 		},
-		ExtraFiles: []string{"/srv/.codex/session_index.jsonl"},
+		ExtraFiles:     []string{"/srv/.codex/session_index.jsonl"},
+		CodexHomeRoots: map[string]remotesync.CodexHomeRoots{"/srv/codex": {ArchivedSessions: "/srv/codex/live"}},
 	}
 
 	selected, ok := remotesync.SelectAllowedTargets(allowed, requested)
@@ -477,6 +507,7 @@ func TestSelectAllowedTargetsReturnsResolvedValues(t *testing.T) {
 		"/srv/Windsurf/User/workspaceStorage/a/state.vscdb",
 	}, selected.Files[parser.AgentWindsurf])
 	assert.Equal(t, []string{"/srv/.codex/session_index.jsonl"}, selected.ExtraFiles)
+	assert.Equal(t, map[string]remotesync.CodexHomeRoots{"/srv/codex": {Sessions: "/srv/codex/live"}}, selected.CodexHomeRoots)
 }
 
 func TestSelectAllowedTargetsPreservesCuratedSelectionOrder(t *testing.T) {

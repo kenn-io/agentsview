@@ -96,28 +96,59 @@ func codexAncestorEntries(manifest rawsync.CanonicalManifest, rollout string, by
 	return names, nil
 }
 
-func codexAncestry(conn catalogQuery, identity rawsync.AuthIdentity, manifest rawsync.CanonicalManifest, byPath map[string]rawsync.Entry) CodexAncestry {
-	reached := slices.Clone(manifest.Manifest.Entries)
+func codexAncestry(conn catalogQuery, identity rawsync.AuthIdentity, byPath map[string]rawsync.Entry) CodexAncestry {
 	return func(ctx context.Context, from, rollout string) ([]string, error) {
 		parent, ok := byPath[from]
-		key := parser.CodexSessionUUIDFromFilename(path.Base(parent.Path))
-		if !ok || key == "" || !slices.ContainsFunc(reached, func(entry rawsync.Entry) bool {
-			return parser.CodexSessionUUIDFromFilename(path.Base(entry.Path)) == key && entry.Length == parent.Length && slices.Equal(entry.Objects, parent.Objects)
-		}) {
+		if !ok {
 			return nil, nil
 		}
-		rows, err := acceptedCodexSources(ctx, conn, identity, key)
-		if err != nil {
-			return nil, err
-		}
-		source, found, err := pickAncestorSource(identity, parent, key, rows)
-		if err != nil || !found {
-			return nil, err
-		}
-		names, err := codexAncestorEntries(source, rollout, byPath)
-		for _, name := range names {
-			reached = append(reached, byPath[name])
-		}
-		return names, err
+		return codexAncestorWalk(ctx, conn, identity, parent, rollout, byPath)
 	}
+}
+
+func codexAncestorWalk(ctx context.Context, conn catalogQuery, identity rawsync.AuthIdentity, parent rawsync.Entry, rollout string, byPath map[string]rawsync.Entry) ([]string, error) {
+	seen := make(map[string]bool)
+	for level := []rawsync.Entry{parent}; len(level) > 0; {
+		var names []string
+		var next []rawsync.Entry
+		for _, page := range level {
+			key := parser.CodexSessionUUIDFromFilename(path.Base(page.Path))
+			if key == "" {
+				continue
+			}
+			rows, err := acceptedCodexSources(ctx, conn, identity, key)
+			if err != nil {
+				return nil, err
+			}
+			source, found, err := pickAncestorSource(identity, page, key, rows)
+			if err != nil {
+				return nil, err
+			}
+			if !found || seen[source.ManifestID] {
+				continue
+			}
+			seen[source.ManifestID] = true
+			got, err := codexAncestorEntries(source, rollout, byPath)
+			if err != nil {
+				return nil, err
+			}
+			names = append(names, got...)
+			scratch := make(map[string]rawsync.Entry)
+			for _, name := range codexCompanions(source.Manifest.Entries, nil, scratch) {
+				next = append(next, scratch[name])
+			}
+		}
+		if len(names) > 0 {
+			candidates := make([]rawsync.Entry, 0, len(names))
+			for _, name := range names {
+				entry := byPath[name]
+				entry.Path = name
+				candidates = append(candidates, entry)
+			}
+			scratch := make(map[string]rawsync.Entry)
+			return codexCompanions(candidates, nil, scratch), nil
+		}
+		level = next
+	}
+	return nil, nil
 }

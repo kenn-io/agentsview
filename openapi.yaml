@@ -6951,6 +6951,10 @@ components:
     RemotesyncArchiveRequest:
       additionalProperties: false
       properties:
+        codex_home_roots:
+          additionalProperties:
+            $ref: "#/components/schemas/RemotesyncCodexHomeRoots"
+          type: object
         codex_index_files:
           additionalProperties:
             items:
@@ -6991,6 +6995,14 @@ components:
       required:
         - dirs
       type: object
+    RemotesyncCodexHomeRoots:
+      additionalProperties: false
+      properties:
+        archived_sessions:
+          type: string
+        sessions:
+          type: string
+      type: object
     RemotesyncManifest:
       additionalProperties: false
       properties:
@@ -7020,6 +7032,10 @@ components:
     RemotesyncTargetSet:
       additionalProperties: false
       properties:
+        codex_home_roots:
+          additionalProperties:
+            $ref: "#/components/schemas/RemotesyncCodexHomeRoots"
+          type: object
         codex_index_files:
           additionalProperties:
             items:
