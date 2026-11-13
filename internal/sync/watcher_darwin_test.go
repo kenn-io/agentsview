@@ -2461,6 +2461,7 @@ func TestDarwinWatcherNativeDropReconcilesOnlyThatRoot(t *testing.T) {
 // replaced root then gets a new stream and releases its polling.
 func TestDarwinWatcherNativeDropRecoversHiddenRootLoss(t *testing.T) {
 	replace := func(t *testing.T, root string) {
+		t.Helper()
 		require.NoError(t, os.Rename(root, root+".old"))
 		require.NoError(t, os.Mkdir(root, 0o700))
 	}
@@ -2474,11 +2475,14 @@ func TestDarwinWatcherNativeDropRecoversHiddenRootLoss(t *testing.T) {
 		duringActivation bool
 	}{
 		{name: "removed", mutate: func(t *testing.T, root string) {
+			t.Helper()
 			require.NoError(t, os.RemoveAll(root))
 		}},
 		{name: "replaced", recovers: true, mutate: replace},
-		{name: "replaced during activation", recovers: true, mutate: replace,
-			duringActivation: true},
+		{
+			name: "replaced during activation", recovers: true, mutate: replace,
+			duringActivation: true,
+		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			base := t.TempDir()
