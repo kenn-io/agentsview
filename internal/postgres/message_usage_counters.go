@@ -23,10 +23,10 @@ const messageUsageCounterBackfillBatch = 5000
 
 // backfillMessageUsageCountersPG fills the usage counter columns on messages a
 // binary without them wrote: rows from before the upgrade, and rows an older
-// binary pushes afterwards. Usage reads take these counters only from the
-// columns, so such a row counts no output tokens or web searches until this
-// runs. idx_messages_usage_counters_missing keeps the check cheap once no row
-// is left, so every push can run it.
+// binary pushes afterwards. Until this runs, usage reads bill no web searches
+// for such a row and rank its Claude output snapshot as having no output
+// tokens. idx_messages_usage_counters_missing keeps the check cheap once no
+// row is left, so every push can run it.
 //
 // Each batch also bumps the filled sessions' updated_at, the change every
 // publisher makes alongside its message writes, so usage caches and the
