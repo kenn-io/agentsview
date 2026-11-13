@@ -81,10 +81,9 @@ func TestIsFrustrationMarkerMatchesReference(t *testing.T) {
 	markers := 0
 	for _, prompt := range prompts {
 		want := referenceIsFrustrationMarker(prompt)
-		got := IsFrustrationMarker(prompt)
-		require.Equal(t, want, got, "%q", prompt)
+		require.Equal(t, want, IsFrustrationMarker(prompt), "%q", prompt)
 		require.Equal(t, referenceNormalizePrompt(prompt), normalizePrompt(prompt), "%q", prompt)
-		if got {
+		if want {
 			markers++
 		}
 	}
