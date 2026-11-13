@@ -1,6 +1,8 @@
 package signals
 
 import (
+	"crypto/sha256"
+	"fmt"
 	"math/rand/v2"
 	"strings"
 	"testing"
@@ -113,4 +115,27 @@ func FuzzIsFrustrationMarkerMatchesReference(f *testing.F) {
 		require.Equal(t, referenceIsFrustrationMarker(prompt), IsFrustrationMarker(prompt), "%q", prompt)
 		require.Equal(t, referenceNormalizePrompt(prompt), normalizePrompt(prompt), "%q", prompt)
 	})
+}
+
+// The digest records the matcher results for this fixed corpus at each stored
+// count version. When results change, bump FrustrationMarkerVersion and record
+// the new digest; the old entry documents the previous contract.
+func TestFrustrationMarkerVersionContract(t *testing.T) {
+	digests := map[int]string{1: "72e77932fbe773cd99daf4191c0fa9f6d30a3eddf05864f3b1a4a60ad99798e2"}
+	h := sha256.New()
+	prompts := append([]string(nil), frustrationEdgePrompts...)
+	r := rand.New(rand.NewPCG(7, 11))
+	for range 200_000 {
+		prompts = append(prompts, randomFrustrationPrompt(r))
+	}
+	for _, prompt := range prompts {
+		if IsFrustrationMarker(prompt) {
+			h.Write([]byte{1})
+		} else {
+			h.Write([]byte{0})
+		}
+	}
+	want, ok := digests[FrustrationMarkerVersion]
+	require.True(t, ok, "record the matcher digest for the new version")
+	assert.Equal(t, want, fmt.Sprintf("%x", h.Sum(nil)), "matcher results changed; bump the version and record the new digest")
 }

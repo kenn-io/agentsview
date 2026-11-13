@@ -113,13 +113,16 @@ func AnalyzeHeuristics(in HeuristicInput) HeuristicSignals {
 	return s
 }
 
+// FrustrationMarkerVersion identifies the rules used for persisted counts.
+// Increment it when IsFrustrationMarker changes its results.
+const FrustrationMarkerVersion = 1
+
 // IsFrustrationMarker reports whether a user prompt matches the
 // reference Coach frustration rules: repeated punctuation, high
 // caps-word ratio, or direct hostile/frustrated language. It strips
 // fenced code first so pasted logs do not become tone signals.
 //
-// Signals runs it over every prompt in range after each restart, so it
-// reads each prompt in few passes: one strips fences, one builds the
+// It reads each prompt in a few passes: one strips fences, one builds the
 // normalized form and counts capitalized words, and one looks for every
 // phrase literal. The regular expression runs only from the first literal.
 func IsFrustrationMarker(content string) bool {

@@ -2,8 +2,6 @@ package db
 
 import "sync"
 
-const FrustrationMarkerVersion = 1
-
 // FrustrationMarkerMemo reuses counts while a session's transcript is unchanged.
 // Backends use transcript versions for reuse and generations when replacing
 // an archive can change text without changing those versions.

@@ -2,6 +2,7 @@ package db
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 	"fmt"
 	"log"
@@ -4337,6 +4338,8 @@ func (db *DB) signalRows(
 	return all, nil
 }
 
+var errNewerFrustrationMarkerVersion = errors.New("stored frustration marker version is newer than this binary")
+
 func (db *DB) populateFrustrationMarkers(
 	ctx context.Context,
 	rows []SignalRow,
@@ -4360,19 +4363,21 @@ func (db *DB) populateFrustrationMarkers(
 	// missing. Remove this fallback if read-only open starts requiring the table.
 	err := queryChunked(ids, func(chunk []string) error {
 		ph, args := InPlaceholders(chunk)
-		args = append([]any{FrustrationMarkerVersion}, args...)
-		stored, err := db.getReader().QueryContext(ctx, `SELECT session_id, transcript_key, count FROM session_frustration_markers WHERE marker_version = ? AND session_id IN `+ph, args...)
+		stored, err := db.getReader().QueryContext(ctx, `SELECT session_id, transcript_key, marker_version, count FROM session_frustration_markers WHERE session_id IN `+ph, args...)
 		if err != nil {
 			return err
 		}
 		defer stored.Close()
 		for stored.Next() {
 			var id, key string
-			var count int
-			if err := stored.Scan(&id, &key, &count); err != nil {
+			var version, count int
+			if err := stored.Scan(&id, &key, &version, &count); err != nil {
 				return err
 			}
-			if i, ok := idx[id]; ok && rows[i].transcriptVersion == key {
+			if version > signals.FrustrationMarkerVersion {
+				return fmt.Errorf("%w: session %s has version %d, supported version is %d", errNewerFrustrationMarkerVersion, id, version, signals.FrustrationMarkerVersion)
+			}
+			if i, ok := idx[id]; ok && version == signals.FrustrationMarkerVersion && rows[i].transcriptVersion == key {
 				rows[i].FrustrationMarkerCount = count
 				m.Store(generation, id, key, count)
 				delete(idx, id)
@@ -4434,14 +4439,18 @@ func (db *DB) populateFrustrationMarkers(
 	if err := ctx.Err(); err != nil {
 		return err
 	}
+	if len(ids) > 0 && !db.readOnly {
+		if err := db.storeFrustrationMarkers(ctx, generation, ids, idx, rows); err != nil {
+			if errors.Is(err, errNewerFrustrationMarkerVersion) {
+				return err
+			}
+			log.Printf("storing frustration markers: %v", err)
+			return nil
+		}
+	}
 	for _, id := range ids {
 		r := rows[idx[id]]
 		m.Store(generation, id, r.transcriptVersion, r.FrustrationMarkerCount)
-	}
-	if len(ids) > 0 && !db.readOnly {
-		if err := db.storeFrustrationMarkers(ctx, generation, ids, idx, rows); err != nil {
-			log.Printf("storing frustration markers: %v", err)
-		}
 	}
 	return nil
 }
@@ -4459,11 +4468,26 @@ func (db *DB) storeFrustrationMarkers(ctx context.Context, generation uint64, id
 	defer tx.Rollback()
 	for _, id := range ids {
 		r := rows[idx[id]]
-		_, err := tx.ExecContext(ctx, `INSERT INTO session_frustration_markers (session_id, transcript_key, marker_version, count)
+		result, err := tx.ExecContext(ctx, `INSERT INTO session_frustration_markers (session_id, transcript_key, marker_version, count)
    SELECT id, ?, ?, ? FROM sessions WHERE id = ? AND transcript_revision || '|' || created_at = ?
-   ON CONFLICT(session_id) DO UPDATE SET transcript_key = excluded.transcript_key, marker_version = excluded.marker_version, count = excluded.count`, r.transcriptVersion, FrustrationMarkerVersion, r.FrustrationMarkerCount, id, r.transcriptVersion)
+   ON CONFLICT(session_id) DO UPDATE SET transcript_key = excluded.transcript_key, marker_version = excluded.marker_version, count = excluded.count
+   WHERE session_frustration_markers.marker_version <= excluded.marker_version`, r.transcriptVersion, signals.FrustrationMarkerVersion, r.FrustrationMarkerCount, id, r.transcriptVersion)
 		if err != nil {
 			return err
+		}
+		affected, err := result.RowsAffected()
+		if err != nil {
+			return err
+		}
+		if affected == 0 {
+			var version int
+			err := tx.QueryRowContext(ctx, `SELECT marker_version FROM session_frustration_markers WHERE session_id = ? AND marker_version > ?`, id, signals.FrustrationMarkerVersion).Scan(&version)
+			if err == nil {
+				return fmt.Errorf("%w: session %s has version %d, supported version is %d", errNewerFrustrationMarkerVersion, id, version, signals.FrustrationMarkerVersion)
+			}
+			if !errors.Is(err, sql.ErrNoRows) {
+				return err
+			}
 		}
 	}
 	return tx.Commit()

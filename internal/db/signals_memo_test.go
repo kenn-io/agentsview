@@ -10,6 +10,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"go.kenn.io/agentsview/internal/config"
+	"go.kenn.io/agentsview/internal/signals"
 )
 
 func TestSignalsFrustrationMemoReuse(t *testing.T) {
@@ -264,7 +265,7 @@ func TestSignalsFrustrationStoredRefresh(t *testing.T) {
 		var storedKey string
 		require.NoError(t, d.getReader().QueryRowContext(ctx, `SELECT transcript_key, marker_version, count FROM session_frustration_markers WHERE session_id = 'first'`).Scan(&storedKey, &version, &count))
 		assert.NotEqual(t, "stale", storedKey)
-		assert.Equal(t, FrustrationMarkerVersion, version)
+		assert.Equal(t, signals.FrustrationMarkerVersion, version)
 		assert.Equal(t, 2, count)
 	}
 }
@@ -366,4 +367,47 @@ func TestSignalsFrustrationVersionKeepsToolEffectiveness(t *testing.T) {
 		}
 	}
 	t.Fatal("Grep tool missing")
+}
+
+func TestSignalsFrustrationRejectsNewerStoredVersion(t *testing.T) {
+	d := testDB(t)
+	ctx := t.Context()
+	insertSession(t, d, "session", "test")
+	require.NoError(t, d.InsertMessages(ctx, []Message{{SessionID: "session", Role: "user", Content: "this is broken"}}))
+	_, err := d.getWriter().ExecContext(ctx, `INSERT INTO session_frustration_markers VALUES ('session', 'future-key', ?, 42)`, signals.FrustrationMarkerVersion+1)
+	require.NoError(t, err)
+	rows, err := d.signalRows(ctx, AnalyticsFilter{})
+	require.NoError(t, err)
+	require.ErrorIs(t, d.populateFrustrationMarkers(ctx, rows), errNewerFrustrationMarkerVersion)
+	// A newer process may write the row after the initial lookup but before storage.
+	require.ErrorIs(t, d.storeFrustrationMarkers(ctx, d.frustrationMemo.Generation(), []string{"session"}, map[string]int{"session": 0}, rows), errNewerFrustrationMarkerVersion)
+	var version, count int
+	var key string
+	require.NoError(t, d.getReader().QueryRowContext(ctx, `SELECT transcript_key, marker_version, count FROM session_frustration_markers WHERE session_id = 'session'`).Scan(&key, &version, &count))
+	assert.Equal(t, "future-key", key)
+	assert.Equal(t, signals.FrustrationMarkerVersion+1, version)
+	assert.Equal(t, 42, count)
+}
+
+func TestSignalsFrustrationRetriesFailedStore(t *testing.T) {
+	d := testDB(t)
+	ctx := t.Context()
+	insertSession(t, d, "session", "test")
+	require.NoError(t, d.InsertMessages(ctx, []Message{{SessionID: "session", Role: "user", Content: "this is broken"}}))
+	require.NoError(t, d.UpdateSessionSignals(ctx, "session", SessionSignalUpdate{QualitySignals: QualitySignals{Version: CurrentQualitySignalVersion}}))
+	_, err := d.getWriter().ExecContext(ctx, `CREATE TRIGGER reject_frustration_store BEFORE INSERT ON session_frustration_markers BEGIN SELECT RAISE(ABORT, 'injected failure'); END`)
+	require.NoError(t, err)
+	resp, err := d.analyticsSignals(ctx, AnalyticsFilter{})
+	require.NoError(t, err)
+	assert.Equal(t, 1, resp.QualityHealth.Totals.FrustrationMarkerCount)
+	var count int
+	require.NoError(t, d.getReader().QueryRowContext(ctx, `SELECT count(*) FROM session_frustration_markers`).Scan(&count))
+	assert.Zero(t, count)
+	_, err = d.getWriter().ExecContext(ctx, `DROP TRIGGER reject_frustration_store`)
+	require.NoError(t, err)
+	resp, err = d.analyticsSignals(ctx, AnalyticsFilter{})
+	require.NoError(t, err)
+	assert.Equal(t, 1, resp.QualityHealth.Totals.FrustrationMarkerCount)
+	require.NoError(t, d.getReader().QueryRowContext(ctx, `SELECT count FROM session_frustration_markers WHERE session_id = 'session'`).Scan(&count))
+	assert.Equal(t, 1, count)
 }

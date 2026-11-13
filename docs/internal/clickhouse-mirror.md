@@ -721,22 +721,24 @@ SQLite keeps its scan in Go, which skips system rows in SQL. DuckDB and
 PostgreSQL judge plain prompts in SQL as well; see
 [PostgreSQL frustration marker reads](../agents/storage.md#postgresql-frustration-marker-reads).
 
-**Go judges each prompt in a few passes.** SQLite sends every prompt of a
-session its memo misses to `IsFrustrationMarker`, and PostgreSQL, DuckDB, and
-ClickHouse send the prompts they cannot judge in SQL. The memo lives in memory,
-so the first Signals load after a restart judges every prompt in range. The
-function strips code fences once. One pass then builds the normalized prompt and
-counts the capitalized words, and another finds the first phrase literal. The
+**Go judges each prompt in a few passes.** SQLite sends prompts from sessions
+without a current stored count to `IsFrustrationMarker`. PostgreSQL, DuckDB,
+and ClickHouse send the prompts they cannot judge in SQL. SQLite stores each
+count with its transcript key, so later visits after a restart reuse unchanged
+counts. The first visit after upgrading counts each session once; later visits
+recount only changed sessions. The function strips code fences once. One pass
+then builds the normalized prompt and counts the capitalized words, and another
+finds the first phrase literal. The
 regular expression starts one byte before that literal, because no match can
 begin earlier. Tests compare the function with its original step-by-step form on
 edge cases, a random corpus, and a fuzz target.
 
-On a scratch SQLite archive of 7,000 sessions with 140,000 prompts (594 MiB of
-prompt text), the first Signals load after a restart fell from 9.2 s to 2.2 s
-with the file in the page cache, and from 10.4 s to 3.3-3.6 s with it evicted.
+Before SQLite stored these counts, a scratch archive of 7,000 sessions with
+140,000 prompts (594 MiB of prompt text) saw its first Signals load after a
+restart fall from 9.2 s to 2.2 s with the file in the page cache, and from 10.4 s to 3.3-3.6 s with it evicted.
 Allocation fell from 12.4 GiB to 3.2 GiB, and the count stayed the same. SQLite
-returns the prompt text in 0.42 s; the judge took 8.3 s before and 2.0 s after.
-A load the memo answers takes 15 ms either way.
+returned the prompt text in 0.42 s; the judge took 8.3 s before and 2.0 s after.
+A load the memo answered took 15 ms either way.
 
 Rejected for SQLite:
 
@@ -744,7 +746,7 @@ Rejected for SQLite:
   written. The first load would then read stored numbers. But every path that
   writes or replaces messages would have to keep them current, and existing
   archives would need a backfill that judges every prompt once anyway. With the
-  faster judge, the cost it removes is about 2 s once per restart.
+  faster judge, the cost it removes was about 2 s once per restart.
 - Judging prompts in SQL. SQLite has no `REGEXP`, and a function registered from
   Go would run the same Go check behind SQL.
 
