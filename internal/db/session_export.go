@@ -1264,7 +1264,7 @@ func sessionExportUsageTokens(
 	r usageScanRow,
 ) (inputTok, outputTok, cacheCrTok, cacheRdTok, reasoningTok int) {
 	if r.usageSource == "message" {
-		return clampedUsageTokenCountersWithReasoning(r.tokenJSON)
+		return clampedUsageTokenCountersWithReasoning(r.tokenUsage())
 	}
 	inputTok, outputTok, cacheCrTok, cacheRdTok = UsageEventRowTokens(
 		r.usageSource,

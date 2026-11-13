@@ -51,7 +51,11 @@ func MessageRecordedCost(tokenJSON string) (sql.NullInt64, string) {
 	if !strings.Contains(tokenJSON, usagefacts.RecordedCostKey) {
 		return sql.NullInt64{}, ""
 	}
-	cost := usagefacts.ParseTokenUsage(tokenJSON).RecordedCostMicrodollars
+	return recordedCost(usagefacts.ParseTokenUsage(tokenJSON))
+}
+
+func recordedCost(parsed usagefacts.ParsedTokenUsage) (sql.NullInt64, string) {
+	cost := parsed.RecordedCostMicrodollars
 	if cost == nil {
 		return sql.NullInt64{}, ""
 	}
@@ -693,6 +697,19 @@ type usageScanRow struct {
 	terminationStatus        string
 	displayName              string
 	startedAt                string
+	// tokens is tokenJSON parsed, when tokensParsed is set. scanUsageRow
+	// fills it so the several readers of one row share one parse.
+	tokens       usagefacts.ParsedTokenUsage
+	tokensParsed bool
+}
+
+// tokenUsage returns the row's parsed token usage JSON. A row from
+// scanUsageRow carries it; a row built another way parses it here.
+func (r usageScanRow) tokenUsage() usagefacts.ParsedTokenUsage {
+	if r.tokensParsed {
+		return r.tokens
+	}
+	return usagefacts.ParseTokenUsage(r.tokenJSON)
 }
 
 func (r usageScanRow) UsageIdentity() activity.UsageIdentity {
@@ -1413,7 +1430,8 @@ func scanUsageRow(rows *sql.Rows) (usageScanRow, error) {
 		&r.startedAt,
 	)
 	if err == nil && r.usageSource == "message" {
-		r.cost, r.costStatus = MessageRecordedCost(r.tokenJSON)
+		r.tokens, r.tokensParsed = usagefacts.ParseTokenUsage(r.tokenJSON), true
+		r.cost, r.costStatus = recordedCost(r.tokens)
 	}
 	return r, err
 }
@@ -1472,7 +1490,12 @@ func parseUsageTokenCounters(
 func parseUsageTokenCountersWithReasoning(
 	tokenJSON string,
 ) (inputTok, outputTok, cacheCrTok, cacheRdTok, reasoningTok int) {
-	parsed := usagefacts.ParseTokenUsage(tokenJSON)
+	return parsedUsageTokenCountersWithReasoning(usagefacts.ParseTokenUsage(tokenJSON))
+}
+
+func parsedUsageTokenCountersWithReasoning(
+	parsed usagefacts.ParsedTokenUsage,
+) (inputTok, outputTok, cacheCrTok, cacheRdTok, reasoningTok int) {
 	return int(parsed.InputTokens), int(parsed.OutputTokens),
 		int(parsed.CacheCreationTokens), int(parsed.CacheReadTokens),
 		int(parsed.ReasoningTokens)
@@ -1485,9 +1508,8 @@ func parseUsageWebSearchRequests(tokenJSON string) int {
 // clampedCacheCreation1hTokens returns the clamped 1h-TTL subset of a
 // message row's cache-write tokens. Usage events never carry the nested
 // breakdown, so event rows always price at the base write rate.
-func clampedCacheCreation1hTokens(tokenJSON string) int {
-	return int(usagefacts.ClampPlausibleTokens(
-		usagefacts.ParseTokenUsage(tokenJSON).CacheCreation1hTokens))
+func clampedCacheCreation1hTokens(parsed usagefacts.ParsedTokenUsage) int {
+	return int(usagefacts.ClampPlausibleTokens(parsed.CacheCreation1hTokens))
 }
 
 // usageRowWebSearchRequests returns how many billed Anthropic server-side
@@ -1498,6 +1520,15 @@ func usageRowWebSearchRequests(usageSource, tokenJSON string) int {
 		return 0
 	}
 	return parseUsageWebSearchRequests(tokenJSON)
+}
+
+// scanRowWebSearchRequests is usageRowWebSearchRequests for a scanned row,
+// reusing the row's parsed token usage.
+func scanRowWebSearchRequests(r usageScanRow) int {
+	if r.usageSource != "message" {
+		return 0
+	}
+	return int(r.tokenUsage().WebSearchRequests)
 }
 
 func dailyUsageRowWebSearchRequests(r dailyUsageScanRow) int {
@@ -1536,9 +1567,9 @@ func UsageEventRowTokens(
 }
 
 func clampedUsageTokenCounters(
-	tokenJSON string,
+	parsed usagefacts.ParsedTokenUsage,
 ) (inputTok, outputTok, cacheCrTok, cacheRdTok int) {
-	inputTok, outputTok, cacheCrTok, cacheRdTok, _ = parseUsageTokenCountersWithReasoning(tokenJSON)
+	inputTok, outputTok, cacheCrTok, cacheRdTok, _ = parsedUsageTokenCountersWithReasoning(parsed)
 	return ClampPlausibleTokens(int64(inputTok)),
 		ClampPlausibleTokens(int64(outputTok)),
 		ClampPlausibleTokens(int64(cacheCrTok)),
@@ -1546,9 +1577,9 @@ func clampedUsageTokenCounters(
 }
 
 func clampedUsageTokenCountersWithReasoning(
-	tokenJSON string,
+	parsed usagefacts.ParsedTokenUsage,
 ) (inputTok, outputTok, cacheCrTok, cacheRdTok, reasoningTok int) {
-	inputTok, outputTok, cacheCrTok, cacheRdTok, reasoningTok = parseUsageTokenCountersWithReasoning(tokenJSON)
+	inputTok, outputTok, cacheCrTok, cacheRdTok, reasoningTok = parsedUsageTokenCountersWithReasoning(parsed)
 	return ClampPlausibleTokens(int64(inputTok)),
 		ClampPlausibleTokens(int64(outputTok)),
 		ClampPlausibleTokens(int64(cacheCrTok)),
@@ -3308,7 +3339,7 @@ func sessionRowCost(
 	r usageScanRow, pricing *export.PricingResolver,
 ) (cost money.Money, priced, contributes bool, err error) {
 	return sessionRowCostWithWebSearchRequests(
-		r, usageRowWebSearchRequests(r.usageSource, r.tokenJSON), pricing)
+		r, scanRowWebSearchRequests(r), pricing)
 }
 
 func sessionRowCostWithWebSearchRequests(
@@ -3317,8 +3348,9 @@ func sessionRowCostWithWebSearchRequests(
 	var inTok, outTok, crTok, cr1hTok, rdTok int
 	reasoningTok := r.reasoningTokens
 	if r.usageSource == "message" {
-		inTok, outTok, crTok, rdTok, reasoningTok = clampedUsageTokenCountersWithReasoning(r.tokenJSON)
-		cr1hTok = clampedCacheCreation1hTokens(r.tokenJSON)
+		tokens := r.tokenUsage()
+		inTok, outTok, crTok, rdTok, reasoningTok = clampedUsageTokenCountersWithReasoning(tokens)
+		cr1hTok = clampedCacheCreation1hTokens(tokens)
 	} else {
 		inTok, outTok, crTok, rdTok = UsageEventRowTokens(
 			r.usageSource,
@@ -3387,7 +3419,7 @@ func sessionUsageBreakdownEntryWithWebSearchRequests(
 ) SessionUsageBreakdownEntry {
 	var inTok, outTok, crTok, rdTok int
 	if r.usageSource == "message" {
-		inTok, outTok, crTok, rdTok = clampedUsageTokenCounters(r.tokenJSON)
+		inTok, outTok, crTok, rdTok = clampedUsageTokenCounters(r.tokenUsage())
 	} else {
 		inTok, outTok, crTok, rdTok = UsageEventRowTokens(
 			r.usageSource,
@@ -3495,7 +3527,7 @@ func (db *DB) getSessionUsageLegacy(
 		}
 		var outputTokens int
 		if r.usageSource == "message" {
-			_, outputTokens, _, _ = clampedUsageTokenCounters(r.tokenJSON)
+			_, outputTokens, _, _ = clampedUsageTokenCounters(r.tokenUsage())
 		} else {
 			_, outputTokens, _, _ = UsageEventRowTokens(
 				r.usageSource,
@@ -3503,14 +3535,13 @@ func (db *DB) getSessionUsageLegacy(
 				r.cacheCreationInputTokens, r.cacheReadInputTokens)
 		}
 		snapshotRows[i] = activity.UsageRow{
-			SessionID:      r.sessionID,
-			Timestamp:      r.ts,
-			MessageOrdinal: UsageRowMessageOrdinal(r.messageOrdinal),
-			OutputTokens:   outputTokens,
-			WebSearchRequests: usageRowWebSearchRequests(
-				r.usageSource, r.tokenJSON),
-			ClaudeMessageID: r.claudeMessageID,
-			ClaudeRequestID: r.claudeRequestID,
+			SessionID:         r.sessionID,
+			Timestamp:         r.ts,
+			MessageOrdinal:    UsageRowMessageOrdinal(r.messageOrdinal),
+			OutputTokens:      outputTokens,
+			WebSearchRequests: scanRowWebSearchRequests(r),
+			ClaudeMessageID:   r.claudeMessageID,
+			ClaudeRequestID:   r.claudeRequestID,
 		}
 	}
 	snapshotMask, _, snapshotWebSearchRequests, err := activity.ClaudeSnapshotSurvivorSelectionContext(ctx, snapshotRows)
