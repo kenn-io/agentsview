@@ -205,7 +205,9 @@ a quarter of the mirror's live messages, it runs `OPTIMIZE TABLE ... FINAL` on
 each table it rewrote, largest first, and waits for each merge before it
 returns. The push log names each table and how long its merge took. A full push
 that resumes after an interruption counts the messages its earlier attempt
-wrote, so it compacts like a full push that ran straight through.
+wrote, so it compacts like a full push that ran straight through. A push that
+ends with session errors does not compact; the push that later finishes cleanly
+compacts what both wrote.
 
 Reads keep working during the merge, though they compete with it for CPU and
 disk. ClickHouse starts the merge only when the disk has free space for twice

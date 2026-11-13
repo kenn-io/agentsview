@@ -5,6 +5,7 @@ package clickhouse
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 	"net/url"
 	"testing"
@@ -205,4 +206,33 @@ func TestResumedChangedOnlyFullPushCountsEarlierWrites(t *testing.T) {
 	// live ones; with alpha's 14 the run rewrote nearly all of them.
 	require.Equal(t, 2, res.MessagesPushed)
 	assert.Contains(t, compactions(t, conn)[before:], "messages")
+}
+
+// A push that ends with session errors leaves its full push run to resume.
+// Only the clean push that finishes the run compacts, once, for what both
+// pushes wrote.
+func TestPushWithSessionErrorsLeavesCompactionToCleanPush(t *testing.T) {
+	t.Parallel()
+	ctx := t.Context()
+	local, target := seedFixture(t)
+	failing := newTestSync(t, local, target, storage.PusherOptions{})
+	failing.hooks = &pushHooks{beforeSessionRows: func(batch []db.Session) error {
+		for _, sess := range batch {
+			if sess.ID == fixtureBetaID {
+				return errors.New("injected session failure")
+			}
+		}
+		return nil
+	}}
+	res, err := failing.Push(ctx, false, nil)
+	require.NoError(t, err)
+	require.Equal(t, 1, res.Errors)
+	require.Positive(t, res.MessagesPushed)
+	conn := chtest.Open(t, target.URL, target.Database)
+	assert.Empty(t, compactions(t, conn), "a push with session errors does not compact")
+
+	res, err = newTestSync(t, local, target, storage.PusherOptions{}).Push(ctx, false, nil)
+	require.NoError(t, err)
+	require.Zero(t, res.Errors)
+	assert.Contains(t, compactions(t, conn), "messages")
 }

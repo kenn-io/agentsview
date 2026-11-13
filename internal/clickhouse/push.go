@@ -414,8 +414,13 @@ func (s *Sync) pushWithOptions(
 			return result, err
 		}
 	}
-	if err := s.compactAfterRewrite(ctx, result.MessagesPushed+resumedMessages); err != nil {
-		return result, err
+	// A push with session errors leaves its full push run to resume, and
+	// the resumed push counts this push's writes again, so only a clean push
+	// compacts: the run that finishes merges everything it wrote once.
+	if result.Errors == 0 {
+		if err := s.compactAfterRewrite(ctx, result.MessagesPushed+resumedMessages); err != nil {
+			return result, err
+		}
 	}
 	result.Duration = time.Since(start)
 	return result, nil
