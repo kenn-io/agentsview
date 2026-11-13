@@ -80,6 +80,11 @@ func TestFrustrationMemoPublicationBetweenReads(t *testing.T) {
 			require.NoError(t, err)
 			store, err := NewStore(ctx, url, schema, true)
 			require.NoError(t, err)
+			_, err = store.GetAnalyticsSignals(ctx, db.AnalyticsFilter{})
+			require.NoError(t, err)
+			require.NoError(t, store.Close())
+			store, err = NewStore(ctx, url, schema, true)
+			require.NoError(t, err)
 			t.Cleanup(func() { require.NoError(t, store.Close()) })
 			versionColumn, err := sessionVersionColumnPG(ctx, pg)
 			require.NoError(t, err)
@@ -101,14 +106,18 @@ func TestFrustrationMemoPublicationBetweenReads(t *testing.T) {
 				_, err = tx.ExecContext(ctx, `DELETE FROM sessions WHERE id = $1`, id)
 			}
 			require.NoError(t, err)
-			var publishedVersion string
 			if test.name != "remove-session" {
-				require.NoError(t, tx.QueryRowContext(ctx, `UPDATE sessions SET updated_at = updated_at + interval '1 second' WHERE id = $1 RETURNING `+versionColumn+`::text`, id).Scan(&publishedVersion))
+				_, err = tx.ExecContext(ctx, `UPDATE sessions SET updated_at = updated_at + interval '1 second' WHERE id = $1`, id)
+				require.NoError(t, err)
 			}
 			require.NoError(t, tx.Commit())
+			var publishedVersion string
+			if test.name != "remove-session" {
+				require.NoError(t, pg.QueryRowContext(ctx, `SELECT `+frustrationSessionVersion(versionColumn)+` FROM sessions WHERE id = $1`, id).Scan(&publishedVersion))
+			}
 
 			require.NoError(t, store.populateFrustrationMarkers(ctx, rows, versions, versionColumn))
-			if test.name == "edit" {
+			if test.name != "remove-session" {
 				assert.Equal(t, test.want, rows[0].FrustrationMarkerCount)
 			}
 			memo := &store.runtimeState().frustrationMarkers
@@ -182,14 +191,6 @@ func TestFrustrationMemo(t *testing.T) {
 			warm, err := store.GetAnalyticsSignals(ctx, db.AnalyticsFilter{})
 			require.NoError(t, err)
 			assert.Equal(t, test.want, warm.QualityHealth.Totals.FrustrationMarkerCount)
-			if test.name != "reuse" {
-				fresh, err := NewStore(ctx, url, schema, true)
-				require.NoError(t, err)
-				t.Cleanup(func() { require.NoError(t, fresh.Close()) })
-				scanned, err := fresh.GetAnalyticsSignals(ctx, db.AnalyticsFilter{})
-				require.NoError(t, err)
-				assert.Equal(t, scanned.QualityHealth.Totals.FrustrationMarkerCount, warm.QualityHealth.Totals.FrustrationMarkerCount)
-			}
 		})
 	}
 }

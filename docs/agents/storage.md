@@ -1323,10 +1323,25 @@ column and must join the events table to recover the text.
 
 ### PostgreSQL frustration marker reads
 
-Signals counts frustration markers for sessions the in-memory memo does not
-hold. PostgreSQL and CockroachDB read the session versions and those sessions'
-prompts in one statement, `pgFrustrationPromptsSQL`, with the session IDs as one
-array parameter (`= ANY($1)`). A prompt made of ASCII and
+Signals reuses counts in `session_frustration_counts` after a restart. Each
+row pairs the session's committed row version and UTC `updated_at` with an
+independent rules version. A saved count must match both the version selected
+for Signals and the current session version at lookup. A mismatch triggers a
+fresh count. Bump `frustrationMarkerRulesVersion` whenever the Go or PostgreSQL
+frustration classifier changes a verdict. Counts fill lazily after a complete
+scan, including zero counts. A save skips sessions changed before the write
+starts. A sync overlapping the save can leave a stale row; later reads reject
+that row and recount the session.
+
+A read-only role reuses rows it can read and scans misses without saving them.
+The table is optional for push. A missing table falls back to scanning.
+Hosted adoption discards the derived table. Hosted stores and borrowed read
+transactions use only the in-memory memo and scanning.
+
+For sessions without a reusable count, PostgreSQL and CockroachDB read the
+session versions and those sessions' prompts in one statement,
+`pgFrustrationPromptsSQL`, with the session IDs as one array parameter
+(`= ANY($1)`). A prompt made of ASCII and
 `signals.PlainPromptSymbols`, the alphabet the
 [ClickHouse read](../internal/clickhouse-mirror.md#dashboard-facts) also uses,
 is judged in SQL and comes back only when it is a marker, without its text. Go

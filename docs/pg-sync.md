@@ -21,9 +21,10 @@ the schema and `TRIGGER` on the watched tables. Installation takes a
 writes wait. CockroachDB skips this journal.
 Usage cache invalidation relies on `pg push` updating each parent session when
 it changes that session's messages. Direct SQL message edits must also change
-the parent session's `updated_at` to invalidate cached usage.
+the parent session's `updated_at` to invalidate cached usage and Signals counts.
 Activity reuse needs `SELECT` on `usage_session_changes` for `pg serve`
-roles given access later.
+roles given access later. Signals count reuse needs `SELECT`, and saving counts
+needs `INSERT` and `UPDATE`, on `session_frustration_counts`.
 
 On `pg serve`, ended Activity ranges are reused in memory until a push touches
 their sessions or range, pricing changes, or project identity changes.
