@@ -235,22 +235,6 @@ func (d *DB) CopyOrphanedDataFromExcluding(
 	if err := reconcileTranscriptRevisionsTx(ctx, tx); err != nil {
 		return nil, fmt.Errorf("reconciling transcript revisions: %w", err)
 	}
-	// At this point only reparsed sessions and previously copied trash exist.
-	// Orphans may change during sanitization, so copy counts before they arrive.
-	if !d.usageOnlyStorage() && oldDBHasTable(ctx, tx, "session_frustration_markers") {
-		if _, err := tx.ExecContext(ctx, `INSERT OR IGNORE INTO main.session_frustration_markers
-			(session_id, transcript_key, marker_version, count)
-			SELECT current.id, current.transcript_revision || '|' || current.created_at,
-				markers.marker_version, markers.count
-			FROM main.sessions current
-			JOIN old_db.sessions old ON old.id = current.id
-			JOIN old_db.session_frustration_markers markers ON markers.session_id = old.id
-			WHERE current.transcript_revision = old.transcript_revision
-				AND markers.transcript_key = old.transcript_revision || '|' || old.created_at
-				AND current.deleted_at IS NULL`); err != nil {
-			return nil, fmt.Errorf("copying frustration markers: %w", err)
-		}
-	}
 	if err := reconcileConversationResyncTx(ctx, tx, d.usageOnlyStorage()); err != nil {
 		return nil, fmt.Errorf("reconciling conversation identities: %w", err)
 	}
@@ -277,6 +261,9 @@ func (d *DB) CopyOrphanedDataFromExcluding(
 			return nil, err
 		}
 	}
+	if err := copyResyncFrustrationMarkers(ctx, tx, d.usageOnlyStorage()); err != nil {
+		return nil, fmt.Errorf("copying frustration markers: %w", err)
+	}
 	if err := retainConversationTombstonesTx(ctx, tx); err != nil {
 		return nil, fmt.Errorf("retaining conversation tombstones: %w", err)
 	}
@@ -295,6 +282,36 @@ func (d *DB) CopyOrphanedDataFromExcluding(
 	}
 
 	return ids, nil
+}
+
+func copyResyncFrustrationMarkers(ctx context.Context, tx *sql.Tx, usageOnly bool) error {
+	if usageOnly || !oldDBHasTable(ctx, tx, "session_frustration_markers") {
+		return nil
+	}
+	// Reparsed sessions were reconciled above. For copied orphans, compare
+	// prompts after sanitization and projection before reusing their counts.
+	_, err := tx.ExecContext(ctx, `INSERT OR IGNORE INTO main.session_frustration_markers
+		(session_id, transcript_key, marker_version, count)
+		SELECT current.id, current.transcript_revision || '|' || current.created_at,
+			markers.marker_version, markers.count
+		FROM main.sessions current
+		LEFT JOIN _orphaned_ids orphan ON orphan.id = current.id
+		JOIN old_db.sessions old ON old.id = COALESCE(orphan.source_id, current.id)
+		JOIN old_db.session_frustration_markers markers ON markers.session_id = old.id
+		WHERE current.transcript_revision = old.transcript_revision
+			AND markers.transcript_key = old.transcript_revision || '|' || old.created_at
+			AND current.deleted_at IS NULL
+			AND (orphan.id IS NULL OR (
+				NOT EXISTS (SELECT ordinal, content FROM old_db.messages
+					WHERE session_id = old.id AND role = 'user' AND source_subtype <> 'tool_result' AND is_system = 0
+					EXCEPT SELECT ordinal, content FROM main.messages
+					WHERE session_id = current.id AND role = 'user' AND source_subtype <> 'tool_result' AND is_system = 0)
+				AND NOT EXISTS (SELECT ordinal, content FROM main.messages
+					WHERE session_id = current.id AND role = 'user' AND source_subtype <> 'tool_result' AND is_system = 0
+					EXCEPT SELECT ordinal, content FROM old_db.messages
+					WHERE session_id = old.id AND role = 'user' AND source_subtype <> 'tool_result' AND is_system = 0)
+			))`)
+	return err
 }
 
 // CopyTrashedDataFrom copies soft-deleted sessions and their
