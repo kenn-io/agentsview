@@ -128,8 +128,10 @@ func TestRequestArchivePreservesEmptyDeltaSelection(t *testing.T) {
 	t.Cleanup(server.Close)
 
 	source := HTTPSource{URL: server.URL, Client: server.Client()}
-	targets := TargetSet{Dirs: map[parser.AgentType][]string{parser.AgentCodex: {"/storage/live", "/home/codex/archived_sessions"}},
-		CodexHomeRoots: map[string]CodexHomeRoots{"/home/codex": {Sessions: "/storage/live", ArchivedSessions: "/home/codex/archived_sessions"}}}
+	targets := TargetSet{
+		Dirs:           map[parser.AgentType][]string{parser.AgentCodex: {"/storage/live", "/home/codex/archived_sessions"}},
+		CodexHomeRoots: map[string]CodexHomeRoots{"/home/codex": {Sessions: "/storage/live", ArchivedSessions: "/home/codex/archived_sessions"}},
+	}
 	supported, err := source.Manifest(t.Context(), targets, func(ManifestEntry) error { return nil })
 	require.NoError(t, err)
 	assert.True(t, supported)
