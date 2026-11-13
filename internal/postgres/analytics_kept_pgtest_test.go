@@ -55,7 +55,13 @@ func TestAnalyticsKeptPushAndSelection(t *testing.T) {
 	velocity, err := store.GetAnalyticsVelocity(ctx, f)
 	require.NoError(t, err)
 	require.Equal(t, float64(60), velocity.Overall.FirstResponseSec.P50)
+	terms := []db.TrendTermInput{{Term: "answer", Variants: []string{"answer"}, Matchers: []string{"answer"}}}
+	trends, err := store.GetTrendsTerms(ctx, f, terms, "week")
+	require.NoError(t, err)
+	require.Equal(t, 1, trends.Series[0].Total)
 	reads := counter.count()
+	_, err = store.GetTrendsTerms(ctx, f, terms, "week")
+	require.NoError(t, err)
 	toolsAgain, err := store.GetAnalyticsTools(ctx, f)
 	require.NoError(t, err)
 	velocityAgain, err := store.GetAnalyticsVelocity(ctx, f)
@@ -96,7 +102,10 @@ func TestAnalyticsKeptPushAndSelection(t *testing.T) {
 		assert.Len(t, selectedVelocity.ByAgent, selection.wantCalls)
 		assert.Greater(t, counter.count(), reads)
 	}
-	write("Grep", "a longer answer")
+	write("Grep", "a longer reply")
+	trends, err = store.GetTrendsTerms(ctx, f, terms, "week")
+	require.NoError(t, err)
+	require.Zero(t, trends.Series[0].Total)
 	changed, err := store.GetAnalyticsTools(ctx, f)
 	require.NoError(t, err)
 	assert.Equal(t, "Grep", changed.ByTool[0].ToolName)
@@ -229,7 +238,7 @@ func TestAnalyticsKeptActiveSincePreservesStableSelections(t *testing.T) {
 }
 
 func TestAnalyticsKeptBypasses(t *testing.T) {
-	for _, mode := range []string{"active", "hosted", "borrowed", "no journal"} {
+	for _, mode := range []string{"active", "active since", "local", "hosted", "borrowed", "no journal"} {
 		t.Run(mode, func(t *testing.T) {
 			local, syncer, store := newUsageJournalFixture(t)
 			pgKeptSession(t, local, "session", "project", "2026-06-14")
@@ -238,6 +247,10 @@ func TestAnalyticsKeptBypasses(t *testing.T) {
 			switch mode {
 			case "active":
 				f.Termination = "active"
+			case "active since":
+				f.ActiveSince = "2026-06-14T00:00:00Z"
+			case "local":
+				f.Timezone = "Local"
 			case "hosted":
 				store.hostedRelations = true
 			case "borrowed":
@@ -252,7 +265,9 @@ func TestAnalyticsKeptBypasses(t *testing.T) {
 			counter := &analyticsReadCounter{storeExecutor: store.pg}
 			store.pg = counter
 			read := func() {
-				_, err := store.GetAnalyticsTools(t.Context(), f)
+				_, err := store.GetTrendsTerms(t.Context(), f, []db.TrendTermInput{{Term: "prompt", Matchers: []string{"prompt"}}}, "week")
+				require.NoError(t, err)
+				_, err = store.GetAnalyticsTools(t.Context(), f)
 				require.NoError(t, err)
 				_, err = store.GetAnalyticsVelocity(t.Context(), f)
 				require.NoError(t, err)

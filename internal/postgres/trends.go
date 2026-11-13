@@ -18,6 +18,12 @@ func (s *Store) GetTrendsTerms(
 	if granularity == "" {
 		granularity = "week"
 	}
+	return keptAnalytics(ctx, s, "trends|"+db.TrendsKeptVariant(terms, granularity), f, func(ctx context.Context, f db.AnalyticsFilter) (db.TrendsTermsResponse, error) {
+		return s.loadTrendsTerms(ctx, f, terms, granularity)
+	})
+}
+
+func (s *Store) loadTrendsTerms(ctx context.Context, f db.AnalyticsFilter, terms []db.TrendTermInput, granularity string) (db.TrendsTermsResponse, error) {
 	acc := db.NewTrendWorkers(ctx, f.From, f.To, granularity, terms)
 	defer func() {
 		if acc != nil {

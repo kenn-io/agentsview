@@ -7,7 +7,7 @@ import (
 )
 
 type analyticsReport interface {
-	ToolsAnalyticsResponse | VelocityResponse | SignalsAnalyticsResponse
+	ToolsAnalyticsResponse | VelocityResponse | SignalsAnalyticsResponse | TrendsTermsResponse
 }
 
 func keptAnalytics[T analyticsReport](ctx context.Context, db *DB, panel string, f AnalyticsFilter, load func(context.Context, AnalyticsFilter) (T, error)) (T, error) {

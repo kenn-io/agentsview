@@ -82,6 +82,7 @@ func TestAnalyticsKeptErrorsAreRetried(t *testing.T) {
 }
 
 type analyticsReports interface {
+	GetTrendsTerms(context.Context, db.AnalyticsFilter, []db.TrendTermInput, string) (db.TrendsTermsResponse, error)
 	GetAnalyticsSummary(context.Context, db.AnalyticsFilter) (db.AnalyticsSummary, error)
 	GetAnalyticsActivity(context.Context, db.AnalyticsFilter, string) (db.ActivityResponse, error)
 	GetAnalyticsHeatmap(context.Context, db.AnalyticsFilter, string) (db.HeatmapResponse, error)
@@ -102,6 +103,9 @@ type keptPanelCase struct {
 
 func keptPanelCases(ctx context.Context, f db.AnalyticsFilter) []keptPanelCase {
 	return []keptPanelCase{
+		{"trends", func(s analyticsReports) (any, error) {
+			return s.GetTrendsTerms(ctx, f, []db.TrendTermInput{{Term: "prompt", Variants: []string{"prompt"}, Matchers: []string{"prompt"}}}, "week")
+		}},
 		{"summary", func(s analyticsReports) (any, error) { return s.GetAnalyticsSummary(ctx, f) }},
 		{"activity-default", func(s analyticsReports) (any, error) { return s.GetAnalyticsActivity(ctx, f, "") }},
 		{"activity-day", func(s analyticsReports) (any, error) { return s.GetAnalyticsActivity(ctx, f, "day") }},
