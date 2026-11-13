@@ -140,6 +140,8 @@ func testUsagePartsPeers(t *testing.T, update string, firstOutput int) {
 		`INSERT INTO messages SELECT * REPLACE (id + 10 AS id, ordinal + 10 AS ordinal, '{}' AS token_usage, CASE WHEN claude_message_id != '' THEN claude_message_id || '-other' ELSE '' END AS claude_message_id, CASE WHEN source_uuid != '' THEN source_uuid || '-other' ELSE '' END AS source_uuid) FROM messages WHERE id IN (2, 3)`,
 		`INSERT INTO sessions SELECT * REPLACE ('session-c' AS id, 'c1' AS agentsview_push_fingerprint) FROM sessions WHERE id = 'session-b'`,
 		`INSERT INTO messages SELECT * REPLACE (23 AS id, 'session-c' AS session_id) FROM messages WHERE id = 13`,
+		`INSERT INTO sessions SELECT * REPLACE ('session-d' AS id, 'd1' AS agentsview_push_fingerprint) FROM sessions WHERE id = 'session-a'`,
+		`INSERT INTO messages SELECT * REPLACE (4 AS id, 'session-d' AS session_id, '<synthetic>' AS model) FROM messages WHERE id = 2`,
 	)
 	f := db.UsageFilter{From: "2026-01-01", To: "2026-01-01", Timezone: "UTC"}
 	store := openUsagePartsStore(t, path)
@@ -155,16 +157,25 @@ func testUsagePartsPeers(t *testing.T, update string, firstOutput int) {
 	require.NoError(t, err)
 	require.Equal(t, firstOutput, selected.Totals.OutputTokens)
 	require.NoError(t, store.Close())
+	writeUsageMirror(t, path, `UPDATE sessions SET agentsview_push_fingerprint = 'd2' WHERE id = 'session-d'`)
+	store = openUsagePartsStore(t, path)
+	var refreshed []string
+	previous := usagePartReadObserver
+	usagePartReadObserver = func(ids []string) { refreshed = append(refreshed, ids...) }
+	t.Cleanup(func() { usagePartReadObserver = previous })
+	_, err = store.GetDailyUsage(t.Context(), f)
+	require.NoError(t, err)
+	require.ElementsMatch(t, []string{"session-d"}, refreshed)
+	_, err = store.GetDailyUsage(t.Context(), filtered)
+	require.NoError(t, err)
+	require.NoError(t, store.Close())
 	writeUsageMirror(t, path,
 		`UPDATE sessions SET agentsview_push_fingerprint = 'a2' WHERE id = 'session-a'`,
 		`UPDATE messages SET token_usage = '{"output_tokens":900}' WHERE id = 2`,
 	)
 	store = openUsagePartsStore(t, path)
 	defer store.Close()
-	var refreshed []string
-	previous := usagePartReadObserver
-	usagePartReadObserver = func(ids []string) { refreshed = append(refreshed, ids...) }
-	t.Cleanup(func() { usagePartReadObserver = previous })
+	refreshed = nil
 	got, err := store.GetDailyUsage(t.Context(), f)
 	require.NoError(t, err)
 	require.ElementsMatch(t, []string{"session-a", "session-b", "session-c"}, refreshed)

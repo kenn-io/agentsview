@@ -156,7 +156,8 @@ func (s *Store) usagePartPeers(ctx context.Context) (map[string]string, error) {
 			CASE WHEN m.claude_message_id != '' THEN 'c:' || m.claude_message_id || ':' || m.claude_request_id
 			ELSE 's:' || s.agent || ':' || m.source_uuid END AS k
 		FROM messages m JOIN sessions s ON s.id = m.session_id
-		WHERE s.deleted_at IS NULL AND (m.claude_message_id != '' OR (s.agent != '' AND m.source_uuid != ''))
+		WHERE s.deleted_at IS NULL AND `+duckUsageMessageSourceEligibility+`
+		AND (m.claude_message_id != '' OR (s.agent != '' AND m.source_uuid != ''))
 	), shared AS (SELECT k FROM keys GROUP BY k HAVING COUNT(*) > 1)
 	SELECT keys.k, keys.session_id FROM keys JOIN shared USING (k) ORDER BY keys.k`)
 	if err != nil {
