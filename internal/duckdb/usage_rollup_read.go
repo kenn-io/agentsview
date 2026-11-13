@@ -380,6 +380,10 @@ func (s *Store) dailyPartsFromRollup(
 	return parts, nil
 }
 
+// usageRollupRecordsReadObserver, when set, runs after a rollup read loads
+// the pricing records and before it reads their counts.
+var usageRollupRecordsReadObserver func()
+
 // usageRollupPricingRecords returns, per session, the pricing provenance of
 // the rollup rows a read keeps, as the live path records it row by row.
 func (s *Store) usageRollupPricingRecords(
@@ -405,6 +409,9 @@ func (s *Store) usageRollupPricingRecords(
 	}
 	if err := rows.Err(); err != nil {
 		return nil, fmt.Errorf("iterating duckdb usage rollup records: %w", err)
+	}
+	if usageRollupRecordsReadObserver != nil {
+		usageRollupRecordsReadObserver()
 	}
 	where, args := plan.rollupWhere(f, "p")
 	counts, err := s.queryContext(ctx, `

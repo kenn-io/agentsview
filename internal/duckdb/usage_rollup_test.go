@@ -377,3 +377,48 @@ func TestUsageRollupPartsSurviveRestart(t *testing.T) {
 	require.Equal(t, wantDaily, gotDaily)
 	require.Equal(t, wantTop, gotTop)
 }
+
+// A mirror replacement in the middle of a rollup read sends the read to the
+// new mirror's rows, even when the new mirror's pricing counts name records
+// the old mirror did not have.
+func TestUsageRollupReadSurvivesReplacementWithNewRecords(t *testing.T) {
+	skipReopenTestOnWindows(t)
+	ctx := t.Context()
+	t.Setenv("CACHE_DIRECTORY", t.TempDir())
+	dir := t.TempDir()
+	path, next := filepath.Join(dir, "rollup.duckdb"), filepath.Join(dir, "next.duckdb")
+	local := rollupFixture(t)
+	_, err := rebuildMirror(ctx, path, local, "test-machine", storage.MirrorPushOptions{}, "test", nil)
+	require.NoError(t, err)
+	// A model without a price adds a pricing record without changing the
+	// prices the read loaded before the replacement.
+	_, err = local.WriteSessionBatchAtomic(ctx, []db.SessionBatchWrite{
+		rollupWrite(rollupSession("claude:n", "claude", "alpha", "m1", "2026-03-08T14:00:00Z"), []db.Message{
+			rollupMessage("claude:n", 0, "2026-03-08T14:05:00Z", "test-unpriced", "n1", "", out(60)),
+		}),
+	})
+	require.NoError(t, err)
+	_, err = rebuildMirror(ctx, next, local, "test-machine", storage.MirrorPushOptions{}, "test", nil)
+	require.NoError(t, err)
+
+	store := openUsagePartsStore(t, path)
+	defer store.Close()
+	previous := usageRollupRecordsReadObserver
+	t.Cleanup(func() { usageRollupRecordsReadObserver = previous })
+	swapped := false
+	usageRollupRecordsReadObserver = func() {
+		usageRollupRecordsReadObserver = nil
+		require.NoError(t, swapMirrorFile(next, path))
+		store.checkMirrorReplacement(ctx, func(err error) { require.NoError(t, err) })
+		swapped = true
+	}
+	f := db.UsageFilter{From: "2026-03-08", To: "2026-03-08", Timezone: "UTC"}
+	got, err := store.GetDailyUsage(ctx, f)
+	require.NoError(t, err)
+	require.True(t, swapped, "the read never reached the rollup's pricing records")
+	require.Len(t, got.Daily, 1)
+	require.Contains(t, got.Daily[0].ModelsUsed, "test-unpriced")
+	want, err := NewStoreFromDB(store.DB()).GetDailyUsage(ctx, f)
+	require.NoError(t, err)
+	require.Equal(t, want, got)
+}
