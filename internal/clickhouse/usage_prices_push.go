@@ -58,8 +58,16 @@ type usagePricer struct {
 	pending  []chUsagePriceModel
 }
 
+// newUsagePricer prices with the mirror's catalog. After a pricing sync it
+// takes the GenAI row from that sync instead of reading the document back.
 func (s *Sync) newUsagePricer(ctx context.Context) (*usagePricer, error) {
-	catalog, err := chLoadPricingCatalog(ctx, s.conn, nil)
+	var catalog chPricingCatalog
+	var err error
+	if s.genAI != nil {
+		catalog, err = chLoadPricingCatalogWithGenAI(ctx, s.conn, s.genAI.row)
+	} else {
+		catalog, err = chLoadPricingCatalog(ctx, s.conn, nil)
+	}
 	if err != nil {
 		return nil, err
 	}

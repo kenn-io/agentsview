@@ -2,6 +2,7 @@ package postgres
 
 import (
 	"context"
+	"crypto/sha256"
 	"database/sql"
 	"database/sql/driver"
 	"errors"
@@ -118,6 +119,14 @@ func (c *pricingProbeConn) QueryContext(
 		c.state.mu.Unlock()
 		if err != nil {
 			return nil, err
+		}
+		if strings.Contains(query, "sha256(data_json)") {
+			// PostgreSQL answers the digest query with the binary SHA-256
+			// of the stored document.
+			for i, row := range values {
+				sum := sha256.Sum256(row[3].([]byte))
+				values[i] = []driver.Value{row[0], row[1], row[2], sum[:], row[4]}
+			}
 		}
 		return &pricingProbeRows{columns: []string{
 			"version", "source_ref", "source", "data_json", "updated_at",

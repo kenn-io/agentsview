@@ -3,6 +3,7 @@ package clickhouse
 import (
 	"context"
 	"database/sql"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"strconv"
@@ -182,23 +183,71 @@ func genAIEffectivePricingRow(
 			"parsing clickhouse GenAI pricing document: %w", err,
 		)
 	}
-	var updatedAt *time.Time
-	if parsedTime, parseErr := time.Parse(
-		time.RFC3339Nano, document.UpdatedAt,
-	); parseErr == nil {
-		utc := parsedTime.UTC()
-		updatedAt = &utc
-	}
 	source := export.PricingRowSourceFetched
 	if document.Source == db.GenAIPricingSourceEmbedded {
 		source = export.PricingRowSourceEmbedded
 	}
 	return export.EffectivePricingRow{
 		GenAI: parsed.Prices, GenAIVersion: parsed.Version,
-		GenAISource: source, GenAIUpdatedAt: updatedAt,
+		GenAISource: source, GenAIUpdatedAt: genAIUpdatedAt(document.UpdatedAt),
 	}, nil
 }
 
+// genAIUpdatedAt parses a stored document's updated_at, which is empty for
+// a document that was never fetched.
+func genAIUpdatedAt(updatedAt string) *time.Time {
+	parsed, err := time.Parse(time.RFC3339Nano, updatedAt)
+	if err != nil {
+		return nil
+	}
+	utc := parsed.UTC()
+	return &utc
+}
+
+// loadGenAIPricingState reads the mirror's GenAI pricing document without
+// its data, which a push compares by digest instead of transferring.
+func loadGenAIPricingState(
+	ctx context.Context, q genAIPricingQuerier,
+) (*db.GenAIPricingState, error) {
+	var state db.GenAIPricingState
+	// SHA256 returns the raw 32-byte digest; encoding it here sends half the
+	// bytes a hex string would.
+	var digest string
+	err := q.QueryRowContext(ctx, `
+		SELECT version, source_ref, source, SHA256(data_json), updated_at
+		FROM genai_pricing WHERE singleton = 1`).Scan(
+		&state.Version, &state.SourceRef, &state.Source,
+		&digest, &state.UpdatedAt,
+	)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, fmt.Errorf("reading clickhouse GenAI pricing state: %w", err)
+	}
+	state.DataSHA256 = hex.EncodeToString([]byte(digest))
+	return &state, nil
+}
+
+// genAIPricingKey identifies a GenAI pricing document's content and
+// provenance: what its parsed pricing row depends on, apart from the
+// observation time.
+type genAIPricingKey struct {
+	version, sourceRef, source, dataSHA256 string
+}
+
+// genAIPricingCache is the parsed pricing row of the GenAI document the
+// mirror held when this Sync last checked it.
+type genAIPricingCache struct {
+	key genAIPricingKey
+	row export.EffectivePricingRow
+}
+
+// syncGenAIPricing makes the mirror hold the archive's GenAI pricing
+// document and records its parsed row for the push's pricer. The pricer
+// must resolve exactly as a reader of the mirror would, because the pricing
+// digest keys the stored price records, so the row is parsed from the
+// document the mirror now holds, with the mirror's observation time.
 func (s *Sync) syncGenAIPricing(ctx context.Context) error {
 	document, err := s.local.GetGenAIPricing(ctx)
 	if err != nil {
@@ -208,13 +257,42 @@ func (s *Sync) syncGenAIPricing(ctx context.Context) error {
 		embedded := db.EmbeddedGenAIPricingDocument()
 		document = &embedded
 	}
-	existing, err := loadGenAIPricing(ctx, s.conn)
+	existing, err := loadGenAIPricingState(ctx, s.conn)
 	if err != nil {
 		return err
 	}
-	if db.GenAIPricingDocumentsEqual(existing, document) {
-		return nil
+	if existing == nil || !existing.Matches(document) {
+		if err := s.writeGenAIPricing(ctx, document); err != nil {
+			return err
+		}
+		// Another host whose clock runs ahead may have written a different
+		// document with a higher push_version, which the mirror keeps over
+		// this write. Check what it kept before pricing with it.
+		existing, err = loadGenAIPricingState(ctx, s.conn)
+		if err != nil {
+			return err
+		}
+		if existing == nil || !existing.Matches(document) {
+			retained, err := loadGenAIPricing(ctx, s.conn)
+			if err != nil {
+				return err
+			}
+			if retained == nil {
+				return errors.New(
+					"clickhouse genai_pricing has no document after writing one",
+				)
+			}
+			return s.cacheGenAIPricing(retained)
+		}
 	}
+	stored := *document
+	stored.UpdatedAt = existing.UpdatedAt
+	return s.cacheGenAIPricing(&stored)
+}
+
+func (s *Sync) writeGenAIPricing(
+	ctx context.Context, document *db.GenAIPricingDocument,
+) error {
 	version := newPushVersion()
 	row := [][]any{{
 		int64(1),
@@ -234,6 +312,26 @@ func (s *Sync) syncGenAIPricing(ctx context.Context) error {
 	); err != nil {
 		return fmt.Errorf("deleting older clickhouse genai_pricing rows: %w", err)
 	}
+	return nil
+}
+
+// cacheGenAIPricing records the parsed row of the document the mirror
+// holds, parsing it only when its content or provenance changed since this
+// Sync last parsed one.
+func (s *Sync) cacheGenAIPricing(document *db.GenAIPricingDocument) error {
+	key := genAIPricingKey{
+		version: document.Version, sourceRef: document.SourceRef,
+		source: document.Source, dataSHA256: db.GenAIPricingDataSHA256(document.Data),
+	}
+	if s.genAI != nil && s.genAI.key == key {
+		s.genAI.row.GenAIUpdatedAt = genAIUpdatedAt(document.UpdatedAt)
+		return nil
+	}
+	row, err := genAIEffectivePricingRow(document)
+	if err != nil {
+		return err
+	}
+	s.genAI = &genAIPricingCache{key: key, row: row}
 	return nil
 }
 
