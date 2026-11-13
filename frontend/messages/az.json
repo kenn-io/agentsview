@@ -2114,6 +2114,7 @@
   "appearance_chart_palette_matplotlib": "Matplotlib",
   "appearance_chart_palette_colorblind": "Rəng korluğu üçün təhlükəsiz",
   "appearance_message_layout": "Mesaj düzülüşü",
+  "appearance_always_show_year": "İli həmişə göstər",
   "appearance_reading_width": "Oxuma eni",
   "appearance_reading_width_default": "Standart",
   "appearance_reading_width_wider": "Daha geniş",

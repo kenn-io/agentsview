@@ -1,8 +1,11 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test";
+import { ui } from "../stores/ui.svelte.js";
 import { setLocale } from "../i18n/index.js";
 import { testMoney } from "../test/money.js";
 import {
   formatRelativeTime,
+  formatTimestamp,
+  formatFullTimestamp,
   sanitizeSnippet,
   highlightTerms,
   _resetNonceCounter,
@@ -19,7 +22,27 @@ describe("formatRelativeTime", () => {
 
   afterEach(() => {
     vi.useRealTimers();
+    ui.alwaysShowYear = false;
     setLocale("en");
+  });
+
+  it("shows years on request while preserving relative dates", () => {
+    vi.setSystemTime(new Date("2026-11-13T12:00:00Z"));
+    ui.alwaysShowYear = true;
+    for (const year of ["2024", "2025", "2026"]) {
+      const date = `${year}-11-01T12:00:00Z`;
+      expect(formatRelativeTime(date)).toContain(year);
+      expect(formatTimestamp(date)).toContain(year);
+    }
+    expect(formatRelativeTime("2026-11-12T12:00:00Z")).toBe("1d ago");
+    expect(formatFullTimestamp("2024-11-11T12:00:00Z")).toContain("2024");
+    expect(formatFullTimestamp(null)).toBe("—");
+    ui.alwaysShowYear = false;
+    expect(formatRelativeTime("2024-11-11T12:00:00Z")).not.toContain("2024");
+    expect(formatTimestamp("2024-11-11T12:00:00Z")).not.toContain("2024");
+    setLocale("zh-CN");
+    ui.alwaysShowYear = true;
+    expect(formatTimestamp("2024-11-11T12:00:00Z")).toContain("2024");
   });
 
   it.each([

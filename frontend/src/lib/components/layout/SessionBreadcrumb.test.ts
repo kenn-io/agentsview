@@ -394,9 +394,22 @@ afterEach(() => {
   document.body.innerHTML = "";
   ui.sidebarOpen = true;
   ui.isMobileViewport = false;
+  ui.alwaysShowYear = false;
 });
 
 describe("SessionBreadcrumb", () => {
+  it("updates the session date when the year setting changes", async () => {
+    mount(SessionBreadcrumb, {
+      target: document.body,
+      props: { session: makeSession("claude"), onBack: () => {} },
+    });
+    await tick();
+    expect(document.querySelector(".session-time")?.textContent).not.toContain("2026");
+    ui.toggleAlwaysShowYear();
+    await tick();
+    expect(document.querySelector(".session-time")?.textContent).toContain("2026");
+  });
+
   it("places the desktop expand control to the left of the relocated filter", async () => {
     ui.sidebarOpen = false;
 

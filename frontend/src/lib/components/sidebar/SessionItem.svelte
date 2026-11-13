@@ -8,7 +8,7 @@
     readProgress,
   } from "../../stores/read-progress.svelte.js";
   import { starred } from "../../stores/starred.svelte.js";
-  import { formatCount, formatRelativeTime } from "../../utils/format.js";
+  import { formatCount, formatFullTimestamp, formatRelativeTime } from "../../utils/format.js";
   import { sessionMachineDisplay } from "../../utils/machines.js";
   import { agentInk as getAgentInk, agentLabel, entrypointBadge } from "../../utils/agents.js";
   import {
@@ -494,7 +494,7 @@
             {/if}
           </div>
           {#if !compact}
-            <span class="session-time">{timeStr}</span>
+            <span class="session-time" title={formatFullTimestamp(session.ended_at ?? session.started_at)}>{timeStr}</span>
           {/if}
         </div>
         {#if starred.errors[session.id]}<p role="alert">{starred.errors[session.id]}</p>{/if}
@@ -503,7 +503,7 @@
             <span class="session-project" title={session.project}>{session.project}</span>
           {/if}
           {#if compact}
-            <span class="session-time">{timeStr}</span>
+            <span class="session-time" title={formatFullTimestamp(session.ended_at ?? session.started_at)}>{timeStr}</span>
           {/if}
           {#if hasUnread}
             <span

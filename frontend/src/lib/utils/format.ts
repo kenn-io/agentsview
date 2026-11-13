@@ -1,4 +1,5 @@
 import { formatCount as kitFormatCount } from "@kenn-io/kit-ui/utils/format";
+import { ui } from "../stores/ui.svelte.js";
 import { formatDateTime, getLocale, m } from "../i18n/index.js";
 export { formatMoney as formatCost } from "../money.js";
 
@@ -48,6 +49,7 @@ export function formatRelativeTime(isoString: string | null | undefined): string
   }
 
   return formatDateTime(date, {
+    year: ui.alwaysShowYear ? "numeric" : undefined,
     month: "short",
     day: "numeric",
   });
@@ -58,11 +60,17 @@ export function formatTimestamp(isoString: string | null | undefined): string {
   if (!isoString) return "—";
   const d = new Date(isoString);
   return formatDateTime(d, {
+    year: ui.alwaysShowYear ? "numeric" : undefined,
     month: "short",
     day: "numeric",
     hour: "2-digit",
     minute: "2-digit",
   });
+}
+
+export function formatFullTimestamp(isoString: string | null | undefined): string {
+  if (!isoString) return "—";
+  return formatDateTime(new Date(isoString), { dateStyle: "medium", timeStyle: "short" });
 }
 
 /** Formats an agent name for display */

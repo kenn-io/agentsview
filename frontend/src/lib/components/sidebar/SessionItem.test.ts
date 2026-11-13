@@ -55,6 +55,11 @@ describe("SessionItem identity", () => {
     flushSync();
   }
 
+  it.each([false, true])("shows the full date on hover in compact=%s", (compact) => {
+    mountSession({ ended_at: "2024-06-01T12:00:00Z" }, { compact });
+    expect(document.querySelector<HTMLElement>(".session-time")?.title).toContain("2024");
+  });
+
   it("updates a mounted row when its title arrives", () => {
     mountSession({ first_message: null, is_index_only: true });
     const row = document.querySelector(".session-item");

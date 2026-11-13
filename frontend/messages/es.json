@@ -2129,6 +2129,7 @@
   "appearance_chart_palette_matplotlib": "Matplotlib",
   "appearance_chart_palette_colorblind": "Apto para daltonismo",
   "appearance_message_layout": "Diseño de mensajes",
+  "appearance_always_show_year": "Mostrar siempre el año",
   "appearance_reading_width": "Ancho de lectura",
   "appearance_reading_width_default": "Predeterminado",
   "appearance_reading_width_wider": "Más ancho",

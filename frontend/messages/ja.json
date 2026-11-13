@@ -2096,6 +2096,7 @@
   "appearance_chart_palette_matplotlib": "Matplotlib",
   "appearance_chart_palette_colorblind": "色覚サポート",
   "appearance_message_layout": "メッセージのレイアウト",
+  "appearance_always_show_year": "常に年を表示",
   "appearance_reading_width": "本文の幅",
   "appearance_reading_width_default": "デフォルト",
   "appearance_reading_width_wider": "広め",
