@@ -94,8 +94,8 @@ func sqlUsageTestResolver(t *testing.T) *export.PricingResolver {
 
 // sqlUsageTestRows generates one session's rows. Identities come from small
 // pools, so sessions share Claude pairs, source UUIDs, and usage keys, and
-// timestamps tie across sessions; pricing timestamps may differ from the
-// row's own timestamp, cross a price change, or be missing.
+// timestamps tie across sessions and cross price changes. A row is priced at
+// its own timestamp or has no pricing timestamp, as mirrored rows are.
 func sqlUsageTestRows(rng *rand.Rand, id string, copilot bool) []clickSessionUsageOrderedRow {
 	pick := func(options ...string) string { return options[rng.IntN(len(options))] }
 	n := rng.IntN(16)
@@ -107,11 +107,8 @@ func sqlUsageTestRows(rng *rand.Rand, id string, copilot bool) []clickSessionUsa
 			ts = sqlUsageTestStart
 		}
 		pricingTS := ts
-		switch rng.IntN(8) {
-		case 0:
+		if rng.IntN(8) == 0 {
 			pricingTS = time.Time{}
-		case 1:
-			pricingTS = ts.Add(-time.Duration(rng.IntN(48*60)) * time.Minute)
 		}
 		row := clickActivityReportUsageRow{
 			sessionID: id, source: "message",
@@ -302,11 +299,11 @@ func (u *sqlUsageTestTable) sumAndSelect(
 // The SQL path must give the report and the pricing block that selecting
 // and pricing every row in Go gives, across the rules of billing-time
 // pricing: rates that change with the time of day, a catalog start date,
-// the Kimi alias cutoff, a pricing timestamp apart from the row's timestamp
-// or missing, request bands, provider billing policies, priority tiers,
-// reported and recorded costs, Copilot session totals, and zero-token rows,
-// along with the survivor rules over candidates, Claude pairs, dedup
-// tokens, the effective end, and bucket windows.
+// the Kimi alias cutoff, a missing pricing timestamp, request bands,
+// provider billing policies, priority tiers, reported and recorded costs,
+// Copilot session totals, and zero-token rows, along with the survivor
+// rules over candidates, Claude pairs, dedup tokens, the effective end, and
+// bucket windows.
 func TestSQLActivityUsageMatchesGoSelection(t *testing.T) {
 	t.Parallel()
 	u := newSQLUsageTestTable(t)

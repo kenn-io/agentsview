@@ -59,6 +59,11 @@ type UsageRateSchedule struct {
 // usage without a timestamp. A segment starts at the range start and at
 // every instant the resolver says a price can change; adjacent segments
 // that resolve alike merge.
+//
+// A usage row's pricing timestamp is its own timestamp or missing, so a
+// report over [startUS, endUS) prices no row outside the span. The first
+// segment would price an earlier timestamp at the rate in effect at
+// startUS.
 func BuildUsageRateSchedule(
 	pricing *export.PricingResolver, keys []UsageRateKey, startUS, endUS int64,
 ) UsageRateSchedule {
