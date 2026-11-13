@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"testing"
+	"time"
 
 	"github.com/mattn/go-sqlite3"
 	"github.com/stretchr/testify/assert"
@@ -407,4 +408,30 @@ func TestSignalsFrustrationFailedStoreRetriesOnEvidence(t *testing.T) {
 	assert.Equal(t, 1, evidence.Sessions[0].SignalTotal)
 	require.NoError(t, d.getReader().QueryRowContext(ctx, `SELECT count FROM session_frustration_markers WHERE session_id = 'session'`).Scan(&count))
 	assert.Equal(t, 1, count)
+}
+
+func TestSignalsFrustrationCanceledWhileSaving(t *testing.T) {
+	d := testDB(t)
+	insertSession(t, d, "session", "test")
+	require.NoError(t, d.InsertMessages(t.Context(), []Message{{SessionID: "session", Role: "user", Content: "this is broken"}}))
+	require.NoError(t, d.UpdateSessionSignals(t.Context(), "session", SessionSignalUpdate{QualitySignals: QualitySignals{Version: CurrentQualitySignalVersion}}))
+
+	writer := d.rawWriter()
+	conn, err := writer.Conn(t.Context())
+	require.NoError(t, err)
+	defer conn.Close()
+	waits := writer.Stats().WaitCount
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+	done := make(chan error, 1)
+	go func() {
+		_, err := d.analyticsSignals(ctx, AnalyticsFilter{})
+		done <- err
+	}()
+	waiting := assert.Eventually(t, func() bool { return writer.Stats().WaitCount > waits }, 2*time.Second, time.Millisecond)
+	cancel()
+	err = <-done
+	if waiting {
+		assert.ErrorIs(t, err, context.Canceled)
+	}
 }
