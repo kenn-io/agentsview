@@ -469,7 +469,7 @@ func TestSweepStaleMirrorReopenAliasesHandlesGlobMetacharactersInDirectory(t *te
 }
 
 // A replacement check waits for an earlier check before inspecting the mirror.
-func TestConcurrentMirrorChecksKeepNewestPublication(t *testing.T) {
+func TestMirrorCheckReadsPublicationAfterPreviousCheck(t *testing.T) {
 	skipReopenTestOnWindows(t)
 	dir := t.TempDir()
 	path := filepath.Join(dir, "mirror.duckdb")
@@ -482,11 +482,11 @@ func TestConcurrentMirrorChecksKeepNewestPublication(t *testing.T) {
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, store.Close()) })
 	require.NoError(t, swapMirrorFile(older, path))
-	store.replacementMu.Lock()
+	store.replacement <- struct{}{}
 	held := true
 	defer func() {
 		if held {
-			store.replacementMu.Unlock()
+			<-store.replacement
 		}
 	}()
 	started := make(chan struct{})
@@ -503,10 +503,40 @@ func TestConcurrentMirrorChecksKeepNewestPublication(t *testing.T) {
 	case <-time.After(time.Second): //nolint:kennlint // deadlinetest: the held lock prevents the replacement check from finishing.
 	}
 	require.NoError(t, swapMirrorFile(newer, path))
-	store.replacementMu.Unlock()
+	<-store.replacement
 	held = false
 	<-done
 	require.Equal(t, []string{"newer"}, listMirrorSessionIDs(t, store))
 	require.NoError(t, store.Close())
 	require.Zero(t, countReopenAliasFiles(t, dir))
+}
+
+func TestTrendsCancellationWhileMirrorCheckWaits(t *testing.T) {
+	skipReopenTestOnWindows(t)
+	path := filepath.Join(t.TempDir(), "mirror.duckdb")
+	buildMirrorFixture(t, path, "first")
+	store, err := NewStore(t.Context(), path)
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, store.Close()) })
+	store.replacement <- struct{}{}
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+	started := make(chan struct{})
+	done := make(chan error, 1)
+	go func() {
+		close(started)
+		_, err := store.GetTrendsTerms(ctx, db.AnalyticsFilter{From: "2026-01-01", To: "2026-01-02", Timezone: "UTC"}, []db.TrendTermInput{{Term: "first", Matchers: []string{"first"}}}, "day")
+		done <- err
+	}()
+	<-started
+	cancel()
+	select {
+	case err := <-done:
+		<-store.replacement
+		require.ErrorIs(t, err, context.Canceled)
+	case <-time.After(time.Second): //nolint:kennlint // deadlinetest: a canceled request must return while the check is held.
+		<-store.replacement
+		<-done
+		t.Fatal("canceled Trends request waited for mirror replacement")
+	}
 }
