@@ -125,13 +125,12 @@ func Materialize(ctx context.Context, cfg config.Config, database *db.DB, sessio
 	} else {
 		files, source, err = readConfiguredLocal(ctx, cfg, session, source, id)
 		if errors.Is(err, errSourceUnavailable) {
-			var found bool
-			found, err = archivesource.HasRetainedSession(ctx, cfg, database, session, "claude", id)
-			if err == nil && found {
-				files, source, err = readRetainedSource(ctx, cfg, database, session, nil, id)
-			} else if err == nil {
-				err = errSourceUnavailable
+			if found, err := archivesource.HasRetainedSession(ctx, cfg, database, session, "claude", id); err != nil {
+				return Result{}, fmt.Errorf("reading native transcript: %w", err)
+			} else if !found {
+				return Result{}, fmt.Errorf("reading native transcript: %w", errSourceUnavailable)
 			}
+			files, source, err = readRetainedSource(ctx, cfg, database, session, nil, id)
 		}
 	}
 	if err != nil {
