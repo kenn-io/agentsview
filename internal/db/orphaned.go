@@ -232,8 +232,25 @@ func (d *DB) CopyOrphanedDataFromExcluding(
 	}
 	defer func() { _ = tx.Rollback() }()
 
-	if err := reconcileTranscriptRevisionsTx(ctx, tx); err != nil {
+	reconciled, err := reconcileTranscriptRevisionsTx(ctx, tx)
+	if err != nil {
 		return nil, fmt.Errorf("reconciling transcript revisions: %w", err)
+	}
+	// At this point only reparsed sessions and previously copied trash exist.
+	// Orphans may change during sanitization, so copy counts before they arrive.
+	if reconciled && !d.usageOnlyStorage() && oldDBHasTable(ctx, tx, "session_frustration_markers") {
+		if _, err := tx.ExecContext(ctx, `INSERT OR IGNORE INTO main.session_frustration_markers
+			(session_id, transcript_key, marker_version, count)
+			SELECT current.id, current.transcript_revision || '|' || current.created_at,
+				markers.marker_version, markers.count
+			FROM main.sessions current
+			JOIN old_db.sessions old ON old.id = current.id
+			JOIN old_db.session_frustration_markers markers ON markers.session_id = old.id
+			WHERE current.transcript_revision = old.transcript_revision
+				AND markers.transcript_key = old.transcript_revision || '|' || old.created_at
+				AND current.deleted_at IS NULL`); err != nil {
+			return nil, fmt.Errorf("copying frustration markers: %w", err)
+		}
 	}
 	if err := reconcileConversationResyncTx(ctx, tx, d.usageOnlyStorage()); err != nil {
 		return nil, fmt.Errorf("reconciling conversation identities: %w", err)
@@ -2231,11 +2248,12 @@ func orphanSessionCols(ctx context.Context, tx *sql.Tx) string {
 // The comparison covers the same persisted transcript identity used by the
 // incremental message-diff path, including usage and provider dedup identities.
 // Session metadata and parser-only source bookkeeping remain excluded.
+// The boolean reports whether the source schema allowed reconciliation.
 func reconcileTranscriptRevisionsTx(
 	ctx context.Context, tx *sql.Tx,
-) error {
+) (bool, error) {
 	if !oldDBHasColumn(ctx, tx, "sessions", "transcript_revision") {
-		return nil
+		return false, nil
 	}
 	for table, columns := range map[string][]string{
 		"messages": {
@@ -2254,11 +2272,11 @@ func reconcileTranscriptRevisionsTx(
 		},
 	} {
 		if !oldDBHasTable(ctx, tx, table) {
-			return nil
+			return false, nil
 		}
 		for _, column := range columns {
 			if !oldDBHasColumn(ctx, tx, table, column) {
-				return nil
+				return false, nil
 			}
 		}
 	}
@@ -2366,7 +2384,7 @@ func reconcileTranscriptRevisionsTx(
 		WHERE EXISTS (
 			SELECT 1 FROM old_db.sessions AS old WHERE old.id = current.id
 		)`, oldReasoningEffort, oldReasoningEffort))
-	return err
+	return err == nil, err
 }
 
 func copySessionDataForIDs(

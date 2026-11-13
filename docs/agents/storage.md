@@ -436,7 +436,8 @@ frustration count with a key combining its transcript revision and creation
 time. Its marker version tracks the frustration matcher independently of the
 quality signal version. Signals reuses a row only when both the key and marker
 version match; a changed transcript is counted on the next read. A full resync
-rebuilds the archive, so the next Signals read counts every session again.
+carries matching counts for unchanged reparsed sessions. Changed sessions and
+copied orphans are counted on the next read.
 Read-only archives reuse matching rows when the table exists; older archives
 without it scan prompts. Under the usage-only policy, Signals counts retained
 prompts but does not save new counts. The rows stay local and are not mirrored.

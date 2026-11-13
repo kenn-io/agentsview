@@ -709,7 +709,7 @@ peaks near 290 MiB, with the same per-session counts.
 - Computing frustration counts eagerly on message writes as part of quality
   signals. That would recompute every session's signals and republish every
   replica for a count ClickHouse can compute on demand. SQLite instead saves
-  counts on read with an independent marker version.
+  counts lazily on read, keyed by transcript revision and marker version.
 - Porting all of `IsFrustrationMarker` to ClickHouse SQL. Unicode letters,
   spaces, and case folding differ between Go and ClickHouse, so only prompts in
   the shared alphabet above are judged in SQL.
@@ -726,8 +726,9 @@ PostgreSQL judge plain prompts in SQL as well; see
 without a current stored count to `IsFrustrationMarker`. PostgreSQL, DuckDB,
 and ClickHouse send the prompts they cannot judge in SQL. SQLite stores each
 count with its transcript key, so later visits after a restart reuse unchanged
-counts. The first visit after upgrading or a full resync counts each session
-once; later visits recount only changed sessions. The function strips code
+counts. The first visit after upgrading counts each session once. Full resync
+keeps matching counts for unchanged reparsed sessions; changed sessions and
+copied orphans are counted on the next read. The function strips code
 fences once. One pass then builds the normalized prompt and counts the
 capitalized words, and another finds the first phrase literal. The regular
 expression starts one byte before that literal, because no match can begin

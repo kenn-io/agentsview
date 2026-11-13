@@ -10,7 +10,82 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"go.kenn.io/agentsview/internal/config"
 )
+
+func TestCopyReparsedFrustrationCounts(t *testing.T) {
+	ctx := t.Context()
+	source := testDB(t)
+	for _, id := range []string{"unchanged", "changed", "stale", "orphan", "trashed", "trashed-clean"} {
+		insertSession(t, source, id, "project")
+		require.NoError(t, source.InsertMessages(ctx, []Message{{SessionID: id, Role: "user", Content: "this is broken"}}))
+		require.NoError(t, source.UpdateSessionSignals(ctx, id, SessionSignalUpdate{QualitySignals: QualitySignals{Version: CurrentQualitySignalVersion}}))
+	}
+	_, err := source.getWriter().ExecContext(ctx, `UPDATE messages SET content = ? WHERE session_id IN ('orphan', 'trashed')`, "this is brok\xffen")
+	require.NoError(t, err)
+	_, err = source.getWriter().ExecContext(ctx, `UPDATE sessions SET transcript_revision = '7', created_at = '2020-01-01T00:00:00Z'`)
+	require.NoError(t, err)
+	rows, err := source.signalRows(ctx, AnalyticsFilter{})
+	require.NoError(t, err)
+	require.NoError(t, source.populateFrustrationMarkers(ctx, rows))
+	var orphanCount int
+	require.NoError(t, source.getReader().QueryRowContext(ctx, `SELECT count FROM session_frustration_markers WHERE session_id = 'orphan'`).Scan(&orphanCount))
+	require.Zero(t, orphanCount)
+	require.NoError(t, source.SoftDeleteSession(ctx, "trashed"))
+	require.NoError(t, source.SoftDeleteSession(ctx, "trashed-clean"))
+	_, err = source.getWriter().ExecContext(ctx, `UPDATE session_frustration_markers SET transcript_key = 'stale' WHERE session_id = 'stale'`)
+	require.NoError(t, err)
+	_, err = source.getWriter().ExecContext(ctx, fmt.Sprintf(`PRAGMA user_version = %d`, sanitizedSourceDataVersion-1))
+	require.NoError(t, err)
+
+	destination := testDB(t)
+	for _, id := range []string{"unchanged", "changed", "stale"} {
+		insertSession(t, destination, id, "project")
+		content := "this is broken"
+		if id == "changed" {
+			content = "please explain this"
+		}
+		require.NoError(t, destination.InsertMessages(ctx, []Message{{SessionID: id, Role: "user", Content: content}}))
+		require.NoError(t, destination.UpdateSessionSignals(ctx, id, SessionSignalUpdate{QualitySignals: QualitySignals{Version: CurrentQualitySignalVersion}}))
+	}
+	_, err = destination.getWriter().ExecContext(ctx, `UPDATE sessions SET created_at = '2030-01-01T00:00:00Z'`)
+	require.NoError(t, err)
+	_, err = destination.CopyTrashedDataFrom(ctx, source.Path())
+	require.NoError(t, err)
+	copied, err := destination.CopyOrphanedDataFrom(ctx, source.Path())
+	require.NoError(t, err)
+	require.Equal(t, 1, copied)
+	saved, err := destination.getReader().QueryContext(ctx, `SELECT session_id, transcript_key, count FROM session_frustration_markers`)
+	require.NoError(t, err)
+	got := make(map[string]string)
+	for saved.Next() {
+		var id, key string
+		var count int
+		require.NoError(t, saved.Scan(&id, &key, &count))
+		got[id] = fmt.Sprintf("%s:%d", key, count)
+	}
+	require.NoError(t, saved.Err())
+	require.NoError(t, saved.Close())
+	assert.Equal(t, map[string]string{"unchanged": "7|2030-01-01T00:00:00Z:1"}, got)
+	resp, err := destination.GetAnalyticsSignals(ctx, AnalyticsFilter{})
+	require.NoError(t, err)
+	assert.Equal(t, 3, resp.QualityHealth.Totals.FrustrationMarkerCount)
+
+	usage := testDB(t)
+	usage.SetArchiveContent(config.ArchiveContentUsage)
+	insertSession(t, usage, "unchanged", "project")
+	_, err = usage.CopyOrphanedDataFrom(ctx, source.Path())
+	require.NoError(t, err)
+	var count int
+	require.NoError(t, usage.getReader().QueryRowContext(ctx, `SELECT count(*) FROM session_frustration_markers`).Scan(&count))
+	assert.Zero(t, count)
+	_, err = source.getWriter().ExecContext(ctx, `DROP TABLE session_frustration_markers`)
+	require.NoError(t, err)
+	legacy := testDB(t)
+	insertSession(t, legacy, "unchanged", "project")
+	_, err = legacy.CopyOrphanedDataFrom(ctx, source.Path())
+	require.NoError(t, err)
+}
 
 func TestCopyOrphanedDataCodexTrashIsNotAReparse(t *testing.T) {
 	for _, trash := range []bool{false, true} {
