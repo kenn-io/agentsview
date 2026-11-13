@@ -9,6 +9,10 @@ import (
 )
 
 func keptAnalytics[T any](ctx context.Context, s *Store, panel string, f db.AnalyticsFilter, load func(context.Context, db.AnalyticsFilter) (T, error)) (T, error) {
+	return keptAnalyticsWith(ctx, s, panel, f, s.keptUsageVersion, load)
+}
+
+func keptAnalyticsWith[T any](ctx context.Context, s *Store, panel string, f db.AnalyticsFilter, versionFor func(context.Context, string) string, load func(context.Context, db.AnalyticsFilter) (T, error)) (T, error) {
 	if f.ActiveSince != "" || f.Timezone == "Local" || db.TerminationUsesTime(f.Termination) {
 		return load(ctx, f)
 	}
@@ -17,7 +21,7 @@ func keptAnalytics[T any](ctx context.Context, s *Store, panel string, f db.Anal
 		return load(ctx, f)
 	}
 	slot := panel + "|" + string(key)
-	version := s.keptUsageVersion(ctx, slot)
+	version := versionFor(ctx, slot)
 	if version == "" {
 		return load(ctx, f)
 	}

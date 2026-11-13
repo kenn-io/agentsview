@@ -2,6 +2,7 @@ package postgres
 
 import (
 	"context"
+	"fmt"
 	"io"
 
 	"go.kenn.io/agentsview/internal/db"
@@ -91,7 +92,22 @@ func (h *HostedStore) GetAnalyticsSignals(ctx context.Context, f db.AnalyticsFil
 }
 
 func (h *HostedStore) GetTrendsTerms(ctx context.Context, f db.AnalyticsFilter, terms []db.TrendTermInput, granularity string) (db.TrendsTermsResponse, error) {
-	return h.physical.GetTrendsTerms(ctx, f, terms, granularity)
+	if granularity == "" {
+		granularity = "week"
+	}
+	version := func(ctx context.Context, _ string) string {
+		if h.readTx != nil {
+			return ""
+		}
+		r, err := h.revision(ctx)
+		if err != nil || r == (hostedRevision{}) {
+			return ""
+		}
+		return fmt.Sprintf("hosted|%d|%d|%d", r.Identity, r.Selection, r.Corpus)
+	}
+	return keptAnalyticsWith(ctx, h.physical, "trends|"+db.TrendsKeptVariant(terms, granularity), f, version, func(ctx context.Context, f db.AnalyticsFilter) (db.TrendsTermsResponse, error) {
+		return h.physical.loadTrendsTerms(ctx, f, terms, granularity)
+	})
 }
 
 func (h *HostedStore) GetDailyUsage(ctx context.Context, f db.UsageFilter) (db.DailyUsageResult, error) {

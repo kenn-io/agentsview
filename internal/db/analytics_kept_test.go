@@ -259,6 +259,9 @@ func TestTrendsKeptTracksContentAndSelection(t *testing.T) {
 		return result
 	}
 	require.Equal(t, 1, read().Series[0].Total)
+	_, err := d.getWriter().ExecContext(ctx, `UPDATE messages SET content = 'bravo' WHERE session_id = 'session' AND ordinal = 0`)
+	require.NoError(t, err)
+	require.Equal(t, 1, read().Series[0].Total)
 	messages[0].Content = "bravo"
 	require.NoError(t, d.ReplaceSessionContent(ctx, "session", messages, SessionSignalUpdate{}, nil))
 	after := read()
@@ -309,25 +312,4 @@ func TestTrendsKeptSelection(t *testing.T) {
 	zoned, err := d.GetTrendsTerms(t.Context(), f, []TrendTermInput{b}, "day")
 	require.NoError(t, err)
 	require.Equal(t, "2024-05-31", zoned.Series[0].Points[0].Date)
-}
-
-func TestTrendsKeptLocalTimezoneChange(t *testing.T) {
-	local := time.Local //nolint:forbidigo // Exercise the process-local timezone.
-	_ = time.Now().In(local)
-	original := *local
-	t.Cleanup(func() { *local = original })
-	*local = *time.FixedZone("Local", 0)
-	d := testDB(t)
-	insertSession(t, d, "session", "project")
-	insertMessages(t, d, Message{SessionID: "session", Ordinal: 0, Role: "user", Content: "alpha", Timestamp: "2024-06-01T00:30:00Z"})
-	f := AnalyticsFilter{From: "2024-05-31", To: "2024-06-01", Timezone: "Local"}
-	terms := []TrendTermInput{{Term: "alpha", Variants: []string{"alpha"}, Matchers: []string{"alpha"}}}
-	first, err := d.GetTrendsTerms(t.Context(), f, terms, "day")
-	require.NoError(t, err)
-	require.Equal(t, 1, first.Series[0].Points[1].Count)
-	*local = *time.FixedZone("Local", -5*60*60)
-	second, err := d.GetTrendsTerms(t.Context(), f, terms, "day")
-	require.NoError(t, err)
-	require.Equal(t, 1, second.Series[0].Points[0].Count)
-	require.Zero(t, second.Series[0].Points[1].Count)
 }

@@ -468,6 +468,7 @@ func TestSweepStaleMirrorReopenAliasesHandlesGlobMetacharactersInDirectory(t *te
 	assert.FileExists(t, path, "sweep must not remove the mirror file itself")
 }
 
+// Repeated real-file checks exercise overlapping publications; scheduling controls the overlap.
 func TestConcurrentMirrorChecksKeepNewestPublication(t *testing.T) {
 	skipReopenTestOnWindows(t)
 	dir := t.TempDir()
