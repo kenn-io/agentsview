@@ -128,9 +128,8 @@ func TestPiSourceLookup(t *testing.T) {
 	require.NoError(t, os.WriteFile(good, data, 0o600))
 	uncertain := filepath.Join(root, "uncertain.jsonl")
 	require.NoError(t, os.WriteFile(uncertain, []byte(strings.Repeat(" ", (1<<20)+1)), 0o600))
-	result, err = Materialize(t.Context(), cfg, s, cwd)
-	require.NoError(t, err)
-	assert.Equal(t, good, result.Source)
+	_, err = Materialize(t.Context(), cfg, s, cwd)
+	require.ErrorIs(t, err, errPiHeaderSize)
 }
 
 func TestPiSourceLookupRejectsUnreadableCandidate(t *testing.T) {
@@ -155,6 +154,25 @@ func TestPiSourceLookupRejectsUnreadableCandidate(t *testing.T) {
 	session := &db.Session{ID: "pi:target", Agent: "pi", Machine: "local", FilePath: &stale}
 	_, err = Materialize(t.Context(), cfg, session, cwd)
 	require.ErrorIs(t, err, os.ErrPermission)
+	_, err = os.Stat(filepath.Join(dest, "target.jsonl"))
+	require.ErrorIs(t, err, os.ErrNotExist)
+}
+
+func TestPiSourceLookupRejectsLargeHeaderCandidate(t *testing.T) {
+	root, dest, cwd := t.TempDir(), t.TempDir(), t.TempDir()
+	t.Setenv("PI_CODING_AGENT_SESSION_DIR", dest)
+	t.Setenv("PI_CODING_AGENT_DIR", "")
+	t.Setenv("PI_DIR", "")
+	readable := filepath.Join(root, "readable.jsonl")
+	large := filepath.Join(root, "large.jsonl")
+	require.NoError(t, os.WriteFile(readable, []byte(`{"type":"session","id":"target","cwd":"/old"}`+"\n"), 0o600))
+	header := `{"type":"session","extra":"` + strings.Repeat("a", 1<<20) + `","id":"target","cwd":"/old"}` + "\n"
+	require.NoError(t, os.WriteFile(large, []byte(header), 0o600))
+	cfg := config.Config{InstallationID: "local", LocalMachineName: "local", AgentDirs: map[parser.AgentType][]string{parser.AgentPi: {root}}}
+	stale := filepath.Join(root, "missing.jsonl")
+	session := &db.Session{ID: "pi:target", Agent: "pi", Machine: "local", FilePath: &stale}
+	_, err := Materialize(t.Context(), cfg, session, cwd)
+	require.ErrorIs(t, err, errPiHeaderSize)
 	_, err = os.Stat(filepath.Join(dest, "target.jsonl"))
 	require.ErrorIs(t, err, os.ErrNotExist)
 }
