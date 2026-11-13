@@ -86,3 +86,38 @@ func TestEnsureSchemaUpgradesOldPricingLayout(t *testing.T) {
 	}, types, "updated_at_typed is gone")
 	require.NoError(t, CheckSchemaCompat(ctx, pg))
 }
+
+// A start that dropped model_pricing's text updated_at but stopped before
+// renaming updated_at_typed must not block the next start, which moves
+// pricing metadata by reading updated_at.
+func TestEnsureSchemaFinishesInterruptedPricingTimeRename(t *testing.T) {
+	pgURL := testPGURL(t)
+	const schema = "agentsview_pricing_rename_test"
+	cleanNamedPGSchema(t, pgURL, schema)
+	t.Cleanup(func() { cleanNamedPGSchema(t, pgURL, schema) })
+	pg, err := Open(t.Context(), pgURL, schema, true)
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, pg.Close()) })
+	ctx := t.Context()
+	require.NoError(t, EnsureSchema(ctx, pg, schema))
+
+	for _, statement := range []string{
+		`ALTER TABLE model_pricing DROP COLUMN updated_at`,
+		`ALTER TABLE model_pricing ADD COLUMN updated_at_typed TIMESTAMPTZ`,
+		`INSERT INTO model_pricing (model_pattern, updated_at_typed)
+		 VALUES ('acme/model', '2026-07-01T00:00:02Z')`,
+	} {
+		_, err := pg.ExecContext(ctx, statement)
+		require.NoError(t, err, statement)
+	}
+
+	require.NoError(t, EnsureSchema(ctx, pg, schema))
+
+	var priceTime sql.NullTime
+	require.NoError(t, pg.QueryRowContext(ctx,
+		`SELECT updated_at FROM model_pricing WHERE model_pattern = 'acme/model'`,
+	).Scan(&priceTime))
+	assert.True(t, priceTime.Time.Equal(
+		time.Date(2026, 7, 1, 0, 0, 2, 0, time.UTC)), priceTime)
+	require.NoError(t, CheckSchemaCompat(ctx, pg))
+}

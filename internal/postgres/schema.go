@@ -726,12 +726,22 @@ func movePricingMetaPG(ctx context.Context, conn storeExecutor) error {
 }
 
 // migratePricingLayoutPG moves pricing metadata into pricing_meta and
-// then types the pricing times, which the metadata kept as text.
+// then types the pricing times, which the metadata kept as text. It first
+// finishes any rename an earlier start left undone, because the move reads
+// model_pricing.updated_at and a start that stopped after dropping the text
+// column leaves only updated_at_typed.
 func migratePricingLayoutPG(ctx context.Context, conn storeExecutor) error {
+	types, err := pricingTimeColumnTypesPG(ctx, conn)
+	if err != nil {
+		return err
+	}
+	if err := finishPricingTimeRenamesPG(ctx, conn, types); err != nil {
+		return err
+	}
 	if err := movePricingMetaPG(ctx, conn); err != nil {
 		return err
 	}
-	return typePricingTimesPG(ctx, conn)
+	return typePricingTimesPG(ctx, conn, types)
 }
 
 // pricingTimeTables are the pricing tables whose updated_at older stores
@@ -745,33 +755,57 @@ var pricingTimeTables = []string{
 // metadata shared model_pricing (see movePricingMetaPG). An empty time
 // becomes NULL. CockroachDB converts a column type only outside a
 // transaction and behind an experimental setting, so each table copies the
-// times into a new column instead. Every step can be repeated, so a run
-// that stops partway finishes on the next start.
-func typePricingTimesPG(ctx context.Context, conn storeExecutor) error {
-	types, err := pricingTimeColumnTypesPG(ctx, conn)
-	if err != nil {
-		return err
-	}
+// times into a new column instead. Every step can be repeated, and
+// finishPricingTimeRenamesPG completes the last one, so a run that stops
+// partway finishes on the next start. types holds the column types from
+// pricingTimeColumnTypesPG.
+func typePricingTimesPG(
+	ctx context.Context, conn storeExecutor, types map[string]map[string]string,
+) error {
 	for _, table := range pricingTimeTables {
-		columns := types[table]
-		if columns["updated_at"] == "text" {
-			for _, statement := range []string{
-				"ALTER TABLE " + table + " ADD COLUMN IF NOT EXISTS updated_at_typed TIMESTAMPTZ",
-				"UPDATE " + table + " SET updated_at_typed = NULLIF(updated_at, '')::timestamptz",
-				"ALTER TABLE " + table + " DROP COLUMN updated_at",
-			} {
-				if _, err := conn.ExecContext(ctx, statement); err != nil {
-					return fmt.Errorf("typing pg %s.updated_at: %w", table, err)
-				}
-			}
-		} else if columns["updated_at"] != "" || columns["updated_at_typed"] == "" {
+		if types[table]["updated_at"] != "text" {
 			continue
 		}
-		if _, err := conn.ExecContext(ctx,
-			"ALTER TABLE "+table+" RENAME COLUMN updated_at_typed TO updated_at",
-		); err != nil {
-			return fmt.Errorf("renaming pg %s.updated_at: %w", table, err)
+		for _, statement := range []string{
+			"ALTER TABLE " + table + " ADD COLUMN IF NOT EXISTS updated_at_typed TIMESTAMPTZ",
+			"UPDATE " + table + " SET updated_at_typed = NULLIF(updated_at, '')::timestamptz",
+			"ALTER TABLE " + table + " DROP COLUMN updated_at",
+		} {
+			if _, err := conn.ExecContext(ctx, statement); err != nil {
+				return fmt.Errorf("typing pg %s.updated_at: %w", table, err)
+			}
 		}
+		if err := renamePricingTimePG(ctx, conn, table); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// finishPricingTimeRenamesPG renames updated_at_typed to updated_at on
+// each pricing table where typePricingTimesPG dropped the text column but
+// stopped before the rename. A renamed table has no text column left, so
+// typePricingTimesPG skips it.
+func finishPricingTimeRenamesPG(
+	ctx context.Context, conn storeExecutor, types map[string]map[string]string,
+) error {
+	for _, table := range pricingTimeTables {
+		columns := types[table]
+		if columns["updated_at"] != "" || columns["updated_at_typed"] == "" {
+			continue
+		}
+		if err := renamePricingTimePG(ctx, conn, table); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func renamePricingTimePG(ctx context.Context, conn storeExecutor, table string) error {
+	if _, err := conn.ExecContext(ctx,
+		"ALTER TABLE "+table+" RENAME COLUMN updated_at_typed TO updated_at",
+	); err != nil {
+		return fmt.Errorf("renaming pg %s.updated_at: %w", table, err)
 	}
 	return nil
 }
