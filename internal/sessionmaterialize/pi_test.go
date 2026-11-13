@@ -296,7 +296,7 @@ func TestPiHeaderIdentityAndVersion(t *testing.T) {
 		{`{"type":"session","id":"id","version":4,"cwd":"/old"}`, "id", "version"},
 		{`{"type":"title"}` + "\n" + `{"type":"session","id":"id","cwd":"/old"}`, "id", "header"},
 		{`{"type":123,"id":"id"}`, "id", "header"},
-		{`{"type":"session","id":123}`, "id", "header"},
+		{`{"type":"session","id":123}`, "id", "identity"},
 		{`{"type":"session","id":"id","version":"3"}`, "id", "header"},
 		{`{"Type":"session","id":"id"}`, "id", "header"},
 		{`{"type":"session","ID":"id"}`, "id", "identity"},
@@ -315,6 +315,52 @@ func TestPiHeaderIdentityAndVersion(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestPiHeaderFilenameIdentityPreservesBytes(t *testing.T) {
+	for _, tc := range []struct{ name, field string }{
+		{"empty", `"id" : ""`},
+		{"null", `"id" : null`},
+		{"number", `"id" : 123`},
+		{"boolean", `"id" : false`},
+		{"object", `"id" : {"nested":1}`},
+		{"array", `"id" : [1,2]`},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			data := []byte("\n" + `{"type":"session", ` + tc.field + `, "cwd" : "/old", "other": [1, 2]}` + "\n" + `{"type":"message"}` + "\n")
+			got, err := relocatePiHeader(t.Context(), data, "id.jsonl", "id", "/new")
+			require.NoError(t, err)
+			assert.Equal(t, "\n"+`{"type":"session", "id" : "id", "cwd" : "/new", "other": [1, 2]}`+"\n"+`{"type":"message"}`+"\n", string(got))
+			_, err = relocatePiHeader(t.Context(), data, "other.jsonl", "id", "/new")
+			require.ErrorIs(t, err, errPiIdentity)
+		})
+	}
+	got, err := relocatePiHeader(t.Context(), []byte(`{"type":"session","cwd":"/old","id":null}`), "id.jsonl", "id", "/new")
+	require.NoError(t, err)
+	assert.Equal(t, `{"type":"session","cwd":"/new","id":"id"}`, string(got))
+	_, err = relocatePiHeader(t.Context(), []byte(`{"type":"session","id":"other","cwd":"/old"}`), "id.jsonl", "id", "/new")
+	require.ErrorIs(t, err, errPiIdentity)
+}
+
+func TestMaterializePiFilenameIdentity(t *testing.T) {
+	root, dest, cwd := t.TempDir(), t.TempDir(), t.TempDir()
+	t.Setenv("PI_CODING_AGENT_DIR", "")
+	t.Setenv("PI_CODING_AGENT_SESSION_DIR", dest)
+	t.Setenv("PI_DIR", "")
+	name := filepath.Join(root, "id.jsonl")
+	original := `{"type":"session", "id":null, "cwd":"/old"}` + "\n" + `{"type":"message"}` + "\n"
+	require.NoError(t, os.WriteFile(name, []byte(original), 0o600))
+	cfg := config.Config{InstallationID: "local", LocalMachineName: "local", AgentDirs: map[parser.AgentType][]string{parser.AgentPi: {root}}}
+	stale := filepath.Join(root, "missing.jsonl")
+	session := &db.Session{ID: "pi:id", Agent: "pi", Machine: "local", FilePath: &stale}
+	result, err := Materialize(t.Context(), cfg, session, cwd)
+	require.NoError(t, err)
+	got, err := os.ReadFile(result.Paths[0])
+	require.NoError(t, err)
+	assert.Equal(t, `{"type":"session", "id":"id", "cwd":`+string(mustJSON(t, result.Cwd))+`}`+"\n"+`{"type":"message"}`+"\n", string(got))
+	got, err = os.ReadFile(name)
+	require.NoError(t, err)
+	assert.Equal(t, original, string(got))
 }
 
 func TestPiStoredSourceWithLargeHeader(t *testing.T) {

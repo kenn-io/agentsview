@@ -3411,9 +3411,9 @@ schemas keep their existing ordering behavior.
   [session manager](https://github.com/earendil-works/pi/blob/acaa253cc8e3f159e6100b6f3874861b1f0bfc99/packages/coding-agent/src/core/session-manager.ts)
   writes files directly into an explicit session directory; default sessions
   live one encoded project directory below the session root. Agentsview
-  discovers both layouts. Materialization changes the header `cwd` and adds an
-  `id` from the filename for older headers without one, which Pi needs to load
-  the session. A long checkout uses a hash-named directory under `sessions/`;
+  discovers both layouts. Materialization changes the header `cwd` and uses an
+  `id` from the filename when the header ID is missing, empty, or not a string.
+  A long checkout uses a hash-named directory under `sessions/`;
   Pi lists it among all sessions but not in the checkout-filtered list.
   Reverified 2026-09-22 against
   [pi-subagents](https://github.com/nicobailon/pi-subagents) v0.70.1 at
@@ -3497,7 +3497,8 @@ schemas keep their existing ordering behavior.
   paths, unlike the older format pin above. Current format version is 3; the
   first parsed entry must be a session with a string ID. Blank and malformed
   lines can precede that entry, while a parsed title cannot. Pi cannot open an
-  idless legacy file until materialization inserts the filename-derived ID.
+  file with a missing or non-string ID until materialization writes the
+  filename-derived ID. It accepts an empty ID, which materialization also replaces.
   `SessionManager.open` uses the header cwd; materialization changes that value
   and resolves the checkout through symlinks. Custom IDs may contain interior dots;
   the CLI also opens renamed `.jsonl` paths using the identity in their session

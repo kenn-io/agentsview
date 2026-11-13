@@ -187,11 +187,12 @@ func piHeader(ctx context.Context, r io.Reader, name, id string, limit int64) ([
 				if json.Unmarshal(header["type"], &kind, jsontext.AllowInvalidUTF8(true)) != nil || kind != "session" {
 					return nil, 0, errPiNotSession
 				}
-				if value, ok := header["id"]; ok && json.Unmarshal(value, &headerID, jsontext.AllowInvalidUTF8(true)) != nil {
-					return nil, 0, errPiNotSession
+				if value, ok := header["id"]; ok {
+					if json.Unmarshal(value, &headerID, jsontext.AllowInvalidUTF8(true)) != nil {
+						headerID = ""
+					}
 				}
-				_, hasID := header["id"]
-				if headerID != id && !(!hasID && strings.TrimSuffix(filepath.Base(name), ".jsonl") == id) {
+				if headerID != id && !(headerID == "" && strings.TrimSuffix(filepath.Base(name), ".jsonl") == id) {
 					return nil, 0, errPiIdentity
 				}
 				if value, ok := header["version"]; ok && json.Unmarshal(value, &version) != nil {
@@ -233,7 +234,8 @@ func relocatePiHeader(ctx context.Context, data []byte, name, id, cwd string) ([
 		return nil, err
 	}
 	start, end, count := -1, -1, 0
-	hasID := false
+	idStart, idEnd := -1, -1
+	var headerID string
 	for decoder.PeekKind() != jsontext.KindEndObject {
 		key, err := decoder.ReadToken()
 		if err != nil {
@@ -245,7 +247,12 @@ func relocatePiHeader(ctx context.Context, data []byte, name, id, cwd string) ([
 			return nil, err
 		}
 		if name == "id" {
-			hasID = true
+			idEnd = int(decoder.InputOffset())
+			idStart = idEnd - len(value)
+			headerID = ""
+			if json.Unmarshal(value, &headerID, jsontext.AllowInvalidUTF8(true)) != nil {
+				headerID = ""
+			}
 		}
 		if name == "cwd" {
 			count++
@@ -260,12 +267,19 @@ func relocatePiHeader(ctx context.Context, data []byte, name, id, cwd string) ([
 	if err != nil {
 		return nil, fmt.Errorf("native Pi checkout path is not valid UTF-8: %w", err)
 	}
-	if !hasID {
+	if idStart < 0 || headerID == "" {
 		encodedID, err := json.Marshal(id)
 		if err != nil {
 			return nil, err
 		}
-		encoded = slices.Concat(encoded, []byte(`,"id":`), encodedID)
+		if idStart < 0 {
+			encoded = slices.Concat(encoded, []byte(`,"id":`), encodedID)
+		} else if idStart > start {
+			data = slices.Concat(data[:offset+idStart], encodedID, data[offset+idEnd:])
+		} else {
+			data = slices.Concat(data[:offset+start], encoded, data[offset+end:])
+			return slices.Concat(data[:offset+idStart], encodedID, data[offset+idEnd:]), nil
+		}
 	}
 	return slices.Concat(data[:offset+start], encoded, data[offset+end:]), nil
 }

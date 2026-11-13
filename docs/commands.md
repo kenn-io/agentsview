@@ -2203,9 +2203,9 @@ partway through, retry to reuse files that are still identical. The command
 does not rewrite existing transcript records. If its last worktree binding is
 non-null, it appends Claude's native null worktree-state record to prevent
 restoring the original checkout, as observed in Claude Code 2.1.322. For Pi,
-the command changes the session header `cwd` to the selected checkout and adds
-an `id` derived from the filename when the header lacks one. All other transcript
-bytes, including branch and parent records, stay intact.
+the command changes the session header `cwd` to the selected checkout and uses
+the filename as `id` when the header's ID is missing, empty, or not a string.
+All other transcript bytes, including branch and parent records, stay intact.
 The Pi checkout is resolved through symlinks, and relative Pi directory
 overrides are resolved from that checkout. Pi files must have a session header
 of version 1–3. Pi-family files with a leading title cannot be opened by the
