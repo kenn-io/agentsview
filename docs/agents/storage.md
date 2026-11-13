@@ -1392,12 +1392,10 @@ the SQL.
   that a push builds; see
   [Usage rollup](../../internal/duckdb/README.md#usage-rollup). A read must
   return what it returns without the rollup. A change to how usage rows are
-  deduplicated, dated, or priced must keep both copies of the rules in step.
-  When it changes what a build stores, bump `usageRollupFormat` and record the
-  new digest in `internal/duckdb/testdata/usage-rollup-format-digests`;
-  `TestUsageRollupFormat` fails until both are done. Test fixtures that edit a
-  pushed mirror by hand must drop the rollup, because those edits leave push
-  fingerprints unchanged.
+  deduplicated, dated, or priced must keep both copies of the rules in step,
+  and a change to what a build stores must bump the rollup format as that
+  section describes. Test fixtures that edit a pushed mirror by hand must drop
+  the rollup, because those edits leave push fingerprints unchanged.
 - Keep Quack read-only. `duckdb push` writes the local mirror; it never writes
   to a remote DuckDB service.
 - Replace a file only after identifying it as an agentsview DuckDB mirror. Fail
