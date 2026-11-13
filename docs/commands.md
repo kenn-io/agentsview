@@ -2177,8 +2177,9 @@ Stop the owner and retry if the vault is busy; an unprepared vault or an
 uncheckpointed directory database requires its owner to prepare it first. Directory
 recovery takes the existing application lock in shared read-only mode; attach the
 directory or start its owner once to create the lock before using recovery.
-For local sessions, configured originals are tried first; a bound retained
-original is used when the configured source is unavailable. If an owning
+For local sessions, configured originals are tried first; a retained original
+is used when the configured source is unavailable. A seeded local session can
+use a uniquely matching recorded source without reparsing. If an owning
 snapshot is unavailable before selection, an equivalent configured directory
 attachment can be used. Reconstruction requires temporary scratch space.
 Claude archive-only fork sessions cannot be installed; select a session with a

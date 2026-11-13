@@ -259,7 +259,7 @@ archiveSource:
 						}
 					}
 				}
-				found, lookupErr := archivesource.HasRetainedSession(ctx, database, session.ID)
+				found, lookupErr := archivesource.HasRetainedSession(ctx, cfg, database, session, "codex", raw)
 				if lookupErr != nil {
 					return Result{}, lookupErr
 				}
@@ -346,7 +346,7 @@ archiveSource:
 		closeSource = nil
 	}
 	if errors.Is(err, errSourceUnavailable) && host == "" {
-		found, lookupErr := archivesource.HasRetainedSession(ctx, database, session.ID)
+		found, lookupErr := archivesource.HasRetainedSession(ctx, cfg, database, session, "codex", raw)
 		if lookupErr != nil {
 			return Result{}, lookupErr
 		}

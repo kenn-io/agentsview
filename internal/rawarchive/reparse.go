@@ -182,13 +182,12 @@ func (a *Archive) reparseSource(ctx context.Context, scratch *db.DB, scratchDir 
 		if err != nil {
 			return err
 		}
-		sourcePaths = equivalentSourcePaths(prepared.SourcePaths, root.OriginalPath, rootAliases)
+		sourcePaths = EquivalentSourcePaths(prepared.SourcePaths, root.OriginalPath, rootAliases)
 	}
 	// The owner may have stored a session under an older machine key that
 	// now resolves to this installation.
 	ownedBy := func(machine string) bool {
-		return machine == root.DeviceID ||
-			(root.DeviceID == owner && (machine == "" || machine == "local" || aliases[machine] == owner))
+		return MachineOwnedBy(machine, root.DeviceID, owner, aliases)
 	}
 	active := make(map[string]bool)
 	for _, path := range sourcePaths {
@@ -334,9 +333,15 @@ func (a *Archive) reparseSource(ctx context.Context, scratch *db.DB, scratchDir 
 	return nil
 }
 
-// equivalentSourcePaths adds each recorded alias spelling of paths beneath the
+// MachineOwnedBy reports whether a machine key belongs to the captured root owner.
+func MachineOwnedBy(machine, rootDevice, owner string, aliases map[string]string) bool {
+	return machine == rootDevice ||
+		(rootDevice == owner && (machine == "" || machine == "local" || aliases[machine] == owner))
+}
+
+// EquivalentSourcePaths adds each recorded alias spelling of paths beneath the
 // root's original path. Paths keep the source machine's separator.
-func equivalentSourcePaths(paths []string, original string, aliases []string) []string {
+func EquivalentSourcePaths(paths []string, original string, aliases []string) []string {
 	out := slices.Clone(paths)
 	for _, path := range paths {
 		rest, ok := strings.CutPrefix(path, original)

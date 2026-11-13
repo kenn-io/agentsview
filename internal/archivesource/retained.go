@@ -23,12 +23,20 @@ import (
 type codexReadCallback func(string, []string, []string, func(context.Context, string, int64) ([]byte, error)) error
 
 // HasRetainedSession is a routing hint; Retained rechecks the binding inside its transaction.
-func HasRetainedSession(ctx context.Context, database *db.DB, sessionID string) (bool, error) {
+func HasRetainedSession(ctx context.Context, cfg config.Config, database *db.DB, session *db.Session, provider, native string) (bool, error) {
 	if database == nil {
 		return false, nil
 	}
 	var found bool
-	err := database.Reader().QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM raw_archive_sessions WHERE session_id=?)`, sessionID).Scan(&found)
+	err := database.Reader().QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM raw_archive_sessions WHERE session_id=?)`, session.ID).Scan(&found)
+	if err != nil || found {
+		return found, err
+	}
+	var stored string
+	if session.FilePath != nil {
+		stored = *session.FilePath
+	}
+	_, found, err = unboundRetainedSource(ctx, database.Reader(), cfg.InstallationID, session.Machine, provider, native, stored)
 	return found, err
 }
 
@@ -92,7 +100,25 @@ func Retained(ctx context.Context, cfg config.Config, database *db.DB, sessionID
 			JOIN raw_archive_sources s ON s.root_id=b.root_id AND s.source_key=b.source_key
 			WHERE b.session_id=? AND b.device_id=? AND b.provider=? AND b.parser_id=? AND r.device_id=b.device_id AND r.provider=b.provider`, sessionID, device, provider, native).Scan(&owner.Source.DeviceID, &owner.Source.RootID, &owner.Source.SourceKey, &owner.ManifestID)
 		if errors.Is(err, sql.ErrNoRows) {
-			return nil, "", "", errors.New("original transcript or owning source unavailable")
+			var bound bool
+			err = tx.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM raw_archive_sessions WHERE session_id=?)`, sessionID).Scan(&bound)
+			if err != nil {
+				return nil, "", "", err
+			}
+			if !bound {
+				var found bool
+				owner, found, err = unboundRetainedSource(ctx, tx, cfg.InstallationID, device, provider, native, stored)
+				if err != nil {
+					return nil, "", "", err
+				}
+				if found {
+					owner.Source.ArchiveID = archiveID
+				} else {
+					return nil, "", "", errors.New("original transcript or owning source unavailable")
+				}
+			} else {
+				return nil, "", "", errors.New("original transcript or owning source unavailable")
+			}
 		}
 		if err != nil {
 			return nil, "", "", fmt.Errorf("retained session ownership: %w", err)
