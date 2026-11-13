@@ -417,6 +417,7 @@ func TestSignalsFrustrationUsageOnly(t *testing.T) {
 	for _, id := range []string{"first", "second"} {
 		insertSession(t, d, id, "test")
 		require.NoError(t, d.InsertMessages(ctx, []Message{{SessionID: id, Role: "user", Content: "this is broken"}}))
+		require.NoError(t, d.SettleUsageOnlySignals(ctx, id))
 	}
 	_, err := d.getWriter().ExecContext(ctx, `INSERT INTO session_frustration_markers (session_id, transcript_key, marker_version, count)
 		SELECT id, transcript_revision || '|' || created_at, ?, 7 FROM sessions WHERE id = 'first'`, signals.FrustrationMarkerVersion)
