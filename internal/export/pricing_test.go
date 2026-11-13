@@ -69,7 +69,7 @@ func TestPricingResolverExactCustomRateBeatsConfiguredAlias(t *testing.T) {
 	assert.Zero(t, lookup.Rates.InputPerMTok.Microdollars)
 }
 
-func TestPricingResolverCopyAndReplayRecordedCounts(t *testing.T) {
+func TestPricingResolverCopyReplayAndResolvedBandIsolation(t *testing.T) {
 	resolver := NewPricingResolver([]EffectivePricingRow{
 		{ModelPattern: "gateway/foo", Rates: ModelRates{Source: PricingRowSourceCustom, Bands: []PricingBand{{AboveInputTokens: 100}}}},
 	})

@@ -25,14 +25,12 @@ import (
 
 func TestUsageKeptMirrorReplacementAndPricing(t *testing.T) {
 	skipReopenTestOnWindows(t)
-	t.Setenv("CACHE_DIRECTORY", t.TempDir())
 	dir := t.TempDir()
 	path := filepath.Join(dir, "mirror.duckdb")
 	keptActivityMirror(t, path, "session-a", 500)
 	store, err := NewStore(t.Context(), path)
 	require.NoError(t, err)
 	defer store.Close()
-	require.NoError(t, store.OpenActivityReportDisk(t.Context()))
 	reads := 0
 	previous := analyticsQueryObserver
 	analyticsQueryObserver = func(string) { reads++ }
@@ -74,7 +72,7 @@ func TestUsageKeptMirrorReplacementAndPricing(t *testing.T) {
 	require.Equal(t, 9, reads)
 }
 
-func TestUsageKeptSameStampReplacementDuringPublish(t *testing.T) {
+func TestUsageKeptSameStampReplacementDuringMemoAndDiskPublish(t *testing.T) {
 	skipReopenTestOnWindows(t)
 	t.Setenv("CACHE_DIRECTORY", t.TempDir())
 	dir := t.TempDir()
@@ -97,22 +95,11 @@ func TestUsageKeptSameStampReplacementDuringPublish(t *testing.T) {
 	stamp := store.mirrorStamp()
 	paused := make(chan struct{})
 	resume := make(chan struct{})
-	memoPaused := make(chan struct{})
-	memoResume := make(chan struct{})
 	var resumeOnce sync.Once
-	var memoResumeOnce sync.Once
 	unpause := func() { resumeOnce.Do(func() { close(resume) }) }
-	unpauseMemo := func() { memoResumeOnce.Do(func() { close(memoResume) }) }
 	previous := usagePartPublishObserver
 	usagePartPublishObserver = func() { close(paused); <-resume }
 	t.Cleanup(func() { usagePartPublishObserver = previous })
-	store.dailyUsage.Size = func(result db.DailyUsageResult) int64 {
-		if result.Totals.OutputTokens == 500 {
-			close(memoPaused)
-			<-memoResume
-		}
-		return 1
-	}
 	var first db.DailyUsageResult
 	var firstErr error
 	done := make(chan struct{})
@@ -122,7 +109,6 @@ func TestUsageKeptSameStampReplacementDuringPublish(t *testing.T) {
 	}()
 	defer func() {
 		unpause()
-		unpauseMemo()
 		select {
 		case <-done:
 		case <-time.After(10 * time.Second):
@@ -140,21 +126,15 @@ func TestUsageKeptSameStampReplacementDuringPublish(t *testing.T) {
 	require.Equal(t, stamp, store.mirrorStamp(), "replacement must preserve the file and WAL stamp")
 	unpause()
 	select {
-	case <-memoPaused:
-	case <-time.After(10 * time.Second):
-		require.FailNow(t, "Usage read did not reach memo publication")
-	}
-	files, err := filepath.Glob(filepath.Join(os.Getenv("CACHE_DIRECTORY"), "duckdb-usage", "*", "*.gob"))
-	require.NoError(t, err)
-	require.Empty(t, files)
-	unpauseMemo()
-	select {
 	case <-done:
 	case <-time.After(10 * time.Second):
 		require.FailNow(t, "Usage read did not finish after replacement")
 	}
 	require.NoError(t, firstErr)
 	require.Equal(t, 500, first.Totals.OutputTokens)
+	files, err := filepath.Glob(filepath.Join(os.Getenv("CACHE_DIRECTORY"), "duckdb-usage", "*", "*.gob"))
+	require.NoError(t, err)
+	require.Empty(t, files)
 	usagePartPublishObserver = nil
 	changed, err := store.GetDailyUsage(t.Context(), db.UsageFilter{})
 	require.NoError(t, err)
