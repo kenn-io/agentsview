@@ -772,8 +772,8 @@ func chClampTokens(expr string) string {
 }
 
 // chUsageNormSource holds the per-row expressions usage_normalized computes
-// for message rows. Raw rows carry the message's token JSON; prepared rows
-// already carry the normalized counters.
+// for message rows. Stored rows carry the counters the usage_messages view
+// extracted; prepared rows already carry the normalized counters.
 type chUsageNormSource struct {
 	input, output, cacheCreate, cacheCreate1h, cacheRead, reasoning, web string
 	priceModel, priceKey                                                 string
