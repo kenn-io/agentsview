@@ -110,7 +110,7 @@ archiveSource:
 		if base == "sessions" || base == "archived_sessions" {
 			for _, candidate := range matchingRoots {
 				other := path.Base(candidate)
-				if candidate != root && path.Dir(candidate) == path.Dir(root) && (other == "sessions" || other == "archived_sessions") {
+				if candidate != root && path.Dir(strings.TrimSuffix(candidate, "/")) == path.Dir(strings.TrimSuffix(root, "/")) && (other == "sessions" || other == "archived_sessions") {
 					roots = append(roots, candidate)
 				}
 			}

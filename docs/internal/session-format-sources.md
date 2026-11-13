@@ -3519,8 +3519,10 @@ schemas keep their existing ordering behavior.
   title cannot. An idless legacy file can be indexed by Agentsview but cannot
   be opened by this Pi version. `SessionManager.open` uses the header cwd;
   materialization changes only that value, resolves the checkout through
-  symlinks, and preserves the native ID. Startup chooses the session directory
-  from the environment, then merged project/global settings, then the default
+  symlinks, and preserves the native ID. Custom IDs may contain interior dots;
+  the CLI also opens renamed `.jsonl` paths using the identity in their session
+  header. Startup chooses the session directory from the environment, then
+  merged project/global settings, then the default
   encoded checkout directory. The installer bounds header lookup to 1 MiB and
   refuses versions outside 1–3 as an Agentsview policy, and unsafe
   identity-derived filenames. Malformed or oversized settings fail closed.

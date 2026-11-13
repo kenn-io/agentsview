@@ -85,6 +85,7 @@ func TestMaterializeCodexConfigured(t *testing.T) {
 		const foreignID = "33333333-3333-4333-8333-333333333333"
 		foreignRoot := filepath.Join(location, "2026", "01", "03")
 		require.NoError(t, os.MkdirAll(foreignRoot, 0o700))
+		t.Cleanup(func() { assert.NoError(t, os.RemoveAll(foreignRoot)) })
 		foreignPage := filepath.Join(foreignRoot, "rollout-2026-01-03T01-00-00-"+id+".jsonl")
 		foreignBytes := []byte(`{"type":"session_meta","payload":{"id":"11111111-1111-4111-8111-111111111111","history_mode":"paginated","label":"machine-b"}}` + "\n")
 		require.NoError(t, os.WriteFile(foreignPage, foreignBytes, 0o600))
@@ -248,14 +249,19 @@ func TestMaterializeCodexS3(t *testing.T) {
 	var corrupt atomic.Bool
 	var unsafeSelected atomic.Bool
 	var unsafeFetched atomic.Bool
+	var foreignListed atomic.Bool
 	unsafeKey := "host/raw/codex/sessions/2026/01/01/rollout-x\\..\\..\\..\\..\\escape-" + id + ".jsonl"
 	unrelatedKey := "host/raw/codex/sessions/2026/01/01/rollout-x\\..\\escape-33333333-3333-4333-8333-333333333333.jsonl"
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Query().Get("list-type") == "2" {
 			w.Header().Set("Content-Type", "application/xml")
-			if strings.Contains(r.URL.Query().Get("prefix"), "archived_sessions") {
+			switch r.URL.Query().Get("prefix") {
+			case "host/raw/codex/archived_sessions/":
 				_, _ = fmt.Fprintf(w, `<ListBucketResult><IsTruncated>false</IsTruncated><Contents><Key>%s</Key><Size>%d</Size></Contents></ListBucketResult>`, parentKey, len(parentContent))
-			} else {
+			case "other/raw/codex/archived_sessions/":
+				foreignListed.Store(true)
+				_, _ = fmt.Fprintf(w, `<ListBucketResult><IsTruncated>false</IsTruncated><Contents><Key>%s</Key><Size>%d</Size></Contents></ListBucketResult>`, strings.Replace(parentKey, "host/", "other/", 1), len(parentContent))
+			case "host/raw/codex/sessions/":
 				listed := key
 				if unsafeSelected.Load() {
 					listed += ".zst"
@@ -265,6 +271,8 @@ func TestMaterializeCodexS3(t *testing.T) {
 					_, _ = fmt.Fprintf(w, `<Contents><Key>%s</Key><Size>10</Size></Contents>`, unsafeKey)
 				}
 				_, _ = io.WriteString(w, `</ListBucketResult>`)
+			default:
+				_, _ = io.WriteString(w, `<ListBucketResult><IsTruncated>false</IsTruncated></ListBucketResult>`)
 			}
 			return
 		}
@@ -310,6 +318,40 @@ func TestMaterializeCodexS3(t *testing.T) {
 	got, err = os.ReadFile(result.Paths[1])
 	require.NoError(t, err)
 	assert.Equal(t, content, string(got))
+	for _, tc := range []struct {
+		name, live, archived string
+	}{
+		{"no slash", root, archivedRoot},
+		{"live slash", root + "/", archivedRoot},
+		{"archive slash", root, archivedRoot + "/"},
+		{"both slash", root + "/", archivedRoot + "/"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Setenv("CODEX_HOME", t.TempDir())
+			cfg := config.Config{AgentDirs: map[parser.AgentType][]string{parser.AgentCodex: {tc.live, tc.archived}}}
+			result, err := Materialize(t.Context(), cfg, nil, session, t.TempDir())
+			require.NoError(t, err)
+			require.Len(t, result.Paths, 2)
+			got, err := os.ReadFile(result.Paths[0])
+			require.NoError(t, err)
+			assert.Equal(t, parentContent, string(got))
+			got, err = os.ReadFile(result.Paths[1])
+			require.NoError(t, err)
+			assert.Equal(t, content, string(got))
+		})
+	}
+	t.Run("foreign ancestor", func(t *testing.T) {
+		home := t.TempDir()
+		t.Setenv("CODEX_HOME", home)
+		cfg := config.Config{AgentDirs: map[parser.AgentType][]string{parser.AgentCodex: {root, "s3://test/other/raw/codex/archived_sessions/"}}}
+		_, err := Materialize(t.Context(), cfg, nil, session, t.TempDir())
+		require.ErrorContains(t, err, "missing Codex ancestor")
+		assert.False(t, foreignListed.Load())
+		assert.False(t, unsafeFetched.Load())
+		entries, err := os.ReadDir(home)
+		require.NoError(t, err)
+		assert.Empty(t, entries)
+	})
 	unsafeSelected.Store(true)
 	unsafeHome := t.TempDir()
 	t.Setenv("CODEX_HOME", unsafeHome)
