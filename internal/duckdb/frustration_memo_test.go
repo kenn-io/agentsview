@@ -218,3 +218,58 @@ func TestPushRebuildsStaleFrustrationCountsBelowCutoff(t *testing.T) {
 	assert.False(t, result.Diagnostics.Full)
 	assert.Zero(t, result.SessionsPushed)
 }
+
+func TestDuckDBIncrementalPushUpdatesFrustrationCount(t *testing.T) {
+	skipReopenTestOnWindows(t)
+	ctx := t.Context()
+	local, path := newPushFixture(t, 1)
+	_, err := Push(ctx, path, local, "m", storage.MirrorPushOptions{}, false, nil)
+	require.NoError(t, err)
+
+	appendFrustrationPrompt(t, local, "sess-1")
+	result, err := Push(ctx, path, local, "m", storage.MirrorPushOptions{}, false, nil)
+	require.NoError(t, err)
+	assert.False(t, result.Diagnostics.Full)
+	assert.Equal(t, 1, result.SessionsPushed)
+	conn, err := OpenReadOnly(ctx, path)
+	require.NoError(t, err)
+	var count int
+	require.NoError(t, conn.QueryRowContext(ctx, `SELECT frustration_marker_count FROM sessions WHERE id = 'sess-1'`).Scan(&count))
+	assert.Equal(t, 1, count)
+	require.NoError(t, conn.Close())
+
+	store, err := NewStore(ctx, path)
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, store.Close()) })
+	resp, err := store.GetAnalyticsSignals(ctx, db.AnalyticsFilter{})
+	require.NoError(t, err)
+	assert.Equal(t, 1, resp.QualityHealth.Totals.FrustrationMarkerCount)
+}
+
+func TestDuckDBTrustsStoredZeroFrustrationCount(t *testing.T) {
+	skipReopenTestOnWindows(t)
+	ctx := t.Context()
+	local, path := newPushFixture(t, 1)
+	require.NoError(t, local.UpdateSessionSignals(ctx, "sess-1", db.SessionSignalUpdate{QualitySignals: db.QualitySignals{Version: db.CurrentQualitySignalVersion}}))
+	_, err := Push(ctx, path, local, "m", storage.MirrorPushOptions{}, false, nil)
+	require.NoError(t, err)
+
+	conn, err := Open(ctx, path)
+	require.NoError(t, err)
+	var version, count int
+	require.NoError(t, conn.QueryRowContext(ctx, `SELECT frustration_markers_version, frustration_marker_count FROM sessions WHERE id = 'sess-1'`).Scan(&version, &count))
+	assert.Equal(t, frustrationMarkersVersion, version)
+	assert.Zero(t, count)
+	updated, err := conn.ExecContext(ctx, `UPDATE messages SET content = 'this is broken' WHERE session_id = 'sess-1' AND role = 'user'`)
+	require.NoError(t, err)
+	changed, err := updated.RowsAffected()
+	require.NoError(t, err)
+	require.EqualValues(t, 1, changed)
+	require.NoError(t, conn.Close())
+	store, err := NewStore(ctx, path)
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, store.Close()) })
+	resp, err := store.GetAnalyticsSignals(ctx, db.AnalyticsFilter{})
+	require.NoError(t, err)
+	assert.Equal(t, 0, resp.QualityHealth.Totals.FrustrationMarkerCount)
+}
