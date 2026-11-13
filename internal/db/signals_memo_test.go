@@ -300,6 +300,28 @@ func TestSignalsFrustrationReadOnly(t *testing.T) {
 	assert.Zero(t, n)
 }
 
+func TestSignalsFrustrationReadOnlyWithoutStoredTable(t *testing.T) {
+	d := testDB(t)
+	ctx := t.Context()
+	insertSession(t, d, "session", "test")
+	require.NoError(t, d.InsertMessages(ctx, []Message{{SessionID: "session", Role: "user", Content: "this is broken"}}))
+	require.NoError(t, d.UpdateSessionSignals(ctx, "session", SessionSignalUpdate{QualitySignals: QualitySignals{Version: CurrentQualitySignalVersion}}))
+	_, err := d.getWriter().ExecContext(ctx, `DROP TABLE session_frustration_markers`)
+	require.NoError(t, err)
+	ro, err := OpenReadOnly(ctx, d.Path())
+	require.NoError(t, err)
+	defer ro.Close()
+	ro.rawReader().SetMaxOpenConns(1)
+	resp, err := ro.analyticsSignals(ctx, AnalyticsFilter{})
+	require.NoError(t, err)
+	assert.Equal(t, 1, resp.QualityHealth.Totals.FrustrationMarkerCount)
+	var changes, tables int
+	require.NoError(t, ro.getReader().QueryRowContext(ctx, `SELECT total_changes()`).Scan(&changes))
+	require.NoError(t, ro.getReader().QueryRowContext(ctx, `SELECT count(*) FROM sqlite_master WHERE type = 'table' AND name = 'session_frustration_markers'`).Scan(&tables))
+	assert.Zero(t, changes)
+	assert.Zero(t, tables)
+}
+
 func TestSignalsFrustrationCleanup(t *testing.T) {
 	for _, usageOnly := range []bool{false, true} {
 		t.Run(strconv.FormatBool(usageOnly), func(t *testing.T) {

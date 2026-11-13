@@ -4356,8 +4356,8 @@ func (db *DB) populateFrustrationMarkers(
 		idx[rows[i].ID] = i
 		ids = append(ids, rows[i].ID)
 	}
-	// A read-only archive may predate the derived table. Fall back to scanning
-	// its prompts if the table is unavailable.
+	// A read-only archive may predate this table. Scan its prompts if it is
+	// missing. Remove this fallback if read-only open starts requiring the table.
 	err := queryChunked(ids, func(chunk []string) error {
 		ph, args := InPlaceholders(chunk)
 		args = append([]any{FrustrationMarkerVersion}, args...)
