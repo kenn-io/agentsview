@@ -113,12 +113,25 @@ type duckGenAIPricingRow interface {
 	Scan(...any) error
 }
 
-func loadDuckGenAIPricing(
+// loadDuckGenAIPricingState reads the mirror's GenAI pricing document
+// without its data, which a push compares by digest instead of reading.
+func loadDuckGenAIPricingState(
 	ctx context.Context, q duckGenAIPricingQuerier,
-) (*db.GenAIPricingDocument, error) {
-	return scanDuckGenAIPricing(q.QueryRowContext(ctx, `
-		SELECT version, source_ref, source, data_json, updated_at
-		FROM genai_pricing WHERE singleton = 1`))
+) (*db.GenAIPricingState, error) {
+	var state db.GenAIPricingState
+	err := q.QueryRowContext(ctx, `
+		SELECT version, source_ref, source, lower(sha256(data_json)), updated_at
+		FROM genai_pricing WHERE singleton = 1`).Scan(
+		&state.Version, &state.SourceRef, &state.Source,
+		&state.DataSHA256, &state.UpdatedAt,
+	)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, fmt.Errorf("reading duckdb GenAI pricing state: %w", err)
+	}
+	return &state, nil
 }
 
 func scanDuckGenAIPricing(
@@ -187,11 +200,11 @@ func (s *Sync) syncGenAIPricing(ctx context.Context) error {
 		return fmt.Errorf("beginning duckdb GenAI pricing sync: %w", err)
 	}
 	defer func() { _ = tx.Rollback() }()
-	existing, err := loadDuckGenAIPricing(ctx, tx)
+	existing, err := loadDuckGenAIPricingState(ctx, tx)
 	if err != nil {
 		return err
 	}
-	if db.GenAIPricingDocumentsEqual(existing, document) {
+	if existing.Matches(document) {
 		return nil
 	}
 	if err := s.execMutation(ctx, tx, `

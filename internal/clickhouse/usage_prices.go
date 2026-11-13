@@ -142,6 +142,7 @@ type chUsagePriceModel struct {
 	priceModel string
 }
 
+// chLoadPricingCatalog loads the mirror's catalog, GenAI document included.
 func chLoadPricingCatalog(
 	ctx context.Context, conn *sql.DB,
 	customPricing map[string]config.CustomModelRate,
@@ -158,6 +159,28 @@ func chLoadPricingCatalog(
 	if err != nil {
 		return chPricingCatalog{}, err
 	}
+	return chBuildPricingCatalog(ctx, conn, customPricing, pricing, genAI)
+}
+
+// chLoadPricingCatalogWithGenAI loads the mirror's catalog with genAI, the
+// parsed row of the GenAI document the mirror holds.
+func chLoadPricingCatalogWithGenAI(
+	ctx context.Context, conn *sql.DB,
+	customPricing map[string]config.CustomModelRate,
+	genAI export.EffectivePricingRow,
+) (chPricingCatalog, error) {
+	pricing, err := chLoadPricing(ctx, conn, nil)
+	if err != nil {
+		return chPricingCatalog{}, err
+	}
+	return chBuildPricingCatalog(ctx, conn, customPricing, pricing, genAI)
+}
+
+func chBuildPricingCatalog(
+	ctx context.Context, conn *sql.DB,
+	customPricing map[string]config.CustomModelRate,
+	pricing map[string]export.ModelRates, genAI export.EffectivePricingRow,
+) (chPricingCatalog, error) {
 	models, err := loadUsagePriceModels(ctx, conn, false)
 	if err != nil {
 		return chPricingCatalog{}, err

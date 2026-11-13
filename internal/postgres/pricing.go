@@ -3,6 +3,7 @@ package postgres
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 	"strings"
 	"time"
@@ -84,6 +85,30 @@ func queryPGGenAIPricing(ctx context.Context, q pgGenAIPricingQuerier, allowMiss
 		return nil, fmt.Errorf("reading pg GenAI pricing document: %w", err)
 	}
 	return &document, nil
+}
+
+// loadPGGenAIPricingState reads the mirror's GenAI pricing document without
+// its data, which a push compares by digest instead of transferring. A
+// missing table reads as a missing document, as in loadPGGenAIPricing.
+func loadPGGenAIPricingState(
+	ctx context.Context, q pgGenAIPricingQuerier,
+) (*db.GenAIPricingState, error) {
+	var state db.GenAIPricingState
+	var digest pushDigest
+	err := q.QueryRowContext(ctx, `
+		SELECT version, source_ref, source, sha256(data_json), updated_at
+		FROM genai_pricing WHERE singleton = 1`).Scan(
+		&state.Version, &state.SourceRef, &state.Source,
+		&digest, &state.UpdatedAt,
+	)
+	if errors.Is(err, sql.ErrNoRows) || isUndefinedTable(err) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, fmt.Errorf("reading pg GenAI pricing state: %w", err)
+	}
+	state.DataSHA256 = string(digest)
+	return &state, nil
 }
 
 // Optional-table fallbacks must not issue a failing statement in a transaction:
@@ -838,11 +863,11 @@ func (s *Sync) syncModelPricing(ctx context.Context) error {
 	if err != nil {
 		return fmt.Errorf("planning model pricing sync: %w", err)
 	}
-	existingGenAI, err := loadPGGenAIPricing(ctx, tx)
+	existingGenAI, err := loadPGGenAIPricingState(ctx, tx)
 	if err != nil {
 		return err
 	}
-	genAIChanged := !db.GenAIPricingDocumentsEqual(existingGenAI, localGenAI)
+	genAIChanged := !existingGenAI.Matches(localGenAI)
 	if len(changedPrices) == 0 && len(removePatterns) == 0 && !genAIChanged {
 		return nil
 	}
