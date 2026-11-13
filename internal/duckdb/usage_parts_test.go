@@ -17,6 +17,14 @@ import (
 	pricingpkg "go.kenn.io/agentsview/internal/pricing"
 )
 
+func openUsagePartsStore(t *testing.T, path string) *Store {
+	t.Helper()
+	store, err := NewStore(t.Context(), path)
+	require.NoError(t, err)
+	require.NoError(t, store.OpenActivityReportDisk(t.Context()))
+	return store
+}
+
 func TestUsagePartsAcrossRestart(t *testing.T) {
 	t.Setenv("CACHE_DIRECTORY", t.TempDir())
 	path := filepath.Join(t.TempDir(), "mirror.duckdb")
@@ -28,9 +36,7 @@ func TestUsagePartsAcrossRestart(t *testing.T) {
 	_, err = conn.ExecContext(t.Context(), `UPDATE messages SET token_usage = '{"output_tokens":500,"recorded_cost_microdollars":2000}' WHERE id = 2`)
 	require.NoError(t, err)
 	require.NoError(t, conn.Close())
-	store, err := NewStore(t.Context(), path)
-	require.NoError(t, err)
-	require.NoError(t, store.OpenActivityReportDisk(t.Context()))
+	store := openUsagePartsStore(t, path)
 	f := db.UsageFilter{From: "2026-01-01", To: "2026-01-01", Timezone: "UTC"}
 	first, err := store.GetDailyUsage(t.Context(), f)
 	require.NoError(t, err)
@@ -40,10 +46,8 @@ func TestUsagePartsAcrossRestart(t *testing.T) {
 	require.Equal(t, money.MustParseDollars("0.002"), first.Totals.TotalCost)
 	require.NoError(t, store.Close())
 
-	restarted, err := NewStore(t.Context(), path)
-	require.NoError(t, err)
+	restarted := openUsagePartsStore(t, path)
 	defer restarted.Close()
-	require.NoError(t, restarted.OpenActivityReportDisk(t.Context()))
 	reads := 0
 	previous := analyticsQueryObserver
 	analyticsQueryObserver = func(string) { reads++ }
@@ -64,10 +68,8 @@ func TestUsagePartsAcrossRestart(t *testing.T) {
 	_, err = conn.ExecContext(t.Context(), `UPDATE messages SET token_usage = '{"output_tokens":900}' WHERE id = 2`)
 	require.NoError(t, err)
 	require.NoError(t, conn.Close())
-	changed, err := NewStore(t.Context(), path)
-	require.NoError(t, err)
+	changed := openUsagePartsStore(t, path)
 	defer changed.Close()
-	require.NoError(t, changed.OpenActivityReportDisk(t.Context()))
 	got, err = changed.GetDailyUsage(t.Context(), f)
 	require.NoError(t, err)
 	require.Equal(t, 900, got.Totals.OutputTokens)
@@ -134,11 +136,14 @@ func testUsagePartsPeers(t *testing.T, update string, firstOutput int) {
 	require.NoError(t, err)
 	_, err = conn.ExecContext(t.Context(), `INSERT INTO messages SELECT * REPLACE (3 AS id, 'session-b' AS session_id, '{"output_tokens":700}' AS token_usage) FROM messages WHERE id = 2`)
 	require.NoError(t, err)
+	_, err = conn.ExecContext(t.Context(), `INSERT INTO messages SELECT * REPLACE (id + 10 AS id, ordinal + 10 AS ordinal, '{}' AS token_usage, CASE WHEN claude_message_id != '' THEN claude_message_id || '-other' ELSE '' END AS claude_message_id, CASE WHEN source_uuid != '' THEN source_uuid || '-other' ELSE '' END AS source_uuid) FROM messages WHERE id IN (2, 3)`)
+	require.NoError(t, err)
 	require.NoError(t, conn.Close())
 	f := db.UsageFilter{From: "2026-01-01", To: "2026-01-01", Timezone: "UTC"}
-	store, err := NewStore(t.Context(), path)
+	store := openUsagePartsStore(t, path)
+	peers, err := store.usagePartPeers(t.Context())
 	require.NoError(t, err)
-	require.NoError(t, store.OpenActivityReportDisk(t.Context()))
+	require.ElementsMatch(t, []string{"session-a", "session-b"}, peers["session-a"])
 	first, err := store.GetDailyUsage(t.Context(), f)
 	require.NoError(t, err)
 	require.Equal(t, firstOutput, first.Totals.OutputTokens)
@@ -155,10 +160,8 @@ func testUsagePartsPeers(t *testing.T, update string, firstOutput int) {
 	_, err = conn.ExecContext(t.Context(), `UPDATE messages SET token_usage = '{"output_tokens":900}' WHERE id = 2`)
 	require.NoError(t, err)
 	require.NoError(t, conn.Close())
-	store, err = NewStore(t.Context(), path)
-	require.NoError(t, err)
+	store = openUsagePartsStore(t, path)
 	defer store.Close()
-	require.NoError(t, store.OpenActivityReportDisk(t.Context()))
 	var refreshed []string
 	previous := usagePartReadObserver
 	usagePartReadObserver = func(ids []string) { refreshed = append(refreshed, ids...) }
@@ -182,10 +185,8 @@ func testUsagePartsPeers(t *testing.T, update string, firstOutput int) {
 	_, err = conn.ExecContext(t.Context(), `UPDATE sessions SET deleted_at = CURRENT_TIMESTAMP WHERE id = 'session-a'`)
 	require.NoError(t, err)
 	require.NoError(t, conn.Close())
-	store, err = NewStore(t.Context(), path)
-	require.NoError(t, err)
+	store = openUsagePartsStore(t, path)
 	defer store.Close()
-	require.NoError(t, store.OpenActivityReportDisk(t.Context()))
 	refreshed = nil
 	got, err = store.GetDailyUsage(t.Context(), f)
 	require.NoError(t, err)
@@ -211,9 +212,7 @@ func TestUsagePartsMirrorPricingChange(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, conn.Close())
 	f := db.UsageFilter{From: "2026-01-01", To: "2026-01-01", Timezone: "UTC"}
-	store, err := NewStore(t.Context(), path)
-	require.NoError(t, err)
-	require.NoError(t, store.OpenActivityReportDisk(t.Context()))
+	store := openUsagePartsStore(t, path)
 	first, err := store.GetDailyUsage(t.Context(), f)
 	require.NoError(t, err)
 	require.Equal(t, money.MustParseDollars("0.005"), first.Totals.TotalCost)
@@ -228,9 +227,7 @@ func TestUsagePartsMirrorPricingChange(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, store.Close())
 	pricingpkg.SetConfiguredAliases(map[string]string{"kept-model": "price-b"})
-	store, err = NewStore(t.Context(), path)
-	require.NoError(t, err)
-	require.NoError(t, store.OpenActivityReportDisk(t.Context()))
+	store = openUsagePartsStore(t, path)
 	aliased, err := store.GetDailyUsage(t.Context(), f)
 	require.NoError(t, err)
 	require.Equal(t, money.MustParseDollars("0.01"), aliased.Totals.TotalCost)
@@ -243,10 +240,8 @@ func TestUsagePartsMirrorPricingChange(t *testing.T) {
 	_, err = conn.ExecContext(t.Context(), `UPDATE model_pricing SET output_microdollars_per_mtok = 30000000 WHERE model_pattern = 'price-b'`)
 	require.NoError(t, err)
 	require.NoError(t, conn.Close())
-	store, err = NewStore(t.Context(), path)
-	require.NoError(t, err)
+	store = openUsagePartsStore(t, path)
 	defer store.Close()
-	require.NoError(t, store.OpenActivityReportDisk(t.Context()))
 	reads := 0
 	previous := analyticsQueryObserver
 	analyticsQueryObserver = func(string) { reads++ }
@@ -267,9 +262,7 @@ func TestUsagePartsRefreshesCursorAccount(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, conn.Close())
 	f := db.UsageFilter{From: "2026-01-01", To: "2026-01-01", Timezone: "UTC"}
-	store, err := NewStore(t.Context(), path)
-	require.NoError(t, err)
-	require.NoError(t, store.OpenActivityReportDisk(t.Context()))
+	store := openUsagePartsStore(t, path)
 	_, err = store.GetDailyUsage(t.Context(), f)
 	require.NoError(t, err)
 	require.NoError(t, store.Close())
@@ -280,10 +273,8 @@ func TestUsagePartsRefreshesCursorAccount(t *testing.T) {
 	_, err = conn.ExecContext(t.Context(), `INSERT INTO sync_metadata (key, value) VALUES (?, '1') ON CONFLICT (key) DO UPDATE SET value = excluded.value`, cursorUsageMaxIDMetadataKey)
 	require.NoError(t, err)
 	require.NoError(t, conn.Close())
-	store, err = NewStore(t.Context(), path)
-	require.NoError(t, err)
+	store = openUsagePartsStore(t, path)
 	defer store.Close()
-	require.NoError(t, store.OpenActivityReportDisk(t.Context()))
 	var refreshed []string
 	previous := usagePartReadObserver
 	usagePartReadObserver = func(ids []string) { refreshed = append(refreshed, ids...) }
@@ -296,6 +287,21 @@ func TestUsagePartsRefreshesCursorAccount(t *testing.T) {
 	want, err := fresh.GetDailyUsage(t.Context(), f)
 	require.NoError(t, err)
 	require.Equal(t, want, got)
+	require.NoError(t, store.Close())
+	conn, err = Open(t.Context(), path)
+	require.NoError(t, err)
+	_, err = conn.ExecContext(t.Context(), `UPDATE sync_metadata SET value = 'new-generation' WHERE key = ?`, sourceDatabaseIDMetadataKey)
+	require.NoError(t, err)
+	_, err = conn.ExecContext(t.Context(), `UPDATE cursor_usage_events SET output_tokens = 300 WHERE id = 1`)
+	require.NoError(t, err)
+	require.NoError(t, conn.Close())
+	store = openUsagePartsStore(t, path)
+	defer store.Close()
+	refreshed = nil
+	got, err = store.GetDailyUsage(t.Context(), f)
+	require.NoError(t, err)
+	require.Equal(t, []string{""}, refreshed)
+	require.Equal(t, 800, got.Totals.OutputTokens)
 }
 
 func TestUsagePartsRefreshesAuthoritativeCost(t *testing.T) {
@@ -365,9 +371,7 @@ func TestUsagePartsReplacementDuringPublish(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, info.Size(), nextInfo.Size())
 	require.NoError(t, os.Chtimes(next, info.ModTime(), info.ModTime()))
-	store, err := NewStore(t.Context(), path)
-	require.NoError(t, err)
-	require.NoError(t, store.OpenActivityReportDisk(t.Context()))
+	store := openUsagePartsStore(t, path)
 	initial := store
 	t.Cleanup(func() { _ = initial.Close() })
 	paused, resume := make(chan struct{}), make(chan struct{})
@@ -403,10 +407,8 @@ func TestUsagePartsReplacementDuringPublish(t *testing.T) {
 	}
 	usagePartPublishObserver = nil
 	require.NoError(t, store.Close())
-	store, err = NewStore(t.Context(), path)
-	require.NoError(t, err)
+	store = openUsagePartsStore(t, path)
 	defer store.Close()
-	require.NoError(t, store.OpenActivityReportDisk(t.Context()))
 	reads := 0
 	prevQuery := analyticsQueryObserver
 	analyticsQueryObserver = func(string) { reads++ }

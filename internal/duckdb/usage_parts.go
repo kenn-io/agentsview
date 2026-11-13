@@ -2,9 +2,8 @@ package duckdb
 
 import (
 	"context"
-	"database/sql"
-	"errors"
 	"fmt"
+	"maps"
 	"slices"
 
 	"go.kenn.io/agentsview/internal/kept"
@@ -84,27 +83,25 @@ func refreshUsageParts[T any](ctx context.Context, s *Store, slot, priceDigest s
 			values[id] = part.Value
 		}
 	}
-	if len(old) == 0 || len(changed) != 0 {
-		var ids []string
-		if len(old) != 0 {
-			ids = make([]string, 0, len(changed))
-			for id := range changed {
-				if _, ok := versions[id]; ok {
-					ids = append(ids, id)
-				}
+	var ids []string
+	if len(old) != 0 {
+		ids = make([]string, 0, len(changed))
+		for id := range changed {
+			if _, ok := versions[id]; ok {
+				ids = append(ids, id)
 			}
 		}
-		if len(old) == 0 || len(ids) > 0 {
-			if usagePartReadObserver != nil {
-				usagePartReadObserver(ids)
-			}
-			updated, err := read(ctx, ids)
-			if err != nil {
-				return nil, err
-			}
-			for id, value := range updated {
-				values[id] = value
-			}
+	}
+	if len(old) == 0 || len(ids) > 0 {
+		if usagePartReadObserver != nil {
+			usagePartReadObserver(ids)
+		}
+		updated, err := read(ctx, ids)
+		if err != nil {
+			return nil, err
+		}
+		for id, value := range updated {
+			values[id] = value
 		}
 	}
 	if usagePartPublishObserver != nil {
@@ -148,12 +145,19 @@ func (s *Store) usagePartVersions(ctx context.Context) (map[string]string, error
 	if err != nil {
 		return nil, err
 	}
-	var cursor string
-	err = s.queryRowContext(ctx, `SELECT value FROM sync_metadata WHERE key = ?`, cursorUsageMaxIDMetadataKey).Scan(&cursor)
-	if err != nil && !errors.Is(err, sql.ErrNoRows) {
+	var generation, cursor string
+	err = s.queryRowContext(ctx, `SELECT
+		COALESCE((SELECT value FROM sync_metadata WHERE key = ?), ''),
+		COALESCE((SELECT value FROM sync_metadata WHERE key = ?), '')`,
+		sourceDatabaseIDMetadataKey, cursorUsageMaxIDMetadataKey).Scan(&generation, &cursor)
+	if err != nil {
 		return nil, err
 	}
-	versions[""] = "cursor:" + cursor
+	if generation != "" {
+		versions[""] = generation + "|" + cursor
+	} else {
+		versions[""] = ""
+	}
 	return versions, nil
 }
 
@@ -181,11 +185,20 @@ func (s *Store) usagePartPeers(ctx context.Context) (map[string][]string, error)
 	if err := rows.Err(); err != nil {
 		return nil, err
 	}
-	peers := map[string][]string{}
+	sets := map[string]map[string]struct{}{}
 	for _, ids := range groups {
 		for _, id := range ids {
-			peers[id] = append(peers[id], ids...)
+			if sets[id] == nil {
+				sets[id] = map[string]struct{}{}
+			}
+			for _, peer := range ids {
+				sets[id][peer] = struct{}{}
+			}
 		}
+	}
+	peers := map[string][]string{}
+	for id, set := range sets {
+		peers[id] = slices.Sorted(maps.Keys(set))
 	}
 	return peers, nil
 }
