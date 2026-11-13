@@ -103,8 +103,7 @@ func findPiSource(ctx context.Context, cfg config.Config, session *db.Session, s
 	candidates := parser.NewPiSourceSet(parser.AgentPi, roots)
 	name, err := uniqueLocalSource(ctx, provider, stored, scopedDiscover(cfg, session, parser.AgentPi, candidates.DiscoverEach), func(name string) (bool, error) {
 		err := checkPiHeaderFile(ctx, name, id)
-		var pathErr *os.PathError
-		if errors.Is(err, errPiIdentity) || errors.Is(err, errPiNotSession) || errors.Is(err, errPiHeaderSize) || errors.As(err, &pathErr) {
+		if errors.Is(err, errPiIdentity) || errors.Is(err, errPiNotSession) || errors.Is(err, errPiHeaderSize) {
 			return false, nil
 		}
 		return err == nil, err

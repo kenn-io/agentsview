@@ -133,6 +133,32 @@ func TestPiSourceLookup(t *testing.T) {
 	assert.Equal(t, good, result.Source)
 }
 
+func TestPiSourceLookupRejectsUnreadableCandidate(t *testing.T) {
+	root, dest, cwd := t.TempDir(), t.TempDir(), t.TempDir()
+	t.Setenv("PI_CODING_AGENT_SESSION_DIR", dest)
+	t.Setenv("PI_CODING_AGENT_DIR", "")
+	t.Setenv("PI_DIR", "")
+	data := []byte(`{"type":"session","id":"target","cwd":"/old"}` + "\n")
+	readable := filepath.Join(root, "readable.jsonl")
+	unreadable := filepath.Join(root, "unreadable.jsonl")
+	require.NoError(t, os.WriteFile(readable, data, 0o600))
+	require.NoError(t, os.WriteFile(unreadable, data, 0o000))
+	t.Cleanup(func() { assert.NoError(t, os.Chmod(unreadable, 0o600)) })
+	f, err := os.Open(unreadable)
+	if err == nil {
+		require.NoError(t, f.Close())
+		t.Skip("file permissions do not prevent reads")
+	}
+	require.ErrorIs(t, err, os.ErrPermission)
+	cfg := config.Config{InstallationID: "local", LocalMachineName: "local", AgentDirs: map[parser.AgentType][]string{parser.AgentPi: {root}}}
+	stale := filepath.Join(root, "missing.jsonl")
+	session := &db.Session{ID: "pi:target", Agent: "pi", Machine: "local", FilePath: &stale}
+	_, err = Materialize(t.Context(), cfg, session, cwd)
+	require.ErrorIs(t, err, os.ErrPermission)
+	_, err = os.Stat(filepath.Join(dest, "target.jsonl"))
+	require.ErrorIs(t, err, os.ErrNotExist)
+}
+
 func TestMaterializePiConfiguredSources(t *testing.T) {
 	for _, mirror := range []bool{false, true} {
 		t.Run(map[bool]string{false: "local", true: "mirror"}[mirror], func(t *testing.T) {
