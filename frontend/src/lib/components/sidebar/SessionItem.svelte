@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { m } from "../../i18n/index.js";
+  import { formatDateTime, m } from "../../i18n/index.js";
   import { getSessionStatus } from "../../stores/sessionStatus.svelte.js";
   import { sessions } from "../../stores/sessions.svelte.js";
   import type { SessionGroupInput } from "../../stores/sessionGroups.js";
@@ -8,7 +8,7 @@
     readProgress,
   } from "../../stores/read-progress.svelte.js";
   import { starred } from "../../stores/starred.svelte.js";
-  import { formatCount, formatFullTimestamp, formatRelativeTime } from "../../utils/format.js";
+  import { formatCount, formatRelativeTime } from "../../utils/format.js";
   import { sessionMachineDisplay } from "../../utils/machines.js";
   import { agentInk as getAgentInk, agentLabel, entrypointBadge } from "../../utils/agents.js";
   import {
@@ -156,6 +156,11 @@
   let timeStr = $derived(
     formatRelativeTime(session.ended_at ?? session.started_at),
   );
+
+  let fullTime = $derived.by(() => {
+    const timestamp = session.ended_at ?? session.started_at;
+    return timestamp ? formatDateTime(timestamp, { dateStyle: "medium", timeStyle: "short" }) : "—";
+  });
 
   let isStarred = $derived(starred.isStarred(session.id));
 
@@ -494,7 +499,7 @@
             {/if}
           </div>
           {#if !compact}
-            <span class="session-time" title={formatFullTimestamp(session.ended_at ?? session.started_at)}>{timeStr}</span>
+            <span class="session-time" title={fullTime}>{timeStr}</span>
           {/if}
         </div>
         {#if starred.errors[session.id]}<p role="alert">{starred.errors[session.id]}</p>{/if}
@@ -503,7 +508,7 @@
             <span class="session-project" title={session.project}>{session.project}</span>
           {/if}
           {#if compact}
-            <span class="session-time" title={formatFullTimestamp(session.ended_at ?? session.started_at)}>{timeStr}</span>
+            <span class="session-time" title={fullTime}>{timeStr}</span>
           {/if}
           {#if hasUnread}
             <span

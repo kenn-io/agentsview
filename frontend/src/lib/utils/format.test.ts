@@ -5,7 +5,6 @@ import { testMoney } from "../test/money.js";
 import {
   formatRelativeTime,
   formatTimestamp,
-  formatFullTimestamp,
   sanitizeSnippet,
   highlightTerms,
   _resetNonceCounter,
@@ -26,7 +25,7 @@ describe("formatRelativeTime", () => {
     setLocale("en");
   });
 
-  it("shows years on request while preserving relative dates", () => {
+  it("shows years on request, including for recent sessions", () => {
     vi.setSystemTime(new Date("2026-11-13T12:00:00Z"));
     ui.alwaysShowYear = true;
     for (const year of ["2024", "2025", "2026"]) {
@@ -34,10 +33,13 @@ describe("formatRelativeTime", () => {
       expect(formatRelativeTime(date)).toContain(year);
       expect(formatTimestamp(date)).toContain(year);
     }
-    expect(formatRelativeTime("2026-11-12T12:00:00Z")).toBe("1d ago");
-    expect(formatFullTimestamp("2024-11-11T12:00:00Z")).toContain("2024");
-    expect(formatFullTimestamp(null)).toBe("—");
+    expect(formatRelativeTime("2026-11-13T11:58:00Z")).toContain("2026");
+    expect(formatRelativeTime("2026-11-11T12:00:00Z")).toContain("2026");
+    expect(formatRelativeTime(null)).toBe("—");
+    vi.setSystemTime(new Date("2026-01-02T12:00:00Z"));
+    expect(formatRelativeTime("2025-12-31T12:00:00Z")).toContain("2025");
     ui.alwaysShowYear = false;
+    expect(formatRelativeTime("2025-12-31T12:00:00Z")).toBe("2d ago");
     expect(formatRelativeTime("2024-11-11T12:00:00Z")).not.toContain("2024");
     expect(formatTimestamp("2024-11-11T12:00:00Z")).not.toContain("2024");
     setLocale("zh-CN");

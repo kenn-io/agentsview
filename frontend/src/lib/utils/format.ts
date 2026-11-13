@@ -31,6 +31,10 @@ export function formatRelativeTime(isoString: string | null | undefined): string
   const date = new Date(isoString);
   const diffSec = Math.floor((Date.now() - date.getTime()) / 1000);
 
+  if (ui.alwaysShowYear) {
+    return formatDateTime(date, { year: "numeric", month: "short", day: "numeric" });
+  }
+
   if (diffSec < MINUTE) return m.shared_relative_just_now();
   if (diffSec < HOUR) {
     return m.shared_relative_minutes_ago({
@@ -66,11 +70,6 @@ export function formatTimestamp(isoString: string | null | undefined): string {
     hour: "2-digit",
     minute: "2-digit",
   });
-}
-
-export function formatFullTimestamp(isoString: string | null | undefined): string {
-  if (!isoString) return "—";
-  return formatDateTime(new Date(isoString), { dateStyle: "medium", timeStyle: "short" });
 }
 
 /** Formats an agent name for display */
