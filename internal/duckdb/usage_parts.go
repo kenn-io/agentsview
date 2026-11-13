@@ -3,16 +3,15 @@ package duckdb
 import (
 	"context"
 	"fmt"
-	"maps"
-	"slices"
 
+	"go.kenn.io/agentsview/internal/db"
 	"go.kenn.io/agentsview/internal/kept"
 	pricingpkg "go.kenn.io/agentsview/internal/pricing"
 )
 
 type usagePart[T any] struct {
 	ID, Fingerprint string
-	Peers           []string
+	Group           string
 	Present         bool
 	Value           T
 }
@@ -21,7 +20,7 @@ var usagePartReadObserver func([]string)
 var usagePartPublishObserver func()
 
 // refreshUsageParts retains only parts whose source sessions are unchanged.
-func refreshUsageParts[T any](ctx context.Context, s *Store, slot, priceDigest string, size func(T) int64, read func(context.Context, []string) (map[string]T, error)) (map[string]T, error) {
+func refreshUsageParts[T any](ctx context.Context, s *Store, slot, priceDigest string, f db.UsageFilter, size func(T) int64, read func(context.Context, []string) (map[string]T, error)) (map[string]T, error) {
 	if !s.usageDisk.Enabled() || slot == "" {
 		return read(ctx, nil)
 	}
@@ -30,7 +29,7 @@ func refreshUsageParts[T any](ctx context.Context, s *Store, slot, priceDigest s
 	if err != nil {
 		return nil, err
 	}
-	version := "usage-parts-1|" + priceDigest + "|" + pricingpkg.ConfiguredAliasesDigest()
+	version := usagePartsVersion(f, priceDigest)
 	old := map[string]usagePart[T]{}
 	if data, ok := s.usageDisk.Get(slot, version); ok {
 		if rows, ok := kept.DecodeRows[usagePart[T]](data); ok {
@@ -64,17 +63,18 @@ func refreshUsageParts[T any](ctx context.Context, s *Store, slot, priceDigest s
 	if err != nil {
 		return nil, err
 	}
-	queue := make([]string, 0, len(changed))
+	oldGroups, newGroups := map[string]bool{}, map[string]bool{}
 	for id := range changed {
-		queue = append(queue, id)
+		if group := old[id].Group; group != "" {
+			oldGroups[group] = true
+		}
+		if group := peers[id]; group != "" {
+			newGroups[group] = true
+		}
 	}
-	for i := 0; i < len(queue); i++ {
-		id := queue[i]
-		for _, peer := range append(slices.Clone(peers[id]), old[id].Peers...) {
-			if !changed[peer] {
-				changed[peer] = true
-				queue = append(queue, peer)
-			}
+	for id := range versions {
+		if oldGroups[old[id].Group] || newGroups[peers[id]] {
+			changed[id] = true
 		}
 	}
 	values := make(map[string]T, len(versions))
@@ -114,11 +114,7 @@ func refreshUsageParts[T any](ctx context.Context, s *Store, slot, priceDigest s
 			rows = append(rows, usagePart[T]{id, fingerprint, peers[id], present, value})
 		}
 		if data, err := kept.EncodeRows(rows, 128<<20, func(part usagePart[T]) int64 {
-			n := int64(len(part.ID)+len(part.Fingerprint)) + size(part.Value)
-			for _, peer := range part.Peers {
-				n += int64(len(peer))
-			}
-			return n
+			return int64(len(part.ID)+len(part.Fingerprint)+len(part.Group)) + size(part.Value)
 		}); err == nil {
 			s.usageDisk.Put(slot, version, data)
 		}
@@ -145,23 +141,16 @@ func (s *Store) usagePartVersions(ctx context.Context) (map[string]string, error
 	if err != nil {
 		return nil, err
 	}
-	var generation, cursor string
-	err = s.queryRowContext(ctx, `SELECT
-		COALESCE((SELECT value FROM sync_metadata WHERE key = ?), ''),
-		COALESCE((SELECT value FROM sync_metadata WHERE key = ?), '')`,
-		sourceDatabaseIDMetadataKey, cursorUsageMaxIDMetadataKey).Scan(&generation, &cursor)
-	if err != nil {
+	var count int64
+	var hash uint64
+	if err := s.queryRowContext(ctx, `SELECT COUNT(*), COALESCE(BIT_XOR(HASH(cu)), 0) FROM cursor_usage_events cu`).Scan(&count, &hash); err != nil {
 		return nil, err
 	}
-	if generation != "" {
-		versions[""] = generation + "|" + cursor
-	} else {
-		versions[""] = ""
-	}
+	versions[""] = fmt.Sprintf("%d|%d", count, hash)
 	return versions, nil
 }
 
-func (s *Store) usagePartPeers(ctx context.Context) (map[string][]string, error) {
+func (s *Store) usagePartPeers(ctx context.Context) (map[string]string, error) {
 	rows, err := s.queryContext(ctx, `WITH keys AS (
 		SELECT DISTINCT m.session_id,
 			CASE WHEN m.claude_message_id != '' THEN 'c:' || m.claude_message_id || ':' || m.claude_request_id
@@ -174,31 +163,45 @@ func (s *Store) usagePartPeers(ctx context.Context) (map[string][]string, error)
 		return nil, fmt.Errorf("querying usage peers: %w", err)
 	}
 	defer rows.Close()
-	groups := map[string][]string{}
+	parents := map[string]string{}
+	var root func(string) string
+	root = func(id string) string {
+		if parent, ok := parents[id]; !ok {
+			parents[id] = id
+			return id
+		} else if parent != id {
+			parents[id] = root(parent)
+		}
+		return parents[id]
+	}
+	var previous, first string
 	for rows.Next() {
 		var key, id string
 		if err := rows.Scan(&key, &id); err != nil {
 			return nil, err
 		}
-		groups[key] = append(groups[key], id)
+		if key != previous || first == "" {
+			previous, first = key, id
+			root(id)
+			continue
+		}
+		a, b := root(first), root(id)
+		if a < b {
+			parents[b] = a
+		} else {
+			parents[a] = b
+		}
 	}
 	if err := rows.Err(); err != nil {
 		return nil, err
 	}
-	sets := map[string]map[string]struct{}{}
-	for _, ids := range groups {
-		for _, id := range ids {
-			if sets[id] == nil {
-				sets[id] = map[string]struct{}{}
-			}
-			for _, peer := range ids {
-				sets[id][peer] = struct{}{}
-			}
-		}
+	for id := range parents {
+		parents[id] = root(id)
 	}
-	peers := map[string][]string{}
-	for id, set := range sets {
-		peers[id] = slices.Sorted(maps.Keys(set))
-	}
-	return peers, nil
+	return parents, nil
+}
+
+func usagePartsVersion(f db.UsageFilter, priceDigest string) string {
+	expr, zone := duckUsageLocalDateSQL(f)
+	return fmt.Sprintf("usage-parts-2|%s|%s|%s|%v", priceDigest, pricingpkg.ConfiguredAliasesDigest(), expr, zone)
 }

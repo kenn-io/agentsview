@@ -61,12 +61,28 @@ func TestPricingResolverExactCustomRateBeatsConfiguredAlias(t *testing.T) {
 	pricingpkg.SetConfiguredAliases(map[string]string{"foo": "gpt-6-sol"})
 	t.Cleanup(func() { pricingpkg.SetConfiguredAliases(nil) })
 	resolver := NewPricingResolver([]EffectivePricingRow{
-		{ModelPattern: "gateway/foo", Rates: ModelRates{Source: PricingRowSourceCustom}},
+		{ModelPattern: "gateway/foo", Rates: ModelRates{Source: PricingRowSourceCustom, Bands: []PricingBand{{AboveInputTokens: 100}}}},
 		{ModelPattern: "gpt-6-sol", Rates: ModelRates{InputPerMTok: money.MustParseDollars("9"), Source: PricingRowSourceFetched}},
 	})
 	_, lookup := resolver.ResolveAt("gateway/foo", "gateway/foo", time.Time{})
 	require.True(t, lookup.OK)
 	assert.Zero(t, lookup.Rates.InputPerMTok.Microdollars)
+	first := resolver.Copy()
+	_, copied := first.Resolve("gateway/foo", "gateway/foo")
+	first.RecordResolvedComputedRequest("gateway/foo", "gateway/foo", copied, 200, 0, 0)
+	first.RecordResolvedReported("gateway/foo", "gateway/foo", copied)
+	first.RecordUnattributedReported()
+	records, unattributed := first.RecordedCounts()
+	replayed := resolver.Copy()
+	replayed.ReplayRecordedCounts(records, unattributed)
+	want, err := first.BuildBlock()
+	require.NoError(t, err)
+	got, err := replayed.BuildBlock()
+	require.NoError(t, err)
+	require.Equal(t, want, got)
+	copied.Rates.Bands[0].AboveInputTokens = 999
+	_, again := resolver.Resolve("gateway/foo", "gateway/foo")
+	require.Equal(t, 100, again.Rates.Bands[0].AboveInputTokens)
 }
 
 func TestPricingResolverUsesHistoricalGenAIPricesBeforeFlatFallback(t *testing.T) {
@@ -1608,29 +1624,4 @@ func TestPricingResolverDependencyFingerprint(t *testing.T) {
 			}
 		})
 	}
-}
-
-func TestPricingResolverCopyAndReplay(t *testing.T) {
-	rows := []EffectivePricingRow{{ModelPattern: "model", Rates: ModelRates{
-		Source: PricingRowSourceCustom,
-		Bands:  []PricingBand{{AboveInputTokens: 100}},
-	}}}
-	base := NewPricingResolver(rows)
-	first := base.Copy()
-	_, lookup := first.Resolve("model", "model")
-	require.True(t, lookup.OK)
-	first.RecordResolvedComputedRequest("model", "model", lookup, 200, 0, 0)
-	first.RecordResolvedReported("model", "model", lookup)
-	first.RecordUnattributedReported()
-	records, unattributed := first.RecordedCounts()
-	replayed := base.Copy()
-	replayed.ReplayRecordedCounts(records, unattributed)
-	want, err := first.BuildBlock()
-	require.NoError(t, err)
-	got, err := replayed.BuildBlock()
-	require.NoError(t, err)
-	require.Equal(t, want, got)
-	lookup.Rates.Bands[0].AboveInputTokens = 999
-	_, again := base.Resolve("model", "model")
-	require.Equal(t, 100, again.Rates.Bands[0].AboveInputTokens)
 }

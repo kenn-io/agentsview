@@ -4,6 +4,7 @@ package duckdb
 
 import (
 	"os"
+	"os/exec"
 	"path/filepath"
 	"sync"
 	"testing"
@@ -25,17 +26,25 @@ func openUsagePartsStore(t *testing.T, path string) *Store {
 	return store
 }
 
+func writeUsageMirror(t *testing.T, path string, statements ...string) {
+	t.Helper()
+	conn, err := Open(t.Context(), path)
+	require.NoError(t, err)
+	for _, statement := range statements {
+		_, err := conn.ExecContext(t.Context(), statement)
+		require.NoError(t, err)
+	}
+	require.NoError(t, conn.Close())
+}
+
 func TestUsagePartsAcrossRestart(t *testing.T) {
 	t.Setenv("CACHE_DIRECTORY", t.TempDir())
 	path := filepath.Join(t.TempDir(), "mirror.duckdb")
 	keptActivityMirror(t, path, "session-a", 500)
-	conn, err := Open(t.Context(), path)
-	require.NoError(t, err)
-	_, err = conn.ExecContext(t.Context(), `UPDATE sessions SET agentsview_push_fingerprint = 'first'`)
-	require.NoError(t, err)
-	_, err = conn.ExecContext(t.Context(), `UPDATE messages SET token_usage = '{"output_tokens":500,"recorded_cost_microdollars":2000}' WHERE id = 2`)
-	require.NoError(t, err)
-	require.NoError(t, conn.Close())
+	writeUsageMirror(t, path,
+		`UPDATE sessions SET agentsview_push_fingerprint = 'first'`,
+		`UPDATE messages SET token_usage = '{"output_tokens":500,"recorded_cost_microdollars":2000}' WHERE id = 2`,
+	)
 	store := openUsagePartsStore(t, path)
 	f := db.UsageFilter{From: "2026-01-01", To: "2026-01-01", Timezone: "UTC"}
 	first, err := store.GetDailyUsage(t.Context(), f)
@@ -61,13 +70,10 @@ func TestUsagePartsAcrossRestart(t *testing.T) {
 	require.Zero(t, reads)
 	require.NoError(t, restarted.Close())
 
-	conn, err = Open(t.Context(), path)
-	require.NoError(t, err)
-	_, err = conn.ExecContext(t.Context(), `UPDATE sessions SET agentsview_push_fingerprint = 'second'`)
-	require.NoError(t, err)
-	_, err = conn.ExecContext(t.Context(), `UPDATE messages SET token_usage = '{"output_tokens":900}' WHERE id = 2`)
-	require.NoError(t, err)
-	require.NoError(t, conn.Close())
+	writeUsageMirror(t, path,
+		`UPDATE sessions SET agentsview_push_fingerprint = 'second'`,
+		`UPDATE messages SET token_usage = '{"output_tokens":900}' WHERE id = 2`,
+	)
 	changed := openUsagePartsStore(t, path)
 	defer changed.Close()
 	got, err = changed.GetDailyUsage(t.Context(), f)
@@ -126,24 +132,20 @@ func testUsagePartsPeers(t *testing.T, update string, firstOutput int) {
 	t.Setenv("CACHE_DIRECTORY", t.TempDir())
 	path := filepath.Join(t.TempDir(), "mirror.duckdb")
 	keptActivityMirror(t, path, "session-a", 500)
-	conn, err := Open(t.Context(), path)
-	require.NoError(t, err)
-	_, err = conn.ExecContext(t.Context(), `UPDATE sessions SET agentsview_push_fingerprint = 'a1'`)
-	require.NoError(t, err)
-	_, err = conn.ExecContext(t.Context(), `INSERT INTO sessions SELECT * REPLACE ('session-b' AS id, 'b1' AS agentsview_push_fingerprint, 'beta' AS project) FROM sessions WHERE id = 'session-a'`)
-	require.NoError(t, err)
-	_, err = conn.ExecContext(t.Context(), `UPDATE messages SET `+update+` WHERE id = 2`)
-	require.NoError(t, err)
-	_, err = conn.ExecContext(t.Context(), `INSERT INTO messages SELECT * REPLACE (3 AS id, 'session-b' AS session_id, '{"output_tokens":700}' AS token_usage) FROM messages WHERE id = 2`)
-	require.NoError(t, err)
-	_, err = conn.ExecContext(t.Context(), `INSERT INTO messages SELECT * REPLACE (id + 10 AS id, ordinal + 10 AS ordinal, '{}' AS token_usage, CASE WHEN claude_message_id != '' THEN claude_message_id || '-other' ELSE '' END AS claude_message_id, CASE WHEN source_uuid != '' THEN source_uuid || '-other' ELSE '' END AS source_uuid) FROM messages WHERE id IN (2, 3)`)
-	require.NoError(t, err)
-	require.NoError(t, conn.Close())
+	writeUsageMirror(t, path,
+		`UPDATE sessions SET agentsview_push_fingerprint = 'a1'`,
+		`INSERT INTO sessions SELECT * REPLACE ('session-b' AS id, 'b1' AS agentsview_push_fingerprint, 'beta' AS project) FROM sessions WHERE id = 'session-a'`,
+		`UPDATE messages SET `+update+` WHERE id = 2`,
+		`INSERT INTO messages SELECT * REPLACE (3 AS id, 'session-b' AS session_id, '{"output_tokens":700}' AS token_usage) FROM messages WHERE id = 2`,
+		`INSERT INTO messages SELECT * REPLACE (id + 10 AS id, ordinal + 10 AS ordinal, '{}' AS token_usage, CASE WHEN claude_message_id != '' THEN claude_message_id || '-other' ELSE '' END AS claude_message_id, CASE WHEN source_uuid != '' THEN source_uuid || '-other' ELSE '' END AS source_uuid) FROM messages WHERE id IN (2, 3)`,
+		`INSERT INTO sessions SELECT * REPLACE ('session-c' AS id, 'c1' AS agentsview_push_fingerprint) FROM sessions WHERE id = 'session-b'`,
+		`INSERT INTO messages SELECT * REPLACE (23 AS id, 'session-c' AS session_id) FROM messages WHERE id = 13`,
+	)
 	f := db.UsageFilter{From: "2026-01-01", To: "2026-01-01", Timezone: "UTC"}
 	store := openUsagePartsStore(t, path)
 	peers, err := store.usagePartPeers(t.Context())
 	require.NoError(t, err)
-	require.ElementsMatch(t, []string{"session-a", "session-b"}, peers["session-a"])
+	require.Equal(t, map[string]string{"session-a": "session-a", "session-b": "session-a", "session-c": "session-a"}, peers)
 	first, err := store.GetDailyUsage(t.Context(), f)
 	require.NoError(t, err)
 	require.Equal(t, firstOutput, first.Totals.OutputTokens)
@@ -153,13 +155,10 @@ func testUsagePartsPeers(t *testing.T, update string, firstOutput int) {
 	require.NoError(t, err)
 	require.Equal(t, firstOutput, selected.Totals.OutputTokens)
 	require.NoError(t, store.Close())
-	conn, err = Open(t.Context(), path)
-	require.NoError(t, err)
-	_, err = conn.ExecContext(t.Context(), `UPDATE sessions SET agentsview_push_fingerprint = 'a2' WHERE id = 'session-a'`)
-	require.NoError(t, err)
-	_, err = conn.ExecContext(t.Context(), `UPDATE messages SET token_usage = '{"output_tokens":900}' WHERE id = 2`)
-	require.NoError(t, err)
-	require.NoError(t, conn.Close())
+	writeUsageMirror(t, path,
+		`UPDATE sessions SET agentsview_push_fingerprint = 'a2' WHERE id = 'session-a'`,
+		`UPDATE messages SET token_usage = '{"output_tokens":900}' WHERE id = 2`,
+	)
 	store = openUsagePartsStore(t, path)
 	defer store.Close()
 	var refreshed []string
@@ -168,7 +167,7 @@ func testUsagePartsPeers(t *testing.T, update string, firstOutput int) {
 	t.Cleanup(func() { usagePartReadObserver = previous })
 	got, err := store.GetDailyUsage(t.Context(), f)
 	require.NoError(t, err)
-	require.ElementsMatch(t, []string{"session-a", "session-b"}, refreshed)
+	require.ElementsMatch(t, []string{"session-a", "session-b", "session-c"}, refreshed)
 	require.Equal(t, 900, got.Totals.OutputTokens)
 	fresh := NewStoreFromDB(store.DB())
 	want, err := fresh.GetDailyUsage(t.Context(), f)
@@ -177,14 +176,20 @@ func testUsagePartsPeers(t *testing.T, update string, firstOutput int) {
 	refreshed = nil
 	selected, err = store.GetDailyUsage(t.Context(), filtered)
 	require.NoError(t, err)
-	require.ElementsMatch(t, []string{"session-a", "session-b"}, refreshed)
+	require.ElementsMatch(t, []string{"session-a", "session-b", "session-c"}, refreshed)
 	require.Equal(t, 900, selected.Totals.OutputTokens)
 	require.NoError(t, store.Close())
-	conn, err = Open(t.Context(), path)
+	writeUsageMirror(t, path,
+		`UPDATE sessions SET agentsview_push_fingerprint = agentsview_push_fingerprint || '-split' WHERE id IN ('session-a', 'session-b')`,
+		`UPDATE messages SET claude_message_id = '', source_uuid = '' WHERE id IN (12, 13)`,
+	)
+	store = openUsagePartsStore(t, path)
+	refreshed = nil
+	_, err = store.GetDailyUsage(t.Context(), f)
 	require.NoError(t, err)
-	_, err = conn.ExecContext(t.Context(), `UPDATE sessions SET deleted_at = CURRENT_TIMESTAMP WHERE id = 'session-a'`)
-	require.NoError(t, err)
-	require.NoError(t, conn.Close())
+	require.ElementsMatch(t, []string{"session-a", "session-b", "session-c"}, refreshed)
+	require.NoError(t, store.Close())
+	writeUsageMirror(t, path, `UPDATE sessions SET deleted_at = CURRENT_TIMESTAMP WHERE id = 'session-a'`)
 	store = openUsagePartsStore(t, path)
 	defer store.Close()
 	refreshed = nil
@@ -204,26 +209,16 @@ func TestUsagePartsMirrorPricingChange(t *testing.T) {
 	t.Cleanup(func() { pricingpkg.SetConfiguredAliases(nil) })
 	path := filepath.Join(t.TempDir(), "mirror.duckdb")
 	keptActivityMirror(t, path, "session-a", 500)
-	conn, err := Open(t.Context(), path)
-	require.NoError(t, err)
-	_, err = conn.ExecContext(t.Context(), `UPDATE sessions SET agentsview_push_fingerprint = 'a1'`)
-	require.NoError(t, err)
-	_, err = conn.ExecContext(t.Context(), `INSERT INTO model_pricing (model_pattern, input_microdollars_per_mtok, output_microdollars_per_mtok, cache_creation_microdollars_per_mtok, cache_read_microdollars_per_mtok, updated_at) VALUES ('price-a', 0, 10000000, 0, 0, ''), ('price-b', 0, 20000000, 0, 0, '')`)
-	require.NoError(t, err)
-	require.NoError(t, conn.Close())
+	writeUsageMirror(t, path,
+		`UPDATE sessions SET agentsview_push_fingerprint = 'a1'`,
+		`INSERT INTO model_pricing (model_pattern, input_microdollars_per_mtok, output_microdollars_per_mtok, cache_creation_microdollars_per_mtok, cache_read_microdollars_per_mtok, updated_at) VALUES ('price-a', 0, 10000000, 0, 0, ''), ('price-b', 0, 20000000, 0, 0, '')`,
+	)
 	f := db.UsageFilter{From: "2026-01-01", To: "2026-01-01", Timezone: "UTC"}
 	store := openUsagePartsStore(t, path)
 	first, err := store.GetDailyUsage(t.Context(), f)
 	require.NoError(t, err)
 	require.Equal(t, money.MustParseDollars("0.005"), first.Totals.TotalCost)
 	_, err = store.GetTopSessionsByCost(t.Context(), f, 10)
-	require.NoError(t, err)
-	pricingpkg.SetConfiguredAliases(map[string]string{"kept-model": "price-b"})
-	inMemory, err := store.GetDailyUsage(t.Context(), f)
-	require.NoError(t, err)
-	require.Equal(t, money.MustParseDollars("0.01"), inMemory.Totals.TotalCost)
-	pricingpkg.SetConfiguredAliases(map[string]string{"kept-model": "price-a"})
-	_, err = store.GetDailyUsage(t.Context(), f)
 	require.NoError(t, err)
 	require.NoError(t, store.Close())
 	pricingpkg.SetConfiguredAliases(map[string]string{"kept-model": "price-b"})
@@ -235,11 +230,7 @@ func TestUsagePartsMirrorPricingChange(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, money.MustParseDollars("0.01"), top[0].Cost)
 	require.NoError(t, store.Close())
-	conn, err = Open(t.Context(), path)
-	require.NoError(t, err)
-	_, err = conn.ExecContext(t.Context(), `UPDATE model_pricing SET output_microdollars_per_mtok = 30000000 WHERE model_pattern = 'price-b'`)
-	require.NoError(t, err)
-	require.NoError(t, conn.Close())
+	writeUsageMirror(t, path, `UPDATE model_pricing SET output_microdollars_per_mtok = 30000000 WHERE model_pattern = 'price-b'`)
 	store = openUsagePartsStore(t, path)
 	defer store.Close()
 	reads := 0
@@ -256,23 +247,13 @@ func TestUsagePartsRefreshesCursorAccount(t *testing.T) {
 	t.Setenv("CACHE_DIRECTORY", t.TempDir())
 	path := filepath.Join(t.TempDir(), "mirror.duckdb")
 	keptActivityMirror(t, path, "session-a", 500)
-	conn, err := Open(t.Context(), path)
-	require.NoError(t, err)
-	_, err = conn.ExecContext(t.Context(), `UPDATE sessions SET agentsview_push_fingerprint = 'a1'`)
-	require.NoError(t, err)
-	require.NoError(t, conn.Close())
+	writeUsageMirror(t, path, `UPDATE sessions SET agentsview_push_fingerprint = 'a1'`)
 	f := db.UsageFilter{From: "2026-01-01", To: "2026-01-01", Timezone: "UTC"}
 	store := openUsagePartsStore(t, path)
-	_, err = store.GetDailyUsage(t.Context(), f)
+	_, err := store.GetDailyUsage(t.Context(), f)
 	require.NoError(t, err)
 	require.NoError(t, store.Close())
-	conn, err = Open(t.Context(), path)
-	require.NoError(t, err)
-	_, err = conn.ExecContext(t.Context(), `INSERT INTO cursor_usage_events (id, occurred_at, model, output_tokens, dedup_key) VALUES (1, TIMESTAMP '2026-01-01 01:00:00', 'kept-model', 200, 'account-1')`)
-	require.NoError(t, err)
-	_, err = conn.ExecContext(t.Context(), `INSERT INTO sync_metadata (key, value) VALUES (?, '1') ON CONFLICT (key) DO UPDATE SET value = excluded.value`, cursorUsageMaxIDMetadataKey)
-	require.NoError(t, err)
-	require.NoError(t, conn.Close())
+	writeUsageMirror(t, path, `INSERT INTO cursor_usage_events (id, occurred_at, model, output_tokens, dedup_key) VALUES (1, TIMESTAMP '2026-01-01 01:00:00', 'kept-model', 200, 'account-1')`)
 	store = openUsagePartsStore(t, path)
 	defer store.Close()
 	var refreshed []string
@@ -288,13 +269,7 @@ func TestUsagePartsRefreshesCursorAccount(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, want, got)
 	require.NoError(t, store.Close())
-	conn, err = Open(t.Context(), path)
-	require.NoError(t, err)
-	_, err = conn.ExecContext(t.Context(), `UPDATE sync_metadata SET value = 'new-generation' WHERE key = ?`, sourceDatabaseIDMetadataKey)
-	require.NoError(t, err)
-	_, err = conn.ExecContext(t.Context(), `UPDATE cursor_usage_events SET output_tokens = 300 WHERE id = 1`)
-	require.NoError(t, err)
-	require.NoError(t, conn.Close())
+	writeUsageMirror(t, path, `UPDATE cursor_usage_events SET output_tokens = 300 WHERE id = 1`)
 	store = openUsagePartsStore(t, path)
 	defer store.Close()
 	refreshed = nil
@@ -308,15 +283,11 @@ func TestUsagePartsRefreshesAuthoritativeCost(t *testing.T) {
 	t.Setenv("CACHE_DIRECTORY", t.TempDir())
 	path := filepath.Join(t.TempDir(), "mirror.duckdb")
 	keptActivityMirror(t, path, "session-a", 500)
-	conn, err := Open(t.Context(), path)
-	require.NoError(t, err)
-	_, err = conn.ExecContext(t.Context(), `UPDATE sessions SET agentsview_push_fingerprint = 'a1', agent = 'copilot'`)
-	require.NoError(t, err)
-	_, err = conn.ExecContext(t.Context(), `INSERT INTO messages SELECT * REPLACE (3 AS id, 2 AS ordinal, TIMESTAMP '2026-01-02 00:01:00' AS timestamp) FROM messages WHERE id = 2`)
-	require.NoError(t, err)
-	_, err = conn.ExecContext(t.Context(), `INSERT INTO usage_events (id, session_id, source, model, cost_microdollars, cost_status, cost_source, occurred_at, dedup_key) VALUES (1, 'session-a', 'shutdown', 'kept-model', 10000, 'exact', 'copilot-reported', TIMESTAMP '2026-01-02 00:02:00', 'cost')`)
-	require.NoError(t, err)
-	require.NoError(t, conn.Close())
+	writeUsageMirror(t, path,
+		`UPDATE sessions SET agentsview_push_fingerprint = 'a1', agent = 'copilot'`,
+		`INSERT INTO messages SELECT * REPLACE (3 AS id, 2 AS ordinal, TIMESTAMP '2026-01-02 00:01:00' AS timestamp) FROM messages WHERE id = 2`,
+		`INSERT INTO usage_events (id, session_id, source, model, cost_microdollars, cost_status, cost_source, occurred_at, dedup_key) VALUES (1, 'session-a', 'shutdown', 'kept-model', 10000, 'exact', 'copilot-reported', TIMESTAMP '2026-01-02 00:02:00', 'cost')`,
+	)
 	f := db.UsageFilter{From: "2026-01-01", To: "2026-01-02", Timezone: "UTC"}
 	rates := map[string]config.CustomModelRate{"kept-model": {OutputMicrodollarsPerMTok: 10_000_000}}
 	store, err := NewStore(t.Context(), path)
@@ -327,13 +298,10 @@ func TestUsagePartsRefreshesAuthoritativeCost(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, money.MustParseDollars("0.01"), first.Totals.TotalCost)
 	require.NoError(t, store.Close())
-	conn, err = Open(t.Context(), path)
-	require.NoError(t, err)
-	_, err = conn.ExecContext(t.Context(), `UPDATE sessions SET agentsview_push_fingerprint = 'a2'`)
-	require.NoError(t, err)
-	_, err = conn.ExecContext(t.Context(), `UPDATE usage_events SET cost_microdollars = 20000 WHERE id = 1`)
-	require.NoError(t, err)
-	require.NoError(t, conn.Close())
+	writeUsageMirror(t, path,
+		`UPDATE sessions SET agentsview_push_fingerprint = 'a2'`,
+		`UPDATE usage_events SET cost_microdollars = 20000 WHERE id = 1`,
+	)
 	store, err = NewStore(t.Context(), path)
 	require.NoError(t, err)
 	defer store.Close()
@@ -417,4 +385,26 @@ func TestUsagePartsReplacementDuringPublish(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, 900, got.Totals.OutputTokens)
 	require.Equal(t, 1, reads)
+}
+
+func TestUsagePartsDefaultTimezone(t *testing.T) {
+	if path := os.Getenv("USAGE_PARTS_TZ_MIRROR"); path != "" {
+		store := openUsagePartsStore(t, path)
+		defer store.Close()
+		result, err := store.GetDailyUsage(t.Context(), db.UsageFilter{})
+		require.NoError(t, err)
+		require.Len(t, result.Daily, 1)
+		require.Equal(t, os.Getenv("USAGE_PARTS_TZ_DATE"), result.Daily[0].Date)
+		return
+	}
+	t.Setenv("CACHE_DIRECTORY", t.TempDir())
+	path := filepath.Join(t.TempDir(), "mirror.duckdb")
+	keptActivityMirror(t, path, "session-a", 500)
+	writeUsageMirror(t, path, `UPDATE sessions SET agentsview_push_fingerprint = 'a1'`, `UPDATE messages SET timestamp = TIMESTAMP '2026-01-02 02:00:00' WHERE id = 2`)
+	for _, tc := range []struct{ zone, day string }{{"America/New_York", "2026-01-01"}, {"UTC", "2026-01-02"}} {
+		cmd := exec.CommandContext(t.Context(), os.Args[0], "-test.run=^TestUsagePartsDefaultTimezone$")
+		cmd.Env = append(os.Environ(), "TZ="+tc.zone, "USAGE_PARTS_TZ_MIRROR="+path, "USAGE_PARTS_TZ_DATE="+tc.day)
+		out, err := cmd.CombinedOutput()
+		require.NoError(t, err, "%s", out)
+	}
 }

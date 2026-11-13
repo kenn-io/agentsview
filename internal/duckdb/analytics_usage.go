@@ -1505,7 +1505,7 @@ func (s *Store) readDailyUsage(
 	if slot != "" {
 		slot = "daily|" + slot
 	}
-	parts, err := refreshUsageParts(ctx, s, slot, block.Digest, duckDailyPartBytes, func(ctx context.Context, ids []string) (map[string]duckDailyPart, error) {
+	parts, err := refreshUsageParts(ctx, s, slot, block.Digest, f, duckDailyPartBytes, func(ctx context.Context, ids []string) (map[string]duckDailyPart, error) {
 		out := map[string]duckDailyPart{}
 		var id string
 		var w *dailyWork
@@ -2052,7 +2052,7 @@ func (s *Store) readTopSessionTotals(
 	if slot != "" {
 		slot = "top|" + slot
 	}
-	parts, err := refreshUsageParts(ctx, s, slot, block.Digest, db.TopSessionBytes, func(ctx context.Context, ids []string) (map[string]db.TopSessionEntry, error) {
+	parts, err := refreshUsageParts(ctx, s, slot, block.Digest, f, db.TopSessionBytes, func(ctx context.Context, ids []string) (map[string]db.TopSessionEntry, error) {
 		return s.readTopSessionParts(ctx, f, ids, rateResolver)
 	})
 	if err != nil {
