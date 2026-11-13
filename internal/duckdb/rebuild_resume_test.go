@@ -6,6 +6,7 @@ import (
 	"context"
 	"encoding/json/v2"
 	"fmt"
+	"os"
 	"path/filepath"
 	"strconv"
 	"testing"
@@ -330,4 +331,44 @@ func TestRebuildRestartsWhenFrustrationVersionChanged(t *testing.T) {
 	result, err := Push(ctx, path, local, "test-machine", storage.MirrorPushOptions{}, false, nil)
 	require.NoError(t, err)
 	assert.Equal(t, resumeSessionCount, result.SessionsPushed)
+}
+
+func TestPushPreservesNewerInterruptedRebuild(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		full bool
+	}{
+		{name: "normal"},
+		{name: "full", full: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ctx := t.Context()
+			local := newLocalDB(t)
+			seedResumeSessions(t, local)
+			path := filepath.Join(t.TempDir(), "mirror.duckdb")
+			killedRebuild(t, path, local, storage.MirrorPushOptions{})
+			file := rebuildFilePath(path)
+			conn, err := Open(ctx, file)
+			require.NoError(t, err)
+			runJSON, err := readMetadataKey(ctx, conn, rebuildRunMetadataKey)
+			require.NoError(t, err)
+			var run rebuildRun
+			require.NoError(t, json.Unmarshal([]byte(runJSON), &run))
+			run.FrustrationMarkersVersion = frustrationMarkersVersion + 1
+			encoded, err := json.Marshal(run)
+			require.NoError(t, err)
+			require.NoError(t, recordMetadataKey(ctx, conn, rebuildRunMetadataKey, string(encoded)))
+			require.NoError(t, recordMetadataKey(ctx, conn, frustrationMarkersVersionMetadataKey, strconv.Itoa(run.FrustrationMarkersVersion)))
+			require.NoError(t, conn.Close())
+			before, err := os.ReadFile(file)
+			require.NoError(t, err)
+
+			_, err = Push(ctx, path, local, "test-machine", storage.MirrorPushOptions{}, tc.full, nil)
+			assert.ErrorIs(t, err, errFutureFrustrationVersion)
+			assert.NoFileExists(t, path)
+			after, err := os.ReadFile(file)
+			require.NoError(t, err, "the interrupted rebuild must survive")
+			assert.Equal(t, before, after)
+		})
+	}
 }
