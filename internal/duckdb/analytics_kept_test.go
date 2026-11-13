@@ -43,8 +43,15 @@ func TestAnalyticsKeptMirrorReplacement(t *testing.T) {
 	before, err := store.GetAnalyticsSummary(t.Context(), f)
 	require.NoError(t, err)
 	require.Equal(t, "alpha", before.MostActive)
+	trendsFilter := db.AnalyticsFilter{From: "2026-01-01", To: "2026-01-02", Timezone: "UTC"}
+	terms := []db.TrendTermInput{{Term: "changed", Variants: []string{"changed"}, Matchers: []string{"changed"}}}
+	trends, err := store.GetTrendsTerms(t.Context(), trendsFilter, terms, "day")
+	require.NoError(t, err)
+	require.Zero(t, trends.Series[0].Total)
 	require.NoError(t, swapMirrorFile(next, path))
-	store.checkMirrorReplacement(t.Context(), func(err error) { require.NoError(t, err) })
+	trends, err = store.GetTrendsTerms(t.Context(), trendsFilter, terms, "day")
+	require.NoError(t, err)
+	require.Equal(t, 1, trends.Series[0].Total)
 	after, err := store.GetAnalyticsSummary(t.Context(), f)
 	require.NoError(t, err)
 	require.Equal(t, "beta", after.MostActive)
