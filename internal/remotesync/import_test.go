@@ -11,6 +11,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"testing/synctest"
 	"time"
@@ -75,13 +76,21 @@ func TestPreparedHTTPSyncRebuildContributor(t *testing.T) {
 	}}
 	targetsJSON, err := json.Marshal(targets)
 	require.NoError(t, err)
+	delete(targets.Dirs, parser.AgentCodex)
+	withoutCodexJSON, err := json.Marshal(targets)
+	require.NoError(t, err)
+	var revokeCodex atomic.Bool
 	manifestJSON, err := json.Marshal(manifest)
 	require.NoError(t, err)
 	server := newCurrentProtocolServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
 		case "/api/v1/remote-sync/targets":
 			w.Header().Set("Content-Type", "application/json")
-			_, _ = w.Write(targetsJSON)
+			if revokeCodex.Load() {
+				_, _ = w.Write(withoutCodexJSON)
+			} else {
+				_, _ = w.Write(targetsJSON)
+			}
 		case "/api/v1/remote-sync/manifest":
 			w.Header().Set("Content-Type", "application/json")
 			_, _ = w.Write(manifestJSON)
@@ -159,17 +168,24 @@ func TestPreparedHTTPSyncRebuildContributor(t *testing.T) {
 	assert.NotContains(t, remoteCache, remoteFile,
 		"a full contributor must not load the active database's stale host cache")
 
-	prepared.targets = TargetSet{Dirs: map[parser.AgentType][]string{
-		parser.AgentClaude: {skippedDir},
-	}}
 	activeStats, err := prepared.ImportActive(t.Context())
 	require.NoError(t, err)
-	roots, err = LoadMirrorCodexRoots(t.Context(), prepared.Root())
-	require.NoError(t, err)
-	assert.Empty(t, roots)
 	assert.Equal(t, 0, activeStats.Failed)
 	assert.Equal(t, 0, activeStats.Skipped,
 		"reusing a prepared bootstrap import must preserve its full-parse scope")
+	require.NoError(t, prepared.Close())
+	revokeCodex.Store(true)
+	next, err := hs.Prepare(t.Context())
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, next.Close()) })
+	assert.NotContains(t, next.Targets().Dirs, parser.AgentCodex)
+	activeStats, err = next.ImportActive(t.Context())
+	require.NoError(t, err)
+	roots, err = LoadMirrorCodexRoots(t.Context(), next.Root())
+	require.NoError(t, err)
+	assert.Empty(t, roots)
+	assert.Equal(t, 0, activeStats.Failed)
+	assert.Equal(t, 0, activeStats.Skipped)
 }
 
 func TestPreparedHTTPSyncRebuildOutcomeClassification(t *testing.T) {
