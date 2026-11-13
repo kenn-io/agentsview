@@ -226,11 +226,14 @@ for (const [mode, highContrast] of THEMES) {
       expect(contrast.ratio, JSON.stringify(contrast)).toBeGreaterThanOrEqual(3);
     });
 
-    test("agent names stay readable in the sidebar and session header", async ({ page }) => {
-      const header = page.locator(".session-breadcrumb .agent-badge:not(.entrypoint-badge)");
-      const seen = new Set<string>();
-      for (const agents of agentBatches()) {
-        await page.unrouteAll({ behavior: "wait" });
+    // Each batch owns its page and routes. Replacing routes on a live page
+    // races Playwright's pending interception updates from sidebar refreshes.
+    for (const [batch, agents] of agentBatches().entries()) {
+      test(`agent names stay readable in the sidebar and session header (batch ${batch + 1})`, async ({
+        page,
+      }) => {
+        const header = page.locator(".session-breadcrumb .agent-badge:not(.entrypoint-badge)");
+        const seen = new Set<string>();
         await withAgents(page, agents);
         const sp = new SessionsPage(page);
         await sp.goto();
@@ -263,15 +266,14 @@ for (const [mode, highContrast] of THEMES) {
             `header ${label} ${JSON.stringify(inHeader)}`,
           ).toBeGreaterThanOrEqual(4.5);
         }
-      }
-      expect([...seen].sort()).toEqual(AGENT_PER_COLOR.map((agent) => agentLabel(agent)).sort());
-      await page.unrouteAll({ behavior: "ignoreErrors" });
-    });
+        expect([...seen].sort()).toEqual(agents.map((agent) => agentLabel(agent)).sort());
+        await page.unrouteAll({ behavior: "ignoreErrors" });
+      });
 
-    test("agent names stay readable in the search palette", async ({ page }) => {
-      const seen = new Set<string>();
-      for (const agents of agentBatches()) {
-        await page.unrouteAll({ behavior: "wait" });
+      test(`agent names stay readable in the search palette (batch ${batch + 1})`, async ({
+        page,
+      }) => {
+        const seen = new Set<string>();
         await withAgents(page, agents);
         const sp = new SessionsPage(page);
         await sp.goto();
@@ -300,10 +302,10 @@ for (const [mode, highContrast] of THEMES) {
           ).toBeGreaterThanOrEqual(4.5);
         }
         await page.keyboard.press("Escape");
-      }
-      expect([...seen].sort()).toEqual(AGENT_PER_COLOR.map((agent) => agentLabel(agent)).sort());
-      await page.unrouteAll({ behavior: "ignoreErrors" });
-    });
+        expect([...seen].sort()).toEqual(agents.map((agent) => agentLabel(agent)).sort());
+        await page.unrouteAll({ behavior: "ignoreErrors" });
+      });
+    }
 
     for (const grade of ["A", "B", "C", "F"]) {
       test(`the ${grade} health grade stays readable at rest and on hover`, async ({ page }) => {
