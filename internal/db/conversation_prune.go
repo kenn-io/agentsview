@@ -30,7 +30,7 @@ func (db *DB) PruneConversationTombstones(ctx context.Context) (int64, error) {
 	if err := db.Update(ctx, func(tx *sql.Tx) error {
 		if err := tx.QueryRowContext(ctx, `SELECT COALESCE(MAX(revision), 0), COALESCE(MAX(rowid), 0)
 		 FROM conversation_messages WHERE removed = 1 AND source_id = ''`).Scan(&floor, &maxRowID); err != nil {
-			return fmt.Errorf("finding conversation tombstones: %w", err)
+			return fmt.Errorf("find: %w", err)
 		}
 		if floor == 0 {
 			return nil
@@ -49,7 +49,7 @@ func (db *DB) PruneConversationTombstones(ctx context.Context) (int64, error) {
 			 WHERE rowid > ? AND rowid <= ? AND removed = 1 AND source_id = '' AND revision <= ?`,
 				low, low+conversationPruneRowidBatch, floor)
 			if err != nil {
-				return fmt.Errorf("pruning conversation tombstones: %w", err)
+				return fmt.Errorf("delete: %w", err)
 			}
 			n, err := res.RowsAffected()
 			pruned += n

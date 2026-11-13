@@ -344,7 +344,7 @@ func (db *DB) Compact(ctx context.Context, options CompactOptions) (result Compa
 	// and nothing frees their pages for the VACUUM below to reclaim.
 	if _, err := db.PruneConversationTombstones(ctx); err != nil {
 		_ = os.Remove(op.opDir)
-		return result, fmt.Errorf("prune conversation tombstones: %w", err)
+		return result, fmt.Errorf("remove deleted conversation records: %w", err)
 	}
 	if err := db.CloseWriter(); err != nil {
 		primary := fmt.Errorf("close archive writer for compaction: %w", err)
