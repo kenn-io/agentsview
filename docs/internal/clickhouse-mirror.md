@@ -407,6 +407,11 @@ prices the Cursor rows again; session rows wait for the next whole pass. A read
 that still finds a record without its context after three attempts prices every
 row per request.
 
+A read lists the context IDs of its digest on every request, but the store keeps
+the contexts it has decoded and fetches the JSON only for IDs it has not seen. A
+context ID is a hash of the context's JSON, so a decoded context stays valid for
+as long as its ID exists.
+
 Serve stays read-only. Missing prices and reader-specific custom rates are
 computed for that request using the current pricing rules while push fills the
 shared records. A response never mixes prices from different pricing digests.
