@@ -525,7 +525,11 @@ func readRetainedSource(ctx context.Context, cfg config.Config, database *db.DB,
 	if err != nil {
 		return nil, "", err
 	}
-	defer func() { retErr = errors.Join(retErr, tree.Cleanup()) }()
+	defer func() {
+		if cleanupErr := tree.Cleanup(); cleanupErr != nil {
+			retErr = errors.Join(retErr, cleanupErr)
+		}
+	}()
 	name, err := tree.EntryPath(primary)
 	if err != nil {
 		return nil, "", err
