@@ -499,8 +499,8 @@ func TestMirrorCheckReadsPublicationAfterPreviousCheck(t *testing.T) {
 	<-started
 	select {
 	case <-done:
-		t.Fatal("replacement check finished while another check held the lock")
-	case <-time.After(time.Second): //nolint:kennlint // deadlinetest: the held lock prevents the replacement check from finishing.
+		require.FailNow(t, "replacement check finished while another check held the lock")
+	case <-time.After(time.Second):
 	}
 	require.NoError(t, swapMirrorFile(newer, path))
 	store.replacementMu.Unlock()

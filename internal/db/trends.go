@@ -35,7 +35,7 @@ func TrendsKeptVariant(terms []TrendTermInput, granularity string) string {
 	}
 	values := make([]term, len(terms))
 	for i, t := range terms {
-		values[i] = term{t.Term, t.Variants, t.Matchers}
+		values[i] = term(t)
 	}
 	key, _ := json.Marshal(struct {
 		Version     int
