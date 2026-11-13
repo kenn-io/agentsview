@@ -73,10 +73,11 @@ func TestPreparedHTTPSyncRebuildContributor(t *testing.T) {
 	targets := TargetSet{Dirs: map[parser.AgentType][]string{
 		parser.AgentClaude: {remoteDir, skippedDir},
 		parser.AgentCodex:  {"/remote-codex"},
-	}}
+	}, CodexHomeRoots: map[string]CodexHomeRoots{"/home": {Sessions: "/remote-codex"}}}
 	targetsJSON, err := json.Marshal(targets)
 	require.NoError(t, err)
 	delete(targets.Dirs, parser.AgentCodex)
+	targets.CodexHomeRoots = nil
 	withoutCodexJSON, err := json.Marshal(targets)
 	require.NoError(t, err)
 	var revokeCodex atomic.Bool
@@ -136,6 +137,9 @@ func TestPreparedHTTPSyncRebuildContributor(t *testing.T) {
 	roots, err := LoadMirrorCodexRoots(t.Context(), prepared.Root())
 	require.NoError(t, err)
 	assert.Equal(t, []string{"/remote-codex"}, roots)
+	metadata, err := LoadMirrorCodexMetadata(t.Context(), prepared.Root())
+	require.NoError(t, err)
+	assert.Equal(t, map[string]CodexHomeRoots{"/home": {Sessions: "/remote-codex"}}, metadata.Homes)
 	assert.NoFileExists(t, journalPath)
 	require.NoError(t, prepared.Commit(t.Context()), "post-swap commit is idempotent")
 
@@ -192,6 +196,9 @@ func TestPreparedHTTPSyncRebuildContributor(t *testing.T) {
 	roots, err = LoadMirrorCodexRoots(t.Context(), unchanged.Root())
 	require.NoError(t, err)
 	assert.Equal(t, []string{"/remote-codex"}, roots)
+	metadata, err = LoadMirrorCodexMetadata(t.Context(), unchanged.Root())
+	require.NoError(t, err)
+	assert.Equal(t, map[string]CodexHomeRoots{"/home": {Sessions: "/remote-codex"}}, metadata.Homes)
 	require.NoError(t, os.Remove(mirrorCodexRootsPath(unchanged.Root())))
 	unchangedContributor, err := unchanged.RebuildContributor(t.Context())
 	require.NoError(t, err)
@@ -205,6 +212,9 @@ func TestPreparedHTTPSyncRebuildContributor(t *testing.T) {
 	roots, err = LoadMirrorCodexRoots(t.Context(), unchanged.Root())
 	require.NoError(t, err)
 	assert.Equal(t, []string{"/remote-codex"}, roots)
+	metadata, err = LoadMirrorCodexMetadata(t.Context(), unchanged.Root())
+	require.NoError(t, err)
+	assert.Equal(t, map[string]CodexHomeRoots{"/home": {Sessions: "/remote-codex"}}, metadata.Homes)
 	require.NoError(t, unchanged.Commit(t.Context()))
 	require.NoError(t, unchanged.Close())
 	revokeCodex.Store(true)
@@ -217,6 +227,9 @@ func TestPreparedHTTPSyncRebuildContributor(t *testing.T) {
 	roots, err = LoadMirrorCodexRoots(t.Context(), next.Root())
 	require.NoError(t, err)
 	assert.Empty(t, roots)
+	metadata, err = LoadMirrorCodexMetadata(t.Context(), next.Root())
+	require.NoError(t, err)
+	assert.Empty(t, metadata.Homes)
 	assert.Equal(t, 0, activeStats.Failed)
 	assert.Equal(t, 0, activeStats.Skipped)
 }

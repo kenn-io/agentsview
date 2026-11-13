@@ -158,40 +158,9 @@ func materializeCodex(ctx context.Context, cfg config.Config, database *db.DB, s
 					retErr = errors.Join(retErr, closeSource())
 				}
 			}()
-			advertised, err := remotesync.LoadMirrorCodexRoots(ctx, mirror)
+			root, roots, archiveRoots, err = codexMirrorGroup(ctx, mirror, anchor, host)
 			if err != nil {
-				return Result{}, fmt.Errorf("cannot read Codex source locations for host %s; use a compatible or newer AgentsView and sync the host if locations are missing or outdated: %w", host, err)
-			}
-			var mapped []string
-			for _, remoteRoot := range advertised {
-				candidate, err := remotesync.SafeRemappedRemotePath(mirror, remoteRoot)
-				if err != nil {
-					return Result{}, fmt.Errorf("invalid advertised Codex root: %w", err)
-				}
-				if _, err := os.Lstat(candidate); err == nil && !within(mirror, candidate) {
-					return Result{}, errors.New("advertised Codex root is outside the mirror")
-				} else if err == nil {
-					mapped = append(mapped, candidate)
-				} else if !errors.Is(err, os.ErrNotExist) {
-					return Result{}, err
-				}
-				rel, err := filepath.Rel(candidate, anchor)
-				if err == nil && filepath.IsLocal(rel) && (root == "" || len(candidate) < len(root)) {
-					root = candidate
-				}
-			}
-			if root == "" {
-				return Result{}, fmt.Errorf("recorded source is outside Codex roots advertised at the last sync; sync host %s again", host)
-			}
-			if !within(mirror, root) {
-				return Result{}, errors.New("native Codex mirror root is unavailable or outside the mirror")
-			}
-			roots = []string{root}
-			if base := filepath.Base(root); base == "sessions" || base == "archived_sessions" {
-				other := map[string]string{"sessions": "archived_sessions", "archived_sessions": "sessions"}[base]
-				if sibling := filepath.Join(filepath.Dir(root), other); slices.Contains(mapped, sibling) {
-					roots = append(roots, sibling)
-				}
+				return Result{}, err
 			}
 		} else {
 			if source == "" {

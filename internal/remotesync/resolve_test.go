@@ -258,6 +258,37 @@ func TestResolveTargetsOmitsAllowedTargetsInsideForbiddenRoots(t *testing.T) {
 	require.True(t, ok,
 		"a client echoing the advertised set must not be rejected")
 	assert.Equal(t, []string{outsideClaude}, selected.Dirs[parser.AgentClaude])
+
+	home := filepath.Join(base, "codex-home")
+	live, archive := filepath.Join(base, "storage", "live"), filepath.Join(home, "archived_sessions")
+	require.NoError(t, os.MkdirAll(live, 0o755))
+	require.NoError(t, os.MkdirAll(archive, 0o755))
+	if err := os.Symlink(live, filepath.Join(home, "sessions")); err != nil {
+		t.Skipf("directory symlinks unavailable: %v", err)
+	}
+	actualLive, err := filepath.EvalSymlinks(live)
+	require.NoError(t, err)
+	actualArchive, err := filepath.EvalSymlinks(archive)
+	require.NoError(t, err)
+	actualHome, err := filepath.EvalSymlinks(home)
+	require.NoError(t, err)
+	cfg := config.Config{
+		AgentDirs: map[parser.AgentType][]string{parser.AgentCodex: {actualLive, actualArchive}},
+		ProviderMetadata: map[parser.AgentType]map[string][]string{parser.AgentCodex: {
+			actualLive: {actualHome}, actualArchive: {actualHome},
+		}},
+	}
+	targets = resolveTargetsForTest(t, cfg)
+	roles := remotesync.CodexHomeRoots{Sessions: actualLive, ArchivedSessions: actualArchive}
+	assert.Equal(t, roles, targets.CodexHomeRoots[actualHome])
+	requested := remotesync.TargetSet{Dirs: map[parser.AgentType][]string{parser.AgentCodex: {actualLive}},
+		CodexHomeRoots: map[string]remotesync.CodexHomeRoots{actualHome: {Sessions: actualLive, ArchivedSessions: "/untrusted"}}}
+	selected, ok = remotesync.SelectAllowedTargets(targets, requested)
+	require.True(t, ok)
+	assert.Equal(t, remotesync.CodexHomeRoots{Sessions: actualLive}, selected.CodexHomeRoots[actualHome])
+	cfg.AgentDirs[parser.AgentTrae] = []string{actualArchive}
+	targets = resolveTargetsForTest(t, cfg)
+	assert.Equal(t, remotesync.CodexHomeRoots{Sessions: actualLive}, targets.CodexHomeRoots[actualHome])
 }
 
 // TestResolveTargetsDropsFileScopedAgentWhenSessionFilesForbidden guards

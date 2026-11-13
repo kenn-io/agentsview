@@ -69,6 +69,12 @@ func (s *SyncStats) UnmarshalJSONFrom(in *jsontext.Decoder) error {
 	return nil
 }
 
+// CodexHomeRoots names the advertised transcript roots for one native home.
+type CodexHomeRoots struct {
+	Sessions         string `json:"sessions,omitempty"`
+	ArchivedSessions string `json:"archived_sessions,omitempty"`
+}
+
 type TargetSet struct {
 	Dirs               map[parser.AgentType][]string `json:"dirs"`
 	Files              map[parser.AgentType][]string `json:"files,omitempty"`
@@ -76,8 +82,9 @@ type TargetSet struct {
 	ProviderExtraFiles map[parser.AgentType][]string `json:"provider_extra_files,omitempty"`
 	// CodexIndexFiles associates transcript roots with their home title indexes.
 	// The files are transported through ProviderExtraFiles.
-	CodexIndexFiles map[string][]string `json:"codex_index_files,omitempty"`
-	ForbiddenRoots  []string            `json:"forbidden_roots,omitempty"`
+	CodexIndexFiles map[string][]string       `json:"codex_index_files,omitempty"`
+	CodexHomeRoots  map[string]CodexHomeRoots `json:"codex_home_roots,omitempty"`
+	ForbiddenRoots  []string                  `json:"forbidden_roots,omitempty"`
 }
 
 // AllExtraFiles returns shared and provider-owned curated files without
@@ -203,7 +210,7 @@ func (t TargetSet) SplitFileScoped() (dirScoped, fileScoped TargetSet) {
 		target.Files[agent] = files
 	}
 	dirScoped.ExtraFiles = t.ExtraFiles
-	dirScoped.CodexIndexFiles = t.CodexIndexFiles
+	copyCodexTargetMetadata(&dirScoped, t)
 	for agent, files := range t.ProviderExtraFiles {
 		target := &dirScoped
 		if t.isFileScoped(agent) &&
@@ -216,6 +223,11 @@ func (t TargetSet) SplitFileScoped() (dirScoped, fileScoped TargetSet) {
 		target.ProviderExtraFiles[agent] = files
 	}
 	return dirScoped, fileScoped
+}
+
+func copyCodexTargetMetadata(dst *TargetSet, src TargetSet) {
+	dst.CodexIndexFiles = src.CodexIndexFiles
+	dst.CodexHomeRoots = src.CodexHomeRoots
 }
 
 // DeltaAllowedRoots returns the trusted base paths a delta-archive file
@@ -286,9 +298,7 @@ func (r ArchiveRequest) MarshalJSON() ([]byte, error) {
 	if len(r.ProviderExtraFiles) > 0 {
 		out["provider_extra_files"] = r.ProviderExtraFiles
 	}
-	if len(r.CodexIndexFiles) > 0 {
-		out["codex_index_files"] = r.CodexIndexFiles
-	}
+	marshalCodexTargetMetadata(out, r.TargetSet)
 	if len(r.ForbiddenRoots) > 0 {
 		out["forbidden_roots"] = r.ForbiddenRoots
 	}
@@ -298,16 +308,28 @@ func (r ArchiveRequest) MarshalJSON() ([]byte, error) {
 	return json.Marshal(out)
 }
 
-func (r *ArchiveRequest) UnmarshalJSON(data []byte) error {
-	var raw struct {
-		Dirs               map[parser.AgentType][]string `json:"dirs"`
-		Files              jsontext.Value                `json:"files"`
-		ExtraFiles         []string                      `json:"extra_files"`
-		ProviderExtraFiles map[parser.AgentType][]string `json:"provider_extra_files"`
-		CodexIndexFiles    map[string][]string           `json:"codex_index_files"`
-		ForbiddenRoots     []string                      `json:"forbidden_roots"`
-		DeltaFiles         []string                      `json:"delta_files"`
+func marshalCodexTargetMetadata(out map[string]any, targets TargetSet) {
+	if len(targets.CodexIndexFiles) > 0 {
+		out["codex_index_files"] = targets.CodexIndexFiles
 	}
+	if len(targets.CodexHomeRoots) > 0 {
+		out["codex_home_roots"] = targets.CodexHomeRoots
+	}
+}
+
+type archiveRequestWire struct {
+	Dirs               map[parser.AgentType][]string `json:"dirs"`
+	Files              jsontext.Value                `json:"files"`
+	ExtraFiles         []string                      `json:"extra_files"`
+	ProviderExtraFiles map[parser.AgentType][]string `json:"provider_extra_files"`
+	CodexIndexFiles    map[string][]string           `json:"codex_index_files"`
+	CodexHomeRoots     map[string]CodexHomeRoots     `json:"codex_home_roots"`
+	ForbiddenRoots     []string                      `json:"forbidden_roots"`
+	DeltaFiles         []string                      `json:"delta_files"`
+}
+
+func (r *ArchiveRequest) UnmarshalJSON(data []byte) error {
+	var raw archiveRequestWire
 	if err := json.Unmarshal(data, &raw); err != nil {
 		return err
 	}
@@ -316,6 +338,7 @@ func (r *ArchiveRequest) UnmarshalJSON(data []byte) error {
 		ExtraFiles:         raw.ExtraFiles,
 		ProviderExtraFiles: raw.ProviderExtraFiles,
 		CodexIndexFiles:    raw.CodexIndexFiles,
+		CodexHomeRoots:     raw.CodexHomeRoots,
 		ForbiddenRoots:     raw.ForbiddenRoots,
 	}
 	r.DeltaFiles = raw.DeltaFiles
