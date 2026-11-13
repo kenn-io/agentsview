@@ -39,22 +39,22 @@ func codexMirrorGroup(ctx context.Context, mirror, anchor, host string) (string,
 
 func codexMirrorHomeGroup(root string, saved remotesync.MirrorCodexMetadata, mapped map[string]string) ([]string, map[string]bool, error) {
 	roots, roles := []string{root}, make(map[string]bool)
-	var association *remotesync.CodexHomeRoots
 	for _, home := range saved.Homes {
 		live, archive := mapped[home.Sessions], mapped[home.ArchivedSessions]
 		if live != root && archive != root {
 			continue
 		}
-		if live == archive || (association != nil && *association != home) {
+		if live == archive {
 			return nil, nil, errors.New("contradictory Codex mirror home roots")
 		}
-		selectedHome := home
-		association = &selectedHome
 		for _, pair := range []struct {
 			dir      string
 			archived bool
 		}{{live, false}, {archive, true}} {
 			if pair.dir != "" {
+				if role, exists := roles[pair.dir]; exists && role != pair.archived {
+					return nil, nil, errors.New("contradictory Codex mirror home roots")
+				}
 				roles[pair.dir] = pair.archived
 				if !slices.Contains(roots, pair.dir) {
 					roots = append(roots, pair.dir)
@@ -62,7 +62,7 @@ func codexMirrorHomeGroup(root string, saved remotesync.MirrorCodexMetadata, map
 			}
 		}
 	}
-	if association == nil && (filepath.Base(root) == "sessions" || filepath.Base(root) == "archived_sessions") {
+	if len(roles) == 0 && (filepath.Base(root) == "sessions" || filepath.Base(root) == "archived_sessions") {
 		other := map[string]string{"sessions": "archived_sessions", "archived_sessions": "sessions"}[filepath.Base(root)]
 		sibling := filepath.Join(filepath.Dir(root), other)
 		if slices.ContainsFunc(saved.Dirs, func(dir string) bool { return mapped[dir] == sibling }) {
