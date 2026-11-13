@@ -709,8 +709,14 @@ docs-preview:
 docs-check:
 	bash scripts/check-docs.sh
 
+# With DOCS_SCREENSHOTS_OUTPUT and DOCS_SCREENSHOTS_CORPUS set, capture this
+# commit and write the docs-generated-assets tree and website preview there.
 docs-screenshots:
+ifdef DOCS_SCREENSHOTS_OUTPUT
+	bash docs/screenshots/capture-commit.sh
+else
 	bash docs/screenshots/run.sh
+endif
 
 docs-assets-branch:
 	bash docs/assets/update-static-assets-branch.sh
