@@ -18,7 +18,8 @@ func (s *Store) ActivityReportSourceProbe(
 		COALESCE((SELECT MAX(id) FROM messages), 0),
 		COALESCE((SELECT MAX(id) FROM usage_events), 0),
 		GREATEST(
-			COALESCE((SELECT MAX(updated_at) FROM model_pricing), ''),
+			COALESCE((SELECT MAX(updated_at) FROM model_pricing
+				WHERE model_pattern NOT LIKE '\_%' ESCAPE '\'), ''),
 			COALESCE((SELECT MAX(updated_at) FROM genai_pricing), '')
 		),
 		COALESCE(CAST((SELECT value FROM sync_metadata WHERE key = ?) AS BIGINT), 0)`,

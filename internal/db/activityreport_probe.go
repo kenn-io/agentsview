@@ -18,7 +18,8 @@ func (db *DB) ActivityReportSourceProbe(
 		COALESCE((SELECT MAX(id) FROM messages), 0),
 		COALESCE((SELECT MAX(id) FROM usage_events), 0),
 		MAX(
-			COALESCE((SELECT MAX(updated_at) FROM model_pricing), ''),
+			COALESCE((SELECT MAX(updated_at) FROM model_pricing
+				WHERE model_pattern NOT LIKE '\_%' ESCAPE '\'), ''),
 			COALESCE((SELECT MAX(updated_at) FROM genai_pricing), '')
 		),
 		COALESCE((SELECT CAST(value AS INTEGER) FROM archive_metadata
