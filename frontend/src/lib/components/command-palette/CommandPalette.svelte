@@ -587,7 +587,7 @@
   .palette-controls {
     --kit-control-font-size: 12px;
     --typeahead-min-width: 120px;
-    --typeahead-max-width: 140px;
+    --typeahead-max-width: 120px;
     display: flex;
     flex-wrap: wrap;
     align-items: center;
