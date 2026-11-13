@@ -22,7 +22,7 @@ import (
 	"go.kenn.io/docbank/docbank"
 )
 
-func seedRetainedFixture(t *testing.T, root, data string, roots []rawarchive.RootSpec) (string, *db.DB, func() error) {
+func captureAndSeedRetainedFixture(t *testing.T, root, data string, roots []rawarchive.RootSpec) string {
 	t.Helper()
 	ctx := t.Context()
 	capture := filepath.Join(root, "capture")
@@ -31,6 +31,13 @@ func seedRetainedFixture(t *testing.T, root, data string, roots []rawarchive.Roo
 	seed := filepath.Join(root, "seed")
 	_, err = rawarchive.Seed(ctx, filepath.Join(capture, "capture.json"), seed, nil)
 	require.NoError(t, err)
+	return seed
+}
+
+func seedRetainedFixture(t *testing.T, root, data string, roots []rawarchive.RootSpec) (string, *db.DB, func() error) {
+	t.Helper()
+	ctx := t.Context()
+	seed := captureAndSeedRetainedFixture(t, root, data, roots)
 	database, err := db.OpenIsolatedContext(ctx, filepath.Join(seed, "sessions.db"))
 	require.NoError(t, err)
 	t.Cleanup(func() { assert.NoError(t, database.Close()) })
