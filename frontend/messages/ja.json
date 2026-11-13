@@ -3187,25 +3187,12 @@
   "usage_tooltip_no_usage": "使用なし",
   "session_toc_toggle": "プロンプトへ移動",
   "session_toc_toggle_shortcut": "プロンプトへ移動 (T)",
-  "session_toc_count": [
-    {
-      "declarations": ["input count", "input countLabel", "local countPlural = count: plural"],
-      "selectors": ["countPlural"],
-      "match": {
-        "countPlural=one": "{countLabel} 件のプロンプト",
-        "countPlural=other": "{countLabel} 件のプロンプト"
-      }
-    }
-  ],
   "session_toc_empty": "このセッションにはプロンプトがありません",
-  "session_toc_hidden_by_filter": "メッセージフィルターでプロンプトが非表示になっています",
-  "session_toc_loading_older": "以前のプロンプトを読み込み中…",
-  "session_toc_load_failed": "以前のプロンプトを読み込めませんでした",
+  "session_toc_loading": "プロンプトを読み込み中…",
+  "session_toc_more": "{total} 件中、新しい {shown} 件を表示。入力して絞り込めます。",
+  "session_toc_load_failed": "プロンプトを読み込めませんでした",
   "session_toc_empty_prompt": "空のプロンプト",
   "session_toc_search": "プロンプトを検索",
-  "session_toc_matches": "{total} 件中 {matched} 件のプロンプト",
-  "session_toc_matches_capped": "{matched} 件一致、最初の {limit} 件を表示",
-  "session_toc_window": "プロンプト {from}–{to} / {total} 件。入力するとすべてを検索します。",
   "session_toc_no_match": "一致するプロンプトはありません",
   "shortcuts_toggle_session_toc": "プロンプトへ移動"
 }

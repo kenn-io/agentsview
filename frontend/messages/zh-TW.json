@@ -3116,24 +3116,12 @@
   "usage_tooltip_no_usage": "無使用",
   "session_toc_toggle": "跳至提示",
   "session_toc_toggle_shortcut": "跳至提示 (T)",
-  "session_toc_count": [
-    {
-      "declarations": ["input count", "input countLabel", "local countPlural = count: plural"],
-      "selectors": ["countPlural"],
-      "match": {
-        "countPlural=other": "{countLabel} 則提示"
-      }
-    }
-  ],
   "session_toc_empty": "此對話中沒有提示",
-  "session_toc_hidden_by_filter": "訊息篩選已隱藏提示",
-  "session_toc_loading_older": "正在載入較早的提示…",
-  "session_toc_load_failed": "無法載入較早的提示",
+  "session_toc_loading": "正在載入提示…",
+  "session_toc_more": "顯示 {total} 則中最新的 {shown} 則。輸入以縮小範圍。",
+  "session_toc_load_failed": "無法載入提示",
   "session_toc_empty_prompt": "空白提示",
   "session_toc_search": "搜尋提示",
-  "session_toc_matches": "{total} 則提示中的 {matched} 則",
-  "session_toc_matches_capped": "{matched} 則相符，顯示前 {limit} 則",
-  "session_toc_window": "提示 {from}–{to}，共 {total} 則。輸入即可搜尋全部。",
   "session_toc_no_match": "沒有相符的提示",
   "shortcuts_toggle_session_toc": "跳至提示"
 }

@@ -3264,25 +3264,12 @@
   "usage_tooltip_no_usage": "Sin uso",
   "session_toc_toggle": "Ir a un prompt",
   "session_toc_toggle_shortcut": "Ir a un prompt (T)",
-  "session_toc_count": [
-    {
-      "declarations": ["input count", "input countLabel", "local countPlural = count: plural"],
-      "selectors": ["countPlural"],
-      "match": {
-        "countPlural=one": "{countLabel} prompt",
-        "countPlural=other": "{countLabel} prompts"
-      }
-    }
-  ],
   "session_toc_empty": "No hay prompts en esta sesión",
-  "session_toc_hidden_by_filter": "El filtro de mensajes oculta los prompts",
-  "session_toc_loading_older": "Cargando prompts anteriores…",
-  "session_toc_load_failed": "No se pudieron cargar los prompts anteriores",
+  "session_toc_loading": "Cargando prompts…",
+  "session_toc_more": "Se muestran los {shown} más recientes de {total}. Escribe para acotar.",
+  "session_toc_load_failed": "No se pudieron cargar los prompts",
   "session_toc_empty_prompt": "Prompt vacío",
   "session_toc_search": "Buscar prompts",
-  "session_toc_matches": "{matched} de {total} prompts",
-  "session_toc_matches_capped": "{matched} coincidencias; se muestran las primeras {limit}",
-  "session_toc_window": "Prompts {from}–{to} de {total}. Escribe para buscar en todos.",
   "session_toc_no_match": "Ningún prompt coincide",
   "shortcuts_toggle_session_toc": "Ir a un prompt"
 }

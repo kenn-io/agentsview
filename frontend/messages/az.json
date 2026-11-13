@@ -3227,25 +3227,12 @@
   "usage_tooltip_no_usage": "İstifadə yoxdur",
   "session_toc_toggle": "Sorğuya keç",
   "session_toc_toggle_shortcut": "Sorğuya keç (T)",
-  "session_toc_count": [
-    {
-      "declarations": ["input count", "input countLabel", "local countPlural = count: plural"],
-      "selectors": ["countPlural"],
-      "match": {
-        "countPlural=one": "{countLabel} sorğu",
-        "countPlural=other": "{countLabel} sorğu"
-      }
-    }
-  ],
   "session_toc_empty": "Bu sessiyada sorğu yoxdur",
-  "session_toc_hidden_by_filter": "Sorğular mesaj filtri ilə gizlədilib",
-  "session_toc_loading_older": "Əvvəlki sorğular yüklənir…",
-  "session_toc_load_failed": "Əvvəlki sorğular yüklənmədi",
+  "session_toc_loading": "Sorğular yüklənir…",
+  "session_toc_more": "{total} sorğudan ən yeni {shown} göstərilir. Daraltmaq üçün yazın.",
+  "session_toc_load_failed": "Sorğular yüklənmədi",
   "session_toc_empty_prompt": "Boş sorğu",
   "session_toc_search": "Sorğularda axtar",
-  "session_toc_matches": "{total} sorğudan {matched}",
-  "session_toc_matches_capped": "{matched} uyğunluq, ilk {limit} göstərilir",
-  "session_toc_window": "{total} sorğudan {from}–{to}. Hamısında axtarmaq üçün yazın.",
   "session_toc_no_match": "Uyğun sorğu yoxdur",
   "shortcuts_toggle_session_toc": "Sorğuya keç"
 }

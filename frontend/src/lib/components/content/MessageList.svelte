@@ -28,7 +28,6 @@
   import { inSessionSearch } from "../../stores/inSessionSearch.svelte.js";
   import { sessionActivity } from "../../stores/sessionActivity.svelte.js";
   import SessionFindView from "./SessionFindView.svelte";
-  import { sessionToc } from "../../stores/sessionToc.svelte.js";
   import {
     getLatestDisplayIndex,
     type ScrollAlign,
@@ -333,64 +332,6 @@
     }
     return ordinals;
   }
-
-  // Tell the prompt picker which rows are on screen, so it can open at the
-  // turn being read.
-  function publishTocView() {
-    const v = virtualizer.instance;
-    if (!v || !containerRef) {
-      sessionToc.view = null;
-      return;
-    }
-    const top = containerRef.scrollTop;
-    const bottom = top + containerRef.clientHeight;
-    let topOrdinal: number | null = null;
-    let minOrdinal = Number.POSITIVE_INFINITY;
-    let maxOrdinal = Number.NEGATIVE_INFINITY;
-    for (const row of v.getVirtualItems()) {
-      if (row.end <= top || row.start >= bottom) continue;
-      const item = itemAt(row.index);
-      if (!item) continue;
-      // An open empty row holds a card per prompt, so only the cards on
-      // screen count; the first of them, in page order, is the top one.
-      const onScreen = item.kind === "empty-group" && emptyGroupOpen(item)
-        ? visibleToolGroupOrdinals(row.index)
-        : ui.sortNewestFirst ? [...item.ordinals].reverse() : item.ordinals;
-      if (onScreen.length === 0) continue;
-      topOrdinal ??= onScreen[0]!;
-      for (const ordinal of onScreen) {
-        minOrdinal = Math.min(minOrdinal, ordinal);
-        maxOrdinal = Math.max(maxOrdinal, ordinal);
-      }
-    }
-    if (topOrdinal === null) {
-      sessionToc.view = null;
-      return;
-    }
-    const atEnd = !ui.sortNewestFirst &&
-      top + containerRef.clientHeight >= containerRef.scrollHeight - 2;
-    const prev = sessionToc.view;
-    if (
-      prev?.topOrdinal === topOrdinal && prev.minOrdinal === minOrdinal &&
-      prev.maxOrdinal === maxOrdinal && prev.atEnd === atEnd
-    ) {
-      return;
-    }
-    sessionToc.view = { topOrdinal, minOrdinal, maxOrdinal, atEnd };
-  }
-
-  $effect(() => {
-    void messages.sessionId;
-    untrack(() => sessionToc.resetView());
-  });
-
-  $effect(() => {
-    void virtualizer.instance;
-    void displayItemsAsc;
-    void containerScrollTop;
-    void ui.sortNewestFirst;
-    untrack(publishTocView);
-  });
 
   // Recompute visible timestamp when minimap opens or
   // message content changes (e.g. SSE reload).

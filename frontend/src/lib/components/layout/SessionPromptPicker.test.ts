@@ -4,40 +4,17 @@ import { fireEvent, screen } from "@testing-library/svelte";
 import { flushSync, mount, unmount } from "svelte";
 import { SessionsService, type DbMessage as Message } from "../../api/generated/index.js";
 import { messages } from "../../stores/messages.svelte.js";
-import { sessionToc } from "../../stores/sessionToc.svelte.js";
 import { ui } from "../../stores/ui.svelte.js";
+import { msg } from "../../utils/test-messages.js";
 import SessionPromptPicker from "./SessionPromptPicker.svelte";
+import { openPromptPicker } from "./prompt-picker.js";
 
-let sessionCounter = 0;
-let sessionId = "";
+const prompt = (ordinal: number, content = `prompt ${ordinal}`) => msg({ ordinal, content });
 
-function msg(ordinal: number, extra: Partial<Message> = {}): Message {
-  return {
-    id: ordinal + 1,
-    session_id: sessionId,
-    ordinal,
-    role: "user",
-    content: `prompt ${ordinal}`,
-    timestamp: "2026-01-01T00:00:00Z",
-    has_thinking: false,
-    thinking_text: "",
-    has_tool_use: false,
-    model: "",
-    context_tokens: 0,
-    output_tokens: 0,
-    has_context_tokens: false,
-    has_output_tokens: false,
-    is_system: false,
-    ...extra,
-    content_length: (extra.content ?? `prompt ${ordinal}`).length,
-  };
-}
-
-function load(rows: Message[], hasOlder = false) {
-  messages.sessionId = sessionId;
-  messages.messages = rows;
-  messages.hasOlder = hasOlder;
-  messages.loading = false;
+function serve(...pages: Message[][]) {
+  const read = vi.spyOn(SessionsService, "getApiV1SessionsByIdMessages");
+  for (const page of pages) read.mockResolvedValueOnce({ messages: page } as never);
+  return read;
 }
 
 async function settle() {
@@ -47,14 +24,10 @@ async function settle() {
   }
 }
 
-function optionLabels(): string[] {
+function labels(): string[] {
   return screen
     .queryAllByRole("option")
     .map((el) => el.querySelector(".kit-typeahead__option-label")!.textContent!.trim());
-}
-
-function status(): string {
-  return document.querySelector(".picker-status")!.textContent!.replace(/\s+/g, " ").trim();
 }
 
 async function open() {
@@ -62,12 +35,15 @@ async function open() {
   await settle();
 }
 
+async function search(text: string) {
+  await fireEvent.input(screen.getByRole("combobox"), { target: { value: text } });
+  await settle();
+}
+
 let component: ReturnType<typeof mount> | null = null;
 
 beforeEach(() => {
-  sessionId = `picker-session-${++sessionCounter}`;
-  sessionToc.resetView();
-  ui.setBlockVisible("user", true);
+  messages.sessionId = "s1";
   ui.pendingScrollOrdinal = null;
   component = mount(SessionPromptPicker, { target: document.body });
 });
@@ -76,152 +52,89 @@ afterEach(() => {
   if (component) unmount(component);
   component = null;
   vi.restoreAllMocks();
-  messages.messages = [];
-  messages.hasOlder = false;
   messages.sessionId = null;
   document.body.innerHTML = "";
 });
 
 describe("SessionPromptPicker", () => {
-  it("lists only typed prompts and marks the turn on screen", async () => {
-    load([
-      msg(0, { content: "Set up the repo" }),
-      msg(1, { role: "assistant", content: "Done" }),
-      msg(2, { is_system: true, content: "injected" }),
-      msg(3, { content: "Add tests\nwith details" }),
-      msg(4, { role: "assistant" }),
-      msg(5, { content: "Ship it" }),
-    ]);
-    sessionToc.view = { topOrdinal: 4, minOrdinal: 3, maxOrdinal: 4, atEnd: false };
+  it("reads every page of prompts and lists them newest first", async () => {
+    const first = Array.from({ length: 1000 }, (_, i) => prompt(i * 2));
+    const read = serve(first, [prompt(2000, "Latest prompt")]);
     await open();
 
-    // The prompt being read comes first, then the ones before it.
-    expect(optionLabels()).toEqual(["Add tests", "Set up the repo"]);
-    expect(status()).toBe("3 prompts");
-    const current = screen.getByRole("option", { selected: true });
-    expect(current.textContent).toContain("Add tests");
-    expect(current.querySelector(".kit-typeahead__option-meta")!.textContent).toContain("#2");
-
-    // Enter on the highlighted first row keeps the reader where they are.
-    await fireEvent.keyDown(screen.getByRole("combobox"), { key: "Enter" });
-    await settle();
-    expect(ui.pendingScrollOrdinal).toBe(3);
+    expect(read.mock.calls.map((call) => call[1])).toEqual([
+      { roles: "user", direction: "asc", from: 0, limit: 1000 },
+      { roles: "user", direction: "asc", from: 1999, limit: 1000 },
+    ]);
+    const newest = screen.getAllByRole("option")[0]!;
+    expect(newest.textContent).toContain("Latest prompt");
+    expect(newest.querySelector(".kit-typeahead__option-meta")!.textContent).toContain("#1,001");
   });
 
-  it("searches the whole prompt, not just its first line", async () => {
-    load([
-      msg(0, { content: "Look at the handler\nthe cache key ignores rounding" }),
-      msg(1, { content: "Fix the cache" }),
-      msg(2, { content: "Write the changelog" }),
+  it("lists only typed prompts, by their first line", async () => {
+    serve([
+      prompt(0, "Set up the repo\nwith details"),
+      msg({ ordinal: 1, source_subtype: "tool_result", content: "output" }),
+      msg({ ordinal: 2, content: "<bash-stdout>ok</bash-stdout>" }),
+      prompt(3, "Ship it"),
     ]);
     await open();
-    await fireEvent.input(screen.getByRole("combobox"), { target: { value: "cache rounding" } });
-    await settle();
 
-    expect(optionLabels()).toEqual(["Look at the handler"]);
-    expect(status()).toBe("1 of 3 prompts");
+    expect(labels()).toEqual(["Ship it", "Set up the repo"]);
+  });
 
-    await fireEvent.input(screen.getByRole("combobox"), { target: { value: "deploy" } });
-    await settle();
-    expect(optionLabels()).toEqual([]);
+  it("matches every typed word anywhere in a prompt", async () => {
+    serve([
+      prompt(0, "Look at the handler\nthe cache key ignores rounding"),
+      prompt(1, "Fix the cache"),
+      prompt(2, "Write the changelog"),
+    ]);
+    await open();
+
+    await search("Rounding  CACHE");
+    expect(labels()).toEqual(["Look at the handler"]);
+    await search("deploy");
+    expect(labels()).toEqual([]);
     expect(document.body.textContent).toContain("No prompts match");
   });
 
+  it("renders at most 100 matches and says how many there are", async () => {
+    serve(Array.from({ length: 250 }, (_, i) => prompt(i)));
+    await open();
+
+    expect(screen.getAllByRole("option")).toHaveLength(100);
+    expect(labels()[0]).toBe("prompt 249");
+    expect(document.querySelector(".picker-status")!.textContent!.trim()).toBe(
+      "Showing the newest 100 of 250. Type to narrow.",
+    );
+
+    // 24, 124, 224, and 240-249: few enough to show them all.
+    await search("prompt 24");
+    expect(screen.getAllByRole("option")).toHaveLength(13);
+    expect(document.querySelector(".picker-status")!.textContent!.trim()).toBe("");
+  });
+
   it("jumps to the chosen prompt", async () => {
-    load([msg(0, { content: "First" }), msg(1, { content: "Second" })]);
+    serve([prompt(0, "First"), prompt(4, "Second")]);
     await open();
     await fireEvent.mouseDown(screen.getByRole("option", { name: /Second/ }));
-    await settle();
 
-    expect(ui.pendingScrollOrdinal).toBe(1);
-    expect(sessionToc.picked).toBe(1);
+    expect(ui.pendingScrollOrdinal).toBe(4);
   });
 
-  it("renders at most 100 prompts in a very long session", async () => {
-    load(Array.from({ length: 250 }, (_, i) => msg(i)));
-    await open();
-
-    // Nothing is on screen yet, so the list starts at the last prompt.
-    expect(screen.getAllByRole("option")).toHaveLength(100);
-    expect(optionLabels()[0]).toBe("prompt 249");
-    expect(status()).toBe("Prompts 151–250 of 250. Type to search them all.");
-
-    await fireEvent.input(screen.getByRole("combobox"), { target: { value: "prompt" } });
-    await settle();
-    expect(screen.getAllByRole("option")).toHaveLength(100);
-    expect(status()).toBe("250 matches, showing the first 100");
-  });
-
-  it("reads prompts older than the loaded window and numbers them in order", async () => {
-    let respond!: (value: unknown) => void;
-    const read = vi
-      .spyOn(SessionsService, "getApiV1SessionsByIdMessages")
-      .mockReturnValue(new Promise((resolve) => (respond = resolve)) as never);
-    load([msg(4, { content: "Loaded prompt" })], true);
-    await open();
-    // Counts would cover only the loaded page until the read finishes.
-    expect(status()).toBe("Loading earlier prompts…");
-
-    respond({
-      messages: [msg(2, { content: "Second prompt" }), msg(0, { content: "First prompt" })],
-      transcript_revision: "rev-1",
-    });
-    await settle();
-    expect(status()).toBe("3 prompts");
-
-    expect(read).toHaveBeenCalledTimes(1);
-    expect(read.mock.calls[0]![0]).toEqual({ id: sessionId });
-    expect(read.mock.calls[0]![1]).toEqual({
-      roles: "user",
-      direction: "desc",
-      from: 3,
-      limit: 1000,
-    });
-    expect(optionLabels()).toEqual(["Loaded prompt", "Second prompt", "First prompt"]);
-    const loaded = screen.getByRole("option", { name: /Loaded prompt/ });
-    expect(loaded.querySelector(".kit-typeahead__option-meta")!.textContent).toContain("#3");
-  });
-
-  it("hides counts that would cover only the loaded page when earlier prompts fail to load", async () => {
-    vi.spyOn(console, "warn").mockImplementation(() => {});
+  it("shows an error when the prompts cannot be read", async () => {
     vi.spyOn(SessionsService, "getApiV1SessionsByIdMessages").mockRejectedValue(new Error("down"));
-    load([msg(4, { content: "Loaded prompt" })], true);
     await open();
 
-    expect(document.querySelector(".picker-status [role=status]")).toBeNull();
-    expect(screen.getByRole("alert").textContent).toContain("Could not load earlier prompts");
-    expect(optionLabels()).toEqual(["Loaded prompt"]);
+    expect(screen.getByRole("alert").textContent).toContain("Could not load prompts");
   });
 
-  it("does not jump on the Enter that confirms an input method's text", async () => {
-    load([msg(0, { content: "検索" }), msg(1, { content: "Other" })]);
-    await open();
-    const search = screen.getByRole("combobox");
-    await fireEvent.keyDown(search, { key: "Enter", isComposing: true });
-    await fireEvent.keyDown(search, { key: "Escape", keyCode: 229 });
+  it("opens from the keyboard shortcut", async () => {
+    serve([prompt(0, "Only prompt")]);
+    openPromptPicker();
     await settle();
 
-    expect(ui.pendingScrollOrdinal).toBeNull();
-    expect(screen.getByRole("combobox")).toBeTruthy();
-  });
-
-  it("opens with an empty search when t is pressed on its button", async () => {
-    load([msg(0, { content: "Only prompt" })]);
-    const button = screen.getByRole("button", { name: "Jump to prompt" });
-    button.focus();
-    await fireEvent.keyDown(button, { key: "t" });
-    await settle();
-
-    expect((screen.getByRole("combobox") as HTMLInputElement).value).toBe("");
-    expect(optionLabels()).toEqual(["Only prompt"]);
-  });
-
-  it("opens from the keyboard shortcut's request", async () => {
-    load([msg(0, { content: "Only prompt" })]);
-    sessionToc.requestOpen();
-    await settle();
-
-    expect(optionLabels()).toEqual(["Only prompt"]);
+    expect(labels()).toEqual(["Only prompt"]);
     expect(document.activeElement).toBe(screen.getByRole("combobox"));
   });
 });

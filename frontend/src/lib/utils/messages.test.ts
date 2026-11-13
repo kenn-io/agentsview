@@ -1,5 +1,11 @@
 import { describe, it, expect } from "vite-plus/test";
-import { isSystemMessage, normalizeMessagePreview, previewMessage } from "./messages.js";
+import type { DbMessage as Message } from "../api/generated/index.js";
+import {
+  isPromptMessage,
+  isSystemMessage,
+  normalizeMessagePreview,
+  previewMessage,
+} from "./messages.js";
 import { msg } from "./test-messages.js";
 
 describe("isSystemMessage", () => {
@@ -267,5 +273,37 @@ describe("previewMessage", () => {
       text: "<system-reminder>ctx</system-reminder>",
       isShell: true,
     });
+  });
+});
+
+describe("isPromptMessage", () => {
+  it("keeps typed prompts, including empty ones and shell commands", () => {
+    expect(isPromptMessage(msg({ content: "fix the bug" }))).toBe(true);
+    expect(isPromptMessage(msg({ content: "" }))).toBe(true);
+    expect(isPromptMessage(msg({ content: "<bash-input>ls</bash-input>" }))).toBe(true);
+    expect(
+      isPromptMessage(msg({ content: "<bash-input>ls</bash-input><bash-stdout>a</bash-stdout>" })),
+    ).toBe(true);
+  });
+
+  it.each([
+    ["an assistant reply", { role: "assistant" }],
+    ["a system-flagged row", { is_system: true }],
+    ["a continuation card", { is_system: true, source_subtype: "continuation" }],
+    ["a compaction boundary", { is_compact_boundary: true }],
+    ["stored tool output", { source_subtype: "tool_result" }],
+    ["injected command output", { content: "<local-command-stdout>ok</local-command-stdout>" }],
+    ["a reminder-only row", { content: "<system-reminder>ctx</system-reminder>" }],
+    ["shell output", { content: "<bash-stdout>hello</bash-stdout>" }],
+    [
+      "shell output that prints a closing tag",
+      { content: "<bash-stdout>a </bash-stdout> b</bash-stdout>" },
+    ],
+    [
+      "shell output after a reminder",
+      { content: "<system-reminder>ctx</system-reminder>\n<bash-stdout>ok</bash-stdout>" },
+    ],
+  ] satisfies [string, Partial<Message>][])("drops %s", (_name, extra) => {
+    expect(isPromptMessage(msg(extra))).toBe(false);
   });
 });
