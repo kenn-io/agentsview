@@ -467,3 +467,44 @@ func TestSweepStaleMirrorReopenAliasesHandlesGlobMetacharactersInDirectory(t *te
 		"a reopen alias in a glob-metacharacter directory must still be swept")
 	assert.FileExists(t, path, "sweep must not remove the mirror file itself")
 }
+
+// A replacement check waits for an earlier check before inspecting the mirror.
+func TestMirrorCheckReadsPublicationAfterPreviousCheck(t *testing.T) {
+	skipReopenTestOnWindows(t)
+	dir := t.TempDir()
+	path := filepath.Join(dir, "mirror.duckdb")
+	older := filepath.Join(dir, "older.duckdb")
+	newer := filepath.Join(dir, "newer.duckdb")
+	buildMirrorFixture(t, path, "first")
+	buildMirrorFixture(t, older, "older")
+	buildMirrorFixture(t, newer, "newer")
+	store, err := NewStore(t.Context(), path)
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, store.Close()) })
+	require.NoError(t, swapMirrorFile(older, path))
+	store.replacementMu.Lock()
+	held := true
+	defer func() {
+		if held {
+			store.replacementMu.Unlock()
+		}
+	}()
+	started := make(chan struct{})
+	done := make(chan struct{})
+	go func() {
+		close(started)
+		defer close(done)
+		store.checkMirrorReplacement(t.Context(), nil)
+	}()
+	<-started
+	select {
+	case <-done:
+		require.FailNow(t, "replacement check finished while another check held the lock")
+	case <-time.After(time.Second):
+	}
+	require.NoError(t, swapMirrorFile(newer, path))
+	store.replacementMu.Unlock()
+	held = false
+	<-done
+	require.Equal(t, []string{"newer"}, listMirrorSessionIDs(t, store))
+}

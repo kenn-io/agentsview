@@ -244,3 +244,55 @@ func TestAnalyticsKeptTerminationClock(t *testing.T) {
 		assert.Zero(t, after.TotalCalls)
 	})
 }
+
+func TestTrendsKeptTracksContentAndSelection(t *testing.T) {
+	d := testDB(t)
+	ctx := t.Context()
+	insertSession(t, d, "session", "project", func(s *Session) { s.StartedAt = new("2024-06-01T00:30:00Z"); s.MessageCount = 1 })
+	messages := []Message{{SessionID: "session", Ordinal: 0, Role: "user", Content: "alpha bravo", ContentLength: 11, Timestamp: "2024-06-01T00:30:00Z"}}
+	insertMessages(t, d, messages...)
+	var sized atomic.Int64
+	d.analyticsKept.Size = func(any) int64 { sized.Add(1); return 1 }
+	f := AnalyticsFilter{From: "2024-05-31", To: "2024-06-01", Timezone: "UTC", Project: "project"}
+	a := TrendTermInput{Term: "alpha", Variants: []string{"alpha"}, Matchers: []string{"alpha"}}
+	b := TrendTermInput{Term: "bravo", Variants: []string{"bravo"}, Matchers: []string{"bravo"}}
+	terms := []TrendTermInput{a, b}
+	read := func() TrendsTermsResponse {
+		result, err := d.GetTrendsTerms(ctx, f, terms, "week")
+		require.NoError(t, err)
+		return result
+	}
+	first := read()
+	require.Equal(t, 1, first.Series[0].Total)
+	require.EqualValues(t, 1, sized.Load())
+	require.Equal(t, first, read())
+	require.EqualValues(t, 1, sized.Load())
+	reversed, err := d.GetTrendsTerms(ctx, f, []TrendTermInput{b, a}, "week")
+	require.NoError(t, err)
+	require.Equal(t, "bravo", reversed.Series[0].Term)
+	day, err := d.GetTrendsTerms(ctx, f, terms, "day")
+	require.NoError(t, err)
+	require.Equal(t, "day", day.Granularity)
+	require.Equal(t, 1, day.Series[0].Points[1].Count)
+	a.Variants = []string{"different"}
+	variant, err := d.GetTrendsTerms(ctx, f, []TrendTermInput{a, b}, "week")
+	require.NoError(t, err)
+	require.Equal(t, []string{"different"}, variant.Series[0].Variants)
+	a.Matchers = []string{"absent"}
+	matcher, err := d.GetTrendsTerms(ctx, f, []TrendTermInput{a, b}, "week")
+	require.NoError(t, err)
+	require.Zero(t, matcher.Series[0].Total)
+	messages[0].Content = "bravo bravo"
+	require.NoError(t, d.ReplaceSessionContent(ctx, "session", messages, SessionSignalUpdate{}, nil))
+	after := read()
+	require.Zero(t, after.Series[0].Total)
+	require.Equal(t, 1, after.MessageCount)
+	fresh, err := d.trendsTerms(ctx, f, terms, "week")
+	require.NoError(t, err)
+	require.Equal(t, fresh, after)
+	session, err := d.GetSession(ctx, "session")
+	require.NoError(t, err)
+	session.Project = "other"
+	require.NoError(t, d.UpsertSession(ctx, *session))
+	require.Zero(t, read().MessageCount)
+}

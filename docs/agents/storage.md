@@ -1078,8 +1078,13 @@ invalidates it. Partial reports, read-only archives, and reports filtered by
 active, stale, or unclean termination status bypass this cache.
 
 SQLite uses `usage_change_revision` and `analytics_change_revision` to invalidate
-kept Tools, Velocity, and Signals reports. Tool-call updates and deletes, message
-content-length repairs, and signal updates advance the analytics counter.
+kept Tools, Velocity, Signals, and Trends reports. Tool-call updates and deletes, message
+content-length repairs, and signal updates advance the analytics counter. Message
+changes also advance the session transcript revision. PostgreSQL uses its session
+journal, hosted PostgreSQL uses its tenant identity, selection, and corpus revisions,
+DuckDB uses its mirror stamp, and ClickHouse uses its sessions and messages parts
+fingerprint to invalidate Trends reports. Remote DuckDB through Quack reads Trends
+fresh because it has no reliable freshness token.
 Read-only archives and reports filtered by active, stale, or unclean termination
 status bypass this cache.
 

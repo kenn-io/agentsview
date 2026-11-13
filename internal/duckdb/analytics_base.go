@@ -493,5 +493,10 @@ func (s *Store) GetTrendsTerms(
 	ctx context.Context, f db.AnalyticsFilter,
 	terms []db.TrendTermInput, granularity string,
 ) (db.TrendsTermsResponse, error) {
-	return s.analytics().GetTrendsTerms(ctx, f, terms, granularity)
+	if s.path != "" {
+		s.checkMirrorReplacement(ctx, nil)
+	}
+	return keptAnalytics(ctx, s, "trends", f, db.TrendsKeptVariant(terms, granularity), func(ctx context.Context) (db.TrendsTermsResponse, error) {
+		return s.analytics().GetTrendsTerms(ctx, f, terms, granularity)
+	})
 }
