@@ -83,8 +83,7 @@ func TestIsFrustrationMarkerMatchesReference(t *testing.T) {
 	markers := 0
 	for _, prompt := range prompts {
 		want := referenceIsFrustrationMarker(prompt)
-		got := IsFrustrationMarker(prompt)
-		require.Equal(t, want, got, "%q", prompt)
+		require.Equal(t, want, IsFrustrationMarker(prompt), "%q", prompt)
 		require.Equal(t, referenceNormalizePrompt(prompt), normalizePrompt(prompt), "%q", prompt)
 		if want {
 			markers++
@@ -96,7 +95,7 @@ func TestIsFrustrationMarkerMatchesReference(t *testing.T) {
 }
 
 func TestIsFrustrationMarkerExamples(t *testing.T) {
-	examples := map[string]bool{
+	for prompt, want := range map[string]bool{
 		"wtf":                                   false,
 		"come\n\t on, run it":                   true,
 		"you bro\u212ae the build":              true,
@@ -105,36 +104,35 @@ func TestIsFrustrationMarkerExamples(t *testing.T) {
 		"ABC def GHI jkl mno pqr":               false,
 		"\u24b6\u24b7 \u24b8\u24b9 ok fine now": false,
 		"```FUCK FUCK FUCK``` please handle it": false,
+	} {
+		assert.Equal(t, want, IsFrustrationMarker(prompt), "%q", prompt)
 	}
-	// Hash a fixed corpus in stable order, independent of the random test.
-	unique := make(map[string]bool)
-	for _, prompt := range frustrationEdgePrompts {
-		unique[prompt] = true
-	}
-	for _, prompt := range []string{
+}
+
+func TestFrustrationMarkerVersionGuard(t *testing.T) {
+	prompts := []string{
+		"", "wtf", "wtf wtf w", "wtf wtf wt", "   this is broken   ",
+		"this\u00a0is\u2028broken", "come\n\t on, run it", "come ```x``` on, run it",
+		"you bro\u212ae the build", "doe\u017f not work at all", "D\u0130D YOU READ IT",
+		"\u0130\u0130\u0130\u0130\u0130", "\u023a\u023a\u023a\u023a\u023a",
+		"\xff\xfe\xfd\xfc\xfb", "\xc5 \xc5 \xc5 \xc5 \xc5",
+		"ABC def GHI jkl mno", "ABC def GHI jkl mno pqr", "AB CD ef gh ij",
+		"\u01c5\u01c5 \u01c5\u01c5 \u01c5\u01c5 ok", "\u24b6\u24b7 \u24b8\u24b9 \u24ba\u24bb now",
+		"\u03a3\u03a3 \u039b\u039b \u03a9\u03a9 ok go", "STRASSE \u00dfTRASSE ok fine",
+		"```FUCK FUCK FUCK``` please handle it", "``` unclosed FUCK FUCK FUCK",
+		"why won\u2019t it build", "why won't it build", "???", "what?? ok!! fine??",
+		"x\u0085\u0085\u0085\u0085\u0085\u0085\u0085\u0085y",
+		"\u24b6\u24b7 \u24b8\u24b9 ok fine now",
 		"this is wtf", "please come on", "why won't this work",
 		"this doesn't work", "this does not work", "still broken", "same error",
 		"you broke it", "fuck this", "please fix!!!", "please fix???",
 		"please fix!!", "please fix??", "ABC DEF ghi jkl", "ABC def ghi jkl",
-	} {
-		unique[prompt] = true
-	}
-	for prompt := range examples {
-		unique[prompt] = true
-	}
-	prompts := make([]string, 0, len(unique))
-	for prompt := range unique {
-		prompts = append(prompts, prompt)
 	}
 	sort.Strings(prompts)
 	h := sha256.New()
 	fmt.Fprintf(h, "%d:", FrustrationMarkerVersion)
 	for _, prompt := range prompts {
-		got := IsFrustrationMarker(prompt)
-		if want, ok := examples[prompt]; ok {
-			assert.Equal(t, want, got, "%q", prompt)
-		}
-		if got {
+		if IsFrustrationMarker(prompt) {
 			h.Write([]byte{1})
 		} else {
 			h.Write([]byte{0})

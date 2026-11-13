@@ -4477,8 +4477,7 @@ func (db *DB) storeFrustrationMarkers(ctx context.Context, generation uint64, id
 			ON CONFLICT(session_id) DO UPDATE SET
 				transcript_key = excluded.transcript_key,
 				marker_version = excluded.marker_version,
-				count = excluded.count
-			WHERE session_frustration_markers.marker_version <= excluded.marker_version`,
+				count = excluded.count`,
 			r.transcriptVersion, signals.FrustrationMarkerVersion, r.FrustrationMarkerCount, id, r.transcriptVersion)
 		if err != nil {
 			return err

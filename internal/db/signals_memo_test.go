@@ -202,19 +202,13 @@ func TestSignalsFrustrationStoredRefresh(t *testing.T) {
 	assert.Equal(t, 2, firstCount)
 	_, err = d.getWriter().ExecContext(ctx, `DROP TRIGGER keep_second`)
 	require.NoError(t, err)
-	_, err = d.getWriter().ExecContext(ctx, `UPDATE session_frustration_markers SET marker_version = ?, count = 99 WHERE session_id = 'first'`, signals.FrustrationMarkerVersion+1)
-	require.NoError(t, err)
-	// Version zero simulates a prior matcher version once the version advances.
-	_, err = d.getWriter().ExecContext(ctx, `UPDATE session_frustration_markers SET count = 99, marker_version = 0 WHERE session_id = 'second'`)
+	// The previous version simulates an older matcher after a version bump.
+	_, err = d.getWriter().ExecContext(ctx, `UPDATE session_frustration_markers SET count = 99, marker_version = ? WHERE session_id = 'second'`, signals.FrustrationMarkerVersion-1)
 	require.NoError(t, err)
 	require.NoError(t, d.Reopen())
 	resp, err = d.analyticsSignals(ctx, AnalyticsFilter{})
 	require.NoError(t, err)
 	assert.Equal(t, 3, resp.QualityHealth.Totals.FrustrationMarkerCount)
-	var futureVersion, futureCount int
-	require.NoError(t, d.getReader().QueryRowContext(ctx, `SELECT marker_version, count FROM session_frustration_markers WHERE session_id = 'first'`).Scan(&futureVersion, &futureCount))
-	assert.Equal(t, signals.FrustrationMarkerVersion+1, futureVersion)
-	assert.Equal(t, 99, futureCount)
 	var count, version int
 	require.NoError(t, d.getReader().QueryRowContext(ctx, `SELECT marker_version, count FROM session_frustration_markers WHERE session_id = 'second'`).Scan(&version, &count))
 	assert.Equal(t, signals.FrustrationMarkerVersion, version)

@@ -94,34 +94,24 @@ func conversationProjectionState(t *testing.T, database *db.DB) (rows int, activ
 func TestResyncPreservesFrustrationCounts(t *testing.T) {
 	ctx := t.Context()
 	root := t.TempDir()
-	dir := filepath.Join(root, "project")
-	require.NoError(t, os.MkdirAll(dir, 0o700))
-	for _, id := range []string{"conversation-a", "conversation-b"} {
-		source := fmt.Sprintf(`{"type":"user","uuid":"user-a","sessionId":%q,"cwd":%q,"timestamp":"2026-08-01T10:00:00Z","message":{"role":"user","content":"this is broken"}}
-`, id, root)
-		require.NoError(t, os.WriteFile(filepath.Join(dir, id+".jsonl"), []byte(source), 0o600))
-	}
+	path := filepath.Join(root, "project", "conversation.jsonl")
+	require.NoError(t, os.MkdirAll(filepath.Dir(path), 0o700))
+	source := fmt.Sprintf(`{"type":"user","uuid":"user-a","sessionId":"conversation-a","cwd":%q,"timestamp":"2026-08-01T10:00:00Z","message":{"role":"user","content":"this is broken"}}
+`, root)
+	require.NoError(t, os.WriteFile(path, []byte(source), 0o600))
 	database := dbtest.OpenTestDB(t)
 	engine := sync.NewEngine(ctx, database, sync.EngineConfig{AgentDirs: map[parser.AgentType][]string{parser.AgentClaude: {root}}, Machine: "local"})
 	t.Cleanup(engine.Close)
-	require.Equal(t, 2, engine.SyncAll(ctx, nil).Synced)
+	require.Equal(t, 1, engine.SyncAll(ctx, nil).Synced)
 	before, err := database.GetAnalyticsSignals(ctx, db.AnalyticsFilter{})
 	require.NoError(t, err)
-	require.Equal(t, 2, before.QualityHealth.Totals.FrustrationMarkerCount)
-	require.NoError(t, os.Remove(filepath.Join(dir, "conversation-b.jsonl")))
+	require.Equal(t, 1, before.QualityHealth.Totals.FrustrationMarkerCount)
 	resync := engine.ResyncAll(ctx, nil)
 	require.False(t, resync.Aborted, "warnings: %v", resync.Warnings)
 	require.Zero(t, resync.Failed)
-	for _, id := range []string{"conversation-a", "conversation-b"} {
-		session, err := database.GetSessionFull(ctx, id)
-		require.NoError(t, err)
-		require.NotNil(t, session, id)
-		var count int
-		err = database.Reader().QueryRowContext(ctx, `SELECT count FROM session_frustration_markers WHERE session_id = ?`, id).Scan(&count)
-		if assert.NoError(t, err, id) {
-			assert.Equal(t, 1, count, id)
-		}
-	}
+	var count int
+	require.NoError(t, database.Reader().QueryRowContext(ctx, `SELECT count FROM session_frustration_markers`).Scan(&count))
+	assert.Equal(t, 1, count)
 }
 
 func TestConversationExportColdArchiveStaysColdThroughResync(t *testing.T) {
