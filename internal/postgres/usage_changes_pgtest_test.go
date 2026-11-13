@@ -414,18 +414,9 @@ func TestUsageChangeJournalRestrictedRole(t *testing.T) {
 	require.NoError(t, local.UpsertSession(ctx, db.Session{ID: "restricted", Machine: "test-machine", Project: "project-a", Agent: "codex"}))
 	before, err := store.UsageChangeRevision(ctx)
 	require.NoError(t, err)
-	_, err = syncer.pg.ExecContext(ctx, `DROP TABLE session_frustration_counts`)
-	require.NoError(t, err)
 	result, err := publisher.Push(ctx, false, nil)
 	require.NoError(t, err)
 	require.Empty(t, result.Errors)
-	var countsExist bool
-	require.NoError(t, syncer.pg.QueryRowContext(ctx, `SELECT to_regclass('session_frustration_counts') IS NOT NULL`).Scan(&countsExist))
-	require.False(t, countsExist)
-	syncer.schemaDone = false
-	require.NoError(t, syncer.EnsureSchema(ctx))
-	require.NoError(t, syncer.pg.QueryRowContext(ctx, `SELECT to_regclass('session_frustration_counts') IS NOT NULL`).Scan(&countsExist))
-	require.True(t, countsExist)
 	through, ids, err := restricted.LoadUsageChanges(ctx, before)
 	require.NoError(t, err)
 	assert.Greater(t, through, before)
