@@ -168,9 +168,7 @@ func openExportReadOnlyDB(ctx context.Context, appCfg config.Config) (*db.DB, er
 	if !db.IsSchemaUpgradeRequired(err) {
 		return nil, fmt.Errorf("open local archive: %w", err)
 	}
-	if upgradeErr := db.UpgradeExportSchemaInPlace(ctx,
-		appCfg.DBPath, err,
-	); upgradeErr != nil {
+	if upgradeErr := upgradeExportSchemaOwned(ctx, appCfg, err); upgradeErr != nil {
 		return nil, fmt.Errorf(
 			"upgrade local archive schema for export: %w", upgradeErr)
 	}
@@ -179,6 +177,21 @@ func openExportReadOnlyDB(ctx context.Context, appCfg config.Config) (*db.DB, er
 		return nil, fmt.Errorf("reopen upgraded local archive: %w", err)
 	}
 	return database, nil
+}
+
+func upgradeExportSchemaOwned(ctx context.Context, cfg config.Config, cause error) (retErr error) {
+	if err := rejectLiveWritableDaemonBeforeDirectWrite(cfg); err != nil {
+		return err
+	}
+	lock, err := acquireWriteOwnerLock(ctx, writeLockDataDir(cfg))
+	if err != nil {
+		return err
+	}
+	defer func() { retErr = errors.Join(retErr, lock.Close()) }()
+	if err := db.RecoverCompactManifest(cfg.DBPath); err != nil {
+		return fmt.Errorf("recovering interrupted archive compaction: %w", err)
+	}
+	return db.UpgradeExportSchemaInPlace(ctx, cfg.DBPath, cause)
 }
 
 func newExportSessionsCommand() *cobra.Command {
