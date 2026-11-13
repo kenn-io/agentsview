@@ -92,9 +92,6 @@ func (h *HostedStore) GetAnalyticsSignals(ctx context.Context, f db.AnalyticsFil
 }
 
 func (h *HostedStore) GetTrendsTerms(ctx context.Context, f db.AnalyticsFilter, terms []db.TrendTermInput, granularity string) (db.TrendsTermsResponse, error) {
-	if granularity == "" {
-		granularity = "week"
-	}
 	version := func(ctx context.Context, _ string) string {
 		if h.readTx != nil {
 			return ""
@@ -105,7 +102,7 @@ func (h *HostedStore) GetTrendsTerms(ctx context.Context, f db.AnalyticsFilter, 
 		}
 		return fmt.Sprintf("hosted|%d|%d|%d", r.Identity, r.Selection, r.Corpus)
 	}
-	return keptAnalyticsWith(ctx, h.physical, "trends|"+db.TrendsKeptVariant(terms, granularity), f, version, func(ctx context.Context, f db.AnalyticsFilter) (db.TrendsTermsResponse, error) {
+	return keptAnalyticsWith(ctx, h.physical, "trends|"+db.TrendsKeptVariant(terms, trendsGranularity(granularity)), f, version, func(ctx context.Context, f db.AnalyticsFilter) (db.TrendsTermsResponse, error) {
 		return h.physical.loadTrendsTerms(ctx, f, terms, granularity)
 	})
 }

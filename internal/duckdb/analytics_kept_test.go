@@ -57,6 +57,7 @@ func TestAnalyticsKeptMirrorReplacement(t *testing.T) {
 	trends, err = store.GetTrendsTerms(t.Context(), trendsFilter, terms, "day")
 	require.NoError(t, err)
 	require.Equal(t, 1, trends.Series[0].Total)
+	store.checkMirrorReplacement(t.Context(), func(err error) { require.NoError(t, err) })
 	after, err := store.GetAnalyticsSummary(t.Context(), f)
 	require.NoError(t, err)
 	require.Equal(t, "beta", after.MostActive)

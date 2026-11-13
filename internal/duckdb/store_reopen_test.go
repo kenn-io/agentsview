@@ -468,41 +468,45 @@ func TestSweepStaleMirrorReopenAliasesHandlesGlobMetacharactersInDirectory(t *te
 	assert.FileExists(t, path, "sweep must not remove the mirror file itself")
 }
 
-// Repeated real-file checks exercise overlapping publications; scheduling controls the overlap.
+// A replacement check waits for an earlier check before inspecting the mirror.
 func TestConcurrentMirrorChecksKeepNewestPublication(t *testing.T) {
 	skipReopenTestOnWindows(t)
 	dir := t.TempDir()
-	first := filepath.Join(dir, "first.duckdb")
+	path := filepath.Join(dir, "mirror.duckdb")
 	older := filepath.Join(dir, "older.duckdb")
 	newer := filepath.Join(dir, "newer.duckdb")
-	buildMirrorFixture(t, first, "first")
+	buildMirrorFixture(t, path, "first")
 	buildMirrorFixture(t, older, "older")
 	buildMirrorFixture(t, newer, "newer")
-	path := filepath.Join(dir, "mirror.duckdb")
-	require.NoError(t, os.Link(first, path))
 	store, err := NewStore(t.Context(), path)
 	require.NoError(t, err)
-	for i := range 10 {
-		oldLink := filepath.Join(dir, fmt.Sprintf("old-%d.duckdb", i))
-		require.NoError(t, os.Link(older, oldLink))
-		require.NoError(t, swapMirrorFile(oldLink, path))
-		started := make(chan struct{})
-		done := make(chan struct{})
-		go func() {
-			close(started)
-			defer close(done)
-			store.checkMirrorReplacement(t.Context(), nil)
-		}()
-		<-started
-		runtime.Gosched()
-		newLink := filepath.Join(dir, fmt.Sprintf("new-%d.duckdb", i))
-		require.NoError(t, os.Link(newer, newLink))
-		require.NoError(t, swapMirrorFile(newLink, path))
+	t.Cleanup(func() { require.NoError(t, store.Close()) })
+	require.NoError(t, swapMirrorFile(older, path))
+	store.replacementMu.Lock()
+	held := true
+	defer func() {
+		if held {
+			store.replacementMu.Unlock()
+		}
+	}()
+	started := make(chan struct{})
+	done := make(chan struct{})
+	go func() {
+		close(started)
+		defer close(done)
 		store.checkMirrorReplacement(t.Context(), nil)
-		require.Equal(t, []string{"newer"}, listMirrorSessionIDs(t, store))
-		<-done
-		require.Equal(t, []string{"newer"}, listMirrorSessionIDs(t, store))
+	}()
+	<-started
+	select {
+	case <-done:
+		t.Fatal("replacement check finished while another check held the lock")
+	case <-time.After(time.Second): //nolint:kennlint // deadlinetest: the held lock prevents the replacement check from finishing.
 	}
+	require.NoError(t, swapMirrorFile(newer, path))
+	store.replacementMu.Unlock()
+	held = false
+	<-done
+	require.Equal(t, []string{"newer"}, listMirrorSessionIDs(t, store))
 	require.NoError(t, store.Close())
 	require.Zero(t, countReopenAliasFiles(t, dir))
 }

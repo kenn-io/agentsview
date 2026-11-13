@@ -60,7 +60,7 @@ func TestAnalyticsKeptPushAndSelection(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, 1, trends.Series[0].Total)
 	reads := counter.count()
-	_, err = store.GetTrendsTerms(ctx, f, terms, "week")
+	_, err = store.GetTrendsTerms(ctx, f, terms, "")
 	require.NoError(t, err)
 	toolsAgain, err := store.GetAnalyticsTools(ctx, f)
 	require.NoError(t, err)

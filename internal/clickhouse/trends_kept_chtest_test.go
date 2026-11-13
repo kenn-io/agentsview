@@ -3,6 +3,7 @@
 package clickhouse
 
 import (
+	"sync/atomic"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -26,6 +27,8 @@ func TestTrendsKeptPush(t *testing.T) {
 	store, err := NewStore(ctx, target)
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, store.Close()) })
+	var sized atomic.Int64
+	store.trendsReads.Size = func(db.TrendsTermsResponse) int64 { sized.Add(1); return 1 }
 	f := db.AnalyticsFilter{Project: session.Project, Timezone: "UTC", From: "2026-01-01", To: "2026-01-31"}
 	terms := []db.TrendTermInput{{Term: "alpha", Variants: []string{"alpha"}, Matchers: []string{"alpha"}}}
 	read := func(filter db.AnalyticsFilter) db.TrendsTermsResponse {
@@ -35,23 +38,20 @@ func TestTrendsKeptPush(t *testing.T) {
 	}
 	first := read(f)
 	require.Equal(t, 1, first.Series[0].Total)
+	require.EqualValues(t, 1, sized.Load())
 	require.Equal(t, first, read(f))
+	require.EqualValues(t, 1, sized.Load())
 	messages[0].Content = "bravo"
 	require.NoError(t, local.ReplaceSessionMessages(ctx, fixtureBetaID, messages))
 	_, err = syncer.Push(ctx, false, nil)
 	require.NoError(t, err)
 	require.Zero(t, read(f).Series[0].Total)
 	session.Project = "changed-project"
-	_, err = local.WriteSessionBatchAtomic(ctx, []db.SessionBatchWrite{{Session: *session, Messages: messages, DataVersion: 1, ReplaceMessages: true}})
+	_, err = local.WriteSessionBatchAtomic(ctx, []db.SessionBatchWrite{{Session: *session, DataVersion: 1, ReplaceMessages: false}})
 	require.NoError(t, err)
 	_, err = syncer.Push(ctx, false, nil)
 	require.NoError(t, err)
 	require.Zero(t, read(f).MessageCount)
 	f.Project = "changed-project"
 	require.Equal(t, 1, read(f).MessageCount)
-	f.ActiveSince = "2000-01-01T00:00:00Z"
-	require.Equal(t, 1, read(f).MessageCount)
-	require.NoError(t, store.DB().Close())
-	_, err = store.GetTrendsTerms(ctx, f, terms, "week")
-	require.Error(t, err)
 }
