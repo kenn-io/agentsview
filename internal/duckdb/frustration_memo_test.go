@@ -234,6 +234,11 @@ func TestDuckDBIncrementalPushUpdatesFrustrationCount(t *testing.T) {
 	require.NoError(t, conn.QueryRowContext(ctx, `SELECT frustration_marker_count FROM sessions WHERE id = 'sess-1'`).Scan(&count))
 	assert.Equal(t, 1, count)
 	require.NoError(t, conn.Close())
+
+	result, err = Push(ctx, path, local, "m", storage.MirrorPushOptions{}, false, nil)
+	require.NoError(t, err)
+	assert.False(t, result.Diagnostics.Full)
+	assert.Zero(t, result.SessionsPushed)
 }
 
 func TestDuckDBTrustsStoredZeroFrustrationCount(t *testing.T) {
