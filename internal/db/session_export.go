@@ -1017,7 +1017,7 @@ func forEachSessionUsageCredit(
 			Timestamp:         r.ts,
 			MessageOrdinal:    ordinal,
 			OutputTokens:      outputTok,
-			WebSearchRequests: usageRowWebSearchRequests(r.usageSource, r.tokenJSON),
+			WebSearchRequests: scanRowWebSearchRequests(r),
 			ClaudeMessageID:   r.claudeMessageID,
 			ClaudeRequestID:   r.claudeRequestID,
 		}
