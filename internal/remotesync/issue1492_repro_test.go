@@ -265,7 +265,7 @@ func TestIssue1492VanishedVSCodeWorkspaceIsEvictedFromMirror(t *testing.T) {
 	require.Contains(t, initial.Files[parser.AgentVSCodeCopilot], workspace)
 
 	mirror := t.TempDir()
-	mirrorWorkspace, err := SafeRemappedRemotePath(mirror, workspace)
+	mirrorWorkspace, err := safeRemappedRemotePath(mirror, workspace)
 	require.NoError(t, err)
 	require.NoError(t, os.MkdirAll(filepath.Dir(mirrorWorkspace), 0o755))
 	require.NoError(t, os.WriteFile(mirrorWorkspace, []byte("stale"), 0o644))
@@ -539,7 +539,7 @@ func TestIssue1492VanishedZedDatabaseRemainsEvictable(t *testing.T) {
 	assert.Empty(t, archiveEntries(t, delta.Bytes()))
 
 	mirror := t.TempDir()
-	mirrorPath, err := SafeRemappedRemotePath(mirror, dbPath)
+	mirrorPath, err := safeRemappedRemotePath(mirror, dbPath)
 	require.NoError(t, err)
 	require.NoError(t, os.MkdirAll(filepath.Dir(mirrorPath), 0o755))
 	require.NoError(t, os.WriteFile(mirrorPath, []byte("stale"), 0o644))

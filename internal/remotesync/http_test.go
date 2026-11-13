@@ -326,9 +326,9 @@ func TestHTTPSyncFullArchiveExtractsOnlyManifestFetchSet(t *testing.T) {
 		t.Context(), TargetSet{}, []string{wanted}, true, mirrorRoot,
 	)
 	require.NoError(t, err)
-	wantedLocal, err := SafeRemappedRemotePath(mirrorRoot, wanted)
+	wantedLocal, err := safeRemappedRemotePath(mirrorRoot, wanted)
 	require.NoError(t, err)
-	extraLocal, err := SafeRemappedRemotePath(mirrorRoot, extra)
+	extraLocal, err := safeRemappedRemotePath(mirrorRoot, extra)
 	require.NoError(t, err)
 	assert.FileExists(t, wantedLocal)
 	assert.NoFileExists(t, extraLocal,
@@ -1285,7 +1285,7 @@ func TestHTTPUnchangedMirrorBackfillsAntigravityTitles(t *testing.T) {
 				require.NoError(t, err)
 				assert.Equal(t, SyncStats{}, idle)
 			case "unreadable titles":
-				mirrorStore, err := SafeRemappedRemotePath(MirrorDir(hs.DataDir, hs.Host), store)
+				mirrorStore, err := safeRemappedRemotePath(MirrorDir(hs.DataDir, hs.Host), store)
 				require.NoError(t, err)
 				savedStore, err := os.ReadFile(mirrorStore)
 				require.NoError(t, err)
@@ -2298,7 +2298,7 @@ func TestHTTPSyncMirrorSecondSyncTransfersOnlyDelta(t *testing.T) {
 	// The deleted remote file is gone from the mirror, but its
 	// session survives in the DB (archive semantics).
 	mirrorRoot := MirrorDir(dataDir, "devbox")
-	staleLocal, err := SafeRemappedRemotePath(mirrorRoot, staleRemote)
+	staleLocal, err := safeRemappedRemotePath(mirrorRoot, staleRemote)
 	require.NoError(t, err)
 	assert.NoFileExists(t, staleLocal)
 	page, err := database.ListSessions(t.Context(), db.SessionFilter{Limit: 10})
@@ -2328,7 +2328,7 @@ func TestHTTPSyncMirrorRemovesSidecarThatVanishesDuringDeltaArchive(t *testing.T
 	prepared, err := hs.Prepare(t.Context())
 	require.NoError(t, err)
 	require.NoError(t, prepared.Close())
-	localWAL, err := SafeRemappedRemotePath(MirrorDir(dataDir, "devbox"), wal)
+	localWAL, err := safeRemappedRemotePath(MirrorDir(dataDir, "devbox"), wal)
 	require.NoError(t, err)
 	require.FileExists(t, localWAL)
 
@@ -2435,7 +2435,7 @@ func TestHTTPSyncMirrorRefreshesStateDBWhenWALVanishesDuringDeltaArchive(t *test
 	}
 	require.Len(t, remote.archiveRequests, 2)
 	assert.Equal(t, []string{stateDB}, remote.archiveRequests[1].DeltaFiles)
-	localWAL, err := SafeRemappedRemotePath(MirrorDir(dataDir, "devbox"), stateWAL)
+	localWAL, err := safeRemappedRemotePath(MirrorDir(dataDir, "devbox"), stateWAL)
 	require.NoError(t, err)
 	assert.NoFileExists(t, localWAL)
 
@@ -2654,7 +2654,7 @@ func TestHTTPSyncMirrorRecoversFromDirAtFilePath(t *testing.T) {
 
 	// Simulate a crashed extraction: a directory occupies a.jsonl's
 	// mirror path (MkdirAll ran, the file write never happened).
-	local, err := SafeRemappedRemotePath(MirrorDir(dataDir, "devbox"), wedged)
+	local, err := safeRemappedRemotePath(MirrorDir(dataDir, "devbox"), wedged)
 	require.NoError(t, err)
 	require.NoError(t, os.Remove(local))
 	require.NoError(t, os.Mkdir(local, 0o755))
@@ -2718,7 +2718,7 @@ func TestHTTPSyncMirrorPartitionsFileScopedAgents(t *testing.T) {
 	assert.NotContains(t, remote.archiveRequests[1].Dirs, parser.AgentClaude)
 
 	mirrorRoot := MirrorDir(dataDir, "devbox")
-	scopedLocal, err := SafeRemappedRemotePath(mirrorRoot, scoped)
+	scopedLocal, err := safeRemappedRemotePath(mirrorRoot, scoped)
 	require.NoError(t, err)
 	assert.FileExists(t, scopedLocal)
 
@@ -2771,7 +2771,7 @@ func TestHTTPSyncDisarmedFileScopedReplayDoesNotRearmRefresh(t *testing.T) {
 	t.Cleanup(func() { require.NoError(t, second.Close()) })
 	assert.Len(t, remote.archiveRequests, 1,
 		"a disarmed pending file-scoped export must replay before another refresh")
-	mirroredStateDB, err := SafeRemappedRemotePath(
+	mirroredStateDB, err := safeRemappedRemotePath(
 		MirrorDir(dataDir, hs.Host), stateDB,
 	)
 	require.NoError(t, err)
@@ -2823,7 +2823,7 @@ func TestHTTPSyncDisarmedFullReplayDefersFileScopedRefresh(t *testing.T) {
 			t.Cleanup(func() { require.NoError(t, second.Close()) })
 			assert.Len(t, remote.archiveRequests, 1,
 				"a disarmed full replay must reuse its sanitized export snapshot")
-			mirroredStateDB, err := SafeRemappedRemotePath(
+			mirroredStateDB, err := safeRemappedRemotePath(
 				MirrorDir(dataDir, hs.Host), stateDB,
 			)
 			require.NoError(t, err)
@@ -2868,7 +2868,7 @@ func TestHTTPSyncDisarmedFullReplayKeepsALargeFileScopedSnapshot(t *testing.T) {
 	require.NoError(t, database.ReplaceRemoteSkippedFiles(t.Context(), hs.Host, skipped))
 	// The manifest never lists file-scoped exports, so each of these looks
 	// deleted. There are more than the journal holds as entries.
-	mirroredStateDB, err := SafeRemappedRemotePath(mirrorRoot, stateDB)
+	mirroredStateDB, err := safeRemappedRemotePath(mirrorRoot, stateDB)
 	require.NoError(t, err)
 	exports := filepath.Join(filepath.Dir(mirroredStateDB), "exports")
 	require.NoError(t, os.MkdirAll(exports, 0o755))
@@ -2918,7 +2918,7 @@ func TestHTTPSyncDisarmedFullReplayKeepsRemovedFileScopedTarget(t *testing.T) {
 	t.Cleanup(func() { require.NoError(t, second.Close()) })
 	assert.Len(t, remote.archiveRequests, 1,
 		"replay must not request a sanitized target that is no longer advertised")
-	mirroredStateDB, err := SafeRemappedRemotePath(
+	mirroredStateDB, err := safeRemappedRemotePath(
 		MirrorDir(dataDir, hs.Host), stateDB,
 	)
 	require.NoError(t, err)
@@ -3041,10 +3041,10 @@ func TestHTTPSyncMirrorRooCodeDeltaTransfersOnlyChangedTranscript(t *testing.T) 
 	assert.Nil(t, remote.archiveRequests[0].DeltaFiles)
 
 	mirrorRoot := MirrorDir(dataDir, "devbox")
-	mirroredTranscript, err := SafeRemappedRemotePath(mirrorRoot, transcripts[0])
+	mirroredTranscript, err := safeRemappedRemotePath(mirrorRoot, transcripts[0])
 	require.NoError(t, err)
 	assert.FileExists(t, mirroredTranscript)
-	mirroredSettings, err := SafeRemappedRemotePath(mirrorRoot, mcpSettings)
+	mirroredSettings, err := safeRemappedRemotePath(mirrorRoot, mcpSettings)
 	require.NoError(t, err)
 	assert.NoFileExists(t, mirroredSettings,
 		"mcp_settings.json must never reach the mirror")
@@ -3552,7 +3552,7 @@ func TestPrepareHTTPSyncFailureCleansOwnedResources(t *testing.T) {
 		prepared, err := hs.Prepare(t.Context())
 		require.Error(t, err)
 		assert.Nil(t, prepared)
-		local, mapErr := SafeRemappedRemotePath(MirrorDir(hs.DataDir, "devbox"), path)
+		local, mapErr := safeRemappedRemotePath(MirrorDir(hs.DataDir, "devbox"), path)
 		require.NoError(t, mapErr)
 		body, readErr := os.ReadFile(local)
 		require.NoError(t, readErr)
@@ -4383,7 +4383,7 @@ func TestPrepareHTTPSyncsCacheInvalidationFailureRetainsArmedJournal(t *testing.
 	require.NoError(t, err)
 	require.NoError(t, prepared.Close())
 
-	local, err := SafeRemappedRemotePath(MirrorDir(dataDir, hs.Host), path)
+	local, err := safeRemappedRemotePath(MirrorDir(dataDir, hs.Host), path)
 	require.NoError(t, err)
 	beforeBytes, err := os.ReadFile(local)
 	require.NoError(t, err)
@@ -4462,12 +4462,12 @@ func TestPrepareHTTPSyncSameMtimeSizeChangeRecoversAfterAbortedRebuild(t *testin
 	require.NoError(t, os.Remove(deleted))
 	prepared, err := hs.Prepare(t.Context())
 	require.NoError(t, err)
-	changedLocal, err := SafeRemappedRemotePath(prepared.Root(), changed)
+	changedLocal, err := safeRemappedRemotePath(prepared.Root(), changed)
 	require.NoError(t, err)
 	changedBytes, err := os.ReadFile(changedLocal)
 	require.NoError(t, err)
 	assert.Contains(t, string(changedBytes), "new")
-	deletedLocal, err := SafeRemappedRemotePath(prepared.Root(), deleted)
+	deletedLocal, err := safeRemappedRemotePath(prepared.Root(), deleted)
 	require.NoError(t, err)
 	assert.NoFileExists(t, deletedLocal)
 	cache, err := database.LoadRemoteSkippedFiles(t.Context(), hs.Host)

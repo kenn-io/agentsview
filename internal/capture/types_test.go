@@ -49,7 +49,7 @@ func TestDecodeResultRejectsUnknownContract(t *testing.T) {
 func TestClaudeWorkDirEncodingMatchesObservedProducerLayout(t *testing.T) {
 	assert.Equal(t,
 		"-workspace-Space-dot-underscore--hash",
-		encodeClaudeWorkDir("/workspace/Space.dot_underscore/@hash"),
+		ClaudeProjectDir("/workspace/Space.dot_underscore/@hash"),
 	)
 }
 

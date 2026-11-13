@@ -96,7 +96,7 @@ func locateRoot(ctx context.Context, m manifest) ([]string, error) {
 	switch Provider(m.Provider) {
 	case ProviderClaude:
 		path := filepath.Join(
-			m.ProviderRoot, encodeClaudeWorkDir(m.ProviderWorkDir),
+			m.ProviderRoot, ClaudeProjectDir(m.ProviderWorkDir),
 			m.ProviderSessionID+".jsonl",
 		)
 		if _, err := os.Stat(path); err != nil {

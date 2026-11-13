@@ -156,9 +156,9 @@ evidence; they do not establish whether a tool helped the task.
 ## Claude Code (`claude`)
 
 - **Native resume (checked 2026-11-11):** Claude Code 2.1.322's installed
-  producer resolves the checkout through realpath when possible, normalizes it
-  to NFC, replaces each non-ASCII-alphanumeric UTF-16 unit with `-`, and for
-  paths over 200 units appends a base-36 signed 32-bit hash after the first 200
+  producer resolves the checkout through realpath when possible and replaces each
+  non-ASCII-alphanumeric UTF-16 unit with `-` without Unicode normalization. For
+  paths over 200 units it appends a base-36 signed 32-bit hash after the first 200
   encoded units. `CLAUDE_CODE_PROJECT_DIR_NAME` is accepted in local mode only
   with a nonempty `CLAUDE_CONFIG_DIR` and a valid non-reserved name. The
   producer reads `worktree-state` records last-wins per session and recognizes

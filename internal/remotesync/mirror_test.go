@@ -56,7 +56,7 @@ func diffManifest(root string, m Manifest) (result diffResult, err error) {
 func writeMirrorFile(t *testing.T, root, remotePath, content string, mtime time.Time) string {
 	t.Helper()
 
-	local, err := SafeRemappedRemotePath(root, remotePath)
+	local, err := safeRemappedRemotePath(root, remotePath)
 	require.NoError(t, err)
 	require.NoError(t, os.MkdirAll(filepath.Dir(local), 0o755))
 	require.NoError(t, os.WriteFile(local, []byte(content), 0o644))
@@ -245,7 +245,7 @@ func TestAcquireMirrorLockIsExclusive(t *testing.T) {
 func TestRemoveMirrorTypeConflictsRemovesDirAtFetchPath(t *testing.T) {
 	root := t.TempDir()
 	wedged := "/archives/claude/projects/p/s.jsonl"
-	local, err := SafeRemappedRemotePath(root, wedged)
+	local, err := safeRemappedRemotePath(root, wedged)
 	require.NoError(t, err)
 	require.NoError(t, os.MkdirAll(local, 0o755))
 

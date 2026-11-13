@@ -19,8 +19,6 @@ import (
 	"time"
 	"unicode/utf16"
 
-	"golang.org/x/text/unicode/norm"
-
 	"go.kenn.io/agentsview/internal/pathutil"
 )
 
@@ -467,7 +465,7 @@ func ClaudeProjectDir(dir string) string {
 	if resolved, err := filepath.EvalSymlinks(abs); err == nil {
 		abs = resolved
 	}
-	units := utf16.Encode([]rune(norm.NFC.String(abs)))
+	units := utf16.Encode([]rune(abs))
 	var b strings.Builder
 	var hash int32
 	for _, c := range units {
@@ -487,17 +485,6 @@ func ClaudeProjectDir(dir string) string {
 		h = -h
 	}
 	return name[:200] + "-" + strconv.FormatInt(h, 36)
-}
-
-func encodeClaudeWorkDir(dir string) string {
-	dir = filepath.Clean(dir)
-	return strings.Map(func(r rune) rune {
-		if r == '-' || r >= 'a' && r <= 'z' || r >= 'A' && r <= 'Z' ||
-			r >= '0' && r <= '9' {
-			return r
-		}
-		return '-'
-	}, dir)
 }
 
 // scanFirstLine is used only for exact candidate validation. It stops before

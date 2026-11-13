@@ -173,7 +173,7 @@ func (e *mirrorWalkError) FailureSummary() string {
 
 // add compares one manifest entry.
 func (d *mirrorDiff) add(entry ManifestEntry) error {
-	local, err := SafeRemappedRemotePath(d.root, entry.Path)
+	local, err := safeRemappedRemotePath(d.root, entry.Path)
 	if err != nil {
 		return fmt.Errorf("manifest path %q: %w", entry.Path, err)
 	}
@@ -456,7 +456,7 @@ func ApplyMirrorDeletions(mirrorRoot string, deletions []string) error {
 // fail closed on any path outside the mirror root.
 func RemoveMirrorTypeConflicts(mirrorRoot string, fetch []string) error {
 	for _, remotePath := range fetch {
-		local, err := SafeRemappedRemotePath(mirrorRoot, remotePath)
+		local, err := safeRemappedRemotePath(mirrorRoot, remotePath)
 		if err != nil {
 			return fmt.Errorf("fetch path %q: %w", remotePath, err)
 		}
@@ -484,7 +484,7 @@ func RemoveMirrorTypeConflicts(mirrorRoot string, fetch []string) error {
 // actually present in the downloaded archive.
 func RemoveMirrorFetchFiles(mirrorRoot string, fetch []string) error {
 	for _, remotePath := range fetch {
-		local, err := SafeRemappedRemotePath(mirrorRoot, remotePath)
+		local, err := safeRemappedRemotePath(mirrorRoot, remotePath)
 		if err != nil {
 			return fmt.Errorf("fetch path %q: %w", remotePath, err)
 		}
