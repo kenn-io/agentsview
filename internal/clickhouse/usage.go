@@ -594,12 +594,23 @@ func chExternalColumn[T ~string](declare func(string, T) func(*ext.Table) error,
 	return declare(name, T(typ))
 }
 
-// withUsageDeltaTables attaches the replaced session list, the raw hosts'
-// session list, and the prepared delta rows a prepared read's SQL names,
-// when the state has them, to the context the read runs under.
+// withUsageDeltaTables attaches the tables of usageDeltaTables to the
+// context a prepared read runs under.
 func withUsageDeltaTables(ctx context.Context, state preparedUsageState) (context.Context, error) {
+	tables, err := usageDeltaTables(state)
+	if err != nil || len(tables) == 0 {
+		return ctx, err
+	}
+	return chdriver.Context(ctx, chdriver.WithExternalTable(tables...)), nil
+}
+
+// usageDeltaTables returns the replaced session list, the raw hosts'
+// session list, and the prepared delta rows a prepared read's SQL names,
+// when the state has them. A query consumes the tables it sends, so each
+// read needs its own.
+func usageDeltaTables(state preparedUsageState) ([]*ext.Table, error) {
 	if !state.ready {
-		return ctx, nil
+		return nil, nil
 	}
 	var tables []*ext.Table
 	if replaced := state.replaced(); len(replaced) > 0 {
@@ -632,10 +643,7 @@ func withUsageDeltaTables(ctx context.Context, state preparedUsageState) (contex
 		}
 		tables = append(tables, table)
 	}
-	if len(tables) == 0 {
-		return ctx, nil
-	}
-	return chdriver.Context(ctx, chdriver.WithExternalTable(tables...)), nil
+	return tables, nil
 }
 
 // chUsageStoredPriceSelect selects the stored price columns of the joined

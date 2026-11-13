@@ -43,14 +43,8 @@ type Store struct {
 	// pages serves the session list, sidebar filters, and one-session reads
 	// apart from conn's dashboard and Usage scans; see pageMaxOpenConns.
 	pages *sql.DB
-	// bulk reads the Activity usage rows; see openBulk.
+	// bulk serves the Activity reads that return many rows; see openBulk.
 	bulk chdriver.Conn
-	// usageSliceRows is the fewest stored rows worth a slice of their own in
-	// an Activity range read; see readActivityUsageSlices.
-	usageSliceRows int
-	// afterUsageSlices, when set, runs once a sliced range read has read
-	// every slice. Tests use it to change the rows mid-read.
-	afterUsageSlices func()
 	// beforeUsageExtent lets tests change source rows after the request snapshot.
 	beforeUsageExtent func()
 	// afterTrackerReads, when set, runs after the row trackers read and
@@ -111,11 +105,9 @@ type Store struct {
 	activitySessions activitySessionMemo
 	// activityInputQueries counts pairing input reads that reached ClickHouse.
 	activityInputQueries atomic.Int64
-	// activityUsageRows keeps activity usage reads per source, set, and range.
-	activityUsageRows kept.Memo[*activityUsageKept]
-	// activityUsageRanges keeps every session's prepared usage rows and
-	// their survivors per range in progress; see activityUsageRange.
-	activityUsageRanges kept.Memo[*activityUsageRange]
+	// activityUsageSums keeps the result of the latest usage query per
+	// report selection; see keptActivityUsageSums.
+	activityUsageSums kept.Memo[*activityUsageSums]
 	// readinessLog holds the last prepared usage readiness logged.
 	readinessLog struct {
 		sync.Mutex
@@ -126,10 +118,8 @@ type Store struct {
 	projectIdentityMaps     kept.Memo[map[string]export.ProjectMapEntry]
 	reports                 kept.Reports
 	// activityChecks records the parts each report was last checked against.
-	activityChecks       kept.Memo[string]
-	activityUsageQueries atomic.Int64
-	// activityUsageRowsRead counts the activity usage rows scanned.
-	activityUsageRowsRead  atomic.Int64
+	activityChecks         kept.Memo[string]
+	activityUsageQueries   atomic.Int64
 	activitySessionQueries atomic.Int64
 }
 
@@ -177,7 +167,7 @@ func NewStore(ctx context.Context, t Target) (*Store, error) {
 // and bulk serves the reads that return millions of rows; see openBulk. The
 // caller owns the connections' compatibility checks.
 func NewStoreFromDB(conn *sql.DB, bulk chdriver.Conn) *Store {
-	s := &Store{conn: conn, pages: conn, bulk: bulk, usageSliceRows: activityUsageSliceRows}
+	s := &Store{conn: conn, pages: conn, bulk: bulk}
 	s.usageVersions.tables = map[string]usageTableVersion{}
 	s.usageVersions.prices = map[string]*finalRows{}
 	s.dailyUsageRows.Size, s.dailyUsageRows.MaxBytes = dailyUsageRowBytes, dailyUsageRowsBytes
@@ -185,9 +175,7 @@ func NewStoreFromDB(conn *sql.DB, bulk chdriver.Conn) *Store {
 	s.usageSessionRows.Size = usageSessionRowBytes
 	s.topSessionTotals.Size = db.TopSessionBytes
 	s.analyticsSessionRows.Size = analyticsSessionBytes
-	s.activityUsageRows.Size, s.activityUsageRows.MaxBytes = keptUsageBytes, activityUsageRowsBytes
-	s.activityUsageRanges.Size, s.activityUsageRanges.MaxBytes = usageRangeBytes, activityUsageRangeBytes
-	s.activityUsageRanges.Limit = activityUsageRangeLimit
+	s.activityUsageSums.Size = (*activityUsageSums).bytes
 	s.activitySessionListings.Size = sessionListingBytes
 	return s
 }

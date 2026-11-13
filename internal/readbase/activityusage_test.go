@@ -1,4 +1,4 @@
-package duckdb
+package readbase
 
 import (
 	"math/rand/v2"
@@ -14,7 +14,7 @@ import (
 
 // The usage query prices a row at the last schedule segment of its model
 // and provider that starts at or before the row; a row without a timestamp
-// prices at the segment from activityUsageNullPricingUS. Either way it must
+// prices at the segment from ActivityUsageNullPricingUS. Either way it must
 // get the rate the resolver gives at the row's own instant, across
 // time-of-day windows, catalog start dates, and the Kimi alias cutoff.
 func TestUsageRateScheduleMatchesResolverAtEveryInstant(t *testing.T) {
@@ -43,23 +43,23 @@ func TestUsageRateScheduleMatchesResolverAtEveryInstant(t *testing.T) {
 		{ModelPattern: pricingpkg.KimiK3Canonical, Rates: export.ModelRates{InputPerMTok: money.MustParseDollars("4")}},
 		{ModelPattern: "flat-model", Rates: export.ModelRates{InputPerMTok: money.MustParseDollars("3")}},
 	})
-	keys := []usageRateKey{{model: "flat-model"}, {model: "kimi-for-coding"}, {model: "night-model"}}
+	keys := []UsageRateKey{{Model: "flat-model"}, {Model: "kimi-for-coding"}, {Model: "night-model"}}
 	start := time.Date(2026, 7, 17, 0, 0, 0, 0, time.UTC)
 	end := time.Date(2026, 7, 22, 0, 0, 0, 0, time.UTC)
-	schedule := buildUsageRateSchedule(pricing, keys, ceilMicros(start), ceilMicros(end))
-	scheduled := func(key usageRateKey, us int64) export.UsageRate {
-		var found *usageRate
-		for i, rate := range schedule.rates {
-			if rate.model == key.model && rate.providerID == key.providerID && rate.fromUS <= us {
-				found = &schedule.rates[i]
+	schedule := BuildUsageRateSchedule(pricing, keys, CeilMicros(start), CeilMicros(end))
+	scheduled := func(key UsageRateKey, us int64) export.UsageRate {
+		var found *UsageRate
+		for i, rate := range schedule.Rates {
+			if rate.Model == key.Model && rate.ProviderID == key.ProviderID && rate.FromUS <= us {
+				found = &schedule.Rates[i]
 			}
 		}
 		require.NotNil(t, found, "no segment for %v at %d", key, us)
 		return found.UsageRate
 	}
 	for _, key := range keys {
-		want := pricing.UsageRateAt(key.providerID, key.model, time.Time{})
-		require.True(t, want.Equal(scheduled(key, activityUsageNullPricingUS)), "%s without a timestamp", key.model)
+		want := pricing.UsageRateAt(key.ProviderID, key.Model, time.Time{})
+		require.True(t, want.Equal(scheduled(key, ActivityUsageNullPricingUS)), "%s without a timestamp", key.Model)
 	}
 	rng := rand.New(rand.NewPCG(7, 11))
 	span := end.Sub(start).Microseconds()
@@ -74,8 +74,8 @@ func TestUsageRateScheduleMatchesResolverAtEveryInstant(t *testing.T) {
 	}
 	for _, at := range instants {
 		for _, key := range keys {
-			want := pricing.UsageRateAt(key.providerID, key.model, at)
-			require.True(t, want.Equal(scheduled(key, at.UnixMicro())), "%s at %s", key.model, at)
+			want := pricing.UsageRateAt(key.ProviderID, key.Model, at)
+			require.True(t, want.Equal(scheduled(key, at.UnixMicro())), "%s at %s", key.Model, at)
 		}
 	}
 }
