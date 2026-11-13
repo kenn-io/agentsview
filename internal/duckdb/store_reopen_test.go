@@ -502,6 +502,22 @@ func TestMirrorCheckReadsPublicationAfterPreviousCheck(t *testing.T) {
 		t.Fatal("replacement check finished while another check held the lock")
 	case <-time.After(time.Second): //nolint:kennlint // deadlinetest: the held lock prevents the replacement check from finishing.
 	}
+	ctx, cancel := context.WithCancel(t.Context())
+	cancel()
+	canceled := make(chan struct{})
+	go func() {
+		defer close(canceled)
+		store.checkMirrorReplacement(ctx, nil)
+	}()
+	select {
+	case <-canceled:
+	case <-time.After(time.Second): //nolint:kennlint // deadlinetest: cancellation must release the waiting check.
+		<-store.replacement
+		held = false
+		<-canceled
+		<-done
+		t.Fatal("canceled mirror check waited for replacement")
+	}
 	require.NoError(t, swapMirrorFile(newer, path))
 	<-store.replacement
 	held = false
@@ -509,34 +525,4 @@ func TestMirrorCheckReadsPublicationAfterPreviousCheck(t *testing.T) {
 	require.Equal(t, []string{"newer"}, listMirrorSessionIDs(t, store))
 	require.NoError(t, store.Close())
 	require.Zero(t, countReopenAliasFiles(t, dir))
-}
-
-func TestTrendsCancellationWhileMirrorCheckWaits(t *testing.T) {
-	skipReopenTestOnWindows(t)
-	path := filepath.Join(t.TempDir(), "mirror.duckdb")
-	buildMirrorFixture(t, path, "first")
-	store, err := NewStore(t.Context(), path)
-	require.NoError(t, err)
-	t.Cleanup(func() { require.NoError(t, store.Close()) })
-	store.replacement <- struct{}{}
-	ctx, cancel := context.WithCancel(t.Context())
-	defer cancel()
-	started := make(chan struct{})
-	done := make(chan error, 1)
-	go func() {
-		close(started)
-		_, err := store.GetTrendsTerms(ctx, db.AnalyticsFilter{From: "2026-01-01", To: "2026-01-02", Timezone: "UTC"}, []db.TrendTermInput{{Term: "first", Matchers: []string{"first"}}}, "day")
-		done <- err
-	}()
-	<-started
-	cancel()
-	select {
-	case err := <-done:
-		<-store.replacement
-		require.ErrorIs(t, err, context.Canceled)
-	case <-time.After(time.Second): //nolint:kennlint // deadlinetest: a canceled request must return while the check is held.
-		<-store.replacement
-		<-done
-		t.Fatal("canceled Trends request waited for mirror replacement")
-	}
 }

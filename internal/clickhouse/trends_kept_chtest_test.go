@@ -41,17 +41,18 @@ func TestTrendsKeptPush(t *testing.T) {
 	require.EqualValues(t, 1, sized.Load())
 	require.Equal(t, first, read(f))
 	require.EqualValues(t, 1, sized.Load())
-	messages[0].Content = "bravo"
-	require.NoError(t, local.ReplaceSessionMessages(ctx, fixtureBetaID, messages))
-	_, err = syncer.Push(ctx, false, nil)
-	require.NoError(t, err)
-	require.Zero(t, read(f).Series[0].Total)
 	session.Project = "changed-project"
 	_, err = local.WriteSessionBatchAtomic(ctx, []db.SessionBatchWrite{{Session: *session, DataVersion: 1, ReplaceMessages: false}})
 	require.NoError(t, err)
 	_, err = syncer.Push(ctx, false, nil)
 	require.NoError(t, err)
 	require.Zero(t, read(f).MessageCount)
+	require.Zero(t, read(f).Series[0].Total)
 	f.Project = "changed-project"
-	require.Equal(t, 1, read(f).MessageCount)
+	require.Equal(t, 1, read(f).Series[0].Total)
+	messages[0].Content = "bravo"
+	require.NoError(t, local.ReplaceSessionMessages(ctx, fixtureBetaID, messages))
+	_, err = syncer.Push(ctx, false, nil)
+	require.NoError(t, err)
+	require.Zero(t, read(f).Series[0].Total)
 }
