@@ -2,7 +2,7 @@ package signals
 
 import (
 	"crypto/sha256"
-	"fmt"
+	"encoding/hex"
 	"math/rand/v2"
 	"strings"
 	"testing"
@@ -115,7 +115,7 @@ func TestFrustrationMarkerVersionDigest(t *testing.T) {
 	digests := map[int]string{1: "50cedcd8875dcfa5e3b044358ab956d80cc558f5d42f47a42f141f1420dc72bf"}
 	wantDigest, ok := digests[FrustrationMarkerVersion]
 	require.True(t, ok, "record the matcher digest for the new version")
-	assert.Equal(t, wantDigest, fmt.Sprintf("%x", h.Sum(nil)), "matcher results changed; bump the version and record the new digest")
+	assert.Equal(t, wantDigest, hex.EncodeToString(h.Sum(nil)), "matcher results changed; bump the version and record the new digest")
 }
 
 func TestIsFrustrationMarkerExamples(t *testing.T) {

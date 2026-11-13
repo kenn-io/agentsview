@@ -4436,8 +4436,11 @@ func (db *DB) populateFrustrationMarkers(
 	}
 	if len(ids) > 0 && !db.readOnly {
 		if err := db.storeFrustrationMarkers(ctx, generation, ids, idx, rows); err != nil {
+			if ctx.Err() != nil {
+				return ctx.Err()
+			}
 			log.Printf("storing frustration markers: %v", err)
-			return ctx.Err()
+			return nil
 		}
 	}
 	for _, id := range ids {
@@ -4448,7 +4451,9 @@ func (db *DB) populateFrustrationMarkers(
 }
 
 func (db *DB) storeFrustrationMarkers(ctx context.Context, generation uint64, ids []string, idx map[string]int, rows []SignalRow) error {
-	db.mu.Lock()
+	if err := db.lockWriterCtx(ctx); err != nil {
+		return err
+	}
 	defer db.mu.Unlock()
 	if db.frustrationMemo.Generation() != generation {
 		return nil
@@ -4457,7 +4462,7 @@ func (db *DB) storeFrustrationMarkers(ctx context.Context, generation uint64, id
 	if err != nil {
 		return err
 	}
-	defer tx.Rollback()
+	defer func() { _ = tx.Rollback() }()
 	for _, id := range ids {
 		r := rows[idx[id]]
 		_, err := tx.ExecContext(ctx, `INSERT INTO session_frustration_markers

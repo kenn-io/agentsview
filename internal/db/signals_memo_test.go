@@ -10,6 +10,7 @@ import (
 	"github.com/stretchr/testify/require"
 	"go.kenn.io/agentsview/internal/config"
 	"go.kenn.io/agentsview/internal/signals"
+	"go.kenn.io/agentsview/internal/testutil"
 )
 
 func TestSignalsFrustrationMemoReuse(t *testing.T) {
@@ -344,4 +345,35 @@ func TestSignalsFrustrationCanceledWhileSaving(t *testing.T) {
 	cancel()
 	err = <-done
 	assert.ErrorIs(t, err, context.Canceled)
+}
+
+func TestSignalsFrustrationCanceledWaitingForWriterLock(t *testing.T) {
+	d := testDB(t)
+	insertSession(t, d, "session", "test")
+	require.NoError(t, d.InsertMessages(t.Context(), []Message{{SessionID: "session", Role: "user", Content: "this is broken"}}))
+	require.NoError(t, d.UpdateSessionSignals(t.Context(), "session", SessionSignalUpdate{QualitySignals: QualitySignals{Version: CurrentQualitySignalVersion}}))
+
+	d.mu.Lock()
+	ctx, cancel := context.WithCancel(t.Context())
+	done := make(chan error, 1)
+	go func() {
+		defer close(done)
+		_, err := d.analyticsSignals(ctx, AnalyticsFilter{})
+		done <- err
+	}()
+	defer func() {
+		cancel()
+		d.mu.Unlock()
+		<-done
+	}()
+	require.Eventually(t, func() bool {
+		return testutil.GoroutineBlockedOnMutexIn("lockctx.Lock")
+	}, 10*time.Second, 5*time.Millisecond)
+	cancel()
+	select {
+	case err := <-done:
+		require.ErrorIs(t, err, context.Canceled)
+	case <-time.After(5 * time.Second):
+		require.FailNow(t, "analytics waited for the writer lock after cancellation")
+	}
 }

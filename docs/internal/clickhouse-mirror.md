@@ -687,9 +687,9 @@ when it is a marker, without its text. Over such text ClickHouse's RE2 and Go's
 `internal/signals` exports. Any other prompt, including invalid UTF-8, comes
 back with its text and Go judges it. The set is `signals.PlainPromptSymbols`,
 which DuckDB shares (see `internal/duckdb/README.md`), and a unit test checks
-every symbol in it against Go's Unicode tables. ClickHouse tests compare the
-counts with `IsFrustrationMarker` on edge cases and on a random corpus, and
-require that only prompts outside the set come back with text.
+every symbol in it against Go's Unicode tables. ClickHouse tests compare the counts with
+`IsFrustrationMarker` on edge cases and on a random corpus, and require that
+only prompts outside the set come back with text.
 
 The query reads without FINAL, because FINAL would merge the text of every
 message in the sessions, assistant replies included. A subquery with
