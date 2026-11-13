@@ -55,7 +55,7 @@ archiveSource:
 		stored, _ := storedSource(session, "")
 		if retained {
 			_, _, source, err = archivesource.Retained(ctx, cfg, database, session.ID, session.Machine, raw, "codex", stored, owners, maxSourceBytes, use)
-		} else {
+		} else if len(owners) > 0 {
 			if owners[0].NativeSessionID != raw || owners[0].Source.DeviceID != session.Machine {
 				return Result{}, errors.New("archive session identity differs")
 			}

@@ -529,5 +529,8 @@ func readRetainedSource(ctx context.Context, cfg config.Config, database *db.DB,
 		return nil, "", err
 	}
 	files, err := readLocalSource(ctx, tree.Root(), name, native, maxSourceBytes)
-	return files, source, err
+	if err != nil {
+		return nil, source, err
+	}
+	return files, source, nil
 }
