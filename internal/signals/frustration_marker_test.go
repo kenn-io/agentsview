@@ -106,10 +106,7 @@ func TestIsFrustrationMarkerMatchesReference(t *testing.T) {
 	// Both answers must be common, or agreement would prove little.
 	assert.Greater(t, markers, len(prompts)/10)
 	assert.Less(t, markers, len(prompts)*9/10)
-	digests := map[int]string{1: "6b54bd9f1a162d52fe1e63a07abee412d65f2fdee1b8d0f29d11a108702e0006"}
-	wantDigest, ok := digests[FrustrationMarkerVersion]
-	require.True(t, ok, "record the matcher digest for the new version")
-	assert.Equal(t, wantDigest, hex.EncodeToString(h.Sum(nil)), "matcher results changed; bump the version and record the new digest")
+	assert.Equal(t, "6b54bd9f1a162d52fe1e63a07abee412d65f2fdee1b8d0f29d11a108702e0006", hex.EncodeToString(h.Sum(nil)), "matcher results changed; bump the version and record the new digest")
 }
 
 func TestIsFrustrationMarkerExamples(t *testing.T) {

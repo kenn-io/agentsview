@@ -4444,11 +4444,8 @@ func (db *DB) populateFrustrationMarkers(
 	}
 	if len(ids) > 0 && !db.readOnly && !db.usageOnlyStorage() {
 		if err := db.storeFrustrationMarkers(ctx, generation, ids, idx, rows); err != nil {
-			if ctx.Err() != nil {
-				return ctx.Err()
-			}
 			log.Printf("storing frustration markers: %v", err)
-			return nil
+			return ctx.Err()
 		}
 	}
 	for _, id := range ids {

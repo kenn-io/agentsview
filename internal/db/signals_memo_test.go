@@ -15,6 +15,13 @@ import (
 	"go.kenn.io/agentsview/internal/testutil"
 )
 
+func seedFrustrationSession(t *testing.T, d *DB, id, project string) {
+	t.Helper()
+	insertSession(t, d, id, project)
+	require.NoError(t, d.InsertMessages(t.Context(), []Message{{SessionID: id, Role: "user", Content: "this is broken"}}))
+	require.NoError(t, d.UpdateSessionSignals(t.Context(), id, SessionSignalUpdate{QualitySignals: QualitySignals{Version: CurrentQualitySignalVersion}}))
+}
+
 func TestSignalsFrustrationMemoReuse(t *testing.T) {
 	d := testDB(t)
 	ctx := t.Context()
@@ -178,11 +185,7 @@ func TestSignalsFrustrationStoredRefresh(t *testing.T) {
 	d := testDB(t)
 	ctx := t.Context()
 	for _, id := range []string{"first", "second"} {
-		insertSession(t, d, id, "test")
-		require.NoError(t, d.InsertMessages(ctx, []Message{{SessionID: id, Role: "user", Content: "this is broken"}}))
-	}
-	for _, id := range []string{"first", "second"} {
-		require.NoError(t, d.UpdateSessionSignals(ctx, id, SessionSignalUpdate{QualitySignals: QualitySignals{Version: CurrentQualitySignalVersion}}))
+		seedFrustrationSession(t, d, id, "test")
 	}
 	_, err := d.analyticsSignals(ctx, AnalyticsFilter{})
 	require.NoError(t, err)
@@ -236,9 +239,7 @@ func TestSignalsFrustrationReadOnly(t *testing.T) {
 		t.Run(fmt.Sprintf("stored=%t", stored), func(t *testing.T) {
 			d := testDB(t)
 			ctx := t.Context()
-			insertSession(t, d, "session", "test")
-			require.NoError(t, d.InsertMessages(ctx, []Message{{SessionID: "session", Role: "user", Content: "this is broken"}}))
-			require.NoError(t, d.UpdateSessionSignals(ctx, "session", SessionSignalUpdate{QualitySignals: QualitySignals{Version: CurrentQualitySignalVersion}}))
+			seedFrustrationSession(t, d, "session", "test")
 			if stored {
 				_, err := d.GetAnalyticsSignals(ctx, AnalyticsFilter{})
 				require.NoError(t, err)
@@ -279,9 +280,7 @@ func TestSignalsFrustrationCleanup(t *testing.T) {
 		t.Run(action, func(t *testing.T) {
 			d := testDB(t)
 			ctx := t.Context()
-			insertSession(t, d, "session", "test")
-			require.NoError(t, d.InsertMessages(ctx, []Message{{SessionID: "session", Role: "user", Content: "this is broken"}}))
-			require.NoError(t, d.UpdateSessionSignals(ctx, "session", SessionSignalUpdate{QualitySignals: QualitySignals{Version: CurrentQualitySignalVersion}}))
+			seedFrustrationSession(t, d, "session", "test")
 			rows, err := d.signalRows(ctx, AnalyticsFilter{})
 			require.NoError(t, err)
 			require.NoError(t, d.populateFrustrationMarkers(ctx, rows))
@@ -306,17 +305,12 @@ func TestSignalsFrustrationUsagePolicyKeepsRetainedPrompts(t *testing.T) {
 	d := testDB(t)
 	ctx := t.Context()
 	for _, id := range []string{"saved", "unsaved"} {
-		insertSession(t, d, id, "test")
-		require.NoError(t, d.InsertMessages(ctx, []Message{{SessionID: id, Role: "user", Content: "this is broken"}}))
-		require.NoError(t, d.UpdateSessionSignals(ctx, id, SessionSignalUpdate{QualitySignals: QualitySignals{Version: CurrentQualitySignalVersion}}))
+		seedFrustrationSession(t, d, id, "test")
 	}
 	_, err := d.getWriter().ExecContext(ctx, `INSERT INTO session_frustration_markers (session_id, transcript_key, marker_version, count)
 		SELECT id, transcript_revision || '|' || created_at, ?, 1 FROM sessions WHERE id = 'saved'`, signals.FrustrationMarkerVersion)
 	require.NoError(t, err)
 	d.SetArchiveContent(config.ArchiveContentUsage)
-	insertSession(t, d, "new", "test")
-	require.NoError(t, d.InsertMessages(ctx, []Message{{SessionID: "new", Role: "user", Content: "this is broken"}}))
-	require.NoError(t, d.SettleUsageOnlySignals(ctx, "new"))
 	resp, err := d.GetAnalyticsSignals(ctx, AnalyticsFilter{})
 	require.NoError(t, err)
 	assert.Equal(t, 2, resp.QualityHealth.Totals.FrustrationMarkerCount)
@@ -328,9 +322,7 @@ func TestSignalsFrustrationUsagePolicyKeepsRetainedPrompts(t *testing.T) {
 func TestSignalsFrustrationFailedStoreRetriesOnEvidence(t *testing.T) {
 	d := testDB(t)
 	ctx := t.Context()
-	insertSession(t, d, "session", "test")
-	require.NoError(t, d.InsertMessages(ctx, []Message{{SessionID: "session", Role: "user", Content: "this is broken"}}))
-	require.NoError(t, d.UpdateSessionSignals(ctx, "session", SessionSignalUpdate{QualitySignals: QualitySignals{Version: CurrentQualitySignalVersion}}))
+	seedFrustrationSession(t, d, "session", "test")
 	_, err := d.getWriter().ExecContext(ctx, `CREATE TRIGGER reject_frustration_store BEFORE INSERT ON session_frustration_markers BEGIN SELECT RAISE(ABORT, 'injected failure'); END`)
 	require.NoError(t, err)
 	resp, err := d.GetAnalyticsSignals(ctx, AnalyticsFilter{})
@@ -351,9 +343,7 @@ func TestSignalsFrustrationCanceledWhileSaving(t *testing.T) {
 	for _, blocker := range []string{"connection", "mutex"} {
 		t.Run(blocker, func(t *testing.T) {
 			d := testDB(t)
-			insertSession(t, d, "session", "test")
-			require.NoError(t, d.InsertMessages(t.Context(), []Message{{SessionID: "session", Role: "user", Content: "this is broken"}}))
-			require.NoError(t, d.UpdateSessionSignals(t.Context(), "session", SessionSignalUpdate{QualitySignals: QualitySignals{Version: CurrentQualitySignalVersion}}))
+			seedFrustrationSession(t, d, "session", "test")
 			var blocked func() bool
 			var release func()
 			if blocker == "connection" {

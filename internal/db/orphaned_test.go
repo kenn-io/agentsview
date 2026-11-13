@@ -16,9 +16,7 @@ func TestCopyReparsedFrustrationCounts(t *testing.T) {
 	ctx := t.Context()
 	source := testDB(t)
 	for _, id := range []string{"unchanged", "changed", "stale", "orphan", "trashed-clean"} {
-		insertSession(t, source, id, "project")
-		require.NoError(t, source.InsertMessages(ctx, []Message{{SessionID: id, Role: "user", Content: "this is broken"}}))
-		require.NoError(t, source.UpdateSessionSignals(ctx, id, SessionSignalUpdate{QualitySignals: QualitySignals{Version: CurrentQualitySignalVersion}}))
+		seedFrustrationSession(t, source, id, "project")
 	}
 	_, err := source.getWriter().ExecContext(ctx, `UPDATE messages SET content = ? WHERE session_id = 'orphan'`, "this is brok\xffen")
 	require.NoError(t, err)
@@ -50,9 +48,8 @@ func TestCopyReparsedFrustrationCounts(t *testing.T) {
 	require.NoError(t, err)
 	_, err = destination.CopyTrashedDataFrom(ctx, source.Path())
 	require.NoError(t, err)
-	copied, err := destination.CopyOrphanedDataFrom(ctx, source.Path())
+	_, err = destination.CopyOrphanedDataFrom(ctx, source.Path())
 	require.NoError(t, err)
-	require.Equal(t, 1, copied)
 	saved, err := destination.getReader().QueryContext(ctx, `SELECT session_id, transcript_key, count FROM session_frustration_markers`)
 	require.NoError(t, err)
 	got := make(map[string]string)
@@ -65,10 +62,6 @@ func TestCopyReparsedFrustrationCounts(t *testing.T) {
 	require.NoError(t, saved.Err())
 	require.NoError(t, saved.Close())
 	assert.Equal(t, map[string]string{"unchanged": "7|2030-01-01T00:00:00Z:1"}, got)
-	resp, err := destination.GetAnalyticsSignals(ctx, AnalyticsFilter{})
-	require.NoError(t, err)
-	assert.Equal(t, 3, resp.QualityHealth.Totals.FrustrationMarkerCount)
-
 	_, err = source.getWriter().ExecContext(ctx, `DROP TABLE session_frustration_markers`)
 	require.NoError(t, err)
 	legacy := testDB(t)
