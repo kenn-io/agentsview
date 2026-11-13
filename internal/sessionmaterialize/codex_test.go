@@ -395,6 +395,20 @@ func TestMaterializeCodexCustomMirrorScope(t *testing.T) {
 	got, err := os.ReadFile(result.Paths[1])
 	require.NoError(t, err)
 	assert.Equal(t, newPage, got)
+	t.Run("missing root beneath escaping symlink", func(t *testing.T) {
+		escape := filepath.Join(mirror, "x", "escape")
+		if err := os.Symlink(t.TempDir(), escape); err != nil {
+			t.Skipf("directory symlinks unavailable: %v", err)
+		}
+		require.NoError(t, os.WriteFile(mirror+".codex-roots.json", []byte(`{"version":1,"dirs":["/x/custom","/x/escape/missing"]}`), 0o600))
+		home := t.TempDir()
+		t.Setenv("CODEX_HOME", home)
+		_, err := Materialize(t.Context(), cfg, nil, session, t.TempDir())
+		require.ErrorContains(t, err, "outside the mirror")
+		entries, err := os.ReadDir(home)
+		require.NoError(t, err)
+		assert.Empty(t, entries)
+	})
 }
 
 func TestMaterializeCodexLoadedLinkedHome(t *testing.T) {
@@ -451,10 +465,11 @@ func TestMaterializeCodexLoadedLinkedHome(t *testing.T) {
 	assert.Equal(t, parentBytes, got)
 
 	for _, tc := range []struct {
-		name                   string
-		linked, index, missing bool
+		name                                string
+		linked, index, missing, missingRoot bool
 	}{
 		{name: "linked without index", linked: true},
+		{name: "linked missing mirrored active root", linked: true, missingRoot: true},
 		{name: "linked with rename index", linked: true, index: true},
 		{name: "unlinked control"},
 		{name: "parent in unrelated home", linked: true, missing: true},
@@ -492,6 +507,16 @@ func TestMaterializeCodexLoadedLinkedHome(t *testing.T) {
 			require.NoError(t, os.MkdirAll(filepath.Dir(childFile), 0o700))
 			require.NoError(t, os.WriteFile(parentFile, parentData, 0o600))
 			require.NoError(t, os.WriteFile(childFile, childData, 0o600))
+			const newRollout = "33333333-3333-4333-8333-333333333333"
+			newName := "rollout-2026-01-02T00-00-00-" + id + "_" + newRollout + ".jsonl"
+			newFile := filepath.Join(archived, newName)
+			newData := []byte(lineagePage(id, "2026-01-02T00:00:00Z", "newer child", 2, map[string]any{
+				"forked_from_id": parent, "forked_from_ordinal_exclusive": 2,
+				"history_base": lineageBase(parent, 2, len(parentData)),
+			}))
+			if tc.missingRoot {
+				require.NoError(t, os.WriteFile(newFile, newData, 0o600))
+			}
 			if tc.index {
 				index := fmt.Sprintf("{\"id\":%q,\"thread_name\":\"renamed child\"}\n", id)
 				require.NoError(t, os.WriteFile(filepath.Join(home, parser.CodexSessionIndexFilename), []byte(index), 0o600))
@@ -584,6 +609,75 @@ func TestMaterializeCodexLoadedLinkedHome(t *testing.T) {
 				}
 			}
 			checkSources()
+			if tc.missingRoot {
+				mirroredChild, err := remotesync.SafeRemappedRemotePath(mirror, childFile)
+				require.NoError(t, err)
+				mirroredLive, err := remotesync.SafeRemappedRemotePath(mirror, live)
+				require.NoError(t, err)
+				checkArchived := func() {
+					t.Helper()
+					for path, want := range map[string][]byte{parentFile: parentData, newFile: newData} {
+						mirrored, err := remotesync.SafeRemappedRemotePath(mirror, path)
+						require.NoError(t, err)
+						for _, file := range []string{path, mirrored} {
+							got, err := os.ReadFile(file)
+							require.NoError(t, err)
+							require.Equal(t, want, got)
+						}
+					}
+				}
+				checkArchived()
+				require.NoError(t, os.Remove(childFile))
+				for _, dir := range []string{filepath.Join(live, "2026", "01", "01"), filepath.Join(live, "2026", "01"), filepath.Join(live, "2026")} {
+					require.NoError(t, os.Remove(dir))
+				}
+				next, err := sync.Prepare(t.Context())
+				require.NoError(t, err)
+				t.Cleanup(func() { assert.NoError(t, next.Close()) })
+				stats, err := next.ImportActive(t.Context())
+				require.NoError(t, err)
+				require.Zero(t, stats.Failed)
+				require.Zero(t, stats.Deferred)
+				require.NoError(t, next.Close())
+				imported, err = database.GetSessionFull(t.Context(), "remote~codex:"+id)
+				require.NoError(t, err)
+				require.NotNil(t, imported)
+				require.NotNil(t, imported.FilePath)
+				require.Equal(t, "remote:"+childFile, *imported.FilePath)
+				for _, path := range []string{mirroredChild, mirroredLive} {
+					_, err := os.Stat(path)
+					require.ErrorIs(t, err, os.ErrNotExist)
+				}
+				metadata, err := remotesync.LoadMirrorCodexMetadata(t.Context(), mirror)
+				require.NoError(t, err)
+				require.Equal(t, remotesync.CodexHomeRoots{Sessions: live, ArchivedSessions: archived}, metadata.Homes[home])
+				checkArchived()
+				require.NoError(t, os.Remove(live))
+				_, err = os.Stat(live)
+				require.ErrorIs(t, err, os.ErrNotExist)
+				imported, err = database.GetSessionFull(t.Context(), "remote~codex:"+id)
+				require.NoError(t, err)
+				require.NotNil(t, imported)
+				require.NotNil(t, imported.FilePath)
+				require.Equal(t, "remote:"+childFile, *imported.FilePath)
+				destination := filepath.Join(root, "destination")
+				t.Setenv("CODEX_HOME", destination)
+				localCfg := config.Config{DataDir: localData, RemoteHosts: []config.RemoteHost{{Host: "remote"}}}
+				result, err := Materialize(t.Context(), localCfg, database, imported, t.TempDir())
+				checkArchived()
+				require.NoError(t, err)
+				require.Equal(t, imported.ID, result.RequestedID)
+				require.Equal(t, newName, result.InstalledPage)
+				parentDest := filepath.Join(destination, "sessions", "2024", "01", "15", filepath.Base(parentFile))
+				newDest := filepath.Join(destination, "sessions", "2026", "01", "02", newName)
+				require.ElementsMatch(t, []string{parentDest, newDest}, result.Paths)
+				for path, want := range map[string][]byte{parentDest: parentData, newDest: newData} {
+					got, err := os.ReadFile(path)
+					require.NoError(t, err)
+					require.Equal(t, want, got)
+				}
+				return
+			}
 			destination := filepath.Join(root, "destination")
 			t.Setenv("CODEX_HOME", destination)
 			localCfg := config.Config{DataDir: localData, RemoteHosts: []config.RemoteHost{{Host: "remote"}}}
