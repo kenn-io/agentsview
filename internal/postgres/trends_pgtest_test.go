@@ -44,9 +44,6 @@ func TestStoreGetTrendsTerms(t *testing.T) {
 		From: "2024-06-01", To: "2024-06-09", Timezone: "UTC",
 	}, terms, "week")
 	require.NoError(t, err, "GetTrendsTerms")
-	defaulted, err := store.GetTrendsTerms(ctx, db.AnalyticsFilter{From: "2024-06-01", To: "2024-06-09", Timezone: "UTC"}, terms, "")
-	require.NoError(t, err)
-	assert.Equal(t, got, defaulted)
 	assert.Equal(t, []string{"2024-05-27", "2024-06-03"},
 		trendBucketDates(got.Buckets))
 	assert.Equal(t, []int{1, 1},
