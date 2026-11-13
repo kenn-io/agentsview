@@ -409,42 +409,6 @@ type inputPreviewArgs struct {
 	Name          jsontext.Value `json:"name"`
 }
 
-// str returns the string value of the named key, or "" when the key is
-// absent or holds something other than a string.
-func (a inputPreviewArgs) str(key string) string {
-	var v jsontext.Value
-	switch key {
-	case "file_path":
-		v = a.FilePath
-	case "path":
-		v = a.Path
-	case "filePath":
-		v = a.FilePathCamel
-	case "file":
-		v = a.File
-	case "pattern":
-		v = a.Pattern
-	case "query":
-		v = a.Query
-	case "command":
-		v = a.Command
-	case "cmd":
-		v = a.Cmd
-	case "skill":
-		v = a.Skill
-	case "name":
-		v = a.Name
-	}
-	if v.Kind() != '"' {
-		return ""
-	}
-	var s string
-	if err := json.Unmarshal(v, &s); err != nil {
-		return ""
-	}
-	return s
-}
-
 // makeInputPreview returns a short snippet of the tool's input args,
 // suitable for display in the timing summary's call list. Mirrors the
 // most common cases from frontend/src/lib/utils/tool-params.ts;
@@ -467,9 +431,11 @@ func makeInputPreview(category, toolName, inputJSON string) string {
 		return ""
 	}
 
-	pickStr := func(keys ...string) string {
-		for _, k := range keys {
-			if s := args.str(k); s != "" {
+	// pickStr returns the first value that is a non-empty JSON string.
+	pickStr := func(values ...jsontext.Value) string {
+		for _, v := range values {
+			var s string
+			if v.Kind() == '"' && json.Unmarshal(v, &s) == nil && s != "" {
 				return s
 			}
 		}
@@ -484,17 +450,17 @@ func makeInputPreview(category, toolName, inputJSON string) string {
 	var raw string
 	switch key {
 	case "Read":
-		raw = pickStr("file_path", "path")
+		raw = pickStr(args.FilePath, args.Path)
 	case "Edit":
-		raw = pickStr("file_path", "path", "filePath", "file")
+		raw = pickStr(args.FilePath, args.Path, args.FilePathCamel, args.File)
 	case "Write":
-		raw = pickStr("file_path", "path", "file")
+		raw = pickStr(args.FilePath, args.Path, args.File)
 	case "Grep":
-		raw = pickStr("pattern", "query")
+		raw = pickStr(args.Pattern, args.Query)
 	case "Glob":
-		raw = pickStr("pattern", "path")
+		raw = pickStr(args.Pattern, args.Path)
 	case "Bash":
-		cmd := pickStr("command", "cmd")
+		cmd := pickStr(args.Command, args.Cmd)
 		if cmd != "" {
 			if i := strings.IndexByte(cmd, '\n'); i >= 0 {
 				cmd = cmd[:i]
@@ -502,9 +468,9 @@ func makeInputPreview(category, toolName, inputJSON string) string {
 			raw = cmd
 		}
 	case "Skill", "skill":
-		raw = pickStr("skill", "name")
+		raw = pickStr(args.Skill, args.Name)
 	default:
-		raw = pickStr("file_path", "path", "pattern", "command", "cmd")
+		raw = pickStr(args.FilePath, args.Path, args.Pattern, args.Command, args.Cmd)
 	}
 
 	const maxLen = 100
