@@ -223,11 +223,9 @@ func (f *snapshotLineageFixture) materialize(key string, homes []string, names, 
 		require.NoError(f.t, err)
 		require.Len(f.t, owners, 1)
 		require.Equal(f.t, db.ArchiveSessionProvenance{
-			ArchiveSourceProvenance: db.ArchiveSourceProvenance{
-				Attachment: db.ArchiveAttachmentKey{RepositoryID: report.RepositoryID, SnapshotID: report.SnapshotID},
-				Source:     db.ArchiveSourceIdentity{ArchiveID: archiveID, DeviceID: lineageDevice, RootID: oldSource.RootID, SourceKey: oldSource.SourceKey},
-				ManifestID: oldSource.ManifestID,
-			},
+			Attachment:      db.ArchiveAttachmentKey{RepositoryID: report.RepositoryID, SnapshotID: report.SnapshotID},
+			Source:          db.ArchiveSourceIdentity{ArchiveID: archiveID, DeviceID: lineageDevice, RootID: oldSource.RootID, SourceKey: oldSource.SourceKey},
+			ManifestID:      oldSource.ManifestID,
 			NativeSessionID: "codex:" + lineageC,
 		}, owners[0])
 	}
