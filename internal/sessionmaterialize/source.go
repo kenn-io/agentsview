@@ -24,8 +24,10 @@ import (
 
 const maxSourceBytes = 512 << 20
 
-var errSourceSize = errors.New("native source exceeds size limit")
-var errSourceUnavailable = errors.New("native transcript is unavailable from configured sources")
+var (
+	errSourceSize        = errors.New("native source exceeds size limit")
+	errSourceUnavailable = errors.New("native transcript is unavailable from configured sources")
+)
 
 type sourceFile struct {
 	rel  string
