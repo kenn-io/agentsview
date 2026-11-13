@@ -18,7 +18,7 @@ func newSessionMaterializeCommand() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "materialize <id>",
 		Short: "Install original session files for native resume",
-		Long: "Install a Claude or Pi session from configured local or mirror sources, or a Claude session from S3, for a local checkout, then print a resume command. " +
+		Long: "Install a Claude session with its companions or a Pi transcript from configured local or mirror sources; Claude also supports S3 roots. Print a resume command for a local checkout. " +
 			"Requires a local archive with conversation content; the original files must total at most 512 MiB. " +
 			"End the running session and wait for any S3 uploader to finish before materializing. " +
 			"Retained and attached captures and Codex are not yet supported.",

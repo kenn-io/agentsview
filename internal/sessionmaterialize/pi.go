@@ -175,7 +175,7 @@ func piHeader(ctx context.Context, r io.Reader, id string) ([]byte, int, error) 
 				}
 			} else {
 				var header map[string]jsontext.Value
-				if json.Unmarshal(line, &header, jsontext.AllowDuplicateNames(true), jsontext.AllowInvalidUTF8(true)) != nil || header == nil {
+				if json.Unmarshal(line, &header, jsontext.AllowDuplicateNames(true), jsontext.AllowInvalidUTF8(true)) != nil {
 					return nil, 0, errPiNotSession
 				}
 				var kind, headerID string
@@ -213,15 +213,7 @@ func checkPiHeaderFile(ctx context.Context, name, id string) error {
 		return err
 	}
 	defer file.Close()
-	before, err := file.Stat()
-	if err != nil {
-		return err
-	}
 	_, _, err = piHeader(ctx, file, id)
-	after, statErr := os.Stat(name)
-	if statErr != nil || !os.SameFile(before, after) || before.Size() != after.Size() || before.ModTime() != after.ModTime() {
-		return errors.New("native Pi source changed while reading; retry when idle")
-	}
 	return err
 }
 
@@ -258,7 +250,7 @@ func relocatePiHeader(ctx context.Context, data []byte, id, cwd string) ([]byte,
 	if data == nil {
 		return nil, errors.New("invalid native Pi header offsets")
 	}
-	encoded, err := json.Marshal(cwd, jsontext.EscapeForHTML(true), jsontext.EscapeForJS(true))
+	encoded, err := json.Marshal(cwd)
 	if err != nil {
 		return nil, fmt.Errorf("native Pi checkout path is not valid UTF-8: %w", err)
 	}
