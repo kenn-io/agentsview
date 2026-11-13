@@ -498,6 +498,9 @@ func TestUsageJournaledClaimSurvivingInstalls(t *testing.T) {
 	for _, scenario := range []string{"backfill", "reused-id"} {
 		t.Run(scenario, func(t *testing.T) {
 			database := testDB(t)
+			// Keep installs under test control: notifications can build another
+			// timezone first and consume the row ID the replacement must reuse.
+			database.SetUsageCacheNotificationWork(func() (func(), bool) { return nil, false })
 			seedJournaledUsage(t, database, "session")
 			filter := UsageFilter{Timezone: "UTC"}
 			cache := warmJournaledUsage(t, database, filter)
