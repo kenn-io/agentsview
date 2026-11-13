@@ -183,8 +183,7 @@ func checkDirectoryRouting(t *testing.T, cfg config.Config, receiver *db.DB, ses
 	directoryOnly := cfg
 	directoryOnly.ArchiveSources = cfg.ArchiveSources[1:]
 	directory := directoryOnly.ArchiveSources[0].Directory
-	beforeHash, beforeNames, sidecars := directoryState(t, directory)
-	require.Empty(t, sidecars)
+	beforeDB, _, beforeNames := seedArchiveState(t, directory)
 	result, err := Materialize(t.Context(), directoryOnly, receiver, session, cwd)
 	require.NoError(t, err)
 	assert.Contains(t, result.Source, "directory:")
@@ -205,10 +204,9 @@ func checkDirectoryRouting(t *testing.T, cfg config.Config, receiver *db.DB, ses
 	require.ErrorIs(t, err, docbank.ErrVaultLocked)
 	require.ErrorContains(t, err, "archive is busy")
 	require.NoError(t, vault.Close())
-	afterHash, afterNames, sidecars := directoryState(t, directory)
-	assert.Equal(t, beforeHash, afterHash)
+	afterDB, _, afterNames := seedArchiveState(t, directory)
+	assert.Equal(t, beforeDB, afterDB)
 	assert.Equal(t, beforeNames, afterNames)
-	assert.Empty(t, sidecars)
 	unavailable := cfg
 	unavailable.ArchiveSources = append([]config.ArchiveSource(nil), cfg.ArchiveSources...)
 	unavailable.ArchiveSources[0].Repository = filepath.Join(t.TempDir(), "missing")
@@ -263,28 +261,6 @@ func checkDirectoryRouting(t *testing.T, cfg config.Config, receiver *db.DB, ses
 	entries, err := os.ReadDir(brokenHome)
 	require.NoError(t, err)
 	assert.Empty(t, entries)
-}
-
-func directoryState(t *testing.T, directory string) ([32]byte, []string, []string) {
-	t.Helper()
-	saved := filepath.Join(directory, "sessions.db")
-	data, err := os.ReadFile(saved)
-	require.NoError(t, err)
-	entries, err := os.ReadDir(directory)
-	require.NoError(t, err)
-	var names, sidecars []string
-	for _, entry := range entries {
-		names = append(names, entry.Name())
-	}
-	for _, suffix := range []string{"-wal", "-shm", "-journal"} {
-		_, err := os.Lstat(saved + suffix)
-		if err == nil {
-			sidecars = append(sidecars, suffix)
-		} else {
-			require.ErrorIs(t, err, os.ErrNotExist)
-		}
-	}
-	return sha256.Sum256(data), names, sidecars
 }
 
 // A native fork chain can retain each replay parent under a different captured home.

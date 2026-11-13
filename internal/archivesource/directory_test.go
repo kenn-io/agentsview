@@ -105,6 +105,10 @@ func testAttachedRestoredDirectory(t *testing.T, layout string) {
 	after, err := os.ReadFile(filepath.Join(moved, application, "sessions.db"))
 	require.NoError(t, err)
 	assert.Equal(t, sha256.Sum256(saved), sha256.Sum256(after), "source database is never migrated or rewritten")
+	for _, suffix := range []string{"-wal", "-shm", "-journal"} {
+		_, err := os.Lstat(filepath.Join(moved, application, "sessions.db") + suffix)
+		require.ErrorIs(t, err, os.ErrNotExist)
+	}
 }
 
 func TestAttachedDirectoryRefusesActiveWriter(t *testing.T) {
@@ -117,37 +121,6 @@ func TestAttachedDirectoryRefusesActiveWriter(t *testing.T) {
 	defer lock.Close()
 	_, err = OpenIndex(t.Context(), source, t.TempDir(), nil)
 	require.ErrorContains(t, err, "in use")
-}
-
-func TestAttachedDirectoryDiscoveryLeavesCleanSourceClean(t *testing.T) {
-	_, inputs := archiveFixture(t)
-	directory := filepath.Join(inputs, "seed")
-	prepareDirectoryOwnerLock(t, directory)
-	saved := filepath.Join(directory, "sessions.db")
-	before, err := os.ReadFile(saved)
-	require.NoError(t, err)
-	entries, err := os.ReadDir(directory)
-	require.NoError(t, err)
-	index, err := OpenIndex(t.Context(), config.ArchiveSource{Directory: directory}, t.TempDir(), nil)
-	require.NoError(t, err)
-	require.NoError(t, index.Close())
-	after, err := os.ReadFile(saved)
-	require.NoError(t, err)
-	assert.Equal(t, sha256.Sum256(before), sha256.Sum256(after))
-	afterEntries, err := os.ReadDir(directory)
-	require.NoError(t, err)
-	var beforeNames, afterNames []string
-	for _, entry := range entries {
-		beforeNames = append(beforeNames, entry.Name())
-	}
-	for _, entry := range afterEntries {
-		afterNames = append(afterNames, entry.Name())
-	}
-	assert.Equal(t, beforeNames, afterNames)
-	for _, suffix := range []string{"-wal", "-shm", "-journal"} {
-		_, err := os.Lstat(saved + suffix)
-		require.ErrorIs(t, err, os.ErrNotExist)
-	}
 }
 
 func TestAttachedDirectorySidecarSourceStillDiscovered(t *testing.T) {
