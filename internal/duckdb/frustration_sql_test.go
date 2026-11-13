@@ -236,7 +236,7 @@ func TestDuckFrustrationMarkerScanMatchesGoOnRandomPrompts(t *testing.T) {
 	}
 	local := newLocalDB(t)
 	const ts = "2026-02-01T09:00:00.000Z"
-	messages := make([]db.Message, len(prompts))
+	messages := make([]db.Message, len(prompts)+1)
 	for i, p := range prompts {
 		messages[i] = syncMessage("corpus", i, "user", p.content, ts)
 		if i%13 == 0 {
@@ -245,7 +245,7 @@ func TestDuckFrustrationMarkerScanMatchesGoOnRandomPrompts(t *testing.T) {
 			messages[i].SourceSubtype = "tool_result"
 		}
 	}
-	messages = append(messages, syncMessage("corpus", len(messages), "assistant", "this is broken", ts))
+	messages[len(prompts)] = syncMessage("corpus", len(prompts), "assistant", "this is broken", ts)
 	_, err := local.WriteSessionBatchAtomic(t.Context(), []db.SessionBatchWrite{{
 		Session:  syncSession("corpus", "alpha", "corpus", ts, len(messages)),
 		Messages: messages, DataVersion: 1, ReplaceMessages: true,
