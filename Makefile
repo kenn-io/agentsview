@@ -47,6 +47,14 @@ PRICING_SNAPSHOT_FILE := internal/pricing/snapshot/litellm_snapshot.json.gz
 # queries, caught by the bench gate). Caller-provided flags stay last so
 # they can still override.
 SQLITE_INCLUDE_DIR := .sqlite-include
+
+# Builds leave out the DuckDB mirror driver unless DUCKDB=1. DuckDB's prebuilt
+# libraries require an x86-64-v3 CPU and run code at process start, so linking
+# them stops agentsview from starting on older x86-64 CPUs. Tests link DuckDB
+# so they cover the mirror. See README.md#duckdb-mirror.
+comma := ,
+BUILD_TAGS := fts5$(if $(filter 1,$(DUCKDB)),$(comma)duckdb)
+TEST_TAGS := fts5,duckdb
 export CGO_CFLAGS := -O2 -g -I$(CURDIR)/$(SQLITE_INCLUDE_DIR) $(CGO_CFLAGS)
 
 GOPATH_FIRST := $(shell go env GOPATH | cut -d: -f1)
@@ -95,19 +103,19 @@ pricing-snapshot: sqlite-vec-header
 
 # Build the binary (debug, with embedded pricing snapshot and frontend)
 build: pricing-snapshot frontend
-	CGO_ENABLED=1 go build -tags fts5 -ldflags="$(LDFLAGS)" -o agentsview ./cmd/agentsview
+	CGO_ENABLED=1 go build -tags $(BUILD_TAGS) -ldflags="$(LDFLAGS)" -o agentsview ./cmd/agentsview
 	@chmod +x agentsview
 
 # Build with optimizations (release)
 build-release: pricing-snapshot frontend
-	CGO_ENABLED=1 go build -tags fts5 -ldflags="$(LDFLAGS_RELEASE)" -trimpath -o agentsview ./cmd/agentsview
+	CGO_ENABLED=1 go build -tags $(BUILD_TAGS) -ldflags="$(LDFLAGS_RELEASE)" -trimpath -o agentsview ./cmd/agentsview
 	@chmod +x agentsview
 
 # Homebrew build profile: the release build with cgo and
 # DISTRIBUTION=homebrew, written to $(BINDIR)/agentsview.
 homebrew: DISTRIBUTION := homebrew
 homebrew: pricing-snapshot frontend
-	CGO_ENABLED=1 go build -tags fts5 -ldflags="$(LDFLAGS_RELEASE)" -trimpath -buildvcs=false -o "$(BINDIR)/agentsview" ./cmd/agentsview
+	CGO_ENABLED=1 go build -tags $(BUILD_TAGS) -ldflags="$(LDFLAGS_RELEASE)" -trimpath -buildvcs=false -o "$(BINDIR)/agentsview" ./cmd/agentsview
 
 # Install to ~/.local/bin, $GOBIN, or $GOPATH/bin.
 # Copy to a temp file in the destination directory, then rename into place.
@@ -355,8 +363,8 @@ GO_TEST_P_FLAG := $(if $(GO_TEST_P),-p $(GO_TEST_P),)
 # Run the cacheable unit/integration suite. The external-service lanes below
 # intentionally retain `-count=1` because they require fresh state.
 test: pricing-snapshot ensure-embed-dir
-	go test $(GO_TEST_P_FLAG) -tags "fts5" ./... -skip '^TestActiveAppendGrowth$$' -v
-	go test -tags "fts5" ./cmd/perfsim -run '^TestActiveAppendGrowth$$' -v
+	go test $(GO_TEST_P_FLAG) -tags "$(TEST_TAGS)" ./... -skip '^TestActiveAppendGrowth$$' -v
+	go test -tags "$(TEST_TAGS)" ./cmd/perfsim -run '^TestActiveAppendGrowth$$' -v
 
 # Reproducible synthetic ingest, steady-state sync, and analytics measurements.
 .PHONY: perf-sim
@@ -367,11 +375,11 @@ perf-sim: pricing-snapshot ensure-embed-dir
 # Check that the generated OpenAPI contract matches its API version record
 test-api-version: pricing-snapshot ensure-embed-dir
 	@base="$${API_VERSION_BASE:-}"; if [ -z "$$base" ]; then base=$$(git merge-base HEAD origin/main) || exit 1; fi; \
-	API_VERSION_BASE="$$base" go test -tags "fts5" ./cmd/agentsview -run '^(TestAPIVersionContract|TestCheckAPIVersionContract|TestLoadAPIVersionRecords|TestOpenAPIProsePreservesSchemaValues|TestBaseAPIVersionRecords)$$' -v
+	API_VERSION_BASE="$$base" go test -tags "$(TEST_TAGS)" ./cmd/agentsview -run '^(TestAPIVersionContract|TestCheckAPIVersionContract|TestLoadAPIVersionRecords|TestOpenAPIProsePreservesSchemaValues|TestBaseAPIVersionRecords)$$' -v
 
 # Run fast tests only
 test-short: pricing-snapshot ensure-embed-dir
-	go test $(GO_TEST_P_FLAG) -tags "fts5" ./... -short
+	go test $(GO_TEST_P_FLAG) -tags "$(TEST_TAGS)" ./... -short
 
 # CI test runner. Prints a compact log, writes go test JSON events to
 # gotestsum/<suite>.json for the CI flake monitor, and reruns failed tests up
@@ -386,7 +394,7 @@ gotestsum = go tool gotestsum --format pkgname-and-test-fails --format-icons tex
 # identical under the tag and already covered by the untagged run.
 test-evalingest: pricing-snapshot ensure-embed-dir
 	CGO_ENABLED=1 $(call gotestsum,evalingest,./internal/server) \
-		-tags "fts5,evalingest" -count=1
+		-tags "$(TEST_TAGS),evalingest" -count=1
 
 # Compare db.Store read-query performance across SQLite, DuckDB, and PostgreSQL.
 # Requires Docker because the PostgreSQL backend is started with testcontainers.
@@ -396,7 +404,7 @@ BENCH_BACKENDS_MESSAGES_PER_SESSION ?= 64
 bench-backends: pricing-snapshot ensure-embed-dir
 	AGENTSVIEW_BENCH_SESSIONS=$(BENCH_BACKENDS_SESSIONS) \
 		AGENTSVIEW_BENCH_MESSAGES_PER_SESSION=$(BENCH_BACKENDS_MESSAGES_PER_SESSION) \
-		CGO_ENABLED=1 go test -tags "fts5,benchdb" ./internal/backendbench $(BENCH_BACKENDS_FLAGS)
+		CGO_ENABLED=1 go test -tags "$(TEST_TAGS),benchdb" ./internal/backendbench $(BENCH_BACKENDS_FLAGS)
 
 # Local hot-path benchmark comparison. Runs every benchmark in these packages
 # (sync engine warm/cold/append, message write paths, usage
@@ -426,11 +434,11 @@ BENCH_GATE_TIME ?= 20x
 BENCH_GATE_HEAVY ?= GetDailyUsage|UsageRollup|SQLiteActivityReport|SyncAllColdArchive|ResyncBulk|CopyMixedLegacyPageOrphans|CopySessionMetadataPins
 BENCH_GATE_HEAVY_TIME ?= 5x
 bench-gate: pricing-snapshot ensure-embed-dir
-	CGO_ENABLED=1 go test -tags "fts5" -run '^$$' \
+	CGO_ENABLED=1 go test -tags "$(TEST_TAGS)" -run '^$$' \
 		-bench . -skip '$(BENCH_GATE_HEAVY)' -benchmem \
 		-count $(BENCH_GATE_COUNT) -benchtime $(BENCH_GATE_TIME) \
 		-timeout 25m $(BENCH_GATE_PACKAGES)
-	CGO_ENABLED=1 go test -tags "fts5" -run '^$$' \
+	CGO_ENABLED=1 go test -tags "$(TEST_TAGS)" -run '^$$' \
 		-bench '$(BENCH_GATE_HEAVY)' -benchmem \
 		-count $(BENCH_GATE_COUNT) -benchtime $(BENCH_GATE_HEAVY_TIME) \
 		-timeout 25m $(BENCH_GATE_PACKAGES)
@@ -451,7 +459,7 @@ postgres-up:
 bench-pg-usage: pricing-snapshot
 	docker compose -f docker-compose.test.yml up -d --wait postgres
 	TEST_PG_URL="postgres://agentsview_test:agentsview_test_password@localhost:5433/agentsview_test?sslmode=disable" \
-	CGO_ENABLED=1 go test -tags "fts5,pgtest" ./internal/postgres \
+	CGO_ENABLED=1 go test -tags "$(TEST_TAGS),pgtest" ./internal/postgres \
 		-run '^$$' -bench 'BenchmarkPGUsage(Read|Refresh)' -benchmem -count=5
 
 # Stop test PostgreSQL container
@@ -463,12 +471,12 @@ test-postgres: pricing-snapshot ensure-embed-dir postgres-up
 	@echo "Waiting for postgres to be ready..."
 	@sleep 2
 	TEST_PG_URL="postgres://agentsview_test:agentsview_test_password@localhost:5433/agentsview_test?sslmode=disable" \
-	CGO_ENABLED=1 go test -tags "fts5,pgtest" -v ./cmd/agentsview \
+	CGO_ENABLED=1 go test -tags "$(TEST_TAGS),pgtest" -v ./cmd/agentsview \
 		-run 'TestRawSync.*CleanUploads|TestPGServeKataHubConnection|TestRawSyncBackfill|TestRawProjectionDialogueRolloutRequeuesCompletedProductionVersion|TestHostedRuntimeHealthRequiresStatusToken|TestReplicaRecipeQueryWithoutConfig|TestReplicaServeWatchPublication' -count=1
 	TEST_PG_URL="postgres://agentsview_test:agentsview_test_password@localhost:5433/agentsview_test?sslmode=disable" \
-	CGO_ENABLED=1 go test -p 1 -tags "fts5,pgtest" -v ./internal/postgres/... ./internal/activity/... -count=1 -timeout=20m
+	CGO_ENABLED=1 go test -p 1 -tags "$(TEST_TAGS),pgtest" -v ./internal/postgres/... ./internal/activity/... -count=1 -timeout=20m
 	TEST_PG_URL="postgres://agentsview_test:agentsview_test_password@localhost:5433/agentsview_test?sslmode=disable" \
-	CGO_ENABLED=1 go test -tags "fts5,pgtest" -v ./internal/service -run '^TestPlanUsageCountsParity$$' -count=1
+	CGO_ENABLED=1 go test -tags "$(TEST_TAGS),pgtest" -v ./internal/service -run '^TestPlanUsageCountsParity$$' -count=1
 
 # PostgreSQL integration tests for CI (postgres already running as service)
 POSTGRES_CORE_HEAVY_TEST := TestRawProjectionProofLookupsStayBounded
@@ -476,7 +484,7 @@ test-postgres-ci:
 	$(MAKE) -j1 test-postgres-raw-sync-ci test-postgres-core-ci
 
 test-postgres-raw-sync-ci: pricing-snapshot ensure-embed-dir
-	CGO_ENABLED=1 $(call gotestsum,postgres-raw-sync,./cmd/agentsview) -tags "fts5,pgtest" \
+	CGO_ENABLED=1 $(call gotestsum,postgres-raw-sync,./cmd/agentsview) -tags "$(TEST_TAGS),pgtest" \
 		-run 'TestRawSync.*CleanUploads|TestPGServeKataHubConnection|TestRawSyncBackfill|TestRawProjectionDialogueRolloutRequeuesCompletedProductionVersion|TestHostedRuntimeHealthRequiresStatusToken|TestReplicaRecipeQueryWithoutConfig|TestReplicaServeWatchPublication' -count=1
 
 test-postgres-core-ci:
@@ -484,18 +492,18 @@ test-postgres-core-ci:
 
 .PHONY: test-postgres-standby-ci
 test-postgres-standby-ci: pricing-snapshot ensure-embed-dir
-	CGO_ENABLED=1 go test -tags "fts5,pgtest" ./internal/postgres -run '^TestUsageStandbyRetainsResults$$' -count=1 -timeout=5m
+	CGO_ENABLED=1 go test -tags "$(TEST_TAGS),pgtest" ./internal/postgres -run '^TestUsageStandbyRetainsResults$$' -count=1 -timeout=5m
 
 # Three processes split the internal/postgres tests and run them in parallel,
 # each test in its own database. Activity runs afterward on the original database.
 test-postgres-core-fast-ci: pricing-snapshot ensure-embed-dir
 	CGO_ENABLED=1 bash scripts/test-postgres-shards.sh postgres-core-fast ./internal/postgres 3 '$(POSTGRES_CORE_HEAVY_TEST)' 20m
-	CGO_ENABLED=1 $(call gotestsum,postgres-core-fast-activity,./internal/activity/...) -p 1 -tags "fts5,pgtest" -count=1 -timeout=20m
-	CGO_ENABLED=1 $(call gotestsum,postgres-core-fast-service,./internal/service) -tags "fts5,pgtest" -run '^TestPlanUsageCountsParity$$' -count=1
+	CGO_ENABLED=1 $(call gotestsum,postgres-core-fast-activity,./internal/activity/...) -p 1 -tags "$(TEST_TAGS),pgtest" -count=1 -timeout=20m
+	CGO_ENABLED=1 $(call gotestsum,postgres-core-fast-service,./internal/service) -tags "$(TEST_TAGS),pgtest" -run '^TestPlanUsageCountsParity$$' -count=1
 
 test-postgres-core-heavy-ci: pricing-snapshot ensure-embed-dir
-	CGO_ENABLED=1 go test -tags "fts5,pgtest" ./internal/postgres/... -list '^$(POSTGRES_CORE_HEAVY_TEST)$$' | grep -Fx '$(POSTGRES_CORE_HEAVY_TEST)'
-	CGO_ENABLED=1 $(call gotestsum,postgres-core-heavy,./internal/postgres/...) -tags "fts5,pgtest" -run '^$(POSTGRES_CORE_HEAVY_TEST)$$' -count=1 -timeout=20m
+	CGO_ENABLED=1 go test -tags "$(TEST_TAGS),pgtest" ./internal/postgres/... -list '^$(POSTGRES_CORE_HEAVY_TEST)$$' | grep -Fx '$(POSTGRES_CORE_HEAVY_TEST)'
+	CGO_ENABLED=1 $(call gotestsum,postgres-core-heavy,./internal/postgres/...) -tags "$(TEST_TAGS),pgtest" -run '^$(POSTGRES_CORE_HEAVY_TEST)$$' -count=1 -timeout=20m
 
 # Start test ClickHouse container (native 19000, HTTP 18123)
 clickhouse-up:
@@ -510,20 +518,20 @@ test-clickhouse: pricing-snapshot ensure-embed-dir clickhouse-up
 	@echo "Waiting for clickhouse to be ready..."
 	@sleep 2
 	TEST_CLICKHOUSE_URL="clickhouse://localhost:19000/default" \
-		CGO_ENABLED=1 go test -tags "fts5,chtest" -v ./internal/clickhouse/... ./internal/activity/... -count=1 -timeout=20m
+		CGO_ENABLED=1 go test -tags "$(TEST_TAGS),chtest" -v ./internal/clickhouse/... ./internal/activity/... -count=1 -timeout=20m
 	TEST_CLICKHOUSE_URL="clickhouse://localhost:19000/default" \
-		CGO_ENABLED=1 go test -tags "fts5,chtest" -v ./internal/service -run '^TestPlanUsageCountsParity$$' -count=1
+		CGO_ENABLED=1 go test -tags "$(TEST_TAGS),chtest" -v ./internal/service -run '^TestPlanUsageCountsParity$$' -count=1
 
 # ClickHouse integration tests for CI (clickhouse already running as service)
 test-clickhouse-ci: pricing-snapshot ensure-embed-dir
-	CGO_ENABLED=1 $(call gotestsum,clickhouse,./internal/clickhouse/... ./internal/activity/...) -tags "fts5,chtest" -count=1 -timeout=20m
-	CGO_ENABLED=1 $(call gotestsum,clickhouse-service,./internal/service) -tags "fts5,chtest" -run '^TestPlanUsageCountsParity$$' -count=1
+	CGO_ENABLED=1 $(call gotestsum,clickhouse,./internal/clickhouse/... ./internal/activity/...) -tags "$(TEST_TAGS),chtest" -count=1 -timeout=20m
+	CGO_ENABLED=1 $(call gotestsum,clickhouse-service,./internal/service) -tags "$(TEST_TAGS),chtest" -run '^TestPlanUsageCountsParity$$' -count=1
 
 # S3 discovery integration tests. testcontainers starts and tears down a
 # rustfs (S3-compatible) container automatically, so only a working Docker
 # daemon is required.
 test-s3: pricing-snapshot ensure-embed-dir
-	CGO_ENABLED=1 go test -tags "fts5,s3test" -v ./internal/sync/... -run TestS3 -count=1
+	CGO_ENABLED=1 go test -tags "$(TEST_TAGS),s3test" -v ./internal/sync/... -run TestS3 -count=1
 
 # Local E2E builds enable the mapping workspace. Prebuilt servers must opt in
 # because their embedded frontend may not include the workspace yet.
@@ -553,6 +561,7 @@ memory-e2e: pricing-snapshot ensure-embed-dir
 # Vet
 vet: pricing-snapshot ensure-embed-dir
 	go vet -tags fts5 ./...
+	go vet -tags "$(TEST_TAGS)" ./...
 
 # Lint Go code and auto-fix where possible (local development)
 lint: lint-config-check lint-sql lint-golangci nilaway
@@ -733,26 +742,26 @@ docs-deploy:
 # Build release binary for current platform (CGO required for sqlite3)
 release: pricing-snapshot frontend
 	mkdir -p dist
-	CGO_ENABLED=1 go build -tags fts5 \
+	CGO_ENABLED=1 go build -tags $(BUILD_TAGS) \
 		-ldflags="$(LDFLAGS_RELEASE)" -trimpath \
 		-o dist/agentsview-$$(go env GOOS)-$$(go env GOARCH) ./cmd/agentsview
 
 # Cross-compile targets (require CC set to target cross-compiler)
 release-darwin-arm64: pricing-snapshot frontend
 	mkdir -p dist
-	GOOS=darwin GOARCH=arm64 CGO_ENABLED=1 go build -tags fts5 \
+	GOOS=darwin GOARCH=arm64 CGO_ENABLED=1 go build -tags $(BUILD_TAGS) \
 		-ldflags="$(LDFLAGS_RELEASE)" -trimpath \
 		-o dist/agentsview-darwin-arm64 ./cmd/agentsview
 
 release-darwin-amd64: pricing-snapshot frontend
 	mkdir -p dist
-	GOOS=darwin GOARCH=amd64 CGO_ENABLED=1 go build -tags fts5 \
+	GOOS=darwin GOARCH=amd64 CGO_ENABLED=1 go build -tags $(BUILD_TAGS) \
 		-ldflags="$(LDFLAGS_RELEASE)" -trimpath \
 		-o dist/agentsview-darwin-amd64 ./cmd/agentsview
 
 release-linux-amd64: pricing-snapshot frontend
 	mkdir -p dist
-	GOOS=linux GOARCH=amd64 CGO_ENABLED=1 go build -tags fts5 \
+	GOOS=linux GOARCH=amd64 CGO_ENABLED=1 go build -tags $(BUILD_TAGS) \
 		-ldflags="$(LDFLAGS_RELEASE)" -trimpath \
 		-o dist/agentsview-linux-amd64 ./cmd/agentsview
 
@@ -768,7 +777,7 @@ install-hooks:
 help:
 	@echo "agentsview build targets:"
 	@echo ""
-	@echo "  build          - Build with embedded frontend"
+	@echo "  build          - Build with embedded frontend (DUCKDB=1 adds the DuckDB mirror)"
 	@echo "  build-release  - Release build (optimized, stripped)"
 	@echo "  homebrew       - Release build for Homebrew (BINDIR=dir, DISTRIBUTION=homebrew)"
 	@echo "  pricing-snapshot - Restore LiteLLM snapshot from artifact branch"

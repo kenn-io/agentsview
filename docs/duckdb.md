@@ -45,6 +45,26 @@ counts. After upgrading, run `agentsview replica duckdb push` once to rebuild
 the mirror; `agentsview replica duckdb serve` refuses to open an older mirror
 until you do.
 
+## Build with DuckDB
+
+Release binaries, installers, wheels, and the published container image do not
+include DuckDB. DuckDB 2.0's prebuilt libraries need an x86-64-v3 CPU (AVX2,
+BMI2, and FMA), and linking them stopped AgentsView from starting on older
+x86-64 CPUs, even for people who never use the mirror. Without DuckDB, the
+`replica duckdb` commands report that the build does not include it.
+
+To use the mirror, [build from source](/docs/quickstart/#build-from-source) with
+DuckDB:
+
+```bash
+make install DUCKDB=1
+```
+
+Plain `go build` needs `-tags fts5,duckdb`. For a container, build the image
+with `docker build --build-arg GO_TAGS=fts5,duckdb .`. The result runs only on
+CPUs the DuckDB libraries support: x86-64-v3 or newer on amd64, and arm64 on
+Linux and macOS. Windows on ARM has no DuckDB library.
+
 ## Quick Start
 
 ```bash

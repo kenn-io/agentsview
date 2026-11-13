@@ -410,7 +410,14 @@ jobs:
 
       - name: Run Go tests (Linux, single package)
         if: runner.os == 'Linux' && matrix.package != ''
-        run: go tool gotestsum --format pkgname-and-test-fails --format-icons text --jsonfile gotestsum/${{ matrix.suite }}.json --rerun-fails=2 --rerun-fails-report gotestsum/${{ matrix.suite }}-reruns.txt --packages "${{ matrix.package }}" -- -tags "fts5" -count=1 -timeout=20m
+        run: go tool gotestsum --format pkgname-and-test-fails --format-icons text --jsonfile gotestsum/${{ matrix.suite }}.json --rerun-fails=2 --rerun-fails-report gotestsum/${{ matrix.suite }}-reruns.txt --packages "${{ matrix.package }}" -- -tags "fts5,duckdb" -count=1 -timeout=20m
+        env:
+          CGO_ENABLED: "1"
+
+      # Release builds leave out the DuckDB driver; check the stub they get.
+      - name: Run DuckDB tests without the duckdb tag (Linux)
+        if: matrix.suite == 'linux-duckdb'
+        run: go tool gotestsum --format pkgname-and-test-fails --format-icons text --jsonfile gotestsum/${{ matrix.suite }}-default.json --rerun-fails=2 --rerun-fails-report gotestsum/${{ matrix.suite }}-default-reruns.txt --packages "./internal/duckdb ./cmd/agentsview" -- -tags "fts5" -run 'DuckDBUnavailable|WithoutDriver' -count=1 -timeout=5m
         env:
           CGO_ENABLED: "1"
 
@@ -420,7 +427,7 @@ jobs:
         shell: bash
         run: |
           packages="$(go list -tags fts5 ./... | grep -vE '/(cmd/perfsim|internal/(duckdb|sync))$')"
-          go tool gotestsum --format pkgname-and-test-fails --format-icons text --jsonfile gotestsum/${{ matrix.suite }}.json --rerun-fails=2 --rerun-fails-report gotestsum/${{ matrix.suite }}-reruns.txt --packages "$packages" -- -tags "fts5" -count=1 -timeout=20m
+          go tool gotestsum --format pkgname-and-test-fails --format-icons text --jsonfile gotestsum/${{ matrix.suite }}.json --rerun-fails=2 --rerun-fails-report gotestsum/${{ matrix.suite }}-reruns.txt --packages "$packages" -- -tags "fts5,duckdb" -count=1 -timeout=20m
         env:
           CGO_ENABLED: "1"
 
@@ -444,7 +451,7 @@ jobs:
             'go.kenn.io/agentsview/internal/sync'
           )
           $packages = $packages | Where-Object { $_ -notin $isolatedPackages }
-          go tool gotestsum --format pkgname-and-test-fails --format-icons text --jsonfile gotestsum/${{ matrix.suite }}.json --rerun-fails=2 --rerun-fails-report gotestsum/${{ matrix.suite }}-reruns.txt --packages ($packages -join ' ') -- -tags "fts5" -count=1 -timeout=20m
+          go tool gotestsum --format pkgname-and-test-fails --format-icons text --jsonfile gotestsum/${{ matrix.suite }}.json --rerun-fails=2 --rerun-fails-report gotestsum/${{ matrix.suite }}-reruns.txt --packages ($packages -join ' ') -- -tags "fts5,duckdb" -count=1 -timeout=20m
         env:
           CGO_ENABLED: "1"
 
@@ -506,7 +513,7 @@ jobs:
 
       - name: Run archive, CLI, signing, and volume identity tests (macOS)
         if: runner.os == 'macOS'
-        run: go tool gotestsum --format pkgname-and-test-fails --format-icons text --jsonfile gotestsum/${{ matrix.suite }}.json --rerun-fails=2 --rerun-fails-report gotestsum/${{ matrix.suite }}-reruns.txt --packages "./internal/db ./internal/rawcapture ./internal/requestsign ./cmd/agentsview ./internal/volumeid" -- -tags "fts5" -count=1 -timeout=10m
+        run: go tool gotestsum --format pkgname-and-test-fails --format-icons text --jsonfile gotestsum/${{ matrix.suite }}.json --rerun-fails=2 --rerun-fails-report gotestsum/${{ matrix.suite }}-reruns.txt --packages "./internal/db ./internal/rawcapture ./internal/requestsign ./cmd/agentsview ./internal/volumeid" -- -tags "fts5,duckdb" -count=1 -timeout=10m
         env:
           CGO_ENABLED: "1"
 
@@ -686,7 +693,7 @@ jobs:
       - name: Run ${{ matrix.name }} tests
         shell: pwsh
         run: |
-          go tool gotestsum --format pkgname-and-test-fails --format-icons text --jsonfile gotestsum/${{ matrix.suite }}.json --rerun-fails=2 --rerun-fails-report gotestsum/${{ matrix.suite }}-reruns.txt --packages "${{ matrix.package }}" -- -tags "fts5" -run '${{ matrix.run || '.' }}' -skip '${{ matrix.skip || '^$' }}' -count=1 -timeout=20m
+          go tool gotestsum --format pkgname-and-test-fails --format-icons text --jsonfile gotestsum/${{ matrix.suite }}.json --rerun-fails=2 --rerun-fails-report gotestsum/${{ matrix.suite }}-reruns.txt --packages "${{ matrix.package }}" -- -tags "fts5,duckdb" -run '${{ matrix.run || '.' }}' -skip '${{ matrix.skip || '^$' }}' -count=1 -timeout=20m
         env:
           CGO_ENABLED: "1"
 
@@ -853,7 +860,7 @@ jobs:
         run: kit-retry 3 5 go run ./internal/pricing/cmd/litellm-snapshot -restore
 
       - name: Run DuckDB tests
-        run: go tool gotestsum --format pkgname-and-test-fails --format-icons text --jsonfile gotestsum/windows-duckdb.json --rerun-fails=2 --rerun-fails-report gotestsum/windows-duckdb-reruns.txt --packages "./internal/duckdb" -- -tags "fts5" -count=1 -timeout=20m
+        run: go tool gotestsum --format pkgname-and-test-fails --format-icons text --jsonfile gotestsum/windows-duckdb.json --rerun-fails=2 --rerun-fails-report gotestsum/windows-duckdb-reruns.txt --packages "./internal/duckdb" -- -tags "fts5,duckdb" -count=1 -timeout=20m
         env:
           CGO_ENABLED: "1"
 
@@ -948,13 +955,13 @@ jobs:
         shell: bash
         run: |
           packages="$(go list ./... | grep -vE '/(cmd/(agentsview|perfsim)|internal/(db|server|duckdb|sync))$')"
-          go tool gotestsum --format pkgname-and-test-fails --format-icons text --jsonfile gotestsum/${{ matrix.suite }}.json --rerun-fails=2 --rerun-fails-report gotestsum/${{ matrix.suite }}-reruns.txt --packages "$packages" -- -p 4 -tags "fts5" -race -count=1 -timeout=20m
+          go tool gotestsum --format pkgname-and-test-fails --format-icons text --jsonfile gotestsum/${{ matrix.suite }}.json --rerun-fails=2 --rerun-fails-report gotestsum/${{ matrix.suite }}-reruns.txt --packages "$packages" -- -p 4 -tags "fts5,duckdb" -race -count=1 -timeout=20m
         env:
           CGO_ENABLED: "1"
 
       - name: Run ${{ matrix.name }} tests (race detector)
         if: matrix.package != ''
-        run: go tool gotestsum --format pkgname-and-test-fails --format-icons text --jsonfile gotestsum/${{ matrix.suite }}.json --rerun-fails=2 --rerun-fails-report gotestsum/${{ matrix.suite }}-reruns.txt --packages "${{ matrix.package }}" -- -tags "fts5" -race -run '${{ matrix.run || '.' }}' -skip '${{ matrix.skip || '^$' }}' -count=1 -timeout=20m
+        run: go tool gotestsum --format pkgname-and-test-fails --format-icons text --jsonfile gotestsum/${{ matrix.suite }}.json --rerun-fails=2 --rerun-fails-report gotestsum/${{ matrix.suite }}-reruns.txt --packages "${{ matrix.package }}" -- -tags "fts5,duckdb" -race -run '${{ matrix.run || '.' }}' -skip '${{ matrix.skip || '^$' }}' -count=1 -timeout=20m
         env:
           CGO_ENABLED: "1"
 
@@ -974,7 +981,7 @@ jobs:
         if: matrix.testSet == 'other' && github.event_name == 'push' && github.ref == 'refs/heads/main' && env.GO_CACHE_HIT != 'true'
         run: |
           mkdir -p "$RUNNER_TEMP/race-test-binaries"
-          go test -p 4 -tags "fts5" -race -c -o "$RUNNER_TEMP/race-test-binaries/" ./cmd/agentsview ./internal/db ./internal/server
+          go test -p 4 -tags "fts5,duckdb" -race -c -o "$RUNNER_TEMP/race-test-binaries/" ./cmd/agentsview ./internal/db ./internal/server
         env:
           CGO_ENABLED: "1"
 
@@ -1275,9 +1282,9 @@ jobs:
 
       - name: Pre-build Go binaries
         run: |
-          CGO_ENABLED=1 go build -tags fts5 \
+          CGO_ENABLED=1 go build -tags fts5,duckdb \
             -o /tmp/testfixture ./cmd/testfixture
-          CGO_ENABLED=1 go build -tags fts5 \
+          CGO_ENABLED=1 go build -tags fts5,duckdb \
             -o /tmp/agentsview ./cmd/agentsview
         env:
           CGO_ENABLED: "1"

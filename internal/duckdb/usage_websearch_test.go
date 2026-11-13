@@ -1,4 +1,4 @@
-//go:build !(windows && arm64)
+//go:build duckdb && !(windows && arm64)
 
 // ABOUTME: Store-contract parity for message token counters and the Anthropic
 // ABOUTME: web search fee: the DuckDB mirror must read and charge them like SQLite.

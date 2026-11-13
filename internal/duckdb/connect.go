@@ -338,6 +338,10 @@ func openQuackClient(ctx context.Context,
 	if err := ValidateQuackClientURL(rawURL, token, allowInsecure); err != nil {
 		return nil, err
 	}
+	// Report a build without DuckDB before dialing the endpoint.
+	if err := RequireDriver(); err != nil {
+		return nil, err
+	}
 	timeout := resolveAttachTimeout(attachTimeout)
 	// Cheap TCP preflight before ATTACH: catches unreachable or blackholed
 	// endpoints in a bounded time even when the extension would otherwise

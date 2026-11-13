@@ -1195,6 +1195,9 @@ func TestMirrorPushStreamsWaitingForAnotherPush(t *testing.T) {
 // neither, so a client whose stream drops keeps its --full request.
 func TestMirrorPushReportsArchiveRebuild(t *testing.T) {
 	t.Parallel()
+	if duckdb.RequireDriver() != nil {
+		t.Skip("this build does not link DuckDB; run with -tags duckdb")
+	}
 	for _, rebuild := range []bool{false, true} {
 		t.Run(fmt.Sprintf("rebuild=%t", rebuild), func(t *testing.T) {
 			t.Parallel()

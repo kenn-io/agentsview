@@ -197,6 +197,9 @@ func TestRunWithAttachTimeout(t *testing.T) {
 }
 
 func TestOpenQuackClientPreflightFailsFast(t *testing.T) {
+	if RequireDriver() != nil {
+		t.Skip("this build does not link DuckDB; run with -tags duckdb")
+	}
 	// A closed loopback port makes the TCP preflight fail before the quack
 	// extension is even loaded, so an unreachable endpoint returns promptly
 	// instead of hanging.

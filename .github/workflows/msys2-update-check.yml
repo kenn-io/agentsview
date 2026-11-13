@@ -126,7 +126,7 @@ jobs:
             )
             $packages = $packages | Where-Object { $_ -notin $isolatedPackages }
           }
-          go test -tags "fts5" $packages -run '${{ matrix.run || '.' }}' -skip '${{ matrix.skip || '^$' }}' -v -count=1 -timeout=20m
+          go test -tags "fts5,duckdb" $packages -run '${{ matrix.run || '.' }}' -skip '${{ matrix.skip || '^$' }}' -v -count=1 -timeout=20m
         env:
           CGO_ENABLED: "1"
 
