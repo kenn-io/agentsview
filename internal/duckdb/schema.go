@@ -33,7 +33,8 @@ import (
 // copies it for resident sessions.
 // v26 adds session_usage_totals, the usage totals agents record for whole
 // sessions.
-const SchemaVersion = 26
+// v27 stores frustration marker counts at push time.
+const SchemaVersion = 27
 
 const schemaVersionMetadataKey = "agentsview_schema_version"
 
@@ -244,7 +245,9 @@ var mirrorTables = []tableSpec{
 			pr_links VARCHAR NOT NULL DEFAULT '',
 			labels VARCHAR[],
 			agentsview_push_fingerprint TEXT,
-			source_archive_id TEXT NOT NULL DEFAULT ''
+			source_archive_id TEXT NOT NULL DEFAULT '',
+			frustration_markers_version INTEGER NOT NULL DEFAULT 0,
+			frustration_marker_count INTEGER NOT NULL DEFAULT 0
 		)`,
 		columns: []columnSpec{
 			{"id", "id TEXT"},
@@ -320,6 +323,8 @@ var mirrorTables = []tableSpec{
 			{"labels", "labels VARCHAR[]"},
 			{"agentsview_push_fingerprint", "agentsview_push_fingerprint TEXT"},
 			{"source_archive_id", "source_archive_id TEXT NOT NULL DEFAULT ''"},
+			{"frustration_markers_version", "frustration_markers_version INTEGER NOT NULL DEFAULT 0"},
+			{"frustration_marker_count", "frustration_marker_count INTEGER NOT NULL DEFAULT 0"},
 		},
 		indexes: []string{
 			"CREATE INDEX IF NOT EXISTS idx_sessions_ended ON sessions(ended_at, id)",

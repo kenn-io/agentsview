@@ -1423,9 +1423,9 @@ own metadata, which is why the docs below call the database a mirror.
   those rows). Reads use them only on rows at `dashboardFactsVersion` and scan
   messages for every other row, so results match the scan. A fact must count
   exactly what the scan it replaces counts; change a definition only with a
-  version bump, which makes each archive's next push a full push. SQLite,
-  PostgreSQL, and DuckDB still scan; this is a ClickHouse storage-layout
-  difference. See
+  version bump, which makes each archive's next push a full push. SQLite and
+  PostgreSQL still scan. DuckDB stores frustration marker counts at push time
+  and scans when the stored version is stale. See
   [Dashboard facts](../internal/clickhouse-mirror.md#dashboard-facts).
 - Activity report queries receive the selected session IDs as the
   `activity_candidate_ids` external table on the request context. Do not

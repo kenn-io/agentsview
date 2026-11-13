@@ -34,7 +34,8 @@ func (s *Store) loadAnalyticsSessions(
 		args = append(args, extraArgs...)
 	}
 	rows, err := s.queryContext(ctx, `
-		SELECT `+readbase.AnalyticsSessionColumns+`, COALESCE(s.agentsview_push_fingerprint, '')
+		SELECT `+readbase.AnalyticsSessionColumns+`, COALESCE(s.agentsview_push_fingerprint, ''),
+			CASE WHEN s.frustration_markers_version = `+fmt.Sprint(frustrationMarkersVersion)+` THEN s.frustration_marker_count END
 		FROM sessions s
 		WHERE `+where, args...)
 	if err != nil {
@@ -42,7 +43,7 @@ func (s *Store) loadAnalyticsSessions(
 	}
 	defer rows.Close()
 
-	return readbase.ScanAnalyticsSessions(rows, "duckdb", formatDBTime, readbase.AnalyticsSessionExtras{PushFingerprint: true})
+	return readbase.ScanAnalyticsSessions(rows, "duckdb", formatDBTime, readbase.AnalyticsSessionExtras{PushFingerprint: true, FrustrationMarkers: true})
 }
 
 func duckBuildAnalyticsWhere(f db.AnalyticsFilter, dateCol, tablePrefix string, includeDate, includeTime bool) (string, []any) {
@@ -217,15 +218,27 @@ const frustrationMemoGeneration uint64 = 0
 func (s *Store) duckPopulateFrustrationMarkers(
 	ctx context.Context,
 	rows []db.SignalRow,
-	versions map[string]string,
+	sessions []readbase.AnalyticsSession,
 ) error {
 	if len(rows) == 0 {
 		return nil
 	}
 	cache := s.path != ""
+	versions := make(map[string]string, len(sessions))
+	stored := make(map[string]int, len(sessions))
+	for _, session := range sessions {
+		versions[session.ID] = session.PushFingerprint
+		if session.FrustrationMarkers != nil {
+			stored[session.ID] = *session.FrustrationMarkers
+		}
+	}
 	idx := make(map[string]int, len(rows))
 	ids := make([]string, 0, len(rows))
 	for i := range rows {
+		if count, ok := stored[rows[i].ID]; ok {
+			rows[i].FrustrationMarkerCount = count
+			continue
+		}
 		if version := versions[rows[i].ID]; cache && version != "" {
 			if count, ok := s.frustrationMemo.Lookup(frustrationMemoGeneration, rows[i].ID, version); ok {
 				rows[i].FrustrationMarkerCount = count

@@ -386,11 +386,7 @@ func (s analyticsSQL) TrendsSQL(f, sessionFilter db.AnalyticsFilter, _ bool) (st
 func (s analyticsSQL) FormatTime(v any) string { return formatDBTime(v) }
 
 func (s analyticsSQL) PopulateFrustrationMarkers(ctx context.Context, rows []db.SignalRow, sessions []readbase.AnalyticsSession) error {
-	versions := make(map[string]string, len(sessions))
-	for _, session := range sessions {
-		versions[session.ID] = session.PushFingerprint
-	}
-	return s.store.duckPopulateFrustrationMarkers(ctx, rows, versions)
+	return s.store.duckPopulateFrustrationMarkers(ctx, rows, sessions)
 }
 
 func (s *Store) GetAnalyticsSummary(

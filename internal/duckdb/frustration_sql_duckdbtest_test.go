@@ -8,6 +8,8 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"go.kenn.io/agentsview/internal/db"
 )
 
 // Through Quack, parameters are rendered into the SQL text, so the marker
@@ -34,4 +36,24 @@ func TestQuackFrustrationMarkerScanCounts(t *testing.T) {
 
 	assert.Equal(t, []int{1, 1, 0, 0, 1, 1, 0}, scanMarkers(t, store, ids))
 	assert.Equal(t, map[string]bool{ids[4]: true, ids[5]: true}, shippedContent(t, store, ids))
+}
+
+func TestQuackStoredFrustrationCounts(t *testing.T) {
+	ctx := t.Context()
+	path := filepath.Join(t.TempDir(), "mirror.duckdb")
+	buildMirrorFixture(t, path, "session", "this is broken")
+	conn, err := Open(ctx, path)
+	require.NoError(t, err)
+	_, err = conn.ExecContext(ctx, `UPDATE messages SET content = 'fine'`)
+	require.NoError(t, err)
+	require.NoError(t, conn.Close())
+	uri := "quack:127.0.0.1:" + freeTCPPort(t)
+	const token = "agentsview-duckdbtest-token-stored-frustration"
+	openQuackMirrorServer(t, ctx, path, uri, token)
+	store, err := NewQuackStore(ctx, uri, token, false, 0)
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, store.Close()) })
+	resp, err := store.GetAnalyticsSignals(ctx, db.AnalyticsFilter{})
+	require.NoError(t, err)
+	assert.Equal(t, 1, resp.QualityHealth.Totals.FrustrationMarkerCount)
 }

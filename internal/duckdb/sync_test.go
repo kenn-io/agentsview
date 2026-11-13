@@ -1259,7 +1259,7 @@ func TestSyncPushReportsProgressAcrossBatchBoundaries(t *testing.T) {
 func TestDuckSessionFingerprintCoversEveryMirroredColumn(t *testing.T) {
 	base := db.Session{CreatedAt: "2026-03-11T12:00:00Z"}
 	encodeArgs := func(s db.Session) string {
-		data, err := json.Marshal(sessionInsertArgs(s, "m", "archive", "fp"))
+		data, err := json.Marshal(sessionInsertArgs(s, "m", "archive", "fp", 0))
 		require.NoError(t, err)
 		return string(data)
 	}

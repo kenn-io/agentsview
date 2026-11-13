@@ -18,8 +18,10 @@ import (
 
 	"go.kenn.io/agentsview/internal/db"
 	"go.kenn.io/agentsview/internal/export"
+	"go.kenn.io/agentsview/internal/ingest"
 	"go.kenn.io/agentsview/internal/money"
 	pricingpkg "go.kenn.io/agentsview/internal/pricing"
+	"go.kenn.io/agentsview/internal/signals"
 	"go.kenn.io/agentsview/internal/storage"
 )
 
@@ -1031,6 +1033,10 @@ type duckMutationExecutor interface {
 	ExecContext(context.Context, string, ...any) (sql.Result, error)
 }
 
+// frustrationMarkersVersion is independent of db.CurrentQualitySignalVersion.
+// Bump it when IsFrustrationMarker changes.
+const frustrationMarkersVersion = 1
+
 const duckInsertBatchBytes = 1 << 20
 
 func sessionInsertArgs(
@@ -1038,6 +1044,7 @@ func sessionInsertArgs(
 	fallbackMachine string,
 	archiveID string,
 	fingerprint string,
+	frustrationCount int,
 ) []any {
 	return []any{
 		sess.ID, sess.Project, sess.ProjectAssigned,
@@ -1074,7 +1081,7 @@ func sessionInsertArgs(
 		timeValue(sess.CreatedAt), nilString(sess.TerminationStatus),
 		sess.SecretLeakCount, sess.SecretsRulesVersion,
 		db.EncodePRLinks(sess.PRLinks), db.LabelsArg(sess.Labels),
-		nilEmpty(fingerprint), archiveID,
+		nilEmpty(fingerprint), archiveID, frustrationMarkersVersion, frustrationCount,
 	}
 }
 
@@ -1416,11 +1423,11 @@ var duckAppendColumns = func() map[string][]columnSpec {
 }()
 
 func (s *Sync) appendSession(ctx context.Context, batch *duckAppendBatch, sess db.Session, fingerprint string) (int, error) {
-	if err := batch.add(ctx, "sessions", sessionInsertArgs(sess, s.machine, s.archiveID, fingerprint)...); err != nil {
-		return 0, err
-	}
 	msgs, err := s.local.GetAllMessages(ctx, sess.ID)
 	if err != nil {
+		return 0, err
+	}
+	if err := batch.add(ctx, "sessions", sessionInsertArgs(sess, s.machine, s.archiveID, fingerprint, signals.CountFrustrationMarkers(ingest.ExtractHeuristicMessages(msgs)))...); err != nil {
 		return 0, err
 	}
 	if err := insertMessages(ctx, batch, msgs); err != nil {
