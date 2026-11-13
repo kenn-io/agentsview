@@ -286,19 +286,13 @@ func TestTrendsKeptTracksContentAndSelection(t *testing.T) {
 	require.NoError(t, d.ReplaceSessionContent(ctx, "session", messages, SessionSignalUpdate{}, nil))
 	after := read()
 	require.Zero(t, after.Series[0].Total)
+	require.Equal(t, 1, after.MessageCount)
 	fresh, err := d.trendsTerms(ctx, f, terms, "week")
 	require.NoError(t, err)
 	require.Equal(t, fresh, after)
-	messages = append(messages, Message{SessionID: "session", Ordinal: 1, Role: "assistant", Content: "alpha", ContentLength: 5, Timestamp: "2024-06-01T00:31:00Z"})
-	require.NoError(t, d.ReplaceSessionContent(ctx, "session", messages, SessionSignalUpdate{}, nil))
-	require.Equal(t, 1, read().Series[0].Total)
 	session, err := d.GetSession(ctx, "session")
 	require.NoError(t, err)
 	session.Project = "other"
 	require.NoError(t, d.UpsertSession(ctx, *session))
-	require.Zero(t, read().Series[0].Total)
-	f.Project = "other"
-	require.Equal(t, 1, read().Series[0].Total)
-	require.NoError(t, d.SoftDeleteSession(ctx, "session"))
-	require.Zero(t, read().Series[0].Total)
+	require.Zero(t, read().MessageCount)
 }

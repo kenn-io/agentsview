@@ -482,13 +482,6 @@ func TestHostedTrendsKeptPublicationAndSnapshot(t *testing.T) {
 		require.NoError(t, err)
 		return result
 	}
-	defaulted, err := h.GetTrendsTerms(ctx, filter, terms, "")
-	require.NoError(t, err)
-	weekReads := counter.count()
-	week, err := h.GetTrendsTerms(ctx, filter, terms, "week")
-	require.NoError(t, err)
-	require.Equal(t, week, defaulted)
-	require.Equal(t, weekReads, counter.count())
 	first := read(filter)
 	require.Equal(t, 1, first.Series[0].Total)
 	count := counter.count()

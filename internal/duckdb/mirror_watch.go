@@ -92,12 +92,8 @@ func PrimeFileIdentity(info os.FileInfo) {
 // handle and checks again on the next tick.
 func (s *Store) checkMirrorReplacement(ctx context.Context, onEvent func(err error)) {
 	// Serialize the stat, open, and swap so an older check cannot overwrite a newer handle.
-	select {
-	case s.replacement <- struct{}{}:
-		defer func() { <-s.replacement }()
-	case <-ctx.Done():
-		return
-	}
+	s.replacementMu.Lock()
+	defer s.replacementMu.Unlock()
 	info, err := os.Stat(s.path)
 	if err != nil {
 		return
