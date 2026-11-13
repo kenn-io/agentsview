@@ -851,14 +851,18 @@ func TestCopyOrphanedFrustrationCounts(t *testing.T) {
 	for _, id := range []string{"unchanged", "changed", "stale", "orphan", "invalid"} {
 		insertSession(t, source, id, "project")
 		require.NoError(t, source.InsertMessages(ctx, []Message{{SessionID: id, Role: "user", Content: "this is broken"}}))
+		require.NoError(t, source.UpdateSessionSignals(ctx, id, SessionSignalUpdate{QualitySignals: QualitySignals{Version: CurrentQualitySignalVersion}}))
 	}
-	_, err := source.getWriter().ExecContext(ctx, `UPDATE messages SET content = ? WHERE session_id = 'invalid'`, "this is broken\xff")
+	_, err := source.getWriter().ExecContext(ctx, `UPDATE messages SET content = ? WHERE session_id = 'invalid'`, "this is brok\xffen")
 	require.NoError(t, err)
 	_, err = source.getWriter().ExecContext(ctx, `UPDATE sessions SET transcript_revision = '7', created_at = '2020-01-01T00:00:00Z'`)
 	require.NoError(t, err)
 	rows, err := source.signalRows(ctx, AnalyticsFilter{})
 	require.NoError(t, err)
 	require.NoError(t, source.populateFrustrationMarkers(ctx, rows))
+	var invalidCount int
+	require.NoError(t, source.getReader().QueryRowContext(ctx, `SELECT count FROM session_frustration_markers WHERE session_id = 'invalid'`).Scan(&invalidCount))
+	require.Zero(t, invalidCount)
 	_, err = source.getWriter().ExecContext(ctx, `UPDATE session_frustration_markers SET transcript_key = 'stale', count = 99 WHERE session_id = 'stale'`)
 	require.NoError(t, err)
 	_, err = source.getWriter().ExecContext(ctx, fmt.Sprintf(`PRAGMA user_version = %d`, sanitizedSourceDataVersion-1))
@@ -872,6 +876,7 @@ func TestCopyOrphanedFrustrationCounts(t *testing.T) {
 			content = "please explain this"
 		}
 		require.NoError(t, destination.InsertMessages(ctx, []Message{{SessionID: id, Role: "user", Content: content}}))
+		require.NoError(t, destination.UpdateSessionSignals(ctx, id, SessionSignalUpdate{QualitySignals: QualitySignals{Version: CurrentQualitySignalVersion}}))
 	}
 	_, err = destination.getWriter().ExecContext(ctx, `UPDATE sessions SET created_at = '2030-01-01T00:00:00Z'`)
 	require.NoError(t, err)
@@ -889,7 +894,10 @@ func TestCopyOrphanedFrustrationCounts(t *testing.T) {
 	}
 	require.NoError(t, saved.Err())
 	require.NoError(t, saved.Close())
-	assert.Equal(t, map[string]int{"unchanged": 1, "orphan": 1, "invalid": 1}, got)
+	resp, err := destination.GetAnalyticsSignals(ctx, AnalyticsFilter{})
+	require.NoError(t, err)
+	assert.Equal(t, 4, resp.QualityHealth.Totals.FrustrationMarkerCount)
+	assert.Equal(t, map[string]int{"unchanged": 1, "orphan": 1}, got)
 	rows, err = destination.signalRows(ctx, AnalyticsFilter{})
 	require.NoError(t, err)
 	require.NoError(t, destination.populateFrustrationMarkers(ctx, rows))
@@ -898,18 +906,6 @@ func TestCopyOrphanedFrustrationCounts(t *testing.T) {
 		counts[row.ID] = row.FrustrationMarkerCount
 	}
 	assert.Equal(t, map[string]int{"unchanged": 1, "changed": 0, "stale": 1, "orphan": 1, "invalid": 1}, counts)
-	// The invalid byte is sanitized during orphan copy. A fresh scan agrees with its saved count.
-	_, err = destination.getWriter().ExecContext(ctx, `DELETE FROM session_frustration_markers WHERE session_id = 'invalid'`)
-	require.NoError(t, err)
-	require.NoError(t, destination.Reopen())
-	rows, err = destination.signalRows(ctx, AnalyticsFilter{})
-	require.NoError(t, err)
-	require.NoError(t, destination.populateFrustrationMarkers(ctx, rows))
-	for _, row := range rows {
-		if row.ID == "invalid" {
-			assert.Equal(t, 1, row.FrustrationMarkerCount)
-		}
-	}
 
 	usage := testDB(t)
 	usage.SetArchiveContent(config.ArchiveContentUsage)

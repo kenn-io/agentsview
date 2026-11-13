@@ -232,9 +232,6 @@ func (d *DB) CopyOrphanedDataFromExcluding(
 	}
 	defer func() { _ = tx.Rollback() }()
 
-	if err := reconcileTranscriptRevisionsTx(ctx, tx); err != nil {
-		return nil, fmt.Errorf("reconciling transcript revisions: %w", err)
-	}
 	if err := reconcileConversationResyncTx(ctx, tx, d.usageOnlyStorage()); err != nil {
 		return nil, fmt.Errorf("reconciling conversation identities: %w", err)
 	}
@@ -260,6 +257,10 @@ func (d *DB) CopyOrphanedDataFromExcluding(
 		if err := clearCopiedSelfParents(ctx, tx, "_orphaned_ids"); err != nil {
 			return nil, err
 		}
+	}
+	// Compare final copied content so changed text advances its revision.
+	if err := reconcileTranscriptRevisionsTx(ctx, tx); err != nil {
+		return nil, fmt.Errorf("reconciling transcript revisions: %w", err)
 	}
 	if err := retainConversationTombstonesTx(ctx, tx); err != nil {
 		return nil, fmt.Errorf("retaining conversation tombstones: %w", err)
