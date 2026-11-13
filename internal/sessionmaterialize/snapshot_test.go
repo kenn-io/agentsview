@@ -283,7 +283,7 @@ func TestMaterializeCodexSnapshotForkParentAcrossRoots(t *testing.T) {
 	t.Cleanup(engine.Close)
 	manager, err := archivesource.NewManager(ctx, cfg, receiver, engine, nil)
 	require.NoError(t, err)
-	t.Cleanup(func() { _ = manager.Close() })
+	t.Cleanup(manager.Close)
 	_, err = manager.Drain(ctx, nil)
 	require.NoError(t, err)
 	session, err := receiver.GetSessionFull(ctx, device+"~codex:"+thread)
