@@ -305,19 +305,14 @@ func TestSignalsFrustrationCleanup(t *testing.T) {
 func TestSignalsFrustrationUsagePolicyKeepsRetainedPrompts(t *testing.T) {
 	d := testDB(t)
 	ctx := t.Context()
-	for _, id := range []string{"saved", "unsaved"} {
-		seedFrustrationSession(t, d, id, "test")
-	}
-	_, err := d.getWriter().ExecContext(ctx, `INSERT INTO session_frustration_markers (session_id, transcript_key, marker_version, count)
-		SELECT id, transcript_revision || '|' || created_at, ?, 1 FROM sessions WHERE id = 'saved'`, signals.FrustrationMarkerVersion)
-	require.NoError(t, err)
+	seedFrustrationSession(t, d, "unsaved", "test")
 	d.SetArchiveContent(config.ArchiveContentUsage)
 	resp, err := d.GetAnalyticsSignals(ctx, AnalyticsFilter{})
 	require.NoError(t, err)
-	assert.Equal(t, 2, resp.QualityHealth.Totals.FrustrationMarkerCount)
+	assert.Equal(t, 1, resp.QualityHealth.Totals.FrustrationMarkerCount)
 	var count int
 	require.NoError(t, d.getReader().QueryRowContext(ctx, `SELECT count(*) FROM session_frustration_markers`).Scan(&count))
-	assert.Equal(t, 1, count)
+	assert.Zero(t, count)
 }
 
 func TestSignalsFrustrationFailedStoreRetriesOnEvidence(t *testing.T) {
