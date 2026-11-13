@@ -32,7 +32,7 @@ export function formatRelativeTime(isoString: string | null | undefined, alwaysS
   const diffSec = Math.floor((Date.now() - date.getTime()) / 1000);
 
   if (alwaysShowYear) {
-    return formatDateTime(date, { year: "numeric", month: "short", day: "numeric" });
+    return formatDateTime(date, { year: "numeric", month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" });
   }
 
   if (diffSec < MINUTE) return m.shared_relative_just_now();

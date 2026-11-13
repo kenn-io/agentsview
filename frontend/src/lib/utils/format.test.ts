@@ -25,6 +25,11 @@ describe("formatRelativeTime", () => {
     setLocale("en");
   });
 
+  it("distinguishes sessions on the same day when showing years", () => {
+    expect(formatRelativeTime("2026-06-01T12:00:00", true)).toBe("Jun 1, 2026, 12:00 PM");
+    expect(formatRelativeTime("2026-06-01T14:30:00", true)).toBe("Jun 1, 2026, 02:30 PM");
+  });
+
   it("shows years on request, including for recent sessions", () => {
     vi.setSystemTime(new Date("2026-11-13T12:00:00Z"));
     ui.alwaysShowYear = true;

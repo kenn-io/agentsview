@@ -431,7 +431,7 @@ Each session item shows:
   from other machines show a machine name tag. Only visible in shared multi-host
   deployments.
 - **Project name** — abbreviated, right-aligned
-- **Relative time** — "2h ago", "Mon", "Dec 1"
+- **Session time** — relative time such as "2h ago", or the date and time with the year when **Always show year** is on
 - **User prompt count** — number of user messages in the session
 
 Antigravity sessions show the conversation title Antigravity saves in
