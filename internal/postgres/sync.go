@@ -505,6 +505,7 @@ func (s *Sync) ensureSchemaLocked(ctx context.Context) error {
 			return err
 		}
 		ensureUsageChangeJournalPG(ctx, s.pg)
+		ensureFrustrationCountsPG(ctx, s.pg)
 		// pushSchemaCurrent predates the vector tables, so a schema
 		// created before this feature is "current" yet lacks them; a
 		// plain post-upgrade pg push would never create them. Run the

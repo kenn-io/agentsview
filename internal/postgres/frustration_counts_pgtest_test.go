@@ -4,15 +4,26 @@ package postgres
 
 import (
 	"bytes"
+	"context"
+	"database/sql"
 	"log"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/require"
 	"go.kenn.io/agentsview/internal/db"
 )
 
-func TestFrustrationCountsRestartAndRefresh(t *testing.T) {
-	const schema = "agentsview_frustration_counts_test"
+type frustrationFixture struct {
+	syncer                     *Sync
+	local                      *db.DB
+	pg                         *sql.DB
+	ctx                        context.Context
+	url, schema, versionColumn string
+}
+
+func newFrustrationFixture(t *testing.T, schema string) *frustrationFixture {
+	t.Helper()
 	syncer, local, pg, ctx := newSessionProvenancePushSync(t, schema)
 	url := testPGURL(t)
 	t.Cleanup(func() { cleanNamedPGSchema(t, url, schema) })
@@ -23,167 +34,189 @@ func TestFrustrationCountsRestartAndRefresh(t *testing.T) {
 	}
 	_, err := syncer.Push(ctx, false, nil)
 	require.NoError(t, err)
-	open := func() *Store {
-		store, err := NewStore(ctx, url, schema, true)
-		require.NoError(t, err)
-		t.Cleanup(func() { require.NoError(t, store.Close()) })
-		return store
-	}
-	store := open()
-	versionColumn, err := sessionVersionColumnPG(ctx, store.pg)
+	column, err := sessionVersionColumnPG(ctx, pg)
 	require.NoError(t, err)
-	first, err := open().GetAnalyticsSignals(ctx, db.AnalyticsFilter{})
-	require.NoError(t, err)
-	require.Equal(t, 2, first.QualityHealth.Totals.FrustrationMarkerCount)
-	var n int
-	require.NoError(t, pg.QueryRowContext(ctx, `SELECT count(*) FROM session_frustration_counts`).Scan(&n))
-	require.Equal(t, 2, n)
-	// An older reader scans a future rules version without replacing it.
-	_, err = pg.ExecContext(ctx, `UPDATE session_frustration_counts SET rules_version = $1, marker_count = 7 WHERE session_id = 'one'`, frustrationMarkerRulesVersion+1)
-	require.NoError(t, err)
-	future, err := open().GetAnalyticsSignals(ctx, db.AnalyticsFilter{})
-	require.NoError(t, err)
-	require.Equal(t, 2, future.QualityHealth.Totals.FrustrationMarkerCount)
-	var futureVersion, futureCount int
-	require.NoError(t, pg.QueryRowContext(ctx, `SELECT rules_version, marker_count FROM session_frustration_counts WHERE session_id = 'one'`).Scan(&futureVersion, &futureCount))
-	require.Equal(t, frustrationMarkerRulesVersion+1, futureVersion)
-	require.Equal(t, 7, futureCount)
-	_, err = pg.ExecContext(ctx, `UPDATE session_frustration_counts SET rules_version = $1, marker_count = 1 WHERE session_id = 'one'`, frustrationMarkerRulesVersion)
-	require.NoError(t, err)
-	// A distinct stored count proves the fresh store uses the saved row.
-	_, err = pg.ExecContext(ctx, `UPDATE session_frustration_counts SET marker_count = 7 WHERE session_id = 'one'`)
-	require.NoError(t, err)
-	fresh, err := open().GetAnalyticsSignals(ctx, db.AnalyticsFilter{})
-	require.NoError(t, err)
-	require.Equal(t, 8, fresh.QualityHealth.Totals.FrustrationMarkerCount)
-	_, err = pg.ExecContext(ctx, `UPDATE session_frustration_counts SET rules_version = 0 WHERE session_id = 'one'`)
-	require.NoError(t, err)
-	refreshed, err := open().GetAnalyticsSignals(ctx, db.AnalyticsFilter{})
-	require.NoError(t, err)
-	require.Equal(t, 2, refreshed.QualityHealth.Totals.FrustrationMarkerCount)
+	return &frustrationFixture{syncer, local, pg, ctx, url, schema, column}
+}
 
-	// After a push, a fresh store recounts the changed session and reuses the other.
-	_, err = pg.ExecContext(ctx, `UPDATE session_frustration_counts SET marker_count = 7 WHERE session_id = 'one'`)
+func (f *frustrationFixture) open(t *testing.T) *Store {
+	t.Helper()
+	store, err := NewStore(f.ctx, f.url, f.schema, true)
 	require.NoError(t, err)
-	session := db.Session{ID: "two", Agent: "claude", Project: "sample", Machine: "workstation", MessageCount: 1}
-	messages := []db.Message{{SessionID: "two", Ordinal: 0, Role: "user", Content: "Please explain this function."}}
-	_, err = local.WriteSessionBatchContext(ctx, []db.SessionBatchWrite{{Session: session, Messages: messages, ReplaceMessages: true}})
-	require.NoError(t, err)
-	require.NoError(t, local.UpdateSessionSignals(ctx, "two", db.SessionSignalUpdate{QualitySignals: db.QualitySignals{Version: db.CurrentQualitySignalVersion}}))
-	_, err = syncer.Push(ctx, false, nil)
-	require.NoError(t, err)
-	afterPush, err := open().GetAnalyticsSignals(ctx, db.AnalyticsFilter{})
-	require.NoError(t, err)
-	require.Equal(t, 7, afterPush.QualityHealth.Totals.FrustrationMarkerCount)
+	t.Cleanup(func() { require.NoError(t, store.Close()) })
+	return store
+}
 
-	// Restore the fixture for the filter and fallback checks below.
-	_, err = pg.ExecContext(ctx, `UPDATE session_frustration_counts SET marker_count = 1 WHERE session_id = 'one'`)
+func (f *frustrationFixture) replace(t *testing.T, id, content string) {
+	t.Helper()
+	session := db.Session{ID: id, Agent: "claude", Project: "sample", Machine: "workstation", MessageCount: 1}
+	_, err := f.local.WriteSessionBatchContext(f.ctx, []db.SessionBatchWrite{{Session: session, Messages: []db.Message{{SessionID: id, Ordinal: 0, Role: "user", Content: content}}, ReplaceMessages: true}})
 	require.NoError(t, err)
-	messages[0].Content = "this is broken"
-	_, err = local.WriteSessionBatchContext(ctx, []db.SessionBatchWrite{{Session: session, Messages: messages, ReplaceMessages: true}})
+	require.NoError(t, f.local.UpdateSessionSignals(f.ctx, id, db.SessionSignalUpdate{QualitySignals: db.QualitySignals{Version: db.CurrentQualitySignalVersion}}))
+	_, err = f.syncer.Push(f.ctx, false, nil)
 	require.NoError(t, err)
-	require.NoError(t, local.UpdateSessionSignals(ctx, "two", db.SessionSignalUpdate{QualitySignals: db.QualitySignals{Version: db.CurrentQualitySignalVersion}}))
-	_, err = syncer.Push(ctx, false, nil)
+}
+
+func TestFrustrationCountsRulesAndRestart(t *testing.T) {
+	f := newFrustrationFixture(t, "agentsview_frustration_rules_test")
+	result, err := f.open(t).GetAnalyticsSignals(f.ctx, db.AnalyticsFilter{})
 	require.NoError(t, err)
-	_, err = open().GetAnalyticsSignals(ctx, db.AnalyticsFilter{})
+	require.Equal(t, 2, result.QualityHealth.Totals.FrustrationMarkerCount)
+	_, err = f.pg.ExecContext(f.ctx, `UPDATE session_frustration_counts SET rules_version = $1, marker_count = 7 WHERE session_id = 'one'`, frustrationMarkerRulesVersion+1)
 	require.NoError(t, err)
-	filter := db.AnalyticsFilter{}
-	cached := open()
-	actual, err := cached.GetAnalyticsSignals(ctx, filter)
+	result, err = f.open(t).GetAnalyticsSignals(f.ctx, db.AnalyticsFilter{})
 	require.NoError(t, err)
-	evidence, err := cached.GetAnalyticsSignalSessions(ctx, filter, "frustration_marker_count", 10)
+	require.Equal(t, 2, result.QualityHealth.Totals.FrustrationMarkerCount)
+	var version, count int
+	require.NoError(t, f.pg.QueryRowContext(f.ctx, `SELECT rules_version, marker_count FROM session_frustration_counts WHERE session_id = 'one'`).Scan(&version, &count))
+	require.Equal(t, frustrationMarkerRulesVersion+1, version)
+	require.Equal(t, 7, count)
+	_, err = f.pg.ExecContext(f.ctx, `UPDATE session_frustration_counts SET rules_version = 0 WHERE session_id = 'one'`)
+	require.NoError(t, err)
+	result, err = f.open(t).GetAnalyticsSignals(f.ctx, db.AnalyticsFilter{})
+	require.NoError(t, err)
+	require.Equal(t, 2, result.QualityHealth.Totals.FrustrationMarkerCount)
+}
+
+func TestFrustrationCountsAfterPush(t *testing.T) {
+	f := newFrustrationFixture(t, "agentsview_frustration_push_test")
+	_, err := f.open(t).GetAnalyticsSignals(f.ctx, db.AnalyticsFilter{})
+	require.NoError(t, err)
+	_, err = f.pg.ExecContext(f.ctx, `UPDATE session_frustration_counts SET marker_count = 7 WHERE session_id = 'one'`)
+	require.NoError(t, err)
+	f.replace(t, "two", "Please explain this function.")
+	result, err := f.open(t).GetAnalyticsSignals(f.ctx, db.AnalyticsFilter{})
+	require.NoError(t, err)
+	require.Equal(t, 7, result.QualityHealth.Totals.FrustrationMarkerCount)
+}
+
+func TestFrustrationCountsEvidence(t *testing.T) {
+	f := newFrustrationFixture(t, "agentsview_frustration_evidence_test")
+	filter := db.AnalyticsFilter{Project: "sample"}
+	_, err := f.open(t).GetAnalyticsSignals(f.ctx, filter)
+	require.NoError(t, err)
+	evidence, err := f.open(t).GetAnalyticsSignalSessions(f.ctx, filter, "frustration_marker_count", 10)
 	require.NoError(t, err)
 	require.Len(t, evidence.Sessions, 2)
-	ids := make([]string, 0, len(evidence.Sessions))
 	for _, example := range evidence.Sessions {
-		ids = append(ids, example.SessionID)
+		require.Equal(t, 1, example.SignalTotal)
+		require.Equal(t, "this is broken", example.Excerpt)
 	}
-	require.ElementsMatch(t, []string{"one", "two"}, ids)
-	_, err = pg.ExecContext(ctx, `DELETE FROM session_frustration_counts`)
+	_, err = f.pg.ExecContext(f.ctx, `DELETE FROM session_frustration_counts`)
 	require.NoError(t, err)
-	scanning := open()
-	expected, err := scanning.GetAnalyticsSignals(ctx, filter)
+	scanned, err := f.open(t).GetAnalyticsSignalSessions(f.ctx, filter, "frustration_marker_count", 10)
 	require.NoError(t, err)
-	wantEvidence, err := scanning.GetAnalyticsSignalSessions(ctx, filter, "frustration_marker_count", 10)
-	require.NoError(t, err)
-	require.Equal(t, expected, actual)
-	require.Equal(t, wantEvidence, evidence)
+	require.Equal(t, scanned, evidence)
+}
 
-	// A restricted reader can reuse one row and scan the stale one.
-	_, err = pg.ExecContext(ctx, `UPDATE session_frustration_counts SET rules_version = 0 WHERE session_id = 'one'`)
-	require.NoError(t, err)
-	if versionColumn != "crdb_internal_mvcc_timestamp" {
-		_, err = pg.ExecContext(ctx, `UPDATE session_frustration_counts SET marker_count = 7 WHERE session_id = 'two'`)
-		require.NoError(t, err)
-		roleURL := newUsageJournalRole(t, syncer, `GRANT SELECT ON ALL TABLES IN SCHEMA `+schema+` TO ROLE`)
-		reader, err := NewStore(ctx, roleURL, schema, true)
-		require.NoError(t, err)
-		t.Cleanup(func() { require.NoError(t, reader.Close()) })
-		restricted, err := reader.GetAnalyticsSignals(ctx, db.AnalyticsFilter{})
-		require.NoError(t, err)
-		require.Equal(t, 8, restricted.QualityHealth.Totals.FrustrationMarkerCount)
-		_, err = pg.ExecContext(ctx, `UPDATE sessions SET updated_at = updated_at + interval '1 second' WHERE id = 'one'`)
-		require.NoError(t, err)
-		restricted, err = reader.GetAnalyticsSignals(ctx, db.AnalyticsFilter{})
-		require.NoError(t, err)
-		require.Equal(t, 8, restricted.QualityHealth.Totals.FrustrationMarkerCount)
-		var version int
-		require.NoError(t, pg.QueryRowContext(ctx, `SELECT rules_version FROM session_frustration_counts WHERE session_id = 'one'`).Scan(&version))
-		require.Zero(t, version)
+func TestFrustrationCountsRestrictedReader(t *testing.T) {
+	f := newFrustrationFixture(t, "agentsview_frustration_reader_test")
+	if f.versionColumn != "xmin" {
+		t.Skip("PostgreSQL roles required")
 	}
+	_, err := f.open(t).GetAnalyticsSignals(f.ctx, db.AnalyticsFilter{})
+	require.NoError(t, err)
+	_, err = f.pg.ExecContext(f.ctx, `UPDATE session_frustration_counts SET rules_version = 0 WHERE session_id = 'one'`)
+	require.NoError(t, err)
+	_, err = f.pg.ExecContext(f.ctx, `UPDATE session_frustration_counts SET marker_count = 7 WHERE session_id = 'two'`)
+	require.NoError(t, err)
+	roleURL := newUsageJournalRole(t, f.syncer, `GRANT SELECT ON ALL TABLES IN SCHEMA `+f.schema+` TO ROLE`)
+	reader, err := NewStore(f.ctx, roleURL, f.schema, true)
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, reader.Close()) })
+	var output bytes.Buffer
+	previous := log.Writer()
+	log.SetOutput(&output)
+	defer log.SetOutput(previous)
+	result, err := reader.GetAnalyticsSignals(f.ctx, db.AnalyticsFilter{})
+	require.NoError(t, err)
+	require.Equal(t, 8, result.QualityHealth.Totals.FrustrationMarkerCount)
+	require.NotContains(t, output.String(), "storing frustration counts")
+}
 
-	// A borrowed snapshot must still work when the optional table is absent.
-	_, err = pg.ExecContext(ctx, `DROP TABLE session_frustration_counts`)
+func TestFrustrationCountsMissingAndBorrowed(t *testing.T) {
+	f := newFrustrationFixture(t, "agentsview_frustration_missing_test")
+	owner := f.open(t)
+	tx, err := f.pg.BeginTx(f.ctx, nil)
 	require.NoError(t, err)
-	owner := open()
-	tx, err := pg.BeginTx(ctx, nil)
+	result, err := owner.readView(tx).GetAnalyticsSignals(f.ctx, db.AnalyticsFilter{})
 	require.NoError(t, err)
-	view := owner.readView(tx)
-	borrowed, err := view.GetAnalyticsSignals(ctx, db.AnalyticsFilter{})
-	require.NoError(t, err)
-	require.Equal(t, 2, borrowed.QualityHealth.Totals.FrustrationMarkerCount)
+	require.Equal(t, 2, result.QualityHealth.Totals.FrustrationMarkerCount)
 	require.NoError(t, tx.Rollback())
-	missing := open()
-	func() {
-		var output bytes.Buffer
-		previous := log.Writer()
-		log.SetOutput(&output)
-		defer log.SetOutput(previous)
-		result, err := missing.GetAnalyticsSignals(ctx, db.AnalyticsFilter{})
-		require.NoError(t, err)
-		require.Equal(t, 2, result.QualityHealth.Totals.FrustrationMarkerCount)
-		require.NotContains(t, output.String(), "storing frustration counts")
+	_, err = f.pg.ExecContext(f.ctx, `DROP TABLE session_frustration_counts`)
+	require.NoError(t, err)
+	var output bytes.Buffer
+	previous := log.Writer()
+	log.SetOutput(&output)
+	defer log.SetOutput(previous)
+	result, err = f.open(t).GetAnalyticsSignals(f.ctx, db.AnalyticsFilter{})
+	require.NoError(t, err)
+	require.Equal(t, 2, result.QualityHealth.Totals.FrustrationMarkerCount)
+	require.NotContains(t, output.String(), "storing frustration counts")
+}
+
+func TestFrustrationCountsDelayedSave(t *testing.T) {
+	f := newFrustrationFixture(t, "agentsview_frustration_delayed_test")
+	store := f.open(t)
+	_, versions, err := store.signalRows(f.ctx, db.AnalyticsFilter{}, f.versionColumn)
+	require.NoError(t, err)
+	f.replace(t, "one", "Please explain this function.")
+	_, err = f.open(t).GetAnalyticsSignals(f.ctx, db.AnalyticsFilter{})
+	require.NoError(t, err)
+	_, err = f.pg.ExecContext(f.ctx, `DELETE FROM session_frustration_counts WHERE session_id = 'two'`)
+	require.NoError(t, err)
+	require.NoError(t, store.storeFrustrationCounts(f.ctx, versions, map[string]int{"one": 9, "two": 1}, f.versionColumn))
+	var saved string
+	var count int
+	require.NoError(t, f.pg.QueryRowContext(f.ctx, `SELECT session_version, marker_count FROM session_frustration_counts WHERE session_id = 'one'`).Scan(&saved, &count))
+	require.NotEqual(t, versions["one"], saved)
+	require.Zero(t, count)
+	require.NoError(t, f.pg.QueryRowContext(f.ctx, `SELECT session_version, marker_count FROM session_frustration_counts WHERE session_id = 'two'`).Scan(&saved, &count))
+	require.Equal(t, versions["two"], saved)
+	require.Equal(t, 1, count)
+	require.NoError(t, f.local.DeleteSession(f.ctx, "one"))
+	_, err = f.syncer.Push(f.ctx, true, nil)
+	require.NoError(t, err)
+	require.NoError(t, store.storeFrustrationCounts(f.ctx, versions, map[string]int{"one": 9, "two": 1}, f.versionColumn))
+	require.NoError(t, f.pg.QueryRowContext(f.ctx, `SELECT count(*) FROM session_frustration_counts WHERE session_id = 'one'`).Scan(&count))
+	require.Zero(t, count)
+}
+
+func TestFrustrationCountsWaitingSave(t *testing.T) {
+	f := newFrustrationFixture(t, "agentsview_frustration_waiting_test")
+	if f.versionColumn != "xmin" {
+		t.Skip("PostgreSQL lock inspection required")
+	}
+	store := f.open(t)
+	_, err := store.GetAnalyticsSignals(f.ctx, db.AnalyticsFilter{})
+	require.NoError(t, err)
+	_, versions, err := store.signalRows(f.ctx, db.AnalyticsFilter{}, f.versionColumn)
+	require.NoError(t, err)
+	tx, err := f.pg.BeginTx(f.ctx, nil)
+	require.NoError(t, err)
+	defer tx.Rollback()
+	_, err = tx.ExecContext(f.ctx, `UPDATE session_frustration_counts SET marker_count = 1 WHERE session_id = 'one'`)
+	require.NoError(t, err)
+	done := make(chan error, 1)
+	go func() {
+		done <- store.storeFrustrationCounts(f.ctx, map[string]string{"one": versions["one"]}, map[string]int{"one": 9}, f.versionColumn)
 	}()
-	require.NoError(t, EnsureSchema(ctx, pg, schema))
-	_, err = pg.ExecContext(ctx, `UPDATE sessions SET updated_at = updated_at + interval '1 second' WHERE id = 'one'`)
+	require.Eventually(t, func() bool {
+		var waiting bool
+		err := f.pg.QueryRowContext(f.ctx, `SELECT EXISTS (SELECT 1 FROM pg_stat_activity WHERE datname = current_database() AND wait_event_type = 'Lock' AND query LIKE '%WITH candidates AS MATERIALIZED%')`).Scan(&waiting)
+		return err == nil && waiting
+	}, 5*time.Second, 10*time.Millisecond)
+	_, err = tx.ExecContext(f.ctx, `UPDATE sessions SET updated_at = updated_at + interval '1 second' WHERE id = 'one'`)
 	require.NoError(t, err)
-	_, err = missing.GetAnalyticsSignals(ctx, db.AnalyticsFilter{})
+	var newer string
+	require.NoError(t, tx.QueryRowContext(f.ctx, `SELECT `+frustrationSessionVersion(f.versionColumn)+` FROM sessions WHERE id = 'one'`).Scan(&newer))
+	_, err = tx.ExecContext(f.ctx, `UPDATE session_frustration_counts SET session_version = $1, marker_count = 0 WHERE session_id = 'one'`, newer)
 	require.NoError(t, err)
-	require.NoError(t, pg.QueryRowContext(ctx, `SELECT count(*) FROM session_frustration_counts WHERE session_id = 'one'`).Scan(&n))
-	require.Equal(t, 1, n)
-	_, err = open().GetAnalyticsSignals(ctx, db.AnalyticsFilter{})
-	require.NoError(t, err)
-	// A session can be deleted after the scan and before its batch is saved.
-	_, versions, err := store.signalRows(ctx, db.AnalyticsFilter{}, versionColumn)
-	require.NoError(t, err)
-	require.Len(t, versions, 2)
-	_, err = pg.ExecContext(ctx, `DELETE FROM session_frustration_counts WHERE session_id = 'two'`)
-	require.NoError(t, err)
-	require.NoError(t, pg.QueryRowContext(ctx, `SELECT count(*) FROM session_frustration_counts WHERE session_id = 'one'`).Scan(&n))
-	require.Equal(t, 1, n)
-	require.NoError(t, local.DeleteSession(ctx, "one"))
-	_, err = syncer.Push(ctx, true, nil)
-	require.NoError(t, err)
-	require.NoError(t, pg.QueryRowContext(ctx, `SELECT count(*) FROM sessions WHERE id = 'one'`).Scan(&n))
-	require.Zero(t, n)
-	require.NoError(t, pg.QueryRowContext(ctx, `SELECT count(*) FROM session_frustration_counts WHERE session_id = 'one'`).Scan(&n))
-	require.Zero(t, n)
-	require.NoError(t, store.storeFrustrationCounts(ctx, versions, map[string]int{"one": 1, "two": 1}))
-	var savedVersion string
-	var savedCount int
-	require.NoError(t, pg.QueryRowContext(ctx, `SELECT session_version, marker_count FROM session_frustration_counts WHERE session_id = 'two'`).Scan(&savedVersion, &savedCount))
-	require.Equal(t, versions["two"], savedVersion)
-	require.Equal(t, 1, savedCount)
-	require.NoError(t, pg.QueryRowContext(ctx, `SELECT count(*) FROM session_frustration_counts WHERE session_id = 'one'`).Scan(&n))
-	require.Zero(t, n)
+	require.NoError(t, tx.Commit())
+	require.NoError(t, <-done)
+	var saved string
+	var count int
+	require.NoError(t, f.pg.QueryRowContext(f.ctx, `SELECT session_version, marker_count FROM session_frustration_counts WHERE session_id = 'one'`).Scan(&saved, &count))
+	require.Equal(t, newer, saved)
+	require.Zero(t, count)
 }

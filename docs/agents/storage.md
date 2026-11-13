@@ -1324,10 +1324,12 @@ independent rules version. A saved count must match both the version selected
 for Signals and the current session version at lookup. A mismatch triggers a
 fresh count. Bump `frustrationMarkerRulesVersion` whenever the Go or PostgreSQL
 frustration classifier changes a verdict. Counts fill lazily after a complete
-scan, including zero counts.
+scan, including zero counts. A save requires the session to remain unchanged
+since its scan.
 
 A read-only role reuses rows it can read and scans misses without saving them.
-A missing table falls back to scanning. Hosted adoption discards the derived
+The table is optional for push. A missing table falls back to scanning.
+Hosted adoption discards the derived
 table. Hosted stores and borrowed read transactions use only the in-memory
 memo and scanning.
 
