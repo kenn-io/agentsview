@@ -294,7 +294,7 @@ func loadOpenCodeV2Messages(ctx context.Context, db *sql.DB, sessionID, cwd stri
 				}
 			}
 			pm.Content = strings.Join(texts, "\n")
-			applyOpenCodeTokenUsage(&pm, openCodeMessageData{ModelID: data.Model.ID}, raw, nil)
+			applyOpenCodeTokenUsage(&pm, openCodeMessageData{ModelID: data.Model.ID}, raw, nil, true)
 		case "system", "synthetic", "skill", "compaction":
 			pm.Role, pm.IsSystem, pm.Content = RoleUser, true, data.Text
 			if kind == "compaction" {

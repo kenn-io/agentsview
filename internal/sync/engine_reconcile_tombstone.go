@@ -212,7 +212,7 @@ func (e *Engine) tombstoneMissingWatchSourceScopesLocked(
 					for _, ownership := range page {
 						if hasNonAuthoritativeScopes {
 							withheld, err := reconciliationOwnershipWithinNonAuthoritativeContainer(
-								ctx, spool, agent, ownership,
+								ctx, spool, provider, scope, ownership,
 							)
 							if err != nil {
 								return deleted, fmt.Errorf(
@@ -497,9 +497,7 @@ func (e *Engine) tombstoneMissingWatchSourceScopesLocked(
 							// provider across its full configured scope whether
 							// the session still resolves anywhere: a same-ID copy
 							// under another root is a move, not a deletion.
-							if _, _, virtual := parser.ParseVirtualSourcePath(
-								ownership.FilePath,
-							); virtual {
+							if isProviderVirtualMemberPath(provider, ownership.FilePath, scope.proofScopes) {
 								relocated, err := e.reconciliationMemberRelocated(
 									ctx, provider, ownership.ID, ownership.FilePath,
 								)

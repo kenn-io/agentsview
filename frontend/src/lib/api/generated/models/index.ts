@@ -331,6 +331,7 @@ export * from "./getApiV1SessionsByIdActivityPathParameters.ts";
 export * from "./getApiV1SessionsByIdChildrenPathParameters.ts";
 export * from "./getApiV1SessionsByIdCommitsPathParameters.ts";
 export * from "./getApiV1SessionsByIdDirectoryPathParameters.ts";
+export * from "./getApiV1SessionsByIdExportParams.ts";
 export * from "./getApiV1SessionsByIdExportPathParameters.ts";
 export * from "./getApiV1SessionsByIdFileReferencesPathParameters.ts";
 export * from "./getApiV1SessionsByIdMdDepth.ts";

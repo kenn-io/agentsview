@@ -1,0 +1,3 @@
+{"role":"session_meta","platform":"linux","model":"gpt-4","timestamp":"2026-04-03T15:27:00.000000"}
+{"role":"user","content":"Fix the flaky date parsing test","timestamp":"2026-04-03T15:27:21.014566"}
+{"role":"assistant","content":"The test depends on the local timezone; I will pin it to UTC.","timestamp":"2026-04-03T15:27:25.123456"}

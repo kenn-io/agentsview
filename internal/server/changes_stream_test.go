@@ -307,13 +307,15 @@ func TestChangeStreamResumesAfterCursorWithoutRepeats(t *testing.T) {
 	// catch-up can send the session alone before the messages arrive.
 	live := caughtUp.changesWithMessages(t, 2)
 	assert.Equal(t, changes.To, live[0].From)
-	var sessions []string
+	ids := messageIDs(live)
+	assert.Len(t, ids, 2)
+	slices.Sort(ids)
+	assert.Len(t, slices.Compact(ids), 2, "no message repeats")
 	for _, event := range live {
 		for _, message := range event.Messages {
-			sessions = append(sessions, message.SessionID)
+			assert.Equal(t, "stream-c", message.SessionID)
 		}
 	}
-	assert.Equal(t, []string{"stream-c", "stream-c"}, sessions)
 }
 
 func TestChangeStreamResetsForeignAndInvalidCursors(t *testing.T) {

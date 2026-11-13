@@ -8,13 +8,17 @@ env:
   # Go build cache across checkouts and worktrees.
   GOFLAGS: -trimpath
 
-# Long-running fuzz exploration of the Antigravity wire-walk
-# (GitHub #648). Every CI run already executes the committed seed
-# corpus via plain `go test`; this workflow spends real fuzz time
-# searching for new invariant violations on a schedule. A found
-# failure is written to testdata/fuzz/ by the fuzz engine and
-# uploaded as an artifact so it can be committed as a regression
-# case.
+# Scheduled fuzz exploration of every fuzz target in internal/parser:
+# one FuzzProvider<Name> target per session provider, plus the
+# Antigravity wire-walk targets (GitHub #648). Every CI run already
+# replays the committed seed corpus through plain `go test`; this
+# workflow spends real fuzz time searching for new invariant
+# violations. Targets are found from the source, so a new target
+# joins the schedule without editing this file, and they are spread
+# over FUZZ_SHARDS parallel jobs that fuzz their share one after
+# another. A found failure is written to testdata/fuzz/ by the fuzz
+# engine and uploaded as an artifact so it can be committed as a
+# regression case.
 
 on:
   schedule:
@@ -22,9 +26,9 @@ on:
   workflow_dispatch:
     inputs:
       fuzztime:
-        description: "Fuzz per target: positive Go duration up to 343m, or positive Nx iterations with a 360-minute job cap"
+        description: "Fuzz per target: positive Go duration that fits each shard in 360 minutes, or positive Nx iterations with a 360-minute job cap"
         required: false
-        default: "10m"
+        default: "2m"
 
 # Timeout p99 measurements: https://github.com/kenn-io/agentsview/pull/2547
 jobs:
@@ -33,6 +37,8 @@ jobs:
     timeout-minutes: 10
     outputs:
       timeout-minutes: ${{ steps.budget.outputs.timeout-minutes }}
+      targets: ${{ steps.budget.outputs.targets }}
+      shards: ${{ steps.budget.outputs.shards }}
     steps:
       - uses: actions/checkout@v7.0.1
         with:
@@ -46,42 +52,77 @@ jobs:
       - name: Calculate fuzz budget
         id: budget
         env:
-          FUZZTIME: ${{ github.event.inputs.fuzztime || '10m' }}
+          FUZZTIME: ${{ github.event.inputs.fuzztime || '2m' }}
+          FUZZ_SHARDS: "8"
         run: |
-          cat > "$RUNNER_TEMP/fuzz-budget.go" <<'EOF'
+          targets=$(grep -ho '^func Fuzz[A-Za-z0-9_]*' internal/parser/*_test.go | cut -c6- | sort | tr '\n' ' ')
+          export FUZZ_TARGETS="$targets"
+          cat > "$RUNNER_TEMP/fuzz-budget.go" <<'GO'
           package main
 
           import (
               "fmt"
               "os"
+              "strconv"
               "strings"
               "time"
           )
 
+          // Setup, the seed replay, and the artifact upload take up to
+          // 17 minutes per job, and each target adds about a minute to
+          // instrument and replay its corpus.
+          const (
+              jobMinutes       = 360
+              setupMinutes     = 17
+              perTargetMinutes = 1
+          )
+
           func main() {
+              targets := strings.Fields(os.Getenv("FUZZ_TARGETS"))
+              shards, err := strconv.Atoi(os.Getenv("FUZZ_SHARDS"))
+              if err != nil || shards < 1 || len(targets) == 0 {
+                  fail("need at least one fuzz target and one shard")
+              }
+              perShard := (len(targets) + shards - 1) / shards
+              minutes := int64(jobMinutes)
               fuzztime := os.Getenv("FUZZTIME")
-              minutes := int64(360)
               if !strings.HasSuffix(fuzztime, "x") {
                   duration, err := time.ParseDuration(fuzztime)
-                  if err != nil || duration <= 0 || duration > 343*time.Minute {
-                      fmt.Fprintln(os.Stderr, "fuzztime must be a positive Go duration of at most 343m or positive Nx iterations with a 360-minute job cap")
-                      os.Exit(1)
+                  if err != nil || duration <= 0 {
+                      fail("fuzztime must be a positive Go duration or positive Nx iterations")
                   }
-                  // Keep the measured default's 17-minute allowance for setup, tests, and upload.
-                  minutes = int64((duration+time.Minute-1)/time.Minute) + 17
+                  // Reject before rounding: adding to a duration near the
+                  // int64 limit would overflow into a negative budget.
+                  if duration > jobMinutes*time.Minute {
+                      fail(fmt.Sprintf("fuzztime %s exceeds the %d-minute job cap", fuzztime, jobMinutes))
+                  }
+                  each := int64((duration+time.Minute-1)/time.Minute) + perTargetMinutes
+                  minutes = int64(perShard)*each + setupMinutes
+                  if minutes > jobMinutes {
+                      fail(fmt.Sprintf("fuzztime %s for %d targets per shard needs %d minutes; the job cap is %d",
+                          fuzztime, perShard, minutes, jobMinutes))
+                  }
+              }
+              shardList := make([]string, shards)
+              for i := range shardList {
+                  shardList[i] = strconv.Itoa(i)
               }
               output, err := os.OpenFile(os.Getenv("GITHUB_OUTPUT"), os.O_APPEND|os.O_WRONLY, 0)
               if err != nil {
-                  fmt.Fprintln(os.Stderr, err)
-                  os.Exit(1)
+                  fail(err.Error())
               }
               defer output.Close()
-              if _, err := fmt.Fprintf(output, "timeout-minutes=%d\n", minutes); err != nil {
-                  fmt.Fprintln(os.Stderr, err)
-                  os.Exit(1)
+              if _, err := fmt.Fprintf(output, "timeout-minutes=%d\ntargets=%s\nshards=[%s]\n",
+                  minutes, strings.Join(targets, " "), strings.Join(shardList, ",")); err != nil {
+                  fail(err.Error())
               }
           }
-          EOF
+
+          func fail(msg string) {
+              fmt.Fprintln(os.Stderr, msg)
+              os.Exit(1)
+          }
+          GO
           go run "$RUNNER_TEMP/fuzz-budget.go"
 
   fuzz:
@@ -91,12 +132,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        target:
-          - FuzzAgProtoParse
-          - FuzzAgProtoLooksLikePrefix
-          - FuzzDecodeAntigravityStep
-          - FuzzExtractModelName
-          - FuzzExtractTokenUsage
+        shard: ${{ fromJSON(needs.fuzz-budget.outputs.shards) }}
     steps:
       - uses: actions/checkout@v7.0.1
         with:
@@ -118,22 +154,42 @@ jobs:
         run: kit-retry 3 5 go run ./internal/pricing/cmd/litellm-snapshot -restore
 
       # The dispatch input goes through an env var, never directly
-      # into the run script, so it cannot inject shell commands.
-      - name: Fuzz ${{ matrix.target }}
-        run: >
-          go test -tags "fts5"
-          -fuzz "^${TARGET}$"
-          -fuzztime "$FUZZTIME"
-          ./internal/parser/
+      # into the run script, so it cannot inject shell commands. A
+      # failing target does not stop the shard: the rest still fuzz,
+      # and the job fails at the end.
+      - name: Fuzz shard ${{ matrix.shard }}
+        run: |
+          read -r -a targets <<< "$TARGETS"
+          shards=$(jq length <<< "$SHARDS")
+          status=0
+          for i in "${!targets[@]}"; do
+            (( i % shards == SHARD )) || continue
+            target=${targets[$i]}
+            echo "::group::$target"
+            if ! go test -tags "fts5" -run "^${target}\$" -fuzz "^${target}\$" \
+              -fuzztime "$FUZZTIME" ./internal/parser/; then
+              echo "::error::$target found a failing input"
+              status=1
+            fi
+            echo "::endgroup::"
+          done
+          exit "$status"
         env:
           CGO_ENABLED: "1"
-          TARGET: ${{ matrix.target }}
-          FUZZTIME: ${{ github.event.inputs.fuzztime || '10m' }}
+          # Each input gets fresh temp files, and database targets build
+          # a SQLite store per input. On tmpfs that costs about a
+          # millisecond instead of a disk sync. Build files stay on disk.
+          TMPDIR: /dev/shm
+          GOTMPDIR: ${{ runner.temp }}
+          SHARD: ${{ matrix.shard }}
+          SHARDS: ${{ needs.fuzz-budget.outputs.shards }}
+          TARGETS: ${{ needs.fuzz-budget.outputs.targets }}
+          FUZZTIME: ${{ github.event.inputs.fuzztime || '2m' }}
 
       - name: Upload failing inputs
         if: failure()
         uses: actions/upload-artifact@v7.0.2
         with:
-          name: fuzz-failures-${{ matrix.target }}
+          name: fuzz-failures-shard-${{ matrix.shard }}
           path: internal/parser/testdata/fuzz/
           if-no-files-found: ignore
