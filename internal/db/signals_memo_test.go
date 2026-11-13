@@ -422,16 +422,15 @@ func TestSignalsFrustrationCanceledWhileSaving(t *testing.T) {
 	defer conn.Close()
 	waits := writer.Stats().WaitCount
 	ctx, cancel := context.WithCancel(t.Context())
-	defer cancel()
 	done := make(chan error, 1)
 	go func() {
+		defer close(done)
 		_, err := d.analyticsSignals(ctx, AnalyticsFilter{})
 		done <- err
 	}()
-	waiting := assert.Eventually(t, func() bool { return writer.Stats().WaitCount > waits }, 2*time.Second, time.Millisecond)
+	defer func() { cancel(); <-done }()
+	require.Eventually(t, func() bool { return writer.Stats().WaitCount > waits }, 2*time.Second, time.Millisecond)
 	cancel()
 	err = <-done
-	if waiting {
-		assert.ErrorIs(t, err, context.Canceled)
-	}
+	assert.ErrorIs(t, err, context.Canceled)
 }
