@@ -347,8 +347,8 @@ catalog repriced the whole mirror each time, about nine times a day on a mirror
 fed by three machines, and kept every generation.
 
 A pricing pass reads message usage from `usage_messages`, the narrow copy of the
-usage columns that the prepared and raw-host readers also read, and gets the
-same price keys a read of the token JSON in `messages` would. `usage_messages`
+usage columns that every usage reader also reads, and gets the same price keys
+a read of the token JSON in `messages` would. `usage_messages`
 indexes every 64 rows. For a batch of 100 sessions, a pass over `messages` read
 whole index granules of the wide table: about 1.5 million rows on a production
 mirror, for under 3,000 usage rows.
