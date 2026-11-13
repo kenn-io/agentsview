@@ -80,6 +80,9 @@ func (db *DB) GetTrendsTerms(
 	if granularity == "" {
 		granularity = "week"
 	}
+	if f.Timezone == "Local" {
+		return db.trendsTerms(ctx, f, terms, granularity)
+	}
 	return keptAnalytics(ctx, db, "trends|"+TrendsKeptVariant(terms, granularity), f, func(ctx context.Context, f AnalyticsFilter) (TrendsTermsResponse, error) {
 		return db.trendsTerms(ctx, f, terms, granularity)
 	})
@@ -91,9 +94,6 @@ func (db *DB) trendsTerms(ctx context.Context, f AnalyticsFilter, terms []TrendT
 		return TrendsTermsResponse{}, err
 	}
 	defer release()
-	if granularity == "" {
-		granularity = "week"
-	}
 	acc := NewTrendWorkers(ctx, f.From, f.To, granularity, terms)
 	defer func() {
 		if acc != nil {
