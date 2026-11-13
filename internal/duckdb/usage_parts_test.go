@@ -406,7 +406,8 @@ func TestUsagePartsReplacementDuringRefresh(t *testing.T) {
 			store = openUsagePartsStore(t, old)
 			defer store.Close()
 			previous := usagePartReadObserver
-			usagePartReadObserver = func([]string) {
+			usagePartReadObserver = func(ids []string) {
+				require.Equal(t, []string{"session-a"}, ids)
 				require.NoError(t, swapMirrorFile(final, old))
 				store.checkMirrorReplacement(t.Context(), func(err error) { require.NoError(t, err) })
 			}
