@@ -279,6 +279,7 @@ func TestPushRebuildTriggers(t *testing.T) {
 		name          string
 		mangle        func(t *testing.T, path string)
 		wantReasonHas string
+		staleCount    bool
 	}{
 		{
 			name: "schema version too old",
@@ -314,6 +315,7 @@ func TestPushRebuildTriggers(t *testing.T) {
 				setMirrorMetadataValue(t, path, frustrationMarkersVersionMetadataKey, "0")
 			},
 			wantReasonHas: "frustration",
+			staleCount:    true,
 		},
 		{
 			name: "scope drift",
@@ -353,13 +355,27 @@ func TestPushRebuildTriggers(t *testing.T) {
 			_, err := Push(ctx, path, local, "m", storage.MirrorPushOptions{}, false, nil)
 			require.NoError(t, err)
 
+			if tt.staleCount {
+				appendFrustrationPrompt(t, local, "sess-1")
+				setSessionSignalsTo(t, local, "sess-1", "2020-01-01T00:00:00.000Z")
+			}
 			tt.mangle(t, path)
 
 			res, err := Push(ctx, path, local, "m", storage.MirrorPushOptions{}, false, nil)
 			require.NoError(t, err)
 			assert.True(t, res.Diagnostics.Full)
 			assert.Contains(t, res.Diagnostics.RebuildReason, tt.wantReasonHas)
-			assertMirrorMessageCount(t, path, "sess-1", 2)
+			if tt.staleCount {
+				conn, err := OpenReadOnly(ctx, path)
+				require.NoError(t, err)
+				var count int
+				require.NoError(t, conn.QueryRowContext(ctx, `SELECT frustration_marker_count FROM sessions WHERE id = 'sess-1'`).Scan(&count))
+				assert.Equal(t, 1, count)
+				require.NoError(t, conn.Close())
+				assertMirrorMessageCount(t, path, "sess-1", 3)
+			} else {
+				assertMirrorMessageCount(t, path, "sess-1", 2)
+			}
 		})
 	}
 }
