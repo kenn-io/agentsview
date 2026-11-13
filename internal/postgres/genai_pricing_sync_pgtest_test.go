@@ -4,11 +4,13 @@ package postgres
 
 import (
 	"context"
+	"database/sql"
 	"fmt"
 	"math/rand/v2"
 	"net"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
@@ -42,7 +44,7 @@ func TestSyncModelPricingComparesGenAIByDigest(t *testing.T) {
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, syncer.Close()) })
 	require.NoError(t, syncer.EnsureSchema(ctx))
-	mirrored := func() (data []byte, updatedAt string) {
+	mirrored := func() (data []byte, updatedAt sql.NullTime) {
 		t.Helper()
 		require.NoError(t, syncer.pg.QueryRowContext(ctx,
 			`SELECT data_json, updated_at FROM genai_pricing WHERE singleton = 1`,
@@ -56,7 +58,7 @@ func TestSyncModelPricingComparesGenAIByDigest(t *testing.T) {
 	embedded := db.EmbeddedGenAIPricingDocument().Data
 	require.Equal(t, embedded, data, "a missing mirror document is inserted")
 	_, err = syncer.pg.ExecContext(ctx,
-		`UPDATE genai_pricing SET updated_at = 'mirror-observed' WHERE singleton = 1`)
+		`UPDATE genai_pricing SET updated_at = '2026-07-01T00:00:00Z' WHERE singleton = 1`)
 	require.NoError(t, err)
 
 	quoted, err := quoteIdentifier(schema)
@@ -78,7 +80,8 @@ func TestSyncModelPricingComparesGenAIByDigest(t *testing.T) {
 	t.Logf("PostgreSQL sent %d bytes for an unchanged %d-byte GenAI document", received.Load(), len(embedded))
 	assert.Less(t, received.Load(), int64(64<<10), "an unchanged document is not transferred")
 	_, updatedAt := mirrored()
-	assert.Equal(t, "mirror-observed", updatedAt, "a matching document is not rewritten")
+	assert.True(t, updatedAt.Time.Equal(time.Date(2026, 7, 1, 0, 0, 0, 0, time.UTC)),
+		"a matching document is not rewritten: %v", updatedAt)
 
 	require.NoError(t, local.UpsertGenAIPricing(ctx, db.GenAIPricingDocument{
 		Version: "genai-prices-test", SourceRef: "upstream-ref",

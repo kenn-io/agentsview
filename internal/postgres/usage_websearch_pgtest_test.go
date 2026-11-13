@@ -28,7 +28,7 @@ func seedWebSearchUsage(t *testing.T, store *Store, model string) {
 			output_microdollars_per_mtok,
 			cache_creation_microdollars_per_mtok,
 			cache_read_microdollars_per_mtok, updated_at
-		) VALUES ('claude-websearch-test', 1000000, 2000000, 0, 0, 'seed')`)
+		) VALUES ('claude-websearch-test', 1000000, 2000000, 0, 0, '2026-01-01T00:00:00Z')`)
 	require.NoError(t, err, "insert pricing")
 	_, err = store.DB().ExecContext(ctx, `
 		INSERT INTO sessions (
@@ -154,7 +154,7 @@ func TestPGUsageJSONExtractionUsesExactPathsAndMalformedFallback(t *testing.T) {
 			output_microdollars_per_mtok,
 			cache_creation_microdollars_per_mtok,
 			cache_read_microdollars_per_mtok, updated_at
-		) VALUES ('claude-json-path-test', 0, 1000000, 0, 0, 'seed');
+		) VALUES ('claude-json-path-test', 0, 1000000, 0, 0, '2026-01-01T00:00:00Z');
 		INSERT INTO sessions (
 			id, machine, project, agent, started_at,
 			message_count, user_message_count

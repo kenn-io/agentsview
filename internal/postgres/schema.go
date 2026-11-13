@@ -339,7 +339,7 @@ CREATE TABLE IF NOT EXISTS model_pricing (
     cache_creation_microdollars_per_mtok BIGINT NOT NULL DEFAULT 0,
     cache_creation_1h_microdollars_per_mtok BIGINT NOT NULL DEFAULT 0,
     cache_read_microdollars_per_mtok BIGINT NOT NULL DEFAULT 0,
-    updated_at TEXT NOT NULL DEFAULT ''
+    updated_at TIMESTAMPTZ
 );
 
 CREATE TABLE IF NOT EXISTS model_pricing_bands (
@@ -351,7 +351,7 @@ CREATE TABLE IF NOT EXISTS model_pricing_bands (
     cache_creation_microdollars_per_mtok BIGINT NOT NULL,
     cache_creation_1h_microdollars_per_mtok BIGINT NOT NULL DEFAULT 0,
     cache_read_microdollars_per_mtok BIGINT NOT NULL,
-    updated_at TEXT NOT NULL DEFAULT '',
+    updated_at TIMESTAMPTZ,
     PRIMARY KEY (model_pattern, above_input_tokens)
 );
 
@@ -361,7 +361,7 @@ CREATE TABLE IF NOT EXISTS genai_pricing (
     source_ref TEXT NOT NULL DEFAULT '',
     source TEXT NOT NULL,
     data_json BYTEA NOT NULL,
-    updated_at TEXT NOT NULL DEFAULT ''
+    updated_at TIMESTAMPTZ
 );
 
 CREATE TABLE IF NOT EXISTS pricing_meta (
@@ -727,6 +727,81 @@ func movePricingMetaPG(ctx context.Context, conn *sql.DB) error {
 	return nil
 }
 
+// pricingTimeTables are the pricing tables whose updated_at older stores
+// kept as text.
+var pricingTimeTables = []string{
+	"model_pricing", "model_pricing_bands", "genai_pricing",
+}
+
+// typePricingTimesPG converts the pricing tables' updated_at columns from
+// text to timestamptz. Older stores kept them as text because pricing
+// metadata shared model_pricing (see movePricingMetaPG). An empty time
+// becomes NULL. CockroachDB converts a column type only outside a
+// transaction and behind an experimental setting, so each table copies the
+// times into a new column instead. Every step can be repeated, so a run
+// that stops partway finishes on the next start.
+func typePricingTimesPG(ctx context.Context, conn *sql.DB) error {
+	types, err := pricingTimeColumnTypesPG(ctx, conn)
+	if err != nil {
+		return err
+	}
+	for _, table := range pricingTimeTables {
+		columns := types[table]
+		if columns["updated_at"] == "text" {
+			for _, statement := range []string{
+				"ALTER TABLE " + table + " ADD COLUMN IF NOT EXISTS updated_at_typed TIMESTAMPTZ",
+				"UPDATE " + table + " SET updated_at_typed = NULLIF(updated_at, '')::timestamptz",
+				"ALTER TABLE " + table + " DROP COLUMN updated_at",
+			} {
+				if _, err := conn.ExecContext(ctx, statement); err != nil {
+					return fmt.Errorf("typing pg %s.updated_at: %w", table, err)
+				}
+			}
+		} else if columns["updated_at"] != "" || columns["updated_at_typed"] == "" {
+			continue
+		}
+		if _, err := conn.ExecContext(ctx,
+			"ALTER TABLE "+table+" RENAME COLUMN updated_at_typed TO updated_at",
+		); err != nil {
+			return fmt.Errorf("renaming pg %s.updated_at: %w", table, err)
+		}
+	}
+	return nil
+}
+
+// pricingTimeColumnTypesPG returns the data types of the pricing tables'
+// updated_at columns, and of the column typePricingTimesPG copies them
+// into, by table and column.
+func pricingTimeColumnTypesPG(
+	ctx context.Context, conn *sql.DB,
+) (map[string]map[string]string, error) {
+	rows, err := conn.QueryContext(ctx, `
+		SELECT table_name, column_name, data_type
+		FROM information_schema.columns
+		WHERE table_schema = current_schema()
+		  AND table_name IN ('model_pricing', 'model_pricing_bands', 'genai_pricing')
+		  AND column_name IN ('updated_at', 'updated_at_typed')`)
+	if err != nil {
+		return nil, fmt.Errorf("reading pg pricing column types: %w", err)
+	}
+	defer rows.Close()
+	types := make(map[string]map[string]string)
+	for rows.Next() {
+		var table, column, dataType string
+		if err := rows.Scan(&table, &column, &dataType); err != nil {
+			return nil, fmt.Errorf("scanning pg pricing column types: %w", err)
+		}
+		if types[table] == nil {
+			types[table] = make(map[string]string)
+		}
+		types[table][column] = dataType
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("reading pg pricing column types: %w", err)
+	}
+	return types, nil
+}
+
 func migrateMoneyColumnsPG(
 	ctx context.Context,
 	conn *sql.DB,
@@ -1067,6 +1142,9 @@ func EnsureSchema(
 		return err
 	}
 	if err := movePricingMetaPG(ctx, db); err != nil {
+		return err
+	}
+	if err := typePricingTimesPG(ctx, db); err != nil {
 		return err
 	}
 	step = time.Now()
@@ -2376,6 +2454,18 @@ func CheckSchemaCompat(
 	}
 
 	if hasModelPricing {
+		types, err := pricingTimeColumnTypesPG(ctx, db)
+		if err != nil {
+			return err
+		}
+		for _, table := range pricingTimeTables {
+			if types[table]["updated_at"] == "text" {
+				return errors.New(
+					"pg pricing tables store updated_at as text; " +
+						"run `agentsview replica pg push` to upgrade the schema")
+			}
+		}
+
 		_, err = db.ExecContext(ctx,
 			`SELECT model_pattern, above_input_tokens,
 				input_microdollars_per_mtok, output_microdollars_per_mtok,

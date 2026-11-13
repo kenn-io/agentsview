@@ -204,7 +204,7 @@ func TestUsagePartsMirrorPricingChange(t *testing.T) {
 	keptActivityMirror(t, path, "session-a", 500)
 	writeUsageMirror(t, path,
 		`UPDATE sessions SET agentsview_push_fingerprint = 'a1'`,
-		`INSERT INTO model_pricing (model_pattern, input_microdollars_per_mtok, output_microdollars_per_mtok, cache_creation_microdollars_per_mtok, cache_read_microdollars_per_mtok, updated_at) VALUES ('price-a', 0, 10000000, 0, 0, ''), ('price-b', 0, 20000000, 0, 0, '')`,
+		`INSERT INTO model_pricing (model_pattern, input_microdollars_per_mtok, output_microdollars_per_mtok, cache_creation_microdollars_per_mtok, cache_read_microdollars_per_mtok, updated_at) VALUES ('price-a', 0, 10000000, 0, 0, NULL), ('price-b', 0, 20000000, 0, 0, NULL)`,
 	)
 	f := db.UsageFilter{From: "2026-01-01", To: "2026-01-01", Timezone: "UTC"}
 	store := openUsagePartsStore(t, path)

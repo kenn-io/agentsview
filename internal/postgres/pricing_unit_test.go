@@ -11,6 +11,7 @@ import (
 	"sync"
 	"testing"
 	"testing/synctest"
+	"time"
 
 	"github.com/jackc/pgx/v5/pgconn"
 
@@ -344,7 +345,7 @@ func TestLoadPricingMapSharesConcurrentDBRows(t *testing.T) {
 		t.Cleanup(releaseBlock)
 		state := &pricingProbeState{
 			rows: [][]driver.Value{{
-				"db-model", int64(1000000), int64(2000000), int64(3000000), int64(0), int64(4000000), "2026-06-08",
+				"db-model", int64(1000000), int64(2000000), int64(3000000), int64(0), int64(4000000), time.Date(2026, 6, 8, 0, 0, 0, 0, time.UTC),
 			}},
 			block: block,
 		}
@@ -405,7 +406,7 @@ func TestLoadPricingMapUsesEmbeddedGenAIWhenTableMissing(t *testing.T) {
 func TestLoadPricingMapUsesDBRowsAsEffectiveTable(t *testing.T) {
 	state := &pricingProbeState{
 		rows: [][]driver.Value{{
-			"db-model", int64(1000000), int64(2000000), int64(3000000), int64(0), int64(4000000), "2026-06-08",
+			"db-model", int64(1000000), int64(2000000), int64(3000000), int64(0), int64(4000000), time.Date(2026, 6, 8, 0, 0, 0, 0, time.UTC),
 		}},
 	}
 	pg := newPricingProbeDB(t, state)
@@ -428,7 +429,7 @@ func TestLoadPricingMapKeepsSharedDBRowsForActiveCaller(t *testing.T) {
 		defer unblock()
 		state := &pricingProbeState{
 			rows: [][]driver.Value{{
-				"db-model", int64(1000000), int64(2000000), int64(3000000), int64(0), int64(4000000), "2026-06-08",
+				"db-model", int64(1000000), int64(2000000), int64(3000000), int64(0), int64(4000000), time.Date(2026, 6, 8, 0, 0, 0, 0, time.UTC),
 			}},
 			block: block,
 		}
@@ -484,7 +485,7 @@ func TestLoadPricingMapCancelsDBRowsWithCaller(t *testing.T) {
 				defer close(block)
 				state := &pricingProbeState{
 					rows: [][]driver.Value{{
-						"db-model", int64(1000000), int64(2000000), int64(3000000), int64(0), int64(4000000), "2026-06-08",
+						"db-model", int64(1000000), int64(2000000), int64(3000000), int64(0), int64(4000000), time.Date(2026, 6, 8, 0, 0, 0, 0, time.UTC),
 					}},
 					block: block,
 					done:  make(chan struct{}),
@@ -525,7 +526,7 @@ func TestLoadPricingMapStartsFreshLoadAfterAllWaitersCancel(t *testing.T) {
 		defer close(releaseCanceledQuery)
 		state := &pricingProbeState{
 			rows: [][]driver.Value{{
-				"db-model", int64(1000000), int64(2000000), int64(3000000), int64(0), int64(4000000), "2026-06-08",
+				"db-model", int64(1000000), int64(2000000), int64(3000000), int64(0), int64(4000000), time.Date(2026, 6, 8, 0, 0, 0, 0, time.UTC),
 			}},
 			block:            block,
 			afterCancelBlock: releaseCanceledQuery,
@@ -564,7 +565,7 @@ func TestSetCustomPricingForgetsInFlightPricingLoad(t *testing.T) {
 		defer close(block)
 		state := &pricingProbeState{
 			rows: [][]driver.Value{{
-				"db-model", int64(1000000), int64(2000000), int64(3000000), int64(0), int64(4000000), "2026-06-08",
+				"db-model", int64(1000000), int64(2000000), int64(3000000), int64(0), int64(4000000), time.Date(2026, 6, 8, 0, 0, 0, 0, time.UTC),
 			}},
 			block: block,
 		}
@@ -599,7 +600,7 @@ func TestSetCustomPricingForgetsInFlightPricingLoad(t *testing.T) {
 func TestLoadPricingMapReloadsAfterCompletedDBRows(t *testing.T) {
 	state := &pricingProbeState{
 		rows: [][]driver.Value{{
-			"db-model", int64(1000000), int64(2000000), int64(3000000), int64(0), int64(4000000), "2026-06-08",
+			"db-model", int64(1000000), int64(2000000), int64(3000000), int64(0), int64(4000000), time.Date(2026, 6, 8, 0, 0, 0, 0, time.UTC),
 		}},
 	}
 	pg := newPricingProbeDB(t, state)
@@ -608,7 +609,7 @@ func TestLoadPricingMapReloadsAfterCompletedDBRows(t *testing.T) {
 	first, err := store.loadPricingMap(t.Context())
 	require.NoError(t, err, "first loadPricingMap")
 	state.setRows([][]driver.Value{{
-		"db-model", int64(7000000), int64(2000000), int64(3000000), int64(0), int64(4000000), "2026-06-08",
+		"db-model", int64(7000000), int64(2000000), int64(3000000), int64(0), int64(4000000), time.Date(2026, 6, 8, 0, 0, 0, 0, time.UTC),
 	}})
 	second, err := store.loadPricingMap(t.Context())
 	require.NoError(t, err, "second loadPricingMap")
@@ -649,7 +650,7 @@ func TestLoadPricingMapDoesNotCacheMissingTableFallback(t *testing.T) {
 }
 
 func TestPGPricingUpsertStatementBatchesRows(t *testing.T) {
-	query, args := pgPricingUpsertStatement([]db.ModelPricing{
+	query, args, err := pgPricingUpsertStatement([]db.ModelPricing{
 		{
 			ModelPattern:         "model-a",
 			InputPerMTok:         money.MustParseDollars("1"),
@@ -663,9 +664,10 @@ func TestPGPricingUpsertStatementBatchesRows(t *testing.T) {
 			OutputPerMTok:        money.MustParseDollars("6"),
 			CacheCreationPerMTok: money.MustParseDollars("7"),
 			CacheReadPerMTok:     money.MustParseDollars("8"),
-			UpdatedAt:            "source-time",
+			UpdatedAt:            "2026-02-01T12:30:00.250Z",
 		},
-	}, "call-time")
+	}, "2026-03-01T00:00:00Z")
+	require.NoError(t, err)
 
 	assert.Contains(t, query,
 		"VALUES ($1, $2, $3, $4, $5, $6, $7), "+
@@ -678,9 +680,17 @@ func TestPGPricingUpsertStatementBatchesRows(t *testing.T) {
 	assert.Contains(t, query, "RETURNING model_pattern")
 	require.Len(t, args, 14)
 	assert.Equal(t, "model-a", args[0])
-	assert.Equal(t, "call-time", args[6])
+	assert.Equal(t, time.Date(2026, 3, 1, 0, 0, 0, 0, time.UTC), args[6])
 	assert.Equal(t, "model-b", args[7])
-	assert.Equal(t, "source-time", args[13])
+	assert.Equal(t,
+		time.Date(2026, 2, 1, 12, 30, 0, 250_000_000, time.UTC), args[13])
+}
+
+func TestPGPricingUpsertStatementRejectsUnreadableTime(t *testing.T) {
+	_, _, err := pgPricingUpsertStatement([]db.ModelPricing{{
+		ModelPattern: "model-a", UpdatedAt: "yesterday",
+	}}, "2026-03-01T00:00:00Z")
+	require.ErrorContains(t, err, `"yesterday"`)
 }
 
 func TestPGPricingDeleteStatement(t *testing.T) {
@@ -712,11 +722,11 @@ func TestSyncModelPricingSkipsWriteWhenRemoteRowsUnchanged(t *testing.T) {
 
 	state := &pricingProbeState{
 		rows: [][]driver.Value{{
-			"same-model", int64(1000000), int64(2000000), int64(3000000), int64(0), int64(4000000), "old",
+			"same-model", int64(1000000), int64(2000000), int64(3000000), int64(0), int64(4000000), time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC),
 		}},
 		genAIRows: [][]driver.Value{{
 			"genai-prices-test", "upstream-ref", db.GenAIPricingSourceFetched,
-			[]byte(`{"test":true}`), "old",
+			[]byte(`{"test":true}`), time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC),
 		}},
 	}
 	pg := newPricingProbeDB(t, state)

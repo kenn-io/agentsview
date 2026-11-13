@@ -62,11 +62,12 @@ type pgGenAIPricingQuerier interface {
 
 func queryPGGenAIPricing(ctx context.Context, q pgGenAIPricingQuerier, allowMissing bool) (*db.GenAIPricingDocument, error) {
 	var document db.GenAIPricingDocument
+	var updatedAt sql.NullTime
 	err := q.QueryRowContext(ctx, `
 		SELECT version, source_ref, source, data_json, updated_at
 		FROM genai_pricing WHERE singleton = 1`).Scan(
 		&document.Version, &document.SourceRef, &document.Source,
-		&document.Data, &document.UpdatedAt,
+		&document.Data, &updatedAt,
 	)
 	if err == sql.ErrNoRows || allowMissing && isUndefinedTable(err) {
 		return nil, nil
@@ -74,6 +75,7 @@ func queryPGGenAIPricing(ctx context.Context, q pgGenAIPricingQuerier, allowMiss
 	if err != nil {
 		return nil, fmt.Errorf("reading pg GenAI pricing document: %w", err)
 	}
+	document.UpdatedAt = db.FormatMirrorPricingTime(updatedAt)
 	return &document, nil
 }
 
@@ -85,11 +87,12 @@ func loadPGGenAIPricingState(
 ) (*db.GenAIPricingState, error) {
 	var state db.GenAIPricingState
 	var digest pushDigest
+	var updatedAt sql.NullTime
 	err := q.QueryRowContext(ctx, `
 		SELECT version, source_ref, source, sha256(data_json), updated_at
 		FROM genai_pricing WHERE singleton = 1`).Scan(
 		&state.Version, &state.SourceRef, &state.Source,
-		&digest, &state.UpdatedAt,
+		&digest, &updatedAt,
 	)
 	if errors.Is(err, sql.ErrNoRows) || isUndefinedTable(err) {
 		return nil, nil
@@ -98,6 +101,7 @@ func loadPGGenAIPricingState(
 		return nil, fmt.Errorf("reading pg GenAI pricing state: %w", err)
 	}
 	state.DataSHA256 = string(digest)
+	state.UpdatedAt = db.FormatMirrorPricingTime(updatedAt)
 	return &state, nil
 }
 
@@ -380,7 +384,7 @@ ORDER BY p.model_pattern, b.above_input_tokens`
 
 func pgPricingUpsertStatement(
 	prices []db.ModelPricing, defaultUpdatedAt string,
-) (string, []any) {
+) (string, []any, error) {
 	var b strings.Builder
 	b.WriteString(`INSERT INTO model_pricing
 		(model_pattern, input_microdollars_per_mtok, output_microdollars_per_mtok,
@@ -398,9 +402,9 @@ func pgPricingUpsertStatement(
 			"($%d, $%d, $%d, $%d, $%d, $%d, $%d)",
 			base, base+1, base+2, base+3, base+4, base+5, base+6,
 		)
-		updatedAt := p.UpdatedAt
-		if updatedAt == "" {
-			updatedAt = defaultUpdatedAt
+		updatedAt, err := pgPricingTime(p.UpdatedAt, defaultUpdatedAt)
+		if err != nil {
+			return "", nil, fmt.Errorf("pricing for %q: %w", p.ModelPattern, err)
 		}
 		args = append(args,
 			sanitizePG(p.ModelPattern),
@@ -409,7 +413,7 @@ func pgPricingUpsertStatement(
 			p.CacheCreationPerMTok,
 			p.CacheCreation1hPerMTok,
 			p.CacheReadPerMTok,
-			sanitizePG(updatedAt),
+			updatedAt,
 		)
 	}
 	b.WriteString(`
@@ -420,13 +424,8 @@ func pgPricingUpsertStatement(
 		cache_creation_1h_microdollars_per_mtok = EXCLUDED.cache_creation_1h_microdollars_per_mtok,
 		cache_read_microdollars_per_mtok = EXCLUDED.cache_read_microdollars_per_mtok,
 		updated_at = CASE
-			WHEN model_pricing.updated_at = '' THEN EXCLUDED.updated_at
-			WHEN model_pricing.updated_at::timestamptz >=
-				EXCLUDED.updated_at::timestamptz
-			THEN to_char(
-				(model_pricing.updated_at::timestamptz + INTERVAL '1 microsecond')
-					AT TIME ZONE 'UTC',
-				'YYYY-MM-DD"T"HH24:MI:SS.US"Z"')
+			WHEN model_pricing.updated_at >= EXCLUDED.updated_at
+			THEN model_pricing.updated_at + INTERVAL '1 microsecond'
 			ELSE EXCLUDED.updated_at
 		END
 	WHERE model_pricing.input_microdollars_per_mtok IS DISTINCT FROM
@@ -440,7 +439,16 @@ func pgPricingUpsertStatement(
 		OR model_pricing.cache_read_microdollars_per_mtok IS DISTINCT FROM
 			EXCLUDED.cache_read_microdollars_per_mtok
 	RETURNING model_pattern`)
-	return b.String(), args
+	return b.String(), args, nil
+}
+
+// pgPricingTime converts a stored pricing time for a timestamptz column,
+// stamping fallback when the archive has none.
+func pgPricingTime(stored, fallback string) (any, error) {
+	if stored == "" {
+		stored = fallback
+	}
+	return db.MirrorPricingTime(stored)
 }
 
 func listPGModelPricing(
@@ -464,7 +472,7 @@ func scanPGModelPricingRows(rows *sql.Rows) ([]db.ModelPricing, error) {
 		var p db.ModelPricing
 		var threshold, input, output, cacheCreation, cacheCreation1h,
 			cacheRead sql.NullInt64
-		var bandUpdatedAt sql.NullString
+		var updatedAt, bandUpdatedAt sql.NullTime
 		if err := rows.Scan(
 			&p.ModelPattern,
 			&p.InputPerMTok,
@@ -472,7 +480,7 @@ func scanPGModelPricingRows(rows *sql.Rows) ([]db.ModelPricing, error) {
 			&p.CacheCreationPerMTok,
 			&p.CacheCreation1hPerMTok,
 			&p.CacheReadPerMTok,
-			&p.UpdatedAt,
+			&updatedAt,
 			&threshold,
 			&input,
 			&output,
@@ -483,6 +491,7 @@ func scanPGModelPricingRows(rows *sql.Rows) ([]db.ModelPricing, error) {
 		); err != nil {
 			return nil, fmt.Errorf("scanning pg pricing: %w", err)
 		}
+		p.UpdatedAt = db.FormatMirrorPricingTime(updatedAt)
 		i, exists := byPattern[p.ModelPattern]
 		if !exists {
 			i = len(out)
@@ -514,7 +523,7 @@ func scanPGModelPricingRows(rows *sql.Rows) ([]db.ModelPricing, error) {
 				CacheReadPerMTok: money.Money{
 					Microdollars: cacheRead.Int64,
 				},
-				UpdatedAt: bandUpdatedAt.String,
+				UpdatedAt: db.FormatMirrorPricingTime(bandUpdatedAt),
 			})
 		}
 	}
@@ -526,16 +535,12 @@ func scanPGModelPricingRows(rows *sql.Rows) ([]db.ModelPricing, error) {
 
 func pgPricingTouchStatement(
 	prices []db.ModelPricing, defaultUpdatedAt string,
-) (string, []any) {
+) (string, []any, error) {
 	var b strings.Builder
 	b.WriteString(`UPDATE model_pricing AS p
 		SET updated_at = CASE
-			WHEN p.updated_at = '' THEN v.updated_at
-			WHEN p.updated_at::timestamptz >= v.updated_at::timestamptz
-			THEN to_char(
-				(p.updated_at::timestamptz + INTERVAL '1 microsecond')
-					AT TIME ZONE 'UTC',
-				'YYYY-MM-DD"T"HH24:MI:SS.US"Z"')
+			WHEN p.updated_at >= v.updated_at
+			THEN p.updated_at + INTERVAL '1 microsecond'
 			ELSE v.updated_at
 		END
 		FROM (VALUES `)
@@ -545,16 +550,16 @@ func pgPricingTouchStatement(
 			b.WriteString(", ")
 		}
 		base := i*2 + 1
-		fmt.Fprintf(&b, "($%d::text, $%d::text)", base, base+1)
-		updatedAt := price.UpdatedAt
-		if updatedAt == "" {
-			updatedAt = defaultUpdatedAt
+		fmt.Fprintf(&b, "($%d::text, $%d::timestamptz)", base, base+1)
+		updatedAt, err := pgPricingTime(price.UpdatedAt, defaultUpdatedAt)
+		if err != nil {
+			return "", nil, fmt.Errorf("pricing for %q: %w", price.ModelPattern, err)
 		}
 		args = append(args, sanitizePG(price.ModelPattern), updatedAt)
 	}
 	b.WriteString(`) AS v(model_pattern, updated_at)
 		WHERE p.model_pattern = v.model_pattern`)
-	return b.String(), args
+	return b.String(), args, nil
 }
 
 func pgPricingBandDeleteStatement(
@@ -582,7 +587,7 @@ type pgModelPricingBand struct {
 func pgPricingBandInsertStatement(
 	bands []pgModelPricingBand,
 	defaultUpdatedAt string,
-) (string, []any) {
+) (string, []any, error) {
 	var b strings.Builder
 	b.WriteString(`INSERT INTO model_pricing_bands
 		(model_pattern, above_input_tokens,
@@ -599,9 +604,9 @@ func pgPricingBandInsertStatement(
 		base := i*8 + 1
 		fmt.Fprintf(&b, "($%d, $%d, $%d, $%d, $%d, $%d, $%d, $%d)",
 			base, base+1, base+2, base+3, base+4, base+5, base+6, base+7)
-		updatedAt := item.band.UpdatedAt
-		if updatedAt == "" {
-			updatedAt = defaultUpdatedAt
+		updatedAt, err := pgPricingTime(item.band.UpdatedAt, defaultUpdatedAt)
+		if err != nil {
+			return "", nil, fmt.Errorf("pricing band for %q: %w", item.model, err)
 		}
 		args = append(args,
 			sanitizePG(item.model),
@@ -611,10 +616,10 @@ func pgPricingBandInsertStatement(
 			item.band.CacheCreationPerMTok,
 			item.band.CacheCreation1hPerMTok,
 			item.band.CacheReadPerMTok,
-			sanitizePG(updatedAt),
+			updatedAt,
 		)
 	}
-	return b.String(), args
+	return b.String(), args, nil
 }
 
 func pgPricingDeleteStatement(
@@ -681,9 +686,12 @@ func upsertPGModelPricing(
 	for i := 0; i < len(prices); i += pricingUpsertBatch {
 		if err := func() error {
 			end := min(i+pricingUpsertBatch, len(prices))
-			query, args := pgPricingUpsertStatement(
+			query, args, err := pgPricingUpsertStatement(
 				prices[i:end], defaultUpdatedAt,
 			)
+			if err != nil {
+				return err
+			}
 			rows, err := tx.QueryContext(ctx, query, args...)
 			if err != nil {
 				return fmt.Errorf(
@@ -725,7 +733,10 @@ func upsertPGModelPricing(
 	for i := 0; i < len(bandOnlyPrices); i += pricingUpsertBatch {
 		end := min(i+pricingUpsertBatch, len(bandOnlyPrices))
 		batch := bandOnlyPrices[i:end]
-		query, args := pgPricingTouchStatement(batch, defaultUpdatedAt)
+		query, args, err := pgPricingTouchStatement(batch, defaultUpdatedAt)
+		if err != nil {
+			return err
+		}
 		if _, err := tx.ExecContext(ctx, query, args...); err != nil {
 			return fmt.Errorf(
 				"advancing pg pricing timestamps at batch %d: %w", i, err)
@@ -751,8 +762,11 @@ func upsertPGModelPricing(
 	}
 	for i := 0; i < len(bands); i += pricingUpsertBatch {
 		end := min(i+pricingUpsertBatch, len(bands))
-		query, args := pgPricingBandInsertStatement(
+		query, args, err := pgPricingBandInsertStatement(
 			bands[i:end], defaultUpdatedAt)
+		if err != nil {
+			return err
+		}
 		if _, err := tx.ExecContext(ctx, query, args...); err != nil {
 			return fmt.Errorf(
 				"inserting pg pricing bands at batch %d: %w", i, err)
@@ -768,7 +782,11 @@ const pricingSyncLockKey = "model_pricing_sync_lock"
 func upsertPGGenAIPricing(
 	ctx context.Context, tx *sql.Tx, document db.GenAIPricingDocument,
 ) error {
-	_, err := tx.ExecContext(ctx, `
+	updatedAt, err := db.MirrorPricingTime(document.UpdatedAt)
+	if err != nil {
+		return fmt.Errorf("GenAI pricing document: %w", err)
+	}
+	_, err = tx.ExecContext(ctx, `
 		INSERT INTO genai_pricing
 			(singleton, version, source_ref, source, data_json, updated_at)
 		VALUES (1, $1, $2, $3, $4, $5)
@@ -779,7 +797,7 @@ func upsertPGGenAIPricing(
 			data_json = excluded.data_json,
 			updated_at = excluded.updated_at`,
 		document.Version, document.SourceRef, document.Source,
-		document.Data, document.UpdatedAt,
+		document.Data, updatedAt,
 	)
 	if err != nil {
 		return fmt.Errorf("upserting pg GenAI pricing document: %w", err)

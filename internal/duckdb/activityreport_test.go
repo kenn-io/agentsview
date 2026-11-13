@@ -1339,3 +1339,27 @@ func TestDuckGetActivityReportAutomationFilterAndSessionSplit(t *testing.T) {
 		})
 	}
 }
+
+// The probe reports the newest pricing time across model prices and the
+// GenAI document, so a change to either refreshes open Activity reports. A
+// table without a time does not hide the other's.
+func TestActivityReportSourceProbeReportsNewestPricingTime(t *testing.T) {
+	ctx := t.Context()
+	conn := openTestDuckDB(t)
+	require.NoError(t, EnsureSchema(ctx, conn))
+	store := NewStoreFromDB(conn)
+	for _, step := range []struct{ sql, want string }{
+		{`SELECT 1`, ""},
+		{`INSERT INTO genai_pricing (singleton, version, source, data_json)
+		  VALUES (1, 'v1', 'embedded', '{}')`, ""},
+		{`INSERT INTO model_pricing (model_pattern, updated_at)
+		  VALUES ('probe-model', '2026-07-01 00:00:02')`, "2026-07-01 00:00:02"},
+		{`UPDATE genai_pricing SET updated_at = '2026-07-02 00:00:00'`, "2026-07-02 00:00:00"},
+	} {
+		_, err := conn.ExecContext(ctx, step.sql)
+		require.NoError(t, err, step.sql)
+		probe, err := store.ActivityReportSourceProbe(ctx)
+		require.NoError(t, err)
+		assert.Equal(t, step.want, probe.MaxPricingUpdated, step.sql)
+	}
+}

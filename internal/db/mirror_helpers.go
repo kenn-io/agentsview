@@ -1,6 +1,8 @@
 package db
 
 import (
+	"database/sql"
+	"fmt"
 	"sort"
 	"time"
 
@@ -49,6 +51,29 @@ func ValueOrNever(v string) string {
 func ActivityReportInstantBoundsUTC(q activity.Query) (string, string) {
 	return q.RangeStart.UTC().Format(time.RFC3339),
 		q.RangeEnd.UTC().Format(time.RFC3339)
+}
+
+// MirrorPricingTime converts a pricing time the archive stores as text
+// into the value a mirror's timestamp column takes. The archive stores an
+// unknown time as "", which becomes NULL.
+func MirrorPricingTime(stored string) (any, error) {
+	if stored == "" {
+		return nil, nil
+	}
+	t, ok := ParseStoredTimestamp(stored)
+	if !ok {
+		return nil, fmt.Errorf("pricing time %q is not an RFC 3339 time", stored)
+	}
+	return t.UTC(), nil
+}
+
+// FormatMirrorPricingTime formats a mirror's pricing timestamp the way the
+// archive returns one, with "" for NULL.
+func FormatMirrorPricingTime(t sql.NullTime) string {
+	if !t.Valid {
+		return ""
+	}
+	return t.Time.UTC().Format(time.RFC3339Nano)
 }
 
 // FallbackMirrorPricingRows converts the embedded fallback pricing into
