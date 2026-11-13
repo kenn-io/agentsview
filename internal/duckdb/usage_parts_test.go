@@ -284,7 +284,8 @@ func TestUsagePartsRefreshesCursorAccount(t *testing.T) {
 	require.Equal(t, 800, got.Totals.OutputTokens)
 	require.NoError(t, store.Close())
 	writeUsageMirror(t, path,
-		`INSERT INTO sessions SELECT * REPLACE ('session-b' AS id) FROM sessions WHERE id = 'session-a'`,
+		`UPDATE sessions SET agentsview_push_fingerprint = 'a2' WHERE id = 'session-a'`,
+		`INSERT INTO sessions SELECT * REPLACE ('session-b' AS id, 'b1' AS agentsview_push_fingerprint) FROM sessions WHERE id = 'session-a'`,
 		`INSERT INTO messages SELECT * REPLACE (3 AS id, 'session-b' AS session_id) FROM messages WHERE id = 2`,
 		`INSERT INTO usage_events (id, session_id, source, model, output_tokens, occurred_at, dedup_key) VALUES (1, 'session-a', 'test', 'kept-model', 10, TIMESTAMP '2026-01-01 01:00:00', 'a'), (2, 'session-b', 'test', 'kept-model', 20, TIMESTAMP '2026-01-01 01:00:00', 'b')`,
 	)
@@ -303,6 +304,14 @@ func TestUsagePartsRefreshesCursorAccount(t *testing.T) {
 		require.NoError(t, err)
 		require.ElementsMatch(t, tc.outputs, outputs)
 	}
+	var outputs []int
+	err = store.forEachSessionUsageAggregateRow(t.Context(), f, []string{"session-a"}, func(row duckUsageAggregateRow) error {
+		require.Equal(t, "session-a", row.sessionID)
+		outputs = append(outputs, row.outputTok)
+		return nil
+	})
+	require.NoError(t, err)
+	require.ElementsMatch(t, []int{500, 10}, outputs)
 }
 
 func TestUsagePartsRefreshesAuthoritativeCost(t *testing.T) {
