@@ -295,7 +295,13 @@ content (API keys, tokens, credentials). Detected secrets are:
 
 - recorded as findings in the database;
 - redacted by default in CLI and UI views;
-- revealable only via localhost-gated paths.
+- masked by default in every export that returns message text: the HTML and
+  Markdown session exports, Gist publishing, the raw `agentsview session export`
+  source stream, and `agentsview export conversations message`. Each has one
+  opt-out: a `reveal=true` query parameter that only localhost callers may use,
+  or a `--reveal` flag on the local CLI. Session summary and reporting exports
+  carry no message text;
+- revealable only via localhost-gated paths or an explicit local CLI flag.
 
 This is a defense-in-depth feature, not data-loss prevention. It does not catch
 every secret pattern, does not retroactively remove secrets from the on-disk
@@ -350,5 +356,5 @@ its own proposal.
    PG/HTTP targets), or should the docs simply make the current limits
    clearer?
 1. **Secret detection scope.** Should the detector expand (more patterns,
-   structured-secret types), should redacted-by-default extend to exports, and
-   should there be a "scrub-on-import" pass?
+   structured-secret types), and should there be a "scrub-on-import" pass?
+   Exports that return message text now mask detected secrets by default.

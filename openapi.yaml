@@ -21959,6 +21959,13 @@ paths:
           schema:
             description: Session ID
             type: string
+        - description: Export unredacted secret values; localhost callers only
+          explode: false
+          in: query
+          name: reveal
+          schema:
+            description: Export unredacted secret values; localhost callers only
+            type: boolean
       responses:
         "200":
           content:
@@ -22251,6 +22258,13 @@ paths:
               - "1"
               - all
             type: string
+        - description: Export unredacted secret values; localhost callers only
+          explode: false
+          in: query
+          name: reveal
+          schema:
+            description: Export unredacted secret values; localhost callers only
+            type: boolean
       responses:
         "200":
           content:
@@ -23155,6 +23169,13 @@ paths:
           name: secret
           schema:
             description: Create a secret gist instead of a public one
+            type: boolean
+        - description: Publish unredacted secret values; localhost callers only
+          explode: false
+          in: query
+          name: reveal
+          schema:
+            description: Publish unredacted secret values; localhost callers only
             type: boolean
       responses:
         "200":

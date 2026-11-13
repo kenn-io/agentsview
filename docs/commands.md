@@ -2098,7 +2098,9 @@ agentsview export conversations message SESSION_ID MESSAGE_ID \
 ```
 
 These commands read the local archive and do not send content to another system.
-Existing session summary and activity exports remain content-free.
+`message` masks detected secrets by default and marks such bodies with
+`redacted: true`; pass `--reveal` to return the stored text unchanged. Existing
+session summary and activity exports remain content-free.
 
 ______________________________________________________________________
 
@@ -2150,7 +2152,7 @@ agentsview session list --resume         # recently-active resume table
 agentsview session messages <id>         # paginated messages
 agentsview session commits <id>          # commits and their prompts
 agentsview session tool-calls <id>       # flat tool-call list
-agentsview session export <id>           # stream raw source file
+agentsview session export <id>           # stream raw source, secrets masked
 agentsview session sync <path-or-id>     # parse + insert
 agentsview session watch <id>            # NDJSON event stream
 agentsview session search <pattern>      # content search across sessions
