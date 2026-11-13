@@ -113,7 +113,13 @@ func TestHTTPSyncRejectsMismatchedRemoteProtocol(t *testing.T) {
 
 func TestRequestArchivePreservesEmptyDeltaSelection(t *testing.T) {
 	var received ArchiveRequest
+	var manifestTargets TargetSet
 	server := newCurrentProtocolServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/api/v1/remote-sync/manifest" {
+			assert.NoError(t, json.UnmarshalRead(r.Body, &manifestTargets))
+			_, _ = w.Write([]byte(`{"files":[]}`))
+			return
+		}
 		if !assert.NoError(t, json.UnmarshalRead(r.Body, &received)) {
 			return
 		}
@@ -121,13 +127,19 @@ func TestRequestArchivePreservesEmptyDeltaSelection(t *testing.T) {
 	}))
 	t.Cleanup(server.Close)
 
-	response, err := (HTTPSource{URL: server.URL, Client: server.Client()}).requestArchive(
-		t.Context(), ArchiveRequest{DeltaFiles: []string{}},
-	)
+	source := HTTPSource{URL: server.URL, Client: server.Client()}
+	targets := TargetSet{Dirs: map[parser.AgentType][]string{parser.AgentCodex: {"/storage/live", "/home/codex/archived_sessions"}},
+		CodexHomeRoots: map[string]CodexHomeRoots{"/home/codex": {Sessions: "/storage/live", ArchivedSessions: "/home/codex/archived_sessions"}}}
+	supported, err := source.Manifest(t.Context(), targets, func(ManifestEntry) error { return nil })
+	require.NoError(t, err)
+	assert.True(t, supported)
+	response, err := source.requestArchive(t.Context(), ArchiveRequest{TargetSet: targets, DeltaFiles: []string{}})
 	require.NoError(t, err)
 	require.NoError(t, response.Body.Close())
 	assert.NotNil(t, received.DeltaFiles)
 	assert.Empty(t, received.DeltaFiles)
+	assert.Equal(t, map[string]CodexHomeRoots{"/home/codex": {Sessions: "/storage/live", ArchivedSessions: "/home/codex/archived_sessions"}}, manifestTargets.CodexHomeRoots)
+	assert.Equal(t, map[string]CodexHomeRoots{"/home/codex": {Sessions: "/storage/live", ArchivedSessions: "/home/codex/archived_sessions"}}, received.CodexHomeRoots)
 }
 
 func TestHTTPSyncDownloadsArchiveAndImports(t *testing.T) {
