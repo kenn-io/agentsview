@@ -252,8 +252,8 @@ func keptUsageMirror(t *testing.T, path string) {
  (4, 'plan-only', 1, 'assistant', 'answer', TIMESTAMP '2026-01-01 00:01:00', 'plan-a'),
  (5, 'plan-only', 2, 'assistant', 'answer', TIMESTAMP '2026-01-01 00:01:00', 'plan-b')`)
 	require.NoError(t, err)
-	_, err = conn.ExecContext(t.Context(), `INSERT INTO messages (id, session_id, ordinal, role, content, timestamp, model, token_usage, output_tokens)
- VALUES (6, 'session-a', 2, 'assistant', 'answer', TIMESTAMP '2026-01-01 00:01:00', 'other-model', '{"output_tokens":250}', 250)`)
+	_, err = conn.ExecContext(t.Context(), `INSERT INTO messages (id, session_id, ordinal, role, content, timestamp, model, token_usage, output_tokens, usage_output_tokens)
+ VALUES (6, 'session-a', 2, 'assistant', 'answer', TIMESTAMP '2026-01-01 00:01:00', 'other-model', '{"output_tokens":250}', 250, 250)`)
 	require.NoError(t, err)
 	require.NoError(t, conn.Close())
 }

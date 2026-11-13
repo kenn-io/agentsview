@@ -1,7 +1,7 @@
 //go:build !(windows && arm64)
 
-// ABOUTME: Store-contract parity for the Anthropic web search fee: the
-// ABOUTME: DuckDB mirror must charge it exactly like the SQLite archive.
+// ABOUTME: Store-contract parity for message token counters and the Anthropic
+// ABOUTME: web search fee: the DuckDB mirror must read and charge them like SQLite.
 package duckdb
 
 import (
@@ -302,4 +302,63 @@ func TestDuckWebSearchFeeOnUnpricedModelMatchesSQLite(t *testing.T) {
 		sqliteDaily.Totals.TotalCost)
 	assert.Equal(t, sqliteDaily.Totals.TotalCost,
 		duckDaily.Totals.TotalCost)
+}
+
+// The mirror must read each message's token counters exactly as SQLite does,
+// usagefacts.ParseTokenUsage, for counts that are valid JSON but not plain
+// integers: a count past the int64 range clamps to the plausible maximum,
+// and a fraction or exponent keeps only its leading digits.
+func TestDuckUsageReadsTokenCountersLikeSQLite(t *testing.T) {
+	cases := []struct {
+		name       string
+		tokenUsage string
+	}{
+		{
+			"count past int64",
+			`{"input_tokens":100000,"output_tokens":99999999999999999999}`,
+		},
+		{"fraction", `{"input_tokens":100000.7,"output_tokens":100000}`},
+		{"exponent", `{"input_tokens":1e5,"output_tokens":100000}`},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			writes := webSearchWrites("claude-websearch-test", 0)
+			writes[0].Messages = writes[0].Messages[:1]
+			writes[0].Messages[0].TokenUsage = jsontext.Value(tc.tokenUsage)
+			writes[0].Session.MessageCount = 1
+			ctx := t.Context()
+			local, duck := webSearchStoresFromWrites(t, writes)
+
+			sqliteSession, err := local.GetSessionUsage(ctx, "duck-ws", true)
+			require.NoError(t, err)
+			require.NotNil(t, sqliteSession)
+			duckSession, err := duck.GetSessionUsage(ctx, "duck-ws", true)
+			require.NoError(t, err)
+			require.NotNil(t, duckSession)
+			assert.Equal(t, sqliteSession.Breakdown, duckSession.Breakdown)
+			assert.Equal(t, sqliteSession.Cost, duckSession.Cost)
+
+			filter := db.UsageFilter{From: "2026-07-30", To: "2026-07-30"}
+			sqliteDaily, err := local.GetDailyUsage(ctx, filter)
+			require.NoError(t, err)
+			duckDaily, err := duck.GetDailyUsage(ctx, filter)
+			require.NoError(t, err)
+			assert.Equal(t, sqliteDaily.Totals, duckDaily.Totals)
+
+			sqliteRows, err := local.GetSessionUsageRows(ctx, []string{"duck-ws"})
+			require.NoError(t, err)
+			duckRows, err := duck.GetSessionUsageRows(ctx, []string{"duck-ws"})
+			require.NoError(t, err)
+			assert.Equal(t, sqliteRows.Rows, duckRows.Rows)
+
+			query := duckDayQuery(t, "2026-07-30", "UTC")
+			sqliteReport, err := local.GetActivityReport(ctx,
+				db.AnalyticsFilter{Timezone: "UTC"}, query)
+			require.NoError(t, err)
+			duckReport, err := duck.GetActivityReport(ctx,
+				db.AnalyticsFilter{Timezone: "UTC"}, query)
+			require.NoError(t, err)
+			assert.Equal(t, sqliteReport.Totals, duckReport.Totals)
+		})
+	}
 }

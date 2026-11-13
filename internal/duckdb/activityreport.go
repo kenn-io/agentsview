@@ -177,14 +177,12 @@ func (s *Store) GetSessionUsageRows(
 		SELECT m.session_id AS session_id, m.ordinal AS message_ordinal,
 			'message' AS source, COALESCE(m.timestamp, s.started_at) AS ts,
 			m.timestamp AS pricing_ts,
-			m.model AS model, m.provider_id AS provider_id, m.token_usage AS token_json,
+			m.model AS model, m.provider_id AS provider_id,
 			m.claude_message_id AS claude_message_id,
 			m.claude_request_id AS claude_request_id,
 			m.source_uuid AS source_uuid,
 			'' AS usage_dedup_key,
-			0 AS input_tokens, 0 AS output_tokens,
-			0 AS cache_create, 0 AS cache_read,
-			COALESCE(TRY_CAST(json_extract_string(m.token_usage, '$.reasoning_tokens') AS BIGINT), 0) AS reasoning_tokens,
+			`+duckMessageUsageCountersSQL+`,
 			CASE WHEN TRY_CAST(json_extract_string(m.token_usage, '$.recorded_cost_microdollars') AS BIGINT) >= 0 THEN TRY_CAST(json_extract_string(m.token_usage, '$.recorded_cost_microdollars') AS BIGINT) END AS cost_microdollars,
 				'' AS cost_source,
 				CASE WHEN TRY_CAST(json_extract_string(m.token_usage, '$.recorded_cost_microdollars') AS BIGINT) >= 0 THEN 'recorded' ELSE '' END AS cost_status,
@@ -201,7 +199,7 @@ func (s *Store) GetSessionUsageRows(
 		SELECT ue.session_id AS session_id, ue.message_ordinal AS message_ordinal,
 			ue.source AS source, COALESCE(ue.occurred_at, s.started_at) AS ts,
 			ue.occurred_at AS pricing_ts,
-			ue.model AS model, ue.provider_id AS provider_id, '' AS token_json,
+			ue.model AS model, ue.provider_id AS provider_id,
 			'' AS claude_message_id, '' AS claude_request_id,
 			'' AS source_uuid,
 			CASE
@@ -212,6 +210,7 @@ func (s *Store) GetSessionUsageRows(
 			ue.cache_creation_input_tokens AS cache_create,
 			ue.cache_read_input_tokens AS cache_read,
 			ue.reasoning_tokens AS reasoning_tokens,
+			0 AS cache_create_1h, 0 AS web_search_requests,
 			ue.cost_microdollars AS cost_microdollars,
 			ue.cost_source AS cost_source,
 			ue.cost_status AS cost_status,
@@ -826,15 +825,13 @@ func duckActivityUsageWith(candidateWhere string) string {
 			SELECT m.session_id AS session_id, m.ordinal AS message_ordinal,
 				'message' AS source, COALESCE(m.timestamp, s.started_at) AS ts,
 				m.timestamp AS pricing_ts,
-				m.model AS model, m.provider_id AS provider_id, m.token_usage AS token_json,
+				m.model AS model, m.provider_id AS provider_id,
 				s.agent AS agent,
 				m.claude_message_id AS claude_message_id,
 				m.claude_request_id AS claude_request_id,
 				m.source_uuid AS source_uuid,
 				'' AS usage_dedup_key,
-				0 AS input_tokens, 0 AS output_tokens,
-					0 AS cache_create, 0 AS cache_read,
-					COALESCE(TRY_CAST(json_extract_string(m.token_usage, '$.reasoning_tokens') AS BIGINT), 0) AS reasoning_tokens,
+				`+duckMessageUsageCountersSQL+`,
 					CASE WHEN TRY_CAST(json_extract_string(m.token_usage, '$.recorded_cost_microdollars') AS BIGINT) >= 0 THEN TRY_CAST(json_extract_string(m.token_usage, '$.recorded_cost_microdollars') AS BIGINT) END AS cost_microdollars,
 				'' AS cost_source,
 				CASE WHEN TRY_CAST(json_extract_string(m.token_usage, '$.recorded_cost_microdollars') AS BIGINT) >= 0 THEN 'recorded' ELSE '' END AS cost_status
@@ -853,7 +850,7 @@ func duckActivityUsageWith(candidateWhere string) string {
 			SELECT ue.session_id AS session_id, ue.message_ordinal AS message_ordinal,
 				ue.source AS source, COALESCE(ue.occurred_at, s.started_at) AS ts,
 				ue.occurred_at AS pricing_ts,
-				ue.model AS model, ue.provider_id AS provider_id, '' AS token_json,
+				ue.model AS model, ue.provider_id AS provider_id,
 				s.agent AS agent,
 				'' AS claude_message_id, '' AS claude_request_id,
 				'' AS source_uuid,
@@ -865,6 +862,7 @@ func duckActivityUsageWith(candidateWhere string) string {
 					ue.cache_creation_input_tokens AS cache_create,
 					ue.cache_read_input_tokens AS cache_read,
 					ue.reasoning_tokens AS reasoning_tokens,
+					0 AS cache_create_1h, 0 AS web_search_requests,
 					ue.cost_microdollars AS cost_microdollars,
 					ue.cost_source AS cost_source,
 			ue.cost_status AS cost_status
@@ -886,15 +884,13 @@ func duckActivityUsageWith(candidateWhere string) string {
 			SELECT m.session_id AS session_id, m.ordinal AS message_ordinal,
 				'message' AS source, COALESCE(m.timestamp, s.started_at) AS ts,
 				m.timestamp AS pricing_ts,
-				m.model AS model, m.provider_id AS provider_id, m.token_usage AS token_json,
+				m.model AS model, m.provider_id AS provider_id,
 				s.agent AS agent,
 				m.claude_message_id AS claude_message_id,
 				m.claude_request_id AS claude_request_id,
 				m.source_uuid AS source_uuid,
 				'' AS usage_dedup_key,
-				0 AS input_tokens, 0 AS output_tokens,
-				0 AS cache_create, 0 AS cache_read,
-				COALESCE(TRY_CAST(json_extract_string(m.token_usage, '$.reasoning_tokens') AS BIGINT), 0) AS reasoning_tokens,
+				`+duckMessageUsageCountersSQL+`,
 				CASE WHEN TRY_CAST(json_extract_string(m.token_usage, '$.recorded_cost_microdollars') AS BIGINT) >= 0 THEN TRY_CAST(json_extract_string(m.token_usage, '$.recorded_cost_microdollars') AS BIGINT) END AS cost_microdollars,
 				'' AS cost_source,
 				CASE WHEN TRY_CAST(json_extract_string(m.token_usage, '$.recorded_cost_microdollars') AS BIGINT) >= 0 THEN 'recorded' ELSE '' END AS cost_status
@@ -923,43 +919,35 @@ func duckActivityUsageWith(candidateWhere string) string {
 		usage_normalized AS (
 			SELECT session_id, message_ordinal, ts, pricing_ts, source, model, provider_id, agent,
 				claude_message_id, claude_request_id, source_uuid, usage_dedup_key,
+				-- Message rows carry counters push already clamped
+				-- (duckMessageUsageCountersSQL), so the clamps below leave
+				-- them as stored.
 				CASE
-					WHEN source = 'message' THEN LEAST(GREATEST(COALESCE(TRY_CAST(tok[1] AS BIGINT), 0), 0), %[1]d)
 					WHEN source = 'session' THEN GREATEST(input_tokens, 0)
 					ELSE LEAST(GREATEST(input_tokens, 0), %[1]d)
 				END AS input_tokens_norm,
 				CASE
-					WHEN source = 'message' THEN LEAST(GREATEST(COALESCE(TRY_CAST(tok[2] AS BIGINT), 0), 0), %[1]d)
 					WHEN source = 'session' THEN GREATEST(output_tokens, 0)
 					ELSE LEAST(GREATEST(output_tokens, 0), %[1]d)
 				END AS output_tokens_norm,
 				CASE
-					WHEN source = 'message' THEN LEAST(GREATEST(COALESCE(TRY_CAST(tok[3] AS BIGINT), 0), 0), %[1]d)
 					WHEN source = 'session' THEN GREATEST(cache_create, 0)
 					ELSE LEAST(GREATEST(cache_create, 0), %[1]d)
 				END AS cache_create_norm,
-					-- 1h-TTL subset of cache_create_norm from the nested
-					-- Anthropic breakdown; only message rows carry it.
-					CASE
-						WHEN source = 'message' THEN LEAST(GREATEST(COALESCE(TRY_CAST(tok[4] AS BIGINT), 0), 0), %[1]d)
-						ELSE 0
-					END AS cache_create_1h_norm,
-					CASE
-						WHEN source = 'message' THEN LEAST(GREATEST(COALESCE(TRY_CAST(tok[5] AS BIGINT), 0), 0), %[1]d)
-						WHEN source = 'session' THEN GREATEST(cache_read, 0)
-						ELSE LEAST(GREATEST(cache_read, 0), %[1]d)
-					END AS cache_read_norm,
-					CASE
-						WHEN source = 'message' THEN LEAST(GREATEST(COALESCE(TRY_CAST(tok[6] AS BIGINT), 0), 0), %[1]d)
-						WHEN source = 'session' THEN GREATEST(reasoning_tokens, 0)
-						ELSE LEAST(GREATEST(reasoning_tokens, 0), %[1]d)
-					END AS reasoning_tokens_norm,
-					CASE
-						WHEN source = 'message' THEN GREATEST(COALESCE(TRY_CAST(tok[7] AS BIGINT), 0), 0)
-						ELSE 0
-					END AS web_search_requests_norm,
-					cost_microdollars, cost_source, cost_status
-			FROM (SELECT *, `+duckUsageMessageTokensSQL+` AS tok FROM usage_raw)
+				-- 1h-TTL subset of cache_create_norm from the nested
+				-- Anthropic breakdown; only message rows carry it.
+				cache_create_1h AS cache_create_1h_norm,
+				CASE
+					WHEN source = 'session' THEN GREATEST(cache_read, 0)
+					ELSE LEAST(GREATEST(cache_read, 0), %[1]d)
+				END AS cache_read_norm,
+				CASE
+					WHEN source = 'session' THEN GREATEST(reasoning_tokens, 0)
+					ELSE LEAST(GREATEST(reasoning_tokens, 0), %[1]d)
+				END AS reasoning_tokens_norm,
+				web_search_requests AS web_search_requests_norm,
+				cost_microdollars, cost_source, cost_status
+			FROM usage_raw
 		),
 		activity_usage_candidates AS (
 			SELECT id FROM candidate_sessions

@@ -1472,6 +1472,10 @@ the SQL.
   Never store DuckDB sync state in SQLite.
 - Store frustration-marker counts at push and rebuild when the counting rules
   change.
+- Read message token counters from the `messages.usage_*` columns, which push
+  fills with `usagefacts.ParseTokenUsage`, the parser SQLite reads with. Do not
+  extract them from `token_usage` in read SQL. Schema version 29 rebuilds the
+  mirror to fill them. The harness-recorded cost is still read from the JSON.
 - Replace whole sessions during incremental updates and gate them with
   per-session fingerprints. Do not add per-table, per-column, or diff-based
   updates.

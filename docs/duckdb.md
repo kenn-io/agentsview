@@ -40,6 +40,11 @@ Search matches text extracted from tool-result images when
 [`[image_text]`](configuration.md#image-text) is enabled locally. The first
 push after upgrading rebuilds the mirror to copy existing image text.
 
+Usage and Activity read each message's token counts from columns that push
+fills, without parsing the message's token JSON. The first push after upgrading
+rebuilds the mirror to fill them. Serve requires that rebuild before opening an
+older mirror.
+
 ## Quick Start
 
 ```bash

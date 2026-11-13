@@ -22,6 +22,7 @@ import (
 	"go.kenn.io/agentsview/internal/money"
 	"go.kenn.io/agentsview/internal/signals"
 	"go.kenn.io/agentsview/internal/storage"
+	"go.kenn.io/agentsview/internal/usagefacts"
 )
 
 func (s *Sync) syncModelPricing(ctx context.Context) error {
@@ -1110,6 +1111,10 @@ func insertMessages(
 ) error {
 	for _, m := range msgs {
 		dialogue, _ := db.StoredDialogue(m.Content, m.ThinkingText, m.DialogueText)
+		// Usage reads take these counters from typed columns, parsed here
+		// by the same function SQLite reads with, so no read parses
+		// token_usage.
+		usage := usagefacts.ParseTokenUsage(string(m.TokenUsage))
 		if err := batch.add(ctx, "messages",
 			m.ID, m.SessionID, m.Ordinal, m.Role, m.Content,
 			m.ThinkingText, dialogue, timeValue(m.Timestamp),
@@ -1120,6 +1125,9 @@ func insertMessages(
 			m.ClaudeMessageID, m.ClaudeRequestID,
 			m.SourceType, m.SourceSubtype, m.PromptSource, m.SourceUUID,
 			m.SourceParentUUID, m.IsSidechain, m.IsCompactBoundary,
+			usage.InputTokens, usage.OutputTokens, usage.CacheCreationTokens,
+			usage.CacheCreation1hTokens, usage.CacheReadTokens,
+			usage.ReasoningTokens, usage.WebSearchRequests,
 		); err != nil {
 			return fmt.Errorf("inserting duckdb messages: %w", err)
 		}
