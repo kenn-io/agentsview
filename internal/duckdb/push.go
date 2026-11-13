@@ -120,7 +120,7 @@ func loadDuckGenAIPricingState(
 ) (*db.GenAIPricingState, error) {
 	var state db.GenAIPricingState
 	err := q.QueryRowContext(ctx, `
-		SELECT version, source_ref, source, lower(sha256(data_json)), updated_at
+		SELECT version, source_ref, source, sha256(data_json), updated_at
 		FROM genai_pricing WHERE singleton = 1`).Scan(
 		&state.Version, &state.SourceRef, &state.Source,
 		&state.DataSHA256, &state.UpdatedAt,

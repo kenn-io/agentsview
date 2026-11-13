@@ -3,6 +3,7 @@ package clickhouse
 import (
 	"context"
 	"database/sql"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"strconv"
@@ -209,11 +210,14 @@ func loadGenAIPricingState(
 	ctx context.Context, q genAIPricingQuerier,
 ) (*db.GenAIPricingState, error) {
 	var state db.GenAIPricingState
+	// SHA256 returns the raw 32-byte digest; encoding it here sends half the
+	// bytes a hex string would.
+	var digest string
 	err := q.QueryRowContext(ctx, `
-		SELECT version, source_ref, source, lower(hex(SHA256(data_json))), updated_at
+		SELECT version, source_ref, source, SHA256(data_json), updated_at
 		FROM genai_pricing WHERE singleton = 1`).Scan(
 		&state.Version, &state.SourceRef, &state.Source,
-		&state.DataSHA256, &state.UpdatedAt,
+		&digest, &state.UpdatedAt,
 	)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, nil
@@ -221,6 +225,7 @@ func loadGenAIPricingState(
 	if err != nil {
 		return nil, fmt.Errorf("reading clickhouse GenAI pricing state: %w", err)
 	}
+	state.DataSHA256 = hex.EncodeToString([]byte(digest))
 	return &state, nil
 }
 
