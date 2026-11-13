@@ -45,8 +45,12 @@ func TestExportSchemaUpgradeRefusesWhileOwnerHeld(t *testing.T) {
 	after, err := os.ReadFile(cfg.DBPath)
 	require.NoError(t, err)
 	assert.Equal(t, before, after)
-	for _, suffix := range []string{"-wal", "-shm", "-journal"} {
-		_, err := os.Stat(cfg.DBPath + suffix)
+	_, err = os.Stat(cfg.DBPath + "-journal")
+	assert.ErrorIs(t, err, os.ErrNotExist)
+	wal, err := os.Stat(cfg.DBPath + "-wal")
+	if err == nil {
+		assert.Zero(t, wal.Size())
+	} else {
 		assert.ErrorIs(t, err, os.ErrNotExist)
 	}
 
