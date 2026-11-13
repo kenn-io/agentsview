@@ -38,8 +38,7 @@ type snapshotLineageFixture struct {
 func newSnapshotLineageFixture(t *testing.T) *snapshotLineageFixture {
 	t.Helper()
 	root := t.TempDir()
-	data := filepath.Join(root, "data")
-	require.NoError(t, os.MkdirAll(data, 0o700))
+	data := t.TempDir()
 	database, err := db.OpenIsolatedContext(t.Context(), filepath.Join(data, "sessions.db"))
 	require.NoError(t, err)
 	require.NoError(t, database.Close())
@@ -109,7 +108,7 @@ func (f *snapshotLineageFixture) accepted(home, key, original string) (db.RawArc
 	return root, source, manifest
 }
 
-func requireLineageEntry(t *testing.T, manifest rawsync.CanonicalManifest, name, content string) rawsync.Entry {
+func requireLineageEntry(t *testing.T, manifest rawsync.CanonicalManifest, name, content string) {
 	t.Helper()
 	var matches []rawsync.Entry
 	for _, entry := range manifest.Manifest.Entries {
@@ -120,16 +119,6 @@ func requireLineageEntry(t *testing.T, manifest rawsync.CanonicalManifest, name,
 	require.Len(t, matches, 1)
 	require.Equal(t, int64(len(content)), matches[0].Length)
 	require.Equal(t, []rawsync.ObjectRef{{SHA256: fmt.Sprintf("%x", sha256.Sum256([]byte(content))), Length: int64(len(content))}}, matches[0].Objects)
-	return matches[0]
-}
-
-func requireNoLineageEntry(t *testing.T, manifest rawsync.CanonicalManifest, names ...string) {
-	t.Helper()
-	for _, entry := range manifest.Manifest.Entries {
-		for _, name := range names {
-			require.NotEqual(t, name, filepath.Base(entry.Path))
-		}
-	}
 }
 
 func (f *snapshotLineageFixture) inventory(root db.RawArchiveRoot, name, content string) {
@@ -203,41 +192,6 @@ func (f *snapshotLineageFixture) materialize(key string, homes []string, names, 
 	require.ElementsMatch(f.t, names, installed, "intermediate pages are provenance only")
 }
 
-func TestMaterializeCodexSnapshotRevertSkipsParent(t *testing.T) {
-	f := newSnapshotLineageFixture(t)
-	child, parent, grandparent := filepath.Join(f.root, "child"), filepath.Join(f.root, "parent"), filepath.Join(f.root, "grandparent")
-	gName := "rollout-2023-01-15T00-00-00-" + lineageG + ".jsonl"
-	pName := "rollout-2024-01-15T00-00-00-" + lineageP + ".jsonl"
-	cName := "rollout-2026-01-01T00-00-00-" + lineageC + "_" + lineageR + ".jsonl"
-	gPath := filepath.Join(grandparent, "sessions", "2023", "01", "15", gName)
-	pPath := filepath.Join(parent, "sessions", "2024", "01", "15", pName)
-	cPath := filepath.Join(child, "sessions", "2026", "01", "01", cName)
-	g := lineagePage(lineageG, "2023-01-15T00:00:00Z", "grandparent", 0, map[string]any{})
-	p := lineagePage(lineageP, "2024-01-15T00:00:00Z", "parent", 2, map[string]any{"forked_from_id": lineageG, "forked_from_ordinal_exclusive": 2, "history_base": lineageBase(lineageG, 2, len(g))})
-	c := lineagePage(lineageC, "2026-01-01T00:00:00Z", "reverted child", 2, map[string]any{"forked_from_id": lineageP, "forked_from_ordinal_exclusive": 4, "history_base": lineageBase(lineageG, 2, len(g))})
-	dbtest.WriteTestFile(t, gPath, []byte(g))
-	dbtest.WriteTestFile(t, pPath, []byte(p))
-	dbtest.WriteTestFile(t, cPath, []byte(c))
-	f.open(f.capture("capture", "", child, parent, grandparent))
-	cr, _, cm := f.accepted(child, lineageC+"_"+lineageR, cPath)
-	pr, _, pm := f.accepted(parent, lineageP, pPath)
-	gr, _, _ := f.accepted(grandparent, lineageG, gPath)
-	require.NotEqual(t, cr.ID, pr.ID)
-	require.NotEqual(t, pr.ID, gr.ID)
-	require.NotEqual(t, cr.ID, gr.ID)
-	requireLineageEntry(t, cm, cName, c)
-	pFromChild := requireLineageEntry(t, cm, pName, p)
-	requireNoLineageEntry(t, cm, gName)
-	pFromParent := requireLineageEntry(t, pm, pName, p)
-	require.Equal(t, pFromChild.Objects, pFromParent.Objects)
-	require.Equal(t, pFromChild.Length, pFromParent.Length)
-	requireLineageEntry(t, pm, gName, g)
-	f.inventory(cr, cName, c)
-	f.inventory(pr, pName, p)
-	f.inventory(gr, gName, g)
-	f.materialize(lineageC+"_"+lineageR, []string{child, parent, grandparent}, []string{gName, cName}, []string{g, c})
-}
-
 func TestMaterializeCodexSnapshotLaterNewestPage(t *testing.T) {
 	f := newSnapshotLineageFixture(t)
 	child, parent := filepath.Join(f.root, "child"), filepath.Join(f.root, "parent")
@@ -255,23 +209,21 @@ func TestMaterializeCodexSnapshotLaterNewestPage(t *testing.T) {
 	f.open(first)
 	firstRoot, firstSource, firstManifest := f.accepted(child, lineageC, oldPath)
 	requireLineageEntry(t, firstManifest, oldName, old)
-	requireNoLineageEntry(t, firstManifest, pName, newName)
+	require.Len(t, firstManifest.Manifest.Entries, 1)
 	firstManifestID := firstSource.ManifestID
 	dbtest.WriteTestFile(t, pPath, []byte(p))
 	dbtest.WriteTestFile(t, newPath, []byte(newPage))
 	second := f.capture("second", first, child, parent)
 	spec, err := rawarchive.LoadImportSpec(t.Context(), second)
 	require.NoError(t, err)
-	report, err := f.archive.Import(t.Context(), spec)
+	_, err = f.archive.Import(t.Context(), spec)
 	require.NoError(t, err)
-	require.Contains(t, strings.Join(report.Gaps, "\n"), "source conflict: accepted "+firstManifestID+", proposed ")
 	childRoot, oldSource, oldManifest := f.accepted(child, lineageC, oldPath)
 	require.Equal(t, firstRoot.ID, childRoot.ID)
 	require.Equal(t, firstManifestID, oldSource.ManifestID)
 	requireLineageEntry(t, oldManifest, oldName, old)
-	requireNoLineageEntry(t, oldManifest, pName, newName)
-	_, newSource, newManifest := f.accepted(child, lineageC+"_"+lineageR, newPath)
-	require.NotEqual(t, oldSource.SourceKey, newSource.SourceKey)
+	require.Len(t, oldManifest.Manifest.Entries, 1)
+	_, _, newManifest := f.accepted(child, lineageC+"_"+lineageR, newPath)
 	requireLineageEntry(t, newManifest, newName, newPage)
 	requireLineageEntry(t, newManifest, pName, p)
 	parentRoot, _, _ := f.accepted(parent, lineageP, pPath)

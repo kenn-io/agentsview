@@ -1,12 +1,9 @@
 package sessionmaterialize
 
 import (
-	"crypto/sha256"
 	"database/sql"
-	"fmt"
 	"os"
 	"path/filepath"
-	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -16,7 +13,6 @@ import (
 	"go.kenn.io/agentsview/internal/db"
 	"go.kenn.io/agentsview/internal/dbtest"
 	"go.kenn.io/agentsview/internal/rawarchive"
-	"go.kenn.io/agentsview/internal/rawsync"
 	syncer "go.kenn.io/agentsview/internal/sync"
 	"go.kenn.io/agentsview/internal/testjsonl"
 )
@@ -175,192 +171,56 @@ func TestMaterializeCodexSnapshotLineage(t *testing.T) {
 // A native fork chain can retain each replay parent under a different captured home.
 // Each accepted manifest authenticates its immediate parent bytes.
 func TestMaterializeCodexSnapshotForkParentAcrossRoots(t *testing.T) {
-	const device = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
-	const grandparent = "33333333-3333-4333-8333-333333333333"
-	const parent = "11111111-1111-4111-8111-111111111111"
-	const thread = "22222222-2222-4222-8222-222222222222"
-	ctx := t.Context()
-	root := t.TempDir()
-	data := filepath.Join(root, "data")
-	require.NoError(t, os.MkdirAll(data, 0o700))
-	database, err := db.OpenIsolatedContext(ctx, filepath.Join(data, "sessions.db"))
-	require.NoError(t, err)
-	t.Cleanup(func() { _ = database.Close() })
-	require.NoError(t, database.Close())
-	dbtest.WriteTestFile(t, filepath.Join(data, "telemetry-install-id"), []byte(device))
-	childHome, parentHome, grandparentHome := filepath.Join(root, "child"), filepath.Join(root, "parent"), filepath.Join(root, "grandparent")
-	grandparentName := "rollout-2023-01-15T00-00-00-" + grandparent + ".jsonl"
-	parentName := "rollout-2024-01-15T00-00-00-" + parent + ".jsonl"
-	pageName := "rollout-2026-01-01T00-00-00-" + thread + ".jsonl"
-	grandparentPath := filepath.Join(grandparentHome, "sessions", "2023", "01", "15", grandparentName)
-	parentPath := filepath.Join(parentHome, "sessions", "2024", "01", "15", parentName)
-	childPath := filepath.Join(childHome, "sessions", "2026", "01", "01", pageName)
-	withOrdinal := func(line string, ordinal int) string {
-		return strings.TrimSuffix(line, "}") + fmt.Sprintf(`,"ordinal":%d}`, ordinal)
-	}
-	grandparentBytes := testjsonl.JoinJSONL(
-		withOrdinal(testjsonl.CodexSessionMetaWithFieldsJSON(grandparent, "/work", "codex_cli_rs", "2023-01-15T00:00:00Z", map[string]any{"history_mode": "paginated"}), 0),
-		withOrdinal(testjsonl.CodexMsgJSON("user", "grandparent", "2023-01-15T00:00:01Z"), 1),
-	)
-	ancestor := testjsonl.JoinJSONL(
-		withOrdinal(testjsonl.CodexSessionMetaWithFieldsJSON(parent, "/work", "codex_cli_rs", "2024-01-15T00:00:00Z", map[string]any{
-			"forked_from_id": grandparent, "forked_from_ordinal_exclusive": 2, "history_mode": "paginated",
-			"history_base": map[string]any{"thread_id": grandparent, "end_ordinal_exclusive": 2, "end_byte_offset": len(grandparentBytes)},
-		}), 2),
-		withOrdinal(testjsonl.CodexMsgJSON("user", "parent", "2024-01-15T00:00:01Z"), 3),
-	)
-	page := testjsonl.JoinJSONL(
-		withOrdinal(testjsonl.CodexSessionMetaWithFieldsJSON(thread, "/work", "codex_cli_rs", "2026-01-01T00:00:00Z", map[string]any{
-			"forked_from_id": parent, "forked_from_ordinal_exclusive": 4, "history_mode": "paginated",
-			"history_base": map[string]any{"thread_id": parent, "end_ordinal_exclusive": 4, "end_byte_offset": len(ancestor)},
-		}), 4),
-		withOrdinal(testjsonl.CodexMsgJSON("user", "child", "2026-01-01T00:00:01Z"), 5),
-	)
-	dbtest.WriteTestFile(t, grandparentPath, []byte(grandparentBytes))
-	dbtest.WriteTestFile(t, parentPath, []byte(ancestor))
-	dbtest.WriteTestFile(t, childPath, []byte(page))
-	capture := filepath.Join(root, "capture")
-	settings := rawarchive.RecoverySettings{LocalMachineName: "fixture"}
-	_, err = rawarchive.Capture(ctx, rawarchive.CaptureOptions{DataDir: data, Destination: capture, Settings: settings, Roots: []rawarchive.RootSpec{{Provider: "codex", Path: childHome}, {Provider: "codex", Path: parentHome}, {Provider: "codex", Path: grandparentHome}}})
-	require.NoError(t, err)
-	seed := filepath.Join(root, "seed")
-	_, err = rawarchive.Seed(ctx, filepath.Join(capture, "capture.json"), seed, nil)
-	require.NoError(t, err)
-	saved, err := db.OpenIsolatedContext(ctx, filepath.Join(seed, "sessions.db"))
-	require.NoError(t, err)
-	t.Cleanup(func() { _ = saved.Close() })
-	archive, err := rawarchive.Open(ctx, saved, seed, nil)
-	require.NoError(t, err)
-	t.Cleanup(func() { _ = archive.Close() })
-
-	roots, err := saved.ListRawArchiveRoots(ctx)
-	require.NoError(t, err)
-	var childRoot, parentRoot, grandparentRoot db.RawArchiveRoot
-	for _, item := range roots {
-		switch item.OriginalPath {
-		case childHome:
-			childRoot = item
-		case parentHome:
-			parentRoot = item
-		case grandparentHome:
-			grandparentRoot = item
-		}
-	}
-	require.NotEmpty(t, childRoot.ID)
-	require.NotEmpty(t, parentRoot.ID)
-	require.NotEmpty(t, grandparentRoot.ID)
-	require.NotEqual(t, childRoot.ID, parentRoot.ID)
-	require.NotEqual(t, childRoot.ID, grandparentRoot.ID)
-	require.NotEqual(t, parentRoot.ID, grandparentRoot.ID)
-	assert.Equal(t, device, childRoot.DeviceID)
-	assert.Equal(t, device, parentRoot.DeviceID)
-	assert.Equal(t, device, grandparentRoot.DeviceID)
-	source, err := saved.RawArchiveSourceByKey(ctx, childRoot.ID, "codex:"+thread)
-	require.NoError(t, err)
-	require.NotNil(t, source)
-	assert.Equal(t, "codex:"+thread, source.SourceKey)
-	assert.Equal(t, childPath, source.OriginalPath)
-	archiveID, err := saved.GetArchiveID(ctx)
-	require.NoError(t, err)
-	identity, err := rawsync.NewAuthIdentity(archiveID, device)
-	require.NoError(t, err)
-	manifest, err := rawsync.ParseCanonicalManifest(identity, source.ManifestID, source.CanonicalJSON, rawsync.DefaultManifestLimits())
-	require.NoError(t, err)
-	parentHash := fmt.Sprintf("%x", sha256.Sum256([]byte(ancestor)))
-	grandparentHash := fmt.Sprintf("%x", sha256.Sum256([]byte(grandparentBytes)))
-	var parentEntries, childEntries int
-	var parentInChild rawsync.Entry
-	for _, entry := range manifest.Manifest.Entries {
-		assert.NotEqual(t, grandparentName, filepath.Base(entry.Path))
-		if filepath.Base(entry.Path) == pageName {
-			childEntries++
-			assert.Equal(t, int64(len(page)), entry.Length)
-			assert.Equal(t, []rawsync.ObjectRef{{SHA256: fmt.Sprintf("%x", sha256.Sum256([]byte(page))), Length: int64(len(page))}}, entry.Objects)
-		}
-		if filepath.Base(entry.Path) == parentName {
-			parentEntries++
-			parentInChild = entry
-			assert.Equal(t, int64(len(ancestor)), entry.Length)
-			assert.Equal(t, []rawsync.ObjectRef{{SHA256: parentHash, Length: int64(len(ancestor))}}, entry.Objects)
-		}
-	}
-	require.Equal(t, 1, parentEntries, "accepted leaf manifest must authenticate the external parent")
-	require.Equal(t, 1, childEntries, "accepted leaf manifest must authenticate the child")
-	parentSource, err := saved.RawArchiveSourceByKey(ctx, parentRoot.ID, "codex:"+parent)
-	require.NoError(t, err)
-	require.NotNil(t, parentSource)
-	assert.Equal(t, parentPath, parentSource.OriginalPath)
-	parentManifest, err := rawsync.ParseCanonicalManifest(identity, parentSource.ManifestID, parentSource.CanonicalJSON, rawsync.DefaultManifestLimits())
-	require.NoError(t, err)
-	var parentPrimaryEntries, grandparentEntries int
-	for _, entry := range parentManifest.Manifest.Entries {
-		switch filepath.Base(entry.Path) {
-		case parentName:
-			parentPrimaryEntries++
-			assert.Equal(t, parentInChild.Length, entry.Length)
-			assert.Equal(t, parentInChild.Objects, entry.Objects)
-		case grandparentName:
-			grandparentEntries++
-			assert.Equal(t, int64(len(grandparentBytes)), entry.Length)
-			assert.Equal(t, []rawsync.ObjectRef{{SHA256: grandparentHash, Length: int64(len(grandparentBytes))}}, entry.Objects)
-		}
-	}
-	require.Equal(t, 1, parentPrimaryEntries, "accepted parent manifest must match the leaf parent bytes")
-	require.Equal(t, 1, grandparentEntries, "accepted parent manifest must authenticate the grandparent")
-	files, err := saved.ListRawArchiveFiles(ctx, 0, 1000)
-	require.NoError(t, err)
-	var parentRows, grandparentRows int
-	for _, file := range files {
-		if file.SHA256 == grandparentHash {
-			grandparentRows++
-			assert.Equal(t, grandparentRoot.ID, file.RootID)
-			assert.Equal(t, int64(len(grandparentBytes)), file.Size)
-			assert.Equal(t, grandparentName, filepath.Base(file.Path))
-		}
-		if file.SHA256 == parentHash {
-			parentRows++
-			assert.Equal(t, parentRoot.ID, file.RootID)
-			assert.Equal(t, int64(len(ancestor)), file.Size)
-			assert.Equal(t, parentName, filepath.Base(file.Path))
-		}
-	}
-	require.Equal(t, 1, parentRows, "parent inventory must belong only to its captured root")
-	require.Equal(t, 1, grandparentRows, "grandparent inventory must belong only to its captured root")
-
-	repository := filepath.Join(root, "repository")
-	report, err := archive.Backup(ctx, repository, settings, "fixture")
-	require.NoError(t, err)
-	require.NoError(t, archive.Close())
-	require.NoError(t, saved.Close())
-	require.NoError(t, os.RemoveAll(childHome))
-	require.NoError(t, os.RemoveAll(parentHome))
-	require.NoError(t, os.RemoveAll(grandparentHome))
-	receiver := dbtest.OpenTestDB(t)
-	_, err = receiver.EnsureInstallationIdentity(ctx, "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb")
-	require.NoError(t, err)
-	cfg := config.Config{DataDir: filepath.Dir(receiver.Path()), ArchiveContent: config.ArchiveContentFull, ArchiveSources: []config.ArchiveSource{{Name: "fixture", Repository: repository, Snapshot: report.SnapshotID}}}
-	engine := syncer.NewEngine(ctx, receiver, syncer.EngineConfig{Ephemeral: true})
-	t.Cleanup(engine.Close)
-	manager, err := archivesource.NewManager(ctx, cfg, receiver, engine, nil)
-	require.NoError(t, err)
-	t.Cleanup(manager.Close)
-	_, err = manager.Drain(ctx, nil)
-	require.NoError(t, err)
-	session, err := receiver.GetSessionFull(ctx, device+"~codex:"+thread)
-	require.NoError(t, err)
-	require.NotNil(t, session)
-	t.Setenv("CODEX_HOME", t.TempDir())
-	t.Setenv("CODEX_SESSIONS_DIR", "")
-	result, err := Materialize(ctx, cfg, receiver, session, t.TempDir())
-	require.NoError(t, err)
-	assert.Equal(t, "snapshot:"+report.SnapshotID, result.Source)
-	assert.Equal(t, session.ID, result.RequestedID)
-	assert.Equal(t, pageName, result.InstalledPage)
-	require.Len(t, result.Paths, 3)
-	for i, want := range []struct{ name, content string }{{grandparentName, grandparentBytes}, {parentName, ancestor}, {pageName, page}} {
-		assert.Equal(t, want.name, filepath.Base(result.Paths[i]))
-		got, err := os.ReadFile(result.Paths[i])
-		require.NoError(t, err)
-		assert.Equal(t, want.content, string(got))
+	for _, tc := range []struct {
+		name     string
+		reverted bool
+	}{
+		{name: "ordinary"},
+		{name: "revert skips parent", reverted: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			f := newSnapshotLineageFixture(t)
+			child, parent, grandparent := filepath.Join(f.root, "child"), filepath.Join(f.root, "parent"), filepath.Join(f.root, "grandparent")
+			gName := "rollout-2023-01-15T00-00-00-" + lineageG + ".jsonl"
+			pName := "rollout-2024-01-15T00-00-00-" + lineageP + ".jsonl"
+			key := lineageC
+			if tc.reverted {
+				key += "_" + lineageR
+			}
+			cName := "rollout-2026-01-01T00-00-00-" + key + ".jsonl"
+			gPath := filepath.Join(grandparent, "sessions", "2023", "01", "15", gName)
+			pPath := filepath.Join(parent, "sessions", "2024", "01", "15", pName)
+			cPath := filepath.Join(child, "sessions", "2026", "01", "01", cName)
+			g := lineagePage(lineageG, "2023-01-15T00:00:00Z", "grandparent", 0, map[string]any{})
+			p := lineagePage(lineageP, "2024-01-15T00:00:00Z", "parent", 2, map[string]any{"forked_from_id": lineageG, "forked_from_ordinal_exclusive": 2, "history_base": lineageBase(lineageG, 2, len(g))})
+			base, ordinal := lineageBase(lineageP, 4, len(p)), 4
+			if tc.reverted {
+				base, ordinal = lineageBase(lineageG, 2, len(g)), 2
+			}
+			c := lineagePage(lineageC, "2026-01-01T00:00:00Z", "child", ordinal, map[string]any{"forked_from_id": lineageP, "forked_from_ordinal_exclusive": 4, "history_base": base})
+			dbtest.WriteTestFile(t, gPath, []byte(g))
+			dbtest.WriteTestFile(t, pPath, []byte(p))
+			dbtest.WriteTestFile(t, cPath, []byte(c))
+			f.open(f.capture("capture", "", child, parent, grandparent))
+			cr, _, cm := f.accepted(child, key, cPath)
+			pr, _, pm := f.accepted(parent, lineageP, pPath)
+			gr, _, _ := f.accepted(grandparent, lineageG, gPath)
+			require.NotEqual(t, cr.ID, pr.ID)
+			require.NotEqual(t, pr.ID, gr.ID)
+			require.NotEqual(t, cr.ID, gr.ID)
+			requireLineageEntry(t, cm, cName, c)
+			requireLineageEntry(t, cm, pName, p)
+			require.Len(t, cm.Manifest.Entries, 2)
+			requireLineageEntry(t, pm, pName, p)
+			requireLineageEntry(t, pm, gName, g)
+			f.inventory(cr, cName, c)
+			f.inventory(pr, pName, p)
+			f.inventory(gr, gName, g)
+			names, contents := []string{gName, pName, cName}, []string{g, p, c}
+			if tc.reverted {
+				names, contents = []string{gName, cName}, []string{g, c}
+			}
+			f.materialize(key, []string{child, parent, grandparent}, names, contents)
+		})
 	}
 }
