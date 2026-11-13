@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/gofrs/flock"
 	"go.kenn.io/agentsview/internal/artifact"
 	"go.kenn.io/agentsview/internal/config"
 	"go.kenn.io/agentsview/internal/db"
@@ -43,11 +44,12 @@ func Retained(ctx context.Context, cfg config.Config, database *db.DB, sessionID
 	var reader *docbank.ContentReader
 	var tx *sql.Tx
 	var connection *sql.DB
+	var lock *flock.Flock
 	var owner db.ArchiveSessionProvenance
 	var archiveID string
 	var err error
 	if len(owners) != 0 {
-		reader, connection, tx, owner, archiveID, err = openRetainedDirectory(ctx, cfg.ArchiveSources, owners)
+		reader, connection, tx, lock, owner, archiveID, err = openRetainedDirectory(ctx, cfg.ArchiveSources, owners)
 		if err != nil {
 			return nil, "", "", err
 		}
@@ -74,6 +76,9 @@ func Retained(ctx context.Context, cfg config.Config, database *db.DB, sessionID
 			retErr = errors.Join(retErr, connection.Close())
 		}
 		retErr = errors.Join(retErr, reader.Close())
+		if lock != nil {
+			retErr = errors.Join(retErr, lock.Close())
+		}
 	}()
 	if len(owners) == 0 {
 		archiveID, err = checkSavedSchema(ctx, tx)
@@ -109,75 +114,113 @@ func Retained(ctx context.Context, cfg config.Config, database *db.DB, sessionID
 }
 
 // openRetainedDirectory checks each configured directory under its own lease.
-func openRetainedDirectory(ctx context.Context, sources []config.ArchiveSource, owners []db.ArchiveSessionProvenance) (*docbank.ContentReader, *sql.DB, *sql.Tx, db.ArchiveSessionProvenance, string, error) {
+func openRetainedDirectory(ctx context.Context, sources []config.ArchiveSource, owners []db.ArchiveSessionProvenance) (*docbank.ContentReader, *sql.DB, *sql.Tx, *flock.Flock, db.ArchiveSessionProvenance, string, error) {
 	var candidateErr error
 	for _, candidate := range sources {
 		if candidate.Directory == "" {
 			continue
 		}
-		reader, connection, tx, archiveID, err := openDirectoryCandidate(ctx, candidate.Directory)
+		reader, connection, tx, lock, archiveID, err := openDirectoryCandidate(ctx, candidate.Directory)
 		if err != nil {
 			if ctx.Err() != nil {
-				return nil, nil, nil, db.ArchiveSessionProvenance{}, "", errors.Join(ctx.Err(), err)
+				return nil, nil, nil, nil, db.ArchiveSessionProvenance{}, "", errors.Join(ctx.Err(), err)
 			}
 			candidateErr = errors.Join(candidateErr, fmt.Errorf("directory %s: %w", candidate.Directory, err))
 			continue
 		}
 		for _, owner := range owners {
 			if owner.Attachment.RepositoryID == "archive:"+archiveID && owner.Attachment.SnapshotID == "directory:"+archiveID {
-				return reader, connection, tx, owner, archiveID, nil
+				return reader, connection, tx, lock, owner, archiveID, nil
 			}
 		}
 		rollbackErr := tx.Rollback()
 		if errors.Is(rollbackErr, sql.ErrTxDone) {
 			rollbackErr = nil
 		}
-		if err := errors.Join(ctx.Err(), rollbackErr, connection.Close(), reader.Close()); err != nil {
-			return nil, nil, nil, db.ArchiveSessionProvenance{}, "", err
+		if err := errors.Join(ctx.Err(), rollbackErr, connection.Close(), reader.Close(), lock.Close()); err != nil {
+			return nil, nil, nil, nil, db.ArchiveSessionProvenance{}, "", err
 		}
 	}
 	if err := ctx.Err(); err != nil {
-		return nil, nil, nil, db.ArchiveSessionProvenance{}, "", err
+		return nil, nil, nil, nil, db.ArchiveSessionProvenance{}, "", err
 	}
-	return nil, nil, nil, db.ArchiveSessionProvenance{}, "", errors.Join(errors.New("owning directory is not configured or unavailable"), candidateErr)
+	return nil, nil, nil, nil, db.ArchiveSessionProvenance{}, "", errors.Join(errors.New("owning directory is not configured or unavailable"), candidateErr)
 }
 
-func openDirectoryCandidate(ctx context.Context, directory string) (*docbank.ContentReader, *sql.DB, *sql.Tx, string, error) {
+func openDirectoryCandidate(ctx context.Context, directory string) (_ *docbank.ContentReader, _ *sql.DB, _ *sql.Tx, _ *flock.Flock, _ string, retErr error) {
 	application, vault, err := directoryLayout(directory)
 	if err != nil {
-		return nil, nil, nil, "", err
+		return nil, nil, nil, nil, "", err
 	}
-	reader, err := docbank.OpenContentReader(ctx, docbank.ContentReaderConfig{Root: vault})
+	lockPath := filepath.Join(application, "db.write.lock")
+	info, err := os.Lstat(lockPath)
+	if errors.Is(err, os.ErrNotExist) || (err == nil && !info.Mode().IsRegular()) {
+		return nil, nil, nil, nil, "", errors.New("archive directory requires an existing regular db.write.lock; attach or start its owner, then retry")
+	}
 	if err != nil {
-		return nil, nil, nil, "", vaultReadError(err)
+		return nil, nil, nil, nil, "", err
+	}
+	lock := flock.New(lockPath, flock.SetFlag(os.O_RDONLY))
+	locked, err := lock.TryRLock()
+	if err != nil || !locked {
+		if err == nil {
+			err = errors.New("archive is busy; stop its owner and retry")
+		}
+		return nil, nil, nil, nil, "", errors.Join(err, lock.Close())
+	}
+	var reader *docbank.ContentReader
+	var connection *sql.DB
+	var tx *sql.Tx
+	defer func() {
+		if retErr == nil {
+			return
+		}
+		if tx != nil {
+			rollbackErr := tx.Rollback()
+			if !errors.Is(rollbackErr, sql.ErrTxDone) {
+				retErr = errors.Join(retErr, rollbackErr)
+			}
+		}
+		if connection != nil {
+			retErr = errors.Join(retErr, connection.Close())
+		}
+		if reader != nil {
+			retErr = errors.Join(retErr, reader.Close())
+		}
+		retErr = errors.Join(retErr, lock.Close())
+	}()
+	reader, err = docbank.OpenContentReader(ctx, docbank.ContentReaderConfig{Root: vault})
+	if err != nil {
+		return nil, nil, nil, nil, "", vaultReadError(err)
 	}
 	saved := filepath.Join(application, "sessions.db")
-	// A separate read-only connection must not create or alter SQLite sidecars.
 	for _, suffix := range []string{"-wal", "-shm", "-journal"} {
 		if _, statErr := os.Lstat(saved + suffix); statErr == nil {
-			return nil, nil, nil, "", errors.Join(errors.New("saved archive database requires owner checkpoint"), reader.Close())
+			return nil, nil, nil, nil, "", errors.New("close the archive writer and retry")
 		} else if !errors.Is(statErr, os.ErrNotExist) {
-			return nil, nil, nil, "", errors.Join(statErr, reader.Close())
+			return nil, nil, nil, nil, "", statErr
 		}
 	}
-	uri := "file:" + (&url.URL{Path: saved}).EscapedPath() + "?mode=ro"
-	connection, err := sql.Open("sqlite3", uri)
+	pending, err := db.CompactRecoveryPending(saved)
 	if err != nil {
-		return nil, nil, nil, "", errors.Join(err, reader.Close())
+		return nil, nil, nil, nil, "", err
 	}
-	tx, err := connection.BeginTx(ctx, &sql.TxOptions{ReadOnly: true})
+	if pending {
+		return nil, nil, nil, nil, "", errors.New("archive compaction recovery is pending; start the owner and retry")
+	}
+	connection, err = sql.Open("sqlite3", immutableURI(saved))
 	if err != nil {
-		return nil, nil, nil, "", errors.Join(err, connection.Close(), reader.Close())
+		return nil, nil, nil, nil, "", err
+	}
+	tx, err = connection.BeginTx(ctx, &sql.TxOptions{ReadOnly: true})
+	if err != nil {
+		return nil, nil, nil, nil, "", err
 	}
 	archiveID, err := checkSavedSchema(ctx, tx)
 	if err != nil {
-		rollbackErr := tx.Rollback()
-		if errors.Is(rollbackErr, sql.ErrTxDone) {
-			rollbackErr = nil
-		}
-		return nil, nil, nil, "", errors.Join(err, rollbackErr, connection.Close(), reader.Close())
+		return nil, nil, nil, nil, "", err
 	}
-	return reader, connection, tx, archiveID, nil
+	return reader, connection, tx, lock, archiveID, nil
 }
 
 func vaultReadError(err error) error {

@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"database/sql"
+	"errors"
 	"fmt"
 	"io/fs"
 	"os"
@@ -11,6 +12,7 @@ import (
 	"runtime"
 	"testing"
 
+	"github.com/gofrs/flock"
 	"github.com/klauspost/compress/zstd"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -83,6 +85,7 @@ func TestRetainedClaudeOriginalAndDirectory(t *testing.T) {
 	require.NoError(t, err)
 	owner.Attachment = db.ArchiveAttachmentKey{RepositoryID: "archive:" + archiveID, SnapshotID: "directory:" + archiveID}
 	require.NoError(t, database.Close())
+	prepareDirectoryOwnerLock(t, seed)
 	directoryCfg := config.Config{ArchiveSources: []config.ArchiveSource{{Directory: seed}}}
 	tree, primary, source, err = Retained(ctx, directoryCfg, nil, id, sourceDevice, id, "claude", "", []db.ArchiveSessionProvenance{owner}, 1<<20, nil)
 	require.NoError(t, err)
@@ -98,18 +101,57 @@ func TestRetainedClaudeOriginalAndDirectory(t *testing.T) {
 	require.NoError(t, os.Mkdir(filepath.Join(alternate, "application"), 0o700))
 	alternateDB := filepath.Join(alternate, "application", "sessions.db")
 	require.NoError(t, os.WriteFile(alternateDB, saved, 0o600))
-	before := retainedTree(t, alternate)
 	alternateCfg := config.Config{ArchiveSources: []config.ArchiveSource{{Directory: filepath.Join(t.TempDir(), "unprepared")}, {Directory: alternate}}}
+	_, _, _, err = Retained(ctx, alternateCfg, nil, id, sourceDevice, id, "claude", "", []db.ArchiveSessionProvenance{owner}, 1<<20, nil)
+	require.ErrorContains(t, err, "existing regular db.write.lock")
+	_, err = os.Stat(filepath.Join(alternate, "application", "db.write.lock"))
+	require.ErrorIs(t, err, os.ErrNotExist)
+	prepareDirectoryOwnerLock(t, filepath.Join(alternate, "application"))
+	before := retainedTree(t, alternate)
 	tree, _, _, err = Retained(ctx, alternateCfg, nil, id, sourceDevice, id, "claude", "", []db.ArchiveSessionProvenance{owner}, 1<<20, nil)
 	require.NoError(t, err)
 	require.NoError(t, tree.Cleanup())
 	assert.Equal(t, before, retainedTree(t, alternate))
-	_, err = os.Stat(filepath.Join(alternate, "application", "db.write.lock"))
-	require.ErrorIs(t, err, os.ErrNotExist)
+	lockPath := filepath.Join(alternate, "application", "db.write.lock")
+	exclusive := flock.New(lockPath)
+	t.Cleanup(func() { _ = exclusive.Close() })
+	locked, err := exclusive.TryLock()
+	require.NoError(t, err)
+	require.True(t, locked)
+	_, _, _, err = Retained(ctx, alternateCfg, nil, id, sourceDevice, id, "claude", "", []db.ArchiveSessionProvenance{owner}, 1<<20, nil)
+	require.ErrorContains(t, err, "archive is busy")
+	require.NoError(t, exclusive.Close())
+	shared := flock.New(lockPath, flock.SetFlag(os.O_RDONLY))
+	t.Cleanup(func() { _ = shared.Close() })
+	locked, err = shared.TryRLock()
+	require.NoError(t, err)
+	require.True(t, locked)
+	tree, _, _, err = Retained(ctx, alternateCfg, nil, id, sourceDevice, id, "claude", "", []db.ArchiveSessionProvenance{owner}, 1<<20, nil)
+	require.NoError(t, err)
+	require.NoError(t, tree.Cleanup())
+	require.NoError(t, shared.Close())
+	pending := filepath.Join(alternate, "application", "compact-recovery.json")
+	require.NoError(t, os.WriteFile(pending, []byte("pending"), 0o600))
+	_, _, _, err = Retained(ctx, alternateCfg, nil, id, sourceDevice, id, "claude", "", []db.ArchiveSessionProvenance{owner}, 1<<20, nil)
+	require.ErrorContains(t, err, "compaction recovery is pending")
+	require.NoError(t, os.Remove(pending))
+	require.NoError(t, os.Remove(lockPath))
+	require.NoError(t, os.Mkdir(lockPath, 0o700))
+	_, _, _, err = Retained(ctx, alternateCfg, nil, id, sourceDevice, id, "claude", "", []db.ArchiveSessionProvenance{owner}, 1<<20, nil)
+	require.ErrorContains(t, err, "existing regular db.write.lock")
+	require.NoError(t, os.Remove(lockPath))
+	if err := os.Symlink(alternateDB, lockPath); err == nil {
+		_, _, _, err = Retained(ctx, alternateCfg, nil, id, sourceDevice, id, "claude", "", []db.ArchiveSessionProvenance{owner}, 1<<20, nil)
+		require.ErrorContains(t, err, "existing regular db.write.lock")
+		require.NoError(t, os.Remove(lockPath))
+	} else if runtime.GOOS != "windows" {
+		require.NoError(t, err)
+	}
+	prepareDirectoryOwnerLock(t, filepath.Join(alternate, "application"))
 	wal := filepath.Join(alternate, "application", "sessions.db-wal")
 	require.NoError(t, os.WriteFile(wal, []byte("pending"), 0o600))
 	_, _, _, err = Retained(ctx, alternateCfg, nil, id, sourceDevice, id, "claude", "", []db.ArchiveSessionProvenance{owner}, 1<<20, nil)
-	require.ErrorContains(t, err, "owner checkpoint")
+	require.ErrorContains(t, err, "close the archive writer and retry")
 	require.NoError(t, os.Remove(wal))
 	cancelled, cancel := context.WithCancel(ctx)
 	cancel()
@@ -276,6 +318,7 @@ func TestRetainedDirectoryReadCreatesNoSidecars(t *testing.T) {
 	}
 	listing, err := os.ReadDir(seed)
 	require.NoError(t, err)
+	var directoryMode fs.FileMode
 	check := func() {
 		t.Helper()
 		after, err := os.ReadDir(seed)
@@ -294,11 +337,18 @@ func TestRetainedDirectoryReadCreatesNoSidecars(t *testing.T) {
 		current, err := os.Stat(dbPath)
 		require.NoError(t, err)
 		assert.Equal(t, info.ModTime(), current.ModTime())
+		assert.Equal(t, info.Mode(), current.Mode())
+		currentDir, err := os.Stat(seed)
+		require.NoError(t, err)
+		assert.Equal(t, directoryMode, currentDir.Mode())
 	}
 	if runtime.GOOS != "windows" {
 		require.NoError(t, os.Chmod(seed, 0o555))
 		t.Cleanup(func() { _ = os.Chmod(seed, 0o700) })
 	}
+	directoryInfo, err := os.Stat(seed)
+	require.NoError(t, err)
+	directoryMode = directoryInfo.Mode()
 	called := false
 	_, _, _, err = Retained(ctx, config.Config{ArchiveSources: []config.ArchiveSource{{Directory: seed}}}, nil, owner.NativeSessionID, sourceDevice, owner.NativeSessionID, "codex", "", []db.ArchiveSessionProvenance{owner}, 1<<20, func(_ string, _, _ []string, _ func(context.Context, string, int64) ([]byte, error)) error {
 		called = true
@@ -308,4 +358,34 @@ func TestRetainedDirectoryReadCreatesNoSidecars(t *testing.T) {
 	require.NoError(t, err)
 	assert.True(t, called)
 	check()
+	callbackErr := errors.New("callback failed")
+	_, _, _, err = Retained(ctx, config.Config{ArchiveSources: []config.ArchiveSource{{Directory: seed}}}, nil, owner.NativeSessionID, sourceDevice, owner.NativeSessionID, "codex", "", []db.ArchiveSessionProvenance{owner}, 1<<20, func(_ string, _, _ []string, _ func(context.Context, string, int64) ([]byte, error)) error {
+		return callbackErr
+	})
+	require.ErrorIs(t, err, callbackErr)
+	cancelCtx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	_, _, _, err = Retained(cancelCtx, config.Config{ArchiveSources: []config.ArchiveSource{{Directory: seed}}}, nil, owner.NativeSessionID, sourceDevice, owner.NativeSessionID, "codex", "", []db.ArchiveSessionProvenance{owner}, 1<<20, func(_ string, _, _ []string, _ func(context.Context, string, int64) ([]byte, error)) error {
+		cancel()
+		return cancelCtx.Err()
+	})
+	require.ErrorIs(t, err, context.Canceled)
+	lock := flock.New(filepath.Join(seed, "db.write.lock"), flock.SetFlag(os.O_RDONLY))
+	t.Cleanup(func() { _ = lock.Close() })
+	locked, err := lock.TryLock()
+	require.NoError(t, err)
+	require.True(t, locked)
+	require.NoError(t, lock.Close())
+	check()
+}
+
+// prepareDirectoryOwnerLock uses the same lock creation as an application owner.
+func prepareDirectoryOwnerLock(t *testing.T, application string) {
+	t.Helper()
+	lock := flock.New(filepath.Join(application, "db.write.lock"))
+	t.Cleanup(func() { _ = lock.Close() })
+	locked, err := lock.TryLock()
+	require.NoError(t, err)
+	require.True(t, locked)
+	require.NoError(t, lock.Close())
 }

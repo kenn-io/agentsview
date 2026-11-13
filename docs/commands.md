@@ -2174,7 +2174,9 @@ configured S3 roots, snapshot attachments, local retained archives, and
 configured directory attachments that own the session. Pi has no retained
 captures. Retained and directory recovery needs an idle, prepared raw vault.
 Stop the owner and retry if the vault is busy; an unprepared vault or an
-uncheckpointed directory database requires its owner to prepare it first.
+uncheckpointed directory database requires its owner to prepare it first. Directory
+recovery takes the existing application lock in shared read-only mode; attach the
+directory or start its owner once to create the lock before using recovery.
 For local sessions, configured originals are tried first; a bound retained
 original is used when the configured source is unavailable. If an owning
 snapshot is unavailable before selection, an equivalent configured directory

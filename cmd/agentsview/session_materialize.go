@@ -25,7 +25,8 @@ func newSessionMaterializeCommand() *cobra.Command {
 		Long: "Install a Claude session with its companions or a Pi or Codex transcript from configured local or mirror sources; Claude and Codex also support S3 roots and snapshots. Print a resume command for a local checkout. " +
 			"Requires a local archive with conversation content; the original files must total at most 512 MiB. " +
 			"End the running session and wait for any S3 uploader to finish before materializing. " +
-			"Claude and Codex support retained archives and configured directory attachments; Pi has no retained captures.",
+			"Claude and Codex support retained archives and configured directory attachments; Pi has no retained captures. " +
+			"Directory recovery requires an existing application lock; attach the directory or start its owner once to create it.",
 		Example: "  agentsview session materialize <id> --cwd <path>",
 		Args:    cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {

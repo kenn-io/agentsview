@@ -39,6 +39,7 @@ func materializeCodex(ctx context.Context, cfg config.Config, database *db.DB, s
 		}
 	}
 	retained := useRetained(cfg, session, owners)
+	var configuredErr error
 archiveSource:
 	if retained || len(owners) > 0 {
 		var pages []codexPage
@@ -71,6 +72,9 @@ archiveSource:
 			}
 		}
 		if err != nil {
+			if configuredErr != nil && configuredErr != errSourceUnavailable {
+				err = errors.Join(configuredErr, err)
+			}
 			return Result{}, fmt.Errorf("reading native Codex transcript: %w", err)
 		}
 		return installCodex(ctx, cwd, source, session.ID, pages)
@@ -347,6 +351,7 @@ archiveSource:
 			return Result{}, lookupErr
 		}
 		if found {
+			configuredErr = err
 			retained = true
 			goto archiveSource
 		}
