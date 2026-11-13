@@ -1517,7 +1517,7 @@ func (s *Store) forEachDailyUsageGroupRow(
 		}
 		if rows, ok := s.dailyUsageRows.Get(memoSlot, memoVersion); ok {
 			if state.ready && len(state.raw) == 0 {
-				s.usageDisk.Keep(memoSlot, usageDiskVersion+memoVersion, func() ([]byte, error) { return encodeUsageRows(rows, dailyUsageRowsBytes, dailyUsageRowBytes) })
+				s.usageDisk.Keep(memoSlot, usageDiskVersion+memoVersion, func() ([]byte, error) { return kept.EncodeRows(rows, dailyUsageRowsBytes, dailyUsageRowBytes) })
 			}
 			for _, r := range rows {
 				if err := visit(r); err != nil {
@@ -1531,7 +1531,7 @@ func (s *Store) forEachDailyUsageGroupRow(
 	diskReady := !top && s.usageDisk.Enabled() && state.ready && len(state.raw) == 0 && memoSlot != ""
 	if diskReady {
 		if data, ok := s.usageDisk.Get(memoSlot, usageDiskVersion+memoVersion); ok {
-			if keptRows, ok := decodeUsageRows[chDailyUsageGroupRow](data); ok {
+			if keptRows, ok := kept.DecodeRows[chDailyUsageGroupRow](data); ok {
 				for _, row := range keptRows {
 					if err := visit(row); err != nil {
 						return err
@@ -1680,7 +1680,7 @@ func (s *Store) forEachDailyUsageGroupRow(
 	if !top && (!state.ready || len(state.raw) != 0 || s.usageCaptureStable(ctx)) {
 		s.dailyUsageRows.Put(memoSlot, memoVersion, memo)
 		if diskReady {
-			if data, err := encodeUsageRows(memo, dailyUsageRowsBytes, dailyUsageRowBytes); err == nil {
+			if data, err := kept.EncodeRows(memo, dailyUsageRowsBytes, dailyUsageRowBytes); err == nil {
 				s.usageDisk.Put(memoSlot, usageDiskVersion+memoVersion, data)
 			}
 		}
@@ -2354,11 +2354,11 @@ func (s *Store) GetTopSessionsByCost(
 	diskReady := s.usageDisk.Enabled() && state.ready && len(state.raw) == 0 && memoSlot != ""
 	out, ok := s.topSessionTotals.Get(memoSlot, memoVersion)
 	if ok && diskReady {
-		s.usageDisk.Keep(memoSlot, topUsageDiskVersion+memoVersion, func() ([]byte, error) { return encodeUsageRows(out, kept.DefaultMaxBytes, db.TopSessionBytes) })
+		s.usageDisk.Keep(memoSlot, topUsageDiskVersion+memoVersion, func() ([]byte, error) { return kept.EncodeRows(out, kept.DefaultMaxBytes, db.TopSessionBytes) })
 	}
 	if !ok && diskReady {
 		if data, found := s.usageDisk.Get(memoSlot, topUsageDiskVersion+memoVersion); found {
-			out, ok = decodeUsageRows[db.TopSessionEntry](data)
+			out, ok = kept.DecodeRows[db.TopSessionEntry](data)
 			if ok {
 				s.topSessionTotals.Put(memoSlot, memoVersion, out)
 			}
@@ -2381,7 +2381,7 @@ func (s *Store) GetTopSessionsByCost(
 		if catalogDigest == pricing.catalog.digest && (!state.ready || len(state.raw) != 0 || s.usageCaptureStable(ctx)) {
 			s.topSessionTotals.Put(memoSlot, memoVersion, out)
 			if diskReady {
-				if data, err := encodeUsageRows(out, kept.DefaultMaxBytes, db.TopSessionBytes); err == nil {
+				if data, err := kept.EncodeRows(out, kept.DefaultMaxBytes, db.TopSessionBytes); err == nil {
 					s.usageDisk.Put(memoSlot, topUsageDiskVersion+memoVersion, data)
 				}
 			}

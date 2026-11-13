@@ -107,6 +107,9 @@ They live under `$CACHE_DIRECTORY/duckdb-activity-reports`, or under
 `agentsview/duckdb-activity-reports` in the user cache directory. Reports no one
 opens for 30 days are removed. Deleting them only slows the next open. If the
 cache directory cannot be created, serve keeps reports in memory only.
+Usage results also use `$CACHE_DIRECTORY/duckdb-usage`, or
+`agentsview/duckdb-usage` in the user cache directory. Deleting these files is
+safe and makes the next Usage visit read the mirror again.
 
 ## Quack Remote Access
 

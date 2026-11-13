@@ -1609,3 +1609,28 @@ func TestPricingResolverDependencyFingerprint(t *testing.T) {
 		})
 	}
 }
+
+func TestPricingResolverCopyAndReplay(t *testing.T) {
+	rows := []EffectivePricingRow{{ModelPattern: "model", Rates: ModelRates{
+		Source: PricingRowSourceCustom,
+		Bands:  []PricingBand{{AboveInputTokens: 100}},
+	}}}
+	base := NewPricingResolver(rows)
+	first := base.Copy()
+	_, lookup := first.Resolve("model", "model")
+	require.True(t, lookup.OK)
+	first.RecordResolvedComputedRequest("model", "model", lookup, 200, 0, 0)
+	first.RecordResolvedReported("model", "model", lookup)
+	first.RecordUnattributedReported()
+	records, unattributed := first.RecordedCounts()
+	replayed := base.Copy()
+	replayed.ReplayRecordedCounts(records, unattributed)
+	want, err := first.BuildBlock()
+	require.NoError(t, err)
+	got, err := replayed.BuildBlock()
+	require.NoError(t, err)
+	require.Equal(t, want, got)
+	lookup.Rates.Bands[0].AboveInputTokens = 999
+	_, again := base.Resolve("model", "model")
+	require.Equal(t, 100, again.Rates.Bands[0].AboveInputTokens)
+}

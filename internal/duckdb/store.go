@@ -46,6 +46,7 @@ type Store struct {
 	fileInfo       os.FileInfo
 	walStamp       string
 	reports        kept.Reports
+	usageDisk      kept.Disk
 	analyticsReads kept.Reads[[]byte]
 	dailyUsage     kept.Reads[db.DailyUsageResult]
 	planUsage      kept.Reads[*db.PlanUsageCountSummary]

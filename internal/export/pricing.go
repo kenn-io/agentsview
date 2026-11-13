@@ -200,7 +200,12 @@ func NewPricingResolverWithDigest(rows []EffectivePricingRow, digest string) *Pr
 // caches. A resolver caches lookups without locking, so each goroutine that
 // resolves prices needs its own copy.
 func (r *PricingResolver) Copy() *PricingResolver {
-	return NewPricingResolverWithDigest(r.rows, r.digest)
+	return &PricingResolver{
+		rows: r.rows, digest: r.digest, byModel: r.byModel,
+		genAI: r.genAI, genAISource: r.genAISource, genAIUpdatedAt: r.genAIUpdatedAt,
+		lookupCache: make(map[string]PricingLookup),
+		recorded:    make(map[string]map[pricingRecordKey]*pricingRecord),
+	}
 }
 
 func NewPricingResolver(rows []EffectivePricingRow) *PricingResolver {
@@ -557,6 +562,7 @@ func (r *PricingResolver) resolveFlat(
 ) (string, PricingLookup, bool) {
 	if rates, ok := r.byModel[reportedModel]; ok &&
 		rates.Source == PricingRowSourceCustom {
+		rates.Bands = slices.Clone(rates.Bands)
 		return reportedModel, PricingLookup{
 			Rates:   rates,
 			Pattern: reportedModel,
@@ -1298,4 +1304,41 @@ func (r *PricingResolver) PriceChanges(from, to time.Time) []time.Time {
 		out = slices.CompactFunc(out, time.Time.Equal)
 	}
 	return out
+}
+
+// PricingRecord retains the provenance accumulated for a group of usage rows.
+type PricingRecord struct {
+	ReportedModel, PricedModel  string
+	Lookup                      PricingLookup
+	Computed, Reported          bool
+	BaseRequests, AggregateRows int
+	BandRequests                map[int]int
+}
+
+// RecordedCounts returns the provenance recorded by this resolver.
+func (r *PricingResolver) RecordedCounts() ([]PricingRecord, bool) {
+	var records []PricingRecord
+	for model, resolutions := range r.recorded {
+		for key, rec := range resolutions {
+			bands := make(map[int]int, len(rec.bandRequestCounts))
+			for band, count := range rec.bandRequestCounts {
+				bands[band] = count
+			}
+			records = append(records, PricingRecord{model, key.pricedModel, clonePricingLookup(rec.lookup), rec.computed, rec.reported, rec.baseRequestCount, rec.aggregateRowCount, bands})
+		}
+	}
+	return records, r.unattributedReported
+}
+
+// ReplayRecordedCounts combines retained provenance into this resolver.
+func (r *PricingResolver) ReplayRecordedCounts(records []PricingRecord, unattributed bool) {
+	if unattributed {
+		r.RecordUnattributedReported()
+	}
+	for _, rec := range records {
+		r.accumulateResolved(rec.ReportedModel, rec.PricedModel, rec.Lookup, rec.Reported, rec.Computed, rec.BaseRequests, rec.AggregateRows, nil)
+		for band, count := range rec.BandRequests {
+			r.RecordResolvedCounts(rec.ReportedModel, rec.PricedModel, rec.Lookup, 0, count, 0, &band)
+		}
+	}
 }
