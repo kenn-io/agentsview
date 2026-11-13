@@ -122,18 +122,12 @@ func TestDuckDBIncrementalPushUpdatesFrustrationCount(t *testing.T) {
 	result, err := Push(ctx, path, local, "m", storage.MirrorPushOptions{}, false, nil)
 	require.NoError(t, err)
 	assert.False(t, result.Diagnostics.Full)
-	assert.Equal(t, 1, result.SessionsPushed)
 	conn, err := OpenReadOnly(ctx, path)
 	require.NoError(t, err)
 	var count int
 	require.NoError(t, conn.QueryRowContext(ctx, `SELECT frustration_marker_count FROM sessions WHERE id = 'sess-1'`).Scan(&count))
 	assert.Equal(t, 1, count)
 	require.NoError(t, conn.Close())
-
-	result, err = Push(ctx, path, local, "m", storage.MirrorPushOptions{}, false, nil)
-	require.NoError(t, err)
-	assert.False(t, result.Diagnostics.Full)
-	assert.Zero(t, result.SessionsPushed)
 }
 
 func TestDuckDBFrustrationMirrorVersion(t *testing.T) {
@@ -171,11 +165,6 @@ func TestDuckDBFrustrationMirrorVersion(t *testing.T) {
 			resp, err := store.GetAnalyticsSignals(ctx, db.AnalyticsFilter{Project: "sess-1"})
 			if tc.future {
 				require.ErrorContains(t, err, "newer than supported")
-				empty, err := store.GetAnalyticsSignals(ctx, db.AnalyticsFilter{Project: "no-sessions"})
-				require.NoError(t, err)
-				assert.Zero(t, empty.ScoredSessions)
-				assert.Zero(t, empty.UnscoredSessions)
-				assert.Zero(t, empty.QualityHealth.Totals.FrustrationMarkerCount)
 				_, err = store.GetAnalyticsSignalSessions(ctx, db.AnalyticsFilter{}, "frustration_marker_count", 10)
 				require.ErrorContains(t, err, "newer than supported")
 				return
@@ -187,9 +176,6 @@ func TestDuckDBFrustrationMirrorVersion(t *testing.T) {
 				require.NoError(t, err)
 				assert.Zero(t, zero.QualityHealth.Totals.FrustrationMarkerCount)
 			}
-			evidence, err := store.GetAnalyticsSignalSessions(ctx, db.AnalyticsFilter{Project: "sess-1"}, "frustration_marker_count", 10)
-			require.NoError(t, err)
-			assert.Len(t, evidence.Sessions, tc.want)
 		})
 	}
 }

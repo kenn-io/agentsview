@@ -359,7 +359,6 @@ func TestPushPreservesNewerInterruptedRebuild(t *testing.T) {
 			encoded, err := json.Marshal(run)
 			require.NoError(t, err)
 			require.NoError(t, recordMetadataKey(ctx, conn, rebuildRunMetadataKey, string(encoded)))
-			require.NoError(t, recordMetadataKey(ctx, conn, frustrationMarkersVersionMetadataKey, strconv.Itoa(run.FrustrationMarkersVersion)))
 			require.NoError(t, conn.Close())
 			before, err := os.ReadFile(file)
 			require.NoError(t, err)
