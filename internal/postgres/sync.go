@@ -218,6 +218,14 @@ func isUndefinedTable(err error) bool {
 	return ok && pgErr.Code == "42P01"
 }
 
+// isTransactionConflict reports a deadlock (40P01) or serialization failure
+// (40001). The database rolled the failed statement back, so running it again
+// later is safe.
+func isTransactionConflict(err error) bool {
+	pgErr, ok := errors.AsType[*pgconn.PgError](err)
+	return ok && (pgErr.Code == "40P01" || pgErr.Code == "40001")
+}
+
 // isUndefinedColumn returns true when a query references a column
 // that does not exist (PG SQLSTATE 42703).
 func isUndefinedColumn(err error) bool {
@@ -489,7 +497,15 @@ func (s *Sync) ensureSchemaLocked(ctx context.Context) error {
 		// this Sync's pushes, so the fill runs on every check, not only at
 		// schema setup. A schema dropped since setup has nothing to fill;
 		// push's marker check notices the reset and sets the schema up again.
-		if _, err := backfillMessageUsageCountersPG(ctx, s.pg); err != nil && !isUndefinedTable(err) {
+		_, err := backfillMessageUsageCountersPG(ctx, s.pg)
+		switch {
+		case err == nil, isUndefinedTable(err):
+		case isTransactionConflict(err):
+			// A publisher locks a session before its messages and the fill
+			// locks messages first, so the two can deadlock. The database
+			// rolled the batch back; the next push fills it.
+			log.Printf("pg schema: message usage counter fill deferred: %v", err)
+		default:
 			return err
 		}
 		return nil
