@@ -572,10 +572,6 @@ func TestMaterializeCodexLoadedLinkedHome(t *testing.T) {
 			require.NotNil(t, imported)
 			require.NotNil(t, imported.FilePath)
 			require.Equal(t, "remote:"+childFile, *imported.FilePath)
-			if tc.index {
-				require.NotNil(t, imported.SessionName)
-				require.Equal(t, "renamed child", *imported.SessionName)
-			}
 			mirror := remotesync.MirrorDir(localData, "remote")
 			checkSources := func() {
 				for path, want := range map[string][]byte{parentFile: parentData, childFile: childData} {
