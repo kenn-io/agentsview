@@ -429,6 +429,15 @@ If the original rollout moves outside a filtered push's project scope, the
 curation transfer and removal of the old thread row share a transaction. A
 failed transfer leaves the thread and its pins intact.
 
+### SQLite frustration marker counts
+
+The SQLite-only `session_frustration_markers` table stores each session's
+frustration count with a key combining its transcript revision and creation
+time. Its marker version tracks the frustration matcher independently of the
+quality signal version. Signals reuses a row only when both the key and marker
+version match; a changed transcript is counted on the next read. The rows are
+local and are not mirrored.
+
 ### Codex incremental import state
 
 Four SQLite-only tables support local Codex imports: `parser_checkpoints` holds

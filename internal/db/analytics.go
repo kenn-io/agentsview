@@ -4363,7 +4363,8 @@ func (db *DB) populateFrustrationMarkers(
 	// missing. Remove this fallback if read-only open starts requiring the table.
 	err := queryChunked(ids, func(chunk []string) error {
 		ph, args := InPlaceholders(chunk)
-		stored, err := db.getReader().QueryContext(ctx, `SELECT session_id, transcript_key, marker_version, count FROM session_frustration_markers WHERE session_id IN `+ph, args...)
+		stored, err := db.getReader().QueryContext(ctx, `SELECT session_id, transcript_key, marker_version, count
+			FROM session_frustration_markers WHERE session_id IN `+ph, args...)
 		if err != nil {
 			return err
 		}
@@ -4468,10 +4469,16 @@ func (db *DB) storeFrustrationMarkers(ctx context.Context, generation uint64, id
 	defer tx.Rollback()
 	for _, id := range ids {
 		r := rows[idx[id]]
-		result, err := tx.ExecContext(ctx, `INSERT INTO session_frustration_markers (session_id, transcript_key, marker_version, count)
-   SELECT id, ?, ?, ? FROM sessions WHERE id = ? AND transcript_revision || '|' || created_at = ?
-   ON CONFLICT(session_id) DO UPDATE SET transcript_key = excluded.transcript_key, marker_version = excluded.marker_version, count = excluded.count
-   WHERE session_frustration_markers.marker_version <= excluded.marker_version`, r.transcriptVersion, signals.FrustrationMarkerVersion, r.FrustrationMarkerCount, id, r.transcriptVersion)
+		result, err := tx.ExecContext(ctx, `INSERT INTO session_frustration_markers
+			(session_id, transcript_key, marker_version, count)
+			SELECT id, ?, ?, ? FROM sessions
+			WHERE id = ? AND transcript_revision || '|' || created_at = ?
+			ON CONFLICT(session_id) DO UPDATE SET
+				transcript_key = excluded.transcript_key,
+				marker_version = excluded.marker_version,
+				count = excluded.count
+			WHERE session_frustration_markers.marker_version <= excluded.marker_version`,
+			r.transcriptVersion, signals.FrustrationMarkerVersion, r.FrustrationMarkerCount, id, r.transcriptVersion)
 		if err != nil {
 			return err
 		}
@@ -4481,7 +4488,8 @@ func (db *DB) storeFrustrationMarkers(ctx context.Context, generation uint64, id
 		}
 		if affected == 0 {
 			var version int
-			err := tx.QueryRowContext(ctx, `SELECT marker_version FROM session_frustration_markers WHERE session_id = ? AND marker_version > ?`, id, signals.FrustrationMarkerVersion).Scan(&version)
+			err := tx.QueryRowContext(ctx, `SELECT marker_version FROM session_frustration_markers
+				WHERE session_id = ? AND marker_version > ?`, id, signals.FrustrationMarkerVersion).Scan(&version)
 			if err == nil {
 				return fmt.Errorf("%w: session %s has version %d, supported version is %d", errNewerFrustrationMarkerVersion, id, version, signals.FrustrationMarkerVersion)
 			}

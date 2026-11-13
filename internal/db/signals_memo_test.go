@@ -411,3 +411,20 @@ func TestSignalsFrustrationRetriesFailedStore(t *testing.T) {
 	require.NoError(t, d.getReader().QueryRowContext(ctx, `SELECT count FROM session_frustration_markers WHERE session_id = 'session'`).Scan(&count))
 	assert.Equal(t, 1, count)
 }
+
+func TestSignalsFrustrationUsageOnlySignalSettlement(t *testing.T) {
+	d := testDB(t)
+	ctx := t.Context()
+	insertSession(t, d, "session", "test")
+	require.NoError(t, d.InsertMessages(ctx, []Message{{SessionID: "session", Role: "user", Content: "this is broken"}}))
+	rows, err := d.signalRows(ctx, AnalyticsFilter{})
+	require.NoError(t, err)
+	require.NoError(t, d.populateFrustrationMarkers(ctx, rows))
+	var count int
+	require.NoError(t, d.getReader().QueryRowContext(ctx, `SELECT count FROM session_frustration_markers WHERE session_id = 'session'`).Scan(&count))
+	require.Equal(t, 1, count)
+	d.SetArchiveContent(config.ArchiveContentUsage)
+	require.NoError(t, d.UpdateSessionSignals(ctx, "session", SessionSignalUpdate{}))
+	require.NoError(t, d.getReader().QueryRowContext(ctx, `SELECT count(*) FROM session_frustration_markers WHERE session_id = 'session'`).Scan(&count))
+	assert.Zero(t, count)
+}
