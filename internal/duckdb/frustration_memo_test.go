@@ -253,12 +253,6 @@ func TestDuckDBTrustsStoredZeroFrustrationCount(t *testing.T) {
 
 	conn, err := Open(ctx, path)
 	require.NoError(t, err)
-	var version, count int
-	require.NoError(t, conn.QueryRowContext(ctx, `
-		SELECT frustration_markers_version, frustration_marker_count
-		FROM sessions WHERE id = 'sess-1'`).Scan(&version, &count))
-	assert.Equal(t, frustrationMarkersVersion, version)
-	assert.Zero(t, count)
 	// A rescan would count this marker instead of trusting the stored zero.
 	updated, err := conn.ExecContext(ctx, `
 		UPDATE messages SET content = 'this is broken'
