@@ -347,7 +347,7 @@ func TestAnalyticsKeptActiveSincePreservesStableSelections(t *testing.T) {
 }
 
 func TestAnalyticsKeptBypasses(t *testing.T) {
-	for _, mode := range []string{"active", "active since", "hosted", "borrowed", "no journal"} {
+	for _, mode := range []string{"active", "hosted", "borrowed", "no journal"} {
 		t.Run(mode, func(t *testing.T) {
 			local, syncer, store := newUsageJournalFixture(t)
 			pgKeptSession(t, local, "session", "project", "2026-06-14")
@@ -356,8 +356,6 @@ func TestAnalyticsKeptBypasses(t *testing.T) {
 			switch mode {
 			case "active":
 				f.Termination = "active"
-			case "active since":
-				f.ActiveSince = "2026-06-14T00:00:00Z"
 			case "hosted":
 				store.hostedRelations = true
 			case "borrowed":
