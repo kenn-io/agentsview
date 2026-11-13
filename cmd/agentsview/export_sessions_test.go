@@ -626,9 +626,16 @@ func TestExportSessionsUpgradesRecordedRepositoryColumn(t *testing.T) {
 
 			before, err := os.ReadFile(dbPath)
 			require.NoError(t, err)
-			for _, suffix := range []string{"-wal", "-shm", "-journal"} {
-				_, err := os.Stat(dbPath + suffix)
-				require.ErrorIs(t, err, os.ErrNotExist)
+			// The seeded database remains open until cleanup, so its WAL may
+			// already contain the fixture and schema change.
+			sidecars := make(map[string][]byte)
+			for _, suffix := range []string{"-wal", "-journal"} {
+				data, err := os.ReadFile(dbPath + suffix)
+				if err != nil {
+					require.ErrorIs(t, err, os.ErrNotExist)
+					continue
+				}
+				sidecars[suffix] = data
 			}
 			owner := holdWriteOwnerLockForTest(t, dataDir)
 			blockedOut, blockedErr, err := executeExportSessionsCommand(newRootCommand(), "export", "sessions", "--format", "json")
@@ -638,13 +645,14 @@ func TestExportSessionsUpgradesRecordedRepositoryColumn(t *testing.T) {
 			after, err := os.ReadFile(dbPath)
 			require.NoError(t, err)
 			assert.Equal(t, before, after)
-			_, err = os.Stat(dbPath + "-journal")
-			require.ErrorIs(t, err, os.ErrNotExist)
-			wal, err := os.Stat(dbPath + "-wal")
-			if err == nil {
-				assert.Zero(t, wal.Size())
-			} else {
-				require.ErrorIs(t, err, os.ErrNotExist)
+			for _, suffix := range []string{"-wal", "-journal"} {
+				data, err := os.ReadFile(dbPath + suffix)
+				if want, exists := sidecars[suffix]; exists {
+					require.NoError(t, err)
+					assert.Equal(t, want, data)
+				} else {
+					require.ErrorIs(t, err, os.ErrNotExist)
+				}
 			}
 			require.NoError(t, owner.Release())
 
