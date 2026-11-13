@@ -114,6 +114,7 @@ func sessionIDs(sessions []db.Session) []string {
 }
 
 func TestNewStore(t *testing.T) {
+	t.Parallel()
 	pgURL := testPGURL(t)
 	ensureStoreSchema(t, pgURL)
 
@@ -126,6 +127,7 @@ func TestNewStore(t *testing.T) {
 }
 
 func TestDetectInsightGenerationAvailability(t *testing.T) {
+	t.Parallel()
 	pgURL := testPGURL(t)
 	ensureStoreSchema(t, pgURL)
 
@@ -140,6 +142,7 @@ func TestDetectInsightGenerationAvailability(t *testing.T) {
 }
 
 func TestProbeInsightGenerationAvailabilityTx_ReadOnly(t *testing.T) {
+	t.Parallel()
 	pgURL := testPGURL(t)
 	ensureStoreSchema(t, pgURL)
 
@@ -162,6 +165,7 @@ func TestProbeInsightGenerationAvailabilityTx_ReadOnly(t *testing.T) {
 }
 
 func TestStoreListSessions(t *testing.T) {
+	t.Parallel()
 	pgURL := testPGURL(t)
 	ensureStoreSchema(t, pgURL)
 
@@ -188,6 +192,7 @@ func TestStoreListSessions(t *testing.T) {
 }
 
 func TestStoreListSessions_MachineMultiSelect(t *testing.T) {
+	t.Parallel()
 	pgURL := testPGURL(t)
 	ensureStoreSchema(t, pgURL)
 
@@ -344,6 +349,7 @@ func sidebarIndexIDs(
 func TestStoreGetSidebarSessionIndexComputesIsTeammate(
 	t *testing.T,
 ) {
+	t.Parallel()
 	pgURL := testPGURL(t)
 	store := ensureSidebarIndexStoreSchema(t, pgURL)
 	defer store.Close()
@@ -368,6 +374,7 @@ func TestStoreGetSidebarSessionIndexComputesIsTeammate(
 func TestStoreGetSidebarSessionIndexReturnsDisplayNameAndProjectAssignment(
 	t *testing.T,
 ) {
+	t.Parallel()
 	pgURL := testPGURL(t)
 	store := ensureSidebarIndexStoreSchema(t, pgURL)
 	defer store.Close()
@@ -397,6 +404,7 @@ func TestStoreGetSidebarSessionIndexReturnsDisplayNameAndProjectAssignment(
 func TestStoreGetSidebarSessionIndexExcludeAutomated(
 	t *testing.T,
 ) {
+	t.Parallel()
 	pgURL := testPGURL(t)
 	store := ensureSidebarIndexStoreSchema(t, pgURL)
 	defer store.Close()
@@ -431,6 +439,7 @@ func TestStoreGetSidebarSessionIndexExcludeAutomated(
 func TestStoreGetSidebarSessionIndexExcludeOneShotKeepsAutomated(
 	t *testing.T,
 ) {
+	t.Parallel()
 	pgURL := testPGURL(t)
 	store := ensureSidebarIndexStoreSchema(t, pgURL)
 	defer store.Close()
@@ -467,6 +476,7 @@ func TestStoreGetSidebarSessionIndexExcludeOneShotKeepsAutomated(
 func TestStoreGetSidebarSessionIndexIncludesChildrenForMatchingRoot(
 	t *testing.T,
 ) {
+	t.Parallel()
 	pgURL := testPGURL(t)
 	store := ensureSidebarIndexStoreSchema(t, pgURL)
 	defer store.Close()
@@ -510,6 +520,7 @@ func TestStoreGetSidebarSessionIndexIncludesChildrenForMatchingRoot(
 }
 
 func TestStoreGetSidebarSessionIndexTotalCountsCanonicalRoots(t *testing.T) {
+	t.Parallel()
 	pgURL := testPGURL(t)
 	store := ensureSidebarIndexStoreSchema(t, pgURL)
 	defer store.Close()
@@ -565,6 +576,7 @@ func TestStoreGetSidebarSessionIndexTotalCountsCanonicalRoots(t *testing.T) {
 func TestStoreGetSidebarSessionIndexPagedExcludesAutomatedDescendants(
 	t *testing.T,
 ) {
+	t.Parallel()
 	pgURL := testPGURL(t)
 	store := ensureSidebarIndexStoreSchema(t, pgURL)
 	defer store.Close()
@@ -615,6 +627,7 @@ func TestStoreGetSidebarSessionIndexPagedExcludesAutomatedDescendants(
 func TestStoreGetSidebarSessionIndexPaginatesContinuationsAsDescendants(
 	t *testing.T,
 ) {
+	t.Parallel()
 	pgURL := testPGURL(t)
 	store := ensureSidebarIndexStoreSchema(t, pgURL)
 	defer store.Close()
@@ -665,6 +678,7 @@ func TestStoreGetSidebarSessionIndexPaginatesContinuationsAsDescendants(
 func TestStoreGetSidebarSessionIndexPaginatesByDescendantFreshness(
 	t *testing.T,
 ) {
+	t.Parallel()
 	pgURL := testPGURL(t)
 	store := ensureSidebarIndexStoreSchema(t, pgURL)
 	defer store.Close()
@@ -715,6 +729,7 @@ func TestStoreGetSidebarSessionIndexPaginatesByDescendantFreshness(
 func TestStoreGetSidebarSessionIndexStarredIncludesStarredDescendantRoot(
 	t *testing.T,
 ) {
+	t.Parallel()
 	pgURL := testPGURL(t)
 	store := ensureSidebarIndexStoreSchema(t, pgURL)
 	defer store.Close()
@@ -757,6 +772,7 @@ func TestStoreGetSidebarSessionIndexStarredIncludesStarredDescendantRoot(
 }
 
 func TestStoreGetSidebarSessionIndexPaginatesOrphanRoots(t *testing.T) {
+	t.Parallel()
 	pgURL := testPGURL(t)
 	store := ensureSidebarIndexStoreSchema(t, pgURL)
 	defer store.Close()
@@ -802,6 +818,7 @@ func TestStoreGetSidebarSessionIndexPaginatesOrphanRoots(t *testing.T) {
 }
 
 func TestStoreGetSidebarSessionIndexDoesNotPromoteSoftDeletedParentChildren(t *testing.T) {
+	t.Parallel()
 	pgURL := testPGURL(t)
 	store := ensureSidebarIndexStoreSchema(t, pgURL)
 	defer store.Close()
@@ -831,6 +848,7 @@ func TestStoreGetSidebarSessionIndexDoesNotPromoteSoftDeletedParentChildren(t *t
 }
 
 func TestStoreGetSession(t *testing.T) {
+	t.Parallel()
 	pgURL := testPGURL(t)
 	ensureStoreSchema(t, pgURL)
 
@@ -846,6 +864,7 @@ func TestStoreGetSession(t *testing.T) {
 }
 
 func TestStoreGetMessages(t *testing.T) {
+	t.Parallel()
 	pgURL := testPGURL(t)
 	ensureStoreSchema(t, pgURL)
 
@@ -915,6 +934,7 @@ func seedActivitySession(
 }
 
 func TestStoreGetSessionActivity(t *testing.T) {
+	t.Parallel()
 	pgURL := testPGURL(t)
 	ensureStoreSchema(t, pgURL)
 
@@ -961,6 +981,7 @@ func TestStoreGetSessionActivity(t *testing.T) {
 }
 
 func TestStoreGetSessionActivity_NoMessages(t *testing.T) {
+	t.Parallel()
 	pgURL := testPGURL(t)
 	ensureStoreSchema(t, pgURL)
 
@@ -981,6 +1002,7 @@ func TestStoreGetSessionActivity_NoMessages(t *testing.T) {
 func TestStoreGetSessionActivity_NullTimestamps(
 	t *testing.T,
 ) {
+	t.Parallel()
 	pgURL := testPGURL(t)
 	ensureStoreSchema(t, pgURL)
 
@@ -1011,6 +1033,7 @@ func TestStoreGetSessionActivity_NullTimestamps(
 func TestStoreGetSessionActivity_SingleMessage(
 	t *testing.T,
 ) {
+	t.Parallel()
 	pgURL := testPGURL(t)
 	ensureStoreSchema(t, pgURL)
 
@@ -1040,6 +1063,7 @@ func TestStoreGetSessionActivity_SingleMessage(
 func TestStoreGetSessionActivity_PrefixInjectedExcluded(
 	t *testing.T,
 ) {
+	t.Parallel()
 	pgURL := testPGURL(t)
 	ensureStoreSchema(t, pgURL)
 
@@ -1086,6 +1110,7 @@ func TestStoreGetSessionActivity_PrefixInjectedExcluded(
 func TestStoreGetSessionActivity_FractionalTimestamps(
 	t *testing.T,
 ) {
+	t.Parallel()
 	pgURL := testPGURL(t)
 	ensureStoreSchema(t, pgURL)
 
@@ -1126,6 +1151,7 @@ func TestStoreGetSessionActivity_FractionalTimestamps(
 func TestStoreAnalyticsSummaryOutputTokenCoverage(
 	t *testing.T,
 ) {
+	t.Parallel()
 	pgURL := testPGURL(t)
 	ensureAnalyticsTokenStoreSchema(t, pgURL)
 
@@ -1146,6 +1172,7 @@ func TestStoreAnalyticsSummaryOutputTokenCoverage(
 }
 
 func TestStoreAnalyticsHeatmapOutputTokens(t *testing.T) {
+	t.Parallel()
 	pgURL := testPGURL(t)
 	ensureAnalyticsTokenStoreSchema(t, pgURL)
 
@@ -1174,6 +1201,7 @@ func TestStoreAnalyticsHeatmapOutputTokens(t *testing.T) {
 func TestStoreAnalyticsTopSessionsOutputTokens(
 	t *testing.T,
 ) {
+	t.Parallel()
 	pgURL := testPGURL(t)
 	ensureAnalyticsTokenStoreSchema(t, pgURL)
 
@@ -1202,6 +1230,7 @@ func TestStoreAnalyticsTopSessionsOutputTokens(
 }
 
 func TestStoreAnalyticsTopSessionsDisplayName(t *testing.T) {
+	t.Parallel()
 	pgURL := testPGURL(t)
 	ensureStoreSchema(t, pgURL)
 
@@ -1260,6 +1289,7 @@ func TestStoreAnalyticsTopSessionsDisplayName(t *testing.T) {
 }
 
 func TestStoreAnalyticsTopSessionsMessagesAllowRunningSessions(t *testing.T) {
+	t.Parallel()
 	pgURL := testPGURL(t)
 	ensureStoreSchema(t, pgURL)
 
@@ -1307,6 +1337,7 @@ func TestStoreAnalyticsTopSessionsMessagesAllowRunningSessions(t *testing.T) {
 }
 
 func TestStoreAnalyticsTopSessionsDurationUsesClampedActiveDuration(t *testing.T) {
+	t.Parallel()
 	pgURL := testPGURL(t)
 	ensureStoreSchema(t, pgURL)
 
@@ -1380,6 +1411,7 @@ func TestStoreAnalyticsTopSessionsDurationUsesClampedActiveDuration(t *testing.T
 }
 
 func TestStoreAnalyticsTopSessionsDurationExcludesReversedTimestamps(t *testing.T) {
+	t.Parallel()
 	pgURL := testPGURL(t)
 	ensureStoreSchema(t, pgURL)
 
@@ -1441,7 +1473,9 @@ func TestStoreAnalyticsTopSessionsDurationExcludesReversedTimestamps(t *testing.
 }
 
 func TestStoreWriteSurface(t *testing.T) {
+	t.Parallel()
 	pgURL := testPGURL(t)
+	ensureStoreSchema(t, pgURL)
 
 	store, err := NewStore(t.Context(), pgURL, testSchema, true)
 	require.NoError(t, err, "NewStore")
@@ -1566,6 +1600,7 @@ func TestStoreWriteSurface(t *testing.T) {
 }
 
 func TestStoreListSessionsParentlessChildrenRespectFilters(t *testing.T) {
+	t.Parallel()
 	store := ensureSidebarIndexStoreSchema(t, testPGURL(t))
 	defer store.Close()
 	for _, id := range []string{"worker", "dangling", "deleted", "other", "nested"} {

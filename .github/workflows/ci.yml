@@ -1129,7 +1129,7 @@ jobs:
       - name: Run CockroachDB integration tests
         if: matrix.cockroach
         run: |
-          docker run -d --name cockroach-schema -p 127.0.0.1:26257:26257 --entrypoint /cockroach/cockroach cockroachdb/cockroach:v25.4.6 start-single-node --insecure --listen-addr=0.0.0.0:26257
+          docker run -d --name cockroach-schema -p 127.0.0.1:26257:26257 --entrypoint /cockroach/cockroach cockroachdb/cockroach:v25.4.6 start-single-node --insecure --listen-addr=0.0.0.0:26257 --store=type=mem,size=4GiB
           for i in {1..60}; do
             if docker exec cockroach-schema /cockroach/cockroach sql --insecure --host=127.0.0.1:26257 -e 'SELECT 1'; then break; fi
             sleep 1

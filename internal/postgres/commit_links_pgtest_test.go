@@ -13,6 +13,7 @@ import (
 )
 
 func TestPGPurgeWithoutCommitLinksTable(t *testing.T) {
+	t.Parallel()
 	for _, emptyTrash := range []bool{false, true} {
 		t.Run(map[bool]string{false: "delete-session", true: "empty-trash"}[emptyTrash], func(t *testing.T) {
 			syncer, _, pg, ctx := newSessionProvenancePushSync(t, "agentsview_commit_purge_old_test")
@@ -44,6 +45,7 @@ func TestPGPurgeWithoutCommitLinksTable(t *testing.T) {
 }
 
 func TestPGPurgeKeepsMissingCommitLinks(t *testing.T) {
+	t.Parallel()
 	for _, emptyTrash := range []bool{false, true} {
 		t.Run(map[bool]string{false: "delete-session", true: "empty-trash"}[emptyTrash], func(t *testing.T) {
 			syncer, local, pg, ctx := newSessionProvenancePushSync(t, "agentsview_commit_purge_test")
@@ -86,6 +88,7 @@ func TestPGPurgeKeepsMissingCommitLinks(t *testing.T) {
 }
 
 func TestPGCommitLinkParity(t *testing.T) {
+	t.Parallel()
 	syncer, local, pg, ctx := newSessionProvenancePushSync(t, "agentsview_commit_links_test")
 	dbtest.SeedCommitLinks(t, local)
 	_, err := syncer.Push(ctx, false, nil)
@@ -170,6 +173,7 @@ func TestPGCommitLinkParity(t *testing.T) {
 }
 
 func TestPGCommitLinksBeforeUpgradePush(t *testing.T) {
+	t.Parallel()
 	syncer, _, pg, ctx := newSessionProvenancePushSync(t, "agentsview_commit_links_old_test")
 	store, err := NewStore(t.Context(), testPGURL(t), syncer.schema, true)
 	require.NoError(t, err)
@@ -183,6 +187,7 @@ func TestPGCommitLinksBeforeUpgradePush(t *testing.T) {
 }
 
 func TestPGCommitLinkScopeAndOwnership(t *testing.T) {
+	t.Parallel()
 	syncer, local, pg, ctx := newSessionProvenancePushSync(t, "agentsview_commit_link_scope_test")
 	dbtest.SeedCommitLinks(t, local)
 	syncer.projects = []string{"commit-project"}
@@ -217,6 +222,7 @@ func TestPGCommitLinkScopeAndOwnership(t *testing.T) {
 }
 
 func TestPGRetainedCommitLinkScope(t *testing.T) {
+	t.Parallel()
 	syncer, local, _, ctx := newSessionProvenancePushSync(t, "agentsview_retained_commit_scope_test")
 	dbtest.SeedCommitLinks(t, local)
 	require.NoError(t, syncer.EnsureSchema(ctx))
@@ -231,6 +237,7 @@ func TestPGRetainedCommitLinkScope(t *testing.T) {
 }
 
 func TestPGCommitLinksRemovedWithDeletedSession(t *testing.T) {
+	t.Parallel()
 	syncer, local, pg, ctx := newSessionProvenancePushSync(t, "agentsview_commit_deleted_rows_test")
 	dbtest.SeedCommitLinks(t, local)
 	_, err := syncer.Push(ctx, true, nil)

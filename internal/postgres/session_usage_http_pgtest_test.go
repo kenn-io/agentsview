@@ -7,7 +7,6 @@ import (
 	"encoding/json/v2"
 	"net/http"
 	"net/http/httptest"
-	"os"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -33,6 +32,7 @@ func usageHTTP(t *testing.T, h http.Handler, id, query string, status int) map[s
 }
 
 func TestSessionUsageRawIDHTTPPostgres(t *testing.T) {
+	t.Parallel()
 	_, dataDir := newPGE2ETestDatabase(t)
 	local := dbtest.OpenTestDB(t)
 	dbtest.SeedPricingMeta(t, local)
@@ -45,7 +45,7 @@ func TestSessionUsageRawIDHTTPPostgres(t *testing.T) {
 		require.NoError(t, local.UpsertSession(t.Context(), s))
 		require.NoError(t, local.InsertMessages(t.Context(), []db.Message{{SessionID: id, Ordinal: 0, Role: "assistant", Model: "unknown-model", Timestamp: "2026-01-01T00:00:00Z", TokenUsage: jsontext.Value(`{"input_tokens":1000,"output_tokens":500}`)}}))
 	}
-	pgURL := os.Getenv("TEST_PG_URL")
+	pgURL := postgres.PGTestURL(t)
 	syncer, err := postgres.New(t.Context(), pgURL, pgE2ESchema, local, "test", true, storage.PusherOptions{})
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, syncer.Close()) })
@@ -92,6 +92,7 @@ func TestSessionUsageRawIDHTTPPostgres(t *testing.T) {
 }
 
 func TestHostedSessionUsageRawIDHTTP(t *testing.T) {
+	t.Parallel()
 	store, split, _ := postgres.HostedPublicFixture(t)
 	h := server.New(config.Config{Host: "127.0.0.1", DataDir: t.TempDir()}, store, nil).Handler()
 	assert.Equal(t, "codex:portable", usageHTTP(t, h, "portable", "", 200)["session_id"])
@@ -124,6 +125,7 @@ var hostedUsageQueries = []string{
 }
 
 func TestHostedSessionUsageClaudeAmbiguityHTTP(t *testing.T) {
+	t.Parallel()
 	const rawID = "00000000-0000-4000-8000-000000000001"
 	store := postgres.HostedClaudeUsageFixture(t, rawID, 2)
 	h := server.New(config.Config{Host: "127.0.0.1", DataDir: t.TempDir()}, store, nil).Handler()
@@ -161,6 +163,7 @@ func TestHostedSessionUsageClaudeAmbiguityHTTP(t *testing.T) {
 }
 
 func TestHostedSessionUsageDeletedLegacyHTTP(t *testing.T) {
+	t.Parallel()
 	store, _, _ := postgres.HostedPublicFixture(t)
 	pg := store.(*postgres.HostedStore).DB()
 	_, err := pg.ExecContext(t.Context(), `INSERT INTO sessions(id,project,machine,agent,deleted_at) VALUES
@@ -182,6 +185,7 @@ func TestHostedSessionUsageDeletedLegacyHTTP(t *testing.T) {
 }
 
 func TestHostedSessionUsageDeletedProjectionHTTP(t *testing.T) {
+	t.Parallel()
 	store, _, _ := postgres.HostedPublicFixture(t)
 	h := server.New(config.Config{Host: "127.0.0.1", DataDir: t.TempDir()}, store, nil).Handler()
 	assert.Equal(t, "codex:portable", usageHTTP(t, h, "portable", "", 200)["session_id"])
@@ -202,6 +206,7 @@ func TestHostedSessionUsageDeletedProjectionHTTP(t *testing.T) {
 }
 
 func TestHostedSessionUsageDeletedProjectionsBeforeLimitHTTP(t *testing.T) {
+	t.Parallel()
 	const rawID = "00000000-0000-4000-8000-000000000001"
 	store := postgres.HostedClaudeUsageFixture(t, rawID, 7)
 	ids, err := store.FindSessionIDsByRawSuffix(t.Context(), rawID, 100)

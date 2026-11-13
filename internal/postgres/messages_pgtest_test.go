@@ -12,6 +12,7 @@ import (
 )
 
 func TestStoreSearchILIKE(t *testing.T) {
+	t.Parallel()
 	pgURL := testPGURL(t)
 	ensureStoreSchema(t, pgURL)
 
@@ -33,6 +34,7 @@ func TestStoreSearchILIKE(t *testing.T) {
 }
 
 func TestPGSearchDeduplication(t *testing.T) {
+	t.Parallel()
 	pgURL := testPGURL(t)
 	ensureStoreSchema(t, pgURL)
 
@@ -52,6 +54,7 @@ func TestPGSearchDeduplication(t *testing.T) {
 }
 
 func TestPGSearchSnippetUsesWinningMessage(t *testing.T) {
+	t.Parallel()
 	pgURL := testPGURL(t)
 	ensureStoreSchema(t, pgURL)
 	pg, err := Open(t.Context(), pgURL, testSchema, false)
@@ -81,6 +84,7 @@ func TestPGSearchSnippetUsesWinningMessage(t *testing.T) {
 }
 
 func TestPGSearchRecencySort(t *testing.T) {
+	t.Parallel()
 	pgURL := testPGURL(t)
 	ensureStoreSchema(t, pgURL)
 
@@ -134,6 +138,7 @@ func TestPGSearchRecencySort(t *testing.T) {
 }
 
 func TestPGSearchRelevanceSort(t *testing.T) {
+	t.Parallel()
 	pgURL := testPGURL(t)
 	ensureStoreSchema(t, pgURL)
 
@@ -197,6 +202,7 @@ func TestPGSearchRelevanceSort(t *testing.T) {
 }
 
 func TestPGSearchNullTimestampSorting(t *testing.T) {
+	t.Parallel()
 	pgURL := testPGURL(t)
 	ensureStoreSchema(t, pgURL)
 
@@ -288,6 +294,7 @@ func TestPGSearchNullTimestampSorting(t *testing.T) {
 }
 
 func TestPGSearchSystemMessageExcluded(t *testing.T) {
+	t.Parallel()
 	pgURL := testPGURL(t)
 	ensureStoreSchema(t, pgURL)
 
@@ -344,6 +351,7 @@ func TestPGSearchSystemMessageExcluded(t *testing.T) {
 // does not appear in global search results when all its messages are
 // system messages (the EXISTS guard in the name branch).
 func TestPGSearchNameBranchExcludesSystemOnlySessions(t *testing.T) {
+	t.Parallel()
 	pgURL := testPGURL(t)
 	ensureStoreSchema(t, pgURL)
 
@@ -439,6 +447,7 @@ func TestPGSearchNameBranchExcludesSystemOnlySessions(t *testing.T) {
 // (the in-session Cmd+F find-bar) excludes system messages since the
 // frontend hides them and matching would produce phantom highlights.
 func TestPGSearchSessionExcludesSystemMessages(t *testing.T) {
+	t.Parallel()
 	pgURL := testPGURL(t)
 	ensureStoreSchema(t, pgURL)
 
@@ -488,6 +497,7 @@ func TestPGSearchSessionExcludesSystemMessages(t *testing.T) {
 }
 
 func TestPGSearchSessionNameMatch(t *testing.T) {
+	t.Parallel()
 	pgURL := testPGURL(t)
 	ensureStoreSchema(t, pgURL)
 
@@ -532,6 +542,7 @@ func TestPGSearchSessionNameMatch(t *testing.T) {
 }
 
 func TestPGSearchRecencyNameOnlyBeatsOlderContent(t *testing.T) {
+	t.Parallel()
 	pgURL := testPGURL(t)
 	ensureStoreSchema(t, pgURL)
 
@@ -586,6 +597,7 @@ func TestPGSearchRecencyNameOnlyBeatsOlderContent(t *testing.T) {
 // snippet returned is the first_message (the matching field), not the
 // display_name.
 func TestPGSearchSnippetMatchingField(t *testing.T) {
+	t.Parallel()
 	pgURL := testPGURL(t)
 	ensureStoreSchema(t, pgURL)
 
@@ -634,6 +646,7 @@ func TestPGSearchSnippetMatchingField(t *testing.T) {
 // TestGetMessagesIsSystemField verifies that GetMessages and GetAllMessages
 // correctly populate db.Message.IsSystem from the is_system column.
 func TestGetMessagesIsSystemField(t *testing.T) {
+	t.Parallel()
 	pgURL := testPGURL(t)
 
 	const schema = "agentsview_is_system_test"
@@ -690,6 +703,7 @@ func TestGetMessagesIsSystemField(t *testing.T) {
 // round-trip coverage (db.TestResolveToolCallsDerivesPositionalCallIndex) so
 // GetMessages/GetAllMessages consumers see these fields at parity.
 func TestGetMessagesToolCallFilePathAndCallIndex(t *testing.T) {
+	t.Parallel()
 	pgURL := testPGURL(t)
 
 	const schema = "agentsview_toolcall_fields_test"
@@ -756,6 +770,7 @@ func TestGetMessagesToolCallFilePathAndCallIndex(t *testing.T) {
 // ID matches the existing convention used by TurnRow.MessageID
 // and CallRow.MessageID in session_timing.go.
 func TestGetMessagesIDPopulated(t *testing.T) {
+	t.Parallel()
 	pgURL := testPGURL(t)
 
 	const schema = "agentsview_msg_id_test"
@@ -846,6 +861,7 @@ func TestGetMessagesIDPopulated(t *testing.T) {
 // (hyphen, colon, embedded quote), whether raw or explicitly quoted, must match
 // content and not error. ILIKE has no FTS-operator hazard, but this pins parity.
 func TestPGSearchOperatorTokenNoError(t *testing.T) {
+	t.Parallel()
 	pgURL := testPGURL(t)
 	ensureStoreSchema(t, pgURL)
 
@@ -892,6 +908,7 @@ func TestPGSearchOperatorTokenNoError(t *testing.T) {
 // only when every term appears in its content (AND), matching SQLite FTS5's
 // implicit AND so the same user query behaves identically across backends.
 func TestPGSearchMultiTermAND(t *testing.T) {
+	t.Parallel()
 	pgURL := testPGURL(t)
 	ensureStoreSchema(t, pgURL)
 

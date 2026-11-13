@@ -5,7 +5,6 @@ package postgres
 import (
 	"context"
 	"database/sql"
-	"os"
 	"sync"
 	"testing"
 	"time"
@@ -35,6 +34,7 @@ func (c *analyticsReadCounter) count() int {
 }
 
 func TestAnalyticsKeptVersion1ReadOnlyPrimary(t *testing.T) {
+	t.Parallel()
 	local, syncer, owner := newUsageJournalFixture(t)
 	pgKeptSession(t, local, "session", "project", "2026-06-14")
 	pgKeptPush(t, syncer, false)
@@ -85,10 +85,8 @@ func TestAnalyticsKeptVersion1ReadOnlyPrimary(t *testing.T) {
 }
 
 func TestAnalyticsKeptStandbyReflectsChanges(t *testing.T) {
-	standbyURL := os.Getenv("TEST_PG_STANDBY_URL")
-	if standbyURL == "" {
-		t.Skip("TEST_PG_STANDBY_URL must point to a standby of TEST_PG_URL")
-	}
+	t.Parallel()
+	standbyURL := testPGStandbyURL(t)
 	local, syncer, primary := newUsageJournalFixture(t)
 	ctx := t.Context()
 	write := func(tool, answer string) {
@@ -143,6 +141,7 @@ func TestAnalyticsKeptStandbyReflectsChanges(t *testing.T) {
 }
 
 func TestAnalyticsKeptPushAndSelection(t *testing.T) {
+	t.Parallel()
 	local, syncer, store := newUsageJournalFixture(t)
 	ctx := t.Context()
 	write := func(tool, answer string) {
@@ -260,6 +259,7 @@ func TestAnalyticsKeptPushAndSelection(t *testing.T) {
 }
 
 func TestAnalyticsKeptAdvancingCutoff(t *testing.T) {
+	t.Parallel()
 	local, syncer, store := newUsageJournalFixture(t)
 	pgKeptSession(t, local, "session", "project", "2026-06-14")
 	pgKeptPush(t, syncer, false)
@@ -316,6 +316,7 @@ func TestAnalyticsKeptLocalTimezoneChange(t *testing.T) {
 }
 
 func TestAnalyticsKeptActiveSincePreservesStableSelections(t *testing.T) {
+	t.Parallel()
 	local, syncer, store := newUsageJournalFixture(t)
 	pgKeptSession(t, local, "session", "project", "2026-06-14")
 	pgKeptPush(t, syncer, false)
@@ -347,6 +348,7 @@ func TestAnalyticsKeptActiveSincePreservesStableSelections(t *testing.T) {
 }
 
 func TestAnalyticsKeptBypasses(t *testing.T) {
+	t.Parallel()
 	for _, mode := range []string{"active", "hosted", "borrowed", "no journal"} {
 		t.Run(mode, func(t *testing.T) {
 			local, syncer, store := newUsageJournalFixture(t)
@@ -385,6 +387,7 @@ func TestAnalyticsKeptBypasses(t *testing.T) {
 }
 
 func TestAnalyticsKeptCommitOrder(t *testing.T) {
+	t.Parallel()
 	local, syncer, store := newUsageJournalFixture(t)
 	pgKeptSession(t, local, "first", "project", "2026-06-14")
 	pgKeptSession(t, local, "second", "project", "2026-06-14")

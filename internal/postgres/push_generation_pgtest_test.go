@@ -30,6 +30,7 @@ const lostStateReason = "the local archive lost its record of earlier pushes, as
 // A rebuild keeps this archive's push marker but drops its watermark, so
 // PostgreSQL can hold rows the rebuild dropped. The next push must be full.
 func TestPushAfterArchiveRebuildIsFull(t *testing.T) {
+	t.Parallel()
 	f := newResumeFixture(t, "agentsview_push_generation_test")
 	_, err := f.sync().Push(t.Context(), false, nil)
 	require.NoError(t, err)
@@ -45,6 +46,7 @@ func TestPushAfterArchiveRebuildIsFull(t *testing.T) {
 }
 
 func TestPushAfterArchiveRebuildRemovesMissingSessions(t *testing.T) {
+	t.Parallel()
 	for _, tc := range []struct {
 		name            string
 		projects        []string
@@ -130,6 +132,7 @@ func TestPushAfterArchiveRebuildRemovesMissingSessions(t *testing.T) {
 // archive. The first push with a new filter has saved no state of its own, so
 // it must not claim it lost any.
 func TestFirstFilteredPushDoesNotClaimLostState(t *testing.T) {
+	t.Parallel()
 	f := newResumeFixture(t, "agentsview_push_generation_test")
 	_, err := f.sync().Push(t.Context(), false, nil)
 	require.NoError(t, err)
@@ -147,6 +150,7 @@ func TestFirstFilteredPushDoesNotClaimLostState(t *testing.T) {
 // without saving its cutoff into the replacement, and the next push must be
 // full.
 func TestPushFailsWhenTheArchiveIsRebuiltDuringIt(t *testing.T) {
+	t.Parallel()
 	f := newResumeFixture(t, "agentsview_push_generation_test")
 	_, err := f.sync().Push(t.Context(), false, nil)
 	require.NoError(t, err)
@@ -172,6 +176,7 @@ func TestPushFailsWhenTheArchiveIsRebuiltDuringIt(t *testing.T) {
 // A --full push that fails before it records its full push reports that it
 // never started, so a watch keeps the --full request.
 func TestFullPushFailingBeforeItsRunIsNotStarted(t *testing.T) {
+	t.Parallel()
 	f := newResumeFixture(t, "agentsview_push_generation_test")
 	ctx, cancel := context.WithCancel(t.Context())
 	cancel()
@@ -187,6 +192,7 @@ func TestFullPushFailingBeforeItsRunIsNotStarted(t *testing.T) {
 // the save must still end when the archive writer never reopens, as during a
 // daemon shutdown.
 func TestFailedFullPushProgressSaveEnds(t *testing.T) {
+	t.Parallel()
 	f := newResumeFixture(t, "agentsview_push_generation_test")
 	s := f.sync()
 	s.fullRunSaveTimeout = 100 * time.Millisecond

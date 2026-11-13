@@ -25,6 +25,7 @@ func reconcilePinnedMessages(
 }
 
 func TestStoreStarsAndPins(t *testing.T) {
+	t.Parallel()
 	pgURL := testPGURL(t)
 
 	const schema = "agentsview_curation_test"
@@ -138,6 +139,7 @@ func TestStoreStarsAndPins(t *testing.T) {
 }
 
 func TestPushPreservesMultiplePGPinsBySourceUUID(t *testing.T) {
+	t.Parallel()
 	pgURL := testPGURL(t)
 	cleanPGSchema(t, pgURL)
 	t.Cleanup(func() { cleanPGSchema(t, pgURL) })
@@ -265,6 +267,7 @@ func TestPushPreservesMultiplePGPinsBySourceUUID(t *testing.T) {
 // local SQLite archive and the next PostgreSQL push drop the pin —
 // the stores stay consistent instead of diverging on heuristics.
 func TestPushDropsEditedLegacyPinInBothStores(t *testing.T) {
+	t.Parallel()
 	pgURL := testPGURL(t)
 	cleanPGSchema(t, pgURL)
 	t.Cleanup(func() { cleanPGSchema(t, pgURL) })
@@ -374,6 +377,7 @@ func TestPushDropsEditedLegacyPinInBothStores(t *testing.T) {
 }
 
 func TestPushReconcilesPGPinsByPriorMessageIdentity(t *testing.T) {
+	t.Parallel()
 	pgURL := testPGURL(t)
 
 	tests := []struct {
@@ -521,6 +525,7 @@ func TestPushReconcilesPGPinsByPriorMessageIdentity(t *testing.T) {
 }
 
 func TestRestorePinnedMessagesPreservesPinCreatedAfterSnapshot(t *testing.T) {
+	t.Parallel()
 	pgURL := testPGURL(t)
 
 	const schema = "agentsview_pin_snapshot_race_test"
@@ -600,6 +605,7 @@ func TestRestorePinnedMessagesPreservesPinCreatedAfterSnapshot(t *testing.T) {
 }
 
 func TestPinMessageSerializesWithSessionReplacement(t *testing.T) {
+	t.Parallel()
 	pgURL := testPGURL(t)
 
 	const schema = "agentsview_pin_session_lock_test"
@@ -660,6 +666,7 @@ func TestPinMessageSerializesWithSessionReplacement(t *testing.T) {
 }
 
 func TestReconcilePinnedMessagesPrefersCurrentTargetPin(t *testing.T) {
+	t.Parallel()
 	pgURL := testPGURL(t)
 
 	const schema = "agentsview_pin_duplicate_test"
@@ -739,6 +746,7 @@ func TestReconcilePinnedMessagesPrefersCurrentTargetPin(t *testing.T) {
 }
 
 func TestReconcilePinnedMessagesFollowsStoredUniqueSourceUUID(t *testing.T) {
+	t.Parallel()
 	pgURL := testPGURL(t)
 
 	const schema = "agentsview_pin_shifted_uuid_test"
@@ -808,6 +816,7 @@ func TestReconcilePinnedMessagesFollowsStoredUniqueSourceUUID(t *testing.T) {
 }
 
 func TestRestorePinnedMessagesUsesResolvedAnchorOrdinalForNewDuplicateUUID(t *testing.T) {
+	t.Parallel()
 	pgURL := testPGURL(t)
 
 	const schema = "agentsview_pin_shifted_duplicate_test"
@@ -987,6 +996,7 @@ func restoreIdenticalDuplicatePins(
 func TestRestorePinnedMessagesKeepsPinOnUnchangedIdenticalDuplicates(
 	t *testing.T,
 ) {
+	t.Parallel()
 	got := restoreIdenticalDuplicatePins(t,
 		"agentsview_pin_identical_dup_keep_test",
 		"pg-pin-identical-dup-keep", `
@@ -1004,6 +1014,7 @@ func TestRestorePinnedMessagesKeepsPinOnUnchangedIdenticalDuplicates(
 func TestRestorePinnedMessagesDropsPinOnChangedDuplicateMultiplicity(
 	t *testing.T,
 ) {
+	t.Parallel()
 	got := restoreIdenticalDuplicatePins(t,
 		"agentsview_pin_identical_dup_change_test",
 		"pg-pin-identical-dup-change", `
@@ -1020,6 +1031,7 @@ func TestRestorePinnedMessagesDropsPinOnChangedDuplicateMultiplicity(
 func TestRestorePinnedMessagesFollowsShiftedIdenticalDuplicates(
 	t *testing.T,
 ) {
+	t.Parallel()
 	// A context row inserted before the duplicates shifts both while
 	// their multiplicity stays equal: the pin must follow its
 	// occurrence rank instead of staying on the saved ordinal where
@@ -1042,6 +1054,7 @@ func TestRestorePinnedMessagesFollowsShiftedIdenticalDuplicates(
 func TestRestorePinnedMessagesFollowsShiftedEqualLegacyMessages(
 	t *testing.T,
 ) {
+	t.Parallel()
 	pgURL := testPGURL(t)
 
 	const schema = "agentsview_pin_legacy_shift_test"
@@ -1142,6 +1155,7 @@ func TestRestorePinnedMessagesFollowsShiftedEqualLegacyMessages(
 // pin's original ordinal. The pin must be deleted: otherwise it
 // would silently re-anchor on an unrelated message.
 func TestReconcilePinnedMessagesPrunesPinWhenSourceUUIDGone(t *testing.T) {
+	t.Parallel()
 	pgURL := testPGURL(t)
 
 	const schema = "agentsview_pin_source_gone_test"
@@ -1217,6 +1231,7 @@ func TestReconcilePinnedMessagesPrunesPinWhenSourceUUIDGone(t *testing.T) {
 // the later duplicate. Reconciliation must keep the pin where it is
 // rather than relocating it to the lowest-ordinal duplicate.
 func TestReconcilePinnedMessagesKeepsPinOnLaterDuplicateSourceUUID(t *testing.T) {
+	t.Parallel()
 	pgURL := testPGURL(t)
 
 	const schema = "agentsview_pin_dup_uuid_test"
@@ -1297,6 +1312,7 @@ func TestReconcilePinnedMessagesKeepsPinOnLaterDuplicateSourceUUID(t *testing.T)
 // message currently at message_id; otherwise the next reconciliation
 // would follow the stale uuid away from where the user just pinned.
 func TestPinMessageRepinRefreshesSourceUUID(t *testing.T) {
+	t.Parallel()
 	pgURL := testPGURL(t)
 
 	const schema = "agentsview_pin_repin_test"
@@ -1393,6 +1409,7 @@ func TestPinMessageRepinRefreshesSourceUUID(t *testing.T) {
 // session gets no translation, so its pin on a bare uuid drops when the
 // replacement rows no longer carry it.
 func TestPushRestoresDevinPinAcrossSourceUUIDRescope(t *testing.T) {
+	t.Parallel()
 	pgURL := testPGURL(t)
 
 	tests := []struct {
@@ -1492,6 +1509,7 @@ func TestPushRestoresDevinPinAcrossSourceUUIDRescope(t *testing.T) {
 // form, each row would look unique and the pin would attach to whichever
 // row the scan returned first.
 func TestPushDropsDevinPinWhenBareAndScopedUUIDsCoexist(t *testing.T) {
+	t.Parallel()
 	pgURL := testPGURL(t)
 	cleanPGSchema(t, pgURL)
 	t.Cleanup(func() { cleanPGSchema(t, pgURL) })

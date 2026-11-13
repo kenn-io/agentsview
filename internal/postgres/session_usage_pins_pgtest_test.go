@@ -15,6 +15,7 @@ import (
 // growing session, so usage pushed after its first read must reach the
 // second.
 func TestPGSessionUsagePins(t *testing.T) {
+	t.Parallel()
 	syncer, local, _, ctx := newSessionProvenancePushSync(t, "agentsview_session_usage_pins_test")
 	dbtest.SeedSessionUsagePins(t, local)
 	_, err := syncer.Push(ctx, true, nil)

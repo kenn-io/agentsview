@@ -77,6 +77,7 @@ func seedSecretFindingsSession(
 }
 
 func TestPGListSecretFindings(t *testing.T) {
+	t.Parallel()
 	pgURL := testPGURL(t)
 	ensureStoreSchema(t, pgURL)
 
@@ -198,6 +199,7 @@ func TestPGListSecretFindings(t *testing.T) {
 }
 
 func TestPGListSecretFindingsPagination(t *testing.T) {
+	t.Parallel()
 	pgURL := testPGURL(t)
 	ensureStoreSchema(t, pgURL)
 
@@ -250,6 +252,7 @@ func TestPGListSecretFindingsPagination(t *testing.T) {
 }
 
 func TestPGListSecretFindingsDateFilter(t *testing.T) {
+	t.Parallel()
 	pgURL := testPGURL(t)
 	ensureStoreSchema(t, pgURL)
 
@@ -303,6 +306,7 @@ func TestPGListSecretFindingsDateFilter(t *testing.T) {
 }
 
 func TestPGSecretFindingSource(t *testing.T) {
+	t.Parallel()
 	pgURL := testPGURL(t)
 	ensureStoreSchema(t, pgURL)
 

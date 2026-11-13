@@ -1570,8 +1570,30 @@ own metadata, which is why the docs below call the database a mirror.
 
 ## PostgreSQL Integration Tests
 
-Run PostgreSQL integration tests only against a dedicated test database. The
-tests create and drop the `agentsview` schema.
+Run PostgreSQL integration tests only against a dedicated test server. Each
+top-level test in `internal/postgres` creates its own database on the
+`TEST_PG_URL` server, named `agentsview_test_<hex>`, and drops it when the test
+ends. The role in `TEST_PG_URL` needs `CREATEDB`. A test binary that is killed
+leaves its databases behind; drop them by that prefix.
+
+Because each test owns a database, the tests run in parallel:
+
+- Start a new `pgtest` test with `t.Parallel()` and get its database from
+  `testPGURL(t)`, or `PGTestURL(t)` in the external `postgres_test` package.
+  Subtests share their top-level test's database. `isolatedPGDatabase(t)`
+  returns another, separate database.
+- Leave out `t.Parallel()` when the test changes process-wide state, such as
+  `t.Setenv`, `time.Local`, `log.SetOutput`, `db.SetUserAutomationPrefixes`,
+  or `pricing.SetConfiguredAliases`. Go runs those tests one at a time before
+  the parallel ones start.
+- Roles are server-wide. Give each role a name no other test uses.
+- Concurrent tests share the server's connections and lock table. Against a
+  server with the default 100 connections, 16 concurrent tests ran out of lock
+  memory (SQLSTATE 53200) and 12 did not, so `make test-postgres` passes
+  `-parallel 8` and each CI shard passes `-parallel=4`.
+- Run CockroachDB with an in-memory store
+  (`start-single-node --store=type=mem,size=4GiB`). Schema setup takes about
+  10 s per test there, against 86 s on a disk store.
 
 Use `make test-postgres` to start the test container and run the suite. It
 leaves the container running. If you started that container, use
@@ -1581,7 +1603,7 @@ To use an existing dedicated instance, run:
 
 ```bash
 TEST_PG_URL="postgres://user:pass@host:5432/dbname?sslmode=disable" \
-  CGO_ENABLED=1 go test -tags "fts5,pgtest" ./internal/postgres/... -v
+  CGO_ENABLED=1 go test -parallel 8 -tags "fts5,pgtest" ./internal/postgres/... -v
 ```
 
 ### Image text

@@ -63,6 +63,7 @@ func requirePGKeptEqual(t *testing.T, want, got activity.CandidateArtifacts) {
 }
 
 func TestPGActivityReportKeptVersion1Journal(t *testing.T) {
+	t.Parallel()
 	local, syncer, store := newUsageJournalFixture(t)
 	pgKeptSession(t, local, "past", "project-a", "2026-06-14")
 	pgKeptPush(t, syncer, false)
@@ -75,6 +76,7 @@ func TestPGActivityReportKeptVersion1Journal(t *testing.T) {
 }
 
 func TestPGActivityReportKeptChanges(t *testing.T) {
+	t.Parallel()
 	for _, tc := range []struct {
 		name     string
 		timezone string
@@ -284,6 +286,7 @@ func TestPGActivityReportKeptChanges(t *testing.T) {
 }
 
 func TestPGActivityReportKeptPushDuringBuild(t *testing.T) {
+	t.Parallel()
 	local, syncer, store := newUsageJournalFixture(t)
 	pgKeptSession(t, local, "past", "project-a", "2026-06-14")
 	pgKeptPush(t, syncer, false)
@@ -306,6 +309,7 @@ func TestPGActivityReportKeptPushDuringBuild(t *testing.T) {
 }
 
 func TestPGActivityReportKeptBypasses(t *testing.T) {
+	t.Parallel()
 	for _, mode := range []string{"partial", "hosted", "missing journal", "unreadable journal", "active", "stale", "unclean", "clean, active"} {
 		t.Run(mode, func(t *testing.T) {
 			q, f := pgDayQuery(t, "2026-06-14", "UTC"), db.AnalyticsFilter{Timezone: "UTC"}
@@ -358,6 +362,7 @@ func TestPGActivityReportKeptBypasses(t *testing.T) {
 }
 
 func TestPGActivityReportKeptJournalRecreated(t *testing.T) {
+	t.Parallel()
 	local, syncer, store := newUsageJournalFixture(t)
 	pgKeptSession(t, local, "past", "project-a", "2026-06-14")
 	pgKeptPush(t, syncer, false)

@@ -49,6 +49,7 @@ func (p *projectionPartialParser) Parse(_ context.Context, m rawsync.CanonicalMa
 	return out, nil
 }
 func TestRawProjectionWorkerReportsCommittedPartialOutcomes(t *testing.T) {
+	t.Parallel()
 	for _, maximum := range []int{1, 3} {
 		t.Run(fmt.Sprint(maximum), func(t *testing.T) {
 			f := newProjectionFixture(t)

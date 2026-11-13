@@ -11,6 +11,7 @@ import (
 )
 
 func TestPushSessionWithCodexScope(t *testing.T) {
+	t.Parallel()
 	syncer, local, pg, ctx := newSessionProvenancePushSync(t, "agentsview_codex_scope_push_test")
 	seedProvenanceSession(t, local, "session-1", "workstation", "project", "")
 	result, err := syncer.Push(ctx, true, nil)

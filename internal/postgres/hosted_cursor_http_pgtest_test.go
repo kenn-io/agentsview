@@ -17,6 +17,7 @@ import (
 )
 
 func TestHostedCursorHTTPBadRequest(t *testing.T) {
+	t.Parallel()
 	store, split, _ := postgres.HostedPublicFixture(t)
 	cfg, err := config.Default()
 	require.NoError(t, err)

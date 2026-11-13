@@ -252,6 +252,7 @@ func (f *pgUsageBenchmarkFixture) replaceDeltaSessionMessage(
 }
 
 func TestPGUsageBenchmarkFixture(t *testing.T) {
+	t.Parallel()
 	fixture := openPGUsageBenchmarkFixture(t)
 	sessions, messages := pgUsageRemoteCardinality(t, fixture.remote)
 	require.Zero(t, sessions)
@@ -290,6 +291,7 @@ func TestPGUsageBenchmarkFixture(t *testing.T) {
 }
 
 func TestPGUsageBenchmarkActivityOnlySessionCoverage(t *testing.T) {
+	t.Parallel()
 	fixture := openPGUsageBenchmarkFixture(t)
 	fixture.prime(t)
 	filter := db.UsageFilter{Timezone: "UTC"}
@@ -325,6 +327,7 @@ func (s pgUsageCountsOverride) GetUsageSessionCounts(
 }
 
 func TestPGUsageBenchmarkReadPreflightRejectsMismatchedCompleteResult(t *testing.T) {
+	t.Parallel()
 	fixture := openPGUsageBenchmarkFixture(t)
 	fixture.prime(t)
 	filter := pgUsageBenchmarkFilter(pgUsageBenchmarkCases()[0])

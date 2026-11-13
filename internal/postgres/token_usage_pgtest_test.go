@@ -14,6 +14,7 @@ import (
 )
 
 func TestStoreSessionAndMessageTokenUsage(t *testing.T) {
+	t.Parallel()
 	pgURL := testPGURL(t)
 	ensureStoreSchema(t, pgURL)
 
@@ -78,6 +79,7 @@ func TestStoreSessionAndMessageTokenUsage(t *testing.T) {
 }
 
 func TestPushTokenUsageToPostgres(t *testing.T) {
+	t.Parallel()
 	pgURL := testPGURL(t)
 	cleanPGSchema(t, pgURL)
 	t.Cleanup(func() { cleanPGSchema(t, pgURL) })
@@ -140,6 +142,7 @@ func TestPushTokenUsageToPostgres(t *testing.T) {
 }
 
 func TestEnsureSchemaBackfillsTokenCoverageFlags(t *testing.T) {
+	t.Parallel()
 	pgURL := testPGURL(t)
 	cleanPGSchema(t, pgURL)
 	t.Cleanup(func() { cleanPGSchema(t, pgURL) })

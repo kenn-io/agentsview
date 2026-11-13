@@ -13,6 +13,7 @@ import (
 )
 
 func TestStoreInsightCRUD(t *testing.T) {
+	t.Parallel()
 	pgURL := testPGURL(t)
 	ensureStoreSchema(t, pgURL)
 

@@ -57,6 +57,7 @@ func readIdentityRows(
 // per-row upsert loop produced, across the fallback-vs-real-remote cases
 // the per-row logic encodes.
 func TestSyncProjectIdentityObservationsBatchMatchesSequential(t *testing.T) {
+	t.Parallel()
 	pgURL := testPGURL(t)
 	const schema = "agentsview_projident_batch_test"
 	pg, err := Open(t.Context(), pgURL, schema, true)
@@ -230,6 +231,7 @@ func TestSyncProjectIdentityObservationsBatchMatchesSequential(t *testing.T) {
 }
 
 func TestPGListProjectIdentityObservationsChunksLargeLabelLists(t *testing.T) {
+	t.Parallel()
 	pgURL := testPGURL(t)
 	const schema = "agentsview_project_identity_chunk_test"
 	pg, err := Open(t.Context(), pgURL, schema, true)
@@ -287,6 +289,7 @@ func TestPGListProjectIdentityObservationsChunksLargeLabelLists(t *testing.T) {
 }
 
 func TestPGSourceArchiveScopeRejectsSaltMismatch(t *testing.T) {
+	t.Parallel()
 	pgURL := testPGURL(t)
 	const schema = "agentsview_project_identity_salt_mismatch_test"
 	pg, err := Open(t.Context(), pgURL, schema, true)
@@ -304,6 +307,7 @@ func TestPGSourceArchiveScopeRejectsSaltMismatch(t *testing.T) {
 }
 
 func TestPGUsageGroups(t *testing.T) {
+	t.Parallel()
 	const schema = "agentsview_usage_groups_test"
 	pg, err := Open(t.Context(), testPGURL(t), schema, true)
 	require.NoError(t, err)

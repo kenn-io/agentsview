@@ -79,6 +79,7 @@ func timingInsertToolCallPG(
 }
 
 func TestPGGetSessionTiming_Solo(t *testing.T) {
+	t.Parallel()
 	pgURL := testPGURL(t)
 	ensureStoreSchema(t, pgURL)
 
@@ -118,6 +119,7 @@ func TestPGGetSessionTiming_Solo(t *testing.T) {
 }
 
 func TestPGGetSessionTiming_LastMessageFallsBackToSessionEnd(t *testing.T) {
+	t.Parallel()
 	pgURL := testPGURL(t)
 	ensureStoreSchema(t, pgURL)
 
@@ -151,6 +153,7 @@ func TestPGGetSessionTiming_LastMessageFallsBackToSessionEnd(t *testing.T) {
 }
 
 func TestPGGetSessionTiming_RunningSessionLastTurnNull(t *testing.T) {
+	t.Parallel()
 	pgURL := testPGURL(t)
 	ensureStoreSchema(t, pgURL)
 
@@ -181,6 +184,7 @@ func TestPGGetSessionTiming_RunningSessionLastTurnNull(t *testing.T) {
 }
 
 func TestPGGetSessionTiming_NonMonotonicTimestampClampsNull(t *testing.T) {
+	t.Parallel()
 	pgURL := testPGURL(t)
 	ensureStoreSchema(t, pgURL)
 
@@ -212,6 +216,7 @@ func TestPGGetSessionTiming_NonMonotonicTimestampClampsNull(t *testing.T) {
 }
 
 func TestPGGetSessionTiming_NoToolUseHasNoTurnDuration(t *testing.T) {
+	t.Parallel()
 	pgURL := testPGURL(t)
 	ensureStoreSchema(t, pgURL)
 
@@ -239,6 +244,7 @@ func TestPGGetSessionTiming_NoToolUseHasNoTurnDuration(t *testing.T) {
 }
 
 func TestPGGetSessionTiming_ClosedSubagentTimestampsMeasureExecution(t *testing.T) {
+	t.Parallel()
 	pgURL := testPGURL(t)
 	ensureStoreSchema(t, pgURL)
 
@@ -279,6 +285,7 @@ func TestPGGetSessionTiming_ClosedSubagentTimestampsMeasureExecution(t *testing.
 }
 
 func TestPGGetSessionTiming_MissingSessionReturnsNil(t *testing.T) {
+	t.Parallel()
 	pgURL := testPGURL(t)
 	ensureStoreSchema(t, pgURL)
 
@@ -294,6 +301,7 @@ func TestPGGetSessionTiming_MissingSessionReturnsNil(t *testing.T) {
 }
 
 func TestPGGetSessionTiming_ActivityTiming(t *testing.T) {
+	t.Parallel()
 	pgURL := testPGURL(t)
 	ensureStoreSchema(t, pgURL)
 	pg, err := Open(t.Context(), pgURL, testSchema, true)

@@ -433,6 +433,7 @@ func seedToolsSkillsParityFixture(t *testing.T, local *db.DB) {
 }
 
 func TestToolEffectivenessSQLitePGParity(t *testing.T) {
+	t.Parallel()
 	const schema = "agentsview_tool_rates_parity_test"
 	url := testPGURL(t)
 	cleanNamedPGSchema(t, url, schema)

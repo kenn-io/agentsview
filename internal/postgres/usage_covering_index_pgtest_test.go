@@ -12,6 +12,7 @@ import (
 const usageIdxTestSchema = "agentsview_usage_idx_test"
 
 func TestEnsureSchemaMigratesUsageCoveringIndex(t *testing.T) {
+	t.Parallel()
 	pgURL := testPGURL(t)
 	pg, err := Open(t.Context(), pgURL, usageIdxTestSchema, true)
 	require.NoError(t, err, "Open")

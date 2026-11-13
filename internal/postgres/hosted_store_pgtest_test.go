@@ -15,6 +15,7 @@ import (
 )
 
 func TestDiscardedPromptClearsGroupLabelOnUpsert(t *testing.T) {
+	t.Parallel()
 	f := newHostedFixture(t, "tenant-group-label")
 	sess := db.Session{
 		ID: "group-label-discard", Machine: "device-a", Agent: "hermes", Project: "scheduled",
@@ -65,6 +66,7 @@ func TestDiscardedPromptClearsGroupLabelOnUpsert(t *testing.T) {
 // A physical Store passed through the hosted constructor cannot resolve the
 // provider alias and leaks storage identities in its list and transcript.
 func TestHostedPublicReadBoundary(t *testing.T) {
+	t.Parallel()
 	f := newProjectionFixture(t)
 	m, _ := f.accept(t, "device-a", "capture-a", "")
 	require.NoError(t, f.sink.Project(t.Context(), f.lease(t, m), m, projectionOutcome("public transcript")))
@@ -115,6 +117,7 @@ func TestHostedPublicReadBoundary(t *testing.T) {
 }
 
 func TestHostedPublicConflictCurationAndCursor(t *testing.T) {
+	t.Parallel()
 	f := newProjectionFixture(t)
 	a, accepted := f.accept(t, "device-a", "capture-a", "")
 	require.NoError(t, f.sink.Project(t.Context(), f.lease(t, a), a, projectionOutcome("first transcript")))
@@ -178,6 +181,7 @@ func TestHostedPublicConflictCurationAndCursor(t *testing.T) {
 }
 
 func TestHostedSharedChildTraversesBothParentVariants(t *testing.T) {
+	t.Parallel()
 	f := newProjectionFixture(t)
 	outcome := func(parentText string) rawderive.ParsedManifest {
 		p := projectionOutcome(parentText)
@@ -251,6 +255,7 @@ func TestHostedSharedChildTraversesBothParentVariants(t *testing.T) {
 }
 
 func TestHostedReadKeepsOneIdentitySnapshot(t *testing.T) {
+	t.Parallel()
 	f := newProjectionFixture(t)
 	m, accepted := f.accept(t, "device-a", "capture-a", "")
 	require.NoError(t, f.sink.Project(t.Context(), f.lease(t, m), m, projectionOutcome("before")))
@@ -343,6 +348,7 @@ func TestHostedReadKeepsOneIdentitySnapshot(t *testing.T) {
 }
 
 func TestHostedUsageAndActivityReferences(t *testing.T) {
+	t.Parallel()
 	f := newProjectionFixture(t)
 	m, _ := f.accept(t, "device-a", "capture-a", "")
 	p := projectionOutcome("usage transcript")
@@ -383,6 +389,7 @@ func TestHostedUsageAndActivityReferences(t *testing.T) {
 }
 
 func TestHostedCurationGuardChecksCollisionInsideTransaction(t *testing.T) {
+	t.Parallel()
 	f := newProjectionFixture(t)
 	m, _ := f.accept(t, "device-a", "capture-a", "")
 	require.NoError(t, f.sink.Project(t.Context(), f.lease(t, m), m, projectionOutcome("raw transcript")))
@@ -402,6 +409,7 @@ func TestHostedCurationGuardChecksCollisionInsideTransaction(t *testing.T) {
 }
 
 func TestHostedBulkCurationResolvesEntireBatchBeforeWriting(t *testing.T) {
+	t.Parallel()
 	f := newProjectionFixture(t)
 	m, _ := f.accept(t, "device-a", "capture-a", "")
 	require.NoError(t, f.sink.Project(t.Context(), f.lease(t, m), m, projectionOutcome("visible")))
@@ -422,6 +430,7 @@ func TestHostedBulkCurationResolvesEntireBatchBeforeWriting(t *testing.T) {
 }
 
 func TestHostedConstructorRejectsMissingRevisionProtection(t *testing.T) {
+	t.Parallel()
 	f := newHostedFixture(t, "tenant-projection")
 	_, err := f.admin.ExecContext(t.Context(), `DROP TRIGGER hosted_legacy_revision ON sessions`)
 	require.NoError(t, err)
@@ -430,6 +439,7 @@ func TestHostedConstructorRejectsMissingRevisionProtection(t *testing.T) {
 }
 
 func TestHostedConstructorRejectsWeakenedRevisionProtection(t *testing.T) {
+	t.Parallel()
 	for _, alteration := range []string{
 		`DROP TRIGGER hosted_legacy_revision ON sessions; CREATE TRIGGER hosted_legacy_revision AFTER INSERT OR UPDATE OR DELETE ON sessions FOR EACH ROW WHEN (false) EXECUTE FUNCTION hosted_legacy_revision()`,
 		`CREATE FUNCTION noop_revision() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN RETURN NULL; END $$; DROP TRIGGER hosted_legacy_revision ON sessions; CREATE TRIGGER hosted_legacy_revision AFTER INSERT OR UPDATE OR DELETE ON sessions FOR EACH ROW EXECUTE FUNCTION noop_revision()`,
@@ -446,6 +456,7 @@ func TestHostedConstructorRejectsWeakenedRevisionProtection(t *testing.T) {
 }
 
 func TestHostedUnresolvedPinRetainsCreationTime(t *testing.T) {
+	t.Parallel()
 	f := newProjectionFixture(t)
 	m, accepted := f.accept(t, "device-a", "pin-time-a", "")
 	require.NoError(t, f.sink.Project(t.Context(), f.lease(t, m), m, projectionOutcome("original pinned message")))
@@ -467,6 +478,7 @@ func TestHostedUnresolvedPinRetainsCreationTime(t *testing.T) {
 }
 
 func TestHostedTrendsKeptPublication(t *testing.T) {
+	t.Parallel()
 	f := newProjectionFixture(t)
 	ctx := t.Context()
 	m, accepted := f.accept(t, "device-a", "capture-a", "")

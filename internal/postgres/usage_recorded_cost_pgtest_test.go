@@ -11,6 +11,7 @@ import (
 )
 
 func TestRecordedCostPricesOnlyUnpricedModels(t *testing.T) {
+	t.Parallel()
 	const schema = "agentsview_recorded_cost_test"
 	pgURL := testPGURL(t)
 	cleanNamedPGSchema(t, pgURL, schema)

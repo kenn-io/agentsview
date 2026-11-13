@@ -466,7 +466,7 @@ test-postgres: pricing-snapshot ensure-embed-dir postgres-up
 	CGO_ENABLED=1 go test -tags "fts5,pgtest" -v ./cmd/agentsview \
 		-run 'TestRawSync.*CleanUploads|TestPGServeKataHubConnection|TestRawSyncBackfill|TestRawProjectionDialogueRolloutRequeuesCompletedProductionVersion|TestHostedRuntimeHealthRequiresStatusToken|TestReplicaRecipeQueryWithoutConfig|TestReplicaServeWatchPublication' -count=1
 	TEST_PG_URL="postgres://agentsview_test:agentsview_test_password@localhost:5433/agentsview_test?sslmode=disable" \
-	CGO_ENABLED=1 go test -p 1 -tags "fts5,pgtest" -v ./internal/postgres/... ./internal/activity/... -count=1 -timeout=20m
+	CGO_ENABLED=1 go test -p 1 -parallel 8 -tags "fts5,pgtest" -v ./internal/postgres/... ./internal/activity/... -count=1 -timeout=20m
 	TEST_PG_URL="postgres://agentsview_test:agentsview_test_password@localhost:5433/agentsview_test?sslmode=disable" \
 	CGO_ENABLED=1 go test -tags "fts5,pgtest" -v ./internal/service -run '^TestPlanUsageCountsParity$$' -count=1
 
@@ -486,8 +486,8 @@ test-postgres-core-ci:
 test-postgres-standby-ci: pricing-snapshot ensure-embed-dir
 	CGO_ENABLED=1 go test -tags "fts5,pgtest" ./internal/postgres -run '^TestUsageStandbyRetainsResults$$' -count=1 -timeout=5m
 
-# Each process gets its own database because tests drop schemas that own
-# database-wide extensions. Activity runs afterward on the original database.
+# Three processes each run four internal/postgres tests at a time; every test
+# creates its own database. Activity runs afterward on the original database.
 test-postgres-core-fast-ci: pricing-snapshot ensure-embed-dir
 	CGO_ENABLED=1 bash scripts/test-postgres-shards.sh postgres-core-fast ./internal/postgres 3 '$(POSTGRES_CORE_HEAVY_TEST)' 20m
 	CGO_ENABLED=1 $(call gotestsum,postgres-core-fast-activity,./internal/activity/...) -p 1 -tags "fts5,pgtest" -count=1 -timeout=20m

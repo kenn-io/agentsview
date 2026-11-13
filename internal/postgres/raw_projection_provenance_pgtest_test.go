@@ -16,6 +16,7 @@ import (
 )
 
 func TestRawProjectionPreservesAbsentProviderTitleFromSameSource(t *testing.T) {
+	t.Parallel()
 	f := newProjectionFixture(t)
 	m, accepted := f.accept(t, "device-a", "named", "")
 	named := projectionOutcome("first")
@@ -64,6 +65,7 @@ func TestRawProjectionPreservesAbsentProviderTitleFromSameSource(t *testing.T) {
 }
 
 func TestRawProjectionEqualSourcesNoOpAndRemoval(t *testing.T) {
+	t.Parallel()
 	f := newProjectionFixture(t)
 	a, ar := f.accept(t, "device-a", "equal-a", "")
 	require.NoError(t, f.sink.Project(t.Context(), f.lease(t, a), a, projectionOutcome("equal")))
@@ -107,6 +109,7 @@ func TestRawProjectionEqualSourcesNoOpAndRemoval(t *testing.T) {
 }
 
 func TestRawProjectionPartialMembersKeepPriorProof(t *testing.T) {
+	t.Parallel()
 	f := newProjectionFixture(t)
 	m, accepted := f.accept(t, "device-a", "multi-a", "")
 	outcome := projectionOutcome("first")
@@ -134,6 +137,7 @@ func TestRawProjectionPartialMembersKeepPriorProof(t *testing.T) {
 	assert.Equal(t, "retrying", state)
 }
 func TestRawProjectionRetainsProviderHistoryAndEveryAcceptedContributor(t *testing.T) {
+	t.Parallel()
 	f := newProjectionFixture(t)
 	m, accepted := f.accept(t, "device-a", "history-a", "", parser.AgentRooCode)
 	outcome := projectionOutcome("retained history")
@@ -195,6 +199,7 @@ func TestRawProjectionRetainsProviderHistoryAndEveryAcceptedContributor(t *testi
 }
 
 func TestRawProjectionUsageOnlyMemberAndDerivedFindings(t *testing.T) {
+	t.Parallel()
 	f := newProjectionFixture(t)
 	m, _ := f.accept(t, "device-a", "complete-graph", "")
 	outcome := projectionOutcome("inspect")
@@ -233,6 +238,7 @@ func TestRawProjectionUsageOnlyMemberAndDerivedFindings(t *testing.T) {
 }
 
 func TestRawProjectionKeepsLegacyProofSeparate(t *testing.T) {
+	t.Parallel()
 	f := newProjectionFixture(t)
 	_, err := f.runtime.ExecContext(t.Context(), `INSERT INTO sessions(id,project,machine,agent,first_message) VALUES('codex:portable','legacy','archive','codex','legacy preserved')`)
 	require.NoError(t, err)
@@ -249,6 +255,7 @@ func TestRawProjectionKeepsLegacyProofSeparate(t *testing.T) {
 }
 
 func TestRawProjectionProviderFallbackAliasSurvivesConflict(t *testing.T) {
+	t.Parallel()
 	f := newProjectionFixture(t)
 	for _, device := range []string{"device-a", "device-b"} {
 		m, _ := f.accept(t, device, "vibe-"+device, "", parser.AgentVibe)
@@ -270,6 +277,7 @@ func TestRawProjectionProviderFallbackAliasSurvivesConflict(t *testing.T) {
 }
 
 func TestRawProjectionNonportableIdentityHasExplicitAliasConflict(t *testing.T) {
+	t.Parallel()
 	f := newProjectionFixture(t)
 	a, ar := f.accept(t, "device-a", "opaque-a", "")
 	out := projectionOutcome("equal text")
@@ -296,6 +304,7 @@ func TestRawProjectionNonportableIdentityHasExplicitAliasConflict(t *testing.T) 
 }
 
 func TestRawProjectionHonorsExplicitExclusionWithoutReplacingMembership(t *testing.T) {
+	t.Parallel()
 	f := newProjectionFixture(t)
 	first, accepted := f.accept(t, "device-a", "included", "")
 	require.NoError(t, f.sink.Project(t.Context(), f.lease(t, first), first, projectionOutcome("retained")))
@@ -311,6 +320,7 @@ func TestRawProjectionHonorsExplicitExclusionWithoutReplacingMembership(t *testi
 }
 
 func TestRawProjectionReprocessedCronPublishesGroup(t *testing.T) {
+	t.Parallel()
 	f := newProjectionFixture(t)
 	manifest, _ := f.accept(t, "device-a", "ungrouped-cron", "", parser.AgentHermes)
 	outcome := projectionOutcome("same transcript")

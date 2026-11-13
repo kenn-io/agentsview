@@ -132,6 +132,7 @@ func seedFrictionPG(t *testing.T, store *Store) {
 }
 
 func TestFrictionListParity(t *testing.T) {
+	t.Parallel()
 	pgURL := testPGURL(t)
 	ensureStoreSchema(t, pgURL)
 	store, err := NewStore(t.Context(), pgURL, testSchema, true)
@@ -337,6 +338,7 @@ func TestFrictionListParity(t *testing.T) {
 // A read-only serve role cannot add the Kata link and filing-state tables
 // to a schema that predates them; pattern reads must still work.
 func TestFrictionPatternsReadWithoutTheLinksTable(t *testing.T) {
+	t.Parallel()
 	const schema = "agentsview_friction_nolinks_test"
 	pgURL := testPGURL(t)
 	cleanNamedPGSchema(t, pgURL, schema)
@@ -401,6 +403,7 @@ func TestFrictionPatternsReadWithoutTheLinksTable(t *testing.T) {
 // CONFLICT DO UPDATE needs UPDATE, and unlinking and linking need DELETE. A role missing any of them must
 // fail the probe, or filing creates a Kata issue it cannot record.
 func TestFrictionIssueLinkProbeNeedsEveryWritePrivilege(t *testing.T) {
+	t.Parallel()
 	const schema = "agentsview_friction_privs_test"
 	const role = "agentsview_friction_link_writer"
 	const password = "agentsview_friction_link_writer_pw"
@@ -464,6 +467,7 @@ func TestFrictionIssueLinkProbeNeedsEveryWritePrivilege(t *testing.T) {
 // An insert-only link save that waits on a competing, uncommitted insert
 // must return the competitor's link once it commits.
 func TestAddFrictionIssueLinkReturnsAConcurrentWinner(t *testing.T) {
+	t.Parallel()
 	const schema = "agentsview_friction_race_test"
 	pgURL := testPGURL(t)
 	cleanNamedPGSchema(t, pgURL, schema)
@@ -524,6 +528,7 @@ func TestAddFrictionIssueLinkReturnsAConcurrentWinner(t *testing.T) {
 // Every link and filing-state writer locks the pattern first, so a person
 // linking while automatic filing records a retry never deadlocks.
 func TestFrictionLinkWritersDoNotDeadlock(t *testing.T) {
+	t.Parallel()
 	const schema = "agentsview_friction_lock_test"
 	pgURL := testPGURL(t)
 	cleanNamedPGSchema(t, pgURL, schema)

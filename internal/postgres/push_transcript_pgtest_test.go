@@ -17,6 +17,7 @@ import (
 // A pinned message that moves into a page the push already copied must keep
 // its pin.
 func TestPushKeepsPinWhenTranscriptShiftsDuringCopy(t *testing.T) {
+	t.Parallel()
 	const id = "claude:pin-shift"
 	const schema = "agentsview_pin_shift_test"
 	const total = db.MaxMessageLimit + 500
@@ -84,6 +85,7 @@ func TestPushKeepsPinWhenTranscriptShiftsDuringCopy(t *testing.T) {
 // pin whose message is still there, and drop only the pin whose message is
 // gone, as it would without the writes.
 func TestPushCopiesSessionThatGrowsDuringTheCopy(t *testing.T) {
+	t.Parallel()
 	const id = "claude:pin-grow"
 	const schema = "agentsview_pin_grow_test"
 	const total = db.MaxMessageLimit + 500

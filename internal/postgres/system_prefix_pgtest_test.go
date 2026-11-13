@@ -12,6 +12,7 @@ import (
 )
 
 func TestSystemPrefixSQLClassification(t *testing.T) {
+	t.Parallel()
 	conn, err := sql.Open("pgx", testPGURL(t))
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, conn.Close()) })

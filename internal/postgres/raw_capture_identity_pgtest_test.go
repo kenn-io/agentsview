@@ -17,6 +17,7 @@ import (
 // A filename alias does not replace a missing provider identity. Identical
 // real-provider results must coalesce only when that native key is present.
 func TestRawClaudeProviderIdentityControlsDeviceCoalescing(t *testing.T) {
+	t.Parallel()
 	for _, known := range []bool{false, true} {
 		name := "missing_identity"
 		if known {

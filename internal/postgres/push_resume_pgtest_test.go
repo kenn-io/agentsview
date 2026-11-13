@@ -113,6 +113,7 @@ func (f resumeFixture) messageCTID(t *testing.T, sessionID string) string {
 // keep the sessions earlier processes committed, so the push converges, and
 // the run must end with every session in PG and nothing left pending.
 func TestFullPushResumesAcrossRestarts(t *testing.T) {
+	t.Parallel()
 	f := newResumeFixture(t, "agentsview_push_resume_test")
 
 	f.killedPush(t)
@@ -144,6 +145,7 @@ func TestFullPushResumesAcrossRestarts(t *testing.T) {
 // A run recorded against another archive generation is abandoned: sessions
 // it committed may predate the change, so every session is pushed again.
 func TestFullPushRestartsWhenArchiveChangedSinceInterruption(t *testing.T) {
+	t.Parallel()
 	f := newResumeFixture(t, "agentsview_push_resume_archive_test")
 	f.killedPush(t)
 
@@ -166,6 +168,7 @@ func TestFullPushRestartsWhenArchiveChangedSinceInterruption(t *testing.T) {
 // A session the interrupted run committed but that PG lost while the pusher
 // was down is pushed again instead of being skipped.
 func TestFullPushResumeRepushesSessionsMissingFromPG(t *testing.T) {
+	t.Parallel()
 	f := newResumeFixture(t, "agentsview_push_resume_missing_test")
 	f.killedPush(t)
 	_, err := f.pg.ExecContext(t.Context(), `DELETE FROM messages WHERE session_id = 'new'`)
@@ -214,6 +217,7 @@ func (e interruptingVectorExport) SessionDocs(
 // A full push killed during its vector phase resumes there: the sessions and
 // the vectors it already pushed are not sent again.
 func TestFullPushResumesVectorPhase(t *testing.T) {
+	t.Parallel()
 	s, local, _ := newVectorPushTestSync(t, testPGURL(t), "agentsview_push_resume_vector_test")
 	seedVectorSession(t, local, "A")
 	seedVectorSession(t, local, "B")
@@ -265,6 +269,7 @@ func TestFullPushResumesVectorPhase(t *testing.T) {
 // An explicit full push starts over instead of resuming an unfinished one,
 // and its reason says it discarded that run only when one was waiting.
 func TestRequestedFullPushDiscardsUnfinishedRun(t *testing.T) {
+	t.Parallel()
 	f := newResumeFixture(t, "agentsview_push_resume_requested_test")
 	f.killedPush(t)
 
@@ -285,6 +290,7 @@ func TestRequestedFullPushDiscardsUnfinishedRun(t *testing.T) {
 // archive is a new generation, so the unfinished run cannot resume there, but
 // the push still reports that --full discarded it.
 func TestRequestedFullPushAfterResyncReportsDiscardedRun(t *testing.T) {
+	t.Parallel()
 	f := newResumeFixture(t, "agentsview_push_resume_resync_test")
 	f.killedPush(t)
 
@@ -308,6 +314,7 @@ func TestRequestedFullPushAfterResyncReportsDiscardedRun(t *testing.T) {
 // A full push that ended with session errors does not keep later pushes
 // full once nothing else requires one; they go back to incremental.
 func TestErroredFullPushRunDroppedWhenNoFullPushRequired(t *testing.T) {
+	t.Parallel()
 	f := newResumeFixture(t, "agentsview_push_resume_errored_test")
 	first, err := f.sync().Push(t.Context(), false, nil)
 	require.NoError(t, err)

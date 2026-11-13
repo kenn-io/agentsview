@@ -51,6 +51,7 @@ func codexCloudProjection(messages int, tokens bool, plan *parser.ParsedPlanUsag
 // replace the hub's transcript, and the refetched history must not drop
 // the hub's live token counts.
 func TestRawProjectionCodexCloudRebuiltMirrorKeepsHistory(t *testing.T) {
+	t.Parallel()
 	f := newProjectionFixture(t)
 	store := &Store{pg: f.runtime}
 	m1, accepted := f.accept(t, "device-a", "capture-a", "", parser.AgentCodexCloud)

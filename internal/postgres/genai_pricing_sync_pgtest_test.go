@@ -25,6 +25,7 @@ import (
 // digest must agree with the archive's, or every push would rewrite the
 // document and its observation time.
 func TestSyncModelPricingComparesGenAIByDigest(t *testing.T) {
+	t.Parallel()
 	ctx := t.Context()
 	url := testPGURL(t)
 	schema := fmt.Sprintf("agentsview_genai_digest_%x", rand.Uint64())

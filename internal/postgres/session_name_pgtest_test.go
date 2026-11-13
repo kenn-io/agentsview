@@ -20,6 +20,7 @@ import (
 // SessionName (agent-provided title, no user rename) surfaces its name through
 // all PG read paths.
 func TestPGSessionNameVisibleInReadPaths(t *testing.T) {
+	t.Parallel()
 	pgURL := testPGURL(t)
 
 	const schema = "agentsview_session_name_test"
@@ -120,6 +121,7 @@ func TestPGSessionNameVisibleInReadPaths(t *testing.T) {
 func strPtr(s string) *string { return &s }
 
 func TestPGPushUsageOnlyClearsRenamedTitle(t *testing.T) {
+	t.Parallel()
 	pgURL := testPGURL(t)
 	cleanPGSchema(t, pgURL)
 	t.Cleanup(func() { cleanPGSchema(t, pgURL) })

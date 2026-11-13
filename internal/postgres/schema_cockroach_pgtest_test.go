@@ -9,6 +9,7 @@ import (
 )
 
 func TestCockroachSchemaAndCodexScope(t *testing.T) {
+	t.Parallel()
 	pgURL := testPGURL(t)
 	const schema = "agentsview_cockroach_fresh_test"
 	cleanNamedPGSchema(t, pgURL, schema)
