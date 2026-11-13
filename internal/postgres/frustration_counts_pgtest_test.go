@@ -93,11 +93,19 @@ func TestFrustrationCountsUnavailable(t *testing.T) {
 		if f.versionColumn != "xmin" {
 			t.Skip("PostgreSQL roles required")
 		}
-		_, err := f.open(t).GetAnalyticsSignals(f.ctx, db.AnalyticsFilter{})
+		session := db.Session{ID: "two", Agent: "claude", Project: "sample", Machine: "workstation", MessageCount: 2}
+		messages := []db.Message{
+			{SessionID: "two", Ordinal: 0, Role: "user", Content: "this is broken"},
+			{SessionID: "two", Ordinal: 1, Role: "user", Content: "this is broken"},
+		}
+		_, err := f.local.WriteSessionBatchContext(f.ctx, []db.SessionBatchWrite{{Session: session, Messages: messages, ReplaceMessages: true}})
+		require.NoError(t, err)
+		require.NoError(t, f.local.UpdateSessionSignals(f.ctx, "two", db.SessionSignalUpdate{QualitySignals: db.QualitySignals{Version: db.CurrentQualitySignalVersion}}))
+		_, err = f.syncer.Push(f.ctx, false, nil)
+		require.NoError(t, err)
+		_, err = f.open(t).GetAnalyticsSignals(f.ctx, db.AnalyticsFilter{})
 		require.NoError(t, err)
 		_, err = f.pg.ExecContext(f.ctx, `UPDATE session_frustration_counts SET rules_version = 0 WHERE session_id = 'one'`)
-		require.NoError(t, err)
-		_, err = f.pg.ExecContext(f.ctx, `UPDATE session_frustration_counts SET marker_count = 7 WHERE session_id = 'two'`)
 		require.NoError(t, err)
 		roleURL := newUsageJournalRole(t, f.syncer, `GRANT SELECT ON ALL TABLES IN SCHEMA `+f.schema+` TO ROLE`)
 		reader, err := NewStore(f.ctx, roleURL, f.schema, true)
@@ -109,7 +117,7 @@ func TestFrustrationCountsUnavailable(t *testing.T) {
 		defer log.SetOutput(previous)
 		result, err := reader.GetAnalyticsSignals(f.ctx, db.AnalyticsFilter{})
 		require.NoError(t, err)
-		require.Equal(t, 8, result.QualityHealth.Totals.FrustrationMarkerCount)
+		require.Equal(t, 3, result.QualityHealth.Totals.FrustrationMarkerCount)
 		require.NotContains(t, output.String(), "storing frustration counts")
 	})
 	t.Run("missing table and borrowed snapshot", func(t *testing.T) {
