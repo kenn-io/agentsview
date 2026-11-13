@@ -40,10 +40,10 @@ Search matches text extracted from tool-result images when
 [`[image_text]`](configuration.md#image-text) is enabled locally. The first
 push after upgrading rebuilds the mirror to copy existing image text.
 
-Usage and Activity read each message's token counts from columns that push
-fills, without parsing the message's token JSON. The first push after upgrading
-rebuilds the mirror to fill them. Serve requires that rebuild before opening an
-older mirror.
+Usage and Activity load faster because the mirror stores each message's token
+counts. After upgrading, run `agentsview replica duckdb push` once to rebuild
+the mirror; `agentsview replica duckdb serve` refuses to open an older mirror
+until you do.
 
 ## Quick Start
 
