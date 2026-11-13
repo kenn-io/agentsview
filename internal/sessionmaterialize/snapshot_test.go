@@ -181,6 +181,23 @@ func checkDirectoryRouting(t *testing.T, cfg config.Config, receiver *db.DB, ses
 	result, err := Materialize(t.Context(), directoryOnly, receiver, session, cwd)
 	require.NoError(t, err)
 	assert.Contains(t, result.Source, "directory:")
+	// The imported foreign session's archive URI must retain its exact owner
+	// binding; a different root is not an alternate source.
+	require.NotNil(t, session.FilePath)
+	assert.Contains(t, *session.FilePath, "archive://")
+	wrong := *session
+	wrongPath := "archive://wrong-root/source"
+	wrong.FilePath = &wrongPath
+	_, err = Materialize(t.Context(), directoryOnly, receiver, &wrong, cwd)
+	require.ErrorContains(t, err, "binding")
+	vault, err := docbank.New(t.Context(), docbank.Config{Root: filepath.Join(directoryOnly.ArchiveSources[0].Directory, rawarchive.Directory, "artifacts")})
+	require.NoError(t, err)
+	busyVault := vault
+	t.Cleanup(func() { _ = busyVault.Close() })
+	_, err = Materialize(t.Context(), directoryOnly, receiver, session, cwd)
+	require.ErrorIs(t, err, docbank.ErrVaultLocked)
+	assert.ErrorContains(t, err, "archive is busy")
+	require.NoError(t, vault.Close())
 	unavailable := cfg
 	unavailable.ArchiveSources = append([]config.ArchiveSource(nil), cfg.ArchiveSources...)
 	unavailable.ArchiveSources[0].Repository = filepath.Join(t.TempDir(), "missing")
@@ -206,7 +223,7 @@ func checkDirectoryRouting(t *testing.T, cfg config.Config, receiver *db.DB, ses
 		extras = append(extras, docbank.BackupExtraFile{Path: fileName, RecordAs: "application/" + name})
 	}
 	require.NoError(t, reader.Close())
-	vault, err := docbank.New(t.Context(), docbank.Config{Root: filepath.Join(cfg.ArchiveSources[1].Directory, rawarchive.Directory, "artifacts")})
+	vault, err = docbank.New(t.Context(), docbank.Config{Root: filepath.Join(cfg.ArchiveSources[1].Directory, rawarchive.Directory, "artifacts")})
 	require.NoError(t, err)
 	bad, err := vault.CreateBackup(t.Context(), repository, docbank.BackupOptions{ExtraFiles: extras})
 	require.NoError(t, err)

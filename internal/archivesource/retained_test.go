@@ -8,6 +8,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"runtime"
 	"testing"
 
 	"github.com/klauspost/compress/zstd"
@@ -222,4 +223,89 @@ func retainedTree(t *testing.T, root string) map[string]string {
 	})
 	require.NoError(t, err)
 	return entries
+}
+
+func TestRetainedDirectoryReadCreatesNoSidecars(t *testing.T) {
+	const thread = "22222222-2222-4222-8222-222222222222"
+	ctx := t.Context()
+	inputs := t.TempDir()
+	home := filepath.Join(inputs, "codex")
+	name := "rollout-2026-01-01T00-00-00-" + thread + ".jsonl"
+	page := testjsonl.JoinJSONL(testjsonl.CodexSessionMetaWithFieldsJSON(thread, "/work", "codex_cli_rs", "2026-01-01T00:00:00Z", map[string]any{"history_mode": "paginated"}), testjsonl.CodexMsgJSON("user", "question", "2026-01-01T00:00:01Z"))
+	dbtest.WriteTestFile(t, filepath.Join(home, "sessions", name), []byte(page))
+	backupSourceRoots(t, inputs, []rawarchive.RootSpec{{Provider: "codex", Path: home}})
+	seed := filepath.Join(inputs, "seed")
+	database, err := db.OpenIsolatedContext(ctx, filepath.Join(seed, "sessions.db"))
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = database.Close() })
+	archive, err := rawarchive.Open(ctx, database, seed, nil)
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = archive.Close() })
+	_, err = archive.Reparse(ctx, rawarchive.ReparseOptions{All: true, ScratchBytes: 1 << 20})
+	require.NoError(t, err)
+	archiveID, err := database.GetArchiveID(ctx)
+	require.NoError(t, err)
+	var owner db.ArchiveSessionProvenance
+	owner.NativeSessionID = "codex:" + thread
+	owner.Source.ArchiveID = archiveID
+	err = database.Reader().QueryRowContext(ctx, `SELECT b.device_id,b.root_id,b.source_key,s.manifest_id FROM raw_archive_sessions b JOIN raw_archive_sources s ON s.root_id=b.root_id AND s.source_key=b.source_key WHERE b.session_id=?`, owner.NativeSessionID).Scan(&owner.Source.DeviceID, &owner.Source.RootID, &owner.Source.SourceKey, &owner.ManifestID)
+	require.NoError(t, err)
+	owner.Attachment = db.ArchiveAttachmentKey{RepositoryID: "archive:" + archiveID, SnapshotID: "directory:" + archiveID}
+	require.NoError(t, archive.Close())
+	require.NoError(t, database.Close())
+	// The normal directory attach path creates the application owner lock.
+	index, err := openDirectoryIndex(ctx, config.ArchiveSource{Directory: seed}, t.TempDir())
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = index.Close() })
+	require.NoError(t, index.Close())
+	dbPath := filepath.Join(seed, "sessions.db")
+	// A final writable owner checkpoints and closes after attachment.
+	checkpointed, err := db.OpenIsolatedContext(ctx, dbPath)
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = checkpointed.Close() })
+	require.NoError(t, checkpointed.Close())
+	before, err := os.ReadFile(dbPath)
+	require.NoError(t, err)
+	require.GreaterOrEqual(t, len(before), 20)
+	assert.Equal(t, []byte{2, 2}, before[18:20])
+	info, err := os.Stat(dbPath)
+	require.NoError(t, err)
+	for _, suffix := range []string{"-wal", "-shm", "-journal"} {
+		_, err := os.Stat(dbPath + suffix)
+		require.ErrorIs(t, err, os.ErrNotExist)
+	}
+	listing, err := os.ReadDir(seed)
+	require.NoError(t, err)
+	check := func() {
+		t.Helper()
+		after, err := os.ReadDir(seed)
+		require.NoError(t, err)
+		var gotNames, wantNames []string
+		for _, entry := range after {
+			gotNames = append(gotNames, entry.Name())
+		}
+		for _, entry := range listing {
+			wantNames = append(wantNames, entry.Name())
+		}
+		assert.Equal(t, wantNames, gotNames)
+		bytes, err := os.ReadFile(dbPath)
+		require.NoError(t, err)
+		assert.Equal(t, before, bytes)
+		current, err := os.Stat(dbPath)
+		require.NoError(t, err)
+		assert.Equal(t, info.ModTime(), current.ModTime())
+	}
+	if runtime.GOOS != "windows" {
+		require.NoError(t, os.Chmod(seed, 0o555))
+		t.Cleanup(func() { _ = os.Chmod(seed, 0o700) })
+	}
+	called := false
+	_, _, _, err = Retained(ctx, config.Config{ArchiveSources: []config.ArchiveSource{{Directory: seed}}}, nil, owner.NativeSessionID, sourceDevice, owner.NativeSessionID, "codex", "", []db.ArchiveSessionProvenance{owner}, 1<<20, func(_ string, _ []string, _ func(context.Context, string, int64) ([]byte, error)) error {
+		called = true
+		check()
+		return nil
+	})
+	require.NoError(t, err)
+	assert.True(t, called)
+	check()
 }
