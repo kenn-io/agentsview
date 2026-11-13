@@ -85,6 +85,8 @@ type Store struct {
 	}
 	// deltaCache keeps the prepared rows of changed snapshots.
 	deltaCache usageDeltaCache
+	// usageRollups keeps what reads checked about the current rollup.
+	usageRollups usageRollupCache
 	// The usage row memos keep recent range reads per rows and filter.
 	dailyUsageRows kept.Memo[chDailyUsageGroupRow]
 	usageDisk      kept.Disk

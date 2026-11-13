@@ -181,6 +181,7 @@ func TestUsagePriceContextReplaysPricingBlock(t *testing.T) {
 }
 
 func testUsagePriceContextReplaysPricingBlock(t *testing.T, groupEvents int) {
+	t.Helper()
 	rows := usagePriceTestRows("1", time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC))
 	type event struct {
 		input    chUsagePriceInput
