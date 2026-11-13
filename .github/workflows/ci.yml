@@ -430,10 +430,21 @@ jobs:
           kit-retry 3 5 sudo apt-get update
           kit-retry 3 5 sudo apt-get install -y --no-install-recommends qemu-user
           go build -tags fts5 -o "$RUNNER_TEMP/agentsview" ./cmd/agentsview
+          # QEMU user mode runs the binary with the runner's own loader and
+          # libc. The runner installs Ubuntu's amd64v3 package builds, which
+          # need x86-64-v3 themselves, so load the plain amd64 libraries from
+          # the Ubuntu image of the same release instead.
+          image="ubuntu:$(. /etc/os-release && echo "$VERSION_ID")"
+          kit-retry 3 5 docker pull "$image"
+          sysroot="$RUNNER_TEMP/x86-64-sysroot"
+          mkdir -p "$sysroot"
+          cid=$(docker create "$image")
+          docker export "$cid" | tar -x -C "$sysroot"
+          docker rm "$cid"
           export HOME="$RUNNER_TEMP/nehalem-home" AGENTSVIEW_DATA_DIR="$RUNNER_TEMP/nehalem-data"
           mkdir -p "$HOME" "$AGENTSVIEW_DATA_DIR"
-          qemu-x86_64 -cpu Nehalem "$RUNNER_TEMP/agentsview" version
-          qemu-x86_64 -cpu Nehalem "$RUNNER_TEMP/agentsview" serve --no-browser --host 127.0.0.1 --port 18493 > "$RUNNER_TEMP/nehalem-serve.log" 2>&1 &
+          qemu-x86_64 -cpu Nehalem -L "$sysroot" "$RUNNER_TEMP/agentsview" version
+          qemu-x86_64 -cpu Nehalem -L "$sysroot" "$RUNNER_TEMP/agentsview" serve --no-browser --host 127.0.0.1 --port 18493 > "$RUNNER_TEMP/nehalem-serve.log" 2>&1 &
           pid=$!
           # workflowretry: allow Local readiness probe; the loop retries while the emulated server starts.
           until curl -sf http://127.0.0.1:18493/api/v1/version > /dev/null; do
