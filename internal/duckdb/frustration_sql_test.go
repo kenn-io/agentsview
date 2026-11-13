@@ -14,6 +14,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"go.kenn.io/agentsview/internal/db"
+	"go.kenn.io/agentsview/internal/readbase"
 	"go.kenn.io/agentsview/internal/signals"
 	"go.kenn.io/agentsview/internal/storage"
 )
@@ -85,10 +86,12 @@ func seedMarkerPrompts(t *testing.T, prompts []markerPrompt) (*Store, []string) 
 func scanMarkers(t *testing.T, store *Store, ids []string) []int {
 	t.Helper()
 	rows := make([]db.SignalRow, len(ids))
+	sessions := make([]readbase.AnalyticsSession, len(ids))
 	for i, id := range ids {
 		rows[i].ID = id
+		sessions[i].ID = id
 	}
-	require.NoError(t, store.duckPopulateFrustrationMarkers(t.Context(), rows, nil))
+	require.NoError(t, store.duckPopulateFrustrationMarkers(t.Context(), rows, sessions))
 	counts := make([]int, len(rows))
 	for i := range rows {
 		counts[i] = rows[i].FrustrationMarkerCount

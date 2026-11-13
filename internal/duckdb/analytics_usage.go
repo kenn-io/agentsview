@@ -223,37 +223,23 @@ func (s *Store) duckPopulateFrustrationMarkers(
 	rows []db.SignalRow,
 	sessions []readbase.AnalyticsSession,
 ) error {
-	var markerVersion int
-	if len(sessions) > 0 {
-		// The watcher can replace the mirror after the session query. Use the
-		// version read with those counts, not one from the replacement.
-		markerVersion = sessions[0].FrustrationMarkersVersion
-	} else if err := s.queryRowContext(ctx, `SELECT COALESCE((SELECT CAST(value AS INTEGER) FROM sync_metadata WHERE key = ?), 0)`, frustrationMarkersVersionMetadataKey).Scan(&markerVersion); err != nil {
-		return fmt.Errorf("reading duckdb frustration marker version: %w", err)
-	}
-	if markerVersion > frustrationMarkersVersion {
-		return errFutureFrustrationVersion
-	}
 	if len(rows) == 0 {
 		return nil
 	}
-	cache := s.path != ""
-	versions := make(map[string]string, len(sessions))
-	stored := make(map[string]int, len(sessions))
-	for _, session := range sessions {
-		versions[session.ID] = session.PushFingerprint
-		if markerVersion == frustrationMarkersVersion {
-			stored[session.ID] = *session.FrustrationMarkers
-		}
+	// Use the version read with the counts even if the watcher replaced the mirror.
+	markerVersion := sessions[0].FrustrationMarkersVersion
+	if markerVersion > frustrationMarkersVersion {
+		return errFutureFrustrationVersion
 	}
+	cache := s.path != ""
 	idx := make(map[string]int, len(rows))
 	ids := make([]string, 0, len(rows))
 	for i := range rows {
-		if count, ok := stored[rows[i].ID]; ok {
-			rows[i].FrustrationMarkerCount = count
+		if markerVersion == frustrationMarkersVersion {
+			rows[i].FrustrationMarkerCount = *sessions[i].FrustrationMarkers
 			continue
 		}
-		if version := versions[rows[i].ID]; cache && version != "" {
+		if version := sessions[i].PushFingerprint; cache && version != "" {
 			if count, ok := s.frustrationMemo.Lookup(frustrationMemoGeneration, rows[i].ID, version); ok {
 				rows[i].FrustrationMarkerCount = count
 				continue
@@ -289,7 +275,7 @@ func (s *Store) duckPopulateFrustrationMarkers(
 	}
 	if cache {
 		for id, i := range idx {
-			if version := versions[id]; version != "" {
+			if version := sessions[i].PushFingerprint; version != "" {
 				s.frustrationMemo.Store(frustrationMemoGeneration, id, version, rows[i].FrustrationMarkerCount)
 			}
 		}

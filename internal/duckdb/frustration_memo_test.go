@@ -226,8 +226,11 @@ func TestDuckDBFrustrationMirrorVersion(t *testing.T) {
 			resp, err := store.GetAnalyticsSignals(ctx, db.AnalyticsFilter{})
 			if tc.future {
 				require.ErrorContains(t, err, "newer than supported")
-				_, err = store.GetAnalyticsSignals(ctx, db.AnalyticsFilter{Project: "no-sessions"})
-				require.ErrorContains(t, err, "newer than supported")
+				empty, err := store.GetAnalyticsSignals(ctx, db.AnalyticsFilter{Project: "no-sessions"})
+				require.NoError(t, err)
+				assert.Zero(t, empty.ScoredSessions)
+				assert.Zero(t, empty.UnscoredSessions)
+				assert.Zero(t, empty.QualityHealth.Totals.FrustrationMarkerCount)
 				_, err = store.GetAnalyticsSignalSessions(ctx, db.AnalyticsFilter{}, "frustration_marker_count", 10)
 				require.ErrorContains(t, err, "newer than supported")
 				return
