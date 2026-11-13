@@ -621,6 +621,10 @@ versions. This removes the need to run `pg push` before starting the server
 after an upgrade. If the PostgreSQL role is read-only, the migration is skipped
 and the server falls back to the schema compatibility check.
 
+For Dashboard Signals, writable serving connections lazily fill the optional
+`session_frustration_counts` table. Read-only roles need `SELECT` on the table
+to reuse saved counts; they scan missing counts without saving them.
+
 When `require_auth` is enabled, a bearer token is generated if needed and
 printed on startup. Pass it via `Authorization: Bearer <token>` on API requests.
 The SSE watch endpoint also accepts `?token=<token>` for native `EventSource`

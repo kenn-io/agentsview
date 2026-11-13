@@ -10,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"go.kenn.io/agentsview/internal/db"
 )
@@ -210,4 +211,38 @@ func TestFrustrationCountsRefreshAtScale(t *testing.T) {
 	var refreshed int
 	require.NoError(t, f.pg.QueryRowContext(f.ctx, `SELECT count(*) FROM session_frustration_counts WHERE session_id LIKE 'scale-%' AND marker_count = 1 AND session_version <> 'old'`).Scan(&refreshed))
 	require.Equal(t, 10000, refreshed)
+}
+
+func TestFrustrationCountsConcurrentColdSaves(t *testing.T) {
+	f := newFrustrationFixture(t, "agentsview_frustration_concurrent_test")
+	_, err := f.pg.ExecContext(f.ctx, `INSERT INTO sessions (id, machine, project, agent) SELECT 'cold-' || n, 'test', 'sample', 'claude' FROM generate_series(1, 3000) n`)
+	require.NoError(t, err)
+	rows, err := f.pg.QueryContext(f.ctx, `SELECT id, `+frustrationSessionVersion(f.versionColumn)+` FROM sessions`)
+	require.NoError(t, err)
+	versions := make(map[string]string)
+	counts := make(map[string]int)
+	for rows.Next() {
+		var id, version string
+		require.NoError(t, rows.Scan(&id, &version))
+		versions[id] = version
+		counts[id] = 1
+	}
+	require.NoError(t, rows.Err())
+	require.NoError(t, rows.Close())
+	store := f.open(t)
+	start := make(chan struct{})
+	results := make(chan error, 8)
+	for range 8 {
+		go func() {
+			<-start
+			results <- store.storeFrustrationCounts(f.ctx, versions, counts, f.versionColumn)
+		}()
+	}
+	close(start)
+	for range 8 {
+		assert.NoError(t, <-results)
+	}
+	var count int
+	require.NoError(t, f.pg.QueryRowContext(f.ctx, `SELECT count(*) FROM session_frustration_counts WHERE marker_count = 1`).Scan(&count))
+	require.Equal(t, len(versions), count)
 }

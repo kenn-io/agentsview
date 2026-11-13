@@ -61,6 +61,7 @@ func (s *Store) storeFrustrationCounts(ctx context.Context, versions map[string]
 	_, err := s.DB().ExecContext(ctx, `INSERT INTO session_frustration_counts (session_id, session_version, rules_version, marker_count)
         SELECT t.id, t.version, $4, t.count FROM unnest($1::text[], $2::text[], $3::integer[]) AS t(id, version, count)
         JOIN sessions s ON s.id = t.id AND `+frustrationSessionVersion("s."+versionColumn)+` = t.version
+        ORDER BY t.id
         ON CONFLICT (session_id) DO UPDATE SET session_version = EXCLUDED.session_version, rules_version = EXCLUDED.rules_version, marker_count = EXCLUDED.marker_count
         WHERE session_frustration_counts.rules_version <= EXCLUDED.rules_version`, ids, tokens, values, frustrationMarkerRulesVersion)
 	if err != nil {
