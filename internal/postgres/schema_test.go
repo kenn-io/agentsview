@@ -587,6 +587,7 @@ func TestEnsureSchemaChecksDataVersionBeforeDDL(t *testing.T) {
 
 func setPushSchemaProbeCurrent(state *schemaProbeState) {
 	state.existingTables = map[string]bool{
+		"session_frustration_counts":                      true,
 		"retained_commit_links":                           true,
 		"commit_links":                                    true,
 		"model_pricing":                                   true,
@@ -645,6 +646,7 @@ func TestSyncEnsureSchemaSkipsLegacyDDLWhenSchemaCompatible(t *testing.T) {
 func TestEnsureSchemaScrubsProjectIdentityGitRemoteCredentials(t *testing.T) {
 	pg, state := newSchemaProbeDB(t, nil)
 	state.existingTables = map[string]bool{
+		"session_frustration_counts":                      true,
 		"retained_commit_links":                           true,
 		"commit_links":                                    true,
 		"model_pricing":                                   true,
@@ -990,7 +992,7 @@ func TestSyncEnsureSchemaRunsDDLWhenPushMetadataMissing(t *testing.T) {
 }
 
 func TestSyncEnsureSchemaRunsDDLWhenPushTableMissing(t *testing.T) {
-	for _, missing := range []string{"model_pricing", "retained_commit_links"} {
+	for _, missing := range []string{"model_pricing", "retained_commit_links", "session_frustration_counts"} {
 		t.Run(missing, func(t *testing.T) {
 			pg, state := newSchemaProbeDB(t, map[string][]string{
 				"sessions": {

@@ -52,6 +52,12 @@ func TestFrustrationMemoCommittedVersionsWithEqualTimestamps(t *testing.T) {
 	warm, err := store.GetAnalyticsSignals(ctx, db.AnalyticsFilter{})
 	require.NoError(t, err)
 	assert.Zero(t, warm.QualityHealth.Totals.FrustrationMarkerCount)
+	fresh, err := NewStore(ctx, url, schema, true)
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, fresh.Close()) })
+	restarted, err := fresh.GetAnalyticsSignals(ctx, db.AnalyticsFilter{})
+	require.NoError(t, err)
+	assert.Zero(t, restarted.QualityHealth.Totals.FrustrationMarkerCount)
 }
 
 func TestFrustrationMemoPublicationBetweenReads(t *testing.T) {
@@ -103,7 +109,7 @@ func TestFrustrationMemoPublicationBetweenReads(t *testing.T) {
 			require.NoError(t, err)
 			var publishedVersion string
 			if test.name != "remove-session" {
-				require.NoError(t, tx.QueryRowContext(ctx, `UPDATE sessions SET updated_at = updated_at + interval '1 second' WHERE id = $1 RETURNING `+versionColumn+`::text`, id).Scan(&publishedVersion))
+				require.NoError(t, tx.QueryRowContext(ctx, `UPDATE sessions SET updated_at = updated_at + interval '1 second' WHERE id = $1 RETURNING `+frustrationSessionVersion(versionColumn), id).Scan(&publishedVersion))
 			}
 			require.NoError(t, tx.Commit())
 
@@ -118,6 +124,11 @@ func TestFrustrationMemoPublicationBetweenReads(t *testing.T) {
 				count, hit := memo.Lookup(memo.Generation(), id, publishedVersion)
 				assert.True(t, hit, "the prompt scan must cache the version it read, including sessions without prompts")
 				assert.Equal(t, test.want, count)
+				var savedVersion string
+				var savedCount int
+				require.NoError(t, pg.QueryRowContext(ctx, `SELECT session_version, marker_count FROM session_frustration_counts WHERE session_id = $1`, id).Scan(&savedVersion, &savedCount))
+				assert.Equal(t, publishedVersion, savedVersion)
+				assert.Equal(t, test.want, savedCount)
 			}
 		})
 	}

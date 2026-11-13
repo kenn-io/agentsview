@@ -1138,6 +1138,14 @@ func EnsureSchema(
 	if _, err := db.ExecContext(ctx, coreDDL); err != nil {
 		return fmt.Errorf("creating pg tables: %w", err)
 	}
+	if _, err := db.ExecContext(ctx, `CREATE TABLE IF NOT EXISTS session_frustration_counts (
+        session_id TEXT PRIMARY KEY REFERENCES sessions(id) ON DELETE CASCADE,
+        session_version TEXT NOT NULL,
+        rules_version INTEGER NOT NULL,
+        marker_count INTEGER NOT NULL
+    )`); err != nil {
+		return fmt.Errorf("creating pg frustration counts table: %w", err)
+	}
 	if _, err := db.ExecContext(ctx, frictionDDL); err != nil {
 		return fmt.Errorf("creating pg friction tables: %w", err)
 	}
@@ -2633,7 +2641,8 @@ func pushSchemaCurrent(ctx context.Context, db *sql.DB) bool {
 	if err := checkPushSchemaCompat(ctx, db); err != nil {
 		return false
 	}
-	if !pgHasTable(ctx, db, "commit_links") ||
+	if !pgHasTable(ctx, db, "session_frustration_counts") ||
+		!pgHasTable(ctx, db, "commit_links") ||
 		!pgHasTable(ctx, db, "retained_commit_links") ||
 		!pgHasTable(ctx, db, "model_pricing") ||
 		!pgHasTable(ctx, db, "model_pricing_bands") ||

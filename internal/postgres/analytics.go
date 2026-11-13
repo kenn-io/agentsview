@@ -3,6 +3,7 @@ package postgres
 import (
 	"context"
 	"fmt"
+	"log"
 	"math"
 	"sort"
 	"strings"
@@ -2690,7 +2691,7 @@ func (s *Store) signalRows(
 		short_prompt_count, unstructured_start,
 		missing_success_criteria_count,
 		missing_verification_count, duplicate_prompt_count,
-		no_code_context_count, runaway_tool_loop_count, ` + versionColumn + `::text
+		no_code_context_count, runaway_tool_loop_count, ` + frustrationSessionVersion(versionColumn) + `
 		FROM sessions WHERE ` + where
 	rows, err := s.pg.QueryContext(ctx, query, pb.args...)
 	if err != nil {
@@ -2871,12 +2872,31 @@ func (s *Store) populateFrustrationMarkers(
 	if len(ids) == 0 {
 		return nil
 	}
+	if s.DB() != nil && !s.hostedRelations {
+		counts, err := s.loadStoredFrustrationCounts(ctx, ids, versions)
+		if err != nil {
+			log.Printf("loading frustration counts: %v", err)
+		}
+		remaining := ids[:0]
+		for _, id := range ids {
+			if count, ok := counts[id]; ok {
+				rows[idx[id]].FrustrationMarkerCount = count
+				memo.Store(generation, id, versions[id], count)
+			} else {
+				remaining = append(remaining, id)
+			}
+		}
+		ids = remaining
+		if len(ids) == 0 {
+			return nil
+		}
+	}
 	var serverEncoding string
 	if err := s.pg.QueryRowContext(ctx, `SELECT current_setting('server_encoding')`).Scan(&serverEncoding); err != nil {
 		return fmt.Errorf("reading server encoding: %w", err)
 	}
 	scannedVersions := make(map[string]string, len(ids))
-	query, args := pgFrustrationQuery(serverEncoding, versionColumn, ids)
+	query, args := pgFrustrationQuery(serverEncoding, frustrationSessionVersion(versionColumn), ids)
 	msgRows, err := s.pg.QueryContext(ctx, query, args...)
 	if err != nil {
 		return fmt.Errorf("querying frustration markers: %w", err)
@@ -2900,9 +2920,24 @@ func (s *Store) populateFrustrationMarkers(
 	if err := msgRows.Err(); err != nil {
 		return fmt.Errorf("iterating frustration markers: %w", err)
 	}
+	if err := msgRows.Close(); err != nil {
+		return fmt.Errorf("closing frustration markers: %w", err)
+	}
 	// Only complete scans are memoized, using versions read with the prompts.
 	for id, version := range scannedVersions {
 		memo.Store(generation, id, version, rows[idx[id]].FrustrationMarkerCount)
+	}
+	if s.DB() != nil && !s.hostedRelations && !s.runtimeState().frustrationCountsReadOnly.Load() {
+		counts := make(map[string]int, len(scannedVersions))
+		for id := range scannedVersions {
+			counts[id] = rows[idx[id]].FrustrationMarkerCount
+		}
+		if err := s.storeFrustrationCounts(ctx, scannedVersions, counts); err != nil {
+			if IsReadOnlyError(err) {
+				s.runtimeState().frustrationCountsReadOnly.Store(true)
+			}
+			log.Printf("storing frustration counts: %v", err)
+		}
 	}
 	return nil
 }
