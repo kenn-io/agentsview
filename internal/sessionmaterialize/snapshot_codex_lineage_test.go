@@ -1,7 +1,6 @@
 package sessionmaterialize
 
 import (
-	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -69,15 +68,11 @@ func (f *snapshotLineageFixture) open(capture string) {
 }
 
 func lineagePage(thread, timestamp, message string, ordinal int, fields map[string]any) string {
-	fields["history_mode"] = "paginated"
-	withOrdinal := func(line string, n int) string {
-		return strings.TrimSuffix(line, "}") + fmt.Sprintf(`,"ordinal":%d}`, n)
-	}
-	return testjsonl.JoinJSONL(withOrdinal(testjsonl.CodexSessionMetaWithFieldsJSON(thread, "/work", "codex_cli_rs", timestamp, fields), ordinal), withOrdinal(testjsonl.CodexMsgJSON("user", message, timestamp), ordinal+1))
+	return testjsonl.CodexLineagePage(thread, timestamp, message, ordinal, fields)
 }
 
 func lineageBase(thread string, ordinal, bytes int) map[string]any {
-	return map[string]any{"thread_id": thread, "end_ordinal_exclusive": ordinal, "end_byte_offset": bytes}
+	return testjsonl.CodexLineageBase(thread, ordinal, bytes)
 }
 
 func (f *snapshotLineageFixture) accepted(home, key, original string) *db.RawArchiveSource {
