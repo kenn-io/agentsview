@@ -1507,3 +1507,56 @@ func TestConversationExportDiffedReplaceKeepsUnchangedIDs(t *testing.T) {
 		})
 	}
 }
+
+// Recovering from usage-only storage reconciles the whole session even when the
+// message write is a diff: the policy-gap rows below the diff can project
+// messages the table no longer holds.
+func TestConversationExportDiffedReplaceAfterUsageOnlyStorage(t *testing.T) {
+	d := testDB(t)
+	ctx := t.Context()
+	require.NoError(t, d.UpsertSession(ctx, Session{ID: "chat", Project: "sample", Machine: "local", Agent: "codex"}))
+	require.NoError(t, d.InsertMessages(ctx, []Message{
+		{SessionID: "chat", Ordinal: 0, Role: "user", Content: "Question"},
+		{SessionID: "chat", Ordinal: 1, Role: "assistant", Content: "Answer", Model: "gpt-5", TokenUsage: []byte(`{"input_tokens":10,"output_tokens":5}`), HasOutputTokens: true, OutputTokens: 5},
+	}))
+	_, err := d.ExportConversationChanges(ctx, ConversationExportOptions{})
+	require.NoError(t, err)
+
+	d.SetArchiveContent(config.ArchiveContentUsage)
+	all, err := d.GetAllMessages(ctx, "chat")
+	require.NoError(t, err)
+	require.NoError(t, d.ReplaceSessionMessages(ctx, "chat", all))
+	require.NoError(t, d.Close())
+	d, err = Open(ctx, d.Path())
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, d.Close()) })
+
+	stored, err := d.GetAllMessages(ctx, "chat")
+	require.NoError(t, err)
+	require.NotEmpty(t, stored)
+	next := stored[len(stored)-1].Ordinal + 1
+	grown := append(append([]Message(nil), stored...), Message{SessionID: "chat", Ordinal: next, Role: "user", Content: "Follow-up"})
+	require.NoError(t, d.ReplaceSessionMessages(ctx, "chat", grown))
+
+	want := map[int]bool{}
+	for _, m := range grown {
+		want[m.Ordinal] = true
+	}
+	require.NoError(t, d.Update(ctx, func(tx *sql.Tx) error {
+		rows, err := tx.QueryContext(ctx, `SELECT ordinal, gap FROM conversation_messages WHERE session_id = 'chat' AND removed = 0`)
+		if err != nil {
+			return err
+		}
+		defer rows.Close()
+		for rows.Next() {
+			var ordinal int
+			var gap string
+			if err := rows.Scan(&ordinal, &gap); err != nil {
+				return err
+			}
+			assert.True(t, want[ordinal], "live projection at ordinal %d has no stored message", ordinal)
+			assert.NotEqual(t, "archive_content_excluded", gap, "ordinal %d", ordinal)
+		}
+		return rows.Err()
+	}))
+}
