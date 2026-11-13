@@ -2929,7 +2929,7 @@ func (s *Store) populateFrustrationMarkers(
 		for id := range scannedVersions {
 			counts[id] = rows[idx[id]].FrustrationMarkerCount
 		}
-		if err := s.storeFrustrationCounts(ctx, scannedVersions, counts, versionColumn); err != nil && !isUndefinedTable(err) && !IsReadOnlyError(err) {
+		if err := s.storeFrustrationCountsForRead(ctx, scannedVersions, counts, versionColumn); err != nil && !isUndefinedTable(err) && !IsReadOnlyError(err) {
 			log.Printf("storing frustration counts: %v", err)
 		}
 	}

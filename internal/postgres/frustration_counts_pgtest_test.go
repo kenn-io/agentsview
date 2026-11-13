@@ -8,6 +8,7 @@ import (
 	"database/sql"
 	"log"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -213,4 +214,26 @@ func TestFrustrationCountsBulkSaves(t *testing.T) {
 		require.NoError(t, f.pg.QueryRowContext(f.ctx, `SELECT count(*) FROM session_frustration_counts WHERE marker_count = 1`).Scan(&count))
 		require.Equal(t, len(versions), count)
 	})
+}
+
+func TestFrustrationEvidenceWithLockedCount(t *testing.T) {
+	f := newFrustrationFixture(t, "agentsview_frustration_locked_test")
+	_, err := f.open(t).GetAnalyticsSignals(f.ctx, db.AnalyticsFilter{})
+	require.NoError(t, err)
+	_, err = f.pg.ExecContext(f.ctx, `UPDATE session_frustration_counts SET rules_version = 0 WHERE session_id = 'one'`)
+	require.NoError(t, err)
+	tx, err := f.pg.BeginTx(f.ctx, nil)
+	require.NoError(t, err)
+	defer tx.Rollback()
+	_, err = tx.ExecContext(f.ctx, `SELECT 1 FROM session_frustration_counts WHERE session_id = 'one' FOR UPDATE`)
+	require.NoError(t, err)
+	ctx, cancel := context.WithTimeout(f.ctx, 3*time.Second)
+	defer cancel()
+	evidence, err := f.open(t).GetAnalyticsSignalSessions(ctx, db.AnalyticsFilter{}, "frustration_marker_count", 10)
+	require.NoError(t, err)
+	require.Len(t, evidence.Sessions, 2)
+	for _, example := range evidence.Sessions {
+		require.Equal(t, 1, example.SignalTotal)
+		require.Equal(t, "this is broken", example.Excerpt)
+	}
 }
