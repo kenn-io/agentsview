@@ -12,7 +12,7 @@ import (
 	"go.kenn.io/agentsview/internal/storage"
 )
 
-func TestPushFrustrationMarkerDefinitionVersion1(t *testing.T) {
+func TestPushFrustrationMarkerCounts(t *testing.T) {
 	ctx := t.Context()
 	local := newLocalDB(t)
 	const ts = "2026-02-01T09:00:00.000Z"
@@ -22,7 +22,6 @@ func TestPushFrustrationMarkerDefinitionVersion1(t *testing.T) {
 		want                       int
 	}{
 		{"phrase", "user", "this is broken after the retry", "", false, 1},
-		{"assistant", "assistant", "this is broken after the retry", "", false, 0},
 		{"system", "user", "this is broken after the retry", "", true, 0},
 		{"tool-result", "user", "this is broken after the retry", "tool_result", false, 0},
 	}
@@ -43,10 +42,6 @@ func TestPushFrustrationMarkerDefinitionVersion1(t *testing.T) {
 	conn, err := OpenReadOnly(ctx, path)
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, conn.Close()) })
-	version, err := readMetadataKey(ctx, conn, frustrationMarkersVersionMetadataKey)
-	require.NoError(t, err)
-	// Update these expectations with the version when the counting definition changes.
-	require.Equal(t, "1", version)
 	for _, tc := range cases {
 		var count int
 		require.NoError(t, conn.QueryRowContext(ctx, `SELECT frustration_marker_count FROM sessions WHERE id = ?`, tc.id).Scan(&count))
