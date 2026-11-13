@@ -40,9 +40,10 @@ type MirrorProbe struct {
 	// existing unrecognized file so a misdirected path (for example the
 	// primary SQLite archive) is never silently replaced by a mirror
 	// rebuild.
-	RecognizedMirror bool
-	SchemaVersion    int
-	DataVersion      int
+	RecognizedMirror          bool
+	SchemaVersion             int
+	DataVersion               int
+	FrustrationMarkersVersion int
 	// SourceDatabaseID is the database_id of the SQLite archive generation
 	// the mirror was built from (see mirrorMetadata.SourceDatabaseID). "" on
 	// mirrors written before the id was recorded.
@@ -148,6 +149,7 @@ func probeOpenMirror(ctx context.Context, conn *sql.DB) MirrorProbe {
 	probe.ShapeOK = true
 	probe.SchemaVersion = meta.SchemaVersion
 	probe.DataVersion = meta.DataVersion
+	probe.FrustrationMarkersVersion = meta.FrustrationMarkersVersion
 	probe.SourceDatabaseID = meta.SourceDatabaseID
 	probe.SourceArchiveID = meta.SourceArchiveID
 	probe.Scope = meta.Scope
@@ -227,13 +229,14 @@ func mirrorShapeIssueFromColumns(existing map[string]map[string]bool) string {
 // NeedsRebuild reports whether the probed mirror can serve scope/
 // sourceDataVersion as-is, or must be rebuilt with buildMirror. A missing
 // file, a shape problem, a schema version mismatch in either direction, a
-// stale source data version, or a different push scope all require a
+// stale source data or frustration marker version, or a different push scope all require a
 // rebuild; there is no in-place migration path for the mirror schema.
 func (p MirrorProbe) NeedsRebuild(scope string, sourceDataVersion int) bool {
 	if !p.FileExists || !p.ShapeOK {
 		return true
 	}
 	return p.SchemaVersion != SchemaVersion ||
+		p.FrustrationMarkersVersion != frustrationMarkersVersion ||
 		p.DataVersion != sourceDataVersion ||
 		p.Scope != scope
 }
@@ -294,6 +297,8 @@ func rebuildReason(
 		return fmt.Sprintf(
 			"schema version %d vs %d", probe.SchemaVersion, SchemaVersion,
 		)
+	case probe.FrustrationMarkersVersion != frustrationMarkersVersion:
+		return fmt.Sprintf("frustration markers version %d vs %d", probe.FrustrationMarkersVersion, frustrationMarkersVersion)
 	case probe.DataVersion != sourceDataVersion:
 		return fmt.Sprintf(
 			"data version %d vs %d", probe.DataVersion, sourceDataVersion,

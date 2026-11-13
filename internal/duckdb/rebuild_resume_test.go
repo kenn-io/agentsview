@@ -307,3 +307,35 @@ func TestErroredRebuildDroppedWhenMirrorNeedsNoRebuild(t *testing.T) {
 	assert.Equal(t, 1, res.Errors)
 	assert.NoFileExists(t, rebuildFilePath(path))
 }
+
+func TestRebuildRestartsWhenFrustrationVersionChanged(t *testing.T) {
+	ctx := t.Context()
+	local := newLocalDB(t)
+	seedResumeSessions(t, local)
+	path := filepath.Join(t.TempDir(), "mirror.duckdb")
+	killedRebuild(t, path, local, storage.MirrorPushOptions{})
+
+	conn, err := Open(ctx, rebuildFilePath(path))
+	require.NoError(t, err)
+	runJSON, err := readMetadataKey(ctx, conn, rebuildRunMetadataKey)
+	require.NoError(t, err)
+	var run rebuildRun
+	require.NoError(t, json.Unmarshal([]byte(runJSON), &run))
+	run.FrustrationMarkersVersion = 0
+	encoded, err := json.Marshal(run)
+	require.NoError(t, err)
+	require.NoError(t, recordMetadataKey(ctx, conn, rebuildRunMetadataKey, string(encoded)))
+	_, err = conn.ExecContext(ctx, `UPDATE sessions SET frustration_markers_version = 0`)
+	require.NoError(t, err)
+	require.NoError(t, conn.Close())
+
+	result, err := Push(ctx, path, local, "test-machine", storage.MirrorPushOptions{}, false, nil)
+	require.NoError(t, err)
+	assert.Equal(t, resumeSessionCount, result.SessionsPushed)
+	conn, err = OpenReadOnly(ctx, path)
+	require.NoError(t, err)
+	defer conn.Close()
+	var version int
+	require.NoError(t, conn.QueryRowContext(ctx, `SELECT frustration_markers_version FROM sessions WHERE id = 'session-100'`).Scan(&version))
+	assert.Equal(t, frustrationMarkersVersion, version)
+}

@@ -69,8 +69,10 @@ make e2e-duckdb
 ## Signals frustration markers
 
 The Signals panel counts each session's frustration markers, the prompts
-`signals.IsFrustrationMarker` flags. Push stores the count for each session it writes. When a stored count is stale,
-the reader scans its prompts and keeps the count in memory per push fingerprint.
+`signals.IsFrustrationMarker` flags. Push stores the count for each session it
+writes. A change to the marker algorithm rebuilds the mirror on the next push.
+When a stored count is stale, the reader scans its prompts and keeps the count
+in memory per push fingerprint.
 
 For those sessions one query (`duckFrustrationPromptsSQL`) judges most prompts
 in DuckDB:

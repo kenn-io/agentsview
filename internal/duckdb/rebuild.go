@@ -221,13 +221,14 @@ func copyMirrorFile(ctx context.Context, src, dst string) (err error) {
 // rows the current push would not write, so only a matching file resumes.
 type rebuildRun struct {
 	// Reason is why the rebuild started. A resumed rebuild keeps it.
-	Reason           string `json:"reason"`
-	SchemaVersion    int    `json:"schema_version"`
-	DataVersion      int    `json:"data_version"`
-	Scope            string `json:"scope"`
-	Machine          string `json:"machine"`
-	SourceDatabaseID string `json:"source_database_id"`
-	SourceArchiveID  string `json:"source_archive_id"`
+	Reason                    string `json:"reason"`
+	SchemaVersion             int    `json:"schema_version"`
+	FrustrationMarkersVersion int    `json:"frustration_markers_version"`
+	DataVersion               int    `json:"data_version"`
+	Scope                     string `json:"scope"`
+	Machine                   string `json:"machine"`
+	SourceDatabaseID          string `json:"source_database_id"`
+	SourceArchiveID           string `json:"source_archive_id"`
 	// Errored reports that the rebuild reached the end with session errors.
 	// Such a rebuild resumes only while something else still requires a
 	// rebuild. Otherwise the incremental push handles the failed sessions.
@@ -248,13 +249,14 @@ func newRebuildRun(
 		return rebuildRun{}, fmt.Errorf("reading local archive id: %w", err)
 	}
 	return rebuildRun{
-		Reason:           reason,
-		SchemaVersion:    SchemaVersion,
-		DataVersion:      db.CurrentDataVersion(),
-		Scope:            db.CanonicalPushScope(opts.Projects, opts.ExcludeProjects),
-		Machine:          machine,
-		SourceDatabaseID: databaseID,
-		SourceArchiveID:  archiveID,
+		Reason:                    reason,
+		SchemaVersion:             SchemaVersion,
+		FrustrationMarkersVersion: frustrationMarkersVersion,
+		DataVersion:               db.CurrentDataVersion(),
+		Scope:                     db.CanonicalPushScope(opts.Projects, opts.ExcludeProjects),
+		Machine:                   machine,
+		SourceDatabaseID:          databaseID,
+		SourceArchiveID:           archiveID,
 	}, nil
 }
 
@@ -831,17 +833,18 @@ func (s *Sync) writeRebuildMetadata(
 	identityRevision, mappingRevision int64,
 ) error {
 	return writeMirrorMetadata(ctx, s.duck, mirrorMetadata{
-		SchemaVersion:    SchemaVersion,
-		DataVersion:      db.CurrentDataVersion(),
-		SourceDatabaseID: snapshot.sourceDatabaseID,
-		SourceArchiveID:  snapshot.sourceArchiveID,
-		Scope:            scope,
-		LastPushCutoff:   snapshot.cutoff,
-		LastPushAt:       time.Now().UTC().Format(time.RFC3339),
-		LastPushMachine:  s.machine,
-		DeletionRevision: snapshot.deletionRevision,
-		IdentityRevision: identityRevision,
-		MappingRevision:  mappingRevision,
+		SchemaVersion:             SchemaVersion,
+		FrustrationMarkersVersion: frustrationMarkersVersion,
+		DataVersion:               db.CurrentDataVersion(),
+		SourceDatabaseID:          snapshot.sourceDatabaseID,
+		SourceArchiveID:           snapshot.sourceArchiveID,
+		Scope:                     scope,
+		LastPushCutoff:            snapshot.cutoff,
+		LastPushAt:                time.Now().UTC().Format(time.RFC3339),
+		LastPushMachine:           s.machine,
+		DeletionRevision:          snapshot.deletionRevision,
+		IdentityRevision:          identityRevision,
+		MappingRevision:           mappingRevision,
 	})
 }
 

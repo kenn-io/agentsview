@@ -186,3 +186,35 @@ func TestDuckDBStoredFrustrationCountsMatchScanWithFilters(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, stored, scanned)
 }
+
+func TestPushRebuildsStaleFrustrationCountsBelowCutoff(t *testing.T) {
+	ctx := t.Context()
+	local, path := newPushFixture(t, 1)
+	appendFrustrationPrompt(t, local, "sess-1")
+	_, err := Push(ctx, path, local, "m", storage.MirrorPushOptions{}, false, nil)
+	require.NoError(t, err)
+	setSessionSignalsTo(t, local, "sess-1", "2020-01-01T00:00:00.000Z")
+	setMirrorMetadataValue(t, path, frustrationMarkersVersionMetadataKey, "0")
+	conn, err := Open(ctx, path)
+	require.NoError(t, err)
+	_, err = conn.ExecContext(ctx, `UPDATE sessions SET frustration_markers_version = 0, frustration_marker_count = 0 WHERE id = 'sess-1'`)
+	require.NoError(t, err)
+	require.NoError(t, conn.Close())
+
+	result, err := Push(ctx, path, local, "m", storage.MirrorPushOptions{}, false, nil)
+	require.NoError(t, err)
+	assert.True(t, result.Diagnostics.Full)
+	assert.Contains(t, result.Diagnostics.RebuildReason, "frustration markers version")
+	conn, err = OpenReadOnly(ctx, path)
+	require.NoError(t, err)
+	var version, count int
+	require.NoError(t, conn.QueryRowContext(ctx, `SELECT frustration_markers_version, frustration_marker_count FROM sessions WHERE id = 'sess-1'`).Scan(&version, &count))
+	assert.Equal(t, frustrationMarkersVersion, version)
+	assert.Equal(t, 1, count)
+	require.NoError(t, conn.Close())
+
+	result, err = Push(ctx, path, local, "m", storage.MirrorPushOptions{}, false, nil)
+	require.NoError(t, err)
+	assert.False(t, result.Diagnostics.Full)
+	assert.Zero(t, result.SessionsPushed)
+}

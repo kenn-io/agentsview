@@ -707,17 +707,18 @@ func (s *Sync) finalizeIncrementalPush(
 	deletionRevision, identityRevision, mappingRevision int64,
 ) error {
 	return writeMirrorMetadata(ctx, s.duck, mirrorMetadata{
-		SchemaVersion:    SchemaVersion,
-		DataVersion:      db.CurrentDataVersion(),
-		SourceDatabaseID: sourceDatabaseID,
-		SourceArchiveID:  s.archiveID,
-		Scope:            db.CanonicalPushScope(opts.Projects, opts.ExcludeProjects),
-		LastPushCutoff:   cutoff,
-		LastPushAt:       time.Now().UTC().Format(time.RFC3339),
-		LastPushMachine:  s.machine,
-		DeletionRevision: deletionRevision,
-		IdentityRevision: identityRevision,
-		MappingRevision:  mappingRevision,
+		SchemaVersion:             SchemaVersion,
+		FrustrationMarkersVersion: frustrationMarkersVersion,
+		DataVersion:               db.CurrentDataVersion(),
+		SourceDatabaseID:          sourceDatabaseID,
+		SourceArchiveID:           s.archiveID,
+		Scope:                     db.CanonicalPushScope(opts.Projects, opts.ExcludeProjects),
+		LastPushCutoff:            cutoff,
+		LastPushAt:                time.Now().UTC().Format(time.RFC3339),
+		LastPushMachine:           s.machine,
+		DeletionRevision:          deletionRevision,
+		IdentityRevision:          identityRevision,
+		MappingRevision:           mappingRevision,
 	})
 }
 
