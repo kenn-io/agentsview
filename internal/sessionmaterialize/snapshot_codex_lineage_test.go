@@ -141,10 +141,10 @@ func (f *snapshotLineageFixture) inventory(root db.RawArchiveRoot, name, content
 func requireOldCodexDeferred(t *testing.T, err error, dataDir, oldName string) {
 	t.Helper()
 	require.Error(t, err)
-	_, ok := err.(archivesource.DrainError)
+	_, ok := err.(archivesource.DrainError) //nolint:errorlint // The outermost error must be the DrainError itself.
 	require.True(t, ok, "expected an attachment DrainError")
 	for {
-		require.NotNil(t, err)
+		require.Error(t, err)
 		if retry, ok := err.(interface {
 			ReconciliationRetryDeferOnly() bool
 			ReconciliationRetryPaths() []string
@@ -166,11 +166,11 @@ func requireOldCodexDeferred(t *testing.T, err error, dataDir, oldName string) {
 			require.Equal(t, []string{"sessions", "2025", "01", "01", oldName}, parts[1:])
 			return
 		}
-		switch wrapped := err.(type) {
+		switch wrapped := err.(type) { //nolint:errorlint // Inspect each exact node so joined failures cannot be skipped.
 		case interface{ Unwrap() []error }:
 			children := wrapped.Unwrap()
 			require.Len(t, children, 1)
-			require.NotNil(t, children[0])
+			require.Error(t, children[0])
 			err = children[0]
 		case interface{ Unwrap() error }:
 			err = wrapped.Unwrap()
