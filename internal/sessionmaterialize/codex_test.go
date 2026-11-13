@@ -616,11 +616,49 @@ func TestMaterializeCodexLoadedLinkedHome(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, parentBytes, got)
 
+	t.Run("enclosing configured root retains linked archive", func(t *testing.T) {
+		data, destination := t.TempDir(), filepath.Join(t.TempDir(), "destination")
+		outer, err := filepath.EvalSymlinks(filepath.Dir(live))
+		require.NoError(t, err)
+		resolvedLive, err := filepath.EvalSymlinks(live)
+		require.NoError(t, err)
+		resolvedHome, err := filepath.EvalSymlinks(profile)
+		require.NoError(t, err)
+		configText := fmt.Sprintf("[[session_sources]]\nagent = \"codex\"\ndir = %q\n[agents.codex]\nhomes = [%q]\n", outer, profile)
+		require.NoError(t, os.WriteFile(filepath.Join(data, "config.toml"), []byte(configText), 0o600))
+		t.Setenv("AGENTSVIEW_DATA_DIR", data)
+		t.Setenv("CODEX_HOME", profile)
+		fs := flag.NewFlagSet("enclosing fixture", flag.ContinueOnError)
+		config.RegisterServeFlags(fs)
+		require.NoError(t, fs.Parse(nil))
+		loaded, err := config.Load(fs)
+		require.NoError(t, err)
+		require.Contains(t, loaded.ResolveDirs(parser.AgentCodex), outer)
+		require.Contains(t, loaded.ResolveDirs(parser.AgentCodex), resolvedLive)
+		require.Contains(t, loaded.ProviderMetadata[parser.AgentCodex][resolvedLive], resolvedHome)
+		selected := *session
+		selected.Machine = loaded.InstallationID
+		t.Setenv("CODEX_HOME", destination)
+		got, err := Materialize(t.Context(), loaded, nil, &selected, t.TempDir())
+		require.NoError(t, err)
+		require.Equal(t, filepath.Base(page), got.InstalledPage)
+		require.Equal(t, []string{filepath.Join(destination, "sessions", "2024", "01", "15", filepath.Base(parentPath)), filepath.Join(destination, "sessions", "2026", "01", "01", filepath.Base(page))}, got.Paths)
+		for i, source := range []string{parentPath, page} {
+			want := [][]byte{parentBytes, pageBytes}[i]
+			for _, path := range []string{source, got.Paths[i]} {
+				data, err := os.ReadFile(path)
+				require.NoError(t, err)
+				require.Equal(t, want, data)
+			}
+		}
+	})
+
 	for _, tc := range []struct {
-		name                                                    string
-		linked, index, missing, missingRoot, shared, standalone bool
+		name                                                           string
+		linked, index, missing, missingRoot, shared, standalone, outer bool
 	}{
 		{name: "linked without index", linked: true},
+		{name: "enclosing advertised root retains linked archive", linked: true, outer: true},
 		{name: "linked missing mirrored active root", linked: true, missingRoot: true},
 		{name: "linked with rename index", linked: true, index: true},
 		{name: "unlinked control"},
@@ -689,6 +727,9 @@ func TestMaterializeCodexLoadedLinkedHome(t *testing.T) {
 			data := filepath.Join(root, "remote-config")
 			require.NoError(t, os.MkdirAll(data, 0o700))
 			configText := fmt.Sprintf("[agents.codex]\nhomes = [%q, %q]\n", home, other)
+			if tc.outer {
+				configText = fmt.Sprintf("[[session_sources]]\nagent = \"codex\"\ndir = %q\n[agents.codex]\nhomes = [%q, %q]\n", filepath.Dir(live), home, other)
+			}
 			var unrelatedParent string
 			var unrelatedData []byte
 			if tc.shared {
@@ -774,6 +815,13 @@ func TestMaterializeCodexLoadedLinkedHome(t *testing.T) {
 			require.NotNil(t, imported.FilePath)
 			require.Equal(t, "remote:"+childFile, *imported.FilePath)
 			mirror := remotesync.MirrorDir(localData, "remote")
+			if tc.outer {
+				metadata, err := remotesync.LoadMirrorCodexMetadata(t.Context(), mirror)
+				require.NoError(t, err)
+				require.Contains(t, metadata.Dirs, filepath.Dir(live))
+				require.Contains(t, metadata.Dirs, live)
+				require.Equal(t, remotesync.CodexHomeRoots{Sessions: live, ArchivedSessions: archived}, metadata.Homes[home])
+			}
 			if tc.shared {
 				metadata, err := remotesync.LoadMirrorCodexMetadata(t.Context(), mirror)
 				require.NoError(t, err)
@@ -887,6 +935,9 @@ func TestMaterializeCodexLoadedLinkedHome(t *testing.T) {
 				return
 			}
 			require.Len(t, result.Paths, 2)
+			if tc.outer {
+				require.Equal(t, []string{filepath.Join(destination, "sessions", "2024", "01", "15", filepath.Base(parentFile)), filepath.Join(destination, "sessions", "2026", "01", "01", filepath.Base(childFile))}, result.Paths)
+			}
 			for i, want := range [][]byte{parentData, childData} {
 				got, err := os.ReadFile(result.Paths[i])
 				require.NoError(t, err)

@@ -335,27 +335,26 @@ func codexConfiguredGroup(cfg config.Config, candidates []string, selected, anch
 	roots := []string{selected}
 	archived := make(map[string]bool)
 	metadata := cfg.ProviderMetadata[parser.AgentCodex]
-	for _, home := range metadata[selected] {
-		live, liveErr := pathutil.ResolveAbsolute(filepath.Join(home, "sessions"))
-		archive, archiveErr := pathutil.ResolveAbsolute(filepath.Join(home, "archived_sessions"))
-		selectedPath, selectedErr := pathutil.ResolveAbsolute(selected)
-		if liveErr != nil || archiveErr != nil || selectedErr != nil || (selectedPath != live && selectedPath != archive) {
-			continue
-		}
-		for _, candidate := range candidates {
-			resolved, err := pathutil.ResolveAbsolute(candidate)
-			if err != nil || (resolved != live && resolved != archive) {
-				continue
-			}
-			archived[candidate] = resolved == archive
-			if !slices.Contains(roots, candidate) {
-				roots = append(roots, candidate)
-			}
-		}
-	}
 	for _, candidate := range candidates {
 		resolved, err := pathutil.ResolveAbsolute(candidate)
 		rel, relErr := filepath.Rel(resolved, anchor)
+		for _, home := range metadata[candidate] {
+			live, liveErr := pathutil.ResolveAbsolute(filepath.Join(home, "sessions"))
+			archive, archiveErr := pathutil.ResolveAbsolute(filepath.Join(home, "archived_sessions"))
+			if err != nil || relErr != nil || !filepath.IsLocal(rel) || liveErr != nil || archiveErr != nil || (resolved != live && resolved != archive) {
+				continue
+			}
+			for _, partner := range candidates {
+				partnerPath, partnerErr := pathutil.ResolveAbsolute(partner)
+				if partnerErr != nil || (partnerPath != live && partnerPath != archive) {
+					continue
+				}
+				archived[partner] = partnerPath == archive
+				if !slices.Contains(roots, partner) {
+					roots = append(roots, partner)
+				}
+			}
+		}
 		if ((err == nil && relErr == nil && filepath.IsLocal(rel)) || (len(metadata[selected]) == 0 && (filepath.Base(selected) == "sessions" || filepath.Base(selected) == "archived_sessions") && filepath.Dir(candidate) == filepath.Dir(selected) && (filepath.Base(candidate) == "sessions" || filepath.Base(candidate) == "archived_sessions"))) && !slices.Contains(roots, candidate) {
 			roots = append(roots, candidate)
 		}

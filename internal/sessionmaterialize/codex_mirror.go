@@ -41,23 +41,22 @@ func codexMirrorHomeGroup(root, anchor string, saved remotesync.MirrorCodexMetad
 	roots, roles := []string{root}, make(map[string]bool)
 	for _, home := range saved.Homes {
 		live, archive := mapped[home.Sessions], mapped[home.ArchivedSessions]
-		if live != root && archive != root {
+		liveRel, liveErr := filepath.Rel(live, anchor)
+		archiveRel, archiveErr := filepath.Rel(archive, anchor)
+		if (live == "" || liveErr != nil || !filepath.IsLocal(liveRel)) && (archive == "" || archiveErr != nil || !filepath.IsLocal(archiveRel)) {
 			continue
 		}
 		if live == archive {
 			return nil, nil, errors.New("contradictory Codex mirror home roots")
 		}
-		for _, pair := range []struct {
-			dir      string
-			archived bool
-		}{{live, false}, {archive, true}} {
-			if pair.dir != "" {
-				if role, exists := roles[pair.dir]; exists && role != pair.archived {
+		for _, dir := range []string{live, archive} {
+			if dir != "" {
+				if role, exists := roles[dir]; exists && role != (dir == archive) {
 					return nil, nil, errors.New("contradictory Codex mirror home roots")
 				}
-				roles[pair.dir] = pair.archived
-				if !slices.Contains(roots, pair.dir) {
-					roots = append(roots, pair.dir)
+				roles[dir] = dir == archive
+				if !slices.Contains(roots, dir) {
+					roots = append(roots, dir)
 				}
 			}
 		}
