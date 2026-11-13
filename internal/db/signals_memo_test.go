@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -153,14 +154,16 @@ func TestSignalsFrustrationMemoReaderSwap(t *testing.T) {
 
 type cancelAfterScanContext struct {
 	context.Context
-	reader *sql.DB
-	cancel context.CancelFunc
+	reader      *sql.DB
+	cancel      context.CancelFunc
+	scanStarted *atomic.Bool
 }
 
 func (ctx cancelAfterScanContext) Err() error {
-	// The driver checks Err while holding a connection. Cancel only once
-	// the completed scan has closed its rows and returned that connection.
-	if ctx.reader.Stats().InUse == 0 {
+	// Stored-count rows also return their connection before the prompt scan.
+	// database/sql can call Err asynchronously after closing those rows.
+	// Wait for the prompt query before treating an idle pool as scan completion.
+	if ctx.scanStarted.Load() && ctx.reader.Stats().InUse == 0 {
 		ctx.cancel()
 	}
 	return ctx.Context.Err()
@@ -173,9 +176,27 @@ func TestSignalsFrustrationMemoCanceled(t *testing.T) {
 	rows, err := d.signalRows(t.Context(), AnalyticsFilter{})
 	require.NoError(t, err)
 	require.Len(t, rows, 1)
+	reader := d.rawReader()
+	reader.SetMaxOpenConns(1)
+	conn, err := reader.Conn(t.Context())
+	require.NoError(t, err)
+	var scanStarted atomic.Bool
+	var sqlite *sqlite3.SQLiteConn
+	require.NoError(t, conn.Raw(func(raw any) error {
+		sqlite = raw.(*diagnosticReaderConn).SQLiteConn
+		sqlite.RegisterAuthorizer(func(op int, table, column, _ string) int {
+			if op == sqlite3.SQLITE_READ && table == "messages" && column == "content" {
+				scanStarted.Store(true)
+			}
+			return sqlite3.SQLITE_OK
+		})
+		return nil
+	}))
+	require.NoError(t, conn.Close())
+	defer sqlite.RegisterAuthorizer(nil)
 	ctx, cancel := context.WithCancel(t.Context())
 	defer cancel()
-	err = d.populateFrustrationMarkers(cancelAfterScanContext{Context: ctx, reader: d.rawReader(), cancel: cancel}, rows)
+	err = d.populateFrustrationMarkers(cancelAfterScanContext{Context: ctx, reader: reader, cancel: cancel, scanStarted: &scanStarted}, rows)
 	require.Equal(t, context.Canceled, err, "cancellation must come from the post-scan check, rather than a wrapped query error")
 	assert.Equal(t, 1, rows[0].FrustrationMarkerCount, "the scan must finish before cancellation")
 	assert.Empty(t, d.frustrationMemo.counts)
