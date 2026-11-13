@@ -122,6 +122,8 @@ dependencies:
         commit: 'sha1-1791c94d02222ed022f31d41eab3118e4f4fcc15'
         owner_id: 259885253
         repo_id: 1427332808
+        uses:
+            - 'actions/setup-node@v7.1.0'
     'kenn-io/actions@main':
         ref: 'main'
         commit: 'sha1-91872e6fe12293b93dd00abc6b668658063ed3c6'
