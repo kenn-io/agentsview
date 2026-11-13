@@ -27,7 +27,7 @@ func MaterializeSnapshot(ctx context.Context, sources []config.ArchiveSource, ow
 }
 
 // ReadCodexSnapshot retains the snapshot lease while rollout pages are read.
-func ReadCodexSnapshot(ctx context.Context, sources []config.ArchiveSource, owners []db.ArchiveSessionProvenance, limit int64, use func(string, []string, func(context.Context, string, int64) ([]byte, error)) error) (string, error) {
+func ReadCodexSnapshot(ctx context.Context, sources []config.ArchiveSource, owners []db.ArchiveSessionProvenance, limit int64, use func(string, []string, []string, func(context.Context, string, int64) ([]byte, error)) error) (string, error) {
 	_, _, snapshot, err := materializeSnapshot(ctx, sources, owners, "codex", limit, use)
 	return snapshot, err
 }
@@ -35,7 +35,7 @@ func ReadCodexSnapshot(ctx context.Context, sources []config.ArchiveSource, owne
 // ErrSnapshotUnavailable means no snapshot owner was selected.
 var ErrSnapshotUnavailable = errors.New("owning snapshot unavailable")
 
-func materializeSnapshot(ctx context.Context, sources []config.ArchiveSource, owners []db.ArchiveSessionProvenance, provider string, limit int64, use func(string, []string, func(context.Context, string, int64) ([]byte, error)) error) (tree *rawderive.Materialization, primary string, snapshot string, retErr error) {
+func materializeSnapshot(ctx context.Context, sources []config.ArchiveSource, owners []db.ArchiveSessionProvenance, provider string, limit int64, use func(string, []string, []string, func(context.Context, string, int64) ([]byte, error)) error) (tree *rawderive.Materialization, primary string, snapshot string, retErr error) {
 	defer func() {
 		if retErr != nil && tree != nil {
 			retErr = errors.Join(retErr, tree.Cleanup())
@@ -146,7 +146,7 @@ type catalogQuery interface {
 	QueryRowContext(context.Context, string, ...any) *sql.Row
 }
 
-func materializeCatalog(ctx context.Context, catalog catalogQuery, archiveID string, owner db.ArchiveSessionProvenance, provider string, limit int64, use func(string, []string, func(context.Context, string, int64) ([]byte, error)) error, objects rawderive.ObjectStore, release func() error, sourceID string) (tree *rawderive.Materialization, primary, source string, retErr error) {
+func materializeCatalog(ctx context.Context, catalog catalogQuery, archiveID string, owner db.ArchiveSessionProvenance, provider string, limit int64, use func(string, []string, []string, func(context.Context, string, int64) ([]byte, error)) error, objects rawderive.ObjectStore, release func() error, sourceID string) (tree *rawderive.Materialization, primary, source string, retErr error) {
 	s := owner.Source
 	if archiveID != s.ArchiveID {
 		return nil, "", "", errors.New("saved archive identity differs")
@@ -183,47 +183,7 @@ func materializeCatalog(ctx context.Context, catalog catalogQuery, archiveID str
 	base := strings.TrimSuffix(primary, ".jsonl") + "/"
 	bound.Path = primary
 	if use != nil {
-		rows, err := catalog.QueryContext(ctx, `SELECT path,sha256,size,mod_time_ns,covered FROM raw_archive_files WHERE root_id=? AND (path LIKE '%.jsonl' OR path LIKE '%.jsonl.zst') ORDER BY path`, s.RootID)
-		if err != nil {
-			return nil, "", "", err
-		}
-		conflicts := make(map[string]bool)
-		items, err := inventoryEntries(rows, bound, conflicts)
-		if err != nil {
-			return nil, "", "", err
-		}
-		byPath := make(map[string]rawsync.Entry, len(items))
-		names := make([]string, 0, len(items))
-		for _, entry := range items {
-			byPath[entry.Path] = entry
-			names = append(names, entry.Path)
-		}
-		read := func(ctx context.Context, name string, requested int64) (_ []byte, readErr error) {
-			entry, ok := byPath[name]
-			if conflicts[name] {
-				return nil, errors.New("conflicting saved file versions")
-			}
-			if !ok || requested <= 0 || entry.Length > requested {
-				return nil, errors.New("saved rollout unavailable or exceeds size limit")
-			}
-			m := rawderive.Materializer{Store: objects, BaseDir: os.TempDir(), MaxTotalBytes: min(limit, requested)}
-			materialized, err := m.MaterializeEntries(ctx, identity, manifest.Manifest.CapturedAt, []rawsync.Entry{entry})
-			if err != nil {
-				return nil, err
-			}
-			defer func() { readErr = errors.Join(readErr, materialized.Cleanup()) }()
-			filename, err := materialized.EntryPath(name)
-			if err != nil {
-				return nil, err
-			}
-			file, err := os.Open(filename)
-			if err != nil {
-				return nil, err
-			}
-			defer func() { readErr = errors.Join(readErr, file.Close()) }()
-			return io.ReadAll(io.LimitReader(file, entry.Length+1))
-		}
-		return nil, "", sourceID, use(originalRoot, names, read)
+		return nil, "", sourceID, readCodexCatalog(ctx, catalog, s.RootID, originalRoot, bound, identity, manifest, objects, limit, use)
 	}
 	entries, err := selectedInventory(ctx, catalog, s.RootID, bound, base)
 	if err != nil {
@@ -237,6 +197,74 @@ func materializeCatalog(ctx context.Context, catalog catalogQuery, archiveID str
 	}
 	tree, err = (rawderive.Materializer{Store: objects, BaseDir: os.TempDir(), MaxTotalBytes: limit}).MaterializeEntries(ctx, identity, manifest.Manifest.CapturedAt, entries)
 	return tree, primary, sourceID, err
+}
+
+// readCodexCatalog keeps its backing reader open through the synchronous callback.
+func readCodexCatalog(ctx context.Context, conn catalogQuery, rootID, originalRoot string, bound rawsync.Entry, identity rawsync.AuthIdentity, manifest rawsync.CanonicalManifest, objects rawderive.ObjectStore, limit int64, use func(string, []string, []string, func(context.Context, string, int64) ([]byte, error)) error) error {
+	rows, err := conn.QueryContext(ctx, `SELECT path,sha256,size,mod_time_ns,covered FROM raw_archive_files WHERE root_id=? AND (path LIKE '%.jsonl' OR path LIKE '%.jsonl.zst') ORDER BY path`, rootID)
+	if err != nil {
+		return err
+	}
+	conflicts := make(map[string]bool)
+	items, err := inventoryEntries(rows, bound, conflicts)
+	if err != nil {
+		return err
+	}
+	byPath := make(map[string]rawsync.Entry, len(items))
+	names := make([]string, 0, len(items))
+	for _, entry := range items {
+		byPath[entry.Path] = entry
+		names = append(names, entry.Path)
+	}
+	ancestors := codexCompanions(manifest.Manifest.Entries, names, byPath)
+	read := func(ctx context.Context, name string, requested int64) (_ []byte, readErr error) {
+		entry, ok := byPath[name]
+		if conflicts[name] {
+			return nil, errors.New("conflicting saved file versions")
+		}
+		if !ok || requested <= 0 || entry.Length > requested {
+			return nil, errors.New("saved rollout unavailable or exceeds size limit")
+		}
+		m := rawderive.Materializer{Store: objects, BaseDir: os.TempDir(), MaxTotalBytes: min(limit, requested)}
+		materialized, err := m.MaterializeEntries(ctx, identity, manifest.Manifest.CapturedAt, []rawsync.Entry{entry})
+		if err != nil {
+			return nil, err
+		}
+		defer func() { readErr = errors.Join(readErr, materialized.Cleanup()) }()
+		filename, err := materialized.EntryPath(name)
+		if err != nil {
+			return nil, err
+		}
+		file, err := os.Open(filename)
+		if err != nil {
+			return nil, err
+		}
+		defer func() { readErr = errors.Join(readErr, file.Close()) }()
+		return io.ReadAll(io.LimitReader(file, entry.Length+1))
+	}
+	return use(originalRoot, names, ancestors, read)
+}
+
+// codexCompanions adds only manifest-authenticated rollouts outside the root inventory.
+func codexCompanions(entries []rawsync.Entry, names []string, byPath map[string]rawsync.Entry) []string {
+	rootKeys := make(map[string]bool, len(names))
+	for _, name := range names {
+		rootKeys[parser.CodexSessionUUIDFromFilename(path.Base(name))] = true
+	}
+	seen := make(map[string][]rawsync.Entry)
+	var ancestors []string
+	for _, entry := range entries {
+		key := parser.CodexSessionUUIDFromFilename(path.Base(entry.Path))
+		if key == "" || rootKeys[key] || slices.ContainsFunc(seen[key], func(other rawsync.Entry) bool {
+			return other.Length == entry.Length && slices.Equal(other.Objects, entry.Objects)
+		}) {
+			continue
+		}
+		seen[key] = append(seen[key], entry)
+		byPath[entry.Path] = entry
+		ancestors = append(ancestors, entry.Path)
+	}
+	return ancestors
 }
 
 // snapshotPrimaryPath binds a canonical entry to its capture-root coordinate.

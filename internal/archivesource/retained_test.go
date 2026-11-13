@@ -161,14 +161,14 @@ func TestRetainedCodexCompressedAndAncestor(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, archive.Close())
 	cancelCtx, cancel := context.WithCancel(ctx)
-	_, _, _, err = Retained(cancelCtx, config.Config{DataDir: seed}, database, "codex:"+thread, sourceDevice, "codex:"+thread, "codex", "", nil, 1<<20, func(_ string, _ []string, _ func(context.Context, string, int64) ([]byte, error)) error {
+	_, _, _, err = Retained(cancelCtx, config.Config{DataDir: seed}, database, "codex:"+thread, sourceDevice, "codex:"+thread, "codex", "", nil, 1<<20, func(_ string, _, _ []string, _ func(context.Context, string, int64) ([]byte, error)) error {
 		cancel()
 		return cancelCtx.Err()
 	})
 	require.ErrorIs(t, err, context.Canceled)
 	require.NotErrorIs(t, err, sql.ErrTxDone)
 	var seen []string
-	_, _, source, err := Retained(ctx, config.Config{DataDir: seed}, database, "codex:"+thread, sourceDevice, "codex:"+thread, "codex", "", nil, 1<<20, func(_ string, names []string, read func(context.Context, string, int64) ([]byte, error)) error {
+	_, _, source, err := Retained(ctx, config.Config{DataDir: seed}, database, "codex:"+thread, sourceDevice, "codex:"+thread, "codex", "", nil, 1<<20, func(_ string, names, _ []string, read func(context.Context, string, int64) ([]byte, error)) error {
 		for _, name := range names {
 			got, err := read(ctx, name, 1<<20)
 			require.NoError(t, err)
@@ -300,7 +300,7 @@ func TestRetainedDirectoryReadCreatesNoSidecars(t *testing.T) {
 		t.Cleanup(func() { _ = os.Chmod(seed, 0o700) })
 	}
 	called := false
-	_, _, _, err = Retained(ctx, config.Config{ArchiveSources: []config.ArchiveSource{{Directory: seed}}}, nil, owner.NativeSessionID, sourceDevice, owner.NativeSessionID, "codex", "", []db.ArchiveSessionProvenance{owner}, 1<<20, func(_ string, _ []string, _ func(context.Context, string, int64) ([]byte, error)) error {
+	_, _, _, err = Retained(ctx, config.Config{ArchiveSources: []config.ArchiveSource{{Directory: seed}}}, nil, owner.NativeSessionID, sourceDevice, owner.NativeSessionID, "codex", "", []db.ArchiveSessionProvenance{owner}, 1<<20, func(_ string, _, _ []string, _ func(context.Context, string, int64) ([]byte, error)) error {
 		called = true
 		check()
 		return nil

@@ -42,13 +42,13 @@ func materializeCodex(ctx context.Context, cfg config.Config, database *db.DB, s
 archiveSource:
 	if retained || len(owners) > 0 {
 		var pages []codexPage
-		use := func(root string, names []string, read func(context.Context, string, int64) ([]byte, error)) error {
+		use := func(root string, names, ancestors []string, read func(context.Context, string, int64) ([]byte, error)) error {
 			archived := make(map[string]bool)
 			for _, name := range names {
 				archived[name] = codexArchived(root, name)
 			}
 			var err error
-			pages, err = codexLineage(ctx, thread, names, archived, read)
+			pages, err = codexLineage(ctx, thread, names, ancestors, archived, read)
 			return err
 		}
 		var source string
@@ -180,7 +180,7 @@ archiveSource:
 			}()
 			advertised, err := remotesync.LoadMirrorCodexRoots(ctx, mirror)
 			if err != nil {
-				return Result{}, fmt.Errorf("native Codex root metadata for host %s unavailable; use a compatible or newer AgentsView for newer metadata, then sync the host if metadata is missing or outdated: %w", host, err)
+				return Result{}, fmt.Errorf("cannot read Codex source locations for host %s; use a compatible or newer AgentsView and sync the host if locations are missing or outdated: %w", host, err)
 			}
 			var mapped []string
 			for _, remoteRoot := range advertised {
@@ -336,7 +336,7 @@ archiveSource:
 			return nil, errors.New("native Codex source outside configured roots")
 		}
 	}
-	pages, err := codexLineage(ctx, thread, names, archived, read)
+	pages, err := codexLineage(ctx, thread, names, nil, archived, read)
 	if closeSource != nil {
 		err = errors.Join(err, closeSource())
 		closeSource = nil

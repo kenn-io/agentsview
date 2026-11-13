@@ -3,6 +3,7 @@ package sessionmaterialize
 import (
 	"bufio"
 	"bytes"
+	"cmp"
 	"context"
 	"encoding/json/jsontext"
 	"encoding/json/v2"
@@ -110,19 +111,17 @@ func inspectCodexPage(ctx context.Context, name string, data []byte) (codexPage,
 	return codexPage{name: name, thread: record.Payload.ID, rollout: rollout, data: data, mode: mode, base: record.Payload.Base, decodedSize: uint64(len(line)) + uint64(remaining)}, nil
 }
 
-// codexLineage validates every ancestor before returning files in publication
-// order, with the requested thread's newest page last.
-func codexLineage(ctx context.Context, thread string, names []string, archived map[string]bool, read func(context.Context, string, int64) ([]byte, error)) ([]codexPage, error) {
-	type choice struct {
-		name        string
-		rank        int
-		ambiguous   bool
-		invalidDate bool
-	}
-	byRollout := make(map[string]choice)
-	var newest, newestStamp, newestRollout string
+type codexChoice struct {
+	name        string
+	rank        int
+	ambiguous   bool
+	invalidDate bool
+}
+
+func rankCodexRollouts(thread string, names []string, archived map[string]bool) (byRollout map[string]codexChoice, newest, newestRollout string, invalidRequested bool) {
+	byRollout = make(map[string]codexChoice)
+	var newestStamp string
 	var newestCanonical bool
-	var invalidRequested bool
 	for _, name := range names {
 		key := parser.CodexSessionUUIDFromFilename(path.Base(name))
 		if key == "" {
@@ -148,7 +147,7 @@ func codexLineage(ctx context.Context, thread string, names []string, archived m
 		}
 		current := byRollout[rollout]
 		if current.name == "" || rank < current.rank {
-			current = choice{name: name, rank: rank, invalidDate: dateErr != nil}
+			current = codexChoice{name: name, rank: rank, invalidDate: dateErr != nil}
 		} else if rank == current.rank && name != current.name {
 			current.ambiguous = true
 		}
@@ -157,6 +156,14 @@ func codexLineage(ctx context.Context, thread string, names []string, archived m
 			newest, newestStamp, newestRollout, newestCanonical = name, stamp, rollout, canonical
 		}
 	}
+	return byRollout, newest, newestRollout, invalidRequested
+}
+
+// codexLineage validates every ancestor before returning files in publication
+// order, with the requested thread's newest page last.
+func codexLineage(ctx context.Context, thread string, names, ancestors []string, archived map[string]bool, read func(context.Context, string, int64) ([]byte, error)) ([]codexPage, error) {
+	byRollout, newest, newestRollout, invalidRequested := rankCodexRollouts(thread, names, archived)
+	ancestry, _, _, _ := rankCodexRollouts("", ancestors, nil)
 	if newest == "" {
 		if invalidRequested {
 			return nil, errors.New("invalid Codex rollout date")
@@ -169,7 +176,7 @@ func codexLineage(ctx context.Context, thread string, names []string, archived m
 	var total int64
 	rollout := newestRollout
 	for {
-		selected := byRollout[rollout]
+		selected := cmp.Or(byRollout[rollout], ancestry[rollout])
 		if selected.ambiguous {
 			return nil, fmt.Errorf("ambiguous Codex rollout %s", rollout)
 		}
@@ -197,11 +204,11 @@ func codexLineage(ctx context.Context, thread string, names []string, archived m
 			return nil, errors.New("native Codex history requires timestamped filenames")
 		}
 		if seen[page.rollout] {
-			return nil, errors.New("native Codex lineage cycle")
+			return nil, errors.New("codex history contains a loop")
 		}
 		seen[page.rollout] = true
 		if cutoff != nil && (page.mode != "paginated" || cutoff.Offset > page.decodedSize) {
-			return nil, errors.New("native Codex lineage cutoff or source differs")
+			return nil, errors.New("incomplete or incompatible codex history")
 		}
 		pages = append(pages, page)
 		if page.base == nil {
