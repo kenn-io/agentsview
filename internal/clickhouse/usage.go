@@ -1915,7 +1915,7 @@ func (s *Store) usagePricingForCatalog(
 ) (*export.PricingResolver, map[string]chUsagePriceContext, [][2]string, error) {
 	catalog := snapshot.catalog
 	resolver := export.NewPricingResolverWithDigest(catalog.rows, snapshot.catalogDigest)
-	contexts, err := loadUsagePriceContexts(ctx, s.conn, catalog.digest)
+	contexts, err := s.usagePriceContexts(ctx, catalog.digest)
 	if err != nil {
 		return nil, nil, nil, err
 	}

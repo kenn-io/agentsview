@@ -9,6 +9,7 @@ import (
 	"encoding/json/v2"
 	"errors"
 	"fmt"
+	"maps"
 	"slices"
 	"strconv"
 	"strings"
@@ -547,14 +548,54 @@ func decodeUsagePriceContext(data string) (chUsagePriceContext, error) {
 	return c, err
 }
 
-// loadUsagePriceContexts reads every context persisted under digest.
-func loadUsagePriceContexts(
-	ctx context.Context, conn *sql.DB, digest string,
+// usagePriceContextCache keeps the decoded price contexts of one pricing
+// digest. A context ID is a hash of the context's JSON, so a decoded context
+// stays valid for as long as its ID exists.
+type usagePriceContextCache struct {
+	mu       sync.Mutex
+	digest   string
+	contexts map[string]chUsagePriceContext
+}
+
+// usagePriceContexts returns every context persisted under digest. Each call
+// reads the digest's full context ID list in one query, so a context a push
+// adds mid-read shows up on the next call, but the query returns JSON only
+// for IDs not decoded yet. After the first read that is rare: contexts change
+// only when pricing or the registered models change.
+func (s *Store) usagePriceContexts(
+	ctx context.Context, digest string,
+) (map[string]chUsagePriceContext, error) {
+	cache := &s.priceContexts
+	cache.mu.Lock()
+	known := cache.contexts
+	if cache.digest != digest {
+		known = nil
+	}
+	cache.mu.Unlock()
+	knownIDs := slices.Collect(maps.Keys(known))
+	if knownIDs == nil {
+		knownIDs = []string{}
+	}
+	out, err := queryUsagePriceContexts(ctx, s.conn, digest, knownIDs, known)
+	if err != nil {
+		return nil, err
+	}
+	cache.mu.Lock()
+	defer cache.mu.Unlock()
+	cache.digest, cache.contexts = digest, out
+	return maps.Clone(out), nil
+}
+
+// queryUsagePriceContexts reads digest's contexts. It takes the contexts in
+// knownIDs from known and decodes the JSON of the rest.
+func queryUsagePriceContexts(
+	ctx context.Context, conn *sql.DB, digest string, knownIDs []string,
+	known map[string]chUsagePriceContext,
 ) (map[string]chUsagePriceContext, error) {
 	rows, err := conn.QueryContext(ctx, `
-		SELECT context_id, context_json
+		SELECT context_id, if(has(?, context_id), '', context_json)
 		FROM usage_price_contexts
-		WHERE pricing_digest = ?`, digest)
+		WHERE pricing_digest = ?`, knownIDs, digest)
 	if isMissingTableError(err) {
 		// The reader may hold SELECT-only credentials, so only push upgrades
 		// the schema.
@@ -571,6 +612,10 @@ func loadUsagePriceContexts(
 		var id, data string
 		if err := rows.Scan(&id, &data); err != nil {
 			return nil, fmt.Errorf("scanning clickhouse usage price context: %w", err)
+		}
+		if c, ok := known[id]; ok {
+			out[id] = c
+			continue
 		}
 		c, err := decodeUsagePriceContext(data)
 		if err != nil {

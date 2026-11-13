@@ -65,6 +65,8 @@ type Store struct {
 	frustrationMarkers frustrationMarkerMemo
 	// pricing memoizes the pricing catalog per set of active pricing parts.
 	pricing pricingCache
+	// priceContexts keeps the decoded usage price contexts of one digest.
+	priceContexts usagePriceContextCache
 	// coverageCache memoizes complete usage snapshot coverage per rows.
 	coverageCache usageCoverageCache
 	// usageVersions keeps one parts digest and row identity per small usage

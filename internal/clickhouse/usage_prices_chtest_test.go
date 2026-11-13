@@ -252,7 +252,7 @@ func dailyUsageGroupRowStats(
 	t.Helper()
 	catalog, err := chLoadPricingCatalog(t.Context(), store.conn, store.customPricing)
 	require.NoError(t, err)
-	contexts, err := loadUsagePriceContexts(t.Context(), store.conn, catalog.digest)
+	contexts, err := store.usagePriceContexts(t.Context(), catalog.digest)
 	require.NoError(t, err)
 	customModels := chCustomPricedModels(contexts, export.NewPricingResolver(catalog.rows))
 	var stats usageGroupRowStats
@@ -1085,4 +1085,33 @@ func TestSessionUsageReadsStoredCounters(t *testing.T) {
 	require.NotNil(t, usage)
 	assert.Equal(t, money.MustParseDollars("0.4"), usage.Cost, "1M input tokens at $0.40 per million")
 	assert.Equal(t, 1, usage.BreakdownCount)
+}
+
+// A context ID names its content, so a read reuses a decoded context even
+// after the stored JSON changes, and still picks up a context a later push
+// adds under the same digest.
+func TestUsagePriceContextsReuseDecodedContexts(t *testing.T) {
+	t.Parallel()
+	store, _, _ := newUsagePriceStore(t)
+	var digest string
+	require.NoError(t, store.DB().QueryRowContext(t.Context(),
+		"SELECT value FROM sync_metadata WHERE key = ?", usagePricedDigestKey).Scan(&digest))
+	first, err := store.usagePriceContexts(t.Context(), digest)
+	require.NoError(t, err)
+	require.NotEmpty(t, first)
+
+	execPreparedUsage(t, store, `ALTER TABLE usage_price_contexts UPDATE context_json = 'not json'
+		WHERE 1 SETTINGS mutations_sync = 2`)
+	again, err := store.usagePriceContexts(t.Context(), digest)
+	require.NoError(t, err, "cached contexts are not decoded again")
+	assert.Equal(t, first, again)
+
+	execPreparedUsage(t, store, `
+		INSERT INTO usage_price_contexts (pricing_digest, context_id, context_json, push_version)
+		SELECT `+chSQLString(digest)+`, 'added-context', '{"reported_model":"added-model","ok":true,"input":7}', 1`)
+	added, err := store.usagePriceContexts(t.Context(), digest)
+	require.NoError(t, err)
+	assert.Len(t, added, len(first)+1)
+	assert.Equal(t, "added-model", added["added-context"].ReportedModel)
+	assert.EqualValues(t, 7, added["added-context"].Input)
 }
