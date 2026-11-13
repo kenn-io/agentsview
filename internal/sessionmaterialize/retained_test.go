@@ -222,6 +222,28 @@ func TestMaterializeRetainedCodexForkParentAcrossRoots(t *testing.T) {
 	dbtest.WriteTestFile(t, filepath.Join(parentRoot, "sessions", parentName), []byte(ancestor))
 	seed, database, closeArchive := seedRetainedFixture(t, root, data, []rawarchive.RootSpec{{Provider: "codex", Path: childRoot}, {Provider: "codex", Path: parentRoot}})
 	require.NoError(t, closeArchive())
+	require.NoError(t, database.Close())
+	receiver := dbtest.OpenTestDB(t)
+	_, err = receiver.EnsureInstallationIdentity(ctx, "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb")
+	require.NoError(t, err)
+	directoryCfg := config.Config{DataDir: filepath.Dir(receiver.Path()), ArchiveContent: config.ArchiveContentFull, ArchiveSources: []config.ArchiveSource{{Name: "directory", Directory: seed}}}
+	engine := syncer.NewEngine(ctx, receiver, syncer.EngineConfig{Ephemeral: true})
+	t.Cleanup(engine.Close)
+	manager, err := archivesource.NewManager(ctx, directoryCfg, receiver, engine, nil)
+	require.NoError(t, err)
+	t.Cleanup(manager.Close)
+	_, err = manager.Drain(ctx, nil)
+	require.NoError(t, err)
+	manager.Close()
+	foreign, err := receiver.GetSessionFull(ctx, device+"~codex:"+thread)
+	require.NoError(t, err)
+	require.NotNil(t, foreign)
+	owners, err := receiver.ArchiveSessionOwners(ctx, foreign.ID)
+	require.NoError(t, err)
+	require.Len(t, owners, 1)
+	database, err = db.OpenIsolatedContext(ctx, filepath.Join(seed, "sessions.db"))
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = database.Close() })
 	// A later independent capture adds an unrelated same-rollout copy without
 	// changing the already accepted leaf manifest.
 	thirdRoot := filepath.Join(root, "third")
@@ -241,9 +263,15 @@ func TestMaterializeRetainedCodexForkParentAcrossRoots(t *testing.T) {
 	session, err := database.GetSessionFull(ctx, "codex:"+thread)
 	require.NoError(t, err)
 	require.NotNil(t, session)
-	var manifestID, childID, archiveID string
+	var manifestID, childID, sourceKey, archiveID string
 	var canonical []byte
-	require.NoError(t, database.Reader().QueryRowContext(ctx, `SELECT s.manifest_id,s.root_id,s.canonical_json,(SELECT value FROM archive_metadata WHERE key='archive_id') FROM raw_archive_sources s JOIN raw_archive_sessions b ON b.root_id=s.root_id AND b.source_key=s.source_key WHERE b.session_id=?`, session.ID).Scan(&manifestID, &childID, &canonical, &archiveID))
+	require.NoError(t, database.Reader().QueryRowContext(ctx, `SELECT s.manifest_id,s.root_id,s.source_key,s.canonical_json,(SELECT value FROM archive_metadata WHERE key='archive_id') FROM raw_archive_sources s JOIN raw_archive_sessions b ON b.root_id=s.root_id AND b.source_key=s.source_key WHERE b.session_id=?`, session.ID).Scan(&manifestID, &childID, &sourceKey, &canonical, &archiveID))
+	assert.Equal(t, db.ArchiveAttachmentKey{RepositoryID: "archive:" + archiveID, SnapshotID: "directory:" + archiveID}, owners[0].Attachment)
+	assert.Equal(t, archiveID, owners[0].Source.ArchiveID)
+	assert.Equal(t, device, owners[0].Source.DeviceID)
+	assert.Equal(t, childID, owners[0].Source.RootID)
+	assert.Equal(t, sourceKey, owners[0].Source.SourceKey)
+	assert.Equal(t, manifestID, owners[0].ManifestID)
 	identity, err := rawsync.NewAuthIdentity(archiveID, device)
 	require.NoError(t, err)
 	manifest, err := rawsync.ParseCanonicalManifest(identity, manifestID, canonical, rawsync.DefaultManifestLimits())
@@ -286,50 +314,16 @@ func TestMaterializeRetainedCodexForkParentAcrossRoots(t *testing.T) {
 		}
 	})
 	require.NoError(t, database.Close())
-	receiver := dbtest.OpenTestDB(t)
-	_, err = receiver.EnsureInstallationIdentity(ctx, "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb")
-	require.NoError(t, err)
-	directoryCfg := config.Config{DataDir: filepath.Dir(receiver.Path()), ArchiveContent: config.ArchiveContentFull, ArchiveSources: []config.ArchiveSource{{Name: "directory", Directory: seed}}}
-	engine := syncer.NewEngine(ctx, receiver, syncer.EngineConfig{Ephemeral: true})
-	t.Cleanup(engine.Close)
-	manager, err := archivesource.NewManager(ctx, directoryCfg, receiver, engine, nil)
-	require.NoError(t, err)
-	t.Cleanup(manager.Close)
-	_, err = manager.Drain(ctx, nil)
-	require.NoError(t, err)
-	foreign, err := receiver.GetSessionFull(ctx, device+"~codex:"+thread)
-	require.NoError(t, err)
-	require.NotNil(t, foreign)
-	// The attachment reader is closed before the saved database is checkpointed.
-	checkpointed, err := db.OpenIsolatedContext(ctx, filepath.Join(seed, "sessions.db"))
-	require.NoError(t, err)
-	t.Cleanup(func() { _ = checkpointed.Close() })
-	require.NoError(t, checkpointed.Close())
-	beforeDB, err := os.ReadFile(filepath.Join(seed, "sessions.db"))
-	require.NoError(t, err)
-	beforeEntries, err := os.ReadDir(seed)
-	require.NoError(t, err)
-	for _, suffix := range []string{"-wal", "-shm", "-journal"} {
-		_, err := os.Stat(filepath.Join(seed, "sessions.db") + suffix)
-		require.ErrorIs(t, err, os.ErrNotExist)
-	}
+	beforeHash, beforeNames, sidecars := directoryState(t, seed)
+	require.Empty(t, sidecars)
 	t.Setenv("CODEX_HOME", t.TempDir())
 	result, err := Materialize(ctx, directoryCfg, receiver, foreign, t.TempDir())
 	require.NoError(t, err)
 	assert.Contains(t, result.Source, "directory:")
-	afterDB, err := os.ReadFile(filepath.Join(seed, "sessions.db"))
-	require.NoError(t, err)
-	assert.Equal(t, beforeDB, afterDB)
-	afterEntries, err := os.ReadDir(seed)
-	require.NoError(t, err)
-	var beforeNames, afterNames []string
-	for _, entry := range beforeEntries {
-		beforeNames = append(beforeNames, entry.Name())
-	}
-	for _, entry := range afterEntries {
-		afterNames = append(afterNames, entry.Name())
-	}
+	afterHash, afterNames, sidecars := directoryState(t, seed)
+	assert.Equal(t, beforeHash, afterHash)
 	assert.Equal(t, beforeNames, afterNames)
+	assert.Empty(t, sidecars)
 	require.Len(t, result.Paths, 2)
 	for i, want := range []string{ancestor, page} {
 		got, err := os.ReadFile(result.Paths[i])

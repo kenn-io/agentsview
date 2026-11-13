@@ -119,6 +119,75 @@ func TestAttachedDirectoryRefusesActiveWriter(t *testing.T) {
 	require.ErrorContains(t, err, "in use")
 }
 
+func TestAttachedDirectoryDiscoveryLeavesCleanSourceClean(t *testing.T) {
+	_, inputs := archiveFixture(t)
+	directory := filepath.Join(inputs, "seed")
+	prepareDirectoryOwnerLock(t, directory)
+	saved := filepath.Join(directory, "sessions.db")
+	before, err := os.ReadFile(saved)
+	require.NoError(t, err)
+	entries, err := os.ReadDir(directory)
+	require.NoError(t, err)
+	index, err := OpenIndex(t.Context(), config.ArchiveSource{Directory: directory}, t.TempDir(), nil)
+	require.NoError(t, err)
+	require.NoError(t, index.Close())
+	after, err := os.ReadFile(saved)
+	require.NoError(t, err)
+	assert.Equal(t, sha256.Sum256(before), sha256.Sum256(after))
+	afterEntries, err := os.ReadDir(directory)
+	require.NoError(t, err)
+	var beforeNames, afterNames []string
+	for _, entry := range entries {
+		beforeNames = append(beforeNames, entry.Name())
+	}
+	for _, entry := range afterEntries {
+		afterNames = append(afterNames, entry.Name())
+	}
+	assert.Equal(t, beforeNames, afterNames)
+	for _, suffix := range []string{"-wal", "-shm", "-journal"} {
+		_, err := os.Lstat(saved + suffix)
+		require.ErrorIs(t, err, os.ErrNotExist)
+	}
+}
+
+func TestAttachedDirectorySidecarSourceStillDiscovered(t *testing.T) {
+	_, inputs := archiveFixture(t)
+	directory := filepath.Join(inputs, "seed")
+	saved := filepath.Join(directory, "sessions.db")
+	// This handle creates real sidecar state; it performs no overlapping writes.
+	writer, err := db.OpenIsolatedContext(t.Context(), saved)
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = writer.Close() })
+	require.FileExists(t, saved+"-shm")
+	before, err := os.ReadFile(saved)
+	require.NoError(t, err)
+	index, err := OpenIndex(t.Context(), config.ArchiveSource{Directory: directory}, t.TempDir(), nil)
+	require.NoError(t, err)
+	require.NoError(t, index.Close())
+	after, err := os.ReadFile(saved)
+	require.NoError(t, err)
+	assert.Equal(t, before, after)
+	require.NoError(t, writer.Close())
+}
+
+func TestAttachedDirectoryPendingCompactionRefused(t *testing.T) {
+	_, inputs := archiveFixture(t)
+	directory := filepath.Join(inputs, "seed")
+	saved := filepath.Join(directory, "sessions.db")
+	before, err := os.ReadFile(saved)
+	require.NoError(t, err)
+	require.NoError(t, os.WriteFile(filepath.Join(directory, "compact-recovery.json"), []byte("pending"), 0o600))
+	_, err = OpenIndex(t.Context(), config.ArchiveSource{Directory: directory}, t.TempDir(), nil)
+	require.ErrorContains(t, err, "compaction recovery is pending")
+	after, err := os.ReadFile(saved)
+	require.NoError(t, err)
+	assert.Equal(t, before, after)
+	for _, suffix := range []string{"-wal", "-shm", "-journal"} {
+		_, err := os.Lstat(saved + suffix)
+		require.ErrorIs(t, err, os.ErrNotExist)
+	}
+}
+
 func TestAttachedDirectoryMachineNameRequiresOneMachine(t *testing.T) {
 	_, inputs := archiveFixture(t)
 	directory := filepath.Join(inputs, "seed")

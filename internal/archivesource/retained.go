@@ -220,19 +220,8 @@ func openDirectoryCandidate(ctx context.Context, directory string) (_ *docbank.C
 		return nil, nil, nil, nil, "", vaultReadError(err)
 	}
 	saved := filepath.Join(application, "sessions.db")
-	for _, suffix := range []string{"-wal", "-shm", "-journal"} {
-		if _, statErr := os.Lstat(saved + suffix); statErr == nil {
-			return nil, nil, nil, nil, "", errors.New("close the archive writer and retry")
-		} else if !errors.Is(statErr, os.ErrNotExist) {
-			return nil, nil, nil, nil, "", statErr
-		}
-	}
-	pending, err := db.CompactRecoveryPending(saved)
-	if err != nil {
+	if err := checkSavedQuiescent(saved); err != nil {
 		return nil, nil, nil, nil, "", err
-	}
-	if pending {
-		return nil, nil, nil, nil, "", errors.New("archive compaction recovery is pending; start the owner and retry")
 	}
 	connection, err = sql.Open("sqlite3", immutableURI(saved))
 	if err != nil {
@@ -247,6 +236,26 @@ func openDirectoryCandidate(ctx context.Context, directory string) (_ *docbank.C
 		return nil, nil, nil, nil, "", err
 	}
 	return reader, connection, tx, lock, archiveID, nil
+}
+
+var errSavedSidecars = errors.New("close the archive writer and retry")
+
+func checkSavedQuiescent(saved string) error {
+	pending, err := db.CompactRecoveryPending(saved)
+	if err != nil {
+		return err
+	}
+	if pending {
+		return errors.New("archive compaction recovery is pending; start the owner and retry")
+	}
+	for _, suffix := range []string{"-wal", "-shm", "-journal"} {
+		if _, err := os.Lstat(saved + suffix); err == nil {
+			return errSavedSidecars
+		} else if !errors.Is(err, os.ErrNotExist) {
+			return err
+		}
+	}
+	return nil
 }
 
 func vaultReadError(err error) error {
