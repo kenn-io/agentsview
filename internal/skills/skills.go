@@ -245,7 +245,7 @@ func RenderPackage(h Harness, version string, remote Remote) ([]Rendered, error)
 			"agentsview-search-conversations",
 			filepath.Join(claudeAgentDir, "agentsview-search-conversations.md"),
 			"search-conversations.md.tmpl",
-			templateData{},
+			templateData{ServerArgs: remote.Args()},
 			version,
 			"",
 		)

@@ -41,12 +41,14 @@ func newSessionSearchCommand() *cobra.Command {
 		Short: "Search message and tool content across sessions",
 		Long: "Search archived message and tool content with redacted snippets. " +
 			"The default is substring search across available sources. " +
+			"On SQLite, a search of several words lists exact text first, then messages holding every word, then those holding more of the words; " +
+			"a fully quoted search matches its text only. " +
 			"Choose at most one of --regex, --fts, --semantic, or --hybrid. " +
 			"FTS and semantic/hybrid modes search messages only. " +
 			"--semantic needs an embedding index; without one, --hybrid returns keyword matches with a note on stderr. " +
 			"JSON returns a numeric next_cursor for further matches; repeat the query, search mode, backend, and filters when continuing.",
 		Example: "  agentsview session search 'connection reset' --since 14d --in messages,tool_result --json\n" +
-			"  agentsview session search 'connection AND reset' --fts --json\n" +
+			"  agentsview session search '\"connection\" OR \"reset\"' --fts --json\n" +
 			"  agentsview session search 'why the build failed' --hybrid --scope top --json",
 		Args:         cobra.ExactArgs(1),
 		SilenceUsage: true,
@@ -553,10 +555,17 @@ func contentSearchRetry(cmd *cobra.Command, pattern string, changes map[string]a
 	return strings.Join(parts, " ")
 }
 
+// sqliteArchive reports whether svc searches a SQLite archive, whose default
+// search already matches query words anywhere in a message.
+func sqliteArchive(ctx context.Context, svc service.SessionService) bool {
+	status, err := service.GetMemoryStatus(ctx, svc)
+	return err == nil && status.Archive.Backend == "sqlite"
+}
+
 func contentSearchHints(ctx context.Context, cmd *cobra.Command, svc service.SessionService, req service.ContentSearchRequest, res *service.ContentSearchResult) []contentSearchCLIHint {
 	hints := service.SearchContentHints(ctx, svc, req, res, true, nil)
 	messagesOnly := len(req.Sources) == 0 || len(req.Sources) == 1 && req.Sources[0] == "messages"
-	if len(res.Matches) == 0 && req.Cursor == 0 && res.NextCursor == 0 && !res.CandidateTruncated && req.Mode == "substring" && len(strings.Fields(req.Pattern)) > 1 && messagesOnly {
+	if len(res.Matches) == 0 && req.Cursor == 0 && res.NextCursor == 0 && !res.CandidateTruncated && req.Mode == "substring" && len(strings.Fields(req.Pattern)) > 1 && messagesOnly && !sqliteArchive(ctx, svc) {
 		retry := req
 		retry.Mode = "fts"
 		if page, err := svc.SearchContent(ctx, retry); err == nil && len(page.Matches) > 0 {

@@ -5377,11 +5377,12 @@ func (db *DB) checkFTSModuleLoads(
 
 // HasFTS checks if Full Text Search is available.
 func (db *DB) HasFTS(ctx context.Context) bool {
-	// We need to actually try to access the table, because it might exist
-	// in sqlite_master but fail to load if the fts5 module is missing
-	// in the current runtime.
+	// We need to actually query the table, because it might exist in
+	// sqlite_master but fail to load if the fts5 module is missing in the
+	// current runtime. A MATCH reads the index instead of scanning rows, and
+	// succeeds whether or not any row matches.
 	_, err := db.getReader().Exec(ctx,
-		"SELECT 1 FROM messages_fts LIMIT 1",
+		"SELECT 1 FROM messages_fts WHERE messages_fts MATCH 'agentsviewprobe' LIMIT 1",
 	)
 	return err == nil
 }
