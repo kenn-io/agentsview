@@ -194,15 +194,14 @@ func (s *Server) humaUpdateSettings(
 		patch["require_auth"] = *in.Body.RequireAuth
 	}
 	if len(patch) > 0 {
-		s.settingsApplyMu.Lock()
-		defer s.settingsApplyMu.Unlock()
-		if s.restartAccepted {
-			return nil, apiError(http.StatusConflict,
-				"AgentsView is restarting. Save again after the page reloads.")
+		release, err := s.beginConfigSave()
+		if err != nil {
+			return nil, err
 		}
+		defer release()
 		s.mu.Lock()
 		rollback := s.ingestionRollbackLocked(patch)
-		err := s.cfg.SaveSettings(patch)
+		err = s.cfg.SaveSettings(patch)
 		if err == nil && s.cfg.RequireAuth {
 			err = s.cfg.EnsureAuthToken()
 		}

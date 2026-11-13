@@ -39,6 +39,20 @@ func (s *Server) humaRestartDaemon(ctx context.Context, _ *emptyInput) (*jsonOut
 	return &jsonOutput[map[string]bool]{Body: map[string]bool{"restarting": true}}, nil
 }
 
+// beginConfigSave takes the turn a config.toml write must hold so it cannot
+// interleave with restart preparation, and refuses once a restart has been
+// accepted: the replacement was built from earlier settings and would not
+// see the write. The caller must call release when the write is done.
+func (s *Server) beginConfigSave() (release func(), err error) {
+	s.settingsApplyMu.Lock()
+	if s.restartAccepted {
+		s.settingsApplyMu.Unlock()
+		return nil, apiError(http.StatusConflict,
+			"AgentsView is restarting. Save again after the page reloads.")
+	}
+	return s.settingsApplyMu.Unlock, nil
+}
+
 func (s *Server) humaPersistDaemon(_ context.Context, _ *emptyInput) (*jsonOutput[map[string]bool], error) {
 	if s.persistDaemon == nil {
 		return nil, apiError(http.StatusNotImplemented, "daemon lifetime is unavailable on this server")

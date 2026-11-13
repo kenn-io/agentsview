@@ -122,59 +122,85 @@ func TestDaemonRestart(t *testing.T) {
 // A settings save that arrives while a restart is being prepared must not be
 // dropped: the replacement is built from the settings read at the start.
 func TestDaemonRestartRefusesSettingsSavesItWouldDrop(t *testing.T) {
-	requireAuth := func(t *testing.T, f *syncRouteFixture) bool {
+	read := func(t *testing.T, f *syncRouteFixture, path string, into any) {
 		t.Helper()
-		res := serveJSON(t, f.handler, http.MethodGet, "/api/v1/settings", nil)
+		res := serveJSON(t, f.handler, http.MethodGet, path, nil)
 		require.Equal(t, http.StatusOK, res.Code, res.Body.String())
-		var body struct {
-			RequireAuth bool `json:"require_auth"`
-		}
-		require.NoError(t, json.Unmarshal(res.Body.Bytes(), &body))
-		return body.RequireAuth
+		require.NoError(t, json.Unmarshal(res.Body.Bytes(), into))
 	}
-	t.Run("save during an accepted restart", func(t *testing.T) {
-		f := newSyncRouteFixture(t)
-		entered, release := make(chan struct{}), make(chan struct{})
-		f.srv.restartDaemon = func(context.Context, config.Config) error {
-			close(entered)
-			<-release
-			return nil
-		}
-		// The requests run outside the test goroutine, so they serve raw
-		// recorders and the test asserts on the results.
-		request := func(method, path, body string) *http.Request {
-			req := httptest.NewRequestWithContext(t.Context(), method, path, strings.NewReader(body))
-			req.Host = "127.0.0.1:0"
-			req.RemoteAddr = "127.0.0.1:1234"
-			req.Header.Set("Origin", "http://127.0.0.1:0")
-			req.Header.Set("Content-Type", "application/json")
-			return req
-		}
-		restarted := make(chan *httptest.ResponseRecorder, 1)
-		go func() {
-			w := httptest.NewRecorder()
-			f.handler.ServeHTTP(w, request(http.MethodPost, "/api/v1/daemon/restart", ""))
-			restarted <- w
-		}()
-		<-entered
-		saved := make(chan *httptest.ResponseRecorder, 1)
-		go func() {
-			w := httptest.NewRecorder()
-			f.handler.ServeHTTP(w, request(http.MethodPut, "/api/v1/settings", `{"require_auth":true}`))
-			saved <- w
-		}()
-		select {
-		case w := <-saved:
-			require.FailNow(t, "settings save finished while the restart was being prepared", "status %d: %s", w.Code, w.Body.String())
-		case <-time.After(100 * time.Millisecond): //nolint:kennlint // deadlinetest: absence check; the restart holds the settings lock, so the save must not finish before release
-		}
-		close(release)
-		res := <-restarted
-		require.Equal(t, http.StatusOK, res.Code, res.Body.String())
-		res = <-saved
-		assert.Equal(t, http.StatusConflict, res.Code, res.Body.String())
-		assert.False(t, requireAuth(t, f))
-	})
+	// Each config.toml writer must wait for restart preparation and then be
+	// refused, leaving the setting as the replacement will load it.
+	for _, tc := range []struct {
+		name, method, path, body string
+		unchanged                func(*testing.T, *syncRouteFixture)
+	}{
+		{
+			name: "settings", method: http.MethodPut, path: "/api/v1/settings", body: `{"require_auth":true}`,
+			unchanged: func(t *testing.T, f *syncRouteFixture) {
+				t.Helper()
+				var body struct {
+					RequireAuth bool `json:"require_auth"`
+				}
+				read(t, f, "/api/v1/settings", &body)
+				assert.False(t, body.RequireAuth)
+			},
+		},
+		{
+			name: "terminal", method: http.MethodPost, path: "/api/v1/config/terminal", body: `{"mode":"clipboard"}`,
+			unchanged: func(t *testing.T, f *syncRouteFixture) {
+				t.Helper()
+				var body struct {
+					Mode string `json:"mode"`
+				}
+				read(t, f, "/api/v1/config/terminal", &body)
+				assert.NotEqual(t, "clipboard", body.Mode)
+			},
+		},
+	} {
+		t.Run(tc.name+" save during an accepted restart", func(t *testing.T) {
+			f := newSyncRouteFixture(t)
+			entered, release := make(chan struct{}), make(chan struct{})
+			f.srv.restartDaemon = func(context.Context, config.Config) error {
+				close(entered)
+				<-release
+				return nil
+			}
+			// The requests run outside the test goroutine, so they serve raw
+			// recorders and the test asserts on the results.
+			request := func(method, path, body string) *http.Request {
+				req := httptest.NewRequestWithContext(t.Context(), method, path, strings.NewReader(body))
+				req.Host = "127.0.0.1:0"
+				req.RemoteAddr = "127.0.0.1:1234"
+				req.Header.Set("Origin", "http://127.0.0.1:0")
+				req.Header.Set("Content-Type", "application/json")
+				return req
+			}
+			restarted := make(chan *httptest.ResponseRecorder, 1)
+			go func() {
+				w := httptest.NewRecorder()
+				f.handler.ServeHTTP(w, request(http.MethodPost, "/api/v1/daemon/restart", ""))
+				restarted <- w
+			}()
+			<-entered
+			saved := make(chan *httptest.ResponseRecorder, 1)
+			go func() {
+				w := httptest.NewRecorder()
+				f.handler.ServeHTTP(w, request(tc.method, tc.path, tc.body))
+				saved <- w
+			}()
+			select {
+			case w := <-saved:
+				require.FailNow(t, "save finished while the restart was being prepared", "status %d: %s", w.Code, w.Body.String())
+			case <-time.After(100 * time.Millisecond): //nolint:kennlint // deadlinetest: absence check; the restart holds the settings lock, so the save must not finish before release
+			}
+			close(release)
+			res := <-restarted
+			require.Equal(t, http.StatusOK, res.Code, res.Body.String())
+			res = <-saved
+			assert.Equal(t, http.StatusConflict, res.Code, res.Body.String())
+			tc.unchanged(t, f)
+		})
+	}
 
 	t.Run("save after a refused restart", func(t *testing.T) {
 		f := newSyncRouteFixture(t)
