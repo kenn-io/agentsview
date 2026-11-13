@@ -42,7 +42,7 @@ type Store struct {
 	readbase.MirrorStubs
 	path           string
 	handleMu       sync.RWMutex
-	replacementMu  sync.Mutex
+	replacement    chan struct{}
 	duck           *sql.DB
 	fileInfo       os.FileInfo
 	walStamp       string
@@ -104,7 +104,7 @@ func NewStore(ctx context.Context, path string) (*Store, error) {
 		return nil, err
 	}
 	return &Store{
-		path: path, duck: conn, fileInfo: info, walStamp: walStamp,
+		path: path, duck: conn, fileInfo: info, walStamp: walStamp, replacement: make(chan struct{}, 1),
 		topUsage:       kept.Reads[[]db.TopSessionEntry]{Size: db.TopSessionsBytes},
 		analyticsReads: kept.Reads[[]byte]{Size: func(b []byte) int64 { return int64(len(b)) }},
 	}, nil
