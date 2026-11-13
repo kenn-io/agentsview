@@ -61,12 +61,18 @@ func TestPricingResolverExactCustomRateBeatsConfiguredAlias(t *testing.T) {
 	pricingpkg.SetConfiguredAliases(map[string]string{"foo": "gpt-6-sol"})
 	t.Cleanup(func() { pricingpkg.SetConfiguredAliases(nil) })
 	resolver := NewPricingResolver([]EffectivePricingRow{
-		{ModelPattern: "gateway/foo", Rates: ModelRates{Source: PricingRowSourceCustom, Bands: []PricingBand{{AboveInputTokens: 100}}}},
+		{ModelPattern: "gateway/foo", Rates: ModelRates{Source: PricingRowSourceCustom}},
 		{ModelPattern: "gpt-6-sol", Rates: ModelRates{InputPerMTok: money.MustParseDollars("9"), Source: PricingRowSourceFetched}},
 	})
 	_, lookup := resolver.ResolveAt("gateway/foo", "gateway/foo", time.Time{})
 	require.True(t, lookup.OK)
 	assert.Zero(t, lookup.Rates.InputPerMTok.Microdollars)
+}
+
+func TestPricingResolverCopyAndReplayRecordedCounts(t *testing.T) {
+	resolver := NewPricingResolver([]EffectivePricingRow{
+		{ModelPattern: "gateway/foo", Rates: ModelRates{Source: PricingRowSourceCustom, Bands: []PricingBand{{AboveInputTokens: 100}}}},
+	})
 	first := resolver.Copy()
 	_, copied := first.Resolve("gateway/foo", "gateway/foo")
 	first.RecordResolvedComputedRequest("gateway/foo", "gateway/foo", copied, 200, 0, 0)

@@ -76,13 +76,16 @@ func TestUsageKeptMirrorReplacementAndPricing(t *testing.T) {
 
 func TestUsageKeptSameStampReplacementDuringPublish(t *testing.T) {
 	skipReopenTestOnWindows(t)
+	t.Setenv("CACHE_DIRECTORY", t.TempDir())
 	dir := t.TempDir()
 	path := filepath.Join(dir, "mirror.duckdb")
 	keptActivityMirror(t, path, "session-a", 500)
+	writeUsageMirror(t, path, `UPDATE sessions SET agentsview_push_fingerprint = 'first'`)
 	info, err := os.Stat(path)
 	require.NoError(t, err)
 	next := filepath.Join(dir, "next.duckdb")
 	keptActivityMirror(t, next, "session-b", 900)
+	writeUsageMirror(t, next, `UPDATE sessions SET agentsview_push_fingerprint = 'second'`)
 	nextInfo, err := os.Stat(next)
 	require.NoError(t, err)
 	require.Equal(t, info.Size(), nextInfo.Size())
@@ -90,19 +93,15 @@ func TestUsageKeptSameStampReplacementDuringPublish(t *testing.T) {
 	store, err := NewStore(t.Context(), path)
 	require.NoError(t, err)
 	defer store.Close()
+	require.NoError(t, store.OpenActivityReportDisk(t.Context()))
 	stamp := store.mirrorStamp()
 	paused := make(chan struct{})
 	resume := make(chan struct{})
 	var resumeOnce sync.Once
 	unpause := func() { resumeOnce.Do(func() { close(resume) }) }
-	// Sizing runs after the read finishes, before the memo publishes it.
-	store.dailyUsage.Size = func(result db.DailyUsageResult) int64 {
-		if result.Totals.OutputTokens == 500 {
-			close(paused)
-			<-resume
-		}
-		return 1
-	}
+	previous := usagePartPublishObserver
+	usagePartPublishObserver = func() { close(paused); <-resume }
+	t.Cleanup(func() { usagePartPublishObserver = previous })
 	var first db.DailyUsageResult
 	var firstErr error
 	done := make(chan struct{})
@@ -135,6 +134,10 @@ func TestUsageKeptSameStampReplacementDuringPublish(t *testing.T) {
 	}
 	require.NoError(t, firstErr)
 	require.Equal(t, 500, first.Totals.OutputTokens)
+	files, err := filepath.Glob(filepath.Join(os.Getenv("CACHE_DIRECTORY"), "duckdb-usage", "*", "*.gob"))
+	require.NoError(t, err)
+	require.Empty(t, files)
+	usagePartPublishObserver = nil
 	changed, err := store.GetDailyUsage(t.Context(), db.UsageFilter{})
 	require.NoError(t, err)
 	require.Equal(t, 900, changed.Totals.OutputTokens)

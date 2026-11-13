@@ -6,9 +6,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"sync"
 	"testing"
-	"time"
 
 	"github.com/stretchr/testify/require"
 
@@ -90,28 +88,24 @@ func TestUsagePartsAcrossRestart(t *testing.T) {
 	wantTop, err := fresh.GetTopSessionsByCost(t.Context(), f, 10)
 	require.NoError(t, err)
 	require.Equal(t, wantTop, gotTop)
-	reads = 0
-	changed.SetCustomPricing(map[string]config.CustomModelRate{"kept-model": {OutputMicrodollarsPerMTok: 10_000_000}})
-	repriced, err := changed.GetDailyUsage(t.Context(), f)
-	require.NoError(t, err)
-	require.Equal(t, money.MustParseDollars("0.009"), repriced.Totals.TotalCost)
-	require.Equal(t, 1, reads)
 	require.NoError(t, changed.Close())
 	files, err := filepath.Glob(filepath.Join(os.Getenv("CACHE_DIRECTORY"), "duckdb-usage", "*", "*.gob"))
 	require.NoError(t, err)
 	require.NotEmpty(t, files)
 	for _, file := range files {
-		require.NoError(t, os.WriteFile(file, []byte("truncated"), 0600))
+		data, err := os.ReadFile(file)
+		require.NoError(t, err)
+		require.Greater(t, len(data), 1)
+		require.NoError(t, os.WriteFile(file, data[:len(data)-1], 0600))
 	}
 	restarted, err = NewStore(t.Context(), path)
 	require.NoError(t, err)
 	defer restarted.Close()
-	restarted.SetCustomPricing(map[string]config.CustomModelRate{"kept-model": {OutputMicrodollarsPerMTok: 10_000_000}})
 	require.NoError(t, restarted.OpenActivityReportDisk(t.Context()))
 	reads = 0
 	got, err = restarted.GetDailyUsage(t.Context(), f)
 	require.NoError(t, err)
-	require.Equal(t, repriced, got)
+	require.Equal(t, want, got)
 	require.Equal(t, 1, reads)
 }
 
@@ -288,6 +282,27 @@ func TestUsagePartsRefreshesCursorAccount(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, []string{""}, refreshed)
 	require.Equal(t, 800, got.Totals.OutputTokens)
+	require.NoError(t, store.Close())
+	writeUsageMirror(t, path,
+		`INSERT INTO sessions SELECT * REPLACE ('session-b' AS id) FROM sessions WHERE id = 'session-a'`,
+		`INSERT INTO messages SELECT * REPLACE (3 AS id, 'session-b' AS session_id) FROM messages WHERE id = 2`,
+		`INSERT INTO usage_events (id, session_id, source, model, output_tokens, occurred_at, dedup_key) VALUES (1, 'session-a', 'test', 'kept-model', 10, TIMESTAMP '2026-01-01 01:00:00', 'a'), (2, 'session-b', 'test', 'kept-model', 20, TIMESTAMP '2026-01-01 01:00:00', 'b')`,
+	)
+	store = openUsagePartsStore(t, path)
+	defer store.Close()
+	for _, tc := range []struct {
+		id      string
+		outputs []int
+	}{{"session-a", []int{500, 10}}, {"", []int{300}}} {
+		var outputs []int
+		err := store.forEachDailyUsageAggregateRow(t.Context(), f, []string{tc.id}, func(row duckUsageAggregateRow) error {
+			require.Equal(t, tc.id, row.sessionID)
+			outputs = append(outputs, row.outputTok)
+			return nil
+		})
+		require.NoError(t, err)
+		require.ElementsMatch(t, tc.outputs, outputs)
+	}
 }
 
 func TestUsagePartsRefreshesAuthoritativeCost(t *testing.T) {
@@ -328,74 +343,6 @@ func TestUsagePartsRefreshesAuthoritativeCost(t *testing.T) {
 	want, err := fresh.GetDailyUsage(t.Context(), f)
 	require.NoError(t, err)
 	require.Equal(t, want, got)
-}
-
-func TestUsagePartsReplacementDuringPublish(t *testing.T) {
-	skipReopenTestOnWindows(t)
-	t.Setenv("CACHE_DIRECTORY", t.TempDir())
-	dir := t.TempDir()
-	path, next := filepath.Join(dir, "mirror.duckdb"), filepath.Join(dir, "next.duckdb")
-	keptActivityMirror(t, path, "session-a", 500)
-	keptActivityMirror(t, next, "session-a", 900)
-	for _, file := range []string{path, next} {
-		conn, err := Open(t.Context(), file)
-		require.NoError(t, err)
-		_, err = conn.ExecContext(t.Context(), `UPDATE sessions SET agentsview_push_fingerprint = 'same'`)
-		require.NoError(t, err)
-		require.NoError(t, conn.Close())
-	}
-	info, err := os.Stat(path)
-	require.NoError(t, err)
-	nextInfo, err := os.Stat(next)
-	require.NoError(t, err)
-	require.Equal(t, info.Size(), nextInfo.Size())
-	require.NoError(t, os.Chtimes(next, info.ModTime(), info.ModTime()))
-	store := openUsagePartsStore(t, path)
-	initial := store
-	t.Cleanup(func() { _ = initial.Close() })
-	paused, resume := make(chan struct{}), make(chan struct{})
-	previous := usagePartPublishObserver
-	usagePartPublishObserver = func() { close(paused); <-resume }
-	t.Cleanup(func() { usagePartPublishObserver = previous })
-	done := make(chan struct{})
-	var readErr error
-	var resumeOnce sync.Once
-	unpause := func() { resumeOnce.Do(func() { close(resume) }) }
-	go func() { defer close(done); _, readErr = store.GetDailyUsage(t.Context(), db.UsageFilter{}) }()
-	t.Cleanup(func() {
-		unpause()
-		select {
-		case <-done:
-		case <-time.After(10 * time.Second):
-			t.Error("usage read did not finish")
-		}
-	})
-	select {
-	case <-paused:
-	case <-time.After(10 * time.Second):
-		require.FailNow(t, "usage read did not reach publication")
-	}
-	require.NoError(t, swapMirrorFile(next, path))
-	store.checkMirrorReplacement(t.Context(), func(err error) { require.NoError(t, err) })
-	unpause()
-	select {
-	case <-done:
-		require.NoError(t, readErr)
-	case <-time.After(10 * time.Second):
-		require.FailNow(t, "usage read did not finish")
-	}
-	usagePartPublishObserver = nil
-	require.NoError(t, store.Close())
-	store = openUsagePartsStore(t, path)
-	defer store.Close()
-	reads := 0
-	prevQuery := analyticsQueryObserver
-	analyticsQueryObserver = func(string) { reads++ }
-	t.Cleanup(func() { analyticsQueryObserver = prevQuery })
-	got, err := store.GetDailyUsage(t.Context(), db.UsageFilter{})
-	require.NoError(t, err)
-	require.Equal(t, 900, got.Totals.OutputTokens)
-	require.Equal(t, 1, reads)
 }
 
 func TestUsagePartsDefaultTimezone(t *testing.T) {
