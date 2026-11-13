@@ -1,7 +1,7 @@
 //go:build pgtest
 
 // ABOUTME: End-to-end PostgreSQL coverage for the Anthropic web search fee,
-// ABOUTME: read from the pushed token_usage blob like SQLite reads it.
+// ABOUTME: read from the counters push stores from token_usage, as SQLite reads it.
 package postgres
 
 import (
@@ -55,6 +55,8 @@ func seedWebSearchUsage(t *testing.T, store *Store, model string) {
 			'm-1', 'r-1'
 		)`, model)
 	require.NoError(t, err, "insert messages")
+	_, err = backfillMessageUsageCountersPG(ctx, store.DB())
+	require.NoError(t, err, "store usage counters as push does")
 }
 
 func TestStoreSessionUsageBillsWebSearchRequests(t *testing.T) {
@@ -108,6 +110,8 @@ func TestPGAsymmetricClaudeSnapshotsPreserveWebSearchFee(t *testing.T) {
 			'm-0', 'r-0'
 		)`)
 	require.NoError(t, err, "insert fuller snapshot")
+	_, err = backfillMessageUsageCountersPG(ctx, store.DB())
+	require.NoError(t, err, "store usage counters as push does")
 
 	usage, err := store.GetSessionUsage(ctx, "pg-websearch", true)
 	require.NoError(t, err)
@@ -189,13 +193,18 @@ func TestPGUsageJSONExtractionUsesExactPathsAndMalformedFallback(t *testing.T) {
 			'm-truncated', 'r-truncated'
 		)`)
 	require.NoError(t, err, "seed usage")
+	_, err = backfillMessageUsageCountersPG(ctx, store.DB())
+	require.NoError(t, err, "store usage counters as push does")
 
 	daily, err := store.GetDailyUsage(ctx, db.UsageFilter{
 		From: "2026-07-30", To: "2026-07-30", Timezone: "UTC",
 	})
 	require.NoError(t, err)
 	assert.Equal(t, 600000, daily.Totals.OutputTokens)
-	assert.Equal(t, money.MustParseDollars("0.65"), daily.Totals.TotalCost)
+	// $0.60 of output plus three searches: the larger count (2) for
+	// m-scoped and 1 for m-truncated. The truncated row's server_tool_use
+	// object never closes, so it bills no searches, as SQLite reads it.
+	assert.Equal(t, money.MustParseDollars("0.63"), daily.Totals.TotalCost)
 }
 
 // An unpriced model still owes the flat fee, which does not depend on token
@@ -223,4 +232,36 @@ func TestStoreSessionUsageBillsWebSearchOnUnpricedModel(t *testing.T) {
 	})
 	require.NoError(t, err, "GetDailyUsage")
 	assert.Equal(t, money.MustParseDollars("0.02"), daily.Totals.TotalCost)
+}
+
+// A binary older than the stored usage counters pushes messages without them.
+// The next push's schema check fills them, so those messages bill their web
+// searches and rank their Claude snapshots by output again.
+func TestPGPushSchemaCheckFillsMissingUsageCounters(t *testing.T) {
+	const schema = "agentsview_usage_counter_repair_test"
+	_, store := prepareUsageSchema(t, schema)
+	seedWebSearchUsage(t, store, "claude-websearch-test")
+	ctx := t.Context()
+	_, err := store.DB().ExecContext(ctx, `
+		UPDATE messages
+		SET usage_output_tokens = NULL, usage_web_search_requests = NULL`)
+	require.NoError(t, err, "clear counters as an older binary leaves them")
+	require.True(t, pushSchemaCurrent(ctx, store.DB()),
+		"the per-push repair path must run, not a full schema setup")
+
+	syncer := &Sync{pg: store.DB(), schema: schema}
+	require.NoError(t, syncer.EnsureSchema(ctx))
+
+	var outputTokens, webSearchRequests int64
+	require.NoError(t, store.DB().QueryRowContext(ctx, `
+		SELECT usage_output_tokens, usage_web_search_requests
+		FROM messages WHERE session_id = 'pg-websearch' AND ordinal = 0`,
+	).Scan(&outputTokens, &webSearchRequests))
+	assert.EqualValues(t, 100000, outputTokens)
+	assert.EqualValues(t, 2, webSearchRequests)
+	daily, err := store.GetDailyUsage(ctx, db.UsageFilter{
+		From: "2026-07-30", To: "2026-07-30", Timezone: "UTC",
+	})
+	require.NoError(t, err)
+	assert.Equal(t, money.MustParseDollars("0.62"), daily.Totals.TotalCost)
 }

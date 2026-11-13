@@ -32,95 +32,6 @@ type columnMigration struct {
 	desc   string
 }
 
-// fallback_key remains in the installed signature so CREATE OR REPLACE can
-// upgrade existing databases; extraction is deliberately governed by
-// json_path for both valid and supported malformed values.
-const postgresUsageJSONHelperDDL = `
-CREATE OR REPLACE FUNCTION agentsview_json_integer(
-    raw_value TEXT, json_path TEXT[], fallback_key TEXT
-) RETURNS TEXT
-LANGUAGE PLpgSQL
-IMMUTABLE
-AS $function$
-DECLARE
-    parsed JSONB;
-    counter TEXT;
-    repaired TEXT;
-BEGIN
-    parsed := raw_value::JSONB;
-    counter := parsed #>> json_path;
-    IF counter ~ '^-?[0-9]+$' THEN
-        RETURN counter;
-    END IF;
-    RETURN NULL;
-EXCEPTION WHEN OTHERS THEN
-    BEGIN
-        repaired := raw_value || repeat('}', GREATEST(
-            length(raw_value) - length(replace(raw_value, '{', '')) -
-            (length(raw_value) - length(replace(raw_value, '}', ''))),
-            0));
-        parsed := repaired::JSONB;
-        counter := parsed #>> json_path;
-        IF counter ~ '^-?[0-9]+$' THEN
-            RETURN counter;
-        END IF;
-        RETURN NULL;
-    EXCEPTION WHEN OTHERS THEN
-        RETURN NULL;
-    END;
-END;
-$function$;`
-
-// cockroachUsageJSONHelperDDL avoids PL/pgSQL exception blocks, which older
-// CockroachDB releases reject. json_valid guards the JSONB cast; end-truncated
-// legacy objects are balanced before the exact requested path is extracted.
-const cockroachUsageJSONHelperDDL = `
-CREATE OR REPLACE FUNCTION agentsview_json_integer(
-    raw_value TEXT, json_path TEXT[], fallback_key TEXT
-) RETURNS TEXT
-LANGUAGE SQL
-IMMUTABLE
-AS $function$
-SELECT CASE
-    WHEN json_valid(candidate_value) THEN
-        CASE
-            WHEN (candidate_value::JSONB #>> json_path) ~ '^-?[0-9]+$'
-                THEN candidate_value::JSONB #>> json_path
-            ELSE NULL
-        END
-    ELSE NULL
-END
-FROM (
-    SELECT CASE
-        WHEN json_valid(raw_value) THEN raw_value
-        ELSE raw_value || repeat('}', GREATEST(
-            length(raw_value) - length(replace(raw_value, '{', '')) -
-            (length(raw_value) - length(replace(raw_value, '}', ''))),
-            0))
-        END AS candidate_value
-) repaired
-$function$;`
-
-const usageJSONHelperProbe = `
-SELECT
-    agentsview_json_integer(
-        '{"metadata":{"output_tokens":900},"output_tokens":"42"}',
-        ARRAY['output_tokens'], 'output_tokens'),
-    agentsview_json_integer(
-        '{"metadata":{"web_search_requests":9},"server_tool_use":{"web_search_requests":"2"}}',
-        ARRAY['server_tool_use', 'web_search_requests'],
-        'web_search_requests'),
-    agentsview_json_integer(
-        '{"output_tokens":"7"',
-        ARRAY['output_tokens'], 'output_tokens'),
-    agentsview_json_integer(
-        '{"metadata":{"output_tokens":900},"output_tokens":"42"',
-        ARRAY['output_tokens'], 'output_tokens'),
-    agentsview_json_integer(
-        '{"metadata":{"web_search_requests":9},"server_tool_use":{"web_search_requests":"2"',
-        ARRAY['server_tool_use', 'web_search_requests'],
-        'web_search_requests')`
-
 // sessionPlanUsageDDL mirrors SQLite's session_plan_usage. Times stay
 // the archive's RFC 3339 text and groups its JSON text, so every backend
 // returns the same values; nothing range-queries these columns.
@@ -288,6 +199,8 @@ CREATE TABLE IF NOT EXISTS messages (
     token_usage    TEXT NOT NULL DEFAULT '',
     context_tokens INT NOT NULL DEFAULT 0,
     output_tokens  INT NOT NULL DEFAULT 0,
+    usage_output_tokens       BIGINT,
+    usage_web_search_requests BIGINT,
     provider_id    TEXT NOT NULL DEFAULT '',
     has_context_tokens BOOLEAN NOT NULL DEFAULT FALSE,
     has_output_tokens  BOOLEAN NOT NULL DEFAULT FALSE,
@@ -1005,60 +918,6 @@ func rekeyMigratedCursorUsageEventsPG(ctx context.Context, tx *sql.Tx) error {
 	return nil
 }
 
-func probeUsageJSONHelper(ctx context.Context, db *sql.DB) error {
-	var outputTokens, webSearchRequests, malformedOutput string
-	var malformedScopedOutput, malformedScopedWebSearch string
-	if err := db.QueryRowContext(ctx, usageJSONHelperProbe).Scan(
-		&outputTokens, &webSearchRequests, &malformedOutput,
-		&malformedScopedOutput, &malformedScopedWebSearch,
-	); err != nil {
-		return err
-	}
-	if outputTokens != "42" || webSearchRequests != "2" ||
-		malformedOutput != "7" || malformedScopedOutput != "42" ||
-		malformedScopedWebSearch != "2" {
-		return fmt.Errorf(
-			"unexpected extraction results: output=%q web_search=%q "+
-				"malformed=%q malformed_scoped_output=%q "+
-				"malformed_scoped_web_search=%q",
-			outputTokens, webSearchRequests, malformedOutput,
-			malformedScopedOutput, malformedScopedWebSearch,
-		)
-	}
-	return nil
-}
-
-func ensureUsageJSONHelper(ctx context.Context, db *sql.DB) error {
-	_, primaryErr := db.ExecContext(ctx, postgresUsageJSONHelperDDL)
-	if primaryErr == nil {
-		primaryErr = probeUsageJSONHelper(ctx, db)
-		if primaryErr == nil {
-			return nil
-		}
-	}
-
-	if _, err := db.ExecContext(ctx, cockroachUsageJSONHelperDDL); err != nil {
-		return fmt.Errorf(
-			"creating usage JSON helper: PL/pgSQL implementation failed: %v; "+
-				"SQL fallback failed: %w",
-			primaryErr, err,
-		)
-	}
-	if err := probeUsageJSONHelper(ctx, db); err != nil {
-		return fmt.Errorf(
-			"validating Cockroach-compatible usage JSON helper "+
-				"after PL/pgSQL implementation failed (%v): %w",
-			primaryErr, err,
-		)
-	}
-	log.Printf(
-		"pg schema: using Cockroach-compatible SQL usage JSON helper "+
-			"after PL/pgSQL probe failed: %v",
-		primaryErr,
-	)
-	return nil
-}
-
 // lockSyncMetadataRow holds a row lock on the sync_metadata row named key
 // until tx ends, creating the row first if needed. A row lock is used instead
 // of pg_advisory_xact_lock because supported CockroachDB versions do not
@@ -1150,14 +1009,6 @@ func EnsureSchema(
 	}
 	log.Printf(
 		"pg schema: core DDL step completed in %s",
-		time.Since(step).Round(time.Millisecond),
-	)
-	step = time.Now()
-	if err := ensureUsageJSONHelper(ctx, db); err != nil {
-		return err
-	}
-	log.Printf(
-		"pg schema: usage JSON helper step completed in %s",
 		time.Since(step).Round(time.Millisecond),
 	)
 
@@ -1255,6 +1106,16 @@ func EnsureSchema(
 	log.Printf(
 		"pg schema: partial indexes step completed in %s",
 		time.Since(step).Round(time.Millisecond),
+	)
+	step = time.Now()
+	filled, err := backfillMessageUsageCountersPG(ctx, db)
+	if err != nil {
+		return err
+	}
+	log.Printf(
+		"pg schema: message usage counter backfill completed in %s"+
+			" (%d row(s) filled)",
+		time.Since(step).Round(time.Millisecond), filled,
 	)
 	step = time.Now()
 	if err := createContentSearchIndexesPG(ctx, db); err != nil {
@@ -1379,6 +1240,12 @@ func createPartialIndexesPG(ctx context.Context, db pgSessionExecer) error {
 		 WHERE token_usage != ''
 		   AND model != ''
 		   AND model != '<synthetic>'`,
+		// idx_messages_usage_counters_missing finds the rows
+		// backfillMessageUsageCountersPG fills. Push writes the counters,
+		// so the index stays empty unless an older binary pushes.
+		`CREATE INDEX IF NOT EXISTS idx_messages_usage_counters_missing
+		 ON messages(session_id, ordinal)
+		 WHERE usage_output_tokens IS NULL`,
 		`CREATE INDEX IF NOT EXISTS idx_messages_activity_timestamp
 		 ON messages(timestamp, session_id, ordinal)
 		 WHERE timestamp IS NOT NULL`,
@@ -1457,8 +1324,9 @@ func backfillIsAutomatedPG(
 
 // runSchemaDataRepairsPG runs the correctness repairs that
 // EnsureSchema performs: it recomputes is_automated, backfills
-// source-curation baselines, scrubs stored project remotes, and repairs
-// token-coverage flags. The one-time automation tracking installation
+// source-curation baselines, scrubs stored project remotes, fills message
+// usage counters an older binary left empty, and repairs token-coverage
+// flags. The one-time automation tracking installation
 // holds an exclusive sessions lock until commit, blocking reads and writes.
 // Subsequent repairs use row-level writes.
 func runSchemaDataRepairsPG(ctx context.Context, db *sql.DB) error {
@@ -1478,6 +1346,9 @@ func runSchemaDataRepairsPG(ctx context.Context, db *sql.DB) error {
 		return err
 	}
 	if _, err := scrubProjectIdentityGitRemoteCredentialsPG(ctx, db); err != nil {
+		return err
+	}
+	if _, err := backfillMessageUsageCountersPG(ctx, db); err != nil {
 		return err
 	}
 	runRepair, err := shouldRunTokenCoverageRepair(ctx, db, false)
@@ -2299,13 +2170,6 @@ func pgHasIndex(ctx context.Context, db *sql.DB, name string) bool {
 func CheckSchemaCompat(
 	ctx context.Context, db *sql.DB,
 ) error {
-	if err := probeUsageJSONHelper(ctx, db); err != nil {
-		return fmt.Errorf(
-			"usage JSON helper missing or incompatible: %w",
-			err,
-		)
-	}
-
 	_, err := db.ExecContext(ctx,
 		`SELECT updated_at, `+pgSessionCols+`
 		 FROM sessions LIMIT 0`)
@@ -2355,6 +2219,7 @@ func CheckSchemaCompat(
 			timestamp, has_thinking, has_tool_use,
 			content_length, is_system, model, reasoning_effort, token_usage,
 			context_tokens, output_tokens, provider_id,
+			usage_output_tokens, usage_web_search_requests,
 			has_context_tokens, has_output_tokens,
 			claude_message_id, claude_request_id,
 			source_type, source_subtype, prompt_source, source_uuid,

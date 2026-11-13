@@ -3846,25 +3846,27 @@ func bulkInsertMessages(
 			timestamp, has_thinking, has_tool_use,
 			content_length, is_system, model, reasoning_effort, token_usage,
 			context_tokens, output_tokens,
+			usage_output_tokens, usage_web_search_requests,
 			provider_id,
 			has_context_tokens, has_output_tokens,
 			claude_message_id, claude_request_id,
 			source_type, source_subtype, prompt_source, source_uuid,
 			source_parent_uuid, is_sidechain,
 			is_compact_boundary) VALUES `)
-		args := make([]any, 0, len(batch)*28)
+		args := make([]any, 0, len(batch)*30)
 		for j, m := range batch {
 			if j > 0 {
 				b.WriteByte(',')
 			}
-			p := j*28 + 1
+			p := j*30 + 1
 			fmt.Fprintf(&b,
-				"($%d,$%d,$%d,$%d,$%d,$%d,$%d,$%d,$%d,$%d,$%d,$%d,$%d,$%d,$%d,$%d,$%d,$%d,$%d,$%d,$%d,$%d,$%d,$%d,$%d,$%d,$%d,$%d)",
+				"($%d,$%d,$%d,$%d,$%d,$%d,$%d,$%d,$%d,$%d,$%d,$%d,$%d,$%d,$%d,$%d,$%d,$%d,$%d,$%d,$%d,$%d,$%d,$%d,$%d,$%d,$%d,$%d,$%d,$%d)",
 				p, p+1, p+2, p+3, p+4,
 				p+5, p+6, p+7, p+8, p+9,
 				p+10, p+11, p+12, p+13, p+14, p+15,
 				p+16, p+17, p+18, p+19, p+20,
 				p+21, p+22, p+23, p+24, p+25, p+26, p+27,
+				p+28, p+29,
 			)
 			ts, err := optionalSQLiteTimestamp(m.Timestamp)
 			if err != nil {
@@ -3882,6 +3884,8 @@ func bulkInsertMessages(
 			if stored, _ := db.StoredDialogue(m.Content, m.ThinkingText, m.DialogueText); stored != nil {
 				dialogue = sanitizePG(*stored)
 			}
+			tokenUsage := sanitizePG(string(m.TokenUsage))
+			usageOutputTokens, usageWebSearchRequests := messageUsageCounters(tokenUsage)
 			args = append(args,
 				sessionID, m.Ordinal, sanitizePG(m.Role),
 				sanitizePG(m.Content),
@@ -3890,8 +3894,9 @@ func bulkInsertMessages(
 				m.HasToolUse, m.ContentLength, m.IsSystem,
 				sanitizePG(m.Model),
 				sanitizePG(m.ReasoningEffort),
-				sanitizePG(string(m.TokenUsage)),
+				tokenUsage,
 				m.ContextTokens, m.OutputTokens,
+				usageOutputTokens, usageWebSearchRequests,
 				sanitizePG(m.ProviderID),
 				m.HasContextTokens, m.HasOutputTokens,
 				sanitizePG(m.ClaudeMessageID),

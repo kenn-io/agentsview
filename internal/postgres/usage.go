@@ -169,6 +169,8 @@ SELECT
 	m.model,
 	m.provider_id,
 	m.token_usage,
+	COALESCE(m.usage_output_tokens, 0) AS usage_output_tokens,
+	COALESCE(m.usage_web_search_requests, 0) AS usage_web_search_requests,
 	0 AS input_tokens,
 	0 AS output_tokens,
 	0 AS cache_creation_input_tokens,
@@ -198,6 +200,8 @@ SELECT
 	ue.model,
 	ue.provider_id,
 	'' AS token_usage,
+	0 AS usage_output_tokens,
+	0 AS usage_web_search_requests,
 	ue.input_tokens,
 	ue.output_tokens,
 	ue.cache_creation_input_tokens,
@@ -244,6 +248,8 @@ message_timestamp_rows AS MATERIALIZED (
 		m.model,
 		m.provider_id,
 		m.token_usage,
+		m.usage_output_tokens,
+		m.usage_web_search_requests,
 		m.claude_message_id,
 		m.claude_request_id,
 		m.source_uuid
@@ -459,15 +465,7 @@ func pgDailyUsageRowSelectFromRowsWithSession(
 	projectColumn := "u.project"
 	agentColumn := "u.agent"
 	machineColumnExpr := "u.machine"
-	webSearchColumn := `CASE
-		WHEN u.usage_source = 'message' THEN GREATEST(COALESCE(
-			CAST(agentsview_json_integer(
-				u.token_usage,
-				ARRAY['server_tool_use', 'web_search_requests'],
-				'web_search_requests') AS BIGINT),
-			0), 0)
-		ELSE 0
-	END`
+	webSearchColumn := "u.usage_web_search_requests"
 	metadataJoin := ""
 	if reloadSessionMetadata {
 		metadataJoin = `
@@ -658,6 +656,8 @@ SELECT
 	COALESCE(NULLIF(cu.model, ''), '<unknown>') AS model,
 	'' AS provider_id,
 	'' AS token_usage,
+	0 AS usage_output_tokens,
+	0 AS usage_web_search_requests,
 	cu.input_tokens,
 	cu.output_tokens,
 	cu.cache_write_tokens AS cache_creation_input_tokens,
@@ -784,10 +784,7 @@ func pgSnapshotOutputTokensSQL() string {
 	return fmt.Sprintf(`CASE
 				WHEN u.claude_message_id = '' THEN 0
 				ELSE CASE
-					WHEN u.usage_source = 'message' THEN LEAST(GREATEST(COALESCE(
-						CAST(agentsview_json_integer(
-							u.token_usage, ARRAY['output_tokens'], 'output_tokens') AS NUMERIC),
-						0), 0), %[1]d)
+					WHEN u.usage_source = 'message' THEN u.usage_output_tokens
 					WHEN u.usage_source = 'session'
 						THEN GREATEST(u.output_tokens, 0)
 					ELSE LEAST(GREATEST(u.output_tokens, 0), %[1]d)
@@ -808,15 +805,7 @@ func pgSnapshotRankedDailyUsageRowsSQL(
 	filterWhere = "u.snapshot_attribution_session_id = '' OR (" +
 		strings.ReplaceAll(filterWhere, "s.", "attributed.") + ")"
 	outputTokens := pgSnapshotOutputTokensSQL()
-	webSearchRequests := `CASE
-				WHEN u.usage_source = 'message' THEN GREATEST(COALESCE(
-					CAST(agentsview_json_integer(
-						u.token_usage,
-						ARRAY['server_tool_use', 'web_search_requests'],
-						'web_search_requests') AS BIGINT),
-					0), 0)
-				ELSE 0
-			END`
+	webSearchRequests := "u.usage_web_search_requests"
 	return fmt.Sprintf(`
 		WITH usage_snapshot_window AS (
 			SELECT u.*, %[1]s AS snapshot_output_tokens,
