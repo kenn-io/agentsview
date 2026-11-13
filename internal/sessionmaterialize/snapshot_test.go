@@ -96,7 +96,11 @@ func TestMaterializeSnapshotInstallsCapturedCompanions(t *testing.T) {
 	entries, err := os.ReadDir(scratch)
 	require.NoError(t, err)
 	assert.Empty(t, entries)
-	checkDirectoryRouting(t, cfg, receiver, session, cwd)
+	checkDirectoryRouting(t, cfg, receiver, session, cwd, map[string]string{
+		filepath.Join("projects", "fixture", id+".jsonl"):                          primary,
+		filepath.Join("projects", "fixture", id, "tool-results", "tool.txt"):       "tool output",
+		filepath.Join("projects", "fixture", id, "subagents", "agent-child.jsonl"): child,
+	})
 	bad := *session
 	bad.Machine = "wrong-device"
 	_, err = Materialize(ctx, cfg, receiver, &bad, cwd)
@@ -168,10 +172,13 @@ func TestMaterializeCodexSnapshotLineage(t *testing.T) {
 	assert.Equal(t, "snapshot:"+report.SnapshotID, result.Source)
 	assert.Equal(t, parentName, filepath.Base(result.Paths[0]))
 	assert.Equal(t, pageName, filepath.Base(result.Paths[1]))
-	checkDirectoryRouting(t, cfg, receiver, session, t.TempDir())
+	checkDirectoryRouting(t, cfg, receiver, session, t.TempDir(), map[string]string{
+		filepath.Join("sessions", "2024", "01", "15", parentName): ancestor,
+		filepath.Join("sessions", "2026", "01", "01", pageName):   page,
+	})
 }
 
-func checkDirectoryRouting(t *testing.T, cfg config.Config, receiver *db.DB, session *db.Session, cwd string) {
+func checkDirectoryRouting(t *testing.T, cfg config.Config, receiver *db.DB, session *db.Session, cwd string, expected map[string]string) {
 	t.Helper()
 	owners, err := receiver.ArchiveSessionOwners(t.Context(), session.ID)
 	require.NoError(t, err)
@@ -180,9 +187,33 @@ func checkDirectoryRouting(t *testing.T, cfg config.Config, receiver *db.DB, ses
 	directoryOnly.ArchiveSources = cfg.ArchiveSources[1:]
 	directory := directoryOnly.ArchiveSources[0].Directory
 	beforeDB, _, beforeNames := seedArchiveState(t, directory)
+	setHome := func() string {
+		t.Helper()
+		home := t.TempDir()
+		if session.Agent == "codex" {
+			t.Setenv("CODEX_HOME", home)
+		} else {
+			t.Setenv("CLAUDE_CONFIG_DIR", home)
+		}
+		return home
+	}
+	checkInstalled := func(home string, result Result) {
+		t.Helper()
+		var paths []string
+		for rel, want := range expected {
+			name := filepath.Join(home, rel)
+			paths = append(paths, name)
+			got, err := os.ReadFile(name)
+			require.NoError(t, err)
+			assert.Equal(t, want, string(got))
+		}
+		assert.ElementsMatch(t, paths, result.Paths)
+	}
+	home := setHome()
 	result, err := Materialize(t.Context(), directoryOnly, receiver, session, cwd)
 	require.NoError(t, err)
 	assert.Contains(t, result.Source, "directory:")
+	checkInstalled(home, result)
 	// The imported foreign session's archive URI must retain its exact owner
 	// binding; a different root is not an alternate source.
 	require.NotNil(t, session.FilePath)
@@ -206,57 +237,25 @@ func checkDirectoryRouting(t *testing.T, cfg config.Config, receiver *db.DB, ses
 	unavailable := cfg
 	unavailable.ArchiveSources = append([]config.ArchiveSource(nil), cfg.ArchiveSources...)
 	unavailable.ArchiveSources[0].Repository = filepath.Join(t.TempDir(), "missing")
+	home = setHome()
 	result, err = Materialize(t.Context(), unavailable, receiver, session, cwd)
 	require.NoError(t, err)
 	assert.Contains(t, result.Source, "directory:")
-	// Create a real snapshot whose selected recovery inventory is invalid.
-	repository, err := docbank.OpenBackupRepository(cfg.ArchiveSources[0].Repository)
+	checkInstalled(home, result)
+	// Corrupt the already attached snapshot; its valid directory alternate must not mask the error.
+	manifest := filepath.Join(cfg.ArchiveSources[0].Repository, "snapshots", cfg.ArchiveSources[0].Snapshot+".mvmanifest")
+	original, err := os.ReadFile(manifest)
 	require.NoError(t, err)
-	reader, err := repository.OpenSnapshot(t.Context(), cfg.ArchiveSources[0].Snapshot)
-	require.NoError(t, err)
-	var extras []docbank.BackupExtraFile
-	for _, name := range []string{"sessions.db", "inventory.json", "recovery-settings.json", "telemetry-install-id"} {
-		fileName := filepath.Join(t.TempDir(), name)
-		file, err := os.Create(fileName)
-		require.NoError(t, err)
-		_, err = reader.CopyExtra(t.Context(), "application/"+name, file)
-		require.NoError(t, err)
-		require.NoError(t, file.Close())
-		if name == "inventory.json" {
-			require.NoError(t, os.WriteFile(fileName, []byte(`{"version":2}`), 0o600))
-		}
-		extras = append(extras, docbank.BackupExtraFile{Path: fileName, RecordAs: "application/" + name})
-	}
-	require.NoError(t, reader.Close())
-	vault, err = docbank.New(t.Context(), docbank.Config{Root: filepath.Join(cfg.ArchiveSources[1].Directory, rawarchive.Directory, "artifacts")})
-	require.NoError(t, err)
-	bad, err := vault.CreateBackup(t.Context(), repository, docbank.BackupOptions{ExtraFiles: extras})
-	require.NoError(t, err)
-	require.NoError(t, vault.Close())
-	var snapshotOwner db.ArchiveSessionProvenance
-	for _, owner := range owners {
-		if owner.Attachment.SnapshotID == cfg.ArchiveSources[0].Snapshot {
-			snapshotOwner = owner
-		}
-	}
-	require.NotEmpty(t, snapshotOwner.ManifestID)
-	snapshotOwner.Attachment.SnapshotID = bad.ID
-	require.NoError(t, receiver.RegisterArchiveAttachment(t.Context(), snapshotOwner.Attachment, snapshotOwner.Source.ArchiveID))
-	require.NoError(t, receiver.SetArchiveAttachmentTargets(t.Context(), snapshotOwner.Attachment, "fixture", []db.ArchiveSourceTarget{{Provenance: snapshotOwner.ArchiveSourceProvenance, Target: "fixture"}}))
-	broken := cfg
-	broken.ArchiveSources = append([]config.ArchiveSource(nil), cfg.ArchiveSources...)
-	broken.ArchiveSources[0].Snapshot = bad.ID
-	brokenHome := t.TempDir()
-	if session.Agent == "codex" {
-		t.Setenv("CODEX_HOME", brokenHome)
-	} else {
-		t.Setenv("CLAUDE_CONFIG_DIR", brokenHome)
-	}
-	_, err = Materialize(t.Context(), broken, receiver, session, cwd)
-	require.ErrorContains(t, err, "unsupported recovery inventory version")
+	require.NoError(t, os.Chmod(manifest, 0o600))
+	require.NoError(t, os.WriteFile(manifest, []byte("corrupt"), 0o600))
+	t.Cleanup(func() { _ = os.WriteFile(manifest, original, 0o600) })
+	brokenHome := setHome()
+	_, err = Materialize(t.Context(), cfg, receiver, session, cwd)
+	require.ErrorContains(t, err, "parsing snapshot")
 	entries, err := os.ReadDir(brokenHome)
 	require.NoError(t, err)
 	assert.Empty(t, entries)
+	require.NoError(t, os.WriteFile(manifest, original, 0o600))
 }
 
 // A native fork chain can retain each replay parent under a different captured home.

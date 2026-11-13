@@ -349,20 +349,49 @@ func TestRetainedDirectoryReadCreatesNoSidecars(t *testing.T) {
 	directoryInfo, err := os.Stat(seed)
 	require.NoError(t, err)
 	directoryMode = directoryInfo.Mode()
+	vaultPath := filepath.Join(seed, rawarchive.Directory, "artifacts")
+	checkReleased := func() {
+		t.Helper()
+		lock := flock.New(filepath.Join(seed, "db.write.lock"), flock.SetFlag(os.O_RDONLY))
+		locked, err := lock.TryLock()
+		require.NoError(t, err)
+		require.True(t, locked)
+		require.NoError(t, lock.Close())
+		vault, err := docbank.New(ctx, docbank.Config{Root: vaultPath})
+		require.NoError(t, err)
+		require.NoError(t, vault.Close())
+		check()
+	}
 	called := false
-	_, _, _, err = Retained(ctx, config.Config{ArchiveSources: []config.ArchiveSource{{Directory: seed}}}, nil, owner.NativeSessionID, sourceDevice, owner.NativeSessionID, "codex", "", []db.ArchiveSessionProvenance{owner}, 1<<20, func(_ string, _, _ []string, _ func(context.Context, string, int64) ([]byte, error), _ CodexAncestry) error {
+	_, _, _, err = Retained(ctx, config.Config{ArchiveSources: []config.ArchiveSource{{Directory: seed}}}, nil, owner.NativeSessionID, sourceDevice, owner.NativeSessionID, "codex", "", []db.ArchiveSessionProvenance{owner}, 1<<20, func(_ string, names, _ []string, read func(context.Context, string, int64) ([]byte, error), _ CodexAncestry) error {
 		called = true
+		require.Len(t, names, 1)
+		assert.Equal(t, name, filepath.Base(names[0]))
+		got, err := read(ctx, names[0], 1<<20)
+		require.NoError(t, err)
+		assert.Equal(t, page, string(got))
+		lock := flock.New(filepath.Join(seed, "db.write.lock"), flock.SetFlag(os.O_RDONLY))
+		locked, err := lock.TryLock()
+		require.NoError(t, err)
+		assert.False(t, locked)
+		require.NoError(t, lock.Close())
+		vault, err := docbank.New(ctx, docbank.Config{Root: vaultPath})
+		if vault != nil {
+			t.Cleanup(func() { _ = vault.Close() })
+		}
+		require.ErrorIs(t, err, docbank.ErrVaultLocked)
 		check()
 		return nil
 	})
 	require.NoError(t, err)
 	assert.True(t, called)
-	check()
+	checkReleased()
 	callbackErr := errors.New("callback failed")
 	_, _, _, err = Retained(ctx, config.Config{ArchiveSources: []config.ArchiveSource{{Directory: seed}}}, nil, owner.NativeSessionID, sourceDevice, owner.NativeSessionID, "codex", "", []db.ArchiveSessionProvenance{owner}, 1<<20, func(_ string, _, _ []string, _ func(context.Context, string, int64) ([]byte, error), _ CodexAncestry) error {
 		return callbackErr
 	})
 	require.ErrorIs(t, err, callbackErr)
+	checkReleased()
 	cancelCtx, cancel := context.WithCancel(ctx)
 	defer cancel()
 	_, _, _, err = Retained(cancelCtx, config.Config{ArchiveSources: []config.ArchiveSource{{Directory: seed}}}, nil, owner.NativeSessionID, sourceDevice, owner.NativeSessionID, "codex", "", []db.ArchiveSessionProvenance{owner}, 1<<20, func(_ string, _, _ []string, _ func(context.Context, string, int64) ([]byte, error), _ CodexAncestry) error {
@@ -370,13 +399,7 @@ func TestRetainedDirectoryReadCreatesNoSidecars(t *testing.T) {
 		return cancelCtx.Err()
 	})
 	require.ErrorIs(t, err, context.Canceled)
-	lock := flock.New(filepath.Join(seed, "db.write.lock"), flock.SetFlag(os.O_RDONLY))
-	t.Cleanup(func() { _ = lock.Close() })
-	locked, err := lock.TryLock()
-	require.NoError(t, err)
-	require.True(t, locked)
-	require.NoError(t, lock.Close())
-	check()
+	checkReleased()
 }
 
 // prepareDirectoryOwnerLock uses the same lock creation as an application owner.

@@ -624,6 +624,30 @@ func TestExportSessionsUpgradesRecordedRepositoryColumn(t *testing.T) {
 			require.NoError(t, err)
 			require.NoError(t, raw.Close())
 
+			before, err := os.ReadFile(dbPath)
+			require.NoError(t, err)
+			for _, suffix := range []string{"-wal", "-shm", "-journal"} {
+				_, err := os.Stat(dbPath + suffix)
+				require.ErrorIs(t, err, os.ErrNotExist)
+			}
+			owner := holdWriteOwnerLockForTest(t, dataDir)
+			blockedOut, blockedErr, err := executeExportSessionsCommand(newRootCommand(), "export", "sessions", "--format", "json")
+			require.ErrorContains(t, err, writeOwnerLockPath(dataDir))
+			assert.Empty(t, blockedOut)
+			assert.Empty(t, blockedErr)
+			after, err := os.ReadFile(dbPath)
+			require.NoError(t, err)
+			assert.Equal(t, before, after)
+			_, err = os.Stat(dbPath + "-journal")
+			require.ErrorIs(t, err, os.ErrNotExist)
+			wal, err := os.Stat(dbPath + "-wal")
+			if err == nil {
+				assert.Zero(t, wal.Size())
+			} else {
+				require.ErrorIs(t, err, os.ErrNotExist)
+			}
+			require.NoError(t, owner.Release())
+
 			stdout, stderr, err := executeExportSessionsCommand(
 				newRootCommand(), "export", "sessions", "--format", "json",
 			)
@@ -637,6 +661,8 @@ func TestExportSessionsUpgradesRecordedRepositoryColumn(t *testing.T) {
 				assert.Len(t, doc.Sessions, 2)
 				assert.Equal(t, "export-sessions-test-db", doc.DatabaseID)
 			}
+			next := acquireWriteOwnerLockForTest(t, dataDir)
+			require.NoError(t, next.Close())
 			// The schema is readable, but export must not bypass parser upgrades.
 			readonly, err := db.OpenReadOnly(t.Context(), dbPath)
 			require.NoError(t, err)

@@ -196,6 +196,10 @@ func TestMaterializeClaudeConfiguredBeforeRetained(t *testing.T) {
 	result, err = Materialize(ctx, cfg, database, session, t.TempDir())
 	require.NoError(t, err)
 	assert.Contains(t, result.Source, "retained:")
+	require.Len(t, result.Paths, 1)
+	got, err := os.ReadFile(result.Paths[0])
+	require.NoError(t, err)
+	assert.Equal(t, original, string(got))
 }
 
 // Capture records the external replay parent in the leaf's own manifest even

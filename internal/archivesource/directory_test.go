@@ -127,15 +127,40 @@ func TestAttachedDirectorySidecarSourceStillDiscovered(t *testing.T) {
 	_, inputs := archiveFixture(t)
 	directory := filepath.Join(inputs, "seed")
 	saved := filepath.Join(directory, "sessions.db")
-	// This handle creates real sidecar state; it performs no overlapping writes.
 	writer, err := db.OpenIsolatedContext(t.Context(), saved)
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = writer.Close() })
-	require.FileExists(t, saved+"-shm")
 	before, err := os.ReadFile(saved)
 	require.NoError(t, err)
+	roots, err := writer.ListRawArchiveRoots(t.Context())
+	require.NoError(t, err)
+	sourcesBefore, err := writer.ListRawArchiveSources(t.Context(), "", 100)
+	require.NoError(t, err)
+	require.NotEmpty(t, sourcesBefore)
+	var root db.RawArchiveRoot
+	for _, candidate := range roots {
+		if candidate.ID == sourcesBefore[0].RootID {
+			root = candidate
+			break
+		}
+	}
+	require.NotEmpty(t, root.ID)
+	root.Machine = "updated-in-wal"
+	require.NoError(t, writer.RegisterRawArchiveRoot(t.Context(), root))
+	require.FileExists(t, saved+"-wal")
+	require.FileExists(t, saved+"-shm")
 	index, err := OpenIndex(t.Context(), config.ArchiveSource{Directory: directory}, t.TempDir(), nil)
 	require.NoError(t, err)
+	sources, err := index.Sources(t.Context(), "", 100)
+	require.NoError(t, err)
+	found := false
+	for _, source := range sources {
+		if source.Root.ID == root.ID {
+			found = true
+			assert.Equal(t, "updated-in-wal", source.Root.Machine)
+		}
+	}
+	require.True(t, found)
 	require.NoError(t, index.Close())
 	after, err := os.ReadFile(saved)
 	require.NoError(t, err)
