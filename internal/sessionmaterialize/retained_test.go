@@ -18,7 +18,7 @@ import (
 	"go.kenn.io/agentsview/internal/testjsonl"
 )
 
-func seedRetainedFixture(t *testing.T, root, data string, roots []rawarchive.RootSpec) (string, *db.DB, *rawarchive.Archive) {
+func seedRetainedFixture(t *testing.T, root, data string, roots []rawarchive.RootSpec) (string, *db.DB, func() error) {
 	t.Helper()
 	ctx := t.Context()
 	capture := filepath.Join(root, "capture")
@@ -29,11 +29,21 @@ func seedRetainedFixture(t *testing.T, root, data string, roots []rawarchive.Roo
 	require.NoError(t, err)
 	database, err := db.OpenIsolatedContext(ctx, filepath.Join(seed, "sessions.db"))
 	require.NoError(t, err)
+	t.Cleanup(func() { assert.NoError(t, database.Close()) })
 	archive, err := rawarchive.Open(ctx, database, seed, nil)
 	require.NoError(t, err)
+	archiveOpen := true
+	closeArchive := func() error {
+		if !archiveOpen {
+			return nil
+		}
+		archiveOpen = false
+		return archive.Close()
+	}
+	t.Cleanup(func() { assert.NoError(t, closeArchive()) })
 	_, err = archive.Reparse(ctx, rawarchive.ReparseOptions{All: true, ScratchBytes: 1 << 20})
 	require.NoError(t, err)
-	return seed, database, archive
+	return seed, database, closeArchive
 }
 
 func TestMaterializeRetainedCodexLineage(t *testing.T) {
@@ -55,20 +65,32 @@ func TestMaterializeRetainedCodexLineage(t *testing.T) {
 	page := testjsonl.JoinJSONL(testjsonl.CodexSessionMetaWithFieldsJSON(thread, "/work", "codex_cli_rs", "2026-01-01T00:00:00Z", map[string]any{"history_mode": "paginated", "history_base": map[string]any{"thread_id": parent, "end_ordinal_exclusive": 2, "end_byte_offset": len(ancestor)}}), testjsonl.CodexMsgJSON("user", "question", "2026-01-01T00:00:01Z"))
 	dbtest.WriteTestFile(t, filepath.Join(codexHome, "sessions", pageName), []byte(page))
 	dbtest.WriteTestFile(t, filepath.Join(codexHome, "archived_sessions", parentName), []byte(ancestor))
-	seed, database, archive := seedRetainedFixture(t, root, data, []rawarchive.RootSpec{{Provider: "codex", Path: codexHome}})
-	defer database.Close()
+	seed, database, closeArchive := seedRetainedFixture(t, root, data, []rawarchive.RootSpec{{Provider: "codex", Path: codexHome}})
 	session, err := database.GetSessionFull(ctx, "codex:"+thread)
 	require.NoError(t, err)
 	require.NotNil(t, session)
 	home := t.TempDir()
 	t.Setenv("CODEX_HOME", home)
 	t.Setenv("CODEX_SESSIONS_DIR", "")
-	cfg := config.Config{DataDir: seed, InstallationID: device, AgentDirs: map[parser.AgentType][]string{parser.AgentCodex: {codexHome}}}
+	cfg := config.Config{DataDir: seed, InstallationID: device, AgentDirs: map[parser.AgentType][]string{parser.AgentCodex: {filepath.Join(codexHome, "sessions"), filepath.Join(codexHome, "archived_sessions")}}}
 	cwd := t.TempDir()
 	configured, err := Materialize(ctx, cfg, database, session, cwd)
 	require.NoError(t, err, "configured original must remain usable while the vault is busy")
 	assert.NotContains(t, configured.Source, "retained:")
-	require.NoError(t, archive.Close())
+	require.NoError(t, closeArchive())
+	// The configured leaf survives but its required ancestor is available only
+	// from retained custody. Recovery must install the entire retained chain.
+	require.NoError(t, os.Remove(filepath.Join(codexHome, "archived_sessions", parentName)))
+	t.Setenv("CODEX_HOME", t.TempDir())
+	retainedChain, err := Materialize(ctx, cfg, database, session, cwd)
+	require.NoError(t, err)
+	assert.Contains(t, retainedChain.Source, "retained:")
+	require.Len(t, retainedChain.Paths, 2)
+	for i, want := range []string{ancestor, page} {
+		got, err := os.ReadFile(retainedChain.Paths[i])
+		require.NoError(t, err)
+		assert.Equal(t, want, string(got))
+	}
 	// Removing a configured root, while the original remains on disk, may use
 	// only the explicitly bound retained source.
 	unconfigured := cfg
@@ -135,8 +157,7 @@ func TestMaterializeClaudeConfiguredBeforeRetained(t *testing.T) {
 	name := filepath.Join(projects, "project", id+".jsonl")
 	original := testjsonl.NewSessionBuilder().AddClaudeUserWithSessionID("2026-01-01T00:00:00Z", "configured original", id).String()
 	dbtest.WriteTestFile(t, name, []byte(original))
-	seed, database, archive := seedRetainedFixture(t, root, data, []rawarchive.RootSpec{{Provider: "claude", Path: projects}})
-	defer database.Close()
+	seed, database, closeArchive := seedRetainedFixture(t, root, data, []rawarchive.RootSpec{{Provider: "claude", Path: projects}})
 	session, err := database.GetSessionFull(ctx, id)
 	require.NoError(t, err)
 	require.NotNil(t, session)
@@ -146,7 +167,7 @@ func TestMaterializeClaudeConfiguredBeforeRetained(t *testing.T) {
 	result, err := Materialize(ctx, cfg, database, session, t.TempDir())
 	require.NoError(t, err, "configured original must remain usable while the vault is busy")
 	assert.Equal(t, name, result.Source)
-	require.NoError(t, archive.Close())
+	require.NoError(t, closeArchive())
 	require.NoError(t, os.Remove(name))
 	t.Setenv("CLAUDE_CONFIG_DIR", t.TempDir())
 	result, err = Materialize(ctx, cfg, database, session, t.TempDir())

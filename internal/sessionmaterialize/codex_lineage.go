@@ -161,7 +161,7 @@ func codexLineage(ctx context.Context, thread string, names []string, archived m
 		if invalidRequested {
 			return nil, errors.New("invalid Codex rollout date")
 		}
-		return nil, fmt.Errorf("native Codex transcript is unavailable: %w", errSourceUnavailable)
+		return nil, errSourceUnavailable
 	}
 	seen := make(map[string]bool)
 	var pages []codexPage
@@ -174,7 +174,7 @@ func codexLineage(ctx context.Context, thread string, names []string, archived m
 			return nil, fmt.Errorf("ambiguous Codex rollout %s", rollout)
 		}
 		if selected.name == "" {
-			return nil, fmt.Errorf("missing Codex ancestor %s", rollout)
+			return nil, fmt.Errorf("missing Codex ancestor %s: %w", rollout, errSourceUnavailable)
 		}
 		if selected.invalidDate {
 			return nil, errors.New("invalid Codex rollout date")
