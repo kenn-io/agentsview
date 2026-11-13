@@ -400,8 +400,14 @@ func (s *Sync) pushWithOptions(
 		// work grows past its limit instead of waiting for the schedule.
 		// A failed trigger is retried by the next push that writes, and
 		// where the view refreshes it, by the view's daily refresh.
-		if err := refreshPreparedUsage(ctx, conn, s.usageWritten); err != nil {
+		started, err := refreshPreparedUsage(ctx, conn, s.usageWritten)
+		if err != nil {
 			log.Printf("clickhouse push: prepared usage is behind; usage reads stay correct but slower: %v", err)
+		}
+		// Usage reads add the rollup's sums only while it was built from the
+		// rows prepared_usage holds, so build it once those rows change.
+		if err := refreshUsageRollup(ctx, conn, started); err != nil {
+			log.Printf("clickhouse push: the usage rollup is behind; usage reads stay correct but slower: %v", err)
 		}
 	}
 	if full && result.Errors > 0 {

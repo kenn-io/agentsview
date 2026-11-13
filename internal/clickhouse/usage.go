@@ -461,9 +461,22 @@ func chSQLString(s string) string {
 }
 
 func chUsageLocalDateSQL(f db.UsageFilter) (string, any) {
+	return chUsageLocalDateOf(f, "ts IS NULL", "ts")
+}
+
+// chUsageLocalDateOf renders the local calendar date of the timestamp tsExpr
+// under f, or ” where isNull holds.
+func chUsageLocalDateOf(f db.UsageFilter, isNull, tsExpr string) (string, any) {
 	if f.Timezone != "" {
-		return "if(ts IS NULL, '', formatDateTime(ts, '%Y-%m-%d', ?))", f.Timezone
+		return "if(" + isNull + ", '', formatDateTime(" + tsExpr + ", '%Y-%m-%d', ?))", f.Timezone
 	}
+	return "if(" + isNull + ", '', formatDateTime(" + tsExpr + " + toIntervalSecond(?), '%Y-%m-%d', 'UTC'))", chUsageFixedOffset(f)
+}
+
+// chUsageFixedOffset is the UTC offset, in seconds, a read without a
+// timezone groups dates by: the server's local offset at noon on the first
+// day of the range.
+func chUsageFixedOffset(f db.UsageFilter) int {
 	ref := time.Now().UTC()
 	if f.From != "" {
 		if t, err := time.Parse(time.RFC3339, f.From+"T12:00:00Z"); err == nil {
@@ -471,17 +484,21 @@ func chUsageLocalDateSQL(f db.UsageFilter) (string, any) {
 		}
 	}
 	_, offset := ref.In(time.Local).Zone() //nolint:forbidigo // Usage reports group UTC timestamps into local calendar dates when no timezone is selected.
-	return "if(ts IS NULL, '', formatDateTime(ts + toIntervalSecond(?), '%Y-%m-%d', 'UTC'))", offset
+	return offset
 }
 
-// chPreparedUsageRawSQL renders usage_raw from prepared_usage instead of
+// chPreparedUsageRawSQLWith renders usage_raw from prepared_usage instead of
 // messages and usage_events. Prepared rows already hold the normalized
 // counters, so they take the place of the token JSON and the raw counters;
 // the normalization step is idempotent on them. Session columns still come
 // from the live sessions row: usage_localized joins them for the rows that
 // survive deduplication. Until then the rows carry the agent they were
 // prepared with, which deduplication reads, and empty session columns.
-func chPreparedUsageRawSQL(state preparedUsageState, f db.UsageFilter, sessionID string) (string, []any) {
+// Given a rollup, it takes only the stored rows the rollup does not sum; see
+// chUsageRollupRead.sourceSQL.
+func chPreparedUsageRawSQLWith(
+	state preparedUsageState, f db.UsageFilter, sessionID string, rollup *chUsageRollupRead,
+) (string, []any) {
 	// Model and session filters apply after Claude snapshot attribution
 	// (usage_kept), exactly as the raw source does: a filtered
 	// session's facts may belong to another session in the same request.
@@ -489,11 +506,25 @@ func chPreparedUsageRawSQL(state preparedUsageState, f db.UsageFilter, sessionID
 	bounds := chUsageBoundsForFilter(inputFilter)
 	rangeWhere, rangeArgs := appendChUsageColumnBounds("1", "ts", bounds, nil)
 	rangeWhere, rangeArgs = appendChUsageColumnBounds(rangeWhere, chPreparedUsageKeyColumn, bounds, rangeArgs)
-	sourceSQL, args := chPreparedUsageSourceSQL(state, rangeWhere, rangeArgs)
+	var sourceSQL string
+	var args []any
+	if rollup != nil {
+		sourceSQL, args = rollup.sourceSQL(state, rangeWhere, rangeArgs)
+	} else {
+		sourceSQL, args = chPreparedUsageSourceSQL(state, rangeWhere, rangeArgs)
+	}
 	where := "s.deleted_at IS NULL"
 	where, args = appendChUsageSessionFilterClauses(where, args, inputFilter, sessionID)
 	return `
-		SELECT p.session_id AS session_id, p.message_ordinal AS message_ordinal,
+		SELECT ` + chPreparedUsageRawSelect() + `
+		FROM (` + sourceSQL + `) p
+		WHERE p.session_id IN (SELECT s.id FROM sessions s WHERE ` + where + `)`, args
+}
+
+// chPreparedUsageRawSelect selects usage_raw's columns from the prepared
+// rows p.
+func chPreparedUsageRawSelect() string {
+	return `p.session_id AS session_id, p.message_ordinal AS message_ordinal,
 			p.source AS source, p.ts AS ts, p.pricing_ts AS pricing_ts,
 			p.model AS model, p.provider_id AS provider_id, '' AS token_json,
 			p.claude_message_id AS claude_message_id,
@@ -513,9 +544,7 @@ func chPreparedUsageRawSQL(state preparedUsageState, f db.UsageFilter, sessionID
 			CAST(NULL AS Nullable(DateTime64(6, 'UTC'))) AS started_at,
 			CAST(NULL AS Nullable(DateTime64(6, 'UTC'))) AS activity_at,
 			p.price_model AS stored_price_model, p.price_key AS stored_price_key,
-			` + chUsageStoredPriceSelect() + `
-		FROM (` + sourceSQL + `) p
-		WHERE p.session_id IN (SELECT s.id FROM sessions s WHERE ` + where + `)`, args
+			` + chUsageStoredPriceSelect()
 }
 
 // chPreparedUsageSourceSQL renders the prepared rows a read may use under
@@ -643,16 +672,23 @@ type chUsageSource struct {
 }
 
 // chPreparedUsageCTE is chUsageCTE over prepared usage rows.
-func chPreparedUsageCTE(state preparedUsageState, f db.UsageFilter, sessionID string) (string, []any) {
-	rawSQL, args := chPreparedUsageRawSQL(state, f, sessionID)
+func chPreparedUsageCTE(
+	state preparedUsageState, f db.UsageFilter, sessionID string, rollup *chUsageRollupRead,
+) (string, []any) {
+	rawSQL, args := chPreparedUsageRawSQLWith(state, f, sessionID, rollup)
 	return chUsageCTEFromRawSource(f, rawSQL, args, true, chPreparedUsageNormSource(), sessionID)
 }
 
 // chPreparedDailyUsageCTE is chDailyUsageCTE over prepared usage rows.
-func chPreparedDailyUsageCTE(state preparedUsageState, f db.UsageFilter, includeCursor bool) (string, []any, bool) {
-	sessionRowsSQL, sessionArgs := chPreparedUsageRawSQL(state, f, "")
+func chPreparedDailyUsageCTE(
+	state preparedUsageState, f db.UsageFilter, includeCursor bool, rollup *chUsageRollupRead,
+) (string, []any, bool) {
 	cursorRowsSQL, cursorArgs, ok := chCursorUsageRowsSQLForBounds(f, chUsageBoundsForFilter(f))
 	ok = ok && includeCursor
+	if ok && rollup != nil {
+		rollup.cursorSQL, rollup.cursorArgs = cursorRowsSQL, cursorArgs
+	}
+	sessionRowsSQL, sessionArgs := chPreparedUsageRawSQLWith(state, f, "", rollup)
 	if ok {
 		sessionRowsSQL += "\n\t\tUNION ALL\n\t\tSELECT c.*, " + chUsageStoredPriceZeroSelect() +
 			"\n\t\tFROM (" + cursorRowsSQL + ") c"
@@ -667,21 +703,29 @@ func chPreparedDailyUsageCTE(state preparedUsageState, f db.UsageFilter, include
 // messages and usage events. A single-session read stays raw: prepared
 // usage is ordered by time, not session, and one session is cheap by key.
 func usageCTEFor(state preparedUsageState, f db.UsageFilter, sessionID string) chUsageSource {
+	return usageCTEWith(state, f, sessionID, nil)
+}
+
+// usageCTEWith is usageCTEFor that, given a rollup, reads only the rows the
+// rollup does not sum.
+func usageCTEWith(state preparedUsageState, f db.UsageFilter, sessionID string, rollup *chUsageRollupRead) chUsageSource {
 	if sessionID == "" && state.ready {
-		cte, args := chPreparedUsageCTE(state, f, "")
+		cte, args := chPreparedUsageCTE(state, f, "", rollup)
 		return chUsageSource{cte: cte, args: args, storedPricesDigest: state.pricingDigest}
 	}
 	cte, args := chUsageCTE(f, sessionID)
 	return chUsageSource{cte: cte, args: args}
 }
 
-func (s *Store) dailyUsageCTE(ctx context.Context, state preparedUsageState, f db.UsageFilter) (chUsageSource, error) {
+func (s *Store) dailyUsageCTE(
+	ctx context.Context, state preparedUsageState, f db.UsageFilter, rollup *chUsageRollupRead,
+) (chUsageSource, error) {
 	if state.ready {
 		includeCursor, err := s.cursorUsageRowsInBounds(ctx, f)
 		if err != nil {
 			return chUsageSource{}, err
 		}
-		cte, args, cursorRows := chPreparedDailyUsageCTE(state, f, includeCursor)
+		cte, args, cursorRows := chPreparedDailyUsageCTE(state, f, includeCursor, rollup)
 		return chUsageSource{cte: cte, args: args, storedPricesDigest: state.pricingDigest, cursorRows: cursorRows}, nil
 	}
 	cte, args := chDailyUsageCTE(f)
@@ -857,18 +901,7 @@ func chUsageCTEFromRawSource(
 					if(source = 'session' OR session_id = '', greatest(reasoning_tokens, 0),
 						least(greatest(reasoning_tokens, 0), %[4]d))) AS reasoning_tokens_norm,
 				if(source = 'message', %[14]s, 0) AS web_search_requests_norm,
-				if(claude_message_id != '',
-					concat('claude:', claude_message_id, ':', claude_request_id),
-					if(source = 'message' AND agent != '' AND source_uuid != '',
-						concat('source:', agent, ':', source_uuid),
-						if(usage_dedup_key != '',
-							concat('usage:', usage_dedup_key),
-							concat('row:', session_id, ':', source, ':',
-								ifNull(toString(message_ordinal), ''), ':',
-								ifNull(toString(ts), ''), ':', model)
-						)
-					)
-				) AS dedup_group,
+				`+chUsageDedupGroupSQL+` AS dedup_group,
 				%[2]s AS local_date,
 				%[5]s AS price_model,
 				%[13]s AS price_key
@@ -1542,13 +1575,56 @@ func (s *Store) forEachDailyUsageGroupRow(
 			}
 		}
 	}
-	var source chUsageSource
-	if top {
-		source = usageCTEFor(state, f, "")
-	} else {
-		source, err = s.dailyUsageCTE(ctx, state, f)
+	readCtx, err := withUsageDeltaTables(ctx, state)
+	if err != nil {
+		return err
+	}
+	var memo []chDailyUsageGroupRow
+	keep := func(r chDailyUsageGroupRow) error {
+		if !top {
+			memo = append(memo, r)
+		}
+		return visit(r)
+	}
+	served, err := s.visitRollupDailyUsageGroups(ctx, readCtx, state, f, pricingDigest, customModels, top, keep)
+	if err != nil {
+		return err
+	}
+	if !served {
+		query, args, err := s.dailyUsageGroupSQL(ctx, state, f, pricingDigest, customModels, top, nil)
 		if err != nil {
 			return err
+		}
+		if err := s.scanDailyUsageGroups(readCtx, query, args, f.PairwiseSides && !top, keep); err != nil {
+			return err
+		}
+	}
+	if !top && (!state.ready || len(state.raw) != 0 || s.usageCaptureStable(ctx)) {
+		s.dailyUsageRows.Put(memoSlot, memoVersion, memo)
+		if diskReady {
+			if data, err := kept.EncodeRows(memo, dailyUsageRowsBytes, dailyUsageRowBytes); err == nil {
+				s.usageDisk.Put(memoSlot, usageDiskVersion+memoVersion, data)
+			}
+		}
+	}
+	return nil
+}
+
+// dailyUsageGroupSQL renders the daily usage group query. Given a rollup, it
+// ranks only the rows the rollup does not sum and adds the rollup's sums;
+// see chUsageRollupGroupsSQL.
+func (s *Store) dailyUsageGroupSQL(
+	ctx context.Context, state preparedUsageState, f db.UsageFilter,
+	pricingDigest string, customModels [][2]string, top bool, rollup *chUsageRollupRead,
+) (string, []any, error) {
+	var source chUsageSource
+	if top {
+		source = usageCTEWith(state, f, "", rollup)
+	} else {
+		var err error
+		source, err = s.dailyUsageCTE(ctx, state, f, rollup)
+		if err != nil {
+			return "", nil, err
 		}
 	}
 	cte, args := source.cte, source.args
@@ -1556,59 +1632,29 @@ func (s *Store) forEachDailyUsageGroupRow(
 	if f.Breakdowns {
 		machineSelect = "machine"
 	}
-	customPred := "0"
-	var customArgs []any
-	if len(customModels) > 0 {
-		tuples := make([]string, len(customModels))
-		for i, pair := range customModels {
-			tuples[i] = "(?, ?)"
-			customArgs = append(customArgs, pair[0], pair[1])
-		}
-		customPred = "(model, price_model) IN (" + strings.Join(tuples, ", ") + ")"
-	}
+	customPred, customArgs := chUsageCustomPred(customModels)
 	pricedSQL, pricedArgs := chUsagePricedCTE(source, pricingDigest)
+	args = append(args, pricedArgs...)
+	args = append(args, customArgs...)
+	evidence := f.PairwiseSides && !top
+	if rollup != nil {
+		groupsSQL, groupsArgs := chUsageRollupGroupsSQL(rollup, f, top, evidence)
+		return cte + pricedSQL + chUsageClassifiedCTE(machineSelect, customPred) + groupsSQL,
+			append(args, groupsArgs...), nil
+	}
 	evidenceSelect := ""
-	if f.PairwiseSides && !top {
+	if evidence {
 		evidenceSelect = ", groupUniqArrayArray(inexact_models), groupUniqArrayArray(inexact_projects)"
 	}
-	// Visit rows in time order so the last Copilot-reported total is the session cost.
-	order := `ORDER BY session_id ASC, local_date ASC, project ASC, agent ASC, group_machine ASC,
-			row_ts ASC, COALESCE(row_message_ordinal, -1) ASC, row_source ASC,
-			any(usage_dedup_key) ASC, model ASC, row_price_model ASC`
-	if top {
-		order = `ORDER BY session_id ASC, row_ts ASC, COALESCE(row_message_ordinal, -1) ASC,
-			row_source ASC, any(usage_dedup_key) ASC, model ASC, row_price_model ASC`
-	}
-	query := cte + pricedSQL + `,
-		usage_classified AS (
-			SELECT *,
-				` + machineSelect + ` AS group_machine,
-				authoritative_cost_rows = 1 OR p_priced != 1 OR ` + customPred + `
-					OR recorded_cost_microdollars IS NOT NULL AS explicit_row,
-				multiIf(
-					reported_cost_rows = 1, '` + chUsagePriceKindReported + `',
-					input_tokens_norm = 0 AND output_tokens_norm = 0
-						AND reasoning_tokens_norm = 0 AND cache_create_norm = 0
-						AND cache_read_norm = 0 AND web_search_requests_norm = 0,
-						'` + chUsagePriceKindZero + `',
-					p_request_scoped, '` + chUsagePriceKindRequest + `',
-					'` + chUsagePriceKindAggregate + `'
-				) AS price_kind
-			FROM usage_priced
-		)
+	query := cte + pricedSQL + chUsageClassifiedCTE(machineSelect, customPred) + `
 		SELECT session_id, local_date, project, agent, group_machine, model, provider_id,
-			if(explicit_row, dedup_group, '') AS explicit_key,
-			if(explicit_row, '', price_kind) AS group_kind,
-			if(explicit_row, '', if(
-				price_kind IN ('` + chUsagePriceKindReported + `', '` + chUsagePriceKindZero + `'),
-				p_unbilled_context_id, p_billed_context_id)) AS group_context,
-			if(explicit_row OR price_kind != '` + chUsagePriceKindRequest + `', -1, p_band) AS group_band,
+			` + chUsageGroupKeySelect + `,
 			toInt64(count()) AS events,
 			sum(input_tokens_norm), sum(output_tokens_norm),
 			sum(cache_create_norm), sum(cache_read_norm),
 			toInt64(sum(toInt128(p_token_cost))), toInt64(sum(toInt128(p_savings))),
 			toInt64(sum(toInt128(explicit_cost))), sum(billable_web_search_requests),
-			max(if(explicit_row OR price_kind = '` + chUsagePriceKindZero + `', '', p_price_error)),
+			` + chUsageGroupPriceErrorSQL + `,
 			arrayExists(total -> total < toInt128('-9223372036854775808')
 				OR total > toInt128('9223372036854775807'),
 				[sum(toInt128(p_token_cost)), sum(toInt128(p_savings)), sum(toInt128(explicit_cost))]),
@@ -1625,19 +1671,34 @@ func (s *Store) forEachDailyUsageGroupRow(
 		FROM usage_classified
 		GROUP BY session_id, local_date, project, agent, group_machine, model, provider_id,
 			explicit_key, group_kind, group_context, group_band
-		` + order
-	args = append(args, pricedArgs...)
-	args = append(args, customArgs...)
-	readCtx, err := withUsageDeltaTables(ctx, state)
-	if err != nil {
-		return err
+		` + chUsageGroupOrder(top, "any(usage_dedup_key)")
+	return query, args, nil
+}
+
+// chUsageGroupOrder orders usage groups so Go visits each session's rows in
+// time order, and the last Copilot-reported total is the session cost.
+// dedupKey is the expression of a group's usage dedup key.
+func chUsageGroupOrder(top bool, dedupKey string) string {
+	if top {
+		return `ORDER BY session_id ASC, row_ts ASC, COALESCE(row_message_ordinal, -1) ASC,
+			row_source ASC, ` + dedupKey + ` ASC, model ASC, row_price_model ASC`
 	}
-	rows, err := s.queryContext(readCtx, query, args...)
+	return `ORDER BY session_id ASC, local_date ASC, project ASC, agent ASC, group_machine ASC,
+			row_ts ASC, COALESCE(row_message_ordinal, -1) ASC, row_source ASC,
+			` + dedupKey + ` ASC, model ASC, row_price_model ASC`
+}
+
+// scanDailyUsageGroups runs a daily usage group query and passes each group
+// to visit. evidence reports that the query selects the pairwise evidence.
+func (s *Store) scanDailyUsageGroups(
+	ctx context.Context, query string, args []any, evidence bool,
+	visit func(chDailyUsageGroupRow) error,
+) error {
+	rows, err := s.queryContext(ctx, query, args...)
 	if err != nil {
 		return fmt.Errorf("querying clickhouse daily usage aggregates: %w", err)
 	}
 	defer rows.Close()
-	var memo []chDailyUsageGroupRow
 	for rows.Next() {
 		var r chDailyUsageGroupRow
 		var explicitKey string
@@ -1658,7 +1719,7 @@ func (s *Store) forEachDailyUsageGroupRow(
 			&r.AuthoritativeCost, &r.AuthoritativeCostRows,
 			&r.RecordedCost,
 		}
-		if f.PairwiseSides && !top {
+		if evidence {
 			targets = append(targets, &r.InexactModels, &r.InexactProjects)
 		}
 		if err := rows.Scan(targets...); err != nil {
@@ -1667,9 +1728,6 @@ func (s *Store) forEachDailyUsageGroupRow(
 		r.Explicit = explicitKey != ""
 		r.TS = formatDBTime(ts)
 		r.PricingTS = formatDBTime(pricingTS)
-		if !top {
-			memo = append(memo, r)
-		}
 		if err := visit(r); err != nil {
 			return err
 		}
@@ -1677,16 +1735,74 @@ func (s *Store) forEachDailyUsageGroupRow(
 	if err := rows.Err(); err != nil {
 		return fmt.Errorf("iterating clickhouse daily usage aggregates: %w", err)
 	}
-	if !top && (!state.ready || len(state.raw) != 0 || s.usageCaptureStable(ctx)) {
-		s.dailyUsageRows.Put(memoSlot, memoVersion, memo)
-		if diskReady {
-			if data, err := kept.EncodeRows(memo, dailyUsageRowsBytes, dailyUsageRowBytes); err == nil {
-				s.usageDisk.Put(memoSlot, usageDiskVersion+memoVersion, data)
-			}
-		}
-	}
 	return nil
 }
+
+// chUsageCustomPred renders the condition that a row's (model, price_model)
+// pair is one the reader's custom rates reprice.
+func chUsageCustomPred(customModels [][2]string) (string, []any) {
+	if len(customModels) == 0 {
+		return "0", nil
+	}
+	tuples := make([]string, len(customModels))
+	args := make([]any, 0, 2*len(customModels))
+	for i, pair := range customModels {
+		tuples[i] = "(?, ?)"
+		args = append(args, pair[0], pair[1])
+	}
+	return "(model, price_model) IN (" + strings.Join(tuples, ", ") + ")", args
+}
+
+// chUsageClassifiedCTE renders usage_classified: each priced row with its
+// breakdown machine, whether Go must see it whole, and its price kind.
+func chUsageClassifiedCTE(machineSelect, customPred string) string {
+	return `,
+		usage_classified AS (
+			SELECT *,
+				` + machineSelect + ` AS group_machine,
+				authoritative_cost_rows = 1 OR p_priced != 1 OR ` + customPred + `
+					OR recorded_cost_microdollars IS NOT NULL AS explicit_row,
+				multiIf(
+					reported_cost_rows = 1, '` + chUsagePriceKindReported + `',
+					input_tokens_norm = 0 AND output_tokens_norm = 0
+						AND reasoning_tokens_norm = 0 AND cache_create_norm = 0
+						AND cache_read_norm = 0 AND web_search_requests_norm = 0,
+						'` + chUsagePriceKindZero + `',
+					p_request_scoped, '` + chUsagePriceKindRequest + `',
+					'` + chUsagePriceKindAggregate + `'
+				) AS price_kind
+			FROM usage_priced
+		)`
+}
+
+// chUsageGroupKeySelect selects the pricing part of a usage group's key
+// from usage_classified: an explicit row's own identity, or the price kind,
+// context, and band its events share.
+const chUsageGroupKeySelect = `if(explicit_row, dedup_group, '') AS explicit_key,
+			if(explicit_row, '', price_kind) AS group_kind,
+			if(explicit_row, '', if(
+				price_kind IN ('` + chUsagePriceKindReported + `', '` + chUsagePriceKindZero + `'),
+				p_unbilled_context_id, p_billed_context_id)) AS group_context,
+			if(explicit_row OR price_kind != '` + chUsagePriceKindRequest + `', -1, p_band) AS group_band`
+
+// chUsageGroupPriceErrorSQL is the price error a group reports: none for an
+// explicit row, which Go prices itself, or for unpriced zero-token events.
+const chUsageGroupPriceErrorSQL = `max(if(explicit_row OR price_kind = '` + chUsagePriceKindZero + `', '', p_price_error))`
+
+// chUsageDedupGroupSQL names the event a usage row reports, over unprefixed
+// prepared or raw columns. Rows naming the same event deduplicate.
+const chUsageDedupGroupSQL = `if(claude_message_id != '',
+					concat('claude:', claude_message_id, ':', claude_request_id),
+					if(source = 'message' AND agent != '' AND source_uuid != '',
+						concat('source:', agent, ':', source_uuid),
+						if(usage_dedup_key != '',
+							concat('usage:', usage_dedup_key),
+							concat('row:', session_id, ':', source, ':',
+								ifNull(toString(message_ordinal), ''), ':',
+								ifNull(toString(ts), ''), ':', model)
+						)
+					)
+				)`
 
 // chPricedUsageGroupCost turns one priced group into its cost and cache
 // savings and replays the group's pricing context into the pricing block.
@@ -2518,32 +2634,24 @@ func (s *Store) GetUsageSessionCounts(
 	}
 	counted, ok := s.usageSessionRows.Get(memoSlot, memoVersion)
 	if !ok {
-		source := usageCTEFor(state, f, "")
 		readCtx, err := withUsageDeltaTables(ctx, state)
 		if err != nil {
 			return db.UsageSessionCounts{}, err
 		}
-		rows, err := s.queryContext(readCtx, source.cte+`
+		counted, ok, err = s.rollupUsageSessionRows(ctx, readCtx, state, f)
+		if err != nil {
+			return db.UsageSessionCounts{}, err
+		}
+		if !ok {
+			source := usageCTEFor(state, f, "")
+			counted, err = s.scanUsageSessionRows(readCtx, source.cte+`
 			SELECT DISTINCT session_id, project, agent
 			FROM usage_localized
 			WHERE session_id != ''
-			ORDER BY session_id`, source.args...)
-		if err != nil {
-			return db.UsageSessionCounts{}, fmt.Errorf(
-				"querying clickhouse usage session counts: %w", err)
-		}
-		defer rows.Close()
-		for rows.Next() {
-			var r chUsageSessionRow
-			if err := rows.Scan(&r.sessionID, &r.project, &r.agent); err != nil {
-				return db.UsageSessionCounts{}, fmt.Errorf(
-					"scanning clickhouse usage session count: %w", err)
+			ORDER BY session_id`, source.args)
+			if err != nil {
+				return db.UsageSessionCounts{}, err
 			}
-			counted = append(counted, r)
-		}
-		if err := rows.Err(); err != nil {
-			return db.UsageSessionCounts{}, fmt.Errorf(
-				"iterating clickhouse usage session counts: %w", err)
 		}
 		s.usageSessionRows.Put(memoSlot, memoVersion, counted)
 	}

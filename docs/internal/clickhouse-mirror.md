@@ -691,6 +691,81 @@ done finds the table one-fiftieth behind again and starts a refresh, about
 every 33 seconds until the full push ends. Each refresh in those bursts was
 due by the rule above, and none was requested while another was running.
 
+## Usage rollup
+
+A cold Usage page still ranked every prepared row to deduplicate it, then
+grouped and priced the survivors. Almost none of those rows change between
+refreshes, so push stores the result for the rows whose deduplication cannot
+depend on other rows, and reads rank only the rest.
+
+**What the table holds.** `usage_rollup` has one partition per prepared stamp.
+Its key is the table comment, which hashes the table and build SQL, plus the
+`prepared_usage` stamp: the snapshot count and hash, the pricing digest, and the
+price record count. A partition holds three kinds of rows:
+
+- `aggregate`: priced sums per session, model, price model, explicit group, and
+  15-minute UTC bucket. Explicit groups keep their own rows, because Go reads
+  their per-row values.
+- `exception`: prepared rows copied unchanged, for every (session, bucket) unit
+  that holds a deduplication group the rollup cannot sum. A group cannot be
+  summed when its rows span units, when its rows disagree on a null time or, for
+  non-Claude rows, on the model, or when a Cursor usage event names it. The rule
+  works on whole units because Claude deduplication joins rows by session, time,
+  and ordinal across groups.
+- `identity`: the hash of each summed group's identity and its unit, for groups
+  whose identity is not a single row.
+
+Buckets are Unix seconds computed from the microsecond time, so times before
+1970 and after 2106 keep their own bucket. One table at 15-minute grain serves
+every zone: each bucket falls on one local date wherever the offset is a
+multiple of 15 minutes and does not change inside the bucket.
+
+**Building.** After a push requests a prepared refresh, it waits for the
+refresh to finish. It then reads the stamp, and builds the partition if that
+stamp has none. Three inserts fill a `usage_rollup_build_<n>` table, the push
+checks that the stamp did not change meanwhile, and `REPLACE PARTITION` moves
+the partition in whole. A push also drops build tables a killed push left an
+hour ago, and partitions of other stamps that no push has written for an hour.
+A failed build is logged, and reads stay exact without it.
+
+**Reading.** A read uses the partition only when the result stays identical:
+
+- Prepared usage is ready, no host serves raw rows, and the partition for the
+  current stamp exists.
+- For priced reads, the prepared rows' pricing digest matches the catalog, and
+  no custom rate names a model and price model the rollup summed.
+- The zone keeps every summed bucket on one date. Reads without a zone check
+  the fixed offset; reads with one check the partition's buckets in ClickHouse
+  once per zone.
+
+The read ranks the exception rows, the delta rows, and, from `prepared_usage`,
+every summed unit whose identity a delta row or Cursor row also names. It adds
+the aggregate rows of live sessions that pass the filters and are not replaced
+by the delta or ranked again, dates them by bucket, and regroups the result.
+Money sums as `Int128` and keeps today's overflow check. The read collects its
+groups before returning them and checks afterwards that the partition still
+exists; a push that dropped it meanwhile sends the read back to the prepared
+rows.
+
+**Cost and gain.** On a copy of a production mirror with 1.58 million prepared
+rows, the rollup held 170,000 aggregate, 21,000 exception, and 805,000 identity
+rows. Its three inserts took 3.4 seconds and about 1 GiB of memory. A push that
+starts a prepared refresh now also waits for it, which took 3.4 to 4.1 seconds
+there; before, the push returned while the refresh ran. Pushes that start no
+refresh only check that the partition exists.
+
+First Usage requests after a serve start, in `America/New_York`, median of five
+starts:
+
+| Request | Before (s) | Rollup (s) | Speed-up |
+| --- | --- | --- | --- |
+| One-year summary | 1.477 | 0.826 | 1.8x |
+| 30-day summary | 0.602 | 0.428 | 1.4x |
+| 30-day top sessions | 0.519 | 0.359 | 1.4x |
+
+Repeat requests reuse the grouped rows they read before, so the rollup does not
+change them.
+
 ## Dashboard facts
 
 The Analytics panels used to rebuild per-session numbers from `messages` and

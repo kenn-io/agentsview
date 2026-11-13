@@ -1435,6 +1435,14 @@ the SQL.
 - When readers hold the mirror, catch up and swap a reusable standby using its
   own cursors. Bootstrap it from the main file and WAL, retry while it is
   held, and discard it after a full rebuild.
+- Usage summary, Top sessions, and usage session counts read the usage rollup
+  that a push builds; see
+  [Usage rollup](../../internal/duckdb/README.md#usage-rollup). A read must
+  return what it returns without the rollup. A change to how usage rows are
+  deduplicated, dated, or priced must keep both copies of the rules in step,
+  and a change to what a build stores must bump the rollup format as that
+  section describes. Test fixtures that edit a pushed mirror by hand must drop
+  the rollup, because those edits leave push fingerprints unchanged.
 - Keep Quack read-only. `duckdb push` writes the local mirror; it never writes
   to a remote DuckDB service.
 - Replace a file only after identifying it as an agentsview DuckDB mirror. Fail
@@ -1493,6 +1501,13 @@ own metadata, which is why the docs below call the database a mirror.
   tables, and must stay safe to repeat. See the
   [Activity report reads](../internal/clickhouse-mirror.md#activity-report-reads)
   design section.
+- Usage reads add priced sums from `usage_rollup`, built from `prepared_usage`
+  under the same stamp, and rank only the rows the rollup does not sum. A read
+  must return what it returns without the rollup; when a condition cannot hold,
+  read without it. Any change to how usage rows are deduplicated, dated, or
+  priced must also change the rollup's build and read SQL, and the
+  `usage_rollup_chtest_test.go` comparisons must keep passing. See
+  [Usage rollup](../internal/clickhouse-mirror.md#usage-rollup).
 - `clickhouse push` stores per-session dashboard facts on `sessions`
   (`dashboard_facts_version` and the `fact_*` columns) and copies each tool
   call's message timestamp and model onto `tool_calls` (`message_facts` marks

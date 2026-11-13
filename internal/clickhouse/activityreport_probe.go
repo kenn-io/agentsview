@@ -305,8 +305,33 @@ func (st preparedUsageState) replaced() []string {
 	return slices.Compact(ids)
 }
 
+// preparedUsageStateAttempts bounds how often preparedUsageState reads the
+// state again because a refresh replaced the prepared rows meanwhile.
+const preparedUsageStateAttempts = 3
+
+// preparedUsageState reads the state a usage read works from. Its stamp and
+// its coverage come from separate queries, and a refresh between them pairs
+// the old rows' stamp with coverage of the new rows. A rollup read would then
+// sum the old rows for a session only the new rows cover, showing its old
+// usage, and leave out a session only the new rows hold. The state counts
+// only when the stamp is the same after the coverage as before it.
 func (s *Store) preparedUsageState(ctx context.Context) (preparedUsageState, error) {
-	return s.readPreparedUsageState(ctx, true)
+	for range preparedUsageStateAttempts {
+		state, err := s.readPreparedUsageState(ctx, true)
+		if err != nil || !state.ready {
+			return state, err
+		}
+		after, err := readPreparedUsageStamp(ctx, s.conn)
+		if err != nil {
+			return preparedUsageState{}, err
+		}
+		if after == state.stamp {
+			return state, nil
+		}
+	}
+	// Reads without prepared usage are slower but exact.
+	s.logUsageReadiness("not ready: prepared usage kept refreshing while its state was read")
+	return preparedUsageState{}, nil
 }
 
 // preparedUsageReady reports whether prepared usage answers reads. It
@@ -315,6 +340,10 @@ func (s *Store) preparedUsageReady(ctx context.Context) (bool, error) {
 	state, err := s.readPreparedUsageState(ctx, false)
 	return state.ready, err
 }
+
+// preparedUsageStampReadObserver, when set, runs after a state read takes
+// the prepared rows' stamp and before it reads their coverage.
+var preparedUsageStampReadObserver func()
 
 // readPreparedUsageState reads the state. Without withDelta it leaves the
 // delta rows and the pricing digest out, so the state only says whether
@@ -348,8 +377,10 @@ func (s *Store) readPreparedUsageState(ctx context.Context, withDelta bool) (pre
 	if err != nil {
 		return preparedUsageState{}, fmt.Errorf("reading prepared usage stamp: %w", err)
 	}
-	stamp := fmt.Sprintf("%s|%d|%d|%s|%d", comment, stored.snapshotCount, stored.snapshotHash,
-		stored.pricingDigest, stored.priceCount)
+	stamp := stored.format(comment)
+	if preparedUsageStampReadObserver != nil {
+		preparedUsageStampReadObserver()
+	}
 	live, key, err := s.usageCoverage(ctx, stamp, stored.pricingDigest)
 	if err != nil {
 		return preparedUsageState{}, err
@@ -803,6 +834,12 @@ type usageStamp struct {
 	snapshotCount, snapshotHash uint64
 	pricingDigest               string
 	priceCount                  uint64
+}
+
+// format returns the preparedUsageState stamp of rows carrying u in a
+// prepared_usage table with the given comment.
+func (u usageStamp) format(comment string) string {
+	return fmt.Sprintf("%s|%d|%d|%s|%d", comment, u.snapshotCount, u.snapshotHash, u.pricingDigest, u.priceCount)
 }
 
 // usageDeltaCache keeps, under one whole-catalog digest, the prepared rows

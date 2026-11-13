@@ -1,5 +1,5 @@
 ---
-last_edited: 2026-11-12
+last_edited: 2026-11-13
 title: Changelog
 description: Release history for AgentsView
 ---
@@ -33,6 +33,18 @@ The latest release is
   the daily Friction Log, grouping repeated messages with their count.
 
 **Improvements**
+
+- The Usage page opens faster on ClickHouse and DuckDB mirrors. On a
+  production-size archive, the first one-year summary after a serve start took
+  0.83 seconds instead of 1.48 on ClickHouse (1.8x) and 0.49 seconds instead of
+  3.2 on DuckDB (6.5x). Push now stores priced usage sums per session and 15
+  minutes, and Usage reads add them to the few rows they still deduplicate. A
+  repeat ClickHouse request took 0.09 seconds instead of 0.23 (2.4x), because
+  Usage now records the pricing of each usage group in one call. A ClickHouse
+  push that refreshes prepared usage now waits 3.4 to 4.1 seconds for the
+  refresh and spends 3.4 seconds building the sums, and a full DuckDB rebuild
+  takes about 15 seconds longer. The first DuckDB push after upgrading rebuilds
+  the mirror.
 
 - Usage reuses priced work after restarting native PostgreSQL serving and after
   pushes. When that cache would first need a large rebuild, such as on first
