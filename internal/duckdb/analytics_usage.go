@@ -496,6 +496,17 @@ type duckUsageRowScope struct {
 	messageArgs, eventArgs []any
 }
 
+// duckUsageMessageTokensSQL reads the token counters of a usage row's
+// token_usage JSON as one list, indexed from 1: input, output, cache
+// creation, 1h cache creation, cache read, reasoning, and web search
+// requests. One json_extract_string call with a path list parses the JSON
+// once; a call per path parses it once per path, which made the seven
+// counters about five times slower. Only message rows carry the JSON.
+const duckUsageMessageTokensSQL = `CASE WHEN source = 'message' THEN json_extract_string(token_json, [
+	'$.input_tokens', '$.output_tokens', '$.cache_creation_input_tokens',
+	'$.cache_creation.ephemeral_1h_input_tokens', '$.cache_read_input_tokens',
+	'$.reasoning_tokens', '$.server_tool_use.web_search_requests']) END`
+
 func duckUsageRawSQL(f db.UsageFilter, sessionIDs []string) (string, []any) {
 	var scope duckUsageRowScope
 	if sessionIDs != nil {
@@ -779,35 +790,35 @@ func duckUsageCTEFromRaw(
 			%[1]s
 		),
 		usage_normalized AS (
-			SELECT *,
+			SELECT * EXCLUDE (tok),
 				CASE
-					WHEN source = 'message' THEN LEAST(GREATEST(COALESCE(TRY_CAST(json_extract_string(token_json, '$.input_tokens') AS BIGINT), 0), 0), %[3]d)
+					WHEN source = 'message' THEN LEAST(GREATEST(COALESCE(TRY_CAST(tok[1] AS BIGINT), 0), 0), %[3]d)
 					WHEN (source = 'session' OR session_id = '') THEN GREATEST(input_tokens, 0)
 					ELSE LEAST(GREATEST(input_tokens, 0), %[3]d)
 				END AS input_tokens_norm,
 				CASE
-					WHEN source = 'message' THEN LEAST(GREATEST(COALESCE(TRY_CAST(json_extract_string(token_json, '$.output_tokens') AS BIGINT), 0), 0), %[3]d)
+					WHEN source = 'message' THEN LEAST(GREATEST(COALESCE(TRY_CAST(tok[2] AS BIGINT), 0), 0), %[3]d)
 					WHEN (source = 'session' OR session_id = '') THEN GREATEST(output_tokens, 0)
 					ELSE LEAST(GREATEST(output_tokens, 0), %[3]d)
 				END AS output_tokens_norm,
 				CASE
-					WHEN source = 'message' THEN LEAST(GREATEST(COALESCE(TRY_CAST(json_extract_string(token_json, '$.cache_creation_input_tokens') AS BIGINT), 0), 0), %[3]d)
+					WHEN source = 'message' THEN LEAST(GREATEST(COALESCE(TRY_CAST(tok[3] AS BIGINT), 0), 0), %[3]d)
 					WHEN (source = 'session' OR session_id = '') THEN GREATEST(cache_create, 0)
 					ELSE LEAST(GREATEST(cache_create, 0), %[3]d)
 				END AS cache_create_norm,
 					-- 1h-TTL subset of cache_create_norm from the nested
 					-- Anthropic breakdown; only message rows carry it.
 					CASE
-						WHEN source = 'message' THEN LEAST(GREATEST(COALESCE(TRY_CAST(json_extract_string(token_json, '$.cache_creation.ephemeral_1h_input_tokens') AS BIGINT), 0), 0), %[3]d)
+						WHEN source = 'message' THEN LEAST(GREATEST(COALESCE(TRY_CAST(tok[4] AS BIGINT), 0), 0), %[3]d)
 						ELSE 0
 					END AS cache_create_1h_norm,
 					CASE
-						WHEN source = 'message' THEN LEAST(GREATEST(COALESCE(TRY_CAST(json_extract_string(token_json, '$.cache_read_input_tokens') AS BIGINT), 0), 0), %[3]d)
+						WHEN source = 'message' THEN LEAST(GREATEST(COALESCE(TRY_CAST(tok[5] AS BIGINT), 0), 0), %[3]d)
 						WHEN (source = 'session' OR session_id = '') THEN GREATEST(cache_read, 0)
 						ELSE LEAST(GREATEST(cache_read, 0), %[3]d)
 					END AS cache_read_norm,
 					CASE
-						WHEN source = 'message' THEN LEAST(GREATEST(COALESCE(TRY_CAST(json_extract_string(token_json, '$.reasoning_tokens') AS BIGINT), 0), 0), %[3]d)
+						WHEN source = 'message' THEN LEAST(GREATEST(COALESCE(TRY_CAST(tok[6] AS BIGINT), 0), 0), %[3]d)
 						WHEN (source = 'session' OR session_id = '') THEN GREATEST(reasoning_tokens, 0)
 						ELSE LEAST(GREATEST(reasoning_tokens, 0), %[3]d)
 					END AS reasoning_tokens_norm,
@@ -815,13 +826,13 @@ func duckUsageCTEFromRaw(
 					-- top of tokens. Only per-message rows carry a usage
 					-- blob; usage events never report server tool use.
 					CASE
-						WHEN source = 'message' THEN GREATEST(COALESCE(TRY_CAST(json_extract_string(token_json, '$.server_tool_use.web_search_requests') AS BIGINT), 0), 0)
+						WHEN source = 'message' THEN GREATEST(COALESCE(TRY_CAST(tok[7] AS BIGINT), 0), 0)
 						ELSE 0
 					END AS web_search_requests_norm,
 				%[6]s AS dedup_group,
 				%[2]s AS local_date,
 				%[4]s AS price_model
-			FROM usage_raw
+			FROM (SELECT *, `+duckUsageMessageTokensSQL+` AS tok FROM usage_raw)
 		),%[5]s`, rawSQL, localDateSQL, db.MaxPlausibleTokens,
 		priceModelSQL, dedupCTE, duckUsageDedupGroupSQL)
 	args = append(args, localDateArg)

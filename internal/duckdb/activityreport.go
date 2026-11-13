@@ -924,42 +924,42 @@ func duckActivityUsageWith(candidateWhere string) string {
 			SELECT session_id, message_ordinal, ts, pricing_ts, source, model, provider_id, agent,
 				claude_message_id, claude_request_id, source_uuid, usage_dedup_key,
 				CASE
-					WHEN source = 'message' THEN LEAST(GREATEST(COALESCE(TRY_CAST(json_extract_string(token_json, '$.input_tokens') AS BIGINT), 0), 0), %[1]d)
+					WHEN source = 'message' THEN LEAST(GREATEST(COALESCE(TRY_CAST(tok[1] AS BIGINT), 0), 0), %[1]d)
 					WHEN source = 'session' THEN GREATEST(input_tokens, 0)
 					ELSE LEAST(GREATEST(input_tokens, 0), %[1]d)
 				END AS input_tokens_norm,
 				CASE
-					WHEN source = 'message' THEN LEAST(GREATEST(COALESCE(TRY_CAST(json_extract_string(token_json, '$.output_tokens') AS BIGINT), 0), 0), %[1]d)
+					WHEN source = 'message' THEN LEAST(GREATEST(COALESCE(TRY_CAST(tok[2] AS BIGINT), 0), 0), %[1]d)
 					WHEN source = 'session' THEN GREATEST(output_tokens, 0)
 					ELSE LEAST(GREATEST(output_tokens, 0), %[1]d)
 				END AS output_tokens_norm,
 				CASE
-					WHEN source = 'message' THEN LEAST(GREATEST(COALESCE(TRY_CAST(json_extract_string(token_json, '$.cache_creation_input_tokens') AS BIGINT), 0), 0), %[1]d)
+					WHEN source = 'message' THEN LEAST(GREATEST(COALESCE(TRY_CAST(tok[3] AS BIGINT), 0), 0), %[1]d)
 					WHEN source = 'session' THEN GREATEST(cache_create, 0)
 					ELSE LEAST(GREATEST(cache_create, 0), %[1]d)
 				END AS cache_create_norm,
 					-- 1h-TTL subset of cache_create_norm from the nested
 					-- Anthropic breakdown; only message rows carry it.
 					CASE
-						WHEN source = 'message' THEN LEAST(GREATEST(COALESCE(TRY_CAST(json_extract_string(token_json, '$.cache_creation.ephemeral_1h_input_tokens') AS BIGINT), 0), 0), %[1]d)
+						WHEN source = 'message' THEN LEAST(GREATEST(COALESCE(TRY_CAST(tok[4] AS BIGINT), 0), 0), %[1]d)
 						ELSE 0
 					END AS cache_create_1h_norm,
 					CASE
-						WHEN source = 'message' THEN LEAST(GREATEST(COALESCE(TRY_CAST(json_extract_string(token_json, '$.cache_read_input_tokens') AS BIGINT), 0), 0), %[1]d)
+						WHEN source = 'message' THEN LEAST(GREATEST(COALESCE(TRY_CAST(tok[5] AS BIGINT), 0), 0), %[1]d)
 						WHEN source = 'session' THEN GREATEST(cache_read, 0)
 						ELSE LEAST(GREATEST(cache_read, 0), %[1]d)
 					END AS cache_read_norm,
 					CASE
-						WHEN source = 'message' THEN LEAST(GREATEST(COALESCE(TRY_CAST(json_extract_string(token_json, '$.reasoning_tokens') AS BIGINT), 0), 0), %[1]d)
+						WHEN source = 'message' THEN LEAST(GREATEST(COALESCE(TRY_CAST(tok[6] AS BIGINT), 0), 0), %[1]d)
 						WHEN source = 'session' THEN GREATEST(reasoning_tokens, 0)
 						ELSE LEAST(GREATEST(reasoning_tokens, 0), %[1]d)
 					END AS reasoning_tokens_norm,
 					CASE
-						WHEN source = 'message' THEN GREATEST(COALESCE(TRY_CAST(json_extract_string(token_json, '$.server_tool_use.web_search_requests') AS BIGINT), 0), 0)
+						WHEN source = 'message' THEN GREATEST(COALESCE(TRY_CAST(tok[7] AS BIGINT), 0), 0)
 						ELSE 0
 					END AS web_search_requests_norm,
 					cost_microdollars, cost_source, cost_status
-			FROM usage_raw
+			FROM (SELECT *, `+duckUsageMessageTokensSQL+` AS tok FROM usage_raw)
 		),
 		activity_usage_candidates AS (
 			SELECT id FROM candidate_sessions
