@@ -56,6 +56,8 @@ const {
     setRange: vi.fn(),
     resetRange: vi.fn(),
     endSession: vi.fn(),
+    retain: vi.fn(),
+    restore: vi.fn((): { query: string; project: string; selectedIndex: number } | null => null),
   },
   mockRouter: {
     navigateToSession: vi.fn(),
@@ -269,6 +271,132 @@ describe("CommandPalette", () => {
     expect(mockSearchStore.endSession).toHaveBeenCalledBefore(mockSearchStore.clear);
     expect(mockSearchStore.clear).toHaveBeenCalledOnce();
     expect(mockSearchStore.resetSort).toHaveBeenCalledOnce();
+  });
+
+  it("keeps the search for the next open when a result is picked", async () => {
+    mockSessions.filters.project = "proj-a";
+    mockSearchStore.results = [
+      makeSearchResult({ session_id: "codex:first" }),
+      makeSearchResult({ session_id: "codex:second" }),
+    ];
+    const component = mount(CommandPalette, { target: document.body });
+    await tick();
+    await enterSearchQuery("configuration");
+
+    const items = document.querySelectorAll<HTMLElement>(".palette-item");
+    items[1]!.click();
+    await tick();
+    unmount(component);
+
+    expect(mockRouter.navigateToSession).toHaveBeenCalledWith("codex:second");
+    expect(mockSearchStore.endSession).toHaveBeenCalledBefore(mockSearchStore.retain);
+    expect(mockSearchStore.retain).toHaveBeenCalledWith({
+      query: "configuration",
+      project: "proj-a",
+      selectedIndex: 1,
+    });
+    expect(mockSearchStore.clear).not.toHaveBeenCalled();
+    expect(mockSearchStore.resetSort).not.toHaveBeenCalled();
+    expect(mockSearchStore.resetRange).not.toHaveBeenCalled();
+  });
+
+  it("discards the search when the palette closes without a pick", async () => {
+    const component = mount(CommandPalette, { target: document.body });
+    await tick();
+    await enterSearchQuery("configuration");
+
+    window.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", cancelable: true }));
+    await tick();
+    unmount(component);
+
+    expect(mockUi.activeModal).toBeNull();
+    expect(mockSearchStore.retain).not.toHaveBeenCalled();
+    expect(mockSearchStore.clear).toHaveBeenCalledOnce();
+  });
+
+  it("reopens a retained search with its query selected and its pick highlighted", async () => {
+    mockSessions.filters.project = "";
+    mockSearchStore.restore.mockReturnValueOnce({
+      query: "configuration",
+      project: "proj-a",
+      selectedIndex: 1,
+    });
+    mockSearchStore.results = [
+      makeSearchResult({ session_id: "codex:first" }),
+      makeSearchResult({ session_id: "codex:second" }),
+    ];
+    const component = mount(CommandPalette, { target: document.body });
+    try {
+      await tick();
+      const input = document.querySelector<HTMLInputElement>(".palette-input")!;
+      expect(input.value).toBe("configuration");
+      expect([input.selectionStart, input.selectionEnd]).toEqual([0, "configuration".length]);
+      const items = document.querySelectorAll<HTMLElement>(".palette-item");
+      expect(items[1]!.classList.contains("selected")).toBe(true);
+      expect(document.querySelector(".palette-controls")?.textContent).toContain("proj-a");
+      expect(mockSearchStore.search).not.toHaveBeenCalled();
+
+      input.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
+      expect(mockRouter.navigateToSession).toHaveBeenCalledWith("codex:second");
+    } finally {
+      unmount(component);
+    }
+  });
+
+  it("offers the clear button only while there is a query", async () => {
+    const component = mount(CommandPalette, { target: document.body });
+    try {
+      await tick();
+      const clearButton = () =>
+        document.querySelector<HTMLButtonElement>('button[aria-label="Clear search"]');
+      expect(clearButton()).toBeNull();
+
+      await enterSearchQuery("co");
+      expect(clearButton()).not.toBeNull();
+
+      await enterSearchQuery("");
+      expect(clearButton()).toBeNull();
+    } finally {
+      unmount(component);
+    }
+  });
+
+  it("clears a reopened search back to a fresh palette", async () => {
+    mockSessions.filters.project = "";
+    mockSearchStore.restore.mockReturnValueOnce({
+      query: "configuration",
+      project: "proj-a",
+      selectedIndex: 1,
+    });
+    mockSearchStore.results = [
+      makeSearchResult({ session_id: "codex:first" }),
+      makeSearchResult({ session_id: "codex:second" }),
+    ];
+    const component = mount(CommandPalette, { target: document.body });
+    try {
+      await tick();
+      const input = document.querySelector<HTMLInputElement>(".palette-input")!;
+      document.querySelector<HTMLButtonElement>('button[aria-label="Clear search"]')!.click();
+      await tick();
+
+      expect(input.value).toBe("");
+      expect(document.activeElement).toBe(input);
+      expect(mockUi.activeModal).toBe("commandPalette");
+      expect(mockSearchStore.clear).toHaveBeenCalledOnce();
+      expect(mockSearchStore.resetSort).toHaveBeenCalledOnce();
+      expect(mockSearchStore.resetRange).toHaveBeenCalledOnce();
+      // Recent sessions replace the results, with the first one highlighted.
+      const items = document.querySelectorAll<HTMLElement>(".palette-item");
+      expect(items).toHaveLength(mockSessions.sessions.length);
+      expect(items[0]!.classList.contains("selected")).toBe(true);
+      expect(document.querySelector('button[aria-label="Clear search"]')).toBeNull();
+
+      // The retained project is gone: the next query searches the sidebar's.
+      await enterSearchQuery("another");
+      expect(mockSearchStore.search).toHaveBeenLastCalledWith("another", "");
+    } finally {
+      unmount(component);
+    }
   });
 
   it("copies canonical session_id to clipboard, not stripped display ID", async () => {

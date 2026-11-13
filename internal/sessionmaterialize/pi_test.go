@@ -243,19 +243,54 @@ func TestPiPreservesPrefixAndUsesIdentityForNonuniqueNames(t *testing.T) {
 	t.Setenv("PI_CODING_AGENT_SESSION_DIR", dest)
 	t.Setenv("PI_CODING_AGENT_DIR", "")
 	cfg := config.Config{InstallationID: "local", LocalMachineName: "local", AgentDirs: map[parser.AgentType][]string{parser.AgentPi: {root}}}
-	for _, id := range []string{"child-one", "child-two"} {
-		name := filepath.Join(root, id, "session.jsonl")
+	for _, tc := range []struct{ id, rel, wantBase string }{
+		{"child-one", "child-one/session.jsonl", "child-one.jsonl"},
+		{"child-two", "child-two/session.jsonl", "child-two.jsonl"},
+		{"work.v2", "work.v2/session.jsonl", "work.v2.jsonl"},
+		{"work.v2", "2026-01-01T00-00-00_work.v2.jsonl", "2026-01-01T00-00-00_work.v2.jsonl"},
+	} {
+		t.Run(tc.rel, func(t *testing.T) {
+			id := tc.id
+			name := filepath.Join(root, filepath.FromSlash(tc.rel))
+			require.NoError(t, os.MkdirAll(filepath.Dir(name), 0o700))
+			original := "\nnot-json\nnull\nfalse\n0.0\n\"\"\n" + `{"type":"session","id":"` + id + `","cwd":"/old"}` + "\n"
+			require.NoError(t, os.WriteFile(name, []byte(original), 0o600))
+			t.Cleanup(func() { assert.NoError(t, os.Remove(name)) })
+			s := &db.Session{ID: "pi:" + id, Agent: "pi", Machine: "local", FilePath: &name}
+			result, err := Materialize(t.Context(), cfg, nil, s, cwd)
+			require.NoError(t, err)
+			require.Equal(t, []string{filepath.Join(dest, tc.wantBase)}, result.Paths)
+			got, err := os.ReadFile(result.Paths[0])
+			require.NoError(t, err)
+			assert.Equal(t, "\nnot-json\nnull\nfalse\n0.0\n\"\"\n"+`{"type":"session","id":"`+id+`","cwd":`+string(mustJSON(t, cwd))+"}\n", string(got))
+			retry, err := Materialize(t.Context(), cfg, nil, s, cwd)
+			require.NoError(t, err)
+			assert.Equal(t, "unchanged", retry.Status)
+			retried, err := os.ReadFile(result.Paths[0])
+			require.NoError(t, err)
+			assert.Equal(t, got, retried)
+		})
+	}
+}
+
+func TestPiRejectsUnsafeIdentityFilenames(t *testing.T) {
+	root, dest, cwd := t.TempDir(), t.TempDir(), t.TempDir()
+	t.Setenv("PI_CODING_AGENT_SESSION_DIR", dest)
+	t.Setenv("PI_CODING_AGENT_DIR", "")
+	cfg := config.Config{InstallationID: "local", LocalMachineName: "local", AgentDirs: map[parser.AgentType][]string{parser.AgentPi: {root}}}
+	for i, id := range []string{"..", ".work", "work.", "a/b", `a\b`} {
+		name := filepath.Join(root, string(rune('0'+i)), "session.jsonl")
 		require.NoError(t, os.MkdirAll(filepath.Dir(name), 0o700))
-		original := "\nnot-json\nnull\nfalse\n0.0\n\"\"\n" + `{"type":"session","id":"` + id + `","cwd":"/old"}` + "\n"
+		original := `{"type":"session","id":` + string(mustJSON(t, id)) + `,"cwd":"/old"}` + "\n"
 		require.NoError(t, os.WriteFile(name, []byte(original), 0o600))
 		s := &db.Session{ID: "pi:" + id, Agent: "pi", Machine: "local", FilePath: &name}
-		result, err := Materialize(t.Context(), cfg, nil, s, cwd)
-		require.NoError(t, err)
-		require.Equal(t, []string{filepath.Join(dest, id+".jsonl")}, result.Paths)
-		got, err := os.ReadFile(result.Paths[0])
-		require.NoError(t, err)
-		assert.Equal(t, "\nnot-json\nnull\nfalse\n0.0\n\"\"\n"+`{"type":"session","id":"`+id+`","cwd":`+string(mustJSON(t, cwd))+"}\n", string(got))
+		_, err := Materialize(t.Context(), cfg, nil, s, cwd)
+		require.ErrorContains(t, err, "cannot be used as a filename")
+		require.NoError(t, os.Remove(name))
 	}
+	entries, err := os.ReadDir(dest)
+	require.NoError(t, err)
+	assert.Empty(t, entries)
 }
 
 func TestPiResolvesCheckoutSymlink(t *testing.T) {

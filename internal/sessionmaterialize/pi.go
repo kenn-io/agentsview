@@ -73,7 +73,7 @@ func materializePi(ctx context.Context, cfg config.Config, session *db.Session, 
 	}
 	basename := filepath.Base(name)
 	if !strings.HasSuffix(basename, "_"+id+".jsonl") {
-		if !parser.IsValidSessionID(id) || !filepath.IsLocal(id+".jsonl") {
+		if strings.Trim(id, ".") != id || !parser.IsValidSessionID(strings.ReplaceAll(id, ".", "")) || !filepath.IsLocal(id+".jsonl") {
 			return Result{}, errors.New("native Pi session identity cannot be used as a filename")
 		}
 		basename = id + ".jsonl"
