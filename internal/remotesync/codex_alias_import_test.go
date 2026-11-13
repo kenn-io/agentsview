@@ -18,7 +18,7 @@ import (
 
 func TestRemoteCodexAliasTitleSurvivesArchiveImport(t *testing.T) {
 	base := t.TempDir()
-	primary := filepath.Join(base, "primary", "live")
+	primary := filepath.Join(base, "primary", "sessions")
 	alias := filepath.Join(base, "alternate", "sessions")
 	require.NoError(t, os.MkdirAll(primary, 0o755))
 	require.NoError(t, os.MkdirAll(filepath.Dir(alias), 0o755))
