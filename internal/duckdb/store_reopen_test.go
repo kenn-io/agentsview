@@ -171,6 +171,8 @@ func TestStoreConcurrentReadsAcrossReplacement(t *testing.T) {
 	require.True(t, old.Next())
 	require.NoError(t, old.Scan(&id))
 	require.Equal(t, "old-session", id)
+	require.NoError(t, old.Err())
+	require.NoError(t, current.Err())
 }
 
 func TestStoreKeepsOldHandleWhenReplacementIncompatible(t *testing.T) {

@@ -16,8 +16,10 @@ import (
 	"go.kenn.io/agentsview/internal/config"
 )
 
-const quackAttachmentName = "agentsview_remote"
-const servingReaderMaxOpenConns = 4
+const (
+	quackAttachmentName       = "agentsview_remote"
+	servingReaderMaxOpenConns = 4
+)
 
 // DefaultAttachTimeout bounds a remote Quack ATTACH (and its TCP preflight)
 // when the caller does not configure an explicit timeout. Native non-loopback
