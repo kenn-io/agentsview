@@ -124,9 +124,10 @@ func TestMaterializeUnboundSeededNativeSources(t *testing.T) {
 					discovery = filepath.Join(discovery, "sessions")
 				}
 				machine := "local"
-				if scenario == "empty machine" {
+				switch scenario {
+				case "empty machine":
 					machine = ""
-				} else if scenario == "installation machine" {
+				case "installation machine":
 					machine = device
 				}
 				if scenario == "unowned machine" || scenario == "recorded machine alias" {
@@ -159,9 +160,10 @@ func TestMaterializeUnboundSeededNativeSources(t *testing.T) {
 				require.Equal(t, selectedPath, *before.FilePath)
 				require.NoError(t, database.Close())
 				roots := []rawarchive.RootSpec{{Provider: string(agent), Path: selected}}
-				if scenario == "same ID different roots" {
+				switch scenario {
+				case "same ID different roots":
 					roots = append(roots, rawarchive.RootSpec{Provider: string(agent), Path: first})
-				} else if scenario == "missing captured path" {
+				case "missing captured path":
 					roots = []rawarchive.RootSpec{{Provider: string(agent), Path: first}}
 				}
 				seed := captureAndSeedRetainedFixture(t, root, data, roots)

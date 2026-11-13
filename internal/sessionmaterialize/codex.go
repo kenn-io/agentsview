@@ -72,7 +72,7 @@ archiveSource:
 			}
 		}
 		if err != nil {
-			if configuredErr != nil && configuredErr != errSourceUnavailable {
+			if configuredErr != nil && !errors.Is(configuredErr, errSourceUnavailable) {
 				err = errors.Join(configuredErr, err)
 			}
 			return Result{}, fmt.Errorf("reading native Codex transcript: %w", err)
