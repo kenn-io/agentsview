@@ -424,12 +424,15 @@ func (s *Sync) runIncrementalPush(
 		)
 	}
 
+	// Usage reads stay exact without a current rollup, so a failed build
+	// must not keep this push's sessions from being published.
 	rollupRebuilt := false
 	if result.Errors == 0 {
-		rollupRebuilt, err = s.refreshUsageRollup(ctx)
-		if err != nil {
-			return result, err
+		rebuilt, rollupErr := s.refreshUsageRollup(ctx)
+		if rollupErr != nil {
+			log.Printf("duckdbsync: the usage rollup is behind; usage reads stay correct but slower: %v", rollupErr)
 		}
+		rollupRebuilt = rebuilt
 	}
 
 	if len(pushed) > 0 || result.Diagnostics.DeletedStaleSessions > 0 || rollupRebuilt {

@@ -655,13 +655,15 @@ func buildMirrorInto(
 	if err != nil {
 		return result, err
 	}
+	// Usage reads stay exact without a rollup, and the next push builds one,
+	// so a failed build does not fail the rebuild.
 	rollupStart := time.Now()
-	meta, err := s.buildUsageRollup(ctx)
-	if err != nil {
-		return result, err
+	if meta, rollupErr := s.buildUsageRollup(ctx); rollupErr != nil {
+		log.Printf("duckdbsync: building the usage rollup failed; usage reads stay correct but slower: %v", rollupErr)
+	} else {
+		log.Printf("duckdbsync: built usage rollup over %d usage rows in %s",
+			meta.SourceRows, time.Since(rollupStart).Round(time.Millisecond))
 	}
-	log.Printf("duckdbsync: built usage rollup over %d usage rows in %s",
-		meta.SourceRows, time.Since(rollupStart).Round(time.Millisecond))
 	scope := db.CanonicalPushScope(opts.Projects, opts.ExcludeProjects)
 	if err := s.writeRebuildMetadata(
 		ctx, scope, snapshot, identityRevision, mappingRevision,
