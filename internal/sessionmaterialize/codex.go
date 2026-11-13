@@ -101,7 +101,7 @@ archiveSource:
 			machine := s3SourceMachine(cfg, parser.AgentCodex, candidate)
 			if machine == session.Machine {
 				matchingRoots = append(matchingRoots, candidate)
-				if strings.HasPrefix(source, strings.TrimSuffix(candidate, "/")+"/") && len(candidate) > len(root) {
+				if strings.HasPrefix(source, strings.TrimSuffix(candidate, "/")+"/") && (root == "" || len(candidate) < len(root)) {
 					root = candidate
 				}
 			}
@@ -242,7 +242,7 @@ archiveSource:
 				}
 				return Result{}, errors.New("native Codex source outside configured roots")
 			}
-			roots, archiveRoots = codexConfiguredGroup(cfg, candidates, root)
+			roots, archiveRoots = codexConfiguredGroup(cfg, candidates, root, anchor)
 		}
 		if _, err := os.Lstat(anchor); err == nil {
 			if !within(root, anchor) {
@@ -287,13 +287,11 @@ archiveSource:
 			var matched string
 			for _, candidate := range roots {
 				rel, err := filepath.Rel(candidate, ref.DisplayPath)
-				if err == nil && filepath.IsLocal(rel) && len(candidate) > len(matched) {
+				isArchive, known := archiveRoots[candidate]
+				_, matchedKnown := archiveRoots[matched]
+				if err == nil && filepath.IsLocal(rel) && ((known && !matchedKnown) || (known == matchedKnown && len(candidate) > len(matched))) {
 					matched = candidate
-					if isArchive, known := archiveRoots[candidate]; known {
-						archived[name] = isArchive
-					} else {
-						archived[name] = codexArchived(candidate, filepath.ToSlash(rel))
-					}
+					archived[name] = isArchive || !known && codexArchived(candidate, filepath.ToSlash(rel))
 				}
 			}
 			return nil
@@ -332,8 +330,8 @@ archiveSource:
 	return installCodex(ctx, cwd, source, session.ID, pages)
 }
 
-// codexConfiguredGroup joins only configured native roots proven to share a home.
-func codexConfiguredGroup(cfg config.Config, candidates []string, selected string) ([]string, map[string]bool) {
+// codexConfiguredGroup includes anchor roots and proven native home partners.
+func codexConfiguredGroup(cfg config.Config, candidates []string, selected, anchor string) ([]string, map[string]bool) {
 	roots := []string{selected}
 	archived := make(map[string]bool)
 	metadata := cfg.ProviderMetadata[parser.AgentCodex]
@@ -355,11 +353,11 @@ func codexConfiguredGroup(cfg config.Config, candidates []string, selected strin
 			}
 		}
 	}
-	if len(metadata[selected]) == 0 {
-		for _, candidate := range candidates {
-			if (filepath.Base(selected) == "sessions" || filepath.Base(selected) == "archived_sessions") && filepath.Dir(candidate) == filepath.Dir(selected) && (filepath.Base(candidate) == "sessions" || filepath.Base(candidate) == "archived_sessions") && !slices.Contains(roots, candidate) {
-				roots = append(roots, candidate)
-			}
+	for _, candidate := range candidates {
+		resolved, err := pathutil.ResolveAbsolute(candidate)
+		rel, relErr := filepath.Rel(resolved, anchor)
+		if ((err == nil && relErr == nil && filepath.IsLocal(rel)) || (len(metadata[selected]) == 0 && (filepath.Base(selected) == "sessions" || filepath.Base(selected) == "archived_sessions") && filepath.Dir(candidate) == filepath.Dir(selected) && (filepath.Base(candidate) == "sessions" || filepath.Base(candidate) == "archived_sessions"))) && !slices.Contains(roots, candidate) {
+			roots = append(roots, candidate)
 		}
 	}
 	return roots, archived
