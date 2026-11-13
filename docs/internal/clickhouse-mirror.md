@@ -706,9 +706,10 @@ peaks near 290 MiB, with the same per-session counts.
   `do_not_merge_across_partitions_select_final`. ClickHouse cannot add a
   partition key in place, so every large table would be copied, and every
   version of a row must stay in one partition.
-- Storing the frustration count in SQLite as quality signal version 8. That
-  recomputes every session's signals and republishes every replica, for one
-  count only ClickHouse needs to precompute.
+- Computing frustration counts eagerly on message writes as part of quality
+  signals. That would recompute every session's signals and republish every
+  replica for a count ClickHouse can compute on demand. SQLite instead saves
+  counts lazily on read, keyed by transcript revision and marker version.
 - Porting all of `IsFrustrationMarker` to ClickHouse SQL. Unicode letters,
   spaces, and case folding differ between Go and ClickHouse, so only prompts in
   the shared alphabet above are judged in SQL.
@@ -721,22 +722,26 @@ SQLite keeps its scan in Go, which skips system rows in SQL. DuckDB and
 PostgreSQL judge plain prompts in SQL as well; see
 [PostgreSQL frustration marker reads](../agents/storage.md#postgresql-frustration-marker-reads).
 
-**Go judges each prompt in a few passes.** SQLite sends every prompt of a
-session its memo misses to `IsFrustrationMarker`, and PostgreSQL, DuckDB, and
-ClickHouse send the prompts they cannot judge in SQL. The memo lives in memory,
-so the first Signals load after a restart judges every prompt in range. The
-function strips code fences once. One pass then builds the normalized prompt and
-counts the capitalized words, and another finds the first phrase literal. The
-regular expression starts one byte before that literal, because no match can
-begin earlier. Tests compare the function with its original step-by-step form on
-edge cases, a random corpus, and a fuzz target.
+**Go judges each prompt in a few passes.** SQLite sends prompts from sessions
+without a current stored count to `IsFrustrationMarker`. PostgreSQL, DuckDB,
+and ClickHouse send the prompts they cannot judge in SQL. SQLite stores each
+count with its transcript key, so later visits after a restart reuse unchanged
+counts. The first visit after upgrading counts each session once. Full resync
+keeps matching counts for unchanged reparsed sessions and copied sessions
+whose prompt rows remain unchanged. Changed or transformed prompts are
+recounted on the next read. The function strips code fences once. One pass
+builds the normalized prompt and counts capitalized words, and another finds
+the first phrase literal. The regular expression starts one byte before that
+literal, because no match can begin earlier. Tests compare the function with
+its original step-by-step form on edge cases, a random corpus, and a fuzz target.
 
-On a scratch SQLite archive of 7,000 sessions with 140,000 prompts (594 MiB of
-prompt text), the first Signals load after a restart fell from 9.2 s to 2.2 s
-with the file in the page cache, and from 10.4 s to 3.3-3.6 s with it evicted.
-Allocation fell from 12.4 GiB to 3.2 GiB, and the count stayed the same. SQLite
-returns the prompt text in 0.42 s; the judge took 8.3 s before and 2.0 s after.
-A load the memo answers takes 15 ms either way.
+Before SQLite stored these counts, a scratch archive of 7,000 sessions with
+140,000 prompts (594 MiB of prompt text) saw its first Signals load after a
+restart fall from 9.2 s to 2.2 s with the file in the page cache, and from
+10.4 s to 3.3-3.6 s with it evicted. Allocation fell from 12.4 GiB to 3.2 GiB,
+and the count stayed the same. SQLite returned the prompt text in 0.42 s; the
+judge took 8.3 s before and 2.0 s after. A load the memo answered took 15 ms
+either way.
 
 Rejected for SQLite:
 
@@ -744,7 +749,7 @@ Rejected for SQLite:
   written. The first load would then read stored numbers. But every path that
   writes or replaces messages would have to keep them current, and existing
   archives would need a backfill that judges every prompt once anyway. With the
-  faster judge, the cost it removes is about 2 s once per restart.
+  faster judge, the cost it removes was about 2 s once per restart.
 - Judging prompts in SQL. SQLite has no `REGEXP`, and a function registered from
   Go would run the same Go check behind SQL.
 

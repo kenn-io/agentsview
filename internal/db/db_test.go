@@ -6320,6 +6320,7 @@ func TestCopyOrphanedDataFrom_LegacyNoIsSystem(t *testing.T) {
 	// SQLite doesn't support DROP COLUMN before 3.35;
 	// recreate the table without is_system.
 	_, err = raw.ExecContext(t.Context(), `
+		DROP TABLE IF EXISTS session_frustration_markers;
 		DROP VIEW IF EXISTS message_search_content;
 		DROP VIEW IF EXISTS message_trigram_source;
 		DROP TRIGGER IF EXISTS conversation_usage_key_insert;
