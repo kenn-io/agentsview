@@ -42,6 +42,7 @@ type Store struct {
 	readbase.MirrorStubs
 	path           string
 	handleMu       sync.RWMutex
+	replacementMu  sync.Mutex
 	duck           *sql.DB
 	fileInfo       os.FileInfo
 	walStamp       string
