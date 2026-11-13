@@ -421,6 +421,29 @@ jobs:
         env:
           CGO_ENABLED: "1"
 
+      # Start the release-style build on a CPU without AVX2, BMI2, or FMA, so
+      # code that needs x86-64-v3 at startup fails here before it ships.
+      - name: Start the default build on an x86-64-v2 CPU (Linux)
+        if: matrix.suite == 'linux-duckdb'
+        timeout-minutes: 5
+        run: |
+          kit-retry 3 5 sudo apt-get update
+          kit-retry 3 5 sudo apt-get install -y --no-install-recommends qemu-user
+          go build -tags fts5 -o "$RUNNER_TEMP/agentsview" ./cmd/agentsview
+          export HOME="$RUNNER_TEMP/nehalem-home" AGENTSVIEW_DATA_DIR="$RUNNER_TEMP/nehalem-data"
+          mkdir -p "$HOME" "$AGENTSVIEW_DATA_DIR"
+          qemu-x86_64 -cpu Nehalem "$RUNNER_TEMP/agentsview" version
+          qemu-x86_64 -cpu Nehalem "$RUNNER_TEMP/agentsview" serve --no-browser --host 127.0.0.1 --port 18493 > "$RUNNER_TEMP/nehalem-serve.log" 2>&1 &
+          pid=$!
+          # workflowretry: allow Local readiness probe; the loop retries while the emulated server starts.
+          until curl -sf http://127.0.0.1:18493/api/v1/version > /dev/null; do
+            kill -0 "$pid" 2> /dev/null || { cat "$RUNNER_TEMP/nehalem-serve.log"; exit 1; }
+            sleep 1
+          done
+          kill "$pid"
+        env:
+          CGO_ENABLED: "1"
+
       # Sync and DuckDB run in separate normal Linux jobs.
       - name: Run other Go tests (Linux)
         if: runner.os == 'Linux' && matrix.testSet == 'other'

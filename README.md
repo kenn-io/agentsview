@@ -794,18 +794,9 @@ archive. `agentsview serve` still performs primary ingestion into SQLite. Use
 DuckDB when you want a portable analytics file, read-only local serving from a
 mirror, or remote read access through DuckDB's Quack protocol.
 
-Release binaries, installers, wheels, and the published container image do not
-include DuckDB. DuckDB 2.0's prebuilt libraries need an x86-64-v3 CPU (AVX2,
-BMI2, and FMA), and linking them stopped agentsview from starting on older
-x86-64 CPUs. To use the mirror, build agentsview from source with DuckDB:
-
-```bash
-make install DUCKDB=1
-```
-
-Plain `go build` needs `-tags fts5,duckdb`. The result runs only on CPUs the
-DuckDB libraries support: x86-64-v3 or newer on amd64, and arm64 on Linux and
-macOS. Windows on ARM has no DuckDB library.
+Release builds leave out DuckDB. To use the mirror, build from source with
+`make install DUCKDB=1`; see
+[Build with DuckDB](https://agentsview.io/docs/duckdb/#build-with-duckdb).
 
 ```bash
 agentsview replica duckdb push          # mirror SQLite into DuckDB

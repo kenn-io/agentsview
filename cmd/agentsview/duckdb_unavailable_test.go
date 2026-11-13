@@ -15,8 +15,6 @@ import (
 )
 
 func TestDuckDBCommandsFailBeforeWorkWithoutDriver(t *testing.T) {
-	unavailable := duckdbsync.RequireDriver()
-	require.Error(t, unavailable)
 	for _, args := range [][]string{
 		{"replica", "duckdb", "push"},
 		{"replica", "duckdb", "status"},
@@ -26,12 +24,12 @@ func TestDuckDBCommandsFailBeforeWorkWithoutDriver(t *testing.T) {
 	} {
 		t.Run(strings.Join(args, " "), func(t *testing.T) {
 			dataDir := testDataDir(t)
-			root := newRootCommand()
-			root.SetOut(&bytes.Buffer{})
-			root.SetErr(&bytes.Buffer{})
-			root.SetArgs(args)
-			err := root.ExecuteContext(t.Context())
-			require.ErrorIs(t, err, unavailable)
+			var stdout, stderr bytes.Buffer
+			err := executeCLIWithLegacyFlagCompat(args, &stdout, &stderr)
+			require.ErrorIs(t, err, duckdbsync.ErrUnavailable)
+			assert.Equal(t, cliUnavailableExitCode, reportCLIError(err, &stderr))
+			// Config settings cannot add a driver the build leaves out.
+			assert.NotContains(t, stderr.String(), "AGENTSVIEW_DUCKDB_PATH")
 			// No daemon, archive, or mirror work file was created.
 			entries, readErr := os.ReadDir(dataDir)
 			require.NoError(t, readErr)

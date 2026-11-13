@@ -16,6 +16,7 @@ import (
 	"github.com/spf13/cobra"
 	"github.com/spf13/pflag"
 	"go.kenn.io/agentsview/internal/db"
+	duckdbsync "go.kenn.io/agentsview/internal/duckdb"
 	"go.kenn.io/agentsview/internal/servicehttp"
 )
 
@@ -316,6 +317,12 @@ func applyCLIRecovery(cmd *cobra.Command, err error, d *cliDiagnosticError) {
 	if errors.Is(err, errLocalDaemonUnreachable) {
 		d.kind, d.code = "unavailable", cliUnavailableExitCode
 		d.hint = "run `agentsview daemon status`; if the local daemon is stuck, run `agentsview daemon restart`"
+		return
+	}
+	// The error already says how to get DuckDB; config settings cannot add it.
+	if errors.Is(err, duckdbsync.ErrUnavailable) {
+		d.kind, d.code = "unavailable", cliUnavailableExitCode
+		d.hint = commandHelpHint(cmd)
 		return
 	}
 	if errors.Is(err, db.ErrSemanticUnavailable) {

@@ -55,8 +55,10 @@ ancestor permissions satisfy their checks.
   every agentsview start crash on older x86-64 CPUs. Build targets add the tag
   only with `DUCKDB=1`. Tests, vet, lint, and the e2e server link DuckDB so
   they cover the mirror, and CI also runs `internal/duckdb` without the tag.
-  Tag DuckDB-only test files `duckdb`; a test elsewhere that needs the driver
-  skips when `duckdb.Available` is false.
+  CI also starts that build under QEMU on a Nehalem CPU model (x86-64-v2), so
+  code that needs a newer CPU at startup fails CI. Tag DuckDB-only test files
+  `duckdb`; a test elsewhere that needs the driver skips when
+  `duckdb.RequireDriver()` returns an error.
 - The Makefile's `LDFLAGS` set the PostHog project key with
   `-X go.kenn.io/kit/telemetry/posthog.projectKey`. Builds without it send no
   telemetry, so keep it out of test and e2e builds.

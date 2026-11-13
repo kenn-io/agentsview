@@ -5,7 +5,8 @@ package duckdb
 import (
 	"context"
 	"database/sql"
-	"errors"
+	"fmt"
+	"runtime"
 )
 
 // Default builds leave out the DuckDB driver. DuckDB 2.0's prebuilt libraries
@@ -14,11 +15,15 @@ import (
 // x86-64 CPUs, even for users who never touch the DuckDB mirror. Building with
 // -tags duckdb links the driver. duckdb-go-bindings ships no prebuilt library
 // for windows/arm64, so that platform always gets this stub.
-var errDuckDBUnavailable = errors.New(
-	"this agentsview build does not include DuckDB: " +
-		"build agentsview from source with `make install DUCKDB=1` (or -tags fts5,duckdb) " +
-		"to use the DuckDB mirror; see https://agentsview.io/docs/duckdb/#build-with-duckdb",
-)
+var errDuckDBUnavailable = unavailableError()
+
+func unavailableError() error {
+	if runtime.GOOS == "windows" && runtime.GOARCH == "arm64" {
+		return fmt.Errorf("%w: duckdb-go-bindings ships no DuckDB library for windows/arm64", ErrUnavailable)
+	}
+	return fmt.Errorf("%w: build agentsview from source with `make install DUCKDB=1` "+
+		"(or -tags fts5,duckdb); see https://agentsview.io/docs/duckdb/#build-with-duckdb", ErrUnavailable)
+}
 
 // RequireDriver reports an error when this build does not link the DuckDB
 // driver.

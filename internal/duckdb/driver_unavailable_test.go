@@ -13,12 +13,12 @@ func TestOpenReportsDuckDBUnavailable(t *testing.T) {
 	db, err := Open(t.Context(), "sessions.duckdb")
 	require.Error(t, err)
 	assert.Nil(t, db)
-	assert.ErrorIs(t, err, errDuckDBUnavailable)
+	assert.ErrorIs(t, err, ErrUnavailable)
 }
 
 func TestNewQuackStoreReportsDuckDBUnavailable(t *testing.T) {
 	store, err := NewQuackStore(t.Context(), "quack:localhost:8765", "token", false, 0)
 	require.Error(t, err)
 	assert.Nil(t, store)
-	assert.ErrorIs(t, err, errDuckDBUnavailable)
+	assert.ErrorIs(t, err, ErrUnavailable)
 }
