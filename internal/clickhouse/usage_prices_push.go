@@ -64,7 +64,7 @@ func (s *Sync) newUsagePricer(ctx context.Context) (*usagePricer, error) {
 	var catalog chPricingCatalog
 	var err error
 	if s.genAI != nil {
-		catalog, err = chLoadPricingCatalogWithGenAI(ctx, s.conn, nil, s.genAI.row)
+		catalog, err = chLoadPricingCatalogWithGenAI(ctx, s.conn, s.genAI.row)
 	} else {
 		catalog, err = chLoadPricingCatalog(ctx, s.conn, nil)
 	}

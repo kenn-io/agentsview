@@ -162,18 +162,17 @@ func chLoadPricingCatalog(
 	return chBuildPricingCatalog(ctx, conn, customPricing, pricing, genAI)
 }
 
-// chLoadPricingCatalogWithGenAI loads the mirror's catalog with genAI, the
-// parsed row of the GenAI document the mirror holds.
+// chLoadPricingCatalogWithGenAI loads the mirror's catalog, without reader
+// custom rates, with genAI, the parsed row of the GenAI document the mirror
+// holds.
 func chLoadPricingCatalogWithGenAI(
-	ctx context.Context, conn *sql.DB,
-	customPricing map[string]config.CustomModelRate,
-	genAI export.EffectivePricingRow,
+	ctx context.Context, conn *sql.DB, genAI export.EffectivePricingRow,
 ) (chPricingCatalog, error) {
 	pricing, err := chLoadPricing(ctx, conn, nil)
 	if err != nil {
 		return chPricingCatalog{}, err
 	}
-	return chBuildPricingCatalog(ctx, conn, customPricing, pricing, genAI)
+	return chBuildPricingCatalog(ctx, conn, nil, pricing, genAI)
 }
 
 func chBuildPricingCatalog(

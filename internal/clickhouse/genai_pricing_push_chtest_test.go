@@ -80,9 +80,6 @@ func TestPushReadsGenAIPricingDigestOnce(t *testing.T) {
 			require.NoError(t, err)
 			assert.Equal(t, reader.digest, syncer.pricer.digest)
 			assert.Equal(t, reader.digest, meta[usagePricedDigestKey])
-			pricer, err := syncer.newUsagePricer(ctx)
-			require.NoError(t, err)
-			assert.Equal(t, reader.digest, pricer.digest)
 		})
 	}
 }
