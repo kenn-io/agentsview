@@ -234,13 +234,6 @@ func TestDuckDBIncrementalPushUpdatesFrustrationCount(t *testing.T) {
 	require.NoError(t, conn.QueryRowContext(ctx, `SELECT frustration_marker_count FROM sessions WHERE id = 'sess-1'`).Scan(&count))
 	assert.Equal(t, 1, count)
 	require.NoError(t, conn.Close())
-
-	store, err := NewStore(ctx, path)
-	require.NoError(t, err)
-	t.Cleanup(func() { require.NoError(t, store.Close()) })
-	resp, err := store.GetAnalyticsSignals(ctx, db.AnalyticsFilter{})
-	require.NoError(t, err)
-	assert.Equal(t, 1, resp.QualityHealth.Totals.FrustrationMarkerCount)
 }
 
 func TestDuckDBTrustsStoredZeroFrustrationCount(t *testing.T) {
