@@ -153,6 +153,33 @@ func TestMaterializeCodexConfigured(t *testing.T) {
 			}
 		})
 	}
+	t.Run("nested custom direct file", func(t *testing.T) {
+		home, custom := t.TempDir(), filepath.Join(t.TempDir(), "custom")
+		t.Setenv("CODEX_HOME", home)
+		oldSource := filepath.Join(custom, "batch", oldName)
+		newSource := filepath.Join(custom, "2026", "01", "02", newName)
+		for name, body := range map[string][]byte{oldSource: old, newSource: newPage} {
+			require.NoError(t, os.MkdirAll(filepath.Dir(name), 0o700))
+			require.NoError(t, os.WriteFile(name, body, 0o600))
+		}
+		scoped := cfg
+		scoped.AgentDirs = map[parser.AgentType][]string{parser.AgentCodex: {custom, filepath.Dir(oldSource)}}
+		selected := *session
+		selected.FilePath = &oldSource
+		got, err := Materialize(t.Context(), scoped, nil, &selected, cwd)
+		require.NoError(t, err)
+		require.Equal(t, newName, got.InstalledPage)
+		require.Equal(t, []string{filepath.Join(home, "sessions", "2026", "01", "01", oldName), filepath.Join(home, "sessions", "2026", "01", "02", newName)}, got.Paths)
+		for i, source := range []string{oldSource, newSource} {
+			want := [][]byte{old, newPage}[i]
+			installed, err := os.ReadFile(got.Paths[i])
+			require.NoError(t, err)
+			assert.Equal(t, want, installed)
+			original, err := os.ReadFile(source)
+			require.NoError(t, err)
+			assert.Equal(t, want, original)
+		}
+	})
 	// A publisher failure unrelated to rollout matching reaches the caller.
 	blockedHome := t.TempDir()
 	t.Setenv("CODEX_HOME", blockedHome)
@@ -380,6 +407,69 @@ func TestMaterializeCodexS3(t *testing.T) {
 		require.NoError(t, err)
 		assert.Empty(t, entries)
 	})
+	t.Run("overlapping day roots", func(t *testing.T) {
+		const pageID = "33333333-3333-4333-8333-333333333333"
+		oldName := "rollout-2026-01-01T01-00-00-" + id + ".jsonl"
+		newName := "rollout-2026-01-02T01-00-00-" + id + "_" + pageID + ".jsonl"
+		oldKey := "host/raw/codex/sessions/2026/01/01/" + oldName
+		newKey := "host/raw/codex/sessions/2026/01/02/" + newName
+		old := fmt.Sprintf(`{"type":"session_meta","payload":{"id":%q,"history_mode":"paginated"}}`+"\n", id)
+		newPage := fmt.Sprintf(`{"type":"session_meta","payload":{"id":%q,"history_mode":"paginated","history_base":{"thread_id":%q,"end_ordinal_exclusive":1,"end_byte_offset":%d}}}`+"\n", id, id, len(old))
+		objects := map[string]string{oldKey: old, newKey: newPage}
+		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if r.Method != http.MethodGet {
+				http.Error(w, "read only", http.StatusMethodNotAllowed)
+				return
+			}
+			if r.URL.Query().Get("list-type") == "2" {
+				w.Header().Set("Content-Type", "application/xml")
+				_, _ = io.WriteString(w, `<ListBucketResult><IsTruncated>false</IsTruncated>`)
+				prefix := r.URL.Query().Get("prefix")
+				if prefix != "host/raw/codex/sessions/" && prefix != "host/raw/codex/sessions/2026/01/01/" && prefix != "host/raw/codex/sessions/2026/01/02/" {
+					_, _ = io.WriteString(w, `</ListBucketResult>`)
+					return
+				}
+				for key, body := range objects {
+					if strings.HasPrefix(key, prefix) {
+						_, _ = fmt.Fprintf(w, `<Contents><Key>%s</Key><Size>%d</Size></Contents>`, key, len(body))
+					}
+				}
+				_, _ = io.WriteString(w, `</ListBucketResult>`)
+				return
+			}
+			body, ok := objects[strings.TrimPrefix(r.URL.Path, "/test/")]
+			if !ok || !strings.HasPrefix(r.URL.Path, "/test/") {
+				http.NotFound(w, r)
+				return
+			}
+			_, _ = io.WriteString(w, body)
+		}))
+		defer server.Close()
+		t.Setenv("AWS_S3_ENDPOINT", server.URL)
+		for _, tc := range []struct{ name, key, sessionID string }{
+			{"old anchor", oldKey, "host~codex:" + id},
+			{"new anchor", newKey, "host~codex:" + id + "_" + pageID},
+		} {
+			t.Run(tc.name, func(t *testing.T) {
+				home := t.TempDir()
+				t.Setenv("CODEX_HOME", home)
+				uri := "s3://test/" + tc.key
+				scoped := cfg
+				scoped.AgentDirs = map[parser.AgentType][]string{parser.AgentCodex: {root, uri[:strings.LastIndex(uri, "/")]}}
+				selected := *session
+				selected.ID, selected.FilePath = tc.sessionID, &uri
+				got, err := Materialize(t.Context(), scoped, nil, &selected, t.TempDir())
+				require.NoError(t, err)
+				require.Equal(t, newName, got.InstalledPage)
+				require.Equal(t, []string{filepath.Join(home, "sessions", "2026", "01", "01", oldName), filepath.Join(home, "sessions", "2026", "01", "02", newName)}, got.Paths)
+				for i, want := range []string{old, newPage} {
+					data, err := os.ReadFile(got.Paths[i])
+					require.NoError(t, err)
+					assert.Equal(t, want, string(data))
+				}
+			})
+		}
+	})
 	unsafeSelected.Store(true)
 	unsafeHome := t.TempDir()
 	t.Setenv("CODEX_HOME", unsafeHome)
@@ -423,6 +513,40 @@ func TestMaterializeCodexCustomMirrorScope(t *testing.T) {
 	got, err := os.ReadFile(result.Paths[1])
 	require.NoError(t, err)
 	assert.Equal(t, newPage, got)
+	t.Run("nested custom direct file", func(t *testing.T) {
+		data, home := t.TempDir(), t.TempDir()
+		t.Setenv("CODEX_HOME", home)
+		mirror := remotesync.MirrorDir(data, "remote")
+		oldSource := filepath.Join(mirror, "x", "custom", "batch", oldName)
+		newSource := filepath.Join(mirror, "x", "custom", "2026", "01", "02", newName)
+		for name, body := range map[string][]byte{oldSource: old, newSource: newPage} {
+			require.NoError(t, os.MkdirAll(filepath.Dir(name), 0o700))
+			require.NoError(t, os.WriteFile(name, body, 0o600))
+		}
+		metadata := []byte(`{"version":1,"dirs":["/x/custom","/x/custom/batch"]}`)
+		require.NoError(t, os.WriteFile(mirror+".codex-roots.json", metadata, 0o600))
+		stored := "remote:/x/custom/batch/" + oldName
+		selected := *session
+		selected.FilePath = &stored
+		scoped := cfg
+		scoped.DataDir = data
+		got, err := Materialize(t.Context(), scoped, nil, &selected, t.TempDir())
+		require.NoError(t, err)
+		require.Equal(t, newName, got.InstalledPage)
+		require.Equal(t, []string{filepath.Join(home, "sessions", "2026", "01", "01", oldName), filepath.Join(home, "sessions", "2026", "01", "02", newName)}, got.Paths)
+		for i, source := range []string{oldSource, newSource} {
+			want := [][]byte{old, newPage}[i]
+			installed, err := os.ReadFile(got.Paths[i])
+			require.NoError(t, err)
+			assert.Equal(t, want, installed)
+			original, err := os.ReadFile(source)
+			require.NoError(t, err)
+			assert.Equal(t, want, original)
+		}
+		saved, err := os.ReadFile(mirror + ".codex-roots.json")
+		require.NoError(t, err)
+		assert.Equal(t, metadata, saved)
+	})
 	t.Run("missing root beneath escaping symlink", func(t *testing.T) {
 		escape := filepath.Join(mirror, "x", "escape")
 		if err := os.Symlink(t.TempDir(), escape); err != nil {
