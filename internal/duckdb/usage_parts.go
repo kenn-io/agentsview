@@ -3,6 +3,7 @@ package duckdb
 import (
 	"context"
 	"fmt"
+	"maps"
 
 	"go.kenn.io/agentsview/internal/db"
 	"go.kenn.io/agentsview/internal/kept"
@@ -16,8 +17,10 @@ type usagePart[T any] struct {
 	Value           T
 }
 
-var usagePartReadObserver func([]string)
-var usagePartPublishObserver func()
+var (
+	usagePartReadObserver    func([]string)
+	usagePartPublishObserver func()
+)
 
 // refreshUsageParts retains only parts whose source sessions are unchanged.
 func refreshUsageParts[T any](ctx context.Context, s *Store, slot, priceDigest string, f db.UsageFilter, size func(T) int64, read func(context.Context, []string) (map[string]T, error)) (map[string]T, error) {
@@ -100,9 +103,7 @@ func refreshUsageParts[T any](ctx context.Context, s *Store, slot, priceDigest s
 		if err != nil {
 			return nil, err
 		}
-		for id, value := range updated {
-			values[id] = value
-		}
+		maps.Copy(values, updated)
 	}
 	if usagePartPublishObserver != nil {
 		usagePartPublishObserver()
@@ -127,6 +128,7 @@ func (s *Store) usagePartVersions(ctx context.Context) (map[string]string, error
 	if err != nil {
 		return nil, fmt.Errorf("querying usage fingerprints: %w", err)
 	}
+	defer rows.Close()
 	versions := map[string]string{}
 	for rows.Next() {
 		var id, fingerprint string

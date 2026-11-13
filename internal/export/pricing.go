@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"hash"
+	"maps"
 	"math/big"
 	"slices"
 	"sort"
@@ -1321,9 +1322,7 @@ func (r *PricingResolver) RecordedCounts() ([]PricingRecord, bool) {
 	for model, resolutions := range r.recorded {
 		for key, rec := range resolutions {
 			bands := make(map[int]int, len(rec.bandRequestCounts))
-			for band, count := range rec.bandRequestCounts {
-				bands[band] = count
-			}
+			maps.Copy(bands, rec.bandRequestCounts)
 			records = append(records, PricingRecord{model, key.pricedModel, clonePricingLookup(rec.lookup), rec.computed, rec.reported, rec.baseRequestCount, rec.aggregateRowCount, bands})
 		}
 	}

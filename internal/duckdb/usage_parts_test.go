@@ -36,7 +36,8 @@ func writeUsageMirror(t *testing.T, path string, statements ...string) {
 }
 
 func TestUsagePartsAcrossRestart(t *testing.T) {
-	t.Setenv("CACHE_DIRECTORY", t.TempDir())
+	t.Chdir(t.TempDir())
+	t.Setenv("CACHE_DIRECTORY", "cache")
 	path := filepath.Join(t.TempDir(), "mirror.duckdb")
 	keptActivityMirror(t, path, "session-a", 500)
 	writeUsageMirror(t, path,
@@ -96,7 +97,7 @@ func TestUsagePartsAcrossRestart(t *testing.T) {
 		data, err := os.ReadFile(file)
 		require.NoError(t, err)
 		require.Greater(t, len(data), 1)
-		require.NoError(t, os.WriteFile(file, data[:len(data)-1], 0600))
+		require.NoError(t, os.WriteFile(file, data[:len(data)-1], 0o600))
 	}
 	restarted, err = NewStore(t.Context(), path)
 	require.NoError(t, err)
