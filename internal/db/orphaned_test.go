@@ -10,6 +10,7 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"go.kenn.io/agentsview/internal/config"
 )
 
 func TestCopyOrphanedDataCodexTrashIsNotAReparse(t *testing.T) {
@@ -842,4 +843,86 @@ func TestCopySessionMetadataDoesNotCarryRevisionCounters(t *testing.T) {
 	err = destination.getReader().QueryRowContext(t.Context(), `
 		SELECT value FROM archive_metadata WHERE key = 'analytics_change_revision'`).Scan(&revision)
 	require.ErrorIs(t, err, sql.ErrNoRows)
+}
+
+func TestCopyOrphanedFrustrationCounts(t *testing.T) {
+	ctx := t.Context()
+	source := testDB(t)
+	for _, id := range []string{"unchanged", "changed", "stale", "orphan", "invalid"} {
+		insertSession(t, source, id, "project")
+		require.NoError(t, source.InsertMessages(ctx, []Message{{SessionID: id, Role: "user", Content: "this is broken"}}))
+	}
+	_, err := source.getWriter().ExecContext(ctx, `UPDATE messages SET content = ? WHERE session_id = 'invalid'`, "this is broken\xff")
+	require.NoError(t, err)
+	_, err = source.getWriter().ExecContext(ctx, `UPDATE sessions SET transcript_revision = '7', created_at = '2020-01-01T00:00:00Z'`)
+	require.NoError(t, err)
+	rows, err := source.signalRows(ctx, AnalyticsFilter{})
+	require.NoError(t, err)
+	require.NoError(t, source.populateFrustrationMarkers(ctx, rows))
+	_, err = source.getWriter().ExecContext(ctx, `UPDATE session_frustration_markers SET transcript_key = 'stale', count = 99 WHERE session_id = 'stale'`)
+	require.NoError(t, err)
+	_, err = source.getWriter().ExecContext(ctx, fmt.Sprintf(`PRAGMA user_version = %d`, sanitizedSourceDataVersion-1))
+	require.NoError(t, err)
+
+	destination := testDB(t)
+	for _, id := range []string{"unchanged", "changed", "stale"} {
+		insertSession(t, destination, id, "project")
+		content := "this is broken"
+		if id == "changed" {
+			content = "please explain this"
+		}
+		require.NoError(t, destination.InsertMessages(ctx, []Message{{SessionID: id, Role: "user", Content: content}}))
+	}
+	_, err = destination.getWriter().ExecContext(ctx, `UPDATE sessions SET created_at = '2030-01-01T00:00:00Z'`)
+	require.NoError(t, err)
+	copied, err := destination.CopyOrphanedDataFrom(ctx, source.Path())
+	require.NoError(t, err)
+	require.Equal(t, 2, copied)
+	saved, err := destination.getReader().QueryContext(ctx, `SELECT session_id, count FROM session_frustration_markers`)
+	require.NoError(t, err)
+	got := make(map[string]int)
+	for saved.Next() {
+		var id string
+		var count int
+		require.NoError(t, saved.Scan(&id, &count))
+		got[id] = count
+	}
+	require.NoError(t, saved.Err())
+	require.NoError(t, saved.Close())
+	assert.Equal(t, map[string]int{"unchanged": 1, "orphan": 1, "invalid": 1}, got)
+	rows, err = destination.signalRows(ctx, AnalyticsFilter{})
+	require.NoError(t, err)
+	require.NoError(t, destination.populateFrustrationMarkers(ctx, rows))
+	counts := make(map[string]int)
+	for _, row := range rows {
+		counts[row.ID] = row.FrustrationMarkerCount
+	}
+	assert.Equal(t, map[string]int{"unchanged": 1, "changed": 0, "stale": 1, "orphan": 1, "invalid": 1}, counts)
+	// The invalid byte is sanitized during orphan copy. A fresh scan agrees with its saved count.
+	_, err = destination.getWriter().ExecContext(ctx, `DELETE FROM session_frustration_markers WHERE session_id = 'invalid'`)
+	require.NoError(t, err)
+	require.NoError(t, destination.Reopen())
+	rows, err = destination.signalRows(ctx, AnalyticsFilter{})
+	require.NoError(t, err)
+	require.NoError(t, destination.populateFrustrationMarkers(ctx, rows))
+	for _, row := range rows {
+		if row.ID == "invalid" {
+			assert.Equal(t, 1, row.FrustrationMarkerCount)
+		}
+	}
+
+	usage := testDB(t)
+	usage.SetArchiveContent(config.ArchiveContentUsage)
+	_, err = usage.CopyOrphanedDataFrom(ctx, source.Path())
+	require.NoError(t, err)
+	var n int
+	require.NoError(t, usage.getReader().QueryRowContext(ctx, `SELECT count(*) FROM session_frustration_markers`).Scan(&n))
+	assert.Zero(t, n)
+	_, err = source.getWriter().ExecContext(ctx, `DROP TABLE session_frustration_markers`)
+	require.NoError(t, err)
+	legacy := testDB(t)
+	_, err = legacy.CopyOrphanedDataFrom(ctx, source.Path())
+	require.NoError(t, err)
+	require.NoError(t, legacy.getReader().QueryRowContext(ctx, `SELECT count(*) FROM session_frustration_markers`).Scan(&n))
+	assert.Zero(t, n)
 }

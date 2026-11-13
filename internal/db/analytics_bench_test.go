@@ -63,12 +63,13 @@ func BenchmarkSignalsFrustration(b *testing.B) {
 				require.NoError(b, err)
 				require.Empty(b, result.Errors)
 			}
-			for _, mode := range []string{"cold", "restart", "repeat"} {
+			for _, mode := range []string{"cold", "restart", "repeat", "post_write", "tool_retries"} {
 				b.Run(mode, func(b *testing.B) {
 					_, err := d.GetAnalyticsSignals(ctx, AnalyticsFilter{})
 					require.NoError(b, err)
 					b.ReportAllocs()
 					b.ResetTimer()
+					iteration := 0
 					for b.Loop() {
 						if mode != "repeat" {
 							b.StopTimer()
@@ -76,13 +77,30 @@ func BenchmarkSignalsFrustration(b *testing.B) {
 								_, err := d.getWriter().ExecContext(ctx, `DELETE FROM session_frustration_markers`)
 								require.NoError(b, err)
 							}
-							d.frustrationMemo.Swap(func() {})
+							if mode == "post_write" {
+								msgs := make([]Message, 10)
+								for j := range msgs {
+									msgs[j] = Message{SessionID: "session-0", Ordinal: j, Role: "user", Content: text}
+								}
+								msgs[0].Content += fmt.Sprintf(" %d", iteration)
+								iteration++
+								require.NoError(b, d.ReplaceSessionMessages(ctx, "session-0", msgs))
+								require.NoError(b, d.UpdateSessionSignals(ctx, "session-0", SessionSignalUpdate{QualitySignals: QualitySignals{Version: CurrentQualitySignalVersion}}))
+							} else {
+								d.frustrationMemo.Swap(func() {})
+							}
 							d.analyticsKept.Clear()
 							b.StartTimer()
 						}
-						resp, err := d.GetAnalyticsSignals(ctx, AnalyticsFilter{})
-						require.NoError(b, err)
-						require.Equal(b, size.sessions*10, resp.QualityHealth.Totals.FrustrationMarkerCount)
+						if mode == "tool_retries" {
+							resp, err := d.GetAnalyticsSignalSessions(ctx, AnalyticsFilter{}, "tool_retries", 10)
+							require.NoError(b, err)
+							require.Len(b, resp.Sessions, 10)
+						} else {
+							resp, err := d.GetAnalyticsSignals(ctx, AnalyticsFilter{})
+							require.NoError(b, err)
+							require.Equal(b, size.sessions*10, resp.QualityHealth.Totals.FrustrationMarkerCount)
+						}
 					}
 				})
 			}

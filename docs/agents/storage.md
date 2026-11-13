@@ -436,8 +436,9 @@ frustration count with a key combining its transcript revision and creation
 time. Its marker version tracks the frustration matcher independently of the
 quality signal version. Signals reuses a row only when both the key and marker
 version match; a changed transcript is counted on the next read. Read-only
-archives scan prompts rather than reading or writing the table. The rows are
-local and are not mirrored.
+archives scan prompts rather than reading or writing the table. A full resync
+carries counts for unchanged transcripts. The rows stay local and are not
+mirrored.
 
 ### Codex incremental import state
 
