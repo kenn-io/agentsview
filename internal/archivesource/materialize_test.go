@@ -747,8 +747,14 @@ func TestReadCodexCatalogExposesManifestCompanion(t *testing.T) {
 			if scenario == "newer inventory" {
 				firstRoots, err := database.ListRawArchiveRoots(ctx)
 				require.NoError(t, err)
-				require.Len(t, firstRoots, 1)
-				firstRootID = firstRoots[0].ID
+				var matching []db.RawArchiveRoot
+				for _, root := range firstRoots {
+					if root.Provider == "codex" && root.OriginalPath == child {
+						matching = append(matching, root)
+					}
+				}
+				require.Len(t, matching, 1)
+				firstRootID = matching[0].ID
 				firstSource, err := database.RawArchiveSourceByKey(ctx, firstRootID, "codex:"+cID)
 				require.NoError(t, err)
 				require.NotNil(t, firstSource)
