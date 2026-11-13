@@ -1207,9 +1207,6 @@ func snapshotRankedDailyUsageRowsSQL(
 		WHERE survivor.snapshot_attribution_session_id = ''
 			OR (` + filterWhere + `)`
 	}
-	outputTokens := "u.usage_output_tokens"
-	webSearchRequests := "u.usage_web_search_requests"
-
 	args := make([]any, 0,
 		len(dupsArgs)+len(claudeArgs)+2*len(windowArgs)+
 			len(rowsArgs)+len(filterArgs))
@@ -1228,7 +1225,7 @@ func snapshotRankedDailyUsageRowsSQL(
 				FIRST_VALUE(u.project) OVER attribution AS snapshot_project,
 				FIRST_VALUE(u.agent) OVER attribution AS snapshot_agent,
 				FIRST_VALUE(u.machine) OVER attribution AS snapshot_machine,
-				MAX(%[5]s) OVER (
+				MAX(u.usage_web_search_requests) OVER (
 					ranking ROWS BETWEEN UNBOUNDED PRECEDING
 						AND UNBOUNDED FOLLOWING
 				) AS snapshot_web_search_requests,
@@ -1243,7 +1240,7 @@ func snapshotRankedDailyUsageRowsSQL(
 					CASE WHEN julianday(u.ts) IS NULL THEN u.ts ELSE '' END ASC
 			), ranking AS (
 				PARTITION BY u.claude_message_id, u.claude_request_id
-				ORDER BY %[4]s DESC,
+				ORDER BY u.usage_output_tokens DESC,
 					julianday(u.ts) IS NULL ASC, julianday(u.ts) DESC,
 					u.session_id DESC, COALESCE(u.message_ordinal, -1) DESC,
 					CASE WHEN julianday(u.ts) IS NULL THEN u.ts ELSE '' END DESC
@@ -1257,13 +1254,13 @@ func snapshotRankedDailyUsageRowsSQL(
 				u.machine AS snapshot_machine,
 				NULL AS snapshot_web_search_requests,
 				1 AS snapshot_rank
-			FROM (%[6]s) u
+			FROM (%[4]s) u
 			WHERE %[3]s
 				AND NOT (
 					u.usage_source = 'message'
 					AND u.claude_message_id != ''
-					AND (%[8]s) IN (
-						SELECT %[9]s FROM usage_snapshot_dups
+					AND (%[6]s) IN (
+						SELECT %[7]s FROM usage_snapshot_dups
 					)
 				)
 			UNION ALL
@@ -1272,9 +1269,8 @@ func snapshotRankedDailyUsageRowsSQL(
 			WHERE r.snapshot_rank = 1
 		)
 		SELECT survivor.*
-		FROM usage_snapshot_survivors survivor%[7]s`,
-		dupsSQL, claudeRowsSQL, windowWhere, outputTokens,
-		webSearchRequests, rowsSQL, survivorFilter,
+		FROM usage_snapshot_survivors survivor%[5]s`,
+		dupsSQL, claudeRowsSQL, windowWhere, rowsSQL, survivorFilter,
 		usageSnapshotRequestKey("u."), usageSnapshotRequestKey("")), args
 }
 
