@@ -145,6 +145,7 @@ func TestPushDiscardsIncompatibleRebuild(t *testing.T) {
 		edit func(*testing.T, *sql.DB, *rebuildRun)
 	}{
 		{"schema version 20", func(t *testing.T, conn *sql.DB, run *rebuildRun) {
+			t.Helper()
 			run.SchemaVersion, run.DataVersion = 20, db.CurrentDataVersion()
 			require.NoError(t, recordMetadataKey(t.Context(), conn, schemaVersionMetadataKey, "20"))
 			require.NoError(t, recordMetadataKey(t.Context(), conn, dataVersionMetadataKey, strconv.Itoa(db.CurrentDataVersion())))
