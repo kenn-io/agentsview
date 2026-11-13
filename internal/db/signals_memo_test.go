@@ -204,6 +204,7 @@ func TestSignalsFrustrationStoredRefresh(t *testing.T) {
 	require.NoError(t, err)
 	_, err = d.getWriter().ExecContext(ctx, `UPDATE session_frustration_markers SET marker_version = ?, count = 99 WHERE session_id = 'first'`, signals.FrustrationMarkerVersion+1)
 	require.NoError(t, err)
+	// Version zero simulates a prior matcher version once the version advances.
 	_, err = d.getWriter().ExecContext(ctx, `UPDATE session_frustration_markers SET count = 99, marker_version = 0 WHERE session_id = 'second'`)
 	require.NoError(t, err)
 	require.NoError(t, d.Reopen())
@@ -234,7 +235,7 @@ func TestSignalsFrustrationStoreRejectsChangedTranscript(t *testing.T) {
 	assert.Zero(t, count)
 }
 
-func TestSignalsFrustrationReadOnly(t *testing.T) {
+func TestSignalsFrustrationReadOnlyStoredReuseAndLegacyFallback(t *testing.T) {
 	for _, stored := range []bool{false, true} {
 		t.Run(fmt.Sprintf("stored=%t", stored), func(t *testing.T) {
 			d := testDB(t)

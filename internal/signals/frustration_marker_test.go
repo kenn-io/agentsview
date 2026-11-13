@@ -3,7 +3,9 @@ package signals
 import (
 	"crypto/sha256"
 	"encoding/hex"
+	"fmt"
 	"math/rand/v2"
+	"sort"
 	"strings"
 	"testing"
 
@@ -73,32 +75,17 @@ func randomFrustrationPrompt(r *rand.Rand) string {
 }
 
 func TestIsFrustrationMarkerMatchesReference(t *testing.T) {
-	versionPrompts := append([]string(nil), frustrationEdgePrompts...)
-	versionPrompts = append(versionPrompts,
-		"this is wtf", "please come on", "why won't this work", "this is broken",
-		"this doesn't work", "this does not work", "still broken", "same error",
-		"you broke it", "fuck this", "please fix!!!", "please fix???",
-		"please fix!!", "please fix??", "ABC DEF ghi jkl", "ABC def ghi jkl",
-	)
-	prompts := append([]string(nil), versionPrompts...)
+	prompts := append([]string(nil), frustrationEdgePrompts...)
 	r := rand.New(rand.NewPCG(7, 11))
 	for range 200_000 {
 		prompts = append(prompts, randomFrustrationPrompt(r))
 	}
 	markers := 0
-	h := sha256.New()
-	for i, prompt := range prompts {
+	for _, prompt := range prompts {
 		want := referenceIsFrustrationMarker(prompt)
 		got := IsFrustrationMarker(prompt)
 		require.Equal(t, want, got, "%q", prompt)
 		require.Equal(t, referenceNormalizePrompt(prompt), normalizePrompt(prompt), "%q", prompt)
-		if i < len(versionPrompts) {
-			if got {
-				h.Write([]byte{1})
-			} else {
-				h.Write([]byte{0})
-			}
-		}
 		if want {
 			markers++
 		}
@@ -106,11 +93,10 @@ func TestIsFrustrationMarkerMatchesReference(t *testing.T) {
 	// Both answers must be common, or agreement would prove little.
 	assert.Greater(t, markers, len(prompts)/10)
 	assert.Less(t, markers, len(prompts)*9/10)
-	assert.Equal(t, "6b54bd9f1a162d52fe1e63a07abee412d65f2fdee1b8d0f29d11a108702e0006", hex.EncodeToString(h.Sum(nil)), "matcher results changed; bump the version and record the new digest")
 }
 
 func TestIsFrustrationMarkerExamples(t *testing.T) {
-	for prompt, want := range map[string]bool{
+	examples := map[string]bool{
 		"wtf":                                   false,
 		"come\n\t on, run it":                   true,
 		"you bro\u212ae the build":              true,
@@ -119,9 +105,42 @@ func TestIsFrustrationMarkerExamples(t *testing.T) {
 		"ABC def GHI jkl mno pqr":               false,
 		"\u24b6\u24b7 \u24b8\u24b9 ok fine now": false,
 		"```FUCK FUCK FUCK``` please handle it": false,
-	} {
-		assert.Equal(t, want, IsFrustrationMarker(prompt), "%q", prompt)
 	}
+	// Hash a fixed corpus in stable order, independent of the random test.
+	unique := make(map[string]bool)
+	for _, prompt := range frustrationEdgePrompts {
+		unique[prompt] = true
+	}
+	for _, prompt := range []string{
+		"this is wtf", "please come on", "why won't this work",
+		"this doesn't work", "this does not work", "still broken", "same error",
+		"you broke it", "fuck this", "please fix!!!", "please fix???",
+		"please fix!!", "please fix??", "ABC DEF ghi jkl", "ABC def ghi jkl",
+	} {
+		unique[prompt] = true
+	}
+	for prompt := range examples {
+		unique[prompt] = true
+	}
+	prompts := make([]string, 0, len(unique))
+	for prompt := range unique {
+		prompts = append(prompts, prompt)
+	}
+	sort.Strings(prompts)
+	h := sha256.New()
+	fmt.Fprintf(h, "%d:", FrustrationMarkerVersion)
+	for _, prompt := range prompts {
+		got := IsFrustrationMarker(prompt)
+		if want, ok := examples[prompt]; ok {
+			assert.Equal(t, want, got, "%q", prompt)
+		}
+		if got {
+			h.Write([]byte{1})
+		} else {
+			h.Write([]byte{0})
+		}
+	}
+	assert.Equal(t, "c2b71d27d0370a66d0770e72b5474b2b4d1cbff34d99709722911db69c8f2a5a", hex.EncodeToString(h.Sum(nil)), "matcher results changed; bump the version and record the new digest")
 }
 
 func FuzzIsFrustrationMarkerMatchesReference(f *testing.F) {
