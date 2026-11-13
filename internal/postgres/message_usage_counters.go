@@ -2,7 +2,9 @@ package postgres
 
 import (
 	"context"
+	"database/sql"
 	"fmt"
+	"log"
 
 	"go.kenn.io/agentsview/internal/usagefacts"
 )
@@ -40,6 +42,22 @@ func backfillMessageUsageCountersPG(ctx context.Context, pg storeExecutor) (int,
 			return total, err
 		}
 	}
+}
+
+// fillMessageUsageCountersPG runs backfillMessageUsageCountersPG during a
+// push's schema check. A publisher locks a session before its messages and the
+// fill locks messages first, so the two can deadlock when another machine
+// pushes the same session. Each batch is its own statement, so the database
+// rolled back only the batch it aborted; the fill logs the conflict and the
+// next push fills those rows. Callers inside an explicit transaction cannot go
+// on after an abort and call backfillMessageUsageCountersPG directly.
+func fillMessageUsageCountersPG(ctx context.Context, db *sql.DB) (int, error) {
+	filled, err := backfillMessageUsageCountersPG(ctx, db)
+	if isTransactionConflict(err) {
+		log.Printf("pg schema: message usage counter fill deferred: %v", err)
+		return filled, nil
+	}
+	return filled, err
 }
 
 type messageUsageCounterBatch struct {

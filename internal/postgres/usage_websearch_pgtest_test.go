@@ -289,58 +289,77 @@ func TestPGPushSchemaCheckFillsMissingUsageCounters(t *testing.T) {
 
 // A publisher locks a session and then its messages, while the counter fill
 // locks messages and then their session. When the two meet, PostgreSQL aborts
-// the fill as a deadlock. The push must go on, and a later push fills the
+// the fill as a deadlock. The push must go on, whether the fill ran in a new
+// push process's first schema check or a later one, and a later push fills the
 // counters.
 func TestPGPushSchemaCheckSurvivesCounterFillDeadlock(t *testing.T) {
-	const schema = "agentsview_usage_counter_deadlock_test"
-	_, store := prepareUsageSchema(t, schema)
-	ctx := t.Context()
-	var version string
-	require.NoError(t, store.DB().QueryRowContext(ctx, `SELECT version()`).Scan(&version))
-	if strings.Contains(version, "CockroachDB") {
-		t.Skip("CockroachDB resolves lock conflicts by transaction priority, not deadlock detection")
+	for _, tc := range []struct {
+		name, schema string
+		schemaDone   bool
+	}{
+		{"first push", "agentsview_usage_counter_deadlock_first_test", false},
+		{"later push", "agentsview_usage_counter_deadlock_test", true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			_, store := prepareUsageSchema(t, tc.schema)
+			ctx := t.Context()
+			var version string
+			require.NoError(t, store.DB().QueryRowContext(ctx, `SELECT version()`).Scan(&version))
+			if strings.Contains(version, "CockroachDB") {
+				t.Skip("CockroachDB resolves lock conflicts by transaction priority, not deadlock detection")
+			}
+			seedWebSearchUsage(t, store, "claude-websearch-test")
+			if !tc.schemaDone {
+				// A new push process checks a current schema through its data
+				// repairs, which run the fill before the first push. One check
+				// now settles the other repairs, such as classifying the seeded
+				// session, so the fill is the only one left to meet the
+				// publisher.
+				require.True(t, pushSchemaCurrent(ctx, store.DB()))
+				require.NoError(t, (&Sync{pg: store.DB(), schema: tc.schema}).EnsureSchema(ctx))
+			}
+			_, err := store.DB().ExecContext(ctx, `
+				UPDATE messages
+				SET usage_output_tokens = NULL, usage_web_search_requests = NULL`)
+			require.NoError(t, err)
+
+			publisher, err := store.DB().BeginTx(ctx, nil)
+			require.NoError(t, err)
+			t.Cleanup(func() { _ = publisher.Rollback() })
+			_, err = publisher.ExecContext(ctx,
+				`UPDATE sessions SET updated_at = NOW() WHERE id = 'pg-websearch'`)
+			require.NoError(t, err)
+
+			syncer := &Sync{pg: store.DB(), schema: tc.schema, schemaDone: tc.schemaDone}
+			fill := make(chan error, 1)
+			go func() { fill <- syncer.EnsureSchema(ctx) }()
+			// The fill now holds the session's message rows and waits for its
+			// session row, which the publisher holds.
+			require.Eventually(t, func() bool {
+				var waiting bool
+				err := store.DB().QueryRowContext(ctx, `
+					SELECT EXISTS (
+						SELECT 1 FROM pg_stat_activity
+						WHERE datname = current_database() AND pid <> pg_backend_pid()
+						  AND wait_event_type = 'Lock'
+						  AND query LIKE '%usage_output_tokens = v.output_tokens%')`,
+				).Scan(&waiting)
+				return err == nil && waiting
+			}, 10*time.Second, 10*time.Millisecond)
+			_, publishErr := publisher.ExecContext(ctx,
+				`UPDATE messages SET content = content WHERE session_id = 'pg-websearch'`)
+			require.NoError(t, <-fill, "a deadlocked counter fill must not fail the push")
+			require.NoError(t, publishErr)
+			require.NoError(t, publisher.Commit())
+
+			require.NoError(t, syncer.EnsureSchema(ctx))
+			var outputTokens, webSearchRequests int64
+			require.NoError(t, store.DB().QueryRowContext(ctx, `
+				SELECT usage_output_tokens, usage_web_search_requests
+				FROM messages WHERE session_id = 'pg-websearch' AND ordinal = 0`,
+			).Scan(&outputTokens, &webSearchRequests))
+			assert.EqualValues(t, 100000, outputTokens)
+			assert.EqualValues(t, 2, webSearchRequests)
+		})
 	}
-	seedWebSearchUsage(t, store, "claude-websearch-test")
-	_, err := store.DB().ExecContext(ctx, `
-		UPDATE messages
-		SET usage_output_tokens = NULL, usage_web_search_requests = NULL`)
-	require.NoError(t, err)
-
-	publisher, err := store.DB().BeginTx(ctx, nil)
-	require.NoError(t, err)
-	t.Cleanup(func() { _ = publisher.Rollback() })
-	_, err = publisher.ExecContext(ctx,
-		`UPDATE sessions SET updated_at = NOW() WHERE id = 'pg-websearch'`)
-	require.NoError(t, err)
-
-	syncer := &Sync{pg: store.DB(), schema: schema, schemaDone: true}
-	fill := make(chan error, 1)
-	go func() { fill <- syncer.EnsureSchema(ctx) }()
-	// The fill now holds the session's message rows and waits for its
-	// session row, which the publisher holds.
-	require.Eventually(t, func() bool {
-		var waiting bool
-		err := store.DB().QueryRowContext(ctx, `
-			SELECT EXISTS (
-				SELECT 1 FROM pg_stat_activity
-				WHERE datname = current_database() AND pid <> pg_backend_pid()
-				  AND wait_event_type = 'Lock'
-				  AND query LIKE '%usage_output_tokens = v.output_tokens%')`,
-		).Scan(&waiting)
-		return err == nil && waiting
-	}, 10*time.Second, 10*time.Millisecond)
-	_, publishErr := publisher.ExecContext(ctx,
-		`UPDATE messages SET content = content WHERE session_id = 'pg-websearch'`)
-	require.NoError(t, <-fill, "a deadlocked counter fill must not fail the push")
-	require.NoError(t, publishErr)
-	require.NoError(t, publisher.Commit())
-
-	require.NoError(t, syncer.EnsureSchema(ctx))
-	var outputTokens, webSearchRequests int64
-	require.NoError(t, store.DB().QueryRowContext(ctx, `
-		SELECT usage_output_tokens, usage_web_search_requests
-		FROM messages WHERE session_id = 'pg-websearch' AND ordinal = 0`,
-	).Scan(&outputTokens, &webSearchRequests))
-	assert.EqualValues(t, 100000, outputTokens)
-	assert.EqualValues(t, 2, webSearchRequests)
 }

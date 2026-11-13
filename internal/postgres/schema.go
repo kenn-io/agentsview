@@ -1108,7 +1108,7 @@ func EnsureSchema(
 		time.Since(step).Round(time.Millisecond),
 	)
 	step = time.Now()
-	filled, err := backfillMessageUsageCountersPG(ctx, db)
+	filled, err := fillMessageUsageCountersPG(ctx, db)
 	if err != nil {
 		return err
 	}
@@ -1348,7 +1348,7 @@ func runSchemaDataRepairsPG(ctx context.Context, db *sql.DB) error {
 	if _, err := scrubProjectIdentityGitRemoteCredentialsPG(ctx, db); err != nil {
 		return err
 	}
-	if _, err := backfillMessageUsageCountersPG(ctx, db); err != nil {
+	if _, err := fillMessageUsageCountersPG(ctx, db); err != nil {
 		return err
 	}
 	runRepair, err := shouldRunTokenCoverageRepair(ctx, db, false)

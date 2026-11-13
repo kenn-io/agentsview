@@ -497,15 +497,7 @@ func (s *Sync) ensureSchemaLocked(ctx context.Context) error {
 		// this Sync's pushes, so the fill runs on every check, not only at
 		// schema setup. A schema dropped since setup has nothing to fill;
 		// push's marker check notices the reset and sets the schema up again.
-		_, err := backfillMessageUsageCountersPG(ctx, s.pg)
-		switch {
-		case err == nil, isUndefinedTable(err):
-		case isTransactionConflict(err):
-			// A publisher locks a session before its messages and the fill
-			// locks messages first, so the two can deadlock. The database
-			// rolled the batch back; the next push fills it.
-			log.Printf("pg schema: message usage counter fill deferred: %v", err)
-		default:
+		if _, err := fillMessageUsageCountersPG(ctx, s.pg); err != nil && !isUndefinedTable(err) {
 			return err
 		}
 		return nil
