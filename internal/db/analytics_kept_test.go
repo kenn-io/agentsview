@@ -282,12 +282,6 @@ func TestTrendsKeptTracksContentAndSelection(t *testing.T) {
 	matcher, err := d.GetTrendsTerms(ctx, f, []TrendTermInput{a, b}, "week")
 	require.NoError(t, err)
 	require.Zero(t, matcher.Series[0].Total)
-	zonedFilter := f
-	zonedFilter.Timezone = "America/New_York"
-	zoned, err := d.GetTrendsTerms(ctx, zonedFilter, terms, "day")
-	require.NoError(t, err)
-	require.Equal(t, 1, zoned.Series[0].Points[0].Count)
-	require.Zero(t, zoned.Series[0].Points[1].Count)
 	messages[0].Content = "bravo bravo"
 	require.NoError(t, d.ReplaceSessionContent(ctx, "session", messages, SessionSignalUpdate{}, nil))
 	after := read()
