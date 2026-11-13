@@ -103,7 +103,7 @@ func TestRetainedClaudeOriginalAndDirectory(t *testing.T) {
 	require.NoError(t, os.WriteFile(alternateDB, saved, 0o600))
 	alternateCfg := config.Config{ArchiveSources: []config.ArchiveSource{{Directory: filepath.Join(t.TempDir(), "unprepared")}, {Directory: alternate}}}
 	_, _, _, err = Retained(ctx, alternateCfg, nil, id, sourceDevice, id, "claude", "", []db.ArchiveSessionProvenance{owner}, 1<<20, nil)
-	require.ErrorContains(t, err, "existing regular db.write.lock")
+	require.ErrorContains(t, err, "attach the archive directory or run AgentsView there once, then retry")
 	_, err = os.Stat(filepath.Join(alternate, "application", "db.write.lock"))
 	require.ErrorIs(t, err, os.ErrNotExist)
 	prepareDirectoryOwnerLock(t, filepath.Join(alternate, "application"))
@@ -138,11 +138,11 @@ func TestRetainedClaudeOriginalAndDirectory(t *testing.T) {
 	require.NoError(t, os.Remove(lockPath))
 	require.NoError(t, os.Mkdir(lockPath, 0o700))
 	_, _, _, err = Retained(ctx, alternateCfg, nil, id, sourceDevice, id, "claude", "", []db.ArchiveSessionProvenance{owner}, 1<<20, nil)
-	require.ErrorContains(t, err, "existing regular db.write.lock")
+	require.ErrorContains(t, err, "attach the archive directory or run AgentsView there once, then retry")
 	require.NoError(t, os.Remove(lockPath))
 	if err := os.Symlink(alternateDB, lockPath); err == nil {
 		_, _, _, err = Retained(ctx, alternateCfg, nil, id, sourceDevice, id, "claude", "", []db.ArchiveSessionProvenance{owner}, 1<<20, nil)
-		require.ErrorContains(t, err, "existing regular db.write.lock")
+		require.ErrorContains(t, err, "attach the archive directory or run AgentsView there once, then retry")
 		require.NoError(t, os.Remove(lockPath))
 	} else if runtime.GOOS != "windows" {
 		require.NoError(t, err)

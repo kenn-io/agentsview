@@ -170,7 +170,7 @@ func openDirectoryCandidate(ctx context.Context, directory string) (_ *docbank.C
 	lockPath := filepath.Join(application, "db.write.lock")
 	info, err := os.Lstat(lockPath)
 	if errors.Is(err, os.ErrNotExist) || (err == nil && !info.Mode().IsRegular()) {
-		return nil, nil, nil, nil, "", errors.New("archive directory requires an existing regular db.write.lock; attach or start its owner, then retry")
+		return nil, nil, nil, nil, "", errors.New("attach the archive directory or run AgentsView there once, then retry")
 	}
 	if err != nil {
 		return nil, nil, nil, nil, "", err
