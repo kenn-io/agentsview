@@ -4356,9 +4356,17 @@ func (db *DB) populateFrustrationMarkers(
 		idx[rows[i].ID] = i
 		ids = append(ids, rows[i].ID)
 	}
+	hasMarkers := true
 	// Read-only archives may predate this table. Remove this fallback if
 	// read-only open starts requiring the table.
-	if !db.readOnly {
+	if db.readOnly {
+		if err := db.getReader().QueryRowContext(ctx, `SELECT EXISTS(
+			SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'session_frustration_markers'
+		)`).Scan(&hasMarkers); err != nil {
+			return fmt.Errorf("checking frustration markers table: %w", err)
+		}
+	}
+	if hasMarkers {
 		err := queryChunked(ids, func(chunk []string) error {
 			ph, args := InPlaceholders(chunk)
 			args = append([]any{signals.FrustrationMarkerVersion}, args...)

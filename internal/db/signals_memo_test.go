@@ -6,6 +6,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/mattn/go-sqlite3"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"go.kenn.io/agentsview/internal/config"
@@ -243,6 +244,38 @@ func TestSignalsFrustrationReadOnly(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, 1, resp.QualityHealth.Totals.FrustrationMarkerCount)
 	require.NoError(t, ro.Close())
+}
+
+func TestSignalsFrustrationReadOnlyReusesStoredCount(t *testing.T) {
+	d := testDB(t)
+	ctx := t.Context()
+	insertSession(t, d, "session", "test")
+	require.NoError(t, d.InsertMessages(ctx, []Message{{SessionID: "session", Role: "user", Content: "this is broken"}}))
+	require.NoError(t, d.UpdateSessionSignals(ctx, "session", SessionSignalUpdate{QualitySignals: QualitySignals{Version: CurrentQualitySignalVersion}}))
+	_, err := d.GetAnalyticsSignals(ctx, AnalyticsFilter{})
+	require.NoError(t, err)
+	ro, err := OpenReadOnly(ctx, d.Path())
+	require.NoError(t, err)
+	defer ro.Close()
+	ro.rawReader().SetMaxOpenConns(1)
+	conn, err := ro.rawReader().Conn(ctx)
+	require.NoError(t, err)
+	var sqlite *sqlite3.SQLiteConn
+	require.NoError(t, conn.Raw(func(raw any) error {
+		sqlite = raw.(*sqlite3.SQLiteConn)
+		sqlite.RegisterAuthorizer(func(op int, table, column, _ string) int {
+			if op == sqlite3.SQLITE_READ && table == "messages" && column == "content" {
+				return sqlite3.SQLITE_DENY
+			}
+			return sqlite3.SQLITE_OK
+		})
+		return nil
+	}))
+	require.NoError(t, conn.Close())
+	defer sqlite.RegisterAuthorizer(nil)
+	resp, err := ro.GetAnalyticsSignals(ctx, AnalyticsFilter{})
+	require.NoError(t, err)
+	assert.Equal(t, 1, resp.QualityHealth.Totals.FrustrationMarkerCount)
 }
 
 func TestSignalsFrustrationCleanup(t *testing.T) {

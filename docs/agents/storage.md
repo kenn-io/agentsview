@@ -437,8 +437,9 @@ time. Its marker version tracks the frustration matcher independently of the
 quality signal version. Signals reuses a row only when both the key and marker
 version match; a changed transcript is counted on the next read. A full resync
 rebuilds the archive, so the next Signals read counts every session again.
-Read-only archives scan prompts rather than reading or writing the table.
-Usage-only archives skip the count. The rows stay local and are not mirrored.
+Read-only archives reuse matching rows when the table exists; older archives
+without it scan prompts. Usage-only archives skip the count. The rows stay local
+and are not mirrored.
 
 ### Codex incremental import state
 

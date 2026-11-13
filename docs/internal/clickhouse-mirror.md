@@ -706,9 +706,10 @@ peaks near 290 MiB, with the same per-session counts.
   `do_not_merge_across_partitions_select_final`. ClickHouse cannot add a
   partition key in place, so every large table would be copied, and every
   version of a row must stay in one partition.
-- Computing frustration counts eagerly on message writes as quality signal
-  version 8. That recomputes every session's signals and republishes every
-  replica for a count ClickHouse can compute on demand.
+- Computing frustration counts eagerly on message writes as part of quality
+  signals. That would recompute every session's signals and republish every
+  replica for a count ClickHouse can compute on demand. SQLite instead saves
+  counts on read with an independent marker version.
 - Porting all of `IsFrustrationMarker` to ClickHouse SQL. Unicode letters,
   spaces, and case folding differ between Go and ClickHouse, so only prompts in
   the shared alphabet above are judged in SQL.
