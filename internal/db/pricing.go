@@ -455,12 +455,6 @@ const setPricingMetaSQL = `INSERT INTO pricing_meta (key, value)
 // model_pricing rows.
 const pricingMetaDataVersion = 181
 
-const pricingMetaSchemaSQL = `
-CREATE TABLE IF NOT EXISTS pricing_meta (
-    key   TEXT PRIMARY KEY,
-    value TEXT NOT NULL
-) WITHOUT ROWID;`
-
 // movePricingMetaLocked moves pricing metadata out of model_pricing.
 // Archives before data version 181 stored each value as a model_pricing
 // row whose pattern starts with "_" and whose updated_at held the value:
@@ -469,9 +463,6 @@ CREATE TABLE IF NOT EXISTS pricing_meta (
 // that did not reported the JSON list as the newest pricing time.
 // The move runs in one transaction, so a crash leaves either layout.
 func movePricingMetaLocked(ctx context.Context, w *writerHandle) error {
-	if _, err := w.ExecContext(ctx, pricingMetaSchemaSQL); err != nil {
-		return fmt.Errorf("creating pricing_meta: %w", err)
-	}
 	tx, err := w.BeginTx(ctx, nil)
 	if err != nil {
 		return fmt.Errorf("starting pricing_meta migration: %w", err)

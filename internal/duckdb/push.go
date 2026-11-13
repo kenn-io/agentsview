@@ -26,7 +26,7 @@ import (
 )
 
 func (s *Sync) syncModelPricing(ctx context.Context) error {
-	prices, err := s.local.ListModelPricing(ctx)
+	prices, localOpenRouter, err := s.local.ListModelPricingWithOpenRouter(ctx)
 	if err != nil {
 		return err
 	}
@@ -45,16 +45,12 @@ func (s *Sync) syncModelPricing(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	localOpenRouter, err := s.local.GetPricingMetaContext(ctx, pricingpkg.OpenRouterModelsMetaKey)
-	if err != nil {
-		return err
-	}
 	plan, err := db.PlanModelPricingSync(existing, existingOpenRouter, prices, localOpenRouter)
 	if err != nil {
 		return fmt.Errorf("planning duckdb pricing sync: %w", err)
 	}
 	prices = plan.Changed
-	if len(prices) == 0 && len(plan.Remove) == 0 && !plan.WriteOpenRouterModels {
+	if len(prices) == 0 && len(plan.Remove) == 0 && plan.OpenRouterModels == "" {
 		return s.syncGenAIPricing(ctx)
 	}
 	if err := s.removeDuckModelPricing(ctx, plan.Remove); err != nil {
@@ -116,7 +112,7 @@ func (s *Sync) syncModelPricing(ctx context.Context) error {
 			)
 		}
 	}
-	if plan.WriteOpenRouterModels {
+	if plan.OpenRouterModels != "" {
 		if err := s.execMutation(ctx, tx, `
 			INSERT INTO pricing_meta (key, value) VALUES (?, ?)
 			ON CONFLICT (key) DO UPDATE SET value = excluded.value`,

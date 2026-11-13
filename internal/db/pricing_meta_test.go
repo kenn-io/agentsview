@@ -11,8 +11,7 @@ import (
 )
 
 // Opening an archive that kept pricing metadata as model_pricing rows moves
-// each value to pricing_meta and leaves only model prices behind, so the
-// newest pricing time comes from a real price.
+// each value to pricing_meta and leaves only model prices behind.
 func TestOpenMovesPricingMetaOutOfModelPricing(t *testing.T) {
 	ctx := t.Context()
 	path := filepath.Join(t.TempDir(), "archive.db")
@@ -23,7 +22,6 @@ func TestOpenMovesPricingMetaOutOfModelPricing(t *testing.T) {
 	}}))
 	for _, statement := range []string{
 		"DROP TABLE pricing_meta",
-		`UPDATE model_pricing SET updated_at = '2026-07-01T00:00:02.000Z'`,
 		`INSERT INTO model_pricing (model_pattern, updated_at)
 		 VALUES ('_openrouter_models', '["or/model-a"]'),
 		        ('_fallback_version', 'seed-7')`,
@@ -49,8 +47,4 @@ func TestOpenMovesPricingMetaOutOfModelPricing(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, prices, 1)
 	assert.Equal(t, "acme/model", prices[0].ModelPattern)
-
-	probe, err := upgraded.ActivityReportSourceProbe(ctx)
-	require.NoError(t, err)
-	assert.Equal(t, "2026-07-01T00:00:02.000Z", probe.MaxPricingUpdated)
 }

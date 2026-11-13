@@ -19,7 +19,7 @@ import (
 const pricingUpsertBatch = 100
 
 func (s *Sync) syncModelPricing(ctx context.Context) error {
-	prices, err := s.local.ListModelPricing(ctx)
+	prices, localOpenRouter, err := s.local.ListModelPricingWithOpenRouter(ctx)
 	if err != nil {
 		return err
 	}
@@ -38,10 +38,6 @@ func (s *Sync) syncModelPricing(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	localOpenRouter, err := s.local.GetPricingMetaContext(ctx, pricingpkg.OpenRouterModelsMetaKey)
-	if err != nil {
-		return err
-	}
 	plan, err := db.PlanModelPricingSync(existing, existingOpenRouter, prices, localOpenRouter)
 	if err != nil {
 		return fmt.Errorf("planning clickhouse pricing sync: %w", err)
@@ -52,7 +48,7 @@ func (s *Sync) syncModelPricing(ctx context.Context) error {
 	if err := s.replaceModelPricing(ctx, plan.Changed); err != nil {
 		return err
 	}
-	if plan.WriteOpenRouterModels {
+	if plan.OpenRouterModels != "" {
 		if err := insertRows(ctx, s.conn, "pricing_meta", [][]any{{
 			pricingpkg.OpenRouterModelsMetaKey, plan.OpenRouterModels, newPushVersion(),
 		}}); err != nil {

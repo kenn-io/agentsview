@@ -806,7 +806,7 @@ func upsertPGGenAIPricing(
 }
 
 func (s *Sync) syncModelPricing(ctx context.Context) error {
-	prices, err := s.local.ListModelPricing(ctx)
+	prices, localOpenRouter, err := s.local.ListModelPricingWithOpenRouter(ctx)
 	if err != nil {
 		return fmt.Errorf("listing local model pricing: %w", err)
 	}
@@ -841,10 +841,6 @@ func (s *Sync) syncModelPricing(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	localOpenRouter, err := s.local.GetPricingMetaContext(ctx, pricing.OpenRouterModelsMetaKey)
-	if err != nil {
-		return err
-	}
 	plan, err := db.PlanModelPricingSync(
 		existing, existingOpenRouter, prices, localOpenRouter,
 	)
@@ -857,7 +853,7 @@ func (s *Sync) syncModelPricing(ctx context.Context) error {
 	}
 	genAIChanged := !existingGenAI.Matches(localGenAI)
 	if len(plan.Changed) == 0 && len(plan.Remove) == 0 &&
-		!plan.WriteOpenRouterModels && !genAIChanged {
+		plan.OpenRouterModels == "" && !genAIChanged {
 		return nil
 	}
 	if err := reconcileModelPricing(
@@ -865,7 +861,7 @@ func (s *Sync) syncModelPricing(ctx context.Context) error {
 	); err != nil {
 		return fmt.Errorf("syncing model pricing to pg: %w", err)
 	}
-	if plan.WriteOpenRouterModels {
+	if plan.OpenRouterModels != "" {
 		if _, err := tx.ExecContext(ctx, `
 			INSERT INTO pricing_meta (key, value) VALUES ($1, $2)
 			ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value`,

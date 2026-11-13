@@ -58,6 +58,15 @@ CREATE TABLE IF NOT EXISTS session_plan_usage (
 );
 `
 
+// pricingMetaDDL holds pricing bookkeeping that is not a price, such as
+// the OpenRouter ownership list.
+const pricingMetaDDL = `
+CREATE TABLE IF NOT EXISTS pricing_meta (
+    key   TEXT PRIMARY KEY,
+    value TEXT NOT NULL
+);
+`
+
 const commitLinksDDL = `
 CREATE TABLE IF NOT EXISTS commit_links (
     session_id TEXT NOT NULL, sha TEXT NOT NULL,
@@ -364,11 +373,7 @@ CREATE TABLE IF NOT EXISTS genai_pricing (
     updated_at TIMESTAMPTZ
 );
 
-CREATE TABLE IF NOT EXISTS pricing_meta (
-    key   TEXT PRIMARY KEY,
-    value TEXT NOT NULL
-);
-
+` + pricingMetaDDL + `
 CREATE TABLE IF NOT EXISTS source_archives (
     source_archive_id   TEXT PRIMARY KEY,
     source_archive_salt TEXT NOT NULL
@@ -702,29 +707,31 @@ CREATE TABLE IF NOT EXISTS friction_filing_state (
 // movePricingMetaPG moves pricing metadata out of model_pricing. Older
 // pushes kept the OpenRouter ownership list as a model_pricing row whose
 // pattern starts with "_", with the list in updated_at. A key already in
-// pricing_meta was written by a newer push, so it wins.
-func movePricingMetaPG(ctx context.Context, conn *sql.DB) error {
-	tx, err := conn.BeginTx(ctx, nil)
-	if err != nil {
-		return fmt.Errorf("beginning pg pricing_meta migration: %w", err)
-	}
-	defer func() { _ = tx.Rollback() }()
-	if _, err := tx.ExecContext(ctx, `
+// pricing_meta was written by a newer push, so it wins. One statement
+// deletes and copies the rows, so a reader never sees both layouts or
+// neither, inside or outside a caller's transaction.
+func movePricingMetaPG(ctx context.Context, conn storeExecutor) error {
+	if _, err := conn.ExecContext(ctx, `
+		WITH moved AS (
+			DELETE FROM model_pricing
+			WHERE model_pattern LIKE '\_%' ESCAPE '\'
+			RETURNING model_pattern, updated_at
+		)
 		INSERT INTO pricing_meta (key, value)
-		SELECT model_pattern, updated_at FROM model_pricing
-		WHERE model_pattern LIKE '\_%' ESCAPE '\'
+		SELECT model_pattern, updated_at FROM moved
 		ON CONFLICT (key) DO NOTHING`); err != nil {
-		return fmt.Errorf("copying pg pricing metadata to pricing_meta: %w", err)
-	}
-	if _, err := tx.ExecContext(ctx, `
-		DELETE FROM model_pricing
-		WHERE model_pattern LIKE '\_%' ESCAPE '\'`); err != nil {
-		return fmt.Errorf("deleting pg pricing metadata from model_pricing: %w", err)
-	}
-	if err := tx.Commit(); err != nil {
-		return fmt.Errorf("committing pg pricing_meta migration: %w", err)
+		return fmt.Errorf("moving pg pricing metadata to pricing_meta: %w", err)
 	}
 	return nil
+}
+
+// migratePricingLayoutPG moves pricing metadata into pricing_meta and
+// then types the pricing times, which the metadata kept as text.
+func migratePricingLayoutPG(ctx context.Context, conn storeExecutor) error {
+	if err := movePricingMetaPG(ctx, conn); err != nil {
+		return err
+	}
+	return typePricingTimesPG(ctx, conn)
 }
 
 // pricingTimeTables are the pricing tables whose updated_at older stores
@@ -740,7 +747,7 @@ var pricingTimeTables = []string{
 // transaction and behind an experimental setting, so each table copies the
 // times into a new column instead. Every step can be repeated, so a run
 // that stops partway finishes on the next start.
-func typePricingTimesPG(ctx context.Context, conn *sql.DB) error {
+func typePricingTimesPG(ctx context.Context, conn storeExecutor) error {
 	types, err := pricingTimeColumnTypesPG(ctx, conn)
 	if err != nil {
 		return err
@@ -773,7 +780,7 @@ func typePricingTimesPG(ctx context.Context, conn *sql.DB) error {
 // updated_at columns, and of the column typePricingTimesPG copies them
 // into, by table and column.
 func pricingTimeColumnTypesPG(
-	ctx context.Context, conn *sql.DB,
+	ctx context.Context, conn hostedQuerier,
 ) (map[string]map[string]string, error) {
 	rows, err := conn.QueryContext(ctx, `
 		SELECT table_name, column_name, data_type
@@ -1141,10 +1148,7 @@ func EnsureSchema(
 	if err := migrateAccountUsageCountersPG(ctx, db); err != nil {
 		return err
 	}
-	if err := movePricingMetaPG(ctx, db); err != nil {
-		return err
-	}
-	if err := typePricingTimesPG(ctx, db); err != nil {
+	if err := migratePricingLayoutPG(ctx, db); err != nil {
 		return err
 	}
 	step = time.Now()

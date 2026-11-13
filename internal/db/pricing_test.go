@@ -421,7 +421,6 @@ func TestPlanModelPricingSync(t *testing.T) {
 			assert.Equal(t, tt.wantChange, plan.Changed)
 			assert.Equal(t, tt.wantRemove, plan.Remove)
 			assert.Equal(t, tt.wantOpenRouter, plan.OpenRouterModels)
-			assert.Equal(t, tt.wantOpenRouter != "", plan.WriteOpenRouterModels)
 		})
 	}
 }

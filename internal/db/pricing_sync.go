@@ -15,10 +15,9 @@ type PricingSyncPlan struct {
 	// Remove holds the patterns to delete.
 	Remove []string
 	// OpenRouterModels is the OpenRouter ownership list to store on the
-	// target, as written by pricing.EncodeOpenRouterModels. It is set
-	// only when it differs from the target's list.
-	OpenRouterModels      string
-	WriteOpenRouterModels bool
+	// target, as written by pricing.EncodeOpenRouterModels. It is empty
+	// when the target's list already matches.
+	OpenRouterModels string
 }
 
 // PlanModelPricingSync compares a push target's pricing rows and
@@ -91,7 +90,6 @@ func PlanModelPricingSync(
 	}
 	if merged := pricing.EncodeOpenRouterModels(owned); merged != existingOpenRouter {
 		plan.OpenRouterModels = merged
-		plan.WriteOpenRouterModels = true
 	}
 	return plan, nil
 }
