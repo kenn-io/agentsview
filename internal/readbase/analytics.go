@@ -100,11 +100,9 @@ type AnalyticsSession struct {
 	NoCodeContextCount          int
 	RunawayToolLoopCount        int
 	PushVersion                 uint64 // ClickHouse cache version; zero for DuckDB.
-	PushFingerprint             string // DuckDB cache version; empty means uncached.
 	// FrustrationMarkers is the count push stored on the
 	// session; nil when the backend has none and must count them.
-	FrustrationMarkers        *int
-	FrustrationMarkersVersion int
+	FrustrationMarkers *int
 }
 
 func (s *Analytics) analyticsSessionsModelTimeFiltered(

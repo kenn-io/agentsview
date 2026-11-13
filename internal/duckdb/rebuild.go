@@ -267,14 +267,6 @@ func (r rebuildRun) resumableAs(current rebuildRun) bool {
 	return r == current
 }
 
-func discardIncompatibleRebuild(file string, run, current rebuildRun) error {
-	if run.FrustrationMarkersVersion > current.FrustrationMarkersVersion {
-		return errFutureFrustrationVersion
-	}
-	log.Printf("duckdbsync: discarding unfinished rebuild (%s) because the archive, scope, machine, or format changed since it began", run.Reason)
-	return removeRebuildFile(file)
-}
-
 // claimRebuild takes path's rebuild lock and returns the run of an unfinished
 // rebuild to continue, or nil to start fresh. The caller holds the lock until
 // the rebuild swaps in or fails, then unlocks it.
@@ -379,7 +371,8 @@ func pendingRebuild(ctx context.Context, path string, current rebuildRun) (*rebu
 		log.Printf("duckdbsync: discarding unfinished rebuild %s with no readable run record: %v", file, readErr)
 		return nil, removeRebuildFile(file)
 	case !run.resumableAs(current):
-		return nil, discardIncompatibleRebuild(file, run, current)
+		log.Printf("duckdbsync: discarding unfinished rebuild (%s) because the archive, scope, machine, or format changed since it began", run.Reason)
+		return nil, removeRebuildFile(file)
 	}
 	return &run, nil
 }

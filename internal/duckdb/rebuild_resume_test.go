@@ -7,7 +7,6 @@ import (
 	"database/sql"
 	"encoding/json/v2"
 	"fmt"
-	"os"
 	"path/filepath"
 	"strconv"
 	"testing"
@@ -321,56 +320,4 @@ func TestErroredRebuildDroppedWhenMirrorNeedsNoRebuild(t *testing.T) {
 	assert.Empty(t, res.Diagnostics.RebuildReason)
 	assert.Equal(t, 1, res.Errors)
 	assert.NoFileExists(t, rebuildFilePath(path))
-}
-
-func TestPushPreservesNewerInterruptedRebuild(t *testing.T) {
-	for _, tc := range []struct {
-		name string
-		full bool
-	}{
-		{name: "normal"},
-		{name: "full", full: true},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			ctx := t.Context()
-			local := newLocalDB(t)
-			seedResumeSessions(t, local)
-			path := filepath.Join(t.TempDir(), "mirror.duckdb")
-			_, err := Push(ctx, path, local, "test-machine", storage.MirrorPushOptions{}, false, nil)
-			require.NoError(t, err)
-			killCtx, kill := context.WithCancel(ctx)
-			_, err = Push(killCtx, path, local, "test-machine", storage.MirrorPushOptions{}, true, func(p storage.MirrorPushProgress) {
-				if p.SessionsDone == duckSessionPushBatchSize {
-					kill()
-				}
-			})
-			kill()
-			require.ErrorIs(t, err, context.Canceled)
-			published, err := os.ReadFile(path)
-			require.NoError(t, err)
-			file := rebuildFilePath(path)
-			conn, err := Open(ctx, file)
-			require.NoError(t, err)
-			runJSON, err := readMetadataKey(ctx, conn, rebuildRunMetadataKey)
-			require.NoError(t, err)
-			var run rebuildRun
-			require.NoError(t, json.Unmarshal([]byte(runJSON), &run))
-			run.FrustrationMarkersVersion = frustrationMarkersVersion + 1
-			encoded, err := json.Marshal(run)
-			require.NoError(t, err)
-			require.NoError(t, recordMetadataKey(ctx, conn, rebuildRunMetadataKey, string(encoded)))
-			require.NoError(t, conn.Close())
-			before, err := os.ReadFile(file)
-			require.NoError(t, err)
-
-			_, err = Push(ctx, path, local, "test-machine", storage.MirrorPushOptions{}, tc.full, nil)
-			require.ErrorIs(t, err, errFutureFrustrationVersion)
-			publishedAfter, err := os.ReadFile(path)
-			require.NoError(t, err)
-			assert.Equal(t, published, publishedAfter)
-			after, err := os.ReadFile(file)
-			require.NoError(t, err, "the interrupted rebuild must survive")
-			assert.Equal(t, before, after)
-		})
-	}
 }

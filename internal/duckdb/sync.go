@@ -170,9 +170,6 @@ func Push(
 			path, probe.ShapeIssue,
 		)
 	}
-	if probe.FrustrationMarkersVersion > frustrationMarkersVersion {
-		return storage.MirrorPushResult{}, errFutureFrustrationVersion
-	}
 	localDeletionRevision, err := local.SessionDeletionPublicationRevision(ctx)
 	if err != nil {
 		return storage.MirrorPushResult{}, err

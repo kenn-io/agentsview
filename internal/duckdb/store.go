@@ -62,8 +62,6 @@ type Store struct {
 	// gone.
 	retiring sync.WaitGroup
 
-	// frustrationMemo reuses local mirror counts by transcript fingerprint.
-	frustrationMemo db.FrustrationMarkerMemo
 	// activityRuns keeps sessions' activity runs by push fingerprint.
 	activityRuns activityRunsMemo
 

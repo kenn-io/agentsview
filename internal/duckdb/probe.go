@@ -136,17 +136,6 @@ func probeOpenMirror(ctx context.Context, conn *sql.DB) MirrorProbe {
 	probe.RecognizedMirror = recognized
 	if shapeIssue := mirrorShapeIssueFromColumns(existing); shapeIssue != "" {
 		probe.ShapeIssue = shapeIssue
-		if recognized {
-			value, err := readMetadataKey(ctx, conn, frustrationMarkersVersionMetadataKey)
-			if err != nil {
-				probe.ShapeIssue, probe.LockConflict = classifyProbeError(err)
-				return probe
-			}
-			probe.FrustrationMarkersVersion, err = parseMirrorMetadataInt(frustrationMarkersVersionMetadataKey, value)
-			if err != nil {
-				probe.ShapeIssue = err.Error()
-			}
-		}
 		return probe
 	}
 

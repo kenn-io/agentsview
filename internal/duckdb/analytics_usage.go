@@ -3,7 +3,6 @@ package duckdb
 import (
 	"context"
 	"database/sql"
-	"errors"
 	"fmt"
 	"slices"
 	"sort"
@@ -17,11 +16,8 @@ import (
 	"go.kenn.io/agentsview/internal/money"
 	pricingpkg "go.kenn.io/agentsview/internal/pricing"
 	"go.kenn.io/agentsview/internal/readbase"
-	"go.kenn.io/agentsview/internal/signals"
 	"go.kenn.io/agentsview/internal/usagefacts"
 )
-
-var errFutureFrustrationVersion = errors.New("duckdb mirror has frustration marker rules newer than supported; update AgentsView")
 
 // loadAnalyticsSessions leaves paired model/time filtering to the shared base.
 func (s *Store) loadAnalyticsSessions(
@@ -37,16 +33,15 @@ func (s *Store) loadAnalyticsSessions(
 		args = append(args, extraArgs...)
 	}
 	rows, err := s.queryContext(ctx, `
-		SELECT `+readbase.AnalyticsSessionColumns+`, COALESCE(s.agentsview_push_fingerprint, ''), s.frustration_marker_count,
-			COALESCE((SELECT CAST(value AS INTEGER) FROM sync_metadata WHERE key = ?), 0)
+		SELECT `+readbase.AnalyticsSessionColumns+`, s.frustration_marker_count
 		FROM sessions s
-		WHERE `+where, append([]any{frustrationMarkersVersionMetadataKey}, args...)...)
+		WHERE `+where, args...)
 	if err != nil {
 		return nil, fmt.Errorf("querying duckdb analytics sessions: %w", err)
 	}
 	defer rows.Close()
 
-	return readbase.ScanAnalyticsSessions(rows, "duckdb", formatDBTime, readbase.AnalyticsSessionExtras{PushFingerprint: true, FrustrationMarkers: true, FrustrationMarkersVersion: true})
+	return readbase.ScanAnalyticsSessions(rows, "duckdb", formatDBTime, readbase.AnalyticsSessionExtras{FrustrationMarkers: true})
 }
 
 func duckBuildAnalyticsWhere(f db.AnalyticsFilter, dateCol, tablePrefix string, includeDate, includeTime bool) (string, []any) {
@@ -213,74 +208,6 @@ func (s analyticsSQL) VelocityToolCounts(ctx context.Context, ids []string, _ db
 	}
 	defer rows.Close()
 	return readbase.ScanAnalyticsVelocityToolCounts(rows, "duckdb", out)
-}
-
-// Mirror replacements preserve the memo generation; fingerprints version entries.
-const frustrationMemoGeneration uint64 = 0
-
-func (s *Store) duckPopulateFrustrationMarkers(
-	ctx context.Context,
-	rows []db.SignalRow,
-	sessions []readbase.AnalyticsSession,
-) error {
-	if len(rows) == 0 {
-		return nil
-	}
-	// Use the version read with the counts even if the watcher replaced the mirror.
-	markerVersion := sessions[0].FrustrationMarkersVersion
-	if markerVersion > frustrationMarkersVersion {
-		return errFutureFrustrationVersion
-	}
-	cache := s.path != ""
-	idx := make(map[string]int, len(rows))
-	ids := make([]string, 0, len(rows))
-	for i := range rows {
-		if markerVersion == frustrationMarkersVersion {
-			rows[i].FrustrationMarkerCount = *sessions[i].FrustrationMarkers
-			continue
-		}
-		if version := sessions[i].PushFingerprint; cache && version != "" {
-			if count, ok := s.frustrationMemo.Lookup(frustrationMemoGeneration, rows[i].ID, version); ok {
-				rows[i].FrustrationMarkerCount = count
-				continue
-			}
-		}
-		idx[rows[i].ID] = i
-		ids = append(ids, rows[i].ID)
-	}
-	if len(ids) == 0 {
-		return nil
-	}
-	msgRows, err := s.queryContext(ctx, duckFrustrationPromptsSQL, duckFrustrationPromptsArgs(ids)...)
-	if err != nil {
-		return fmt.Errorf("querying duckdb frustration markers: %w", err)
-	}
-	defer msgRows.Close()
-	for msgRows.Next() {
-		var sessionID, content string
-		var decided bool
-		if err := msgRows.Scan(&sessionID, &decided, &content); err != nil {
-			return fmt.Errorf("scanning duckdb frustration marker: %w", err)
-		}
-		i, ok := idx[sessionID]
-		if !ok {
-			continue
-		}
-		if decided || signals.IsFrustrationMarker(content) {
-			rows[i].FrustrationMarkerCount++
-		}
-	}
-	if err := msgRows.Err(); err != nil {
-		return fmt.Errorf("iterating duckdb frustration markers: %w", err)
-	}
-	if cache {
-		for id, i := range idx {
-			if version := sessions[i].PushFingerprint; version != "" {
-				s.frustrationMemo.Store(frustrationMemoGeneration, id, version, rows[i].FrustrationMarkerCount)
-			}
-		}
-	}
-	return nil
 }
 
 func (s *Store) loadPricing(ctx context.Context) (map[string]export.ModelRates, error) {
