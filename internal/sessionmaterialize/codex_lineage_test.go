@@ -186,7 +186,7 @@ func TestCodexLineageCompanionAuthority(t *testing.T) {
 				}
 				return []byte("corrupt alternative"), nil
 			}, func(context.Context, string, string) ([]string, error) {
-				t.Error("resolver called for an available rollout")
+				assert.Fail(t, "resolver called for an available rollout")
 				return nil, nil
 			})
 			if tc.failure != "" {
