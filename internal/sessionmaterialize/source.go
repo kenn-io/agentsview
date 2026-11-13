@@ -519,24 +519,19 @@ func hasDirectoryOwner(owners []db.ArchiveSessionProvenance) bool {
 	})
 }
 
-func readRetainedSource(ctx context.Context, cfg config.Config, database *db.DB, session *db.Session, owners []db.ArchiveSessionProvenance, native string) (_ []sourceFile, source string, retErr error) {
+func readRetainedSource(ctx context.Context, cfg config.Config, database *db.DB, session *db.Session, owners []db.ArchiveSessionProvenance, native string) ([]sourceFile, string, error) {
 	stored, _ := storedSource(session, "")
 	tree, primary, source, err := archivesource.Retained(ctx, cfg, database, session.ID, session.Machine, native, "claude", stored, owners, maxSourceBytes, nil)
 	if err != nil {
 		return nil, "", err
 	}
-	defer func() {
-		if cleanupErr := tree.Cleanup(); cleanupErr != nil {
-			retErr = errors.Join(retErr, cleanupErr)
-		}
-	}()
 	name, err := tree.EntryPath(primary)
 	if err != nil {
-		return nil, "", err
+		return nil, "", errors.Join(err, tree.Cleanup())
 	}
 	files, err := readLocalSource(ctx, tree.Root(), name, native, maxSourceBytes)
 	if err != nil {
-		return nil, source, err
+		return nil, source, errors.Join(err, tree.Cleanup())
 	}
-	return files, source, nil
+	return files, source, errors.Join(nil, tree.Cleanup())
 }

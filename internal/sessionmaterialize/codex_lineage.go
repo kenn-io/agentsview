@@ -179,7 +179,6 @@ func codexLineage(ctx context.Context, thread string, names, ancestors []string,
 		selected, err := codexChoose(ctx, rollout, pages, byRollout, ancestry, resolve)
 		if err != nil {
 			return nil, err
-
 		}
 		name := selected.name
 		data, err := read(ctx, name, maxSourceBytes-total)
