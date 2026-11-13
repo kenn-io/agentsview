@@ -32,6 +32,10 @@ func keptActivityMirror(t *testing.T, path, session string, output int) {
 	require.NoError(t, err)
 	_, err = conn.ExecContext(t.Context(), `UPDATE sessions SET ended_at = TIMESTAMP '2026-01-01 00:01:00', message_count = 2`)
 	require.NoError(t, err)
+	// These edits keep the push fingerprints a push would change, so the
+	// usage rollup built for the old rows would still count as current.
+	_, err = conn.ExecContext(t.Context(), `DELETE FROM sync_metadata WHERE key = ?`, usageRollupMetadataKey)
+	require.NoError(t, err)
 	require.NoError(t, conn.Close())
 }
 

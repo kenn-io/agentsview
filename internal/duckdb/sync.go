@@ -424,7 +424,15 @@ func (s *Sync) runIncrementalPush(
 		)
 	}
 
-	if len(pushed) > 0 || result.Diagnostics.DeletedStaleSessions > 0 {
+	rollupRebuilt := false
+	if result.Errors == 0 {
+		rollupRebuilt, err = s.refreshUsageRollup(ctx)
+		if err != nil {
+			return result, err
+		}
+	}
+
+	if len(pushed) > 0 || result.Diagnostics.DeletedStaleSessions > 0 || rollupRebuilt {
 		if err := s.checkpointAfterMutatingPush(ctx); err != nil {
 			return result, err
 		}

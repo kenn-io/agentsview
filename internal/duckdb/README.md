@@ -70,3 +70,41 @@ make e2e-duckdb
 
 Push stores frustration marker counts for each session. A change to the marker
 algorithm rebuilds the mirror on the next push.
+
+## Usage rollup
+
+Usage summary, Top sessions, and usage session counts read a rollup that a push
+builds, so a read after a push does not rank and price every usage row again.
+Per-session usage and Activity reports read the live tables.
+
+Usage summary and Top sessions keep their per-session results in the on-disk
+usage cache. The rollup fills that cache when it is empty; a later read
+recomputes only the sessions whose push fingerprint changed, from the live
+tables.
+
+The rollup holds priced usage summed by session, 15-minute UTC bucket, model,
+and provider, the pricing provenance of those rows, raw copies of the rows it
+could not sum, and the fingerprint of every session it covers. Reads sum the
+buckets into local days for the requested zone.
+
+A push rebuilds the whole rollup when the mirror has none, when its format or
+the mirror's pricing changed, or when the usage rows of sessions changed since
+the build reach 1/50 of the rows it covers. Between rebuilds, reads take new and
+changed sessions from the live tables and skip the rollup rows of deleted ones.
+
+A dedup group is summed only when no window, filter, or later row can change
+which of its rows wins:
+
+- all its rows belong to one session and one bucket;
+- a non-Claude group has one model, because model filters apply before its
+  ranking;
+- no row carries a Copilot-reported session cost; and
+- no Cursor account row shares its identity.
+
+Other groups keep their rows, which reads rank with the live rows. A read also
+sends live the (session, bucket) units whose summed groups now share an identity
+with a changed session's row or a Cursor account row.
+
+A read uses the live path when the rollup's pricing differs from its own (for
+example, custom pricing), or when the zone's offset over the read's range is not
+a multiple of 15 minutes or changes off a 15-minute UTC boundary.

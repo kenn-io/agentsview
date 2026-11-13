@@ -655,6 +655,13 @@ func buildMirrorInto(
 	if err != nil {
 		return result, err
 	}
+	rollupStart := time.Now()
+	meta, err := s.buildUsageRollup(ctx)
+	if err != nil {
+		return result, err
+	}
+	log.Printf("duckdbsync: built usage rollup over %d usage rows in %s",
+		meta.SourceRows, time.Since(rollupStart).Round(time.Millisecond))
 	scope := db.CanonicalPushScope(opts.Projects, opts.ExcludeProjects)
 	if err := s.writeRebuildMetadata(
 		ctx, scope, snapshot, identityRevision, mappingRevision,

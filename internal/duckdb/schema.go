@@ -34,7 +34,8 @@ import (
 // v26 adds session_usage_totals, the usage totals agents record for whole
 // sessions.
 // v27 stores frustration marker counts at push time.
-const SchemaVersion = 27
+// v28 adds the usage rollup tables (see usage_rollup.go).
+const SchemaVersion = 28
 
 const schemaVersionMetadataKey = "agentsview_schema_version"
 
@@ -100,7 +101,7 @@ type columnSpec struct {
 	def  string
 }
 
-var mirrorTables = []tableSpec{
+var mirrorTables = append([]tableSpec{
 	{
 		name: "commit_links",
 		create: `CREATE TABLE IF NOT EXISTS commit_links (
@@ -917,7 +918,7 @@ var mirrorTables = []tableSpec{
 			"CREATE INDEX IF NOT EXISTS idx_pinned_created ON pinned_messages(created_at)",
 		},
 	},
-}
+}, usageRollupTables...)
 
 // EnsureSchema creates the DuckDB mirror schema. It has no production
 // callers: Sync.Push always goes through ProbeMirror to pick buildMirror
