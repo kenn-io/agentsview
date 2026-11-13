@@ -88,7 +88,7 @@ func Materialize(ctx context.Context, cfg config.Config, database *db.DB, sessio
 			snapshotErr := err
 			files, source, err = readRetainedSource(ctx, cfg, database, session, owners, id)
 			if err != nil {
-				err = errors.Join(snapshotErr, err)
+				return Result{}, fmt.Errorf("reading native transcript: %w", errors.Join(snapshotErr, err))
 			}
 		}
 	} else if source, err = storedSource(session, host); err != nil {
@@ -519,19 +519,17 @@ func hasDirectoryOwner(owners []db.ArchiveSessionProvenance) bool {
 	})
 }
 
-func readRetainedSource(ctx context.Context, cfg config.Config, database *db.DB, session *db.Session, owners []db.ArchiveSessionProvenance, native string) ([]sourceFile, string, error) {
+func readRetainedSource(ctx context.Context, cfg config.Config, database *db.DB, session *db.Session, owners []db.ArchiveSessionProvenance, native string) (_ []sourceFile, source string, retErr error) {
 	stored, _ := storedSource(session, "")
 	tree, primary, source, err := archivesource.Retained(ctx, cfg, database, session.ID, session.Machine, native, "claude", stored, owners, maxSourceBytes, nil)
 	if err != nil {
 		return nil, "", err
 	}
+	defer func() { retErr = errors.Join(retErr, tree.Cleanup()) }()
 	name, err := tree.EntryPath(primary)
 	if err != nil {
-		return nil, "", errors.Join(err, tree.Cleanup())
+		return nil, "", err
 	}
 	files, err := readLocalSource(ctx, tree.Root(), name, native, maxSourceBytes)
-	if err != nil {
-		return nil, source, errors.Join(err, tree.Cleanup())
-	}
-	return files, source, errors.Join(nil, tree.Cleanup())
+	return files, source, err
 }
