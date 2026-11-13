@@ -2,7 +2,6 @@ package db
 
 import (
 	"context"
-	"database/sql"
 	"errors"
 	"fmt"
 	"log"
@@ -4338,8 +4337,6 @@ func (db *DB) signalRows(
 	return all, nil
 }
 
-var errNewerFrustrationMarkerVersion = errors.New("stored frustration marker version is newer than this binary")
-
 func (db *DB) populateFrustrationMarkers(
 	ctx context.Context,
 	rows []SignalRow,
@@ -4359,38 +4356,33 @@ func (db *DB) populateFrustrationMarkers(
 		idx[rows[i].ID] = i
 		ids = append(ids, rows[i].ID)
 	}
-	// A read-only archive may predate this table. Scan its prompts if it is
-	// missing. Remove this fallback if read-only open starts requiring the table.
-	err := queryChunked(ids, func(chunk []string) error {
-		ph, args := InPlaceholders(chunk)
-		stored, err := db.getReader().QueryContext(ctx, `SELECT session_id, transcript_key, marker_version, count
-			FROM session_frustration_markers WHERE session_id IN `+ph, args...)
-		if err != nil {
-			return err
-		}
-		defer stored.Close()
-		for stored.Next() {
-			var id, key string
-			var version, count int
-			if err := stored.Scan(&id, &key, &version, &count); err != nil {
+	if !db.readOnly {
+		err := queryChunked(ids, func(chunk []string) error {
+			ph, args := InPlaceholders(chunk)
+			args = append([]any{signals.FrustrationMarkerVersion}, args...)
+			stored, err := db.getReader().QueryContext(ctx, `SELECT session_id, transcript_key, count
+				FROM session_frustration_markers WHERE marker_version = ? AND session_id IN `+ph, args...)
+			if err != nil {
 				return err
 			}
-			if version > signals.FrustrationMarkerVersion {
-				return fmt.Errorf("%w: session %s has version %d, supported version is %d", errNewerFrustrationMarkerVersion, id, version, signals.FrustrationMarkerVersion)
+			defer stored.Close()
+			for stored.Next() {
+				var id, key string
+				var count int
+				if err := stored.Scan(&id, &key, &count); err != nil {
+					return err
+				}
+				if i, ok := idx[id]; ok && rows[i].transcriptVersion == key {
+					rows[i].FrustrationMarkerCount = count
+					m.Store(generation, id, key, count)
+					delete(idx, id)
+				}
 			}
-			if i, ok := idx[id]; ok && version == signals.FrustrationMarkerVersion && rows[i].transcriptVersion == key {
-				rows[i].FrustrationMarkerCount = count
-				m.Store(generation, id, key, count)
-				delete(idx, id)
-			}
+			return stored.Err()
+		})
+		if err != nil {
+			return fmt.Errorf("reading frustration markers: %w", err)
 		}
-		return stored.Err()
-	})
-	if err != nil && ctx.Err() != nil {
-		return ctx.Err()
-	}
-	if err != nil && !(db.readOnly && strings.Contains(err.Error(), "no such table: session_frustration_markers")) {
-		return fmt.Errorf("reading frustration markers: %w", err)
 	}
 	pending := ids[:0]
 	for _, id := range ids {
@@ -4399,7 +4391,7 @@ func (db *DB) populateFrustrationMarkers(
 		}
 	}
 	ids = pending
-	err = queryChunked(ids, func(chunk []string) error {
+	err := queryChunked(ids, func(chunk []string) error {
 		ph, args := InPlaceholders(chunk)
 		q := `SELECT session_id, content
 			FROM messages
@@ -4440,18 +4432,14 @@ func (db *DB) populateFrustrationMarkers(
 	if err := ctx.Err(); err != nil {
 		return err
 	}
-	if len(ids) > 0 && !db.readOnly {
-		if err := db.storeFrustrationMarkers(ctx, generation, ids, idx, rows); err != nil {
-			if errors.Is(err, errNewerFrustrationMarkerVersion) {
-				return err
-			}
-			log.Printf("storing frustration markers: %v", err)
-			return nil
-		}
-	}
 	for _, id := range ids {
 		r := rows[idx[id]]
 		m.Store(generation, id, r.transcriptVersion, r.FrustrationMarkerCount)
+	}
+	if len(ids) > 0 && !db.readOnly {
+		if err := db.storeFrustrationMarkers(ctx, generation, ids, idx, rows); err != nil {
+			log.Printf("storing frustration markers: %v", err)
+		}
 	}
 	return nil
 }
@@ -4469,7 +4457,7 @@ func (db *DB) storeFrustrationMarkers(ctx context.Context, generation uint64, id
 	defer tx.Rollback()
 	for _, id := range ids {
 		r := rows[idx[id]]
-		result, err := tx.ExecContext(ctx, `INSERT INTO session_frustration_markers
+		_, err := tx.ExecContext(ctx, `INSERT INTO session_frustration_markers
 			(session_id, transcript_key, marker_version, count)
 			SELECT id, ?, ?, ? FROM sessions
 			WHERE id = ? AND transcript_revision || '|' || created_at = ?
@@ -4481,21 +4469,6 @@ func (db *DB) storeFrustrationMarkers(ctx context.Context, generation uint64, id
 			r.transcriptVersion, signals.FrustrationMarkerVersion, r.FrustrationMarkerCount, id, r.transcriptVersion)
 		if err != nil {
 			return err
-		}
-		affected, err := result.RowsAffected()
-		if err != nil {
-			return err
-		}
-		if affected == 0 {
-			var version int
-			err := tx.QueryRowContext(ctx, `SELECT marker_version FROM session_frustration_markers
-				WHERE session_id = ? AND marker_version > ?`, id, signals.FrustrationMarkerVersion).Scan(&version)
-			if err == nil {
-				return fmt.Errorf("%w: session %s has version %d, supported version is %d", errNewerFrustrationMarkerVersion, id, version, signals.FrustrationMarkerVersion)
-			}
-			if !errors.Is(err, sql.ErrNoRows) {
-				return err
-			}
 		}
 	}
 	return tx.Commit()

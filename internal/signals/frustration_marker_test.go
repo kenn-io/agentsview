@@ -79,14 +79,23 @@ func TestIsFrustrationMarkerMatchesReference(t *testing.T) {
 		prompts = append(prompts, randomFrustrationPrompt(r))
 	}
 	markers := 0
+	h := sha256.New()
 	for _, prompt := range prompts {
 		want := referenceIsFrustrationMarker(prompt)
-		require.Equal(t, want, IsFrustrationMarker(prompt), "%q", prompt)
+		got := IsFrustrationMarker(prompt)
+		require.Equal(t, want, got, "%q", prompt)
 		require.Equal(t, referenceNormalizePrompt(prompt), normalizePrompt(prompt), "%q", prompt)
-		if want {
+		if got {
 			markers++
+			h.Write([]byte{1})
+		} else {
+			h.Write([]byte{0})
 		}
 	}
+	digests := map[int]string{1: "72e77932fbe773cd99daf4191c0fa9f6d30a3eddf05864f3b1a4a60ad99798e2"}
+	wantDigest, ok := digests[FrustrationMarkerVersion]
+	require.True(t, ok, "record the matcher digest for the new version")
+	assert.Equal(t, wantDigest, fmt.Sprintf("%x", h.Sum(nil)), "matcher results changed; bump the version and record the new digest")
 	// Both answers must be common, or agreement would prove little.
 	assert.Greater(t, markers, len(prompts)/10)
 	assert.Less(t, markers, len(prompts)*9/10)
@@ -115,27 +124,4 @@ func FuzzIsFrustrationMarkerMatchesReference(f *testing.F) {
 		require.Equal(t, referenceIsFrustrationMarker(prompt), IsFrustrationMarker(prompt), "%q", prompt)
 		require.Equal(t, referenceNormalizePrompt(prompt), normalizePrompt(prompt), "%q", prompt)
 	})
-}
-
-// The digest records the matcher results for this fixed corpus at each stored
-// count version. When results change, bump FrustrationMarkerVersion and record
-// the new digest; the old entry documents the previous contract.
-func TestFrustrationMarkerVersionContract(t *testing.T) {
-	digests := map[int]string{1: "72e77932fbe773cd99daf4191c0fa9f6d30a3eddf05864f3b1a4a60ad99798e2"}
-	h := sha256.New()
-	prompts := append([]string(nil), frustrationEdgePrompts...)
-	r := rand.New(rand.NewPCG(7, 11))
-	for range 200_000 {
-		prompts = append(prompts, randomFrustrationPrompt(r))
-	}
-	for _, prompt := range prompts {
-		if IsFrustrationMarker(prompt) {
-			h.Write([]byte{1})
-		} else {
-			h.Write([]byte{0})
-		}
-	}
-	want, ok := digests[FrustrationMarkerVersion]
-	require.True(t, ok, "record the matcher digest for the new version")
-	assert.Equal(t, want, fmt.Sprintf("%x", h.Sum(nil)), "matcher results changed; bump the version and record the new digest")
 }

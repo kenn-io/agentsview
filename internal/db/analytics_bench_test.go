@@ -32,8 +32,8 @@ func BenchmarkGetAnalyticsToolsYearRange(b *testing.B) {
 	}
 }
 
-// Cold dashboard iterations repeat the prompt scan paid by every request before
-// memoization. The two axes vary session count and total user-message bytes.
+// The axes vary session count and total user-message bytes. Cold iterations
+// build stored counts, restart iterations reuse them, and repeats use the kept report.
 func BenchmarkSignalsFrustration(b *testing.B) {
 	for _, size := range []struct {
 		name     string
@@ -63,25 +63,26 @@ func BenchmarkSignalsFrustration(b *testing.B) {
 				require.NoError(b, err)
 				require.Empty(b, result.Errors)
 			}
-			for _, mode := range []string{"cold", "warm", "tool_retries"} {
+			for _, mode := range []string{"cold", "restart", "repeat"} {
 				b.Run(mode, func(b *testing.B) {
 					_, err := d.GetAnalyticsSignals(ctx, AnalyticsFilter{})
 					require.NoError(b, err)
 					b.ReportAllocs()
 					b.ResetTimer()
 					for b.Loop() {
-						if mode == "cold" || mode == "tool_retries" {
+						if mode != "repeat" {
+							b.StopTimer()
+							if mode == "cold" {
+								_, err := d.getWriter().ExecContext(ctx, `DELETE FROM session_frustration_markers`)
+								require.NoError(b, err)
+							}
 							d.frustrationMemo.Swap(func() {})
+							d.analyticsKept.Clear()
+							b.StartTimer()
 						}
-						if mode == "tool_retries" {
-							resp, err := d.GetAnalyticsSignalSessions(ctx, AnalyticsFilter{}, mode, 10)
-							require.NoError(b, err)
-							require.Len(b, resp.Sessions, 10)
-						} else {
-							resp, err := d.GetAnalyticsSignals(ctx, AnalyticsFilter{})
-							require.NoError(b, err)
-							require.Equal(b, size.sessions*10, resp.QualityHealth.Totals.FrustrationMarkerCount)
-						}
+						resp, err := d.GetAnalyticsSignals(ctx, AnalyticsFilter{})
+						require.NoError(b, err)
+						require.Equal(b, size.sessions*10, resp.QualityHealth.Totals.FrustrationMarkerCount)
 					}
 				})
 			}

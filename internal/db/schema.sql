@@ -1669,7 +1669,7 @@ CREATE TABLE IF NOT EXISTS session_signal_state (
 
 -- SQLite-only derived counts; these rows are never mirrored.
 CREATE TABLE IF NOT EXISTS session_frustration_markers (
-    session_id TEXT PRIMARY KEY,
+    session_id TEXT PRIMARY KEY REFERENCES sessions(id) ON DELETE CASCADE,
     transcript_key TEXT NOT NULL,
     marker_version INTEGER NOT NULL,
     count INTEGER NOT NULL

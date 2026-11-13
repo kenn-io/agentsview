@@ -3,7 +3,6 @@ package db
 import (
 	"context"
 	"database/sql"
-	"strconv"
 	"testing"
 
 	"github.com/mattn/go-sqlite3"
@@ -195,15 +194,17 @@ func TestSignalsFrustrationStoredAcrossRestart(t *testing.T) {
 	for _, id := range []string{"first", "second"} {
 		require.NoError(t, d.UpdateSessionSignals(ctx, id, SessionSignalUpdate{QualitySignals: QualitySignals{Version: CurrentQualitySignalVersion}}))
 	}
-	resp, err := d.analyticsSignals(ctx, AnalyticsFilter{})
+	resp, err := d.GetAnalyticsSignals(ctx, AnalyticsFilter{})
 	require.NoError(t, err)
 	assert.Equal(t, 3, resp.QualityHealth.Totals.FrustrationMarkerCount)
 	require.NoError(t, d.Reopen())
 	d.rawReader().SetMaxOpenConns(1)
 	conn, err := d.rawReader().Conn(ctx)
 	require.NoError(t, err)
+	var sqlite *sqlite3.SQLiteConn
 	require.NoError(t, conn.Raw(func(raw any) error {
-		raw.(*diagnosticReaderConn).RegisterAuthorizer(func(op int, table, column, _ string) int {
+		sqlite = raw.(*diagnosticReaderConn).SQLiteConn
+		sqlite.RegisterAuthorizer(func(op int, table, column, _ string) int {
 			if op == sqlite3.SQLITE_READ && table == "messages" && column == "content" {
 				return sqlite3.SQLITE_DENY
 			}
@@ -213,18 +214,15 @@ func TestSignalsFrustrationStoredAcrossRestart(t *testing.T) {
 	}))
 	require.NoError(t, conn.Close())
 	defer func() {
-		conn, err := d.rawReader().Conn(ctx)
-		require.NoError(t, err)
-		defer conn.Close()
-		require.NoError(t, conn.Raw(func(raw any) error { raw.(*diagnosticReaderConn).RegisterAuthorizer(nil); return nil }))
+		if sqlite != nil {
+			sqlite.RegisterAuthorizer(nil)
+		}
 	}()
-	resp, err = d.analyticsSignals(ctx, AnalyticsFilter{})
+	resp, err = d.GetAnalyticsSignals(ctx, AnalyticsFilter{})
 	require.NoError(t, err)
 	assert.Equal(t, 3, resp.QualityHealth.Totals.FrustrationMarkerCount)
-	conn, err = d.rawReader().Conn(ctx)
-	require.NoError(t, err)
-	require.NoError(t, conn.Raw(func(raw any) error { raw.(*diagnosticReaderConn).RegisterAuthorizer(nil); return nil }))
-	require.NoError(t, conn.Close())
+	sqlite.RegisterAuthorizer(nil)
+	sqlite = nil
 	require.NoError(t, d.Reopen())
 	evidence, err := d.GetAnalyticsSignalSessions(ctx, AnalyticsFilter{}, "frustration_marker_count", 10)
 	require.NoError(t, err)
@@ -245,6 +243,8 @@ func TestSignalsFrustrationStoredRefresh(t *testing.T) {
 	require.NoError(t, err)
 	var key string
 	require.NoError(t, d.getReader().QueryRowContext(ctx, `SELECT transcript_key FROM session_frustration_markers WHERE session_id = 'second'`).Scan(&key))
+	_, err = d.getWriter().ExecContext(ctx, `CREATE TRIGGER keep_second BEFORE UPDATE ON session_frustration_markers WHEN OLD.session_id = 'second' BEGIN SELECT RAISE(ABORT, 'unchanged session updated'); END`)
+	require.NoError(t, err)
 	require.NoError(t, d.Reopen())
 	require.NoError(t, d.InsertMessages(ctx, []Message{{SessionID: "first", Ordinal: 1, Role: "user", Content: "this is broken"}}))
 	require.NoError(t, d.UpdateSessionSignals(ctx, "first", SessionSignalUpdate{QualitySignals: QualitySignals{Version: CurrentQualitySignalVersion}}))
@@ -254,7 +254,20 @@ func TestSignalsFrustrationStoredRefresh(t *testing.T) {
 	var after string
 	require.NoError(t, d.getReader().QueryRowContext(ctx, `SELECT transcript_key FROM session_frustration_markers WHERE session_id = 'second'`).Scan(&after))
 	assert.Equal(t, key, after)
-	for _, update := range []string{`marker_version = 0`, `transcript_key = 'stale'`} {
+	var firstCount int
+	require.NoError(t, d.getReader().QueryRowContext(ctx, `SELECT count FROM session_frustration_markers WHERE session_id = 'first'`).Scan(&firstCount))
+	assert.Equal(t, 2, firstCount)
+	_, err = d.getWriter().ExecContext(ctx, `UPDATE session_frustration_markers SET marker_version = ?, count = 99 WHERE session_id = 'first'`, signals.FrustrationMarkerVersion+1)
+	require.NoError(t, err)
+	require.NoError(t, d.Reopen())
+	resp, err = d.analyticsSignals(ctx, AnalyticsFilter{})
+	require.NoError(t, err)
+	assert.Equal(t, 3, resp.QualityHealth.Totals.FrustrationMarkerCount)
+	var futureVersion, futureCount int
+	require.NoError(t, d.getReader().QueryRowContext(ctx, `SELECT marker_version, count FROM session_frustration_markers WHERE session_id = 'first'`).Scan(&futureVersion, &futureCount))
+	assert.Equal(t, signals.FrustrationMarkerVersion+1, futureVersion)
+	assert.Equal(t, 99, futureCount)
+	for _, update := range []string{`marker_version = 0`, `marker_version = 0, transcript_key = 'stale'`} {
 		_, err := d.getWriter().ExecContext(ctx, `UPDATE session_frustration_markers SET count = 99, `+update+` WHERE session_id = 'first'`)
 		require.NoError(t, err)
 		require.NoError(t, d.Reopen())
@@ -268,6 +281,14 @@ func TestSignalsFrustrationStoredRefresh(t *testing.T) {
 		assert.Equal(t, signals.FrustrationMarkerVersion, version)
 		assert.Equal(t, 2, count)
 	}
+	require.NoError(t, d.Reopen())
+	require.NoError(t, d.ReplaceSessionMessages(ctx, "first", []Message{{SessionID: "first", Role: "user", Content: "Explain the function"}}))
+	require.NoError(t, d.UpdateSessionSignals(ctx, "first", SessionSignalUpdate{QualitySignals: QualitySignals{Version: CurrentQualitySignalVersion}}))
+	resp, err = d.analyticsSignals(ctx, AnalyticsFilter{})
+	require.NoError(t, err)
+	assert.Equal(t, 1, resp.QualityHealth.Totals.FrustrationMarkerCount)
+	require.NoError(t, d.getReader().QueryRowContext(ctx, `SELECT count FROM session_frustration_markers WHERE session_id = 'first'`).Scan(&firstCount))
+	assert.Zero(t, firstCount)
 }
 
 func TestSignalsFrustrationStoreRejectsChangedTranscript(t *testing.T) {
@@ -290,42 +311,31 @@ func TestSignalsFrustrationReadOnly(t *testing.T) {
 	insertSession(t, d, "session", "test")
 	require.NoError(t, d.InsertMessages(ctx, []Message{{SessionID: "session", Role: "user", Content: "this is broken"}}))
 	require.NoError(t, d.UpdateSessionSignals(ctx, "session", SessionSignalUpdate{QualitySignals: QualitySignals{Version: CurrentQualitySignalVersion}}))
-	ro, err := OpenReadOnly(ctx, d.Path())
+	_, err := d.getWriter().ExecContext(ctx, `INSERT INTO session_frustration_markers
+		SELECT id, transcript_revision || '|' || created_at, ?, 99 FROM sessions WHERE id = 'session'`, signals.FrustrationMarkerVersion)
 	require.NoError(t, err)
-	defer ro.Close()
-	resp, err := ro.analyticsSignals(ctx, AnalyticsFilter{})
-	require.NoError(t, err)
-	assert.Equal(t, 1, resp.QualityHealth.Totals.FrustrationMarkerCount)
-	var n int
-	require.NoError(t, d.getReader().QueryRowContext(ctx, `SELECT count(*) FROM session_frustration_markers`).Scan(&n))
-	assert.Zero(t, n)
-}
-
-func TestSignalsFrustrationReadOnlyWithoutStoredTable(t *testing.T) {
-	d := testDB(t)
-	ctx := t.Context()
-	insertSession(t, d, "session", "test")
-	require.NoError(t, d.InsertMessages(ctx, []Message{{SessionID: "session", Role: "user", Content: "this is broken"}}))
-	require.NoError(t, d.UpdateSessionSignals(ctx, "session", SessionSignalUpdate{QualitySignals: QualitySignals{Version: CurrentQualitySignalVersion}}))
-	_, err := d.getWriter().ExecContext(ctx, `DROP TABLE session_frustration_markers`)
-	require.NoError(t, err)
-	ro, err := OpenReadOnly(ctx, d.Path())
-	require.NoError(t, err)
-	defer ro.Close()
-	ro.rawReader().SetMaxOpenConns(1)
-	resp, err := ro.analyticsSignals(ctx, AnalyticsFilter{})
-	require.NoError(t, err)
-	assert.Equal(t, 1, resp.QualityHealth.Totals.FrustrationMarkerCount)
-	var changes, tables int
-	require.NoError(t, ro.getReader().QueryRowContext(ctx, `SELECT total_changes()`).Scan(&changes))
-	require.NoError(t, ro.getReader().QueryRowContext(ctx, `SELECT count(*) FROM sqlite_master WHERE type = 'table' AND name = 'session_frustration_markers'`).Scan(&tables))
-	assert.Zero(t, changes)
-	assert.Zero(t, tables)
+	for _, tablePresent := range []bool{true, false} {
+		if !tablePresent {
+			_, err = d.getWriter().ExecContext(ctx, `DROP TABLE session_frustration_markers`)
+			require.NoError(t, err)
+		}
+		ro, err := OpenReadOnly(ctx, d.Path())
+		require.NoError(t, err)
+		resp, err := ro.GetAnalyticsSignals(ctx, AnalyticsFilter{})
+		require.NoError(t, err)
+		assert.Equal(t, 1, resp.QualityHealth.Totals.FrustrationMarkerCount)
+		require.NoError(t, ro.Close())
+		if tablePresent {
+			var count int
+			require.NoError(t, d.getReader().QueryRowContext(ctx, `SELECT count FROM session_frustration_markers WHERE session_id = 'session'`).Scan(&count))
+			assert.Equal(t, 99, count)
+		}
+	}
 }
 
 func TestSignalsFrustrationCleanup(t *testing.T) {
-	for _, usageOnly := range []bool{false, true} {
-		t.Run(strconv.FormatBool(usageOnly), func(t *testing.T) {
+	for _, action := range []string{"delete", "usage text", "usage signals"} {
+		t.Run(action, func(t *testing.T) {
 			d := testDB(t)
 			ctx := t.Context()
 			insertSession(t, d, "session", "test")
@@ -333,16 +343,22 @@ func TestSignalsFrustrationCleanup(t *testing.T) {
 			rows, err := d.signalRows(ctx, AnalyticsFilter{})
 			require.NoError(t, err)
 			require.NoError(t, d.populateFrustrationMarkers(ctx, rows))
-			if usageOnly {
-				d.SetArchiveContent(config.ArchiveContentUsage)
-				require.NoError(t, d.UpsertSession(ctx, Session{ID: "session", Project: "test", Agent: "claude", Machine: "local"}))
-			} else {
+			var count int
+			require.NoError(t, d.getReader().QueryRowContext(ctx, `SELECT count FROM session_frustration_markers WHERE session_id = 'session'`).Scan(&count))
+			require.Equal(t, 1, count)
+			switch action {
+			case "delete":
 				_, err := d.DeleteParserExcludedSessions(ctx, []string{"session"})
 				require.NoError(t, err)
+			case "usage text":
+				d.SetArchiveContent(config.ArchiveContentUsage)
+				require.NoError(t, d.UpsertSession(ctx, Session{ID: "session", Project: "test", Agent: "claude", Machine: "local"}))
+			case "usage signals":
+				d.SetArchiveContent(config.ArchiveContentUsage)
+				require.NoError(t, d.UpdateSessionSignals(ctx, "session", SessionSignalUpdate{}))
 			}
-			var n int
-			require.NoError(t, d.getReader().QueryRowContext(ctx, `SELECT count(*) FROM session_frustration_markers`).Scan(&n))
-			assert.Zero(t, n)
+			require.NoError(t, d.getReader().QueryRowContext(ctx, `SELECT count(*) FROM session_frustration_markers WHERE session_id = 'session'`).Scan(&count))
+			assert.Zero(t, count)
 		})
 	}
 }
@@ -369,27 +385,7 @@ func TestSignalsFrustrationVersionKeepsToolEffectiveness(t *testing.T) {
 	t.Fatal("Grep tool missing")
 }
 
-func TestSignalsFrustrationRejectsNewerStoredVersion(t *testing.T) {
-	d := testDB(t)
-	ctx := t.Context()
-	insertSession(t, d, "session", "test")
-	require.NoError(t, d.InsertMessages(ctx, []Message{{SessionID: "session", Role: "user", Content: "this is broken"}}))
-	_, err := d.getWriter().ExecContext(ctx, `INSERT INTO session_frustration_markers VALUES ('session', 'future-key', ?, 42)`, signals.FrustrationMarkerVersion+1)
-	require.NoError(t, err)
-	rows, err := d.signalRows(ctx, AnalyticsFilter{})
-	require.NoError(t, err)
-	require.ErrorIs(t, d.populateFrustrationMarkers(ctx, rows), errNewerFrustrationMarkerVersion)
-	// A newer process may write the row after the initial lookup but before storage.
-	require.ErrorIs(t, d.storeFrustrationMarkers(ctx, d.frustrationMemo.Generation(), []string{"session"}, map[string]int{"session": 0}, rows), errNewerFrustrationMarkerVersion)
-	var version, count int
-	var key string
-	require.NoError(t, d.getReader().QueryRowContext(ctx, `SELECT transcript_key, marker_version, count FROM session_frustration_markers WHERE session_id = 'session'`).Scan(&key, &version, &count))
-	assert.Equal(t, "future-key", key)
-	assert.Equal(t, signals.FrustrationMarkerVersion+1, version)
-	assert.Equal(t, 42, count)
-}
-
-func TestSignalsFrustrationRetriesFailedStore(t *testing.T) {
+func TestSignalsFrustrationFailedStoreRetriesAfterRestart(t *testing.T) {
 	d := testDB(t)
 	ctx := t.Context()
 	insertSession(t, d, "session", "test")
@@ -397,7 +393,7 @@ func TestSignalsFrustrationRetriesFailedStore(t *testing.T) {
 	require.NoError(t, d.UpdateSessionSignals(ctx, "session", SessionSignalUpdate{QualitySignals: QualitySignals{Version: CurrentQualitySignalVersion}}))
 	_, err := d.getWriter().ExecContext(ctx, `CREATE TRIGGER reject_frustration_store BEFORE INSERT ON session_frustration_markers BEGIN SELECT RAISE(ABORT, 'injected failure'); END`)
 	require.NoError(t, err)
-	resp, err := d.analyticsSignals(ctx, AnalyticsFilter{})
+	resp, err := d.GetAnalyticsSignals(ctx, AnalyticsFilter{})
 	require.NoError(t, err)
 	assert.Equal(t, 1, resp.QualityHealth.Totals.FrustrationMarkerCount)
 	var count int
@@ -405,26 +401,15 @@ func TestSignalsFrustrationRetriesFailedStore(t *testing.T) {
 	assert.Zero(t, count)
 	_, err = d.getWriter().ExecContext(ctx, `DROP TRIGGER reject_frustration_store`)
 	require.NoError(t, err)
-	resp, err = d.analyticsSignals(ctx, AnalyticsFilter{})
+	resp, err = d.GetAnalyticsSignals(ctx, AnalyticsFilter{})
+	require.NoError(t, err)
+	assert.Equal(t, 1, resp.QualityHealth.Totals.FrustrationMarkerCount)
+	require.NoError(t, d.getReader().QueryRowContext(ctx, `SELECT count(*) FROM session_frustration_markers`).Scan(&count))
+	assert.Zero(t, count)
+	require.NoError(t, d.Reopen())
+	resp, err = d.GetAnalyticsSignals(ctx, AnalyticsFilter{})
 	require.NoError(t, err)
 	assert.Equal(t, 1, resp.QualityHealth.Totals.FrustrationMarkerCount)
 	require.NoError(t, d.getReader().QueryRowContext(ctx, `SELECT count FROM session_frustration_markers WHERE session_id = 'session'`).Scan(&count))
 	assert.Equal(t, 1, count)
-}
-
-func TestSignalsFrustrationUsageOnlySignalSettlement(t *testing.T) {
-	d := testDB(t)
-	ctx := t.Context()
-	insertSession(t, d, "session", "test")
-	require.NoError(t, d.InsertMessages(ctx, []Message{{SessionID: "session", Role: "user", Content: "this is broken"}}))
-	rows, err := d.signalRows(ctx, AnalyticsFilter{})
-	require.NoError(t, err)
-	require.NoError(t, d.populateFrustrationMarkers(ctx, rows))
-	var count int
-	require.NoError(t, d.getReader().QueryRowContext(ctx, `SELECT count FROM session_frustration_markers WHERE session_id = 'session'`).Scan(&count))
-	require.Equal(t, 1, count)
-	d.SetArchiveContent(config.ArchiveContentUsage)
-	require.NoError(t, d.UpdateSessionSignals(ctx, "session", SessionSignalUpdate{}))
-	require.NoError(t, d.getReader().QueryRowContext(ctx, `SELECT count(*) FROM session_frustration_markers WHERE session_id = 'session'`).Scan(&count))
-	assert.Zero(t, count)
 }
