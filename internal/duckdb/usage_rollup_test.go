@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/require"
 
@@ -421,4 +422,24 @@ func TestUsageRollupReadSurvivesReplacementWithNewRecords(t *testing.T) {
 	want, err := NewStoreFromDB(store.DB()).GetDailyUsage(ctx, f)
 	require.NoError(t, err)
 	require.Equal(t, want, got)
+}
+
+// Past a zone's last listed transition Go derives its offsets from the
+// zone's rule string, and on December 31 of a leap year it reports the
+// current period as ending at or before the instant asked about. Archived
+// rows reach that rule from 2038 on, and Windows test runs, which use Go's
+// embedded slim zone data, reach it years earlier. The zone check must still
+// finish, and every New York offset fits a bucket.
+func TestUsageRollupZoneAlignedPastLeapYearEnd(t *testing.T) {
+	from := time.Date(2040, 11, 1, 0, 0, 0, 0, time.UTC)
+	to := time.Date(2041, 2, 1, 0, 0, 0, 0, time.UTC)
+	meta := usageRollupMeta{MinBucket: &from, MaxBucket: &to}
+	done := make(chan bool, 1)
+	go func() { done <- usageRollupZoneAligned(db.UsageFilter{Timezone: "America/New_York"}, meta) }()
+	select {
+	case aligned := <-done:
+		require.True(t, aligned)
+	case <-time.After(time.Minute):
+		require.FailNow(t, "the zone check did not finish")
+	}
 }

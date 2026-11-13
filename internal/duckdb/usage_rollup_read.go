@@ -259,6 +259,15 @@ func usageRollupZoneAligned(f db.UsageFilter, meta usageRollupMeta) bool {
 				return false
 			}
 			_, end := local.ZoneBounds()
+			if !end.IsZero() && !end.After(t) {
+				// Past a zone's last listed transition, Go derives offsets
+				// from the zone's rule string and ends a year's last period
+				// 365 days after the year starts. In a leap year that is
+				// December 31 at 00:00 UTC, at or before t, and the walk
+				// would never advance. Go keeps one offset until the UTC
+				// year ends, so resume there.
+				end = time.Date(t.UTC().Year()+1, time.January, 1, 0, 0, 0, 0, time.UTC)
+			}
 			if end.IsZero() || !end.Before(hi) {
 				return true
 			}
