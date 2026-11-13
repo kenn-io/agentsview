@@ -2214,7 +2214,8 @@ when the selected checkout matters: end the existing running session first.
 Materialize after Claude and any S3 uploader finish; S3 files can otherwise
 reflect different upload moments.
 If the destination is a configured Claude or Pi source root, a later sync may
-also discover the installed copy as a separate local session.
+discover the installed copy and deduplicate it by native session ID. The stored
+file path or checkout directory may then update.
 
 `agentsview session commits <id>` lists transcript and Git trailer commits
 linked to a session. The `SOURCE` column distinguishes `transcript` from
