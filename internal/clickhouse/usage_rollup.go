@@ -301,8 +301,7 @@ func readPreparedUsageStamp(ctx context.Context, conn *sql.DB) (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("reading prepared usage stamp: %w", err)
 	}
-	return fmt.Sprintf("%s|%d|%d|%s|%d", comment, stored.snapshotCount, stored.snapshotHash,
-		stored.pricingDigest, stored.priceCount), nil
+	return stored.format(comment), nil
 }
 
 // refreshUsageRollup builds the rollup of the rows prepared_usage holds

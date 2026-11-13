@@ -115,3 +115,13 @@ A mirror keeps its rollup across releases until `usageRollupFormat` changes.
 `TestUsageRollupFormat` hashes what a build stores for a fixture and fails until
 a change to that output bumps the format and records the new digest in
 `testdata/usage-rollup-format-digests`.
+
+**Cost and gain.** On a mirror of a 43,620-session archive, a full rebuild took
+about 15 seconds longer with the rollup. First Usage requests after a serve
+start, in `America/New_York`, median of three starts:
+
+| Request | Before (s) | Rollup (s) | Speed-up |
+| --- | --- | --- | --- |
+| One-year summary | 3.2 | 0.49 | 6.5x |
+| 30-day summary | 0.83 | 0.38 | 2.2x |
+| 30-day top sessions | 0.88 | 0.25 | 3.5x |

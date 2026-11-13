@@ -123,11 +123,9 @@ type usageRollupMeta struct {
 	MinBucket, MaxBucket *time.Time
 }
 
-func readUsageRollupMeta(
-	ctx context.Context, query func(context.Context, string, ...any) interface{ Scan(...any) error },
-) (usageRollupMeta, bool, error) {
+func (s *Store) readUsageRollupMeta(ctx context.Context) (usageRollupMeta, bool, error) {
 	var value string
-	err := query(ctx, `SELECT value FROM sync_metadata WHERE key = ?`, usageRollupMetadataKey).Scan(&value)
+	err := s.queryRowContext(ctx, `SELECT value FROM sync_metadata WHERE key = ?`, usageRollupMetadataKey).Scan(&value)
 	if errors.Is(err, sql.ErrNoRows) {
 		return usageRollupMeta{}, false, nil
 	}
@@ -178,7 +176,7 @@ func (s *Sync) refreshUsageRollup(ctx context.Context) (bool, error) {
 }
 
 func usageRollupRebuildReason(ctx context.Context, store *Store) (string, error) {
-	meta, ok, err := readUsageRollupMeta(ctx, store.queryRowContext)
+	meta, ok, err := store.readUsageRollupMeta(ctx)
 	if err != nil {
 		return "", err
 	}
@@ -467,7 +465,10 @@ func appendUsageRollup(
 		return b.Time
 	}
 	for _, k := range order {
-		a := sums[k]
+		a, ok := sums[k]
+		if !ok || a == nil {
+			return fmt.Errorf("usage rollup key %v has no sums", k)
+		}
 		if err := batch.add(ctx, "usage_rollup", k.session, bucketValue(k.bucket), k.model, k.provider,
 			a.input, a.output, a.cacheCr, a.cacheRd, a.cost.Microdollars, a.savings.Microdollars); err != nil {
 			return err

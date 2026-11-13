@@ -44,7 +44,7 @@ type usageRollupPlan struct {
 func (s *Store) usageRollupPlan(
 	ctx context.Context, f db.UsageFilter, pricingDigest string, cursor bool,
 ) (*usageRollupPlan, error) {
-	meta, ok, err := readUsageRollupMeta(ctx, s.queryRowContext)
+	meta, ok, err := s.readUsageRollupMeta(ctx)
 	if err != nil || !ok || meta.Format != usageRollupFormat {
 		return nil, err
 	}

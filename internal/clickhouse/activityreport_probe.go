@@ -348,8 +348,7 @@ func (s *Store) readPreparedUsageState(ctx context.Context, withDelta bool) (pre
 	if err != nil {
 		return preparedUsageState{}, fmt.Errorf("reading prepared usage stamp: %w", err)
 	}
-	stamp := fmt.Sprintf("%s|%d|%d|%s|%d", comment, stored.snapshotCount, stored.snapshotHash,
-		stored.pricingDigest, stored.priceCount)
+	stamp := stored.format(comment)
 	live, key, err := s.usageCoverage(ctx, stamp, stored.pricingDigest)
 	if err != nil {
 		return preparedUsageState{}, err
@@ -803,6 +802,12 @@ type usageStamp struct {
 	snapshotCount, snapshotHash uint64
 	pricingDigest               string
 	priceCount                  uint64
+}
+
+// format returns the preparedUsageState stamp of rows carrying u in a
+// prepared_usage table with the given comment.
+func (u usageStamp) format(comment string) string {
+	return fmt.Sprintf("%s|%d|%d|%s|%d", comment, u.snapshotCount, u.snapshotHash, u.pricingDigest, u.priceCount)
 }
 
 // usageDeltaCache keeps, under one whole-catalog digest, the prepared rows
