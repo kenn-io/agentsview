@@ -87,12 +87,22 @@ func TestFrustrationCountsRestartAndRefresh(t *testing.T) {
 	require.NoError(t, err)
 	_, err = open().GetAnalyticsSignals(ctx, db.AnalyticsFilter{})
 	require.NoError(t, err)
-	for _, filter := range []db.AnalyticsFilter{{}, {Project: "sample"}, {Agent: "claude"}, {From: "2000-01-01", To: "2100-01-01"}} {
+	for i, filter := range []db.AnalyticsFilter{{}, {Project: "sample"}, {Agent: "claude"}, {From: "2000-01-01", To: "2100-01-01"}} {
 		cached := open()
 		actual, err := cached.GetAnalyticsSignals(ctx, filter)
 		require.NoError(t, err)
 		evidence, err := cached.GetAnalyticsSignalSessions(ctx, filter, "frustration_marker_count", 10)
 		require.NoError(t, err)
+		if i == 0 {
+			require.Len(t, evidence.Sessions, 2)
+			ids := make([]string, 0, len(evidence.Sessions))
+			for _, example := range evidence.Sessions {
+				ids = append(ids, example.SessionID)
+				require.Equal(t, "this is broken", example.Excerpt)
+				require.Equal(t, 1, example.SignalTotal)
+			}
+			require.ElementsMatch(t, []string{"one", "two"}, ids)
+		}
 		_, err = pg.ExecContext(ctx, `DELETE FROM session_frustration_counts`)
 		require.NoError(t, err)
 		scanning := open()
