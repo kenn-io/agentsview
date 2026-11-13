@@ -166,8 +166,7 @@ evidence; they do not establish whether a tool helped the task.
   native clear only for a selected session whose final binding is non-null;
   the rest of the source bytes remain unchanged. The
   [official session documentation](https://code.claude.com/docs/en/sessions)
-  describes project storage and resume behavior. A running-session attachment
-  can retain its existing directory; the in-app picker may use recorded paths.
+  describes project storage and resume behavior.
 
 - **Hook output (checked 2026-11-04):** The parser reads the `hook_success`
   attachment shape reported in

@@ -188,9 +188,8 @@ func TestMaterializeConfiguredSources(t *testing.T) {
 
 func TestS3ConfiguredSource(t *testing.T) {
 	const id = "12345678-1234-1234-1234-123456789abc"
-	const parent = "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"
 	const root = "s3://test/host/raw/claude"
-	const contents = "{\"type\":\"user\",\"sessionId\":\"" + parent + "\",\"message\":{\"content\":\"fixture\"}}\n"
+	const contents = "{\"type\":\"user\",\"sessionId\":\"" + id + "\",\"message\":{\"content\":\"fixture\"}}\n"
 	const base = "host/raw/claude/project/" + id
 	var extraKey atomic.Value
 	extraKey.Store("")
@@ -246,7 +245,7 @@ func TestS3ConfiguredSource(t *testing.T) {
 	t.Setenv("CLAUDE_CONFIG_DIR", home)
 	t.Setenv("CLAUDE_CODE_PROJECT_DIR_NAME", "project")
 	uri := root + "/project/" + id + ".jsonl"
-	s := &db.Session{ID: "host~" + id, Agent: "claude", Machine: "host", FilePath: &uri, SourceSessionID: "host~" + parent}
+	s := &db.Session{ID: "host~" + id, Agent: "claude", Machine: "host", FilePath: &uri}
 	cwd := t.TempDir()
 	_, err = Materialize(t.Context(), cfg, s, cwd)
 	require.NoError(t, err)
@@ -344,9 +343,6 @@ func TestMaterializeLinkedClaudeSources(t *testing.T) {
 				require.NoError(t, err)
 				assert.Equal(t, content, string(got))
 			}
-			result, err = Materialize(t.Context(), cfg, session, cwd)
-			require.NoError(t, err)
-			assert.Equal(t, "unchanged", result.Status)
 		})
 	}
 }

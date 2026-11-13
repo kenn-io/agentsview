@@ -2,6 +2,10 @@ package capture
 
 import (
 	"encoding/json"
+	"os"
+	"path/filepath"
+	"regexp"
+	"runtime"
 	"strings"
 	"testing"
 
@@ -47,10 +51,24 @@ func TestDecodeResultRejectsUnknownContract(t *testing.T) {
 }
 
 func TestClaudeWorkDirEncodingMatchesObservedProducerLayout(t *testing.T) {
-	assert.Equal(t,
-		"-workspace-Space-dot-underscore--hash",
-		ClaudeProjectDir("/workspace/Space.dot_underscore/@hash"),
-	)
+	assert.Equal(t, "-workspace-Space-dot-underscore--hash", ClaudeProjectDir("/workspace/Space.dot_underscore/@hash"))
+	if runtime.GOOS == "windows" {
+		return
+	}
+	checkout := filepath.Join(t.TempDir(), "checkout")
+	require.NoError(t, os.Mkdir(checkout, 0o700))
+	link := filepath.Join(t.TempDir(), "link")
+	require.NoError(t, os.Symlink(checkout, link))
+	resolved, err := filepath.EvalSymlinks(checkout)
+	require.NoError(t, err)
+	for _, tc := range []struct{ name, cwd, want string }{
+		{"long", "/" + strings.Repeat("a", 200), "-" + strings.Repeat("a", 199) + "-b6ymvl"},
+		{"decomposed", "/cafe\u0301", "-cafe-"},
+		{"astral", "/\U0001f600", "---"},
+		{"symlink", link, regexp.MustCompile(`[^a-zA-Z0-9]`).ReplaceAllString(resolved, "-")},
+	} {
+		t.Run(tc.name, func(t *testing.T) { assert.Equal(t, tc.want, ClaudeProjectDir(tc.cwd)) })
+	}
 }
 
 func TestResultMarksIncompleteTokenAndCostProvenance(t *testing.T) {

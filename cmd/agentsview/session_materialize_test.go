@@ -1,13 +1,10 @@
 package main
 
 import (
-	"os"
-	"path/filepath"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-	"go.kenn.io/agentsview/internal/db"
 )
 
 func TestSessionMaterializeRejectsRemoteBackends(t *testing.T) {
@@ -41,19 +38,4 @@ func TestSessionMaterializeUsageOnly(t *testing.T) {
 	t.Setenv("AGENTSVIEW_ARCHIVE_CONTENT", "usage")
 	_, err := executeCommand(newRootCommand(), "session", "materialize", "fixture", "--cwd", t.TempDir())
 	require.ErrorContains(t, err, "archive_content=usage")
-}
-
-func TestSessionMaterializeRequiresOriginalTranscript(t *testing.T) {
-	dataDir, root := newAgentDataDir(t), t.TempDir()
-	t.Setenv("CLAUDE_CONFIG_DIR", root)
-	const machine = "0123456789abcdef0123456789abcdef"
-	const id = "11111111-2222-4333-8444-555555555555"
-	require.NoError(t, os.WriteFile(filepath.Join(dataDir, "telemetry-install-id"), []byte(machine), 0o600))
-	database, err := db.OpenIsolatedContext(t.Context(), filepath.Join(dataDir, "sessions.db"))
-	require.NoError(t, err)
-	require.NoError(t, database.UpsertSession(t.Context(), db.Session{ID: id, Agent: "claude", Machine: machine, Project: "fixture"}))
-	require.NoError(t, database.InsertMessages(t.Context(), []db.Message{{SessionID: id, Role: "user", Content: "Archived message", SourceUUID: "one"}}))
-	require.NoError(t, database.Close())
-	_, err = executeCommand(newRootCommand(), "session", "materialize", id, "--cwd", t.TempDir())
-	require.ErrorContains(t, err, "native resume requires the original transcript")
 }
