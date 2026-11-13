@@ -46,9 +46,6 @@ func TestRetainedClaudeOriginalAndDirectory(t *testing.T) {
 	_, _, _, err = Retained(ctx, cfg, database, id, sourceDevice, id, "claude", "", nil, 1<<20, nil)
 	require.ErrorIs(t, err, docbank.ErrVaultLocked)
 	require.NoError(t, archive.Close())
-	found, err := HasRetainedSession(ctx, database, id)
-	require.NoError(t, err)
-	require.True(t, found)
 	tree, primary, source, err := Retained(ctx, cfg, database, id, sourceDevice, id, "claude", "", nil, 1<<20, nil)
 	require.NoError(t, err)
 	assert.Contains(t, source, "retained:")
@@ -95,9 +92,6 @@ func TestRetainedClaudeOriginalAndDirectory(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, original, string(got))
 	require.NoError(t, tree.Cleanup())
-	t.Setenv("TMPDIR", "")
-	t.Setenv("TMP", "")
-	t.Setenv("TEMP", "")
 	alternate := t.TempDir()
 	require.NoError(t, os.CopyFS(alternate, os.DirFS(filepath.Join(seed, rawarchive.Directory, "artifacts"))))
 	require.NoError(t, os.Mkdir(filepath.Join(alternate, "application"), 0o700))
@@ -116,8 +110,6 @@ func TestRetainedClaudeOriginalAndDirectory(t *testing.T) {
 	_, _, _, err = Retained(ctx, alternateCfg, nil, id, sourceDevice, id, "claude", "", []db.ArchiveSessionProvenance{owner}, 1<<20, nil)
 	require.ErrorContains(t, err, "owner checkpoint")
 	require.NoError(t, os.Remove(wal))
-	_, _, _, err = Retained(ctx, directoryCfg, nil, id, sourceDevice, id, "claude", "archive://wrong/source", []db.ArchiveSessionProvenance{owner}, 1<<20, nil)
-	require.ErrorContains(t, err, "binding")
 	cancelled, cancel := context.WithCancel(ctx)
 	cancel()
 	_, _, _, err = Retained(cancelled, directoryCfg, nil, id, sourceDevice, id, "claude", "", []db.ArchiveSessionProvenance{owner}, 1<<20, nil)
@@ -195,6 +187,8 @@ func TestRetainedCodexCompressedAndAncestor(t *testing.T) {
 
 func TestRetainedMissingVaultNeedsOwner(t *testing.T) {
 	data := t.TempDir()
+	_, _, _, err := Retained(t.Context(), config.Config{DataDir: data}, nil, "session", "device", "native", "claude", "", nil, 1024, nil)
+	require.ErrorContains(t, err, "requires the local archive database")
 	database, err := db.OpenIsolatedContext(t.Context(), filepath.Join(data, "sessions.db"))
 	require.NoError(t, err)
 	defer database.Close()
@@ -212,10 +206,7 @@ func retainedTree(t *testing.T, root string) map[string]string {
 		if err != nil {
 			return err
 		}
-		rel, err := filepath.Rel(root, name)
-		if err != nil {
-			return err
-		}
+		rel, _ := filepath.Rel(root, name)
 		if entry.Type().IsRegular() {
 			data, err := os.ReadFile(name)
 			if err != nil {

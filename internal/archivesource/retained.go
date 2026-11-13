@@ -53,6 +53,9 @@ func Retained(ctx context.Context, cfg config.Config, database *db.DB, sessionID
 		}
 		source = "directory:" + archiveID
 	} else {
+		if database == nil {
+			return nil, "", "", errors.New("retained recovery requires the local archive database")
+		}
 		vault := filepath.Join(cfg.DataDir, rawarchive.Directory, "artifacts")
 		reader, err = docbank.OpenContentReader(ctx, docbank.ContentReaderConfig{Root: vault})
 		if err != nil {
@@ -99,8 +102,8 @@ func Retained(ctx context.Context, cfg config.Config, database *db.DB, sessionID
 			return nil, "", "", errors.New("archive source binding differs")
 		}
 	}
-	objects := rawsync.NewArtifactObjectReader(artifact.ContentReaderOpener(reader))
-	return materializeCatalog(ctx, tx, owner, provider, limit, use, objects, nil, source)
+	objects := rawsync.NewArtifactObjectReader(artifact.ContentReaderOpener{Reader: reader})
+	return materializeCatalog(ctx, tx, archiveID, owner, provider, limit, use, objects, nil, source)
 }
 
 // openRetainedDirectory checks each configured directory under its own lease.

@@ -55,16 +55,20 @@ archiveSource:
 			return err
 		}
 		var source string
+		stored, _ := storedSource(session, "")
 		if retained {
-			stored := ""
-			if session.FilePath != nil {
-				stored = *session.FilePath
-			}
 			_, _, source, err = archivesource.Retained(ctx, cfg, database, session.ID, session.Machine, raw, "codex", stored, owners, maxSourceBytes, use)
 		} else {
 			var snapshot string
 			snapshot, err = archivesource.ReadCodexSnapshot(ctx, cfg.ArchiveSources, owners, maxSourceBytes, use)
 			source = "snapshot:" + snapshot
+			if errors.Is(err, archivesource.ErrSnapshotUnavailable) && hasDirectoryOwner(owners) {
+				snapshotErr := err
+				_, _, source, err = archivesource.Retained(ctx, cfg, database, session.ID, session.Machine, raw, "codex", stored, owners, maxSourceBytes, use)
+				if err != nil {
+					err = errors.Join(snapshotErr, err)
+				}
+			}
 		}
 		if err != nil {
 			return Result{}, fmt.Errorf("reading native Codex transcript: %w", err)
@@ -210,40 +214,58 @@ archiveSource:
 				}
 			}
 		} else {
-			if source == "" {
-				if database != nil {
-					found, lookupErr := archivesource.HasRetainedSession(ctx, database, session.ID)
-					if lookupErr != nil {
-						return Result{}, lookupErr
-					}
-					if found {
-						retained = true
-						goto archiveSource
-					}
-				}
-				return Result{}, fmt.Errorf("native Codex resume requires an original transcript: %w", errSourceUnavailable)
-			}
-			anchor, err = pathutil.ResolveAbsolute(source)
-			if err != nil {
-				return Result{}, err
-			}
 			candidates := configuredRoots(cfg, session, parser.AgentCodex)
-			if info, statErr := os.Stat(anchor); statErr == nil && info.Mode().IsRegular() {
-				candidates = localRoots(cfg, parser.AgentCodex)
-			} else if statErr != nil && !errors.Is(statErr, os.ErrNotExist) {
-				return Result{}, statErr
-			}
-			for _, candidate := range candidates {
-				resolved, err := pathutil.ResolveAbsolute(candidate)
+			if source != "" {
+				anchor, err = pathutil.ResolveAbsolute(source)
 				if err != nil {
 					return Result{}, err
 				}
-				rel, err := filepath.Rel(resolved, anchor)
-				if err == nil && filepath.IsLocal(rel) && len(candidate) > len(root) {
-					root = candidate
+				if info, statErr := os.Stat(anchor); statErr == nil && info.Mode().IsRegular() {
+					candidates = localRoots(cfg, parser.AgentCodex)
+				} else if statErr != nil && !errors.Is(statErr, os.ErrNotExist) {
+					return Result{}, statErr
+				}
+				for _, candidate := range candidates {
+					resolved, err := pathutil.ResolveAbsolute(candidate)
+					if err != nil {
+						return Result{}, err
+					}
+					rel, err := filepath.Rel(resolved, anchor)
+					if err == nil && filepath.IsLocal(rel) && len(candidate) > len(root) {
+						root = candidate
+					}
 				}
 			}
 			if root == "" {
+				// A recorded path inside a configured root that resolves outside it
+				// is an escape, not an unavailable configured source.
+				if original, absErr := filepath.Abs(source); absErr == nil && source != "" {
+					for _, candidate := range candidates {
+						configured, err := filepath.Abs(candidate)
+						if err != nil {
+							return Result{}, err
+						}
+						rel, err := filepath.Rel(configured, original)
+						if err == nil && filepath.IsLocal(rel) {
+							if _, err := os.Lstat(original); err == nil && !within(configured, original) {
+								return Result{}, errors.New("native Codex source outside configured root")
+							} else if err != nil && !errors.Is(err, os.ErrNotExist) {
+								return Result{}, err
+							}
+						}
+					}
+				}
+				found, lookupErr := archivesource.HasRetainedSession(ctx, database, session.ID)
+				if lookupErr != nil {
+					return Result{}, lookupErr
+				}
+				if found {
+					retained = true
+					goto archiveSource
+				}
+				if source == "" {
+					return Result{}, fmt.Errorf("native Codex resume requires an original transcript: %w", errSourceUnavailable)
+				}
 				return Result{}, errors.New("native Codex source outside configured roots")
 			}
 			roots, archiveRoots = codexConfiguredGroup(cfg, candidates, root)
@@ -319,7 +341,7 @@ archiveSource:
 		err = errors.Join(err, closeSource())
 		closeSource = nil
 	}
-	if errors.Is(err, errSourceUnavailable) && host == "" && database != nil {
+	if errors.Is(err, errSourceUnavailable) && host == "" {
 		found, lookupErr := archivesource.HasRetainedSession(ctx, database, session.ID)
 		if lookupErr != nil {
 			return Result{}, lookupErr

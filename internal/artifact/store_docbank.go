@@ -134,16 +134,10 @@ type contentOpener interface {
 }
 
 // ContentReaderOpener adapts a borrowed read-only vault without transferring ownership.
-func ContentReaderOpener(reader *docbank.ContentReader) interface {
-	Open(context.Context, Ref) (Entry, VerifiedReader, error)
-} {
-	return &docbankContentReader{reader: reader}
-}
+type ContentReaderOpener struct{ Reader *docbank.ContentReader }
 
-type docbankContentReader struct{ reader *docbank.ContentReader }
-
-func (r *docbankContentReader) Open(ctx context.Context, ref Ref) (Entry, VerifiedReader, error) {
-	return openDocbankContent(ctx, r.reader, ref)
+func (r ContentReaderOpener) Open(ctx context.Context, ref Ref) (Entry, VerifiedReader, error) {
+	return openDocbankContent(ctx, r.Reader, ref)
 }
 
 func openDocbankContent(ctx context.Context, source contentOpener, ref Ref) (Entry, VerifiedReader, error) {

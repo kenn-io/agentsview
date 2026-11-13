@@ -32,6 +32,9 @@ func ReadCodexSnapshot(ctx context.Context, sources []config.ArchiveSource, owne
 	return snapshot, err
 }
 
+// ErrSnapshotUnavailable means no snapshot owner was selected.
+var ErrSnapshotUnavailable = errors.New("owning snapshot unavailable")
+
 func materializeSnapshot(ctx context.Context, sources []config.ArchiveSource, owners []db.ArchiveSessionProvenance, provider string, limit int64, use func(string, []string, func(context.Context, string, int64) ([]byte, error)) error) (tree *rawderive.Materialization, primary string, snapshot string, retErr error) {
 	defer func() {
 		if retErr != nil && tree != nil {
@@ -82,9 +85,9 @@ func materializeSnapshot(ctx context.Context, sources []config.ArchiveSource, ow
 	}
 	if selected == nil {
 		if candidateErr != nil {
-			return nil, "", "", candidateErr
+			return nil, "", "", errors.Join(ErrSnapshotUnavailable, candidateErr)
 		}
-		return nil, "", "", errors.New("owning snapshot is not configured")
+		return nil, "", "", fmt.Errorf("%w: owning snapshot is not configured", ErrSnapshotUnavailable)
 	}
 	if err := readRecoveryMetadata(ctx, selected); err != nil {
 		return nil, "", "", err
@@ -119,6 +122,10 @@ func materializeSnapshot(ctx context.Context, sources []config.ArchiveSource, ow
 			retErr = errors.Join(retErr, conn.Close())
 		}
 	}()
+	archiveID, err := checkSavedSchema(ctx, conn)
+	if err != nil {
+		return nil, "", "", err
+	}
 	release := func() error {
 		if err := conn.Close(); err != nil {
 			conn = nil
@@ -131,7 +138,7 @@ func materializeSnapshot(ctx context.Context, sources []config.ArchiveSource, ow
 		scratch = ""
 		return nil
 	}
-	return materializeCatalog(ctx, conn, owner, provider, limit, use, snapshotObjects{selected}, release, owner.Attachment.SnapshotID)
+	return materializeCatalog(ctx, conn, archiveID, owner, provider, limit, use, snapshotObjects{selected}, release, owner.Attachment.SnapshotID)
 }
 
 type catalogQuery interface {
@@ -139,18 +146,14 @@ type catalogQuery interface {
 	QueryRowContext(context.Context, string, ...any) *sql.Row
 }
 
-func materializeCatalog(ctx context.Context, catalog catalogQuery, owner db.ArchiveSessionProvenance, provider string, limit int64, use func(string, []string, func(context.Context, string, int64) ([]byte, error)) error, objects rawderive.ObjectStore, release func() error, sourceID string) (tree *rawderive.Materialization, primary, source string, retErr error) {
-	archiveID, err := checkSavedSchema(ctx, catalog)
-	if err != nil {
-		return nil, "", "", err
-	}
+func materializeCatalog(ctx context.Context, catalog catalogQuery, archiveID string, owner db.ArchiveSessionProvenance, provider string, limit int64, use func(string, []string, func(context.Context, string, int64) ([]byte, error)) error, objects rawderive.ObjectStore, release func() error, sourceID string) (tree *rawderive.Materialization, primary, source string, retErr error) {
 	s := owner.Source
 	if archiveID != s.ArchiveID {
 		return nil, "", "", errors.New("saved archive identity differs")
 	}
 	var canonical []byte
 	var configuredRoot, originalRoot, originalPath string
-	err = catalog.QueryRowContext(ctx, `SELECT r.configured_root_id,r.original_path,s.original_path,s.canonical_json FROM raw_archive_sources s JOIN raw_archive_roots r ON r.id=s.root_id WHERE s.manifest_id=? AND s.root_id=? AND s.source_key=? AND r.device_id=? AND r.provider=?`, owner.ManifestID, s.RootID, s.SourceKey, s.DeviceID, provider).Scan(&configuredRoot, &originalRoot, &originalPath, &canonical)
+	err := catalog.QueryRowContext(ctx, `SELECT r.configured_root_id,r.original_path,s.original_path,s.canonical_json FROM raw_archive_sources s JOIN raw_archive_roots r ON r.id=s.root_id WHERE s.manifest_id=? AND s.root_id=? AND s.source_key=? AND r.device_id=? AND r.provider=?`, owner.ManifestID, s.RootID, s.SourceKey, s.DeviceID, provider).Scan(&configuredRoot, &originalRoot, &originalPath, &canonical)
 	if err != nil {
 		return nil, "", "", fmt.Errorf("saved source ownership: %w", err)
 	}
