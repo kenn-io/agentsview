@@ -79,7 +79,6 @@ func TestIsFrustrationMarkerMatchesReference(t *testing.T) {
 		prompts = append(prompts, randomFrustrationPrompt(r))
 	}
 	markers := 0
-	h := sha256.New()
 	for _, prompt := range prompts {
 		want := referenceIsFrustrationMarker(prompt)
 		got := IsFrustrationMarker(prompt)
@@ -87,18 +86,36 @@ func TestIsFrustrationMarkerMatchesReference(t *testing.T) {
 		require.Equal(t, referenceNormalizePrompt(prompt), normalizePrompt(prompt), "%q", prompt)
 		if got {
 			markers++
+		}
+	}
+	// Both answers must be common, or agreement would prove little.
+	assert.Greater(t, markers, len(prompts)/10)
+	assert.Less(t, markers, len(prompts)*9/10)
+}
+
+func TestFrustrationMarkerVersionDigest(t *testing.T) {
+	prompts := []string{
+		"wtf",
+		"come\n\t on, run it",
+		"you bro\u212ae the build",
+		"why won\u2019t it build",
+		"AB CD ef gh ij",
+		"ABC def GHI jkl mno pqr",
+		"\u24b6\u24b7 \u24b8\u24b9 ok fine now",
+		"```FUCK FUCK FUCK``` please handle it",
+	}
+	h := sha256.New()
+	for _, prompt := range prompts {
+		if IsFrustrationMarker(prompt) {
 			h.Write([]byte{1})
 		} else {
 			h.Write([]byte{0})
 		}
 	}
-	digests := map[int]string{1: "72e77932fbe773cd99daf4191c0fa9f6d30a3eddf05864f3b1a4a60ad99798e2"}
+	digests := map[int]string{1: "50cedcd8875dcfa5e3b044358ab956d80cc558f5d42f47a42f141f1420dc72bf"}
 	wantDigest, ok := digests[FrustrationMarkerVersion]
 	require.True(t, ok, "record the matcher digest for the new version")
 	assert.Equal(t, wantDigest, fmt.Sprintf("%x", h.Sum(nil)), "matcher results changed; bump the version and record the new digest")
-	// Both answers must be common, or agreement would prove little.
-	assert.Greater(t, markers, len(prompts)/10)
-	assert.Less(t, markers, len(prompts)*9/10)
 }
 
 func TestIsFrustrationMarkerExamples(t *testing.T) {

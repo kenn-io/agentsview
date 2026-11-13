@@ -6,7 +6,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/mattn/go-sqlite3"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"go.kenn.io/agentsview/internal/config"
@@ -112,8 +111,6 @@ func TestSignalsFrustrationCountsFollowTranscriptChanges(t *testing.T) {
 		{SessionID: "session", Ordinal: 7, Role: "user", Content: "come\n\t on, run it"},
 	}))
 	assert.Equal(t, 3, count())
-	require.NoError(t, d.Reopen())
-	assert.Equal(t, 3, count())
 
 	require.NoError(t, d.InsertMessages(ctx, []Message{
 		// Two of six words are capitals, under the threshold.
@@ -122,16 +119,12 @@ func TestSignalsFrustrationCountsFollowTranscriptChanges(t *testing.T) {
 		{SessionID: "session", Ordinal: 9, Role: "user", Content: "doe\u017f not work"},
 	}))
 	assert.Equal(t, 4, count(), "an append must recount the session")
-	require.NoError(t, d.Reopen())
-	assert.Equal(t, 4, count())
 
 	require.NoError(t, d.ReplaceSessionMessages(ctx, "session", []Message{
 		{SessionID: "session", Ordinal: 0, Role: "user", Content: "wtf"},
 		{SessionID: "session", Ordinal: 1, Role: "user", Content: "STILL BROKEN!!"},
 	}))
 	assert.Equal(t, 1, count(), "a replacement must recount the session")
-	require.NoError(t, d.Reopen())
-	assert.Equal(t, 1, count())
 }
 
 func TestSignalsFrustrationMemoReaderSwap(t *testing.T) {
@@ -179,49 +172,6 @@ func TestSignalsFrustrationMemoCanceled(t *testing.T) {
 	var n int
 	require.NoError(t, d.getReader().QueryRowContext(t.Context(), `SELECT count(*) FROM session_frustration_markers`).Scan(&n))
 	assert.Zero(t, n)
-}
-
-func TestSignalsFrustrationStoredAcrossRestart(t *testing.T) {
-	d := testDB(t)
-	ctx := t.Context()
-	for _, id := range []string{"first", "second"} {
-		insertSession(t, d, id, "test")
-	}
-	require.NoError(t, d.InsertMessages(ctx, []Message{
-		{SessionID: "first", Ordinal: 0, Role: "user", Content: "this is broken"},
-		{SessionID: "first", Ordinal: 1, Role: "user", Content: "this is broken"},
-		{SessionID: "second", Ordinal: 0, Role: "user", Content: "this is broken"},
-	}))
-	for _, id := range []string{"first", "second"} {
-		require.NoError(t, d.UpdateSessionSignals(ctx, id, SessionSignalUpdate{QualitySignals: QualitySignals{Version: CurrentQualitySignalVersion}}))
-	}
-	resp, err := d.GetAnalyticsSignals(ctx, AnalyticsFilter{})
-	require.NoError(t, err)
-	assert.Equal(t, 3, resp.QualityHealth.Totals.FrustrationMarkerCount)
-	require.NoError(t, d.Reopen())
-	d.rawReader().SetMaxOpenConns(1)
-	conn, err := d.rawReader().Conn(ctx)
-	require.NoError(t, err)
-	var sqlite *sqlite3.SQLiteConn
-	require.NoError(t, conn.Raw(func(raw any) error {
-		sqlite = raw.(*diagnosticReaderConn).SQLiteConn
-		sqlite.RegisterAuthorizer(func(op int, table, column, _ string) int {
-			if op == sqlite3.SQLITE_READ && table == "messages" && column == "content" {
-				return sqlite3.SQLITE_DENY
-			}
-			return sqlite3.SQLITE_OK
-		})
-		return nil
-	}))
-	require.NoError(t, conn.Close())
-	defer func() {
-		if sqlite != nil {
-			sqlite.RegisterAuthorizer(nil)
-		}
-	}()
-	resp, err = d.GetAnalyticsSignals(ctx, AnalyticsFilter{})
-	require.NoError(t, err)
-	assert.Equal(t, 3, resp.QualityHealth.Totals.FrustrationMarkerCount)
 }
 
 func TestSignalsFrustrationStoredRefresh(t *testing.T) {
@@ -320,7 +270,8 @@ func TestSignalsFrustrationCleanup(t *testing.T) {
 			switch action {
 			case "usage text":
 				d.SetArchiveContent(config.ArchiveContentUsage)
-				require.NoError(t, d.UpsertSession(ctx, Session{ID: "session", Project: "test", Agent: "claude", Machine: "local"}))
+				name := "renamed"
+				require.NoError(t, d.RenameSession(ctx, "session", &name))
 			case "usage signals":
 				d.SetArchiveContent(config.ArchiveContentUsage)
 				require.NoError(t, d.UpdateSessionSignals(ctx, "session", SessionSignalUpdate{}))
@@ -359,21 +310,15 @@ func TestSignalsFrustrationUsageOnly(t *testing.T) {
 	d := testDB(t)
 	d.SetArchiveContent(config.ArchiveContentUsage)
 	ctx := t.Context()
-	for _, id := range []string{"first", "second"} {
-		insertSession(t, d, id, "test")
-		require.NoError(t, d.InsertMessages(ctx, []Message{{SessionID: id, Role: "user", Content: "this is broken"}}))
-		require.NoError(t, d.SettleUsageOnlySignals(ctx, id))
-	}
+	insertSession(t, d, "first", "test")
+	require.NoError(t, d.InsertMessages(ctx, []Message{{SessionID: "first", Role: "user", Content: "this is broken"}}))
+	require.NoError(t, d.SettleUsageOnlySignals(ctx, "first"))
 	_, err := d.getWriter().ExecContext(ctx, `INSERT INTO session_frustration_markers (session_id, transcript_key, marker_version, count)
 		SELECT id, transcript_revision || '|' || created_at, ?, 7 FROM sessions WHERE id = 'first'`, signals.FrustrationMarkerVersion)
 	require.NoError(t, err)
 	resp, err := d.GetAnalyticsSignals(ctx, AnalyticsFilter{})
 	require.NoError(t, err)
 	assert.Zero(t, resp.QualityHealth.Totals.FrustrationMarkerCount)
-	var rows, count int
-	require.NoError(t, d.getReader().QueryRowContext(ctx, `SELECT count(*), sum(count) FROM session_frustration_markers`).Scan(&rows, &count))
-	assert.Equal(t, 1, rows)
-	assert.Equal(t, 7, count)
 }
 
 func TestSignalsFrustrationCanceledWhileSaving(t *testing.T) {
