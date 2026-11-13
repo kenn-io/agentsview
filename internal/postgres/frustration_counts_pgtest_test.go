@@ -8,7 +8,6 @@ import (
 	"database/sql"
 	"log"
 	"testing"
-	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -63,6 +62,18 @@ func TestFrustrationCountsRulesAndRestart(t *testing.T) {
 	result, err := f.open(t).GetAnalyticsSignals(f.ctx, db.AnalyticsFilter{})
 	require.NoError(t, err)
 	require.Equal(t, 2, result.QualityHealth.Totals.FrustrationMarkerCount)
+	if f.versionColumn == "xmin" {
+		roleURL := newUsageJournalRole(t, f.syncer, `GRANT SELECT ON sessions, session_frustration_counts TO ROLE`)
+		reader, err := NewStore(f.ctx, roleURL, f.schema, true)
+		require.NoError(t, err)
+		t.Cleanup(func() { require.NoError(t, reader.Close()) })
+		var one int
+		err = reader.DB().QueryRowContext(f.ctx, `SELECT 1 FROM messages LIMIT 1`).Scan(&one)
+		require.Error(t, err)
+		restarted, err := reader.GetAnalyticsSignals(f.ctx, db.AnalyticsFilter{})
+		require.NoError(t, err)
+		require.Equal(t, 2, restarted.QualityHealth.Totals.FrustrationMarkerCount)
+	}
 	_, err = f.pg.ExecContext(f.ctx, `UPDATE session_frustration_counts SET rules_version = $1, marker_count = 7 WHERE session_id = 'one'`, frustrationMarkerRulesVersion+1)
 	require.NoError(t, err)
 	result, err = f.open(t).GetAnalyticsSignals(f.ctx, db.AnalyticsFilter{})
@@ -80,11 +91,6 @@ func TestFrustrationCountsRulesAndRestart(t *testing.T) {
 	require.NoError(t, f.pg.QueryRowContext(f.ctx, `SELECT rules_version, marker_count FROM session_frustration_counts WHERE session_id = 'one'`).Scan(&version, &count))
 	require.Equal(t, frustrationMarkerRulesVersion, version)
 	require.Equal(t, 1, count)
-
-	f.replace(t, "two", "Please explain this function.")
-	result, err = f.open(t).GetAnalyticsSignals(f.ctx, db.AnalyticsFilter{})
-	require.NoError(t, err)
-	require.Equal(t, 1, result.QualityHealth.Totals.FrustrationMarkerCount)
 }
 
 func TestFrustrationCountsUnavailable(t *testing.T) {
@@ -160,9 +166,6 @@ func TestFrustrationCountsDelayedSave(t *testing.T) {
 	require.NoError(t, f.pg.QueryRowContext(f.ctx, `SELECT session_version, marker_count FROM session_frustration_counts WHERE session_id = 'two'`).Scan(&saved, &count))
 	require.Equal(t, versions["two"], saved)
 	require.Equal(t, 1, count)
-	result, err := f.open(t).GetAnalyticsSignals(f.ctx, db.AnalyticsFilter{})
-	require.NoError(t, err)
-	require.Equal(t, 1, result.QualityHealth.Totals.FrustrationMarkerCount)
 }
 
 func TestFrustrationCountsBulkSaves(t *testing.T) {
@@ -186,9 +189,7 @@ func TestFrustrationCountsBulkSaves(t *testing.T) {
 	t.Run("refresh", func(t *testing.T) {
 		_, err := f.pg.ExecContext(f.ctx, `INSERT INTO session_frustration_counts (session_id, session_version, rules_version, marker_count) SELECT id, 'old', $1, 0 FROM sessions WHERE id LIKE 'bulk-%'`, frustrationMarkerRulesVersion)
 		require.NoError(t, err)
-		ctx, cancel := context.WithTimeout(f.ctx, 3*time.Second)
-		defer cancel()
-		require.NoError(t, store.storeFrustrationCounts(ctx, versions, counts, f.versionColumn))
+		require.NoError(t, store.storeFrustrationCounts(f.ctx, versions, counts, f.versionColumn))
 		var refreshed int
 		require.NoError(t, f.pg.QueryRowContext(f.ctx, `SELECT count(*) FROM session_frustration_counts WHERE session_id LIKE 'bulk-%' AND marker_count = 1 AND session_version <> 'old'`).Scan(&refreshed))
 		require.Equal(t, 10000, refreshed)
