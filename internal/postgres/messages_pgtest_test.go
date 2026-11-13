@@ -13,7 +13,7 @@ import (
 
 func TestStoreSearchILIKE(t *testing.T) {
 	t.Parallel()
-	pgURL := testPGURL(t)
+	pgURL := testPGStoreURL(t)
 	ensureStoreSchema(t, pgURL)
 
 	store, err := NewStore(t.Context(), pgURL, testSchema, true)
@@ -35,7 +35,7 @@ func TestStoreSearchILIKE(t *testing.T) {
 
 func TestPGSearchDeduplication(t *testing.T) {
 	t.Parallel()
-	pgURL := testPGURL(t)
+	pgURL := testPGStoreURL(t)
 	ensureStoreSchema(t, pgURL)
 
 	// store-test-001 has 2 messages; searching "hello" only matches ordinal 0.
@@ -55,7 +55,7 @@ func TestPGSearchDeduplication(t *testing.T) {
 
 func TestPGSearchSnippetUsesWinningMessage(t *testing.T) {
 	t.Parallel()
-	pgURL := testPGURL(t)
+	pgURL := testPGStoreURL(t)
 	ensureStoreSchema(t, pgURL)
 	pg, err := Open(t.Context(), pgURL, testSchema, false)
 	require.NoError(t, err)
@@ -85,7 +85,7 @@ func TestPGSearchSnippetUsesWinningMessage(t *testing.T) {
 
 func TestPGSearchRecencySort(t *testing.T) {
 	t.Parallel()
-	pgURL := testPGURL(t)
+	pgURL := testPGStoreURL(t)
 	ensureStoreSchema(t, pgURL)
 
 	// Open a write connection to insert additional test data.
@@ -139,7 +139,7 @@ func TestPGSearchRecencySort(t *testing.T) {
 
 func TestPGSearchRelevanceSort(t *testing.T) {
 	t.Parallel()
-	pgURL := testPGURL(t)
+	pgURL := testPGStoreURL(t)
 	ensureStoreSchema(t, pgURL)
 
 	pg, err := Open(t.Context(), pgURL, testSchema, false)
@@ -203,7 +203,7 @@ func TestPGSearchRelevanceSort(t *testing.T) {
 
 func TestPGSearchNullTimestampSorting(t *testing.T) {
 	t.Parallel()
-	pgURL := testPGURL(t)
+	pgURL := testPGStoreURL(t)
 	ensureStoreSchema(t, pgURL)
 
 	pg, err := Open(t.Context(), pgURL, testSchema, false)
@@ -295,7 +295,7 @@ func TestPGSearchNullTimestampSorting(t *testing.T) {
 
 func TestPGSearchSystemMessageExcluded(t *testing.T) {
 	t.Parallel()
-	pgURL := testPGURL(t)
+	pgURL := testPGStoreURL(t)
 	ensureStoreSchema(t, pgURL)
 
 	pg, err := Open(t.Context(), pgURL, testSchema, false)
@@ -352,7 +352,7 @@ func TestPGSearchSystemMessageExcluded(t *testing.T) {
 // system messages (the EXISTS guard in the name branch).
 func TestPGSearchNameBranchExcludesSystemOnlySessions(t *testing.T) {
 	t.Parallel()
-	pgURL := testPGURL(t)
+	pgURL := testPGStoreURL(t)
 	ensureStoreSchema(t, pgURL)
 
 	pg, err := Open(t.Context(), pgURL, testSchema, false)
@@ -448,7 +448,7 @@ func TestPGSearchNameBranchExcludesSystemOnlySessions(t *testing.T) {
 // frontend hides them and matching would produce phantom highlights.
 func TestPGSearchSessionExcludesSystemMessages(t *testing.T) {
 	t.Parallel()
-	pgURL := testPGURL(t)
+	pgURL := testPGStoreURL(t)
 	ensureStoreSchema(t, pgURL)
 
 	pg, err := Open(t.Context(), pgURL, testSchema, false)
@@ -498,7 +498,7 @@ func TestPGSearchSessionExcludesSystemMessages(t *testing.T) {
 
 func TestPGSearchSessionNameMatch(t *testing.T) {
 	t.Parallel()
-	pgURL := testPGURL(t)
+	pgURL := testPGStoreURL(t)
 	ensureStoreSchema(t, pgURL)
 
 	pg, err := Open(t.Context(), pgURL, testSchema, false)
@@ -543,7 +543,7 @@ func TestPGSearchSessionNameMatch(t *testing.T) {
 
 func TestPGSearchRecencyNameOnlyBeatsOlderContent(t *testing.T) {
 	t.Parallel()
-	pgURL := testPGURL(t)
+	pgURL := testPGStoreURL(t)
 	ensureStoreSchema(t, pgURL)
 
 	pg, err := Open(t.Context(), pgURL, testSchema, false)
@@ -598,7 +598,7 @@ func TestPGSearchRecencyNameOnlyBeatsOlderContent(t *testing.T) {
 // display_name.
 func TestPGSearchSnippetMatchingField(t *testing.T) {
 	t.Parallel()
-	pgURL := testPGURL(t)
+	pgURL := testPGStoreURL(t)
 	ensureStoreSchema(t, pgURL)
 
 	pg, err := Open(t.Context(), pgURL, testSchema, false)
@@ -862,7 +862,7 @@ func TestGetMessagesIDPopulated(t *testing.T) {
 // content and not error. ILIKE has no FTS-operator hazard, but this pins parity.
 func TestPGSearchOperatorTokenNoError(t *testing.T) {
 	t.Parallel()
-	pgURL := testPGURL(t)
+	pgURL := testPGStoreURL(t)
 	ensureStoreSchema(t, pgURL)
 
 	pg, err := Open(t.Context(), pgURL, testSchema, false)
@@ -909,7 +909,7 @@ func TestPGSearchOperatorTokenNoError(t *testing.T) {
 // implicit AND so the same user query behaves identically across backends.
 func TestPGSearchMultiTermAND(t *testing.T) {
 	t.Parallel()
-	pgURL := testPGURL(t)
+	pgURL := testPGStoreURL(t)
 	ensureStoreSchema(t, pgURL)
 
 	pg, err := Open(t.Context(), pgURL, testSchema, false)

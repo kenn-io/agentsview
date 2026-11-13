@@ -974,6 +974,7 @@ func TestPGUsageCacheUnreadableJournalStopsWarming(t *testing.T) {
 }
 
 func TestPGUsageCacheDirectFallbackAndRecovery(t *testing.T) {
+	t.Parallel()
 	for _, name := range []string{"granted role", "initial denial", "cancelled caller", "extraction failure", "busy sessions", "busy accounts", "pricing mutation", "late journal installation"} {
 		t.Run(name, func(t *testing.T) {
 			_, syncer, owner, counter := keptUsageFixture(t)
@@ -1060,10 +1061,7 @@ func TestPGUsageCacheDirectFallbackAndRecovery(t *testing.T) {
 				// A fill can stop while its caller remains active. Classify the caller,
 				// rather than the fill error, when deciding whether to read directly.
 				var output bytes.Buffer
-				previous, flags := log.Writer(), log.Flags()
-				log.SetOutput(&output)
-				log.SetFlags(0)
-				t.Cleanup(func() { log.SetOutput(previous); log.SetFlags(flags) })
+				reader.usageCache.SetLogger(log.New(&output, "", 0))
 				for _, failure := range []error{errors.New("injected remote extraction failure"), context.Canceled, context.DeadlineExceeded} {
 					probe.before = func(context.Context, []string) error { return failure }
 					_, err := reader.usageCache.GetDailyUsage(ctx, filter)
@@ -1119,9 +1117,7 @@ func TestPGUsageCacheDirectFallbackAndRecovery(t *testing.T) {
 				require.NoError(t, reader.usageCache.WaitWarm(ctx))
 				requireCachedUsageMatchesDirect(t, reader, filter)
 				var output bytes.Buffer
-				previous := log.Writer()
-				log.SetOutput(&output)
-				t.Cleanup(func() { log.SetOutput(previous) })
+				reader.usageCache.SetLogger(log.New(&output, "", 0))
 				_, err = owner.pg.ExecContext(ctx, dropUsageChangeJournalSQL)
 				require.NoError(t, err)
 				filter.From = "2026-01-01"
@@ -1137,9 +1133,7 @@ func TestPGUsageCacheDirectFallbackAndRecovery(t *testing.T) {
 			require.NotNil(t, reader.usageCache)
 			if name == "late journal installation" {
 				var output bytes.Buffer
-				previous := log.Writer()
-				log.SetOutput(&output)
-				t.Cleanup(func() { log.SetOutput(previous) })
+				reader.usageCache.SetLogger(log.New(&output, "", 0))
 				want, err := (&Store{pg: reader.pg}).GetDailyUsage(ctx, filter)
 				require.NoError(t, err)
 				for range 10 {
@@ -1432,13 +1426,12 @@ func TestPGUsageCacheNewerClaimDoesNotResetOlderSnapshot(t *testing.T) {
 }
 
 func TestPGUsageCacheDefersAccountChange(t *testing.T) {
+	t.Parallel()
 	_, _, store, _ := keptUsageFixture(t)
 	ctx := t.Context()
-	var output bytes.Buffer
-	previous := log.Writer()
-	log.SetOutput(&output)
-	t.Cleanup(func() { log.SetOutput(previous) })
 	attachUsageCacheProbe(t, store, t.TempDir())
+	var output bytes.Buffer
+	store.usageCache.SetLogger(log.New(&output, "", 0))
 	filter := db.UsageFilter{Timezone: "UTC"}
 	requireCachedUsageMatchesDirect(t, store, filter)
 	require.NoError(t, store.usageCache.LoadReadiness(ctx))

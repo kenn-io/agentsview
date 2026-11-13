@@ -25,7 +25,7 @@ import (
 // is exercised on its own, independent of what any parser emits.
 func TestPGGetMessagesDropsInvalidStoredTokenUsage(t *testing.T) {
 	t.Parallel()
-	pgURL := testPGURL(t)
+	pgURL := testPGStoreURL(t)
 	ensureStoreSchema(t, pgURL)
 
 	pg, err := Open(t.Context(), pgURL, testSchema, false)
@@ -60,7 +60,7 @@ func TestPGGetMessagesDropsInvalidStoredTokenUsage(t *testing.T) {
 // Valid usage must still round-trip through the mirror untouched.
 func TestPGGetMessagesPreservesValidStoredTokenUsage(t *testing.T) {
 	t.Parallel()
-	pgURL := testPGURL(t)
+	pgURL := testPGStoreURL(t)
 	ensureStoreSchema(t, pgURL)
 
 	pg, err := Open(t.Context(), pgURL, testSchema, false)

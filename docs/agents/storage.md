@@ -1582,6 +1582,12 @@ Because each test owns a database, the tests run in parallel:
   `testPGURL(t)`, or `PGTestURL(t)` in the external `postgres_test` package.
   Subtests share their top-level test's database. `isolatedPGDatabase(t)`
   returns another, separate database.
+- Tests that call `ensureStoreSchema` get their database from
+  `testPGStoreURL(t)`. On PostgreSQL that database is a copy of a template in
+  which `EnsureSchema` already created the store schema, which saves about
+  60 ms per test. The template is built once per test binary and dropped at
+  exit. CockroachDB has no `CREATE DATABASE ... TEMPLATE`, so there the test
+  gets an empty database and creates the schema itself.
 - Leave out `t.Parallel()` when the test changes process-wide state, such as
   `t.Setenv`, `time.Local`, `log.SetOutput`, `db.SetUserAutomationPrefixes`,
   or `pricing.SetConfiguredAliases`. Go runs those tests one at a time before
@@ -1589,8 +1595,11 @@ Because each test owns a database, the tests run in parallel:
 - Roles are server-wide. Give each role a name no other test uses.
 - Concurrent tests share the server's connections and lock table. Against a
   server with the default 100 connections, 16 concurrent tests ran out of lock
-  memory (SQLSTATE 53200) and 12 did not, so `make test-postgres` passes
-  `-parallel 8` and each CI shard passes `-parallel=4`.
+  memory (SQLSTATE 53200) and 12 did not. So on PostgreSQL a top-level test
+  holds one of `max_connections / 8` slots while its databases exist, and
+  waits when none is free. The slots are lock files in the system temporary
+  directory, keyed by server address, so every test process against one
+  server shares them. CockroachDB has no shared lock table and no slots.
 - Run CockroachDB with an in-memory store
   (`start-single-node --store=type=mem,size=4GiB`). Schema setup takes about
   10 s per test there, against 86 s on a disk store.
@@ -1603,7 +1612,7 @@ To use an existing dedicated instance, run:
 
 ```bash
 TEST_PG_URL="postgres://user:pass@host:5432/dbname?sslmode=disable" \
-  CGO_ENABLED=1 go test -parallel 8 -tags "fts5,pgtest" ./internal/postgres/... -v
+  CGO_ENABLED=1 go test -tags "fts5,pgtest" ./internal/postgres/... -v
 ```
 
 ### Image text

@@ -15,7 +15,7 @@ import (
 
 func TestGetActiveProjectLabelsIncludesRelationshipSessions(t *testing.T) {
 	t.Parallel()
-	pgURL := testPGURL(t)
+	pgURL := testPGStoreURL(t)
 	ensureStoreSchema(t, pgURL)
 
 	store, err := NewStore(t.Context(), pgURL, testSchema, true)
@@ -44,7 +44,7 @@ func TestGetActiveProjectLabelsIncludesRelationshipSessions(t *testing.T) {
 
 func TestSessionFilterIncludesEmptyForProjectMapping(t *testing.T) {
 	t.Parallel()
-	pgURL := testPGURL(t)
+	pgURL := testPGStoreURL(t)
 	ensureStoreSchema(t, pgURL)
 	store, err := NewStore(t.Context(), pgURL, testSchema, true)
 	require.NoError(t, err)
@@ -72,7 +72,7 @@ func TestSessionFilterIncludesEmptyForProjectMapping(t *testing.T) {
 
 func TestListSessionsDateFilterIncludesOverlappingSessions(t *testing.T) {
 	t.Parallel()
-	pgURL := testPGURL(t)
+	pgURL := testPGStoreURL(t)
 	ensureStoreSchema(t, pgURL)
 
 	store, err := NewStore(t.Context(), pgURL, testSchema, true)
@@ -150,7 +150,7 @@ func TestListSessionsDateFilterIncludesOverlappingSessions(t *testing.T) {
 // returns only sessions where secret_leak_count > 0.
 func TestListSessions_HasSecret(t *testing.T) {
 	t.Parallel()
-	pgURL := testPGURL(t)
+	pgURL := testPGStoreURL(t)
 	ensureStoreSchema(t, pgURL)
 
 	store, err := NewStore(t.Context(), pgURL, testSchema, true)
@@ -235,7 +235,7 @@ func TestListSessions_HasSecret(t *testing.T) {
 // unique project so the schema's seed session does not interfere.
 func TestListSessions_Sort(t *testing.T) {
 	t.Parallel()
-	pgURL := testPGURL(t)
+	pgURL := testPGStoreURL(t)
 	ensureStoreSchema(t, pgURL)
 
 	store, err := NewStore(t.Context(), pgURL, testSchema, true)
@@ -295,7 +295,7 @@ func TestListSessions_Sort(t *testing.T) {
 // must match the full listing.
 func TestListSessions_SortMultiKey(t *testing.T) {
 	t.Parallel()
-	pgURL := testPGURL(t)
+	pgURL := testPGStoreURL(t)
 	ensureStoreSchema(t, pgURL)
 
 	store, err := NewStore(t.Context(), pgURL, testSchema, true)
@@ -362,7 +362,7 @@ func TestListSessions_SortMultiKey(t *testing.T) {
 // inside both ORDER BY and the keyset cursor predicate.
 func TestListSessions_SortSecretsVersioned(t *testing.T) {
 	t.Parallel()
-	pgURL := testPGURL(t)
+	pgURL := testPGStoreURL(t)
 	ensureStoreSchema(t, pgURL)
 
 	store, err := NewStore(t.Context(), pgURL, testSchema, true)
@@ -437,7 +437,7 @@ func TestListSessions_SortSecretsVersioned(t *testing.T) {
 // rows last on PostgreSQL and paginates across the sentinel boundary.
 func TestListSessions_SortNullsLast(t *testing.T) {
 	t.Parallel()
-	pgURL := testPGURL(t)
+	pgURL := testPGStoreURL(t)
 	ensureStoreSchema(t, pgURL)
 
 	store, err := NewStore(t.Context(), pgURL, testSchema, true)
@@ -596,7 +596,7 @@ func TestFindSessionIDsByRawSuffixPG(t *testing.T) {
 
 func TestGetMatchingMachineIDs(t *testing.T) {
 	t.Parallel()
-	pgURL := testPGURL(t)
+	pgURL := testPGStoreURL(t)
 	ensureStoreSchema(t, pgURL)
 	store, err := NewStore(t.Context(), pgURL, testSchema, true)
 	require.NoError(t, err)

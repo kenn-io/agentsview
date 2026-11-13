@@ -38,9 +38,8 @@ mapfile -t tests < <(awk -v excluded="$excluded" '/^(Test|Example|Fuzz)/ && $0 !
 ((${#tests[@]} >= shards)) || { echo 'empty test list or shard' >&2; exit 1; }
 printf '%s tests in %s processes\n' "${#tests[@]}" "$shards"
 
-# Tests in a shard run in parallel, each in its own database. All of them share
-# the server's connections and lock table: on a default server (100
-# connections), 16 concurrent tests ran out of lock memory and 12 did not.
+# Tests in a shard run in parallel, each in its own database. The test helper
+# limits how many run at once across all shards (see docs/agents/storage.md).
 base=${TEST_PG_URL%%\?*}
 query=${TEST_PG_URL#"$base"}
 database=$(psql -X -v ON_ERROR_STOP=1 "$TEST_PG_URL" -Atc 'SELECT current_database()')
@@ -58,7 +57,7 @@ for ((i=0; i<shards; i++)); do
     pattern=$(IFS='|'; echo "${names[*]}")
     TEST_PG_URL=$url go tool gotestsum --format pkgname-and-test-fails --format-icons text \
         --jsonfile "$work/$i.json" --rerun-fails=2 --rerun-fails-report "$work/$i-reruns.txt" \
-        --packages "$package" -- -tags "fts5,pgtest" -run "^($pattern)$" -count=1 -parallel=4 -timeout="$timeout" > "$work/$i.out" 2>&1 &
+        --packages "$package" -- -tags "fts5,pgtest" -run "^($pattern)$" -count=1 -timeout="$timeout" > "$work/$i.out" 2>&1 &
     pids[i]=$!
     pending+=("$!")
 done

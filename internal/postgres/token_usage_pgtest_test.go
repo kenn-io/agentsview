@@ -15,7 +15,7 @@ import (
 
 func TestStoreSessionAndMessageTokenUsage(t *testing.T) {
 	t.Parallel()
-	pgURL := testPGURL(t)
+	pgURL := testPGStoreURL(t)
 	ensureStoreSchema(t, pgURL)
 
 	pg, err := Open(t.Context(), pgURL, testSchema, false)

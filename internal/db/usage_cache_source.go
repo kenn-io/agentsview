@@ -9,6 +9,7 @@ import (
 	"slices"
 	"strconv"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"go.kenn.io/agentsview/internal/export"
@@ -81,6 +82,9 @@ type UsageCacheReader struct {
 	// warmRetryAt is when an unavailable source may be probed again. Until
 	// then unready reads stay on the direct path without queueing a pass.
 	warmRetryAt time.Time
+	// logger receives the reader's warm-pass and fallback messages; nil
+	// means the standard logger.
+	logger atomic.Pointer[log.Logger]
 }
 
 // UsageChangeSummary describes journal changes after a claimed revision.
@@ -125,6 +129,19 @@ func NewUsageCacheReader(directory string, source UsageCacheSource) (*UsageCache
 		engine: engine, warmPending: make(map[string]bool), warmIdle: idle,
 		warmCtx: warmCtx, warmCancel: warmCancel,
 	}, nil
+}
+
+// SetLogger sends the reader's warm-pass and fallback messages to logger.
+func (reader *UsageCacheReader) SetLogger(logger *log.Logger) {
+	reader.logger.Store(logger)
+}
+
+// Logger returns the logger set by SetLogger, or the standard logger.
+func (reader *UsageCacheReader) Logger() *log.Logger {
+	if logger := reader.logger.Load(); logger != nil {
+		return logger
+	}
+	return log.Default()
 }
 
 func (reader *UsageCacheReader) Close() error {
@@ -389,7 +406,7 @@ func (reader *UsageCacheReader) runWarm(idle chan struct{}) {
 			continue
 		}
 		if err != nil && reader.warmCtx.Err() == nil {
-			log.Printf("warming usage cache for timezone %q: %v", timezone, err)
+			reader.Logger().Printf("warming usage cache for timezone %q: %v", timezone, err)
 			// Keep failed work alive even when later requests hit a memoized
 			// direct result and do not queue another warm pass.
 			select {
