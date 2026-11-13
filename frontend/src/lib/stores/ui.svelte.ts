@@ -330,7 +330,9 @@ class UIStore {
 
   private localZoomLevel = readStoredZoom();
   zoomLevel: ZoomLevel = $state(this.localZoomLevel ?? ZOOM_DEFAULT);
-  alwaysShowYear: boolean = $state(readStoredBool(ALWAYS_SHOW_YEAR_KEY, false));
+  alwaysShowYear: boolean = $state(
+    readStoredBool(ALWAYS_SHOW_YEAR_KEY, false),
+  );
   renderUnknownXmlBlocksAsPreformatted: boolean = $state(
     readStoredBool(UNKNOWN_XML_PREFORMATTED_KEY, false),
   );
@@ -440,7 +442,10 @@ class UIStore {
 
       $effect(() => {
         try {
-          localStorage?.setItem(ALWAYS_SHOW_YEAR_KEY, String(this.alwaysShowYear));
+          localStorage?.setItem(
+            ALWAYS_SHOW_YEAR_KEY,
+            String(this.alwaysShowYear),
+          );
         } catch {
           // ignore
         }

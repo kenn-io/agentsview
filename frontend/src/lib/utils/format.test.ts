@@ -30,16 +30,17 @@ describe("formatRelativeTime", () => {
     ui.alwaysShowYear = true;
     for (const year of ["2024", "2025", "2026"]) {
       const date = `${year}-11-01T12:00:00Z`;
-      expect(formatRelativeTime(date)).toContain(year);
+      expect(formatRelativeTime(date, true)).toContain(year);
       expect(formatTimestamp(date)).toContain(year);
     }
-    expect(formatRelativeTime("2026-11-13T11:58:00Z")).toContain("2026");
-    expect(formatRelativeTime("2026-11-11T12:00:00Z")).toContain("2026");
+    expect(formatRelativeTime("2026-11-13T11:58:00Z", true)).toContain("2026");
+    expect(formatRelativeTime("2026-11-11T12:00:00Z", true)).toContain("2026");
     expect(formatRelativeTime(null)).toBe("—");
     vi.setSystemTime(new Date("2026-01-02T12:00:00Z"));
-    expect(formatRelativeTime("2025-12-31T12:00:00Z")).toContain("2025");
-    ui.alwaysShowYear = false;
+    expect(formatRelativeTime("2025-12-31T12:00:00Z", true)).toContain("2025");
     expect(formatRelativeTime("2025-12-31T12:00:00Z")).toBe("2d ago");
+    expect(formatRelativeTime("2026-01-02T11:58:00Z")).toBe("2m ago");
+    ui.alwaysShowYear = false;
     expect(formatRelativeTime("2024-11-11T12:00:00Z")).not.toContain("2024");
     expect(formatTimestamp("2024-11-11T12:00:00Z")).not.toContain("2024");
     setLocale("zh-CN");

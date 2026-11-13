@@ -1,7 +1,11 @@
 <script lang="ts">
-  import { formatDateTime, m } from "../../i18n/index.js";
+  import {
+    formatDateTime,
+    m,
+  } from "../../i18n/index.js";
   import { getSessionStatus } from "../../stores/sessionStatus.svelte.js";
   import { sessions } from "../../stores/sessions.svelte.js";
+  import { ui } from "../../stores/ui.svelte.js";
   import type { SessionGroupInput } from "../../stores/sessionGroups.js";
   import {
     buildReadProgressToken,
@@ -154,7 +158,7 @@
 
   const userMessageCount = $derived(session.user_message_count ?? 0);
   let timeStr = $derived(
-    formatRelativeTime(session.ended_at ?? session.started_at),
+    formatRelativeTime(session.ended_at ?? session.started_at, ui.alwaysShowYear),
   );
 
   let fullTime = $derived.by(() => {

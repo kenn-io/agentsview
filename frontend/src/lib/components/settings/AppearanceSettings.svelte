@@ -195,7 +195,11 @@
 
   <div class="setting-row">
     <span class="setting-label">{m.appearance_always_show_year()}</span>
-    <Toggle checked={ui.alwaysShowYear} onchange={() => ui.toggleAlwaysShowYear()} ariaLabel={m.appearance_always_show_year()}>
+    <Toggle
+      checked={ui.alwaysShowYear}
+      onchange={() => ui.toggleAlwaysShowYear()}
+      ariaLabel={m.appearance_always_show_year()}
+    >
       {ui.alwaysShowYear ? m.appearance_on() : m.appearance_off()}
     </Toggle>
   </div>

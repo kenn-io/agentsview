@@ -25,13 +25,13 @@ const DAY = 86400;
 const WEEK = 604800;
 
 /** Formats an ISO timestamp as a human-friendly relative time */
-export function formatRelativeTime(isoString: string | null | undefined): string {
+export function formatRelativeTime(isoString: string | null | undefined, alwaysShowYear = false): string {
   if (!isoString) return "—";
 
   const date = new Date(isoString);
   const diffSec = Math.floor((Date.now() - date.getTime()) / 1000);
 
-  if (ui.alwaysShowYear) {
+  if (alwaysShowYear) {
     return formatDateTime(date, { year: "numeric", month: "short", day: "numeric" });
   }
 
@@ -53,7 +53,6 @@ export function formatRelativeTime(isoString: string | null | undefined): string
   }
 
   return formatDateTime(date, {
-    year: ui.alwaysShowYear ? "numeric" : undefined,
     month: "short",
     day: "numeric",
   });

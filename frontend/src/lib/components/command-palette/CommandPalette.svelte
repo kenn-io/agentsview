@@ -469,7 +469,7 @@
               </span>
               <span class="item-agent" style:--agent-ink={agentInk(result.agent)}>{agentLabel(result.agent)}</span>
               <span class="item-meta">
-                {truncate(result.project, 20)}{result.timestamp ? ' · ' + formatRelativeTime(result.timestamp) : ''}
+                {truncate(result.project, 20)}{result.timestamp ? ' · ' + formatRelativeTime(result.timestamp, ui.alwaysShowYear) : ''}
               </span>
               <!-- svelte-ignore a11y_click_events_have_key_events -->
               <!-- svelte-ignore a11y_no_static_element_interactions -->
@@ -501,7 +501,7 @@
             </span>
             <span class="item-agent" style:--agent-ink={agentInk(session.agent)}>{agentLabel(session.agent, session.agent_label)}</span>
             <span class="item-meta">
-              {formatRelativeTime(session.ended_at ?? session.started_at)}
+              {formatRelativeTime(session.ended_at ?? session.started_at, ui.alwaysShowYear)}
             </span>
           </button>
         {/each}
