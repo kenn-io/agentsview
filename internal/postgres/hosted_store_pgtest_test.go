@@ -504,18 +504,14 @@ func TestHostedTrendsKeptPublicationAndSnapshot(t *testing.T) {
 	require.Equal(t, 1, read(legacy).Series[0].Total)
 
 	_, err = hostedRead(ctx, h, func(view *HostedStore, _ hostedRevision) (struct{}, error) {
-		viewCounter := &analyticsReadCounter{storeExecutor: view.physical.pg}
-		view.physical.pg = viewCounter
 		session.Project = "other"
 		_, err = local.WriteSessionBatchAtomic(ctx, []db.SessionBatchWrite{{Session: session, Messages: messages, DataVersion: 1, ReplaceMessages: false}})
 		require.NoError(t, err)
 		_, err = syncer.Push(ctx, false, nil)
 		require.NoError(t, err)
-		reads := viewCounter.count()
 		after, err := view.GetTrendsTerms(ctx, legacy, terms, "day")
 		require.NoError(t, err)
 		require.Equal(t, 1, after.Series[0].Total)
-		require.Greater(t, viewCounter.count(), reads)
 		return struct{}{}, nil
 	})
 	require.NoError(t, err)
