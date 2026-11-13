@@ -69,6 +69,28 @@ func TestPricingResolverExactCustomRateBeatsConfiguredAlias(t *testing.T) {
 	assert.Zero(t, lookup.Rates.InputPerMTok.Microdollars)
 }
 
+func TestPricingResolverCopyReplayAndResolvedBandIsolation(t *testing.T) {
+	resolver := NewPricingResolver([]EffectivePricingRow{
+		{ModelPattern: "gateway/foo", Rates: ModelRates{Source: PricingRowSourceCustom, Bands: []PricingBand{{AboveInputTokens: 100}}}},
+	})
+	first := resolver.Copy()
+	_, copied := first.Resolve("gateway/foo", "gateway/foo")
+	first.RecordResolvedComputedRequest("gateway/foo", "gateway/foo", copied, 200, 0, 0)
+	first.RecordResolvedReported("gateway/foo", "gateway/foo", copied)
+	first.RecordUnattributedReported()
+	records, unattributed := first.RecordedCounts()
+	replayed := resolver.Copy()
+	replayed.ReplayRecordedCounts(records, unattributed)
+	want, err := first.BuildBlock()
+	require.NoError(t, err)
+	got, err := replayed.BuildBlock()
+	require.NoError(t, err)
+	require.Equal(t, want, got)
+	copied.Rates.Bands[0].AboveInputTokens = 999
+	_, again := resolver.Resolve("gateway/foo", "gateway/foo")
+	require.Equal(t, 100, again.Rates.Bands[0].AboveInputTokens)
+}
+
 func TestPricingResolverUsesHistoricalGenAIPricesBeforeFlatFallback(t *testing.T) {
 	embedded := pricingpkg.EmbeddedGenAIDocument()
 	genAI := EffectivePricingRow{
