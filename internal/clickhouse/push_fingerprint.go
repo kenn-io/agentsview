@@ -29,25 +29,29 @@ type sessionFingerprint struct {
 // session scalars, every message with its tool calls and result events,
 // the usage-event fingerprint, the tool-call fingerprint (file_path and
 // call_index are json:"-" on ToolCall), secret findings, pins, commit
-// links, and successful image text.
+// links, and successful image text. It also returns how many message rows
+// a push stores for each session, which a usage-only archive keeps fewer of
+// than the session's message count.
 func (s *Sync) sessionFingerprints(
 	ctx context.Context, sessions []db.Session, onProgress func(storage.PushProgress),
-) (map[string]sessionFingerprint, error) {
-	out := make(map[string]sessionFingerprint, len(sessions))
+) (fingerprints map[string]sessionFingerprint, messageRows map[string]int, err error) {
+	fingerprints = make(map[string]sessionFingerprint, len(sessions))
+	messageRows = make(map[string]int, len(sessions))
 	for i, sess := range sessions {
 		if err := ctx.Err(); err != nil {
-			return nil, err
+			return nil, nil, err
 		}
 		payload, err := s.loadPayload(ctx, sess)
 		if err != nil {
-			return nil, err
+			return nil, nil, err
 		}
-		out[sess.ID] = payload.fingerprint
+		fingerprints[sess.ID] = payload.fingerprint
+		messageRows[sess.ID] = len(payload.messages)
 		if onProgress != nil && (i+1)%fingerprintProgressStride == 0 {
 			onProgress(storage.PushProgress{Phase: "preparing", SessionsDone: i + 1, SessionsTotal: len(sessions)})
 		}
 	}
-	return out, nil
+	return fingerprints, messageRows, nil
 }
 
 // SessionContent is what a push writes for a session outside the session
