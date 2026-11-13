@@ -106,21 +106,8 @@ func usageChangeJournalSQL() (string, string) {
 		}
 		for _, event := range []string{"INSERT", "UPDATE", "DELETE"} {
 			condition := ""
-			if table.name != "genai_pricing" {
-				// Match isPricingMetaPattern and the pricing queries' literal underscore prefix.
-				const oldModel = `OLD.model_pattern NOT LIKE '\_%' ESCAPE '\'`
-				const newModel = `NEW.model_pattern NOT LIKE '\_%' ESCAPE '\'`
-				switch event {
-				case "INSERT":
-					condition = newModel
-				case "DELETE":
-					condition = oldModel
-				case "UPDATE":
-					condition = "(" + oldModel + " OR " + newModel + ") AND "
-				}
-			}
 			if event == "UPDATE" {
-				condition += "(" + strings.Join(changes, " OR ") + ")"
+				condition = "(" + strings.Join(changes, " OR ") + ")"
 			}
 			add("trg_"+table.name+"_usage_change_"+strings.ToLower(event), event, table.name, condition, "", false)
 		}

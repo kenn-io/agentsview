@@ -45,17 +45,14 @@ func chLoadPricing(
 	out := map[string]export.ModelRates{}
 	count := 0
 	for _, p := range rows {
-		if strings.HasPrefix(p.ModelPattern, "_") {
-			continue
-		}
 		rates := db.ModelPricingRates(p)
 		out[p.ModelPattern] = rates
 		count++
 	}
 	if count == 0 {
-		out = db.FallbackPricingMap()
+		out = db.FallbackRateMap()
 	} else {
-		fallback := db.FallbackPricingMap()
+		fallback := db.FallbackRateMap()
 		for model, rates := range out {
 			rates.Source = db.ModelPricingSource(model, rates, fallback)
 			out[model] = rates

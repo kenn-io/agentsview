@@ -1618,7 +1618,7 @@ func TestPushRetiresOpenRouterPricingRows(t *testing.T) {
 	require.NoError(t, err, "first push")
 
 	// LiteLLM now covers the model: the local refresh retires the
-	// OpenRouter row and rewrites the ownership sentinel.
+	// OpenRouter row and rewrites the ownership list.
 	require.NoError(t, local.ReconcileModelPricing(
 		[]db.ModelPricing{{
 			ModelPattern: "minimax/MiniMax-M3",
@@ -1657,9 +1657,9 @@ func TestPushRetiresOpenRouterPricingRows(t *testing.T) {
 
 	var meta string
 	require.NoError(t, store.DB().QueryRowContext(t.Context(), `
-		SELECT updated_at FROM model_pricing WHERE model_pattern = $1`,
+		SELECT value FROM pricing_meta WHERE key = $1`,
 		pricing.OpenRouterModelsMetaKey).Scan(&meta))
-	assert.Equal(t, `[]`, meta, "ownership sentinel mirrored by value")
+	assert.Equal(t, `[]`, meta, "ownership list mirrored by value")
 }
 
 func TestPushFallsBackToBuiltinPricingWhenLocalTableEmpty(t *testing.T) {

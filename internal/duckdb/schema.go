@@ -37,7 +37,9 @@ import (
 // v28 adds the usage rollup tables (see usage_rollup.go).
 // v29 stores each message's token usage counters in typed columns, parsed at
 // push by usagefacts.ParseTokenUsage, so usage reads never parse token_usage.
-const SchemaVersion = 29
+// v30 moves the OpenRouter ownership list from a model_pricing row into
+// pricing_meta.
+const SchemaVersion = 30
 
 const schemaVersionMetadataKey = "agentsview_schema_version"
 
@@ -642,6 +644,17 @@ var mirrorTables = append([]tableSpec{
 			{"source", "source TEXT NOT NULL"},
 			{"data_json", "data_json BLOB NOT NULL"},
 			{"updated_at", "updated_at TEXT NOT NULL DEFAULT ''"},
+		},
+	},
+	{
+		name: "pricing_meta",
+		create: `CREATE TABLE IF NOT EXISTS pricing_meta (
+			key TEXT PRIMARY KEY,
+			value TEXT NOT NULL
+		)`,
+		columns: []columnSpec{
+			{"key", "key TEXT"},
+			{"value", "value TEXT NOT NULL"},
 		},
 	},
 	{

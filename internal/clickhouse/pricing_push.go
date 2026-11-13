@@ -34,20 +34,44 @@ func (s *Sync) syncModelPricing(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	prices, removePatterns, err := db.PlanModelPricingSync(existing, prices)
+	existingOpenRouter, err := readPricingMeta(ctx, s.conn, pricingpkg.OpenRouterModelsMetaKey)
+	if err != nil {
+		return err
+	}
+	localOpenRouter, err := s.local.GetPricingMetaContext(ctx, pricingpkg.OpenRouterModelsMetaKey)
+	if err != nil {
+		return err
+	}
+	plan, err := db.PlanModelPricingSync(existing, existingOpenRouter, prices, localOpenRouter)
 	if err != nil {
 		return fmt.Errorf("planning clickhouse pricing sync: %w", err)
 	}
-	if len(prices) == 0 && len(removePatterns) == 0 {
-		return s.syncGenAIPricing(ctx)
-	}
-	if err := s.removeModelPricing(ctx, removePatterns); err != nil {
+	if err := s.removeModelPricing(ctx, plan.Remove); err != nil {
 		return err
 	}
-	if err := s.replaceModelPricing(ctx, prices); err != nil {
+	if err := s.replaceModelPricing(ctx, plan.Changed); err != nil {
 		return err
+	}
+	if plan.WriteOpenRouterModels {
+		if err := insertRows(ctx, s.conn, "pricing_meta", [][]any{{
+			pricingpkg.OpenRouterModelsMetaKey, plan.OpenRouterModels, newPushVersion(),
+		}}); err != nil {
+			return err
+		}
 	}
 	return s.syncGenAIPricing(ctx)
+}
+
+// readPricingMeta reads a pricing_meta value from the mirror. Returns ""
+// if not found.
+func readPricingMeta(ctx context.Context, conn *sql.DB, key string) (string, error) {
+	var value string
+	if err := conn.QueryRowContext(ctx,
+		`SELECT argMax(value, push_version) FROM pricing_meta WHERE key = ?`, key,
+	).Scan(&value); err != nil {
+		return "", fmt.Errorf("reading clickhouse pricing meta %q: %w", key, err)
+	}
+	return value, nil
 }
 
 func (s *Sync) removeModelPricing(ctx context.Context, patterns []string) error {

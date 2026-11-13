@@ -112,6 +112,9 @@ func (c *pricingProbeConn) ExecContext(
 func (c *pricingProbeConn) QueryContext(
 	ctx context.Context, query string, _ []driver.NamedValue,
 ) (driver.Rows, error) {
+	if strings.Contains(strings.ToLower(query), "from pricing_meta") {
+		return &pricingProbeRows{columns: []string{"value"}}, nil
+	}
 	if strings.Contains(strings.ToLower(query), "from genai_pricing") {
 		c.state.mu.Lock()
 		values := append([][]driver.Value(nil), c.state.genAIRows...)
@@ -213,7 +216,7 @@ func (s *pricingProbeState) unblockNextQuery() {
 }
 
 func TestCustomPricingOverridesPricingMap(t *testing.T) {
-	fallback := db.FallbackPricingMap()
+	fallback := db.FallbackRateMap()
 	tests := []struct {
 		name       string
 		dbPrices   []db.ModelPricing
@@ -377,21 +380,6 @@ func TestLoadPricingMapSharesConcurrentDBRows(t *testing.T) {
 		secondByPattern := pricingRowsByPattern(second.prices)
 		assert.Equal(t, money.MustParseDollars("1"), secondByPattern["db-model"].InputPerMTok)
 	})
-}
-
-func TestLoadPricingMapUsesFallbackForSentinelOnlyCatalog(t *testing.T) {
-	state := &pricingProbeState{rows: [][]driver.Value{{
-		"_fallback_version", int64(0), int64(0), int64(0), int64(0), int64(0), "v1",
-		nil, nil, nil, nil, nil, nil, nil,
-	}}}
-	store := &Store{pg: newPricingProbeDB(t, state)}
-
-	rows, err := store.loadPricingMap(t.Context())
-	require.NoError(t, err)
-	byPattern := pricingRowsByPattern(rows)
-
-	assert.NotContains(t, byPattern, "_fallback_version")
-	assert.Contains(t, byPattern, "gpt-5.5")
 }
 
 func TestLoadPricingMapUsesEmbeddedGenAIWhenTableMissing(t *testing.T) {
@@ -693,21 +681,6 @@ func TestPGPricingUpsertStatementBatchesRows(t *testing.T) {
 	assert.Equal(t, "call-time", args[6])
 	assert.Equal(t, "model-b", args[7])
 	assert.Equal(t, "source-time", args[13])
-}
-
-func TestPGPricingMetaUpsertStatement(t *testing.T) {
-	query, args := pgPricingMetaUpsertStatement([]db.ModelPricing{
-		{ModelPattern: "_openrouter_models", UpdatedAt: `["a"]`},
-		{ModelPattern: "_fallback_version", UpdatedAt: "v3"},
-	})
-
-	assert.Contains(t, query, "VALUES ($1, 0, 0, 0, 0, 0, $2), ($3, 0, 0, 0, 0, 0, $4)")
-	assert.Contains(t, query, "DO UPDATE SET\n\t\tupdated_at = EXCLUDED.updated_at")
-	assert.NotContains(t, query, "timestamptz",
-		"sentinel values are opaque and must not be cast")
-	assert.Equal(t, []any{
-		"_openrouter_models", `["a"]`, "_fallback_version", "v3",
-	}, args)
 }
 
 func TestPGPricingDeleteStatement(t *testing.T) {

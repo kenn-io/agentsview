@@ -1503,7 +1503,7 @@ func TestSyncModelPricingRetiresOpenRouterRows(t *testing.T) {
 	require.NoError(t, syncer.syncModelPricing(ctx))
 
 	// LiteLLM now covers the model: the local refresh retires the
-	// OpenRouter row and rewrites the ownership sentinel.
+	// OpenRouter row and rewrites the ownership list.
 	require.NoError(t, local.ReconcileModelPricing(
 		[]db.ModelPricing{{
 			ModelPattern: "minimax/MiniMax-M3",
@@ -1537,10 +1537,10 @@ func TestSyncModelPricingRetiresOpenRouterRows(t *testing.T) {
 	assert.Equal(t, int64(2_000_000), input, "replacement row mirrored")
 	var meta string
 	require.NoError(t, syncer.DB().QueryRowContext(ctx,
-		`SELECT updated_at FROM model_pricing WHERE model_pattern = ?`,
+		`SELECT value FROM pricing_meta WHERE key = ?`,
 		pricing.OpenRouterModelsMetaKey,
 	).Scan(&meta))
-	assert.Equal(t, `[]`, meta, "ownership sentinel mirrored by value")
+	assert.Equal(t, `[]`, meta, "ownership list mirrored")
 }
 
 func TestSyncModelPricingSkipsUnchangedMirrorRows(t *testing.T) {

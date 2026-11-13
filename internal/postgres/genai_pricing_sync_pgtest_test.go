@@ -17,6 +17,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"go.kenn.io/agentsview/internal/db"
+	"go.kenn.io/agentsview/internal/money"
 	"go.kenn.io/agentsview/internal/storage"
 )
 
@@ -32,6 +33,11 @@ func TestSyncModelPricingComparesGenAIByDigest(t *testing.T) {
 	cleanNamedPGSchema(t, url, schema)
 	t.Cleanup(func() { cleanNamedPGSchema(t, url, schema) })
 	local := testDB(t)
+	// One model price keeps the push from copying the fallback catalog,
+	// which would swamp the byte count this test measures.
+	require.NoError(t, local.UpsertModelPricing([]db.ModelPricing{{
+		ModelPattern: "acme/model", InputPerMTok: money.MustParseDollars("1"),
+	}}))
 	syncer, err := New(ctx, url, schema, local, "machine", true, storage.PusherOptions{})
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, syncer.Close()) })

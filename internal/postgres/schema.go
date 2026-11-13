@@ -364,6 +364,11 @@ CREATE TABLE IF NOT EXISTS genai_pricing (
     updated_at TEXT NOT NULL DEFAULT ''
 );
 
+CREATE TABLE IF NOT EXISTS pricing_meta (
+    key   TEXT PRIMARY KEY,
+    value TEXT NOT NULL
+);
+
 CREATE TABLE IF NOT EXISTS source_archives (
     source_archive_id   TEXT PRIMARY KEY,
     source_archive_salt TEXT NOT NULL
@@ -693,6 +698,34 @@ CREATE TABLE IF NOT EXISTS friction_filing_state (
     updated_at      TIMESTAMPTZ NOT NULL
 );
 `
+
+// movePricingMetaPG moves pricing metadata out of model_pricing. Older
+// pushes kept the OpenRouter ownership list as a model_pricing row whose
+// pattern starts with "_", with the list in updated_at. A key already in
+// pricing_meta was written by a newer push, so it wins.
+func movePricingMetaPG(ctx context.Context, conn *sql.DB) error {
+	tx, err := conn.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("beginning pg pricing_meta migration: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+	if _, err := tx.ExecContext(ctx, `
+		INSERT INTO pricing_meta (key, value)
+		SELECT model_pattern, updated_at FROM model_pricing
+		WHERE model_pattern LIKE '\_%' ESCAPE '\'
+		ON CONFLICT (key) DO NOTHING`); err != nil {
+		return fmt.Errorf("copying pg pricing metadata to pricing_meta: %w", err)
+	}
+	if _, err := tx.ExecContext(ctx, `
+		DELETE FROM model_pricing
+		WHERE model_pattern LIKE '\_%' ESCAPE '\'`); err != nil {
+		return fmt.Errorf("deleting pg pricing metadata from model_pricing: %w", err)
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("committing pg pricing_meta migration: %w", err)
+	}
+	return nil
+}
 
 func migrateMoneyColumnsPG(
 	ctx context.Context,
@@ -1031,6 +1064,9 @@ func EnsureSchema(
 		return err
 	}
 	if err := migrateAccountUsageCountersPG(ctx, db); err != nil {
+		return err
+	}
+	if err := movePricingMetaPG(ctx, db); err != nil {
 		return err
 	}
 	step = time.Now()

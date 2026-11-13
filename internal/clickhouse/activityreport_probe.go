@@ -72,8 +72,7 @@ func (s *Store) readActivitySourceProbe(ctx context.Context) (activity.SourcePro
 		ifNull(toString((SELECT max(local_modified_at) FROM sessions)), ''),
 		ifNull((SELECT max(data_version) FROM sessions), 0),
 		greatest(
-			ifNull((SELECT max(updated_at) FROM model_pricing
-				WHERE NOT startsWith(model_pattern, '_')), ''),
+			ifNull((SELECT max(updated_at) FROM model_pricing), ''),
 			ifNull((SELECT max(updated_at) FROM genai_pricing), '')
 		),
 		ifNull((

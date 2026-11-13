@@ -18,7 +18,9 @@ import (
 // so an older mirror upgrades in place; the version tells operators and
 // status output which shape a mirror has. Version 11 converts string columns
 // with few distinct values to LowCardinality (see convertToLowCardinality).
-const SchemaVersion = 11
+// Version 12 moves pricing metadata out of model_pricing (see
+// movePricingMeta).
+const SchemaVersion = 12
 
 // Metadata keys shared by every archive that pushes into the mirror.
 const (
@@ -449,6 +451,11 @@ var mirrorTables = []tableSpec{
 		orderBy: []string{"singleton"},
 	},
 	{
+		name:    "pricing_meta",
+		columns: []columnSpec{col("key", tString), col("value", tString)},
+		orderBy: []string{"key"},
+	},
+	{
 		// usage_event_prices holds what Go priced for one distinct set of
 		// normalized usage inputs under one pricing digest. price_key is
 		// computed by chUsagePriceKeySQL, never in Go, so the usage reader's
@@ -786,6 +793,9 @@ func EnsureSchemaOn(ctx context.Context, conn *sql.DB) error {
 	if err := ensureUsageMessages(ctx, conn, existing["usage_messages"]); err != nil {
 		return err
 	}
+	if err := movePricingMeta(ctx, conn); err != nil {
+		return err
+	}
 	for _, i := range retiredSkipIndexes {
 		if _, has := existingIndexes[i.table][i.name]; !has {
 			continue
@@ -807,6 +817,39 @@ func EnsureSchemaOn(ctx context.Context, conn *sql.DB) error {
 		schemaVersionKey:     strconv.Itoa(SchemaVersion),
 		sourceDataVersionKey: strconv.Itoa(db.CurrentDataVersion()),
 	})
+}
+
+// movePricingMeta moves pricing metadata out of model_pricing. Mirrors
+// before schema version 12 kept the OpenRouter ownership list as a
+// model_pricing row whose pattern starts with "_", with the list in
+// updated_at. Each moved row keeps its push_version, so a value a newer
+// push already wrote to pricing_meta still wins.
+func movePricingMeta(ctx context.Context, conn *sql.DB) error {
+	var rows uint64
+	if err := conn.QueryRowContext(ctx, `
+		SELECT count() FROM model_pricing
+		WHERE startsWith(model_pattern, '_')`).Scan(&rows); err != nil {
+		return fmt.Errorf("counting clickhouse pricing metadata rows: %w", err)
+	}
+	if rows == 0 {
+		return nil
+	}
+	if _, err := conn.ExecContext(ctx, `
+		INSERT INTO pricing_meta (key, value, push_version)
+		SELECT model_pattern, argMax(updated_at, push_version), max(push_version)
+		FROM model_pricing
+		WHERE startsWith(model_pattern, '_')
+		GROUP BY model_pattern`); err != nil {
+		return fmt.Errorf("copying clickhouse pricing metadata to pricing_meta: %w", err)
+	}
+	for _, table := range []string{"model_pricing_bands", "model_pricing"} {
+		if _, err := conn.ExecContext(ctx,
+			"DELETE FROM "+table+" WHERE startsWith(model_pattern, '_')",
+		); err != nil {
+			return fmt.Errorf("deleting clickhouse pricing metadata from %s: %w", table, err)
+		}
+	}
+	return nil
 }
 
 // repartitionCacheTables drops a partitioned table that an older version

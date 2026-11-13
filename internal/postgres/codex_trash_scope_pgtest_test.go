@@ -10,7 +10,6 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"go.kenn.io/agentsview/internal/db"
-	"go.kenn.io/agentsview/internal/dbtest"
 )
 
 const (
@@ -134,7 +133,6 @@ func newCodexTrashMirror(t *testing.T) (*db.DB, *Sync, *Store) {
 	require.NoError(t, raw.Close())
 	local, err := db.OpenIsolated(ctx, filepath.Join(t.TempDir(), "local.db"))
 	require.NoError(t, err)
-	dbtest.SeedPricingMeta(t, local)
 	t.Cleanup(func() { require.NoError(t, local.Close()) })
 	require.NoError(t, local.CopyArchiveIdentityFrom(t.Context(), sourcePath))
 	_, err = local.CopyTrashedDataFrom(t.Context(), sourcePath)
@@ -464,7 +462,6 @@ func TestCodexTrashScopeUpgradePreservesLaterPerFileDeletion(t *testing.T) {
 			require.NoError(t, raw.Close())
 			local, err := db.OpenIsolated(ctx, filepath.Join(t.TempDir(), "rebuilt.db"))
 			require.NoError(t, err)
-			dbtest.SeedPricingMeta(t, local)
 			t.Cleanup(func() { require.NoError(t, local.Close()) })
 			require.NoError(t, local.CopyArchiveIdentityFrom(t.Context(), sourcePath))
 			require.NoError(t, local.CopySyncStateFrom(t.Context(), sourcePath))

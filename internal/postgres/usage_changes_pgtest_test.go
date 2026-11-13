@@ -278,8 +278,8 @@ func TestUsageChangeJournalPushPaths(t *testing.T) {
 			}
 			if tc.name == "openrouter bookkeeping" {
 				var published bool
-				require.NoError(t, syncer.pg.QueryRowContext(ctx, `SELECT EXISTS (SELECT 1 FROM model_pricing WHERE model_pattern = $1)`, pricing.OpenRouterModelsMetaKey).Scan(&published))
-				require.True(t, published, "push publishes the bookkeeping row")
+				require.NoError(t, syncer.pg.QueryRowContext(ctx, `SELECT EXISTS (SELECT 1 FROM pricing_meta WHERE key = $1)`, pricing.OpenRouterModelsMetaKey).Scan(&published))
+				require.True(t, published, "push publishes the ownership list")
 				assert.Equal(t, before, after)
 				return
 			}

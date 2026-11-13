@@ -5544,7 +5544,7 @@ func TestCopyInsightsFrom(t *testing.T) {
 func TestCopyModelPricingFrom(t *testing.T) {
 	dir := t.TempDir()
 
-	// Source DB with pricing rows and a sentinel meta row.
+	// Source DB with pricing rows and a pricing metadata value.
 	srcPath := filepath.Join(dir, "src.db")
 	srcDB := testDBAtPath(t, srcPath, "src")
 	require.NoError(t, srcDB.UpsertModelPricing([]ModelPricing{
@@ -5587,7 +5587,7 @@ func TestCopyModelPricingFrom(t *testing.T) {
 
 	meta, err := dstDB.GetPricingMeta("_fallback_version")
 	require.NoError(t, err, "GetPricingMeta")
-	assert.Equal(t, "v42", meta, "sentinel meta row copied")
+	assert.Equal(t, "v42", meta, "pricing metadata copied")
 }
 
 func TestCopyModelPricingFromRollsBackParentWhenBandCopyFails(t *testing.T) {

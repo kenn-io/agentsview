@@ -438,11 +438,6 @@ func TestUsageChangeJournalPricingIgnoresMetadataAndUnchangedRows(t *testing.T) 
 	after, err := d.UsageChangeRevision(ctx)
 	require.NoError(t, err)
 	assert.Equal(t, before, after)
-	_, err = d.getWriter().ExecContext(ctx, `DELETE FROM model_pricing WHERE model_pattern = '_last_fetch'`)
-	require.NoError(t, err)
-	after, err = d.UsageChangeRevision(ctx)
-	require.NoError(t, err)
-	assert.Equal(t, before, after)
 
 	for _, tc := range []struct {
 		table  string

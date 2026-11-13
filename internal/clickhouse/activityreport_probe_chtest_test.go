@@ -58,9 +58,6 @@ func TestActivitySourceProbeCachePreservesFreshness(t *testing.T) {
 		{`INSERT INTO sessions (id,push_version,data_version,local_modified_at) VALUES ('probe',2,2,'2026-01-10 00:00:00')`, activity.SourceProbe{SessionCount: 1, MaxSessionModified: want.MaxSessionModified, MaxDataVersion: 2, MaxUsageID: 42}},
 		{`INSERT INTO model_pricing (model_pattern,updated_at,push_version) VALUES ('probe','2026-01-11',1)`, activity.SourceProbe{SessionCount: 1, MaxSessionModified: want.MaxSessionModified, MaxDataVersion: 2, MaxUsageID: 42, MaxPricingUpdated: "2026-01-11"}},
 		{`INSERT INTO genai_pricing (singleton,updated_at,push_version) VALUES (1,'2026-01-12',1)`, activity.SourceProbe{SessionCount: 1, MaxSessionModified: want.MaxSessionModified, MaxDataVersion: 2, MaxUsageID: 42, MaxPricingUpdated: "2026-01-12"}},
-		// The OpenRouter ownership sentinel's JSON value sorts above every
-		// timestamp; the probe must not pick it.
-		{`INSERT INTO model_pricing (model_pattern,updated_at,push_version) VALUES ('_openrouter_models','["or/model-a"]',1)`, activity.SourceProbe{SessionCount: 1, MaxSessionModified: want.MaxSessionModified, MaxDataVersion: 2, MaxUsageID: 42, MaxPricingUpdated: "2026-01-12"}},
 		{`INSERT INTO sync_metadata (key,value,push_version) VALUES ('agentsview_identity_revision:probe','7',1)`, activity.SourceProbe{SessionCount: 1, MaxSessionModified: want.MaxSessionModified, MaxDataVersion: 2, MaxUsageID: 42, MaxPricingUpdated: "2026-01-12", ProjectIdentityGeneration: 7}},
 	} {
 		_, err = conn.ExecContext(ctx, step.sql)

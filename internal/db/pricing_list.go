@@ -10,8 +10,7 @@ import (
 	"go.kenn.io/agentsview/internal/money"
 )
 
-// ListModelPricing returns every pricing row, including sentinel
-// metadata rows (for example `_fallback_version`).
+// ListModelPricing returns every pricing row with its bands.
 func (db *DB) ListModelPricing(
 	ctx context.Context,
 ) ([]ModelPricing, error) {

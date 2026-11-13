@@ -247,9 +247,6 @@ func (s *Store) loadPricing(ctx context.Context) (map[string]export.ModelRates, 
 		); err != nil {
 			return nil, err
 		}
-		if strings.HasPrefix(model, "_") {
-			continue
-		}
 		stored, exists := out[model]
 		if !exists {
 			if parsed, err := time.Parse(time.RFC3339Nano, updatedAt); err == nil {
@@ -290,9 +287,9 @@ func (s *Store) loadPricing(ctx context.Context) (map[string]export.ModelRates, 
 		return nil, err
 	}
 	if count == 0 {
-		out = db.FallbackPricingMap()
+		out = db.FallbackRateMap()
 	} else {
-		fallback := db.FallbackPricingMap()
+		fallback := db.FallbackRateMap()
 		for model, rates := range out {
 			rates.Source = db.ModelPricingSource(model, rates, fallback)
 			out[model] = rates

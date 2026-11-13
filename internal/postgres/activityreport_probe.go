@@ -20,8 +20,7 @@ func (s *Store) ActivityReportSourceProbe(
 		session_probe.message_count,
 		COALESCE((SELECT MAX(id) FROM usage_events), 0),
 		GREATEST(
-			COALESCE((SELECT MAX(updated_at) FROM model_pricing
-				WHERE model_pattern NOT LIKE '\_%' ESCAPE '\'), ''),
+			COALESCE((SELECT MAX(updated_at) FROM model_pricing), ''),
 			COALESCE((SELECT MAX(updated_at) FROM genai_pricing), '')
 		),
 		COALESCE((SELECT value::bigint FROM sync_metadata WHERE key = $1), 0)

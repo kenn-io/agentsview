@@ -38,9 +38,6 @@ func pricingRowsToMap(prices []db.ModelPricing) map[string]export.ModelRates {
 	fallback := db.FallbackRateMap()
 	out := make(map[string]export.ModelRates, len(prices))
 	for _, p := range prices {
-		if strings.HasPrefix(p.ModelPattern, "_") {
-			continue
-		}
 		rates := db.ModelPricingRates(p)
 		rates.Source = db.ModelPricingSource(p.ModelPattern, rates, fallback)
 		out[p.ModelPattern] = rates
@@ -230,7 +227,7 @@ func (s *Store) readPricingMap(ctx context.Context) ([]export.EffectivePricingRo
 	out := map[string]export.ModelRates{}
 	dbRows, err := s.mergeDBPricing(ctx, out)
 	if err == nil && dbRows == 0 {
-		out = db.FallbackPricingMap()
+		out = db.FallbackRateMap()
 	}
 	var prices []export.EffectivePricingRow
 	if err == nil {
@@ -317,9 +314,6 @@ func (s *Store) mergeDBPricing(
 	fallback := db.FallbackRateMap()
 	usableRows := 0
 	for _, p := range prices {
-		if strings.HasPrefix(p.ModelPattern, "_") {
-			continue
-		}
 		rates := db.ModelPricingRates(p)
 		rates.Source = db.ModelPricingSource(p.ModelPattern, rates, fallback)
 		out[p.ModelPattern] = rates
@@ -623,33 +617,6 @@ func pgPricingBandInsertStatement(
 	return b.String(), args
 }
 
-// pgPricingMetaUpsertStatement writes sentinel metadata rows, whose
-// updated_at holds an opaque value rather than a timestamp.
-func pgPricingMetaUpsertStatement(
-	metaRows []db.ModelPricing,
-) (string, []any) {
-	var b strings.Builder
-	b.WriteString(`INSERT INTO model_pricing
-		(model_pattern, input_microdollars_per_mtok, output_microdollars_per_mtok,
-		 cache_creation_microdollars_per_mtok, cache_creation_1h_microdollars_per_mtok,
-		 cache_read_microdollars_per_mtok, updated_at)
-	VALUES `)
-	args := make([]any, 0, len(metaRows)*2)
-	for i, row := range metaRows {
-		if i > 0 {
-			b.WriteString(", ")
-		}
-		fmt.Fprintf(&b, "($%d, 0, 0, 0, 0, 0, $%d)", i*2+1, i*2+2)
-		args = append(args,
-			sanitizePG(row.ModelPattern), sanitizePG(row.UpdatedAt),
-		)
-	}
-	b.WriteString(`
-	ON CONFLICT (model_pattern) DO UPDATE SET
-		updated_at = EXCLUDED.updated_at`)
-	return b.String(), args
-}
-
 func pgPricingDeleteStatement(
 	table string, patterns []string,
 ) (string, []any) {
@@ -664,8 +631,7 @@ func pgPricingDeleteStatement(
 }
 
 // reconcileModelPricing deletes removePatterns and upserts prices within
-// tx. Sentinel metadata rows are written by value; model rows go through
-// the change-detecting upsert and band replacement.
+// tx, through the change-detecting upsert and band replacement.
 func reconcileModelPricing(
 	ctx context.Context, tx *sql.Tx,
 	prices []db.ModelPricing, removePatterns []string,
@@ -673,24 +639,22 @@ func reconcileModelPricing(
 	if err := deletePGModelPricing(ctx, tx, removePatterns); err != nil {
 		return err
 	}
-	metaRows := make([]db.ModelPricing, 0)
-	modelRows := make([]db.ModelPricing, 0, len(prices))
-	for _, price := range prices {
-		if strings.HasPrefix(price.ModelPattern, "_") {
-			metaRows = append(metaRows, price)
-		} else {
-			modelRows = append(modelRows, price)
-		}
+	return upsertPGModelPricing(ctx, tx, prices)
+}
+
+// readPGPricingMeta reads a pricing_meta value. Returns "" if not found.
+func readPGPricingMeta(ctx context.Context, tx *sql.Tx, key string) (string, error) {
+	var value string
+	err := tx.QueryRowContext(ctx,
+		`SELECT value FROM pricing_meta WHERE key = $1`, key,
+	).Scan(&value)
+	if errors.Is(err, sql.ErrNoRows) {
+		return "", nil
 	}
-	for i := 0; i < len(metaRows); i += pricingUpsertBatch {
-		end := min(i+pricingUpsertBatch, len(metaRows))
-		query, args := pgPricingMetaUpsertStatement(metaRows[i:end])
-		if _, err := tx.ExecContext(ctx, query, args...); err != nil {
-			return fmt.Errorf(
-				"upserting pg pricing meta at batch %d: %w", i, err)
-		}
+	if err != nil {
+		return "", fmt.Errorf("reading pg pricing meta %q: %w", key, err)
 	}
-	return upsertPGModelPricing(ctx, tx, modelRows)
+	return value, nil
 }
 
 func deletePGModelPricing(
@@ -844,8 +808,8 @@ func (s *Sync) syncModelPricing(ctx context.Context) error {
 		return fmt.Errorf("beginning pg pricing sync: %w", err)
 	}
 	defer func() { _ = tx.Rollback() }()
-	// Pushes from several machines read the same ownership sentinel and
-	// each write a merged copy, so read, plan, and write are serialized
+	// Pushes from several machines read the same OpenRouter ownership list
+	// and each write a merged copy, so read, plan, and write are serialized
 	// under one lock; otherwise a slower push could overwrite ownership a
 	// faster one recorded and leave its rows untracked.
 	if err := lockSyncMetadataRow(ctx, tx, pricingSyncLockKey); err != nil {
@@ -855,8 +819,16 @@ func (s *Sync) syncModelPricing(ctx context.Context) error {
 	if err != nil {
 		return fmt.Errorf("listing pg model pricing: %w", err)
 	}
-	changedPrices, removePatterns, err := db.PlanModelPricingSync(
-		existing, prices,
+	existingOpenRouter, err := readPGPricingMeta(ctx, tx, pricing.OpenRouterModelsMetaKey)
+	if err != nil {
+		return err
+	}
+	localOpenRouter, err := s.local.GetPricingMetaContext(ctx, pricing.OpenRouterModelsMetaKey)
+	if err != nil {
+		return err
+	}
+	plan, err := db.PlanModelPricingSync(
+		existing, existingOpenRouter, prices, localOpenRouter,
 	)
 	if err != nil {
 		return fmt.Errorf("planning model pricing sync: %w", err)
@@ -866,13 +838,23 @@ func (s *Sync) syncModelPricing(ctx context.Context) error {
 		return err
 	}
 	genAIChanged := !existingGenAI.Matches(localGenAI)
-	if len(changedPrices) == 0 && len(removePatterns) == 0 && !genAIChanged {
+	if len(plan.Changed) == 0 && len(plan.Remove) == 0 &&
+		!plan.WriteOpenRouterModels && !genAIChanged {
 		return nil
 	}
 	if err := reconcileModelPricing(
-		ctx, tx, changedPrices, removePatterns,
+		ctx, tx, plan.Changed, plan.Remove,
 	); err != nil {
 		return fmt.Errorf("syncing model pricing to pg: %w", err)
+	}
+	if plan.WriteOpenRouterModels {
+		if _, err := tx.ExecContext(ctx, `
+			INSERT INTO pricing_meta (key, value) VALUES ($1, $2)
+			ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value`,
+			pricing.OpenRouterModelsMetaKey, sanitizePG(plan.OpenRouterModels),
+		); err != nil {
+			return fmt.Errorf("writing pg OpenRouter models: %w", err)
+		}
 	}
 	if genAIChanged {
 		if err := upsertPGGenAIPricing(ctx, tx, *localGenAI); err != nil {

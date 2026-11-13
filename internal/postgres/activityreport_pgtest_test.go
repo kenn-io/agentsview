@@ -111,20 +111,6 @@ func TestPGActivityReportSourceProbeUsesMirrorSchema(t *testing.T) {
 		"identity-only mirror updates must change the Activity probe")
 }
 
-func TestPGActivityReportSourceProbeIgnoresPricingSentinels(t *testing.T) {
-	_, store := prepareUsageSchema(t, "agentsview_activity_probe_sentinel_test")
-	ctx := t.Context()
-	_, err := store.DB().ExecContext(ctx, `INSERT INTO model_pricing
-		(model_pattern, updated_at) VALUES
-		('_openrouter_models', '["or/model-a"]'),
-		('probe-model', '2026-07-01T00:00:02.000Z')`)
-	require.NoError(t, err)
-
-	probe, err := store.ActivityReportSourceProbe(ctx)
-	require.NoError(t, err)
-	assert.Equal(t, "2026-07-01T00:00:02.000Z", probe.MaxPricingUpdated)
-}
-
 func TestPGGetActivityReport(t *testing.T) {
 	t.Parallel()
 	_, store := prepareUsageSchema(t, "agentsview_daily_report_test")

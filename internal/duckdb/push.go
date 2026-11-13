@@ -41,14 +41,23 @@ func (s *Sync) syncModelPricing(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	prices, removePatterns, err := db.PlanModelPricingSync(existing, prices)
+	existingOpenRouter, err := s.duckPricingMeta(ctx, pricingpkg.OpenRouterModelsMetaKey)
+	if err != nil {
+		return err
+	}
+	localOpenRouter, err := s.local.GetPricingMetaContext(ctx, pricingpkg.OpenRouterModelsMetaKey)
+	if err != nil {
+		return err
+	}
+	plan, err := db.PlanModelPricingSync(existing, existingOpenRouter, prices, localOpenRouter)
 	if err != nil {
 		return fmt.Errorf("planning duckdb pricing sync: %w", err)
 	}
-	if len(prices) == 0 && len(removePatterns) == 0 {
+	prices = plan.Changed
+	if len(prices) == 0 && len(plan.Remove) == 0 && !plan.WriteOpenRouterModels {
 		return s.syncGenAIPricing(ctx)
 	}
-	if err := s.removeDuckModelPricing(ctx, removePatterns); err != nil {
+	if err := s.removeDuckModelPricing(ctx, plan.Remove); err != nil {
 		return err
 	}
 
@@ -101,10 +110,35 @@ func (s *Sync) syncModelPricing(ctx context.Context) error {
 			)
 		}
 	}
+	if plan.WriteOpenRouterModels {
+		if err := s.execMutation(ctx, tx, `
+			INSERT INTO pricing_meta (key, value) VALUES (?, ?)
+			ON CONFLICT (key) DO UPDATE SET value = excluded.value`,
+			pricingpkg.OpenRouterModelsMetaKey, plan.OpenRouterModels,
+		); err != nil {
+			return fmt.Errorf("writing duckdb OpenRouter models: %w", err)
+		}
+	}
 	if err := tx.Commit(); err != nil {
 		return fmt.Errorf("committing duckdb pricing sync: %w", err)
 	}
 	return s.syncGenAIPricing(ctx)
+}
+
+// duckPricingMeta reads a pricing_meta value from the mirror. Returns ""
+// if not found.
+func (s *Sync) duckPricingMeta(ctx context.Context, key string) (string, error) {
+	var value string
+	err := s.duck.QueryRowContext(ctx,
+		`SELECT value FROM pricing_meta WHERE key = ?`, key,
+	).Scan(&value)
+	if errors.Is(err, sql.ErrNoRows) {
+		return "", nil
+	}
+	if err != nil {
+		return "", fmt.Errorf("reading duckdb pricing meta %q: %w", key, err)
+	}
+	return value, nil
 }
 
 type duckGenAIPricingQuerier interface {

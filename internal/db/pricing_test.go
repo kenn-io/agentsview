@@ -198,18 +198,8 @@ func TestUpsertModelPricingOverwrites(t *testing.T) {
 	assert.Equal(t, money.MustParseDollars("1.00"), got.CacheReadPerMTok)
 }
 
-// Model rows compare by rate; sentinel metadata rows keep their value in
-// updated_at, so a new value is a change.
 func TestFilterChangedModelPricingIgnoresUpdatedAtOnlyDifferences(t *testing.T) {
 	existing := []ModelPricing{
-		{
-			ModelPattern:         "_fallback_version",
-			InputPerMTok:         money.MustParseDollars("0"),
-			OutputPerMTok:        money.MustParseDollars("0"),
-			CacheCreationPerMTok: money.MustParseDollars("0"),
-			CacheReadPerMTok:     money.MustParseDollars("0"),
-			UpdatedAt:            "v1",
-		},
 		{
 			ModelPattern:         "same-model",
 			InputPerMTok:         money.MustParseDollars("1"),
@@ -228,14 +218,6 @@ func TestFilterChangedModelPricingIgnoresUpdatedAtOnlyDifferences(t *testing.T) 
 		},
 	}
 	desired := []ModelPricing{
-		{
-			ModelPattern:         "_fallback_version",
-			InputPerMTok:         money.MustParseDollars("0"),
-			OutputPerMTok:        money.MustParseDollars("0"),
-			CacheCreationPerMTok: money.MustParseDollars("0"),
-			CacheReadPerMTok:     money.MustParseDollars("0"),
-			UpdatedAt:            "v2",
-		},
 		{
 			ModelPattern:         "same-model",
 			InputPerMTok:         money.MustParseDollars("1"),
@@ -265,15 +247,14 @@ func TestFilterChangedModelPricingIgnoresUpdatedAtOnlyDifferences(t *testing.T) 
 	gotSummary, gotRows := FilterChangedModelPricing(existing, desired)
 
 	assert.Equal(t, PricingChangeSummary{
-		Total:     4,
+		Total:     3,
 		Missing:   1,
-		Changed:   2,
+		Changed:   1,
 		Unchanged: 1,
 	}, gotSummary)
-	require.Len(t, gotRows, 3)
-	assert.Equal(t, "_fallback_version", gotRows[0].ModelPattern)
-	assert.Equal(t, "changed-model", gotRows[1].ModelPattern)
-	assert.Equal(t, "missing-model", gotRows[2].ModelPattern)
+	require.Len(t, gotRows, 2)
+	assert.Equal(t, "changed-model", gotRows[0].ModelPattern)
+	assert.Equal(t, "missing-model", gotRows[1].ModelPattern)
 }
 
 func TestPricingMeta(t *testing.T) {
@@ -298,13 +279,10 @@ func TestPricingMeta(t *testing.T) {
 	require.NoError(t, err, "GetPricingMeta v2")
 	require.Equal(t, "v2", got)
 
-	// Sentinel row does not interfere with model lookups.
-	p, err := d.GetModelPricing("_fallback_version")
-	require.NoError(t, err, "GetModelPricing sentinel")
-	if p != nil {
-		assert.Zero(t, p.InputPerMTok,
-			"sentinel should have zero pricing, got %+v", p)
-	}
+	// Metadata is not a model price.
+	prices, err := d.ListModelPricing(t.Context())
+	require.NoError(t, err)
+	assert.Empty(t, prices)
 }
 
 func TestReconcileModelPricing(t *testing.T) {
@@ -369,101 +347,87 @@ func TestPlanModelPricingSync(t *testing.T) {
 			InputPerMTok: money.MustParseDollars(dollars),
 		}
 	}
-	meta := func(value string) ModelPricing {
-		return ModelPricing{
-			ModelPattern: "_openrouter_models", UpdatedAt: value,
-		}
-	}
 	tests := []struct {
-		name       string
-		existing   []ModelPricing
-		desired    []ModelPricing
-		wantChange []ModelPricing
-		wantRemove []string
+		name           string
+		existing       []ModelPricing
+		existingOwned  string
+		desired        []ModelPricing
+		desiredOwned   string
+		wantChange     []ModelPricing
+		wantRemove     []string
+		wantOpenRouter string
 	}{
 		{
-			name: "retired pattern removed and ownership dropped",
-			existing: []ModelPricing{
-				model("minimax/minimax-m3", "9"),
-				meta(`["minimax/minimax-m3"]`),
-			},
-			desired: []ModelPricing{
-				model("minimax/MiniMax-M3", "2"),
-				meta(`[]`),
-			},
-			wantChange: []ModelPricing{
-				model("minimax/MiniMax-M3", "2"), meta(`[]`),
-			},
-			wantRemove: []string{"minimax/minimax-m3"},
+			name:           "retired pattern removed and ownership dropped",
+			existing:       []ModelPricing{model("minimax/minimax-m3", "9")},
+			existingOwned:  `["minimax/minimax-m3"]`,
+			desired:        []ModelPricing{model("minimax/MiniMax-M3", "2")},
+			desiredOwned:   `[]`,
+			wantChange:     []ModelPricing{model("minimax/MiniMax-M3", "2")},
+			wantRemove:     []string{"minimax/minimax-m3"},
+			wantOpenRouter: `[]`,
 		},
 		{
-			name: "pattern adopted by a local non-OpenRouter row loses ownership",
-			existing: []ModelPricing{
-				model("acme/model", "9"),
-				meta(`["acme/model"]`),
-			},
-			desired: []ModelPricing{
-				model("acme/model", "9"),
-				meta(`[]`),
-			},
-			wantChange: []ModelPricing{meta(`[]`)},
+			name:           "pattern adopted by a local non-OpenRouter row loses ownership",
+			existing:       []ModelPricing{model("acme/model", "9")},
+			existingOwned:  `["acme/model"]`,
+			desired:        []ModelPricing{model("acme/model", "9")},
+			desiredOwned:   `[]`,
+			wantChange:     []ModelPricing{},
+			wantOpenRouter: `[]`,
 		},
 		{
-			name: "delisted row another machine owns keeps its ownership",
-			existing: []ModelPricing{
-				model("acme/delisted", "9"),
-				meta(`["acme/delisted"]`),
-			},
-			desired: []ModelPricing{
-				model("acme/local", "1"),
-				meta(`["acme/local"]`),
-			},
-			wantChange: []ModelPricing{
-				model("acme/local", "1"),
-				meta(`["acme/delisted","acme/local"]`),
-			},
+			name:           "delisted row another machine owns keeps its ownership",
+			existing:       []ModelPricing{model("acme/delisted", "9")},
+			existingOwned:  `["acme/delisted"]`,
+			desired:        []ModelPricing{model("acme/local", "1")},
+			desiredOwned:   `["acme/local"]`,
+			wantChange:     []ModelPricing{model("acme/local", "1")},
+			wantOpenRouter: `["acme/delisted","acme/local"]`,
 		},
 		{
-			name: "local OpenRouter row covered by a target row is withheld",
-			existing: []ModelPricing{
-				model("acme/Stale-Model", "9"),
-				meta(`[]`),
-			},
+			name:          "local OpenRouter row covered by a target row is withheld",
+			existing:      []ModelPricing{model("acme/Stale-Model", "9")},
+			existingOwned: `[]`,
 			desired: []ModelPricing{
 				model("acme/stale-model", "5"),
 				model("acme/fresh", "1"),
-				meta(`["acme/fresh","acme/stale-model"]`),
 			},
-			wantChange: []ModelPricing{
-				model("acme/fresh", "1"),
-				meta(`["acme/fresh"]`),
-			},
+			desiredOwned:   `["acme/fresh","acme/stale-model"]`,
+			wantChange:     []ModelPricing{model("acme/fresh", "1")},
+			wantOpenRouter: `["acme/fresh"]`,
 		},
 		{
-			name:     "no sentinel anywhere pushes plain rows",
-			existing: []ModelPricing{model("acme/model", "9")},
-			desired:  []ModelPricing{model("other", "1")},
-			wantChange: []ModelPricing{
-				model("other", "1"),
-			},
+			name:       "no ownership list anywhere pushes plain rows",
+			existing:   []ModelPricing{model("acme/model", "9")},
+			desired:    []ModelPricing{model("other", "1")},
+			wantChange: []ModelPricing{model("other", "1")},
+		},
+		{
+			name:          "unchanged ownership list is not rewritten",
+			existing:      []ModelPricing{model("acme/fresh", "1")},
+			existingOwned: `["acme/fresh"]`,
+			desired:       []ModelPricing{model("acme/fresh", "1")},
+			desiredOwned:  `["acme/fresh"]`,
+			wantChange:    []ModelPricing{},
 		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			changed, remove, err := PlanModelPricingSync(
-				tt.existing, tt.desired,
+			plan, err := PlanModelPricingSync(
+				tt.existing, tt.existingOwned, tt.desired, tt.desiredOwned,
 			)
 			require.NoError(t, err)
-			assert.Equal(t, tt.wantChange, changed)
-			assert.Equal(t, tt.wantRemove, remove)
+			assert.Equal(t, tt.wantChange, plan.Changed)
+			assert.Equal(t, tt.wantRemove, plan.Remove)
+			assert.Equal(t, tt.wantOpenRouter, plan.OpenRouterModels)
+			assert.Equal(t, tt.wantOpenRouter != "", plan.WriteOpenRouterModels)
 		})
 	}
 }
 
-func TestPlanModelPricingSyncRejectsCorruptSentinel(t *testing.T) {
-	_, _, err := PlanModelPricingSync([]ModelPricing{{
-		ModelPattern: "_openrouter_models", UpdatedAt: "not json",
-	}}, nil)
+func TestPlanModelPricingSyncRejectsCorruptOwnershipList(t *testing.T) {
+	_, err := PlanModelPricingSync(nil, "not json", nil, "")
 	require.Error(t, err)
 }
 

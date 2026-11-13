@@ -58,11 +58,11 @@ func TestActivityReportSourceProbeChangesWithReportInputs(t *testing.T) {
 		"identity-only changes must invalidate Activity report generations")
 }
 
-func TestActivityReportSourceProbeIgnoresPricingSentinels(t *testing.T) {
+func TestActivityReportSourceProbeIgnoresPricingMeta(t *testing.T) {
 	database := testDB(t)
 	ctx := t.Context()
-	// The OpenRouter ownership sentinel stores a JSON array in updated_at,
-	// which sorts above every ISO timestamp.
+	// The OpenRouter ownership list is a JSON array, which sorts above every
+	// ISO timestamp if it reaches the pricing time.
 	require.NoError(t, database.SetPricingMetaContext(
 		ctx, "_openrouter_models", `["or/model-a"]`,
 	))
