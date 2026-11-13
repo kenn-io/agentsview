@@ -426,6 +426,16 @@ func scanUsageIdentityFactRows(
 	return rows.Err()
 }
 
+// usageAccountInvalidationSQL deletes the account install when a changed
+// session usage key matches an account key. The empty-key predicate lets
+// SQLite probe the partial usage key index.
+const usageAccountInvalidationSQL = `DELETE FROM usage_rollup_installs
+	WHERE session_id = ? AND EXISTS (
+		SELECT 1 FROM usage_changed_identities c
+		JOIN cursor_usage_facts cf ON c.kind = 2 AND cf.dedup_key = c.first
+		WHERE EXISTS (SELECT 1 FROM usage_facts f
+			WHERE f.usage_dedup_key = c.first AND f.usage_dedup_key != ''))`
+
 // invalidateUsageDedupSharers deletes every timezone rollup install of the
 // sessions, other than the excluded ones, that store a fact matching one of
 // the changed dedup identities. Their next read reclassifies groups whose
@@ -470,6 +480,10 @@ func invalidateUsageDedupSharers(
 			return nil, fmt.Errorf("recording changed usage identities: %w", err)
 		}
 	}
+	return invalidatePreparedUsageDedupSharers(ctx, runner, excluded)
+}
+
+func invalidatePreparedUsageDedupSharers(ctx context.Context, runner usageCacheStatementRunner, excluded map[string]bool) ([]string, error) {
 	sharerRows, err := runner.QueryContext(ctx, `
 		SELECT DISTINCT cs.session_id
 		FROM usage_changed_identities c
@@ -509,6 +523,13 @@ func invalidateUsageDedupSharers(
 	}
 	if err := sharerRows.Err(); err != nil {
 		return nil, err
+	}
+	// Account totals price only keys no session reports. A session key that
+	// now matches an account key moves that account row back to the
+	// exception tier, so the account install rebuilds.
+	if _, err := runner.ExecContext(ctx, usageAccountInvalidationSQL,
+		usageRollupCursorSessionID); err != nil {
+		return nil, fmt.Errorf("invalidating account usage totals: %w", err)
 	}
 	err = queryChunked(sharers, func(chunk []string) error {
 		placeholders, args := InPlaceholders(chunk)

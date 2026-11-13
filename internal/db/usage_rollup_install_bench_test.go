@@ -50,11 +50,11 @@ func benchmarkUsageRollupInstall(b *testing.B, replace bool) {
 	require.NoError(b, err)
 	identity := usageTimezoneIdentityFor(time.UTC, nil)
 	if replace {
-		require.NoError(b, installUsageRollupBuilds(b.Context(), conn, identity, time.UTC, builds, usageDedupIdentitySet{}))
+		require.NoError(b, installUsageRollupBuilds(b.Context(), conn, identity, time.UTC, builds, usageDedupIdentitySet{}, 0))
 	}
 	b.ResetTimer()
 	for range b.N {
-		require.NoError(b, installUsageRollupBuilds(b.Context(), conn, identity, time.UTC, builds, usageDedupIdentitySet{}))
+		require.NoError(b, installUsageRollupBuilds(b.Context(), conn, identity, time.UTC, builds, usageDedupIdentitySet{}, 0))
 		b.StopTimer()
 		var rows, input, cost int64
 		require.NoError(b, conn.QueryRowContext(b.Context(), `SELECT COUNT(*), SUM(input_tokens), SUM(estimated_cost_microdollars) FROM usage_daily_rollups`).Scan(&rows, &input, &cost))

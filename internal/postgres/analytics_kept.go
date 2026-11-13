@@ -18,6 +18,15 @@ func keptAnalytics[T any](ctx context.Context, s *Store, panel string, f db.Anal
 	}
 	slot := panel + "|" + string(key)
 	version := s.keptUsageVersion(ctx, slot)
+	if version == standbyUsageMarker {
+		return load(ctx, f)
+	}
+	if version == "" && s.readTx == nil && !s.hostedRelations {
+		var standby bool
+		if err := s.pg.QueryRowContext(ctx, `SELECT pg_is_in_recovery()`).Scan(&standby); err == nil && !standby {
+			version = s.directUsageVersion(ctx, slot)
+		}
+	}
 	if version == "" {
 		return load(ctx, f)
 	}

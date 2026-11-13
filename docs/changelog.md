@@ -34,6 +34,13 @@ The latest release is
 
 **Improvements**
 
+- Usage reuses priced work after restarting native PostgreSQL serving and after
+  pushes. When that cache would first need a large rebuild, such as on first
+  use, after a price change, or after new account usage, Usage shows the direct
+  PostgreSQL result and rebuilds the cache in the background. Its disposable
+  cache lives in `<data-dir>/usage-postgres/`. SQLite rebuilds its Usage cache
+  once after this upgrade.
+
 - Session exports now mask API keys, tokens, and other detected secrets by
   default, using the same masked form as search results. This covers the HTML
   and Markdown session exports, Gist publishing, the raw

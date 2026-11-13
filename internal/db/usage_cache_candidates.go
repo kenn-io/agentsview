@@ -28,6 +28,7 @@ func (kind usageQueryKind) readsJournaledTotals() bool {
 }
 
 type usageSourceVersion struct {
+	CapturePricingDigest  string
 	UsageGeneration       string
 	MessageOrdinal        sql.NullInt64
 	SessionID             string
@@ -75,16 +76,23 @@ type usageQueryInterval struct {
 }
 
 type usageQuerySnapshot struct {
-	ChangeRevision  int64
-	DatabaseID      string
-	Sessions        []usageQuerySession
-	Versions        []usageSourceVersion
-	Intervals       []usageQueryInterval
-	CursorHighWater int64
-	PricingRows     []export.EffectivePricingRow
-	PricingDigest   string
-	PricingIdentity string
-	location        *time.Location
+	resetEpoch           int64
+	exactAccountRevision bool
+	deferAccountBuild    bool
+	ChangeIDs            []string
+	ChangeRevision       int64
+	DatabaseID           string
+	Sessions             []usageQuerySession
+	Versions             []usageSourceVersion
+	Intervals            []usageQueryInterval
+	CursorHighWater      int64
+	PricingRows          []export.EffectivePricingRow
+	PricingDigest        string
+	PricingIdentity      string
+	// MissingTimestampsLast follows a source whose ascending order places
+	// undated usage after dated usage, as PostgreSQL's NULLS LAST default does.
+	MissingTimestampsLast bool
+	location              *time.Location
 }
 
 // Close exists to make the snapshot boundary explicit to callers. Capture
@@ -99,6 +107,9 @@ type usageQuerySessionRecord struct {
 func (db *DB) captureUsageQuery(
 	ctx context.Context, filter UsageFilter, kind usageQueryKind,
 ) (usageQuerySnapshot, error) {
+	if db.usageSource != nil {
+		return db.captureExternalUsage(ctx, filter, nil, nil)
+	}
 	return db.captureUsageSnapshot(ctx, filter, func(ctx context.Context, tx *sql.Tx, snapshot *usageQuerySnapshot) error {
 		return captureUsageQueryFrom(ctx, tx, filter, kind, snapshot)
 	})
@@ -145,6 +156,9 @@ func (snapshot *usageQuerySnapshot) loadUsageEventFingerprints(ctx context.Conte
 }
 
 func (db *DB) captureUsageSessions(ctx context.Context, ids []string) (usageQuerySnapshot, error) {
+	if db.usageSource != nil {
+		return db.captureExternalUsage(ctx, UsageFilter{}, &ids, nil)
+	}
 	// Rollups use committed fills' source versions, so metadata capture skips usage-event fingerprints.
 	return db.captureUsageSnapshot(ctx, UsageFilter{}, func(ctx context.Context, tx *sql.Tx, snapshot *usageQuerySnapshot) error {
 		return loadUsageSnapshotSessions(ctx, tx, ids, UsageFilter{}, false, snapshot)
@@ -441,38 +455,36 @@ func usageQueryIntervals(filter UsageFilter) []usageQueryInterval {
 	}
 	location := filter.Location()
 	parseDate := func(value string) (time.Time, bool) {
-		parsed, err := time.ParseInLocation("2006-01-02", value, location)
+		parsed, err := time.Parse("2006-01-02", value)
 		return parsed, err == nil
 	}
 	from, hasFrom := parseDate(filter.From)
 	to, hasTo := parseDate(filter.To)
-	if filter.From != "" && !hasFrom || filter.To != "" && !hasTo {
+	if filter.From != "" && !hasFrom || filter.To != "" && !hasTo || hasFrom && hasTo && from.After(to) {
 		return nil
 	}
 	if hasFrom && hasTo {
-		if from.After(to) {
-			return nil
-		}
 		var intervals []usageQueryInterval
 		for day := from; !day.After(to); day = day.AddDate(0, 0, 1) {
-			next := day.AddDate(0, 0, 1)
 			date := day.Format("2006-01-02")
+			start, next, _ := FrictionDayBounds(date, location)
 			intervals = append(intervals, usageQueryInterval{
-				FromMillis: day.UTC().UnixMilli(), ToMillis: next.UTC().UnixMilli(),
+				FromMillis: start.UnixMilli(), ToMillis: next.UnixMilli(),
 				FromLocalDate: date, ToLocalDate: date,
 			})
 		}
 		return intervals
 	}
 	if hasFrom {
+		from, _, _ = FrictionDayBounds(filter.From, location)
 		return []usageQueryInterval{{
 			FromMillis: from.UTC().UnixMilli(), ToMillis: math.MaxInt64,
 			FromLocalDate: filter.From,
 		}}
 	}
-	next := to.AddDate(0, 0, 1)
+	_, next, _ := FrictionDayBounds(filter.To, location)
 	return []usageQueryInterval{{
 		FromMillis: math.MinInt64, ToMillis: next.UTC().UnixMilli(),
-		ToLocalDate: filter.To,
+		FromLocalDate: "0000-01-01", ToLocalDate: filter.To,
 	}}
 }

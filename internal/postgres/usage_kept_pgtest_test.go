@@ -6,12 +6,15 @@ import (
 	"context"
 	"database/sql"
 	"maps"
+	"os"
 	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
 
+	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/stdlib"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"go.kenn.io/agentsview/internal/config"
@@ -163,6 +166,327 @@ func keptUsageFixture(t *testing.T) (*db.DB, *Sync, *Store, *usageReadCounter) {
 	counter := &usageReadCounter{storeExecutor: store.pg, queries: map[string]int{}}
 	store.pg = counter
 	return local, syncer, store, counter
+}
+
+// usageQueryTracer observes real queries on both pooled connections and
+// transactions opened from them.
+type usageQueryTracer struct {
+	mu             sync.Mutex
+	queries        map[string]int
+	probes         atomic.Int64
+	identityProbes atomic.Int64
+	started        chan struct{}
+	release        chan struct{}
+	once           sync.Once
+}
+
+func TestUsageRestrictedPrimaryRetainsDirectResults(t *testing.T) {
+	_, syncer, primary, _ := keptUsageFixture(t)
+	ctx := t.Context()
+	roleURL := newUsageJournalRole(t, syncer, `GRANT SELECT ON ALL TABLES IN SCHEMA `+syncer.schema+` TO ROLE`)
+	_, err := primary.pg.ExecContext(ctx, `REVOKE EXECUTE ON FUNCTION pg_catalog.pg_control_system() FROM PUBLIC`)
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		_, err := primary.pg.ExecContext(context.WithoutCancel(t.Context()), `GRANT EXECUTE ON FUNCTION pg_catalog.pg_control_system() TO PUBLIC`)
+		require.NoError(t, err)
+	})
+	config, err := pgx.ParseConfig(roleURL)
+	require.NoError(t, err)
+	config.RuntimeParams["search_path"] = syncer.schema
+	config.RuntimeParams["TimeZone"] = "UTC"
+	trace := &usageQueryTracer{queries: map[string]int{}}
+	config.Tracer = trace
+	pool := stdlib.OpenDB(*config)
+	reader := &Store{pg: pool, ownedDB: pool}
+	t.Cleanup(func() { require.NoError(t, reader.Close()) })
+	require.NoError(t, reader.ConfigureUsageCache(ctx, t.TempDir(), roleURL, syncer.schema))
+	filter := db.UsageFilter{From: "2026-01-01", To: "2026-01-01", Timezone: "UTC"}
+	want, err := primary.GetDailyUsage(ctx, filter)
+	require.NoError(t, err)
+	got, err := reader.GetDailyUsage(ctx, filter)
+	require.NoError(t, err)
+	require.Equal(t, want, got)
+	wantTop, err := primary.GetTopSessionsByCost(ctx, filter, 10)
+	require.NoError(t, err)
+	gotTop, err := reader.GetTopSessionsByCost(ctx, filter, 10)
+	require.NoError(t, err)
+	require.Equal(t, wantTop, gotTop)
+	wantPlan, err := primary.GetPlanUsageSessionCounts(ctx, filter)
+	require.NoError(t, err)
+	gotPlan, err := reader.GetPlanUsageSessionCounts(ctx, filter)
+	require.NoError(t, err)
+	require.Equal(t, wantPlan, gotPlan)
+	trace.mu.Lock()
+	reads := maps.Clone(trace.queries)
+	trace.mu.Unlock()
+	require.GreaterOrEqual(t, len(reads), 3)
+	got, err = reader.GetDailyUsage(ctx, filter)
+	require.NoError(t, err)
+	require.Equal(t, want, got)
+	gotTop, err = reader.GetTopSessionsByCost(ctx, filter, 10)
+	require.NoError(t, err)
+	require.Equal(t, wantTop, gotTop)
+	gotPlan, err = reader.GetPlanUsageSessionCounts(ctx, filter)
+	require.NoError(t, err)
+	require.Equal(t, wantPlan, gotPlan)
+	trace.mu.Lock()
+	again := maps.Clone(trace.queries)
+	trace.mu.Unlock()
+	require.Equal(t, reads, again, "repeats must reuse the direct reports")
+	waitCtx, stopWait := context.WithTimeout(ctx, 15*time.Second)
+	require.NoError(t, reader.WaitUsageCacheWarm(waitCtx))
+	stopWait()
+	identityProbes := trace.identityProbes.Load()
+	_, err = reader.GetDailyUsage(ctx, filter)
+	require.NoError(t, err)
+	waitCtx, stopWait = context.WithTimeout(ctx, 15*time.Second)
+	require.NoError(t, reader.WaitUsageCacheWarm(waitCtx))
+	stopWait()
+	require.Equal(t, identityProbes, trace.identityProbes.Load(), "an unavailable source must not be retried on every visit")
+	var revision int64
+	require.NoError(t, primary.pg.QueryRowContext(ctx, `SELECT value::bigint FROM sync_metadata WHERE key='usage_change_revision'`).Scan(&revision))
+	tx, err := primary.beginTx(ctx, nil)
+	require.NoError(t, err)
+	_, err = tx.ExecContext(ctx, `UPDATE usage_events SET output_tokens=output_tokens+100 WHERE session_id='paid-a'`)
+	require.NoError(t, err)
+	_, err = tx.ExecContext(ctx, `UPDATE sync_metadata SET value=$1::bigint::text WHERE key='usage_change_revision'`, revision-1)
+	require.NoError(t, err)
+	require.NoError(t, tx.Commit())
+	want, err = (&Store{pg: primary.pg}).readDailyUsage(ctx, filter)
+	require.NoError(t, err)
+	got, err = reader.GetDailyUsage(ctx, filter)
+	require.NoError(t, err)
+	require.Equal(t, want, got)
+	require.NotEqual(t, 1250, got.Totals.OutputTokens)
+	_, err = primary.pg.ExecContext(ctx, `GRANT EXECUTE ON FUNCTION pg_catalog.pg_control_system() TO PUBLIC`)
+	require.NoError(t, err)
+	time.Sleep(6 * time.Second)
+	_, err = reader.GetDailyUsage(ctx, filter)
+	require.NoError(t, err)
+	warmCtx, cancel := context.WithTimeout(ctx, 15*time.Second)
+	defer cancel()
+	require.NoError(t, reader.WaitUsageCacheWarm(warmCtx))
+	require.False(t, reader.runtimeState().usageIdentityDenied.Load())
+	_, err = reader.usageCache.ResetEpoch(ctx)
+	require.NoError(t, err)
+	_, err = primary.pg.ExecContext(ctx, `REVOKE EXECUTE ON FUNCTION pg_catalog.pg_control_system() FROM PUBLIC`)
+	require.NoError(t, err)
+	_, err = reader.GetDailyUsage(ctx, filter)
+	require.NoError(t, err)
+	waitCtx, stopWait = context.WithTimeout(ctx, 15*time.Second)
+	require.NoError(t, reader.WaitUsageCacheWarm(waitCtx))
+	stopWait()
+	identityProbes = trace.identityProbes.Load()
+	_, err = reader.GetDailyUsage(ctx, filter)
+	require.NoError(t, err)
+	waitCtx, stopWait = context.WithTimeout(ctx, 15*time.Second)
+	require.NoError(t, reader.WaitUsageCacheWarm(waitCtx))
+	stopWait()
+	require.Equal(t, identityProbes, trace.identityProbes.Load(), "a formerly ready cache must stop probing an unavailable identity")
+}
+
+func (trace *usageQueryTracer) TraceQueryStart(ctx context.Context, _ *pgx.Conn, data pgx.TraceQueryStartData) context.Context {
+	if strings.Contains(data.SQL, "pg_control_system()") {
+		trace.identityProbes.Add(1)
+	}
+	if strings.Contains(data.SQL, "usage_history_token") {
+		trace.probes.Add(1)
+	}
+	if strings.Contains(data.SQL, "usage_event_timestamp_rows AS MATERIALIZED") || strings.Contains(data.SQL, "FROM session_plan_usage p") {
+		trace.mu.Lock()
+		trace.queries[data.SQL]++
+		trace.mu.Unlock()
+		if trace.started != nil {
+			trace.once.Do(func() {
+				close(trace.started)
+				select {
+				case <-trace.release:
+				case <-ctx.Done():
+				}
+			})
+		}
+	}
+	return ctx
+}
+
+func (*usageQueryTracer) TraceQueryEnd(context.Context, *pgx.Conn, pgx.TraceQueryEndData) {}
+
+func TestUsageStandbyRetainsResults(t *testing.T) {
+	standbyURL := os.Getenv("TEST_PG_STANDBY_URL")
+	if standbyURL == "" {
+		t.Skip("TEST_PG_STANDBY_URL must point to a standby of TEST_PG_URL")
+	}
+	_, syncer, primary, _ := keptUsageFixture(t)
+	ctx := t.Context()
+	var lsn string
+	require.NoError(t, primary.pg.QueryRowContext(ctx, `SELECT pg_current_wal_lsn()::text`).Scan(&lsn))
+	connection, err := sql.Open("pgx", standbyURL)
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, connection.Close()) })
+	require.Eventually(t, func() bool {
+		var caughtUp bool
+		return connection.QueryRowContext(ctx, `SELECT pg_last_wal_replay_lsn() >= $1::pg_lsn`, lsn).Scan(&caughtUp) == nil && caughtUp
+	}, 20*time.Second, 50*time.Millisecond)
+	config, err := pgx.ParseConfig(standbyURL)
+	require.NoError(t, err)
+	quotedSchema, err := quoteIdentifier(syncer.schema)
+	require.NoError(t, err)
+	config.RuntimeParams["search_path"] = quotedSchema
+	config.RuntimeParams["TimeZone"] = "UTC"
+	trace := &usageQueryTracer{queries: map[string]int{}}
+	config.Tracer = trace
+	pool := stdlib.OpenDB(*config)
+	standby := &Store{pg: pool, ownedDB: pool}
+	t.Cleanup(func() { require.NoError(t, standby.Close()) })
+	require.NoError(t, standby.ConfigureUsageCache(ctx, t.TempDir(), standbyURL, syncer.schema))
+	filter := db.UsageFilter{From: "2026-01-01", To: "2026-01-01", Timezone: "UTC"}
+	want, err := primary.GetDailyUsage(ctx, filter)
+	require.NoError(t, err)
+	got, err := standby.GetDailyUsage(ctx, filter)
+	require.NoError(t, err)
+	require.Equal(t, want, got)
+	wantTop, err := primary.GetTopSessionsByCost(ctx, filter, 10)
+	require.NoError(t, err)
+	gotTop, err := standby.GetTopSessionsByCost(ctx, filter, 10)
+	require.NoError(t, err)
+	require.Equal(t, wantTop, gotTop)
+	wantPlan, err := primary.GetPlanUsageSessionCounts(ctx, filter)
+	require.NoError(t, err)
+	gotPlan, err := standby.GetPlanUsageSessionCounts(ctx, filter)
+	require.NoError(t, err)
+	require.Equal(t, wantPlan, gotPlan)
+	trace.mu.Lock()
+	reads := maps.Clone(trace.queries)
+	trace.mu.Unlock()
+	require.GreaterOrEqual(t, len(reads), 3, "daily, top sessions, and plan counts must load their source rows")
+	got, err = standby.GetDailyUsage(ctx, filter)
+	require.NoError(t, err)
+	require.Equal(t, want, got)
+	gotTop, err = standby.GetTopSessionsByCost(ctx, filter, 10)
+	require.NoError(t, err)
+	require.Equal(t, wantTop, gotTop)
+	gotPlan, err = standby.GetPlanUsageSessionCounts(ctx, filter)
+	require.NoError(t, err)
+	require.Equal(t, wantPlan, gotPlan)
+	trace.mu.Lock()
+	again := maps.Clone(trace.queries)
+	trace.mu.Unlock()
+	require.Equal(t, reads, again, "repeats must reuse the retained reports")
+
+	// A restored history may reach the same numeric revision with different
+	// data. The token must prevent reusing the prior standby result.
+	var revision int64
+	var oldToken string
+	require.NoError(t, primary.pg.QueryRowContext(ctx, `SELECT (SELECT value::bigint FROM sync_metadata WHERE key='usage_change_revision'), (SELECT value FROM sync_metadata WHERE key='usage_history_token')`).Scan(&revision, &oldToken))
+	tx, err := primary.beginTx(ctx, nil)
+	require.NoError(t, err)
+	_, err = tx.ExecContext(ctx, `UPDATE usage_events SET output_tokens=output_tokens+100 WHERE session_id='paid-a'`)
+	require.NoError(t, err)
+	_, err = tx.ExecContext(ctx, `UPDATE sync_metadata SET value=$1::bigint::text WHERE key='usage_change_revision'`, revision-1)
+	require.NoError(t, err)
+	require.NoError(t, tx.Commit())
+	var newRevision int64
+	var newToken string
+	require.NoError(t, primary.pg.QueryRowContext(ctx, `SELECT (SELECT value::bigint FROM sync_metadata WHERE key='usage_change_revision'), (SELECT value FROM sync_metadata WHERE key='usage_history_token')`).Scan(&newRevision, &newToken))
+	require.Equal(t, revision, newRevision)
+	require.NotEqual(t, oldToken, newToken)
+	require.NoError(t, primary.pg.QueryRowContext(ctx, `SELECT pg_current_wal_lsn()::text`).Scan(&lsn))
+	require.Eventually(t, func() bool {
+		var caughtUp bool
+		return connection.QueryRowContext(ctx, `SELECT pg_last_wal_replay_lsn() >= $1::pg_lsn`, lsn).Scan(&caughtUp) == nil && caughtUp
+	}, 20*time.Second, 50*time.Millisecond)
+	want, err = (&Store{pg: primary.pg}).readDailyUsage(ctx, filter)
+	require.NoError(t, err)
+	got, err = standby.GetDailyUsage(ctx, filter)
+	require.NoError(t, err)
+	require.Equal(t, want, got)
+	require.NotEqual(t, 1250, got.Totals.OutputTokens)
+
+	// Two callers of the same cold selection should share its source scan.
+	filter.From = "2025-12-31"
+	trace.mu.Lock()
+	before := maps.Clone(trace.queries)
+	trace.mu.Unlock()
+	probes := trace.probes.Load()
+	trace.started, trace.release = make(chan struct{}), make(chan struct{})
+	releaseScan := sync.OnceFunc(func() { close(trace.release) })
+	t.Cleanup(releaseScan)
+	var values [2]db.DailyUsageResult
+	var readErrors [2]error
+	var group sync.WaitGroup
+	group.Add(2)
+	go func() {
+		defer group.Done()
+		values[0], readErrors[0] = standby.GetDailyUsage(ctx, filter)
+	}()
+	select {
+	case <-trace.started:
+	case <-time.After(10 * time.Second):
+		t.Fatal("first standby scan did not start")
+	}
+	go func() {
+		defer group.Done()
+		values[1], readErrors[1] = standby.GetDailyUsage(ctx, filter)
+	}()
+	require.Eventually(t, func() bool { return trace.probes.Load() >= probes+3 }, 10*time.Second, 10*time.Millisecond)
+	// Let the second validated caller join the first scan before releasing it.
+	time.Sleep(200 * time.Millisecond)
+	releaseScan()
+	group.Wait()
+	require.NoError(t, readErrors[0])
+	require.NoError(t, readErrors[1])
+	require.Equal(t, values[0], values[1])
+	trace.mu.Lock()
+	after := maps.Clone(trace.queries)
+	trace.mu.Unlock()
+	scans := 0
+	for query, count := range after {
+		scans += count - before[query]
+	}
+	require.Equal(t, 1, scans, "concurrent callers should share the daily source scan")
+}
+
+func TestUsageKeptJournalReplacementAtSameRevision(t *testing.T) {
+	for _, cache := range []bool{false, true} {
+		t.Run(map[bool]string{false: "direct", true: "cache"}[cache], func(t *testing.T) {
+			_, _, store, _ := keptUsageFixture(t)
+			ctx := t.Context()
+			if cache {
+				attachUsageCacheProbe(t, store, t.TempDir())
+				t.Cleanup(func() { require.NoError(t, store.usageCache.Close()) })
+			}
+			filter := db.UsageFilter{From: "2026-01-01", To: "2026-01-01", Timezone: "UTC", Breakdowns: true}
+			before, err := store.GetDailyUsage(ctx, filter)
+			require.NoError(t, err)
+			topBefore, err := store.GetTopSessionsByCost(ctx, filter, 10)
+			require.NoError(t, err)
+			version := store.keptUsageVersion(ctx, "test")
+			require.NotEmpty(t, version)
+			var revision int64
+			require.NoError(t, store.pg.QueryRowContext(ctx, `SELECT value::bigint FROM sync_metadata WHERE key='usage_change_revision'`).Scan(&revision))
+			_, err = store.pg.ExecContext(ctx, `UPDATE usage_events SET output_tokens=900 WHERE session_id='paid-a'`)
+			require.NoError(t, err)
+			_, err = store.pg.ExecContext(ctx, `ALTER TABLE usage_session_changes RENAME TO old_usage_session_changes;
+CREATE TABLE usage_session_changes (LIKE old_usage_session_changes INCLUDING ALL);
+INSERT INTO usage_session_changes SELECT * FROM old_usage_session_changes`)
+			require.NoError(t, err)
+			_, err = store.pg.ExecContext(ctx, `UPDATE sync_metadata SET value=($1::bigint)::text WHERE key='usage_change_revision'`, revision)
+			require.NoError(t, err)
+			require.NotEqual(t, version, store.keptUsageVersion(ctx, "test"))
+			after, err := store.GetDailyUsage(ctx, filter)
+			require.NoError(t, err)
+			topAfter, err := store.GetTopSessionsByCost(ctx, filter, 10)
+			require.NoError(t, err)
+			want, err := (&Store{pg: store.pg}).GetDailyUsage(ctx, filter)
+			require.NoError(t, err)
+			wantTop, err := (&Store{pg: store.pg}).GetTopSessionsByCost(ctx, filter, 10)
+			require.NoError(t, err)
+			require.NotEqual(t, before.Totals, after.Totals)
+			require.NotEqual(t, topBefore, topAfter)
+			require.Equal(t, want.Totals, after.Totals)
+			require.Equal(t, wantTop, topAfter)
+		})
+	}
 }
 
 func TestUsageKeptPushBetweenReads(t *testing.T) {

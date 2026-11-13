@@ -8,9 +8,9 @@ remains authoritative; deleting a recognized cache generation loses no user
 data.
 
 The cache serves daily usage, top sessions, billed-session counts, and relaxed
-matching counts. Per-session detail remains on the bounded live path. PostgreSQL
-keeps its live implementation and is checked against SQLite by the
-complete-result `pgtest` fixture.
+matching counts. Per-session detail remains on the bounded live path. Native PostgreSQL uses
+the same cache for aggregate reads and retains direct reads while it fills.
+The complete-result `pgtest` fixture compares it with SQLite.
 
 The release target is a complete warm 30-day CLI result in at most two seconds
 on the protected production-scale clone, with byte-identical results before and
@@ -90,9 +90,9 @@ greatest-output snapshot wins, attribution follows the earliest row, the maximum
 web-search count carries over, and losing snapshot output is recorded as
 discarded. Only irreducible groups are stored as narrow exceptions, so exception
 volume scales with genuine cross-session, cross-day, and cross-model duplicates
-rather than with token-bearing messages. Cursor facts stay entirely on the
-exception tier: their keys may collide with session usage keys and their filters
-depend on per-row headless state.
+rather than with token-bearing messages. Native SQLite keeps account facts on
+the exception tier. External caches aggregate non-colliding account facts by
+day, model, agent, and headless state; colliding keys stay as exceptions.
 
 At read time the query loads only exception rows intersecting the requested
 window from the currently verified candidate sessions. It then applies the
@@ -111,7 +111,14 @@ journaled sessions and resolves the group from the latest exception rows of all
 members.
 
 Cursor usage uses the same exception representation under a synthetic source
-install keyed by the Cursor high-water mark. Matching-session activity has
+install keyed by the Cursor high-water mark. An external source replaces its
+whole account generation, so that build also prices every account row whose
+dedup key appears once and in no cached session. It stores their sums in
+`usage_rollup_account_totals`, keyed by day, agent, headless state, model, and
+rate. Requests filter those rows by agent, automated scope, and model, and keep
+only colliding rows as exceptions. A fill that gives a session one of those
+keys deletes the account install, and the install transaction rejects a build
+whose collisions grew while it ran. Matching-session activity has
 compact `(session_id, day, model)` rows for relaxed counts. An eligible fact
 with neither its own timestamp nor a session start is retained with an empty
 day: unbounded matching counts include it, while bounded reads exclude it.

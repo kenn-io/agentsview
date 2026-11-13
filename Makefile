@@ -482,6 +482,10 @@ test-postgres-raw-sync-ci: pricing-snapshot ensure-embed-dir
 test-postgres-core-ci:
 	$(MAKE) -j1 test-postgres-core-fast-ci test-postgres-core-heavy-ci
 
+.PHONY: test-postgres-standby-ci
+test-postgres-standby-ci: pricing-snapshot ensure-embed-dir
+	CGO_ENABLED=1 go test -tags "fts5,pgtest" ./internal/postgres -run '^TestUsageStandbyRetainsResults$$' -count=1 -timeout=5m
+
 # Each process gets its own database because tests drop schemas that own
 # database-wide extensions. Activity runs afterward on the original database.
 test-postgres-core-fast-ci: pricing-snapshot ensure-embed-dir

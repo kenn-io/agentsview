@@ -1021,6 +1021,11 @@ type DB struct {
 	// reuse prepared statements, so a SQLite authorizer sees one compilation
 	// per query shape rather than one per page.
 	memberFreshnessPages atomic.Int64
+
+	usageSource           UsageCacheSource
+	usageSourceIdentityMu sync.Mutex
+	// usageSourceDatabaseID holds the external source identity from the latest capture.
+	usageSourceDatabaseID atomic.Pointer[string]
 }
 
 // MessagesLoadCount returns the total number of GetAllMessages calls the

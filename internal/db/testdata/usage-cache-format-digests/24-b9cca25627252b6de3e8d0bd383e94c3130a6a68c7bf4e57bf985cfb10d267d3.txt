@@ -1,0 +1,1 @@
+Separate snapshot ranking and store priced account totals.

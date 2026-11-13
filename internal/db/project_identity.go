@@ -412,6 +412,20 @@ func (db *DB) CopyArchiveIdentityFrom(ctx context.Context, sourcePath string) er
 }
 
 func (db *DB) GetDatabaseID(ctx context.Context) (string, error) {
+	if db.usageSource != nil {
+		// Every capture refreshes this identity and every prepared window
+		// compares it with its capture, so a changed source is retried.
+		if id := db.usageSourceDatabaseID.Load(); id != nil {
+			return *id, nil
+		}
+		probe, err := db.usageSource.CaptureUsage(ctx, UsageSourceRequest{IDs: &[]string{}})
+		if err == nil && probe.DatabaseID != "" {
+			if !db.usageSourceDatabaseID.CompareAndSwap(nil, &probe.DatabaseID) {
+				return *db.usageSourceDatabaseID.Load(), nil
+			}
+		}
+		return probe.DatabaseID, err
+	}
 	id, _, err := db.databaseIDAndUsagePricingRevision(ctx)
 	if err != nil {
 		return "", err

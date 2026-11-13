@@ -803,7 +803,7 @@ func TestUsageSpoolRetainsOnlyChangedFacts(t *testing.T) {
 				assert.Equal(t, step.spooled, spooled, step.name)
 				assert.Equal(t, step.total, total, step.name)
 				_, lost, err := cache.fill.installSpool(t.Context(), spool,
-					[]usageSourceVersion{extracted["session"]}, nil, expected)
+					[]usageSourceVersion{extracted["session"]}, nil, expected, 0)
 				require.NoError(t, err, step.name)
 				assert.Empty(t, lost, step.name)
 				require.NoError(t, spool.Close())
@@ -833,7 +833,7 @@ func TestUsageSpoolFallsBackAfterCacheRevisionChanges(t *testing.T) {
 	require.NoError(t, spool.db.QueryRowContext(t.Context(), `SELECT COUNT(*) FROM facts`).Scan(&rows))
 	assert.Equal(t, 8, rows, "a changed baseline requires the complete snapshot")
 	installed, lost, err := cache.fill.installSpool(t.Context(), spool,
-		[]usageSourceVersion{extracted["session"]}, nil, expected)
+		[]usageSourceVersion{extracted["session"]}, nil, expected, 0)
 	require.NoError(t, err)
 	assert.Empty(t, installed)
 	assert.Equal(t, []string{"session"}, lost)
@@ -1030,6 +1030,9 @@ func TestUsagePageFillShardsLargeWindow(t *testing.T) {
 	extracted := make(map[string]usageSourceVersion)
 	var started int
 	barrier := make(chan struct{})
+	release := make(chan struct{})
+	unblock := sync.OnceFunc(func() { close(release) })
+	t.Cleanup(unblock)
 	var mu sync.Mutex
 	cache.fill.observer.beforeExtract = func(versions []usageSourceVersion) {
 		mu.Lock()
@@ -1038,6 +1041,7 @@ func TestUsagePageFillShardsLargeWindow(t *testing.T) {
 			extracted[version.SessionID] = version
 		}
 		started++
+		hold := started == 2
 		if started == 2 {
 			close(barrier)
 		}
@@ -1047,10 +1051,41 @@ func TestUsagePageFillShardsLargeWindow(t *testing.T) {
 		case <-barrier:
 		case <-ctx.Done():
 		}
+		if hold {
+			select {
+			case <-release:
+			case <-ctx.Done():
+			}
+		}
 	}
-	installs, _, err := cache.fillAndRollupUsageWindow(ctx, &snapshot, &snapshot, func(string) {})
+	done := make(chan error, 1)
+	go func() {
+		installs, _, err := cache.fillAndRollupUsageWindow(ctx, &snapshot, &snapshot, func(string) {})
+		if err == nil && len(installs) != sessions {
+			err = fmt.Errorf("got %d installs, want %d", len(installs), sessions)
+		}
+		done <- err
+	}()
+	<-barrier
+	require.Eventually(t, func() bool {
+		return usageCacheCount(t, cache, "usage_cached_sessions") > 0
+	}, 10*time.Second, 10*time.Millisecond)
+	select {
+	case err := <-done:
+		require.FailNow(t, "partial request returned before all shards finished", "%v", err)
+	default:
+	}
+	secondManager := newUsageCacheManager(database.path)
+	secondManager.attachArchive(database)
+	t.Cleanup(func() { require.NoError(t, secondManager.Close()) })
+	second, err := secondManager.Generation(ctx, snapshot.DatabaseID)
 	require.NoError(t, err)
-	assert.Len(t, installs, sessions)
+	copySnapshot := snapshot
+	installs, _, err := second.fillAndRollupUsageWindow(ctx, &copySnapshot, &copySnapshot, func(string) {})
+	require.NoError(t, err)
+	require.Len(t, installs, sessions)
+	unblock()
+	require.NoError(t, <-done)
 	assert.ElementsMatch(t, snapshot.Versions, slices.Collect(maps.Values(extracted)))
 }
 
@@ -1708,7 +1743,7 @@ func TestUsageSpoolTokenAppendReadsOnlyNewMessages(t *testing.T) {
 			var rows int
 			require.NoError(t, spool.db.QueryRowContext(t.Context(), `SELECT COUNT(*) FROM facts`).Scan(&rows))
 			assert.Equal(t, 1, rows)
-			_, lost, err := cache.fill.installSpool(t.Context(), spool, []usageSourceVersion{extracted["session"]}, nil, expected)
+			_, lost, err := cache.fill.installSpool(t.Context(), spool, []usageSourceVersion{extracted["session"]}, nil, expected, 0)
 			require.NoError(t, err)
 			assert.Empty(t, lost)
 			for _, messages := range [][]Message{
