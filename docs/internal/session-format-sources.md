@@ -793,7 +793,10 @@ fixtures retain this field; missing identities remain source-local.
   [prefix reader](https://github.com/openai/codex/blob/6b9826e3aa83b1a5947db50f4332cb9c65f1b340/codex-rs/rollout/src/seekable_reader.rs)
   checks the cutoff against decoded bytes. Materialization preserves the original
   bytes and installs the newest available page and its ancestors without
-  modifying Codex state or launching Codex.
+  modifying Codex state or launching Codex. The pinned
+  [CLI resume arguments](https://github.com/openai/codex/blob/6b9826e3aa83b1a5947db50f4332cb9c65f1b340/codex-rs/cli/src/cli_main.rs#L348-L370)
+  and [resume test](https://github.com/openai/codex/blob/6b9826e3aa83b1a5947db50f4332cb9c65f1b340/codex-rs/cli/src/cli_main.rs#L4222-L4261)
+  establish the session ID and `-C` checkout arguments.
 
 - **Reasoning, compaction, and usage repeats (checked 2026-11-11 at
   `87b7bdbf2efb9cb6fb15d821ef535061012c0138`):** The pinned

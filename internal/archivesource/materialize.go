@@ -164,14 +164,6 @@ func materializeSnapshot(ctx context.Context, sources []config.ArchiveSource, ow
 	base := strings.TrimSuffix(primary, ".jsonl") + "/"
 	bound.Path = primary
 	if use != nil {
-		var duplicate bool
-		err = conn.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM raw_archive_roots WHERE device_id=? AND provider='codex' AND original_path=? AND id<>?)`, s.DeviceID, originalRoot, s.RootID).Scan(&duplicate)
-		if err != nil {
-			return nil, "", "", err
-		}
-		if duplicate {
-			return nil, "", "", errors.New("ambiguous snapshot root coordinates")
-		}
 		rows, err := conn.QueryContext(ctx, `SELECT path,sha256,size,mod_time_ns,covered FROM raw_archive_files WHERE root_id=? AND (path LIKE '%.jsonl' OR path LIKE '%.jsonl.zst') ORDER BY path`, s.RootID)
 		if err != nil {
 			return nil, "", "", err

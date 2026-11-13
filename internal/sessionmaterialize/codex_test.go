@@ -2,6 +2,7 @@ package sessionmaterialize
 
 import (
 	"context"
+	"flag"
 	"fmt"
 	"io"
 	"net/http"
@@ -61,6 +62,18 @@ func TestMaterializeCodexConfiguredAndMirror(t *testing.T) {
 				assert.Equal(t, want, got)
 			}
 			if !mirror {
+				installedPaths := result.Paths
+				t.Run("relabeled recorded source", func(t *testing.T) {
+					relabeled := *session
+					relabeled.Machine = "old-label"
+					result, err := Materialize(t.Context(), cfg, nil, &relabeled, cwd)
+					require.NoError(t, err)
+					assert.Equal(t, installedPaths, result.Paths)
+					missing := filepath.Join(location, "missing", oldName)
+					relabeled.FilePath = &missing
+					_, err = Materialize(t.Context(), cfg, nil, &relabeled, cwd)
+					require.ErrorContains(t, err, "outside configured roots")
+				})
 				t.Run("recorded directory alias", func(t *testing.T) {
 					alias := filepath.Join(t.TempDir(), "source-link")
 					if err := os.Symlink(location, alias); err != nil {
@@ -71,6 +84,7 @@ func TestMaterializeCodexConfiguredAndMirror(t *testing.T) {
 					result, err := Materialize(t.Context(), cfg, nil, &linked, cwd)
 					require.NoError(t, err)
 					assert.Equal(t, "unchanged", result.Status)
+					assert.Equal(t, installedPaths, result.Paths)
 					outside := filepath.Join(t.TempDir(), oldName)
 					require.NoError(t, os.WriteFile(outside, old, 0o600))
 					linked.FilePath = &outside
@@ -129,13 +143,25 @@ func TestMaterializeCodexS3(t *testing.T) {
 	parentContent := fmt.Sprintf(`{"type":"session_meta","payload":{"id":%q,"history_mode":"paginated"}}`+"\n", parent)
 	content := fmt.Sprintf(`{"type":"session_meta","payload":{"id":%q,"history_mode":"paginated","history_base":{"thread_id":%q,"end_ordinal_exclusive":1,"end_byte_offset":%d}}}`+"\n", id, parent, len(parentContent))
 	var corrupt atomic.Bool
+	var unsafeSelected atomic.Bool
+	var unsafeFetched atomic.Bool
+	unsafeKey := "host/raw/codex/sessions/2026/01/01/rollout-x\\..\\..\\..\\..\\escape-" + id + ".jsonl"
+	unrelatedKey := "host/raw/codex/sessions/2026/01/01/rollout-x\\..\\escape-33333333-3333-4333-8333-333333333333.jsonl"
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Query().Get("list-type") == "2" {
 			w.Header().Set("Content-Type", "application/xml")
 			if strings.Contains(r.URL.Query().Get("prefix"), "archived_sessions") {
 				_, _ = fmt.Fprintf(w, `<ListBucketResult><IsTruncated>false</IsTruncated><Contents><Key>%s</Key><Size>%d</Size></Contents></ListBucketResult>`, parentKey, len(parentContent))
 			} else {
-				_, _ = fmt.Fprintf(w, `<ListBucketResult><IsTruncated>false</IsTruncated><Contents><Key>%s</Key><Size>%d</Size></Contents></ListBucketResult>`, key, len(content))
+				listed := key
+				if unsafeSelected.Load() {
+					listed += ".zst"
+				}
+				_, _ = fmt.Fprintf(w, `<ListBucketResult><IsTruncated>false</IsTruncated><Contents><Key>%s</Key><Size>%d</Size></Contents><Contents><Key>%s</Key><Size>10</Size></Contents>`, listed, len(content), unrelatedKey)
+				if unsafeSelected.Load() {
+					_, _ = fmt.Fprintf(w, `<Contents><Key>%s</Key><Size>10</Size></Contents>`, unsafeKey)
+				}
+				_, _ = io.WriteString(w, `</ListBucketResult>`)
 			}
 			return
 		}
@@ -149,6 +175,7 @@ func TestMaterializeCodexS3(t *testing.T) {
 		case "/test/" + parentKey:
 			_, _ = io.WriteString(w, parentContent)
 		default:
+			unsafeFetched.Store(true)
 			http.NotFound(w, r)
 		}
 	}))
@@ -180,6 +207,15 @@ func TestMaterializeCodexS3(t *testing.T) {
 	got, err = os.ReadFile(result.Paths[1])
 	require.NoError(t, err)
 	assert.Equal(t, content, string(got))
+	unsafeSelected.Store(true)
+	unsafeHome := t.TempDir()
+	t.Setenv("CODEX_HOME", unsafeHome)
+	_, err = Materialize(t.Context(), cfg, nil, session, t.TempDir())
+	require.ErrorContains(t, err, "invalid selected Codex S3 path")
+	assert.False(t, unsafeFetched.Load())
+	_, err = os.Stat(filepath.Join(unsafeHome, "sessions"))
+	require.ErrorIs(t, err, os.ErrNotExist)
+	unsafeSelected.Store(false)
 	home := t.TempDir()
 	t.Setenv("CODEX_HOME", home)
 	corrupt.Store(true)
@@ -187,6 +223,44 @@ func TestMaterializeCodexS3(t *testing.T) {
 	require.ErrorContains(t, err, "metadata")
 	_, err = os.Stat(filepath.Join(home, "sessions"))
 	require.ErrorIs(t, err, os.ErrNotExist)
+}
+
+func TestMaterializeCodexLoadedLinkedHome(t *testing.T) {
+	const id = "11111111-1111-4111-8111-111111111111"
+	const parent = "22222222-2222-4222-8222-222222222222"
+	base := t.TempDir()
+	profile, live := filepath.Join(base, "profile"), filepath.Join(base, "storage", "live")
+	archive := filepath.Join(profile, "archived_sessions")
+	require.NoError(t, os.MkdirAll(profile, 0o700))
+	require.NoError(t, os.MkdirAll(live, 0o700))
+	require.NoError(t, os.MkdirAll(archive, 0o700))
+	if err := os.Symlink(live, filepath.Join(profile, "sessions")); err != nil {
+		t.Skipf("directory symlinks unavailable: %v", err)
+	}
+	t.Setenv("HOME", base)
+	t.Setenv("USERPROFILE", base)
+	t.Setenv("AGENTSVIEW_DATA_DIR", filepath.Join(base, "data"))
+	t.Setenv("CODEX_HOME", profile)
+	t.Setenv("CODEX_SESSIONS_DIR", "")
+	fs := flag.NewFlagSet("fixture", flag.ContinueOnError)
+	config.RegisterServeFlags(fs)
+	require.NoError(t, fs.Parse(nil))
+	cfg, err := config.Load(fs)
+	require.NoError(t, err)
+	parentBytes := []byte(fmt.Sprintf(`{"type":"session_meta","payload":{"id":%q,"history_mode":"paginated"}}`+"\n", parent))
+	parentPath := filepath.Join(archive, "rollout-2024-01-15T00-00-00-"+parent+".jsonl")
+	require.NoError(t, os.WriteFile(parentPath, parentBytes, 0o600))
+	page := filepath.Join(live, "rollout-2026-01-01T00-00-00-"+id+".jsonl")
+	pageBytes := []byte(fmt.Sprintf(`{"type":"session_meta","payload":{"id":%q,"history_mode":"paginated","history_base":{"thread_id":%q,"end_ordinal_exclusive":1,"end_byte_offset":%d}}}`+"\n", id, parent, len(parentBytes)))
+	require.NoError(t, os.WriteFile(page, pageBytes, 0o600))
+	session := &db.Session{ID: "codex:" + id, Agent: "codex", Machine: cfg.InstallationID, FilePath: &page}
+	t.Setenv("CODEX_HOME", filepath.Join(base, "destination"))
+	result, err := Materialize(t.Context(), cfg, nil, session, t.TempDir())
+	require.NoError(t, err)
+	require.Len(t, result.Paths, 2)
+	got, err := os.ReadFile(result.Paths[0])
+	require.NoError(t, err)
+	assert.Equal(t, parentBytes, got)
 }
 
 func TestMaterializeCodexMissingAndCrossRoot(t *testing.T) {

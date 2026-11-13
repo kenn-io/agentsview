@@ -389,6 +389,16 @@ func readBounded(r io.Reader, limit int64) ([]byte, error) {
 	return data, nil
 }
 
+func s3SourceMachine(cfg config.Config, agent parser.AgentType, root string) string {
+	if machine := parser.S3MachineFromRoot(root, agent); machine != "" {
+		return machine
+	}
+	if machine := cfg.SourceMachines[agent][root]; machine != "" {
+		return machine
+	}
+	return cfg.InstallationID
+}
+
 func readS3Source(ctx context.Context, cfg config.Config, machine, uri, id string, limit int64) ([]sourceFile, error) {
 	p, ok := parser.S3ProviderFor(parser.AgentClaude)
 	if !ok || p.S3SessionID(uri) != id {
@@ -397,13 +407,7 @@ func readS3Source(ctx context.Context, cfg config.Config, machine, uri, id strin
 	allowed := false
 	for _, root := range cfg.ResolveDirs(parser.AgentClaude) {
 		if strings.HasPrefix(root, "s3://") && strings.HasPrefix(uri, strings.TrimSuffix(root, "/")+"/") {
-			m := parser.S3MachineFromRoot(root, parser.AgentClaude)
-			if m == "" {
-				m = cfg.SourceMachines[parser.AgentClaude][root]
-				if m == "" {
-					m = cfg.InstallationID
-				}
-			}
+			m := s3SourceMachine(cfg, parser.AgentClaude, root)
 			rel := strings.TrimPrefix(uri, strings.TrimSuffix(root, "/")+"/")
 			scan := p.S3Scanner()
 			if m == machine && path.Clean(rel) == rel && scan.Keep(rel, strings.Split(rel, "/")) {

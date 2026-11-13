@@ -19,6 +19,7 @@ import (
 	"go.kenn.io/agentsview/internal/db"
 	"go.kenn.io/agentsview/internal/parser"
 	"go.kenn.io/agentsview/internal/pathutil"
+	"go.kenn.io/agentsview/internal/rawpath"
 	"go.kenn.io/agentsview/internal/remotesync"
 )
 
@@ -72,13 +73,7 @@ func materializeCodex(ctx context.Context, cfg config.Config, database *db.DB, s
 			if !strings.HasPrefix(candidate, "s3://") {
 				continue
 			}
-			machine := parser.S3MachineFromRoot(candidate, parser.AgentCodex)
-			if machine == "" {
-				machine = cfg.SourceMachines[parser.AgentCodex][candidate]
-				if machine == "" {
-					machine = cfg.InstallationID
-				}
-			}
+			machine := s3SourceMachine(cfg, parser.AgentCodex, candidate)
 			if machine == session.Machine {
 				matchingRoots = append(matchingRoots, candidate)
 				if strings.HasPrefix(source, strings.TrimSuffix(candidate, "/")+"/") && len(candidate) > len(root) {
@@ -101,6 +96,7 @@ func materializeCodex(ctx context.Context, cfg config.Config, database *db.DB, s
 			}
 		}
 		sizes := make(map[string]int64)
+		relative := make(map[string]string)
 		for _, candidate := range roots {
 			objects, err := parser.ListS3ObjectsContext(ctx, candidate)
 			if err != nil {
@@ -108,7 +104,7 @@ func materializeCodex(ctx context.Context, cfg config.Config, database *db.DB, s
 			}
 			for _, obj := range objects {
 				rel, ok := strings.CutPrefix(obj.URI, strings.TrimSuffix(candidate, "/")+"/")
-				if !ok || path.Clean(rel) != rel || !p.S3Scanner().Keep(rel, strings.Split(rel, "/")) {
+				if !ok || !p.S3Scanner().Keep(rel, strings.Split(rel, "/")) {
 					continue
 				}
 				if _, exists := sizes[obj.URI]; !exists {
@@ -116,11 +112,15 @@ func materializeCodex(ctx context.Context, cfg config.Config, database *db.DB, s
 				}
 				archived[obj.URI] = codexArchived(candidate, rel)
 				sizes[obj.URI] = obj.Size
+				relative[obj.URI] = rel
 			}
 		}
 		read = func(ctx context.Context, name string, limit int64) (_ []byte, readErr error) {
 			if size, ok := sizes[name]; !ok || size < 0 || size > limit {
 				return nil, errors.New("native Codex S3 source unavailable or exceeds size limit")
+			}
+			if err := rawpath.Validate(relative[name], rawpath.DefaultMaxBytes); err != nil {
+				return nil, fmt.Errorf("invalid selected Codex S3 path: %w", err)
 			}
 			r, err := parser.FetchS3ObjectContext(ctx, name)
 			if err != nil {
@@ -132,6 +132,7 @@ func materializeCodex(ctx context.Context, cfg config.Config, database *db.DB, s
 	} else {
 		var root string
 		var roots []string
+		archiveRoots := make(map[string]bool)
 		anchor := source
 		if host != "" {
 			if !slices.ContainsFunc(cfg.RemoteHosts, func(remote config.RemoteHost) bool { return remote.Host == host }) {
@@ -182,13 +183,19 @@ func materializeCodex(ctx context.Context, cfg config.Config, database *db.DB, s
 			}
 		} else {
 			if source == "" {
-				return Result{}, errors.New("native Codex source outside configured roots")
+				return Result{}, errors.New("native Codex resume requires an original transcript")
 			}
 			anchor, err = pathutil.ResolveAbsolute(source)
 			if err != nil {
 				return Result{}, err
 			}
-			for _, candidate := range configuredRoots(cfg, session, parser.AgentCodex) {
+			candidates := configuredRoots(cfg, session, parser.AgentCodex)
+			if info, statErr := os.Stat(anchor); statErr == nil && info.Mode().IsRegular() {
+				candidates = localRoots(cfg, parser.AgentCodex)
+			} else if statErr != nil && !errors.Is(statErr, os.ErrNotExist) {
+				return Result{}, statErr
+			}
+			for _, candidate := range candidates {
 				resolved, err := pathutil.ResolveAbsolute(candidate)
 				if err != nil {
 					return Result{}, err
@@ -201,11 +208,7 @@ func materializeCodex(ctx context.Context, cfg config.Config, database *db.DB, s
 			if root == "" {
 				return Result{}, errors.New("native Codex source outside configured roots")
 			}
-			for _, candidate := range configuredRoots(cfg, session, parser.AgentCodex) {
-				if candidate == root || ((filepath.Base(root) == "sessions" || filepath.Base(root) == "archived_sessions") && filepath.Dir(candidate) == filepath.Dir(root) && (filepath.Base(candidate) == "sessions" || filepath.Base(candidate) == "archived_sessions")) {
-					roots = append(roots, candidate)
-				}
-			}
+			roots, archiveRoots = codexConfiguredGroup(cfg, candidates, root)
 		}
 		if _, err := os.Lstat(anchor); err == nil {
 			if !within(root, anchor) {
@@ -234,7 +237,11 @@ func materializeCodex(ctx context.Context, cfg config.Config, database *db.DB, s
 				rel, err := filepath.Rel(candidate, ref.DisplayPath)
 				if err == nil && filepath.IsLocal(rel) && len(candidate) > len(matched) {
 					matched = candidate
-					archived[name] = codexArchived(candidate, filepath.ToSlash(rel))
+					if isArchive, known := archiveRoots[candidate]; known {
+						archived[name] = isArchive
+					} else {
+						archived[name] = codexArchived(candidate, filepath.ToSlash(rel))
+					}
 				}
 			}
 			return nil
@@ -262,6 +269,39 @@ func materializeCodex(ctx context.Context, cfg config.Config, database *db.DB, s
 	return installCodex(ctx, cwd, source, session.ID, pages)
 }
 
+// codexConfiguredGroup joins only configured native roots proven to share a home.
+func codexConfiguredGroup(cfg config.Config, candidates []string, selected string) ([]string, map[string]bool) {
+	roots := []string{selected}
+	archived := make(map[string]bool)
+	metadata := cfg.ProviderMetadata[parser.AgentCodex]
+	for _, home := range metadata[selected] {
+		live, liveErr := pathutil.ResolveAbsolute(filepath.Join(home, "sessions"))
+		archive, archiveErr := pathutil.ResolveAbsolute(filepath.Join(home, "archived_sessions"))
+		selectedPath, selectedErr := pathutil.ResolveAbsolute(selected)
+		if liveErr != nil || archiveErr != nil || selectedErr != nil || (selectedPath != live && selectedPath != archive) {
+			continue
+		}
+		for _, candidate := range candidates {
+			resolved, err := pathutil.ResolveAbsolute(candidate)
+			if err != nil || (resolved != live && resolved != archive) {
+				continue
+			}
+			archived[candidate] = resolved == archive
+			if !slices.Contains(roots, candidate) {
+				roots = append(roots, candidate)
+			}
+		}
+	}
+	if len(metadata[selected]) == 0 {
+		for _, candidate := range candidates {
+			if (filepath.Base(selected) == "sessions" || filepath.Base(selected) == "archived_sessions") && filepath.Dir(candidate) == filepath.Dir(selected) && (filepath.Base(candidate) == "sessions" || filepath.Base(candidate) == "archived_sessions") && !slices.Contains(roots, candidate) {
+				roots = append(roots, candidate)
+			}
+		}
+	}
+	return roots, archived
+}
+
 // codexArchived uses only the selected root and its relative coordinates.
 func codexArchived(root, relative string) bool {
 	root = strings.ReplaceAll(root, `\`, "/")
@@ -283,7 +323,18 @@ func installCodex(ctx context.Context, cwd, source, requestedID string, pages []
 		if err != nil {
 			return Result{}, err
 		}
-		dest := filepath.Join(root, filepath.FromSlash(date), path.Base(page.name))
+		base := path.Base(page.name)
+		if err := rawpath.Validate(base, rawpath.DefaultMaxBytes); err != nil {
+			return Result{}, fmt.Errorf("invalid native Codex destination: %w", err)
+		}
+		rel := path.Join(date, base)
+		if err := rawpath.Validate(rel, rawpath.DefaultMaxBytes); err != nil {
+			return Result{}, fmt.Errorf("invalid native Codex destination: %w", err)
+		}
+		dest := filepath.Join(root, filepath.FromSlash(rel))
+		if check, err := filepath.Rel(root, dest); err != nil || !filepath.IsLocal(check) {
+			return Result{}, errors.New("native Codex destination outside root")
+		}
 		files = append(files, installFile{dest, page.data})
 		paths = append(paths, dest)
 	}

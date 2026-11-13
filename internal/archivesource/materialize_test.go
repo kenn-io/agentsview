@@ -175,14 +175,16 @@ func TestReadCodexSnapshotUsesAcceptedOriginal(t *testing.T) {
 	dbtest.WriteTestFile(t, filepath.Join(filepath.Dir(root), "archived_sessions", conflicted), []byte("conflict bytes"))
 	other := filepath.Join(inputs, "other", "sessions")
 	dbtest.WriteTestFile(t, filepath.Join(other, unrelated), []byte("unrelated bytes"))
-	source := backupSourceRoots(t, inputs, []rawarchive.RootSpec{{Provider: "codex", Path: root}, {Provider: "codex", Path: other}})
+	archiveRoot := filepath.Join(filepath.Dir(root), "archived_sessions")
+	roots := []rawarchive.RootSpec{{Provider: "codex", Path: root}, {Provider: "codex", Path: archiveRoot}, {Provider: "codex", Path: other}}
+	source := backupSourceRoots(t, inputs, roots)
 	changed := testjsonl.NewSessionBuilder().AddCodexMeta("2026-01-01T00:00:00Z", id, "/workspace/project-a", "codex_cli_rs").AddCodexMessage("2026-01-01T00:00:01Z", "user", "later question").String()
 	dbtest.WriteTestFile(t, filepath.Join(root, name), []byte(changed))
 	dbtest.WriteTestFile(t, filepath.Join(filepath.Dir(root), "archived_sessions", conflicted), []byte("later conflict bytes"))
 	ctx := t.Context()
 	capture := filepath.Join(inputs, "capture-next")
 	settings := rawarchive.RecoverySettings{LocalMachineName: "retired-desktop"}
-	_, err := rawarchive.Capture(ctx, rawarchive.CaptureOptions{DataDir: filepath.Join(inputs, "application"), Destination: capture, IdentityFrom: filepath.Join(inputs, "capture", "capture.json"), Roots: []rawarchive.RootSpec{{Provider: "codex", Path: root}, {Provider: "codex", Path: other}}, Settings: settings})
+	_, err := rawarchive.Capture(ctx, rawarchive.CaptureOptions{DataDir: filepath.Join(inputs, "application"), Destination: capture, IdentityFrom: filepath.Join(inputs, "capture", "capture.json"), Roots: roots, Settings: settings})
 	require.NoError(t, err)
 	spec, err := rawarchive.LoadImportSpec(ctx, filepath.Join(capture, "capture.json"))
 	require.NoError(t, err)
@@ -194,15 +196,33 @@ func TestReadCodexSnapshotUsesAcceptedOriginal(t *testing.T) {
 	require.NoError(t, err)
 	// Model two accepted manifests retaining different versions of this page.
 	require.NoError(t, database.Update(ctx, func(tx *sql.Tx) error {
+		var selectedRoot, originalHome string
+		err := tx.QueryRowContext(ctx, `SELECT s.root_id,r.original_path FROM raw_archive_sources s JOIN raw_archive_roots r ON r.id=s.root_id WHERE s.source_key LIKE ?`, "%"+name).Scan(&selectedRoot, &originalHome)
+		if err != nil {
+			return err
+		}
+		var sameHome int
+		err = tx.QueryRowContext(ctx, `SELECT count(*) FROM raw_archive_roots WHERE provider='codex' AND original_path=?`, originalHome).Scan(&sameHome)
+		if err != nil {
+			return err
+		}
+		require.Equal(t, 2, sameHome)
+		// A sibling root's inventory must never be substituted into this source.
+		_, err = tx.ExecContext(ctx, `INSERT INTO raw_archive_files(root_id,path,sha256,size,mod_time_ns,covered)
+			SELECT r.id,?,f.sha256,f.size,f.mod_time_ns,0 FROM raw_archive_roots r JOIN raw_archive_files f ON f.root_id=? AND f.path LIKE ?
+			WHERE r.original_path=? AND r.id<>? LIMIT 1`, "sibling-only.jsonl", selectedRoot, "%"+parent, originalHome, selectedRoot)
+		if err != nil {
+			return err
+		}
 		result, err := tx.ExecContext(ctx, `UPDATE raw_archive_files SET covered=1 WHERE path LIKE ?`, "%"+conflicted)
 		if err != nil {
 			return err
 		}
 		count, err := result.RowsAffected()
 		require.NoError(t, err)
-		require.EqualValues(t, 2, count)
+		require.EqualValues(t, 4, count)
 		_, err = tx.ExecContext(ctx, `INSERT INTO raw_archive_files(root_id,path,sha256,size,mod_time_ns,covered)
-			SELECT root_id,?,sha256,size,mod_time_ns,0 FROM raw_archive_files WHERE path LIKE ? LIMIT 1`, unsafeName, "%"+parent)
+			SELECT root_id,?,sha256,size,mod_time_ns,0 FROM raw_archive_files WHERE root_id=? AND path LIKE ? LIMIT 1`, unsafeName, selectedRoot, "%"+parent)
 		return err
 	}))
 	report, err := archive.Backup(ctx, source.Repository, settings, "test")
