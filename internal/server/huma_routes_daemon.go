@@ -24,12 +24,18 @@ func (s *Server) humaRestartDaemon(ctx context.Context, _ *emptyInput) (*jsonOut
 	if !s.restartSupported() {
 		return nil, apiError(http.StatusNotImplemented, "Restart AgentsView the way you started it, then reload this page.")
 	}
+	// The replacement is built from this snapshot. Holding settingsApplyMu
+	// until the restart is accepted keeps a concurrent save, such as turning
+	// on authentication, from landing after the snapshot and being dropped.
+	s.settingsApplyMu.Lock()
+	defer s.settingsApplyMu.Unlock()
 	s.mu.RLock()
 	current := s.cfg
 	s.mu.RUnlock()
 	if err := s.restartDaemon(ctx, current); err != nil {
 		return nil, apiError(http.StatusInternalServerError, err.Error())
 	}
+	s.restartAccepted = true
 	return &jsonOutput[map[string]bool]{Body: map[string]bool{"restarting": true}}, nil
 }
 

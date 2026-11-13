@@ -196,6 +196,10 @@ func (s *Server) humaUpdateSettings(
 	if len(patch) > 0 {
 		s.settingsApplyMu.Lock()
 		defer s.settingsApplyMu.Unlock()
+		if s.restartAccepted {
+			return nil, apiError(http.StatusConflict,
+				"AgentsView is restarting. Save again after the page reloads.")
+		}
 		s.mu.Lock()
 		rollback := s.ingestionRollbackLocked(patch)
 		err := s.cfg.SaveSettings(patch)
