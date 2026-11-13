@@ -26,6 +26,100 @@ import (
 	"go.kenn.io/kit/embedlocal"
 )
 
+func TestSharedChoiceStartsIndexing(t *testing.T) {
+	setTestHome(t, t.TempDir())
+	dir := testDataDir(t)
+	require.NoError(t, embedlocal.RecordChoice())
+	cfg, err := config.LoadReadOnly()
+	require.NoError(t, err)
+	database := dbtest.OpenTestDBAt(t, filepath.Join(dir, "sessions.db"))
+	dbtest.SeedSessionWithMessages(t, database, "session-one", "sample", []db.Message{dbtest.UserMsg("session-one", 0, "reuse database connections")})
+	encoded := make(chan struct{}, 1)
+	stub := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var request struct {
+			Input []string `json:"input"`
+		}
+		if !assert.NoError(t, json.UnmarshalRead(r.Body, &request)) {
+			w.WriteHeader(http.StatusBadRequest)
+			return
+		}
+		writeEmbeddingsResponse(t, w, len(request.Input), 768)
+		select {
+		case encoded <- struct{}{}:
+		default:
+		}
+	}))
+	defer stub.Close()
+	oldInspect, oldEndpoint, oldBattery := inspectLocalEmbeddings, localEmbeddingEndpoint, onBattery
+	t.Cleanup(func() {
+		inspectLocalEmbeddings, localEmbeddingEndpoint, onBattery = oldInspect, oldEndpoint, oldBattery
+	})
+	inspectLocalEmbeddings = func(context.Context, embedlocal.Options) (embedlocal.Status, error) { return embedlocal.Status{}, nil }
+	localEmbeddingEndpoint = func(_ context.Context, opts embedlocal.Options) (string, error) {
+		assert.True(t, opts.SkipOllama)
+		return stub.URL + "/v1", nil
+	}
+	onBattery = func() bool { return false }
+	owner, err := newLiveVectorServing(t.Context(), cfg, database, nil, config.LoadReadOnly)
+	require.NoError(t, err)
+	defer func() { require.NoError(t, owner.Close()) }()
+	select {
+	case <-encoded:
+	case <-time.After(45 * time.Second):
+		require.FailNow(t, "shared choice did not start indexing")
+	}
+	saved, err := config.LoadReadOnly()
+	require.NoError(t, err)
+	assert.False(t, saved.Vector.Enabled)
+	owner.Manager("").Wait()
+	ln, port := listenLoopback(t)
+	cfg.Host, cfg.Port = "127.0.0.1", port
+	startTestServer(t, ln, server.New(cfg, database, nil, owner.ServerOptions()...).Handler())
+	writeDaemonRuntimeForTest(t, dir, "127.0.0.1", port, "test", false)
+	out, err := executeCommand(newRootCommand(), "index", "embeddings", "build", "--repair-invalid")
+	require.NoError(t, err, out)
+	assert.Contains(t, out, "Repair")
+}
+
+func TestSharedChoiceRespectsSettings(t *testing.T) {
+	for _, raw := range []string{
+		"[vector]\nenabled = false\n",
+		"[vector.embeddings]\nmodel = 'custom'\n",
+		"[vector.embeddings]\nmodel = 'custom'\ndimension = 768\n[vector.embeddings.servers.remote]\nendpoint = 'https://example.com/v1'\n",
+		"[pg]\nurl = 'postgres://example.com/db'\n",
+		"[clickhouse]\nurl = 'clickhouse://example.com/db'\n",
+	} {
+		t.Run(strings.Split(raw, "\n")[0]+raw, func(t *testing.T) {
+			setTestHome(t, t.TempDir())
+			dir := testDataDir(t)
+			writeTestConfig(t, dir, raw)
+			require.NoError(t, embedlocal.RecordChoice())
+			cfg, err := config.LoadReadOnly()
+			require.NoError(t, err)
+			database := dbtest.OpenTestDBAt(t, filepath.Join(dir, "sessions.db"))
+			old := inspectLocalEmbeddings
+			t.Cleanup(func() { inspectLocalEmbeddings = old })
+			inspectLocalEmbeddings = func(context.Context, embedlocal.Options) (embedlocal.Status, error) { return embedlocal.Status{}, nil }
+			owner, err := newLiveVectorServing(t.Context(), cfg, database, nil, config.LoadReadOnly)
+			require.NoError(t, err)
+			defer func() { require.NoError(t, owner.Close()) }()
+			assert.Nil(t, owner.Manager(""))
+		})
+	}
+}
+
+func TestSharedChoiceExpandsIndexPath(t *testing.T) {
+	setTestHome(t, t.TempDir())
+	dir := testDataDir(t)
+	writeTestConfig(t, dir, "[vector]\ndb_path = '~/vectors.db'\n")
+	cfg, err := config.LoadReadOnly()
+	require.NoError(t, err)
+	candidate, eligible, err := cfg.SharedVectorSetup()
+	require.NoError(t, err)
+	require.True(t, eligible)
+	assert.Equal(t, filepath.Join(os.Getenv("HOME"), "vectors.db"), candidate.Vector.DBPath)
+}
+
 func TestLiveEmbeddingsSetup(t *testing.T) {
 	oldInspect, oldEndpoint, oldInstall := inspectLocalEmbeddings, localEmbeddingEndpoint, installLocalEmbeddings
 	oldOnBattery := onBattery
@@ -191,6 +285,11 @@ func TestLiveEmbeddingsSetup(t *testing.T) {
 				return result
 			}
 			awaitBuild()
+			if recipe == "fresh" || recipe == "automatic" {
+				chosen, err := embedlocal.ChoiceRecorded()
+				require.NoError(t, err)
+				assert.Equal(t, recipe == "fresh", chosen)
+			}
 			assert.EqualValues(t, 1, reloads.Load())
 			assert.Empty(t, status().Setup.Action)
 			assert.Equal(t, recipe == "fresh", installs.Load() > 0)

@@ -144,7 +144,7 @@ func (s *Store) fetchHybridKeywordBatch(
 			AND m.session_id IN (SELECT id FROM sessions WHERE `+scopeWhere+`)
 		ORDER BY COALESCE(s.ended_at, s.started_at, s.created_at) DESC NULLS LAST,
 			m.session_id ASC, m.ordinal ASC
-		LIMIT ? OFFSET ?`, args...)
+		LIMIT ? OFFSET ?`+systemPrefixSettings, args...)
 	if err != nil {
 		return nil, fmt.Errorf("clickhouse hybrid keyword leg: %w", err)
 	}

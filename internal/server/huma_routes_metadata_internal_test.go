@@ -14,73 +14,92 @@ import (
 	"go.kenn.io/agentsview/internal/service"
 )
 
-type statsSpyService struct {
+type longRouteSpyService struct {
 	service.SessionService
 	got  service.StatsFilter
 	ctx  context.Context
 	wait <-chan struct{}
 }
 
-func (s *statsSpyService) Stats(
+func (s *longRouteSpyService) Stats(
 	ctx context.Context, f service.StatsFilter,
 ) (*service.SessionStats, error) {
 	s.got = f
+	if err := s.block(ctx); err != nil {
+		return nil, err
+	}
+	return &service.SessionStats{}, nil
+}
+
+func (s *longRouteSpyService) block(ctx context.Context) error {
 	s.ctx = ctx
 	if s.wait != nil {
 		select {
 		case <-s.wait:
 		case <-ctx.Done():
-			return nil, ctx.Err()
+			return ctx.Err()
 		}
 	}
-	return &service.SessionStats{}, nil
+	return nil
 }
 
-func TestSessionStatsOutlivesWriteTimeout(t *testing.T) {
-	for _, cancelRequest := range []bool{false, true} {
-		name := "complete"
-		if cancelRequest {
-			name = "cancel"
-		}
-		t.Run(name, func(t *testing.T) {
-			srv := testServer(t, 30*time.Second)
-			srv.cfg.GithubToken = "server-token"
-			synctest.Test(t, func(t *testing.T) {
-				release := make(chan struct{})
-				spy := &statsSpyService{wait: release}
-				srv.sessions = spy
-				ctx, cancel := context.WithCancel(t.Context())
-				req := httptest.NewRequestWithContext(ctx, http.MethodGet,
-					"/api/v1/session-stats?include_github_outcomes=true", nil)
-				response := httptest.NewRecorder()
-				done := make(chan struct{})
-				go func() {
-					srv.mux.ServeHTTP(response, req)
-					close(done)
-				}()
-				defer func() { cancel(); <-done }()
-				synctest.Wait()
-				require.NotNil(t, spy.ctx, "the request must reach the stats service")
-				time.Sleep(31 * time.Second)
-				synctest.Wait()
-				require.NoError(t, spy.ctx.Err(), "the write timeout must not cancel outcome lookups")
-				assert.True(t, spy.got.IncludeGitHubOutcomes)
-				if cancelRequest {
-					cancel()
-					<-done
-					assert.ErrorIs(t, spy.ctx.Err(), context.Canceled)
-				} else {
-					close(release)
-					<-done
-					assert.Equal(t, http.StatusOK, response.Code, response.Body.String())
+func (s *longRouteSpyService) Search(ctx context.Context, _ service.SearchRequest) (*service.SessionSearchResult, error) {
+	if err := s.block(ctx); err != nil {
+		return nil, err
+	}
+	return &service.SessionSearchResult{}, nil
+}
+
+func TestLongRoutesOutliveWriteTimeout(t *testing.T) {
+	for _, route := range []struct{ name, path string }{
+		{"stats", "/api/v1/session-stats?include_github_outcomes=true"},
+		{"search", "/api/v1/search?q=needle"},
+	} {
+		for _, cancelRequest := range []bool{false, true} {
+			name := "complete"
+			if cancelRequest {
+				name = "cancel"
+			}
+			t.Run(route.name+"/"+name, func(t *testing.T) {
+				srv := testServer(t, 30*time.Second)
+				if route.name == "stats" {
+					srv.cfg.GithubToken = "server-token"
 				}
+				synctest.Test(t, func(t *testing.T) {
+					release := make(chan struct{})
+					spy := &longRouteSpyService{wait: release}
+					srv.sessions = spy
+					ctx, cancel := context.WithCancel(t.Context())
+					req := httptest.NewRequestWithContext(ctx, http.MethodGet, route.path, nil)
+					response := httptest.NewRecorder()
+					done := make(chan struct{})
+					go func() { srv.mux.ServeHTTP(response, req); close(done) }()
+					defer func() { cancel(); <-done }()
+					synctest.Wait()
+					require.NotNil(t, spy.ctx, "the request must reach the service")
+					time.Sleep(31 * time.Second)
+					synctest.Wait()
+					require.NoError(t, spy.ctx.Err(), "the write timeout must not cancel the request")
+					if route.name == "stats" {
+						assert.True(t, spy.got.IncludeGitHubOutcomes)
+					}
+					if cancelRequest {
+						cancel()
+						<-done
+						assert.ErrorIs(t, spy.ctx.Err(), context.Canceled)
+					} else {
+						close(release)
+						<-done
+						assert.Equal(t, http.StatusOK, response.Code, response.Body.String())
+					}
+				})
 			})
-		})
+		}
 	}
 }
 
 func TestHumaGetSessionStatsUsesServerGitHubToken(t *testing.T) {
-	spy := &statsSpyService{}
+	spy := &longRouteSpyService{}
 	srv := &Server{
 		cfg:      config.Config{GithubToken: "server-token"},
 		sessions: spy,
@@ -96,7 +115,7 @@ func TestHumaGetSessionStatsUsesServerGitHubToken(t *testing.T) {
 
 func TestHumaGetSessionStatsOutcomesOnly(t *testing.T) {
 	srv := testServer(t, 30*time.Second)
-	spy := &statsSpyService{}
+	spy := &longRouteSpyService{}
 	srv.sessions = spy
 	response := httptest.NewRecorder()
 	srv.mux.ServeHTTP(response, httptest.NewRequestWithContext(t.Context(), http.MethodGet,

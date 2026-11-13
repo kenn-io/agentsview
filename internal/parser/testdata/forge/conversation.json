@@ -1,0 +1,12 @@
+{
+  "conversation_id": "conv-fuzz",
+  "messages": [
+    {"message": {"text": {"role": "System", "content": "<system_information>\n<current_working_directory>/home/user/code/app</current_working_directory>\n</system_information>", "model": "gpt-5.4", "timestamp": "2026-05-02T09:58:15Z"}}},
+    {"message": {"text": {"role": "User", "content": "Add a retry to the HTTP client.", "raw_content": {"Text": "Add a retry to the HTTP client."}, "model": "gpt-5.4", "timestamp": "2026-05-02T09:58:16Z"}},
+     "usage": {"prompt_tokens": {"actual": 100}, "completion_tokens": {"actual": 5}, "cached_tokens": {"actual": 20}}},
+    {"message": {"text": {"role": "Assistant", "content": "", "tool_calls": [{"name": "read", "call_id": "call_read_1", "arguments": {"file_path": "client.go"}}], "model": "gpt-5.4", "reasoning_details": [{"text": "Read the client first."}], "timestamp": "2026-05-02T09:58:17Z"}},
+     "usage": {"prompt_tokens": {"actual": 120}, "completion_tokens": {"actual": 10}, "cached_tokens": {"actual": 30}}},
+    {"message": {"tool": {"name": "read", "call_id": "call_read_1", "output": {"is_error": false, "values": [{"text": "package client"}]}}}},
+    {"message": {"text": {"role": "Assistant", "content": "Added a retry with backoff.", "model": "gpt-5.4", "timestamp": "2026-05-02T09:58:20Z"}}}
+  ]
+}

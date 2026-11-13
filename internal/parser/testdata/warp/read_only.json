@@ -1,0 +1,1 @@
+{"conversation_usage_metadata":{"token_usage":[{"model_id":"auto","warp_tokens":10,"byok_tokens":5}],"tool_usage_metadata":{"read_files_stats":{"count":1}}}}

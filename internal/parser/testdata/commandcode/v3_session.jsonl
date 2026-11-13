@@ -1,0 +1,5 @@
+{"type":"session","version":3,"timestamp":"2026-10-14T21:00:00Z","cwd":"/home/user/code/app"}
+{"type":"message","timestamp":"2026-10-14T21:00:02Z","message":{"role":"user","content":[{"type":"text","text":"Find why the build is slow"}]}}
+{"type":"message","timestamp":"2026-10-14T21:00:03Z","message":{"role":"assistant","content":[{"type":"thinking","thinking":"Check the build script first."},{"type":"text","text":"Reading the build script."},{"type":"tool_use","id":"call_1","name":"Read","input":{"file_path":"build.sh"}}]}}
+{"type":"message","timestamp":"2026-10-14T21:00:04Z","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"call_1","content":[{"type":"text","text":"go build -a ./..."}]}]}}
+{"type":"message","timestamp":"2026-10-14T21:00:05Z","message":{"role":"assistant","content":[{"type":"text","text":"The -a flag forces a full rebuild every time."}]}}
