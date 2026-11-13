@@ -21,12 +21,6 @@ type mirrorCodexRoots struct {
 
 func mirrorCodexRootsPath(root string) string { return filepath.Clean(root) + ".codex-roots.json" }
 
-// LoadMirrorCodexRoots reads the last successfully imported advertised scopes.
-func LoadMirrorCodexRoots(ctx context.Context, root string) ([]string, error) {
-	saved, err := LoadMirrorCodexMetadata(ctx, root)
-	return saved.Dirs, err
-}
-
 // MirrorCodexMetadata is the last successfully imported host scope.
 type MirrorCodexMetadata struct {
 	Dirs  []string

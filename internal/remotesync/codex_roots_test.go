@@ -18,11 +18,9 @@ func TestCodexMirrorRootsPersistence(t *testing.T) {
 	p.targets.CodexHomeRoots = map[string]CodexHomeRoots{"/home": {Sessions: "/one", ArchivedSessions: "/two"}}
 	ctx := t.Context()
 	require.NoError(t, p.persistCodexRoots(ctx))
-	got, err := LoadMirrorCodexRoots(ctx, root)
-	require.NoError(t, err)
-	assert.Equal(t, []string{"/one", "/two"}, got)
 	metadata, err := LoadMirrorCodexMetadata(ctx, root)
 	require.NoError(t, err)
+	assert.Equal(t, []string{"/one", "/two"}, metadata.Dirs)
 	assert.Equal(t, p.targets.CodexHomeRoots, metadata.Homes)
 	old := time.Unix(100, 0)
 	name := mirrorCodexRootsPath(root)
@@ -34,9 +32,9 @@ func TestCodexMirrorRootsPersistence(t *testing.T) {
 	p.targets.Dirs[parser.AgentCodex] = nil
 	p.targets.CodexHomeRoots = nil
 	require.NoError(t, p.persistCodexRoots(ctx))
-	got, err = LoadMirrorCodexRoots(ctx, root)
+	metadata, err = LoadMirrorCodexMetadata(ctx, root)
 	require.NoError(t, err)
-	assert.Empty(t, got)
+	assert.Empty(t, metadata.Dirs)
 	legacy := []byte(`{"version":1,"dirs":["/legacy"]}`)
 	require.NoError(t, os.WriteFile(name, legacy, 0o600))
 	metadata, err = LoadMirrorCodexMetadata(ctx, root)
@@ -49,11 +47,11 @@ func TestCodexMirrorRootsPersistence(t *testing.T) {
 	data, err := os.ReadFile(name)
 	require.NoError(t, err)
 	assert.Equal(t, newer, data)
-	_, err = LoadMirrorCodexRoots(ctx, root)
+	_, err = LoadMirrorCodexMetadata(ctx, root)
 	require.ErrorContains(t, err, "unsupported")
 	cancelled, cancel := context.WithCancel(ctx)
 	cancel()
 	require.ErrorIs(t, p.persistCodexRoots(cancelled), context.Canceled)
-	_, err = LoadMirrorCodexRoots(cancelled, root)
+	_, err = LoadMirrorCodexMetadata(cancelled, root)
 	require.ErrorIs(t, err, context.Canceled)
 }

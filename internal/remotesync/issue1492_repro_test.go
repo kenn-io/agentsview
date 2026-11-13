@@ -385,7 +385,7 @@ func TestIssue1492CuratedEditorRootsAccumulateFiles(t *testing.T) {
 
 func TestArchiveRequestPreservesEmptyFiles(t *testing.T) {
 	targetSet := TargetSet{
-		Dirs:           map[parser.AgentType][]string{parser.AgentCursor: {"/root"}},
+		Dirs:           map[parser.AgentType][]string{parser.AgentCursor: {"/root"}, parser.AgentCodex: {"/live", "/archive"}},
 		Files:          map[parser.AgentType][]string{parser.AgentCursor: {}},
 		CodexHomeRoots: map[string]CodexHomeRoots{"/home": {Sessions: "/live", ArchivedSessions: "/archive"}},
 	}
@@ -402,7 +402,6 @@ func TestArchiveRequestPreservesEmptyFiles(t *testing.T) {
 	assert.Empty(t, files)
 	assert.NotNil(t, decoded.DeltaFiles)
 	assert.Equal(t, targetSet.CodexHomeRoots, decoded.CodexHomeRoots)
-	decoded.Dirs[parser.AgentCodex] = []string{"/live", "/archive"}
 	require.NoError(t, validateTargetSetPaths(decoded.TargetSet))
 	decoded.CodexHomeRoots["/home"] = CodexHomeRoots{Sessions: "/live", ArchivedSessions: "/unadvertised"}
 	require.ErrorContains(t, validateTargetSetPaths(decoded.TargetSet), "not advertised")

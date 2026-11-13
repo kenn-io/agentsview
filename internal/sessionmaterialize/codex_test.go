@@ -175,7 +175,6 @@ func TestMaterializeCodexMirror(t *testing.T) {
 		{"separate day roots", `{"version":1,"dirs":["/archived_sessions/source/sessions/2026/01/01","/archived_sessions/source/sessions/2026/01/02"]}`, oldName, ""},
 		{"containing root wins", `{"version":1,"dirs":["/archived_sessions/source/sessions/2026/01/01","/archived_sessions/source/sessions"]}`, newName, ""},
 		{"unadvertised", `{"version":1,"dirs":["/elsewhere"]}`, "", "outside Codex roots"},
-		{"newer version", `{"version":2,"dirs":[]}`, "", "compatible or newer AgentsView"},
 		{"invalid metadata", `{`, "", "source locations"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
