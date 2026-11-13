@@ -29,7 +29,7 @@ work="$(mktemp -d "$repo_root/.docs-capture.XXXXXX")"
 cleanup() {
   status=$?
   mkdir -p "$output/logs"
-  find "$work" -name '*.log' -type f | while IFS= read -r log; do
+  find "$work" -path "$work/prepared/bundle" -prune -o -name '*.log' -type f -print | while IFS= read -r log; do
     name="${log#"$work"/}"
     cp "$log" "$output/logs/${name//\//-}"
   done
