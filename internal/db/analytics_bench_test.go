@@ -145,7 +145,7 @@ func BenchmarkGetTrendsTermsOutOfRangeHistory(b *testing.B) {
 					b.ReportAllocs()
 					b.ResetTimer()
 					for b.Loop() {
-						resp, err := d.GetTrendsTerms(ctx, f, terms, "week")
+						resp, err := d.trendsTerms(ctx, f, terms, "week")
 						require.NoError(b, err)
 						require.Equal(b, 3000, resp.MessageCount)
 					}

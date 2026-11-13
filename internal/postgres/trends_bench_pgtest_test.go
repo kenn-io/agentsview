@@ -72,7 +72,7 @@ func BenchmarkPGTrendsTerms(b *testing.B) {
 		b.Run(fc.name, func(b *testing.B) {
 			b.ReportAllocs()
 			for b.Loop() {
-				resp, err := store.GetTrendsTerms(b.Context(), fc.filter, terms, "week")
+				resp, err := store.loadTrendsTerms(b.Context(), fc.filter, terms, "week")
 				require.NoError(b, err)
 				require.Positive(b, resp.MessageCount)
 				require.Positive(b, resp.Series[0].Total)

@@ -497,6 +497,9 @@ func (s *Store) GetTrendsTerms(
 	if granularity == "" {
 		granularity = "week"
 	}
+	if f.Timezone == "Local" {
+		return s.analytics().GetTrendsTerms(ctx, f, terms, granularity)
+	}
 	return keptAnalytics(ctx, s, "trends", f, db.TrendsKeptVariant(terms, granularity), func(ctx context.Context) (db.TrendsTermsResponse, error) {
 		return s.analytics().GetTrendsTerms(ctx, f, terms, granularity)
 	})
