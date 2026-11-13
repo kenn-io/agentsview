@@ -21,9 +21,10 @@ import (
 const defaultBaseURL = "https://api.cursor.com"
 
 // Cursor limits /teams/filtered-usage-events to 60 requests per minute per
-// team, shared by every caller using that team's admin keys. Spacing page
-// requests a second apart keeps one fetch inside that limit on its own;
-// retries cover the requests other callers spend from the same budget.
+// team, shared by every caller using that team's admin keys. Spacing requests
+// a second apart holds one fetch to that rate on its own; retries absorb the
+// requests other callers spend from the same budget, and the odd window where
+// timing jitter lands one request over.
 const defaultRequestInterval = time.Second
 
 // A rate-limited Admin API response carries Retry-After: 60, the length of
@@ -53,25 +54,25 @@ type Client struct {
 	OnRetry func(page int, err error, wait time.Duration)
 }
 
-// StatusError reports a non-2xx response from the Cursor Admin API.
-type StatusError struct {
-	StatusCode int
-	Status     string
-	// RetryAfter is the server's requested wait from the Retry-After header,
+// statusError reports a non-2xx response from the Cursor Admin API.
+type statusError struct {
+	statusCode int
+	status     string
+	// retryAfter is the server's requested wait from the Retry-After header,
 	// or zero when the response did not include one.
-	RetryAfter time.Duration
+	retryAfter time.Duration
 }
 
-func (e *StatusError) Error() string {
-	return "cursor admin API returned " + e.Status
+func (e *statusError) Error() string {
+	return "cursor admin API returned " + e.status
 }
 
-// Retryable reports whether the same request may succeed later: a rate limit
+// retryable reports whether the same request may succeed later: a rate limit
 // clears when Cursor's window rolls over, and a server error may be transient.
 // Other statuses, such as a rejected key or bad request, will not change.
-func (e *StatusError) Retryable() bool {
-	return e.StatusCode == http.StatusTooManyRequests ||
-		e.StatusCode >= http.StatusInternalServerError
+func (e *statusError) retryable() bool {
+	return e.statusCode == http.StatusTooManyRequests ||
+		e.statusCode >= http.StatusInternalServerError
 }
 
 // TokenUsage mirrors the per-request usage payload.
@@ -202,10 +203,10 @@ func (c *Client) ListUsageEvents(
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode < 200 || resp.StatusCode > 299 {
-		return Page{}, &StatusError{
-			StatusCode: resp.StatusCode,
-			Status:     resp.Status,
-			RetryAfter: httputil.ParseRetryAfter(resp.Header.Get("Retry-After")),
+		return Page{}, &statusError{
+			statusCode: resp.StatusCode,
+			status:     resp.Status,
+			retryAfter: httputil.ParseRetryAfter(resp.Header.Get("Retry-After")),
 		}
 	}
 
@@ -333,13 +334,13 @@ func (c *Client) listUsageEventsWithRetry(
 		if err == nil {
 			return page, nil
 		}
-		statusErr, ok := errors.AsType[*StatusError](err)
-		if !ok || !statusErr.Retryable() {
+		statusErr, ok := errors.AsType[*statusError](err)
+		if !ok || !statusErr.retryable() {
 			return Page{}, backoff.Permanent(err)
 		}
-		if statusErr.RetryAfter > 0 {
+		if statusErr.retryAfter > 0 {
 			return Page{}, backoff.RetryAfter(
-				min(statusErr.RetryAfter, maxRetryDelay), err,
+				min(statusErr.retryAfter, maxRetryDelay), err,
 			)
 		}
 		return Page{}, err
@@ -353,7 +354,7 @@ func (c *Client) listUsageEventsWithRetry(
 			if c.OnRetry == nil {
 				return
 			}
-			if statusErr, ok := errors.AsType[*StatusError](err); ok {
+			if statusErr, ok := errors.AsType[*statusError](err); ok {
 				err = statusErr
 			}
 			c.OnRetry(q.Page, err, wait)
