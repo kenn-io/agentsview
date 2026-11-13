@@ -272,7 +272,7 @@ func (s *Sync) syncGenAIPricing(ctx context.Context) error {
 		if err != nil {
 			return err
 		}
-		if !existing.Matches(document) {
+		if existing == nil || !existing.Matches(document) {
 			retained, err := loadGenAIPricing(ctx, s.conn)
 			if err != nil {
 				return err
