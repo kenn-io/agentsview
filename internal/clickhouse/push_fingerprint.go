@@ -14,16 +14,26 @@ import (
 // fingerprintProgressStride bounds how often the preparing phase reports.
 const fingerprintProgressStride = 200
 
+// sessionFingerprint identifies a session's local state. full covers
+// everything a push writes for the session and is stored as
+// agentsview_push_fingerprint; a push skips a session whose full
+// fingerprint, archive, and dashboard facts already match. content covers
+// everything outside the session row and is stored as
+// agentsview_content_fingerprint; a push that finds only the content
+// unchanged rewrites just the session row.
+type sessionFingerprint struct {
+	full, content string
+}
+
 // sessionFingerprints hashes each candidate's local content: the mirrored
 // session scalars, every message with its tool calls and result events,
 // the usage-event fingerprint, the tool-call fingerprint (file_path and
 // call_index are json:"-" on ToolCall), secret findings, pins, commit
-// links, and successful image text. The mirror stores the hash on the
-// session row; a later push skips sessions whose hash is unchanged.
+// links, and successful image text.
 func (s *Sync) sessionFingerprints(
 	ctx context.Context, sessions []db.Session, onProgress func(storage.PushProgress),
-) (map[string]string, error) {
-	out := make(map[string]string, len(sessions))
+) (map[string]sessionFingerprint, error) {
+	out := make(map[string]sessionFingerprint, len(sessions))
 	for i, sess := range sessions {
 		if err := ctx.Err(); err != nil {
 			return nil, err
@@ -40,27 +50,32 @@ func (s *Sync) sessionFingerprints(
 	return out, nil
 }
 
+// SessionContent is what a push writes for a session outside the session
+// row: the dependent tables and the rows derived from them. Every value a
+// dependent row takes from the local archive must reach this struct, or a
+// change to it alone would leave the stored row stale. It is exported
+// because encoding/json inlines only an embedded exported struct.
+type SessionContent struct {
+	Messages       []db.Message
+	Dialogue       []*string `json:",omitzero"`
+	Usage          string
+	ToolCalls      string
+	SecretFindings []db.SecretFinding
+	Pins           []db.PinnedMessage
+	CommitLinks    []db.CommitLinkRow `json:",omitzero"`
+	ImageText      []db.ImageTextRow  `json:",omitzero"`
+	// Omitted when nil so sessions without plan usage keep the
+	// fingerprints they had before the table existed.
+	PlanUsage *db.SessionPlanUsage `json:",omitzero"`
+	// Omitted when nil for the same reason as PlanUsage.
+	SessionTotal *db.SessionUsageTotal `json:",omitzero"`
+}
+
 func (s *Sync) snapshotFingerprint(
 	snapshot *db.SessionMirrorSnapshot, total *db.SessionUsageTotal,
-) (string, error) {
+) (sessionFingerprint, error) {
 	sess := snapshot.Session
-	payload := struct {
-		SessionFields  []any
-		Messages       []db.Message
-		Dialogue       []*string `json:",omitzero"`
-		Usage          string
-		ToolCalls      string
-		SecretFindings []db.SecretFinding
-		Pins           []db.PinnedMessage
-		CommitLinks    []db.CommitLinkRow `json:",omitzero"`
-		ImageText      []db.ImageTextRow  `json:",omitzero"`
-		// Omitted when nil so sessions without plan usage keep the
-		// fingerprints they had before the table existed.
-		PlanUsage *db.SessionPlanUsage `json:",omitzero"`
-		// Omitted when nil for the same reason as PlanUsage.
-		SessionTotal *db.SessionUsageTotal `json:",omitzero"`
-	}{
-		SessionFields:  sessionFingerprintFields(sess, db.MirroredSessionMachine(sess, s.machine)),
+	content := SessionContent{
 		Messages:       snapshot.Messages,
 		Dialogue:       db.DialogueFingerprintValues(snapshot.Messages),
 		Usage:          snapshot.UsageFingerprint,
@@ -72,9 +87,30 @@ func (s *Sync) snapshotFingerprint(
 		PlanUsage:      snapshot.PlanUsage,
 		SessionTotal:   total,
 	}
-	data, err := json.Marshal(payload)
+	// The content fields are inlined after the session fields, so the full
+	// fingerprint keeps the encoding it had before the content fingerprint
+	// existed and an upgrade rewrites nothing.
+	full, err := hashJSON(sess.ID, struct {
+		SessionFields  []any
+		SessionContent `json:",inline"`
+	}{
+		SessionFields:  sessionFingerprintFields(sess, db.MirroredSessionMachine(sess, s.machine)),
+		SessionContent: content,
+	})
 	if err != nil {
-		return "", fmt.Errorf("encoding session fingerprint %s: %w", sess.ID, err)
+		return sessionFingerprint{}, err
+	}
+	contentHash, err := hashJSON(sess.ID, content)
+	if err != nil {
+		return sessionFingerprint{}, err
+	}
+	return sessionFingerprint{full: full, content: contentHash}, nil
+}
+
+func hashJSON(sessionID string, value any) (string, error) {
+	data, err := json.Marshal(value)
+	if err != nil {
+		return "", fmt.Errorf("encoding session fingerprint %s: %w", sessionID, err)
 	}
 	sum := sha256.Sum256(data)
 	return hex.EncodeToString(sum[:]), nil
@@ -153,10 +189,13 @@ var sessionFingerprintColumns = []string{
 var derivedSessionColumns = map[string]string{
 	"last_message_at":             "derived from the messages the fingerprint hashes",
 	"agentsview_push_fingerprint": "the fingerprint itself",
-	"source_archive_id":           "push bookkeeping",
-	"stored_message_count":        "derived from the messages the fingerprint hashes",
-	// The full push that publishes a new dashboardFactsVersion rewrites
-	// these; otherwise they change only with the messages.
+	// A push writes both with the content; they describe it.
+	"agentsview_content_fingerprint": "the content fingerprint itself",
+	"content_version":                "push bookkeeping",
+	"source_archive_id":              "push bookkeeping",
+	"stored_message_count":           "derived from the messages the fingerprint hashes",
+	// A push rewrites the session rows of sessions below the current
+	// dashboardFactsVersion; otherwise these change only with the messages.
 	"dashboard_facts_version":       "push bookkeeping",
 	"fact_user_messages":            "derived from the messages the fingerprint hashes",
 	"fact_assistant_messages":       "derived from the messages the fingerprint hashes",

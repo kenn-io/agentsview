@@ -139,13 +139,13 @@ func TestHostWithoutSnapshotsIsReadRaw(t *testing.T) {
 	for _, query := range []string{
 		`INSERT INTO usage_session_snapshots (` + snapshotColumns + `) SELECT * EXCEPT (revision) REPLACE ('older-snapshot' AS id, 'host-b' AS machine, toUInt64(1) AS push_version)
 		 FROM (SELECT * FROM usage_session_snapshots FINAL WHERE id = '` + fixtureAlphaID + `')`,
-		`INSERT INTO sessions SELECT * REPLACE ('older-snapshot' AS id, 'host-b' AS machine, toUInt64(1) AS push_version)
+		`INSERT INTO sessions SELECT * REPLACE ('older-snapshot' AS id, 'host-b' AS machine, toUInt64(1) AS push_version, toUInt64(1) AS content_version)
 		 FROM (SELECT * FROM sessions FINAL WHERE id = '` + fixtureAlphaID + `')`,
 		"SYSTEM REFRESH VIEW prepare_usage",
 		"SYSTEM WAIT VIEW prepare_usage",
 		`INSERT INTO messages (session_id,ordinal,timestamp,model,token_usage,claude_message_id,claude_request_id,push_version) VALUES
 		 ('older-snapshot',0,'2026-01-10 13:00:00','claude-test','{"input_tokens":1,"output_tokens":40}','older-m0','older-r0',2)`,
-		`INSERT INTO sessions SELECT * REPLACE ('older-snapshot' AS id, 'host-b' AS machine, toUInt64(2) AS push_version, 1 AS message_count)
+		`INSERT INTO sessions SELECT * REPLACE ('older-snapshot' AS id, 'host-b' AS machine, toUInt64(2) AS push_version, toUInt64(2) AS content_version, 1 AS message_count)
 		 FROM (SELECT * FROM sessions FINAL WHERE id = '` + fixtureAlphaID + `')`,
 	} {
 		_, err := store.DB().ExecContext(ctx, query)

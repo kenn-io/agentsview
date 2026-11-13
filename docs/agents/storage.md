@@ -1465,13 +1465,16 @@ own metadata, which is why the docs below call the database a mirror.
 - Derived tables (`usage_messages`, `terminal_event_snapshots`) are
   insert-maintained by materialized views and keyed by
   `ReplacingMergeTree(revision)`, where live rows use an odd revision above
-  the backfill's even one. Readers check them against `sessions.push_version`:
-  `usage_messages` rows count at or above it, because messages land before the
-  session row is published, and `terminal_event_snapshots` rows match it
-  exactly. A materialized view runs inside the insert and reads joined tables
-  in full, so filter a joined table to the inserted block's sessions. Create
-  and update long-lived views through `ensureView`, which replaces the query
-  of a view an older release created. Views never see deletes;
+  the backfill's even one. `usage_messages` rows count when they are at or
+  above `sessions.content_version`, because messages land before the session
+  row is published and a push that keeps a session's messages republishes only
+  its row. `terminal_event_snapshots` rows match `sessions.push_version`
+  exactly. Any read that pairs a session with its dependent rows compares them
+  with `content_version`, never `push_version`. A materialized view runs
+  inside the insert and reads joined tables in full, so filter a joined table
+  to the inserted block's sessions. Create and update long-lived views
+  through `ensureView`, which replaces the query of a view an older release
+  created. Views never see deletes;
   `deleteMirrorSessions` clears the derived tables. Startup backfills record
   completion in `sync_metadata` only after finishing, never modify source
   tables, and must stay safe to repeat. See the
@@ -1483,7 +1486,8 @@ own metadata, which is why the docs below call the database a mirror.
   those rows). Reads use them only on rows at `dashboardFactsVersion` and scan
   messages for every other row, so results match the scan. A fact must count
   exactly what the scan it replaces counts; change a definition only with a
-  version bump, which makes each archive's next push a full push. SQLite and
+  version bump, which makes each archive's next push a full push that
+  republishes the session rows below that version. SQLite and
   PostgreSQL still scan. DuckDB stores frustration marker counts at push time. See
   [Dashboard facts](../internal/clickhouse-mirror.md#dashboard-facts).
 - Activity report queries receive the selected session IDs as the

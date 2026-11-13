@@ -37,8 +37,9 @@ empty. `HasFTS()` is true (ILIKE). `HasSemantic()` is true once
 Content search matches dialogue in `messages` and reasoning in `thinking` for
 substring and regex modes. Hybrid keyword hits use dialogue for matching and
 snippets; vector-only hits use rendered messages. A per-archive dialogue marker
-forces a full push after upgrading. That push re-sends every session in the
-configured mirror scope, including sessions without dialogue. Session
+forces a full push after upgrading. That push rewrites every session in the
+configured mirror scope, including sessions without dialogue, because rows
+written before dialogue existed have matching fingerprints. Session
 fingerprints include nullable dialogue values so later dialogue-only changes
 trigger another write. The marker is set after a clean full push.
 
@@ -137,6 +138,10 @@ transactions. Per batch of changed sessions (100 by default, set by the target's
    deleted message.
 1. Insert session rows with fingerprint and `source_archive_id`.
 
+A session whose messages and other dependent rows are unchanged skips steps 1
+and 2: the push rewrites only its session row and usage snapshot. See
+[Pushes rewrite only what differs](#pushes-rewrite-only-what-differs).
+
 The delete removes only keys the session no longer has, such as messages cut
 from a shorter session or a tool call dropped from a kept message. A key the
 push rewrote keeps its older row until `ReplacingMergeTree` collapses it, which
@@ -155,10 +160,15 @@ on retry.
 **Full pushes resume.** A full push writes a run record under
 `agentsview_full_push_run:<archive>` in `sync_metadata` before its first batch
 and clears it with the cursor. The record holds the run's starting push version,
-the archive database ID, the scope, and the schema and data versions. A later
-push that finds the record with matching values resumes the run. It treats a
-session as done when this archive's mirror session row has the local fingerprint
-and a push version at or after the run's. The vector phase skips a session whose
+the archive database ID, the scope, the schema and data versions, and whether
+the run rewrites every session. A later push that finds the record with
+matching values resumes the run. A run that rewrites every session treats a
+session as done when this archive's mirror session row has the local
+fingerprint and a push version at or after the run's. Any other run compares
+each session with the mirror as it did when it started, so the sessions the
+earlier process wrote now match and are skipped. A push that must rewrite every
+session does not resume a run that skips unchanged ones. The vector phase
+skips a session whose
 `vector_push_state` row has a matching hash and a version at or after the run's.
 Any mismatch starts a new full push, and so does `--full`. A run that ends with
 session errors stays recorded with an `errored` flag. A matching record resumes
@@ -175,6 +185,60 @@ Pushes send sessions newest activity first (`ended_at`, then `started_at`, then
 `created_at`). A Codex revert page goes right after its thread's session, which
 mirrors read to decide whether the page is trashed. PostgreSQL pushes and DuckDB
 rebuilds use the same order.
+
+**Pushes rewrite only what differs.** Each session row stores two
+fingerprints. `agentsview_push_fingerprint` hashes the session fields and all of
+its content. `agentsview_content_fingerprint` hashes only the content: messages,
+dialogue, usage and tool call digests, secret findings, pins, commit links,
+image text, plan usage, and the usage total. `content_version` records the push
+version of the dependent rows the session row describes, and readers pair a
+session with its messages, image text, usage rows, and tool result events
+through it. `push_version` stays the version of the session row itself, which
+caches keyed on it rely on.
+
+A push plans each session against its mirror row:
+
+| Mirror row                                           | Push writes                     |
+| ---------------------------------------------------- | ------------------------------- |
+| Missing, or content fingerprint differs              | Every table, at the new version |
+| Content matches, session fields differ               | Session row and usage snapshot  |
+| Fingerprint matches, row is in an older format       | Session row and usage snapshot  |
+| Fingerprint matches, another archive owns it (full)  | Session row and usage snapshot  |
+| Fingerprint matches                                  | Nothing                         |
+
+A session row that rewrites only itself keeps the `content_version` of the
+rows it kept. If the archive changes between planning and writing, the batch
+compares the content fingerprint it loaded with the one it planned on and
+rewrites the whole session instead. A row in an older format lacks a stored
+message count, current dashboard facts, or a content fingerprint. Without a
+content fingerprint, any session-field change would rewrite the whole session,
+so the first push after upgrading republishes every session row of its archive
+once, with its content fingerprint, and keeps the messages.
+
+Each full-push reason gets its own scope:
+
+- Rebuilt archive, local deletion journal reset, push scope change, and a
+  resync before a push: rewrite only sessions that differ, then remove mirror
+  sessions missing locally. A data-version resync usually changes only
+  `data_version`, so most sessions rewrite only their session row.
+- Missing commit links marker: rewrite only `commit_links` for every session.
+- Session rows in an older format (`republishing session rows from an older
+  format`): rewrite only those session rows.
+- Missing message dialogue or usage snapshot marker: rewrite every session,
+  because rows written before those formats lack data their fingerprints
+  cannot see.
+- `--full` (`PushOptions.RewriteUnchanged`): rewrite every session. It is the
+  manual repair for mirror rows damaged outside a push. A `--full` watch keeps
+  the request until a full push starts, so a full push the watch starts on its
+  own after that rewrites only what changed.
+
+A full push no longer repairs mirror rows that differ from what their
+fingerprints claim. A change to how a push renders content that its
+fingerprints do not cover needs a new marker that rewrites every session, or
+a fingerprint change. A serve binary from before `content_version` reads
+dependent rows against `push_version`, so on a mirror where a newer client
+rewrote only some session rows it hides those sessions' image text and
+Activity usage until it upgrades.
 
 **Shared filter builder, ClickHouse dialect.** Existing SQLite, PostgreSQL, and
 DuckDB SQL stay byte-identical. ClickHouse uses `UNION ALL` in recursive CTEs,
@@ -364,13 +428,15 @@ version resolution instead of scanning `tool_result_events`.
 Both derived tables use `ReplacingMergeTree(revision)` with
 `revision = push_version * 2` for backfilled rows and `push_version * 2 + 1` for
 rows written by the materialized view. A live insert therefore beats a
-concurrent backfill of the same version. Readers compare each row with
-`sessions.push_version`. A push writes messages before it publishes the session
-row, and an interrupted push never publishes it, so usage rows count when their
-version is at or above the session's; an exact match would report no usage for
-that session until its next successful push. Rows that a shorter republished
-session left behind stay below the session's version and never surface. Terminal
-snapshots are written by the session insert itself and match exactly.
+concurrent backfill of the same version. Readers compare usage rows with
+`sessions.content_version`. A push writes messages before it publishes the
+session row, and an interrupted push never publishes it, so usage rows count
+when their version is at or above the session's; an exact match would report no
+usage for that session until its next successful push. Rows that a shorter
+republished session left behind stay below the session's version and never
+surface. Terminal snapshots are written by the session insert itself, read
+`tool_result_events` at the session's `content_version`, and match
+`sessions.push_version` exactly.
 
 The snapshot view runs inside every `sessions` insert, and ClickHouse reads a
 view's joined table in full. The view therefore limits `tool_result_events` to
@@ -668,9 +734,11 @@ published session version and a scan would read the newer messages; both
 settle when the session row lands.
 
 **Backfill is one full push.** A push that finds rows of its archive below the
-current facts version, or without `stored_message_count`, runs one full push
-(`publishing stored session counts`) and repeats it until one finishes without
-errors. Bump `dashboardFactsVersion` when a fact's definition changes.
+current facts version, or without `stored_message_count` or a content
+fingerprint, runs one full push (`republishing session rows from an older
+format`) and repeats it until one finishes without errors. The facts come from the local archive, so the push rewrites only the
+stale session rows and keeps their messages. Bump `dashboardFactsVersion` when
+a fact's definition changes.
 
 **FINAL stays on.** The panels that used facts now read `sessions` with FINAL
 instead of `messages` and `tool_calls`, which removes most of FINAL's cost

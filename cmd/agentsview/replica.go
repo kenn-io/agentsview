@@ -356,6 +356,12 @@ func writeReplicaPushSummary(
 	if result.SkippedResumed > 0 {
 		fmt.Fprintf(w, "Skipped %d session(s) already pushed by the unfinished full push\n", result.SkippedResumed)
 	}
+	if result.SessionRowsOnly > 0 {
+		fmt.Fprintf(w, "Rewrote only the session row of %d pushed session(s) whose messages were unchanged\n", result.SessionRowsOnly)
+	}
+	if result.CommitLinksOnly > 0 {
+		fmt.Fprintf(w, "Rewrote only the commit links of %d session(s)\n", result.CommitLinksOnly)
+	}
 	if result.DeletedStale > 0 {
 		fmt.Fprintf(w, "Removed %d stale session(s)\n", result.DeletedStale)
 	}
