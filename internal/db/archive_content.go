@@ -427,7 +427,7 @@ func clearUsageOnlyTextTx(
 		return fmt.Errorf("clearing usage-only pin notes for %s: %w", sessionID, err)
 	}
 	// Continuation state can retain the last message or raw SHA input bytes.
-	for _, table := range []string{"session_signal_state", "parser_checkpoints", "parser_checkpoint_blobs"} {
+	for _, table := range []string{"session_signal_state", "session_frustration_markers", "parser_checkpoints", "parser_checkpoint_blobs"} {
 		if _, err := tx.Exec("DELETE FROM "+table+" WHERE session_id = ?", sessionID); err != nil {
 			return fmt.Errorf("clearing usage-only continuation state for %s: %w", sessionID, err)
 		}

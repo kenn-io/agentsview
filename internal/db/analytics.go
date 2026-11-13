@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log"
 	"math"
 	"slices"
 	"sort"
@@ -4355,7 +4356,44 @@ func (db *DB) populateFrustrationMarkers(
 		idx[rows[i].ID] = i
 		ids = append(ids, rows[i].ID)
 	}
+	// A read-only archive may predate the derived table. Fall back to scanning
+	// its prompts if the table is unavailable.
 	err := queryChunked(ids, func(chunk []string) error {
+		ph, args := InPlaceholders(chunk)
+		args = append([]any{FrustrationMarkerVersion}, args...)
+		stored, err := db.getReader().QueryContext(ctx, `SELECT session_id, transcript_key, count FROM session_frustration_markers WHERE marker_version = ? AND session_id IN `+ph, args...)
+		if err != nil {
+			return err
+		}
+		defer stored.Close()
+		for stored.Next() {
+			var id, key string
+			var count int
+			if err := stored.Scan(&id, &key, &count); err != nil {
+				return err
+			}
+			if i, ok := idx[id]; ok && rows[i].transcriptVersion == key {
+				rows[i].FrustrationMarkerCount = count
+				m.Store(generation, id, key, count)
+				delete(idx, id)
+			}
+		}
+		return stored.Err()
+	})
+	if err != nil && ctx.Err() != nil {
+		return ctx.Err()
+	}
+	if err != nil && !(db.readOnly && strings.Contains(err.Error(), "no such table: session_frustration_markers")) {
+		return fmt.Errorf("reading frustration markers: %w", err)
+	}
+	pending := ids[:0]
+	for _, id := range ids {
+		if _, ok := idx[id]; ok {
+			pending = append(pending, id)
+		}
+	}
+	ids = pending
+	err = queryChunked(ids, func(chunk []string) error {
 		ph, args := InPlaceholders(chunk)
 		q := `SELECT session_id, content
 			FROM messages
@@ -4400,7 +4438,35 @@ func (db *DB) populateFrustrationMarkers(
 		r := rows[idx[id]]
 		m.Store(generation, id, r.transcriptVersion, r.FrustrationMarkerCount)
 	}
+	if len(ids) > 0 && !db.readOnly {
+		if err := db.storeFrustrationMarkers(ctx, generation, ids, idx, rows); err != nil {
+			log.Printf("storing frustration markers: %v", err)
+		}
+	}
 	return nil
+}
+
+func (db *DB) storeFrustrationMarkers(ctx context.Context, generation uint64, ids []string, idx map[string]int, rows []SignalRow) error {
+	db.mu.Lock()
+	defer db.mu.Unlock()
+	if db.frustrationMemo.Generation() != generation {
+		return nil
+	}
+	tx, err := db.getWriter().BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	for _, id := range ids {
+		r := rows[idx[id]]
+		_, err := tx.ExecContext(ctx, `INSERT INTO session_frustration_markers (session_id, transcript_key, marker_version, count)
+   SELECT id, ?, ?, ? FROM sessions WHERE id = ? AND transcript_revision || '|' || created_at = ?
+   ON CONFLICT(session_id) DO UPDATE SET transcript_key = excluded.transcript_key, marker_version = excluded.marker_version, count = excluded.count`, r.transcriptVersion, FrustrationMarkerVersion, r.FrustrationMarkerCount, id, r.transcriptVersion)
+		if err != nil {
+			return err
+		}
+	}
+	return tx.Commit()
 }
 
 func scanSignalRow(rs rowScanner, loc *time.Location) (SignalRow, error) {

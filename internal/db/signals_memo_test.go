@@ -3,10 +3,13 @@ package db
 import (
 	"context"
 	"database/sql"
+	"strconv"
 	"testing"
 
+	"github.com/mattn/go-sqlite3"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"go.kenn.io/agentsview/internal/config"
 )
 
 func TestSignalsFrustrationMemoReuse(t *testing.T) {
@@ -108,6 +111,8 @@ func TestSignalsFrustrationCountsFollowTranscriptChanges(t *testing.T) {
 		{SessionID: "session", Ordinal: 7, Role: "user", Content: "come\n\t on, run it"},
 	}))
 	assert.Equal(t, 3, count())
+	require.NoError(t, d.Reopen())
+	assert.Equal(t, 3, count())
 
 	require.NoError(t, d.InsertMessages(ctx, []Message{
 		// Two of six words are capitals, under the threshold.
@@ -116,12 +121,16 @@ func TestSignalsFrustrationCountsFollowTranscriptChanges(t *testing.T) {
 		{SessionID: "session", Ordinal: 9, Role: "user", Content: "doe\u017f not work"},
 	}))
 	assert.Equal(t, 4, count(), "an append must recount the session")
+	require.NoError(t, d.Reopen())
+	assert.Equal(t, 4, count())
 
 	require.NoError(t, d.ReplaceSessionMessages(ctx, "session", []Message{
 		{SessionID: "session", Ordinal: 0, Role: "user", Content: "wtf"},
 		{SessionID: "session", Ordinal: 1, Role: "user", Content: "STILL BROKEN!!"},
 	}))
 	assert.Equal(t, 1, count(), "a replacement must recount the session")
+	require.NoError(t, d.Reopen())
+	assert.Equal(t, 1, count())
 }
 
 func TestSignalsFrustrationMemoReaderSwap(t *testing.T) {
@@ -166,4 +175,173 @@ func TestSignalsFrustrationMemoCanceled(t *testing.T) {
 	require.Equal(t, context.Canceled, err, "cancellation must come from the post-scan check, rather than a wrapped query error")
 	assert.Equal(t, 1, rows[0].FrustrationMarkerCount, "the scan must finish before cancellation")
 	assert.Empty(t, d.frustrationMemo.counts)
+	var n int
+	require.NoError(t, d.getReader().QueryRowContext(t.Context(), `SELECT count(*) FROM session_frustration_markers`).Scan(&n))
+	assert.Zero(t, n)
+}
+
+func TestSignalsFrustrationStoredAcrossRestart(t *testing.T) {
+	d := testDB(t)
+	ctx := t.Context()
+	for _, id := range []string{"first", "second"} {
+		insertSession(t, d, id, "test")
+	}
+	require.NoError(t, d.InsertMessages(ctx, []Message{
+		{SessionID: "first", Ordinal: 0, Role: "user", Content: "this is broken"},
+		{SessionID: "first", Ordinal: 1, Role: "user", Content: "this is broken"},
+		{SessionID: "second", Ordinal: 0, Role: "user", Content: "this is broken"},
+	}))
+	for _, id := range []string{"first", "second"} {
+		require.NoError(t, d.UpdateSessionSignals(ctx, id, SessionSignalUpdate{QualitySignals: QualitySignals{Version: CurrentQualitySignalVersion}}))
+	}
+	resp, err := d.analyticsSignals(ctx, AnalyticsFilter{})
+	require.NoError(t, err)
+	assert.Equal(t, 3, resp.QualityHealth.Totals.FrustrationMarkerCount)
+	require.NoError(t, d.Reopen())
+	d.rawReader().SetMaxOpenConns(1)
+	conn, err := d.rawReader().Conn(ctx)
+	require.NoError(t, err)
+	require.NoError(t, conn.Raw(func(raw any) error {
+		raw.(*diagnosticReaderConn).RegisterAuthorizer(func(op int, table, column, _ string) int {
+			if op == sqlite3.SQLITE_READ && table == "messages" && column == "content" {
+				return sqlite3.SQLITE_DENY
+			}
+			return sqlite3.SQLITE_OK
+		})
+		return nil
+	}))
+	require.NoError(t, conn.Close())
+	defer func() {
+		conn, err := d.rawReader().Conn(ctx)
+		require.NoError(t, err)
+		defer conn.Close()
+		require.NoError(t, conn.Raw(func(raw any) error { raw.(*diagnosticReaderConn).RegisterAuthorizer(nil); return nil }))
+	}()
+	resp, err = d.analyticsSignals(ctx, AnalyticsFilter{})
+	require.NoError(t, err)
+	assert.Equal(t, 3, resp.QualityHealth.Totals.FrustrationMarkerCount)
+	conn, err = d.rawReader().Conn(ctx)
+	require.NoError(t, err)
+	require.NoError(t, conn.Raw(func(raw any) error { raw.(*diagnosticReaderConn).RegisterAuthorizer(nil); return nil }))
+	require.NoError(t, conn.Close())
+	require.NoError(t, d.Reopen())
+	evidence, err := d.GetAnalyticsSignalSessions(ctx, AnalyticsFilter{}, "frustration_marker_count", 10)
+	require.NoError(t, err)
+	assert.Len(t, evidence.Sessions, 2)
+}
+
+func TestSignalsFrustrationStoredRefresh(t *testing.T) {
+	d := testDB(t)
+	ctx := t.Context()
+	for _, id := range []string{"first", "second"} {
+		insertSession(t, d, id, "test")
+		require.NoError(t, d.InsertMessages(ctx, []Message{{SessionID: id, Role: "user", Content: "this is broken"}}))
+	}
+	for _, id := range []string{"first", "second"} {
+		require.NoError(t, d.UpdateSessionSignals(ctx, id, SessionSignalUpdate{QualitySignals: QualitySignals{Version: CurrentQualitySignalVersion}}))
+	}
+	_, err := d.analyticsSignals(ctx, AnalyticsFilter{})
+	require.NoError(t, err)
+	var key string
+	require.NoError(t, d.getReader().QueryRowContext(ctx, `SELECT transcript_key FROM session_frustration_markers WHERE session_id = 'second'`).Scan(&key))
+	require.NoError(t, d.Reopen())
+	require.NoError(t, d.InsertMessages(ctx, []Message{{SessionID: "first", Ordinal: 1, Role: "user", Content: "this is broken"}}))
+	require.NoError(t, d.UpdateSessionSignals(ctx, "first", SessionSignalUpdate{QualitySignals: QualitySignals{Version: CurrentQualitySignalVersion}}))
+	resp, err := d.analyticsSignals(ctx, AnalyticsFilter{})
+	require.NoError(t, err)
+	assert.Equal(t, 3, resp.QualityHealth.Totals.FrustrationMarkerCount)
+	var after string
+	require.NoError(t, d.getReader().QueryRowContext(ctx, `SELECT transcript_key FROM session_frustration_markers WHERE session_id = 'second'`).Scan(&after))
+	assert.Equal(t, key, after)
+	for _, update := range []string{`marker_version = 0`, `transcript_key = 'stale'`} {
+		_, err := d.getWriter().ExecContext(ctx, `UPDATE session_frustration_markers SET count = 99, `+update+` WHERE session_id = 'first'`)
+		require.NoError(t, err)
+		require.NoError(t, d.Reopen())
+		resp, err = d.analyticsSignals(ctx, AnalyticsFilter{})
+		require.NoError(t, err)
+		assert.Equal(t, 3, resp.QualityHealth.Totals.FrustrationMarkerCount)
+		var count, version int
+		var storedKey string
+		require.NoError(t, d.getReader().QueryRowContext(ctx, `SELECT transcript_key, marker_version, count FROM session_frustration_markers WHERE session_id = 'first'`).Scan(&storedKey, &version, &count))
+		assert.NotEqual(t, "stale", storedKey)
+		assert.Equal(t, FrustrationMarkerVersion, version)
+		assert.Equal(t, 2, count)
+	}
+}
+
+func TestSignalsFrustrationStoreRejectsChangedTranscript(t *testing.T) {
+	d := testDB(t)
+	ctx := t.Context()
+	insertSession(t, d, "session", "test")
+	rows, err := d.signalRows(ctx, AnalyticsFilter{})
+	require.NoError(t, err)
+	require.Len(t, rows, 1)
+	require.NoError(t, d.InsertMessages(ctx, []Message{{SessionID: "session", Role: "user", Content: "this is broken"}}))
+	require.NoError(t, d.storeFrustrationMarkers(ctx, d.frustrationMemo.Generation(), []string{"session"}, map[string]int{"session": 0}, rows))
+	var count int
+	require.NoError(t, d.getReader().QueryRowContext(ctx, `SELECT count(*) FROM session_frustration_markers`).Scan(&count))
+	assert.Zero(t, count)
+}
+
+func TestSignalsFrustrationReadOnly(t *testing.T) {
+	d := testDB(t)
+	ctx := t.Context()
+	insertSession(t, d, "session", "test")
+	require.NoError(t, d.InsertMessages(ctx, []Message{{SessionID: "session", Role: "user", Content: "this is broken"}}))
+	require.NoError(t, d.UpdateSessionSignals(ctx, "session", SessionSignalUpdate{QualitySignals: QualitySignals{Version: CurrentQualitySignalVersion}}))
+	ro, err := OpenReadOnly(ctx, d.Path())
+	require.NoError(t, err)
+	defer ro.Close()
+	resp, err := ro.analyticsSignals(ctx, AnalyticsFilter{})
+	require.NoError(t, err)
+	assert.Equal(t, 1, resp.QualityHealth.Totals.FrustrationMarkerCount)
+	var n int
+	require.NoError(t, d.getReader().QueryRowContext(ctx, `SELECT count(*) FROM session_frustration_markers`).Scan(&n))
+	assert.Zero(t, n)
+}
+
+func TestSignalsFrustrationCleanup(t *testing.T) {
+	for _, usageOnly := range []bool{false, true} {
+		t.Run(strconv.FormatBool(usageOnly), func(t *testing.T) {
+			d := testDB(t)
+			ctx := t.Context()
+			insertSession(t, d, "session", "test")
+			require.NoError(t, d.InsertMessages(ctx, []Message{{SessionID: "session", Role: "user", Content: "this is broken"}}))
+			rows, err := d.signalRows(ctx, AnalyticsFilter{})
+			require.NoError(t, err)
+			require.NoError(t, d.populateFrustrationMarkers(ctx, rows))
+			if usageOnly {
+				d.SetArchiveContent(config.ArchiveContentUsage)
+				require.NoError(t, d.UpsertSession(ctx, Session{ID: "session", Project: "test", Agent: "claude", Machine: "local"}))
+			} else {
+				_, err := d.DeleteParserExcludedSessions(ctx, []string{"session"})
+				require.NoError(t, err)
+			}
+			var n int
+			require.NoError(t, d.getReader().QueryRowContext(ctx, `SELECT count(*) FROM session_frustration_markers`).Scan(&n))
+			assert.Zero(t, n)
+		})
+	}
+}
+
+func TestSignalsFrustrationVersionKeepsToolEffectiveness(t *testing.T) {
+	d := testDB(t)
+	ctx := t.Context()
+	seedToolRateFixture(t, d)
+	_, err := d.analyticsSignals(ctx, AnalyticsFilter{})
+	require.NoError(t, err)
+	_, err = d.getWriter().ExecContext(ctx, `UPDATE session_frustration_markers SET marker_version = 0`)
+	require.NoError(t, err)
+	require.NoError(t, d.Reopen())
+	_, err = d.analyticsSignals(ctx, AnalyticsFilter{})
+	require.NoError(t, err)
+	result, err := d.GetAnalyticsTools(ctx, AnalyticsFilter{From: "2025-06-01", To: "2025-06-02", Timezone: "UTC"})
+	require.NoError(t, err)
+	for _, tool := range result.ByTool {
+		if tool.ToolName == "Grep" {
+			assert.Equal(t, 6, tool.AnalyzedCalls)
+			return
+		}
+	}
+	t.Fatal("Grep tool missing")
 }

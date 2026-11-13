@@ -1667,6 +1667,14 @@ CREATE TABLE IF NOT EXISTS session_signal_state (
     updated_at          TEXT NOT NULL
 );
 
+-- SQLite-only derived counts; these rows are never mirrored.
+CREATE TABLE IF NOT EXISTS session_frustration_markers (
+    session_id TEXT PRIMARY KEY,
+    transcript_key TEXT NOT NULL,
+    marker_version INTEGER NOT NULL,
+    count INTEGER NOT NULL
+);
+
 -- SQLite-only parser-proven conversation projection and compact latest changes.
 -- Text lives in messages and is read back by ordinal; body is retired and
 -- stays NULL. Removed rows retain metadata, not old text.

@@ -2480,6 +2480,7 @@ func deleteSessionMessagesTx(tx transactionQueries, sessionID string) error {
 		"DELETE FROM parser_checkpoints WHERE session_id = ?",
 		"DELETE FROM parser_checkpoint_blobs WHERE session_id = ?",
 		"DELETE FROM session_signal_state WHERE session_id = ?",
+		"DELETE FROM session_frustration_markers WHERE session_id = ?",
 		"DELETE FROM tool_call_occurrence_agent_state WHERE session_id = ?",
 	} {
 		if _, err := tx.Exec(stmt, sessionID); err != nil {
