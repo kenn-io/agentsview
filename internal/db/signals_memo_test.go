@@ -246,26 +246,31 @@ func TestSignalsFrustrationReadOnly(t *testing.T) {
 }
 
 func TestSignalsFrustrationCleanup(t *testing.T) {
-	for _, action := range []string{"usage text", "usage signals"} {
+	for _, action := range []string{"usage text", "usage signals", "usage count"} {
 		t.Run(action, func(t *testing.T) {
 			d := testDB(t)
 			ctx := t.Context()
 			insertSession(t, d, "session", "test")
 			require.NoError(t, d.InsertMessages(ctx, []Message{{SessionID: "session", Role: "user", Content: "this is broken"}}))
+			require.NoError(t, d.UpdateSessionSignals(ctx, "session", SessionSignalUpdate{QualitySignals: QualitySignals{Version: CurrentQualitySignalVersion}}))
 			rows, err := d.signalRows(ctx, AnalyticsFilter{})
 			require.NoError(t, err)
 			require.NoError(t, d.populateFrustrationMarkers(ctx, rows))
 			var count int
 			require.NoError(t, d.getReader().QueryRowContext(ctx, `SELECT count FROM session_frustration_markers WHERE session_id = 'session'`).Scan(&count))
 			require.Equal(t, 1, count)
+			d.SetArchiveContent(config.ArchiveContentUsage)
 			switch action {
 			case "usage text":
-				d.SetArchiveContent(config.ArchiveContentUsage)
 				name := "renamed"
 				require.NoError(t, d.RenameSession(ctx, "session", &name))
 			case "usage signals":
-				d.SetArchiveContent(config.ArchiveContentUsage)
 				require.NoError(t, d.UpdateSessionSignals(ctx, "session", SessionSignalUpdate{}))
+			case "usage count":
+				resp, err := d.GetAnalyticsSignals(ctx, AnalyticsFilter{})
+				require.NoError(t, err)
+				assert.Zero(t, resp.QualityHealth.Totals.FrustrationMarkerCount)
+				return
 			}
 			require.NoError(t, d.getReader().QueryRowContext(ctx, `SELECT count(*) FROM session_frustration_markers WHERE session_id = 'session'`).Scan(&count))
 			assert.Zero(t, count)
@@ -293,21 +298,6 @@ func TestSignalsFrustrationFailedStoreRetriesOnEvidence(t *testing.T) {
 	var count int
 	require.NoError(t, d.getReader().QueryRowContext(ctx, `SELECT count FROM session_frustration_markers WHERE session_id = 'session'`).Scan(&count))
 	assert.Equal(t, 1, count)
-}
-
-func TestSignalsFrustrationUsageOnly(t *testing.T) {
-	d := testDB(t)
-	d.SetArchiveContent(config.ArchiveContentUsage)
-	ctx := t.Context()
-	insertSession(t, d, "first", "test")
-	require.NoError(t, d.InsertMessages(ctx, []Message{{SessionID: "first", Role: "user", Content: "this is broken"}}))
-	require.NoError(t, d.SettleUsageOnlySignals(ctx, "first"))
-	_, err := d.getWriter().ExecContext(ctx, `INSERT INTO session_frustration_markers (session_id, transcript_key, marker_version, count)
-		SELECT id, transcript_revision || '|' || created_at, ?, 7 FROM sessions WHERE id = 'first'`, signals.FrustrationMarkerVersion)
-	require.NoError(t, err)
-	resp, err := d.GetAnalyticsSignals(ctx, AnalyticsFilter{})
-	require.NoError(t, err)
-	assert.Zero(t, resp.QualityHealth.Totals.FrustrationMarkerCount)
 }
 
 func TestSignalsFrustrationCanceledWhileSaving(t *testing.T) {

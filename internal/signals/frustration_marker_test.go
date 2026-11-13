@@ -92,20 +92,25 @@ func TestIsFrustrationMarkerMatchesReference(t *testing.T) {
 	assert.Less(t, markers, len(prompts)*9/10)
 }
 
-func TestFrustrationMarkerVersionDigest(t *testing.T) {
-	prompts := []string{
-		"wtf",
-		"come\n\t on, run it",
-		"you bro\u212ae the build",
-		"why won\u2019t it build",
-		"AB CD ef gh ij",
-		"ABC def GHI jkl mno pqr",
-		"\u24b6\u24b7 \u24b8\u24b9 ok fine now",
-		"```FUCK FUCK FUCK``` please handle it",
+func TestIsFrustrationMarkerExamples(t *testing.T) {
+	examples := []struct {
+		prompt string
+		want   bool
+	}{
+		{"wtf", false},
+		{"come\n\t on, run it", true},
+		{"you bro\u212ae the build", true},
+		{"why won\u2019t it build", false},
+		{"AB CD ef gh ij", true},
+		{"ABC def GHI jkl mno pqr", false},
+		{"\u24b6\u24b7 \u24b8\u24b9 ok fine now", false},
+		{"```FUCK FUCK FUCK``` please handle it", false},
 	}
 	h := sha256.New()
-	for _, prompt := range prompts {
-		if IsFrustrationMarker(prompt) {
+	for _, example := range examples {
+		got := IsFrustrationMarker(example.prompt)
+		assert.Equal(t, example.want, got, "%q", example.prompt)
+		if got {
 			h.Write([]byte{1})
 		} else {
 			h.Write([]byte{0})
@@ -115,21 +120,6 @@ func TestFrustrationMarkerVersionDigest(t *testing.T) {
 	wantDigest, ok := digests[FrustrationMarkerVersion]
 	require.True(t, ok, "record the matcher digest for the new version")
 	assert.Equal(t, wantDigest, hex.EncodeToString(h.Sum(nil)), "matcher results changed; bump the version and record the new digest")
-}
-
-func TestIsFrustrationMarkerExamples(t *testing.T) {
-	for prompt, want := range map[string]bool{
-		"wtf":                                   false,
-		"come\n\t on, run it":                   true,
-		"you bro\u212ae the build":              true,
-		"why won\u2019t it build":               false,
-		"AB CD ef gh ij":                        true,
-		"ABC def GHI jkl mno pqr":               false,
-		"\u24b6\u24b7 \u24b8\u24b9 ok fine now": false,
-		"```FUCK FUCK FUCK``` please handle it": false,
-	} {
-		assert.Equal(t, want, IsFrustrationMarker(prompt), "%q", prompt)
-	}
 }
 
 func FuzzIsFrustrationMarkerMatchesReference(f *testing.F) {
