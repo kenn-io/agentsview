@@ -38,14 +38,8 @@ func materializeCodex(ctx context.Context, cfg config.Config, database *db.DB, s
 			return Result{}, err
 		}
 	}
-	owners, err = matchingArchiveOwners(session, owners)
-	if err != nil {
-		return Result{}, err
-	}
-	retained, err := useRetained(ctx, cfg, database, session, owners)
-	if err != nil {
-		return Result{}, err
-	}
+	retained := useRetained(cfg, session, owners)
+archiveSource:
 	if retained || len(owners) > 0 {
 		if len(owners) > 0 && (owners[0].NativeSessionID != raw || owners[0].Source.DeviceID != session.Machine) {
 			return Result{}, errors.New("archive session identity differs")
@@ -217,7 +211,17 @@ func materializeCodex(ctx context.Context, cfg config.Config, database *db.DB, s
 			}
 		} else {
 			if source == "" {
-				return Result{}, errors.New("native Codex resume requires an original transcript")
+				if database != nil {
+					found, lookupErr := archivesource.HasRetainedSession(ctx, database, session.ID)
+					if lookupErr != nil {
+						return Result{}, lookupErr
+					}
+					if found {
+						retained = true
+						goto archiveSource
+					}
+				}
+				return Result{}, fmt.Errorf("native Codex resume requires an original transcript: %w", errSourceUnavailable)
 			}
 			anchor, err = pathutil.ResolveAbsolute(source)
 			if err != nil {
@@ -296,6 +300,16 @@ func materializeCodex(ctx context.Context, cfg config.Config, database *db.DB, s
 	if closeSource != nil {
 		err = errors.Join(err, closeSource())
 		closeSource = nil
+	}
+	if errors.Is(err, errSourceUnavailable) && host == "" && database != nil {
+		found, lookupErr := archivesource.HasRetainedSession(ctx, database, session.ID)
+		if lookupErr != nil {
+			return Result{}, lookupErr
+		}
+		if found {
+			retained = true
+			goto archiveSource
+		}
 	}
 	if err != nil {
 		return Result{}, fmt.Errorf("reading native Codex transcript: %w", err)

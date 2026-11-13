@@ -161,7 +161,7 @@ func codexLineage(ctx context.Context, thread string, names []string, archived m
 		if invalidRequested {
 			return nil, errors.New("invalid Codex rollout date")
 		}
-		return nil, errors.New("native Codex transcript is unavailable")
+		return nil, fmt.Errorf("native Codex transcript is unavailable: %w", errSourceUnavailable)
 	}
 	seen := make(map[string]bool)
 	var pages []codexPage

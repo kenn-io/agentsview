@@ -75,7 +75,7 @@ func TestSelectedInventoryAuthorityAndScope(t *testing.T) {
 			_, err = conn.ExecContext(t.Context(), `DELETE FROM raw_archive_files WHERE path=? AND sha256=?`, primary, strings.Repeat("a", 64))
 			require.NoError(t, err)
 			_, err = selectedInventory(t.Context(), conn, "root", bound, "project/id/")
-			require.ErrorContains(t, err, "saved transcript does not match snapshot")
+			require.ErrorContains(t, err, "saved transcript does not match selected archive")
 			insert("root", primary, strings.Repeat("a", 64), true)
 			_, err = conn.ExecContext(t.Context(), `INSERT INTO raw_archive_files VALUES(?,?,?,?,?,?)`, "root", "project/id/subagents/corrupt.json", strings.Repeat("a", 64), 1, 1, 2)
 			require.NoError(t, err)
@@ -359,10 +359,10 @@ func TestMaterializeSnapshotEquivalentCandidates(t *testing.T) {
 		change func(*db.ArchiveSessionProvenance)
 		want   string
 	}{
-		{"archive", func(p *db.ArchiveSessionProvenance) { p.Source.ArchiveID = "wrong" }, "snapshot archive identity differs"},
-		{"root", func(p *db.ArchiveSessionProvenance) { p.Source.RootID = "wrong" }, "snapshot source ownership"},
-		{"manifest", func(p *db.ArchiveSessionProvenance) { p.ManifestID = "wrong" }, "snapshot source ownership"},
-		{"unbound unknown native id", func(p *db.ArchiveSessionProvenance) { p.NativeSessionID = "wrong" }, "snapshot transcript source differs"},
+		{"archive", func(p *db.ArchiveSessionProvenance) { p.Source.ArchiveID = "wrong" }, "saved archive identity differs"},
+		{"root", func(p *db.ArchiveSessionProvenance) { p.Source.RootID = "wrong" }, "saved source ownership"},
+		{"manifest", func(p *db.ArchiveSessionProvenance) { p.ManifestID = "wrong" }, "saved source ownership"},
+		{"unbound unknown native id", func(p *db.ArchiveSessionProvenance) { p.NativeSessionID = "wrong" }, "saved transcript source differs"},
 		{"repository", func(p *db.ArchiveSessionProvenance) { p.Attachment.RepositoryID = "wrong" }, "owning snapshot is not configured"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -418,7 +418,7 @@ func TestMaterializeSnapshotEquivalentCandidates(t *testing.T) {
 		directory := owner
 		directory.Attachment.SnapshotID = "directory:fixture"
 		refused, path, attachment, err := MaterializeSnapshot(t.Context(), nil, []db.ArchiveSessionProvenance{directory}, "claude", 512<<20)
-		require.ErrorContains(t, err, "directory captures cannot")
+		require.ErrorContains(t, err, "owning snapshot is not configured")
 		assert.Nil(t, refused)
 		assert.Empty(t, path)
 		assert.Empty(t, attachment)
@@ -587,7 +587,7 @@ func TestMaterializeSnapshotSavedSessionBinding(t *testing.T) {
 			t.Setenv("TEMP", scratch)
 			tree, path, _, err := MaterializeSnapshot(ctx, []config.ArchiveSource{source}, []db.ArchiveSessionProvenance{owner}, "claude", 512<<20)
 			if conflict {
-				require.ErrorContains(t, err, "snapshot session ownership differs")
+				require.ErrorContains(t, err, "saved session ownership differs")
 				assert.Nil(t, tree)
 				assert.Empty(t, path)
 			} else {

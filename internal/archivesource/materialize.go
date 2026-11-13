@@ -84,11 +84,6 @@ func materializeSnapshot(ctx context.Context, sources []config.ArchiveSource, ow
 		if candidateErr != nil {
 			return nil, "", "", candidateErr
 		}
-		if slices.ContainsFunc(owners, func(owner db.ArchiveSessionProvenance) bool {
-			return strings.HasPrefix(owner.Attachment.SnapshotID, "directory:")
-		}) {
-			return nil, "", "", errors.New("directory captures cannot materialize native sessions; configure the owning snapshot")
-		}
 		return nil, "", "", errors.New("owning snapshot is not configured")
 	}
 	if err := readRecoveryMetadata(ctx, selected); err != nil {
@@ -124,7 +119,19 @@ func materializeSnapshot(ctx context.Context, sources []config.ArchiveSource, ow
 			retErr = errors.Join(retErr, conn.Close())
 		}
 	}()
-	return materializeCatalog(ctx, conn, owner, provider, limit, use, snapshotObjects{selected}, false, owner.Attachment.SnapshotID)
+	release := func() error {
+		if err := conn.Close(); err != nil {
+			conn = nil
+			return err
+		}
+		conn = nil
+		if err := os.RemoveAll(scratch); err != nil {
+			return err
+		}
+		scratch = ""
+		return nil
+	}
+	return materializeCatalog(ctx, conn, owner, provider, limit, use, snapshotObjects{selected}, release, owner.Attachment.SnapshotID)
 }
 
 type catalogQuery interface {
@@ -132,28 +139,28 @@ type catalogQuery interface {
 	QueryRowContext(context.Context, string, ...any) *sql.Row
 }
 
-func materializeCatalog(ctx context.Context, catalog catalogQuery, owner db.ArchiveSessionProvenance, provider string, limit int64, use func(string, []string, func(context.Context, string, int64) ([]byte, error)) error, objects rawderive.ObjectStore, strict bool, sourceID string) (tree *rawderive.Materialization, primary, source string, retErr error) {
+func materializeCatalog(ctx context.Context, catalog catalogQuery, owner db.ArchiveSessionProvenance, provider string, limit int64, use func(string, []string, func(context.Context, string, int64) ([]byte, error)) error, objects rawderive.ObjectStore, release func() error, sourceID string) (tree *rawderive.Materialization, primary, source string, retErr error) {
 	archiveID, err := checkSavedSchema(ctx, catalog)
 	if err != nil {
 		return nil, "", "", err
 	}
 	s := owner.Source
 	if archiveID != s.ArchiveID {
-		return nil, "", "", errors.New("snapshot archive identity differs")
+		return nil, "", "", errors.New("saved archive identity differs")
 	}
 	var canonical []byte
 	var configuredRoot, originalRoot string
 	err = catalog.QueryRowContext(ctx, `SELECT r.configured_root_id,r.original_path,s.canonical_json FROM raw_archive_sources s JOIN raw_archive_roots r ON r.id=s.root_id WHERE s.manifest_id=? AND s.root_id=? AND s.source_key=? AND r.device_id=? AND r.provider=?`, owner.ManifestID, s.RootID, s.SourceKey, s.DeviceID, provider).Scan(&configuredRoot, &originalRoot, &canonical)
 	if err != nil {
-		return nil, "", "", fmt.Errorf("snapshot source ownership: %w", err)
+		return nil, "", "", fmt.Errorf("saved source ownership: %w", err)
 	}
 	var boundRoot, boundSource string
 	err = catalog.QueryRowContext(ctx, `SELECT root_id,source_key FROM raw_archive_sessions WHERE device_id=? AND provider=? AND parser_id=?`, s.DeviceID, provider, owner.NativeSessionID).Scan(&boundRoot, &boundSource)
-	if err != nil && (strict || !errors.Is(err, sql.ErrNoRows)) {
+	if err != nil && !errors.Is(err, sql.ErrNoRows) {
 		return nil, "", "", err
 	}
 	if err == nil && (boundRoot != s.RootID || boundSource != s.SourceKey) {
-		return nil, "", "", errors.New("snapshot session ownership differs")
+		return nil, "", "", errors.New("saved session ownership differs")
 	}
 	identity, err := rawsync.NewAuthIdentity(archiveID, s.DeviceID)
 	if err != nil {
@@ -164,7 +171,7 @@ func materializeCatalog(ctx context.Context, catalog catalogQuery, owner db.Arch
 		return nil, "", "", err
 	}
 	if manifest.Manifest.ConfiguredRootID != configuredRoot || manifest.Manifest.SourceKey != s.SourceKey || string(manifest.Manifest.Provider) != provider {
-		return nil, "", "", errors.New("snapshot source mismatch")
+		return nil, "", "", errors.New("saved source mismatch")
 	}
 	bound, primary, err := snapshotPrimaryPath(s.SourceKey, originalRoot, owner.NativeSessionID, manifest.Manifest.Entries)
 	if err != nil {
@@ -194,7 +201,7 @@ func materializeCatalog(ctx context.Context, catalog catalogQuery, owner db.Arch
 				return nil, errors.New("conflicting saved file versions")
 			}
 			if !ok || requested <= 0 || entry.Length > requested {
-				return nil, errors.New("snapshot rollout unavailable or exceeds size limit")
+				return nil, errors.New("saved rollout unavailable or exceeds size limit")
 			}
 			m := rawderive.Materializer{Store: objects, BaseDir: os.TempDir(), MaxTotalBytes: min(limit, requested)}
 			materialized, err := m.MaterializeEntries(ctx, identity, manifest.Manifest.CapturedAt, []rawsync.Entry{entry})
@@ -220,6 +227,11 @@ func materializeCatalog(ctx context.Context, catalog catalogQuery, owner db.Arch
 		return nil, "", "", err
 	}
 
+	if release != nil {
+		if err := release(); err != nil {
+			return nil, "", "", err
+		}
+	}
 	tree, err = (rawderive.Materializer{Store: objects, BaseDir: os.TempDir(), MaxTotalBytes: limit}).MaterializeEntries(ctx, identity, manifest.Manifest.CapturedAt, entries)
 	return tree, primary, sourceID, err
 }
@@ -236,13 +248,13 @@ func snapshotPrimaryPath(sourceKey, originalRoot, nativeID string, entries []raw
 		}
 		if matches && rawderive.SourceKeyEndsWithEntry(key, entry.Path) {
 			if bound.Path != "" {
-				return rawsync.Entry{}, "", errors.New("ambiguous snapshot transcript source")
+				return rawsync.Entry{}, "", errors.New("ambiguous saved transcript source")
 			}
 			bound = entry
 		}
 	}
 	if bound.Path == "" {
-		return rawsync.Entry{}, "", errors.New("snapshot transcript source differs")
+		return rawsync.Entry{}, "", errors.New("saved transcript source differs")
 	}
 	providerRoot := strings.TrimSuffix(strings.TrimSuffix(key, bound.Path), "/")
 	var relativeRoot string
@@ -250,7 +262,7 @@ func snapshotPrimaryPath(sourceKey, originalRoot, nativeID string, entries []raw
 		var ok bool
 		relativeRoot, ok = strings.CutPrefix(providerRoot, root+"/")
 		if !ok || relativeRoot == "" || path.Clean(relativeRoot) != relativeRoot {
-			return rawsync.Entry{}, "", errors.New("snapshot transcript outside capture root")
+			return rawsync.Entry{}, "", errors.New("saved transcript outside capture root")
 		}
 	}
 	return bound, path.Join(relativeRoot, bound.Path), nil
@@ -295,7 +307,7 @@ func inventoryEntries(rows *sql.Rows, bound rawsync.Entry, conflicts map[string]
 		return nil, err
 	}
 	if len(choices[bound.Path].covered) != 1 {
-		return nil, errors.New("saved transcript does not match snapshot")
+		return nil, errors.New("saved transcript does not match selected archive")
 	}
 	var entries []rawsync.Entry
 	for _, c := range choices {
