@@ -56,6 +56,37 @@ func TestFrustrationCountsRestartAndRefresh(t *testing.T) {
 	refreshed, err := open().GetAnalyticsSignals(ctx, db.AnalyticsFilter{})
 	require.NoError(t, err)
 	require.Equal(t, 2, refreshed.QualityHealth.Totals.FrustrationMarkerCount)
+
+	// After a push, a fresh store recounts the changed session and reuses the other.
+	_, err = pg.ExecContext(ctx, `UPDATE session_frustration_counts SET marker_count = 7 WHERE session_id = 'one'`)
+	require.NoError(t, err)
+	session := db.Session{ID: "two", Agent: "claude", Project: "sample", Machine: "workstation", MessageCount: 1}
+	messages := []db.Message{{SessionID: "two", Ordinal: 0, Role: "user", Content: "Please explain this function."}}
+	_, err = local.WriteSessionBatchContext(ctx, []db.SessionBatchWrite{{Session: session, Messages: messages, ReplaceMessages: true}})
+	require.NoError(t, err)
+	require.NoError(t, local.UpdateSessionSignals(ctx, "two", db.SessionSignalUpdate{QualitySignals: db.QualitySignals{Version: db.CurrentQualitySignalVersion}}))
+	_, err = syncer.Push(ctx, false, nil)
+	require.NoError(t, err)
+	afterPush, err := open().GetAnalyticsSignals(ctx, db.AnalyticsFilter{})
+	require.NoError(t, err)
+	require.Equal(t, 7, afterPush.QualityHealth.Totals.FrustrationMarkerCount)
+	var unchangedCount, changedCount int
+	require.NoError(t, pg.QueryRowContext(ctx, `SELECT marker_count FROM session_frustration_counts WHERE session_id = 'one'`).Scan(&unchangedCount))
+	require.NoError(t, pg.QueryRowContext(ctx, `SELECT marker_count FROM session_frustration_counts WHERE session_id = 'two'`).Scan(&changedCount))
+	require.Equal(t, 7, unchangedCount)
+	require.Zero(t, changedCount)
+
+	// Restore the fixture for the filter and fallback checks below.
+	_, err = pg.ExecContext(ctx, `UPDATE session_frustration_counts SET marker_count = 1 WHERE session_id = 'one'`)
+	require.NoError(t, err)
+	messages[0].Content = "this is broken"
+	_, err = local.WriteSessionBatchContext(ctx, []db.SessionBatchWrite{{Session: session, Messages: messages, ReplaceMessages: true}})
+	require.NoError(t, err)
+	require.NoError(t, local.UpdateSessionSignals(ctx, "two", db.SessionSignalUpdate{QualitySignals: db.QualitySignals{Version: db.CurrentQualitySignalVersion}}))
+	_, err = syncer.Push(ctx, false, nil)
+	require.NoError(t, err)
+	_, err = open().GetAnalyticsSignals(ctx, db.AnalyticsFilter{})
+	require.NoError(t, err)
 	for _, filter := range []db.AnalyticsFilter{{}, {Project: "sample"}, {Agent: "claude"}, {From: "2000-01-01", To: "2100-01-01"}} {
 		cached := open()
 		actual, err := cached.GetAnalyticsSignals(ctx, filter)
