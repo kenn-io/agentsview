@@ -68,41 +68,5 @@ make e2e-duckdb
 
 ## Signals frustration markers
 
-The Signals panel counts each session's frustration markers, the prompts
-`signals.IsFrustrationMarker` flags. Counts are kept in memory per push
-fingerprint, so a load reads only sessions that changed since the last one.
-
-For those sessions one query (`duckFrustrationPromptsSQL`) judges most prompts
-in DuckDB:
-
-- A prompt made only of ASCII and `signals.PlainPromptSymbols` (dashes, quotes,
-  arrows, check marks, box drawing, emoji, private use) is judged in SQL. It
-  comes back only when it is a marker, without its text. ClickHouse uses the
-  same set and the same steps.
-- Any other prompt comes back with its text, and Go judges it. DuckDB stores
-  only valid UTF-8, so no prompt is sent back for its encoding.
-
-The SQL follows `IsFrustrationMarker` with its exported patterns and thresholds.
-DuckDB's regular expressions are RE2: they match UTF-8, fold case under `(?i)`
-as Go does, and keep `\b` and `\w` to ASCII. `strlen` counts bytes as Go's `len`
-does; `length` would count characters. The query comment lists the three steps
-and why each matches Go over a plain prompt.
-
-The query ends in `ORDER BY session_id`. Without that pipeline breaker, DuckDB
-evaluates the marker expression on one thread as the result streams to Go.
-
-The patterns are parameters, never part of the query text. Quack renders
-parameters into the SQL by replacing each question mark, and the patterns
-contain question marks. The session ID list renders as a `VARCHAR[]` literal.
-
-Tests compare the counts with `IsFrustrationMarker` on hand-labeled edge cases
-and on a seeded random corpus, require that only prompts outside the set come
-back with text, and check that DuckDB's `lower`, `upper`, and `(?i)` leave every
-symbol in the set alone. A Quack test runs the same read over a served mirror.
-
-On a generated mirror of 2,000 sessions with 379 MB of prompt text and 1.57 GB
-on disk, judging in DuckDB took the read from 3.93 s to 1.22 s, Go allocations
-from 3.80 GB to 134 MB, and warm peak RSS growth from about 400 MB to 30-170 MB,
-with the same counts and about 3% more CPU time. On a mirror whose prompts fill
-only four row groups, wall time is unchanged, because DuckDB parallelizes by row
-group.
+Push stores frustration marker counts for each session. A change to the marker
+algorithm rebuilds the mirror on the next push.
