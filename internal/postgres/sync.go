@@ -485,6 +485,12 @@ func (s *Sync) EnsureSchema(ctx context.Context) error {
 
 func (s *Sync) ensureSchemaLocked(ctx context.Context) error {
 	if s.schemaDone {
+		// An older binary can push messages without usage counters between
+		// this Sync's pushes, so the fill runs on every check, not only at
+		// schema setup.
+		if _, err := backfillMessageUsageCountersPG(ctx, s.pg); err != nil {
+			return err
+		}
 		return nil
 	}
 	if err := CheckDataVersionCompat(ctx, s.pg); err != nil {

@@ -242,14 +242,35 @@ func TestPGPushSchemaCheckFillsMissingUsageCounters(t *testing.T) {
 	_, store := prepareUsageSchema(t, schema)
 	seedWebSearchUsage(t, store, "claude-websearch-test")
 	ctx := t.Context()
-	_, err := store.DB().ExecContext(ctx, `
-		UPDATE messages
-		SET usage_output_tokens = NULL, usage_web_search_requests = NULL`)
-	require.NoError(t, err, "clear counters as an older binary leaves them")
+	filter := db.UsageFilter{From: "2026-07-30", To: "2026-07-30", Timezone: "UTC"}
+	// An older binary writes the message without counters and bumps its
+	// session, as every publisher does with a message write.
+	olderPublisherWrite := func() {
+		t.Helper()
+		_, err := store.DB().ExecContext(ctx, `
+			UPDATE messages
+			SET usage_output_tokens = NULL, usage_web_search_requests = NULL`)
+		require.NoError(t, err)
+		_, err = store.DB().ExecContext(ctx, `UPDATE sessions SET updated_at = NOW()`)
+		require.NoError(t, err)
+	}
+	olderPublisherWrite()
 	require.True(t, pushSchemaCurrent(ctx, store.DB()),
 		"the per-push repair path must run, not a full schema setup")
 
 	syncer := &Sync{pg: store.DB(), schema: schema}
+	require.NoError(t, syncer.EnsureSchema(ctx))
+	daily, err := store.GetDailyUsage(ctx, filter)
+	require.NoError(t, err)
+	assert.Equal(t, money.MustParseDollars("0.62"), daily.Totals.TotalCost)
+
+	// The same Sync runs the next push. Usage read before it sees the
+	// older binary's message without its web searches; the push fills the
+	// counters and the read after it sees them.
+	olderPublisherWrite()
+	daily, err = store.GetDailyUsage(ctx, filter)
+	require.NoError(t, err)
+	assert.Equal(t, money.MustParseDollars("0.60"), daily.Totals.TotalCost)
 	require.NoError(t, syncer.EnsureSchema(ctx))
 
 	var outputTokens, webSearchRequests int64
@@ -259,9 +280,7 @@ func TestPGPushSchemaCheckFillsMissingUsageCounters(t *testing.T) {
 	).Scan(&outputTokens, &webSearchRequests))
 	assert.EqualValues(t, 100000, outputTokens)
 	assert.EqualValues(t, 2, webSearchRequests)
-	daily, err := store.GetDailyUsage(ctx, db.UsageFilter{
-		From: "2026-07-30", To: "2026-07-30", Timezone: "UTC",
-	})
+	daily, err = store.GetDailyUsage(ctx, filter)
 	require.NoError(t, err)
 	assert.Equal(t, money.MustParseDollars("0.62"), daily.Totals.TotalCost)
 }
