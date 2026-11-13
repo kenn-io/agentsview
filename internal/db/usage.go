@@ -2095,34 +2095,7 @@ func genAIEffectivePricingRow(
 	if err != nil {
 		return export.EffectivePricingRow{}, err
 	}
-	if stored == nil {
-		embedded := pricingpkg.EmbeddedGenAIDocument()
-		return export.EffectivePricingRow{
-			GenAI: embedded.Prices, GenAIVersion: embedded.Version,
-			GenAISource: export.PricingRowSourceEmbedded,
-		}, nil
-	}
-	document, err := pricingpkg.ParseGenAIDocument(
-		stored.Data, stored.Version, stored.SourceRef,
-	)
-	if err != nil {
-		return export.EffectivePricingRow{}, fmt.Errorf(
-			"parsing stored GenAI pricing document: %w", err,
-		)
-	}
-	var updatedAt *time.Time
-	if parsed, parseErr := time.Parse(time.RFC3339Nano, stored.UpdatedAt); parseErr == nil {
-		utc := parsed.UTC()
-		updatedAt = &utc
-	}
-	source := export.PricingRowSourceFetched
-	if stored.Source == GenAIPricingSourceEmbedded {
-		source = export.PricingRowSourceEmbedded
-	}
-	return export.EffectivePricingRow{
-		GenAI: document.Prices, GenAIVersion: document.Version,
-		GenAISource: source, GenAIUpdatedAt: updatedAt,
-	}, nil
+	return GenAIEffectivePricingRow(stored)
 }
 
 // FallbackRateMap converts the embedded fallback pricing into rates keyed by

@@ -152,11 +152,7 @@ func chLoadPricingCatalog(
 	if err != nil {
 		return chPricingCatalog{}, err
 	}
-	document, err := loadGenAIPricing(ctx, conn)
-	if err != nil {
-		return chPricingCatalog{}, err
-	}
-	genAI, err := genAIEffectivePricingRow(document)
+	genAI, err := loadGenAIPricingRow(ctx, conn)
 	if err != nil {
 		return chPricingCatalog{}, err
 	}

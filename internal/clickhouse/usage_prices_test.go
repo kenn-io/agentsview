@@ -250,7 +250,7 @@ func chBillable(in chUsagePriceInput, tokens int) int {
 // reload pays this.
 func BenchmarkUsagePricingDigest(b *testing.B) {
 	embedded := db.EmbeddedGenAIPricingDocument()
-	genAI, err := genAIEffectivePricingRow(&embedded)
+	genAI, err := db.GenAIEffectivePricingRow(&embedded)
 	require.NoError(b, err)
 	rows := append(db.MirrorPricingRows(db.FallbackPricingMap()), genAI)
 	patterns := make([]string, 0, len(rows))
@@ -300,7 +300,7 @@ func genAIHistoryDocument(t *testing.T, histBase, otherBase string) db.GenAIPric
 func genAIHistoryRows(t *testing.T, histBase, otherBase string) []export.EffectivePricingRow {
 	t.Helper()
 	document := genAIHistoryDocument(t, histBase, otherBase)
-	genAI, err := genAIEffectivePricingRow(&document)
+	genAI, err := db.GenAIEffectivePricingRow(&document)
 	require.NoError(t, err)
 	return []export.EffectivePricingRow{genAI}
 }

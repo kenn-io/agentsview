@@ -328,13 +328,7 @@ func (s *Store) loadPricingResolver(
 	if err != nil {
 		return nil, err
 	}
-	document, err := scanDuckGenAIPricing(s.queryRowContext(ctx, `
-		SELECT version, source_ref, source, data_json, updated_at
-		FROM genai_pricing WHERE singleton = 1`))
-	if err != nil {
-		return nil, err
-	}
-	genAI, err := duckGenAIEffectivePricingRow(document)
+	genAI, err := loadDuckGenAIPricingRow(ctx, s.queryRowContext)
 	if err != nil {
 		return nil, err
 	}
