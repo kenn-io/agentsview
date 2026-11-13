@@ -273,3 +273,46 @@ func TestPartialActivityUsageRereadsPastNextRow(t *testing.T) {
 	require.Equal(t, 0, activity.ReportWithSessions(third).Totals.OutputTokens)
 	require.Equal(t, 3, reads)
 }
+
+func TestPartialActivityUsageRereadsPastClaudePeer(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "mirror.duckdb")
+	keptActivityMirror(t, path, "session-a", 500)
+	conn, err := Open(t.Context(), path)
+	require.NoError(t, err)
+	_, err = conn.ExecContext(t.Context(), `UPDATE sessions SET project = 'included'`)
+	require.NoError(t, err)
+	_, err = conn.ExecContext(t.Context(), `INSERT INTO sessions SELECT * REPLACE ('session-b' AS id, 'excluded' AS project) FROM sessions WHERE id = 'session-a'`)
+	require.NoError(t, err)
+	_, err = conn.ExecContext(t.Context(), `UPDATE messages SET claude_message_id = 'message', claude_request_id = 'request' WHERE id = 2`)
+	require.NoError(t, err)
+	_, err = conn.ExecContext(t.Context(), `INSERT INTO messages SELECT * REPLACE (3 AS id, 'session-b' AS session_id, TIMESTAMP '2026-01-01 12:30:00' AS timestamp, '{"output_tokens":900}' AS token_usage, 900 AS output_tokens) FROM messages WHERE id = 2`)
+	require.NoError(t, err)
+	require.NoError(t, conn.Close())
+	store, err := NewStore(t.Context(), path)
+	require.NoError(t, err)
+	defer store.Close()
+	q, err := activity.ResolveQuery(activity.QueryInput{Preset: "day", Date: "2026-01-01", Timezone: "UTC"}, time.Date(2026, 1, 1, 12, 0, 0, 0, time.UTC))
+	require.NoError(t, err)
+	reads := 0
+	previous := analyticsQueryObserver
+	analyticsQueryObserver = func(query string) {
+		if strings.Contains(query, "activity_usage_keyed") {
+			reads++
+		}
+	}
+	t.Cleanup(func() { analyticsQueryObserver = previous })
+	filter := db.AnalyticsFilter{Project: "included", Timezone: "UTC"}
+	first, err := store.GetActivityReport(t.Context(), filter, q)
+	require.NoError(t, err)
+	require.Equal(t, 500, first.Totals.OutputTokens)
+	q.EffectiveEnd = q.EffectiveEnd.Add(time.Minute)
+	repeat, err := store.GetActivityReport(t.Context(), filter, q)
+	require.NoError(t, err)
+	require.Equal(t, 500, repeat.Totals.OutputTokens)
+	require.Equal(t, 1, reads)
+	q.EffectiveEnd = q.EffectiveEnd.Add(time.Hour)
+	updated, err := store.GetActivityReport(t.Context(), filter, q)
+	require.NoError(t, err)
+	require.Equal(t, 900, updated.Totals.OutputTokens)
+	require.Equal(t, 2, reads)
+}

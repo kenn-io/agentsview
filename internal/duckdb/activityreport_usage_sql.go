@@ -77,16 +77,14 @@ func (s *Store) sumActivityUsage(
 	}
 	if version != "" {
 		nextUS := int64(math.MaxInt64)
-		if q.Partial {
-			var next sql.NullInt64
-			args := append(slices.Clone(withArgs), endUS)
-			err := s.queryRowContext(ctx, "WITH "+with+" SELECT min(ts_us) FROM activity_usage_rows WHERE ts_us >= ?", args...).Scan(&next)
-			if err != nil {
-				return nil, fmt.Errorf("querying next activity usage row: %w", err)
-			}
-			if next.Valid {
-				nextUS = next.Int64
-			}
+		var next sql.NullInt64
+		args := append(slices.Clone(withArgs), endUS)
+		err := s.queryRowContext(ctx, "WITH "+with+" SELECT min(ts_us) FROM activity_usage_rows WHERE ts_us >= ?", args...).Scan(&next)
+		if err != nil {
+			return readbase.AssembleActivityUsage(pricing, schedule, groups)
+		}
+		if next.Valid {
+			nextUS = next.Int64
 		}
 		s.activityUsageSums.Put(slot, version, []*readbase.ActivityUsageSums{{Schedule: schedule, Groups: groups, EndUS: endUS, NextUS: nextUS}})
 	}

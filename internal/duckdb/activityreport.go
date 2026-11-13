@@ -768,9 +768,10 @@ func (s *Store) activityReportUsage(
 ) ([]activity.UsageRow, *export.PricingBlock, error) {
 	out := []activity.UsageRow{}
 	version := s.keptVersion()
-	if db.TerminationUsesTime(f.Termination) {
+	if !q.Partial || db.TerminationUsesTime(f.Termination) {
 		version = ""
 	}
+	// Keep the filter and range stable while the effective end moves.
 	slotQuery := q
 	slotQuery.EffectiveEnd = q.RangeEnd
 	slot := kept.Selection(f, slotQuery)
