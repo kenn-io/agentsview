@@ -467,3 +467,41 @@ func TestSweepStaleMirrorReopenAliasesHandlesGlobMetacharactersInDirectory(t *te
 		"a reopen alias in a glob-metacharacter directory must still be swept")
 	assert.FileExists(t, path, "sweep must not remove the mirror file itself")
 }
+
+func TestConcurrentMirrorChecksKeepNewestPublication(t *testing.T) {
+	skipReopenTestOnWindows(t)
+	dir := t.TempDir()
+	first := filepath.Join(dir, "first.duckdb")
+	older := filepath.Join(dir, "older.duckdb")
+	newer := filepath.Join(dir, "newer.duckdb")
+	buildMirrorFixture(t, first, "first")
+	buildMirrorFixture(t, older, "older")
+	buildMirrorFixture(t, newer, "newer")
+	path := filepath.Join(dir, "mirror.duckdb")
+	require.NoError(t, os.Link(first, path))
+	store, err := NewStore(t.Context(), path)
+	require.NoError(t, err)
+	for i := range 10 {
+		oldLink := filepath.Join(dir, fmt.Sprintf("old-%d.duckdb", i))
+		require.NoError(t, os.Link(older, oldLink))
+		require.NoError(t, swapMirrorFile(oldLink, path))
+		started := make(chan struct{})
+		done := make(chan struct{})
+		go func() {
+			close(started)
+			defer close(done)
+			store.checkMirrorReplacement(t.Context(), nil)
+		}()
+		<-started
+		runtime.Gosched()
+		newLink := filepath.Join(dir, fmt.Sprintf("new-%d.duckdb", i))
+		require.NoError(t, os.Link(newer, newLink))
+		require.NoError(t, swapMirrorFile(newLink, path))
+		store.checkMirrorReplacement(t.Context(), nil)
+		require.Equal(t, []string{"newer"}, listMirrorSessionIDs(t, store))
+		<-done
+		require.Equal(t, []string{"newer"}, listMirrorSessionIDs(t, store))
+	}
+	require.NoError(t, store.Close())
+	require.Zero(t, countReopenAliasFiles(t, dir))
+}
