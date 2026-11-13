@@ -100,23 +100,12 @@ func Retained(ctx context.Context, cfg config.Config, database *db.DB, sessionID
 			JOIN raw_archive_sources s ON s.root_id=b.root_id AND s.source_key=b.source_key
 			WHERE b.session_id=? AND b.device_id=? AND b.provider=? AND b.parser_id=? AND r.device_id=b.device_id AND r.provider=b.provider`, sessionID, device, provider, native).Scan(&owner.Source.DeviceID, &owner.Source.RootID, &owner.Source.SourceKey, &owner.ManifestID)
 		if errors.Is(err, sql.ErrNoRows) {
-			var bound bool
-			err = tx.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM raw_archive_sessions WHERE session_id=?)`, sessionID).Scan(&bound)
-			if err != nil {
-				return nil, "", "", err
-			}
-			if !bound {
-				var found bool
+			var bound, found bool
+			if err = tx.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM raw_archive_sessions WHERE session_id=?)`, sessionID).Scan(&bound); err == nil && !bound {
 				owner, found, err = unboundRetainedSource(ctx, tx, cfg.InstallationID, device, provider, native, stored)
-				if err != nil {
-					return nil, "", "", err
-				}
-				if found {
-					owner.Source.ArchiveID = archiveID
-				} else {
-					return nil, "", "", errors.New("original transcript or owning source unavailable")
-				}
-			} else {
+				owner.Source.ArchiveID = archiveID
+			}
+			if err == nil && !found {
 				return nil, "", "", errors.New("original transcript or owning source unavailable")
 			}
 		}
