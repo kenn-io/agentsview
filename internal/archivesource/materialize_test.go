@@ -702,34 +702,24 @@ func TestReadCodexCatalogExposesManifestCompanion(t *testing.T) {
 			pPath := filepath.Join(parent, "sessions", "2024", "01", "15", pName)
 			oldPath := filepath.Join(child, "sessions", "2025", "01", "01", oldName)
 			cPath := filepath.Join(child, "sessions", "2026", "01", "01", cName)
-			page := func(id, stamp, message string, ordinal int, fields map[string]any) string {
-				fields["history_mode"] = "paginated"
-				withOrdinal := func(line string, n int) string {
-					return strings.TrimSuffix(line, "}") + fmt.Sprintf(`,"ordinal":%d}`, n)
-				}
-				return testjsonl.JoinJSONL(withOrdinal(testjsonl.CodexSessionMetaWithFieldsJSON(id, "/work", "codex_cli_rs", stamp, fields), ordinal), withOrdinal(testjsonl.CodexMsgJSON("user", message, stamp), ordinal+1))
-			}
-			base := func(id string, ordinal, size int) map[string]any {
-				return map[string]any{"thread_id": id, "end_ordinal_exclusive": ordinal, "end_byte_offset": size}
-			}
-			g := page(gID, "2023-01-15T00:00:00Z", "grandparent", 0, map[string]any{})
-			p := page(pID, "2024-01-15T00:00:00Z", "parent", 2, map[string]any{"forked_from_id": gID, "forked_from_ordinal_exclusive": 2, "history_base": base(gID, 2, len(g))})
+			g := testjsonl.CodexLineagePage(gID, "2023-01-15T00:00:00Z", "grandparent", 0, map[string]any{})
+			p := testjsonl.CodexLineagePage(pID, "2024-01-15T00:00:00Z", "parent", 2, map[string]any{"forked_from_id": gID, "forked_from_ordinal_exclusive": 2, "history_base": testjsonl.CodexLineageBase(gID, 2, len(g))})
 			if scenario == "newer inventory" {
-				p = page(pID, "2024-01-15T00:00:00Z", "parent", 0, map[string]any{})
+				p = testjsonl.CodexLineagePage(pID, "2024-01-15T00:00:00Z", "parent", 0, map[string]any{})
 			}
-			cutoff, history := 4, base(pID, 4, len(p))
+			cutoff, history := 4, testjsonl.CodexLineageBase(pID, 4, len(p))
 			if scenario != "ordinary" {
-				cutoff, history = 2, base(gID, 2, len(g))
+				cutoff, history = 2, testjsonl.CodexLineageBase(gID, 2, len(g))
 			}
 			if scenario == "newer inventory" {
-				history = base(pID, 2, len(p))
+				history = testjsonl.CodexLineageBase(pID, 2, len(p))
 			}
 			message := "child"
 			if scenario == "newer inventory" {
 				message = "new child"
 			}
-			c := page(cID, "2026-01-01T00:00:00Z", message, cutoff, map[string]any{"forked_from_id": pID, "forked_from_ordinal_exclusive": cutoff, "history_base": history})
-			old := page(cID, "2025-01-01T00:00:00Z", "old child", 2, map[string]any{"forked_from_id": pID, "forked_from_ordinal_exclusive": 2, "history_base": base(pID, 2, len(p))})
+			c := testjsonl.CodexLineagePage(cID, "2026-01-01T00:00:00Z", message, cutoff, map[string]any{"forked_from_id": pID, "forked_from_ordinal_exclusive": cutoff, "history_base": history})
+			old := testjsonl.CodexLineagePage(cID, "2025-01-01T00:00:00Z", "old child", 2, map[string]any{"forked_from_id": pID, "forked_from_ordinal_exclusive": 2, "history_base": testjsonl.CodexLineageBase(pID, 2, len(p))})
 			roots := []rawarchive.RootSpec{{Provider: "codex", Path: child}, {Provider: "codex", Path: parent}, {Provider: "codex", Path: grandparent}}
 			if scenario == "newer inventory" {
 				dbtest.WriteTestFile(t, oldPath, []byte(old))

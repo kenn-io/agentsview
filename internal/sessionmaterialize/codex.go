@@ -205,7 +205,7 @@ archiveSource:
 						return Result{}, err
 					}
 					rel, err := filepath.Rel(resolved, anchor)
-					if err == nil && filepath.IsLocal(rel) && len(candidate) > len(root) {
+					if err == nil && filepath.IsLocal(rel) && (root == "" || len(candidate) < len(root)) {
 						root = candidate
 					}
 				}

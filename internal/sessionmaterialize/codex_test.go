@@ -125,6 +125,34 @@ func TestMaterializeCodexConfigured(t *testing.T) {
 		_, err = Materialize(t.Context(), scoped, nil, &selected, cwd)
 		require.ErrorContains(t, err, "missing Codex ancestor")
 	})
+	for _, tc := range []struct {
+		name, anchor string
+	}{
+		{"old anchor finds newer page", oldPath},
+		{"new anchor finds earlier ancestor", newPath},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			home := t.TempDir()
+			t.Setenv("CODEX_HOME", home)
+			scoped := cfg
+			scoped.AgentDirs = map[parser.AgentType][]string{parser.AgentCodex: {location, filepath.Dir(tc.anchor)}}
+			selected := *session
+			selected.FilePath = &tc.anchor
+			got, err := Materialize(t.Context(), scoped, nil, &selected, cwd)
+			require.NoError(t, err)
+			require.Equal(t, newName, got.InstalledPage)
+			wantPaths := []string{
+				filepath.Join(home, "sessions", "2026", "01", "01", oldName),
+				filepath.Join(home, "sessions", "2026", "01", "02", newName),
+			}
+			require.Equal(t, wantPaths, got.Paths)
+			for i, want := range [][]byte{old, newPage} {
+				data, err := os.ReadFile(wantPaths[i])
+				require.NoError(t, err)
+				assert.Equal(t, want, data)
+			}
+		})
+	}
 	// A publisher failure unrelated to rollout matching reaches the caller.
 	blockedHome := t.TempDir()
 	t.Setenv("CODEX_HOME", blockedHome)
