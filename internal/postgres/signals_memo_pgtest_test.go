@@ -107,11 +107,15 @@ func TestFrustrationMemoPublicationBetweenReads(t *testing.T) {
 				_, err = tx.ExecContext(ctx, `DELETE FROM sessions WHERE id = $1`, id)
 			}
 			require.NoError(t, err)
-			var publishedVersion string
 			if test.name != "remove-session" {
-				require.NoError(t, tx.QueryRowContext(ctx, `UPDATE sessions SET updated_at = updated_at + interval '1 second' WHERE id = $1 RETURNING `+frustrationSessionVersion(versionColumn), id).Scan(&publishedVersion))
+				_, err = tx.ExecContext(ctx, `UPDATE sessions SET updated_at = updated_at + interval '1 second' WHERE id = $1`, id)
+				require.NoError(t, err)
 			}
 			require.NoError(t, tx.Commit())
+			var publishedVersion string
+			if test.name != "remove-session" {
+				require.NoError(t, pg.QueryRowContext(ctx, `SELECT `+frustrationSessionVersion(versionColumn)+` FROM sessions WHERE id = $1`, id).Scan(&publishedVersion))
+			}
 
 			require.NoError(t, store.populateFrustrationMarkers(ctx, rows, versions, versionColumn))
 			if test.name == "edit" {
