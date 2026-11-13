@@ -585,8 +585,8 @@ func (s *Store) usagePriceContexts(
 // returns its JSON again; the read still reuses its decoded context.
 const maxKnownPriceContextIDs = 2048
 
-// queryUsagePriceContexts reads digest's contexts. It takes the contexts in
-// known from known and decodes the JSON of the rest.
+// queryUsagePriceContexts reads digest's contexts. It reuses each context
+// already in known and decodes the JSON of the rest.
 func queryUsagePriceContexts(
 	ctx context.Context, conn *sql.DB, digest string,
 	known map[string]chUsagePriceContext,
