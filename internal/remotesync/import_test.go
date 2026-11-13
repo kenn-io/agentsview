@@ -71,6 +71,7 @@ func TestPreparedHTTPSyncRebuildContributor(t *testing.T) {
 	}(t)
 	targets := TargetSet{Dirs: map[parser.AgentType][]string{
 		parser.AgentClaude: {remoteDir, skippedDir},
+		parser.AgentCodex:  {"/remote-codex"},
 	}}
 	targetsJSON, err := json.Marshal(targets)
 	require.NoError(t, err)
@@ -122,7 +123,6 @@ func TestPreparedHTTPSyncRebuildContributor(t *testing.T) {
 		"AfterSync runs before swap and must retain the journal")
 	require.NotNil(t, prepared.mirrorImport)
 	assert.Equal(t, JournalPendingSwap, prepared.mirrorImport.outcome)
-	prepared.targets.Dirs[parser.AgentCodex] = []string{"/remote-codex"}
 	require.NoError(t, prepared.Commit(t.Context()))
 	roots, err := LoadMirrorCodexRoots(t.Context(), prepared.Root())
 	require.NoError(t, err)

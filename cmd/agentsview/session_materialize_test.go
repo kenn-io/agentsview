@@ -112,6 +112,9 @@ func TestSessionMaterializeSnapshotDispatch(t *testing.T) {
 func TestPiResumeCommandQuotesPaths(t *testing.T) {
 	assert.Equal(t, "cd '/work dir' && pi --session '/data/a b.jsonl'", piResumeCommand("/work dir", "/data/a b.jsonl", false))
 	assert.Equal(t, "Set-Location -LiteralPath 'C:\\work dir'; if ($?) { pi --session 'C:\\data\\a b.jsonl' }", piResumeCommand(`C:\work dir`, `C:\data\a b.jsonl`, true))
+}
+
+func TestCodexResumeCommandQuotesPaths(t *testing.T) {
 	assert.Equal(t, "codex resume thread -C '/work dir'", codexResumeCommand("thread", "/work dir", false))
 	assert.Equal(t, "codex resume 'thread' -C 'C:\\work dir'", codexResumeCommand("thread", `C:\work dir`, true))
 }
@@ -168,7 +171,7 @@ func TestCodexMaterializeCommand(t *testing.T) {
 	}
 	require.NoError(t, json.Unmarshal([]byte(output), &result))
 	assert.Equal(t, "codex:"+id, result.RequestedID)
-	assert.NotEmpty(t, result.InstalledPage)
+	assert.Equal(t, filepath.Base(name), result.InstalledPage)
 	assert.Contains(t, result.Command, "codex resume ")
 	assert.Contains(t, result.Command, id)
 	assert.Contains(t, result.Command, " -C ")

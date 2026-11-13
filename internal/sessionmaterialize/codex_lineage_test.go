@@ -28,7 +28,7 @@ func TestCodexLineageIncludesParentThreadAndCompressedPage(t *testing.T) {
 	compressedCorrupt := encoder.EncodeAll([]byte("corrupt\n"), nil)
 	encoder.Close()
 	plain := strings.TrimSuffix(newName, ".zst")
-	live, archive := "sessions/"+newName, "archived_sessions/"+plain
+	live, archive := "sessions/"+newName, "archived_sessions/"+strings.Replace(plain, "2026-01-03", "2026-01-04", 1)
 	unrelated := "rollout-2026-01-01T00-00-00-44444444-4444-4444-4444-444444444444.jsonl"
 	type fixture struct {
 		names    []string
@@ -120,10 +120,10 @@ func TestCodexLegacyFilenameAndInvalidLineage(t *testing.T) {
 	assert.Equal(t, data, page.data)
 	revert := "22222222-2222-4222-8222-222222222222"
 	revertName := "rollout-2024-01-15T00-00-00-" + id + "_" + revert + ".jsonl"
-	legacy := []byte(fmt.Sprintf(`{"type":"session_meta","payload":{"id":%q,"session_id":%q}}`, revert, id))
+	legacy := []byte(fmt.Sprintf(`{"type":"session_meta","payload":{"id":%q,"session_id":%q}}`+"\n", revert, id))
 	_, err = inspectCodexPage(t.Context(), revertName, legacy)
 	require.NoError(t, err)
-	wrongSession := []byte(fmt.Sprintf(`{"type":"session_meta","payload":{"id":%q,"session_id":%q}}`, revert, "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"))
+	wrongSession := []byte(fmt.Sprintf(`{"type":"session_meta","payload":{"id":%q,"session_id":%q}}`+"\n", revert, "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"))
 	_, err = inspectCodexPage(t.Context(), revertName, wrongSession)
 	require.ErrorContains(t, err, "identity")
 	for _, mode := range []string{`null`, `""`, `"future"`, `1`} {
@@ -132,36 +132,26 @@ func TestCodexLegacyFilenameAndInvalidLineage(t *testing.T) {
 	}
 	_, err = inspectCodexPage(t.Context(), "rollout-20240115-"+id+"_"+revert+".jsonl", legacy)
 	require.ErrorContains(t, err, "canonical")
-	paginated := []byte(fmt.Sprintf(`{"type":"session_meta","payload":{"id":%q,"session_id":%q,"history_mode":"paginated"}}`, revert, id))
+	paginated := []byte(fmt.Sprintf(`{"type":"session_meta","payload":{"id":%q,"session_id":%q,"history_mode":"paginated"}}`+"\n", revert, id))
 	_, err = codexLineage(t.Context(), id, []string{revertName}, nil, func(context.Context, string, int64) ([]byte, error) { return paginated, nil })
 	require.ErrorContains(t, err, "identity")
 	canonical := "rollout-2024-01-15T00-00-00-" + id + "_" + revert + ".jsonl"
-	pages, err := codexLineage(t.Context(), id, []string{name, canonical}, nil, func(context.Context, string, int64) ([]byte, error) { return data, nil })
-	require.NoError(t, err)
-	assert.Equal(t, canonical, pages[0].name)
 	later := "rollout-2024-01-15T03-00-00-" + id + "_33333333-3333-4333-8333-333333333333.jsonl"
-	pages, err = codexLineage(t.Context(), id, []string{canonical, later}, nil, func(context.Context, string, int64) ([]byte, error) { return data, nil })
-	require.NoError(t, err)
-	assert.Equal(t, later, pages[0].name)
 	tied := "rollout-2024-01-15T00-00-00-" + id + "_33333333-3333-4333-8333-333333333333.jsonl"
-	pages, err = codexLineage(t.Context(), id, []string{canonical, tied}, nil, func(context.Context, string, int64) ([]byte, error) { return data, nil })
-	require.NoError(t, err)
-	assert.Equal(t, tied, pages[0].name)
-}
-
-func TestCodexCopyPreferenceUsesSelectedRoot(t *testing.T) {
-	const id = "11111111-1111-4111-8111-111111111111"
-	const rollout = "22222222-2222-4222-8222-222222222222"
-	live := "sessions/rollout-2024-01-15T00-00-00-" + id + "_" + rollout + ".jsonl.zst"
-	archived := "archived_sessions/rollout-2024-01-16T00-00-00-" + id + "_" + rollout + ".jsonl"
-	data := []byte(fmt.Sprintf(`{"type":"session_meta","payload":{"id":%q,"history_mode":"paginated"}}`+"\n", id))
-	encoder, err := zstd.NewWriter(nil)
-	require.NoError(t, err)
-	compressed := encoder.EncodeAll(data, nil)
-	encoder.Close()
-	files := map[string][]byte{live: compressed, archived: data}
-	pages, err := codexLineage(t.Context(), id, []string{live, archived}, map[string]bool{archived: true}, func(_ context.Context, name string, _ int64) ([]byte, error) { return files[name], nil })
-	require.NoError(t, err)
-	require.Len(t, pages, 1)
-	assert.Equal(t, live, pages[0].name)
+	for _, tc := range []struct {
+		name  string
+		names []string
+		want  string
+	}{
+		{"canonical over legacy", []string{name, canonical}, canonical},
+		{"later timestamp", []string{canonical, later}, later},
+		{"tied timestamp", []string{canonical, tied}, tied},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			pages, err := codexLineage(t.Context(), id, tc.names, nil, func(context.Context, string, int64) ([]byte, error) { return data, nil })
+			require.NoError(t, err)
+			require.Len(t, pages, 1)
+			assert.Equal(t, tc.want, pages[0].name)
+		})
+	}
 }

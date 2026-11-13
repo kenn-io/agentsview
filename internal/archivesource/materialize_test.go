@@ -55,7 +55,6 @@ func TestSelectedInventoryAuthorityAndScope(t *testing.T) {
 			}
 			insert("root", "project/sibling/subagents/agent.jsonl", strings.Repeat("e", 64), true)
 			insert("other", "project/id/subagents/other.json", strings.Repeat("f", 64), true)
-
 			entries, err := selectedInventory(t.Context(), conn, "root", bound, "project/id/")
 			if tc.wantError {
 				require.ErrorContains(t, err, "conflicting saved file versions")
@@ -268,7 +267,7 @@ func TestReadCodexSnapshotUsesAcceptedOriginal(t *testing.T) {
 			}
 		}
 		_, err := read(t.Context(), unsafeName, 512<<20)
-		require.Error(t, err)
+		require.ErrorContains(t, err, "entry path: invalid raw logical path")
 		return nil
 	})
 	require.NoError(t, err)

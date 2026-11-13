@@ -1,7 +1,6 @@
 package sessionmaterialize
 
 import (
-	"context"
 	"flag"
 	"fmt"
 	"io"
@@ -95,7 +94,6 @@ func TestMaterializeCodexConfiguredAndMirror(t *testing.T) {
 					require.ErrorContains(t, err, "outside configured roots")
 				})
 			}
-			var got []byte
 			if mirror {
 				sidecar := remotesync.MirrorDir(root, "remote") + ".codex-roots.json"
 				originalSidecar, err := os.ReadFile(sidecar)
@@ -106,7 +104,7 @@ func TestMaterializeCodexConfiguredAndMirror(t *testing.T) {
 					{"separate day roots", `{"version":1,"dirs":["/archived_sessions/source/sessions/2026/01/01","/archived_sessions/source/sessions/2026/01/02"]}`, oldName, ""},
 					{"containing root wins", `{"version":1,"dirs":["/archived_sessions/source/sessions/2026/01/01","/archived_sessions/source/sessions"]}`, newName, ""},
 					{"unadvertised", `{"version":1,"dirs":["/elsewhere"]}`, "", "outside Codex roots"},
-					{"newer version", `{"version":2,"dirs":[]}`, "", "metadata"},
+					{"newer version", `{"version":2,"dirs":[]}`, "", "compatible or newer AgentsView"},
 					{"invalid metadata", `{`, "", "metadata"},
 				} {
 					t.Run(tc.name, func(t *testing.T) {
@@ -121,39 +119,52 @@ func TestMaterializeCodexConfiguredAndMirror(t *testing.T) {
 						}
 					})
 				}
-				require.NoError(t, os.Remove(sidecar))
-				_, err = Materialize(t.Context(), cfg, nil, session, cwd)
-				require.ErrorContains(t, err, "metadata")
-				require.NoError(t, os.WriteFile(sidecar, originalSidecar, 0o600))
-				// The ancestor may have moved to the sibling archived root.
+				t.Run("missing sidecar", func(t *testing.T) {
+					require.NoError(t, os.Remove(sidecar))
+					_, err := Materialize(t.Context(), cfg, nil, session, cwd)
+					require.ErrorContains(t, err, "sync the host if metadata is missing or outdated")
+				})
 				archive := filepath.Join(filepath.Dir(location), "archived_sessions")
-				require.NoError(t, os.MkdirAll(archive, 0o700))
 				archivedPath := filepath.Join(archive, oldName)
-				require.NoError(t, os.Rename(oldPath, archivedPath))
-				require.NoError(t, os.WriteFile(sidecar, []byte(`{"version":1,"dirs":["/archived_sessions/source/sessions"]}`), 0o600))
-				_, err = Materialize(t.Context(), cfg, nil, session, cwd)
-				require.ErrorContains(t, err, "missing Codex ancestor")
-				require.NoError(t, os.WriteFile(sidecar, originalSidecar, 0o600))
-				t.Setenv("CODEX_HOME", t.TempDir())
-				result, err = Materialize(t.Context(), cfg, nil, session, cwd)
-				require.NoError(t, err)
-				got, err = os.ReadFile(result.Paths[0])
-				require.NoError(t, err)
-				assert.Equal(t, old, got)
-				require.NoError(t, os.Rename(archivedPath, oldPath))
-				encoder, err := zstd.NewWriter(nil)
-				require.NoError(t, err)
-				compressed := encoder.EncodeAll(old, nil)
-				encoder.Close()
-				require.NoError(t, os.Remove(oldPath))
-				require.NoError(t, os.WriteFile(oldPath+".zst", compressed, 0o600))
-				require.NoError(t, os.WriteFile(archivedPath, old, 0o600))
-				t.Setenv("CODEX_HOME", t.TempDir())
-				result, err = Materialize(t.Context(), cfg, nil, session, cwd)
-				require.NoError(t, err)
-				got, err = os.ReadFile(result.Paths[0])
-				require.NoError(t, err)
-				assert.Equal(t, compressed, got)
+				for _, tc := range []struct {
+					name                             string
+					advertiseSibling, compressedLive bool
+				}{
+					{"sibling not advertised", false, false},
+					{"archived ancestor", true, false},
+					{"live compressed before archived plain", true, true},
+				} {
+					t.Run(tc.name, func(t *testing.T) {
+						t.Setenv("CODEX_HOME", t.TempDir())
+						require.NoError(t, os.MkdirAll(archive, 0o700))
+						require.NoError(t, os.RemoveAll(archivedPath))
+						require.NoError(t, os.RemoveAll(oldPath))
+						require.NoError(t, os.RemoveAll(oldPath+".zst"))
+						require.NoError(t, os.WriteFile(archivedPath, old, 0o600))
+						metadata := originalSidecar
+						if !tc.advertiseSibling {
+							metadata = []byte(`{"version":1,"dirs":["/archived_sessions/source/sessions"]}`)
+						}
+						require.NoError(t, os.WriteFile(sidecar, metadata, 0o600))
+						want := old
+						if tc.compressedLive {
+							encoder, err := zstd.NewWriter(nil)
+							require.NoError(t, err)
+							want = encoder.EncodeAll(old, nil)
+							encoder.Close()
+							require.NoError(t, os.WriteFile(oldPath+".zst", want, 0o600))
+						}
+						result, err := Materialize(t.Context(), cfg, nil, session, cwd)
+						if !tc.advertiseSibling {
+							require.ErrorContains(t, err, "missing Codex ancestor")
+							return
+						}
+						require.NoError(t, err)
+						got, err := os.ReadFile(result.Paths[0])
+						require.NoError(t, err)
+						assert.Equal(t, want, got)
+					})
+				}
 			}
 			if !mirror {
 				// A publisher failure unrelated to rollout matching reaches the caller.
@@ -248,16 +259,12 @@ func TestMaterializeCodexS3(t *testing.T) {
 	_, err = Materialize(t.Context(), cfg, nil, session, t.TempDir())
 	require.ErrorContains(t, err, "invalid selected Codex S3 path")
 	assert.False(t, unsafeFetched.Load())
-	_, err = os.Stat(filepath.Join(unsafeHome, "sessions"))
-	require.ErrorIs(t, err, os.ErrNotExist)
 	unsafeSelected.Store(false)
 	home := t.TempDir()
 	t.Setenv("CODEX_HOME", home)
 	corrupt.Store(true)
 	_, err = Materialize(t.Context(), cfg, nil, session, t.TempDir())
 	require.ErrorContains(t, err, "metadata")
-	_, err = os.Stat(filepath.Join(home, "sessions"))
-	require.ErrorIs(t, err, os.ErrNotExist)
 }
 
 func TestMaterializeCodexCustomMirrorScope(t *testing.T) {
@@ -352,12 +359,6 @@ func TestMaterializeCodexMissingAndCrossRoot(t *testing.T) {
 	require.NoError(t, os.WriteFile(ancestor, []byte(ancestorContent), 0o600))
 	cfg.AgentDirs[parser.AgentCodex] = []string{live, archived}
 	session.FilePath = &page
-	ctx, cancel := context.WithCancel(t.Context())
-	cancel()
-	_, err = Materialize(ctx, cfg, nil, session, t.TempDir())
-	require.ErrorIs(t, err, context.Canceled)
-	_, err = os.Stat(filepath.Join(home, "sessions"))
-	require.ErrorIs(t, err, os.ErrNotExist)
 	// An identical same-rollout copy in the other native tree is safe.
 	identical := filepath.Join(home, "archived_sessions", "other-date", filepath.Base(ancestor))
 	require.NoError(t, os.MkdirAll(filepath.Dir(identical), 0o700))

@@ -160,7 +160,7 @@ func materializeCodex(ctx context.Context, cfg config.Config, database *db.DB, s
 			}()
 			advertised, err := remotesync.LoadMirrorCodexRoots(ctx, mirror)
 			if err != nil {
-				return Result{}, fmt.Errorf("Codex root metadata for host %s unavailable; sync the host and retry: %w", host, err)
+				return Result{}, fmt.Errorf("Codex root metadata for host %s unavailable; use a compatible or newer AgentsView for newer metadata, then sync the host if metadata is missing or outdated: %w", host, err)
 			}
 			var mapped []string
 			for _, remoteRoot := range advertised {
@@ -170,10 +170,11 @@ func materializeCodex(ctx context.Context, cfg config.Config, database *db.DB, s
 				}
 				if _, err := os.Lstat(candidate); err == nil && !within(mirror, candidate) {
 					return Result{}, errors.New("advertised Codex root is outside the mirror")
-				} else if err != nil && !errors.Is(err, os.ErrNotExist) {
+				} else if err == nil {
+					mapped = append(mapped, candidate)
+				} else if !errors.Is(err, os.ErrNotExist) {
 					return Result{}, err
 				}
-				mapped = append(mapped, candidate)
 				rel, err := filepath.Rel(candidate, anchor)
 				if err == nil && filepath.IsLocal(rel) && (root == "" || len(candidate) < len(root)) {
 					root = candidate
@@ -188,16 +189,8 @@ func materializeCodex(ctx context.Context, cfg config.Config, database *db.DB, s
 			roots = []string{root}
 			if base := filepath.Base(root); base == "sessions" || base == "archived_sessions" {
 				other := map[string]string{"sessions": "archived_sessions", "archived_sessions": "sessions"}[base]
-				sibling := filepath.Join(filepath.Dir(root), other)
-				if slices.Contains(mapped, sibling) {
-					if _, err := os.Lstat(sibling); err == nil {
-						if !within(mirror, sibling) {
-							return Result{}, errors.New("native Codex mirror source is unavailable")
-						}
-						roots = append(roots, sibling)
-					} else if !errors.Is(err, os.ErrNotExist) {
-						return Result{}, err
-					}
+				if sibling := filepath.Join(filepath.Dir(root), other); slices.Contains(mapped, sibling) {
+					roots = append(roots, sibling)
 				}
 			}
 		} else {
@@ -343,17 +336,11 @@ func installCodex(ctx context.Context, cwd, source, requestedID string, pages []
 			return Result{}, err
 		}
 		base := path.Base(page.name)
-		if err := rawpath.Validate(base, rawpath.DefaultMaxBytes); err != nil {
-			return Result{}, fmt.Errorf("invalid native Codex destination: %w", err)
-		}
 		rel := path.Join(date, base)
 		if err := rawpath.Validate(rel, rawpath.DefaultMaxBytes); err != nil {
 			return Result{}, fmt.Errorf("invalid native Codex destination: %w", err)
 		}
 		dest := filepath.Join(root, filepath.FromSlash(rel))
-		if check, err := filepath.Rel(root, dest); err != nil || !filepath.IsLocal(check) {
-			return Result{}, errors.New("native Codex destination outside root")
-		}
 		files = append(files, installFile{dest, page.data})
 		paths = append(paths, dest)
 	}
