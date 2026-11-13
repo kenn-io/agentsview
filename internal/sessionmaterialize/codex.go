@@ -133,7 +133,7 @@ func materializeCodex(ctx context.Context, cfg config.Config, database *db.DB, s
 		var root string
 		var roots []string
 		archiveRoots := make(map[string]bool)
-		anchor := source
+		var anchor string
 		if host != "" {
 			if !slices.ContainsFunc(cfg.RemoteHosts, func(remote config.RemoteHost) bool { return remote.Host == host }) {
 				return Result{}, errors.New("session host is not configured")
@@ -160,7 +160,7 @@ func materializeCodex(ctx context.Context, cfg config.Config, database *db.DB, s
 			}()
 			advertised, err := remotesync.LoadMirrorCodexRoots(ctx, mirror)
 			if err != nil {
-				return Result{}, fmt.Errorf("Codex root metadata for host %s unavailable; use a compatible or newer AgentsView for newer metadata, then sync the host if metadata is missing or outdated: %w", host, err)
+				return Result{}, fmt.Errorf("native Codex root metadata for host %s unavailable; use a compatible or newer AgentsView for newer metadata, then sync the host if metadata is missing or outdated: %w", host, err)
 			}
 			var mapped []string
 			for _, remoteRoot := range advertised {

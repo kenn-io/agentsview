@@ -587,6 +587,9 @@ func (p *PreparedRemote) ImportActive(ctx context.Context) (SyncStats, error) {
 		if p.legacy {
 			return p.sync.importRoot(ctx, p.targets, p.root)
 		}
+		if err := p.persistCodexRoots(ctx); err != nil {
+			return SyncStats{}, fmt.Errorf("persist Codex mirror roots: %w", err)
+		}
 		return SyncStats{}, nil
 	}
 	stats, err := p.mirrorImport.pending.Execute(ctx)
@@ -771,7 +774,7 @@ func (p *PreparedRemote) RebuildContributor(
 
 // Commit retires a processed persistent journal after an atomic rebuild swap.
 func (p *PreparedRemote) Commit(ctx context.Context) error {
-	if p == nil || p.mirrorImport == nil || p.committed {
+	if p == nil || p.legacy || p.committed {
 		return nil
 	}
 	if !p.commitReady {
@@ -780,6 +783,10 @@ func (p *PreparedRemote) Commit(ctx context.Context) error {
 	start := time.Now()
 	if err := p.persistCodexRoots(ctx); err != nil {
 		return fmt.Errorf("persist Codex mirror roots after rebuild: %w", err)
+	}
+	if p.mirrorImport == nil {
+		p.committed = true
+		return nil
 	}
 	if err := p.persistAntigravityTitleStates(); err != nil {
 		log.Printf("Antigravity title verification: %v", err)

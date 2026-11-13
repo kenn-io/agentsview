@@ -133,8 +133,8 @@ func materializeSnapshot(ctx context.Context, sources []config.ArchiveSource, ow
 		return nil, "", "", errors.New("snapshot archive identity differs")
 	}
 	var canonical []byte
-	var configuredRoot, originalRoot string
-	err = conn.QueryRowContext(ctx, `SELECT r.configured_root_id,r.original_path,s.canonical_json FROM raw_archive_sources s JOIN raw_archive_roots r ON r.id=s.root_id WHERE s.manifest_id=? AND s.root_id=? AND s.source_key=? AND r.device_id=? AND r.provider=?`, owner.ManifestID, s.RootID, s.SourceKey, s.DeviceID, provider).Scan(&configuredRoot, &originalRoot, &canonical)
+	var configuredRoot, originalRoot, originalPath string
+	err = conn.QueryRowContext(ctx, `SELECT r.configured_root_id,r.original_path,s.original_path,s.canonical_json FROM raw_archive_sources s JOIN raw_archive_roots r ON r.id=s.root_id WHERE s.manifest_id=? AND s.root_id=? AND s.source_key=? AND r.device_id=? AND r.provider=?`, owner.ManifestID, s.RootID, s.SourceKey, s.DeviceID, provider).Scan(&configuredRoot, &originalRoot, &originalPath, &canonical)
 	if err != nil {
 		return nil, "", "", fmt.Errorf("snapshot source ownership: %w", err)
 	}
@@ -157,7 +157,7 @@ func materializeSnapshot(ctx context.Context, sources []config.ArchiveSource, ow
 	if manifest.Manifest.ConfiguredRootID != configuredRoot || manifest.Manifest.SourceKey != s.SourceKey || string(manifest.Manifest.Provider) != provider {
 		return nil, "", "", errors.New("snapshot source mismatch")
 	}
-	bound, primary, err := snapshotPrimaryPath(s.SourceKey, originalRoot, owner.NativeSessionID, manifest.Manifest.Entries)
+	bound, primary, err := snapshotPrimaryPath(s.SourceKey, originalPath, originalRoot, owner.NativeSessionID, manifest.Manifest.Entries)
 	if err != nil {
 		return nil, "", "", err
 	}
@@ -224,16 +224,20 @@ func materializeSnapshot(ctx context.Context, sources []config.ArchiveSource, ow
 }
 
 // snapshotPrimaryPath binds a canonical entry to its capture-root coordinate.
-func snapshotPrimaryPath(sourceKey, originalRoot, nativeID string, entries []rawsync.Entry) (rawsync.Entry, string, error) {
+func snapshotPrimaryPath(sourceKey, originalPath, originalRoot, nativeID string, entries []rawsync.Entry) (rawsync.Entry, string, error) {
 	portable := func(name string) string { return path.Clean(strings.ReplaceAll(name, `\`, "/")) }
-	key, root := portable(sourceKey), strings.TrimSuffix(portable(originalRoot), "/")
+	key, source, root := portable(sourceKey), portable(originalPath), strings.TrimSuffix(portable(originalRoot), "/")
 	var bound rawsync.Entry
 	for _, entry := range entries {
 		matches := path.Base(entry.Path) == nativeID+".jsonl"
 		if native, ok := strings.CutPrefix(nativeID, "codex:"); ok {
 			matches = parser.CodexSessionUUIDFromFilename(path.Base(entry.Path)) == native
 		}
-		if matches && rawderive.SourceKeyEndsWithEntry(key, entry.Path) {
+		keyMatches := rawderive.SourceKeyEndsWithEntry(key, entry.Path)
+		if strings.HasPrefix(key, "codex:") {
+			keyMatches = key == parser.CodexSourceKey(parser.AgentCodex, parser.CodexSessionUUIDFromFilename(path.Base(entry.Path)))
+		}
+		if matches && keyMatches && rawderive.SourceKeyEndsWithEntry(source, entry.Path) {
 			if bound.Path != "" {
 				return rawsync.Entry{}, "", errors.New("ambiguous snapshot transcript source")
 			}
@@ -243,7 +247,7 @@ func snapshotPrimaryPath(sourceKey, originalRoot, nativeID string, entries []raw
 	if bound.Path == "" {
 		return rawsync.Entry{}, "", errors.New("snapshot transcript source differs")
 	}
-	providerRoot := strings.TrimSuffix(strings.TrimSuffix(key, bound.Path), "/")
+	providerRoot := strings.TrimSuffix(strings.TrimSuffix(source, bound.Path), "/")
 	var relativeRoot string
 	if providerRoot != root {
 		var ok bool

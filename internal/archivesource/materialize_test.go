@@ -189,14 +189,33 @@ func TestReadCodexSnapshotUsesAcceptedOriginal(t *testing.T) {
 	require.NoError(t, err)
 	database, err := db.OpenIsolatedContext(ctx, filepath.Join(inputs, "seed", "sessions.db"))
 	require.NoError(t, err)
+	databaseOpen := true
+	t.Cleanup(func() {
+		if databaseOpen {
+			assert.NoError(t, database.Close())
+		}
+	})
 	archive, err := rawarchive.Open(ctx, database, filepath.Join(inputs, "seed"), nil)
 	require.NoError(t, err)
+	archiveOpen := true
+	t.Cleanup(func() {
+		if archiveOpen {
+			assert.NoError(t, archive.Close())
+		}
+	})
 	_, err = archive.Import(ctx, spec)
 	require.NoError(t, err)
+	selectedRoot := ""
 	// Model two accepted manifests retaining different versions of this page.
 	require.NoError(t, database.Update(ctx, func(tx *sql.Tx) error {
-		var selectedRoot, originalHome string
-		err := tx.QueryRowContext(ctx, `SELECT s.root_id,r.original_path FROM raw_archive_sources s JOIN raw_archive_roots r ON r.id=s.root_id WHERE s.source_key LIKE ?`, "%"+name).Scan(&selectedRoot, &originalHome)
+		var originalHome string
+		var countSources int
+		err := tx.QueryRowContext(ctx, `SELECT count(*) FROM raw_archive_sources s JOIN raw_archive_roots r ON r.id=s.root_id WHERE s.source_key=? AND s.original_path=? AND r.provider=?`, "codex:"+id, filepath.Join(root, name), "codex").Scan(&countSources)
+		if err != nil {
+			return err
+		}
+		require.Equal(t, 1, countSources)
+		err = tx.QueryRowContext(ctx, `SELECT s.root_id,r.original_path FROM raw_archive_sources s JOIN raw_archive_roots r ON r.id=s.root_id WHERE s.source_key=? AND s.original_path=? AND r.provider=?`, "codex:"+id, filepath.Join(root, name), "codex").Scan(&selectedRoot, &originalHome)
 		if err != nil {
 			return err
 		}
@@ -228,7 +247,9 @@ func TestReadCodexSnapshotUsesAcceptedOriginal(t *testing.T) {
 	require.NoError(t, err)
 	source.Snapshot = report.SnapshotID
 	require.NoError(t, archive.Close())
+	archiveOpen = false
 	require.NoError(t, database.Close())
+	databaseOpen = false
 	require.NoError(t, os.RemoveAll(inputs))
 	index, err := OpenIndex(t.Context(), source, t.TempDir(), nil)
 	require.NoError(t, err)
@@ -236,11 +257,14 @@ func TestReadCodexSnapshotUsesAcceptedOriginal(t *testing.T) {
 	sources, err := index.Sources(t.Context(), "", 10)
 	require.NoError(t, err)
 	var owner db.ArchiveSessionProvenance
+	matches := 0
 	for _, item := range sources {
-		if item.Root.Provider == "codex" && strings.HasSuffix(item.SourceKey, name) {
+		if item.Root.Provider == "codex" && item.RootID == selectedRoot && item.SourceKey == "codex:"+id && item.OriginalPath == filepath.Join(root, name) {
+			matches++
 			owner = db.ArchiveSessionProvenance{ArchiveSourceProvenance: index.provenance(item), NativeSessionID: "codex:" + id}
 		}
 	}
+	require.Equal(t, 1, matches)
 	require.NotEmpty(t, owner.ManifestID)
 	selected, err := ReadCodexSnapshot(t.Context(), []config.ArchiveSource{source}, []db.ArchiveSessionProvenance{owner}, 512<<20, func(_ string, names []string, read func(context.Context, string, int64) ([]byte, error)) error {
 		require.Len(t, names, 4)
@@ -428,11 +452,22 @@ func TestMaterializeSnapshotEquivalentCandidates(t *testing.T) {
 
 func TestSnapshotPrimaryWindowsCoordinates(t *testing.T) {
 	entry := rawsync.Entry{Path: "project/id.jsonl", Type: "file"}
-	bound, primary, err := snapshotPrimaryPath(`C:\agent\projects\project\id.jsonl`, `C:\agent`, "id", []rawsync.Entry{entry})
+	bound, primary, err := snapshotPrimaryPath(`C:\agent\projects\project\id.jsonl`, `C:\agent\projects\project\id.jsonl`, `C:\agent`, "id", []rawsync.Entry{entry})
 	require.NoError(t, err)
 	assert.Equal(t, entry, bound)
 	assert.Equal(t, "projects/project/id.jsonl", primary)
-	_, _, err = snapshotPrimaryPath(`D:\elsewhere\project\id.jsonl`, `C:\agent`, "id", []rawsync.Entry{entry})
+	_, _, err = snapshotPrimaryPath(`D:\elsewhere\project\id.jsonl`, `D:\elsewhere\project\id.jsonl`, `C:\agent`, "id", []rawsync.Entry{entry})
+	require.ErrorContains(t, err, "outside capture root")
+
+	const id = "019eb791-cf7d-75c1-8439-9ed74c122e02"
+	codexEntry := rawsync.Entry{Path: "sessions/rollout-20260101-" + id + ".jsonl", Type: "file"}
+	original := `C:\agent\sessions\rollout-20260101-` + id + `.jsonl`
+	_, primary, err = snapshotPrimaryPath("codex:"+id, original, `C:\agent`, "codex:"+id, []rawsync.Entry{codexEntry})
+	require.NoError(t, err)
+	assert.Equal(t, codexEntry.Path, primary)
+	_, _, err = snapshotPrimaryPath("codex:11111111-1111-4111-8111-111111111111", original, `C:\agent`, "codex:"+id, []rawsync.Entry{codexEntry})
+	require.ErrorContains(t, err, "source differs")
+	_, _, err = snapshotPrimaryPath("codex:"+id, `D:\outside\`+codexEntry.Path, `C:\agent`, "codex:"+id, []rawsync.Entry{codexEntry})
 	require.ErrorContains(t, err, "outside capture root")
 }
 
