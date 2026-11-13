@@ -395,6 +395,20 @@ func TestMaterializeCodexCustomMirrorScope(t *testing.T) {
 	got, err := os.ReadFile(result.Paths[1])
 	require.NoError(t, err)
 	assert.Equal(t, newPage, got)
+	t.Run("missing root beneath escaping symlink", func(t *testing.T) {
+		escape := filepath.Join(mirror, "x", "escape")
+		if err := os.Symlink(t.TempDir(), escape); err != nil {
+			t.Skipf("directory symlinks unavailable: %v", err)
+		}
+		require.NoError(t, os.WriteFile(mirror+".codex-roots.json", []byte(`{"version":1,"dirs":["/x/custom","/x/escape/missing"]}`), 0o600))
+		home := t.TempDir()
+		t.Setenv("CODEX_HOME", home)
+		_, err := Materialize(t.Context(), cfg, nil, session, t.TempDir())
+		require.ErrorContains(t, err, "outside the mirror")
+		entries, err := os.ReadDir(home)
+		require.NoError(t, err)
+		assert.Empty(t, entries)
+	})
 }
 
 func TestMaterializeCodexLoadedLinkedHome(t *testing.T) {

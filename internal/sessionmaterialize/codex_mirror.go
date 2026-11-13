@@ -16,7 +16,7 @@ func codexMirrorGroup(ctx context.Context, mirror, anchor, host string) (string,
 	if err != nil {
 		return "", nil, nil, fmt.Errorf("cannot read Codex source locations for host %s; use a compatible or newer AgentsView and sync the host if locations are missing or outdated: %w", host, err)
 	}
-	mapped, err := mapCodexMirrorRoots(mirror, saved.Dirs)
+	mapped, err := mapCodexMirrorRoots(ctx, mirror, saved.Dirs)
 	if err != nil {
 		return "", nil, nil, err
 	}
@@ -29,9 +29,6 @@ func codexMirrorGroup(ctx context.Context, mirror, anchor, host string) (string,
 	}
 	if root == "" {
 		return "", nil, nil, fmt.Errorf("recorded source is outside Codex roots advertised at the last sync; sync host %s again", host)
-	}
-	if !within(mirror, root) {
-		return "", nil, nil, errors.New("native Codex mirror root is unavailable or outside the mirror")
 	}
 	roots, roles, err := codexMirrorHomeGroup(root, saved, mapped)
 	if err != nil {
@@ -75,20 +72,41 @@ func codexMirrorHomeGroup(root string, saved remotesync.MirrorCodexMetadata, map
 	return roots, roles, nil
 }
 
-func mapCodexMirrorRoots(mirror string, advertised []string) (map[string]string, error) {
+func mapCodexMirrorRoots(ctx context.Context, mirror string, advertised []string) (map[string]string, error) {
 	mapped := make(map[string]string, len(advertised))
 	for _, remoteRoot := range advertised {
 		candidate, err := remotesync.SafeRemappedRemotePath(mirror, remoteRoot)
 		if err != nil {
 			return nil, fmt.Errorf("invalid advertised Codex root: %w", err)
 		}
-		if _, err := os.Lstat(candidate); err == nil && !within(mirror, candidate) {
-			return nil, errors.New("advertised Codex root is outside the mirror")
-		} else if err == nil {
-			mapped[remoteRoot] = candidate
-		} else if !errors.Is(err, os.ErrNotExist) {
+		if err := validateCodexMirrorRoot(ctx, mirror, candidate); err != nil {
 			return nil, err
 		}
+		mapped[remoteRoot] = candidate
 	}
 	return mapped, nil
+}
+
+// validateCodexMirrorRoot permits absent advertised roots only inside the mirror.
+func validateCodexMirrorRoot(ctx context.Context, mirror, candidate string) error {
+	for current := candidate; ; current = filepath.Dir(current) {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		rel, err := filepath.Rel(mirror, current)
+		if err != nil || (rel != "." && !filepath.IsLocal(rel)) {
+			return errors.New("advertised Codex root is outside the mirror")
+		}
+		if _, err := os.Lstat(current); err == nil {
+			if !within(mirror, current) {
+				return errors.New("advertised Codex root is outside the mirror")
+			}
+			return nil
+		} else if !errors.Is(err, os.ErrNotExist) {
+			return err
+		}
+		if rel == "." {
+			return errors.New("native Codex mirror root is unavailable or outside the mirror")
+		}
+	}
 }
