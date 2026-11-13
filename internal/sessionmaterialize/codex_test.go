@@ -175,7 +175,7 @@ func TestMaterializeCodexMirror(t *testing.T) {
 		{"containing root wins", `{"version":1,"dirs":["/archived_sessions/source/sessions/2026/01/01","/archived_sessions/source/sessions"]}`, newName, ""},
 		{"unadvertised", `{"version":1,"dirs":["/elsewhere"]}`, "", "outside Codex roots"},
 		{"newer version", `{"version":2,"dirs":[]}`, "", "compatible or newer AgentsView"},
-		{"invalid metadata", `{`, "", "metadata"},
+		{"invalid metadata", `{`, "", "source locations"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Setenv("CODEX_HOME", t.TempDir())
@@ -192,7 +192,7 @@ func TestMaterializeCodexMirror(t *testing.T) {
 	t.Run("missing sidecar", func(t *testing.T) {
 		require.NoError(t, os.Remove(sidecar))
 		_, err := Materialize(t.Context(), cfg, nil, session, cwd)
-		require.ErrorContains(t, err, "sync the host if metadata is missing or outdated")
+		require.ErrorContains(t, err, "sync the host if locations are missing or outdated")
 	})
 	archive := filepath.Join(filepath.Dir(location), "archived_sessions")
 	archivedPath := filepath.Join(archive, oldName)

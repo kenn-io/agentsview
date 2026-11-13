@@ -2,13 +2,16 @@ package archivesource
 
 import (
 	"context"
+	"crypto/sha256"
 	"database/sql"
 	"fmt"
+	"io"
 	"os"
 	"path"
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/klauspost/compress/zstd"
 	"github.com/stretchr/testify/assert"
@@ -266,7 +269,7 @@ func TestReadCodexSnapshotUsesAcceptedOriginal(t *testing.T) {
 	}
 	require.Equal(t, 1, matches)
 	require.NotEmpty(t, owner.ManifestID)
-	selected, err := ReadCodexSnapshot(t.Context(), []config.ArchiveSource{source}, []db.ArchiveSessionProvenance{owner}, 512<<20, func(_ string, names []string, read func(context.Context, string, int64) ([]byte, error)) error {
+	selected, err := ReadCodexSnapshot(t.Context(), []config.ArchiveSource{source}, []db.ArchiveSessionProvenance{owner}, 512<<20, func(_ string, names, _ []string, read func(context.Context, string, int64) ([]byte, error)) error {
 		require.Len(t, names, 4)
 		for _, candidate := range names {
 			if path.Base(candidate) == conflicted || candidate == unsafeName {
@@ -317,7 +320,7 @@ func TestReadCodexSnapshotPreservesCompressedLegacyBytes(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, sources, 1)
 	owner := db.ArchiveSessionProvenance{ArchiveSourceProvenance: index.provenance(sources[0]), NativeSessionID: "codex:" + id}
-	_, err = ReadCodexSnapshot(t.Context(), []config.ArchiveSource{source}, []db.ArchiveSessionProvenance{owner}, 512<<20, func(_ string, names []string, read func(context.Context, string, int64) ([]byte, error)) error {
+	_, err = ReadCodexSnapshot(t.Context(), []config.ArchiveSource{source}, []db.ArchiveSessionProvenance{owner}, 512<<20, func(_ string, names, _ []string, read func(context.Context, string, int64) ([]byte, error)) error {
 		require.Len(t, names, 1)
 		assert.Equal(t, name, filepath.Base(names[0]))
 		got, err := read(t.Context(), names[0], 512<<20)
@@ -639,4 +642,71 @@ func TestMaterializeSnapshotSavedSessionBinding(t *testing.T) {
 			assert.Empty(t, remaining)
 		})
 	}
+}
+
+func TestCodexCompanionsRespectRootAndExactAliases(t *testing.T) {
+	const rootID = "11111111-1111-4111-8111-111111111111"
+	const parentID = "22222222-2222-4222-8222-222222222222"
+	rootName := "rollout-2026-01-01T00-00-00-" + rootID + ".jsonl"
+	parentName := "rollout-2024-01-01T00-00-00-" + parentID + ".jsonl"
+	ref := rawsync.ObjectRef{SHA256: strings.Repeat("a", 64), Length: 4}
+	other := rawsync.ObjectRef{SHA256: strings.Repeat("b", 64), Length: 4}
+	entries := []rawsync.Entry{
+		{Path: "root/" + rootName, Length: 4, Objects: []rawsync.ObjectRef{ref}},
+		{Path: "first/" + parentName, Length: 4, Objects: []rawsync.ObjectRef{ref}},
+		{Path: "alias/" + parentName, Length: 4, Objects: []rawsync.ObjectRef{ref}},
+		{Path: "different/" + parentName, Length: 4, Objects: []rawsync.ObjectRef{other}},
+	}
+	byPath := map[string]rawsync.Entry{rootName: entries[0]}
+	ancestors := codexCompanions(entries, []string{rootName}, byPath)
+	require.Equal(t, []string{"first/" + parentName, "different/" + parentName}, ancestors)
+	assert.Equal(t, entries[1], byPath[ancestors[0]])
+	assert.Equal(t, entries[3], byPath[ancestors[1]])
+	assert.Equal(t, entries[0], byPath[rootName])
+}
+
+type codexCatalogStore struct {
+	ref  rawsync.ObjectRef
+	data []byte
+}
+
+func (s codexCatalogStore) CopyObject(_ context.Context, tenant string, ref rawsync.ObjectRef, dst io.Writer) (rawsync.ObjectInfo, error) {
+	if tenant != "archive" || ref != s.ref {
+		return rawsync.ObjectInfo{}, rawsync.ErrNotFound
+	}
+	_, err := dst.Write(s.data)
+	return rawsync.ObjectInfo{Ref: ref}, err
+}
+
+func TestReadCodexCatalogExposesManifestCompanion(t *testing.T) {
+	ctx := t.Context()
+	conn, err := sql.Open("sqlite3", ":memory:")
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = conn.Close() })
+	_, err = conn.ExecContext(ctx, `CREATE TABLE raw_archive_files(root_id TEXT,path TEXT,sha256 TEXT,size INTEGER,mod_time_ns INTEGER,covered INTEGER)`)
+	require.NoError(t, err)
+	root := "rollout-2026-01-01T00-00-00-11111111-1111-4111-8111-111111111111.jsonl"
+	parent := "replay-parent-0/rollout-2024-01-01T00-00-00-22222222-2222-4222-8222-222222222222.jsonl"
+	data := []byte("authenticated parent")
+	ref := rawsync.ObjectRef{SHA256: fmt.Sprintf("%x", sha256.Sum256(data)), Length: int64(len(data))}
+	bound := rawsync.Entry{Path: root, Type: "file", Length: ref.Length, Objects: []rawsync.ObjectRef{ref}}
+	_, err = conn.ExecContext(ctx, `INSERT INTO raw_archive_files VALUES(?,?,?,?,?,?)`, "root", root, ref.SHA256, ref.Length, 0, true)
+	require.NoError(t, err)
+	companion := rawsync.Entry{Path: parent, Type: "file", Length: ref.Length, Objects: []rawsync.ObjectRef{ref}}
+	manifest := rawsync.CanonicalManifest{Manifest: rawsync.Manifest{CapturedAt: time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC), Entries: []rawsync.Entry{bound, companion}}}
+	identity, err := rawsync.NewAuthIdentity("archive", "device")
+	require.NoError(t, err)
+	called := false
+	err = readCodexCatalog(ctx, conn, "root", "/native", bound, identity, manifest, codexCatalogStore{ref, data}, 1024, func(root string, names, ancestors []string, read func(context.Context, string, int64) ([]byte, error)) error {
+		called = true
+		assert.Equal(t, "/native", root)
+		assert.Equal(t, []string{bound.Path}, names)
+		require.Equal(t, []string{parent}, ancestors)
+		got, err := read(ctx, ancestors[0], 1024)
+		require.NoError(t, err)
+		assert.Equal(t, data, got)
+		return nil
+	})
+	require.NoError(t, err)
+	assert.True(t, called)
 }
