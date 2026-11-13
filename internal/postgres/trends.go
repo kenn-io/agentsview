@@ -15,20 +15,15 @@ func (s *Store) GetTrendsTerms(
 	terms []db.TrendTermInput,
 	granularity string,
 ) (db.TrendsTermsResponse, error) {
-	return keptAnalytics(ctx, s, "trends|"+db.TrendsKeptVariant(terms, trendsGranularity(granularity)), f, func(ctx context.Context, f db.AnalyticsFilter) (db.TrendsTermsResponse, error) {
+	return keptAnalytics(ctx, s, "trends|"+db.TrendsKeptVariant(terms, granularity), f, func(ctx context.Context, f db.AnalyticsFilter) (db.TrendsTermsResponse, error) {
 		return s.loadTrendsTerms(ctx, f, terms, granularity)
 	})
 }
 
-func trendsGranularity(granularity string) string {
-	if granularity == "" {
-		return "week"
-	}
-	return granularity
-}
-
 func (s *Store) loadTrendsTerms(ctx context.Context, f db.AnalyticsFilter, terms []db.TrendTermInput, granularity string) (db.TrendsTermsResponse, error) {
-	granularity = trendsGranularity(granularity)
+	if granularity == "" {
+		granularity = "week"
+	}
 	acc := db.NewTrendWorkers(ctx, f.From, f.To, granularity, terms)
 	defer func() {
 		if acc != nil {

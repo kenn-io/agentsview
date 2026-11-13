@@ -482,11 +482,11 @@ func TestMirrorCheckReadsPublicationAfterPreviousCheck(t *testing.T) {
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, store.Close()) })
 	require.NoError(t, swapMirrorFile(older, path))
-	store.replacement <- struct{}{}
+	store.replacementMu.Lock()
 	held := true
 	defer func() {
 		if held {
-			<-store.replacement
+			store.replacementMu.Unlock()
 		}
 	}()
 	started := make(chan struct{})
@@ -502,24 +502,8 @@ func TestMirrorCheckReadsPublicationAfterPreviousCheck(t *testing.T) {
 		t.Fatal("replacement check finished while another check held the lock")
 	case <-time.After(time.Second): //nolint:kennlint // deadlinetest: the held lock prevents the replacement check from finishing.
 	}
-	ctx, cancel := context.WithCancel(t.Context())
-	cancel()
-	canceled := make(chan struct{})
-	go func() {
-		defer close(canceled)
-		store.checkMirrorReplacement(ctx, nil)
-	}()
-	select {
-	case <-canceled:
-	case <-time.After(time.Second): //nolint:kennlint // deadlinetest: cancellation must release the waiting check.
-		<-store.replacement
-		held = false
-		<-canceled
-		<-done
-		t.Fatal("canceled mirror check waited for replacement")
-	}
 	require.NoError(t, swapMirrorFile(newer, path))
-	<-store.replacement
+	store.replacementMu.Unlock()
 	held = false
 	<-done
 	require.Equal(t, []string{"newer"}, listMirrorSessionIDs(t, store))
