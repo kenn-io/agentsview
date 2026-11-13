@@ -168,9 +168,11 @@ func TestUsageRollupSkippedForCustomRates(t *testing.T) {
 
 // A summed bucket that a zone's offset splits across two local dates sends
 // that zone's reads back to the prepared rows. Archived timestamps start in
-// 2000, when every zone's offset was a multiple of 15 minutes, so the test
-// copies a summed row into 1971, when Monrovia was 44 minutes 30 seconds
-// behind UTC.
+// 2000, when every zone's offset was a multiple of 15 minutes, and ClickHouse
+// moves each clock change to a 15-minute step: it dates St. John's change at
+// 02:31 UTC on 2010-11-07 from 02:30. No archived row can split a bucket, so
+// the test copies a summed row into 1971, when Monrovia was 44 minutes 30
+// seconds behind UTC.
 func TestUsageRollupSkippedForMisalignedZone(t *testing.T) {
 	t.Parallel()
 	_, syncer := newUsageRollupSync(t)
