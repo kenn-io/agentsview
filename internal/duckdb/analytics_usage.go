@@ -1579,12 +1579,19 @@ func (s *Store) readDailyUsage(
 		// A full read can use the rollup; a refresh of a few sessions reads
 		// their rows directly.
 		if ids == nil {
+			// The rollup read runs several queries. A mirror replacement
+			// between them could mix two mirrors' rows, so a read that saw
+			// one reads again without the rollup.
+			handle := s.DB()
 			plan, err := s.usageRollupPlan(ctx, f, block.Digest, true)
 			if err != nil {
 				return nil, err
 			}
 			if plan != nil {
-				return s.dailyPartsFromRollup(ctx, f, plan, rateResolver)
+				parts, err := s.dailyPartsFromRollup(ctx, f, plan, rateResolver)
+				if err != nil || s.DB() == handle {
+					return parts, err
+				}
 			}
 		}
 		return dailyPartsFromRows(f, rateResolver, func(visit func(duckUsageAggregateRow) error) error {
@@ -2086,12 +2093,17 @@ func (s *Store) readTopSessionTotals(
 	}
 	parts, err := refreshUsageParts(ctx, s, slot, block.Digest, f, db.TopSessionBytes, func(ctx context.Context, ids []string) (map[string]db.TopSessionEntry, error) {
 		if ids == nil {
+			// See readDailyUsage: a replacement mid-read reads again live.
+			handle := s.DB()
 			plan, err := s.usageRollupPlan(ctx, f, block.Digest, false)
 			if err != nil {
 				return nil, err
 			}
 			if plan != nil {
-				return s.topSessionsFromRollup(ctx, f, plan, rateResolver)
+				parts, err := s.topSessionsFromRollup(ctx, f, plan, rateResolver)
+				if err != nil || s.DB() == handle {
+					return parts, err
+				}
 			}
 		}
 		return s.readTopSessionParts(ctx, f, ids, rateResolver)
@@ -2179,21 +2191,28 @@ func (s *Store) GetUsageSessionCounts(
 	ctx context.Context, f db.UsageFilter,
 ) (db.UsageSessionCounts, error) {
 	// Which rows survive does not depend on prices, so any pricing will do.
+	// A mirror replacement between the rollup read's queries reads again
+	// without the rollup, as in readDailyUsage.
+	handle := s.DB()
 	plan, err := s.usageRollupPlan(ctx, f, "", false)
 	if err != nil {
 		return db.UsageSessionCounts{}, err
 	}
-	seen := map[string]db.UsageSessionInfo{}
-	var cte string
-	var args []any
 	if plan != nil {
+		seen := map[string]db.UsageSessionInfo{}
 		if err := s.rollupSessionInfo(ctx, f, plan, seen); err != nil {
 			return db.UsageSessionCounts{}, err
 		}
-		cte, args = plan.liveCTE(f, false)
-	} else {
-		cte, args = duckUsageCTE(f, nil)
+		cte, args := plan.liveCTE(f, false)
+		if err := s.scanUsageSessionInfo(ctx, cte, args, seen); err != nil {
+			return db.UsageSessionCounts{}, err
+		}
+		if s.DB() == handle {
+			return db.NewUsageSessionCounts(seen), nil
+		}
 	}
+	seen := map[string]db.UsageSessionInfo{}
+	cte, args := duckUsageCTE(f, nil)
 	if err := s.scanUsageSessionInfo(ctx, cte, args, seen); err != nil {
 		return db.UsageSessionCounts{}, err
 	}

@@ -107,4 +107,11 @@ with a changed session's row or a Cursor account row.
 
 A read uses the live path when the rollup's pricing differs from its own (for
 example, custom pricing), or when the zone's offset over the read's range is not
-a multiple of 15 minutes or changes off a 15-minute UTC boundary.
+a multiple of 15 minutes or changes off a 15-minute UTC boundary. A rollup read
+runs several queries; when a mirror replacement swaps the handle between them,
+the read runs again on the live path.
+
+A mirror keeps its rollup across releases until `usageRollupFormat` changes.
+`TestUsageRollupFormat` hashes what a build stores for a fixture and fails until
+a change to that output bumps the format and records the new digest in
+`testdata/usage-rollup-format-digests`.
