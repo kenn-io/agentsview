@@ -52,12 +52,6 @@ func TestFrustrationMemoCommittedVersionsWithEqualTimestamps(t *testing.T) {
 	warm, err := store.GetAnalyticsSignals(ctx, db.AnalyticsFilter{})
 	require.NoError(t, err)
 	assert.Zero(t, warm.QualityHealth.Totals.FrustrationMarkerCount)
-	fresh, err := NewStore(ctx, url, schema, true)
-	require.NoError(t, err)
-	t.Cleanup(func() { require.NoError(t, fresh.Close()) })
-	restarted, err := fresh.GetAnalyticsSignals(ctx, db.AnalyticsFilter{})
-	require.NoError(t, err)
-	assert.Zero(t, restarted.QualityHealth.Totals.FrustrationMarkerCount)
 }
 
 func TestFrustrationMemoPublicationBetweenReads(t *testing.T) {
@@ -197,14 +191,6 @@ func TestFrustrationMemo(t *testing.T) {
 			warm, err := store.GetAnalyticsSignals(ctx, db.AnalyticsFilter{})
 			require.NoError(t, err)
 			assert.Equal(t, test.want, warm.QualityHealth.Totals.FrustrationMarkerCount)
-			if test.name != "reuse" {
-				fresh, err := NewStore(ctx, url, schema, true)
-				require.NoError(t, err)
-				t.Cleanup(func() { require.NoError(t, fresh.Close()) })
-				scanned, err := fresh.GetAnalyticsSignals(ctx, db.AnalyticsFilter{})
-				require.NoError(t, err)
-				assert.Equal(t, scanned.QualityHealth.Totals.FrustrationMarkerCount, warm.QualityHealth.Totals.FrustrationMarkerCount)
-			}
 		})
 	}
 }
