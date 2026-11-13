@@ -1034,8 +1034,8 @@ type duckMutationExecutor interface {
 }
 
 // frustrationMarkersVersion is independent of db.CurrentQualitySignalVersion.
-// Bump it when CountFrustrationMarkers or ExtractHeuristicMessages changes,
-// including which messages are eligible for counting.
+// Bump it when CountFrustrationMarkers, IsFrustrationMarker, or
+// ExtractHeuristicMessages changes its rules or message eligibility.
 const frustrationMarkersVersion = 1
 
 const duckInsertBatchBytes = 1 << 20

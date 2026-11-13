@@ -346,7 +346,18 @@ func TestPushPreservesNewerInterruptedRebuild(t *testing.T) {
 			local := newLocalDB(t)
 			seedResumeSessions(t, local)
 			path := filepath.Join(t.TempDir(), "mirror.duckdb")
-			killedRebuild(t, path, local, storage.MirrorPushOptions{})
+			_, err := Push(ctx, path, local, "test-machine", storage.MirrorPushOptions{}, false, nil)
+			require.NoError(t, err)
+			killCtx, kill := context.WithCancel(ctx)
+			_, err = Push(killCtx, path, local, "test-machine", storage.MirrorPushOptions{}, true, func(p storage.MirrorPushProgress) {
+				if p.SessionsDone == duckSessionPushBatchSize {
+					kill()
+				}
+			})
+			kill()
+			require.ErrorIs(t, err, context.Canceled)
+			published, err := os.ReadFile(path)
+			require.NoError(t, err)
 			file := rebuildFilePath(path)
 			conn, err := Open(ctx, file)
 			require.NoError(t, err)
@@ -364,8 +375,10 @@ func TestPushPreservesNewerInterruptedRebuild(t *testing.T) {
 			require.NoError(t, err)
 
 			_, err = Push(ctx, path, local, "test-machine", storage.MirrorPushOptions{}, tc.full, nil)
-			assert.ErrorIs(t, err, errFutureFrustrationVersion)
-			assert.NoFileExists(t, path)
+			require.ErrorIs(t, err, errFutureFrustrationVersion)
+			publishedAfter, err := os.ReadFile(path)
+			require.NoError(t, err)
+			assert.Equal(t, published, publishedAfter)
 			after, err := os.ReadFile(file)
 			require.NoError(t, err, "the interrupted rebuild must survive")
 			assert.Equal(t, before, after)
