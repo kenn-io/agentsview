@@ -160,7 +160,8 @@ func (p messageDiffPlan) firstWrittenOrdinal() (int, bool) {
 // row without a native source ID gets a new ID and a tombstone. Full
 // replacements (truncations, reorders, rewrites) reconcile the whole session,
 // as do sessions recovering from usage-only storage: their policy-gap rows can
-// project messages the table no longer holds, and must lose that gap.
+// project messages the table no longer holds, or the session may have no
+// projected rows at all, and the gap must be cleared by a complete projection.
 func reconcileReplacedConversationTx(
 	tx transactionQueries, sessionID string, msgs []Message,
 	plan messageDiffPlan, useDiff, usageOnly bool,
@@ -168,7 +169,9 @@ func reconcileReplacedConversationTx(
 	from, ok := plan.firstWrittenOrdinal()
 	if useDiff && ok && !usageOnly {
 		if err := tx.QueryRow(`SELECT NOT EXISTS(SELECT 1 FROM conversation_messages
-		 WHERE session_id=? AND removed=0 AND gap='archive_content_excluded')`, sessionID).Scan(&ok); err != nil {
+		 WHERE session_id=? AND removed=0 AND gap='archive_content_excluded')
+		 AND NOT EXISTS(SELECT 1 FROM conversation_session_changes
+		 WHERE session_id=? AND gap='archive_content_excluded')`, sessionID, sessionID).Scan(&ok); err != nil {
 			return err
 		}
 	}

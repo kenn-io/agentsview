@@ -1560,3 +1560,52 @@ func TestConversationExportDiffedReplaceAfterUsageOnlyStorage(t *testing.T) {
 		return rows.Err()
 	}))
 }
+
+// A session written only under usage-only storage has no projected messages,
+// just a session coverage gap. Leaving usage-only storage projects every
+// stored message even when the next write is a diffed append.
+func TestConversationExportDiffedReplaceProjectsUsageOnlySession(t *testing.T) {
+	d := testDB(t)
+	ctx := t.Context()
+	d.SetArchiveContent(config.ArchiveContentUsage)
+	require.NoError(t, d.UpsertSession(ctx, Session{ID: "chat", Project: "sample", Machine: "local", Agent: "codex"}))
+	_, err := d.ExportConversationChanges(ctx, ConversationExportOptions{})
+	require.NoError(t, err)
+	require.NoError(t, d.ReplaceSessionMessages(ctx, "chat", []Message{
+		{SessionID: "chat", Ordinal: 0, Role: "assistant", Content: "Answer", Model: "gpt-5", TokenUsage: []byte(`{"input_tokens":10,"output_tokens":5}`), HasOutputTokens: true, OutputTokens: 5},
+		{SessionID: "chat", Ordinal: 1, Role: "assistant", Content: "Second", Model: "gpt-5", TokenUsage: []byte(`{"input_tokens":12,"output_tokens":6}`), HasOutputTokens: true, OutputTokens: 6},
+	}))
+	require.NoError(t, d.Close())
+	d, err = Open(ctx, d.Path())
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, d.Close()) })
+
+	stored, err := d.GetAllMessages(ctx, "chat")
+	require.NoError(t, err)
+	require.NotEmpty(t, stored)
+	next := stored[len(stored)-1].Ordinal + 1
+	grown := append(append([]Message(nil), stored...), Message{SessionID: "chat", Ordinal: next, Role: "user", Content: "Follow-up"})
+	require.NoError(t, d.ReplaceSessionMessages(ctx, "chat", grown))
+
+	var projected []int
+	require.NoError(t, d.Update(ctx, func(tx *sql.Tx) error {
+		rows, err := tx.QueryContext(ctx, `SELECT ordinal FROM conversation_messages WHERE session_id = 'chat' AND removed = 0 ORDER BY ordinal`)
+		if err != nil {
+			return err
+		}
+		defer rows.Close()
+		for rows.Next() {
+			var ordinal int
+			if err := rows.Scan(&ordinal); err != nil {
+				return err
+			}
+			projected = append(projected, ordinal)
+		}
+		return rows.Err()
+	}))
+	var want []int
+	for _, m := range grown {
+		want = append(want, m.Ordinal)
+	}
+	assert.Equal(t, want, projected)
+}
