@@ -113,22 +113,17 @@ func TestIsFrustrationMarkerMatchesReference(t *testing.T) {
 }
 
 func TestIsFrustrationMarkerExamples(t *testing.T) {
-	examples := []struct {
-		prompt string
-		want   bool
-	}{
-		{"wtf", false},
-		{"come\n\t on, run it", true},
-		{"you bro\u212ae the build", true},
-		{"why won\u2019t it build", false},
-		{"AB CD ef gh ij", true},
-		{"ABC def GHI jkl mno pqr", false},
-		{"\u24b6\u24b7 \u24b8\u24b9 ok fine now", false},
-		{"```FUCK FUCK FUCK``` please handle it", false},
-	}
-	for _, example := range examples {
-		got := IsFrustrationMarker(example.prompt)
-		assert.Equal(t, example.want, got, "%q", example.prompt)
+	for prompt, want := range map[string]bool{
+		"wtf":                                   false,
+		"come\n\t on, run it":                   true,
+		"you bro\u212ae the build":              true,
+		"why won\u2019t it build":               false,
+		"AB CD ef gh ij":                        true,
+		"ABC def GHI jkl mno pqr":               false,
+		"\u24b6\u24b7 \u24b8\u24b9 ok fine now": false,
+		"```FUCK FUCK FUCK``` please handle it": false,
+	} {
+		assert.Equal(t, want, IsFrustrationMarker(prompt), "%q", prompt)
 	}
 }
 
