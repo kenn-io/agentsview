@@ -12,6 +12,7 @@ import (
 	"slices"
 	"strings"
 
+	"github.com/aws/aws-sdk-go-v2/service/s3/types"
 	"go.kenn.io/agentsview/internal/capture"
 	"go.kenn.io/agentsview/internal/config"
 	"go.kenn.io/agentsview/internal/ctxio"
@@ -22,7 +23,17 @@ import (
 
 const maxSourceBytes = 512 << 20
 
-var errSourceSize = errors.New("native source exceeds size limit")
+var (
+	errSourceSize        = errors.New("native source exceeds size limit")
+	errSourceUnavailable = errors.New("native transcript is unavailable from configured sources")
+)
+
+func sourceReadError(context string, err error) error {
+	if errors.Is(err, errSourceUnavailable) {
+		return fmt.Errorf("%s: native resume requires the original transcript: %w", context, err)
+	}
+	return fmt.Errorf("%s: %w", context, err)
+}
 
 type sourceFile struct {
 	rel  string
@@ -82,9 +93,13 @@ func Materialize(ctx context.Context, cfg config.Config, session *db.Session, cw
 		if err != nil {
 			return Result{}, err
 		}
-		files, err = readLocalSource(ctx, root, name, id, maxSourceBytes)
+		if _, statErr := os.Stat(name); errors.Is(statErr, os.ErrNotExist) {
+			err = errSourceUnavailable
+		} else {
+			files, err = readLocalSource(ctx, root, name, id, maxSourceBytes)
+		}
 		if err != nil {
-			return Result{}, fmt.Errorf("reading native transcript: %w", errors.Join(err, lock.Close()))
+			return Result{}, sourceReadError("reading native transcript", errors.Join(err, lock.Close()))
 		}
 		if err := lock.Close(); err != nil {
 			return Result{}, fmt.Errorf("reading native transcript: %w", err)
@@ -93,7 +108,7 @@ func Materialize(ctx context.Context, cfg config.Config, session *db.Session, cw
 		files, source, err = readConfiguredLocal(ctx, cfg, session, source, id)
 	}
 	if err != nil {
-		return Result{}, fmt.Errorf("reading native transcript: %w", err)
+		return Result{}, sourceReadError("reading native transcript", err)
 	}
 	parent := session.SourceSessionID
 	if parent != "" {
@@ -142,7 +157,7 @@ func storedSource(session *db.Session, host string) (string, error) {
 	if host == "" {
 		return "", nil
 	}
-	return "", errors.New("native transcript is unavailable from configured sources")
+	return "", sourceReadError("reading native transcript", errSourceUnavailable)
 }
 
 func readConfiguredLocal(ctx context.Context, cfg config.Config, session *db.Session, stored, id string) ([]sourceFile, string, error) {
@@ -211,7 +226,7 @@ func uniqueLocalSource(ctx context.Context, provider parser.Provider, stored, id
 		return nil
 	})
 	if err == nil && matchInfo == nil {
-		err = errors.New("native transcript is unavailable from configured sources")
+		err = errSourceUnavailable
 	}
 	return match, err
 }
@@ -358,6 +373,10 @@ func readS3Source(ctx context.Context, cfg config.Config, machine, uri, id strin
 	}
 	data, err := fetch(uri)
 	if err != nil {
+		var missing *types.NoSuchKey
+		if errors.As(err, &missing) {
+			return nil, fmt.Errorf("%w: %w", errSourceUnavailable, err)
+		}
 		return nil, err
 	}
 	out := []sourceFile{{data: data}}

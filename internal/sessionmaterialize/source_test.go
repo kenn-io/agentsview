@@ -21,6 +21,45 @@ import (
 	"go.kenn.io/agentsview/internal/remotesync"
 )
 
+func TestMaterializeSourceErrorGuidance(t *testing.T) {
+	const id = "12345678-1234-1234-1234-123456789abc"
+	root := t.TempDir()
+	cfg := config.Config{InstallationID: "local", LocalMachineName: "local", AgentDirs: map[parser.AgentType][]string{parser.AgentClaude: {root}}}
+	session := &db.Session{ID: id, Agent: "claude", Machine: "local"}
+	cwd := t.TempDir()
+	_, err := Materialize(t.Context(), cfg, session, cwd)
+	require.ErrorContains(t, err, "native resume requires the original transcript")
+
+	name := filepath.Join(root, "project", id+".jsonl")
+	require.NoError(t, os.MkdirAll(filepath.Dir(name), 0o700))
+	file, err := os.Create(name)
+	require.NoError(t, err)
+	require.NoError(t, file.Truncate(maxSourceBytes+1))
+	require.NoError(t, file.Close())
+	session.FilePath = &name
+	_, err = Materialize(t.Context(), cfg, session, cwd)
+	require.ErrorIs(t, err, errSourceSize)
+	assert.Contains(t, err.Error(), "reading native transcript")
+	assert.NotContains(t, err.Error(), "native resume requires the original transcript")
+
+	ctx, cancel := context.WithCancel(t.Context())
+	cancel()
+	_, err = Materialize(ctx, cfg, session, cwd)
+	require.ErrorIs(t, err, context.Canceled)
+	assert.NotContains(t, err.Error(), "native resume requires the original transcript")
+}
+
+func TestMaterializeMissingMirrorRequiresOriginalTranscript(t *testing.T) {
+	const id = "12345678-1234-1234-1234-123456789abc"
+	data := t.TempDir()
+	require.NoError(t, os.MkdirAll(remotesync.MirrorDir(data, "remote"), 0o700))
+	cfg := config.Config{DataDir: data, RemoteHosts: []config.RemoteHost{{Host: "remote"}}}
+	source := "remote:/project/" + id + ".jsonl"
+	session := &db.Session{ID: "remote~" + id, Agent: "claude", Machine: "remote", FilePath: &source}
+	_, err := Materialize(t.Context(), cfg, session, t.TempDir())
+	require.ErrorContains(t, err, "native resume requires the original transcript")
+}
+
 func TestMaterializeConfiguredSources(t *testing.T) {
 	const id = "12345678-1234-1234-1234-123456789abc"
 	for _, mirror := range []bool{false, true} {
