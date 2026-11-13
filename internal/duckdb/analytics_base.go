@@ -392,20 +392,7 @@ func (s analyticsSQL) TrendSessionVersions(ctx context.Context, f db.AnalyticsFi
 	where, args := duckBuildAnalyticsWhere(sf, "COALESCE(s.started_at, s.created_at)", "s.", true, true)
 	window, more := readbase.TrendSessionWindowSQL(f, duckAnalyticsMessageWindowPred)
 	args = append(args, more...)
-	rows, err := s.QueryContext(ctx, `SELECT s.id, COALESCE(s.agentsview_push_fingerprint, '') FROM sessions s WHERE `+where+window, args...)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	result := map[string]string{}
-	for rows.Next() {
-		var id, v string
-		if err := rows.Scan(&id, &v); err != nil {
-			return nil, err
-		}
-		result[id] = v
-	}
-	return result, rows.Err()
+	return db.ScanTrendVersions(s.QueryContext(ctx, `SELECT s.id, COALESCE(s.agentsview_push_fingerprint, '') FROM sessions s WHERE `+where+window, args...))
 }
 func (s analyticsSQL) TrendMessagesSQL(set string, args []any) (string, []any) {
 	return readbase.AnalyticsTrendsSQL(db.AnalyticsFilter{}, duckAnalyticsMessageWindowPred, db.DuckDBSystemPrefixSQL("m.content", "m.role"), db.DuckDBQueryDialect(), "m.session_id IN "+set, args, true, true)

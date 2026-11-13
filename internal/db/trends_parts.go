@@ -1,7 +1,9 @@
 package db
 
 import (
+	"cmp"
 	"context"
+	"database/sql"
 	"fmt"
 	"sort"
 	"sync"
@@ -26,6 +28,23 @@ type trendPart struct {
 type TrendPartsSource interface {
 	TrendSessionVersions(context.Context, AnalyticsFilter) (map[string]string, error)
 	VisitTrendMessages(context.Context, AnalyticsFilter, []string, func(string, string, time.Time)) error
+}
+
+// ScanTrendVersions reads id and version rows.
+func ScanTrendVersions(rows *sql.Rows, err error) (map[string]string, error) {
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	result := map[string]string{}
+	for rows.Next() {
+		var id, version string
+		if err := rows.Scan(&id, &version); err != nil {
+			return nil, err
+		}
+		result[id] = version
+	}
+	return result, rows.Err()
 }
 
 var trendPartsObserver struct {
@@ -77,24 +96,14 @@ func TrendsFromParts(ctx context.Context, disk *kept.Disk, identity string, f An
 			trendPartsObserver.read(ids)
 		}
 		trendPartsObserver.Unlock()
-		for _, id := range ids {
-			parts[id] = trendPart{ID: id, Version: versions[id], Days: make(map[string]*trendDay)}
-		}
 		workers := newTrendPartWorkers(ctx, terms)
-		err := src.VisitTrendMessages(ctx, f, ids, workers.add)
-		days, workerErr := workers.finish()
-		if err != nil {
+		err := src.VisitTrendMessages(ctx, f, ids, workers.addSession)
+		days, workerErr := workers.finishParts()
+		if err := cmp.Or(err, workerErr); err != nil {
 			return TrendsTermsResponse{}, true, err
 		}
-		if workerErr != nil {
-			return TrendsTermsResponse{}, true, workerErr
-		}
-		for id, d := range days {
-			part, ok := parts[id]
-			if ok {
-				part.Days = d
-				parts[id] = part
-			}
+		for _, id := range ids {
+			parts[id] = trendPart{ID: id, Version: versions[id], Days: days[id]}
 		}
 	}
 	if err := ctx.Err(); err != nil {
@@ -115,36 +124,14 @@ func TrendsFromParts(ctx context.Context, disk *kept.Disk, identity string, f An
 			disk.Put(slot, version, data)
 		}
 	}
-	buckets := TrendBucketRange(f.From, f.To, granularity)
-	index := trendBucketIndex(buckets)
-	counts := make([][]int, len(terms))
-	for i := range counts {
-		counts[i] = make([]int, len(buckets))
-	}
-	messages := make([]int, len(buckets))
+	acc := NewTrendAccumulator(f.From, f.To, granularity, terms)
+	flt := f.MessageScopeFilter()
 	for id := range versions {
 		for date, day := range parts[id].Days {
-			if !InDateRange(date, f.From, f.To) {
-				continue
-			}
-			t, err := time.Parse("2006-01-02", date)
-			if err != nil {
-				continue
-			}
-			if f.DayOfWeek != nil && (int(t.Weekday())+6)%7 != *f.DayOfWeek {
-				continue
-			}
-			i, ok := index[TrendBucketDate(t, time.UTC, granularity)]
-			if !ok {
-				continue
-			}
-			messages[i] += day.Messages
-			for j, count := range day.Counts {
-				if j < len(counts) {
-					counts[j][i] += count
-				}
+			if local, err := time.Parse("2006-01-02", date); err == nil && flt.MatchesDayHour(local, true) {
+				acc.addDay(local, day)
 			}
 		}
 	}
-	return BuildTrendsTermsResponse(f.From, f.To, granularity, buckets, terms, counts, messages), true, nil
+	return acc.Response(), true, nil
 }

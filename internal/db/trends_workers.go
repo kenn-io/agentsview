@@ -34,7 +34,11 @@ func NewTrendWorkers(ctx context.Context, from, to, granularity string, terms []
 					if ctx.Err() != nil {
 						return
 					}
-					acc.Add(row.content, row.local)
+					if acc.parts != nil {
+						acc.addPart(row)
+					} else {
+						acc.Add(row.content, row.local)
+					}
 				}
 			}
 		})
@@ -42,8 +46,21 @@ func NewTrendWorkers(ctx context.Context, from, to, granularity string, terms []
 	return w
 }
 
+// newTrendPartWorkers counts messages by session and local day.
+func newTrendPartWorkers(ctx context.Context, terms []TrendTermInput) *TrendWorkers {
+	w := NewTrendWorkers(ctx, "", "", "", terms)
+	for _, acc := range w.workers {
+		acc.parts = map[string]map[string]*trendDay{}
+	}
+	return w
+}
+
 func (w *TrendWorkers) Add(content string, local time.Time) {
-	w.batch = append(w.batch, trendWork{content: content, local: local})
+	w.addSession("", content, local)
+}
+
+func (w *TrendWorkers) addSession(id, content string, local time.Time) {
+	w.batch = append(w.batch, trendWork{id, content, local})
 	if len(w.batch) == 64 {
 		w.flush()
 	}
@@ -82,80 +99,58 @@ func (w *TrendWorkers) Finish() (TrendsTermsResponse, error) {
 	return result.Response(), nil
 }
 
-// TrendPartWorkers counts messages by session and local day.
-type TrendPartWorkers struct {
-	ctx   context.Context
-	jobs  chan []trendWork
-	batch []trendWork
-	parts []map[string]map[string]*trendDay
-	wait  sync.WaitGroup
+func (a *TrendAccumulator) bucket(local time.Time) (int, bool) {
+	if !InDateRange(local.Format("2006-01-02"), a.from, a.to) {
+		return 0, false
+	}
+	bucket, ok := a.index[TrendBucketDate(local, local.Location(), a.granularity)]
+	return bucket, ok
 }
 
-func newTrendPartWorkers(ctx context.Context, terms []TrendTermInput) *TrendPartWorkers {
-	n := max(1, min(4, runtime.GOMAXPROCS(0)-1))
-	w := &TrendPartWorkers{ctx: ctx, jobs: make(chan []trendWork, n), parts: make([]map[string]map[string]*trendDay, n)}
-	for i := range w.parts {
-		days := map[string]map[string]*trendDay{}
-		w.parts[i] = days
-		matchers := make([][]trendMatcher, len(terms))
-		for j, term := range terms {
-			matchers[j] = prepareTrendMatchers(term)
-		}
-		w.wait.Go(func() {
-			var lower []byte
-			for batch := range w.jobs {
-				for _, row := range batch {
-					if ctx.Err() != nil {
-						return
-					}
-					session := days[row.sessionID]
-					if session == nil {
-						session = map[string]*trendDay{}
-						days[row.sessionID] = session
-					}
-					date := row.local.Format("2006-01-02")
-					day := session[date]
-					if day == nil {
-						day = &trendDay{Counts: make([]int, len(terms))}
-						session[date] = day
-					}
-					day.Messages++
-					lower = appendTrendLower(lower, row.content)
-					for j, m := range matchers {
-						day.Counts[j] += countTrendOccurrences(lower, m)
-					}
-				}
-			}
-		})
-	}
-	return w
-}
-func (w *TrendPartWorkers) add(id, content string, local time.Time) {
-	w.batch = append(w.batch, trendWork{sessionID: id, content: content, local: local})
-	if len(w.batch) == 64 {
-		w.flush()
-	}
-}
-func (w *TrendPartWorkers) flush() {
-	if len(w.batch) == 0 {
+// addDay adds a stored local day's counts to its bucket.
+func (a *TrendAccumulator) addDay(local time.Time, day *trendDay) {
+	bucket, ok := a.bucket(local)
+	if !ok {
 		return
 	}
-	select {
-	case w.jobs <- w.batch:
-	case <-w.ctx.Done():
+	a.messageCounts[bucket] += day.Messages
+	for i, count := range day.Counts {
+		if i < len(a.counts) {
+			a.counts[i][bucket] += count
+		}
 	}
-	w.batch = nil
 }
-func (w *TrendPartWorkers) finish() (map[string]map[string]*trendDay, error) {
+
+func (a *TrendAccumulator) addPart(row trendWork) {
+	days := a.parts[row.sessionID]
+	if days == nil {
+		days = map[string]*trendDay{}
+		a.parts[row.sessionID] = days
+	}
+	date := row.local.Format("2006-01-02")
+	day := days[date]
+	if day == nil {
+		day = &trendDay{Counts: make([]int, len(a.matchers))}
+		days[date] = day
+	}
+	day.Messages++
+	a.lower = appendTrendLower(a.lower, row.content)
+	for i, matchers := range a.matchers {
+		day.Counts[i] += countTrendOccurrences(a.lower, matchers)
+	}
+}
+
+// finishParts waits for workers and merges their session days.
+func (w *TrendWorkers) finishParts() (map[string]map[string]*trendDay, error) {
 	w.flush()
 	close(w.jobs)
 	w.wait.Wait()
 	if err := w.ctx.Err(); err != nil {
 		return nil, err
 	}
-	result := w.parts[0]
-	for _, sessions := range w.parts[1:] {
-		for id, days := range sessions {
+	result := w.workers[0].parts
+	for _, other := range w.workers[1:] {
+		for id, days := range other.parts {
 			target := result[id]
 			if target == nil {
 				result[id] = days

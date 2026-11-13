@@ -20,37 +20,26 @@ func (db *DB) trendsPartsDisk() {
 	})
 }
 
+// sqliteTrendSelection selects the sessions a Trends read walks.
 func sqliteTrendSelection(f AnalyticsFilter) (string, []any) {
 	sessionFilter := f
 	sessionFilter.From, sessionFilter.To, sessionFilter.Model = "", "", ""
 	sessionFilter.DayOfWeek, sessionFilter.Hour = nil, nil
 	where, args := sessionFilter.buildWhereWithDate("", false, "s.id")
 	from, to := f.messageWindowBoundsUTC()
-	if window, wargs := analyticsMessageWindowPred("COALESCE(NULLIF(started_at, ''), created_at)", from, to); window != "" {
-		message, margs := analyticsMessageWindowPred("wm.timestamp", from, to)
-		where += " AND s.id IN (SELECT sessions.id FROM sessions WHERE (" + window + " OR EXISTS (SELECT 1 FROM messages wm WHERE wm.session_id = sessions.id AND wm.timestamp != '' AND " + message + ")))"
+	if sessionWindow, wargs := analyticsMessageWindowPred("COALESCE(NULLIF(started_at, ''), created_at)", from, to); sessionWindow != "" {
+		messageWindow, messageArgs := analyticsMessageWindowPred("wm.timestamp", from, to)
+		// Filter sessions before walking their messages.
+		where += " AND s.id IN (SELECT sessions.id FROM sessions WHERE (" + sessionWindow + " OR EXISTS (SELECT 1 FROM messages wm WHERE wm.session_id = sessions.id AND wm.timestamp != '' AND " + messageWindow + ")))"
 		args = append(args, wargs...)
-		args = append(args, margs...)
+		args = append(args, messageArgs...)
 	}
 	return where, args
 }
 
 func (db *DB) TrendSessionVersions(ctx context.Context, f AnalyticsFilter) (map[string]string, error) {
 	where, args := sqliteTrendSelection(f)
-	rows, err := db.getReader().QueryContext(ctx, `SELECT s.id, s.transcript_revision || '|' || s.created_at || '|' || COALESCE(s.started_at, '') FROM sessions s WHERE `+where, args...)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	result := map[string]string{}
-	for rows.Next() {
-		var id, version string
-		if err := rows.Scan(&id, &version); err != nil {
-			return nil, err
-		}
-		result[id] = version
-	}
-	return result, rows.Err()
+	return ScanTrendVersions(db.getReader().QueryContext(ctx, `SELECT s.id, s.transcript_revision || '|' || s.created_at || '|' || COALESCE(s.started_at, '') FROM sessions s WHERE `+where, args...))
 }
 
 func (db *DB) VisitTrendMessages(ctx context.Context, f AnalyticsFilter, ids []string, visit func(string, string, time.Time)) error {

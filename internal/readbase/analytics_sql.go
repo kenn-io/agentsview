@@ -164,12 +164,9 @@ func AnalyticsTrendsSQL(
 		args = append(args, windowArgs...)
 	}
 	args = append(args, sessionPredArgs...)
-	if sessionWindow, sessionArgs := windowPred("COALESCE(s.started_at, s.created_at)", from, to); sessionWindow != "" {
-		messageWindow, messageArgs := windowPred("wm.timestamp", from, to)
-		where += " AND (" + sessionWindow + " OR s.id IN (SELECT wm.session_id FROM messages wm WHERE wm.timestamp IS NOT NULL AND " + messageWindow + "))"
-		args = append(args, sessionArgs...)
-		args = append(args, messageArgs...)
-	}
+	sessionWindow, sessionArgs := TrendSessionWindowSQL(f, windowPred)
+	where += sessionWindow
+	args = append(args, sessionArgs...)
 	if inWindow != "" && !wholeSession {
 		rowWindow := inWindow
 		if len(f.MessageScopeFilter().Models) > 0 {

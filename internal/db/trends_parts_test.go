@@ -59,6 +59,12 @@ func TestTrendsPartsReuseAndBuckets(t *testing.T) {
 	assert.Equal(t, 2, got.MessageCount)
 	assert.Equal(t, 3, got.Series[0].Total)
 	assert.Len(t, source.reads, 1)
+	canceled, cancel := context.WithCancel(t.Context())
+	cancel()
+	_, handled, err = TrendsFromParts(canceled, &reopened, "fixture", f, terms, "month", source)
+	assert.True(t, handled)
+	assert.ErrorIs(t, err, context.Canceled)
+	assert.Len(t, source.reads, 1)
 	delete(source.versions, "b")
 	source.versions["a"] = "2"
 	source.messages["a"] = []struct{ content, timestamp string }{{"apple", "2025-03-03T12:00:00Z"}}

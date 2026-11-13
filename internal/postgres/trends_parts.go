@@ -8,15 +8,19 @@ import (
 	"go.kenn.io/agentsview/internal/db"
 )
 
+// trendSelection selects the sessions a Trends read walks.
 func (s *Store) trendSelection(f db.AnalyticsFilter) (string, []any) {
 	sf := f
 	sf.From, sf.To, sf.Model = "", "", ""
 	sf.DayOfWeek, sf.Hour = nil, nil
 	pb := &paramBuilder{}
 	preds := []string{buildAnalyticsWhereWithDate(sf, "", pb, false, "s.id", s.sessionDialect())}
-	if window := pgAnalyticsMessageWindowLiteral(f, pgDateCol); window != "" {
-		message := pgAnalyticsMessageWindowLiteral(f, "wm.timestamp")
-		preds = append(preds, "s.id IN (SELECT sessions.id FROM sessions WHERE ("+window+" OR EXISTS (SELECT 1 FROM messages wm WHERE wm.session_id = sessions.id AND wm.timestamp IS NOT NULL AND "+message+")))")
+	// The window bounds are inlined as literals. pgx caches prepared
+	// statements per connection, and from the sixth run PostgreSQL may switch
+	// to a generic plan that cannot see how narrow the window is.
+	if sessionWindow := pgAnalyticsMessageWindowLiteral(f, pgDateCol); sessionWindow != "" {
+		messageWindow := pgAnalyticsMessageWindowLiteral(f, "wm.timestamp")
+		preds = append(preds, "s.id IN (SELECT sessions.id FROM sessions WHERE ("+sessionWindow+" OR EXISTS (SELECT 1 FROM messages wm WHERE wm.session_id = sessions.id AND wm.timestamp IS NOT NULL AND "+messageWindow+")))")
 	}
 	return strings.Join(preds, " AND "), pb.args
 }
@@ -27,20 +31,7 @@ func (s *Store) TrendSessionVersions(ctx context.Context, f db.AnalyticsFilter) 
 		return nil, err
 	}
 	where, args := s.trendSelection(f)
-	rows, err := s.pg.QueryContext(ctx, `SELECT s.id, `+frustrationSessionVersion("s."+column)+` FROM sessions s WHERE `+where, args...)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	result := map[string]string{}
-	for rows.Next() {
-		var id, version string
-		if err := rows.Scan(&id, &version); err != nil {
-			return nil, err
-		}
-		result[id] = version
-	}
-	return result, rows.Err()
+	return db.ScanTrendVersions(s.pg.QueryContext(ctx, `SELECT s.id, `+frustrationSessionVersion("s."+column)+` FROM sessions s WHERE `+where, args...))
 }
 
 func (s *Store) VisitTrendMessages(ctx context.Context, f db.AnalyticsFilter, ids []string, visit func(string, string, time.Time)) error {

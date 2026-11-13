@@ -36,23 +36,8 @@ func (s *Store) loadTrendsTerms(ctx context.Context, f db.AnalyticsFilter, terms
 		}
 	}()
 	loc := analyticsLocation(f)
-	sessionFilter := f
-	sessionFilter.From = ""
-	sessionFilter.To = ""
-	sessionFilter.DayOfWeek = nil
-	sessionFilter.Hour = nil
-	sessionFilter.Model = ""
-	pb := &paramBuilder{}
-	preds := []string{buildAnalyticsWhereWithDate(
-		sessionFilter, "", pb, false, "s.id", s.sessionDialect(),
-	)}
-	// The window bounds are inlined as literals. pgx caches prepared
-	// statements per connection, and from the sixth run PostgreSQL may switch
-	// to a generic plan that cannot see how narrow the window is.
-	if sessionWindow := pgAnalyticsMessageWindowLiteral(f, pgDateCol); sessionWindow != "" {
-		messageWindow := pgAnalyticsMessageWindowLiteral(f, "wm.timestamp")
-		preds = append(preds, "s.id IN (SELECT sessions.id FROM sessions WHERE ("+sessionWindow+" OR EXISTS (SELECT 1 FROM messages wm WHERE wm.session_id = sessions.id AND wm.timestamp IS NOT NULL AND "+messageWindow+")))")
-	}
+	where, args := s.trendSelection(f)
+	preds := []string{where}
 	flt := f.MessageScopeFilter()
 	modelFiltering := len(flt.Models) > 0
 	content := "m.content"
@@ -91,7 +76,7 @@ func (s *Store) loadTrendsTerms(ctx context.Context, f db.AnalyticsFilter, terms
 			AND m.is_system = FALSE
 			AND ` + db.PostgresSystemPrefixSQL("m.content", "m.role") + tail
 
-	rows, err := s.pg.QueryContext(ctx, query, pb.args...)
+	rows, err := s.pg.QueryContext(ctx, query, args...)
 	if err != nil {
 		return db.TrendsTermsResponse{}, fmt.Errorf("querying trends terms: %w", err)
 	}

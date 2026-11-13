@@ -1010,18 +1010,7 @@ func (s *Analytics) GetTrendsTerms(
 			if err := rows.Scan(&row.content, &timestamp); err != nil {
 				return db.TrendsTermsResponse{}, err
 			}
-			var local time.Time
-			var has bool
-			switch value := timestamp.(type) {
-			case time.Time:
-				local, has = value.In(loc), true
-			case *time.Time:
-				if value != nil {
-					local, has = value.In(loc), true
-				}
-			default:
-				local, has = analyticsLocalTime(s.backend.FormatTime(timestamp), loc)
-			}
+			local, has := trendLocalTime(s.backend, timestamp, loc)
 			if has && flt.MatchesDayHour(local, true) {
 				acc.Add(row.content, local)
 			}
