@@ -48,34 +48,27 @@ func TestEnsureSchemaConvertsStringColumnsToLowCardinality(t *testing.T) {
 
 	require.NoError(t, EnsureSchemaOn(ctx, conn))
 
-	types := map[string]string{}
-	rows, err := conn.QueryContext(ctx, `SELECT table || '.' || name, type
-		FROM system.columns WHERE database = currentDatabase()`)
+	cols, err := readColumns(ctx, conn)
 	require.NoError(t, err)
-	defer rows.Close()
-	for rows.Next() {
-		var name, typ string
-		require.NoError(t, rows.Scan(&name, &typ))
-		types[name] = typ
+	want := map[string]map[string]string{
+		"messages": {
+			"role":          "LowCardinality(String)",
+			"model":         "LowCardinality(String)",
+			"prompt_source": "Nullable(String)",
+		},
+		"tool_calls":              {"tool_name": "LowCardinality(String)"},
+		"sessions":                {"agent": "LowCardinality(String)"},
+		"usage_messages":          {"model": "LowCardinality(String)"},
+		"usage_session_snapshots": {"agent": "LowCardinality(String)"},
 	}
-	require.NoError(t, rows.Err())
-	assert.Equal(t, map[string]string{
-		"messages.role":                 "LowCardinality(String)",
-		"messages.model":                "LowCardinality(String)",
-		"tool_calls.tool_name":          "LowCardinality(String)",
-		"sessions.agent":                "LowCardinality(String)",
-		"usage_messages.model":          "LowCardinality(String)",
-		"usage_session_snapshots.agent": "LowCardinality(String)",
-		"messages.prompt_source":        "Nullable(String)",
-	}, map[string]string{
-		"messages.role":                 types["messages.role"],
-		"messages.model":                types["messages.model"],
-		"tool_calls.tool_name":          types["tool_calls.tool_name"],
-		"sessions.agent":                types["sessions.agent"],
-		"usage_messages.model":          types["usage_messages.model"],
-		"usage_session_snapshots.agent": types["usage_session_snapshots.agent"],
-		"messages.prompt_source":        types["messages.prompt_source"],
-	})
+	got := map[string]map[string]string{}
+	for table, columns := range want {
+		got[table] = map[string]string{}
+		for column := range columns {
+			got[table][column] = cols[table][column]
+		}
+	}
+	assert.Equal(t, want, got)
 
 	var role, model, agent, toolName string
 	require.NoError(t, conn.QueryRowContext(ctx,
