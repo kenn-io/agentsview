@@ -63,12 +63,6 @@ type pgGenAIPricingQuerier interface {
 	QueryRowContext(context.Context, string, ...any) *sql.Row
 }
 
-func loadPGGenAIPricing(
-	ctx context.Context, q pgGenAIPricingQuerier,
-) (*db.GenAIPricingDocument, error) {
-	return queryPGGenAIPricing(ctx, q, true)
-}
-
 func queryPGGenAIPricing(ctx context.Context, q pgGenAIPricingQuerier, allowMissing bool) (*db.GenAIPricingDocument, error) {
 	var document db.GenAIPricingDocument
 	err := q.QueryRowContext(ctx, `
@@ -88,7 +82,7 @@ func queryPGGenAIPricing(ctx context.Context, q pgGenAIPricingQuerier, allowMiss
 
 // loadPGGenAIPricingState reads the mirror's GenAI pricing document without
 // its data, which a push compares by digest instead of transferring. A
-// missing table reads as a missing document, as in loadPGGenAIPricing.
+// missing table reads as a missing document, as in loadPGGenAIPricingRow.
 func loadPGGenAIPricingState(
 	ctx context.Context, q pgGenAIPricingQuerier,
 ) (*db.GenAIPricingState, error) {
