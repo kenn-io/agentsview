@@ -497,7 +497,7 @@ test-postgres-standby-ci: pricing-snapshot ensure-embed-dir
 # Three processes split the internal/postgres tests and run them in parallel,
 # each test in its own database. Activity runs afterward on the original database.
 test-postgres-core-fast-ci: pricing-snapshot ensure-embed-dir
-	CGO_ENABLED=1 bash scripts/test-postgres-shards.sh postgres-core-fast ./internal/postgres 3 '$(POSTGRES_CORE_HEAVY_TEST)' 20m
+	CGO_ENABLED=1 TEST_TAGS='$(TEST_TAGS)' bash scripts/test-postgres-shards.sh postgres-core-fast ./internal/postgres 3 '$(POSTGRES_CORE_HEAVY_TEST)' 20m
 	CGO_ENABLED=1 $(call gotestsum,postgres-core-fast-activity,./internal/activity/...) -p 1 -tags "$(TEST_TAGS),pgtest" -count=1 -timeout=20m
 	CGO_ENABLED=1 $(call gotestsum,postgres-core-fast-service,./internal/service) -tags "$(TEST_TAGS),pgtest" -run '^TestPlanUsageCountsParity$$' -count=1
 
