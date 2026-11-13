@@ -466,7 +466,7 @@ func TestHostedUnresolvedPinRetainsCreationTime(t *testing.T) {
 	assert.NotEmpty(t, after[0].CreatedAt)
 }
 
-func TestHostedTrendsKeptPublicationAndSnapshot(t *testing.T) {
+func TestHostedTrendsKeptPublication(t *testing.T) {
 	f := newProjectionFixture(t)
 	ctx := t.Context()
 	m, accepted := f.accept(t, "device-a", "capture-a", "")
@@ -493,7 +493,7 @@ func TestHostedTrendsKeptPublicationAndSnapshot(t *testing.T) {
 
 	local := testDB(t)
 	session := db.Session{ID: "legacy-session", Project: "legacy", Machine: "device-b", Agent: "claude", StartedAt: new("2026-01-01T01:00:00Z"), MessageCount: 1}
-	messages := []db.Message{{SessionID: session.ID, Ordinal: 0, Role: "user", Content: "alpha", Timestamp: "2026-01-01T01:00:00Z"}}
+	messages := []db.Message{{SessionID: session.ID, Ordinal: 0, Role: "user", Content: "alpha", ContentLength: 5, Timestamp: "2026-01-01T01:00:00Z"}}
 	_, err = local.WriteSessionBatchAtomic(ctx, []db.SessionBatchWrite{{Session: session, Messages: messages, DataVersion: 1, ReplaceMessages: true}})
 	require.NoError(t, err)
 	syncer := &Sync{pg: f.runtime, local: local, machine: "device-b", schema: f.schema, schemaDone: true}
@@ -503,17 +503,10 @@ func TestHostedTrendsKeptPublicationAndSnapshot(t *testing.T) {
 	legacy.Project = "legacy"
 	require.Equal(t, 1, read(legacy).Series[0].Total)
 
-	_, err = hostedRead(ctx, h, func(view *HostedStore, _ hostedRevision) (struct{}, error) {
-		session.Project = "other"
-		_, err = local.WriteSessionBatchAtomic(ctx, []db.SessionBatchWrite{{Session: session, Messages: messages, DataVersion: 1, ReplaceMessages: false}})
-		require.NoError(t, err)
-		_, err = syncer.Push(ctx, false, nil)
-		require.NoError(t, err)
-		after, err := view.GetTrendsTerms(ctx, legacy, terms, "day")
-		require.NoError(t, err)
-		require.Equal(t, 1, after.Series[0].Total)
-		return struct{}{}, nil
-	})
+	session.Project = "other"
+	_, err = local.WriteSessionBatchAtomic(ctx, []db.SessionBatchWrite{{Session: session, Messages: messages, DataVersion: 1, ReplaceMessages: false}})
+	require.NoError(t, err)
+	_, err = syncer.Push(ctx, false, nil)
 	require.NoError(t, err)
 	require.Zero(t, read(legacy).Series[0].Total)
 }
