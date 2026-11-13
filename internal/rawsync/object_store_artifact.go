@@ -19,18 +19,16 @@ type artifactOpener interface {
 	Open(context.Context, artifact.Ref) (artifact.Entry, artifact.VerifiedReader, error)
 }
 
-type artifactObjectReader struct{ opener artifactOpener }
+type ArtifactObjectReader struct{ opener artifactOpener }
 
 type artifactObjectStore struct {
-	artifactObjectReader
+	ArtifactObjectReader
 	store artifact.ArtifactStore
 }
 
 // NewArtifactObjectReader provides only verified copying from a borrowed opener.
-func NewArtifactObjectReader(opener artifactOpener) interface {
-	CopyObject(context.Context, string, ObjectRef, io.Writer) (ObjectInfo, error)
-} {
-	return &artifactObjectReader{opener: opener}
+func NewArtifactObjectReader(opener artifactOpener) *ArtifactObjectReader {
+	return &ArtifactObjectReader{opener: opener}
 }
 
 // NewArtifactObjectStore adapts the verified artifact ledger for raw custody.
@@ -38,7 +36,7 @@ func NewArtifactObjectStore(store artifact.ArtifactStore) (ObjectStore, error) {
 	if store == nil {
 		return nil, fmt.Errorf("%w: artifact store is required", ErrInvalid)
 	}
-	return &artifactObjectStore{artifactObjectReader: artifactObjectReader{opener: store}, store: store}, nil
+	return &artifactObjectStore{ArtifactObjectReader: ArtifactObjectReader{opener: store}, store: store}, nil
 }
 
 func (s *artifactObjectStore) PutObject(
@@ -82,7 +80,7 @@ func (s *artifactObjectStore) StatObject(
 	return objectInfoFromArtifact(entry), nil
 }
 
-func (s *artifactObjectReader) OpenObject(
+func (s *ArtifactObjectReader) OpenObject(
 	ctx context.Context,
 	tenantID string,
 	object ObjectRef,
@@ -108,7 +106,7 @@ func (s *artifactObjectReader) OpenObject(
 // store owns the reader lifecycle. The artifact reader is opened with ctx and
 // is read and closed sequentially; callers never need to assume that Close is
 // safe to race with an in-flight Read.
-func (s *artifactObjectReader) CopyObject(
+func (s *ArtifactObjectReader) CopyObject(
 	ctx context.Context,
 	tenantID string,
 	object ObjectRef,

@@ -82,6 +82,13 @@ func Materialize(ctx context.Context, cfg config.Config, database *db.DB, sessio
 		var snapshot string
 		files, snapshot, err = readSnapshotSource(ctx, cfg, owners, id)
 		source = "snapshot:" + snapshot
+		if errors.Is(err, archivesource.ErrSnapshotUnavailable) && hasDirectoryOwner(owners) {
+			snapshotErr := err
+			files, source, err = readRetainedSource(ctx, cfg, database, session, owners, id)
+			if err != nil {
+				err = errors.Join(snapshotErr, err)
+			}
+		}
 	} else if source, err = storedSource(session, host); err != nil {
 		return Result{}, err
 	} else if strings.HasPrefix(source, "s3://") {
@@ -499,18 +506,19 @@ func useRetained(cfg config.Config, session *db.Session, owners []db.ArchiveSess
 				return false
 			}
 		}
-		return slices.ContainsFunc(owners, func(o db.ArchiveSessionProvenance) bool {
-			return strings.HasPrefix(o.Attachment.SnapshotID, "directory:")
-		})
+		return hasDirectoryOwner(owners)
 	}
 	return session.FilePath != nil && strings.HasPrefix(*session.FilePath, "archive://")
 }
 
+func hasDirectoryOwner(owners []db.ArchiveSessionProvenance) bool {
+	return slices.ContainsFunc(owners, func(o db.ArchiveSessionProvenance) bool {
+		return strings.HasPrefix(o.Attachment.SnapshotID, "directory:")
+	})
+}
+
 func readRetainedSource(ctx context.Context, cfg config.Config, database *db.DB, session *db.Session, owners []db.ArchiveSessionProvenance, native string) (_ []sourceFile, source string, retErr error) {
-	stored := ""
-	if session.FilePath != nil {
-		stored = *session.FilePath
-	}
+	stored, _ := storedSource(session, "")
 	tree, primary, source, err := archivesource.Retained(ctx, cfg, database, session.ID, session.Machine, native, "claude", stored, owners, maxSourceBytes, nil)
 	if err != nil {
 		return nil, "", err
