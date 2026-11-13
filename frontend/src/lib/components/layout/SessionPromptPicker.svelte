@@ -28,6 +28,8 @@
   let loading = $state(false);
   let failed = $state(false);
   let read: AbortController | null = null;
+  // The session `prompts` belong to; another session's must not be picked.
+  let promptsFor: string | null = null;
 
   // Every prompt, newest first, read again on each opening so a live
   // session's new prompts show up.
@@ -37,6 +39,7 @@
     read?.abort();
     const controller = new AbortController();
     read = controller;
+    if (promptsFor !== id) prompts = [];
     loading = true;
     failed = false;
     try {
@@ -52,6 +55,7 @@
         if (page.messages.length < PAGE_SIZE || !last) break;
         from = last.ordinal + 1;
       }
+      promptsFor = id;
       prompts = rows
         .map((row, index) => {
           const text = previewMessage(row.content).text.trim();

@@ -122,6 +122,22 @@ describe("SessionPromptPicker", () => {
     expect(ui.pendingScrollOrdinal).toBe(4);
   });
 
+  it("drops the previous session's prompts while the next one loads", async () => {
+    serve([prompt(0, "From session one")]);
+    await open();
+    await fireEvent.keyDown(screen.getByRole("combobox"), { key: "Escape" });
+    await settle();
+
+    messages.sessionId = "s2";
+    vi.spyOn(SessionsService, "getApiV1SessionsByIdMessages").mockReturnValue(
+      new Promise(() => {}) as never,
+    );
+    await open();
+
+    expect(labels()).toEqual([]);
+    expect(document.body.textContent).toContain("Loading prompts…");
+  });
+
   it("shows an error when the prompts cannot be read", async () => {
     vi.spyOn(SessionsService, "getApiV1SessionsByIdMessages").mockRejectedValue(new Error("down"));
     await open();
