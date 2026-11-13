@@ -1451,6 +1451,11 @@ own metadata, which is why the docs below call the database a mirror.
   collapse them, and deleting them writes patch rows. Store every ClickHouse
   push cursor and version in the mirror's `sync_metadata`. Never store
   ClickHouse sync state in SQLite.
+- A push that rewrote at least `compactionShare` of the live messages runs
+  `OPTIMIZE TABLE ... FINAL` on `compactionTables` (`compactAfterRewrite`). Add
+  every new table a session push rewrites to that list. Compaction failures
+  are logged and never fail the push. See
+  [Compaction after a large rewrite](../internal/clickhouse-mirror.md#compaction-after-a-large-rewrite).
 - Every mirrored table is `ReplacingMergeTree(push_version)`. Every connection
   sets `final = 1` and, unless the URL sets it, `max_threads = 8`. Do not
   write `FINAL` in query text. One exception: a lookup may collect sort keys

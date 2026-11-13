@@ -165,6 +165,9 @@ to fan out across every configured target. `--all --watch` is rejected.
    [Vector Push](#vector-push).
 1. Advances this archive's cursor in the mirror's `sync_metadata` only when
    every session succeeded.
+1. Compacts the rewritten tables when the push rewrote at least a quarter of
+   the mirror's live messages, as a full push does: see
+   [Compaction after a large push](#compaction-after-a-large-push).
 
 Use `--full` to bypass fingerprints and re-push everything — for example after a
 schema reset or when message content was rewritten in place.
@@ -192,6 +195,27 @@ push cleanly.
 If any sessions fail during an incremental push, the cursor is not advanced, so
 the next push retries them. The exit code is 1 when any errors occur, 0
 otherwise.
+
+#### Compaction after a large push
+
+A rewritten session keeps its older rows on disk until ClickHouse merges them
+away, and after full pushes those merges rarely happen on their own. Every
+dashboard read then pays to skip the older copies. When a push rewrote at least
+a quarter of the mirror's live messages, it runs `OPTIMIZE TABLE ... FINAL` on
+each table it rewrote, largest first, and waits for each merge before it
+returns. The push log names each table and how long its merge took.
+
+Reads keep working during the merge, though they compete with it for CPU and
+disk. ClickHouse starts the merge only when the disk has free space for twice
+the size of the table it merges; otherwise the push logs the refusal.
+
+The push role needs the `OPTIMIZE` grant on the mirror database and
+`SELECT ON system.parts`. Without them, the push logs
+`skipped compacting the rewritten tables` with the server's error and still
+succeeds; reads stay correct but slow down as older copies pile up. To grant
+them, run `GRANT OPTIMIZE ON <database>.* TO <push_user>` and
+`GRANT SELECT ON system.parts TO <push_user>`, or add the matching `<query>`
+lines to an XML-managed user's `<grants>`.
 
 #### Automatic Push Watcher
 

@@ -43,8 +43,8 @@ func newPushVersion() uint64 {
 // PushWithOptions runs one push: it fingerprints the changed window,
 // rewrites changed sessions (dependents first, then a version-bounded
 // delete, then the session rows), applies local hard deletes, refreshes
-// stars and pins, and advances this archive's cursor only when every
-// session succeeded.
+// stars and pins, advances this archive's cursor only when every session
+// succeeded, and compacts the rewritten tables after a large rewrite.
 func (s *Sync) PushWithOptions(
 	ctx context.Context, opts storage.PushOptions, onProgress func(storage.PushProgress),
 ) (storage.PushResult, error) {
@@ -413,6 +413,9 @@ func (s *Sync) pushWithOptions(
 		if err := writeMetadata(ctx, conn, map[string]string{s.archiveKey(fullPushRunKeyBase): encoded}); err != nil {
 			return result, err
 		}
+	}
+	if err := s.compactAfterRewrite(ctx, result.MessagesPushed); err != nil {
+		return result, err
 	}
 	result.Duration = time.Since(start)
 	return result, nil

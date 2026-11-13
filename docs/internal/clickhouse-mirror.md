@@ -157,6 +157,9 @@ A crash before step 3 leaves the fingerprint stale, so the next push re-selects
 the session. A crash between 1 and 2 leaves extra old rows that step 2 removes
 on retry.
 
+**A large rewrite ends in a compaction.** See
+[Compaction after a large rewrite](#compaction-after-a-large-rewrite).
+
 **Full pushes resume.** A full push writes a run record under
 `agentsview_full_push_run:<archive>` in `sync_metadata` before its first batch
 and clears it with the cursor. The record holds the run's starting push version,
@@ -275,6 +278,62 @@ PostgreSQL watcher.
 - A generic remote-mirror package. DSN, TLS, `Sync`, and SQL are not
   PostgreSQL's. Shared pieces are `db.Store`, dialect hooks, named-target
   parsing, and `serviceKind`.
+
+## Compaction after a large rewrite
+
+A push that rewrites a session writes a new version of each of its rows. The
+older version stays on disk until a merge puts both into one part, and the
+merge selector rarely merges a multi-gigabyte part with smaller ones. After full
+pushes, one production mirror stored 3.7 readable copies of every `messages`
+row, and every `final=1` read paid to collapse them. The evidence is in
+[ClickHouse read performance](clickhouse-performance.md).
+
+After a push writes its cursor, it compacts when it wrote at least a quarter of
+the mirror's live messages (`compactionShare`). Live messages are the sum of
+`stored_message_count` on the session rows, which is cheap to read. A full push
+from either of the two archives that share production's mirror qualifies (55%
+and 45% of live messages). A routine incremental push writes far less. One
+decision covers every table, since the tables a push rewrites grow with its
+messages.
+
+The push then runs `OPTIMIZE TABLE <table> FINAL` on each table a session push
+rewrites (`compactionTables`), largest on disk first, and waits for each merge:
+
+- It sets `optimize_throw_if_noop = 1`. Without it, the server returns success
+  when it declines the merge and says why only in its own log. It declines when
+  the disk lacks free space for twice the table's size, or when a background
+  merge on the table is still running after 120 s.
+- It runs on its own one-connection pool with a one-hour read timeout. The
+  server sends nothing while it merges, and the driver's default five-minute
+  read timeout would end the wait on a large table while the merge keeps
+  running.
+- Compaction only speeds up reads. A failure, such as a role without the
+  `OPTIMIZE` grant, is logged and skips the remaining tables; the push still
+  succeeds. Cancellation still ends the push.
+
+Reads keep working during a merge: queries read the old parts until the merged
+part replaces them. A merge does compete with reads for CPU and disk.
+
+On a copy of production's tables with their stored copies (merges stopped
+while copying, then started on every table as on the server), compaction took
+233 s on a machine that runs production queries 2.4x to 3x faster:
+`tool_result_events` 79 s (13.1 GiB to 2.0 GiB), `usage_session_snapshots`
+133 s (1.11 GiB to 217 MiB), `messages` 13 s (6.88 GiB to 797 MiB, after
+background merges had started on it), and under 5 s for each other table. Expect
+about 10 minutes on the production server. Cold pages, the first request after
+a serve restart and the median of three:
+
+| Page                        | Copies (s) | Compacted (s) | Speed-up |
+| --------------------------- | ---------- | ------------- | -------- |
+| Activity, one year          | 6.631      | 5.625         | 1.18x    |
+| Activity, one week          | 1.274      | 0.466         | 2.73x    |
+| Usage summary, one year     | 0.459      | 0.446         | 1.03x    |
+| Analytics summary, one year | 0.466      | 0.232         | 2.00x    |
+| Trends, one year            | 2.204      | 0.968         | 2.28x    |
+| Content search              | 11.717     | 3.164         | 3.70x    |
+
+Usage reads `prepared_usage`, a plain `MergeTree` without stored copies, and a
+one-year Activity report spends most of its time in Go, so neither changes much.
 
 ## Stored usage prices
 
@@ -910,7 +969,9 @@ Several machines can share one database without ownership conflict detection.
 Two archives that reuse a session ID overwrite each other.
 
 Until a merge, both old and new `push_version` rows can exist on disk. `final=1`
-hides the stale ones from readers.
+hides the stale ones from readers, at a read cost that grows with the number of
+copies; see
+[Compaction after a large rewrite](#compaction-after-a-large-rewrite).
 
 ## Tests
 
