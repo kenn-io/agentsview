@@ -3,12 +3,13 @@
 <script lang="ts">
   import type { Attachment } from "svelte/attachments";
   import { IconButton, Typeahead, type TypeaheadOption } from "@kenn-io/kit-ui";
-  import { SessionsService } from "../../api/generated/index";
-  import { isAbortError } from "../../api/runtime.js";
+  import { SessionsService, type DbMessage as Message } from "../../api/generated/index";
+  import { ApiError, isAbortError } from "../../api/runtime.js";
   import { m } from "../../i18n/index.js";
   import { TableOfContentsIcon } from "../../icons.js";
   import { messages } from "../../stores/messages.svelte.js";
   import { ui } from "../../stores/ui.svelte.js";
+  import { hasVisibleSegments } from "../../utils/content-parser.js";
   import { formatNumber, formatTimestamp } from "../../utils/format.js";
   import { isPromptMessage, previewMessage } from "../../utils/messages.js";
   import { setPromptPickerTrigger } from "./prompt-picker.js";
@@ -17,8 +18,11 @@
   // Typeahead renders every option it gets, so a session with thousands
   // of prompts shows the newest matches and asks for more letters.
   const SHOWN = 100;
+  // A sync that lands between pages restarts the read this many times at most.
+  const MAX_READS = 3;
 
   interface Prompt {
+    message: Message;
     option: TypeaheadOption;
     search: string;
   }
@@ -43,23 +47,13 @@
     loading = true;
     failed = false;
     try {
-      const rows = [];
-      for (let from = 0; ; ) {
-        const page = await SessionsService.getApiV1SessionsByIdMessages(
-          { id },
-          { roles: "user", direction: "asc", from, limit: PAGE_SIZE },
-          { signal: controller.signal },
-        );
-        rows.push(...page.messages.filter(isPromptMessage));
-        const last = page.messages.at(-1);
-        if (page.messages.length < PAGE_SIZE || !last) break;
-        from = last.ordinal + 1;
-      }
+      const rows = await readPrompts(id, controller.signal);
       promptsFor = id;
       prompts = rows
         .map((row, index) => {
           const text = previewMessage(row.content).text.trim();
           return {
+            message: row,
             option: {
               name: String(row.ordinal),
               label: text.split("\n", 1)[0] || m.session_toc_empty_prompt(),
@@ -79,11 +73,52 @@
     }
   }
 
+  // Every page names the first page's revision, so a sync between pages
+  // answers 409 and the read starts over rather than mixing two transcripts.
+  async function readPrompts(id: string, signal: AbortSignal): Promise<Message[]> {
+    for (let attempt = 1; ; attempt++) {
+      const rows: Message[] = [];
+      let revision: string | undefined;
+      try {
+        for (let from = 0; ; ) {
+          const page = await SessionsService.getApiV1SessionsByIdMessages(
+            { id },
+            {
+              roles: "user",
+              direction: "asc",
+              from,
+              limit: PAGE_SIZE,
+              ...(revision ? { expected_revision: revision } : {}),
+            },
+            { signal },
+          );
+          revision ??= page.transcript_revision || undefined;
+          rows.push(...page.messages.filter(isPromptMessage));
+          const last = page.messages.at(-1);
+          if (page.messages.length < PAGE_SIZE || !last) return rows;
+          from = last.ordinal + 1;
+        }
+      } catch (err) {
+        if (!(err instanceof ApiError && err.status === 409) || attempt >= MAX_READS) throw err;
+      }
+    }
+  }
+
+  // The transcript's own rule, so a prompt it hides is never offered as a
+  // place to jump. A filtered code fence keeps a placeholder, so it counts.
+  let shown = $derived(
+    ui.hasBlockFilters
+      ? prompts.filter((p) =>
+          hasVisibleSegments(p.message, (type) => type === "code" || ui.isBlockVisible(type)),
+        )
+      : prompts,
+  );
+
   let matches = $derived.by(() => {
     const words = query.toLowerCase().split(/\s+/).filter(Boolean);
     return words.length === 0
-      ? prompts
-      : prompts.filter((p) => words.every((word) => p.search.includes(word)));
+      ? shown
+      : shown.filter((p) => words.every((word) => p.search.includes(word)));
   });
 
   // The list's header exists only while the list is open.

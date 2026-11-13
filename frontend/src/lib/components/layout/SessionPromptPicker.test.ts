@@ -3,13 +3,16 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test"
 import { fireEvent, screen } from "@testing-library/svelte";
 import { flushSync, mount, unmount } from "svelte";
 import { SessionsService, type DbMessage as Message } from "../../api/generated/index.js";
+import { ApiError } from "../../api/runtime.js";
 import { messages } from "../../stores/messages.svelte.js";
 import { ui } from "../../stores/ui.svelte.js";
 import { msg } from "../../utils/test-messages.js";
 import SessionPromptPicker from "./SessionPromptPicker.svelte";
 import { openPromptPicker } from "./prompt-picker.js";
 
-const prompt = (ordinal: number, content = `prompt ${ordinal}`) => msg({ ordinal, content });
+// Parsed content is cached by id and length, so each prompt needs its own.
+const prompt = (ordinal: number, content = `prompt ${ordinal}`) =>
+  msg({ id: ordinal + 1, ordinal, content, content_length: content.length });
 
 function serve(...pages: Message[][]) {
   const read = vi.spyOn(SessionsService, "getApiV1SessionsByIdMessages");
@@ -52,6 +55,7 @@ afterEach(() => {
   if (component) unmount(component);
   component = null;
   vi.restoreAllMocks();
+  ui.showAllBlocks();
   messages.sessionId = null;
   document.body.innerHTML = "";
 });
@@ -69,6 +73,40 @@ describe("SessionPromptPicker", () => {
     const newest = screen.getAllByRole("option")[0]!;
     expect(newest.textContent).toContain("Latest prompt");
     expect(newest.querySelector(".kit-typeahead__option-meta")!.textContent).toContain("#1,001");
+  });
+
+  it("restarts the read when the transcript changes between pages", async () => {
+    const read = vi.spyOn(SessionsService, "getApiV1SessionsByIdMessages");
+    const page = (revision: string, rows: Message[]) =>
+      read.mockResolvedValueOnce({ messages: rows, transcript_revision: revision } as never);
+    page(
+      "r1",
+      Array.from({ length: 1000 }, (_, i) => prompt(i, "old")),
+    );
+    read.mockRejectedValueOnce(new ApiError(409, "transcript changed"));
+    page("r2", [prompt(0, "Rewritten prompt")]);
+    await open();
+
+    expect(read.mock.calls.map((call) => call[1])).toEqual([
+      { roles: "user", direction: "asc", from: 0, limit: 1000 },
+      { roles: "user", direction: "asc", from: 1000, limit: 1000, expected_revision: "r1" },
+      { roles: "user", direction: "asc", from: 0, limit: 1000 },
+    ]);
+    expect(labels()).toEqual(["Rewritten prompt"]);
+  });
+
+  it("offers only the prompts the transcript's filters show", async () => {
+    serve([prompt(0, "Plain prompt"), prompt(1, "Run this\n```sh\nmake test\n```")]);
+    await open();
+    expect(labels()).toEqual(["Run this", "Plain prompt"]);
+
+    ui.setBlockVisible("user", false);
+    await settle();
+    expect(labels()).toEqual(["Run this"]);
+
+    ui.setBlockVisible("user", true);
+    await settle();
+    expect(labels()).toEqual(["Run this", "Plain prompt"]);
   });
 
   it("lists only typed prompts, by their first line", async () => {
