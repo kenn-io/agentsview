@@ -128,6 +128,16 @@ func TestQuackStoreAnalyticsDashboardReads(t *testing.T) {
 	// handed to quack_serve for read access.
 	local := newLocalDB(t)
 	seedDuckDBSyncFixture(t, local)
+	const frustrationID = "duck-sync-frustration"
+	const frustrationPrompt = "this is broken"
+	const frustrationTime = "2026-01-10T03:00:00.000Z"
+	_, err := local.WriteSessionBatchAtomic(ctx, []db.SessionBatchWrite{{
+		Session:     syncSession(frustrationID, "alpha", frustrationPrompt, frustrationTime, 1),
+		Messages:    []db.Message{syncMessage(frustrationID, 0, "user", frustrationPrompt, frustrationTime)},
+		Signals:     db.SessionSignalUpdate{QualitySignals: db.QualitySignals{Version: db.CurrentQualitySignalVersion}},
+		DataVersion: 1, ReplaceMessages: true,
+	}})
+	require.NoError(t, err)
 	require.NoError(t, local.UpdateSessionSignals(ctx, "duck-sync-alpha", db.SessionSignalUpdate{
 		QualitySignals:   db.QualitySignals{Version: db.CurrentQualitySignalVersion},
 		ToolObservations: []db.ToolObservation{{MessageOrdinal: 1, Outcome: "empty"}},
@@ -138,8 +148,8 @@ func TestQuackStoreAnalyticsDashboardReads(t *testing.T) {
 	)
 	result, err := Push(ctx, path, local, "quack-client", storage.MirrorPushOptions{}, true, nil)
 	require.NoError(t, err, "push analytics fixture into local mirror")
-	assert.Equal(t, 3, result.SessionsPushed)
-	assert.Equal(t, 4, result.MessagesPushed)
+	assert.Equal(t, 4, result.SessionsPushed)
+	assert.Equal(t, 5, result.MessagesPushed)
 
 	openQuackMirrorServer(t, ctx, path, uri, token)
 
@@ -162,8 +172,8 @@ func TestQuackStoreAnalyticsDashboardReads(t *testing.T) {
 	assert.Equal(t, SchemaVersion, configStatus.SchemaVersion)
 	assert.Equal(t, db.CurrentDataVersion(), configStatus.DataVersion)
 	assert.Empty(t, configStatus.Scope, "unfiltered push canonicalizes to empty scope")
-	assert.Equal(t, 3, configStatus.DuckDBSessions)
-	assert.Equal(t, 4, configStatus.DuckDBMessages)
+	assert.Equal(t, 4, configStatus.DuckDBSessions)
+	assert.Equal(t, 5, configStatus.DuckDBMessages)
 
 	filter := db.AnalyticsFilter{
 		From:     "2026-01-10",
@@ -172,11 +182,11 @@ func TestQuackStoreAnalyticsDashboardReads(t *testing.T) {
 	}
 	page, err := store.ListSessions(ctx, db.SessionFilter{Limit: 10})
 	require.NoError(t, err, "list sessions through Quack")
-	assert.Len(t, page.Sessions, 3)
+	assert.Len(t, page.Sessions, 4)
 
 	sidebar, err := store.GetSidebarSessionIndex(ctx, db.SessionFilter{})
 	require.NoError(t, err, "read sidebar session index through Quack")
-	assert.Equal(t, 3, sidebar.Total)
+	assert.Equal(t, 4, sidebar.Total)
 
 	search, err := store.Search(ctx, db.SearchFilter{Query: "alpha", Limit: 10})
 	require.NoError(t, err, "search sessions through Quack")
@@ -232,6 +242,9 @@ func TestQuackStoreAnalyticsDashboardReads(t *testing.T) {
 	tools, err := store.GetAnalyticsTools(ctx, filter)
 	require.NoError(t, err, "read tool analytics through Quack")
 	assert.Equal(t, 2, tools.TotalCalls)
+	signals, err := store.GetAnalyticsSignals(ctx, filter)
+	require.NoError(t, err, "read Signals through Quack")
+	assert.Equal(t, 1, signals.QualityHealth.Totals.FrustrationMarkerCount)
 	zoneFilter := db.AnalyticsFilter{From: "2026-01-09", To: "2026-01-10", Timezone: "America/New_York", ToolName: "search", ToolCategory: "search"}
 	zoneTools, err := store.GetAnalyticsTools(ctx, zoneFilter)
 	require.NoError(t, err)

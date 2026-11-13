@@ -2,6 +2,7 @@ package db
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 	"fmt"
 	"log"
@@ -43,13 +44,38 @@ func (timings usageRollupRequestTimings) logIfSlow(started time.Time) {
 		timings.rollup.ExceptionRows, timings.rollup.ExceptionGroups)
 }
 
+// ErrUsageCacheWarming reports that a read declined to fill or rebuild much
+// of the cache. Its caller serves a direct read while a background pass
+// prepares the cache.
+var ErrUsageCacheWarming = errors.New("usage cache is not ready for this report")
+
+// usageDeferredRefreshLimit bounds the changed sessions a deferring read
+// refreshes itself. Larger refreshes cost more than the direct read they
+// would replace.
+const usageDeferredRefreshLimit = 64
+
+type usageWorkDeferredKey struct{}
+
+// withUsageWorkDeferred marks a read that must not fill or rebuild much of
+// the cache. Such a read returns ErrUsageCacheWarming instead.
+func withUsageWorkDeferred(ctx context.Context) context.Context {
+	return context.WithValue(ctx, usageWorkDeferredKey{}, true)
+}
+
+func usageWorkDeferred(ctx context.Context) bool {
+	deferred, _ := ctx.Value(usageWorkDeferredKey{}).(bool)
+	return deferred
+}
+
 type usagePreparedWindow struct {
-	snapshot   usageQuerySnapshot
-	installs   map[string]usageRollupInstall
-	journaled  bool
-	kind       usageQueryKind
-	installSeq int64
-	timings    usageRollupRequestTimings
+	claimDatabaseID string
+	claimZone       *usageZoneCoverage
+	snapshot        usageQuerySnapshot
+	installs        map[string]usageRollupInstall
+	journaled       bool
+	kind            usageQueryKind
+	installSeq      int64
+	timings         usageRollupRequestTimings
 }
 
 // usageWindowObserver provides deterministic synchronization for tests.
@@ -139,15 +165,35 @@ func (db *DB) prepareUsageWindow(ctx context.Context, filter UsageFilter, kind u
 			return prepared, err
 		}
 	}
-	snapshot := prepared.snapshot
-	if snapshot.DatabaseID == "" {
-		snapshot, err = db.captureUsageQuery(ctx, filter, kind)
+	if usageWorkDeferred(ctx) && kind != usageQueryKindActivity {
+		// Without current journal coverage, this read would check, fill,
+		// and build every session in its window.
+		return usagePreparedWindow{}, ErrUsageCacheWarming
+	}
+	full := db.usageSource != nil && filter.From == "" && filter.To == ""
+	var observedID string
+	var latestClaim, accounts, observedEpoch int64
+	if full {
+		observedID, err = db.GetDatabaseID(ctx)
+		if err != nil {
+			return usagePreparedWindow{}, err
+		}
+		cache, release, err := db.usageCache.acquireGeneration(ctx, observedID)
+		if err != nil {
+			return usagePreparedWindow{}, err
+		}
+		err = cache.db.QueryRowContext(ctx, `SELECT MAX(COALESCE((SELECT MAX(change_revision) FROM usage_rollup_timezones), 0), CAST((SELECT value FROM usage_cache_metadata WHERE key = ?) AS INTEGER)), CAST((SELECT value FROM usage_cache_metadata WHERE key = ?) AS INTEGER), CAST((SELECT value FROM usage_cache_metadata WHERE key = ?) AS INTEGER)`, usageCacheMetadataSourceMutation, usageCacheMetadataCursorHighWaterMark, usageCacheMetadataResetEpoch).Scan(&latestClaim, &accounts, &observedEpoch)
+		release()
 		if err != nil {
 			return usagePreparedWindow{}, err
 		}
 	}
-	if !cursor {
-		snapshot.CursorHighWater = 0
+	snapshot := prepared.snapshot
+	if snapshot.DatabaseID == "" || full {
+		snapshot, err = db.captureUsageQuery(ctx, filter, kind)
+		if err != nil {
+			return usagePreparedWindow{}, err
+		}
 	}
 	timings := usageRollupRequestTimings{capture: time.Since(started), candidates: len(snapshot.Versions)}
 	report("Checking the usage cache for this report")
@@ -156,9 +202,37 @@ func (db *DB) prepareUsageWindow(ctx context.Context, filter UsageFilter, kind u
 		return usagePreparedWindow{}, err
 	}
 	defer release()
+	if full && snapshot.exactAccountRevision {
+		if snapshot.DatabaseID != observedID || snapshot.resetEpoch != observedEpoch {
+			return usagePreparedWindow{}, errUsageCacheSourceChanged
+		}
+		if latestClaim > snapshot.ChangeRevision || accounts > snapshot.CursorHighWater {
+			if err := cache.resetRewoundUsage(ctx, snapshot.resetEpoch); err != nil {
+				return usagePreparedWindow{}, err
+			}
+			return usagePreparedWindow{}, errUsageCacheSourceChanged
+		}
+	}
+	if !cursor {
+		snapshot.CursorHighWater = 0
+	}
 	sweepStarted := time.Now()
 	if err := cache.sweepDeletionJournal(ctx, db); err != nil {
 		return usagePreparedWindow{}, err
+	}
+	if usageWorkDeferred(ctx) {
+		ready, err := cache.usageActivityWindowReady(ctx, filter, snapshot)
+		if err != nil {
+			return usagePreparedWindow{}, err
+		}
+		if !ready {
+			return usagePreparedWindow{}, ErrUsageCacheWarming
+		}
+	}
+	if full {
+		if err := cache.sweepAbsentUsageOwners(ctx, snapshot); err != nil {
+			return usagePreparedWindow{}, err
+		}
 	}
 	timings.sweep = time.Since(sweepStarted)
 	installs, measured, err := cache.fillAndRollupUsageWindow(ctx, &snapshot, &snapshot, report)
@@ -166,14 +240,142 @@ func (db *DB) prepareUsageWindow(ctx context.Context, filter UsageFilter, kind u
 		return usagePreparedWindow{}, err
 	}
 	timings.fill, timings.rollup = measured.fill, measured.rollup
-	return usagePreparedWindow{snapshot: snapshot, installs: installs, timings: timings}, nil
+	result := usagePreparedWindow{snapshot: snapshot, installs: installs, timings: timings}
+	if full && snapshot.DatabaseID == prepared.claimDatabaseID {
+		result.claimZone = prepared.claimZone
+	}
+	return result, nil
+}
+
+// usageActivityWindowReady reports whether an activity read can bring its
+// window up to date with a small fill. The zone must hold journal coverage
+// at the snapshot's pricing, and few sessions may need new facts or rollups.
+func (cache *usageCache) usageActivityWindowReady(
+	ctx context.Context, filter UsageFilter, snapshot usageQuerySnapshot,
+) (bool, error) {
+	zone, err := readUsageZoneCoverage(ctx, cache.db,
+		usageTimezoneIdentityFor(filter.Location(), nil).Key)
+	if err != nil {
+		return false, err
+	}
+	if !zone.revision.Valid || zone.foreignPricing || zone.pricing != snapshot.PricingIdentity {
+		return false, nil
+	}
+	lost, err := usageSessionsWithoutRollup(ctx, cache.db, zone.id, usageDeferredRefreshLimit+1)
+	if err != nil {
+		return false, err
+	}
+	ids := usageSourceVersionIDs(snapshot.Versions)
+	cached, err := readUsageCachedSessions(ctx, cache.db, ids)
+	if err != nil {
+		return false, err
+	}
+	pending := len(lost)
+	for _, version := range snapshot.Versions {
+		if current, ok := cached[version.SessionID]; !ok || !current.source.Equal(version) {
+			pending++
+		}
+	}
+	return pending <= usageDeferredRefreshLimit, nil
+}
+
+// usageRefreshReady reports whether a journaled read can refresh its changed
+// sessions and account rows itself. A changed account generation rebuilds
+// every account row, so a deferring read leaves it to the warm pass.
+func (cache *usageCache) usageRefreshReady(
+	ctx context.Context, zoneID int64, refreshIDs []string, cursorHighWater int64,
+) (bool, error) {
+	if len(refreshIDs) > usageDeferredRefreshLimit {
+		return false, nil
+	}
+	if cursorHighWater == 0 {
+		return true, nil
+	}
+	var stored int64
+	if err := cache.db.QueryRowContext(ctx, `SELECT CAST(value AS INTEGER)
+		FROM usage_cache_metadata WHERE key = ?`,
+		usageCacheMetadataCursorHighWaterMark).Scan(&stored); err != nil {
+		return false, err
+	}
+	if stored != cursorHighWater {
+		return false, nil
+	}
+	var installed int64
+	err := cache.db.QueryRowContext(ctx, `SELECT fact_install_revision
+		FROM usage_rollup_installs WHERE timezone_id = ? AND session_id = ?`,
+		zoneID, usageRollupCursorSessionID).Scan(&installed)
+	if errors.Is(err, sql.ErrNoRows) {
+		return false, nil
+	}
+	return err == nil && installed >= cursorHighWater, err
 }
 
 func (cache *usageCache) fillAndRollupUsageWindow(ctx context.Context, snapshot, window *usageQuerySnapshot, report func(string)) (map[string]usageRollupInstall, usageRollupRequestTimings, error) {
 	timings := usageRollupRequestTimings{candidates: len(snapshot.Versions)}
 	fillStarted := time.Now()
 	report(fmt.Sprintf("Preparing usage data for %d sessions in this report", timings.candidates))
-	fills, err := cache.fillUsageWindow(ctx, snapshot)
+	var fills map[string]usageFillResult
+	var err error
+	checkpoint, warming := ctx.Value(usageWarmCheckpointKey{}).(func())
+	if cache.fill.archive.usageSource != nil && len(snapshot.Versions) > usageFillShardMinSessions {
+		// Install each batch before extracting the next so an interrupted warm
+		// pass can reuse both its facts and daily totals.
+		fills = make(map[string]usageFillResult, len(snapshot.Versions))
+		sessions := make(map[string]usageQuerySession, len(snapshot.Sessions))
+		for _, session := range snapshot.Sessions {
+			sessions[session.ID] = session
+		}
+		resolver := export.NewPricingResolverWithDigest(snapshot.PricingRows, snapshot.PricingDigest)
+		for start := 0; start < len(snapshot.Versions); start += usageFillShardMinSessions {
+			if warming && start > 0 {
+				checkpoint()
+				if err := ctx.Err(); err != nil {
+					return nil, timings, err
+				}
+			}
+			end := min(start+usageFillShardMinSessions, len(snapshot.Versions))
+			batch := *snapshot
+			batch.Versions = slices.Clone(snapshot.Versions[start:end])
+			batch.Sessions = make([]usageQuerySession, 0, len(batch.Versions))
+			for _, version := range batch.Versions {
+				if session, ok := sessions[version.SessionID]; ok {
+					batch.Sessions = append(batch.Sessions, session)
+				}
+			}
+			if start > 0 || warming {
+				batch.CursorHighWater = 0
+			}
+			batchFills, fillErr := cache.fill.Ensure(ctx, batch.Versions, batch.CursorHighWater)
+			if fillErr != nil {
+				return nil, timings, fillErr
+			}
+			maps.Copy(fills, batchFills)
+			batch.dropDeleted(batchFills)
+			_, metrics, rollupErr := cache.rollup.Ensure(ctx, batch, batchFills, resolver)
+			timings.rollup = timings.rollup.plus(metrics)
+			if rollupErr != nil {
+				return nil, timings, rollupErr
+			}
+			if warming && start == 0 {
+				// Account imports can be large; wait for direct readers before
+				// loading them or continuing with the rest of the history.
+				checkpoint()
+				if err := ctx.Err(); err != nil {
+					return nil, timings, err
+				}
+				if snapshot.CursorHighWater > 0 {
+					if err := cache.fill.ensureCursor(ctx, snapshot.CursorHighWater); err != nil {
+						return nil, timings, err
+					}
+				}
+			}
+		}
+	} else {
+		if warming {
+			checkpoint()
+		}
+		fills, err = cache.fillUsageWindow(ctx, snapshot)
+	}
 	if err != nil {
 		return nil, timings, err
 	}
@@ -184,13 +386,20 @@ func (cache *usageCache) fillAndRollupUsageWindow(ctx context.Context, snapshot,
 		window.dropDeleted(maps.Clone(fills))
 	}
 	snapshot.dropDeleted(fills)
+	if warming {
+		checkpoint()
+		if err := ctx.Err(); err != nil {
+			return nil, timings, err
+		}
+	}
 	resolver := export.NewPricingResolverWithDigest(snapshot.PricingRows, snapshot.PricingDigest)
 	report(fmt.Sprintf("Calculating daily totals for %d sessions in this report", timings.candidates))
+	// Later batches can invalidate earlier totals through shared dedup keys.
 	installs, metrics, err := cache.rollup.Ensure(ctx, *snapshot, fills, resolver)
 	if err != nil {
 		return nil, timings, err
 	}
-	timings.rollup = metrics
+	timings.rollup = timings.rollup.plus(metrics)
 	return installs, timings, nil
 }
 
@@ -198,9 +407,13 @@ func (cache *usageCache) fillAndRollupUsageWindow(ctx context.Context, snapshot,
 // splitting large windows across the bulk-read slots.
 func (cache *usageCache) fillUsageWindow(ctx context.Context, snapshot *usageQuerySnapshot) (map[string]usageFillResult, error) {
 	shards := max(1, min(bulkReadSlots, len(snapshot.Versions)/usageFillShardMinSessions))
+	remote := cache.fill.archive.usageSource != nil
+	if remote {
+		shards = 1
+	}
 	var fills map[string]usageFillResult
 	var err error
-	if shards == 1 {
+	if shards == 1 && (!remote || len(snapshot.Versions) <= usageFillShardMinSessions) {
 		fills, err = cache.fill.Ensure(ctx, snapshot.Versions, snapshot.CursorHighWater)
 	} else {
 		fills = make(map[string]usageFillResult, len(snapshot.Versions))
@@ -295,6 +508,13 @@ func (db *DB) queryUsageRollups(
 		timings := prepared.timings
 		timings.read = time.Since(readStarted)
 		if queryErr == nil {
+			if prepared.claimZone != nil {
+				queryErr = cache.claimUsageZone(ctx, usageTimezoneIdentityFor(filter.Location(), nil), *prepared.claimZone, snapshot.ChangeRevision, snapshot.PricingIdentity, prepared.installs)
+				if queryErr != nil {
+					release()
+					return usageQuerySnapshot{}, usageFactsResult{}, nil, queryErr
+				}
+			}
 			cache.recordUsageTimezoneRequest(ctx, usageTimezoneIdentityFor(snapshot.location, snapshot.Intervals))
 			release()
 			timings.logIfSlow(started)

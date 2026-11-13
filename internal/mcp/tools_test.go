@@ -699,6 +699,17 @@ func TestSearchContent_SubstringMatch(t *testing.T) {
 	assert.Equal(t, "s1", out.Matches[0].SessionID)
 }
 
+func TestSearchContent_ReportsMatchedWords(t *testing.T) {
+	fake := &fakeContentSearchService{result: &service.ContentSearchResult{
+		Matches: []db.ContentMatch{{MatchedWords: 2}},
+	}}
+	ts := &toolset{svc: fake}
+	_, out, err := ts.searchContent(t.Context(), nil, searchContentIn{Pattern: "invoice rounding decision", IncludeActive: true})
+	require.NoError(t, err)
+	require.Len(t, out.Matches, 1)
+	assert.Equal(t, 2, out.Matches[0].MatchedWords)
+}
+
 // TestSearchContent_ContextRedactsSecretByDefault verifies that a secret in
 // a message adjacent to a search match comes back redacted in
 // context_before through the real service (not a fake), proving the MCP
@@ -2113,9 +2124,11 @@ func TestSearchContent_LexicalChildScope(t *testing.T) {
 	svc := servicehttp.NewHTTPBackend(httpServer.URL, "", false, "")
 	st, ct := newInMemoryPair(t, newServer(ServeOptions{Service: svc}))
 	defer func() { require.NoError(t, ct.Close()); require.NoError(t, st.Wait()) }()
-	for _, mode := range []string{"", "regex"} {
+	// Quotes keep the default search to the exact text instead of every
+	// message holding its words.
+	for _, tc := range []struct{ mode, pattern string }{{"", `"a-child first prompt"`}, {"regex", "a-child first prompt"}} {
 		result, err := ct.CallTool(t.Context(), callParams(ToolSearchContent, map[string]any{
-			"pattern": "a-child first prompt", "mode": mode, "include_active": true,
+			"pattern": tc.pattern, "mode": tc.mode, "include_active": true,
 		}))
 		require.NoError(t, err)
 		require.False(t, result.IsError)

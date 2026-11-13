@@ -57,17 +57,17 @@ in-process fallback.
 
 The parsed-output digest records each provider and corpus input under
 `internal/parser/testdata/data-version-output-digests`. If output changes for a
-recorded input, take a new data version and record its digest with `bump` set
-to true. Keep records already on main. For a new input, append its first digest
-at the current version using output from the current main parser, and leave
-`bump` unset. This also applies when the input accompanies a parser change.
-A new provider can append its first digest at the current version. If records
+recorded input, take a new data version and record its digest with `bump` set to
+true. Keep records already on main. For a new input, append its first digest at
+the current version using output from the current main parser, and leave `bump`
+unset. This also applies when the input accompanies a parser change. A new
+provider can append its first digest at the current version. If records
 conflict, keep the record from main, remove your unmerged conflicting record,
 and take the next version.
 
 The digest covers only inputs in `internal/parser/testdata/data-version-corpus`.
-Parser behavior outside that corpus is unguarded. Add a representative input
-for each new stored-output behavior.
+Parser behavior outside that corpus is unguarded. Add a representative input for
+each new stored-output behavior.
 
 A parser upgrade can instead reparse only the affected providers in place.
 Declare it in `dataVersionScopes` in `internal/db/data_version_scope.go`:
@@ -231,10 +231,27 @@ every message.
 
 Message IDs are opaque archive identities, not row IDs, ordinals, timestamps, or
 text hashes. Preserve them through verified appends, unchanged complete
-reparses, and unambiguous native source IDs, including retained tombstones.
-Changed no-ID replacements must report identity ambiguity. Rebuilds retain these
-IDs and tombstones but use the new database generation for revisions and
-cursors.
+reparses, and unambiguous native source IDs, including retained tombstones. A
+full-session write that applies an in-place diff reconciles only from the first
+ordinal the diff writes, so the rows below it keep their IDs. Changed no-ID
+replacements must report identity ambiguity. Rebuilds retain these IDs and
+tombstones but use the new database generation for revisions and cursors.
+
+`db compact` prunes conversation tombstones that have no native source ID before
+it vacuums. Tombstones with a source ID stay, because they map a returning
+message back to its export ID. Pruning stops the usage-cache backfill first, so
+no long read snapshot pins the WAL. It raises `conversation_pruned_revision` in
+`archive_metadata` to the newest prunable tombstone's revision, then deletes
+tombstones at or below it in rowid batches, so the WAL stays small and
+tombstones written meanwhile survive.
+
+Every change-stream cursor and export position records the floor it was issued
+under. A position restarts (`reset` or `ErrConversationReconciliationRequired`)
+only when the floor has risen since it was issued and the position has not read
+through it. A walk that starts after pruning can therefore page through rows
+below the floor. A body read of a pruned revision returns
+`ErrConversationRevisionChanged`, as the tombstone would have. The floor belongs
+to the database generation, so rebuilds do not copy it.
 
 An archive is cold until its first conversation export: sync writes no message
 projection rows, and the first `export conversations changes` builds the index
@@ -428,6 +445,20 @@ been removed or filtered out.
 If the original rollout moves outside a filtered push's project scope, the
 curation transfer and removal of the old thread row share a transaction. A
 failed transfer leaves the thread and its pins intact.
+
+### SQLite frustration marker counts
+
+The SQLite-only `session_frustration_markers` table stores each session's
+frustration count with a key combining its transcript revision and creation
+time. Its marker version tracks the frustration matcher independently of the
+quality signal version. Signals reuses a row only when both the key and marker
+version match; a changed transcript is counted on the next read. A full resync
+carries matching counts for unchanged reparsed sessions and copied sessions
+whose prompt rows remain unchanged. Changed or transformed prompts are recounted
+on the next read. Read-only archives reuse matching rows when the table exists;
+older archives without it scan prompts. Under the usage-only policy, Signals
+counts retained prompts but does not save new counts. The rows stay local and
+are not mirrored.
 
 ### Codex incremental import state
 
@@ -728,9 +759,10 @@ Keep identity-only corrections in the reporting digest. The wire contract is in
   PostgreSQL/CockroachDB, DuckDB and ClickHouse. Match queries, indexes,
   aggregations, filters and ordering unless a documented SQL, storage layout
   or disposable mirror constraint requires a difference.
-- Do not fix correctness or performance in only one backend unless the user
-  limits the task to that backend. If implementations must differ, explain why
-  and preserve the same behavior.
+- Do not fix correctness in only one backend unless the user limits the task to
+  that backend. If implementations must differ, explain why and preserve the
+  same behavior. Performance work follows
+  [Optimizations apply to every backend](#optimizations-apply-to-every-backend).
 - PostgreSQL, DuckDB and ClickHouse share catalog orchestration in
   `internal/readbase.Catalog`. Shared query builders own SQL that differs only
   in syntax. Each backend explicitly supplies every required SQL operation and
@@ -753,23 +785,22 @@ Keep identity-only corrections in the reporting digest. The wire contract is in
   message counts and project maps; SQL, pricing, caches and read lifetimes
   stay in each backend. Daily usage query strategies and aggregation loops
   remain per backend.
-- DuckDB Activity reports select, price, and sum usage in SQL with
-  `sumActivityUsage`, and derive session runs in SQL with `activitySessionRuns`,
-  both in `internal/duckdb`. Go resolves each model to its rates over the range
-  as a schedule of segments; SQL picks a row's segment and pricing band and does
-  the integer cost math. The SQLite, PostgreSQL, and ClickHouse reports keep the
-  Go rules in `internal/activity`, because the SQL was slower for them on a
-  one-year archive of 30,000 sessions:
-  - SQLite: the usage step took 6.2 s in SQL and 0.99 s in Go, 6.3x slower. One
-    sort of the 600,000 usage rows already takes 1.1 s, and the rules need
-    several. The runs SQL took 11.1 s against 1.9 s for the Go pairing, 5.8x
-    slower, even with an inexact stand-in for DuckDB's
-    `last_value(... IGNORE NULLS)`, which SQLite lacks.
-  - PostgreSQL: the usage selection alone took 1.86 s at best, against about 1 s
-    for the whole Go usage step, at least 1.9x slower.
-  - ClickHouse: the SQL was up to 1.7x faster cold, but reopening a range that
-    includes today was 1.2x to 2.8x slower than the kept usage ranges and
-    pairing memo.
+- DuckDB and ClickHouse Activity reports select, price, and sum usage in SQL,
+  with `sumActivityUsage` in `internal/duckdb` and `readActivityUsageSums` in
+  `internal/clickhouse`. Go resolves each model to its rates over the range as
+  a schedule of segments; SQL picks a row's segment and pricing band and does
+  the integer cost math. Both backends share the schedule and the assembly of
+  the summed groups in `internal/readbase/activityusage.go`. DuckDB also
+  derives session runs in SQL with `activitySessionRuns`. The SQLite and
+  PostgreSQL reports keep the Go rules in `internal/activity`, because the SQL
+  was slower for them on a one-year archive of 30,000 sessions:
+    - SQLite: the usage step took 6.2 s in SQL and 0.99 s in Go, 6.3x slower. One
+      sort of the 600,000 usage rows already takes 1.1 s, and the rules need
+      several. The runs SQL took 11.1 s against 1.9 s for the Go pairing, 5.8x
+      slower, even with an inexact stand-in for DuckDB's
+      `last_value(... IGNORE NULLS)`, which SQLite lacks.
+    - PostgreSQL: the usage selection alone took 1.86 s at best, against about 1 s
+      for the whole Go usage step, at least 1.9x slower.
 
 ### Harness-recorded costs
 
@@ -816,18 +847,52 @@ rows, so no usage, cost, or rollup query reads it. Session usage loads it as
   `SessionUsageTotalFingerprints` changes, like `session_plan_usage`.
   `dbtest.SeedSessionUsageTotal` and `AssertSessionUsageTotal` check each.
 
+### Optimizations apply to every backend
+
+Apply every database optimization and every Go-side backend optimization to each
+backend it applies to: SQLite, PostgreSQL, CockroachDB, DuckDB, and ClickHouse,
+plus any code they share.
+
+A change that optimizes one, two, or three of these backends while the
+optimization applies to the others is incomplete. When a backend cannot take the
+optimization, because the engine lacks the feature or the slow path does not
+exist there, the change names that backend and the reason in its commit message
+and pull request description.
+
 ### Usage cache divergence
 
-SQLite's aggregate usage APIs read timezone-specific daily rollups from a
-disposable sibling database. Normalized, unpriced facts in the same database are
-the exact build substrate, not the warm aggregate read path. Per-session detail
-remains on the live row path, and PostgreSQL continues to aggregate its live
-normalized archive rows. The live path is never a fallback for a failed or stale
-SQLite aggregate read. Both implementations are co-maintained under the same
-behavior contract: daily usage, top sessions, billed session counts, relaxed
-matching counts, and per-session usage must remain observably equal. The
-`pgtest` complete-result parity fixture is the acceptance boundary. Track the
-PostgreSQL-native optimization in
+SQLite and native PostgreSQL aggregate usage APIs read persisted,
+timezone-specific daily rollups. After a restart, Usage reuses priced rows; a
+later push refreshes changed sessions and their snapshot peers on the next read.
+Pricing changes rebuild affected prices during reads. Pushes do no cache work.
+Per-session detail continues to read archive rows.
+
+PostgreSQL stores its disposable cache under the configured data directory,
+partitioned by a credential-free target fingerprint and the change journal's
+table identity. SELECT-only roles can use journals upgraded by a current writer.
+Hosted and borrowed transaction readers, CockroachDB, and connections without a
+usable journal retain direct reads. A journal installed later enables persistent
+reuse without a server restart. If a cache attempt fails while the request is
+active, the existing direct PostgreSQL read supplies its result or error.
+Failure to create the cache directory uses temporary storage. Pairwise retains
+its exactness fallback and can make two extra filtered cache reads. Plan usage,
+per-session details, and Activity retain their existing read paths.
+
+A first bounded visit fills candidate sessions for its date window. Widening the
+window adds missing sessions. Only a complete, verified all-history read can
+establish global journal coverage; later covered reads replay changed sessions
+and missing installs. On SQLite, the first build and repricing can take longer
+than warm reads. Native PostgreSQL serves its direct read instead whenever the
+cache lacks current coverage for the timezone, the catalog or account generation
+changed, or more than 64 sessions changed. A background worker then reads all
+history in that timezone to rebuild the cache and claim coverage; see
+[Usage cache backfill](background-work.md#usage-cache-backfill). Format 24
+rebuilds each SQLite usage cache once after upgrading; the 31,000-session
+fixture previously took about 19 seconds and 92 MB. Both implementations are
+co-maintained under the same behavior contract: daily usage, top sessions,
+billed session counts, relaxed matching counts, and per-session usage must
+remain observably equal. The `pgtest` complete-result parity fixture is the
+acceptance boundary. Track the PostgreSQL-native optimization in
 [issue #1451](https://github.com/kenn-io/agentsview/issues/1451).
 
 The usage cache filename is derived from its format version and the archive
@@ -850,12 +915,11 @@ Do not widen or narrow this live/baked boundary implicitly.
 The cache format version is also the extractor compatibility version. Bump
 `usageCacheFormatVersion` whenever fact extraction, `priceUsageFact`, web-search
 fees, deduplication, rollup semantics, or query-time model canonicalization
-change. Add a record in `internal/db/testdata/usage-cache-format-digests`
-for each format bump. If this PR added the record, replace it when its output
+change. Add a record in `internal/db/testdata/usage-cache-format-digests` for
+each format bump. If this PR added the record, replace it when its output
 changes; otherwise bump the format and record the new digest. The digest covers
 stored facts and daily rollups for the fixture; add a case when new usage
-behavior needs another input.
-Each rollup install records the distinct
+behavior needs another input. Each rollup install records the distinct
 `(provider, reported model, canonical model)` lookups its daily rows used, and a
 full-path read re-resolves only those against the current catalog. A catalog
 digest change sends reads through that path until a coverage pass claims the
@@ -1054,8 +1118,19 @@ or an in-window Claude peer changes; a changed project identity map also
 invalidates it. Partial reports, read-only archives, and reports filtered by
 active, stale, or unclean termination status bypass this cache.
 
+SQLite uses `usage_change_revision` and `analytics_change_revision` to
+invalidate kept Tools, Velocity, Signals, and Trends reports. Tool-call updates
+and deletes, message content-length repairs, and signal updates advance the
+analytics counter. Message changes also advance the session transcript revision.
+PostgreSQL uses its session journal, hosted PostgreSQL uses its tenant identity,
+selection, and corpus revisions, DuckDB uses its mirror stamp, and ClickHouse
+uses its sessions and messages parts fingerprint to invalidate Trends reports.
+Remote DuckDB through Quack reads Trends fresh because it has no reliable
+freshness token. Read-only archives and reports filtered by active, stale, or
+unclean termination status bypass this cache.
+
 PostgreSQL keeps ongoing Activity reports' per-session activity and raw usage
-inputs in memory with a 128 MiB estimated-size budget. Each session keeps its
+inputs in memory with a 256 MiB estimated-size budget. Each session keeps its
 runs and the ascending times of its counted user and assistant messages, derived
 from one pairing over all time: the candidates a report range leaves out are
 ones the aggregator rejects for that range anyway, so one entry serves every
@@ -1246,10 +1321,11 @@ content clears them for a fresh scan.
 ### PostgreSQL usage change journal
 
 PostgreSQL's usage change journal tracks session, usage, pricing, Cursor usage,
-and project identity writes, including changes to source archives. Installation
-requires `CREATE` on the schema and `TRIGGER` on the watched tables in addition
-to normal table access. See [PostgreSQL Sync](../pg-sync.md) for installation
-locks. CockroachDB has no journal.
+and project identity writes, including changes to source archives. Version 2
+tracks account changes separately and records a history token for safe standby
+reuse. Installation requires `CREATE` on the schema and `TRIGGER` on the watched
+tables in addition to normal table access. See [PostgreSQL Sync](../pg-sync.md)
+for installation locks. CockroachDB has no journal.
 
 ### PostgreSQL usage comparisons
 
@@ -1287,14 +1363,28 @@ column and must join the events table to recover the text.
 
 ### PostgreSQL frustration marker reads
 
-Signals counts frustration markers for sessions the in-memory memo does not
-hold. PostgreSQL and CockroachDB read the session versions and those sessions'
-prompts in one statement, `pgFrustrationPromptsSQL`, with the session IDs as one
-array parameter (`= ANY($1)`). A prompt made of ASCII and
-`signals.PlainPromptSymbols`, the alphabet the
-[ClickHouse read](../internal/clickhouse-mirror.md#dashboard-facts) also uses,
-is judged in SQL and comes back only when it is a marker, without its text. Go
-judges the rest with `signals.IsFrustrationMarker`:
+Signals reuses counts in `session_frustration_counts` after a restart. Each row
+pairs the session's committed row version and UTC `updated_at` with an
+independent rules version. A saved count must match both the version selected
+for Signals and the current session version at lookup. A mismatch triggers a
+fresh count. Bump `frustrationMarkerRulesVersion` whenever the Go or PostgreSQL
+frustration classifier changes a verdict. Counts fill lazily after a complete
+scan, including zero counts. A save skips sessions changed before the write
+starts. A sync overlapping the save can leave a stale row; later reads reject
+that row and recount the session.
+
+A read-only role reuses rows it can read and scans misses without saving them.
+The table is optional for push. A missing table falls back to scanning. Hosted
+adoption discards the derived table. Hosted stores and borrowed read
+transactions use only the in-memory memo and scanning.
+
+For sessions without a reusable count, PostgreSQL and CockroachDB read the
+session versions and those sessions' prompts in one statement,
+`pgFrustrationPromptsSQL`, with the session IDs as one array parameter
+(`= ANY($1)`). A prompt made of ASCII and `signals.PlainPromptSymbols`, the
+alphabet the [ClickHouse read](../internal/clickhouse-mirror.md#dashboard-facts)
+also uses, is judged in SQL and comes back only when it is a marker, without its
+text. Go judges the rest with `signals.IsFrustrationMarker`:
 
 - prompts with any other rune;
 - every prompt when the server encoding is not UTF8. The store reads the
@@ -1327,8 +1417,8 @@ The SQL follows `IsFrustrationMarker` step by step. Port it with these rules:
   When that bound is below the threshold, so is the exact ratio. SQL counts
   every word for unresolved prompts of at most 16 KiB, which covers typed
   prompts and short prompts after a fenced paste. Longer prompts use the
-  32-word bound before falling back to Go. `translate()` is slower
-  still (42 s), so the SQL never uses it.
+  32-word bound before falling back to Go. `translate()` is slower still (42
+  s), so the SQL never uses it.
 
 On a fixture of 2,500 sessions with 41,162 prompts (484 MiB of prompt text, 1.9%
 of it outside the plain alphabet), one Signals load with an empty memo took 4.1
@@ -1350,12 +1440,22 @@ the SQL.
   reads, or compatibility shims for old mirrors.
 - Store every DuckDB push cursor and version in the mirror's `sync_metadata`.
   Never store DuckDB sync state in SQLite.
+- Store frustration-marker counts at push and rebuild when the counting rules
+  change.
 - Replace whole sessions during incremental updates and gate them with
   per-session fingerprints. Do not add per-table, per-column, or diff-based
   updates.
 - When readers hold the mirror, catch up and swap a reusable standby using its
   own cursors. Bootstrap it from the main file and WAL, retry while it is
   held, and discard it after a full rebuild.
+- Usage summary, Top sessions, and usage session counts read the usage rollup
+  that a push builds; see
+  [Usage rollup](../../internal/duckdb/README.md#usage-rollup). A read must
+  return what it returns without the rollup. A change to how usage rows are
+  deduplicated, dated, or priced must keep both copies of the rules in step,
+  and a change to what a build stores must bump the rollup format as that
+  section describes. Test fixtures that edit a pushed mirror by hand must drop
+  the rollup, because those edits leave push fingerprints unchanged.
 - Keep Quack read-only. `duckdb push` writes the local mirror; it never writes
   to a remote DuckDB service.
 - Replace a file only after identifying it as an agentsview DuckDB mirror. Fail
@@ -1385,6 +1485,11 @@ own metadata, which is why the docs below call the database a mirror.
   collapse them, and deleting them writes patch rows. Store every ClickHouse
   push cursor and version in the mirror's `sync_metadata`. Never store
   ClickHouse sync state in SQLite.
+- A push that rewrote at least `compactionShare` of the live messages runs
+  `OPTIMIZE TABLE ... FINAL` on `compactionTables` (`compactAfterRewrite`). Add
+  every new table a session push rewrites to that list. Compaction failures
+  are logged and never fail the push. See
+  [Compaction after a large rewrite](../internal/clickhouse-mirror.md#compaction-after-a-large-rewrite).
 - Every mirrored table is `ReplacingMergeTree(push_version)`. Every connection
   sets `final = 1` and, unless the URL sets it, `max_threads = 8`. Do not
   write `FINAL` in query text. One exception: a lookup may collect sort keys
@@ -1399,27 +1504,36 @@ own metadata, which is why the docs below call the database a mirror.
 - Derived tables (`usage_messages`, `terminal_event_snapshots`) are
   insert-maintained by materialized views and keyed by
   `ReplacingMergeTree(revision)`, where live rows use an odd revision above
-  the backfill's even one. Readers check them against `sessions.push_version`:
-  `usage_messages` rows count at or above it, because messages land before the
-  session row is published, and `terminal_event_snapshots` rows match it
-  exactly. A materialized view runs inside the insert and reads joined tables
-  in full, so filter a joined table to the inserted block's sessions. Create
-  and update long-lived views through `ensureView`, which replaces the query
-  of a view an older release created. Views never see deletes;
-  `deleteMirrorSessions` clears the derived tables. Startup backfills record
-  completion in `sync_metadata` only after finishing, never modify source
-  tables, and must stay safe to repeat. See the
+  the backfill's even one. `usage_messages` rows count when they are at or
+  above `sessions.content_version`, because messages land before the session
+  row is published and a push that keeps a session's messages republishes only
+  its row. `terminal_event_snapshots` rows match `sessions.push_version`
+  exactly. Any read that pairs a session with its dependent rows compares them
+  with `content_version`, never `push_version`. A materialized view runs
+  inside the insert and reads joined tables in full, so filter a joined table
+  to the inserted block's sessions. Create and update long-lived views through
+  `ensureView`, which replaces the query of a view an older release created.
+  Views never see deletes; `deleteMirrorSessions` clears the derived tables.
+  Startup backfills record completion in `sync_metadata` only after finishing,
+  never modify source tables, and must stay safe to repeat. See the
   [Activity report reads](../internal/clickhouse-mirror.md#activity-report-reads)
   design section.
+- Usage reads add priced sums from `usage_rollup`, built from `prepared_usage`
+  under the same stamp, and rank only the rows the rollup does not sum. A read
+  must return what it returns without the rollup; when a condition cannot hold,
+  read without it. Any change to how usage rows are deduplicated, dated, or
+  priced must also change the rollup's build and read SQL, and the
+  `usage_rollup_chtest_test.go` comparisons must keep passing. See
+  [Usage rollup](../internal/clickhouse-mirror.md#usage-rollup).
 - `clickhouse push` stores per-session dashboard facts on `sessions`
   (`dashboard_facts_version` and the `fact_*` columns) and copies each tool
   call's message timestamp and model onto `tool_calls` (`message_facts` marks
   those rows). Reads use them only on rows at `dashboardFactsVersion` and scan
   messages for every other row, so results match the scan. A fact must count
   exactly what the scan it replaces counts; change a definition only with a
-  version bump, which makes each archive's next push a full push. SQLite,
-  PostgreSQL, and DuckDB still scan; this is a ClickHouse storage-layout
-  difference. See
+  version bump, which makes each archive's next push a full push that
+  republishes the session rows below that version. SQLite and PostgreSQL still
+  scan. DuckDB stores frustration marker counts at push time. See
   [Dashboard facts](../internal/clickhouse-mirror.md#dashboard-facts).
 - Activity report queries receive the selected session IDs as the
   `activity_candidate_ids` external table on the request context. Do not
@@ -1454,8 +1568,39 @@ own metadata, which is why the docs below call the database a mirror.
 
 ## PostgreSQL Integration Tests
 
-Run PostgreSQL integration tests only against a dedicated test database. The
-tests create and drop the `agentsview` schema.
+Run PostgreSQL integration tests only against a dedicated test server. Each
+top-level test in `internal/postgres` creates its own database on the
+`TEST_PG_URL` server, named `agentsview_test_<hex>`, and drops it when the test
+ends. The role in `TEST_PG_URL` needs `CREATEDB`. A test binary that is killed
+leaves its databases behind; drop them by that prefix.
+
+Because each test owns a database, the tests run in parallel:
+
+- Start a new `pgtest` test with `t.Parallel()` and get its database from
+  `testPGURL(t)`, or `PGTestURL(t)` in the external `postgres_test` package.
+  Subtests share their top-level test's database. `isolatedPGDatabase(t)`
+  returns another, separate database.
+- Tests that call `ensureStoreSchema` get their database from
+  `testPGStoreURL(t)`. On PostgreSQL that database is a copy of a template in
+  which `EnsureSchema` already created the store schema, which saves about
+  60 ms per test. The template is built once per test binary and dropped at
+  exit. CockroachDB has no `CREATE DATABASE ... TEMPLATE`, so there the test
+  gets an empty database and creates the schema itself.
+- Leave out `t.Parallel()` when the test changes process-wide state, such as
+  `t.Setenv`, `time.Local`, `log.SetOutput`, `db.SetUserAutomationPrefixes`,
+  or `pricing.SetConfiguredAliases`. Go runs those tests one at a time before
+  the parallel ones start.
+- Roles are server-wide. Give each role a name no other test uses.
+- Concurrent tests share the server's connections and lock table. Against a
+  server with the default 100 connections, 16 concurrent tests ran out of lock
+  memory (SQLSTATE 53200) and 12 did not. So on PostgreSQL a top-level test
+  holds one of `max_connections / 8` slots while its databases exist, and
+  waits when none is free. The slots are lock files in the system temporary
+  directory, keyed by server address, so every test process against one
+  server shares them. CockroachDB has no shared lock table and no slots.
+- Run CockroachDB with an in-memory store
+  (`start-single-node --store=type=mem,size=4GiB`). Schema setup takes about
+  10 s per test there, against 86 s on a disk store.
 
 Use `make test-postgres` to start the test container and run the suite. It
 leaves the container running. If you started that container, use

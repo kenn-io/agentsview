@@ -196,6 +196,11 @@ func TestDuckDBSystemPrefixSQLTerminalRemainder(t *testing.T) {
 	conn := openTestDuckDB(t)
 	rows, err := conn.QueryContext(t.Context(), `
 		WITH candidates(label, role, content) AS (VALUES
+			('empty', 'user', ''),
+			('ordinary', 'user', 'hello'),
+			('unicode-ordinary', 'user', '　hello'),
+			('bom-prefix', 'user', chr(65279) || '<task-notification>done</task-notification>'),
+			('unicode-prefix', 'user', '　<goal_context>state</goal_context>'),
 			('reminder-only', 'user', '<system-reminder>a</system-reminder><system-reminder>b</system-reminder>'),
 			('reminder-task', 'user', '<system-reminder>a</system-reminder><task-notification>done</task-notification>'),
 			('reminder-ordinary', 'user', '<system-reminder>a</system-reminder>real prompt'),
@@ -214,7 +219,7 @@ func TestDuckDBSystemPrefixSQLTerminalRemainder(t *testing.T) {
 		got = append(got, label)
 	}
 	require.NoError(t, rows.Err())
-	assert.Equal(t, []string{"reminder-malformed", "reminder-ordinary"}, got)
+	assert.Equal(t, []string{"empty", "ordinary", "reminder-malformed", "reminder-ordinary", "unicode-ordinary"}, got)
 }
 
 // TestDuckDBSearchContentSemanticModesUnavailable pins that "semantic" and

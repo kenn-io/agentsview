@@ -17,6 +17,7 @@ import (
 // transcript_fidelity column is pushed to PostgreSQL, read back correctly,
 // and that a change triggers a re-push via the IS DISTINCT FROM guard.
 func TestPGTranscriptFidelityRoundTripsAndRepushes(t *testing.T) {
+	t.Parallel()
 	pgURL := testPGURL(t)
 
 	const schema = "agentsview_transcript_fidelity_test"

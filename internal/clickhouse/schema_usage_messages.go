@@ -216,7 +216,10 @@ func ensureUsageSessionSnapshots(ctx context.Context, conn *sql.DB) error {
 			return err
 		}
 	}
-	return ensurePreparedUsage(ctx, conn)
+	if err := ensurePreparedUsage(ctx, conn); err != nil {
+		return err
+	}
+	return ensureUsageRollup(ctx, conn)
 }
 
 // chSnapshotPreparesUsage names the snapshot column that says whether the
@@ -929,21 +932,22 @@ func chExchangeSupported(ctx context.Context, conn *sql.DB) (supported bool, err
 // rebuild lock, and the push rebuilds the table before it returns.
 //
 // wrote reports whether the push changed what the stamp covers; see
-// preparedUsageRebuildDue.
-func refreshPreparedUsage(ctx context.Context, conn *sql.DB, wrote bool) error {
+// preparedUsageRebuildDue. started reports that the push started the view's
+// refresh, which runs on after it returns.
+func refreshPreparedUsage(ctx context.Context, conn *sql.DB, wrote bool) (started bool, err error) {
 	hasView, err := preparedUsageViewExists(ctx, conn)
 	if err != nil {
-		return err
+		return false, err
 	}
 	if !hasView {
 		locks, _, state, err := newestRebuildLock(ctx, conn)
 		if err != nil {
-			return err
+			return false, err
 		}
 		switch {
 		case locks == 0:
 			log.Print(chNoLockSkipMessage)
-			return nil
+			return false, nil
 		case state.Status == rebuildLockRetired:
 			// A schema step that replaces prepared_usage drops the view
 			// first. If the database also lost its swap support, the step
@@ -953,32 +957,32 @@ func refreshPreparedUsage(ctx context.Context, conn *sql.DB, wrote bool) error {
 			// until the next schema step.
 			exchange, err := chExchangeSupportedSinceStart(ctx, conn)
 			if err != nil {
-				return err
+				return false, err
 			}
 			if exchange {
 				if err := finishScheduledRefreshSwitch(ctx, conn); err != nil {
-					return fmt.Errorf("finishing the switch to the prepare_usage view (the next push retries): %w", err)
+					return false, fmt.Errorf("finishing the switch to the prepare_usage view (the next push retries): %w", err)
 				}
-				return nil
+				return true, nil
 			}
 			if err := openRebuildLocks(ctx, conn); err != nil {
-				return err
+				return false, err
 			}
 		}
 		if err := rebuildPreparedUsage(ctx, conn, wrote); err != nil {
-			return fmt.Errorf("rebuilding prepared usage (the next push retries): %w", err)
+			return false, fmt.Errorf("rebuilding prepared usage (the next push retries): %w", err)
 		}
-		return nil
+		return false, nil
 	}
 	due, reason, err := preparedUsageRebuildDue(ctx, conn, wrote)
 	if err != nil || !due {
-		return err
+		return false, err
 	}
 	log.Printf("clickhouse push: starting prepared usage refresh: %s", reason)
 	if _, err := conn.ExecContext(ctx, "SYSTEM REFRESH VIEW prepare_usage"); err != nil {
-		return fmt.Errorf("starting prepared usage refresh (the next push that writes retries): %w", err)
+		return false, fmt.Errorf("starting prepared usage refresh (the next push that writes retries): %w", err)
 	}
-	return nil
+	return true, nil
 }
 
 // finishScheduledRefreshSwitch completes a switch to the view that a schema
@@ -1498,7 +1502,7 @@ func dropTables(ctx context.Context, conn *sql.DB, condition string, args ...any
 }
 
 func (s *Sync) insertUsageSessionSnapshots(
-	ctx context.Context, payloads []sessionPayload, version uint64,
+	ctx context.Context, payloads []sessionPayload, contentVersions map[string]uint64, version uint64,
 ) error {
 	spec, err := usageSessionSnapshotSpec()
 	if err != nil {
@@ -1518,7 +1522,7 @@ func (s *Sync) insertUsageSessionSnapshots(
 		for _, event := range payload.usage {
 			events = append(events, usageEventRow(event, version))
 		}
-		row := s.sessionRow(payload, payload.fingerprint, version)
+		row := s.sessionRow(payload, contentVersions[payload.session.ID], version)
 		rows = append(rows, append(row[:len(row)-1], messages, events, version))
 	}
 	s.usageWritten = s.usageWritten || len(rows) > 0

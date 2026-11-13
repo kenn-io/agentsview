@@ -12,6 +12,7 @@ import (
 )
 
 func TestSessionUsageTotalPushesApartFromUsage(t *testing.T) {
+	t.Parallel()
 	const schema = "agentsview_session_total_test"
 	ctx := t.Context()
 	pgURL := testPGURL(t)

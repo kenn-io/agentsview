@@ -63,6 +63,7 @@ func seedPGDailyFixture(t *testing.T, store *Store) {
 }
 
 func TestPGActivityReportReadersAvoidPreparedStatements(t *testing.T) {
+	t.Parallel()
 	_, store := prepareUsageSchema(t, "agentsview_activity_fresh_plan_test")
 	seedPGDailyFixture(t, store)
 	tx, err := store.DB().BeginTx(t.Context(), nil)
@@ -86,6 +87,7 @@ func TestPGActivityReportReadersAvoidPreparedStatements(t *testing.T) {
 }
 
 func TestPGActivityReportSourceProbeUsesMirrorSchema(t *testing.T) {
+	t.Parallel()
 	_, store := prepareUsageSchema(t, "agentsview_activity_probe_test")
 	ctx := t.Context()
 
@@ -110,6 +112,7 @@ func TestPGActivityReportSourceProbeUsesMirrorSchema(t *testing.T) {
 }
 
 func TestPGGetActivityReport(t *testing.T) {
+	t.Parallel()
 	_, store := prepareUsageSchema(t, "agentsview_daily_report_test")
 	ctx := t.Context()
 	seedPGDailyFixture(t, store)
@@ -125,6 +128,7 @@ func TestPGGetActivityReport(t *testing.T) {
 }
 
 func TestPGActivityReportSecondRead(t *testing.T) {
+	t.Parallel()
 	_, store := prepareUsageSchema(t, "agentsview_activity_second_read_test")
 	seedPGDailyFixture(t, store)
 	ctx := t.Context()
@@ -166,6 +170,7 @@ func TestPGActivityReportSecondRead(t *testing.T) {
 // DuckDB. Mirrors the SQLite
 // TestGetActivityReport_OpenSessionWithInRangeMessageIncluded.
 func TestPGGetActivityReportOpenSessionWithInRangeMessageIncluded(t *testing.T) {
+	t.Parallel()
 	_, store := prepareUsageSchema(t, "agentsview_daily_report_open_test")
 	ctx := t.Context()
 
@@ -208,6 +213,7 @@ func TestPGGetActivityReportOpenSessionWithInRangeMessageIncluded(t *testing.T) 
 // its input and output tokens and computed cost in the day totals, matching
 // the SQLite reference behavior.
 func TestPGGetActivityReportUsageCostAndTokens(t *testing.T) {
+	t.Parallel()
 	_, store := prepareUsageSchema(t, "agentsview_daily_report_usage_test")
 	ctx := t.Context()
 
@@ -257,6 +263,7 @@ func TestPGGetActivityReportUsageCostAndTokens(t *testing.T) {
 }
 
 func TestPGGetActivityReportCopilotReportedCostReplacesSessionEstimates(t *testing.T) {
+	t.Parallel()
 	_, store := prepareUsageSchema(t, "agentsview_activity_copilot_authoritative_test")
 	ctx := t.Context()
 	_, err := store.DB().ExecContext(ctx, `
@@ -312,6 +319,7 @@ func TestPGGetActivityReportCopilotReportedCostReplacesSessionEstimates(t *testi
 // GetDailyUsage, which never filters by relationship_type). The fork's
 // replayed usage row dedups away, so it adds a session row but no cost.
 func TestPGGetActivityReportIncludesSubagentUsage(t *testing.T) {
+	t.Parallel()
 	_, store := prepareUsageSchema(t, "agentsview_daily_report_subagent_test")
 	ctx := t.Context()
 
@@ -389,6 +397,7 @@ func TestPGGetActivityReportIncludesSubagentUsage(t *testing.T) {
 }
 
 func TestPGGetActivityReportPricingModelsOnlyIncludeDedupSurvivors(t *testing.T) {
+	t.Parallel()
 	_, store := prepareUsageSchema(t, "agentsview_daily_report_pricing_survivor_test")
 	ctx := t.Context()
 
@@ -442,6 +451,7 @@ func TestPGGetActivityReportPricingModelsOnlyIncludeDedupSurvivors(t *testing.T)
 // window plus the usage ts-bounds keep a session whose only activity
 // falls outside the target day from contributing to that day.
 func TestPGGetActivityReportExcludesOtherDays(t *testing.T) {
+	t.Parallel()
 	_, store := prepareUsageSchema(t, "agentsview_daily_report_otherday_test")
 	ctx := t.Context()
 
@@ -497,6 +507,7 @@ func reportSessionIDsPG(sessions []activity.SessionRow) map[string]struct{} {
 // bounds: a session that began and ended on the prior day but lands
 // inside the pad must NOT appear in the target day's report.
 func TestPGGetActivityReportPriorDayWithinPadExcluded(t *testing.T) {
+	t.Parallel()
 	_, store := prepareUsageSchema(t, "agentsview_daily_report_pad_test")
 	ctx := t.Context()
 
@@ -539,6 +550,7 @@ func TestPGGetActivityReportPriorDayWithinPadExcluded(t *testing.T) {
 // synthetic-model message carrying real token_usage must not inflate
 // the day totals.
 func TestPGGetActivityReportExcludesIneligibleUsage(t *testing.T) {
+	t.Parallel()
 	_, store := prepareUsageSchema(t, "agentsview_daily_report_eligible_test")
 	ctx := t.Context()
 
@@ -585,6 +597,7 @@ func TestPGGetActivityReportExcludesIneligibleUsage(t *testing.T) {
 // first-seen cross-session dedup uses timestamp order rather than database or
 // candidate-ID order.
 func TestPGGetActivityReportDedupUsesChronologicalOrder(t *testing.T) {
+	t.Parallel()
 	_, store := prepareUsageSchema(t, "agentsview_daily_report_chunk_test")
 	ctx := t.Context()
 
@@ -675,6 +688,7 @@ func TestPGGetActivityReportDedupUsesChronologicalOrder(t *testing.T) {
 func TestPGGetActivityReportFiltersAfterCrossSessionSnapshotSelection(
 	t *testing.T,
 ) {
+	t.Parallel()
 	_, store := prepareUsageSchema(
 		t, "agentsview_activity_filtered_snapshot_test")
 	ctx := t.Context()
@@ -721,6 +735,7 @@ func TestPGGetActivityReportFiltersAfterCrossSessionSnapshotSelection(
 }
 
 func TestPGGetActivityReportDeduplicatesAfterProjectFilter(t *testing.T) {
+	t.Parallel()
 	_, store := prepareUsageSchema(
 		t, "agentsview_activity_filtered_dedup_test")
 	ctx := t.Context()
@@ -761,6 +776,7 @@ func TestPGGetActivityReportDeduplicatesAfterProjectFilter(t *testing.T) {
 // split. Mirrors the SQLite
 // TestGetActivityReport_AutomationFilterAndSessionSplit.
 func TestPGGetActivityReportAutomationFilterAndSessionSplit(t *testing.T) {
+	t.Parallel()
 	_, store := prepareUsageSchema(t, "agentsview_daily_report_automation_test")
 	ctx := t.Context()
 

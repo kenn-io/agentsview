@@ -385,12 +385,11 @@ func (s analyticsSQL) TrendsSQL(f, sessionFilter db.AnalyticsFilter, _ bool) (st
 
 func (s analyticsSQL) FormatTime(v any) string { return formatDBTime(v) }
 
-func (s analyticsSQL) PopulateFrustrationMarkers(ctx context.Context, rows []db.SignalRow, sessions []readbase.AnalyticsSession) error {
-	versions := make(map[string]string, len(sessions))
-	for _, session := range sessions {
-		versions[session.ID] = session.PushFingerprint
+func (s analyticsSQL) PopulateFrustrationMarkers(_ context.Context, rows []db.SignalRow, sessions []readbase.AnalyticsSession) error {
+	for i := range rows {
+		rows[i].FrustrationMarkerCount = *sessions[i].FrustrationMarkers
 	}
-	return s.store.duckPopulateFrustrationMarkers(ctx, rows, versions)
+	return nil
 }
 
 func (s *Store) GetAnalyticsSummary(
@@ -494,5 +493,10 @@ func (s *Store) GetTrendsTerms(
 	ctx context.Context, f db.AnalyticsFilter,
 	terms []db.TrendTermInput, granularity string,
 ) (db.TrendsTermsResponse, error) {
-	return s.analytics().GetTrendsTerms(ctx, f, terms, granularity)
+	if s.path != "" {
+		s.checkMirrorReplacement(ctx, nil)
+	}
+	return keptAnalytics(ctx, s, "trends", f, db.TrendsKeptVariant(terms, granularity), func(ctx context.Context) (db.TrendsTermsResponse, error) {
+		return s.analytics().GetTrendsTerms(ctx, f, terms, granularity)
+	})
 }

@@ -1,9 +1,10 @@
 package db
 
 import (
-	"bytes"
 	"context"
+	"crypto/sha256"
 	"database/sql"
+	"encoding/hex"
 	"errors"
 	"fmt"
 
@@ -25,17 +26,38 @@ type GenAIPricingDocument struct {
 	UpdatedAt string
 }
 
-// GenAIPricingDocumentsEqual reports whether two documents have the same
-// pricing content and provenance. UpdatedAt is observation metadata and does
-// not make otherwise identical pricing documents different.
-func GenAIPricingDocumentsEqual(a, b *GenAIPricingDocument) bool {
-	if a == nil || b == nil {
-		return a == nil && b == nil
+// GenAIPricingState describes a stored GenAI pricing document without its
+// data. Mirrors read it to decide whether the archive's document changed
+// without transferring the document, which is close to a megabyte.
+type GenAIPricingState struct {
+	Version   string
+	SourceRef string
+	Source    string
+	// DataSHA256 is the lowercase hexadecimal SHA-256 of the stored data,
+	// as GenAIPricingDataSHA256 computes it.
+	DataSHA256 string
+	UpdatedAt  string
+}
+
+// GenAIPricingDataSHA256 returns the lowercase hexadecimal SHA-256 of a
+// GenAI pricing document's data.
+func GenAIPricingDataSHA256(data []byte) string {
+	sum := sha256.Sum256(data)
+	return hex.EncodeToString(sum[:])
+}
+
+// Matches reports whether the stored document has the same pricing content
+// and provenance as document, comparing the data by digest. UpdatedAt is
+// observation metadata and does not make otherwise identical documents
+// different. A nil state is a missing document.
+func (s *GenAIPricingState) Matches(document *GenAIPricingDocument) bool {
+	if s == nil || document == nil {
+		return s == nil && document == nil
 	}
-	return a.Version == b.Version &&
-		a.SourceRef == b.SourceRef &&
-		a.Source == b.Source &&
-		bytes.Equal(a.Data, b.Data)
+	return s.Version == document.Version &&
+		s.SourceRef == document.SourceRef &&
+		s.Source == document.Source &&
+		s.DataSHA256 == GenAIPricingDataSHA256(document.Data)
 }
 
 // GetGenAIPricing returns the stored GenAI Prices document, or nil when the

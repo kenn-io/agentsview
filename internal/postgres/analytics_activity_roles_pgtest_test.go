@@ -18,6 +18,7 @@ import (
 // split behind the stacked activity timeline: system-injected and tool-result
 // user rows count toward the total but not the user segment on every backend.
 func TestAnalyticsActivityRoleSplitParity(t *testing.T) {
+	t.Parallel()
 	pgURL := testPGURL(t)
 	cleanPGSchema(t, pgURL)
 	t.Cleanup(func() { cleanPGSchema(t, pgURL) })

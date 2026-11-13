@@ -19,6 +19,7 @@ AgentsView stores all persistent data under a single directory, defaulting to
 ├── assets/          # Images stored outside SQLite
 ├── vectors.db       # Semantic-search vector index (when [vector] is enabled)
 ├── usage-cache-v6-<id>.db # Disposable usage-aggregate cache
+├── usage-postgres/  # Disposable PostgreSQL usage caches
 ├── telemetry-install-id # Application installation ID
 ├── telemetry-daemon-active.lock  # Serializes daily daemon reports
 ├── telemetry-setup-finished.lock # Serializes the one-time setup report
@@ -43,9 +44,9 @@ has stopped before rotating. Debug log writes share `debug.log.rotate.lock`
 and wait while rotation holds it exclusively. If the lock is busy or the
 backup fails, AgentsView keeps the active log intact.
 
-`usage-cache-v6-<id>.db` is a derived cache of usage aggregates, not user data.
-It is safe to delete when no AgentsView process is running; the next usage query
-rebuilds it automatically. Back up `sessions.db` for session history, `assets/`
+`usage-cache-v6-<id>.db` and `usage-postgres/` contain derived usage aggregates.
+They are safe to delete when no AgentsView process is running; the next usage
+query rebuilds them automatically. Back up `sessions.db` for session history, `assets/`
 for images stored outside SQLite, `config.toml` for settings, and
 `telemetry-install-id` for installation identity. Keep the database and assets
 together when restoring or moving the archive.
@@ -2179,6 +2180,15 @@ Change detection uses file size, mtime, inode, and device tracking to validate
 incremental parses more reliably. A pool of 8 workers processes files in
 parallel during sync.
 
+On `main` (not yet released), shared JSONL discovery can isolate an inaccessible
+file or subtree when the provider supports scoped traversal. A dangling symlink
+remains incomplete, but retries inspect only the unfinished scope. Archived
+sessions beneath that scope remain available, and unrelated session changes
+continue importing. Restoring access lets the retained retry complete without a
+daemon restart. Actual source removal still follows the normal source-missing
+policy. Opaque failures and passes with more than 256 reported failure scopes
+retain the original conservative retry scope.
+
 Codex history hints are available when the producing frontend writes
 `history.jsonl`. In Codex configuration, `[history] persistence = "none"`
 disables those writes; sessions whose stored activity is recent still get
@@ -2538,13 +2548,18 @@ Optional features that send data externally when you enable them:
     `model`, or to the selected agent CLI when neither is set.
 - [Publish to Gist](/docs/usage/#publish-to-gist) uploads a session to GitHub.
 
-The automatic outbound requests are update checks and anonymous telemetry:
+The automatic outbound requests are update checks, pricing refreshes, and
+anonymous telemetry:
 
-- **CLI and web UI** — on startup, the server contacts the GitHub API to check
-    for new releases. No identifying information is sent beyond what a standard
-    GitHub API request includes (IP address, user-agent).
+- **CLI and web UI** — when the web UI loads, the server requests
+    `github.com/kenn-io/agentsview/releases/latest` to find the newest release
+    and caches the answer for an hour. No identifying information is sent
+    beyond what a standard HTTPS request includes (IP address, user-agent).
 - **Desktop app** — uses Tauri's native updater, which checks the GitHub release
     feed independently.
+- **Pricing** — the server downloads public model-pricing catalogs from GitHub
+    and OpenRouter at startup and daily; see
+    [Pricing Source](/docs/token-usage/#pricing-source).
 - **Anonymous daemon telemetry** — see below.
 
 ### Anonymous Daemon Telemetry
@@ -2678,6 +2693,7 @@ Every event contains only:
 - operating system and CPU architecture
 - the application-owned installation ID stored in
   `~/.agentsview/telemetry-install-id`
+- whole hours since that ID was created
 - for the five UI actions, the one listed value above
 - for feature outcomes, the listed kind or reason
 - for screen views, the listed screen name and `surface: web`

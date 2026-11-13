@@ -685,7 +685,11 @@ CREATE INDEX IF NOT EXISTS idx_provider_freshness_updated_at
 // compactions as compact boundaries, and render Grok tool calls in assistant
 // rows. Re-parse Grok sources in place; source and session identities are
 // unchanged.)
-const dataVersion = 178
+// (179: count OpenCode-family reasoning tokens in output when the writer
+// stored output without them, and record reasoning_tokens. Re-parse OpenCode,
+// Kilo, MiMo Code and ICodeMate sources in place; source and session
+// identities are unchanged.)
+const dataVersion = 179
 
 const archiveOnlyVersionBase = 1 << 20
 
@@ -938,6 +942,7 @@ type DB struct {
 	usageCache           *usageCacheManager
 	activityMemo         activityCandidateMemo
 	activityKept         kept.Memo[activityKept]
+	analyticsKept        kept.Reads[any]
 	usageKept            kept.Memo[DailyUsageResult]
 	sessionStatsFacts    *sessionStatsFactsMemo
 	frustrationMemo      FrustrationMarkerMemo
@@ -1016,6 +1021,11 @@ type DB struct {
 	// reuse prepared statements, so a SQLite authorizer sees one compilation
 	// per query shape rather than one per page.
 	memberFreshnessPages atomic.Int64
+
+	usageSource           UsageCacheSource
+	usageSourceIdentityMu sync.Mutex
+	// usageSourceDatabaseID holds the external source identity from the latest capture.
+	usageSourceDatabaseID atomic.Pointer[string]
 }
 
 // MessagesLoadCount returns the total number of GetAllMessages calls the
@@ -5367,11 +5377,12 @@ func (db *DB) checkFTSModuleLoads(
 
 // HasFTS checks if Full Text Search is available.
 func (db *DB) HasFTS(ctx context.Context) bool {
-	// We need to actually try to access the table, because it might exist
-	// in sqlite_master but fail to load if the fts5 module is missing
-	// in the current runtime.
+	// We need to actually query the table, because it might exist in
+	// sqlite_master but fail to load if the fts5 module is missing in the
+	// current runtime. A MATCH reads the index instead of scanning rows, and
+	// succeeds whether or not any row matches.
 	_, err := db.getReader().Exec(ctx,
-		"SELECT 1 FROM messages_fts LIMIT 1",
+		"SELECT 1 FROM messages_fts WHERE messages_fts MATCH 'agentsviewprobe' LIMIT 1",
 	)
 	return err == nil
 }
@@ -5836,6 +5847,7 @@ func (db *DB) reopenLockedWithBarrier(keepWriterBarrier bool) error {
 	oldWriter := db.writer.Swap(writer)
 	var oldReader *sql.DB
 	db.activityKept.DeleteSlots(func(string) bool { return true })
+	db.analyticsKept.Clear()
 	db.usageKept.DeleteSlots(func(string) bool { return true })
 	db.activityMemo.swap(func() {
 		db.frustrationMemo.Swap(func() { db.sessionStatsFacts.Swap(func() { oldReader = db.reader.Swap(reader) }) })

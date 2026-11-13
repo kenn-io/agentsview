@@ -18,6 +18,7 @@ import (
 )
 
 func TestDiagnosticPushFilteredAndReset(t *testing.T) {
+	t.Parallel()
 	const schema = "agentsview_diagnostics_inbox_test"
 	pgURL := testPGURL(t)
 	cleanNamedPGSchema(t, pgURL, schema)
@@ -65,6 +66,7 @@ func TestDiagnosticPushFilteredAndReset(t *testing.T) {
 }
 
 func TestDiagnosticReadsWithoutTable(t *testing.T) {
+	t.Parallel()
 	const schema = "agentsview_diagnostic_missing_test"
 	pgURL := testPGURL(t)
 	cleanNamedPGSchema(t, pgURL, schema)
@@ -100,6 +102,7 @@ func TestDiagnosticReadsWithoutTable(t *testing.T) {
 }
 
 func TestDiagnosticPushConflictingArchives(t *testing.T) {
+	t.Parallel()
 	const schema = "agentsview_diagnostic_conflict_test"
 	pgURL := testPGURL(t)
 	cleanNamedPGSchema(t, pgURL, schema)
@@ -168,6 +171,7 @@ func TestDiagnosticPushConflictingArchives(t *testing.T) {
 }
 
 func TestPushReturnsDiagnosticErrorAfterPublishingSessions(t *testing.T) {
+	t.Parallel()
 	const schema = "agentsview_diagnostic_push_error_test"
 	const sessionID = "claude:unrelated-session"
 	pgURL := testPGURL(t)

@@ -7,4 +7,8 @@ export type PostApiV1SessionsByIdPublishParams = {
    * Create a secret gist instead of a public one
    */
   secret?: boolean;
+  /**
+   * Publish unredacted secret values; localhost callers only
+   */
+  reveal?: boolean;
 };

@@ -21,6 +21,7 @@ import (
 )
 
 func TestHostedResumeUsesCapturedProviderIdentity(t *testing.T) {
+	t.Parallel()
 	for _, tc := range []struct {
 		agent   parser.AgentType
 		command string

@@ -420,7 +420,7 @@ func TestUsageJournaledStaleDeletionAfterPeerRestore(t *testing.T) {
 			require.Greater(t, zone.revision.Int64, revision)
 			// Resume the deletion batch after its archive recheck, once the other
 			// handle has restored the session and advanced coverage past the restore.
-			require.NoError(t, cache.fill.deleteNotificationSessions([]string{"session"}, revision))
+			require.NoError(t, cache.fill.deleteNotificationSessions([]string{"session"}, revision, 0))
 			assert.Zero(t, usageCacheCount(t, cache, "usage_cached_sessions"), "the stale notification must delete cached facts before reads repair them")
 			for range 2 {
 				got, err = database.GetDailyUsage(t.Context(), filter)
@@ -498,6 +498,9 @@ func TestUsageJournaledClaimSurvivingInstalls(t *testing.T) {
 	for _, scenario := range []string{"backfill", "reused-id"} {
 		t.Run(scenario, func(t *testing.T) {
 			database := testDB(t)
+			// Keep installs under test control: notifications can build another
+			// timezone first and consume the row ID the replacement must reuse.
+			database.SetUsageCacheNotificationWork(func() (func(), bool) { return nil, false })
 			seedJournaledUsage(t, database, "session")
 			filter := UsageFilter{Timezone: "UTC"}
 			cache := warmJournaledUsage(t, database, filter)
@@ -529,7 +532,7 @@ func TestUsageJournaledClaimSurvivingInstalls(t *testing.T) {
 				}
 				cache.fill.observer.beforeDeletionSweep = func() {
 					if published.Load() && resumed.CompareAndSwap(false, true) {
-						require.NoError(t, cache.fill.deleteNotificationSessions([]string{"session"}, revision))
+						require.NoError(t, cache.fill.deleteNotificationSessions([]string{"session"}, revision, 0))
 					}
 				}
 				require.NoError(t, database.runUsageCacheBackfillPass(t.Context(), time.Now(), snapshot, zone.installSeq))
@@ -552,7 +555,7 @@ func TestUsageJournaledClaimSurvivingInstalls(t *testing.T) {
 				require.NoError(t, err)
 				required := installs["session"]
 				require.Positive(t, required.ID)
-				require.NoError(t, cache.fill.deleteNotificationSessions([]string{"session"}, revision))
+				require.NoError(t, cache.fill.deleteNotificationSessions([]string{"session"}, revision, 0))
 				// A different session reuses the highest deleted SQLite row ID.
 				seedJournaledUsage(t, database, "replacement")
 				peer, err := database.captureUsageQuery(t.Context(), filter, usageQueryKindToken)
@@ -619,7 +622,7 @@ func TestUsageJournaledBackfillClaimChecksEarlierBatch(t *testing.T) {
 			JOIN usage_rollup_timezones z ON z.id = i.timezone_id WHERE z.timezone_key = ?`, identity.Key).Scan(&installed)
 		require.NoError(t, err)
 		if installed == usageCacheBackfillBatchSize+1 && resumed.CompareAndSwap(false, true) {
-			require.NoError(t, cache.fill.deleteNotificationSessions([]string{firstID}, revision))
+			require.NoError(t, cache.fill.deleteNotificationSessions([]string{firstID}, revision, 0))
 		}
 	}
 	require.NoError(t, database.runUsageCacheBackfillPass(t.Context(), time.Now(), snapshot, zone.installSeq))

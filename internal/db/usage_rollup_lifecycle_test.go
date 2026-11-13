@@ -8,7 +8,9 @@ import (
 	"encoding/binary"
 	"encoding/json"
 	"fmt"
+	"math"
 	"slices"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -18,7 +20,23 @@ import (
 
 	"go.kenn.io/agentsview/internal/export"
 	"go.kenn.io/agentsview/internal/money"
+	"go.kenn.io/agentsview/internal/usagefacts"
 )
+
+func TestUsageQueryIntervals(t *testing.T) {
+	day := usageQueryInterval{
+		FromMillis:    time.Date(2026, 9, 6, 4, 0, 0, 0, time.UTC).UnixMilli(),
+		ToMillis:      time.Date(2026, 9, 7, 3, 0, 0, 0, time.UTC).UnixMilli(),
+		FromLocalDate: "2026-09-06", ToLocalDate: "2026-09-06",
+	}
+	assert.Equal(t, []usageQueryInterval{day}, usageQueryIntervals(UsageFilter{From: "2026-09-06", To: "2026-09-06", Timezone: "America/Santiago"}))
+	fromOnly := day
+	fromOnly.ToMillis, fromOnly.ToLocalDate = math.MaxInt64, ""
+	assert.Equal(t, []usageQueryInterval{fromOnly}, usageQueryIntervals(UsageFilter{From: "2026-09-06", Timezone: "America/Santiago"}))
+	toOnly := day
+	toOnly.FromMillis, toOnly.FromLocalDate = math.MinInt64, "0000-01-01"
+	assert.Equal(t, []usageQueryInterval{toOnly}, usageQueryIntervals(UsageFilter{To: "2026-09-06", Timezone: "America/Santiago"}))
+}
 
 func TestUsageTimezoneIdentityUsesNamedZone(t *testing.T) {
 	loc, err := time.LoadLocation("America/Chicago")
@@ -861,60 +879,295 @@ func TestUsageRollupConnectedSnapshotChangeRebuildsOnlyChangedSession(t *testing
 		"the changed sibling must immediately replace the snapshot winner")
 }
 
-func TestUsageRollupRetriesAfterFactRevisionChanges(t *testing.T) {
-	database := testDB(t)
-	seedUsageSnapshotSession(t, database, "rollup-race", "project-a",
-		"2026-08-10T09:00:00Z", 0, 10, "model-a")
-	oldSnapshot, oldFills, cache := prepareUsageRollupTest(t, database)
-	oldRevision := oldFills["rollup-race"].InstallRevision
-	oldBuilt := make(chan struct{})
-	releaseOld := make(chan struct{})
-	var blocked atomic.Bool
-	cache.rollup.observer.beforeInstall = func(builds []usageRollupBuild) {
-		if len(builds) != 1 || builds[0].FactRevision != oldRevision ||
-			!blocked.CompareAndSwap(false, true) {
-			return
-		}
-		close(oldBuilt)
-		<-releaseOld
-	}
-	type rollupOutcome struct {
-		installs map[string]usageRollupInstall
-		err      error
-	}
-	oldDone := make(chan rollupOutcome, 1)
-	go func() {
-		installs, _, ensureErr := cache.rollup.Ensure(
-			t.Context(), oldSnapshot, oldFills,
-			export.NewPricingResolver(oldSnapshot.PricingRows))
-		oldDone <- rollupOutcome{installs: installs, err: ensureErr}
-	}()
-	<-oldBuilt
-	tx, err := database.getWriter().BeginTx(t.Context(), nil)
-	require.NoError(t, err)
-	_, err = tx.ExecContext(t.Context(), `UPDATE messages SET token_usage = '{"output_tokens":20}'
-		WHERE session_id = 'rollup-race'`)
-	require.NoError(t, err)
-	_, err = tx.ExecContext(t.Context(), `UPDATE sessions SET transcript_revision = 'newer'
-		WHERE id = 'rollup-race'`)
-	require.NoError(t, err)
-	require.NoError(t, tx.Commit())
-	newSnapshot, newFills, _ := prepareUsageRollupTest(t, database)
-	close(releaseOld)
-	oldOutcome := <-oldDone
-	require.NoError(t, oldOutcome.err)
-	assert.Equal(t, newFills["rollup-race"].InstallRevision,
-		oldOutcome.installs["rollup-race"].FactRevision)
+func TestUsageRollupPublishesOnlyCurrentFactRevisions(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name              string
+		external, account bool
+	}{{"local facts", false, false}, {"external facts", true, false}, {"external accounts", true, true}} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			database := testDB(t)
+			if !tc.account {
+				seedUsageSnapshotSession(t, database, "rollup-race", "project-a",
+					"2026-08-10T09:00:00Z", 0, 10, "model-a")
+			}
+			engine := database
+			var source *rollupAccountSource
+			var reader *UsageCacheReader
+			directory := t.TempDir()
+			if tc.external {
+				databaseID, err := database.GetDatabaseID(t.Context())
+				require.NoError(t, err)
+				source = &rollupAccountSource{database: database, databaseID: databaseID, revision: 10, output: 10}
+				if tc.account {
+					source.accounts = []UsageSourceAccount{{ID: 1, Agent: "cursor", Timestamp: "2026-08-10T09:00:00Z", Model: "model-a", OutputTokens: 10, ChargedMicrodollars: 100, DedupKey: "account"}}
+				}
+				reader, err = NewUsageCacheReader(directory, source)
+				require.NoError(t, err)
+				t.Cleanup(func() { require.NoError(t, reader.Close()) })
+				engine = reader.engine
+			}
+			oldSnapshot, oldFills, cache := prepareUsageRollupTest(t, engine)
+			owner, oldRevision := "rollup-race", oldFills["rollup-race"].InstallRevision
+			if tc.account {
+				owner, oldRevision = usageRollupCursorSessionID, oldSnapshot.CursorHighWater
+			}
+			oldBuilt := make(chan struct{})
+			releaseOld := make(chan struct{})
+			release := sync.OnceFunc(func() { close(releaseOld) })
+			t.Cleanup(release)
+			var blocked atomic.Bool
+			cache.rollup.observer.beforeInstall = func(builds []usageRollupBuild) {
+				if !slices.ContainsFunc(builds, func(build usageRollupBuild) bool {
+					return build.SessionID == owner && build.FactRevision == oldRevision
+				}) ||
+					!blocked.CompareAndSwap(false, true) {
+					return
+				}
+				close(oldBuilt)
+				<-releaseOld
+			}
+			type rollupOutcome struct {
+				installs map[string]usageRollupInstall
+				err      error
+			}
+			oldDone := make(chan rollupOutcome, 1)
+			go func() {
+				installs, _, ensureErr := cache.rollup.Ensure(
+					t.Context(), oldSnapshot, oldFills,
+					export.NewPricingResolver(oldSnapshot.PricingRows))
+				oldDone <- rollupOutcome{installs: installs, err: ensureErr}
+			}()
+			select {
+			case <-oldBuilt:
+			case <-time.After(10 * time.Second):
+				require.FailNow(t, "old rollup did not reach publication")
+			}
+			if tc.account {
+				source.revision = 20
+				source.accounts[0].OutputTokens, source.accounts[0].ChargedMicrodollars = 20, 200
+				require.NoError(t, cache.fill.replaceExternalAccounts(t.Context(), 20))
+			} else {
+				tx, err := database.getWriter().BeginTx(t.Context(), nil)
+				require.NoError(t, err)
+				_, err = tx.ExecContext(t.Context(), `UPDATE messages SET token_usage = '{"output_tokens":20}'
+			WHERE session_id = 'rollup-race'`)
+				require.NoError(t, err)
+				_, err = tx.ExecContext(t.Context(), `UPDATE sessions SET transcript_revision = 'newer'
+			WHERE id = 'rollup-race'`)
+				require.NoError(t, err)
+				require.NoError(t, tx.Commit())
+				if source != nil {
+					source.output = 20
+				}
+			}
+			newSnapshot, newFills, _ := prepareUsageRollupTest(t, engine)
+			release()
+			var oldOutcome rollupOutcome
+			select {
+			case oldOutcome = <-oldDone:
+			case <-time.After(10 * time.Second):
+				require.FailNow(t, "old rollup did not finish")
+			}
+			if tc.external {
+				require.ErrorIs(t, oldOutcome.err, errUsageCacheSourceChanged)
+				oldOutcome.installs, _, oldOutcome.err = cache.rollup.Ensure(t.Context(), newSnapshot, newFills, export.NewPricingResolver(newSnapshot.PricingRows))
+			}
+			require.NoError(t, oldOutcome.err)
+			newRevision := newFills[owner].InstallRevision
+			if tc.account {
+				newRevision = newSnapshot.CursorHighWater
+			}
+			assert.Equal(t, newRevision, oldOutcome.installs[owner].FactRevision)
 
-	filter := UsageFilter{
-		From: "2026-08-10", To: "2026-08-10", Timezone: "UTC",
+			filter := UsageFilter{
+				From: "2026-08-10", To: "2026-08-10", Timezone: "UTC",
+			}
+			result, err := cache.usageRollupQuery(
+				t.Context(), usagePreparedWindow{snapshot: newSnapshot, installs: oldOutcome.installs}, filter,
+				export.NewPricingResolver(newSnapshot.PricingRows), 0)
+			require.NoError(t, err)
+			require.Len(t, result.Groups, 1)
+			require.Equal(t, int64(20), result.Groups[0].OutputTokens)
+		})
 	}
-	result, err := cache.usageRollupQuery(
-		t.Context(), usagePreparedWindow{snapshot: newSnapshot, installs: oldOutcome.installs}, filter,
-		export.NewPricingResolver(newSnapshot.PricingRows), 0)
-	require.NoError(t, err)
-	require.Len(t, result.Groups, 1)
-	assert.Equal(t, int64(20), result.Groups[0].OutputTokens)
+}
+
+func TestUsageRollupDeferredAccountBuilds(t *testing.T) {
+	setup := func(t *testing.T, id string) (*DB, *rollupRaceSource, *UsageCacheReader, usageQuerySnapshot, map[string]usageFillResult, *usageCache) {
+		t.Helper()
+		database := testDB(t)
+		seedUsageSnapshotSession(t, database, id, "project-a", "2026-08-10T09:00:00Z", 0, 10, "model-a")
+		databaseID, err := database.GetDatabaseID(t.Context())
+		require.NoError(t, err)
+		source := &rollupRaceSource{}
+		source.database, source.databaseID, source.revision = database, databaseID, 10
+		source.accounts = []UsageSourceAccount{{ID: 1, Agent: "cursor", Timestamp: "2026-08-10T09:00:00Z", Model: "model-a", OutputTokens: 10, DedupKey: "shared"}}
+		reader, err := NewUsageCacheReader(t.TempDir(), source)
+		require.NoError(t, err)
+		t.Cleanup(func() { require.NoError(t, reader.Close()) })
+		snapshot, fills, cache := prepareUsageRollupTest(t, reader.engine)
+		require.True(t, snapshot.exactAccountRevision)
+		return database, source, reader, snapshot, fills, cache
+	}
+	t.Run("overlapping flights", func(t *testing.T) {
+		for _, deferredFirst := range []bool{true, false} {
+			name := "background first"
+			if deferredFirst {
+				name = "deferred first"
+			}
+			t.Run(name, func(t *testing.T) {
+				_, _, _, snapshot, fills, cache := setup(t, "rollup-flight")
+				started := make(chan int, 2)
+				release := [2]chan struct{}{make(chan struct{}), make(chan struct{})}
+				unblock := [2]func(){sync.OnceFunc(func() { close(release[0]) }), sync.OnceFunc(func() { close(release[1]) })}
+				t.Cleanup(func() { unblock[0](); unblock[1]() })
+				var flight atomic.Int32
+				cache.rollup.observer.beforeEnsure = func() {
+					i := int(flight.Add(1)) - 1
+					started <- i
+					<-release[i]
+				}
+				var accountBuilt atomic.Bool
+				var accountLoads atomic.Int32
+				cache.rollup.observer.beforeAccountBuild = func() { accountLoads.Add(1) }
+				cache.rollup.observer.beforeInstall = func(builds []usageRollupBuild) {
+					if slices.ContainsFunc(builds, func(build usageRollupBuild) bool { return build.SessionID == usageRollupCursorSessionID }) {
+						accountBuilt.Store(true)
+					}
+				}
+				start := func(deferred bool) <-chan error {
+					done := make(chan error, 1)
+					go func() {
+						ctx := t.Context()
+						if deferred {
+							ctx = withUsageWorkDeferred(ctx)
+						}
+						_, _, err := cache.rollup.Ensure(ctx, snapshot, fills, export.NewPricingResolver(snapshot.PricingRows))
+						done <- err
+					}()
+					return done
+				}
+				waitStarted := func(want int) {
+					select {
+					case got := <-started:
+						require.Equal(t, want, got)
+					case <-time.After(5 * time.Second):
+						require.FailNow(t, "separate rollup flight did not start")
+					}
+				}
+				first := start(deferredFirst)
+				waitStarted(0)
+				second := start(!deferredFirst)
+				waitStarted(1)
+				deferredDone, backgroundDone := first, second
+				deferredIndex, backgroundIndex := 0, 1
+				if !deferredFirst {
+					deferredDone, backgroundDone = second, first
+					deferredIndex, backgroundIndex = 1, 0
+				}
+				unblock[deferredIndex]()
+				select {
+				case err := <-deferredDone:
+					require.ErrorIs(t, err, ErrUsageCacheWarming)
+				case <-time.After(5 * time.Second):
+					require.FailNow(t, "deferred flight did not finish")
+				}
+				require.False(t, accountBuilt.Load(), "the deferred flight must not build account totals")
+				require.Zero(t, accountLoads.Load(), "the deferred flight must not load account totals")
+				var accounts int
+				require.NoError(t, cache.db.QueryRowContext(t.Context(), `SELECT COUNT(*) FROM usage_rollup_installs WHERE session_id = ?`, usageRollupCursorSessionID).Scan(&accounts))
+				require.Zero(t, accounts)
+				unblock[backgroundIndex]()
+				select {
+				case err := <-backgroundDone:
+					require.NoError(t, err)
+				case <-time.After(5 * time.Second):
+					require.FailNow(t, "background flight did not finish")
+				}
+				require.True(t, accountBuilt.Load())
+				require.Equal(t, int32(1), accountLoads.Load())
+				require.NoError(t, cache.db.QueryRowContext(t.Context(), `SELECT COUNT(*) FROM usage_rollup_installs WHERE session_id = ?`, usageRollupCursorSessionID).Scan(&accounts))
+				require.Equal(t, 1, accounts)
+			})
+		}
+	})
+	t.Run("concurrent fill", func(t *testing.T) {
+		database, source, reader, snapshot, fills, cache := setup(t, "rollup-race")
+		resolver := export.NewPricingResolver(snapshot.PricingRows)
+		_, _, err := cache.rollup.Ensure(t.Context(), snapshot, fills, resolver)
+		require.NoError(t, err)
+
+		// The foreground request needs a session rollup, but its account rollup is current.
+		_, err = database.getWriter().ExecContext(t.Context(), `UPDATE sessions SET project='project-b' WHERE id='rollup-race'`)
+		require.NoError(t, err)
+		snapshot, fills, _ = prepareUsageRollupTest(t, reader.engine)
+		require.True(t, snapshot.exactAccountRevision)
+		started := make(chan struct{})
+		release := make(chan struct{})
+		unblock := sync.OnceFunc(func() { close(release) })
+		t.Cleanup(unblock)
+		cache.rollup.observer.beforeEnsure = func() {
+			close(started)
+			<-release
+		}
+		var rebuiltAccount atomic.Bool
+		var accountLoads atomic.Int32
+		cache.rollup.observer.beforeAccountBuild = func() { accountLoads.Add(1) }
+		cache.rollup.observer.beforeInstall = func(builds []usageRollupBuild) {
+			if slices.ContainsFunc(builds, func(build usageRollupBuild) bool { return build.SessionID == usageRollupCursorSessionID }) {
+				rebuiltAccount.Store(true)
+			}
+		}
+		done := make(chan error, 1)
+		go func() {
+			_, _, err := cache.rollup.Ensure(withUsageWorkDeferred(t.Context()), snapshot, fills, resolver)
+			done <- err
+		}()
+		select {
+		case <-started:
+		case <-time.After(10 * time.Second):
+			require.FailNow(t, "foreground rollup did not start")
+		}
+
+		// A concurrent fill introduces a session key that matches the account row.
+		source.key = "shared"
+		seedUsageSnapshotSession(t, database, "other-session", "project-a", "2026-08-10T10:00:00Z", 0, 10, "model-a")
+		_, _, _ = prepareUsageRollupTest(t, reader.engine)
+		var accounts int
+		require.NoError(t, cache.db.QueryRowContext(t.Context(), `SELECT COUNT(*) FROM usage_rollup_installs WHERE session_id = ?`, usageRollupCursorSessionID).Scan(&accounts))
+		require.Zero(t, accounts, "the concurrent fill must invalidate the account rollup")
+		unblock()
+		select {
+		case err := <-done:
+			require.ErrorIs(t, err, ErrUsageCacheWarming)
+			assert.False(t, rebuiltAccount.Load(), "the foreground request must defer the account rebuild")
+			require.Zero(t, accountLoads.Load())
+		case <-time.After(10 * time.Second):
+			require.FailNow(t, "foreground rollup did not finish")
+		}
+		cache.rollup.observer.beforeEnsure = nil
+		_, _, err = cache.rollup.Ensure(t.Context(), snapshot, fills, resolver)
+		require.NoError(t, err)
+		require.True(t, rebuiltAccount.Load(), "the background build must install account totals")
+		require.NoError(t, cache.db.QueryRowContext(t.Context(), `SELECT COUNT(*) FROM usage_rollup_installs WHERE session_id = ?`, usageRollupCursorSessionID).Scan(&accounts))
+		require.Equal(t, 1, accounts)
+	})
+}
+
+type rollupRaceSource struct {
+	rollupAccountSource
+	key string
+}
+
+func (s *rollupRaceSource) StreamUsage(ctx context.Context, ids []string, emit func(string, usagefacts.Fact) error) (UsageSourceSnapshot, error) {
+	for _, id := range ids {
+		if err := emit(id, usagefacts.Fact{Source: "session", Model: "model-a", UsesSessionStart: true, OutputTokens: 10, UsageDedupKey: s.key, TokenEligible: true}); err != nil {
+			return UsageSourceSnapshot{}, err
+		}
+	}
+	return s.CaptureUsage(ctx, UsageSourceRequest{Filter: UsageFilter{Timezone: "UTC"}})
 }
 
 func TestUsageRollupCursorAppendsOnlyNewEvents(t *testing.T) {
@@ -992,7 +1245,7 @@ func TestUsageRollupOlderCursorBuildCannotReplaceNewerEvents(t *testing.T) {
 	defer conn.Close()
 	pricing := newUsagePricingIdentities(export.NewPricingResolver(oldSnapshot.PricingRows))
 	oldBuild, err := loadCursorUsageRollupBuild(
-		t.Context(), conn, 0, oldSnapshot.CursorHighWater, oldSnapshot.location, pricing)
+		t.Context(), conn, 0, oldSnapshot, pricing)
 	require.NoError(t, err)
 	// Prepare the empty session scope used by Cursor-only rollup installs.
 	_, err = loadUsageRollupFacts(t.Context(), conn, nil)
@@ -1010,11 +1263,11 @@ func TestUsageRollupOlderCursorBuildCannotReplaceNewerEvents(t *testing.T) {
 		t.Context(), nil, newSnapshot.CursorHighWater)
 	require.NoError(t, err)
 	newBuild, err := loadCursorUsageRollupBuild(
-		t.Context(), conn, 0, newSnapshot.CursorHighWater, newSnapshot.location, pricing)
+		t.Context(), conn, 0, newSnapshot, pricing)
 	require.NoError(t, err)
 	identity := usageTimezoneIdentityFor(newSnapshot.location, newSnapshot.Intervals)
 	require.NoError(t, installUsageRollupBuilds(t.Context(), conn, identity, newSnapshot.location,
-		[]usageRollupBuild{newBuild}, cross))
+		[]usageRollupBuild{newBuild}, cross, newSnapshot.resetEpoch))
 	newInstalls, stale, err := readUsageRollupInstalls(
 		t.Context(), conn, identity, newSnapshot, newFills, pricing)
 	require.NoError(t, err)
@@ -1023,11 +1276,11 @@ func TestUsageRollupOlderCursorBuildCannotReplaceNewerEvents(t *testing.T) {
 		newInstalls[usageRollupCursorSessionID].FactRevision)
 
 	err = installUsageRollupBuilds(t.Context(), conn, identity, newSnapshot.location,
-		[]usageRollupBuild{newBuild}, cross)
+		[]usageRollupBuild{newBuild}, cross, newSnapshot.resetEpoch)
 	require.ErrorIs(t, err, errUsageCacheSourceChanged, "a competing build already installed this range")
 
 	err = installUsageRollupBuilds(t.Context(), conn, identity, oldSnapshot.location,
-		[]usageRollupBuild{oldBuild}, cross)
+		[]usageRollupBuild{oldBuild}, cross, oldSnapshot.resetEpoch)
 	require.ErrorIs(t, err, errUsageCacheSourceChanged)
 	oldInstalls, stale, err := readUsageRollupInstalls(
 		t.Context(), conn, identity, oldSnapshot, oldFills, pricing)
@@ -1127,4 +1380,44 @@ func effectivePricingRateForTest(
 	}
 	require.FailNow(t, "pricing row not found", pattern)
 	return export.ModelRates{}
+}
+
+type rollupAccountSource struct {
+	UsageCacheSource
+	database   *DB
+	output     int64
+	databaseID string
+	revision   int64
+	accounts   []UsageSourceAccount
+}
+
+func (s *rollupAccountSource) CaptureUsage(ctx context.Context, request UsageSourceRequest) (UsageSourceSnapshot, error) {
+	snapshot, err := s.database.captureUsageQuery(ctx, request.Filter, usageQueryKindToken)
+	snapshot.CursorHighWater = s.revision
+	return snapshot, err
+}
+
+func (s *rollupAccountSource) StreamUsage(ctx context.Context, ids []string, emit func(string, usagefacts.Fact) error) (UsageSourceSnapshot, error) {
+	for _, id := range ids {
+		if id != "rollup-race" {
+			return UsageSourceSnapshot{}, fmt.Errorf("unexpected source session %q", id)
+		}
+		if err := emit(id, usagefacts.Fact{Source: "message", Model: "model-a", MessageOrdinal: new(0), UsesSessionStart: true, OutputTokens: s.output, TokenEligible: true}); err != nil {
+			return UsageSourceSnapshot{}, err
+		}
+	}
+	return s.CaptureUsage(ctx, UsageSourceRequest{Filter: UsageFilter{Timezone: "UTC"}})
+}
+
+func (s *rollupAccountSource) BuildProjectIdentityMap(ctx context.Context, labels []string) (map[string]export.ProjectMapEntry, error) {
+	return s.database.BuildProjectIdentityMap(ctx, labels)
+}
+
+func (s *rollupAccountSource) StreamUsageAccounts(_ context.Context, emit func(UsageSourceAccount) error) (string, int64, error) {
+	for _, account := range s.accounts {
+		if err := emit(account); err != nil {
+			return "", 0, err
+		}
+	}
+	return s.databaseID, s.revision, nil
 }

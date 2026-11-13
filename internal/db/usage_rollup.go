@@ -228,9 +228,10 @@ type usageRollupCall struct {
 }
 
 type usageRollupObserver struct {
-	beforeEnsure  func()
-	beforeAttempt func(map[string]usageFillResult)
-	beforeInstall func([]usageRollupBuild)
+	beforeEnsure       func()
+	beforeAttempt      func(map[string]usageFillResult)
+	beforeInstall      func([]usageRollupBuild)
+	beforeAccountBuild func()
 }
 
 // usageRollupCoordinator aggregates committed per-session facts out of the
@@ -273,9 +274,11 @@ func (c *usageRollupCoordinator) Ensure(
 	if err != nil {
 		return nil, usageRollupMetrics{}, err
 	}
-	if len(stale) == 0 && installs[usageRollupCursorSessionID].FactRevision >= snapshot.CursorHighWater {
+	cursorCurrent := installs[usageRollupCursorSessionID].FactRevision >= snapshot.CursorHighWater
+	if len(stale) == 0 && cursorCurrent {
 		return installs, usageRollupMetrics{}, nil
 	}
+	snapshot.deferAccountBuild = usageWorkDeferred(ctx) && snapshot.exactAccountRevision
 	// The catalog digest only keys single-flight; staleness is per session.
 	catalogHash := snapshot.PricingIdentity
 	batch := snapshot
@@ -564,10 +567,13 @@ func (c *usageRollupCoordinator) ensureAttempt(
 	if err != nil {
 		return nil, false, usageRollupMetrics{}, err
 	}
-	if installs[usageRollupCursorSessionID].FactRevision < snapshot.CursorHighWater {
+	if !snapshot.deferAccountBuild && installs[usageRollupCursorSessionID].FactRevision < snapshot.CursorHighWater {
+		if c.observer.beforeAccountBuild != nil {
+			c.observer.beforeAccountBuild()
+		}
 		cursorBuild, cursorErr := loadCursorUsageRollupBuild(
 			ctx, conn, installs[usageRollupCursorSessionID].FactRevision,
-			snapshot.CursorHighWater, snapshot.location, pricing)
+			snapshot, pricing)
 		if cursorErr != nil {
 			return nil, false, usageRollupMetrics{}, cursorErr
 		}
@@ -595,10 +601,19 @@ func (c *usageRollupCoordinator) ensureAttempt(
 		c.observer.beforeInstall(slices.Clone(builds))
 	}
 	err = installUsageRollupBuilds(
-		ctx, conn, identity, snapshot.location, builds, cross)
+		ctx, conn, identity, snapshot.location, builds, cross, snapshot.resetEpoch)
 	metrics.InstallDuration = time.Since(installStarted)
 	if err != nil {
-		if errors.Is(err, errUsageCacheSourceChanged) {
+		if snapshot.deferAccountBuild && errors.Is(err, errUsageCacheSourceChanged) {
+			current, _, readErr := readUsageRollupInstalls(ctx, conn, identity, snapshot, fills, pricing)
+			if readErr != nil {
+				return nil, false, metrics, readErr
+			}
+			if current[usageRollupCursorSessionID].FactRevision < snapshot.CursorHighWater {
+				return nil, false, metrics, ErrUsageCacheWarming
+			}
+		}
+		if errors.Is(err, errUsageCacheSourceChanged) && !snapshot.exactAccountRevision {
 			return nil, false, metrics, nil
 		}
 		return nil, false, metrics, err
@@ -610,6 +625,12 @@ func (c *usageRollupCoordinator) ensureAttempt(
 	}
 	if len(stale) != 0 ||
 		installs[usageRollupCursorSessionID].FactRevision < snapshot.CursorHighWater {
+		if snapshot.deferAccountBuild && installs[usageRollupCursorSessionID].FactRevision < snapshot.CursorHighWater {
+			return nil, false, metrics, ErrUsageCacheWarming
+		}
+		if snapshot.exactAccountRevision {
+			return nil, false, metrics, errUsageCacheSourceChanged
+		}
 		// Another builder installed a different generation of one of these
 		// sessions while this one was building. Its facts are committed, so
 		// the next attempt sees them.
@@ -690,6 +711,17 @@ func readUsageRollupInstalls(
 	if err := errors.Join(rows.Err(), rows.Close()); err != nil {
 		return nil, nil, err
 	}
+	if cursor, ok := installs[usageRollupCursorSessionID]; ok && snapshot.exactAccountRevision {
+		// A full account generation prices its totals at build time, so a
+		// changed lookup rebuilds it like a session.
+		expected, err := pricing.forEncoded(pricingInputs[usageRollupCursorSessionID])
+		if err != nil {
+			return nil, nil, err
+		}
+		if cursor.PricingHash != expected {
+			delete(installs, usageRollupCursorSessionID)
+		}
+	}
 	sessions := make(map[string]usageQuerySession, len(snapshot.Sessions))
 	for _, session := range snapshot.Sessions {
 		sessions[session.ID] = session
@@ -726,7 +758,7 @@ func readUsageRollupInstalls(
 func installUsageRollupBuilds(
 	ctx context.Context, conn *sql.Conn, identity usageTimezoneIdentity,
 	location *time.Location, builds []usageRollupBuild,
-	buildCross usageDedupIdentitySet,
+	buildCross usageDedupIdentitySet, epoch int64,
 ) error {
 	// Take the cache write lock up front. A deferred transaction that
 	// reads before its first write fails with SQLITE_BUSY_SNAPSHOT
@@ -743,6 +775,9 @@ func installUsageRollupBuilds(
 			_, _ = conn.ExecContext(context.WithoutCancel(ctx), `ROLLBACK`)
 		}
 	}()
+	if err := verifyUsageResetEpoch(ctx, conn, epoch); err != nil {
+		return err
+	}
 	// A fill committing between classification and this install can add a
 	// sibling for an identity that was finalized into a daily row. Abort on
 	// new crossness; crossness that disappeared keeps the conservative
@@ -807,6 +842,14 @@ func installUsageRollupBuilds(
 	defer func() { _ = stmts.Close() }()
 	dates := make(map[string]bool)
 	for _, build := range builds {
+		if build.ExactAccountRevision {
+			if err := verifyUsageAccountRevision(ctx, conn, build.FactRevision); err != nil {
+				return err
+			}
+			if err := verifyUsageAccountCollisions(ctx, conn, build.AccountCollisions); err != nil {
+				return err
+			}
+		}
 		var installID int64
 		var installedFactRevision int64
 		err := stmts.QueryRowContext(ctx, `SELECT id, fact_install_revision
@@ -823,19 +866,22 @@ func installUsageRollupBuilds(
 			SET change_revision=MIN(change_revision, ?) WHERE id=?`, build.ChangeRevision, timezoneID); err != nil {
 			return err
 		}
-		if build.SessionID == usageRollupCursorSessionID &&
-			installedFactRevision != build.CursorAfter {
+		// A full account generation replaces its rows, as a session does.
+		appendOnly := build.SessionID == usageRollupCursorSessionID &&
+			!build.ExactAccountRevision
+		if appendOnly && installedFactRevision != build.CursorAfter {
 			return fmt.Errorf(
 				"%w: Cursor usage base changed during rollup build",
 				errUsageCacheSourceChanged)
 		}
 		if err == nil {
-			if build.SessionID != usageRollupCursorSessionID {
+			if !appendOnly {
 				if _, err := stmts.ExecContext(ctx, `DELETE FROM usage_daily_rollups WHERE rollup_install_id = ?`, installID); err != nil {
 					return err
 				}
 				for _, table := range []string{
 					"usage_activity_rollups", "usage_rollup_exceptions",
+					"usage_rollup_account_totals",
 				} {
 					if _, err := stmts.ExecContext(ctx, `DELETE FROM `+table+
 						` WHERE rollup_install_id = ?`, installID); err != nil {
@@ -919,6 +965,26 @@ func installUsageRollupRows(
 		}
 		dates[row.LocalDate] = true
 	}
+	for _, row := range build.AccountTotals {
+		band := -1
+		if row.BandThreshold != nil {
+			band = *row.BandThreshold
+		}
+		_, err := conn.ExecContext(ctx, `INSERT INTO usage_rollup_account_totals VALUES(
+			?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+			installID, row.LocalDate, row.Agent, boolInt(row.IsHeadless),
+			row.ReportedModel, row.ProviderID, row.PricedModel, row.MatchedPattern,
+			boolInt(row.RateOK), row.RateHash, band, row.PricingKey,
+			row.PricingTimestamp, row.InputTokens, row.OutputTokens,
+			row.ReasoningTokens, row.CacheCreationTokens, row.CacheReadTokens,
+			row.CostMicrodollars, row.SavingsMicrodollars,
+			row.ComputedRequestCount, row.ComputedAggregateCount,
+			row.ReportedCount, row.BaseRequestCount)
+		if err != nil {
+			return err
+		}
+		dates[row.LocalDate] = true
+	}
 	for _, row := range build.Activity {
 		if _, err := conn.ExecContext(ctx, `INSERT INTO usage_activity_rollups VALUES(?, ?, ?, ?)`,
 			installID, row.LocalDate, row.Model, row.UserMessageCount); err != nil {
@@ -929,7 +995,7 @@ func installUsageRollupRows(
 	for _, row := range build.Exceptions {
 		fact := row.Fact
 		_, err := conn.ExecContext(ctx, `INSERT INTO usage_rollup_exceptions VALUES(
-			?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+			?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 			installID, row.GroupKind, row.GroupKey, fact.CachedSessionID,
 			fact.FactIndex, fact.SourceSessionID, fact.LocalDate, fact.Fact.Source,
 			fact.Fact.MessageOrdinal, fact.Fact.TimestampMillis, fact.Fact.TimestampNanos,
@@ -942,11 +1008,30 @@ func installUsageRollupRows(
 			fact.Fact.CostSource, fact.Fact.CostStatus,
 			boolInt(fact.Fact.RequestScoped), boolInt(fact.IsHeadless),
 			fact.Fact.ClaudeMessageID, fact.Fact.ClaudeRequestID,
-			fact.Fact.SourceUUID, fact.Fact.UsageDedupKey)
+			fact.Fact.SourceUUID, fact.Fact.UsageDedupKey, fact.Fact.RankingOutputTokens)
 		if err != nil {
 			return err
 		}
 		dates[fact.LocalDate] = true
+	}
+	return nil
+}
+
+// verifyUsageAccountCollisions rejects an account build when a key it
+// priced into totals now collides, because a fill installed a session that
+// reports the same key after the build read the collisions.
+func verifyUsageAccountCollisions(
+	ctx context.Context, conn *sql.Conn, built map[string]bool,
+) error {
+	current, err := loadCursorUsageCollisions(ctx, conn)
+	if err != nil {
+		return err
+	}
+	for key := range current {
+		if !built[key] {
+			return fmt.Errorf("%w: account usage key gained a duplicate during rollup build",
+				errUsageCacheSourceChanged)
+		}
 	}
 	return nil
 }
@@ -982,6 +1067,7 @@ func usageRollupCallKey(
 	writeUsageHashString(digest,
 		usageTimezoneIdentityFor(snapshot.location, snapshot.Intervals).Key)
 	writeUsageHashString(digest, catalogHash)
+	writeUsageHashBool(digest, snapshot.deferAccountBuild)
 	writeUsageHashInt64(digest, snapshot.CursorHighWater)
 	writeUsageHashInt64(digest, snapshot.ChangeRevision)
 	sessions := make(map[string]usageQuerySession, len(snapshot.Sessions))

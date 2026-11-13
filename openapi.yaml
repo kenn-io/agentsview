@@ -1375,6 +1375,10 @@ components:
           type: string
         machine:
           type: string
+        matched_words:
+          description: Number of retained query words the match holds in ranked word search; unquoted stop words are dropped. Zero for other searches.
+          format: int64
+          type: integer
         ordinal:
           format: int64
           type: integer
@@ -1426,6 +1430,7 @@ components:
         - ordinal
         - timestamp
         - snippet
+        - matched_words
         - ordinal_range
       type: object
     DbCursorAttributionMetrics:
@@ -21959,6 +21964,13 @@ paths:
           schema:
             description: Session ID
             type: string
+        - description: Export unredacted secret values; localhost callers only
+          explode: false
+          in: query
+          name: reveal
+          schema:
+            description: Export unredacted secret values; localhost callers only
+            type: boolean
       responses:
         "200":
           content:
@@ -22251,6 +22263,13 @@ paths:
               - "1"
               - all
             type: string
+        - description: Export unredacted secret values; localhost callers only
+          explode: false
+          in: query
+          name: reveal
+          schema:
+            description: Export unredacted secret values; localhost callers only
+            type: boolean
       responses:
         "200":
           content:
@@ -23155,6 +23174,13 @@ paths:
           name: secret
           schema:
             description: Create a secret gist instead of a public one
+            type: boolean
+        - description: Publish unredacted secret values; localhost callers only
+          explode: false
+          in: query
+          name: reveal
+          schema:
+            description: Publish unredacted secret values; localhost callers only
             type: boolean
       responses:
         "200":

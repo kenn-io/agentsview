@@ -21,6 +21,7 @@ const (
 )
 
 func TestPreSplitPGTrashKeepsPagesHidden(t *testing.T) {
+	t.Parallel()
 	for _, tc := range []struct {
 		name, prefix, agent string
 	}{
@@ -166,6 +167,7 @@ func newCodexTrashMirror(t *testing.T) (*db.DB, *Sync, *Store) {
 }
 
 func TestCodexLegacyTrashPurgeMirror(t *testing.T) {
+	t.Parallel()
 	for _, empty := range []bool{false, true} {
 		name := "thread"
 		if empty {
@@ -242,6 +244,7 @@ func TestCodexLegacyTrashPurgeMirror(t *testing.T) {
 }
 
 func TestCodexLegacyTrashRestoreMirror(t *testing.T) {
+	t.Parallel()
 	for _, localRestore := range []bool{false, true} {
 		for _, id := range []string{codexTrashThread, codexTrashPage} {
 			name := "remote/" + id
@@ -294,6 +297,7 @@ func TestCodexLegacyTrashRestoreMirror(t *testing.T) {
 }
 
 func TestCodexLegacyTrashPagePurgeStaysPerFile(t *testing.T) {
+	t.Parallel()
 	local, syncer, store := newCodexTrashMirror(t)
 	ctx := t.Context()
 	removed, err := store.DeleteSessionIfTrashed(ctx, codexTrashPage)
@@ -316,6 +320,7 @@ func TestCodexLegacyTrashPagePurgeStaysPerFile(t *testing.T) {
 }
 
 func TestCodexTrashScopeSchemaMigrationKeepsArchive(t *testing.T) {
+	t.Parallel()
 	_, syncer, store := newCodexTrashMirror(t)
 	ctx := t.Context()
 	_, err := store.pg.ExecContext(ctx, `ALTER TABLE sessions DROP COLUMN trash_includes_codex_pages, DROP COLUMN source_trash_includes_codex_pages;
@@ -343,6 +348,7 @@ func TestCodexTrashScopeSchemaMigrationKeepsArchive(t *testing.T) {
 }
 
 func TestHostedLegacyCodexTrashScope(t *testing.T) {
+	t.Parallel()
 	for _, action := range []string{"purge", "empty", "restore_page", "restore_thread"} {
 		t.Run(action, func(t *testing.T) {
 			f := newHostedFixture(t, "tenant-codex-trash")
@@ -396,6 +402,7 @@ func TestHostedLegacyCodexTrashScope(t *testing.T) {
 }
 
 func TestCodexTrashScopeUpgradePreservesLaterPerFileDeletion(t *testing.T) {
+	t.Parallel()
 	for _, tc := range []struct {
 		name                                         string
 		missingBaseline, currentColumns, remoteTrash bool

@@ -75,6 +75,7 @@ function contentMatch(sessionId: string, ordinal: number, score: number): DbCont
     ordinal_range: [ordinal, ordinal],
     timestamp: `2026-06-${String(ordinal).padStart(2, "0")}T10:00:00Z`,
     snippet: `semantic snippet ${ordinal}`,
+    matched_words: 0,
     score,
   };
 }
@@ -159,6 +160,60 @@ describe("SearchStore", () => {
     expect(storage.setItem).toHaveBeenCalledWith(SEARCH_MODE_STORAGE_KEY, "hybrid");
     expect(store.mode).toBe("hybrid");
     expect(store.sort).toBe("recency");
+  });
+
+  it("retains the search for one later open without another request", async () => {
+    const store = createSearchStore(memoryStorage());
+    searchService.getApiV1Search.mockResolvedValueOnce(fullTextResponse("needle", 3));
+    store.setSort("recency");
+    store.setRange({ mode: "relative", days: 7 });
+    store.search("needle", "alpha");
+    await runDebounce();
+    await flushMicrotasks();
+    const results = store.results;
+
+    store.retain({ query: "needle", project: "alpha", selectedIndex: 2 });
+
+    expect(store.restore()).toEqual({ query: "needle", project: "alpha", selectedIndex: 2 });
+    expect(store.query).toBe("needle");
+    expect(store.project).toBe("alpha");
+    expect(store.sort).toBe("recency");
+    expect(store.range).toEqual({ mode: "relative", days: 7 });
+    expect(store.results).toEqual(results);
+    expect(store.restore()).toBeNull();
+    expect(searchService.getApiV1Search).toHaveBeenCalledOnce();
+  });
+
+  it("restores a search retained mid-debounce by running it from the top", async () => {
+    const store = createSearchStore(memoryStorage());
+    searchService.getApiV1Search.mockResolvedValueOnce(fullTextResponse("needle", 2));
+    searchService.getApiV1Search.mockResolvedValueOnce(fullTextResponse("needles", 1));
+    store.search("needle", "alpha");
+    await runDebounce();
+    await flushMicrotasks();
+    store.search("needles", "alpha");
+
+    store.retain({ query: "needles", project: "alpha", selectedIndex: 1 });
+    await runDebounce();
+    expect(searchService.getApiV1Search).toHaveBeenCalledOnce();
+
+    expect(store.restore()).toEqual({ query: "needles", project: "alpha", selectedIndex: 0 });
+    await flushMicrotasks();
+    expect(searchService.getApiV1Search).toHaveBeenLastCalledWith(
+      expect.objectContaining({ q: "needles", project: "alpha" }),
+      expect.anything(),
+    );
+    expect(store.results).toHaveLength(1);
+  });
+
+  it("clear discards a retained search", () => {
+    const store = createSearchStore(memoryStorage());
+    store.retain({ query: "ab", project: "", selectedIndex: 1 });
+
+    store.clear();
+
+    expect(store.restore()).toBeNull();
+    expect(store.query).toBe("");
   });
 
   it("calls full-text search with the exact request and normalizes its result", async () => {

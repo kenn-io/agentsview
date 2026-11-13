@@ -3,6 +3,7 @@ package db
 import (
 	"bytes"
 	"context"
+	"encoding/json/v2"
 	"errors"
 	"fmt"
 	"sort"
@@ -21,6 +22,27 @@ type TrendTermInput struct {
 	Term     string   `json:"term"`
 	Variants []string `json:"variants"`
 	Matchers []string `json:"-"`
+}
+
+// trendsMatchingVersion changes when term matching or variant expansion changes.
+const trendsMatchingVersion = 1
+
+// TrendsKeptVariant identifies the ordered terms and their matching rules.
+func TrendsKeptVariant(terms []TrendTermInput, granularity string) string {
+	type term struct {
+		Term               string
+		Variants, Matchers []string
+	}
+	values := make([]term, len(terms))
+	for i, t := range terms {
+		values[i] = term(t)
+	}
+	key, _ := json.Marshal(struct {
+		Version     int
+		Granularity string
+		Terms       []term
+	}{trendsMatchingVersion, granularity, values})
+	return string(key)
 }
 
 type TrendBucket struct {
@@ -55,6 +77,12 @@ func (db *DB) GetTrendsTerms(
 	terms []TrendTermInput,
 	granularity string,
 ) (TrendsTermsResponse, error) {
+	return keptAnalytics(ctx, db, "trends|"+TrendsKeptVariant(terms, granularity), f, func(ctx context.Context, f AnalyticsFilter) (TrendsTermsResponse, error) {
+		return db.trendsTerms(ctx, f, terms, granularity)
+	})
+}
+
+func (db *DB) trendsTerms(ctx context.Context, f AnalyticsFilter, terms []TrendTermInput, granularity string) (TrendsTermsResponse, error) {
 	release, err := db.acquireBulkRead(ctx)
 	if err != nil {
 		return TrendsTermsResponse{}, err

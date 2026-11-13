@@ -566,21 +566,31 @@ archive, never from any daemon. Both `--server` and `--format`/`--json` are
 rejected with an error — the command also rejects `--pg`. It streams raw bytes,
 so structured-output and remote-store flags don't apply.
 
+Detected secrets, such as API keys, tokens and private keys, are masked by
+default, with the same detector and masked form as search results. The command
+reads the whole source before writing. A JSON Lines source is masked inside each
+record's decoded strings, so JSON escapes such as `\n` cannot hide a key, and
+each record stays valid JSON. Any other source is masked as a whole, so a key
+block that spans lines is still caught. Pass `--reveal` to stream the source
+unchanged.
+
 ```bash
 agentsview session export <id>
+agentsview session export <id> --reveal
 ```
 
 Exit states:
 
 | State                                  | Behavior                                         |
 | -------------------------------------- | ------------------------------------------------ |
-| Session in local archive, file on disk | Streams bytes verbatim                           |
+| Session in local archive, file on disk | Streams bytes, secrets masked unless `--reveal`  |
 | Session in local archive, file missing | Exit 1: error prefixed `source file not found`   |
 | Session in local archive, path empty   | Exit 1: `source file not found for session <id>` |
 | Session not in local archive           | Exit 1: `session not in local archive: <id>`     |
 
 For a DB-derived export (HTML or markdown) use the HTTP endpoints
-`/api/v1/sessions/{id}/export` or `/api/v1/sessions/{id}/md`.
+`/api/v1/sessions/{id}/export` or `/api/v1/sessions/{id}/md`. They mask
+secrets too; see [secrets in exports](/docs/usage/#secrets-in-exports).
 
 Markdown export accepts an optional `depth` query parameter:
 
@@ -816,7 +826,8 @@ agentsview session search <pattern> [flags]
       "ordinal_range": [12, 24],
       "location": "tool_result",
       "tool_name": "Bash",
-      "snippet": "...connecting to db with token ***REDACTED***..."
+      "snippet": "...connecting to db with token ***REDACTED***...",
+      "matched_words": 3
     }
   ]
 }
@@ -917,6 +928,15 @@ substring (the default) and regex modes also walk `tool_calls.input_json`,
 `--hybrid` require an embedding index and return a single ranked page
 (`--cursor` is rejected) — see [Semantic Search](/docs/semantic-search/) for
 setup, scoring, and limitations.
+
+On SQLite, a default search of several words that includes `messages` returns
+exact text matches first, then messages ordered by how many query words they
+hold, with that count in `matched_words`. Unquoted stop words do not count.
+Regular word forms count, and a quoted phrase inside the query requires its
+words together and in order. `--fts` and hybrid's keyword leg use the same word
+matching unless the query starts with a quote and holds only
+quoted phrases or FTS5 operators, which keeps FTS5 behavior. Other searches
+report `matched_words` as `0`.
 
 On PostgreSQL, `--fts` matches each word or quoted phrase as a case-insensitive substring; a query that starts with a quote also honors `AND`, `OR`, `NOT`, and parentheses as SQLite does. `NEAR(...)` and prefix `*` are not supported there; `*` matches literally.
 

@@ -1420,3 +1420,192 @@ func BenchmarkConversationExport(b *testing.B) {
 		})
 	}
 }
+
+// A diffed full-session write keeps the IDs of rows below the first ordinal it
+// writes, so growing a session without native source IDs leaves no tombstones
+// for messages that did not change.
+func TestConversationExportDiffedReplaceKeepsUnchangedIDs(t *testing.T) {
+	writes := map[string]func(context.Context, *DB, []Message) error{
+		"ReplaceSessionMessages": func(ctx context.Context, d *DB, msgs []Message) error {
+			return d.ReplaceSessionMessages(ctx, "chat", msgs)
+		},
+		"ReplaceSessionContent": func(ctx context.Context, d *DB, msgs []Message) error {
+			return d.ReplaceSessionContent(ctx, "chat", msgs, SessionSignalUpdate{}, nil)
+		},
+	}
+	for name, write := range writes {
+		t.Run(name, func(t *testing.T) {
+			d := testDB(t)
+			ctx := t.Context()
+			require.NoError(t, d.UpsertSession(ctx, Session{ID: "chat", Project: "sample", Machine: "local", Agent: "codex"}))
+			msgs := []Message{
+				{SessionID: "chat", Ordinal: 0, Role: "user", Content: "First question"},
+				{SessionID: "chat", Ordinal: 1, Role: "assistant", Content: "First answer"},
+				{SessionID: "chat", Ordinal: 2, Role: "user", Content: "Second question"},
+				{SessionID: "chat", Ordinal: 3, Role: "assistant", Content: "Second ans"},
+			}
+			require.NoError(t, d.InsertMessages(ctx, msgs))
+			initial, err := d.ExportConversationChanges(ctx, ConversationExportOptions{})
+			require.NoError(t, err)
+			require.Len(t, initial.Changes, 4)
+			ids := map[int]string{}
+			for _, change := range initial.Changes {
+				ids[change.Ordinal] = change.MessageID
+			}
+
+			// A pure append keeps every stored row.
+			msgs = append(msgs, Message{SessionID: "chat", Ordinal: 4, Role: "user", Content: "Third question"})
+			require.NoError(t, write(ctx, d, msgs))
+			appended, err := d.ExportConversationChanges(ctx, ConversationExportOptions{Checkpoint: initial.Checkpoint})
+			require.NoError(t, err)
+			require.Len(t, appended.Changes, 1)
+			assert.Equal(t, 4, appended.Changes[0].Ordinal)
+			assert.False(t, appended.Changes[0].Deleted)
+			ids[4] = appended.Changes[0].MessageID
+
+			// Completing a reply and appending replaces only the completed row.
+			msgs[3].Content = "Second answer, completed"
+			msgs = append(msgs, Message{SessionID: "chat", Ordinal: 5, Role: "assistant", Content: "Third answer"})
+			require.NoError(t, write(ctx, d, msgs))
+			grown, err := d.ExportConversationChanges(ctx, ConversationExportOptions{Checkpoint: appended.Checkpoint})
+			require.NoError(t, err)
+			var removed, created []int
+			for _, change := range grown.Changes {
+				if change.Deleted {
+					removed = append(removed, change.Ordinal)
+					continue
+				}
+				created = append(created, change.Ordinal)
+				assert.NotEqual(t, ids[change.Ordinal], change.MessageID)
+			}
+			assert.Equal(t, []int{3, 4}, removed)
+			assert.ElementsMatch(t, []int{3, 4, 5}, created)
+
+			var rows, tombstones int
+			require.NoError(t, d.Update(ctx, func(tx *sql.Tx) error {
+				return tx.QueryRowContext(ctx, `SELECT COUNT(*), COALESCE(SUM(removed), 0) FROM conversation_messages WHERE session_id = 'chat'`).Scan(&rows, &tombstones)
+			}))
+			assert.Equal(t, 8, rows)
+			assert.Equal(t, 2, tombstones)
+			var live []string
+			require.NoError(t, d.Update(ctx, func(tx *sql.Tx) error {
+				r, err := tx.QueryContext(ctx, `SELECT message_id FROM conversation_messages WHERE session_id = 'chat' AND removed = 0 AND ordinal < 3 ORDER BY ordinal`)
+				if err != nil {
+					return err
+				}
+				defer r.Close()
+				for r.Next() {
+					var id string
+					if err := r.Scan(&id); err != nil {
+						return err
+					}
+					live = append(live, id)
+				}
+				return r.Err()
+			}))
+			assert.Equal(t, []string{ids[0], ids[1], ids[2]}, live)
+		})
+	}
+}
+
+// Recovering from usage-only storage reconciles the whole session even when the
+// message write is a diff: the policy-gap rows below the diff can project
+// messages the table no longer holds.
+func TestConversationExportDiffedReplaceAfterUsageOnlyStorage(t *testing.T) {
+	d := testDB(t)
+	ctx := t.Context()
+	require.NoError(t, d.UpsertSession(ctx, Session{ID: "chat", Project: "sample", Machine: "local", Agent: "codex"}))
+	require.NoError(t, d.InsertMessages(ctx, []Message{
+		{SessionID: "chat", Ordinal: 0, Role: "user", Content: "Question"},
+		{SessionID: "chat", Ordinal: 1, Role: "assistant", Content: "Answer", Model: "gpt-5", TokenUsage: []byte(`{"input_tokens":10,"output_tokens":5}`), HasOutputTokens: true, OutputTokens: 5},
+	}))
+	_, err := d.ExportConversationChanges(ctx, ConversationExportOptions{})
+	require.NoError(t, err)
+
+	d.SetArchiveContent(config.ArchiveContentUsage)
+	all, err := d.GetAllMessages(ctx, "chat")
+	require.NoError(t, err)
+	require.NoError(t, d.ReplaceSessionMessages(ctx, "chat", all))
+	require.NoError(t, d.Close())
+	d, err = Open(ctx, d.Path())
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, d.Close()) })
+
+	stored, err := d.GetAllMessages(ctx, "chat")
+	require.NoError(t, err)
+	require.NotEmpty(t, stored)
+	next := stored[len(stored)-1].Ordinal + 1
+	grown := append(append([]Message(nil), stored...), Message{SessionID: "chat", Ordinal: next, Role: "user", Content: "Follow-up"})
+	require.NoError(t, d.ReplaceSessionMessages(ctx, "chat", grown))
+
+	want := map[int]bool{}
+	for _, m := range grown {
+		want[m.Ordinal] = true
+	}
+	require.NoError(t, d.Update(ctx, func(tx *sql.Tx) error {
+		rows, err := tx.QueryContext(ctx, `SELECT ordinal, gap FROM conversation_messages WHERE session_id = 'chat' AND removed = 0`)
+		if err != nil {
+			return err
+		}
+		defer rows.Close()
+		for rows.Next() {
+			var ordinal int
+			var gap string
+			if err := rows.Scan(&ordinal, &gap); err != nil {
+				return err
+			}
+			assert.True(t, want[ordinal], "live projection at ordinal %d has no stored message", ordinal)
+			assert.NotEqual(t, "archive_content_excluded", gap, "ordinal %d", ordinal)
+		}
+		return rows.Err()
+	}))
+}
+
+// A session written only under usage-only storage has no projected messages,
+// just a session coverage gap. Leaving usage-only storage projects every
+// stored message even when the next write is a diffed append.
+func TestConversationExportDiffedReplaceProjectsUsageOnlySession(t *testing.T) {
+	d := testDB(t)
+	ctx := t.Context()
+	d.SetArchiveContent(config.ArchiveContentUsage)
+	require.NoError(t, d.UpsertSession(ctx, Session{ID: "chat", Project: "sample", Machine: "local", Agent: "codex"}))
+	_, err := d.ExportConversationChanges(ctx, ConversationExportOptions{})
+	require.NoError(t, err)
+	require.NoError(t, d.ReplaceSessionMessages(ctx, "chat", []Message{
+		{SessionID: "chat", Ordinal: 0, Role: "assistant", Content: "Answer", Model: "gpt-5", TokenUsage: []byte(`{"input_tokens":10,"output_tokens":5}`), HasOutputTokens: true, OutputTokens: 5},
+		{SessionID: "chat", Ordinal: 1, Role: "assistant", Content: "Second", Model: "gpt-5", TokenUsage: []byte(`{"input_tokens":12,"output_tokens":6}`), HasOutputTokens: true, OutputTokens: 6},
+	}))
+	require.NoError(t, d.Close())
+	d, err = Open(ctx, d.Path())
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, d.Close()) })
+
+	stored, err := d.GetAllMessages(ctx, "chat")
+	require.NoError(t, err)
+	require.NotEmpty(t, stored)
+	next := stored[len(stored)-1].Ordinal + 1
+	grown := append(append([]Message(nil), stored...), Message{SessionID: "chat", Ordinal: next, Role: "user", Content: "Follow-up"})
+	require.NoError(t, d.ReplaceSessionMessages(ctx, "chat", grown))
+
+	var projected []int
+	require.NoError(t, d.Update(ctx, func(tx *sql.Tx) error {
+		rows, err := tx.QueryContext(ctx, `SELECT ordinal FROM conversation_messages WHERE session_id = 'chat' AND removed = 0 ORDER BY ordinal`)
+		if err != nil {
+			return err
+		}
+		defer rows.Close()
+		for rows.Next() {
+			var ordinal int
+			if err := rows.Scan(&ordinal); err != nil {
+				return err
+			}
+			projected = append(projected, ordinal)
+		}
+		return rows.Err()
+	}))
+	var want []int
+	for _, m := range grown {
+		want = append(want, m.Ordinal)
+	}
+	assert.Equal(t, want, projected)
+}

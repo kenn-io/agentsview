@@ -22,6 +22,7 @@ import (
 // depth; this test's job is narrower: prove all three methods are reachable
 // through db.Store on a store built the way the HTTP server builds it.
 func TestPGDataReadsThroughStoreInterface(t *testing.T) {
+	t.Parallel()
 	const schema = "agentsview_data_reads_test"
 	sync, localDB, pg, ctx := newSessionProvenancePushSync(t, schema)
 

@@ -3,6 +3,7 @@ package clickhouse
 import (
 	"context"
 	"database/sql"
+	"encoding/json/v2"
 	"fmt"
 	"slices"
 	"strconv"
@@ -516,10 +517,11 @@ func (s analyticsSQL) ScanTopSession(rows *sql.Rows) (db.TopSession, error) {
 
 func (s analyticsSQL) TrendsSQL(f, sessionFilter db.AnalyticsFilter, ordered bool) (string, []any) {
 	sessionPred, args := chAnalyticsSessionSet(sessionFilter).in("m.session_id")
-	return readbase.AnalyticsTrendsSQL(
+	query, args := readbase.AnalyticsTrendsSQL(
 		f, chAnalyticsMessageWindowPred,
 		db.ClickHouseSystemPrefixSQL("m.content", "m.role"), db.ClickHouseQueryDialect(),
 		sessionPred, args, ordered)
+	return query + systemPrefixSettings, args
 }
 
 func (s analyticsSQL) FormatTime(v any) string { return formatDBTime(v) }
@@ -607,5 +609,22 @@ func (s *Store) GetTrendsTerms(
 	ctx context.Context, f db.AnalyticsFilter,
 	terms []db.TrendTermInput, granularity string,
 ) (db.TrendsTermsResponse, error) {
-	return s.analytics().GetTrendsTerms(ctx, f, terms, granularity)
+	load := func(ctx context.Context) (db.TrendsTermsResponse, error) {
+		return s.analytics().GetTrendsTerms(ctx, f, terms, granularity)
+	}
+	if f.ActiveSince != "" || db.TerminationUsesTime(f.Termination) {
+		return load(ctx)
+	}
+	key, err := json.Marshal(struct {
+		Filter  db.AnalyticsFilter
+		Variant string
+	}{f, db.TrendsKeptVariant(terms, granularity)})
+	if err != nil {
+		return load(ctx)
+	}
+	version, err := s.tablePartsFingerprint(ctx, []string{"sessions", "messages"})
+	if err != nil {
+		return load(ctx)
+	}
+	return s.trendsReads.Do(ctx, string(key), version, load)
 }

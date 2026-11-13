@@ -23,6 +23,7 @@ import (
 )
 
 func TestPushPreservesLegacyOffsetTimestamps(t *testing.T) {
+	t.Parallel()
 	pgURL := testPGURL(t)
 	const schema = "agentsview_push_legacy_time_test"
 	cleanNamedPGSchema(t, pgURL, schema)
@@ -113,6 +114,7 @@ func TestPushPreservesLegacyOffsetTimestamps(t *testing.T) {
 }
 
 func TestPGUsageEventFingerprintsPreserveExactMicrodollars(t *testing.T) {
+	t.Parallel()
 	pgURL := testPGURL(t)
 	const schema = "agentsview_usage_fingerprint_money_test"
 	cleanNamedPGSchema(t, pgURL, schema)
@@ -164,6 +166,7 @@ func TestPGUsageEventFingerprintsPreserveExactMicrodollars(t *testing.T) {
 func TestPushMirrorsSessionProjectIdentitySnapshotsByArchiveGeneration(
 	t *testing.T,
 ) {
+	t.Parallel()
 	pgURL := testPGURL(t)
 	const schema = "agentsview_push_project_snapshot_test"
 	pg, err := Open(t.Context(), pgURL, schema, true)
@@ -258,6 +261,7 @@ func TestPushMirrorsSessionProjectIdentitySnapshotsByArchiveGeneration(
 }
 
 func TestFilteredIdentityPublicationPreservesUnfilteredMetadata(t *testing.T) {
+	t.Parallel()
 	const (
 		schema            = "agentsview_unfiltered_identity_owner_test"
 		includedSessionID = "snapshot-included"
@@ -334,6 +338,7 @@ func TestFilteredIdentityPublicationPreservesUnfilteredMetadata(t *testing.T) {
 }
 
 func TestFilteredIdentityPublicationAdoptsLegacyOwnerlessScope(t *testing.T) {
+	t.Parallel()
 	const (
 		schema          = "agentsview_legacy_identity_scope_test"
 		includedProject = "included_project"
@@ -432,6 +437,7 @@ func TestFilteredIdentityPublicationAdoptsLegacyOwnerlessScope(t *testing.T) {
 func TestFilteredThenUnfilteredIdentityPublicationIncludesExcludedProject(
 	t *testing.T,
 ) {
+	t.Parallel()
 	pgURL := testPGURL(t)
 	const schema = "agentsview_filtered_identity_revision_test"
 	cleanNamedPGSchema(t, pgURL, schema)
@@ -503,6 +509,7 @@ func TestFilteredThenUnfilteredIdentityPublicationIncludesExcludedProject(
 func TestAlternatingFilteredPublicationsPreserveEachScopesMetadata(
 	t *testing.T,
 ) {
+	t.Parallel()
 	pgURL := testPGURL(t)
 	const schema = "agentsview_filtered_metadata_scope_test"
 	cleanNamedPGSchema(t, pgURL, schema)
@@ -586,6 +593,7 @@ func TestAlternatingFilteredPublicationsPreserveEachScopesMetadata(
 }
 
 func TestPushProjectMoveReconcilesFilteredScope(t *testing.T) {
+	t.Parallel()
 	const (
 		sessionID     = "pg-project-move"
 		sourceProject = "source_project"
@@ -735,6 +743,7 @@ func TestPushProjectMoveReconcilesFilteredScope(t *testing.T) {
 func TestIdentityPublicationUpdatesOnlyChangedRowsAndAppliesTombstones(
 	t *testing.T,
 ) {
+	t.Parallel()
 	pgURL := testPGURL(t)
 	const schema = "agentsview_identity_delta_test"
 	cleanNamedPGSchema(t, pgURL, schema)
@@ -839,6 +848,7 @@ func TestIdentityPublicationUpdatesOnlyChangedRowsAndAppliesTombstones(
 // reclassification at unchanged content length reaches the flags stream
 // and republishes the updated message flags.
 func TestPushSystemReclassificationRepublishes(t *testing.T) {
+	t.Parallel()
 	pgURL := testPGURL(t)
 
 	const schema = "agentsview_push_sysfingerprint_test"
@@ -921,6 +931,7 @@ func TestPushSystemReclassificationRepublishes(t *testing.T) {
 }
 
 func TestPushMessageNanosecondTimestampNoRewriteRegression(t *testing.T) {
+	t.Parallel()
 	pgURL := testPGURL(t)
 
 	const schema = "agentsview_push_msgtime_nanos_test"
@@ -985,6 +996,7 @@ func TestPushMessageNanosecondTimestampNoRewriteRegression(t *testing.T) {
 // and a subsequent push with nil clears the column back to NULL via the
 // ON CONFLICT DO UPDATE path.
 func TestPushSessionTerminationStatus(t *testing.T) {
+	t.Parallel()
 	pgURL := testPGURL(t)
 
 	const schema = "agentsview_push_termstatus_test"
@@ -1058,6 +1070,7 @@ func TestPushSessionTerminationStatus(t *testing.T) {
 }
 
 func TestPushSessionPreservesSourceMachine(t *testing.T) {
+	t.Parallel()
 	pgURL := testPGURL(t)
 
 	const schema = "agentsview_push_source_machine_test"
@@ -1107,6 +1120,7 @@ func TestPushSessionPreservesSourceMachine(t *testing.T) {
 }
 
 func TestPushPreservesPGServeLocalCurationFields(t *testing.T) {
+	t.Parallel()
 	pgURL := testPGURL(t)
 
 	const schema = "agentsview_push_preserve_pg_curation_test"
@@ -1196,6 +1210,7 @@ func TestPushPreservesPGServeLocalCurationFields(t *testing.T) {
 }
 
 func TestPushKeepsSourceAvailabilityLocalAndPreservesPGUserTrash(t *testing.T) {
+	t.Parallel()
 	pgURL := testPGURL(t)
 	const schema = "agentsview_push_source_missing_test"
 	pg, err := Open(t.Context(), pgURL, schema, true)
@@ -1324,6 +1339,7 @@ func TestPushKeepsSourceAvailabilityLocalAndPreservesPGUserTrash(t *testing.T) {
 }
 
 func TestPushPreservesPGServePermanentDeletes(t *testing.T) {
+	t.Parallel()
 	pgURL := testPGURL(t)
 
 	const schema = "agentsview_push_preserve_pg_deletes_test"
@@ -1448,6 +1464,7 @@ func TestPushPreservesPGServePermanentDeletes(t *testing.T) {
 }
 
 func TestPushPurgesRowsForPGExcludedSessions(t *testing.T) {
+	t.Parallel()
 	pgURL := testPGURL(t)
 
 	const schema = "agentsview_push_excluded_purge_test"
@@ -1541,6 +1558,7 @@ func TestPushPurgesRowsForPGExcludedSessions(t *testing.T) {
 }
 
 func TestPushSessionSkipsPGExcludedSession(t *testing.T) {
+	t.Parallel()
 	pgURL := testPGURL(t)
 
 	const schema = "agentsview_push_session_excluded_test"
@@ -1595,6 +1613,7 @@ func TestPushSessionSkipsPGExcludedSession(t *testing.T) {
 }
 
 func TestPushUpdatesSourceCurationFieldsWithoutPGOverride(t *testing.T) {
+	t.Parallel()
 	pgURL := testPGURL(t)
 
 	const schema = "agentsview_push_source_curation_update_test"
@@ -1693,6 +1712,7 @@ func TestPushUpdatesSourceCurationFieldsWithoutPGOverride(t *testing.T) {
 }
 
 func TestPushPreservesLegacyPGCurationWithoutSourceBaseline(t *testing.T) {
+	t.Parallel()
 	pgURL := testPGURL(t)
 
 	const schema = "agentsview_push_legacy_source_curation_test"
@@ -1825,6 +1845,7 @@ func TestPushPreservesLegacyPGCurationWithoutSourceBaseline(t *testing.T) {
 // must not skip usage_event syncing just because the message count is 0 --
 // otherwise the dashboard shows tokens with a $0 cost.
 func TestPushSyncsUsageEventsForZeroMessageSession(t *testing.T) {
+	t.Parallel()
 	pgURL := testPGURL(t)
 
 	const schema = "agentsview_push_zeromsg_usage_test"
@@ -1927,6 +1948,7 @@ func TestPushSyncsUsageEventsForZeroMessageSession(t *testing.T) {
 }
 
 func TestPushSyncsCursorUsageEventsIntoPGDailyUsage(t *testing.T) {
+	t.Parallel()
 	pgURL := testPGURL(t)
 
 	const schema = "agentsview_cursor_usage_pg_test"
@@ -2004,6 +2026,7 @@ func TestPushSyncsCursorUsageEventsIntoPGDailyUsage(t *testing.T) {
 }
 
 func TestPushCursorUsageEventsDedupsAfterLegacyMoneyMigration(t *testing.T) {
+	t.Parallel()
 	pgURL := testPGURL(t)
 
 	const schema = "agentsview_cursor_usage_money_migration_push_test"
@@ -2083,6 +2106,7 @@ func TestPushCursorUsageEventsDedupsAfterLegacyMoneyMigration(t *testing.T) {
 }
 
 func TestPushCursorUsageEventsPreservesRowsFromOtherMachines(t *testing.T) {
+	t.Parallel()
 	pgURL := testPGURL(t)
 
 	const schema = "agentsview_cursor_usage_append_only_pg_test"
@@ -2149,6 +2173,7 @@ func TestPushCursorUsageEventsPreservesRowsFromOtherMachines(t *testing.T) {
 // An incremental push sends only the Cursor rows added since the last one;
 // a full push sends them all again.
 func TestPushSendsOnlyNewCursorUsageEvents(t *testing.T) {
+	t.Parallel()
 	pgURL := testPGURL(t)
 
 	const schema = "agentsview_cursor_usage_high_water_pg_test"
@@ -2317,6 +2342,7 @@ func pgMessageCTID(
 // third-party session files, so the push boundary must be defensive
 // regardless of any single parser fix.
 func TestPushMessagesSanitizesNULBytes(t *testing.T) {
+	t.Parallel()
 	pgURL := testPGURL(t)
 
 	const schema = "agentsview_push_nul_test"
@@ -2420,6 +2446,7 @@ func TestPushMessagesSanitizesNULBytes(t *testing.T) {
 // The push marker, not a per-machine row count, drives reset detection, so the
 // second incremental push is a no-op rather than a forced full re-push.
 func TestPushIncrementalWithOnlyForeignMachineSessions(t *testing.T) {
+	t.Parallel()
 	pgURL := testPGURL(t)
 
 	const schema = "agentsview_push_foreign_machine_test"
@@ -2508,6 +2535,7 @@ func TestPushIncrementalWithOnlyForeignMachineSessions(t *testing.T) {
 // push, leaving this host's session missing; the push marker is per-pusher, so
 // the reset is detected and the session is re-pushed.
 func TestPushDetectsResetWhenCompetingMachineRowsExist(t *testing.T) {
+	t.Parallel()
 	pgURL := testPGURL(t)
 
 	const schema = "agentsview_push_reset_competing_test"
@@ -2588,6 +2616,7 @@ func TestPushDetectsResetWhenCompetingMachineRowsExist(t *testing.T) {
 // the old value while PG holds a fresh marker, and reset-lost sessions would be
 // skipped indefinitely.
 func TestPushMarkerNotWrittenWhenResetRecoveryFails(t *testing.T) {
+	t.Parallel()
 	pgURL := testPGURL(t)
 
 	const schema = "agentsview_push_reset_recovery_fail_test"
@@ -2695,6 +2724,7 @@ func TestPushMarkerNotWrittenWhenResetRecoveryFails(t *testing.T) {
 // the session is re-evaluated; without the resolved machine in the fingerprint
 // it would match and be skipped, leaving PG with the stale machine name.
 func TestPushUpdatesSentinelMachineWhenSyncMachineChanges(t *testing.T) {
+	t.Parallel()
 	pgURL := testPGURL(t)
 
 	const schema = "agentsview_push_sentinel_machine_test"
@@ -2764,6 +2794,7 @@ func TestPushUpdatesSentinelMachineWhenSyncMachineChanges(t *testing.T) {
 }
 
 func TestPushAdoptsOwnerlessRowsFromPreviousMarkerMachine(t *testing.T) {
+	t.Parallel()
 	pgURL := testPGURL(t)
 
 	const schema = "agentsview_push_legacy_marker_machine_test"
@@ -2889,6 +2920,7 @@ func TestPushAdoptsOwnerlessRowsFromPreviousMarkerMachine(t *testing.T) {
 }
 
 func TestFilteredPushAdoptsOwnerlessRowsFromLegacyUnscopedMarker(t *testing.T) {
+	t.Parallel()
 	pgURL := testPGURL(t)
 
 	const schema = "agentsview_push_filtered_legacy_marker_test"
@@ -2988,6 +3020,7 @@ func TestFilteredPushAdoptsOwnerlessRowsFromLegacyUnscopedMarker(t *testing.T) {
 }
 
 func TestPushReportsSkippedConflicts(t *testing.T) {
+	t.Parallel()
 	pgURL := testPGURL(t)
 
 	const schema = "agentsview_push_skipped_conflicts_test"
@@ -3105,6 +3138,7 @@ func seedProvenanceSession(
 // TestPushWritesSessionProvenance verifies that a push stamps the local
 // archive id and source file path onto the pushed PG sessions row.
 func TestPushWritesSessionProvenance(t *testing.T) {
+	t.Parallel()
 	const schema = "agentsview_push_provenance_test"
 	sync, localDB, pg, ctx := newSessionProvenancePushSync(t, schema)
 
@@ -3127,6 +3161,7 @@ func TestPushWritesSessionProvenance(t *testing.T) {
 }
 
 func TestArchiveIdentityChangeRepublishesUnchangedSessions(t *testing.T) {
+	t.Parallel()
 	const schema = "agentsview_push_archive_identity_change_test"
 	syncer, localDB, pg, ctx := newSessionProvenancePushSync(t, schema)
 	seedProvenanceSession(t, localDB, "sess-1", "workstation", "proj", "")
@@ -3228,6 +3263,7 @@ func TestArchiveIdentityChangeRepublishesUnchangedSessions(t *testing.T) {
 func TestFilteredArchiveIdentityRepairPreservesOtherPublicationScope(
 	t *testing.T,
 ) {
+	t.Parallel()
 	const schema = "agentsview_filtered_archive_identity_repair_test"
 	pgURL := testPGURL(t)
 	cleanNamedPGSchema(t, pgURL, schema)
@@ -3378,6 +3414,7 @@ func TestFilteredArchiveIdentityRepairPreservesOtherPublicationScope(
 // second push must not re-touch a session whose provenance was cleared
 // out-of-band after the marker was written.
 func TestSessionProvenanceBackfillForcesOneFullPush(t *testing.T) {
+	t.Parallel()
 	const schema = "agentsview_push_provenance_backfill_test"
 	sync, localDB, pg, ctx := newSessionProvenancePushSync(t, schema)
 
@@ -3408,6 +3445,7 @@ func TestSessionProvenanceBackfillForcesOneFullPush(t *testing.T) {
 // failed push leaves the provenance backfill marker unset, so the next push
 // retries the one-time backfill instead of silently skipping it.
 func TestSessionProvenanceBackfillMarkerNotWrittenOnFailure(t *testing.T) {
+	t.Parallel()
 	const schema = "agentsview_push_provenance_backfill_fail_test"
 	sync, localDB, pg, ctx := newSessionProvenancePushSync(t, schema)
 
@@ -3435,6 +3473,7 @@ func TestSessionProvenanceBackfillMarkerNotWrittenOnFailure(t *testing.T) {
 // provenance predates source_archive_id, without completing the target-wide
 // marker for sessions outside that filter.
 func TestSessionProvenanceBackfillCompletesPerFilterScope(t *testing.T) {
+	t.Parallel()
 	const schema = "agentsview_push_provenance_filtered_test"
 	unfiltered, localDB, _, ctx := newSessionProvenancePushSync(t, schema)
 
@@ -3557,6 +3596,7 @@ func (f *usagePushFixture) pushMetadataChange(
 }
 
 func TestPGPushMetadataChangesPreserveUnchangedUsage(t *testing.T) {
+	t.Parallel()
 	type mirroredMessage struct {
 		Version     string
 		SessionName string
@@ -3617,6 +3657,7 @@ func TestPGPushMetadataChangesPreserveUnchangedUsage(t *testing.T) {
 }
 
 func TestPGPushReplacesChangedUsage(t *testing.T) {
+	t.Parallel()
 	type mirroredUsage struct {
 		OutputTokens int
 		OccurredAt   sql.NullTime
@@ -3668,6 +3709,7 @@ func TestPGPushReplacesChangedUsage(t *testing.T) {
 // the session would stay remote under its old project with the watermark
 // already past the move.
 func TestFilteredPushReconcilesProjectMoveCommittedDuringPush(t *testing.T) {
+	t.Parallel()
 	const (
 		sessionID     = "pg-concurrent-move"
 		sourceProject = "source_project"

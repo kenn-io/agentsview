@@ -193,10 +193,14 @@ for (const [mode, highContrast] of THEMES) {
       await page.locator(".kit-find-bar__input").fill("e");
       const rail = page.locator(".find-overview-rail");
       await expect(rail.locator(".tick.current")).toHaveCount(1);
-      const track = await rail.locator(".track").evaluate((el) => getComputedStyle(el).fill);
-      const ticks = await rail
-        .locator(".tick")
-        .evaluateAll((els) => [...new Set(els.map((el) => getComputedStyle(el).fill))]);
+      // History loading can replace ticks between evaluateAll's selection
+      // and callback. Read connected descendants in one browser callback.
+      const { track, ticks } = await rail.evaluate((el) => ({
+        track: getComputedStyle(el.querySelector(".track")!).fill,
+        ticks: [
+          ...new Set([...el.querySelectorAll(".tick")].map((tick) => getComputedStyle(tick).fill)),
+        ],
+      }));
       expect(ticks.length).toBeGreaterThanOrEqual(2);
       for (const tick of ticks) {
         const contrast = await renderedContrast(rail, { foreground: tick, background: track });
@@ -222,11 +226,14 @@ for (const [mode, highContrast] of THEMES) {
       expect(contrast.ratio, JSON.stringify(contrast)).toBeGreaterThanOrEqual(3);
     });
 
-    test("agent names stay readable in the sidebar and session header", async ({ page }) => {
-      const header = page.locator(".session-breadcrumb .agent-badge:not(.entrypoint-badge)");
-      const seen = new Set<string>();
-      for (const agents of agentBatches()) {
-        await page.unrouteAll({ behavior: "wait" });
+    // Each batch owns its page and routes. Replacing routes on a live page
+    // races Playwright's pending interception updates from sidebar refreshes.
+    for (const [batch, agents] of agentBatches().entries()) {
+      test(`agent names stay readable in the sidebar and session header (batch ${batch + 1})`, async ({
+        page,
+      }) => {
+        const header = page.locator(".session-breadcrumb .agent-badge:not(.entrypoint-badge)");
+        const seen = new Set<string>();
         await withAgents(page, agents);
         const sp = new SessionsPage(page);
         await sp.goto();
@@ -259,15 +266,14 @@ for (const [mode, highContrast] of THEMES) {
             `header ${label} ${JSON.stringify(inHeader)}`,
           ).toBeGreaterThanOrEqual(4.5);
         }
-      }
-      expect([...seen].sort()).toEqual(AGENT_PER_COLOR.map((agent) => agentLabel(agent)).sort());
-      await page.unrouteAll({ behavior: "ignoreErrors" });
-    });
+        expect([...seen].sort()).toEqual(agents.map((agent) => agentLabel(agent)).sort());
+        await page.unrouteAll({ behavior: "ignoreErrors" });
+      });
 
-    test("agent names stay readable in the search palette", async ({ page }) => {
-      const seen = new Set<string>();
-      for (const agents of agentBatches()) {
-        await page.unrouteAll({ behavior: "wait" });
+      test(`agent names stay readable in the search palette (batch ${batch + 1})`, async ({
+        page,
+      }) => {
+        const seen = new Set<string>();
         await withAgents(page, agents);
         const sp = new SessionsPage(page);
         await sp.goto();
@@ -296,10 +302,10 @@ for (const [mode, highContrast] of THEMES) {
           ).toBeGreaterThanOrEqual(4.5);
         }
         await page.keyboard.press("Escape");
-      }
-      expect([...seen].sort()).toEqual(AGENT_PER_COLOR.map((agent) => agentLabel(agent)).sort());
-      await page.unrouteAll({ behavior: "ignoreErrors" });
-    });
+        expect([...seen].sort()).toEqual(agents.map((agent) => agentLabel(agent)).sort());
+        await page.unrouteAll({ behavior: "ignoreErrors" });
+      });
+    }
 
     for (const grade of ["A", "B", "C", "F"]) {
       test(`the ${grade} health grade stays readable at rest and on hover`, async ({ page }) => {

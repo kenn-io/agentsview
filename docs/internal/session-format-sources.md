@@ -2242,7 +2242,11 @@ fixtures retain this field; missing identities remain source-local.
   includes losing candidates and the judge
   ([processor](https://github.com/XiaomiMiMo/MiMo-Code/blob/f24ce4eb7341bfba6bb608436c1d27a843508adf/packages/opencode/src/session/processor.ts#L982)).
   Agentsview keeps the sum of the `step-finish` costs as a recorded cost, as
-  for OpenCode.
+  for OpenCode. The pinned `getUsage` stores `output` as the SDK output minus
+  reasoning and bills `reasoning` separately at the output rate. Every tagged
+  release from v0.1.1 through v0.1.16 (where the file moved to `packages/cli`)
+  and the 2026-11-09 default branch do the same. Stored output adds reasoning
+  back; see the shared rule in the `opencode` entry.
 - **Agentsview:** `internal/parser/mimocode.go` delegates to
   `internal/parser/opencode.go`; compare MiMo's pinned schema with OpenCode
   whenever their shared parser changes.
@@ -2522,10 +2526,11 @@ preservation of archived messages for OpenCode, Kilo, MiMoCode, and Icodemate.
   user message and falls back to the title only when there is none. Kilo and
   MiMo Code share this parser.
 
-- **Usage and cost:** Assistant messages persist input, output, cache-read, and
-  cache-write tokens, plus model/provider identity. Agentsview computes price
-  from those tokens. Reverified 2026-11-11 at the pinned commit: each
-  `step-finish` part stores the `cost` of one model request, which
+- **Usage and cost:** Assistant messages persist input, output, reasoning,
+  cache-read, and cache-write tokens, plus model/provider identity. Agentsview
+  computes price from those tokens. Reverified 2026-11-11 at the pinned
+  commit: each `step-finish` part stores the `cost` of one model request,
+  which
   [`Session.getUsage`](https://github.com/anomalyco/opencode/blob/dff8fbc149fb7492e4f07b713ac31ea70d9a541c/packages/opencode/src/session/session.ts#L338)
   estimates in USD from models.dev or configured rates (0 when a model has
   no rate; GitHub Copilot responses use the provider's nano-AIU charge). The
@@ -2550,6 +2555,29 @@ preservation of archived messages for OpenCode, Kilo, MiMoCode, and Icodemate.
   text, or tool part. Agentsview stores it as a hidden usage-only row, as the
   v2 projection already did. Kilo, MiMo Code, and ICodeMate share this
   decoder.
+
+- **Reasoning tokens (2026-11-11):** The `tokens.output` convention changed.
+  Through v1.3.15, `getUsage` stored the SDK output count, which includes
+  reasoning. Commit
+  [`280eb16e`](https://github.com/anomalyco/opencode/commit/280eb16e7704791b031481bc5415fbecfdec0319)
+  (#21047, first released in v1.3.16) stores output minus reasoning and
+  bills reasoning separately; the pinned
+  [session.ts](https://github.com/anomalyco/opencode/blob/67caf894e0843ee370e72839e8265e483233479b/packages/opencode/src/session/session.ts#L338)
+  still does. The v2 `session_message` writer,
+  [publish-llm-event.ts](https://github.com/anomalyco/opencode/blob/67caf894e0843ee370e72839e8265e483233479b/packages/core/src/session/runner/publish-llm-event.ts#L18),
+  stores `visibleOutputTokens`, also output minus reasoning, and first
+  shipped in v1.16.0; its tokens carry no `total`. Since v1.1.57 (commit
+  `0fd6f365`) v1 records also persist `tokens.total`, the SDK
+  input-plus-output total. Agentsview stores `output_tokens` with reasoning
+  included and `reasoning_tokens` as the subset, which pricing bills once. For
+  a v1 record it adds reasoning back only when `total` equals input,
+  cache-read, cache-write, output, and reasoning combined; a record without
+  `total` (all older than the change) or matching neither sum keeps its stored
+  output. v2 projections always add it. Kilo, MiMo Code, and ICodeMate share
+  this rule. `TestParseOpenCodeDB_ReasoningTokens` and
+  `TestOpenCodeFamilyReasoningTokensArePricedOnce` cover both conventions
+  through parse, storage, and cost. Data version 179 reparses the four
+  providers in place.
 
 - **Working directory:** SQLite sessions store a per-session `directory` and a
   `project_id`. The synthetic `global` project uses `worktree=/`. Agentsview
@@ -2733,7 +2761,13 @@ preservation of archived messages for OpenCode, Kilo, MiMoCode, and Icodemate.
   [`KiloCostPropagation`](https://github.com/Kilo-Org/kilocode/blob/938919ab72e3977d1512e0363417270e3337c7b1/packages/opencode/src/kilocode/session/cost-propagation.ts#L63)
   adds child subagent session costs into the parent message `cost`, so
   Agentsview keeps only the sum of the message's `step-finish` costs as a
-  recorded cost, as for OpenCode.
+  recorded cost, as for OpenCode. Kilo merged OpenCode's reasoning change
+  (`280eb16e`) in v7.2.6; v7.2.5 and earlier store output with reasoning
+  included. The pinned
+  [session.ts](https://github.com/Kilo-Org/kilocode/blob/938919ab72e3977d1512e0363417270e3337c7b1/packages/opencode/src/session/session.ts#L443)
+  subtracts reasoning, and its v2 writer stores `visibleOutputTokens`. Kilo
+  had no `session_message` writer before v7.2.6. The `opencode` entry's
+  reasoning rule applies.
 - **Agentsview:** `internal/parser/kilo.go` uses the OpenCode family parser.
   Kilo migrations mean the pinned current source must be compared with legacy
   fixtures when changing compatibility.
@@ -3405,6 +3439,31 @@ schemas keep their existing ordering behavior.
   against 133 local run directories, with and without the header: all type as
   subagents with a parent, none resolve to themselves, and the other Pi
   sessions keep their fork type. Data version 156 reparses Pi-format archives.
+- **Scoped recovery:** Reverified 2026-11-10 against the shared JSONL source set
+  and Pi's streaming discovery adapter. Pi forwards requested scopes to the
+  shared walker, so inaccessible session paths use
+  [scoped retries][pi-scoped-retries] without changing configured source
+  identities. The transcript format, parsed output, and data version are
+  unchanged.
+- **Artifact directories:** Reverified 2026-11-12 against pi-subagents at
+  `7e2794efba0b727af51d08c36614ea939f1a827b`: the
+  [artifact writer](https://github.com/nicobailon/pi-subagents/blob/7e2794efba0b727af51d08c36614ea939f1a827b/src/shared/artifacts.ts),
+  [session-root helper](https://github.com/nicobailon/pi-subagents/blob/7e2794efba0b727af51d08c36614ea939f1a827b/src/extension/index.ts),
+  and
+  [child launcher](https://github.com/nicobailon/pi-subagents/blob/7e2794efba0b727af51d08c36614ea939f1a827b/src/runs/foreground/subagent-executor.ts).
+  Session-local outputs go into a `subagent-artifacts` directory beside the
+  transcript. Child transcripts use the parent transcript's stem as their
+  directory, separately from artifacts. A local reproduction with a dangling
+  package-cache symlink inside an artifact output caused incomplete Pi
+  discovery and repeated reconciliation. Pi, OMO, and StepCode exclude
+  `subagent-artifacts` descendants from discovery, changed-path mapping, and
+  source lookup. They classify excluded changes as non-data so remote delta
+  planning does not scan the provider. An explicitly configured root with that
+  basename remains supported, including when a broader root also contains it.
+  Nested child transcripts outside artifact directories remain
+  discoverable, and unreadable session directories still report incomplete
+  discovery. The transcript format, parsed output, and data version are
+  unchanged.
 - **Agentsview:** `internal/parser/pi.go` and `internal/parser/pi_provider.go`;
   alternate branches remain in the file but only the active ancestry is a
   conversation. Reverified 2026-09-03 against 156 local Pi transcripts: the
@@ -4517,7 +4576,12 @@ schemas keep their existing ordering behavior.
   clear surviving children's parent links. A cron continuation whose
   ancestors were pruned keeps its stored job, including transcript-only parses
   and Augure Desktop. Cron member fingerprints include the resolved job ID in
-  direct and cached reads for both providers.
+  direct and cached reads for both providers. Scoped reconciliation recognises
+  virtual state members from membership proofs or configured archive paths,
+  including after a profile disappears. Reverified 2026-11-12 with a state
+  session moved between two configured roots: syncing its former root, even
+  after removing the old profile, preserves the complete archived session as
+  source-present. This includes profiles named `sessions` or `state.db`.
 
 ## Forge (`forge`)
 
@@ -5111,6 +5175,9 @@ schemas keep their existing ordering behavior.
   the VSCode OpenCode path, a `step-finish` part `cost` is kept as a recorded
   cost through the shared OpenCode parser, which prices a message only when
   the catalog has no rate. No iCodeMate store with step costs was inspected.
+  Without producer source, the `opencode` entry's reasoning rule applies by
+  inference: a v1 record adds reasoning to output only when its own
+  `tokens.total` shows output excludes it, and a v2 projection always adds it.
 - **Agentsview:** `internal/parser/icodemate.go` delegates to
   `internal/parser/opencode.go` for the VSCode OpenCode path;
   `internal/parser/icodemate_cli.go` parses the Claude-format CLI projects
@@ -5914,7 +5981,12 @@ schemas keep their existing ordering behavior.
   The local daemon's startup sync establishes its baseline first. Failed
   metadata-only updates recover on the next full sync (normally within 15
   minutes) or transcript write. Direct session lookups refresh metadata
-  without consuming the watcher baseline.
+  without consuming the watcher baseline, including ID-only and unsuccessful
+  lookups. Reverified 2026-11-11 against two-session metadata edits and
+  metadata-only reconciliation fixtures: full and scoped discovery use shared
+  preparation for selected roots. Descendant scans refresh their active index
+  snapshot without acknowledging pending metadata changes for other sessions;
+  whole-root discovery still establishes the watcher baseline.
 
 ## fx (`fx`)
 
@@ -6090,3 +6162,4 @@ schemas keep their existing ordering behavior.
 [grok-subagent-resume]: https://github.com/xai-org/grok-build/blob/d71f6e0c1f5acc5469e503e192fe14824e6f8c90/crates/codegen/xai-grok-shell/src/agent/subagent/mod.rs#L1180-L1195
 [omo-configuration-paths]: https://github.com/code-yeongyu/senpi/blob/b50f58c8a21b0e94b12c4269a9a8c608e03d308c/packages/coding-agent/src/config.ts
 [omo-session-manager]: https://github.com/code-yeongyu/senpi/blob/b50f58c8a21b0e94b12c4269a9a8c608e03d308c/packages/coding-agent/src/core/session-manager.ts
+[pi-scoped-retries]: ../configuration.md#sync-behavior

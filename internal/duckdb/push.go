@@ -18,8 +18,10 @@ import (
 
 	"go.kenn.io/agentsview/internal/db"
 	"go.kenn.io/agentsview/internal/export"
+	"go.kenn.io/agentsview/internal/ingest"
 	"go.kenn.io/agentsview/internal/money"
 	pricingpkg "go.kenn.io/agentsview/internal/pricing"
+	"go.kenn.io/agentsview/internal/signals"
 	"go.kenn.io/agentsview/internal/storage"
 )
 
@@ -113,12 +115,25 @@ type duckGenAIPricingRow interface {
 	Scan(...any) error
 }
 
-func loadDuckGenAIPricing(
+// loadDuckGenAIPricingState reads the mirror's GenAI pricing document
+// without its data, which a push compares by digest instead of reading.
+func loadDuckGenAIPricingState(
 	ctx context.Context, q duckGenAIPricingQuerier,
-) (*db.GenAIPricingDocument, error) {
-	return scanDuckGenAIPricing(q.QueryRowContext(ctx, `
-		SELECT version, source_ref, source, data_json, updated_at
-		FROM genai_pricing WHERE singleton = 1`))
+) (*db.GenAIPricingState, error) {
+	var state db.GenAIPricingState
+	err := q.QueryRowContext(ctx, `
+		SELECT version, source_ref, source, sha256(data_json), updated_at
+		FROM genai_pricing WHERE singleton = 1`).Scan(
+		&state.Version, &state.SourceRef, &state.Source,
+		&state.DataSHA256, &state.UpdatedAt,
+	)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, fmt.Errorf("reading duckdb GenAI pricing state: %w", err)
+	}
+	return &state, nil
 }
 
 func scanDuckGenAIPricing(
@@ -187,11 +202,11 @@ func (s *Sync) syncGenAIPricing(ctx context.Context) error {
 		return fmt.Errorf("beginning duckdb GenAI pricing sync: %w", err)
 	}
 	defer func() { _ = tx.Rollback() }()
-	existing, err := loadDuckGenAIPricing(ctx, tx)
+	existing, err := loadDuckGenAIPricingState(ctx, tx)
 	if err != nil {
 		return err
 	}
-	if db.GenAIPricingDocumentsEqual(existing, document) {
+	if existing.Matches(document) {
 		return nil
 	}
 	if err := s.execMutation(ctx, tx, `
@@ -1031,6 +1046,11 @@ type duckMutationExecutor interface {
 	ExecContext(context.Context, string, ...any) (sql.Result, error)
 }
 
+// frustrationMarkersVersion is independent of db.CurrentQualitySignalVersion.
+// Bump it when CountFrustrationMarkers, IsFrustrationMarker, or
+// ExtractHeuristicMessages changes its rules or message eligibility.
+const frustrationMarkersVersion = 1
+
 const duckInsertBatchBytes = 1 << 20
 
 func sessionInsertArgs(
@@ -1038,6 +1058,7 @@ func sessionInsertArgs(
 	fallbackMachine string,
 	archiveID string,
 	fingerprint string,
+	frustrationCount int,
 ) []any {
 	return []any{
 		sess.ID, sess.Project, sess.ProjectAssigned,
@@ -1074,7 +1095,7 @@ func sessionInsertArgs(
 		timeValue(sess.CreatedAt), nilString(sess.TerminationStatus),
 		sess.SecretLeakCount, sess.SecretsRulesVersion,
 		db.EncodePRLinks(sess.PRLinks), db.LabelsArg(sess.Labels),
-		nilEmpty(fingerprint), archiveID,
+		nilEmpty(fingerprint), archiveID, frustrationCount,
 	}
 }
 
@@ -1416,11 +1437,11 @@ var duckAppendColumns = func() map[string][]columnSpec {
 }()
 
 func (s *Sync) appendSession(ctx context.Context, batch *duckAppendBatch, sess db.Session, fingerprint string) (int, error) {
-	if err := batch.add(ctx, "sessions", sessionInsertArgs(sess, s.machine, s.archiveID, fingerprint)...); err != nil {
-		return 0, err
-	}
 	msgs, err := s.local.GetAllMessages(ctx, sess.ID)
 	if err != nil {
+		return 0, err
+	}
+	if err := batch.add(ctx, "sessions", sessionInsertArgs(sess, s.machine, s.archiveID, fingerprint, signals.CountFrustrationMarkers(ingest.ExtractHeuristicMessages(msgs)))...); err != nil {
 		return 0, err
 	}
 	if err := insertMessages(ctx, batch, msgs); err != nil {

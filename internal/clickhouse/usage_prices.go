@@ -142,6 +142,7 @@ type chUsagePriceModel struct {
 	priceModel string
 }
 
+// chLoadPricingCatalog loads the mirror's catalog, GenAI document included.
 func chLoadPricingCatalog(
 	ctx context.Context, conn *sql.DB,
 	customPricing map[string]config.CustomModelRate,
@@ -158,6 +159,27 @@ func chLoadPricingCatalog(
 	if err != nil {
 		return chPricingCatalog{}, err
 	}
+	return chBuildPricingCatalog(ctx, conn, customPricing, pricing, genAI)
+}
+
+// chLoadPricingCatalogWithGenAI loads the mirror's catalog, without reader
+// custom rates, with genAI, the parsed row of the GenAI document the mirror
+// holds.
+func chLoadPricingCatalogWithGenAI(
+	ctx context.Context, conn *sql.DB, genAI export.EffectivePricingRow,
+) (chPricingCatalog, error) {
+	pricing, err := chLoadPricing(ctx, conn, nil)
+	if err != nil {
+		return chPricingCatalog{}, err
+	}
+	return chBuildPricingCatalog(ctx, conn, nil, pricing, genAI)
+}
+
+func chBuildPricingCatalog(
+	ctx context.Context, conn *sql.DB,
+	customPricing map[string]config.CustomModelRate,
+	pricing map[string]export.ModelRates, genAI export.EffectivePricingRow,
+) (chPricingCatalog, error) {
 	models, err := loadUsagePriceModels(ctx, conn, false)
 	if err != nil {
 		return chPricingCatalog{}, err
@@ -349,8 +371,10 @@ func (c chUsagePriceContext) lookup() export.PricingLookup {
 	}
 }
 
-// record replays events priced under this context into the pricing block,
-// one call per event so the application counts match per-event pricing.
+// record replays events priced under this context into the pricing block.
+// The application counts match pricing every event on its own; a group's
+// events are recorded in one call because a one-year read replays hundreds
+// of thousands of them.
 func (c chUsagePriceContext) record(
 	pricing *export.PricingResolver, kind string, bandAbove int64, events int,
 ) error {
@@ -361,10 +385,8 @@ func (c chUsagePriceContext) record(
 	case chUsagePriceKindZero:
 		pricing.RecordResolvedComputed(c.ReportedModel, c.PricedModel, lookup)
 	case chUsagePriceKindAggregate:
-		for range events {
-			pricing.RecordResolvedComputedAggregate(
-				c.ReportedModel, c.PricedModel, lookup)
-		}
+		pricing.RecordResolvedCounts(
+			c.ReportedModel, c.PricedModel, lookup, 0, 0, events, nil)
 	case chUsagePriceKindRequest:
 		// One token above the threshold selects exactly that band; zero
 		// tokens select the base rates.
@@ -372,10 +394,12 @@ func (c chUsagePriceContext) record(
 		if bandAbove >= 0 {
 			bandTokens = int(bandAbove) + 1
 		}
-		for range events {
-			pricing.RecordResolvedComputedRequest(
-				c.ReportedModel, c.PricedModel, lookup, bandTokens, 0, 0)
+		var band *int
+		if threshold, ok := lookup.Rates.RequestBand(bandTokens, 0, 0); ok {
+			band = &threshold
 		}
+		pricing.RecordResolvedCounts(
+			c.ReportedModel, c.PricedModel, lookup, 0, events, 0, band)
 	default:
 		return fmt.Errorf("unknown clickhouse usage price kind %q", kind)
 	}

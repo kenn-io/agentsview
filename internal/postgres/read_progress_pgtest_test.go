@@ -15,6 +15,7 @@ import (
 )
 
 func TestPushSessionTranscriptRevisionRoundTrip(t *testing.T) {
+	t.Parallel()
 	pgURL := testPGURL(t)
 	const schema = "agentsview_read_progress_test"
 	pg, err := Open(t.Context(), pgURL, schema, true)

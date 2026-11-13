@@ -2590,6 +2590,105 @@ func TestParseOpenCodeDB_ZeroTokens(t *testing.T) {
 	assertEq(t, "ContextTokens", asst.ContextTokens, 0)
 }
 
+// TestParseOpenCodeDB_ReasoningTokens covers both tokens.output conventions.
+// Each record is shaped like an OpenCode writer reporting one OpenAI call
+// with 1000 input tokens (200 cached) and 300 output tokens, 120 of them
+// reasoning, so the SDK total is 1300. Builds before v1.3.16 store output
+// 300; later builds store 180 and bill reasoning separately. Stored output
+// must be 300 either way, with reasoning recorded as its subset.
+func TestParseOpenCodeDB_ReasoningTokens(t *testing.T) {
+	tests := []struct {
+		name          string
+		messageTokens string
+		stepTokens    string
+		wantOutput    int
+		wantReasoning int
+	}{
+		{
+			name:          "output excludes reasoning",
+			messageTokens: `{"total":1300,"input":800,"output":180,"reasoning":120,"cache":{"read":200,"write":0}}`,
+			wantOutput:    300,
+			wantReasoning: 120,
+		},
+		{
+			name:          "output includes reasoning",
+			messageTokens: `{"total":1300,"input":800,"output":300,"reasoning":120,"cache":{"read":200,"write":0}}`,
+			wantOutput:    300,
+			wantReasoning: 120,
+		},
+		{
+			// Builds before v1.1.57 did not persist total; all of them
+			// predate the change and store output with reasoning.
+			name:          "no total keeps stored output",
+			messageTokens: `{"input":800,"output":300,"reasoning":120,"cache":{"read":200,"write":0}}`,
+			wantOutput:    300,
+			wantReasoning: 120,
+		},
+		{
+			name:          "total matching neither sum keeps stored output",
+			messageTokens: `{"total":5000,"input":800,"output":180,"reasoning":120,"cache":{"read":200,"write":0}}`,
+			wantOutput:    180,
+			wantReasoning: 120,
+		},
+		{
+			name:          "step-finish part supplies the total",
+			messageTokens: `{"input":800,"output":180,"reasoning":120,"cache":{"read":200,"write":0}}`,
+			stepTokens:    `{"total":1300,"input":800,"output":180,"reasoning":120,"cache":{"read":200,"write":0}}`,
+			wantOutput:    300,
+			wantReasoning: 120,
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			dbPath, seeder, db := newTestDB(t)
+			defer db.Close()
+
+			seeder.AddProject("prj_1", "/tmp/proj")
+			seeder.AddSession("ses_r", "prj_1", "", "Reasoning",
+				1700000000000, 1700000010000)
+			seeder.AddMessage("msg_u", "ses_r",
+				1700000000000, 1700000000000, `{"role":"user"}`)
+			seeder.AddPart("prt_u", "msg_u", "ses_r",
+				1700000000000, 1700000000000,
+				`{"type":"text","text":"hi"}`)
+			seeder.AddMessage("msg_a", "ses_r",
+				1700000005000, 1700000005000,
+				`{"role":"assistant","modelID":"gpt-5.4","providerID":"openai",`+
+					`"tokens":`+tc.messageTokens+`}`)
+			seeder.AddPart("prt_a", "msg_a", "ses_r",
+				1700000005000, 1700000005000,
+				`{"type":"text","text":"answer"}`)
+			if tc.stepTokens != "" {
+				seeder.AddPart("prt_step", "msg_a", "ses_r",
+					1700000006000, 1700000006000,
+					`{"type":"step-finish","reason":"stop","tokens":`+tc.stepTokens+`}`)
+			}
+
+			sessions, err := parseOpenCodeAll(dbPath, "m")
+			require.NoError(t, err)
+			require.Len(t, sessions, 1)
+			var asst *ParsedMessage
+			for i := range sessions[0].Messages {
+				if sessions[0].Messages[i].Role == RoleAssistant {
+					asst = &sessions[0].Messages[i]
+				}
+			}
+			require.NotNil(t, asst)
+			var got map[string]int
+			require.NoError(t, json.Unmarshal(asst.TokenUsage, &got))
+			assert.Equal(t, map[string]int{
+				"input_tokens":                800,
+				"output_tokens":               tc.wantOutput,
+				"reasoning_tokens":            tc.wantReasoning,
+				"cache_read_input_tokens":     200,
+				"cache_creation_input_tokens": 0,
+			}, got)
+			assert.Equal(t, tc.wantOutput, asst.OutputTokens)
+			assert.True(t, asst.HasOutputTokens)
+		})
+	}
+}
+
 // TestParseOpenCodeDB_NoTokenUsage verifies that assistant
 // messages with no tokens block (e.g. errored requests) leave
 // TokenUsage empty so they are filtered out by the usage query.

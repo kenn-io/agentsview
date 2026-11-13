@@ -75,7 +75,7 @@ type VersionInfo struct {
 // Bump it when a client-visible contract cannot be decoded safely by an older
 // CLI or daemon.
 const (
-	APIVersion = 16
+	APIVersion = 18
 	// KataAPIVersion is the first daemon API that serves /api/v1/kata/status.
 	KataAPIVersion = 14
 	// FrictionAPIVersion is the first daemon API that serves
@@ -1590,13 +1590,14 @@ func (s *Server) Shutdown(ctx context.Context) error {
 // binding to the specified host. It returns an error instead of reusing an
 // occupied port when the candidate range is exhausted.
 func FindAvailablePort(ctx context.Context, host string, start int) (int, error) {
-	return findAvailablePort(ctx, host, start, selectEphemeralPort)
+	return findAvailablePort(ctx, host, start, selectEphemeralPort, listenProbesFree)
 }
 
 func findAvailablePort(ctx context.Context,
 	host string,
 	start int,
 	selectEphemeral func(context.Context, string) (int, error),
+	portFree func(context.Context, []listenProbe, int) bool,
 ) (int, error) {
 	if start == 0 {
 		if !isWildcardListenHost(host) {
@@ -1608,7 +1609,7 @@ func findAvailablePort(ctx context.Context,
 			if err != nil {
 				return 0, err
 			}
-			if listenProbesFree(ctx, probes, port) {
+			if portFree(ctx, probes, port) {
 				return port, nil
 			}
 		}
@@ -1620,7 +1621,7 @@ func findAvailablePort(ctx context.Context,
 	probes := listenProbes(ctx, host)
 	last := min(start+99, 65535)
 	for port := start; port <= last; port++ {
-		if listenProbesFree(ctx, probes, port) {
+		if portFree(ctx, probes, port) {
 			return port, nil
 		}
 	}

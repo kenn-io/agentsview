@@ -22,6 +22,7 @@ import (
 // This contract also runs against CockroachDB through TEST_PG_URL. It needs
 // only the existing replica session tables and the new digest tables.
 func TestFrictionSessionVersionPreventsStaleSave(t *testing.T) {
+	t.Parallel()
 	const schema = "agentsview_friction_version_test"
 	pgURL := testPGURL(t)
 	cleanNamedPGSchema(t, pgURL, schema)
@@ -139,6 +140,7 @@ func openFrictionParityStores(t *testing.T) (*db.DB, *Store) {
 }
 
 func TestFrictionReviewStoreParity(t *testing.T) {
+	t.Parallel()
 	local, pgStore := openFrictionParityStores(t)
 	for name, s := range map[string]frictionReviewStore{"sqlite": local, "postgres": pgStore} {
 		t.Run(name, func(t *testing.T) {
@@ -225,6 +227,7 @@ func TestFrictionReviewStoreParity(t *testing.T) {
 }
 
 func TestFrictionSubjectsSeekActivityAndMembership(t *testing.T) {
+	t.Parallel()
 	_, store := openFrictionParityStores(t)
 	_, err := store.pg.ExecContext(t.Context(), `INSERT INTO friction_digest_sessions(subject_id, date, subject_kind)
   VALUES ('c', '2026-09-15', 'session')`)

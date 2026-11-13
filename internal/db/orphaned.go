@@ -261,6 +261,9 @@ func (d *DB) CopyOrphanedDataFromExcluding(
 			return nil, err
 		}
 	}
+	if err := copyResyncFrustrationMarkers(ctx, tx, d.usageOnlyStorage()); err != nil {
+		return nil, fmt.Errorf("copying frustration markers: %w", err)
+	}
 	if err := retainConversationTombstonesTx(ctx, tx); err != nil {
 		return nil, fmt.Errorf("retaining conversation tombstones: %w", err)
 	}
@@ -279,6 +282,36 @@ func (d *DB) CopyOrphanedDataFromExcluding(
 	}
 
 	return ids, nil
+}
+
+func copyResyncFrustrationMarkers(ctx context.Context, tx *sql.Tx, usageOnly bool) error {
+	if usageOnly || !oldDBHasTable(ctx, tx, "session_frustration_markers") {
+		return nil
+	}
+	// Reparsed sessions were reconciled above. For copied orphans, compare
+	// prompts after sanitization and projection before reusing their counts.
+	_, err := tx.ExecContext(ctx, `INSERT OR IGNORE INTO main.session_frustration_markers
+		(session_id, transcript_key, marker_version, count)
+		SELECT current.id, current.transcript_revision || '|' || current.created_at,
+			markers.marker_version, markers.count
+		FROM main.sessions current
+		LEFT JOIN _orphaned_ids orphan ON orphan.id = current.id
+		JOIN old_db.sessions old ON old.id = COALESCE(orphan.source_id, current.id)
+		JOIN old_db.session_frustration_markers markers ON markers.session_id = old.id
+		WHERE current.transcript_revision = old.transcript_revision
+			AND markers.transcript_key = old.transcript_revision || '|' || old.created_at
+			AND current.deleted_at IS NULL
+			AND (orphan.id IS NULL OR (
+				NOT EXISTS (SELECT ordinal, content FROM old_db.messages
+					WHERE session_id = old.id AND role = 'user' AND source_subtype <> 'tool_result' AND is_system = 0
+					EXCEPT SELECT ordinal, content FROM main.messages
+					WHERE session_id = current.id AND role = 'user' AND source_subtype <> 'tool_result' AND is_system = 0)
+				AND NOT EXISTS (SELECT ordinal, content FROM main.messages
+					WHERE session_id = current.id AND role = 'user' AND source_subtype <> 'tool_result' AND is_system = 0
+					EXCEPT SELECT ordinal, content FROM old_db.messages
+					WHERE session_id = old.id AND role = 'user' AND source_subtype <> 'tool_result' AND is_system = 0)
+			))`)
+	return err
 }
 
 // CopyTrashedDataFrom copies soft-deleted sessions and their
@@ -1732,8 +1765,10 @@ func (d *DB) CopySessionMetadataFrom(
 				'project_identity_publication_revision',
 				'session_deletion_publication_revision',
 				'usage_change_revision',
+				'analytics_change_revision',
 				'usage_pricing_revision',
 				'conversation_publication_revision',
+				'conversation_pruned_revision',
 				'conversation_usage_revision',
 				'worktree_mapping_publication_revision'
 			)

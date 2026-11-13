@@ -1138,6 +1138,7 @@ func EnsureSchema(
 	if _, err := db.ExecContext(ctx, coreDDL); err != nil {
 		return fmt.Errorf("creating pg tables: %w", err)
 	}
+	ensureFrustrationCountsPG(ctx, db)
 	if _, err := db.ExecContext(ctx, frictionDDL); err != nil {
 		return fmt.Errorf("creating pg friction tables: %w", err)
 	}
@@ -1523,6 +1524,7 @@ func backfillCodexThreadScopePG(ctx context.Context, pg pgSessionExecer) error {
 		), exclusions AS (
 			UPDATE excluded_sessions SET include_codex_pages = TRUE
 			WHERE id ~ $2 AND EXISTS (SELECT 1 FROM migration)
+			RETURNING id
 		)
 		UPDATE sessions SET trash_includes_codex_pages = TRUE,
 			source_trash_includes_codex_pages = (source_deleted_at IS NOT NULL)

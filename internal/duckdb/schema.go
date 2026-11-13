@@ -33,23 +33,26 @@ import (
 // copies it for resident sessions.
 // v26 adds session_usage_totals, the usage totals agents record for whole
 // sessions.
-const SchemaVersion = 26
+// v27 stores frustration marker counts at push time.
+// v28 adds the usage rollup tables (see usage_rollup.go).
+const SchemaVersion = 28
 
 const schemaVersionMetadataKey = "agentsview_schema_version"
 
 // Mirror metadata keys recorded by writeMirrorMetadata and read back by
 // readMirrorMetadata / ProbeMirror.
 const (
-	dataVersionMetadataKey      = "agentsview_source_data_version"
-	sourceDatabaseIDMetadataKey = "agentsview_source_database_id"
-	sourceArchiveIDMetadataKey  = "agentsview_source_archive_id"
-	pushScopeMetadataKey        = "agentsview_push_scope"
-	lastPushAtMetadataKey       = "agentsview_last_push_at"
-	lastPushMachineMetadataKey  = "agentsview_last_push_machine"
-	lastPushCutoffMetadataKey   = "agentsview_last_push_cutoff"
-	deletionRevisionMetadataKey = "agentsview_session_deletion_revision"
-	identityRevisionMetadataKey = "agentsview_project_identity_revision"
-	mappingRevisionMetadataKey  = "agentsview_worktree_mapping_revision"
+	frustrationMarkersVersionMetadataKey = "agentsview_frustration_markers_version"
+	dataVersionMetadataKey               = "agentsview_source_data_version"
+	sourceDatabaseIDMetadataKey          = "agentsview_source_database_id"
+	sourceArchiveIDMetadataKey           = "agentsview_source_archive_id"
+	pushScopeMetadataKey                 = "agentsview_push_scope"
+	lastPushAtMetadataKey                = "agentsview_last_push_at"
+	lastPushMachineMetadataKey           = "agentsview_last_push_machine"
+	lastPushCutoffMetadataKey            = "agentsview_last_push_cutoff"
+	deletionRevisionMetadataKey          = "agentsview_session_deletion_revision"
+	identityRevisionMetadataKey          = "agentsview_project_identity_revision"
+	mappingRevisionMetadataKey           = "agentsview_worktree_mapping_revision"
 )
 
 // curationFingerprintMetadataKey stores a hash of the local in-scope
@@ -98,7 +101,7 @@ type columnSpec struct {
 	def  string
 }
 
-var mirrorTables = []tableSpec{
+var mirrorTables = append([]tableSpec{
 	{
 		name: "commit_links",
 		create: `CREATE TABLE IF NOT EXISTS commit_links (
@@ -244,7 +247,8 @@ var mirrorTables = []tableSpec{
 			pr_links VARCHAR NOT NULL DEFAULT '',
 			labels VARCHAR[],
 			agentsview_push_fingerprint TEXT,
-			source_archive_id TEXT NOT NULL DEFAULT ''
+			source_archive_id TEXT NOT NULL DEFAULT '',
+			frustration_marker_count INTEGER NOT NULL DEFAULT 0
 		)`,
 		columns: []columnSpec{
 			{"id", "id TEXT"},
@@ -320,6 +324,7 @@ var mirrorTables = []tableSpec{
 			{"labels", "labels VARCHAR[]"},
 			{"agentsview_push_fingerprint", "agentsview_push_fingerprint TEXT"},
 			{"source_archive_id", "source_archive_id TEXT NOT NULL DEFAULT ''"},
+			{"frustration_marker_count", "frustration_marker_count INTEGER NOT NULL DEFAULT 0"},
 		},
 		indexes: []string{
 			"CREATE INDEX IF NOT EXISTS idx_sessions_ended ON sessions(ended_at, id)",
@@ -913,7 +918,7 @@ var mirrorTables = []tableSpec{
 			"CREATE INDEX IF NOT EXISTS idx_pinned_created ON pinned_messages(created_at)",
 		},
 	},
-}
+}, usageRollupTables...)
 
 // EnsureSchema creates the DuckDB mirror schema. It has no production
 // callers: Sync.Push always goes through ProbeMirror to pick buildMirror
@@ -983,8 +988,9 @@ func recordMetadataKey(
 // the source revisions needed to detect deletions and identity changes that
 // happened after the mirror was built.
 type mirrorMetadata struct {
-	SchemaVersion int
-	DataVersion   int
+	SchemaVersion             int
+	DataVersion               int
+	FrustrationMarkersVersion int
 	// SourceDatabaseID is the archive_metadata database_id of the SQLite
 	// archive the mirror was built from. It identifies the archive
 	// GENERATION, not just the path: a resync builds a fresh archive with a
@@ -1014,6 +1020,7 @@ func writeMirrorMetadata(ctx context.Context, db *sql.DB, meta mirrorMetadata) e
 		value string
 	}{
 		{schemaVersionMetadataKey, strconv.Itoa(meta.SchemaVersion)},
+		{frustrationMarkersVersionMetadataKey, strconv.Itoa(meta.FrustrationMarkersVersion)},
 		{dataVersionMetadataKey, strconv.Itoa(meta.DataVersion)},
 		{sourceDatabaseIDMetadataKey, meta.SourceDatabaseID},
 		{sourceArchiveIDMetadataKey, meta.SourceArchiveID},
@@ -1038,9 +1045,9 @@ func writeMirrorMetadata(ctx context.Context, db *sql.DB, meta mirrorMetadata) e
 // errors so callers (ProbeMirror) can surface them as shape issues rather
 // than silently treating a corrupt mirror as version 0.
 func readMirrorMetadata(ctx context.Context, db *sql.DB) (mirrorMetadata, error) {
-	raw := make(map[string]string, 11)
+	raw := make(map[string]string, 12)
 	for _, key := range []string{
-		schemaVersionMetadataKey, dataVersionMetadataKey,
+		schemaVersionMetadataKey, dataVersionMetadataKey, frustrationMarkersVersionMetadataKey,
 		sourceDatabaseIDMetadataKey, sourceArchiveIDMetadataKey,
 		pushScopeMetadataKey,
 		lastPushCutoffMetadataKey, lastPushAtMetadataKey, lastPushMachineMetadataKey,
@@ -1064,6 +1071,11 @@ func readMirrorMetadata(ctx context.Context, db *sql.DB) (mirrorMetadata, error)
 	var err error
 	if meta.SchemaVersion, err = parseMirrorMetadataInt(
 		schemaVersionMetadataKey, raw[schemaVersionMetadataKey],
+	); err != nil {
+		return mirrorMetadata{}, err
+	}
+	if meta.FrustrationMarkersVersion, err = parseMirrorMetadataInt(
+		frustrationMarkersVersionMetadataKey, raw[frustrationMarkersVersionMetadataKey],
 	); err != nil {
 		return mirrorMetadata{}, err
 	}

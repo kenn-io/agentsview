@@ -22,6 +22,7 @@ import (
 )
 
 func TestRawIngestStoreObjectRegistry(t *testing.T) {
+	t.Parallel()
 	pg, store := newRawIngestTestStore(t)
 	_, err := NewRawIngestStore(nil)
 	assert.ErrorIs(t, err, rawsync.ErrInvalid)
@@ -53,6 +54,7 @@ func TestRawIngestStoreObjectRegistry(t *testing.T) {
 }
 
 func TestRawIngestStoreBatchesVerifiedObjectRegistration(t *testing.T) {
+	t.Parallel()
 	pg, store := newRawIngestTestStore(t)
 	identity := rawIngestIdentity(t, "tenant-a")
 	objects := make([]rawsync.ObjectRef, 0, rawIngestBatchRows+1)
@@ -74,6 +76,7 @@ func TestRawIngestStoreBatchesVerifiedObjectRegistration(t *testing.T) {
 }
 
 func TestRawIngestStoreCommitIsAtomicFencedAndIdempotent(t *testing.T) {
+	t.Parallel()
 	pg, store := newRawIngestTestStore(t)
 	identity := rawIngestIdentity(t, "tenant-a")
 	object := rawIngestObject(t, "a", 7)
@@ -142,6 +145,7 @@ func TestRawIngestStoreCommitIsAtomicFencedAndIdempotent(t *testing.T) {
 }
 
 func TestRawIngestStoreCommitSupersedesPriorHeadParseJob(t *testing.T) {
+	t.Parallel()
 	pg, store := newRawIngestTestStore(t)
 	identity := rawIngestIdentity(t, "tenant-a")
 	object := rawIngestObject(t, "a", 7)
@@ -193,6 +197,7 @@ func TestRawIngestStoreCommitSupersedesPriorHeadParseJob(t *testing.T) {
 }
 
 func TestRawIngestStoreCommitFencesLeasedPriorHeadParseJob(t *testing.T) {
+	t.Parallel()
 	pg, store := newRawIngestTestStore(t)
 	identity := rawIngestIdentity(t, "tenant-a")
 	object := rawIngestObject(t, "a", 7)
@@ -229,6 +234,7 @@ func TestRawIngestStoreCommitFencesLeasedPriorHeadParseJob(t *testing.T) {
 func TestRawIngestStoreCommitDoesNotOverwriteTerminalPriorHeadJobAfterWait(
 	t *testing.T,
 ) {
+	t.Parallel()
 	for _, terminal := range []string{"complete", "failed"} {
 		t.Run(terminal, func(t *testing.T) {
 			pg, store := newRawIngestTestStore(t)
@@ -338,6 +344,7 @@ func TestRawIngestStoreCommitDoesNotOverwriteTerminalPriorHeadJobAfterWait(
 }
 
 func TestRawIngestStoreCommitSupersedesSingleLegacyPriorHeadJob(t *testing.T) {
+	t.Parallel()
 	pg, store := newRawIngestTestStore(t)
 	identity := rawIngestIdentity(t, "tenant-a")
 	object := rawIngestObject(t, "a", 7)
@@ -410,6 +417,7 @@ func readRawParseJob(
 }
 
 func TestRawIngestStoreMissingObjectChangesNoAcceptanceState(t *testing.T) {
+	t.Parallel()
 	pg, store := newRawIngestTestStore(t)
 	identity := rawIngestIdentity(t, "tenant-a")
 	manifest := rawIngestManifest(
@@ -426,6 +434,7 @@ func TestRawIngestStoreMissingObjectChangesNoAcceptanceState(t *testing.T) {
 }
 
 func TestRawIngestStoreConcurrentIdenticalRetryConverges(t *testing.T) {
+	t.Parallel()
 	pg, store := newRawIngestTestStore(t)
 	identity := rawIngestIdentity(t, "tenant-a")
 	object := rawIngestObject(t, "a", 7)
@@ -465,6 +474,7 @@ func TestRawIngestStoreConcurrentIdenticalRetryConverges(t *testing.T) {
 }
 
 func TestRawIngestStoreBatchesManifestReferences(t *testing.T) {
+	t.Parallel()
 	pg, store := newRawIngestTestStore(t)
 	identity := rawIngestIdentity(t, "tenant-a")
 	const objectCount = rawIngestBatchRows + 1
@@ -506,6 +516,7 @@ func TestRawIngestStoreBatchesManifestReferences(t *testing.T) {
 }
 
 func TestRawIngestStoreJobFailureRollsBackManifestAndHead(t *testing.T) {
+	t.Parallel()
 	pg, store := newRawIngestTestStore(t)
 	identity := rawIngestIdentity(t, "tenant-a")
 	object := rawIngestObject(t, "a", 7)
@@ -532,6 +543,7 @@ func TestRawIngestStoreJobFailureRollsBackManifestAndHead(t *testing.T) {
 }
 
 func TestRawIngestStoreConcurrentHeadAdvance(t *testing.T) {
+	t.Parallel()
 	pg, store := newRawIngestTestStore(t)
 	identity := rawIngestIdentity(t, "tenant-a")
 	object := rawIngestObject(t, "a", 7)
@@ -679,6 +691,7 @@ func rawIngestTableCount(t *testing.T, pg *sql.DB, table string) int {
 }
 
 func TestRawIngestStoreAcceptsMaximumLengthIncompressibleKeys(t *testing.T) {
+	t.Parallel()
 	pg, store := newRawIngestTestStore(t)
 	limits := rawsync.DefaultManifestLimits()
 	sourceKey := rawIngestIncompressibleText(t, 1, 4096, sourceKeyAlphabet)

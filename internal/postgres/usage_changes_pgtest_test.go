@@ -33,6 +33,7 @@ func newUsageJournalFixture(t *testing.T) (*db.DB, *Sync, *Store) {
 }
 
 func TestUsageChangeJournalEmptyArchivePublication(t *testing.T) {
+	t.Parallel()
 	local, syncer, store := newUsageJournalFixture(t)
 	ctx := t.Context()
 	require.NoError(t, local.UpsertSession(ctx, db.Session{ID: "session-a", Project: "project-a", Machine: "test-machine", Agent: "codex"}))
@@ -65,6 +66,7 @@ func TestUsageChangeJournalEmptyArchivePublication(t *testing.T) {
 }
 
 func TestUsageChangeJournalWriteAfterImmediateStamp(t *testing.T) {
+	t.Parallel()
 	for _, mode := range []string{"IMMEDIATE", "DEFERRED"} {
 		t.Run(mode, func(t *testing.T) {
 			_, syncer, store := newUsageJournalFixture(t)
@@ -104,7 +106,22 @@ func newUsageJournalRole(t *testing.T, syncer *Sync, grants string) string {
 	return roleDSN
 }
 
+func TestUsageCurrentJournalNeedsNoFunctionOwnership(t *testing.T) {
+	t.Parallel()
+	_, syncer, _ := newUsageJournalFixture(t)
+	ctx := t.Context()
+	reader, err := NewStore(ctx, newUsageJournalRole(t, syncer, `GRANT SELECT ON sync_metadata TO ROLE`), syncer.schema, true)
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, reader.Close()) })
+	tx, err := reader.DB().BeginTx(ctx, nil)
+	require.NoError(t, err)
+	defer tx.Rollback()
+	require.NoError(t, installUsageAccountRevisionPG(ctx, tx))
+	require.NoError(t, installUsageHistoryTokenPG(ctx, tx))
+}
+
 func TestUsageChangeJournalWatchedTables(t *testing.T) {
+	t.Parallel()
 	_, syncer, store := newUsageJournalFixture(t)
 	ctx := t.Context()
 	_, err := syncer.pg.ExecContext(ctx, `INSERT INTO sessions(id,machine,project,agent) VALUES('owner','machine','project','codex'),('other','machine','project','codex');
@@ -147,6 +164,11 @@ func TestUsageChangeJournalWatchedTables(t *testing.T) {
 				require.NoError(t, err)
 				assert.Equal(t, before+1, through, query)
 				assert.Equal(t, tc.ids[step], ids, query)
+				if tc.table == "cursor_usage_events" {
+					var accountRevision int64
+					require.NoError(t, store.pg.QueryRowContext(ctx, `SELECT revision FROM usage_session_changes WHERE session_id=''`).Scan(&accountRevision))
+					assert.Equal(t, through, accountRevision, "account writes must advance the global marker")
+				}
 				if tc.table == "usage_events" && step == 0 {
 					// Released publishers replace usage without touching sessions.
 					_, err = syncer.pg.ExecContext(ctx, `DELETE FROM usage_events WHERE session_id='owner';
@@ -175,6 +197,7 @@ func TestUsageChangeJournalWatchedTables(t *testing.T) {
 }
 
 func TestUsageChangeJournalPushPaths(t *testing.T) {
+	t.Parallel()
 	local, syncer, store := newUsageJournalFixture(t)
 	ctx := t.Context()
 	push := func(t *testing.T, full bool) {
@@ -275,6 +298,7 @@ func TestUsageChangeJournalPushPaths(t *testing.T) {
 
 // The transaction that commits later gets the later revision, whichever began first.
 func TestUsageChangeJournalCommitOrder(t *testing.T) {
+	t.Parallel()
 	_, syncer, store := newUsageJournalFixture(t)
 	ctx := t.Context()
 	before, err := store.UsageChangeRevision(ctx)
@@ -298,6 +322,7 @@ func TestUsageChangeJournalCommitOrder(t *testing.T) {
 }
 
 func TestUsageChangeJournalInstallIdempotent(t *testing.T) {
+	t.Parallel()
 	_, syncer, store := newUsageJournalFixture(t)
 	ctx := t.Context()
 	before, err := store.UsageChangeRevision(ctx)
@@ -335,12 +360,33 @@ func TestUsageChangeJournalInstallIdempotent(t *testing.T) {
 	assert.Greater(t, after, before)
 }
 
+func TestUsageChangeJournalDropClearsHistory(t *testing.T) {
+	t.Parallel()
+	_, syncer, _ := newUsageJournalFixture(t)
+	ctx := t.Context()
+	var token string
+	require.NoError(t, syncer.pg.QueryRowContext(ctx, `SELECT value FROM sync_metadata WHERE key='usage_history_token'`).Scan(&token))
+	_, err := syncer.pg.ExecContext(ctx, dropUsageChangeJournalSQL)
+	require.NoError(t, err)
+	var count int
+	require.NoError(t, syncer.pg.QueryRowContext(ctx, `SELECT count(*) FROM sync_metadata WHERE key IN ('usage_history_token', 'usage_account_revision')`).Scan(&count))
+	require.Zero(t, count)
+	ensureUsageChangeJournalPG(ctx, syncer.pg)
+	var newToken string
+	require.NoError(t, syncer.pg.QueryRowContext(ctx, `SELECT value FROM sync_metadata WHERE key='usage_history_token'`).Scan(&newToken))
+	require.NotEqual(t, token, newToken)
+	var accountRevision int64
+	require.NoError(t, syncer.pg.QueryRowContext(ctx, `SELECT value::bigint FROM sync_metadata WHERE key='usage_account_revision'`).Scan(&accountRevision))
+	require.Positive(t, accountRevision)
+}
+
 func TestUsageChangeJournalNewerVersion(t *testing.T) {
+	t.Parallel()
 	_, syncer, store := newUsageJournalFixture(t)
 	ctx := t.Context()
 	_, err := syncer.pg.ExecContext(ctx, dropUsageChangeJournalSQL)
 	require.NoError(t, err)
-	_, err = syncer.pg.ExecContext(ctx, `INSERT INTO sync_metadata(key,value) VALUES('usage_change_journal_version','2')`)
+	_, err = syncer.pg.ExecContext(ctx, `INSERT INTO sync_metadata(key,value) VALUES('usage_change_journal_version',$1)`, fmt.Sprint(usageChangeJournalVersionPG+1))
 	require.NoError(t, err)
 	ensureUsageChangeJournalPG(ctx, syncer.pg)
 	// Optional setup swallows installation errors. Check the installer directly
@@ -360,6 +406,7 @@ func TestUsageChangeJournalNewerVersion(t *testing.T) {
 }
 
 func TestUsageChangeJournalRestrictedRole(t *testing.T) {
+	t.Parallel()
 	local, syncer, store := newUsageJournalFixture(t)
 	ctx := t.Context()
 	roleURL := newUsageJournalRole(t, syncer, `GRANT SELECT,INSERT,UPDATE,DELETE ON ALL TABLES IN SCHEMA `+syncer.schema+` TO ROLE;
@@ -395,6 +442,7 @@ func TestUsageChangeJournalRestrictedRole(t *testing.T) {
 }
 
 func TestUsageChangeJournalLateGrantedReader(t *testing.T) {
+	t.Parallel()
 	_, syncer, _ := newUsageJournalFixture(t)
 	ctx := t.Context()
 	// Granted after installation, so the journal itself stays unreadable.
@@ -405,4 +453,43 @@ func TestUsageChangeJournalLateGrantedReader(t *testing.T) {
 	require.NoError(t, err)
 	assert.Zero(t, through)
 	assert.Empty(t, ids)
+}
+
+func TestUsageJournalUpgradesHistoryToken(t *testing.T) {
+	t.Parallel()
+	_, syncer, store := newUsageJournalFixture(t)
+	ctx := t.Context()
+	// Version 1 stamped revisions and account changes without a history token.
+	oldStamp := strings.Replace(stampUsageChangeFunctionBodyPG,
+		`UPDATE usage_session_changes SET revision = stamped WHERE revision = 0;`,
+		`UPDATE usage_session_changes SET revision = stamped WHERE revision = 0;
+    IF current_setting('agentsview.uc_accounts_' || TG_RELID, true) = 'on' THEN
+        UPDATE sync_metadata SET value = stamped::text WHERE key = 'usage_account_revision';
+        PERFORM set_config('agentsview.uc_accounts_' || TG_RELID, '', true);
+    END IF;`, 1)
+	quotedSchema, err := quoteIdentifier(syncer.schema)
+	require.NoError(t, err)
+	_, err = store.pg.ExecContext(ctx, fmt.Sprintf(`UPDATE sync_metadata SET value='1' WHERE key='usage_change_journal_version';
+ DELETE FROM sync_metadata WHERE key='usage_history_token';
+ CREATE OR REPLACE FUNCTION stamp_usage_change() RETURNS trigger LANGUAGE plpgsql SECURITY DEFINER
+ SET search_path = pg_catalog, %s, pg_temp AS $journal$%s$journal$`, quotedSchema, oldStamp))
+	require.NoError(t, err)
+	require.NoError(t, EnsureSchema(ctx, syncer.pg, syncer.schema))
+	var version, before string
+	require.NoError(t, store.pg.QueryRowContext(ctx, `SELECT (SELECT value FROM sync_metadata WHERE key='usage_change_journal_version'), (SELECT value FROM sync_metadata WHERE key='usage_history_token')`).Scan(&version, &before))
+	require.Equal(t, "2", version)
+	require.NotEmpty(t, before)
+	_, err = store.pg.ExecContext(ctx, `INSERT INTO sessions(id,machine,project,agent) VALUES('history-token','machine','project','codex')`)
+	require.NoError(t, err)
+	var after string
+	require.NoError(t, store.pg.QueryRowContext(ctx, `SELECT value FROM sync_metadata WHERE key='usage_history_token'`).Scan(&after))
+	require.NotEqual(t, before, after)
+	tx, err := store.beginTx(ctx, nil)
+	require.NoError(t, err)
+	_, err = tx.ExecContext(ctx, `UPDATE sessions SET project='rolled-back' WHERE id='history-token'`)
+	require.NoError(t, err)
+	require.NoError(t, tx.Rollback())
+	var rolledBack string
+	require.NoError(t, store.pg.QueryRowContext(ctx, `SELECT value FROM sync_metadata WHERE key='usage_history_token'`).Scan(&rolledBack))
+	require.Equal(t, after, rolledBack)
 }

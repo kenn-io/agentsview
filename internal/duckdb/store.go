@@ -20,6 +20,7 @@ import (
 	"go.kenn.io/agentsview/internal/config"
 	"go.kenn.io/agentsview/internal/db"
 	"go.kenn.io/agentsview/internal/kept"
+	pricingpkg "go.kenn.io/agentsview/internal/pricing"
 	"go.kenn.io/agentsview/internal/readbase"
 )
 
@@ -42,10 +43,12 @@ type Store struct {
 	readbase.MirrorStubs
 	path           string
 	handleMu       sync.RWMutex
+	replacementMu  sync.Mutex
 	duck           *sql.DB
 	fileInfo       os.FileInfo
 	walStamp       string
 	reports        kept.Reports
+	usageDisk      kept.Disk
 	analyticsReads kept.Reads[[]byte]
 	dailyUsage     kept.Reads[db.DailyUsageResult]
 	planUsage      kept.Reads[*db.PlanUsageCountSummary]
@@ -62,8 +65,6 @@ type Store struct {
 	// gone.
 	retiring sync.WaitGroup
 
-	// frustrationMemo reuses local mirror counts by transcript fingerprint.
-	frustrationMemo db.FrustrationMarkerMemo
 	// activityRuns keeps sessions' activity runs by push fingerprint.
 	activityRuns activityRunsMemo
 
@@ -131,7 +132,7 @@ func (s *Store) keptVersion() string {
 	if stamp == "" {
 		return ""
 	}
-	return stamp + "|" + s.pricingDigest + "|" + s.aliasPath
+	return stamp + "|" + s.pricingDigest + "|" + s.aliasPath + "|" + pricingpkg.ConfiguredAliasesDigest()
 }
 
 // Capture before opening: DuckDB may replay a leftover WAL on open.

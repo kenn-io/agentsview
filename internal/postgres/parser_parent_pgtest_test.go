@@ -15,6 +15,7 @@ import (
 )
 
 func TestPGParserParentProvenanceRoundTripsAndRepushes(t *testing.T) {
+	t.Parallel()
 	pgURL := testPGURL(t)
 	const schema = "agentsview_parser_parent_test"
 	cleanNamedPGSchema(t, pgURL, schema)
@@ -81,6 +82,7 @@ func TestPGParserParentProvenanceRoundTripsAndRepushes(t *testing.T) {
 }
 
 func TestPGParserParentBackfillIgnoresLegacyProvenanceMarker(t *testing.T) {
+	t.Parallel()
 	pgURL := testPGURL(t)
 	const schema = "agentsview_parser_parent_backfill_test"
 	cleanNamedPGSchema(t, pgURL, schema)

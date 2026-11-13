@@ -11,6 +11,7 @@ import (
 )
 
 func TestFleetBatchAndSearchMetadata(t *testing.T) {
+	t.Parallel()
 	store := setupContentSearch(t)
 	for _, id := range []string{"codex:shared", "node-a~codex:shared", "unrelated"} {
 		insertCSSession(t, store, id, "app", "codex", "2026-09-01T12:00:00Z", "2026-09-01T12:01:00Z")

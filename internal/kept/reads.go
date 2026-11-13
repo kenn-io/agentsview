@@ -16,15 +16,7 @@ type Reads[T any] struct {
 	flights Flights[T]
 }
 
-// Do returns a kept value or loads it. Empty slots or versions bypass reuse.
-func (r *Reads[T]) Do(ctx context.Context, slot, version string, load func(context.Context) (T, error)) (T, error) {
-	if err := ctx.Err(); err != nil {
-		var zero T
-		return zero, err
-	}
-	if slot == "" || version == "" {
-		return load(ctx)
-	}
+func (r *Reads[T]) init() {
 	r.once.Do(func() {
 		if r.Size != nil {
 			r.memo.Size = r.Size
@@ -37,6 +29,41 @@ func (r *Reads[T]) Do(ctx context.Context, slot, version string, load func(conte
 			return JSONBytes(value)
 		}
 	})
+}
+
+// Get returns a retained value without starting detached work.
+func (r *Reads[T]) Get(slot, version string) (T, bool) {
+	var zero T
+	if slot == "" || version == "" {
+		return zero, false
+	}
+	r.init()
+	values, ok := r.memo.Get(slot, version)
+	if !ok {
+		return zero, false
+	}
+	return values[0], true
+}
+
+// Put publishes a value whose owning operation has completed.
+func (r *Reads[T]) Put(slot, version string, value T) {
+	if slot == "" || version == "" {
+		return
+	}
+	r.init()
+	r.memo.Put(slot, version, []T{value})
+}
+
+// Do returns a kept value or loads it. Empty slots or versions bypass reuse.
+func (r *Reads[T]) Do(ctx context.Context, slot, version string, load func(context.Context) (T, error)) (T, error) {
+	if err := ctx.Err(); err != nil {
+		var zero T
+		return zero, err
+	}
+	if slot == "" || version == "" {
+		return load(ctx)
+	}
+	r.init()
 	if values, ok := r.memo.Get(slot, version); ok {
 		return values[0], nil
 	}

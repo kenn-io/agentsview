@@ -23,6 +23,7 @@ require (
 	github.com/gofrs/flock v0.13.1
 	github.com/google/go-cmp v0.7.0
 	github.com/google/shlex v0.0.0-20191202100458-e7afc7fbc510
+	github.com/google/uuid v1.6.0
 	github.com/jackc/pgx/v5 v5.12.0
 	github.com/jellydator/ttlcache/v3 v3.4.1
 	github.com/klauspost/compress v1.20.3
@@ -42,7 +43,7 @@ require (
 	github.com/tidwall/gjson v1.20.0
 	github.com/yuin/goldmark/v2 v2.1.13
 	go.kenn.io/docbank v0.17.0
-	go.kenn.io/kata v0.22.0
+	go.kenn.io/kata v0.23.0
 	go.kenn.io/kit v0.52.0
 	go.yaml.in/yaml/v3 v3.0.5
 	golang.org/x/exp v0.0.0-20261014143641-f0251eb4aa3e
@@ -112,7 +113,6 @@ require (
 	github.com/goccy/go-json v0.11.2 // indirect
 	github.com/google/flatbuffers v25.12.19+incompatible // indirect
 	github.com/google/jsonschema-go v0.4.3 // indirect
-	github.com/google/uuid v1.6.0 // indirect
 	github.com/hashicorp/golang-lru/v2 v2.0.7 // indirect
 	github.com/hhrutter/tiff v1.0.6 // indirect
 	github.com/inconshreveable/mousetrap v1.1.0 // indirect

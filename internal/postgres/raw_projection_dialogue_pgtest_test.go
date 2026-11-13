@@ -15,6 +15,7 @@ import (
 )
 
 func TestRawProjectionRefreshesDialogueWithoutNewContent(t *testing.T) {
+	t.Parallel()
 	f := newProjectionFixture(t)
 	_, grantErr := f.admin.ExecContext(t.Context(), `REVOKE UPDATE ON messages FROM "`+f.role+`"; GRANT UPDATE(dialogue_text) ON messages TO "`+f.role+`"`)
 	require.NoError(t, grantErr)
@@ -132,6 +133,7 @@ func TestRawProjectionRefreshesDialogueWithoutNewContent(t *testing.T) {
 // A prefix can retain its own revision while its branch selects a longer one.
 // Refreshing that prefix must retain dialogue until it materializes.
 func TestRawProjectionDialogueUpgradeRefreshesRetainedRevision(t *testing.T) {
+	t.Parallel()
 	f := newProjectionFixture(t)
 	short := projectionOutcome("prefixneedle")
 	short.Outcome.Results[0].Result.Messages = short.Outcome.Results[0].Result.Messages[:1]
@@ -170,6 +172,7 @@ func TestRawProjectionDialogueUpgradeRefreshesRetainedRevision(t *testing.T) {
 }
 
 func TestRawProjectionDialogueVersionChecksAtOpen(t *testing.T) {
+	t.Parallel()
 	f := newProjectionFixture(t)
 	m, _ := f.accept(t, "device-a", "original", "")
 	require.NoError(t, f.sink.Project(t.Context(), f.lease(t, m), m, projectionOutcome("question")))

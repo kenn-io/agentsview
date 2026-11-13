@@ -70,6 +70,8 @@ func newConversationMessageCommand() *cobra.Command {
 		Use: "message SESSION_ID MESSAGE_ID", Short: "Read a bounded chunk of one message revision",
 		Long: "Read one bounded chunk of the exact message revision named by a changes result. " +
 			"Supply its session ID, message ID, --revision, and --database-id, using the same --text-mode. " +
+			"Detected secrets are masked by default; offsets and text_bytes then describe the masked text and redacted is true. " +
+			"--reveal returns the stored text unchanged. " +
 			"A changed revision or archive generation requires handling the export error before retrying.",
 		Example: "  agentsview export conversations message <session-id> <message-id> --text-mode stored --revision <revision> --database-id <database-id> --max-bytes 65536",
 		Args:    cobra.ExactArgs(2), SilenceUsage: true,
@@ -98,6 +100,7 @@ func newConversationMessageCommand() *cobra.Command {
 	command.Flags().StringVar(&options.DatabaseID, "database-id", "", "Expected archive generation from the changes listing")
 	command.Flags().Int64Var(&options.Offset, "offset", 0, "Starting UTF-8 byte offset from the previous chunk")
 	command.Flags().IntVar(&options.MaxBytes, "max-bytes", 64*1024, "Maximum message text bytes in this chunk")
+	command.Flags().BoolVar(&options.RevealSecrets, "reveal", false, "Show full secret values (unredacted)")
 	return command
 }
 
@@ -202,7 +205,7 @@ func writeConversationExportError(command *cobra.Command, cause error) error {
 		return fmt.Errorf("%w; run `agentsview export conversations changes` first to build the conversation index", cause)
 	case errors.Is(cause, db.ErrConversationReconciliationRequired):
 		code, result.Error = sessionExportCursorResetExitCode, "reconciliation_required"
-		result.Message = "conversation checkpoint belongs to another archive generation; reconcile from a new changes walk"
+		result.Message = "conversation checkpoint belongs to another archive generation or predates pruned deletions; reconcile from a new changes walk"
 	case errors.Is(cause, db.ErrConversationRevisionChanged):
 		code, result.Error = conversationRevisionChangedExitCode, "revision_changed"
 		result.Message = "this message revision was superseded; read the next changes cycle for its current state"

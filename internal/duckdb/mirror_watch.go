@@ -91,6 +91,9 @@ func PrimeFileIdentity(info os.FileInfo) {
 // change yet" rather than an error: the watcher keeps serving the old
 // handle and checks again on the next tick.
 func (s *Store) checkMirrorReplacement(ctx context.Context, onEvent func(err error)) {
+	// Serialize the stat, open, and swap so an older check cannot overwrite a newer handle.
+	s.replacementMu.Lock()
+	defer s.replacementMu.Unlock()
 	info, err := os.Stat(s.path)
 	if err != nil {
 		return

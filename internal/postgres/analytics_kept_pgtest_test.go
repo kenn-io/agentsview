@@ -33,7 +33,115 @@ func (c *analyticsReadCounter) count() int {
 	return c.reads
 }
 
+func TestAnalyticsKeptVersion1ReadOnlyPrimary(t *testing.T) {
+	t.Parallel()
+	local, syncer, owner := newUsageJournalFixture(t)
+	pgKeptSession(t, local, "session", "project", "2026-06-14")
+	pgKeptPush(t, syncer, false)
+	ctx := t.Context()
+	_, err := owner.pg.ExecContext(ctx, `UPDATE sync_metadata SET value='1' WHERE key='usage_change_journal_version'; DELETE FROM sync_metadata WHERE key IN ('usage_account_revision', 'usage_history_token'); REVOKE EXECUTE ON FUNCTION pg_catalog.pg_control_system() FROM PUBLIC`)
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		_, err := owner.pg.ExecContext(context.WithoutCancel(ctx), `GRANT EXECUTE ON FUNCTION pg_catalog.pg_control_system() TO PUBLIC`)
+		require.NoError(t, err)
+	})
+	roleURL := newUsageJournalRole(t, syncer, `GRANT SELECT ON ALL TABLES IN SCHEMA `+syncer.schema+` TO ROLE`)
+	for _, cache := range []bool{false, true} {
+		t.Run(map[bool]string{false: "without cache", true: "with cache"}[cache], func(t *testing.T) {
+			reader, err := NewStore(ctx, roleURL, syncer.schema, true)
+			require.NoError(t, err)
+			t.Cleanup(func() { require.NoError(t, reader.Close()) })
+			if cache {
+				attachUsageCacheProbe(t, reader, t.TempDir())
+				reader.usageCache.DeferWork()
+				t.Cleanup(func() { require.NoError(t, reader.usageCache.Close()) })
+			}
+			counter := &analyticsReadCounter{storeExecutor: reader.pg}
+			reader.pg = counter
+			f := db.AnalyticsFilter{From: "2026-06-14", To: "2026-06-14", Timezone: "UTC"}
+			tools, err := reader.GetAnalyticsTools(ctx, f)
+			require.NoError(t, err)
+			velocity, err := reader.GetAnalyticsVelocity(ctx, f)
+			require.NoError(t, err)
+			require.Len(t, velocity.ByAgent, 1)
+			reads := counter.count()
+			require.Positive(t, reads)
+			again, err := reader.GetAnalyticsTools(ctx, f)
+			require.NoError(t, err)
+			againVelocity, err := reader.GetAnalyticsVelocity(ctx, f)
+			require.NoError(t, err)
+			assert.Equal(t, tools, again)
+			assert.Equal(t, velocity, againVelocity)
+			assert.Equal(t, reads, counter.count())
+			_, err = owner.pg.ExecContext(ctx, `UPDATE sessions SET deleted_at=now() WHERE id='session'`)
+			require.NoError(t, err)
+			deleted, err := reader.GetAnalyticsVelocity(ctx, f)
+			require.NoError(t, err)
+			assert.Empty(t, deleted.ByAgent)
+			_, err = owner.pg.ExecContext(ctx, `UPDATE sessions SET deleted_at=NULL WHERE id='session'`)
+			require.NoError(t, err)
+		})
+	}
+}
+
+func TestAnalyticsKeptStandbyReflectsChanges(t *testing.T) {
+	t.Parallel()
+	standbyURL := testPGStandbyURL(t)
+	local, syncer, primary := newUsageJournalFixture(t)
+	ctx := t.Context()
+	write := func(tool, answer string) {
+		require.NoError(t, local.UpsertSession(ctx, db.Session{ID: "session", Project: "project", Machine: "test-machine", Agent: "claude", StartedAt: new("2026-06-14T10:00:00Z"), EndedAt: new("2026-06-14T10:01:00Z"), MessageCount: 2}))
+		require.NoError(t, local.ReplaceSessionMessages(ctx, "session", []db.Message{
+			{SessionID: "session", Ordinal: 0, Role: "user", Content: "question", Timestamp: "2026-06-14T10:00:00Z"},
+			{SessionID: "session", Ordinal: 1, Role: "assistant", Content: answer, ContentLength: len(answer), Timestamp: "2026-06-14T10:01:00Z", ToolCalls: []db.ToolCall{{ToolName: tool, Category: "Read", ToolUseID: "call"}}},
+		}))
+		pgKeptPush(t, syncer, false)
+	}
+	standby, err := sql.Open("pgx", standbyURL)
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, standby.Close()) })
+	catchUp := func() {
+		var lsn string
+		require.NoError(t, primary.pg.QueryRowContext(ctx, `SELECT pg_current_wal_lsn()::text`).Scan(&lsn))
+		require.Eventually(t, func() bool {
+			var caughtUp bool
+			return standby.QueryRowContext(ctx, `SELECT pg_last_wal_replay_lsn() >= $1::pg_lsn`, lsn).Scan(&caughtUp) == nil && caughtUp
+		}, 20*time.Second, 50*time.Millisecond)
+	}
+	for _, cache := range []bool{false, true} {
+		t.Run(map[bool]string{false: "without cache", true: "with cache"}[cache], func(t *testing.T) {
+			write("Read", "answer")
+			catchUp()
+			reader, err := NewStore(ctx, standbyURL, syncer.schema, true)
+			require.NoError(t, err)
+			t.Cleanup(func() { require.NoError(t, reader.Close()) })
+			if cache {
+				attachUsageCacheProbe(t, reader, t.TempDir())
+				reader.usageCache.DeferWork()
+				t.Cleanup(func() { require.NoError(t, reader.usageCache.Close()) })
+			}
+			f := db.AnalyticsFilter{From: "2026-06-14", To: "2026-06-14", Timezone: "UTC"}
+			before, err := reader.GetAnalyticsTools(ctx, f)
+			require.NoError(t, err)
+			require.Len(t, before.ByTool, 1)
+			require.Equal(t, "Read", before.ByTool[0].ToolName)
+			velocity, err := reader.GetAnalyticsVelocity(ctx, f)
+			require.NoError(t, err)
+			write("Grep", "a longer answer")
+			catchUp()
+			after, err := reader.GetAnalyticsTools(ctx, f)
+			require.NoError(t, err)
+			require.Len(t, after.ByTool, 1)
+			require.Equal(t, "Grep", after.ByTool[0].ToolName)
+			afterVelocity, err := reader.GetAnalyticsVelocity(ctx, f)
+			require.NoError(t, err)
+			require.NotEqual(t, velocity.Overall.CharsPerActiveMin, afterVelocity.Overall.CharsPerActiveMin)
+		})
+	}
+}
+
 func TestAnalyticsKeptPushAndSelection(t *testing.T) {
+	t.Parallel()
 	local, syncer, store := newUsageJournalFixture(t)
 	ctx := t.Context()
 	write := func(tool, answer string) {
@@ -55,7 +163,13 @@ func TestAnalyticsKeptPushAndSelection(t *testing.T) {
 	velocity, err := store.GetAnalyticsVelocity(ctx, f)
 	require.NoError(t, err)
 	require.Equal(t, float64(60), velocity.Overall.FirstResponseSec.P50)
+	terms := []db.TrendTermInput{{Term: "answer", Variants: []string{"answer"}, Matchers: []string{"answer"}}}
+	trends, err := store.GetTrendsTerms(ctx, f, terms, "week")
+	require.NoError(t, err)
+	require.Equal(t, 1, trends.Series[0].Total)
 	reads := counter.count()
+	_, err = store.GetTrendsTerms(ctx, f, terms, "week")
+	require.NoError(t, err)
 	toolsAgain, err := store.GetAnalyticsTools(ctx, f)
 	require.NoError(t, err)
 	velocityAgain, err := store.GetAnalyticsVelocity(ctx, f)
@@ -96,7 +210,10 @@ func TestAnalyticsKeptPushAndSelection(t *testing.T) {
 		assert.Len(t, selectedVelocity.ByAgent, selection.wantCalls)
 		assert.Greater(t, counter.count(), reads)
 	}
-	write("Grep", "a longer answer")
+	write("Grep", "a longer reply")
+	trends, err = store.GetTrendsTerms(ctx, f, terms, "week")
+	require.NoError(t, err)
+	require.Zero(t, trends.Series[0].Total)
 	changed, err := store.GetAnalyticsTools(ctx, f)
 	require.NoError(t, err)
 	assert.Equal(t, "Grep", changed.ByTool[0].ToolName)
@@ -142,6 +259,7 @@ func TestAnalyticsKeptPushAndSelection(t *testing.T) {
 }
 
 func TestAnalyticsKeptAdvancingCutoff(t *testing.T) {
+	t.Parallel()
 	local, syncer, store := newUsageJournalFixture(t)
 	pgKeptSession(t, local, "session", "project", "2026-06-14")
 	pgKeptPush(t, syncer, false)
@@ -198,6 +316,7 @@ func TestAnalyticsKeptLocalTimezoneChange(t *testing.T) {
 }
 
 func TestAnalyticsKeptActiveSincePreservesStableSelections(t *testing.T) {
+	t.Parallel()
 	local, syncer, store := newUsageJournalFixture(t)
 	pgKeptSession(t, local, "session", "project", "2026-06-14")
 	pgKeptPush(t, syncer, false)
@@ -229,6 +348,7 @@ func TestAnalyticsKeptActiveSincePreservesStableSelections(t *testing.T) {
 }
 
 func TestAnalyticsKeptBypasses(t *testing.T) {
+	t.Parallel()
 	for _, mode := range []string{"active", "hosted", "borrowed", "no journal"} {
 		t.Run(mode, func(t *testing.T) {
 			local, syncer, store := newUsageJournalFixture(t)
@@ -267,6 +387,7 @@ func TestAnalyticsKeptBypasses(t *testing.T) {
 }
 
 func TestAnalyticsKeptCommitOrder(t *testing.T) {
+	t.Parallel()
 	local, syncer, store := newUsageJournalFixture(t)
 	pgKeptSession(t, local, "first", "project", "2026-06-14")
 	pgKeptSession(t, local, "second", "project", "2026-06-14")

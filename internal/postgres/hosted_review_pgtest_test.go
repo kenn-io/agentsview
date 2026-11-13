@@ -25,6 +25,7 @@ func waitHostedLocks(t *testing.T, f projectionFixture, ctx context.Context, cou
 }
 
 func TestHostedPinResponseUsesTransactionCohort(t *testing.T) {
+	t.Parallel()
 	f := newProjectionFixture(t)
 	first, accepted := f.accept(t, "device-a", "pin-race-a", "")
 	require.NoError(t, f.sink.Project(t.Context(), f.lease(t, first), first, projectionOutcome("before pin")))
@@ -66,6 +67,7 @@ func TestHostedPinResponseUsesTransactionCohort(t *testing.T) {
 }
 
 func TestHostedLegacyWriteFencesFirstRawPublication(t *testing.T) {
+	t.Parallel()
 	f := newProjectionFixture(t)
 	_, err := f.runtime.ExecContext(t.Context(), `INSERT INTO sessions(id,project,machine,agent) VALUES('codex:portable','archive','machine','codex')`)
 	require.NoError(t, err)
@@ -125,6 +127,7 @@ func TestHostedLegacyWriteFencesFirstRawPublication(t *testing.T) {
 }
 
 func TestHostedLegacyIdentityTriggerContentionIsAtomic(t *testing.T) {
+	t.Parallel()
 	f := newProjectionFixture(t)
 	h, err := newHostedAdapter(t.Context(), f.runtime, f.tenant)
 	require.NoError(t, err)
@@ -155,6 +158,7 @@ func TestHostedLegacyIdentityTriggerContentionIsAtomic(t *testing.T) {
 }
 
 func TestHostedLegacyTrashPassCannotDeleteNewRawTrash(t *testing.T) {
+	t.Parallel()
 	f := newProjectionFixture(t)
 	m, _ := f.accept(t, "device-a", "late-trash", "")
 	require.NoError(t, f.sink.Project(t.Context(), f.lease(t, m), m, projectionOutcome("late raw trash")))
@@ -176,6 +180,7 @@ func TestHostedLegacyTrashPassCannotDeleteNewRawTrash(t *testing.T) {
 }
 
 func TestHostedPinInventorySkipsFalseHistoricalPayloads(t *testing.T) {
+	t.Parallel()
 	f := newProjectionFixture(t)
 	m, _ := f.accept(t, "device-a", "unpinned-history", "")
 	require.NoError(t, f.sink.Project(t.Context(), f.lease(t, m), m, projectionOutcome("historical pin")))
@@ -202,6 +207,7 @@ func TestHostedPinInventorySkipsFalseHistoricalPayloads(t *testing.T) {
 }
 
 func TestHostedPinPageBoundsHydrationAndOrdersUnresolved(t *testing.T) {
+	t.Parallel()
 	f := newProjectionFixture(t)
 	first, accepted := f.accept(t, "device-a", "bounded-pin-a", "")
 	require.NoError(t, f.sink.Project(t.Context(), f.lease(t, first), first, projectionOutcome("durable old pin")))
@@ -242,6 +248,7 @@ func TestHostedPinPageBoundsHydrationAndOrdersUnresolved(t *testing.T) {
 }
 
 func TestHostedLegacyIdentityTriggerDoesNotWaitBehindGroup(t *testing.T) {
+	t.Parallel()
 	f := newProjectionFixture(t)
 	m, _ := f.accept(t, "device-a", "group-contention", "")
 	require.NoError(t, f.sink.Project(t.Context(), f.lease(t, m), m, projectionOutcome("existing raw")))
@@ -274,6 +281,7 @@ func TestHostedLegacyIdentityTriggerDoesNotWaitBehindGroup(t *testing.T) {
 }
 
 func TestHostedPinPageAppliesEffectiveCohortOverrides(t *testing.T) {
+	t.Parallel()
 	f := newProjectionFixture(t)
 	a, _ := f.accept(t, "device-a", "pin-cohort-a", "")
 	require.NoError(t, f.sink.Project(t.Context(), f.lease(t, a), a, projectionOutcome("cohort pin")))
@@ -306,6 +314,7 @@ func TestHostedPinPageAppliesEffectiveCohortOverrides(t *testing.T) {
 }
 
 func TestHostedAliasBucketsBoundContentionWithoutGlobalLock(t *testing.T) {
+	t.Parallel()
 	f := newProjectionFixture(t)
 	ctx, cancel := context.WithTimeout(t.Context(), 3*time.Second)
 	defer cancel()
@@ -333,6 +342,7 @@ func TestHostedAliasBucketsBoundContentionWithoutGlobalLock(t *testing.T) {
 }
 
 func TestHostedLegacyWriteFencesFirstVibeFallbackPublication(t *testing.T) {
+	t.Parallel()
 	f := newProjectionFixture(t)
 	manifest, _ := f.accept(t, "device-a", "first-vibe-fallback", "", parser.AgentVibe)
 	const canonical = "vibe:portable"

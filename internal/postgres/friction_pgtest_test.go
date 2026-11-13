@@ -16,6 +16,7 @@ import (
 )
 
 func TestPushSchemaCurrentRequiresFrictionTables(t *testing.T) {
+	t.Parallel()
 	for _, drop := range []string{"TABLE friction_findings", "COLUMN friction_hash"} {
 		t.Run(drop, func(t *testing.T) {
 			pgURL := testPGURL(t)
@@ -105,6 +106,7 @@ func testFrictionRows(id string) []db.FrictionFinding {
 }
 
 func TestPGPushFrictionRoundTrip(t *testing.T) {
+	t.Parallel()
 	pgURL := testPGURL(t)
 	cleanPGSchema(t, pgURL)
 	t.Cleanup(func() { cleanPGSchema(t, pgURL) })
@@ -139,6 +141,7 @@ func TestPGPushFrictionRoundTrip(t *testing.T) {
 }
 
 func TestPGPushFrictionChangeRepushesAndUnchangedSkips(t *testing.T) {
+	t.Parallel()
 	pgURL := testPGURL(t)
 	cleanPGSchema(t, pgURL)
 	t.Cleanup(func() { cleanPGSchema(t, pgURL) })
@@ -190,6 +193,7 @@ func TestPGPushFrictionChangeRepushesAndUnchangedSkips(t *testing.T) {
 }
 
 func TestPGPushSessionWriteCountsAndFriction(t *testing.T) {
+	t.Parallel()
 	for _, mode := range []string{"incremental", "without preload", "full", "messages"} {
 		t.Run(mode, func(t *testing.T) {
 			pgURL := testPGURL(t)
@@ -293,6 +297,7 @@ func TestPGPushSessionWriteCountsAndFriction(t *testing.T) {
 }
 
 func TestPushFrictionReportsChange(t *testing.T) {
+	t.Parallel()
 	pgURL := testPGURL(t)
 	cleanPGSchema(t, pgURL)
 	t.Cleanup(func() { cleanPGSchema(t, pgURL) })

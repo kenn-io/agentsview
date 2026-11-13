@@ -1,0 +1,1 @@
+{"type":"tool","tool":"read","callID":"call_7f3a","state":{"status":"completed","input":{"filePath":"/home/user/code/app/config/settings.toml"},"output":"[server]\nport = 8080\n","metadata":{"exit":0},"time":{"start":1700000002000,"end":1700000002100}}}

@@ -10,6 +10,7 @@ import (
 )
 
 func TestRawProjectionRemovesUnresolvedPinAcrossCurrentCohort(t *testing.T) {
+	t.Parallel()
 	f := newProjectionFixture(t)
 	a, ar := f.accept(t, "device-a", "old-a", "")
 	require.NoError(t, f.sink.Project(t.Context(), f.lease(t, a), a, projectionOutcome("original")))

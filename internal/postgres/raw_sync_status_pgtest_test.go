@@ -29,6 +29,7 @@ import (
 )
 
 func TestRawSyncStatusPostgresHTTP(t *testing.T) {
+	t.Parallel()
 	pg, _ := newPGE2ETestDatabase(t)
 	ctx := t.Context()
 	metadata, err := postgres.NewRawIngestStore(pg)
@@ -288,6 +289,7 @@ func TestRawSyncStatusPostgresHTTP(t *testing.T) {
 }
 
 func TestRawSyncStatusPostgresEmptyHTTP(t *testing.T) {
+	t.Parallel()
 	pg, _ := newPGE2ETestDatabase(t)
 	ctx := t.Context()
 	metadata, err := postgres.NewRawIngestStore(pg)
@@ -327,6 +329,7 @@ func TestRawSyncStatusPostgresEmptyHTTP(t *testing.T) {
 }
 
 func TestRawSyncStatusPostgresParseCompletion(t *testing.T) {
+	t.Parallel()
 	pg, _ := newPGE2ETestDatabase(t)
 	ctx := t.Context()
 	metadata, err := postgres.NewRawIngestStore(pg)
@@ -457,6 +460,7 @@ func TestRawSyncStatusPostgresParseCompletion(t *testing.T) {
 }
 
 func TestRawSyncStatusRollsBackAfterQueryFailure(t *testing.T) {
+	t.Parallel()
 	pg, _ := newPGE2ETestDatabase(t)
 	pg.SetMaxOpenConns(1)
 	metadata, err := postgres.NewRawIngestStore(pg)

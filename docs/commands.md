@@ -1070,6 +1070,14 @@ a compacted database before replacing the original, and truncates the
 write-ahead log (WAL). It preserves stored sessions and does not change what
 future imports retain.
 
+Compaction first removes deleted-message records from the conversation export
+index. Change-stream and conversation-export readers keep these records only so
+they can learn about a deletion. A reader whose position predates a removed
+record restarts: the change stream sends `reset`, and
+`export conversations changes` returns `reconciliation_required`. Readers that
+have already read past every removed record continue unchanged. The `--dry-run`
+estimate does not include the space these records free.
+
 ```bash
 agentsview db compact [flags]
 ```
@@ -2098,7 +2106,9 @@ agentsview export conversations message SESSION_ID MESSAGE_ID \
 ```
 
 These commands read the local archive and do not send content to another system.
-Existing session summary and activity exports remain content-free.
+`message` masks detected secrets by default and marks such bodies with
+`redacted: true`; pass `--reveal` to return the stored text unchanged. Existing
+session summary and activity exports remain content-free.
 
 ______________________________________________________________________
 
@@ -2150,7 +2160,7 @@ agentsview session list --resume         # recently-active resume table
 agentsview session messages <id>         # paginated messages
 agentsview session commits <id>          # commits and their prompts
 agentsview session tool-calls <id>       # flat tool-call list
-agentsview session export <id>           # stream raw source file
+agentsview session export <id>           # stream raw source, secrets masked
 agentsview session materialize <id> --cwd <path> # install files for native resume
 agentsview session sync <path-or-id>     # parse + insert
 agentsview session watch <id>            # NDJSON event stream
@@ -2238,13 +2248,26 @@ flags. JSON adds `hints` entries with `code`, `message`, and a full `next` comma
 Counts use a bounded search and say `more than N` when more matches exist, or
 `at least N` for semantic and hybrid searches or when filtering or candidate
 limits prevent an exact count.
-For multi-word substring queries over messages, a hint offers `--fts` only when
-that retry finds matches. `excluded_combined` gives a retry with the remaining
+For multi-word substring queries over messages on a PostgreSQL, DuckDB, or
+ClickHouse archive, a hint offers `--fts` only when that retry finds matches.
+SQLite's default search already matches the words, so it never offers that
+hint. `excluded_combined` gives a retry with the remaining
 include flags for matches beyond the individual class hints. Failed diagnostic
 searches add no hint.
 
 `session search` supports substring (default), `--regex`, `--fts`, `--semantic`,
-and `--hybrid` modes. Repeatable `--exclude-session <id>` drops matches from
+and `--hybrid` modes. On SQLite, a default search of several words lists matches
+of the exact text first, from every selected source. Messages holding every
+word follow, then messages holding fewer of the words; `matched_words` in JSON
+counts them, excluding unquoted stop words. Regular word forms match, so
+`invoice` also finds `invoices`.
+A single word, a fully quoted query such as `'"rounding of invoices"'`, and a
+search whose `--in` leaves out `messages` match the exact text only. A quoted
+phrase inside a longer query requires its words together and in order. `--fts`
+and hybrid's keyword matches rank messages by words the same way; hybrid
+keyword matches report their word count. An `--fts` query made only of
+quoted phrases, or one that uses FTS5 operators after a leading quote, such as
+`'"fix" OR "missing"'`, keeps its FTS5 meaning. Repeatable `--exclude-session <id>` drops matches from
 those sessions before `--limit`. Hybrid returns keyword matches with a note
 while the embedding index is unavailable. Semantic and hybrid
 results can be scoped with `--scope top|all|subordinate` (default `all`) to include or exclude sidechain and subagent content — see

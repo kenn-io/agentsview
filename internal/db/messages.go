@@ -2149,7 +2149,7 @@ func (db *DB) replaceSessionMessages(ctx context.Context,
 	}
 	var pendingRecallRevocations recallEvidenceRevocationEvents
 
-	if err := reconcileConversationMessagesTx(tx, sessionID, msgs, true, db.usageOnlyStorage()); err != nil {
+	if err := reconcileReplacedConversationTx(tx, sessionID, msgs, plan, useDiff, db.usageOnlyStorage()); err != nil {
 		return err
 	}
 	if useDiff {
@@ -2457,7 +2457,7 @@ func deleteSessionMessageRowsTx(
 
 func deleteSessionMessagesTx(tx transactionQueries, sessionID string) error {
 	if _, err := tx.Exec(
-		"DELETE FROM tool_calls WHERE session_id = ?",
+		"DELETE FROM tool_calls WHERE session_id = ?;"+strings.ReplaceAll(counterTemplate, "{{counter}}", archiveMetadataAnalyticsChangeRevisionKey),
 		sessionID,
 	); err != nil {
 		return fmt.Errorf("deleting old tool_calls: %w", err)
@@ -2597,7 +2597,7 @@ func (db *DB) replaceSessionContent(ctx context.Context,
 	}
 	var pendingRecallRevocations recallEvidenceRevocationEvents
 
-	if err := reconcileConversationMessagesTx(tx, sessionID, msgs, true, db.usageOnlyStorage()); err != nil {
+	if err := reconcileReplacedConversationTx(tx, sessionID, msgs, plan, useDiff, db.usageOnlyStorage()); err != nil {
 		return err
 	}
 	if useDiff {

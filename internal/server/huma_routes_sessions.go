@@ -22,6 +22,7 @@ import (
 	"go.kenn.io/agentsview/internal/ingest"
 	"go.kenn.io/agentsview/internal/money"
 	"go.kenn.io/agentsview/internal/parser"
+	"go.kenn.io/agentsview/internal/secrets"
 	"go.kenn.io/agentsview/internal/service"
 	"go.kenn.io/agentsview/internal/sessionwatch"
 	"go.kenn.io/agentsview/internal/signals"
@@ -932,6 +933,7 @@ type openSessionResponse struct {
 type publishSessionInput struct {
 	ID     string `path:"id" required:"true" doc:"Session ID"`
 	Secret bool   `query:"secret" doc:"Create a secret gist instead of a public one"`
+	Reveal bool   `query:"reveal" doc:"Publish unredacted secret values; localhost callers only"`
 }
 
 type publishResponse struct {
@@ -1019,25 +1021,60 @@ func (s *Server) humaOpenSession(
 	}, nil
 }
 
+// gistDescription names a published session by its project and the start of
+// its first prompt. Unless reveal is set, the prompt is masked. The stored
+// first prompt is a preview cut to 300 characters, so a long private key block
+// can lose its END line, and the detector needs that line to match the block.
+// The description therefore ends before any private key header that masking
+// left in place.
+func gistDescription(project string, firstMessage *string, reveal bool) string {
+	first := ""
+	if firstMessage != nil {
+		first = *firstMessage
+		if !reveal {
+			first = cutAtPrivateKeyHeader(secrets.Redact(first))
+		}
+		first = stringutil.TruncateRunes(first, 100, "...")
+	}
+	return fmt.Sprintf("Agent session: %s - %s", project, first)
+}
+
+// cutAtPrivateKeyHeader returns text up to its first "-----BEGIN ... PRIVATE
+// KEY-----" header, with trailing whitespace removed.
+func cutAtPrivateKeyHeader(text string) string {
+	const begin = "-----BEGIN "
+	for i := 0; ; {
+		j := strings.Index(text[i:], begin)
+		if j < 0 {
+			return text
+		}
+		start := i + j
+		i = start + len(begin)
+		name, _, closed := strings.Cut(text[i:], "-----")
+		if closed && strings.HasSuffix(name, "PRIVATE KEY") && !strings.Contains(name, "\n") {
+			return strings.TrimRight(text[:start], " \t\r\n")
+		}
+	}
+}
+
 func (s *Server) humaPublishSession(
 	ctx context.Context,
 	in *publishSessionInput,
 ) (*jsonOutput[publishResponse], error) {
+	if err := requireLocalReveal(ctx, in.Reveal); err != nil {
+		return nil, err
+	}
 	token := s.githubToken(ctx)
 	if token == "" {
 		return nil, apiError(http.StatusUnauthorized, "GitHub token not configured")
 	}
-	session, msgs, err := s.sessionWithMessages(ctx, in.ID)
+	session, msgs, err := s.sessionWithMessages(ctx, in.ID, in.Reveal)
 	if err != nil {
 		return nil, err
 	}
 	htmlContent := generateExportHTML(session, msgs)
 	filename := session.Project + "-" + formatDateShort(session.StartedAt) + ".html"
-	first := ""
-	if session.FirstMessage != nil {
-		first = stringutil.TruncateRunes(*session.FirstMessage, 100, "...")
-	}
-	description := fmt.Sprintf("Agent session: %s - %s", session.Project, first)
+	description := gistDescription(session.Project, session.FirstMessage, in.Reveal)
 	gist, err := createGist(ctx, token, filename, description, htmlContent, !in.Secret)
 	if err != nil {
 		return nil, apiError(http.StatusBadGateway, err.Error())
@@ -1229,13 +1266,23 @@ type uploadSessionResponse struct {
 }
 
 type markdownInput struct {
-	ID    string        `path:"id" required:"true" doc:"Session ID"`
-	Depth markdownDepth `query:"depth" enum:"1,all" doc:"Child session depth"`
+	ID     string        `path:"id" required:"true" doc:"Session ID"`
+	Depth  markdownDepth `query:"depth" enum:"1,all" doc:"Child session depth"`
+	Reveal bool          `query:"reveal" doc:"Export unredacted secret values; localhost callers only"`
 }
 
+type exportSessionInput struct {
+	ID     string `path:"id" required:"true" doc:"Session ID"`
+	Reveal bool   `query:"reveal" doc:"Export unredacted secret values; localhost callers only"`
+}
+
+// sessionWithMessages loads a session for HTML export or publishing. Unless
+// reveal is set, it masks detected secrets in the messages. Callers check
+// requireLocalReveal first.
 func (s *Server) sessionWithMessages(
 	ctx context.Context,
 	id string,
+	reveal bool,
 ) (*db.Session, []db.Message, error) {
 	session, err := s.db.GetSession(ctx, id)
 	if err != nil {
@@ -1248,14 +1295,39 @@ func (s *Server) sessionWithMessages(
 	if err != nil {
 		return nil, nil, apiError(http.StatusInternalServerError, err.Error())
 	}
-	return session, msgs, nil
+	return session, exportMessages(msgs, reveal), nil
+}
+
+// requireLocalReveal rejects a request to reveal secrets from a caller that
+// is not on localhost, as secret listing and search do.
+func requireLocalReveal(ctx context.Context, reveal bool) error {
+	if reveal && !isLocalhostContext(ctx) {
+		return apiError(http.StatusForbidden, "reveal is only permitted from localhost")
+	}
+	return nil
+}
+
+// exportMessages masks detected secrets in messages that leave the archive
+// through a session export, unless the caller asked to reveal them.
+func exportMessages(msgs []db.Message, reveal bool) []db.Message {
+	if reveal {
+		return msgs
+	}
+	masked := make([]db.Message, len(msgs))
+	for i, m := range msgs {
+		masked[i] = service.RedactMessageSecrets(m)
+	}
+	return masked
 }
 
 func (s *Server) humaExportSession(
 	ctx context.Context,
-	in *idPathInput,
+	in *exportSessionInput,
 ) (*bytesOutput, error) {
-	session, msgs, err := s.sessionWithMessages(ctx, in.ID)
+	if err := requireLocalReveal(ctx, in.Reveal); err != nil {
+		return nil, err
+	}
+	session, msgs, err := s.sessionWithMessages(ctx, in.ID, in.Reveal)
 	if err != nil {
 		return nil, err
 	}
@@ -1272,8 +1344,11 @@ func (s *Server) humaMarkdownSession(
 	ctx context.Context,
 	in *markdownInput,
 ) (*bytesOutput, error) {
+	if err := requireLocalReveal(ctx, in.Reveal); err != nil {
+		return nil, err
+	}
 	depth := string(in.Depth)
-	tree, err := s.loadExportSessionTree(ctx, in.ID, depth, map[string]bool{}, 0)
+	tree, err := s.loadExportSessionTree(ctx, in.ID, depth, in.Reveal, map[string]bool{}, 0)
 	if err != nil {
 		return nil, serverError(err)
 	}

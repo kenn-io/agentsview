@@ -1,0 +1,1 @@
+Sum priced usage per session, 15-minute UTC bucket, model, and provider.

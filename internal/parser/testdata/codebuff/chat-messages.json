@@ -1,0 +1,33 @@
+[
+  {
+    "id": "user-1",
+    "variant": "user",
+    "content": "Add input validation to the signup form",
+    "timestamp": "2026-07-15T15:04:00Z"
+  },
+  {
+    "id": "ai-1",
+    "variant": "ai",
+    "content": "",
+    "timestamp": "2026-07-15T15:05:00Z",
+    "blocks": [
+      {
+        "type": "text",
+        "textType": "text",
+        "content": "Reading the form component first."
+      },
+      {
+        "type": "tool",
+        "toolName": "read_files",
+        "toolCallId": "tc-1",
+        "input": {"paths": ["src/signup.tsx"]},
+        "output": "export function Signup() {}"
+      },
+      {
+        "type": "text",
+        "textType": "text",
+        "content": "I added required-field checks to the email input."
+      }
+    ]
+  }
+]

@@ -15,6 +15,7 @@ import (
 )
 
 func TestPGClaudeProvenanceVisibleInReadPaths(t *testing.T) {
+	t.Parallel()
 	pgURL := testPGURL(t)
 
 	const schema = "agentsview_session_identity_test"

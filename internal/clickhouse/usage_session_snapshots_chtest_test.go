@@ -114,7 +114,10 @@ func TestUsageSessionSnapshotReadParity(t *testing.T) {
 	eventFields = append(eventFields, "push_version")
 	eventSource := "(SELECT " + strings.Join(eventFields, ",") + " FROM usage_session_snapshots ARRAY JOIN usage_events AS record)"
 	for _, candidateSQL := range []string{"SELECT id FROM sessions", "SELECT id FROM sessions WHERE id = 'ch-price-snap-a'"} {
-		baseline, args := clickActivityReportUsageQuery(chSessionSet{body: candidateSQL}, "2026-01-01T00:00:00Z", "2026-02-01T00:00:00Z")
+		source := activityUsageSourceFor(preparedUsageState{}, "2026-01-01T00:00:00Z", "2026-02-01T00:00:00Z")
+		baseline := "WITH activity_usage_candidates AS (" + candidateSQL + ") SELECT " + chPreparedUsageColumns +
+			" FROM (" + source.sql + ") SETTINGS " + source.settings
+		args := source.args
 		snapshotQuery := strings.ReplaceAll(baseline, "FROM usage_messages m", "FROM "+messageSource+" m")
 		snapshotQuery = strings.ReplaceAll(snapshotQuery, "FROM usage_events ue", "FROM "+eventSource+" ue")
 		snapshotQuery = strings.ReplaceAll(snapshotQuery, "FROM sessions", "FROM usage_session_snapshots")
@@ -151,7 +154,7 @@ func TestUsageSnapshotWithoutSessionFingerprintIsRemoved(t *testing.T) {
 			require.NoError(t, err)
 			// Model a crash after the complete row lands but before its
 			// sessions fingerprint is published.
-			require.NoError(t, s.insertUsageSessionSnapshots(ctx, []sessionPayload{payload}, newPushVersion()))
+			require.NoError(t, s.insertUsageSessionSnapshots(ctx, []sessionPayload{payload}, nil, newPushVersion()))
 			var result storage.PushResult
 			if mode == "full" {
 				err = s.deleteSessionsMissingLocally(ctx, nil, &result)

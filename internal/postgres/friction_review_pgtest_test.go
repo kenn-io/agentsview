@@ -39,6 +39,7 @@ func (s *pausedFrictionSelection) FrictionSubjectsForDate(ctx context.Context, d
 }
 
 func TestFrictionConcurrentBuildsAfterActivityMoves(t *testing.T) {
+	t.Parallel()
 	for _, tc := range []struct {
 		name           string
 		competingBuild bool
@@ -137,6 +138,7 @@ func TestFrictionConcurrentBuildsAfterActivityMoves(t *testing.T) {
 // The same archive digested on SQLite and on its PostgreSQL hub produces
 // identical Markdown and summary JSON.
 func TestFrictionRunnerParitySQLiteAndPG(t *testing.T) {
+	t.Parallel()
 	local, pgStore := openFrictionParityStores(t)
 	now := func() time.Time { return time.Date(2026, 9, 22, 10, 0, 0, 0, time.UTC) }
 	build := func(s review.Store) ([]byte, []byte) {
@@ -164,6 +166,7 @@ func TestFrictionRunnerParitySQLiteAndPG(t *testing.T) {
 }
 
 func TestFrictionHubCatchesUpAfterLatePush(t *testing.T) {
+	t.Parallel()
 	local, hub := openFrictionParityStores(t)
 	r := &review.Runner{Store: hub, Loc: time.UTC, Now: func() time.Time {
 		return time.Date(2026, 9, 17, 10, 0, 0, 0, time.UTC)
@@ -212,6 +215,7 @@ func TestFrictionHubCatchesUpAfterLatePush(t *testing.T) {
 }
 
 func TestFrictionMidnightDSTParity(t *testing.T) {
+	t.Parallel()
 	local, hub := openFrictionParityStores(t)
 	loc, err := time.LoadLocation("America/Santiago")
 	require.NoError(t, err)

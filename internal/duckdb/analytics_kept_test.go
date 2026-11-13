@@ -42,8 +42,21 @@ func TestAnalyticsKeptMirrorReplacement(t *testing.T) {
 	before, err := store.GetAnalyticsSummary(t.Context(), f)
 	require.NoError(t, err)
 	require.Equal(t, "alpha", before.MostActive)
+	trendsFilter := db.AnalyticsFilter{From: "2026-01-01", To: "2026-01-02", Timezone: "UTC"}
+	terms := []db.TrendTermInput{{Term: "changed", Variants: []string{"changed"}, Matchers: []string{"changed"}}}
+	trends, err := store.GetTrendsTerms(t.Context(), trendsFilter, terms, "day")
+	require.NoError(t, err)
+	require.Zero(t, trends.Series[0].Total)
+	invalid := filepath.Join(dir, "invalid.duckdb")
+	require.NoError(t, os.WriteFile(invalid, []byte("invalid mirror"), 0o600))
+	require.NoError(t, swapMirrorFile(invalid, path))
+	unchanged, err := store.GetTrendsTerms(t.Context(), trendsFilter, terms, "day")
+	require.NoError(t, err)
+	require.Equal(t, trends, unchanged)
 	require.NoError(t, swapMirrorFile(next, path))
-	store.checkMirrorReplacement(t.Context(), func(err error) { require.NoError(t, err) })
+	trends, err = store.GetTrendsTerms(t.Context(), trendsFilter, terms, "day")
+	require.NoError(t, err)
+	require.Equal(t, 1, trends.Series[0].Total)
 	after, err := store.GetAnalyticsSummary(t.Context(), f)
 	require.NoError(t, err)
 	require.Equal(t, "beta", after.MostActive)
@@ -82,6 +95,7 @@ func TestAnalyticsKeptErrorsAreRetried(t *testing.T) {
 }
 
 type analyticsReports interface {
+	GetTrendsTerms(context.Context, db.AnalyticsFilter, []db.TrendTermInput, string) (db.TrendsTermsResponse, error)
 	GetAnalyticsSummary(context.Context, db.AnalyticsFilter) (db.AnalyticsSummary, error)
 	GetAnalyticsActivity(context.Context, db.AnalyticsFilter, string) (db.ActivityResponse, error)
 	GetAnalyticsHeatmap(context.Context, db.AnalyticsFilter, string) (db.HeatmapResponse, error)
@@ -102,6 +116,9 @@ type keptPanelCase struct {
 
 func keptPanelCases(ctx context.Context, f db.AnalyticsFilter) []keptPanelCase {
 	return []keptPanelCase{
+		{"trends", func(s analyticsReports) (any, error) {
+			return s.GetTrendsTerms(ctx, f, []db.TrendTermInput{{Term: "prompt", Variants: []string{"prompt"}, Matchers: []string{"prompt"}}}, "week")
+		}},
 		{"summary", func(s analyticsReports) (any, error) { return s.GetAnalyticsSummary(ctx, f) }},
 		{"activity-default", func(s analyticsReports) (any, error) { return s.GetAnalyticsActivity(ctx, f, "") }},
 		{"activity-day", func(s analyticsReports) (any, error) { return s.GetAnalyticsActivity(ctx, f, "day") }},

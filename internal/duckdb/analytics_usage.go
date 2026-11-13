@@ -16,7 +16,6 @@ import (
 	"go.kenn.io/agentsview/internal/money"
 	pricingpkg "go.kenn.io/agentsview/internal/pricing"
 	"go.kenn.io/agentsview/internal/readbase"
-	"go.kenn.io/agentsview/internal/signals"
 	"go.kenn.io/agentsview/internal/usagefacts"
 )
 
@@ -34,7 +33,7 @@ func (s *Store) loadAnalyticsSessions(
 		args = append(args, extraArgs...)
 	}
 	rows, err := s.queryContext(ctx, `
-		SELECT `+readbase.AnalyticsSessionColumns+`, COALESCE(s.agentsview_push_fingerprint, '')
+		SELECT `+readbase.AnalyticsSessionColumns+`, s.frustration_marker_count
 		FROM sessions s
 		WHERE `+where, args...)
 	if err != nil {
@@ -42,7 +41,7 @@ func (s *Store) loadAnalyticsSessions(
 	}
 	defer rows.Close()
 
-	return readbase.ScanAnalyticsSessions(rows, "duckdb", formatDBTime, readbase.AnalyticsSessionExtras{PushFingerprint: true})
+	return readbase.ScanAnalyticsSessions(rows, "duckdb", formatDBTime, readbase.AnalyticsSessionExtras{FrustrationMarkers: true})
 }
 
 func duckBuildAnalyticsWhere(f db.AnalyticsFilter, dateCol, tablePrefix string, includeDate, includeTime bool) (string, []any) {
@@ -209,65 +208,6 @@ func (s analyticsSQL) VelocityToolCounts(ctx context.Context, ids []string, _ db
 	}
 	defer rows.Close()
 	return readbase.ScanAnalyticsVelocityToolCounts(rows, "duckdb", out)
-}
-
-// Mirror replacements preserve the memo generation; fingerprints version entries.
-const frustrationMemoGeneration uint64 = 0
-
-func (s *Store) duckPopulateFrustrationMarkers(
-	ctx context.Context,
-	rows []db.SignalRow,
-	versions map[string]string,
-) error {
-	if len(rows) == 0 {
-		return nil
-	}
-	cache := s.path != ""
-	idx := make(map[string]int, len(rows))
-	ids := make([]string, 0, len(rows))
-	for i := range rows {
-		if version := versions[rows[i].ID]; cache && version != "" {
-			if count, ok := s.frustrationMemo.Lookup(frustrationMemoGeneration, rows[i].ID, version); ok {
-				rows[i].FrustrationMarkerCount = count
-				continue
-			}
-		}
-		idx[rows[i].ID] = i
-		ids = append(ids, rows[i].ID)
-	}
-	if len(ids) == 0 {
-		return nil
-	}
-	msgRows, err := s.queryContext(ctx, duckFrustrationPromptsSQL, duckFrustrationPromptsArgs(ids)...)
-	if err != nil {
-		return fmt.Errorf("querying duckdb frustration markers: %w", err)
-	}
-	defer msgRows.Close()
-	for msgRows.Next() {
-		var sessionID, content string
-		var decided bool
-		if err := msgRows.Scan(&sessionID, &decided, &content); err != nil {
-			return fmt.Errorf("scanning duckdb frustration marker: %w", err)
-		}
-		i, ok := idx[sessionID]
-		if !ok {
-			continue
-		}
-		if decided || signals.IsFrustrationMarker(content) {
-			rows[i].FrustrationMarkerCount++
-		}
-	}
-	if err := msgRows.Err(); err != nil {
-		return fmt.Errorf("iterating duckdb frustration markers: %w", err)
-	}
-	if cache {
-		for id, i := range idx {
-			if version := versions[id]; version != "" {
-				s.frustrationMemo.Store(frustrationMemoGeneration, id, version, rows[i].FrustrationMarkerCount)
-			}
-		}
-	}
-	return nil
 }
 
 func (s *Store) loadPricing(ctx context.Context) (map[string]export.ModelRates, error) {
@@ -555,9 +495,33 @@ func duckUsageSourceWheres(
 	return messageWhere, messageArgs, eventWhere, eventArgs
 }
 
-func duckUsageRawSQL(f db.UsageFilter, sessionID string) (string, []any) {
+// duckUsageRowScope narrows duckUsageRawSQL's message and usage event rows.
+// Each predicate reads its source alias (m or ue) and the session alias s.
+type duckUsageRowScope struct {
+	message, event         string
+	messageArgs, eventArgs []any
+}
+
+func duckUsageRawSQL(f db.UsageFilter, sessionIDs []string) (string, []any) {
+	var scope duckUsageRowScope
+	if sessionIDs != nil {
+		scope = duckUsageRowScope{
+			message: "m.session_id IN (SELECT unnest(?))", messageArgs: []any{sessionIDs},
+			event: "ue.session_id IN (SELECT unnest(?))", eventArgs: []any{sessionIDs},
+		}
+	}
+	return duckUsageScopedRawSQL(f, scope)
+}
+
+func duckUsageScopedRawSQL(f db.UsageFilter, scope duckUsageRowScope) (string, []any) {
 	messageWhere, messageArgs, eventWhere, eventArgs := duckUsageSourceWheres(
-		f, sessionID, duckUsageMessageEligibility, duckUsageBoundsForFilter(f))
+		f, "", duckUsageMessageEligibility, duckUsageBoundsForFilter(f))
+	if scope.message != "" {
+		messageWhere += " AND (" + scope.message + ")"
+		messageArgs = append(messageArgs, scope.messageArgs...)
+		eventWhere += " AND (" + scope.event + ")"
+		eventArgs = append(eventArgs, scope.eventArgs...)
+	}
 
 	query := fmt.Sprintf(`
 		SELECT m.session_id AS session_id, m.ordinal AS message_ordinal,
@@ -689,12 +653,12 @@ func duckCursorUsageRowsSQLForBounds(
 	return fmt.Sprintf(duckDailyCursorUsageRowsSQLTemplate, where), args, true
 }
 
-func duckDailyUsageRawSQL(f db.UsageFilter) (string, []any) {
+func duckDailyUsageRawSQL(f db.UsageFilter, sessionIDs []string) (string, []any) {
 	bounds := duckUsageBoundsForFilter(f)
 	sessionRowsSQL, sessionArgs := duckUsageRawSQL(
-		duckUsageSnapshotInputFilter(f), "")
+		duckUsageSnapshotInputFilter(f), sessionIDs)
 	cursorRowsSQL, cursorArgs, ok := duckCursorUsageRowsSQLForBounds(f, bounds)
-	if !ok {
+	if !ok || (sessionIDs != nil && !slices.Contains(sessionIDs, "")) {
 		return sessionRowsSQL, sessionArgs
 	}
 	rowsSQL := sessionRowsSQL + "\n\t\tUNION ALL\n" + cursorRowsSQL
@@ -705,13 +669,18 @@ func duckDailyUsageRawSQL(f db.UsageFilter) (string, []any) {
 }
 
 func duckUsageLocalDateSQL(f db.UsageFilter) (string, any) {
+	return duckUsageLocalDateSQLFor(f, "ts")
+}
+
+// duckUsageLocalDateSQLFor renders the local date of timestamp column col.
+func duckUsageLocalDateSQLFor(f db.UsageFilter, col string) (string, any) {
 	name := f.Timezone
 	// The shared default zone converts per timestamp, so dates follow DST.
 	if location := f.Location(); name == "" && location.String() != "Local" {
 		name = location.String()
 	}
 	if name != "" {
-		return "COALESCE(strftime(timezone(?, timezone('UTC', ts)), '%Y-%m-%d'), '')", name
+		return "COALESCE(strftime(timezone(?, timezone('UTC', " + col + ")), '%Y-%m-%d'), '')", name
 	}
 	ref := time.Now().UTC()
 	if f.From != "" {
@@ -720,17 +689,17 @@ func duckUsageLocalDateSQL(f db.UsageFilter) (string, any) {
 		}
 	}
 	_, offset := ref.In(f.Location()).Zone()
-	return "COALESCE(strftime(ts + (? * INTERVAL 1 SECOND), '%Y-%m-%d'), '')", offset
+	return "COALESCE(strftime(" + col + " + (? * INTERVAL 1 SECOND), '%Y-%m-%d'), '')", offset
 }
 
-func duckUsageCTE(f db.UsageFilter, sessionID string) (string, []any) {
+func duckUsageCTE(f db.UsageFilter, sessionIDs []string) (string, []any) {
 	rawSQL, args := duckUsageRawSQL(
-		duckUsageSnapshotInputFilter(f), sessionID)
+		duckUsageSnapshotInputFilter(f), sessionIDs)
 	return duckUsageCTEFromRaw(f, rawSQL, args, true)
 }
 
-func duckDailyUsageCTE(f db.UsageFilter) (string, []any) {
-	rawSQL, args := duckDailyUsageRawSQL(f)
+func duckDailyUsageCTE(f db.UsageFilter, sessionIDs []string) (string, []any) {
+	rawSQL, args := duckDailyUsageRawSQL(f, sessionIDs)
 	return duckUsageCTEFromRaw(f, rawSQL, args, true)
 }
 
@@ -779,6 +748,20 @@ func duckPriceModelCaseSQL() string {
 	)
 	return b.String()
 }
+
+// duckUsageDedupGroupSQL names a usage_raw row's dedup identity. Claude rows
+// rank by their request; the rollup hashes the same text as its identity.
+const duckUsageDedupGroupSQL = `CASE
+					WHEN claude_message_id != ''
+						THEN 'claude:' || claude_message_id || ':' || claude_request_id
+					WHEN source = 'message' AND agent != '' AND source_uuid != ''
+						THEN 'source:' || agent || ':' || source_uuid
+					WHEN usage_dedup_key != ''
+						THEN 'usage:' || usage_dedup_key
+					ELSE 'row:' || session_id || ':' || source || ':' ||
+						COALESCE(CAST(message_ordinal AS VARCHAR), '') || ':' ||
+						COALESCE(CAST(ts AS VARCHAR), '') || ':' || model
+				END`
 
 func duckUsageCTEFromRaw(
 	f db.UsageFilter, rawSQL string, args []any,
@@ -841,22 +824,12 @@ func duckUsageCTEFromRaw(
 						WHEN source = 'message' THEN GREATEST(COALESCE(TRY_CAST(json_extract_string(token_json, '$.server_tool_use.web_search_requests') AS BIGINT), 0), 0)
 						ELSE 0
 					END AS web_search_requests_norm,
-				CASE
-					WHEN claude_message_id != ''
-						THEN 'claude:' || claude_message_id || ':' || claude_request_id
-					WHEN source = 'message' AND agent != '' AND source_uuid != ''
-						THEN 'source:' || agent || ':' || source_uuid
-					WHEN usage_dedup_key != ''
-						THEN 'usage:' || usage_dedup_key
-					ELSE 'row:' || session_id || ':' || source || ':' ||
-						COALESCE(CAST(message_ordinal AS VARCHAR), '') || ':' ||
-						COALESCE(CAST(ts AS VARCHAR), '') || ':' || model
-				END AS dedup_group,
+				%[6]s AS dedup_group,
 				%[2]s AS local_date,
 				%[4]s AS price_model
 			FROM usage_raw
 		),%[5]s`, rawSQL, localDateSQL, db.MaxPlausibleTokens,
-		priceModelSQL, dedupCTE)
+		priceModelSQL, dedupCTE, duckUsageDedupGroupSQL)
 	args = append(args, localDateArg)
 	args = append(args, dateArgs...)
 	args = append(args, dedupArgs...)
@@ -1352,25 +1325,10 @@ func duckSessionUsageBreakdownLabel(r duckSessionUsageRow) string {
 	return db.SessionUsageBreakdownLabel(ordinal, r.source)
 }
 
-func (s *Store) forEachDailyUsageAggregateRow(
-	ctx context.Context,
-	f db.UsageFilter,
-	visit func(duckUsageAggregateRow) error,
-) error {
-	cte, args := duckDailyUsageCTE(f)
-	machineSelect := "'' AS machine"
-	machineOrder := ""
-	if f.Breakdowns {
-		machineSelect = "machine"
-		machineOrder = ", machine ASC"
-	}
-	// Keep one result per deduplicated usage row. CostForTokens quantizes each
-	// row to whole microdollars; grouping token counts before that boundary can
-	// turn several unrepresentable sub-microdollar rows into stored cost.
-	query := cte + `
-		SELECT session_id, local_date, project, agent, ` + machineSelect + `, model, provider_id, price_model,
-			source, message_ordinal, ts, pricing_ts,
-			input_tokens_norm AS input_tokens,
+// duckUsageAggregateValueSQL selects a usage_localized row's token counts
+// and the billable and reported parts its price is computed from, in the
+// order scanUsageAggregateValues reads them.
+const duckUsageAggregateValueSQL = `input_tokens_norm AS input_tokens,
 			output_tokens_norm AS output_tokens,
 			cache_create_norm AS cache_creation_tokens,
 			cache_create_1h_norm AS cache_creation_1h_tokens,
@@ -1390,7 +1348,38 @@ func (s *Store) forEachDailyUsageAggregateRow(
 			CASE WHEN cost_microdollars IS NOT NULL AND cost_source != 'copilot-reported' THEN 1 ELSE 0 END AS reported_cost_rows,
 			CASE WHEN cost_microdollars IS NOT NULL AND cost_source = 'copilot-reported' THEN cost_microdollars ELSE 0 END AS authoritative_cost,
 			CASE WHEN cost_microdollars IS NOT NULL AND cost_source = 'copilot-reported' THEN 1 ELSE 0 END AS authoritative_cost_rows,
-			recorded_cost_microdollars
+			recorded_cost_microdollars`
+
+func (s *Store) forEachDailyUsageAggregateRow(
+	ctx context.Context,
+	f db.UsageFilter,
+	sessionIDs []string,
+	visit func(duckUsageAggregateRow) error,
+) error {
+	cte, args := duckDailyUsageCTE(f, sessionIDs)
+	return s.forEachDailyUsageAggregateRowFrom(ctx, f, cte, args, visit)
+}
+
+// forEachDailyUsageAggregateRowFrom visits the usage_localized rows of cte.
+func (s *Store) forEachDailyUsageAggregateRowFrom(
+	ctx context.Context,
+	f db.UsageFilter,
+	cte string, args []any,
+	visit func(duckUsageAggregateRow) error,
+) error {
+	machineSelect := "'' AS machine"
+	machineOrder := ""
+	if f.Breakdowns {
+		machineSelect = "machine"
+		machineOrder = ", machine ASC"
+	}
+	// Keep one result per deduplicated usage row. CostForTokens quantizes each
+	// row to whole microdollars; grouping token counts before that boundary can
+	// turn several unrepresentable sub-microdollar rows into stored cost.
+	query := cte + `
+		SELECT session_id, local_date, project, agent, ` + machineSelect + `, model, provider_id, price_model,
+			source, message_ordinal, ts, pricing_ts,
+			` + duckUsageAggregateValueSQL + `
 		FROM usage_localized
 		-- Visit rows in time order so the last Copilot-reported total is the session cost.
 		ORDER BY session_id ASC, local_date ASC, project ASC, agent ASC` + machineOrder + `, ts ASC, COALESCE(message_ordinal, -1) ASC, source ASC, usage_dedup_key ASC, model ASC, price_model ASC`
@@ -1403,18 +1392,12 @@ func (s *Store) forEachDailyUsageAggregateRow(
 	for rows.Next() {
 		var r duckUsageAggregateRow
 		var ts, pricingTS any
-		if err := rows.Scan(
+		dest := append([]any{
 			&r.sessionID, &r.date, &r.project, &r.agent, &r.machine, &r.model,
 			&r.providerID,
 			&r.priceModel, &r.source, &r.messageOrdinal, &ts, &pricingTS,
-			&r.inputTok, &r.outputTok, &r.cacheCr, &r.cacheCr1h, &r.cacheRd,
-			&r.billableInput, &r.billableOutput, &r.billableReason,
-			&r.billableCacheCr, &r.billableCacheCr1h, &r.billableCacheRd,
-			&r.billableWebSearch,
-			&r.explicitCost, &r.reportedCostRows,
-			&r.authoritativeCost, &r.authoritativeCostRows,
-			&r.recordedCost,
-		); err != nil {
+		}, r.aggregateValueDest()...)
+		if err := rows.Scan(dest...); err != nil {
 			return fmt.Errorf("scanning duckdb daily usage aggregate: %w", err)
 		}
 		r.ts = formatDBTime(ts)
@@ -1429,6 +1412,19 @@ func (s *Store) forEachDailyUsageAggregateRow(
 	return nil
 }
 
+// aggregateValueDest is the scan destination for duckUsageAggregateValueSQL.
+func (r *duckUsageAggregateRow) aggregateValueDest() []any {
+	return []any{
+		&r.inputTok, &r.outputTok, &r.cacheCr, &r.cacheCr1h, &r.cacheRd,
+		&r.billableInput, &r.billableOutput, &r.billableReason,
+		&r.billableCacheCr, &r.billableCacheCr1h, &r.billableCacheRd,
+		&r.billableWebSearch,
+		&r.explicitCost, &r.reportedCostRows,
+		&r.authoritativeCost, &r.authoritativeCostRows,
+		&r.recordedCost,
+	}
+}
+
 func (s *Store) GetDailyUsage(ctx context.Context, f db.UsageFilter) (db.DailyUsageResult, error) {
 	version := s.keptVersion()
 	if version == "" {
@@ -1441,6 +1437,129 @@ func (s *Store) GetDailyUsage(ctx context.Context, f db.UsageFilter) (db.DailyUs
 	return db.DailyUsage(ctx, &s.dailyUsage, slot, version, f, s.readDailyUsage)
 }
 
+type duckDailyPartRow struct {
+	Date, Project, Agent, Machine, Model, ProviderID string
+	Input, Output, CacheCreate, CacheRead            int
+	Estimated                                        money.Money
+}
+type duckDailyPart struct {
+	Rows          []duckDailyPartRow
+	Authoritative *money.Money
+	Savings       money.Money
+	Records       []export.PricingRecord
+	Unattributed  bool
+}
+
+func duckDailyPartBytes(part duckDailyPart) int64 {
+	n := int64(len(part.Rows)*128 + len(part.Records)*256)
+	for _, row := range part.Rows {
+		n += int64(len(row.Date) + len(row.Project) + len(row.Agent) + len(row.Machine) + len(row.Model) + len(row.ProviderID))
+	}
+	for _, rec := range part.Records {
+		n += int64(len(rec.ReportedModel) + len(rec.PricedModel) + len(rec.Lookup.Pattern) + len(rec.Lookup.Adjustment) + len(rec.Lookup.Rates.Bands)*128 + len(rec.BandRequests)*16)
+	}
+	return n
+}
+
+// duckUsageAccumKey is one Usage summary cell before days are assembled.
+type duckUsageAccumKey struct {
+	date       string
+	project    string
+	agent      string
+	machine    string
+	model      string
+	providerID string
+}
+
+type duckSessionCost struct {
+	estimated     map[duckUsageAccumKey]money.Money
+	authoritative *money.Money
+}
+
+// dailyPartsFromRows prices each visited row and groups it by session, the
+// way every daily usage read prices rows.
+func dailyPartsFromRows(
+	f db.UsageFilter, rateResolver *export.PricingResolver,
+	forEach func(func(duckUsageAggregateRow) error) error,
+) (map[string]duckDailyPart, error) {
+	type dailyWork struct {
+		buckets  map[duckUsageAccumKey]*duckUsageBucket
+		cost     duckSessionCost
+		savings  money.Money
+		resolver *export.PricingResolver
+	}
+	out := map[string]duckDailyPart{}
+	var id string
+	var w *dailyWork
+	flush := func() {
+		if w == nil {
+			return
+		}
+		part := duckDailyPart{Authoritative: w.cost.authoritative, Savings: w.savings}
+		part.Records, part.Unattributed = w.resolver.RecordedCounts()
+		for k, b := range w.buckets {
+			part.Rows = append(part.Rows, duckDailyPartRow{k.date, k.project, k.agent, k.machine, k.model, k.providerID, b.inputTok, b.outputTok, b.cacheCr, b.cacheRd, w.cost.estimated[k]})
+		}
+		out[id] = part
+	}
+	err := forEach(func(r duckUsageAggregateRow) error {
+		if w == nil || id != r.sessionID {
+			flush()
+			id = r.sessionID
+			w = &dailyWork{buckets: map[duckUsageAccumKey]*duckUsageBucket{}, cost: duckSessionCost{estimated: map[duckUsageAccumKey]money.Money{}}, resolver: rateResolver.Copy()}
+		}
+		key := duckUsageAccumKey{r.date, r.project, r.agent, r.machine, r.model, r.providerID}
+		b := w.buckets[key]
+		if b == nil {
+			b = &duckUsageBucket{}
+			w.buckets[key] = b
+		}
+		cost, savings, err := r.priceForAggregate(w.resolver)
+		if err != nil {
+			return err
+		}
+		w.savings, err = money.Add(w.savings, savings)
+		if err != nil {
+			return fmt.Errorf("summing duckdb cache savings: %w", err)
+		}
+		b.inputTok += r.inputTok
+		b.outputTok += r.outputTok
+		b.cacheCr += r.cacheCr
+		b.cacheRd += r.cacheRd
+		w.cost.estimated[key], err = money.Add(w.cost.estimated[key], cost)
+		if err != nil {
+			return fmt.Errorf("summing duckdb usage: %w", err)
+		}
+		if !f.HasModelFilter() && r.authoritativeCostRows > 0 {
+			v := money.Money{Microdollars: r.authoritativeCost}
+			w.cost.authoritative = &v
+			w.resolver.RecordUnattributedReported()
+		}
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	flush()
+	return out, nil
+}
+
+// priceForAggregate prices one deduplicated row as the Usage summary and Top
+// sessions do, recording its pricing provenance in resolver.
+func (r *duckUsageAggregateRow) priceForAggregate(
+	resolver *export.PricingResolver,
+) (money.Money, money.Money, error) {
+	r.applyRecordedCost(resolver)
+	cost, savings, _, _, err := duckUsageAggregateResolvedCost(
+		r.model, r.priceModel, r.providerID, duckUsagePricingTimestamp(r.pricingTS),
+		r.inputTok, r.outputTok, r.cacheCr, r.cacheCr1h, r.cacheRd,
+		r.billableInput, r.billableOutput, r.billableReason,
+		r.billableCacheCr, r.billableCacheCr1h, r.billableCacheRd,
+		r.billableWebSearch, r.explicitCost, r.reportedCostRows > 0,
+		db.UsageSourceIsRequestScoped(r.source) || r.messageOrdinal.Valid, resolver)
+	return cost, savings, err
+}
+
 func (s *Store) readDailyUsage(
 	ctx context.Context, f db.UsageFilter,
 ) (db.DailyUsageResult, error) {
@@ -1448,87 +1567,77 @@ func (s *Store) readDailyUsage(
 	if err != nil {
 		return db.DailyUsageResult{}, err
 	}
-	type usageAccumKey struct {
-		date       string
-		project    string
-		agent      string
-		machine    string
-		model      string
-		providerID string
+	block, err := rateResolver.BuildBlock()
+	if err != nil {
+		return db.DailyUsageResult{}, err
 	}
-	accum := map[usageAccumKey]*duckUsageBucket{}
-	type sessionCost struct {
-		estimated     map[usageAccumKey]money.Money
-		authoritative *money.Money
+	slot := db.UsageSlot(f, true)
+	if slot != "" {
+		slot = "daily|" + slot
 	}
-	sessionCosts := map[string]sessionCost{}
-	useAuthoritativeCost := !f.HasModelFilter()
+	parts, err := refreshUsageParts(ctx, s, slot, block.Digest, f, duckDailyPartBytes, func(ctx context.Context, ids []string) (map[string]duckDailyPart, error) {
+		// A full read can use the rollup; a refresh of a few sessions reads
+		// their rows directly.
+		if ids == nil {
+			// The rollup read runs several queries. A mirror replacement
+			// between them could mix two mirrors' rows, or fail the read
+			// when the new mirror's pricing counts name records the old one
+			// lacked, so a read that saw one reads again without the rollup,
+			// whatever it returned.
+			handle := s.DB()
+			plan, err := s.usageRollupPlan(ctx, f, block.Digest, true)
+			var parts map[string]duckDailyPart
+			if err == nil && plan != nil {
+				parts, err = s.dailyPartsFromRollup(ctx, f, plan, rateResolver)
+			}
+			if s.DB() == handle && (err != nil || plan != nil) {
+				return parts, err
+			}
+		}
+		return dailyPartsFromRows(f, rateResolver, func(visit func(duckUsageAggregateRow) error) error {
+			return s.forEachDailyUsageAggregateRow(ctx, f, ids, visit)
+		})
+	})
+	if err != nil {
+		return db.DailyUsageResult{}, err
+	}
+	accum := map[duckUsageAccumKey]*duckUsageBucket{}
+	sessionCosts := map[string]duckSessionCost{}
 	projectLabels := map[string]bool{}
 	var seenSessions map[string]db.UsageSessionInfo
 	if !f.SkipSessionCounts {
 		seenSessions = map[string]db.UsageSessionInfo{}
 	}
 	var totalSavings money.Money
-	err = s.forEachDailyUsageAggregateRow(ctx, f, func(r duckUsageAggregateRow) error {
-		key := usageAccumKey{
-			date: r.date, project: r.project, agent: r.agent,
-			machine: r.machine, model: r.model, providerID: r.providerID,
+	partIDs := db.SortedKeys(parts)
+	for _, id := range partIDs {
+		part := parts[id]
+		rateResolver.ReplayRecordedCounts(part.Records, part.Unattributed)
+		totalSavings, err = money.Add(totalSavings, part.Savings)
+		if err != nil {
+			return db.DailyUsageResult{}, err
 		}
-		if r.project != "" {
-			projectLabels[r.project] = true
-		}
-		if seenSessions != nil && r.sessionID != "" {
-			seenSessions[r.sessionID] = db.UsageSessionInfo{
-				Project: r.project,
-				Agent:   r.agent,
+		sc := duckSessionCost{estimated: map[duckUsageAccumKey]money.Money{}, authoritative: part.Authoritative}
+		for _, row := range part.Rows {
+			key := duckUsageAccumKey{row.Date, row.Project, row.Agent, row.Machine, row.Model, row.ProviderID}
+			b := accum[key]
+			if b == nil {
+				b = &duckUsageBucket{}
+				accum[key] = b
+			}
+			b.inputTok += row.Input
+			b.outputTok += row.Output
+			b.cacheCr += row.CacheCreate
+			b.cacheRd += row.CacheRead
+			sc.estimated[key] = row.Estimated
+			if row.Project != "" {
+				projectLabels[row.Project] = true
+			}
+			if seenSessions != nil && id != "" {
+				seenSessions[id] = db.UsageSessionInfo{Project: row.Project, Agent: row.Agent}
 			}
 		}
-		b := accum[key]
-		if b == nil {
-			b = &duckUsageBucket{}
-			accum[key] = b
-		}
-		r.applyRecordedCost(rateResolver)
-		cost, savings, _, _, priceErr := duckUsageAggregateResolvedCost(
-			r.model, r.priceModel, r.providerID, duckUsagePricingTimestamp(r.pricingTS),
-			r.inputTok, r.outputTok, r.cacheCr, r.cacheCr1h, r.cacheRd,
-			r.billableInput, r.billableOutput, r.billableReason,
-			r.billableCacheCr, r.billableCacheCr1h, r.billableCacheRd,
-			r.billableWebSearch,
-			r.explicitCost,
-			r.reportedCostRows > 0,
-			db.UsageSourceIsRequestScoped(r.source) || r.messageOrdinal.Valid,
-			rateResolver,
-		)
-		if priceErr != nil {
-			return priceErr
-		}
-		totalSavings, priceErr = money.Add(totalSavings, savings)
-		if priceErr != nil {
-			return fmt.Errorf("summing duckdb cache savings: %w", priceErr)
-		}
-		b.inputTok += r.inputTok
-		b.outputTok += r.outputTok
-		b.cacheCr += r.cacheCr
-		b.cacheRd += r.cacheRd
-		sc := sessionCosts[r.sessionID]
-		if sc.estimated == nil {
-			sc.estimated = map[usageAccumKey]money.Money{}
-		}
-		sc.estimated[key], priceErr = money.Add(sc.estimated[key], cost)
-		if priceErr != nil {
-			return fmt.Errorf("summing duckdb usage: %w", priceErr)
-		}
-		if useAuthoritativeCost && r.authoritativeCostRows > 0 {
-			v := money.Money{Microdollars: r.authoritativeCost}
-			sc.authoritative = &v
-			rateResolver.RecordUnattributedReported()
-		}
-		sessionCosts[r.sessionID] = sc
-		return nil
-	})
-	if err != nil {
-		return db.DailyUsageResult{}, err
+		sessionCosts[id] = sc
 	}
 	sessionIDs := make([]string, 0, len(sessionCosts))
 	for sessionID := range sessionCosts {
@@ -1538,7 +1647,7 @@ func (s *Store) readDailyUsage(
 	for _, sessionID := range sessionIDs {
 		sc := sessionCosts[sessionID]
 		if sc.authoritative != nil {
-			keys := make([]usageAccumKey, 0, len(sc.estimated))
+			keys := make([]duckUsageAccumKey, 0, len(sc.estimated))
 			for key := range sc.estimated {
 				keys = append(keys, key)
 			}
@@ -1777,10 +1886,19 @@ func sortedUsageBucketKeys(m map[string]duckUsageBucket) []string {
 func (s *Store) forEachSessionUsageAggregateRow(
 	ctx context.Context,
 	f db.UsageFilter,
-	sessionID string,
+	sessionIDs []string,
 	visit func(duckUsageAggregateRow) error,
 ) error {
-	cte, args := duckUsageCTE(f, sessionID)
+	cte, args := duckUsageCTE(f, sessionIDs)
+	return s.forEachSessionUsageAggregateRowFrom(ctx, cte, args, visit)
+}
+
+// forEachSessionUsageAggregateRowFrom visits the usage_localized rows of cte.
+func (s *Store) forEachSessionUsageAggregateRowFrom(
+	ctx context.Context,
+	cte string, args []any,
+	visit func(duckUsageAggregateRow) error,
+) error {
 	// Top-session and session-usage callers aggregate these rows in Go only
 	// after each row has been quantized to whole microdollars.
 	query := cte + `
@@ -1858,7 +1976,7 @@ func (s *Store) forEachSessionUsageAggregateRow(
 func (s *Store) sessionUsageRowCount(
 	ctx context.Context, sessionID string, pricing *export.PricingResolver,
 ) (int, error) {
-	cte, args := duckUsageCTE(db.UsageFilter{}, sessionID)
+	cte, args := duckUsageCTE(db.UsageFilter{}, []string{sessionID})
 	query := cte + `
 		SELECT
 			COUNT(*) FILTER (WHERE
@@ -1907,7 +2025,7 @@ func (s *Store) sessionUsageRowCount(
 func (s *Store) sessionUsageRows(
 	ctx context.Context, sessionID string,
 ) ([]duckSessionUsageRow, error) {
-	cte, args := duckUsageCTE(db.UsageFilter{}, sessionID)
+	cte, args := duckUsageCTE(db.UsageFilter{}, []string{sessionID})
 	query := cte + `
 		SELECT session_id, message_ordinal, source, ts, pricing_ts, model, provider_id,
 			input_tokens_norm, output_tokens_norm,
@@ -1965,99 +2083,163 @@ func (s *Store) readTopSessionTotals(
 	if err != nil {
 		return nil, err
 	}
-	type acc struct {
-		row               db.TopSessionEntry
-		tokens            int
-		cost              money.Money
-		authoritativeCost *money.Money
-	}
-	bySession := map[string]*acc{}
-	err = s.forEachSessionUsageAggregateRow(
-		ctx, f, "", func(r duckUsageAggregateRow) error {
-			a := bySession[r.sessionID]
-			if a == nil {
-				a = &acc{row: db.TopSessionEntry{
-					SessionID: r.sessionID, DisplayName: r.displayName,
-					Agent: r.agent, Project: r.project, StartedAt: r.startedAt,
-					GroupKey: r.groupKey, SessionName: r.sessionName, Machine: r.machine,
-				}}
-				bySession[r.sessionID] = a
-			}
-			r.applyRecordedCost(rateResolver)
-			cost, _, _, _, priceErr := duckUsageAggregateResolvedCost(
-				r.model, r.priceModel, r.providerID, duckUsagePricingTimestamp(r.pricingTS),
-				r.inputTok, r.outputTok, r.cacheCr, r.cacheCr1h, r.cacheRd,
-				r.billableInput, r.billableOutput, r.billableReason,
-				r.billableCacheCr, r.billableCacheCr1h, r.billableCacheRd,
-				r.billableWebSearch,
-				r.explicitCost,
-				r.reportedCostRows > 0,
-				db.UsageSourceIsRequestScoped(r.source) || r.messageOrdinal.Valid,
-				rateResolver,
-			)
-			if priceErr != nil {
-				return priceErr
-			}
-			a.row.InputTokens += r.inputTok
-			a.row.OutputTokens += r.outputTok
-			a.row.CacheCreationTokens += r.cacheCr
-			a.row.CacheReadTokens += r.cacheRd
-			a.tokens += r.inputTok + r.outputTok + r.cacheCr + r.cacheRd
-			a.cost, priceErr = money.Add(a.cost, cost)
-			if priceErr != nil {
-				return fmt.Errorf("summing duckdb top-session cost: %w", priceErr)
-			}
-			if !f.HasModelFilter() && r.authoritativeCostRows > 0 {
-				v := money.Money{Microdollars: r.authoritativeCost}
-				a.authoritativeCost = &v
-			}
-			return nil
-		})
+	block, err := rateResolver.BuildBlock()
 	if err != nil {
 		return nil, err
 	}
-	out := make([]db.TopSessionEntry, 0, len(bySession))
-	for _, a := range bySession {
+	slot := db.UsageSlot(f, false)
+	if slot != "" {
+		slot = "top|" + slot
+	}
+	parts, err := refreshUsageParts(ctx, s, slot, block.Digest, f, db.TopSessionBytes, func(ctx context.Context, ids []string) (map[string]db.TopSessionEntry, error) {
+		if ids == nil {
+			// See readDailyUsage: a replacement mid-read reads again live.
+			handle := s.DB()
+			plan, err := s.usageRollupPlan(ctx, f, block.Digest, false)
+			var parts map[string]db.TopSessionEntry
+			if err == nil && plan != nil {
+				parts, err = s.topSessionsFromRollup(ctx, f, plan, rateResolver)
+			}
+			if s.DB() == handle && (err != nil || plan != nil) {
+				return parts, err
+			}
+		}
+		return s.readTopSessionParts(ctx, f, ids, rateResolver)
+	})
+	if err != nil {
+		return nil, err
+	}
+	out := make([]db.TopSessionEntry, 0, len(parts))
+	for _, entry := range parts {
+		out = append(out, entry)
+	}
+	return out, nil
+}
+
+func (s *Store) readTopSessionParts(ctx context.Context, f db.UsageFilter, ids []string, rateResolver *export.PricingResolver) (map[string]db.TopSessionEntry, error) {
+	bySession := map[string]*duckTopSessionAcc{}
+	err := accumulateTopSessionRows(f, rateResolver, bySession, func(visit func(duckUsageAggregateRow) error) error {
+		return s.forEachSessionUsageAggregateRow(ctx, f, ids, visit)
+	})
+	if err != nil {
+		return nil, err
+	}
+	return finishTopSessions(bySession), nil
+}
+
+// duckTopSessionAcc sums one session's priced rows for Top sessions.
+type duckTopSessionAcc struct {
+	row               db.TopSessionEntry
+	tokens            int
+	cost              money.Money
+	authoritativeCost *money.Money
+}
+
+func accumulateTopSessionRows(
+	f db.UsageFilter, rateResolver *export.PricingResolver,
+	bySession map[string]*duckTopSessionAcc,
+	forEach func(func(duckUsageAggregateRow) error) error,
+) error {
+	return forEach(func(r duckUsageAggregateRow) error {
+		a := bySession[r.sessionID]
+		if a == nil {
+			a = &duckTopSessionAcc{row: db.TopSessionEntry{
+				SessionID: r.sessionID, DisplayName: r.displayName,
+				Agent: r.agent, Project: r.project, StartedAt: r.startedAt,
+				GroupKey: r.groupKey, SessionName: r.sessionName, Machine: r.machine,
+			}}
+			bySession[r.sessionID] = a
+		}
+		cost, _, priceErr := r.priceForAggregate(rateResolver)
+		if priceErr != nil {
+			return priceErr
+		}
+		a.row.InputTokens += r.inputTok
+		a.row.OutputTokens += r.outputTok
+		a.row.CacheCreationTokens += r.cacheCr
+		a.row.CacheReadTokens += r.cacheRd
+		a.tokens += r.inputTok + r.outputTok + r.cacheCr + r.cacheRd
+		a.cost, priceErr = money.Add(a.cost, cost)
+		if priceErr != nil {
+			return fmt.Errorf("summing duckdb top-session cost: %w", priceErr)
+		}
+		if !f.HasModelFilter() && r.authoritativeCostRows > 0 {
+			v := money.Money{Microdollars: r.authoritativeCost}
+			a.authoritativeCost = &v
+		}
+		return nil
+	})
+}
+
+func finishTopSessions(bySession map[string]*duckTopSessionAcc) map[string]db.TopSessionEntry {
+	out := make(map[string]db.TopSessionEntry, len(bySession))
+	for id, a := range bySession {
 		a.row.TotalTokens = a.tokens
 		if a.authoritativeCost != nil {
 			a.row.Cost = *a.authoritativeCost
 		} else {
 			a.row.Cost = a.cost
 		}
-		out = append(out, a.row)
+		out[id] = a.row
 	}
-	return out, nil
+	return out
 }
 
 func (s *Store) GetUsageSessionCounts(
 	ctx context.Context, f db.UsageFilter,
 ) (db.UsageSessionCounts, error) {
-	cte, args := duckUsageCTE(f, "")
+	// Which rows survive does not depend on prices, so any pricing will do.
+	// A mirror replacement between the rollup read's queries reads again
+	// without the rollup, as in readDailyUsage.
+	handle := s.DB()
+	plan, err := s.usageRollupPlan(ctx, f, "", false)
+	seen := map[string]db.UsageSessionInfo{}
+	if err == nil && plan != nil {
+		err = s.rollupSessionInfo(ctx, f, plan, seen)
+		if err == nil {
+			cte, args := plan.liveCTE(f, false)
+			err = s.scanUsageSessionInfo(ctx, cte, args, seen)
+		}
+	}
+	if s.DB() == handle && (err != nil || plan != nil) {
+		if err != nil {
+			return db.UsageSessionCounts{}, err
+		}
+		return db.NewUsageSessionCounts(seen), nil
+	}
+	seen = map[string]db.UsageSessionInfo{}
+	cte, args := duckUsageCTE(f, nil)
+	if err := s.scanUsageSessionInfo(ctx, cte, args, seen); err != nil {
+		return db.UsageSessionCounts{}, err
+	}
+	return db.NewUsageSessionCounts(seen), nil
+}
+
+// scanUsageSessionInfo adds the sessions with a surviving row in cte.
+func (s *Store) scanUsageSessionInfo(
+	ctx context.Context, cte string, args []any, seen map[string]db.UsageSessionInfo,
+) error {
 	rows, err := s.queryContext(ctx, cte+`
 		SELECT DISTINCT session_id, project, agent
 		FROM usage_localized
 		WHERE session_id != ''
 		ORDER BY session_id`, args...)
 	if err != nil {
-		return db.UsageSessionCounts{}, fmt.Errorf(
-			"querying duckdb usage session counts: %w", err)
+		return fmt.Errorf("querying duckdb usage session counts: %w", err)
 	}
 	defer rows.Close()
-	seen := map[string]db.UsageSessionInfo{}
 	for rows.Next() {
 		var sessionID string
 		var info db.UsageSessionInfo
 		if err := rows.Scan(&sessionID, &info.Project, &info.Agent); err != nil {
-			return db.UsageSessionCounts{}, fmt.Errorf(
-				"scanning duckdb usage session count: %w", err)
+			return fmt.Errorf("scanning duckdb usage session count: %w", err)
 		}
 		seen[sessionID] = info
 	}
 	if err := rows.Err(); err != nil {
-		return db.UsageSessionCounts{}, fmt.Errorf(
-			"iterating duckdb usage session counts: %w", err)
+		return fmt.Errorf("iterating duckdb usage session counts: %w", err)
 	}
-	return db.NewUsageSessionCounts(seen), nil
+	return nil
 }
 
 // appendDuckUsageMatchingActivityClauses requires the session to have at
@@ -2242,7 +2424,7 @@ func (s *Store) GetSessionUsage(
 	hasRows := false
 	if mayHaveRows {
 		err = s.forEachSessionUsageAggregateRow(
-			ctx, db.UsageFilter{}, sessionID,
+			ctx, db.UsageFilter{}, []string{sessionID},
 			func(r duckUsageAggregateRow) error {
 				deduplicatedOutputTokens += r.snapshotDedupOutput
 				if r.authoritativeCostRows > 0 {

@@ -1,5 +1,5 @@
 ---
-last_edited: 2026-11-12
+last_edited: 2026-11-13
 title: Changelog
 description: Release history for AgentsView
 ---
@@ -37,11 +37,71 @@ The latest release is
 
 **Improvements**
 
+- The Usage page opens faster on ClickHouse and DuckDB mirrors. On a
+  production-size archive, the first one-year summary after a serve start took
+  0.83 seconds instead of 1.48 on ClickHouse (1.8x) and 0.49 seconds instead of
+  3.2 on DuckDB (6.5x). Push now stores priced usage sums per session and 15
+  minutes, and Usage reads add them to the few rows they still deduplicate. A
+  repeat ClickHouse request took 0.09 seconds instead of 0.23 (2.4x), because
+  Usage now records the pricing of each usage group in one call. A ClickHouse
+  push that refreshes prepared usage now waits 3.4 to 4.1 seconds for the
+  refresh and spends 3.4 seconds building the sums, and a full DuckDB rebuild
+  takes about 15 seconds longer. The first DuckDB push after upgrading rebuilds
+  the mirror.
+
+- Usage reuses priced work after restarting native PostgreSQL serving and after
+  pushes. When that cache would first need a large rebuild, such as on first
+  use, after a price change, or after new account usage, Usage shows the direct
+  PostgreSQL result and rebuilds the cache in the background. Its disposable
+  cache lives in `<data-dir>/usage-postgres/`. SQLite rebuilds its Usage cache
+  once after this upgrade.
+
+- Session exports now mask API keys, tokens, and other detected secrets by
+  default, using the same masked form as search results. This covers the HTML
+  and Markdown session exports, Gist publishing, the raw
+  `agentsview session export` source stream, and
+  `agentsview export conversations message`. Pass `--reveal` on the CLI, or
+  `reveal=true` on an HTTP export from localhost, to get the stored text
+  unchanged. A conversation body with a masked secret reports `redacted: true`,
+  and its offsets count the masked text. See
+  [Secrets in exports](/docs/usage/#secrets-in-exports) and
+  [Conversation Export](/docs/conversation-export/#secrets-are-masked-by-default).
+
 - `agentsview sync` no longer prints a deprecation warning. It stays a supported
   shortcut for `agentsview source sync` and is listed in root help again.
 
+- ClickHouse pushes write far less after an archive rebuild, a data-version
+  resync, a scope change, or a format upgrade. Those full pushes now rewrite
+  only the sessions that differ from the mirror and still remove sessions that
+  are gone locally. A session whose messages are unchanged rewrites only its
+  session row, and the commit links upgrade rewrites only commit links.
+  The first push after upgrading republishes each session row once.
+  `clickhouse push --full` still rewrites every session, so use it to repair a
+  damaged mirror. Upgrade `clickhouse serve` together with the pushing clients:
+  an older serve hides image text and Activity usage for sessions a newer
+  client rewrote this way.
+
 **Bug fixes**
 
+- A growing Codex session no longer leaves a removed copy of every earlier
+  message in the conversation export index each time it is fully re-read. A
+  long session could add millions of such rows and many gigabytes to the
+  archive. Messages before the first changed one now keep their export IDs
+  and stay out of the change stream. To recover the space these rows already
+  take, run `agentsview db compact`: it now removes deleted-message records
+  before reclaiming space. Change-stream and conversation-export readers
+  whose position predates a removed record restart with a full replay.
+- Sessions from worktrees named `<repo>.<branch>` next to the main checkout,
+  the default worktrunk layout, now group under the repository's project when
+  the checkout is not on disk, such as on a central collector. Before, each
+  worktree folder became its own project. Existing sessions pick up the new name
+  when they are next re-parsed.
+- OpenCode, Kilo, and MiMo Code costs now include reasoning tokens. Current
+  versions of these tools record reasoning separately from output, and
+  AgentsView priced only the output, so sessions on reasoning models were
+  under-billed by the whole reasoning share. Output now counts reasoning once
+  for both new and older recordings, and existing sessions are reparsed in
+  place on upgrade.
 - A busy daemon no longer logs `a long-running reader is holding the WAL`, or
   a goroutine dump, when its reads only overlap. The warning now appears only
   when three checkpoints in a row stop at the same point, which means one read
@@ -80,6 +140,14 @@ The latest release is
 - Prune removes matching parent and child session chains in one pass, even
   without `--agent`.
 - Commit lookups keep live prompts and other archives' deleted-session links.
+- Junie session titles, projects, and working directories refresh during scoped
+  reconciliation even when an index-change notification was missed. Metadata
+  changes for other sessions remain pending for their next index event.
+- An inaccessible subtree no longer makes shared JSONL discovery repeatedly
+  process healthy sibling sessions when the provider supports scoped traversal.
+  Retries remain limited to unfinished paths, and archived sessions under a
+  broken symlink remain available until discovery can establish their source
+  state.
 - Antigravity app and IDE sessions now show their project and working directory
   instead of all landing in one unlabeled project. AgentsView reads each
   conversation's workspace folder from Antigravity's
