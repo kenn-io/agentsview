@@ -378,14 +378,13 @@ SELECT
 	m.model,
 	m.provider_id,
 	m.token_usage,
+	m.usage_output_tokens,
+	m.usage_web_search_requests,
 	0 AS input_tokens,
 	0 AS output_tokens,
 	0 AS cache_creation_input_tokens,
 	0 AS cache_read_input_tokens,
-	CASE
-		WHEN json_valid(m.token_usage) THEN COALESCE(CAST(json_extract(m.token_usage, '$.reasoning_tokens') AS INTEGER), 0)
-		ELSE 0
-	END AS reasoning_tokens,
+	0 AS reasoning_tokens,
 	NULL AS cost_microdollars,
 	'' AS cost_status,
 	'' AS cost_source,
@@ -417,6 +416,8 @@ SELECT
 	ue.model,
 	ue.provider_id,
 	'' AS token_usage,
+	0 AS usage_output_tokens,
+	0 AS usage_web_search_requests,
 	ue.input_tokens,
 	ue.output_tokens,
 	ue.cache_creation_input_tokens,
@@ -465,14 +466,13 @@ SELECT
 	m.model,
 	m.provider_id,
 	m.token_usage,
+	m.usage_output_tokens,
+	m.usage_web_search_requests,
 	0 AS input_tokens,
 	0 AS output_tokens,
 	0 AS cache_creation_input_tokens,
 	0 AS cache_read_input_tokens,
-	CASE
-		WHEN json_valid(m.token_usage) THEN COALESCE(CAST(json_extract(m.token_usage, '$.reasoning_tokens') AS INTEGER), 0)
-		ELSE 0
-	END AS reasoning_tokens,
+	0 AS reasoning_tokens,
 	NULL AS cost_microdollars,
 	'' AS cost_status,
 	'' AS cost_source,
@@ -498,6 +498,8 @@ SELECT
 	ue.model,
 	ue.provider_id,
 	'' AS token_usage,
+	0 AS usage_output_tokens,
+	0 AS usage_web_search_requests,
 	ue.input_tokens,
 	ue.output_tokens,
 	ue.cache_creation_input_tokens,
@@ -530,14 +532,13 @@ SELECT
 	m.model,
 	m.provider_id,
 	m.token_usage,
+	m.usage_output_tokens,
+	m.usage_web_search_requests,
 	0 AS input_tokens,
 	0 AS output_tokens,
 	0 AS cache_creation_input_tokens,
 	0 AS cache_read_input_tokens,
-	CASE
-		WHEN json_valid(m.token_usage) THEN COALESCE(CAST(json_extract(m.token_usage, '$.reasoning_tokens') AS INTEGER), 0)
-		ELSE 0
-	END AS reasoning_tokens,
+	0 AS reasoning_tokens,
 	NULL AS cost_microdollars,
 	'' AS cost_status,
 	'' AS cost_source,
@@ -562,6 +563,8 @@ SELECT
 	ue.model,
 	ue.provider_id,
 	'' AS token_usage,
+	0 AS usage_output_tokens,
+	0 AS usage_web_search_requests,
 	ue.input_tokens,
 	ue.output_tokens,
 	ue.cache_creation_input_tokens,
@@ -609,6 +612,8 @@ message_timestamp_rows AS MATERIALIZED (
 		m.model,
 		m.provider_id,
 		m.token_usage,
+		m.usage_output_tokens,
+		m.usage_web_search_requests,
 		m.claude_message_id,
 		m.claude_request_id,
 		m.source_uuid
@@ -830,19 +835,11 @@ func dailyUsageRowSelectFromRowsWithMachine(
 ) string {
 	return dailyUsageRowSelectFromRowsWithColumns(
 		rowsSQL, includeMachine, dailyUsageRowColumns{
-			session: "u.session_id",
-			webSearch: `CASE
-		WHEN u.usage_source = 'message' THEN MAX(COALESCE(CASE
-			WHEN json_valid(u.token_usage) THEN CAST(json_extract(
-				u.token_usage, '$.server_tool_use.web_search_requests'
-			) AS INTEGER)
-			ELSE agentsview_usage_web_search_requests(u.token_usage)
-		END, 0), 0)
-		ELSE 0
-	END`,
-			project: "u.project",
-			agent:   "u.agent",
-			machine: "u.machine",
+			session:   "u.session_id",
+			webSearch: "u.usage_web_search_requests",
+			project:   "u.project",
+			agent:     "u.agent",
+			machine:   "u.machine",
 		})
 }
 
@@ -1066,6 +1063,8 @@ SELECT
 	COALESCE(NULLIF(cu.model, ''), '<unknown>') AS model,
 	'' AS provider_id,
 	'' AS token_usage,
+	0 AS usage_output_tokens,
+	0 AS usage_web_search_requests,
 	cu.input_tokens,
 	cu.output_tokens,
 	cu.cache_write_tokens AS cache_creation_input_tokens,
@@ -1208,17 +1207,8 @@ func snapshotRankedDailyUsageRowsSQL(
 		WHERE survivor.snapshot_attribution_session_id = ''
 			OR (` + filterWhere + `)`
 	}
-	outputTokens := fmt.Sprintf(`MIN(MAX(COALESCE(CASE
-						WHEN json_valid(u.token_usage) THEN CAST(json_extract(
-							u.token_usage, '$.output_tokens') AS INTEGER)
-						ELSE agentsview_usage_output_tokens(u.token_usage)
-					END, 0), 0), %d)`, MaxPlausibleTokens)
-	webSearchRequests := `MAX(COALESCE(CASE
-					WHEN json_valid(u.token_usage) THEN CAST(json_extract(
-						u.token_usage, '$.server_tool_use.web_search_requests'
-					) AS INTEGER)
-					ELSE agentsview_usage_web_search_requests(u.token_usage)
-				END, 0), 0)`
+	outputTokens := "u.usage_output_tokens"
+	webSearchRequests := "u.usage_web_search_requests"
 
 	args := make([]any, 0,
 		len(dupsArgs)+len(claudeArgs)+2*len(windowArgs)+

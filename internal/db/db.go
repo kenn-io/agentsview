@@ -3385,6 +3385,9 @@ func (db *DB) migrateColumns(ctx context.Context, progress OpenProgressFunc) err
 	if err := addDialogueIsContent(ctx, w, progress); err != nil {
 		return err
 	}
+	if err := addMessageUsageCounters(ctx, w, progress); err != nil {
+		return err
+	}
 	if _, err := w.ExecContext(ctx, artifactSessionQueueTriggerCreatesSQL); err != nil {
 		return fmt.Errorf("installing artifact session queue triggers: %w", err)
 	}
@@ -4251,6 +4254,7 @@ var messageVelocityIndexColumns = []string{
 var usageSessionCoveringIndexColumns = []string{
 	"session_id", "ordinal", "timestamp", "role", "model",
 	"provider_id", "claude_message_id", "claude_request_id", "token_usage", "source_uuid",
+	"usage_output_tokens", "usage_web_search_requests",
 }
 
 func ensureUsageIndexesLocked(ctx context.Context, w *writerHandle) error {
@@ -4280,7 +4284,8 @@ func ensureUsageIndexesLocked(ctx context.Context, w *writerHandle) error {
 		w, "idx_messages_usage_session_covering", usageSessionCoveringIndexColumns,
 		`CREATE INDEX IF NOT EXISTS idx_messages_usage_session_covering
 		 ON messages(session_id, ordinal, timestamp, role, model, provider_id,
-		             claude_message_id, claude_request_id, token_usage, source_uuid)
+		             claude_message_id, claude_request_id, token_usage, source_uuid,
+		             usage_output_tokens, usage_web_search_requests)
 		 WHERE token_usage != '' AND model != '' AND model != '<synthetic>'`,
 	); err != nil {
 		return err

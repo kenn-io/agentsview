@@ -144,6 +144,8 @@ CREATE TABLE IF NOT EXISTS messages (
     token_usage TEXT NOT NULL DEFAULT '',
     context_tokens INTEGER NOT NULL DEFAULT 0,
     output_tokens INTEGER NOT NULL DEFAULT 0,
+    usage_output_tokens INTEGER NOT NULL DEFAULT 0,
+    usage_web_search_requests INTEGER NOT NULL DEFAULT 0,
     provider_id TEXT NOT NULL DEFAULT '',
     has_context_tokens INTEGER NOT NULL DEFAULT 0,
     has_output_tokens INTEGER NOT NULL DEFAULT 0,

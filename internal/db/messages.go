@@ -52,7 +52,8 @@ const (
 		has_context_tokens, has_output_tokens,
 		claude_message_id, claude_request_id,
 		source_type, source_subtype, prompt_source, source_uuid,
-		source_parent_uuid, is_sidechain, is_compact_boundary`
+		source_parent_uuid, is_sidechain, is_compact_boundary,
+		usage_output_tokens, usage_web_search_requests`
 
 	// DefaultMessageLimit is the default number of messages returned.
 	DefaultMessageLimit = 100
@@ -66,7 +67,7 @@ const (
 	// Keep multi-row INSERT statements below SQLite's historic
 	// 999-variable limit so binaries built against older SQLite
 	// versions still work.
-	messageInsertRowsPerStmt         = 33  // 30 params per row
+	messageInsertRowsPerStmt         = 31  // 32 params per row
 	toolCallInsertRowsPerStmt        = 66  // 15 params per row
 	toolResultEventInsertRowsPerStmt = 70  // 14 params per row
 	toolCallAgentStateRowsPerStmt    = 142 // 7 params per row
@@ -1319,7 +1320,7 @@ func insertMessagesTx(
 	for start := 0; start < len(msgs); start += messageInsertRowsPerStmt {
 		end := min(start+messageInsertRowsPerStmt, len(msgs))
 		batch := msgs[start:end]
-		args := make([]any, 0, len(batch)*30)
+		args := make([]any, 0, len(batch)*32)
 		for i, m := range batch {
 			id := nextID + int64(start+i)
 			ids[start+i] = id
@@ -1329,7 +1330,7 @@ func insertMessagesTx(
 		query := fmt.Sprintf(
 			"INSERT INTO messages (id, %s) VALUES %s",
 			insertMessageCols,
-			multiRowPlaceholders(len(batch), 30),
+			multiRowPlaceholders(len(batch), 32),
 		)
 		if _, err := tx.Exec(query, args...); err != nil {
 			first := batch[0].Ordinal
@@ -1733,16 +1734,20 @@ func applyMessageTokenUsageUpdateTx(ctx context.Context,
 		)
 	}
 
+	usageOutputTokens, usageWebSearchRequests := storedMessageUsageCounters(incomingUsage)
 	result, err := tx.ExecContext(ctx,
 		`UPDATE messages
 		 SET token_usage = ?, context_tokens = ?, output_tokens = ?,
-		     has_context_tokens = ?, has_output_tokens = ?
+		     has_context_tokens = ?, has_output_tokens = ?,
+		     usage_output_tokens = ?, usage_web_search_requests = ?
 		 WHERE session_id = ? AND ordinal = ? AND token_usage = ''`,
 		incomingUsage,
 		update.ContextTokens,
 		update.OutputTokens,
 		update.HasContextTokens,
 		update.HasOutputTokens,
+		usageOutputTokens,
+		usageWebSearchRequests,
 		sessionID,
 		update.Ordinal,
 	)
