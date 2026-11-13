@@ -1031,20 +1031,18 @@ func (s *Sync) sessionFingerprints(
 			return nil, fmt.Errorf("tool call fingerprint %s: %w", sess.ID, err)
 		}
 		payload := struct {
-			FrustrationMarkersVersion int
-			SessionFields             []any
-			Messages                  []db.Message
-			Dialogue                  []*string `json:",omitzero"`
-			Usage                     string
-			ToolCalls                 string
-			SecretFindings            []db.SecretFinding
-			Pins                      []db.PinnedMessage
-			PlanUsage                 string
-			CommitLinks               []db.CommitLinkRow `json:",omitzero"`
-			ImageText                 []db.ImageTextRow  `json:",omitzero"`
-			SessionTotal              string             `json:",omitzero"`
+			SessionFields  []any
+			Messages       []db.Message
+			Dialogue       []*string `json:",omitzero"`
+			Usage          string
+			ToolCalls      string
+			SecretFindings []db.SecretFinding
+			Pins           []db.PinnedMessage
+			PlanUsage      string
+			CommitLinks    []db.CommitLinkRow `json:",omitzero"`
+			ImageText      []db.ImageTextRow  `json:",omitzero"`
+			SessionTotal   string             `json:",omitzero"`
 		}{
-			FrustrationMarkersVersion: frustrationMarkersVersion,
 			SessionFields: duckSessionFingerprintFields(
 				sess, db.MirroredSessionMachine(sess, s.machine),
 			),

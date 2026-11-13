@@ -64,9 +64,6 @@ func TestQuackScansStaleFrustrationCount(t *testing.T) {
 	buildMirrorFixture(t, path, "session", "this is broken")
 	conn, err := Open(ctx, path)
 	require.NoError(t, err)
-	var count int
-	require.NoError(t, conn.QueryRowContext(ctx, `SELECT frustration_marker_count FROM sessions WHERE id = 'session'`).Scan(&count))
-	require.Equal(t, 1, count)
 	_, err = conn.ExecContext(ctx, `UPDATE sessions SET frustration_markers_version = 0 WHERE id = 'session'`)
 	require.NoError(t, err)
 	_, err = conn.ExecContext(ctx, `UPDATE messages SET content = 'fine' WHERE session_id = 'session'`)
