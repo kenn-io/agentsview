@@ -85,6 +85,7 @@ func TestMaterializeCodexConfigured(t *testing.T) {
 		const foreignID = "33333333-3333-4333-8333-333333333333"
 		foreignRoot := filepath.Join(location, "2026", "01", "03")
 		require.NoError(t, os.MkdirAll(foreignRoot, 0o700))
+		t.Cleanup(func() { assert.NoError(t, os.RemoveAll(foreignRoot)) })
 		foreignPage := filepath.Join(foreignRoot, "rollout-2026-01-03T01-00-00-"+id+".jsonl")
 		foreignBytes := []byte(`{"type":"session_meta","payload":{"id":"11111111-1111-4111-8111-111111111111","history_mode":"paginated","label":"machine-b"}}` + "\n")
 		require.NoError(t, os.WriteFile(foreignPage, foreignBytes, 0o600))
