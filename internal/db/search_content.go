@@ -368,9 +368,21 @@ func (db *DB) searchContentSubstring(
 	}
 	if !quoted && hasSource(f, "messages") && len(strings.Fields(f.Pattern)) > 1 && db.HasFTS(ctx) {
 		if q, ok := contentWordsQuery(f.Pattern); ok {
-			return db.searchContentWords(ctx, f, q, true)
+			return db.searchContentWordsOrSubstring(ctx, f, q)
 		}
 	}
+	return db.searchContentLiteral(ctx, f)
+}
+
+func (db *DB) searchContentWordsOrSubstring(ctx context.Context, f ContentSearchFilter, q contentWords) (ContentSearchPage, error) {
+	page, err := db.searchContentWords(ctx, f, q, true)
+	if err == nil || !strings.Contains(err.Error(), "no such table: messages_fts") {
+		return page, err
+	}
+	return db.searchContentLiteral(ctx, f)
+}
+
+func (db *DB) searchContentLiteral(ctx context.Context, f ContentSearchFilter) (ContentSearchPage, error) {
 	return searchWithSubstringCandidates(ctx, db, f, f.Pattern,
 		func(candidates substringCandidateFilters) (ContentSearchPage, error) {
 			return db.substringSearchPage(ctx, f, candidates)

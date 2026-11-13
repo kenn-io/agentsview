@@ -40,6 +40,22 @@ func TestSearchContentStemmedMatchSnippet(t *testing.T) {
 	}
 }
 
+func TestSearchContentWordsFallsBackWhenImportDropsFTS(t *testing.T) {
+	d := testDB(t)
+	requireFTS(t, d)
+	seedWordSearch(t, d, "proj", [3]string{"exact", "invoice rounding decision", ""})
+	f := ContentSearchFilter{Pattern: "invoice rounding decision", Limit: 50, Sources: []string{"messages"}}
+	q, ok := contentWordsQuery(f.Pattern)
+	require.True(t, ok)
+	require.NoError(t, d.DropFTS(t.Context()))
+
+	page, err := d.searchContentWordsOrSubstring(t.Context(), f, q)
+	require.NoError(t, err)
+	require.Len(t, page.Matches, 1)
+	assert.Equal(t, "exact", page.Matches[0].SessionID)
+	assert.Contains(t, page.Matches[0].Snippet, f.Pattern)
+}
+
 type wordHit struct {
 	session, location string
 	words             int
