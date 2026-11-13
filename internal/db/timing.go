@@ -3,6 +3,7 @@ package db
 import (
 	"context"
 	"database/sql"
+	"encoding/json/jsontext"
 	"encoding/json/v2"
 	"strings"
 	"time"
@@ -390,6 +391,60 @@ func millisBetween(a, b string) int64 {
 	return tb.Sub(ta).Milliseconds()
 }
 
+// inputPreviewArgs holds the tool input keys makeInputPreview reads. The
+// decoder skips every other key without building a value for it, so the
+// large arguments of a Write or Edit cost a scan, not a copy. Each field
+// stays raw because a key may hold a non-string, which makeInputPreview
+// ignores rather than treating as a decode error.
+type inputPreviewArgs struct {
+	FilePath      jsontext.Value `json:"file_path"`
+	Path          jsontext.Value `json:"path"`
+	FilePathCamel jsontext.Value `json:"filePath"`
+	File          jsontext.Value `json:"file"`
+	Pattern       jsontext.Value `json:"pattern"`
+	Query         jsontext.Value `json:"query"`
+	Command       jsontext.Value `json:"command"`
+	Cmd           jsontext.Value `json:"cmd"`
+	Skill         jsontext.Value `json:"skill"`
+	Name          jsontext.Value `json:"name"`
+}
+
+// str returns the string value of the named key, or "" when the key is
+// absent or holds something other than a string.
+func (a inputPreviewArgs) str(key string) string {
+	var v jsontext.Value
+	switch key {
+	case "file_path":
+		v = a.FilePath
+	case "path":
+		v = a.Path
+	case "filePath":
+		v = a.FilePathCamel
+	case "file":
+		v = a.File
+	case "pattern":
+		v = a.Pattern
+	case "query":
+		v = a.Query
+	case "command":
+		v = a.Command
+	case "cmd":
+		v = a.Cmd
+	case "skill":
+		v = a.Skill
+	case "name":
+		v = a.Name
+	}
+	if v.Kind() != '"' {
+		return ""
+	}
+	var s string
+	if err := json.Unmarshal(v, &s); err != nil {
+		return ""
+	}
+	return s
+}
+
 // makeInputPreview returns a short snippet of the tool's input args,
 // suitable for display in the timing summary's call list. Mirrors the
 // most common cases from frontend/src/lib/utils/tool-params.ts;
@@ -407,17 +462,15 @@ func makeInputPreview(category, toolName, inputJSON string) string {
 	if inputJSON == "" {
 		return ""
 	}
-	var params map[string]any
-	if err := json.Unmarshal([]byte(inputJSON), &params); err != nil {
+	var args inputPreviewArgs
+	if err := json.Unmarshal([]byte(inputJSON), &args); err != nil {
 		return ""
 	}
 
 	pickStr := func(keys ...string) string {
 		for _, k := range keys {
-			if v, ok := params[k]; ok && v != nil {
-				if s, ok := v.(string); ok && s != "" {
-					return s
-				}
+			if s := args.str(k); s != "" {
+				return s
 			}
 		}
 		return ""
