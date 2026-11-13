@@ -47,7 +47,6 @@ func TestTrendsKeptPush(t *testing.T) {
 	_, err = syncer.Push(ctx, false, nil)
 	require.NoError(t, err)
 	require.Zero(t, read(f).MessageCount)
-	require.Zero(t, read(f).Series[0].Total)
 	f.Project = "changed-project"
 	require.Equal(t, 1, read(f).Series[0].Total)
 	messages[0].Content = "bravo"

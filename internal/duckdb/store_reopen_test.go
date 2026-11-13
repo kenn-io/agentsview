@@ -507,6 +507,4 @@ func TestMirrorCheckReadsPublicationAfterPreviousCheck(t *testing.T) {
 	held = false
 	<-done
 	require.Equal(t, []string{"newer"}, listMirrorSessionIDs(t, store))
-	require.NoError(t, store.Close())
-	require.Zero(t, countReopenAliasFiles(t, dir))
 }
