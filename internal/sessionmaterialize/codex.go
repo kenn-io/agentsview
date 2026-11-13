@@ -43,13 +43,13 @@ func materializeCodex(ctx context.Context, cfg config.Config, database *db.DB, s
 archiveSource:
 	if retained || len(owners) > 0 {
 		var pages []codexPage
-		use := func(root string, names, ancestors []string, read func(context.Context, string, int64) ([]byte, error)) error {
+		use := func(root string, names, ancestors []string, read func(context.Context, string, int64) ([]byte, error), resolve archivesource.CodexAncestry) error {
 			archived := make(map[string]bool)
 			for _, name := range names {
 				archived[name] = codexArchived(root, name)
 			}
 			var err error
-			pages, err = codexLineage(ctx, thread, names, ancestors, archived, read)
+			pages, err = codexLineage(ctx, thread, names, ancestors, archived, read, resolve)
 			return err
 		}
 		var source string
@@ -69,6 +69,7 @@ archiveSource:
 				if err != nil {
 					err = errors.Join(snapshotErr, err)
 				}
+
 			}
 		}
 		if err != nil {
@@ -340,7 +341,7 @@ archiveSource:
 			return nil, errors.New("native Codex source outside configured roots")
 		}
 	}
-	pages, err := codexLineage(ctx, thread, names, nil, archived, read)
+	pages, err := codexLineage(ctx, thread, names, nil, archived, read, nil)
 	if closeSource != nil {
 		err = errors.Join(err, closeSource())
 		closeSource = nil

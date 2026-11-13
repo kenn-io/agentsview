@@ -86,7 +86,7 @@ func TestCodexLineageIncludesParentThreadAndCompressedPage(t *testing.T) {
 				}
 				return data, nil
 			}
-			pages, err := codexLineage(t.Context(), thread, f.names, nil, f.archived, read)
+			pages, err := codexLineage(t.Context(), thread, f.names, nil, f.archived, read, nil)
 			if tc.failure != "" {
 				require.ErrorContains(t, err, tc.failure)
 				return
@@ -133,7 +133,7 @@ func TestCodexLegacyFilenameAndInvalidLineage(t *testing.T) {
 	_, err = inspectCodexPage(t.Context(), "rollout-20240115-"+id+"_"+revert+".jsonl", legacy)
 	require.ErrorContains(t, err, "timestamped filenames")
 	paginated := []byte(fmt.Sprintf(`{"type":"session_meta","payload":{"id":%q,"session_id":%q,"history_mode":"paginated"}}`+"\n", revert, id))
-	_, err = codexLineage(t.Context(), id, []string{revertName}, nil, nil, func(context.Context, string, int64) ([]byte, error) { return paginated, nil })
+	_, err = codexLineage(t.Context(), id, []string{revertName}, nil, nil, func(context.Context, string, int64) ([]byte, error) { return paginated, nil }, nil)
 	require.ErrorContains(t, err, "identity")
 	canonical := "rollout-2024-01-15T00-00-00-" + id + "_" + revert + ".jsonl"
 	later := "rollout-2024-01-15T03-00-00-" + id + "_33333333-3333-4333-8333-333333333333.jsonl"
@@ -148,7 +148,7 @@ func TestCodexLegacyFilenameAndInvalidLineage(t *testing.T) {
 		{"tied timestamp", []string{canonical, tied}, tied},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			pages, err := codexLineage(t.Context(), id, tc.names, nil, nil, func(context.Context, string, int64) ([]byte, error) { return data, nil })
+			pages, err := codexLineage(t.Context(), id, tc.names, nil, nil, func(context.Context, string, int64) ([]byte, error) { return data, nil }, nil)
 			require.NoError(t, err)
 			require.Len(t, pages, 1)
 			assert.Equal(t, tc.want, pages[0].name)
@@ -173,19 +173,21 @@ func TestCodexLineageCompanionAuthority(t *testing.T) {
 		{"root wins", []string{pageName, parentName}, []string{"other/" + parentName}, ""},
 		{"ambiguous root refuses", []string{pageName, parentName, "root/" + parentName}, []string{"other/" + parentName}, "ambiguous"},
 		{"newer requested companion ignored", []string{pageName}, []string{parentName, "rollout-2027-01-01T00-00-00-" + thread + ".jsonl"}, ""},
-		{"plain companion wins", []string{pageName}, []string{parentName, parentName + ".zst"}, ""},
-		{"unequal companion rank refuses", []string{pageName}, []string{parentName, "other/" + parentName}, "ambiguous"},
-		{"corrupt selected companion refuses", []string{pageName}, []string{parentName}, "metadata"},
+		{"plain companion wins", []string{pageName}, []string{parentName + ".zst", parentName}, ""},
+		{"equal companion rank refuses", []string{pageName}, []string{parentName, "other/" + parentName}, "ambiguous"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			pages, err := codexLineage(t.Context(), thread, tc.roots, tc.companions, nil, func(_ context.Context, name string, _ int64) ([]byte, error) {
 				if name == pageName {
 					return pageBytes, nil
 				}
-				if name == parentName && tc.name != "corrupt selected companion refuses" {
+				if name == parentName {
 					return parentBytes, nil
 				}
 				return []byte("corrupt alternative"), nil
+			}, func(context.Context, string, string) ([]string, error) {
+				assert.Fail(t, "resolver called for an available rollout")
+				return nil, nil
 			})
 			if tc.failure != "" {
 				require.ErrorContains(t, err, tc.failure)
@@ -197,4 +199,58 @@ func TestCodexLineageCompanionAuthority(t *testing.T) {
 			assert.Equal(t, pageName, pages[1].name)
 		})
 	}
+}
+
+func TestCodexLineageLazyAncestry(t *testing.T) {
+	const parent = "11111111-1111-4111-8111-111111111111"
+	const thread = "22222222-2222-4222-8222-222222222222"
+	parentName := "rollout-2024-01-15T00-00-00-" + parent + ".jsonl"
+	pageName := "rollout-2026-01-01T00-00-00-" + thread + ".jsonl"
+	parentBytes := []byte(fmt.Sprintf(`{"type":"session_meta","payload":{"id":%q,"history_mode":"paginated"}}`+"\n", parent))
+	pageBytes := []byte(fmt.Sprintf(`{"type":"session_meta","payload":{"id":%q,"history_mode":"paginated","history_base":{"thread_id":%q,"end_ordinal_exclusive":1,"end_byte_offset":%d}}}`+"\n", thread, parent, len(parentBytes)))
+	read := func(_ context.Context, name string, _ int64) ([]byte, error) {
+		if name == pageName {
+			return pageBytes, nil
+		}
+		return parentBytes, nil
+	}
+	for _, tc := range []struct {
+		name                        string
+		roots, companions, returned []string
+		failure                     string
+		calls                       int
+	}{
+		{"lazy lookup", []string{pageName}, nil, []string{parentName}, "", 1},
+		{"missing", []string{pageName}, nil, nil, "missing Codex ancestor", 1},
+		{"ambiguous", []string{pageName}, nil, []string{parentName, "other/" + parentName}, "ambiguous Codex rollout", 1},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			calls := 0
+			pages, err := codexLineage(t.Context(), thread, tc.roots, tc.companions, nil, read, func(_ context.Context, from, rollout string) ([]string, error) {
+				calls++
+				assert.Equal(t, pageName, from)
+				assert.Equal(t, parent, rollout)
+				return tc.returned, nil
+			})
+			assert.Equal(t, tc.calls, calls)
+			if tc.failure != "" {
+				require.ErrorContains(t, err, tc.failure)
+				return
+			}
+			require.NoError(t, err)
+			require.Len(t, pages, 2)
+			assert.Equal(t, parentName, pages[0].name)
+		})
+	}
+	want := errors.New("catalog failure")
+	_, err := codexLineage(t.Context(), thread, []string{pageName}, nil, nil, read, func(context.Context, string, string) ([]string, error) { return nil, want })
+	require.ErrorIs(t, err, want)
+	cycleBytes := []byte(fmt.Sprintf(`{"type":"session_meta","payload":{"id":%q,"history_mode":"paginated","history_base":{"thread_id":%q,"end_ordinal_exclusive":1,"end_byte_offset":1}}}`+"\n", parent, parent))
+	_, err = codexLineage(t.Context(), thread, []string{pageName}, nil, nil, func(_ context.Context, name string, _ int64) ([]byte, error) {
+		if name == pageName {
+			return pageBytes, nil
+		}
+		return cycleBytes, nil
+	}, func(context.Context, string, string) ([]string, error) { return []string{parentName}, nil })
+	require.ErrorContains(t, err, "codex history contains a loop")
 }

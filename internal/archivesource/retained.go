@@ -20,7 +20,7 @@ import (
 	"go.kenn.io/docbank/docbank"
 )
 
-type codexReadCallback func(string, []string, []string, func(context.Context, string, int64) ([]byte, error)) error
+type codexReadCallback func(string, []string, []string, func(context.Context, string, int64) ([]byte, error), CodexAncestry) error
 
 // HasRetainedSession is a routing hint; Retained rechecks the binding inside its transaction.
 func HasRetainedSession(ctx context.Context, cfg config.Config, database *db.DB, session *db.Session, provider, native string) (bool, error) {

@@ -203,14 +203,14 @@ func TestRetainedCodexCompressedAndAncestor(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, archive.Close())
 	cancelCtx, cancel := context.WithCancel(ctx)
-	_, _, _, err = Retained(cancelCtx, config.Config{DataDir: seed}, database, "codex:"+thread, sourceDevice, "codex:"+thread, "codex", "", nil, 1<<20, func(_ string, _, _ []string, _ func(context.Context, string, int64) ([]byte, error)) error {
+	_, _, _, err = Retained(cancelCtx, config.Config{DataDir: seed}, database, "codex:"+thread, sourceDevice, "codex:"+thread, "codex", "", nil, 1<<20, func(_ string, _, _ []string, _ func(context.Context, string, int64) ([]byte, error), _ CodexAncestry) error {
 		cancel()
 		return cancelCtx.Err()
 	})
 	require.ErrorIs(t, err, context.Canceled)
 	require.NotErrorIs(t, err, sql.ErrTxDone)
 	var seen []string
-	_, _, source, err := Retained(ctx, config.Config{DataDir: seed}, database, "codex:"+thread, sourceDevice, "codex:"+thread, "codex", "", nil, 1<<20, func(_ string, names, _ []string, read func(context.Context, string, int64) ([]byte, error)) error {
+	_, _, source, err := Retained(ctx, config.Config{DataDir: seed}, database, "codex:"+thread, sourceDevice, "codex:"+thread, "codex", "", nil, 1<<20, func(_ string, names, _ []string, read func(context.Context, string, int64) ([]byte, error), _ CodexAncestry) error {
 		for _, name := range names {
 			got, err := read(ctx, name, 1<<20)
 			require.NoError(t, err)
@@ -350,7 +350,7 @@ func TestRetainedDirectoryReadCreatesNoSidecars(t *testing.T) {
 	require.NoError(t, err)
 	directoryMode = directoryInfo.Mode()
 	called := false
-	_, _, _, err = Retained(ctx, config.Config{ArchiveSources: []config.ArchiveSource{{Directory: seed}}}, nil, owner.NativeSessionID, sourceDevice, owner.NativeSessionID, "codex", "", []db.ArchiveSessionProvenance{owner}, 1<<20, func(_ string, _, _ []string, _ func(context.Context, string, int64) ([]byte, error)) error {
+	_, _, _, err = Retained(ctx, config.Config{ArchiveSources: []config.ArchiveSource{{Directory: seed}}}, nil, owner.NativeSessionID, sourceDevice, owner.NativeSessionID, "codex", "", []db.ArchiveSessionProvenance{owner}, 1<<20, func(_ string, _, _ []string, _ func(context.Context, string, int64) ([]byte, error), _ CodexAncestry) error {
 		called = true
 		check()
 		return nil
@@ -359,13 +359,13 @@ func TestRetainedDirectoryReadCreatesNoSidecars(t *testing.T) {
 	assert.True(t, called)
 	check()
 	callbackErr := errors.New("callback failed")
-	_, _, _, err = Retained(ctx, config.Config{ArchiveSources: []config.ArchiveSource{{Directory: seed}}}, nil, owner.NativeSessionID, sourceDevice, owner.NativeSessionID, "codex", "", []db.ArchiveSessionProvenance{owner}, 1<<20, func(_ string, _, _ []string, _ func(context.Context, string, int64) ([]byte, error)) error {
+	_, _, _, err = Retained(ctx, config.Config{ArchiveSources: []config.ArchiveSource{{Directory: seed}}}, nil, owner.NativeSessionID, sourceDevice, owner.NativeSessionID, "codex", "", []db.ArchiveSessionProvenance{owner}, 1<<20, func(_ string, _, _ []string, _ func(context.Context, string, int64) ([]byte, error), _ CodexAncestry) error {
 		return callbackErr
 	})
 	require.ErrorIs(t, err, callbackErr)
 	cancelCtx, cancel := context.WithCancel(ctx)
 	defer cancel()
-	_, _, _, err = Retained(cancelCtx, config.Config{ArchiveSources: []config.ArchiveSource{{Directory: seed}}}, nil, owner.NativeSessionID, sourceDevice, owner.NativeSessionID, "codex", "", []db.ArchiveSessionProvenance{owner}, 1<<20, func(_ string, _, _ []string, _ func(context.Context, string, int64) ([]byte, error)) error {
+	_, _, _, err = Retained(cancelCtx, config.Config{ArchiveSources: []config.ArchiveSource{{Directory: seed}}}, nil, owner.NativeSessionID, sourceDevice, owner.NativeSessionID, "codex", "", []db.ArchiveSessionProvenance{owner}, 1<<20, func(_ string, _, _ []string, _ func(context.Context, string, int64) ([]byte, error), _ CodexAncestry) error {
 		cancel()
 		return cancelCtx.Err()
 	})
