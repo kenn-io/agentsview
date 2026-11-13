@@ -3,6 +3,7 @@ package db
 import (
 	"database/sql"
 	"fmt"
+	"math"
 	"testing"
 	"time"
 
@@ -269,4 +270,23 @@ func TestPruneExpiredConversationTombstonesKeepsRetentionWindow(t *testing.T) {
 	pruned, err = d.PruneExpiredConversationTombstones(ctx, start.Add(2*retention), retention)
 	require.NoError(t, err)
 	assert.EqualValues(t, 2, pruned)
+}
+
+func TestPruneConversationTombstonesStopsOnReplacedArchive(t *testing.T) {
+	d := testDB(t)
+	seedConversationTombstones(t, d)
+	_, removed := conversationTombstoneCounts(t, d)
+	require.Positive(t, removed)
+
+	_, err := d.pruneConversationTombstonesThrough(t.Context(), math.MaxInt64, "an-earlier-generation")
+	require.ErrorIs(t, err, errConversationGenerationChanged)
+	_, after := conversationTombstoneCounts(t, d)
+	assert.Equal(t, removed, after)
+	var floor int64
+	require.NoError(t, d.Update(t.Context(), func(tx *sql.Tx) error {
+		var err error
+		floor, err = archiveJournalRevision(t.Context(), tx, conversationPrunedRevisionKey, "conversation pruned")
+		return err
+	}))
+	assert.Zero(t, floor)
 }

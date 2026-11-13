@@ -1070,9 +1070,11 @@ a compacted database before replacing the original, and truncates the
 write-ahead log (WAL). It preserves stored sessions and does not change what
 future imports retain.
 
-Compaction first removes all deleted-message records from the conversation
-export index. The daemon also removes them on its own once they are a week or
-two old, but only compaction shrinks the database file. Change-stream and
+Compaction first removes deleted-message records from the conversation export
+index, except records of messages with a native source ID, which stay so a
+returning message keeps its export ID. The daemon also removes the same records
+on its own once they are a week or two old, but only compaction shrinks the
+database file. Change-stream and
 conversation-export readers keep these records only so they can learn about a
 deletion. A reader whose position predates a removed record restarts: the change
 stream sends `reset`, and `export conversations changes` returns

@@ -331,8 +331,10 @@ generation invalidates a saved checkpoint: the command leaves stdout empty,
 writes a `reconciliation_required` JSON error to stderr, and exits with code 4.
 Reconcile the new generation rather than treating it as an empty update. The
 daemon removes deleted-message records after one to two weeks, and
-[`db compact`](/docs/commands/#agentsview-db-compact) removes them all, so a
-checkpoint saved before the newest removed record fails the same way.
+[`db compact`](/docs/commands/#agentsview-db-compact) removes them at once, so a
+checkpoint saved before the newest removed record fails the same way. Records of
+messages with a native source ID are never removed, so a returning message keeps
+its `message_id`.
 
 Native identities stored in `source_uuid` support edits, insertion and deletion
 without turning every change into another utterance. Some source formats lack

@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"maps"
+	"math"
 	"os"
 	"slices"
 	"strconv"
@@ -205,6 +206,10 @@ func testBulkReadEntryPoints(t *testing.T, blocked bool) {
 		}, nil, false},
 		{"Cursor batch", func(ctx context.Context) error {
 			_, _, err := cache.fill.readCursorBatch(ctx, 0, snapshot.CursorHighWater)
+			return err
+		}, nil, false},
+		{"conversation tombstone scan", func(ctx context.Context) error {
+			_, _, _, err := database.scanConversationTombstones(ctx, math.MaxInt64, "")
 			return err
 		}, nil, false},
 		{"unsupported signal", func(ctx context.Context) error {
