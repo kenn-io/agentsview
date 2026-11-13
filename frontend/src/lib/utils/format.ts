@@ -31,9 +31,7 @@ export function formatRelativeTime(isoString: string | null | undefined, alwaysS
   const date = new Date(isoString);
   const diffSec = Math.floor((Date.now() - date.getTime()) / 1000);
 
-  if (alwaysShowYear) {
-    return formatDateTime(date, { year: "numeric", month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" });
-  }
+  if (alwaysShowYear) return formatTimestamp(isoString, true);
 
   if (diffSec < MINUTE) return m.shared_relative_just_now();
   if (diffSec < HOUR) {
@@ -59,11 +57,14 @@ export function formatRelativeTime(isoString: string | null | undefined, alwaysS
 }
 
 /** Formats an ISO timestamp as a readable date/time string */
-export function formatTimestamp(isoString: string | null | undefined): string {
+export function formatTimestamp(
+  isoString: string | null | undefined,
+  showYear = ui.alwaysShowYear,
+): string {
   if (!isoString) return "—";
   const d = new Date(isoString);
   return formatDateTime(d, {
-    year: ui.alwaysShowYear ? "numeric" : undefined,
+    year: showYear ? "numeric" : undefined,
     month: "short",
     day: "numeric",
     hour: "2-digit",

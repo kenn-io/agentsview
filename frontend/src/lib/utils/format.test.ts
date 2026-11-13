@@ -48,6 +48,7 @@ describe("formatRelativeTime", () => {
     ui.alwaysShowYear = false;
     expect(formatRelativeTime("2024-11-11T12:00:00Z")).not.toContain("2024");
     expect(formatTimestamp("2024-11-11T12:00:00Z")).not.toContain("2024");
+    expect(formatTimestamp("2024-11-11T12:00:00Z", true)).toContain("2024");
     setLocale("zh-CN");
     ui.alwaysShowYear = true;
     expect(formatTimestamp("2024-11-11T12:00:00Z")).toContain("2024");

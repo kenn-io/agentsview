@@ -16,7 +16,7 @@
     agentLabel,
     entrypointBadge,
   } from "../../utils/agents.js";
-  import { formatCount, formatTimestamp } from "../../utils/format.js";
+  import { formatCount } from "../../utils/format.js";
   import { normalizeMessagePreview } from "../../utils/messages.js";
   import { getGradeStyle, getGradeLabel } from "../../utils/grade.js";
   import SessionFilterControl from "../filters/SessionFilterControl.svelte";
@@ -431,7 +431,18 @@
       {#if session.started_at}
         <span class="meta-group meta-time">
           <span class="session-time">
-            {formatTimestamp(session.started_at)}
+            {new Date(session.started_at).toLocaleDateString(
+              undefined,
+              {
+                year: ui.alwaysShowYear ? "numeric" : undefined,
+                month: "short",
+                day: "numeric",
+              },
+            )}
+            {new Date(session.started_at).toLocaleTimeString(
+              undefined,
+              { hour: "2-digit", minute: "2-digit" },
+            )}
           </span>
         </span>
       {/if}

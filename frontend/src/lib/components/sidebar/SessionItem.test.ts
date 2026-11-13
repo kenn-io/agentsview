@@ -5,6 +5,7 @@ import { createClassComponent } from "svelte/legacy";
 import SessionItem from "./SessionItem.svelte";
 import { sessions } from "../../stores/sessions.svelte.js";
 import { ui } from "../../stores/ui.svelte.js";
+import { formatTimestamp } from "../../utils/format.js";
 
 let component: ReturnType<typeof mount> | undefined;
 
@@ -72,9 +73,16 @@ describe("SessionItem identity", () => {
     expect(time.textContent).toBe("2m ago");
   });
 
-  it.each([false, true])("shows the full date on hover in compact=%s", (compact) => {
-    mountSession({ ended_at: "2024-06-01T12:00:00Z" }, { compact });
-    expect(document.querySelector<HTMLElement>(".session-time")?.title).toContain("2024");
+  it.each([false, true])("shows the full date and time on hover in compact=%s", (compact) => {
+    const ended = "2024-06-01T12:00:00Z";
+    mountSession({ ended_at: ended }, { compact });
+    const time = document.querySelector<HTMLElement>(".session-time")!;
+    expect(time.title).toBe(formatTimestamp(ended, true));
+    expect(time.textContent).not.toContain("2024");
+    ui.alwaysShowYear = true;
+    flushSync();
+    expect(time.textContent).toBe(formatTimestamp(ended, true));
+    expect(time.title).toBe(formatTimestamp(ended, true));
   });
 
   it("updates a mounted row when its title arrives", () => {

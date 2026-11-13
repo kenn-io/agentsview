@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { describe, it, expect, vi, beforeEach, afterEach } from "vite-plus/test";
+import { describe, it, expect, vi, beforeEach, afterEach, onTestFinished } from "vite-plus/test";
 import { mount as mountComponent, unmount as unmountComponent, tick } from "svelte";
 import { createClassComponent as createLegacyComponent } from "svelte/legacy";
 // @ts-ignore
@@ -398,16 +398,28 @@ afterEach(() => {
 });
 
 describe("SessionBreadcrumb", () => {
-  it("updates the session date when the year setting changes", async () => {
+  it("keeps the browser's regional date and clock, adding the year when set", async () => {
+    const dateSpy = vi
+      .spyOn(Date.prototype, "toLocaleDateString")
+      .mockImplementation(function (_locale, options) {
+        return options?.year ? "20 Feb 2026" : "20 Feb";
+      });
+    const timeSpy = vi.spyOn(Date.prototype, "toLocaleTimeString").mockReturnValue("14:30");
+    onTestFinished(() => {
+      dateSpy.mockRestore();
+      timeSpy.mockRestore();
+    });
     mount(SessionBreadcrumb, {
       target: document.body,
       props: { session: makeSession("claude"), onBack: () => {} },
     });
     await tick();
-    expect(document.querySelector(".session-time")?.textContent).not.toContain("2026");
+    const time = () => document.querySelector(".session-time")?.textContent?.replace(/\s+/g, " ").trim();
+    expect(time()).toBe("20 Feb 14:30");
     ui.toggleAlwaysShowYear();
     await tick();
-    expect(document.querySelector(".session-time")?.textContent).toContain("2026");
+    expect(time()).toBe("20 Feb 2026 14:30");
+    expect(dateSpy).toHaveBeenLastCalledWith(undefined, expect.objectContaining({ year: "numeric" }));
   });
 
   it("places the desktop expand control to the left of the relocated filter", async () => {
