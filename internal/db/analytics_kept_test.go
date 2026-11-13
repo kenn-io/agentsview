@@ -244,3 +244,69 @@ func TestAnalyticsKeptTerminationClock(t *testing.T) {
 		assert.Zero(t, after.TotalCalls)
 	})
 }
+
+func TestTrendsKeptTracksContentAndSelection(t *testing.T) {
+	d := testDB(t)
+	ctx := t.Context()
+	insertSession(t, d, "session", "project", func(s *Session) { s.StartedAt = new("2024-06-01T09:00:00Z"); s.MessageCount = 1 })
+	messages := []Message{{SessionID: "session", Ordinal: 0, Role: "user", Content: "alpha", ContentLength: 5, Timestamp: "2024-06-01T09:00:00Z"}}
+	insertMessages(t, d, messages...)
+	f := AnalyticsFilter{From: "2024-06-01", To: "2024-06-02", Timezone: "UTC", Project: "project"}
+	terms := []TrendTermInput{{Term: "alpha", Variants: []string{"alpha"}, Matchers: []string{"alpha"}}}
+	read := func() TrendsTermsResponse {
+		result, err := d.GetTrendsTerms(ctx, f, terms, "week")
+		require.NoError(t, err)
+		return result
+	}
+	require.Equal(t, 1, read().Series[0].Total)
+	messages[0].Content = "bravo"
+	require.NoError(t, d.ReplaceSessionContent(ctx, "session", messages, SessionSignalUpdate{}, nil))
+	after := read()
+	require.Zero(t, after.Series[0].Total)
+	fresh, err := d.trendsTerms(ctx, f, terms, "week")
+	require.NoError(t, err)
+	require.Equal(t, fresh, after)
+	messages = append(messages, Message{SessionID: "session", Ordinal: 1, Role: "assistant", Content: "alpha", ContentLength: 5, Timestamp: "2024-06-01T09:01:00Z"})
+	require.NoError(t, d.ReplaceSessionContent(ctx, "session", messages, SessionSignalUpdate{}, nil))
+	require.Equal(t, 1, read().Series[0].Total)
+	session, err := d.GetSession(ctx, "session")
+	require.NoError(t, err)
+	session.Project = "other"
+	require.NoError(t, d.UpsertSession(ctx, *session))
+	require.Zero(t, read().Series[0].Total)
+	require.NoError(t, d.SoftDeleteSession(ctx, "session"))
+	f.Project = ""
+	require.Zero(t, read().Series[0].Total)
+}
+
+func TestTrendsKeptSelection(t *testing.T) {
+	d := testDB(t)
+	insertSession(t, d, "session", "project")
+	insertMessages(t, d, Message{SessionID: "session", Ordinal: 0, Role: "user", Content: "alpha bravo", Timestamp: "2024-06-01T00:30:00Z"})
+	f := AnalyticsFilter{From: "2024-05-31", To: "2024-06-01", Timezone: "UTC"}
+	a := TrendTermInput{Term: "alpha", Variants: []string{"alpha"}, Matchers: []string{"alpha"}}
+	b := TrendTermInput{Term: "bravo", Variants: []string{"bravo"}, Matchers: []string{"bravo"}}
+	base, err := d.GetTrendsTerms(t.Context(), f, []TrendTermInput{a, b}, "")
+	require.NoError(t, err)
+	week, err := d.GetTrendsTerms(t.Context(), f, []TrendTermInput{a, b}, "week")
+	require.NoError(t, err)
+	require.Equal(t, base, week)
+	reversed, err := d.GetTrendsTerms(t.Context(), f, []TrendTermInput{b, a}, "week")
+	require.NoError(t, err)
+	require.Equal(t, "bravo", reversed.Series[0].Term)
+	day, err := d.GetTrendsTerms(t.Context(), f, []TrendTermInput{a, b}, "day")
+	require.NoError(t, err)
+	require.Equal(t, "day", day.Granularity)
+	a.Variants = []string{"different"}
+	variant, err := d.GetTrendsTerms(t.Context(), f, []TrendTermInput{a, b}, "week")
+	require.NoError(t, err)
+	require.Equal(t, []string{"different"}, variant.Series[0].Variants)
+	a.Matchers = []string{"absent"}
+	matcher, err := d.GetTrendsTerms(t.Context(), f, []TrendTermInput{a, b}, "week")
+	require.NoError(t, err)
+	require.Zero(t, matcher.Series[0].Total)
+	f.Timezone = "America/New_York"
+	zoned, err := d.GetTrendsTerms(t.Context(), f, []TrendTermInput{b}, "day")
+	require.NoError(t, err)
+	require.Equal(t, "2024-05-31", zoned.Series[0].Points[0].Date)
+}
