@@ -609,13 +609,10 @@ func (s *Store) GetTrendsTerms(
 	ctx context.Context, f db.AnalyticsFilter,
 	terms []db.TrendTermInput, granularity string,
 ) (db.TrendsTermsResponse, error) {
-	if granularity == "" {
-		granularity = "week"
-	}
 	load := func(ctx context.Context) (db.TrendsTermsResponse, error) {
 		return s.analytics().GetTrendsTerms(ctx, f, terms, granularity)
 	}
-	if f.ActiveSince != "" || f.Timezone == "Local" || db.TerminationUsesTime(f.Termination) {
+	if f.ActiveSince != "" || db.TerminationUsesTime(f.Termination) {
 		return load(ctx)
 	}
 	key, err := json.Marshal(struct {

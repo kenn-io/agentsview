@@ -101,7 +101,8 @@ type Store struct {
 	topSessionTotals kept.Memo[db.TopSessionEntry]
 	// analyticsSessionRows keeps recent analytics session listings.
 	analyticsSessionRows kept.Memo[readbase.AnalyticsSession]
-	trendsReads          kept.Reads[db.TrendsTermsResponse]
+	// trendsReads keeps finished Trends reports by selection and parts fingerprint.
+	trendsReads kept.Reads[db.TrendsTermsResponse]
 	// analyticsListings shares one listing read among concurrent requests.
 	analyticsListings singleflight.Group
 	// activitySessions keeps activity pairing inputs per session version.

@@ -3,6 +3,7 @@
 package postgres
 
 import (
+	"context"
 	"database/sql"
 	"encoding/base64"
 	"github.com/stretchr/testify/assert"
@@ -464,4 +465,80 @@ func TestHostedUnresolvedPinRetainsCreationTime(t *testing.T) {
 	assert.True(t, after[0].Unresolved)
 	assert.Equal(t, before[0].CreatedAt, after[0].CreatedAt)
 	assert.NotEmpty(t, after[0].CreatedAt)
+}
+
+type hostedTrendsCounter struct{ *analyticsReadCounter }
+
+func (c *hostedTrendsCounter) QueryRowContext(ctx context.Context, query string, args ...any) *sql.Row {
+	c.mu.Lock()
+	c.reads++
+	c.mu.Unlock()
+	return c.storeExecutor.QueryRowContext(ctx, query, args...)
+}
+
+func TestHostedTrendsKeptPublicationAndSnapshot(t *testing.T) {
+	f := newProjectionFixture(t)
+	ctx := t.Context()
+	m, accepted := f.accept(t, "device-a", "capture-a", "")
+	require.NoError(t, f.sink.Project(ctx, f.lease(t, m), m, projectionOutcome("alpha")))
+	h, err := newHostedAdapter(ctx, f.runtime, f.tenant)
+	require.NoError(t, err)
+	counter := &hostedTrendsCounter{&analyticsReadCounter{storeExecutor: h.physical.pg}}
+	h.physical.pg = counter
+	filter := db.AnalyticsFilter{From: "2026-01-01", To: "2026-01-02", Timezone: "UTC"}
+	terms := []db.TrendTermInput{{Term: "alpha", Variants: []string{"alpha"}, Matchers: []string{"alpha"}}}
+	read := func(f db.AnalyticsFilter) db.TrendsTermsResponse {
+		result, err := h.GetTrendsTerms(ctx, f, terms, "day")
+		require.NoError(t, err)
+		return result
+	}
+	first := read(filter)
+	require.Equal(t, 1, first.Series[0].Total)
+	count := counter.count()
+	require.Equal(t, first, read(filter))
+	require.Equal(t, count+1, counter.count())
+	canceled, cancel := context.WithCancel(ctx)
+	cancel()
+	_, err = h.GetTrendsTerms(canceled, filter, terms, "day")
+	require.ErrorIs(t, err, context.Canceled)
+	next, _ := f.accept(t, "device-a", "capture-b", accepted.Receipt)
+	require.NoError(t, f.sink.Project(ctx, f.lease(t, next), next, projectionOutcome("bravo")))
+	require.Zero(t, read(filter).Series[0].Total)
+
+	local := testDB(t)
+	session := db.Session{ID: "legacy-session", Project: "legacy", Machine: "device-b", Agent: "claude", StartedAt: new("2026-01-01T01:00:00Z"), MessageCount: 1}
+	messages := []db.Message{{SessionID: session.ID, Ordinal: 0, Role: "user", Content: "alpha", Timestamp: "2026-01-01T01:00:00Z"}}
+	_, err = local.WriteSessionBatchAtomic(ctx, []db.SessionBatchWrite{{Session: session, Messages: messages, DataVersion: 1, ReplaceMessages: true}})
+	require.NoError(t, err)
+	syncer := &Sync{pg: f.runtime, local: local, machine: "device-b", schema: f.schema, schemaDone: true}
+	pushed, err := syncer.Push(ctx, false, nil)
+	require.NoError(t, err)
+	require.Empty(t, pushed.Errors)
+	require.Equal(t, 1, pushed.SessionsPushed)
+	legacy := filter
+	legacy.Project = "legacy"
+	require.Equal(t, 1, read(legacy).Series[0].Total)
+
+	_, err = hostedRead(ctx, h, func(view *HostedStore, _ hostedRevision) (struct{}, error) {
+		viewCounter := &analyticsReadCounter{storeExecutor: view.physical.pg}
+		view.physical.pg = viewCounter
+		before, err := view.GetTrendsTerms(ctx, legacy, terms, "day")
+		require.NoError(t, err)
+		require.Equal(t, 1, before.Series[0].Total)
+		session.Project = "other"
+		_, err = local.WriteSessionBatchAtomic(ctx, []db.SessionBatchWrite{{Session: session, Messages: messages, DataVersion: 1, ReplaceMessages: false}})
+		require.NoError(t, err)
+		pushed, err := syncer.Push(ctx, false, nil)
+		require.NoError(t, err)
+		require.Empty(t, pushed.Errors)
+		require.Equal(t, 1, pushed.SessionsPushed)
+		reads := viewCounter.count()
+		after, err := view.GetTrendsTerms(ctx, legacy, terms, "day")
+		require.NoError(t, err)
+		require.Equal(t, 1, after.Series[0].Total)
+		require.Greater(t, viewCounter.count(), reads)
+		return struct{}{}, nil
+	})
+	require.NoError(t, err)
+	require.Zero(t, read(legacy).Series[0].Total)
 }

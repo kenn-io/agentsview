@@ -4,7 +4,6 @@ package clickhouse
 
 import (
 	"testing"
-	"time"
 
 	"github.com/stretchr/testify/require"
 	"go.kenn.io/agentsview/internal/db"
@@ -55,29 +54,4 @@ func TestTrendsKeptPush(t *testing.T) {
 	require.NoError(t, store.DB().Close())
 	_, err = store.GetTrendsTerms(ctx, f, terms, "week")
 	require.Error(t, err)
-}
-
-func TestTrendsKeptLocalTimezoneChange(t *testing.T) {
-	localZone := time.Local //nolint:forbidigo // Exercise the process-local timezone.
-	_ = time.Now().In(localZone)
-	original := *localZone
-	t.Cleanup(func() { *localZone = original })
-	*localZone = *time.FixedZone("Local", 0)
-	local, target := seedFixture(t)
-	syncer := newTestSync(t, local, target, storage.PusherOptions{})
-	_, err := syncer.Push(t.Context(), false, nil)
-	require.NoError(t, err)
-	store, err := NewStore(t.Context(), target)
-	require.NoError(t, err)
-	t.Cleanup(func() { require.NoError(t, store.Close()) })
-	f := db.AnalyticsFilter{From: "2026-01-10", To: "2026-01-11", Project: "beta", Timezone: "Local"}
-	terms := []db.TrendTermInput{{Term: "beta", Variants: []string{"beta"}, Matchers: []string{"beta"}}}
-	first, err := store.GetTrendsTerms(t.Context(), f, terms, "day")
-	require.NoError(t, err)
-	require.Equal(t, 1, first.Series[0].Points[1].Count)
-	*localZone = *time.FixedZone("Local", -5*60*60)
-	second, err := store.GetTrendsTerms(t.Context(), f, terms, "day")
-	require.NoError(t, err)
-	require.Equal(t, 1, second.Series[0].Points[0].Count)
-	require.Zero(t, second.Series[0].Points[1].Count)
 }

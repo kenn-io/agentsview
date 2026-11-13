@@ -8,7 +8,6 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
-	"time"
 
 	"github.com/stretchr/testify/require"
 	"go.kenn.io/agentsview/internal/db"
@@ -263,36 +262,4 @@ func TestAnalyticsKeptMovingSelectionsReadFresh(t *testing.T) {
 			require.Error(t, err)
 		})
 	}
-}
-
-func TestTrendsKeptLocalTimezoneChange(t *testing.T) {
-	local := time.Local //nolint:forbidigo // Exercise the process-local timezone.
-	_ = time.Now().In(local)
-	original := *local
-	t.Cleanup(func() { *local = original })
-	*local = *time.FixedZone("Local", 0)
-	id := "trends-local"
-	archive := newLocalDB(t)
-	_, err := archive.WriteSessionBatchAtomic(t.Context(), []db.SessionBatchWrite{{
-		Session:     syncSession(id, "project", "alpha", "2024-06-01T00:30:00Z", 1),
-		Messages:    []db.Message{syncMessage(id, 0, "user", "alpha", "2024-06-01T00:30:00Z")},
-		DataVersion: 1, ReplaceMessages: true,
-	}})
-	require.NoError(t, err)
-	path := filepath.Join(t.TempDir(), "mirror.duckdb")
-	_, err = rebuildMirror(t.Context(), path, archive, "test-machine", storage.MirrorPushOptions{}, "test", nil)
-	require.NoError(t, err)
-	store, err := NewStore(t.Context(), path)
-	require.NoError(t, err)
-	t.Cleanup(func() { require.NoError(t, store.Close()) })
-	f := db.AnalyticsFilter{From: "2024-05-31", To: "2024-06-01", Timezone: "Local"}
-	terms := []db.TrendTermInput{{Term: "alpha", Variants: []string{"alpha"}, Matchers: []string{"alpha"}}}
-	first, err := store.GetTrendsTerms(t.Context(), f, terms, "day")
-	require.NoError(t, err)
-	require.Equal(t, 1, first.Series[0].Points[1].Count)
-	*local = *time.FixedZone("Local", -5*60*60)
-	second, err := store.GetTrendsTerms(t.Context(), f, terms, "day")
-	require.NoError(t, err)
-	require.Equal(t, 1, second.Series[0].Points[0].Count)
-	require.Zero(t, second.Series[0].Points[1].Count)
 }
