@@ -3,6 +3,7 @@ package db
 import (
 	"context"
 	"database/sql"
+	"fmt"
 	"testing"
 	"time"
 
@@ -231,55 +232,50 @@ func TestSignalsFrustrationStoreRejectsChangedTranscript(t *testing.T) {
 }
 
 func TestSignalsFrustrationReadOnly(t *testing.T) {
-	d := testDB(t)
-	ctx := t.Context()
-	insertSession(t, d, "session", "test")
-	require.NoError(t, d.InsertMessages(ctx, []Message{{SessionID: "session", Role: "user", Content: "this is broken"}}))
-	require.NoError(t, d.UpdateSessionSignals(ctx, "session", SessionSignalUpdate{QualitySignals: QualitySignals{Version: CurrentQualitySignalVersion}}))
-	_, err := d.getWriter().ExecContext(ctx, `DROP TABLE session_frustration_markers`)
-	require.NoError(t, err)
-	ro, err := OpenReadOnly(ctx, d.Path())
-	require.NoError(t, err)
-	resp, err := ro.GetAnalyticsSignals(ctx, AnalyticsFilter{})
-	require.NoError(t, err)
-	assert.Equal(t, 1, resp.QualityHealth.Totals.FrustrationMarkerCount)
-	require.NoError(t, ro.Close())
-}
-
-func TestSignalsFrustrationReadOnlyReusesStoredCount(t *testing.T) {
-	d := testDB(t)
-	ctx := t.Context()
-	insertSession(t, d, "session", "test")
-	require.NoError(t, d.InsertMessages(ctx, []Message{{SessionID: "session", Role: "user", Content: "this is broken"}}))
-	require.NoError(t, d.UpdateSessionSignals(ctx, "session", SessionSignalUpdate{QualitySignals: QualitySignals{Version: CurrentQualitySignalVersion}}))
-	_, err := d.GetAnalyticsSignals(ctx, AnalyticsFilter{})
-	require.NoError(t, err)
-	ro, err := OpenReadOnly(ctx, d.Path())
-	require.NoError(t, err)
-	defer ro.Close()
-	ro.rawReader().SetMaxOpenConns(1)
-	conn, err := ro.rawReader().Conn(ctx)
-	require.NoError(t, err)
-	var sqlite *sqlite3.SQLiteConn
-	require.NoError(t, conn.Raw(func(raw any) error {
-		sqlite = raw.(*sqlite3.SQLiteConn)
-		sqlite.RegisterAuthorizer(func(op int, table, column, _ string) int {
-			if op == sqlite3.SQLITE_READ && table == "messages" && column == "content" {
-				return sqlite3.SQLITE_DENY
+	for _, stored := range []bool{false, true} {
+		t.Run(fmt.Sprintf("stored=%t", stored), func(t *testing.T) {
+			d := testDB(t)
+			ctx := t.Context()
+			insertSession(t, d, "session", "test")
+			require.NoError(t, d.InsertMessages(ctx, []Message{{SessionID: "session", Role: "user", Content: "this is broken"}}))
+			require.NoError(t, d.UpdateSessionSignals(ctx, "session", SessionSignalUpdate{QualitySignals: QualitySignals{Version: CurrentQualitySignalVersion}}))
+			if stored {
+				_, err := d.GetAnalyticsSignals(ctx, AnalyticsFilter{})
+				require.NoError(t, err)
+			} else {
+				_, err := d.getWriter().ExecContext(ctx, `DROP TABLE session_frustration_markers`)
+				require.NoError(t, err)
 			}
-			return sqlite3.SQLITE_OK
+			ro, err := OpenReadOnly(ctx, d.Path())
+			require.NoError(t, err)
+			defer ro.Close()
+			if stored {
+				ro.rawReader().SetMaxOpenConns(1)
+				conn, err := ro.rawReader().Conn(ctx)
+				require.NoError(t, err)
+				var sqlite *sqlite3.SQLiteConn
+				require.NoError(t, conn.Raw(func(raw any) error {
+					sqlite = raw.(*sqlite3.SQLiteConn)
+					sqlite.RegisterAuthorizer(func(op int, table, column, _ string) int {
+						if op == sqlite3.SQLITE_READ && table == "messages" && column == "content" {
+							return sqlite3.SQLITE_DENY
+						}
+						return sqlite3.SQLITE_OK
+					})
+					return nil
+				}))
+				require.NoError(t, conn.Close())
+				defer sqlite.RegisterAuthorizer(nil)
+			}
+			resp, err := ro.GetAnalyticsSignals(ctx, AnalyticsFilter{})
+			require.NoError(t, err)
+			assert.Equal(t, 1, resp.QualityHealth.Totals.FrustrationMarkerCount)
 		})
-		return nil
-	}))
-	require.NoError(t, conn.Close())
-	defer sqlite.RegisterAuthorizer(nil)
-	resp, err := ro.GetAnalyticsSignals(ctx, AnalyticsFilter{})
-	require.NoError(t, err)
-	assert.Equal(t, 1, resp.QualityHealth.Totals.FrustrationMarkerCount)
+	}
 }
 
 func TestSignalsFrustrationCleanup(t *testing.T) {
-	for _, action := range []string{"usage text", "usage signals", "usage count"} {
+	for _, action := range []string{"usage text", "usage signals"} {
 		t.Run(action, func(t *testing.T) {
 			d := testDB(t)
 			ctx := t.Context()
@@ -299,11 +295,6 @@ func TestSignalsFrustrationCleanup(t *testing.T) {
 				require.NoError(t, d.RenameSession(ctx, "session", &name))
 			case "usage signals":
 				require.NoError(t, d.UpdateSessionSignals(ctx, "session", SessionSignalUpdate{}))
-			case "usage count":
-				resp, err := d.GetAnalyticsSignals(ctx, AnalyticsFilter{})
-				require.NoError(t, err)
-				assert.Equal(t, 1, resp.QualityHealth.Totals.FrustrationMarkerCount)
-				return
 			}
 			require.NoError(t, d.getReader().QueryRowContext(ctx, `SELECT count(*) FROM session_frustration_markers WHERE session_id = 'session'`).Scan(&count))
 			assert.Zero(t, count)

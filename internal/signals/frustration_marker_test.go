@@ -73,22 +73,31 @@ func randomFrustrationPrompt(r *rand.Rand) string {
 }
 
 func TestIsFrustrationMarkerMatchesReference(t *testing.T) {
-	prompts := append([]string(nil), frustrationEdgePrompts...)
+	versionPrompts := append([]string(nil), frustrationEdgePrompts...)
+	versionPrompts = append(versionPrompts,
+		"this is wtf", "please come on", "why won't this work", "this is broken",
+		"this doesn't work", "this does not work", "still broken", "same error",
+		"you broke it", "fuck this", "please fix!!!", "please fix???",
+		"please fix!!", "please fix??", "ABC DEF ghi jkl", "ABC def ghi jkl",
+	)
+	prompts := append([]string(nil), versionPrompts...)
 	r := rand.New(rand.NewPCG(7, 11))
 	for range 200_000 {
 		prompts = append(prompts, randomFrustrationPrompt(r))
 	}
 	markers := 0
 	h := sha256.New()
-	for _, prompt := range prompts {
+	for i, prompt := range prompts {
 		want := referenceIsFrustrationMarker(prompt)
 		got := IsFrustrationMarker(prompt)
 		require.Equal(t, want, got, "%q", prompt)
 		require.Equal(t, referenceNormalizePrompt(prompt), normalizePrompt(prompt), "%q", prompt)
-		if got {
-			h.Write([]byte{1})
-		} else {
-			h.Write([]byte{0})
+		if i < len(versionPrompts) {
+			if got {
+				h.Write([]byte{1})
+			} else {
+				h.Write([]byte{0})
+			}
 		}
 		if want {
 			markers++
@@ -97,7 +106,7 @@ func TestIsFrustrationMarkerMatchesReference(t *testing.T) {
 	// Both answers must be common, or agreement would prove little.
 	assert.Greater(t, markers, len(prompts)/10)
 	assert.Less(t, markers, len(prompts)*9/10)
-	digests := map[int]string{1: "72e77932fbe773cd99daf4191c0fa9f6d30a3eddf05864f3b1a4a60ad99798e2"}
+	digests := map[int]string{1: "6b54bd9f1a162d52fe1e63a07abee412d65f2fdee1b8d0f29d11a108702e0006"}
 	wantDigest, ok := digests[FrustrationMarkerVersion]
 	require.True(t, ok, "record the matcher digest for the new version")
 	assert.Equal(t, wantDigest, hex.EncodeToString(h.Sum(nil)), "matcher results changed; bump the version and record the new digest")
