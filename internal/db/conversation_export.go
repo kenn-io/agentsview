@@ -16,6 +16,7 @@ import (
 	"unicode/utf8"
 
 	"go.kenn.io/agentsview/internal/export"
+	"go.kenn.io/agentsview/internal/secrets"
 )
 
 const conversationRevisionKey = "conversation_publication_revision"
@@ -73,17 +74,24 @@ type ConversationMessageOptions struct {
 	Revision   string
 	Offset     int64
 	MaxBytes   int
+	// RevealSecrets returns the stored text unchanged. By default every
+	// secret-shaped span is masked as the UI masks it, and offsets index the
+	// masked text.
+	RevealSecrets bool
 }
 
 type ConversationMessage struct {
 	TextMode string `json:"text_mode,omitempty"`
 	ConversationChange
-	SchemaVersion int     `json:"schema_version"`
-	ArchiveID     string  `json:"archive_id"`
-	DatabaseID    string  `json:"database_id"`
-	Offset        int64   `json:"offset"`
-	NextOffset    int64   `json:"next_offset"`
-	Text          *string `json:"text"`
+	SchemaVersion int    `json:"schema_version"`
+	ArchiveID     string `json:"archive_id"`
+	DatabaseID    string `json:"database_id"`
+	Offset        int64  `json:"offset"`
+	NextOffset    int64  `json:"next_offset"`
+	// Redacted reports that secrets were masked, so the text and TextBytes
+	// differ from the stored message the Digest identifies.
+	Redacted bool    `json:"redacted,omitzero"`
+	Text     *string `json:"text"`
 }
 
 type conversationPosition struct {
@@ -298,9 +306,6 @@ func (db *DB) GetConversationMessage(ctx context.Context, opts ConversationMessa
 	if result.Deleted || result.Revision != opts.Revision {
 		return ConversationMessage{}, ErrConversationRevisionChanged
 	}
-	if opts.Offset > result.TextBytes {
-		return ConversationMessage{}, errors.New("offset exceeds message text length")
-	}
 	changes := []ConversationChange{result.ConversationChange}
 	if err := db.attachConversationMetadata(ctx, tx, result.ArchiveID, changes, mode); err != nil {
 		return ConversationMessage{}, err
@@ -321,6 +326,18 @@ func (db *DB) GetConversationMessage(ctx context.Context, opts ConversationMessa
 		if sum := sha256.Sum256([]byte(text)); hex.EncodeToString(sum[:]) != result.Digest {
 			return ConversationMessage{}, ErrConversationRevisionChanged
 		}
+		if !opts.RevealSecrets {
+			// Mask the whole message before chunking so a secret that spans
+			// a chunk boundary is still recognized and every chunk indexes
+			// the same masked text.
+			if masked := secrets.Redact(text); masked != text {
+				text, result.Redacted = masked, true
+				result.TextBytes = int64(len(text))
+			}
+		}
+		if opts.Offset > result.TextBytes {
+			return ConversationMessage{}, errors.New("offset exceeds message text length")
+		}
 		chunk := text[opts.Offset : opts.Offset+min(int64(len(text))-opts.Offset, int64(opts.MaxBytes))]
 		if len(chunk) > 0 && !utf8.RuneStart(chunk[0]) {
 			return ConversationMessage{}, errors.New("offset is not a UTF-8 boundary")
@@ -330,6 +347,8 @@ func (db *DB) GetConversationMessage(ctx context.Context, opts ConversationMessa
 		}
 		// Clone so a small chunk does not pin the whole message in memory.
 		result.Text, result.NextOffset = new(strings.Clone(chunk)), opts.Offset+int64(len(chunk))
+	} else if opts.Offset > result.TextBytes {
+		return ConversationMessage{}, errors.New("offset exceeds message text length")
 	}
 	if err := tx.Commit(); err != nil {
 		return ConversationMessage{}, err

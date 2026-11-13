@@ -22,7 +22,7 @@ func (s *Store) runtimeState() *storeRuntime {
 	s.runtimeOnce.Do(func() {
 		if s.runtime == nil {
 			s.runtime = &storeRuntime{
-				activityInputs: kept.Memo[pgActivityInputs]{MaxBytes: 128 << 20, Size: pgActivityInputBytes},
+				activityInputs: kept.Memo[pgActivityInputs]{MaxBytes: 256 << 20, Size: pgActivityInputBytes},
 				activityKept: kept.Memo[pgActivityKept]{
 					MaxBytes: 128 << 20,
 					Size: func(e pgActivityKept) int64 {

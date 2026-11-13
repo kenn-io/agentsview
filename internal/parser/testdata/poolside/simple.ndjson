@@ -1,0 +1,4 @@
+{"id":"event-1","timestamp":"2026-07-08T07:20:51.089334-04:00","type":"session.start","session_start":{"workspace":"","working_directories":["/home/user/code/app"],"prompt":""}}
+{"id":"event-2","timestamp":"2026-07-08T07:20:51.092132-04:00","type":"session.input","session_input":{"id":"","prompt":"Hello, can you help me?","estimated_prompt_token_usage":10,"mode":"build"}}
+{"id":"event-3","timestamp":"2026-07-08T07:20:55.564843-04:00","type":"assistant_message.start","assistant_message_start":{}}
+{"id":"event-4","timestamp":"2026-07-08T07:20:56.000000-04:00","type":"assistant_message.end","assistant_message_end":{"assistant_message":"I can help you with that."}}

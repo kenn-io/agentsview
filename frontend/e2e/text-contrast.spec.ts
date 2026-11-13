@@ -193,10 +193,14 @@ for (const [mode, highContrast] of THEMES) {
       await page.locator(".kit-find-bar__input").fill("e");
       const rail = page.locator(".find-overview-rail");
       await expect(rail.locator(".tick.current")).toHaveCount(1);
-      const track = await rail.locator(".track").evaluate((el) => getComputedStyle(el).fill);
-      const ticks = await rail
-        .locator(".tick")
-        .evaluateAll((els) => [...new Set(els.map((el) => getComputedStyle(el).fill))]);
+      // History loading can replace ticks between evaluateAll's selection
+      // and callback. Read connected descendants in one browser callback.
+      const { track, ticks } = await rail.evaluate((el) => ({
+        track: getComputedStyle(el.querySelector(".track")!).fill,
+        ticks: [
+          ...new Set([...el.querySelectorAll(".tick")].map((tick) => getComputedStyle(tick).fill)),
+        ],
+      }));
       expect(ticks.length).toBeGreaterThanOrEqual(2);
       for (const tick of ticks) {
         const contrast = await renderedContrast(rail, { foreground: tick, background: track });

@@ -1,0 +1,7 @@
+{"type": "metadata", "protocol_version": "1.3"}
+{"timestamp": 1704067200.0, "message": {"type": "TurnBegin", "payload": {"user_input": [{"type": "text", "text": "List the Go files in this module"}]}}}
+{"timestamp": 1704067201.0, "message": {"type": "ContentPart", "payload": {"type": "think", "think": "A glob will do.", "encrypted": null}}}
+{"timestamp": 1704067202.0, "message": {"type": "ToolCall", "payload": {"type": "function", "id": "tool_1", "function": {"name": "Glob", "arguments": "{\"pattern\": \"*.go\"}"}, "extras": null}}}
+{"timestamp": 1704067203.0, "message": {"type": "ToolResult", "payload": {"tool_call_id": "tool_1", "return_value": {"is_error": false, "output": "main.go\nutil.go"}}}}
+{"timestamp": 1704067204.0, "message": {"type": "ContentPart", "payload": {"type": "text", "text": "There are two files: main.go and util.go."}}}
+{"timestamp": 1704067205.0, "message": {"type": "TurnEnd", "payload": {}}}

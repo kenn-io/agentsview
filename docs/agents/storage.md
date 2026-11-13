@@ -753,6 +753,23 @@ Keep identity-only corrections in the reporting digest. The wire contract is in
   message counts and project maps; SQL, pricing, caches and read lifetimes
   stay in each backend. Daily usage query strategies and aggregation loops
   remain per backend.
+- DuckDB Activity reports select, price, and sum usage in SQL with
+  `sumActivityUsage`, and derive session runs in SQL with `activitySessionRuns`,
+  both in `internal/duckdb`. Go resolves each model to its rates over the range
+  as a schedule of segments; SQL picks a row's segment and pricing band and does
+  the integer cost math. The SQLite, PostgreSQL, and ClickHouse reports keep the
+  Go rules in `internal/activity`, because the SQL was slower for them on a
+  one-year archive of 30,000 sessions:
+  - SQLite: the usage step took 6.2 s in SQL and 0.99 s in Go, 6.3x slower. One
+    sort of the 600,000 usage rows already takes 1.1 s, and the rules need
+    several. The runs SQL took 11.1 s against 1.9 s for the Go pairing, 5.8x
+    slower, even with an inexact stand-in for DuckDB's
+    `last_value(... IGNORE NULLS)`, which SQLite lacks.
+  - PostgreSQL: the usage selection alone took 1.86 s at best, against about 1 s
+    for the whole Go usage step, at least 1.9x slower.
+  - ClickHouse: the SQL was up to 1.7x faster cold, but reopening a range that
+    includes today was 1.2x to 2.8x slower than the kept usage ranges and
+    pairing memo.
 
 ### Harness-recorded costs
 
@@ -1023,7 +1040,7 @@ on its pool, with the message read split into one slice per 4,096 sessions, up
 to two; a read snapshot shares one transaction, so there they run in turn. Both
 then derive each session's runs on every available core through
 `activity.DeriveSessionRunsInParallel`, which gives the runs the merged
-candidate stream gives. DuckDB keeps its reads in turn on its single connection.
+candidate stream gives.
 
 The terminal candidates query names `idx_messages_assistant_model` with
 `INDEXED BY` for its prior-model lookup. The wider velocity index also covers
@@ -1037,8 +1054,14 @@ or an in-window Claude peer changes; a changed project identity map also
 invalidates it. Partial reports, read-only archives, and reports filtered by
 active, stale, or unclean termination status bypass this cache.
 
+SQLite uses `usage_change_revision` and `analytics_change_revision` to invalidate
+kept Tools, Velocity, and Signals reports. Tool-call updates and deletes, message
+content-length repairs, and signal updates advance the analytics counter.
+Read-only archives and reports filtered by active, stale, or unclean termination
+status bypass this cache.
+
 PostgreSQL keeps ongoing Activity reports' per-session activity and raw usage
-inputs in memory with a 128 MiB estimated-size budget. Each session keeps its
+inputs in memory with a 256 MiB estimated-size budget. Each session keeps its
 runs and the ascending times of its counted user and assistant messages, derived
 from one pairing over all time: the candidates a report range leaves out are
 ones the aggregator rejects for that range anyway, so one entry serves every
@@ -1059,12 +1082,13 @@ DuckDB keeps each session's runs and counted message times in memory per session
 and gap cap, within a 128 MiB budget, at the session's
 `agentsview_push_fingerprint`. A push changes that fingerprint whenever a
 session's messages or tool events change, so entries survive mirror replacements
-and a refresh pairs only changed sessions. A session without a fingerprint is
-paired on every report. Like PostgreSQL, DuckDB pairs over all time and clips
-runs at the effective end cast to its microsecond `TIMESTAMP`. On the same
-scratch data, the kept runs took 74 MiB, and a refresh with ten changed sessions
-spent 328 ms pairing instead of 3.4 s, 224 ms sweeping instead of 1.1 s, and 42
-ms counting messages instead of 593 ms.
+and a refresh derives only changed sessions. A session without a fingerprint is
+derived on every report. DuckDB derives the runs over all time in one SQL query,
+`activitySessionRuns`, which pairs, caps, and trims the candidates and returns
+each run's pieces, and clips them at the report's effective end. On the same
+scratch data, deriving every session took 2.4 s instead of 4.8 s (2.0x), the
+kept runs took 74 MiB, and a refresh with ten changed sessions spent 189 ms
+instead of 315 ms on runs (1.7x), 216 ms sweeping, and 46 ms counting messages.
 
 ### PostgreSQL push preparation indexes
 

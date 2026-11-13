@@ -12,6 +12,70 @@ import (
 	"go.kenn.io/agentsview/internal/parser"
 )
 
+func TestReconcileJunieRefreshesMetadataWithoutChangedPathEvent(t *testing.T) {
+	for _, tc := range []struct {
+		name              string
+		force, descendant bool
+	}{
+		{name: "root"},
+		{name: "session", descendant: true},
+		{name: "lost root", force: true},
+		{name: "lost session", force: true, descendant: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			root := t.TempDir()
+			sessionDir := filepath.Join(root, "session-one")
+			for _, id := range []string{"session-one", "session-two"} {
+				dir := filepath.Join(root, id)
+				require.NoError(t, os.Mkdir(dir, 0o755))
+				require.NoError(t, os.WriteFile(filepath.Join(dir, "events.jsonl"), []byte(
+					`{"kind":"UserPromptEvent","requestId":"request","prompt":"Hello","timestampMs":1704067200500}`+"\n",
+				), 0o600))
+			}
+			index := filepath.Join(root, "index.jsonl")
+			require.NoError(t, os.WriteFile(index, []byte(
+				`{"sessionId":"session-one","projectDir":"/work/old","taskName":"Before"}`+"\n"+
+					`{"sessionId":"session-two","projectDir":"/work/old","taskName":"Before"}`+"\n",
+			), 0o600))
+			database := openTestDB(t)
+			engine := NewEngine(t.Context(), database, EngineConfig{
+				AgentDirs: map[parser.AgentType][]string{parser.AgentJunie: {root}}, Machine: "local",
+			})
+			t.Cleanup(engine.Close)
+			require.Equal(t, 2, engine.SyncAll(t.Context(), nil).Synced)
+			require.NoError(t, os.WriteFile(index, []byte(
+				`{"sessionId":"session-one","projectDir":"/work/new","taskName":"After!"}`+"\n"+
+					`{"sessionId":"session-two","projectDir":"/work/new","taskName":"After!"}`+"\n",
+			), 0o600))
+			requested := root
+			if tc.descendant {
+				requested = sessionDir
+			}
+			if tc.force {
+				require.NoError(t, engine.ReconcileWatchRootsAfterLostEvents(t.Context(), []string{requested}, false))
+			} else {
+				require.NoError(t, engine.ReconcileWatchRoots(t.Context(), []string{requested}, false))
+			}
+			stored, err := database.GetSessionFull(t.Context(), "junie:session-one")
+			require.NoError(t, err)
+			require.NotNil(t, stored)
+			type metadata struct {
+				Project, Cwd string
+				Title        *string
+			}
+			assert.Equal(t, metadata{"new", "/work/new", new("After!")}, metadata{stored.Project, stored.Cwd, stored.SessionName})
+			if tc.descendant {
+				require.NoError(t, engine.SyncPathsContext(t.Context(), []string{index}))
+			}
+			sibling, err := database.GetSessionFull(t.Context(), "junie:session-two")
+			require.NoError(t, err)
+			require.NotNil(t, sibling)
+			assert.Equal(t, metadata{"new", "/work/new", new("After!")}, metadata{sibling.Project, sibling.Cwd, sibling.SessionName},
+				"scoped preparation must not consume the pending index change for an unrequested session")
+		})
+	}
+}
+
 func TestSyncJunieMetadataFreshnessAndSourceDeletion(t *testing.T) {
 	root := t.TempDir()
 	sessionDir := filepath.Join(root, "session-one")
