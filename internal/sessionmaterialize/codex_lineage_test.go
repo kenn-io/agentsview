@@ -131,7 +131,7 @@ func TestCodexLegacyFilenameAndInvalidLineage(t *testing.T) {
 		require.ErrorContains(t, err, "history mode")
 	}
 	_, err = inspectCodexPage(t.Context(), "rollout-20240115-"+id+"_"+revert+".jsonl", legacy)
-	require.ErrorContains(t, err, "canonical")
+	require.ErrorContains(t, err, "timestamped filenames")
 	paginated := []byte(fmt.Sprintf(`{"type":"session_meta","payload":{"id":%q,"session_id":%q,"history_mode":"paginated"}}`+"\n", revert, id))
 	_, err = codexLineage(t.Context(), id, []string{revertName}, nil, func(context.Context, string, int64) ([]byte, error) { return paginated, nil })
 	require.ErrorContains(t, err, "identity")

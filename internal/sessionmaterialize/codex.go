@@ -241,7 +241,25 @@ func materializeCodex(ctx context.Context, cfg config.Config, database *db.DB, s
 		if found && parser.CodexThreadIDFromSessionKey(parser.CodexSessionUUIDFromFilename(filepath.Base(ref.DisplayPath))) != thread {
 			return Result{}, errors.New("native Codex source identity differs")
 		}
-		if err := discovery.DiscoverEach(ctx, func(ref parser.SourceRef) error {
+		discover := discovery.DiscoverEach
+		if host == "" {
+			scope := *session
+			if found && filepath.Clean(ref.DisplayPath) == filepath.Clean(anchor) {
+				info, statErr := os.Stat(anchor)
+				if statErr != nil {
+					return Result{}, statErr
+				}
+				if info.Mode().IsRegular() {
+					machine, _ := pathMachine(cfg, parser.AgentCodex, anchor)
+					if machine == "" {
+						machine = cfg.InstallationID
+					}
+					scope.Machine = machine
+				}
+			}
+			discover = scopedDiscover(cfg, &scope, parser.AgentCodex, discover)
+		}
+		if err := discover(ctx, func(ref parser.SourceRef) error {
 			name := filepath.ToSlash(ref.DisplayPath)
 			names = append(names, name)
 			var matched string

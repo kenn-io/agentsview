@@ -80,6 +80,49 @@ func TestMaterializeCodexConfigured(t *testing.T) {
 		_, err = Materialize(t.Context(), cfg, nil, &linked, cwd)
 		require.ErrorContains(t, err, "outside configured roots")
 	})
+	t.Run("nested machine lineage", func(t *testing.T) {
+		t.Setenv("CODEX_HOME", t.TempDir())
+		const foreignID = "33333333-3333-4333-8333-333333333333"
+		foreignRoot := filepath.Join(location, "2026", "01", "03")
+		require.NoError(t, os.MkdirAll(foreignRoot, 0o700))
+		foreignPage := filepath.Join(foreignRoot, "rollout-2026-01-03T01-00-00-"+id+".jsonl")
+		foreignBytes := []byte(`{"type":"session_meta","payload":{"id":"11111111-1111-4111-8111-111111111111","history_mode":"paginated","label":"machine-b"}}` + "\n")
+		require.NoError(t, os.WriteFile(foreignPage, foreignBytes, 0o600))
+		scoped := cfg
+		scoped.AgentDirs = map[parser.AgentType][]string{parser.AgentCodex: {location, foreignRoot}}
+		scoped.SourceMachines = map[parser.AgentType]map[string]string{parser.AgentCodex: {location: "machine-a", foreignRoot: "machine-b"}}
+		selected := *session
+		selected.Machine = "machine-a"
+		got, err := Materialize(t.Context(), scoped, nil, &selected, cwd)
+		require.NoError(t, err)
+		assert.Equal(t, newName, got.InstalledPage)
+		require.Len(t, got.Paths, 2)
+		first, err := os.ReadFile(got.Paths[0])
+		require.NoError(t, err)
+		assert.Equal(t, old, first)
+		last, err := os.ReadFile(got.Paths[1])
+		require.NoError(t, err)
+		assert.Equal(t, newPage, last)
+		selected.Machine = "old-label"
+		got, err = Materialize(t.Context(), scoped, nil, &selected, cwd)
+		require.NoError(t, err)
+		assert.Equal(t, newName, got.InstalledPage)
+		missing := filepath.Join(location, "missing", oldName)
+		selected.FilePath = &missing
+		_, err = Materialize(t.Context(), scoped, nil, &selected, cwd)
+		require.ErrorContains(t, err, "outside configured roots")
+
+		foreignAncestor := filepath.Join(foreignRoot, "rollout-2026-01-03T02-00-00-"+foreignID+".jsonl")
+		ancestorBytes := []byte(`{"type":"session_meta","payload":{"id":"33333333-3333-4333-8333-333333333333","history_mode":"paginated","label":"machine-b ancestor"}}` + "\n")
+		require.NoError(t, os.WriteFile(foreignAncestor, ancestorBytes, 0o600))
+		localNeedsForeign := []byte(fmt.Sprintf(`{"type":"session_meta","payload":{"id":%q,"history_mode":"paginated","history_base":{"thread_id":%q,"end_ordinal_exclusive":1,"end_byte_offset":%d}}}`+"\n", id, foreignID, len(ancestorBytes)))
+		require.NoError(t, os.WriteFile(newPath, localNeedsForeign, 0o600))
+		t.Cleanup(func() { assert.NoError(t, os.WriteFile(newPath, newPage, 0o600)) })
+		selected.Machine = "machine-a"
+		selected.FilePath = &stored
+		_, err = Materialize(t.Context(), scoped, nil, &selected, cwd)
+		require.ErrorContains(t, err, "missing Codex ancestor")
+	})
 	// A publisher failure unrelated to rollout matching reaches the caller.
 	blockedHome := t.TempDir()
 	t.Setenv("CODEX_HOME", blockedHome)

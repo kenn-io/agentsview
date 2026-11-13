@@ -94,7 +94,7 @@ func inspectCodexPage(ctx context.Context, name string, data []byte) (codexPage,
 	}
 	_, stamp, _ := codexDate(name)
 	if (mode == "paginated" || record.Payload.Base != nil || key != thread) && stamp == "" {
-		return codexPage{}, errors.New("native Codex lineage requires canonical filename")
+		return codexPage{}, errors.New("native Codex history requires timestamped filenames")
 	}
 	// Early revert pages recorded the rollout ID as id and the thread as
 	// session_id; newer producers record the thread in id.
@@ -194,7 +194,7 @@ func codexLineage(ctx context.Context, thread string, names []string, archived m
 		}
 		_, stamp, _ := codexDate(name)
 		if cutoff != nil && stamp == "" {
-			return nil, errors.New("native Codex lineage requires canonical filename")
+			return nil, errors.New("native Codex history requires timestamped filenames")
 		}
 		if seen[page.rollout] {
 			return nil, errors.New("native Codex lineage cycle")
