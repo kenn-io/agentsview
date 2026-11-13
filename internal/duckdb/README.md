@@ -72,7 +72,8 @@ The Signals panel counts each session's frustration markers, the prompts
 `signals.IsFrustrationMarker` flags. Push stores the count for each session it
 writes. A change to the marker algorithm rebuilds the mirror on the next push.
 When a stored count is stale, the reader scans its prompts and keeps the count
-in memory per push fingerprint.
+in memory per push fingerprint. If a mirror uses newer marker rules, populated
+Signals reads and pushes return an error asking the user to update AgentsView.
 
 For those sessions one query (`duckFrustrationPromptsSQL`) judges most prompts
 in DuckDB:

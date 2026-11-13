@@ -1356,6 +1356,8 @@ the SQL.
   reads, or compatibility shims for old mirrors.
 - Store every DuckDB push cursor and version in the mirror's `sync_metadata`.
   Never store DuckDB sync state in SQLite.
+- Store frustration-marker counts at push. Scan prompts for older rules;
+  reject newer rules with an update error on populated Signals reads and pushes.
 - Replace whole sessions during incremental updates and gate them with
   per-session fingerprints. Do not add per-table, per-column, or diff-based
   updates.
