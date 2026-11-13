@@ -33,6 +33,9 @@ type changeStreamPosition struct {
 	Conversation int64  `json:"conversation,string"`
 	Usage        int64  `json:"usage,string"`
 	MessageUsage int64  `json:"message_usage,string"`
+	// Pruned is the tombstone floor when this position was issued. A later
+	// floor above Conversation means pruning removed deletions it missed.
+	Pruned int64 `json:"pruned,string,omitempty"`
 }
 
 func (p changeStreamPosition) encode() (string, error) {
@@ -187,7 +190,7 @@ func (db *DB) ReadChangeStreamHead(ctx context.Context) (ChangeStreamHead, error
 	head, err := changeStreamPosition{
 		Version: changeStreamPositionVersion, Kind: changeStreamPositionKind,
 		DatabaseID: heads.databaseID, Conversation: heads.conversation, Usage: heads.usage,
-		MessageUsage: heads.messageUsage,
+		MessageUsage: heads.messageUsage, Pruned: heads.pruned,
 	}.encode()
 	if err != nil {
 		return ChangeStreamHead{}, err
@@ -242,8 +245,8 @@ func (db *DB) ReadChangeStream(
 	if !ok || position.DatabaseID != heads.databaseID ||
 		position.Conversation > heads.conversation || position.Usage > heads.usage ||
 		position.MessageUsage > heads.messageUsage ||
-		// Pruning removed deletions this cursor has not read.
-		position.Conversation < heads.pruned {
+		// Pruning since this cursor was issued removed deletions it has not read.
+		position.Pruned < heads.pruned && position.Conversation < heads.pruned {
 		batch.Reset = true
 		// The replay sends every message with its current usage, so no
 		// earlier usage change needs its own re-send.
@@ -327,6 +330,7 @@ func (db *DB) ReadChangeStream(
 		batch.Messages = append(batch.Messages, message)
 	}
 	batch.Sessions = sessions
+	position.Pruned = heads.pruned
 	batch.To, err = position.encode()
 	if err != nil {
 		return ChangeStreamBatch{}, err

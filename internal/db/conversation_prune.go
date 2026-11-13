@@ -19,7 +19,9 @@ const conversationPrunedRevisionKey = "conversation_pruned_revision"
 const conversationPruneRowidBatch = 100_000
 
 // PruneConversationTombstones deletes the removed rows of the conversation
-// index and returns how many it deleted. It first raises the pruned revision
+// index that have no native source ID and returns how many it deleted.
+// Tombstones with a source ID stay: they map a returning message back to its
+// export ID. It first raises the pruned revision
 // floor to the newest tombstone, so every reader whose position is older
 // restarts before any row disappears. Tombstones written while it runs have a
 // newer revision and are kept.
@@ -27,7 +29,7 @@ func (db *DB) PruneConversationTombstones(ctx context.Context) (int64, error) {
 	var floor, maxRowID int64
 	if err := db.Update(ctx, func(tx *sql.Tx) error {
 		if err := tx.QueryRowContext(ctx, `SELECT COALESCE(MAX(revision), 0), COALESCE(MAX(rowid), 0)
-		 FROM conversation_messages WHERE removed = 1`).Scan(&floor, &maxRowID); err != nil {
+		 FROM conversation_messages WHERE removed = 1 AND source_id = ''`).Scan(&floor, &maxRowID); err != nil {
 			return fmt.Errorf("finding conversation tombstones: %w", err)
 		}
 		if floor == 0 {
@@ -44,7 +46,7 @@ func (db *DB) PruneConversationTombstones(ctx context.Context) (int64, error) {
 	for low := int64(0); low < maxRowID; low += conversationPruneRowidBatch {
 		if err := db.Update(ctx, func(tx *sql.Tx) error {
 			res, err := tx.ExecContext(ctx, `DELETE FROM conversation_messages
-			 WHERE rowid > ? AND rowid <= ? AND removed = 1 AND revision <= ?`,
+			 WHERE rowid > ? AND rowid <= ? AND removed = 1 AND source_id = '' AND revision <= ?`,
 				low, low+conversationPruneRowidBatch, floor)
 			if err != nil {
 				return fmt.Errorf("pruning conversation tombstones: %w", err)

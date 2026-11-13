@@ -101,6 +101,8 @@ type conversationPosition struct {
 	DatabaseID string `json:"database_id"`
 	After      int64  `json:"after,string"`
 	Through    int64  `json:"through,string"`
+	// Pruned is the tombstone floor when this position was issued.
+	Pruned int64 `json:"pruned,string,omitempty"`
 }
 
 const conversationChangeColumns = `session_id, message_id, CAST(revision AS TEXT), ordinal,
@@ -183,9 +185,10 @@ func (db *DB) ExportConversationChanges(ctx context.Context, opts ConversationEx
 	if err != nil {
 		return result, err
 	}
-	// A position below the pruned floor may have missed deletions whose
-	// tombstones are gone.
-	if position.DatabaseID != "" && (position.DatabaseID != result.DatabaseID || position.Through > current || position.After < pruned) {
+	// A position issued before the latest pruning that has not read through
+	// its floor may have missed deletions whose tombstones are gone.
+	if position.DatabaseID != "" && (position.DatabaseID != result.DatabaseID || position.Through > current ||
+		position.Pruned < pruned && position.After < pruned) {
 		return result, ErrConversationReconciliationRequired
 	}
 	if opts.Cursor == "" {
@@ -218,7 +221,7 @@ func (db *DB) ExportConversationChanges(ctx context.Context, opts ConversationEx
 	if err := db.attachConversationMetadata(ctx, tx, result.ArchiveID, result.Changes, mode); err != nil {
 		return result, err
 	}
-	position.Version, position.DatabaseID, position.TextMode = 1, result.DatabaseID, mode
+	position.Version, position.DatabaseID, position.TextMode, position.Pruned = 1, result.DatabaseID, mode, pruned
 	if more {
 		position.Kind = "cursor"
 		position.After, err = strconv.ParseInt(result.Changes[len(result.Changes)-1].Revision, 10, 64)
@@ -306,6 +309,17 @@ func (db *DB) GetConversationMessage(ctx context.Context, opts ConversationMessa
 	}
 	result.SchemaVersion, result.Type = 1, "message"
 	err = scanConversationChange(tx.QueryRowContext(ctx, `SELECT `+conversationColumnsForMode(mode)+` FROM conversation_messages WHERE session_id = ? AND message_id = ?`, opts.SessionID, opts.MessageID), &result.ConversationChange)
+	if errors.Is(err, sql.ErrNoRows) {
+		// A revision at or below the pruned floor was listed, then removed and
+		// pruned; report it as superseded, as its tombstone would have.
+		pruned, perr := archiveJournalRevision(ctx, tx, conversationPrunedRevisionKey, "conversation pruned")
+		if perr != nil {
+			return result, perr
+		}
+		if revision, perr := strconv.ParseInt(opts.Revision, 10, 64); perr == nil && revision > 0 && revision <= pruned {
+			return ConversationMessage{}, ErrConversationRevisionChanged
+		}
+	}
 	if err != nil {
 		return result, err
 	}
