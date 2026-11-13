@@ -18,6 +18,7 @@ import (
 	"go.kenn.io/agentsview/internal/ctxio"
 	"go.kenn.io/agentsview/internal/db"
 	"go.kenn.io/agentsview/internal/parser"
+	"go.kenn.io/agentsview/internal/pathutil"
 	"go.kenn.io/agentsview/internal/remotesync"
 )
 
@@ -172,7 +173,7 @@ func readConfiguredLocal(ctx context.Context, cfg config.Config, session *db.Ses
 	if !ok || !streaming || !recordedOK {
 		return nil, "", errors.New("native source provider unavailable")
 	}
-	name, err := uniqueLocalSource(ctx, recorded, stored, discoverer.DiscoverEach, func(name string) (bool, error) {
+	name, err := uniqueLocalSource(ctx, recorded, stored, scopedDiscover(cfg, session, parser.AgentClaude, discoverer.DiscoverEach), func(name string) (bool, error) {
 		return filepath.Base(name) == id+".jsonl", nil
 	})
 	if err != nil {
@@ -202,15 +203,50 @@ func localRoots(cfg config.Config, agent parser.AgentType) []string {
 func configuredRoots(cfg config.Config, session *db.Session, agent parser.AgentType) []string {
 	var roots []string
 	for _, root := range localRoots(cfg, agent) {
-		machine := cfg.SourceMachines[agent][root]
-		if machine == "" {
-			machine = cfg.InstallationID
-		}
-		if machine == session.Machine || (session.Machine == cfg.LocalMachineName && machine == cfg.InstallationID) {
+		if machineOwns(cfg, session, cfg.SourceMachines[agent][root]) {
 			roots = append(roots, root)
 		}
 	}
 	return roots
+}
+
+// machineOwns reports whether a source label belongs to the archived session.
+func machineOwns(cfg config.Config, session *db.Session, machine string) bool {
+	if machine == "" {
+		machine = cfg.InstallationID
+	}
+	return machine == session.Machine || (session.Machine == cfg.LocalMachineName && machine == cfg.InstallationID)
+}
+
+// pathMachine follows ingest's most-specific configured root attribution.
+func pathMachine(cfg config.Config, agent parser.AgentType, name string) (string, bool) {
+	key, err := pathutil.LocalComparisonKey(name)
+	if err != nil {
+		return "", false
+	}
+	var best, machine string
+	for root, label := range cfg.SourceMachines[agent] {
+		rootKey, err := pathutil.LocalComparisonKey(root)
+		if err != nil || len(rootKey) <= len(best) {
+			continue
+		}
+		if rel, err := filepath.Rel(rootKey, key); err == nil && rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+			best, machine = rootKey, label
+		}
+	}
+	return machine, best != ""
+}
+
+// scopedDiscover filters fallback candidates by ingest's machine attribution.
+func scopedDiscover(cfg config.Config, session *db.Session, agent parser.AgentType, discover func(context.Context, func(parser.SourceRef) error) error) func(context.Context, func(parser.SourceRef) error) error {
+	return func(ctx context.Context, yield func(parser.SourceRef) error) error {
+		return discover(ctx, func(ref parser.SourceRef) error {
+			if machine, ok := pathMachine(cfg, agent, ref.DisplayPath); ok && !machineOwns(cfg, session, machine) {
+				return nil
+			}
+			return yield(ref)
+		})
+	}
 }
 
 // uniqueLocalSource keeps an archived path that still resolves exactly.

@@ -100,7 +100,7 @@ func findPiSource(ctx context.Context, cfg config.Config, session *db.Session, s
 		return "", nil, errors.New("native Pi source provider unavailable")
 	}
 	candidates := parser.NewPiSourceSet(parser.AgentPi, roots)
-	name, err := uniqueLocalSource(ctx, provider, stored, candidates.DiscoverEach, func(name string) (bool, error) {
+	name, err := uniqueLocalSource(ctx, provider, stored, scopedDiscover(cfg, session, parser.AgentPi, candidates.DiscoverEach), func(name string) (bool, error) {
 		err := checkPiHeaderFile(ctx, name, id)
 		if errors.Is(err, errPiIdentity) || errors.Is(err, errPiNotSession) {
 			return false, nil
