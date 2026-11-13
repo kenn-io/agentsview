@@ -624,7 +624,7 @@ func TestMaterializeCodexLoadedLinkedHome(t *testing.T) {
 		require.NoError(t, err)
 		resolvedHome, err := filepath.EvalSymlinks(profile)
 		require.NoError(t, err)
-		configText := fmt.Sprintf("[agents.codex]\ndirs = [%q]\nhomes = [%q]\n", outer, profile)
+		configText := fmt.Sprintf("[[session_sources]]\nagent = \"codex\"\ndir = %q\n[agents.codex]\nhomes = [%q]\n", outer, profile)
 		require.NoError(t, os.WriteFile(filepath.Join(data, "config.toml"), []byte(configText), 0o600))
 		t.Setenv("AGENTSVIEW_DATA_DIR", data)
 		t.Setenv("CODEX_HOME", profile)
@@ -728,7 +728,7 @@ func TestMaterializeCodexLoadedLinkedHome(t *testing.T) {
 			require.NoError(t, os.MkdirAll(data, 0o700))
 			configText := fmt.Sprintf("[agents.codex]\nhomes = [%q, %q]\n", home, other)
 			if tc.outer {
-				configText = fmt.Sprintf("[agents.codex]\ndirs = [%q]\nhomes = [%q, %q]\n", filepath.Dir(live), home, other)
+				configText = fmt.Sprintf("[[session_sources]]\nagent = \"codex\"\ndir = %q\n[agents.codex]\nhomes = [%q, %q]\n", filepath.Dir(live), home, other)
 			}
 			var unrelatedParent string
 			var unrelatedData []byte
