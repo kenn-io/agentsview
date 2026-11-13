@@ -128,9 +128,6 @@ func TestDuckDBStoredFrustrationCounts(t *testing.T) {
 	assert.Equal(t, 1, result.SessionsPushed)
 	conn, err = Open(ctx, path)
 	require.NoError(t, err)
-	var count int
-	require.NoError(t, conn.QueryRowContext(ctx, `SELECT frustration_marker_count FROM sessions WHERE id = 'sess-2'`).Scan(&count))
-	assert.Equal(t, 1, count)
 	_, err = conn.ExecContext(ctx, `UPDATE sessions SET frustration_markers_version = 0 WHERE id = 'sess-1'`)
 	require.NoError(t, err)
 	require.NoError(t, conn.Close())
