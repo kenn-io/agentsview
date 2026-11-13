@@ -170,6 +170,10 @@ func TestFullPushResumesVectorPhase(t *testing.T) {
 	assert.Equal(t, 1, res.Vectors.SessionsUnchanged)
 	assert.Len(t, exported, 1)
 	assert.NotContains(t, exported, interrupted)
+	// The interrupted run rewrote every message before it stopped, so the
+	// resumed push compacts even though it wrote none itself.
+	conn := chtest.Open(t, target.URL, target.Database)
+	assert.Contains(t, compactions(t, conn), "messages")
 }
 
 // pushTimeColumns are columns besides push_version that take their value

@@ -203,7 +203,9 @@ away, and after full pushes those merges rarely happen on their own. Every
 dashboard read then pays to skip the older copies. When a push rewrote at least
 a quarter of the mirror's live messages, it runs `OPTIMIZE TABLE ... FINAL` on
 each table it rewrote, largest first, and waits for each merge before it
-returns. The push log names each table and how long its merge took.
+returns. The push log names each table and how long its merge took. A full push
+that resumes after an interruption counts the messages its earlier attempt
+wrote, so it compacts like a full push that ran straight through.
 
 Reads keep working during the merge, though they compete with it for CPU and
 disk. ClickHouse starts the merge only when the disk has free space for twice
