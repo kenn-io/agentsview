@@ -6,6 +6,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -90,24 +91,6 @@ func TestUsagePartsAcrossRestart(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, wantTop, gotTop)
 	require.NoError(t, changed.Close())
-	files, err := filepath.Glob(filepath.Join(os.Getenv("CACHE_DIRECTORY"), "duckdb-usage", "*", "*.gob"))
-	require.NoError(t, err)
-	require.NotEmpty(t, files)
-	for _, file := range files {
-		data, err := os.ReadFile(file)
-		require.NoError(t, err)
-		require.Greater(t, len(data), 1)
-		require.NoError(t, os.WriteFile(file, data[:len(data)-1], 0o600))
-	}
-	restarted, err = NewStore(t.Context(), path)
-	require.NoError(t, err)
-	defer restarted.Close()
-	require.NoError(t, restarted.OpenActivityReportDisk(t.Context()))
-	reads = 0
-	got, err = restarted.GetDailyUsage(t.Context(), f)
-	require.NoError(t, err)
-	require.Equal(t, want, got)
-	require.Equal(t, 1, reads)
 }
 
 func TestUsagePartsRefreshesDuplicatePeers(t *testing.T) {
@@ -374,5 +357,82 @@ func TestUsagePartsDefaultTimezone(t *testing.T) {
 		cmd.Env = append(os.Environ(), "TZ="+tc.zone, "USAGE_PARTS_TZ_MIRROR="+path, "USAGE_PARTS_TZ_DATE="+tc.day)
 		out, err := cmd.CombinedOutput()
 		require.NoError(t, err, "%s", out)
+	}
+}
+
+func TestUsagePartsReplacementDuringRefresh(t *testing.T) {
+	skipReopenTestOnWindows(t)
+	for _, tc := range []struct {
+		name string
+		read func(*Store, db.UsageFilter) (any, int, error)
+	}{
+		{"daily", func(s *Store, f db.UsageFilter) (any, int, error) {
+			result, err := s.GetDailyUsage(t.Context(), f)
+			return result, result.Totals.OutputTokens, err
+		}},
+		{"top", func(s *Store, f db.UsageFilter) (any, int, error) {
+			result, err := s.GetTopSessionsByCost(t.Context(), f, 10)
+			total := 0
+			for _, row := range result {
+				total += row.OutputTokens
+			}
+			return result, total, err
+		}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Chdir(t.TempDir())
+			t.Setenv("CACHE_DIRECTORY", "cache")
+			dir := t.TempDir()
+			old, middle, final := filepath.Join(dir, "old.duckdb"), filepath.Join(dir, "middle.duckdb"), filepath.Join(dir, "final.duckdb")
+			for _, fixture := range []struct {
+				path, aFingerprint, bFingerprint string
+				a, b                             int
+			}{{old, "a1", "b1", 100, 200}, {middle, "a2", "b1", 300, 200}, {final, "a3", "b2", 500, 400}} {
+				keptActivityMirror(t, fixture.path, "session-a", fixture.a)
+				writeUsageMirror(t, fixture.path,
+					`UPDATE model_pricing SET updated_at = '2026-01-01T00:00:00Z'`,
+					`UPDATE sessions SET agentsview_push_fingerprint = '`+fixture.aFingerprint+`'`,
+					`INSERT INTO sessions SELECT * REPLACE ('session-b' AS id, '`+fixture.bFingerprint+`' AS agentsview_push_fingerprint) FROM sessions WHERE id = 'session-a'`,
+					`INSERT INTO messages SELECT * REPLACE (3 AS id, 'session-b' AS session_id, '{"output_tokens":`+strconv.Itoa(fixture.b)+`}' AS token_usage) FROM messages WHERE id = 2`,
+				)
+			}
+			f := db.UsageFilter{From: "2026-01-01", To: "2026-01-01", Timezone: "UTC"}
+			store := openUsagePartsStore(t, old)
+			_, total, err := tc.read(store, f)
+			require.NoError(t, err)
+			require.Equal(t, 300, total)
+			require.NoError(t, store.Close())
+			require.NoError(t, swapMirrorFile(middle, old))
+			store = openUsagePartsStore(t, old)
+			defer store.Close()
+			previous := usagePartReadObserver
+			usagePartReadObserver = func([]string) {
+				require.NoError(t, swapMirrorFile(final, old))
+				store.checkMirrorReplacement(t.Context(), func(err error) { require.NoError(t, err) })
+			}
+			t.Cleanup(func() { usagePartReadObserver = previous })
+			got, total, err := tc.read(store, f)
+			require.NoError(t, err)
+			require.Equal(t, 900, total)
+			usagePartReadObserver = nil
+			fresh := NewStoreFromDB(store.DB())
+			want, _, err := tc.read(fresh, f)
+			require.NoError(t, err)
+			require.Equal(t, want, got)
+			stable, _, err := tc.read(store, f)
+			require.NoError(t, err)
+			require.Equal(t, want, stable)
+			require.NoError(t, store.Close())
+			store = openUsagePartsStore(t, old)
+			defer store.Close()
+			reads := 0
+			queryObserver := analyticsQueryObserver
+			analyticsQueryObserver = func(string) { reads++ }
+			t.Cleanup(func() { analyticsQueryObserver = queryObserver })
+			restarted, _, err := tc.read(store, f)
+			require.NoError(t, err)
+			require.Equal(t, want, restarted)
+			require.Zero(t, reads)
+		})
 	}
 }

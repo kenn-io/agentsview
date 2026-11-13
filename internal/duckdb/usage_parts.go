@@ -105,6 +105,9 @@ func refreshUsageParts[T any](ctx context.Context, s *Store, slot, priceDigest s
 		}
 		maps.Copy(values, updated)
 	}
+	if stamp != s.keptVersion() {
+		return read(ctx, nil)
+	}
 	if usagePartPublishObserver != nil {
 		usagePartPublishObserver()
 	}
