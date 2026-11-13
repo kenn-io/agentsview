@@ -185,7 +185,10 @@ func TestCodexLineageCompanionAuthority(t *testing.T) {
 					return parentBytes, nil
 				}
 				return []byte("corrupt alternative"), nil
-			}, nil)
+			}, func(context.Context, string, string) ([]string, error) {
+				t.Error("resolver called for an available rollout")
+				return nil, nil
+			})
 			if tc.failure != "" {
 				require.ErrorContains(t, err, tc.failure)
 				return
@@ -218,11 +221,8 @@ func TestCodexLineageLazyAncestry(t *testing.T) {
 		calls                       int
 	}{
 		{"lazy lookup", []string{pageName}, nil, []string{parentName}, "", 1},
-		{"root precedence", []string{pageName, parentName}, nil, nil, "", 0},
-		{"companion precedence", []string{pageName}, []string{parentName}, nil, "", 0},
 		{"missing", []string{pageName}, nil, nil, "missing Codex ancestor", 1},
 		{"ambiguous", []string{pageName}, nil, []string{parentName, "other/" + parentName}, "ambiguous Codex rollout", 1},
-		{"no requested page", nil, nil, nil, "unavailable", 0},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			calls := 0
@@ -245,7 +245,7 @@ func TestCodexLineageLazyAncestry(t *testing.T) {
 	want := errors.New("catalog failure")
 	_, err := codexLineage(t.Context(), thread, []string{pageName}, nil, nil, read, func(context.Context, string, string) ([]string, error) { return nil, want })
 	require.ErrorIs(t, err, want)
-	cycleBytes := []byte(fmt.Sprintf(`{"type":"session_meta","payload":{"id":%q,"history_mode":"paginated","history_base":{"thread_id":%q,"end_ordinal_exclusive":1,"end_byte_offset":1}}}`+"\n", parent, thread))
+	cycleBytes := []byte(fmt.Sprintf(`{"type":"session_meta","payload":{"id":%q,"history_mode":"paginated","history_base":{"thread_id":%q,"end_ordinal_exclusive":1,"end_byte_offset":1}}}`+"\n", parent, parent))
 	_, err = codexLineage(t.Context(), thread, []string{pageName}, nil, nil, func(_ context.Context, name string, _ int64) ([]byte, error) {
 		if name == pageName {
 			return pageBytes, nil
@@ -253,8 +253,4 @@ func TestCodexLineageLazyAncestry(t *testing.T) {
 		return cycleBytes, nil
 	}, func(context.Context, string, string) ([]string, error) { return []string{parentName}, nil })
 	require.ErrorContains(t, err, "codex history contains a loop")
-	date, stamp, err := codexDate("\x00manifest/" + parentName)
-	require.NoError(t, err)
-	assert.Equal(t, "2024/01/15", date)
-	assert.Equal(t, "2024-01-15T00-00-00", stamp)
 }

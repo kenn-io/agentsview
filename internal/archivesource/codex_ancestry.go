@@ -116,12 +116,9 @@ func codexAncestry(conn *sql.DB, identity rawsync.AuthIdentity, manifest rawsync
 			return nil, err
 		}
 		names, err := codexAncestorEntries(source, rollout, byPath)
-		if err != nil {
-			return nil, err
-		}
 		for _, name := range names {
 			reached = append(reached, byPath[name])
 		}
-		return names, nil
+		return names, err
 	}
 }
