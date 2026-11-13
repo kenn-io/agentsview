@@ -1087,3 +1087,23 @@ func TestUsagePriceContextsReuseDecodedContexts(t *testing.T) {
 	assert.Equal(t, "added-model", added["added-context"].ReportedModel)
 	assert.EqualValues(t, 7, added["added-context"].Input)
 }
+
+// A warm read names its decoded context IDs in the query. A digest with more
+// contexts than fit in ClickHouse's default 256 KiB max_query_size must still
+// read.
+func TestUsagePriceContextsReadManyContexts(t *testing.T) {
+	t.Parallel()
+	store, _, _ := newUsagePriceStore(t)
+	const digest = "many-contexts-digest"
+	execPreparedUsage(t, store, `
+		INSERT INTO usage_price_contexts (pricing_digest, context_id, context_json, push_version)
+		SELECT `+chSQLString(digest)+`, lower(hex(MD5(toString(number)))),
+			concat('{"reported_model":"m-', toString(number), '","ok":true}'), 1
+		FROM numbers(8000)`)
+	first, err := store.usagePriceContexts(t.Context(), digest)
+	require.NoError(t, err)
+	require.Len(t, first, 8000)
+	again, err := store.usagePriceContexts(t.Context(), digest)
+	require.NoError(t, err)
+	assert.Equal(t, first, again)
+}

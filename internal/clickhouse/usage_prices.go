@@ -9,7 +9,6 @@ import (
 	"encoding/json/v2"
 	"errors"
 	"fmt"
-	"maps"
 	"slices"
 	"strconv"
 	"strings"
@@ -568,26 +567,37 @@ func (s *Store) usagePriceContexts(
 		known = nil
 	}
 	cache.mu.Unlock()
-	knownIDs := slices.Collect(maps.Keys(known))
-	if knownIDs == nil {
-		knownIDs = []string{}
-	}
-	out, err := queryUsagePriceContexts(ctx, s.conn, digest, knownIDs, known)
+	out, err := queryUsagePriceContexts(ctx, s.conn, digest, known)
 	if err != nil {
 		return nil, err
 	}
 	cache.mu.Lock()
 	defer cache.mu.Unlock()
+	// Callers only read the map, so the cache and every caller share it.
 	cache.digest, cache.contexts = digest, out
-	return maps.Clone(out), nil
+	return out, nil
 }
 
+// maxKnownPriceContextIDs caps how many decoded context IDs a read names in
+// its query. clickhouse-go inlines bound arguments into the statement, and
+// the server rejects a statement over max_query_size (256 KiB by default).
+// 2,048 IDs of 32 hex digits take about 74 KB. An ID past the cap only
+// returns its JSON again; the read still reuses its decoded context.
+const maxKnownPriceContextIDs = 2048
+
 // queryUsagePriceContexts reads digest's contexts. It takes the contexts in
-// knownIDs from known and decodes the JSON of the rest.
+// known from known and decodes the JSON of the rest.
 func queryUsagePriceContexts(
-	ctx context.Context, conn *sql.DB, digest string, knownIDs []string,
+	ctx context.Context, conn *sql.DB, digest string,
 	known map[string]chUsagePriceContext,
 ) (map[string]chUsagePriceContext, error) {
+	knownIDs := make([]string, 0, min(len(known), maxKnownPriceContextIDs))
+	for id := range known {
+		if len(knownIDs) == maxKnownPriceContextIDs {
+			break
+		}
+		knownIDs = append(knownIDs, id)
+	}
 	rows, err := conn.QueryContext(ctx, `
 		SELECT context_id, if(has(?, context_id), '', context_json)
 		FROM usage_price_contexts
