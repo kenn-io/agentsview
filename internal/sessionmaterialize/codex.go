@@ -76,7 +76,7 @@ func materializeCodex(ctx context.Context, cfg config.Config, database *db.DB, s
 			machine := s3SourceMachine(cfg, parser.AgentCodex, candidate)
 			if machine == session.Machine {
 				matchingRoots = append(matchingRoots, candidate)
-				if strings.HasPrefix(source, strings.TrimSuffix(candidate, "/")+"/") && len(candidate) > len(root) {
+				if strings.HasPrefix(source, strings.TrimSuffix(candidate, "/")+"/") && (root == "" || len(candidate) < len(root)) {
 					root = candidate
 				}
 			}
