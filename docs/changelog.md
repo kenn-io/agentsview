@@ -89,12 +89,12 @@ The latest release is
 **Bug fixes**
 
 - `agentsview source cursor sync-usage` no longer aborts when Cursor rate-limits
-  it. Cursor allows 60 requests per minute per team, so a 30-day sync, or one
-  that ran while other tools used the same team's admin keys, often failed with
-  `429 Too Many Requests` and stored nothing. The command now spaces requests a
-  second apart and retries a page that gets a 429 or a server error, waiting as
-  long as Cursor's `Retry-After` asks or backing off when it does not say, and
-  reports each wait on stderr. See
+  it. Cursor allows 60 requests per minute per team, so a sync that needed more
+  than about 60 pages, or one that ran while other tools used the same team's
+  admin keys, could fail with `429 Too Many Requests` and store nothing. The
+  command now spaces requests a second apart and retries a page that gets a 429
+  or a server error, waiting as long as Cursor's `Retry-After` asks or backing
+  off when it does not say, and reports each wait on stderr. See
   [`source cursor sync-usage`](/docs/commands/#agentsview-source-cursor-sync-usage).
 - A growing Codex session no longer leaves a removed copy of every earlier
   message in the conversation export index each time it is fully re-read. A

@@ -217,9 +217,9 @@ func TestFetchAllUsageEventsRetriesTransientFailures(t *testing.T) {
 					notice := (*notices)[i]
 					assert.Equal(t, 1, notice.page)
 					assert.Equal(t, gap, notice.wait)
-					statusErr, ok := errors.AsType[*StatusError](notice.err)
+					statusErr, ok := errors.AsType[*statusError](notice.err)
 					require.True(t, ok, "OnRetry receives the API status error")
-					assert.Equal(t, tc.wantStatus, statusErr.StatusCode)
+					assert.Equal(t, tc.wantStatus, statusErr.statusCode)
 				}
 			})
 		})
@@ -238,9 +238,9 @@ func TestFetchAllUsageEventsFailsFastOnPermanentStatus(t *testing.T) {
 
 				_, err := client.FetchAllUsageEvents(t.Context(), onePageQuery())
 				require.Error(t, err)
-				statusErr, ok := errors.AsType[*StatusError](err)
+				statusErr, ok := errors.AsType[*statusError](err)
 				require.True(t, ok)
-				assert.Equal(t, status, statusErr.StatusCode)
+				assert.Equal(t, status, statusErr.statusCode)
 				assert.Len(t, api.recorded(), 1)
 				assert.Empty(t, *notices)
 			})
@@ -275,9 +275,9 @@ func TestFetchAllUsageEventsGivesUpAfterMaxAttempts(t *testing.T) {
 		require.Error(t, err)
 		assert.Contains(t, err.Error(), "page 1")
 		assert.Contains(t, err.Error(), "giving up after 5 attempts")
-		statusErr, ok := errors.AsType[*StatusError](err)
+		statusErr, ok := errors.AsType[*statusError](err)
 		require.True(t, ok)
-		assert.Equal(t, http.StatusTooManyRequests, statusErr.StatusCode)
+		assert.Equal(t, http.StatusTooManyRequests, statusErr.statusCode)
 
 		assert.Len(t, api.recorded(), maxPageAttempts)
 		assert.Len(t, *notices, maxPageAttempts-1)
