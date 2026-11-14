@@ -409,6 +409,7 @@ func (cache *usageCache) recordUsageTimezoneRequestAt(
 		if parseErr == nil && requestedAt.Sub(requested) < usageTimezoneRequestResolution {
 			return nil
 		}
+		//nolint:nilaway // Callers hold a successfully acquired cache.
 		_, err = cache.db.ExecContext(ctx, `UPDATE usage_rollup_timezones
 			SET last_requested_at = ? WHERE timezone_key = ?`,
 			requestedAt.UTC().Format(time.RFC3339Nano), identity.Key)

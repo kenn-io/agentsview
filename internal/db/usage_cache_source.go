@@ -458,7 +458,7 @@ func (reader *UsageCacheReader) flushWarmRequests(parent context.Context) {
 		writeErr := err
 		if writeErr == nil {
 			identity := usageTimezoneIdentityFor((UsageFilter{Timezone: timezone}).Location(), nil)
-			writeErr = insertUsageTimezone(ctx, cache.db, identity, stamp)
+			writeErr = insertUsageTimezone(ctx, cache.db, identity, stamp) //nolint:nilaway // Successful acquisition returns a cache.
 			if writeErr == nil {
 				writeErr = cache.recordUsageTimezoneRequestAt(ctx, identity, stamp)
 			}
