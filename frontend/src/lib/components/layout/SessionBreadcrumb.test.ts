@@ -414,7 +414,8 @@ describe("SessionBreadcrumb", () => {
       props: { session: makeSession("claude"), onBack: () => {} },
     });
     await tick();
-    const time = () => document.querySelector(".session-time")?.textContent?.replace(/\s+/g, " ").trim();
+    const time = () =>
+      document.querySelector(".session-time")?.textContent?.replace(/\s+/g, " ").trim();
     expect(time()).toBe("20 Feb 14:30");
     ui.toggleAlwaysShowYear();
     await tick();

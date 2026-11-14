@@ -58,19 +58,22 @@ describe("SessionItem identity", () => {
     flushSync();
   }
 
-  it.each([false, true])("updates the date and keeps the full hover time in compact=%s", (compact) => {
-    const ended = "2024-06-01T12:00:00Z";
-    mountSession({ ended_at: ended }, { compact });
-    const time = document.querySelector<HTMLElement>(".session-time")!;
-    expect(time.title).toBe(formatTimestamp(ended, true));
-    expect(time.textContent).not.toContain("2024");
-    ui.alwaysShowYear = true;
-    flushSync();
-    expect(time.textContent).toContain("2024");
-    ui.alwaysShowYear = false;
-    flushSync();
-    expect(time.textContent).not.toContain("2024");
-  });
+  it.each([false, true])(
+    "updates the date and keeps the full hover time in compact=%s",
+    (compact) => {
+      const ended = "2024-06-01T12:00:00Z";
+      mountSession({ ended_at: ended }, { compact });
+      const time = document.querySelector<HTMLElement>(".session-time")!;
+      expect(time.title).toBe(formatTimestamp(ended, true));
+      expect(time.textContent).not.toContain("2024");
+      ui.alwaysShowYear = true;
+      flushSync();
+      expect(time.textContent).toContain("2024");
+      ui.alwaysShowYear = false;
+      flushSync();
+      expect(time.textContent).not.toContain("2024");
+    },
+  );
 
   it("updates a mounted row when its title arrives", () => {
     mountSession({ first_message: null, is_index_only: true });

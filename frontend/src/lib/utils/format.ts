@@ -25,7 +25,10 @@ const DAY = 86400;
 const WEEK = 604800;
 
 /** Formats an ISO timestamp as a human-friendly relative time */
-export function formatRelativeTime(isoString: string | null | undefined, alwaysShowYear = false): string {
+export function formatRelativeTime(
+  isoString: string | null | undefined,
+  alwaysShowYear = false,
+): string {
   if (!isoString) return "—";
 
   const date = new Date(isoString);
