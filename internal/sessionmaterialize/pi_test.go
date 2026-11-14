@@ -284,17 +284,17 @@ func TestPiHeaderIdentityAndVersion(t *testing.T) {
 	assert.Equal(t, prefix+`{"type":"session","id":"id","cwd":"/new"}`+"\n", string(got))
 	_, err = relocatePiHeader(t.Context(), []byte(`{"type":"session","id":"id","cwd":"/old"}`), "id.jsonl", "id", string([]byte{0xff}))
 	require.ErrorContains(t, err, "UTF-8")
-	for _, tc := range []struct{ header, id, want string }{
-		{`{"type":"session","id":"other","cwd":"/old"}`, "id", "identity"},
-		{`{"type":"session","id":"id"}`, "id", "one cwd"},
-		{`{"type":"session","cwd":"/old"}`, "id", "identity"},
-		{`{"type":"session","id":"id","version":4,"cwd":"/old"}`, "id", "version"},
-		{`{"type":"title"}` + "\n" + `{"type":"session","id":"id","cwd":"/old"}`, "id", "header"},
-		{`{"type":123,"id":"id"}`, "id", "header"},
-		{`{"type":"session","id":"id","version":"3"}`, "id", "header"},
-		{"", "id", "header"},
+	for _, tc := range []struct{ name, header, id, want string }{
+		{"wrong identity", `{"type":"session","id":"other","cwd":"/old"}`, "id", "identity"},
+		{"missing cwd", `{"type":"session","id":"id"}`, "id", "one cwd"},
+		{"missing identity", `{"type":"session","cwd":"/old"}`, "id", "identity"},
+		{"unsupported version", `{"type":"session","id":"id","version":4,"cwd":"/old"}`, "id", "version"},
+		{"title before session", `{"type":"title"}` + "\n" + `{"type":"session","id":"id","cwd":"/old"}`, "id", "header"},
+		{"numeric type", `{"type":123,"id":"id"}`, "id", "header"},
+		{"string version", `{"type":"session","id":"id","version":"3"}`, "id", "header"},
+		{"empty header", "", "id", "header"},
 	} {
-		t.Run(tc.header, func(t *testing.T) {
+		t.Run(tc.name, func(t *testing.T) {
 			_, err := relocatePiHeader(t.Context(), []byte(tc.header), "other.jsonl", tc.id, "/new")
 			switch tc.want {
 			case "identity":
