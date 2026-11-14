@@ -86,6 +86,10 @@ The latest release is
   an older serve hides image text and Activity usage for sessions a newer
   client rewrote this way.
 
+- Hub containers can pull workstation transcripts over SSH. The image now
+  includes an SSH client; see [hub container SSH](/docs/configuration/#hub-container-ssh)
+  for dedicated-key mounts and connection checks.
+
 **Bug fixes**
 
 - A growing Codex session no longer leaves a removed copy of every earlier
