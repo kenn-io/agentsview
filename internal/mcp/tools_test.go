@@ -2185,4 +2185,30 @@ func TestListRecallPagesWithEvidence(t *testing.T) {
 	require.Len(t, next.Entries, 1)
 	assert.NotEqual(t, out.Entries[0].ID, next.Entries[0].ID)
 	assert.Empty(t, next.NextCursor)
+	_, err = d.InsertRecallEntry(t.Context(), db.RecallEntry{ID: "c", Type: "fact", Scope: "project", Status: "archived", Title: "c", Body: "c", SourceSessionID: "s1"})
+	require.NoError(t, err)
+	res, err = ct.CallTool(t.Context(), callParams("list_recall", map[string]any{"limit": 1, "updated_since": "2020-01-01T00:00:00Z", "cursor": out.NextCursor}))
+	require.NoError(t, err)
+	require.True(t, res.IsError)
+	require.Len(t, res.Content, 1)
+	text, ok := res.Content[0].(*mcp.TextContent)
+	require.True(t, ok)
+	assert.Contains(t, text.Text, "recall corpus changed; restart pagination")
+}
+
+func TestListRecallFiltersSourceSession(t *testing.T) {
+	d := dbtest.OpenTestDB(t)
+	for _, id := range []string{"s1", "s2"} {
+		dbtest.SeedSession(t, d, id, "project")
+		_, err := d.InsertRecallEntry(t.Context(), db.RecallEntry{ID: id, Type: "fact", Scope: "project", Status: "accepted", Title: id, Body: id, SourceSessionID: id})
+		require.NoError(t, err)
+	}
+	st, ct := newInMemoryPair(t, newServer(ServeOptions{Service: service.NewDirectBackend(d, nil)}))
+	t.Cleanup(func() { require.NoError(t, ct.Close()); require.NoError(t, st.Wait()) })
+	res, err := ct.CallTool(t.Context(), callParams("list_recall", map[string]any{"source_session_id": "s1"}))
+	require.NoError(t, err)
+	require.False(t, res.IsError)
+	out := decodeStructured[listRecallOut](t, res)
+	require.Len(t, out.Entries, 1)
+	assert.Equal(t, "s1", out.Entries[0].SourceSessionID)
 }

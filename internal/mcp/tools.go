@@ -271,6 +271,7 @@ type listRecallIn struct {
 	Scope           string `json:"scope,omitempty"`
 	Status          string `json:"status,omitempty"`
 	ExtractorMethod string `json:"extractor_method,omitempty"`
+	SourceSessionID string `json:"source_session_id,omitempty"`
 	SourceRunID     string `json:"source_run_id,omitempty"`
 	TrustedOnly     bool   `json:"trusted_only,omitempty"`
 	Cursor          string `json:"cursor,omitempty" jsonschema:"Cursor from a previous next_cursor."`
@@ -288,7 +289,7 @@ func (t *toolset) listRecall(ctx context.Context, _ *mcp.CallToolRequest, in lis
 		UpdatedSince: in.UpdatedSince, Project: in.Project,
 		CWD: in.CWD, GitBranch: in.GitBranch, Agent: in.Agent, Type: in.Type,
 		Scope: in.Scope, Status: in.Status, ExtractorMethod: in.ExtractorMethod,
-		SourceRunID: in.SourceRunID, TrustedOnly: in.TrustedOnly, Cursor: in.Cursor,
+		SourceSessionID: in.SourceSessionID, SourceRunID: in.SourceRunID, TrustedOnly: in.TrustedOnly, Cursor: in.Cursor,
 		Limit: clampLimit(in.Limit, defaultListLimit, maxListLimit),
 	})
 	if err != nil {
