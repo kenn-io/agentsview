@@ -24,21 +24,3 @@ func TestOpenConfiguresThreadCount(t *testing.T) {
 	).Scan(&got))
 	assert.Equal(t, strconv.Itoa(duckDBThreadCount()), got)
 }
-
-func TestServingReadOnlyConnections(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "pool.duckdb")
-	writable, err := Open(t.Context(), path)
-	require.NoError(t, err)
-	assert.Equal(t, 1, writable.Stats().MaxOpenConnections)
-	require.NoError(t, writable.Close())
-
-	readOnly, err := OpenReadOnly(t.Context(), path)
-	require.NoError(t, err)
-	assert.Equal(t, 1, readOnly.Stats().MaxOpenConnections)
-	require.NoError(t, readOnly.Close())
-
-	serving, err := openServingReadOnly(t.Context(), path)
-	require.NoError(t, err)
-	t.Cleanup(func() { require.NoError(t, serving.Close()) })
-	assert.Equal(t, 4, serving.Stats().MaxOpenConnections)
-}

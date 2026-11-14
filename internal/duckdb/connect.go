@@ -18,8 +18,7 @@ import (
 
 const (
 	quackAttachmentName = "agentsview_remote"
-	// Four connections cut cold Dashboard waits from about 11s to 6s in
-	// paired runs while bounding concurrent panel reads.
+	// Bound concurrent reads while allowing Dashboard panels to run together.
 	servingReaderMaxOpenConns = 4
 )
 
@@ -83,10 +82,8 @@ func openServingReadOnly(ctx context.Context, path string) (*sql.DB, error) {
 	return db, nil
 }
 
-// configureOpenedDuckDB applies the shared connection settings: a single
-// pooled connection (DuckDB permits one writer per database file, and a
-// single connection avoids surprising file-lock contention) and the thread
-// count.
+// configureOpenedDuckDB sets the thread count and a default single connection.
+// Local serving handles widen the pool for concurrent reads.
 func configureOpenedDuckDB(ctx context.Context, db *sql.DB) (*sql.DB, error) {
 	db.SetMaxOpenConns(1)
 	db.SetMaxIdleConns(1)
