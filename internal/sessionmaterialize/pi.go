@@ -90,7 +90,10 @@ func materializePi(ctx context.Context, cfg config.Config, session *db.Session, 
 	}
 	changed, err := publishFiles(ctx, []installFile{{dest, data}})
 	if err != nil {
-		return Result{Cwd: cwd}, err
+		if _, ok := errors.AsType[*DestinationDiffersError](err); ok {
+			return Result{Cwd: cwd}, err
+		}
+		return Result{}, err
 	}
 	status := "unchanged"
 	if changed {
