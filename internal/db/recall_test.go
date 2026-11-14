@@ -3082,6 +3082,7 @@ func TestRecallListTimeBounds(t *testing.T) {
 		want []string
 	}{
 		{RecallQuery{UpdatedSince: cutoff}, []string{"changed", "new"}},
+		{RecallQuery{CreatedSince: cutoff}, []string{"new"}},
 	} {
 		entries, err := d.ListRecallEntries(t.Context(), tc.q)
 		require.NoError(t, err)
@@ -3092,6 +3093,8 @@ func TestRecallListTimeBounds(t *testing.T) {
 		assert.ElementsMatch(t, tc.want, ids)
 	}
 	_, err := d.ListRecallEntries(t.Context(), RecallQuery{UpdatedSince: "yesterday"})
+	require.ErrorIs(t, err, ErrInvalidRecallQuery)
+	_, err = d.ListRecallEntries(t.Context(), RecallQuery{CreatedSince: "yesterday"})
 	require.ErrorIs(t, err, ErrInvalidRecallQuery)
 }
 
@@ -3140,4 +3143,37 @@ func TestRecallCheckpointIncludesSubsequentWrite(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, entries, 1)
 	assert.Equal(t, "after-checkpoint", entries[0].ID)
+}
+
+func TestRecallTimeBoundedPagesOldestFirst(t *testing.T) {
+	d := testDB(t)
+	insertSession(t, d, "walk-session", "project")
+	for _, row := range []struct{ id, updated string }{
+		{"a", "2026-02-01T00:00:00.000Z"},
+		{"b", "2026-02-01T00:00:00.000Z"},
+		{"c", "2026-02-01T00:00:00.000Z"},
+		{"d", "2026-02-02T00:00:00.000Z"},
+	} {
+		_, err := d.InsertRecallEntry(t.Context(), RecallEntry{ID: row.id, Type: "fact", Scope: "project", Status: "accepted", Title: row.id, Body: row.id, SourceSessionID: "walk-session"})
+		require.NoError(t, err)
+		_, err = d.getWriter().Exec(t.Context(), "UPDATE recall_entries SET updated_at = ? WHERE id = ?", row.updated, row.id)
+		require.NoError(t, err)
+	}
+	q := RecallQuery{UpdatedSince: "2026-01-01T00:00:00Z", Limit: 2}
+
+	first, err := d.ListRecallEntries(t.Context(), q)
+	require.NoError(t, err)
+	require.Len(t, first, 2)
+	assert.Equal(t, "c", first[0].ID)
+	assert.Equal(t, "b", first[1].ID)
+
+	// "a" is unseen; a change moves it behind the cursor's remaining tail.
+	_, err = d.getWriter().Exec(t.Context(), "UPDATE recall_entries SET updated_at = ? WHERE id = ?", "2026-02-03T00:00:00.000Z", "a")
+	require.NoError(t, err)
+	q.CursorUpdatedAt, q.CursorID = first[1].UpdatedAt, first[1].ID
+	second, err := d.ListRecallEntries(t.Context(), q)
+	require.NoError(t, err)
+	require.Len(t, second, 2)
+	assert.Equal(t, "d", second[0].ID)
+	assert.Equal(t, "a", second[1].ID)
 }

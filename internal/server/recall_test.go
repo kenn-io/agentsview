@@ -415,28 +415,6 @@ func TestListRecallEntriesPaginatesWithoutRepeatingEntries(t *testing.T) {
 	assert.ElementsMatch(t, []string{"page-a", "page-b", "page-c"}, ids)
 }
 
-func TestListRecallDeltaRejectsChangedCorpus(t *testing.T) {
-	te := setup(t)
-	seedRecallEntrySession(t, te)
-	for _, id := range []string{"page-a", "page-b"} {
-		seedRecallEntry(t, te, db.RecallEntry{ID: id, Title: id, Body: id, SourceSessionID: "recall-session"})
-	}
-	path := "/api/v1/recall/entries?limit=1&updated_since=2020-01-01T00:00:00Z"
-	first := te.get(t, path)
-	assertStatus(t, first, http.StatusOK)
-	page := decode[listRecallEntriesResponse](t, first)
-	require.NotEmpty(t, page.NextCursor)
-	unseen := "page-a"
-	if page.RecallEntries[0].ID == unseen {
-		unseen = "page-b"
-	}
-	w := te.post(t, "/api/v1/recall/entries/"+unseen+"/review", `{"action":"archive"}`)
-	assertStatus(t, w, http.StatusOK)
-	second := te.get(t, path+"&cursor="+url.QueryEscape(page.NextCursor))
-	assertStatus(t, second, http.StatusConflict)
-	assert.Contains(t, second.Body.String(), "recall corpus changed; restart pagination")
-}
-
 func TestListRecallEntriesPaginatesStableDiversifiedRankedResults(t *testing.T) {
 	te := setup(t)
 	for _, sessionID := range []string{"a-shared", "b-unique", "c-unique"} {
@@ -2008,7 +1986,7 @@ func TestListRecallEntriesTimeBounds(t *testing.T) {
 	te := setup(t)
 	seedRecallEntrySession(t, te)
 	seedRecallEntry(t, te, db.RecallEntry{ID: "bounds", Title: "bounds", Body: "bounds", SourceSessionID: "recall-session"})
-	for _, param := range []string{"updated_since"} {
+	for _, param := range []string{"updated_since", "created_since"} {
 		bad := te.get(t, "/api/v1/recall/entries?"+param+"=invalid")
 		assertStatus(t, bad, http.StatusBadRequest)
 		future := te.get(t, "/api/v1/recall/entries?"+param+"=2999-01-01T00:00:00Z")
@@ -2021,7 +1999,7 @@ func TestListRecallEntriesTimeBoundsIncludeArchived(t *testing.T) {
 	te := setup(t)
 	seedRecallEntrySession(t, te)
 	seedRecallEntry(t, te, db.RecallEntry{ID: "archived", Status: "archived", Title: "archived", Body: "archived", SourceSessionID: "recall-session", SourceRunID: "generation"})
-	for _, param := range []string{"updated_since"} {
+	for _, param := range []string{"updated_since", "created_since"} {
 		w := te.get(t, "/api/v1/recall/entries?"+param+"=2020-01-01T00:00:00Z")
 		assertStatus(t, w, http.StatusOK)
 		entries := decode[listRecallEntriesResponse](t, w).RecallEntries

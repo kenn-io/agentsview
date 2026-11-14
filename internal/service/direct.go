@@ -1515,6 +1515,7 @@ func recallFilterToDB(f RecallFilter) db.RecallQuery {
 	return db.RecallQuery{
 		Text:                f.Query,
 		UpdatedSince:        f.UpdatedSince,
+		CreatedSince:        f.CreatedSince,
 		Project:             f.Project,
 		CWD:                 f.CWD,
 		GitBranch:           f.GitBranch,

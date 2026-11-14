@@ -6,12 +6,9 @@ import (
 	"encoding/base64"
 	"encoding/hex"
 	"encoding/json/v2"
-	"errors"
 
 	"go.kenn.io/agentsview/internal/db"
 )
-
-var ErrStaleRecallPagination = errors.New("recall corpus changed; restart pagination")
 
 const (
 	RecallListCursorRecency = "recency"
@@ -37,30 +34,6 @@ func ListRecentRecallEntriesPage(
 	cursor *RecallListCursor,
 ) ([]db.RecallResult, string, error) {
 	pageLimit = db.RecallLimit(pageLimit)
-	var revision string
-	var revisionProvider interface {
-		RecallQueryRevision(context.Context) (string, error)
-	}
-	if query.UpdatedSince != "" {
-		revisionProvider, _ = store.(interface {
-			RecallQueryRevision(context.Context) (string, error)
-		})
-		if revisionProvider != nil {
-			var err error
-			revision, err = revisionProvider.RecallQueryRevision(ctx)
-			if err != nil {
-				return nil, "", err
-			}
-		}
-		if cursor != nil {
-			if revision == "" {
-				return nil, "", db.ErrInvalidRecallQuery
-			}
-			if cursor.Revision != revision {
-				return nil, "", ErrStaleRecallPagination
-			}
-		}
-	}
 	if cursor != nil {
 		if cursor.Kind != RecallListCursorRecency {
 			return nil, "", db.ErrInvalidRecallQuery
@@ -73,15 +46,6 @@ func ListRecentRecallEntriesPage(
 	if err != nil {
 		return nil, "", err
 	}
-	if revision != "" {
-		current, err := revisionProvider.RecallQueryRevision(ctx)
-		if err != nil {
-			return nil, "", err
-		}
-		if current != revision {
-			return nil, "", ErrStaleRecallPagination
-		}
-	}
 	if entries == nil {
 		entries = []db.RecallEntry{}
 	}
@@ -93,7 +57,7 @@ func ListRecentRecallEntriesPage(
 	for _, entry := range entries {
 		results = append(results, db.RecallResult{RecallEntry: entry})
 	}
-	if !hasMore || (query.UpdatedSince != "" && revision == "") {
+	if !hasMore {
 		return results, "", nil
 	}
 	last := entries[len(entries)-1]
@@ -101,7 +65,6 @@ func ListRecentRecallEntriesPage(
 		Kind:       RecallListCursorRecency,
 		UpdatedAt:  last.UpdatedAt,
 		ID:         last.ID,
-		Revision:   revision,
 		FilterHash: RecallListFilterHash(query),
 	})
 	return results, nextCursor, nil
@@ -138,7 +101,7 @@ func DecodeRecallListCursor(raw string) (RecallListCursor, error) {
 	switch cursor.Kind {
 	case RecallListCursorRecency:
 		if cursor.UpdatedAt == "" || cursor.ID == "" ||
-			cursor.Offset != 0 {
+			cursor.Offset != 0 || cursor.Revision != "" {
 			return RecallListCursor{}, db.ErrInvalidRecallQuery
 		}
 	case RecallListCursorRanked:
