@@ -53,13 +53,19 @@ func TestCompactionSummariesExcludedSessionDoesNotReadMessages(t *testing.T) {
 	roo.Agent = "roocode"
 	kilo := &service.SessionDetail{}
 	kilo.Agent = "kilo-legacy"
-	for _, detail := range []*service.SessionDetail{nil, roo, kilo} {
+	for _, detail := range []*service.SessionDetail{roo, kilo} {
 		svc := &compactionSpy{detail: detail}
 		out, err := service.CompactionSummaries(t.Context(), svc, service.CompactionSummariesRequest{SessionID: "session"})
 		require.NoError(t, err)
 		assert.Empty(t, out.Summaries)
 		assert.Empty(t, svc.reads)
 	}
+}
+
+func TestCompactionSummariesMissingSession(t *testing.T) {
+	svc := service.NewDirectBackend(dbtest.OpenTestDB(t), nil)
+	_, err := service.CompactionSummaries(t.Context(), svc, service.CompactionSummariesRequest{SessionID: "missing"})
+	require.ErrorIs(t, err, service.ErrSessionNotFound)
 }
 
 func TestCompactionSummariesDaemonReplacementPage(t *testing.T) {

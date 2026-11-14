@@ -70,7 +70,10 @@ func CompactionSummaries(ctx context.Context, svc SessionService, req Compaction
 		if err != nil {
 			return out, err
 		}
-		if detail == nil || slices.Contains(compactionExcludedAgents[:], detail.Agent) {
+		if detail == nil {
+			return out, ErrSessionNotFound
+		}
+		if slices.Contains(compactionExcludedAgents[:], detail.Agent) {
 			return out, nil
 		}
 		sessions = append(sessions, detail.Session)
