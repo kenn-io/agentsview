@@ -1365,7 +1365,7 @@ func TestHTTPBackendRecallTimeBoundsAndCursor(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path == "/api/v1/version" {
 			w.Header().Set("Content-Type", "application/json")
-			_, _ = w.Write([]byte(`{"api_version":19}`))
+			_, _ = w.Write([]byte(`{"api_version":20}`))
 			return
 		}
 		assert.Equal(t, "2026-01-01T00:00:00Z", r.URL.Query().Get("updated_since"))
@@ -1397,7 +1397,7 @@ func TestHTTPBackendRecallTimeBoundsOldServer(t *testing.T) {
 			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				w.Header().Set("Content-Type", "application/json")
 				if r.URL.Path == "/api/v1/version" {
-					_, _ = w.Write([]byte(`{"api_version":18}`))
+					_, _ = w.Write([]byte(`{"api_version":19}`))
 					return
 				}
 				calls++
@@ -1412,7 +1412,7 @@ func TestHTTPBackendRecallTimeBoundsOldServer(t *testing.T) {
 			t.Cleanup(srv.Close)
 			svc := servicehttp.NewHTTPBackend(srv.URL, "", false, "")
 			if tc.known {
-				svc = servicehttp.NewHTTPBackendForServer(srv.URL, "", servicehttp.HTTPServerCapabilities{APIVersion: 18})
+				svc = servicehttp.NewHTTPBackendForServer(srv.URL, "", servicehttp.HTTPServerCapabilities{APIVersion: 19})
 			}
 			_, err := svc.ListRecallEntries(t.Context(), tc.filter)
 			require.ErrorContains(t, err, "restart or upgrade")
@@ -1438,7 +1438,7 @@ func TestHTTPBackendRecallStalePageReturnsRestartError(t *testing.T) {
 		_, _ = w.Write([]byte(`{"error":"recall corpus changed during pagination"}`))
 	}))
 	t.Cleanup(srv.Close)
-	svc := servicehttp.NewHTTPBackendForServer(srv.URL, "", servicehttp.HTTPServerCapabilities{APIVersion: 19})
+	svc := servicehttp.NewHTTPBackendForServer(srv.URL, "", servicehttp.HTTPServerCapabilities{APIVersion: 20})
 	_, err := svc.ListRecallEntries(t.Context(), service.RecallFilter{UpdatedSince: "2026-01-01T00:00:00Z", Cursor: "previous"})
 	require.ErrorIs(t, err, service.ErrStaleRecallPagination)
 }

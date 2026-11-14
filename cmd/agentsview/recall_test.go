@@ -330,7 +330,7 @@ func TestRecallListUsesExplicitServerURL(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path == "/api/v1/version" {
 			w.Header().Set("Content-Type", "application/json")
-			_, _ = w.Write([]byte(`{"api_version":19}`))
+			_, _ = w.Write([]byte(`{"api_version":20}`))
 			return
 		}
 		gotPath = r.URL.Path

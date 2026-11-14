@@ -435,7 +435,7 @@ const SessionAnnotationsAPIVersion = 11
 
 // RecallTimeBoundsAPIVersion is the first daemon API that filters Recall
 // lists by updated_since and created_since; older daemons ignore them.
-const RecallTimeBoundsAPIVersion = 19
+const RecallTimeBoundsAPIVersion = 20
 
 // ListFilter mirrors the HTTP query parameters in handleListSessions.
 // Field names map to HTTP query param names via json tags.
