@@ -376,29 +376,37 @@ func TestMusePersonalIndexCacheAcrossProviders(t *testing.T) {
 				require.Len(t, sources, count)
 				parseAll := func(want string) {
 					var workers sync.WaitGroup
-					for _, source := range sources {
+					errs := make([]error, len(sources))
+					ended := make([]string, len(sources))
+					for i, source := range sources {
 						workers.Go(func() {
 							other, ok := NewProvider(AgentMusePersonal, ProviderConfig{Roots: []string{root}})
-							if !assert.True(t, ok) {
+							if !ok {
+								errs[i] = errors.New("muse personal provider unavailable")
 								return
 							}
 							fp, err := other.Fingerprint(ctx, source)
 							if err != nil {
-								t.Errorf("fingerprint %s: %v", source.Key, err)
+								errs[i] = fmt.Errorf("fingerprint %s: %w", source.Key, err)
 								return
 							}
 							out, err := other.Parse(ctx, ParseRequest{Source: source, Fingerprint: fp})
 							if err != nil {
-								t.Errorf("parse %s: %v", source.Key, err)
+								errs[i] = fmt.Errorf("parse %s: %w", source.Key, err)
 								return
 							}
-							if !assert.Len(t, out.Results, 1) {
+							if len(out.Results) != 1 {
+								errs[i] = fmt.Errorf("parse %s: got %d results, want 1", source.Key, len(out.Results))
 								return
 							}
-							assert.Equal(t, want, out.Results[0].Result.Session.EndedAt.Format(time.RFC3339))
+							ended[i] = out.Results[0].Result.Session.EndedAt.Format(time.RFC3339)
 						})
 					}
 					workers.Wait()
+					require.NoError(t, errors.Join(errs...))
+					for _, got := range ended {
+						assert.Equal(t, want, got)
+					}
 				}
 				parseAll("2026-10-05T16:00:00Z")
 				assert.Equal(t, int64(1), scans.Load())
