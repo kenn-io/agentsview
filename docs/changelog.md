@@ -250,6 +250,13 @@ The latest release is
   or a server error, waiting as long as Cursor's `Retry-After` asks or backing
   off when it does not say, and reports each wait on stderr. See
   [`source cursor sync-usage`](/docs/commands/#agentsview-source-cursor-sync-usage).
+
+- Daemon-backed PostgreSQL and ClickHouse push watchers no longer reject
+  change-triggered pushes when the client and daemon use different source roots.
+  Push watchers follow committed archive changes from the daemon without starting
+  a second filesystem watcher. Startup, periodic catch-up and shutdown still sync
+  sources through the archive owner.
+
 - A growing Codex session no longer leaves a removed copy of every earlier
   message in the conversation export index each time it is fully re-read. A
   long session could add millions of such rows and many gigabytes to the
