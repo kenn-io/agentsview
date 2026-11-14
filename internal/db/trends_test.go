@@ -2,6 +2,8 @@ package db
 
 import (
 	"context"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -597,4 +599,69 @@ func TestTrendsPartsRecountChangedSessionStart(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, []TrendPoint{{Date: "2024-06-05", Count: 0}, {Date: "2024-06-06", Count: 1}}, got.Series[0].Points)
 	assert.Equal(t, [][]string{{"s1"}}, reads)
+}
+
+func TestTrendsSQLiteOffsetWindows(t *testing.T) {
+	ctx := t.Context()
+	d := testDB(t)
+	start := "2024-01-01T00:00:00Z"
+	insertSession(t, d, "offset-message", "project", func(s *Session) {
+		s.StartedAt = &start
+		s.MessageCount, s.UserMessageCount = 2, 2
+	})
+	insertMessages(t, d,
+		Message{SessionID: "offset-message", Ordinal: 0, Role: "user", Content: "probe", ContentLength: 5, Timestamp: "2025-03-08T22:00:00-12:00"},
+		Message{SessionID: "offset-message", Ordinal: 1, Role: "user", Content: "probe", ContentLength: 5, Timestamp: "2025-03-11T03:00:00+14:00"},
+	)
+	fallback := "2025-03-08T22:00:00-12:00"
+	insertSession(t, d, "offset-fallback", "project", func(s *Session) {
+		s.StartedAt = &fallback
+		s.MessageCount, s.UserMessageCount = 1, 1
+	})
+	insertMessages(t, d, Message{SessionID: "offset-fallback", Ordinal: 0, Role: "user", Content: "probe", ContentLength: 5})
+	insertSession(t, d, "offset-old", "project", func(s *Session) {
+		s.StartedAt = &start
+		s.MessageCount, s.UserMessageCount = 1, 1
+	})
+	insertMessages(t, d, Message{SessionID: "offset-old", Ordinal: 0, Role: "user", Content: "probe", ContentLength: 5, Timestamp: "2024-01-01T00:00:00-12:00"})
+	terms, err := ParseTrendTerms([]string{"probe"})
+	require.NoError(t, err)
+	f := AnalyticsFilter{From: "2025-03-10", To: "2025-03-10", Timezone: "Pacific/Kiritimati"}
+	var reads [][]string
+	reset := SetTrendPartsReadObserver(func(ids []string) { reads = append(reads, append([]string(nil), ids...)) })
+	t.Cleanup(reset)
+	retained, err := d.GetTrendsTerms(ctx, f, terms, "day")
+	require.NoError(t, err)
+	require.True(t, d.trendsDisk.Enabled())
+	assert.Equal(t, 2, retained.MessageCount)
+	assert.Equal(t, 2, retained.Series[0].Total)
+	require.Equal(t, [][]string{{"offset-fallback", "offset-message"}}, reads)
+	reads = nil
+
+	cacheFile := filepath.Join(t.TempDir(), "cache-file")
+	require.NoError(t, os.WriteFile(cacheFile, nil, 0600))
+	t.Setenv("CACHE_DIRECTORY", cacheFile)
+	direct, err := Open(ctx, d.Path())
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, direct.Close()) })
+	want, err := direct.GetTrendsTerms(ctx, f, terms, "day")
+	require.NoError(t, err)
+	require.False(t, direct.trendsDisk.Enabled())
+	assert.Equal(t, retained, want)
+
+	f.To = "2025-03-11"
+	wide, err := d.GetTrendsTerms(ctx, f, terms, "day")
+	require.NoError(t, err)
+	assert.Equal(t, 3, wide.MessageCount)
+	assert.Equal(t, []TrendPoint{{Date: "2025-03-10", Count: 2}, {Date: "2025-03-11", Count: 1}}, wide.Series[0].Points)
+	assert.Empty(t, reads)
+	wideDirect, err := direct.GetTrendsTerms(ctx, f, terms, "day")
+	require.NoError(t, err)
+	assert.Equal(t, wide, wideDirect)
+	zero := 0
+	f.Hour = &zero
+	hourly, err := d.GetTrendsTerms(ctx, f, terms, "day")
+	require.NoError(t, err)
+	assert.Equal(t, 2, hourly.MessageCount)
+	assert.Equal(t, 2, hourly.Series[0].Total)
 }

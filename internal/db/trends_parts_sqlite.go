@@ -20,6 +20,32 @@ func (db *DB) trendsPartsDisk() {
 	})
 }
 
+// Offset timestamps cannot be ordered against UTC bounds as text. Widen the
+// candidate window by the largest RFC3339 offset Go accepts, then apply the
+// exact local date and hour after parsing.
+func sqliteTrendWindowPred(col, from, to string) (string, []any) {
+	pred, args := analyticsMessageWindowPred(col, from, to)
+	if pred == "" {
+		return pred, args
+	}
+	offsetBound := func(value string, shift time.Duration) string {
+		t, err := time.Parse("2006-01-02T15:04:05", value)
+		if err != nil {
+			return ""
+		}
+		t = t.Add(shift)
+		if t.Year() < 1 || t.Year() > 9999 {
+			return ""
+		}
+		return t.Format("2006-01-02T15:04:05")
+	}
+	offsetRange, offsetArgs := analyticsMessageRangePred(col, offsetBound(from, -25*time.Hour), offsetBound(to, 25*time.Hour))
+	if offsetRange == "" {
+		return "(" + pred + " OR substr(" + col + ", -6, 1) IN ('+', '-'))", args
+	}
+	return "(" + pred + " OR (substr(" + col + ", -6, 1) IN ('+', '-') AND " + offsetRange + "))", append(args, offsetArgs...)
+}
+
 // sqliteTrendSelection selects the sessions a Trends read walks.
 func sqliteTrendSelection(f AnalyticsFilter) (string, []any) {
 	sessionFilter := f
@@ -27,8 +53,8 @@ func sqliteTrendSelection(f AnalyticsFilter) (string, []any) {
 	sessionFilter.DayOfWeek, sessionFilter.Hour = nil, nil
 	where, args := sessionFilter.buildWhereWithDate("", false, "s.id")
 	from, to := f.messageWindowBoundsUTC()
-	if sessionWindow, wargs := analyticsMessageWindowPred("COALESCE(NULLIF(started_at, ''), created_at)", from, to); sessionWindow != "" {
-		messageWindow, messageArgs := analyticsMessageWindowPred("wm.timestamp", from, to)
+	if sessionWindow, wargs := sqliteTrendWindowPred("COALESCE(NULLIF(started_at, ''), created_at)", from, to); sessionWindow != "" {
+		messageWindow, messageArgs := sqliteTrendWindowPred("wm.timestamp", from, to)
 		// Filter sessions before walking their messages.
 		where += " AND s.id IN (SELECT sessions.id FROM sessions WHERE (" + sessionWindow + " OR EXISTS (SELECT 1 FROM messages wm WHERE wm.session_id = sessions.id AND wm.timestamp != '' AND " + messageWindow + ")))"
 		args = append(args, wargs...)

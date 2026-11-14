@@ -25,14 +25,19 @@ func (s *Store) ConfigureUsageCache(ctx context.Context, directory, targetURL, s
 	if err != nil {
 		return err
 	}
-	if err := s.trendsDisk.Open("postgres-trends", strings.ReplaceAll(fingerprint, ":", "-"), 128<<20, 256<<20); err != nil {
+	column, err := sessionVersionColumnPG(ctx, s.pg)
+	if err != nil {
 		return err
 	}
-	s.trendsDisk.Sweep(time.Now())
-	s.trendsIdentity = fingerprint
-	column, err := sessionVersionColumnPG(ctx, s.pg)
-	if err != nil || column != "xmin" {
-		return err
+	if err := s.trendsDisk.Open("postgres-trends", strings.ReplaceAll(fingerprint, ":", "-"), 128<<20, 256<<20); err != nil {
+		log.Printf("opening trends cache: %v", err)
+	} else {
+		s.trendsDisk.Sweep(time.Now())
+		s.trendsIdentity = fingerprint
+		s.trendsVersionColumn = column
+	}
+	if column != "xmin" {
+		return nil
 	}
 	reader, err := db.NewUsageCacheReader(filepath.Join(directory, "usage-postgres", strings.ReplaceAll(fingerprint, ":", "-")), &pgUsageCacheSource{Store: s, target: fingerprint})
 	if err != nil {

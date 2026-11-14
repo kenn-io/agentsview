@@ -20,6 +20,7 @@ import (
 	"github.com/gofrs/flock"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"go.kenn.io/agentsview/internal/testutil"
 )
 
 // Each top-level test gets its own database on the TEST_PG_URL server, so
@@ -339,6 +340,7 @@ func pgStoreTemplateName(tb testing.TB, server *pgTestServer, baseURL string) st
 }
 
 func TestMain(m *testing.M) {
+	cleanup := testutil.IsolateCacheDirectory()
 	code := m.Run()
 	if pgStoreTemplate.name != "" {
 		// Runs after every test has ended, so no test's context remains.
@@ -350,6 +352,7 @@ func TestMain(m *testing.M) {
 			code = max(code, 1)
 		}
 	}
+	cleanup()
 	os.Exit(code)
 }
 

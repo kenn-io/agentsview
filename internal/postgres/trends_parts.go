@@ -26,12 +26,8 @@ func (s *Store) trendSelection(f db.AnalyticsFilter) (string, []any) {
 }
 
 func (s *Store) TrendSessionVersions(ctx context.Context, f db.AnalyticsFilter) (map[string]string, error) {
-	column, err := sessionVersionColumnPG(ctx, s.pg)
-	if err != nil {
-		return nil, err
-	}
 	where, args := s.trendSelection(f)
-	return db.ScanTrendVersions(s.pg.QueryContext(ctx, `SELECT s.id, `+frustrationSessionVersion("s."+column)+` FROM sessions s WHERE `+where, args...))
+	return db.ScanTrendVersions(s.pg.QueryContext(ctx, `SELECT s.id, `+frustrationSessionVersion("s."+s.trendsVersionColumn)+` FROM sessions s WHERE `+where, args...))
 }
 
 func (s *Store) VisitTrendMessages(ctx context.Context, f db.AnalyticsFilter, ids []string, visit func(string, string, time.Time)) error {

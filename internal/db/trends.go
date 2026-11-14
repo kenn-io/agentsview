@@ -115,7 +115,7 @@ func (db *DB) trendsTerms(ctx context.Context, f AnalyticsFilter, terms []TrendT
 	content := "m.content"
 	var selectArgs []any
 	effectiveTime := "COALESCE(NULLIF(m.timestamp, ''), NULLIF(s.started_at, ''), s.created_at)"
-	if inWindow, wargs := analyticsMessageWindowPred(effectiveTime, from, to); inWindow != "" {
+	if inWindow, wargs := sqliteTrendWindowPred(effectiveTime, from, to); inWindow != "" {
 		rowWindow := inWindow
 		if modelFiltering {
 			content = "CASE WHEN " + inWindow + " THEN m.content ELSE '' END"
