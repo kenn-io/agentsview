@@ -1173,7 +1173,13 @@ func (s *Store) collectContentSubstringPass(
 			var contentPred string
 			if ranked {
 				b := db.NewQueryBuilder(db.DuckDBQueryDialect(), 0)
-				contentPred = db.WordFilterSQL(b, "COALESCE(m.dialogue_text, m.content)", f, words, all)
+				column := "COALESCE(m.dialogue_text, m.content)"
+				if all {
+					contentPred = db.WordFilterSQL(b, column, f, words, true)
+				} else {
+					contentPred = "(" + db.WordCandidateSQL(b, column, words, false) + " AND " +
+						db.WordRegexSQL(b, column, words, false) + ")"
+				}
 				args = append(append(args, b.Args()...), scopeArgs...)
 			} else {
 				contentPred = addSearchArgs("COALESCE(m.dialogue_text, m.content)")
@@ -1277,19 +1283,30 @@ func (s *Store) collectContentSubstringPass(
 	if len(branches) == 0 {
 		return nil, nil
 	}
-	rank, order := "0 AS n, 0 AS tier", ""
+	var query string
 	if ranked {
 		b := db.NewQueryBuilder(db.DuckDBQueryDialect(), 0)
-		rank, order = db.WordRankSQL(b, "body", f, words, all), "tier, n DESC, "
-		args = append(b.Args(), args...) // rank precedes the branches in the SQL
-	}
-	query := `
+		rank := db.WordRankSQL(b, "body", f, words, all)
+		args = append(args, b.Args()...)
+		query = `WITH candidates AS (` + strings.Join(branches, " UNION ALL ") + `),
+			ranked AS MATERIALIZED (
+				SELECT candidates.*, ` + rank + ` FROM candidates
+			)
+			SELECT session_id, project, agent, location, role, tool_name,
+				ordinal, ts, body, n, tier
+			FROM ranked WHERE n >= 1
+			ORDER BY tier, n DESC, sort_ts DESC, session_id ASC, ordinal ASC,
+				src ASC, row_id ASC, call_index ASC, event_index ASC, body ASC
+			LIMIT ? OFFSET ?`
+	} else {
+		query = `
 		SELECT session_id, project, agent, location, role, tool_name,
-			ordinal, ts, body, ` + rank + `
+			ordinal, ts, body, 0 AS n, 0 AS tier
 		FROM (` + strings.Join(branches, " UNION ALL ") + `)
-		ORDER BY ` + order + `sort_ts DESC, session_id ASC, ordinal ASC,
+		ORDER BY sort_ts DESC, session_id ASC, ordinal ASC,
 			src ASC, row_id ASC, call_index ASC, event_index ASC, body ASC
 		LIMIT ? OFFSET ?`
+	}
 	args = append(args, f.Limit+1, f.Cursor)
 	return s.scanContentMatches(ctx, query, args, func(body string) string {
 		if ranked {
