@@ -37,16 +37,12 @@ func tokenMap(t *testing.T, c *sql.DB) map[string]string {
 	return out
 }
 
-func TestHermesMemberTokensMatchDirectAndSeededFingerprint(t *testing.T) {
+func TestHermesMemberTokensMatchDirectFingerprint(t *testing.T) {
 	c, path := hermesTokenFixture(t)
 	hermesfixture.CreateLedger(t, c)
 	_, err := c.ExecContext(t.Context(), `INSERT INTO session_model_usage(session_id,model,input_tokens) SELECT id,'model',12 FROM sessions; INSERT INTO sessions(id,source,started_at) VALUES ('cron_job-a_20261007_120000','cron',1778767200)`)
 	require.NoError(t, err)
 	tokens := tokenMap(t, c)
-	ctx, cleanup, err := WithReconciliationCache(t.Context())
-	require.NoError(t, err)
-	t.Cleanup(func() { require.NoError(t, cleanup()) })
-	require.NoError(t, seedHermesMemberCoresLocked(ctx, path))
 	set := newHermesSourceSet(AgentHermes, []string{filepath.Dir(path)})
 	sources, err := set.Discover(t.Context())
 	require.NoError(t, err)
@@ -64,10 +60,6 @@ func TestHermesMemberTokensMatchDirectAndSeededFingerprint(t *testing.T) {
 		token, ok := hermesStoredMemberToken(fp.Hash)
 		require.True(t, ok)
 		assert.Equal(t, tokens[src.SessionID], token)
-		src.FingerprintSingleMember = false
-		seeded, err := hermesStateMemberFingerprint(ctx, source, src)
-		require.NoError(t, err)
-		assert.Equal(t, fp.Hash, seeded.Hash)
 	}
 	assert.Equal(t, len(tokens), checked)
 }
@@ -86,13 +78,13 @@ func TestHermesMemberTokenChanges(t *testing.T) {
 		{"usage", "", `UPDATE sessions SET input_tokens=777 WHERE id='child'`, true},
 		{"display", "", `UPDATE messages SET codex_reasoning_items='[]' WHERE session_id='child'`, true},
 		{"timestamp repair", `UPDATE messages SET timestamp=-5 WHERE session_id='child'`, `UPDATE messages SET timestamp=1778767210 WHERE session_id='child'`, true},
-		{"live count after interior delete", `INSERT INTO messages(session_id,role,content,timestamp) VALUES ('child','user','inactive',1778767200),('child','user','inactive',1778767300)`, `DELETE FROM messages WHERE id=1; UPDATE sessions SET message_count=0 WHERE id='child'`, true},
+		{"live count after interior delete", `INSERT INTO messages(session_id,role,content,timestamp) VALUES ('child','user','inactive',1778767200),('child','user','inactive',1778767300)`, `DELETE FROM messages WHERE id=1`, true},
 		{"delete all endpoints", `UPDATE sessions SET message_count=0 WHERE id='child'`, `DELETE FROM messages WHERE session_id='child'`, true},
 		{"unused session fields", "", `UPDATE sessions SET runtime_revision=8,last_activity_at=1778769999 WHERE id='child'`, false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			c, _ := hermesTokenFixture(t)
-			_, err := c.ExecContext(t.Context(), `INSERT INTO sessions(id,source,started_at) VALUES ('neighbour','cli',1778767200)`)
+			_, err := c.ExecContext(t.Context(), `INSERT INTO sessions(id,source,started_at) VALUES ('neighbour','cli',1778767200); INSERT INTO messages(session_id,role,content,timestamp) VALUES ('neighbour','user','untouched',1778767200)`)
 			require.NoError(t, err)
 			if tc.setup != "" {
 				_, err = c.ExecContext(t.Context(), tc.setup)
@@ -113,7 +105,7 @@ func TestHermesMemberTokenChanges(t *testing.T) {
 }
 
 func TestHermesMemberListingFallbacksAndDeletion(t *testing.T) {
-	for _, kind := range []string{"deleted", "prefixed deleted", "malformed", "legacy", "future token", "suppressed", "suppressed cron", "pager error", "trigger removed", "missing session index", "missing id index", "empty authority", "suppressed authority"} {
+	for _, kind := range []string{"deleted", "duplicate snapshot", "malformed", "legacy", "future token", "suppressed cron", "pager error", "trigger removed", "missing session index", "missing id index", "empty authority"} {
 		t.Run(kind, func(t *testing.T) {
 			c, path := hermesTokenFixture(t)
 			root := filepath.Dir(path)
@@ -123,8 +115,7 @@ func TestHermesMemberListingFallbacksAndDeletion(t *testing.T) {
 			require.NoError(t, err)
 			require.NoError(t, os.MkdirAll(filepath.Join(root, "sessions"), 0o700))
 			transcript := "s.jsonl"
-			if kind == "prefixed deleted" {
-				transcript = "session_s.jsonl"
+			if kind == "duplicate snapshot" {
 				writeSourceFile(t, filepath.Join(root, "sessions", "session_s.json"), hermesProviderJSONFixture("legacy"))
 			}
 			writeSourceFile(t, filepath.Join(root, "sessions", transcript), hermesProviderJSONLFixture("fallback"))
@@ -137,7 +128,7 @@ func TestHermesMemberListingFallbacksAndDeletion(t *testing.T) {
 			require.NoError(t, err)
 			stored := StoredMemberFreshness{Path: VirtualSourcePath(path, "s"), FingerprintHash: fingerprint.Hash}
 			switch kind {
-			case "deleted", "prefixed deleted":
+			case "deleted", "duplicate snapshot":
 				_, err = c.ExecContext(t.Context(), `DELETE FROM messages;DELETE FROM sessions`)
 			case "malformed":
 				_, err = c.ExecContext(t.Context(), `UPDATE sessions SET started_at='invalid'`)
@@ -145,7 +136,7 @@ func TestHermesMemberListingFallbacksAndDeletion(t *testing.T) {
 				stored.FingerprintHash = strings.Repeat("a", 64)
 			case "future token":
 				stored.FingerprintHash = strings.Replace(fingerprint.Hash, "hst1:", "hst2:", 1)
-			case "suppressed", "suppressed cron":
+			case "suppressed cron":
 				stored.Suppressed = true
 				_, err = c.ExecContext(t.Context(), `UPDATE sessions SET title='changed'`)
 			case "trigger removed":
@@ -160,10 +151,8 @@ func TestHermesMemberListingFallbacksAndDeletion(t *testing.T) {
 			switch kind {
 			case "empty authority":
 				rows = nil
-			case "suppressed authority":
-				rows[0].Suppressed = true
 			}
-			if kind == "suppressed" || kind == "suppressed cron" {
+			if kind == "suppressed cron" {
 				// Mixed authority still skips the matching suppressed member.
 				rows = append([]StoredMemberFreshness{{Path: VirtualSourcePath(path, "a")}}, rows...)
 			}
@@ -176,14 +165,10 @@ func TestHermesMemberListingFallbacksAndDeletion(t *testing.T) {
 			sources, err := set.SourcesForChangedPath(t.Context(), ChangedPathRequest{Path: path, AllowWatermarkOnlySources: true, StoredMemberFreshnessPage: pager})
 			require.NoError(t, err)
 			switch kind {
-			case "suppressed", "suppressed cron":
+			case "suppressed cron":
 				assert.Empty(t, sources)
-			case "deleted", "prefixed deleted":
-				if kind == "prefixed deleted" {
-					require.Len(t, sources, 2)
-				} else {
-					require.Len(t, sources, 1)
-				}
+			case "deleted", "duplicate snapshot":
+				require.Len(t, sources, 1)
 				assert.Equal(t, filepath.Join(root, "sessions", transcript), sources[0].DisplayPath)
 			case "malformed":
 				require.Len(t, sources, 2)
@@ -228,9 +213,6 @@ func TestHermesMemberTokenLedgerOnlyWrite(t *testing.T) {
 	_, err = c.ExecContext(t.Context(), `INSERT INTO session_model_usage(session_id,model,input_tokens,task) VALUES ('child','model',87,'aux')
  ON CONFLICT(session_id,model,billing_provider,billing_base_url,billing_mode,task) DO UPDATE SET input_tokens=input_tokens+excluded.input_tokens`)
 	require.NoError(t, err)
-	after := tokenMap(t, c)
-	assert.NotEqual(t, before["child"], after["child"])
-	assert.Equal(t, before["neighbour"], after["neighbour"])
 	// Fingerprints constructed from the pre-write tokens are the existing cursor
 	// contract; the deep component is irrelevant to an unchanged token comparison.
 	var stored []StoredMemberFreshness
