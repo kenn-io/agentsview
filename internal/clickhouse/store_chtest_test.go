@@ -539,37 +539,22 @@ func TestStorePoolsCapQueryThreads(t *testing.T) {
 	assert.Equal(t, 12, store.conn.Stats().MaxOpenConnections)
 }
 
-func TestStoreCompactionSummaryReads(t *testing.T) {
+func TestStoreMessageWindowCompactBoundary(t *testing.T) {
 	t.Parallel()
 	store, syncer, local := newPushedStore(t)
 	ctx := t.Context()
-	ended := "2028-06-15T00:00:00Z"
-	for _, row := range []struct{ id, agent, role, subtype, content string }{
-		{"user", "hermes", "user", "", "summary"},
-		{"event", "roocode", "system", "", "Context condensed"}, {"placeholder", "evener", "system", "CHECKPOINT", "[CHECKPOINT]"},
-	} {
-		s := db.Session{ID: row.id, Project: "alpha", Machine: fixtureMachine, Agent: row.agent, MessageCount: 2, CreatedAt: ended, EndedAt: &ended}
-		sourceType := ""
-		if row.id == "placeholder" {
-			sourceType = "evener_empty_compaction"
-		}
-		require.NoError(t, local.UpsertSession(ctx, s))
-		require.NoError(t, local.InsertMessages(ctx, []db.Message{
-			{SessionID: s.ID, Ordinal: 0, Role: "user", Content: "prompt"},
-			{SessionID: s.ID, Ordinal: 1, Role: row.role, IsCompactBoundary: true, SourceType: sourceType, SourceSubtype: row.subtype, Content: row.content},
-		}))
-	}
-	_, err := syncer.Push(ctx, false, nil)
+	session, err := local.GetSessionFull(ctx, fixtureAlphaID)
 	require.NoError(t, err)
-	got, err := store.GetMessagesWindow(ctx, "user", db.MessageWindow{Limit: 10, Asc: true, CompactBoundaryOnly: true})
+	messages, err := local.GetAllMessages(ctx, fixtureAlphaID)
+	require.NoError(t, err)
+	messages = append(messages, db.Message{SessionID: fixtureAlphaID, Ordinal: 2, Role: "assistant", IsSystem: true, IsCompactBoundary: true, Content: "summary"})
+	session.MessageCount = len(messages)
+	_, err = local.WriteSessionBatchAtomic(ctx, []db.SessionBatchWrite{{Session: *session, Messages: messages, DataVersion: 1, ReplaceMessages: true}})
+	require.NoError(t, err)
+	_, err = syncer.Push(ctx, false, nil)
+	require.NoError(t, err)
+	got, err := store.GetMessagesWindow(ctx, fixtureAlphaID, db.MessageWindow{Limit: 10, Asc: true, CompactBoundaryOnly: true})
 	require.NoError(t, err)
 	require.Len(t, got, 1)
-	assert.Equal(t, 1, got[0].Ordinal)
-	page, err := store.ListSessions(ctx, db.SessionFilter{ActiveSince: "2028-06-01T00:00:00Z", HasCompactionSummary: true, IncludeChildren: true})
-	require.NoError(t, err)
-	var ids []string
-	for _, s := range page.Sessions {
-		ids = append(ids, s.ID)
-	}
-	assert.ElementsMatch(t, []string{"user"}, ids)
+	assert.Equal(t, 2, got[0].Ordinal)
 }

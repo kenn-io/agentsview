@@ -2163,37 +2163,3 @@ func TestCompactionSummaries(t *testing.T) {
 	require.Len(t, out.Summaries, 1)
 	assert.Equal(t, service.CompactionSummary{SessionID: "compacted", Ordinal: 1, Timestamp: "2024-06-15T10:00:00Z", Content: "full summary"}, out.Summaries[0])
 }
-
-func TestCompactionSummariesActiveChildren(t *testing.T) {
-	ts, d := newTestToolset(t)
-	for _, row := range []struct{ id, parent, ended string }{
-		{"active-root", "", "2024-06-15T00:00:00Z"},
-		{"stale-child", "active-root", "2024-01-01T00:00:00Z"},
-		{"old-root", "", "2024-01-01T00:00:00Z"},
-		{"active-child", "old-root", "2024-06-15T00:00:00Z"},
-		{"orphan", "missing", "2024-06-15T00:00:00Z"},
-	} {
-		dbtest.SeedSession(t, d, row.id, "project", func(s *db.Session) {
-			s.EndedAt = &row.ended
-			if row.parent != "" {
-				s.ParentSessionID = &row.parent
-				s.RelationshipType = "subagent"
-			}
-		})
-		require.NoError(t, d.InsertMessages(t.Context(), []db.Message{{SessionID: row.id, Ordinal: 0, Role: "assistant", IsSystem: true, IsCompactBoundary: true, Content: row.id}}))
-	}
-	page, err := d.ListSessions(t.Context(), db.SessionFilter{HasCompactionSummary: true})
-	require.NoError(t, err)
-	var roots []string
-	for _, row := range page.Sessions {
-		roots = append(roots, row.ID)
-	}
-	assert.ElementsMatch(t, []string{"active-root", "old-root"}, roots)
-	_, out, err := ts.compactionSummaries(t.Context(), nil, compactionSummariesIn{ActiveSince: "2024-06-01T00:00:00Z"})
-	require.NoError(t, err)
-	var ids []string
-	for _, row := range out.Summaries {
-		ids = append(ids, row.SessionID)
-	}
-	assert.ElementsMatch(t, []string{"active-root", "active-child", "orphan"}, ids)
-}

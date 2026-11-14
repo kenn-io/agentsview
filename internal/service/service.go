@@ -48,10 +48,6 @@ var ErrBeforeAfterRequireAround = errors.New("before/after require around")
 // APIVersion is the current client and daemon contract version.
 const APIVersion = 19
 
-// CompactionSummariesAPIVersion is the first daemon API that applies the
-// compaction summary filters.
-const CompactionSummariesAPIVersion = 19
-
 // ErrSemanticUnavailable is returned by SearchContent for modes
 // "semantic" and hybrid requests without keyword fallback when the backing
 // store has no VectorSearcher wired in.
@@ -442,8 +438,6 @@ type ListFilter struct {
 	ExclusionCounts *bool `json:"exclusion_counts,omitempty"`
 	// IDs selects explicit sessions and their host copies; nil uses discovery defaults.
 	IDs []string `json:"ids,omitzero"`
-	// HasCompactionSummary selects sessions with compaction summary text.
-	HasCompactionSummary bool `json:"has_compaction_summary,omitempty"`
 
 	Project            string `json:"project,omitempty"`
 	ExcludeProject     string `json:"exclude_project,omitempty"`

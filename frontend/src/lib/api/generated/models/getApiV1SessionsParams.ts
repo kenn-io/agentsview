@@ -4,10 +4,6 @@
 
 export type GetApiV1SessionsParams = {
   /**
-   * Select sessions with a non-empty compaction summary
-   */
-  has_compaction_summary?: boolean;
-  /**
    * Include default-exclusion counts; true also samples hidden children, false counts only one-shot and automated sessions. First page only.
    */
   exclusion_counts?: boolean;

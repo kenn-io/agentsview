@@ -12,7 +12,6 @@ import (
 	"net/http"
 	"net/url"
 	"strings"
-	"sync"
 	"time"
 
 	"github.com/doordash-oss/oapi-codegen-dd/v3/pkg/runtime"
@@ -92,8 +91,6 @@ type httpBackend struct {
 	apiVersion int
 	friction   bool
 	token      string
-	// apiVersionMu guards apiVersion, which compaction reads refresh.
-	apiVersionMu sync.Mutex
 }
 
 const recallNonRecordingAPIVersion = 4
@@ -305,42 +302,31 @@ func (b *httpBackend) FindSessionIDsByRawSuffix(
 	return response.JSON200.Ids, nil
 }
 
-// Refresh compaction capabilities because the daemon at the URL can change.
-func (b *httpBackend) requireSessionAnnotations(ctx context.Context, minVersion int, feature string, refresh bool) error {
-	b.apiVersionMu.Lock()
-	defer b.apiVersionMu.Unlock()
+// Probe only when the backend has no version so unfiltered lists need no extra request.
+func (b *httpBackend) requireSessionAnnotations(ctx context.Context) error {
 	version := b.apiVersion
-	if version == 0 || refresh {
+	if version == 0 {
 		capabilities, err := ProbeHTTPServerCapabilities(ctx, b.baseURL, b.token)
 		if err != nil {
 			return err
 		}
 		version = capabilities.APIVersion
-		b.apiVersion = version
 	}
-	if minVersion == service.CompactionSummariesAPIVersion && version > service.APIVersion {
-		return fmt.Errorf("server API version %d is newer than supported version %d; upgrade the client", version, service.APIVersion)
-	}
-	if version < minVersion {
-		return fmt.Errorf("server API version %d does not support %s; restart or upgrade the server", version, feature)
+	if version < service.SessionAnnotationsAPIVersion {
+		return fmt.Errorf(
+			"server API version %d does not support session labels, parent links, or their filters; "+
+				"restart or upgrade the server",
+			version,
+		)
 	}
 	return nil
-}
-
-// CheckCompactionSummaries checks the daemon once per summary request.
-func (b *httpBackend) CheckCompactionSummaries(ctx context.Context) error {
-	return b.requireSessionAnnotations(ctx, service.CompactionSummariesAPIVersion, "compaction summaries", true)
 }
 
 func (b *httpBackend) List(
 	ctx context.Context, f service.ListFilter,
 ) (*service.SessionList, error) {
-	if f.HasCompactionSummary {
-		if err := b.requireSessionAnnotations(ctx, service.CompactionSummariesAPIVersion, "compaction summaries", false); err != nil {
-			return nil, err
-		}
-	} else if len(f.Labels) > 0 || f.PR != "" {
-		if err := b.requireSessionAnnotations(ctx, service.SessionAnnotationsAPIVersion, "session labels, parent links, or their filters", false); err != nil {
+	if len(f.Labels) > 0 || f.PR != "" {
+		if err := b.requireSessionAnnotations(ctx); err != nil {
 			return nil, err
 		}
 	}
@@ -449,9 +435,6 @@ func filterToQuery(f service.ListFilter) (*apiclient.GetAPIV1SessionsQuery, erro
 	if f.IncludeChildren {
 		q.IncludeChildren = new(true)
 	}
-	if f.HasCompactionSummary {
-		q.HasCompactionSummary = new(true)
-	}
 	if f.IncludeSource {
 		q.IncludeSource = new(true)
 	}
@@ -520,9 +503,6 @@ func (b *httpBackend) Messages(
 ) (*service.MessageList, error) {
 	q := &apiclient.GetAPIV1SessionsIDMessagesQuery{}
 	if f.CompactBoundaryOnly {
-		if err := b.requireSessionAnnotations(ctx, service.CompactionSummariesAPIVersion, "compaction summaries", false); err != nil {
-			return nil, err
-		}
 		q.CompactBoundary = new(true)
 	}
 	if f.From != nil {
@@ -1155,14 +1135,11 @@ const subagentUsageAPIVersion = 6
 func (b *httpBackend) SessionUsage(
 	ctx context.Context, req service.SessionUsageRequest,
 ) (*service.SessionUsageReport, error) {
-	b.apiVersionMu.Lock()
-	version := b.apiVersion
-	b.apiVersionMu.Unlock()
-	if !req.OwnOnly && version > 0 && version < subagentUsageAPIVersion {
+	if !req.OwnOnly && b.apiVersion > 0 && b.apiVersion < subagentUsageAPIVersion {
 		return nil, fmt.Errorf(
 			"server API version %d does not support combined subagent usage; "+
 				"upgrade or restart the server, or request own-session usage",
-			version,
+			b.apiVersion,
 		)
 	}
 	api, err := b.apiClient(b.client)

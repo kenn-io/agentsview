@@ -16,7 +16,3 @@ func IsCompactionEventAgent(agent string) bool {
 func IsCompactionPlaceholder(sourceType string) bool {
 	return sourceType == parser.EvenerEmptyCompactionSourceType
 }
-
-func compactionSummaryMembership(b *QueryBuilder) string {
-	return "m.is_compact_boundary = " + b.dialect.trueLiteral + " AND m.content <> '' AND COALESCE(m.source_type, '') <> " + b.Add(parser.EvenerEmptyCompactionSourceType)
-}

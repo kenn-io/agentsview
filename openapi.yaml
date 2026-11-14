@@ -20624,13 +20624,6 @@ paths:
     get:
       operationId: get-api-v1-sessions
       parameters:
-        - description: Select sessions with a non-empty compaction summary
-          explode: false
-          in: query
-          name: has_compaction_summary
-          schema:
-            description: Select sessions with a non-empty compaction summary
-            type: boolean
         - description: Include default-exclusion counts; true also samples hidden children, false counts only one-shot and automated sessions. First page only.
           explode: false
           in: query

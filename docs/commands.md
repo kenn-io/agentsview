@@ -2201,7 +2201,7 @@ agentsview session label <id> k=v ...    # add or remove labels
 agentsview session parent <id> <parent>  # record the launching session
 ```
 
-For `session compactions`, `--limit` counts sessions per page, not response bytes. Resume `--cursor` with the same `--active-since`, including after an empty page. The read returns boundary text under any stored role. RooCode and legacy Kilo boundaries are events, so their sessions are excluded. Evener empty checkpoints and summaries use `[CHECKPOINT]` and `[SUMMARY]`; those placeholders are skipped, while real text is returned. A page can be empty with a cursor when its text is whitespace.
+For `session compactions`, `--limit` counts sessions per page, not response bytes. Resume `--cursor` with the same `--active-since`, even when a page has no summaries.
 
 `agentsview session commits <id>` lists transcript and Git trailer commits
 linked to a session. The `SOURCE` column distinguishes `transcript` from
@@ -2608,7 +2608,7 @@ SQLite archive directly. See
 daemon again.
 
 Use `--profile memory` when the client should discover only the
-`get_memory_status`, `search_content`, `get_messages`, and `get_compaction_summaries` conversation-memory
+`get_memory_status`, `search_content`, and `get_messages` conversation-memory
 tools. `get_memory_status` reports archive, lexical, semantic, vector coverage,
 and source-telemetry readiness without running a search probe. The default
 `full` profile preserves the complete MCP tool surface. Profile selection works

@@ -85,35 +85,6 @@ func TestCompactionSummariesValidationAndRetainedSummary(t *testing.T) {
 	assert.Equal(t, "retained summary", out.Summaries[0].Content)
 }
 
-func TestCompactionSummarySessionMembership(t *testing.T) {
-	d := dbtest.OpenTestDB(t)
-	for _, row := range []struct {
-		id, agent, content, source string
-		boundary                   bool
-	}{
-		{"good", "claude", "summary", "", true},
-		{"roo", "roocode", "Context condensed", "", true},
-		{"kilo", "kilo-legacy", "Context condensed", "", true},
-		{"empty", "codex", "", "", true},
-		{"placeholder", "evener", "[SUMMARY]", "evener_empty_compaction", true},
-		{"pending", "opencode", "pending", "", false},
-		{"deleted", "claude", "deleted", "", true},
-	} {
-		dbtest.SeedSession(t, d, row.id, "project", func(s *db.Session) { s.Agent = row.agent; s.EndedAt = new("2024-06-15T00:00:00Z") })
-		require.NoError(t, d.InsertMessages(t.Context(), []db.Message{{SessionID: row.id, Role: "assistant", Content: row.content, SourceType: row.source, IsCompactBoundary: row.boundary}}))
-	}
-	require.NoError(t, d.SoftDeleteSession(t.Context(), "deleted"))
-	page, err := d.ListSessions(t.Context(), db.SessionFilter{ActiveSince: "2024-06-01T00:00:00Z", HasCompactionSummary: true, IncludeChildren: true})
-	require.NoError(t, err)
-	require.Len(t, page.Sessions, 1)
-	assert.Equal(t, "good", page.Sessions[0].ID)
-	out, err := service.CompactionSummaries(t.Context(), service.NewDirectBackend(d, nil), service.CompactionSummariesRequest{ActiveSince: "2024-06-01T00:00:00Z"})
-	require.NoError(t, err)
-	require.Len(t, out.Summaries, 1)
-	assert.Equal(t, "good", out.Summaries[0].SessionID)
-	assert.Equal(t, "summary", out.Summaries[0].Content)
-}
-
 func TestCompactionSummariesWhitespacePage(t *testing.T) {
 	d := dbtest.OpenTestDB(t)
 	svc := service.NewDirectBackend(d, nil)

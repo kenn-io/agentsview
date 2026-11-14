@@ -62,7 +62,7 @@ func (b *httpBackend) annotationClient(
 		return nil, fmt.Errorf("%s: daemon at %s is read-only: %w",
 			op, b.baseURL, db.ErrReadOnly)
 	}
-	if err := b.requireSessionAnnotations(ctx, service.SessionAnnotationsAPIVersion, "session labels, parent links, or their filters", false); err != nil {
+	if err := b.requireSessionAnnotations(ctx); err != nil {
 		return nil, err
 	}
 	return b.apiClient(b.client)

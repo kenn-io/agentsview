@@ -304,35 +304,17 @@ func TestPGGetMessagesWindow_ReportsRevisionWithRows(t *testing.T) {
 	assert.Empty(t, revision, "no rows means no revision to describe them")
 }
 
-func TestPGCompactionSummaryReads(t *testing.T) {
+func TestPGGetMessagesWindow_CompactBoundary(t *testing.T) {
 	t.Parallel()
 	pgURL := testPGURL(t)
 	pg := mwEnsureSchema(t, pgURL)
 	defer pg.Close()
-	for _, row := range []struct{ id, agent, role, subtype, content string }{
-		{"user", "hermes", "user", "", "summary"},
-		{"event", "roocode", "system", "", "Context condensed"}, {"placeholder", "evener", "system", "CHECKPOINT", "[CHECKPOINT]"},
-	} {
-		mwSeedWindowMessages(t, pg, row.id)
-		_, err := pg.ExecContext(t.Context(), `UPDATE sessions SET agent = $1, ended_at = '2024-06-15T00:00:00Z' WHERE id = $2`, row.agent, row.id)
-		require.NoError(t, err)
-		sourceType := ""
-		if row.id == "placeholder" {
-			sourceType = "evener_empty_compaction"
-		}
-		_, err = pg.ExecContext(t.Context(), `UPDATE messages SET is_compact_boundary = TRUE, role = $1, source_subtype = $2, content = $3, source_type = $4 WHERE session_id = $5 AND ordinal = 3`, row.role, row.subtype, row.content, sourceType, row.id)
-		require.NoError(t, err)
-	}
+	mwSeedWindowMessages(t, pg, "boundary")
+	_, err := pg.ExecContext(t.Context(), `UPDATE messages SET is_compact_boundary = TRUE WHERE session_id = $1 AND ordinal IN (3, 8)`, "boundary")
+	require.NoError(t, err)
 	store := mwNewStore(t, pgURL)
 	defer store.Close()
-	msgs, err := store.GetMessagesWindow(t.Context(), "user", db.MessageWindow{Limit: 100, Asc: true, CompactBoundaryOnly: true})
+	msgs, err := store.GetMessagesWindow(t.Context(), "boundary", db.MessageWindow{Limit: 100, Asc: true, CompactBoundaryOnly: true})
 	require.NoError(t, err)
-	assert.Equal(t, []int{3}, mwOrdinalsOf(msgs))
-	page, err := store.ListSessions(t.Context(), db.SessionFilter{ActiveSince: "2024-06-01T00:00:00Z", HasCompactionSummary: true, IncludeChildren: true})
-	require.NoError(t, err)
-	var ids []string
-	for _, s := range page.Sessions {
-		ids = append(ids, s.ID)
-	}
-	assert.ElementsMatch(t, []string{"user"}, ids)
+	assert.Equal(t, []int{3, 8}, mwOrdinalsOf(msgs))
 }

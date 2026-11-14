@@ -632,8 +632,6 @@ type SessionFilter struct {
 	// PR keeps sessions linked to a repository, optionally narrowed to one
 	// pull request number.
 	PR PRFilter
-	// HasCompactionSummary selects sessions with compaction summary text.
-	HasCompactionSummary bool
 	// SecretsRulesVersions limits HasSecret to sessions scanned by one of these
 	// current scanner versions. Empty preserves raw DB semantics for tests and
 	// direct store callers that explicitly want unversioned counts.
