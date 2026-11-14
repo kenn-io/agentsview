@@ -6,6 +6,8 @@ import (
 	"encoding/base64"
 	"encoding/hex"
 	"encoding/json/v2"
+	"errors"
+	"fmt"
 
 	"go.kenn.io/agentsview/internal/db"
 )
@@ -24,19 +26,50 @@ type RecallListCursor struct {
 	FilterHash string `json:"filter_hash"`
 }
 
+// ErrStaleRecallPagination reports that the corpus changed between or during
+// the pages of one walk. A cursor cannot say which entries were missed, so the
+// caller starts over from the first page with the walk's original bound.
+var ErrStaleRecallPagination = errors.New(
+	"recall corpus changed during pagination; restart from the first page " +
+		"with the same updated_since bound, and keep the saved checkpoint " +
+		"until the last page returns",
+)
+
+// RecallQueryRevisionProvider reports the revision that changes with every
+// Recall entry or evidence write. An empty revision marks a read-only archive.
+type RecallQueryRevisionProvider interface {
+	RecallQueryRevision(context.Context) (string, error)
+}
+
+// ListRecentRecallEntriesPage returns one recency page. Time-bounded pages
+// carry the corpus revision in their cursor, because a write that shares the
+// cursor's millisecond can sort behind it and be skipped.
 func ListRecentRecallEntriesPage(
 	ctx context.Context,
 	store interface {
 		ListRecallEntries(context.Context, db.RecallQuery) ([]db.RecallEntry, error)
 	},
 	query db.RecallQuery,
-	pageLimit int,
 	cursor *RecallListCursor,
 ) ([]db.RecallResult, string, error) {
-	pageLimit = db.RecallLimit(pageLimit)
+	pageLimit := db.RecallLimit(query.Limit)
+	bounded := query.TimeBounded()
+	revisions, tracked := store.(RecallQueryRevisionProvider)
+	tracked = tracked && bounded
+	var revision string
+	if tracked {
+		var err error
+		revision, err = revisions.RecallQueryRevision(ctx)
+		if err != nil {
+			return nil, "", err
+		}
+	}
 	if cursor != nil {
 		if cursor.Kind != RecallListCursorRecency {
 			return nil, "", db.ErrInvalidRecallQuery
+		}
+		if bounded && cursor.Revision != revision {
+			return nil, "", ErrStaleRecallPagination
 		}
 		query.CursorUpdatedAt = cursor.UpdatedAt
 		query.CursorID = cursor.ID
@@ -45,6 +78,15 @@ func ListRecentRecallEntriesPage(
 	entries, err := store.ListRecallEntries(ctx, query)
 	if err != nil {
 		return nil, "", err
+	}
+	if tracked {
+		current, err := revisions.RecallQueryRevision(ctx)
+		if err != nil {
+			return nil, "", err
+		}
+		if current != revision {
+			return nil, "", ErrStaleRecallPagination
+		}
 	}
 	if entries == nil {
 		entries = []db.RecallEntry{}
@@ -60,11 +102,19 @@ func ListRecentRecallEntriesPage(
 	if !hasMore {
 		return results, "", nil
 	}
+	if bounded && !tracked {
+		return nil, "", fmt.Errorf(
+			"%w: this store cannot page a time-bounded list safely; "+
+				"narrow the bounds or filters to fit one page",
+			db.ErrInvalidRecallQuery,
+		)
+	}
 	last := entries[len(entries)-1]
 	nextCursor := EncodeRecallListCursor(RecallListCursor{
 		Kind:       RecallListCursorRecency,
 		UpdatedAt:  last.UpdatedAt,
 		ID:         last.ID,
+		Revision:   revision,
 		FilterHash: RecallListFilterHash(query),
 	})
 	return results, nextCursor, nil
@@ -100,8 +150,7 @@ func DecodeRecallListCursor(raw string) (RecallListCursor, error) {
 	}
 	switch cursor.Kind {
 	case RecallListCursorRecency:
-		if cursor.UpdatedAt == "" || cursor.ID == "" ||
-			cursor.Offset != 0 || cursor.Revision != "" {
+		if cursor.UpdatedAt == "" || cursor.ID == "" || cursor.Offset != 0 {
 			return RecallListCursor{}, db.ErrInvalidRecallQuery
 		}
 	case RecallListCursorRanked:

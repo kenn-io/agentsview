@@ -691,11 +691,14 @@ func reconcileRecallEvidenceForSessionTx(
 			}
 			continue
 		}
-		if startOrdinal != group.key.messageStartOrdinal || endOrdinal != group.key.messageEndOrdinal ||
-			metadata.MessageStartSourceUUID != group.key.messageStartSourceID || metadata.MessageEndSourceUUID != group.key.messageEndSourceID {
-			if _, err := tx.ExecContext(ctx, `UPDATE recall_entries SET updated_at = strftime('%Y-%m-%dT%H:%M:%fZ','now') WHERE id = ?`, group.key.entryID); err != nil {
-				return fmt.Errorf("updating reconciled recall entry %s: %w", group.key.entryID, err)
-			}
+		// The digest already matches. Rewriting unchanged pointers would fire
+		// the evidence trigger and invalidate open bounded-list cursors.
+		if startOrdinal == group.key.messageStartOrdinal && endOrdinal == group.key.messageEndOrdinal &&
+			metadata.MessageStartSourceUUID == group.key.messageStartSourceID && metadata.MessageEndSourceUUID == group.key.messageEndSourceID {
+			continue
+		}
+		if _, err := tx.ExecContext(ctx, `UPDATE recall_entries SET updated_at = strftime('%Y-%m-%dT%H:%M:%fZ','now') WHERE id = ?`, group.key.entryID); err != nil {
+			return fmt.Errorf("updating reconciled recall entry %s: %w", group.key.entryID, err)
 		}
 		for _, evidenceID := range group.evidenceIDs {
 			if _, err := tx.ExecContext(ctx, `

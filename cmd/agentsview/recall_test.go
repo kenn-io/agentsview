@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"database/sql"
 	"encoding/json/jsontext"
 	"encoding/json/v2"
 	"fmt"
@@ -2640,12 +2641,27 @@ func TestRecallListHumanShowsTrustAndCursor(t *testing.T) {
 	})
 	require.NoError(t, err)
 	require.NoError(t, d.Close())
+	raw, err := sql.Open("sqlite3", filepath.Join(dataDir, "sessions.db"))
+	require.NoError(t, err)
+	_, err = raw.ExecContext(t.Context(), `UPDATE recall_entries SET updated_at = CASE id
+		WHEN 'm-cli' THEN '2026-11-14T10:11:12.123Z' ELSE '2026-11-14T10:11:13.000Z' END`)
+	require.NoError(t, err)
+	require.NoError(t, raw.Close())
 
 	out, err := executeCommand(newRootCommand(),
 		"recall", "list", "--updated-since", "2020-01-01T00:00:00Z", "--limit", "1")
 
 	require.NoError(t, err)
+	assert.Contains(t, out, "    updated_at=2026-11-14T10:11:12.123Z")
+	assert.Contains(t, out, "    body: Verify cwd before retrying failed reads.")
+	assert.Contains(t, out, "review_state=human_reviewed")
 	assert.Contains(t, out, "provenance_ok=false")
 	assert.Contains(t, out, "    evidence recall-session:3-7")
 	assert.Regexp(t, `(?m)^next_cursor: \S+$`, out)
+
+	query, err := executeCommand(newRootCommand(),
+		"recall", "query", "cwd failed reads", "--evidence")
+	require.NoError(t, err)
+	assert.Contains(t, query, "    evidence recall-session:3-7")
+	assert.NotContains(t, query, "body:")
 }

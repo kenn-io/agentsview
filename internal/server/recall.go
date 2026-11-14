@@ -47,12 +47,6 @@ func handleInvalidRecallQuery(w http.ResponseWriter, err error) bool {
 	return false
 }
 
-var errStaleRecallPagination = errors.New("stale recall pagination")
-
-type recallQueryRevisionProvider interface {
-	RecallQueryRevision(context.Context) (string, error)
-}
-
 type servedRecallSourceRunLister interface {
 	ListServedRecallSourceRuns(context.Context) ([]string, error)
 }
@@ -118,9 +112,7 @@ func (s *Server) handleListRecallEntries(
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
-	results, nextCursor, err := s.listRecallEntriesPage(
-		r.Context(), query, query.Limit, cursor,
-	)
+	results, nextCursor, err := s.listRecallEntriesPage(r.Context(), query, cursor)
 	if err != nil {
 		if handleContextError(w, err) {
 			return
@@ -131,9 +123,8 @@ func (s *Server) handleListRecallEntries(
 		if s.handleReadOnly(w, err) {
 			return
 		}
-		if errors.Is(err, errStaleRecallPagination) {
-			writeError(w, http.StatusConflict,
-				"recall corpus changed; restart pagination")
+		if errors.Is(err, service.ErrStaleRecallPagination) {
+			writeError(w, http.StatusConflict, err.Error())
 			return
 		}
 		writeError(w, http.StatusInternalServerError, err.Error())
@@ -153,23 +144,20 @@ func (s *Server) handleListRecallEntries(
 func (s *Server) listRecallEntriesPage(
 	ctx context.Context,
 	query db.RecallQuery,
-	pageLimit int,
 	cursor *service.RecallListCursor,
 ) ([]db.RecallResult, string, error) {
 	if strings.TrimSpace(query.Text) != "" {
-		return s.listRankedRecallEntriesPage(
-			ctx, query, db.RecallLimit(pageLimit), cursor,
-		)
+		return s.listRankedRecallEntriesPage(ctx, query, cursor)
 	}
-	return service.ListRecentRecallEntriesPage(ctx, s.db, query, pageLimit, cursor)
+	return service.ListRecentRecallEntriesPage(ctx, s.db, query, cursor)
 }
 
 func (s *Server) listRankedRecallEntriesPage(
 	ctx context.Context,
 	query db.RecallQuery,
-	pageLimit int,
 	cursor *service.RecallListCursor,
 ) ([]db.RecallResult, string, error) {
+	pageLimit := db.RecallLimit(query.Limit)
 	filterHash := service.RecallListFilterHash(query)
 	offset := 0
 	if cursor != nil {
@@ -178,7 +166,7 @@ func (s *Server) listRankedRecallEntriesPage(
 		}
 		offset = cursor.Offset
 	}
-	revisionProvider, ok := s.db.(recallQueryRevisionProvider)
+	revisionProvider, ok := s.db.(service.RecallQueryRevisionProvider)
 	if !ok {
 		if cursor != nil {
 			return nil, "", db.ErrInvalidRecallQuery
@@ -200,7 +188,7 @@ func (s *Server) listRankedRecallEntriesPage(
 		return page.RecallEntries, "", err
 	}
 	if cursor != nil && cursor.Revision != revision {
-		return nil, "", errStaleRecallPagination
+		return nil, "", service.ErrStaleRecallPagination
 	}
 	query.Limit = min(offset+pageLimit+1, db.MaxRecallEntryLimit)
 	page, err := s.db.QueryRecallEntries(ctx, query)
@@ -212,7 +200,7 @@ func (s *Server) listRankedRecallEntriesPage(
 		return nil, "", err
 	}
 	if currentRevision != revision {
-		return nil, "", errStaleRecallPagination
+		return nil, "", service.ErrStaleRecallPagination
 	}
 	if offset >= len(page.RecallEntries) {
 		return []db.RecallResult{}, "", nil

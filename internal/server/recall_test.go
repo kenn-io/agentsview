@@ -525,7 +525,7 @@ func TestListRecallEntriesRejectsRankedCursorAfterCorpusMutation(t *testing.T) {
 
 	assertStatus(t, second, http.StatusConflict)
 	assertErrorResponse(t, second,
-		"recall corpus changed; restart pagination")
+		service.ErrStaleRecallPagination.Error())
 }
 
 func TestListRecallEntriesRejectsRankedCursorAfterRankingFieldMutation(
@@ -597,7 +597,7 @@ func TestListRecallEntriesRejectsRankedCursorAfterRankingFieldMutation(
 
 			assertStatus(t, second, http.StatusConflict)
 			assertErrorResponse(t, second,
-				"recall corpus changed; restart pagination")
+				service.ErrStaleRecallPagination.Error())
 		})
 	}
 }
@@ -2010,4 +2010,30 @@ func TestListRecallEntriesTimeBoundsIncludeArchived(t *testing.T) {
 	w := te.get(t, "/api/v1/recall/entries")
 	assertStatus(t, w, http.StatusOK)
 	assert.Empty(t, decode[listRecallEntriesResponse](t, w).RecallEntries)
+}
+
+func TestListRecallEntriesBoundedPageConflictsAfterSameMillisecondInsert(t *testing.T) {
+	te := setup(t)
+	seedRecallEntrySession(t, te)
+	raw, err := sql.Open("sqlite3", filepath.Join(te.dataDir, "test.db"))
+	require.NoError(t, err)
+	t.Cleanup(func() { raw.Close() })
+	seed := func(id string) {
+		seedRecallEntry(t, te, db.RecallEntry{ID: id, Title: id, Body: id, SourceSessionID: "recall-session"})
+		_, err := raw.ExecContext(t.Context(), "UPDATE recall_entries SET updated_at = '2026-11-14T07:56:43.261Z' WHERE id = ?", id)
+		require.NoError(t, err)
+	}
+	seed("page-a")
+	seed("page-b")
+	const path = "/api/v1/recall/entries?limit=1&updated_since=2026-11-14T00:00:00Z"
+	first := te.get(t, path)
+	assertStatus(t, first, http.StatusOK)
+	cursor := decode[listRecallEntriesResponse](t, first).NextCursor
+	require.NotEmpty(t, cursor)
+	seed("page-c")
+
+	second := te.get(t, path+"&cursor="+url.QueryEscape(cursor))
+
+	assertStatus(t, second, http.StatusConflict)
+	assertErrorResponse(t, second, service.ErrStaleRecallPagination.Error())
 }

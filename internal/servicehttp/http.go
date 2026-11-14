@@ -1335,6 +1335,9 @@ func (b *httpBackend) ListRecallEntries(
 				"recall list: daemon at %s: %w", b.baseURL, db.ErrReadOnly,
 			)
 		}
+		if response.HTTPResponse.StatusCode == http.StatusConflict {
+			return nil, service.ErrStaleRecallPagination
+		}
 		return nil, err
 	}
 	out := service.RecallList{RecallEntries: response.JSON200.Entries, TrustedOnly: response.JSON200.TrustedOnly, NextCursor: response.JSON200.NextCursor}
