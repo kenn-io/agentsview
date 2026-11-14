@@ -12,6 +12,7 @@ import (
 	"net/http"
 	"net/url"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/doordash-oss/oapi-codegen-dd/v3/pkg/runtime"
@@ -88,9 +89,10 @@ type httpBackend struct {
 	recallQueries     bool
 	docbankEnabled    bool
 	// apiVersion is the probed server API version, or 0 when unknown.
-	apiVersion int
-	friction   bool
-	token      string
+	apiVersionMu sync.Mutex
+	apiVersion   int
+	friction     bool
+	token        string
 }
 
 const recallNonRecordingAPIVersion = 4
@@ -304,7 +306,9 @@ func (b *httpBackend) FindSessionIDsByRawSuffix(
 
 // Probe only when the backend has no version so unfiltered lists need no extra request.
 func (b *httpBackend) requireSessionAnnotations(ctx context.Context) error {
+	b.apiVersionMu.Lock()
 	version := b.apiVersion
+	b.apiVersionMu.Unlock()
 	if version == 0 {
 		capabilities, err := ProbeHTTPServerCapabilities(ctx, b.baseURL, b.token)
 		if err != nil {
@@ -323,14 +327,18 @@ func (b *httpBackend) requireSessionAnnotations(ctx context.Context) error {
 }
 
 func (b *httpBackend) requireCompactionSummaries(ctx context.Context) error {
+	b.apiVersionMu.Lock()
 	version := b.apiVersion
 	if version == 0 {
 		capabilities, err := ProbeHTTPServerCapabilities(ctx, b.baseURL, b.token)
 		if err != nil {
+			b.apiVersionMu.Unlock()
 			return err
 		}
 		version = capabilities.APIVersion
+		b.apiVersion = version
 	}
+	b.apiVersionMu.Unlock()
 	if version < service.CompactionSummariesAPIVersion {
 		return fmt.Errorf("server API version %d does not support compaction summaries; restart or upgrade the server", version)
 	}
@@ -1166,11 +1174,14 @@ const subagentUsageAPIVersion = 6
 func (b *httpBackend) SessionUsage(
 	ctx context.Context, req service.SessionUsageRequest,
 ) (*service.SessionUsageReport, error) {
-	if !req.OwnOnly && b.apiVersion > 0 && b.apiVersion < subagentUsageAPIVersion {
+	b.apiVersionMu.Lock()
+	version := b.apiVersion
+	b.apiVersionMu.Unlock()
+	if !req.OwnOnly && version > 0 && version < subagentUsageAPIVersion {
 		return nil, fmt.Errorf(
 			"server API version %d does not support combined subagent usage; "+
 				"upgrade or restart the server, or request own-session usage",
-			b.apiVersion,
+			version,
 		)
 	}
 	api, err := b.apiClient(b.client)

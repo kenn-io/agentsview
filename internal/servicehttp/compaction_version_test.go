@@ -4,6 +4,8 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"sync"
+	"sync/atomic"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -56,6 +58,58 @@ func TestCompactionFiltersRequireAPIVersion(t *testing.T) {
 				})
 			}
 		}
+	}
+}
+
+func TestCompactionFiltersCacheVersionProbe(t *testing.T) {
+	for _, version := range []int{18, 19} {
+		t.Run(fmt.Sprintf("version=%d", version), func(t *testing.T) {
+			var probes atomic.Int32
+			var reads atomic.Int32
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				w.Header().Set("Content-Type", "application/json")
+				if r.URL.Path == "/api/v1/version" {
+					if probes.Add(1) == 1 {
+						w.WriteHeader(http.StatusServiceUnavailable)
+						return
+					}
+					fmt.Fprintf(w, `{"api_version":%d}`, version)
+					return
+				}
+				reads.Add(1)
+				if r.URL.Path == "/api/v1/sessions" {
+					fmt.Fprint(w, `{"sessions":[],"total":0}`)
+				} else {
+					fmt.Fprint(w, `{"messages":[],"count":0}`)
+				}
+			}))
+			defer srv.Close()
+			b := NewHTTPBackend(srv.URL, "", false, "")
+			_, err := b.List(t.Context(), service.ListFilter{MatchEachSession: true})
+			require.Error(t, err)
+
+			var wg sync.WaitGroup
+			for range 4 {
+				wg.Go(func() {
+					_, err := b.Messages(t.Context(), "s", service.MessageFilter{CompactBoundaryOnly: true})
+					if version == 18 {
+						assert.ErrorContains(t, err, "restart or upgrade")
+					} else {
+						assert.NoError(t, err)
+					}
+				})
+			}
+			wg.Wait()
+			_, err = b.List(t.Context(), service.ListFilter{MatchEachSession: true})
+			assert.EqualValues(t, 2, probes.Load())
+			if version == 18 {
+				assert.ErrorContains(t, err, "restart or upgrade")
+				assert.Zero(t, reads.Load())
+			} else {
+				assert.NoError(t, err)
+				assert.EqualValues(t, 5, reads.Load())
+			}
+		})
 	}
 }
 
