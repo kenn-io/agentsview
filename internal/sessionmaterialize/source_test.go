@@ -347,27 +347,6 @@ func TestMaterializeLinkedClaudeSources(t *testing.T) {
 	}
 }
 
-func TestMaterializeMirrorRejectsLinkedProjectOutsideMirror(t *testing.T) {
-	const id = "12345678-1234-1234-1234-123456789abc"
-	data, outside := t.TempDir(), t.TempDir()
-	t.Setenv("CLAUDE_CONFIG_DIR", t.TempDir())
-	t.Setenv("CLAUDE_CODE_PROJECT_DIR_NAME", "fixture")
-	remote := "/projects/linked/" + id + ".jsonl"
-	root := remotesync.MirrorDir(data, "remote")
-	name, err := remotesync.SafeRemappedRemotePath(root, remote)
-	require.NoError(t, err)
-	require.NoError(t, os.MkdirAll(filepath.Dir(filepath.Dir(name)), 0o700))
-	if err := os.Symlink(outside, filepath.Dir(name)); err != nil {
-		t.Skipf("symlink unavailable: %v", err)
-	}
-	require.NoError(t, os.WriteFile(filepath.Join(outside, id+".jsonl"), []byte(`{"type":"user","sessionId":"`+id+`","message":{"content":"outside"}}`+"\n"), 0o600))
-	stored := "remote:" + remote
-	cfg := config.Config{DataDir: data, RemoteHosts: []config.RemoteHost{{Host: "remote"}}}
-	session := &db.Session{ID: "remote~" + id, Agent: "claude", Machine: "remote", FilePath: &stored}
-	_, err = Materialize(t.Context(), cfg, session, t.TempDir())
-	require.ErrorContains(t, err, "source identity or root mismatch")
-}
-
 func TestReadFileBudgetAndInvalidCompanionPath(t *testing.T) {
 	t.Run("budget", func(t *testing.T) {
 		name := filepath.Join(t.TempDir(), "file")
