@@ -703,9 +703,10 @@ agents still collapses to its prompts and final answers.
 
 ![Focused transcript mode](/docs/assets/generated/screenshots/focused-transcript.png)
 
-Toggle between Normal and Focused mode using the transcript mode button in the
-session header. The header adjusts responsively to fit the available space. The
-mode preference is saved in localStorage.
+Switch between Normal and Focused mode in the **Transcript view** menu in the
+session header: under **Content**, choose **All messages and tool calls** or
+**Only your prompts and final answers**. The mode preference is saved in
+localStorage.
 
 ### Message Display
 
@@ -1296,9 +1297,9 @@ ______________________________________________________________________
 
 ## Publish to Gist
 
-Press `p` or click the publish button to share a session via GitHub Gist. As of
-0.33.0, the publish button is a dropdown with two entries: **Publish public
-Gist** and **Publish secret Gist**. The `p` shortcut publishes publicly.
+Press `p` or open the **More actions** menu in the header to share a session via
+GitHub Gist. The menu has two entries: **Publish public Gist** and **Publish
+secret Gist**. The `p` shortcut publishes publicly.
 
 ![Publish modal](/docs/assets/generated/screenshots/publish-modal.png)
 
