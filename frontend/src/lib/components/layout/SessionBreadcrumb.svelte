@@ -433,7 +433,11 @@
           <span class="session-time">
             {new Date(session.started_at).toLocaleDateString(
               undefined,
-              { month: "short", day: "numeric" },
+              {
+                year: ui.alwaysShowYear ? "numeric" : undefined,
+                month: "short",
+                day: "numeric",
+              },
             )}
             {new Date(session.started_at).toLocaleTimeString(
               undefined,

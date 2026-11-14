@@ -431,7 +431,7 @@ Each session item shows:
   from other machines show a machine name tag. Only visible in shared multi-host
   deployments.
 - **Project name** — abbreviated, right-aligned
-- **Relative time** — "2h ago", "Mon", "Dec 1"
+- **Session time** — relative time such as "2h ago", or the date and time with the year when **Always show year** is on
 - **User prompt count** — number of user messages in the session
 
 Antigravity sessions show the conversation title Antigravity saves in
@@ -1393,7 +1393,7 @@ organized into sections:
 | Section            | What You Can Configure                                                                                   |
 | ------------------ | -------------------------------------------------------------------------------------------------------- |
 | Language           | Interface language (Azerbaijani, English, French, Japanese, Korean, Spanish, Simplified Chinese, or Traditional Chinese)       |
-| Appearance         | Theme (light/dark), high-contrast mode, chart colors, message colors, message layout, zoom, block visibility |
+| Appearance         | Theme (light/dark), high-contrast mode, chart colors, message colors, message layout, zoom, always show year, block visibility |
 | Date ranges        | Browser-local checkbox for linking date selections across Sessions, Usage, Activity, Trends, and Quality |
 | Session Providers  | Enable session providers, inspect their session directories, and add alternate agent homes               |
 | Tool-result images | Choose whether future imports keep, drop, or offload tool-result images; preview and remove images already stored |

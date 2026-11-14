@@ -2026,6 +2026,7 @@
   "appearance_chart_palette_matplotlib": "Matplotlib",
   "appearance_chart_palette_colorblind": "色盲友善",
   "appearance_message_layout": "訊息佈局",
+  "appearance_always_show_year": "一律顯示年份",
   "appearance_reading_width": "閱讀寬度",
   "appearance_reading_width_default": "預設",
   "appearance_reading_width_wider": "更寬",

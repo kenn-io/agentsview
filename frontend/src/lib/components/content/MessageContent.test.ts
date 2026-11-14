@@ -24,6 +24,7 @@ const uiState = vi.hoisted(() => {
   const hidden = new Set<string>();
   return {
     hidden,
+    alwaysShowYear: false,
     isBlockVisible: (type: string) => !hidden.has(type),
     hideBlock: (type: string) => hidden.add(type),
     showAllBlocks: () => hidden.clear(),
@@ -161,9 +162,16 @@ afterEach(async () => {
   state.remote = false;
   state.searching = false;
   uiState.showAllBlocks();
+  uiState.alwaysShowYear = false;
 });
 
 describe("MessageContent", () => {
+  it("shows the year in message timestamps when enabled", async () => {
+    uiState.alwaysShowYear = true;
+    await render(message());
+    expect(text(".timestamp")).toContain("2026");
+  });
+
   it("shows pin success only after persistence", async () => {
     let resolve!: (saved: boolean) => void;
     pinMock.mockReturnValueOnce(

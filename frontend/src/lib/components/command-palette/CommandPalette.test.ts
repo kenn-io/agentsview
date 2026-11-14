@@ -14,6 +14,7 @@ const {
 } = vi.hoisted(() => ({
   mockUi: {
     activeModal: "commandPalette" as "commandPalette" | null,
+    alwaysShowYear: false,
     scrollToOrdinal: vi.fn(),
     clearSelection: vi.fn(),
     clearScrollState: vi.fn(),
@@ -192,9 +193,38 @@ describe("CommandPalette", () => {
       mockSessions.activeSessionId = null;
     });
     mockUi.activeModal = "commandPalette";
+    mockUi.alwaysShowYear = false;
     mockSessions.filters.project = "";
     mockSessions.sessions = [makeSession("s1", "cursor"), makeSession("s2", "unknown")];
   });
+
+  it.each([false, true])(
+    "formats recent sessions and search results with year=%s",
+    async (showYear) => {
+      const clock = vi
+        .spyOn(Date, "now")
+        .mockReturnValue(new Date("2026-06-01T12:02:00Z").getTime());
+      mockUi.alwaysShowYear = showYear;
+      mockSessions.sessions = [
+        { ...makeSession("recent", "cursor"), ended_at: "2026-06-01T12:00:00Z" },
+      ];
+      mockSearchStore.results = [makeSearchResult({ timestamp: "2026-06-01T12:00:00Z" })];
+      const component = mount(CommandPalette, { target: document.body });
+      try {
+        await tick();
+        expect(document.querySelector(".item-meta")?.textContent).toContain(
+          showYear ? "2026" : "2m ago",
+        );
+        await enterSearchQuery();
+        expect(document.querySelector(".item-meta")?.textContent).toContain(
+          showYear ? "2026" : "2m ago",
+        );
+      } finally {
+        unmount(component);
+        clock.mockRestore();
+      }
+    },
+  );
 
   it("names each recent session's agent in its agent ink, including fallback", async () => {
     const component = mount(CommandPalette, {

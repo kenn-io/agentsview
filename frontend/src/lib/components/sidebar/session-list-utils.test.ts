@@ -188,6 +188,17 @@ describe("buildDisplayItems (ungrouped)", () => {
     }
   });
 
+  it("reserves room for timestamps when years are shown", () => {
+    const groups = [makeGroup("claude", 2, "a"), makeGroup("gpt", 1, "b")];
+    const expanded = new Set(["a-session-0"]);
+    const items = buildDisplayItems(groups, [], "none", new Set(), expanded, true);
+    expect(items.map((item) => [item.top, item.height])).toEqual([
+      [0, 56],
+      [56, 50],
+      [106, 56],
+    ]);
+  });
+
   it("attaches correct group reference", () => {
     const groups = [makeGroup("claude", 2, "a")];
     const items = buildDisplayItems(groups, [], "none", new Set(), new Set());

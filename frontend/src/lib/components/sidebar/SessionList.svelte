@@ -117,7 +117,7 @@
 
   // Build flat display items for virtual scrolling.
   let displayItems = $derived.by(() =>
-    buildDisplayItems(groups, groupSections, groupMode, collapsed, expandedGroups),
+    buildDisplayItems(groups, groupSections, groupMode, collapsed, expandedGroups, ui.alwaysShowYear),
   );
 
   // When include_children is enabled the API total includes

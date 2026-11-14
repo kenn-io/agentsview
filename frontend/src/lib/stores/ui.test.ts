@@ -676,6 +676,37 @@ describe("UIStore", () => {
     });
   });
 
+  describe("alwaysShowYear", () => {
+    const original = globalThis.localStorage;
+    afterEach(() => {
+      Object.defineProperty(globalThis, "localStorage", {
+        value: original,
+        writable: true,
+        configurable: true,
+      });
+    });
+
+    it.each([
+      [null, false],
+      ["true", true],
+    ])("restores %s as %s and persists a toggle", async (stored, expected) => {
+      const setItem = vi.fn();
+      Object.defineProperty(globalThis, "localStorage", {
+        value: {
+          getItem: (key: string) => (key === "agentsview-always-show-year" ? stored : null),
+          setItem,
+        },
+        writable: true,
+        configurable: true,
+      });
+      const mod = await import(/* @vite-ignore */ `./ui.svelte.js?year-${stored}`);
+      expect(mod.ui.alwaysShowYear).toBe(expected);
+      mod.ui.toggleAlwaysShowYear();
+      await tick();
+      expect(setItem).toHaveBeenCalledWith("agentsview-always-show-year", String(!expected));
+    });
+  });
+
   describe("readingWidth", () => {
     async function freshStore(stored: string | null, tag: string) {
       const setItem = vi.fn();

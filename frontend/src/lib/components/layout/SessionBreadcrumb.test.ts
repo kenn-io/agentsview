@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { describe, it, expect, vi, beforeEach, afterEach } from "vite-plus/test";
+import { describe, it, expect, vi, beforeEach, afterEach, onTestFinished } from "vite-plus/test";
 import { mount as mountComponent, unmount as unmountComponent, tick } from "svelte";
 import { createClassComponent as createLegacyComponent } from "svelte/legacy";
 // @ts-ignore
@@ -394,9 +394,32 @@ afterEach(() => {
   document.body.innerHTML = "";
   ui.sidebarOpen = true;
   ui.isMobileViewport = false;
+  ui.alwaysShowYear = false;
 });
 
 describe("SessionBreadcrumb", () => {
+  it("adds the year to the session date when enabled", async () => {
+    const dateSpy = vi
+      .spyOn(Date.prototype, "toLocaleDateString")
+      .mockImplementation(function (_locale, options) {
+        return options?.year ? "20 Feb 2026" : "20 Feb";
+      });
+    onTestFinished(() => {
+      dateSpy.mockRestore();
+    });
+    mount(SessionBreadcrumb, {
+      target: document.body,
+      props: { session: makeSession("claude"), onBack: () => {} },
+    });
+    await tick();
+    const time = () =>
+      document.querySelector(".session-time")?.textContent?.replace(/\s+/g, " ").trim();
+    expect(time()).not.toContain("2026");
+    ui.toggleAlwaysShowYear();
+    await tick();
+    expect(time()).toContain("20 Feb 2026");
+  });
+
   it("places the desktop expand control to the left of the relocated filter", async () => {
     ui.sidebarOpen = false;
 

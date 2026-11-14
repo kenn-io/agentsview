@@ -2026,6 +2026,7 @@
   "appearance_chart_palette_matplotlib": "Matplotlib",
   "appearance_chart_palette_colorblind": "色盲友好",
   "appearance_message_layout": "消息布局",
+  "appearance_always_show_year": "始终显示年份",
   "appearance_reading_width": "阅读宽度",
   "appearance_reading_width_default": "默认",
   "appearance_reading_width_wider": "更宽",

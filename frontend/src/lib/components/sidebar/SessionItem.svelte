@@ -2,13 +2,14 @@
   import { m } from "../../i18n/index.js";
   import { getSessionStatus } from "../../stores/sessionStatus.svelte.js";
   import { sessions } from "../../stores/sessions.svelte.js";
+  import { ui } from "../../stores/ui.svelte.js";
   import type { SessionGroupInput } from "../../stores/sessionGroups.js";
   import {
     buildReadProgressToken,
     readProgress,
   } from "../../stores/read-progress.svelte.js";
   import { starred } from "../../stores/starred.svelte.js";
-  import { formatCount, formatRelativeTime } from "../../utils/format.js";
+  import { formatCount, formatRelativeTime, formatTimestamp } from "../../utils/format.js";
   import { sessionMachineDisplay } from "../../utils/machines.js";
   import { agentInk as getAgentInk, agentLabel, entrypointBadge } from "../../utils/agents.js";
   import {
@@ -153,8 +154,10 @@
   });
 
   const userMessageCount = $derived(session.user_message_count ?? 0);
+  let fullTime = $derived(formatTimestamp(session.ended_at ?? session.started_at, true));
+
   let timeStr = $derived(
-    formatRelativeTime(session.ended_at ?? session.started_at),
+    formatRelativeTime(session.ended_at ?? session.started_at, ui.alwaysShowYear),
   );
 
   let isStarred = $derived(starred.isStarred(session.id));
@@ -383,7 +386,7 @@
 <div
   class="session-item"
   class:active={isActive}
-  class:compact
+  class:compact class:years={ui.alwaysShowYear}
   class:depth-1={depth === 1}
   class:depth-2={depth >= 2}
   class:orphaned-teammate={isOrphanedTeammate}
@@ -479,7 +482,8 @@
         onclick={handleSessionClick}
       >
         <!-- Two lines: the title with its time, then project, message count,
-             machine, and agent. Compact child rows put the time on the meta line. -->
+             machine, and agent. Compact child rows put the time on the meta line;
+             a row showing years, compact or not, moves it to a third line. -->
         <div class="session-name-row">
           <div
             class="session-name"
@@ -493,8 +497,8 @@
               {displayLabel.text}
             {/if}
           </div>
-          {#if !compact}
-            <span class="session-time">{timeStr}</span>
+          {#if !compact || ui.alwaysShowYear}
+            <span class="session-time" title={fullTime}>{timeStr}</span>
           {/if}
         </div>
         {#if starred.errors[session.id]}<p role="alert">{starred.errors[session.id]}</p>{/if}
@@ -502,8 +506,8 @@
           {#if !hideProject}
             <span class="session-project" title={session.project}>{session.project}</span>
           {/if}
-          {#if compact}
-            <span class="session-time">{timeStr}</span>
+          {#if compact && !ui.alwaysShowYear}
+            <span class="session-time" title={fullTime}>{timeStr}</span>
           {/if}
           {#if hasUnread}
             <span
@@ -783,6 +787,73 @@
     display: flex;
     flex-direction: column;
     gap: 2px;
+  }
+
+  /* With years shown the full timestamp takes a third line, so the title
+     and the meta line keep the row's whole width. */
+  .session-item.years:not(.compact) {
+    height: 56px;
+  }
+
+  .session-item.years.compact {
+    height: 50px;
+  }
+
+  /* The title line's extra leading already separates it from the meta
+     line; this gives the time line the same visual gap. */
+  .session-item.years.compact .session-time {
+    margin-top: 2px;
+  }
+
+  /* The dot stays on the title line rather than centering on the meta line. */
+  .session-item.years.compact > :global(.kit-status-dot) {
+    align-self: flex-start;
+    margin-top: 8px;
+  }
+
+  .session-item.years.compact > :global(.kit-status-bubble) {
+    align-self: flex-start;
+    margin-top: 6px;
+  }
+
+  /* A child's tree dash shrinks and its checkbox moves into the space, so
+     the checkbox, dot, and title keep the parent's order and the full date
+     still fits when a wide fallback font draws the Hangul. */
+  .session-item.years.compact > .tree-dash {
+    width: 8px;
+  }
+
+  .session-item.years.compact > .tree-dash ~ .select-checkbox {
+    margin-left: -10px;
+  }
+
+  /* The waiting bubble takes the dot's width so the title doesn't move. */
+  .session-item.years.compact > .tree-dash ~ :global(.kit-status-bubble) {
+    margin-left: -2px;
+    margin-right: -2px;
+  }
+
+  .session-item.years .session-info-link {
+    display: flex;
+    flex-direction: column;
+  }
+
+  .session-item.years .session-name-row {
+    display: contents;
+  }
+
+  /* The line starts under the title, so it reads as part of its own row.
+     One step below the meta line, the longest full date (Korean) fits a
+     220px sidebar in multi-select. */
+  .session-item.years .session-time {
+    order: 1;
+    font-size: 10px;
+    line-height: 13px;
+  }
+
+  /* A child row's time matches its meta line, below its smaller title. */
+  .session-item.years.compact .session-time {
+    font-size: 9px;
   }
 
   .session-info-link {

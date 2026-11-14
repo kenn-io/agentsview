@@ -51,6 +51,7 @@ describe("AppearanceSettings", () => {
     messageColors.applyPreset("default");
     ui.setZoomLevel(100);
     ui.renderUnknownXmlBlocksAsPreformatted = false;
+    ui.alwaysShowYear = false;
     if (ui.highContrast) ui.toggleHighContrast();
     settings.chartPalette = "agentsview";
     settings.readOnly = false;
@@ -156,6 +157,15 @@ describe("AppearanceSettings", () => {
     expect(queryAllByRole("option")).toHaveLength(0);
     await fireEvent.keyDown(input, { key: "Enter" });
     expect(ui.zoomLevel).toBe(100);
+  });
+
+  it("toggles the year display", async () => {
+    const { getByRole } = render(AppearanceSettings);
+    const toggle = getByRole("switch", { name: "Always show year" });
+    expect((toggle as HTMLInputElement).checked).toBe(false);
+    await fireEvent.click(toggle);
+    expect(ui.alwaysShowYear).toBe(true);
+    expect((toggle as HTMLInputElement).checked).toBe(true);
   });
 
   it("toggles rendering unknown XML blocks as preformatted text", async () => {
