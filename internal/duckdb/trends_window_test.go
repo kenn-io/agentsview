@@ -58,6 +58,18 @@ func TestDuckTrendsUnversionedSessions(t *testing.T) {
 				require.Equal(t, 1, got.Series[0].Total)
 				require.NoError(t, store.Close())
 			}
+			dbtest.ChangeTrendsWindow(t, local, "rewrite")
+			_, err = Push(t.Context(), path, local, "m", storage.MirrorPushOptions{}, false, nil)
+			require.NoError(t, err)
+			store := openUsagePartsStore(t, path)
+			var fingerprint string
+			require.NoError(t, store.queryRowContext(t.Context(), `SELECT agentsview_push_fingerprint FROM sessions WHERE id = 'trends-window-fallback'`).Scan(&fingerprint))
+			require.NotEmpty(t, fingerprint)
+			got, err := store.GetTrendsTerms(t.Context(), db.AnalyticsFilter{From: "2025-03-10", To: "2025-03-10", Timezone: "UTC"}, terms, "day")
+			require.NoError(t, err)
+			require.Len(t, got.Series, 1)
+			require.Equal(t, 2, got.Series[0].Total)
+			require.NoError(t, store.Close())
 		})
 	}
 }

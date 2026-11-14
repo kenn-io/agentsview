@@ -7,7 +7,6 @@ import (
 	"encoding/json/v2"
 	"fmt"
 	"maps"
-	"slices"
 	"sort"
 	"sync"
 	"time"
@@ -75,8 +74,13 @@ func TrendsFromParts(ctx context.Context, disk *kept.Disk, identity string, f An
 		return TrendsTermsResponse{}, false, nil
 	}
 	versions, err := src.TrendSessionVersions(ctx, f)
-	if err != nil || slices.Contains(slices.Collect(maps.Values(versions)), "") {
-		return TrendsTermsResponse{}, err != nil, err
+	if err != nil {
+		return TrendsTermsResponse{}, true, err
+	}
+	for _, version := range versions {
+		if version == "" {
+			return TrendsTermsResponse{}, false, nil
+		}
 	}
 	selection := f.TrendsSessionFilter()
 	selection.Timezone = ""
