@@ -21,10 +21,8 @@ func (s *Store) GetTrendsTerms(
 }
 
 func (s *Store) loadTrendsTerms(ctx context.Context, f db.AnalyticsFilter, terms []db.TrendTermInput, granularity string) (db.TrendsTermsResponse, error) {
-	if s.readTx == nil && !s.hostedRelations {
-		if result, handled, err := db.TrendsFromParts(ctx, &s.trendsDisk, s.trendsIdentity, f, terms, granularity, s); handled {
-			return result, err
-		}
+	if result, handled, err := db.TrendsFromParts(ctx, &s.trendsDisk, s.trendsIdentity, f, terms, granularity, s); handled {
+		return result, err
 	}
 	if granularity == "" {
 		granularity = "week"
@@ -36,8 +34,13 @@ func (s *Store) loadTrendsTerms(ctx context.Context, f db.AnalyticsFilter, terms
 		}
 	}()
 	loc := analyticsLocation(f)
-	where, args := s.trendSelection(f, true)
-	preds := []string{where}
+	pb := &paramBuilder{}
+	preds := []string{buildAnalyticsWhereWithDate(
+		f.TrendsSessionFilter(), "", pb, false, "s.id", s.sessionDialect(),
+	)}
+	if sessionWindow := pgTrendSessionWindow(f); sessionWindow != "" {
+		preds = append(preds, "s.id IN (SELECT sessions.id FROM sessions WHERE "+sessionWindow+")")
+	}
 	flt := f.MessageScopeFilter()
 	modelFiltering := len(flt.Models) > 0
 	content := "m.content"
@@ -76,7 +79,7 @@ func (s *Store) loadTrendsTerms(ctx context.Context, f db.AnalyticsFilter, terms
 			AND m.is_system = FALSE
 			AND ` + db.PostgresSystemPrefixSQL("m.content", "m.role") + tail
 
-	rows, err := s.pg.QueryContext(ctx, query, args...)
+	rows, err := s.pg.QueryContext(ctx, query, pb.args...)
 	if err != nil {
 		return db.TrendsTermsResponse{}, fmt.Errorf("querying trends terms: %w", err)
 	}

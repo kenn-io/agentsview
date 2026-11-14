@@ -50,7 +50,7 @@ func NewTrendWorkers(ctx context.Context, from, to, granularity string, terms []
 func newTrendPartWorkers(ctx context.Context, terms []TrendTermInput) *TrendWorkers {
 	w := NewTrendWorkers(ctx, "", "", "", terms)
 	for _, acc := range w.workers {
-		acc.parts = map[string]map[string]*trendDay{}
+		acc.parts = map[trendPartKey]*trendDay{}
 	}
 	return w
 }
@@ -122,16 +122,11 @@ func (a *TrendAccumulator) addDay(local time.Time, day *trendDay) {
 }
 
 func (a *TrendAccumulator) addPart(row trendWork) {
-	days := a.parts[row.sessionID]
-	if days == nil {
-		days = map[string]*trendDay{}
-		a.parts[row.sessionID] = days
-	}
-	date := row.local.Format("2006-01-02")
-	day := days[date]
+	key := trendPartKey{row.sessionID, row.local.Format("2006-01-02")}
+	day := a.parts[key]
 	if day == nil {
 		day = &trendDay{Counts: make([]int, len(a.matchers))}
-		days[date] = day
+		a.parts[key] = day
 	}
 	day.Messages++
 	a.lower = appendTrendLower(a.lower, row.content)
@@ -148,24 +143,19 @@ func (w *TrendWorkers) finishParts() (map[string]map[string]*trendDay, error) {
 	if err := w.ctx.Err(); err != nil {
 		return nil, err
 	}
-	result := w.workers[0].parts
-	for _, other := range w.workers[1:] {
-		for id, days := range other.parts {
-			target := result[id]
-			if target == nil {
-				result[id] = days
-				continue
+	result := map[string]map[string]*trendDay{}
+	for _, worker := range w.workers {
+		for key, day := range worker.parts {
+			if result[key.id] == nil {
+				result[key.id] = map[string]*trendDay{}
 			}
-			for date, day := range days {
-				dst := target[date]
-				if dst == nil {
-					target[date] = day
-					continue
-				}
+			if dst := result[key.id][key.date]; dst != nil {
 				dst.Messages += day.Messages
 				for i, count := range day.Counts {
 					dst.Counts[i] += count
 				}
+			} else {
+				result[key.id][key.date] = day
 			}
 		}
 	}

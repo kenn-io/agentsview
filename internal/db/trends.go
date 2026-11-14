@@ -108,8 +108,13 @@ func (db *DB) trendsTerms(ctx context.Context, f AnalyticsFilter, terms []TrendT
 		}
 	}()
 	loc := f.location()
-	where, args := sqliteTrendSelection(f, true)
+	where, args := f.TrendsSessionFilter().buildWhereWithDate("", false, "s.id")
 	from, to := f.messageWindowBoundsUTC()
+	if sessionWindow, wargs := sqliteTrendSessionWindow(f); sessionWindow != "" {
+		// Filter sessions before walking their messages.
+		where += " AND s.id IN (SELECT sessions.id FROM sessions WHERE " + sessionWindow + ")"
+		args = append(args, wargs...)
+	}
 	flt := f.MessageScopeFilter()
 	modelFiltering := len(flt.Models) > 0
 	content := "m.content"
@@ -220,7 +225,7 @@ type TrendAccumulator struct {
 	messageCounts         []int
 	lower                 []byte
 	matchers              [][]trendMatcher
-	parts                 map[string]map[string]*trendDay
+	parts                 map[trendPartKey]*trendDay
 }
 
 // NewTrendAccumulator returns an accumulator for the buckets spanning

@@ -20,6 +20,8 @@ type trendDay struct {
 	Counts   []int
 }
 
+type trendPartKey struct{ id, date string }
+
 // TrendPartsSource reads session versions before streaming their complete messages.
 type TrendPartsSource interface {
 	TrendSessionVersions(context.Context, AnalyticsFilter) (map[string]string, error)
@@ -42,6 +44,14 @@ func ScanTrendVersions(rows *sql.Rows, err error) (map[string]string, error) {
 		result[id] = version
 	}
 	return result, rows.Err()
+}
+
+// ScanTrendIDs reads one id per row.
+func ScanTrendIDs(rows *sql.Rows, err error) ([]string, error) {
+	if err != nil {
+		return nil, err
+	}
+	return scanStrings(rows)
 }
 
 var trendPartsObserver struct {
@@ -90,12 +100,12 @@ func TrendsFromParts(ctx context.Context, disk *kept.Disk, identity string, f An
 			dirty = true
 		}
 	}
-	sort.Strings(ids)
 	if len(ids) > 0 {
 		ids, err = src.TrendWindowSessions(ctx, f, ids)
 		if err != nil {
 			return TrendsTermsResponse{}, true, err
 		}
+		sort.Strings(ids)
 	}
 	if len(ids) > 0 {
 		trendPartsObserver.Lock()

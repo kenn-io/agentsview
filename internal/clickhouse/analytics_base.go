@@ -531,9 +531,11 @@ func (s analyticsSQL) TrendSessionVersions(ctx context.Context, f db.AnalyticsFi
 	where, args := chBuildAnalyticsWhere(sf, "COALESCE(s.started_at, s.created_at)", "s.", true, true)
 	return db.ScanTrendVersions(s.QueryContext(ctx, `SELECT s.id, toString(s.push_version) FROM sessions s WHERE `+where, args...))
 }
+
 func (s analyticsSQL) TrendSessionWindow(f db.AnalyticsFilter, set string, args []any) (string, []any) {
-	return readbase.TrendSessionWindowForIDsSQL(f, chAnalyticsMessageWindowPred, set, args)
+	return readbase.TrendSessionWindowSQL(f, chAnalyticsMessageWindowPred, set, args)
 }
+
 func (s analyticsSQL) TrendMessagesSQL(set string, args []any) (string, []any) {
 	query, args := readbase.AnalyticsTrendsSQL(db.AnalyticsFilter{}, chAnalyticsMessageWindowPred, db.ClickHouseSystemPrefixSQL("m.content", "m.role"), db.ClickHouseQueryDialect(), "m.session_id IN "+set, args, false, true)
 	return query + systemPrefixSettings, args

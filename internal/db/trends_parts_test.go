@@ -7,7 +7,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"runtime"
+	"strings"
 	"testing"
 	"time"
 
@@ -25,9 +25,11 @@ type trendPartsFixture struct {
 func (s *trendPartsFixture) TrendSessionVersions(context.Context, AnalyticsFilter) (map[string]string, error) {
 	return s.versions, nil
 }
+
 func (s *trendPartsFixture) TrendWindowSessions(_ context.Context, _ AnalyticsFilter, ids []string) ([]string, error) {
 	return ids, nil
 }
+
 func (s *trendPartsFixture) VisitTrendMessages(_ context.Context, f AnalyticsFilter, ids []string, visit func(string, string, time.Time)) error {
 	s.reads = append(s.reads, append([]string(nil), ids...))
 	for _, id := range ids {
@@ -41,6 +43,7 @@ func (s *trendPartsFixture) VisitTrendMessages(_ context.Context, f AnalyticsFil
 	}
 	return nil
 }
+
 func TestTrendsPartsReuseAndBuckets(t *testing.T) {
 	t.Setenv("CACHE_DIRECTORY", t.TempDir())
 	var disk kept.Disk
@@ -72,7 +75,7 @@ func TestTrendsPartsReuseAndBuckets(t *testing.T) {
 	cancel()
 	_, handled, err = TrendsFromParts(canceled, &reopened, "fixture", f, terms, "month", source)
 	assert.True(t, handled)
-	assert.ErrorIs(t, err, context.Canceled)
+	require.ErrorIs(t, err, context.Canceled)
 	assert.Len(t, source.reads, 1)
 	delete(source.versions, "b")
 	source.versions["a"] = "2"
@@ -128,7 +131,9 @@ func TestTrendsPartsTimezoneRules(t *testing.T) {
 		require.Contains(t, got.Series[0].Points, TrendPoint{Date: os.Getenv("TRENDS_EXPECT_DAY"), Count: 1})
 		return
 	}
-	archive, err := zip.OpenReader(filepath.Join(runtime.GOROOT(), "lib", "time", "zoneinfo.zip"))
+	goRoot, err := exec.CommandContext(t.Context(), "go", "env", "GOROOT").Output()
+	require.NoError(t, err)
+	archive, err := zip.OpenReader(filepath.Join(strings.TrimSpace(string(goRoot)), "lib", "time", "zoneinfo.zip"))
 	require.NoError(t, err)
 	defer archive.Close()
 	cache := t.TempDir()
@@ -146,9 +151,9 @@ func TestTrendsPartsTimezoneRules(t *testing.T) {
 		}
 		require.NotEmpty(t, data)
 		zoneDir := t.TempDir()
-		require.NoError(t, os.MkdirAll(filepath.Join(zoneDir, "Test"), 0700))
-		require.NoError(t, os.WriteFile(filepath.Join(zoneDir, "Test", "Zone"), data, 0600))
-		cmd := exec.Command(os.Args[0], "-test.run=^TestTrendsPartsTimezoneRules$")
+		require.NoError(t, os.MkdirAll(filepath.Join(zoneDir, "Test"), 0o700))
+		require.NoError(t, os.WriteFile(filepath.Join(zoneDir, "Test", "Zone"), data, 0o600))
+		cmd := exec.CommandContext(t.Context(), os.Args[0], "-test.run=^TestTrendsPartsTimezoneRules$")
 		cmd.Env = append(os.Environ(), "ZONEINFO="+zoneDir, "CACHE_DIRECTORY="+cache, "TRENDS_RULES_CHILD="+cache, "TRENDS_EXPECT_DAY="+tc.day)
 		output, err := cmd.CombinedOutput()
 		require.NoError(t, err, "%s", output)

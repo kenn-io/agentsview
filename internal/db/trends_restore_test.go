@@ -58,7 +58,7 @@ func TestTrendsSQLiteRestoreAndResync(t *testing.T) {
 			}
 			require.Equal(t, first, read())
 			require.Equal(t, first, read())
-			require.NoError(t, os.WriteFile(path, backup, 0600))
+			require.NoError(t, os.WriteFile(path, backup, 0o600))
 			require.Equal(t, firstRevision, write("orange"))
 			d := open()
 			gotIdentity, err := d.GetDatabaseID(t.Context())

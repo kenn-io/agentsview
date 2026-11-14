@@ -200,27 +200,21 @@ func AssertTrendsPartsReuse(t *testing.T, open func(bool) db.Store, change func(
 	}
 }
 
-// RewriteTrendsWindow changes one session without changing its timestamp.
-func RewriteTrendsWindow(t *testing.T, d *db.DB) {
-	t.Helper()
-	require.NoError(t, d.ReplaceSessionMessages(t.Context(), "trends-window-fallback", []db.Message{{
-		SessionID: "trends-window-fallback", Ordinal: 0, Role: "user", Content: "fallback fallback", ContentLength: 17,
-	}}))
-	require.NoError(t, d.SetSessionDataVersion(t.Context(), "trends-window-fallback", db.CurrentDataVersion()))
-}
-
-// ChangeTrendsWindow changes one session for retention tests.
+// ChangeTrendsWindow changes one session for retention tests; a rewrite keeps its timestamp.
 func ChangeTrendsWindow(t *testing.T, d *db.DB, action string) {
 	t.Helper()
 	switch action {
 	case "rewrite":
-		RewriteTrendsWindow(t, d)
+		require.NoError(t, d.ReplaceSessionMessages(t.Context(), "trends-window-fallback", []db.Message{{
+			SessionID: "trends-window-fallback", Ordinal: 0, Role: "user", Content: "fallback fallback", ContentLength: 17,
+		}}))
+		require.NoError(t, d.SetSessionDataVersion(t.Context(), "trends-window-fallback", db.CurrentDataVersion()))
 	case "delete":
 		require.NoError(t, d.SoftDeleteSession(t.Context(), "trends-window-fallback"))
 	case "restore":
 		_, err := d.RestoreSession(t.Context(), "trends-window-fallback")
 		require.NoError(t, err)
 	default:
-		t.Fatalf("unknown action %q", action)
+		require.FailNow(t, "unknown action", "action: %q", action)
 	}
 }

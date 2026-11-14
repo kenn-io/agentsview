@@ -37,7 +37,8 @@ type AnalyticsBackend interface {
 	// order; a backend may sort anyway.
 	TrendsSQL(f, sessionFilter db.AnalyticsFilter, ordered bool) (string, []any)
 	TrendSessionVersions(context.Context, db.AnalyticsFilter) (map[string]string, error)
-	TrendSessionWindow(db.AnalyticsFilter, string, []any) (string, []any)
+	// TrendSessionWindow returns TrendSessionWindowSQL for an ID relation from VisitSessionIDSets.
+	TrendSessionWindow(f db.AnalyticsFilter, idSet string, args []any) (string, []any)
 	TrendsDisk() (*kept.Disk, string)
 	TrendMessagesSQL(string, []any) (string, []any)
 	FormatTime(any) string
@@ -968,12 +969,7 @@ func (s *Analytics) GetTrendsTerms(
 			_, _ = acc.Finish()
 		}
 	}()
-	sessionFilter := f
-	sessionFilter.From = ""
-	sessionFilter.To = ""
-	sessionFilter.Model = ""
-	sessionFilter.DayOfWeek = nil
-	sessionFilter.Hour = nil
+	sessionFilter := f.TrendsSessionFilter()
 	loc := analyticsLocation(f.Timezone)
 	flt := f.MessageScopeFilter()
 	modelFiltering := len(flt.Models) > 0

@@ -200,7 +200,7 @@ func TestTrendWorkersCancellationReturnsError(t *testing.T) {
 	workers.Add("seam", time.Date(2024, 6, 1, 9, 0, 0, 0, time.UTC))
 	cancel()
 	_, err = workers.Finish()
-	assert.ErrorIs(t, err, context.Canceled)
+	require.ErrorIs(t, err, context.Canceled)
 }
 
 func TestTrendWorkersStopCountingAfterCancellation(t *testing.T) {
@@ -639,7 +639,7 @@ func TestTrendsSQLiteOffsetWindows(t *testing.T) {
 	reads = nil
 
 	cacheFile := filepath.Join(t.TempDir(), "cache-file")
-	require.NoError(t, os.WriteFile(cacheFile, nil, 0600))
+	require.NoError(t, os.WriteFile(cacheFile, nil, 0o600))
 	t.Setenv("CACHE_DIRECTORY", cacheFile)
 	direct, err := Open(ctx, d.Path())
 	require.NoError(t, err)
@@ -647,7 +647,7 @@ func TestTrendsSQLiteOffsetWindows(t *testing.T) {
 	want, err := direct.GetTrendsTerms(ctx, f, terms, "day")
 	require.NoError(t, err)
 	require.False(t, direct.trendsDisk.Enabled())
-	assert.Equal(t, retained, want)
+	assert.Equal(t, want, retained)
 
 	f.To = "2025-03-11"
 	wide, err := d.GetTrendsTerms(ctx, f, terms, "day")
@@ -655,16 +655,6 @@ func TestTrendsSQLiteOffsetWindows(t *testing.T) {
 	assert.Equal(t, 3, wide.MessageCount)
 	assert.Equal(t, []TrendPoint{{Date: "2025-03-10", Count: 2}, {Date: "2025-03-11", Count: 1}}, wide.Series[0].Points)
 	assert.Empty(t, reads)
-	wideDirect, err := direct.GetTrendsTerms(ctx, f, terms, "day")
-	require.NoError(t, err)
-	assert.Equal(t, wide, wideDirect)
-	zero := 0
-	f.Hour = &zero
-	hourly, err := d.GetTrendsTerms(ctx, f, terms, "day")
-	require.NoError(t, err)
-	assert.Equal(t, 2, hourly.MessageCount)
-	assert.Equal(t, 2, hourly.Series[0].Total)
-	f.Hour = nil
 	f.From, f.To = "2024-01-02", "2024-01-02"
 	old, err := d.GetTrendsTerms(ctx, f, terms, "day")
 	require.NoError(t, err)

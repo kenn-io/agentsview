@@ -149,6 +149,7 @@ func analyticsCandidateMessagesSQL(ph string, includeContent bool) string {
 // AnalyticsTrendsSQL selects trend candidate messages from the sessions
 // sessionPred selects. ordered keeps rows grouped by session in ordinal
 // order, which the scope reducer needs when a model filter is set.
+// wholeSession prefixes each row with its session ID.
 func AnalyticsTrendsSQL(
 	f db.AnalyticsFilter, windowPred func(string, string, string) (string, []any),
 	systemPrefix string, dialect db.QueryDialect,
@@ -164,10 +165,10 @@ func AnalyticsTrendsSQL(
 		args = append(args, windowArgs...)
 	}
 	args = append(args, sessionPredArgs...)
-	sessionWindow, sessionArgs := TrendSessionWindowSQL(f, windowPred)
+	sessionWindow, sessionArgs := TrendSessionWindowSQL(f, windowPred, "", nil)
 	where += sessionWindow
 	args = append(args, sessionArgs...)
-	if inWindow != "" && !wholeSession {
+	if inWindow != "" {
 		rowWindow := inWindow
 		if len(f.MessageScopeFilter().Models) > 0 {
 			rowWindow = "(" + inWindow + " OR m.role = 'assistant')"
@@ -232,27 +233,18 @@ func AnalyticsAndClause(pred string) string {
 	return " AND " + pred
 }
 
-// TrendSessionWindowSQL selects sessions with a start or message in the padded window.
-func TrendSessionWindowSQL(f db.AnalyticsFilter, windowPred func(string, string, string) (string, []any)) (string, []any) {
-	return trendSessionWindowSQL(f, windowPred, "", nil)
-}
-
-// TrendSessionWindowForIDsSQL limits the timestamp scan to missing sessions.
-func TrendSessionWindowForIDsSQL(f db.AnalyticsFilter, windowPred func(string, string, string) (string, []any), set string, setArgs []any) (string, []any) {
-	return trendSessionWindowSQL(f, windowPred, set, setArgs)
-}
-
-func trendSessionWindowSQL(f db.AnalyticsFilter, windowPred func(string, string, string) (string, []any), set string, setArgs []any) (string, []any) {
+// TrendSessionWindowSQL selects sessions that start or have a message in the
+// padded window. A non-empty set limits the message scan to those sessions.
+func TrendSessionWindowSQL(f db.AnalyticsFilter, windowPred func(string, string, string) (string, []any), set string, setArgs []any) (string, []any) {
 	from, to := AnalyticsWindowBounds(f)
 	window, args := windowPred("COALESCE(s.started_at, s.created_at)", from, to)
 	if window == "" {
 		return "", nil
 	}
-	message, more := windowPred("wm.timestamp", from, to)
-	selection := ""
+	message, messageArgs := windowPred("wm.timestamp", from, to)
 	if set != "" {
-		selection = "wm.session_id IN " + set + " AND "
+		message = "wm.session_id IN " + set + " AND " + message
 		args = append(args, setArgs...)
 	}
-	return " AND (" + window + " OR s.id IN (SELECT wm.session_id FROM messages wm WHERE " + selection + "wm.timestamp IS NOT NULL AND " + message + "))", append(args, more...)
+	return " AND (" + window + " OR s.id IN (SELECT wm.session_id FROM messages wm WHERE wm.timestamp IS NOT NULL AND " + message + "))", append(args, messageArgs...)
 }

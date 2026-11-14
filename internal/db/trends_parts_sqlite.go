@@ -46,26 +46,19 @@ func sqliteTrendWindowPred(col, from, to string) (string, []any) {
 	return "(" + pred + " OR (substr(" + col + ", -6, 1) IN ('+', '-') AND " + offsetRange + "))", append(args, offsetArgs...)
 }
 
-// sqliteTrendSelection selects the sessions a Trends read walks.
-func sqliteTrendSelection(f AnalyticsFilter, window bool) (string, []any) {
-	sessionFilter := f.TrendsSessionFilter()
-	where, args := sessionFilter.buildWhereWithDate("", false, "s.id")
+// sqliteTrendSessionWindow selects sessions that start or have a message in the padded window.
+func sqliteTrendSessionWindow(f AnalyticsFilter) (string, []any) {
 	from, to := f.messageWindowBoundsUTC()
-	if !window {
-		return where, args
+	sessionWindow, args := sqliteTrendWindowPred("COALESCE(NULLIF(started_at, ''), created_at)", from, to)
+	if sessionWindow == "" {
+		return "", nil
 	}
-	if sessionWindow, wargs := sqliteTrendWindowPred("COALESCE(NULLIF(started_at, ''), created_at)", from, to); sessionWindow != "" {
-		messageWindow, messageArgs := sqliteTrendWindowPred("wm.timestamp", from, to)
-		// Filter sessions before walking their messages.
-		where += " AND s.id IN (SELECT sessions.id FROM sessions WHERE (" + sessionWindow + " OR EXISTS (SELECT 1 FROM messages wm WHERE wm.session_id = sessions.id AND wm.timestamp != '' AND " + messageWindow + ")))"
-		args = append(args, wargs...)
-		args = append(args, messageArgs...)
-	}
-	return where, args
+	messageWindow, messageArgs := sqliteTrendWindowPred("wm.timestamp", from, to)
+	return "(" + sessionWindow + " OR EXISTS (SELECT 1 FROM messages wm WHERE wm.session_id = sessions.id AND wm.timestamp != '' AND " + messageWindow + "))", append(args, messageArgs...)
 }
 
 func (db *DB) TrendSessionVersions(ctx context.Context, f AnalyticsFilter) (map[string]string, error) {
-	where, args := sqliteTrendSelection(f, false)
+	where, args := f.TrendsSessionFilter().buildWhereWithDate("", false, "s.id")
 	return ScanTrendVersions(db.getReader().QueryContext(ctx, `SELECT s.id, s.transcript_revision || '|' || COALESCE(s.trends_generation, '') || '|' || s.created_at || '|' || COALESCE(s.started_at, '') FROM sessions s WHERE `+where, args...))
 }
 
@@ -74,29 +67,12 @@ func (db *DB) TrendWindowSessions(ctx context.Context, f AnalyticsFilter, ids []
 	if err != nil {
 		return nil, err
 	}
-	from, to := f.messageWindowBoundsUTC()
-	session, args := sqliteTrendWindowPred("COALESCE(NULLIF(s.started_at, ''), s.created_at)", from, to)
-	where := ""
-	if session != "" {
-		message, more := sqliteTrendWindowPred("wm.timestamp", from, to)
-		where = " AND (" + session + " OR EXISTS (SELECT 1 FROM messages wm WHERE wm.session_id = s.id AND wm.timestamp != '' AND " + message + "))"
-		args = append(args, more...)
+	query, args := `SELECT id FROM sessions WHERE id IN (SELECT value FROM json_each(?))`, []any{string(encoded)}
+	if window, wargs := sqliteTrendSessionWindow(f); window != "" {
+		query += " AND " + window
+		args = append(args, wargs...)
 	}
-	args = append([]any{string(encoded)}, args...)
-	rows, err := db.getReader().QueryContext(ctx, `SELECT s.id FROM sessions s WHERE s.id IN (SELECT value FROM json_each(?))`+where+` ORDER BY s.id`, args...)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	var selected []string
-	for rows.Next() {
-		var id string
-		if err := rows.Scan(&id); err != nil {
-			return nil, err
-		}
-		selected = append(selected, id)
-	}
-	return selected, rows.Err()
+	return ScanTrendIDs(db.getReader().QueryContext(ctx, query, args...))
 }
 
 func (db *DB) VisitTrendMessages(ctx context.Context, f AnalyticsFilter, ids []string, visit func(string, string, time.Time)) error {

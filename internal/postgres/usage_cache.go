@@ -34,7 +34,7 @@ func (s *Store) ConfigureUsageCache(ctx context.Context, directory, targetURL, s
 	} else {
 		s.trendsDisk.Sweep(time.Now())
 		s.trendsIdentity = fingerprint
-		s.trendsVersionColumn = column
+		s.trendsVersion = column
 	}
 	if column != "xmin" {
 		return nil
