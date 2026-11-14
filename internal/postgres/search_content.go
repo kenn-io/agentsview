@@ -739,10 +739,7 @@ func (s *Store) searchContentWordsPG(
 			LIMIT %s OFFSET %s`,
 			scopeWhere, pgWordMatches(f, words, all, from, pb), union, pb.add(f.Limit+1), pb.add(f.Cursor))
 		page, err = s.scanPGContentMatches(ctx, query, pb.args, f.Limit, f.Cursor, func(body string) string {
-			start, end := db.WordSnippetRange(body, words)
-			if end == 0 {
-				start, end, _ = db.CaseInsensitiveSpan(body, f.Pattern)
-			}
+			start, end := db.WordSnippetRange(body, f.Pattern, words)
 			return f.BuildSnippet(body, start, end)
 		})
 		if err != nil || page.NextCursor != 0 {

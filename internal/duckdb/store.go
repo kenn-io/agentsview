@@ -1293,10 +1293,7 @@ func (s *Store) collectContentSubstringPass(
 	args = append(args, f.Limit+1, f.Cursor)
 	return s.scanContentMatches(ctx, query, args, func(body string) string {
 		if ranked {
-			start, end := db.WordSnippetRange(body, words)
-			if end == 0 {
-				start, end, _ = db.CaseInsensitiveSpan(body, f.Pattern)
-			}
+			start, end := db.WordSnippetRange(body, f.Pattern, words)
 			return f.BuildSnippet(body, start, end)
 		}
 		if f.Mode == "fts" {

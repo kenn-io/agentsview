@@ -170,7 +170,7 @@ func (s *Store) fetchHybridKeywordBatch(
 		hit.ordinal = int(ordinal)
 		start, end := db.FTSSnippetRange(f.Pattern, content)
 		if ranked {
-			start, end = db.WordSnippetRange(content, words)
+			start, end = db.WordSnippetRange(content, f.Pattern, words)
 		}
 		lo, hi := db.SnippetBounds(content, start, end, db.ContentSnippetRadius)
 		hit.content = content

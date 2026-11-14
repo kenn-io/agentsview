@@ -27,37 +27,23 @@ type ContentWords struct {
 	Phrases []string
 }
 
-// WordSnippetRange finds the first whole word matching a query form.
-func WordSnippetRange(body string, words ContentWords) (int, int) {
-	start := -1
-	for i, r := range body {
-		if unicode.IsLetter(r) || unicode.IsNumber(r) {
-			if start < 0 {
-				start = i
-			}
-			continue
-		}
-		if start >= 0 {
-			for _, forms := range words.Terms {
-				for _, form := range forms {
-					if strings.EqualFold(body[start:i], form) {
-						return start, i
-					}
-				}
-			}
-			start = -1
-		}
-	}
-	if start >= 0 {
+// WordSnippetRange finds the first whole word in body matching a query form,
+// else pattern's first case-insensitive occurrence, else the start of body.
+func WordSnippetRange(body, pattern string, words ContentWords) (int, int) {
+	offset := 0
+	for word := range strings.FieldsFuncSeq(body, func(r rune) bool {
+		return !unicode.IsLetter(r) && !unicode.IsNumber(r)
+	}) {
+		offset += strings.Index(body[offset:], word)
 		for _, forms := range words.Terms {
-			for _, form := range forms {
-				if strings.EqualFold(body[start:], form) {
-					return start, len(body)
-				}
+			if slices.ContainsFunc(forms, func(form string) bool { return strings.EqualFold(word, form) }) {
+				return offset, offset + len(word)
 			}
 		}
+		offset += len(word)
 	}
-	return 0, 0
+	start, end, _ := CaseInsensitiveSpan(body, pattern)
+	return start, end
 }
 
 // RouteContentWords applies SQLite's gates for word matching to f, a

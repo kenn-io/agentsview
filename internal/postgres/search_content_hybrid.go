@@ -172,7 +172,7 @@ func (s *Store) fetchHybridKeywordBatchPG(
 				SELECT session_id, ordinal, body, n FROM word_matches WHERE n >= 1
 				ORDER BY n DESC, sort_ts DESC NULLS LAST, session_id ASC, ordinal ASC
 				LIMIT ` + pb.add(k) + " OFFSET " + pb.add(offset)
-			if hits, err = s.scanHybridKeywordPG(ctx, f, query, pb.args); err != nil || len(hits) == k {
+			if hits, err = s.scanHybridKeywordPG(ctx, f.Pattern, words, query, pb.args); err != nil || len(hits) == k {
 				break
 			}
 		}
@@ -198,11 +198,11 @@ func (s *Store) fetchHybridKeywordBatchPG(
 		LIMIT %s OFFSET %s`,
 		contentPred, db.PostgresSystemPrefixSQL("m.content", "m.role"),
 		scopeWhere, limitP, offsetP)
-	return s.scanHybridKeywordPG(ctx, f, query, pb.args)
+	return s.scanHybridKeywordPG(ctx, f.Pattern, db.ContentWords{}, query, pb.args)
 }
 
 func (s *Store) scanHybridKeywordPG(
-	ctx context.Context, f db.ContentSearchFilter, query string, args []any,
+	ctx context.Context, pattern string, words db.ContentWords, query string, args []any,
 ) ([]pgHybridDisplay, error) {
 	rows, err := s.pg.QueryContext(ctx, query, args...)
 	if err != nil {
@@ -217,7 +217,7 @@ func (s *Store) scanHybridKeywordPG(
 		if err := rows.Scan(&hit.sessionID, &hit.ordinal, &content, &hit.matchedWords); err != nil {
 			return nil, fmt.Errorf("scan hybrid keyword hit: %w", err)
 		}
-		hit.snippet = pgKeywordApproxSnippet(content, f)
+		hit.snippet = pgKeywordApproxSnippet(content, pattern, words)
 		hits = append(hits, hit)
 	}
 	if err := rows.Err(); err != nil {
@@ -229,12 +229,10 @@ func (s *Store) scanHybridKeywordPG(
 // pgKeywordApproxSnippet returns an unredacted window for SemanticSnippet.
 // Natural word searches center it on the first matching form; explicit FTS
 // expressions use the term-aware span.
-func pgKeywordApproxSnippet(content string, f db.ContentSearchFilter) string {
-	start, end := db.FTSSnippetRange(f.Pattern, content)
-	kf := f
-	kf.Mode = "fts"
-	if _, words, ok := db.RouteContentWords(kf); ok {
-		start, end = db.WordSnippetRange(content, words)
+func pgKeywordApproxSnippet(content, pattern string, words db.ContentWords) string {
+	start, end := db.FTSSnippetRange(pattern, content)
+	if len(words.Terms) > 0 {
+		start, end = db.WordSnippetRange(content, pattern, words)
 	}
 	lo, hi := db.SnippetBounds(content, start, end, db.ContentSnippetRadius)
 	return content[lo:hi]
