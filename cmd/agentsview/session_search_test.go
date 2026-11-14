@@ -911,6 +911,34 @@ func TestSessionSearchRetryQuotesForPlatform(t *testing.T) {
 	}
 }
 
+func TestSessionSearchRemoteDefaultDoesNotRetryFTS(t *testing.T) {
+	newAgentDataDir(t)
+	var modes []string
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		assert.Equal(t, "/api/v1/search/content", r.URL.Path)
+		assert.Equal(t, "invoice rounding", r.URL.Query().Get("pattern"))
+		mode := r.URL.Query().Get("mode")
+		modes = append(modes, mode)
+		w.Header().Set("Content-Type", "application/json")
+		if mode == "fts" {
+			_, _ = w.Write([]byte(`{"matches":[{"session_id":"match","location":"message","snippet":"invoices"}]}`))
+			return
+		}
+		_, _ = w.Write([]byte(`{"matches":[]}`))
+	}))
+	defer ts.Close()
+
+	cmd := newRootCommand()
+	var stdout, stderr bytes.Buffer
+	cmd.SetOut(&stdout)
+	cmd.SetErr(&stderr)
+	cmd.SetArgs([]string{"session", "--server", ts.URL, "search", "invoice rounding", "--include-children", "--include-automated", "--include-one-shot", "--json"})
+	require.NoError(t, cmd.Execute())
+	assert.Equal(t, []string{"substring"}, modes)
+	assert.NotContains(t, stdout.String(), "try_fts")
+	assert.NotContains(t, stderr.String(), "try_fts")
+}
+
 func TestSessionSearchHybridKeywordFallback(t *testing.T) {
 	newAgentDataDir(t)
 	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
