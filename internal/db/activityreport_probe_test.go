@@ -57,3 +57,20 @@ func TestActivityReportSourceProbeChangesWithReportInputs(t *testing.T) {
 	assert.NotEqual(t, afterPricing, afterIdentity,
 		"identity-only changes must invalidate Activity report generations")
 }
+
+func TestActivityReportSourceProbeIgnoresPricingSentinels(t *testing.T) {
+	database := testDB(t)
+	ctx := t.Context()
+	// The OpenRouter ownership sentinel stores a JSON array in updated_at,
+	// which sorts above every ISO timestamp.
+	require.NoError(t, database.SetPricingMetaContext(
+		ctx, "_openrouter_models", `["or/model-a"]`,
+	))
+	_, err := database.getWriter().Exec(ctx, `INSERT INTO model_pricing(
+		model_pattern, updated_at
+	) VALUES ('probe-model', '2026-07-01T00:00:02.000Z')`)
+	require.NoError(t, err)
+	probe, err := database.ActivityReportSourceProbe(ctx)
+	require.NoError(t, err)
+	assert.Equal(t, "2026-07-01T00:00:02.000Z", probe.MaxPricingUpdated)
+}

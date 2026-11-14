@@ -16,8 +16,9 @@ import (
 // SchemaVersion is recorded in sync_metadata after EnsureSchema. Columns
 // added later ship as ADD COLUMN IF NOT EXISTS entries in the table specs,
 // so an older mirror upgrades in place; the version tells operators and
-// status output which shape a mirror has.
-const SchemaVersion = 10
+// status output which shape a mirror has. Version 11 converts string columns
+// with few distinct values to LowCardinality (see convertToLowCardinality).
+const SchemaVersion = 11
 
 // Metadata keys shared by every archive that pushes into the mirror.
 const (
@@ -200,11 +201,11 @@ var mirrorTables = []tableSpec{
 			col("id", tString),
 			col("project", tString),
 			col("project_assigned", tBool),
-			colDefault("machine", tString, "'local'"),
-			colDefault("agent", tString, "'claude'"),
+			colDefault("machine", tLowString, "'local'"),
+			colDefault("agent", tLowString, "'claude'"),
 			col("agent_label", tString),
-			col("entrypoint", tString),
-			col("session_kind", tString),
+			col("entrypoint", tLowString),
+			col("session_kind", tLowString),
 			col("first_message", tNullString),
 			col("display_name", tNullString),
 			col("session_name", tNullString),
@@ -221,7 +222,7 @@ var mirrorTables = []tableSpec{
 			col("local_modified_at", tNullTime),
 			colDefault("transcript_revision", tString, "'0'"),
 			col("parent_session_id", tNullString),
-			col("relationship_type", tString),
+			col("relationship_type", tLowString),
 			col("total_output_tokens", tInt),
 			col("peak_context_tokens", tInt),
 			col("has_total_output_tokens", tBool),
@@ -231,9 +232,9 @@ var mirrorTables = []tableSpec{
 			col("tool_retry_count", tInt),
 			col("edit_churn_count", tInt),
 			col("consecutive_failure_max", tInt),
-			colDefault("outcome", tString, "'unknown'"),
-			colDefault("outcome_confidence", tString, "'low'"),
-			col("ended_with_role", tString),
+			colDefault("outcome", tLowString, "'unknown'"),
+			colDefault("outcome_confidence", tLowString, "'low'"),
+			col("ended_with_role", tLowString),
 			col("final_failure_streak", tInt),
 			col("signals_pending_since", tNullString),
 			col("compaction_count", tInt),
@@ -257,7 +258,7 @@ var mirrorTables = []tableSpec{
 			col("source_session_id", tString),
 			col("source_version", tString),
 			col("group_key", tString),
-			col("transcript_fidelity", tString),
+			col("transcript_fidelity", tLowString),
 			col("parser_malformed_lines", tInt),
 			col("is_truncated", tBool),
 			col("deleted_at", tNullTime),
@@ -273,7 +274,7 @@ var mirrorTables = []tableSpec{
 			col("labels", tStringArray),
 			col("last_message_at", tNullTime),
 			col("agentsview_push_fingerprint", tString),
-			col("source_archive_id", tString),
+			col("source_archive_id", tLowString),
 			col("stored_message_count", tNullInt),
 			// Dashboard facts: per-session counts push derives from the
 			// messages it writes, valid only on rows whose
@@ -311,7 +312,7 @@ var mirrorTables = []tableSpec{
 			col("id", tInt),
 			col("session_id", tString),
 			col("ordinal", tInt),
-			col("role", tString),
+			col("role", tLowString),
 			col("content", tString),
 			col("thinking_text", tString),
 			col("dialogue_text", tNullString),
@@ -320,19 +321,19 @@ var mirrorTables = []tableSpec{
 			col("has_tool_use", tBool),
 			col("content_length", tInt),
 			col("is_system", tBool),
-			col("model", tString),
-			col("reasoning_effort", tString),
+			col("model", tLowString),
+			col("reasoning_effort", tLowString),
 			col("token_usage", tString),
 			col("context_tokens", tInt),
 			col("output_tokens", tInt),
-			col("provider_id", tString),
+			col("provider_id", tLowString),
 			col("has_context_tokens", tBool),
 			col("has_output_tokens", tBool),
 			col("claude_message_id", tString),
 			col("claude_request_id", tString),
-			col("source_type", tString),
-			col("source_subtype", tString),
-			col("prompt_source", tString),
+			col("source_type", tLowString),
+			col("source_subtype", tLowString),
+			col("prompt_source", tLowString),
 			col("source_uuid", tString),
 			col("source_parent_uuid", tString),
 			col("is_sidechain", tBool),
@@ -346,17 +347,17 @@ var mirrorTables = []tableSpec{
 			col("id", tInt),
 			col("session_id", tString),
 			col("message_ordinal", tNullInt),
-			col("source", tString),
-			col("model", tString),
-			col("provider_id", tString),
+			col("source", tLowString),
+			col("model", tLowString),
+			col("provider_id", tLowString),
 			col("input_tokens", tInt),
 			col("output_tokens", tInt),
 			col("cache_creation_input_tokens", tInt),
 			col("cache_read_input_tokens", tInt),
 			col("reasoning_tokens", tInt),
 			col("cost_microdollars", tNullInt),
-			col("cost_status", tString),
-			col("cost_source", tString),
+			col("cost_status", tLowString),
+			col("cost_source", tLowString),
 			col("occurred_at", tNullTime),
 			col("dedup_key", tString),
 		},
@@ -534,16 +535,16 @@ var mirrorTables = []tableSpec{
 			col("message_id", tInt),
 			col("message_ordinal", tInt),
 			col("session_id", tString),
-			col("tool_name", tString),
+			col("tool_name", tLowString),
 			col("observed_outcome", tNullString),
 			col("observed_repeat", tNullString),
 			col("sequence_ending", tNullString),
 
-			col("category", tString),
+			col("category", tLowString),
 			col("call_index", tInt),
 			col("tool_use_id", tString),
 			col("input_json", tString),
-			col("skill_name", tString),
+			col("skill_name", tLowString),
 			col("result_content_length", tInt),
 			col("result_content", tString),
 			col("subagent_session_id", tString),
@@ -567,8 +568,8 @@ var mirrorTables = []tableSpec{
 			col("tool_use_id", tString),
 			col("agent_id", tString),
 			col("subagent_session_id", tString),
-			col("source", tString),
-			col("status", tString),
+			col("source", tLowString),
+			col("status", tLowString),
 			col("content", tString),
 			col("content_length", tInt),
 			col("timestamp", tNullTime),
@@ -770,6 +771,9 @@ func EnsureSchemaOn(ctx context.Context, conn *sql.DB) error {
 				return fmt.Errorf("adding clickhouse column %s.%s: %w", t.name, c.name, err)
 			}
 		}
+		if err := convertToLowCardinality(ctx, conn, t.name, cols, t.columns); err != nil {
+			return err
+		}
 		for _, i := range t.indexes {
 			if _, has := existingIndexes[t.name][i.name]; has {
 				continue
@@ -779,7 +783,7 @@ func EnsureSchemaOn(ctx context.Context, conn *sql.DB) error {
 			}
 		}
 	}
-	if err := ensureUsageMessages(ctx, conn); err != nil {
+	if err := ensureUsageMessages(ctx, conn, existing["usage_messages"]); err != nil {
 		return err
 	}
 	for _, i := range retiredSkipIndexes {
@@ -917,27 +921,54 @@ func readSkipIndexes(ctx context.Context, conn *sql.DB) (map[string]map[string]s
 	return out, rows.Err()
 }
 
-// readColumns maps table name to the set of column names in the current
+// readColumns maps table name to column name to column type in the current
 // database.
-func readColumns(ctx context.Context, conn *sql.DB) (map[string]map[string]struct{}, error) {
+func readColumns(ctx context.Context, conn *sql.DB) (map[string]map[string]string, error) {
 	rows, err := conn.QueryContext(ctx,
-		`SELECT table, name FROM system.columns WHERE database = currentDatabase()`)
+		`SELECT table, name, type FROM system.columns WHERE database = currentDatabase()`)
 	if err != nil {
 		return nil, fmt.Errorf("reading clickhouse columns: %w", err)
 	}
 	defer rows.Close()
-	out := map[string]map[string]struct{}{}
+	out := map[string]map[string]string{}
 	for rows.Next() {
-		var table, name string
-		if err := rows.Scan(&table, &name); err != nil {
+		var table, name, typ string
+		if err := rows.Scan(&table, &name, &typ); err != nil {
 			return nil, fmt.Errorf("scanning clickhouse columns: %w", err)
 		}
 		if out[table] == nil {
-			out[table] = map[string]struct{}{}
+			out[table] = map[string]string{}
 		}
-		out[table][name] = struct{}{}
+		out[table][name] = typ
 	}
 	return out, rows.Err()
+}
+
+// convertToLowCardinality changes columns that a mirror created as plain
+// strings to the LowCardinality type their spec now declares. Repeated
+// values such as roles, models, and agents then take less space and filter
+// and group faster. Only that change is made: wrapping a type in
+// LowCardinality keeps every value, while other type differences could lose
+// data and stay for an operator to resolve. The ALTER returns once the table
+// metadata changes; ClickHouse rewrites existing parts in a background
+// mutation. Older binaries keep pushing, because a LowCardinality column
+// accepts plain strings.
+func convertToLowCardinality(
+	ctx context.Context, conn *sql.DB, table string,
+	current map[string]string, columns []columnSpec,
+) error {
+	for _, c := range columns {
+		have, ok := current[c.name]
+		if !ok || c.typ != "LowCardinality("+have+")" {
+			continue
+		}
+		if _, err := conn.ExecContext(ctx,
+			"ALTER TABLE "+table+" MODIFY COLUMN "+c.ddl()); err != nil {
+			return fmt.Errorf("converting clickhouse column %s.%s to %s: %w",
+				table, c.name, c.typ, err)
+		}
+	}
+	return nil
 }
 
 // CheckSchemaCompat verifies every mirror table and column exists. It names

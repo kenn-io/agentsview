@@ -67,6 +67,8 @@ var dataVersionScopes = map[int][]parser.AgentType{
 	177: {parser.AgentClaude, parser.AgentCowork, parser.AgentQoder, parser.AgentIcodemate},
 	178: {parser.AgentGrok},
 	179: {parser.AgentOpenCode, parser.AgentKilo, parser.AgentMiMoCode, parser.AgentIcodemate},
+
+	usageEventMicrosDataVersion: {}, // Older binaries cannot maintain usage_events.occurred_at_us; nothing to reparse.
 }
 
 // firstScopedDataVersion is the oldest version that may be declared. Released

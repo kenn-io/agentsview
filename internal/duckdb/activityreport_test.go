@@ -1339,3 +1339,19 @@ func TestDuckGetActivityReportAutomationFilterAndSessionSplit(t *testing.T) {
 		})
 	}
 }
+
+func TestActivityReportSourceProbeIgnoresPricingSentinels(t *testing.T) {
+	ctx := t.Context()
+	conn := openTestDuckDB(t)
+	require.NoError(t, EnsureSchema(ctx, conn))
+	store := NewStoreFromDB(conn)
+	_, err := conn.ExecContext(ctx, `INSERT INTO model_pricing
+		(model_pattern, updated_at) VALUES
+		('_openrouter_models', '["or/model-a"]'),
+		('probe-model', '2026-07-01T00:00:02.000Z')`)
+	require.NoError(t, err)
+
+	probe, err := store.ActivityReportSourceProbe(ctx)
+	require.NoError(t, err)
+	assert.Equal(t, "2026-07-01T00:00:02.000Z", probe.MaxPricingUpdated)
+}

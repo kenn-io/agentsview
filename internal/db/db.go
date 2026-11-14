@@ -689,7 +689,9 @@ CREATE INDEX IF NOT EXISTS idx_provider_freshness_updated_at
 // stored output without them, and record reasoning_tokens. Re-parse OpenCode,
 // Kilo, MiMo Code and ICodeMate sources in place; source and session
 // identities are unchanged.)
-const dataVersion = 179
+// (180: prevent older binaries from writing usage events without
+// occurred_at_us or querying the index it replaced.)
+const dataVersion = 180
 
 const archiveOnlyVersionBase = 1 << 20
 
@@ -1507,9 +1509,18 @@ func OpenFreshIsolatedContext(ctx context.Context, path string) (*DB, error) {
 	if err == nil {
 		err = ensureConversationSchemaLocked(ctx, d.getWriter())
 	}
+	if err == nil {
+		// Date-bounded usage reads name these indexes, and a read-only open
+		// requires them. schema.sql cannot create them, because it runs
+		// before older archives gain the columns they cover.
+		err = ensureUsageIndexesLocked(ctx, d.getWriter())
+	}
+	if err == nil {
+		err = d.ensureUsageEventsSchemaLocked(ctx, d.getWriter())
+	}
 	d.mu.Unlock()
 	if err != nil {
-		return closeOnError(fmt.Errorf("initializing fresh archive triggers and export state: %w", err))
+		return closeOnError(fmt.Errorf("initializing fresh archive triggers, indexes, and export state: %w", err))
 	}
 	if _, err := d.GetOrCreateDatabaseID(ctx); err != nil {
 		return closeOnError(fmt.Errorf("initializing database id: %w", err))
@@ -2286,6 +2297,8 @@ func checkReadOnlySchemaCompatibility(ctx context.Context, conn *sql.DB) error {
 		"idx_messages_usage_timestamp",
 		"idx_messages_usage_session_covering",
 		"idx_messages_activity_timestamp",
+		"idx_usage_events_occurred_us",
+		"idx_usage_events_occurred_unparsed",
 	} {
 		var present bool
 		if err := conn.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM sqlite_master

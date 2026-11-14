@@ -1220,6 +1220,18 @@ stored usage counters.
 Discovery collects distinct session IDs per bounded timestamp range before
 checking `sessions`, so each session is looked up once per range.
 
+Usage events are found by time through `usage_events.occurred_at_us`: the
+event's `occurred_at` text as UTC Unix microseconds, set on every write and NULL
+when the text is blank or does not parse. Range reads seek it through
+`idx_usage_events_occurred_us`. Text that does not parse keeps the padded text
+range through the partial index `idx_usage_events_occurred_unparsed`, so a
+report still places it on the day its date prefix names. `occurred_at` stays the
+record that exports, fingerprints, and mirror pushes read. The writable open
+that adds the column fills it in the same transaction. The usage change and
+conversation usage triggers watch only the recorded columns, so the fill
+publishes nothing. Data version 180 requires no reparse; it keeps older binaries
+from writing rows without the column or querying the text index it replaced.
+
 Changing any of these index column lists rebuilds the affected archive index on
 the next writable open, before HTTP readiness, and must log that startup is
 waiting for the migration. Read-only opens require the current indexes and may

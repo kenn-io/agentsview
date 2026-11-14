@@ -84,7 +84,7 @@ func usageChangeJournalSQL() (string, string) {
 	}
 	add("trg_tool_calls_analytics_change_update", "UPDATE OF "+strings.Join(columns, ", "), "tool_calls", strings.Join(changes, " OR "), "", true)
 	add("trg_usage_events_usage_change_insert", "INSERT", "usage_events", "", "NEW.session_id", false)
-	columns = []string{"id", "session_id", "message_ordinal", "source", "model", "provider_id", "input_tokens", "output_tokens", "cache_creation_input_tokens", "cache_read_input_tokens", "reasoning_tokens", "cost_microdollars", "cost_status", "cost_source", "occurred_at", "dedup_key"}
+	columns = usageEventRecordColumns
 	changes = make([]string, len(columns))
 	for i, column := range columns {
 		changes[i] = "OLD." + column + " IS NOT NEW." + column

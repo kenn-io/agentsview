@@ -597,11 +597,37 @@ func dailyUsageRowsSQLWithWhere(
 	)
 }
 
+// usageEventTimestampRowsSelect reads one arm of usage_event_timestamp_rows;
+// each arm appends its own filter.
+const usageEventTimestampRowsSelect = `	SELECT
+		ue.id,
+		ue.session_id,
+		ue.message_ordinal,
+		ue.source,
+		ue.occurred_at,
+		ue.model,
+		ue.provider_id,
+		ue.input_tokens,
+		ue.output_tokens,
+		ue.cache_creation_input_tokens,
+		ue.cache_read_input_tokens,
+		ue.reasoning_tokens,
+		ue.cost_microdollars,
+		ue.cost_status,
+		ue.cost_source,
+		ue.dedup_key
+	FROM usage_events ue
+	WHERE `
+
 func dailyUsageRowsSQLWithTimestampCTEs(
-	messageTimestampWhere, eventTimestampWhere string,
+	messageTimestampWhere string, eventTimestampWheres []string,
 	messageTimestampJoinWhere, eventTimestampJoinWhere string,
 	messageFallbackWhere, eventFallbackWhere string,
 ) string {
+	eventTimestampSelects := make([]string, len(eventTimestampWheres))
+	for i, where := range eventTimestampWheres {
+		eventTimestampSelects[i] = usageEventTimestampRowsSelect + where
+	}
 	return `
 WITH
 message_timestamp_rows AS MATERIALIZED (
@@ -621,25 +647,7 @@ message_timestamp_rows AS MATERIALIZED (
 	WHERE ` + messageTimestampWhere + `
 ),
 usage_event_timestamp_rows AS MATERIALIZED (
-	SELECT
-		ue.id,
-		ue.session_id,
-		ue.message_ordinal,
-		ue.source,
-		ue.occurred_at,
-		ue.model,
-		ue.provider_id,
-		ue.input_tokens,
-			ue.output_tokens,
-			ue.cache_creation_input_tokens,
-			ue.cache_read_input_tokens,
-			ue.reasoning_tokens,
-			ue.cost_microdollars,
-			ue.cost_status,
-			ue.cost_source,
-		ue.dedup_key
-	FROM usage_events ue
-	WHERE ` + eventTimestampWhere + `
+` + strings.Join(eventTimestampSelects, "\n\tUNION ALL\n") + `
 )
 ` + fmt.Sprintf(
 		dailyUsageMessageRowsSQLTemplate,
@@ -930,6 +938,55 @@ func appendUsageColumnBounds(
 	return where, args
 }
 
+// usageEventTimeBranches splits the usage_events rows (alias ue) that match
+// base into one filter per index seek of their own timestamp. Rows whose
+// timestamp parses seek occurred_at_us. Rows whose text does not parse keep
+// the padded text range, so the date-prefix fallback that places them on a
+// day still finds them. A bound that does not parse as a timestamp leaves one
+// filter with the text range over every row.
+func usageEventTimeBranches(
+	base string, baseArgs []any, b usageBounds,
+) ([]string, []any) {
+	parsed, args, ok := appendUsageEventMicroBounds(
+		base+"\n\tAND ue.occurred_at_us IS NOT NULL", b, slices.Clone(baseArgs))
+	if !ok {
+		where, args := appendUsageColumnBounds(base, "ue.occurred_at", b, baseArgs)
+		return []string{where}, args
+	}
+	args = append(args, baseArgs...)
+	unparsed, args := appendUsageColumnBounds(
+		base+"\n\tAND ue.occurred_at_us IS NULL", "ue.occurred_at", b, args)
+	return []string{parsed, unparsed}, args
+}
+
+// appendUsageEventMicroBounds bounds ue.occurred_at_us by the padded RFC3339
+// bounds in b. ok is false, and where is unchanged, when a set bound does not
+// parse as a timestamp.
+func appendUsageEventMicroBounds(
+	where string, b usageBounds, args []any,
+) (string, []any, bool) {
+	var micros [2]int64
+	for i, bound := range []string{b.from, b.to} {
+		if bound == "" {
+			continue
+		}
+		parsed, err := time.Parse(time.RFC3339Nano, bound)
+		if err != nil {
+			return where, args, false
+		}
+		micros[i] = parsed.UTC().UnixMicro()
+	}
+	if b.from != "" {
+		where += "\n\tAND ue.occurred_at_us >= ?"
+		args = append(args, micros[0])
+	}
+	if b.to != "" {
+		where += "\n\tAND ue.occurred_at_us <= ?"
+		args = append(args, micros[1])
+	}
+	return where, args, true
+}
+
 func usageRowsSQLForBounds(
 	f UsageFilter, b usageBounds,
 ) (string, []any) {
@@ -976,8 +1033,8 @@ func usageBoundedRowsSQL(
 	var eventTimestampArgs []any
 	eventTimestampSourceWhere, eventTimestampArgs = f.appendUsageSourceFilterClauses(
 		eventTimestampSourceWhere, eventTimestampArgs, "ue.model")
-	eventTimestampSourceWhere, eventTimestampArgs = appendUsageColumnBounds(
-		eventTimestampSourceWhere, "ue.occurred_at", b, eventTimestampArgs)
+	eventTimestampSourceWheres, eventTimestampArgs := usageEventTimeBranches(
+		eventTimestampSourceWhere, eventTimestampArgs, b)
 	var eventTimestampJoinArgs []any
 	eventTimestampJoinWhere, eventTimestampJoinArgs := f.appendUsageSessionFilterClauses(
 		usageSessionEligibility, eventTimestampJoinArgs)
@@ -1000,7 +1057,7 @@ func usageBoundedRowsSQL(
 
 	rowsSQL := dailyUsageRowsSQLWithTimestampCTEs(
 		messageTimestampSourceWhere,
-		eventTimestampSourceWhere,
+		eventTimestampSourceWheres,
 		messageTimestampJoinWhere,
 		eventTimestampJoinWhere,
 		messageFallbackWhere,
