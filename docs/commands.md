@@ -2352,7 +2352,7 @@ agentsview recall import <accepted-recall.jsonl> --dry-run
 the boundary. A bounded list returns the oldest change first and includes
 archived entries. Pass the returned `next_cursor` to `--cursor` for the next
 page. If Recall changes during the walk, restart from the first page with the
-same `--updated-since`. See [Recall](/docs/recall/) for following changes over
+same original time bound(s). See [Recall](/docs/recall/) for following changes over
 time.
 
 Model-backed extraction requires an enabled `[recall.extract]` config section —
