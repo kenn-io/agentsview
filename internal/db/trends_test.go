@@ -599,15 +599,49 @@ func TestTrendsPartsRecountChangedSessionStart(t *testing.T) {
 	assert.Equal(t, [][]string{{"s1"}}, reads)
 }
 
+func TestTrendsPartsConcurrentBatch(t *testing.T) {
+	t.Setenv("CACHE_DIRECTORY", t.TempDir())
+	d := testDB(t)
+	ctx := t.Context()
+	for _, id := range []string{"a", "b"} {
+		insertSession(t, d, id, "project", func(s *Session) { s.MessageCount, s.UserMessageCount = 1, 1 })
+		insertMessages(t, d, Message{SessionID: id, Role: "user", Content: "apple", Timestamp: "2025-03-10T12:00:00Z"})
+	}
+	terms, err := ParseTrendTerms([]string{"apple"})
+	require.NoError(t, err)
+	f := AnalyticsFilter{From: "2025-03-10", To: "2025-03-10", Timezone: "UTC"}
+	first, err := d.trendsTerms(ctx, f, terms, "day")
+	require.NoError(t, err)
+	require.Equal(t, 2, first.Series[0].Total)
+	require.NoError(t, d.ReplaceSessionMessages(ctx, "a", []Message{{SessionID: "a", Role: "user", Content: "apple apple", Timestamp: "2025-03-10T12:00:00Z"}}))
+	var writes []SessionBatchWrite
+	for _, item := range []struct{ id, content string }{{"a", "banana"}, {"b", "apple apple"}} {
+		session, err := d.GetSession(ctx, item.id)
+		require.NoError(t, err)
+		require.NotNil(t, session)
+		writes = append(writes, SessionBatchWrite{Session: *session, ReplaceMessages: true, Messages: []Message{{SessionID: item.id, Role: "user", Content: item.content, Timestamp: "2025-03-10T12:00:00Z"}}})
+	}
+	var readIDs []string
+	var writeErr error
+	reset := SetTrendPartsReadObserver(func(ids []string) {
+		readIDs = append(readIDs, ids...)
+		_, writeErr = d.WriteSessionBatchAtomic(ctx, writes)
+	})
+	got, err := d.trendsTerms(ctx, f, terms, "day")
+	reset()
+	require.NoError(t, err)
+	require.NoError(t, writeErr)
+	require.Equal(t, []string{"a"}, readIDs)
+	require.Equal(t, 2, got.Series[0].Total)
+	again, err := d.trendsTerms(ctx, f, terms, "day")
+	require.NoError(t, err)
+	require.Equal(t, 2, again.Series[0].Total)
+}
+
 func TestTrendsSQLiteOffsetWindows(t *testing.T) {
 	ctx := t.Context()
 	d := testDB(t)
 	start := "2024-01-01T00:00:00Z"
-	insertSession(t, d, "offset-message", "project", func(s *Session) {
-		s.StartedAt = &start
-		s.MessageCount, s.UserMessageCount = 1, 1
-	})
-	insertMessages(t, d, Message{SessionID: "offset-message", Ordinal: 0, Role: "user", Content: "probe", ContentLength: 5, Timestamp: "2025-03-08T22:00:00-12:00"})
 	insertSession(t, d, "offset-upper", "project", func(s *Session) {
 		s.StartedAt = &start
 		s.MessageCount, s.UserMessageCount = 1, 1
@@ -632,17 +666,16 @@ func TestTrendsSQLiteOffsetWindows(t *testing.T) {
 	t.Cleanup(reset)
 	retained, err := d.GetTrendsTerms(ctx, f, terms, "day")
 	require.NoError(t, err)
-	require.True(t, d.trendsDisk.Enabled())
-	assert.Equal(t, 3, retained.MessageCount)
-	assert.Equal(t, 3, retained.Series[0].Total)
-	require.Equal(t, [][]string{{"offset-fallback", "offset-message", "offset-upper"}}, reads)
+	assert.Equal(t, 2, retained.MessageCount)
+	assert.Equal(t, 2, retained.Series[0].Total)
+	require.Equal(t, [][]string{{"offset-fallback", "offset-upper"}}, reads)
 	reads = nil
 
 	f.To = "2025-03-11"
 	wide, err := d.GetTrendsTerms(ctx, f, terms, "day")
 	require.NoError(t, err)
-	assert.Equal(t, 3, wide.MessageCount)
-	assert.Equal(t, []TrendPoint{{Date: "2025-03-10", Count: 3}, {Date: "2025-03-11", Count: 0}}, wide.Series[0].Points)
+	assert.Equal(t, 2, wide.MessageCount)
+	assert.Equal(t, []TrendPoint{{Date: "2025-03-10", Count: 2}, {Date: "2025-03-11", Count: 0}}, wide.Series[0].Points)
 	assert.Empty(t, reads)
 	f.From, f.To = "2024-01-02", "2024-01-02"
 	old, err := d.GetTrendsTerms(ctx, f, terms, "day")

@@ -6,6 +6,7 @@ import (
 	"database/sql"
 	"encoding/json/v2"
 	"fmt"
+	"maps"
 	"sort"
 	"sync"
 	"time"
@@ -119,8 +120,14 @@ func TrendsFromParts(ctx context.Context, disk *kept.Disk, identity string, f An
 			parts[id] = kept.Part[map[string]*trendDay]{ID: id, Fingerprint: versions[id], Present: true, Value: days[id]}
 		}
 	}
-	if err := ctx.Err(); err != nil {
-		return TrendsTermsResponse{}, true, err
+	if len(changed) > 0 {
+		latest, err := src.TrendSessionVersions(ctx, f)
+		if err != nil {
+			return TrendsTermsResponse{}, true, err
+		}
+		if !maps.Equal(versions, latest) {
+			return TrendsTermsResponse{}, false, nil
+		}
 	}
 	if len(ids) > 0 {
 		rows := make([]kept.Part[map[string]*trendDay], 0, len(parts))
@@ -128,11 +135,7 @@ func TrendsFromParts(ctx context.Context, disk *kept.Disk, identity string, f An
 			rows = append(rows, part)
 		}
 		kept.SaveParts(disk, slot, version, rows, func(days map[string]*trendDay) int64 {
-			var size int64
-			for date, day := range days {
-				size += int64(len(date) + 8 + 8*len(day.Counts))
-			}
-			return size
+			return int64(len(days) * (18 + 8*len(terms)))
 		})
 	}
 

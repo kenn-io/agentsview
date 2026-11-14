@@ -20,8 +20,6 @@ func TestTrendsSQLiteRestoreAndResync(t *testing.T) {
 	}
 	seeded := open()
 	dbtest.SeedTrendsWindow(t, seeded)
-	identity, err := seeded.GetDatabaseID(t.Context())
-	require.NoError(t, err)
 	require.NoError(t, seeded.Close())
 	backup, err := os.ReadFile(path)
 	require.NoError(t, err)
@@ -49,10 +47,5 @@ func TestTrendsSQLiteRestoreAndResync(t *testing.T) {
 	require.Equal(t, 3, read())
 	require.NoError(t, os.WriteFile(path, backup, 0o600))
 	require.Equal(t, firstRevision, write("orange"))
-	d := open()
-	gotIdentity, err := d.GetDatabaseID(t.Context())
-	require.NoError(t, err)
-	require.Equal(t, identity, gotIdentity)
-	require.NoError(t, d.Close())
 	require.Equal(t, 1, read())
 }

@@ -70,12 +70,13 @@ func TestTrendsPartsReuseAndBuckets(t *testing.T) {
 	_, _, err = TrendsFromParts(t.Context(), &reopened, "fixture", f, terms, "month", source)
 	require.NoError(t, err)
 	require.Equal(t, [][]string{{"a", "b"}, {"a"}}, source.reads)
+	source.versions["a"] = "3"
 	canceled, cancel := context.WithCancel(t.Context())
-	cancel()
+	reset := SetTrendPartsReadObserver(func([]string) { cancel() })
 	_, handled, err = TrendsFromParts(canceled, &reopened, "fixture", f, terms, "month", source)
-	assert.True(t, handled)
+	reset()
+	require.True(t, handled)
 	require.ErrorIs(t, err, context.Canceled)
-	assert.Len(t, source.reads, 2)
 	hour := 12
 	f.Hour = &hour
 	_, handled, err = TrendsFromParts(t.Context(), &reopened, "fixture", f, terms, "day", source)

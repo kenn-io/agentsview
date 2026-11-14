@@ -263,9 +263,13 @@ func (a *TrendAccumulator) Add(content string, local time.Time) {
 		return
 	}
 	a.messageCounts[bucket]++
+	a.countMessage(content, func(i, count int) { a.counts[i][bucket] += count })
+}
+
+func (a *TrendAccumulator) countMessage(content string, add func(int, int)) {
 	a.lower = appendTrendLower(a.lower, content)
 	for i, matchers := range a.matchers {
-		a.counts[i][bucket] += countTrendOccurrences(a.lower, matchers)
+		add(i, countTrendOccurrences(a.lower, matchers))
 	}
 }
 

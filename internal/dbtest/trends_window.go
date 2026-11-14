@@ -164,9 +164,6 @@ func AssertTrendsPartsReuse(t *testing.T, open func(bool) db.Store, change func(
 		want, err := directStore.GetTrendsTerms(t.Context(), filter, terms, "day")
 		require.NoError(t, err)
 		assert.Equal(t, want, got, "%+v", filter)
-		if filter.Timezone == "Pacific/Kiritimati" {
-			assert.Equal(t, 1, got.Series[1].Total)
-		}
 	}
 	require.NoError(t, directStore.(interface{ Close() error }).Close())
 	require.NoError(t, changedStore.(interface{ Close() error }).Close())

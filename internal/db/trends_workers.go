@@ -115,9 +115,7 @@ func (a *TrendAccumulator) addDay(local time.Time, day *trendDay) {
 	}
 	a.messageCounts[bucket] += day.Messages
 	for i, count := range day.Counts {
-		if i < len(a.counts) {
-			a.counts[i][bucket] += count
-		}
+		a.counts[i][bucket] += count
 	}
 }
 
@@ -129,10 +127,7 @@ func (a *TrendAccumulator) addPart(row trendWork) {
 		a.parts[key] = day
 	}
 	day.Messages++
-	a.lower = appendTrendLower(a.lower, row.content)
-	for i, matchers := range a.matchers {
-		day.Counts[i] += countTrendOccurrences(a.lower, matchers)
-	}
+	a.countMessage(row.content, func(i, count int) { day.Counts[i] += count })
 }
 
 // finishParts waits for workers and merges their session days.

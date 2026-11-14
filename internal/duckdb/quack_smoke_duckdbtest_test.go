@@ -120,6 +120,7 @@ func TestQuackStoreReattachesAfterFailedReattach(t *testing.T) {
 }
 
 func TestQuackStoreAnalyticsDashboardReads(t *testing.T) {
+	t.Setenv("CACHE_DIRECTORY", t.TempDir())
 	ctx := t.Context()
 	path := filepath.Join(t.TempDir(), "agentsview-quack-analytics.duckdb")
 	uri := "quack:127.0.0.1:" + freeTCPPort(t)
@@ -159,6 +160,15 @@ func TestQuackStoreAnalyticsDashboardReads(t *testing.T) {
 	t.Cleanup(func() {
 		require.NoError(t, store.Close(), "close Quack-backed store")
 	})
+	require.NoError(t, store.OpenActivityReportDisk(ctx))
+	usageReads := 0
+	previousUsageObserver := usagePartReadObserver
+	usagePartReadObserver = func([]string) { usageReads++ }
+	t.Cleanup(func() { usagePartReadObserver = previousUsageObserver })
+	usage, err := store.GetDailyUsage(ctx, db.UsageFilter{From: "2026-01-10", To: "2026-01-10", Timezone: "UTC"})
+	require.NoError(t, err)
+	require.Positive(t, usage.Totals.OutputTokens)
+	require.Zero(t, usageReads)
 
 	configStatus, err := ReadStatusFromConfig(ctx, config.DuckDBConfig{
 		URL:         uri,

@@ -2523,8 +2523,7 @@ func schemaColumnMigrations() []schemaColumnMigration {
 	return []schemaColumnMigration{
 		{"sessions", "usage_generation", "ALTER TABLE sessions ADD COLUMN usage_generation TEXT;" +
 			" UPDATE sessions SET usage_generation=lower(hex(randomblob(8)))"},
-		{"sessions", "trends_generation", "ALTER TABLE sessions ADD COLUMN trends_generation TEXT;" +
-			" UPDATE sessions SET trends_generation=lower(hex(randomblob(16)))"},
+		{"sessions", "trends_generation", "ALTER TABLE sessions ADD COLUMN trends_generation TEXT"},
 		{
 			"sessions", "automation_audit",
 			"ALTER TABLE sessions ADD COLUMN automation_audit INTEGER NOT NULL DEFAULT 1",
