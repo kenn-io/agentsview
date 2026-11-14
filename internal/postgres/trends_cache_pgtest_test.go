@@ -45,6 +45,7 @@ func TestPGTrendsCacheUsesConfiguredEngineVersion(t *testing.T) {
 	t.Cleanup(reset)
 	_, err = store.loadTrendsTerms(ctx, f, terms, "day")
 	require.NoError(t, err)
+	require.NotEmpty(t, reads)
 	reads = nil
 	_, err = store.loadTrendsTerms(ctx, f, terms, "day")
 	require.NoError(t, err)
