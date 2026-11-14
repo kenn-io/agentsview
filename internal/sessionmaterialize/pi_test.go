@@ -3,6 +3,7 @@ package sessionmaterialize
 import (
 	"context"
 	"encoding/json"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
@@ -17,6 +18,28 @@ import (
 )
 
 func TestPiDestination(t *testing.T) {
+	t.Run("settings precedence", func(t *testing.T) {
+		cwd, agent := t.TempDir(), t.TempDir()
+		t.Setenv("PI_CODING_AGENT_DIR", agent)
+		t.Setenv("PI_CODING_AGENT_SESSION_DIR", "")
+		require.NoError(t, os.WriteFile(filepath.Join(agent, "settings.json"), []byte("\xef\xbb\xbf"+`{"sessionDir":"global-sessions"}`), 0o600))
+		got, err := piDestination(t.Context(), cwd, "id.jsonl")
+		require.NoError(t, err)
+		assert.Equal(t, filepath.Join(cwd, "global-sessions", "id.jsonl"), got)
+		require.NoError(t, os.Mkdir(filepath.Join(cwd, ".pi"), 0o700))
+		require.NoError(t, os.WriteFile(filepath.Join(cwd, ".pi", "settings.json"), []byte(`{"sessionDir":"project-sessions"}`), 0o600))
+		got, err = piDestination(t.Context(), cwd, "id.jsonl")
+		require.NoError(t, err)
+		assert.Equal(t, filepath.Join(cwd, "project-sessions", "id.jsonl"), got)
+		require.NoError(t, os.WriteFile(filepath.Join(cwd, ".pi", "settings.json"), []byte(`{"sessionDir":null}`), 0o600))
+		got, err = piDestination(t.Context(), cwd, "id.jsonl")
+		require.NoError(t, err)
+		assert.Contains(t, got, filepath.Join(agent, "sessions"))
+		t.Setenv("PI_CODING_AGENT_SESSION_DIR", "environment-sessions")
+		got, err = piDestination(t.Context(), cwd, "id.jsonl")
+		require.NoError(t, err)
+		assert.Equal(t, filepath.Join(cwd, "environment-sessions", "id.jsonl"), got)
+	})
 	t.Run("255 byte checkout component", func(t *testing.T) {
 		if filepath.Separator != '/' {
 			t.Skip("fixture uses a POSIX absolute path")
@@ -25,7 +48,7 @@ func TestPiDestination(t *testing.T) {
 		t.Setenv("PI_CODING_AGENT_DIR", agent)
 		t.Setenv("PI_CODING_AGENT_SESSION_DIR", "")
 		cwd := "/" + strings.Repeat("a", 251)
-		got, err := piDestination(cwd, "id.jsonl")
+		got, err := piDestination(t.Context(), cwd, "id.jsonl")
 		require.NoError(t, err)
 		assert.Equal(t, filepath.Join(agent, "sessions", "--"+strings.Repeat("a", 251)+"--", "id.jsonl"), got)
 	})
@@ -37,7 +60,7 @@ func TestPiDestination(t *testing.T) {
 		t.Setenv("PI_CODING_AGENT_DIR", agent)
 		t.Setenv("PI_CODING_AGENT_SESSION_DIR", "")
 		cwd := "/" + strings.Repeat("0", 150) + "/" + strings.Repeat("0", 150)
-		got, err := piDestination(cwd, "id.jsonl")
+		got, err := piDestination(t.Context(), cwd, "id.jsonl")
 		require.NoError(t, err)
 		assert.Equal(t, filepath.Join(agent, "sessions", "--8b198fcfb9c0abfa873a9f4c46fc3a59--", "id.jsonl"), got)
 	})
@@ -47,14 +70,23 @@ func TestPiDestination(t *testing.T) {
 	}
 	t.Setenv("PI_CODING_AGENT_SESSION_DIR", "relative-sessions")
 	t.Setenv("PI_CODING_AGENT_DIR", "")
-	got, err := piDestination(cwd, "id.jsonl")
+	got, err := piDestination(t.Context(), cwd, "id.jsonl")
 	require.NoError(t, err)
 	assert.Equal(t, filepath.Join(cwd, "relative-sessions", "id.jsonl"), got)
 	t.Setenv("PI_CODING_AGENT_SESSION_DIR", "")
 	t.Setenv("PI_CODING_AGENT_DIR", "relative-agent")
-	got, err = piDestination(cwd, "id.jsonl")
+	got, err = piDestination(t.Context(), cwd, "id.jsonl")
 	require.NoError(t, err)
 	assert.Equal(t, filepath.Join(cwd, "relative-agent", "sessions", encoded, "id.jsonl"), got)
+	urlDir := t.TempDir()
+	urlPath := filepath.ToSlash(urlDir)
+	if !strings.HasPrefix(urlPath, "/") {
+		urlPath = "/" + urlPath
+	}
+	t.Setenv("PI_CODING_AGENT_SESSION_DIR", (&url.URL{Scheme: "file", Path: urlPath}).String())
+	got, err = piDestination(t.Context(), cwd, "id.jsonl")
+	require.NoError(t, err)
+	assert.Equal(t, filepath.Join(urlDir, "id.jsonl"), got)
 }
 
 func TestPiSourceLookup(t *testing.T) {
@@ -396,4 +428,16 @@ func mustJSON(t *testing.T, value string) []byte {
 	data, err := json.Marshal(value)
 	require.NoError(t, err)
 	return data
+}
+
+// piResolveDir invokes this normalization only on Windows.
+func TestPiWindowsShellPaths(t *testing.T) {
+	for input, want := range map[string]string{
+		"/c/work": `C:\work`, "/mnt/d/work/file": `D:\work\file`,
+		"/cygdrive/e": `E:\`, "/Z": `Z:\`, "/MNT/f/root": `F:\root`,
+		"//server/share": "//server/share", "/mnt/example": "/mnt/example",
+		`/c/mixed\path`: `/c/mixed\path`,
+	} {
+		assert.Equal(t, want, piWindowsShellPath(input), input)
+	}
 }

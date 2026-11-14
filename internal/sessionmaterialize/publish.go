@@ -16,6 +16,15 @@ type installFile struct {
 	data []byte
 }
 
+// DestinationDiffersError identifies an existing file with different bytes.
+type DestinationDiffersError struct {
+	Path string
+}
+
+func (e *DestinationDiffersError) Error() string {
+	return "destination differs: " + e.Path
+}
+
 // publishFiles preflights every destination before publishing in order. Callers
 // put the primary transcript last, after all its dependencies.
 func publishFiles(ctx context.Context, files []installFile) (changed bool, err error) {
@@ -88,17 +97,17 @@ func identicalDestination(ctx context.Context, file installFile) (bool, error) {
 		return false, fmt.Errorf("destination is not a regular file: %s", file.path)
 	}
 	if info.Size() != int64(len(file.data)) {
-		return false, fmt.Errorf("destination differs: %s", file.path)
+		return false, &DestinationDiffersError{Path: file.path}
 	}
 	old, _, err := readFile(ctx, file.path, int64(len(file.data)))
 	if errors.Is(err, errSourceSize) {
-		return false, fmt.Errorf("destination differs: %s", file.path)
+		return false, &DestinationDiffersError{Path: file.path}
 	}
 	if err != nil {
 		return false, err
 	}
 	if !bytes.Equal(old, file.data) {
-		return false, fmt.Errorf("destination differs: %s", file.path)
+		return false, &DestinationDiffersError{Path: file.path}
 	}
 	return true, nil
 }

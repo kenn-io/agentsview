@@ -2184,8 +2184,9 @@ limited to 512 MiB. `--server`, `--server-token-file`, and `--pg` are
 unsupported. JSON output includes the source, destination paths, checkout,
 command, and installed or unchanged status. Claude's native home and supported
 environment overrides determine the destination, independently of discovery
-roots. Pi uses its native agent directory, or the session directory set by
-`PI_CODING_AGENT_SESSION_DIR`. For discovery, `PI_DIR` takes precedence over
+roots. Pi uses its native agent directory, or its configured session directory
+from settings or `PI_CODING_AGENT_SESSION_DIR` (which takes priority). For
+discovery, `PI_DIR` takes precedence over
 `PI_CODING_AGENT_SESSION_DIR`; either
 overrides configured discovery roots. Local companions must resolve inside the
 configured root when the transcript is inside it; an externally linked project
@@ -2197,6 +2198,7 @@ command preserves its spelling so Claude uses the same credentials.
 
 Existing identical files are reused; a different or non-regular file causes
 an error, including a previously installed file that has since been extended.
+For Pi, the error includes a command to resume that file if it is the same session.
 Dependencies are installed before the transcript. If publication stops
 partway through, retry to reuse files that are still identical. The command
 does not rewrite existing transcript records. If its last worktree binding is
@@ -2209,7 +2211,8 @@ The Pi checkout is resolved through symlinks, and relative Pi directory
 overrides are resolved from that checkout. Pi files must have a session header
 of version 1–3. Pi-family files with a leading title cannot be opened by the
 verified Pi consumer and are not installed. Stored headers share the 512 MiB
-source limit; fallback discovery scans at most 64 MiB per candidate. A nonunique
+source limit; fallback discovery scans at most 64 MiB per candidate. Malformed or
+oversized Pi settings cause materialization to fail. A nonunique
 source name such as `session.jsonl` is installed using its session ID as the
 filename. For a checkout whose encoded directory exceeds 255 bytes, the file
 goes under a hash-named directory in `sessions/`. Pi's all-sessions list shows
