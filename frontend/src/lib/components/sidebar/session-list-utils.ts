@@ -1,7 +1,10 @@
 import type { SessionGroup, SessionGroupInput } from "../../stores/sessionGroups.js";
+import { ui } from "../../stores/ui.svelte.js";
 import { sessionAncestryMatcher } from "../../utils/session-ancestry.js";
 
 export const ITEM_HEIGHT = 42;
+// A row showing years carries its timestamp on a third line.
+const YEAR_ITEM_HEIGHT = 56;
 const CHILD_ITEM_HEIGHT = 34;
 const TEAM_HEADER_HEIGHT = 28;
 export const HEADER_HEIGHT = 28;
@@ -163,10 +166,10 @@ function emitGroupItems(
     count: 0,
     group: g,
     depth: 0,
-    height: ITEM_HEIGHT,
+    height: ui.alwaysShowYear ? YEAR_ITEM_HEIGHT : ITEM_HEIGHT,
     top: y.value,
   });
-  y.value += ITEM_HEIGHT;
+  y.value += ui.alwaysShowYear ? YEAR_ITEM_HEIGHT : ITEM_HEIGHT;
 
   if (!isExpanded) return;
 

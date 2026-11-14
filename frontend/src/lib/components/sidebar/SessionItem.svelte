@@ -384,7 +384,7 @@
 <div
   class="session-item"
   class:active={isActive}
-  class:compact
+  class:compact class:years={ui.alwaysShowYear}
   class:depth-1={depth === 1}
   class:depth-2={depth >= 2}
   class:orphaned-teammate={isOrphanedTeammate}
@@ -480,7 +480,8 @@
         onclick={handleSessionClick}
       >
         <!-- Two lines: the title with its time, then project, message count,
-             machine, and agent. Compact child rows put the time on the meta line. -->
+             machine, and agent. Compact child rows put the time on the meta line;
+             a row showing years moves it to a third line. -->
         <div class="session-name-row">
           <div
             class="session-name"
@@ -784,6 +785,21 @@
     display: flex;
     flex-direction: column;
     gap: 2px;
+  }
+
+  /* With years shown the full timestamp takes a third line, so the title
+     and the meta line keep the row's whole width. */
+  .session-item.years:not(.compact) {
+    height: 56px;
+  }
+
+  .session-item.years:not(.compact) .session-name-row {
+    display: contents;
+  }
+
+  .session-item.years:not(.compact) .session-time {
+    order: 1;
+    line-height: 13px;
   }
 
   .session-info-link {

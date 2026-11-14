@@ -454,6 +454,55 @@ test.describe("sidebar agent names", () => {
     expect(await prefixFitsBeforeEllipsis(page, CROWDED_ID, "Open".length)).toBe(true);
   });
 
+  test("a row showing years keeps the full timestamp, title, and metadata at 280px", async ({
+    page,
+  }) => {
+    // A two-digit day and month give the widest dates; Korean writes them
+    // longest of the shipped locales.
+    const ended_at = "2026-12-15T12:00:00Z";
+    await page.route("**/api/v1/sessions/sidebar-index**", (route) =>
+      route.fulfill({
+        json: { ...sidebarResponse(), sessions: fixtureRows.map((row) => ({ ...row, ended_at })) },
+      }),
+    );
+    await page.addInitScript(() => localStorage.setItem("agentsview-always-show-year", "true"));
+    for (const locale of ["en", "ko"]) {
+      await page.addInitScript((value) => localStorage.setItem("agentsview-locale", value), locale);
+      await openSessions(page, 1280, 280);
+      const row = await page
+        .locator('[data-session-id="open-code-review-session"]')
+        .evaluate((item) => {
+          const itemRect = item.getBoundingClientRect();
+          const times = [...item.querySelectorAll<HTMLElement>(".session-time")];
+          const rows = [...document.querySelectorAll("#session-sidebar .session-item")];
+          const next = rows[rows.indexOf(item) + 1];
+          return {
+            gapToNext: next ? next.getBoundingClientRect().top - itemRect.bottom : 0,
+            text: times.map((time) => time.textContent).join(" "),
+            clipped: times.filter((time) => {
+              const rect = time.getBoundingClientRect();
+              return (
+                time.scrollWidth > time.clientWidth + 1 ||
+                rect.right > itemRect.right + 1 ||
+                rect.top < itemRect.top - 1 ||
+                rect.bottom > itemRect.bottom + 1
+              );
+            }).length,
+            name: item.querySelector(".session-name")!.getBoundingClientRect().width,
+            meta: item.querySelector(".session-meta")!.getBoundingClientRect().width,
+            column: item.querySelector(".session-info")!.getBoundingClientRect().width,
+          };
+        });
+      console.log(`width=280px with years locale=${locale} ${JSON.stringify(row)}`);
+      expect(row.gapToNext).toBeGreaterThanOrEqual(-0.5);
+      expect(row.text).toContain("2026");
+      expect(row.text).toMatch(/\d{1,2}:\d{2}/);
+      expect(row.clipped).toBe(0);
+      expect(row.name).toBeGreaterThan(row.column * 0.6);
+      expect(row.meta).toBeGreaterThanOrEqual(row.column - 1);
+    }
+  });
+
   test("metadata boundary preserves rows and controls across desktop and mobile widths", async ({
     page,
   }, testInfo) => {
