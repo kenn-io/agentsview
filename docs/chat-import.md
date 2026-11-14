@@ -48,9 +48,8 @@ as unsupported before any sessions are emitted.
 The web import dialog currently supports Claude.ai and ChatGPT. Import Gemini
 Apps exports with the [CLI](#importing-via-the-cli).
 
-Click the **Import conversations** button in the header
-(the upload icon in the top-right area) to open the import
-dialog.
+Open the **More actions** menu (the `…` button in the header) and choose
+**Import conversations** to open the import dialog.
 
 ![Import button in header](/docs/assets/generated/screenshots/import-button.png)
 

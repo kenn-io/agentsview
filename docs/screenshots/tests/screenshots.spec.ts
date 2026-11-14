@@ -1345,7 +1345,7 @@ test.describe('Command palette', () => {
     const palette = page.locator('.palette-overlay');
     await palette.locator('.palette-input').fill('implement');
     await palette.getByTitle('Select project', { exact: true }).click();
-    await page.getByRole('option', { name: /^agentsview \(/ }).first().click();
+    await page.getByRole('option', { name: /^agentsview \d+$/ }).first().click();
     await expect(palette.locator('.palette-item').first()).toBeVisible();
     await palette.getByRole('button', { name: 'All time', exact: true }).click();
     await expect(page.getByRole('radio', { name: 'Calendar', exact: true })).toBeVisible();
@@ -1398,12 +1398,8 @@ test.describe('Modals', () => {
 
   test('publish modal', async ({ page }) => {
     await selectFirstSession(page);
-    await page.locator(
-      'button[aria-label="Publish to Gist"]'
-    ).click();
-    await page.locator('.export-dropdown .overflow-item', {
-      hasText: 'Publish public Gist',
-    }).click();
+    await page.getByRole('button', { name: 'More actions', exact: true }).click();
+    await page.getByRole('menuitem', { name: /Publish public Gist/ }).click();
     const dialog = page.getByRole('dialog', {
       name: 'Publish to public GitHub Gist',
     });
@@ -1719,7 +1715,7 @@ test.describe('Settings', () => {
       await route.fulfill({ response, json: settings });
     });
     await openSettings(page);
-    const section = await openSettingsPanel(page, 'Session Providers');
+    const section = await openSettingsPanel(page, 'Session providers');
     const card = section.locator('.provider-row').filter({
       has: page.locator('.provider-name', { hasText: /^Codex$/ }),
     });
@@ -1750,8 +1746,7 @@ test.describe('Settings', () => {
     await openSettings(page);
     const remoteSection = await openSettingsPanel(
       page,
-      'Remote access',
-      'Remote Access'
+      'Remote access'
     );
     await remoteSection.scrollIntoViewIfNeeded();
     await page.waitForTimeout(500);
@@ -2082,20 +2077,18 @@ test.describe('Focused transcript mode', () => {
   });
 
   test('focused transcript view', async ({ page }) => {
-    // Click the "Focused" pill in the transcript strip
-    const focusedPill = page.locator(
-      'button[aria-label="Focused transcript mode"]'
-    );
-    await expect(focusedPill).toBeVisible({ timeout: 5_000 });
-    await focusedPill.click();
+    // Content mode lives in the Transcript view menu.
+    const viewMenu = page.getByRole('button', { name: /^Transcript view:/ });
+    await viewMenu.click();
+    await page.getByRole('menuitemradio', {
+      name: /Only your prompts and final answers/,
+    }).click();
+    await page.keyboard.press('Escape');
+    await expect(page.getByRole('menu')).toBeHidden();
+    await expect(viewMenu).toHaveAccessibleName(/prompts and answers/);
+    await viewMenu.blur();
     await page.waitForTimeout(1000);
     await snap(page, 'focused-transcript');
-
-    // Toggle back to normal mode
-    const normalPill = page.locator(
-      'button[aria-label="Normal transcript mode"]'
-    );
-    await normalPill.click();
   });
 });
 
@@ -2200,31 +2193,35 @@ test.describe('Import conversations', () => {
     await waitForApp(page);
   });
 
-  test('import button in header', async ({ page }) => {
-    const importBtn = page.locator(
-      'button[title="Import conversations"]'
-    );
-    await expect(importBtn).toBeVisible({ timeout: 5_000 });
+  // Import lives in the header's More actions menu.
+  async function openImportMenu(page: Page) {
+    await page.getByRole('button', { name: 'More actions', exact: true }).click();
+    const item = page.getByRole('menuitem', { name: 'Import conversations' });
+    await expect(item).toBeVisible({ timeout: 5_000 });
+    return item;
+  }
 
-    // Capture a region around the button for context — snap
-    // the header-right section that contains it.
-    const headerRight = page.locator('.header-right');
-    if (await headerRight.count() > 0) {
-      await snapEl(headerRight, 'import-button');
-    } else {
-      await snapEl(importBtn, 'import-button');
-    }
+  async function openImportModal(page: Page) {
+    await (await openImportMenu(page)).click();
+    const modal = page.getByRole('dialog');
+    await expect(modal).toBeVisible({ timeout: 5_000 });
+    return modal;
+  }
+
+  test('import button in header', async ({ page }) => {
+    await openImportMenu(page);
+    await page.waitForTimeout(300);
+    // The open menu with the header buttons it drops from.
+    await snapRange(
+      page,
+      page.getByRole('button', { name: 'Keyboard shortcuts', exact: true }),
+      page.getByRole('menu'),
+      'import-button'
+    );
   });
 
   test('import modal claude-ai', async ({ page }) => {
-    const importBtn = page.locator(
-      'button[title="Import conversations"]'
-    );
-    await expect(importBtn).toBeVisible({ timeout: 5_000 });
-    await importBtn.click();
-
-    const modal = page.locator('div[role="dialog"]');
-    await expect(modal).toBeVisible({ timeout: 5_000 });
+    const modal = await openImportModal(page);
     await page.waitForTimeout(300);
 
     // Claude.ai is the default provider
@@ -2234,14 +2231,7 @@ test.describe('Import conversations', () => {
   });
 
   test('import modal chatgpt', async ({ page }) => {
-    const importBtn = page.locator(
-      'button[title="Import conversations"]'
-    );
-    await expect(importBtn).toBeVisible({ timeout: 5_000 });
-    await importBtn.click();
-
-    const modal = page.locator('div[role="dialog"]');
-    await expect(modal).toBeVisible({ timeout: 5_000 });
+    const modal = await openImportModal(page);
     await page.waitForTimeout(300);
 
     // Select ChatGPT provider via its label
@@ -2257,8 +2247,7 @@ test.describe('Import conversations', () => {
     await page.route('**/api/v1/import/claude-ai/chrome', (route) =>
       route.fulfill({ json: { connected: true } })
     );
-    await page.getByTitle('Import conversations', { exact: true }).click();
-    const modal = page.getByRole('dialog');
+    const modal = await openImportModal(page);
     await expect(modal.getByText('Connected', { exact: true })).toBeVisible();
     await expect(modal.getByRole('button', { name: 'Sync', exact: true })).toBeEnabled();
     await snapEl(modal, 'import-claude-sync');
@@ -2617,7 +2606,7 @@ test.describe('Recent Edits', () => {
     await page.waitForSelector('.recent-edits-page', {
       timeout: 10_000,
     });
-    await page.waitForSelector('.re-file', { timeout: 10_000 });
+    await page.waitForSelector('.re-file-row', { timeout: 10_000 });
 
     const firstRow = page.locator('.re-file-row').first();
     await firstRow.click();
