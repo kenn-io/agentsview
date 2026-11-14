@@ -305,42 +305,20 @@ func (b *httpBackend) FindSessionIDsByRawSuffix(
 }
 
 // Probe only when the backend has no version so unfiltered lists need no extra request.
-func (b *httpBackend) requireSessionAnnotations(ctx context.Context) error {
+func (b *httpBackend) requireSessionAnnotations(ctx context.Context, minVersion int, feature string) error {
 	b.apiVersionMu.Lock()
-	version := b.apiVersion
-	b.apiVersionMu.Unlock()
-	if version == 0 {
-		capabilities, err := ProbeHTTPServerCapabilities(ctx, b.baseURL, b.token)
-		if err != nil {
-			return err
-		}
-		version = capabilities.APIVersion
-	}
-	if version < service.SessionAnnotationsAPIVersion {
-		return fmt.Errorf(
-			"server API version %d does not support session labels, parent links, or their filters; "+
-				"restart or upgrade the server",
-			version,
-		)
-	}
-	return nil
-}
-
-func (b *httpBackend) requireCompactionSummaries(ctx context.Context) error {
-	b.apiVersionMu.Lock()
+	defer b.apiVersionMu.Unlock()
 	version := b.apiVersion
 	if version == 0 {
 		capabilities, err := ProbeHTTPServerCapabilities(ctx, b.baseURL, b.token)
 		if err != nil {
-			b.apiVersionMu.Unlock()
 			return err
 		}
 		version = capabilities.APIVersion
 		b.apiVersion = version
 	}
-	b.apiVersionMu.Unlock()
-	if version < service.CompactionSummariesAPIVersion {
-		return fmt.Errorf("server API version %d does not support compaction summaries; restart or upgrade the server", version)
+	if version < minVersion {
+		return fmt.Errorf("server API version %d does not support %s; restart or upgrade the server", version, feature)
 	}
 	return nil
 }
@@ -348,13 +326,13 @@ func (b *httpBackend) requireCompactionSummaries(ctx context.Context) error {
 func (b *httpBackend) List(
 	ctx context.Context, f service.ListFilter,
 ) (*service.SessionList, error) {
-	if f.MatchEachSession {
-		if err := b.requireCompactionSummaries(ctx); err != nil {
+	if f.HasCompactionSummary {
+		if err := b.requireSessionAnnotations(ctx, service.CompactionSummariesAPIVersion, "compaction summaries"); err != nil {
 			return nil, err
 		}
 	}
 	if len(f.Labels) > 0 || f.PR != "" {
-		if err := b.requireSessionAnnotations(ctx); err != nil {
+		if err := b.requireSessionAnnotations(ctx, service.SessionAnnotationsAPIVersion, "session labels, parent links, or their filters"); err != nil {
 			return nil, err
 		}
 	}
@@ -463,8 +441,8 @@ func filterToQuery(f service.ListFilter) (*apiclient.GetAPIV1SessionsQuery, erro
 	if f.IncludeChildren {
 		q.IncludeChildren = new(true)
 	}
-	if f.MatchEachSession {
-		q.MatchEachSession = new(true)
+	if f.HasCompactionSummary {
+		q.HasCompactionSummary = new(true)
 	}
 	if f.IncludeSource {
 		q.IncludeSource = new(true)
@@ -532,11 +510,8 @@ func encodeSessionIDs(ids []string) (string, error) {
 func (b *httpBackend) Messages(
 	ctx context.Context, id string, f service.MessageFilter,
 ) (*service.MessageList, error) {
-	if f.CompactBoundaryOnly && f.Around != nil {
-		return nil, service.ErrCompactBoundaryAround
-	}
 	if f.CompactBoundaryOnly {
-		if err := b.requireCompactionSummaries(ctx); err != nil {
+		if err := b.requireSessionAnnotations(ctx, service.CompactionSummariesAPIVersion, "compaction summaries"); err != nil {
 			return nil, err
 		}
 	}

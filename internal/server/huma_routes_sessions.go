@@ -114,8 +114,8 @@ type SessionListFilters = sessionFilterInput
 
 // Batch selection belongs only to the session list, not sidebar discovery.
 type listSessionsInput struct {
-	MatchEachSession bool              `query:"match_each_session" doc:"Apply filters to each session, including child sessions"`
-	ExclusionCounts  optionalBoolParam `query:"exclusion_counts" doc:"Include default-exclusion counts; true also samples hidden children, false counts only one-shot and automated sessions. First page only."`
+	HasCompactionSummary bool              `query:"has_compaction_summary" doc:"Select sessions with a non-empty compaction summary"`
+	ExclusionCounts      optionalBoolParam `query:"exclusion_counts" doc:"Include default-exclusion counts; true also samples hidden children, false counts only one-shot and automated sessions. First page only."`
 	SessionListFilters
 	IDs    string `query:"ids" doc:"Comma-separated list of 1 to 100 session IDs. Quote IDs containing commas or line breaks with RFC 4180 CSV quoting; IDs containing CRLF are rejected. Raw IDs include host copies; tilde-qualified IDs match exactly. Explicit filters intersect the selection; discovery exclusions do not apply."`
 	IDsSet bool
@@ -301,7 +301,7 @@ func (s *Server) humaListSessions(
 	if err != nil {
 		return nil, err
 	}
-	filter.MatchEachSession = in.MatchEachSession
+	filter.HasCompactionSummary = in.HasCompactionSummary
 	filter.ExclusionCounts = optionalBoolValue(in.ExclusionCounts)
 	if in.IDsSet {
 		filter.IDs, err = parseSessionIDs(in.IDs)
@@ -433,8 +433,7 @@ func (s *Server) humaGetMessages(
 			return nil, apiError(http.StatusNotImplemented, err.Error())
 		}
 		if errors.Is(err, service.ErrAroundMutuallyExclusive) ||
-			errors.Is(err, service.ErrBeforeAfterRequireAround) ||
-			errors.Is(err, service.ErrCompactBoundaryAround) {
+			errors.Is(err, service.ErrBeforeAfterRequireAround) {
 			return nil, apiError(http.StatusBadRequest, err.Error())
 		}
 		return nil, serverError(err)

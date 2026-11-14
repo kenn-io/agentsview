@@ -23984,8 +23984,8 @@ type GetAPIV1SessionStatsQuery struct {
 }
 
 type GetAPIV1SessionsQuery struct {
-	// MatchEachSession Apply filters to each session, including child sessions
-	MatchEachSession *bool `json:"match_each_session,omitempty"`
+	// HasCompactionSummary Select sessions with a non-empty compaction summary
+	HasCompactionSummary *bool `json:"has_compaction_summary,omitempty"`
 
 	// ExclusionCounts Include default-exclusion counts; true also samples hidden children, false counts only one-shot and automated sessions. First page only.
 	ExclusionCounts *bool `json:"exclusion_counts,omitempty"`

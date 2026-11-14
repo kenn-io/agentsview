@@ -20624,12 +20624,12 @@ paths:
     get:
       operationId: get-api-v1-sessions
       parameters:
-        - description: Apply filters to each session, including child sessions
+        - description: Select sessions with a non-empty compaction summary
           explode: false
           in: query
-          name: match_each_session
+          name: has_compaction_summary
           schema:
-            description: Apply filters to each session, including child sessions
+            description: Select sessions with a non-empty compaction summary
             type: boolean
         - description: Include default-exclusion counts; true also samples hidden children, false counts only one-shot and automated sessions. First page only.
           explode: false

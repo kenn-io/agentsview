@@ -665,8 +665,6 @@ func getMessagesWith(
 	return msgs, nil
 }
 
-var ErrCompactBoundaryAround = errors.New("compact_boundary cannot be combined with around")
-
 // MessageWindow parameterises GetMessagesWindow. Exactly one retrieval
 // mode: Around non-nil = symmetric window; otherwise linear from/limit.
 type MessageWindow struct {
@@ -693,9 +691,6 @@ type MessageWindow struct {
 func (db *DB) GetMessagesWindow(
 	ctx context.Context, sessionID string, w MessageWindow,
 ) ([]Message, error) {
-	if w.Around != nil && w.CompactBoundaryOnly {
-		return nil, ErrCompactBoundaryAround
-	}
 	if w.Around != nil {
 		return db.getMessagesAroundAnchor(ctx, sessionID, w)
 	}

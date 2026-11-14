@@ -23,11 +23,7 @@ func BuildAnalyticsWhere(f AnalyticsFilter, b *QueryBuilder, prefix, sessionID s
 	}
 	if values := CSVFilterValues(f.Model); len(values) > 0 {
 		pred := inPredicate("m.model", values, b)
-		if b.dialect.messageMembership != nil {
-			preds = append(preds, b.dialect.messageMembership(sessionID, pred))
-		} else {
-			preds = append(preds, "EXISTS (SELECT 1 FROM messages m WHERE m.session_id = "+sessionID+" AND "+pred+")")
-		}
+		preds = append(preds, b.dialect.MessageMembershipSQL(sessionID, pred))
 	}
 	if f.MinUserMessages > 0 {
 		preds = append(preds, q("user_message_count")+" >= "+b.Add(f.MinUserMessages))

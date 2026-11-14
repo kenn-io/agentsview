@@ -142,8 +142,8 @@ func newServer(opts ServeOptions) *mcp.Server {
 	}
 	memoryOnly := opts.Profile == ProfileMemory
 
+	mcp.AddTool(s, &mcp.Tool{Name: ToolGetCompactionSummaries, Description: "Read compaction summaries; use next_cursor to continue.", Annotations: readOnly}, t.compactionSummaries)
 	if !memoryOnly {
-		mcp.AddTool(s, &mcp.Tool{Name: ToolGetCompactionSummaries, Description: "Read compaction summaries; use next_cursor to continue.", Annotations: readOnly}, t.compactionSummaries)
 		addFileReferencesTool(s, t, externalRead)
 		mcp.AddTool(s, &mcp.Tool{
 			Name: ToolSearchSessions,

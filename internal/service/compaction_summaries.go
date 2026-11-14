@@ -47,42 +47,35 @@ func CompactionSummaries(ctx context.Context, svc SessionService, req Compaction
 	if limit > MaxCompactionSessionLimit {
 		limit = MaxCompactionSessionLimit
 	}
-	cursor := req.Cursor
-	for {
-		ids := []string{req.SessionID}
-		if req.ActiveSince != "" {
-			page, err := svc.List(ctx, ListFilter{ActiveSince: req.ActiveSince, Cursor: cursor, Limit: limit, IncludeOneShot: true, OneShotFilterSet: true, IncludeAutomated: true, AutomatedFilterSet: true, MatchEachSession: true})
+	ids := []string{req.SessionID}
+	if req.ActiveSince != "" {
+		page, err := svc.List(ctx, ListFilter{ActiveSince: req.ActiveSince, Cursor: req.Cursor, Limit: limit, IncludeOneShot: true, OneShotFilterSet: true, IncludeAutomated: true, AutomatedFilterSet: true, HasCompactionSummary: true})
+		if err != nil {
+			return out, err
+		}
+		out.NextCursor = page.NextCursor
+		ids = ids[:0]
+		for _, session := range page.Sessions {
+			ids = append(ids, session.ID)
+		}
+	}
+	for _, id := range ids {
+		from := 0
+		for {
+			page, err := svc.Messages(ctx, id, MessageFilter{From: &from, Direction: "asc", Limit: db.MaxMessageLimit, CompactBoundaryOnly: true})
 			if err != nil {
 				return out, err
 			}
-			out.NextCursor = page.NextCursor
-			ids = ids[:0]
-			for _, session := range page.Sessions {
-				ids = append(ids, session.ID)
+			for _, m := range page.Messages {
+				if strings.TrimSpace(m.Content) != "" {
+					out.Summaries = append(out.Summaries, CompactionSummary{SessionID: id, Ordinal: m.Ordinal, Timestamp: m.Timestamp, Content: m.Content})
+				}
 			}
-		}
-		for _, id := range ids {
-			from := 0
-			for {
-				page, err := svc.Messages(ctx, id, MessageFilter{From: &from, Direction: "asc", Limit: db.MaxMessageLimit, CompactBoundaryOnly: true})
-				if err != nil {
-					return out, err
-				}
-				for _, m := range page.Messages {
-					if strings.TrimSpace(m.Content) != "" {
-						out.Summaries = append(out.Summaries, CompactionSummary{SessionID: id, Ordinal: m.Ordinal, Timestamp: m.Timestamp, Content: m.Content})
-					}
-				}
-				if len(page.Messages) < db.MaxMessageLimit {
-					break
-				}
-				from = page.Messages[len(page.Messages)-1].Ordinal + 1
+			if len(page.Messages) < db.MaxMessageLimit {
+				break
 			}
+			from = page.Messages[len(page.Messages)-1].Ordinal + 1
 		}
-		if len(out.Summaries) > 0 || out.NextCursor == "" {
-			break
-		}
-		cursor = out.NextCursor
 	}
 	return out, nil
 }

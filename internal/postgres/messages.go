@@ -84,9 +84,6 @@ const pgRevisionCol = `COALESCE((SELECT transcript_revision FROM sessions WHERE 
 func (s *Store) GetMessagesWindow(
 	ctx context.Context, sessionID string, w db.MessageWindow,
 ) ([]db.Message, error) {
-	if w.Around != nil && w.CompactBoundaryOnly {
-		return nil, db.ErrCompactBoundaryAround
-	}
 	if w.Around != nil {
 		return s.getMessagesAroundAnchor(ctx, sessionID, w)
 	}

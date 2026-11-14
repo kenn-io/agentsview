@@ -15,7 +15,7 @@ import (
 
 func TestCompactionFiltersRequireAPIVersion(t *testing.T) {
 	for _, known := range []bool{false, true} {
-		for _, version := range []int{18, 19} {
+		for _, version := range []int{18, 19, 20} {
 			for _, list := range []bool{false, true} {
 				t.Run(fmt.Sprintf("known=%t/version=%d/list=%t", known, version, list), func(t *testing.T) {
 					var requests []string
@@ -27,7 +27,7 @@ func TestCompactionFiltersRequireAPIVersion(t *testing.T) {
 							return
 						}
 						if list {
-							assert.Equal(t, "true", r.URL.Query().Get("match_each_session"))
+							assert.Equal(t, "true", r.URL.Query().Get("has_compaction_summary"))
 							fmt.Fprint(w, `{"sessions":[],"total":0}`)
 							return
 						}
@@ -41,7 +41,7 @@ func TestCompactionFiltersRequireAPIVersion(t *testing.T) {
 					}
 					var err error
 					if list {
-						_, err = b.List(t.Context(), service.ListFilter{MatchEachSession: true})
+						_, err = b.List(t.Context(), service.ListFilter{HasCompactionSummary: true})
 					} else {
 						_, err = b.Messages(t.Context(), "s", service.MessageFilter{CompactBoundaryOnly: true})
 					}
@@ -85,7 +85,7 @@ func TestCompactionFiltersCacheVersionProbe(t *testing.T) {
 			}))
 			defer srv.Close()
 			b := NewHTTPBackend(srv.URL, "", false, "")
-			_, err := b.List(t.Context(), service.ListFilter{MatchEachSession: true})
+			_, err := b.List(t.Context(), service.ListFilter{HasCompactionSummary: true})
 			require.Error(t, err)
 
 			var wg sync.WaitGroup
@@ -100,7 +100,7 @@ func TestCompactionFiltersCacheVersionProbe(t *testing.T) {
 				})
 			}
 			wg.Wait()
-			_, err = b.List(t.Context(), service.ListFilter{MatchEachSession: true})
+			_, err = b.List(t.Context(), service.ListFilter{HasCompactionSummary: true})
 			assert.EqualValues(t, 2, probes.Load())
 			if version == 18 {
 				assert.ErrorContains(t, err, "restart or upgrade")
@@ -125,4 +125,26 @@ func TestCompactionFiltersInvalidActiveSince(t *testing.T) {
 	_, err := filterToQuery(service.ListFilter{ActiveSince: "yesterday"})
 	require.ErrorContains(t, err, "invalid active_since")
 	require.ErrorContains(t, err, "RFC3339")
+}
+
+func TestCompactionSummariesProbeOnceForMultipleSessions(t *testing.T) {
+	var probes atomic.Int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch r.URL.Path {
+		case "/api/v1/version":
+			probes.Add(1)
+			fmt.Fprint(w, `{"api_version":19}`)
+		case "/api/v1/sessions":
+			fmt.Fprint(w, `{"sessions":[{"id":"one"},{"id":"two"}],"total":2}`)
+		default:
+			fmt.Fprint(w, `{"messages":[{"ordinal":0,"content":"summary"}],"count":1}`)
+		}
+	}))
+	defer srv.Close()
+	b := NewHTTPBackend(srv.URL, "", false, "")
+	out, err := service.CompactionSummaries(t.Context(), b, service.CompactionSummariesRequest{ActiveSince: "2024-06-01T00:00:00Z"})
+	require.NoError(t, err)
+	require.Len(t, out.Summaries, 2)
+	assert.EqualValues(t, 1, probes.Load())
 }

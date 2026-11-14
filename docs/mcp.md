@@ -84,7 +84,7 @@ client will see these tools:
 | `search_sessions`             | Full-text search across recorded sessions                                |
 | `list_sessions`               | List recent or filtered sessions                                         |
 | `get_session_overview`        | Fetch metadata and a compact message preview                             |
-| `get_compaction_summaries`    | Read full compaction summaries for a session or sessions active since a timestamp. Resume `next_cursor` with the same `active_since`. |
+| `get_compaction_summaries`    | Read full compaction summaries for a session or sessions active since a timestamp. The limit counts sessions. Resume `next_cursor` with the same `active_since`, even when a page is empty. |
 | `get_messages`                | Read paginated message bodies from one session                           |
 | `get_memory_status`           | Report archive, lexical, semantic, and source readiness                  |
 | `search_content`              | Substring, regex, terms, semantic, or hybrid search over session text    |
@@ -137,7 +137,7 @@ profile:
 ```
 
 This profile advertises only `get_memory_status`, `search_content`, and
-`get_messages`. The status tool reports the authenticated archive backend,
+`get_messages`, and `get_compaction_summaries`. The status tool reports the authenticated archive backend,
 read-only mode, server version, lexical availability, semantic generation
 coverage, and whether per-source freshness telemetry is available. Its `ready`,
 `partial`, `unavailable`, or `unknown` states come from the same provider as the

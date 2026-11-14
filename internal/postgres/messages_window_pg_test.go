@@ -317,12 +317,9 @@ func TestPGGetMessagesWindow_CompactBoundary(t *testing.T) {
 	msgs, err := store.GetMessagesWindow(t.Context(), "boundary", db.MessageWindow{Limit: 100, Asc: true, CompactBoundaryOnly: true})
 	require.NoError(t, err)
 	assert.Equal(t, []int{3, 8}, mwOrdinalsOf(msgs))
-	anchor := 6
-	_, err = store.GetMessagesWindow(t.Context(), "boundary", db.MessageWindow{Around: &anchor, CompactBoundaryOnly: true})
-	require.ErrorIs(t, err, db.ErrCompactBoundaryAround)
 }
 
-func TestPGListSessionsMatchEachSession(t *testing.T) {
+func TestPGListSessionsHasCompactionSummary(t *testing.T) {
 	t.Parallel()
 	pgURL := testPGURL(t)
 	pg := mwEnsureSchema(t, pgURL)
@@ -333,9 +330,11 @@ func TestPGListSessionsMatchEachSession(t *testing.T) {
 	require.NoError(t, err)
 	_, err = pg.ExecContext(t.Context(), `UPDATE sessions SET ended_at = '2024-06-15T00:00:00Z', parent_session_id = 'old-root', relationship_type = 'subagent' WHERE id = 'active-child'`)
 	require.NoError(t, err)
+	_, err = pg.ExecContext(t.Context(), `UPDATE messages SET is_compact_boundary = TRUE WHERE session_id = 'active-child' AND ordinal = 3`)
+	require.NoError(t, err)
 	store := mwNewStore(t, pgURL)
 	defer store.Close()
-	page, err := store.ListSessions(t.Context(), db.SessionFilter{ActiveSince: "2024-06-01T00:00:00Z", MatchEachSession: true})
+	page, err := store.ListSessions(t.Context(), db.SessionFilter{ActiveSince: "2024-06-01T00:00:00Z", HasCompactionSummary: true})
 	require.NoError(t, err)
 	require.Len(t, page.Sessions, 1)
 	assert.Equal(t, "active-child", page.Sessions[0].ID)

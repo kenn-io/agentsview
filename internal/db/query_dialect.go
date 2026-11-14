@@ -94,6 +94,14 @@ func (d QueryDialect) Position(haystack, needle string) string {
 	return d.position(haystack, needle)
 }
 
+// MessageMembershipSQL selects sessions with a matching message.
+func (d QueryDialect) MessageMembershipSQL(sessionID, pred string) string {
+	if d.messageMembership != nil {
+		return d.messageMembership(sessionID, pred)
+	}
+	return "EXISTS (SELECT 1 FROM messages m WHERE m.session_id = " + sessionID + " AND " + pred + ")"
+}
+
 // SignedAggregate keeps ClickHouse aggregate counts scannable as Go integers.
 func (d QueryDialect) SignedAggregate(expr string) string {
 	if d.signedWindowCounts {
@@ -830,9 +838,8 @@ func buildSessionFilterWithBuilder(
 	// Opaque project-key callers have already resolved every raw label that
 	// belongs to the identity. Match those labels on each row directly so
 	// child sessions are neither excluded nor pulled in merely because their
-	// parent belongs to the requested project. MatchEachSession applies the same
-	// per-row filtering without restricting the project.
-	if f.ProjectLabels != nil || f.MatchEachSession {
+	// parent belongs to the requested project. Summary filtering also applies per row.
+	if f.ProjectLabels != nil || f.HasCompactionSummary {
 		filterPreds, oneShotPred := sessionFilterPredicates(f, b, q)
 		allPreds := slices.Concat(basePreds, filterPreds)
 		if oneShotPred != "" {
@@ -920,6 +927,14 @@ func sessionFilterPredicates(
 	f SessionFilter, b *QueryBuilder, q func(string) string,
 ) ([]string, string) {
 	var preds []string
+	if f.HasCompactionSummary {
+		pred := "m.is_compact_boundary = " + b.dialect.trueLiteral + " AND m.content <> ''"
+		sessionID := q("id")
+		if sessionID == "id" {
+			sessionID = "sessions.id"
+		}
+		preds = append(preds, b.dialect.MessageMembershipSQL(sessionID, pred))
+	}
 	if f.IDs != nil {
 		preds = append(preds, sessionIDsPredicate(f, b, q("id")))
 	}

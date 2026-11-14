@@ -615,19 +615,19 @@ type SessionFilter struct {
 	// subordinate units the Scope filter exists to govern. Top-level
 	// sessions keep the one-shot exclusion unchanged; every other caller
 	// (session list, substring/regex/fts search) leaves this false.
-	ChildExemptOneShot bool
-	ExcludeAutomated   bool     // exclude sessions where is_automated = 1
-	AutomatedScope     string   // "", "human", "all", or "automated"
-	IncludeChildren    bool     // include subagent sessions (for sidebar grouping)
-	MatchEachSession   bool     // apply filters to each session, including children
-	IncludeEmpty       bool     // include zero-message sessions for project mapping
-	IncludeOrphans     bool     // promote orphan child rows to sidebar roots
-	IncludeSource      bool     // include the session source file path in list rows
-	Outcome            []string // filter by outcome values
-	HealthGrade        []string // filter by health grade values
-	MinToolFailures    *int     // minimum tool_failure_signal_count
-	HasSecret          bool     // only sessions with current secret_leak_count > 0
-	Starred            bool     // only sessions starred by the user
+	ChildExemptOneShot   bool
+	ExcludeAutomated     bool     // exclude sessions where is_automated = 1
+	AutomatedScope       string   // "", "human", "all", or "automated"
+	IncludeChildren      bool     // include subagent sessions (for sidebar grouping)
+	HasCompactionSummary bool     // select sessions with non-empty compaction boundaries
+	IncludeEmpty         bool     // include zero-message sessions for project mapping
+	IncludeOrphans       bool     // promote orphan child rows to sidebar roots
+	IncludeSource        bool     // include the session source file path in list rows
+	Outcome              []string // filter by outcome values
+	HealthGrade          []string // filter by health grade values
+	MinToolFailures      *int     // minimum tool_failure_signal_count
+	HasSecret            bool     // only sessions with current secret_leak_count > 0
+	Starred              bool     // only sessions starred by the user
 	// Labels keeps sessions carrying every listed label (exact match).
 	Labels []string
 	// PR keeps sessions linked to a repository, optionally narrowed to one

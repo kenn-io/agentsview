@@ -13,9 +13,6 @@ func (s Sessions) GetMessages(ctx context.Context, sessionID string, from, limit
 }
 
 func (s Sessions) GetMessagesWindow(ctx context.Context, sessionID string, w db.MessageWindow) ([]db.Message, error) {
-	if w.Around != nil && w.CompactBoundaryOnly {
-		return nil, db.ErrCompactBoundaryAround
-	}
 	if w.Limit <= 0 || w.Limit > db.MaxMessageLimit {
 		w.Limit = db.DefaultMessageLimit
 	}

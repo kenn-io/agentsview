@@ -2176,7 +2176,7 @@ Machine filters accept exact IDs, aliases, comma-separated ID/alias lists, or a
 unique whole display label. A valid 32-hex installation ID takes precedence even
 without stored sessions. Unknown or ambiguous names return an error with choices.
 
-Programmatic access to session data for scripts, automation agents, and CI jobs.
+Programmatic access to session data for scripts, automation agents, and CI jobs. For `session compactions`, `--limit` counts sessions per page, not response bytes. Resume `--cursor` with the same `--active-since`, including after an empty page.
 See [Session API](/docs/session-api/) for full documentation, including
 stability guarantees, transport auto-detection, and every subcommand.
 
@@ -2606,7 +2606,7 @@ SQLite archive directly. See
 daemon again.
 
 Use `--profile memory` when the client should discover only the
-`get_memory_status`, `search_content`, and `get_messages` conversation-memory
+`get_memory_status`, `search_content`, `get_messages`, and `get_compaction_summaries` conversation-memory
 tools. `get_memory_status` reports archive, lexical, semantic, vector coverage,
 and source-telemetry readiness without running a search probe. The default
 `full` profile preserves the complete MCP tool surface. Profile selection works
