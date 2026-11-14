@@ -54,6 +54,9 @@ func newSessionMaterializeCommand() *cobra.Command {
 			if err != nil {
 				return err
 			}
+			if session == nil {
+				return fmt.Errorf("session not in local archive: %s", args[0])
+			}
 			result, err := sessionmaterialize.Materialize(cmd.Context(), cfg, session, cwd)
 			if err != nil {
 				return err
