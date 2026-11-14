@@ -1349,12 +1349,17 @@ func NormalizeRecallQuery(q RecallQuery) RecallQuery {
 // meaningful result. Trusted queries always target accepted entries; asking
 // for another explicit status is therefore a caller error, not an empty page.
 func ValidateRecallQuery(q RecallQuery) error {
-	q = NormalizeRecallQuery(q)
 	for _, bound := range []string{q.UpdatedSince, q.CreatedSince} {
-		if _, err := recallBound(bound); err != nil {
+		trimmed := strings.TrimSpace(bound)
+		if bound != "" && trimmed == "" {
+			return fmt.Errorf(
+				"%w: invalid timestamp %q", ErrInvalidRecallQuery, bound)
+		}
+		if _, err := recallBound(trimmed); err != nil {
 			return err
 		}
 	}
+	q = NormalizeRecallQuery(q)
 	switch q.Mode {
 	case RecallQueryModeLexical, RecallQueryModeVector, RecallQueryModeHybrid:
 	default:

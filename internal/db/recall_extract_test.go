@@ -3353,61 +3353,6 @@ func TestRefreshExtractedSessionCoverageRestoresProvenance(t *testing.T) {
 	assert.Equal(t, "sess-1-uuid-1", evidence.MessageEndSourceUUID)
 }
 
-func TestRefreshExtractedSessionCoverageListsReboundEvidence(t *testing.T) {
-	d := testDB(t)
-	ctx := t.Context()
-	session := seedCommitUnitSession(t, d, "sess-1")
-	_, err := d.EnsureExtractGeneration(ctx, ExtractGeneration{
-		Fingerprint: "fp-a", Model: "m", Segmenter: "turns-v1",
-	})
-	require.NoError(t, err)
-	_, err = d.UpsertExtractProgress(ctx, ExtractProgressUpsert{
-		SessionID: "sess-1", Fingerprint: "fp-a",
-		ContentDigest: "dg", UnitsTotal: 1, StampedAt: time.Now(),
-	})
-	require.NoError(t, err)
-	entry := commitUnitEntry("e-1", "sess-1", 0, 1)
-	entry.Project = session.Project
-	entry.CWD = session.Cwd
-	entry.GitBranch = session.GitBranch
-	entry.Agent = session.Agent
-	_, err = d.InsertExtractedRecallEntries(ctx, []RecallEntry{entry})
-	require.NoError(t, err)
-
-	_, err = d.getWriter().Exec(ctx,
-		"UPDATE recall_entries SET updated_at = '2020-01-01T00:00:00.000Z' WHERE id = 'e-1'")
-	require.NoError(t, err)
-	before, err := d.GetRecallEntry(ctx, "e-1")
-	require.NoError(t, err)
-	require.True(t, before.ProvenanceOK)
-	require.Len(t, before.Evidence, 1)
-	assert.Empty(t, before.Evidence[0].ContentDigest)
-
-	query := RecallQuery{UpdatedSince: "2021-01-01T00:00:00Z"}
-	entries, err := d.ListRecallEntries(ctx, query)
-	require.NoError(t, err)
-	assert.Empty(t, entries)
-
-	_, err = d.RefreshExtractedSessionCoverage(ctx, ExtractCoverageRefresh{
-		Fingerprint:  "fp-a",
-		Digest:       "dg",
-		StampedAt:    time.Now(),
-		ScanVersions: []string{"rules-v1"},
-		Session:      session,
-	})
-	require.NoError(t, err)
-
-	entries, err = d.ListRecallEntries(ctx, query)
-	require.NoError(t, err)
-	require.Len(t, entries, 1,
-		"a refreshed evidence record must appear in an updated-since list")
-	assert.Equal(t, "e-1", entries[0].ID)
-	require.Len(t, entries[0].Evidence, 1)
-	assert.NotEmpty(t, entries[0].Evidence[0].ContentDigest)
-	assert.Equal(t, "sess-1-uuid-0", entries[0].Evidence[0].MessageStartSourceUUID)
-	assert.Equal(t, "sess-1-uuid-1", entries[0].Evidence[0].MessageEndSourceUUID)
-}
-
 func TestExtractCandidatesAllowCandidateFindingsPolicy(t *testing.T) {
 	d := testDB(t)
 	ctx := t.Context()

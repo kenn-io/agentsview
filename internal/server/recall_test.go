@@ -2006,6 +2006,13 @@ func TestListRecallEntriesTimeBounds(t *testing.T) {
 		future := te.get(t, "/api/v1/recall/entries?"+param+"=2999-01-01T00:00:00Z")
 		assertStatus(t, future, http.StatusOK)
 		assert.Empty(t, decode[listRecallEntriesResponse](t, future).RecallEntries)
+		padded := te.get(t, "/api/v1/recall/entries?"+param+"="+
+			url.QueryEscape(" 2999-01-01T00:00:00Z "))
+		assertStatus(t, padded, http.StatusOK)
+		whitespace := te.get(t, "/api/v1/recall/entries?"+param+"="+
+			url.QueryEscape(" \t "))
+		assertStatus(t, whitespace, http.StatusBadRequest)
+		assert.Contains(t, whitespace.Body.String(), "invalid recall query")
 	}
 }
 

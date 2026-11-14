@@ -94,6 +94,13 @@ func (s *Server) handleListRecallEntries(
 		TrustedOnly:         trustedOnly,
 		Limit:               limit,
 	}
+	if err := db.ValidateRecallQuery(query); err != nil {
+		if handleInvalidRecallQuery(w, err) {
+			return
+		}
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
 	query = db.NormalizeRecallQuery(query)
 	var cursor *service.RecallListCursor
 	if rawCursor := q.Get("cursor"); rawCursor != "" {
@@ -104,13 +111,6 @@ func (s *Server) handleListRecallEntries(
 			return
 		}
 		cursor = &decoded
-	}
-	if err := db.ValidateRecallQuery(query); err != nil {
-		if handleInvalidRecallQuery(w, err) {
-			return
-		}
-		writeError(w, http.StatusInternalServerError, err.Error())
-		return
 	}
 	results, nextCursor, err := s.listRecallEntriesPage(r.Context(), query, cursor)
 	if err != nil {
