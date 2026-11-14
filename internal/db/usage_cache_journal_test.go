@@ -655,8 +655,11 @@ func TestUsageJournaledEmptyNewTimezoneWhileCacheWriterBusy(t *testing.T) {
 	seedJournaledUsage(t, database, "session")
 	cache := warmJournaledUsage(t, database, UsageFilter{Timezone: "UTC"})
 	holdUsageCacheWriter(t, cache)
-	got, err := database.GetDailyUsage(t.Context(), UsageFilter{Timezone: "America/New_York", From: "2026-09-01", To: "2026-09-01"})
+	ctx, cancel := context.WithTimeout(t.Context(), time.Second)
+	defer cancel()
+	got, err := database.GetDailyUsage(ctx, UsageFilter{Timezone: "America/New_York", From: "2026-09-01", To: "2026-09-01"})
 	require.NoError(t, err, "an empty report in a new timezone needs no cache write")
+	require.NoError(t, ctx.Err(), "the read must not wait for the cache writer")
 	assert.Empty(t, got.Daily)
 	assert.Zero(t, got.Totals.InputTokens)
 }

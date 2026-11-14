@@ -125,7 +125,8 @@ Codex data-loss bug or a merge blocker.
   gates, not reasons to delay daemon readiness. A foreground request for an
   unbuilt timezone or all-history coverage remains exact and may pay the
   remaining `fill facts -> build rollups -> read` cold cost.
-- Native PostgreSQL serving runs no coverage pass. A Usage read returns the
+- Native PostgreSQL serving queues a coverage pass at launch for unready
+  process-local and recently requested timezones. A Usage read returns the
   direct PostgreSQL result when its timezone has no current journal claim, its
   pricing, account usage, or project identity changed, or it would refresh more than 64
   changed sessions. That read queues its timezone for one background worker,

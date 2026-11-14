@@ -97,6 +97,181 @@ VALUES ('batch-1','provider','paid-a',20,'2026-01-01','shared'),
 	requireCachedUsageMatchesDirect(t, store, db.UsageFilter{Timezone: "UTC"})
 }
 
+func TestPGUsageCacheLaunchResumesInterruptedFill(t *testing.T) {
+	t.Parallel()
+	_, _, store, _ := keptUsageFixture(t)
+	ctx := t.Context()
+	zone := "Pacific/Honolulu"
+	if (db.UsageFilter{}).Location().String() == zone {
+		zone = "America/New_York"
+	}
+	directory := t.TempDir()
+	probe := attachUsageCacheProbe(t, store, directory)
+	require.NoError(t, store.usageCache.LoadReadiness(ctx))
+	store.usageCache.DeferWork()
+	started := make(chan struct{})
+	probe.before = func(ctx context.Context, _ []string) error {
+		close(started)
+		<-ctx.Done()
+		return ctx.Err()
+	}
+	_, err := store.usageCache.GetDailyUsage(ctx, db.UsageFilter{Timezone: "UTC"})
+	require.ErrorIs(t, err, db.ErrUsageCacheWarming)
+	select {
+	case <-started:
+	case <-time.After(10 * time.Second):
+		t.Fatal("first timezone did not start warming")
+	}
+	_, err = store.usageCache.GetDailyUsage(ctx, db.UsageFilter{Timezone: zone})
+	require.ErrorIs(t, err, db.ErrUsageCacheWarming)
+	files, err := filepath.Glob(filepath.Join(directory, "usage-cache-v*.db"))
+	require.NoError(t, err)
+	require.Len(t, files, 1)
+	cached, err := sql.Open("sqlite3", files[0])
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, cached.Close()) })
+	require.NoError(t, store.usageCache.Close())
+	var count int
+	require.NoError(t, cached.QueryRowContext(ctx, `SELECT count(*) FROM usage_rollup_timezones WHERE timezone_name = ? AND change_revision IS NULL`, zone).Scan(&count))
+	require.Equal(t, 1, count)
+	attachUsageCacheProbe(t, store, directory)
+	require.NoError(t, store.usageCache.LoadReadiness(ctx))
+	store.usageCache.DeferWork()
+	t.Cleanup(func() { require.NoError(t, store.usageCache.Close()) })
+	require.NoError(t, store.WarmUsageCache(ctx))
+	require.NoError(t, store.usageCache.WaitWarm(ctx))
+	require.NoError(t, cached.QueryRowContext(ctx, `SELECT count(*) FROM usage_rollup_timezones WHERE timezone_name = ? AND change_revision IS NOT NULL`, zone).Scan(&count))
+	require.Equal(t, 1, count)
+	_, err = store.usageCache.GetDailyUsage(ctx, db.UsageFilter{Timezone: zone})
+	require.NoError(t, err)
+	requireCachedUsageMatchesDirect(t, store, db.UsageFilter{Timezone: zone})
+}
+
+func TestPGUsageCacheLaunchSkipsReadyZones(t *testing.T) {
+	t.Parallel()
+	_, _, store, _ := keptUsageFixture(t)
+	ctx := t.Context()
+	directory := t.TempDir()
+	attachUsageCacheProbe(t, store, directory)
+	for _, timezone := range []string{(db.UsageFilter{}).Location().String(), "UTC"} {
+		_, err := store.usageCache.GetDailyUsage(ctx, db.UsageFilter{Timezone: timezone})
+		require.NoError(t, err)
+	}
+	require.NoError(t, store.usageCache.Close())
+	probe := attachUsageCacheProbe(t, store, directory)
+	require.NoError(t, store.usageCache.LoadReadiness(ctx))
+	store.usageCache.DeferWork()
+	t.Cleanup(func() { require.NoError(t, store.usageCache.Close()) })
+	var captures atomic.Int64
+	probe.afterCapture = func(context.Context) error { captures.Add(1); return nil }
+	require.NoError(t, store.WarmUsageCache(ctx))
+	require.NoError(t, store.usageCache.WaitWarm(ctx))
+	assert.Zero(t, captures.Load())
+}
+
+func TestPGUsageCacheLaunchPreservesRequestRecency(t *testing.T) {
+	t.Parallel()
+	for _, requested := range []bool{false, true} {
+		t.Run(fmt.Sprintf("request=%t", requested), func(t *testing.T) {
+			_, _, store, _ := keptUsageFixture(t)
+			ctx := t.Context()
+			zone := "Pacific/Honolulu"
+			if (db.UsageFilter{}).Location().String() == zone {
+				zone = "America/New_York"
+			}
+			directory := t.TempDir()
+			attachUsageCacheProbe(t, store, directory)
+			for _, filter := range []db.UsageFilter{{}, {Timezone: zone}} {
+				_, err := store.usageCache.GetDailyUsage(ctx, filter)
+				require.NoError(t, err)
+			}
+			require.NoError(t, store.usageCache.Close())
+			files, err := filepath.Glob(filepath.Join(directory, "usage-cache-v*.db"))
+			require.NoError(t, err)
+			require.Len(t, files, 1)
+			cached, err := sql.Open("sqlite3", files[0])
+			require.NoError(t, err)
+			t.Cleanup(func() { require.NoError(t, cached.Close()) })
+			const old = "2020-01-01T00:00:00Z"
+			_, err = cached.ExecContext(ctx, `UPDATE usage_rollup_timezones SET last_requested_at = ?, change_revision = NULL WHERE timezone_name = ?`, old, zone)
+			require.NoError(t, err)
+			attachUsageCacheProbe(t, store, directory)
+			require.NoError(t, store.usageCache.LoadReadiness(ctx))
+			store.usageCache.DeferWork()
+			t.Cleanup(func() { require.NoError(t, store.usageCache.Close()) })
+			hold := store.usageCache.HoldWarm()
+			t.Cleanup(hold)
+			require.NoError(t, store.WarmUsageCache(ctx))
+			if requested {
+				_, err := store.GetDailyUsage(ctx, db.UsageFilter{Timezone: zone})
+				require.NoError(t, err)
+			}
+			hold()
+			require.NoError(t, store.usageCache.WaitWarm(ctx))
+			var stamp string
+			require.NoError(t, cached.QueryRowContext(ctx, `SELECT last_requested_at FROM usage_rollup_timezones WHERE timezone_name = ?`, zone).Scan(&stamp))
+			if requested {
+				assert.NotEqual(t, old, stamp)
+			} else {
+				assert.Equal(t, old, stamp)
+			}
+		})
+	}
+}
+
+func TestPGUsageCacheDeferredReadWithBusyCacheWriter(t *testing.T) {
+	t.Parallel()
+	_, _, store, _ := keptUsageFixture(t)
+	ctx := t.Context()
+	filter := db.UsageFilter{Timezone: "Pacific/Honolulu"}
+	want, err := store.GetDailyUsage(ctx, filter)
+	require.NoError(t, err)
+	directory := t.TempDir()
+	attachUsageCacheProbe(t, store, directory)
+	require.NoError(t, store.usageCache.LoadReadiness(ctx))
+	store.usageCache.DeferWork()
+	closed := false
+	t.Cleanup(func() {
+		if !closed {
+			require.NoError(t, store.usageCache.Close())
+		}
+	})
+	files, err := filepath.Glob(filepath.Join(directory, "usage-cache-v*.db"))
+	require.NoError(t, err)
+	require.Len(t, files, 1)
+	cached, err := sql.Open("sqlite3", files[0])
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, cached.Close()) })
+	conn, err := cached.Conn(ctx)
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, conn.Close()) })
+	_, err = conn.ExecContext(ctx, `BEGIN IMMEDIATE`)
+	require.NoError(t, err)
+	t.Cleanup(func() { _, _ = conn.ExecContext(context.WithoutCancel(ctx), `ROLLBACK`) })
+	request, cancel := context.WithTimeout(ctx, time.Second)
+	defer cancel()
+	got, err := store.GetDailyUsage(request, filter)
+	require.NoError(t, err)
+	require.NoError(t, request.Err(), "the direct read must not wait for the cache writer")
+	assert.Equal(t, want, got)
+	done := make(chan error, 1)
+	go func() { done <- store.usageCache.Close() }()
+	select {
+	case err := <-done:
+		closed = true
+		require.NoError(t, err)
+		t.Fatal("close returned before the queued timezone was recorded")
+	case <-time.After(100 * time.Millisecond):
+	}
+	_, err = conn.ExecContext(ctx, `ROLLBACK`)
+	require.NoError(t, err)
+	require.NoError(t, <-done)
+	closed = true
+	var count int
+	require.NoError(t, cached.QueryRowContext(ctx, `SELECT COUNT(*) FROM usage_rollup_timezones WHERE timezone_name = ?`, filter.Timezone).Scan(&count))
+	require.Equal(t, 1, count)
+}
+
 func TestPGUsageCacheDeferredReadsReuseDirectResults(t *testing.T) {
 	t.Parallel()
 	for _, state := range []string{"version 1", "fill in progress"} {

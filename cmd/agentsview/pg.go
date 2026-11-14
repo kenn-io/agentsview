@@ -38,6 +38,8 @@ func (pgReplica) serveOptions(
 	}
 	if err := pgStore.ConfigureUsageCache(ctx, appCfg.DataDir, target.URL, target.Schema); err != nil {
 		log.Printf("pg serve: Usage cache unavailable, using direct reads: %v", err)
+	} else if err := pgStore.WarmUsageCache(ctx); err != nil {
+		log.Printf("pg serve: queueing Usage cache warm: %v", err)
 	}
 	pool := pgStore.DB()
 	if pool == nil {

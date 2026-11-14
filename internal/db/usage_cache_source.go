@@ -65,15 +65,16 @@ type UsageCacheReader struct {
 	// deferWork makes reads hand large preparation to the warm worker.
 	deferWork bool
 
-	warmMu      sync.Mutex
-	warmPending map[string]bool // timezone names waiting for a warm pass
-	warmRunning string          // timezone of the running warm pass
-	warmBusy    bool            // a warm pass is running
-	warmIdle    chan struct{}   // closed while no warm pass runs
-	warmCtx     context.Context
-	warmCancel  context.CancelFunc
-	readyID     string
-	readyZones  map[string]bool
+	warmMu        sync.Mutex
+	warmPending   map[string]bool // timezone names waiting for a warm pass
+	warmRequested map[string]time.Time
+	warmRunning   string        // timezone of the running warm pass
+	warmBusy      bool          // a warm pass is running
+	warmIdle      chan struct{} // closed while no warm pass runs
+	warmCtx       context.Context
+	warmCancel    context.CancelFunc
+	readyID       string
+	readyZones    map[string]bool
 	// directReads counts callers serving a direct read after a deferred
 	// read; lastDeferred is when a read last deferred. A warm pass waits
 	// for both to settle, so it does not compete with those direct reads.
@@ -107,6 +108,7 @@ const (
 	usageWarmDeferGrace   = time.Second
 	usageWarmPollInterval = 10 * time.Millisecond
 	usageWarmRetryDelay   = 5 * time.Second
+	usageWarmWriteTimeout = 30 * time.Second
 )
 
 type usageWarmCheckpointKey struct{}
@@ -126,7 +128,7 @@ func NewUsageCacheReader(directory string, source UsageCacheSource) (*UsageCache
 	idle := make(chan struct{})
 	close(idle)
 	return &UsageCacheReader{
-		engine: engine, warmPending: make(map[string]bool), warmIdle: idle,
+		engine: engine, warmPending: make(map[string]bool), warmRequested: make(map[string]time.Time), warmIdle: idle,
 		warmCtx: warmCtx, warmCancel: warmCancel,
 	}, nil
 }
@@ -145,17 +147,46 @@ func (reader *UsageCacheReader) Logger() *log.Logger {
 }
 
 func (reader *UsageCacheReader) Close() error {
-	reader.warmCancel()
 	reader.warmMu.Lock()
+	reader.warmCancel()
 	idle := reader.warmIdle
 	reader.warmMu.Unlock()
 	<-idle
+	reader.flushWarmRequests()
 	return reader.engine.usageCache.Close()
 }
 
 // DeferWork makes reads that would fill or rebuild much of the cache return
 // an error and queue a background warm pass instead. Call it before reads.
 func (reader *UsageCacheReader) DeferWork() { reader.deferWork = true }
+
+// WarmUnready queues launch-time fills for unready local and recent zones.
+func (reader *UsageCacheReader) WarmUnready(ctx context.Context) error {
+	if !reader.deferWork {
+		return nil
+	}
+	id, err := reader.engine.GetDatabaseID(ctx)
+	if err != nil {
+		return err
+	}
+	cache, release, err := reader.engine.usageCache.acquireGeneration(ctx, id)
+	if err != nil {
+		return err
+	}
+	defer release()
+	locations, err := usageBackfillLocations(ctx, cache, (UsageFilter{}).Location())
+	if err != nil {
+		return err
+	}
+	for i, location := range locations {
+		filter := UsageFilter{}
+		if i > 0 {
+			filter.Timezone = location.String()
+		}
+		reader.deferRead(filter, false)
+	}
+	return nil
+}
 
 // LoadReadiness opens the persisted generation and loads its completed zones
 // before the reader starts serving requests. A failed probe leaves every zone
@@ -270,21 +301,28 @@ func (reader *UsageCacheReader) GetUsageMatchingSessionCount(ctx context.Context
 // warm pass for its timezone is queued or running. The pass will replace
 // what the read would have checked.
 func (reader *UsageCacheReader) DeferRead(filter UsageFilter) bool {
+	return reader.deferRead(filter, true)
+}
+
+func (reader *UsageCacheReader) deferRead(filter UsageFilter, requested bool) bool {
 	if !reader.deferWork {
 		return false
 	}
 	key := usageTimezoneIdentityFor(filter.Location(), nil).Key
 	id := reader.engine.usageSourceDatabaseID.Load()
 	reader.warmMu.Lock()
-	defer reader.warmMu.Unlock()
 	queued := time.Now().Before(reader.warmRetryAt) || reader.warmPending[filter.Timezone] ||
 		(reader.warmBusy && reader.warmRunning == filter.Timezone)
 	unready := id == nil || *id != reader.readyID || !reader.readyZones[key]
 	if queued || unready {
 		reader.lastDeferred = time.Now()
+		if requested {
+			reader.warmRequested[filter.Timezone] = reader.lastDeferred
+		}
 	}
+	reader.warmMu.Unlock()
 	if unready && !queued {
-		reader.queueWarmLocked(filter.Timezone)
+		reader.queueWarm(filter.Timezone)
 	}
 	return queued || unready
 }
@@ -307,6 +345,9 @@ func (reader *UsageCacheReader) markUnavailable(err error) bool {
 // deferred queues a warm pass for a read that declined to build the cache.
 func (reader *UsageCacheReader) deferred(filter UsageFilter, err error) error {
 	if !reader.markUnavailable(err) && errors.Is(err, ErrUsageCacheWarming) {
+		reader.warmMu.Lock()
+		reader.warmRequested[filter.Timezone] = time.Now()
+		reader.warmMu.Unlock()
 		reader.queueWarm(filter.Timezone)
 	}
 	return err
@@ -351,7 +392,9 @@ func (reader *UsageCacheReader) waitForDirectReads() {
 func (reader *UsageCacheReader) queueWarm(timezone string) {
 	reader.warmMu.Lock()
 	defer reader.warmMu.Unlock()
-	reader.queueWarmLocked(timezone)
+	if !reader.warmPending[timezone] && !(reader.warmBusy && reader.warmRunning == timezone) {
+		reader.queueWarmLocked(timezone)
+	}
 }
 
 // queueWarmLocked queues a pass for timezone. The caller holds warmMu.
@@ -369,6 +412,52 @@ func (reader *UsageCacheReader) queueWarmLocked(timezone string) {
 	idle := make(chan struct{})
 	reader.warmIdle = idle
 	go reader.runWarm(idle)
+}
+
+func (reader *UsageCacheReader) flushWarmRequests() {
+	reader.warmMu.Lock()
+	requests := reader.warmRequested
+	reader.warmRequested = make(map[string]time.Time)
+	reader.warmMu.Unlock()
+	if len(requests) == 0 {
+		return
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), usageWarmWriteTimeout)
+	defer cancel()
+	id := reader.engine.usageSourceDatabaseID.Load()
+	var cache *usageCache
+	var release func()
+	var err error
+	if id != nil {
+		cache, release, err = reader.engine.usageCache.acquireGeneration(ctx, *id)
+	} else {
+		err = ErrUsageSourceUnavailable
+	}
+	if err == nil {
+		defer release()
+	}
+	for timezone, stamp := range requests {
+		writeErr := err
+		if writeErr == nil {
+			identity := usageTimezoneIdentityFor((UsageFilter{Timezone: timezone}).Location(), nil)
+			writeErr = insertUsageTimezone(ctx, cache.db, identity, stamp)
+			if writeErr == nil {
+				_, writeErr = cache.db.ExecContext(ctx, `UPDATE usage_rollup_timezones SET last_requested_at = ?
+					WHERE timezone_key = ? AND (CASE WHEN instr(last_requested_at, '.') = 0
+					THEN replace(last_requested_at, 'Z', '.000000000Z')
+					ELSE replace(last_requested_at, 'Z', '000000000Z') END) < ?`,
+					stamp.UTC().Format(time.RFC3339Nano), identity.Key, stamp.UTC().Format("2006-01-02T15:04:05.000000000Z"))
+			}
+		}
+		if writeErr != nil {
+			reader.warmMu.Lock()
+			if reader.warmRequested[timezone].Before(stamp) {
+				reader.warmRequested[timezone] = stamp
+			}
+			reader.warmMu.Unlock()
+			reader.Logger().Printf("recording usage timezone %q: %v", timezone, writeErr)
+		}
+	}
 }
 
 // runWarm reads the whole history of each queued timezone. That read fills
@@ -393,6 +482,7 @@ func (reader *UsageCacheReader) runWarm(idle chan struct{}) {
 		}
 		reader.warmBusy, reader.warmRunning = true, timezone
 		reader.warmMu.Unlock()
+		reader.flushWarmRequests()
 		reader.waitForDirectReads()
 		if reader.warmCtx.Err() != nil {
 			continue
@@ -402,6 +492,7 @@ func (reader *UsageCacheReader) runWarm(idle chan struct{}) {
 		if err == nil {
 			err = reader.LoadReadiness(ctx)
 		}
+		reader.flushWarmRequests()
 		if reader.markUnavailable(err) {
 			continue
 		}
@@ -413,7 +504,7 @@ func (reader *UsageCacheReader) runWarm(idle chan struct{}) {
 			case <-reader.warmCtx.Done():
 			case <-time.After(usageWarmRetryDelay):
 				reader.warmMu.Lock()
-				reader.warmPending[timezone] = true
+				reader.queueWarmLocked(timezone)
 				reader.warmMu.Unlock()
 			}
 		}

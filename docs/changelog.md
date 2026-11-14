@@ -40,6 +40,8 @@ The latest release is
 
 **Improvements**
 
+- Native PostgreSQL serving starts filling the Usage cache at launch.
+
 - The Usage page opens faster on ClickHouse and DuckDB mirrors. On a
   production-size archive, the first one-year summary after a serve start took
   0.83 seconds instead of 1.48 on ClickHouse (1.8x) and 0.49 seconds instead of

@@ -515,7 +515,9 @@ func (db *DB) queryUsageRollups(
 					return usageQuerySnapshot{}, usageFactsResult{}, nil, queryErr
 				}
 			}
-			cache.recordUsageTimezoneRequest(ctx, usageTimezoneIdentityFor(snapshot.location, snapshot.Intervals))
+			if ctx.Value(usageWarmCheckpointKey{}) == nil {
+				cache.recordUsageTimezoneRequest(ctx, usageTimezoneIdentityFor(snapshot.location, snapshot.Intervals))
+			}
 			release()
 			timings.logIfSlow(started)
 			if observe := db.usageCache.usageWindowObserver.afterRead; observe != nil {
