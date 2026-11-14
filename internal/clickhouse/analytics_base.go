@@ -529,7 +529,7 @@ func (s analyticsSQL) TrendsDisk() (*kept.Disk, string) { return &s.store.usageD
 func (s analyticsSQL) TrendSessionVersions(ctx context.Context, f db.AnalyticsFilter) (map[string]string, error) {
 	sf := f.TrendsSessionFilter()
 	where, args := chBuildAnalyticsWhere(sf, "COALESCE(s.started_at, s.created_at)", "s.", true, true)
-	return db.ScanTrendVersions(s.QueryContext(ctx, `SELECT s.id, toString(s.push_version) FROM sessions s WHERE `+where, args...))
+	return db.ScanTrendVersions(s.QueryContext(ctx, `SELECT s.id, concat(toString(s.push_version), '|', toString(m.n), '|', toString(m.h)) FROM sessions s LEFT JOIN (SELECT session_id, count() AS n, groupBitXor(cityHash64(ordinal, push_version)) AS h FROM messages GROUP BY session_id) m ON m.session_id = s.id WHERE `+where, args...))
 }
 
 func (s analyticsSQL) TrendSessionWindow(f db.AnalyticsFilter, set string, args []any) (string, []any) {

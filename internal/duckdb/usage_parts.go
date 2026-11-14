@@ -101,24 +101,9 @@ func refreshUsageParts[T any](ctx context.Context, s *Store, slot, priceDigest s
 }
 
 func (s *Store) usagePartVersions(ctx context.Context) (map[string]string, error) {
-	rows, err := s.queryContext(ctx, `SELECT id, COALESCE(agentsview_push_fingerprint, '') FROM sessions WHERE deleted_at IS NULL`)
+	versions, err := db.ScanTrendVersions(s.queryContext(ctx, `SELECT id, COALESCE(agentsview_push_fingerprint, '') FROM sessions WHERE deleted_at IS NULL`))
 	if err != nil {
 		return nil, fmt.Errorf("querying usage fingerprints: %w", err)
-	}
-	defer rows.Close()
-	versions := map[string]string{}
-	for rows.Next() {
-		var id, fingerprint string
-		if err := rows.Scan(&id, &fingerprint); err != nil {
-			rows.Close()
-			return nil, err
-		}
-		versions[id] = fingerprint
-	}
-	err = rows.Err()
-	rows.Close()
-	if err != nil {
-		return nil, err
 	}
 	var count int64
 	var hash uint64
