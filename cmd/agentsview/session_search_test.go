@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os/exec"
@@ -911,32 +912,54 @@ func TestSessionSearchRetryQuotesForPlatform(t *testing.T) {
 	}
 }
 
-func TestSessionSearchRemoteDefaultDoesNotRetryFTS(t *testing.T) {
-	newAgentDataDir(t)
-	var modes []string
-	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		assert.Equal(t, "/api/v1/search/content", r.URL.Path)
-		assert.Equal(t, "invoice rounding", r.URL.Query().Get("pattern"))
-		mode := r.URL.Query().Get("mode")
-		modes = append(modes, mode)
-		w.Header().Set("Content-Type", "application/json")
-		if mode == "fts" {
-			_, _ = w.Write([]byte(`{"matches":[{"session_id":"match","location":"message","snippet":"invoices"}]}`))
-			return
-		}
-		_, _ = w.Write([]byte(`{"matches":[]}`))
-	}))
-	defer ts.Close()
+func TestSessionSearchRemoteDefaultFTSHint(t *testing.T) {
+	for _, tc := range []struct {
+		backend string
+		retry   bool
+	}{
+		{"cockroach", true}, {"postgres", false}, {"duckdb", false}, {"clickhouse", false}, {"sqlite", false}, {"", true},
+	} {
+		t.Run(tc.backend, func(t *testing.T) {
+			newAgentDataDir(t)
+			var modes []string
+			ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if r.URL.Path == "/api/v1/memory/status" {
+					if tc.backend == "" {
+						http.NotFound(w, r)
+					} else {
+						w.Header().Set("Content-Type", "application/json")
+						_, _ = fmt.Fprintf(w, `{"archive":{"backend":%q},"lexical":{"status":"ready"}}`, tc.backend)
+					}
+					return
+				}
+				assert.Equal(t, "/api/v1/search/content", r.URL.Path)
+				assert.Equal(t, "invoice rounding", r.URL.Query().Get("pattern"))
+				mode := r.URL.Query().Get("mode")
+				modes = append(modes, mode)
+				w.Header().Set("Content-Type", "application/json")
+				if mode == "fts" {
+					_, _ = w.Write([]byte(`{"matches":[{"session_id":"match","location":"message","snippet":"invoices"}]}`))
+					return
+				}
+				_, _ = w.Write([]byte(`{"matches":[]}`))
+			}))
+			defer ts.Close()
 
-	cmd := newRootCommand()
-	var stdout, stderr bytes.Buffer
-	cmd.SetOut(&stdout)
-	cmd.SetErr(&stderr)
-	cmd.SetArgs([]string{"session", "--server", ts.URL, "search", "invoice rounding", "--include-children", "--include-automated", "--include-one-shot", "--json"})
-	require.NoError(t, cmd.Execute())
-	assert.Equal(t, []string{"substring"}, modes)
-	assert.NotContains(t, stdout.String(), "try_fts")
-	assert.NotContains(t, stderr.String(), "try_fts")
+			cmd := newRootCommand()
+			var stdout, stderr bytes.Buffer
+			cmd.SetOut(&stdout)
+			cmd.SetErr(&stderr)
+			cmd.SetArgs([]string{"session", "--server", ts.URL, "search", "invoice rounding", "--include-children", "--include-automated", "--include-one-shot", "--json"})
+			require.NoError(t, cmd.Execute())
+			if tc.retry {
+				assert.Equal(t, []string{"substring", "fts"}, modes)
+				assert.Contains(t, stdout.String(), "try_fts")
+			} else {
+				assert.Equal(t, []string{"substring"}, modes)
+				assert.NotContains(t, stdout.String(), "try_fts")
+			}
+		})
+	}
 }
 
 func TestSessionSearchHybridKeywordFallback(t *testing.T) {

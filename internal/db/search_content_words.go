@@ -74,9 +74,6 @@ func RouteContentWords(f ContentSearchFilter) (ContentSearchFilter, ContentWords
 		return f, ContentWords{}, false
 	}
 	q, ok := contentWordsQuery(f.Pattern)
-	if f.Mode == "fts" && len(strings.Fields(f.Pattern)) < 2 && len(q.forms) < 2 && !strings.ContainsAny(f.Pattern, "*+:^") {
-		return f, ContentWords{}, false
-	}
 	return f, ContentWords{Terms: q.forms, Phrases: q.phrases}, ok
 }
 

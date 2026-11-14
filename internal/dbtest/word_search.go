@@ -88,6 +88,13 @@ func AssertWordSearch(t *testing.T, store db.Store) {
 		return hits
 	}
 	for _, mode := range []string{"fts", "hybrid"} {
+		t.Run("single word matches whole words/"+mode, func(t *testing.T) {
+			page, err := store.SearchContent(t.Context(), db.ContentSearchFilter{
+				Pattern: "invoice", Mode: mode, Project: "word-search", KeywordOnly: mode == "hybrid",
+			})
+			require.NoError(t, err)
+			assert.Equal(t, []hit{{"exact", "message", 1}, {"two", "message", 1}, {"one", "message", 1}}, project(page.Matches))
+		})
 		t.Run("stop word leaves one searchable word/"+mode, func(t *testing.T) {
 			page, err := store.SearchContent(t.Context(), db.ContentSearchFilter{
 				Pattern: "invoice the", Mode: mode, Project: "word-search", KeywordOnly: mode == "hybrid",

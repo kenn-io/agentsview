@@ -3,6 +3,7 @@ package service_test
 import (
 	"context"
 	"fmt"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -15,6 +16,27 @@ import (
 type fallbackVectorSearcher struct {
 	conceptVectorSearcher
 	err error
+}
+
+type namedFallbackStore struct {
+	*db.DB
+	name string
+}
+
+func (s *namedFallbackStore) MemoryBackendName() string { return s.name }
+
+func TestHybridKeywordFallbackBackendGuidance(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		want bool
+	}{{"cockroach", true}, {"postgres", false}, {"duckdb", false}, {"clickhouse", false}, {"sqlite", false}} {
+		t.Run(tc.name, func(t *testing.T) {
+			d := dbtest.OpenTestDB(t)
+			result, err := service.NewReadOnlyBackend(&namedFallbackStore{DB: d, name: tc.name}).SearchContent(t.Context(), service.ContentSearchRequest{Pattern: "invoice rounding", Mode: "hybrid", KeywordFallback: true})
+			require.NoError(t, err)
+			assert.Equal(t, tc.want, strings.Contains(result.Note, "try short substring queries"))
+		})
+	}
 }
 
 func (s *fallbackVectorSearcher) PrepareSemanticSearch(context.Context, string) (db.VectorSearchPage, int, error) {

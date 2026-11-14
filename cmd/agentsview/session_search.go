@@ -557,6 +557,17 @@ func contentSearchRetry(cmd *cobra.Command, pattern string, changes map[string]a
 
 func contentSearchHints(ctx context.Context, cmd *cobra.Command, svc service.SessionService, req service.ContentSearchRequest, res *service.ContentSearchResult) []contentSearchCLIHint {
 	hints := service.SearchContentHints(ctx, svc, req, res, true, nil)
+	messagesOnly := len(req.Sources) == 0 || len(req.Sources) == 1 && req.Sources[0] == "messages"
+	if len(res.Matches) == 0 && req.Cursor == 0 && res.NextCursor == 0 && !res.CandidateTruncated && req.Mode == "substring" && len(strings.Fields(req.Pattern)) > 1 && messagesOnly {
+		status, err := service.GetMemoryStatus(ctx, svc)
+		if err == nil && (status.Archive.Backend == "cockroach" || status.Lexical.Reason == "unsupported") {
+			retry := req
+			retry.Mode = "fts"
+			if page, err := svc.SearchContent(ctx, retry); err == nil && len(page.Matches) > 0 {
+				hints = append(hints, service.ContentSearchHint{Code: "try_fts", Message: fmt.Sprintf("substring search looks for the exact text %q; --fts matches the words anywhere in a message", req.Pattern), RetryWith: map[string]any{"fts": true}})
+			}
+		}
+	}
 	cliHints := make([]contentSearchCLIHint, 0, len(hints))
 	for _, hint := range hints {
 		cliHints = append(cliHints, contentSearchCLIHint{Code: hint.Code, Message: hint.Message, Next: contentSearchRetry(cmd, req.Pattern, hint.RetryWith, runtime.GOOS)})
