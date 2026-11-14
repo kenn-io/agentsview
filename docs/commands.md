@@ -1732,8 +1732,9 @@ ______________________________________________________________________
 ### `agentsview replica duckdb`
 
 Mirror the local SQLite archive into DuckDB and serve from it, locally or over
-the Quack remote protocol. See [DuckDB Mirror](/docs/duckdb/) for full
-documentation.
+the Quack remote protocol. Release builds leave DuckDB out; build from source
+with `make install DUCKDB=1` to use these commands. See
+[DuckDB Mirror](/docs/duckdb/) for full documentation.
 
 ```bash
 agentsview replica duckdb push          # mirror SQLite into sessions.duckdb

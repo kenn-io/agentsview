@@ -2780,8 +2780,8 @@ func TestPGPushLocalNoSyncDaemonReachesConfigValidation(t *testing.T) {
 
 func TestDuckDBPushLocalNoSyncDaemonWritesConfiguredPath(t *testing.T) {
 	t.Parallel()
-	if runtime.GOOS == "windows" && runtime.GOARCH == "arm64" {
-		t.Skip("duckdb-go-bindings does not ship a windows/arm64 library")
+	if duckdb.RequireDriver() != nil {
+		t.Skip("this build does not link DuckDB; run with -tags duckdb")
 	}
 
 	te := setupNoSyncMode(t)
@@ -2813,8 +2813,8 @@ func TestDuckDBPushLocalNoSyncDaemonWritesConfiguredPath(t *testing.T) {
 // single JSON body after a silent wait.
 func TestDuckDBPushStreamsSSEDoneEvent(t *testing.T) {
 	t.Parallel()
-	if runtime.GOOS == "windows" && runtime.GOARCH == "arm64" {
-		t.Skip("duckdb-go-bindings does not ship a windows/arm64 library")
+	if duckdb.RequireDriver() != nil {
+		t.Skip("this build does not link DuckDB; run with -tags duckdb")
 	}
 
 	te := setupNoSyncMode(t)

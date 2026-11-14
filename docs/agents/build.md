@@ -48,6 +48,17 @@ ancestor permissions satisfy their checks.
 
 - Build with `CGO_ENABLED=1`; the SQLite driver requires CGO.
 - Use the `fts5` build tag for full-text search.
+- The `duckdb` build tag links the DuckDB mirror driver. Builds without it,
+  including every release artifact, get the stub in
+  `internal/duckdb/driver_unavailable.go`. DuckDB 2.0's prebuilt libraries
+  require x86-64-v3 and run code from a package `init`, so linking them made
+  every agentsview start crash on older x86-64 CPUs. Build targets add the tag
+  only with `DUCKDB=1`. Tests, vet, lint, and the e2e server link DuckDB so
+  they cover the mirror, and CI also runs `internal/duckdb` without the tag.
+  CI also starts that build under QEMU on a Nehalem CPU model (x86-64-v2), so
+  code that needs a newer CPU at startup fails CI. Tag DuckDB-only test files
+  `duckdb`; a test elsewhere that needs the driver skips when
+  `duckdb.RequireDriver()` returns an error.
 - The Makefile's `LDFLAGS` set the PostHog project key with
   `-X go.kenn.io/kit/telemetry/posthog.projectKey`. Builds without it send no
   telemetry, so keep it out of test and e2e builds.

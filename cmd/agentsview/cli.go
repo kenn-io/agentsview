@@ -16,6 +16,7 @@ import (
 	"go.kenn.io/agentsview/internal/clickhouse"
 	"go.kenn.io/agentsview/internal/config"
 	"go.kenn.io/agentsview/internal/db"
+	duckdbsync "go.kenn.io/agentsview/internal/duckdb"
 	"go.kenn.io/agentsview/internal/server"
 	"golang.org/x/term"
 )
@@ -776,6 +777,14 @@ func newDuckDBCommand() *cobra.Command {
 		GroupID:      groupData,
 		SilenceUsage: true,
 		Args:         cobra.NoArgs,
+		// Stop before starting a daemon or touching the mirror when this build
+		// leaves out the DuckDB driver. The bare group still prints its help.
+		PersistentPreRunE: func(cmd *cobra.Command, _ []string) error {
+			if cmd.HasSubCommands() {
+				return nil
+			}
+			return duckdbsync.RequireDriver()
+		},
 		RunE: func(cmd *cobra.Command, args []string) error {
 			return cmd.Help()
 		},

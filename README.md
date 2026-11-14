@@ -180,20 +180,24 @@ docker run --rm -p 127.0.0.1:8080:8080 \
   ghcr.io/kenn-io/agentsview:latest
 ```
 
-Example DuckDB mirror startup:
+Example DuckDB mirror startup. The published image leaves out DuckDB, so build
+an image with it first (see
+[DuckDB Mirror and Quack](#duckdb-mirror-and-quack)):
 
 ```bash
+docker build --build-arg GO_TAGS=fts5,duckdb -t agentsview-duckdb .
+
 # Populate /data/sessions.duckdb from the mounted SQLite archive.
 docker run --rm \
   -v agentsview-data:/data \
   -v "$HOME/.claude/projects:/agents/claude:ro" \
   -e CLAUDE_PROJECTS_DIR=/agents/claude \
-  ghcr.io/kenn-io/agentsview:latest duckdb push --full
+  agentsview-duckdb duckdb push --full
 
 # Serve the populated mirror read-only.
 docker run --rm -p 127.0.0.1:8080:8080 \
   -v agentsview-data:/data \
-  ghcr.io/kenn-io/agentsview:latest duckdb serve
+  agentsview-duckdb duckdb serve
 ```
 
 Example Quack startup:
@@ -203,7 +207,7 @@ Example Quack startup:
 QUACK_TOKEN="$(openssl rand -base64 32)"
 docker run --rm -p 127.0.0.1:9494:9494 \
   -v agentsview-data:/data \
-  ghcr.io/kenn-io/agentsview:latest \
+  agentsview-duckdb \
   duckdb quack serve \
     --bind quack:0.0.0.0:9494 \
     --token "$QUACK_TOKEN" \
@@ -216,7 +220,7 @@ docker run --rm -p 127.0.0.1:9494:9494 \
 docker run --rm -p 127.0.0.1:8080:8080 \
   -e AGENTSVIEW_DUCKDB_URL='quack:duckdb.example.com:9494' \
   -e AGENTSVIEW_DUCKDB_TOKEN="$QUACK_TOKEN" \
-  ghcr.io/kenn-io/agentsview:latest duckdb serve --allow-insecure
+  agentsview-duckdb duckdb serve --allow-insecure
 ```
 
 Keep Quack on loopback or behind TLS. Plain HTTP Quack on a non-loopback bind
@@ -345,11 +349,12 @@ agentsview report stats --include-git-outcomes
   filters in the command palette and optional CJK character and phrase search
   for Chinese, Japanese, and Korean text in SQLite, including Chinese word
   segmentation through `simple`/cppjieba
-- **Semantic search** (opt-in) -- search by meaning using local embeddings by default.
-  Choose Settings → Embeddings → Turn on or run `agentsview index embeddings build`
-  to set it up. Agents use keyword search until indexing is ready; content-search
-  matches cite the conversation unit they came from. Configure other providers
-  in [Semantic Search](https://agentsview.io/semantic-search/#enabling-vector)
+- **Semantic search** (opt-in) -- search by meaning using local embeddings by
+  default. Choose Settings → Embeddings → Turn on or run
+  `agentsview index embeddings build` to set it up. Agents use keyword search
+  until indexing is ready; content-search matches cite the conversation unit
+  they came from. Configure other providers in
+  [Semantic Search](https://agentsview.io/semantic-search/#enabling-vector)
 - **Token usage and cost dashboard** -- per-session and per-model cost
   breakdowns, total and uncached input counts, and daily spend charts with
   Smooth, Lines, and Bars views
@@ -367,8 +372,8 @@ agentsview report stats --include-git-outcomes
   adds folder suggestions, session previews, and bulk corrections
 - **Recall corpus browser** -- approve or archive experimental extracted
   knowledge and jump from entries to their supporting transcript evidence
-- **Conversation memory** -- Claude Code and Codex setup lets agents
-  search past decisions and cite source messages; see
+- **Conversation memory** -- Claude Code and Codex setup lets agents search past
+  decisions and cite source messages; see
   [MCP memory setup](https://agentsview.io/docs/mcp/#focused-memory-profile)
 - **Eight interface languages** -- Azerbaijani, English, French, Japanese,
   Korean, Spanish, Simplified Chinese, and Traditional Chinese
@@ -466,8 +471,8 @@ for the full transcript (user turns, assistant replies, thinking, and tool
 calls). Grok trims `chat_history.jsonl` each time it compacts a session, so
 AgentsView rebuilds the turns before each compaction from `updates.jsonl` and
 marks each compaction in the transcript. If `chat_history.jsonl` is missing,
-AgentsView falls back to summary-only mode. Set `GROK_DIR` or `agents.grok.dirs` to override the default
-directory.
+AgentsView falls back to summary-only mode. Set `GROK_DIR` or `agents.grok.dirs`
+to override the default directory.
 
 Goose sessions are read from its shared SQLite `sessions.db`, including
 transcript content, thinking, tool calls and results, session relationships,
@@ -789,6 +794,10 @@ archive. `agentsview serve` still performs primary ingestion into SQLite. Use
 DuckDB when you want a portable analytics file, read-only local serving from a
 mirror, or remote read access through DuckDB's Quack protocol.
 
+Release builds leave out DuckDB. To use the mirror, build from source with
+`make install DUCKDB=1`; see
+[Build with DuckDB](https://agentsview.io/docs/duckdb/#build-with-duckdb).
+
 ```bash
 agentsview replica duckdb push          # mirror SQLite into DuckDB
 agentsview replica duckdb status        # show mirror sync status
@@ -814,9 +823,10 @@ Backend modes:
 
 Troubleshooting:
 
-- If `duckdb push` fails to open the mirror, confirm the binary was built with
-  the DuckDB Go driver for your platform and that `AGENTSVIEW_DUCKDB_PATH`
-  points to a writable file location.
+- If DuckDB commands report that the build does not include DuckDB, rebuild with
+  `make install DUCKDB=1`.
+- If `duckdb push` fails to open the mirror, confirm that
+  `AGENTSVIEW_DUCKDB_PATH` points to a writable file location.
 - If Quack commands fail with extension errors, update the agentsview binary so
   the embedded DuckDB runtime includes the Quack extension.
 - If a remote attach fails, check the token, the `quack:` URL, TLS/proxy
@@ -878,7 +888,7 @@ Requires Go 1.27.4+ (CGO), Node.js 24.22.1+.
 ```bash
 make dev            # Go server (dev mode)
 make frontend-dev   # Vite+ dev server (run alongside make dev)
-make build          # build binary with embedded frontend
+make build          # build binary with embedded frontend (DUCKDB=1 adds DuckDB)
 make install        # install to ~/.local/bin
 ```
 

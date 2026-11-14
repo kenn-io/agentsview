@@ -98,6 +98,11 @@ The latest release is
   all at once and shrink the database file. Change-stream and
   conversation-export readers whose position predates a removed record
   restart with a full replay.
+- AgentsView starts again on x86-64 CPUs without AVX2, BMI2, and FMA (older
+  than x86-64-v3), such as Ivy Bridge, Atom, Pentium Silver, and virtual
+  machines that hide those features. 0.47.0 crashed at startup on these CPUs
+  with an illegal instruction, even when the DuckDB mirror was never used,
+  because the DuckDB 2.0 libraries it linked require x86-64-v3.
 - Sessions from worktrees named `<repo>.<branch>` next to the main checkout,
   the default worktrunk layout, now group under the repository's project when
   the checkout is not on disk, such as on a central collector. Before, each
@@ -181,6 +186,13 @@ The latest release is
   the lost records are still missing, but the count shows that the totals may
   be low. Existing sessions pick up the count the next time their source
   changes; the upgrade does not trigger a resync.
+
+**Upgrade notes**
+
+- Release binaries, installers, wheels, and the published container image no
+  longer include the DuckDB mirror. To keep using `replica duckdb` commands,
+  build from source with `make install DUCKDB=1`. See
+  [Build with DuckDB](/docs/duckdb/#build-with-duckdb).
 
 ## 0.47.0
 
