@@ -4535,6 +4535,45 @@ schemas keep their existing ordering behavior.
   under the Hermes folder (`state.db`, `state.db-wal`, `sessions/<name>`)
   rather than its absolute local path, so an archive unpacked into a fresh
   folder keeps its fingerprints (`TestHermesFingerprintsIgnoreTheLocalFolder`).
+- **Watcher change check (2026-11-10):** Reverified the entire producer tree
+  at [Hermes `aca4f1df`](https://github.com/NousResearch/hermes-agent/tree/aca4f1df).
+  Stores with a positive integer schema version at most 33, `transcript_revision`,
+  and complete native message-update triggers use a per-session token to skip
+  unchanged members on database and WAL events. The token includes parsed
+  session fields, model usage ledger rows, transcript revision, and a checksum
+  over every message ID, timestamp, and finish reason. The checksum scans
+  message history.
+  The native `messages_transcript_revision_update` and
+  `messages_display_revision_update` definitions in
+  [hermes_state_common.py](https://github.com/NousResearch/hermes-agent/blob/aca4f1df/hermes_state_common.py)
+  cover payload and display rewrites. Coverage is rechecked on every event:
+  an older writer can recreate shorter triggers. Invalid or future schema
+  versions and incomplete trigger coverage retain full checks.
+  [Native recovery](https://github.com/NousResearch/hermes-agent/blob/aca4f1df/hermes_cli/session_recovery.py)
+  repairs all out-of-window timestamps in fresh recovery output. Installing that
+  output changes the timestamp checksum even when revision and live count stay
+  unchanged. No replacement tracker is used.
+  Reverify these couplings when the producer changes: additive changes can occur
+  without a schema-version bump. The pinned tree has no independent message
+  session-ID reassignment. A finish-reason change in
+  [transcript repair](https://github.com/NousResearch/hermes-agent/blob/aca4f1df/agent/transcript_repair.py#L317-L328)
+  names content and display metadata in the update, advancing the revision.
+  [Prune rewrites](https://github.com/NousResearch/hermes-agent/blob/aca4f1df/hermes_state_prune_rewrite.py#L225-L249)
+  first insert a retained row with a new ID, advancing the greatest message ID.
+  Transcript-file edits use their own `sessions/` events. Listing costs session
+  metadata, distinct lifetime ledger keys, and message history, not only changed
+  sessions.
+  Auxiliary same-key ledger UPSERTs can leave session fields/revision unchanged,
+  so the full ledger read remains necessary under the current producer contract.
+  Ledger keys aggregate route/task usage; their lifetime count has no verified
+  constant bound per session. Database events also scan transcript directory
+  entries and check membership in the same read snapshot, so transcripts for
+  missing or unreadable rows remain discoverable. Unchanged members need only
+  indexed session lookups; selected members also check message readability.
+  Cron members still receive full fingerprint checks because an ancestor can
+  change their resolved job. Other selected members read transcript payloads.
+  The new fingerprint format causes one reparse of
+  previously imported sessions as they are checked.
 - **Model usage check (2026-10-22):**
   [hermes_state_usage.py](https://github.com/NousResearch/hermes-agent/blob/3ba2b0787ed3a73ec3b08085ed0137f235209cf4/hermes_state_usage.py)
   records per-model and billing-route deltas in `session_model_usage`.

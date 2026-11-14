@@ -1110,7 +1110,7 @@ func TestHermesMemberCoreSeedMatchesBulkCronAncestry(t *testing.T) {
 	require.NoError(t, seedHermesMemberCoresLocked(ctx, stateDB))
 	require.Len(t, bulkDigests, 307)
 	for id, want := range bulkDigests {
-		h, _, ok := cachedHermesMemberCore(ctx, hermesSource{Path: VirtualSourcePath(stateDB, id)})
+		h, _, _, ok := cachedHermesMemberCore(ctx, hermesSource{Path: VirtualSourcePath(stateDB, id)})
 		require.True(t, ok, id)
 		assert.Equal(t, want, h.Sum(nil), id)
 	}

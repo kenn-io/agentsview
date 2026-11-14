@@ -733,6 +733,25 @@ func (s hermesSourceSet) discoverTranscriptEach(
 			membership.Close()
 		}
 	}()
+	return s.discoverTranscriptEachWithMembership(ctx, root, sessionsDir, func(id string) (bool, error) {
+		if stateDB == "" {
+			return false, nil
+		}
+		if membership == nil {
+			opened, err := openHermesStateMembership(ctx, stateDB)
+			if err != nil {
+				return false, err
+			}
+			membership = opened
+		}
+		return membership.Has(ctx, id)
+	}, yield)
+}
+
+func (s hermesSourceSet) discoverTranscriptEachWithMembership(
+	ctx context.Context, root, sessionsDir string,
+	has func(string) (bool, error), yield func(SourceRef) error,
+) error {
 	return streamDirectoryEntries(ctx, sessionsDir, func(entry os.DirEntry) error {
 		if entry.IsDir() {
 			return nil
@@ -751,21 +770,12 @@ func (s hermesSourceSet) discoverTranscriptEach(
 		default:
 			return nil
 		}
-		if stateDB != "" {
-			if membership == nil {
-				opened, err := openHermesStateMembership(ctx, stateDB)
-				if err != nil {
-					return err
-				}
-				membership = opened
-			}
-			found, err := membership.Has(ctx, id)
-			if err != nil {
-				return err
-			}
-			if found {
-				return nil
-			}
+		found, err := has(id)
+		if err != nil {
+			return err
+		}
+		if found {
+			return nil
 		}
 		ref, ok := s.transcriptSourceRef(root, filepath.Join(sessionsDir, name))
 		if !ok {
@@ -1155,7 +1165,7 @@ func (s hermesSourceSet) SourcesForChangedPath(
 		} else if req.WatchRoot != "" && !hermesWatchRootMatches(root, req.WatchRoot) {
 			continue
 		}
-		sources, err := s.changedPathSources(ctx, root, req.Path, allowMissing)
+		sources, err := s.changedPathSources(ctx, root, req, allowMissing)
 		if err != nil || len(sources) > 0 {
 			return sources, err
 		}
@@ -1164,12 +1174,23 @@ func (s hermesSourceSet) SourcesForChangedPath(
 }
 
 func (s hermesSourceSet) changedPathSources(
-	ctx context.Context, root, path string, allowMissing bool,
+	ctx context.Context, root string, req ChangedPathRequest, allowMissing bool,
 ) ([]SourceRef, error) {
+	path := req.Path
 	if stateDB, sessionsDir, ok := hermesStatePaths(root); ok {
 		if hermesStatePathAffectsArchive(path, stateDB) {
 			if samePath(path, stateDB+"-wal") && !sqliteWALHasFrames(path) {
 				return nil, nil
+			}
+			if req.AllowWatermarkOnlySources && req.StoredMemberFreshnessPage != nil && req.EventKind != "remove" && IsRegularFile(stateDB) {
+				sources, used, err := s.changedHermesMembers(ctx, root, stateDB, sessionsDir, req.StoredMemberFreshnessPage)
+				if ctx.Err() != nil {
+					return nil, ctx.Err()
+				}
+				if used && err == nil {
+					return sources, nil
+				}
+				// Any schema, listing or pager failure retries the full path.
 			}
 			var sources []SourceRef
 			_, err := s.discoverStateEach(ctx, root, stateDB, func(source SourceRef) error {
@@ -1928,16 +1949,16 @@ func hermesStateMemberFingerprint(
 		return SourceFingerprint{Key: source.FingerprintKey}, nil
 	}
 	if reconciliationCacheAvailable(ctx) && !src.FingerprintSingleMember {
-		if h, candidatePaths, ok := cachedHermesMemberCore(ctx, src); ok {
-			return hermesStateMemberFingerprintFinish(source, src, h, candidatePaths)
+		if h, candidatePaths, token, ok := cachedHermesMemberCore(ctx, src); ok {
+			return hermesStateMemberFingerprintFinish(source, src, h, candidatePaths, token)
 		}
 		// One bulk pass over state.db seeds every member's core, so the rest
 		// of the reconciliation fingerprints without reopening the database.
 		// Seeding failures fall through to the instrumented per-member open,
 		// which surfaces the underlying error with its usual handling.
 		if seedHermesMemberCores(ctx, src.StateDB) == nil {
-			if h, candidatePaths, ok := cachedHermesMemberCore(ctx, src); ok {
-				return hermesStateMemberFingerprintFinish(source, src, h, candidatePaths)
+			if h, candidatePaths, token, ok := cachedHermesMemberCore(ctx, src); ok {
+				return hermesStateMemberFingerprintFinish(source, src, h, candidatePaths, token)
 			}
 		}
 	}
@@ -1947,9 +1968,13 @@ func hermesStateMemberFingerprint(
 		return SourceFingerprint{}, hermesStateLookupError{err: fmt.Errorf("open hermes state db: %w", err)}
 	}
 	defer conn.Close()
+	token, usage, err := hermesMemberToken(ctx, conn, src.SessionID)
+	if err != nil {
+		return SourceFingerprint{}, err
+	}
 	ss, messages, candidatePaths, err := readHermesStateSessionFingerprintInputs(
 		ctx,
-		conn, src.StateDB, src.SessionID,
+		conn, src.StateDB, src.SessionID, usage,
 	)
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
@@ -1964,11 +1989,11 @@ func hermesStateMemberFingerprint(
 	if err := addHermesStateSessionFingerprint(h, ss, messages); err != nil {
 		return SourceFingerprint{}, err
 	}
-	return hermesStateMemberFingerprintFinish(source, src, h, candidatePaths)
+	return hermesStateMemberFingerprintFinish(source, src, h, candidatePaths, token)
 }
 
 func hermesStateMemberFingerprintFinish(
-	source SourceRef, src hermesSource, h hash.Hash, candidatePaths []string,
+	source SourceRef, src hermesSource, h hash.Hash, candidatePaths []string, token string,
 ) (SourceFingerprint, error) {
 	info, err := os.Stat(src.StateDB)
 	if err != nil {
@@ -2026,7 +2051,7 @@ func hermesStateMemberFingerprintFinish(
 			continue
 		}
 	}
-	fingerprint.Hash = hex.EncodeToString(h.Sum(nil))
+	fingerprint.Hash = "hst1:" + token + ":" + hex.EncodeToString(h.Sum(nil))
 	return fingerprint, nil
 }
 
@@ -2036,6 +2061,7 @@ func hermesStateMemberFingerprintFinish(
 // shared state.db connection; the fingerprint path resumes the digest instead
 // of reopening the database, producing byte-identical hashes either way.
 type hermesMemberFingerprintCore struct {
+	Token          string   `json:"token"`
 	HashState      []byte   `json:"hash_state"`
 	CandidatePaths []string `json:"candidate_paths"`
 }
@@ -2068,30 +2094,12 @@ func seedHermesMemberCoresLocked(ctx context.Context, stateDB string) error {
 	}
 	defer memberConn.Close()
 	observeSharedContainerScan(ctx)
-	rows, err := idsConn.QueryContext(ctx, "SELECT id FROM sessions ORDER BY id")
-	if err != nil {
-		return fmt.Errorf("query hermes sessions: %w", err)
-	}
-	defer rows.Close()
-	for rows.Next() {
-		var id string
-		if err := rows.Scan(&id); err != nil {
-			return fmt.Errorf("scan hermes session id: %w", err)
-		}
-		if !isValidHermesSessionID(id) {
-			continue
-		}
+	return listHermesMemberTokens(ctx, idsConn, "", func(id, token string, _ bool, usage []hermesModelUsage) error {
 		retainedIDBytes := int64(len(id))
 		observeStreamingRetainedBytes(ctx, retainedIDBytes)
-		if err := cacheHermesMemberCore(
-			ctx, memberConn, stateDB, id, VirtualSourcePath(stateDB, id),
-		); err != nil {
-			observeStreamingRetainedBytes(ctx, -retainedIDBytes)
-			return err
-		}
-		observeStreamingRetainedBytes(ctx, -retainedIDBytes)
-	}
-	return rows.Err()
+		defer observeStreamingRetainedBytes(ctx, -retainedIDBytes)
+		return cacheHermesMemberCore(ctx, memberConn, stateDB, id, VirtualSourcePath(stateDB, id), token, usage)
+	})
 }
 
 // cacheHermesMemberCore seeds one member's fingerprint core into the
@@ -2099,11 +2107,11 @@ func seedHermesMemberCoresLocked(ctx context.Context, stateDB string) error {
 // left for the fingerprint path to surface through its established error
 // handling; only cache-write failures propagate.
 func cacheHermesMemberCore(
-	ctx context.Context, conn *sql.DB, stateDB, id, fingerprintKey string,
+	ctx context.Context, conn *sql.DB, stateDB, id, fingerprintKey, token string, usage []hermesModelUsage,
 ) error {
 	ss, messages, candidatePaths, err := readHermesStateSessionFingerprintInputs(
 		ctx,
-		conn, stateDB, id,
+		conn, stateDB, id, usage,
 	)
 	if err != nil {
 		return nil //nolint:nilerr // Failure to build the optional checkpoint forces full parsing next time.
@@ -2124,7 +2132,7 @@ func cacheHermesMemberCore(
 		return nil //nolint:nilerr // Failure to build the optional checkpoint forces full parsing next time.
 	}
 	payload, err := json.Marshal(hermesMemberFingerprintCore{
-		HashState: state, CandidatePaths: candidatePaths,
+		HashState: state, CandidatePaths: candidatePaths, Token: token,
 	})
 	if err != nil {
 		return nil //nolint:nilerr // Failure to build the optional checkpoint forces full parsing next time.
@@ -2139,23 +2147,23 @@ func cacheHermesMemberCore(
 // back to the instrumented per-member open path.
 func cachedHermesMemberCore(
 	ctx context.Context, src hermesSource,
-) (hash.Hash, []string, bool) {
+) (hash.Hash, []string, string, bool) {
 	value, found, err := reconciliationCacheGet(
 		ctx, hermesMemberCoreCacheKey(src.Path),
 	)
 	if err != nil || !found {
-		return nil, nil, false
+		return nil, nil, "", false
 	}
 	var core hermesMemberFingerprintCore
 	if err := json.Unmarshal([]byte(value), &core); err != nil {
-		return nil, nil, false
+		return nil, nil, "", false
 	}
 	h := sha256.New()
 	unmarshaler, ok := h.(encoding.BinaryUnmarshaler)
 	if !ok || unmarshaler.UnmarshalBinary(core.HashState) != nil {
-		return nil, nil, false
+		return nil, nil, "", false
 	}
-	return h, core.CandidatePaths, true
+	return h, core.CandidatePaths, core.Token, true
 }
 
 func addHermesStateSessionFingerprint(
@@ -2317,17 +2325,18 @@ func addHermesFingerprintPart(
 func hermesProviderCapabilities() Capabilities {
 	return Capabilities{
 		Source: SourceCapabilities{
-			DiscoverSources:      CapabilitySupported,
-			StreamingDiscovery:   CapabilitySupported,
-			WatchSources:         CapabilitySupported,
-			ClassifyChangedPath:  CapabilitySupported,
-			FindSource:           CapabilitySupported,
-			CompositeFingerprint: CapabilitySupported,
-			MultiSessionSource:   CapabilitySupported,
-			AppOwnedStore:        CapabilitySupported,
-			PerSessionErrors:     CapabilityNotApplicable,
-			ExcludedSessions:     CapabilityNotApplicable,
-			ForceReplaceOnParse:  CapabilitySupported,
+			DiscoverSources:              CapabilitySupported,
+			StreamingDiscovery:           CapabilitySupported,
+			WatchSources:                 CapabilitySupported,
+			ClassifyChangedPath:          CapabilitySupported,
+			FindSource:                   CapabilitySupported,
+			CompositeFingerprint:         CapabilitySupported,
+			MultiSessionSource:           CapabilitySupported,
+			AppOwnedStore:                CapabilitySupported,
+			StoredMemberFreshnessListing: CapabilitySupported,
+			PerSessionErrors:             CapabilityNotApplicable,
+			ExcludedSessions:             CapabilityNotApplicable,
+			ForceReplaceOnParse:          CapabilitySupported,
 		},
 		Content: ContentCapabilities{
 			FirstMessage:         CapabilitySupported,
