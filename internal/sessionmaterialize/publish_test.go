@@ -19,9 +19,10 @@ func TestPublishPreservesExistingFiles(t *testing.T) {
 	require.NoError(t, err)
 	assert.False(t, created)
 	_, err = publishFiles(t.Context(), []installFile{{p, []byte("different")}})
-	require.ErrorContains(t, err, "destination differs")
+	var differs *DestinationDiffersError
+	require.ErrorAs(t, err, &differs)
 	_, err = publishFiles(t.Context(), []installFile{{p, []byte("other")}})
-	require.ErrorContains(t, err, "destination differs")
+	require.ErrorAs(t, err, &differs)
 	contents, err := os.ReadFile(p)
 	require.NoError(t, err)
 	assert.Equal(t, "first", string(contents))

@@ -3411,10 +3411,7 @@ schemas keep their existing ordering behavior.
   [session manager](https://github.com/earendil-works/pi/blob/acaa253cc8e3f159e6100b6f3874861b1f0bfc99/packages/coding-agent/src/core/session-manager.ts)
   writes files directly into an explicit session directory; default sessions
   live one encoded project directory below the session root. Agentsview
-  discovers both layouts. Materialization changes the header `cwd` and uses an
-  `id` from the filename when the header ID is missing, empty, or not a string.
-  A long checkout uses a hash-named directory under `sessions/`;
-  Pi lists it among all sessions but not in the checkout-filtered list.
+  discovers both layouts.
   Reverified 2026-09-22 against
   [pi-subagents](https://github.com/nicobailon/pi-subagents) v0.70.1 at
   `9b8356d4351747a7108695344e0c26a7c85e84de`: the extension's
@@ -3504,10 +3501,8 @@ schemas keep their existing ordering behavior.
   the CLI also opens renamed `.jsonl` paths using the identity in their session
   header. Startup chooses the session directory from the environment, then
   merged project/global settings, then the default
-  encoded checkout directory. The installer bounds fallback header lookup to
-  1 MiB and stored source reads to 512 MiB. It refuses versions outside 1–3 as
-  an Agentsview policy, and unsafe
-  identity-derived filenames. Malformed or oversized settings fail closed.
+  encoded checkout directory. The installer refuses unsafe identity-derived
+  filenames.
 
 ## Prime Agent (`prime-agent`)
 

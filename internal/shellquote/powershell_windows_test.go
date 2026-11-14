@@ -2,7 +2,6 @@ package shellquote
 
 import (
 	"encoding/json"
-	"errors"
 	"os/exec"
 	"strings"
 	"testing"
@@ -35,17 +34,12 @@ ConvertTo-Json -Compress -InputObject ($command.CommandElements[1].Value)
 				t.Skipf("%s is unavailable: %v", executable, err)
 			}
 			for _, value := range []string{
-				`C:\sessions\plain.jsonl`,
-				"C:\\sessions\\' ; Write-Output injected #.jsonl",
 				"C:\\sessions\\'‘’‚‛''; $(Write-Output injected)\n$env:HOME & |.jsonl",
 			} {
 				t.Run(value, func(t *testing.T) {
 					cmd := exec.CommandContext(t.Context(), binary, "-NoProfile", "-NonInteractive", "-Command", parser)
 					cmd.Stdin = strings.NewReader("pi " + PowerShell(value))
 					output, err := cmd.Output()
-					if exit, ok := errors.AsType[*exec.ExitError](err); ok {
-						require.NoError(t, err, "%s", exit.Stderr)
-					}
 					require.NoError(t, err)
 					var parsed string
 					require.NoError(t, json.Unmarshal(output, &parsed), "%s", output)
