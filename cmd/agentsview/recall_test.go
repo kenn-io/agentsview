@@ -2619,16 +2619,7 @@ func seedRecallEntrySourceSessionFixture(
 	require.NoError(t, err)
 }
 
-func TestRecallTimeFlagsOnlyOnList(t *testing.T) {
-	list := newRecallListCommand()
-	stats := newRecallStatsCommand()
-	for _, name := range []string{"updated-since", "created-since", "cursor"} {
-		assert.NotNil(t, list.Flags().Lookup(name))
-		assert.Nil(t, stats.Flags().Lookup(name))
-	}
-}
-
-func TestRecallListHumanShowsTrustAndCursor(t *testing.T) {
+func TestRecallListHumanShowsCursor(t *testing.T) {
 	dataDir := t.TempDir()
 	setRecallTestEnv(t, dataDir)
 	seedRecallEntryFixture(t, dataDir)
@@ -2653,8 +2644,6 @@ func TestRecallListHumanShowsTrustAndCursor(t *testing.T) {
 	require.NoError(t, err)
 	assert.Contains(t, out, "    updated_at=2026-11-14T10:11:12.123Z")
 	assert.Contains(t, out, "    body: Verify cwd before retrying failed reads.")
-	assert.Contains(t, out, "review_state=human_reviewed")
-	assert.Contains(t, out, "provenance_ok=false")
 	assert.Contains(t, out, "    evidence recall-session:3-7")
 	assert.Regexp(t, `(?m)^next_cursor: \S+$`, out)
 

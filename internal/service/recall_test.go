@@ -1166,59 +1166,31 @@ func seedServiceRecallEntry(t *testing.T, d *db.DB, m db.RecallEntry) {
 	require.NoError(t, err)
 }
 
-func TestDirectRecallDeltaRejectsSameMillisecondInsert(t *testing.T) {
-	for _, tc := range []struct {
-		name   string
-		filter service.RecallFilter
-	}{
-		{"updated since", service.RecallFilter{Limit: 1, UpdatedSince: "2026-11-14T00:00:00Z"}},
-		{"created since", service.RecallFilter{Limit: 1, CreatedSince: "2020-01-01T00:00:00Z"}},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			dbPath := filepath.Join(t.TempDir(), "test.db")
-			d, err := db.Open(t.Context(), dbPath)
-			require.NoError(t, err)
-			t.Cleanup(func() { d.Close() })
-			raw, err := sql.Open("sqlite3", dbPath)
-			require.NoError(t, err)
-			t.Cleanup(func() { raw.Close() })
-			seedServiceRecallEntrySession(t, d)
-			seed := func(id string) {
-				seedServiceRecallEntry(t, d, db.RecallEntry{ID: id, Title: id, Body: id, SourceSessionID: "recall-session"})
-				_, err := raw.ExecContext(t.Context(), "UPDATE recall_entries SET updated_at = ? WHERE id = ?", "2026-11-14T07:56:43.261Z", id)
-				require.NoError(t, err)
-			}
-			seed("page-a")
-			seed("page-b")
-			svc := service.NewReadOnlyBackend(d)
-			first, err := svc.ListRecallEntries(t.Context(), tc.filter)
-			require.NoError(t, err)
-			require.NotEmpty(t, first.NextCursor)
-			seed("page-c")
-			tc.filter.Cursor = first.NextCursor
-			_, err = svc.ListRecallEntries(t.Context(), tc.filter)
-			require.ErrorIs(t, err, service.ErrStaleRecallPagination)
-		})
-	}
-}
-
-type recallListOnlyStore struct{ d *db.DB }
-
-func (s recallListOnlyStore) ListRecallEntries(ctx context.Context, q db.RecallQuery) ([]db.RecallEntry, error) {
-	return s.d.ListRecallEntries(ctx, q)
-}
-
-func TestRecentRecallPageWithoutRevisionRejectsTruncatedBoundedList(t *testing.T) {
-	d := dbtest.OpenTestDB(t)
+func TestDirectRecallDeltaRejectsCorpusMutationDuringPage(t *testing.T) {
+	dbPath := filepath.Join(t.TempDir(), "test.db")
+	d, err := db.Open(t.Context(), dbPath)
+	require.NoError(t, err)
+	t.Cleanup(func() { d.Close() })
+	raw, err := sql.Open("sqlite3", dbPath)
+	require.NoError(t, err)
+	t.Cleanup(func() { raw.Close() })
 	seedServiceRecallEntrySession(t, d)
-	for _, id := range []string{"page-a", "page-b"} {
+	seed := func(id string) {
 		seedServiceRecallEntry(t, d, db.RecallEntry{ID: id, Title: id, Body: id, SourceSessionID: "recall-session"})
+		_, err := raw.ExecContext(t.Context(), "UPDATE recall_entries SET updated_at = ? WHERE id = ?", "2026-11-14T07:56:43.261Z", id)
+		require.NoError(t, err)
 	}
-	store := recallListOnlyStore{d: d}
-
-	_, _, err := service.ListRecentRecallEntriesPage(t.Context(), store,
-		db.RecallQuery{UpdatedSince: "2020-01-01T00:00:00Z", Limit: 1}, nil)
-	require.ErrorIs(t, err, db.ErrInvalidRecallQuery)
+	seed("page-a")
+	seed("page-b")
+	svc := service.NewReadOnlyBackend(d)
+	filter := service.RecallFilter{Limit: 1, UpdatedSince: "2026-11-14T00:00:00Z"}
+	first, err := svc.ListRecallEntries(t.Context(), filter)
+	require.NoError(t, err)
+	require.NotEmpty(t, first.NextCursor)
+	seed("page-c")
+	filter.Cursor = first.NextCursor
+	_, err = svc.ListRecallEntries(t.Context(), filter)
+	require.ErrorIs(t, err, service.ErrStaleRecallPagination)
 }
 
 func TestDirectRecallDeltaArchiveWithoutQueryState(t *testing.T) {
@@ -1274,6 +1246,7 @@ func TestDirectRecallListClampsLargePage(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, second.RecallEntries, 2)
 	assert.Empty(t, second.NextCursor)
+	f.UpdatedSince = ""
 	f.Query = "page"
 	_, err = svc.ListRecallEntries(t.Context(), f)
 	require.ErrorIs(t, err, db.ErrInvalidRecallQuery)

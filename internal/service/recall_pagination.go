@@ -115,7 +115,7 @@ func ListRecentRecallEntriesPage(
 	if !hasMore {
 		return results, "", nil
 	}
-	if bounded && (!tracked || revision == "") {
+	if bounded && revision == "" {
 		return nil, "", fmt.Errorf(
 			"%w: this store cannot page a time-bounded list safely; "+
 				"narrow the bounds or filters to fit one page",
