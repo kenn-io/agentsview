@@ -2038,7 +2038,7 @@ func rebindExtractedSessionEvidenceTx(
 			}
 			bound[key] = metadata
 		}
-		if _, err := tx.ExecContext(ctx, `
+		result, err := tx.ExecContext(ctx, `
 			UPDATE recall_evidence
 			SET content_digest = ?1, message_start_source_uuid = ?2,
 			    message_end_source_uuid = ?3
@@ -2048,14 +2048,20 @@ func rebindExtractedSessionEvidenceTx(
 			metadata.MessageStartSourceUUID,
 			metadata.MessageEndSourceUUID,
 			row.id,
-		); err != nil {
+		)
+		if err != nil {
 			return 0, fmt.Errorf(
 				"re-stamping evidence for entry %s: %w", row.entryID, err)
 		}
-		entryIDs[row.entryID] = true
+		changed, err := result.RowsAffected()
+		if err != nil {
+			return 0, fmt.Errorf(
+				"checking re-stamped evidence for entry %s: %w", row.entryID, err)
+		}
+		entryIDs[row.entryID] = entryIDs[row.entryID] || changed > 0
 	}
 	restored := 0
-	for entryID := range entryIDs {
+	for entryID, evidenceChanged := range entryIDs {
 		result, err := tx.ExecContext(ctx, `
 			UPDATE recall_entries
 			SET provenance_ok = 1,
@@ -2073,6 +2079,17 @@ func rebindExtractedSessionEvidenceTx(
 				"restoring provenance for entry %s: %w", entryID, err)
 		}
 		restored += int(affected)
+		if evidenceChanged && affected == 0 {
+			if _, err := tx.ExecContext(ctx, `
+				UPDATE recall_entries
+				SET updated_at = strftime('%Y-%m-%dT%H:%M:%fZ','now')
+				WHERE id = ?`,
+				entryID,
+			); err != nil {
+				return 0, fmt.Errorf(
+					"updating rebound recall entry %s: %w", entryID, err)
+			}
+		}
 	}
 	return restored, nil
 }
