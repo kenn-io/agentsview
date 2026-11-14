@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -203,7 +204,7 @@ func TestMusePersonalSyncAllSinceIncludesIndexOnlyChanges(t *testing.T) {
 // A shared index edit must replace only the session whose identity changed.
 func TestMusePersonalIndexRefreshesOnlyChangedSession(t *testing.T) {
 	for _, watcher := range []bool{false, true} {
-		t.Run(fmt.Sprint(watcher), func(t *testing.T) {
+		t.Run(strconv.FormatBool(watcher), func(t *testing.T) {
 			root, path := musePersonalSyncFile(t, musePersonalSyncItem(0, `{"type":"message","role":"user","text":"original"}`))
 			secondID := "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee"
 			second := filepath.Join(filepath.Dir(path), secondID+".jsonl")
