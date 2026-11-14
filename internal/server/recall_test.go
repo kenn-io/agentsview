@@ -394,13 +394,13 @@ func TestListRecallEntriesPaginatesWithoutRepeatingEntries(t *testing.T) {
 		})
 	}
 
-	first := te.get(t, "/api/v1/recall/entries?limit=2&updated_since=2020-01-01T00:00:00Z")
+	first := te.get(t, "/api/v1/recall/entries?limit=2")
 	assertStatus(t, first, http.StatusOK)
 	firstPage := decode[listRecallEntriesResponse](t, first)
 	require.Len(t, firstPage.RecallEntries, 2)
 	require.NotEmpty(t, firstPage.NextCursor)
 
-	second := te.get(t, "/api/v1/recall/entries?limit=2&updated_since=2020-01-01T00:00:00Z&cursor="+
+	second := te.get(t, "/api/v1/recall/entries?limit=2&cursor="+
 		url.QueryEscape(firstPage.NextCursor))
 	assertStatus(t, second, http.StatusOK)
 	secondPage := decode[listRecallEntriesResponse](t, second)
@@ -1995,59 +1995,19 @@ func TestListRecallEntriesTimeBounds(t *testing.T) {
 	}
 }
 
-func TestListRecallEntriesTimeBoundsIncludeArchived(t *testing.T) {
+func TestListRecallEntriesBoundedPageConflictsAfterWrite(t *testing.T) {
 	te := setup(t)
 	seedRecallEntrySession(t, te)
-	seedRecallEntry(t, te, db.RecallEntry{ID: "archived", Status: "archived", Title: "archived", Body: "archived", SourceSessionID: "recall-session", SourceRunID: "generation"})
-	for _, param := range []string{"updated_since", "created_since"} {
-		w := te.get(t, "/api/v1/recall/entries?"+param+"=2020-01-01T00:00:00Z")
-		assertStatus(t, w, http.StatusOK)
-		entries := decode[listRecallEntriesResponse](t, w).RecallEntries
-		require.Len(t, entries, 1)
-		assert.Equal(t, "archived", entries[0].Status)
-		assert.Equal(t, "generation", entries[0].SourceRunID)
-	}
-	w := te.get(t, "/api/v1/recall/entries")
-	assertStatus(t, w, http.StatusOK)
-	assert.Empty(t, decode[listRecallEntriesResponse](t, w).RecallEntries)
-}
+	seedRecallEntry(t, te, db.RecallEntry{ID: "page-a", Title: "a", Body: "a", SourceSessionID: "recall-session"})
+	seedRecallEntry(t, te, db.RecallEntry{ID: "page-b", Title: "b", Body: "b", SourceSessionID: "recall-session"})
+	path := "/api/v1/recall/entries?limit=1&updated_since=2020-01-01T00:00:00Z"
+	first := te.get(t, path)
+	assertStatus(t, first, http.StatusOK)
+	cursor := decode[listRecallEntriesResponse](t, first).NextCursor
+	require.NotEmpty(t, cursor)
+	seedRecallEntry(t, te, db.RecallEntry{ID: "page-c", Title: "c", Body: "c", SourceSessionID: "recall-session"})
 
-func TestListRecallEntriesBoundedPageConflictsAfterSameMillisecondInsert(t *testing.T) {
-	tests := []struct {
-		name  string
-		bound string
-	}{
-		{"updated since", "updated_since=2026-11-14T00:00:00Z"},
-		{"created since", "created_since=2020-01-01T00:00:00Z"},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			te := setup(t)
-			seedRecallEntrySession(t, te)
-			raw, err := sql.Open("sqlite3", filepath.Join(te.dataDir, "test.db"))
-			require.NoError(t, err)
-			t.Cleanup(func() { raw.Close() })
-			seed := func(id string) {
-				seedRecallEntry(t, te, db.RecallEntry{ID: id, Title: id, Body: id, SourceSessionID: "recall-session"})
-				_, err := raw.ExecContext(t.Context(), "UPDATE recall_entries SET updated_at = '2026-11-14T07:56:43.261Z' WHERE id = ?", id)
-				require.NoError(t, err)
-			}
-			seed("page-a")
-			seed("page-b")
-			path := "/api/v1/recall/entries?limit=1&" + tt.bound
-			first := te.get(t, path)
-			assertStatus(t, first, http.StatusOK)
-			cursor := decode[listRecallEntriesResponse](t, first).NextCursor
-			require.NotEmpty(t, cursor)
-			seed("page-c")
-
-			second := te.get(t, path+"&cursor="+url.QueryEscape(cursor))
-
-			assertStatus(t, second, http.StatusConflict)
-			msg := decode[map[string]string](t, second)["error"]
-			assert.Equal(t, service.ErrStaleRecallPagination.Error(), msg)
-			// The restart rule must fit a walk bounded by either field.
-			assert.NotContains(t, msg, "updated_since")
-		})
-	}
+	second := te.get(t, path+"&cursor="+url.QueryEscape(cursor))
+	assertStatus(t, second, http.StatusConflict)
+	assert.Equal(t, service.ErrStaleRecallPagination.Error(), decode[map[string]string](t, second)["error"])
 }

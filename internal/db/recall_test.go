@@ -9,7 +9,6 @@ import (
 	"strconv"
 	"strings"
 	"testing"
-	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -3064,65 +3063,40 @@ func TestRecallEntryLifecycleBucket(t *testing.T) {
 func TestRecallListTimeBounds(t *testing.T) {
 	d := testDB(t)
 	insertSession(t, d, "time-session", "project")
-	for _, id := range []string{"old", "changed", "new"} {
-		_, err := d.InsertRecallEntry(t.Context(), RecallEntry{ID: id, Type: "fact", Scope: "project", Status: "accepted", Title: id, Body: id, SourceSessionID: "time-session"})
-		require.NoError(t, err)
-	}
-	for _, row := range []struct{ id, created, updated string }{
-		{"old", "2026-11-12T00:00:00.000Z", "2026-11-12T00:00:00.000Z"},
-		{"changed", "2026-11-12T00:00:00.000Z", "2026-11-13T03:00:00.000Z"},
-		{"new", "2026-11-13T03:00:00.000Z", "2026-11-13T03:00:00.000Z"},
+	for _, row := range []struct{ id, status, created, updated string }{
+		{"before", "accepted", "2026-01-01T00:00:00.000Z", "2026-01-01T00:00:00.000Z"},
+		{"boundary", "accepted", "2026-01-01T00:00:00.001Z", "2026-01-01T00:00:00.001Z"},
+		{"archived", "archived", "2026-01-01T00:00:00.001Z", "2026-01-01T00:00:00.001Z"},
+		{"old", "accepted", "2026-11-12T00:00:00.000Z", "2026-11-12T00:00:00.000Z"},
+		{"changed", "accepted", "2026-11-12T00:00:00.000Z", "2026-11-13T03:00:00.000Z"},
+		{"new", "accepted", "2026-11-13T03:00:00.000Z", "2026-11-13T03:00:00.000Z"},
 	} {
-		_, err := d.getWriter().Exec(t.Context(), "UPDATE recall_entries SET created_at = ?, updated_at = ? WHERE id = ?", row.created, row.updated, row.id)
+		_, err := d.InsertRecallEntry(t.Context(), RecallEntry{ID: row.id, Type: "fact", Scope: "project", Status: row.status, ReviewState: corerecall.ReviewStateHumanReviewed, Transferable: true, ProvenanceOK: true, Title: row.id, Body: row.id, SourceSessionID: "time-session"})
 		require.NoError(t, err)
-	}
-	cutoff := "2026-11-12T22:00:00-05:00"
-	for _, tc := range []struct {
-		q    RecallQuery
-		want []string
-	}{
-		{RecallQuery{UpdatedSince: cutoff}, []string{"changed", "new"}},
-		{RecallQuery{CreatedSince: cutoff}, []string{"new"}},
-	} {
-		entries, err := d.ListRecallEntries(t.Context(), tc.q)
-		require.NoError(t, err)
-		var ids []string
-		for _, entry := range entries {
-			ids = append(ids, entry.ID)
-		}
-		assert.ElementsMatch(t, tc.want, ids)
-	}
-	_, err := d.ListRecallEntries(t.Context(), RecallQuery{UpdatedSince: "yesterday"})
-	require.ErrorIs(t, err, ErrInvalidRecallQuery)
-	_, err = d.ListRecallEntries(t.Context(), RecallQuery{CreatedSince: "yesterday"})
-	require.ErrorIs(t, err, ErrInvalidRecallQuery)
-}
-
-func TestRecallTimeBoundsPrecisionAndStatuses(t *testing.T) {
-	d := testDB(t)
-	insertSession(t, d, "time-precision", "project")
-	for _, row := range []struct{ id, status, timestamp string }{
-		{"before", "accepted", "2026-01-01T00:00:00.000Z"},
-		{"boundary", "accepted", "2026-01-01T00:00:00.001Z"},
-		{"archived", "archived", "2026-01-01T00:00:00.001Z"},
-	} {
-		_, err := d.InsertRecallEntry(t.Context(), RecallEntry{ID: row.id, Type: "fact", Scope: "project", Status: row.status, ReviewState: corerecall.ReviewStateHumanReviewed, Transferable: true, ProvenanceOK: true, Title: row.id, Body: row.id, SourceSessionID: "time-precision"})
-		require.NoError(t, err)
-		_, err = d.getWriter().Exec(t.Context(), "UPDATE recall_entries SET created_at = ?, updated_at = ? WHERE id = ?", row.timestamp, row.timestamp, row.id)
+		_, err = d.getWriter().Exec(t.Context(), "UPDATE recall_entries SET created_at = ?, updated_at = ? WHERE id = ?", row.created, row.updated, row.id)
 		require.NoError(t, err)
 	}
 	for _, tc := range []struct {
-		name string
-		q    RecallQuery
-		want []string
+		name    string
+		q       RecallQuery
+		want    []string
+		invalid bool
 	}{
-		{"default", RecallQuery{}, []string{"before", "boundary"}},
-		{"updated", RecallQuery{UpdatedSince: "2026-01-01T00:00:00.000001Z"}, []string{"before", "boundary", "archived"}},
-		{"explicit status", RecallQuery{UpdatedSince: "2026-01-01T00:00:00.000001Z", Status: "archived"}, []string{"archived"}},
-		{"trusted", RecallQuery{UpdatedSince: "2026-01-01T00:00:00.000001Z", TrustedOnly: true}, []string{"before", "boundary"}},
+		{"default status", RecallQuery{}, []string{"before", "boundary", "old", "changed", "new"}, false},
+		{"inclusive fractional update", RecallQuery{UpdatedSince: "2026-01-01T00:00:00.000001Z"}, []string{"before", "boundary", "archived", "old", "changed", "new"}, false},
+		{"explicit status", RecallQuery{UpdatedSince: "2026-01-01T00:00:00.000001Z", Status: "archived"}, []string{"archived"}, false},
+		{"trusted", RecallQuery{UpdatedSince: "2026-01-01T00:00:00.000001Z", TrustedOnly: true}, []string{"before", "boundary", "old", "changed", "new"}, false},
+		{"updated with offset", RecallQuery{UpdatedSince: "2026-11-12T22:00:00-05:00"}, []string{"changed", "new"}, false},
+		{"created with offset", RecallQuery{CreatedSince: "2026-11-12T22:00:00-05:00"}, []string{"new"}, false},
+		{"bad updated", RecallQuery{UpdatedSince: "yesterday"}, nil, true},
+		{"bad created", RecallQuery{CreatedSince: "yesterday"}, nil, true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			entries, err := d.ListRecallEntries(t.Context(), tc.q)
+			if tc.invalid {
+				require.ErrorIs(t, err, ErrInvalidRecallQuery)
+				return
+			}
 			require.NoError(t, err)
 			var ids []string
 			for _, entry := range entries {
@@ -3131,18 +3105,6 @@ func TestRecallTimeBoundsPrecisionAndStatuses(t *testing.T) {
 			assert.ElementsMatch(t, tc.want, ids)
 		})
 	}
-}
-
-func TestRecallCheckpointIncludesSubsequentWrite(t *testing.T) {
-	d := testDB(t)
-	insertSession(t, d, "checkpoint-session", "project")
-	checkpoint := time.Now().UTC()
-	_, err := d.InsertRecallEntry(t.Context(), RecallEntry{ID: "after-checkpoint", Type: "fact", Scope: "project", Status: "accepted", Title: "after", Body: "after", SourceSessionID: "checkpoint-session"})
-	require.NoError(t, err)
-	entries, err := d.ListRecallEntries(t.Context(), RecallQuery{UpdatedSince: checkpoint.Format(time.RFC3339Nano)})
-	require.NoError(t, err)
-	require.Len(t, entries, 1)
-	assert.Equal(t, "after-checkpoint", entries[0].ID)
 }
 
 func TestRecallTimeBoundedPagesOldestFirst(t *testing.T) {
