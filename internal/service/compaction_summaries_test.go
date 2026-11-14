@@ -68,7 +68,7 @@ func TestCompactionSummariesMissingSession(t *testing.T) {
 	require.ErrorIs(t, err, service.ErrSessionNotFound)
 }
 
-func TestCompactionSummariesDaemonReplacementPage(t *testing.T) {
+func TestCompactionSummariesFilteredPage(t *testing.T) {
 	svc := &compactionSpy{}
 	out, err := service.CompactionSummaries(t.Context(), svc, service.CompactionSummariesRequest{ActiveSince: "2024-06-01T00:00:00Z"})
 	require.NoError(t, err)

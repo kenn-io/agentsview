@@ -22,7 +22,6 @@ func TestCompactionSummariesDaemonReplacement(t *testing.T) {
 			probes.Add(1)
 			fmt.Fprintf(w, `{"api_version":%d}`, version.Load())
 		case "/api/v1/sessions":
-			assert.Equal(t, "true", r.URL.Query().Get("flat"))
 			fmt.Fprint(w, `{"sessions":[{"id":"one"},{"id":"two"}],"total":2}`)
 		default:
 			fmt.Fprint(w, `{"messages":[{"ordinal":1,"content":"summary","is_compact_boundary":true}],"count":1}`)

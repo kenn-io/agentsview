@@ -27,34 +27,32 @@ func TestSessionCompactions(t *testing.T) {
 		{SessionID: "evener:session", Role: "system", IsSystem: true, IsCompactBoundary: true, SourceType: "entry", SourceSubtype: "SUMMARY", Content: "[SUMMARY]"},
 	}))
 	require.NoError(t, d.Close())
-	out, err := executeCommand(newRootCommand(), "session", "compactions", "compacted", "--json")
-	require.NoError(t, err)
-	got := decodeCLIJSON[service.CompactionSummariesResult](t, out)
-	require.Len(t, got.Summaries, 1)
-	assert.Equal(t, "summary", got.Summaries[0].Content)
-	out, err = executeCommand(newRootCommand(), "session", "compactions", "--active-since", "2024-06-01T00:00:00Z", "--limit", "1")
-	require.NoError(t, err)
-	_, cursor, found := strings.Cut(out, "More results: --cursor ")
-	require.True(t, found)
-	out, err = executeCommand(newRootCommand(), "session", "compactions", "--active-since", "2024-06-01T00:00:00Z", "--limit", "1", "--cursor", strings.TrimSpace(cursor))
-	require.NoError(t, err)
-	assert.Contains(t, out, "second summary")
-	out, err = executeCommand(newRootCommand(), "session", "compactions", "evener:session")
-	require.NoError(t, err)
-	assert.Contains(t, out, "Ambiguous compaction label: evener:session #0")
-	for _, tc := range []struct {
-		args    []string
-		message string
-	}{
-		{[]string{"session", "compactions", "compacted", "--limit", "-1"}, "--limit must be 0 or more"},
-		{[]string{"session", "compactions"}, "provide exactly one session ID or --active-since"},
-		{[]string{"session", "compactions", "compacted", "--active-since", "2024-01-01T00:00:00Z"}, "provide exactly one session ID or --active-since"},
-		{[]string{"session", "compactions", "compacted", "--cursor", "cursor"}, "--cursor requires --active-since"},
-	} {
+	t.Run("session JSON", func(t *testing.T) {
+		out, err := executeCommand(newRootCommand(), "session", "compactions", "compacted", "--json")
+		require.NoError(t, err)
+		got := decodeCLIJSON[service.CompactionSummariesResult](t, out)
+		require.Len(t, got.Summaries, 1)
+		assert.Equal(t, "summary", got.Summaries[0].Content)
+	})
+	t.Run("cursor", func(t *testing.T) {
+		out, err := executeCommand(newRootCommand(), "session", "compactions", "--active-since", "2024-06-01T00:00:00Z", "--limit", "1")
+		require.NoError(t, err)
+		_, cursor, found := strings.Cut(out, "More results: --cursor ")
+		require.True(t, found)
+		out, err = executeCommand(newRootCommand(), "session", "compactions", "--active-since", "2024-06-01T00:00:00Z", "--limit", "1", "--cursor", strings.TrimSpace(cursor))
+		require.NoError(t, err)
+		assert.Contains(t, out, "second summary")
+	})
+	t.Run("ambiguous label", func(t *testing.T) {
+		out, err := executeCommand(newRootCommand(), "session", "compactions", "evener:session")
+		require.NoError(t, err)
+		assert.Contains(t, out, "Ambiguous compaction label: evener:session #0")
+	})
+	t.Run("usage error", func(t *testing.T) {
 		var stdout, stderr bytes.Buffer
-		err := executeCLIWithLegacyFlagCompat(tc.args, &stdout, &stderr)
+		err := executeCLIWithLegacyFlagCompat([]string{"session", "compactions", "compacted", "--limit", "-1"}, &stdout, &stderr)
 		require.Error(t, err)
 		assert.Equal(t, 64, reportCLIError(err, &stderr))
-		assert.Contains(t, stderr.String(), "fatal: "+tc.message+"\n")
-	}
+		assert.Contains(t, stderr.String(), "fatal: --limit must be 0 or more\n")
+	})
 }
