@@ -32,6 +32,10 @@ The current implementation is local and SQLite-only. The CLI provides:
   `recall extract preview` for previewing deterministic session chunks; and
 - `recall import --dry-run` for validating reviewed JSONL candidates.
 
+Use `recall list --updated-since <timestamp>` to list entries changed at or after an RFC3339 timestamp. Updates include review, supersession, activation, and provenance changes. `--created-since` selects entries first written at or after the timestamp. Use both flags to require both conditions. The HTTP list accepts `updated_since` and `created_since`, and the MCP `list_recall` tool accepts the same fields. Each returns a `next_cursor` when another page is available.
+
+Each entry's `source_run_id` labels its extraction generation. Activating a generation promotes its entries and updates their `updated_at`, so an update delta immediately after activation includes that generation.
+
 The top-level **Recall** page has two tabs:
 
 - **Corpus** is a browser and review surface for distilled entries. It shows

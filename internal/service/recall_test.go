@@ -1105,3 +1105,26 @@ func seedServiceRecallEntry(t *testing.T, d *db.DB, m db.RecallEntry) {
 	_, err := d.InsertRecallEntry(t.Context(), m)
 	require.NoError(t, err)
 }
+
+func TestDirectRecallListPages(t *testing.T) {
+	d := dbtest.OpenTestDB(t)
+	seedServiceRecallEntrySession(t, d)
+	for _, id := range []string{"page-a", "page-b", "page-c"} {
+		seedServiceRecallEntry(t, d, db.RecallEntry{ID: id, Title: id, Body: id, SourceSessionID: "recall-session"})
+	}
+	svc := service.NewReadOnlyBackend(d)
+	f := service.RecallFilter{Limit: 2, UpdatedSince: "2020-01-01T00:00:00Z", CreatedSince: "2020-01-01T00:00:00Z"}
+	first, err := svc.ListRecallEntries(t.Context(), f)
+	require.NoError(t, err)
+	require.Len(t, first.RecallEntries, 2)
+	require.NotEmpty(t, first.NextCursor)
+	f.Cursor = first.NextCursor
+	second, err := svc.ListRecallEntries(t.Context(), f)
+	require.NoError(t, err)
+	require.Len(t, second.RecallEntries, 1)
+	assert.Empty(t, second.NextCursor)
+	assert.NotEqual(t, first.RecallEntries[0].ID, second.RecallEntries[0].ID)
+	f.Query = "page"
+	_, err = svc.ListRecallEntries(t.Context(), f)
+	require.ErrorIs(t, err, db.ErrInvalidRecallQuery)
+}

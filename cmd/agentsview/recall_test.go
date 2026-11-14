@@ -331,6 +331,9 @@ func TestRecallListUsesExplicitServerURL(t *testing.T) {
 		if !assert.Equal(t, http.MethodGet, r.Method) {
 			return
 		}
+		assert.Equal(t, "2026-11-12T22:00:00-05:00", r.URL.Query().Get("updated_since"))
+		assert.Equal(t, "2026-11-12T20:00:00Z", r.URL.Query().Get("created_since"))
+		assert.Equal(t, "page-token", r.URL.Query().Get("cursor"))
 		if !assert.Equal(t, "agentsview", r.URL.Query().Get("project")) {
 			return
 		}
@@ -352,7 +355,7 @@ func TestRecallListUsesExplicitServerURL(t *testing.T) {
 
 	out, err := executeCommand(newRootCommand(),
 		"recall", "--server", " "+srv.URL+"/ ",
-		"list", "--project", "agentsview", "--format", "json")
+		"list", "--project", "agentsview", "--updated-since", "2026-11-12T22:00:00-05:00", "--created-since", "2026-11-12T20:00:00Z", "--cursor", "page-token", "--format", "json")
 
 	require.NoError(t, err)
 	assert.Equal(t, "/api/v1/recall/entries", gotPath)
@@ -2607,4 +2610,13 @@ func seedRecallEntrySourceSessionFixture(
 		SourceSessionID: sessionID,
 	})
 	require.NoError(t, err)
+}
+
+func TestRecallTimeFlagsOnlyOnList(t *testing.T) {
+	list := newRecallListCommand()
+	stats := newRecallStatsCommand()
+	for _, name := range []string{"updated-since", "created-since", "cursor"} {
+		assert.NotNil(t, list.Flags().Lookup(name))
+		assert.Nil(t, stats.Flags().Lookup(name))
+	}
 }
