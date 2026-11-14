@@ -2755,11 +2755,27 @@ commands that connect to a daemon use the daemon's integration configuration.
 MCP offers `get_session_file_references` when its backend enables Docbank
 lookup. Connections through a signed reader listener omit this tool.
 
-| Setting                            | Purpose                                           |
-| ---------------------------------- | ------------------------------------------------- |
-| `integrations.docbank.url`         | Docbank API base URL. HTTPS, or HTTP on loopback. |
-| `integrations.docbank.web_url`     | Optional browser base URL for version links.      |
-| `integrations.docbank.api_key_env` | Environment variable containing the API key.      |
+| Setting                            | Purpose                                                              |
+| ---------------------------------- | -------------------------------------------------------------------- |
+| `integrations.docbank.url`         | Docbank API base URL. HTTPS, or HTTP under the policy below.         |
+| `integrations.docbank.web_url`     | Optional browser base URL for version links.                         |
+| `integrations.docbank.api_key_env` | Environment variable containing the API key.                         |
+| `integrations.docbank.allow_http`  | Allow plaintext HTTP to any host. Default: `false`.                  |
+
+HTTPS and loopback HTTP work by default. For a trusted private container
+network, opt in explicitly:
+
+```toml
+[integrations.docbank]
+url = "http://docbank:8485"
+api_key_env = "DOCBANK_API_KEY"
+allow_http = true
+```
+
+`allow_http` applies to both `url` and the optional `web_url`, matching the
+Insights transport policy. HTTP exposes the API key and requested digests in
+plaintext, so enable it only on a network you trust. API keys stay in request
+headers and redirects are refused.
 
 Lookup covers retained tool-result images, including offloaded assets, inline
 OpenCode `file.uri` payloads such as PDF and text files, and Markdown `asset://`
