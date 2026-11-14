@@ -24,7 +24,7 @@ func newSessionCompactionsCommand() *cobra.Command {
 			}
 			cursor, _ := cmd.Flags().GetString("cursor")
 			if len(args) == 1 && cursor != "" {
-				return cliUsageError(errors.New("--cursor requires --active-since"), "omit --cursor or use --active-since")
+				return cliUsageError(errors.New("--cursor requires --active-since"), "")
 			}
 			svc, cleanup, err := resolveService(cmd)
 			if err != nil {

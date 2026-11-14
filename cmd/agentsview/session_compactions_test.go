@@ -31,7 +31,6 @@ func TestSessionCompactions(t *testing.T) {
 		{[]string{"session", "compactions", "compacted", "--limit", "-1"}, "--limit must be 0 or more"},
 		{[]string{"session", "compactions"}, "provide exactly one session ID or --active-since"},
 		{[]string{"session", "compactions", "compacted", "--active-since", "2024-01-01T00:00:00Z"}, "provide exactly one session ID or --active-since"},
-		{[]string{"session", "compactions", "compacted", "--cursor", "cursor"}, "--cursor requires --active-since"},
 	} {
 		var stdout, stderr bytes.Buffer
 		err := executeCLIWithLegacyFlagCompat(tc.args, &stdout, &stderr)
@@ -39,6 +38,14 @@ func TestSessionCompactions(t *testing.T) {
 		assert.Equal(t, 64, reportCLIError(err, &stderr))
 		assert.Contains(t, stderr.String(), "fatal: "+tc.message+"\n")
 	}
+}
+
+func TestSessionCompactionsCursorWithID(t *testing.T) {
+	var stdout, stderr bytes.Buffer
+	err := executeCLIWithLegacyFlagCompat([]string{"session", "compactions", "compacted", "--cursor", "cursor"}, &stdout, &stderr)
+	require.Error(t, err)
+	assert.Equal(t, 64, reportCLIError(err, &stderr))
+	assert.Equal(t, "fatal: --cursor requires --active-since\nhint: run `agentsview session compactions --help` for flags and examples\n", stderr.String())
 }
 
 func TestSessionCompactionsOutput(t *testing.T) {
