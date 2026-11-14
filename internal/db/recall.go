@@ -9,6 +9,7 @@ import (
 	"slices"
 	"sort"
 	"strings"
+	"time"
 
 	corerecall "go.kenn.io/agentsview/internal/recall"
 )
@@ -99,6 +100,8 @@ type RecallQuery struct {
 	SourceRunID         string
 	SupersedesEntryID   string
 	SupersededByEntryID string
+	UpdatedSince        string
+	CreatedSince        string
 	CursorUpdatedAt     string
 	CursorID            string
 	ProbeNext           bool
@@ -1332,6 +1335,12 @@ func NormalizeRecallQuery(q RecallQuery) RecallQuery {
 	q.SourceRunID = strings.TrimSpace(q.SourceRunID)
 	q.SupersedesEntryID = strings.TrimSpace(q.SupersedesEntryID)
 	q.SupersededByEntryID = strings.TrimSpace(q.SupersededByEntryID)
+	for _, value := range []*string{&q.UpdatedSince, &q.CreatedSince} {
+		*value = strings.TrimSpace(*value)
+		if t, err := time.Parse(time.RFC3339, *value); err == nil {
+			*value = t.UTC().Format(extractTimeLayout)
+		}
+	}
 	q.CursorUpdatedAt = strings.TrimSpace(q.CursorUpdatedAt)
 	q.CursorID = strings.TrimSpace(q.CursorID)
 	return q
@@ -1342,6 +1351,13 @@ func NormalizeRecallQuery(q RecallQuery) RecallQuery {
 // for another explicit status is therefore a caller error, not an empty page.
 func ValidateRecallQuery(q RecallQuery) error {
 	q = NormalizeRecallQuery(q)
+	for _, value := range []string{q.UpdatedSince, q.CreatedSince} {
+		if value != "" {
+			if _, err := time.Parse(time.RFC3339, value); err != nil {
+				return fmt.Errorf("%w: invalid timestamp %q", ErrInvalidRecallQuery, value)
+			}
+		}
+	}
 	switch q.Mode {
 	case RecallQueryModeLexical, RecallQueryModeVector, RecallQueryModeHybrid:
 	default:
@@ -1565,6 +1581,14 @@ func buildRecallEntryWhere(q RecallQuery, includeText bool) (string, []any) {
 	if q.SupersededByEntryID != "" {
 		preds = append(preds, "superseded_by_entry_id = ?")
 		args = append(args, q.SupersededByEntryID)
+	}
+	if q.UpdatedSince != "" {
+		preds = append(preds, "updated_at >= ?")
+		args = append(args, q.UpdatedSince)
+	}
+	if q.CreatedSince != "" {
+		preds = append(preds, "created_at >= ?")
+		args = append(args, q.CreatedSince)
 	}
 	if q.CursorUpdatedAt != "" {
 		preds = append(preds,

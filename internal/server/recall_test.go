@@ -394,13 +394,13 @@ func TestListRecallEntriesPaginatesWithoutRepeatingEntries(t *testing.T) {
 		})
 	}
 
-	first := te.get(t, "/api/v1/recall/entries?limit=2")
+	first := te.get(t, "/api/v1/recall/entries?limit=2&updated_since=2020-01-01T00:00:00Z&created_since=2020-01-01T00:00:00Z")
 	assertStatus(t, first, http.StatusOK)
 	firstPage := decode[listRecallEntriesResponse](t, first)
 	require.Len(t, firstPage.RecallEntries, 2)
 	require.NotEmpty(t, firstPage.NextCursor)
 
-	second := te.get(t, "/api/v1/recall/entries?limit=2&cursor="+
+	second := te.get(t, "/api/v1/recall/entries?limit=2&updated_since=2020-01-01T00:00:00Z&created_since=2020-01-01T00:00:00Z&cursor="+
 		url.QueryEscape(firstPage.NextCursor))
 	assertStatus(t, second, http.StatusOK)
 	secondPage := decode[listRecallEntriesResponse](t, second)
@@ -1980,4 +1980,17 @@ func seedReviewableRecallEntry(
 			MessageEndOrdinal: 2, Snippet: "Supporting transcript range.",
 		}},
 	})
+}
+
+func TestListRecallEntriesTimeBounds(t *testing.T) {
+	te := setup(t)
+	seedRecallEntrySession(t, te)
+	seedRecallEntry(t, te, db.RecallEntry{ID: "bounds", Title: "bounds", Body: "bounds", SourceSessionID: "recall-session"})
+	for _, param := range []string{"updated_since", "created_since"} {
+		bad := te.get(t, "/api/v1/recall/entries?"+param+"=invalid")
+		assertStatus(t, bad, http.StatusBadRequest)
+		future := te.get(t, "/api/v1/recall/entries?"+param+"=2999-01-01T00:00:00Z")
+		assertStatus(t, future, http.StatusOK)
+		assert.Empty(t, decode[listRecallEntriesResponse](t, future).RecallEntries)
+	}
 }

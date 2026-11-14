@@ -1309,11 +1309,17 @@ func (b *httpBackend) UsagePairwiseComparison(
 	return out, nil
 }
 
+// recallTimeBoundsAPIVersion mirrors server.RecallTimeBoundsAPIVersion.
+const recallTimeBoundsAPIVersion = 19
+
 func (b *httpBackend) ListRecallEntries(
 	ctx context.Context, f service.RecallFilter,
 ) (*service.RecallList, error) {
 	if err := service.ValidateRecallEntryLimit(f.Limit); err != nil {
 		return nil, err
+	}
+	if (f.UpdatedSince != "" || f.CreatedSince != "") && b.apiVersion > 0 && b.apiVersion < recallTimeBoundsAPIVersion {
+		return nil, fmt.Errorf("server API version %d does not support recall time bounds; upgrade or restart the server", b.apiVersion)
 	}
 	q := recallFilterToQuery(f)
 	api, err := b.apiClient(b.client)
@@ -1333,7 +1339,7 @@ func (b *httpBackend) ListRecallEntries(
 		}
 		return nil, err
 	}
-	out := service.RecallList{RecallEntries: response.JSON200.Entries, TrustedOnly: response.JSON200.TrustedOnly}
+	out := service.RecallList{RecallEntries: response.JSON200.Entries, TrustedOnly: response.JSON200.TrustedOnly, NextCursor: response.JSON200.NextCursor}
 	if out.RecallEntries == nil {
 		out.RecallEntries = []db.RecallResult{}
 	}
@@ -1509,6 +1515,15 @@ func (b *httpBackend) ImportRecallEntries(
 
 func recallFilterToQuery(f service.RecallFilter) *apiclient.GetAPIV1RecallEntriesQuery {
 	q := &apiclient.GetAPIV1RecallEntriesQuery{}
+	if f.UpdatedSince != "" {
+		q.UpdatedSince = new(f.UpdatedSince)
+	}
+	if f.CreatedSince != "" {
+		q.CreatedSince = new(f.CreatedSince)
+	}
+	if f.Cursor != "" {
+		q.Cursor = new(f.Cursor)
+	}
 	if f.Query != "" {
 		q.Q = new(f.Query)
 	}

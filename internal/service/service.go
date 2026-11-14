@@ -229,6 +229,9 @@ type ContentSearchResult struct {
 
 // RecallFilter mirrors GET /api/v1/recall/entries query parameters.
 type RecallFilter struct {
+	UpdatedSince        string `json:"updated_since,omitempty"`
+	CreatedSince        string `json:"created_since,omitempty"`
+	Cursor              string `json:"cursor,omitempty"`
 	Query               string `json:"q,omitempty"`
 	Project             string `json:"project,omitempty"`
 	CWD                 string `json:"cwd,omitempty"`
@@ -249,6 +252,7 @@ type RecallFilter struct {
 
 // RecallList mirrors GET /api/v1/recall/entries.
 type RecallList struct {
+	NextCursor    string            `json:"next_cursor,omitempty"`
 	RecallEntries []db.RecallResult `json:"entries"`
 	TrustedOnly   bool              `json:"trusted_only"`
 }

@@ -53,7 +53,7 @@ func callParams(name string, args map[string]any) *mcp.CallToolParams {
 	return &mcp.CallToolParams{Name: name, Arguments: args}
 }
 
-func TestNewServer_RegistersTwentyReadOnlyTools(t *testing.T) {
+func TestNewServer_RegistersTwentyOneReadOnlyTools(t *testing.T) {
 	d := dbtest.OpenTestDB(t)
 	srv := newServer(ServeOptions{
 		Service: service.NewDirectBackend(d, nil, withTestDocbank()),
@@ -62,7 +62,7 @@ func TestNewServer_RegistersTwentyReadOnlyTools(t *testing.T) {
 	require.NotNil(t, srv)
 
 	tools := listCatalog(t, srv)
-	require.Len(t, tools.Tools, 20)
+	require.Len(t, tools.Tools, 21)
 	for _, tl := range tools.Tools {
 		require.NotNil(t, tl.Annotations, "tool %s missing annotations", tl.Name)
 		require.True(t, tl.Annotations.ReadOnlyHint,
@@ -220,6 +220,7 @@ func TestNewServer_OmitsRecallToolForUnsupportedBackend(t *testing.T) {
 	require.Len(t, tools.Tools, 18)
 	for _, tool := range tools.Tools {
 		assert.NotEqual(t, ToolQueryRecall, tool.Name)
+		assert.NotEqual(t, ToolListRecall, tool.Name)
 	}
 	require.NoError(t, ct.Close())
 	require.NoError(t, st.Wait())

@@ -3059,3 +3059,39 @@ func TestRecallEntryLifecycleBucket(t *testing.T) {
 		})
 	}
 }
+
+func TestRecallListTimeBounds(t *testing.T) {
+	d := testDB(t)
+	insertSession(t, d, "time-session", "project")
+	for _, id := range []string{"old", "changed", "new"} {
+		_, err := d.InsertRecallEntry(t.Context(), RecallEntry{ID: id, Type: "fact", Scope: "project", Status: "accepted", Title: id, Body: id, SourceSessionID: "time-session"})
+		require.NoError(t, err)
+	}
+	for _, row := range []struct{ id, created, updated string }{
+		{"old", "2026-11-12T00:00:00.000Z", "2026-11-12T00:00:00.000Z"},
+		{"changed", "2026-11-12T00:00:00.000Z", "2026-11-13T03:00:00.000Z"},
+		{"new", "2026-11-13T03:00:00.000Z", "2026-11-13T03:00:00.000Z"},
+	} {
+		_, err := d.getWriter().Exec(t.Context(), "UPDATE recall_entries SET created_at = ?, updated_at = ? WHERE id = ?", row.created, row.updated, row.id)
+		require.NoError(t, err)
+	}
+	cutoff := "2026-11-12T22:00:00-05:00"
+	for _, tc := range []struct {
+		q    RecallQuery
+		want []string
+	}{
+		{RecallQuery{UpdatedSince: cutoff}, []string{"changed", "new"}},
+		{RecallQuery{CreatedSince: cutoff}, []string{"new"}},
+		{RecallQuery{UpdatedSince: cutoff, CreatedSince: cutoff}, []string{"new"}},
+	} {
+		entries, err := d.ListRecallEntries(t.Context(), tc.q)
+		require.NoError(t, err)
+		var ids []string
+		for _, entry := range entries {
+			ids = append(ids, entry.ID)
+		}
+		assert.ElementsMatch(t, tc.want, ids)
+	}
+	_, err := d.ListRecallEntries(t.Context(), RecallQuery{UpdatedSince: "yesterday"})
+	require.ErrorIs(t, err, ErrInvalidRecallQuery)
+}

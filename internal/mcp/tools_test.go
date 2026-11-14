@@ -1294,7 +1294,7 @@ func TestServer_EndToEnd(t *testing.T) {
 		names = append(names, tl.Name)
 	}
 	assert.ElementsMatch(t, []string{
-		ToolSearchSessions, ToolQueryRecall, ToolListSessions, ToolGetSessionOverview,
+		ToolSearchSessions, ToolQueryRecall, ToolListRecall, ToolListSessions, ToolGetSessionOverview,
 		ToolGetMessages, ToolGetMemoryStatus, ToolSearchContent, ToolGetUsageSummary, ToolGetSessionUsage,
 		ToolGetToolCalls, ToolGetRecentEdits, ToolGetChildSessions, ToolCompareUsage,
 		ToolGetActivityReport, ToolGetToolUsage, ToolGetQualitySignals, ToolSearchDocs,
@@ -2147,4 +2147,41 @@ func TestSearchContent_HybridKeywordFallbackMetadata(t *testing.T) {
 	assert.True(t, fake.lastReq.KeywordFallback)
 	assert.Equal(t, "hybrid_keyword", out.EffectiveMode)
 	assert.Equal(t, note, out.Note)
+}
+
+func TestListRecallPagesWithEvidence(t *testing.T) {
+	d := dbtest.OpenTestDB(t)
+	dbtest.SeedSession(t, d, "s1", "project")
+	for _, id := range []string{"a", "b"} {
+		_, err := d.InsertRecallEntry(t.Context(), db.RecallEntry{
+			ID: id, Type: "fact", Scope: "project", Status: "accepted", Title: id, Body: id,
+			SourceSessionID: "s1", SourceRunID: "generation", Evidence: []db.RecallEvidence{{SessionID: "s1", MessageStartOrdinal: 1, MessageEndOrdinal: 2, Snippet: "evidence"}},
+		})
+		require.NoError(t, err)
+	}
+	srv := newServer(ServeOptions{Service: service.NewDirectBackend(d, nil)})
+	st, ct := newInMemoryPair(t, srv)
+	t.Cleanup(func() { require.NoError(t, ct.Close()); require.NoError(t, st.Wait()) })
+	res, err := ct.CallTool(t.Context(), callParams("list_recall", map[string]any{"limit": 1, "updated_since": "2020-01-01T00:00:00Z"}))
+	require.NoError(t, err)
+	require.False(t, res.IsError)
+	var out listRecallOut
+	raw, err := json.Marshal(res.StructuredContent)
+	require.NoError(t, err)
+	require.NoError(t, json.Unmarshal(raw, &out))
+	require.Len(t, out.Entries, 1)
+	assert.NotEmpty(t, out.Entries[0].ReviewState)
+	assert.Equal(t, "generation", out.Entries[0].SourceRunID)
+	require.Len(t, out.Entries[0].Evidence, 1)
+	require.NotEmpty(t, out.NextCursor)
+	res, err = ct.CallTool(t.Context(), callParams("list_recall", map[string]any{"limit": 1, "updated_since": "2020-01-01T00:00:00Z", "cursor": out.NextCursor}))
+	require.NoError(t, err)
+	require.False(t, res.IsError)
+	var next listRecallOut
+	raw, err = json.Marshal(res.StructuredContent)
+	require.NoError(t, err)
+	require.NoError(t, json.Unmarshal(raw, &next))
+	require.Len(t, next.Entries, 1)
+	assert.NotEqual(t, out.Entries[0].ID, next.Entries[0].ID)
+	assert.Empty(t, next.NextCursor)
 }
