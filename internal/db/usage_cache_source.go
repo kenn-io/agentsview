@@ -68,6 +68,7 @@ type UsageCacheReader struct {
 	warmMu        sync.Mutex
 	warmPending   map[string]bool // timezone names waiting for a warm pass
 	warmRequested map[string]time.Time
+	warmDiscover  bool          // retry launch discovery after a transient failure
 	warmRunning   string        // timezone of the running warm pass
 	warmBusy      bool          // a warm pass is running
 	warmIdle      chan struct{} // closed while no warm pass runs
@@ -165,6 +166,19 @@ func (reader *UsageCacheReader) WarmUnready(ctx context.Context) error {
 	if !reader.deferWork {
 		return nil
 	}
+	err := reader.warmUnready(ctx)
+	if err != nil && ctx.Err() == nil && !errors.Is(err, ErrUsageSourceUnavailable) {
+		reader.warmMu.Lock()
+		if reader.warmCtx.Err() == nil {
+			reader.warmDiscover = true
+			reader.startWarmLocked()
+		}
+		reader.warmMu.Unlock()
+	}
+	return err
+}
+
+func (reader *UsageCacheReader) warmUnready(ctx context.Context) error {
 	id, err := reader.engine.GetDatabaseID(ctx)
 	if err != nil {
 		return err
@@ -404,6 +418,10 @@ func (reader *UsageCacheReader) queueWarmLocked(timezone string) {
 	}
 	reader.warmPending[timezone] = true
 	reader.lastDeferred = time.Now()
+	reader.startWarmLocked()
+}
+
+func (reader *UsageCacheReader) startWarmLocked() {
 	select {
 	case <-reader.warmIdle:
 	default:
@@ -467,6 +485,27 @@ func (reader *UsageCacheReader) flushWarmRequests() {
 func (reader *UsageCacheReader) runWarm(idle chan struct{}) {
 	for {
 		reader.warmMu.Lock()
+		if reader.warmDiscover && reader.warmCtx.Err() == nil {
+			reader.warmDiscover = false
+			reader.warmMu.Unlock()
+			ctx, cancel := context.WithTimeout(reader.warmCtx, usageWarmWriteTimeout)
+			err := reader.LoadReadiness(ctx)
+			if err == nil {
+				err = reader.warmUnready(ctx)
+			}
+			cancel()
+			if err != nil && !errors.Is(err, ErrUsageSourceUnavailable) && reader.warmCtx.Err() == nil {
+				reader.Logger().Printf("discovering usage cache timezones: %v", err)
+				select {
+				case <-reader.warmCtx.Done():
+				case <-time.After(usageWarmRetryDelay):
+					reader.warmMu.Lock()
+					reader.warmDiscover = true
+					reader.warmMu.Unlock()
+				}
+			}
+			continue
+		}
 		var timezone string
 		found := false
 		for name := range reader.warmPending {

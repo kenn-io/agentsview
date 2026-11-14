@@ -169,6 +169,75 @@ func TestPGUsageCacheLaunchSkipsReadyZones(t *testing.T) {
 	assert.Zero(t, captures.Load())
 }
 
+func TestPGUsageCacheLaunchRetriesDiscovery(t *testing.T) {
+	t.Parallel()
+	_, _, store, _ := keptUsageFixture(t)
+	ctx := t.Context()
+	probe := attachUsageCacheProbe(t, store, t.TempDir())
+	store.usageCache.DeferWork()
+	t.Cleanup(func() { require.NoError(t, store.usageCache.Close()) })
+	var available atomic.Bool
+	probe.afterCapture = func(context.Context) error {
+		if !available.Load() {
+			return errors.New("temporary source failure")
+		}
+		return nil
+	}
+	require.Error(t, store.WarmUsageCache(ctx))
+	available.Store(true)
+	waitCtx, cancel := context.WithTimeout(ctx, 20*time.Second)
+	defer cancel()
+	require.NoError(t, store.WaitUsageCacheWarm(waitCtx))
+	_, err := store.usageCache.GetDailyUsage(ctx, db.UsageFilter{})
+	require.NoError(t, err, "launch should finish the fill before the first read")
+	requireCachedUsageMatchesDirect(t, store, db.UsageFilter{})
+}
+
+func TestPGUsageCacheLaunchDoesNotRetryUnavailableSource(t *testing.T) {
+	t.Parallel()
+	_, _, store, _ := keptUsageFixture(t)
+	probe := attachUsageCacheProbe(t, store, t.TempDir())
+	store.usageCache.DeferWork()
+	t.Cleanup(func() { require.NoError(t, store.usageCache.Close()) })
+	var captures atomic.Int64
+	probe.afterCapture = func(context.Context) error {
+		captures.Add(1)
+		return db.ErrUsageSourceUnavailable
+	}
+	require.ErrorIs(t, store.WarmUsageCache(t.Context()), db.ErrUsageSourceUnavailable)
+	require.NoError(t, store.WaitUsageCacheWarm(t.Context()))
+	assert.Equal(t, int64(1), captures.Load())
+}
+
+func TestPGUsageCacheLaunchRetryStopsOnClose(t *testing.T) {
+	t.Parallel()
+	_, _, store, _ := keptUsageFixture(t)
+	probe := attachUsageCacheProbe(t, store, t.TempDir())
+	store.usageCache.DeferWork()
+	var captures atomic.Int64
+	retrying := make(chan struct{})
+	probe.afterCapture = func(context.Context) error {
+		if captures.Add(1) == 2 {
+			close(retrying)
+		}
+		return errors.New("temporary source failure")
+	}
+	require.Error(t, store.WarmUsageCache(t.Context()))
+	select {
+	case <-retrying:
+	case <-time.After(10 * time.Second):
+		t.Fatal("launch discovery did not retry")
+	}
+	done := make(chan error, 1)
+	go func() { done <- store.usageCache.Close() }()
+	select {
+	case err := <-done:
+		require.NoError(t, err)
+	case <-time.After(time.Second):
+		t.Fatal("close did not stop launch discovery")
+	}
+}
+
 func TestPGUsageCacheLaunchPreservesRequestRecency(t *testing.T) {
 	t.Parallel()
 	for _, requested := range []bool{false, true} {
