@@ -224,6 +224,8 @@ A single word, a fully quoted pattern, and searches without the `messages`
 source match the exact text only. A quoted phrase inside a longer query requires
 its words together and in order. Hybrid keyword matches also report their word
 count.
+On CockroachDB, substring search matches the entire query as a substring;
+natural hybrid keyword searches require every word or phrase as a substring.
 
 `search_content` accepts a `mode` of `substring` (default), `regex`, `terms`,
 `semantic`, or `hybrid`. `terms` splits `pattern` on whitespace and requires

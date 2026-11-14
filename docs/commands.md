@@ -2264,7 +2264,11 @@ phrase inside a longer query requires its words together and in order. `--fts`
 and hybrid's keyword matches rank messages by words the same way; hybrid
 keyword matches report their word count. An `--fts` query made only of
 quoted phrases, or one that uses FTS5 operators after a leading quote, such as
-`'"fix" OR "missing"'`, keeps its FTS5 meaning. Repeatable `--exclude-session <id>` drops matches from
+`'"fix" OR "missing"'`, keeps its FTS5 meaning. On CockroachDB, default search
+matches the entire query as a substring; natural `--fts` and hybrid keyword
+searches require every word or phrase as a substring.
+
+Repeatable `--exclude-session <id>` drops matches from
 those sessions before `--limit`. Hybrid returns keyword matches with a note
 while the embedding index is unavailable. Semantic and hybrid
 results can be scoped with `--scope top|all|subordinate` (default `all`) to include or exclude sidechain and subagent content — see
