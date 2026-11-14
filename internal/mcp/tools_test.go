@@ -2168,6 +2168,7 @@ func TestListRecallPagesWithEvidence(t *testing.T) {
 	var out listRecallOut
 	raw, err := json.Marshal(res.StructuredContent)
 	require.NoError(t, err)
+	assert.NotRegexp(t, `"score(_breakdown)?"\s*:`, string(raw))
 	require.NoError(t, json.Unmarshal(raw, &out))
 	require.Len(t, out.Entries, 1)
 	assert.Equal(t, "archived", out.Entries[0].Status)
