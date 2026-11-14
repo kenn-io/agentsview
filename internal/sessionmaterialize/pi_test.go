@@ -17,6 +17,18 @@ import (
 )
 
 func TestPiDestination(t *testing.T) {
+	t.Run("255 byte checkout component", func(t *testing.T) {
+		if filepath.Separator != '/' {
+			t.Skip("fixture uses a POSIX absolute path")
+		}
+		agent := t.TempDir()
+		t.Setenv("PI_CODING_AGENT_DIR", agent)
+		t.Setenv("PI_CODING_AGENT_SESSION_DIR", "")
+		cwd := "/" + strings.Repeat("a", 251)
+		got, err := piDestination(cwd, "id.jsonl")
+		require.NoError(t, err)
+		assert.Equal(t, filepath.Join(agent, "sessions", "--"+strings.Repeat("a", 251)+"--", "id.jsonl"), got)
+	})
 	t.Run("long checkout", func(t *testing.T) {
 		if filepath.Separator != '/' {
 			t.Skip("fixture uses a POSIX absolute path")

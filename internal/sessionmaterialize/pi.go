@@ -292,7 +292,7 @@ func piDestination(cwd, basename string) (string, error) {
 		}
 		encoded := strings.TrimPrefix(strings.NewReplacer("/", "-", `\`, "-", ":", "-").Replace(cwd), "-")
 		component := "--" + encoded + "--"
-		if len(component) > 200 {
+		if len(component) > 255 {
 			hash := sha256.Sum256([]byte(cwd))
 			component = fmt.Sprintf("--%x--", hash[:16])
 		}
