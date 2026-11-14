@@ -1173,13 +1173,7 @@ func (s *Store) collectContentSubstringPass(
 			var contentPred string
 			if ranked {
 				b := db.NewQueryBuilder(db.DuckDBQueryDialect(), 0)
-				column := "COALESCE(m.dialogue_text, m.content)"
-				if all {
-					contentPred = db.WordFilterSQL(b, column, f, words, true)
-				} else {
-					contentPred = "(" + db.WordCandidateSQL(b, column, words, false) + " AND " +
-						db.WordRegexSQL(b, column, words, false) + ")"
-				}
+				contentPred = db.WordFilterSQL(b, "COALESCE(m.dialogue_text, m.content)", f, words, all)
 				args = append(append(args, b.Args()...), scopeArgs...)
 			} else {
 				contentPred = addSearchArgs("COALESCE(m.dialogue_text, m.content)")
@@ -1293,7 +1287,7 @@ func (s *Store) collectContentSubstringPass(
 				SELECT candidates.*, ` + rank + ` FROM candidates
 			)
 			SELECT session_id, project, agent, location, role, tool_name,
-				ordinal, ts, body, n, tier
+				ordinal, ts, body, n
 			FROM ranked WHERE n >= 1
 			ORDER BY tier, n DESC, sort_ts DESC, session_id ASC, ordinal ASC,
 				src ASC, row_id ASC, call_index ASC, event_index ASC, body ASC
@@ -1301,7 +1295,7 @@ func (s *Store) collectContentSubstringPass(
 	} else {
 		query = `
 		SELECT session_id, project, agent, location, role, tool_name,
-			ordinal, ts, body, 0 AS n, 0 AS tier
+			ordinal, ts, body, 0 AS n
 		FROM (` + strings.Join(branches, " UNION ALL ") + `)
 		ORDER BY sort_ts DESC, session_id ASC, ordinal ASC,
 			src ASC, row_id ASC, call_index ASC, event_index ASC, body ASC
@@ -1595,10 +1589,9 @@ func scanDuckContentRows(rows *sql.Rows, makeSnippet func(string) string) ([]db.
 		var m db.ContentMatch
 		var body string
 		var ts any
-		var tier int
 		if err := rows.Scan(&m.SessionID, &m.Project, &m.Agent,
 			&m.Location, &m.Role, &m.ToolName, &m.Ordinal,
-			&ts, &body, &m.MatchedWords, &tier); err != nil {
+			&ts, &body, &m.MatchedWords); err != nil {
 			return nil, err
 		}
 		m.Timestamp = formatDBTime(ts)

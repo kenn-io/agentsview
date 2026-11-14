@@ -1459,6 +1459,11 @@ func createContentSearchIndexesPG(ctx context.Context, pg interface {
 			return err
 		}
 	}
+	// Natural word candidates without diacritics read non-ASCII dialogue here.
+	body := "COALESCE(dialogue_text, content)"
+	if _, err := pg.ExecContext(ctx, fmt.Sprintf(`CREATE INDEX IF NOT EXISTS idx_messages_dialogue_folded_trgm ON messages USING gin ((%s) %s.gin_trgm_ops) WITH (fastupdate = off) WHERE %s`, db.WordFoldSQL(db.PostgresQueryDialect(), body), quotedExt, pgDialogueNonASCIIPredicate(body))); err != nil {
+		return err
+	}
 	// Existing content indexes may still have fastupdate enabled.
 	_, err = pg.ExecContext(ctx, `ALTER INDEX idx_messages_content_trgm SET (fastupdate = off)`)
 	return err

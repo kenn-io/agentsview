@@ -449,13 +449,7 @@ func (s *Store) collectContentSubstringPass(
 			var contentPred string
 			if ranked {
 				b := db.NewQueryBuilder(db.ClickHouseQueryDialect(), 0)
-				column := "COALESCE(m.dialogue_text, m.content)"
-				if all {
-					contentPred = db.WordFilterSQL(b, column, f, words, true)
-				} else {
-					contentPred = "(" + db.WordCandidateSQL(b, column, words, false) + " AND " +
-						db.WordRegexSQL(b, column, words, false) + ")"
-				}
+				contentPred = db.WordFilterSQL(b, "COALESCE(m.dialogue_text, m.content)", f, words, all)
 				args = append(append(args, b.Args()...), scopeArgs...)
 			} else {
 				contentPred = addSearchArgs("COALESCE(m.dialogue_text, m.content)")
@@ -567,7 +561,7 @@ func (s *Store) collectContentSubstringPass(
 				SELECT candidates.*, ` + rank + ` FROM candidates
 			)
 			SELECT session_id, project, agent, location, role, tool_name,
-				ordinal, ts, body, n, tier
+				ordinal, ts, body, n
 			FROM ranked` + matched + `
 			ORDER BY tier, n DESC, sort_ts DESC, session_id ASC, ordinal ASC,
 				src ASC, row_id ASC, call_index ASC, event_index ASC, body ASC
@@ -575,22 +569,21 @@ func (s *Store) collectContentSubstringPass(
 	} else {
 		query = `
 		SELECT session_id, project, agent, location, role, tool_name,
-			ordinal, ts, body, 0 AS n, 0 AS tier
+			ordinal, ts, body, 0 AS n
 		FROM (` + strings.Join(branches, " UNION ALL ") + `) AS matches
 		ORDER BY sort_ts DESC, session_id ASC, ordinal ASC,
 			src ASC, row_id ASC, call_index ASC, event_index ASC, body ASC
 		LIMIT ? OFFSET ?`
 	}
 	args = append(args, f.Limit+1, f.Cursor)
-	var settings []string
-	if ranked && !all {
-		settings = append(settings, "enable_materialized_cte = 1")
-	}
+	materialize := ranked && !all
 	if f.ExcludeSystem && (slices.Contains(f.Sources, "messages") || slices.Contains(f.Sources, "thinking")) {
-		settings = append(settings, "short_circuit_function_evaluation = 'force_enable'")
-	}
-	if len(settings) != 0 {
-		query += " SETTINGS " + strings.Join(settings, ", ")
+		query += systemPrefixSettings
+		if materialize {
+			query += ", enable_materialized_cte = 1"
+		}
+	} else if materialize {
+		query += " SETTINGS enable_materialized_cte = 1"
 	}
 	rows, err := s.queryContext(ctx, query, args...)
 	if err != nil {
@@ -839,9 +832,8 @@ func scanContentRows(rows *sql.Rows, makeSnippet func(string) string) ([]db.Cont
 		var m db.ContentMatch
 		var body string
 		var ts any
-		var tier int
 		if err := rows.Scan(&m.SessionID, &m.Project, &m.Agent,
-			&m.Location, &m.Role, &m.ToolName, &m.Ordinal, &ts, &body, &m.MatchedWords, &tier); err != nil {
+			&m.Location, &m.Role, &m.ToolName, &m.Ordinal, &ts, &body, &m.MatchedWords); err != nil {
 			return nil, fmt.Errorf("scanning clickhouse content match: %w", err)
 		}
 		m.Timestamp = formatDBTime(ts)

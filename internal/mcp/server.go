@@ -222,7 +222,7 @@ func newServer(opts ServeOptions) *mcp.Server {
 			"Use terms when every literal term must occur within one " +
 			"user/assistant exchange, or fully quoted substring text or regex for exact error messages, identifiers, and code fragments. " +
 			"Use concepts with two to five semantic ideas to keep only sessions with evidence for every idea. " +
-			"The default mode remains substring. On SQLite, a substring search of several words lists exact text first, " +
+			"The default mode remains substring. A substring search of several words lists exact text first, " +
 			"then messages holding every word, then those holding more of the words, and reports matched_words. Scope defaults to all, including child sessions and sidechain messages; " +
 			"top excludes them and subordinate returns only them. Child sessions bypass the one-shot exclusion. " +
 			"The response reports effective_scope and exclusions.children. Set context to include N messages of " +

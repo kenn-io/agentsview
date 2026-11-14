@@ -34,6 +34,20 @@ func SeedWordSearch(t *testing.T, d *db.DB) {
 		}
 		require.NoError(t, d.ReplaceSessionMessages(t.Context(), entry.id, []db.Message{m}))
 	}
+	for _, entry := range []struct{ id, project, text string }{
+		{"accent-exact", "word-accent", "café rounding decision"},
+		{"accent-partial", "word-accent-partial", "café"},
+		{"accent-boundary", "word-accent-boundary", "caféine rounding"},
+		{"accent-phrase", "word-accent-phrase", "café rounding missingword"},
+		{"accent-naive", "word-accent-naive", "naïve design"},
+		{"accent-overlap", "word-accent-overlap", "résumé parsing"},
+		{"accent-unicode-boundary", "word-accent-unicode-boundary", "café漢字"},
+	} {
+		SeedSession(t, d, entry.id, entry.project, func(s *db.Session) { s.UserMessageCount = 2 })
+		require.NoError(t, d.ReplaceSessionMessages(t.Context(), entry.id, []db.Message{{
+			SessionID: entry.id, Role: "assistant", Content: entry.text,
+		}}))
+	}
 	SeedSession(t, d, "underscore", "word-boundary", func(s *db.Session) { s.UserMessageCount = 2 })
 	require.NoError(t, d.ReplaceSessionMessages(t.Context(), "underscore", []db.Message{{SessionID: "underscore", Role: "assistant", Content: "invoice_rounding_decision"}}))
 	SeedSession(t, d, "boundary-near", "word-boundary", func(s *db.Session) { s.UserMessageCount = 2 })
@@ -60,6 +74,31 @@ func AssertWordSearch(t *testing.T, store db.Store) {
 			hits = append(hits, hit{m.SessionID, m.Location, m.MatchedWords})
 		}
 		return hits
+	}
+	for _, tc := range []struct {
+		name, pattern, project string
+		want                   []hit
+	}{
+		{"all words fold accents", "cafe rounding decision", "word-accent", []hit{{"accent-exact", "message", 3}}},
+		{"partial candidates fold accents", "cafe missingword", "word-accent-partial", []hit{{"accent-partial", "message", 1}}},
+		{"natural words fold accents", "naive design", "word-accent-naive", []hit{{"accent-naive", "message", 2}}},
+		{"accent folding keeps word boundaries", "cafe rounding missingword", "word-accent-boundary", []hit{{"accent-boundary", "message", 1}}},
+		{"mixed literal-accent phrase matches", `missingword "café rounding"`, "word-accent-phrase", []hit{{"accent-phrase", "message", 3}}},
+		{"mixed unaccented phrase preserves SQLite matching", `missingword "cafe rounding"`, "word-accent-phrase", nil},
+		{"accent folding avoids ASCII boundary false positives", "sum missingword", "word-accent-overlap", nil},
+		{"accent folding does not count an ASCII interior", "sum parsing missingword", "word-accent-overlap", []hit{{"accent-overlap", "message", 1}}},
+		{"accent folding keeps Unicode boundaries", "café missingword", "word-accent-unicode-boundary", nil},
+	} {
+		for _, mode := range []string{"substring", "fts", "hybrid"} {
+			t.Run(tc.name+"/"+mode, func(t *testing.T) {
+				page, err := store.SearchContent(t.Context(), db.ContentSearchFilter{
+					Pattern: tc.pattern, Mode: mode, Project: tc.project,
+					KeywordOnly: mode == "hybrid",
+				})
+				require.NoError(t, err)
+				assert.Equal(t, tc.want, project(page.Matches))
+			})
+		}
 	}
 	for _, mode := range []string{"substring", "fts", "hybrid"} {
 		t.Run("underscore/"+mode, func(t *testing.T) {

@@ -133,29 +133,61 @@ func (s *Store) fetchHybridKeywordBatch(
 	kf.Mode = "fts"
 	var args []any
 	_, words, ranked := db.RouteContentWords(kf)
-	count := "0"
+	var count string
 	var contentPred string
+	var rankedCandidates, rankedPass string
+	var countArgs []any
 	if ranked {
-		b := db.NewQueryBuilder(db.ClickHouseQueryDialect(), 0)
-		count = db.WordCountSQL(b, "COALESCE(m.dialogue_text, m.content)", words)
-		contentPred = db.WordFilterSQL(b, "COALESCE(m.dialogue_text, m.content)", kf, words, false)
-		args = b.Args()
+		filterBuilder := db.NewQueryBuilder(db.ClickHouseQueryDialect(), 0)
+		column := "COALESCE(m.dialogue_text, m.content)"
+		folded := db.WordFoldSQL(db.ClickHouseQueryDialect(), column)
+		contentPred = db.WordFilterSQL(filterBuilder, column, kf, words, false)
+		args = append(args, filterBuilder.Args()...)
+		countBuilder := db.NewQueryBuilder(db.ClickHouseQueryDialect(), 0)
+		count = db.WordCountSQL(countBuilder, "body", "folded_body", words)
+		countArgs = countBuilder.Args()
+		rankedCandidates = `WITH candidates AS MATERIALIZED (
+			SELECT m.session_id, m.ordinal, ` + column + ` AS body,
+				` + folded + ` AS folded_body,
+				COALESCE(s.ended_at, s.started_at, s.created_at) AS activity
+			FROM messages m
+			JOIN sessions s ON s.id = m.session_id
+			WHERE ` + contentPred + `
+				AND m.role IN ('user', 'assistant')
+				AND ` + embeddableMessagePredicate("m") + `
+				AND m.session_id IN (SELECT id FROM sessions WHERE ` + scopeWhere + `)
+		), ranked AS MATERIALIZED (
+			SELECT candidates.*, ` + count + ` AS n FROM candidates
+		)`
+		rankedPass = " FROM ranked WHERE n >= 1"
 	} else {
 		contentPred = contentSearchPredicate("COALESCE(m.dialogue_text, m.content)", kf, &args)
 	}
 	args = append(args, scopeArgs...)
+	args = append(args, countArgs...)
 	args = append(args, k, offset)
-	rows, err := s.queryContext(ctx, `
-		SELECT m.session_id, m.ordinal, COALESCE(m.dialogue_text, m.content), `+count+` AS n
-		FROM messages m
-		JOIN sessions s ON s.id = m.session_id
-		WHERE `+contentPred+`
-			AND m.role IN ('user', 'assistant')
-			AND `+embeddableMessagePredicate("m")+`
-			AND m.session_id IN (SELECT id FROM sessions WHERE `+scopeWhere+`)
-		ORDER BY n DESC, COALESCE(s.ended_at, s.started_at, s.created_at) DESC NULLS LAST,
-			m.session_id ASC, m.ordinal ASC
-		LIMIT ? OFFSET ?`+systemPrefixSettings, args...)
+	var query, order string
+	if ranked {
+		query = rankedCandidates + `
+			SELECT session_id, ordinal, body, n` + rankedPass
+		order = `ORDER BY n DESC, activity DESC NULLS LAST,
+			session_id ASC, ordinal ASC`
+	} else {
+		query = `SELECT m.session_id, m.ordinal, COALESCE(m.dialogue_text, m.content), 0 AS n
+			FROM messages m
+			JOIN sessions s ON s.id = m.session_id
+			WHERE ` + contentPred + `
+				AND m.role IN ('user', 'assistant')
+				AND ` + embeddableMessagePredicate("m") + `
+				AND m.session_id IN (SELECT id FROM sessions WHERE ` + scopeWhere + `)`
+		order = `ORDER BY n DESC, COALESCE(s.ended_at, s.started_at, s.created_at) DESC NULLS LAST,
+			m.session_id ASC, m.ordinal ASC`
+	}
+	settings := systemPrefixSettings
+	if ranked {
+		settings += ", enable_materialized_cte = 1"
+	}
+	rows, err := s.queryContext(ctx, query+"\n"+order+"\n\t\tLIMIT ? OFFSET ?"+settings, args...)
 	if err != nil {
 		return nil, fmt.Errorf("clickhouse hybrid keyword leg: %w", err)
 	}

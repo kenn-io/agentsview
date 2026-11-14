@@ -759,15 +759,17 @@ func pgWordMatches(
 ) string {
 	column := "COALESCE(m.dialogue_text, m.content)"
 	b := db.NewQueryBuilder(db.PostgresQueryDialect(), pb.n)
-	where := db.WordCandidateSQL(b, column, words, all)
+	rawCandidate := db.WordCandidateSQL(b, column, words, all, false)
+	rawWhere := rawCandidate
 	if f.Mode != "fts" {
-		where += " AND NOT " + b.ContainsPredicate(column, f.Pattern)
+		rawWhere += " AND NOT " + b.ContainsPredicate(column, f.Pattern)
 	}
+	foldedCandidate := db.WordCandidateSQL(b, column, words, all, true)
 	n := strconv.Itoa(len(words.Terms))
 	if !all {
-		n = db.WordCountSQL(b, "body", words)
+		n = db.WordCountSQL(b, "body", "folded_body", words)
 	}
-	regex := db.WordRegexSQL(b, "body", words, all)
+	regex := db.WordRegexSQL(b, "body", "folded_body", words, all)
 	if all {
 		if prefix := db.WordPrefixSQL(b, "body", f, words); prefix != "" {
 			regex = "(" + prefix + " OR " + regex + ")"
@@ -775,11 +777,26 @@ func pgWordMatches(
 	}
 	pb.args = append(pb.args, b.Args()...)
 	pb.n += len(b.Args())
-	return fmt.Sprintf(`word_candidates AS MATERIALIZED (
-			SELECT m.session_id, s.project, s.agent, s.transcript_revision, m.role, m.ordinal,
-				m.timestamp AS ts, %s AS body, COALESCE(s.ended_at, s.started_at, s.created_at) AS sort_ts
+	// Accented rows that miss the raw gate come from the partial folded index.
+	candidates := `SELECT m.session_id, s.project, s.agent, s.transcript_revision, m.role, m.ordinal,
+				m.timestamp AS ts, ` + column + ` AS body, ` + db.WordFoldSQL(db.PostgresQueryDialect(), column) + ` AS folded_body,
+				COALESCE(s.ended_at, s.started_at, s.created_at) AS sort_ts
+			` + from
+	return fmt.Sprintf(`raw_word_candidates AS MATERIALIZED (
 			%s AND %s
+		), accent_word_candidates AS MATERIALIZED (
+			%s AND %s AND %s AND NOT %s
+		), word_candidates AS MATERIALIZED (
+			SELECT * FROM raw_word_candidates
+			UNION ALL
+			SELECT * FROM accent_word_candidates
 		), word_matches AS MATERIALIZED (
 			SELECT word_candidates.*, %s AS n FROM word_candidates WHERE %s
-		)`, column, from, where, n, regex)
+		)`, candidates, rawWhere,
+		candidates, pgDialogueNonASCIIPredicate(column), foldedCandidate,
+		rawCandidate, n, regex)
+}
+
+func pgDialogueNonASCIIPredicate(column string) string {
+	return "octet_length(" + column + ") > char_length(" + column + ")"
 }

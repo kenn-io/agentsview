@@ -10,12 +10,17 @@ import (
 )
 
 // WordCandidateSQL matches rows in column holding the common prefix of every
-// query word's forms, or with all false of any word. The substring tests let
-// PostgreSQL use its trigram index before the whole-word regexes run.
-func WordCandidateSQL(b *QueryBuilder, column string, q ContentWords, all bool) string {
+// query word's forms, or with all false of any word. The LIKE gate selects
+// candidates before the whole-word regexes run. With fold, both sides compare
+// without diacritics; without it, PostgreSQL's trigram index serves the gate.
+func WordCandidateSQL(b *QueryBuilder, column string, q ContentWords, all, fold bool) string {
 	parts := make([]string, len(q.Terms))
 	for i, forms := range q.Terms {
-		parts[i] = b.ContainsPredicate(column, wordPrefix(forms))
+		if fold {
+			parts[i] = wordContainsSQL(b, WordFoldSQL(b.dialect, column), wordPrefix(forms))
+		} else {
+			parts[i] = b.ContainsPredicate(column, wordPrefix(forms))
+		}
 	}
 	op := " OR "
 	if all {
@@ -24,18 +29,26 @@ func WordCandidateSQL(b *QueryBuilder, column string, q ContentWords, all bool) 
 	return "(" + strings.Join(parts, op) + ")"
 }
 
-// WordRegexSQL requires every quoted phrase in column and, when all is true,
-// every query word as a whole word.
-func WordRegexSQL(b *QueryBuilder, column string, q ContentWords, all bool) string {
+// WordRegexSQL requires every quoted phrase in raw and, when all is true,
+// every query word as a whole word. folded is raw as WordFoldSQL renders it,
+// or a column already holding that.
+func WordRegexSQL(b *QueryBuilder, raw, folded string, q ContentWords, all bool) string {
 	parts := []string{"1=1"}
 	if all {
 		for _, forms := range q.Terms {
-			parts = append(parts, b.RegexPredicate(column, wordPattern(b, forms)))
+			parts = append(parts, wordTermSQL(b, raw, folded, forms))
 		}
 	}
 	for _, phrase := range q.Phrases {
-		if pattern := phrasePattern(b, phrase); pattern != "" {
-			parts = append(parts, b.RegexPredicate(column, pattern))
+		words := strings.FieldsFunc(phrase, func(r rune) bool {
+			return !unicode.IsLetter(r) && !unicode.IsNumber(r)
+		})
+		for i := range words {
+			words[i] = regexp.QuoteMeta(words[i])
+		}
+		// As phraseMatch does, only non-letter, non-digit runs may separate them.
+		if len(words) > 0 {
+			parts = append(parts, b.RegexPredicate(raw, boundedPattern(b, true, words...)))
 		}
 	}
 	return "(" + strings.Join(parts, " AND ") + ")"
@@ -58,29 +71,27 @@ func WordPrefixSQL(b *QueryBuilder, column string, f ContentSearchFilter, q Cont
 	return "(" + column + " ILIKE " + prefix + " || '%' AND substring(" + column + " from char_length(" + length + ")+1 for 1) !~ '[[:alnum:]]')"
 }
 
-// WordCountSQL counts the query words column holds as whole words.
-func WordCountSQL(b *QueryBuilder, column string, q ContentWords) string {
+// WordCountSQL counts the query words raw holds as whole words, with folded
+// as in WordRegexSQL.
+func WordCountSQL(b *QueryBuilder, raw, folded string, q ContentWords) string {
 	parts := make([]string, len(q.Terms))
 	for i, forms := range q.Terms {
-		parts[i] = "CASE WHEN " + b.ContainsPredicate(column, wordPrefix(forms)) +
-			" AND " + b.RegexPredicate(column, wordPattern(b, forms)) + " THEN 1 ELSE 0 END"
+		parts[i] = "CASE WHEN " + wordContainsSQL(b, folded, wordPrefix(forms)) +
+			" AND " + wordTermSQL(b, raw, folded, forms) + " THEN 1 ELSE 0 END"
 	}
 	return "(" + strings.Join(parts, " + ") + ")"
 }
 
 // WordFilterSQL matches rows in column holding every query word and phrase,
-// or with all false any word and every phrase. Outside fts mode it also
-// matches the exact text.
+// or with all false any word's prefix and every phrase, leaving the count to
+// the caller. With all, outside fts mode, it also matches the exact text.
 func WordFilterSQL(b *QueryBuilder, column string, f ContentSearchFilter, q ContentWords, all bool) string {
 	exact := ""
-	if f.Mode != "fts" {
+	if all && f.Mode != "fts" {
 		exact = b.ContainsPredicate(column, f.Pattern) + " OR "
 	}
-	match := WordCandidateSQL(b, column, q, all)
-	if !all {
-		match += " AND " + WordCountSQL(b, column, q) + " >= 1"
-	}
-	return "(" + exact + "(" + match + " AND " + WordRegexSQL(b, column, q, all) + "))"
+	return "(" + exact + "(" + WordCandidateSQL(b, column, q, all, true) + " AND " +
+		WordRegexSQL(b, column, WordFoldSQL(b.dialect, column), q, all) + "))"
 }
 
 // WordRankSQL selects n, the query words a row in column holds, and tier,
@@ -89,9 +100,10 @@ func WordRankSQL(b *QueryBuilder, column string, f ContentSearchFilter, q Conten
 	n, tier := strconv.Itoa(len(q.Terms)), "1"
 	if !all && f.Mode != "fts" {
 		// The exact text counts every word. Binds follow the SQL text.
-		n = "CASE WHEN " + b.ContainsPredicate(column, f.Pattern) + " THEN " + n + " ELSE " + WordCountSQL(b, column, q) + " END"
+		n = "CASE WHEN " + b.ContainsPredicate(column, f.Pattern) + " THEN " + n + " ELSE " +
+			WordCountSQL(b, column, WordFoldSQL(b.dialect, column), q) + " END"
 	} else if !all {
-		n = WordCountSQL(b, column, q)
+		n = WordCountSQL(b, column, WordFoldSQL(b.dialect, column), q)
 	}
 	if f.Mode != "fts" {
 		tier = "CASE WHEN " + b.ContainsPredicate(column, f.Pattern) + " THEN 0 ELSE 1 END"
@@ -99,37 +111,76 @@ func WordRankSQL(b *QueryBuilder, column string, f ContentSearchFilter, q Conten
 	return n + " AS n, " + tier + " AS tier"
 }
 
-// wordPattern matches any of forms as a whole word, case-insensitively.
-// PostgreSQL's ~* ignores case; RE2 takes (?i), which ClickHouse's
-// regexPredicate repeats harmlessly. ASCII classes serve ASCII words.
-func wordPattern(b *QueryBuilder, forms []string) string {
-	pattern := compactForms(forms)
-	switch {
-	case b.dialect.name == "postgres":
-		return `(^|[^[:alnum:]])` + pattern + `($|[^[:alnum:]])`
-	case !strings.ContainsFunc(strings.Join(forms, ""), func(r rune) bool { return r > unicode.MaxASCII }):
-		return `(?i)(^|[^[:alnum:]])` + pattern + `($|[^[:alnum:]])`
+// WordFoldSQL removes diacritics from expression for natural word
+// predicates, leaving ASCII text as it is.
+func WordFoldSQL(d QueryDialect, expression string) string {
+	switch d.name {
+	case "postgres":
+		folded := `regexp_replace(normalize(` + expression +
+			`, NFD), E'([A-Za-z])[\\u0300-\\u036F]+', E'\\1', 'g')`
+		return "CASE WHEN octet_length(" + expression + ") = char_length(" + expression +
+			") THEN " + expression + " ELSE " + folded + " END"
+	case "duckdb":
+		return "CASE WHEN strlen(" + expression + ") = length(" + expression +
+			") THEN " + expression + " ELSE strip_accents(" + expression + ") END"
+	case "clickhouse":
+		return "if(length(" + expression + ") = lengthUTF8(" + expression +
+			"), " + expression + ", removeDiacriticsUTF8(" + expression + "))"
 	default:
-		return `(?i)(^|[^\p{L}\p{N}])` + pattern + `($|[^\p{L}\p{N}])`
+		return expression
 	}
 }
 
-// phrasePattern matches phrase's words in order with only non-letter,
-// non-digit runs between them, as phraseMatch does.
-func phrasePattern(b *QueryBuilder, phrase string) string {
-	words := strings.FieldsFunc(phrase, func(r rune) bool {
-		return !unicode.IsLetter(r) && !unicode.IsNumber(r)
-	})
-	if len(words) == 0 {
-		return ""
+// wordFoldPatternSQL binds pattern without diacritics. A placeholder appears
+// once, since DuckDB and ClickHouse bind by position.
+func wordFoldPatternSQL(b *QueryBuilder, pattern string) string {
+	ph := b.Add(pattern)
+	switch b.dialect.name {
+	case "duckdb":
+		return "strip_accents(" + ph + ")"
+	case "clickhouse":
+		return "removeDiacriticsUTF8(" + ph + ")"
+	default:
+		return WordFoldSQL(b.dialect, ph)
 	}
-	for i := range words {
-		words[i] = regexp.QuoteMeta(words[i])
-	}
+}
+
+func wordContainsSQL(b *QueryBuilder, folded, pattern string) string {
+	return folded + " " + b.dialect.caseInsensitiveLike + " " +
+		wordFoldPatternSQL(b, "%"+EscapeLikePattern(pattern)+"%") + " " + b.dialect.caseInsensitiveLikeEsc
+}
+
+// wordTermSQL matches any of forms as a whole word, case-insensitively.
+// PostgreSQL's classes already follow Unicode. RE2's Unicode classes are
+// slow, so other dialects test ASCII rows with ASCII classes and keep
+// Unicode classes for the rest, where folding a diacritic must not turn an
+// adjacent non-Latin letter into a boundary.
+func wordTermSQL(b *QueryBuilder, raw, folded string, forms []string) string {
+	compact := compactForms(forms)
 	if b.dialect.name == "postgres" {
-		return `(^|[^[:alnum:]])` + strings.Join(words, `[^[:alnum:]]+`) + `($|[^[:alnum:]])`
+		return b.dialect.regexPredicate(folded, wordFoldPatternSQL(b, boundedPattern(b, true, compact)))
 	}
-	return `(?i)(^|[^\p{L}\p{N}])` + strings.Join(words, `[^\p{L}\p{N}]+`) + `($|[^\p{L}\p{N}])`
+	asciiPattern := wordFoldPatternSQL(b, boundedPattern(b, false, compact))
+	unicodePattern := wordFoldPatternSQL(b, boundedPattern(b, true, compact))
+	ascii := "strlen(" + raw + ") = length(" + raw + ")"
+	if b.dialect.name == "clickhouse" {
+		ascii = "length(" + raw + ") = lengthUTF8(" + raw + ")"
+	}
+	return "CASE WHEN " + ascii + " THEN " + b.dialect.regexPredicate(raw, asciiPattern) +
+		" ELSE " + b.dialect.regexPredicate(folded, unicodePattern) + " END"
+}
+
+// boundedPattern matches words separated by non-letter, non-digit runs, with
+// a boundary on each side. PostgreSQL's ~* ignores case; RE2 takes (?i),
+// which ClickHouse's regexPredicate repeats harmlessly.
+func boundedPattern(b *QueryBuilder, unicodeClasses bool, words ...string) string {
+	flags, gap := "(?i)", `[^\p{L}\p{N}]`
+	if b.dialect.name == "postgres" {
+		flags, gap = "", "[^[:alnum:]]"
+	} else if !unicodeClasses {
+		gap = "[^[:alnum:]]"
+	}
+	return flags + "(^|" + gap + ")" + strings.Join(words, gap+"+") + "($|" + gap + ")"
 }
 
 // compactForms folds forms to their common prefix and an alternation of

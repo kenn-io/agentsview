@@ -702,6 +702,20 @@ func TestPGContentSearchTrigramIndex(t *testing.T) {
 	).Scan(&fastupdateOff), "query pg_class.reloptions")
 	assert.True(t, fastupdateOff,
 		"idx_messages_content_trgm must have fastupdate=off")
+
+	// Natural word candidates without diacritics read a partial folded index.
+	var indexDef, predicate string
+	require.NoError(t, store.DB().QueryRowContext(ctx,
+		`SELECT pg_get_indexdef(i.indexrelid), pg_get_expr(i.indpred, i.indrelid)
+		   FROM pg_index i
+		   JOIN pg_class c ON c.oid = i.indexrelid
+		   JOIN pg_namespace n ON n.oid = c.relnamespace
+		  WHERE n.nspname = $1 AND c.relname = 'idx_messages_dialogue_folded_trgm'`,
+		contentSearchSchema,
+	).Scan(&indexDef, &predicate), "query folded index definition")
+	assert.Contains(t, strings.ToLower(indexDef), "regexp_replace(normalize(coalesce(dialogue_text, content)")
+	assert.Contains(t, indexDef, "fastupdate=off")
+	assert.Contains(t, strings.ToLower(predicate), "octet_length(coalesce(dialogue_text, content))")
 }
 
 // TestPGContentSearchTrigramIndexUpgrade verifies the upgrade path: a store
