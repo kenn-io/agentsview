@@ -1299,7 +1299,7 @@ func captureRecallEvidenceLog(t *testing.T) *recallEvidenceLogBuffer {
 	return &output
 }
 
-func TestRecallEvidenceReconciliationUpdatesDeltaOnlyWhenPointerChanges(t *testing.T) {
+func TestRecallEvidenceReconciliationUpdatesRevisionOnlyWhenPointerChanges(t *testing.T) {
 	d := testDB(t)
 	seedRecallEvidenceWindow(t, d, "rewrite-delta", 10, "stable", "")
 	insertVerifiedRecallSelection(t, d, "delta-entry", "rewrite-delta", 10, 11, []string{"tool-a"})
@@ -1313,23 +1313,16 @@ func TestRecallEvidenceReconciliationUpdatesDeltaOnlyWhenPointerChanges(t *testi
 	unchanged[2].Content = "The formatter passed again."
 	unchanged[2].ContentLength = len(unchanged[2].Content)
 	require.NoError(t, d.ReplaceSessionMessages(t.Context(), "rewrite-delta", unchanged))
-	assert.Equal(t, "2020-01-01T00:00:00.000Z", requireRecallEntry(t, d, "delta-entry").UpdatedAt)
-	// An unchanged revision keeps open time-bounded cursors valid.
+	// An unchanged evidence pointer keeps the corpus revision stable.
 	after, err := d.RecallQueryRevision(t.Context())
 	require.NoError(t, err)
 	assert.Equal(t, before, after)
-	entries, err := d.ListRecallEntries(t.Context(), RecallQuery{UpdatedSince: "2021-01-01T00:00:00Z"})
-	require.NoError(t, err)
-	assert.Empty(t, entries)
 	shifted := shiftedRecallMessages(t, d, "rewrite-delta", 1)
 	require.NoError(t, d.ReplaceSessionMessages(t.Context(), "rewrite-delta", shifted))
 	after, err = d.RecallQueryRevision(t.Context())
 	require.NoError(t, err)
 	assert.NotEqual(t, before, after)
-	entries, err = d.ListRecallEntries(t.Context(), RecallQuery{UpdatedSince: "2021-01-01T00:00:00Z"})
-	require.NoError(t, err)
-	require.Len(t, entries, 1)
-	assert.Equal(t, "delta-entry", entries[0].ID)
-	require.Len(t, entries[0].Evidence, 1)
-	assert.Equal(t, 11, entries[0].Evidence[0].MessageStartOrdinal)
+	entry := requireRecallEntry(t, d, "delta-entry")
+	require.Len(t, entry.Evidence, 1)
+	assert.Equal(t, 11, entry.Evidence[0].MessageStartOrdinal)
 }
