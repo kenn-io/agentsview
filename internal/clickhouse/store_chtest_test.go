@@ -538,3 +538,28 @@ func TestStorePoolsCapQueryThreads(t *testing.T) {
 	assert.Equal(t, 4, store.pages.Stats().MaxOpenConnections)
 	assert.Equal(t, 12, store.conn.Stats().MaxOpenConnections)
 }
+
+func TestStoreMessageWindowCompactBoundary(t *testing.T) {
+	t.Parallel()
+	store, syncer, local := newPushedStore(t)
+	ctx := t.Context()
+	session, err := local.GetSessionFull(ctx, fixtureAlphaID)
+	require.NoError(t, err)
+	messages, err := local.GetAllMessages(ctx, fixtureAlphaID)
+	require.NoError(t, err)
+	messages = append(messages, db.Message{SessionID: fixtureAlphaID, Ordinal: 2, Role: "assistant", IsSystem: true, IsCompactBoundary: true, Content: "summary"})
+	session.MessageCount = len(messages)
+	_, err = local.WriteSessionBatchAtomic(ctx, []db.SessionBatchWrite{{Session: *session, Messages: messages, DataVersion: 1, ReplaceMessages: true}})
+	require.NoError(t, err)
+	_, err = syncer.Push(ctx, false, nil)
+	require.NoError(t, err)
+	got, err := store.GetMessagesWindow(ctx, fixtureAlphaID, db.MessageWindow{Limit: 10, Asc: true, CompactBoundaryOnly: true})
+	require.NoError(t, err)
+	require.Len(t, got, 1)
+	assert.Equal(t, 2, got[0].Ordinal)
+	anchor := 1
+	got, err = store.GetMessagesWindow(ctx, fixtureAlphaID, db.MessageWindow{Around: &anchor, Before: 1, After: 1, CompactBoundaryOnly: true})
+	require.NoError(t, err)
+	require.Len(t, got, 2)
+	assert.Equal(t, []int{1, 2}, []int{got[0].Ordinal, got[1].Ordinal})
+}

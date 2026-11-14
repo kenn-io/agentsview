@@ -159,6 +159,7 @@ func parseSessionIDs(raw string) ([]string, error) {
 }
 
 type messageListInput struct {
+	CompactBoundary  bool             `query:"compact_boundary" doc:"Only compact boundary messages"`
 	ID               string           `path:"id" required:"true" doc:"Session ID"`
 	Limit            int              `query:"limit" minimum:"0" doc:"Maximum number of messages"`
 	Direction        messageDirection `query:"direction" enum:"asc,desc" doc:"Message ordering direction"`
@@ -400,10 +401,11 @@ func (s *Server) humaGetMessages(
 ) (*jsonOutput[*service.MessageList], error) {
 	limit := clampLimit(in.Limit, db.DefaultMessageLimit, db.MaxMessageLimit)
 	filter := service.MessageFilter{
-		Limit:            limit,
-		Direction:        string(in.Direction),
-		ExpectedRevision: in.ExpectedRevision,
-		EvidenceSource:   in.EvidenceSource,
+		CompactBoundaryOnly: in.CompactBoundary,
+		Limit:               limit,
+		Direction:           string(in.Direction),
+		ExpectedRevision:    in.ExpectedRevision,
+		EvidenceSource:      in.EvidenceSource,
 	}
 	if in.From.IsSet {
 		filter.From = &in.From.Value

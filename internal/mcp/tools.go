@@ -1023,3 +1023,22 @@ func (t *toolset) fileReferences(ctx context.Context, _ *mcp.CallToolRequest, in
 	result, err := service.FileReferences(ctx, t.svc, in.SessionID)
 	return nil, result, err
 }
+
+type compactionSummariesIn struct {
+	SessionID   string `json:"session_id,omitempty" jsonschema:"Session ID."`
+	ActiveSince string `json:"active_since,omitempty" jsonschema:"RFC3339 timestamp."`
+	Cursor      string `json:"cursor,omitempty" jsonschema:"Session pagination cursor."`
+	Limit       int    `json:"limit,omitempty" jsonschema:"Sessions per page, default 20, max 100."`
+}
+
+func (t *toolset) compactionSummaries(ctx context.Context, _ *mcp.CallToolRequest, in compactionSummariesIn) (*mcp.CallToolResult, service.CompactionSummariesResult, error) {
+	if in.SessionID != "" && in.ActiveSince == "" {
+		detail, err := t.resolveSession(ctx, in.SessionID)
+		if err != nil {
+			return nil, service.CompactionSummariesResult{}, err
+		}
+		in.SessionID = detail.Session.ID
+	}
+	out, err := service.CompactionSummaries(ctx, t.svc, service.CompactionSummariesRequest{SessionID: in.SessionID, ActiveSince: in.ActiveSince, Cursor: in.Cursor, Limit: in.Limit})
+	return nil, out, err
+}

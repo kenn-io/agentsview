@@ -39,12 +39,13 @@ func seedDuckWindowMessages(t *testing.T, local *db.DB, sessionID string) {
 	for ordinal, role := range roles {
 		content := "msg"
 		msgs = append(msgs, db.Message{
-			SessionID:     sessionID,
-			Ordinal:       ordinal,
-			Role:          role,
-			Content:       content,
-			ContentLength: len(content),
-			IsSystem:      role == "system",
+			SessionID:         sessionID,
+			Ordinal:           ordinal,
+			Role:              role,
+			Content:           content,
+			ContentLength:     len(content),
+			IsSystem:          role == "system",
+			IsCompactBoundary: ordinal == 3 || ordinal == 8,
 		})
 	}
 	require.NoError(t, local.InsertMessages(t.Context(), msgs),
@@ -270,4 +271,15 @@ func TestDuckGetMessagesWindowReadsOnlyWindowToolRows(t *testing.T) {
 			assert.Equal(t, all[msg.Ordinal].ToolCalls, msg.ToolCalls)
 		}
 	}
+}
+
+func TestDuckGetMessagesWindow_CompactBoundary(t *testing.T) {
+	store := newDuckWindowStore(t, func(local *db.DB) { seedDuckWindowMessages(t, local, "boundary") })
+	msgs, err := store.GetMessagesWindow(t.Context(), "boundary", db.MessageWindow{Limit: 100, Asc: true, CompactBoundaryOnly: true})
+	require.NoError(t, err)
+	assert.Equal(t, []int{3, 8}, duckOrdinalsOf(msgs))
+	anchor := 6
+	msgs, err = store.GetMessagesWindow(t.Context(), "boundary", db.MessageWindow{Around: &anchor, Before: 1, After: 1, CompactBoundaryOnly: true})
+	require.NoError(t, err)
+	assert.Equal(t, []int{3, 6, 8}, duckOrdinalsOf(msgs))
 }

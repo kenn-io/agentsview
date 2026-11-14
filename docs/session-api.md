@@ -380,6 +380,17 @@ agentsview session list --sort health --reverse
 
 ______________________________________________________________________
 
+### `agentsview session compactions`
+
+Read full compaction summaries for one session or sessions active since an RFC3339 timestamp. Use `--limit` and `--cursor` to page sessions; an empty page can include `next_cursor`.
+
+```bash
+agentsview session compactions <id> --json
+agentsview session compactions --active-since 2024-01-01T00:00:00Z --limit 20 --json
+```
+
+The messages API accepts `compact_boundary=true` to select compaction boundaries.
+
 ### `agentsview session messages`
 
 Return a window of messages. Response shape matches

@@ -266,6 +266,9 @@ func MessageWindowSQL(columns, revision string, revisionArgs []any, sessionID st
 		}
 		roleClause = " AND role IN (" + strings.Join(placeholders, ",") + ")"
 	}
+	if w.CompactBoundaryOnly {
+		roleClause += " AND is_compact_boundary = TRUE"
+	}
 	args := append([]any(nil), revisionArgs...)
 	if w.Around != nil {
 		anchor := *w.Around

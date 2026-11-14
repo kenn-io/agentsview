@@ -22450,6 +22450,13 @@ paths:
     get:
       operationId: get-api-v1-sessions-id-messages
       parameters:
+        - description: Only compact boundary messages
+          explode: false
+          in: query
+          name: compact_boundary
+          schema:
+            description: Only compact boundary messages
+            type: boolean
         - description: Session ID
           in: path
           name: id

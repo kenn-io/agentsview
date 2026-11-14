@@ -24133,6 +24133,9 @@ func (g GetAPIV1SessionsQuery) Validate() error {
 }
 
 type GetAPIV1SessionsIDMessagesQuery struct {
+	// CompactBoundary Only compact boundary messages
+	CompactBoundary *bool `json:"compact_boundary,omitempty"`
+
 	// Limit Maximum number of messages
 	Limit *int64 `json:"limit,omitempty" validate:"omitempty,gte=0"`
 

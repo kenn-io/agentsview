@@ -2148,3 +2148,49 @@ func TestSearchContent_HybridKeywordFallbackMetadata(t *testing.T) {
 	assert.Equal(t, "hybrid_keyword", out.EffectiveMode)
 	assert.Equal(t, note, out.Note)
 }
+
+func TestCompactionSummaries(t *testing.T) {
+	ts, d := newTestToolset(t)
+	dbtest.SeedSession(t, d, "compacted", "project")
+	require.NoError(t, d.InsertMessages(t.Context(), []db.Message{
+		{SessionID: "compacted", Ordinal: 0, Role: "user", Content: "hello"},
+		{SessionID: "compacted", Ordinal: 1, Role: "assistant", IsSystem: true, IsCompactBoundary: true, Timestamp: "2024-06-15T10:00:00Z", Content: "full summary"},
+		{SessionID: "compacted", Ordinal: 2, Role: "assistant", IsSystem: true, Content: "injected"},
+	}))
+	_, out, err := ts.compactionSummaries(t.Context(), nil, compactionSummariesIn{SessionID: "compacted"})
+	require.NoError(t, err)
+	require.Len(t, out.Summaries, 1)
+	assert.Equal(t, service.CompactionSummary{SessionID: "compacted", Ordinal: 1, Timestamp: "2024-06-15T10:00:00Z", Content: "full summary"}, out.Summaries[0])
+	for _, roles := range [][]string{nil, {"system", "assistant"}} {
+		_, messages, err := ts.getMessages(t.Context(), nil, getMessagesIn{SessionID: "compacted", Roles: roles})
+		require.NoError(t, err)
+		for _, message := range messages.Messages {
+			assert.NotEqual(t, "full summary", message.Content)
+			assert.NotEqual(t, "injected", message.Content)
+		}
+	}
+
+	_, _, err = ts.compactionSummaries(t.Context(), nil, compactionSummariesIn{})
+	require.Error(t, err)
+	_, _, err = ts.compactionSummaries(t.Context(), nil, compactionSummariesIn{SessionID: "compacted", ActiveSince: "2024-06-01T00:00:00Z"})
+	require.Error(t, err)
+}
+
+func TestCompactionSummariesActiveSince(t *testing.T) {
+	ts, d := newTestToolset(t)
+	for _, s := range []struct{ id, ended string }{{"recent", "2024-06-15T10:00:00Z"}, {"empty", "2024-06-14T10:00:00Z"}, {"old", "2024-01-01T00:00:00Z"}} {
+		dbtest.SeedSession(t, d, s.id, "project", func(session *db.Session) { session.EndedAt = &s.ended })
+	}
+	require.NoError(t, d.InsertMessages(t.Context(), []db.Message{
+		{SessionID: "recent", Ordinal: 0, Role: "assistant", IsSystem: true, IsCompactBoundary: true, Content: "recent summary"},
+		{SessionID: "old", Ordinal: 0, Role: "assistant", IsSystem: true, IsCompactBoundary: true, Content: "old summary"},
+	}))
+	_, first, err := ts.compactionSummaries(t.Context(), nil, compactionSummariesIn{ActiveSince: "2024-06-01T00:00:00Z", Limit: 1})
+	require.NoError(t, err)
+	require.NotEmpty(t, first.NextCursor)
+	_, second, err := ts.compactionSummaries(t.Context(), nil, compactionSummariesIn{ActiveSince: "2024-06-01T00:00:00Z", Limit: 1, Cursor: first.NextCursor})
+	require.NoError(t, err)
+	summaries := append(first.Summaries, second.Summaries...)
+	require.Len(t, summaries, 1)
+	assert.Equal(t, "recent summary", summaries[0].Content)
+}

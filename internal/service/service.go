@@ -495,13 +495,14 @@ func SessionIDsRequireCSVEncoding(ids []string) bool {
 // From/Direction (see directBackend.Messages). Roles filters the result to
 // the given roles (empty = all roles) in either mode.
 type MessageFilter struct {
-	From      *int     `json:"from,omitempty"`
-	Limit     int      `json:"limit,omitempty"`
-	Direction string   `json:"direction,omitempty"` // "asc" (default) or "desc"
-	Around    *int     `json:"around,omitempty"`
-	Before    *int     `json:"before,omitempty"` // default 5 when Around set
-	After     *int     `json:"after,omitempty"`  // default 5 when Around set
-	Roles     []string `json:"roles,omitempty"`
+	CompactBoundaryOnly bool     `json:"compact_boundary,omitempty"`
+	From                *int     `json:"from,omitempty"`
+	Limit               int      `json:"limit,omitempty"`
+	Direction           string   `json:"direction,omitempty"` // "asc" (default) or "desc"
+	Around              *int     `json:"around,omitempty"`
+	Before              *int     `json:"before,omitempty"` // default 5 when Around set
+	After               *int     `json:"after,omitempty"`  // default 5 when Around set
+	Roles               []string `json:"roles,omitempty"`
 	// ExpectedRevision rejects a read when the session no longer has the
 	// transcript revision cited by search or an earlier read.
 	ExpectedRevision string `json:"expected_revision,omitempty"`

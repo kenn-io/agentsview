@@ -432,7 +432,7 @@ func (b *directBackend) Messages(
 		limit = db.MaxMessageLimit
 	}
 
-	w := db.MessageWindow{Limit: limit, Asc: asc, Roles: f.Roles}
+	w := db.MessageWindow{Limit: limit, Asc: asc, Roles: f.Roles, CompactBoundaryOnly: f.CompactBoundaryOnly}
 	if f.Around != nil {
 		w.Around = f.Around
 		w.Before = defaultAroundSpan

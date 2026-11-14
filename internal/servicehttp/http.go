@@ -502,6 +502,9 @@ func (b *httpBackend) Messages(
 	ctx context.Context, id string, f service.MessageFilter,
 ) (*service.MessageList, error) {
 	q := &apiclient.GetAPIV1SessionsIDMessagesQuery{}
+	if f.CompactBoundaryOnly {
+		q.CompactBoundary = new(true)
+	}
 	if f.From != nil {
 		q.From = new(int64(*f.From))
 	}
