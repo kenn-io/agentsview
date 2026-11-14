@@ -840,6 +840,9 @@ func buildSessionFilterWithBuilder(
 	// child sessions are neither excluded nor pulled in merely because their
 	// parent belongs to the requested project. Summary filtering also applies per row.
 	if f.ProjectLabels != nil || f.HasCompactionSummary {
+		if f.ProjectLabels == nil && !f.IncludeChildren && !f.HasAnnotationFilter() {
+			basePreds = append(basePreds, q("relationship_type")+" NOT IN ("+b.dialect.SidebarChildRelationshipsSQL()+")")
+		}
 		filterPreds, oneShotPred := sessionFilterPredicates(f, b, q)
 		allPreds := slices.Concat(basePreds, filterPreds)
 		if oneShotPred != "" {
@@ -928,7 +931,7 @@ func sessionFilterPredicates(
 ) ([]string, string) {
 	var preds []string
 	if f.HasCompactionSummary {
-		pred := "m.is_compact_boundary = " + b.dialect.trueLiteral + " AND m.content <> ''"
+		pred := "m.is_compact_boundary = " + b.dialect.trueLiteral + " AND m.role = 'assistant' AND m.content <> ''"
 		sessionID := q("id")
 		if sessionID == "id" {
 			sessionID = "sessions.id"

@@ -49,7 +49,7 @@ func CompactionSummaries(ctx context.Context, svc SessionService, req Compaction
 	}
 	ids := []string{req.SessionID}
 	if req.ActiveSince != "" {
-		page, err := svc.List(ctx, ListFilter{ActiveSince: req.ActiveSince, Cursor: req.Cursor, Limit: limit, IncludeOneShot: true, OneShotFilterSet: true, IncludeAutomated: true, AutomatedFilterSet: true, HasCompactionSummary: true})
+		page, err := svc.List(ctx, ListFilter{ActiveSince: req.ActiveSince, Cursor: req.Cursor, Limit: limit, IncludeOneShot: true, OneShotFilterSet: true, IncludeAutomated: true, AutomatedFilterSet: true, IncludeChildren: true, HasCompactionSummary: true})
 		if err != nil {
 			return out, err
 		}
@@ -62,7 +62,7 @@ func CompactionSummaries(ctx context.Context, svc SessionService, req Compaction
 	for _, id := range ids {
 		from := 0
 		for {
-			page, err := svc.Messages(ctx, id, MessageFilter{From: &from, Direction: "asc", Limit: db.MaxMessageLimit, CompactBoundaryOnly: true})
+			page, err := svc.Messages(ctx, id, MessageFilter{From: &from, Direction: "asc", Limit: db.MaxMessageLimit, Roles: []string{"assistant"}, CompactBoundaryOnly: true})
 			if err != nil {
 				return out, err
 			}

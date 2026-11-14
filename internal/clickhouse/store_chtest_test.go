@@ -569,7 +569,7 @@ func TestStoreListSessionsHasCompactionSummary(t *testing.T) {
 	require.NoError(t, local.InsertMessages(ctx, []db.Message{{SessionID: s.ID, Ordinal: 0, Role: "assistant", IsCompactBoundary: true, Content: "hello"}}))
 	_, err := syncer.Push(ctx, false, nil)
 	require.NoError(t, err)
-	page, err := store.ListSessions(ctx, db.SessionFilter{ActiveSince: "2028-06-01T00:00:00Z", HasCompactionSummary: true})
+	page, err := store.ListSessions(ctx, db.SessionFilter{ActiveSince: "2028-06-01T00:00:00Z", HasCompactionSummary: true, IncludeChildren: true})
 	require.NoError(t, err)
 	require.Len(t, page.Sessions, 1)
 	assert.Equal(t, "active-child", page.Sessions[0].ID)

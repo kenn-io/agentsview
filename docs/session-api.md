@@ -389,7 +389,7 @@ agentsview session compactions <id> --json
 agentsview session compactions --active-since 2024-01-01T00:00:00Z --limit 20 --json
 ```
 
-The messages API accepts `compact_boundary=true` to select compaction boundaries in linear reads. It cannot be combined with `around`. The sessions API accepts `has_compaction_summary=true` to select sessions with a non-empty compaction boundary.
+The messages API accepts `compact_boundary=true` to select compaction boundaries in linear reads. It cannot be combined with `around`. The sessions API accepts `has_compaction_summary=true` to select sessions with a non-empty assistant compaction boundary.
 
 ### `agentsview session messages`
 

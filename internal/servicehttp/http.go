@@ -331,7 +331,7 @@ func (b *httpBackend) List(
 			return nil, err
 		}
 	}
-	if len(f.Labels) > 0 || f.PR != "" {
+	if !f.HasCompactionSummary && (len(f.Labels) > 0 || f.PR != "") {
 		if err := b.requireSessionAnnotations(ctx, service.SessionAnnotationsAPIVersion, "session labels, parent links, or their filters"); err != nil {
 			return nil, err
 		}

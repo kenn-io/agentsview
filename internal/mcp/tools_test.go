@@ -2274,3 +2274,41 @@ func TestCompactionSummariesWhitespacePage(t *testing.T) {
 	assert.Equal(t, "summary", second.Summaries[0].Content)
 	assert.Empty(t, second.NextCursor)
 }
+
+func TestCompactionSummariesExcludeSystemEvents(t *testing.T) {
+	ts, d := newTestToolset(t)
+	ended := "2024-06-15T00:00:00Z"
+	dbtest.SeedSession(t, d, "event", "project", func(s *db.Session) { s.EndedAt = &ended })
+	dbtest.SeedSession(t, d, "summary", "project", func(s *db.Session) { s.EndedAt = &ended })
+	require.NoError(t, d.InsertMessages(t.Context(), []db.Message{
+		{SessionID: "event", Ordinal: 0, Role: "system", IsSystem: true, IsCompactBoundary: true, Content: "Context condensed"},
+		{SessionID: "summary", Ordinal: 0, Role: "system", IsSystem: true, IsCompactBoundary: true, Content: "Context condensed"},
+		{SessionID: "summary", Ordinal: 1, Role: "assistant", IsSystem: true, IsCompactBoundary: true, Content: "summary text"},
+	}))
+	for _, in := range []compactionSummariesIn{{SessionID: "summary"}, {ActiveSince: "2024-06-01T00:00:00Z"}} {
+		_, out, err := ts.compactionSummaries(t.Context(), nil, in)
+		require.NoError(t, err)
+		require.Len(t, out.Summaries, 1)
+		assert.Equal(t, "summary text", out.Summaries[0].Content)
+	}
+}
+
+func TestCompactionSummarySessionFilterChildVisibility(t *testing.T) {
+	_, d := newTestToolset(t)
+	for _, id := range []string{"parent", "child"} {
+		dbtest.SeedSession(t, d, id, "project", func(s *db.Session) {
+			if id == "child" {
+				s.ParentSessionID = new("parent")
+				s.RelationshipType = "subagent"
+			}
+		})
+		require.NoError(t, d.InsertMessages(t.Context(), []db.Message{{SessionID: id, Ordinal: 0, Role: "assistant", IsCompactBoundary: true, Content: "summary"}}))
+	}
+	page, err := d.ListSessions(t.Context(), db.SessionFilter{HasCompactionSummary: true})
+	require.NoError(t, err)
+	require.Len(t, page.Sessions, 1)
+	assert.Equal(t, "parent", page.Sessions[0].ID)
+	page, err = d.ListSessions(t.Context(), db.SessionFilter{HasCompactionSummary: true, IncludeChildren: true})
+	require.NoError(t, err)
+	require.Len(t, page.Sessions, 2)
+}

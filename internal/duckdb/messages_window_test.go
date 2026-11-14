@@ -292,7 +292,7 @@ func TestDuckListSessionsHasCompactionSummary(t *testing.T) {
 			require.NoError(t, local.InsertMessages(t.Context(), []db.Message{{SessionID: item.id, Ordinal: 0, Role: "assistant", IsCompactBoundary: true, Content: "hello"}}))
 		}
 	})
-	page, err := store.ListSessions(t.Context(), db.SessionFilter{ActiveSince: "2024-06-01T00:00:00Z", HasCompactionSummary: true})
+	page, err := store.ListSessions(t.Context(), db.SessionFilter{ActiveSince: "2024-06-01T00:00:00Z", HasCompactionSummary: true, IncludeChildren: true})
 	require.NoError(t, err)
 	require.Len(t, page.Sessions, 1)
 	assert.Equal(t, "active-child", page.Sessions[0].ID)
