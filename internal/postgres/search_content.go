@@ -138,7 +138,11 @@ func appendExcludeSessionIDsPG(
 func (s *Store) searchContentSubstringPG(
 	ctx context.Context, f db.ContentSearchFilter,
 ) (db.ContentSearchPage, error) {
-	f, words, ranked := db.RouteContentWords(f)
+	var words db.ContentWords
+	var ranked bool
+	if !s.cockroach {
+		f, words, ranked = db.RouteContentWords(f)
+	}
 	scopeWhere, scopeArgs := db.BuildContentScopeSQL(f, s.sessionDialect())
 	scopeWhere, scopeArgs = appendExcludeSessionIDsPG(
 		scopeWhere, scopeArgs, "id", f.ExcludeSessionIDs)
@@ -716,6 +720,7 @@ func (s *Store) searchContentWordsPG(
 	ctx context.Context, f db.ContentSearchFilter, words db.ContentWords,
 	scopeWhere string, branches []string, branchArgs []any,
 ) (db.ContentSearchPage, error) {
+	compact := f.Mode == "fts"
 	var union strings.Builder
 	for _, branch := range branches {
 		fmt.Fprintf(&union, "SELECT exact.*, 0 AS tier, %d AS n FROM (%s) exact UNION ALL ", len(words.Terms), branch)
@@ -726,23 +731,46 @@ func (s *Store) searchContentWordsPG(
 	}
 	from := "FROM messages m JOIN sessions s ON s.id = m.session_id JOIN scoped sc ON sc.id = m.session_id WHERE " +
 		sysPred + " AND " + db.LexicalAnchorScopeSQL(f, "s", "m", db.PostgresQueryDialect())
+	scopedSelect := "SELECT id FROM sessions"
+	if compact {
+		scopedSelect = "SELECT id, COALESCE(ended_at, started_at, created_at) AS sort_ts FROM sessions"
+	}
 	var page db.ContentSearchPage
 	var err error
 	for _, all := range []bool{true, false} {
 		pb := &paramBuilder{n: len(branchArgs), args: append([]any{}, branchArgs...)}
-		matchesFilter := " WHERE n >= 1"
-		if all {
-			matchesFilter = ""
+		var query string
+		if compact {
+			query = fmt.Sprintf(`WITH scoped AS (%s WHERE %s), %s,
+				selected AS MATERIALIZED (
+					SELECT session_id, ordinal, ts, sort_ts, n FROM word_matches
+					WHERE n >= 1 ORDER BY n DESC, sort_ts DESC NULLS LAST, session_id ASC, ordinal ASC
+					LIMIT %s OFFSET %s
+				)
+				SELECT m.session_id, s.project, s.agent, s.transcript_revision, 'message' AS location,
+					m.role, '' AS tool_name, m.ordinal, m.timestamp AS ts,
+					COALESCE(m.dialogue_text, m.content) AS snippet, selected.n
+				FROM selected
+				JOIN messages m ON m.session_id = selected.session_id AND m.ordinal = selected.ordinal
+				JOIN sessions s ON s.id = selected.session_id
+				ORDER BY selected.n DESC, selected.sort_ts DESC NULLS LAST,
+					selected.session_id ASC, selected.ordinal ASC`,
+				scopedSelect, scopeWhere, pgWordMatches(f, words, all, from, pb), pb.add(f.Limit+1), pb.add(f.Cursor))
+		} else {
+			matchesFilter := " WHERE n >= 1"
+			if all {
+				matchesFilter = ""
+			}
+			query = fmt.Sprintf(`WITH scoped AS (%s WHERE %s), %s
+				SELECT session_id, project, agent, transcript_revision, location, role, tool_name, ordinal, ts, snippet, n
+				FROM (%sSELECT session_id, project, agent, transcript_revision, 'message' AS location, role,
+					'' AS tool_name, ordinal, ts, body AS snippet, 0 AS src, 0::bigint AS row_id, sort_ts, 1 AS tier, n
+					FROM word_matches%s
+				) sub ORDER BY tier, n DESC, sort_ts DESC NULLS LAST, session_id ASC, ordinal ASC, src ASC, row_id ASC, snippet ASC
+				LIMIT %s OFFSET %s`,
+				scopedSelect, scopeWhere, pgWordMatches(f, words, all, from, pb), union.String(), matchesFilter,
+				pb.add(f.Limit+1), pb.add(f.Cursor))
 		}
-		query := fmt.Sprintf(`WITH scoped AS (SELECT id FROM sessions WHERE %s), %s
-			SELECT session_id, project, agent, transcript_revision, location, role, tool_name, ordinal, ts, snippet, n
-			FROM (%sSELECT session_id, project, agent, transcript_revision, 'message' AS location, role,
-				'' AS tool_name, ordinal, ts, body AS snippet, 0 AS src, 0::bigint AS row_id, sort_ts, 1 AS tier, n
-				FROM word_matches%s
-			) sub ORDER BY tier, n DESC, sort_ts DESC NULLS LAST, session_id ASC, ordinal ASC, src ASC, row_id ASC, snippet ASC
-			LIMIT %s OFFSET %s`,
-			scopeWhere, pgWordMatches(f, words, all, from, pb, s.cockroach), union.String(), matchesFilter,
-			pb.add(f.Limit+1), pb.add(f.Cursor))
 		page, err = s.scanPGContentMatches(ctx, query, pb.args, f.Limit, f.Cursor, func(body string) string {
 			start, end := db.WordSnippetRange(body, f.Pattern, words)
 			return f.BuildSnippet(body, start, end)
@@ -760,16 +788,14 @@ func (s *Store) searchContentWordsPG(
 // Outside fts mode it leaves the exact text to the caller. The partial pass
 // materializes candidates and computes n once.
 func pgWordMatches(
-	f db.ContentSearchFilter, words db.ContentWords, all bool, from string, pb *paramBuilder, cockroach bool,
+	f db.ContentSearchFilter, words db.ContentWords, all bool, from string, pb *paramBuilder,
 ) string {
 	column := "COALESCE(m.dialogue_text, m.content)"
 	dialect := db.PostgresQueryDialect()
-	if cockroach {
-		dialect = db.CockroachQueryDialect()
-	}
 	b := db.NewQueryBuilder(dialect, pb.n)
 	rawCandidate := db.WordCandidateSQL(b, column, words, all, false)
 	rawWhere := rawCandidate
+	foldedRawExclusion := " AND NOT " + rawCandidate
 	if f.Mode != "fts" {
 		rawWhere += " AND NOT " + b.ContainsPredicate(column, f.Pattern)
 	}
@@ -782,28 +808,40 @@ func pgWordMatches(
 	pb.args = append(pb.args, b.Args()...)
 	pb.n += len(b.Args())
 	// Non-ASCII rows that miss the raw gate use the fixed folded candidate path.
-	candidates := `SELECT m.session_id, s.project, s.agent, s.transcript_revision, m.role, m.ordinal,
-				m.timestamp AS ts, ` + column + ` AS body, ` + db.WordFoldSQL(dialect, column) + ` AS folded_body,
-				COALESCE(s.ended_at, s.started_at, s.created_at) AS sort_ts
+	candidateColumns := `m.session_id, s.project, s.agent, s.transcript_revision, m.role, m.ordinal,
+				m.timestamp AS ts, ` + column + ` AS body,
+				COALESCE(s.ended_at, s.started_at, s.created_at) AS sort_ts`
+	candidates := `SELECT ` + candidateColumns + `
 			` + from
-	materialized := " AS MATERIALIZED"
+	candidateMaterialized := " AS MATERIALIZED"
+	matchesMaterialized := " AS MATERIALIZED"
 	if all {
-		materialized = " AS"
+		candidateMaterialized = " AS"
+		matchesMaterialized = " AS"
 	}
-	return fmt.Sprintf(`raw_word_candidates%s (
+	folded := db.WordFoldSQL(dialect, "word_candidates.body")
+	foldedBody := "CASE WHEN " + db.WordNonASCIISQL(dialect, "word_candidates.body") +
+		" THEN " + folded + " ELSE word_candidates.body END"
+	wordMatchColumns := `word_candidates.session_id, word_candidates.project, word_candidates.agent,
+				word_candidates.transcript_revision, word_candidates.role, word_candidates.ordinal,
+				word_candidates.ts, word_candidates.body, word_candidates.sort_ts`
+	wordMatchFrom := `FROM (
+				SELECT word_candidates.*, ` + foldedBody + ` AS folded_body FROM word_candidates
+			) word_candidates`
+	return fmt.Sprintf(`raw_word_candidates AS (
 			%s AND %s
-		), folded_word_candidates%s (
-			%s AND %s AND %s AND NOT %s
+		), folded_word_candidates AS (
+			%s AND %s AND %s%s
 		), word_candidates%s (
 			SELECT * FROM raw_word_candidates
 			UNION ALL
 			SELECT * FROM folded_word_candidates
 		), word_matches%s (
-			SELECT word_candidates.*, %s AS n FROM word_candidates WHERE %s
-		)`, materialized, candidates, rawWhere,
-		materialized, candidates, db.WordNonASCIISQL(dialect, column), foldedCandidate,
-		rawCandidate,
-		materialized,
-		materialized,
-		n, regex)
+			SELECT %s, %s AS n
+			%s WHERE %s
+		)`, candidates, rawWhere, candidates, db.WordNonASCIISQL(dialect, column), foldedCandidate,
+		foldedRawExclusion,
+		candidateMaterialized,
+		matchesMaterialized,
+		wordMatchColumns, n, wordMatchFrom, regex)
 }

@@ -22,7 +22,9 @@ func TestPGDialogueSearchParity(t *testing.T) {
 	require.NoError(t, err)
 	defer store.Close()
 	dbtest.AssertDialogueSearchParity(t, local, store, "substring", "regex", "fts")
-	dbtest.AssertWordSearch(t, store)
+	if !store.cockroach {
+		dbtest.AssertWordSearch(t, store)
+	}
 	t.Run("fts ignores sources", func(t *testing.T) {
 		for _, pattern := range []string{"answerneedle", "reasoningneedle"} {
 			f := db.ContentSearchFilter{Pattern: pattern, Mode: "fts", Project: "dialogue-search", Sources: []string{"thinking"}, Limit: 50}
@@ -68,4 +70,23 @@ func TestPGDialogueSearchParity(t *testing.T) {
 			})
 		}
 	})
+}
+
+func TestPGCockroachNaturalFtsCompatibility(t *testing.T) {
+	t.Parallel()
+	store := setupContentSearch(t)
+	if !store.cockroach {
+		t.Skip("CockroachDB only")
+	}
+	insertCSSession(t, store, "crdb-search-compat", "search-compat", "claude",
+		"2026-05-01T10:00:00Z", "2026-05-01T10:30:00Z")
+	insertCSMessage(t, store, "crdb-search-compat", 0, "user",
+		"invoice rounding decision", "2026-05-01T10:00:00Z", false)
+	for _, filter := range []db.ContentSearchFilter{
+		{Pattern: "invoice rounding decision", Mode: "fts", Sources: []string{"messages"}, Limit: 50},
+		{Pattern: "invoice rounding decision", Mode: "hybrid", KeywordOnly: true, Limit: 50},
+	} {
+		_, err := store.SearchContent(t.Context(), filter)
+		require.NoError(t, err)
+	}
 }

@@ -277,14 +277,6 @@ func PostgresQueryDialect() QueryDialect {
 	}
 }
 
-// CockroachQueryDialect uses PostgreSQL's query operators with CockroachDB's
-// RE2 Unicode character classes for whole-word boundaries.
-func CockroachQueryDialect() QueryDialect {
-	dialect := PostgresQueryDialect()
-	dialect.name = "cockroach"
-	return dialect
-}
-
 // ClickHouseQueryDialect returns the ClickHouse SQL fragments used by the
 // read-only ClickHouse mirror store. It does not couple to
 // internal/clickhouse. ClickHouse differences from the row stores: recursive

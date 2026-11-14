@@ -27,7 +27,7 @@ const unicode61FoldFrom = "ABCDEFGHIJKLMNOPQR" +
 	"\u1e71\u1e72\u1e73\u1e74\u1e75\u1e76\u1e77\u1e7c\u1e7d\u1e7e\u1e7f\u1e80\u1e81\u1e82\u1e83\u1e84\u1e85\u1e86" +
 	"\u1e87\u1e88\u1e89\u1e8a\u1e8b\u1e8c\u1e8d\u1e8e\u1e8f\u1e90\u1e91\u1e92\u1e93\u1e94\u1e95\u1e96\u1e97\u1e98" +
 	"\u1e99\u1e9b\u1ea0\u1ea1\u1ea2\u1ea3\u1eb8\u1eb9\u1eba\u1ebb\u1ebc\u1ebd\u1ec8\u1ec9\u1eca\u1ecb\u1ecc\u1ecd" +
-	"\u1ece\u1ecf\u1ee4\u1ee5\u1ee6\u1ee7\u1ef2\u1ef3\u1ef4\u1ef5\u1ef6\u1ef7\u1ef8\u1ef9\u212a\u212b\u0300\u0301" +
+	"\u1ece\u1ecf\u1ee4\u1ee5\u1ee6\u1ee7\u1ef2\u1ef3\u1ef4\u1ef5\u1ef6\u1ef7\u1ef8\u1ef9\u212a\u212b\u03c2\u00b5\u03d0\u01c5\u0300\u0301" +
 	"\u0302\u0303\u0304\u0306\u0307\u0308\u0309\u030a\u030b\u030c\u030f\u0311\u031b\u0323\u0324\u0325\u0326\u0327" +
 	"\u0328\u032d\u032e\u0330\u0331"
 
@@ -54,7 +54,7 @@ const unicode61FoldTo = "abcdefghijklmnopqr" +
 	"tuuuuuuvvvvwwwwwww" +
 	"wwwxxxxyyzzzzzzhtw" +
 	"ysaaaaeeeeeeiiiioo" +
-	"oouuuuyyyyyyyyka"
+	"oouuuuyyyyyyyyka\u03c3\u03bc\u03b2\u01c6"
 
 var unicode61FoldMap = func() map[rune]rune {
 	from, to := []rune(unicode61FoldFrom), []rune(unicode61FoldTo)
@@ -63,7 +63,7 @@ var unicode61FoldMap = func() map[rune]rune {
 		if i < len(to) {
 			fold[r] = to[i]
 		} else {
-			fold[r] = 0
+			fold[r] = -1
 		}
 	}
 	return fold

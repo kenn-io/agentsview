@@ -51,6 +51,9 @@ func (s *Store) searchContentHybrid(
 		}
 	}
 	k := max(f.Limit*4, db.SemanticOverfetchMin)
+	if f.KeywordOnly && (f.Scope == "" || f.Scope == "all") {
+		k = f.Limit
+	}
 	var vecLeg hybridLeg
 	var err error
 	if searcher != nil {
@@ -141,6 +144,8 @@ func (s *Store) fetchHybridKeywordBatch(
 		filterBuilder := db.NewQueryBuilder(db.ClickHouseQueryDialect(), 0)
 		column := "COALESCE(m.dialogue_text, m.content)"
 		folded := db.WordFoldSQL(db.ClickHouseQueryDialect(), column)
+		foldedBody := "if(" + db.WordNonASCIISQL(db.ClickHouseQueryDialect(), column) +
+			", " + folded + ", " + column + ")"
 		contentPred = db.WordFilterSQL(filterBuilder, column, kf, words, false)
 		args = append(args, filterBuilder.Args()...)
 		countBuilder := db.NewQueryBuilder(db.ClickHouseQueryDialect(), 0)
@@ -148,7 +153,7 @@ func (s *Store) fetchHybridKeywordBatch(
 		countArgs = countBuilder.Args()
 		rankedCandidates = `WITH candidates AS MATERIALIZED (
 			SELECT m.session_id, m.ordinal, ` + column + ` AS body,
-				` + folded + ` AS folded_body,
+				` + foldedBody + ` AS folded_body,
 				COALESCE(s.ended_at, s.started_at, s.created_at) AS activity
 			FROM messages m
 			JOIN sessions s ON s.id = m.session_id

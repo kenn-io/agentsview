@@ -64,10 +64,21 @@ func WordRegexSQL(b *QueryBuilder, raw, folded string, q ContentWords, all bool)
 func WordCountSQL(b *QueryBuilder, raw, folded string, q ContentWords) string {
 	parts := make([]string, len(q.Terms))
 	for i, forms := range q.Terms {
-		parts[i] = "CASE WHEN " + wordContainsSQL(b, folded, wordPrefix(forms), true, true) +
+		parts[i] = "CASE WHEN " + wordCountCandidateSQL(b, raw, folded, forms) +
 			" AND " + wordTermSQL(b, raw, folded, forms) + " THEN 1 ELSE 0 END"
 	}
 	return "(" + strings.Join(parts, " + ") + ")"
+}
+
+func wordCountCandidateSQL(b *QueryBuilder, raw, folded string, forms []string) string {
+	prefix := wordPrefix(forms)
+	foldedCandidate := wordContainsSQL(b, folded, prefix, true, true)
+	rawCandidate := wordContainsSQL(b, raw, prefix, false, false)
+	foldedPrefix := foldUnicode61(prefix)
+	if foldedPrefix != prefix {
+		rawCandidate = "(" + rawCandidate + " OR " + wordContainsSQL(b, raw, foldedPrefix, false, false) + ")"
+	}
+	return "CASE WHEN " + WordNonASCIISQL(b.dialect, raw) + " THEN " + foldedCandidate + " ELSE " + rawCandidate + " END"
 }
 
 // WordFilterSQL matches rows in column holding every query word and phrase,
@@ -79,10 +90,9 @@ func WordFilterSQL(b *QueryBuilder, column string, f ContentSearchFilter, q Cont
 		exact = b.ContainsPredicate(column, f.Pattern) + " OR "
 	}
 	raw := WordCandidateSQL(b, column, q, all, false)
-	rawExclude := WordCandidateSQL(b, column, q, all, false)
 	folded := WordCandidateSQL(b, column, q, all, true)
-	candidate := "(" + raw + " OR (" + WordNonASCIISQL(b.dialect, column) +
-		" AND NOT " + rawExclude + " AND " + folded + "))"
+	candidate := "(" + raw + " OR (CASE WHEN " + WordNonASCIISQL(b.dialect, column) +
+		" THEN " + folded + " ELSE FALSE END))"
 	return "(" + exact + "(" + candidate + " AND " +
 		WordRegexSQL(b, column, WordFoldSQL(b.dialect, column), q, all) + "))"
 }
@@ -109,9 +119,7 @@ func WordFoldSQL(d QueryDialect, expression string) string {
 	from := "'" + unicode61FoldFrom + "'"
 	to := "'" + unicode61FoldTo + "'"
 	switch d.name {
-	case "postgres", "cockroach":
-		return "translate(" + expression + ", " + from + ", " + to + ")"
-	case "duckdb":
+	case "postgres", "duckdb":
 		return "translate(" + expression + ", " + from + ", " + to + ")"
 	case "clickhouse":
 		return "translateUTF8(" + expression + ", " + from + ", " + to + ")"
@@ -123,7 +131,7 @@ func WordFoldSQL(d QueryDialect, expression string) string {
 // WordNonASCIISQL identifies rows that may need the Unicode61 branch.
 func WordNonASCIISQL(d QueryDialect, expression string) string {
 	switch d.name {
-	case "postgres", "cockroach":
+	case "postgres":
 		return "octet_length(" + expression + ") > char_length(" + expression + ")"
 	case "duckdb":
 		return "strlen(" + expression + ") > length(" + expression + ")"
@@ -161,7 +169,7 @@ func wordTermSQL(b *QueryBuilder, raw, folded string, forms []string) string {
 	asciiPattern := b.Add(boundedPattern(b, false, compact))
 	unicodePattern := b.Add(boundedPattern(b, true, compact))
 	ascii := "NOT " + WordNonASCIISQL(b.dialect, raw)
-	return "CASE WHEN " + ascii + " THEN " + b.dialect.regexPredicate(folded, asciiPattern) +
+	return "CASE WHEN " + ascii + " THEN " + b.dialect.regexPredicate(raw, asciiPattern) +
 		" ELSE " + b.dialect.regexPredicate(folded, unicodePattern) + " END"
 }
 
@@ -169,10 +177,11 @@ func wordTermSQL(b *QueryBuilder, raw, folded string, forms []string) string {
 // a boundary on each side. PostgreSQL's ~* ignores case; RE2 takes (?i),
 // which ClickHouse's regexPredicate repeats harmlessly.
 func boundedPattern(b *QueryBuilder, unicodeClasses bool, words ...string) string {
-	flags, gap := "(?i)", `[^\p{L}\p{N}]`
 	if b.dialect.name == "postgres" {
-		flags, gap = "", "[^[:alnum:]]"
-	} else if !unicodeClasses {
+		return "(^|_|\\m)" + strings.Join(words, "[^[:alnum:]]+") + "($|_|\\M)"
+	}
+	flags, gap := "(?i)", `[^\p{L}\p{N}]`
+	if !unicodeClasses {
 		gap = "[^[:alnum:]]"
 	}
 	return flags + "(^|" + gap + ")" + strings.Join(words, gap+"+") + "($|" + gap + ")"

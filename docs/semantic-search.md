@@ -800,10 +800,7 @@ agentsview session search "flaky test" --hybrid --project myapp
   matches both surface. When search by meaning is unavailable, CLI and MCP
   return the keyword matches with `effective_mode: hybrid_keyword` and a note
   beside `coverage`. The note gives the readiness reason (`not set up` or
-  indexing progress) and explains that keyword terms must appear. When keyword
-  results are empty or few, try short substring queries with key terms or
-  synonyms, retaining scope in MCP and HTTP requests and other supported
-  filters.
+  indexing progress) and explains that only keyword matches were returned.
 - Both modes are restricted to the `messages` source — the same restriction
   `--fts` already has — since only user/assistant message content is embedded
   (never raw tool_input/tool_result rows or system messages). Passing `--in`
@@ -1203,6 +1200,8 @@ no ClickHouse counterpart yet.
 
 ## Limitations
 
+- **Porter stemming is SQLite-only.** SQLite's FTS5 matches `relational` to
+  `relate`; PostgreSQL, DuckDB, and ClickHouse don't stem these terms.
 - **Metadata filters post-filter the vector leg.** `--semantic`/`--hybrid`
   over-fetch candidates from the vector index (4x the requested limit, or a
   fixed minimum if that's larger), then drop hits whose session fails

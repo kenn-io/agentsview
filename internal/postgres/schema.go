@@ -1434,7 +1434,6 @@ func createPartialIndexesPG(ctx context.Context, db pgSessionExecer) error {
 // substring searches. Callers decide whether unavailable pg_trgm is fatal.
 // The opclass is qualified because the extension can live outside search_path.
 const (
-	legacyDialogueFoldedIndexPG    = "idx_messages_dialogue_folded_trgm"
 	dialogueFoldedUnicode61IndexPG = "idx_messages_dialogue_folded_unicode61_v1_trgm"
 )
 
@@ -1461,18 +1460,6 @@ func createContentSearchIndexesPG(ctx context.Context, pg interface {
 		{"idx_messages_thinking_trgm", "thinking_text"},
 	} {
 		if _, err := pg.ExecContext(ctx, fmt.Sprintf(`CREATE INDEX IF NOT EXISTS %s ON messages USING gin (%s %s.gin_trgm_ops) WITH (fastupdate = off)`, index.name, index.expression, quotedExt)); err != nil {
-			return err
-		}
-	}
-	var hasLegacyFoldedIndex bool
-	if err := pg.QueryRowContext(ctx, `SELECT EXISTS (
-		SELECT 1 FROM pg_indexes
-		WHERE schemaname = current_schema() AND indexname = $1
-	)`, legacyDialogueFoldedIndexPG).Scan(&hasLegacyFoldedIndex); err != nil {
-		return err
-	}
-	if hasLegacyFoldedIndex {
-		if _, err := pg.ExecContext(ctx, `DROP INDEX `+legacyDialogueFoldedIndexPG); err != nil {
 			return err
 		}
 	}

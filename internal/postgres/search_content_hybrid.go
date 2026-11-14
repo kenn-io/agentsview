@@ -159,24 +159,35 @@ func (s *Store) fetchHybridKeywordBatchPG(
 
 	kf := f
 	kf.Mode = "fts"
-	if _, words, ok := db.RouteContentWords(kf); ok {
-		from := `FROM messages m JOIN sessions s ON s.id = m.session_id
+	kf.ExcludeSystem = true
+	if !s.cockroach {
+		if _, words, ok := db.RouteContentWords(kf); ok {
+			from := `FROM messages m JOIN sessions s ON s.id = m.session_id JOIN scoped sc ON sc.id = m.session_id
 			WHERE m.role IN ('user', 'assistant') AND m.is_system = FALSE
-			  AND ` + db.PostgresSystemPrefixSQL("m.content", "m.role") + `
-			  AND m.session_id IN (SELECT id FROM sessions WHERE ` + scopeWhere + `)`
-		var hits []pgHybridDisplay
-		var err error
-		for _, all := range []bool{true, false} {
-			pb := &paramBuilder{n: len(scopeArgs), args: append([]any{}, scopeArgs...)}
-			query := "WITH " + pgWordMatches(kf, words, all, from, pb, s.cockroach) + `
-				SELECT session_id, ordinal, body, n FROM word_matches WHERE n >= 1
-				ORDER BY n DESC, sort_ts DESC NULLS LAST, session_id ASC, ordinal ASC
-				LIMIT ` + pb.add(k) + " OFFSET " + pb.add(offset)
-			if hits, err = s.scanHybridKeywordPG(ctx, f.Pattern, words, query, pb.args); err != nil || len(hits) == k {
-				break
+			  AND ` + db.PostgresSystemPrefixSQL("m.content", "m.role")
+			var hits []pgHybridDisplay
+			var err error
+			for _, all := range []bool{true, false} {
+				pb := &paramBuilder{n: len(scopeArgs), args: append([]any{}, scopeArgs...)}
+				matches := pgWordMatches(kf, words, all, from, pb)
+				query := fmt.Sprintf(`WITH scoped AS (
+					SELECT id, COALESCE(ended_at, started_at, created_at) AS sort_ts FROM sessions WHERE %s
+				), %s,
+				selected AS MATERIALIZED (
+					SELECT session_id, ordinal, ts, sort_ts, n FROM word_matches WHERE n >= 1
+					ORDER BY n DESC, sort_ts DESC NULLS LAST, session_id ASC, ordinal ASC
+					LIMIT %s OFFSET %s
+				)
+				SELECT selected.session_id, selected.ordinal, COALESCE(m.dialogue_text, m.content), selected.n
+				FROM selected JOIN messages m ON m.session_id = selected.session_id AND m.ordinal = selected.ordinal
+				ORDER BY selected.n DESC, selected.sort_ts DESC NULLS LAST, selected.session_id ASC, selected.ordinal ASC`,
+					scopeWhere, matches, pb.add(k), pb.add(offset))
+				if hits, err = s.scanHybridKeywordPG(ctx, f.Pattern, words, query, pb.args); err != nil || len(hits) == k {
+					break
+				}
 			}
+			return hits, err
 		}
-		return hits, err
 	}
 	contentPred, err := pgContentSearchPredicate("COALESCE(m.dialogue_text, m.content)", kf, escapeLike(f.Pattern), pb)
 	if err != nil {

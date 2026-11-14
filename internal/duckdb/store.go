@@ -1042,9 +1042,7 @@ func (s *Store) SearchContent(ctx context.Context, f db.ContentSearchFilter) (db
 			&db.SearchInputError{Msg: fmt.Sprintf("search: invalid mode %q", f.Mode)}
 	}
 	limit := f.Limit
-	if f.KeywordOnly {
-		f.Limit = max(limit*4, db.SemanticOverfetchMin)
-	}
+	// Keyword-only fusion uses message keys, so it needs no semantic overfetch.
 	matches, err := s.collectContentMatches(ctx, f)
 	if err != nil {
 		return db.ContentSearchPage{}, err
@@ -1134,6 +1132,9 @@ func (s *Store) collectContentSubstringMatches(
 ) ([]db.ContentMatch, error) {
 	f, words, ranked := db.RouteContentWords(f)
 	if ranked {
+		if f.KeywordOnly {
+			return s.collectContentSubstringPass(ctx, f, words, true, false)
+		}
 		matches, err := s.collectContentSubstringPass(ctx, f, words, true, true)
 		if err != nil || len(matches) > f.Limit {
 			return matches, err

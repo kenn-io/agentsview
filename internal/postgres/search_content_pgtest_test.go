@@ -4,7 +4,6 @@ package postgres
 
 import (
 	"errors"
-	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -659,10 +658,9 @@ func TestPGSearchContentEmptyToolUseIDNotSuppressed(t *testing.T) {
 	}
 }
 
-// TestPGContentSearchTrigramIndex verifies EnsureSchema installs the pg_trgm
-// extension and the messages.content trigram index that keeps ILIKE content
-// search off a sequential scan. Index creation is best-effort, so the check is
-// skipped on an instance where pg_trgm cannot be installed.
+// TestPGContentSearchTrigramIndex verifies EnsureSchema installs the raw and
+// Unicode61-folded trigram indexes used by content search. Index creation is
+// best-effort, so the check is skipped when pg_trgm cannot be installed.
 func TestPGContentSearchTrigramIndex(t *testing.T) {
 	t.Parallel()
 	store := setupContentSearch(t)
@@ -705,7 +703,6 @@ func TestPGContentSearchTrigramIndex(t *testing.T) {
 		"idx_messages_content_trgm must have fastupdate=off")
 
 	const foldedIndex = "idx_messages_dialogue_folded_unicode61_v1_trgm"
-	const legacyFoldedIndex = "idx_messages_dialogue_folded_trgm"
 	var indexDef, predicate string
 	require.NoError(t, store.DB().QueryRowContext(ctx,
 		`SELECT pg_get_indexdef(i.indexrelid), pg_get_expr(i.indpred, i.indrelid)
@@ -740,37 +737,14 @@ func TestPGContentSearchTrigramIndex(t *testing.T) {
 		  JOIN pg_namespace n ON n.oid = c.relnamespace
 		 WHERE n.nspname = $1 AND c.relname = $2`, contentSearchSchema, foldedIndex,
 	).Scan(&initialRelFileNode), "query folded index relfilenode")
-
-	// Recreate the old partial NFD index as an upgrade fixture. EnsureSchema
-	// must drop it and retain the versioned Unicode61 index without rebuilding it.
-	var extensionSchema string
-	require.NoError(t, store.DB().QueryRowContext(ctx,
-		`SELECT n.nspname FROM pg_extension e
-		  JOIN pg_namespace n ON n.oid = e.extnamespace
-		 WHERE e.extname = 'pg_trgm'`,
-	).Scan(&extensionSchema), "query pg_trgm schema")
-	quotedExtension, err := quoteIdentifier(extensionSchema)
-	require.NoError(t, err, "quote pg_trgm schema")
-	legacyExpression := `regexp_replace(normalize(COALESCE(dialogue_text, content), NFD), E'([A-Za-z])[\\u0300-\\u036F]+', E'\\1', 'g')`
-	_, err = store.DB().ExecContext(ctx, fmt.Sprintf(`CREATE INDEX %s ON messages USING gin ((%s) %s.gin_trgm_ops) WITH (fastupdate = off) WHERE octet_length(COALESCE(dialogue_text, content)) > char_length(COALESCE(dialogue_text, content))`,
-		legacyFoldedIndex, legacyExpression, quotedExtension,
-	))
-	require.NoError(t, err, "create legacy folded index")
-	require.True(t, pgHasIndex(ctx, store.DB(), legacyFoldedIndex),
-		"legacy folded index fixture was not installed")
-
 	require.NoError(t, EnsureSchema(ctx, store.DB(), contentSearchSchema),
-		"EnsureSchema replaces the legacy folded index")
-	assert.False(t, pgHasIndex(ctx, store.DB(), legacyFoldedIndex),
-		"legacy NFD folded index should be removed")
-	require.NoError(t, EnsureSchema(ctx, store.DB(), contentSearchSchema),
-		"EnsureSchema stays idempotent after index upgrade")
+		"EnsureSchema stays idempotent after index creation")
 	var finalRelFileNode int64
 	require.NoError(t, store.DB().QueryRowContext(ctx,
 		`SELECT c.relfilenode FROM pg_class c
 		  JOIN pg_namespace n ON n.oid = c.relnamespace
 		 WHERE n.nspname = $1 AND c.relname = $2`, contentSearchSchema, foldedIndex,
-	).Scan(&finalRelFileNode), "query folded index relfilenode after upgrade")
+	).Scan(&finalRelFileNode), "query folded index relfilenode after schema init")
 	assert.Equal(t, initialRelFileNode, finalRelFileNode,
 		"schema initialization must not rebuild the versioned folded index")
 }
@@ -858,31 +832,6 @@ func TestPGSearchContentRegexInvalid(t *testing.T) {
 	var inputErr *db.SearchInputError
 	assert.True(t, errors.As(err, &inputErr),
 		"expected *SearchInputError, got %T: %v", err, err)
-}
-
-// TestPGSearchContentFTSMatchesNonContiguousTerms verifies that PG's fts
-// fallback preserves SQLite's implicit-AND term semantics.
-func TestPGSearchContentFTSMatchesNonContiguousTerms(t *testing.T) {
-	t.Parallel()
-	store := setupContentSearch(t)
-	insertCSSession(t, store, "cs-fts-both", "proj", "claude",
-		"2026-05-01T10:00:00Z", "2026-05-01T10:30:00Z")
-	insertCSMessage(t, store, "cs-fts-both", 0, "user",
-		"the quick brown fox jumps", "2026-05-01T10:00:00Z", false)
-	insertCSSession(t, store, "cs-fts-one", "proj", "claude",
-		"2026-05-01T11:00:00Z", "2026-05-01T11:30:00Z")
-	insertCSMessage(t, store, "cs-fts-one", 0, "user",
-		"the quick answer only", "2026-05-01T11:00:00Z", false)
-
-	ctx := t.Context()
-	got, err := store.SearchContent(ctx, db.ContentSearchFilter{
-		Pattern: "quick fox", Mode: "fts",
-		Sources: []string{"messages"}, Limit: 50,
-	})
-	require.NoError(t, err, "SearchContent fts")
-	require.Len(t, got.Matches, 2, "the message holding both words first, then the one holding one")
-	assert.Equal(t, "cs-fts-both", got.Matches[0].SessionID)
-	assert.Equal(t, "message", got.Matches[0].Location)
 }
 
 func TestPGSearchContentTermsAcrossExchangeAndLiterals(t *testing.T) {

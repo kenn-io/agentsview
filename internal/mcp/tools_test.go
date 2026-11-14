@@ -2139,7 +2139,7 @@ func TestSearchContent_LexicalChildScope(t *testing.T) {
 }
 
 func TestSearchContent_HybridKeywordFallbackMetadata(t *testing.T) {
-	const note = "Search by meaning is unavailable: index is building: 40% complete. Returned hybrid keyword matches only. Query words must appear. If matches are empty or few, try short substring queries with key terms or synonyms."
+	const note = "Search by meaning is unavailable: index is building: 40% complete. Returned hybrid keyword matches only."
 	fake := &fakeContentSearchService{result: &service.ContentSearchResult{EffectiveMode: "hybrid_keyword", Note: note}}
 	ts := &toolset{svc: fake}
 	_, out, err := ts.searchContent(t.Context(), nil, searchContentIn{Pattern: "needle", Mode: "hybrid", IncludeActive: true})

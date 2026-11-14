@@ -175,22 +175,13 @@ func TestRenderClaudeSearchAgentContract(t *testing.T) {
 	assert.NotContains(t, agent, "Copyright (c) 2025 Jesse Vincent")
 }
 
-// Local SQLite search already ranks messages holding some of the query words,
-// so only skills aimed at a remote daemon keep the shorter substring retry.
-func TestRenderSubstringRetryOnlyForRemote(t *testing.T) {
-	const retry = "try short `mode: substring` queries"
-	for _, tc := range []struct {
-		remote Remote
-		want   bool
-	}{
-		{Remote{}, false},
-		{Remote{Server: "https://example.invalid"}, true},
-	} {
-		rendered, err := RenderPackage(HarnessClaude, "dev", tc.remote)
+func TestRenderedSearchSkillsUseHybridKeywordMatchesWithoutRetry(t *testing.T) {
+	for _, remote := range []Remote{{}, {Server: "https://example.invalid"}} {
+		rendered, err := RenderPackage(HarnessClaude, "dev", remote)
 		require.NoError(t, err)
 		for _, base := range []string{"SKILL.md", "agentsview-search-conversations.md"} {
 			content := strings.Join(strings.Fields(artifactByBase(t, rendered, base).Content), " ")
-			assert.Equal(t, tc.want, strings.Contains(content, retry), "%s remote=%q", base, tc.remote.Server)
+			assert.Contains(t, content, "disclose keyword-only results once and use the matches without retry", "%s remote=%q", base, remote.Server)
 		}
 	}
 }
