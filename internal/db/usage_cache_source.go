@@ -466,11 +466,7 @@ func (reader *UsageCacheReader) flushWarmRequests(parent context.Context) {
 			identity := usageTimezoneIdentityFor((UsageFilter{Timezone: timezone}).Location(), nil)
 			writeErr = insertUsageTimezone(ctx, cache.db, identity, stamp)
 			if writeErr == nil {
-				_, writeErr = cache.db.ExecContext(ctx, `UPDATE usage_rollup_timezones SET last_requested_at = ?
-					WHERE timezone_key = ? AND (CASE WHEN instr(last_requested_at, '.') = 0
-					THEN replace(last_requested_at, 'Z', '.000000000Z')
-					ELSE replace(last_requested_at, 'Z', '000000000Z') END) < ?`,
-					stamp.UTC().Format(time.RFC3339Nano), identity.Key, stamp.UTC().Format("2006-01-02T15:04:05.000000000Z"))
+				writeErr = cache.recordUsageTimezoneRequestAt(ctx, identity, stamp)
 			}
 		}
 		if writeErr != nil {

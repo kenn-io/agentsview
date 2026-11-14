@@ -278,8 +278,11 @@ func TestPGUsageCacheLaunchRetryStopsOnClose(t *testing.T) {
 
 func TestPGUsageCacheLaunchPreservesRequestRecency(t *testing.T) {
 	t.Parallel()
-	for _, requested := range []bool{false, true} {
-		t.Run(fmt.Sprintf("request=%t", requested), func(t *testing.T) {
+	for _, tc := range []struct {
+		name              string
+		requested, recent bool
+	}{{"launch", false, false}, {"request", true, false}, {"recent request", true, true}} {
+		t.Run(tc.name, func(t *testing.T) {
 			_, _, store, _ := keptUsageFixture(t)
 			ctx := t.Context()
 			zone := "Pacific/Honolulu"
@@ -299,7 +302,10 @@ func TestPGUsageCacheLaunchPreservesRequestRecency(t *testing.T) {
 			cached, err := sql.Open("sqlite3", files[0])
 			require.NoError(t, err)
 			t.Cleanup(func() { require.NoError(t, cached.Close()) })
-			const old = "2020-01-01T00:00:00Z"
+			old := "2020-01-01T00:00:00Z"
+			if tc.recent {
+				old = time.Now().Add(-10 * time.Second).UTC().Format(time.RFC3339Nano)
+			}
 			_, err = cached.ExecContext(ctx, `UPDATE usage_rollup_timezones SET last_requested_at = ?, change_revision = NULL WHERE timezone_name = ?`, old, zone)
 			require.NoError(t, err)
 			attachUsageCacheProbe(t, store, directory)
@@ -309,7 +315,7 @@ func TestPGUsageCacheLaunchPreservesRequestRecency(t *testing.T) {
 			hold := store.usageCache.HoldWarm()
 			t.Cleanup(hold)
 			require.NoError(t, store.WarmUsageCache(ctx))
-			if requested {
+			if tc.requested {
 				_, err := store.GetDailyUsage(ctx, db.UsageFilter{Timezone: zone})
 				require.NoError(t, err)
 			}
@@ -317,7 +323,7 @@ func TestPGUsageCacheLaunchPreservesRequestRecency(t *testing.T) {
 			require.NoError(t, store.usageCache.WaitWarm(ctx))
 			var stamp string
 			require.NoError(t, cached.QueryRowContext(ctx, `SELECT last_requested_at FROM usage_rollup_timezones WHERE timezone_name = ?`, zone).Scan(&stamp))
-			if requested {
+			if tc.requested && !tc.recent {
 				assert.NotEqual(t, old, stamp)
 			} else {
 				assert.Equal(t, old, stamp)
