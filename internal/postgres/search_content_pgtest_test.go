@@ -4,6 +4,7 @@ package postgres
 
 import (
 	"errors"
+	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -703,19 +704,75 @@ func TestPGContentSearchTrigramIndex(t *testing.T) {
 	assert.True(t, fastupdateOff,
 		"idx_messages_content_trgm must have fastupdate=off")
 
-	// Natural word candidates without diacritics read a partial folded index.
+	const foldedIndex = "idx_messages_dialogue_folded_unicode61_v1_trgm"
+	const legacyFoldedIndex = "idx_messages_dialogue_folded_trgm"
 	var indexDef, predicate string
 	require.NoError(t, store.DB().QueryRowContext(ctx,
 		`SELECT pg_get_indexdef(i.indexrelid), pg_get_expr(i.indpred, i.indrelid)
 		   FROM pg_index i
 		   JOIN pg_class c ON c.oid = i.indexrelid
 		   JOIN pg_namespace n ON n.oid = c.relnamespace
-		  WHERE n.nspname = $1 AND c.relname = 'idx_messages_dialogue_folded_trgm'`,
-		contentSearchSchema,
-	).Scan(&indexDef, &predicate), "query folded index definition")
-	assert.Contains(t, strings.ToLower(indexDef), "regexp_replace(normalize(coalesce(dialogue_text, content)")
-	assert.Contains(t, indexDef, "fastupdate=off")
+		  WHERE n.nspname = $1 AND c.relname = $2`,
+		contentSearchSchema, foldedIndex,
+	).Scan(&indexDef, &predicate), "query Unicode61 folded index definition")
+	assert.Contains(t, strings.ToLower(indexDef), "translate(coalesce(dialogue_text, content)")
+	assert.Contains(t, strings.ToLower(indexDef), "gin_trgm_ops")
 	assert.Contains(t, strings.ToLower(predicate), "octet_length(coalesce(dialogue_text, content))")
+	assert.Contains(t, strings.ToLower(predicate), "char_length(coalesce(dialogue_text, content))")
+
+	var foldedFastupdateOff bool
+	require.NoError(t, store.DB().QueryRowContext(ctx,
+		`SELECT EXISTS (
+			SELECT 1
+			  FROM pg_class c
+			  JOIN pg_namespace n ON n.oid = c.relnamespace
+			 WHERE n.nspname = $1
+			   AND c.relname = $2
+			   AND 'fastupdate=off' = ANY(c.reloptions)
+		)`, contentSearchSchema, foldedIndex,
+	).Scan(&foldedFastupdateOff), "query folded index reloptions")
+	assert.True(t, foldedFastupdateOff,
+		"Unicode61 folded index must have fastupdate=off")
+
+	var initialRelFileNode int64
+	require.NoError(t, store.DB().QueryRowContext(ctx,
+		`SELECT c.relfilenode FROM pg_class c
+		  JOIN pg_namespace n ON n.oid = c.relnamespace
+		 WHERE n.nspname = $1 AND c.relname = $2`, contentSearchSchema, foldedIndex,
+	).Scan(&initialRelFileNode), "query folded index relfilenode")
+
+	// Recreate the old partial NFD index as an upgrade fixture. EnsureSchema
+	// must drop it and retain the versioned Unicode61 index without rebuilding it.
+	var extensionSchema string
+	require.NoError(t, store.DB().QueryRowContext(ctx,
+		`SELECT n.nspname FROM pg_extension e
+		  JOIN pg_namespace n ON n.oid = e.extnamespace
+		 WHERE e.extname = 'pg_trgm'`,
+	).Scan(&extensionSchema), "query pg_trgm schema")
+	quotedExtension, err := quoteIdentifier(extensionSchema)
+	require.NoError(t, err, "quote pg_trgm schema")
+	legacyExpression := `regexp_replace(normalize(COALESCE(dialogue_text, content), NFD), E'([A-Za-z])[\\u0300-\\u036F]+', E'\\1', 'g')`
+	_, err = store.DB().ExecContext(ctx, fmt.Sprintf(`CREATE INDEX %s ON messages USING gin ((%s) %s.gin_trgm_ops) WITH (fastupdate = off) WHERE octet_length(COALESCE(dialogue_text, content)) > char_length(COALESCE(dialogue_text, content))`,
+		legacyFoldedIndex, legacyExpression, quotedExtension,
+	))
+	require.NoError(t, err, "create legacy folded index")
+	require.True(t, pgHasIndex(ctx, store.DB(), legacyFoldedIndex),
+		"legacy folded index fixture was not installed")
+
+	require.NoError(t, EnsureSchema(ctx, store.DB(), contentSearchSchema),
+		"EnsureSchema replaces the legacy folded index")
+	assert.False(t, pgHasIndex(ctx, store.DB(), legacyFoldedIndex),
+		"legacy NFD folded index should be removed")
+	require.NoError(t, EnsureSchema(ctx, store.DB(), contentSearchSchema),
+		"EnsureSchema stays idempotent after index upgrade")
+	var finalRelFileNode int64
+	require.NoError(t, store.DB().QueryRowContext(ctx,
+		`SELECT c.relfilenode FROM pg_class c
+		  JOIN pg_namespace n ON n.oid = c.relnamespace
+		 WHERE n.nspname = $1 AND c.relname = $2`, contentSearchSchema, foldedIndex,
+	).Scan(&finalRelFileNode), "query folded index relfilenode after upgrade")
+	assert.Equal(t, initialRelFileNode, finalRelFileNode,
+		"schema initialization must not rebuild the versioned folded index")
 }
 
 // TestPGContentSearchTrigramIndexUpgrade verifies the upgrade path: a store

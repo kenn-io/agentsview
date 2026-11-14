@@ -741,7 +741,7 @@ func (s *Store) searchContentWordsPG(
 				FROM word_matches%s
 			) sub ORDER BY tier, n DESC, sort_ts DESC NULLS LAST, session_id ASC, ordinal ASC, src ASC, row_id ASC, snippet ASC
 			LIMIT %s OFFSET %s`,
-			scopeWhere, pgWordMatches(f, words, all, from, pb), union.String(), matchesFilter,
+			scopeWhere, pgWordMatches(f, words, all, from, pb, s.cockroach), union.String(), matchesFilter,
 			pb.add(f.Limit+1), pb.add(f.Cursor))
 		page, err = s.scanPGContentMatches(ctx, query, pb.args, f.Limit, f.Cursor, func(body string) string {
 			start, end := db.WordSnippetRange(body, f.Pattern, words)
@@ -760,10 +760,14 @@ func (s *Store) searchContentWordsPG(
 // Outside fts mode it leaves the exact text to the caller. The partial pass
 // materializes candidates and computes n once.
 func pgWordMatches(
-	f db.ContentSearchFilter, words db.ContentWords, all bool, from string, pb *paramBuilder,
+	f db.ContentSearchFilter, words db.ContentWords, all bool, from string, pb *paramBuilder, cockroach bool,
 ) string {
 	column := "COALESCE(m.dialogue_text, m.content)"
-	b := db.NewQueryBuilder(db.PostgresQueryDialect(), pb.n)
+	dialect := db.PostgresQueryDialect()
+	if cockroach {
+		dialect = db.CockroachQueryDialect()
+	}
+	b := db.NewQueryBuilder(dialect, pb.n)
 	rawCandidate := db.WordCandidateSQL(b, column, words, all, false)
 	rawWhere := rawCandidate
 	if f.Mode != "fts" {
@@ -775,16 +779,11 @@ func pgWordMatches(
 		n = db.WordCountSQL(b, "body", "folded_body", words)
 	}
 	regex := db.WordRegexSQL(b, "body", "folded_body", words, all)
-	if all {
-		if prefix := db.WordPrefixSQL(b, "body", f, words); prefix != "" {
-			regex = "CASE WHEN " + prefix + " THEN TRUE ELSE " + regex + " END"
-		}
-	}
 	pb.args = append(pb.args, b.Args()...)
 	pb.n += len(b.Args())
-	// Accented rows that miss the raw gate come from the partial folded index.
+	// Non-ASCII rows that miss the raw gate use the fixed folded candidate path.
 	candidates := `SELECT m.session_id, s.project, s.agent, s.transcript_revision, m.role, m.ordinal,
-				m.timestamp AS ts, ` + column + ` AS body, ` + db.WordFoldSQL(db.PostgresQueryDialect(), column) + ` AS folded_body,
+				m.timestamp AS ts, ` + column + ` AS body, ` + db.WordFoldSQL(dialect, column) + ` AS folded_body,
 				COALESCE(s.ended_at, s.started_at, s.created_at) AS sort_ts
 			` + from
 	materialized := " AS MATERIALIZED"
@@ -793,22 +792,18 @@ func pgWordMatches(
 	}
 	return fmt.Sprintf(`raw_word_candidates%s (
 			%s AND %s
-		), accent_word_candidates%s (
+		), folded_word_candidates%s (
 			%s AND %s AND %s AND NOT %s
 		), word_candidates%s (
 			SELECT * FROM raw_word_candidates
 			UNION ALL
-			SELECT * FROM accent_word_candidates
+			SELECT * FROM folded_word_candidates
 		), word_matches%s (
 			SELECT word_candidates.*, %s AS n FROM word_candidates WHERE %s
 		)`, materialized, candidates, rawWhere,
-		materialized, candidates, pgDialogueNonASCIIPredicate(column), foldedCandidate,
+		materialized, candidates, db.WordNonASCIISQL(dialect, column), foldedCandidate,
 		rawCandidate,
 		materialized,
 		materialized,
 		n, regex)
-}
-
-func pgDialogueNonASCIIPredicate(column string) string {
-	return "octet_length(" + column + ") > char_length(" + column + ")"
 }

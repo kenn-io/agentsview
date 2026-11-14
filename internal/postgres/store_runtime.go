@@ -59,7 +59,7 @@ func (s *Store) beginTx(ctx context.Context, options *sql.TxOptions) (*sql.Tx, e
 
 func (s *Store) readView(tx *sql.Tx) *Store {
 	return &Store{
-		pg: tx, readTx: tx, hostedRelations: s.hostedRelations,
+		pg: tx, readTx: tx, hostedRelations: s.hostedRelations, cockroach: s.cockroach,
 		runtime: s.runtimeState(), pricingSnapshot: &pricingSnapshot{},
 	}
 }

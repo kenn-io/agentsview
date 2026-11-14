@@ -9,8 +9,6 @@ import (
 	"strconv"
 	"strings"
 	"unicode"
-
-	"golang.org/x/text/unicode/norm"
 )
 
 // contentWords is a natural-language query: the words a message can hold,
@@ -36,7 +34,7 @@ func WordSnippetRange(body, pattern string, words ContentWords) (int, int) {
 	for i, forms := range words.Terms {
 		foldedForms[i] = make([]string, len(forms))
 		for j, form := range forms {
-			foldedForms[i][j] = foldLatinDiacritics(form)
+			foldedForms[i][j] = foldUnicode61(form)
 		}
 	}
 	offset := 0
@@ -49,7 +47,7 @@ func WordSnippetRange(body, pattern string, words ContentWords) (int, int) {
 				return offset, offset + len(word)
 			}
 		}
-		foldedWord := foldLatinDiacritics(word)
+		foldedWord := foldUnicode61(word)
 		for _, forms := range foldedForms {
 			if slices.ContainsFunc(forms, func(form string) bool { return strings.EqualFold(foldedWord, form) }) {
 				return offset, offset + len(word)
@@ -59,21 +57,6 @@ func WordSnippetRange(body, pattern string, words ContentWords) (int, int) {
 	}
 	start, end, _ := CaseInsensitiveSpan(body, pattern)
 	return start, end
-}
-
-func foldLatinDiacritics(text string) string {
-	decomposed := norm.NFD.String(text)
-	var folded strings.Builder
-	folded.Grow(len(decomposed))
-	previousLatin := false
-	for _, r := range decomposed {
-		if previousLatin && r >= '\u0300' && r <= '\u036f' {
-			continue
-		}
-		folded.WriteRune(r)
-		previousLatin = r >= 'A' && r <= 'Z' || r >= 'a' && r <= 'z'
-	}
-	return folded.String()
 }
 
 // RouteContentWords applies SQLite's gates for word matching to f, a

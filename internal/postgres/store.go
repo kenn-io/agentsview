@@ -35,7 +35,12 @@ func NewStore(
 		}
 		return nil, err
 	}
-	return &Store{pg: pg, ownedDB: pg}, nil
+	cockroach, err := isCockroachPG(ctx, pg)
+	if err != nil {
+		pg.Close()
+		return nil, fmt.Errorf("detecting database engine: %w", err)
+	}
+	return &Store{pg: pg, ownedDB: pg, cockroach: cockroach}, nil
 }
 
 // NewHostedStore opens the read adapter with the same fixed tenant boundary as

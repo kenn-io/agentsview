@@ -1433,6 +1433,11 @@ func createPartialIndexesPG(ctx context.Context, db pgSessionExecer) error {
 // createContentSearchIndexesPG accelerates content, dialogue, and thinking
 // substring searches. Callers decide whether unavailable pg_trgm is fatal.
 // The opclass is qualified because the extension can live outside search_path.
+const (
+	legacyDialogueFoldedIndexPG    = "idx_messages_dialogue_folded_trgm"
+	dialogueFoldedUnicode61IndexPG = "idx_messages_dialogue_folded_unicode61_v1_trgm"
+)
+
 func createContentSearchIndexesPG(ctx context.Context, pg interface {
 	pgSessionExecer
 	hostedQuerier
@@ -1459,9 +1464,28 @@ func createContentSearchIndexesPG(ctx context.Context, pg interface {
 			return err
 		}
 	}
-	// Natural word candidates without diacritics read non-ASCII dialogue here.
+	var hasLegacyFoldedIndex bool
+	if err := pg.QueryRowContext(ctx, `SELECT EXISTS (
+		SELECT 1 FROM pg_indexes
+		WHERE schemaname = current_schema() AND indexname = $1
+	)`, legacyDialogueFoldedIndexPG).Scan(&hasLegacyFoldedIndex); err != nil {
+		return err
+	}
+	if hasLegacyFoldedIndex {
+		if _, err := pg.ExecContext(ctx, `DROP INDEX `+legacyDialogueFoldedIndexPG); err != nil {
+			return err
+		}
+	}
 	body := "COALESCE(dialogue_text, content)"
-	if _, err := pg.ExecContext(ctx, fmt.Sprintf(`CREATE INDEX IF NOT EXISTS idx_messages_dialogue_folded_trgm ON messages USING gin ((%s) %s.gin_trgm_ops) WITH (fastupdate = off) WHERE %s`, db.WordFoldSQL(db.PostgresQueryDialect(), body), quotedExt, pgDialogueNonASCIIPredicate(body))); err != nil {
+	// The suffix versions the index with its fixed Unicode61 fold. A changed
+	// fold must get a new index name so existing indexes are never reused with
+	// a different query expression.
+	if _, err := pg.ExecContext(ctx, fmt.Sprintf(`CREATE INDEX IF NOT EXISTS %s ON messages USING gin ((%s) %s.gin_trgm_ops) WITH (fastupdate = off) WHERE %s`,
+		dialogueFoldedUnicode61IndexPG,
+		db.WordFoldSQL(db.PostgresQueryDialect(), body),
+		quotedExt,
+		db.WordNonASCIISQL(db.PostgresQueryDialect(), body),
+	)); err != nil {
 		return err
 	}
 	// Existing content indexes may still have fastupdate enabled.

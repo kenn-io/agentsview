@@ -11,13 +11,21 @@ import (
 
 // WordCandidateSQL matches rows in column holding the common prefix of every
 // query word's forms, or with all false of any word. The LIKE gate selects
-// candidates before the whole-word regexes run. With fold, Latin words compare
-// without diacritics; without it, PostgreSQL's trigram index serves the gate.
+// candidates before whole-word regexes run. With fold, it applies SQLite's
+// fixed Unicode61 mapping; without it, PostgreSQL's trigram index serves the gate.
 func WordCandidateSQL(b *QueryBuilder, column string, q ContentWords, all, fold bool) string {
 	parts := make([]string, len(q.Terms))
 	for i, forms := range q.Terms {
-		foldTerm := fold && wordUsesLatinDiacritics(forms)
-		parts[i] = wordContainsSQL(b, column, wordPrefix(forms), foldTerm, false)
+		prefix := wordPrefix(forms)
+		if fold {
+			parts[i] = wordContainsSQL(b, column, prefix, true, false)
+			continue
+		}
+		parts[i] = wordContainsSQL(b, column, prefix, false, false)
+		foldedPrefix := foldUnicode61(prefix)
+		if foldedPrefix != prefix {
+			parts[i] = "(" + parts[i] + " OR " + wordContainsSQL(b, column, foldedPrefix, false, false) + ")"
+		}
 	}
 	op := " OR "
 	if all {
@@ -51,34 +59,12 @@ func WordRegexSQL(b *QueryBuilder, raw, folded string, q ContentWords, all bool)
 	return "(" + strings.Join(parts, " AND ") + ")"
 }
 
-// WordPrefixSQL proves an all-word match when a plain query starts the body.
-func WordPrefixSQL(b *QueryBuilder, column string, f ContentSearchFilter, q ContentWords) string {
-	fields := strings.Fields(f.Pattern)
-	if len(q.Phrases) != 0 || len(fields) != len(q.Terms) || strings.Join(fields, " ") != f.Pattern {
-		return ""
-	}
-	for i, field := range fields {
-		if strings.ContainsFunc(field, func(r rune) bool { return !unicode.IsLetter(r) && !unicode.IsNumber(r) }) ||
-			!slices.ContainsFunc(q.Terms[i], func(form string) bool { return strings.EqualFold(field, form) }) {
-			return ""
-		}
-	}
-	prefix := b.Add(f.Pattern)
-	length := b.Add(f.Pattern)
-	return "(" + column + " ILIKE " + prefix + " || '%' AND substring(" + column + " from char_length(" + length + ")+1 for 1) !~ '[[:alnum:]]')"
-}
-
 // WordCountSQL counts the query words raw holds as whole words, with folded
 // as in WordRegexSQL.
 func WordCountSQL(b *QueryBuilder, raw, folded string, q ContentWords) string {
 	parts := make([]string, len(q.Terms))
 	for i, forms := range q.Terms {
-		foldTerm := wordUsesLatinDiacritics(forms)
-		candidateColumn := raw
-		if foldTerm {
-			candidateColumn = folded
-		}
-		parts[i] = "CASE WHEN " + wordContainsSQL(b, candidateColumn, wordPrefix(forms), foldTerm, foldTerm) +
+		parts[i] = "CASE WHEN " + wordContainsSQL(b, folded, wordPrefix(forms), true, true) +
 			" AND " + wordTermSQL(b, raw, folded, forms) + " THEN 1 ELSE 0 END"
 	}
 	return "(" + strings.Join(parts, " + ") + ")"
@@ -92,7 +78,12 @@ func WordFilterSQL(b *QueryBuilder, column string, f ContentSearchFilter, q Cont
 	if all && f.Mode != "fts" {
 		exact = b.ContainsPredicate(column, f.Pattern) + " OR "
 	}
-	return "(" + exact + "(" + WordCandidateSQL(b, column, q, all, true) + " AND " +
+	raw := WordCandidateSQL(b, column, q, all, false)
+	rawExclude := WordCandidateSQL(b, column, q, all, false)
+	folded := WordCandidateSQL(b, column, q, all, true)
+	candidate := "(" + raw + " OR (" + WordNonASCIISQL(b.dialect, column) +
+		" AND NOT " + rawExclude + " AND " + folded + "))"
+	return "(" + exact + "(" + candidate + " AND " +
 		WordRegexSQL(b, column, WordFoldSQL(b.dialect, column), q, all) + "))"
 }
 
@@ -113,152 +104,65 @@ func WordRankSQL(b *QueryBuilder, column string, f ContentSearchFilter, q Conten
 	return n + " AS n, " + tier + " AS tier"
 }
 
-// WordFoldSQL removes diacritics from expression for natural word
-// predicates, leaving ASCII text as it is.
+// WordFoldSQL applies the pinned SQLite Unicode61 fold to expression.
 func WordFoldSQL(d QueryDialect, expression string) string {
+	from := "'" + unicode61FoldFrom + "'"
+	to := "'" + unicode61FoldTo + "'"
 	switch d.name {
-	case "postgres":
-		folded := `regexp_replace(normalize(` + expression +
-			`, NFD), E'([A-Za-z])[\\u0300-\\u036F]+', E'\\1', 'g')`
-		return "CASE WHEN octet_length(" + expression + ") = char_length(" + expression +
-			") THEN " + expression + " ELSE " + folded + " END"
+	case "postgres", "cockroach":
+		return "translate(" + expression + ", " + from + ", " + to + ")"
 	case "duckdb":
-		return "CASE WHEN strlen(" + expression + ") = length(" + expression +
-			") THEN " + expression + " ELSE strip_accents(" + expression + ") END"
+		return "translate(" + expression + ", " + from + ", " + to + ")"
 	case "clickhouse":
-		return "if(length(" + expression + ") = lengthUTF8(" + expression +
-			"), " + expression + ", removeDiacriticsUTF8(" + expression + "))"
+		return "translateUTF8(" + expression + ", " + from + ", " + to + ")"
 	default:
 		return expression
 	}
 }
 
-// wordFoldPatternSQL binds pattern without diacritics. A placeholder appears
-// once, since DuckDB and ClickHouse bind by position.
-func wordFoldPatternSQL(b *QueryBuilder, pattern string) string {
-	ph := b.Add(pattern)
-	switch b.dialect.name {
+// WordNonASCIISQL identifies rows that may need the Unicode61 branch.
+func WordNonASCIISQL(d QueryDialect, expression string) string {
+	switch d.name {
+	case "postgres", "cockroach":
+		return "octet_length(" + expression + ") > char_length(" + expression + ")"
 	case "duckdb":
-		return "strip_accents(" + ph + ")"
+		return "strlen(" + expression + ") > length(" + expression + ")"
 	case "clickhouse":
-		return "removeDiacriticsUTF8(" + ph + ")"
+		return "length(" + expression + ") > lengthUTF8(" + expression + ")"
 	default:
-		return WordFoldSQL(b.dialect, ph)
+		return "1=0"
 	}
 }
 
 func wordContainsSQL(b *QueryBuilder, column, pattern string, fold, columnFolded bool) string {
-	patterns := wordCandidateLikePatterns(pattern)
+	if fold {
+		pattern = foldUnicode61(pattern)
+	}
 	if fold && !columnFolded {
 		column = WordFoldSQL(b.dialect, column)
 	}
-	predicates := make([]string, len(patterns))
-	for i, candidate := range patterns {
-		var patternSQL string
-		if fold {
-			patternSQL = wordFoldPatternSQL(b, candidate)
-		} else {
-			patternSQL = b.Add(candidate)
-		}
-		predicates[i] = column + " " + b.dialect.caseInsensitiveLike + " " + patternSQL + " " + b.dialect.caseInsensitiveLikeEsc
-	}
-	return "(" + strings.Join(predicates, " OR ") + ")"
+	pattern = "%" + EscapeLikePattern(pattern) + "%"
+	return "(" + column + " " + b.dialect.caseInsensitiveLike + " " + b.Add(pattern) + " " +
+		b.dialect.caseInsensitiveLikeEsc + ")"
 }
 
-// Bound candidate SQL growth when a word has several simple-fold aliases.
-const maxWordCaseFoldVariants = 2
-
-func wordCandidateLikePatterns(pattern string) []string {
-	runes := []rune(pattern)
-	choices := make([][]rune, len(runes))
-	for i, r := range runes {
-		choices[i] = append([]rune{r}, wordCaseFoldAliases(r)...)
-	}
-	variants := [][]rune{{}}
-	for i := range runes {
-		if len(variants) > maxWordCaseFoldVariants/len(choices[i]) {
-			return []string{wordWildcardCaseFoldPattern(runes, choices)}
-		}
-		next := make([][]rune, 0, len(variants)*len(choices[i]))
-		for _, variant := range variants {
-			for _, folded := range choices[i] {
-				candidate := append(slices.Clone(variant), folded)
-				next = append(next, candidate)
-			}
-		}
-		variants = next
-	}
-	patterns := make([]string, len(variants))
-	for i, variant := range variants {
-		patterns[i] = "%" + EscapeLikePattern(string(variant)) + "%"
-	}
-	return patterns
-}
-
-func wordWildcardCaseFoldPattern(runes []rune, choices [][]rune) string {
-	var wildcard strings.Builder
-	wildcard.WriteByte('%')
-	for i, r := range runes {
-		if len(choices[i]) > 1 {
-			wildcard.WriteByte('_')
-		} else {
-			wildcard.WriteString(EscapeLikePattern(string(r)))
-		}
-	}
-	wildcard.WriteByte('%')
-	return wildcard.String()
-}
-
-func wordCaseFoldAliases(r rune) []rune {
-	if r > unicode.MaxASCII || !unicode.IsLetter(r) {
-		return nil
-	}
-	var aliases []rune
-	for folded := unicode.SimpleFold(r); folded != r; folded = unicode.SimpleFold(folded) {
-		if folded > unicode.MaxASCII {
-			aliases = append(aliases, folded)
-		}
-	}
-	return aliases
-}
-
-// wordTermSQL matches any of forms as a whole word, case-insensitively.
-// PostgreSQL's classes already follow Unicode. RE2's Unicode classes are
-// slow, so other dialects test ASCII rows with ASCII classes and keep
-// Unicode classes for the rest, where folding a diacritic must not turn an
-// adjacent non-Latin letter into a boundary.
+// wordTermSQL matches any form as a whole word using SQLite's fixed fold.
+// RE2's Unicode classes are slower, so non-PostgreSQL dialects use ASCII
+// classes only when the raw body is ASCII.
 func wordTermSQL(b *QueryBuilder, raw, folded string, forms []string) string {
-	compact := compactForms(forms)
-	if !wordUsesLatinDiacritics(forms) {
-		return b.dialect.regexPredicate(raw, b.Add(boundedPattern(b, true, compact)))
+	foldedForms := make([]string, len(forms))
+	for i, form := range forms {
+		foldedForms[i] = foldUnicode61(form)
 	}
+	compact := compactForms(foldedForms)
 	if b.dialect.name == "postgres" {
-		return b.dialect.regexPredicate(folded, wordFoldPatternSQL(b, boundedPattern(b, true, compact)))
+		return b.dialect.regexPredicate(folded, b.Add(boundedPattern(b, true, compact)))
 	}
-	asciiPattern := wordFoldPatternSQL(b, boundedPattern(b, false, compact))
-	unicodePattern := wordFoldPatternSQL(b, boundedPattern(b, true, compact))
-	ascii := "strlen(" + raw + ") = length(" + raw + ")"
-	if b.dialect.name == "clickhouse" {
-		ascii = "length(" + raw + ") = lengthUTF8(" + raw + ")"
-	}
-	return "CASE WHEN " + ascii + " THEN " + b.dialect.regexPredicate(raw, asciiPattern) +
+	asciiPattern := b.Add(boundedPattern(b, false, compact))
+	unicodePattern := b.Add(boundedPattern(b, true, compact))
+	ascii := "NOT " + WordNonASCIISQL(b.dialect, raw)
+	return "CASE WHEN " + ascii + " THEN " + b.dialect.regexPredicate(folded, asciiPattern) +
 		" ELSE " + b.dialect.regexPredicate(folded, unicodePattern) + " END"
-}
-
-func wordUsesLatinDiacritics(forms []string) bool {
-	hasLatin := false
-	for _, form := range forms {
-		for _, r := range form {
-			if !unicode.IsLetter(r) {
-				continue
-			}
-			if !unicode.In(r, unicode.Latin) {
-				return false
-			}
-			hasLatin = true
-		}
-	}
-	return hasLatin
 }
 
 // boundedPattern matches words separated by non-letter, non-digit runs, with
@@ -301,6 +205,19 @@ func wordCaseFoldRegex(word string) string {
 		pattern.WriteByte(']')
 	}
 	return pattern.String()
+}
+
+func wordCaseFoldAliases(r rune) []rune {
+	if r > unicode.MaxASCII || !unicode.IsLetter(r) {
+		return nil
+	}
+	var aliases []rune
+	for folded := unicode.SimpleFold(r); folded != r; folded = unicode.SimpleFold(folded) {
+		if folded > unicode.MaxASCII {
+			aliases = append(aliases, folded)
+		}
+	}
+	return aliases
 }
 
 // wordPrefix returns the common prefix of forms, which always hold the word.

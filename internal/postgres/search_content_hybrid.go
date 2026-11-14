@@ -168,7 +168,7 @@ func (s *Store) fetchHybridKeywordBatchPG(
 		var err error
 		for _, all := range []bool{true, false} {
 			pb := &paramBuilder{n: len(scopeArgs), args: append([]any{}, scopeArgs...)}
-			query := "WITH " + pgWordMatches(kf, words, all, from, pb) + `
+			query := "WITH " + pgWordMatches(kf, words, all, from, pb, s.cockroach) + `
 				SELECT session_id, ordinal, body, n FROM word_matches WHERE n >= 1
 				ORDER BY n DESC, sort_ts DESC NULLS LAST, session_id ASC, ordinal ASC
 				LIMIT ` + pb.add(k) + " OFFSET " + pb.add(offset)

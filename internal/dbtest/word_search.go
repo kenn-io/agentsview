@@ -36,7 +36,10 @@ func SeedWordSearch(t *testing.T, d *db.DB) {
 	}
 	for _, entry := range []struct{ id, project, text string }{
 		{"accent-exact", "word-accent", "café rounding decision"},
+		{"accent-decomposed", "word-accent-decomposed", "cafe\u0301 rounding"},
+		{"accent-ascii-body", "word-accent-ascii-body", "cafe rounding"},
 		{"accent-partial", "word-accent-partial", "café"},
+		{"accent-multiple", "word-accent-multiple", "rộunding parsing"},
 		{"accent-long-snippet", "word-accent-snippet", strings.Repeat("filler ", 80) + "café " + strings.Repeat("filler ", 80)},
 		{"accent-boundary", "word-accent-boundary", "caféine rounding"},
 		{"accent-phrase", "word-accent-phrase", "café rounding missingword"},
@@ -45,6 +48,7 @@ func SeedWordSearch(t *testing.T, d *db.DB) {
 		{"accent-unicode-boundary", "word-accent-unicode-boundary", "café漢字"},
 		{"accent-greek", "word-accent-greek", "αρχή parsing"},
 		{"long-s", "word-long-s", "teſt"},
+		{"long-s-ascii-body", "word-long-s-ascii-body", "test phrase"},
 		{"long-s-phrase", "word-long-s-phrase", "teſt phrase"},
 		{"long-s-multiple", "word-long-s-multiple", "aſſessment"},
 	} {
@@ -85,7 +89,10 @@ func AssertWordSearch(t *testing.T, store db.Store) {
 		want                   []hit
 	}{
 		{"all words fold accents", "cafe rounding decision", "word-accent", []hit{{"accent-exact", "message", 3}}},
+		{"decomposed accent candidate", "cafe absentword", "word-accent-decomposed", []hit{{"accent-decomposed", "message", 1}}},
+		{"accented query finds ASCII body", "café absentword", "word-accent-ascii-body", []hit{{"accent-ascii-body", "message", 1}}},
 		{"partial candidates fold accents", "cafe missingword", "word-accent-partial", []hit{{"accent-partial", "message", 1}}},
+		{"multiple diacritics stay distinct", "rounding missingword", "word-accent-multiple", nil},
 		{"natural words fold accents", "naive design", "word-accent-naive", []hit{{"accent-naive", "message", 2}}},
 		{"accent folding keeps word boundaries", "cafe rounding missingword", "word-accent-boundary", []hit{{"accent-boundary", "message", 1}}},
 		{"mixed literal-accent phrase matches", `missingword "café rounding"`, "word-accent-phrase", []hit{{"accent-phrase", "message", 3}}},
@@ -95,6 +102,7 @@ func AssertWordSearch(t *testing.T, store db.Store) {
 		{"accent folding keeps Unicode boundaries", "café missingword", "word-accent-unicode-boundary", nil},
 		{"Greek accents stay distinct", "αρχη missingword", "word-accent-greek", nil},
 		{"long s follows SQLite case folding", "test absentword", "word-long-s", []hit{{"long-s", "message", 1}}},
+		{"long s query finds ASCII body", "teſt absentword", "word-long-s-ascii-body", []hit{{"long-s-ascii-body", "message", 1}}},
 		{"long s folds inside quoted phrases", `missingword "test phrase"`, "word-long-s-phrase", []hit{{"long-s-phrase", "message", 2}}},
 		{"multiple long s folds stay candidates", "assessment absentword", "word-long-s-multiple", []hit{{"long-s-multiple", "message", 1}}},
 	} {
