@@ -208,7 +208,7 @@ func parseMusePersonalSession(ctx context.Context, path, machine string) (*Parse
 	highWater := int64(-1)
 	pending := make(map[string][]int)
 	for lineNo := 0; ; lineNo++ {
-		lr.skippedOversized = false
+		skippedBefore := lr.SkippedLines()
 		line, readErr := lr.readLineBytes()
 		if readErr != nil {
 			if !errors.Is(readErr, io.EOF) {
@@ -216,10 +216,11 @@ func parseMusePersonalSession(ctx context.Context, path, machine string) (*Parse
 			}
 			break
 		}
-		if !lr.terminated && !lr.skippedOversized {
+		skippedOversized := lr.SkippedLines() != skippedBefore
+		if !lr.terminated && !skippedOversized {
 			sess.IsTruncated = true
 		}
-		if lr.skippedOversized {
+		if skippedOversized {
 			sess.MalformedLines++
 			continue
 		}
