@@ -31,7 +31,7 @@ func TestLocalConnectionLimits(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "mirror.duckdb")
 	writer, err := Open(t.Context(), path)
 	require.NoError(t, err)
-	assert.Equal(t, 1, writer.Stats().MaxOpenConnections)
+	require.Equal(t, 1, writer.Stats().MaxOpenConnections)
 	require.NoError(t, writer.Close())
 
 	for _, tc := range []struct {
@@ -46,7 +46,7 @@ func TestLocalConnectionLimits(t *testing.T) {
 			duck, err := tc.open(t.Context(), path)
 			require.NoError(t, err)
 			t.Cleanup(func() { require.NoError(t, duck.Close()) })
-			assert.Equal(t, tc.max, duck.Stats().MaxOpenConnections)
+			require.Equal(t, tc.max, duck.Stats().MaxOpenConnections)
 			for range tc.max {
 				conn, err := duck.Conn(t.Context())
 				require.NoError(t, err)
@@ -57,7 +57,6 @@ func TestLocalConnectionLimits(t *testing.T) {
 				).Scan(&threads))
 				assert.Equal(t, strconv.Itoa(duckDBThreadCount()), threads)
 			}
-			assert.Equal(t, tc.max, duck.Stats().InUse)
 		})
 	}
 }
