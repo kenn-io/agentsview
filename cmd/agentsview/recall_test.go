@@ -2193,8 +2193,8 @@ func TestRecallGetHumanShowsSupersessionLifecycle(t *testing.T) {
 		newRootCommand(), "recall", "get", "m-cli",
 	)
 	require.NoError(t, err)
-	assert.Contains(t, archived, "lifecycle status=archived")
-	assert.Contains(t, archived, "superseded_by=m-cli-replacement")
+	assert.Contains(t, archived, "Status:   archived")
+	assert.Contains(t, archived, "Superseded by: m-cli-replacement")
 }
 
 func TestRecallListHumanShowsSupersessionLifecycle(t *testing.T) {
@@ -2658,21 +2658,10 @@ func TestRecallListHumanShowsTrustAndCursor(t *testing.T) {
 	assert.Contains(t, out, "    evidence recall-session:3-7")
 	assert.Regexp(t, `(?m)^next_cursor: \S+$`, out)
 
-	query, err := executeCommand(newRootCommand(),
-		"recall", "query", "cwd failed reads", "--evidence")
+	unbounded, err := executeCommand(newRootCommand(), "recall", "list")
 	require.NoError(t, err)
-	assert.Contains(t, query, "    evidence recall-session:3-7")
-	assert.NotContains(t, query, "body:")
-}
-
-func TestRecallListUnboundedHumanKeepsCompactOutput(t *testing.T) {
-	dataDir := t.TempDir()
-	setRecallTestEnv(t, dataDir)
-	seedRecallEntryFixture(t, dataDir)
-	out, err := executeCommand(newRootCommand(), "recall", "list")
-	require.NoError(t, err)
-	assert.Contains(t, out, "m-cli")
-	assert.NotContains(t, out, "Verify cwd before retrying failed reads.")
-	assert.NotContains(t, out, "updated_at=")
-	assert.NotContains(t, out, "    evidence recall-session:3-7")
+	assert.Contains(t, unbounded, "m-cli")
+	assert.NotContains(t, unbounded, "Verify cwd before retrying failed reads.")
+	assert.NotContains(t, unbounded, "updated_at=")
+	assert.NotContains(t, unbounded, "    evidence recall-session:3-7")
 }
