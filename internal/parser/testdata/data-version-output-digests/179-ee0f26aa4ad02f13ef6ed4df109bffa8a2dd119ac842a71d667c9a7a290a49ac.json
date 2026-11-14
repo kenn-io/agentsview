@@ -1,0 +1,9 @@
+{
+  "version": 179,
+  "digest": "ee0f26aa4ad02f13ef6ed4df109bffa8a2dd119ac842a71d667c9a7a290a49ac",
+  "providers": {
+    "evener": {
+      "sessions/compaction.transcript.jsonl": "3cef5fe881628d802b870fdce3916c5fa81f0cd7466b7dcba8e0d94ff27c1f41"
+    }
+  }
+}

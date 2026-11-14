@@ -65,7 +65,7 @@ func (s *compactionUnfilteredStore) Messages(_ context.Context, id string, _ ser
 	return &service.MessageList{Messages: []db.Message{
 		{Content: "injected prompt", IsSystem: true},
 		{Content: "ordinary message"},
-		{Content: "[CHECKPOINT]", SourceSubtype: "CHECKPOINT", IsCompactBoundary: true},
+		{Content: "[CHECKPOINT]", SourceType: "evener_empty_compaction", SourceSubtype: "CHECKPOINT", IsCompactBoundary: true},
 		{Content: "  ", IsCompactBoundary: true},
 	}}, nil
 }

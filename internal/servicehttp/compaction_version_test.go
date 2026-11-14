@@ -44,9 +44,13 @@ func TestCompactionFiltersRequireAPIVersion(t *testing.T) {
 					} else {
 						_, err = b.Messages(t.Context(), "s", service.MessageFilter{CompactBoundaryOnly: true})
 					}
-					if version < 19 {
-						require.ErrorContains(t, err, "restart or upgrade")
-						assert.Equal(t, []string{"/api/v1/version"}, requests)
+					if version != 19 {
+						require.Error(t, err)
+						if known {
+							assert.Empty(t, requests)
+						} else {
+							assert.Equal(t, []string{"/api/v1/version"}, requests)
+						}
 					} else {
 						require.NoError(t, err)
 					}
@@ -70,7 +74,7 @@ func TestCompactionFiltersInvalidActiveSince(t *testing.T) {
 	require.ErrorContains(t, err, "RFC3339")
 }
 
-func TestCompactionSummariesProbeForMultipleSessions(t *testing.T) {
+func TestCompactionSummariesProbeOnceForMultipleSessions(t *testing.T) {
 	var probes atomic.Int32
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
@@ -89,7 +93,7 @@ func TestCompactionSummariesProbeForMultipleSessions(t *testing.T) {
 	out, err := service.CompactionSummaries(t.Context(), b, service.CompactionSummariesRequest{ActiveSince: "2024-06-01T00:00:00Z"})
 	require.NoError(t, err)
 	require.Len(t, out.Summaries, 2)
-	assert.EqualValues(t, 3, probes.Load())
+	assert.EqualValues(t, 1, probes.Load())
 }
 
 func TestCompactionAndLabelsRequireVersion19(t *testing.T) {
@@ -127,24 +131,22 @@ func TestCompactionFiltersFollowDaemonVersion(t *testing.T) {
 			fmt.Fprintf(w, `{"api_version":%d}`, version.Load())
 			return
 		}
-		if r.URL.Path == "/api/v1/sessions" {
-			fmt.Fprint(w, `{"sessions":[],"total":0}`)
-			return
-		}
-		fmt.Fprint(w, `{"messages":[{"ordinal":1,"content":"injected prompt","is_system":true}],"count":1}`)
+		fmt.Fprint(w, `{"sessions":[],"total":0}`)
 	}))
 	defer srv.Close()
 	b := NewHTTPBackend(srv.URL, "", false, "")
-	_, err := b.List(t.Context(), service.ListFilter{HasCompactionSummary: true})
+	req := service.CompactionSummariesRequest{ActiveSince: "2024-06-01T00:00:00Z"}
+	_, err := service.CompactionSummaries(t.Context(), b, req)
 	require.NoError(t, err)
 	version.Store(18)
-	_, err = b.Messages(t.Context(), "session", service.MessageFilter{CompactBoundaryOnly: true})
-	require.ErrorContains(t, err, "restart or upgrade")
-	_, err = b.List(t.Context(), service.ListFilter{HasCompactionSummary: true})
+	_, err = service.CompactionSummaries(t.Context(), b, req)
 	require.ErrorContains(t, err, "restart or upgrade")
 	version.Store(19)
-	_, err = b.List(t.Context(), service.ListFilter{HasCompactionSummary: true})
+	_, err = service.CompactionSummaries(t.Context(), b, req)
 	require.NoError(t, err)
+	version.Store(20)
+	_, err = service.CompactionSummaries(t.Context(), b, req)
+	require.ErrorContains(t, err, "API version 20")
 }
 
 func TestCompactionSummariesFilterRowsAfterDaemonReplacement(t *testing.T) {
@@ -166,4 +168,25 @@ func TestCompactionSummariesFilterRowsAfterDaemonReplacement(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, out.Summaries, 1)
 	assert.Equal(t, "summary", out.Summaries[0].Content)
+}
+
+func TestCompactionFiltersRejectNewerAPI(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		if r.URL.Path == "/api/v1/version" {
+			fmt.Fprint(w, `{"api_version":20}`)
+			return
+		}
+		if r.URL.Path == "/api/v1/sessions" {
+			fmt.Fprint(w, `{"sessions":[],"total":0}`)
+			return
+		}
+		fmt.Fprint(w, `{"messages":[],"count":0}`)
+	}))
+	defer srv.Close()
+	b := NewHTTPBackend(srv.URL, "", false, "")
+	_, err := b.List(t.Context(), service.ListFilter{HasCompactionSummary: true})
+	require.ErrorContains(t, err, "API version 20")
+	_, err = b.Messages(t.Context(), "session", service.MessageFilter{CompactBoundaryOnly: true})
+	require.ErrorContains(t, err, "API version 20")
 }

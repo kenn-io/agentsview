@@ -569,8 +569,12 @@ func TestStoreListSessionsHasCompactionSummary(t *testing.T) {
 		{"event", "roocode", "system", "", "Context condensed"}, {"placeholder", "evener", "system", "CHECKPOINT", "[CHECKPOINT]"},
 	} {
 		s := db.Session{ID: row.id, Project: "alpha", Machine: fixtureMachine, Agent: row.agent, MessageCount: 1, CreatedAt: ended, EndedAt: &ended}
+		sourceType := ""
+		if row.id == "placeholder" {
+			sourceType = "evener_empty_compaction"
+		}
 		require.NoError(t, local.UpsertSession(ctx, s))
-		require.NoError(t, local.InsertMessages(ctx, []db.Message{{SessionID: s.ID, Ordinal: 0, Role: row.role, IsCompactBoundary: true, SourceSubtype: row.subtype, Content: row.content}}))
+		require.NoError(t, local.InsertMessages(ctx, []db.Message{{SessionID: s.ID, Ordinal: 0, Role: row.role, IsCompactBoundary: true, SourceType: sourceType, SourceSubtype: row.subtype, Content: row.content}}))
 	}
 	_, err := syncer.Push(ctx, false, nil)
 	require.NoError(t, err)

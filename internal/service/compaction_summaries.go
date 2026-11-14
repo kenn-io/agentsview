@@ -50,6 +50,11 @@ func CompactionSummaries(ctx context.Context, svc SessionService, req Compaction
 	if limit > MaxCompactionSessionLimit {
 		limit = MaxCompactionSessionLimit
 	}
+	if checker, ok := svc.(interface{ CheckCompactionSummaries(context.Context) error }); ok {
+		if err := checker.CheckCompactionSummaries(ctx); err != nil {
+			return out, err
+		}
+	}
 	ids := []string{req.SessionID}
 	if req.SessionID != "" {
 		detail, err := svc.Get(ctx, req.SessionID)
@@ -81,7 +86,7 @@ func CompactionSummaries(ctx context.Context, svc SessionService, req Compaction
 				return out, err
 			}
 			for _, m := range page.Messages {
-				if m.IsCompactBoundary && strings.TrimSpace(m.Content) != "" && !db.IsCompactionPlaceholder(m.SourceSubtype, m.Content) {
+				if m.IsCompactBoundary && strings.TrimSpace(m.Content) != "" && !db.IsCompactionPlaceholder(m.SourceType) {
 					out.Summaries = append(out.Summaries, CompactionSummary{SessionID: id, Ordinal: m.Ordinal, Timestamp: m.Timestamp, Content: m.Content})
 				}
 			}

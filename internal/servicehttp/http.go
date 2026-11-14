@@ -317,17 +317,25 @@ func (b *httpBackend) requireSessionAnnotations(ctx context.Context, minVersion 
 		version = capabilities.APIVersion
 		b.apiVersion = version
 	}
+	if minVersion == service.CompactionSummariesAPIVersion && version > service.APIVersion {
+		return fmt.Errorf("server API version %d is newer than supported version %d; upgrade the client", version, service.APIVersion)
+	}
 	if version < minVersion {
 		return fmt.Errorf("server API version %d does not support %s; restart or upgrade the server", version, feature)
 	}
 	return nil
 }
 
+// CheckCompactionSummaries checks the daemon once per summary request.
+func (b *httpBackend) CheckCompactionSummaries(ctx context.Context) error {
+	return b.requireSessionAnnotations(ctx, service.CompactionSummariesAPIVersion, "compaction summaries", true)
+}
+
 func (b *httpBackend) List(
 	ctx context.Context, f service.ListFilter,
 ) (*service.SessionList, error) {
 	if f.HasCompactionSummary {
-		if err := b.requireSessionAnnotations(ctx, service.CompactionSummariesAPIVersion, "compaction summaries", true); err != nil {
+		if err := b.requireSessionAnnotations(ctx, service.CompactionSummariesAPIVersion, "compaction summaries", false); err != nil {
 			return nil, err
 		}
 	} else if len(f.Labels) > 0 || f.PR != "" {
@@ -510,7 +518,7 @@ func (b *httpBackend) Messages(
 	ctx context.Context, id string, f service.MessageFilter,
 ) (*service.MessageList, error) {
 	if f.CompactBoundaryOnly {
-		if err := b.requireSessionAnnotations(ctx, service.CompactionSummariesAPIVersion, "compaction summaries", true); err != nil {
+		if err := b.requireSessionAnnotations(ctx, service.CompactionSummariesAPIVersion, "compaction summaries", false); err != nil {
 			return nil, err
 		}
 	}

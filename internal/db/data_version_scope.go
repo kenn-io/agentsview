@@ -70,6 +70,7 @@ var dataVersionScopes = map[int][]parser.AgentType{
 
 	usageEventMicrosDataVersion: {}, // Older binaries cannot maintain usage_events.occurred_at_us; nothing to reparse.
 	pricingMetaDataVersion:      {}, // Older binaries keep pricing metadata in model_pricing; nothing to reparse.
+	182:                         {parser.AgentEvener},
 }
 
 // firstScopedDataVersion is the oldest version that may be declared. Released

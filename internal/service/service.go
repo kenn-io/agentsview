@@ -45,6 +45,9 @@ var ErrAroundMutuallyExclusive = errors.New(
 // is set without Around. The HTTP handler maps it to a 400 response.
 var ErrBeforeAfterRequireAround = errors.New("before/after require around")
 
+// APIVersion is the current client and daemon contract version.
+const APIVersion = 19
+
 const CompactionSummariesAPIVersion = 19
 
 // ErrSemanticUnavailable is returned by SearchContent for modes

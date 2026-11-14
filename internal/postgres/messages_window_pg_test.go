@@ -331,7 +331,11 @@ func TestPGListSessionsHasCompactionSummary(t *testing.T) {
 		mwSeedWindowMessages(t, pg, row.id)
 		_, err := pg.ExecContext(t.Context(), `UPDATE sessions SET agent = $1, ended_at = '2024-06-15T00:00:00Z' WHERE id = $2`, row.agent, row.id)
 		require.NoError(t, err)
-		_, err = pg.ExecContext(t.Context(), `UPDATE messages SET is_compact_boundary = TRUE, role = $1, source_subtype = $2, content = $3 WHERE session_id = $4 AND ordinal = 3`, row.role, row.subtype, row.content, row.id)
+		sourceType := ""
+		if row.id == "placeholder" {
+			sourceType = "evener_empty_compaction"
+		}
+		_, err = pg.ExecContext(t.Context(), `UPDATE messages SET is_compact_boundary = TRUE, role = $1, source_subtype = $2, content = $3, source_type = $4 WHERE session_id = $5 AND ordinal = 3`, row.role, row.subtype, row.content, sourceType, row.id)
 		require.NoError(t, err)
 	}
 	store := mwNewStore(t, pgURL)

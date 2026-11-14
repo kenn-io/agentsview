@@ -2176,7 +2176,7 @@ Machine filters accept exact IDs, aliases, comma-separated ID/alias lists, or a
 unique whole display label. A valid 32-hex installation ID takes precedence even
 without stored sessions. Unknown or ambiguous names return an error with choices.
 
-Programmatic access to session data for scripts, automation agents, and CI jobs. For `session compactions`, `--limit` counts sessions per page, not response bytes. Resume `--cursor` with the same `--active-since`, including after an empty page. The read returns boundary text under any stored role. RooCode and legacy Kilo boundaries are events, so their sessions are excluded. Evener empty checkpoints and summaries use `[CHECKPOINT]` and `[SUMMARY]`; those placeholders are skipped, while real text is returned. A page can be empty with a cursor when its text is whitespace.
+Programmatic access to session data for scripts, automation agents, and CI jobs.
 See [Session API](/docs/session-api/) for full documentation, including
 stability guarantees, transport auto-detection, and every subcommand.
 
@@ -2200,6 +2200,8 @@ agentsview session usage-batch <id>...   # ordered usage results for several ses
 agentsview session label <id> k=v ...    # add or remove labels
 agentsview session parent <id> <parent>  # record the launching session
 ```
+
+For `session compactions`, `--limit` counts sessions per page, not response bytes. Resume `--cursor` with the same `--active-since`, including after an empty page. The read returns boundary text under any stored role. RooCode and legacy Kilo boundaries are events, so their sessions are excluded. Evener empty checkpoints and summaries use `[CHECKPOINT]` and `[SUMMARY]`; those placeholders are skipped, while real text is returned. A page can be empty with a cursor when its text is whitespace.
 
 `agentsview session commits <id>` lists transcript and Git trailer commits
 linked to a session. The `SOURCE` column distinguishes `transcript` from

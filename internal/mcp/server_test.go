@@ -246,7 +246,7 @@ func TestNewServer_OmitsRecallToolForUnsupportedBackend(t *testing.T) {
 	st, ct := newInMemoryPair(t, srv)
 	tools, err := ct.ListTools(t.Context(), nil)
 	require.NoError(t, err)
-	require.Len(t, tools.Tools, 18)
+	require.Len(t, tools.Tools, 19)
 	for _, tool := range tools.Tools {
 		assert.NotEqual(t, ToolQueryRecall, tool.Name)
 	}
@@ -489,7 +489,11 @@ func TestCompactionSummaryProducers(t *testing.T) {
 	for _, row := range rows {
 		ended := "2024-06-15T00:00:00Z"
 		dbtest.SeedSession(t, d, row.id, "project", func(s *db.Session) { s.EndedAt = &ended; s.Agent = row.agent })
-		require.NoError(t, d.InsertMessages(t.Context(), []db.Message{{SessionID: row.id, Ordinal: 0, Role: row.role, IsSystem: true, IsCompactBoundary: row.boundary, SourceSubtype: row.subtype, Content: row.content}}))
+		sourceType := ""
+		if row.id == "empty-checkpoint" || row.id == "empty-summary" {
+			sourceType = "evener_empty_compaction"
+		}
+		require.NoError(t, d.InsertMessages(t.Context(), []db.Message{{SessionID: row.id, Ordinal: 0, Role: row.role, IsSystem: true, IsCompactBoundary: row.boundary, SourceType: sourceType, SourceSubtype: row.subtype, Content: row.content}}))
 	}
 	srv := newServer(ServeOptions{Service: service.NewDirectBackend(d, nil), Profile: ProfileMemory})
 	st, ct := newInMemoryPair(t, srv)

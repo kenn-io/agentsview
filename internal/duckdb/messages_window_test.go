@@ -287,8 +287,12 @@ func TestDuckListSessionsHasCompactionSummary(t *testing.T) {
 			{"user", "hermes", "user", "", "summary"}, {"system", "fx", "system", "", "summary"},
 			{"event", "roocode", "system", "", "Context condensed"}, {"placeholder", "evener", "system", "CHECKPOINT", "[CHECKPOINT]"},
 		} {
+			sourceType := ""
+			if row.id == "placeholder" {
+				sourceType = "evener_empty_compaction"
+			}
 			require.NoError(t, local.UpsertSession(t.Context(), db.Session{ID: row.id, Project: "proj", Machine: "local", Agent: row.agent, MessageCount: 1, EndedAt: &ended}))
-			require.NoError(t, local.InsertMessages(t.Context(), []db.Message{{SessionID: row.id, Ordinal: 0, Role: row.role, IsCompactBoundary: true, SourceSubtype: row.subtype, Content: row.content}}))
+			require.NoError(t, local.InsertMessages(t.Context(), []db.Message{{SessionID: row.id, Ordinal: 0, Role: row.role, IsCompactBoundary: true, SourceType: sourceType, SourceSubtype: row.subtype, Content: row.content}}))
 		}
 	})
 	page, err := store.ListSessions(t.Context(), db.SessionFilter{ActiveSince: "2024-06-01T00:00:00Z", HasCompactionSummary: true, IncludeChildren: true})

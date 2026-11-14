@@ -693,7 +693,9 @@ CREATE INDEX IF NOT EXISTS idx_provider_freshness_updated_at
 // occurred_at_us or querying the index it replaced.)
 // (181: prevent older binaries from reading or writing pricing metadata as
 // model_pricing rows after it moved to pricing_meta.)
-const dataVersion = 181
+// (182: distinguish empty Evener compaction labels from source text. Re-parse
+// Evener sources in place; source and session identities are unchanged.)
+const dataVersion = 182
 
 const archiveOnlyVersionBase = 1 << 20
 

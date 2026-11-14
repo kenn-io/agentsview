@@ -59,8 +59,8 @@ func TestCompactionSummariesEvenerPlaceholders(t *testing.T) {
 		dbtest.SeedSession(t, d, row.id, "project", func(s *db.Session) { s.Agent = "evener"; s.EndedAt = &row.ended })
 	}
 	require.NoError(t, d.InsertMessages(t.Context(), []db.Message{
-		{SessionID: "a", Ordinal: 0, Role: "system", IsCompactBoundary: true, SourceSubtype: "CHECKPOINT", Content: "[CHECKPOINT]"},
-		{SessionID: "a", Ordinal: 1, Role: "system", IsCompactBoundary: true, SourceSubtype: "SUMMARY", Content: "[SUMMARY]"},
+		{SessionID: "a", Ordinal: 0, Role: "system", IsCompactBoundary: true, SourceType: "evener_empty_compaction", SourceSubtype: "CHECKPOINT", Content: "[CHECKPOINT]"},
+		{SessionID: "a", Ordinal: 1, Role: "system", IsCompactBoundary: true, SourceType: "evener_empty_compaction", SourceSubtype: "SUMMARY", Content: "[SUMMARY]"},
 		{SessionID: "b", Ordinal: 0, Role: "system", IsCompactBoundary: true, SourceSubtype: "CHECKPOINT", Content: "Retained summary"},
 		{SessionID: "c", Ordinal: 0, Role: "system", IsCompactBoundary: true, SourceSubtype: "CHECKPOINT", Content: "[SUMMARY]"},
 		{SessionID: "c", Ordinal: 1, Role: "system", IsCompactBoundary: true, SourceSubtype: "SUMMARY", Content: "[CHECKPOINT]"},
