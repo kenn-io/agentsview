@@ -49,15 +49,18 @@ and return `next_cursor` when more entries remain. To follow changes:
 1. List with your saved checkpoint as `updated_since`, and pass each
    `next_cursor` back until a page returns none.
 1. After the last page, save the last entry's `updated_at` as the new
-   checkpoint. The next walk may return that entry again, so dedupe by `id`.
+   checkpoint. Upsert each returned entry by `id`, since a later walk may
+   return an updated version of an entry you already saved.
 1. If a write lands during the walk, the next page fails with "recall corpus
    changed during pagination" (HTTP 409). Restart from the first page with
    every bound from the original walk, `updated_since`, `created_since`, or
    both, and keep the old checkpoint. Restarting from the last entry you
-   received can miss an entry written in the same millisecond.
+   received can miss an entry written in the same millisecond. Any Recall
+   entry or evidence write can interrupt a walk, even outside its filters.
 
-A read-only archive from before Recall tracked changes cannot change during a
-walk, so it pages without this check.
+An archive from before Recall tracked changes can return a bounded result that
+fits on one page. If more entries match, narrow the bounds or filters to fit
+one page.
 
 The top-level **Recall** page has two tabs:
 

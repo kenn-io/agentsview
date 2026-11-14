@@ -36,7 +36,7 @@ var ErrStaleRecallPagination = errors.New(
 )
 
 // RecallQueryRevisionProvider reports the revision that changes with every
-// Recall entry or evidence write. An empty revision marks a read-only archive.
+// Recall entry or evidence write. An empty revision means tracking is unavailable.
 type RecallQueryRevisionProvider interface {
 	RecallQueryRevision(context.Context) (string, error)
 }
@@ -68,7 +68,7 @@ func ListRecentRecallEntriesPage(
 		if cursor.Kind != RecallListCursorRecency {
 			return nil, "", db.ErrInvalidRecallQuery
 		}
-		if bounded && cursor.Revision != revision {
+		if bounded && (revision == "" || cursor.Revision != revision) {
 			return nil, "", ErrStaleRecallPagination
 		}
 		query.CursorUpdatedAt = cursor.UpdatedAt
@@ -102,7 +102,7 @@ func ListRecentRecallEntriesPage(
 	if !hasMore {
 		return results, "", nil
 	}
-	if bounded && !tracked {
+	if bounded && (!tracked || revision == "") {
 		return nil, "", fmt.Errorf(
 			"%w: this store cannot page a time-bounded list safely; "+
 				"narrow the bounds or filters to fit one page",

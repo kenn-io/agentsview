@@ -2128,7 +2128,6 @@ func TestRecallListAndGetHuman(t *testing.T) {
 	assert.Contains(t, list, "m-cli")
 	assert.Contains(t, list, "Check cwd before file reads")
 	assert.Contains(t, list, "review transferable=false provenance_ok=false evidence=1")
-	assert.Contains(t, list, "    evidence recall-session:3-7")
 
 	get, err := executeCommand(newRootCommand(), "recall", "get", "m-cli")
 	require.NoError(t, err)
@@ -2664,4 +2663,16 @@ func TestRecallListHumanShowsTrustAndCursor(t *testing.T) {
 	require.NoError(t, err)
 	assert.Contains(t, query, "    evidence recall-session:3-7")
 	assert.NotContains(t, query, "body:")
+}
+
+func TestRecallListUnboundedHumanKeepsCompactOutput(t *testing.T) {
+	dataDir := t.TempDir()
+	setRecallTestEnv(t, dataDir)
+	seedRecallEntryFixture(t, dataDir)
+	out, err := executeCommand(newRootCommand(), "recall", "list")
+	require.NoError(t, err)
+	assert.Contains(t, out, "m-cli")
+	assert.NotContains(t, out, "Verify cwd before retrying failed reads.")
+	assert.NotContains(t, out, "updated_at=")
+	assert.NotContains(t, out, "    evidence recall-session:3-7")
 }
