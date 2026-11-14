@@ -303,7 +303,7 @@ func (b *httpBackend) FindSessionIDsByRawSuffix(
 }
 
 // Probe only when the backend has no version so unfiltered lists need no extra request.
-func (b *httpBackend) requireSessionAnnotations(ctx context.Context) error {
+func (b *httpBackend) requireAPIVersion(ctx context.Context, minVersion int, feature string) error {
 	version := b.apiVersion
 	if version == 0 {
 		capabilities, err := ProbeHTTPServerCapabilities(ctx, b.baseURL, b.token)
@@ -312,11 +312,10 @@ func (b *httpBackend) requireSessionAnnotations(ctx context.Context) error {
 		}
 		version = capabilities.APIVersion
 	}
-	if version < service.SessionAnnotationsAPIVersion {
+	if version < minVersion {
 		return fmt.Errorf(
-			"server API version %d does not support session labels, parent links, or their filters; "+
-				"restart or upgrade the server",
-			version,
+			"server API version %d does not support %s; restart or upgrade the server",
+			version, feature,
 		)
 	}
 	return nil
@@ -326,7 +325,7 @@ func (b *httpBackend) List(
 	ctx context.Context, f service.ListFilter,
 ) (*service.SessionList, error) {
 	if len(f.Labels) > 0 || f.PR != "" {
-		if err := b.requireSessionAnnotations(ctx); err != nil {
+		if err := b.requireAPIVersion(ctx, service.SessionAnnotationsAPIVersion, "session labels, parent links, or their filters"); err != nil {
 			return nil, err
 		}
 	}
@@ -1315,11 +1314,16 @@ func (b *httpBackend) ListRecallEntries(
 	if err := service.ValidateRecallEntryLimit(f.Limit); err != nil {
 		return nil, err
 	}
-	q := recallFilterToQuery(f)
 	api, err := b.apiClient(b.client)
 	if err != nil {
 		return nil, err
 	}
+	if f.UpdatedSince != "" || f.CreatedSince != "" {
+		if err := b.requireAPIVersion(ctx, service.RecallTimeBoundsAPIVersion, "Recall time bounds"); err != nil {
+			return nil, err
+		}
+	}
+	q := recallFilterToQuery(f)
 	response, err := api.GetAPIV1RecallEntriesWithResponse(ctx, &apiclient.GetAPIV1RecallEntriesRequestOptions{Query: q})
 	if response == nil {
 		return nil, err
@@ -1331,9 +1335,12 @@ func (b *httpBackend) ListRecallEntries(
 				"recall list: daemon at %s: %w", b.baseURL, db.ErrReadOnly,
 			)
 		}
+		if response.HTTPResponse.StatusCode == http.StatusConflict {
+			return nil, service.ErrStaleRecallPagination
+		}
 		return nil, err
 	}
-	out := service.RecallList{RecallEntries: response.JSON200.Entries, TrustedOnly: response.JSON200.TrustedOnly}
+	out := service.RecallList{RecallEntries: response.JSON200.Entries, TrustedOnly: response.JSON200.TrustedOnly, NextCursor: response.JSON200.NextCursor}
 	if out.RecallEntries == nil {
 		out.RecallEntries = []db.RecallResult{}
 	}
@@ -1509,6 +1516,15 @@ func (b *httpBackend) ImportRecallEntries(
 
 func recallFilterToQuery(f service.RecallFilter) *apiclient.GetAPIV1RecallEntriesQuery {
 	q := &apiclient.GetAPIV1RecallEntriesQuery{}
+	if f.UpdatedSince != "" {
+		q.UpdatedSince = new(f.UpdatedSince)
+	}
+	if f.CreatedSince != "" {
+		q.CreatedSince = new(f.CreatedSince)
+	}
+	if f.Cursor != "" {
+		q.Cursor = new(f.Cursor)
+	}
 	if f.Query != "" {
 		q.Q = new(f.Query)
 	}

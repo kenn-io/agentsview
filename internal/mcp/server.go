@@ -27,6 +27,7 @@ import (
 const (
 	ToolSearchSessions       = "search_sessions"
 	ToolQueryRecall          = "query_recall"
+	ToolListRecall           = "list_recall"
 	ToolListSessions         = "list_sessions"
 	ToolGetSessionOverview   = "get_session_overview"
 	ToolGetMessages          = "get_messages"
@@ -161,6 +162,7 @@ func newServer(opts ServeOptions) *mcp.Server {
 		}, t.searchSessions)
 
 		if service.SupportsRecallQueries(opts.Service) {
+			mcp.AddTool(s, &mcp.Tool{Name: ToolListRecall, Description: "List distilled recall entries without a query. Lists bounded by updated_since or created_since return the oldest change first and include every status.", Annotations: readOnly}, t.listRecall)
 			mcp.AddTool(s, &mcp.Tool{
 				Name: ToolQueryRecall,
 				Description: "Search distilled knowledge extracted from prior sessions. " +

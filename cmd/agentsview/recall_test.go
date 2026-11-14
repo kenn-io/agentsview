@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"database/sql"
 	"encoding/json/jsontext"
 	"encoding/json/v2"
 	"fmt"
@@ -327,10 +328,18 @@ func TestRecallListUsesExplicitServerURL(t *testing.T) {
 
 	var gotPath string
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/api/v1/version" {
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{"api_version":20}`))
+			return
+		}
 		gotPath = r.URL.Path
 		if !assert.Equal(t, http.MethodGet, r.Method) {
 			return
 		}
+		assert.Equal(t, "2026-11-12T22:00:00-05:00", r.URL.Query().Get("updated_since"))
+		assert.Equal(t, "2026-11-01T00:00:00Z", r.URL.Query().Get("created_since"))
+		assert.Equal(t, "page-token", r.URL.Query().Get("cursor"))
 		if !assert.Equal(t, "agentsview", r.URL.Query().Get("project")) {
 			return
 		}
@@ -340,7 +349,7 @@ func TestRecallListUsesExplicitServerURL(t *testing.T) {
 				ID:      "m-list-remote",
 				Type:    "procedure",
 				Scope:   "project",
-				Status:  "accepted",
+				Status:  "archived",
 				Title:   "Remote list recall",
 				Project: "agentsview",
 			}},
@@ -352,7 +361,7 @@ func TestRecallListUsesExplicitServerURL(t *testing.T) {
 
 	out, err := executeCommand(newRootCommand(),
 		"recall", "--server", " "+srv.URL+"/ ",
-		"list", "--project", "agentsview", "--format", "json")
+		"list", "--project", "agentsview", "--updated-since", "2026-11-12T22:00:00-05:00", "--created-since", "2026-11-01T00:00:00Z", "--cursor", "page-token", "--format", "json")
 
 	require.NoError(t, err)
 	assert.Equal(t, "/api/v1/recall/entries", gotPath)
@@ -362,6 +371,7 @@ func TestRecallListUsesExplicitServerURL(t *testing.T) {
 		"stdout should be valid JSON: %q", out)
 	require.Len(t, got.RecallEntries, 1)
 	assert.Equal(t, "m-list-remote", got.RecallEntries[0].ID)
+	assert.Equal(t, "archived", got.RecallEntries[0].Status)
 }
 
 func TestRecallGetUsesExplicitServerURL(t *testing.T) {
@@ -2607,4 +2617,46 @@ func seedRecallEntrySourceSessionFixture(
 		SourceSessionID: sessionID,
 	})
 	require.NoError(t, err)
+}
+
+func TestRecallListHumanShowsCursor(t *testing.T) {
+	dataDir := t.TempDir()
+	setRecallTestEnv(t, dataDir)
+	seedRecallEntryFixture(t, dataDir)
+	d, err := db.Open(t.Context(), filepath.Join(dataDir, "sessions.db"))
+	require.NoError(t, err)
+	_, err = d.InsertRecallEntry(t.Context(), db.RecallEntry{
+		ID: "m-cli-second", Type: "fact", Scope: "project", Status: "accepted",
+		Title: "Second entry", Body: "Second entry", SourceSessionID: "recall-session",
+	})
+	require.NoError(t, err)
+	require.NoError(t, d.Close())
+	raw, err := sql.Open("sqlite3", filepath.Join(dataDir, "sessions.db"))
+	require.NoError(t, err)
+	_, err = raw.ExecContext(t.Context(), `UPDATE recall_entries
+		SET created_at = CASE id
+			WHEN 'm-cli' THEN '2026-11-14T09:11:12.123Z'
+			ELSE '2026-11-14T09:11:13.000Z' END,
+		updated_at = CASE id
+			WHEN 'm-cli' THEN '2026-11-14T10:11:12.123Z'
+			ELSE '2026-11-14T10:11:13.000Z' END`)
+	require.NoError(t, err)
+	require.NoError(t, raw.Close())
+
+	out, err := executeCommand(newRootCommand(),
+		"recall", "list", "--updated-since", "2020-01-01T00:00:00Z", "--limit", "1")
+
+	require.NoError(t, err)
+	assert.Contains(t, out, "    created_at=2026-11-14T09:11:12.123Z")
+	assert.Contains(t, out, "    updated_at=2026-11-14T10:11:12.123Z")
+	assert.Contains(t, out, "    body: Verify cwd before retrying failed reads.")
+	assert.Contains(t, out, "    evidence recall-session:3-7")
+	assert.Regexp(t, `(?m)^next_cursor: \S+$`, out)
+
+	unbounded, err := executeCommand(newRootCommand(), "recall", "list")
+	require.NoError(t, err)
+	assert.Contains(t, unbounded, "m-cli")
+	assert.NotContains(t, unbounded, "Verify cwd before retrying failed reads.")
+	assert.NotContains(t, unbounded, "updated_at=")
+	assert.NotContains(t, unbounded, "    evidence recall-session:3-7")
 }

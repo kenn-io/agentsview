@@ -2334,7 +2334,7 @@ scoring, and trust policy evolve. See [Recall (Experimental)](/docs/recall/) for
 its current guarantees and limitations.
 
 ```bash
-agentsview recall list
+agentsview recall list [--updated-since <timestamp>] [--created-since <timestamp>] [--cursor <cursor>]
 agentsview recall get <id>
 agentsview recall query <text>
 agentsview recall brief <task>
@@ -2347,6 +2347,13 @@ agentsview recall extract doctor
 agentsview recall extract preview --session <id>
 agentsview recall import <accepted-recall.jsonl> --dry-run
 ```
+
+`--updated-since` and `--created-since` take RFC3339 timestamps and include
+the boundary. A bounded list returns the oldest change first and includes
+archived entries. Pass the returned `next_cursor` to `--cursor` for the next
+page. If Recall changes during the walk, restart from the first page with the
+same original time bound(s). See [Recall](/docs/recall/) for following changes over
+time.
 
 Model-backed extraction requires an enabled `[recall.extract]` config section —
 see [Recall](/docs/recall/#automatic-extraction). `preview` replaces the earlier

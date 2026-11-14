@@ -261,6 +261,48 @@ func (t *toolset) queryRecall(
 	}, nil
 }
 
+type listRecallIn struct {
+	UpdatedSince    string `json:"updated_since,omitempty" jsonschema:"Include entries updated at or after this RFC3339 timestamp."`
+	CreatedSince    string `json:"created_since,omitempty" jsonschema:"Include entries created at or after this RFC3339 timestamp."`
+	Project         string `json:"project,omitempty"`
+	CWD             string `json:"cwd,omitempty"`
+	GitBranch       string `json:"git_branch,omitempty"`
+	Agent           string `json:"agent,omitempty"`
+	Type            string `json:"type,omitempty"`
+	Scope           string `json:"scope,omitempty"`
+	Status          string `json:"status,omitempty"`
+	ExtractorMethod string `json:"extractor_method,omitempty"`
+	SourceSessionID string `json:"source_session_id,omitempty"`
+	SourceRunID     string `json:"source_run_id,omitempty"`
+	TrustedOnly     bool   `json:"trusted_only,omitempty"`
+	Cursor          string `json:"cursor,omitempty" jsonschema:"Cursor from a previous next_cursor."`
+	Limit           int    `json:"limit,omitempty" jsonschema:"Max results, default 20, max 100."`
+}
+
+type listRecallOut struct {
+	Entries     []db.RecallEntry `json:"entries"`
+	TrustedOnly bool             `json:"trusted_only"`
+	NextCursor  string           `json:"next_cursor,omitempty"`
+}
+
+func (t *toolset) listRecall(ctx context.Context, _ *mcp.CallToolRequest, in listRecallIn) (*mcp.CallToolResult, listRecallOut, error) {
+	result, err := t.svc.ListRecallEntries(ctx, service.RecallFilter{
+		UpdatedSince: in.UpdatedSince, CreatedSince: in.CreatedSince, Project: in.Project,
+		CWD: in.CWD, GitBranch: in.GitBranch, Agent: in.Agent, Type: in.Type,
+		Scope: in.Scope, Status: in.Status, ExtractorMethod: in.ExtractorMethod,
+		SourceSessionID: in.SourceSessionID, SourceRunID: in.SourceRunID, TrustedOnly: in.TrustedOnly, Cursor: in.Cursor,
+		Limit: clampLimit(in.Limit, defaultListLimit, maxListLimit),
+	})
+	if err != nil {
+		return nil, listRecallOut{}, err
+	}
+	entries := make([]db.RecallEntry, 0, len(result.RecallEntries))
+	for _, entry := range result.RecallEntries {
+		entries = append(entries, entry.RecallEntry)
+	}
+	return nil, listRecallOut{Entries: entries, TrustedOnly: result.TrustedOnly, NextCursor: result.NextCursor}, nil
+}
+
 // --- list_sessions ---
 
 type listSessionsIn struct {
