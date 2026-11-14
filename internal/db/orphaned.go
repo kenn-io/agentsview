@@ -1769,6 +1769,7 @@ func (d *DB) CopySessionMetadataFrom(
 				'usage_pricing_revision',
 				'conversation_publication_revision',
 				'conversation_pruned_revision',
+				'conversation_prune_mark',
 				'conversation_usage_revision',
 				'worktree_mapping_publication_revision'
 			)
