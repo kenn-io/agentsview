@@ -1318,14 +1318,24 @@ func (b *httpBackend) ListRecallEntries(
 	if err := service.ValidateRecallEntryLimit(f.Limit); err != nil {
 		return nil, err
 	}
-	if (f.UpdatedSince != "" || f.CreatedSince != "") && b.apiVersion > 0 && b.apiVersion < recallTimeBoundsAPIVersion {
-		return nil, fmt.Errorf("server API version %d does not support recall time bounds; upgrade or restart the server", b.apiVersion)
-	}
-	q := recallFilterToQuery(f)
 	api, err := b.apiClient(b.client)
 	if err != nil {
 		return nil, err
 	}
+	if f.UpdatedSince != "" || f.CreatedSince != "" {
+		version := b.apiVersion
+		if version == 0 {
+			capabilities, err := probeHTTPServerCapabilities(ctx, api)
+			if err != nil {
+				return nil, err
+			}
+			version = capabilities.APIVersion
+		}
+		if version < recallTimeBoundsAPIVersion {
+			return nil, fmt.Errorf("server API version %d does not support recall time bounds; upgrade or restart the server", version)
+		}
+	}
+	q := recallFilterToQuery(f)
 	response, err := api.GetAPIV1RecallEntriesWithResponse(ctx, &apiclient.GetAPIV1RecallEntriesRequestOptions{Query: q})
 	if response == nil {
 		return nil, err

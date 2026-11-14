@@ -1338,7 +1338,12 @@ func NormalizeRecallQuery(q RecallQuery) RecallQuery {
 	for _, value := range []*string{&q.UpdatedSince, &q.CreatedSince} {
 		*value = strings.TrimSpace(*value)
 		if t, err := time.Parse(time.RFC3339, *value); err == nil {
-			*value = t.UTC().Format(extractTimeLayout)
+			t = t.UTC()
+			// Stored timestamps have millisecond precision; exclude earlier rows.
+			if remainder := t.Nanosecond() % int(time.Millisecond); remainder != 0 {
+				t = t.Add(time.Millisecond - time.Duration(remainder))
+			}
+			*value = t.Format(extractTimeLayout)
 		}
 	}
 	q.CursorUpdatedAt = strings.TrimSpace(q.CursorUpdatedAt)
@@ -1525,11 +1530,13 @@ func buildRecallEntryWhere(q RecallQuery, includeText bool) (string, []any) {
 	preds := []string{"1=1"}
 	var args []any
 	status := q.Status
-	if status == "" {
+	if status == "" && (q.TrustedOnly || (q.UpdatedSince == "" && q.CreatedSince == "")) {
 		status = corerecall.StatusAccepted
 	}
-	preds = append(preds, "status = ?")
-	args = append(args, status)
+	if status != "" {
+		preds = append(preds, "status = ?")
+		args = append(args, status)
+	}
 	if q.Project != "" {
 		preds = append(preds, "project = ?")
 		args = append(args, q.Project)

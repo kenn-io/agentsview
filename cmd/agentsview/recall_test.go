@@ -327,6 +327,11 @@ func TestRecallListUsesExplicitServerURL(t *testing.T) {
 
 	var gotPath string
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/api/v1/version" {
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{"api_version":19}`))
+			return
+		}
 		gotPath = r.URL.Path
 		if !assert.Equal(t, http.MethodGet, r.Method) {
 			return
@@ -343,7 +348,7 @@ func TestRecallListUsesExplicitServerURL(t *testing.T) {
 				ID:      "m-list-remote",
 				Type:    "procedure",
 				Scope:   "project",
-				Status:  "accepted",
+				Status:  "archived",
 				Title:   "Remote list recall",
 				Project: "agentsview",
 			}},
@@ -365,6 +370,7 @@ func TestRecallListUsesExplicitServerURL(t *testing.T) {
 		"stdout should be valid JSON: %q", out)
 	require.Len(t, got.RecallEntries, 1)
 	assert.Equal(t, "m-list-remote", got.RecallEntries[0].ID)
+	assert.Equal(t, "archived", got.RecallEntries[0].Status)
 }
 
 func TestRecallGetUsesExplicitServerURL(t *testing.T) {
