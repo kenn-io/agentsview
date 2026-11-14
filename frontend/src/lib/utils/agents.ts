@@ -53,6 +53,7 @@ export const KNOWN_AGENTS: readonly AgentMeta[] = [
   },
   { name: "pi", color: "var(--accent-indigo)", label: "Pi" },
   { name: "stepcode", color: "var(--accent-indigo)", label: "StepCode" },
+  { name: "direct-api", color: "var(--accent-indigo)", label: "Direct API" },
   { name: "fx", color: "var(--accent-sky)", label: "fx" },
   { name: "tau", color: "var(--accent-amber)", label: "Tau" },
   {
