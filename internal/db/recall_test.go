@@ -9,6 +9,7 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -3113,9 +3114,9 @@ func TestRecallTimeBoundsPrecisionAndStatuses(t *testing.T) {
 		want []string
 	}{
 		{"default", RecallQuery{}, []string{"before", "boundary"}},
-		{"updated", RecallQuery{UpdatedSince: "2026-01-01T00:00:00.000001Z"}, []string{"boundary", "archived"}},
+		{"updated", RecallQuery{UpdatedSince: "2026-01-01T00:00:00.000001Z"}, []string{"before", "boundary", "archived"}},
 		{"explicit status", RecallQuery{UpdatedSince: "2026-01-01T00:00:00.000001Z", Status: "archived"}, []string{"archived"}},
-		{"trusted", RecallQuery{UpdatedSince: "2026-01-01T00:00:00.000001Z", TrustedOnly: true}, []string{"boundary"}},
+		{"trusted", RecallQuery{UpdatedSince: "2026-01-01T00:00:00.000001Z", TrustedOnly: true}, []string{"before", "boundary"}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			entries, err := d.ListRecallEntries(t.Context(), tc.q)
@@ -3127,4 +3128,16 @@ func TestRecallTimeBoundsPrecisionAndStatuses(t *testing.T) {
 			assert.ElementsMatch(t, tc.want, ids)
 		})
 	}
+}
+
+func TestRecallCheckpointIncludesSubsequentWrite(t *testing.T) {
+	d := testDB(t)
+	insertSession(t, d, "checkpoint-session", "project")
+	checkpoint := time.Now().UTC()
+	_, err := d.InsertRecallEntry(t.Context(), RecallEntry{ID: "after-checkpoint", Type: "fact", Scope: "project", Status: "accepted", Title: "after", Body: "after", SourceSessionID: "checkpoint-session"})
+	require.NoError(t, err)
+	entries, err := d.ListRecallEntries(t.Context(), RecallQuery{UpdatedSince: checkpoint.Format(time.RFC3339Nano)})
+	require.NoError(t, err)
+	require.Len(t, entries, 1)
+	assert.Equal(t, "after-checkpoint", entries[0].ID)
 }

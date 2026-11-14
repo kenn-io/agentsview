@@ -1339,11 +1339,7 @@ func NormalizeRecallQuery(q RecallQuery) RecallQuery {
 	q.invalidUpdatedSince = false
 	if q.UpdatedSince != "" {
 		if t, err := time.Parse(time.RFC3339, q.UpdatedSince); err == nil {
-			t = t.UTC()
-			// Stored timestamps have millisecond precision; exclude earlier rows.
-			if remainder := t.Nanosecond() % int(time.Millisecond); remainder != 0 {
-				t = t.Add(time.Millisecond - time.Duration(remainder))
-			}
+			t = t.UTC().Truncate(time.Millisecond)
 			q.UpdatedSince = t.Format(extractTimeLayout)
 		} else {
 			q.invalidUpdatedSince = true

@@ -1130,6 +1130,58 @@ func TestDirectRecallListPages(t *testing.T) {
 	require.ErrorIs(t, err, db.ErrInvalidRecallQuery)
 }
 
+func TestDirectRecallDeltaRejectsChangedCorpus(t *testing.T) {
+	d := dbtest.OpenTestDB(t)
+	seedServiceRecallEntrySession(t, d)
+	for _, id := range []string{"page-a", "page-b"} {
+		seedServiceRecallEntry(t, d, db.RecallEntry{ID: id, Title: id, Body: id, SourceSessionID: "recall-session"})
+	}
+	svc := service.NewReadOnlyBackend(d)
+	f := service.RecallFilter{Limit: 1, UpdatedSince: "2020-01-01T00:00:00Z"}
+	first, err := svc.ListRecallEntries(t.Context(), f)
+	require.NoError(t, err)
+	require.NotEmpty(t, first.NextCursor)
+	unfiltered, err := svc.ListRecallEntries(t.Context(), service.RecallFilter{Limit: 1})
+	require.NoError(t, err)
+	require.NotEmpty(t, unfiltered.NextCursor)
+	unseen := "page-a"
+	if first.RecallEntries[0].ID == unseen {
+		unseen = "page-b"
+	}
+	_, err = d.ReviewRecallEntry(t.Context(), unseen, db.RecallReviewArchive)
+	require.NoError(t, err)
+	f.Cursor = first.NextCursor
+	_, err = svc.ListRecallEntries(t.Context(), f)
+	require.ErrorIs(t, err, service.ErrStaleRecallPagination)
+	_, err = svc.ListRecallEntries(t.Context(), service.RecallFilter{Limit: 1, Cursor: unfiltered.NextCursor})
+	require.NoError(t, err)
+}
+
+type changingRecallPageStore struct {
+	*db.DB
+	change func() error
+}
+
+func (s changingRecallPageStore) ListRecallEntries(ctx context.Context, q db.RecallQuery) ([]db.RecallEntry, error) {
+	entries, err := s.DB.ListRecallEntries(ctx, q)
+	if err == nil {
+		err = s.change()
+	}
+	return entries, err
+}
+
+func TestRecallDeltaRejectsWriteDuringPage(t *testing.T) {
+	d := dbtest.OpenTestDB(t)
+	seedServiceRecallEntrySession(t, d)
+	seedServiceRecallEntry(t, d, db.RecallEntry{ID: "entry", Title: "entry", Body: "entry", SourceSessionID: "recall-session"})
+	store := changingRecallPageStore{DB: d, change: func() error {
+		_, err := d.ReviewRecallEntry(t.Context(), "entry", db.RecallReviewArchive)
+		return err
+	}}
+	_, _, err := service.ListRecentRecallEntriesPage(t.Context(), store, db.RecallQuery{UpdatedSince: "2020-01-01T00:00:00Z"}, 1, nil)
+	require.ErrorIs(t, err, service.ErrStaleRecallPagination)
+}
+
 func TestDirectRecallListClampsLargePage(t *testing.T) {
 	d := dbtest.OpenTestDB(t)
 	seedServiceRecallEntrySession(t, d)

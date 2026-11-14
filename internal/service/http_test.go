@@ -1386,20 +1386,27 @@ func TestHTTPBackendRecallTimeBoundsOldServer(t *testing.T) {
 	calls := 0
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		calls++
-		assert.Empty(t, r.URL.Query().Get("cursor"))
 		w.Header().Set("Content-Type", "application/json")
-		_, _ = w.Write([]byte(`{"entries":[],"trusted_only":false,"next_cursor":""}`))
+		if calls == 1 {
+			assert.Empty(t, r.URL.Query().Get("cursor"))
+			_, _ = w.Write([]byte(`{"entries":[],"trusted_only":false,"next_cursor":"previous"}`))
+			return
+		}
+		assert.Equal(t, "previous", r.URL.Query().Get("cursor"))
+		_, _ = w.Write([]byte(`{"entries":[{"id":"second-page"}],"trusted_only":false,"next_cursor":""}`))
 	}))
 	t.Cleanup(srv.Close)
 	svc := servicehttp.NewHTTPBackendForServer(srv.URL, "", servicehttp.HTTPServerCapabilities{APIVersion: 18})
-	for _, f := range []service.RecallFilter{{UpdatedSince: "2026-01-01T00:00:00Z"}, {Cursor: "previous"}} {
-		_, err := svc.ListRecallEntries(t.Context(), f)
-		require.ErrorContains(t, err, "restart or upgrade")
-	}
+	_, err := svc.ListRecallEntries(t.Context(), service.RecallFilter{UpdatedSince: "2026-01-01T00:00:00Z"})
+	require.ErrorContains(t, err, "restart or upgrade")
 	assert.Zero(t, calls)
-	_, err := svc.ListRecallEntries(t.Context(), service.RecallFilter{})
+	first, err := svc.ListRecallEntries(t.Context(), service.RecallFilter{})
 	require.NoError(t, err)
-	assert.Equal(t, 1, calls)
+	second, err := svc.ListRecallEntries(t.Context(), service.RecallFilter{Cursor: first.NextCursor})
+	require.NoError(t, err)
+	require.Len(t, second.RecallEntries, 1)
+	assert.Equal(t, "second-page", second.RecallEntries[0].ID)
+	assert.Equal(t, 2, calls)
 }
 
 func TestHTTPBackendRecallTimeBoundsProbeOldServer(t *testing.T) {
@@ -1415,9 +1422,17 @@ func TestHTTPBackendRecallTimeBoundsProbeOldServer(t *testing.T) {
 	}))
 	t.Cleanup(srv.Close)
 	svc := servicehttp.NewHTTPBackend(srv.URL, "", false, "")
-	for _, f := range []service.RecallFilter{{UpdatedSince: "2026-01-01T00:00:00Z"}, {Cursor: "previous"}} {
-		_, err := svc.ListRecallEntries(t.Context(), f)
-		require.ErrorContains(t, err, "restart or upgrade")
-	}
+	_, err := svc.ListRecallEntries(t.Context(), service.RecallFilter{UpdatedSince: "2026-01-01T00:00:00Z"})
+	require.ErrorContains(t, err, "restart or upgrade")
 	assert.Zero(t, listCalls)
+}
+
+func TestHTTPBackendRecallStalePagination(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Error(w, "recall corpus changed; restart pagination", http.StatusConflict)
+	}))
+	t.Cleanup(srv.Close)
+	svc := servicehttp.NewHTTPBackendForServer(srv.URL, "", servicehttp.HTTPServerCapabilities{APIVersion: 19})
+	_, err := svc.ListRecallEntries(t.Context(), service.RecallFilter{UpdatedSince: "2020-01-01T00:00:00Z"})
+	require.ErrorIs(t, err, service.ErrStaleRecallPagination)
 }

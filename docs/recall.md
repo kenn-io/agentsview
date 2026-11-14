@@ -40,8 +40,9 @@ include every status, including archived and superseded entries. `trusted_only`
 continues to select accepted entries. The HTTP list and MCP `list_recall` accept
 `updated_since`. Each returns a `next_cursor` when another page is available.
 Record the time you start listing and use it as the next `updated_since` bound.
-An entry changed while paging may move ahead of the cursor; the next run then
-returns it.
+The bound includes its entire millisecond, so entries from earlier in that
+millisecond may overlap. A write during a time-bound walk can return
+"recall corpus changed; restart pagination"; restart with the same bound.
 
 Each entry's `source_run_id` labels its extraction generation. Activating a generation promotes its entries and updates their `updated_at`, so an update delta immediately after activation includes that generation.
 

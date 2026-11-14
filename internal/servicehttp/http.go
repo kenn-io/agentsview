@@ -1318,8 +1318,8 @@ func (b *httpBackend) ListRecallEntries(
 	if err != nil {
 		return nil, err
 	}
-	if f.UpdatedSince != "" || f.Cursor != "" {
-		if err := b.requireAPIVersion(ctx, service.RecallUpdatedSinceAPIVersion, "Recall time bounds and cursors"); err != nil {
+	if f.UpdatedSince != "" {
+		if err := b.requireAPIVersion(ctx, service.RecallUpdatedSinceAPIVersion, "Recall time bounds"); err != nil {
 			return nil, err
 		}
 	}
@@ -1330,6 +1330,9 @@ func (b *httpBackend) ListRecallEntries(
 	}
 	err = serviceResponseError(response.HTTPResponse, response.Body, err)
 	if err != nil {
+		if response.HTTPResponse != nil && response.StatusCode == http.StatusConflict && strings.Contains(string(response.Body), "restart pagination") {
+			return nil, service.ErrStaleRecallPagination
+		}
 		if errors.Is(err, errHTTPNotImplemented) {
 			return nil, fmt.Errorf(
 				"recall list: daemon at %s: %w", b.baseURL, db.ErrReadOnly,
