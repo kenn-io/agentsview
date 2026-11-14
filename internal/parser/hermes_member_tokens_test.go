@@ -33,7 +33,7 @@ func hermesTokenFixture(t *testing.T) (*sql.DB, string) {
 func tokenMap(t *testing.T, c *sql.DB) map[string]string {
 	t.Helper()
 	out := map[string]string{}
-	require.NoError(t, listHermesMemberTokens(t.Context(), c, "", false, func(id, token string, _ bool) error { out[id] = token; return nil }))
+	require.NoError(t, listHermesMemberTokens(t.Context(), c, "", false, func(id, token string, _ bool, _ []hermesModelUsage) error { out[id] = token; return nil }))
 	return out
 }
 
@@ -78,6 +78,8 @@ func TestHermesMemberTokenChanges(t *testing.T) {
 		changed                bool
 	}{
 		{"insert", "", `INSERT INTO messages(session_id,role,content,timestamp) VALUES ('child','assistant','reply',1778767220)`, true},
+		{"finish reason", "", `UPDATE messages SET finish_reason='stop' WHERE session_id='child'`, true},
+		{"interior timestamp", `INSERT INTO messages(session_id,role,content,timestamp) VALUES ('child','user','first',1),('child','user','last',9999999999)`, `UPDATE messages SET timestamp=1778767211 WHERE session_id='child' AND timestamp=1778767210`, true},
 		{"title", "", `UPDATE sessions SET title='new title' WHERE id='child'`, true},
 		{"content", "", `UPDATE messages SET content='rewritten' WHERE session_id='child'`, true},
 		{"usage", "", `UPDATE sessions SET input_tokens=777 WHERE id='child'`, true},
@@ -166,7 +168,11 @@ func TestHermesMemberListingFallbacksAndDeletion(t *testing.T) {
 			case "suppressed":
 				assert.Empty(t, sources)
 			case "deleted", "prefixed deleted":
-				require.Len(t, sources, 1)
+				if kind == "prefixed deleted" {
+					require.Len(t, sources, 2)
+				} else {
+					require.Len(t, sources, 1)
+				}
 				assert.Equal(t, filepath.Join(root, "sessions", transcript), sources[0].DisplayPath)
 			case "malformed":
 				require.Len(t, sources, 2)
