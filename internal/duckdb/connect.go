@@ -2,7 +2,9 @@ package duckdb
 
 import (
 	"context"
+	"crypto/sha256"
 	"database/sql"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"net"
@@ -318,8 +320,10 @@ func NewQuackStore(ctx context.Context,
 	if err != nil {
 		return nil, err
 	}
+	target := sha256.Sum256([]byte(rawURL))
 	return &Store{
 		duck:           client.DB(),
+		trendsCacheID:  "quack-" + hex.EncodeToString(target[:]),
 		quack:          client,
 		connectionKind: duckDBQuackClientConnection,
 	}, nil

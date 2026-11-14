@@ -384,7 +384,13 @@ func (s analyticsSQL) TrendsSQL(f, sessionFilter db.AnalyticsFilter, _ bool) (st
 		"m.session_id IN (SELECT s.id FROM sessions s WHERE "+where+")", args, true, false)
 }
 
-func (s analyticsSQL) TrendsDisk() (*kept.Disk, string) { return &s.store.usageDisk, s.store.path }
+func (s analyticsSQL) TrendsDisk() (*kept.Disk, string) {
+	identity := s.store.path
+	if s.store.trendsCacheID != "" {
+		identity = s.store.trendsCacheID
+	}
+	return &s.store.usageDisk, identity
+}
 func (s analyticsSQL) TrendSessionVersions(ctx context.Context, f db.AnalyticsFilter) (map[string]string, error) {
 	sf := f
 	sf.From, sf.To, sf.Model = "", "", ""

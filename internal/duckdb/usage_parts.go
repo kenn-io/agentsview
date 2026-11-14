@@ -21,6 +21,9 @@ func refreshUsageParts[T any](ctx context.Context, s *Store, slot, priceDigest s
 		return read(ctx, nil)
 	}
 	stamp := s.keptVersion()
+	if stamp == "" {
+		return read(ctx, nil)
+	}
 	versions, err := s.usagePartVersions(ctx)
 	if err != nil {
 		return nil, err
