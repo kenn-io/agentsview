@@ -350,16 +350,29 @@ func TestRawProjectionRollsBackWhenLeaseExpiresDuringWrites(t *testing.T) {
 	t.Parallel()
 	f := newProjectionFixture(t)
 	m, _ := f.accept(t, "device-a", "expires-during-write", "")
-	_, err := f.sink.SelectSourceGeneration(t.Context(), m, "parser-1")
+	lease := f.lease(t, m)
+
+	// Expire the lease after the first message is inserted. Changing its
+	// deadline here guarantees expiry during writes, even on a slow runner.
+	_, err := f.admin.ExecContext(t.Context(), fmt.Sprintf(`CREATE FUNCTION expire_projection_lease() RETURNS trigger LANGUAGE plpgsql AS $$
+BEGIN
+ IF NEW.ordinal=0 THEN
+  UPDATE raw_ingest_jobs SET lease_expires_at=clock_timestamp()-interval '1 second'
+   WHERE id=%d AND state='leased' AND lease_expires_at>clock_timestamp();
+  IF NOT FOUND THEN
+   RAISE EXCEPTION 'fixture lease expired before writes';
+  END IF;
+ END IF;
+ RETURN NEW;
+END $$;
+CREATE TRIGGER expire_projection_lease AFTER INSERT ON messages
+ FOR EACH ROW EXECUTE FUNCTION expire_projection_lease()`, lease.ID))
 	require.NoError(t, err)
-	_, err = f.admin.ExecContext(t.Context(), `CREATE FUNCTION delay_projection_message() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN IF NEW.ordinal=0 THEN IF NOT EXISTS(SELECT 1 FROM raw_ingest_jobs WHERE state='leased' AND lease_expires_at>clock_timestamp()) THEN RAISE EXCEPTION 'fixture lease expired before writes'; END IF; PERFORM pg_sleep(0.4); END IF; RETURN NEW; END $$; CREATE TRIGGER delay_projection_message BEFORE INSERT ON messages FOR EACH ROW EXECUTE FUNCTION delay_projection_message()`)
-	require.NoError(t, err)
-	leases, err := f.jobs.ClaimRawParseJobs(t.Context(), "expiry-worker", 1, 250*time.Millisecond)
-	require.NoError(t, err)
-	require.Len(t, leases, 1)
-	require.ErrorIs(t, f.sink.Project(t.Context(), leases[0], m, projectionOutcome("expired write")), rawderive.ErrLeaseLost)
+	require.ErrorIs(t, f.sink.Project(t.Context(), lease, m, projectionOutcome("expired write")), rawderive.ErrLeaseLost)
 	var count int
 	require.NoError(t, f.runtime.QueryRowContext(t.Context(), `SELECT count(*) FROM sessions`).Scan(&count))
+	assert.Zero(t, count)
+	require.NoError(t, f.runtime.QueryRowContext(t.Context(), `SELECT count(*) FROM messages`).Scan(&count))
 	assert.Zero(t, count)
 	require.NoError(t, f.runtime.QueryRowContext(t.Context(), `SELECT count(*) FROM raw_source_contributions`).Scan(&count))
 	assert.Zero(t, count)
