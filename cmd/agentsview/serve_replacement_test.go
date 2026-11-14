@@ -287,6 +287,58 @@ func TestRestartReleasesLaunchLockWhenNextCommandFails(t *testing.T) {
 	require.NoError(t, lock.Unlock())
 }
 
+// The replacement is rebuilt once the old server stops, so it starts with
+// settings saved after the restart was accepted. If that rebuild fails, the
+// plan checked at acceptance still starts the replacement.
+func TestRestartStartsReplacementFromSettingsAtHandoff(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		replan   func(context.Context) (*foregroundRestartError, error)
+		wantHost string
+		wantArgs []string
+	}{
+		{
+			name: "rebuilt settings",
+			replan: func(context.Context) (*foregroundRestartError, error) {
+				return &foregroundRestartError{args: []string{"serve", "--require-auth=true"}, cfg: config.Config{Host: "saved-after-accept"}}, nil
+			},
+			wantHost: "saved-after-accept",
+			wantArgs: []string{"serve", "--require-auth=true"},
+		},
+		{
+			name: "rebuild fails",
+			replan: func(context.Context) (*foregroundRestartError, error) {
+				return nil, errors.New("config became unreadable")
+			},
+			wantHost: "checked-at-accept",
+			wantArgs: []string{"serve"},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			args := os.Args
+			t.Cleanup(func() { os.Args = args })
+			released := 0
+			var started config.Config
+			calls := 0
+			err := runServeLoop(t.Context(), config.Config{}, serveOptions{}, 0, func(_ context.Context, cfg config.Config, _ serveOptions, _ int) error {
+				calls++
+				if calls == 1 {
+					return &foregroundRestartError{
+						args: []string{"serve"}, release: func() { released++ },
+						cfg: config.Config{Host: "checked-at-accept"}, replan: tc.replan,
+					}
+				}
+				started = cfg
+				return nil
+			})
+			require.NoError(t, err)
+			assert.Equal(t, tc.wantHost, started.Host)
+			assert.Equal(t, tc.wantArgs, os.Args[1:])
+			assert.Equal(t, 1, released, "launch ownership must be released once the replacement exits")
+		})
+	}
+}
+
 func TestRestartReleasesLaunchLockWhenCallerStops(t *testing.T) {
 	dir := runtimeTestDir(t)
 	release, err := acquireForegroundServeLaunchLock(config.Config{DataDir: dir})

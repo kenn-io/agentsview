@@ -651,33 +651,30 @@ func runServe(ctx context.Context, cfg config.Config, opts serveOptions, restart
 		server.WithTelemetryCapture(telemetryCapture),
 	}
 	serverContext := ctx
+	// Declared before the restart option so its replan can read the final
+	// settings of the server built below.
+	var srv *server.Server
 	if opts.ReloadConfig != nil {
-		srvOpts = append(srvOpts, server.WithDaemonRestart(func(ctx context.Context, current config.Config) error {
-			release, err := waitForegroundServeLaunchLock(ctx, cfg)
-			if err != nil {
-				return err
-			}
-			accepted := false
-			defer func() {
-				if !accepted {
-					release()
-				}
-			}()
+		// planRestart builds and checks the replacement for the given
+		// settings. The request runs it to refuse a bad config while this
+		// server still answers; the serve loop runs it again with the final
+		// settings once this server has stopped.
+		planRestart := func(ctx context.Context, current config.Config) (*foregroundRestartError, error) {
 			args := serveBackgroundArgsWithNoSync(serveReplacementArgs(opts.RestartArgs, current), cfg.NoSync)
 			args = append(args, serveHandoffPortArgs(0, restartExplicitPort)...)
 			flags := newServeCommand().Flags()
 			if err := flags.Parse(args); err != nil {
-				return fmt.Errorf("parsing replacement flags: %w", err)
+				return nil, fmt.Errorf("parsing replacement flags: %w", err)
 			}
 			replacement, err := config.LoadSettingsRestartConfig(current, flags)
 			if err != nil {
-				return fmt.Errorf("loading replacement config: %w", err)
+				return nil, fmt.Errorf("loading replacement config: %w", err)
 			}
 			if err := prepareBackgroundReplacement(ctx, &replacement, nil, false); err != nil {
-				return err
+				return nil, err
 			}
 			if err := checkRestartAddress(ctx, cfg, replacement); err != nil {
-				return err
+				return nil, err
 			}
 			nextOpts := opts
 			nextOpts.ReplaceDaemon = false
@@ -688,16 +685,29 @@ func runServe(ctx context.Context, cfg config.Config, opts serveOptions, restart
 			if restartExplicitPort != nil && *restartExplicitPort > 0 {
 				nextPort = 0
 			}
-			args = append([]string{"serve"}, args...)
+			return &foregroundRestartError{args: append([]string{"serve"}, args...), cfg: replacement, opts: nextOpts, port: nextPort}, nil
+		}
+		srvOpts = append(srvOpts, server.WithDaemonRestart(func(ctx context.Context, current config.Config) error {
+			release, err := waitForegroundServeLaunchLock(ctx, cfg)
+			if err != nil {
+				return err
+			}
+			restart, err := planRestart(ctx, current)
+			if err != nil {
+				release()
+				return err
+			}
+			restart.release = release
+			restart.replan = func(ctx context.Context) (*foregroundRestartError, error) {
+				return planRestart(ctx, srv.ConfigSnapshot())
+			}
 			// Let the HTTP response finish before draining its server.
-			restart := &foregroundRestartError{args: args, release: release, cfg: replacement, opts: nextOpts, port: nextPort}
 			context.AfterFunc(ctx, func() {
 				requestRestart(restart)
 				if !errors.Is(context.Cause(serverContext), restart) {
 					release()
 				}
 			})
-			accepted = true
 			return nil
 		}))
 	}
@@ -749,7 +759,7 @@ func runServe(ctx context.Context, cfg config.Config, opts serveOptions, restart
 	if ingestion != nil {
 		srvOpts = append(srvOpts, server.WithIngestionFreshness(ingestion))
 	}
-	srv := server.New(cfg, database, engine, srvOpts...)
+	srv = server.New(cfg, database, engine, srvOpts...)
 	waitFriction := startLocalFrictionReview(ctx, cfg, database, srv, idleTracker)
 	defer func() {
 		requestRestart(nil)
@@ -882,6 +892,9 @@ type foregroundRestartError struct {
 	cfg     config.Config
 	opts    serveOptions
 	port    int
+	// replan rebuilds the replacement from the stopped server's final
+	// settings. Nil keeps the plan checked when the restart was accepted.
+	replan func(context.Context) (*foregroundRestartError, error)
 }
 
 func (r *foregroundRestartError) Error() string { return "restart foreground server" }

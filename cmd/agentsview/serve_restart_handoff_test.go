@@ -505,6 +505,37 @@ func TestRestartClosesStalledRequestAndRetainsLaunchLock(t *testing.T) {
 	}
 }
 
+// A setting written after the restart was accepted, while the old server is
+// still draining, must reach the replacement. Background work such as search
+// setup writes config.toml this way.
+func TestRestartReplacementReadsSettingsSavedDuringDrain(t *testing.T) {
+	_, dataDir := isolateServeTestHome(t)
+	startRestartFixture(t, dataDir, "foreground", "--no-sync")
+	rt := waitForRestartRuntime(t, dataDir)
+	base := fmt.Sprintf("http://127.0.0.1:%d", rt.Port)
+	stallRestartSettingsRequest(t, rt.Port, "")
+	previous := restartTestInstance(t, base, "")
+	restartTestSend(t, http.MethodPost, base+"/api/v1/daemon/restart", "", "", http.StatusOK)
+
+	path := filepath.Join(dataDir, "config.toml")
+	saved, err := os.ReadFile(path)
+	require.NoError(t, err)
+	require.NoError(t, os.WriteFile(path, append([]byte("tool_result_images = \"drop\"\n"), saved...), 0o600))
+
+	require.Eventually(t, func() bool {
+		current := restartTestInstance(t, base, "")
+		return current != "" && current != previous
+	}, 30*time.Second, 100*time.Millisecond)
+	resp, err := restartTestRequest(t, http.MethodGet, base+"/api/v1/settings", "", "")
+	require.NoError(t, err)
+	var body struct {
+		ToolResultImages string `json:"tool_result_images"`
+	}
+	require.NoError(t, json.UnmarshalRead(resp.Body, &body))
+	require.NoError(t, resp.Body.Close())
+	assert.Equal(t, "drop", body.ToolResultImages)
+}
+
 func TestTerminationDuringRestartStopsServer(t *testing.T) {
 	_, dataDir := isolateServeTestHome(t)
 	process, done := startRestartFixture(t, dataDir, "foreground", "--no-sync")

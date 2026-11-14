@@ -96,11 +96,6 @@ func (s *Server) humaSetGithubConfig(
 	if err != nil {
 		return nil, apiError(http.StatusUnauthorized, err.Error())
 	}
-	release, err := s.beginConfigSave()
-	if err != nil {
-		return nil, err
-	}
-	defer release()
 	s.mu.Lock()
 	err = s.cfg.SaveGithubToken(token)
 	s.mu.Unlock()
@@ -152,13 +147,8 @@ func (s *Server) humaSetTerminalConfig(
 			}
 		}
 	}
-	release, err := s.beginConfigSave()
-	if err != nil {
-		return nil, err
-	}
-	defer release()
 	s.mu.Lock()
-	err = s.cfg.SaveTerminalConfig(tc)
+	err := s.cfg.SaveTerminalConfig(tc)
 	tc = s.cfg.Terminal
 	s.mu.Unlock()
 	if err != nil {

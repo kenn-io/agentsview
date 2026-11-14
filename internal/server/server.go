@@ -116,9 +116,6 @@ type Server struct {
 	// daemon; settingsApplyMu keeps saves and their reloads in order.
 	ingestionReloader IngestionReloader
 	settingsApplyMu   gosync.Mutex
-	// restartAccepted is set, under settingsApplyMu, once this lifetime has
-	// handed its settings to a replacement. Later saves would not reach it.
-	restartAccepted bool
 	// onDemandReconfigureMu serializes source updates to onDemandEngine.
 	onDemandReconfigureMu gosync.Mutex
 	// pushTurn lets one archive push run at a time.

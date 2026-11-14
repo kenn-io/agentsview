@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log"
 	"net"
 	"net/netip"
 	"os"
@@ -40,6 +41,7 @@ func runServeLoop(ctx context.Context, cfg config.Config, opts serveOptions, por
 		if ctx.Err() != nil {
 			return nil
 		}
+		restart = replanRestart(ctx, restart)
 		os.Args = append([]string{exe}, restart.args...)
 		cfg, opts, port = restart.cfg, restart.opts, restart.port
 	}
@@ -93,4 +95,21 @@ func restartAddressesDisjoint(ctx context.Context, current, next string) bool {
 		}
 	}
 	return true
+}
+
+// replanRestart rebuilds the replacement once the old server has stopped,
+// so settings saved after the restart was accepted, by the API or by
+// background work such as search setup, reach the replacement. A failure
+// keeps the plan checked when the restart was accepted, because the old
+// server is already gone and cannot report it.
+func replanRestart(ctx context.Context, restart *foregroundRestartError) *foregroundRestartError {
+	if restart.replan == nil {
+		return restart
+	}
+	next, err := restart.replan(ctx)
+	if err != nil {
+		log.Printf("restart: using the settings checked when the restart was accepted: %v", err)
+		return restart
+	}
+	return next
 }
