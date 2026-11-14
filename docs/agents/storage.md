@@ -237,13 +237,24 @@ ordinal the diff writes, so the rows below it keep their IDs. Changed no-ID
 replacements must report identity ambiguity. Rebuilds retain these IDs and
 tombstones but use the new database generation for revisions and cursors.
 
-`db compact` prunes conversation tombstones that have no native source ID before
-it vacuums. Tombstones with a source ID stay, because they map a returning
-message back to its export ID. Pruning stops the usage-cache backfill first, so
-no long read snapshot pins the WAL. It raises `conversation_pruned_revision` in
-`archive_metadata` to the newest prunable tombstone's revision, then deletes
-tombstones at or below it in rowid batches, so the WAL stays small and
-tombstones written meanwhile survive.
+Conversation tombstones that have no native source ID are pruned two ways.
+Tombstones with a source ID stay, because they map a returning message back to
+its export ID.
+
+- The daemon's hourly `conversation-tombstone-prune` job keeps a retention clock
+  in `conversation_prune_mark`: the revision head and the time it was
+  recorded. Once the mark is `ConversationTombstoneRetention` (7 days) old,
+  the job prunes tombstones at or below the mark's revision and restarts the
+  clock at the current head. Each tombstone survives one to two retention
+  periods, so a reader that reads at least weekly never restarts. Freed pages
+  are reused by later writes; the file shrinks only on `db compact`.
+- `db compact` prunes every such tombstone before it vacuums. It stops the
+  usage-cache backfill first, so no long read snapshot pins the WAL.
+
+Both raise `conversation_pruned_revision` in `archive_metadata` to the newest
+pruned tombstone's revision before deleting anything. The scan for that revision
+runs on a reader, and the deletes run in rowid batches, so the writer is held
+only briefly, the WAL stays small, and tombstones written meanwhile survive.
 
 Every change-stream cursor and export position records the floor it was issued
 under. A position restarts (`reset` or `ErrConversationReconciliationRequired`)
@@ -251,7 +262,8 @@ only when the floor has risen since it was issued and the position has not read
 through it. A walk that starts after pruning can therefore page through rows
 below the floor. A body read of a pruned revision returns
 `ErrConversationRevisionChanged`, as the tombstone would have. The floor belongs
-to the database generation, so rebuilds do not copy it.
+to the database generation, as does the retention mark, so rebuilds copy
+neither.
 
 An archive is cold until its first conversation export: sync writes no message
 projection rows, and the first `export conversations changes` builds the index
