@@ -1427,3 +1427,16 @@ func TestHTTPBackendRecallTimeBoundsProbeOldServer(t *testing.T) {
 	require.ErrorContains(t, err, "restart or upgrade")
 	assert.Zero(t, listCalls)
 }
+
+func TestHTTPBackendRecallStalePageReturnsRestartError(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		assert.Equal(t, "previous", r.URL.Query().Get("cursor"))
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusConflict)
+		_, _ = w.Write([]byte(`{"error":"recall corpus changed during pagination"}`))
+	}))
+	t.Cleanup(srv.Close)
+	svc := servicehttp.NewHTTPBackendForServer(srv.URL, "", servicehttp.HTTPServerCapabilities{APIVersion: 19})
+	_, err := svc.ListRecallEntries(t.Context(), service.RecallFilter{UpdatedSince: "2026-01-01T00:00:00Z", Cursor: "previous"})
+	require.ErrorIs(t, err, service.ErrStaleRecallPagination)
+}

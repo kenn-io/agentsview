@@ -1130,33 +1130,87 @@ func TestDirectRecallListPages(t *testing.T) {
 	require.ErrorIs(t, err, db.ErrInvalidRecallQuery)
 }
 
-func TestDirectRecallDeltaReturnsEntryChangedMidWalk(t *testing.T) {
+func TestDirectRecallDeltaRestartsAfterSameMillisecondInsert(t *testing.T) {
+	dbPath := filepath.Join(t.TempDir(), "test.db")
+	d, err := db.Open(t.Context(), dbPath)
+	require.NoError(t, err)
+	t.Cleanup(func() { d.Close() })
+	raw, err := sql.Open("sqlite3", dbPath)
+	require.NoError(t, err)
+	t.Cleanup(func() { raw.Close() })
+	seedServiceRecallEntrySession(t, d)
+	seed := func(id, updatedAt string) {
+		seedServiceRecallEntry(t, d, db.RecallEntry{ID: id, Title: id, Body: id, SourceSessionID: "recall-session"})
+		_, err := raw.ExecContext(t.Context(), "UPDATE recall_entries SET updated_at = ? WHERE id = ?", updatedAt, id)
+		require.NoError(t, err)
+	}
+	seed("page-a", "2026-11-14T07:56:43.261Z")
+	seed("page-b", "2026-11-14T07:56:43.261Z")
+	seed("page-d", "2026-11-14T07:56:43.265Z")
+	svc := service.NewReadOnlyBackend(d)
+	f := service.RecallFilter{Limit: 1, UpdatedSince: "2026-11-14T00:00:00Z"}
+
+	first, err := svc.ListRecallEntries(t.Context(), f)
+	require.NoError(t, err)
+	require.Len(t, first.RecallEntries, 1)
+	assert.Equal(t, "page-b", first.RecallEntries[0].ID)
+	// page-c shares the cursor's millisecond and sorts behind page-b.
+	seed("page-c", "2026-11-14T07:56:43.261Z")
+	f.Cursor = first.NextCursor
+	_, err = svc.ListRecallEntries(t.Context(), f)
+	require.ErrorIs(t, err, service.ErrStaleRecallPagination)
+
+	// Restart from the walk's original bound, not from page-b's updated_at.
+	f.Cursor = ""
+	var ids []string
+	var checkpoint string
+	for {
+		page, err := svc.ListRecallEntries(t.Context(), f)
+		require.NoError(t, err)
+		for _, entry := range page.RecallEntries {
+			ids = append(ids, entry.ID)
+			checkpoint = entry.UpdatedAt
+		}
+		if page.NextCursor == "" {
+			break
+		}
+		f.Cursor = page.NextCursor
+	}
+	assert.Equal(t, []string{"page-c", "page-b", "page-a", "page-d"}, ids)
+
+	seedServiceRecallEntry(t, d, db.RecallEntry{ID: "page-e", Title: "page-e", Body: "page-e", SourceSessionID: "recall-session"})
+	next, err := svc.ListRecallEntries(t.Context(), service.RecallFilter{UpdatedSince: checkpoint})
+	require.NoError(t, err)
+	ids = nil
+	for _, entry := range next.RecallEntries {
+		ids = append(ids, entry.ID)
+	}
+	assert.Equal(t, []string{"page-d", "page-e"}, ids)
+}
+
+type recallListOnlyStore struct{ d *db.DB }
+
+func (s recallListOnlyStore) ListRecallEntries(ctx context.Context, q db.RecallQuery) ([]db.RecallEntry, error) {
+	return s.d.ListRecallEntries(ctx, q)
+}
+
+func TestRecentRecallPageWithoutRevisionRejectsTruncatedBoundedList(t *testing.T) {
 	d := dbtest.OpenTestDB(t)
 	seedServiceRecallEntrySession(t, d)
 	for _, id := range []string{"page-a", "page-b"} {
 		seedServiceRecallEntry(t, d, db.RecallEntry{ID: id, Title: id, Body: id, SourceSessionID: "recall-session"})
 	}
-	svc := service.NewReadOnlyBackend(d)
-	f := service.RecallFilter{Limit: 1, UpdatedSince: "2020-01-01T00:00:00Z"}
-	first, err := svc.ListRecallEntries(t.Context(), f)
-	require.NoError(t, err)
-	require.Len(t, first.RecallEntries, 1)
-	require.NotEmpty(t, first.NextCursor)
-	unseen := "page-a"
-	if first.RecallEntries[0].ID == unseen {
-		unseen = "page-b"
-	}
-	_, err = d.ReviewRecallEntry(t.Context(), unseen, db.RecallReviewArchive)
-	require.NoError(t, err)
+	store := recallListOnlyStore{d: d}
 
-	f.Cursor = first.NextCursor
-	second, err := svc.ListRecallEntries(t.Context(), f)
+	_, _, err := service.ListRecentRecallEntriesPage(t.Context(), store,
+		db.RecallQuery{UpdatedSince: "2020-01-01T00:00:00Z", Limit: 1}, nil)
+	require.ErrorIs(t, err, db.ErrInvalidRecallQuery)
 
+	results, next, err := service.ListRecentRecallEntriesPage(t.Context(), store,
+		db.RecallQuery{UpdatedSince: "2020-01-01T00:00:00Z", Limit: 2}, nil)
 	require.NoError(t, err)
-	require.Len(t, second.RecallEntries, 1)
-	assert.Equal(t, unseen, second.RecallEntries[0].ID)
-	assert.Equal(t, "archived", second.RecallEntries[0].Status)
-	assert.Empty(t, second.NextCursor)
+	assert.Len(t, results, 2)
+	assert.Empty(t, next)
 }
 
 func TestDirectRecallDeltaPagesArchiveWithoutQueryState(t *testing.T) {

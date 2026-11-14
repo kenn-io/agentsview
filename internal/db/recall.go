@@ -727,7 +727,7 @@ func (db *DB) ListRecallEntries(
 		limit++
 	}
 	order := " ORDER BY updated_at DESC, id ASC LIMIT ?"
-	if q.timeBounded() {
+	if q.TimeBounded() {
 		order = " ORDER BY updated_at ASC, id DESC LIMIT ?"
 	}
 	query := "SELECT " + recallBaseCols +
@@ -1522,7 +1522,7 @@ func buildRecallEntryWhere(q RecallQuery, includeText bool) (string, []any) {
 	preds := []string{"1=1"}
 	var args []any
 	status := q.Status
-	if status == "" && (q.TrustedOnly || !q.timeBounded()) {
+	if status == "" && (q.TrustedOnly || !q.TimeBounded()) {
 		status = corerecall.StatusAccepted
 	}
 	if status != "" {
@@ -1592,7 +1592,7 @@ func buildRecallEntryWhere(q RecallQuery, includeText bool) (string, []any) {
 	if q.CursorUpdatedAt != "" {
 		// Bounded lists page oldest change first, so an entry changed
 		// mid-walk moves to the end of the walk and is still returned.
-		if q.timeBounded() {
+		if q.TimeBounded() {
 			preds = append(preds,
 				"(updated_at > ? OR (updated_at = ? AND id < ?))")
 		} else {
@@ -1722,7 +1722,8 @@ func recallQueryTerms(text string) []string {
 	return corerecall.ScoringQueryTerms(text)
 }
 
-func (q RecallQuery) timeBounded() bool {
+// TimeBounded reports whether q has an updated_since or created_since bound.
+func (q RecallQuery) TimeBounded() bool {
 	return q.UpdatedSince != "" || q.CreatedSince != ""
 }
 

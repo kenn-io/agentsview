@@ -1305,14 +1305,27 @@ func TestRecallEvidenceReconciliationUpdatesDeltaOnlyWhenPointerChanges(t *testi
 	insertVerifiedRecallSelection(t, d, "delta-entry", "rewrite-delta", 10, 11, []string{"tool-a"})
 	_, err := d.getWriter().Exec(t.Context(), `UPDATE recall_entries SET updated_at = '2020-01-01T00:00:00.000Z' WHERE id = 'delta-entry'`)
 	require.NoError(t, err)
+	before, err := d.RecallQueryRevision(t.Context())
+	require.NoError(t, err)
+	// Rewriting a message outside the evidence range reconciles the
+	// evidence without moving it.
 	unchanged := shiftedRecallMessages(t, d, "rewrite-delta", 0)
+	unchanged[2].Content = "The formatter passed again."
+	unchanged[2].ContentLength = len(unchanged[2].Content)
 	require.NoError(t, d.ReplaceSessionMessages(t.Context(), "rewrite-delta", unchanged))
 	assert.Equal(t, "2020-01-01T00:00:00.000Z", requireRecallEntry(t, d, "delta-entry").UpdatedAt)
+	// An unchanged revision keeps open time-bounded cursors valid.
+	after, err := d.RecallQueryRevision(t.Context())
+	require.NoError(t, err)
+	assert.Equal(t, before, after)
 	entries, err := d.ListRecallEntries(t.Context(), RecallQuery{UpdatedSince: "2021-01-01T00:00:00Z"})
 	require.NoError(t, err)
 	assert.Empty(t, entries)
 	shifted := shiftedRecallMessages(t, d, "rewrite-delta", 1)
 	require.NoError(t, d.ReplaceSessionMessages(t.Context(), "rewrite-delta", shifted))
+	after, err = d.RecallQueryRevision(t.Context())
+	require.NoError(t, err)
+	assert.NotEqual(t, before, after)
 	entries, err = d.ListRecallEntries(t.Context(), RecallQuery{UpdatedSince: "2021-01-01T00:00:00Z"})
 	require.NoError(t, err)
 	require.Len(t, entries, 1)

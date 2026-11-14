@@ -125,7 +125,10 @@ func newRecallListCommand() *cobra.Command {
 			}
 			out := cmd.OutOrStdout()
 			printRecallEntryTrustedOnlyHuman(out, list.TrustedOnly)
-			if err := printRecallResultsDetailedHuman(out, list.RecallEntries, false, true); err != nil {
+			if err := printRecallResultsDetailedHumanWithOptions(out, list.RecallEntries, recallDetailedPrintOptions{
+				ShowEvidence: true,
+				ShowBody:     true,
+			}); err != nil {
 				return err
 			}
 			if list.NextCursor != "" {
@@ -1394,7 +1397,10 @@ func printRecallResultsDetailedHuman(
 type recallDetailedPrintOptions struct {
 	ShowScores   bool
 	ShowEvidence bool
-	ContextMeta  *service.RecallContextMeta
+	// ShowBody adds each entry's updated_at and body, which recall list
+	// needs for reading changes and saving a checkpoint.
+	ShowBody    bool
+	ContextMeta *service.RecallContextMeta
 }
 
 func printRecallResultsDetailedHumanWithOptions(
@@ -1416,6 +1422,10 @@ func printRecallResultsDetailedHumanWithOptions(
 			fmt.Fprintf(w, "    %s %s\n",
 				sanitizeTerminal(recall.Project),
 				sanitizeTerminal(recall.Agent))
+		}
+		if options.ShowBody {
+			fmt.Fprintf(w, "    updated_at=%s\n", sanitizeTerminal(recall.UpdatedAt))
+			fmt.Fprintf(w, "    body: %s\n", sanitizeTerminal(recall.Body))
 		}
 		printRecallEntryReviewLine(w, recall.RecallEntry)
 		printRecallEntryLifecycleLine(w, recall.RecallEntry)

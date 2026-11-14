@@ -44,9 +44,19 @@ first. Each entry's `source_run_id` names the extraction generation it came
 from.
 
 The HTTP list and MCP `list_recall` accept `updated_since` and `created_since`,
-and return `next_cursor` when more entries remain. To follow changes, pass the
-last returned entry's `updated_at` as the next `updated_since`. An entry that
-changes during a walk appears again later in it, so dedupe by `id`.
+and return `next_cursor` when more entries remain. To follow changes:
+
+1. List with your saved checkpoint as `updated_since`, and pass each
+   `next_cursor` back until a page returns none.
+1. After the last page, save the last entry's `updated_at` as the new
+   checkpoint. The next walk may return that entry again, so dedupe by `id`.
+1. If a write lands during the walk, the next page fails with "recall corpus
+   changed during pagination" (HTTP 409). Restart from the first page with the
+   same `updated_since` and keep the old checkpoint. Restarting from the last
+   entry you received can miss an entry written in the same millisecond.
+
+A read-only archive from before Recall tracked changes cannot change during a
+walk, so it pages without this check.
 
 The top-level **Recall** page has two tabs:
 

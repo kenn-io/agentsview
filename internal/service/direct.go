@@ -1462,7 +1462,7 @@ func (b *directBackend) ListRecallEntries(
 			}
 			cursor = &decoded
 		}
-		entries, next, err := ListRecentRecallEntriesPage(ctx, b.db, query, query.Limit, cursor)
+		entries, next, err := ListRecentRecallEntriesPage(ctx, b.db, query, cursor)
 		if err != nil {
 			return nil, err
 		}
