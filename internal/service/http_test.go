@@ -1369,14 +1369,13 @@ func TestHTTPBackendRecallTimeBoundsAndCursor(t *testing.T) {
 			return
 		}
 		assert.Equal(t, "2026-01-01T00:00:00Z", r.URL.Query().Get("updated_since"))
-		assert.Equal(t, "2025-01-01T00:00:00Z", r.URL.Query().Get("created_since"))
 		assert.Equal(t, "previous", r.URL.Query().Get("cursor"))
 		w.Header().Set("Content-Type", "application/json")
 		_, _ = w.Write([]byte(`{"entries":[{"id":"archived","status":"archived"}],"trusted_only":false,"next_cursor":"next"}`))
 	}))
 	t.Cleanup(srv.Close)
 	svc := servicehttp.NewHTTPBackend(srv.URL, "", false, "")
-	list, err := svc.ListRecallEntries(t.Context(), service.RecallFilter{UpdatedSince: "2026-01-01T00:00:00Z", CreatedSince: "2025-01-01T00:00:00Z", Cursor: "previous"})
+	list, err := svc.ListRecallEntries(t.Context(), service.RecallFilter{UpdatedSince: "2026-01-01T00:00:00Z", Cursor: "previous"})
 	require.NoError(t, err)
 	assert.Equal(t, "next", list.NextCursor)
 	require.Len(t, list.RecallEntries, 1)
@@ -1387,18 +1386,18 @@ func TestHTTPBackendRecallTimeBoundsOldServer(t *testing.T) {
 	calls := 0
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		calls++
-		assert.Equal(t, "previous", r.URL.Query().Get("cursor"))
+		assert.Empty(t, r.URL.Query().Get("cursor"))
 		w.Header().Set("Content-Type", "application/json")
 		_, _ = w.Write([]byte(`{"entries":[],"trusted_only":false,"next_cursor":""}`))
 	}))
 	t.Cleanup(srv.Close)
 	svc := servicehttp.NewHTTPBackendForServer(srv.URL, "", servicehttp.HTTPServerCapabilities{APIVersion: 18})
-	for _, f := range []service.RecallFilter{{UpdatedSince: "2026-01-01T00:00:00Z"}, {CreatedSince: "2026-01-01T00:00:00Z"}} {
+	for _, f := range []service.RecallFilter{{UpdatedSince: "2026-01-01T00:00:00Z"}, {Cursor: "previous"}} {
 		_, err := svc.ListRecallEntries(t.Context(), f)
-		require.ErrorContains(t, err, "upgrade or restart")
+		require.ErrorContains(t, err, "restart or upgrade")
 	}
 	assert.Zero(t, calls)
-	_, err := svc.ListRecallEntries(t.Context(), service.RecallFilter{Cursor: "previous"})
+	_, err := svc.ListRecallEntries(t.Context(), service.RecallFilter{})
 	require.NoError(t, err)
 	assert.Equal(t, 1, calls)
 }
@@ -1416,9 +1415,9 @@ func TestHTTPBackendRecallTimeBoundsProbeOldServer(t *testing.T) {
 	}))
 	t.Cleanup(srv.Close)
 	svc := servicehttp.NewHTTPBackend(srv.URL, "", false, "")
-	for _, f := range []service.RecallFilter{{UpdatedSince: "2026-01-01T00:00:00Z"}, {CreatedSince: "2026-01-01T00:00:00Z"}} {
+	for _, f := range []service.RecallFilter{{UpdatedSince: "2026-01-01T00:00:00Z"}, {Cursor: "previous"}} {
 		_, err := svc.ListRecallEntries(t.Context(), f)
-		require.ErrorContains(t, err, "upgrade or restart")
+		require.ErrorContains(t, err, "restart or upgrade")
 	}
 	assert.Zero(t, listCalls)
 }

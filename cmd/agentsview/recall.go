@@ -125,8 +125,16 @@ func newRecallListCommand() *cobra.Command {
 			}
 			out := cmd.OutOrStdout()
 			printRecallEntryTrustedOnlyHuman(out, list.TrustedOnly)
-			if err := printRecallResultsHuman(out, list.RecallEntries); err != nil {
-				return err
+			if len(list.RecallEntries) == 0 {
+				fmt.Fprintln(out, "(no entries)")
+			}
+			for i := range list.RecallEntries {
+				if i > 0 {
+					fmt.Fprintln(out)
+				}
+				if err := printRecallEntryHuman(out, &list.RecallEntries[i].RecallEntry); err != nil {
+					return err
+				}
 			}
 			if list.NextCursor != "" {
 				fmt.Fprintf(out, "next_cursor: %s\n", list.NextCursor)
@@ -136,7 +144,6 @@ func newRecallListCommand() *cobra.Command {
 	}
 	addRecallFilterFlags(cmd, &f)
 	cmd.Flags().StringVar(&f.UpdatedSince, "updated-since", "", "Include entries updated since this RFC3339 timestamp")
-	cmd.Flags().StringVar(&f.CreatedSince, "created-since", "", "Include entries created since this RFC3339 timestamp")
 	cmd.Flags().StringVar(&f.Cursor, "cursor", "", "Continue from a previous cursor")
 	addRecallEntryCurrentCWDFlag(cmd, &currentCWD)
 	addRecallEntryCurrentGitBranchFlag(cmd, &currentGitBranch)

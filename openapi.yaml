@@ -18503,10 +18503,6 @@ paths:
           schema:
             type: string
         - in: query
-          name: created_since
-          schema:
-            type: string
-        - in: query
           name: limit
           schema:
             type: integer

@@ -3081,8 +3081,6 @@ func TestRecallListTimeBounds(t *testing.T) {
 		want []string
 	}{
 		{RecallQuery{UpdatedSince: cutoff}, []string{"changed", "new"}},
-		{RecallQuery{CreatedSince: cutoff}, []string{"new"}},
-		{RecallQuery{UpdatedSince: cutoff, CreatedSince: cutoff}, []string{"new"}},
 	} {
 		entries, err := d.ListRecallEntries(t.Context(), tc.q)
 		require.NoError(t, err)
@@ -3116,7 +3114,6 @@ func TestRecallTimeBoundsPrecisionAndStatuses(t *testing.T) {
 	}{
 		{"default", RecallQuery{}, []string{"before", "boundary"}},
 		{"updated", RecallQuery{UpdatedSince: "2026-01-01T00:00:00.000001Z"}, []string{"boundary", "archived"}},
-		{"created", RecallQuery{CreatedSince: "2026-01-01T00:00:00.000001Z"}, []string{"boundary", "archived"}},
 		{"explicit status", RecallQuery{UpdatedSince: "2026-01-01T00:00:00.000001Z", Status: "archived"}, []string{"archived"}},
 		{"trusted", RecallQuery{UpdatedSince: "2026-01-01T00:00:00.000001Z", TrustedOnly: true}, []string{"boundary"}},
 	} {
