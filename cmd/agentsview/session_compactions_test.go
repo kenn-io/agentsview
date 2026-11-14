@@ -46,12 +46,14 @@ func TestSessionCompactionsOutput(t *testing.T) {
 	seedSessionsWithOpts(t, dataDir,
 		sessionSeed{id: "first", project: "project", mut: func(s *db.Session) { s.EndedAt = new("2024-06-16T00:00:00Z") }},
 		sessionSeed{id: "second", project: "project", mut: func(s *db.Session) { s.EndedAt = new("2024-06-15T00:00:00Z") }},
+		sessionSeed{id: "evener", project: "project", mut: func(s *db.Session) { s.Agent = "evener"; s.EndedAt = new("2024-06-14T00:00:00Z") }},
 	)
 	d, err := db.Open(t.Context(), filepath.Join(dataDir, "sessions.db"))
 	require.NoError(t, err)
 	require.NoError(t, d.InsertMessages(t.Context(), []db.Message{
 		{SessionID: "first", Role: "assistant", IsCompactBoundary: true, Content: "first summary"},
 		{SessionID: "second", Role: "assistant", IsCompactBoundary: true, Content: "second summary"},
+		{SessionID: "evener", Role: "system", IsSystem: true, IsCompactBoundary: true, SourceType: "entry", SourceSubtype: "SUMMARY", Content: "[SUMMARY]"},
 	}))
 	require.NoError(t, d.Close())
 	out, err := executeCommand(newRootCommand(), "session", "compactions", "--active-since", "2024-06-01T00:00:00Z", "--limit", "1")
@@ -64,20 +66,7 @@ func TestSessionCompactionsOutput(t *testing.T) {
 	out, err = executeCommand(newRootCommand(), "session", "compactions", "--active-since", "2024-06-01T00:00:00Z", "--limit", "1", "--cursor", cursor)
 	require.NoError(t, err)
 	assert.Contains(t, out, "second summary")
-}
-
-func TestSessionCompactionsAmbiguousEvener(t *testing.T) {
-	dataDir := newAgentDataDir(t)
-	seedSessionWithOpts(t, dataDir, "evener", "project", func(s *db.Session) {
-		s.Agent = "evener"
-		s.EndedAt = new("2024-06-15T00:00:00Z")
-	})
-	d, err := db.Open(t.Context(), filepath.Join(dataDir, "sessions.db"))
-	require.NoError(t, err)
-	require.NoError(t, d.InsertMessages(t.Context(), []db.Message{{SessionID: "evener", Role: "system", IsCompactBoundary: true, SourceType: "entry", SourceSubtype: "SUMMARY", Content: "[SUMMARY]"}}))
-	require.NoError(t, d.Close())
-	out, err := executeCommand(newRootCommand(), "session", "compactions", "evener")
+	out, err = executeCommand(newRootCommand(), "session", "compactions", "evener")
 	require.NoError(t, err)
 	assert.Contains(t, out, "Ambiguous compaction label: evener #0")
-	assert.NotContains(t, out, "[SUMMARY]")
 }

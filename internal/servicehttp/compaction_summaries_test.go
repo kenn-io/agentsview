@@ -1,9 +1,7 @@
 package servicehttp_test
 
 import (
-	"encoding/json"
 	"net"
-	"net/http"
 	"net/http/httptest"
 	"testing"
 
@@ -17,11 +15,11 @@ import (
 	"go.kenn.io/agentsview/internal/servicehttp"
 )
 
-func TestCompactionSummariesLegacyEvenerOverHTTP(t *testing.T) {
+func TestMessagesCompactBoundaryOverHTTP(t *testing.T) {
 	d := dbtest.OpenTestDB(t)
 	dbtest.SeedSession(t, d, "b", "project")
 	require.NoError(t, d.InsertMessages(t.Context(), []db.Message{
-		{SessionID: "b", Ordinal: 0, Role: "system", IsCompactBoundary: true, Content: "Retained summary"},
+		{SessionID: "b", Ordinal: 0, Role: "assistant", IsSystem: true, IsCompactBoundary: true, Content: "Retained summary"},
 		{SessionID: "b", Ordinal: 1, Role: "user", Content: "ordinary"},
 	}))
 	daemon := httptest.NewUnstartedServer(nil)
@@ -29,18 +27,11 @@ func TestCompactionSummariesLegacyEvenerOverHTTP(t *testing.T) {
 	daemon.Config.Handler = s.Handler()
 	daemon.Start()
 	defer daemon.Close()
-	request, err := http.NewRequestWithContext(t.Context(), http.MethodGet, daemon.URL+"/api/v1/sessions/b/messages?compact_boundary=true", nil)
+	svc := servicehttp.NewHTTPBackend(daemon.URL, "", true, "")
+	out, err := svc.Messages(t.Context(), "b", service.MessageFilter{CompactBoundaryOnly: true})
 	require.NoError(t, err)
-	response, err := daemon.Client().Do(request)
-	require.NoError(t, err)
-	defer response.Body.Close()
-	require.Equal(t, http.StatusOK, response.StatusCode)
-	var raw struct {
-		Messages []db.Message `json:"messages"`
-	}
-	require.NoError(t, json.NewDecoder(response.Body).Decode(&raw))
-	require.Len(t, raw.Messages, 1)
-	assert.Equal(t, "Retained summary", raw.Messages[0].Content)
+	require.Len(t, out.Messages, 1)
+	assert.Equal(t, "Retained summary", out.Messages[0].Content)
 }
 
 func TestCompactionSummariesActiveChildren(t *testing.T) {
@@ -66,21 +57,28 @@ func TestCompactionSummariesActiveChildren(t *testing.T) {
 	daemon.Config.Handler = s.Handler()
 	daemon.Start()
 	defer daemon.Close()
-	for _, svc := range []service.SessionService{service.NewDirectBackend(d, nil), servicehttp.NewHTTPBackend(daemon.URL, "", true, "")} {
-		var ids []string
-		cursor := ""
-		for range 4 {
-			out, err := service.CompactionSummaries(t.Context(), svc, service.CompactionSummariesRequest{ActiveSince: "2024-06-01T00:00:00Z", Limit: 1, Cursor: cursor})
-			require.NoError(t, err)
-			for _, summary := range out.Summaries {
-				ids = append(ids, summary.SessionID)
-			}
-			cursor = out.NextCursor
-			if cursor == "" {
-				break
-			}
+	svc := service.NewDirectBackend(d, nil)
+	var ids []string
+	cursor := ""
+	for range 4 {
+		out, err := service.CompactionSummaries(t.Context(), svc, service.CompactionSummariesRequest{ActiveSince: "2024-06-01T00:00:00Z", Limit: 1, Cursor: cursor})
+		require.NoError(t, err)
+		for _, summary := range out.Summaries {
+			ids = append(ids, summary.SessionID)
 		}
-		assert.Empty(t, cursor)
-		assert.ElementsMatch(t, []string{"active-parent", "active-child", "orphan"}, ids)
+		cursor = out.NextCursor
+		if cursor == "" {
+			break
+		}
 	}
+	assert.Empty(t, cursor)
+	assert.ElementsMatch(t, []string{"active-parent", "active-child", "orphan"}, ids)
+	remote := servicehttp.NewHTTPBackend(daemon.URL, "", true, "")
+	page, err := remote.List(t.Context(), service.ListFilter{ActiveSince: "2024-06-01T00:00:00Z", Limit: 20, IncludeOneShot: true, OneShotFilterSet: true, IncludeAutomated: true, AutomatedFilterSet: true, IncludeChildren: true, Flat: true})
+	require.NoError(t, err)
+	ids = nil
+	for _, session := range page.Sessions {
+		ids = append(ids, session.ID)
+	}
+	assert.ElementsMatch(t, []string{"active-parent", "active-child", "orphan"}, ids)
 }

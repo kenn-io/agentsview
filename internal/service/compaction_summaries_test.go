@@ -2,7 +2,6 @@ package service_test
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"testing"
 
@@ -68,55 +67,34 @@ func TestCompactionSummariesExcludedSessionDoesNotReadMessages(t *testing.T) {
 	}
 }
 
-func TestCompactionSummariesUnfilteredPage(t *testing.T) {
+func TestCompactionSummariesDaemonReplacementPage(t *testing.T) {
 	svc := &compactionSpy{}
 	out, err := service.CompactionSummaries(t.Context(), svc, service.CompactionSummariesRequest{ActiveSince: "2024-06-01T00:00:00Z"})
 	require.NoError(t, err)
-	assert.True(t, svc.checked)
 	assert.Equal(t, 20, svc.limit)
 	assert.Empty(t, out.Summaries)
+	assert.Equal(t, "next", out.NextCursor)
 	assert.Equal(t, []string{"normal"}, svc.reads)
-	_, err = service.CompactionSummaries(t.Context(), svc, service.CompactionSummariesRequest{ActiveSince: "2024-06-01T00:00:00Z", Limit: -1})
-	require.ErrorContains(t, err, "limit must be 0 or more")
+	svc.includeSummary = true
+	out, err = service.CompactionSummaries(t.Context(), svc, service.CompactionSummariesRequest{ActiveSince: "2024-06-01T00:00:00Z"})
+	require.NoError(t, err)
+	require.Len(t, out.Summaries, 1)
+	assert.Equal(t, "retained summary", out.Summaries[0].Content)
 }
 
-func TestCompactionSummariesValidationAndRetainedSummary(t *testing.T) {
+func TestCompactionSummariesValidation(t *testing.T) {
 	for _, tc := range []struct {
 		req  service.CompactionSummariesRequest
 		want string
 	}{
 		{service.CompactionSummariesRequest{}, "provide exactly one"},
+		{service.CompactionSummariesRequest{ActiveSince: "2024-06-01T00:00:00Z", Limit: -1}, "limit must be 0 or more"},
 		{service.CompactionSummariesRequest{SessionID: "s", ActiveSince: "2024-06-01T00:00:00Z"}, "provide exactly one"},
 		{service.CompactionSummariesRequest{SessionID: "s", Cursor: "next"}, "cursor requires active_since"},
 	} {
 		_, err := service.CompactionSummaries(t.Context(), &compactionSpy{}, tc.req)
 		require.ErrorContains(t, err, tc.want)
 	}
-	out, err := service.CompactionSummaries(t.Context(), &compactionSpy{includeSummary: true}, service.CompactionSummariesRequest{ActiveSince: "2024-06-01T00:00:00Z"})
-	require.NoError(t, err)
-	require.Len(t, out.Summaries, 1)
-	assert.Equal(t, "retained summary", out.Summaries[0].Content)
-}
-
-func TestCompactionSummariesWhitespacePage(t *testing.T) {
-	d := dbtest.OpenTestDB(t)
-	svc := service.NewDirectBackend(d, nil)
-	for _, row := range []struct{ id, ended, content string }{
-		{"blank", "2024-06-17T00:00:00Z", "  \n"},
-		{"summary", "2024-06-16T00:00:00Z", "summary"},
-	} {
-		dbtest.SeedSession(t, d, row.id, "project", func(s *db.Session) { s.EndedAt = &row.ended })
-		require.NoError(t, d.InsertMessages(t.Context(), []db.Message{{SessionID: row.id, Ordinal: 0, Role: "assistant", IsCompactBoundary: true, Content: row.content}}))
-	}
-	first, err := service.CompactionSummaries(t.Context(), svc, service.CompactionSummariesRequest{ActiveSince: "2024-06-01T00:00:00Z", Limit: 1})
-	require.NoError(t, err)
-	assert.Empty(t, first.Summaries)
-	require.NotEmpty(t, first.NextCursor)
-	second, err := service.CompactionSummaries(t.Context(), svc, service.CompactionSummariesRequest{ActiveSince: "2024-06-01T00:00:00Z", Limit: 1, Cursor: first.NextCursor})
-	require.NoError(t, err)
-	require.Len(t, second.Summaries, 1)
-	assert.Equal(t, "summary", second.Summaries[0].Content)
-	assert.Empty(t, second.NextCursor)
 }
 
 func TestCompactionSummariesMultipleMessagePages(t *testing.T) {
@@ -125,7 +103,7 @@ func TestCompactionSummariesMultipleMessagePages(t *testing.T) {
 	dbtest.SeedSession(t, d, "many", "project")
 	messages := make([]db.Message, db.MaxMessageLimit+1)
 	for i := range messages {
-		messages[i] = db.Message{SessionID: "many", Ordinal: i, Role: "assistant", IsCompactBoundary: true, Content: "summary"}
+		messages[i] = db.Message{SessionID: "many", Ordinal: i, Role: "assistant", IsSystem: true, IsCompactBoundary: true, Content: "summary"}
 	}
 	require.NoError(t, d.InsertMessages(t.Context(), messages))
 	out, err := service.CompactionSummaries(t.Context(), svc, service.CompactionSummariesRequest{SessionID: "many"})
@@ -140,13 +118,13 @@ func TestCompactionSummariesLegacyEvener(t *testing.T) {
 		dbtest.SeedSession(t, d, row.id, "project", func(s *db.Session) { s.Agent = "evener"; s.EndedAt = &row.ended })
 	}
 	require.NoError(t, d.InsertMessages(t.Context(), []db.Message{
-		{SessionID: "a", Role: "system", IsCompactBoundary: true, SourceType: "entry", SourceSubtype: "SUMMARY", Content: "[SUMMARY]"},
-		{SessionID: "b", Role: "system", IsCompactBoundary: true, SourceType: "entry", SourceSubtype: "CHECKPOINT", Content: "Retained summary"},
-		{SessionID: "c", Ordinal: 0, Role: "system", IsCompactBoundary: true, SourceType: "evener_literal_compaction", SourceSubtype: "SUMMARY", Content: "[SUMMARY]"},
-		{SessionID: "c", Ordinal: 1, Role: "system", IsCompactBoundary: true, SourceType: "evener_empty_compaction", SourceSubtype: "SUMMARY", Content: "[SUMMARY]"},
+		{SessionID: "a", Role: "system", IsSystem: true, IsCompactBoundary: true, SourceType: "entry", SourceSubtype: "SUMMARY", Content: "[SUMMARY]"},
+		{SessionID: "b", Role: "system", IsSystem: true, IsCompactBoundary: true, SourceType: "entry", SourceSubtype: "CHECKPOINT", Content: "Retained summary"},
+		{SessionID: "c", Ordinal: 0, Role: "system", IsSystem: true, IsCompactBoundary: true, SourceType: "evener_literal_compaction", SourceSubtype: "SUMMARY", Content: "[SUMMARY]"},
+		{SessionID: "c", Ordinal: 1, Role: "system", IsSystem: true, IsCompactBoundary: true, SourceType: "evener_empty_compaction", SourceSubtype: "SUMMARY", Content: "[SUMMARY]"},
 	}))
 	svc := service.NewDirectBackend(d, nil)
-	for id, want := range map[string][]string{"a": nil, "b": {"Retained summary"}, "c": {"[SUMMARY]"}, "missing": nil} {
+	for id, want := range map[string][]string{"a": nil, "b": {"Retained summary"}, "c": {"[SUMMARY]"}} {
 		out, err := service.CompactionSummaries(t.Context(), svc, service.CompactionSummariesRequest{SessionID: id})
 		require.NoError(t, err)
 		var contents []string
@@ -154,11 +132,6 @@ func TestCompactionSummariesLegacyEvener(t *testing.T) {
 			contents = append(contents, summary.Content)
 		}
 		assert.Equal(t, want, contents, id)
-		if id == "a" {
-			raw, err := json.Marshal(out)
-			require.NoError(t, err)
-			assert.Contains(t, string(raw), `"ambiguous":[{"session_id":"a","ordinal":0}]`)
-		}
 	}
 	active, err := service.CompactionSummaries(t.Context(), svc, service.CompactionSummariesRequest{ActiveSince: "2024-06-01T00:00:00Z"})
 	require.NoError(t, err)

@@ -1729,7 +1729,7 @@ func TestGrokCompactionUpgradeReparsesInPlace(t *testing.T) {
 
 func TestEvenerCompactionUpgradeReparsesStoredLabels(t *testing.T) {
 	version := db.CurrentDataVersion()
-	scope := db.ScopedDataVersionProviders(version-1, version)
+	scope := db.ScopedDataVersionProviders(179, 180)
 	assert.ElementsMatch(t, []parser.AgentType{parser.AgentEvener}, scope)
 	t.Cleanup(db.InstallDataVersionScopesForTest(map[int][]parser.AgentType{version: scope}))
 	ctx := t.Context()
@@ -1771,6 +1771,6 @@ func TestEvenerCompactionUpgradeReparsesStoredLabels(t *testing.T) {
 	messages, err := database.GetAllMessages(ctx, "evener:compaction")
 	require.NoError(t, err)
 	require.Len(t, messages, 2)
-	assert.NotEqual(t, "entry", messages[0].SourceType)
-	assert.NotEqual(t, "entry", messages[1].SourceType)
+	assert.Equal(t, parser.EvenerEmptyCompactionSourceType, messages[0].SourceType)
+	assert.Equal(t, parser.EvenerLiteralCompactionSourceType, messages[1].SourceType)
 }

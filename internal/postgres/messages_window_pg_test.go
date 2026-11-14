@@ -310,7 +310,7 @@ func TestPGGetMessagesWindow_CompactBoundary(t *testing.T) {
 	pg := mwEnsureSchema(t, pgURL)
 	defer pg.Close()
 	mwSeedWindowMessages(t, pg, "boundary")
-	_, err := pg.ExecContext(t.Context(), `UPDATE messages SET is_compact_boundary = TRUE WHERE session_id = $1 AND ordinal IN (3, 8)`, "boundary")
+	_, err := pg.ExecContext(t.Context(), `UPDATE messages SET is_compact_boundary = TRUE, is_system = TRUE WHERE session_id = $1 AND ordinal IN (3, 8)`, "boundary")
 	require.NoError(t, err)
 	store := mwNewStore(t, pgURL)
 	defer store.Close()
