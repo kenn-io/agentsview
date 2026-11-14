@@ -6,6 +6,7 @@ import (
 	"database/sql"
 	"encoding/hex"
 	"fmt"
+	"hash"
 	"regexp"
 	"strings"
 )
@@ -50,12 +51,43 @@ func hermesTokenMetadata(ctx context.Context, conn *sql.DB, indexed bool) (revis
 	return revision, indexes == 2, err
 }
 
-func listHermesMemberTokens(ctx context.Context, conn *sql.DB, id string, indexed bool, yield func(string, string, bool) error) error {
+func listHermesMemberTokens(ctx context.Context, conn *sql.DB, id string, indexed bool, yield func(string, string, bool, []hermesModelUsage) error) error {
 	revision, indexed, err := hermesTokenMetadata(ctx, conn, indexed)
 	if err != nil {
 		return err
 	}
 	usage, err := readHermesModelUsage(ctx, conn, id)
+	if err != nil {
+		return err
+	}
+	checksums := make(map[string]hash.Hash)
+	query := `SELECT session_id, timestamp, COALESCE(finish_reason, '') FROM messages`
+	var messageArgs []any
+	if id != "" {
+		query += ` WHERE session_id = ?`
+		messageArgs = append(messageArgs, id)
+	}
+	query += ` ORDER BY session_id, id`
+	messageRows, err := conn.QueryContext(ctx, query, messageArgs...)
+	if err != nil {
+		return err
+	}
+	for messageRows.Next() {
+		var sid string
+		var timestamp, finish any
+		if err := messageRows.Scan(&sid, &timestamp, &finish); err != nil {
+			messageRows.Close()
+			return err
+		}
+		h := checksums[sid]
+		if h == nil {
+			h = sha256.New()
+			checksums[sid] = h
+		}
+		fmt.Fprintf(h, "%T:%q\x00%T:%q\x00", timestamp, fmt.Sprint(timestamp), finish, fmt.Sprint(finish))
+	}
+	err = messageRows.Err()
+	messageRows.Close()
 	if err != nil {
 		return err
 	}
@@ -92,17 +124,24 @@ func listHermesMemberTokens(ctx context.Context, conn *sql.DB, id string, indexe
 			fmt.Fprintf(h, "%T:%q\x00", value, fmt.Sprint(value))
 		}
 		fmt.Fprintf(h, "%#v", usage[sid])
-		if err := yield(sid, hex.EncodeToString(h.Sum(nil)), values[1] == "cron"); err != nil {
+		if checksum := checksums[sid]; checksum != nil {
+			h.Write(checksum.Sum(nil))
+		}
+		if err := yield(sid, hex.EncodeToString(h.Sum(nil)), values[1] == "cron", usage[sid]); err != nil {
 			return err
 		}
 	}
 	return rows.Err()
 }
 
-func hermesMemberToken(ctx context.Context, conn *sql.DB, id string) (string, error) {
+func hermesMemberToken(ctx context.Context, conn *sql.DB, id string) (string, []hermesModelUsage, error) {
 	var token string
-	err := listHermesMemberTokens(ctx, conn, id, false, func(_ string, value string, _ bool) error { token = value; return nil })
-	return token, err
+	var usage []hermesModelUsage
+	err := listHermesMemberTokens(ctx, conn, id, false, func(_ string, value string, _ bool, rows []hermesModelUsage) error {
+		token, usage = value, rows
+		return nil
+	})
+	return token, usage, err
 }
 
 func hermesStoredMemberToken(value string) (string, bool) {
@@ -208,7 +247,7 @@ func (s hermesSourceSet) changedHermesMembers(ctx context.Context, root, stateDB
 	}
 	var sources []SourceRef
 	selected := make(map[string]struct{})
-	err = listHermesMemberTokens(ctx, conn, "", true, func(id, token string, cron bool) error {
+	err = listHermesMemberTokens(ctx, conn, "", true, func(id, token string, cron bool, _ []hermesModelUsage) error {
 		row, found, err := cursor.Lookup(ctx, VirtualSourcePath(stateDB, id))
 		if err != nil {
 			return err

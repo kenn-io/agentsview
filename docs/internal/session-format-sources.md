@@ -4196,14 +4196,15 @@ schemas keep their existing ordering behavior.
   a per-session token to skip unchanged members on database and WAL events.
   The token includes parsed session fields (including the native live
   `message_count`), model usage ledger rows, transcript revision, greatest
-  message ID, and first/last indexed timestamps. Three covering seeks per
-  session use `idx_messages_session_id(session_id,id)` and
-  `idx_messages_session(session_id,timestamp)`; message history is not scanned.
+  message ID, first/last indexed timestamps, and a checksum over every message
+  timestamp and finish reason. Three covering seeks per session use
+  `idx_messages_session_id(session_id,id)` and
+  `idx_messages_session(session_id,timestamp)`. The checksum scans message history.
   The gated listing pins those indexes because the producer warns that stale
   [SQLite statistics](https://github.com/NousResearch/hermes-agent/blob/aca4f1df/hermes_state_common.py#L140-L146)
   can choose the wrong index and sort message history. Direct and seeded
   fingerprints remain usable without either index: their token omits message
-  endpoints while the full fingerprint still reads the session's history.
+  endpoints and still checks message timestamps and finish reasons.
   Native append/replacement moves greatest ID; active-only deletion resets the
   live count even when newer inactive rows remain. Clear removes all messages.
   The native `messages_transcript_revision_update` and
@@ -4225,9 +4226,8 @@ schemas keep their existing ordering behavior.
   names content and display metadata in the update, advancing the revision.
   [Prune rewrites](https://github.com/NousResearch/hermes-agent/blob/aca4f1df/hermes_state_prune_rewrite.py#L225-L249)
   first insert a retained row with a new ID, advancing the greatest message ID.
-  Transcript-file edits use their own `sessions/` events. Listing costs session
-  metadata plus distinct lifetime ledger keys and indexed message seeks, not
-  only changed sessions.
+  Transcript-file edits use their own `sessions/` events. Listing costs session metadata, distinct lifetime ledger keys, and message
+  history, not only changed sessions.
   Auxiliary same-key ledger UPSERTs can leave session fields/revision unchanged,
   so the full ledger read remains necessary under the current producer contract.
   Ledger keys aggregate route/task usage; their lifetime count has no verified

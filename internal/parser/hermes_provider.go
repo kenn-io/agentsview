@@ -739,9 +739,6 @@ func (s hermesSourceSet) discoverTranscriptEachWithMembership(
 		switch {
 		case strings.HasSuffix(name, ".jsonl"):
 		case strings.HasPrefix(name, "session_") && strings.HasSuffix(name, ".json"):
-			if IsRegularFile(filepath.Join(sessionsDir, id+".jsonl")) || IsRegularFile(filepath.Join(sessionsDir, "session_"+id+".jsonl")) {
-				return nil
-			}
 		default:
 			return nil
 		}
@@ -1943,13 +1940,13 @@ func hermesStateMemberFingerprint(
 		return SourceFingerprint{}, hermesStateLookupError{err: fmt.Errorf("open hermes state db: %w", err)}
 	}
 	defer conn.Close()
-	token, err := hermesMemberToken(ctx, conn, src.SessionID)
+	token, usage, err := hermesMemberToken(ctx, conn, src.SessionID)
 	if err != nil {
 		return SourceFingerprint{}, err
 	}
 	ss, messages, candidatePaths, err := readHermesStateSessionFingerprintInputs(
 		ctx,
-		conn, src.StateDB, src.SessionID,
+		conn, src.StateDB, src.SessionID, usage,
 	)
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
@@ -2069,11 +2066,11 @@ func seedHermesMemberCoresLocked(ctx context.Context, stateDB string) error {
 	}
 	defer memberConn.Close()
 	observeSharedContainerScan(ctx)
-	return listHermesMemberTokens(ctx, idsConn, "", false, func(id, token string, _ bool) error {
+	return listHermesMemberTokens(ctx, idsConn, "", false, func(id, token string, _ bool, usage []hermesModelUsage) error {
 		retainedIDBytes := int64(len(id))
 		observeStreamingRetainedBytes(ctx, retainedIDBytes)
 		defer observeStreamingRetainedBytes(ctx, -retainedIDBytes)
-		return cacheHermesMemberCore(ctx, memberConn, stateDB, id, VirtualSourcePath(stateDB, id), token)
+		return cacheHermesMemberCore(ctx, memberConn, stateDB, id, VirtualSourcePath(stateDB, id), token, usage)
 	})
 }
 
@@ -2082,11 +2079,11 @@ func seedHermesMemberCoresLocked(ctx context.Context, stateDB string) error {
 // left for the fingerprint path to surface through its established error
 // handling; only cache-write failures propagate.
 func cacheHermesMemberCore(
-	ctx context.Context, conn *sql.DB, stateDB, id, fingerprintKey, token string,
+	ctx context.Context, conn *sql.DB, stateDB, id, fingerprintKey, token string, usage []hermesModelUsage,
 ) error {
 	ss, messages, candidatePaths, err := readHermesStateSessionFingerprintInputs(
 		ctx,
-		conn, stateDB, id,
+		conn, stateDB, id, usage,
 	)
 	if err != nil {
 		return nil //nolint:nilerr // Failure to build the optional checkpoint forces full parsing next time.

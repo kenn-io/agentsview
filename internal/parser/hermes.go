@@ -1025,9 +1025,14 @@ func readHermesStateSessionSourceConn(ctx context.Context,
 // real Parse path still makes the authoritative richer-source choice when
 // a session is actually reparsed.
 func readHermesStateSessionFingerprintInputs(ctx context.Context,
-	conn *sql.DB, stateDB, rawSessionID string,
+	conn *sql.DB, stateDB, rawSessionID string, usage []hermesModelUsage,
 ) (hermesStateSession, []hermesStateMessage, []string, error) {
-	ss, found, err := readHermesStateSession(ctx, conn, rawSessionID)
+	ss, err := scanHermesStateSession(conn.QueryRowContext(ctx, hermesStateSessionQuery, rawSessionID))
+	found := !errors.Is(err, sql.ErrNoRows)
+	if !found {
+		err = nil
+	}
+	ss.modelUsage = usage
 	if err != nil {
 		return hermesStateSession{}, nil, nil, hermesStateLookupError{err: err}
 	}
