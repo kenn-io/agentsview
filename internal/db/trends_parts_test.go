@@ -109,9 +109,17 @@ func TestTrendsPartsConcurrentWindowMiss(t *testing.T) {
 	direct, err := OpenReadOnly(ctx, d.Path())
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, direct.Close()) })
-	got, err := direct.trendsTerms(ctx, f, terms, "day")
+	want, err := direct.trendsTerms(ctx, f, terms, "day")
 	require.NoError(t, err)
-	require.Equal(t, 2, got.Series[0].Total)
+	require.Equal(t, 2, want.Series[0].Total)
+	var reads [][]string
+	reset := SetTrendPartsReadObserver(func(ids []string) { reads = append(reads, append([]string(nil), ids...)) })
+	t.Cleanup(reset)
+	got, handled, err := TrendsFromParts(ctx, &d.trendsDisk, identity, f, terms, "day", d)
+	require.NoError(t, err)
+	require.True(t, handled)
+	assert.Equal(t, want, got)
+	assert.Equal(t, [][]string{{"b"}}, reads)
 }
 
 func (s *trendPartsFixture) TrendSessionVersions(context.Context, AnalyticsFilter) (map[string]string, error) {
