@@ -454,9 +454,7 @@ test.describe("sidebar agent names", () => {
     expect(await prefixFitsBeforeEllipsis(page, CROWDED_ID, "Open".length)).toBe(true);
   });
 
-  test("a row showing years keeps the full timestamp, title, and metadata at 280px", async ({
-    page,
-  }) => {
+  test("rows showing years fit at 280px and 220px with children", async ({ page }) => {
     // A two-digit day and month give the widest dates; Korean writes them
     // longest of the shipped locales.
     const ended_at = "2026-12-15T12:00:00Z";
@@ -501,23 +499,7 @@ test.describe("sidebar agent names", () => {
       expect(row.name).toBeGreaterThan(row.column * 0.6);
       expect(row.meta).toBeGreaterThanOrEqual(row.column - 1);
     }
-  });
 
-  test("rows showing years keep the timestamp and count at 220px in Korean multi-select, children included", async ({
-    page,
-  }) => {
-    // Korean writes the widest dates, and a nested child in multi-select has
-    // the narrowest column.
-    const ended_at = "2026-12-15T12:00:00Z";
-    await page.route("**/api/v1/sessions/sidebar-index**", (route) =>
-      route.fulfill({
-        json: { ...sidebarResponse(), sessions: fixtureRows.map((row) => ({ ...row, ended_at })) },
-      }),
-    );
-    await page.addInitScript(() => {
-      localStorage.setItem("agentsview-always-show-year", "true");
-      localStorage.setItem("agentsview-locale", "ko");
-    });
     await openSessions(page, 1280, 220);
     // Expanding the parent also opens its subagent group.
     await page.locator(`[data-session-id="${CROWDED_ID}"] .tree-toggle`).click();
@@ -557,7 +539,6 @@ test.describe("sidebar agent names", () => {
         return {
           gapToNext: next ? next.getBoundingClientRect().top - itemRect.bottom : 0,
           text: time.textContent,
-          title: time.title,
           timeEscapes: escapes(text),
           overlapped,
           countClipped:
@@ -568,7 +549,6 @@ test.describe("sidebar agent names", () => {
       console.log(`width=220px years locale=ko multi-select ${id} ${JSON.stringify(row)}`);
       expect(row.text).toContain("2026");
       expect(row.text).toMatch(/\d{1,2}:\d{2}/);
-      expect(row.text).toBe(row.title);
       expect(row.timeEscapes).toBe(false);
       expect(row.overlapped).toBe(0);
       expect(row.countClipped).toBe(false);

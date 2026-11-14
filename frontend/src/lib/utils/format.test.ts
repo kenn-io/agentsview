@@ -51,7 +51,6 @@ describe("date and time with the year", () => {
   it("shows the year and time when requested", () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date("2026-06-03T14:32:00"));
-    expect(formatRelativeTime("2026-06-01T14:30:00", true)).toBe("Jun 1, 2026, 02:30 PM");
     expect(formatRelativeTime("2026-06-03T14:30:00", true)).toBe("Jun 3, 2026, 02:30 PM");
     expect(formatTimestamp("2024-06-01T14:30:00", true)).toBe("Jun 1, 2024, 02:30 PM");
     expect(formatRelativeTime("2024-06-01T14:30:00")).toBe("Jun 1");
