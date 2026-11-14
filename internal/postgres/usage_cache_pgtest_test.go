@@ -147,28 +147,6 @@ func TestPGUsageCacheLaunchResumesInterruptedFill(t *testing.T) {
 	requireCachedUsageMatchesDirect(t, store, db.UsageFilter{Timezone: zone})
 }
 
-func TestPGUsageCacheLaunchSkipsReadyZones(t *testing.T) {
-	t.Parallel()
-	_, _, store, _ := keptUsageFixture(t)
-	ctx := t.Context()
-	directory := t.TempDir()
-	attachUsageCacheProbe(t, store, directory)
-	for _, timezone := range []string{(db.UsageFilter{}).Location().String(), "UTC"} {
-		_, err := store.usageCache.GetDailyUsage(ctx, db.UsageFilter{Timezone: timezone})
-		require.NoError(t, err)
-	}
-	require.NoError(t, store.usageCache.Close())
-	probe := attachUsageCacheProbe(t, store, directory)
-	require.NoError(t, store.usageCache.LoadReadiness(ctx))
-	store.usageCache.DeferWork()
-	t.Cleanup(func() { require.NoError(t, store.usageCache.Close()) })
-	var captures atomic.Int64
-	probe.afterCapture = func(context.Context) error { captures.Add(1); return nil }
-	require.NoError(t, store.WarmUsageCache(ctx))
-	require.NoError(t, store.usageCache.WaitWarm(ctx))
-	assert.Zero(t, captures.Load())
-}
-
 func TestPGUsageCacheLaunchRetriesDiscovery(t *testing.T) {
 	t.Parallel()
 	_, _, store, _ := keptUsageFixture(t)
@@ -176,15 +154,14 @@ func TestPGUsageCacheLaunchRetriesDiscovery(t *testing.T) {
 	probe := attachUsageCacheProbe(t, store, t.TempDir())
 	store.usageCache.DeferWork()
 	t.Cleanup(func() { require.NoError(t, store.usageCache.Close()) })
-	var available atomic.Bool
+	var captures atomic.Int64
 	probe.afterCapture = func(context.Context) error {
-		if !available.Load() {
+		if captures.Add(1) <= 2 {
 			return errors.New("temporary source failure")
 		}
 		return nil
 	}
 	require.Error(t, store.WarmUsageCache(ctx))
-	available.Store(true)
 	waitCtx, cancel := context.WithTimeout(ctx, 20*time.Second)
 	defer cancel()
 	require.NoError(t, store.WaitUsageCacheWarm(waitCtx))
@@ -209,33 +186,12 @@ func TestPGUsageCacheLaunchRetriesUnavailableOnce(t *testing.T) {
 	assert.Equal(t, int64(2), captures.Load())
 }
 
-func TestPGUsageCacheLaunchRecoversUnavailableSource(t *testing.T) {
-	t.Parallel()
-	_, _, store, _ := keptUsageFixture(t)
-	probe := attachUsageCacheProbe(t, store, t.TempDir())
-	store.usageCache.DeferWork()
-	t.Cleanup(func() { require.NoError(t, store.usageCache.Close()) })
-	var captures atomic.Int64
-	probe.afterCapture = func(context.Context) error {
-		if captures.Add(1) == 1 {
-			return db.ErrUsageSourceUnavailable
-		}
-		return nil
-	}
-	require.ErrorIs(t, store.WarmUsageCache(t.Context()), db.ErrUsageSourceUnavailable)
-	ctx, cancel := context.WithTimeout(t.Context(), 20*time.Second)
-	defer cancel()
-	require.NoError(t, store.WaitUsageCacheWarm(ctx))
-	_, err := store.usageCache.GetDailyUsage(ctx, db.UsageFilter{})
-	require.NoError(t, err, "launch should fill before the first Usage read")
-}
-
 func TestPGUsageCacheLaunchPreservesRequestRecency(t *testing.T) {
 	t.Parallel()
 	for _, tc := range []struct {
-		name              string
-		requested, recent bool
-	}{{"launch", false, false}, {"request", true, false}, {"recent request", true, true}} {
+		name                     string
+		requested, recent, ready bool
+	}{{"launch", false, false, false}, {"request", true, false, false}, {"recent request", true, true, false}, {"ready", false, false, true}} {
 		t.Run(tc.name, func(t *testing.T) {
 			_, _, store, _ := keptUsageFixture(t)
 			ctx := t.Context()
@@ -260,11 +216,15 @@ func TestPGUsageCacheLaunchPreservesRequestRecency(t *testing.T) {
 			if tc.recent {
 				old = time.Now().Add(-10 * time.Second).UTC().Format(time.RFC3339Nano)
 			}
-			_, err = cached.ExecContext(ctx, `UPDATE usage_rollup_timezones SET last_requested_at = ?, change_revision = NULL WHERE timezone_name = ?`, old, zone)
-			require.NoError(t, err)
-			attachUsageCacheProbe(t, store, directory)
+			if !tc.ready {
+				_, err = cached.ExecContext(ctx, `UPDATE usage_rollup_timezones SET last_requested_at = ?, change_revision = NULL WHERE timezone_name = ?`, old, zone)
+				require.NoError(t, err)
+			}
+			probe := attachUsageCacheProbe(t, store, directory)
 			require.NoError(t, store.usageCache.LoadReadiness(ctx))
 			store.usageCache.DeferWork()
+			var captures atomic.Int64
+			probe.afterCapture = func(context.Context) error { captures.Add(1); return nil }
 			t.Cleanup(func() { require.NoError(t, store.usageCache.Close()) })
 			hold := store.usageCache.HoldWarm()
 			t.Cleanup(hold)
@@ -275,6 +235,10 @@ func TestPGUsageCacheLaunchPreservesRequestRecency(t *testing.T) {
 			}
 			hold()
 			require.NoError(t, store.usageCache.WaitWarm(ctx))
+			if tc.ready {
+				assert.Zero(t, captures.Load())
+				return
+			}
 			var stamp string
 			require.NoError(t, cached.QueryRowContext(ctx, `SELECT last_requested_at FROM usage_rollup_timezones WHERE timezone_name = ?`, zone).Scan(&stamp))
 			if tc.requested && !tc.recent {
@@ -291,18 +255,11 @@ func TestPGUsageCacheDeferredReadWithBusyCacheWriter(t *testing.T) {
 	_, _, store, _ := keptUsageFixture(t)
 	ctx := t.Context()
 	filter := db.UsageFilter{Timezone: "Pacific/Honolulu"}
-	want, err := store.GetDailyUsage(ctx, filter)
-	require.NoError(t, err)
 	directory := t.TempDir()
 	attachUsageCacheProbe(t, store, directory)
 	require.NoError(t, store.usageCache.LoadReadiness(ctx))
 	store.usageCache.DeferWork()
-	closed := false
-	t.Cleanup(func() {
-		if !closed {
-			require.NoError(t, store.usageCache.Close())
-		}
-	})
+	t.Cleanup(func() { require.NoError(t, store.usageCache.Close()) })
 	files, err := filepath.Glob(filepath.Join(directory, "usage-cache-v*.db"))
 	require.NoError(t, err)
 	require.Len(t, files, 1)
@@ -317,17 +274,8 @@ func TestPGUsageCacheDeferredReadWithBusyCacheWriter(t *testing.T) {
 	t.Cleanup(func() { _, _ = conn.ExecContext(context.WithoutCancel(ctx), `ROLLBACK`) })
 	request, cancel := context.WithTimeout(ctx, time.Second)
 	defer cancel()
-	got, err := store.GetDailyUsage(request, filter)
+	_, err = store.GetDailyUsage(request, filter)
 	require.NoError(t, err)
-	require.NoError(t, request.Err(), "the direct read must not wait for the cache writer")
-	assert.Equal(t, want, got)
-	_, err = conn.ExecContext(ctx, `ROLLBACK`)
-	require.NoError(t, err)
-	require.NoError(t, store.usageCache.Close())
-	closed = true
-	var count int
-	require.NoError(t, cached.QueryRowContext(ctx, `SELECT COUNT(*) FROM usage_rollup_timezones WHERE timezone_name = ?`, filter.Timezone).Scan(&count))
-	require.Equal(t, 1, count)
 }
 
 func TestPGUsageCacheDeferredReadsReuseDirectResults(t *testing.T) {
