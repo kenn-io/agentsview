@@ -1282,13 +1282,17 @@ func (s *Store) collectContentSubstringPass(
 		b := db.NewQueryBuilder(db.DuckDBQueryDialect(), 0)
 		rank := db.WordRankSQL(b, "body", f, words, all)
 		args = append(args, b.Args()...)
+		materialized, matched := "", ""
+		if !all {
+			materialized, matched = " MATERIALIZED", " WHERE n >= 1"
+		}
 		query = `WITH candidates AS (` + strings.Join(branches, " UNION ALL ") + `),
-			ranked AS MATERIALIZED (
+			ranked AS` + materialized + ` (
 				SELECT candidates.*, ` + rank + ` FROM candidates
 			)
 			SELECT session_id, project, agent, location, role, tool_name,
 				ordinal, ts, body, n
-			FROM ranked WHERE n >= 1
+			FROM ranked` + matched + `
 			ORDER BY tier, n DESC, sort_ts DESC, session_id ASC, ordinal ASC,
 				src ASC, row_id ASC, call_index ASC, event_index ASC, body ASC
 			LIMIT ? OFFSET ?`

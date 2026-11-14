@@ -730,14 +730,19 @@ func (s *Store) searchContentWordsPG(
 	var err error
 	for _, all := range []bool{true, false} {
 		pb := &paramBuilder{n: len(branchArgs), args: append([]any{}, branchArgs...)}
+		matchesFilter := " WHERE n >= 1"
+		if all {
+			matchesFilter = ""
+		}
 		query := fmt.Sprintf(`WITH scoped AS (SELECT id FROM sessions WHERE %s), %s
 			SELECT session_id, project, agent, transcript_revision, location, role, tool_name, ordinal, ts, snippet, n
 			FROM (%sSELECT session_id, project, agent, transcript_revision, 'message' AS location, role,
 				'' AS tool_name, ordinal, ts, body AS snippet, 0 AS src, 0::bigint AS row_id, sort_ts, 1 AS tier, n
-				FROM word_matches WHERE n >= 1
+				FROM word_matches%s
 			) sub ORDER BY tier, n DESC, sort_ts DESC NULLS LAST, session_id ASC, ordinal ASC, src ASC, row_id ASC, snippet ASC
 			LIMIT %s OFFSET %s`,
-			scopeWhere, pgWordMatches(f, words, all, from, pb), union.String(), pb.add(f.Limit+1), pb.add(f.Cursor))
+			scopeWhere, pgWordMatches(f, words, all, from, pb), union.String(), matchesFilter,
+			pb.add(f.Limit+1), pb.add(f.Cursor))
 		page, err = s.scanPGContentMatches(ctx, query, pb.args, f.Limit, f.Cursor, func(body string) string {
 			start, end := db.WordSnippetRange(body, f.Pattern, words)
 			return f.BuildSnippet(body, start, end)
@@ -772,7 +777,7 @@ func pgWordMatches(
 	regex := db.WordRegexSQL(b, "body", "folded_body", words, all)
 	if all {
 		if prefix := db.WordPrefixSQL(b, "body", f, words); prefix != "" {
-			regex = "(" + prefix + " OR " + regex + ")"
+			regex = "CASE WHEN " + prefix + " THEN TRUE ELSE " + regex + " END"
 		}
 	}
 	pb.args = append(pb.args, b.Args()...)
@@ -782,19 +787,26 @@ func pgWordMatches(
 				m.timestamp AS ts, ` + column + ` AS body, ` + db.WordFoldSQL(db.PostgresQueryDialect(), column) + ` AS folded_body,
 				COALESCE(s.ended_at, s.started_at, s.created_at) AS sort_ts
 			` + from
-	return fmt.Sprintf(`raw_word_candidates AS MATERIALIZED (
+	materialized := " AS MATERIALIZED"
+	if all {
+		materialized = " AS"
+	}
+	return fmt.Sprintf(`raw_word_candidates%s (
 			%s AND %s
-		), accent_word_candidates AS MATERIALIZED (
+		), accent_word_candidates%s (
 			%s AND %s AND %s AND NOT %s
-		), word_candidates AS MATERIALIZED (
+		), word_candidates%s (
 			SELECT * FROM raw_word_candidates
 			UNION ALL
 			SELECT * FROM accent_word_candidates
-		), word_matches AS MATERIALIZED (
+		), word_matches%s (
 			SELECT word_candidates.*, %s AS n FROM word_candidates WHERE %s
-		)`, candidates, rawWhere,
-		candidates, pgDialogueNonASCIIPredicate(column), foldedCandidate,
-		rawCandidate, n, regex)
+		)`, materialized, candidates, rawWhere,
+		materialized, candidates, pgDialogueNonASCIIPredicate(column), foldedCandidate,
+		rawCandidate,
+		materialized,
+		materialized,
+		n, regex)
 }
 
 func pgDialogueNonASCIIPredicate(column string) string {

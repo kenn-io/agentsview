@@ -11,16 +11,13 @@ import (
 
 // WordCandidateSQL matches rows in column holding the common prefix of every
 // query word's forms, or with all false of any word. The LIKE gate selects
-// candidates before the whole-word regexes run. With fold, both sides compare
+// candidates before the whole-word regexes run. With fold, Latin words compare
 // without diacritics; without it, PostgreSQL's trigram index serves the gate.
 func WordCandidateSQL(b *QueryBuilder, column string, q ContentWords, all, fold bool) string {
 	parts := make([]string, len(q.Terms))
 	for i, forms := range q.Terms {
-		if fold {
-			parts[i] = wordContainsSQL(b, WordFoldSQL(b.dialect, column), wordPrefix(forms))
-		} else {
-			parts[i] = b.ContainsPredicate(column, wordPrefix(forms))
-		}
+		foldTerm := fold && wordUsesLatinDiacritics(forms)
+		parts[i] = wordContainsSQL(b, column, wordPrefix(forms), foldTerm, false)
 	}
 	op := " OR "
 	if all {
@@ -76,7 +73,12 @@ func WordPrefixSQL(b *QueryBuilder, column string, f ContentSearchFilter, q Cont
 func WordCountSQL(b *QueryBuilder, raw, folded string, q ContentWords) string {
 	parts := make([]string, len(q.Terms))
 	for i, forms := range q.Terms {
-		parts[i] = "CASE WHEN " + wordContainsSQL(b, folded, wordPrefix(forms)) +
+		foldTerm := wordUsesLatinDiacritics(forms)
+		candidateColumn := raw
+		if foldTerm {
+			candidateColumn = folded
+		}
+		parts[i] = "CASE WHEN " + wordContainsSQL(b, candidateColumn, wordPrefix(forms), foldTerm, foldTerm) +
 			" AND " + wordTermSQL(b, raw, folded, forms) + " THEN 1 ELSE 0 END"
 	}
 	return "(" + strings.Join(parts, " + ") + ")"
@@ -145,9 +147,18 @@ func wordFoldPatternSQL(b *QueryBuilder, pattern string) string {
 	}
 }
 
-func wordContainsSQL(b *QueryBuilder, folded, pattern string) string {
-	return folded + " " + b.dialect.caseInsensitiveLike + " " +
-		wordFoldPatternSQL(b, "%"+EscapeLikePattern(pattern)+"%") + " " + b.dialect.caseInsensitiveLikeEsc
+func wordContainsSQL(b *QueryBuilder, column, pattern string, fold, columnFolded bool) string {
+	pattern = "%" + EscapeLikePattern(pattern) + "%"
+	var patternSQL string
+	if fold {
+		if !columnFolded {
+			column = WordFoldSQL(b.dialect, column)
+		}
+		patternSQL = wordFoldPatternSQL(b, pattern)
+	} else {
+		patternSQL = b.Add(pattern)
+	}
+	return column + " " + b.dialect.caseInsensitiveLike + " " + patternSQL + " " + b.dialect.caseInsensitiveLikeEsc
 }
 
 // wordTermSQL matches any of forms as a whole word, case-insensitively.
@@ -157,6 +168,9 @@ func wordContainsSQL(b *QueryBuilder, folded, pattern string) string {
 // adjacent non-Latin letter into a boundary.
 func wordTermSQL(b *QueryBuilder, raw, folded string, forms []string) string {
 	compact := compactForms(forms)
+	if !wordUsesLatinDiacritics(forms) {
+		return b.dialect.regexPredicate(raw, b.Add(boundedPattern(b, true, compact)))
+	}
 	if b.dialect.name == "postgres" {
 		return b.dialect.regexPredicate(folded, wordFoldPatternSQL(b, boundedPattern(b, true, compact)))
 	}
@@ -168,6 +182,22 @@ func wordTermSQL(b *QueryBuilder, raw, folded string, forms []string) string {
 	}
 	return "CASE WHEN " + ascii + " THEN " + b.dialect.regexPredicate(raw, asciiPattern) +
 		" ELSE " + b.dialect.regexPredicate(folded, unicodePattern) + " END"
+}
+
+func wordUsesLatinDiacritics(forms []string) bool {
+	hasLatin := false
+	for _, form := range forms {
+		for _, r := range form {
+			if !unicode.IsLetter(r) {
+				continue
+			}
+			if !unicode.In(r, unicode.Latin) {
+				return false
+			}
+			hasLatin = true
+		}
+	}
+	return hasLatin
 }
 
 // boundedPattern matches words separated by non-letter, non-digit runs, with

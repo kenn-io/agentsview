@@ -43,6 +43,7 @@ func SeedWordSearch(t *testing.T, d *db.DB) {
 		{"accent-naive", "word-accent-naive", "naïve design"},
 		{"accent-overlap", "word-accent-overlap", "résumé parsing"},
 		{"accent-unicode-boundary", "word-accent-unicode-boundary", "café漢字"},
+		{"accent-greek", "word-accent-greek", "αρχή parsing"},
 	} {
 		SeedSession(t, d, entry.id, entry.project, func(s *db.Session) { s.UserMessageCount = 2 })
 		require.NoError(t, d.ReplaceSessionMessages(t.Context(), entry.id, []db.Message{{
@@ -89,6 +90,7 @@ func AssertWordSearch(t *testing.T, store db.Store) {
 		{"accent folding avoids ASCII boundary false positives", "sum missingword", "word-accent-overlap", nil},
 		{"accent folding does not count an ASCII interior", "sum parsing missingword", "word-accent-overlap", []hit{{"accent-overlap", "message", 1}}},
 		{"accent folding keeps Unicode boundaries", "café missingword", "word-accent-unicode-boundary", nil},
+		{"Greek accents stay distinct", "αρχη missingword", "word-accent-greek", nil},
 	} {
 		for _, mode := range []string{"substring", "fts", "hybrid"} {
 			t.Run(tc.name+"/"+mode, func(t *testing.T) {
