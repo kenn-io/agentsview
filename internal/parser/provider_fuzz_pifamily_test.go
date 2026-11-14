@@ -10,7 +10,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// Pi-derived and single-directory providers: the five agents that share the
+// Pi-derived and single-directory providers: the six agents that share the
 // Pi parser, plus fx, Tau, Muse, OpenClaw, QClaw, QwenPaw, Omnigent, DeepSeek
 // TUI, DeepSeek Harness, Evener, and Reasonix.
 
@@ -21,9 +21,8 @@ var providerFuzzPiSeeds = []providerFuzzSeed{
 }
 
 func init() {
-	// Pi, OMO, and StepCode group sessions by project directory and accept
-	// transcripts at any depth.
-	for _, agent := range []AgentType{AgentPi, AgentOMO, AgentStepCode} {
+	// Pi, OMO, StepCode, and Direct API accept transcripts at any depth.
+	for _, agent := range []AgentType{AgentPi, AgentOMO, AgentStepCode, AgentDirectAPI} {
 		registerProviderFuzzTarget(providerFuzzTarget{
 			agent: agent,
 			path:  "--home-user-code-app--/" + providerFuzzPiSessionFile,
@@ -238,6 +237,8 @@ func FuzzProviderOMP(f *testing.F) { fuzzProvider(f, AgentOMP) }
 func FuzzProviderOMO(f *testing.F) { fuzzProvider(f, AgentOMO) }
 
 func FuzzProviderStepCode(f *testing.F) { fuzzProvider(f, AgentStepCode) }
+
+func FuzzProviderDirectAPI(f *testing.F) { fuzzProvider(f, AgentDirectAPI) }
 
 func FuzzProviderFx(f *testing.F) { fuzzProvider(f, AgentFx) }
 

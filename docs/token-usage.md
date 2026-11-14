@@ -34,10 +34,10 @@ coding yesterday?" — across multiple coding agents from one archive.
     **Qwen Code**, **OpenClaw**, **QClaw**, **Hermes**, **WorkBuddy**, **Forge**,
     **Piebald**, **Antigravity IDE/CLI**, **Zed**, **VS Code Copilot**, **Visual
     Studio Copilot**, **Mistral Vibe**, **gptme**, **Amp**, **Junie CLI**, **OMO**,
-    and **StepCode**. Coverage also includes **Cline CLI**, **Tencent CodeBuddy
-    CN**, **Augure Code**, **Open Interpreter**, **Augure Desktop 3 beta**,
-    **Charm Crush**, **fx**, and **Muse Code**, and reads **DeepSeek Harness**
-    formats through version 3.
+    **StepCode**, and **Direct API** usage files. Coverage also includes **Cline
+    CLI**, **Tencent CodeBuddy CN**, **Augure Code**, **Open Interpreter**,
+    **Augure Desktop 3 beta**, **Charm Crush**, **fx**, and **Muse Code**, and
+    reads **DeepSeek Harness** formats through version 3.
 
     Command Code forks count only usage produced after the fork.
 
@@ -854,6 +854,30 @@ Amp's exports record only main-thread inference, so tokens spent by `oracle`,
 Note that recent Amp versions keep complete threads server-side and leave only
 stub files on disk. AgentsView reports usage for whatever complete threads are
 present locally; threads that exist only as stubs have nothing to read.
+
+### Direct API Sessions
+
+Tools that call model APIs directly, with no coding agent in between, can
+record their token usage as **Direct API** sessions. The tool writes one
+body-free JSONL file per session: never prompts, documents, or replies. Each
+line is one JSON object, and each line's `parentId` is the `id` of the line
+before it:
+
+1. Header, with a UUID4 `id`, an ISO `timestamp`, and the absolute `cwd`:
+   `{"type":"session","version":3,"id":<uuid4>,"timestamp":<iso>,"cwd":<cwd>}`
+2. Name, with an 8-hex `id` and a null `parentId`:
+   `{"type":"session_info","id":<8 hex>,"parentId":null,"timestamp":<iso>,"name":<name>}`
+3. One line per model call, with an 8-hex `id` and `timestamp` in epoch
+   milliseconds inside `message`:
+   `{"type":"message","id":<8 hex>,"parentId":<previous line id>,"timestamp":<iso>,"message":{"role":"assistant","provider":<provider>,"model":<model>,"content":[],"usage":{"input":I,"output":O,"cacheRead":C,"cacheWrite":0,"totalTokens":I+O+C},"timestamp":<epoch ms>}}`
+
+`input` excludes cached prompt tokens, and `cacheRead` is the cached prompt
+tokens, so `totalTokens` is `input + output + cacheRead`. AgentsView prices the
+tokens from the catalog.
+
+Files go in `~/.agentsview/direct-api/` by default. Set `DIRECT_API_DIR`, or
+`direct_api_dirs` in the [config file](configuration.md), to read another
+directory.
 
 ## Reporting Model
 

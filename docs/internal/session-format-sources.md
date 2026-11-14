@@ -3651,6 +3651,33 @@ schemas keep their existing ordering behavior.
   prefix StepCode's resume picker hides, and leaves them unlinked because the
   parent transcript doesn't record the child ID.
 
+## Direct API (`direct-api`)
+
+- **Format:** A body-free subset of Pi v3 JSONL, written by tools that call
+  model APIs directly instead of through a coding agent. Producers never write
+  prompts, documents, or replies.
+
+- **Evidence:** `no-public-source`.
+
+- **Upstream:** None. AgentsView owns this contract, a subset of the Pi v3
+  session format documented under Pi above; checked 2026-11-13.
+
+- **Usage and cost:** Each assistant line carries input, output, cache-read, and
+  cache-write tokens with a provider and model. Agentsview derives monetary cost
+  from the catalog.
+
+- **Contract:** The public line shapes and usage meaning are in
+  [Direct API Sessions](../token-usage.md#direct-api-sessions).
+
+- **Agentsview:** Direct API reuses the Pi-family provider in
+  `internal/parser/pi.go` and `internal/parser/pi_provider.go`; no separate
+  parser is needed. Its registry entry supplies the default directory
+  (`.agentsview/direct-api`), the `DIRECT_API_DIR` override, the
+  `direct_api_dirs` config key, and the `direct-api:` session-ID prefix, so
+  these sessions never merge into Pi's. Sessions are found at any depth below
+  the directory, and a bare header UUID falls back to a header scan. Cost is
+  derived from the catalog.
+
 ## Qwen Code (`qwen`)
 
 - **Format:** Gemini-derived project chat-record JSONL.
