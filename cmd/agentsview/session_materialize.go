@@ -58,7 +58,7 @@ func newSessionMaterializeCommand() *cobra.Command {
 			if err != nil {
 				if session.Agent == "pi" {
 					if differs, ok := errors.AsType[*sessionmaterialize.DestinationDiffersError](err); ok {
-						return fmt.Errorf("%w; if this is the same session, resume it with: %s", err, piResumeCommand(cwd, differs.Path, runtime.GOOS == "windows"))
+						return fmt.Errorf("%w; if this is the same session, resume it with: %s", err, piResumeCommand(result.Cwd, differs.Path, runtime.GOOS == "windows"))
 					}
 				}
 				return err

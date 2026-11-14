@@ -11,6 +11,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log"
 	"net/url"
 	"os"
 	"path/filepath"
@@ -89,7 +90,7 @@ func materializePi(ctx context.Context, cfg config.Config, session *db.Session, 
 	}
 	changed, err := publishFiles(ctx, []installFile{{dest, data}})
 	if err != nil {
-		return Result{}, err
+		return Result{Cwd: cwd}, err
 	}
 	status := "unchanged"
 	if changed {
@@ -326,7 +327,8 @@ func piSettingsSessionDir(ctx context.Context, agentDir, cwd, projectConfig stri
 		}
 		var settings map[string]jsontext.Value
 		if err := json.Unmarshal(bytes.TrimPrefix(data, []byte("\xef\xbb\xbf")), &settings, jsontext.AllowDuplicateNames(true), jsontext.AllowInvalidUTF8(true)); err != nil {
-			return "", fmt.Errorf("invalid Pi settings: %w", err)
+			log.Printf("warning: ignoring invalid Pi settings %s: %v", name, err)
+			continue
 		}
 		if value, ok := settings["sessionDir"]; ok {
 			dir = ""
