@@ -383,11 +383,16 @@ func TestMusePersonalIndexCacheAcrossProviders(t *testing.T) {
 								return
 							}
 							fp, err := other.Fingerprint(ctx, source)
-							if !assert.NoError(t, err) {
+							if err != nil {
+								t.Errorf("fingerprint %s: %v", source.Key, err)
 								return
 							}
 							out, err := other.Parse(ctx, ParseRequest{Source: source, Fingerprint: fp})
-							if !assert.NoError(t, err) || !assert.Len(t, out.Results, 1) {
+							if err != nil {
+								t.Errorf("parse %s: %v", source.Key, err)
+								return
+							}
+							if !assert.Len(t, out.Results, 1) {
 								return
 							}
 							assert.Equal(t, want, out.Results[0].Result.Session.EndedAt.Format(time.RFC3339))
@@ -457,6 +462,6 @@ func TestMusePersonalDuplicateIdentityIsIncomplete(t *testing.T) {
 	require.ErrorContains(t, err, "duplicate session identity")
 	require.Len(t, sources, 1)
 	discovery, err := DiscoverRawCaptureSources(t.Context(), p)
-	assert.ErrorContains(t, err, "duplicate session identity")
+	require.ErrorContains(t, err, "duplicate session identity")
 	assert.False(t, discovery.Complete)
 }

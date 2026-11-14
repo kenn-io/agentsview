@@ -495,7 +495,7 @@ func musePersonalVerifyIndex(ctx context.Context, path string, before os.FileInf
 	if !after.Mode().IsRegular() || !os.SameFile(before, after) ||
 		before.Size() != after.Size() || !before.ModTime().Equal(after.ModTime()) ||
 		generation != fileStatTupleDigest(0xD6, path) {
-		return errors.New("Muse Personal index changed during read")
+		return errors.New("muse personal index changed during read")
 	}
 	return nil
 }
@@ -515,7 +515,7 @@ func musePersonalLoadIndex(ctx context.Context, path string, info os.FileInfo, g
 		return nil, err
 	}
 	if !opened.Mode().IsRegular() || !os.SameFile(info, opened) {
-		return nil, errors.New("Muse Personal index replaced before read")
+		return nil, errors.New("muse personal index replaced before read")
 	}
 	raw, err := io.ReadAll(io.LimitReader(&countingReader{ctx: ctx, r: f}, musePersonalIndexLimit+1))
 	if err != nil {

@@ -34,7 +34,8 @@ func TestMusePersonalAuditPreservesTemporarilyUnavailableTranscript(t *testing.T
 			require.NoError(t, err)
 			require.True(t, first.Complete)
 			require.Equal(t, 1, first.Captured)
-			if state == "unreadable" {
+			switch state {
+			case "unreadable":
 				require.NoError(t, os.Chmod(path, 0))
 				t.Cleanup(func() {
 					err := os.Chmod(path, 0o600)
@@ -46,9 +47,9 @@ func TestMusePersonalAuditPreservesTemporarilyUnavailableTranscript(t *testing.T
 					require.NoError(t, f.Close())
 					t.Skip("platform permits reading despite denied file permissions")
 				}
-			} else if state == "future version" {
+			case "future version":
 				require.NoError(t, os.WriteFile(path, []byte(strings.Replace(original, `"version":1`, `"version":2`, 1)), 0o600))
-			} else {
+			default:
 				require.NoError(t, os.WriteFile(path, []byte(`{"type":"session_header"`), 0o600))
 			}
 			next, err := auditor.AuditProviderFull(t.Context(), provider)
