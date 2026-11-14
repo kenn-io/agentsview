@@ -1,0 +1,10 @@
+{
+  "version": 179,
+  "digest": "e514cb15630e60759b05d0b90e9b57e9c294f746aa0cecea95e20f3de43b4785",
+  "providers": {
+    "muse-personal": {
+      "agent-11111111-2222-4333-8444-555555555555/sessions/11111111-2222-4333-8444-555555555555.jsonl": "c2e1244c85f737a49400822cb83a1ed9bbe15a14bff05cc9e417f10d094dd920",
+      "agent-aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee/sessions/aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee.jsonl": "876e119f415d15505206f245cc6b6c666c96817967d6dec88947c5fc7afdd01f"
+    }
+  }
+}

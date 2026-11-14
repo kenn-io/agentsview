@@ -16,7 +16,8 @@ turn on [search by meaning](https://agentsview.io/docs/semantic-search/) from
 Settings without editing configuration. Usage and search are much faster on
 large archives. Choose message colors and a color-blind safe chart palette, and
 import Open Interpreter sessions. Commands are now grouped under `source`,
-`report`, `replica`, and `index`; older names still work.
+`report`, `replica`, and `index`; older names still work. The `main` branch
+also supports Muse Personal sessions.
 
 <p align="center">
   <img src="https://agentsview.io/assets/generated/screenshots/dashboard.png" alt="Analytics dashboard" width="720">
@@ -424,6 +425,7 @@ local Amp thread JSON files.
 | MiMoCode              | `~/.local/share/mimocode/`                                                                                                                                                                                                                           |
 | Mistral Vibe          | `~/.vibe/logs/session/`                                                                                                                                                                                                                              |
 | Muse Code             | `~/.local/share/muse/sessions/` (`$XDG_DATA_HOME/muse/sessions/` when `XDG_DATA_HOME` is set)                                                                                                                                                        |
+| Muse Personal         | `~/agents/agent-<uuid>/sessions/`                                                                                                                                                                                                                    |
 | OpenClaw              | `~/.openclaw/agents/`                                                                                                                                                                                                                                |
 | OpenCode              | `~/.local/share/opencode/`                                                                                                                                                                                                                           |
 | Open Code Review      | `~/.opencodereview/sessions/`                                                                                                                                                                                                                        |

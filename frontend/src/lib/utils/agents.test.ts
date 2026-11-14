@@ -74,6 +74,7 @@ describe("KNOWN_AGENTS", () => {
       "freebuff",
       "crush",
       "muse",
+      "muse-personal",
     ]);
   });
 

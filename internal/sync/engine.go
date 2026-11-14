@@ -2368,6 +2368,11 @@ func providerChangedPathForceParse(
 		return eventKind == "remove" &&
 			providerDeletedPhysicalSQLiteSource(agent, sourcePath)
 	}
+	// Index writes and removals compare the per-identity projection before
+	// parsing; explicit reparse modes still set ForceParse at the caller.
+	if agent == parser.AgentMusePersonal && filepath.Base(eventPath) == "sessions.json" {
+		return false
+	}
 	// Copilot companion events compare per-session hashes before parsing.
 	if agent == parser.AgentCopilot && filepath.Clean(sourcePath) != filepath.Clean(eventPath) {
 		return false
@@ -6817,6 +6822,56 @@ func codebuffCompositeMtime(path string) (int64, error) {
 	return mtime, nil
 }
 
+// musePersonalCompositeMtime is a stat-only incremental cutoff for a
+// transcript plus its advisory sessions index. The index ctime catches
+// same-size rewrites with a restored mtime; the sessions directory catches
+// index creation and removal. These local-only signals do not change the
+// persisted transcript mtime or hosted projection.
+func musePersonalCompositeMtime(path string) (int64, error) {
+	dir := filepath.Dir(path)
+	targets := []struct {
+		path      string
+		required  bool
+		directory bool
+	}{
+		{path: path, required: true},
+		{path: filepath.Join(dir, "sessions.json")},
+		{path: dir, required: true, directory: true},
+	}
+	var mtime int64
+	for _, target := range targets {
+		info, err := os.Lstat(target.path)
+		if err != nil && !target.required {
+			continue
+		}
+		if err != nil {
+			return 0, err
+		}
+		if info.Mode()&os.ModeSymlink != 0 {
+			if target.required {
+				return 0, fmt.Errorf("invalid Muse Personal source path (symlink): %s", target.path)
+			}
+			continue
+		}
+		if target.directory {
+			if !info.IsDir() {
+				return 0, fmt.Errorf("invalid Muse Personal sessions path (not a directory): %s", target.path)
+			}
+		} else if !info.Mode().IsRegular() {
+			if target.required {
+				return 0, fmt.Errorf("invalid Muse Personal transcript (not a regular file): %s", target.path)
+			}
+			continue
+		}
+		ts := info.ModTime().UnixNano()
+		if changeTime, ok := fileChangeTime(target.path, info); ok && changeTime > ts {
+			ts = changeTime
+		}
+		mtime = max(mtime, ts)
+	}
+	return mtime, nil
+}
+
 // discoveredFileEffectiveMtime returns the freshness timestamp used to filter a
 // discovered file against an incremental-sync cutoff. For provider-sourced
 // files it consults the provider's Fingerprint so composite/sibling-file
@@ -6942,6 +6997,9 @@ func (e *Engine) discoveredFileEffectiveMtime(
 	// doc comment for what the composite covers.
 	if file.Agent == parser.AgentCodebuff || file.Agent == parser.AgentFreebuff {
 		return codebuffCompositeMtime(file.Path)
+	}
+	if file.Agent == parser.AgentMusePersonal {
+		return musePersonalCompositeMtime(file.Path)
 	}
 	// ICodeMate CLI fingerprints hash transcript and sidecar contents. The
 	// incremental cutoff needs only their stat metadata, including sidecar
@@ -7127,6 +7185,9 @@ func discoveredFileMtime(ctx context.Context,
 
 	if file.Agent == parser.AgentCodebuff || file.Agent == parser.AgentFreebuff {
 		return codebuffCompositeMtime(file.Path)
+	}
+	if file.Agent == parser.AgentMusePersonal {
+		return musePersonalCompositeMtime(file.Path)
 	}
 
 	info, err := os.Stat(file.Path)
@@ -9737,7 +9798,7 @@ func (e *Engine) providerStatDigestEligible(agent parser.AgentType) bool {
 	if e.pathRewriter == nil {
 		return true
 	}
-	return agent != parser.AgentClaude && agent != parser.AgentEvener && !isCodexFormatAgent(agent)
+	return agent != parser.AgentClaude && agent != parser.AgentEvener && agent != parser.AgentMusePersonal && !isCodexFormatAgent(agent)
 }
 
 // providerFreshDigestSourceCurrentInDB reports whether the active stored
@@ -12685,11 +12746,20 @@ func (e *Engine) SourceMtime(ctx context.Context, sessionID string) int64 {
 		return obj.LastModified.UnixNano()
 	}
 
-	if def.Type == parser.AgentEvener {
-		// Session polling must notice metadata and parent changes too.
+	if def.Type == parser.AgentEvener || def.Type == parser.AgentMusePersonal {
+		// Session polling must notice companion metadata changes too.
 		// This opaque stat token is compared for equality, not ordering.
 		if hasher := e.sources().providerStatHashers[def.Type]; hasher != nil {
-			return int64(hasher.ComputeMultiFileStatHash(path))
+			if token := hasher.ComputeMultiFileStatHash(path); token != 0 {
+				return int64(token)
+			}
+		}
+		if def.Type == parser.AgentMusePersonal {
+			// An unusable optional index must not make a live transcript look missing.
+			mtime, err := musePersonalCompositeMtime(path)
+			if err == nil {
+				return mtime
+			}
 		}
 		return 0
 	}

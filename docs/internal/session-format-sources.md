@@ -6167,6 +6167,70 @@ schemas keep their existing ordering behavior.
   not been observed in a published log and are not rendered.
   `session-index.db` is not read.
 
+## Muse Personal (`muse-personal`)
+
+- **Format:** Meta's personal assistant writes version-1 transcripts under
+  `~/agents/agent-<uuid>/sessions/<session-uuid>.jsonl`, with an optional sibling
+  `sessions.json` index. This is a different product and persistence format from
+  Muse Code. The first record is `session_header` with `version`, `session_id`,
+  `agent_id` and RFC 3339 `created_at`. Each `item` has a non-negative integer
+  `seq`, open-ended `source`, RFC 3339 `created_at` and typed `item`. Supported
+  variants are `message`, `message_parts`, `thinking`, `commentary_text`,
+  `function_call` and `function_call_output`. Output `metadata` is an optional
+  JSON string. `compaction_checkpoint.created_at` is integer Unix epoch seconds;
+  its summary is visible and its nested `details_json` history is opaque.
+  The version-1 index has a `sessions` array with identity, timestamps, transcript
+  path, sequence-space counts and optional context-window snapshots. Unknown
+  index keys are ignored. Its `transcript_path` is never a filesystem authority.
+- **Evidence:** `no-public-source`.
+- **Upstream:** Meta documentation was checked 2026-11-02. Searches of Meta's
+  public product and developer documentation did not locate this persistence
+  schema. The [Muse product page](https://ai.meta.com/muse/) identifies the
+  personal assistant only; it is not format evidence. Muse Code's public SDK
+  schema does not describe these files. Shapes were independently checked
+  against two private byte-preserved native captures on 2026-11-02: 7 and 92
+  items, 1 and 27 call/output pairs, and one compaction. These captures are not
+  repository fixtures. `internal/parser/testdata/muse_personal/` contains only
+  developer-authored synthetic examples; their six transcript/index SHA-256
+  hashes were checked against the synthetic source packet on 2026-11-02.
+  The captures confirmed out-of-order physical writes for late finalized
+  thinking, output records without metadata and additional unknown index keys.
+- **Usage and cost:** None emitted. `context_window_usage` is a context snapshot,
+  not per-message usage. Internal `model_id` is not exposed as a public model
+  name. Titles, parent links and chat/subagent classification remain unknown.
+- **Agentsview:** `internal/parser/muse_personal.go` and
+  `internal/parser/muse_personal_provider.go` require UUID layout and matching
+  version-1 header identity. Recognized future transcript versions and duplicate
+  session identities leave discovery incomplete so they cannot authorize raw
+  custody tombstones. Sessions use `muse-personal:<session_id>`.
+  Visible assistant commentary participates in dialogue search and export.
+  Items are sorted by sequence before pairing; ties keep physical order.
+  Only byte-identical same-sequence records are deduplicated. A checkpoint is
+  anchored after the highest preceding physical item sequence; it does not
+  replay nested history or discard previous rows. Outputs attach only to a
+  unique preceding unmatched call ID; sequential reuse works, ambiguity leaves
+  outputs unpaired. Source/sequence occurrence provenance distinguishes retained
+  rows. Unknown variants retain a bounded sanitized type marker even when their
+  body fields have unfamiliar JSON shapes; their bodies stay raw-only. Unknown
+  records accept the RFC3339 and integer epoch-second timestamp shapes already
+  used by known records. Null or invalid record timestamps count as malformed.
+  File parts retain inert recorded references. Thinking signatures,
+  output metadata, checkpoint details and context snapshots stay in raw custody.
+  An unterminated final line defers publication. Raw capture includes the original
+  transcript and regular index, even when the index version cannot enrich the
+  session. Reverified against synthetic fixtures on 2026-11-10: index freshness
+  uses the matching session ID, agent ID and normalized creation instant, with
+  update timestamps in row order (the first eligible row extends end time).
+  Each verified index generation is decoded once per sync pass. Arrival, edits
+  and removal refresh only affected session projections; unrelated fields,
+  whitespace and sibling rows do not force replacement. The complete index
+  remains in raw custody, including malformed or opaque bytes. Local and
+  hosted parsing use the same provider; logical hosted paths remain stable
+  across generations. Nonregular transcripts are rejected before opening;
+  unreadable owned directories and observed cancellation cannot authorize a
+  complete discovery or replacement. An unfinished header also defers parsing
+  and makes discovery nonauthoritative until the rewrite completes.
+
 [evener-source-1]: https://github.com/prime-radiant-inc/evener/blob/da7c06396c9848abfae362dcffce3861a6a0c95a/agent/transcript/transcript.go
 [evener-source-2]: https://github.com/prime-radiant-inc/evener/blob/da7c06396c9848abfae362dcffce3861a6a0c95a/agent/schema/turn.go
 [evener-source-3]: https://github.com/prime-radiant-inc/evener/blob/da7c06396c9848abfae362dcffce3861a6a0c95a/llm/types.go
