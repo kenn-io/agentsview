@@ -1213,7 +1213,7 @@ func TestRecentRecallPageWithoutRevisionRejectsTruncatedBoundedList(t *testing.T
 	assert.Empty(t, next)
 }
 
-func TestDirectRecallDeltaPagesArchiveWithoutQueryState(t *testing.T) {
+func TestDirectRecallDeltaSinglePageArchiveWithoutQueryState(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "revisionless-recall.db")
 	writable, err := db.Open(t.Context(), path)
 	require.NoError(t, err)
@@ -1231,20 +1231,13 @@ func TestDirectRecallDeltaPagesArchiveWithoutQueryState(t *testing.T) {
 	require.NoError(t, err)
 	defer readonly.Close()
 	svc := service.NewReadOnlyBackend(readonly)
-	f := service.RecallFilter{Limit: 1, UpdatedSince: "2020-01-01T00:00:00Z"}
-
-	first, err := svc.ListRecallEntries(t.Context(), f)
+	f := service.RecallFilter{Limit: 2, UpdatedSince: "2020-01-01T00:00:00Z"}
+	result, err := svc.ListRecallEntries(t.Context(), f)
 	require.NoError(t, err)
-	require.Len(t, first.RecallEntries, 1)
-	require.NotEmpty(t, first.NextCursor)
-	f.Cursor = first.NextCursor
-	second, err := svc.ListRecallEntries(t.Context(), f)
-
-	require.NoError(t, err)
-	require.Len(t, second.RecallEntries, 1)
+	require.Len(t, result.RecallEntries, 2)
 	assert.ElementsMatch(t, []string{"page-a", "page-b"},
-		[]string{first.RecallEntries[0].ID, second.RecallEntries[0].ID})
-	assert.Empty(t, second.NextCursor)
+		[]string{result.RecallEntries[0].ID, result.RecallEntries[1].ID})
+	assert.Empty(t, result.NextCursor)
 }
 
 func TestDirectRecallListClampsLargePage(t *testing.T) {
@@ -1264,4 +1257,32 @@ func TestDirectRecallListClampsLargePage(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, second.RecallEntries, 2)
 	assert.Empty(t, second.NextCursor)
+}
+
+func TestDirectRecallDeltaRejectsRevisionlessArchiveContinuation(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "legacy.db")
+	writable, err := db.Open(t.Context(), path)
+	require.NoError(t, err)
+	seedServiceRecallEntrySession(t, writable)
+	for _, id := range []string{"a", "b"} {
+		seedServiceRecallEntry(t, writable, db.RecallEntry{ID: id, Title: id, Body: id, SourceSessionID: "recall-session"})
+	}
+	require.NoError(t, writable.Close())
+	raw, err := sql.Open("sqlite3", path)
+	require.NoError(t, err)
+	_, err = raw.ExecContext(t.Context(), "DROP TABLE recall_query_state")
+	require.NoError(t, err)
+	require.NoError(t, raw.Close())
+	readonly, err := db.OpenReadOnly(t.Context(), path)
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, readonly.Close()) })
+	svc := service.NewReadOnlyBackend(readonly)
+	result, err := svc.ListRecallEntries(t.Context(), service.RecallFilter{Limit: 1, UpdatedSince: "2020-01-01T00:00:00Z"})
+	require.ErrorIs(t, err, db.ErrInvalidRecallQuery)
+	assert.Nil(t, result)
+
+	_, _, err = service.ListRecentRecallEntriesPage(t.Context(), readonly,
+		db.RecallQuery{Limit: 1, UpdatedSince: "2020-01-01T00:00:00Z"},
+		&service.RecallListCursor{Kind: service.RecallListCursorRecency, UpdatedAt: "2026-01-01T00:00:00.000Z", ID: "a"})
+	require.ErrorIs(t, err, service.ErrStaleRecallPagination)
 }

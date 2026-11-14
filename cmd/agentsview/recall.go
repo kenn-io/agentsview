@@ -126,8 +126,8 @@ func newRecallListCommand() *cobra.Command {
 			out := cmd.OutOrStdout()
 			printRecallEntryTrustedOnlyHuman(out, list.TrustedOnly)
 			if err := printRecallResultsDetailedHumanWithOptions(out, list.RecallEntries, recallDetailedPrintOptions{
-				ShowEvidence: true,
-				ShowBody:     true,
+				ShowEvidence: f.UpdatedSince != "" || f.CreatedSince != "",
+				ShowBody:     f.UpdatedSince != "" || f.CreatedSince != "",
 			}); err != nil {
 				return err
 			}
