@@ -3407,6 +3407,8 @@ schemas keep their existing ordering behavior.
   `PI_CODING_AGENT_DIR` replaces `~/.pi/agent`, with default sessions under
   `sessions/`. `PI_CODING_AGENT_SESSION_DIR` supplies the session directory
   directly and takes precedence over that default. Both accept tilde paths.
+  `piResolveDir` mirrors the `~`, `file://`, and Windows shell-drive forms in
+  [Pi 1.5.2's path normalizer](https://github.com/earendil-works/pi/blob/b4afdddf44e059c67ccf5097e5317d913521b470/packages/coding-agent/src/utils/paths.ts).
   The pinned
   [session manager](https://github.com/earendil-works/pi/blob/acaa253cc8e3f159e6100b6f3874861b1f0bfc99/packages/coding-agent/src/core/session-manager.ts)
   writes files directly into an explicit session directory; default sessions
