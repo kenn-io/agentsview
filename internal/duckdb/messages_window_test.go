@@ -40,13 +40,12 @@ func seedDuckWindowMessages(t *testing.T, local *db.DB, sessionID string) {
 	for ordinal, role := range roles {
 		content := "msg"
 		msgs = append(msgs, db.Message{
-			SessionID:         sessionID,
-			Ordinal:           ordinal,
-			Role:              role,
-			Content:           content,
-			ContentLength:     len(content),
-			IsSystem:          role == "system",
-			IsCompactBoundary: ordinal == 3 || ordinal == 8,
+			SessionID:     sessionID,
+			Ordinal:       ordinal,
+			Role:          role,
+			Content:       content,
+			ContentLength: len(content),
+			IsSystem:      role == "system",
 		})
 	}
 	require.NoError(t, local.InsertMessages(t.Context(), msgs),
@@ -278,7 +277,7 @@ func TestDuckGetMessagesWindow_CompactBoundary(t *testing.T) {
 	store := newDuckWindowStore(t, func(local *db.DB) {
 		seedDuckWindowMessages(t, local, "boundary")
 		require.NoError(t, local.Update(t.Context(), func(tx *sql.Tx) error {
-			_, err := tx.ExecContext(t.Context(), "UPDATE messages SET is_system = 1 WHERE session_id = ? AND ordinal IN (3, 8)", "boundary")
+			_, err := tx.ExecContext(t.Context(), "UPDATE messages SET is_compact_boundary = 1, is_system = 1 WHERE session_id = ? AND ordinal IN (3, 8)", "boundary")
 			return err
 		}))
 	})

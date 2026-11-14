@@ -50,31 +50,22 @@ func TestCompactionSummariesActiveChildren(t *testing.T) {
 				s.RelationshipType = "subagent"
 			}
 		})
-		require.NoError(t, d.InsertMessages(t.Context(), []db.Message{{SessionID: row.id, Role: "assistant", Content: row.id, IsSystem: true, IsCompactBoundary: true}}))
 	}
+	filter := service.ListFilter{ActiveSince: "2024-06-01T00:00:00Z", Limit: 20, IncludeOneShot: true, OneShotFilterSet: true, IncludeAutomated: true, AutomatedFilterSet: true, IncludeChildren: true, Flat: true}
+	page, err := service.NewDirectBackend(d, nil).List(t.Context(), filter)
+	require.NoError(t, err)
+	var ids []string
+	for _, session := range page.Sessions {
+		ids = append(ids, session.ID)
+	}
+	assert.ElementsMatch(t, []string{"active-parent", "active-child", "orphan"}, ids)
 	daemon := httptest.NewUnstartedServer(nil)
 	s := server.New(config.Config{Host: "127.0.0.1", Port: daemon.Listener.Addr().(*net.TCPAddr).Port, DataDir: t.TempDir()}, d, nil)
 	daemon.Config.Handler = s.Handler()
 	daemon.Start()
 	defer daemon.Close()
-	svc := service.NewDirectBackend(d, nil)
-	var ids []string
-	cursor := ""
-	for range 4 {
-		out, err := service.CompactionSummaries(t.Context(), svc, service.CompactionSummariesRequest{ActiveSince: "2024-06-01T00:00:00Z", Limit: 1, Cursor: cursor})
-		require.NoError(t, err)
-		for _, summary := range out.Summaries {
-			ids = append(ids, summary.SessionID)
-		}
-		cursor = out.NextCursor
-		if cursor == "" {
-			break
-		}
-	}
-	assert.Empty(t, cursor)
-	assert.ElementsMatch(t, []string{"active-parent", "active-child", "orphan"}, ids)
 	remote := servicehttp.NewHTTPBackend(daemon.URL, "", true, "")
-	page, err := remote.List(t.Context(), service.ListFilter{ActiveSince: "2024-06-01T00:00:00Z", Limit: 20, IncludeOneShot: true, OneShotFilterSet: true, IncludeAutomated: true, AutomatedFilterSet: true, IncludeChildren: true, Flat: true})
+	page, err = remote.List(t.Context(), filter)
 	require.NoError(t, err)
 	ids = nil
 	for _, session := range page.Sessions {

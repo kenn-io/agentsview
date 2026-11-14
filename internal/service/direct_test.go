@@ -1288,10 +1288,8 @@ func TestDirectBackend_Messages_DescExplicitZeroFrom(t *testing.T) {
 	assert.Equal(t, 0, list.Messages[0].Ordinal)
 }
 
-// TestDirectBackend_Messages_AroundMutuallyExclusiveWithFrom verifies that
-// combining Around with an explicit From is rejected: the two retrieval
-// modes (symmetric window vs. linear pagination) cannot both be requested.
-func TestDirectBackend_Messages_AroundMutuallyExclusiveWithFrom(t *testing.T) {
+// TestDirectBackend_Messages_AroundMutuallyExclusive rejects incompatible filters.
+func TestDirectBackend_Messages_AroundMutuallyExclusive(t *testing.T) {
 	t.Parallel()
 	svc, env := newDirectTestSvc(t)
 	sid := env.InsertSession(t)

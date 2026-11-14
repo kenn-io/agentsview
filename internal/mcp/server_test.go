@@ -443,10 +443,9 @@ func TestCompactionSummaryTool(t *testing.T) {
 	defer func() { require.NoError(t, ct.Close()); require.NoError(t, st.Wait()) }()
 	catalog, err := ct.ListTools(t.Context(), nil)
 	require.NoError(t, err)
-	found := false
+	var minimum *float64
 	for _, tool := range catalog.Tools {
 		if tool.Name == ToolGetCompactionSummaries {
-			found = true
 			raw, err := json.Marshal(tool.InputSchema)
 			require.NoError(t, err)
 			var schema struct {
@@ -455,11 +454,11 @@ func TestCompactionSummaryTool(t *testing.T) {
 				} `json:"properties"`
 			}
 			require.NoError(t, json.Unmarshal(raw, &schema))
-			require.NotNil(t, schema.Properties["limit"].Minimum)
-			assert.InDelta(t, 0, *schema.Properties["limit"].Minimum, 0)
+			minimum = schema.Properties["limit"].Minimum
 		}
 	}
-	require.True(t, found)
+	require.NotNil(t, minimum)
+	assert.InDelta(t, 0, *minimum, 0)
 	result, err := ct.CallTool(t.Context(), callParams(ToolGetCompactionSummaries, map[string]any{"session_id": "session"}))
 	require.NoError(t, err)
 	require.False(t, result.IsError)

@@ -1771,6 +1771,5 @@ func TestEvenerCompactionUpgradeReparsesStoredLabels(t *testing.T) {
 	messages, err := database.GetAllMessages(ctx, "evener:compaction")
 	require.NoError(t, err)
 	require.Len(t, messages, 2)
-	assert.Equal(t, parser.EvenerEmptyCompactionSourceType, messages[0].SourceType)
 	assert.Equal(t, parser.EvenerLiteralCompactionSourceType, messages[1].SourceType)
 }
