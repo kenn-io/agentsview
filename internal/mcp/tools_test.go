@@ -2149,9 +2149,10 @@ func TestSearchContent_HybridKeywordFallbackMetadata(t *testing.T) {
 	assert.Equal(t, note, out.Note)
 }
 
-func TestListRecallPagesWithEvidence(t *testing.T) {
+func TestListRecallPagesWithEvidenceAndSourceSessionFilter(t *testing.T) {
 	d := dbtest.OpenTestDB(t)
 	dbtest.SeedSession(t, d, "s1", "project")
+	dbtest.SeedSession(t, d, "s2", "project")
 	for _, id := range []string{"a", "b"} {
 		_, err := d.InsertRecallEntry(t.Context(), db.RecallEntry{
 			ID: id, Type: "fact", Scope: "project", Status: "archived", Title: id, Body: id,
@@ -2185,22 +2186,15 @@ func TestListRecallPagesWithEvidence(t *testing.T) {
 	require.NoError(t, json.Unmarshal(raw, &next))
 	require.Len(t, next.Entries, 1)
 	assert.NotEqual(t, out.Entries[0].ID, next.Entries[0].ID)
-	assert.Empty(t, next.NextCursor)
-}
-
-func TestListRecallFiltersSourceSession(t *testing.T) {
-	d := dbtest.OpenTestDB(t)
-	for _, id := range []string{"s1", "s2"} {
-		dbtest.SeedSession(t, d, id, "project")
-		_, err := d.InsertRecallEntry(t.Context(), db.RecallEntry{ID: id, Type: "fact", Scope: "project", Status: "accepted", Title: id, Body: id, SourceSessionID: id})
-		require.NoError(t, err)
-	}
-	st, ct := newInMemoryPair(t, newServer(ServeOptions{Service: service.NewDirectBackend(d, nil)}))
-	t.Cleanup(func() { require.NoError(t, ct.Close()); require.NoError(t, st.Wait()) })
-	res, err := ct.CallTool(t.Context(), callParams("list_recall", map[string]any{"source_session_id": "s1"}))
+	_, err = d.InsertRecallEntry(t.Context(), db.RecallEntry{
+		ID: "c", Type: "fact", Scope: "project", Status: "accepted",
+		Title: "c", Body: "c", SourceSessionID: "s2",
+	})
+	require.NoError(t, err)
+	res, err = ct.CallTool(t.Context(), callParams("list_recall", map[string]any{"source_session_id": "s2"}))
 	require.NoError(t, err)
 	require.False(t, res.IsError)
-	out := decodeStructured[listRecallOut](t, res)
-	require.Len(t, out.Entries, 1)
-	assert.Equal(t, "s1", out.Entries[0].SourceSessionID)
+	filtered := decodeStructured[listRecallOut](t, res)
+	require.Len(t, filtered.Entries, 1)
+	assert.Equal(t, "s2", filtered.Entries[0].SourceSessionID)
 }

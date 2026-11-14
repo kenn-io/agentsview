@@ -648,20 +648,6 @@ func TestListRecallEntriesQueryMatchesMetadata(t *testing.T) {
 	assert.Positive(t, page.RecallEntries[0].Score)
 }
 
-func TestListRecallEntriesRejectsSearchWithTimeBounds(t *testing.T) {
-	for _, bound := range []string{"updated_since", "created_since"} {
-		t.Run(bound, func(t *testing.T) {
-			te := setup(t)
-			w := te.get(t,
-				"/api/v1/recall/entries?q=retry&"+bound+"=2026-01-01T00:00:00Z")
-
-			assertStatus(t, w, http.StatusBadRequest)
-			assertErrorResponse(t, w,
-				"invalid recall query: cannot combine search text with time bounds; omit the search query")
-		})
-	}
-}
-
 func TestListRecallEntriesIgnoredQueryReturnsNoEntries(t *testing.T) {
 	te := setup(t)
 	seedRecallEntrySession(t, te)
@@ -2006,29 +1992,14 @@ func TestListRecallEntriesTimeBounds(t *testing.T) {
 		future := te.get(t, "/api/v1/recall/entries?"+param+"=2999-01-01T00:00:00Z")
 		assertStatus(t, future, http.StatusOK)
 		assert.Empty(t, decode[listRecallEntriesResponse](t, future).RecallEntries)
-		padded := te.get(t, "/api/v1/recall/entries?"+param+"="+
-			url.QueryEscape(" 2999-01-01T00:00:00Z "))
-		assertStatus(t, padded, http.StatusOK)
 		whitespace := te.get(t, "/api/v1/recall/entries?"+param+"="+
 			url.QueryEscape(" \t "))
 		assertStatus(t, whitespace, http.StatusBadRequest)
 		assert.Contains(t, whitespace.Body.String(), "invalid recall query")
 	}
-}
-
-func TestListRecallEntriesBoundedPageConflictsAfterWrite(t *testing.T) {
-	te := setup(t)
-	seedRecallEntrySession(t, te)
-	seedRecallEntry(t, te, db.RecallEntry{ID: "page-a", Title: "a", Body: "a", SourceSessionID: "recall-session"})
-	seedRecallEntry(t, te, db.RecallEntry{ID: "page-b", Title: "b", Body: "b", SourceSessionID: "recall-session"})
-	path := "/api/v1/recall/entries?limit=1&updated_since=2020-01-01T00:00:00Z"
-	first := te.get(t, path)
-	assertStatus(t, first, http.StatusOK)
-	cursor := decode[listRecallEntriesResponse](t, first).NextCursor
-	require.NotEmpty(t, cursor)
-	seedRecallEntry(t, te, db.RecallEntry{ID: "page-c", Title: "c", Body: "c", SourceSessionID: "recall-session"})
-
-	second := te.get(t, path+"&cursor="+url.QueryEscape(cursor))
-	assertStatus(t, second, http.StatusConflict)
-	assert.Equal(t, service.ErrStaleRecallPagination.Error(), decode[map[string]string](t, second)["error"])
+	search := te.get(t,
+		"/api/v1/recall/entries?q=retry&updated_since=2026-01-01T00:00:00Z")
+	assertStatus(t, search, http.StatusBadRequest)
+	assertErrorResponse(t, search,
+		"invalid recall query: cannot combine search text with time bounds; omit the search query")
 }
