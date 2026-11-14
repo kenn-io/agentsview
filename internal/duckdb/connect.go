@@ -16,7 +16,11 @@ import (
 	"go.kenn.io/agentsview/internal/config"
 )
 
-const quackAttachmentName = "agentsview_remote"
+const (
+	quackAttachmentName = "agentsview_remote"
+	// Bound concurrent reads while allowing Dashboard panels to run together.
+	servingReaderMaxOpenConns = 2
+)
 
 // DefaultAttachTimeout bounds a remote Quack ATTACH (and its TCP preflight)
 // when the caller does not configure an explicit timeout. Native non-loopback
@@ -50,7 +54,7 @@ func Open(ctx context.Context, path string) (*sql.DB, error) {
 	if err != nil {
 		return nil, fmt.Errorf("opening duckdb file: %w", err)
 	}
-	return configureOpenedDuckDB(ctx, db)
+	return configureOpenedDuckDB(ctx, db, 1)
 }
 
 // OpenReadOnly opens an existing local DuckDB file read-only. Read-only
@@ -58,6 +62,14 @@ func Open(ctx context.Context, path string) (*sql.DB, error) {
 // in-process instance), so serve processes and probes never take DuckDB's
 // exclusive write lock on the mirror and never create a missing file.
 func OpenReadOnly(ctx context.Context, path string) (*sql.DB, error) {
+	return openReadOnly(ctx, path, 1)
+}
+
+func openServingReadOnly(ctx context.Context, path string) (*sql.DB, error) {
+	return openReadOnly(ctx, path, servingReaderMaxOpenConns)
+}
+
+func openReadOnly(ctx context.Context, path string, maxConns int) (*sql.DB, error) {
 	if path == "" {
 		return nil, errors.New("duckdb path is required")
 	}
@@ -65,16 +77,13 @@ func OpenReadOnly(ctx context.Context, path string) (*sql.DB, error) {
 	if err != nil {
 		return nil, fmt.Errorf("opening duckdb file %s read-only: %w", path, err)
 	}
-	return configureOpenedDuckDB(ctx, db)
+	return configureOpenedDuckDB(ctx, db, maxConns)
 }
 
-// configureOpenedDuckDB applies the shared connection settings: a single
-// pooled connection (DuckDB permits one writer per database file, and a
-// single connection avoids surprising file-lock contention) and the thread
-// count.
-func configureOpenedDuckDB(ctx context.Context, db *sql.DB) (*sql.DB, error) {
-	db.SetMaxOpenConns(1)
-	db.SetMaxIdleConns(1)
+// configureOpenedDuckDB sets the thread count and connection limit.
+func configureOpenedDuckDB(ctx context.Context, db *sql.DB, maxConns int) (*sql.DB, error) {
+	db.SetMaxOpenConns(maxConns)
+	db.SetMaxIdleConns(maxConns)
 	if err := configureDuckDBThreads(ctx, db); err != nil {
 		_ = db.Close()
 		return nil, err

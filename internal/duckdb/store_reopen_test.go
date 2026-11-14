@@ -138,6 +138,52 @@ func TestStoreReopensAfterMirrorReplacement(t *testing.T) {
 	}, 5*time.Second, 100*time.Millisecond)
 }
 
+func TestStoreReadsWhileRowsHeldAcrossReplacement(t *testing.T) {
+	skipReopenTestOnWindows(t)
+	dir := t.TempDir()
+	path := filepath.Join(dir, "mirror.duckdb")
+	next := filepath.Join(dir, "next.duckdb")
+	buildMirrorFixture(t, path, "old-session")
+	buildMirrorFixture(t, next, "new-session")
+	store, err := NewStore(t.Context(), path)
+	require.NoError(t, err)
+	defer store.Close()
+
+	old, err := store.queryContext(t.Context(), `SELECT id FROM sessions`)
+	require.NoError(t, err)
+	defer old.Close()
+	readCtx, cancelRead := context.WithTimeout(t.Context(), 5*time.Second)
+	defer cancelRead()
+	var id string
+	require.NoError(t, store.queryRowContext(readCtx, `SELECT id FROM sessions`).Scan(&id))
+	require.Equal(t, "old-session", id)
+
+	store.WatchMirrorReplacement(t.Context(), 20*time.Millisecond, nil)
+	require.NoError(t, swapMirrorFile(next, path))
+	replacementCtx, cancelReplacement := context.WithTimeout(t.Context(), 5*time.Second)
+	defer cancelReplacement()
+	require.Eventually(t, func() bool {
+		return store.queryRowContext(replacementCtx, `SELECT id FROM sessions`).Scan(&id) == nil && id == "new-session"
+	}, 5*time.Second, 20*time.Millisecond)
+	current, err := store.queryContext(t.Context(), `SELECT id FROM sessions`)
+	require.NoError(t, err)
+	defer current.Close()
+	currentReadCtx, cancelCurrentRead := context.WithTimeout(t.Context(), 5*time.Second)
+	defer cancelCurrentRead()
+	require.NoError(t, store.queryRowContext(currentReadCtx, `SELECT id FROM sessions`).Scan(&id))
+	require.Equal(t, "new-session", id)
+	require.True(t, current.Next())
+	require.NoError(t, current.Scan(&id))
+	require.Equal(t, "new-session", id)
+	require.False(t, current.Next())
+	require.NoError(t, current.Err())
+	require.True(t, old.Next())
+	require.NoError(t, old.Scan(&id))
+	require.Equal(t, "old-session", id)
+	require.False(t, old.Next())
+	require.NoError(t, old.Err())
+}
+
 func TestStoreKeepsOldHandleWhenReplacementIncompatible(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "m.duckdb")

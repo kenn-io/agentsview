@@ -145,6 +145,47 @@ func keptPanelCases(ctx context.Context, f db.AnalyticsFilter) []keptPanelCase {
 	}
 }
 
+func TestAnalyticsConcurrentPanelsMatchSerial(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "mirror.duckdb")
+	buildMirrorFixture(t, path, "session-a")
+	serial, err := NewStore(t.Context(), path)
+	require.NoError(t, err)
+	t.Cleanup(func() { serial.Close() })
+	concurrent, err := NewStore(t.Context(), path)
+	require.NoError(t, err)
+	t.Cleanup(func() { concurrent.Close() })
+
+	cases := keptPanelCases(t.Context(), db.AnalyticsFilter{Timezone: "UTC"})
+	want := make([]any, len(cases))
+	for i, tc := range cases {
+		want[i], err = tc.read(serial)
+		require.NoError(t, err, tc.name)
+	}
+	type result struct {
+		value any
+		err   error
+	}
+	results := make([]chan result, len(cases))
+	start := make(chan struct{})
+	for i, tc := range cases {
+		results[i] = make(chan result, 1)
+		go func() {
+			<-start
+			value, err := tc.read(concurrent)
+			results[i] <- result{value, err}
+		}()
+	}
+	close(start)
+	got := make([]result, len(cases))
+	for i := range cases {
+		got[i] = <-results[i]
+	}
+	for i, tc := range cases {
+		require.NoError(t, got[i].err, tc.name)
+		require.Equal(t, want[i], got[i].value, tc.name)
+	}
+}
+
 func TestAnalyticsKeptAllPanelsAndVariants(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "mirror.duckdb")
 	local := newLocalDB(t)
