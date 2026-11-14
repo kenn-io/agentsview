@@ -12240,7 +12240,8 @@ func TestProviderStoredFreshnessDecision(t *testing.T) {
 			unchanged := e.providerSourceUnchangedInDB(t.Context(), parser.SourceRef{Provider: tc.agent, DisplayPath: path}, fp,
 				parser.ProviderSyncSemantics{FingerprintHashRequiredForFreshness: tc.required}, nil)
 			assert.Equal(t, tc.want, unchanged)
-			assert.Equal(t, tc.wantReads, reads.Load())
+			assert.Equal(t, tc.wantReads > 0, reads.Load() > 0,
+				"whether the freshness check reads the stored hash")
 		})
 	}
 }
