@@ -1459,6 +1459,17 @@ agentsview source cursor sync-usage [flags]
 | `--email`     | config        | Filter by Cursor team member email   |
 | `--user-id`   | config        | Filter by Cursor team member user ID |
 
+Cursor allows 60 requests per minute to this API for each team, shared by every
+tool that uses the team's admin keys. The command starts requests, retries
+included, at least one second apart. When Cursor answers with
+`429 Too Many Requests` or a server error, the command waits and requests the
+same page again, up to 5 attempts per page. It waits as long as Cursor's
+`Retry-After` header asks, up to 60 seconds, or backs off from about 2 seconds
+when the header is absent. Each wait is reported on stderr. Any other error,
+such as a rejected key, stops the run at once. Nothing is stored unless every
+page is fetched, so a larger `--page-size`, which needs fewer requests, makes a
+long sync less likely to fail.
+
 **Examples:**
 
 ```bash

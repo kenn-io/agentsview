@@ -81,6 +81,7 @@ func TestFetchAllUsageEvents(t *testing.T) {
 	t.Cleanup(srv.Close)
 
 	client := NewClientWithBaseURL(srv.URL, "cursor-key")
+	client.RequestInterval = 0
 	events, err := client.FetchAllUsageEvents(
 		t.Context(),
 		Query{
