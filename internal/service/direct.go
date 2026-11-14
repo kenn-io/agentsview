@@ -1452,6 +1452,9 @@ func (b *directBackend) ListRecallEntries(
 		return nil, err
 	}
 	query = db.NormalizeRecallQuery(query)
+	if err := ValidateRecallListQuery(query); err != nil {
+		return nil, err
+	}
 	if strings.TrimSpace(f.Query) == "" {
 		var cursor *RecallListCursor
 		if f.Cursor != "" {
