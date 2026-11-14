@@ -51,10 +51,11 @@ func TestDecodeResultRejectsUnknownContract(t *testing.T) {
 }
 
 func TestClaudeWorkDirEncodingMatchesObservedProducerLayout(t *testing.T) {
-	assert.Equal(t, "-workspace-Space-dot-underscore--hash", ClaudeProjectDir("/workspace/Space.dot_underscore/@hash"))
 	if runtime.GOOS == "windows" {
+		assert.Equal(t, "C--agentsview-test-fixture-Space-dot-underscore--hash", ClaudeProjectDir(`C:\agentsview-test-fixture\Space.dot_underscore\@hash`))
 		return
 	}
+	assert.Equal(t, "-workspace-Space-dot-underscore--hash", ClaudeProjectDir("/workspace/Space.dot_underscore/@hash"))
 	checkout := filepath.Join(t.TempDir(), "checkout")
 	require.NoError(t, os.Mkdir(checkout, 0o700))
 	link := filepath.Join(t.TempDir(), "link")
