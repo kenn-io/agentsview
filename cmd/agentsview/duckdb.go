@@ -26,6 +26,7 @@ import (
 )
 
 type DuckDBPushConfig struct {
+	NoSourceSync    bool
 	Full            bool
 	ProjectsFlag    string
 	ExcludeProjects string

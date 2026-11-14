@@ -825,6 +825,9 @@ components:
           type: integer
         migrate_legacy_sync_state:
           type: boolean
+        no_source_sync:
+          description: Copy committed archive changes without scanning source files. Full pushes and stale archives still synchronise sources.
+          type: boolean
         no_vectors:
           type: boolean
         projects:

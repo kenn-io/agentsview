@@ -7,7 +7,6 @@ import (
 	"io"
 	"log"
 	"os"
-	"sort"
 	stdsync "sync"
 	"sync/atomic"
 	"time"
@@ -68,7 +67,8 @@ type archiveWriteBackend interface {
 // needed to verify production startup ordering. Nil hooks use the real watcher,
 // timers, push implementations, and local startup sync.
 type archivePushWatchHooks struct {
-	startWatcher func(
+	startArchiveNotifications func(context.Context, func()) (stop, open func())
+	startWatcher              func(
 		config.Config, *syncpkg.Engine, syncpkg.WatchCallback, syncpkg.WatcherOptions,
 	) (func(), func(), []string)
 	newLoop func(
@@ -323,24 +323,6 @@ func watchBatchNeedsPushAck(batch syncpkg.WatchBatch) bool {
 	return false
 }
 
-func watchRecoveryForBatch(
-	cfg config.Config, batch *syncpkg.WatchBatch,
-) *syncpkg.WatchRecoveryScope {
-	if batch == nil || (!batch.FullSync && len(batch.Renames) == 0) {
-		return nil
-	}
-	probed := probeWatchRecoveryScope(cfg)
-	deferred := make([]string, 0, len(probed.deferred))
-	for root := range probed.deferred {
-		deferred = append(deferred, root)
-	}
-	sort.Strings(deferred)
-	return &syncpkg.WatchRecoveryScope{
-		AvailableRoots: append([]string(nil), probed.available...),
-		DeferredRoots:  deferred,
-	}
-}
-
 var errNoWritableDaemon = errors.New("no writable agentsview daemon is running; start the agentsview collector or server")
 
 func resolveArchiveWriteBackend(
@@ -517,29 +499,29 @@ func (b daemonArchiveWriteBackend) ReplicaPush(
 		backend.DisplayName(), pushProgressPhase, newReplicaPushProgressPrinter(),
 	)
 	defer finish()
-	return postDaemonPush[storage.PushResult](
-		ctx, b.tr, b.appCfg.AuthToken, operation,
-		apiclient.DaemonPushRequest{
-			Full:            cfg.Full,
-			Projects:        projects,
-			ExcludeProjects: excludeProjects,
-			Replica: &apiclient.DaemonReplicaTarget{
-				URL:           target.Target.URL,
-				Schema:        new(target.Target.Schema),
-				MachineName:   target.Target.MachineName,
-				AllowInsecure: new(target.Target.AllowInsecure),
-				PushVectors:   new(target.Target.PushVectors),
-				PushBatchSize: new(int64(target.Target.PushBatchSize)),
-			},
-			SyncStateTarget:                new(target.SyncStateTarget()),
-			MigrateLegacySyncState:         new(target.MigrateLegacySyncState()),
-			NoVectors:                      new(cfg.NoVectors),
-			ScopeVectorsToChangedSessions:  new(cfg.ScopeVectorsToChangedSessions),
-			LastReconciledVectorGeneration: new(cfg.LastReconciledVectorGeneration),
-			WatchBatch:                     generatedWatchBatch(cfg.WatchBatch),
-			WatchRecovery:                  generatedWatchRecovery(cfg.WatchRecovery),
+	request := apiclient.DaemonPushRequest{
+		Full:            cfg.Full,
+		Projects:        projects,
+		ExcludeProjects: excludeProjects,
+		Replica: &apiclient.DaemonReplicaTarget{
+			URL:           target.Target.URL,
+			Schema:        new(target.Target.Schema),
+			MachineName:   target.Target.MachineName,
+			AllowInsecure: new(target.Target.AllowInsecure),
+			PushVectors:   new(target.Target.PushVectors),
+			PushBatchSize: new(int64(target.Target.PushBatchSize)),
 		},
-		onProgress,
+		SyncStateTarget:                new(target.SyncStateTarget()),
+		MigrateLegacySyncState:         new(target.MigrateLegacySyncState()),
+		NoVectors:                      new(cfg.NoVectors),
+		ScopeVectorsToChangedSessions:  new(cfg.ScopeVectorsToChangedSessions),
+		LastReconciledVectorGeneration: new(cfg.LastReconciledVectorGeneration),
+	}
+	if cfg.NoSourceSync {
+		request.NoSourceSync = new(true)
+	}
+	return postDaemonPush[storage.PushResult](
+		ctx, b.tr, b.appCfg.AuthToken, operation, request, onProgress,
 	)
 }
 
@@ -567,12 +549,14 @@ func (b daemonArchiveWriteBackend) DuckDBPushWatch(
 	}
 	debounce, interval = watchTimings(debounce, interval)
 	pushWriter := b.watchPushWriter()
+	ready := false
 	push := func(
 		pctx context.Context, reason pushReason, full bool,
 		_ *syncpkg.WatchBatch,
 	) error {
 		pushCfg := cfg
 		pushCfg.Full = full
+		pushCfg.NoSourceSync = ready && reason == reasonArchiveChange
 		// Automatic watch pushes publish held mirrors and skip archive-scale diagnostics.
 		pushCfg.Automatic = true
 		var res storage.MirrorPushResult
@@ -592,16 +576,21 @@ func (b daemonArchiveWriteBackend) DuckDBPushWatch(
 		if err != nil {
 			return err
 		}
-		return completeDuckDBWatchPush(res, reason, full)
+		if err := completeDuckDBWatchPush(res, reason, full); err != nil {
+			return err
+		}
+		ready = true
+		return nil
 	}
 	return archivePushWatch{
-		hooks:    b.watchHooks,
-		appCfg:   b.appCfg,
-		label:    "duckdb watch",
-		debounce: debounce,
-		interval: interval,
-		full:     cfg.Full,
-		push:     push,
+		hooks:              b.watchHooks,
+		appCfg:             b.appCfg,
+		label:              "duckdb watch",
+		debounce:           debounce,
+		interval:           interval,
+		full:               cfg.Full,
+		push:               push,
+		startNotifications: b.startArchiveNotifications,
 	}.run(ctx)
 }
 
@@ -631,25 +620,27 @@ func (b daemonArchiveWriteBackend) duckDBPush(
 		},
 	)
 	defer finish()
-	return postDaemonPush[storage.MirrorPushResult](
-		ctx, b.tr, b.appCfg.AuthToken, mirrorPushOperation,
-		apiclient.DaemonPushRequest{
-			Full:            cfg.Full,
-			Projects:        projects,
-			ExcludeProjects: excludeProjects,
-			Duckdb: &apiclient.ConfigDuckDBConfig{
-				Path:            duckCfg.Path,
-				URL:             duckCfg.URL,
-				Token:           new(duckCfg.Token),
-				MachineName:     duckCfg.MachineName,
-				AllowInsecure:   duckCfg.AllowInsecure,
-				AttachTimeout:   new(int64(duckCfg.AttachTimeout)),
-				Projects:        duckCfg.Projects,
-				ExcludeProjects: duckCfg.ExcludeProjects,
-			},
-			Automatic: new(cfg.Automatic),
+	request := apiclient.DaemonPushRequest{
+		Full:            cfg.Full,
+		Projects:        projects,
+		ExcludeProjects: excludeProjects,
+		Duckdb: &apiclient.ConfigDuckDBConfig{
+			Path:            duckCfg.Path,
+			URL:             duckCfg.URL,
+			Token:           new(duckCfg.Token),
+			MachineName:     duckCfg.MachineName,
+			AllowInsecure:   duckCfg.AllowInsecure,
+			AttachTimeout:   new(int64(duckCfg.AttachTimeout)),
+			Projects:        duckCfg.Projects,
+			ExcludeProjects: duckCfg.ExcludeProjects,
 		},
-		onProgress,
+		Automatic: new(cfg.Automatic),
+	}
+	if cfg.NoSourceSync {
+		request.NoSourceSync = new(true)
+	}
+	return postDaemonPush[storage.MirrorPushResult](
+		ctx, b.tr, b.appCfg.AuthToken, mirrorPushOperation, request, onProgress,
 	)
 }
 
@@ -673,6 +664,7 @@ func (b daemonArchiveWriteBackend) ReplicaPushWatch(
 	pushWriter := b.watchPushWriter()
 	label := backend.Name() + " watch"
 	vectors := newVectorReconcile()
+	ready := false
 	push := func(
 		pctx context.Context, reason pushReason, full bool,
 		batch *syncpkg.WatchBatch,
@@ -683,8 +675,7 @@ func (b daemonArchiveWriteBackend) ReplicaPushWatch(
 			func(opts storage.PushOptions) (storage.PushResult, error) {
 				pushCfg := cfg
 				pushCfg.Full = full
-				pushCfg.WatchBatch = batch
-				pushCfg.WatchRecovery = watchRecoveryForBatch(b.appCfg, batch)
+				pushCfg.NoSourceSync = ready && reason == reasonArchiveChange
 				pushCfg.ScopeVectorsToChangedSessions = opts.ScopeVectorsToChangedSessions
 				pushCfg.LastReconciledVectorGeneration = opts.LastReconciledVectorGeneration
 				if b.watchHooks != nil && b.watchHooks.replicaPush != nil {
@@ -701,17 +692,21 @@ func (b daemonArchiveWriteBackend) ReplicaPushWatch(
 			},
 		)
 		cfg.Health.finish(err)
+		if err == nil {
+			ready = true
+		}
 		return err
 	}
 	return archivePushWatch{
-		hooks:    b.watchHooks,
-		appCfg:   b.appCfg,
-		label:    label,
-		debounce: debounce,
-		interval: interval,
-		full:     cfg.Full,
-		push:     push,
-		wake:     cfg.LifecycleWake,
+		hooks:              b.watchHooks,
+		appCfg:             b.appCfg,
+		label:              label,
+		debounce:           debounce,
+		interval:           interval,
+		full:               cfg.Full,
+		push:               push,
+		startNotifications: b.startArchiveNotifications,
+		wake:               cfg.LifecycleWake,
 	}.run(ctx)
 }
 
@@ -1168,24 +1163,6 @@ func runPGWatchStartupSync(
 		return didResync, errors.New("startup sync processing incomplete")
 	}
 	return didResync, nil
-}
-
-func generatedWatchBatch(batch *syncpkg.WatchBatch) *apiclient.SyncWatchBatch {
-	if batch == nil {
-		return nil
-	}
-	out := &apiclient.SyncWatchBatch{Paths: batch.Paths, ReconcileRoots: batch.ReconcileRoots, FullSync: new(batch.FullSync), LostEvents: new(batch.LostEvents)}
-	for _, rename := range batch.Renames {
-		out.Renames = append(out.Renames, apiclient.SyncWatchRename{Path: rename.Path, Root: new(rename.Root), Agent: new(rename.Agent), ItemType: new(int32(rename.ItemType))})
-	}
-	return out
-}
-
-func generatedWatchRecovery(scope *syncpkg.WatchRecoveryScope) *apiclient.SyncWatchRecoveryScope {
-	if scope == nil {
-		return nil
-	}
-	return &apiclient.SyncWatchRecoveryScope{AvailableRoots: scope.AvailableRoots, DeferredRoots: scope.DeferredRoots}
 }
 
 // replicaPusherOptions scopes one push session to the target's sync-state

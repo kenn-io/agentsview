@@ -169,7 +169,7 @@ func (v *vectorReconcile) push(
 func scopedVectorPush(
 	reason pushReason, full, reconcileNeeded bool,
 ) bool {
-	return reason == reasonChange && !full && !reconcileNeeded
+	return (reason == reasonChange || reason == reasonArchiveChange) && !full && !reconcileNeeded
 }
 
 // nextVectorReconcile folds the post-push update of the reconcile bit and
