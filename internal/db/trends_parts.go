@@ -73,9 +73,6 @@ func TrendsFromParts(ctx context.Context, disk *kept.Disk, identity string, f An
 	if disk == nil || !disk.Enabled() || identity == "" || f.Hour != nil || len(f.MessageScopeFilter().Models) != 0 || f.Timezone == "Local" || f.ActiveSince != "" || TerminationUsesTime(f.Termination) {
 		return TrendsTermsResponse{}, false, nil
 	}
-	if granularity == "" {
-		granularity = "week"
-	}
 	versions, err := src.TrendSessionVersions(ctx, f)
 	if err != nil {
 		return TrendsTermsResponse{}, true, err

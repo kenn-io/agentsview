@@ -83,6 +83,13 @@ func TestUsagePartsAcrossRestart(t *testing.T) {
 	gotTop, err = changed.GetTopSessionsByCost(t.Context(), f, 10)
 	require.NoError(t, err)
 	require.Equal(t, 2, reads)
+	fresh := NewStoreFromDB(changed.DB())
+	want, err := fresh.GetDailyUsage(t.Context(), f)
+	require.NoError(t, err)
+	require.Equal(t, want, got)
+	wantTop, err := fresh.GetTopSessionsByCost(t.Context(), f, 10)
+	require.NoError(t, err)
+	require.Equal(t, wantTop, gotTop)
 	require.NoError(t, changed.Close())
 }
 

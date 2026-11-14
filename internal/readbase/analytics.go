@@ -956,12 +956,12 @@ func (s *Analytics) GetTrendsTerms(
 	ctx context.Context, f db.AnalyticsFilter,
 	terms []db.TrendTermInput, granularity string,
 ) (db.TrendsTermsResponse, error) {
+	if granularity == "" {
+		granularity = "week"
+	}
 	disk, identity := s.backend.TrendsDisk()
 	if result, handled, err := db.TrendsFromParts(ctx, disk, identity, f, terms, granularity, trendPartsSource{s.backend}); handled {
 		return result, err
-	}
-	if granularity == "" {
-		granularity = "week"
 	}
 	acc := db.NewTrendWorkers(ctx, f.From, f.To, granularity, terms)
 	defer func() {

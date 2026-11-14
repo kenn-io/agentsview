@@ -16,6 +16,57 @@ type trendPartsFixture struct {
 	reads    [][]string
 }
 
+type trendWindowRace struct {
+	*DB
+	beforeWindow func()
+}
+
+func (s trendWindowRace) TrendWindowSessions(ctx context.Context, f AnalyticsFilter, ids []string) ([]string, error) {
+	s.beforeWindow()
+	return s.DB.TrendWindowSessions(ctx, f, ids)
+}
+
+func TestTrendsPartsConcurrentWindowMiss(t *testing.T) {
+	t.Setenv("CACHE_DIRECTORY", t.TempDir())
+	d := testDB(t)
+	ctx := t.Context()
+	for _, id := range []string{"a", "b"} {
+		insertSession(t, d, id, "project", func(s *Session) { s.MessageCount, s.UserMessageCount = 1, 1 })
+		insertMessages(t, d, Message{SessionID: id, Role: "user", Content: "apple", Timestamp: "2025-03-10T12:00:00Z"})
+	}
+	terms, err := ParseTrendTerms([]string{"apple"})
+	require.NoError(t, err)
+	f := AnalyticsFilter{From: "2025-03-10", To: "2025-03-10", Timezone: "UTC"}
+	first, err := d.trendsTerms(ctx, f, terms, "day")
+	require.NoError(t, err)
+	require.Equal(t, 2, first.Series[0].Total)
+	require.NoError(t, d.ReplaceSessionMessages(ctx, "a", []Message{{SessionID: "a", Role: "user", Content: "apple apple", Timestamp: "2025-03-10T12:00:00Z"}}))
+	var writes []SessionBatchWrite
+	for _, item := range []struct{ id, content, timestamp string }{
+		{"a", "banana", "2025-01-01T12:00:00Z"}, {"b", "apple apple", "2025-03-10T12:00:00Z"},
+	} {
+		session, err := d.GetSession(ctx, item.id)
+		require.NoError(t, err)
+		require.NotNil(t, session)
+		writes = append(writes, SessionBatchWrite{Session: *session, ReplaceMessages: true, Messages: []Message{{SessionID: item.id, Role: "user", Content: item.content, Timestamp: item.timestamp}}})
+	}
+	identity, err := d.GetDatabaseID(ctx)
+	require.NoError(t, err)
+	var writeErr error
+	_, handled, err := TrendsFromParts(ctx, &d.trendsDisk, identity, f, terms, "day", trendWindowRace{d, func() {
+		_, writeErr = d.WriteSessionBatchAtomic(ctx, writes)
+	}})
+	require.NoError(t, writeErr)
+	require.NoError(t, err)
+	require.False(t, handled)
+	direct, err := OpenReadOnly(ctx, d.Path())
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, direct.Close()) })
+	got, err := direct.trendsTerms(ctx, f, terms, "day")
+	require.NoError(t, err)
+	require.Equal(t, 2, got.Series[0].Total)
+}
+
 func (s *trendPartsFixture) TrendSessionVersions(context.Context, AnalyticsFilter) (map[string]string, error) {
 	return s.versions, nil
 }

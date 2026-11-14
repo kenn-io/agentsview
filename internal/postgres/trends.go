@@ -21,11 +21,11 @@ func (s *Store) GetTrendsTerms(
 }
 
 func (s *Store) loadTrendsTerms(ctx context.Context, f db.AnalyticsFilter, terms []db.TrendTermInput, granularity string) (db.TrendsTermsResponse, error) {
-	if result, handled, err := db.TrendsFromParts(ctx, &s.trendsDisk, s.trendsIdentity, f, terms, granularity, s); handled {
-		return result, err
-	}
 	if granularity == "" {
 		granularity = "week"
+	}
+	if result, handled, err := db.TrendsFromParts(ctx, &s.trendsDisk, s.trendsIdentity, f, terms, granularity, s); handled {
+		return result, err
 	}
 	acc := db.NewTrendWorkers(ctx, f.From, f.To, granularity, terms)
 	defer func() {

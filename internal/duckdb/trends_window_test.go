@@ -14,6 +14,7 @@ import (
 )
 
 func TestDuckTrendsTermsDateWindowEdges(t *testing.T) {
+	t.Setenv("CACHE_DIRECTORY", t.TempDir())
 	local := newLocalDB(t)
 	dbtest.SeedTrendsWindow(t, local)
 	path := filepath.Join(t.TempDir(), "trends.duckdb")

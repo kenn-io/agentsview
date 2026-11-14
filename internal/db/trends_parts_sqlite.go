@@ -31,14 +31,11 @@ func sqliteTrendWindowPred(col, from, to string) (string, []any) {
 	offsetBound := func(value string, shift time.Duration) string {
 		t, err := time.Parse("2006-01-02T15:04:05", value)
 		if err != nil {
-			return ""
+			return value
 		}
 		return t.Add(shift).Format("2006-01-02T15:04:05")
 	}
 	offsetRange, offsetArgs := analyticsMessageRangePred(col, offsetBound(from, -25*time.Hour), offsetBound(to, 25*time.Hour))
-	if offsetRange == "" {
-		return "(" + pred + " OR substr(" + col + ", -6, 1) IN ('+', '-'))", args
-	}
 	return "(" + pred + " OR (substr(" + col + ", -6, 1) IN ('+', '-') AND " + offsetRange + "))", append(args, offsetArgs...)
 }
 
