@@ -4,6 +4,7 @@ import { mount, tick, unmount } from "svelte";
 // @ts-ignore
 import StatusBar from "./StatusBar.svelte";
 import { sync } from "../../stores/sync.svelte.js";
+import { ui } from "../../stores/ui.svelte.js";
 import { formatTimestamp } from "../../utils/format.js";
 import { ApiError, setServerUrl } from "../../api/runtime.js";
 
@@ -37,6 +38,7 @@ describe("StatusBar", () => {
   afterEach(() => {
     document.body.innerHTML = "";
     vi.useRealTimers();
+    ui.alwaysShowYear = false;
     sync.lastSync = null;
     sync.stats = null;
     sync.serverVersion = null;
@@ -159,6 +161,18 @@ describe("StatusBar", () => {
     await tick();
     expect(document.body.textContent).not.toContain("Sync failed");
     await unmount(component);
+  });
+
+  it("keeps the sync timestamp compact when years are enabled", async () => {
+    ui.alwaysShowYear = true;
+    const component = mount(StatusBar, { target: document.body });
+    try {
+      await tick();
+      const syncLabel = document.querySelector(".kit-status-bar__section--right span[title]");
+      expect(syncLabel?.getAttribute("title")).not.toContain("2026");
+    } finally {
+      await unmount(component);
+    }
   });
 
   it("refreshes the sync label as time passes", async () => {

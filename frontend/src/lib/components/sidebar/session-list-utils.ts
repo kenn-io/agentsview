@@ -1,5 +1,4 @@
 import type { SessionGroup, SessionGroupInput } from "../../stores/sessionGroups.js";
-import { ui } from "../../stores/ui.svelte.js";
 import { sessionAncestryMatcher } from "../../utils/session-ancestry.js";
 
 export const ITEM_HEIGHT = 42;
@@ -154,6 +153,7 @@ function emitGroupItems(
   expandedGroups: Set<string>,
   items: DisplayItem[],
   y: { value: number },
+  alwaysShowYear: boolean,
 ): void {
   const hasChildren = g.sessions.length > 1;
   const isExpanded = hasChildren && expandedGroups.has(g.key);
@@ -166,10 +166,10 @@ function emitGroupItems(
     count: 0,
     group: g,
     depth: 0,
-    height: ui.alwaysShowYear ? YEAR_ITEM_HEIGHT : ITEM_HEIGHT,
+    height: alwaysShowYear ? YEAR_ITEM_HEIGHT : ITEM_HEIGHT,
     top: y.value,
   });
-  y.value += ui.alwaysShowYear ? YEAR_ITEM_HEIGHT : ITEM_HEIGHT;
+  y.value += alwaysShowYear ? YEAR_ITEM_HEIGHT : ITEM_HEIGHT;
 
   if (!isExpanded) return;
 
@@ -328,13 +328,14 @@ export function buildDisplayItems(
   mode: GroupMode,
   collapsed: Set<string>,
   expandedGroups: Set<string>,
+  alwaysShowYear = false,
 ): DisplayItem[] {
   const y = { value: 0 };
 
   if (mode === "none") {
     const items: DisplayItem[] = [];
     for (const g of groups) {
-      emitGroupItems(g, "", expandedGroups, items, y);
+      emitGroupItems(g, "", expandedGroups, items, y, alwaysShowYear);
     }
     return items;
   }
@@ -354,7 +355,7 @@ export function buildDisplayItems(
 
     if (!collapsed.has(section.label)) {
       for (const g of section.groups) {
-        emitGroupItems(g, section.label, expandedGroups, items, y);
+        emitGroupItems(g, section.label, expandedGroups, items, y, alwaysShowYear);
       }
     }
   }

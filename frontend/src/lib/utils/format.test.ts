@@ -1,5 +1,4 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test";
-import { ui } from "../stores/ui.svelte.js";
 import { setLocale } from "../i18n/index.js";
 import { testMoney } from "../test/money.js";
 import {
@@ -47,7 +46,6 @@ describe("formatRelativeTime", () => {
 describe("date and time with the year", () => {
   afterEach(() => {
     vi.useRealTimers();
-    ui.alwaysShowYear = false;
   });
 
   it("shows the year and time when requested", () => {
@@ -55,10 +53,8 @@ describe("date and time with the year", () => {
     vi.setSystemTime(new Date("2026-06-03T14:32:00"));
     expect(formatRelativeTime("2026-06-01T14:30:00", true)).toBe("Jun 1, 2026, 02:30 PM");
     expect(formatRelativeTime("2026-06-03T14:30:00", true)).toBe("Jun 3, 2026, 02:30 PM");
-    ui.alwaysShowYear = true;
-    expect(formatTimestamp("2024-06-01T14:30:00")).toBe("Jun 1, 2024, 02:30 PM");
+    expect(formatTimestamp("2024-06-01T14:30:00", true)).toBe("Jun 1, 2024, 02:30 PM");
     expect(formatRelativeTime("2024-06-01T14:30:00")).toBe("Jun 1");
-    ui.alwaysShowYear = false;
     expect(formatTimestamp("2024-06-01T14:30:00")).toBe("Jun 1, 02:30 PM");
   });
 });

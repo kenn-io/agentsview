@@ -158,6 +158,8 @@
     formatRelativeTime(session.ended_at ?? session.started_at, ui.alwaysShowYear),
   );
 
+  let fullTime = $derived(formatTimestamp(session.ended_at ?? session.started_at, true));
+
   let isStarred = $derived(starred.isStarred(session.id));
 
   let childCount = $derived(
@@ -496,7 +498,7 @@
             {/if}
           </div>
           {#if !compact}
-            <span class="session-time" title={formatTimestamp(session.ended_at ?? session.started_at, true)}>{timeStr}</span>
+            <span class="session-time" title={fullTime}>{timeStr}</span>
           {/if}
         </div>
         {#if starred.errors[session.id]}<p role="alert">{starred.errors[session.id]}</p>{/if}
@@ -505,7 +507,7 @@
             <span class="session-project" title={session.project}>{session.project}</span>
           {/if}
           {#if compact}
-            <span class="session-time" title={formatTimestamp(session.ended_at ?? session.started_at, true)}>{timeStr}</span>
+            <span class="session-time" title={fullTime}>{timeStr}</span>
           {/if}
           {#if hasUnread}
             <span

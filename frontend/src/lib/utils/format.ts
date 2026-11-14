@@ -1,5 +1,4 @@
 import { formatCount as kitFormatCount } from "@kenn-io/kit-ui/utils/format";
-import { ui } from "../stores/ui.svelte.js";
 import { formatDateTime, getLocale, m } from "../i18n/index.js";
 export { formatMoney as formatCost } from "../money.js";
 
@@ -60,10 +59,7 @@ export function formatRelativeTime(
 }
 
 /** Formats an ISO timestamp as a readable date/time string */
-export function formatTimestamp(
-  isoString: string | null | undefined,
-  showYear = ui.alwaysShowYear,
-): string {
+export function formatTimestamp(isoString: string | null | undefined, showYear = false): string {
   if (!isoString) return "—";
   const d = new Date(isoString);
   return formatDateTime(d, {
