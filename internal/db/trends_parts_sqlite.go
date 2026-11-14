@@ -68,7 +68,7 @@ func sqliteTrendSelection(f AnalyticsFilter, window bool) (string, []any) {
 
 func (db *DB) TrendSessionVersions(ctx context.Context, f AnalyticsFilter) (map[string]string, error) {
 	where, args := sqliteTrendSelection(f, false)
-	return ScanTrendVersions(db.getReader().QueryContext(ctx, `SELECT s.id, s.transcript_revision || '|' || s.created_at || '|' || COALESCE(s.started_at, '') FROM sessions s WHERE `+where, args...))
+	return ScanTrendVersions(db.getReader().QueryContext(ctx, `SELECT s.id, s.transcript_revision || '|' || COALESCE(s.trends_generation, '') || '|' || s.created_at || '|' || COALESCE(s.started_at, '') FROM sessions s WHERE `+where, args...))
 }
 
 func (db *DB) TrendWindowSessions(ctx context.Context, f AnalyticsFilter, ids []string) ([]string, error) {
