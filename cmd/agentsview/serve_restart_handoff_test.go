@@ -522,9 +522,12 @@ func TestRestartReplacementReadsSettingsSavedDuringDrain(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, os.WriteFile(path, append([]byte("tool_result_images = \"drop\"\n"), saved...), 0o600))
 
+	// HTTP can answer before the replacement publishes its discovery record.
+	// Cleanup needs that new record to find and stop the replacement.
 	require.Eventually(t, func() bool {
 		current := restartTestInstance(t, base, "")
-		return current != "" && current != previous
+		replacement := FindDaemonRuntime(dataDir)
+		return current != "" && current != previous && replacement != nil && replacement.Record.StartedAt.After(rt.Record.StartedAt)
 	}, 30*time.Second, 100*time.Millisecond)
 	resp, err := restartTestRequest(t, http.MethodGet, base+"/api/v1/settings", "", "")
 	require.NoError(t, err)
