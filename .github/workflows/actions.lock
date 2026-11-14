@@ -18,7 +18,7 @@ workflows:
         - 'actions/setup-python@v7.1.0'
         - 'actions/upload-artifact@v7.0.2'
         - 'astral-sh/setup-uv@v10.3.3'
-        - 'kenn-io/actions@1791c94d02222ed022f31d41eab3118e4f4fcc15'
+        - 'kenn-io/actions@33ced853fa88b70eb178ecd40ec74ef64420479d'
         - 'kenn-io/actions@main'
         - 'kenn-io/kit@v0.53.0'
         - 'msys2/setup-msys2@v2.33.0'
@@ -117,13 +117,11 @@ dependencies:
         commit: 'sha1-b725eda525362e7cf34af9a7243cac1e3f01a7ec'
         owner_id: 1940490
         repo_id: 260749683
-    'kenn-io/actions@1791c94d02222ed022f31d41eab3118e4f4fcc15':
+    'kenn-io/actions@33ced853fa88b70eb178ecd40ec74ef64420479d':
         ref: 'main'
-        commit: 'sha1-1791c94d02222ed022f31d41eab3118e4f4fcc15'
+        commit: 'sha1-33ced853fa88b70eb178ecd40ec74ef64420479d'
         owner_id: 259885253
         repo_id: 1427332808
-        uses:
-            - 'actions/setup-node@v7.1.0'
     'kenn-io/actions@main':
         ref: 'main'
         commit: 'sha1-91872e6fe12293b93dd00abc6b668658063ed3c6'

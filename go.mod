@@ -44,7 +44,7 @@ require (
 	github.com/yuin/goldmark/v2 v2.1.13
 	go.kenn.io/docbank v0.17.0
 	go.kenn.io/kata v0.23.0
-	go.kenn.io/kit v0.52.0
+	go.kenn.io/kit v0.53.0
 	go.yaml.in/yaml/v3 v3.0.5
 	golang.org/x/exp v0.0.0-20261014143641-f0251eb4aa3e
 	golang.org/x/mod v0.42.0
