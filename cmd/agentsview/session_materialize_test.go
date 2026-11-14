@@ -1,11 +1,24 @@
 package main
 
 import (
+	"path/filepath"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"go.kenn.io/agentsview/internal/db"
 )
+
+func TestLoadMaterializeSessionMissing(t *testing.T) {
+	database, err := db.OpenIsolatedContext(t.Context(), filepath.Join(t.TempDir(), "sessions.db"))
+	require.NoError(t, err)
+	t.Cleanup(func() { assert.NoError(t, database.Close()) })
+
+	session, err := loadMaterializeSession(t.Context(), database, "missing-id", "missing")
+	assert.Nil(t, session)
+	require.EqualError(t, err, "session not in local archive: missing")
+}
 
 func TestSessionMaterializeRejectsRemoteBackends(t *testing.T) {
 	for _, flag := range []string{"--server=http://127.0.0.1:1", "--pg", "--server-token-file="} {
