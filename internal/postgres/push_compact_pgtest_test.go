@@ -222,7 +222,6 @@ func compactPushResponseBytes(t *testing.T, size int) int64 {
 	if !takeFreshSchemaCopy(t, url, schema) {
 		cleanNamedPGSchema(t, url, schema)
 	}
-	t.Cleanup(func() { cleanNamedPGSchema(t, url, schema) })
 	local := testDB(t)
 	require.NoError(t, local.UpsertModelPricing([]db.ModelPricing{{ModelPattern: "sample-model"}}))
 	require.NoError(t, local.UpsertGenAIPricing(ctx, db.GenAIPricingDocument{

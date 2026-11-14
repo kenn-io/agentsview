@@ -70,7 +70,6 @@ func TestFrustrationMemoPublicationBetweenReads(t *testing.T) {
 			const id = "signals-memo-race"
 			syncer, local, pg, ctx := newSessionProvenancePushSync(t, schema)
 			url := testPGURL(t)
-			t.Cleanup(func() { cleanNamedPGSchema(t, url, schema) })
 			require.NoError(t, local.UpsertSession(ctx, db.Session{
 				ID: id, Agent: "claude", Project: "sample", Machine: "workstation", MessageCount: 1,
 			}))
@@ -147,7 +146,6 @@ func TestFrustrationMemo(t *testing.T) {
 			const id = "signals-memo"
 			syncer, local, _, ctx := newSessionProvenancePushSync(t, schema)
 			url := testPGURL(t)
-			t.Cleanup(func() { cleanNamedPGSchema(t, url, schema) })
 			session := db.Session{ID: id, Agent: "claude", Project: "sample", Machine: "workstation", MessageCount: 2}
 			require.NoError(t, local.UpsertSession(ctx, session))
 			// The system row is not a prompt, so its marker text must not count.

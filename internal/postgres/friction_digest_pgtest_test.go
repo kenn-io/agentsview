@@ -92,7 +92,6 @@ func openFrictionParityStores(t *testing.T) (*db.DB, *Store) {
 	if !fresh {
 		cleanNamedPGSchema(t, pgURL, schema)
 	}
-	t.Cleanup(func() { cleanNamedPGSchema(t, pgURL, schema) })
 	ctx := t.Context()
 	pg, err := Open(t.Context(), pgURL, schema, true)
 	require.NoError(t, err)

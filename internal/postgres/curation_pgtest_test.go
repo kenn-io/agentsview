@@ -461,7 +461,6 @@ func TestPushReconcilesPGPinsByPriorMessageIdentity(t *testing.T) {
 			if !takeFreshSchemaCopy(t, pgURL, "agentsview") {
 				cleanPGSchema(t, pgURL)
 			}
-			t.Cleanup(func() { cleanPGSchema(t, pgURL) })
 
 			local := testDB(t)
 			ps, err := New(
@@ -1393,7 +1392,6 @@ func TestPushRestoresDevinPinAcrossSourceUUIDRescope(t *testing.T) {
 			if !takeFreshSchemaCopy(t, pgURL, "agentsview") {
 				cleanPGSchema(t, pgURL)
 			}
-			t.Cleanup(func() { cleanPGSchema(t, pgURL) })
 
 			local := testDB(t)
 			ps, err := New(

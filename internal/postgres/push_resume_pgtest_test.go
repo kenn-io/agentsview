@@ -33,7 +33,6 @@ func newResumeFixture(t *testing.T) resumeFixture {
 	if !fresh {
 		cleanNamedPGSchema(t, pgURL, schema)
 	}
-	t.Cleanup(func() { cleanNamedPGSchema(t, pgURL, schema) })
 	pg, err := Open(t.Context(), pgURL, schema, true)
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = pg.Close() })

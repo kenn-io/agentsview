@@ -38,7 +38,6 @@ func seedMarkerPrompts(t *testing.T, url, schema string, prompts []markerPrompt)
 	if !fresh {
 		cleanNamedPGSchema(t, url, schema)
 	}
-	t.Cleanup(func() { cleanNamedPGSchema(t, url, schema) })
 	pg, err := Open(ctx, url, schema, true)
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, pg.Close()) })

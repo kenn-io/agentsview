@@ -35,7 +35,6 @@ func TestPreSplitPGTrashKeepsPagesHidden(t *testing.T) {
 			const schema = "agentsview_presplit_pgtrash_test"
 			pgURL := testPGURL(t)
 			cleanNamedPGSchema(t, pgURL, schema)
-			t.Cleanup(func() { cleanNamedPGSchema(t, pgURL, schema) })
 			pg, err := Open(t.Context(), pgURL, schema, true)
 			require.NoError(t, err)
 			t.Cleanup(func() { require.NoError(t, pg.Close()) })
@@ -156,7 +155,6 @@ func newCodexTrashMirror(t *testing.T) (*db.DB, *Sync, *Store) {
 	if !fresh {
 		cleanNamedPGSchema(t, pgURL, schema)
 	}
-	t.Cleanup(func() { cleanNamedPGSchema(t, pgURL, schema) })
 	pg, err := Open(t.Context(), pgURL, schema, true)
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, pg.Close()) })
@@ -420,7 +418,6 @@ func TestCodexTrashScopeUpgradePreservesLaterPerFileDeletion(t *testing.T) {
 			const schema = "agentsview_codex_scope_upgrade_test"
 			pgURL := testPGURL(t)
 			cleanNamedPGSchema(t, pgURL, schema)
-			t.Cleanup(func() { cleanNamedPGSchema(t, pgURL, schema) })
 			pg, err := Open(t.Context(), pgURL, schema, true)
 			require.NoError(t, err)
 			t.Cleanup(func() { require.NoError(t, pg.Close()) })

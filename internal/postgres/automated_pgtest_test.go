@@ -326,7 +326,7 @@ func TestAutomationAuditPGConcurrentClassifiers(t *testing.T) {
 			if !takeFreshSchemaCopy(t, url, "agentsview") {
 				cleanPGSchema(t, url)
 			}
-			t.Cleanup(func() { cleanPGSchema(t, url); db.SetUserAutomationPrefixes(nil) })
+			t.Cleanup(func() { db.SetUserAutomationPrefixes(nil) })
 			ps, err := New(t.Context(), url, "agentsview", testDB(t), "host", true, storage.PusherOptions{})
 			require.NoError(t, err)
 			defer ps.Close()

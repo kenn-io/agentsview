@@ -37,14 +37,7 @@ func newUsageJournalFixture(t *testing.T) (*db.DB, *Sync, *Store) {
 	local := testDB(t)
 	syncer, err := New(t.Context(), pgURL, schema, local, "test-machine", true, storage.PusherOptions{})
 	require.NoError(t, err)
-	t.Cleanup(func() {
-		require.NoError(t, syncer.Close())
-		// The test's database goes with the test; a later fixture's schema
-		// goes with its subtest.
-		if !fresh {
-			cleanNamedPGSchema(t, pgURL, schema)
-		}
-	})
+	t.Cleanup(func() { require.NoError(t, syncer.Close()) })
 	require.NoError(t, syncer.EnsureSchema(t.Context()))
 	store, err := NewStore(t.Context(), pgURL, schema, true)
 	require.NoError(t, err)

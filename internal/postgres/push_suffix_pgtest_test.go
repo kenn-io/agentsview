@@ -72,7 +72,6 @@ func TestPushSuffixPublication(t *testing.T) {
 			if !takeFreshSchemaCopy(t, url, schema) {
 				cleanNamedPGSchema(t, url, schema)
 			}
-			t.Cleanup(func() { cleanNamedPGSchema(t, url, schema) })
 			local := testDB(t)
 			session := db.Session{ID: id, Agent: "claude", Project: "sample", Machine: "machine", MessageCount: 5}
 			require.NoError(t, local.UpsertSession(t.Context(), session))
@@ -178,7 +177,6 @@ func TestPushLegacyVSCodeReplyPin(t *testing.T) {
 			if !takeFreshSchemaCopy(t, url, schema) {
 				cleanNamedPGSchema(t, url, schema)
 			}
-			t.Cleanup(func() { cleanNamedPGSchema(t, url, schema) })
 			local := testDB(t)
 			require.NoError(t, local.UpsertSession(t.Context(), db.Session{ID: "s1", Agent: agent, Project: "project", Machine: "machine", MessageCount: 2}))
 			messages := []db.Message{

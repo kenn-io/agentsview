@@ -46,7 +46,6 @@ func TestCodexPageUpgradeRetiresMissingPostgresHead(t *testing.T) {
 			ctx := t.Context()
 			pgURL := testPGURL(t)
 			cleanNamedPGSchema(t, pgURL, schema)
-			t.Cleanup(func() { cleanNamedPGSchema(t, pgURL, schema) })
 			source := testDB(t)
 			sourcePath := source.Path()
 			pagePath := filepath.Join(t.TempDir(), "rollout-2026-09-25T12-00-00-"+page[len("codex:"):]+".jsonl")
@@ -422,7 +421,6 @@ func TestFilteredFullPushKeepsCuratedCodexThreadWhosePageIsExcluded(t *testing.T
 			if !takeFreshSchemaCopy(t, pgURL, schema) {
 				cleanNamedPGSchema(t, pgURL, schema)
 			}
-			t.Cleanup(func() { cleanNamedPGSchema(t, pgURL, schema) })
 			source := testDB(t)
 			sourcePath := source.Path()
 			pagePath := filepath.Join(t.TempDir(), "rollout-2026-09-25T12-00-00-"+page[len("codex:"):]+".jsonl")

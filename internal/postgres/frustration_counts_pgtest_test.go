@@ -27,7 +27,6 @@ func newFrustrationFixture(t *testing.T, schema string) *frustrationFixture {
 	t.Helper()
 	syncer, local, pg, ctx := newSessionProvenancePushSync(t, schema)
 	url := testPGURL(t)
-	t.Cleanup(func() { cleanNamedPGSchema(t, url, schema) })
 	for _, id := range []string{"one", "two"} {
 		require.NoError(t, local.UpsertSession(ctx, db.Session{ID: id, Agent: "claude", Project: "sample", Machine: "workstation", MessageCount: 1}))
 		require.NoError(t, local.InsertMessages(ctx, []db.Message{{SessionID: id, Ordinal: 0, Role: "user", Content: "this is broken"}}))

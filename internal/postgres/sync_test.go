@@ -578,7 +578,6 @@ func TestPushBumpsUpdatedAtOnMessageRewrite(t *testing.T) {
 			if !takeFreshSchemaCopy(t, pgURL, "agentsview") {
 				cleanPGSchema(t, pgURL)
 			}
-			t.Cleanup(func() { cleanPGSchema(t, pgURL) })
 
 			local := testDB(t)
 			ps, err := New(
@@ -691,10 +690,6 @@ func TestPushDetectsPGTargetChange(t *testing.T) {
 	pgURL := testPGURL(t)
 	cleanNamedPGSchema(t, pgURL, "agentsview_a")
 	cleanNamedPGSchema(t, pgURL, "agentsview_b")
-	t.Cleanup(func() {
-		cleanNamedPGSchema(t, pgURL, "agentsview_a")
-		cleanNamedPGSchema(t, pgURL, "agentsview_b")
-	})
 
 	local := testDB(t)
 	ctx := t.Context()
@@ -768,10 +763,6 @@ func TestPushDetectsPGTargetChangeAfterFilteredPush(t *testing.T) {
 	pgURL := testPGURL(t)
 	cleanNamedPGSchema(t, pgURL, "agentsview_filtered_a")
 	cleanNamedPGSchema(t, pgURL, "agentsview_filtered_b")
-	t.Cleanup(func() {
-		cleanNamedPGSchema(t, pgURL, "agentsview_filtered_a")
-		cleanNamedPGSchema(t, pgURL, "agentsview_filtered_b")
-	})
 
 	local := testDB(t)
 	ctx := t.Context()
@@ -848,7 +839,6 @@ func TestPushFullAfterSchemaDropRecreatesSchema(
 ) {
 	t.Parallel()
 	pgURL := testPGSchemaURL(t, "agentsview")
-	t.Cleanup(func() { cleanPGSchema(t, pgURL) })
 
 	local := testDB(t)
 	ps, err := New(
@@ -888,7 +878,6 @@ func TestScopedPushFullAfterSchemaDropRecreatesSchema(
 	t.Parallel()
 	const schema = "agentsview"
 	pgURL := testPGSchemaURL(t, schema)
-	t.Cleanup(func() { cleanNamedPGSchema(t, pgURL, schema) })
 
 	local := testDB(t)
 	ps, err := New(

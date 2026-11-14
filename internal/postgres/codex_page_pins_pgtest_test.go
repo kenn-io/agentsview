@@ -42,7 +42,6 @@ func TestCodexPageUpgradePreservesPostgresPins(t *testing.T) {
 			if !takeFreshSchemaCopy(t, pgURL, schema) {
 				cleanNamedPGSchema(t, pgURL, schema)
 			}
-			t.Cleanup(func() { cleanNamedPGSchema(t, pgURL, schema) })
 			source := testDB(t)
 			sourcePath := source.Path()
 			pagePath := filepath.Join(t.TempDir(), "rollout-2026-09-25T12-00-00-"+threadUUID+"_22222222-2222-4222-8222-222222222222.jsonl")

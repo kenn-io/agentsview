@@ -21,7 +21,6 @@ func TestPushSchemaCurrentRequiresFrictionTables(t *testing.T) {
 		t.Run(drop, func(t *testing.T) {
 			pgURL := testPGURL(t)
 			cleanPGSchema(t, pgURL)
-			t.Cleanup(func() { cleanPGSchema(t, pgURL) })
 			pg, err := Open(t.Context(), pgURL, "agentsview", true)
 			require.NoError(t, err)
 			defer pg.Close()
@@ -196,7 +195,6 @@ func TestPGPushSessionWriteCountsAndFriction(t *testing.T) {
 			if !takeFreshSchemaCopy(t, pgURL, "agentsview") {
 				cleanPGSchema(t, pgURL)
 			}
-			t.Cleanup(func() { cleanPGSchema(t, pgURL) })
 			local := testDB(t)
 			ps, err := New(t.Context(), pgURL, "agentsview", local, "machine-friction", true, storage.PusherOptions{})
 			require.NoError(t, err)

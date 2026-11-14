@@ -434,7 +434,6 @@ func TestFilteredThenUnfilteredIdentityPublicationIncludesExcludedProject(
 	t.Parallel()
 	const schema = pgPushTestSchema
 	pgURL := testPGSchemaURL(t, schema)
-	t.Cleanup(func() { cleanNamedPGSchema(t, pgURL, schema) })
 	ctx := t.Context()
 	local, err := db.Open(t.Context(), filepath.Join(t.TempDir(), "local.db"))
 	require.NoError(t, err)
@@ -505,7 +504,6 @@ func TestAlternatingFilteredPublicationsPreserveEachScopesMetadata(
 	t.Parallel()
 	const schema = pgPushTestSchema
 	pgURL := testPGSchemaURL(t, schema)
-	t.Cleanup(func() { cleanNamedPGSchema(t, pgURL, schema) })
 	ctx := t.Context()
 	local, err := db.Open(t.Context(), filepath.Join(t.TempDir(), "local.db"))
 	require.NoError(t, err)
@@ -613,7 +611,6 @@ func TestPushProjectMoveReconcilesFilteredScope(t *testing.T) {
 			if !takeFreshSchemaCopy(t, pgURL, schema) {
 				cleanNamedPGSchema(t, pgURL, schema)
 			}
-			t.Cleanup(func() { cleanNamedPGSchema(t, pgURL, schema) })
 			ctx := t.Context()
 			local, err := db.Open(t.Context(), filepath.Join(t.TempDir(), "local.db"))
 			require.NoError(t, err)
@@ -739,7 +736,6 @@ func TestIdentityPublicationUpdatesOnlyChangedRowsAndAppliesTombstones(
 	t.Parallel()
 	const schema = pgPushTestSchema
 	pgURL := testPGSchemaURL(t, schema)
-	t.Cleanup(func() { cleanNamedPGSchema(t, pgURL, schema) })
 	ctx := t.Context()
 	local, err := db.Open(t.Context(), filepath.Join(t.TempDir(), "local.db"))
 	require.NoError(t, err)
@@ -1190,9 +1186,6 @@ func TestPushKeepsSourceAvailabilityLocalAndPreservesPGUserTrash(t *testing.T) {
 	pg, err := Open(t.Context(), pgURL, schema, true)
 	require.NoError(t, err)
 	defer pg.Close()
-	t.Cleanup(func() {
-		_, _ = pg.ExecContext(context.WithoutCancel(t.Context()), `DROP SCHEMA IF EXISTS `+schema+` CASCADE`)
-	})
 	require.NoError(t, EnsureSchema(t.Context(), pg, schema))
 
 	local, err := db.Open(t.Context(), filepath.Join(t.TempDir(), "local.db"))
@@ -3173,7 +3166,6 @@ func TestFilteredArchiveIdentityRepairPreservesOtherPublicationScope(
 	t.Parallel()
 	const schema = pgPushTestSchema
 	pgURL := testPGSchemaURL(t, schema)
-	t.Cleanup(func() { cleanNamedPGSchema(t, pgURL, schema) })
 	ctx := t.Context()
 	local, err := db.Open(t.Context(), filepath.Join(t.TempDir(), "local.db"))
 	require.NoError(t, err)
@@ -3462,7 +3454,6 @@ func newUsagePushFixture(
 	if !takeFreshSchemaCopy(t, pgURL, schema) {
 		cleanNamedPGSchema(t, pgURL, schema)
 	}
-	t.Cleanup(func() { cleanNamedPGSchema(t, pgURL, schema) })
 
 	local := testDB(t)
 	session := db.Session{
