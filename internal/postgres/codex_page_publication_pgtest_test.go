@@ -22,10 +22,7 @@ func TestCodexPagePublicationDuringThreadPurge(t *testing.T) {
 		for _, empty := range []bool{false, true} {
 			for _, first := range []string{"purge", "push"} {
 				t.Run(fmt.Sprintf("hosted=%v/empty=%v/first=%s", hosted, empty, first), func(t *testing.T) {
-					ctx, cancel := context.WithTimeout(t.Context(), 30*time.Second)
-					var workers sync.WaitGroup
-					defer workers.Wait()
-					defer cancel()
+					ctx := t.Context()
 					local, syncer, store := newCodexTrashMirror(t)
 					observer, writer := store.DB(), store.DB()
 					var schema, dsn, tenant string
@@ -85,6 +82,12 @@ func TestCodexPagePublicationDuringThreadPurge(t *testing.T) {
 							endpoint = &Store{pg: pg}
 						}
 					}
+					// Fixture setup can wait for a shared database slot. Give the
+					// competing requests their full budget after setup finishes.
+					ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
+					var workers sync.WaitGroup
+					defer workers.Wait()
+					defer cancel()
 					gate, err := writer.BeginTx(ctx, nil)
 					require.NoError(t, err)
 					defer func() { _ = gate.Rollback() }()
