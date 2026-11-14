@@ -51,6 +51,8 @@ func SeedTrendsWindow(t *testing.T, d *db.DB) {
 		user("fallback", ""))
 	seed("trends-window-old-fallback", "trends-window", "2024-01-01T12:00:00Z",
 		user("fallback", ""))
+	seed("trends-window-offset", "trends-window", "2024-01-01T00:00:00Z",
+		user("offset", "2025-03-08T22:00:00-12:00"))
 	// A user prompt counts for the model of the next assistant message.
 	seed("trends-window-model", "trends-window", "2025-03-10T08:00:00Z",
 		user("prompt", "2025-03-10T09:00:00Z"),
@@ -81,11 +83,11 @@ func AssertTrendsWindow(t *testing.T, store db.Store) {
 	}{
 		{
 			name: "far east", timezone: "Pacific/Kiritimati",
-			want: want{messages: 5, kiri: 3, fallback: 1, prompt: 1},
+			want: want{messages: 6, kiri: 3, fallback: 1, prompt: 1},
 		},
 		{
 			name: "far east project", timezone: "Pacific/Kiritimati", project: "trends-window",
-			want: want{messages: 4, kiri: 2, fallback: 1, prompt: 1},
+			want: want{messages: 5, kiri: 2, fallback: 1, prompt: 1},
 		},
 		{
 			name: "far west", timezone: "Etc/GMT+12",
@@ -119,36 +121,34 @@ func AssertTrendsWindow(t *testing.T, store db.Store) {
 }
 
 // AssertTrendsPartsReuse checks the persisted result across reopen and rewrite.
-func AssertTrendsPartsReuse(t *testing.T, open func() db.Store, rewrite func()) {
+func AssertTrendsPartsReuse(t *testing.T, open func(bool) db.Store, change func(string)) {
 	t.Helper()
-	terms, err := db.ParseTrendTerms([]string{"fallback"})
+	terms, err := db.ParseTrendTerms([]string{"fallback", "offset"})
 	require.NoError(t, err)
 	f := db.AnalyticsFilter{From: "2025-03-10", To: "2025-03-10", Timezone: "UTC"}
 	var reads [][]string
 	reset := db.SetTrendPartsReadObserver(func(ids []string) {
-		for _, id := range ids {
-			if id == "trends-window-fallback" {
-				reads = append(reads, append([]string(nil), ids...))
-				break
-			}
-		}
+		reads = append(reads, append([]string(nil), ids...))
 	})
 	t.Cleanup(reset)
-	firstStore := open()
+	firstStore := open(true)
 	first, err := firstStore.GetTrendsTerms(t.Context(), f, terms, "day")
 	require.NoError(t, firstStore.(interface{ Close() error }).Close())
 	require.NoError(t, err)
 	require.Equal(t, 1, first.Series[0].Total)
 	require.NotEmpty(t, reads)
+	for _, ids := range reads {
+		assert.NotContains(t, ids, "trends-window-old-fallback")
+	}
 	reads = nil
-	restartedStore := open()
+	restartedStore := open(true)
 	restarted, err := restartedStore.GetTrendsTerms(t.Context(), f, terms, "day")
 	require.NoError(t, restartedStore.(interface{ Close() error }).Close())
 	require.NoError(t, err)
 	assert.Equal(t, first, restarted)
 	assert.Empty(t, reads)
-	rewrite()
-	changedStore := open()
+	change("rewrite")
+	changedStore := open(true)
 	changed, err := changedStore.GetTrendsTerms(t.Context(), f, terms, "day")
 	require.NoError(t, err)
 	assert.Equal(t, 2, changed.Series[0].Total)
@@ -160,7 +160,44 @@ func AssertTrendsPartsReuse(t *testing.T, open func() db.Store, rewrite func()) 
 	require.NoError(t, err)
 	assert.Equal(t, 2, filtered.Series[0].Total)
 	assert.Empty(t, reads)
+
+	directStore := open(false)
+	monday := 0
+	for _, filter := range []db.AnalyticsFilter{
+		{From: "2025-03-10", To: "2025-03-11", Timezone: "UTC"},
+		{From: "2025-03-10", To: "2025-03-10", Timezone: "UTC", Project: "trends-window"},
+		{From: "2025-03-10", To: "2025-03-10", Timezone: "UTC", DayOfWeek: &monday},
+		{From: "2025-03-10", To: "2025-03-10", Timezone: "UTC", Hour: &hour},
+		{From: "2025-03-10", To: "2025-03-10", Timezone: "UTC", Model: "gpt-boundary"},
+		{From: "2025-03-10", To: "2025-03-10", Timezone: "Local"},
+		{From: "2025-03-10", To: "2025-03-10", Timezone: "Pacific/Kiritimati"},
+	} {
+		got, err := changedStore.GetTrendsTerms(t.Context(), filter, terms, "day")
+		require.NoError(t, err)
+		want, err := directStore.GetTrendsTerms(t.Context(), filter, terms, "day")
+		require.NoError(t, err)
+		assert.Equal(t, want, got, "%+v", filter)
+		if filter.Timezone == "Pacific/Kiritimati" {
+			assert.Equal(t, 1, got.Series[1].Total)
+		}
+	}
+	require.NoError(t, directStore.(interface{ Close() error }).Close())
 	require.NoError(t, changedStore.(interface{ Close() error }).Close())
+	for _, tc := range []struct {
+		action string
+		total  int
+	}{{"delete", 0}, {"restore", 2}} {
+		change(tc.action)
+		retained, direct := open(true), open(false)
+		got, err := retained.GetTrendsTerms(t.Context(), db.AnalyticsFilter{From: "2025-03-10", To: "2025-03-10", Timezone: "UTC"}, terms, "day")
+		require.NoError(t, err)
+		want, err := direct.GetTrendsTerms(t.Context(), db.AnalyticsFilter{From: "2025-03-10", To: "2025-03-10", Timezone: "UTC"}, terms, "day")
+		require.NoError(t, err)
+		assert.Equal(t, tc.total, got.Series[0].Total)
+		assert.Equal(t, want, got)
+		require.NoError(t, retained.(interface{ Close() error }).Close())
+		require.NoError(t, direct.(interface{ Close() error }).Close())
+	}
 }
 
 // RewriteTrendsWindow changes one session without changing its timestamp.
@@ -170,4 +207,20 @@ func RewriteTrendsWindow(t *testing.T, d *db.DB) {
 		SessionID: "trends-window-fallback", Ordinal: 0, Role: "user", Content: "fallback fallback", ContentLength: 17,
 	}}))
 	require.NoError(t, d.SetSessionDataVersion(t.Context(), "trends-window-fallback", db.CurrentDataVersion()))
+}
+
+// ChangeTrendsWindow changes one session for retention tests.
+func ChangeTrendsWindow(t *testing.T, d *db.DB, action string) {
+	t.Helper()
+	switch action {
+	case "rewrite":
+		RewriteTrendsWindow(t, d)
+	case "delete":
+		require.NoError(t, d.SoftDeleteSession(t.Context(), "trends-window-fallback"))
+	case "restore":
+		_, err := d.RestoreSession(t.Context(), "trends-window-fallback")
+		require.NoError(t, err)
+	default:
+		t.Fatalf("unknown action %q", action)
+	}
 }

@@ -47,12 +47,15 @@ func sqliteTrendWindowPred(col, from, to string) (string, []any) {
 }
 
 // sqliteTrendSelection selects the sessions a Trends read walks.
-func sqliteTrendSelection(f AnalyticsFilter) (string, []any) {
+func sqliteTrendSelection(f AnalyticsFilter, window bool) (string, []any) {
 	sessionFilter := f
 	sessionFilter.From, sessionFilter.To, sessionFilter.Model = "", "", ""
 	sessionFilter.DayOfWeek, sessionFilter.Hour = nil, nil
 	where, args := sessionFilter.buildWhereWithDate("", false, "s.id")
 	from, to := f.messageWindowBoundsUTC()
+	if !window {
+		return where, args
+	}
 	if sessionWindow, wargs := sqliteTrendWindowPred("COALESCE(NULLIF(started_at, ''), created_at)", from, to); sessionWindow != "" {
 		messageWindow, messageArgs := sqliteTrendWindowPred("wm.timestamp", from, to)
 		// Filter sessions before walking their messages.
@@ -64,8 +67,38 @@ func sqliteTrendSelection(f AnalyticsFilter) (string, []any) {
 }
 
 func (db *DB) TrendSessionVersions(ctx context.Context, f AnalyticsFilter) (map[string]string, error) {
-	where, args := sqliteTrendSelection(f)
+	where, args := sqliteTrendSelection(f, false)
 	return ScanTrendVersions(db.getReader().QueryContext(ctx, `SELECT s.id, s.transcript_revision || '|' || s.created_at || '|' || COALESCE(s.started_at, '') FROM sessions s WHERE `+where, args...))
+}
+
+func (db *DB) TrendWindowSessions(ctx context.Context, f AnalyticsFilter, ids []string) ([]string, error) {
+	encoded, err := json.Marshal(ids)
+	if err != nil {
+		return nil, err
+	}
+	from, to := f.messageWindowBoundsUTC()
+	session, args := sqliteTrendWindowPred("COALESCE(NULLIF(s.started_at, ''), s.created_at)", from, to)
+	where := ""
+	if session != "" {
+		message, more := sqliteTrendWindowPred("wm.timestamp", from, to)
+		where = " AND (" + session + " OR EXISTS (SELECT 1 FROM messages wm WHERE wm.session_id = s.id AND wm.timestamp != '' AND " + message + "))"
+		args = append(args, more...)
+	}
+	args = append([]any{string(encoded)}, args...)
+	rows, err := db.getReader().QueryContext(ctx, `SELECT s.id FROM sessions s WHERE s.id IN (SELECT value FROM json_each(?))`+where+` ORDER BY s.id`, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var selected []string
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			return nil, err
+		}
+		selected = append(selected, id)
+	}
+	return selected, rows.Err()
 }
 
 func (db *DB) VisitTrendMessages(ctx context.Context, f AnalyticsFilter, ids []string, visit func(string, string, time.Time)) error {

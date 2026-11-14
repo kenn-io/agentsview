@@ -13,9 +13,13 @@ func TestGetTrendsTermsSQLiteDateWindowEdges(t *testing.T) {
 	d := dbtest.OpenTestDB(t)
 	dbtest.SeedTrendsWindow(t, d)
 	dbtest.AssertTrendsWindow(t, d)
-	dbtest.AssertTrendsPartsReuse(t, func() db.Store {
-		opened, err := db.Open(t.Context(), d.Path())
+	dbtest.AssertTrendsPartsReuse(t, func(retained bool) db.Store {
+		open := db.OpenReadOnly
+		if retained {
+			open = db.Open
+		}
+		opened, err := open(t.Context(), d.Path())
 		require.NoError(t, err)
 		return opened
-	}, func() { dbtest.RewriteTrendsWindow(t, d) })
+	}, func(action string) { dbtest.ChangeTrendsWindow(t, d, action) })
 }

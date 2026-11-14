@@ -108,7 +108,7 @@ func (db *DB) trendsTerms(ctx context.Context, f AnalyticsFilter, terms []TrendT
 		}
 	}()
 	loc := f.location()
-	where, args := sqliteTrendSelection(f)
+	where, args := sqliteTrendSelection(f, true)
 	from, to := f.messageWindowBoundsUTC()
 	flt := f.MessageScopeFilter()
 	modelFiltering := len(flt.Models) > 0

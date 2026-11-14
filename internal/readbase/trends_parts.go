@@ -2,12 +2,36 @@ package readbase
 
 import (
 	"context"
+	"sort"
 	"time"
 
 	"go.kenn.io/agentsview/internal/db"
 )
 
 type trendPartsSource struct{ AnalyticsBackend }
+
+func (s trendPartsSource) TrendWindowSessions(ctx context.Context, f db.AnalyticsFilter, ids []string) ([]string, error) {
+	var selected []string
+	err := s.VisitSessionIDSets(ctx, ids, func(ctx context.Context, set string, args []any) error {
+		window, extra := s.TrendSessionWindow(f, set, args)
+		args = append(args, extra...)
+		rows, err := s.QueryContext(ctx, `SELECT s.id FROM sessions s WHERE s.id IN `+set+window, args...)
+		if err != nil {
+			return err
+		}
+		defer rows.Close()
+		for rows.Next() {
+			var id string
+			if err := rows.Scan(&id); err != nil {
+				return err
+			}
+			selected = append(selected, id)
+		}
+		return rows.Err()
+	})
+	sort.Strings(selected)
+	return selected, err
+}
 
 func (s trendPartsSource) VisitTrendMessages(ctx context.Context, f db.AnalyticsFilter, ids []string, visit func(string, string, time.Time)) error {
 	loc := analyticsLocation(f.Timezone)

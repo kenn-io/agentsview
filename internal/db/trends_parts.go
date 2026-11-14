@@ -4,6 +4,7 @@ import (
 	"cmp"
 	"context"
 	"database/sql"
+	"encoding/json/v2"
 	"fmt"
 	"sort"
 	"sync"
@@ -19,14 +20,10 @@ type trendDay struct {
 	Counts   []int
 }
 
-type trendPart struct {
-	ID, Version string
-	Days        map[string]*trendDay
-}
-
 // TrendPartsSource reads session versions before streaming their complete messages.
 type TrendPartsSource interface {
 	TrendSessionVersions(context.Context, AnalyticsFilter) (map[string]string, error)
+	TrendWindowSessions(context.Context, AnalyticsFilter, []string) ([]string, error)
 	VisitTrendMessages(context.Context, AnalyticsFilter, []string, func(string, string, time.Time)) error
 }
 
@@ -62,7 +59,7 @@ func SetTrendPartsReadObserver(observe func([]string)) func() {
 
 // TrendsFromParts reuses session contributions when the selection permits it.
 func TrendsFromParts(ctx context.Context, disk *kept.Disk, identity string, f AnalyticsFilter, terms []TrendTermInput, granularity string, src TrendPartsSource) (TrendsTermsResponse, bool, error) {
-	if disk == nil || !disk.Enabled() || identity == "" || f.Hour != nil || len(f.MessageScopeFilter().Models) != 0 || f.Timezone == "Local" {
+	if disk == nil || !disk.Enabled() || identity == "" || f.Hour != nil || len(f.MessageScopeFilter().Models) != 0 || f.Timezone == "Local" || f.ActiveSince != "" || TerminationUsesTime(f.Termination) {
 		return TrendsTermsResponse{}, false, nil
 	}
 	if granularity == "" {
@@ -72,24 +69,32 @@ func TrendsFromParts(ctx context.Context, disk *kept.Disk, identity string, f An
 	if err != nil {
 		return TrendsTermsResponse{}, true, err
 	}
-	slot := "trends-parts|" + f.Timezone + "|" + TrendsKeptVariant(terms, "")
-	version := fmt.Sprintf("%s|%d|%d", identity, trendsMatchingVersion, trendsPartsVersion)
-	parts := make(map[string]trendPart)
-	if data, ok := disk.Get(slot, version); ok {
-		if rows, ok := kept.DecodeRows[trendPart](data); ok {
-			for _, row := range rows {
-				parts[row.ID] = row
-			}
-		}
+	selection := f
+	selection.From, selection.To, selection.Timezone = "", "", ""
+	selection.DayOfWeek, selection.Hour = nil, nil
+	selection.Model = ""
+	key, err := json.Marshal(selection)
+	if err != nil {
+		return TrendsTermsResponse{}, true, err
 	}
-	ids := make([]string, 0)
-	for id, version := range versions {
-		part, ok := parts[id]
-		if !ok || version == "" || version != part.Version {
+	slot := "trends-parts|" + usageTimezoneIdentityFor(f.location(), nil).Key + "|" + TrendsKeptVariant(terms, "") + "|" + string(key)
+	version := fmt.Sprintf("%s|%d|%d", identity, trendsMatchingVersion, trendsPartsVersion)
+	parts := kept.LoadParts[map[string]*trendDay](disk, slot, version)
+	changed := kept.StaleParts(parts, versions)
+	ids := make([]string, 0, len(changed))
+	for id := range changed {
+		if _, ok := versions[id]; ok {
 			ids = append(ids, id)
 		}
+		delete(parts, id)
 	}
 	sort.Strings(ids)
+	if len(ids) > 0 {
+		ids, err = src.TrendWindowSessions(ctx, f, ids)
+		if err != nil {
+			return TrendsTermsResponse{}, true, err
+		}
+	}
 	if len(ids) > 0 {
 		trendPartsObserver.Lock()
 		if trendPartsObserver.read != nil {
@@ -103,31 +108,30 @@ func TrendsFromParts(ctx context.Context, disk *kept.Disk, identity string, f An
 			return TrendsTermsResponse{}, true, err
 		}
 		for _, id := range ids {
-			parts[id] = trendPart{ID: id, Version: versions[id], Days: days[id]}
+			parts[id] = kept.Part[map[string]*trendDay]{ID: id, Fingerprint: versions[id], Present: true, Value: days[id]}
 		}
 	}
 	if err := ctx.Err(); err != nil {
 		return TrendsTermsResponse{}, true, err
 	}
-	if len(ids) > 0 {
-		rows := make([]trendPart, 0, len(parts))
+	if len(changed) > 0 {
+		rows := make([]kept.Part[map[string]*trendDay], 0, len(parts))
 		for _, part := range parts {
 			rows = append(rows, part)
 		}
-		if data, err := kept.EncodeRows(rows, 128<<20, func(part trendPart) int64 {
-			size := int64(len(part.ID) + len(part.Version))
-			for date, day := range part.Days {
+		kept.SaveParts(disk, slot, version, rows, func(days map[string]*trendDay) int64 {
+			var size int64
+			for date, day := range days {
 				size += int64(len(date) + 8 + 8*len(day.Counts))
 			}
 			return size
-		}); err == nil {
-			disk.Put(slot, version, data)
-		}
+		})
 	}
+
 	acc := NewTrendAccumulator(f.From, f.To, granularity, terms)
 	flt := f.MessageScopeFilter()
 	for id := range versions {
-		for date, day := range parts[id].Days {
+		for date, day := range parts[id].Value {
 			if local, err := time.Parse("2006-01-02", date); err == nil && flt.MatchesDayHour(local, true) {
 				acc.addDay(local, day)
 			}

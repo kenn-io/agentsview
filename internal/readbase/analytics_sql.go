@@ -234,11 +234,25 @@ func AnalyticsAndClause(pred string) string {
 
 // TrendSessionWindowSQL selects sessions with a start or message in the padded window.
 func TrendSessionWindowSQL(f db.AnalyticsFilter, windowPred func(string, string, string) (string, []any)) (string, []any) {
+	return trendSessionWindowSQL(f, windowPred, "", nil)
+}
+
+// TrendSessionWindowForIDsSQL limits the timestamp scan to missing sessions.
+func TrendSessionWindowForIDsSQL(f db.AnalyticsFilter, windowPred func(string, string, string) (string, []any), set string, setArgs []any) (string, []any) {
+	return trendSessionWindowSQL(f, windowPred, set, setArgs)
+}
+
+func trendSessionWindowSQL(f db.AnalyticsFilter, windowPred func(string, string, string) (string, []any), set string, setArgs []any) (string, []any) {
 	from, to := AnalyticsWindowBounds(f)
 	window, args := windowPred("COALESCE(s.started_at, s.created_at)", from, to)
 	if window == "" {
 		return "", nil
 	}
-	message, margs := windowPred("wm.timestamp", from, to)
-	return " AND (" + window + " OR s.id IN (SELECT wm.session_id FROM messages wm WHERE wm.timestamp IS NOT NULL AND " + message + "))", append(args, margs...)
+	message, more := windowPred("wm.timestamp", from, to)
+	selection := ""
+	if set != "" {
+		selection = "wm.session_id IN " + set + " AND "
+		args = append(args, setArgs...)
+	}
+	return " AND (" + window + " OR s.id IN (SELECT wm.session_id FROM messages wm WHERE " + selection + "wm.timestamp IS NOT NULL AND " + message + "))", append(args, more...)
 }

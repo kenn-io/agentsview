@@ -36,7 +36,7 @@ func (s *Store) loadTrendsTerms(ctx context.Context, f db.AnalyticsFilter, terms
 		}
 	}()
 	loc := analyticsLocation(f)
-	where, args := s.trendSelection(f)
+	where, args := s.trendSelection(f, true)
 	preds := []string{where}
 	flt := f.MessageScopeFilter()
 	modelFiltering := len(flt.Models) > 0

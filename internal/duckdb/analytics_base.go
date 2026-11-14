@@ -390,9 +390,10 @@ func (s analyticsSQL) TrendSessionVersions(ctx context.Context, f db.AnalyticsFi
 	sf.From, sf.To, sf.Model = "", "", ""
 	sf.DayOfWeek, sf.Hour = nil, nil
 	where, args := duckBuildAnalyticsWhere(sf, "COALESCE(s.started_at, s.created_at)", "s.", true, true)
-	window, more := readbase.TrendSessionWindowSQL(f, duckAnalyticsMessageWindowPred)
-	args = append(args, more...)
-	return db.ScanTrendVersions(s.QueryContext(ctx, `SELECT s.id, COALESCE(s.agentsview_push_fingerprint, '') FROM sessions s WHERE `+where+window, args...))
+	return db.ScanTrendVersions(s.QueryContext(ctx, `SELECT s.id, COALESCE(s.agentsview_push_fingerprint, '') FROM sessions s WHERE `+where, args...))
+}
+func (s analyticsSQL) TrendSessionWindow(f db.AnalyticsFilter, set string, args []any) (string, []any) {
+	return readbase.TrendSessionWindowForIDsSQL(f, duckAnalyticsMessageWindowPred, set, args)
 }
 func (s analyticsSQL) TrendMessagesSQL(set string, args []any) (string, []any) {
 	return readbase.AnalyticsTrendsSQL(db.AnalyticsFilter{}, duckAnalyticsMessageWindowPred, db.DuckDBSystemPrefixSQL("m.content", "m.role"), db.DuckDBQueryDialect(), "m.session_id IN "+set, args, true, true)

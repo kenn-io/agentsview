@@ -664,4 +664,10 @@ func TestTrendsSQLiteOffsetWindows(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, 2, hourly.MessageCount)
 	assert.Equal(t, 2, hourly.Series[0].Total)
+	f.Hour = nil
+	f.From, f.To = "2024-01-02", "2024-01-02"
+	old, err := d.GetTrendsTerms(ctx, f, terms, "day")
+	require.NoError(t, err)
+	assert.Equal(t, 1, old.Series[0].Total)
+	assert.Equal(t, [][]string{{"offset-old"}}, reads)
 }

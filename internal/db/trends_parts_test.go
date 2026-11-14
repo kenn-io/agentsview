@@ -1,7 +1,13 @@
 package db
 
 import (
+	"archive/zip"
 	"context"
+	"io"
+	"os"
+	"os/exec"
+	"path/filepath"
+	"runtime"
 	"testing"
 	"time"
 
@@ -19,7 +25,10 @@ type trendPartsFixture struct {
 func (s *trendPartsFixture) TrendSessionVersions(context.Context, AnalyticsFilter) (map[string]string, error) {
 	return s.versions, nil
 }
-func (s *trendPartsFixture) VisitTrendMessages(_ context.Context, _ AnalyticsFilter, ids []string, visit func(string, string, time.Time)) error {
+func (s *trendPartsFixture) TrendWindowSessions(_ context.Context, _ AnalyticsFilter, ids []string) ([]string, error) {
+	return ids, nil
+}
+func (s *trendPartsFixture) VisitTrendMessages(_ context.Context, f AnalyticsFilter, ids []string, visit func(string, string, time.Time)) error {
 	s.reads = append(s.reads, append([]string(nil), ids...))
 	for _, id := range ids {
 		for _, msg := range s.messages[id] {
@@ -27,7 +36,7 @@ func (s *trendPartsFixture) VisitTrendMessages(_ context.Context, _ AnalyticsFil
 			if err != nil {
 				return err
 			}
-			visit(id, msg.content, ts)
+			visit(id, msg.content, ts.In(f.location()))
 		}
 	}
 	return nil
@@ -78,7 +87,7 @@ func TestTrendsPartsReuseAndBuckets(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, 2, got.MessageCount)
 	assert.Equal(t, 2, got.Series[0].Total)
-	assert.Len(t, source.reads, 2)
+	require.Equal(t, [][]string{{"a", "b"}, {"a"}, {"b"}}, source.reads)
 	hour := 12
 	f.Hour = &hour
 	_, handled, err = TrendsFromParts(t.Context(), &reopened, "fixture", f, terms, "day", source)
@@ -89,4 +98,59 @@ func TestTrendsPartsReuseAndBuckets(t *testing.T) {
 	_, handled, err = TrendsFromParts(t.Context(), &reopened, "fixture", f, terms, "day", source)
 	require.NoError(t, err)
 	assert.False(t, handled)
+	f.Model = ""
+	for _, filter := range []AnalyticsFilter{
+		{Timezone: "Local"},
+		{Timezone: "UTC", ActiveSince: "2025-01-01T00:00:00Z"},
+		{Timezone: "UTC", Termination: "active"},
+	} {
+		_, handled, err = TrendsFromParts(t.Context(), &reopened, "fixture", filter, terms, "day", source)
+		require.NoError(t, err)
+		assert.False(t, handled)
+	}
+}
+
+func TestTrendsPartsTimezoneRules(t *testing.T) {
+	if cache := os.Getenv("TRENDS_RULES_CHILD"); cache != "" {
+		t.Setenv("CACHE_DIRECTORY", cache)
+		var disk kept.Disk
+		require.NoError(t, disk.Open("trends-rules", "fixture", 128<<20, 256<<20))
+		terms, err := ParseTrendTerms([]string{"apple"})
+		require.NoError(t, err)
+		source := &trendPartsFixture{versions: map[string]string{"a": "1"}, messages: map[string][]struct{ content, timestamp string }{
+			"a": {{"apple", "2025-03-10T23:00:00Z"}},
+		}}
+		f := AnalyticsFilter{From: "2025-03-10", To: "2025-03-11", Timezone: "Test/Zone"}
+		got, handled, err := TrendsFromParts(t.Context(), &disk, "fixture", f, terms, "day", source)
+		require.NoError(t, err)
+		require.True(t, handled)
+		require.Equal(t, [][]string{{"a"}}, source.reads)
+		require.Contains(t, got.Series[0].Points, TrendPoint{Date: os.Getenv("TRENDS_EXPECT_DAY"), Count: 1})
+		return
+	}
+	archive, err := zip.OpenReader(filepath.Join(runtime.GOROOT(), "lib", "time", "zoneinfo.zip"))
+	require.NoError(t, err)
+	defer archive.Close()
+	cache := t.TempDir()
+	for _, tc := range []struct{ zone, day string }{{"UTC", "2025-03-10"}, {"Pacific/Kiritimati", "2025-03-11"}} {
+		var data []byte
+		for _, file := range archive.File {
+			if file.Name == tc.zone {
+				r, err := file.Open()
+				require.NoError(t, err)
+				data, err = io.ReadAll(r)
+				require.NoError(t, err)
+				require.NoError(t, r.Close())
+				break
+			}
+		}
+		require.NotEmpty(t, data)
+		zoneDir := t.TempDir()
+		require.NoError(t, os.MkdirAll(filepath.Join(zoneDir, "Test"), 0700))
+		require.NoError(t, os.WriteFile(filepath.Join(zoneDir, "Test", "Zone"), data, 0600))
+		cmd := exec.Command(os.Args[0], "-test.run=^TestTrendsPartsTimezoneRules$")
+		cmd.Env = append(os.Environ(), "ZONEINFO="+zoneDir, "CACHE_DIRECTORY="+cache, "TRENDS_RULES_CHILD="+cache, "TRENDS_EXPECT_DAY="+tc.day)
+		output, err := cmd.CombinedOutput()
+		require.NoError(t, err, "%s", output)
+	}
 }

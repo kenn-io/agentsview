@@ -25,13 +25,16 @@ func TestStoreGetTrendsTermsDateWindowEdges(t *testing.T) {
 	t.Cleanup(func() { require.NoError(t, store.Close()) })
 	require.NoError(t, store.ConfigureUsageCache(ctx, t.TempDir(), pgURL, schema))
 	dbtest.AssertTrendsWindow(t, store)
-	dbtest.AssertTrendsPartsReuse(t, func() db.Store {
+	cacheDir := t.TempDir()
+	dbtest.AssertTrendsPartsReuse(t, func(retained bool) db.Store {
 		opened, err := NewStore(ctx, pgURL, schema, true)
 		require.NoError(t, err)
-		require.NoError(t, opened.ConfigureUsageCache(ctx, t.TempDir(), pgURL, schema))
+		if retained {
+			require.NoError(t, opened.ConfigureUsageCache(ctx, cacheDir, pgURL, schema))
+		}
 		return opened
-	}, func() {
-		dbtest.RewriteTrendsWindow(t, local)
+	}, func(action string) {
+		dbtest.ChangeTrendsWindow(t, local, action)
 		_, err := syncer.Push(ctx, false, nil)
 		require.NoError(t, err)
 	})

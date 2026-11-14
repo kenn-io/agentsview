@@ -10,13 +10,6 @@ import (
 	pricingpkg "go.kenn.io/agentsview/internal/pricing"
 )
 
-type usagePart[T any] struct {
-	ID, Fingerprint string
-	Group           string
-	Present         bool
-	Value           T
-}
-
 var (
 	usagePartReadObserver    func([]string)
 	usagePartPublishObserver func()
@@ -33,26 +26,8 @@ func refreshUsageParts[T any](ctx context.Context, s *Store, slot, priceDigest s
 		return nil, err
 	}
 	version := usagePartsVersion(f, priceDigest)
-	old := map[string]usagePart[T]{}
-	if data, ok := s.usageDisk.Get(slot, version); ok {
-		if rows, ok := kept.DecodeRows[usagePart[T]](data); ok {
-			for _, row := range rows {
-				old[row.ID] = row
-			}
-		}
-	}
-	changed := map[string]bool{}
-	for id, fingerprint := range versions {
-		part, ok := old[id]
-		if !ok || fingerprint == "" || fingerprint != part.Fingerprint {
-			changed[id] = true
-		}
-	}
-	for id := range old {
-		if _, ok := versions[id]; !ok {
-			changed[id] = true
-		}
-	}
+	old := kept.LoadParts[T](&s.usageDisk, slot, version)
+	changed := kept.StaleParts(old, versions)
 	if len(changed) == 0 && len(old) != 0 {
 		values := make(map[string]T, len(old))
 		for id, part := range old {
@@ -112,16 +87,12 @@ func refreshUsageParts[T any](ctx context.Context, s *Store, slot, priceDigest s
 		usagePartPublishObserver()
 	}
 	if ctx.Err() == nil && stamp != "" && stamp == s.keptVersion() {
-		rows := make([]usagePart[T], 0, len(versions))
+		rows := make([]kept.Part[T], 0, len(versions))
 		for id, fingerprint := range versions {
 			value, present := values[id]
-			rows = append(rows, usagePart[T]{id, fingerprint, peers[id], present, value})
+			rows = append(rows, kept.Part[T]{ID: id, Fingerprint: fingerprint, Group: peers[id], Present: present, Value: value})
 		}
-		if data, err := kept.EncodeRows(rows, 128<<20, func(part usagePart[T]) int64 {
-			return int64(len(part.ID)+len(part.Fingerprint)+len(part.Group)) + size(part.Value)
-		}); err == nil {
-			s.usageDisk.Put(slot, version, data)
-		}
+		kept.SaveParts(&s.usageDisk, slot, version, rows, size)
 	}
 	return values, nil
 }

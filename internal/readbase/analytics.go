@@ -37,6 +37,7 @@ type AnalyticsBackend interface {
 	// order; a backend may sort anyway.
 	TrendsSQL(f, sessionFilter db.AnalyticsFilter, ordered bool) (string, []any)
 	TrendSessionVersions(context.Context, db.AnalyticsFilter) (map[string]string, error)
+	TrendSessionWindow(db.AnalyticsFilter, string, []any) (string, []any)
 	TrendsDisk() (*kept.Disk, string)
 	TrendMessagesSQL(string, []any) (string, []any)
 	FormatTime(any) string
