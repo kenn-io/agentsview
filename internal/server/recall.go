@@ -146,6 +146,9 @@ func (s *Server) listRecallEntriesPage(
 	query db.RecallQuery,
 	cursor *service.RecallListCursor,
 ) ([]db.RecallResult, string, error) {
+	if err := service.ValidateRecallListQuery(query); err != nil {
+		return nil, "", err
+	}
 	if strings.TrimSpace(query.Text) != "" {
 		return s.listRankedRecallEntriesPage(ctx, query, cursor)
 	}

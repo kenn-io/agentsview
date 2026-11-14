@@ -43,6 +43,9 @@ selects accepted entries. Without a bound, lists show accepted entries, newest
 first. Each entry's `source_run_id` names the extraction generation it came
 from.
 
+Time bounds cannot be combined with a text query. Search uses relevance
+ordering, while a checkpoint walk needs change ordering.
+
 The HTTP list and MCP `list_recall` accept `updated_since` and `created_since`,
 and return `next_cursor` when more entries remain. To follow changes:
 

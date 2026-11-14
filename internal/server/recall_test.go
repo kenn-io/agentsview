@@ -648,6 +648,20 @@ func TestListRecallEntriesQueryMatchesMetadata(t *testing.T) {
 	assert.Positive(t, page.RecallEntries[0].Score)
 }
 
+func TestListRecallEntriesRejectsSearchWithTimeBounds(t *testing.T) {
+	for _, bound := range []string{"updated_since", "created_since"} {
+		t.Run(bound, func(t *testing.T) {
+			te := setup(t)
+			w := te.get(t,
+				"/api/v1/recall/entries?q=retry&"+bound+"=2026-01-01T00:00:00Z")
+
+			assertStatus(t, w, http.StatusBadRequest)
+			assertErrorResponse(t, w,
+				"invalid recall query: cannot combine search text with time bounds; omit the search query")
+		})
+	}
+}
+
 func TestListRecallEntriesIgnoredQueryReturnsNoEntries(t *testing.T) {
 	te := setup(t)
 	seedRecallEntrySession(t, te)

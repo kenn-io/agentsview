@@ -729,6 +729,40 @@ func TestDirectBackend_ListRecallEntriesRejectsNegativeLimit(t *testing.T) {
 	assert.Contains(t, err.Error(), "limit must be non-negative")
 }
 
+func TestDirectBackend_ListRecallEntriesRejectsSearchWithTimeBounds(t *testing.T) {
+	for _, test := range []struct {
+		name   string
+		filter service.RecallFilter
+	}{
+		{
+			name: "updated since",
+			filter: service.RecallFilter{
+				Query:        "retry",
+				UpdatedSince: "2026-01-01T00:00:00Z",
+			},
+		},
+		{
+			name: "created since",
+			filter: service.RecallFilter{
+				Query:        "retry",
+				CreatedSince: "2026-01-01T00:00:00Z",
+			},
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			store := &observingRecallQueryStore{Store: dbtest.OpenTestDB(t)}
+			svc := service.NewReadOnlyBackend(store)
+
+			result, err := svc.ListRecallEntries(t.Context(), test.filter)
+
+			require.ErrorIs(t, err, db.ErrInvalidRecallQuery)
+			require.ErrorContains(t, err, "cannot combine search text with time bounds")
+			assert.Nil(t, result)
+			assert.Zero(t, store.queryCalls)
+		})
+	}
+}
+
 func TestDirectBackend_ListRecallEntriesWithoutQueryUsesUpdatedOrder(t *testing.T) {
 	t.Parallel()
 	dbPath := filepath.Join(

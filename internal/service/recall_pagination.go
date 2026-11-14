@@ -8,6 +8,7 @@ import (
 	"encoding/json/v2"
 	"errors"
 	"fmt"
+	"strings"
 
 	"go.kenn.io/agentsview/internal/db"
 )
@@ -34,6 +35,18 @@ var ErrStaleRecallPagination = errors.New(
 		"with the same original time bound(s), and keep the saved checkpoint " +
 		"until the last page returns",
 )
+
+// ValidateRecallListQuery rejects a text search combined with a time bound.
+// Ranked search pages cannot provide the chronological walk a checkpoint needs.
+func ValidateRecallListQuery(query db.RecallQuery) error {
+	if strings.TrimSpace(query.Text) != "" && query.TimeBounded() {
+		return fmt.Errorf(
+			"%w: cannot combine search text with time bounds; omit the search query",
+			db.ErrInvalidRecallQuery,
+		)
+	}
+	return nil
+}
 
 // RecallQueryRevisionProvider reports the revision that changes with every
 // Recall entry or evidence write. An empty revision means tracking is unavailable.
