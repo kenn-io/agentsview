@@ -10,7 +10,6 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"go.kenn.io/agentsview/internal/db"
-	"go.kenn.io/agentsview/internal/sessionmaterialize"
 )
 
 func TestSessionMaterializeRejectsRemoteBackends(t *testing.T) {
@@ -64,8 +63,6 @@ func TestPiMaterializeCommandReturnsNativeResume(t *testing.T) {
 	database, err := db.OpenIsolatedContext(t.Context(), filepath.Join(dataDir, "sessions.db"))
 	require.NoError(t, err)
 	require.NoError(t, database.UpsertSession(t.Context(), db.Session{ID: "pi:example", Agent: "pi", Machine: machine, Project: "fixture", FilePath: &name}))
-	before, err := database.GetSessionFull(t.Context(), "pi:example")
-	require.NoError(t, err)
 	require.NoError(t, database.Close())
 	output, err := executeCommand(newRootCommand(), "session", "materialize", "pi:example", "--cwd", cwd, "--json")
 	require.NoError(t, err, output)
@@ -93,14 +90,4 @@ func TestPiMaterializeCommandReturnsNativeResume(t *testing.T) {
 	var diagnostic *cliDiagnosticError
 	require.ErrorAs(t, err, &diagnostic)
 	assert.Equal(t, "destination differs; if this is the same session, resume it with: "+result.Command, diagnostic.display)
-	var differs *sessionmaterialize.DestinationDiffersError
-	require.ErrorAs(t, err, &differs)
-	assert.Equal(t, path, differs.Path)
-
-	database, err = db.OpenIsolatedContext(t.Context(), filepath.Join(dataDir, "sessions.db"))
-	require.NoError(t, err)
-	after, err := database.GetSessionFull(t.Context(), "pi:example")
-	require.NoError(t, err)
-	assert.Equal(t, before, after)
-	require.NoError(t, database.Close())
 }

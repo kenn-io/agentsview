@@ -133,11 +133,11 @@ func TestPiSourceLookup(t *testing.T) {
 	assert.Equal(t, fallback, selected)
 }
 
-func TestPiSourceLookupRejectsUncertainCandidate(t *testing.T) {
+func TestPiSourceLookupCandidates(t *testing.T) {
 	for _, tc := range []struct {
 		name string
 		want error
-	}{{"unreadable", os.ErrPermission}, {"large header", errPiHeaderSize}, {"large unrelated header", nil}, {"large matching header", nil}, {"unsupported version", nil}} {
+	}{{"unreadable", os.ErrPermission}, {"large header", errPiHeaderSize}, {"large unrelated header", nil}, {"unsupported version", nil}} {
 		t.Run(tc.name, func(t *testing.T) {
 			root, dest, cwd := t.TempDir(), t.TempDir(), t.TempDir()
 			t.Setenv("PI_CODING_AGENT_SESSION_DIR", dest)
@@ -167,8 +167,6 @@ func TestPiSourceLookupRejectsUncertainCandidate(t *testing.T) {
 				switch tc.name {
 				case "large unrelated header":
 					id = "other"
-				case "large matching header":
-					candidate = target
 				}
 				header := `{"type":"session","parentSession":"` + strings.Repeat("a", size) + `","id":"` + id + `","cwd":"/old"}` + "\n"
 				require.NoError(t, os.WriteFile(candidate, []byte(header), 0o600))
@@ -176,9 +174,6 @@ func TestPiSourceLookupRejectsUncertainCandidate(t *testing.T) {
 			cfg := config.Config{InstallationID: "local", LocalMachineName: "local", AgentDirs: map[parser.AgentType][]string{parser.AgentPi: {root}}}
 			stale := filepath.Join(root, "missing.jsonl")
 			session := &db.Session{ID: "pi:target", Agent: "pi", Machine: "local", FilePath: &stale}
-			if tc.name == "large matching header" {
-				session.FilePath = &target
-			}
 			result, err := Materialize(t.Context(), cfg, session, cwd)
 			if tc.name == "unsupported version" {
 				require.ErrorContains(t, err, "version")
@@ -186,11 +181,6 @@ func TestPiSourceLookupRejectsUncertainCandidate(t *testing.T) {
 				require.NoError(t, err)
 				assert.Equal(t, target, result.Source)
 				assert.Equal(t, []string{filepath.Join(dest, "target.jsonl")}, result.Paths)
-				if tc.name == "large matching header" {
-					got, err := os.ReadFile(result.Paths[0])
-					require.NoError(t, err)
-					assert.Contains(t, string(got), `"cwd":`+string(mustJSON(t, result.Cwd)))
-				}
 				return
 			} else {
 				require.ErrorIs(t, err, tc.want)
@@ -205,8 +195,17 @@ func TestMaterializePiConfiguredSources(t *testing.T) {
 	for _, mirror := range []bool{false, true} {
 		t.Run(map[bool]string{false: "local", true: "mirror"}[mirror], func(t *testing.T) {
 			root, dest, cwd := t.TempDir(), t.TempDir(), t.TempDir()
-			cwd, err := filepath.EvalSymlinks(cwd)
-			require.NoError(t, err)
+			checkout := cwd
+			if !mirror {
+				parent, err := filepath.EvalSymlinks(t.TempDir())
+				require.NoError(t, err)
+				checkout = filepath.Join(parent, "checkout")
+				require.NoError(t, os.Mkdir(checkout, 0o700))
+				cwd = filepath.Join(parent, "link")
+				if err := os.Symlink(checkout, cwd); err != nil {
+					t.Skipf("symlink unavailable: %v", err)
+				}
+			}
 			t.Setenv("PI_CODING_AGENT_DIR", "")
 			t.Setenv("PI_CODING_AGENT_SESSION_DIR", dest)
 			cfg := config.Config{DataDir: root, InstallationID: "local", LocalMachineName: "local"}
@@ -231,12 +230,15 @@ func TestMaterializePiConfiguredSources(t *testing.T) {
 			require.NoError(t, os.WriteFile(name, []byte(original), 0o600))
 			result, err := Materialize(t.Context(), cfg, s, cwd)
 			require.NoError(t, err)
+			if !mirror {
+				assert.Equal(t, checkout, result.Cwd)
+			}
 			require.Equal(t, "installed", result.Status)
 			require.Equal(t, []string{filepath.Join(dest, basename)}, result.Paths)
 			got, err := os.ReadFile(result.Paths[0])
 			require.NoError(t, err)
 			// All records and header fields except the cwd value must stay byte-identical.
-			assert.Equal(t, `{"type":"session", "id":"abc-session", "cwd" : `+string(mustJSON(t, cwd))+`, "parentSession":"/parent.jsonl"}`+"\n"+`{"type":"message","id":"branch","parentId":"first","message":{"role":"user","content":"hello"}}`+"\n", string(got))
+			assert.Equal(t, `{"type":"session", "id":"abc-session", "cwd" : `+string(mustJSON(t, result.Cwd))+`, "parentSession":"/parent.jsonl"}`+"\n"+`{"type":"message","id":"branch","parentId":"first","message":{"role":"user","content":"hello"}}`+"\n", string(got))
 			got, err = os.ReadFile(name)
 			require.NoError(t, err)
 			assert.Equal(t, original, string(got))
@@ -273,8 +275,12 @@ func TestPiLinkedSources(t *testing.T) {
 }
 
 func TestPiHeaderIdentityAndVersion(t *testing.T) {
+	large := `{"type":"session","parentSession":"` + strings.Repeat("a", 1<<20) + `","id":"id","cwd":"/old"}` + "\n"
+	got, err := relocatePiHeader(t.Context(), []byte(large), "id.jsonl", "id", "/new")
+	require.NoError(t, err)
+	assert.Equal(t, strings.Replace(large, `"cwd":"/old"`, `"cwd":"/new"`, 1), string(got))
 	data := []byte(`{"type":"session", "cwd":"/old", "extra":1}` + "\n")
-	got, err := relocatePiHeader(t.Context(), data, "id.jsonl", "id", "/new")
+	got, err = relocatePiHeader(t.Context(), data, "id.jsonl", "id", "/new")
 	require.NoError(t, err)
 	assert.Equal(t, `{"type":"session", "cwd":"/new","id":"id", "extra":1}`+"\n", string(got))
 	prefix := "\nnot-json\nnull\nfalse\n0.0\n\"\"\n"
@@ -354,30 +360,6 @@ func TestPiUsesIdentityForNonuniqueNames(t *testing.T) {
 			assert.Empty(t, entries)
 		})
 	}
-}
-
-func TestPiResolvesCheckoutSymlink(t *testing.T) {
-	root, dest, parent := t.TempDir(), t.TempDir(), t.TempDir()
-	realDir := filepath.Join(parent, "checkout")
-	require.NoError(t, os.Mkdir(realDir, 0o700))
-	link := filepath.Join(parent, "link")
-	if err := os.Symlink(realDir, link); err != nil {
-		t.Skipf("symlink unavailable: %v", err)
-	}
-	resolved, err := filepath.EvalSymlinks(realDir)
-	require.NoError(t, err)
-	t.Setenv("PI_CODING_AGENT_SESSION_DIR", dest)
-	t.Setenv("PI_CODING_AGENT_DIR", "")
-	cfg := config.Config{InstallationID: "local", LocalMachineName: "local", AgentDirs: map[parser.AgentType][]string{parser.AgentPi: {root}}}
-	name := filepath.Join(root, "session.jsonl")
-	s := &db.Session{ID: "pi:target", Agent: "pi", Machine: "local", FilePath: &name}
-	require.NoError(t, os.WriteFile(name, []byte(`{"type":"session","id":"target","cwd":"/old"}`+"\n"), 0o600))
-	result, err := Materialize(t.Context(), cfg, s, link)
-	require.NoError(t, err)
-	assert.Equal(t, resolved, result.Cwd)
-	data, err := os.ReadFile(result.Paths[0])
-	require.NoError(t, err)
-	assert.Equal(t, `{"type":"session","id":"target","cwd":`+string(mustJSON(t, resolved))+"}\n", string(data))
 }
 
 func mustJSON(t *testing.T, value string) []byte {

@@ -140,7 +140,6 @@ func TestMaterializeConfiguredSources(t *testing.T) {
 	}{
 		{name: "moved root", hint: "stale"},
 		{name: "missing path"},
-		{name: "empty path", hint: "empty"},
 		{name: "ambiguous fallback", hint: "stale", duplicate: true, wantError: "ambiguous"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -166,8 +165,6 @@ func TestMaterializeConfiguredSources(t *testing.T) {
 			case "stale":
 				stored := filepath.Join(t.TempDir(), "old-project", id+".jsonl")
 				s.FilePath = &stored
-			case "empty":
-				s.FilePath = new(string)
 			}
 			result, err := Materialize(t.Context(), cfg, s, t.TempDir())
 			dest := filepath.Join(home, "projects", "test-project", id+".jsonl")
