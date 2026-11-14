@@ -10,9 +10,7 @@ import (
 
 // trendSelection selects the sessions a Trends read walks.
 func (s *Store) trendSelection(f db.AnalyticsFilter, window bool) (string, []any) {
-	sf := f
-	sf.From, sf.To, sf.Model = "", "", ""
-	sf.DayOfWeek, sf.Hour = nil, nil
+	sf := f.TrendsSessionFilter()
 	pb := &paramBuilder{}
 	preds := []string{buildAnalyticsWhereWithDate(sf, "", pb, false, "s.id", s.sessionDialect())}
 	// The window bounds are inlined as literals. pgx caches prepared

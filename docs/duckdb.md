@@ -119,6 +119,14 @@ Usage results for the same dates and selection also use
 directory. Deleting these files is
 safe and makes the next Usage visit read the mirror again.
 
+Trends reuses per-session daily counts across restarts and date ranges, then
+recounts sessions changed by a push. The counts share `duckdb-usage` with the
+local Usage cache. Each selection can use up to 128 MiB, with a 256 MiB limit
+per mirror. Hour and model filters, the local timezone, and time-dependent
+session filters read messages directly. Deleting the files makes the next visit
+count messages again. Quack stores endpoint-specific Trends counts in the same
+cache directory on the client; remote Usage reads the mirror directly.
+
 ## Quack Remote Access
 
 [Quack](https://duckdb.org/docs/current/core_extensions/quack) is DuckDB's

@@ -48,9 +48,7 @@ func sqliteTrendWindowPred(col, from, to string) (string, []any) {
 
 // sqliteTrendSelection selects the sessions a Trends read walks.
 func sqliteTrendSelection(f AnalyticsFilter, window bool) (string, []any) {
-	sessionFilter := f
-	sessionFilter.From, sessionFilter.To, sessionFilter.Model = "", "", ""
-	sessionFilter.DayOfWeek, sessionFilter.Hour = nil, nil
+	sessionFilter := f.TrendsSessionFilter()
 	where, args := sessionFilter.buildWhereWithDate("", false, "s.id")
 	from, to := f.messageWindowBoundsUTC()
 	if !window {

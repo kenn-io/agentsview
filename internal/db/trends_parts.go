@@ -69,10 +69,8 @@ func TrendsFromParts(ctx context.Context, disk *kept.Disk, identity string, f An
 	if err != nil {
 		return TrendsTermsResponse{}, true, err
 	}
-	selection := f
-	selection.From, selection.To, selection.Timezone = "", "", ""
-	selection.DayOfWeek, selection.Hour = nil, nil
-	selection.Model = ""
+	selection := f.TrendsSessionFilter()
+	selection.Timezone = ""
 	key, err := json.Marshal(selection)
 	if err != nil {
 		return TrendsTermsResponse{}, true, err

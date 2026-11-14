@@ -392,9 +392,7 @@ func (s analyticsSQL) TrendsDisk() (*kept.Disk, string) {
 	return &s.store.usageDisk, identity
 }
 func (s analyticsSQL) TrendSessionVersions(ctx context.Context, f db.AnalyticsFilter) (map[string]string, error) {
-	sf := f
-	sf.From, sf.To, sf.Model = "", "", ""
-	sf.DayOfWeek, sf.Hour = nil, nil
+	sf := f.TrendsSessionFilter()
 	where, args := duckBuildAnalyticsWhere(sf, "COALESCE(s.started_at, s.created_at)", "s.", true, true)
 	return db.ScanTrendVersions(s.QueryContext(ctx, `SELECT s.id, COALESCE(s.agentsview_push_fingerprint, '') FROM sessions s WHERE `+where, args...))
 }

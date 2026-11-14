@@ -584,6 +584,12 @@ in the same cache directory. Each selection can use up to 128 MiB, with a
 pricing change, new binary, or deletion of the cache directory. If the cache is
 unavailable, Usage reads the mirror instead.
 
+Trends shares this bounded cache and reuses per-session daily counts across
+restarts and date ranges. After a push, it recounts changed sessions. Hour and
+model filters, the local timezone, and time-dependent session filters read
+messages directly. Deleting the cache makes the next Trends visit count messages
+again.
+
 When `require_auth` is enabled, a bearer token is generated if needed and
 printed on startup. Pass it via `Authorization: Bearer <token>` on API requests.
 
