@@ -167,9 +167,16 @@ func TestStoreReadsWhileRowsHeldAcrossReplacement(t *testing.T) {
 	require.NoError(t, err)
 	defer current.Close()
 	require.NoError(t, store.queryRowContext(t.Context(), `SELECT id FROM sessions`).Scan(&id))
+	require.True(t, current.Next())
+	require.NoError(t, current.Scan(&id))
+	require.Equal(t, "new-session", id)
+	require.False(t, current.Next())
+	require.NoError(t, current.Err())
 	require.True(t, old.Next())
 	require.NoError(t, old.Scan(&id))
 	require.Equal(t, "old-session", id)
+	require.False(t, old.Next())
+	require.NoError(t, old.Err())
 }
 
 func TestStoreKeepsOldHandleWhenReplacementIncompatible(t *testing.T) {
