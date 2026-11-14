@@ -42,6 +42,14 @@ func (s *Store) ConfigureUsageCache(ctx context.Context, directory, targetURL, s
 	return nil
 }
 
+// WarmUsageCache queues launch-time fills for unready zones.
+func (s *Store) WarmUsageCache(ctx context.Context) error {
+	if s.usageCache == nil {
+		return nil
+	}
+	return s.usageCache.WarmUnready(ctx)
+}
+
 type pgUsageCacheSource struct {
 	*Store
 	target string

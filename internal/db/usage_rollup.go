@@ -816,12 +816,7 @@ func installUsageRollupBuilds(
 	// Background rebuilds install here too, so only a new zone takes the
 	// install time; recordUsageTimezoneRequest owns later recency stamps.
 	now := time.Now().UTC().Format(time.RFC3339Nano)
-	if _, err := conn.ExecContext(ctx, `INSERT INTO usage_rollup_timezones(
-		timezone_key, timezone_name, interval_fingerprint, last_requested_at
-	) VALUES (?, ?, ?, ?) ON CONFLICT(timezone_key) DO UPDATE SET
-		timezone_name=excluded.timezone_name,
-		interval_fingerprint=excluded.interval_fingerprint`,
-		identity.Key, identity.Name, identity.IntervalFingerprint, now); err != nil {
+	if err := insertUsageTimezone(ctx, conn, identity, time.Now()); err != nil {
 		return err
 	}
 	var timezoneID int64

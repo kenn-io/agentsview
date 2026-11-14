@@ -389,24 +389,42 @@ func (db *DB) runUsageCacheBackfillPass(
 func (cache *usageCache) recordUsageTimezoneRequest(
 	ctx context.Context, identity usageTimezoneIdentity,
 ) {
+	err := cache.recordUsageTimezoneRequestAt(ctx, identity, time.Now())
+	if err != nil && ctx.Err() == nil {
+		log.Printf("recording usage timezone request %s: %v", identity.Name, err)
+	}
+}
+
+func (cache *usageCache) recordUsageTimezoneRequestAt(
+	ctx context.Context, identity usageTimezoneIdentity, requestedAt time.Time,
+) error {
 	var stamp string
 	err := cache.db.QueryRowContext(ctx, `SELECT last_requested_at
 		FROM usage_rollup_timezones WHERE timezone_key = ?`, identity.Key).Scan(&stamp)
 	if errors.Is(err, sql.ErrNoRows) {
-		return
+		return nil
 	}
 	if err == nil {
 		requested, parseErr := time.Parse(time.RFC3339Nano, stamp)
-		if parseErr == nil && time.Since(requested) < usageTimezoneRequestResolution {
-			return
+		if parseErr == nil && requestedAt.Sub(requested) < usageTimezoneRequestResolution {
+			return nil
 		}
+		//nolint:nilaway // Callers hold a successfully acquired cache.
 		_, err = cache.db.ExecContext(ctx, `UPDATE usage_rollup_timezones
 			SET last_requested_at = ? WHERE timezone_key = ?`,
-			time.Now().UTC().Format(time.RFC3339Nano), identity.Key)
+			requestedAt.UTC().Format(time.RFC3339Nano), identity.Key)
 	}
-	if err != nil && ctx.Err() == nil {
-		log.Printf("recording usage timezone request %s: %v", identity.Name, err)
-	}
+	return err
+}
+
+func insertUsageTimezone(ctx context.Context, conn sqlContextExecer, identity usageTimezoneIdentity, stamp time.Time) error {
+	_, err := conn.ExecContext(ctx, `INSERT INTO usage_rollup_timezones(
+		timezone_key, timezone_name, interval_fingerprint, last_requested_at
+	) VALUES (?, ?, ?, ?) ON CONFLICT(timezone_key) DO UPDATE SET
+		timezone_name=excluded.timezone_name,
+		interval_fingerprint=excluded.interval_fingerprint`,
+		identity.Key, identity.Name, identity.IntervalFingerprint, stamp.UTC().Format(time.RFC3339Nano))
+	return err
 }
 
 func usageBackfillLocations(
