@@ -3235,5 +3235,15 @@
   "empty_archive_title": "No sessions yet",
   "empty_archive_desc": "AgentsView reads sessions from these folders. They appear here once an agent writes to one of them.",
   "empty_archive_choose_folders": "Choose folders",
-  "usage_tooltip_no_usage": "No usage"
+  "usage_tooltip_no_usage": "No usage",
+  "session_toc_toggle": "Jump to prompt",
+  "session_toc_toggle_shortcut": "Jump to prompt (T)",
+  "session_toc_empty": "No prompts in this session",
+  "session_toc_loading": "Loading prompts…",
+  "session_toc_more": "Showing the newest {shown} of {total}. Type to narrow.",
+  "session_toc_load_failed": "Could not load prompts",
+  "session_toc_empty_prompt": "Empty prompt",
+  "session_toc_search": "Search prompts",
+  "session_toc_no_match": "No prompts match",
+  "shortcuts_toggle_session_toc": "Jump to a prompt"
 }

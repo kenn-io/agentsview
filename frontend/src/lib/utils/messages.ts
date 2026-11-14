@@ -185,6 +185,22 @@ export function previewMessage(text: string | null | undefined): MessagePreview 
   return { text: out, isShell };
 }
 
+// Claude Code stores a shell shortcut's output as its own user row that
+// opens with its stdout or stderr block.
+const SHELL_OUTPUT_START_RE = /^\s*<bash-(?:stdout|stderr)>/;
+
+/**
+ * Reports whether a message is a prompt someone typed: not injected
+ * context, tool output stored on the user role, shell output, or a
+ * boundary card.
+ */
+export function isPromptMessage(m: Message): boolean {
+  if (m.role !== "user" || m.is_compact_boundary || m.is_system) return false;
+  if (m.source_subtype === "tool_result") return false;
+  if (SHELL_OUTPUT_START_RE.test(stripLeadingReminderEnvelopes(m.content))) return false;
+  return !isSystemMessage(m) && !isSystemBoundaryMessage(m);
+}
+
 /** Plain-text variant of `previewMessage` for non-visual callers
  *  (rename input pre-fill, confirm-delete sentence, etc.). */
 export function normalizeMessagePreview(text: string | null | undefined): string {

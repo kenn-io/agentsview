@@ -3110,5 +3110,15 @@
   "empty_archive_title": "暂无会话",
   "empty_archive_desc": "AgentsView 从这些文件夹读取会话。代理写入其中任一文件夹后，会话就会显示在这里。",
   "empty_archive_choose_folders": "选择文件夹",
-  "usage_tooltip_no_usage": "无使用"
+  "usage_tooltip_no_usage": "无使用",
+  "session_toc_toggle": "跳转到提示",
+  "session_toc_toggle_shortcut": "跳转到提示 (T)",
+  "session_toc_empty": "此会话中没有提示",
+  "session_toc_loading": "正在加载提示…",
+  "session_toc_more": "显示 {total} 条中最新的 {shown} 条。输入以缩小范围。",
+  "session_toc_load_failed": "无法加载提示",
+  "session_toc_empty_prompt": "空提示",
+  "session_toc_search": "搜索提示",
+  "session_toc_no_match": "没有匹配的提示",
+  "shortcuts_toggle_session_toc": "跳转到提示"
 }

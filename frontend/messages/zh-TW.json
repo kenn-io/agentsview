@@ -3113,5 +3113,15 @@
   "empty_archive_title": "尚無對話",
   "empty_archive_desc": "AgentsView 會從這些資料夾讀取對話。代理寫入其中任一資料夾後，對話就會顯示在這裡。",
   "empty_archive_choose_folders": "選擇資料夾",
-  "usage_tooltip_no_usage": "無使用"
+  "usage_tooltip_no_usage": "無使用",
+  "session_toc_toggle": "跳至提示",
+  "session_toc_toggle_shortcut": "跳至提示 (T)",
+  "session_toc_empty": "此對話中沒有提示",
+  "session_toc_loading": "正在載入提示…",
+  "session_toc_more": "顯示 {total} 則中最新的 {shown} 則。輸入以縮小範圍。",
+  "session_toc_load_failed": "無法載入提示",
+  "session_toc_empty_prompt": "空白提示",
+  "session_toc_search": "搜尋提示",
+  "session_toc_no_match": "沒有相符的提示",
+  "shortcuts_toggle_session_toc": "跳至提示"
 }

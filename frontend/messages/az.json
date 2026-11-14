@@ -3224,5 +3224,15 @@
   "empty_archive_title": "Hələ sessiya yoxdur",
   "empty_archive_desc": "AgentsView sessiyaları bu qovluqlardan oxuyur. Agent onlardan birinə yazan kimi sessiyalar burada görünəcək.",
   "empty_archive_choose_folders": "Qovluqları seçin",
-  "usage_tooltip_no_usage": "İstifadə yoxdur"
+  "usage_tooltip_no_usage": "İstifadə yoxdur",
+  "session_toc_toggle": "Sorğuya keç",
+  "session_toc_toggle_shortcut": "Sorğuya keç (T)",
+  "session_toc_empty": "Bu sessiyada sorğu yoxdur",
+  "session_toc_loading": "Sorğular yüklənir…",
+  "session_toc_more": "{total} sorğudan ən yeni {shown} göstərilir. Daraltmaq üçün yazın.",
+  "session_toc_load_failed": "Sorğular yüklənmədi",
+  "session_toc_empty_prompt": "Boş sorğu",
+  "session_toc_search": "Sorğularda axtar",
+  "session_toc_no_match": "Uyğun sorğu yoxdur",
+  "shortcuts_toggle_session_toc": "Sorğuya keç"
 }

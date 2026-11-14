@@ -3261,5 +3261,15 @@
   "empty_archive_title": "Aucune session pour l'instant",
   "empty_archive_desc": "AgentsView lit les sessions dans ces dossiers. Elles apparaîtront ici dès qu'un agent écrira dans l'un d'eux.",
   "empty_archive_choose_folders": "Choisir les dossiers",
-  "usage_tooltip_no_usage": "Aucune utilisation"
+  "usage_tooltip_no_usage": "Aucune utilisation",
+  "session_toc_toggle": "Aller à un prompt",
+  "session_toc_toggle_shortcut": "Aller à un prompt (T)",
+  "session_toc_empty": "Aucun prompt dans cette session",
+  "session_toc_loading": "Chargement des prompts…",
+  "session_toc_more": "Les {shown} plus récents sur {total}. Tapez pour affiner.",
+  "session_toc_load_failed": "Impossible de charger les prompts",
+  "session_toc_empty_prompt": "Prompt vide",
+  "session_toc_search": "Rechercher dans les prompts",
+  "session_toc_no_match": "Aucun prompt ne correspond",
+  "shortcuts_toggle_session_toc": "Aller à un prompt"
 }

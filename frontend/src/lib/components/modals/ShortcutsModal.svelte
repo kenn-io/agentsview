@@ -32,6 +32,7 @@
         { keys: [["k"], ["\u2191"]], action: m.shortcuts_prev_message() },
         { keys: [["Shift", "J"]], action: m.shortcuts_next_user_prompt() },
         { keys: [["Shift", "K"]], action: m.shortcuts_prev_user_prompt() },
+        { keys: [["t"]], action: m.shortcuts_toggle_session_toc() },
       ],
     },
     {

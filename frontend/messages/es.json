@@ -3261,5 +3261,15 @@
   "empty_archive_title": "Aún no hay sesiones",
   "empty_archive_desc": "AgentsView lee las sesiones de estas carpetas. Aparecerán aquí cuando un agente escriba en alguna de ellas.",
   "empty_archive_choose_folders": "Elegir carpetas",
-  "usage_tooltip_no_usage": "Sin uso"
+  "usage_tooltip_no_usage": "Sin uso",
+  "session_toc_toggle": "Ir a un prompt",
+  "session_toc_toggle_shortcut": "Ir a un prompt (T)",
+  "session_toc_empty": "No hay prompts en esta sesión",
+  "session_toc_loading": "Cargando prompts…",
+  "session_toc_more": "Se muestran los {shown} más recientes de {total}. Escribe para acotar.",
+  "session_toc_load_failed": "No se pudieron cargar los prompts",
+  "session_toc_empty_prompt": "Prompt vacío",
+  "session_toc_search": "Buscar prompts",
+  "session_toc_no_match": "Ningún prompt coincide",
+  "shortcuts_toggle_session_toc": "Ir a un prompt"
 }

@@ -42,6 +42,7 @@ describe("ShortcutsModal", () => {
       "Previous message",
       "Next user prompt",
       "Previous user prompt",
+      "Jump to a prompt",
     ]);
     expect(groups.get("Sessions")).toEqual(["Next session", "Previous session"]);
     expect(groups.get("Actions")).toContain("Show this modal");
