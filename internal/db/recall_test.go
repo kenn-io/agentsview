@@ -3095,3 +3095,39 @@ func TestRecallListTimeBounds(t *testing.T) {
 	_, err := d.ListRecallEntries(t.Context(), RecallQuery{UpdatedSince: "yesterday"})
 	require.ErrorIs(t, err, ErrInvalidRecallQuery)
 }
+
+func TestRecallTimeBoundsPrecisionAndStatuses(t *testing.T) {
+	d := testDB(t)
+	insertSession(t, d, "time-precision", "project")
+	for _, row := range []struct{ id, status, timestamp string }{
+		{"before", "accepted", "2026-01-01T00:00:00.000Z"},
+		{"boundary", "accepted", "2026-01-01T00:00:00.001Z"},
+		{"archived", "archived", "2026-01-01T00:00:00.001Z"},
+	} {
+		_, err := d.InsertRecallEntry(t.Context(), RecallEntry{ID: row.id, Type: "fact", Scope: "project", Status: row.status, ReviewState: corerecall.ReviewStateHumanReviewed, Transferable: true, ProvenanceOK: true, Title: row.id, Body: row.id, SourceSessionID: "time-precision"})
+		require.NoError(t, err)
+		_, err = d.getWriter().Exec(t.Context(), "UPDATE recall_entries SET created_at = ?, updated_at = ? WHERE id = ?", row.timestamp, row.timestamp, row.id)
+		require.NoError(t, err)
+	}
+	for _, tc := range []struct {
+		name string
+		q    RecallQuery
+		want []string
+	}{
+		{"default", RecallQuery{}, []string{"before", "boundary"}},
+		{"updated", RecallQuery{UpdatedSince: "2026-01-01T00:00:00.000001Z"}, []string{"boundary", "archived"}},
+		{"created", RecallQuery{CreatedSince: "2026-01-01T00:00:00.000001Z"}, []string{"boundary", "archived"}},
+		{"explicit status", RecallQuery{UpdatedSince: "2026-01-01T00:00:00.000001Z", Status: "archived"}, []string{"archived"}},
+		{"trusted", RecallQuery{UpdatedSince: "2026-01-01T00:00:00.000001Z", TrustedOnly: true}, []string{"boundary"}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			entries, err := d.ListRecallEntries(t.Context(), tc.q)
+			require.NoError(t, err)
+			var ids []string
+			for _, entry := range entries {
+				ids = append(ids, entry.ID)
+			}
+			assert.ElementsMatch(t, tc.want, ids)
+		})
+	}
+}

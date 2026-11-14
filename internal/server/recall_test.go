@@ -1994,3 +1994,19 @@ func TestListRecallEntriesTimeBounds(t *testing.T) {
 		assert.Empty(t, decode[listRecallEntriesResponse](t, future).RecallEntries)
 	}
 }
+
+func TestListRecallEntriesTimeBoundsIncludeArchived(t *testing.T) {
+	te := setup(t)
+	seedRecallEntrySession(t, te)
+	seedRecallEntry(t, te, db.RecallEntry{ID: "archived", Status: "archived", Title: "archived", Body: "archived", SourceSessionID: "recall-session"})
+	for _, param := range []string{"updated_since", "created_since"} {
+		w := te.get(t, "/api/v1/recall/entries?"+param+"=2020-01-01T00:00:00Z")
+		assertStatus(t, w, http.StatusOK)
+		entries := decode[listRecallEntriesResponse](t, w).RecallEntries
+		require.Len(t, entries, 1)
+		assert.Equal(t, "archived", entries[0].Status)
+	}
+	w := te.get(t, "/api/v1/recall/entries")
+	assertStatus(t, w, http.StatusOK)
+	assert.Empty(t, decode[listRecallEntriesResponse](t, w).RecallEntries)
+}

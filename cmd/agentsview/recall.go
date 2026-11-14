@@ -101,7 +101,7 @@ func newRecallListCommand() *cobra.Command {
 	var currentWorktree bool
 	cmd := &cobra.Command{
 		Use:          "list",
-		Short:        "List accepted entries",
+		Short:        "List recall entries",
 		Args:         cobra.NoArgs,
 		SilenceUsage: true,
 		RunE: func(cmd *cobra.Command, args []string) error {

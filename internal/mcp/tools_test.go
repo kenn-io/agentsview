@@ -2154,7 +2154,7 @@ func TestListRecallPagesWithEvidence(t *testing.T) {
 	dbtest.SeedSession(t, d, "s1", "project")
 	for _, id := range []string{"a", "b"} {
 		_, err := d.InsertRecallEntry(t.Context(), db.RecallEntry{
-			ID: id, Type: "fact", Scope: "project", Status: "accepted", Title: id, Body: id,
+			ID: id, Type: "fact", Scope: "project", Status: "archived", Title: id, Body: id,
 			SourceSessionID: "s1", SourceRunID: "generation", Evidence: []db.RecallEvidence{{SessionID: "s1", MessageStartOrdinal: 1, MessageEndOrdinal: 2, Snippet: "evidence"}},
 		})
 		require.NoError(t, err)
@@ -2170,6 +2170,7 @@ func TestListRecallPagesWithEvidence(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, json.Unmarshal(raw, &out))
 	require.Len(t, out.Entries, 1)
+	assert.Equal(t, "archived", out.Entries[0].Status)
 	assert.NotEmpty(t, out.Entries[0].ReviewState)
 	assert.Equal(t, "generation", out.Entries[0].SourceRunID)
 	require.Len(t, out.Entries[0].Evidence, 1)
