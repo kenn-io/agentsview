@@ -32,4 +32,9 @@ func TestCompactionSummariesRoundTrip(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, out.Summaries, 1)
 	assert.Equal(t, "summary", out.Summaries[0].Content)
+	anchor, after := 0, 1
+	window, err := svc.Messages(t.Context(), "session", service.MessageFilter{Around: &anchor, After: &after, CompactBoundaryOnly: true})
+	require.NoError(t, err)
+	require.Len(t, window.Messages, 1)
+	assert.Equal(t, 1, window.Messages[0].Ordinal)
 }

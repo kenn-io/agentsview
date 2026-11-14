@@ -135,8 +135,10 @@ func (s *Store) getMessagesAroundAnchor(
 ) ([]db.Message, error) {
 	anchor := *w.Around
 	roleClause, roleArgs := pgRoleFilterClause(w.Roles, 4)
+	boundaryClause := ""
 	if w.CompactBoundaryOnly {
-		roleClause += " AND is_compact_boundary = TRUE"
+		boundaryClause = " AND is_compact_boundary = TRUE"
+		roleClause += boundaryClause
 	}
 	query := fmt.Sprintf(`
 		SELECT %s, w.*
@@ -146,7 +148,7 @@ func (s *Store) getMessagesAroundAnchor(
 				WHERE session_id = $1 AND ordinal < $2%s
 				ORDER BY ordinal DESC LIMIT $3) AS before_rows
 			UNION ALL
-			SELECT %s FROM messages WHERE session_id = $1 AND ordinal = $2
+			SELECT %s FROM messages WHERE session_id = $1 AND ordinal = $2%s
 			UNION ALL
 			SELECT * FROM (
 				SELECT %s FROM messages
@@ -154,7 +156,7 @@ func (s *Store) getMessagesAroundAnchor(
 				ORDER BY ordinal ASC LIMIT $%d) AS after_rows
 		) AS w
 		ORDER BY w.ordinal`,
-		pgRevisionCol, pgMessageCols, roleClause, pgMessageCols,
+		pgRevisionCol, pgMessageCols, roleClause, pgMessageCols, boundaryClause,
 		pgMessageCols, roleClause, len(roleArgs)+4)
 	args := append([]any{sessionID, anchor, max(w.Before, 0)}, roleArgs...)
 	args = append(args, max(w.After, 0))

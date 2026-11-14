@@ -560,6 +560,6 @@ func TestStoreMessageWindowCompactBoundary(t *testing.T) {
 	anchor := 1
 	got, err = store.GetMessagesWindow(ctx, fixtureAlphaID, db.MessageWindow{Around: &anchor, Before: 1, After: 1, CompactBoundaryOnly: true})
 	require.NoError(t, err)
-	require.Len(t, got, 2)
-	assert.Equal(t, []int{1, 2}, []int{got[0].Ordinal, got[1].Ordinal})
+	require.Len(t, got, 1)
+	assert.Equal(t, 2, got[0].Ordinal)
 }

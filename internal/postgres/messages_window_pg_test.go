@@ -320,5 +320,5 @@ func TestPGGetMessagesWindow_CompactBoundary(t *testing.T) {
 	anchor := 6
 	msgs, err = store.GetMessagesWindow(t.Context(), "boundary", db.MessageWindow{Around: &anchor, Before: 1, After: 1, CompactBoundaryOnly: true})
 	require.NoError(t, err)
-	assert.Equal(t, []int{3, 6, 8}, mwOrdinalsOf(msgs))
+	assert.Equal(t, []int{3, 8}, mwOrdinalsOf(msgs))
 }
