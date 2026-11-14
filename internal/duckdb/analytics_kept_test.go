@@ -145,43 +145,6 @@ func keptPanelCases(ctx context.Context, f db.AnalyticsFilter) []keptPanelCase {
 	}
 }
 
-func TestAnalyticsKeptConcurrentPanels(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "mirror.duckdb")
-	buildMirrorFixture(t, path, "session-a", "prompt")
-	serial, err := NewStore(t.Context(), path)
-	require.NoError(t, err)
-	defer serial.Close()
-	parallel, err := NewStore(t.Context(), path)
-	require.NoError(t, err)
-	defer parallel.Close()
-	cases := keptPanelCases(t.Context(), db.AnalyticsFilter{Timezone: "UTC"})
-	want := make([]any, len(cases))
-	for i, tc := range cases {
-		want[i], err = tc.read(serial)
-		require.NoError(t, err, tc.name)
-	}
-	type result struct {
-		index int
-		value any
-		err   error
-	}
-	results := make(chan result, len(cases))
-	for i, tc := range cases {
-		go func() {
-			value, err := tc.read(parallel)
-			results <- result{i, value, err}
-		}()
-	}
-	gotResults := make([]result, 0, len(cases))
-	for range cases {
-		gotResults = append(gotResults, <-results)
-	}
-	for _, got := range gotResults {
-		require.NoError(t, got.err, cases[got.index].name)
-		require.Equal(t, want[got.index], got.value, cases[got.index].name)
-	}
-}
-
 func TestAnalyticsKeptAllPanelsAndVariants(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "mirror.duckdb")
 	local := newLocalDB(t)

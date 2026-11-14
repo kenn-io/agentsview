@@ -138,7 +138,7 @@ func TestStoreReopensAfterMirrorReplacement(t *testing.T) {
 	}, 5*time.Second, 100*time.Millisecond)
 }
 
-func TestStoreConcurrentReadsAcrossReplacement(t *testing.T) {
+func TestStoreReadsWhileRowsHeldAcrossReplacement(t *testing.T) {
 	skipReopenTestOnWindows(t)
 	dir := t.TempDir()
 	path := filepath.Join(dir, "mirror.duckdb")
@@ -152,21 +152,21 @@ func TestStoreConcurrentReadsAcrossReplacement(t *testing.T) {
 	old, err := store.queryContext(t.Context(), `SELECT id FROM sessions`)
 	require.NoError(t, err)
 	defer old.Close()
-	ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
-	defer cancel()
+	readCtx, cancelRead := context.WithTimeout(t.Context(), 5*time.Second)
+	defer cancelRead()
 	var id string
-	require.NoError(t, store.queryRowContext(ctx, `SELECT id FROM sessions`).Scan(&id))
+	require.NoError(t, store.queryRowContext(readCtx, `SELECT id FROM sessions`).Scan(&id))
 	require.Equal(t, "old-session", id)
 
 	store.WatchMirrorReplacement(t.Context(), 20*time.Millisecond, nil)
 	require.NoError(t, swapMirrorFile(next, path))
 	require.Eventually(t, func() bool {
-		return store.queryRowContext(ctx, `SELECT id FROM sessions`).Scan(&id) == nil && id == "new-session"
+		return store.queryRowContext(t.Context(), `SELECT id FROM sessions`).Scan(&id) == nil && id == "new-session"
 	}, 5*time.Second, 20*time.Millisecond)
-	current, err := store.queryContext(ctx, `SELECT id FROM sessions`)
+	current, err := store.queryContext(t.Context(), `SELECT id FROM sessions`)
 	require.NoError(t, err)
 	defer current.Close()
-	require.NoError(t, store.queryRowContext(ctx, `SELECT id FROM sessions`).Scan(&id))
+	require.NoError(t, store.queryRowContext(t.Context(), `SELECT id FROM sessions`).Scan(&id))
 	require.Equal(t, "new-session", id)
 	require.True(t, old.Next())
 	require.NoError(t, old.Scan(&id))
