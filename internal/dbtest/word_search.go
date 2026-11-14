@@ -45,6 +45,7 @@ func SeedWordSearch(t *testing.T, d *db.DB) {
 		{"accent-unicode-boundary", "word-accent-unicode-boundary", "café漢字"},
 		{"accent-greek", "word-accent-greek", "αρχή parsing"},
 		{"long-s", "word-long-s", "teſt"},
+		{"long-s-phrase", "word-long-s-phrase", "teſt phrase"},
 		{"long-s-multiple", "word-long-s-multiple", "aſſessment"},
 	} {
 		SeedSession(t, d, entry.id, entry.project, func(s *db.Session) { s.UserMessageCount = 2 })
@@ -94,6 +95,7 @@ func AssertWordSearch(t *testing.T, store db.Store) {
 		{"accent folding keeps Unicode boundaries", "café missingword", "word-accent-unicode-boundary", nil},
 		{"Greek accents stay distinct", "αρχη missingword", "word-accent-greek", nil},
 		{"long s follows SQLite case folding", "test absentword", "word-long-s", []hit{{"long-s", "message", 1}}},
+		{"long s folds inside quoted phrases", `missingword "test phrase"`, "word-long-s-phrase", []hit{{"long-s-phrase", "message", 2}}},
 		{"multiple long s folds stay candidates", "assessment absentword", "word-long-s-multiple", []hit{{"long-s-multiple", "message", 1}}},
 	} {
 		for _, mode := range []string{"substring", "fts", "hybrid"} {

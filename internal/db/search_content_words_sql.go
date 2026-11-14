@@ -41,7 +41,7 @@ func WordRegexSQL(b *QueryBuilder, raw, folded string, q ContentWords, all bool)
 			return !unicode.IsLetter(r) && !unicode.IsNumber(r)
 		})
 		for i := range words {
-			words[i] = regexp.QuoteMeta(words[i])
+			words[i] = wordCaseFoldRegex(words[i])
 		}
 		// As phraseMatch does, only non-letter, non-digit runs may separate them.
 		if len(words) > 0 {
