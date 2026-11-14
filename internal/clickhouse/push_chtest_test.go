@@ -369,55 +369,6 @@ func TestPushRecoversFromFailureBeforeSessionRows(t *testing.T) {
 	assert.Equal(t, 3, chtest.Count(t, conn, "messages", "session_id = ?", fixtureAlphaID))
 }
 
-func TestTrendsPartsAfterInterruptedPush(t *testing.T) {
-	ctx := t.Context()
-	local, target := seedFixture(t)
-	syncer := newTestSync(t, local, target, storage.PusherOptions{})
-	_, err := syncer.Push(ctx, false, nil)
-	require.NoError(t, err)
-
-	retained, err := NewStore(ctx, target)
-	require.NoError(t, err)
-	require.NoError(t, retained.openActivityReportDisk(target))
-	t.Cleanup(func() { require.NoError(t, retained.Close()) })
-	f := db.AnalyticsFilter{Project: "alpha", Timezone: "UTC", From: "2026-01-01", To: "2026-01-31"}
-	terms, err := db.ParseTrendTerms([]string{"alpha"})
-	require.NoError(t, err)
-	first, err := retained.GetTrendsTerms(ctx, f, terms, "day")
-	require.NoError(t, err)
-	require.Equal(t, 1, first.Series[0].Total)
-
-	appendMessage(t, local, fixtureAlphaID, "alpha third", "2026-01-10T00:30:00.000Z")
-	syncer.hooks = &pushHooks{beforeSessionRows: func([]db.Session) error { return errors.New("interrupted push") }}
-	result, err := syncer.Push(ctx, false, nil)
-	require.NoError(t, err)
-	require.Equal(t, 1, result.Errors)
-
-	direct, err := NewStore(ctx, target)
-	require.NoError(t, err)
-	t.Cleanup(func() { require.NoError(t, direct.Close()) })
-	want, err := direct.GetTrendsTerms(ctx, f, terms, "day")
-	require.NoError(t, err)
-	require.Equal(t, 2, want.Series[0].Total)
-	got, err := retained.GetTrendsTerms(ctx, f, terms, "day")
-	require.NoError(t, err)
-	assert.Equal(t, want, got)
-
-	require.NoError(t, local.ReplaceSessionMessages(ctx, fixtureAlphaID, nil))
-	result, err = syncer.Push(ctx, false, nil)
-	require.NoError(t, err)
-	require.Equal(t, 1, result.Errors)
-	directEmpty, err := NewStore(ctx, target)
-	require.NoError(t, err)
-	t.Cleanup(func() { require.NoError(t, directEmpty.Close()) })
-	want, err = directEmpty.GetTrendsTerms(ctx, f, terms, "day")
-	require.NoError(t, err)
-	require.Zero(t, want.Series[0].Total)
-	got, err = retained.GetTrendsTerms(ctx, f, terms, "day")
-	require.NoError(t, err)
-	assert.Equal(t, want, got)
-}
-
 func TestPushHonorsProjectScopeAndRemovesMovedSessions(t *testing.T) {
 	t.Parallel()
 	ctx := t.Context()

@@ -584,9 +584,6 @@ in the same cache directory. Each selection can use up to 128 MiB, with a
 pricing change, new binary, or deletion of the cache directory. If the cache is
 unavailable, Usage reads the mirror instead.
 
-Trends keeps per-session counts in the same cache and, after a push, recounts
-only changed sessions.
-
 When `require_auth` is enabled, a bearer token is generated if needed and
 printed on startup. Pass it via `Authorization: Bearer <token>` on API requests.
 

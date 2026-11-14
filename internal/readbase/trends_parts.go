@@ -6,9 +6,18 @@ import (
 	"time"
 
 	"go.kenn.io/agentsview/internal/db"
+	"go.kenn.io/agentsview/internal/kept"
 )
 
-type trendPartsSource struct{ AnalyticsBackend }
+type trendPartsBackend interface {
+	AnalyticsBackend
+	TrendSessionVersions(context.Context, db.AnalyticsFilter) (map[string]string, error)
+	TrendSessionWindow(db.AnalyticsFilter, string, []any) (string, []any)
+	TrendsDisk() (*kept.Disk, string)
+	TrendMessagesSQL(string, []any) (string, []any)
+}
+
+type trendPartsSource struct{ trendPartsBackend }
 
 func (s trendPartsSource) TrendWindowSessions(ctx context.Context, f db.AnalyticsFilter, ids []string) ([]string, error) {
 	var selected []string
@@ -36,7 +45,7 @@ func (s trendPartsSource) VisitTrendMessages(ctx context.Context, f db.Analytics
 			if err := rows.Scan(&id, &content, &value); err != nil {
 				return err
 			}
-			if local, ok := trendLocalTime(s.AnalyticsBackend, value, loc); ok {
+			if local, ok := trendLocalTime(s.trendPartsBackend, value, loc); ok {
 				visit(id, content, local)
 			}
 		}
