@@ -35,3 +35,29 @@ func TestDuckTrendsTermsDateWindowEdges(t *testing.T) {
 		require.NoError(t, err)
 	})
 }
+
+func TestDuckTrendsUnversionedSessions(t *testing.T) {
+	for _, tc := range []struct {
+		name, fingerprint string
+	}{{"null", "NULL"}, {"empty", "''"}} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Setenv("CACHE_DIRECTORY", t.TempDir())
+			local := newLocalDB(t)
+			dbtest.SeedTrendsWindow(t, local)
+			path := filepath.Join(t.TempDir(), "trends.duckdb")
+			_, err := Push(t.Context(), path, local, "m", storage.MirrorPushOptions{}, false, nil)
+			require.NoError(t, err)
+			writeUsageMirror(t, path, `UPDATE sessions SET agentsview_push_fingerprint = `+tc.fingerprint+` WHERE id = 'trends-window-fallback'`)
+			terms, err := db.ParseTrendTerms([]string{"fallback"})
+			require.NoError(t, err)
+			for range 2 {
+				store := openUsagePartsStore(t, path)
+				got, err := store.GetTrendsTerms(t.Context(), db.AnalyticsFilter{From: "2025-03-10", To: "2025-03-10", Timezone: "UTC"}, terms, "day")
+				require.NoError(t, err)
+				require.Len(t, got.Series, 1)
+				require.Equal(t, 1, got.Series[0].Total)
+				require.NoError(t, store.Close())
+			}
+		})
+	}
+}
