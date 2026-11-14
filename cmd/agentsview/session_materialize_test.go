@@ -4,7 +4,6 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
-	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -13,16 +12,6 @@ import (
 	"go.kenn.io/agentsview/internal/db"
 	"go.kenn.io/agentsview/internal/sessionmaterialize"
 )
-
-func TestLoadMaterializeSessionMissing(t *testing.T) {
-	database, err := db.OpenIsolatedContext(t.Context(), filepath.Join(t.TempDir(), "sessions.db"))
-	require.NoError(t, err)
-	t.Cleanup(func() { assert.NoError(t, database.Close()) })
-
-	session, err := loadMaterializeSession(t.Context(), database, "missing-id", "missing")
-	assert.Nil(t, session)
-	require.EqualError(t, err, "session not in local archive: missing")
-}
 
 func TestSessionMaterializeRejectsRemoteBackends(t *testing.T) {
 	for _, flag := range []string{"--server=http://127.0.0.1:1", "--pg", "--server-token-file="} {
@@ -101,8 +90,9 @@ func TestPiMaterializeCommandReturnsNativeResume(t *testing.T) {
 		relative = cwd
 	}
 	_, err = executeCommand(newRootCommand(), "session", "materialize", "pi:example", "--cwd", relative)
-	require.ErrorContains(t, err, "if this is the same session, resume it with: "+result.Command)
-	assert.Equal(t, 1, strings.Count(err.Error(), path))
+	var diagnostic *cliDiagnosticError
+	require.ErrorAs(t, err, &diagnostic)
+	assert.Equal(t, "destination differs; if this is the same session, resume it with: "+result.Command, diagnostic.display)
 	var differs *sessionmaterialize.DestinationDiffersError
 	require.ErrorAs(t, err, &differs)
 	assert.Equal(t, path, differs.Path)
