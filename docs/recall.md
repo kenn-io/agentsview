@@ -35,7 +35,8 @@ The current implementation is local and SQLite-only. The CLI provides:
 Use `recall list --updated-since <timestamp>` to list entries changed at or
 after an RFC3339 timestamp, or `--created-since <timestamp>` to list entries
 created at or after it. Both bounds include the boundary millisecond. The list
-returns entries whose `updated_at` changed.
+filters `updated_since` by `updated_at` and `created_since` by `created_at`.
+When both are set, an entry must meet both bounds.
 
 Time-bounded lists include only entries that still exist; they don't report
 deletions. Consumers that mirror Recall should periodically reconcile their
