@@ -4192,33 +4192,21 @@ schemas keep their existing ordering behavior.
 - **Watcher change check (2026-11-10):** Reverified the entire producer tree
   at [Hermes `aca4f1df`](https://github.com/NousResearch/hermes-agent/tree/aca4f1df).
   Stores with a positive integer schema version at most 33, `transcript_revision`,
-  complete native message-update triggers, and both native message indexes use
-  a per-session token to skip unchanged members on database and WAL events.
-  The token includes parsed session fields (including the native live
-  `message_count`), model usage ledger rows, transcript revision, greatest
-  message ID, first/last indexed timestamps, and a checksum over every message
-  timestamp and finish reason. Three covering seeks per session use
-  `idx_messages_session_id(session_id,id)` and
-  `idx_messages_session(session_id,timestamp)`. The checksum scans message history.
-  The gated listing pins those indexes because the producer warns that stale
-  [SQLite statistics](https://github.com/NousResearch/hermes-agent/blob/aca4f1df/hermes_state_common.py#L140-L146)
-  can choose the wrong index and sort message history. Direct and seeded
-  fingerprints remain usable without either index: their token omits message
-  endpoints and still checks message timestamps and finish reasons.
-  Native append/replacement moves greatest ID; active-only deletion resets the
-  live count even when newer inactive rows remain. Clear removes all messages.
+  and complete native message-update triggers use a per-session token to skip
+  unchanged members on database and WAL events. The token includes parsed
+  session fields, model usage ledger rows, transcript revision, and a checksum
+  over every message ID, timestamp, and finish reason. The checksum scans
+  message history.
   The native `messages_transcript_revision_update` and
   `messages_display_revision_update` definitions in
   [hermes_state_common.py](https://github.com/NousResearch/hermes-agent/blob/aca4f1df/hermes_state_common.py)
   cover payload and display rewrites. Coverage is rechecked on every event:
-  an older writer can recreate shorter triggers. Missing indexes, invalid or
-  future schema versions, and incomplete trigger coverage retain full checks;
-  direct fingerprints remain usable without these indexes.
+  an older writer can recreate shorter triggers. Invalid or future schema
+  versions and incomplete trigger coverage retain full checks.
   [Native recovery](https://github.com/NousResearch/hermes-agent/blob/aca4f1df/hermes_cli/session_recovery.py)
   repairs all out-of-window timestamps in fresh recovery output. Installing that
-  output moves a timestamp endpoint even when revision, live count and greatest
-  ID stay unchanged. This covers native repair, not arbitrary external SQL or
-  manual partial salvage dropping interior rows. No replacement tracker is used.
+  output changes the timestamp checksum even when revision and live count stay
+  unchanged. No replacement tracker is used.
   Reverify these couplings when the producer changes: additive changes can occur
   without a schema-version bump. The pinned tree has no independent message
   session-ID reassignment. A finish-reason change in
@@ -4226,8 +4214,9 @@ schemas keep their existing ordering behavior.
   names content and display metadata in the update, advancing the revision.
   [Prune rewrites](https://github.com/NousResearch/hermes-agent/blob/aca4f1df/hermes_state_prune_rewrite.py#L225-L249)
   first insert a retained row with a new ID, advancing the greatest message ID.
-  Transcript-file edits use their own `sessions/` events. Listing costs session metadata, distinct lifetime ledger keys, and message
-  history, not only changed sessions.
+  Transcript-file edits use their own `sessions/` events. Listing costs session
+  metadata, distinct lifetime ledger keys, and message history, not only changed
+  sessions.
   Auxiliary same-key ledger UPSERTs can leave session fields/revision unchanged,
   so the full ledger read remains necessary under the current producer contract.
   Ledger keys aggregate route/task usage; their lifetime count has no verified

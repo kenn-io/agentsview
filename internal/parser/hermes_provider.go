@@ -739,6 +739,9 @@ func (s hermesSourceSet) discoverTranscriptEachWithMembership(
 		switch {
 		case strings.HasSuffix(name, ".jsonl"):
 		case strings.HasPrefix(name, "session_") && strings.HasSuffix(name, ".json"):
+			if IsRegularFile(filepath.Join(sessionsDir, id+".jsonl")) {
+				return nil
+			}
 		default:
 			return nil
 		}
@@ -2066,7 +2069,7 @@ func seedHermesMemberCoresLocked(ctx context.Context, stateDB string) error {
 	}
 	defer memberConn.Close()
 	observeSharedContainerScan(ctx)
-	return listHermesMemberTokens(ctx, idsConn, "", false, func(id, token string, _ bool, usage []hermesModelUsage) error {
+	return listHermesMemberTokens(ctx, idsConn, "", func(id, token string, _ bool, usage []hermesModelUsage) error {
 		retainedIDBytes := int64(len(id))
 		observeStreamingRetainedBytes(ctx, retainedIDBytes)
 		defer observeStreamingRetainedBytes(ctx, -retainedIDBytes)

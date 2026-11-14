@@ -33,7 +33,7 @@ func hermesTokenFixture(t *testing.T) (*sql.DB, string) {
 func tokenMap(t *testing.T, c *sql.DB) map[string]string {
 	t.Helper()
 	out := map[string]string{}
-	require.NoError(t, listHermesMemberTokens(t.Context(), c, "", false, func(id, token string, _ bool, _ []hermesModelUsage) error { out[id] = token; return nil }))
+	require.NoError(t, listHermesMemberTokens(t.Context(), c, "", func(id, token string, _ bool, _ []hermesModelUsage) error { out[id] = token; return nil }))
 	return out
 }
 
@@ -80,6 +80,7 @@ func TestHermesMemberTokenChanges(t *testing.T) {
 		{"insert", "", `INSERT INTO messages(session_id,role,content,timestamp) VALUES ('child','assistant','reply',1778767220)`, true},
 		{"finish reason", "", `UPDATE messages SET finish_reason='stop' WHERE session_id='child'`, true},
 		{"interior timestamp", `INSERT INTO messages(session_id,role,content,timestamp) VALUES ('child','user','first',1),('child','user','last',9999999999)`, `UPDATE messages SET timestamp=1778767211 WHERE session_id='child' AND timestamp=1778767210`, true},
+		{"message id", "", `UPDATE messages SET id=id+100 WHERE session_id='child'`, true},
 		{"title", "", `UPDATE sessions SET title='new title' WHERE id='child'`, true},
 		{"content", "", `UPDATE messages SET content='rewritten' WHERE session_id='child'`, true},
 		{"usage", "", `UPDATE sessions SET input_tokens=777 WHERE id='child'`, true},
@@ -234,49 +235,6 @@ func TestHermesMemberTokenLedgerOnlyWrite(t *testing.T) {
 	assert.Equal(t, VirtualSourcePath(path, "child"), sources[0].FingerprintKey)
 }
 
-func TestHermesMemberTokenHistoryGrowth(t *testing.T) {
-	c, _ := hermesTokenFixture(t)
-	// Misleading statistics favor the wrong message index unless the gated query pins each seek.
-	_, err := c.ExecContext(t.Context(), `ANALYZE;
- UPDATE sqlite_stat1 SET stat='1000000 1000000 1' WHERE idx='idx_messages_session';
- UPDATE sqlite_stat1 SET stat='1000000 1 1' WHERE idx='idx_messages_session_id';
- ANALYZE sqlite_schema`)
-	require.NoError(t, err)
-	rows, err := c.QueryContext(t.Context(), "EXPLAIN QUERY PLAN "+hermesMemberTokenQuery(true, false, true))
-	require.NoError(t, err)
-	defer func() { require.NoError(t, rows.Close()) }()
-	searches, endpoints := 0, 0
-	for rows.Next() {
-		var id, parent, unused int
-		var detail string
-		require.NoError(t, rows.Scan(&id, &parent, &unused, &detail))
-		assert.NotContains(t, detail, "USE TEMP B-TREE")
-		if strings.Contains(detail, "SEARCH messages USING COVERING INDEX idx_messages_session_id (session_id=?)") {
-			searches++
-		}
-		if strings.Contains(detail, "SEARCH messages USING COVERING INDEX idx_messages_session (session_id=?)") {
-			endpoints++
-		}
-	}
-	require.NoError(t, rows.Err())
-	assert.Equal(t, 1, searches, "greatest ID must use its covering seek")
-	assert.Equal(t, 2, endpoints, "both timestamp endpoints must use covering seeks")
-
-	legacy, _ := hermesTokenFixture(t)
-	_, err = legacy.ExecContext(t.Context(), `DROP INDEX idx_messages_session_id; DROP INDEX idx_messages_session`)
-	require.NoError(t, err)
-	legacyRows, err := legacy.QueryContext(t.Context(), "EXPLAIN QUERY PLAN "+hermesMemberTokenQuery(true, false, false))
-	require.NoError(t, err)
-	defer func() { require.NoError(t, legacyRows.Close()) }()
-	for legacyRows.Next() {
-		var id, parent, unused int
-		var detail string
-		require.NoError(t, legacyRows.Scan(&id, &parent, &unused, &detail))
-		assert.NotContains(t, detail, "messages", "legacy token listing must not scan message histories")
-	}
-	require.NoError(t, legacyRows.Err())
-}
-
 func TestHermesMemberSchemaGate(t *testing.T) {
 	for _, setup := range []string{
 		`UPDATE schema_version SET version=33`, `UPDATE schema_version SET version=34`,
@@ -291,7 +249,7 @@ func TestHermesMemberSchemaGate(t *testing.T) {
 			_, err := c.ExecContext(t.Context(), setup)
 			require.NoError(t, err)
 			ok, _ := hermesStoreTracksRewrites(t.Context(), c)
-			assert.Equal(t, strings.HasSuffix(setup, "=33"), ok)
+			assert.Equal(t, strings.HasSuffix(setup, "=33") || strings.HasPrefix(setup, "DROP INDEX"), ok)
 		})
 	}
 }

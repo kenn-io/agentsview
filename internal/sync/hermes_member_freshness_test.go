@@ -99,3 +99,20 @@ func TestHermesWatcherDiscoversStaleAndNewOrphanTranscripts(t *testing.T) {
 		})
 	}
 }
+
+func TestHermesFullSyncPrefersCurrentTranscript(t *testing.T) {
+	root := t.TempDir()
+	writeHermesSyncStateDB(t, root)
+	dir := filepath.Join(root, "sessions")
+	require.NoError(t, os.MkdirAll(dir, 0o700))
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "orphan.jsonl"), []byte(`{"role":"user","content":"current conversation","timestamp":"2026-05-14T10:01:00Z"}`+"\n"), 0o600))
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "session_orphan.json"), []byte(`{"messages":[{"role":"user","content":"old snapshot"}]}`), 0o600))
+	database := dbtest.OpenTestDB(t)
+	engine := sync.NewEngine(t.Context(), database, sync.EngineConfig{AgentDirs: map[parser.AgentType][]string{parser.AgentHermes: {root}}, Machine: "local"})
+	t.Cleanup(engine.Close)
+	engine.SyncAll(t.Context(), nil)
+	messages, err := database.GetAllMessages(t.Context(), "hermes:orphan")
+	require.NoError(t, err)
+	require.Len(t, messages, 1)
+	assert.Equal(t, "current conversation", messages[0].Content)
+}

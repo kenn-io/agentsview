@@ -17,9 +17,7 @@ func hermesHasTranscriptRevision(ctx context.Context, conn *sql.DB) (bool, error
 	return count == 1, err
 }
 
-// Index-free stores retain the full deep fingerprint without repeated message
-// scans for token endpoints. Only indexed stores can use token-based skipping.
-func hermesMemberTokenQuery(revision, single, indexed bool) string {
+func hermesMemberTokenQuery(revision, single bool) string {
 	rev := "0"
 	if revision {
 		rev = "transcript_revision"
@@ -28,31 +26,11 @@ func hermesMemberTokenQuery(revision, single, indexed bool) string {
 	if single {
 		where = " WHERE id = ?"
 	}
-	endpoints := `0, NULL, NULL`
-	if indexed {
-		endpoints = `COALESCE((SELECT id FROM messages INDEXED BY idx_messages_session_id WHERE session_id=members.id ORDER BY id DESC LIMIT 1),0),
- (SELECT timestamp FROM messages INDEXED BY idx_messages_session WHERE session_id=members.id ORDER BY timestamp LIMIT 1),
- (SELECT timestamp FROM messages INDEXED BY idx_messages_session WHERE session_id=members.id ORDER BY timestamp DESC LIMIT 1)`
-	}
-	return `WITH members AS (SELECT ` + hermesStateSessionColumns + `, ` + rev + ` AS revision FROM sessions` + where + `)
- SELECT members.*, ` + endpoints + ` FROM members ORDER BY members.id`
+	return `SELECT ` + hermesStateSessionColumns + `, ` + rev + ` AS revision FROM sessions` + where + ` ORDER BY id`
 }
 
-// Gated callers already proved both native indexes. Ungated direct and seeded
-// callers discover them once per listing, so their token matches the gated one
-// when the store has both indexes and omits endpoints otherwise.
-func hermesTokenMetadata(ctx context.Context, conn *sql.DB, indexed bool) (revision, hasIndexes bool, err error) {
-	revision, err = hermesHasTranscriptRevision(ctx, conn)
-	if err != nil || indexed {
-		return revision, indexed, err
-	}
-	var indexes int
-	err = conn.QueryRowContext(ctx, `SELECT COUNT(*) FROM sqlite_master WHERE type='index' AND name IN ('idx_messages_session_id','idx_messages_session')`).Scan(&indexes)
-	return revision, indexes == 2, err
-}
-
-func listHermesMemberTokens(ctx context.Context, conn *sql.DB, id string, indexed bool, yield func(string, string, bool, []hermesModelUsage) error) error {
-	revision, indexed, err := hermesTokenMetadata(ctx, conn, indexed)
+func listHermesMemberTokens(ctx context.Context, conn *sql.DB, id string, yield func(string, string, bool, []hermesModelUsage) error) error {
+	revision, err := hermesHasTranscriptRevision(ctx, conn)
 	if err != nil {
 		return err
 	}
@@ -61,7 +39,7 @@ func listHermesMemberTokens(ctx context.Context, conn *sql.DB, id string, indexe
 		return err
 	}
 	checksums := make(map[string]hash.Hash)
-	query := `SELECT session_id, timestamp, COALESCE(finish_reason, '') FROM messages`
+	query := `SELECT session_id, id, timestamp, COALESCE(finish_reason, '') FROM messages`
 	var messageArgs []any
 	if id != "" {
 		query += ` WHERE session_id = ?`
@@ -74,8 +52,8 @@ func listHermesMemberTokens(ctx context.Context, conn *sql.DB, id string, indexe
 	}
 	for messageRows.Next() {
 		var sid string
-		var timestamp, finish any
-		if err := messageRows.Scan(&sid, &timestamp, &finish); err != nil {
+		var messageID, timestamp, finish any
+		if err := messageRows.Scan(&sid, &messageID, &timestamp, &finish); err != nil {
 			messageRows.Close()
 			return err
 		}
@@ -84,7 +62,7 @@ func listHermesMemberTokens(ctx context.Context, conn *sql.DB, id string, indexe
 			h = sha256.New()
 			checksums[sid] = h
 		}
-		fmt.Fprintf(h, "%T:%q\x00%T:%q\x00", timestamp, fmt.Sprint(timestamp), finish, fmt.Sprint(finish))
+		fmt.Fprintf(h, "%T:%q\x00%T:%q\x00%T:%q\x00", messageID, fmt.Sprint(messageID), timestamp, fmt.Sprint(timestamp), finish, fmt.Sprint(finish))
 	}
 	err = messageRows.Err()
 	messageRows.Close()
@@ -95,7 +73,7 @@ func listHermesMemberTokens(ctx context.Context, conn *sql.DB, id string, indexe
 	if id != "" {
 		args = []any{id}
 	}
-	rows, err := conn.QueryContext(ctx, hermesMemberTokenQuery(revision, id != "", indexed), args...)
+	rows, err := conn.QueryContext(ctx, hermesMemberTokenQuery(revision, id != ""), args...)
 	if err != nil {
 		return err
 	}
@@ -137,7 +115,7 @@ func listHermesMemberTokens(ctx context.Context, conn *sql.DB, id string, indexe
 func hermesMemberToken(ctx context.Context, conn *sql.DB, id string) (string, []hermesModelUsage, error) {
 	var token string
 	var usage []hermesModelUsage
-	err := listHermesMemberTokens(ctx, conn, id, false, func(_ string, value string, _ bool, rows []hermesModelUsage) error {
+	err := listHermesMemberTokens(ctx, conn, id, func(_ string, value string, _ bool, rows []hermesModelUsage) error {
 		token, usage = value, rows
 		return nil
 	})
@@ -161,17 +139,13 @@ var (
 // trigger on opening the store. Unrecognized definitions fail closed.
 func hermesStoreTracksRewrites(ctx context.Context, conn *sql.DB) (bool, error) {
 	// Schema 33 is the verified ceiling, not a promise against additive changes.
-	// Native indexes are mandatory for the listing; legacy direct checks need none.
 	var version any
-	var indexes int
-	err := conn.QueryRowContext(ctx, `SELECT version,
- (SELECT COUNT(*) FROM sqlite_master WHERE type='index' AND name IN ('idx_messages_session_id','idx_messages_session'))
- FROM schema_version LIMIT 1`).Scan(&version, &indexes)
+	err := conn.QueryRowContext(ctx, `SELECT version FROM schema_version LIMIT 1`).Scan(&version)
 	if err != nil {
 		return false, err
 	}
 	v, ok := version.(int64)
-	if !ok || v < 1 || v > 33 || indexes != 2 {
+	if !ok || v < 1 || v > 33 {
 		return false, nil
 	}
 	revision, err := hermesHasTranscriptRevision(ctx, conn)
@@ -247,7 +221,7 @@ func (s hermesSourceSet) changedHermesMembers(ctx context.Context, root, stateDB
 	}
 	var sources []SourceRef
 	selected := make(map[string]struct{})
-	err = listHermesMemberTokens(ctx, conn, "", true, func(id, token string, cron bool, _ []hermesModelUsage) error {
+	err = listHermesMemberTokens(ctx, conn, "", func(id, token string, cron bool, _ []hermesModelUsage) error {
 		row, found, err := cursor.Lookup(ctx, VirtualSourcePath(stateDB, id))
 		if err != nil {
 			return err
