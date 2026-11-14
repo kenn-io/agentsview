@@ -312,22 +312,18 @@ test.describe('Dashboard', () => {
     );
     await page.waitForTimeout(500);
 
-    const panels = page.locator('.chart-panel');
-    const count = await panels.count();
-    for (let i = 0; i < count; i++) {
-      const text = await panels.nth(i).textContent();
-      if (text && (text.includes('Shape') || text.includes('Distribution'))) {
-        await panels.nth(i).scrollIntoViewIfNeeded();
-        await page.waitForTimeout(300);
-        await snapRange(
-          page,
-          panels.nth(i).locator('.shape-header'),
-          panels.nth(i).locator('.shape-footer'),
-          'session-shape'
-        );
-        break;
-      }
-    }
+    const panel = page.locator('.chart-panel').filter({
+      has: page.locator('.shape-header'),
+    });
+    await expect(panel).toBeVisible({ timeout: 5_000 });
+    await panel.scrollIntoViewIfNeeded();
+    await page.waitForTimeout(300);
+    await snapRange(
+      page,
+      panel.locator('.shape-header'),
+      panel.locator('.shape-footer'),
+      'session-shape'
+    );
   });
 
   test('tool usage', async ({ page }) => {
@@ -411,17 +407,13 @@ test.describe('Dashboard', () => {
     );
     await page.waitForTimeout(500);
 
-    const panels = page.locator('.chart-panel');
-    const count = await panels.count();
-    for (let i = 0; i < count; i++) {
-      const text = await panels.nth(i).textContent();
-      if (text && text.includes('Comparison')) {
-        await panels.nth(i).scrollIntoViewIfNeeded();
-        await page.waitForTimeout(300);
-        await snapEl(panels.nth(i), 'agent-comparison');
-        break;
-      }
-    }
+    const panel = page.locator('.chart-panel').filter({
+      hasText: 'Agent comparison',
+    });
+    await expect(panel).toBeVisible({ timeout: 5_000 });
+    await panel.scrollIntoViewIfNeeded();
+    await page.waitForTimeout(300);
+    await snapEl(panel, 'agent-comparison');
   });
 
   test('dashboard model filter', async ({ page }) => {
@@ -1223,22 +1215,13 @@ test.describe('Message viewer', () => {
   test('block-type filter dropdown', async ({ page }) => {
     await selectRichSession(page);
 
-    // Click the block-type filter button
-    const filterBtn = page.locator(
-      'button[title="Filter block types"]'
-    );
-    if (await filterBtn.count() > 0) {
-      await filterBtn.click();
-      await page.waitForTimeout(300);
-
-      const dropdown = page.locator('.block-filter-dropdown');
-      if (await dropdown.count() > 0) {
-        await snapEl(dropdown, 'block-filter');
-      }
-
-      // Close by clicking elsewhere
-      await page.keyboard.press('Escape');
-    }
+    // Block visibility lives in the Transcript view menu.
+    await page.getByRole('button', { name: /^Transcript view:/ }).click();
+    const menu = page.getByRole('menu');
+    await expect(menu.getByText('Block Visibility', { exact: true })).toBeVisible();
+    await page.waitForTimeout(300);
+    await snapEl(menu, 'block-filter');
+    await page.keyboard.press('Escape');
   });
 
   test('copy button on message', async ({ page }) => {
