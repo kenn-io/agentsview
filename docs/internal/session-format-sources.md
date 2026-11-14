@@ -3491,7 +3491,7 @@ schemas keep their existing ordering behavior.
   and path normalizer above support Windows shell drive paths, unlike the older
   format pin above. Current format version is 3; the first parsed entry must be
   a session with a string ID. Blank and malformed
-  lines can precede that entry, while a parsed title cannot. Pi cannot open an
+  lines can precede that entry, while a parsed title cannot. Pi cannot open a
   file with a missing or non-string ID until materialization writes the
   filename-derived ID. It accepts an empty ID, which materialization also replaces.
   `SessionManager.open` uses the header cwd; materialization changes that value

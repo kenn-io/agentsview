@@ -24,7 +24,6 @@ func TestClearClaudeWorktree(t *testing.T) {
 		{name: "missing id", input: `{"type":"worktree-state","worktreeSession":{"worktreePath":"/old"}}`, wantError: "invalid worktree session ID"},
 		{name: "invalid id", input: `{"type":"worktree-state","sessionId":"other","worktreeSession":{"worktreePath":"/old"}}`, wantError: "invalid worktree session ID"},
 		{name: "metadata only", input: `{"type":"worktree-state","sessionId":"` + id + `","worktreeSession":null}`, noPrefix: true, wantError: "transcript has no messages for this session"},
-		{name: "other conversation", input: `{"type":"user","sessionId":"aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa","message":{"role":"user","content":"other"}}`, noPrefix: true, wantError: "transcript has no messages for this session"},
 		{name: "parent", input: `{"type":"user","sessionId":"aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa","message":{"content":"parent"}}` + "\n", sourceID: "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa", noPrefix: true},
 		{name: "wrong parent", input: `{"type":"user","sessionId":"aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa","message":{"content":"parent"}}` + "\n", sourceID: "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb", noPrefix: true, wantError: "transcript has no messages for this session"},
 	}

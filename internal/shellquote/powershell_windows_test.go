@@ -33,19 +33,14 @@ ConvertTo-Json -Compress -InputObject ($command.CommandElements[1].Value)
 			if err != nil {
 				t.Skipf("%s is unavailable: %v", executable, err)
 			}
-			for _, value := range []string{
-				"C:\\sessions\\'‘’‚‛''; $(Write-Output injected)\n$env:HOME & |.jsonl",
-			} {
-				t.Run(value, func(t *testing.T) {
-					cmd := exec.CommandContext(t.Context(), binary, "-NoProfile", "-NonInteractive", "-Command", parser)
-					cmd.Stdin = strings.NewReader("pi " + PowerShell(value))
-					output, err := cmd.Output()
-					require.NoError(t, err)
-					var parsed string
-					require.NoError(t, json.Unmarshal(output, &parsed), "%s", output)
-					assert.Equal(t, value, parsed)
-				})
-			}
+			value := "C:\\sessions\\'‘’‚‛''; $(Write-Output injected)\n$env:HOME & |.jsonl"
+			cmd := exec.CommandContext(t.Context(), binary, "-NoProfile", "-NonInteractive", "-Command", parser)
+			cmd.Stdin = strings.NewReader("pi " + PowerShell(value))
+			output, err := cmd.Output()
+			require.NoError(t, err)
+			var parsed string
+			require.NoError(t, json.Unmarshal(output, &parsed), "%s", output)
+			assert.Equal(t, value, parsed)
 		})
 	}
 }
