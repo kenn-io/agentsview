@@ -121,7 +121,7 @@ func Materialize(ctx context.Context, cfg config.Config, session *db.Session, cw
 		}
 		parent = rawParent
 	}
-	primary, err := clearClaudeWorktree(files[0].data, id, parent)
+	primary, err := clearClaudeWorktree(files[0].data, id, parent) //nolint:nilaway // Successful source reads always include the primary file.
 	if err != nil {
 		return Result{}, err
 	}
@@ -407,8 +407,7 @@ func readS3Source(ctx context.Context, cfg config.Config, machine, uri, id strin
 	}
 	data, err := fetch(uri)
 	if err != nil {
-		var missing *types.NoSuchKey
-		if errors.As(err, &missing) {
+		if _, ok := errors.AsType[*types.NoSuchKey](err); ok {
 			return nil, fmt.Errorf("%w: %w", errSourceUnavailable, err)
 		}
 		return nil, err
