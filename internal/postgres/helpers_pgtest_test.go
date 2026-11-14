@@ -339,6 +339,13 @@ func pgStoreTemplateName(tb testing.TB, server *pgTestServer, baseURL string) st
 }
 
 func TestMain(m *testing.M) {
+	cacheDir, err := os.MkdirTemp("", "agentsview-test-cache-*")
+	if err != nil {
+		panic(err)
+	}
+	if err := os.Setenv("CACHE_DIRECTORY", cacheDir); err != nil {
+		panic(err)
+	}
 	code := m.Run()
 	if pgStoreTemplate.name != "" {
 		// Runs after every test has ended, so no test's context remains.
@@ -350,6 +357,7 @@ func TestMain(m *testing.M) {
 			code = max(code, 1)
 		}
 	}
+	_ = os.RemoveAll(cacheDir)
 	os.Exit(code)
 }
 

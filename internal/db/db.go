@@ -947,6 +947,8 @@ type DB struct {
 	activityMemo         activityCandidateMemo
 	activityKept         kept.Memo[activityKept]
 	analyticsKept        kept.Reads[any]
+	trendsDisk           kept.Disk
+	trendsDiskOnce       sync.Once
 	usageKept            kept.Memo[DailyUsageResult]
 	sessionStatsFacts    *sessionStatsFactsMemo
 	frustrationMemo      FrustrationMarkerMemo
@@ -2521,6 +2523,7 @@ func schemaColumnMigrations() []schemaColumnMigration {
 	return []schemaColumnMigration{
 		{"sessions", "usage_generation", "ALTER TABLE sessions ADD COLUMN usage_generation TEXT;" +
 			" UPDATE sessions SET usage_generation=lower(hex(randomblob(8)))"},
+		{"sessions", "trends_generation", "ALTER TABLE sessions ADD COLUMN trends_generation TEXT"},
 		{
 			"sessions", "automation_audit",
 			"ALTER TABLE sessions ADD COLUMN automation_audit INTEGER NOT NULL DEFAULT 1",
@@ -3060,6 +3063,17 @@ func schemaColumnMigrations() []schemaColumnMigration {
 	}
 }
 
+// A random generation distinguishes transcript histories after restoring a backup.
+const trendsGenerationSchemaSQL = `
+CREATE TRIGGER IF NOT EXISTS sessions_trends_generation_insert AFTER INSERT ON sessions BEGIN
+    UPDATE sessions SET trends_generation=lower(hex(randomblob(16))) WHERE id=NEW.id;
+END;
+CREATE TRIGGER IF NOT EXISTS sessions_trends_generation_update AFTER UPDATE OF transcript_revision ON sessions
+WHEN OLD.transcript_revision IS NOT NEW.transcript_revision BEGIN
+    UPDATE sessions SET trends_generation=lower(hex(randomblob(16))) WHERE id=NEW.id;
+END;
+`
+
 // A tail append preserves the generation. Every change to an existing usage
 // input invalidates the prefix retained by incremental usage-cache fills.
 const usageGenerationSchemaSQL = `
@@ -3120,6 +3134,9 @@ func applySchemaColumnMigrations(ctx context.Context, w *writerHandle, progress 
 		progress,
 	); err != nil {
 		return err
+	}
+	if _, err := tx.ExecContext(ctx, trendsGenerationSchemaSQL); err != nil {
+		return fmt.Errorf("installing trends generation triggers: %w", err)
 	}
 	if _, err := tx.ExecContext(ctx, usageGenerationSchemaSQL); err != nil {
 		return fmt.Errorf("installing usage generation triggers: %w", err)

@@ -42,6 +42,7 @@ func (s *Store) MemoryBackendName() string { return "duckdb" }
 type Store struct {
 	readbase.MirrorStubs
 	path              string
+	trendsCacheID     string
 	handleMu          sync.RWMutex
 	replacementMu     sync.Mutex
 	duck              *sql.DB

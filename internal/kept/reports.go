@@ -127,7 +127,7 @@ func (s *Reports) Close() {
 // OpenDisk selects the cache directory and the running binary identity.
 // Call it before serving requests or starting the sweep.
 func (s *Reports) OpenDisk(subdir, id string) error {
-	base, _, _ := strings.Cut(os.Getenv("CACHE_DIRECTORY"), ":")
+	base, _, _ := strings.Cut(os.Getenv("CACHE_DIRECTORY"), string(os.PathListSeparator))
 	if base == "" {
 		userCache, err := os.UserCacheDir()
 		if err != nil {

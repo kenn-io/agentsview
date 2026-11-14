@@ -119,6 +119,10 @@ Usage results for the same dates and selection also use
 directory. Deleting these files is
 safe and makes the next Usage visit read the mirror again.
 
+Trends keeps per-session counts in `duckdb-usage` and, after a push, recounts
+only changed sessions. Quack clients keep them per endpoint in the same
+directory.
+
 ## Quack Remote Access
 
 [Quack](https://duckdb.org/docs/current/core_extensions/quack) is DuckDB's

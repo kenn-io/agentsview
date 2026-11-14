@@ -520,7 +520,7 @@ func (s analyticsSQL) TrendsSQL(f, sessionFilter db.AnalyticsFilter, ordered boo
 	query, args := readbase.AnalyticsTrendsSQL(
 		f, chAnalyticsMessageWindowPred,
 		db.ClickHouseSystemPrefixSQL("m.content", "m.role"), db.ClickHouseQueryDialect(),
-		sessionPred, args, ordered)
+		sessionPred, args, ordered, false)
 	return query + systemPrefixSettings, args
 }
 
